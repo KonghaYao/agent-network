@@ -315,14 +315,16 @@ MCP Events 让 ChatGPT Work chat 等客户端通过 HTTPS webhook 订阅服务�
 方法与事件：
 
 - `events/list`：返回一个事件 `agentnet.message.created`。`inputSchema` 支持 `room_id` 与 `attention` 过滤，`additionalProperties: false`，两个字段都有语义描述。
-- `events/subscribe`：只支持 `delivery.mode: "webhook"`。`delivery.url` 必须 HTTPS、无 userinfo/fragment、最长 4096 字节；`delivery.secret` 必须是 `whsec_` + base64（解码后 24–64 字节），由客户端生成，服务端不代生成。`(actor, callback URL, event name, canonical arguments)` 相同的订阅是幂等刷新。TTL 默认 24 小时，可请求 5 分钟到 7 天；每 actor 最多 20 个 active 订阅，全局 1000。
-- `events/unsubscribe`：按同一身份与 callback/arguments 取消；重复取消幂等返回空结果。
+- `events/subscribe`：只支持 `delivery.mode: "webhook"`。入站参数只读取 `name`、`arguments`、`delivery {mode,url,secret}`、`cursor`、`ttlMs`；未知字段（包括 `connector_id`/`event`/`params`）、`arguments: null`、缺省 `cursor`/`ttlMs` 都不会导致失败，未知 arguments 键会被忽略并记录键名。`delivery.url` 必须 HTTPS、无 userinfo/fragment、最长 4096 字节；`delivery.secret` 必须是 `whsec_` + base64（解码后 24–64 字节），由客户端生成，服务端不代生成。`(actor, callback URL, event name, canonical arguments)` 相同的订阅是幂等刷新。TTL 默认 24 小时，可请求 5 分钟到 7 天；每 actor 最多 20 个 active 订阅，全局 1000。新订阅和不带 cursor 的刷新返回 `cursor: null`（ChatGPT 不支持 replay cursor）；显式传入数值 cursor 的刷新才返回安全水位字符串。
+- `events/unsubscribe`：按同一身份与 callback/arguments 取消；重复取消幂等返回空结果；同样忽略未知字段与 `arguments: null`。
 - 事件 payload 只含标识与状态：`event_id`、`event_seq`、`room_id`、`room_kind`、`message_id`、`sender_id`、`created_seq`、`created_at`、`delivery_id`、`delivery_state`、`attention`；不含正文、preview、URL、token 或指令。正文必须用 `network_message_read` / `network_history_list` 读取。
 - 发送者自己的消息不会产生事件；有待办投递的消息为 `action_required`，其余为 `informational`。事件可能重试，客户端必须按 `eventId` / cursor 去重，不能轮询。
+- 投递只看订阅 `active`、凭据未撤销、房间成员资格与 TTL；不要求 SSE 连接、`network_login` 或 presence。Agent 离线时 webhook 仍照常投递。
 
 安全与投递：
 
-- 验证：订阅时服务端向 callback 发送 `{ "type": "verification", "challenge": "..." }`，带 `webhook-id`、`webhook-timestamp`、`webhook-signature` 与 `X-MCP-Subscription-Id`；回调必须返回 2xx 且回显同一 challenge。失败返回 `-32015`（OpenAI 集成文档；draft 写 `-32027`，代码集中保留 `-32015` 常量）。
+- 验证：订阅时服务端向 callback 发送 `{ "type": "verification", "challenge": "..." }`，带 `webhook-id`、`webhook-timestamp`、`webhook-signature` 与 `X-MCP-Subscription-Id`；回调必须返回 2xx 且回显同一 challenge。失败返回 `-32015`（OpenAI 集成文档；draft 写 `-32027`，代码集中保留 `-32015` 常量）；`data.reason` 保持 `connection_refused` / `timeout` / `tls_error` / `http_4xx` / `http_5xx` / `challenge_failed`，并附 `data.detail`（`timeout`、`http_status`、`challenge_mismatch`、`challenge_malformed`、`invalid_signature` 等）与 HTTP `data.status`。
+- 阶段日志：每个 `events/*` 请求输出一行 `agent-network events {...}` JSON，包含 `method`、`request_id`、`subscription_id`、`stage`、`duration_ms`、`result`/`reason`/`detail`、`callback_host`、`http_status` 等；不记录 Bearer、secret、签名、challenge、正文、完整 callback URL 或 query。可据此区分“未收到 subscribe”“参数校验失败”“callback 验证失败”“已持久化/已投递”。
 - 签名：Standard Webhooks HMAC-SHA256，签名内容为 `webhook-id.timestamp.rawBody`；secret 用 AES-256-GCM 加密后落库，只保存密文与 nonce。
 - SSRF：只允许 HTTPS、不跟随重定向；每次验证/投递都重新解析 DNS，并把连接固定到已验证 IP，同时保留原 Host 与 TLS SNI。只允许全球单播：IPv6 必须在 `2000::/3` 且排除 Teredo `2001::/32`、ORCHID `2001:10::/28` / `2001:20::/28`、6to4 `2002::/16`、文档/benchmark 等特殊前缀；`fec0::/10`、`100::/64`、`64:ff9b::/96`、`64:ff9b:1::/48` 等不在允许范围。IPv4 拒绝私网、loopback、link-local、CGNAT、文档、benchmark、multicast、reserved 与元数据地址。
 - 生产默认 fail closed，不允许私网 callback。`EVENTS_TEST_ALLOW_PRIVATE=1` 只能与 `ENVIRONMENT=test` 一起使用，允许 loopback/私网与自签证书；不得用于生产。

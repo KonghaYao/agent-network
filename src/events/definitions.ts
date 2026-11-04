@@ -23,6 +23,23 @@ export const MESSAGE_CREATED_ARGUMENTS = z.strictObject({
 
 export type MessageCreatedArguments = z.infer<typeof MESSAGE_CREATED_ARGUMENTS>;
 
+export const MESSAGE_CREATED_ARGUMENT_KEYS: ReadonlySet<string> = new Set([
+  'room_id',
+  'attention',
+]);
+
+/**
+ * 入站 arguments 的宽松解析。
+ *
+ * ChatGPT / 其他客户端可能省略字段、显式传 null 或携带未知键；这些都不应让
+ * subscribe 失败。未知键会被忽略并记录键名（不记录值），只有已知字段参与
+ * 订阅身份与过滤。
+ */
+const MESSAGE_CREATED_ARGUMENTS_INPUT = z.object({
+  room_id: z.string().min(1).max(128).nullish(),
+  attention: z.enum(['action_required', 'informational']).nullish(),
+});
+
 export const MESSAGE_CREATED_PAYLOAD = z.strictObject({
   event_id: z.string().min(1),
   event_seq: z.string().regex(/^\d{1,18}$/u),
@@ -73,9 +90,23 @@ export const EVENT_DEFINITIONS: readonly EventDefinition[] = Object.freeze([
 export function canonicalArguments(input: unknown): {
   values: MessageCreatedArguments;
   json: string;
+  ignoredKeys: string[];
 } {
-  const values = MESSAGE_CREATED_ARGUMENTS.parse(input ?? {});
-  return { values, json: stableStringify(values) };
+  const raw = input ?? {};
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('arguments must be an object');
+  }
+  const parsed = MESSAGE_CREATED_ARGUMENTS_INPUT.parse(raw);
+  const values: MessageCreatedArguments = {
+    ...(parsed.room_id !== null && parsed.room_id !== undefined
+      ? { room_id: parsed.room_id }
+      : {}),
+    ...(parsed.attention !== null && parsed.attention !== undefined
+      ? { attention: parsed.attention }
+      : {}),
+  };
+  const ignoredKeys = Object.keys(raw).filter((key) => !MESSAGE_CREATED_ARGUMENT_KEYS.has(key));
+  return { values, json: stableStringify(values), ignoredKeys };
 }
 
 /** 确定性订阅 ID：actor + 规范化 callback URL + 事件名 + canonical arguments。 */

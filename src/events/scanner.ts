@@ -7,6 +7,7 @@ import {
   MESSAGE_CREATED_ARGUMENTS,
 } from './definitions';
 import { newEventDeliveryId } from './subscriptions';
+import { logEventsInfo, logEventsWarn } from './log';
 import type { EventSubscriptionRow } from '../storage/rows';
 
 interface ScanCandidateRow {
@@ -39,6 +40,10 @@ async function suspendSubscription(
   reason: string,
   now: number,
 ): Promise<void> {
+  logEventsWarn('scan.suspend', {
+    subscription_id: subscriptionId,
+    reason,
+  });
   await env.DB.batch([
     env.DB
       .prepare(
@@ -218,6 +223,11 @@ async function scanSubscription(
 
   const statements: D1PreparedStatement[] = [];
   let lastProcessed = scanned;
+  let skippedMissingSender = 0;
+  let skippedSelf = 0;
+  let skippedAttention = 0;
+  let skippedOversized = 0;
+  let queued = 0;
   for (const row of rows.results) {
     let metadata: Record<string, unknown>;
     try {
@@ -227,14 +237,17 @@ async function scanSubscription(
     }
     const senderId = typeof metadata.sender_id === 'string' ? metadata.sender_id : null;
     if (senderId === null) {
-      console.warn('agent-network events scan skipped event without sender', {
+      skippedMissingSender += 1;
+      logEventsWarn('scan.skip', {
         subscription_id: subscription.subscription_id,
         event_seq: row.event_seq,
+        reason: 'missing_sender',
       });
       lastProcessed = row.event_seq;
       continue;
     }
     if (senderId === subscription.actor_id) {
+      skippedSelf += 1;
       lastProcessed = row.event_seq;
       continue;
     }
@@ -243,6 +256,7 @@ async function scanSubscription(
     const attention: 'action_required' | 'informational' =
       match?.state === 'pending' ? 'action_required' : 'informational';
     if (argumentsValue.attention !== undefined && argumentsValue.attention !== attention) {
+      skippedAttention += 1;
       lastProcessed = row.event_seq;
       continue;
     }
@@ -261,9 +275,11 @@ async function scanSubscription(
     const occurrence = buildWebhookOccurrence(payload, row.created_at);
     const body = JSON.stringify(occurrence);
     if (utf8Bytes(body) > LIMITS.eventsWebhookMaxPayloadBytes) {
-      console.warn('agent-network events scan skipped oversized payload', {
+      skippedOversized += 1;
+      logEventsWarn('scan.skip', {
         subscription_id: subscription.subscription_id,
         event_seq: row.event_seq,
+        reason: 'oversized_payload',
       });
       lastProcessed = row.event_seq;
       continue;
@@ -289,6 +305,7 @@ async function scanSubscription(
         ),
     );
     available -= 1;
+    queued += 1;
     lastProcessed = row.event_seq;
   }
 
@@ -302,6 +319,21 @@ async function scanSubscription(
     );
   }
   if (statements.length > 0) await env.DB.batch(statements);
+  logEventsInfo('scan.result', {
+    subscription_id: subscription.subscription_id,
+    actor_id: subscription.actor_id,
+    scanned_from: scanned,
+    head,
+    candidates: rows.results.length,
+    queued,
+    queue_available: available,
+    skipped_missing_sender: skippedMissingSender,
+    skipped_self: skippedSelf,
+    skipped_attention: skippedAttention,
+    skipped_oversized: skippedOversized,
+    // 扫描只看房间成员与 events 表，不依赖 SSE/login/presence。
+    presence_required: false,
+  });
 }
 
 /** 扫描所有活跃订阅，把匹配事件写入投递 outbox。 */
@@ -321,9 +353,9 @@ export async function scanEventSubscriptions(env: Env): Promise<void> {
     try {
       await scanSubscription(env, subscription, now);
     } catch (error) {
-      console.error('agent-network events scan failed', {
+      logEventsWarn('scan.failed', {
         subscription_id: subscription.subscription_id,
-        error: error instanceof Error ? error.message : 'unknown',
+        error: error instanceof Error ? error.name : 'unknown',
       });
     }
   }

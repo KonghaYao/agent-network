@@ -55,7 +55,7 @@ const DATA_DIR =
 interface SubscribeResult {
   id: string;
   refreshBefore: string;
-  cursor: string;
+  cursor: string | null;
   truncated: boolean;
 }
 
@@ -268,6 +268,18 @@ async function main(): Promise<void> {
     check('订阅 id 以 sub_ 开头', mainSub.id.startsWith('sub_'), mainSub.id);
     check('返回有限 refreshBefore', Date.parse(mainSub.refreshBefore) > Date.now());
     checkEqual('新订阅 truncated=false', mainSub.truncated, false);
+    checkEqual('新订阅响应 cursor=null', mainSub.cursor, null);
+    check(
+      '订阅响应包含约定业务字段',
+      ['cursor', 'id', 'refreshBefore', 'truncated'].every((key) => key in mainSub),
+    );
+    checkEqual(
+      '订阅响应没有额外业务字段',
+      Object.keys(mainSub).filter(
+        (key) => !['_meta', 'cursor', 'id', 'refreshBefore', 'resultType', 'truncated'].includes(key),
+      ).length,
+      0,
+    );
 
     const verification = await receiver.waitForRequest(
       (request) => request.isVerification && request.query.includes('main=1'),
@@ -276,6 +288,11 @@ async function main(): Promise<void> {
     checkEqual('challenge webhook-id 以 msg_ 开头', verification.headers.get('webhook-id')?.startsWith('msg_'), true);
     checkEqual('challenge 带 X-MCP-Subscription-Id', verification.subscriptionId, mainSub.id);
     check('challenge 签名合法', verifyWebhookSignature(secret1, verification));
+    check('错误 secret 无法验证 challenge 签名', !verifyWebhookSignature(newSecret(), verification));
+    check(
+      '篡改 challenge body 后签名失效',
+      !verifyWebhookSignature(secret1, { ...verification, body: `${verification.body} ` }),
+    );
     const challengeBody = JSON.parse(verification.body) as { type?: string; challenge?: string };
     checkEqual('challenge envelope type', challengeBody.type, 'verification');
     check('challenge 是 base64url', /^[A-Za-z0-9_-]{20,}$/u.test(challengeBody.challenge ?? ''));
@@ -296,6 +313,98 @@ async function main(): Promise<void> {
     });
     check('不同 arguments 产生不同订阅 id', actionSub.id !== mainSub.id);
     checkEqual('相同 actor+URL 不重复 challenge', receiver.verificationRequests().length, verificationCount);
+
+    // ---------- ChatGPT 兼容字段 / 幂等 ----------
+    const compatUrl = receiver.url('/callback', '?compat=1');
+    const compatResponse = await rawRpc(
+      'events/subscribe',
+      {
+        name: EVENT_NAME,
+        arguments: null,
+        delivery: {
+          mode: 'webhook',
+          url: compatUrl,
+          secret: secret1,
+          signature_version: 'v1',
+        },
+        cursor: null,
+        // ChatGPT 的 task/connector 层可能附带未知字段；服务端必须忽略而不是拒绝。
+        connector_id: 'connector_test2',
+        event: EVENT_NAME,
+        params: { source: 'chatgpt' },
+      },
+      { token: tokenB },
+    );
+    checkEqual('兼容字段 subscribe HTTP 200', compatResponse.status, 200);
+    check('兼容字段不被拒绝', compatResponse.body.error === undefined, compatResponse.body.error);
+    const compatSub = compatResponse.body.result as SubscribeResult;
+    checkEqual('未知顶层字段不影响订阅', compatSub.id.startsWith('sub_'), true);
+    checkEqual('arguments:null 新订阅 cursor=null', compatSub.cursor, null);
+    checkEqual('arguments:null 新订阅 truncated=false', compatSub.truncated, false);
+    check(
+      '无 ttlMs 使用默认有限 TTL',
+      Number.isFinite(Date.parse(compatSub.refreshBefore)) &&
+        Date.parse(compatSub.refreshBefore) - Date.now() <= 24 * 60 * 60_000 + 2_000,
+      compatSub.refreshBefore,
+    );
+
+    const compatSame = await subscribe(tokenB, {
+      url: compatUrl,
+      secret: secret1,
+      arguments: {},
+    });
+    checkEqual('arguments:null 与 {} 是同一订阅', compatSame.id, compatSub.id);
+
+    const orderUrl = receiver.url('/callback', '?order=1');
+    const orderA = await rawRpc(
+      'events/subscribe',
+      {
+        name: EVENT_NAME,
+        arguments: { room_id: roomAB, attention: 'action_required' },
+        delivery: { mode: 'webhook', url: orderUrl, secret: secret1 },
+      },
+      { token: tokenB },
+    );
+    const orderB = await rawRpc(
+      'events/subscribe',
+      {
+        name: EVENT_NAME,
+        arguments: { attention: 'action_required', room_id: roomAB },
+        delivery: { mode: 'webhook', url: orderUrl, secret: secret1 },
+      },
+      { token: tokenB },
+    );
+    checkEqual(
+      'arguments 键顺序不产生新订阅',
+      (orderA.body.result as SubscribeResult).id,
+      (orderB.body.result as SubscribeResult).id,
+    );
+
+    const unknownArgUrl = receiver.url('/callback', '?unknownarg=1');
+    const unknownArgA = await rawRpc(
+      'events/subscribe',
+      {
+        name: EVENT_NAME,
+        arguments: { room_id: roomAB, future_filter: 'ignored' },
+        delivery: { mode: 'webhook', url: unknownArgUrl, secret: secret1 },
+      },
+      { token: tokenB },
+    );
+    const unknownArgB = await rawRpc(
+      'events/subscribe',
+      {
+        name: EVENT_NAME,
+        arguments: { room_id: roomAB },
+        delivery: { mode: 'webhook', url: unknownArgUrl, secret: secret1 },
+      },
+      { token: tokenB },
+    );
+    check('未知 arguments 字段不被拒绝', unknownArgA.body.error === undefined, unknownArgA.body.error);
+    checkEqual(
+      '未知 arguments 字段不改变订阅身份',
+      (unknownArgA.body.result as SubscribeResult).id,
+      (unknownArgB.body.result as SubscribeResult).id,
+    );
 
     const shortTtl = await subscribe(tokenB, {
       url: receiver.url('/callback', '?ttl=min'),
@@ -336,6 +445,51 @@ async function main(): Promise<void> {
       | undefined;
     checkEqual('错误 challenge 返回 -32015', badChallengeError?.code, -32015);
     checkEqual('错误 challenge reason', badChallengeError?.data?.reason, 'challenge_failed');
+    checkEqual(
+      '错误 challenge detail=challenge_mismatch',
+      badChallengeError?.data?.detail,
+      'challenge_mismatch',
+    );
+
+    const verifyMalformed = await rawRpc(
+      'events/subscribe',
+      {
+        name: EVENT_NAME,
+        arguments: {},
+        delivery: { mode: 'webhook', url: receiver.url('/verify-malformed'), secret: secret1 },
+      },
+      { token: tokenB },
+    );
+    const verifyMalformedError = verifyMalformed.body.error as
+      | { code?: number; data?: Record<string, unknown> }
+      | undefined;
+    checkEqual('非 JSON challenge 返回 -32015', verifyMalformedError?.code, -32015);
+    checkEqual('非 JSON challenge reason', verifyMalformedError?.data?.reason, 'challenge_failed');
+    checkEqual(
+      '非 JSON challenge detail=challenge_malformed',
+      verifyMalformedError?.data?.detail,
+      'challenge_malformed',
+    );
+
+    const verifyRedirect = await rawRpc(
+      'events/subscribe',
+      {
+        name: EVENT_NAME,
+        arguments: {},
+        delivery: { mode: 'webhook', url: receiver.url('/verify-redirect'), secret: secret1 },
+      },
+      { token: tokenB },
+    );
+    const verifyRedirectError = verifyRedirect.body.error as
+      | { code?: number; data?: Record<string, unknown> }
+      | undefined;
+    checkEqual('验证端点 302 返回 -32015', verifyRedirectError?.code, -32015);
+    checkEqual('验证端点 302 detail=http_status', verifyRedirectError?.data?.detail, 'http_status');
+    checkEqual('验证端点 302 status=302', verifyRedirectError?.data?.status, 302);
+    check(
+      '验证不跟随重定向',
+      !receiver.requests.some((request) => request.path === '/redirect-target'),
+    );
 
     const verify500 = await rawRpc(
       'events/subscribe',
@@ -351,6 +505,8 @@ async function main(): Promise<void> {
       | undefined;
     checkEqual('验证端点 500 返回 -32015', verify500Error?.code, -32015);
     checkEqual('验证端点 500 reason', verify500Error?.data?.reason, 'http_5xx');
+    checkEqual('验证端点 500 detail=http_status', verify500Error?.data?.detail, 'http_status');
+    checkEqual('验证端点 500 status=500', verify500Error?.data?.status, 500);
 
     const verifySlow = await rawRpc(
       'events/subscribe',
@@ -366,6 +522,7 @@ async function main(): Promise<void> {
       | undefined;
     checkEqual('验证超时返回 -32015', verifySlowError?.code, -32015);
     checkEqual('验证超时 reason', verifySlowError?.data?.reason, 'timeout');
+    checkEqual('验证超时 detail=timeout', verifySlowError?.data?.detail, 'timeout');
 
     // ---------- 核心闭环（subscribe → message → webhook → claim → complete） ----------
     await runEventsAcceptance({ receiver, secret: secret1 });
@@ -387,6 +544,30 @@ async function main(): Promise<void> {
     check('无 delivery 时不带 delivery_id', firstPayload.data.delivery_id === undefined);
     checkEqual('事件 cursor=event_seq', firstPayload.cursor, firstPayload.data.event_seq);
     check('事件 body 不含正文', !firstEvent.body.includes(bodyMarker));
+    check(
+      '事件 body 不含 token/secret',
+      !firstEvent.body.includes(tokenA) &&
+        !firstEvent.body.includes(tokenB) &&
+        !firstEvent.body.includes(secret1) &&
+        !firstEvent.body.includes('whsec_'),
+    );
+    checkEqual(
+      'payload 只含标识与状态字段',
+      JSON.stringify(Object.keys(firstPayload.data).sort()),
+      JSON.stringify(
+        [
+          'attention',
+          'created_at',
+          'created_seq',
+          'event_id',
+          'event_seq',
+          'message_id',
+          'room_id',
+          'room_kind',
+          'sender_id',
+        ].sort(),
+      ),
+    );
     check('事件签名合法', verifyWebhookSignature(secret1, firstEvent));
     checkEqual('webhook-id 等于 eventId', firstEvent.headers.get('webhook-id'), firstPayload.eventId);
     check(
@@ -422,6 +603,83 @@ async function main(): Promise<void> {
           request.subscriptionId === mainSub.id &&
           payloadOf(request).data.message_id === cSent.message.message_id,
       ),
+    );
+
+    // room_id/attention 缺省不限制。
+    const globalSub = await subscribe(tokenB, {
+      url: receiver.url('/callback', '?global=1'),
+      secret: secret1,
+    });
+    const globalSent = await sendMessage(agentC, roomBC, 'global-room-message');
+    const globalEvent = await receiver.waitForEvent(
+      (request) =>
+        request.subscriptionId === globalSub.id &&
+        payloadOf(request).data.message_id === globalSent.message.message_id,
+      '等待无 room 过滤事件',
+    );
+    checkEqual(
+      '未提供 room_id 时接收所有所在房间',
+      payloadOf(globalEvent).data.room_id,
+      roomBC,
+    );
+    checkEqual(
+      'attention 缺省接收 informational',
+      payloadOf(globalEvent).data.attention,
+      'informational',
+    );
+
+    // ---------- 离线投递：无 SSE、无 network_login ----------
+    const tokenD = newToken();
+    const agentD = await connectClient(tokenD);
+    const d = await registerIdentity(agentD, {
+      kind: 'agent',
+      name: 'Events D Offline',
+      sessionId: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+    });
+    const roomAD = (
+      await callTool<RoomDetail>(agentA.client, 'network_room_create', {
+        request_id: newRequestId('room'),
+        kind: 'direct',
+        members: [d.actor_id],
+      })
+    ).room.room_id;
+    await agentD.close();
+    const offlineSub = await subscribe(tokenD, {
+      url: receiver.url('/callback', '?offline=1'),
+      secret: secret1,
+      arguments: { room_id: roomAD },
+    });
+    const offlineDetail = await callTool<RoomDetail>(agentA.client, 'network_room_get', {
+      room_id: roomAD,
+    });
+    checkEqual(
+      '未 login 的 Agent 在线状态为 false',
+      offlineDetail.members.find((member) => member.actor_id === d.actor_id)?.online,
+      false,
+    );
+    const offlineSent = await sendMessage(agentA, roomAD, 'offline-message', {
+      invoke: [d.actor_id],
+    });
+    const offlineEvent = await receiver.waitForEvent(
+      (request) =>
+        request.subscriptionId === offlineSub.id &&
+        payloadOf(request).data.message_id === offlineSent.message.message_id,
+      '等待离线投递',
+    );
+    checkEqual(
+      '无 SSE 且未 login 仍投递',
+      payloadOf(offlineEvent).data.message_id,
+      offlineSent.message.message_id,
+    );
+    checkEqual(
+      '离线投递 attention=action_required',
+      payloadOf(offlineEvent).data.attention,
+      'action_required',
+    );
+    checkEqual(
+      '离线投递携带 delivery_id',
+      payloadOf(offlineEvent).data.delivery_id,
+      offlineSent.delivery_ids[0],
     );
 
     // attention 过滤 + pending delivery。
@@ -967,6 +1225,18 @@ async function main(): Promise<void> {
       !logs.includes('webhook-signature') || !logs.includes('v1,'),
       logs.slice(0, 200),
     );
+    for (const stage of [
+      '"stage":"inbound"',
+      '"stage":"validate"',
+      '"stage":"verification.ok"',
+      '"stage":"subscribe.persist"',
+      '"stage":"delivery.result"',
+    ]) {
+      check(`阶段日志包含 ${stage}`, logs.includes(stage));
+    }
+    check('阶段日志包含 request_id', /"request_id":/u.test(logs));
+    check('阶段日志只记录 callback host', logs.includes('"callback_host":"127.0.0.1"'));
+    check('阶段日志不含完整 callback URL', !logs.includes('https://127.0.0.1:'));
 
     console.log(`MCP Events 验收通过: ${checksPassed()} 项`);
   } finally {

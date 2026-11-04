@@ -8,6 +8,13 @@ import { LIMITS } from './contracts/limits';
 import { isBusinessError, type BusinessErrorBody } from './contracts/errors';
 import { attachPublicUrl, publicFileHeaders } from './drive/service';
 import { roomFileIsDownloadable } from './domain/room-files';
+import {
+  asRecord,
+  callbackHostOf,
+  createEventsLogger,
+  type EventsLogFields,
+  type EventsLogger,
+} from './events/log';
 import { runEventsTick, scheduleEventsTick } from './events/runtime';
 import { authenticate } from './mcp/auth';
 import { buildServer } from './mcp/server';
@@ -27,6 +34,7 @@ interface RpcBody {
     uri?: string;
     notifications?: { resourceSubscriptions?: string[] };
     _meta?: Record<string, unknown>;
+    [key: string]: unknown;
   };
   _meta?: Record<string, unknown>;
 }
@@ -256,12 +264,110 @@ function handlerFor(
   });
 }
 
+/**
+ * events/* 入站摘要：只记录字段名、host 与类型，不记录 secret、完整 URL 或
+ * arguments 值。这样即使参数校验在 SDK/domain 内失败，也能证明请求是否到达。
+ */
+function eventsInboundFields(body: RpcBody): EventsLogFields {
+  const params = asRecord(body.params) ?? {};
+  const delivery = asRecord(params.delivery);
+  const argumentKeys = asRecord(params.arguments);
+  const secret = delivery?.secret;
+  return {
+    stage: 'inbound',
+    params_keys: Object.keys(params).sort(),
+    argument_keys: argumentKeys ? Object.keys(argumentKeys).sort() : null,
+    delivery_mode: typeof delivery?.mode === 'string' ? delivery.mode : null,
+    callback_host:
+      delivery === null ? null : callbackHostOf(delivery.url),
+    secret_present: typeof secret === 'string',
+    secret_prefix_ok:
+      typeof secret === 'string' ? secret.startsWith('whsec_') : null,
+    cursor_kind:
+      params.cursor === null || params.cursor === undefined ? 'null' : typeof params.cursor,
+    ttl_kind:
+      params.ttlMs === null
+        ? 'null'
+        : params.ttlMs === undefined
+          ? 'absent'
+          : typeof params.ttlMs,
+  };
+}
+
+/** 响应阶段日志：JSON-RPC error code 与 result 键名，不回显 message/正文。 */
+function logEventsResponse(
+  log: EventsLogger,
+  response: Response,
+  startedAt: number,
+): void {
+  const status = response.status;
+  const duration = () => Math.max(0, Date.now() - startedAt);
+  void response
+    .clone()
+    .json()
+    .then((payload: unknown) => {
+      const message = asRecord(payload);
+      const error = asRecord(message?.error);
+      const data = asRecord(error?.data);
+      const result = asRecord(message?.result);
+      log.info('response', {
+        stage: 'response',
+        status,
+        duration_ms: duration(),
+        error_code: typeof error?.code === 'number' ? error.code : null,
+        error_reason: typeof data?.reason === 'string' ? data.reason : null,
+        error_detail: typeof data?.detail === 'string' ? data.detail : null,
+        result_keys: result ? Object.keys(result).sort() : null,
+        result_cursor_kind: result
+          ? result.cursor === null
+            ? 'null'
+            : result.cursor === undefined
+              ? 'absent'
+              : typeof result.cursor
+          : null,
+        result_truncated:
+          typeof result?.truncated === 'boolean' ? result.truncated : null,
+      });
+    })
+    .catch(() => {
+      log.info('response', {
+        stage: 'response',
+        status,
+        duration_ms: duration(),
+        error_code: null,
+        result_keys: null,
+      });
+    });
+}
+
 async function handleMcp(request: Request, env: Env, mount?: FileMount): Promise<Response> {
+  const startedAt = Date.now();
+  const body =
+    request.method === 'POST'
+      ? ((await request.clone().json().catch(() => null)) as RpcBody | null)
+      : null;
+  const method =
+    body !== null && !Array.isArray(body) && typeof body.method === 'string'
+      ? body.method
+      : null;
+  const eventsLog =
+    method !== null && method.startsWith('events/')
+      ? createEventsLogger(method, body?.id ?? null)
+      : null;
+  if (eventsLog && body !== null) {
+    eventsLog.info('inbound', eventsInboundFields(body));
+  }
+
   let principal: Awaited<ReturnType<typeof authenticate>>;
   try {
     principal = await authenticate(env.DB, request);
   } catch (error) {
     if (isBusinessError(error)) {
+      eventsLog?.warn('auth', {
+        stage: 'auth',
+        result: 'invalid',
+        error_code: error.code,
+      });
       return jsonRpcError(null, -32000, error.message, error.toBody(), 401);
     }
     throw error;
@@ -276,7 +382,6 @@ async function handleMcp(request: Request, env: Env, mount?: FileMount): Promise
     return new Response(response.body, { status: 405, statusText: response.statusText, headers });
   }
 
-  const body = (await request.clone().json().catch(() => null)) as RpcBody | null;
   const meta = body?._meta ?? body?.params?._meta;
   const requestedSubscriptions = body?.params?.notifications?.resourceSubscriptions;
 
@@ -378,6 +483,7 @@ async function handleMcp(request: Request, env: Env, mount?: FileMount): Promise
   } else if (body?.method === 'events/subscribe' || body?.method === 'events/unsubscribe') {
     scheduleEventsTick(env);
   }
+  if (eventsLog) logEventsResponse(eventsLog, finalResponse, startedAt);
   return finalResponse;
 }
 
