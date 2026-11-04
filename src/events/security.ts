@@ -183,38 +183,71 @@ export interface CallbackTarget {
   family: 4 | 6;
 }
 
+export type CallbackAddressLookup = (
+  hostname: string,
+) => Promise<ReadonlyArray<{ address: string; family: number }>>;
+
+/** 默认解析器；关闭 verbatim，保留解析器给出的顺序。 */
+const defaultLookup: CallbackAddressLookup = (hostname) =>
+  lookup(hostname, { all: true, verbatim: true });
+
 /**
- * 每次验证/投递都重新解析；固定一个已校验地址，保留原 hostname 用于
- * Host 与 TLS SNI，避免 DNS rebinding 与 SNI 失配。
+ * 解析并校验 callback 的全部 A/AAAA 地址。
+ *
+ * - 每个候选地址都单独做 SSRF 校验，不只看第一个；
+ * - 通过校验的地址按 IPv4 优先、解析器原始顺序稳定排序，供连接失败时回退；
+ * - 全部候选都被拒绝才返回 blocked_address，避免私网地址被误报为网络失败。
+ *
+ * IPv4 优先是明确策略：双栈主机在 IPv6 路由不可用时仍能立即回退到 IPv4，
+ * 与“按解析器顺序逐个尝试”相比，避免先耗尽 IPv6 的尝试预算。
+ */
+export async function resolveCallbackTargets(
+  url: URL,
+  rules: CallbackUrlRules,
+  lookupAll: CallbackAddressLookup = defaultLookup,
+): Promise<CallbackTarget[]> {
+  const hostname = stripBrackets(url.hostname);
+  const literalFamily = isIP(hostname);
+  let candidates: ReadonlyArray<{ address: string; family: number }>;
+  if (literalFamily !== 0) {
+    candidates = [{ address: hostname, family: literalFamily }];
+  } else {
+    try {
+      candidates = await lookupAll(hostname);
+    } catch {
+      throw new CallbackTargetError('dns_error', 'callback hostname could not be resolved');
+    }
+  }
+
+  const seen = new Set<string>();
+  const usable: CallbackTarget[] = [];
+  for (const candidate of candidates) {
+    const family: 4 | 6 = candidate.family === 6 ? 6 : 4;
+    const key = `${family}:${candidate.address}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!rules.allowPrivateCallbacks && !isPublicAddress(candidate.address)) continue;
+    usable.push({ hostname, address: candidate.address, family });
+  }
+  if (usable.length === 0) {
+    throw new CallbackTargetError('blocked_address', 'callback address is not public');
+  }
+  return [
+    ...usable.filter((target) => target.family === 4),
+    ...usable.filter((target) => target.family === 6),
+  ];
+}
+
+/**
+ * 每次验证/投递都重新解析；返回 IPv4 优先的首个已校验地址。
+ * 生产请求使用 `resolveCallbackTargets` 逐个尝试，本函数保留给需要
+ * 单目标语义的调用方与测试。
  */
 export async function resolveCallbackTarget(
   url: URL,
   rules: CallbackUrlRules,
 ): Promise<CallbackTarget> {
-  const hostname = stripBrackets(url.hostname);
-  const literalFamily = isIP(hostname);
-  let candidates: { address: string; family: number }[];
-  if (literalFamily !== 0) {
-    candidates = [{ address: hostname, family: literalFamily }];
-  } else {
-    try {
-      candidates = await lookup(hostname, { all: true, verbatim: true });
-    } catch {
-      throw new CallbackTargetError('dns_error', 'callback hostname could not be resolved');
-    }
-  }
-  const usable = candidates.filter(
-    (candidate) => rules.allowPrivateCallbacks || isPublicAddress(candidate.address),
-  );
-  if (usable.length === 0) {
-    throw new CallbackTargetError('blocked_address', 'callback address is not public');
-  }
-  const selected = usable[0]!;
-  return {
-    hostname,
-    address: selected.address,
-    family: selected.family === 6 ? 6 : 4,
-  };
+  return (await resolveCallbackTargets(url, rules))[0]!;
 }
 
 /** whsec_ + strict base64；解码后 24–64 字节。 */

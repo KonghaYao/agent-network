@@ -191,6 +191,46 @@ function beginVerification(hostname: string, now: number, perMinute: number): vo
   verificationAttempts.set(hostname, recent);
 }
 
+function callbackDiagnostics(error: CallbackRequestError): Record<string, string | number | null> {
+  const last = error.attempts.at(-1);
+  return {
+    error_code: error.code ?? 'unknown',
+    error_message: error.message,
+    attempt: error.attemptCount,
+    address_family: last?.family ?? null,
+    callback_address: last?.address ?? null,
+  };
+}
+
+function callbackErrorData(error: CallbackRequestError): Record<string, unknown> {
+  return {
+    attempts: error.attemptCount,
+    ...(error.code ? { error_code: error.code } : {}),
+  };
+}
+
+function logCallbackAttempts(
+  log: EventsLogger,
+  subscriptionId: string,
+  host: string,
+  error: CallbackRequestError,
+): void {
+  for (const attempt of error.attempts) {
+    log.warn('verification', {
+      stage: 'verification.attempt_failed',
+      subscription_id: subscriptionId,
+      callback_host: host,
+      attempt: attempt.attempt,
+      address_family: attempt.family,
+      callback_address: attempt.address,
+      reason: attempt.reason,
+      error_code: attempt.code ?? 'unknown',
+      error_message: attempt.message,
+      duration_ms: attempt.durationMs,
+    });
+  }
+}
+
 async function verifyCallback(
   env: Env,
   callbackUrl: URL,
@@ -317,35 +357,41 @@ async function verifyCallback(
         });
       }
       if (error.reason === 'tls_error') {
+        logCallbackAttempts(log, subscriptionId, host, error);
         log.warn('verification', {
           stage: 'verification.failed',
           subscription_id: subscriptionId,
           callback_host: host,
           reason: 'tls_error',
+          ...callbackDiagnostics(error),
           duration_ms: elapsedMs(startedAt),
         });
-        throw callbackFailure('tls_error', 'tls_error');
+        throw callbackFailure('tls_error', 'tls_error', undefined, callbackErrorData(error));
       }
       if (error.reason === 'timeout') {
+        logCallbackAttempts(log, subscriptionId, host, error);
         log.warn('verification', {
           stage: 'verification.failed',
           subscription_id: subscriptionId,
           callback_host: host,
           reason: 'timeout',
           detail: 'timeout',
+          ...callbackDiagnostics(error),
           duration_ms: elapsedMs(startedAt),
         });
-        throw callbackFailure('timeout', 'timeout');
+        throw callbackFailure('timeout', 'timeout', undefined, callbackErrorData(error));
       }
+      logCallbackAttempts(log, subscriptionId, host, error);
       log.warn('verification', {
         stage: 'verification.failed',
         subscription_id: subscriptionId,
         callback_host: host,
         reason: 'connection_refused',
         detail: error.reason,
+        ...callbackDiagnostics(error),
         duration_ms: elapsedMs(startedAt),
       });
-      throw callbackFailure('connection_refused', error.reason);
+      throw callbackFailure('connection_refused', error.reason, undefined, callbackErrorData(error));
     }
     log.warn('verification', {
       stage: 'verification.failed',

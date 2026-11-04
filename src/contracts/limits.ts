@@ -130,6 +130,8 @@ export const LIMITS = {
   eventsWebhookConcurrency: 4,
   /** challenge 验证超时（毫秒）。 */
   eventsVerificationTimeoutMs: 5_000,
+  /** 单个 callback 地址的尝试超时（毫秒）；总预算仍由调用方 timeoutMs 控制。 */
+  eventsCallbackAttemptTimeoutMs: 5_000,
   /** webhook 投递超时（毫秒）。 */
   eventsWebhookTimeoutMs: 10_000,
   /** webhook 响应最多读取字节数。 */

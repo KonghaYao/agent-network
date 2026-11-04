@@ -8,6 +8,7 @@
  */
 
 import { Database } from 'bun:sqlite';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -45,6 +46,8 @@ import {
   type TestServer,
 } from './lib/events-harness';
 import { runEventsValidationChecks } from './lib/events-validation';
+import { runEventsClientChecks } from './lib/events-client-check';
+import { runEventsFileLogChecks } from './lib/events-file-log-check';
 
 const EVENT_NAME = 'agentnet.message.created';
 const SERVER_PORT = Number(process.env.EVENTS_TEST_PORT ?? 18890);
@@ -255,6 +258,10 @@ async function main(): Promise<void> {
       receiver,
       secret: secret1,
     });
+
+    // ---------- 多地址回退 / 文件日志单元 ----------
+    await runEventsClientChecks({ receiver });
+    runEventsFileLogChecks();
 
     // ---------- challenge / 订阅 ----------
     const mainUrl = receiver.url('/callback', '?main=1');
@@ -523,6 +530,8 @@ async function main(): Promise<void> {
     checkEqual('验证超时返回 -32015', verifySlowError?.code, -32015);
     checkEqual('验证超时 reason', verifySlowError?.data?.reason, 'timeout');
     checkEqual('验证超时 detail=timeout', verifySlowError?.data?.detail, 'timeout');
+    checkEqual('验证超时 data.attempts', verifySlowError?.data?.attempts, 1);
+    checkEqual('验证超时 data.error_code', verifySlowError?.data?.error_code, 'ETIMEDOUT');
 
     // ---------- 核心闭环（subscribe → message → webhook → claim → complete） ----------
     await runEventsAcceptance({ receiver, secret: secret1 });
@@ -1237,6 +1246,29 @@ async function main(): Promise<void> {
     check('阶段日志包含 request_id', /"request_id":/u.test(logs));
     check('阶段日志只记录 callback host', logs.includes('"callback_host":"127.0.0.1"'));
     check('阶段日志不含完整 callback URL', !logs.includes('https://127.0.0.1:'));
+
+    // ---------- 文件日志落盘 ----------
+    const eventLogFile = join(DATA_DIR, 'logs', 'events.log');
+    check('文件日志已落盘', existsSync(eventLogFile));
+    const fileLogs = existsSync(eventLogFile) ? readFileSync(eventLogFile, 'utf8') : '';
+    check('文件日志包含 verification.ok', fileLogs.includes('"stage":"verification.ok"'));
+    check(
+      '文件日志包含地址尝试失败记录',
+      fileLogs.includes('"stage":"verification.attempt_failed"') &&
+        fileLogs.includes('"address_family":4'),
+    );
+    check('文件日志包含 errno 分类', fileLogs.includes('"error_code":"ETIMEDOUT"'));
+    for (const [label, value] of [
+      ['文件日志不含 secret', secret1],
+      ['文件日志不含新 secret', secret2],
+      ['文件日志不含 Agent A token', tokenA],
+      ['文件日志不含 Agent B token', tokenB],
+      ['文件日志不含正文', bodyMarker],
+      ['文件日志不含 whsec_ 前缀', 'whsec_'],
+      ['文件日志不含完整 callback URL', 'https://127.0.0.1:'],
+    ] as const) {
+      check(label, !fileLogs.includes(value));
+    }
 
     console.log(`MCP Events 验收通过: ${checksPassed()} 项`);
   } finally {
