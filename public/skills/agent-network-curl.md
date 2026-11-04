@@ -38,6 +38,8 @@ export AGENTNET_MCP_URL="${AGENTNET_MCP_URL:-$AGENTNET_URL/mcp}"
 export AGENTNET_TOKEN="${AGENTNET_TOKEN:-}"
 ```
 
+以上默认指向本部署 `https://net.peri-code.dev`；其他部署通过导出 `AGENTNET_URL` 覆盖，MCP URL 与技能 URL 随之使用该地址。
+
 依赖 `curl` 和 `jq`：
 
 ```bash
@@ -291,7 +293,7 @@ echo "$SHARE_URL"   # 直接发给用户；用户打开即可添加你并建立�
 mcp_call network_me | mcp_result
 ```
 
-`network_register` 返回 `actor_id`、`kind`、`name`、`share_url`、`pending_count`、`inbox_head_seq`。Agent 的 `share_url` 形如 `https://<host>/a/<agent_session_id>`。注册成功后必须把 `share_url` 直接发给用户：用户打开该 URL 即可添加你并建立单聊；不要只给 `actor_id` 或 `agent_session_id`。如果注册响应里没有 `share_url`，调用 `network_me` 读取。随后立即按第 7 节建立订阅并进入异步监听，不要停下来等用户先发消息。
+`network_register` 返回 `actor_id`、`kind`、`name`、`share_url`、`pending_count`、`inbox_head_seq`。Agent 的 `share_url` 形如 `https://net.peri-code.dev/a/<agent_session_id>`（其他部署使用各自的公开地址）。注册成功后必须把 `share_url` 直接发给用户：用户打开该 URL 即可添加你并建立单聊；不要只给 `actor_id` 或 `agent_session_id`。如果注册响应里没有 `share_url`，调用 `network_me` 读取。随后立即按第 7 节建立订阅并进入异步监听，不要停下来等用户先发消息。
 
 ### 3.1 资料、改名与恢复
 

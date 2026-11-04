@@ -3,8 +3,9 @@
  *
  * 由 `chatClientScript` 拼进主脚本共享作用域，因此可复用 `identity`、
  * `ensureIdentity`、`callTool`、`requestId`、`avatarElement` 与
- * `legacyCopyText`。本地注册表只保存非敏感标识（owner/actor/session/名称/
- * 创建时间），绝不保存 token、MCP URL、提示词或 share_url。
+ * `legacyCopyText`。本地注册表保存 owner/actor/session/名称/创建时间与该
+ * Agent 自己的 MCP URL（含长期 token），供会话右键提示词复用；不保存
+ * human token、提示词或 share_url。注册表只在本浏览器，按当前 human 隔离。
  */
 export const CHAT_AGENTS_SCRIPT = `
 const AGENT_REGISTRY_KEY = 'agent-network-agents-v1';
@@ -62,6 +63,8 @@ function agentRegistryRead() {
     if (typeof item.name !== 'string') continue;
     if (typeof item.agent_session_id !== 'string' && item.agent_session_id !== null) continue;
     if (typeof item.created_at !== 'string') continue;
+    if (typeof item.mcp_url !== 'string' && typeof item.mcp_url !== 'undefined' &&
+        item.mcp_url !== null) continue;
     if (seen.has(item.actor_id)) continue;
     seen.add(item.actor_id);
     items.push({
@@ -69,7 +72,8 @@ function agentRegistryRead() {
       actor_id: item.actor_id,
       name: item.name,
       agent_session_id: item.agent_session_id,
-      created_at: item.created_at
+      created_at: item.created_at,
+      mcp_url: typeof item.mcp_url === 'string' ? item.mcp_url : ''
     });
   }
   return { items: items, error: '' };
@@ -107,6 +111,15 @@ function agentRegistryItems(ownerActorId) {
   return { items: agentsSortByCreated(items).slice(0, AGENT_REGISTRY_MAX), error: read.error };
 }
 
+/** 按当前 human 与 Agent actor 查本地条目；不存在或读失败时返回空。 */
+function agentRegistryEntry(ownerActorId, actorId) {
+  const read = agentRegistryItems(ownerActorId);
+  const item = read.items.find(function (entry) {
+    return entry.actor_id === actorId;
+  });
+  return { item: item || null, error: read.error };
+}
+
 /** 创建成功后写入；同一 actor_id 去重，超过上限保留最新条目。 */
 function agentRegistryAdd(ownerActorId, entry) {
   if (!ownerActorId) return '当前浏览器身份不可用，未能保存本地 Agent 列表';
@@ -119,7 +132,8 @@ function agentRegistryAdd(ownerActorId, entry) {
     actor_id: entry.actor_id,
     name: entry.name,
     agent_session_id: entry.agent_session_id,
-    created_at: entry.created_at
+    created_at: entry.created_at,
+    mcp_url: typeof entry.mcp_url === 'string' ? entry.mcp_url : ''
   });
   return agentRegistryWrite(agentsSortByCreated(items));
 }
@@ -137,7 +151,8 @@ function agentRegistryRename(actorId, name) {
       actor_id: item.actor_id,
       name: name,
       agent_session_id: item.agent_session_id,
-      created_at: item.created_at
+      created_at: item.created_at,
+      mcp_url: item.mcp_url
     };
   });
   if (changed) agentRegistryWrite(items);

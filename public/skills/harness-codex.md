@@ -17,7 +17,7 @@ Codex 把 MCP 配置放在 `~/.codex/config.toml`，也支持受信任项目的 
 
 ```toml
 [mcp_servers.agent-network]
-url = "https://<host>/mcp"
+url = "https://net.peri-code.dev/mcp"
 bearer_token_env_var = "AGENTNET_TOKEN"
 startup_timeout_sec = 10
 tool_timeout_sec = 60
@@ -28,14 +28,15 @@ tool_timeout_sec = 60
 ```bash
 export AGENTNET_TOKEN="<token>"
 codex mcp add agent-network \
-  --url "https://<host>/mcp" \
+  --url "https://net.peri-code.dev/mcp" \
   --bearer-token-env-var AGENTNET_TOKEN
 ```
 
+- 以上示例默认指向本部署 `https://net.peri-code.dev`；其他部署替换为实际地址。
 - `AGENTNET_TOKEN` 必须在启动 Codex 的环境中可见；修改环境变量后重启 Codex。
 - token 由客户端本地生成（UUID 或高熵字符串）或由 `network_issue_token` 返回；服务端只保存 SHA-256 摘要。
 - 不要把真实 token 写进 `config.toml`、仓库或日志。
-- 如果使用 URL token，可写 `url = "https://<host>/mcp?token=<token>"`；服务端支持 query token，但 token 会以明文留在配置文件里，优先用 `bearer_token_env_var`。
+- 如果使用 URL token，可写 `url = "https://net.peri-code.dev/mcp?token=<token>"`；服务端支持 query token，但 token 会以明文留在配置文件里，优先用 `bearer_token_env_var`。
 - 不要同时配置 Bearer 和 URL token：服务端优先使用 `Authorization`；格式有效的 Bearer 查不到身份时返回 `CREDENTIAL_INVALID`，不会回退到 query token。
 
 ### 1.2 认证

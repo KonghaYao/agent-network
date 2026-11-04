@@ -4,7 +4,9 @@
  * 由 `chatClientScript` 拼进主脚本共享作用域，因此可复用
  * `ensureIdentity`、`callTool`、`callToolWithToken`、`requestId` 与
  * `legacyCopyText`。新 Agent 的 token/URL/提示词只保存在本片段的闭包变量与
- * 弹窗输入框/文本区里，关闭即清空，不写 localStorage/sessionStorage 或 console。
+ * 弹窗输入框/文本区里，关闭即清空；注册成功后把该 Agent 自己的 MCP URL
+ * 写入当前 human 的本地 Agents 注册表，供会话右键提示词复用，不写
+ * human token、提示词或 console。
  */
 export const NEW_AGENT_SCRIPT = `
 const newAgentButton = document.getElementById('new-agent');
@@ -36,13 +38,15 @@ function newAgentSkillUrl() {
   return location.origin + NEW_AGENT_SKILL_PATH;
 }
 
-/** 纯 URL skill 提示词：只拼接页面内存里的值，不写入 DOM 以外的地方。 */
-function newAgentBuildPrompt(skillUrl, mcpUrl, name) {
-  return '你是 WeBots Agent。请先阅读技能：\\n' + skillUrl +
-    '\\n\\n使用这个 MCP 端点接入（URL 已包含你的 Agent token）：\\n' + mcpUrl +
-    '\\n\\n你的 Agent 名称：' + name +
-    '\\n按技能文档把它作为 AGENTNET_MCP_URL，或从 URL 取出 token 作为 Bearer。' +
-    '\\n先调用 network_me 确认身份，把返回的 share_url 发给用户；之后保持异步监听，收到用户消息后回复。';
+/** 纯 URL skill 提示词：只引用技能文档与连接信息，不重复技能步骤。 */
+function newAgentBuildPrompt(skillUrl, mcpUrl, token, name) {
+  return '你是 WeBots Agent。请先阅读并严格按技能文档执行：\\n' + skillUrl +
+    '\\n\\n连接信息：\\n' +
+    'AGENTNET_MCP_URL="' + mcpUrl + '"\\n' +
+    'AGENTNET_TOKEN="' + token + '"\\n' +
+    '你的 Agent 身份：' + name +
+    '\\n\\n按技能文档确认身份、把 share_url 发给用户、进入异步监听并处理消息。' +
+    '不要重复发明步骤。凭据只给目标 Agent，勿发群、日志或截图。';
 }
 
 function newAgentSetError(message) {
@@ -207,15 +211,17 @@ async function newAgentCreate(event) {
     const skillUrl = newAgentSkillUrl();
     if (newAgentSkillUrlInput) newAgentSkillUrlInput.value = skillUrl;
     if (newAgentPromptInput) {
-      newAgentPromptInput.value = newAgentBuildPrompt(skillUrl, newAgentUrl, name);
+      newAgentPromptInput.value = newAgentBuildPrompt(skillUrl, newAgentUrl, newAgentToken, name);
     }
     if (newAgentResultElement) newAgentResultElement.hidden = false;
-    // 本地注册表只保存非敏感标识；保存失败不影响已创建的 Agent 与一次性 URL。
+    // 本地注册表保存该 Agent 自己的 MCP URL，供右键提示词复用；不保存 human token。
+    // 保存失败不影响已创建的 Agent 与弹窗内的一次性 URL。
     const registryError = agentRegistryAdd(me && me.actor_id, {
       actor_id: registered.actor_id,
       name: name,
       agent_session_id: agentSessionId,
-      created_at: String(Date.now())
+      created_at: String(Date.now()),
+      mcp_url: newAgentUrl
     });
     if (newAgentCreateButton) {
       newAgentCreateButton.disabled = true;

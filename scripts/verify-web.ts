@@ -785,9 +785,9 @@ async function main(): Promise<void> {
 
       await page.locator('#room-menu-copy-prompt').click();
       await page.waitForFunction(
-        `document.getElementById('room-menu-status').textContent === '已复制'`,
+        `document.getElementById('room-menu-status').textContent === '已复制（未包含凭据）'`,
       );
-      check('复制后菜单显示“已复制”', true);
+      check('未保存凭据时复制后菜单显示明确反馈', true);
       const roomPrompt = (await page.evaluate('window.__copiedRoomPrompt')) as string | null;
       check(
         '提示词包含房间 ID',
@@ -800,13 +800,14 @@ async function main(): Promise<void> {
         roomPrompt,
       );
       check(
-        '提示词包含接入工具与统一流',
+        '提示词只引用技能文档，不重复工具步骤',
         Boolean(roomPrompt) &&
-          roomPrompt!.includes('network_room_get') &&
-          roomPrompt!.includes('network_history_list') &&
-          roomPrompt!.includes('network_message_send') &&
-          roomPrompt!.includes('agentnet://stream') &&
-          roomPrompt!.includes('超过 10 秒'),
+          !roomPrompt!.includes('network_room_get') &&
+          !roomPrompt!.includes('network_history_list') &&
+          !roomPrompt!.includes('network_message_send') &&
+          !roomPrompt!.includes('agentnet://stream') &&
+          !roomPrompt!.includes('claim') &&
+          !roomPrompt!.includes('complete/fail'),
         roomPrompt,
       );
       check(
@@ -815,13 +816,210 @@ async function main(): Promise<void> {
         roomPrompt,
       );
       check(
-        '提示词不含真实 token 或带 token 的 MCP URL',
+        '未保存凭据时提示词明确说明缺少 MCP URL/token',
+        Boolean(roomPrompt) &&
+          roomPrompt!.includes('本浏览器没有保存该 Agent 的 token/MCP URL') &&
+          roomPrompt!.includes('新建 Agent'),
+        roomPrompt,
+      );
+      check(
+        '未保存凭据时提示词不含凭据赋值行',
+        Boolean(roomPrompt) &&
+          !roomPrompt!.includes('AGENTNET_MCP_URL') &&
+          !roomPrompt!.includes('AGENTNET_TOKEN'),
+        roomPrompt,
+      );
+      check(
+        '未保存凭据时提示词不含真实 token 或带 token 的 MCP URL',
         Boolean(roomPrompt) &&
           !roomPrompt!.includes(data.humanToken) &&
           !roomPrompt!.includes(data.agentAToken) &&
           !roomPrompt!.includes('/mcp?token=') &&
           !roomPrompt!.includes('ank_'),
         roomPrompt,
+      );
+
+      // 本地注册表保存 Agent MCP URL 后，direct 提示词应包含 URL 与提取出的 token。
+      const savedAgentToken = crypto.randomUUID();
+      const savedAgentUrl = `${server.base}/mcp?token=${savedAgentToken}`;
+      await page.evaluate(
+        (entry) => localStorage.setItem('agent-network-agents-v1', entry),
+        JSON.stringify({
+          v: 1,
+          items: [
+            {
+              owner_actor_id: data.human.actor_id,
+              actor_id: data.agentA.actor_id,
+              name: data.agentA.name,
+              agent_session_id: data.agentA.agent_session_id,
+              created_at: String(Date.now()),
+              mcp_url: savedAgentUrl,
+            },
+          ],
+        }),
+      );
+      await page.evaluate(`(() => {
+        window.__consoleText = '';
+        ['log', 'info', 'debug', 'warn'].forEach(function (method) {
+          const original = console[method];
+          console[method] = function () {
+            window.__consoleText += Array.prototype.map.call(arguments, String).join(' ') + '\\n';
+            return original.apply(console, arguments);
+          };
+        });
+      })()`);
+      await page.locator('#room-menu-copy-prompt').click();
+      await page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已复制（含凭据，勿转发）'`,
+      );
+      check('命中本地凭据时复制后提示勿转发', true);
+      const credentialPrompt = (await page.evaluate('window.__copiedRoomPrompt')) as string | null;
+      check(
+        'direct Agent 提示词包含保存的 MCP URL 与 token',
+        Boolean(credentialPrompt) &&
+          credentialPrompt!.includes(`AGENTNET_MCP_URL="${savedAgentUrl}"`) &&
+          credentialPrompt!.includes(`AGENTNET_TOKEN="${savedAgentToken}"`),
+        credentialPrompt,
+      );
+      check(
+        '含凭据提示词包含房间、技能 URL 与 Agent 身份',
+        Boolean(credentialPrompt) &&
+          credentialPrompt!.includes(data.direct.room.room_id) &&
+          credentialPrompt!.includes(data.agentA.name) &&
+          credentialPrompt!.includes(`${server.base}/skills/agent-network-curl.md`) &&
+          credentialPrompt!.includes(`你的 Agent 身份：${data.agentA.name}（${data.agentA.actor_id}）`) &&
+          credentialPrompt!.includes('按技能文档恢复连接并处理该房间消息') &&
+          credentialPrompt!.includes('凭据只给目标 Agent，勿发群、日志或截图'),
+        credentialPrompt,
+      );
+      check(
+        '含凭据提示词不重复技能里的工具步骤',
+        Boolean(credentialPrompt) &&
+          !credentialPrompt!.includes('network_room_get') &&
+          !credentialPrompt!.includes('network_history_list') &&
+          !credentialPrompt!.includes('network_message_send') &&
+          !credentialPrompt!.includes('agentnet://stream') &&
+          !credentialPrompt!.includes('claim') &&
+          !credentialPrompt!.includes('complete/fail'),
+        credentialPrompt,
+      );
+      check(
+        '含凭据提示词不包含 human token 或其他 Agent token',
+        Boolean(credentialPrompt) &&
+          !credentialPrompt!.includes(data.humanToken) &&
+          !credentialPrompt!.includes(data.agentAToken),
+        credentialPrompt,
+      );
+      check(
+        '菜单与页面文本不展示 token',
+        !((await page.locator('#room-menu').innerText()) ?? '').includes(savedAgentToken) &&
+          !((await page.locator('body').innerText()) ?? '').includes(savedAgentToken),
+      );
+      const consoleText = (await page.evaluate('window.__consoleText')) as string;
+      check(
+        '凭据提示词不写入 console',
+        !consoleText.includes(savedAgentToken) && !consoleText.includes('AGENTNET_MCP_URL'),
+        consoleText,
+      );
+      const promptStorage = (await page.evaluate(`(() => {
+        const sessionValues = [];
+        for (let index = 0; index < sessionStorage.length; index += 1) {
+          sessionValues.push(sessionStorage.getItem(sessionStorage.key(index)) || '');
+        }
+        return {
+          keys: Object.keys(localStorage).sort().join(','),
+          registry: localStorage.getItem('agent-network-agents-v1') || '',
+          session: sessionValues.join('\\n')
+        };
+      })()`)) as { keys: string; registry: string; session: string };
+      checkEqual(
+        '保存凭据不增加 localStorage key',
+        promptStorage.keys,
+        'agent-network-agents-v1,agent-network-token',
+      );
+      check(
+        '复制凭据提示词不写 sessionStorage',
+        !promptStorage.session.includes(savedAgentToken) &&
+          !promptStorage.session.includes('AGENTNET_MCP_URL'),
+      );
+      check(
+        '复制凭据提示词不写额外副本',
+        promptStorage.registry.split(savedAgentToken).length - 1 === 1 &&
+          !promptStorage.registry.includes('AGENTNET_MCP_URL'),
+      );
+
+      // group 优先选房间内且本地有 MCP URL 的 Agent；没有凭据时回退通用提示词。
+      await page.locator('#empty-state').click();
+      await page.locator(roomLink(data.group.room.room_id)).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      const savedGroupToken = crypto.randomUUID();
+      const savedGroupUrl = `${server.base}/mcp?token=${savedGroupToken}`;
+      await page.evaluate(
+        (entry) => localStorage.setItem('agent-network-agents-v1', entry),
+        JSON.stringify({
+          v: 1,
+          items: [
+            {
+              owner_actor_id: data.human.actor_id,
+              actor_id: data.agentB.actor_id,
+              name: data.agentB.name,
+              agent_session_id: data.agentB.agent_session_id,
+              created_at: String(Date.now()),
+              mcp_url: savedGroupUrl,
+            },
+          ],
+        }),
+      );
+      await page.locator('#room-menu-copy-prompt').click();
+      await page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已复制（含凭据，勿转发）'`,
+      );
+      const groupCredentialPrompt = (await page.evaluate(
+        'window.__copiedRoomPrompt',
+      )) as string | null;
+      check(
+        '群聊提示词选择房间内有凭据的 Agent',
+        Boolean(groupCredentialPrompt) &&
+          groupCredentialPrompt!.includes(data.group.room.room_id) &&
+          groupCredentialPrompt!.includes(
+            `你的 Agent 身份：${data.agentB.name}（${data.agentB.actor_id}）`,
+          ) &&
+          groupCredentialPrompt!.includes(`AGENTNET_MCP_URL="${savedGroupUrl}"`) &&
+          groupCredentialPrompt!.includes(`AGENTNET_TOKEN="${savedGroupToken}"`) &&
+          !groupCredentialPrompt!.includes(data.humanToken) &&
+          !groupCredentialPrompt!.includes('network_room_get'),
+        groupCredentialPrompt,
+      );
+      await page.evaluate(`localStorage.removeItem('agent-network-agents-v1')`);
+      await page.locator('#room-menu-copy-prompt').click();
+      await page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已复制（未包含凭据）'`,
+      );
+      const groupFallbackPrompt = (await page.evaluate(
+        'window.__copiedRoomPrompt',
+      )) as string | null;
+      check(
+        '群聊无本地凭据时回退通用提示词',
+        Boolean(groupFallbackPrompt) &&
+          groupFallbackPrompt!.includes(data.group.room.room_id) &&
+          groupFallbackPrompt!.includes('本浏览器没有保存该 Agent 的 token/MCP URL') &&
+          !groupFallbackPrompt!.includes('AGENTNET_MCP_URL') &&
+          !groupFallbackPrompt!.includes('AGENTNET_TOKEN'),
+        groupFallbackPrompt,
+      );
+      await page.evaluate(`localStorage.setItem('agent-network-agents-v1', '{broken json')`);
+      await page.locator('#room-menu-copy-prompt').click();
+      await page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已复制（未包含凭据）'`,
+      );
+      checkEqual(
+        '注册表解析失败时右键仍回退通用提示词',
+        Boolean(
+          ((await page.evaluate('window.__copiedRoomPrompt')) as string | null)?.includes(
+            '本浏览器没有保存该 Agent 的 token/MCP URL',
+          ),
+        ),
+        true,
       );
 
       await page.locator('#empty-state').click();
@@ -921,7 +1119,7 @@ async function main(): Promise<void> {
       );
       await page.locator('#room-menu-copy-prompt').click();
       await page.waitForFunction(
-        `document.getElementById('room-menu-status').textContent === '已复制'`,
+        `document.getElementById('room-menu-status').textContent === '已复制（未包含凭据）'`,
       );
       check(
         '390px 长按菜单可复制当前房间提示词',
@@ -929,6 +1127,12 @@ async function main(): Promise<void> {
           ((await page.evaluate('window.__copiedRoomPrompt')) as string | null)?.includes(
             data.group.room.room_id,
           ),
+        ),
+      );
+      check(
+        '390px 未保存凭据时提示词说明缺少 MCP URL/token',
+        ((await page.evaluate('window.__copiedRoomPrompt')) as string | null)?.includes(
+          '本浏览器没有保存该 Agent 的 token/MCP URL',
         ),
       );
       await page.mouse.click(200, 600);
@@ -1123,13 +1327,41 @@ async function main(): Promise<void> {
       checkEqual('技能 URL 使用当前 origin', newAgentSkillUrl, `${server.base}/skills/agent-network-curl.md`);
       check('提示词包含 skill URL', newAgentPrompt.includes('/skills/agent-network-curl.md'));
       check('提示词包含 MCP URL 前缀', newAgentPrompt.includes('/mcp?token='));
-      check('提示词包含 network_me', newAgentPrompt.includes('network_me'));
-      check('提示词包含 share_url', newAgentPrompt.includes('share_url'));
-      check('提示词包含 Agent 名称', newAgentPrompt.includes('网页新建 Agent'));
+      const newAgentUrlToken = new URL(newAgentMcpUrl).searchParams.get('token') ?? '';
       check(
-        '提示词区块提示凭据只显示一次',
-        ((await page.locator('.new-agent-prompt .new-agent-warning').textContent()) ?? '')
-          .includes('提示词包含 MCP URL 凭据，只显示一次'),
+        '新建 Agent 提示词包含 MCP URL/token 与 Agent 名称',
+        newAgentUrlToken.length > 0 &&
+          newAgentPrompt.includes(`AGENTNET_MCP_URL="${newAgentMcpUrl}"`) &&
+          newAgentPrompt.includes(`AGENTNET_TOKEN="${newAgentUrlToken}"`) &&
+          newAgentPrompt.includes('你的 Agent 身份：网页新建 Agent') &&
+          !newAgentPrompt.includes(data.humanToken),
+      );
+      check(
+        '新建 Agent 提示词引用 share_url 且不重复工具步骤',
+        newAgentPrompt.includes('share_url') &&
+          newAgentPrompt.includes('按技能文档') &&
+          newAgentPrompt.includes('异步监听') &&
+          !newAgentPrompt.includes('network_room_get') &&
+          !newAgentPrompt.includes('network_history_list') &&
+          !newAgentPrompt.includes('network_message_send') &&
+          !newAgentPrompt.includes('network_delivery_claim'),
+      );
+      check(
+        '新建 Agent 提示词包含凭据使用警告',
+        newAgentPrompt.includes('凭据只给目标 Agent，勿发群、日志或截图'),
+      );
+      const promptWarning =
+        (await page.locator('.new-agent-prompt .new-agent-warning').textContent()) ?? '';
+      const createWarning =
+        (await page.locator('#new-agent-modal .new-agent-warning').first().textContent()) ?? '';
+      check(
+        '新建 Agent 提示本地保存与安全边界',
+        createWarning.includes('MCP URL 含长期 token') &&
+          createWarning.includes('localStorage 可被同源脚本读取') &&
+          createWarning.includes('不要截图、发群或写入日志') &&
+          promptWarning.includes('提示词包含 MCP URL 凭据') &&
+          promptWarning.includes('不要发群、截图或写日志'),
+        { createWarning, promptWarning },
       );
 
       await page.evaluate(`(() => {
@@ -1167,10 +1399,22 @@ async function main(): Promise<void> {
         }
         return values.join('\\n');
       })()`)) as string;
+      const sessionDump = (await page.evaluate(`(() => {
+        const values = [];
+        for (let index = 0; index < sessionStorage.length; index += 1) {
+          values.push(sessionStorage.getItem(sessionStorage.key(index)) || '');
+        }
+        return values.join('\\n');
+      })()`)) as string;
       check(
-        'localStorage/sessionStorage 不含 MCP URL 或提示词',
-        !storageDump.includes(newAgentMcpUrl) && !storageDump.includes(newAgentPrompt),
+        'localStorage 注册表保存新建 Agent 的 MCP URL',
+        storageDump.includes(newAgentMcpUrl),
       );
+      check(
+        'sessionStorage 不含 MCP URL 与提示词',
+        !sessionDump.includes(newAgentMcpUrl) && !sessionDump.includes(newAgentPrompt),
+      );
+      check('localStorage 不保存整段提示词', !storageDump.includes(newAgentPrompt));
 
       await page.locator('#new-agent-close').click();
       const closedState = (await page.evaluate(`(() => ({
@@ -1201,18 +1445,27 @@ async function main(): Promise<void> {
       checkEqual('重开后提示词清空', await page.inputValue('#new-agent-prompt'), '');
       checkEqual('重开后技能 URL 清空', await page.inputValue('#new-agent-skill-url'), '');
       checkEqual(
-        'localStorage 保存浏览器 token 与非敏感 Agents 注册表',
+        'localStorage 保存浏览器 token 与含 Agent MCP URL 的注册表',
         await page.evaluate('Object.keys(localStorage).sort().join(",")'),
         'agent-network-agents-v1,agent-network-token',
       );
       const registryDump = (await page.evaluate(
         `localStorage.getItem('agent-network-agents-v1') || ''`,
       )) as string;
+      const savedRegistry = JSON.parse(registryDump) as {
+        v: number;
+        items: Record<string, unknown>[];
+      };
+      const savedItem = savedRegistry.items[0] ?? {};
+      checkEqual(
+        '本地 Agents 注册表保存该 Agent 自己的 MCP URL',
+        savedItem.mcp_url,
+        newAgentMcpUrl,
+      );
       check(
-        '本地 Agents 注册表不含 MCP URL、token、提示词或分享链接',
+        '本地 Agents 注册表不含 human token、提示词或分享链接',
         registryDump.length > 0 &&
-          !registryDump.includes(newAgentMcpUrl) &&
-          !registryDump.includes('/mcp?token=') &&
+          !registryDump.includes(data.humanToken) &&
           !registryDump.includes(newAgentPrompt) &&
           !registryDump.includes(newAgentShareUrl),
       );
@@ -1321,14 +1574,14 @@ async function main(): Promise<void> {
 
       await page.locator('#agents').click();
       check('Agents 弹窗打开', await page.locator('#agents-modal').isVisible());
+      const agentsHint = (await page.locator('.agents-hint').textContent()) ?? '';
       check(
-        'Agents 弹窗提示本地列表与归档语义',
-        ((await page.locator('.agents-hint').textContent()) ?? '').includes(
-          '列表仅保存在此浏览器',
-        ) &&
-          ((await page.locator('.agents-hint').textContent()) ?? '').includes(
-            '归档不会恢复 MCP URL/token',
-          ),
+        'Agents 弹窗提示本地保存、安全边界与归档语义',
+        agentsHint.includes('MCP URL（含长期 token）仅保存在此浏览器') &&
+          agentsHint.includes('localStorage 可被同源脚本读取') &&
+          agentsHint.includes('清除站点数据会丢失记录，但 Agent 身份仍存在') &&
+          agentsHint.includes('归档不会恢复 MCP URL/token'),
+        agentsHint,
       );
       check(
         '无本地记录时显示空态',
@@ -1356,17 +1609,18 @@ async function main(): Promise<void> {
       );
       const registryItem = (registry?.items[0] ?? {}) as Record<string, unknown>;
       checkEqual(
-        '注册表只保存非敏感字段',
+        '注册表保存 Agent 自己的 MCP URL 但不含 human token',
         Object.keys(registryItem).sort().join(','),
-        'actor_id,agent_session_id,created_at,name,owner_actor_id',
+        'actor_id,agent_session_id,created_at,mcp_url,name,owner_actor_id',
       );
       checkEqual('注册表按当前 human 隔离', registryItem.owner_actor_id, data.human.actor_id);
       checkEqual('注册表记录 Agent 名称', registryItem.name, '归档测试 Agent');
+      checkEqual('注册表记录 Agent MCP URL', registryItem.mcp_url, archivedAgentMcpUrl);
       const registryDump = JSON.stringify(registry);
       check(
-        '注册表不含 MCP URL、token、提示词或分享链接',
-        !registryDump.includes(archivedAgentMcpUrl) &&
-          !registryDump.includes('/mcp?') &&
+        '注册表不含 human token、提示词或分享链接',
+        registryDump.includes(archivedAgentMcpUrl) &&
+          !registryDump.includes(data.humanToken) &&
           !registryDump.includes(archivedAgentShareUrl),
       );
       const archivedAgentId = String(registryItem.actor_id ?? '');
