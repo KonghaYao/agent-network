@@ -99,6 +99,25 @@ function setEmptyListMessage(text) {
   setListHint(text);
 }
 
+function setListRetry(visible) {
+  if (listRetryElement) listRetryElement.hidden = !visible;
+}
+
+function clearListSkeleton() {
+  if (!roomListElement) return;
+  for (const item of Array.from(roomListElement.querySelectorAll('.room-skeleton'))) {
+    item.remove();
+  }
+}
+
+function updateAccount(me) {
+  if (accountNameElement) accountNameElement.textContent = me.name || '未命名';
+  if (accountAvatarElement) {
+    accountAvatarElement.textContent = firstChar(me.name);
+    accountAvatarElement.style.background = avatarColor(me.name);
+  }
+}
+
 function roomMatches(entry, query) {
   if (!query) return true;
   if (String(entry.name || '').toLowerCase().indexOf(query) >= 0) return true;
@@ -112,14 +131,16 @@ function renderRooms() {
   const entries = query ? roomEntries.filter(function (entry) {
     return roomMatches(entry, query);
   }) : roomEntries;
+  const scroller = roomListElement.parentElement;
+  const previousScroll = scroller ? scroller.scrollTop : 0;
   roomListElement.replaceChildren();
   for (const entry of entries) {
     const item = document.createElement('li');
     const link = document.createElement('a');
-    link.className = 'room-item' + (entry.room_id === roomId ? ' active' : '');
+    link.className = 'room-item' + (entry.room_id === activeRoomId ? ' active' : '');
     link.href = '/c/' + encodeURIComponent(entry.room_id);
     link.title = entry.name;
-    if (entry.room_id === roomId) link.setAttribute('aria-current', 'page');
+    if (entry.room_id === activeRoomId) link.setAttribute('aria-current', 'page');
     const avatar = avatarElement(entry.name, entry.kind);
     const main = document.createElement('div');
     main.className = 'room-main';
@@ -164,6 +185,7 @@ function renderRooms() {
   } else {
     setListHint('');
   }
+  if (scroller) scroller.scrollTop = previousScroll;
 }
 
 function updateRoomEntry(roomValue, lastItem, readSucceeded) {
@@ -177,63 +199,168 @@ function updateRoomEntry(roomValue, lastItem, readSucceeded) {
   renderRooms();
 }
 
-async function loadRooms() {
-  let me;
-  try {
-    me = await ensureIdentity();
-  } catch (error) {
-    setEmptyListMessage('创建浏览器身份失败：' + (error && error.message ? error.message : String(error)));
-    return;
+/** active 房间不在列表结果里时（深链旧房间、刚建群）补回条目。 */
+function mergeActiveRoom(summaries) {
+  if (!activeRoomId) return summaries;
+  if (summaries.some(function (entry) { return entry.room_id === activeRoomId; })) {
+    return summaries;
   }
-  try {
-    if (accountNameElement) accountNameElement.textContent = me.name || '未命名';
-    if (accountAvatarElement) {
-      accountAvatarElement.textContent = firstChar(me.name);
-      accountAvatarElement.style.background = avatarColor(me.name);
-    }
-    const page = await callTool('network_rooms_list', { limit: 50 });
-    const entries = await Promise.all(page.items.map(async function (entry) {
-      let name = entry.kind === 'direct' ? '单聊' : entry.title || '群聊';
-      let peerKind = null;
-      let peerOnline = null;
-      if (entry.kind === 'direct') {
-        try {
-          const detail = await callTool('network_room_get', { room_id: entry.room_id });
-          const others = detail.members.filter(function (member) {
-            return member.actor_id !== me.actor_id;
-          });
-          if (others.length > 0) name = others.map(function (member) { return member.name; }).join('、');
-          if (others.length === 1) {
-            peerKind = others[0].kind;
-            // 人类成员没有在线概念，保持 null 且不渲染状态点。
-            peerOnline = others[0].kind === 'agent' ? others[0].online : null;
-          }
-        } catch (error) {
-          // 房间不可读时保留占位名称，列表仍可展示。
+  const cache = roomCache.get(activeRoomId);
+  const activeDetailRoom = room && room.room_id === activeRoomId ? room : null;
+  const detailRoom = activeDetailRoom || (cache && cache.room ? cache.room : null);
+  const detail = {
+    room: detailRoom || {
+      room_id: activeRoomId,
+      kind: 'direct',
+      title: '',
+      head_seq: 0,
+      updated_at: Date.now()
+    },
+    members: activeDetailRoom
+      ? Array.from(members.values())
+      : cache && cache.members
+        ? cache.members
+        : []
+  };
+  const summary = directSummaryFromDetail(detail);
+  summaries.push({
+    room_id: activeRoomId,
+    kind: detail.room.kind,
+    name: summary.name,
+    head_seq: detail.room.head_seq || 0,
+    my_last_read_seq: 0,
+    last_message: cache ? cache.lastMessage || null : null,
+    updated_at: detail.room.updated_at || Date.now(),
+    peer_kind: summary.peer_kind,
+    peer_online: summary.peer_online,
+    peer_actor_id: summary.peer_actor_id,
+    peer_loaded: true
+  });
+  return summaries;
+}
+
+/**
+ * 第二阶段：后台补全 direct 对方名称与在线状态。
+ *
+ * 并发上限 4；每个失败只保留占位名称，不影响已经渲染的列表。
+ * 已有缓存（peerDetails / roomCache）的 direct 房间不再请求。
+ */
+async function fillDirectPeers(me) {
+  const queue = roomEntries.filter(function (entry) {
+    return entry.kind === 'direct' && !entry.peer_loaded;
+  });
+  if (queue.length === 0) return;
+  let index = 0;
+  let renderScheduled = false;
+  function scheduleRoomsRender() {
+    if (renderScheduled) return;
+    renderScheduled = true;
+    const run = function () {
+      renderScheduled = false;
+      renderRooms();
+    };
+    if (window.requestAnimationFrame) requestAnimationFrame(run);
+    else setTimeout(run, 16);
+  }
+  async function worker() {
+    while (index < queue.length) {
+      const entry = queue[index];
+      index += 1;
+      try {
+        const detail = await callTool('network_room_get', { room_id: entry.room_id });
+        const summary = directSummaryFromDetail(detail);
+        peerDetails.set(entry.room_id, summary);
+        const current = roomEntries.find(function (item) {
+          return item.room_id === entry.room_id;
+        });
+        if (current) {
+          current.name = summary.name;
+          current.peer_kind = summary.peer_kind;
+          current.peer_online = summary.peer_online;
+          current.peer_actor_id = summary.peer_actor_id;
+          current.peer_loaded = true;
         }
+        scheduleRoomsRender();
+      } catch (error) {
+        // 房间不可读时保留占位名称，列表仍可展示。
       }
-      return {
-        room_id: entry.room_id,
-        kind: entry.kind,
-        name: name,
-        head_seq: entry.head_seq,
-        my_last_read_seq: entry.my_last_read_seq,
-        last_message: entry.last_message,
-        updated_at: entry.updated_at,
-        peer_kind: peerKind,
-        peer_online: peerOnline
-      };
-    }));
-    roomEntries = sortRooms(entries);
-    if (roomEntries.length === 0) {
-      setEmptyListMessage('还没有单聊。打开 Agent 分享链接即可开始。');
-    } else {
-      setEmptyListMessage('');
     }
-    renderRooms();
-  } catch (error) {
-    setEmptyListMessage('读取单聊失败：' + (error && error.message ? error.message : String(error)));
   }
+  const workers = [];
+  const limit = Math.min(4, queue.length);
+  for (let slot = 0; slot < limit; slot += 1) workers.push(worker());
+  await Promise.all(workers);
+}
+
+/**
+ * 列表加载：single-flight + 两阶段。
+ *
+ * 第一阶段只取 network_rooms_list 并立即渲染摘要；第二阶段在后台补
+ * direct 名称/在线状态。首屏骨架与错误提示都在这里收口。
+ */
+async function loadRooms(options) {
+  if (roomsPromise) return roomsPromise;
+  const hadEntries = roomEntries.length > 0;
+  roomsPromise = (async function () {
+    try {
+      const me = await ensureIdentity();
+      updateAccount(me);
+      const page = await callTool('network_rooms_list', { limit: 50 });
+      const summaries = page.items.map(function (entry) {
+        const cached = entry.kind === 'direct' ? cachedPeerSummary(entry.room_id, me) : null;
+        return {
+          room_id: entry.room_id,
+          kind: entry.kind,
+          name: cached
+            ? cached.name
+            : entry.kind === 'direct'
+              ? '单聊'
+              : entry.title || '群聊',
+          head_seq: entry.head_seq,
+          my_last_read_seq: entry.my_last_read_seq,
+          last_message: entry.last_message,
+          updated_at: entry.updated_at,
+          peer_kind: cached ? cached.peer_kind : null,
+          // 人类成员没有在线概念，保持 null 且不渲染状态点。
+          peer_online: cached ? cached.peer_online : null,
+          peer_actor_id: cached ? cached.peer_actor_id : null,
+          peer_loaded: Boolean(cached) || entry.kind !== 'direct'
+        };
+      });
+      roomEntries = sortRooms(mergeActiveRoom(summaries));
+      renderRooms();
+      clearListSkeleton();
+      setListRetry(false);
+      if (roomEntries.length === 0) {
+        setEmptyListMessage('还没有单聊。打开 Agent 分享链接即可开始。');
+      } else {
+        setEmptyListMessage('');
+      }
+      await fillDirectPeers(me);
+      roomsLoadedAt = Date.now();
+    } catch (error) {
+      if (isAbortError(error)) return;
+      const message = '读取会话失败：' + (error && error.message ? error.message : String(error));
+      clearListSkeleton();
+      if (hadEntries || roomEntries.length > 0) {
+        setListHint(message);
+      } else {
+        setEmptyListMessage(message);
+      }
+      setListRetry(true);
+    } finally {
+      roomsPromise = null;
+      clearListSkeleton();
+    }
+  })();
+  return roomsPromise;
+}
+
+if (listRetryElement) {
+  listRetryElement.addEventListener('click', function () {
+    setListRetry(false);
+    loadRooms({ force: true });
+  });
 }
 
 if (searchInput) {

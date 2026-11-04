@@ -14,6 +14,8 @@ export function deviceHandoffAccount(): string {
       <span class="account-name" id="account-name">未登录</span>
       <button class="account-scan" id="account-copy-id" type="button"
         aria-label="复制当前 actor ID" title="复制当前 actor ID">复制 ID</button>
+      <button class="account-scan" id="new-agent" type="button"
+        aria-haspopup="dialog" aria-controls="new-agent-modal" aria-expanded="false">新建 Agent</button>
       <button class="account-scan" id="device-handoff" type="button"
         aria-haspopup="dialog" aria-controls="handoff-modal" aria-expanded="false">手机扫码</button>
     </div>

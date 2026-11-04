@@ -92,6 +92,16 @@ async function rpc(method, params) {
 
 async function callTool(name, args) {
   const result = await rpc('tools/call', { name: name, arguments: args });
+  if (result.isError) {
+    const item = (result.content || []).find(function (entry) { return entry.type === 'text'; });
+    let detail = null;
+    if (item) {
+      try { detail = JSON.parse(item.text); } catch (error) { detail = { message: item.text }; }
+    }
+    const failure = new Error((detail && detail.message) || '请求失败');
+    if (detail && detail.code) failure.code = detail.code;
+    throw failure;
+  }
   if (result.structuredContent) return result.structuredContent;
   const item = (result.content || []).find(function (entry) { return entry.type === 'text'; });
   return item ? JSON.parse(item.text) : {};

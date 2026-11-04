@@ -20,6 +20,8 @@ const GUARD_CODES: Record<string, BusinessErrorCode> = {
   roomLimit: 'CONFLICT',
   actorExists: 'ACTOR_EXISTS',
   recoveryInvalid: 'RECOVERY_INVALID',
+  roomFileLimit: 'ROOM_FILE_LIMIT',
+  notFileOwner: 'NOT_OWNER',
 };
 
 const GUARD_MESSAGES: Record<string, string> = {
@@ -34,6 +36,8 @@ const GUARD_MESSAGES: Record<string, string> = {
   roomLimit: '活跃房间数量达到上限',
   actorExists: '该 actor_id 已被其他凭据占用',
   recoveryInvalid: '恢复 ticket 无效、已过期或已被使用',
+  roomFileLimit: '房间文件数量或总大小达到上限',
+  notFileOwner: '只有上传者或群 owner 可以删除该文件',
 };
 
 /** 把 D1 batch 抛出的约束错误映射成有类型的业务错误。 */
@@ -61,6 +65,11 @@ export function isMessageConflict(error: unknown): boolean {
 
 export function isDeliveryConflict(error: unknown): boolean {
   return errorText(error).includes('UNIQUE constraint failed: deliveries.recipient_id, deliveries.message_id');
+}
+
+/** 同一 file_id 只能绑定一次；命中后按房间/墓碑状态收敛或报错。 */
+export function isRoomFileConflict(error: unknown): boolean {
+  return errorText(error).includes('UNIQUE constraint failed: room_files.file_id');
 }
 
 export function isOneClaimedConflict(error: unknown): boolean {

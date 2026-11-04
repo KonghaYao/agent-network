@@ -1,25 +1,20 @@
 import { LIMITS } from '../contracts/limits';
 import { backoffMs, nowMs } from '../storage/db';
 import type { Env } from '../env';
-import { publishHint } from './bus';
+import { fanoutStreamItems, type OutboxStreamRow } from './stream';
 
-interface OutboxDueRow {
-  outbox_id: string;
-  topic: string;
-  event_seq: number;
-  attempts: number;
-  created_at: number;
-  event_type: string;
-}
+type OutboxDueRow = OutboxStreamRow;
 
 export interface DrainResult {
   claimed: number;
   published: number;
   failed: number;
   oldestPendingAgeMs: number | null;
+  streamActors: number;
+  streamFrames: number;
+  streamItems: number;
+  streamDropped: number;
 }
-
-const MEMBERSHIP_EVENTS = new Set(['members_changed', 'member_left']);
 
 function chunks<T>(items: T[], size: number): T[][] {
   const result: T[][] = [];
@@ -30,10 +25,11 @@ function chunks<T>(items: T[], size: number): T[][] {
 }
 
 /**
- * 发布 D1 outbox 中的变更提示。
+ * 发布 SQLite outbox 中的变更提示。
  *
- * - 30 秒租约竞争待发布行；同一 topic 合并为最高 event_seq（提示只需要版本）。
- * - 成员变化必须单独以 `membership` 提示发送，避免被合并丢失。
+ * - 30 秒租约竞争待发布行；topic 只作为内部写分区键，不再发布到 hub。
+ * - 每条事件由 `fanoutStreamItems` 映射为统一 stream item 并按 actor 扇出。
+ * - 成员变化不再以专用提示关闭订阅；客户端按 `room.membership` 自行收敛。
  * - 失败按指数退避加 jitter 重排，记录保留，不静默丢弃。
  */
 export async function drainOutbox(env: Env, limit = LIMITS.outboxBatchMax): Promise<DrainResult> {
@@ -49,10 +45,11 @@ export async function drainOutbox(env: Env, limit = LIMITS.outboxBatchMax): Prom
 
   const due = await db
     .prepare(
-      `SELECT o.outbox_id, o.topic, o.event_seq, o.attempts, o.created_at, e.event_type
+      `SELECT o.outbox_id, o.topic, o.event_seq, o.attempts, o.created_at,
+              e.scope_kind, e.scope_id, e.event_type, e.ref_id, e.metadata
          FROM outbox o JOIN events e ON e.event_seq = o.event_seq
         WHERE o.status = 'pending' AND o.next_attempt_at <= ?
-        ORDER BY o.next_attempt_at ASC, o.outbox_id ASC
+        ORDER BY o.next_attempt_at ASC, o.event_seq ASC, o.outbox_id ASC
         LIMIT ?`,
     )
     .bind(now, limit)
@@ -71,37 +68,41 @@ export async function drainOutbox(env: Env, limit = LIMITS.outboxBatchMax): Prom
     if ((result.meta.changes ?? 0) > 0) claimed.push(row);
   }
 
-  const byTopic = new Map<string, OutboxDueRow[]>();
-  for (const row of claimed) {
-    const list = byTopic.get(row.topic) ?? [];
-    list.push(row);
-    byTopic.set(row.topic, list);
+  // 统一 actor stream：按事件映射后 fan-out。outbox 的 topic 仅是内部
+  // 写分区键，cutover 后不再作为可订阅 URI 或 hub topic 发布。
+  let streamStats = {
+    streamActors: 0,
+    streamFrames: 0,
+    streamItems: 0,
+    streamDropped: 0,
+  };
+  try {
+    streamStats = await fanoutStreamItems(db, env, claimed);
+  } catch (error) {
+    // stream 是提示通道；构造/发布失败不能阻塞 outbox 完成，客户端仍可
+    // 通过快照与 network_sync 补齐。
+    console.error('agent-network stream fan-out failed', error);
   }
 
   let published = 0;
   let failed = 0;
-  for (const [topic, rows] of byTopic) {
-    const maxSeq = Math.max(...rows.map((row) => row.event_seq));
-    const membership = rows.some((row) => MEMBERSHIP_EVENTS.has(row.event_type));
+  for (const batch of chunks(claimed, 50)) {
     try {
-      await publishHint(env, topic, maxSeq, membership ? 'membership' : undefined);
-      for (const batch of chunks(rows, 50)) {
-        const placeholders = batch.map(() => '?').join(',');
-        await db
-          .prepare(
-            `UPDATE outbox
-                SET status = 'completed', completed_at = ?, attempts = attempts + 1,
-                    lease_token = NULL, lease_until = NULL
-              WHERE outbox_id IN (${placeholders}) AND lease_token = ?`,
-          )
-          .bind(now, ...batch.map((row) => row.outbox_id), leaseToken)
-          .run();
-      }
-      published += rows.length;
+      const placeholders = batch.map(() => '?').join(',');
+      await db
+        .prepare(
+          `UPDATE outbox
+              SET status = 'completed', completed_at = ?, attempts = attempts + 1,
+                  lease_token = NULL, lease_until = NULL
+            WHERE outbox_id IN (${placeholders}) AND lease_token = ?`,
+        )
+        .bind(now, ...batch.map((row) => row.outbox_id), leaseToken)
+        .run();
+      published += batch.length;
     } catch (error) {
-      console.error('agent-network outbox publish failed', topic, error);
-      failed += rows.length;
-      for (const row of rows) {
+      console.error('agent-network outbox completion failed', error);
+      failed += batch.length;
+      for (const row of batch) {
         await db
           .prepare(
             `UPDATE outbox
@@ -125,5 +126,6 @@ export async function drainOutbox(env: Env, limit = LIMITS.outboxBatchMax): Prom
     failed,
     oldestPendingAgeMs:
       oldest?.oldest === null || oldest?.oldest === undefined ? null : now - oldest.oldest,
+    ...streamStats,
   };
 }

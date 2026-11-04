@@ -13,6 +13,12 @@ export const identitySchema = z.object({
   resources: z.array(z.string()),
 });
 
+/** `network_issue_token` 的返回值；URL 本身即长期凭据。 */
+export const issuedTokenSchema = z.object({
+  token: z.string(),
+  url: z.string(),
+});
+
 export const messagePreviewSchema = z.object({
   message_id: z.string(),
   sender_id: z.string(),
@@ -196,4 +202,37 @@ export const progressResultSchema = z.object({
   delivery_id: z.string(),
   attempt: z.number(),
   progress_at: z.string(),
+});
+
+/** 房间文件的公开视图；public/preview/download URL 都由 PUBLIC_ORIGIN 派生。 */
+export const roomFileSchema = z.object({
+  room_file_id: z.string(),
+  room_id: z.string(),
+  file_id: z.string(),
+  name: z.string(),
+  mime_type: z.string(),
+  size: z.number(),
+  sha256: z.string(),
+  public_url: z.string(),
+  preview_url: z.string(),
+  download_url: z.string(),
+  preview_kind: z.enum(['image', 'pdf', 'text', 'audio', 'video', 'download']),
+  uploader_id: z.string(),
+  uploader_name: z.string(),
+  can_delete: z.boolean(),
+  created_at: z.string(),
+  expires_at: z.string(),
+});
+
+export const roomFileResultSchema = z.object({ file: roomFileSchema });
+
+export const roomFilePageSchema = z.object({
+  items: z.array(roomFileSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+});
+
+export const roomFileDeletedSchema = z.object({
+  file_id: z.string(),
+  deleted: z.literal(true),
 });

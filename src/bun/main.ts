@@ -15,19 +15,6 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function origins(value: string | undefined, fallbackOrigin: string): string[] {
-  const list = (value ?? '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-  if (list.length > 0) return list;
-  try {
-    return [new URL(fallbackOrigin).origin];
-  } catch {
-    return [];
-  }
-}
-
 const port = positiveInt(process.env.PORT, 8792);
 const hostname = process.env.HOST ?? '0.0.0.0';
 const dataDir = resolve(process.env.DATA_DIR ?? '.data');
@@ -60,7 +47,6 @@ if (process.env.DRIVE_DISABLED !== '1') {
     namespace: process.env.DRIVE_NAMESPACE ?? 'agent-network',
     maxFileBytes: positiveInt(process.env.DRIVE_MAX_FILE_BYTES, 128 * 1024 * 1024),
     ttlSeconds: positiveInt(process.env.DRIVE_TTL_SECONDS, 86400),
-    allowedOrigins: origins(process.env.ALLOWED_ORIGINS, publicOrigin),
   });
   await drive.fileService.ready;
   mount = drive.mount;
@@ -94,6 +80,10 @@ const schedule = setInterval(() => {
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {
     clearInterval(schedule);
+    // 先给活动 SSE 发 graceful close，再停止接收新请求。
+    if (env.NOTIFICATION_HUB.closeAllStreams() > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     server.stop();
     await closeDrive?.();
     db.close();

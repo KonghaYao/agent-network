@@ -36,6 +36,36 @@ import {
   type MessageView,
   type RoomDetail,
 } from './lib/acceptance-helpers';
+import { runUnifiedStreamAcceptance } from './lib/stream-acceptance';
+import { runRoomFileAcceptance } from './lib/room-file-acceptance';
+
+const STREAM_URI = 'agentnet://stream';
+const STREAM_EVENT_META = 'io.agent-network/event';
+
+interface StreamItemView {
+  source?: string;
+  kind?: string;
+  attention?: string;
+  room_id?: string;
+  message_id?: string;
+  delivery_id?: string;
+  sender_id?: string;
+  state?: string;
+  change?: string;
+}
+
+function streamItemsOf(event: { params: Record<string, unknown> }): StreamItemView[] {
+  const meta = event.params._meta as Record<string, unknown> | undefined;
+  const payload = meta?.[STREAM_EVENT_META] as { items?: StreamItemView[] } | undefined;
+  return payload?.items ?? [];
+}
+
+function hasStreamItem(
+  event: { params: Record<string, unknown> },
+  predicate: (item: StreamItemView) => boolean,
+): boolean {
+  return event.params.uri === STREAM_URI && streamItemsOf(event).some(predicate);
+}
 
 async function main(): Promise<void> {
   console.log(`端到端验收: ${baseUrl()}`);
@@ -58,9 +88,8 @@ async function main(): Promise<void> {
     const c = await registerIdentity(humanC, { kind: 'human', name: '验收人类 C' });
     check('三个身份注册成功', Boolean(a.actor_id && b.actor_id && c.actor_id), { a: a.actor_id, b: b.actor_id, c: c.actor_id });
     check(
-      '资源入口包含 me 与 inbox',
-      a.resources.includes('agentnet://me') &&
-        a.resources.some((uri) => uri.endsWith('/inbox')),
+      '资源入口只包含统一 stream',
+      a.resources.length === 1 && a.resources[0] === STREAM_URI,
       a.resources,
     );
 
@@ -268,13 +297,11 @@ async function main(): Promise<void> {
     checkEqual('房间摘要指向最新消息', listedRoom?.last_message?.message_id, tailMessage.message.message_id);
 
     const collector = notificationCollector(agentB.client);
-    const subscription = await openSubscription(agentB.client, [
-      'agentnet://me',
-      `agentnet://rooms/${roomId}/head`,
-    ]);
+    const subscription = await openSubscription(agentB.client, [STREAM_URI]);
     check(
-      '订阅 ack 覆盖请求的 URI',
-      (subscription.honoredFilter.resourceSubscriptions ?? []).length === 2,
+      '订阅 ack 只覆盖统一 stream',
+      (subscription.honoredFilter.resourceSubscriptions ?? []).length === 1 &&
+        subscription.honoredFilter.resourceSubscriptions?.[0] === STREAM_URI,
       subscription.honoredFilter,
     );
     const login = await callTool<LoginResult>(agentB.client, 'network_login');
@@ -289,32 +316,48 @@ async function main(): Promise<void> {
       true,
     );
     await collector.waitFor(
-      (event) => event.params.uri === 'agentnet://me',
-      '等待上线提示',
+      (event) => hasStreamItem(event, (item) => item.source === 'session.login'),
+      '等待统一 stream 上线帧',
     );
     collector.reset();
     const notified = await sendMessage(agentA, roomId, 'notify-1');
     await collector.waitFor(
-      (event) => event.params.uri === `agentnet://rooms/${roomId}/head`,
-      '等待房间 head 资源更新',
+      (event) =>
+        hasStreamItem(
+          event,
+          (item) =>
+            item.source === 'room.message' &&
+            item.message_id === notified.message.message_id,
+        ),
+      '等待统一 stream 房间消息',
     );
     check('通知与真实写入一致', notified.message.message_id.length > 0);
 
-    // 普通消息只变更房间；inbox（待办入口）仅在产生新的待办时提示。
+    // 普通消息只产生 informational room.message；inbox 只在产生新待办时变化。
     const invoke = await sendMessage(agentA, roomId, 'task-1', { invoke: [b.actor_id] });
-    const meEvent = await collector.waitFor(
-      (event) => event.params.uri === 'agentnet://me',
-      '等待 inbox 资源更新',
+    const createdEvent = await collector.waitFor(
+      (event) =>
+        hasStreamItem(
+          event,
+          (item) =>
+            item.source === 'delivery.created' &&
+            item.delivery_id === invoke.delivery_ids[0],
+        ),
+      '等待统一 stream 投递帧',
     );
-    check('inbox 通知携带 subscriptionId', Boolean(subscriptionIdOf(meEvent.params)), meEvent.params);
+    check(
+      '统一 stream 通知携带 subscriptionId',
+      Boolean(subscriptionIdOf(createdEvent.params)),
+      createdEvent.params,
+    );
     checkEqual('invoke 创建一条 delivery', invoke.delivery_ids.length, 1);
 
     const senderCollector = notificationCollector(agentA.client);
-    const senderRoomUri = `agentnet://rooms/${roomId}/head`;
-    const senderRoomSubscription = await openSubscription(agentA.client, [senderRoomUri]);
-    await waitUntil('等待发送方房间订阅建立', () =>
-      Boolean(senderRoomSubscription.honoredFilter.resourceSubscriptions?.length),
+    const senderSubscription = await openSubscription(agentA.client, [STREAM_URI]);
+    await waitUntil('等待发送方统一 stream 建立', () =>
+      Boolean(senderSubscription.honoredFilter.resourceSubscriptions?.length),
     );
+    await callTool(agentA.client, 'network_login');
 
     await callTool(agentA.client, 'network_contact_add', {
       request_id: newRequestId('contact'),
@@ -370,14 +413,27 @@ async function main(): Promise<void> {
       claimedRow,
     );
     await senderCollector.waitFor(
-      (event) => event.params.uri === senderRoomUri,
-      '等待 claim 回执房间通知',
+      (event) =>
+        hasStreamItem(
+          event,
+          (item) =>
+            item.source === 'delivery.updated' &&
+            item.delivery_id === deliveryId &&
+            item.state === 'claimed',
+        ),
+      '等待 claim 回执统一 stream 通知',
     );
-    check('claim 回执通过房间订阅推送', senderCollector.events.length > 0);
+    check('claim 回执通过统一 stream 推送', senderCollector.events.length > 0);
     await sleep(1000);
     check(
-      'claim 不再向 recipient 自己发 inbox 提示',
-      collector.events.every((event) => event.params.uri !== 'agentnet://me'),
+      'claim 不再向 recipient 自己发回执',
+      !collector.events.some((event) =>
+        hasStreamItem(
+          event,
+          (item) =>
+            item.source === 'delivery.updated' && item.delivery_id === deliveryId,
+        ),
+      ),
       collector.events,
     );
 
@@ -396,8 +452,14 @@ async function main(): Promise<void> {
     checkEqual('report 记录当前 attempt', report.attempt, 1);
     await sleep(500);
     check(
-      'report 不再向 recipient 自己发 inbox 提示',
-      collector.events.every((event) => event.params.uri !== 'agentnet://me'),
+      'report 不再向 recipient 自己发回执',
+      !collector.events.some((event) =>
+        hasStreamItem(
+          event,
+          (item) =>
+            item.source === 'delivery.updated' && item.delivery_id === deliveryId,
+        ),
+      ),
       collector.events,
     );
     const reportedHistory = await callTool<HistoryPage>(agentA.client, 'network_history_list', {
@@ -413,12 +475,6 @@ async function main(): Promise<void> {
       reportedRow,
     );
     const notificationsBeforeComplete = senderCollector.events.length;
-
-    const inboxResource = await readResourceJson<{ pending: unknown[]; claimed: { delivery_id: string } | null }>(
-      agentB.client,
-      `agentnet://actors/${b.actor_id}/inbox`,
-    );
-    checkEqual('inbox 资源显示当前 claimed', inboxResource.claimed?.delivery_id, deliveryId);
 
     collector.reset();
     const completed = await callTool<{ delivery: Delivery; message: MessageView | null }>(
@@ -449,8 +505,14 @@ async function main(): Promise<void> {
     );
     await sleep(800);
     check(
-      'complete 不再向 recipient 自己发 inbox 提示',
-      collector.events.every((event) => event.params.uri !== 'agentnet://me'),
+      'complete 不再向 recipient 自己发回执',
+      !collector.events.some((event) =>
+        hasStreamItem(
+          event,
+          (item) =>
+            item.source === 'delivery.updated' && item.delivery_id === deliveryId,
+        ),
+      ),
       collector.events,
     );
     const completedInboxState = await inbox(agentB, 'all');
@@ -459,7 +521,7 @@ async function main(): Promise<void> {
       completedInboxState.claimed_delivery_id,
       null,
     );
-    await senderRoomSubscription.close();
+    await senderSubscription.close();
 
     const afterCompleteHistory = await callTool<HistoryPage>(agentA.client, 'network_history_list', {
       room_id: roomId,
@@ -513,8 +575,14 @@ async function main(): Promise<void> {
     checkEqual('fail 后状态为 failed', stuckFailed.state, 'failed');
     await sleep(800);
     check(
-      'fail 不再向 recipient 自己发 inbox 提示',
-      collector.events.every((event) => event.params.uri !== 'agentnet://me'),
+      'fail 不再向 recipient 自己发回执',
+      !collector.events.some((event) =>
+        hasStreamItem(
+          event,
+          (item) =>
+            item.source === 'delivery.updated' && item.delivery_id === stuckDeliveryId,
+        ),
+      ),
       collector.events,
     );
     const recipientRetry = await callTool<Delivery>(agentB.client, 'network_delivery_retry', {
@@ -524,8 +592,13 @@ async function main(): Promise<void> {
     });
     checkEqual('recipient 可 retry 自己的 claimed 投递自恢复', recipientRetry.state, 'pending');
     await collector.waitFor(
-      (event) => event.params.uri === 'agentnet://me',
-      '等待 retry 重新入队提示',
+      (event) =>
+        hasStreamItem(
+          event,
+          (item) =>
+            item.source === 'delivery.retried' && item.delivery_id === stuckDeliveryId,
+        ),
+      '等待 retry 重新入队 stream 提示',
     );
     await callTool(agentA.client, 'network_delivery_cancel', {
       request_id: newRequestId('cancel'),
@@ -671,14 +744,18 @@ async function main(): Promise<void> {
     );
     check('sync 越权错误可读', syncDenied.body.retryable === false, syncDenied.body);
 
-    const crossInbox = await rawRpc(
+    const legacyListen = await rawRpc(
       'subscriptions/listen',
       { notifications: { resourceSubscriptions: [`agentnet://actors/${a.actor_id}/inbox`] } },
       { token: agentB.token },
     );
-    const crossError = crossInbox.body.error as Record<string, unknown> | undefined;
-    checkEqual('订阅他人 inbox 被拒绝', crossError?.code, -32602);
-    checkEqual('越权订阅错误码为 NOT_MEMBER', (crossError?.data as Record<string, unknown> | undefined)?.code, 'NOT_MEMBER');
+    const legacyError = legacyListen.body.error as Record<string, unknown> | undefined;
+    checkEqual('旧 inbox URI 订阅被拒绝', legacyError?.code, -32602);
+    checkEqual(
+      '旧 inbox URI 错误码为 INVALID_ARGUMENT',
+      (legacyError?.data as Record<string, unknown> | undefined)?.code,
+      'INVALID_ARGUMENT',
+    );
 
     const group = await callTool<RoomDetail>(agentA.client, 'network_room_create', {
       request_id: newRequestId('room'),
@@ -688,28 +765,41 @@ async function main(): Promise<void> {
     });
     const groupId = group.room.room_id;
     checkEqual('群聊创建者为 owner', group.room.my_role, 'owner');
-    const groupSubscription = await openSubscription(agentB.client, [
-      `agentnet://rooms/${groupId}/head`,
-    ]);
-    await waitUntil('等待订阅建立', () => Boolean(groupSubscription.honoredFilter.resourceSubscriptions?.length));
+    const groupSubscription = await openSubscription(agentB.client, [STREAM_URI]);
+    await waitUntil('等待统一 stream 建立', () =>
+      Boolean(groupSubscription.honoredFilter.resourceSubscriptions?.length),
+    );
     await callTool(agentA.client, 'network_room_members_update', {
       request_id: newRequestId('members'),
       room_id: groupId,
       remove: [b.actor_id],
     });
-    const closedReason = await waitClosed(groupSubscription);
-    // 服务端以 listen 结果优雅结束订阅流；客户端应重建并重新鉴权。
-    checkEqual('成员被移除后服务端关闭订阅流', closedReason, 'graceful');
+    await collector.waitFor(
+      (event) =>
+        hasStreamItem(
+          event,
+          (item) =>
+            item.source === 'room.membership' &&
+            item.change === 'removed' &&
+            item.room_id === groupId,
+        ),
+      '等待成员移除通知',
+    );
+    const closedRace = await Promise.race([
+      groupSubscription.closed.then(() => 'closed' as const),
+      sleep(400).then(() => 'open' as const),
+    ]);
+    checkEqual('成员被移除后统一 stream 不关闭', closedRace, 'open');
     await expectToolError(
       '被移除成员不能继续读房间',
       callTool(agentB.client, 'network_room_get', { room_id: groupId }),
       'NOT_MEMBER',
     );
 
+    await groupSubscription.close();
     await subscription.close();
     checkEqual('主动关闭订阅标记为 local', await waitClosed(subscription, 5000), 'local');
     await sleep(1000);
-    // 本地 wrangler dev 的 WebSocket 关闭事件比生产环境慢，给 DO 收敛留出余量。
     await waitUntil('关闭最后一个连接后成员显示离线', async () => {
       const detail = await callTool<RoomDetail>(agentA.client, 'network_room_get', {
         room_id: roomId,
@@ -717,19 +807,26 @@ async function main(): Promise<void> {
       return detail.members.find((member) => member.actor_id === b.actor_id)?.online === false;
     }, 30_000);
     const offlineCollector = notificationCollector(agentB.client);
-    const resubscribed = await openSubscription(agentB.client, ['agentnet://me']);
+    const resubscribed = await openSubscription(agentB.client, [STREAM_URI]);
     checkEqual(
-      '同一客户端可重新建立订阅',
+      '同一客户端可重新建立统一 stream',
       resubscribed.honoredFilter.resourceSubscriptions?.[0],
-      'agentnet://me',
+      STREAM_URI,
     );
     const offlineSend = await sendMessage(agentA, roomId, 'offline-task', {
       invoke: [b.actor_id],
     });
     await sleep(1500);
     check(
-      '订阅建立但未上线时收不到 inbox 提示',
-      offlineCollector.events.every((event) => event.params.uri !== 'agentnet://me'),
+      '订阅建立但未上线时收不到 stream 帧',
+      !offlineCollector.events.some((event) =>
+        hasStreamItem(
+          event,
+          (item) =>
+            item.source === 'delivery.created' &&
+            item.delivery_id === offlineSend.delivery_ids[0],
+        ),
+      ),
       offlineCollector.events,
     );
     await expectToolError(
@@ -741,8 +838,8 @@ async function main(): Promise<void> {
     checkEqual('断线后可重新上线', relogin.online, true);
     check('上线返回排队待办数量', relogin.pending_count >= 1, relogin);
     await offlineCollector.waitFor(
-      (event) => event.params.uri === 'agentnet://me',
-      '等待上线补发提示',
+      (event) => hasStreamItem(event, (item) => item.source === 'session.login'),
+      '等待上线补发 stream 帧',
     );
     const queued = await inbox(agentB, 'pending');
     check(
@@ -750,28 +847,31 @@ async function main(): Promise<void> {
       queued.items.some((item) => item.delivery_id === offlineSend.delivery_ids[0]),
       queued.items,
     );
-    const meEvents = offlineCollector.events.filter(
-      (event) => event.params.uri === 'agentnet://me',
-    ).length;
-    await sendMessage(agentA, roomId, 'online-task', { invoke: [b.actor_id] });
+    const onlineTask = await sendMessage(agentA, roomId, 'online-task', { invoke: [b.actor_id] });
     await waitUntil(
-      '上线后收到新的 inbox 提示',
+      '上线后收到新的投递 stream 帧',
       () =>
-        offlineCollector.events.filter((event) => event.params.uri === 'agentnet://me').length >
-        meEvents,
+        offlineCollector.events.some((event) =>
+          hasStreamItem(
+            event,
+            (item) =>
+              item.source === 'delivery.created' &&
+              item.delivery_id === onlineTask.delivery_ids[0],
+          ),
+        ),
     );
     await resubscribed.close();
 
     // 网页人类发送回归：页面把房间内 Agent 成员填入 invoke，人类成员不产生 delivery。
     const webCollector = notificationCollector(agentB.client);
-    const webSubscription = await openSubscription(agentB.client, ['agentnet://me']);
-    await waitUntil('等待网页回归订阅建立', () =>
+    const webSubscription = await openSubscription(agentB.client, [STREAM_URI]);
+    await waitUntil('等待网页回归统一 stream 建立', () =>
       Boolean(webSubscription.honoredFilter.resourceSubscriptions?.length),
     );
     await callTool(agentB.client, 'network_login');
     await webCollector.waitFor(
-      (event) => event.params.uri === 'agentnet://me',
-      '等待网页回归上线提示',
+      (event) => hasStreamItem(event, (item) => item.source === 'session.login'),
+      '等待网页回归上线帧',
     );
     webCollector.reset();
     const webRoom = await callTool<RoomDetail>(humanC.client, 'network_room_create', {
@@ -805,11 +905,17 @@ async function main(): Promise<void> {
     });
     checkEqual('网页人类发送为 Agent 创建 delivery', webSend.delivery_ids.length, 1);
     const webEvent = await webCollector.waitFor(
-      (event) => event.params.uri === 'agentnet://me',
-      '等待网页消息触发 agentnet://me 通知',
+      (event) =>
+        hasStreamItem(
+          event,
+          (item) =>
+            item.source === 'delivery.created' &&
+            item.delivery_id === webSend.delivery_ids[0],
+        ),
+      '等待网页消息触发统一 stream 通知',
     );
     check(
-      '网页消息触发 agentnet://me 通知',
+      '网页消息触发统一 stream 通知',
       Boolean(subscriptionIdOf(webEvent.params)),
       webEvent.params,
     );
@@ -895,8 +1001,11 @@ async function main(): Promise<void> {
       { a: plainInboxA.items, b: plainInboxB.items },
     );
 
-    const resourceMe = await readResourceJson<{ actor_id: string }>(agentB.client, 'agentnet://me');
-    checkEqual('resources/read agentnet://me 返回身份', resourceMe.actor_id, b.actor_id);
+    const resourceStream = await readResourceJson<{ actor_id: string }>(
+      agentB.client,
+      STREAM_URI,
+    );
+    checkEqual('resources/read agentnet://stream 返回身份', resourceStream.actor_id, b.actor_id);
 
     const badScope = await expectToolError(
       '未知 sync scope 返回 INVALID_ARGUMENT',
@@ -904,6 +1013,9 @@ async function main(): Promise<void> {
       'INVALID_ARGUMENT',
     );
     check('未知 scope 错误可读', typeof badScope.body.message === 'string', badScope.body);
+
+    await runUnifiedStreamAcceptance();
+    await runRoomFileAcceptance();
 
     console.log(`端到端验收通过: ${checksPassed()} 项`);
   } finally {

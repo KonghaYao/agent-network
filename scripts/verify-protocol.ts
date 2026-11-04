@@ -14,14 +14,32 @@ import {
   checksPassed,
   connectClient,
   expectToolError,
+  newRequestId,
   newToken,
   rawRpc,
 } from './lib/harness';
+import { runStreamProtocolChecks } from './lib/stream-protocol';
+
+const STREAM_URI = 'agentnet://stream';
 
 interface SkillEntry {
   uri: string;
   frontmatter: { name: string; description: string };
   resources?: { uri: string; digest: string }[];
+}
+
+function toolErrorCode(body: Record<string, unknown>): string | undefined {
+  const result = body.result as
+    | { isError?: boolean; content?: { type?: string; text?: string }[] }
+    | undefined;
+  if (!result?.isError) return undefined;
+  const text = result.content?.find((item) => item.type === 'text')?.text;
+  if (!text) return undefined;
+  try {
+    return (JSON.parse(text) as { code?: string }).code;
+  } catch {
+    return undefined;
+  }
 }
 
 async function main(): Promise<void> {
@@ -81,10 +99,56 @@ async function main(): Promise<void> {
         }[];
       }
     | undefined;
+  const coreToolNames = [
+    'network_issue_token',
+    'network_register',
+    'network_me',
+    'network_login',
+    'network_profile_update',
+    'network_agent_rename',
+    'network_recovery_create',
+    'network_recovery_redeem',
+    'network_contacts_list',
+    'network_contact_add',
+    'network_contact_remove',
+    'network_room_create',
+    'network_rooms_list',
+    'network_room_get',
+    'network_room_members_update',
+    'network_room_leave',
+    'network_message_send',
+    'network_history_list',
+    'network_message_read',
+    'network_room_mark_read',
+    'network_sync',
+    'network_inbox_list',
+    'network_delivery_claim',
+    'network_delivery_report',
+    'network_delivery_complete',
+    'network_delivery_fail',
+    'network_delivery_cancel',
+    'network_delivery_retry',
+  ];
+  const roomFileTools = [
+    'network_room_file_bind',
+    'network_room_file_list',
+    'network_room_file_get',
+    'network_room_file_delete',
+  ];
   const toolNames = listed?.tools?.map((tool) => tool.name) ?? [];
-  const expectedToolCount = toolNames.includes('drive_file_info') ? 28 : 27;
+  // 工具集随 drive 开关变化：核心 28 + drive_file_info + 4 个房间文件工具。
+  const hasDrive = toolNames.includes('drive_file_info');
+  const hasRoomFiles = roomFileTools.every((name) => toolNames.includes(name));
+  check(
+    '房间文件工具与 drive 开关一起注册',
+    hasRoomFiles === hasDrive,
+    roomFileTools.filter((name) => toolNames.includes(name)),
+  );
+  const expectedToolCount =
+    coreToolNames.length + (hasDrive ? 1 : 0) + (hasRoomFiles ? roomFileTools.length : 0);
   check(`tools/list 返回 ${expectedToolCount} 个工具`, toolNames.length === expectedToolCount, toolNames.length);
   for (const required of [
+    'network_issue_token',
     'network_register',
     'network_me',
     'network_login',
@@ -99,6 +163,10 @@ async function main(): Promise<void> {
     'network_delivery_retry',
     'network_sync',
     'drive_file_info',
+    'network_room_file_bind',
+    'network_room_file_list',
+    'network_room_file_get',
+    'network_room_file_delete',
   ]) {
     check(`工具 ${required} 已注册`, toolNames.includes(required), toolNames);
   }
@@ -131,6 +199,284 @@ async function main(): Promise<void> {
     historySchema.includes('"delivery_claimed_at"') && historySchema.includes('"delivery_updated_at"'),
     historyTool?.outputSchema,
   );
+
+  const issueTool = listed?.tools?.find((tool) => tool.name === 'network_issue_token');
+  check(
+    'network_issue_token 标记为只读工具',
+    (issueTool as { annotations?: { readOnlyHint?: boolean } } | undefined)?.annotations
+      ?.readOnlyHint === true,
+  );
+
+  const publicOrigin = (process.env.PUBLIC_ORIGIN ?? baseUrl()).replace(/\/+$/u, '');
+  const issuedResponse = await rawRpc('tools/call', {
+    name: 'network_issue_token',
+    arguments: {},
+  });
+  const issued = (
+    issuedResponse.body.result as
+      | { structuredContent?: { token?: string; url?: string } }
+      | undefined
+  )?.structuredContent;
+  const issuedToken = issued?.token ?? '';
+  const issuedUrlValue = issued?.url;
+  checkEqual('无 Authorization 调用 network_issue_token 返回 200', issuedResponse.status, 200);
+  check('network_issue_token 返回非空 token', issuedToken.length > 0);
+  check(
+    'network_issue_token 返回 PUBLIC_ORIGIN 下的 /mcp?token= URL',
+    typeof issuedUrlValue === 'string' &&
+      issuedUrlValue.startsWith(`${publicOrigin}/mcp?token=`) &&
+      new URL(issuedUrlValue).searchParams.get('token') === issuedToken,
+  );
+
+  const secondIssued = await rawRpc('tools/call', {
+    name: 'network_issue_token',
+    arguments: {},
+  });
+  const secondToken = (
+    secondIssued.body.result as { structuredContent?: { token?: string } } | undefined
+  )?.structuredContent?.token;
+  check(
+    '连续两次 network_issue_token 返回不同 token',
+    secondToken !== undefined && secondToken !== issuedToken,
+  );
+
+  // 与网页“新建 Agent”一致：用 issue_token 返回的新 token 注册，不复用浏览器身份。
+  const newAgentSession = `sess_ui_${crypto.randomUUID().replaceAll('-', '')}`;
+  const newAgentName = '网页新建 Agent 检查';
+  const newAgentRegister = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_register',
+      arguments: {
+        request_id: newRequestId('ui_agent_reg'),
+        kind: 'agent',
+        name: newAgentName,
+        agent_session_id: newAgentSession,
+      },
+    },
+    { token: secondToken },
+  );
+  const newAgentIdentity = (
+    newAgentRegister.body.result as
+      | { structuredContent?: { actor_id?: string; name?: string; share_url?: string | null } }
+      | undefined
+  )?.structuredContent;
+  check(
+    '新建 Agent 流程：新 token 可注册 agent',
+    typeof secondToken === 'string' &&
+      secondToken.length > 0 &&
+      typeof newAgentIdentity?.actor_id === 'string',
+  );
+  check(
+    '新建 Agent 流程：注册返回 share_url',
+    typeof newAgentIdentity?.share_url === 'string' &&
+      newAgentIdentity.share_url.endsWith(`/a/${encodeURIComponent(newAgentSession)}`),
+  );
+  const newAgentMe = await rawRpc(
+    'tools/call',
+    { name: 'network_me', arguments: {} },
+    { token: secondToken },
+  );
+  const newAgentMeIdentity = (
+    newAgentMe.body.result as
+      | { structuredContent?: { actor_id?: string; name?: string } }
+      | undefined
+  )?.structuredContent;
+  checkEqual(
+    '新建 Agent 流程：新 token 调用 network_me 返回同一 actor',
+    newAgentMeIdentity?.actor_id,
+    newAgentIdentity?.actor_id,
+  );
+  checkEqual('新建 Agent 流程：network_me 返回注册名称', newAgentMeIdentity?.name, newAgentName);
+
+  const issuedUrl = new URL(issuedUrlValue ?? `${baseUrl()}/mcp?token=missing`);
+
+  const issuedMe = await rawRpc(
+    'tools/call',
+    { name: 'network_me', arguments: {} },
+    { url: issuedUrl },
+  );
+  checkEqual(
+    '未注册 URL token 调用 network_me 返回 CREDENTIAL_INVALID',
+    toolErrorCode(issuedMe.body),
+    'CREDENTIAL_INVALID',
+  );
+
+  const urlSession = `sess_url_${crypto.randomUUID().replaceAll('-', '')}`;
+  const urlRegister = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_register',
+      arguments: {
+        request_id: newRequestId('url_reg'),
+        kind: 'agent',
+        name: 'URL 凭据检查',
+        agent_session_id: urlSession,
+      },
+    },
+    { url: issuedUrl },
+  );
+  const urlIdentity = (
+    urlRegister.body.result as
+      | { structuredContent?: { actor_id?: string; share_url?: string | null } }
+      | undefined
+  )?.structuredContent;
+  check('URL token 可完成 network_register', typeof urlIdentity?.actor_id === 'string');
+  check(
+    'URL token 注册返回 share_url',
+    typeof urlIdentity?.share_url === 'string' &&
+      urlIdentity.share_url.endsWith(`/a/${encodeURIComponent(urlSession)}`),
+  );
+  const issuedRegisteredMe = await rawRpc(
+    'tools/call',
+    { name: 'network_me', arguments: {} },
+    { url: issuedUrl },
+  );
+  const issuedRegisteredIdentity = (
+    issuedRegisteredMe.body.result as
+      | { structuredContent?: { actor_id?: string } }
+      | undefined
+  )?.structuredContent;
+  checkEqual(
+    'URL token 调用 network_me 返回同一 actor',
+    issuedRegisteredIdentity?.actor_id,
+    urlIdentity?.actor_id,
+  );
+
+  const invalidUrl = new URL(`${baseUrl()}/mcp`);
+  invalidUrl.searchParams.set('token', `invalid_${crypto.randomUUID()}`);
+  const invalidMe = await rawRpc(
+    'tools/call',
+    { name: 'network_me', arguments: {} },
+    { url: invalidUrl },
+  );
+  checkEqual(
+    '无效 query token 调用私有工具返回 CREDENTIAL_INVALID',
+    toolErrorCode(invalidMe.body),
+    'CREDENTIAL_INVALID',
+  );
+
+  const bearerToken = newToken();
+  const bearerRegister = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_register',
+      arguments: {
+        request_id: newRequestId('bearer_reg'),
+        kind: 'agent',
+        name: 'Bearer 优先检查',
+        agent_session_id: `sess_bearer_${crypto.randomUUID().replaceAll('-', '')}`,
+      },
+    },
+    { token: bearerToken },
+  );
+  const bearerIdentity = (
+    bearerRegister.body.result as
+      | { structuredContent?: { actor_id?: string } }
+      | undefined
+  )?.structuredContent;
+  const precedenceUrl = new URL(`${baseUrl()}/mcp`);
+  precedenceUrl.searchParams.set('token', `invalid_${crypto.randomUUID()}`);
+  const precedenceMe = await rawRpc(
+    'tools/call',
+    { name: 'network_me', arguments: {} },
+    { url: precedenceUrl, token: bearerToken },
+  );
+  const precedenceIdentity = (
+    precedenceMe.body.result as
+      | { structuredContent?: { actor_id?: string } }
+      | undefined
+  )?.structuredContent;
+  checkEqual(
+    '合法 Bearer 优先于无效 query token',
+    precedenceIdentity?.actor_id,
+    bearerIdentity?.actor_id,
+  );
+
+  const originIssue = await rawRpc(
+    'tools/call',
+    { name: 'network_issue_token', arguments: {} },
+    { headers: { origin: 'https://example.com' } },
+  );
+  checkEqual('任意 Origin 调用 /mcp 返回 200', originIssue.status, 200);
+  checkEqual(
+    '跨域响应允许任意 Origin',
+    originIssue.headers.get('access-control-allow-origin'),
+    '*',
+  );
+  check(
+    '跨域响应包含 Vary: Origin',
+    (originIssue.headers.get('vary') ?? '').toLowerCase().includes('origin'),
+  );
+
+  const nullOrigin = await rawRpc(
+    'tools/call',
+    { name: 'network_issue_token', arguments: {} },
+    { headers: { origin: 'null' } },
+  );
+  checkEqual('Origin: null 不触发 403', nullOrigin.status, 200);
+
+  const slashOrigin = await rawRpc(
+    'tools/call',
+    { name: 'network_issue_token', arguments: {} },
+    { headers: { origin: 'https://example.com/' } },
+  );
+  checkEqual('带尾斜杠 Origin 不触发 403', slashOrigin.status, 200);
+
+  const preflight = await fetch(`${baseUrl()}/mcp`, {
+    method: 'OPTIONS',
+    headers: {
+      origin: 'https://example.com',
+      'access-control-request-method': 'POST',
+      'access-control-request-headers':
+        'authorization, content-type, mcp-protocol-version, mcp-method, mcp-name',
+    },
+  });
+  checkEqual('OPTIONS /mcp 预检返回 204', preflight.status, 204);
+  checkEqual('预检允许任意 Origin', preflight.headers.get('access-control-allow-origin'), '*');
+  check(
+    '预检允许 Authorization 请求头',
+    (preflight.headers.get('access-control-allow-headers') ?? '')
+      .toLowerCase()
+      .includes('authorization'),
+  );
+  check(
+    '预检声明 POST',
+    (preflight.headers.get('access-control-allow-methods') ?? '').includes('POST'),
+  );
+
+  if (hasDrive) {
+    const uploadPreflight = await fetch(`${baseUrl()}/mcp-upload`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://example.com',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'authorization, mcpp-files-version',
+      },
+    });
+    checkEqual('OPTIONS /mcp-upload 预检返回 204', uploadPreflight.status, 204);
+
+    const uploadBody = 'url token upload';
+    const queryUploadUrl = new URL(`${baseUrl()}/mcp-upload`);
+    queryUploadUrl.searchParams.set('token', issuedToken);
+    const queryUpload = await fetch(queryUploadUrl, {
+      method: 'POST',
+      headers: {
+        origin: 'https://example.com',
+        'MCPP-Files-Version': '1',
+        'content-type': 'text/plain',
+        'MCPP-File-Name': 'url-token.txt',
+        'MCPP-File-Size': String(new TextEncoder().encode(uploadBody).length),
+      },
+      body: uploadBody,
+    });
+    checkEqual('URL token 可用于 /mcp-upload', queryUpload.status, 201);
+    checkEqual(
+      '上传跨域响应允许任意 Origin',
+      queryUpload.headers.get('access-control-allow-origin'),
+      '*',
+    );
+  }
 
   const skills = await rawRpc('skills/list');
   const skillEntries =
@@ -200,6 +546,38 @@ async function main(): Promise<void> {
     '技能正文说明状态变更不自我唤醒',
     skillText.includes('claim/report/complete/fail 不会再触发自己的 inbox 提示'),
     skillText.slice(0, 200),
+  );
+  check(
+    '技能正文要求注册后向用户提供 share_url',
+    skillText.includes('share_url') && skillText.includes('发给用户'),
+    skillText.slice(0, 200),
+  );
+  check(
+    '技能正文要求注册后立即进入异步监听',
+    skillText.includes('异步') &&
+      skillText.includes('network_login') &&
+      skillText.includes('监听') &&
+      skillText.includes('订阅') &&
+      skillText.includes('不要轮询'),
+    skillText.slice(0, 200),
+  );
+  check(
+    '技能正文只覆盖 Agent 类型',
+    !skillText.includes('kind: "human"') && !skillText.includes('human actor'),
+    skillText.slice(0, 200),
+  );
+  check(
+    'MCP 技能声明与静态技能面分离',
+    skillText.includes('无法使用 MCP') && skillText.includes('不属于 `skills/list`'),
+    skillText.slice(0, 240),
+  );
+  check(
+    '技能正文说明 URL 凭据与 Origin 边界',
+    skillText.includes('network_issue_token') &&
+      skillText.includes('?token=') &&
+      skillText.includes('Origin 不再是认证边界') &&
+      skillText.includes('丢失 URL'),
+    skillText.slice(0, 240),
   );
 
   const skillGet = await rawRpc('skills/get', { uri: skill?.uri ?? '' });
@@ -284,6 +662,33 @@ async function main(): Promise<void> {
   check('首页包含会话搜索框', homeHtml.includes('id="room-search"') && homeHtml.includes('搜索'));
   check('首页包含新建群聊入口', homeHtml.includes('id="new-group"'));
   check('首页包含新建群聊弹窗', homeHtml.includes('id="group-modal"'));
+  check(
+    '首页包含新建 Agent 入口',
+    homeHtml.includes('id="new-agent"') && homeHtml.includes('新建 Agent'),
+  );
+  check(
+    '首页包含新建 Agent 弹窗',
+    homeHtml.includes('id="new-agent-modal"') &&
+      homeHtml.includes('id="new-agent-name"') &&
+      homeHtml.includes('id="new-agent-create"') &&
+      homeHtml.includes('id="new-agent-url"') &&
+      homeHtml.includes('id="new-agent-copy"') &&
+      homeHtml.includes('id="new-agent-share"') &&
+      homeHtml.includes('id="new-agent-close"') &&
+      homeHtml.includes('id="new-agent-error"'),
+  );
+  check(
+    '新建 Agent 弹窗标明 MCP URL 只显示一次且为长期凭据',
+    homeHtml.includes('长期凭据') &&
+      homeHtml.includes('只显示一次') &&
+      homeHtml.includes('不要截图、发群或写入日志'),
+  );
+  check(
+    '新建 Agent 使用 issue_token 的新 token 注册',
+    homeHtml.includes('callToolWithToken') &&
+      homeHtml.includes('network_issue_token') &&
+      homeHtml.includes("requestId('web_agent_reg')"),
+  );
   check('首页包含手机扫码入口', homeHtml.includes('id="device-handoff"') && homeHtml.includes('手机扫码'));
   check(
     '首页包含复制 actor ID 按钮',
@@ -340,6 +745,58 @@ async function main(): Promise<void> {
     '静态技能不包含硬编码 Bearer token',
     !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(skillDocText),
   );
+  check(
+    '静态技能只覆盖 Agent 类型',
+    !skillDocText.includes('kind: "human"'),
+    skillDocText.slice(0, 200),
+  );
+  check(
+    '静态技能面向无法使用 MCP 的客户端且不属于 skills/list',
+    skillDocText.includes('无法使用 MCP') && skillDocText.includes('不属于 `skills/list`'),
+    skillDocText.slice(0, 240),
+  );
+  check(
+    '静态技能说明注册后向用户提供 share_url',
+    skillDocText.includes('SHARE_URL') &&
+      skillDocText.includes('.share_url') &&
+      skillDocText.includes('发给用户'),
+    skillDocText.slice(0, 200),
+  );
+  check(
+    '静态技能说明注册后异步监听并包含 subscriptions/listen 与 network_login',
+    skillDocText.includes('异步') &&
+      skillDocText.includes('subscriptions/listen') &&
+      skillDocText.includes('network_login'),
+    skillDocText.slice(0, 200),
+  );
+  check(
+    '静态技能说明 SSE 使用 --http1.1、唯一 subscription id 并重新 login',
+    skillDocText.includes('--http1.1') &&
+      skillDocText.includes('唯一 subscription id') &&
+      skillDocText.includes('重新 `network_login`'),
+    skillDocText.slice(0, 200),
+  );
+  check(
+    '静态技能说明 URL token 流程与 Origin 边界',
+    skillDocText.includes('network_issue_token') &&
+      skillDocText.includes('AGENTNET_MCP_URL') &&
+      skillDocText.includes('Origin 不再是认证边界'),
+    skillDocText.slice(0, 240),
+  );
+  // 房间文件工具由文档 agent 单独补写；这里只要求已归档工具全部覆盖。
+  const documentedTools = toolNames.filter((name) => !roomFileTools.includes(name));
+  const missingTools = documentedTools.filter((name) => !skillDocText.includes(name));
+  check(
+    `静态技能覆盖 tools/list 全部 ${documentedTools.length} 个已归档工具`,
+    missingTools.length === 0,
+    missingTools,
+  );
+  const pendingDocTools = roomFileTools.filter(
+    (name) => toolNames.includes(name) && !skillDocText.includes(name),
+  );
+  if (pendingDocTools.length > 0) {
+    console.log(`  · 房间文件工具文档待补: ${pendingDocTools.join(', ')}`);
+  }
 
   const browserToken = newToken();
   const browserRegister = await rawRpc(
@@ -414,7 +871,7 @@ async function main(): Promise<void> {
   check('单聊页包含改名入口', chatHtml.includes('id="rename"'));
   check('单聊页包含 @ 成员选择器', chatHtml.includes('id="mention-picker"'));
   check('单聊页包含手机扫码入口', chatHtml.includes('id="device-handoff"'));
-  check('单聊页订阅房间 head', chatHtml.includes('agentnet://rooms/'));
+  check('单聊页订阅统一 stream', chatHtml.includes('agentnet://stream'));
   check(
     '单聊页头部按成员 online 渲染在线状态',
     chatHtml.includes('presenceLabel(peer.online)'),
@@ -435,7 +892,10 @@ async function main(): Promise<void> {
   const connection = await connectClient(unregistered);
   try {
     const tools = await connection.client.listTools();
-    const sdkToolCount = tools.tools.some((tool) => tool.name === 'drive_file_info') ? 28 : 27;
+    const sdkToolCount =
+      coreToolNames.length +
+      (tools.tools.some((tool) => tool.name === 'drive_file_info') ? 1 : 0) +
+      (tools.tools.some((tool) => tool.name === 'network_room_file_bind') ? roomFileTools.length : 0);
     checkEqual('官方 SDK 可通过 server/discover 建连', tools.tools.length, sdkToolCount);
     await expectToolError('未注册凭据调用 network_me 返回 CREDENTIAL_INVALID', callTool(connection.client, 'network_me'), 'CREDENTIAL_INVALID');
     await expectToolError(
@@ -446,21 +906,13 @@ async function main(): Promise<void> {
 
     const listen = await rawRpc(
       'subscriptions/listen',
-      { notifications: { resourceSubscriptions: ['agentnet://me'] } },
+      { notifications: { resourceSubscriptions: [STREAM_URI] } },
       { token: unregistered },
     );
     const listenError = listen.body.error as Record<string, unknown> | undefined;
     checkEqual('未注册身份建立订阅被拒绝', listenError?.code, -32602);
     const listenData = listenError?.data as Record<string, unknown> | undefined;
     checkEqual('订阅拒绝返回 CREDENTIAL_INVALID', listenData?.code, 'CREDENTIAL_INVALID');
-
-    const roomListen = await rawRpc(
-      'subscriptions/listen',
-      { notifications: { resourceSubscriptions: [`agentnet://actors/${unregistered}/inbox`] } },
-      { token: unregistered },
-    );
-    const roomListenError = roomListen.body.error as Record<string, unknown> | undefined;
-    checkEqual('未注册身份订阅 inbox 被拒绝', roomListenError?.code, -32602);
   } finally {
     await connection.close();
   }
@@ -479,6 +931,9 @@ async function main(): Promise<void> {
   } finally {
     await anonymous.close();
   }
+
+  if (!secondToken) throw new Error('missing registered agent token');
+  await runStreamProtocolChecks(secondToken, newAgentIdentity?.actor_id);
 
   console.log(`协议验收通过: ${checksPassed()} 项`);
 }

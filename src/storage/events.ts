@@ -98,6 +98,11 @@ export function inboxTopic(actorId: string): string {
   return `inbox:${actorId}`;
 }
 
+/** 统一 actor stream 的进程内通知 topic。 */
+export function actorTopic(actorId: string): string {
+  return `actor:${actorId}`;
+}
+
 /** 更新房间 head 与 member 版本（成员事件使用同一 head 序号）。 */
 export function roomHeadStatement(
   db: D1Database,

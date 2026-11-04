@@ -300,7 +300,11 @@ export function messageCoreStatements(
           scopeId: delivery.recipientId,
           eventType: 'delivery_created',
           refId: delivery.deliveryId,
-          metadata: { message_id: core.messageId, room_id: core.roomId },
+          metadata: {
+            message_id: core.messageId,
+            room_id: core.roomId,
+            sender_id: core.senderId,
+          },
         },
         core.at,
       ),

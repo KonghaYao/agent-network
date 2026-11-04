@@ -125,3 +125,19 @@ export interface RecoveryTicketRow {
   redeem_request_id: string | null;
   created_at: number;
 }
+
+/** 已绑定到房间的 MCPP Files 记录；public_url 由 PUBLIC_ORIGIN 派生，不落库。 */
+export interface RoomFileRow {
+  room_file_id: string;
+  room_id: string;
+  file_id: string;
+  uploader_id: string;
+  name: string;
+  mime_type: string;
+  size: number;
+  sha256: string;
+  created_at: number;
+  expires_at: number;
+  deleted_at: number | null;
+  deleted_by: string | null;
+}

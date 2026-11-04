@@ -106,6 +106,19 @@ export const APP_STYLE = `
   .list-hint { margin: 0; padding: 32px 20px; color: var(--wx-muted); font-size: 13px;
     line-height: 1.7; text-align: center; overflow-wrap: anywhere; }
   .list-hint[hidden] { display: none; }
+  .list-retry { display: block; margin: 0 auto 16px; font-size: 12px; }
+  .list-retry[hidden] { display: none; }
+
+  /* 首屏会话骨架：只占位，不阻塞交互；数据到达后 renderRooms 覆盖。 */
+  .room-skeleton { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 8px; }
+  .skeleton-avatar { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%;
+    background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
+  .skeleton-lines { flex: 1 1 auto; display: flex; flex-direction: column; gap: 7px; }
+  .skeleton-lines span { display: block; height: 10px; border-radius: 4px;
+    background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
+  .skeleton-lines span:first-child { width: 46%; }
+  .skeleton-lines span:last-child { width: 78%; }
+  @keyframes skeleton-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 
   .avatar { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%;
     display: grid; place-items: center; overflow: hidden; color: #fff;
@@ -124,6 +137,9 @@ export const APP_STYLE = `
 
   .chat-pane { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex;
     flex-direction: column; background: var(--wx-bg); }
+  /* 壳同时包含空状态与聊天面板，由 body class 决定桌面端显示哪一个。 */
+  body.page-home .chat-pane:not(.empty-pane) { display: none; }
+  body.page-room .empty-pane { display: none; }
   .chat-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
     min-height: 56px; padding: 0 16px; background: var(--wx-sidebar);
     border-bottom: 1px solid var(--wx-line); }
@@ -152,6 +168,32 @@ export const APP_STYLE = `
 
   .chat-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
     position: relative; background: var(--wx-bg); }
+  /* 细加载条：只提示“正在取新房间”，不覆盖内容、不阻塞操作。 */
+  .chat-loading { position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    overflow: hidden; z-index: 4; }
+  .chat-loading[hidden] { display: none; }
+  .chat-loading::after { content: ""; display: block; width: 42%; height: 100%;
+    background: var(--wx-green); animation: chat-loading-slide 1.1s ease-in-out infinite; }
+  @keyframes chat-loading-slide { 0% { transform: translateX(-110%); }
+    100% { transform: translateX(260%); } }
+  .chat-skeleton { padding: 22px 20px; }
+  .chat-skeleton[hidden] { display: none; }
+  .skeleton-row { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 20px; }
+  .skeleton-row.mine { flex-direction: row-reverse; }
+  .skeleton-row .skeleton-avatar { border-radius: 6px; }
+  .skeleton-bubble { width: min(46%, 260px); height: 42px; border-radius: 4px;
+    background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
+  .chat-error { margin: 0; padding: 26px 20px; text-align: center; color: var(--wx-muted); }
+  .chat-error[hidden] { display: none; }
+  .chat-error p { margin: 0 0 12px; color: var(--wx-unread); font-size: 13px;
+    overflow-wrap: anywhere; }
+  .chat-error-actions { display: flex; align-items: center; justify-content: center; gap: 14px; }
+  .chat-error-actions a { color: var(--wx-link); font-size: 12px; }
+  .stream-status { margin: 0; padding: 4px 16px 0; font-size: 11px; color: var(--wx-muted); }
+  .stream-status[hidden] { display: none; }
+  /* 实时连接持续失败时才显示；非阻塞，不遮挡会话或输入框。 */
+  .stream-banner { margin: 0 0 6px; font-size: 11px; line-height: 1.5; color: var(--wx-muted); }
+  .stream-banner[hidden] { display: none; }
   #older { align-self: center; flex: 0 0 auto; margin: 10px 0 0; padding: 3px 10px;
     border: 0; background: transparent; color: var(--wx-link); font-size: 11px; }
   #older[hidden] { display: none; }
@@ -243,8 +285,23 @@ export const APP_STYLE = `
     font-size: 12px; overflow-wrap: anywhere; }
   .modal-actions { justify-content: flex-end; }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-  /* 账号区两个文字按钮并排：复制 ID 与手机扫码。 */
+  /* 账号区文字按钮并排：复制 ID、新建 Agent 与手机扫码。 */
   .account-scan + .account-scan { margin-left: 10px; }
+
+  .new-agent-card { width: min(440px, 100%); }
+  .new-agent-warning { margin: 12px 0; padding: 8px 10px; border-radius: 4px;
+    background: #fff7ed; color: #9a3412; font-size: 12px; line-height: 1.6;
+    text-align: left; overflow-wrap: anywhere; }
+  .new-agent-result { margin: 4px 0 12px; padding: 10px; border-radius: 6px;
+    background: var(--wx-bg); border: 1px solid var(--wx-line); }
+  .new-agent-result[hidden] { display: none; }
+  #new-agent-url, #new-agent-share { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; }
+  .new-agent-copy { margin: 6px 0 12px; }
+  .new-agent-hint { margin: 0; font-size: 12px; color: var(--wx-muted); line-height: 1.6; }
+  @media (prefers-color-scheme: dark) {
+    .new-agent-warning { background: #3a2a1a; color: #fdba74; }
+  }
 
   .messages::-webkit-scrollbar, .sidebar-list::-webkit-scrollbar,
   .mention-picker::-webkit-scrollbar, .contact-list::-webkit-scrollbar { width: 6px; }
@@ -273,5 +330,10 @@ export const APP_STYLE = `
     .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
     .composer textarea { font-size: 16px; }
     .mention-picker { left: 10px; bottom: 64px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton-avatar, .skeleton-lines span, .skeleton-bubble { animation: none; }
+    .chat-loading::after { animation: none; width: 100%; }
   }
 `;

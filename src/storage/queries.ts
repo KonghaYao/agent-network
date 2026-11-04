@@ -1,4 +1,11 @@
-import type { ActorRow, DeliveryRow, MessageRow, RoomMemberRow, RoomRow } from './rows';
+import type {
+  ActorRow,
+  DeliveryRow,
+  MessageRow,
+  RoomFileRow,
+  RoomMemberRow,
+  RoomRow,
+} from './rows';
 
 export interface D1Like {
   prepare(query: string): D1PreparedStatement;
@@ -41,6 +48,14 @@ export async function isActiveMember(db: D1Like, roomId: string, actorId: string
 
 export async function getMessage(db: D1Like, messageId: string): Promise<MessageRow | null> {
   return db.prepare('SELECT * FROM messages WHERE message_id = ?').bind(messageId).first<MessageRow>();
+}
+
+/** 按 file_id 读取绑定记录；同一 file_id 全局唯一，含墓碑。 */
+export async function getRoomFile(db: D1Like, fileId: string): Promise<RoomFileRow | null> {
+  return db
+    .prepare('SELECT * FROM room_files WHERE file_id = ?')
+    .bind(fileId)
+    .first<RoomFileRow>();
 }
 
 export async function getDelivery(db: D1Like, deliveryId: string): Promise<DeliveryRow | null> {

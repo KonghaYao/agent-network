@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { FILE_ID_PATTERN } from '@peri-code/mcpp/files';
+
 import { LIMITS } from './limits';
 
 const id = (max = 128) => z.string().min(1).max(max);
@@ -16,6 +18,9 @@ export const registerSchema = z.object({
   name: z.string().min(1).max(LIMITS.actorNameMax),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
+
+/** 无鉴权、无数据库写入的长期 URL 凭据申请。 */
+export const issueTokenSchema = z.object({});
 
 export const meSchema = z.object({});
 
@@ -151,6 +156,29 @@ export const deliveryRetrySchema = z.object({
   expected_attempt: z.number().int().nonnegative(),
 });
 
+/** file_id 来自 MCPP Files v1 上传响应；只接受该扩展的格式。 */
+const fileId = z.string().regex(new RegExp(FILE_ID_PATTERN));
+
+export const roomFileBindSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  file_id: fileId,
+});
+
+export const roomFileListSchema = z.object({
+  room_id: id(),
+  cursor,
+  limit: z.number().int().min(1).max(LIMITS.roomFilePageMax).optional(),
+});
+
+export const roomFileGetSchema = z.object({ room_id: id(), file_id: fileId });
+
+export const roomFileDeleteSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  file_id: fileId,
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type ProfileUpdateInput = z.infer<typeof profileUpdateSchema>;
 export type AgentRenameInput = z.infer<typeof agentRenameSchema>;
@@ -174,3 +202,7 @@ export type DeliveryCompleteInput = z.infer<typeof deliveryCompleteSchema>;
 export type DeliveryFailInput = z.infer<typeof deliveryFailSchema>;
 export type DeliveryCancelInput = z.infer<typeof deliveryCancelSchema>;
 export type DeliveryRetryInput = z.infer<typeof deliveryRetrySchema>;
+export type RoomFileBindInput = z.infer<typeof roomFileBindSchema>;
+export type RoomFileListInput = z.infer<typeof roomFileListSchema>;
+export type RoomFileGetInput = z.infer<typeof roomFileGetSchema>;
+export type RoomFileDeleteInput = z.infer<typeof roomFileDeleteSchema>;

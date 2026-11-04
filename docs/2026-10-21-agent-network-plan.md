@@ -1,5 +1,7 @@
 # Agent Network 完整实施计划
 
+> **历史设计文档：当前架构以 README/CLAUDE/src 为准；统一 `agentnet://stream`、SPA、房间文件已取代本文的 Worker/PartyServer/旧 URI 设计。**
+
 版本：v1 计划稿 · 2026-10-21
 代码位置：`peri/npm-packages/agent-network/`
 计划建议入库位置：`peri/spec/issues/2026-10-21-agent-network.md`

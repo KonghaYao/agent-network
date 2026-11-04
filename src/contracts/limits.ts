@@ -34,11 +34,28 @@ export const LIMITS = {
   /** 协作深度与每个 root 的累计 delivery 上限。 */
   cooperationDepthMax: 4,
   rootDeliveryMax: 32,
-  /** 每个 actor 的活跃房间上限。 */
+  /** 每 Agent 的活跃房间上限。 */
   activeRoomsPerActor: 200,
-  /** 每条订阅请求的 resource URI 上限。 */
-  subscriptionUrisMax: 4,
-  /** 内部提示上限。 */
+  /** 房间文件保留上限（毫秒）；不提供续期接口。 */
+  roomFileTtlMs: 30 * 24 * 60 * 60_000,
+  /** 过期房间文件墓碑在 expires_at 之后的额外保留期（毫秒）。 */
+  roomFileTombstoneGraceMs: 7 * 24 * 60 * 60_000,
+  /** 每个房间的文件数量上限。 */
+  roomFilesPerRoom: 200,
+  /** 每个房间的文件总字节上限。 */
+  roomFileBytesPerRoom: 1024 * 1024 * 1024,
+  /** 房间文件列表默认 / 最大条数。 */
+  roomFilePageDefault: 20,
+  roomFilePageMax: 100,
+  /** 每条流式订阅的 URI 上限；只允许 `agentnet://stream`。 */
+  subscriptionUrisMax: 1,
+  /** 统一 actor stream 单帧最多包含的 item 数。 */
+  streamBatchMax: 20,
+  /** 同一 actor 允许的物理连接数（重连重叠/多设备）。 */
+  streamConnectionsPerActor: 4,
+  /** 单条 stream 连接的待发送队列上限。 */
+  streamQueueMax: 32,
+  /** 内部提示上限；统一 stream 的单帧 JSON 也复用该字节上限。 */
   hintBytes: 1024,
   /** 单条监听待发送队列。 */
   listenQueueMax: 32,
@@ -68,6 +85,21 @@ export const LIMITS = {
   /** 重连退避。 */
   reconnectBaseMs: 1_000,
   reconnectMaxMs: 30_000,
+  /** 重连抖动比例（±）。 */
+  reconnectJitterRatio: 0.2,
+  /** 连接稳定多久后重置重连计数。 */
+  reconnectStableMs: 30_000,
+  /** 连续失败多少次后显示非阻塞提示。 */
+  reconnectBannerAfterFailures: 5,
+  /** 连续无 ack 多久后显示非阻塞提示。 */
+  reconnectBannerAfterMs: 60_000,
+  /**
+   * 网页普通 RPC 的超时（毫秒）。流式订阅不套用该超时；
+   * 前端只用它结束 loading 并显示可读错误，不改变服务端行为。
+   */
+  webRequestTimeoutMs: 15_000,
+  /** 网页收到房间通知后的刷新合并窗口（毫秒）。 */
+  webRefreshDebounceMs: 300,
 } as const;
 
 export function clampPage(value: number | undefined, fallback: number, max: number): number {

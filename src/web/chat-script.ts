@@ -1,21 +1,27 @@
 import { LIMITS } from '../contracts/limits';
+import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
+import { CHAT_FILES_SCRIPT } from './chat-files-script';
 import { CHAT_LIST_SCRIPT } from './chat-list-script';
 import { CHAT_RENDER_SCRIPT } from './chat-render-script';
+import { CHAT_ROUTER_SCRIPT } from './chat-router-script';
+import { CHAT_SESSION_SCRIPT } from './chat-session-script';
+import { CHAT_STREAM_SCRIPT } from './chat-stream-script';
 import { HANDOFF_CONTROLLER_SCRIPT } from './handoff';
 import { jsonForScript } from './layout';
+import { NEW_AGENT_SCRIPT } from './new-agent-script';
 import { QR_ENCODER_SCRIPT } from './qr';
 
 /**
  * 应用页内联客户端脚本：会话列表、聊天、建群、@、回执与手机扫码。
  *
- * `roomId` 为 `null` 时只初始化首页列表；有值时同一脚本加载房间。
- * 列表与消息渲染片段由独立模块提供，但拼进同一个 `<script>`，共享作用域。
- * 阈值仍由 `LIMITS` 内联，页面不复制字面量。
+ * `roomId` 只作为首屏 SSR 提示；客户端路由解析 `location.pathname` 后
+ * 通过 `openRoom` 加载房间。所有片段拼进同一个 `<script>` 共享作用域，
+ * 拆文件只为控制单文件行数，不改变工具契约或页面行为。
  */
 export function chatClientScript(roomId: string | null): string {
   const roomJson = roomId === null ? 'null' : jsonForScript(roomId);
   return `<script>
-const roomId = ${roomJson};
+const initialRoomId = ${roomJson};
 const TOKEN_KEY = 'agent-network-token';
 const MAX_CHUNKS = 8;
 // 服务端 LIMITS.invokeMax 的内联值：阈值只在 limits.ts 维护，页面不复制字面量。
@@ -23,8 +29,12 @@ const INVOKE_MAX = ${LIMITS.invokeMax};
 const ACTOR_NAME_MAX = ${LIMITS.actorNameMax};
 // claimed 超过该时长未更新时显示提示；只做本地重绘，不轮询服务端。
 const CLAIM_STALE_MS = ${LIMITS.claimedStaleMs};
+const WEB_REQUEST_TIMEOUT_MS = ${LIMITS.webRequestTimeoutMs};
+const WEB_REFRESH_DEBOUNCE_MS = ${LIMITS.webRefreshDebounceMs};
 const roomListElement = document.getElementById('room-list');
 const listStatusElement = document.getElementById('room-list-status');
+const listRetryElement = document.getElementById('room-list-retry');
+const sidebarListElement = document.querySelector('.sidebar-list');
 const searchInput = document.getElementById('room-search');
 const accountNameElement = document.getElementById('account-name');
 const accountAvatarElement = document.getElementById('account-avatar');
@@ -37,6 +47,14 @@ const composer = document.getElementById('composer');
 const bodyInput = document.getElementById('body');
 const sendButton = document.getElementById('send');
 const statusElement = document.getElementById('status');
+const chatBodyElement = document.getElementById('chat-body');
+const chatLoadingElement = document.getElementById('chat-loading');
+const chatSkeletonElement = document.getElementById('chat-skeleton');
+const chatErrorElement = document.getElementById('chat-error');
+const chatErrorTextElement = document.getElementById('chat-error-text');
+const chatErrorRetryButton = document.getElementById('chat-error-retry');
+const streamStatusElement = document.getElementById('stream-status');
+const streamBannerElement = document.getElementById('stream-banner');
 const renameButton = document.getElementById('rename');
 const renameForm = document.getElementById('rename-form');
 const renameInput = document.getElementById('rename-input');
@@ -52,23 +70,24 @@ const groupCreateButton = document.getElementById('group-create');
 const groupCancelButton = document.getElementById('group-cancel');
 
 let identity = null;
-let members = new Map();
-let room = null;
-let nextOlder = null;
-let refreshChain = Promise.resolve();
-let refreshQueued = false;
-let reloadTimer = null;
 let roomEntries = [];
 let mentionTargets = new Map();
 let activeMention = null;
 let composing = false;
 let ignoreEnterUntil = 0;
 let copyResetTimer = null;
+let pendingRoomRefreshId = null;
 // 发送失败/投递缺失/截断提示必须跨过 SSE 触发的刷新，不能在 300ms 后被清空。
 let stickyStatus = '';
 
 ${CHAT_LIST_SCRIPT}
 ${CHAT_RENDER_SCRIPT}
+${NEW_AGENT_SCRIPT}
+${CHAT_SESSION_SCRIPT}
+${CHAT_STREAM_SCRIPT}
+${CHAT_FILES_SCRIPT}
+${CHAT_FILES_ACTIONS_SCRIPT}
+${CHAT_ROUTER_SCRIPT}
 
 function browserToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -78,8 +97,12 @@ function requestId(prefix) {
   return prefix + '_' + crypto.randomUUID().replaceAll('-', '');
 }
 
-async function api(method, params, toolName) {
-  const token = browserToken();
+/**
+ * 普通 RPC 带 15s 超时；订阅流只受调用方 AbortController 控制。
+ * 超时与主动取消分别抛可识别的错误，调用方据此结束 loading 或静默返回。
+ */
+async function api(method, params, toolName, tokenOverride, signal) {
+  const token = tokenOverride === undefined ? browserToken() : tokenOverride;
   if (!token) throw new Error('浏览器身份尚未初始化，请刷新页面后重试');
   const headers = {
     'content-type': 'application/json',
@@ -89,27 +112,59 @@ async function api(method, params, toolName) {
     authorization: 'Bearer ' + token
   };
   if (toolName) headers['mcp-name'] = toolName;
-  const response = await fetch('/mcp', {
-    method: 'POST',
-    headers: headers,
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: crypto.randomUUID(),
-      method: method,
-      params: Object.assign({}, params, {
-        _meta: {
-          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-          'io.modelcontextprotocol/clientInfo': { name: 'agent-network-web', version: '0.1.0' },
-          'io.modelcontextprotocol/clientCapabilities': {}
-        }
+  const isListen = method === 'subscriptions/listen';
+  // 订阅流直接使用调用方的 signal：中止它即可关闭底层 SSE，避免多一层
+  // controller 让已中止的旧流继续占用同源连接池。
+  const directSignal = isListen ? signal : undefined;
+  const controller = directSignal ? null : new AbortController();
+  const requestSignal = directSignal || controller.signal;
+  let timedOut = false;
+  let timer = null;
+  const onCallerAbort = function () { if (controller) controller.abort(); };
+  if (controller && signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', onCallerAbort);
+  }
+  if (!isListen) {
+    timer = setTimeout(function () {
+      timedOut = true;
+      controller.abort();
+    }, WEB_REQUEST_TIMEOUT_MS);
+  }
+  try {
+    return await fetch('/mcp', {
+      method: 'POST',
+      headers: headers,
+      signal: requestSignal,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: crypto.randomUUID(),
+        method: method,
+        params: Object.assign({}, params, {
+          _meta: {
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+            'io.modelcontextprotocol/clientInfo': { name: 'agent-network-web', version: '0.1.0' },
+            'io.modelcontextprotocol/clientCapabilities': {}
+          }
+        })
       })
-    })
-  });
-  return response;
+    });
+  } catch (error) {
+    if (timedOut) throw new Error('请求超时，请重试');
+    if (signal && signal.aborted) {
+      const aborted = new Error('请求已取消');
+      aborted.name = 'AbortError';
+      throw aborted;
+    }
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (controller && signal) signal.removeEventListener('abort', onCallerAbort);
+  }
 }
 
-async function rpc(method, params, toolName) {
-  const response = await api(method, params, toolName);
+async function rpc(method, params, toolName, tokenOverride, signal) {
+  const response = await api(method, params, toolName, tokenOverride, signal);
   const payload = await response.json().catch(function () { return null; });
   if (!payload) throw new Error('服务无响应');
   if (payload.error) {
@@ -121,8 +176,8 @@ async function rpc(method, params, toolName) {
   return payload.result;
 }
 
-async function callTool(name, args) {
-  const result = await rpc('tools/call', { name: name, arguments: args }, name);
+async function callTool(name, args, tokenOverride, signal) {
+  const result = await rpc('tools/call', { name: name, arguments: args }, name, tokenOverride, signal);
   if (result.isError) {
     const item = (result.content || []).find(function (entry) { return entry.type === 'text'; });
     let detail = null;
@@ -138,57 +193,80 @@ async function callTool(name, args) {
   return item ? JSON.parse(item.text) : {};
 }
 
+/** 用指定 token 调工具；新建 Agent 用它注册，不改变浏览器 human 身份。 */
+function callToolWithToken(name, args, token) {
+  return callTool(name, args, token);
+}
+
 /**
  * 首次访问自动生成并绑定 human 身份。
  *
- * token 在注册前写入 localStorage，重复打开沿用同一身份；凭据被撤销时
- * 换一个新 token 重试一次，避免浏览器永久卡在失效凭据上。
+ * single-flight：首屏列表与深链房间并行调用时只注册一次。token 在注册前
+ * 写入 localStorage，重复打开沿用同一身份；凭据被撤销时换新 token 重试一次。
  */
-async function ensureIdentity() {
-  if (identity) return identity;
-  let token = browserToken();
-  if (!token) {
+function ensureIdentity() {
+  if (identity) return Promise.resolve(identity);
+  if (identityPromise) return identityPromise;
+  identityPromise = (async function () {
+    let token = browserToken();
+    if (!token) {
+      token = crypto.randomUUID();
+      try {
+        localStorage.setItem(TOKEN_KEY, token);
+      } catch (error) {
+        throw new Error('浏览器无法保存身份，请允许本地存储后刷新页面');
+      }
+    }
+    try {
+      identity = await callTool('network_me', {});
+      return identity;
+    } catch (error) {
+      if (!error || error.code !== 'CREDENTIAL_INVALID') throw error;
+    }
+    const register = function (value) {
+      return callTool('network_register', {
+        request_id: requestId('web_reg'),
+        kind: 'human',
+        name: '网页访客 ' + value.replaceAll('-', '').slice(0, 4)
+      });
+    };
+    try {
+      identity = await register(token);
+      return identity;
+    } catch (error) {
+      if (!error || error.code !== 'CREDENTIAL_INVALID') throw error;
+    }
     token = crypto.randomUUID();
     try {
       localStorage.setItem(TOKEN_KEY, token);
     } catch (error) {
       throw new Error('浏览器无法保存身份，请允许本地存储后刷新页面');
     }
-  }
-  try {
-    identity = await callTool('network_me', {});
-    return identity;
-  } catch (error) {
-    if (!error || error.code !== 'CREDENTIAL_INVALID') throw error;
-  }
-  const register = function (value) {
-    return callTool('network_register', {
-      request_id: requestId('web_reg'),
-      kind: 'human',
-      name: '网页访客 ' + value.replaceAll('-', '').slice(0, 4)
-    });
-  };
-  try {
     identity = await register(token);
     return identity;
-  } catch (error) {
-    if (!error || error.code !== 'CREDENTIAL_INVALID') throw error;
+  })().finally(function () {
+    identityPromise = null;
+  });
+  return identityPromise;
+}
+
+/** 首页错误写可见的列表状态，聊天页写聊天状态；不往隐藏元素里写。 */
+function showStatusMessage(message) {
+  if (activeRoomId && document.body.classList.contains('page-room') && statusElement) {
+    statusElement.textContent = message;
+    return;
   }
-  token = crypto.randomUUID();
-  try {
-    localStorage.setItem(TOKEN_KEY, token);
-  } catch (error) {
-    throw new Error('浏览器无法保存身份，请允许本地存储后刷新页面');
+  if (listStatusElement) {
+    listStatusElement.hidden = false;
+    listStatusElement.textContent = message;
   }
-  identity = await register(token);
-  return identity;
 }
 
 /**
  * 收集网页人类发送消息时要唤醒的 Agent 成员。
  *
  * direct 自动唤醒对方 Agent；group 只唤醒文本中仍然存在的 @Agent 记录。
- * 只使用 network_room_get 已缓存的 members，不额外发请求；人类成员与
+ * 只使用当前 active 房间已加载的 members，不额外发请求；人类成员与
  * 发送者自己不进入 invoke。超过上限时返回错误，由调用方明确提示，
  * 不静默截断。
  */
@@ -203,10 +281,9 @@ function agentInvokeTargets() {
     }
     return { targets: [], error: null };
   }
-  const targets = [];
   const text = bodyInput ? bodyInput.value : '';
+  const targets = [];
   for (const actorId of mentionTargets.keys()) {
-    if (actorId === identity.actor_id) continue;
     const member = members.get(actorId);
     if (member && member.kind === 'agent' && text.includes('@' + member.name)) {
       targets.push(actorId);
@@ -219,18 +296,6 @@ function agentInvokeTargets() {
     };
   }
   return { targets: targets, error: null };
-}
-
-function showError(error) {
-  const message = String(error && error.message ? error.message : error);
-  if (statusElement) {
-    statusElement.textContent = message;
-  } else if (listStatusElement) {
-    listStatusElement.hidden = false;
-    listStatusElement.textContent = message;
-  }
-  if (sendButton) sendButton.disabled = true;
-  if (bodyInput) bodyInput.disabled = true;
 }
 
 /** 非安全上下文没有 navigator.clipboard 时的兜底复制。 */
@@ -256,12 +321,7 @@ function legacyCopyText(text) {
 function showCopyIdError(error) {
   const message = '复制 ID 失败：' + (error && error.message ? error.message : String(error));
   if (accountCopyButton) accountCopyButton.title = message;
-  if (statusElement) {
-    statusElement.textContent = message;
-  } else if (listStatusElement) {
-    listStatusElement.hidden = false;
-    listStatusElement.textContent = message;
-  }
+  showStatusMessage(message);
 }
 
 /** 复制当前 actor ID；成功后按钮短暂显示“已复制”，不改变任何身份状态。 */
@@ -337,12 +397,23 @@ function closeRenameForm() {
   updateRenameAffordance();
 }
 
+/** 改名是全局操作：同步更新 active 房间、所有缓存与匹配的 direct 列表项。 */
 function applyAgentName(actorId, name) {
   const member = members.get(actorId);
   if (member) member.name = name;
-  const entry = roomEntries.find(function (item) { return item.room_id === roomId; });
-  if (entry) entry.name = name;
-  if (room && room.kind === 'direct' && titleElement) titleElement.textContent = name;
+  for (const cache of roomCache.values()) {
+    for (const cachedMember of cache.members || []) {
+      if (cachedMember.actor_id === actorId) cachedMember.name = name;
+    }
+  }
+  for (const summary of peerDetails.values()) {
+    if (summary.peer_actor_id === actorId) summary.name = name;
+  }
+  for (const entry of roomEntries) {
+    if (entry.peer_actor_id === actorId) entry.name = name;
+  }
+  const peer = directPeer();
+  if (peer && peer.actor_id === actorId && titleElement) titleElement.textContent = name;
   renderRooms();
 }
 
@@ -413,6 +484,7 @@ function insertMention(member) {
   const position = activeMention.start + insert.length;
   bodyInput.setSelectionRange(position, position);
   mentionTargets.set(member.actor_id, member.name);
+  if (activeRoomId) drafts.set(activeRoomId, bodyInput.value);
   hideMentionPicker();
   resizeComposer();
   bodyInput.focus();
@@ -465,6 +537,10 @@ async function openGroupModal() {
   groupModal.hidden = false;
   if (groupTitleInput) groupTitleInput.value = '';
   if (groupErrorElement) groupErrorElement.textContent = '';
+  if (groupCreateButton) {
+    groupCreateButton.disabled = false;
+    groupCreateButton.textContent = '创建';
+  }
   groupContactsElement.textContent = '正在读取好友…';
   try {
     await ensureIdentity();
@@ -487,283 +563,163 @@ function resizeComposer() {
   bodyInput.style.overflowY = bodyInput.scrollHeight > max ? 'auto' : 'hidden';
 }
 
-function scrollToBottom(force) {
-  const nearBottom =
-    messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 80;
-  if (force || nearBottom) messagesElement.scrollTop = messagesElement.scrollHeight;
-}
-
-async function loadLatest(forceScroll) {
-  const page = await callTool('network_history_list', {
-    room_id: roomId,
-    direction: 'before',
-    limit: 50
-  });
-  nextOlder = page.has_more ? page.next_cursor : null;
-  olderButton.hidden = !nextOlder;
-  messagesElement.replaceChildren();
-  appendHistory(messagesElement, page.items.slice().reverse());
-  scrollToBottom(forceScroll);
-  return page;
-}
-
-async function loadOlder() {
-  if (!nextOlder) return;
-  olderButton.disabled = true;
-  try {
-    const page = await callTool('network_history_list', {
-      room_id: roomId,
-      direction: 'before',
-      cursor: nextOlder,
-      limit: 50
-    });
-    const previousHeight = messagesElement.scrollHeight;
-    const fragment = document.createDocumentFragment();
-    appendHistory(fragment, page.items.slice().reverse());
-    messagesElement.prepend(fragment);
-    messagesElement.scrollTop += messagesElement.scrollHeight - previousHeight;
-    nextOlder = page.has_more ? page.next_cursor : null;
-    olderButton.hidden = !nextOlder;
-  } catch (error) {
-    statusElement.textContent = '加载更早消息失败：' + error.message;
-  } finally {
-    olderButton.disabled = false;
-  }
-}
-
 /**
- * 串行刷新，且合并等待中的请求。
+ * 房间通知的 300ms 合并刷新。
  *
- * 刷新期间到达的新消息或自己刚发出的消息会再排一次，
- * 不会被“正在刷新”直接丢弃；否则首屏刷新会覆盖刚发送的气泡。
+ * 只保留一个定时器，但记住最新的目标房间；切换房间后旧事件不会刷新
+ * 新房间，新房间的事件也不会因为旧定时器而丢失。
  */
-function refresh(forceScroll) {
-  if (refreshQueued) return refreshChain;
-  refreshQueued = true;
-  refreshChain = refreshChain
-    .catch(function () {})
-    .then(function () {
-      refreshQueued = false;
-      return doRefresh(forceScroll);
-    });
-  return refreshChain;
-}
-
-async function doRefresh(forceScroll) {
-  const detail = await callTool('network_room_get', { room_id: roomId });
-  room = detail.room;
-  members = new Map(detail.members.map(function (member) { return [member.actor_id, member]; }));
-  const others = detail.members
-    .filter(function (member) { return member.actor_id !== identity.actor_id; })
-    .map(function (member) { return member.name; });
-  if (room.kind === 'direct') {
-    const peer = directPeer();
-    titleElement.textContent = others.join('、') || '单聊';
-    if (peer && peer.kind === 'agent') {
-      subtitleElement.textContent = presenceLabel(peer.online);
-      subtitleElement.hidden = false;
-    } else {
-      subtitleElement.textContent = '';
-      subtitleElement.hidden = true;
-    }
-    const entry = roomEntries.find(function (item) { return item.room_id === roomId; });
-    if (entry) {
-      entry.peer_kind = peer ? peer.kind : null;
-      entry.peer_online = peer && peer.kind === 'agent' ? peer.online : null;
-      renderRooms();
-    }
-  } else {
-    titleElement.textContent = room.title || '群聊';
-    subtitleElement.textContent = '群聊 · ' + detail.members.length + ' 人';
-    subtitleElement.hidden = false;
-  }
-  updateRenameAffordance();
-  const page = await loadLatest(forceScroll);
-  statusElement.textContent = stickyStatus;
-  let readSucceeded = false;
-  try {
-    await callTool('network_room_mark_read', {
-      room_id: roomId,
-      through_seq: room.head_seq
-    });
-    readSucceeded = true;
-  } catch (error) {
-    // 已读失败不影响聊天；保留未读标记，下次刷新重试。
-  }
-  updateRoomEntry(room, page.items[0] || null, readSucceeded);
-}
-
-function scheduleReload() {
+function scheduleRoomRefresh(roomId) {
+  if (!roomId) return;
+  pendingRoomRefreshId = roomId;
   if (reloadTimer) return;
   reloadTimer = setTimeout(function () {
     reloadTimer = null;
-    refresh(false).catch(showError);
-  }, 300);
+    const targetRoomId = pendingRoomRefreshId;
+    pendingRoomRefreshId = null;
+    if (!targetRoomId || activeRoomId !== targetRoomId) return;
+    refresh(false).catch(function (error) {
+      if (isAbortError(error) || !isActiveRoom(targetRoomId, roomEpoch)) return;
+      statusElement.textContent = '刷新会话失败：' + (error && error.message ? error.message : error);
+    });
+  }, WEB_REFRESH_DEBOUNCE_MS);
 }
 
-async function listen() {
-  const uri = 'agentnet://rooms/' + roomId + '/head';
-  while (true) {
-    try {
-      const response = await api('subscriptions/listen', {
-        notifications: { resourceSubscriptions: [uri] }
-      });
-      if (!response.ok || !response.body) throw new Error('订阅失败');
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      while (true) {
-        const step = await reader.read();
-        if (step.done) break;
-        buffer += decoder.decode(step.value, { stream: true }).replaceAll('\\r\\n', '\\n');
-        let boundary = buffer.indexOf('\\n\\n');
-        while (boundary >= 0) {
-          const frame = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2);
-          const data = frame
-            .split('\\n')
-            .filter(function (line) { return line.startsWith('data:'); })
-            .map(function (line) { return line.slice(5).trimStart(); })
-            .join('\\n');
-          if (data) {
-            try {
-              const event = JSON.parse(data);
-              if (event.method === 'notifications/resources/updated' &&
-                  event.params && event.params.uri === uri) {
-                scheduleReload();
-              }
-            } catch (error) {
-              // 忽略非 JSON 帧
-            }
-          }
-          boundary = buffer.indexOf('\\n\\n');
-        }
-      }
-    } catch (error) {
-      statusElement.textContent = '实时连接中断，正在重连…';
-    }
-    await new Promise(function (resolve) { return setTimeout(resolve, 2000); });
+composer.addEventListener('submit', async function (event) {
+  event.preventDefault();
+  const sendRoomId = activeRoomId;
+  if (!sendRoomId) return;
+  const sendEpoch = roomEpoch;
+  const body = bodyInput.value.trim();
+  if (!body) return;
+  stickyStatus = '';
+  statusElement.textContent = '';
+  const invoke = agentInvokeTargets();
+  if (invoke.error) {
+    stickyStatus = invoke.error;
+    statusElement.textContent = stickyStatus;
+    return;
   }
-}
-
-async function initChat() {
+  sendButton.disabled = true;
   try {
-    await ensureIdentity();
-    await refresh(true);
+    const args = {
+      request_id: requestId('web_msg'),
+      client_message_id: crypto.randomUUID(),
+      room_id: sendRoomId,
+      body: body
+    };
+    // direct 自动唤醒对方 Agent；group 只唤醒被 @ 的 Agent。
+    if (invoke.targets.length > 0) args.invoke = invoke.targets;
+    const result = await callTool('network_message_send', args);
+    // 发送请求不绑定 roomAbort；切换房间后只丢弃 UI 更新，不取消写入。
+    const deliveryIds = Array.isArray(result.delivery_ids) ? result.delivery_ids : [];
+    // 消息已发出，旧房间草稿必须清除；但不要覆盖新房间的输入框。
+    drafts.delete(sendRoomId);
+    if (!isActiveRoom(sendRoomId, sendEpoch)) return;
+    bodyInput.value = '';
+    mentionTargets.clear();
+    hideMentionPicker();
     resizeComposer();
-    listen();
-  } catch (error) {
-    showError(error);
-  }
-}
-
-if (roomId) {
-  composer.addEventListener('submit', async function (event) {
-    event.preventDefault();
-    const body = bodyInput.value.trim();
-    if (!body) return;
-    stickyStatus = '';
-    statusElement.textContent = '';
-    const invoke = agentInvokeTargets();
-    if (invoke.error) {
-      stickyStatus = invoke.error;
+    await refresh(true);
+    if (!isActiveRoom(sendRoomId, sendEpoch)) return;
+    if (invoke.targets.length > 0 && deliveryIds.length !== invoke.targets.length) {
+      stickyStatus =
+        '消息已发送，但 Agent 投递未建立（' + deliveryIds.length + '/' +
+        invoke.targets.length + '），请检查房间成员后重试。';
       statusElement.textContent = stickyStatus;
-      return;
     }
-    sendButton.disabled = true;
-    try {
-      const args = {
-        request_id: requestId('web_msg'),
-        client_message_id: crypto.randomUUID(),
-        room_id: roomId,
-        body: body
-      };
-      // direct 自动唤醒对方 Agent；group 只唤醒被 @ 的 Agent。
-      if (invoke.targets.length > 0) args.invoke = invoke.targets;
-      const result = await callTool('network_message_send', args);
-      const deliveryIds = Array.isArray(result.delivery_ids) ? result.delivery_ids : [];
-      bodyInput.value = '';
-      mentionTargets.clear();
-      hideMentionPicker();
-      resizeComposer();
-      await refresh(true);
-      if (invoke.targets.length > 0 && deliveryIds.length !== invoke.targets.length) {
-        stickyStatus =
-          '消息已发送，但 Agent 投递未建立（' + deliveryIds.length + '/' +
-          invoke.targets.length + '），请检查房间成员后重试。';
-        statusElement.textContent = stickyStatus;
-      }
-    } catch (error) {
-      stickyStatus = '发送失败：' + (error && error.message ? error.message : error);
-      statusElement.textContent = stickyStatus;
-    } finally {
+  } catch (error) {
+    if (!isActiveRoom(sendRoomId, sendEpoch)) return;
+    stickyStatus = '发送失败：' + (error && error.message ? error.message : error);
+    statusElement.textContent = stickyStatus;
+  } finally {
+    if (isActiveRoom(sendRoomId, sendEpoch)) {
       sendButton.disabled = false;
       bodyInput.focus();
     }
-  });
-
-  bodyInput.addEventListener('input', function () {
-    resizeComposer();
-    pruneMentions();
-    updateMentionPicker();
-  });
-  bodyInput.addEventListener('compositionstart', function () {
-    composing = true;
-  });
-  bodyInput.addEventListener('compositionend', function () {
-    composing = false;
-    // Safari/Chrome 可能在确认候选后紧接着再派发一次 Enter，短暂忽略。
-    ignoreEnterUntil = Date.now() + 80;
-  });
-  bodyInput.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') {
-      hideMentionPicker();
-      return;
-    }
-    if (event.key !== 'Enter' || event.shiftKey) return;
-    if (event.isComposing || composing || event.keyCode === 229 || Date.now() < ignoreEnterUntil) {
-      return;
-    }
-    event.preventDefault();
-    composer.requestSubmit();
-  });
-  olderButton.addEventListener('click', loadOlder);
-
-  if (renameButton) renameButton.addEventListener('click', openRenameForm);
-  if (renameCancel) renameCancel.addEventListener('click', closeRenameForm);
-  if (renameForm) {
-    renameForm.addEventListener('submit', async function (event) {
-      event.preventDefault();
-      const peer = directPeer();
-      if (!peer || peer.kind !== 'agent') return;
-      const name = renameInput.value.trim();
-      if (!name) {
-        statusElement.textContent = '名称不能为空';
-        return;
-      }
-      if (name.length > ACTOR_NAME_MAX) {
-        statusElement.textContent = '名称最多 ' + ACTOR_NAME_MAX + ' 个字符';
-        return;
-      }
-      const submitButton = renameForm.querySelector('button[type=submit]');
-      submitButton.disabled = true;
-      try {
-        const result = await callTool('network_agent_rename', {
-          request_id: requestId('rename'),
-          actor_id: peer.actor_id,
-          name: name
-        });
-        applyAgentName(peer.actor_id, result.name);
-        stickyStatus = '';
-        statusElement.textContent = '';
-        closeRenameForm();
-      } catch (error) {
-        statusElement.textContent = '改名失败：' + (error && error.message ? error.message : error);
-      } finally {
-        submitButton.disabled = false;
-      }
-    });
   }
+});
+
+bodyInput.addEventListener('input', function () {
+  if (activeRoomId) drafts.set(activeRoomId, bodyInput.value);
+  resizeComposer();
+  pruneMentions();
+  updateMentionPicker();
+});
+bodyInput.addEventListener('compositionstart', function () {
+  composing = true;
+});
+bodyInput.addEventListener('compositionend', function () {
+  composing = false;
+  // Safari/Chrome 可能在确认候选后紧接着再派发一次 Enter，短暂忽略。
+  ignoreEnterUntil = Date.now() + 80;
+});
+bodyInput.addEventListener('keydown', function (event) {
+  if (event.key === 'Escape') {
+    hideMentionPicker();
+    return;
+  }
+  if (event.key !== 'Enter' || event.shiftKey) return;
+  if (!activeRoomId) return;
+  if (event.isComposing || composing || event.keyCode === 229 || Date.now() < ignoreEnterUntil) {
+    return;
+  }
+  event.preventDefault();
+  composer.requestSubmit();
+});
+
+olderButton.addEventListener('click', function () {
+  if (activeRoomId) loadOlder();
+});
+
+if (renameButton) renameButton.addEventListener('click', function () {
+  if (activeRoomId) openRenameForm();
+});
+if (renameCancel) renameCancel.addEventListener('click', closeRenameForm);
+if (renameForm) {
+  renameForm.addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const renameRoomId = activeRoomId;
+    if (!renameRoomId) return;
+    const renameEpoch = roomEpoch;
+    const peer = directPeer();
+    if (!peer || peer.kind !== 'agent') return;
+    const name = renameInput.value.trim();
+    if (!name) {
+      statusElement.textContent = '名称不能为空';
+      return;
+    }
+    if (name.length > ACTOR_NAME_MAX) {
+      statusElement.textContent = '名称最多 ' + ACTOR_NAME_MAX + ' 个字符';
+      return;
+    }
+    const submitButton = renameForm.querySelector('button[type=submit]');
+    submitButton.disabled = true;
+    try {
+      const result = await callTool('network_agent_rename', {
+        request_id: requestId('rename'),
+        actor_id: peer.actor_id,
+        name: name
+      });
+      applyAgentName(peer.actor_id, result.name);
+      if (!isActiveRoom(renameRoomId, renameEpoch)) return;
+      stickyStatus = '';
+      statusElement.textContent = '';
+      closeRenameForm();
+    } catch (error) {
+      if (!isActiveRoom(renameRoomId, renameEpoch)) return;
+      statusElement.textContent = '改名失败：' + (error && error.message ? error.message : error);
+    } finally {
+      submitButton.disabled = false;
+    }
+  });
+}
+
+if (chatErrorRetryButton) {
+  chatErrorRetryButton.addEventListener('click', function () {
+    if (!activeRoomId) return;
+    openRoom(activeRoomId, { force: true, initial: false }).catch(function () {});
+  });
 }
 
 document.addEventListener('click', function (event) {
@@ -801,10 +757,14 @@ if (groupForm) {
       };
       if (title) args.title = title;
       const result = await callTool('network_room_create', args);
-      location.href = '/c/' + encodeURIComponent(result.room.room_id);
+      const newRoomId = seedRoomCacheFromDetail(result);
+      groupErrorElement.textContent = '';
+      closeGroupModal();
+      navigateTo('/c/' + encodeURIComponent(newRoomId));
     } catch (error) {
       groupErrorElement.textContent =
         '创建失败：' + (error && error.message ? error.message : error);
+    } finally {
       groupCreateButton.disabled = false;
     }
   });
@@ -813,8 +773,10 @@ if (groupForm) {
 if (accountCopyButton) accountCopyButton.addEventListener('click', copyActorId);
 
 (async function init() {
-  await loadRooms();
-  if (roomId) await initChat();
+  bootstrapRoute(initialRoomId);
+  // 首页也启动；每页只有这一条 agentnet://stream，切换房间不重建。
+  startActorStream();
+  await Promise.allSettled([loadRooms()]);
 })();
 </script>
 <script>

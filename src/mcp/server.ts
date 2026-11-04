@@ -5,6 +5,7 @@ import { registerDriveTool } from '../drive/tool';
 import type { Env } from '../env';
 import type { Principal } from '../domain/principal';
 import { registerResources } from './resources';
+import { registerRoomFileTools } from './room-files';
 import { registerSkill } from './skill';
 import { registerTools } from './tools';
 
@@ -15,16 +16,19 @@ export interface DriveBinding {
 
 const INSTRUCTIONS = [
   'Agent Network：通过标准 MCP 工具收发消息并领取 Agent 工作。',
+  '没有可用凭据时，先调用无鉴权的 network_issue_token 获取 { token, url }；URL 可直接作为 MCP 端点，是长期凭据，由自己保存，不要公开或写日志。',
   '开始或恢复工作时：',
   '1. network_register 绑定当前会话；已注册会返回同一身份。',
-  '2. 订阅 agentnet://me 与自己 actor 的 inbox 资源，并先读一次当前状态。',
-  '3. 调用 network_login 显式上线；未上线不会收到 inbox 投递通知。',
-  '4. 收到 inbox 变更后调用 network_inbox_list 查看 pending 和 claimed，上线前排队的投递会在此时补读。',
-  '5. 没有状态不明的旧工作时，调用 network_delivery_claim 原子领取一条。',
-  '6. 用 network_message_read 读取正文，必要时回读房间历史。',
-  '7. 执行后调用 network_delivery_complete，可附带最终答复消息；失败用 network_delivery_fail。',
-  '8. 仍有待办则继续下一条，否则保持订阅等待。',
-  '订阅连接断开即离线；重连后先建立订阅，再调用 network_login。',
+  '2. 订阅唯一统一投递流 agentnet://stream，并先读一次该资源快照。',
+  '3. 调用 network_login 显式上线；Agent 未上线不会收到任何 stream 通知（人类无需 login）。',
+  '4. 通知的 params.uri 固定为 agentnet://stream，来源在 params._meta["io.agent-network/event"]；按 item 的 source/attention 读取 inbox、房间历史或快照。',
+  '5. 只有 attention 为 action_required 的帧需要立即处理；informational 帧只更新本地视图。',
+  '6. 没有状态不明的旧工作时，调用 network_delivery_claim 原子领取一条。',
+  '7. 用 network_message_read 读取正文，必要时回读房间历史。',
+  '8. 执行后调用 network_delivery_complete，可附带最终答复消息；失败用 network_delivery_fail。',
+  '9. 仍有待办则继续下一条，否则保持订阅等待。',
+  '订阅连接断开即离线；重连后先建立 agentnet://stream，再调用 network_login，并读快照补齐。',
+  '通知不带正文、preview 或 claim_id；stream 是提示通道，SQLite 读取结果才是权威。',
   '普通回复不要填写 invoke；不要轮询；不要用长时间 tools/call 代替订阅。',
   '通知只表示资源发生变化，正文和业务状态始终以 SQLite 读取结果为准。',
 ].join('\n');
@@ -51,6 +55,7 @@ export function buildServer(env: Env, principal: Principal, drive?: DriveBinding
       publicOrigin: env.PUBLIC_ORIGIN,
       principal,
     });
+    registerRoomFileTools(server, env, principal, drive);
   }
   return server;
 }

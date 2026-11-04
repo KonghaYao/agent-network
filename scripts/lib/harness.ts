@@ -203,6 +203,147 @@ export async function openSubscription(
   return client.listen(filter);
 }
 
+export interface RawListen {
+  response: Response;
+  /** 已解析的 SSE 帧（不含空行分隔符）。 */
+  frames: string[];
+  text(): string;
+  errorBody(): Record<string, unknown> | null;
+  waitForFrame(
+    predicate: (frame: string) => boolean,
+    label: string,
+    timeoutMs?: number,
+  ): Promise<string>;
+  close(): Promise<void>;
+}
+
+/**
+ * 原始 `subscriptions/listen` 请求，用于验证自定义 SSE 的 wire 形状、
+ * keepalive、abort 与错误响应。调用方必须 close。
+ */
+export async function openRawListen(
+  token: string,
+  subscriptionId: string,
+  uris: string[],
+  options: { protocolVersion?: string | null; signal?: AbortSignal } = {},
+): Promise<RawListen> {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  const meta: Record<string, unknown> = {};
+  const protocolVersion = options.protocolVersion ?? PROTOCOL_VERSION;
+  if (protocolVersion !== null) {
+    meta['io.modelcontextprotocol/protocolVersion'] = protocolVersion;
+    meta['io.modelcontextprotocol/clientInfo'] = {
+      name: 'agent-network-raw-listen',
+      version: '0.1.0',
+    };
+    meta['io.modelcontextprotocol/clientCapabilities'] = {};
+  }
+  const response = await fetch(mcpUrl(), {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      authorization: `Bearer ${token}`,
+      'mcp-method': 'subscriptions/listen',
+      'mcp-protocol-version': PROTOCOL_VERSION,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: subscriptionId,
+      method: 'subscriptions/listen',
+      params: { _meta: meta, notifications: { resourceSubscriptions: uris } },
+    }),
+    signal: controller.signal,
+  });
+
+  const frames: string[] = [];
+  let rawText = '';
+  let buffer = '';
+  let terminal = false;
+  const waiters = new Set<() => void>();
+  const notify = () => {
+    for (const waiter of [...waiters]) waiter();
+  };
+  const isSse = (response.headers.get('content-type') ?? '').includes('text/event-stream');
+
+  const pump = (async () => {
+    if (!isSse || !response.body) {
+      rawText = await response.text();
+      terminal = true;
+      notify();
+      return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        for (;;) {
+          const index = buffer.indexOf('\n\n');
+          if (index < 0) break;
+          const frame = buffer.slice(0, index);
+          buffer = buffer.slice(index + 2);
+          if (frame.trim().length > 0) frames.push(frame);
+        }
+        notify();
+      }
+    } catch {
+      // abort 或连接重置；由调用方按场景处理。
+    } finally {
+      terminal = true;
+      notify();
+    }
+  })();
+
+  return {
+    response,
+    frames,
+    text() {
+      return isSse ? frames.join('\n\n') : rawText;
+    },
+    errorBody() {
+      if (isSse) return null;
+      try {
+        return JSON.parse(rawText) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    },
+    async waitForFrame(predicate, label, timeoutMs = 15_000) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const found = frames.find(predicate);
+        if (found) return found;
+        if (terminal && Date.now() > deadline) {
+          throw new CheckFailure(label, `等待 SSE 帧超时；已收到 ${frames.length} 帧`);
+        }
+        if (Date.now() > deadline) throw new CheckFailure(label, '等待 SSE 帧超时');
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            waiters.delete(waiter);
+            resolve();
+          }, 100);
+          const waiter = () => {
+            clearTimeout(timer);
+            waiters.delete(waiter);
+            resolve();
+          };
+          waiters.add(waiter);
+        });
+      }
+    },
+    async close() {
+      options.signal?.removeEventListener('abort', onAbort);
+      controller.abort();
+      await pump.catch(() => undefined);
+    },
+  };
+}
+
 export async function waitUntil(
   label: string,
   predicate: () => Promise<boolean> | boolean,
@@ -233,6 +374,8 @@ export async function rawRpc(
     protocolVersion?: string | null;
     versionHeader?: string | null;
     clientCapabilities?: Record<string, unknown>;
+    /** 覆盖 MCP 端点；用于验证 URL 凭据。 */
+    url?: URL;
   } = {},
 ): Promise<{ status: number; body: Record<string, unknown>; headers: Headers }> {
   const headers: Record<string, string> = {
@@ -260,7 +403,7 @@ export async function rawRpc(
       options.clientCapabilities ?? {};
   }
 
-  const response = await fetch(mcpUrl(), {
+  const response = await fetch(options.url ?? mcpUrl(), {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -282,4 +425,39 @@ export async function rawRpc(
 
 export async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface UploadedTestFile {
+  fileId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  createdAt: string;
+  expiresAt: string;
+  publicUrl: string;
+}
+
+/** MCPP Files v1 上传；返回服务端追加的 publicUrl，供房间文件用例复用。 */
+export async function uploadTestFile(
+  token: string,
+  input: { name: string; mimeType: string; body: string | Uint8Array },
+): Promise<UploadedTestFile> {
+  const bytes =
+    typeof input.body === 'string' ? new TextEncoder().encode(input.body) : input.body;
+  const response = await fetch(`${baseUrl()}/mcp-upload`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'MCPP-Files-Version': '1',
+      'content-type': input.mimeType,
+      'MCPP-File-Name': input.name,
+      'MCPP-File-Size': String(bytes.length),
+    },
+    body: bytes,
+  });
+  if (response.status !== 201) {
+    throw new CheckFailure('MCPP 上传', `期望 201，实际 ${response.status}`);
+  }
+  return (await response.json()) as UploadedTestFile;
 }

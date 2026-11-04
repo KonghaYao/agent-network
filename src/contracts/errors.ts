@@ -16,6 +16,9 @@ export type BusinessErrorCode =
   | 'RECOVERY_INVALID'
   | 'ROOM_FULL'
   | 'FRIEND_REQUIRED'
+  | 'FILE_UNAVAILABLE'
+  | 'DRIVE_UNAVAILABLE'
+  | 'ROOM_FILE_LIMIT'
   | 'CONFLICT';
 
 export interface BusinessErrorBody {
@@ -25,7 +28,11 @@ export interface BusinessErrorBody {
   details?: Record<string, unknown>;
 }
 
-const RETRYABLE: ReadonlySet<BusinessErrorCode> = new Set(['RATE_LIMITED', 'CONFLICT']);
+const RETRYABLE: ReadonlySet<BusinessErrorCode> = new Set([
+  'RATE_LIMITED',
+  'CONFLICT',
+  'DRIVE_UNAVAILABLE',
+]);
 
 export class BusinessError extends Error {
   readonly code: BusinessErrorCode;

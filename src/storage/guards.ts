@@ -16,6 +16,8 @@ export const GUARD_TABLES = {
   roomLimit: 'guard_room_limit',
   actorExists: 'guard_actor_exists',
   recoveryInvalid: 'guard_recovery_invalid',
+  roomFileLimit: 'guard_room_file_limit',
+  notFileOwner: 'guard_not_file_owner',
 } as const;
 
 export type GuardName = keyof typeof GUARD_TABLES;

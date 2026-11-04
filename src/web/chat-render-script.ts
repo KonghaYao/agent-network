@@ -195,6 +195,13 @@ function messageItem(item) {
   return element;
 }
 
+/** 全量替换消息区；缓存切换与首屏加载共用同一套渲染逻辑。 */
+function renderMessageList(items) {
+  if (!messagesElement) return;
+  messagesElement.replaceChildren();
+  appendHistory(messagesElement, items);
+}
+
 /** 连续消息间隔超过 5 分钟时插入居中时间胶囊。 */
 function appendHistory(container, items) {
   let previous = 0;

@@ -15,6 +15,7 @@ import {
   deliveryRetrySchema,
   historyListSchema,
   inboxListSchema,
+  issueTokenSchema,
   loginSchema,
   meSchema,
   messageReadSchema,
@@ -76,6 +77,7 @@ import {
   historyPageSchema,
   identitySchema,
   inboxPageSchema,
+  issuedTokenSchema,
   leaveResultSchema,
   loginResultSchema,
   markReadResultSchema,
@@ -107,6 +109,13 @@ type RegisterToolCall = (
   callback: (args: unknown) => Promise<ToolReturn>,
 ) => unknown;
 
+/** 生成并返回长期 URL 凭据；不写数据库，服务端只在注册时保存摘要。 */
+function issueToken(origin: string): { token: string; url: string } {
+  const token = crypto.randomUUID();
+  const base = origin.replace(/\/+$/u, '');
+  return { token, url: `${base}/mcp?token=${encodeURIComponent(token)}` };
+}
+
 function failure(error: unknown): ToolReturn {
   if (isBusinessError(error)) {
     return {
@@ -126,7 +135,7 @@ function failure(error: unknown): ToolReturn {
   };
 }
 
-function register<
+export function register<
   I extends StandardSchemaWithJSON,
   O extends StandardSchemaWithJSON,
 >(
@@ -138,9 +147,10 @@ function register<
   handler: (
     args: StandardSchemaWithJSON.InferInput<I>,
   ) => Promise<StandardSchemaWithJSON.InferOutput<O>>,
+  annotations?: Record<string, unknown>,
 ): void {
   const call = server.registerTool as unknown as RegisterToolCall;
-  call.call(server, name, { description, inputSchema, outputSchema }, async (args) => {
+  call.call(server, name, { description, inputSchema, outputSchema, ...(annotations ? { annotations } : {}) }, async (args) => {
     try {
       const value = (await handler(args as StandardSchemaWithJSON.InferInput<I>)) as Record<
         string,
@@ -163,6 +173,16 @@ export function registerTools(
 ): void {
   const db = env.DB;
   const origin = env.PUBLIC_ORIGIN;
+
+  register(
+    server,
+    'network_issue_token',
+    '生成一个长期 MCP URL 凭据；无需 Authorization，不写数据库。返回的 url 可直接作为 MCP 端点，token 也可作 Bearer。URL 与 token 是长期身份凭据：不要公开、写入日志或截图。服务端不保存原始 token，首次 network_register 只保存 SHA-256 摘要；丢失 URL 后只能重新申请并新建身份。每次调用都会返回新的 token。',
+    issueTokenSchema,
+    issuedTokenSchema,
+    async () => issueToken(origin),
+    { readOnlyHint: true },
+  );
 
   /**
    * 为 Agent 成员补充在线快照；人类保持 null。

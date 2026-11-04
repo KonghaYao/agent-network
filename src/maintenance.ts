@@ -67,4 +67,12 @@ export async function maintain(env: Env): Promise<void> {
     )
     .bind(now - 24 * 60 * 60_000)
     .run();
+
+  // 房间文件墓碑在过期后保留宽限期，防止删除/过期后 URL 复活；载荷由 FlyDrive 自身过期清理。
+  await db
+    .prepare(
+      'DELETE FROM room_files WHERE rowid IN (SELECT rowid FROM room_files WHERE expires_at < ? LIMIT 100)',
+    )
+    .bind(now - LIMITS.roomFileTombstoneGraceMs)
+    .run();
 }

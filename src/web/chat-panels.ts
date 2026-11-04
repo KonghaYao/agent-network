@@ -25,10 +25,33 @@ export function sidebarPane(): string {
     </label>
   </header>
   <div class="sidebar-list">
-    <ol id="room-list" class="room-list" aria-label="单聊"></ol>
+    <ol id="room-list" class="room-list" aria-label="单聊">
+      <li class="room-skeleton" aria-hidden="true">
+        <span class="skeleton-avatar"></span>
+        <span class="skeleton-lines"><span></span><span></span></span>
+      </li>
+      <li class="room-skeleton" aria-hidden="true">
+        <span class="skeleton-avatar"></span>
+        <span class="skeleton-lines"><span></span><span></span></span>
+      </li>
+      <li class="room-skeleton" aria-hidden="true">
+        <span class="skeleton-avatar"></span>
+        <span class="skeleton-lines"><span></span><span></span></span>
+      </li>
+      <li class="room-skeleton" aria-hidden="true">
+        <span class="skeleton-avatar"></span>
+        <span class="skeleton-lines"><span></span><span></span></span>
+      </li>
+      <li class="room-skeleton" aria-hidden="true">
+        <span class="skeleton-avatar"></span>
+        <span class="skeleton-lines"><span></span><span></span></span>
+      </li>
+    </ol>
     <p id="room-list-status" class="list-hint" role="status">正在读取…</p>
+    <button id="room-list-retry" class="list-retry" type="button" hidden>重试</button>
   </div>
   <footer class="sidebar-foot">
+    <p id="stream-banner" class="stream-banner" role="status" hidden></p>
     ${deviceHandoffAccount()}
     <details class="service-info">
       <summary>服务信息</summary>
@@ -56,6 +79,8 @@ export function chatPane(): string {
       </div>
       <p class="muted" id="subtitle">正在加载…</p>
     </div>
+    <button class="files-toggle" id="files-toggle" type="button"
+      aria-controls="files-pane" aria-expanded="false">文件</button>
   </header>
   <form id="rename-form" class="rename-form" hidden>
     <input id="rename-input" maxlength="${LIMITS.actorNameMax}" aria-label="Agent 新名称"
@@ -63,8 +88,22 @@ export function chatPane(): string {
     <button class="primary" type="submit">保存</button>
     <button type="button" id="rename-cancel">取消</button>
   </form>
-  <div class="chat-body">
+  <div class="chat-body" id="chat-body" aria-busy="false">
+    <div id="chat-loading" class="chat-loading" role="status" hidden>正在加载会话…</div>
+    <div id="chat-skeleton" class="chat-skeleton" aria-hidden="true" hidden>
+      <div class="skeleton-row"><span class="skeleton-avatar"></span><span class="skeleton-bubble"></span></div>
+      <div class="skeleton-row mine"><span class="skeleton-avatar"></span><span class="skeleton-bubble"></span></div>
+      <div class="skeleton-row"><span class="skeleton-avatar"></span><span class="skeleton-bubble"></span></div>
+    </div>
     <button id="older" type="button" hidden>加载更早</button>
+    <div id="chat-error" class="chat-error" role="alert" hidden>
+      <p id="chat-error-text"></p>
+      <div class="chat-error-actions">
+        <button id="chat-error-retry" type="button">重试</button>
+        <a id="chat-error-back" href="/">返回会话列表</a>
+      </div>
+    </div>
+    <p id="stream-status" class="stream-status" role="status" hidden></p>
     <ol id="messages" class="messages" aria-live="polite"></ol>
     <p id="status" role="status"></p>
     <div id="mention-picker" class="mention-picker" hidden role="listbox" aria-label="选择要 @ 的成员"></div>
@@ -107,6 +146,110 @@ export function groupDialog(): string {
         <button class="primary" id="group-create" type="submit">创建</button>
       </div>
     </form>
+  </div>
+</div>`;
+}
+
+/**
+ * 新建 Agent 弹窗：名称输入与一次性 MCP URL。
+ *
+ * token 只保存在页面内存；关闭后清空输入与结果，不写 localStorage。
+ * 结果区默认隐藏，注册成功后才显示，避免把失败请求的 URL 当可用凭据。
+ */
+export function newAgentDialog(): string {
+  return `<div class="modal" id="new-agent-modal" hidden>
+  <div class="modal-card new-agent-card" role="dialog" aria-modal="true" aria-labelledby="new-agent-title">
+    <h2 id="new-agent-title">新建 Agent</h2>
+    <form id="new-agent-form">
+      <label class="field">Agent 名称
+        <input id="new-agent-name" maxlength="${LIMITS.actorNameMax}" placeholder="例如：翻译助手"
+          autocomplete="off" required>
+      </label>
+      <p class="new-agent-warning">MCP URL 是长期凭据，只显示一次。关闭弹窗后无法再次查看；不要截图、发群或写入日志。</p>
+      <p id="new-agent-error" class="form-error" role="status"></p>
+      <div id="new-agent-result" class="new-agent-result" hidden>
+        <label class="field">MCP URL
+          <input id="new-agent-url" readonly>
+        </label>
+        <button class="new-agent-copy" id="new-agent-copy" type="button">复制 MCP URL</button>
+        <label class="field">分享链接
+          <input id="new-agent-share" readonly>
+        </label>
+        <button class="new-agent-copy" id="new-agent-share-copy" type="button">复制分享链接</button>
+        <p class="new-agent-hint">把分享链接发给对方，对方打开后可添加这个 Agent 为好友。</p>
+      </div>
+      <div class="row modal-actions">
+        <button id="new-agent-close" type="button">关闭</button>
+        <button class="primary" id="new-agent-create" type="submit">创建</button>
+      </div>
+    </form>
+  </div>
+</div>`;
+}
+
+/**
+ * 房间文件面板：桌面右侧栏、平板抽屉与移动端全屏页共用同一份 DOM。
+ *
+ * `hidden` 由客户端根据断点与用户开关控制；服务端不输出任何文件数据。
+ * 文件名、链接与预览内容只通过 textContent/DOM 属性写入，禁止 innerHTML。
+ */
+export function filesPane(): string {
+  return `<aside class="files-pane" id="files-pane" aria-label="房间文件" hidden>
+  <header class="files-head">
+    <h2>文件</h2>
+    <div class="files-head-actions">
+      <button class="primary files-upload" id="files-upload" type="button">上传</button>
+      <button class="files-close" id="files-close" type="button"
+        aria-label="关闭文件栏" title="关闭文件栏">关闭</button>
+    </div>
+  </header>
+  <input id="files-input" type="file" multiple hidden>
+  <div id="files-drop" class="files-drop" role="button" tabindex="0"
+    aria-label="拖拽文件到这里，或点击选择文件">
+    <span class="files-drop-icon" aria-hidden="true">+</span>
+    <span>拖拽文件到这里，或点击“上传”</span>
+  </div>
+  <div id="files-progress" class="files-progress" hidden>
+    <p id="files-progress-text" class="files-progress-text"></p>
+    <progress id="files-progress-bar" max="100" value="0"></progress>
+  </div>
+  <p id="files-status" class="files-status" role="status"></p>
+  <button id="files-bind-retry" class="files-bind-retry" type="button" hidden>重试加入房间</button>
+  <div id="files-error" class="files-error" role="alert" hidden>
+    <p id="files-error-text"></p>
+    <button id="files-retry" type="button">重试</button>
+  </div>
+  <ul id="files-list" class="files-list" aria-label="文件列表"></ul>
+  <p id="files-empty" class="files-empty" hidden>这个房间还没有文件</p>
+  <button id="files-more" class="files-more" type="button" hidden>加载更多</button>
+</aside>`;
+}
+
+/** 文件面板的抽屉遮罩；只在 760–1199px 打开时显示。 */
+export function filesBackdrop(): string {
+  return '<div class="files-backdrop" id="files-backdrop" hidden></div>';
+}
+
+/**
+ * 文件预览弹窗。
+ *
+ * 内容由客户端按 preview_kind 创建 DOM：图片、PDF iframe、文本 pre、
+ * 音视频原生控件；未知类型只给下载入口，绝不写入 HTML/SVG。
+ */
+export function filePreviewDialog(): string {
+  return `<div class="file-preview" id="file-preview" hidden>
+  <div class="file-preview-card" role="dialog" aria-modal="true" aria-labelledby="file-preview-title">
+    <header class="file-preview-head">
+      <div class="file-preview-id">
+        <h2 id="file-preview-title">文件预览</h2>
+        <p id="file-preview-meta" class="file-preview-meta"></p>
+      </div>
+      <button id="file-preview-close" type="button" aria-label="关闭预览">关闭</button>
+    </header>
+    <div id="file-preview-body" class="file-preview-body"></div>
+    <footer class="file-preview-foot">
+      <a id="file-preview-download" href="#" download rel="noopener" hidden>下载文件</a>
+    </footer>
   </div>
 </div>`;
 }

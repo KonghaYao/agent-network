@@ -15,6 +15,7 @@ export function actorId(principal: Principal): string {
   return principal.actor.actor_id;
 }
 
-export function actorResources(actorIdValue: string): string[] {
-  return ['agentnet://me', `agentnet://actors/${actorIdValue}/inbox`];
+export function actorResources(_actorIdValue: string): string[] {
+  // cutover 后每个 actor 只有统一 stream；旧 URI 已删除且不再返回。
+  return ['agentnet://stream'];
 }

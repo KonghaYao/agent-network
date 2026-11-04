@@ -281,6 +281,14 @@ function claimedGuard(
     .bind(deliveryId, attempt, claimId);
 }
 
+/** 原始消息发送者；只用于 stream 回执的 attention/定位，不进入工具输出。 */
+async function deliverySenderId(
+  db: D1Database,
+  delivery: DeliveryRow,
+): Promise<string | undefined> {
+  return (await getMessage(db, delivery.message_id))?.sender_id;
+}
+
 export async function deliveryClaim(
   db: D1Database,
   principal: Principal,
@@ -293,6 +301,7 @@ export async function deliveryClaim(
   const claimId = crypto.randomUUID();
   const eventKey = `claim:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
+  const senderId = await deliverySenderId(db, delivery);
 
   try {
     await runIdempotent(db, {
@@ -344,7 +353,12 @@ export async function deliveryClaim(
           'claim',
           'delivery_claimed',
           at,
-          { state: 'claimed' },
+          {
+            state: 'claimed',
+            actor_id: actor,
+            recipient_id: delivery.recipient_id,
+            sender_id: senderId,
+          },
         ),
       ],
     });
@@ -370,6 +384,7 @@ export async function deliveryReport(
   const at = nowMs();
   const eventKey = `progress:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
+  const senderId = await deliverySenderId(db, delivery);
 
   await runIdempotent(db, {
     actorId: actor,
@@ -400,7 +415,13 @@ export async function deliveryReport(
         'progress',
         'delivery_progress',
         at,
-        { state: 'claimed', attempt: input.attempt },
+        {
+          state: 'claimed',
+          attempt: input.attempt,
+          actor_id: actor,
+          recipient_id: delivery.recipient_id,
+          sender_id: senderId,
+        },
       ),
     ],
   });
@@ -439,6 +460,7 @@ export async function deliveryComplete(
 
   const eventKey = `complete:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
+  const senderId = await deliverySenderId(db, delivery);
   const result = {
     delivery_id: delivery.delivery_id,
     message_id: plan?.messageId ?? null,
@@ -478,7 +500,13 @@ export async function deliveryComplete(
         'complete',
         'delivery_completed',
         at,
-        { state: 'completed', attempt: input.attempt },
+        {
+          state: 'completed',
+          attempt: input.attempt,
+          actor_id: actor,
+          recipient_id: delivery.recipient_id,
+          sender_id: senderId,
+        },
       ),
     ],
   });
@@ -503,6 +531,7 @@ export async function deliveryFail(
   const at = nowMs();
   const eventKey = `fail:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
+  const senderId = await deliverySenderId(db, delivery);
 
   await runIdempotent(db, {
     actorId: actor,
@@ -536,7 +565,13 @@ export async function deliveryFail(
         'fail',
         'delivery_failed',
         at,
-        { state: 'failed', attempt: input.attempt },
+        {
+          state: 'failed',
+          attempt: input.attempt,
+          actor_id: actor,
+          recipient_id: delivery.recipient_id,
+          sender_id: senderId,
+        },
       ),
     ],
   });
@@ -577,6 +612,7 @@ export async function deliveryCancel(
   const at = nowMs();
   const eventKey = `cancel:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
+  const senderId = await deliverySenderId(db, delivery);
 
   await runIdempotent(db, {
     actorId: actor,
@@ -619,7 +655,13 @@ export async function deliveryCancel(
         'delivery_cancelled',
         at,
         0,
-        { reason: input.reason },
+        {
+          reason: input.reason,
+          actor_id: actor,
+          room_id: delivery.room_id,
+          message_id: delivery.message_id,
+          sender_id: senderId,
+        },
         true,
       ),
       ...roomDeliveryEventStatements(
@@ -629,7 +671,12 @@ export async function deliveryCancel(
         'cancel',
         'delivery_cancelled',
         at,
-        { state: 'cancelled' },
+        {
+          state: 'cancelled',
+          actor_id: actor,
+          recipient_id: delivery.recipient_id,
+          sender_id: senderId,
+        },
       ),
     ],
   });
@@ -654,6 +701,7 @@ export async function deliveryRetry(
   const at = nowMs();
   const eventKey = `retry:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
+  const senderId = await deliverySenderId(db, delivery);
 
   await runIdempotent(db, {
     actorId: actor,
@@ -686,7 +734,13 @@ export async function deliveryRetry(
         'delivery_retried',
         at,
         1,
-        { attempt: input.expected_attempt },
+        {
+          attempt: input.expected_attempt,
+          actor_id: actor,
+          room_id: delivery.room_id,
+          message_id: delivery.message_id,
+          sender_id: senderId,
+        },
         true,
       ),
       ...roomDeliveryEventStatements(
@@ -696,7 +750,13 @@ export async function deliveryRetry(
         'retry',
         'delivery_retried',
         at,
-        { state: 'pending', attempt: input.expected_attempt },
+        {
+          state: 'pending',
+          attempt: input.expected_attempt,
+          actor_id: actor,
+          recipient_id: delivery.recipient_id,
+          sender_id: senderId,
+        },
       ),
     ],
   });

@@ -1,0 +1,1672 @@
+/**
+ * 浏览器验收：SPA 路由、状态缓存、加载/错误收口与响应式布局。
+ *
+ * 脚本自托管一个临时 Bun 实例（随机端口 + 临时 DATA_DIR，启用 MCPP Files），用 rawRpc
+ * 创建人类/Agent/房间 fixture，文件模块使用真实上传与 room_files 工具；只对失败与
+ * 延迟场景做请求级故障注入，不替换成功响应。然后由 Playwright 驱动真实页面。
+ * 首次运行前如本机没有 Chromium，执行 `bunx playwright install chromium`。
+ * 运行：bun run test:web
+ */
+
+import { rm } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+
+import { check, checkEqual, checksPassed, rawRpc, sleep } from './lib/harness';
+
+interface Actor {
+  actor_id: string;
+  agent_session_id?: string | null;
+  name: string;
+}
+
+interface RoomDetail {
+  room: {
+    room_id: string;
+    kind: string;
+    title?: string;
+    head_seq: string;
+    updated_at: string;
+    member_count?: number;
+  };
+  members: { actor_id: string; kind: string; name: string }[];
+}
+
+interface McpCall {
+  method: string | null;
+  name: string | null;
+  body: unknown;
+  aborted: boolean;
+}
+
+function streamCallsExpression(): string {
+  return `(window.__mcpCalls || []).filter(function (call) { return call.stream === true; })`;
+}
+
+function roomHeadSubscriptionsExpression(): string {
+  return `(window.__mcpCalls || []).filter(function (call) {
+    return call.method === 'subscriptions/listen' &&
+      JSON.stringify(call.subscriptions || []).indexOf('agentnet://rooms/') >= 0;
+  }).length`;
+}
+
+const IGNORED_CONSOLE = ['Failed to load resource', 'net::ERR_'];
+
+async function rawTool<T>(token: string, name: string, args: Record<string, unknown>): Promise<T> {
+  const response = await rawRpc('tools/call', { name, arguments: args }, { token });
+  const result = response.body.result as
+    | {
+        isError?: boolean;
+        structuredContent?: T;
+        content?: { type: string; text?: string }[];
+      }
+    | undefined;
+  if (!result) throw new Error(`工具 ${name} 无结果: ${JSON.stringify(response.body)}`);
+  const text = result.content?.find((item) => item.type === 'text')?.text;
+  if (result.isError) {
+    let detail: { code?: string; message?: string } = {};
+    if (text) {
+      try {
+        detail = JSON.parse(text) as { code?: string; message?: string };
+      } catch {
+        detail = { message: text };
+      }
+    }
+    throw new Error(`${detail.code ?? 'UNKNOWN'}: ${detail.message ?? ''}`);
+  }
+  if (result.structuredContent) return result.structuredContent;
+  return text ? (JSON.parse(text) as T) : ({} as T);
+}
+
+function requestId(prefix: string): string {
+  return `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`;
+}
+
+async function startServer(): Promise<{ base: string; stop: () => Promise<void> }> {
+  const port = 18900 + Math.floor(Math.random() * 700);
+  const base = `http://127.0.0.1:${port}`;
+  const dataDir = `/tmp/agentnet-web-${process.pid}-${Date.now()}`;
+  const proc = Bun.spawn(['bun', resolve(import.meta.dir, '../src/bun/main.ts')], {
+    cwd: resolve(import.meta.dir, '..'),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      DATA_DIR: dataDir,
+      PUBLIC_ORIGIN: base,
+    },
+    stdout: 'ignore',
+    stderr: 'inherit',
+  });
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        const response = await fetch(`${base}/health`);
+        if (response.ok) {
+          ready = true;
+          break;
+        }
+      } catch {
+        // 服务尚未监听
+      }
+      await sleep(100);
+    }
+    if (!ready) throw new Error('本地验收实例未在 10s 内就绪');
+  } catch (error) {
+    proc.kill();
+    throw error;
+  }
+  return {
+    base,
+    async stop() {
+      proc.kill();
+      await proc.exited.catch(() => undefined);
+      await rm(dataDir, { recursive: true, force: true });
+    },
+  };
+}
+
+function initScript(token: string): string {
+  return `(() => {
+  const TOKEN = ${JSON.stringify(token)};
+  try {
+    localStorage.setItem('agent-network-token', TOKEN);
+    const prior = Number(sessionStorage.getItem('__spaMarker') || '0');
+    window.__spaMarker = prior + 1;
+    sessionStorage.setItem('__spaMarker', String(prior + 1));
+    const loads = Number(sessionStorage.getItem('__loadCount') || '0');
+    window.__loadCount = loads;
+  } catch (error) {
+    window.__spaMarker = 1;
+    window.__loadCount = 0;
+  }
+  window.addEventListener('load', function () {
+    window.__loadCount += 1;
+    try { sessionStorage.setItem('__loadCount', String(window.__loadCount)); } catch (error) {}
+  });
+  window.__mcpCalls = [];
+  window.__fetchLog = [];
+  window.__delayMcp = null;
+  window.__delayedMcpHit = false;
+  window.__failStreams = false;
+  window.__streamSignals = [];
+  window.__abortControllers = [];
+  const NativeAbortController = window.AbortController;
+  window.AbortController = function TrackedAbortController() {
+    const controller = new NativeAbortController();
+    window.__abortControllers.push(controller);
+    return controller;
+  };
+  window.AbortController.prototype = NativeAbortController.prototype;
+  window.__abortStream = function () {
+    for (let index = window.__abortControllers.length - 1; index >= 0; index -= 1) {
+      const controller = window.__abortControllers[index];
+      if (!controller.signal.aborted && window.__streamSignals.indexOf(controller.signal) >= 0) {
+        controller.abort();
+        return true;
+      }
+    }
+    return false;
+  };
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const headers = (init && init.headers) || {};
+    let body = null;
+    try { body = init && init.body ? JSON.parse(init.body) : null; } catch (error) {}
+    const notifications = body && body.params && body.params.notifications;
+    const subscriptions = notifications && notifications.resourceSubscriptions;
+    const isStream = headers['mcp-method'] === 'subscriptions/listen' &&
+      Array.isArray(subscriptions) && subscriptions.indexOf('agentnet://stream') >= 0;
+    const call = {
+      method: headers['mcp-method'] || null,
+      name: headers['mcp-name'] || null,
+      body: body,
+      id: body && body.id,
+      subscriptions: Array.isArray(subscriptions) ? subscriptions : null,
+      stream: isStream,
+      aborted: false,
+      at: Date.now()
+    };
+    window.__mcpCalls.push(call);
+    if (isStream && init && init.signal) {
+      window.__streamSignals.push(init.signal);
+      if (window.__failStreams) {
+        call.failed = true;
+        return Promise.reject(new TypeError('simulated stream failure'));
+      }
+    }
+    const args = body && body.params && body.params.arguments;
+    const roomId = args && args.room_id ? args.room_id : null;
+    const log = function (phase, detail) {
+      window.__fetchLog.push({
+        name: call.name || call.method,
+        roomId: roomId,
+        phase: phase,
+        detail: detail === undefined ? null : detail,
+        at: Date.now()
+      });
+    };
+    log('call');
+    if (init && init.signal) {
+      if (init.signal.aborted) call.aborted = true;
+      else init.signal.addEventListener('abort', function () { call.aborted = true; log('aborted'); }, { once: true });
+    }
+    const delay = window.__delayMcp;
+    const shouldDelay = Boolean(
+      delay && call.name === delay.name && (!delay.roomId || roomId === delay.roomId)
+    );
+    if (shouldDelay) window.__delayedMcpHit = true;
+    return originalFetch(input, init).then(
+      function (response) {
+        log('resolved', response.status);
+        if (!shouldDelay) return response;
+        log('delaying-response');
+        return new Promise(function (resolve) {
+          setTimeout(function () { resolve(response); }, delay.ms);
+        });
+      },
+      function (error) { log('rejected', error && error.name); throw error; }
+    );
+  };
+})();`;
+}
+
+async function makeContext(
+  browser: Browser,
+  token: string,
+  viewport: { width: number; height: number },
+  allErrors: string[],
+  watchConsole = true,
+): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext({ viewport });
+  await context.addInitScript({ content: initScript(token) });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15_000);
+  page.on('pageerror', (error) => allErrors.push(`pageerror: ${error.message}`));
+  if (watchConsole) {
+    page.on('console', (message) => {
+      if (message.type() !== 'error') return;
+      const text = message.text();
+      if (IGNORED_CONSOLE.some((part) => text.includes(part))) return;
+      allErrors.push(`console: ${text}`);
+    });
+  }
+  return { context, page };
+}
+
+function roomLink(roomId: string): string {
+  return `#room-list a.room-item[href="/c/${encodeURIComponent(roomId)}"]`;
+}
+
+async function waitRoom(page: Page, roomId: string, expectedTitle: string): Promise<void> {
+  await page.waitForURL(`**/c/${roomId}`);
+  try {
+    await page.waitForFunction(
+      `document.getElementById('title') && document.getElementById('title').textContent === ${JSON.stringify(expectedTitle)}`,
+    );
+  } catch (error) {
+    console.log('DEBUG waitRoom failed', {
+      roomId,
+      expectedTitle,
+      url: page.url(),
+      title: await page.locator('#title').textContent(),
+      subtitle: await page.locator('#subtitle').textContent(),
+      loading: await page.locator('#chat-loading').isVisible(),
+      errorText: await page.locator('#chat-error-text').textContent(),
+      calls: await page.evaluate(
+        `(window.__mcpCalls || []).slice(-10).map(function (call) { return call.name || call.method; }).join(',')`,
+      ),
+      fetchLog: await page.evaluate(
+        `(window.__fetchLog || []).slice(-18).map(function (entry) {
+          return entry.phase + ':' + (entry.name || '') + ':' + (entry.roomId || '') + ':' + (entry.detail || '');
+        }).join(' | ')`,
+      ),
+    });
+    throw error;
+  }
+}
+
+async function messageCount(page: Page): Promise<number> {
+  return page.locator('#messages .msg').count();
+}
+
+async function sendRoomMessage(token: string, roomId: string, body: string): Promise<void> {
+  await rawTool(token, 'network_message_send', {
+    request_id: requestId('msg'),
+    client_message_id: crypto.randomUUID(),
+    room_id: roomId,
+    body,
+  });
+}
+
+async function waitForText(page: Page, selector: string, text: string, timeout = 10_000): Promise<void> {
+  await page.waitForFunction(
+    `(() => {
+      const node = document.querySelector(${JSON.stringify(selector)});
+      return Boolean(node && node.textContent && node.textContent.indexOf(${JSON.stringify(text)}) >= 0);
+    })()`,
+    undefined,
+    { timeout },
+  );
+}
+
+async function fixture(): Promise<{
+  humanToken: string;
+  human: Actor;
+  agentAToken: string;
+  agentBToken: string;
+  agentA: Actor;
+  agentB: Actor;
+  direct: RoomDetail;
+  group: RoomDetail;
+  extra: RoomDetail;
+}> {
+  const humanToken = crypto.randomUUID();
+  const human = await rawTool<Actor>(humanToken, 'network_register', {
+    request_id: requestId('web_reg'),
+    kind: 'human',
+    name: '浏览器验收人类',
+  });
+  const agentAToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+  const agentBToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+  const agentA = await rawTool<Actor>(agentAToken, 'network_register', {
+    request_id: requestId('reg'),
+    kind: 'agent',
+    name: '验收 Agent A',
+    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+  });
+  const agentB = await rawTool<Actor>(agentBToken, 'network_register', {
+    request_id: requestId('reg'),
+    kind: 'agent',
+    name: '验收 Agent B',
+    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+  });
+  for (const agent of [agentA, agentB]) {
+    await rawTool(humanToken, 'network_contact_add', {
+      request_id: requestId('contact'),
+      agent_session_id: agent.agent_session_id,
+    });
+  }
+  const direct = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('room'),
+    kind: 'direct',
+    members: [agentA.actor_id],
+  });
+  const group = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('room'),
+    kind: 'group',
+    title: '测试群',
+    members: [agentA.actor_id, agentB.actor_id],
+  });
+  const extra = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('room'),
+    kind: 'direct',
+    members: [agentB.actor_id],
+  });
+  for (let index = 0; index < 30; index += 1) {
+    await rawTool(humanToken, 'network_message_send', {
+      request_id: requestId('msg'),
+      client_message_id: crypto.randomUUID(),
+      room_id: direct.room.room_id,
+      body: `D 消息 ${index + 1}`,
+    });
+  }
+  for (const text of ['群消息 1', '群消息 2']) {
+    await rawTool(humanToken, 'network_message_send', {
+      request_id: requestId('msg'),
+      client_message_id: crypto.randomUUID(),
+      room_id: group.room.room_id,
+      body: text,
+    });
+  }
+  for (let index = 0; index < 3; index += 1) {
+    await rawTool(humanToken, 'network_message_send', {
+      request_id: requestId('msg'),
+      client_message_id: crypto.randomUUID(),
+      room_id: extra.room.room_id,
+      body: `E 消息 ${index + 1}`,
+    });
+  }
+  return { humanToken, human, agentAToken, agentBToken, agentA, agentB, direct, group, extra };
+}
+
+interface UploadCall {
+  name: string;
+  size: number;
+  bodySize: number;
+  authorization: boolean;
+  version: string | null;
+  at: number;
+}
+
+interface RealUpload {
+  fileId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  publicUrl: string;
+}
+
+interface UploadSpec {
+  name: string;
+  mimeType: string;
+  body: string | Uint8Array;
+}
+
+const PNG_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2ZQAAAABJRU5ErkJggg==',
+  'base64',
+);
+const PDF_BYTES = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
+
+async function waitUntil(
+  predicate: () => boolean | Promise<boolean>,
+  label: string,
+  timeout = 10_000,
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    if (await predicate()) return;
+    await sleep(50);
+  }
+  throw new Error(`等待超时：${label}`);
+}
+
+/** 用真实 MCPP Files 上传；返回真实 fileId 与公开地址。 */
+async function uploadRealFile(
+  token: string,
+  base: string,
+  spec: UploadSpec,
+): Promise<RealUpload> {
+  const bytes = typeof spec.body === 'string' ? new TextEncoder().encode(spec.body) : spec.body;
+  const response = await fetch(`${base}/mcp-upload`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'MCPP-Files-Version': '1',
+      'content-type': spec.mimeType,
+      'MCPP-File-Name': encodeURIComponent(spec.name),
+      'MCPP-File-Size': String(bytes.length),
+    },
+    body: bytes,
+  });
+  if (response.status !== 201) {
+    throw new Error(`真实上传失败 ${spec.name}: HTTP ${response.status}`);
+  }
+  return (await response.json()) as RealUpload;
+}
+
+async function bindRealFile(token: string, roomId: string, fileId: string): Promise<void> {
+  await rawTool(token, 'network_room_file_bind', {
+    request_id: requestId('file_bind'),
+    room_id: roomId,
+    file_id: fileId,
+  });
+}
+
+/** 真实上传 + bind，用于准备浏览器文件列表。 */
+async function seedRoomFiles(
+  token: string,
+  base: string,
+  roomId: string,
+  specs: UploadSpec[],
+): Promise<RealUpload[]> {
+  const uploaded: RealUpload[] = [];
+  for (const spec of specs) {
+    const file = await uploadRealFile(token, base, spec);
+    await bindRealFile(token, roomId, file.fileId);
+    uploaded.push(file);
+  }
+  return uploaded;
+}
+
+/** 只观察真实上传请求头，不替换响应。 */
+async function observeUploads(page: Page): Promise<{ calls: UploadCall[] }> {
+  const calls: UploadCall[] = [];
+  await page.route('**/mcp-upload', async (route) => {
+    const request = route.request();
+    const headers = request.headers();
+    const encodedName = headers['mcpp-file-name'] ?? '';
+    let name = encodedName;
+    try {
+      name = decodeURIComponent(encodedName);
+    } catch {
+      name = encodedName;
+    }
+    calls.push({
+      name,
+      size: Number(headers['mcpp-file-size'] ?? 0),
+      bodySize: request.postDataBuffer()?.length ?? 0,
+      authorization: (headers['authorization'] ?? '').startsWith('Bearer '),
+      version: headers['mcpp-files-version'] ?? null,
+      at: Date.now(),
+    });
+    await route.continue();
+  });
+  return { calls };
+}
+
+/** 记录真实 `/f/` 请求的 Range 头，不替换服务端响应。 */
+async function observeFileRanges(page: Page): Promise<{ ranges: Record<string, string> }> {
+  const ranges: Record<string, string> = {};
+  await page.route('**/f/**', async (route) => {
+    const range = route.request().headers()['range'];
+    if (range) ranges[new URL(route.request().url()).pathname] = range;
+    try {
+      await route.continue();
+    } catch {
+      // 关闭预览会中止请求；记录已发生即可。
+    }
+  });
+  return { ranges };
+}
+
+async function mcpCallCount(page: Page, name: string): Promise<number> {
+  return (await page.evaluate(
+    `(window.__mcpCalls || []).filter(function (call) { return call.name === ${JSON.stringify(name)}; }).length`,
+  )) as number;
+}
+
+async function fileListCallCount(page: Page): Promise<number> {
+  return mcpCallCount(page, 'network_room_file_list');
+}
+
+async function main(): Promise<void> {
+  const server = await startServer();
+  process.env.AGENTNET_URL = server.base;
+  let browser: Browser | null = null;
+  const allErrors: string[] = [];
+  try {
+    const data = await fixture();
+    browser = await chromium.launch({ headless: true });
+    console.log(`浏览器验收: ${server.base}`);
+
+    // 1. 两阶段列表：摘要先出现，direct 名称/在线状态后台补全。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.route('**/mcp', async (route) => {
+        if (route.request().headers()['mcp-name'] === 'network_room_get') await sleep(900);
+        await route.continue();
+      });
+      const started = Date.now();
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      const elapsed = Date.now() - started;
+      check('列表摘要先于 direct 详情出现', elapsed < 850, elapsed);
+      checkEqual('列表骨架在摘要渲染后清除', await page.locator('.room-skeleton').count(), 0);
+      const initialText = (await page.locator(roomLink(data.direct.room.room_id)).textContent()) ?? '';
+      check('direct 先显示占位名称', initialText.includes('单聊'), initialText);
+      await page.waitForFunction(
+        `(() => {
+          const link = document.querySelector(${JSON.stringify(roomLink(data.direct.room.room_id))});
+          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(data.agentA.name)}));
+        })()`,
+      );
+      check('direct 名称后台补全', true);
+      checkEqual(
+        'direct 在线状态点后台补全',
+        await page.locator(`${roomLink(data.direct.room.room_id)} .presence-dot`).count(),
+        1,
+      );
+      await context.close();
+    }
+
+    // 2. 主流程：首屏、SPA 导航、后退/前进、搜索、缓存/草稿、慢加载、订阅隔离、建群、新 Agent。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      const statusText = (await page.locator('#room-list-status').textContent()) ?? '';
+      check('首屏列表 loading 收口', statusText !== '正在读取…', statusText);
+      checkEqual('首屏列表骨架清除', await page.locator('.room-skeleton').count(), 0);
+      check(
+        '账号名在列表加载后出现',
+        (await page.locator('#account-name').textContent()) !== '未登录',
+      );
+      check(
+        '桌面首页显示空状态而非聊天区',
+        (await page.locator('#empty-state').isVisible()) &&
+          !(await page.locator('#composer').isVisible()),
+      );
+
+      await page.evaluate(`window.__roomListRef = document.getElementById('room-list')`);
+      const loadsBefore = (await page.evaluate('window.__loadCount')) as number;
+      await page.locator(roomLink(data.direct.room.room_id)).click();
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      await page.waitForFunction('document.querySelectorAll("#messages .msg").length >= 3');
+      checkEqual('点击会话后 URL 切换', page.url(), `${server.base}/c/${data.direct.room.room_id}`);
+      checkEqual(
+        'SPA 导航不整页重载',
+        (await page.evaluate('window.__spaMarker')) as number,
+        1,
+      );
+      checkEqual('SPA 导航不触发 load', (await page.evaluate('window.__loadCount')) as number, loadsBefore);
+      checkEqual(
+        '侧栏 DOM 不重建',
+        (await page.evaluate(
+          'window.__roomListRef === document.getElementById("room-list")',
+        )) as boolean,
+        true,
+      );
+      check(
+        '桌面聊天页显示双栏',
+        (await page.locator('.sidebar').isVisible()) &&
+          (await page.locator('#composer').isVisible()) &&
+          !(await page.locator('#empty-state').isVisible()),
+      );
+
+      await page.locator(roomLink(data.group.room.room_id)).click();
+      await waitRoom(page, data.group.room.room_id, '测试群');
+      check(
+        '群聊头部显示成员数',
+        ((await page.locator('#subtitle').textContent()) ?? '').includes('3 人'),
+      );
+      checkEqual(
+        '第二次 SPA 导航仍未重载',
+        (await page.evaluate('window.__spaMarker')) as number,
+        1,
+      );
+
+      await page.goBack();
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      check('浏览器后退回到上一房间', await page.locator('.sidebar').isVisible());
+      checkEqual(
+        '后退后仍是同一 SPA 文档',
+        (await page.evaluate('window.__spaMarker')) as number,
+        1,
+      );
+      await page.goForward();
+      await waitRoom(page, data.group.room.room_id, '测试群');
+      await page.waitForFunction('document.querySelectorAll("#messages .msg").length > 0');
+      check('浏览器前进恢复缓存房间', true);
+
+      await page.fill('#room-search', '测试群');
+      await page.waitForFunction(
+        'document.querySelectorAll("#room-list .room-item").length === 1',
+      );
+      await page.locator(roomLink(data.group.room.room_id)).click();
+      await waitRoom(page, data.group.room.room_id, '测试群');
+      await page.locator('#back').dispatchEvent('click');
+      await page.waitForURL(`${server.base}/`);
+      checkEqual('返回列表后搜索词保持', await page.inputValue('#room-search'), '测试群');
+      checkEqual(
+        '返回列表后过滤结果保持',
+        await page.locator('#room-list .room-item').count(),
+        1,
+      );
+      await page.fill('#room-search', '');
+      await page.waitForFunction(
+        'document.querySelectorAll("#room-list .room-item").length >= 3',
+      );
+      check('清空搜索恢复完整列表', true);
+
+      await page.locator(roomLink(data.direct.room.room_id)).click();
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      await page.waitForFunction('document.querySelectorAll("#messages .msg").length >= 20');
+      // 等后台 SWR 校准完成后再设置滚动位置，避免它按“原本在底部”回底。
+      await sleep(600);
+      await page.evaluate(`(() => {
+        const messages = document.getElementById('messages');
+        if (!messages) return;
+        messages.scrollTop = Math.floor((messages.scrollHeight - messages.clientHeight) * 0.4);
+      })()`);
+      const savedTop = (await page.evaluate(
+        `document.getElementById('messages') ? document.getElementById('messages').scrollTop : 0`,
+      )) as number;
+      await page.fill('#body', '未发送的草稿');
+      await page.locator(roomLink(data.group.room.room_id)).click();
+      await waitRoom(page, data.group.room.room_id, '测试群');
+      await page.locator(roomLink(data.direct.room.room_id)).click();
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      await sleep(600);
+      checkEqual('切换房间恢复草稿', await page.inputValue('#body'), '未发送的草稿');
+      check(
+        '缓存命中立即显示消息',
+        (await messageCount(page)) >= 20,
+        await messageCount(page),
+      );
+      const restoredTop = (await page.evaluate(
+        `document.getElementById('messages') ? document.getElementById('messages').scrollTop : 0`,
+      )) as number;
+      check('缓存命中恢复滚动位置', Math.abs(restoredTop - savedTop) <= 60, {
+        savedTop,
+        restoredTop,
+      });
+
+      await page.locator('#back').dispatchEvent('click');
+      await page.waitForURL(`${server.base}/`);
+      await page.locator('#new-group').click();
+      await page.locator('#group-contacts input[type=checkbox]').first().waitFor({ timeout: 8_000 });
+      check('多次房间切换后普通请求仍可用', true);
+      await page.locator('#group-cancel').click();
+
+      await context.close();
+    }
+
+    // 2b. 建群与新建 Agent（独立 context：首页无订阅，避免历史连接影响）。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      const loadsBeforeGroup = (await page.evaluate('window.__loadCount')) as number;
+      await page.locator('#new-group').click();
+      await page.locator('#group-contacts input[type=checkbox]').first().waitFor();
+      const boxes = page.locator('#group-contacts input[type=checkbox]');
+      check('建群弹窗加载好友', (await boxes.count()) >= 2);
+      await boxes.nth(0).check();
+      await boxes.nth(1).check();
+      await page.fill('#group-title', 'UI 新群');
+      await page.locator('#group-create').click();
+      await page.waitForURL(/\/c\/rm_/);
+      await page.waitForFunction(
+        `document.getElementById('title') && document.getElementById('title').textContent === 'UI 新群'`,
+      );
+      check('建群成功后客户端跳转', true);
+      checkEqual(
+        '建群跳转不整页重载',
+        (await page.evaluate('window.__loadCount')) as number,
+        loadsBeforeGroup,
+      );
+      checkEqual('建群弹窗关闭', await page.locator('#group-modal').isHidden(), true);
+      const newGroupId = decodeURIComponent(page.url().split('/c/')[1] ?? '');
+      check(
+        '侧栏出现新建群',
+        await page.locator(roomLink(newGroupId)).count() === 1,
+      );
+
+      await page.locator('#new-agent').click();
+      await page.fill('#new-agent-name', '网页新建 Agent');
+      await page.locator('#new-agent-create').click();
+      await page.locator('#new-agent-result').waitFor({ state: 'visible' });
+      check('新建 Agent 返回 MCP URL', (await page.inputValue('#new-agent-url')).startsWith('http'));
+      await page.locator('#new-agent-close').click();
+      await page.locator('#new-agent').click();
+      checkEqual('关闭后重开不显示旧 URL', await page.locator('#new-agent-result').isHidden(), true);
+      checkEqual('重开后 URL 输入清空', await page.inputValue('#new-agent-url'), '');
+      checkEqual(
+        'localStorage 只保存浏览器 token',
+        await page.evaluate('Object.keys(localStorage).join(",")'),
+        'agent-network-token',
+      );
+      await page.locator('#new-agent-close').click();
+      await context.close();
+    }
+
+    // 2c. 单条统一 stream、慢加载、事件刷新、自消息、断线退避与重连补拉。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.waitForFunction(`${streamCallsExpression()}.length >= 1`);
+      checkEqual('首页也建立统一 stream', (await page.evaluate(`${streamCallsExpression()}.length`)) as number, 1);
+      checkEqual('没有 room head 订阅', (await page.evaluate(roomHeadSubscriptionsExpression())) as number, 0);
+      const firstStream = (await page.evaluate(`(${streamCallsExpression()})[0]`)) as {
+        id: string;
+        subscriptions: string[];
+      };
+      checkEqual('stream 只订阅 agentnet://stream', JSON.stringify(firstStream.subscriptions), '["agentnet://stream"]');
+
+      await page.locator(roomLink(data.direct.room.room_id)).click();
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      await page.waitForFunction('document.querySelectorAll("#messages .msg").length >= 20');
+
+      // 真实 stream 事件：刷新当前房间。
+      await sendRoomMessage(data.agentAToken, data.direct.room.room_id, '实时消息 A');
+      await waitForText(page, '#messages', '实时消息 A');
+      check('stream 事件刷新当前房间', true);
+
+      // 非当前房间：侧栏预览与未读随事件更新。
+      await sendRoomMessage(data.agentAToken, data.group.room.room_id, '群实时预览');
+      await waitForText(page, roomLink(data.group.room.room_id), '群实时预览');
+      check('stream 事件刷新侧栏预览', true);
+      checkEqual('非当前房间显示未读', await page.locator(`${roomLink(data.group.room.room_id)} .unread`).count(), 1);
+
+      // 自消息：发送后的刷新不能被 stream 再触发一次重复渲染。
+      await page.fill('#body', '自消息只出现一次');
+      await page.locator('#send').click();
+      await waitForText(page, '#messages', '自消息只出现一次');
+      checkEqual('自消息只渲染一次', await page.locator('#messages .msg', { hasText: '自消息只出现一次' }).count(), 1);
+      checkEqual('发送不重建 stream', (await page.evaluate(`${streamCallsExpression()}.length`)) as number, 1);
+
+      await sleep(300);
+      await page.evaluate(
+        `window.__delayMcp = { name: 'network_room_get', roomId: ${JSON.stringify(
+          data.extra.room.room_id,
+        )}, ms: 900 }`,
+      );
+      await page.locator(roomLink(data.extra.room.room_id)).click();
+      await sleep(200);
+      check('无缓存切换保留旧内容', (await messageCount(page)) >= 20, await messageCount(page));
+      check('无缓存切换显示细加载条', await page.locator('#chat-loading').isVisible());
+      checkEqual('无缓存切换不显示全屏 skeleton', await page.locator('#chat-skeleton').isVisible(), false);
+      await waitRoom(page, data.extra.room.room_id, data.agentB.name);
+      await page.waitForFunction(
+        `document.getElementById('chat-loading') &&
+         document.getElementById('chat-loading').hidden === true`,
+      );
+      const extraText = (await page.locator('#messages').textContent()) ?? '';
+      check('新房间加载完成后替换旧内容', extraText.includes('E 消息 1') && !extraText.includes('D 消息 1'));
+      check('延迟的 room_get 已发生', (await page.evaluate('window.__delayedMcpHit')) as boolean);
+      await page.evaluate('window.__delayMcp = null');
+
+      checkEqual('切换房间不重建 stream', (await page.evaluate(`${streamCallsExpression()}.length`)) as number, 1);
+      checkEqual('首个 stream 连接未被中止', (await page.evaluate('window.__streamSignals[0].aborted')) as boolean, false);
+      await page.locator(roomLink(data.direct.room.room_id)).click();
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      await sleep(200);
+      checkEqual('再次切换仍只有一条 stream', (await page.evaluate(`${streamCallsExpression()}.length`)) as number, 1);
+
+      // 模拟断线：中止当前连接并让后续 listen 立即失败。
+      const abortAt = (await page.evaluate(
+        `(() => { window.__failStreams = true; const at = Date.now(); return window.__abortStream() ? at : 0; })()`,
+      )) as number;
+      check('测试成功中止当前 stream', abortAt > 0);
+      await page.waitForFunction(`${streamCallsExpression()}.length >= 3`, undefined, { timeout: 8_000 });
+      const retryCalls = (await page.evaluate(
+        `(${streamCallsExpression()}).map(function (call) { return { id: call.id, at: call.at }; })`,
+      )) as { id: string; at: number }[];
+      const firstRetry = retryCalls[1] ?? { id: '', at: 0 };
+      const secondRetry = retryCalls[2] ?? { id: '', at: 0 };
+      check(
+        '首次重连约 1s 后发生',
+        firstRetry.at - abortAt >= 700 && firstRetry.at - abortAt <= 1_900,
+        { abortAt, retryAt: firstRetry.at },
+      );
+      check(
+        '第二次重连按 2s 退避',
+        secondRetry.at - firstRetry.at >= 1_400 && secondRetry.at - firstRetry.at <= 3_200,
+        { first: firstRetry.at, second: secondRetry.at },
+      );
+      checkEqual('每次重连使用新 subscription id', firstRetry.id !== firstStream.id && secondRetry.id !== firstRetry.id, true);
+
+      // 断线期间产生的新消息，恢复后通过补拉出现。
+      await sendRoomMessage(data.agentAToken, data.direct.room.room_id, '断线补拉消息');
+      await page.evaluate(
+        `window.__failStreams = false; window.dispatchEvent(new Event('online'));`,
+      );
+      await page.waitForFunction(`${streamCallsExpression()}.length >= 4`, undefined, {
+        timeout: 6_000,
+      });
+      await waitForText(page, '#messages', '断线补拉消息', 12_000);
+      check('重连后补拉当前房间历史', true);
+      await waitForText(page, roomLink(data.direct.room.room_id), '断线补拉消息');
+      check('重连后刷新会话列表', true);
+      checkEqual('瞬时失败不显示非阻塞提示', await page.locator('#stream-banner').isHidden(), true);
+      checkEqual(
+        '重连后只有一条未中止的 stream',
+        (await page.evaluate('window.__streamSignals.filter(function (signal) { return !signal.aborted; }).length')) as number,
+        1,
+      );
+      await context.close();
+    }
+
+    // 2d. 持续失败才显示非阻塞提示，恢复后自动消失。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.waitForFunction(`${streamCallsExpression()}.length >= 1`);
+      await page.evaluate(`window.__failStreams = true; window.__abortStream();`);
+      await page.locator('#stream-banner').waitFor({ state: 'visible', timeout: 12_000 });
+      check(
+        '持续失败显示非阻塞提示',
+        ((await page.locator('#stream-banner').textContent()) ?? '').includes('实时连接暂时不可用'),
+      );
+      checkEqual('提示区 role=status', await page.locator('#stream-banner').getAttribute('role'), 'status');
+      checkEqual('持续失败不弹出阻塞错误', await page.locator('#chat-error').isHidden(), true);
+      await page.evaluate(
+        `window.__failStreams = false; window.dispatchEvent(new Event('online'));`,
+      );
+      await page.waitForFunction(
+        `document.getElementById('stream-banner') && document.getElementById('stream-banner').hidden`,
+        undefined,
+        { timeout: 8_000 },
+      );
+      check('恢复后提示自动消失', true);
+      await context.close();
+    }
+
+    // 2e. 非 SSE 响应 + 不可重试错误：停止循环，不再无限重连。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      let streamAttempts = 0;
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-method'] !== 'subscriptions/listen') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as {
+          id?: string;
+          params?: { notifications?: { resourceSubscriptions?: string[] } };
+        } | null;
+        const subscriptions = body?.params?.notifications?.resourceSubscriptions ?? [];
+        if (!subscriptions.includes('agentnet://stream')) {
+          await route.continue();
+          return;
+        }
+        streamAttempts += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            error: {
+              code: -32602,
+              message: 'resourceSubscriptions 必须且只能是 ["agentnet://stream"]',
+              data: { code: 'INVALID_ARGUMENT', message: '旧订阅 URI 已删除', retryable: false },
+            },
+          }),
+        });
+      });
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.locator('#stream-banner').waitFor({ state: 'visible', timeout: 8_000 });
+      check(
+        '非 SSE 响应显示可读提示',
+        ((await page.locator('#stream-banner').textContent()) ?? '').includes('实时连接已停止'),
+      );
+      await sleep(1_500);
+      checkEqual('INVALID_ARGUMENT 不重试', streamAttempts, 1);
+      await page.unroute('**/mcp');
+      await context.close();
+    }
+
+    // 3. 移动端单栏、返回箭头、后退/前进。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      check(
+        '390px 首页只显示列表',
+        (await page.locator('.sidebar').isVisible()) &&
+          !(await page.locator('#composer').isVisible()),
+      );
+      await page.locator(roomLink(data.direct.room.room_id)).click();
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      check(
+        '390px 聊天页只显示聊天区',
+        !(await page.locator('.sidebar').isVisible()) &&
+          (await page.locator('#composer').isVisible()),
+      );
+      check('移动端显示返回箭头', await page.locator('#back').isVisible());
+      await page.locator('#back').click();
+      await page.waitForURL(`${server.base}/`);
+      check('移动端返回箭头回到列表', await page.locator('.sidebar').isVisible());
+      await page.goForward();
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      check('移动端前进恢复聊天', await page.locator('#composer').isVisible());
+      await page.goBack();
+      await page.waitForURL(`${server.base}/`);
+      check('移动端后退回到列表', await page.locator('.sidebar').isVisible());
+      await context.close();
+    }
+
+    // 4. 深链、刷新、未知房间。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      await page.waitForFunction('document.querySelectorAll("#messages .msg").length >= 3');
+      check('深链直接显示聊天', true);
+      checkEqual('深链 loading 收口', await page.locator('#chat-loading').isHidden(), true);
+      checkEqual('深链 skeleton 收口', await page.locator('#chat-skeleton').isHidden(), true);
+      const tokenBefore = await page.evaluate(
+        `localStorage.getItem('agent-network-token')`,
+      );
+      await page.reload();
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      checkEqual(
+        '刷新后沿用同一身份',
+        await page.evaluate(`localStorage.getItem('agent-network-token')`),
+        tokenBefore,
+      );
+      checkEqual('刷新后聊天仍可用', await page.locator('#composer').isEnabled(), true);
+      await page.goto(`${server.base}/c/rm_missing_room`);
+      await page.locator('#chat-error').waitFor({ state: 'visible' });
+      checkEqual('未知房间 URL 不改写', page.url(), `${server.base}/c/rm_missing_room`);
+      checkEqual('未知房间结束 loading', await page.locator('#chat-loading').isHidden(), true);
+      checkEqual('未知房间隐藏 skeleton', await page.locator('#chat-skeleton').isHidden(), true);
+      check(
+        '未知房间显示可读错误',
+        ((await page.locator('#chat-error-text').textContent()) ?? '').includes('会话不存在'),
+      );
+      checkEqual(
+        '未知房间 subtitle 不是永久加载',
+        (await page.locator('#subtitle').textContent()) !== '正在加载…',
+        true,
+      );
+      check('未知房间提供重试与返回', 
+        (await page.locator('#chat-error-retry').isVisible()) &&
+          (await page.locator('#chat-error-back').isVisible()));
+      checkEqual('未知房间不禁用返回后再恢复', await page.locator('#send').isDisabled(), true);
+      await context.close();
+    }
+
+    // 5. 列表失败与重试。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+        false,
+      );
+      let aborted = false;
+      await page.route('**/mcp', async (route) => {
+        if (!aborted && route.request().headers()['mcp-name'] === 'network_rooms_list') {
+          aborted = true;
+          await route.abort();
+          return;
+        }
+        await route.continue();
+      });
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list-retry').waitFor({ state: 'visible' });
+      check(
+        '列表失败显示可读错误',
+        ((await page.locator('#room-list-status').textContent()) ?? '').includes('读取会话失败'),
+      );
+      checkEqual('列表失败后骨架消失', await page.locator('.room-skeleton').count(), 0);
+      await page.unroute('**/mcp');
+      await page.locator('#room-list-retry').click();
+      await page.locator('#room-list .room-item').first().waitFor();
+      checkEqual('列表重试后恢复', await page.locator('#room-list-retry').isHidden(), true);
+      await context.close();
+    }
+
+    // 6. 房间历史失败、错误收口与重试。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+        false,
+      );
+      let aborted = false;
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (!aborted && request.headers()['mcp-name'] === 'network_history_list') {
+          const body = request.postDataJSON() as {
+            params?: { arguments?: { room_id?: string } };
+          } | null;
+          if (body?.params?.arguments?.room_id === data.direct.room.room_id) {
+            aborted = true;
+            await route.abort();
+            return;
+          }
+        }
+        await route.continue();
+      });
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await page.locator('#chat-error').waitFor({ state: 'visible' });
+      checkEqual('房间失败结束 loading', await page.locator('#chat-loading').isHidden(), true);
+      checkEqual('房间失败隐藏 skeleton', await page.locator('#chat-skeleton').isHidden(), true);
+      checkEqual('房间失败 subtitle 为加载失败', await page.locator('#subtitle').textContent(), '加载失败');
+      check('房间失败提供重试', await page.locator('#chat-error-retry').isVisible());
+      checkEqual('房间失败禁用发送', await page.locator('#send').isDisabled(), true);
+      await page.unroute('**/mcp');
+      await page.locator('#chat-error-retry').click();
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      await page.waitForFunction('document.querySelectorAll("#messages .msg").length >= 3');
+      checkEqual('房间重试后错误消失', await page.locator('#chat-error').isHidden(), true);
+      checkEqual('房间重试后恢复发送', await page.locator('#send').isEnabled(), true);
+      await context.close();
+    }
+
+    // 7. 文件模块：真实上传/bind/list、预览、复制、删除、绑定重试与 room.file 通知。
+    {
+      const directId = data.direct.room.room_id;
+      const humanFiles = await seedRoomFiles(data.humanToken, server.base, directId, [
+        { name: '图片 <b>一.png', mimeType: 'image/png', body: PNG_BYTES },
+        { name: '报告.pdf', mimeType: 'application/pdf', body: PDF_BYTES },
+        { name: '说明.txt', mimeType: 'text/plain', body: '第一行\n第二行' },
+        { name: '语音.mp3', mimeType: 'audio/mpeg', body: Buffer.from('ID3mock') },
+        { name: '演示.mp4', mimeType: 'video/mp4', body: Buffer.from('videomock') },
+        { name: '归档.zip', mimeType: 'application/zip', body: Buffer.from('zipmock') },
+        {
+          name: '图标.svg',
+          mimeType: 'image/svg+xml',
+          body: '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+        },
+        { name: '页面.html', mimeType: 'text/html', body: '<script>alert(1)</script>' },
+      ]);
+      await seedRoomFiles(data.agentAToken, server.base, directId, [
+        { name: 'Agent 文件.txt', mimeType: 'text/plain', body: 'agent file' },
+      ]);
+      const textFile = humanFiles.find((file) => file.name === '说明.txt');
+      const zipFile = humanFiles.find((file) => file.name === '归档.zip');
+      if (!textFile || !zipFile) throw new Error('文件 fixture 缺失');
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await context.grantPermissions(['clipboard-read', 'clipboard-write'], {
+        origin: server.base,
+      });
+      const rangeObserver = await observeFileRanges(page);
+      const upload = await observeUploads(page);
+      let failNextBind = false;
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (failNextBind && request.headers()['mcp-name'] === 'network_room_file_bind') {
+          failNextBind = false;
+          const body = request.postDataJSON() as {
+            params?: { arguments?: Record<string, unknown> };
+          };
+          const args = body?.params?.arguments;
+          if (args) {
+            args.file_id = 'f_0000000000000000000000';
+            try {
+              const response = await route.fetch({ postData: JSON.stringify(body) });
+              await route.fulfill({ response });
+              return;
+            } catch {
+              await route.continue().catch(() => undefined);
+              return;
+            }
+          }
+        }
+        await route.continue();
+      });
+      await page.goto(`${server.base}/c/${directId}`);
+      await waitRoom(page, directId, data.agentA.name);
+      await page.waitForFunction('document.querySelectorAll("#files-list .file-item").length === 9');
+      checkEqual('桌面显示右侧文件栏', await page.locator('#files-pane').isVisible(), true);
+      checkEqual('桌面文件栏无遮罩', await page.locator('#files-backdrop').isHidden(), true);
+      checkEqual('桌面保留会话列表', await page.locator('.sidebar').isVisible(), true);
+      checkEqual('桌面保留聊天区', await page.locator('#composer').isVisible(), true);
+      checkEqual(
+        '桌面文件栏宽度 300px',
+        await page.evaluate(`getComputedStyle(document.getElementById('files-pane')).width`),
+        '300px',
+      );
+      const imageItem = page.locator('#files-list .file-item').filter({
+        hasText: '图片 <b>一.png',
+      });
+      checkEqual(
+        '文件名按 textContent 渲染',
+        await imageItem.locator('.file-name').textContent(),
+        '图片 <b>一.png',
+      );
+      checkEqual(
+        '文件名不解析 HTML',
+        await imageItem.locator('.file-name b, .file-name img').count(),
+        0,
+      );
+      checkEqual('列表无内联事件属性', await page.locator('#files-list [onerror]').count(), 0);
+
+      const imageDownloadHref = await imageItem.locator('a.file-action').getAttribute('href');
+      check('真实下载链接指向 /f/', Boolean(imageDownloadHref && imageDownloadHref.includes('/f/')));
+      await imageItem.getByRole('button', { name: '复制链接' }).click();
+      await waitForText(page, '#files-status', '链接即下载权限');
+      checkEqual(
+        '复制真实下载地址',
+        await page.evaluate('navigator.clipboard.readText()'),
+        imageDownloadHref,
+      );
+
+      await imageItem.getByRole('button', { name: '预览' }).click();
+      await page.locator('#file-preview').waitFor({ state: 'visible' });
+      checkEqual('图片预览使用 img', await page.locator('#file-preview-body img').count(), 1);
+      await page.waitForFunction(
+        `(() => { const img = document.querySelector('#file-preview-body img'); return Boolean(img && img.complete && img.naturalWidth > 0); })()`,
+      );
+      check('图片预览加载真实 /f/ 内容', true);
+      checkEqual('图片预览不创建 iframe', await page.locator('#file-preview-body iframe').count(), 0);
+      check(
+        '预览下载链接指向 /f/',
+        ((await page.locator('#file-preview-download').getAttribute('href')) ?? '').includes('/f/'),
+      );
+      await page.locator('#file-preview-close').click();
+
+      const pdfItem = page.locator('#files-list .file-item').filter({ hasText: '报告.pdf' });
+      await pdfItem.getByRole('button', { name: '预览' }).click();
+      await page.locator('#file-preview-body iframe').waitFor();
+      checkEqual(
+        'PDF iframe sandbox 为空',
+        await page.locator('#file-preview-body iframe').getAttribute('sandbox'),
+        '',
+      );
+      checkEqual(
+        'PDF iframe no-referrer',
+        await page.locator('#file-preview-body iframe').getAttribute('referrerpolicy'),
+        'no-referrer',
+      );
+      await page.locator('#file-preview-close').click();
+
+      const textItem = page.locator('#files-list .file-item').filter({ hasText: '说明.txt' });
+      await textItem.getByRole('button', { name: '预览' }).click();
+      await waitForText(page, '#file-preview-body pre', '第一行');
+      checkEqual(
+        '文本预览 Range 上限 262143',
+        rangeObserver.ranges[new URL(textFile.publicUrl).pathname],
+        'bytes=0-262143',
+      );
+      await page.locator('#file-preview-close').click();
+
+      const audioItem = page.locator('#files-list .file-item').filter({ hasText: '语音.mp3' });
+      await audioItem.getByRole('button', { name: '预览' }).click();
+      checkEqual(
+        'audio 使用原生控件',
+        await page.locator('#file-preview-body audio[controls]').count(),
+        1,
+      );
+      await page.locator('#file-preview-close').click();
+      const videoItem = page.locator('#files-list .file-item').filter({ hasText: '演示.mp4' });
+      await videoItem.getByRole('button', { name: '预览' }).click();
+      checkEqual(
+        'video 使用原生控件',
+        await page.locator('#file-preview-body video[controls]').count(),
+        1,
+      );
+      await page.locator('#file-preview-close').click();
+
+      const zipItem = page.locator('#files-list .file-item').filter({ hasText: '归档.zip' });
+      await zipItem.getByRole('button', { name: '预览' }).click();
+      checkEqual(
+        '未知类型不内联',
+        await page.locator(
+          '#file-preview-body img, #file-preview-body iframe, #file-preview-body audio, #file-preview-body video, #file-preview-body pre',
+        ).count(),
+        0,
+      );
+      check(
+        '未知类型提示下载',
+        ((await page.locator('#file-preview-body').textContent()) ?? '').includes('不支持在线预览'),
+      );
+      await page.locator('#file-preview-close').click();
+
+      const svgItem = page.locator('#files-list .file-item').filter({ hasText: '图标.svg' });
+      checkEqual('SVG 缩略图不内联', await svgItem.locator('.file-thumb img').count(), 0);
+      await svgItem.getByRole('button', { name: '预览' }).click();
+      checkEqual('SVG 预览不创建 img', await page.locator('#file-preview-body img').count(), 0);
+      check(
+        'SVG 预览提示下载',
+        ((await page.locator('#file-preview-body').textContent()) ?? '').includes('不支持在线预览'),
+      );
+      await page.locator('#file-preview-close').click();
+
+      const htmlItem = page.locator('#files-list .file-item').filter({ hasText: '页面.html' });
+      await htmlItem.getByRole('button', { name: '预览' }).click();
+      checkEqual(
+        'download 预览不写入 HTML',
+        await page.locator(
+          '#file-preview-body pre, #file-preview-body img, #file-preview-body iframe',
+        ).count(),
+        0,
+      );
+      check(
+        'download 预览提示下载',
+        ((await page.locator('#file-preview-body').textContent()) ?? '').includes('不支持在线预览'),
+      );
+      await page.locator('#file-preview-close').click();
+
+      const agentItem = page.locator('#files-list .file-item').filter({
+        hasText: 'Agent 文件.txt',
+      });
+      checkEqual(
+        '非上传者在单聊无删除权限',
+        await agentItem.getByRole('button', { name: '删除' }).count(),
+        0,
+      );
+
+      const deleteButton = zipItem.getByRole('button', { name: '删除' });
+      await deleteButton.click();
+      checkEqual('删除需要二次确认', await deleteButton.textContent(), '确认删除');
+      await deleteButton.click();
+      await page.waitForFunction(
+        'document.querySelectorAll("#files-list .file-item").length === 8',
+      );
+      const afterDelete = await rawTool<{ items: { file_id: string }[] }>(
+        data.humanToken,
+        'network_room_file_list',
+        { room_id: directId, limit: 100 },
+      );
+      check(
+        '删除后服务端列表不再返回该文件',
+        !afterDelete.items.some((item) => item.file_id === zipFile.fileId),
+      );
+
+      const uploadBase = upload.calls.length;
+      const bindBase = await mcpCallCount(page, 'network_room_file_bind');
+      await page.setInputFiles('#files-input', [
+        { name: '进度测试.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') },
+        {
+          name: '第二 文件.bin',
+          mimeType: 'application/octet-stream',
+          buffer: Buffer.from([1, 2, 3, 4]),
+        },
+      ]);
+      await page.locator('#files-progress').waitFor({ state: 'visible' });
+      await waitUntil(() => upload.calls.length === uploadBase + 2, '两个文件上传');
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_room_file_bind')) >= bindBase + 2,
+        '两次 bind',
+      );
+      const firstUpload = upload.calls[uploadBase]!;
+      checkEqual('上传文件名解码', firstUpload.name, '进度测试.txt');
+      checkEqual('上传大小头', firstUpload.size, 5);
+      checkEqual('上传请求体大小', firstUpload.bodySize, 5);
+      check('上传携带 Bearer', firstUpload.authorization);
+      checkEqual('上传使用 MCPP Files v1', firstUpload.version, '1');
+      const bindCalls = (await page.evaluate(
+        `(window.__mcpCalls || []).filter(function (call) { return call.name === 'network_room_file_bind'; }).slice(-2).map(function (call) { return { args: call.body.params.arguments, at: call.at }; })`,
+      )) as { args: { room_id?: string; file_id?: string }; at: number }[];
+      checkEqual('上传后执行 bind', bindCalls.length, 2);
+      checkEqual('bind 使用当前房间', bindCalls[0]!.args.room_id, directId);
+      check(
+        'bind 使用真实 file_id',
+        /^f_[A-Za-z0-9_-]{22}$/u.test(String(bindCalls[0]!.args.file_id ?? '')),
+      );
+      check(
+        '多文件串行：第二个上传在第一次 bind 之后',
+        upload.calls[uploadBase + 1]!.at >= bindCalls[0]!.at,
+      );
+      await waitForText(page, '#files-status', '已上传 2 个文件');
+      await waitForText(page, '#files-list', '进度测试.txt');
+      await waitForText(page, '#files-list', '第二 文件.bin');
+
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_room_file_bind')) >= bindBase + 2,
+        '上传 bind 收口',
+      );
+      const retryUploadBase = upload.calls.length;
+      failNextBind = true;
+      await page.setInputFiles('#files-input', [
+        { name: '绑定重试.txt', mimeType: 'text/plain', buffer: Buffer.from('retry') },
+      ]);
+      await waitForText(page, '#files-status', '不会重复上传');
+      await page.locator('#files-bind-retry').waitFor({ state: 'visible' });
+      checkEqual('bind 失败只上传一次', upload.calls.length, retryUploadBase + 1);
+      await page.locator('#files-bind-retry').click();
+      await page.waitForFunction('document.getElementById("files-bind-retry").hidden === true');
+      checkEqual('bind 重试不重复上传', upload.calls.length, retryUploadBase + 1);
+      await waitForText(page, '#files-list', '绑定重试.txt');
+
+      await sleep(300);
+      const listBeforeNotify = await fileListCallCount(page);
+      await seedRoomFiles(data.agentAToken, server.base, directId, [
+        { name: '通知文件.txt', mimeType: 'text/plain', body: 'notify' },
+      ]);
+      await waitForText(page, '#files-list', '通知文件.txt');
+      check(
+        'room.file 通知触发真实列表刷新',
+        (await fileListCallCount(page)) > listBeforeNotify,
+      );
+
+      await page.locator('#files-toggle').click();
+      checkEqual('桌面折叠文件栏', await page.locator('#files-pane').isHidden(), true);
+      checkEqual(
+        '折叠状态写入 localStorage',
+        await page.evaluate(`localStorage.getItem('agent-network-files-open')`),
+        '0',
+      );
+      await page.reload();
+      await waitRoom(page, directId, data.agentA.name);
+      checkEqual('刷新后保持折叠', await page.locator('#files-pane').isHidden(), true);
+      await page.locator('#files-toggle').click();
+      checkEqual('再次打开文件栏', await page.locator('#files-pane').isVisible(), true);
+      checkEqual(
+        '打开状态写入 localStorage',
+        await page.evaluate(`localStorage.getItem('agent-network-files-open')`),
+        '1',
+      );
+      await context.close();
+    }
+
+    // 8. 文件分页、按房间缓存、滚动恢复与快速切换守卫（真实列表分页）。
+    {
+      const pagedGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '分页文件群',
+        members: [data.agentA.actor_id],
+      });
+      const cacheGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '缓存文件群',
+        members: [data.agentA.actor_id, data.agentB.actor_id],
+      });
+      const pagedRoomId = pagedGroup.room.room_id;
+      const cacheGroupId = cacheGroup.room.room_id;
+      await seedRoomFiles(
+        data.humanToken,
+        server.base,
+        pagedRoomId,
+        Array.from({ length: 31 }, (_, index) => ({
+          name: `分页文件 ${String(index + 1).padStart(2, '0')}.txt`,
+          mimeType: 'text/plain',
+          body: `page ${index + 1}`,
+        })),
+      );
+      await seedRoomFiles(data.humanToken, server.base, cacheGroupId, [
+        { name: '群文件一.txt', mimeType: 'text/plain', body: 'group 1' },
+        { name: '群文件二.txt', mimeType: 'text/plain', body: 'group 2' },
+        { name: '群文件三.txt', mimeType: 'text/plain', body: 'group 3' },
+      ]);
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/c/${pagedRoomId}`);
+      await waitRoom(page, pagedRoomId, '分页文件群');
+      await page.waitForFunction('document.querySelectorAll("#files-list .file-item").length === 30');
+      checkEqual('首屏文件分页 30 条', await page.locator('#files-list .file-item').count(), 30);
+      checkEqual('有更多文件时显示加载更多', await page.locator('#files-more').isVisible(), true);
+      await page.locator('#files-more').click();
+      await page.waitForFunction('document.querySelectorAll("#files-list .file-item").length === 31');
+      checkEqual('加载更多补齐 31 条', await page.locator('#files-list .file-item').count(), 31);
+      checkEqual('无更多时隐藏加载更多', await page.locator('#files-more').isHidden(), true);
+
+      await page.evaluate(`document.getElementById('files-list').scrollTop = 120`);
+      await sleep(60);
+      await page.locator(roomLink(cacheGroupId)).click();
+      await waitRoom(page, cacheGroupId, '缓存文件群');
+      await waitForText(page, '#files-list', '群文件一.txt');
+      checkEqual('切换房间保持文件栏', await page.locator('#files-pane').isVisible(), true);
+      const listCallsAfterGroup = await fileListCallCount(page);
+      await page.locator(roomLink(pagedRoomId)).click();
+      await waitRoom(page, pagedRoomId, '分页文件群');
+      await page.waitForFunction('document.querySelectorAll("#files-list .file-item").length === 31');
+      checkEqual('切回缓存房间不重复请求', await fileListCallCount(page), listCallsAfterGroup);
+      await sleep(120);
+      check(
+        '按房间恢复滚动位置',
+        Math.abs(
+          ((await page.evaluate(`document.getElementById('files-list').scrollTop`)) as number) - 120,
+        ) <= 2,
+      );
+
+      const listCallsBeforeInactive = await fileListCallCount(page);
+      await seedRoomFiles(data.agentAToken, server.base, cacheGroupId, [
+        { name: '群新文件.txt', mimeType: 'text/plain', body: 'new group file' },
+      ]);
+      await sleep(800);
+      await page.locator(roomLink(cacheGroupId)).click();
+      await waitRoom(page, cacheGroupId, '缓存文件群');
+      await waitForText(page, '#files-list', '群新文件.txt');
+      check(
+        '非当前房间文件事件使缓存失效',
+        (await fileListCallCount(page)) > listCallsBeforeInactive,
+      );
+
+      await page.locator(roomLink(pagedRoomId)).click();
+      await waitRoom(page, pagedRoomId, '分页文件群');
+      await page.waitForFunction('document.querySelectorAll("#files-list .file-item").length === 31');
+      let delayGroupList = true;
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (delayGroupList && request.headers()['mcp-name'] === 'network_room_file_list') {
+          const body = request.postDataJSON() as {
+            params?: { arguments?: { room_id?: string } };
+          };
+          if (body?.params?.arguments?.room_id === cacheGroupId) {
+            delayGroupList = false;
+            await sleep(500);
+          }
+        }
+        try {
+          await route.continue();
+        } catch {
+          // 切回当前房间会中止旧请求，丢弃响应即可。
+        }
+      });
+      await page.locator(roomLink(cacheGroupId)).click();
+      await waitRoom(page, cacheGroupId, '缓存文件群');
+      await sleep(60);
+      await page.locator(roomLink(pagedRoomId)).click();
+      await waitRoom(page, pagedRoomId, '分页文件群');
+      await sleep(800);
+      checkEqual(
+        '快速切换后不显示旧响应',
+        await page.locator('#files-list .file-item').filter({ hasText: '群文件一.txt' }).count(),
+        0,
+      );
+      check(
+        '快速切换后仍显示当前房间文件',
+        (await page.locator('#files-list .file-item').filter({ hasText: '分页文件 01.txt' }).count()) >= 1,
+      );
+      await context.close();
+    }
+
+    // 9. 平板抽屉与移动端全屏文件页（真实文件列表）。
+    {
+      const directId = data.direct.room.room_id;
+      const tablet = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 900, height: 800 },
+        allErrors,
+      );
+      await tablet.page.goto(`${server.base}/c/${directId}`);
+      await waitRoom(tablet.page, directId, data.agentA.name);
+      checkEqual('平板默认不显示文件栏', await tablet.page.locator('#files-pane').isHidden(), true);
+      await tablet.page.locator('#files-toggle').click();
+      await tablet.page.locator('#files-pane').waitFor({ state: 'visible' });
+      const drawer = (await tablet.page.evaluate(
+        `(() => { const style = getComputedStyle(document.getElementById('files-pane')); return { position: style.position, width: style.width }; })()`,
+      )) as { position: string; width: string };
+      checkEqual('平板文件栏为固定抽屉', drawer.position, 'fixed');
+      checkEqual('平板抽屉宽度 320px', drawer.width, '320px');
+      checkEqual('平板抽屉显示遮罩', await tablet.page.locator('#files-backdrop').isVisible(), true);
+      await tablet.page.locator('#files-backdrop').click();
+      checkEqual('点击遮罩关闭抽屉', await tablet.page.locator('#files-pane').isHidden(), true);
+      await tablet.context.close();
+
+      const mobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await mobile.page.goto(`${server.base}/c/${directId}`);
+      await waitRoom(mobile.page, directId, data.agentA.name);
+      checkEqual('移动端默认不显示文件栏', await mobile.page.locator('#files-pane').isHidden(), true);
+      await mobile.page.locator('#files-toggle').click();
+      await mobile.page.locator('#files-pane').waitFor({ state: 'visible' });
+      await mobile.page.waitForFunction('document.querySelectorAll("#files-list .file-item").length > 0');
+      const mobileStyle = (await mobile.page.evaluate(
+        `(() => { const style = getComputedStyle(document.getElementById('files-pane')); return { position: style.position, width: style.width }; })()`,
+      )) as { position: string; width: string };
+      checkEqual('移动端文件页全屏宽度', mobileStyle.width, '390px');
+      checkEqual('移动端文件页固定定位', mobileStyle.position, 'fixed');
+      checkEqual('移动端文件页无遮罩', await mobile.page.locator('#files-backdrop').isHidden(), true);
+      checkEqual('移动端文件页隐藏聊天区', await mobile.page.locator('#composer').isHidden(), true);
+      checkEqual('移动端文件页隐藏会话列表', await mobile.page.locator('.sidebar').isHidden(), true);
+      await mobile.page.waitForFunction(
+        'document.activeElement && document.activeElement.id === "files-close"',
+      );
+      check('移动端打开后聚焦关闭按钮', true);
+      await mobile.page.locator('#files-close').click();
+      await mobile.page.locator('#composer').waitFor({ state: 'visible' });
+      checkEqual('移动端关闭文件页返回聊天', await mobile.page.locator('#files-pane').isHidden(), true);
+      await mobile.page.waitForFunction(
+        'document.activeElement && document.activeElement.id === "files-toggle"',
+      );
+      check('移动端关闭后焦点回到文件按钮', true);
+      await mobile.context.close();
+    }
+
+    // 10. 文件读取失败重试与空态（真实列表 + 单次网络中断）。
+    {
+      const errorGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '错误文件群',
+        members: [data.agentA.actor_id],
+      });
+      const emptyGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '空文件群',
+        members: [data.agentA.actor_id],
+      });
+      const errorRoomId = errorGroup.room.room_id;
+      const emptyRoomId = emptyGroup.room.room_id;
+      await seedRoomFiles(data.humanToken, server.base, errorRoomId, [
+        { name: '重试文件.txt', mimeType: 'text/plain', body: 'retry' },
+      ]);
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      let failed = false;
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (!failed && request.headers()['mcp-name'] === 'network_room_file_list') {
+          const body = request.postDataJSON() as {
+            params?: { arguments?: { room_id?: string } };
+          };
+          if (body?.params?.arguments?.room_id === errorRoomId) {
+            failed = true;
+            await sleep(800);
+            await route.abort();
+            return;
+          }
+        }
+        await route.continue();
+      });
+      await page.goto(`${server.base}/c/${errorRoomId}`);
+      await waitRoom(page, errorRoomId, '错误文件群');
+      checkEqual('文件加载显示骨架', await page.locator('#files-list .file-skeleton').count(), 3);
+      await page.locator('#files-error').waitFor({ state: 'visible' });
+      check(
+        '文件读取失败显示可读错误',
+        ((await page.locator('#files-error-text').textContent()) ?? '').includes('读取文件失败'),
+      );
+      checkEqual('文件读取失败提供重试', await page.locator('#files-retry').isVisible(), true);
+      await page.locator('#files-retry').click();
+      await page.locator('#files-list .file-item').first().waitFor();
+      checkEqual('文件重试后错误消失', await page.locator('#files-error').isHidden(), true);
+      checkEqual('文件重试后显示真实文件', await page.locator('#files-list .file-item').count(), 1);
+
+      await page.goto(`${server.base}/c/${emptyRoomId}`);
+      await waitRoom(page, emptyRoomId, '空文件群');
+      await page.locator('#files-empty').waitFor({ state: 'visible' });
+      checkEqual('空房间显示空态', await page.locator('#files-list .file-item').count(), 0);
+      await context.close();
+    }
+
+    checkEqual('无未捕获页面错误', allErrors.length, 0);
+    console.log(`\n浏览器验收通过 ${checksPassed()} 项`);
+  } finally {
+    await browser?.close().catch(() => undefined);
+    await server.stop();
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

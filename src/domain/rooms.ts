@@ -586,7 +586,12 @@ export async function roomMembersUpdate(
           scopeId: room.room_id,
           eventType: 'members_changed',
           refId: room.room_id,
-          metadata: { add, remove, transfer_owner_to: input.transfer_owner_to ?? null },
+          metadata: {
+            add,
+            remove,
+            transfer_owner_to: input.transfer_owner_to ?? null,
+            changed_by: caller,
+          },
         },
         at,
       ),
@@ -705,6 +710,7 @@ export async function roomLeave(
           scopeId: room.room_id,
           eventType: 'member_left',
           refId: caller,
+          metadata: { changed_by: caller },
         },
         at,
       ),
@@ -720,7 +726,7 @@ export async function roomLeave(
         : []),
       roomMemberSeqStatement(db, room.room_id, eventKey, at),
       ...(() => {
-        const inboxKey = `leave:${room.room_id}:${input.request_id}`;
+        const inboxKey = `leave:${room.room_id}:${input.request_id}:inbox`;
         return [
           eventStatement(
             db,
