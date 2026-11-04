@@ -251,6 +251,14 @@ export const APP_STYLE = `
   #status { min-height: 0; margin: 0; font-size: 12px; color: var(--wx-unread); }
   #status:empty { display: none; }
   #status:not(:empty) { padding: 6px 16px 0; }
+  /* 拖拽覆盖层只做提示；pointer-events:none 保证不阻塞聊天区操作。 */
+  .composer-drop { position: absolute; inset: 8px; z-index: 6; display: grid;
+    place-content: center; gap: 4px; box-sizing: border-box; padding: 16px;
+    border: 2px dashed var(--wx-green); border-radius: 10px;
+    background: rgb(7 193 96 / 10%); text-align: center; pointer-events: none; }
+  .composer-drop[hidden] { display: none; }
+  .composer-drop-title { font-size: 15px; font-weight: 600; color: var(--wx-green); }
+  .composer-drop-hint { font-size: 12px; color: var(--wx-muted); }
 
   .empty-pane { align-items: center; justify-content: center; }
   .empty { padding: 24px; text-align: center; }
@@ -338,6 +346,7 @@ export const APP_STYLE = `
     .msg-content { max-width: 74%; }
     .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
     .composer textarea { font-size: 16px; }
+    .composer-drop { inset: 6px; }
     .mention-picker { left: 10px; bottom: 64px; }
   }
 

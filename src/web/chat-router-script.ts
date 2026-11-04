@@ -36,6 +36,7 @@ function applyRouteChrome(route) {
   hideMentionPicker();
   closeRenameForm();
   closeGroupModal();
+  hideComposerDrop();
   syncFilesChrome();
 }
 

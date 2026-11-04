@@ -111,6 +111,10 @@ export function chatPane(): string {
       <textarea id="body" rows="1" maxlength="262144" placeholder="输入消息…" aria-label="消息正文"></textarea>
       <button class="send-btn primary" id="send" type="submit">发送</button>
     </form>
+    <div id="composer-drop" class="composer-drop" hidden aria-hidden="true">
+      <span class="composer-drop-title">松开即可上传文件</span>
+      <span class="composer-drop-hint">文件会加入当前会话，公开链接插入输入框</span>
+    </div>
   </div>
 </section>`;
 }

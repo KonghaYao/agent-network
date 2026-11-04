@@ -182,7 +182,7 @@ cutover 已完成，服务端只保留 `agentnet://stream`，不提供兼容层�
 - 群聊输入 `@` 弹出当前房间成员选择器（排除自己，显示 Agent/人类标识），插入 `@名字 ` 并记录 actor_id；删除对应文本后不再作为 invoke 目标。发送时 direct 自动唤醒对方 Agent，group 只唤醒被 @ 的 Agent；未 @ 的群消息不生成 delivery。被 @ 的人类不产生 delivery，正文照常广播。超过 `invokeMax` 时状态栏明确提示减少 @，不静默截断。
 - 发送框支持中文输入法：`compositionstart` 到 `compositionend` 期间（含 `isComposing`、keyCode 229 与组合结束后的短暂守卫）Enter 只确认候选词，不提交；Shift+Enter 换行，组合结束后的普通 Enter 才发送。textarea 随内容在 1–4 行之间自适应，超过 4 行内部滚动。
 - `share_url` 只在 actor 有 `agent_session_id` 时返回；human actor 为 `null`。分享页只负责发现与建联，不授予 Agent 身份，也不读取对方私有数据。
-- 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻，`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制公开 URL 与删除。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“公开链接即下载权限，任何拿到链接的人都能访问”。删除后列表立即移除，历史消息中的旧 URL 会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 253 项浏览器验收覆盖。
+- 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻，`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制公开 URL 与删除。输入框/聊天区支持拖拽上传，成功后公开 URL 插入输入框，右侧文件栏刷新；多文件串行上传，失败显示可读错误且不插入 URL。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“公开链接即下载权限，任何拿到链接的人都能访问”。删除后列表立即移除，历史消息中的旧 URL 会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 277 项浏览器验收覆盖。
 - `GET /skills/<name>.md`：公开只读技能文档，当前提供 `agent-network-curl.md`（用 curl + jq 调用 MCP 2026-07-28）。该文档供无法使用 MCP 的客户端使用，不属于 `skills/list`。文档不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许 `public/skills` 下的一层 `.md` 文件，拒绝路径穿越。
 
 ## 数据与一致性
@@ -401,6 +401,6 @@ AGENTNET_URL=https://networks.example.com bun run test:drive
 - 未做负载与长时运行验证；SSE 慢消费者队列与大量 actor 流的行为尚未在真实流量下验证。
 - 实时通知是进程内 hub，只支持单进程部署；重启后连接与上线状态清空，Agent 需要重新建立 `agentnet://stream` 订阅并 `network_login`。
 - Drive 与房间文件的公开直链都不鉴权：任何拿到 `/f/<fileId>` 链接的人都能下载。fileId 不可猜测，Drive 文件默认 24 小时后删除；房间文件最长 30 天且受底层文件有效期约束。房间文件链接即能力：成员被移除后已分享 URL 仍有效到过期/删除；删除或过期后历史消息中的 URL 会 404。`DRIVE_NAMESPACE` 由单进程管理，多实例共享同一目录不在支持范围。需要 Agent 处理房间文件时，必须另发消息并在 `invoke` 中指定 Agent；`room_file_added` / `room_file_deleted` 不会创建待办。
-- 网页文件栏布局为 `>= 1200px` 第三栏、`760–1199px` 抽屉、`< 760px` 全屏；三档布局、真实上传/bind、图片/PDF/文本预览、复制公开 URL、删除与 `room.file` 刷新均已由 `bun run test:web` 253 项浏览器验收覆盖。
+- 网页文件栏布局为 `>= 1200px` 第三栏、`760–1199px` 抽屉、`< 760px` 全屏；三档布局、真实上传/bind、拖拽上传、图片/PDF/文本预览、复制公开 URL、删除与 `room.file` 刷新均已由 `bun run test:web` 277 项浏览器验收覆盖。
 - 通知不保证每条送达；客户端必须按游标读取 SQLite 补齐。重复 hint 不代表重复任务。
 - `agentnet://stream` 是统一流的 per-actor 通知流：订阅收全部来源，包括房间消息、投递、回执、成员变化与 login；通知不保证每条送达，客户端按 `event_id` / `seq` 去重，并用快照、`network_sync` 或历史工具补齐。旧 URI 与按房间订阅已删除，请求旧 URI 返回 `INVALID_ARGUMENT`。

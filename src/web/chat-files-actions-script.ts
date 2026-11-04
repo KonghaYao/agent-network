@@ -403,15 +403,45 @@ async function runUploadTasks() {
       const task = filesUploadTasks.shift();
       let complete = true;
       for (let index = 0; index < task.files.length; index += 1) {
-        const ok = await uploadAndBind(task.roomId, task.files[index], index + 1, task.files.length);
-        if (!ok) {
+        const file = task.files[index];
+        const bound = await uploadAndBind(
+          task.roomId,
+          file,
+          index + 1,
+          task.files.length,
+          Boolean(task.insertUrl)
+        );
+        if (!bound) {
           complete = false;
           break;
+        }
+        if (task.insertUrl) {
+          // bind 返回 { file: {...} }；只接受同源 /f/ 公开地址。
+          const boundFile = bound.file && typeof bound.file === 'object' ? bound.file : bound;
+          const publicUrl = fileSafeUrl(boundFile.public_url);
+          if (!publicUrl) {
+            complete = false;
+            if (activeRoomId === task.roomId) {
+              setDropStatus('「' + file.name + '」已上传，但响应缺少公开链接。');
+            }
+            break;
+          }
+          if (!insertComposerFileUrl(task.roomId, publicUrl)) {
+            // 用户已切到其他房间：上传与 bind 保留在原房间，不再写新房间输入框。
+            complete = false;
+            break;
+          }
         }
       }
       if (complete && filesActiveRoomId === task.roomId) {
         if (filesProgressElement) filesProgressElement.hidden = true;
         setFilesStatus('已上传 ' + task.files.length + ' 个文件。', { transient: true });
+      }
+      if (complete && task.insertUrl && activeRoomId === task.roomId) {
+        setDropStatus(
+          '已上传 ' + task.files.length + ' 个文件，链接已插入输入框。',
+          { transient: true }
+        );
       }
     }
   } finally {
@@ -419,62 +449,66 @@ async function runUploadTasks() {
   }
 }
 
-async function uploadAndBind(roomId, file, index, total) {
-  updateFilesProgress(roomId, '正在上传（' + index + '/' + total + '）：' + file.name, 0);
+async function uploadAndBind(roomId, file, index, total, announce) {
+  const startText = '正在上传（' + index + '/' + total + '）：' + file.name;
+  updateFilesProgress(roomId, startText, 0);
+  if (announce) setDropStatusFor(roomId, startText);
   let token = null;
   try {
     await ensureIdentity();
     token = browserToken();
     if (!token) throw new Error('浏览器身份尚未初始化，请刷新页面后重试');
   } catch (error) {
-    failUpload(roomId, file, error);
-    return false;
+    failUpload(roomId, file, error, announce);
+    return null;
   }
   let uploaded = null;
   try {
     uploaded = await uploadFileToDrive(file, token, function (percent) {
-      updateFilesProgress(
-        roomId,
-        '正在上传（' + index + '/' + total + '）：' + file.name + ' · ' + percent + '%',
-        percent
-      );
+      const text = '正在上传（' + index + '/' + total + '）：' + file.name + ' · ' + percent + '%';
+      updateFilesProgress(roomId, text, percent);
+      if (announce) setDropStatusFor(roomId, text);
     });
   } catch (error) {
-    failUpload(roomId, file, error);
-    return false;
+    failUpload(roomId, file, error, announce);
+    return null;
   }
   const fileId = uploaded && (uploaded.fileId || uploaded.file_id);
   if (!fileId) {
-    failUpload(roomId, file, new Error('上传响应缺少 file_id'));
-    return false;
+    failUpload(roomId, file, new Error('上传响应缺少 file_id'), announce);
+    return null;
   }
-  updateFilesProgress(roomId, '正在加入房间：' + file.name, 100);
+  const bindText = '正在加入房间：' + file.name;
+  updateFilesProgress(roomId, bindText, 100);
+  if (announce) setDropStatusFor(roomId, bindText);
+  let bound = null;
   try {
-    await bindFileToRoom(roomId, fileId, file.name);
+    bound = await bindFileToRoom(roomId, fileId, file.name);
   } catch (error) {
     filesPendingBinds.set(roomId, { fileId: fileId, name: file.name });
     if (filesActiveRoomId === roomId) {
       if (filesProgressElement) filesProgressElement.hidden = true;
       updateFilesBindRetry();
-      setFilesStatus(
-        '已上传「' + file.name + '」，但加入房间失败：' + errorMessage(error) +
-          '。可点击“重试加入房间”，不会重复上传。',
-        { error: true }
-      );
+      const message = '已上传「' + file.name + '」，但加入房间失败：' + errorMessage(error) +
+        '。可点击“重试加入房间”，不会重复上传。';
+      setFilesStatus(message, { error: true });
+      if (announce) setDropStatusFor(roomId, message);
     }
-    return false;
+    return null;
   }
   invalidateFiles(roomId);
   if (filesActiveRoomId === roomId) {
     await refreshFiles(roomId, { force: true, preserveScroll: true, silent: true });
   }
-  return true;
+  return bound && typeof bound === 'object' ? bound : { name: file.name };
 }
 
-function failUpload(roomId, file, error) {
+function failUpload(roomId, file, error, announce) {
   if (filesActiveRoomId !== roomId) return;
   if (filesProgressElement) filesProgressElement.hidden = true;
-  setFilesStatus('上传「' + file.name + '」失败：' + errorMessage(error), { error: true });
+  const message = '上传「' + file.name + '」失败：' + errorMessage(error);
+  setFilesStatus(message, { error: true });
+  if (announce) setDropStatusFor(roomId, message);
 }
 
 function updateFilesProgress(roomId, text, percent) {
@@ -538,14 +572,14 @@ function uploadFailure(status, payload) {
 
 async function bindFileToRoom(roomId, fileId, name) {
   await ensureIdentity();
-  await callTool('network_room_file_bind', {
+  const bound = await callTool('network_room_file_bind', {
     request_id: requestId('file_bind'),
     room_id: roomId,
     file_id: fileId
   });
   filesPendingBinds.delete(roomId);
   updateFilesBindRetry();
-  return name;
+  return bound;
 }
 
 async function retryPendingBind() {
@@ -574,6 +608,149 @@ async function retryPendingBind() {
     updateFilesBindRetry();
   }
 }
+
+const composerDropElement = document.getElementById('composer-drop');
+let composerDropDepth = 0;
+let dropStatusTimer = null;
+
+/** 只有打开房间后才接管拖拽；首页和其他路由不显示上传层。 */
+function composerDropEnabled() {
+  return Boolean(activeRoomId) && document.body.classList.contains('page-room');
+}
+
+function dragHasFiles(event) {
+  const transfer = event.dataTransfer;
+  if (!transfer) return false;
+  if (transfer.files && transfer.files.length > 0) return true;
+  const types = transfer.types ? Array.prototype.slice.call(transfer.types) : [];
+  return types.indexOf('Files') >= 0;
+}
+
+/** 某些合成拖拽事件只填充 items；真实文件拖入时两者都可用。 */
+function dragFiles(event) {
+  const transfer = event.dataTransfer;
+  if (!transfer) return [];
+  const files = Array.prototype.slice.call(transfer.files || []);
+  if (files.length > 0) return files;
+  let items = [];
+  try {
+    items = transfer.items ? Array.prototype.slice.call(transfer.items) : [];
+  } catch (error) {
+    return files;
+  }
+  for (let index = 0; index < items.length; index += 1) {
+    if (items[index].kind !== 'file') continue;
+    const file = items[index].getAsFile();
+    if (file) files.push(file);
+  }
+  return files;
+}
+
+function setComposerDropVisible(visible) {
+  if (!composerDropElement) return;
+  composerDropElement.hidden = !visible;
+}
+
+function hideComposerDrop() {
+  composerDropDepth = 0;
+  setComposerDropVisible(false);
+}
+
+/** 拖拽上传进度写聊天状态栏；文件栏关闭时也能看到每个文件的状态。 */
+function setDropStatus(text, options) {
+  if (!statusElement) return;
+  const settings = options || {};
+  if (dropStatusTimer) {
+    clearTimeout(dropStatusTimer);
+    dropStatusTimer = null;
+  }
+  if (!text) {
+    if (!stickyStatus) statusElement.textContent = '';
+    return;
+  }
+  statusElement.textContent = text;
+  if (settings.transient) {
+    const expected = text;
+    dropStatusTimer = setTimeout(function () {
+      if (statusElement && statusElement.textContent === expected && !stickyStatus) {
+        statusElement.textContent = '';
+      }
+      dropStatusTimer = null;
+    }, FILES_NOTICE_MS);
+  }
+}
+
+/** 旧房间的上传进度不得写进新房间的状态栏。 */
+function setDropStatusFor(roomId, text, options) {
+  if (activeRoomId !== roomId) return;
+  setDropStatus(text, options);
+}
+
+function enqueueDroppedFiles(fileList) {
+  if (!activeRoomId) return;
+  const files = Array.prototype.slice.call(fileList || []).filter(function (file) {
+    return file && typeof file.name === 'string' && file.name.length > 0;
+  });
+  if (files.length === 0) return;
+  filesUploadTasks.push({ roomId: activeRoomId, files: files, insertUrl: true });
+  updateFilesBindRetry();
+  setDropStatusFor(activeRoomId, '正在上传（1/' + files.length + '）：' + files[0].name);
+  if (!filesUploadRunning) runUploadTasks();
+}
+
+/**
+ * 在光标处插入公开 URL，不覆盖已有文本与选区。
+ * 每个文件独占一行；实际发送仍由用户决定，不自动提交。
+ */
+function insertComposerFileUrl(roomId, url) {
+  if (!bodyInput || !url || activeRoomId !== roomId) return false;
+  if (!document.body.classList.contains('page-room')) return false;
+  const value = bodyInput.value;
+  const start = bodyInput.selectionStart === null ? value.length : bodyInput.selectionStart;
+  const prefix = start > 0 && value.charAt(start - 1) !== '\\n' ? '\\n' : '';
+  const inserted = prefix + url + '\\n';
+  bodyInput.setRangeText(inserted, start, start, 'end');
+  drafts.set(roomId, bodyInput.value);
+  resizeComposer();
+  bodyInput.focus();
+  return true;
+}
+
+if (chatBodyElement) {
+  chatBodyElement.addEventListener('dragenter', function (event) {
+    if (!composerDropEnabled() || !dragHasFiles(event)) return;
+    event.preventDefault();
+    composerDropDepth += 1;
+    setComposerDropVisible(true);
+  });
+  chatBodyElement.addEventListener('dragover', function (event) {
+    if (!composerDropEnabled() || !dragHasFiles(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    if (composerDropDepth === 0) composerDropDepth = 1;
+    setComposerDropVisible(true);
+  });
+  chatBodyElement.addEventListener('dragleave', function (event) {
+    if (!composerDropEnabled() || composerDropDepth === 0) return;
+    event.preventDefault();
+    composerDropDepth = Math.max(0, composerDropDepth - 1);
+    if (composerDropDepth === 0) setComposerDropVisible(false);
+  });
+  chatBodyElement.addEventListener('drop', function (event) {
+    if (!composerDropEnabled()) return;
+    const dropped = dragFiles(event);
+    if (dropped.length === 0) {
+      if (dragHasFiles(event)) event.preventDefault();
+      hideComposerDrop();
+      return;
+    }
+    event.preventDefault();
+    hideComposerDrop();
+    enqueueDroppedFiles(dropped);
+  });
+}
+window.addEventListener('dragend', hideComposerDrop);
+window.addEventListener('blur', hideComposerDrop);
 
 if (filesToggleButton) filesToggleButton.addEventListener('click', toggleFilesPane);
 if (filesCloseButton) filesCloseButton.addEventListener('click', closeFilesPane);

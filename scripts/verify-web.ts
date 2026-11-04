@@ -507,6 +507,77 @@ async function observeUploads(page: Page): Promise<{ calls: UploadCall[] }> {
   return { calls };
 }
 
+interface DragFileSpec {
+  name: string;
+  mimeType: string;
+  base64?: string;
+  text?: string;
+}
+
+/** 在页面内构造 DataTransfer 并派发拖拽事件；只用于浏览器验收。 */
+async function dispatchDrag(
+  page: Page,
+  selector: string,
+  type: 'dragenter' | 'dragover' | 'dragleave' | 'drop',
+  files: DragFileSpec[],
+): Promise<void> {
+  const dataTransfer = await page.evaluateHandle(`(() => {
+    const payload = ${JSON.stringify({ files })};
+    const transfer = new DataTransfer();
+    for (const file of payload.files) {
+      const bytes = file.base64
+        ? Uint8Array.from(atob(file.base64), function (char) { return char.charCodeAt(0); })
+        : new TextEncoder().encode(file.text || '');
+      transfer.items.add(new File([bytes], file.name, { type: file.mimeType }));
+    }
+    return transfer;
+  })()`);
+  try {
+    await page.dispatchEvent(selector, type, { dataTransfer });
+  } finally {
+    await dataTransfer.dispose();
+  }
+}
+
+/** 记录拖拽上传，并支持用一次 413 模拟超大文件，不真正构造大文件。 */
+async function observeDropUploads(
+  page: Page,
+): Promise<{ calls: UploadCall[]; failNext: boolean }> {
+  const state = { calls: [] as UploadCall[], failNext: false };
+  await page.route('**/mcp-upload', async (route) => {
+    const request = route.request();
+    const headers = request.headers();
+    const encodedName = headers['mcpp-file-name'] ?? '';
+    let name = encodedName;
+    try {
+      name = decodeURIComponent(encodedName);
+    } catch {
+      name = encodedName;
+    }
+    state.calls.push({
+      name,
+      size: Number(headers['mcpp-file-size'] ?? 0),
+      bodySize: request.postDataBuffer()?.length ?? 0,
+      authorization: (headers['authorization'] ?? '').startsWith('Bearer '),
+      version: headers['mcpp-files-version'] ?? null,
+      at: Date.now(),
+    });
+    if (state.failNext) {
+      state.failNext = false;
+      await route.fulfill({
+        status: 413,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: { code: 'FILE_TOO_LARGE', message: '文件超过大小限制' },
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+  return state;
+}
+
 /** 记录真实 `/f/` 请求的 Range 头，不替换服务端响应。 */
 async function observeFileRanges(page: Page): Promise<{ ranges: Record<string, string> }> {
   const ranges: Record<string, string> = {};
@@ -2393,6 +2464,192 @@ async function main(): Promise<void> {
         Boolean(mobileMetrics) && mobileMetrics!.nameScroll <= mobileMetrics!.nameClient + 1,
         mobileMetrics,
       );
+      await mobile.context.close();
+      await context.close();
+    }
+
+    // 12. 聊天区/输入框拖拽上传：高亮、草稿保留、多文件 URL 插入、失败与移动端。
+    {
+      const dropGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '拖拽文件群',
+        members: [data.agentA.actor_id],
+      });
+      const dropRoomId = dropGroup.room.room_id;
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const upload = await observeDropUploads(page);
+
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await dispatchDrag(page, '#chat-body', 'dragenter', [
+        { name: '首页拖拽.png', mimeType: 'image/png', base64: PNG_BYTES.toString('base64') },
+      ]);
+      checkEqual('首页拖拽不显示上传层', await page.locator('#composer-drop').isHidden(), true);
+      checkEqual('首页拖拽不触发上传', upload.calls.length, 0);
+      await dispatchDrag(page, '#chat-body', 'dragleave', []);
+
+      await page.goto(`${server.base}/c/${dropRoomId}`);
+      await waitRoom(page, dropRoomId, '拖拽文件群');
+      await page.locator('#files-pane').waitFor({ state: 'visible' });
+      await page.locator('#files-empty').waitFor({ state: 'visible' });
+      checkEqual('聊天页拖拽层默认隐藏', await page.locator('#composer-drop').isHidden(), true);
+
+      await page.locator('#body').fill('已有草稿');
+      await page.evaluate(
+        `(() => { const box = document.getElementById('body'); box.focus(); box.setSelectionRange(box.value.length, box.value.length); })()`,
+      );
+      await dispatchDrag(page, '#chat-body', 'dragenter', [
+        { name: '拖拽图片.png', mimeType: 'image/png', base64: PNG_BYTES.toString('base64') },
+        { name: '拖拽说明.txt', mimeType: 'text/plain', text: '拖拽上传内容' },
+      ]);
+      await page.locator('#composer-drop').waitFor({ state: 'visible' });
+      checkEqual('拖拽进入显示上传层', await page.locator('#composer-drop').isVisible(), true);
+      await dispatchDrag(page, '#chat-body', 'dragleave', []);
+      await page.locator('#composer-drop').waitFor({ state: 'hidden' });
+      checkEqual('拖拽离开隐藏上传层', await page.locator('#composer-drop').isHidden(), true);
+
+      const uploadBase = upload.calls.length;
+      const bindBase = await mcpCallCount(page, 'network_room_file_bind');
+      const fileBase = await page.locator('#files-list .file-item').count();
+      await dispatchDrag(page, '#chat-body', 'drop', [
+        { name: '拖拽图片.png', mimeType: 'image/png', base64: PNG_BYTES.toString('base64') },
+        { name: '拖拽说明.txt', mimeType: 'text/plain', text: '拖拽上传内容' },
+      ]);
+      await page.locator('#composer-drop').waitFor({ state: 'hidden' });
+      checkEqual('放下文件后隐藏上传层', await page.locator('#composer-drop').isHidden(), true);
+      await waitUntil(() => upload.calls.length === uploadBase + 2, '拖拽上传两个文件');
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_room_file_bind')) >= bindBase + 2,
+        '拖拽执行两次 bind',
+      );
+      const dropUploads = upload.calls.slice(uploadBase);
+      const dropBinds = (await page.evaluate(
+        `(window.__mcpCalls || []).filter(function (call) { return call.name === 'network_room_file_bind'; }).slice(-2).map(function (call) { return { args: call.body.params.arguments, at: call.at }; })`,
+      )) as { args: { room_id?: string; file_id?: string }; at: number }[];
+      checkEqual('拖拽上传解码文件名', dropUploads[0]!.name, '拖拽图片.png');
+      checkEqual('拖拽上传图片大小头', dropUploads[0]!.size, PNG_BYTES.length);
+      check('拖拽上传携带 Bearer', dropUploads[0]!.authorization);
+      checkEqual('拖拽上传使用 MCPP Files v1', dropUploads[0]!.version, '1');
+      checkEqual('拖拽 bind 使用当前房间', dropBinds[0]!.args.room_id, dropRoomId);
+      check(
+        '拖拽多文件串行：第二次上传在第一次 bind 之后',
+        dropUploads[1]!.at >= dropBinds[0]!.at,
+      );
+
+      await waitUntil(async () => {
+        const value = await page.locator('#body').inputValue();
+        return (value.match(/\/f\/f_/g) || []).length === 2;
+      }, '两个公开 URL 插入输入框');
+      const draftValue = await page.locator('#body').inputValue();
+      check('拖拽上传保留已有草稿', draftValue.startsWith('已有草稿'));
+      const draftLines = draftValue.split('\n').map((line) => line.trim()).filter(Boolean);
+      checkEqual('草稿与两个文件各占一行', draftLines.length, 3);
+      check(
+        '两个公开 URL 各占一行',
+        draftLines[1]!.includes('/f/') && draftLines[2]!.includes('/f/'),
+      );
+      checkEqual(
+        '拖拽后光标位于插入内容之后',
+        (await page.evaluate(
+          `(() => { const box = document.getElementById('body'); return box.selectionStart === box.value.length; })()`,
+        )) as boolean,
+        true,
+      );
+      await waitForText(page, '#status', '链接已插入输入框');
+      await waitForText(page, '#files-list', '拖拽图片.png');
+      await waitForText(page, '#files-list', '拖拽说明.txt');
+      check(
+        '拖拽后文件栏刷新',
+        (await page.locator('#files-list .file-item').count()) >= fileBase + 2,
+      );
+      const droppedImageItem = page.locator('#files-list .file-item').filter({
+        hasText: '拖拽图片.png',
+      });
+      const droppedImageUrl = await droppedImageItem.locator('a.file-action').getAttribute('href');
+      const droppedImagePath = droppedImageUrl ? new URL(droppedImageUrl).pathname : '';
+      check(
+        '输入框插入的是公开 URL',
+        Boolean(droppedImagePath && draftValue.includes(server.base + droppedImagePath)),
+      );
+
+      const beforeSend = await messageCount(page);
+      await page.locator('#send').click();
+      await page.waitForFunction(
+        `document.querySelectorAll('#messages .msg').length > ${beforeSend}`,
+      );
+      const dropMessage = page.locator('#messages .msg').filter({ hasText: '已有草稿' }).last();
+      await dropMessage.waitFor();
+      await waitUntil(
+        async () => (await dropMessage.locator('.msg-file').count()) === 2,
+        '发送后出现两张文件卡片',
+        15_000,
+      );
+      checkEqual('发送后出现两张文件卡片', await dropMessage.locator('.msg-file').count(), 2);
+      checkEqual('发送后输入框清空', await page.locator('#body').inputValue(), '');
+
+      await page.locator('#body').fill('失败草稿');
+      await page.evaluate(
+        `(() => { const box = document.getElementById('body'); box.focus(); box.setSelectionRange(box.value.length, box.value.length); })()`,
+      );
+      const failedDraft = await page.locator('#body').inputValue();
+      const bindBeforeFailure = await mcpCallCount(page, 'network_room_file_bind');
+      upload.failNext = true;
+      await dispatchDrag(page, '#chat-body', 'drop', [
+        {
+          name: '拖拽超大.bin',
+          mimeType: 'application/octet-stream',
+          base64: Buffer.alloc(2048, 1).toString('base64'),
+        },
+      ]);
+      await waitForText(page, '#status', '文件超过大小限制');
+      check(
+        '拖拽上传失败显示可读错误',
+        ((await page.locator('#status').textContent()) ?? '').includes('拖拽超大.bin'),
+      );
+      checkEqual('拖拽上传失败保留草稿', await page.locator('#body').inputValue(), failedDraft);
+      await sleep(200);
+      checkEqual(
+        '拖拽上传失败不执行 bind',
+        await mcpCallCount(page, 'network_room_file_bind'),
+        bindBeforeFailure,
+      );
+
+      const mobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await mobile.page.goto(`${server.base}/c/${dropRoomId}`);
+      await waitRoom(mobile.page, dropRoomId, '拖拽文件群');
+      await dispatchDrag(mobile.page, '#chat-body', 'dragenter', [
+        { name: '移动拖拽.txt', mimeType: 'text/plain', text: 'mobile' },
+      ]);
+      await mobile.page.locator('#composer-drop').waitFor({ state: 'visible' });
+      const dropMetrics = (await mobile.page.evaluate(`(() => {
+        const overlay = document.getElementById('composer-drop');
+        const rect = overlay.getBoundingClientRect();
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          left: rect.left,
+          right: rect.right
+        };
+      })()`)) as { view: number; doc: number; left: number; right: number };
+      check(
+        '390px 拖拽层不横向溢出',
+        dropMetrics.doc <= dropMetrics.view &&
+          dropMetrics.left >= -1 &&
+          dropMetrics.right <= dropMetrics.view + 1,
+        dropMetrics,
+      );
+      await dispatchDrag(mobile.page, '#chat-body', 'dragleave', []);
       await mobile.context.close();
       await context.close();
     }
