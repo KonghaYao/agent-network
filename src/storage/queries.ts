@@ -23,6 +23,17 @@ export async function getActorBySession(db: D1Like, sessionId: string): Promise<
     .first<ActorRow>();
 }
 
+/** 只按已知 actor_id 批量读取；调用方负责去重与数量上限。 */
+export async function getActorsByIds(db: D1Like, actorIds: string[]): Promise<ActorRow[]> {
+  if (actorIds.length === 0) return [];
+  const placeholders = actorIds.map(() => '?').join(', ');
+  const result = await db
+    .prepare(`SELECT * FROM actors WHERE actor_id IN (${placeholders})`)
+    .bind(...actorIds)
+    .all<ActorRow>();
+  return result.results;
+}
+
 export async function getRoom(db: D1Like, roomId: string): Promise<RoomRow | null> {
   return db.prepare('SELECT * FROM rooms WHERE room_id = ?').bind(roomId).first<RoomRow>();
 }

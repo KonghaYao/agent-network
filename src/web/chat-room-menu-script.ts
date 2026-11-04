@@ -1,0 +1,221 @@
+/**
+ * 会话列表右键菜单：复制让 Agent 接入当前房间的提示词。
+ *
+ * 事件委托挂在 `#room-list` 上，`renderRooms` 重建列表后无需重新绑定。
+ * 桌面右键与移动端长按 500ms 打开同一菜单；提示词只包含 `location.origin`、
+ * `room_id` 与房间名，绝不包含 token、MCP URL 或任何凭据。
+ */
+export const CHAT_ROOM_MENU_SCRIPT = `
+const ROOM_MENU_LONG_PRESS_MS = 500;
+const ROOM_MENU_MARGIN = 8;
+const ROOM_MENU_COPY_LABEL = '复制 Agent 连接提示词';
+
+let roomMenuTarget = null;
+let roomMenuAnchor = null;
+let roomMenuPressTimer = null;
+let roomMenuPressPoint = null;
+let roomMenuSuppressClickUntil = 0;
+
+function roomMenuNode() {
+  return document.getElementById('room-menu');
+}
+
+function roomMenuResetStatus() {
+  const status = document.getElementById('room-menu-status');
+  if (!status) return;
+  status.textContent = '';
+  status.hidden = true;
+  status.classList.remove('error', 'ok');
+}
+
+function closeRoomMenu() {
+  const menu = roomMenuNode();
+  if (roomMenuPressTimer) {
+    clearTimeout(roomMenuPressTimer);
+    roomMenuPressTimer = null;
+  }
+  roomMenuPressPoint = null;
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  roomMenuTarget = null;
+  roomMenuAnchor = null;
+  const button = document.getElementById('room-menu-copy-prompt');
+  if (button) button.textContent = ROOM_MENU_COPY_LABEL;
+  roomMenuResetStatus();
+}
+
+/** 菜单靠近光标显示；越界时向左/向上翻转，保证不溢出视口。 */
+function positionRoomMenu(menu, x, y) {
+  menu.hidden = false;
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+  const rect = menu.getBoundingClientRect();
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  let left = x;
+  let top = y;
+  if (left + rect.width + ROOM_MENU_MARGIN > viewportWidth) {
+    left = viewportWidth - rect.width - ROOM_MENU_MARGIN;
+  }
+  if (left < ROOM_MENU_MARGIN) left = ROOM_MENU_MARGIN;
+  if (top + rect.height + ROOM_MENU_MARGIN > viewportHeight) top = y - rect.height;
+  if (top < ROOM_MENU_MARGIN) top = ROOM_MENU_MARGIN;
+  menu.style.left = Math.round(left) + 'px';
+  menu.style.top = Math.round(top) + 'px';
+}
+
+function openRoomMenu(link, x, y) {
+  const menu = roomMenuNode();
+  const button = document.getElementById('room-menu-copy-prompt');
+  if (!menu || !button) return;
+  const roomId = link.getAttribute('data-room-id') || '';
+  if (!roomId) return;
+  const kind = link.getAttribute('data-room-kind');
+  const roomName = (link.getAttribute('data-room-name') || '').trim() ||
+    (kind === 'group' ? '群聊' : '单聊');
+  roomMenuTarget = { roomId: roomId, roomName: roomName };
+  roomMenuAnchor = link;
+  button.textContent = ROOM_MENU_COPY_LABEL;
+  roomMenuResetStatus();
+  positionRoomMenu(menu, x, y);
+  try {
+    button.focus({ preventScroll: true });
+  } catch (error) {
+    button.focus();
+  }
+}
+
+/** 提示词只描述接入步骤；凭据由用户自己的 MCP 客户端提供，页面不读取也不写入。 */
+function roomAgentPrompt(roomId, roomName) {
+  return '你是 WeBots Agent。请使用你自己的 WeBots MCP URL/token 接入，房间 ID：' +
+    roomId + '（' + roomName + '）。\\n' +
+    '1. network_room_get({ room_id }) 确认成员与权限；\\n' +
+    '2. network_history_list({ room_id, limit: 50 }) 读取最近消息；\\n' +
+    '3. 对需要回复的消息用 network_message_send({ request_id, client_message_id, room_id, body, invoke: [] })；\\n' +
+    '4. 保持 agentnet://stream 异步监听；预计超过 10 秒先发简短确认，再开始任务；\\n' +
+    '5. 如果收到 delivery，先 claim、处理、再 complete/fail。\\n' +
+    '技能文档：' + location.origin + '/skills/agent-network-curl.md\\n' +
+    '如果你还不是该房间成员，请让用户把你加入房间；如果你没有 MCP URL，请让用户新建 Agent 并复制提示词。';
+}
+
+async function copyRoomAgentPrompt() {
+  if (!roomMenuTarget) return;
+  const prompt = roomAgentPrompt(roomMenuTarget.roomId, roomMenuTarget.roomName);
+  const status = document.getElementById('room-menu-status');
+  const button = document.getElementById('room-menu-copy-prompt');
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      try {
+        await navigator.clipboard.writeText(prompt);
+      } catch (error) {
+        legacyCopyText(prompt);
+      }
+    } else {
+      legacyCopyText(prompt);
+    }
+  } catch (error) {
+    if (status) {
+      status.textContent = '复制失败：' + (error && error.message ? error.message : String(error));
+      status.hidden = false;
+      status.classList.add('error');
+    }
+    return;
+  }
+  if (status) {
+    status.textContent = '已复制';
+    status.hidden = false;
+    status.classList.remove('error');
+    status.classList.add('ok');
+  }
+  if (button) button.textContent = '已复制';
+}
+
+function clearRoomMenuPress() {
+  if (roomMenuPressTimer) {
+    clearTimeout(roomMenuPressTimer);
+    roomMenuPressTimer = null;
+  }
+  roomMenuPressPoint = null;
+}
+
+if (roomListElement) {
+  roomListElement.addEventListener('contextmenu', function (event) {
+    const link = event.target instanceof Element ? event.target.closest('a.room-item') : null;
+    if (!link || !roomListElement.contains(link)) return;
+    event.preventDefault();
+    clearRoomMenuPress();
+    openRoomMenu(link, event.clientX, event.clientY);
+  });
+
+  // 移动端没有右键：按住 500ms 打开同一菜单；移动超过 8px 视为滚动/拖拽。
+  roomListElement.addEventListener('pointerdown', function (event) {
+    if (event.pointerType !== 'touch' || !event.isPrimary) return;
+    const link = event.target instanceof Element ? event.target.closest('a.room-item') : null;
+    if (!link) return;
+    clearRoomMenuPress();
+    const x = event.clientX;
+    const y = event.clientY;
+    roomMenuPressPoint = { x: x, y: y };
+    roomMenuPressTimer = setTimeout(function () {
+      roomMenuPressTimer = null;
+      roomMenuPressPoint = null;
+      // 长按结束后浏览器仍会补发 click，阻止它跳转。
+      roomMenuSuppressClickUntil = Date.now() + 600;
+      openRoomMenu(link, x, y);
+    }, ROOM_MENU_LONG_PRESS_MS);
+  });
+  roomListElement.addEventListener('pointermove', function (event) {
+    if (!roomMenuPressPoint) return;
+    if (Math.abs(event.clientX - roomMenuPressPoint.x) > 8 ||
+      Math.abs(event.clientY - roomMenuPressPoint.y) > 8) {
+      clearRoomMenuPress();
+    }
+  });
+  roomListElement.addEventListener('pointerup', clearRoomMenuPress);
+  roomListElement.addEventListener('pointercancel', clearRoomMenuPress);
+  roomListElement.addEventListener('click', function (event) {
+    if (Date.now() >= roomMenuSuppressClickUntil) return;
+    const link = event.target instanceof Element ? event.target.closest('a.room-item') : null;
+    if (!link) return;
+    event.preventDefault();
+    event.stopPropagation();
+  });
+}
+
+const roomMenuCopyButton = document.getElementById('room-menu-copy-prompt');
+if (roomMenuCopyButton) {
+  roomMenuCopyButton.addEventListener('click', function () {
+    copyRoomAgentPrompt().catch(function () {});
+  });
+}
+
+document.addEventListener('pointerdown', function (event) {
+  const menu = roomMenuNode();
+  if (!menu || menu.hidden) return;
+  if (event.target instanceof Node && menu.contains(event.target)) return;
+  closeRoomMenu();
+}, true);
+
+document.addEventListener('keydown', function (event) {
+  if (event.key !== 'Escape') return;
+  const menu = roomMenuNode();
+  if (!menu || menu.hidden) return;
+  const anchor = roomMenuAnchor;
+  event.preventDefault();
+  closeRoomMenu();
+  if (anchor && document.contains(anchor)) {
+    try {
+      anchor.focus({ preventScroll: true });
+    } catch (error) {
+      anchor.focus();
+    }
+  }
+});
+
+// 滚动（含侧栏内部滚动）与窗口尺寸变化都会让菜单失去定位参照，直接关闭。
+document.addEventListener('scroll', function () {
+  clearRoomMenuPress();
+  closeRoomMenu();
+}, true);
+window.addEventListener('resize', closeRoomMenu);
+`;

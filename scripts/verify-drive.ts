@@ -45,7 +45,7 @@ async function uploadFile(
       'MCPP-File-Name': input.name,
       'MCPP-File-Size': String(bodyBytes.length),
     },
-    body: bodyBytes,
+    body: bodyBytes as unknown as BodyInit,
   });
   checkEqual(`MCPP 上传 ${input.name} 返回 201`, response.status, 201);
   return (await response.json()) as UploadResponse;

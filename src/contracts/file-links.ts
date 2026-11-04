@@ -13,6 +13,24 @@ import { LIMITS } from './limits';
 
 const FILE_ID = new RegExp(FILE_ID_PATTERN, 'u');
 
+/**
+ * 客户端内联脚本可用的 fileId 片段（去掉 `^`/`$`）。
+ *
+ * 网页用 `MESSAGE_FILE_ID_SOURCE` 构造与这里相同的精确 `f_<22>` 扫描，
+ * 避免客户端/服务端规则漂移；精确校验仍使用 `FILE_ID`。
+ */
+export const MESSAGE_FILE_ID_SOURCE = FILE_ID_PATTERN.replace(/^\^|\$$/gu, '');
+
+const ESCAPED_NEWLINES = /\\r\\n|\\n|\\r|\\t/gu;
+
+/**
+ * 仅供链接提取使用的副本：把字面量 `\r\n`、`\n`、`\r`、`\t` 归一化为
+ * 换行/空格。不修改存储正文、preview 或幂等哈希；调用方不要用它回写消息。
+ */
+export function normalizeEscapedNewlines(body: string): string {
+  return body.replace(ESCAPED_NEWLINES, (match) => (match === '\\t' ? ' ' : '\n'));
+}
+
 /** 向后扫描 URL 前缀时视为分隔符的字符（Markdown/引号/括号/中文标点）。 */
 const PREFIX_DELIMITERS = new Set([
   '"',
@@ -99,18 +117,20 @@ export function extractMessageFileLinks(body: string, publicOrigin: string): str
   const origin = normalizedOrigin(publicOrigin);
   if (origin === null) return [];
 
+  // 字面量 `\n`（字符串中实际是反斜杠 + n）不应污染 URL 前缀；只扫描副本。
+  const text = normalizeEscapedNewlines(body);
   const found: string[] = [];
   const seen = new Set<string>();
   const pattern = /\/f\/([A-Za-z0-9_-]+)/gu;
 
-  for (const match of body.matchAll(pattern)) {
+  for (const match of text.matchAll(pattern)) {
     if (found.length >= LIMITS.messageFileLinksMax) break;
     const fileId = match[1];
     if (fileId === undefined || !FILE_ID.test(fileId)) continue;
     const end = (match.index ?? 0) + match[0].length;
-    if (!validSuffix(body, end)) continue;
+    if (!validSuffix(text, end)) continue;
 
-    const prefix = prefixOf(body, match.index ?? 0);
+    const prefix = prefixOf(text, match.index ?? 0);
     if (prefix === null) continue;
     if (prefix.kind === 'absolute' && (prefix.userinfo || prefix.origin !== origin)) {
       continue;

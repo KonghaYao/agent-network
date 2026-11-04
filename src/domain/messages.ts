@@ -26,6 +26,7 @@ import {
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
 import {
+  getActorsByIds,
   getClaimedDelivery,
   getDelivery,
   getMember,
@@ -54,11 +55,21 @@ export interface MessageView extends MessagePreviewView {
 }
 
 export interface MessagePage {
-  items: MessageView[];
+  items: HistoryMessageView[];
   next_cursor: string | null;
   has_more: boolean;
   snapshot: string;
   head_seq: string;
+}
+
+/**
+ * 历史页的权威发送者类型，用于网页区分 AI Markdown 与人类纯文本。
+ *
+ * `null` 表示 actor 已不存在；网页回退到 members（可能也没有）后按纯文本渲染。
+ * `network_message_send` / `delivery_complete` 的返回结构不包含该字段。
+ */
+export interface HistoryMessageView extends MessageView {
+  sender_kind: 'human' | 'agent' | null;
 }
 
 export interface DeliverySeed {
@@ -629,6 +640,10 @@ export async function historyList(
     db,
     page.map((row) => row.message_id),
   );
+  // 一次 IN 查询取权威 kind，避免网页依赖成员列表或在成员被移出后丢失 AI 属性。
+  const senderIds = [...new Set(page.map((row) => row.sender_id))];
+  const senders = await getActorsByIds(db, senderIds);
+  const senderKinds = new Map(senders.map((actor) => [actor.actor_id, actor.kind]));
 
   const items = page.map((row) => {
     const summary = states.get(row.message_id);
@@ -636,6 +651,7 @@ export async function historyList(
       message_id: row.message_id,
       room_id: row.room_id,
       sender_id: row.sender_id,
+      sender_kind: senderKinds.get(row.sender_id) ?? null,
       created_seq: String(row.created_seq),
       preview: row.preview,
       body_bytes: row.body_bytes,

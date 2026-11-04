@@ -140,6 +140,9 @@ function renderRooms() {
     link.className = 'room-item' + (entry.room_id === activeRoomId ? ' active' : '');
     link.href = '/c/' + encodeURIComponent(entry.room_id);
     link.title = entry.name;
+    link.dataset.roomId = entry.room_id;
+    link.dataset.roomName = entry.name;
+    link.dataset.roomKind = entry.kind;
     if (entry.room_id === activeRoomId) link.setAttribute('aria-current', 'page');
     const avatar = avatarElement(entry.name, entry.kind);
     const main = document.createElement('div');

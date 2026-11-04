@@ -172,7 +172,7 @@ async function newAgentCreate(event) {
   newAgentSetError('');
   try {
     // 只复用浏览器 human 身份来申请 token；注册必须使用下面返回的新 token。
-    await ensureIdentity();
+    const me = await ensureIdentity();
     if (seq !== newAgentRequestSeq) return;
     const issued = await callTool('network_issue_token', {});
     if (seq !== newAgentRequestSeq) return;
@@ -210,12 +210,21 @@ async function newAgentCreate(event) {
       newAgentPromptInput.value = newAgentBuildPrompt(skillUrl, newAgentUrl, name);
     }
     if (newAgentResultElement) newAgentResultElement.hidden = false;
+    // 本地注册表只保存非敏感标识；保存失败不影响已创建的 Agent 与一次性 URL。
+    const registryError = agentRegistryAdd(me && me.actor_id, {
+      actor_id: registered.actor_id,
+      name: name,
+      agent_session_id: agentSessionId,
+      created_at: String(Date.now())
+    });
     if (newAgentCreateButton) {
       newAgentCreateButton.disabled = true;
       newAgentCreateButton.textContent = '已创建';
     }
     if (!newAgentShareInput || !newAgentShareInput.value) {
       newAgentSetError('Agent 已创建，但服务端未返回分享链接');
+    } else if (registryError) {
+      newAgentSetError('Agent 已创建，但' + registryError);
     }
     if (newAgentUrlInput) {
       newAgentUrlInput.focus();

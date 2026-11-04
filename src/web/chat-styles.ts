@@ -80,7 +80,8 @@ export const APP_STYLE = `
   .room-list { list-style: none; margin: 0; padding: 2px 8px 12px; }
   .room-list li { margin: 0; }
   .room-item { position: relative; display: flex; align-items: center; gap: 10px;
-    height: 64px; padding: 0 8px; border-radius: 6px; color: inherit; text-decoration: none; }
+    height: 64px; padding: 0 8px; border-radius: 6px; color: inherit; text-decoration: none;
+    touch-action: pan-y; -webkit-touch-callout: none; }
   .room-item:hover { background: var(--wx-hover); }
   .room-item.active { background: var(--wx-active); }
   .room-main { flex: 1 1 auto; min-width: 0; }
@@ -90,6 +91,21 @@ export const APP_STYLE = `
   .room-time { flex: 0 0 auto; margin-left: auto; font-size: 11px; color: var(--wx-muted); }
   .room-preview { margin-top: 3px; font-size: 12px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 会话右键/长按菜单：固定定位，靠近指针并限制在视口内。 */
+  .room-menu { position: fixed; z-index: 26; min-width: 208px;
+    max-width: calc(100vw - 16px); box-sizing: border-box; padding: 6px;
+    border-radius: 8px; background: var(--wx-panel); border: 1px solid var(--wx-line);
+    box-shadow: var(--wx-shadow); }
+  .room-menu[hidden] { display: none; }
+  .room-menu-item { display: block; width: 100%; box-sizing: border-box;
+    padding: 9px 10px; border: 0; border-radius: 4px; background: transparent;
+    color: var(--wx-text); font: inherit; font-size: 13px; text-align: left;
+    white-space: nowrap; }
+  .room-menu-item:hover, .room-menu-item:focus-visible { background: var(--wx-hover); }
+  .room-menu-status { margin: 4px 0 0; padding: 0 10px 2px; font-size: 12px;
+    color: var(--wx-green); }
+  .room-menu-status[hidden] { display: none; }
+  .room-menu-status.error { color: var(--wx-unread); }
   .avatar-wrap { position: relative; flex: 0 0 auto; display: block; width: 40px; height: 40px; }
   .unread { position: absolute; top: -1px; right: -1px; width: 9px; height: 9px;
     border-radius: 50%; background: var(--wx-unread); box-sizing: content-box;
@@ -302,8 +318,6 @@ export const APP_STYLE = `
     font-size: 12px; overflow-wrap: anywhere; }
   .modal-actions { justify-content: flex-end; }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-  /* 账号区文字按钮并排：复制 ID、新建 Agent 与手机扫码。 */
-  .account-scan + .account-scan { margin-left: 10px; }
 
   .new-agent-card { width: min(440px, 100%); box-sizing: border-box; }
   .new-agent-card .field input { box-sizing: border-box; }

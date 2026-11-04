@@ -11,11 +11,18 @@
  * `filePreviewKind` 对 `text/*` 的宽松回退。
  */
 export const CHAT_MESSAGE_FILES_SCRIPT = `
-const MESSAGE_FILE_MAX = 8;
 const MESSAGE_FILE_CACHE_MAX = 256;
 const MESSAGE_FILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const MESSAGE_FILE_FAILURE_TTL_MS = 60 * 1000;
 const MESSAGE_FILE_CONCURRENCY = 4;
+const MESSAGE_FILE_ESCAPED = /\\\\r\\\\n|\\\\n|\\\\r|\\\\t/g;
+const MESSAGE_FILE_ABSOLUTE = /^([A-Za-z][A-Za-z0-9+.-]*):\\/\\/([^/?#]+)$/;
+const MESSAGE_FILE_TOKEN_AFTER = /^[A-Za-z0-9_-]$/;
+// 与 src/contracts/file-links.ts 的 PREFIX_DELIMITERS 保持一致。
+const MESSAGE_FILE_DELIMITERS = "\\x22'\`()[]{}<>,;*|。，；：！？、）】》」』";
+const MESSAGE_FILE_LINK = new RegExp('/f/(' + MESSAGE_FILE_ID_SOURCE + ')', 'g');
+const MESSAGE_FILE_EXACT = new RegExp('^/f/(' + MESSAGE_FILE_ID_SOURCE + ')$');
+const MESSAGE_FILE_MARKDOWN = /\\[([^\\]\\n]{0,200})\\]\\(\\s*<?([^)\\s>]+)>?\\s*\\)/g;
 const MESSAGE_FILE_TRAILING = '.,;:!?()[]{}<>"\\'' +
   '。，、；：！？）】》」』”’…·';
 // 与公开下载头共享同一份白名单：SVG/HTML/XML/JS 属于主动内容。
@@ -42,7 +49,6 @@ const MESSAGE_FILE_ACTIVE = new Set([
   'text/ecmascript',
   'application/x-javascript'
 ]);
-const MESSAGE_FILE_LINK = /\\[([^\\]\\n]{0,200})\\]\\(\\s*<?((?:https?:\\/\\/|\\/f\\/)[^)\\s>]+)>?\\s*\\)|((?:https?:\\/\\/|\\/f\\/)[^\\s<>\\"']+)/g;
 const messageFileCache = new Map();
 const messageFileInflight = new Map();
 const messageFileQueue = [];
@@ -67,8 +73,47 @@ function messageFileDownloadHref(fileId) {
   return fileSafeUrl('/f/' + fileId + '?download=1');
 }
 
-/** 只接受同源 /f/f_<22>；query/hash 与尾部标点在这里被丢弃。 */
-function messageFileLink(raw) {
+/** 仅用于提取副本：字面量转义换行归一化，不回写消息。 */
+function messageFileNormalizeEscaped(text) {
+  return String(text || '').replace(MESSAGE_FILE_ESCAPED, function (match) {
+    return match === '\\\\t' ? ' ' : '\\n';
+  });
+}
+
+function messageFileDelimiter(char) {
+  return char === undefined || /\\s/.test(char) || MESSAGE_FILE_DELIMITERS.indexOf(char) >= 0;
+}
+
+/** 与 src/contracts/file-links.ts 的 prefixOf 同构：根相对或同源绝对 URL。 */
+function messageFilePrefix(text, index) {
+  let start = index;
+  while (start > 0 && !messageFileDelimiter(text.charAt(start - 1))) start -= 1;
+  const prefix = text.slice(start, index);
+  if (prefix === '') return { relative: true };
+  if (!MESSAGE_FILE_ABSOLUTE.test(prefix)) return null;
+  let url;
+  try {
+    url = new URL(prefix + '/');
+  } catch (error) {
+    return null;
+  }
+  return {
+    relative: false,
+    origin: url.origin,
+    userinfo: Boolean(url.username || url.password)
+  };
+}
+
+/** 与服务端 validSuffix 对齐：拒绝斜杠、多余 token 字符和点扩展名。 */
+function messageFileValidSuffix(text, end) {
+  const next = text.charAt(end);
+  if (next === '/' || MESSAGE_FILE_TOKEN_AFTER.test(next)) return false;
+  if (next === '.') return !MESSAGE_FILE_TOKEN_AFTER.test(text.charAt(end + 1));
+  return true;
+}
+
+/** Markdown 链接目标精确匹配 /f/fileId；仅用于读取标签。 */
+function messageFileTarget(raw) {
   let value = String(raw || '').trim();
   while (value.length > 0 &&
     MESSAGE_FILE_TRAILING.indexOf(value.charAt(value.length - 1)) >= 0) {
@@ -82,20 +127,39 @@ function messageFileLink(raw) {
     return null;
   }
   if (url.origin !== location.origin || url.username || url.password) return null;
-  const match = url.pathname.match(/^\\/f\\/(f_[A-Za-z0-9_-]{22})$/);
-  if (!match) return null;
-  return { fileId: match[1], href: '/f/' + match[1] };
+  const match = url.pathname.match(MESSAGE_FILE_EXACT);
+  return match ? match[1] : null;
+}
+
+function messageFileLabels(text) {
+  const labels = new Map();
+  MESSAGE_FILE_MARKDOWN.lastIndex = 0;
+  let match;
+  while ((match = MESSAGE_FILE_MARKDOWN.exec(text)) !== null) {
+    const fileId = messageFileTarget(match[2]);
+    if (fileId && !labels.has(fileId)) labels.set(fileId, match[1]);
+  }
+  return labels;
+}
+
+/** HEAD 失败时的文件名：去掉成对 Markdown 标记，避免显示星号或反引号。 */
+function messageFileFallbackName(value) {
+  let text = messageFileCleanName(value);
+  text = text.replace(/^\\*\\*([\\s\\S]+)\\*\\*$/, '$1')
+    .replace(/^__([\\s\\S]+)__$/, '$1')
+    .replace(/^\\x60([^\\x60]+)\\x60$/, '$1');
+  return messageFileCleanName(text);
 }
 
 /** HEAD 失败时使用 URL 前一行文件名；Markdown 标签优先。 */
 function messageFileFallback(text, index, label) {
-  const labelName = messageFileCleanName(label);
+  const labelName = messageFileFallbackName(label);
   if (labelName && labelName.indexOf('/f/') < 0 && !/^https?:/i.test(labelName)) {
     return labelName;
   }
   const lines = text.slice(0, index).split('\\n');
   for (let cursor = lines.length - 2; cursor >= 0; cursor -= 1) {
-    const line = messageFileCleanName(lines[cursor]);
+    const line = messageFileFallbackName(lines[cursor]);
     if (!line) continue;
     if (line.indexOf('/f/') >= 0 || /^https?:/i.test(line)) return '';
     return line;
@@ -103,22 +167,28 @@ function messageFileFallback(text, index, label) {
   return '';
 }
 
-/** 扫描正文（含 Markdown 链接），按出现顺序去重并限制 8 个。 */
+/** 精确扫描同源 /f/ 文件链接，前缀/后缀校验与去重上限均与服务端一致。 */
 function messageFileLinks(text) {
-  const value = String(text || '');
+  const value = messageFileNormalizeEscaped(text);
+  const labels = messageFileLabels(value);
   const entries = [];
   const seen = new Set();
   MESSAGE_FILE_LINK.lastIndex = 0;
   let match;
   while ((match = MESSAGE_FILE_LINK.exec(value)) !== null) {
     if (entries.length >= MESSAGE_FILE_MAX) break;
-    const link = messageFileLink(match[2] || match[3] || '');
-    if (!link || seen.has(link.fileId)) continue;
-    seen.add(link.fileId);
+    const fileId = match[1];
+    const end = match.index + match[0].length;
+    if (!messageFileValidSuffix(value, end)) continue;
+    const prefix = messageFilePrefix(value, match.index);
+    if (!prefix) continue;
+    if (!prefix.relative && (prefix.userinfo || prefix.origin !== location.origin)) continue;
+    if (seen.has(fileId)) continue;
+    seen.add(fileId);
     entries.push({
-      fileId: link.fileId,
-      href: link.href,
-      fallback: messageFileFallback(value, match.index, match[1] || '')
+      fileId: fileId,
+      href: '/f/' + fileId,
+      fallback: messageFileFallback(value, match.index, labels.get(fileId) || '')
     });
   }
   return entries;

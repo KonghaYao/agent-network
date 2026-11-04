@@ -168,6 +168,8 @@ function syntheticFileId(): string {
 
 async function databaseCases(
   connection: McpConnection,
+  recipientConnection: McpConnection,
+  recipientId: string,
   actorIdValue: string,
   rooms: { quota: string; byte: string; expiry: string; cleanup: string },
 ): Promise<void> {
@@ -244,6 +246,54 @@ async function databaseCases(
     check(
       '数量配额满时新文件未写入 room_files',
       db.prepare('SELECT 1 AS ok FROM room_files WHERE file_id = ?').get(archiveOverflow.fileId) ===
+        null,
+    );
+
+    // 配额满时 final_body 自动归档同样 best-effort 跳过，complete 仍成功。
+    const quotaFinal = await uploadTestFile(recipientConnection.token, {
+      name: 'quota-final.txt',
+      mimeType: 'text/plain',
+      body: 'q',
+    });
+    const quotaTrigger = await sendMessage(connection, rooms.quota, '配额满 final_body', {
+      invoke: [recipientId],
+    });
+    const quotaInbox = await callTool<{
+      items: { delivery_id: string; message_id: string }[];
+    }>(recipientConnection.client, 'network_inbox_list', { state: 'pending', limit: 50 });
+    const quotaDelivery = quotaInbox.items.find(
+      (item) => item.message_id === quotaTrigger.message.message_id,
+    );
+    check('数量配额满 final_body：找到待办', Boolean(quotaDelivery), quotaInbox.items);
+    const quotaClaimed = await callTool<{
+      delivery_id: string;
+      attempt: number;
+      claim_id: string | null;
+    }>(recipientConnection.client, 'network_delivery_claim', {
+      request_id: newRequestId('claim'),
+      delivery_id: quotaDelivery!.delivery_id,
+    });
+    const quotaCompleted = await callTool<{ message: { message_id: string } | null }>(
+      recipientConnection.client,
+      'network_delivery_complete',
+      {
+        request_id: newRequestId('complete'),
+        delivery_id: quotaClaimed.delivery_id,
+        attempt: quotaClaimed.attempt,
+        claim_id: quotaClaimed.claim_id ?? '',
+        final_body: `配额满最终文件 ${quotaFinal.publicUrl}`,
+      },
+    );
+    check('数量配额满 final_body complete 仍成功', Boolean(quotaCompleted.message));
+    const quotaFinalCount = db
+      .prepare(
+        'SELECT COUNT(*) AS n FROM room_files WHERE room_id = ? AND deleted_at IS NULL AND expires_at > ?',
+      )
+      .get(rooms.quota, now) as { n: number };
+    checkEqual('数量配额满 final_body 自动归档跳过', quotaFinalCount.n, LIMITS.roomFilesPerRoom);
+    check(
+      '数量配额满 final_body 文件未写入 room_files',
+      db.prepare('SELECT 1 AS ok FROM room_files WHERE file_id = ?').get(quotaFinal.fileId) ===
         null,
     );
 
@@ -749,11 +799,12 @@ async function main(): Promise<void> {
     await runAutoArchiveCases(
       aConn,
       bConn,
+      b.actor_id,
       { archive: archiveRoom, second: archiveSecondRoom },
       { bind, listFiles, deleteFile },
     );
 
-    await databaseCases(aConn, a.actor_id, {
+    await databaseCases(aConn, bConn, b.actor_id, a.actor_id, {
       quota: quotaRoom,
       byte: byteRoom,
       expiry: expiryRoom,

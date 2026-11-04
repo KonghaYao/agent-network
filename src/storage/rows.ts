@@ -7,6 +7,9 @@ export interface ActorRow {
   inbox_head_seq: number;
   inbox_min_seq: number;
   pending_count: number;
+  /** 管理列表软归档时间；NULL 表示未归档，不参与任何授权判断。 */
+  archived_at: number | null;
+  archived_by: string | null;
   created_at: number;
   updated_at: number;
 }

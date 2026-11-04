@@ -13,7 +13,9 @@ import { resolve } from 'node:path';
 
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 
+import { extractMessageFileLinks } from '../src/contracts/file-links';
 import { check, checkEqual, checksPassed, rawRpc, sleep } from './lib/harness';
+import { messageFileLinkFixtures } from './lib/room-file-archive';
 
 interface Actor {
   actor_id: string;
@@ -481,7 +483,7 @@ async function uploadRealFile(
       'MCPP-File-Name': encodeURIComponent(spec.name),
       'MCPP-File-Size': String(bytes.length),
     },
-    body: bytes,
+    body: bytes as unknown as BodyInit,
   });
   if (response.status !== 201) {
     throw new Error(`真实上传失败 ${spec.name}: HTTP ${response.status}`);
@@ -714,6 +716,223 @@ async function main(): Promise<void> {
         await page.locator(`${roomLink(data.direct.room.room_id)} .presence-dot`).count(),
         1,
       );
+      await context.close();
+    }
+
+    // 1b. 会话右键菜单：复制 Agent 连接提示词、关闭方式与移动端长按。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.waitForFunction(
+        `(() => {
+          const link = document.querySelector(${JSON.stringify(roomLink(data.direct.room.room_id))});
+          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(data.agentA.name)}));
+        })()`,
+      );
+      await page.evaluate(`(() => {
+        window.__copiedRoomPrompt = null;
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: function (text) {
+              window.__copiedRoomPrompt = text;
+              return Promise.resolve();
+            }
+          }
+        });
+      })()`);
+
+      const directLink = page.locator(roomLink(data.direct.room.room_id));
+      await directLink.click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      check('右键会话显示自定义菜单', true);
+      checkEqual(
+        '菜单项为复制 Agent 连接提示词',
+        (await page.locator('#room-menu-copy-prompt').textContent())?.trim(),
+        '复制 Agent 连接提示词',
+      );
+      const menuMetrics = (await page.evaluate(`(() => {
+        const rect = document.getElementById('room-menu').getBoundingClientRect();
+        return {
+          left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+          view: window.innerWidth, viewHeight: window.innerHeight,
+          doc: document.documentElement.scrollWidth
+        };
+      })()`)) as {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+        view: number;
+        viewHeight: number;
+        doc: number;
+      };
+      check(
+        '桌面菜单不超出视口',
+        menuMetrics.left >= 0 &&
+          menuMetrics.top >= 0 &&
+          menuMetrics.right <= menuMetrics.view + 1 &&
+          menuMetrics.bottom <= menuMetrics.viewHeight + 1 &&
+          menuMetrics.doc <= menuMetrics.view,
+        menuMetrics,
+      );
+
+      await page.locator('#room-menu-copy-prompt').click();
+      await page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已复制'`,
+      );
+      check('复制后菜单显示“已复制”', true);
+      const roomPrompt = (await page.evaluate('window.__copiedRoomPrompt')) as string | null;
+      check(
+        '提示词包含房间 ID',
+        Boolean(roomPrompt && roomPrompt.includes(data.direct.room.room_id)),
+        roomPrompt,
+      );
+      check(
+        '提示词包含房间名',
+        Boolean(roomPrompt && roomPrompt.includes(data.agentA.name)),
+        roomPrompt,
+      );
+      check(
+        '提示词包含接入工具与统一流',
+        Boolean(roomPrompt) &&
+          roomPrompt!.includes('network_room_get') &&
+          roomPrompt!.includes('network_history_list') &&
+          roomPrompt!.includes('network_message_send') &&
+          roomPrompt!.includes('agentnet://stream') &&
+          roomPrompt!.includes('超过 10 秒'),
+        roomPrompt,
+      );
+      check(
+        '提示词包含技能文档 URL',
+        Boolean(roomPrompt && roomPrompt.includes(`${server.base}/skills/agent-network-curl.md`)),
+        roomPrompt,
+      );
+      check(
+        '提示词不含真实 token 或带 token 的 MCP URL',
+        Boolean(roomPrompt) &&
+          !roomPrompt!.includes(data.humanToken) &&
+          !roomPrompt!.includes(data.agentAToken) &&
+          !roomPrompt!.includes('/mcp?token=') &&
+          !roomPrompt!.includes('ank_'),
+        roomPrompt,
+      );
+
+      await page.locator('#empty-state').click();
+      checkEqual('点击菜单外关闭菜单', await page.locator('#room-menu').isHidden(), true);
+
+      await directLink.click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      await page.keyboard.press('Escape');
+      checkEqual('Escape 关闭菜单', await page.locator('#room-menu').isHidden(), true);
+      checkEqual(
+        '关闭后菜单项恢复默认文案',
+        (await page.locator('#room-menu-copy-prompt').textContent())?.trim(),
+        '复制 Agent 连接提示词',
+      );
+
+      await directLink.click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      await page.evaluate(
+        `document.querySelector('.sidebar-list').dispatchEvent(new Event('scroll'))`,
+      );
+      checkEqual('滚动关闭菜单', await page.locator('#room-menu').isHidden(), true);
+
+      await page.locator(roomLink(data.group.room.room_id)).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      await page.locator(roomLink(data.group.room.room_id)).click();
+      await waitRoom(page, data.group.room.room_id, '测试群');
+      checkEqual('切换房间关闭菜单', await page.locator('#room-menu').isHidden(), true);
+      await context.close();
+    }
+
+    // 1c. 移动端 390px 长按会话打开同一菜单，复制内容与布局均可用。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.evaluate(`(() => {
+        window.__copiedRoomPrompt = null;
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: function (text) {
+              window.__copiedRoomPrompt = text;
+              return Promise.resolve();
+            }
+          }
+        });
+      })()`);
+      const groupSelector = roomLink(data.group.room.room_id);
+      await page.evaluate(`(() => {
+        const link = document.querySelector(${JSON.stringify(groupSelector)});
+        const rect = link.getBoundingClientRect();
+        link.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          pointerType: 'touch',
+          isPrimary: true,
+          pointerId: 11,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2
+        }));
+      })()`);
+      await sleep(650);
+      checkEqual(
+        '390px 长按会话打开菜单',
+        await page.locator('#room-menu').isVisible(),
+        true,
+      );
+      const mobileMenuMetrics = (await page.evaluate(`(() => {
+        const rect = document.getElementById('room-menu').getBoundingClientRect();
+        return {
+          left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+          view: window.innerWidth, viewHeight: window.innerHeight,
+          doc: document.documentElement.scrollWidth
+        };
+      })()`)) as {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+        view: number;
+        viewHeight: number;
+        doc: number;
+      };
+      check(
+        '390px 菜单不横向溢出',
+        mobileMenuMetrics.left >= 0 &&
+          mobileMenuMetrics.top >= 0 &&
+          mobileMenuMetrics.right <= mobileMenuMetrics.view + 1 &&
+          mobileMenuMetrics.bottom <= mobileMenuMetrics.viewHeight + 1 &&
+          mobileMenuMetrics.doc <= mobileMenuMetrics.view,
+        mobileMenuMetrics,
+      );
+      await page.locator('#room-menu-copy-prompt').click();
+      await page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已复制'`,
+      );
+      check(
+        '390px 长按菜单可复制当前房间提示词',
+        Boolean(
+          ((await page.evaluate('window.__copiedRoomPrompt')) as string | null)?.includes(
+            data.group.room.room_id,
+          ),
+        ),
+      );
+      await page.mouse.click(200, 600);
+      checkEqual('390px 点击菜单外关闭', await page.locator('#room-menu').isHidden(), true);
       await context.close();
     }
 
@@ -982,9 +1201,20 @@ async function main(): Promise<void> {
       checkEqual('重开后提示词清空', await page.inputValue('#new-agent-prompt'), '');
       checkEqual('重开后技能 URL 清空', await page.inputValue('#new-agent-skill-url'), '');
       checkEqual(
-        'localStorage 只保存浏览器 token',
-        await page.evaluate('Object.keys(localStorage).join(",")'),
-        'agent-network-token',
+        'localStorage 保存浏览器 token 与非敏感 Agents 注册表',
+        await page.evaluate('Object.keys(localStorage).sort().join(",")'),
+        'agent-network-agents-v1,agent-network-token',
+      );
+      const registryDump = (await page.evaluate(
+        `localStorage.getItem('agent-network-agents-v1') || ''`,
+      )) as string;
+      check(
+        '本地 Agents 注册表不含 MCP URL、token、提示词或分享链接',
+        registryDump.length > 0 &&
+          !registryDump.includes(newAgentMcpUrl) &&
+          !registryDump.includes('/mcp?token=') &&
+          !registryDump.includes(newAgentPrompt) &&
+          !registryDump.includes(newAgentShareUrl),
       );
       await page.locator('#new-agent-close').click();
       await context.close();
@@ -1068,7 +1298,378 @@ async function main(): Promise<void> {
       await context.close();
     }
 
-    // 2b-2. 群聊创建后添加成员：owner 权限、分页好友、排除现有成员、重复与失败错误、移动端。
+    // 2b-2. Agents 弹窗：本地注册表、默认隐藏归档、归档/取消归档、错误与移动端。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      check('账号区显示 Agents 入口', await page.locator('#agents').isVisible());
+      check(
+        '300px 侧栏账号区不横向溢出',
+        (await page.evaluate(`(() => {
+          const sidebar = document.querySelector('.sidebar');
+          const account = document.getElementById('account');
+          if (!sidebar || !account) return false;
+          return account.getBoundingClientRect().right <= sidebar.getBoundingClientRect().right + 1;
+        })()`)) as boolean,
+      );
+
+      await page.locator('#agents').click();
+      check('Agents 弹窗打开', await page.locator('#agents-modal').isVisible());
+      check(
+        'Agents 弹窗提示本地列表与归档语义',
+        ((await page.locator('.agents-hint').textContent()) ?? '').includes(
+          '列表仅保存在此浏览器',
+        ) &&
+          ((await page.locator('.agents-hint').textContent()) ?? '').includes(
+            '归档不会恢复 MCP URL/token',
+          ),
+      );
+      check(
+        '无本地记录时显示空态',
+        ((await page.locator('#agents-empty').textContent()) ?? '').includes('还没有 Agent'),
+      );
+      checkEqual('默认隐藏已归档分组', await page.locator('#agents-archived-section').isHidden(), true);
+      await page.locator('#agents-close').click();
+      checkEqual('Agents 弹窗可关闭', await page.locator('#agents-modal').isHidden(), true);
+
+      await page.locator('#new-agent').click();
+      await page.fill('#new-agent-name', '归档测试 Agent');
+      await page.locator('#new-agent-create').click();
+      await page.locator('#new-agent-result').waitFor({ state: 'visible' });
+      const archivedAgentMcpUrl = await page.inputValue('#new-agent-url');
+      const archivedAgentShareUrl = await page.inputValue('#new-agent-share');
+      await page.locator('#new-agent-close').click();
+
+      const registry = (await page.evaluate(`(() => {
+        try { return JSON.parse(localStorage.getItem('agent-network-agents-v1') || 'null'); }
+        catch (error) { return null; }
+      })()`)) as { v: number; items: Record<string, unknown>[] } | null;
+      check(
+        '新建 Agent 写入本地注册表',
+        Boolean(registry) && registry!.v === 1 && registry!.items.length === 1,
+      );
+      const registryItem = (registry?.items[0] ?? {}) as Record<string, unknown>;
+      checkEqual(
+        '注册表只保存非敏感字段',
+        Object.keys(registryItem).sort().join(','),
+        'actor_id,agent_session_id,created_at,name,owner_actor_id',
+      );
+      checkEqual('注册表按当前 human 隔离', registryItem.owner_actor_id, data.human.actor_id);
+      checkEqual('注册表记录 Agent 名称', registryItem.name, '归档测试 Agent');
+      const registryDump = JSON.stringify(registry);
+      check(
+        '注册表不含 MCP URL、token、提示词或分享链接',
+        !registryDump.includes(archivedAgentMcpUrl) &&
+          !registryDump.includes('/mcp?') &&
+          !registryDump.includes(archivedAgentShareUrl),
+      );
+      const archivedAgentId = String(registryItem.actor_id ?? '');
+      check('注册表 actor_id 与页面创建一致', archivedAgentId.startsWith('agt_'));
+
+      await page.locator('#agents').click();
+      await page.waitForFunction(`(() => {
+        const button = document.querySelector('#agents-list button[data-action="copy-share"]');
+        return Boolean(button) && !button.disabled;
+      })()`);
+      checkEqual('Agents 列表显示本地 Agent', await page.locator('#agents-list .agents-item').count(), 1);
+      checkEqual(
+        'Agents 条目显示服务端分享链接',
+        await page.locator('#agents-list .agents-item-share').textContent(),
+        archivedAgentShareUrl,
+      );
+      check(
+        'Agents 条目显示 Agent 名称',
+        ((await page.locator('#agents-list .agents-item-name').textContent()) ?? '').includes(
+          '归档测试 Agent',
+        ),
+      );
+      checkEqual('默认不展开已归档', await page.locator('#agents-archived-section').isHidden(), true);
+      checkEqual(
+        '默认显示已归档计数 0',
+        await page.locator('#agents-toggle').textContent(),
+        '显示已归档 (0)',
+      );
+
+      await page.evaluate(`(() => {
+        window.__copiedShare = null;
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: function (text) {
+              window.__copiedShare = text;
+              return Promise.resolve();
+            }
+          }
+        });
+      })()`);
+      await page.locator('#agents-list button[data-action="copy-share"]').click();
+      await page.waitForFunction(
+        `(document.getElementById('agents-note').textContent || '').includes('已复制')`,
+      );
+      checkEqual(
+        '复制分享链接内容正确',
+        await page.evaluate('window.__copiedShare'),
+        archivedAgentShareUrl,
+      );
+
+      await page.locator('#agents-list button[data-action="archive"]').click();
+      await page.waitForFunction(`document.getElementById('agents-list').children.length === 0`);
+      checkEqual('归档后默认列表隐藏条目', await page.locator('#agents-list .agents-item').count(), 0);
+      checkEqual(
+        '归档后计数变为 1',
+        await page.locator('#agents-toggle').textContent(),
+        '显示已归档 (1)',
+      );
+      checkEqual('归档后已归档分组仍隐藏', await page.locator('#agents-archived-section').isHidden(), true);
+      check(
+        '归档后显示状态提示',
+        ((await page.locator('#agents-note').textContent()) ?? '').includes('已归档'),
+      );
+      await page.locator('#agents-toggle').click();
+      checkEqual('点击后展开已归档分组', await page.locator('#agents-archived-section').isVisible(), true);
+      checkEqual(
+        '已归档条目显示 badge',
+        await page.locator('#agents-archived-list .agents-badge').first().textContent(),
+        '已归档',
+      );
+      check(
+        '已归档条目提供取消归档',
+        await page.locator('#agents-archived-list button[data-action="unarchive"]').isVisible(),
+      );
+      await page.locator('#agents-toggle').click();
+      checkEqual('再次点击隐藏已归档分组', await page.locator('#agents-archived-section').isHidden(), true);
+
+      await page.locator('#agents-close').click();
+      await page.locator('#agents').click();
+      await page.waitForFunction(`(() => {
+        const button = document.querySelector('#agents-archived-list button[data-action="unarchive"]');
+        return Boolean(button) && !button.disabled;
+      })()`);
+      checkEqual(
+        '重开弹窗默认仍隐藏已归档',
+        await page.locator('#agents-archived-section').isHidden(),
+        true,
+      );
+      checkEqual('重开弹窗未归档列表为空', await page.locator('#agents-list .agents-item').count(), 0);
+      await page.locator('#agents-toggle').click();
+      await page.locator('#agents-archived-list button[data-action="unarchive"]').click();
+      await page.waitForFunction(`document.querySelectorAll('#agents-list .agents-item').length === 1`);
+      checkEqual(
+        '取消归档后条目回到未归档列表',
+        await page.locator('#agents-archived-list .agents-item').count(),
+        0,
+      );
+      checkEqual(
+        '取消归档后计数为 0',
+        await page.locator('#agents-toggle').textContent(),
+        '隐藏已归档 (0)',
+      );
+
+      await page.locator('#agents-list button[data-action="archive"]').click();
+      await page.waitForFunction(`document.getElementById('agents-list').children.length === 0`);
+      await page.locator('#agents-close').click();
+      await page.reload();
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.locator('#agents').click();
+      await page.waitForFunction(`(() => {
+        const button = document.querySelector('#agents-archived-list button[data-action="unarchive"]');
+        return Boolean(button) && !button.disabled;
+      })()`);
+      checkEqual('刷新后归档状态保持', await page.locator('#agents-list .agents-item').count(), 0);
+      checkEqual(
+        '刷新后默认仍隐藏已归档',
+        await page.locator('#agents-archived-section').isHidden(),
+        true,
+      );
+      await page.locator('#agents-toggle').click();
+      checkEqual(
+        '刷新后可展开已归档',
+        await page.locator('#agents-archived-list .agents-item').count(),
+        1,
+      );
+      await page.locator('#agents-archived-list button[data-action="unarchive"]').click();
+      await page.waitForFunction(`document.querySelectorAll('#agents-list .agents-item').length === 1`);
+      await page.locator('#agents-close').click();
+
+      const savedRegistry = (await page.evaluate(
+        `localStorage.getItem('agent-network-agents-v1') || ''`,
+      )) as string;
+
+      await page.route('**/mcp', async (route) => {
+        const name = route.request().headers()['mcp-name'];
+        if (name !== 'network_agents_get' && name !== 'network_agent_archive') {
+          await route.continue();
+          return;
+        }
+        let id: unknown = null;
+        try {
+          id = (route.request().postDataJSON() as { id?: unknown }).id;
+        } catch {
+          id = null;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32603,
+              message: name === 'network_agents_get' ? '模拟同步失败' : '模拟归档失败',
+              data: { code: 'INTERNAL_ERROR' },
+            },
+          }),
+        });
+      });
+      await page.locator('#agents').click();
+      await page.waitForFunction(
+        `(document.getElementById('agents-error').textContent || '').includes('同步失败')`,
+      );
+      checkEqual('同步失败时仍显示本地记录', await page.locator('#agents-list .agents-item').count(), 1);
+      check(
+        '同步失败显示可读错误',
+        ((await page.locator('#agents-error').textContent()) ?? '').includes('显示本地记录'),
+      );
+      await page.locator('#agents-list button[data-action="archive"]').click();
+      await page.waitForFunction(
+        `(document.getElementById('agents-error').textContent || '').includes('归档失败')`,
+      );
+      checkEqual('归档失败后条目保持未归档', await page.locator('#agents-list .agents-item').count(), 1);
+      checkEqual(
+        '归档失败不更新计数',
+        await page.locator('#agents-toggle').textContent(),
+        '显示已归档 (0)',
+      );
+      await page.locator('#agents-close').click();
+      await page.unroute('**/mcp');
+      await context.close();
+
+      const otherToken = crypto.randomUUID();
+      await rawTool<Actor>(otherToken, 'network_register', {
+        request_id: requestId('web_other_human'),
+        kind: 'human',
+        name: '隔离访客',
+      });
+      const isolated = await makeContext(
+        browser,
+        otherToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await isolated.page.goto(`${server.base}/`);
+      await isolated.page.waitForFunction(
+        `document.getElementById('account-name') && document.getElementById('account-name').textContent !== '未登录'`,
+      );
+      await isolated.page.evaluate(
+        (value) => localStorage.setItem('agent-network-agents-v1', value),
+        savedRegistry,
+      );
+      await isolated.page.reload();
+      await isolated.page.waitForFunction(
+        `document.getElementById('account-name') && document.getElementById('account-name').textContent !== '未登录'`,
+      );
+      await isolated.page.locator('#agents').click();
+      checkEqual(
+        '其他 human 看不到上一个身份的本地 Agent',
+        await isolated.page.locator('#agents-list .agents-item').count(),
+        0,
+      );
+      check(
+        '其他 human 显示空态',
+        ((await isolated.page.locator('#agents-empty').textContent()) ?? '').includes('还没有 Agent'),
+      );
+      await isolated.page.evaluate(`localStorage.setItem('agent-network-agents-v1', '{broken json')`);
+      await isolated.page.reload();
+      await isolated.page.waitForFunction(
+        `document.getElementById('account-name') && document.getElementById('account-name').textContent !== '未登录'`,
+      );
+      await isolated.page.locator('#agents').click();
+      await isolated.page.waitForFunction(
+        `(document.getElementById('agents-error').textContent || '').includes('已损坏')`,
+      );
+      checkEqual(
+        '注册表解析失败回退空列表',
+        await isolated.page.locator('#agents-list .agents-item').count(),
+        0,
+      );
+      check(
+        '注册表解析失败显示提示',
+        ((await isolated.page.locator('#agents-empty').textContent()) ?? '').includes('还没有 Agent'),
+      );
+      await isolated.context.close();
+
+      const mobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await mobile.page.goto(`${server.base}/`);
+      await mobile.page.locator('#room-list .room-item').first().waitFor();
+      await mobile.page.evaluate(
+        (value) => localStorage.setItem('agent-network-agents-v1', value),
+        savedRegistry,
+      );
+      await mobile.page.reload();
+      await mobile.page.locator('#room-list .room-item').first().waitFor();
+      await mobile.page.locator('#agents').click();
+      await mobile.page.waitForFunction(`(() => {
+        const button = document.querySelector('#agents-list button[data-action="copy-share"]');
+        return Boolean(button) && !button.disabled;
+      })()`);
+      const mobileAgentsMetrics = (await mobile.page.evaluate(`(() => {
+        const card = document.querySelector('#agents-modal .modal-card');
+        const sidebar = document.querySelector('.sidebar');
+        const account = document.getElementById('account');
+        if (!card || !sidebar || !account) return null;
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          cardLeft: card.getBoundingClientRect().left,
+          cardRight: card.getBoundingClientRect().right,
+          accountRight: account.getBoundingClientRect().right,
+          sidebarRight: sidebar.getBoundingClientRect().right
+        };
+      })()`)) as {
+        view: number;
+        doc: number;
+        cardLeft: number;
+        cardRight: number;
+        accountRight: number;
+        sidebarRight: number;
+      } | null;
+      check(
+        '390px Agents 弹窗不横向溢出',
+        Boolean(mobileAgentsMetrics) &&
+          mobileAgentsMetrics!.doc <= mobileAgentsMetrics!.view &&
+          mobileAgentsMetrics!.cardLeft >= 0 &&
+          mobileAgentsMetrics!.cardRight <= mobileAgentsMetrics!.view + 1,
+        mobileAgentsMetrics,
+      );
+      check(
+        '390px 账号区不横向溢出',
+        Boolean(mobileAgentsMetrics) &&
+          mobileAgentsMetrics!.accountRight <= mobileAgentsMetrics!.sidebarRight + 1,
+        mobileAgentsMetrics,
+      );
+      check('390px Agents 归档按钮可见', await mobile.page.locator('#agents-list button[data-action="archive"]').isVisible());
+      check('390px Agents 切换按钮可见', await mobile.page.locator('#agents-toggle').isVisible());
+      await mobile.page.locator('#agents-toggle').click();
+      checkEqual(
+        '390px 可以展开已归档分组',
+        await mobile.page.locator('#agents-archived-section').isVisible(),
+        true,
+      );
+      await mobile.context.close();
+    }
+
+    // 2b-3. 群聊创建后添加成员：owner 权限、分页好友、排除现有成员、重复与失败错误、移动端。
     {
       const { context, page } = await makeContext(
         browser,
@@ -2246,6 +2847,7 @@ async function main(): Promise<void> {
         { name: '卡片脚本.js', mimeType: 'application/javascript', body: 'alert(1)' },
         { name: '去重文件.txt', mimeType: 'text/plain', body: 'dedupe' },
         { name: '第二文件.txt', mimeType: 'text/plain', body: 'second' },
+        { name: '相对路径.txt', mimeType: 'text/plain', body: 'relative' },
         { name: xssFileName, mimeType: 'text/plain', body: 'xss' },
         { name: longFileName, mimeType: 'text/plain', body: 'long' },
       ]);
@@ -2267,6 +2869,7 @@ async function main(): Promise<void> {
       const js = cardFile('卡片脚本.js');
       const dedupeOne = cardFile('去重文件.txt');
       const dedupeTwo = cardFile('第二文件.txt');
+      const relativeFile = cardFile('相对路径.txt');
       const xssFile = cardFile(xssFileName);
       const longFile = cardFile(longFileName);
 
@@ -2371,6 +2974,75 @@ async function main(): Promise<void> {
         [longNameMarker, longFile.publicUrl].join('\n'),
       );
 
+      // 字面量反斜杠 n、粗体/反引号/Markdown 链接、相对路径、外站与双横线 fileId。
+      const literalMarker = '字面量转义卡片';
+      const boldId = `f_${'E'.repeat(22)}`;
+      const codeId = `f_${'F'.repeat(22)}`;
+      const mdId = `f_${'G'.repeat(22)}`;
+      const externalId = `f_${'H'.repeat(22)}`;
+      const dashId = 'f_--d6iupwwZu42Zvph93Ahg';
+      const literalBody = [
+        literalMarker,
+        '',
+        '**粗体换行.txt**',
+        `/f/${boldId}`,
+        '`反引号换行.txt`',
+        `/f/${codeId}`,
+        `[Markdown 换行.txt](/f/${mdId})`,
+        '相对路径.txt',
+        `/f/${relativeFile.fileId}`,
+        '外站文件',
+        `https://external.example/f/${externalId}`,
+        '双横线文件',
+        `${server.base}/f/${dashId}`,
+      ].join('\\n');
+      await sendRoomMessage(data.humanToken, cardRoomId, literalBody);
+
+      // final_body：Agent 完成投递后归档自有文件，消息与右侧文件栏都应出现。
+      const finalReplyFile = await uploadRealFile(data.agentAToken, server.base, {
+        name: '最终答复文件.txt',
+        mimeType: 'text/plain',
+        body: 'final reply file',
+      });
+      const finalReplyTrigger = await rawTool<{ message: { message_id: string } }>(
+        data.humanToken,
+        'network_message_send',
+        {
+          request_id: requestId('send'),
+          client_message_id: `cm_${crypto.randomUUID()}`,
+          room_id: cardRoomId,
+          body: '请处理并回复最终文件',
+          invoke: [data.agentA.actor_id],
+        },
+      );
+      const finalReplyInbox = await rawTool<{
+        items: { delivery_id: string; message_id: string }[];
+      }>(data.agentAToken, 'network_inbox_list', { state: 'pending', limit: 50 });
+      const finalReplyDelivery = finalReplyInbox.items.find(
+        (item) => item.message_id === finalReplyTrigger.message.message_id,
+      );
+      check('final_body fixture 找到待办', Boolean(finalReplyDelivery), finalReplyInbox.items);
+      const finalReplyClaim = await rawTool<{
+        delivery_id: string;
+        attempt: number;
+        claim_id: string;
+      }>(data.agentAToken, 'network_delivery_claim', {
+        request_id: requestId('claim'),
+        delivery_id: finalReplyDelivery!.delivery_id,
+      });
+      const finalReplyComplete = await rawTool<{ message: { message_id: string } }>(
+        data.agentAToken,
+        'network_delivery_complete',
+        {
+          request_id: requestId('complete'),
+          delivery_id: finalReplyClaim.delivery_id,
+          attempt: finalReplyClaim.attempt,
+          claim_id: finalReplyClaim.claim_id,
+          final_body: `\\n\\n**最终答复文件.txt**\\n${finalReplyFile.publicUrl}`,
+        },
+      );
+      check('final_body fixture complete 成功', Boolean(finalReplyComplete.message));
+
       const { context, page } = await makeContext(
         browser,
         data.humanToken,
@@ -2407,8 +3079,35 @@ async function main(): Promise<void> {
           },
         });
       });
+      await page.route(`**/f/${dashId}`, async (route) => {
+        if (route.request().method() !== 'HEAD') {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          headers: {
+            'content-type': 'text/plain; charset=utf-8',
+            'content-length': '5',
+            'content-disposition': 'attachment; filename="literal-dash.txt"',
+          },
+        });
+      });
       await page.goto(`${server.base}/c/${cardRoomId}`);
       await waitRoom(page, cardRoomId, '卡片文件群');
+
+      // 浏览器 messageFileLinks 与服务端解析器使用同一组 fixture。
+      for (const fixture of messageFileLinkFixtures(server.base)) {
+        const expected = extractMessageFileLinks(fixture.body, server.base).join(',');
+        const actual = (await page.evaluate(
+          `(function () {
+            return messageFileLinks(${JSON.stringify(fixture.body)})
+              .map(function (entry) { return entry.fileId; })
+              .join(',');
+          })()`,
+        )) as string;
+        checkEqual(`浏览器/服务端解析一致: ${fixture.label}`, actual, expected);
+      }
 
       const typesMessage = page.locator('#messages .msg').filter({ hasText: typesMarker });
       await typesMessage.scrollIntoViewIfNeeded();
@@ -2675,6 +3374,92 @@ async function main(): Promise<void> {
         0,
       );
       checkEqual('未触发脚本对话框', dialogs, 0);
+
+      const literalMessage = page.locator('#messages .msg').filter({ hasText: literalMarker });
+      await literalMessage.scrollIntoViewIfNeeded();
+      for (const name of [
+        '粗体换行.txt',
+        '反引号换行.txt',
+        'Markdown 换行.txt',
+        '相对路径.txt',
+        'literal-dash.txt',
+      ]) {
+        await literalMessage.locator('.msg-file-name').filter({ hasText: name }).first().waitFor();
+      }
+      checkEqual('字面量换行消息渲染 5 张卡片', await literalMessage.locator('.msg-file').count(), 5);
+      checkEqual(
+        '外站文件不渲染卡片',
+        await literalMessage.locator(`.msg-file[data-file-id="${externalId}"]`).count(),
+        0,
+      );
+      checkEqual(
+        '粗体前一行回退文件名',
+        await literalMessage
+          .locator(`.msg-file[data-file-id="${boldId}"] .msg-file-name`)
+          .textContent(),
+        '粗体换行.txt',
+      );
+      checkEqual(
+        '反引号前一行回退文件名',
+        await literalMessage
+          .locator(`.msg-file[data-file-id="${codeId}"] .msg-file-name`)
+          .textContent(),
+        '反引号换行.txt',
+      );
+      checkEqual(
+        'Markdown 标签回退文件名',
+        await literalMessage
+          .locator(`.msg-file[data-file-id="${mdId}"] .msg-file-name`)
+          .textContent(),
+        'Markdown 换行.txt',
+      );
+      checkEqual(
+        '相对路径卡片命中 HEAD',
+        await literalMessage
+          .locator(`.msg-file[data-file-id="${relativeFile.fileId}"] .msg-file-name`)
+          .textContent(),
+        '相对路径.txt',
+      );
+      checkEqual(
+        '双横线 fileId 卡片',
+        await literalMessage
+          .locator(`.msg-file[data-file-id="${dashId}"] .msg-file-name`)
+          .textContent(),
+        'literal-dash.txt',
+      );
+
+      const finalReplyMessage = page
+        .locator('#messages .msg')
+        .filter({ hasText: '最终答复文件.txt' });
+      await finalReplyMessage.scrollIntoViewIfNeeded();
+      await finalReplyMessage
+        .locator('.msg-file-name')
+        .filter({ hasText: '最终答复文件.txt' })
+        .first()
+        .waitFor();
+      checkEqual(
+        'final_body 消息显示文件卡片',
+        await finalReplyMessage.locator('.msg-file').count(),
+        1,
+      );
+      checkEqual(
+        'final_body 卡片位于 bubble 外',
+        await finalReplyMessage.locator('.bubble .msg-file').count(),
+        0,
+      );
+      await page
+        .locator('#files-list .file-item')
+        .filter({ hasText: '最终答复文件.txt' })
+        .first()
+        .waitFor();
+      checkEqual(
+        'final_body 归档后右侧文件栏出现文件',
+        await page
+          .locator('#files-list .file-item')
+          .filter({ hasText: '最终答复文件.txt' })
+          .count(),
+        1,
+      );
 
       await page.locator(roomLink(data.group.room.room_id)).click();
       await waitRoom(page, data.group.room.room_id, '测试群');
@@ -2944,6 +3729,501 @@ async function main(): Promise<void> {
       await dispatchDrag(mobile.page, '#chat-body', 'dragleave', []);
       await mobile.context.close();
       await context.close();
+    }
+
+    // 13. AI 消息 Markdown：React 岛、安全边界、文件卡片共存、懒加载与回退。
+    {
+      const mdGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: 'AI Markdown 群',
+        members: [data.agentA.actor_id],
+      });
+      const mdRoomId = mdGroup.room.room_id;
+      const mdFiles = await seedRoomFiles(data.humanToken, server.base, mdRoomId, [
+        { name: 'Markdown 附件.txt', mimeType: 'text/plain', body: 'rich markdown attachment' },
+        { name: '长文卡片.txt', mimeType: 'text/plain', body: 'long markdown attachment' },
+      ]);
+      const mdFile = mdFiles[0]!;
+      const longCardFile = mdFiles[1]!;
+      const agentFile = await uploadRealFile(data.agentAToken, server.base, {
+        name: 'Agent 最终附件.txt',
+        mimeType: 'text/plain',
+        body: 'agent final markdown attachment',
+      });
+
+      const richMarker = 'Markdown 综合能力';
+      const richBody = [
+        richMarker,
+        '## 标题',
+        '**粗体** 与 `inline-code`',
+        '[示例链接](https://example.com/md)',
+        '- 列表一',
+        '- 列表二',
+        '',
+        '| 列A | 列B |',
+        '| --- | --- |',
+        '| 单元1 | 单元2 |',
+        '',
+        '```js',
+        'const marker = 1;',
+        '```',
+        '',
+        `附件：${mdFile.publicUrl}`,
+      ].join('\n');
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: richBody,
+      });
+
+      const mentionMarker = '@ 高亮与代码隔离';
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: [
+          mentionMarker,
+          `**你好 @${data.agentA.name}**`,
+          '```text',
+          `@${data.agentA.name}`,
+          '```',
+        ].join('\n'),
+      });
+
+      const xssMarker = 'Markdown 安全边界';
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: [
+          xssMarker,
+          '<img src=x onerror=alert(1)>',
+          '[危险链接](javascript:alert(1))',
+          '<script>alert(1)</script>',
+          '![外部图片](https://evil.example/pixel.png)',
+        ].join('\n'),
+      });
+
+      const humanMarker = '人类 Markdown 保持纯文本';
+      await rawTool(data.humanToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: [humanMarker, '**人类不应加粗** 和 `人类代码`'].join('\n'),
+      });
+
+      const longMarker = '长文标题';
+      const longBody = [
+        `## ${longMarker}`,
+        '长文本内容 '.repeat(120),
+        '**展开后的粗体**',
+        `长文卡片：${longCardFile.publicUrl}`,
+      ].join('\n');
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: longBody,
+      });
+
+      const finalMarker = '最终回答标记';
+      const invoke = await rawTool<{ delivery_ids: string[] }>(
+        data.humanToken,
+        'network_message_send',
+        {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: mdRoomId,
+          body: '请生成最终 Markdown 回复',
+          invoke: [data.agentA.actor_id],
+        },
+      );
+      const deliveryId = invoke.delivery_ids[0];
+      if (!deliveryId) throw new Error('Markdown final_body fixture 缺少 delivery');
+      const claim = await rawTool<{ attempt: number; claim_id: string }>(
+        data.agentAToken,
+        'network_delivery_claim',
+        { request_id: requestId('claim'), delivery_id: deliveryId },
+      );
+      await rawTool(data.agentAToken, 'network_delivery_complete', {
+        request_id: requestId('complete'),
+        delivery_id: deliveryId,
+        attempt: claim.attempt,
+        claim_id: claim.claim_id,
+        final_body: [`**${finalMarker}**`, '', `Agent 最终附件：${agentFile.publicUrl}`].join('\n'),
+      });
+
+      const assetResponse = await fetch(`${server.base}/assets/chat-markdown.js`);
+      checkEqual('Markdown asset 返回 200', assetResponse.status, 200);
+      check(
+        'Markdown asset 为 text/javascript',
+        (assetResponse.headers.get('content-type') ?? '').includes('text/javascript'),
+        assetResponse.headers.get('content-type'),
+      );
+      checkEqual(
+        'Markdown asset 禁止 MIME 嗅探',
+        assetResponse.headers.get('x-content-type-options'),
+        'nosniff',
+      );
+      check(
+        'Markdown asset 可缓存',
+        (assetResponse.headers.get('cache-control') ?? '').includes('max-age=300'),
+        assetResponse.headers.get('cache-control'),
+      );
+      const assetBody = await assetResponse.text();
+      check('Markdown asset 非空', assetBody.length > 1000, assetBody.length);
+      check(
+        'Markdown asset 不包含开发版 React',
+        !assetBody.includes('react-dom.development'),
+        assetBody.slice(0, 80),
+      );
+
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      const markdownRequests: string[] = [];
+      const externalRequests: string[] = [];
+      const dialogs: string[] = [];
+      page.on('request', (request) => {
+        if (request.url().includes('/assets/chat-markdown.js')) markdownRequests.push(request.url());
+        if (request.url().includes('evil.example')) externalRequests.push(request.url());
+      });
+      page.on('dialog', async (dialog) => {
+        dialogs.push(dialog.message());
+        await dialog.dismiss();
+      });
+      await page.goto(`${server.base}/c/${mdRoomId}`);
+      await waitRoom(page, mdRoomId, 'AI Markdown 群');
+
+      const richMessage = page.locator('#messages .msg').filter({ hasText: richMarker }).last();
+      await richMessage.locator('.msg-markdown').waitFor();
+      checkEqual(
+        'AI 粗体渲染',
+        (await richMessage.locator('.msg-markdown strong').first().textContent())?.trim(),
+        '粗体',
+      );
+      checkEqual(
+        'AI 行内代码渲染',
+        (await richMessage.locator('.msg-markdown code').first().textContent())?.trim(),
+        'inline-code',
+      );
+      checkEqual('AI 列表渲染', await richMessage.locator('.msg-markdown li').count(), 2);
+      checkEqual(
+        'AI 表格渲染',
+        (await richMessage.locator('.msg-markdown td').first().textContent())?.trim(),
+        '单元1',
+      );
+      check(
+        'AI 代码块渲染',
+        ((await richMessage.locator('.msg-markdown pre').textContent()) ?? '').includes(
+          'const marker = 1;',
+        ),
+      );
+      const mdLink = richMessage.locator('.msg-markdown a[href="https://example.com/md"]');
+      checkEqual('AI 链接 target', await mdLink.getAttribute('target'), '_blank');
+      checkEqual(
+        'AI 链接 rel',
+        await mdLink.getAttribute('rel'),
+        'noopener noreferrer nofollow',
+      );
+      checkEqual(
+        'AI 链接 referrerPolicy',
+        await mdLink.getAttribute('referrerpolicy'),
+        'no-referrer',
+      );
+      checkEqual(
+        'AI 文件卡片仍在 bubble 外',
+        await richMessage.locator('.bubble .msg-file').count(),
+        0,
+      );
+      checkEqual(
+        'AI 文件卡片仍生成一张',
+        await richMessage.locator('.msg-file').count(),
+        1,
+      );
+      checkEqual(
+        'AI 文件卡片使用 .msg-content 直属容器',
+        await richMessage.locator('.msg-content > .msg-files').count(),
+        1,
+      );
+      check(
+        'AI 气泡内不再显示 Markdown 标记',
+        !((await richMessage.locator('.bubble').textContent()) ?? '').includes('**粗体**'),
+      );
+
+      const mentionMessage = page
+        .locator('#messages .msg')
+        .filter({ hasText: mentionMarker })
+        .last();
+      await mentionMessage.locator('.msg-markdown').waitFor();
+      checkEqual(
+        '粗体内 @ 仍高亮',
+        await mentionMessage.locator('.msg-markdown strong .mention').count(),
+        1,
+      );
+      checkEqual(
+        '代码块内不误高亮 @',
+        await mentionMessage.locator('.msg-markdown pre .mention').count(),
+        0,
+      );
+
+      const xssMessage = page.locator('#messages .msg').filter({ hasText: xssMarker }).last();
+      await xssMessage.locator('.msg-markdown').waitFor();
+      checkEqual('XSS 不生成图片', await xssMessage.locator('.bubble img').count(), 0);
+      checkEqual('XSS 不生成脚本', await xssMessage.locator('.bubble script').count(), 0);
+      checkEqual(
+        'XSS 不生成 javascript 链接',
+        await xssMessage.locator('.bubble a[href^="javascript:" i]').count(),
+        0,
+      );
+      checkEqual('外站图片不发起请求', externalRequests.length, 0);
+      checkEqual('XSS 不弹出对话框', dialogs.length, 0);
+
+      const humanMessage = page
+        .locator('#messages .msg')
+        .filter({ hasText: humanMarker })
+        .last();
+      await humanMessage.waitFor();
+      checkEqual('人类消息不生成 Markdown 容器', await humanMessage.locator('.msg-markdown').count(), 0);
+      checkEqual('人类消息不渲染粗体', await humanMessage.locator('.bubble strong').count(), 0);
+      check(
+        '人类消息保留 Markdown 标记',
+        ((await humanMessage.locator('.bubble').textContent()) ?? '').includes(
+          '**人类不应加粗**',
+        ),
+      );
+
+      const longMessage = page.locator('#messages .msg').filter({ hasText: longMarker }).last();
+      await longMessage.locator('.expand').waitFor();
+      checkEqual(
+        '截断 AI 消息先保持纯文本',
+        await longMessage.locator('.msg-markdown').count(),
+        0,
+      );
+      checkEqual('截断 AI 消息预览不含卡片', await longMessage.locator('.msg-file').count(), 0);
+      await longMessage.locator('.expand').click();
+      await longMessage.locator('.msg-markdown').waitFor();
+      await longMessage.locator(`.msg-file[data-file-id="${longCardFile.fileId}"]`).waitFor();
+      checkEqual(
+        '展开全文后渲染 Markdown',
+        (await longMessage.locator('.msg-markdown strong').first().textContent())?.trim(),
+        '展开后的粗体',
+      );
+      checkEqual('展开全文后补文件卡片', await longMessage.locator('.msg-file').count(), 1);
+      checkEqual(
+        '展开后的卡片仍在 bubble 外',
+        await longMessage.locator('.bubble .msg-file').count(),
+        0,
+      );
+
+      const finalMessage = page
+        .locator('#messages .msg')
+        .filter({ hasText: finalMarker })
+        .last();
+      await finalMessage.locator('.msg-markdown').waitFor();
+      checkEqual(
+        'final_body 渲染 Markdown 粗体',
+        (await finalMessage.locator('.msg-markdown strong').first().textContent())?.trim(),
+        finalMarker,
+      );
+      await finalMessage.locator(`.msg-file[data-file-id="${agentFile.fileId}"]`).waitFor();
+      checkEqual('final_body 卡片位于 bubble 外', await finalMessage.locator('.bubble .msg-file').count(), 0);
+      await page
+        .locator('#files-list .file-item')
+        .filter({ hasText: 'Agent 最终附件.txt' })
+        .first()
+        .waitFor();
+      checkEqual(
+        'final_body 归档后右侧文件栏出现文件',
+        await page
+          .locator('#files-list .file-item')
+          .filter({ hasText: 'Agent 最终附件.txt' })
+          .count(),
+        1,
+      );
+      check(
+        '右侧文件栏同时保留普通附件',
+        (await page.locator('#files-list .file-item').filter({ hasText: 'Markdown 附件.txt' }).count()) === 1,
+      );
+      checkEqual('多条 AI 消息只请求一次 Markdown bundle', markdownRequests.length, 1);
+
+      const mobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await mobile.page.goto(`${server.base}/c/${mdRoomId}`);
+      await waitRoom(mobile.page, mdRoomId, 'AI Markdown 群');
+      await mobile.page.locator('.msg-markdown .md-table').first().waitFor();
+      const mobileMetrics = (await mobile.page.evaluate(`(() => {
+        const messages = document.getElementById('messages');
+        const table = document.querySelector('.msg-markdown .md-table-wrap');
+        const pre = document.querySelector('.msg-markdown .md-pre');
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          listScroll: messages.scrollWidth,
+          listClient: messages.clientWidth,
+          tableScroll: table ? table.scrollWidth : 0,
+          tableClient: table ? table.clientWidth : 0,
+          preScroll: pre ? pre.scrollWidth : 0,
+          preClient: pre ? pre.clientWidth : 0
+        };
+      })()`)) as {
+        view: number;
+        doc: number;
+        listScroll: number;
+        listClient: number;
+        tableScroll: number;
+        tableClient: number;
+        preScroll: number;
+        preClient: number;
+      };
+      check('390px Markdown 不撑破页面', mobileMetrics.doc <= mobileMetrics.view + 1, mobileMetrics);
+      check(
+        '390px 消息区不横向滚动',
+        mobileMetrics.listScroll <= mobileMetrics.listClient + 1,
+        mobileMetrics,
+      );
+      check(
+        '390px 表格在容器内横向滚动',
+        mobileMetrics.tableScroll >= mobileMetrics.tableClient,
+        mobileMetrics,
+      );
+      check(
+        '390px 代码块在容器内横向滚动',
+        mobileMetrics.preScroll >= mobileMetrics.preClient,
+        mobileMetrics,
+      );
+      await mobile.context.close();
+      await context.close();
+
+      // 60 条 AI 消息覆盖「加载更早消息」与 Markdown 升级的高度补偿。
+      const scrollGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: 'AI 滚动群',
+        members: [data.agentA.actor_id],
+      });
+      const scrollRoomId = scrollGroup.room.room_id;
+      for (let index = 1; index <= 60; index += 1) {
+        await rawTool(data.agentAToken, 'network_message_send', {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: scrollRoomId,
+          body: `**滚动消息 ${index}**\n\n滚动锚点 ${index}`,
+        });
+      }
+      const scrollContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      await scrollContext.page.goto(`${server.base}/c/${scrollRoomId}`);
+      await waitRoom(scrollContext.page, scrollRoomId, 'AI 滚动群');
+      await waitUntil(
+        async () => (await scrollContext.page.locator('#messages .msg-markdown').count()) >= 40,
+        '首屏 AI 消息升级 Markdown',
+        20_000,
+      );
+      const bottomGap = (await scrollContext.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        return node.scrollHeight - node.scrollTop - node.clientHeight;
+      })()`)) as number;
+      check('Markdown 升级后保持接近底部', bottomGap < 80, bottomGap);
+
+      const anchor = scrollContext.page
+        .locator('#messages .msg')
+        .filter({ hasText: '滚动锚点 55' })
+        .last();
+      await anchor.scrollIntoViewIfNeeded();
+      await sleep(300);
+      const anchorTopBefore = (await anchor.evaluate(
+        (node) => node.getBoundingClientRect().top,
+      )) as number;
+      const markdownBefore = await scrollContext.page.locator('#messages .msg-markdown').count();
+      await scrollContext.page.locator('#older').click();
+      await waitUntil(
+        async () =>
+          (await scrollContext.page.locator('#messages .msg-markdown').count()) >
+          markdownBefore + 5,
+        '更早 AI 消息升级 Markdown',
+        20_000,
+      );
+      await sleep(300);
+      const anchorTopAfter = (await anchor.evaluate(
+        (node) => node.getBoundingClientRect().top,
+      )) as number;
+      check(
+        '加载更早消息后视口不跳动',
+        Math.abs(anchorTopAfter - anchorTopBefore) <= 80,
+        { anchorTopBefore, anchorTopAfter },
+      );
+      const scrollMetrics = (await scrollContext.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        return { scroll: node.scrollWidth, client: node.clientWidth };
+      })()`)) as { scroll: number; client: number };
+      check(
+        'AI 历史消息不横向滚动',
+        scrollMetrics.scroll <= scrollMetrics.client + 1,
+        scrollMetrics,
+      );
+      await scrollContext.context.close();
+
+      // asset 404：保留纯文本、文件卡片与发送能力，不抛未处理异常。
+      const fallbackErrors: string[] = [];
+      const fallback = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        fallbackErrors,
+      );
+      await fallback.page.route('**/assets/chat-markdown.js', (route) =>
+        route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' }),
+      );
+      await fallback.page.goto(`${server.base}/c/${mdRoomId}`);
+      await waitRoom(fallback.page, mdRoomId, 'AI Markdown 群');
+      const fallbackRich = fallback.page
+        .locator('#messages .msg')
+        .filter({ hasText: richMarker })
+        .last();
+      await fallbackRich.locator('.msg-file').first().waitFor();
+      await sleep(400);
+      checkEqual(
+        'asset 404 时回退纯文本',
+        await fallbackRich.locator('.msg-markdown').count(),
+        0,
+      );
+      check(
+        'asset 404 时保留 Markdown 原文',
+        ((await fallbackRich.locator('.bubble').textContent()) ?? '').includes('**粗体**'),
+      );
+      check(
+        'asset 404 时文件卡片仍可用',
+        (await fallbackRich.locator('.msg-file').count()) === 1,
+      );
+      const fallbackBefore = await messageCount(fallback.page);
+      await fallback.page.locator('#body').fill('asset 失败仍可发送');
+      await fallback.page.locator('#send').click();
+      await fallback.page.waitForFunction(
+        `document.querySelectorAll('#messages .msg').length > ${fallbackBefore}`,
+      );
+      check('asset 404 时不阻塞发送', true);
+      const fallbackUnexpected = fallbackErrors.filter(
+        (item) =>
+          !item.includes('chat-markdown') &&
+          !item.includes('Failed to fetch dynamically imported module') &&
+          !item.includes('Importing a module script failed'),
+      );
+      checkEqual('asset 404 无未处理页面错误', fallbackUnexpected.length, 0);
+      await fallback.context.close();
     }
 
     checkEqual('无未捕获页面错误', allErrors.length, 0);

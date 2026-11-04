@@ -150,6 +150,7 @@ function timeDivider(value) {
 
 function messageItem(item) {
   const mine = Boolean(identity && item.sender_id === identity.actor_id);
+  const agent = isAgentMessage(item);
   const element = document.createElement('li');
   element.className = 'msg' + (mine ? ' mine' : '');
   const sender = senderName(item.sender_id);
@@ -165,11 +166,13 @@ function messageItem(item) {
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   bubble.title = fullTime(item.created_at);
-  renderRichText(bubble, item.preview);
+  const truncated = item.body_bytes > new TextEncoder().encode(item.preview).length;
+  // 截断可能切断 Markdown 语法：先保留纯文本预览，展开全文后再升级。
+  renderMessageBody(bubble, item.preview, item, agent && !truncated);
   content.append(bubble);
   let filesElement = mountMessageFiles(item.preview, null);
   if (filesElement) content.append(filesElement);
-  if (item.body_bytes > new TextEncoder().encode(item.preview).length) {
+  if (truncated) {
     const expand = document.createElement('button');
     expand.type = 'button';
     expand.className = 'expand';
@@ -178,7 +181,7 @@ function messageItem(item) {
       expand.disabled = true;
       try {
         const fullText = await readMessage(item.message_id);
-        renderRichText(bubble, fullText);
+        renderMessageBody(bubble, fullText, item, agent);
         filesElement = mountMessageFiles(fullText, filesElement);
         if (filesElement && !filesElement.isConnected) {
           content.insertBefore(filesElement, expand);
@@ -205,6 +208,7 @@ function messageItem(item) {
 /** 全量替换消息区；缓存切换与首屏加载共用同一套渲染逻辑。 */
 function renderMessageList(items) {
   if (!messagesElement) return;
+  resetMarkdownHandles();
   resetMessageFileCards();
   messagesElement.replaceChildren();
   appendHistory(messagesElement, items);

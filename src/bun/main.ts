@@ -9,6 +9,7 @@ import type { Env, EventsConfig } from '../env';
 import { loadEncryptionKey } from '../events/security';
 import type { FileMount } from '@peri-code/mcpp/files';
 import { NotificationHub } from '../realtime/hub';
+import { buildMarkdownBundle } from '../web/markdown-bundle';
 import { createD1 } from './d1';
 import { migrate } from './migrate';
 
@@ -127,7 +128,12 @@ if (process.env.DRIVE_DISABLED !== '1') {
   );
 }
 
-const app = createApp(env, { mount });
+const markdownAsset = await buildMarkdownBundle();
+if (markdownAsset) {
+  console.log(`markdown asset ready: ${(markdownAsset.length / 1024).toFixed(0)} KiB`);
+}
+
+const app = createApp(env, { mount, markdownAsset });
 
 const server = Bun.serve({
   hostname,

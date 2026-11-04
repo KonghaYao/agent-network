@@ -219,6 +219,7 @@ function setChatLoading(loading, options) {
     chatSkeletonElement.hidden = !loading || !settings.skeleton;
   }
   if (loading && !settings.keepContent && messagesElement) {
+    resetMarkdownHandles();
     messagesElement.replaceChildren();
   }
 }
@@ -231,7 +232,10 @@ function setChatError(message) {
     subtitleElement.textContent = '加载失败';
     subtitleElement.hidden = false;
   }
-  if (messagesElement) messagesElement.replaceChildren();
+  if (messagesElement) {
+    resetMarkdownHandles();
+    messagesElement.replaceChildren();
+  }
   if (sendButton) sendButton.disabled = true;
 }
 

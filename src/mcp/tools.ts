@@ -3,7 +3,10 @@ import { z } from 'zod';
 
 import { isBusinessError } from '../contracts/errors';
 import {
+  agentArchiveSchema,
   agentRenameSchema,
+  agentUnarchiveSchema,
+  agentsGetSchema,
   contactAddSchema,
   contactRemoveSchema,
   contactsListSchema,
@@ -32,6 +35,7 @@ import {
   roomsListSchema,
   syncSchema,
 } from '../contracts/schemas';
+import { agentsGet, archiveAgent, unarchiveAgent } from '../domain/agents';
 import { contactAdd, contactRemove, contactsList } from '../domain/contacts';
 import {
   deliveryCancel,
@@ -69,7 +73,10 @@ import type { Env } from '../env';
 import { login, presenceOf } from '../realtime/presence';
 import { requireActor } from './auth';
 import {
+  agentArchiveResultSchema,
   agentRenameResultSchema,
+  agentUnarchiveResultSchema,
+  agentsGetResultSchema,
   completeResultSchema,
   contactPageSchema,
   contactSchema,
@@ -166,15 +173,31 @@ export function register<
   });
 }
 
-export interface MessageSendHookInput {
+export interface MessageCommittedHookInput {
   messageId: string;
   roomId: string;
   body: string;
 }
 
 export interface ToolHooks {
-  /** 消息事务提交后调用；用于 best-effort 自动归档，不得影响消息结果。 */
-  afterMessageSend?: (input: MessageSendHookInput) => Promise<void>;
+  /**
+   * 消息事务提交后调用（message_send 与 delivery_complete.final_body）；
+   * 用于 best-effort 自动归档，不得影响消息结果。
+   */
+  afterMessageCommitted?: (input: MessageCommittedHookInput) => Promise<void>;
+}
+
+/** 钩子失败直接忽略，不改变已提交的工具结果。 */
+async function runMessageCommittedHook(
+  hooks: ToolHooks,
+  input: MessageCommittedHookInput,
+): Promise<void> {
+  if (!hooks.afterMessageCommitted) return;
+  try {
+    await hooks.afterMessageCommitted(input);
+  } catch {
+    // best-effort：归档失败不改变消息/投递结果。
+  }
 }
 
 export function registerTools(
@@ -257,6 +280,42 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       return renameAgent(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_archive',
+    '软归档一个 Agent。归档只影响 Agent 管理列表，不改变消息、好友、房间、投递、凭据或在线状态；归档可逆，不能恢复 MCP URL 或 token。任何已注册身份都可调用；目标必须是 Agent，人类 actor 返回 INVALID_ARGUMENT。',
+    agentArchiveSchema,
+    agentArchiveResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return archiveAgent(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_unarchive',
+    '取消 Agent 的软归档。只影响 Agent 管理列表的过滤，不改变消息、好友、房间、投递、凭据或在线状态。任何已注册身份都可调用；目标必须是 Agent。',
+    agentUnarchiveSchema,
+    agentUnarchiveResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return unarchiveAgent(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agents_get',
+    '按 actor_id 批量读取 Agent 管理摘要（1–100 个，去重并保持输入顺序）；不提供全局枚举。返回名称、agent_session_id、share_url 与归档状态；不返回 metadata 或任何凭据。',
+    agentsGetSchema,
+    agentsGetResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentsGet(db, principal, input, origin);
     },
   );
 
@@ -386,13 +445,11 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       const result = await messageSend(db, principal, input);
-      if (hooks.afterMessageSend) {
-        await hooks.afterMessageSend({
-          messageId: result.message.message_id,
-          roomId: result.message.room_id,
-          body: input.body,
-        });
-      }
+      await runMessageCommittedHook(hooks, {
+        messageId: result.message.message_id,
+        roomId: result.message.room_id,
+        body: input.body,
+      });
       return result;
     },
   );
@@ -489,7 +546,15 @@ export function registerTools(
     completeResultSchema,
     async (input) => {
       requireActor(principal);
-      return deliveryComplete(db, principal, input);
+      const result = await deliveryComplete(db, principal, input);
+      if (input.final_body && result.message) {
+        await runMessageCommittedHook(hooks, {
+          messageId: result.message.message_id,
+          roomId: result.message.room_id,
+          body: input.final_body,
+        });
+      }
+      return result;
     },
   );
 

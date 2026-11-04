@@ -39,6 +39,11 @@ export const messageSchema = messagePreviewSchema.extend({
   delivery_updated_at: z.string().nullable(),
 });
 
+/** 历史页额外返回权威 sender_kind；send/complete 的消息结构保持不变。 */
+export const historyMessageSchema = messageSchema.extend({
+  sender_kind: z.enum(['human', 'agent']).nullable(),
+});
+
 export const memberSchema = z.object({
   actor_id: z.string(),
   kind: z.enum(['human', 'agent']),
@@ -120,7 +125,7 @@ export const roomPageSchema = z.object({
 });
 
 export const historyPageSchema = z.object({
-  items: z.array(messageSchema),
+  items: z.array(historyMessageSchema),
   next_cursor: z.string().nullable(),
   has_more: z.boolean(),
   snapshot: z.string(),
@@ -179,6 +184,38 @@ export const agentRenameResultSchema = z.object({
   actor_id: z.string(),
   name: z.string(),
   updated_at: z.string(),
+});
+
+/** 软归档结果；archived_at 保留首次归档时间，重复归档不刷新。 */
+export const agentArchiveResultSchema = z.object({
+  actor_id: z.string(),
+  archived: z.literal(true),
+  archived_at: z.string(),
+  archived_by: z.string(),
+});
+
+export const agentUnarchiveResultSchema = z.object({
+  actor_id: z.string(),
+  archived: z.literal(false),
+  archived_at: z.null(),
+  archived_by: z.null(),
+});
+
+/** Agent 管理摘要；不返回 metadata、凭据或 token。 */
+export const agentSummarySchema = z.object({
+  actor_id: z.string(),
+  kind: z.literal('agent'),
+  name: z.string(),
+  agent_session_id: z.string().nullable(),
+  share_url: z.string().nullable(),
+  archived: z.boolean(),
+  archived_at: z.string().nullable(),
+  archived_by: z.string().nullable(),
+});
+
+export const agentsGetResultSchema = z.object({
+  items: z.array(agentSummarySchema),
+  missing_actor_ids: z.array(z.string()),
 });
 
 export const loginResultSchema = z.object({

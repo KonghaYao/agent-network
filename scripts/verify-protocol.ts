@@ -219,6 +219,7 @@ async function main(): Promise<void> {
         tools?: {
           name: string;
           description?: string;
+          inputSchema?: unknown;
           outputSchema?: unknown;
         }[];
       }
@@ -230,6 +231,9 @@ async function main(): Promise<void> {
     'network_login',
     'network_profile_update',
     'network_agent_rename',
+    'network_agent_archive',
+    'network_agent_unarchive',
+    'network_agents_get',
     'network_recovery_create',
     'network_recovery_redeem',
     'network_contacts_list',
@@ -260,7 +264,7 @@ async function main(): Promise<void> {
     'network_room_file_delete',
   ];
   const toolNames = listed?.tools?.map((tool) => tool.name) ?? [];
-  // 工具集随 drive 开关变化：核心 28 + drive_file_info + 4 个房间文件工具。
+  // 工具集随 drive 开关变化：核心 31 + drive_file_info + 4 个房间文件工具。
   const hasDrive = toolNames.includes('drive_file_info');
   const hasRoomFiles = roomFileTools.every((name) => toolNames.includes(name));
   check(
@@ -277,6 +281,9 @@ async function main(): Promise<void> {
     'network_me',
     'network_login',
     'network_agent_rename',
+    'network_agent_archive',
+    'network_agent_unarchive',
+    'network_agents_get',
     'network_message_send',
     'network_inbox_list',
     'network_delivery_claim',
@@ -323,6 +330,61 @@ async function main(): Promise<void> {
     historySchema.includes('"delivery_claimed_at"') && historySchema.includes('"delivery_updated_at"'),
     historyTool?.outputSchema,
   );
+  check(
+    'history 输出 schema 包含权威 sender_kind',
+    historySchema.includes('"sender_kind"'),
+    historyTool?.outputSchema,
+  );
+
+  const archiveTool = listed?.tools?.find((tool) => tool.name === 'network_agent_archive');
+  const archiveDescription = archiveTool?.description ?? '';
+  check(
+    'archive 描述声明只影响管理列表且不改变业务',
+    archiveDescription.includes('只影响 Agent 管理列表') &&
+      archiveDescription.includes('不改变消息') &&
+      archiveDescription.includes('任何已注册身份'),
+    archiveTool?.description,
+  );
+  check(
+    'archive 描述声明不能恢复 MCP URL 或 token',
+    archiveDescription.includes('不能恢复 MCP URL 或 token'),
+    archiveTool?.description,
+  );
+  const agentsGetTool = listed?.tools?.find((tool) => tool.name === 'network_agents_get');
+  check(
+    'agents_get 描述声明不做全局枚举',
+    typeof agentsGetTool?.description === 'string' &&
+      agentsGetTool.description.includes('全局枚举'),
+    agentsGetTool?.description,
+  );
+  const agentsGetInput = JSON.stringify(agentsGetTool?.inputSchema ?? {});
+  check(
+    'agents_get 输入限制为 1–100 个 actor_id',
+    agentsGetInput.includes('"minItems":1') && agentsGetInput.includes('"maxItems":100'),
+    agentsGetTool?.inputSchema,
+  );
+  const agentsGetOutput = JSON.stringify(agentsGetTool?.outputSchema ?? {});
+  check(
+    'agents_get 输出包含归档状态且不含 metadata 或凭据',
+    agentsGetOutput.includes('"archived"') &&
+      agentsGetOutput.includes('"archived_at"') &&
+      agentsGetOutput.includes('"archived_by"') &&
+      !agentsGetOutput.includes('"metadata"') &&
+      !agentsGetOutput.includes('token'),
+    agentsGetTool?.outputSchema,
+  );
+  for (const [label, tool] of [
+    ['network_me', listed?.tools?.find((item) => item.name === 'network_me')],
+    ['network_room_get', roomGetTool],
+    ['network_contacts_list', listed?.tools?.find((item) => item.name === 'network_contacts_list')],
+    ['network_history_list', historyTool],
+  ] as const) {
+    check(
+      `${label} 输出 schema 不增加 archived 字段`,
+      !JSON.stringify(tool?.outputSchema ?? {}).includes('"archived'),
+      tool?.outputSchema,
+    );
+  }
 
   const issueTool = listed?.tools?.find((tool) => tool.name === 'network_issue_token');
   check(
@@ -922,11 +984,12 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 240),
   );
   check(
-    '静态技能包含三份 Harness 指南的相对链接',
+    '静态技能包含四份 Harness 指南的相对链接',
     [
       '[Codex](./harness-codex.md)',
       '[ChatGPT Web](./harness-chatgpt-web.md)',
       '[Peri](./harness-peri.md)',
+      '[Claude](./harness-claude.md)',
     ].every((link) => skillDocText.includes(link)),
     skillDocText.slice(0, 400),
   );
@@ -948,6 +1011,28 @@ async function main(): Promise<void> {
         'network_login',
         'network_delivery_claim',
         'network_delivery_complete',
+      ],
+    },
+    {
+      file: 'harness-claude.md',
+      markers: [
+        'agentnet://stream',
+        'notifications/subscriptions/acknowledged',
+        'network_login',
+        'network_inbox_list',
+        'network_delivery_claim',
+        'network_delivery_complete',
+        'AGENTNET_MCP_URL',
+        '10 秒',
+        '简短确认',
+        '退避',
+        'Claude Code',
+        '后台 Bash',
+        'mcp-upload',
+        'MCPP-Files-Version',
+        'network_room_file_bind',
+        '/f/<fileId>',
+        'public_url',
       ],
     },
   ] as const;
@@ -976,6 +1061,31 @@ async function main(): Promise<void> {
       text.slice(0, 200),
     );
   }
+
+  const claudeGuide = await fetch(`${baseUrl()}/skills/harness-claude.md`);
+  const claudeGuideText = await claudeGuide.text();
+  check(
+    'Claude 指南覆盖会话级后台监听、10 秒确认与退避重连',
+    ['后台 Bash', '10 秒', '简短确认', '退避'].every((marker) =>
+      claudeGuideText.includes(marker),
+    ),
+    {
+      missing: ['后台 Bash', '10 秒', '简短确认', '退避'].filter(
+        (marker) => !claudeGuideText.includes(marker),
+      ),
+    },
+  );
+  check(
+    'Claude 指南区分已验证监听与未验证的原生 MCP 客户端路径',
+    claudeGuideText.includes('不能把') &&
+      claudeGuideText.includes('未实测') &&
+      claudeGuideText.includes('后台 Bash'),
+  );
+  check(
+    'Claude 指南只使用 token 占位符且不含 32 位以上十六进制凭据',
+    claudeGuideText.includes('token=<token>') &&
+      !/\b[0-9a-f]{32,}\b/iu.test(claudeGuideText),
+  );
 
   const codexBridge = await fetch(`${baseUrl()}/skills/harness-codex.md`);
   checkEqual('GET /skills/harness-codex.md 返回 200（桥接指南）', codexBridge.status, 200);
@@ -1114,6 +1224,62 @@ async function main(): Promise<void> {
       | undefined
   )?.structuredContent;
   checkEqual('浏览器身份可建立单聊', roomResult?.room?.kind, 'direct');
+
+  // 历史页权威 sender_kind：人类消息为 human，Agent 消息为 agent。
+  const historyRoomId = roomResult?.room?.room_id ?? '';
+  for (const [token, name, body] of [
+    [browserToken, 'network_message_send', '人类历史 sender_kind'],
+    [shareToken, 'network_message_send', 'Agent 历史 sender_kind'],
+  ] as const) {
+    const sent = await rawRpc(
+      'tools/call',
+      {
+        name,
+        arguments: {
+          request_id: `history_msg_${crypto.randomUUID().replaceAll('-', '')}`,
+          client_message_id: crypto.randomUUID(),
+          room_id: historyRoomId,
+          body,
+        },
+      },
+      { token },
+    );
+    check(
+      `history fixture 写入成功（${body}）`,
+      (sent.body.result as { isError?: boolean } | undefined)?.isError !== true,
+      sent.body,
+    );
+  }
+  const historyResponse = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_history_list',
+      arguments: { room_id: historyRoomId, direction: 'before', limit: 50 },
+    },
+    { token: browserToken },
+  );
+  const historyResult = (
+    historyResponse.body.result as
+      | { structuredContent?: { items?: { sender_kind?: string | null }[] } }
+      | undefined
+  )?.structuredContent;
+  const historyKinds = new Set((historyResult?.items ?? []).map((item) => item.sender_kind));
+  check(
+    'history 返回 human 与 agent 的权威 sender_kind',
+    historyKinds.has('human') && historyKinds.has('agent'),
+    [...historyKinds],
+  );
+  check(
+    'history sender_kind 仅允许 human/agent/null',
+    (historyResult?.items ?? []).every(
+      (item) =>
+        item.sender_kind === 'human' ||
+        item.sender_kind === 'agent' ||
+        item.sender_kind === null ||
+        item.sender_kind === undefined,
+    ),
+    historyResult?.items?.map((item) => item.sender_kind),
+  );
 
   const chatPage = await fetch(`${baseUrl()}/c/${roomResult?.room?.room_id ?? ''}`);
   checkEqual('单聊页 GET 返回 200', chatPage.status, 200);

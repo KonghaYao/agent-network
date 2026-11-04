@@ -60,6 +60,11 @@ export function sidebarPane(): string {
       <p>单聊页面 <code>/c/&lt;room_id&gt;</code></p>
     </details>
   </footer>
+  <div class="room-menu" id="room-menu" role="menu" aria-label="会话操作" hidden>
+    <button class="room-menu-item" id="room-menu-copy-prompt" type="button"
+      role="menuitem">复制 Agent 连接提示词</button>
+    <p class="room-menu-status" id="room-menu-status" role="status" aria-live="polite" hidden></p>
+  </div>
 </aside>`;
 }
 
@@ -224,6 +229,39 @@ export function newAgentDialog(): string {
         <button class="primary" id="new-agent-create" type="submit">创建</button>
       </div>
     </form>
+  </div>
+</div>`;
+}
+
+/**
+ * Agents 管理弹窗：本地注册表 + 服务端归档状态。
+ *
+ * 默认只显示未归档条目；已归档分组必须点“显示已归档”才展开，每次重开
+ * 都重置为隐藏。列表仅在浏览器本地保存，不包含 token、MCP URL 或提示词。
+ */
+export function agentsDialog(): string {
+  return `<div class="modal" id="agents-modal" hidden>
+  <div class="modal-card agents-card" role="dialog" aria-modal="true" aria-labelledby="agents-title">
+    <div class="agents-head">
+      <h2 id="agents-title">Agents</h2>
+      <button class="agents-toggle" id="agents-toggle" type="button" aria-pressed="false">显示已归档 (0)</button>
+    </div>
+    <p class="agents-hint">列表仅保存在此浏览器，清除站点数据会丢失。MCP URL 与 token 只在创建时显示一次，归档不会恢复 MCP URL/token。</p>
+    <p id="agents-note" class="agents-note" role="status"></p>
+    <p id="agents-error" class="form-error" role="alert"></p>
+    <div id="agents-active-section">
+      <ul id="agents-list" class="agents-list" aria-label="未归档 Agent"></ul>
+    </div>
+    <div id="agents-archived-section" hidden>
+      <p class="agents-section-title">已归档（<span id="agents-archived-count">0</span>）</p>
+      <ul id="agents-archived-list" class="agents-list" aria-label="已归档 Agent"></ul>
+      <p id="agents-archived-empty" class="agents-empty" hidden>没有已归档的 Agent。</p>
+    </div>
+    <p id="agents-empty" class="agents-empty" hidden>还没有 Agent。点击“新建 Agent”创建第一个 Agent。</p>
+    <div class="row modal-actions">
+      <button id="agents-new" type="button">新建 Agent</button>
+      <button class="primary" id="agents-close" type="button">关闭</button>
+    </div>
   </div>
 </div>`;
 }

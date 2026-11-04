@@ -6,18 +6,22 @@
  * 代价是二维码本身就是长期凭据：任何看到二维码的人都能获得同一身份。
  */
 
-/** 左下角用户区块：头像、名称与“手机扫码”入口。 */
+/** 左下角用户区块：头像、名称、复制 ID、新建 Agent、Agents 与“手机扫码”入口。 */
 export function deviceHandoffAccount(): string {
   return `<div class="account" id="account">
     <span class="account-avatar" id="account-avatar" aria-hidden="true">?</span>
     <div class="account-main">
       <span class="account-name" id="account-name">未登录</span>
-      <button class="account-scan" id="account-copy-id" type="button"
-        aria-label="复制当前 actor ID" title="复制当前 actor ID">复制 ID</button>
-      <button class="account-scan" id="new-agent" type="button"
-        aria-haspopup="dialog" aria-controls="new-agent-modal" aria-expanded="false">新建 Agent</button>
-      <button class="account-scan" id="device-handoff" type="button"
-        aria-haspopup="dialog" aria-controls="handoff-modal" aria-expanded="false">手机扫码</button>
+      <div class="account-actions">
+        <button class="account-scan" id="account-copy-id" type="button"
+          aria-label="复制当前 actor ID" title="复制当前 actor ID">复制 ID</button>
+        <button class="account-scan" id="new-agent" type="button"
+          aria-haspopup="dialog" aria-controls="new-agent-modal" aria-expanded="false">新建 Agent</button>
+        <button class="account-scan" id="agents" type="button"
+          aria-haspopup="dialog" aria-controls="agents-modal" aria-expanded="false">Agents</button>
+        <button class="account-scan" id="device-handoff" type="button"
+          aria-haspopup="dialog" aria-controls="handoff-modal" aria-expanded="false">手机扫码</button>
+      </div>
     </div>
   </div>`;
 }
@@ -137,7 +141,9 @@ export const DEVICE_HANDOFF_STYLE = `
   .account-main { flex: 1 1 auto; min-width: 0; }
   .account-name { display: block; font-size: 13px; font-weight: 500; color: var(--wx-text, #333);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .account-scan { margin-top: 1px; padding: 0; border: 0; background: none;
+  /* 四个文字按钮在 280–320px 侧栏与 390px 移动端允许换行，不横向溢出。 */
+  .account-actions { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 1px; }
+  .account-scan { padding: 0; border: 0; background: none;
     color: var(--wx-link, #576b95); font-size: 12px; cursor: pointer; }
   .account-scan:hover { text-decoration: underline; }
   .handoff-card { width: min(340px, 100%); text-align: center; }

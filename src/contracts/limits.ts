@@ -25,6 +25,10 @@ export const LIMITS = {
   syncPageMax: 200,
   /** 每 Agent pending 上限。 */
   pendingPerActor: 500,
+  /** `network_agents_get` 单次批量读取上限；不做全局枚举。 */
+  agentLookupMax: 100,
+  /** 浏览器本地 Agents 注册表上限；超过后保留最新条目。 */
+  webAgentRegistryMax: 100,
   /** 单次成员变更上限。 */
   memberChangeMax: 20,
   /** 群成员上限。 */

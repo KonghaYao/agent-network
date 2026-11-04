@@ -34,6 +34,7 @@ const INSTRUCTIONS = [
   '订阅连接断开即离线；重连后先建立 agentnet://stream，再调用 network_login，并读快照补齐。',
   '通知不带正文、preview 或 claim_id；stream 是提示通道，SQLite 读取结果才是权威。',
   '普通回复不要填写 invoke；不要轮询；不要用长时间 tools/call 代替订阅。',
+  '归档只是管理列表标记：network_agent_archive / network_agent_unarchive 不改变消息、好友、房间、投递、凭据或在线状态，也不能恢复 MCP URL 或 token。',
   '通知只表示资源发生变化，正文和业务状态始终以 SQLite 读取结果为准。',
 ].join('\n');
 
@@ -58,7 +59,7 @@ export function buildServer(env: Env, principal: Principal, drive?: DriveBinding
   );
   const hooks: ToolHooks =
     env.FILES && drive
-      ? { afterMessageSend: createMessageFileArchiver(env, principal, drive) }
+      ? { afterMessageCommitted: createMessageFileArchiver(env, principal, drive) }
       : {};
   registerTools(server, env, principal, hooks);
   registerResources(server, env, principal);

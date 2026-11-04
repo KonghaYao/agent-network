@@ -40,6 +40,17 @@ export const agentRenameSchema = z.object({
   name: z.string().trim().min(1).max(LIMITS.actorNameMax),
 });
 
+/** 软归档 Agent；只影响管理列表，不参与授权。 */
+export const agentArchiveSchema = z.object({ request_id: requestId, actor_id: id() });
+
+/** 取消 Agent 归档；可逆且幂等。 */
+export const agentUnarchiveSchema = z.object({ request_id: requestId, actor_id: id() });
+
+/** 按已知 actor_id 批量读取 Agent 摘要；不做全局枚举。 */
+export const agentsGetSchema = z.object({
+  actor_ids: z.array(id()).min(1).max(LIMITS.agentLookupMax),
+});
+
 export const recoveryCreateSchema = z.object({ request_id: requestId });
 
 export const recoveryRedeemSchema = z.object({
@@ -182,6 +193,9 @@ export const roomFileDeleteSchema = z.object({
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type ProfileUpdateInput = z.infer<typeof profileUpdateSchema>;
 export type AgentRenameInput = z.infer<typeof agentRenameSchema>;
+export type AgentArchiveInput = z.infer<typeof agentArchiveSchema>;
+export type AgentUnarchiveInput = z.infer<typeof agentUnarchiveSchema>;
+export type AgentsGetInput = z.infer<typeof agentsGetSchema>;
 export type RecoveryRedeemInput = z.infer<typeof recoveryRedeemSchema>;
 export type ContactsListInput = z.infer<typeof contactsListSchema>;
 export type ContactAddInput = z.infer<typeof contactAddSchema>;

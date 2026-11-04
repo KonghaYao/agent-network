@@ -34,6 +34,7 @@ function applyRouteChrome(route) {
   document.title = home ? 'WeBots' : '聊天 · WeBots';
   // 路由切换时关闭瞬时 UI；new-agent 弹窗可能正在展示只显示一次的凭据，保持打开。
   hideMentionPicker();
+  closeRoomMenu();
   closeRenameForm();
   closeGroupModal();
   hideComposerDrop();

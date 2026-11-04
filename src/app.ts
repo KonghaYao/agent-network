@@ -383,6 +383,8 @@ async function handleMcp(request: Request, env: Env, mount?: FileMount): Promise
 
 export interface AppDeps {
   mount?: FileMount;
+  /** 启动时构建的 AI 消息 Markdown bundle；null 表示构建失败、页面回退纯文本。 */
+  markdownAsset?: string | null;
 }
 
 interface ByteRange {
@@ -492,6 +494,19 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
       stream: env.NOTIFICATION_HUB.streamStats(),
     }),
   );
+
+  // AI 消息 Markdown 岛：启动构建、内存缓存；构建失败或未注入时 404，
+  // 页面保留纯文本回退，不影响发送、文件卡片与其他交互。
+  app.get('/assets/chat-markdown.js', (c) => {
+    if (!deps.markdownAsset) {
+      return c.text('Not Found', 404, { 'cache-control': 'no-store' });
+    }
+    return c.body(deps.markdownAsset, 200, {
+      'content-type': 'text/javascript; charset=utf-8',
+      'cache-control': 'public, max-age=300',
+      'x-content-type-options': 'nosniff',
+    });
+  });
 
   // 公开只读技能文档：只允许 public/skills 下的一层 .md，拒绝路径穿越。
   // 文档本身不含凭据；调用方自行通过 AGENTNET_TOKEN 提供 Bearer。

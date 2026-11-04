@@ -22,7 +22,7 @@ import type { Env } from '../env';
 import { getRoomFile } from '../storage/queries';
 import { requireActor } from './auth';
 import { roomFileDeletedSchema, roomFilePageSchema, roomFileResultSchema } from './outputs';
-import { register, type MessageSendHookInput } from './tools';
+import { register, type MessageCommittedHookInput } from './tools';
 
 export interface RoomFileToolBinding {
   fileService: FileService;
@@ -60,18 +60,20 @@ function createRoomFileSource(binding: RoomFileToolBinding): RoomFileSource {
 }
 
 /**
- * 消息发送成功后的自动归档（best-effort）。
+ * 消息提交后的自动归档（best-effort）。
  *
- * 只处理正文中的同源 `/f/<fileId>`，且仅当发送者拥有该文件、文件未过期、
- * 尚未绑定到任何房间时才调用 `roomFileBind`。任何失败（他人文件、跨房间
- * CONFLICT、配额、Drive 不可用、幂等冲突等）都只跳过当前文件，不影响已
- * 提交的消息响应。归档在消息事务之外串行执行，消息事务本身不感知文件。
+ * 由 `network_message_send` 与带 `final_body` 的 `network_delivery_complete`
+ * 在消息事务提交后触发。只处理正文中的同源 `/f/<fileId>`，且仅当发送者
+ * 拥有该文件、文件未过期、尚未绑定到任何房间时才调用 `roomFileBind`。
+ * 任何失败（他人文件、跨房间 CONFLICT、配额、Drive 不可用、幂等冲突等）
+ * 都只跳过当前文件，不影响已提交的消息响应。归档在消息事务之外串行执行，
+ * 消息事务本身不感知文件。
  */
 export function createMessageFileArchiver(
   env: Env,
   principal: Principal,
   binding: RoomFileToolBinding,
-): (input: MessageSendHookInput) => Promise<void> {
+): (input: MessageCommittedHookInput) => Promise<void> {
   const source = createRoomFileSource(binding);
   return async (input) => {
     const fileIds = extractMessageFileLinks(input.body, env.PUBLIC_ORIGIN);

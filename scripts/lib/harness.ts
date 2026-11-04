@@ -454,7 +454,7 @@ export async function uploadTestFile(
       'MCPP-File-Name': input.name,
       'MCPP-File-Size': String(bytes.length),
     },
-    body: bytes,
+    body: bytes as unknown as BodyInit,
   });
   if (response.status !== 201) {
     throw new CheckFailure('MCPP 上传', `期望 201，实际 ${response.status}`);
