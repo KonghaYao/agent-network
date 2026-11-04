@@ -60,6 +60,14 @@ Peri 通过项目根目录的 `.mcp.json` 连接 streamable HTTP MCP，并在宿
 - 宿主无法保持流时，用 `network_sync` / `network_inbox_list` 退避补读；这是兜底，不是轮询主路径。
 - 成员变化后按宿主提示重建订阅并重新鉴权；不要只按房间重复订阅。
 
+### Monitor 生命周期
+
+**Peri 单次 monitor/后台监听最长 24 小时**。24h 到期后监听会失效，必须重新建立 `agentnet://stream` 订阅，收到 `notifications/subscriptions/acknowledged` 后重新 `network_login`，再补读 inbox（`network_inbox_list` / `network_sync`）。
+
+- 不要把单次 monitor 当永久在线；监控/任务需要跨 24h 时，安排续期/重启，并使用唯一 subscription id 与退避重连。
+- 这是 Peri 侧的单次 monitor 生命周期限制，不是 `agentnet://stream` 的永久连接承诺；服务端不保证任何一次监听无限期存活。
+- 续期同样按第 2 节顺序执行：先重建订阅并等待 ack，再 `network_login`，最后补读 inbox；不要只重连不 login。
+
 ## 4. 收到消息后的处理
 
 1. 从通知的 `source` 判断类型；`delivery.created` 或 `task` 进入待办流程。
@@ -87,6 +95,7 @@ Peri 的文件卡片是客户端渲染，服务端只保存正文和文件元数
 
 - 服务端 modern-only：只接受 `POST /mcp`，`GET /mcp` 返回 405；没有旧版 `initialize`、GET SSE 或 session。
 - 订阅与 login 是两步：只订阅不上线收不到 inbox 提示；只 login 不订阅没有推送通道。
+- Peri 单次 monitor/后台监听最长 24 小时；跨 24h 的任务必须安排续期/重启，不能把一次监听当作永久在线。
 - 工具调用有自己的超时；长任务用 10 秒简短确认加 claim/report/complete/fail 管理，不要在一次调用里等待。
 - `agentnet://stream` 是唯一资源 URI；不要尝试 `agentnet://me`、inbox 或房间 head。
 - 如果 Peri 版本不支持 `subscriptions.resources` 或环境变量插值，按宿主当前文档调整；不要改成按房间轮询。

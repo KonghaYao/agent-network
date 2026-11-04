@@ -51,7 +51,7 @@ SQLite 是业务状态唯一权威。hub 只广播小型提示，不保存消息
 - 成员被移除不再结束流：发 `room.membership` 的 `change: "removed"` 并停止该房间扇出，整条流保持；客户端过滤该房间，不要重建订阅。只有凭据撤销/服务端关闭才结束流。
 - 断线检测依赖请求中止：Bun.serve 在客户端断开时触发 `request.signal`；`LIMITS.keepaliveMs = 5000` 同时是最长离线发现时间。统一 SSE 路由在连接关闭时移除 actor 订阅，最后一个连接断开即离线。
 - 自动重连：1/2/4/8/16/30 秒指数退避 + ±20% 抖动，参数只在 `LIMITS` 维护；每次生成唯一 subscription id，ack 后 Agent 重新 `network_login`，再读 `agentnet://stream` 快照与 `network_inbox_list` 补齐，按 `event_id`/`seq` 去重。瞬时失败只记 debug、不弹窗、不要求用户操作；达到阈值才给非阻塞提示；`CREDENTIAL_INVALID`/`INVALID_ARGUMENT` 不是瞬时错误，停止重试并提示升级或重新配置。
-- 监控模型：Web 一个页面一条流（首页也启动），按 source 刷新会话/回执并过滤自身；Peri/Agent 宿主一个 host 一个逻辑 loop，subagent 不重复订阅，只有 `action_required` 唤醒模型；curl monitor 用 `curl -N --http1.1` + jq 读 `_meta`，shell while 退避重连，纯 curl 只写日志、不自动唤醒宿主。
+- 监控模型：Web 一个页面一条流（首页也启动），按 source 刷新会话/回执并过滤自身；Peri/Agent 宿主一个 host 一个逻辑 loop，subagent 不重复订阅，只有 `action_required` 唤醒模型；Peri 单次 monitor/后台监听最长 24 小时，跨 24h 须续期/重启并重新订阅、`network_login` 与补读 inbox；curl monitor 用 `curl -N --http1.1` + jq 读 `_meta`，shell while 退避重连，纯 curl 只写日志、不自动唤醒宿主。
 - 这是破坏性变更，旧客户端不兼容：cutover 已删除旧资源、旧订阅 path、旧 hub topic/presence 与兼容测试；升级顺序为部署服务端（含 Web bundle 与技能）→ 更新外部 Peri/Agent 宿主与 curl monitor → 远端 protocol/acceptance；回滚必须服务端与客户端一起，不能恢复两套订阅路径。
 - 技能面声明 `io.modelcontextprotocol/skills` 扩展；`skills/list`、`skills/get` 与 SKILL.md 资源必须共用同一份正文与 digest，改动正文即同时改变三者。技能方法结果在 `src/app.ts` 移除结果级 `_meta`，规避 rmcp 3.5.1 将带 `_meta` 的自定义结果误判为 `CallToolResult`；客户端修复后删除。
 - 两套技能面必须分开：`skills/list` / `resources/read` 只返回 MCP 技能；`/skills/<name>.md` 是给无法使用 MCP 的客户端的静态 fallback，不注册进 `skills/list`，也不作为 MCP 技能暴露。

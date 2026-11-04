@@ -1063,6 +1063,31 @@ async function main(): Promise<void> {
     );
   }
 
+  const periGuide = await fetch(`${baseUrl()}/skills/harness-peri.md`);
+  checkEqual('GET /skills/harness-peri.md 返回 200（Peri 指南）', periGuide.status, 200);
+  const periGuideType = periGuide.headers.get('content-type') ?? '';
+  const periGuideText = await periGuide.text();
+  const periMonitorMarkers = [
+    '24 小时',
+    '24h',
+    'monitor',
+    'network_login',
+    'agentnet://stream',
+    'Monitor 生命周期',
+    'notifications/subscriptions/acknowledged',
+  ];
+  check(
+    'Peri 指南标注单次 monitor 最长 24h 并要求续期后重新订阅、login 与补读 inbox',
+    periGuideType.includes('text/markdown') &&
+      periMonitorMarkers.every((marker) => periGuideText.includes(marker)) &&
+      !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(periGuideText) &&
+      !/[?&]token=[0-9a-f]{8}-[0-9a-f]{4}/iu.test(periGuideText),
+    {
+      contentType: periGuideType,
+      missing: periMonitorMarkers.filter((marker) => !periGuideText.includes(marker)),
+    },
+  );
+
   const claudeGuide = await fetch(`${baseUrl()}/skills/harness-claude.md`);
   const claudeGuideText = await claudeGuide.text();
   check(
