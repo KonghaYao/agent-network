@@ -11,8 +11,9 @@ import { operationsStatement, runIdempotent } from '../storage/transactions/runn
 import { actorId, type Principal } from './principal';
 
 /**
- * Agent 软归档是纯管理列表标记：只影响 `network_agents_get` 返回的归档状态；
- * 网页不提供 Agents 管理入口。不得用 `archived_at` 拒绝消息、登录、投递或凭据，
+ * Agent 软归档是纯管理列表标记：只影响 `network_agents_get` 返回的归档状态
+ * 与网页侧栏的默认会话过滤；网页只提供已归档列表的恢复入口，不提供 Agents
+ * 管理/归档界面。不得用 `archived_at` 拒绝消息、登录、投递或凭据，
  * 也不写 events/outbox、不改变 `pending_count`、`rooms.head_seq` 或在线状态。
  */
 

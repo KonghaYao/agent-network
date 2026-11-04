@@ -1,8 +1,9 @@
 /**
  * 浏览器本地 Agent 注册表。
  *
- * 侧栏不提供 Agents 管理入口，也没有 Agents 弹窗或归档界面；注册表仍由
- * “新建 Agent”写入，并供 direct Agent 会话右键提示词与 token 重发复用。
+ * 侧栏不提供 Agents 管理弹窗或归档界面；注册表仍由“新建 Agent”写入，
+ * 并供 direct Agent 会话右键提示词、token 重发与已归档浮层复用。
+ * 归档状态不写入注册表，始终以服务端工具返回为准。
  *
  * 由 `chatClientScript` 拼进主脚本共享作用域，因此可直接使用
  * `AGENT_REGISTRY_MAX`。本地注册表保存 owner/actor/session/名称/创建时间与

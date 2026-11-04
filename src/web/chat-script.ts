@@ -1,6 +1,7 @@
 import { MESSAGE_FILE_ID_SOURCE } from '../contracts/file-links';
 import { LIMITS } from '../contracts/limits';
 import { CHAT_AGENTS_SCRIPT } from './chat-agents-script';
+import { CHAT_ARCHIVE_SCRIPT } from './chat-archive-script';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
 import { CHAT_LIST_SCRIPT } from './chat-list-script';
@@ -37,6 +38,8 @@ const MEMBER_CHANGE_MAX = ${LIMITS.memberChangeMax};
 const GROUP_MEMBERS_MAX = ${LIMITS.groupMembersMax};
 // 本地 Agent 注册表上限；阈值只在 limits.ts 维护。
 const AGENT_REGISTRY_MAX = ${LIMITS.webAgentRegistryMax};
+// 归档状态批量查询上限，与服务端 network_agents_get 一致。
+const AGENT_LOOKUP_MAX = ${LIMITS.agentLookupMax};
 // 与服务端共享的 fileId 片段与链接上限，避免客户端/服务端规则漂移。
 const MESSAGE_FILE_ID_SOURCE = ${jsonForScript(MESSAGE_FILE_ID_SOURCE)};
 const MESSAGE_FILE_MAX = ${LIMITS.messageFileLinksMax};
@@ -94,6 +97,7 @@ let pendingRoomRefreshId = null;
 let stickyStatus = '';
 
 ${CHAT_LIST_SCRIPT}
+${CHAT_ARCHIVE_SCRIPT}
 ${CHAT_ROOM_MENU_SCRIPT}
 ${CHAT_MEMBERS_SCRIPT}
 ${CHAT_MESSAGE_FILES_SCRIPT}

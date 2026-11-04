@@ -63,11 +63,31 @@ export function sidebarPane(): string {
   <div class="room-menu" id="room-menu" role="menu" aria-label="会话操作" hidden>
     <button class="room-menu-item" id="room-menu-copy-prompt" type="button"
       role="menuitem">复制 Agent 连接提示词</button>
+    <button class="room-menu-item" id="room-menu-archive" type="button"
+      role="menuitem" hidden>归档</button>
     <button class="room-menu-item danger" id="room-menu-reissue-token" type="button"
       role="menuitem" hidden>注销并重发 token</button>
     <p class="room-menu-status" id="room-menu-status" role="status" aria-live="polite" hidden></p>
   </div>
+  <div class="archive-popover" id="archive-popover" role="dialog"
+    aria-label="已归档 Agents" hidden>
+    <header class="archive-popover-head">
+      <h2>已归档 Agents</h2>
+      <button class="archive-popover-close" id="archive-popover-close" type="button"
+        aria-label="关闭已归档 Agents" title="关闭">×</button>
+    </header>
+    <p class="archive-popover-status" id="archive-popover-status"
+      role="status" aria-live="polite" hidden></p>
+    <ul class="archive-popover-list" id="archive-popover-list" aria-label="已归档 Agent"></ul>
+    <p class="archive-popover-empty" id="archive-popover-empty"
+      role="status" hidden>暂无已归档 Agent</p>
+  </div>
 </aside>`;
+}
+
+/** 轻量 toast：归档/恢复反馈，不阻塞操作，也不承担错误详情。 */
+export function toastPane(): string {
+  return `<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>`;
 }
 
 /** 聊天区：56px 头部、可滚动消息、固定输入区。 */

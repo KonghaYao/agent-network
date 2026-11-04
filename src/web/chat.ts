@@ -8,6 +8,7 @@ import {
   membersDialog,
   newAgentDialog,
   sidebarPane,
+  toastPane,
 } from './chat-panels';
 import { chatClientScript } from './chat-script';
 import { FILES_STYLE } from './chat-files-styles';
@@ -47,6 +48,7 @@ ${groupDialog()}
 ${membersDialog()}
 ${newAgentDialog()}
 ${deviceHandoffDialog()}
+${toastPane()}
 ${chatClientScript(roomId)}`,
     APP_STYLE + FILES_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE,
     { wide: true, bodyClass: isHome ? 'page-home' : 'page-room' },

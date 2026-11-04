@@ -1,6 +1,6 @@
 # WeBots 代码索引
 
-状态：M0–M3 服务端与 M4 网页入口已实现（分享页建联、微信风双栏首页/聊天、会话搜索、建群、群 @、消息状态回执、Agent 全局改名、Agent token 注销重发、Agent 软归档（网页不提供 Agents 管理入口）、左下角手机扫码共享当前身份与复制扫码内容、显式上线与离线补发、暗色与移动端单栏）；聊天房间文件服务端已实现（绑定、列表、读取、删除墓碑、公开下载与配额），网页文件栏已实现并由 `bun run test:web` 490 项覆盖；MCP Events webhook 订阅、消息文件自动归档、四份 Harness 静态接入指南（Codex/ChatGPT Web/Peri/Claude Code）与相关文档已实现。本地与远程协议/端到端验收通过。生产负载、限流与远程运营仍未验证。使用说明由 [包 README](../../npm-packages/agent-network/README.md) 维护，实施契约见 [active spec](../../spec/issues/2026-10-21-agent-network.md)。
+状态：M0–M3 服务端与 M4 网页入口已实现（分享页建联、微信风双栏首页/聊天、会话搜索、建群、群 @、消息状态回执、Agent 全局改名、Agent token 注销重发、Agent 软归档（侧栏 direct Agent 右键归档与账号区已归档浮层）、左下角手机扫码共享当前身份与复制扫码内容、显式上线与离线补发、暗色与移动端单栏）；聊天房间文件服务端已实现（绑定、列表、读取、删除墓碑、公开下载与配额），网页文件栏已实现并由 `bun run test:web` 520 项覆盖；MCP Events webhook 订阅、消息文件自动归档、四份 Harness 静态接入指南（Codex/ChatGPT Web/Peri/Claude Code）与相关文档已实现。本地与远程协议/端到端验收通过。生产负载、限流与远程运营仍未验证。使用说明由 [包 README](../../npm-packages/agent-network/README.md) 维护，实施契约见 [active spec](../../spec/issues/2026-10-21-agent-network.md)。
 
 ## 边界与数据流
 
@@ -8,7 +8,7 @@
 
 手机扫码：`src/web/handoff.ts` 在左下角用户区块提供入口，`src/web/qr.ts` 在 canvas 现场编码 `location.origin + '/#t=' + encodeURIComponent(token)`；不请求服务端、不新增工具或路由。弹窗的“复制扫码内容”复制同一 URL，优先 `navigator.clipboard.writeText`，失败回退临时 `textarea` + `execCommand`；无 token 时禁用，token 不进入页面文本、DOM 或 console。手机打开后，早执行的 `HANDOFF_ADOPT_SCRIPT` 读取 `#t=`、写入 `localStorage['agent-network-token']`、用 `history.replaceState` 清除 hash，首页脚本随后读取同一 token，因此手机与桌面是同一 actor、同一权限。token 位于 fragment，不随文档请求发送；但二维码本身即长期凭据，弹窗与文档必须提示勿截图/分享，且不声称过期、一次性或“已扫码”。
 
-应用页按职责拆分：`src/web/chat.ts` 只保留 `renderAppPage` / `renderChatPage` 与外壳组合；样式在 `chat-styles.ts`，静态标记与搜索框在 `chat-panels.ts`，通信/刷新/事件在 `chat-script.ts`，会话列表与搜索在 `chat-list-script.ts`，消息渲染（时间胶囊、@ 高亮、回执）在 `chat-render-script.ts`。列表与渲染片段拼进同一个 `<script>` 共享作用域；拆分不改变工具契约、DOM id/class 或页面行为。所有 `src/web/*.ts` 均低于 `STD-SIZE-001` 的 1000 行上限。
+应用页按职责拆分：`src/web/chat.ts` 只保留 `renderAppPage` / `renderChatPage` 与外壳组合；样式在 `chat-styles.ts`，静态标记与搜索框在 `chat-panels.ts`，通信/刷新/事件在 `chat-script.ts`，会话列表与搜索在 `chat-list-script.ts`，归档状态、已归档浮层与 toast 在 `chat-archive-script.ts`，消息渲染（时间胶囊、@ 高亮、回执）在 `chat-render-script.ts`。列表与渲染片段拼进同一个 `<script>` 共享作用域；拆分不改变工具契约、DOM id/class 或页面行为。所有 `src/web/*.ts` 均低于 `STD-SIZE-001` 的 1000 行上限。
 
 AI 消息 Markdown：`src/web/markdown/entry.tsx` 是唯一的 React 子树（React 19 + `streamdown` 2.7.0，`mode="static"`、`parseIncompleteMarkdown={false}`），只接收 `sender_kind === 'agent'` 的气泡；`src/web/chat-markdown-script.ts` 在首条 AI 消息出现时懒加载 `/assets/chat-markdown.js`（失败只请求一次并保留纯文本），负责 mount/update/destroy 与滚动补偿；样式在 `src/web/chat-markdown-styles.ts`。`src/web/markdown-bundle.ts` 在 `src/bun/main.ts` 启动时用 `Bun.build` 生成单文件浏览器 bundle，`src/app.ts` 以正确 content-type、`nosniff` 与 5 分钟缓存提供；构建失败返回 404。安全配置为 sanitize + harden（`http/https/mailto`、无图片、无 data image、`defaultOrigin=location.origin`），不启用 `rehype-raw`，不内置图片，不使用 `dangerouslySetInnerHTML`；链接强制 `target=_blank`/`rel`/`referrerPolicy`，错误边界回退纯文本。服务端 `network_history_list` 在 `messageSchema` 上增加只读 `sender_kind`，网页优先该字段并回退 `members`；人类消息始终纯文本，512B 截断的 AI 消息展开后再渲染 Markdown。文件卡片仍由正文扫描生成在气泡外，`@名字` 在文本节点内高亮、代码块内不误高亮。
 
@@ -29,7 +29,7 @@ MCP Events：`src/contracts/events.ts` 固定事件名与错误码 `-32015`；`s
 
 Agent token 注销重发：`src/domain/identity.ts` 的 `reissueAgentToken` 在同一个 `runIdempotent` 事务中把目标 Agent 所有未撤销凭据置 `revoked_at`，并写入新 token 的 `hashToken` 摘要；`operations.result_json` 只保存 `actor_id`/`revoked_count`/`issued_at`，不保存 raw token，因此同一 `request_id` 重放返回 `TOKEN_NOT_REPLAYABLE`。权限与 `network_agent_rename` 一致，human 目标 `INVALID_ARGUMENT`、未知 `NOT_FOUND`。`src/mcp/tools.ts` 注册 `network_agent_reissue_token`（工具总数 37，关闭 Drive 32），输出 schema 在 `src/mcp/outputs.ts`；`src/web/chat-room-menu-script.ts` 只在 direct Agent 会话显示“注销并重发 token”，使用 `window.confirm` 二次确认，成功后通过 `agentRegistryReissue` 更新 `agent-network-agents-v1` 中的 `mcp_url` 并自动复制新提示词；菜单、页面与 console 不展示 token。
 
-Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `archived_at` / `archived_by`（不建索引、不建独立表）；`src/domain/agents.ts` 的 `archiveAgent` / `unarchiveAgent` 走 `runIdempotent`，保留首次归档时间与操作者，目标必须是 Agent（human → `INVALID_ARGUMENT`，未知 → `NOT_FOUND`），权限与 `network_agent_rename` 一致；`agentsGet` 只按已知 `actor_ids` 批量读取（1–100，去重保序，人类/未知进 `missing_actor_ids`），不返回 metadata 或凭据。归档不写 events/outbox、不改 `pending_count` / `rooms.head_seq`，也不影响认证、好友、房间、消息、delivery、stream、presence 或 login；`identityView` 不暴露归档字段。`src/mcp/tools.ts` 注册 3 个工具（总数 37，关闭 Drive 32），输出 schema 在 `src/mcp/outputs.ts`。网页 `src/web/chat-agents-script.ts` 只维护浏览器本地注册表（网页不提供 Agents 管理入口，也没有 Agents 弹窗或归档界面）；注册表 key 为 `agent-network-agents-v1`，按当前 human `actor_id` 隔离，保存 `owner_actor_id`/`actor_id`/`name`/`agent_session_id`/`created_at`/`mcp_url`（Agent 自己的长期 URL，含 token），不保存 human token、提示词或 `share_url`；`src/web/chat-room-menu-script.ts` 在 direct/group 会话右键时把命中的 MCP URL 与提取的 token 写入复制提示词，未命中时明确提示。
+Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `archived_at` / `archived_by`（不建索引、不建独立表）；`src/domain/agents.ts` 的 `archiveAgent` / `unarchiveAgent` 走 `runIdempotent`，保留首次归档时间与操作者，目标必须是 Agent（human → `INVALID_ARGUMENT`，未知 → `NOT_FOUND`），权限与 `network_agent_rename` 一致；`agentsGet` 只按已知 `actor_ids` 批量读取（1–100，去重保序，人类/未知进 `missing_actor_ids`），不返回 metadata 或凭据。归档不写 events/outbox、不改 `pending_count` / `rooms.head_seq`，也不影响认证、好友、房间、消息、delivery、stream、presence 或 login；`identityView` 不暴露归档字段。`src/mcp/tools.ts` 注册 3 个工具（总数 37，关闭 Drive 32），输出 schema 在 `src/mcp/outputs.ts`。网页 `src/web/chat-agents-script.ts` 只维护浏览器本地注册表（不再提供旧 Agents 管理弹窗或旧归档界面）；`src/web/chat-archive-script.ts` 维护 `network_agents_get` 归档状态、侧栏 direct Agent 过滤、账号区“已归档 Agents”浮层与恢复/toast，`src/web/chat-room-menu-script.ts` 在 direct Agent 右键菜单提供“归档”，群聊与人类会话不显示。归档状态不写 localStorage，也不新增全局枚举端点；浮层只覆盖当前会话列表中的 direct Agent。注册表 key 为 `agent-network-agents-v1`，按当前 human `actor_id` 隔离，保存 `owner_actor_id`/`actor_id`/`name`/`agent_session_id`/`created_at`/`mcp_url`（Agent 自己的长期 URL，含 token），不保存 human token、提示词或 `share_url`；`src/web/chat-room-menu-script.ts` 在 direct/group 会话右键时把命中的 MCP URL 与提取的 token 写入复制提示词，未命中时明确提示。
 
 - 写操作全部经 `src/storage/transactions/runner.ts` 的 `runIdempotent`；`operations` 唯一键取得所有权，业务写入与 `src/storage/guards.ts` 条件闸门在同一 `db.batch()` 中提交。
 - 闸门表在 `migrations/0001_initial.sql` 建立，`0002_named_guards.sql` 为约束命名，使 SQLite CHECK 错误文本可映射为业务错误。
@@ -51,7 +51,8 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 应用页内联客户端脚本（通信、刷新、建群、@、扫码弹窗） | `src/web/chat-script.ts` |
 | 会话列表、搜索过滤、头像与未读 | `src/web/chat-list-script.ts` |
 | 消息气泡、时间胶囊、@ 高亮与回执 | `src/web/chat-render-script.ts` |
-| 本地 Agent 注册表（侧栏无 Agents 入口） | `src/web/chat-agents-script.ts` |
+| 本地 Agent 注册表（不含归档状态） | `src/web/chat-agents-script.ts` |
+| 归档状态、侧栏过滤、已归档浮层与 toast | `src/web/chat-archive-script.ts` |
 | Agent 归档域逻辑与批量摘要 | `src/domain/agents.ts` |
 | `actors.archived_at` / `archived_by` | `migrations/0005_agent_archive.sql` |
 | 左下角扫码入口、弹窗、fragment 采纳与安全文案 | `src/web/handoff.ts` |
@@ -102,7 +103,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 - `bun run test:drive`：47 项（MCPP Files 上传、公开下载、`drive_file_info` 与 Drive 生命周期）
 - `DATA_DIR=.data bun scripts/verify-room-files.ts`：187 项（bind/list/get/delete、上传者与群 owner 权限、200 个 / 1 GiB 配额、30 天 TTL 上限、墓碑、公开 URL、HEAD/Range/416/304/`?download=1`、P0 安全头、`room.file` informational 事件，以及同源文件链接解析与消息提交后自动归档（含 final_body）的幂等/跨房间/他人/删除/过期/配额跳过）
 - `bun run test:events`：314 项（能力与 schema 描述、challenge/HMAC、订阅过滤、动作/信息事件、500 重试与 410/413 停止、暂停/刷新恢复、撤销/移除/过期、重启持久化、cursor/truncated、双签、订阅配额、日志脱敏、文件日志落盘/轮转/fail-open、IPv4 优先多地址回退与单地址超时、全球单播 SSRF allowlist 与公网 IPv4/IPv6、DRIVE_DISABLED 下含文件链接消息仍成功）
-- 浏览器 E2E：Playwright + 本机 Chrome，覆盖搜索过滤、选中高亮、未读红点、气泡左右/头像/时间胶囊/回执、群聊 2×2 头像与 @ 高亮、改名、建群、中文输入法 Enter、扫码弹窗与移动端 hash 采纳、暗色、移动端单栏/返回/输入框自适应/滚动、无 token 引导、侧栏不再有 Agents 按钮、扫码复制（有/无 token、复制内容、execCommand 回退、失败提示、390px）、direct Agent 注销重发（二次确认/取消/成功自动复制/失败/旧 token 失效/DB 不落原文/移动端）；`bun run test:web` 490 项通过，另含 AI 消息 Markdown（类型/安全/懒加载/回退/移动端/滚动）、三档文件栏布局、真实上传/bind/预览/删除与 `room.file` 刷新
+- 浏览器 E2E：Playwright + 本机 Chrome，覆盖搜索过滤、选中高亮、未读红点、气泡左右/头像/时间胶囊/回执、群聊 2×2 头像与 @ 高亮、改名、建群、中文输入法 Enter、扫码弹窗与移动端 hash 采纳、暗色、移动端单栏/返回/输入框自适应/滚动、无 token 引导、侧栏归档入口（右键归档、默认列表过滤、空态/加载/错误、恢复、点击外部/Esc、390px 与暗色）、扫码复制（有/无 token、复制内容、execCommand 回退、失败提示、390px）、direct Agent 注销重发（二次确认/取消/成功自动复制/失败/旧 token 失效/DB 不落原文/移动端）；`bun run test:web` 520 项通过，另含 AI 消息 Markdown（类型/安全/懒加载/回退/移动端/滚动）、三档文件栏布局、真实上传/bind/预览/删除与 `room.file` 刷新
 - 远程：`AGENTNET_URL=https://net.peri-code.dev bun run test:protocol` / `test:acceptance`；2026-10-21 在旧域名 `networks.peri-code.dev` 上 85/109 项通过，部署版本 `1f02bd89-d372-4f22-9135-18c07acfef23`。生产唯一入口为自定义域名，`workers_dev: false`，旧 `workers.dev` 已关闭且无重定向
 
 验收脚本会创建新身份与房间；远程验收不要指向生产数据。本地 dev 状态在 `DATA_DIR`（默认 `.data`）的 `agent-network.sqlite` 与 `files/`；迁移变更后执行 `bun run db:migrate`。

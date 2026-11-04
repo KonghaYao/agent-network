@@ -1798,9 +1798,25 @@ async function main(): Promise<void> {
       checkEqual('Agents 弹窗已移除', await page.locator('#agents-modal').count(), 0);
       const accountActions = await page.locator('#account .account-actions button').allTextContents();
       checkEqual(
-        '账号区只保留复制 ID、新建 Agent 与手机扫码',
-        accountActions.map((label) => label.trim()).join('|'),
+        '账号区保留复制 ID、新建 Agent 与手机扫码文字按钮',
+        accountActions.map((label) => label.trim()).filter(Boolean).join('|'),
         '复制 ID|新建 Agent|手机扫码',
+      );
+      checkEqual('账号区新增单个已归档图标按钮', await page.locator('#archived-agents').count(), 1);
+      checkEqual(
+        '已归档图标按钮有可读标签',
+        await page.locator('#archived-agents').getAttribute('aria-label'),
+        '已归档 Agents',
+      );
+      checkEqual(
+        '已归档图标按钮有 title',
+        await page.locator('#archived-agents').getAttribute('title'),
+        '已归档 Agents',
+      );
+      checkEqual(
+        '已归档图标按钮不显示 Agents 文字',
+        ((await page.locator('#archived-agents').textContent()) ?? '').trim(),
+        '',
       );
       check(
         '300px 侧栏账号区不横向溢出',
@@ -2004,6 +2020,371 @@ async function main(): Promise<void> {
         true,
       );
       await mobile.context.close();
+    }
+
+    // 2b-2a. 归档 direct Agent 会话：入口限制、列表过滤、已归档浮层、恢复与移动端。
+    {
+      const archiveAgent = await createAgentFriend(data.humanToken, '待归档 Agent');
+      const archiveRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [archiveAgent.actor_id],
+      });
+      const humanPeerToken = crypto.randomUUID();
+      const humanPeer = await rawTool<Actor>(humanPeerToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'human',
+        name: '人类单聊对象',
+      });
+      await rawTool(data.humanToken, 'network_contact_add', {
+        request_id: requestId('contact'),
+        actor_id: humanPeer.actor_id,
+      });
+      const humanRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [humanPeer.actor_id],
+      });
+      const archiveLink = roomLink(archiveRoom.room.room_id);
+      const humanLink = roomLink(humanRoom.room.room_id);
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.waitForFunction(
+        `(() => {
+          const link = document.querySelector(${JSON.stringify(archiveLink)});
+          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(archiveAgent.name)}));
+        })()`,
+      );
+      await page.waitForFunction(
+        `(() => {
+          const link = document.querySelector(${JSON.stringify(humanLink)});
+          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(humanPeer.name)}));
+        })()`,
+      );
+
+      await page.locator(roomLink(data.group.room.room_id)).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      checkEqual(
+        '群聊右键不显示归档入口',
+        await page.locator('#room-menu-archive').isHidden(),
+        true,
+      );
+      await page.keyboard.press('Escape');
+      await page.locator(humanLink).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      checkEqual(
+        '人类 direct 会话不显示归档入口',
+        await page.locator('#room-menu-archive').isHidden(),
+        true,
+      );
+      await page.keyboard.press('Escape');
+      await page.locator(archiveLink).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      checkEqual(
+        '单聊 Agent 右键显示归档入口',
+        await page.locator('#room-menu-archive').isVisible(),
+        true,
+      );
+      checkEqual(
+        '归档菜单文案',
+        ((await page.locator('#room-menu-archive').textContent()) ?? '').trim(),
+        '归档',
+      );
+      await page.keyboard.press('Escape');
+
+      // 空态、桌面锚定、外部点击与 Escape 关闭。
+      await page.locator('#archived-agents').click();
+      await page.locator('#archive-popover').waitFor({ state: 'visible' });
+      await page.waitForFunction(
+        `document.getElementById('archive-popover-empty').hidden === false`,
+      );
+      checkEqual(
+        '已归档浮层空态文案',
+        ((await page.locator('#archive-popover-empty').textContent()) ?? '').trim(),
+        '暂无已归档 Agent',
+      );
+      checkEqual(
+        '打开浮层后图标 aria-expanded 为 true',
+        await page.locator('#archived-agents').getAttribute('aria-expanded'),
+        'true',
+      );
+      const desktopPopover = (await page.evaluate(`(() => {
+        const popover = document.getElementById('archive-popover').getBoundingClientRect();
+        const trigger = document.getElementById('archived-agents').getBoundingClientRect();
+        return {
+          left: popover.left, top: popover.top, right: popover.right, bottom: popover.bottom,
+          triggerTop: trigger.top, view: window.innerWidth, viewHeight: window.innerHeight,
+          doc: document.documentElement.scrollWidth
+        };
+      })()`)) as {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+        triggerTop: number;
+        view: number;
+        viewHeight: number;
+        doc: number;
+      };
+      check(
+        '桌面浮层锚定在图标上方且不超出视口',
+        desktopPopover.bottom <= desktopPopover.triggerTop + 1 &&
+          desktopPopover.left >= 0 &&
+          desktopPopover.top >= 0 &&
+          desktopPopover.right <= desktopPopover.view + 1 &&
+          desktopPopover.doc <= desktopPopover.view,
+        desktopPopover,
+      );
+      await page.locator('#room-search').click();
+      checkEqual(
+        '点击外部关闭已归档浮层',
+        await page.locator('#archive-popover').isHidden(),
+        true,
+      );
+      checkEqual(
+        '关闭后 aria-expanded 为 false',
+        await page.locator('#archived-agents').getAttribute('aria-expanded'),
+        'false',
+      );
+      await page.locator('#archived-agents').click();
+      await page.locator('#archive-popover').waitFor({ state: 'visible' });
+      await page.keyboard.press('Escape');
+      checkEqual('Escape 关闭已归档浮层', await page.locator('#archive-popover').isHidden(), true);
+      checkEqual(
+        'Escape 关闭后焦点回到图标',
+        await page.evaluate(`document.activeElement && document.activeElement.id`),
+        'archived-agents',
+      );
+
+      // 归档：toast、侧栏过滤、房间仍可深链访问与发消息。
+      await page.locator(archiveLink).click({ button: 'right' });
+      await page.locator('#room-menu-archive').click();
+      await page.waitForFunction(
+        `document.getElementById('toast').textContent === '已归档，可在已归档 Agents 中恢复'`,
+      );
+      checkEqual(
+        '归档成功 toast 文案',
+        ((await page.locator('#toast').textContent()) ?? '').trim(),
+        '已归档，可在已归档 Agents 中恢复',
+      );
+      await page.waitForFunction(
+        `document.querySelectorAll(${JSON.stringify(archiveLink)}).length === 0`,
+      );
+      checkEqual(
+        '归档不删除房间数据',
+        (await rawTool<RoomDetail>(data.humanToken, 'network_room_get', {
+          room_id: archiveRoom.room.room_id,
+        })).room.room_id,
+        archiveRoom.room.room_id,
+      );
+
+      await page.goto(`${server.base}/c/${archiveRoom.room.room_id}`);
+      await waitRoom(page, archiveRoom.room.room_id, archiveAgent.name);
+      checkEqual('归档后房间仍可打开', await page.locator('#composer').isVisible(), true);
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.waitForFunction(
+        `document.querySelectorAll(${JSON.stringify(archiveLink)}).length === 0`,
+      );
+
+      // 浮层列出已归档 Agent；恢复失败来自 callTool 的 isError，不被静默吞掉。
+      await page.locator('#archived-agents').click();
+      await page.waitForFunction(
+        `document.querySelectorAll('#archive-popover-list .archive-item').length === 1`,
+      );
+      checkEqual(
+        '已归档浮层显示 Agent 名称',
+        ((await page.locator('#archive-popover-list .archive-name').textContent()) ?? '').trim(),
+        archiveAgent.name,
+      );
+      checkEqual(
+        '已归档条目提供恢复按钮',
+        ((await page.locator('#archive-popover-list .archive-restore').textContent()) ?? '').trim(),
+        '恢复',
+      );
+      checkEqual(
+        '有归档条目时隐藏空态',
+        await page.locator('#archive-popover-empty').isHidden(),
+        true,
+      );
+
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_agent_unarchive') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as { id?: unknown } | null;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    code: 'CONFLICT',
+                    message: '模拟恢复失败',
+                    retryable: false,
+                  }),
+                },
+              ],
+            },
+          }),
+        });
+      });
+      await page.locator('#archive-popover-list .archive-restore').click();
+      await page.waitForFunction(
+        `document.getElementById('archive-popover-status').textContent.indexOf('恢复失败：模拟恢复失败') >= 0`,
+      );
+      checkEqual(
+        '恢复失败保留已归档条目',
+        await page.locator('#archive-popover-list .archive-item').count(),
+        1,
+      );
+      checkEqual(
+        '恢复失败不提前放回侧栏',
+        await page.locator(archiveLink).count(),
+        0,
+      );
+      await page.unroute('**/mcp');
+
+      await page.locator('#archive-popover-list .archive-restore').click();
+      await page.waitForFunction(
+        `document.querySelectorAll('#archive-popover-list .archive-item').length === 0`,
+      );
+      await page.waitForFunction(
+        `document.getElementById('toast').textContent.indexOf('已恢复「') >= 0`,
+      );
+      await page.waitForFunction(
+        `document.querySelector(${JSON.stringify(archiveLink)}) !== null`,
+      );
+      checkEqual(
+        '恢复后显示空态',
+        await page.locator('#archive-popover-empty').isVisible(),
+        true,
+      );
+      checkEqual(
+        '恢复后空态文案',
+        ((await page.locator('#archive-popover-empty').textContent()) ?? '').trim(),
+        '暂无已归档 Agent',
+      );
+      checkEqual(
+        '恢复后会话回到侧栏默认列表',
+        await page.locator(archiveLink).count(),
+        1,
+      );
+      await page.keyboard.press('Escape');
+      await context.close();
+      for (const actorId of [archiveAgent.actor_id, humanPeer.actor_id]) {
+        await rawTool(data.humanToken, 'network_contact_remove', {
+          request_id: requestId('contact'),
+          actor_id: actorId,
+        });
+      }
+    }
+
+    // 2b-2b. 390px 已归档浮层：加载态、视口约束、暗色与恢复。
+    {
+      const archiveAgent = await createAgentFriend(data.humanToken, '移动端归档 Agent');
+      const archiveRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [archiveAgent.actor_id],
+      });
+      await rawTool(data.humanToken, 'network_agent_archive', {
+        request_id: requestId('web_agent_archive'),
+        actor_id: archiveAgent.actor_id,
+      });
+      const archiveLink = roomLink(archiveRoom.room.room_id);
+      const mobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await mobile.page.emulateMedia({ colorScheme: 'dark' });
+      await mobile.page.goto(`${server.base}/`);
+      await mobile.page.locator('#room-list .room-item').first().waitFor();
+      await mobile.page.waitForFunction(
+        `document.querySelectorAll(${JSON.stringify(archiveLink)}).length === 0`,
+      );
+      await mobile.page.route('**/mcp', async (route) => {
+        if (route.request().headers()['mcp-name'] !== 'network_agents_get') {
+          await route.continue();
+          return;
+        }
+        await sleep(350);
+        await route.continue();
+      });
+      await mobile.page.locator('#archived-agents').click();
+      await mobile.page.waitForFunction(
+        `document.getElementById('archive-popover-status').textContent === '正在读取已归档 Agent…'`,
+      );
+      checkEqual(
+        '已归档浮层显示加载态',
+        ((await mobile.page.locator('#archive-popover-status').textContent()) ?? '').trim(),
+        '正在读取已归档 Agent…',
+      );
+      await mobile.page.waitForFunction(
+        `document.querySelectorAll('#archive-popover-list .archive-item').length === 1`,
+      );
+      await mobile.page.unroute('**/mcp');
+      const mobilePopover = (await mobile.page.evaluate(`(() => {
+        const popover = document.getElementById('archive-popover').getBoundingClientRect();
+        return {
+          left: popover.left, top: popover.top, right: popover.right, bottom: popover.bottom,
+          view: window.innerWidth, viewHeight: window.innerHeight,
+          doc: document.documentElement.scrollWidth,
+          background: getComputedStyle(document.getElementById('archive-popover')).backgroundColor
+        };
+      })()`)) as {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+        view: number;
+        viewHeight: number;
+        doc: number;
+        background: string;
+      };
+      check(
+        '390px 已归档浮层不超出视口',
+        mobilePopover.left >= 0 &&
+          mobilePopover.top >= 0 &&
+          mobilePopover.right <= mobilePopover.view + 1 &&
+          mobilePopover.bottom <= mobilePopover.viewHeight + 1 &&
+          mobilePopover.doc <= mobilePopover.view,
+        mobilePopover,
+      );
+      checkEqual('暗色浮层使用面板色', mobilePopover.background, 'rgb(43, 43, 43)');
+      await mobile.page.locator('#archive-popover-list .archive-restore').click();
+      await mobile.page.waitForFunction(
+        `document.querySelectorAll('#archive-popover-list .archive-item').length === 0`,
+      );
+      await mobile.page.waitForFunction(
+        `document.querySelector(${JSON.stringify(archiveLink)}) !== null`,
+      );
+      checkEqual(
+        '390px 恢复后会话回到侧栏',
+        await mobile.page.locator(archiveLink).count(),
+        1,
+      );
+      await mobile.context.close();
+      await rawTool(data.humanToken, 'network_contact_remove', {
+        request_id: requestId('contact'),
+        actor_id: archiveAgent.actor_id,
+      });
     }
 
     // 2b-3. 群聊创建后添加成员：owner 权限、分页好友、排除现有成员、重复与失败错误、移动端。

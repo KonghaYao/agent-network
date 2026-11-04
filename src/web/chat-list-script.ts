@@ -127,10 +127,14 @@ function roomMatches(entry, query) {
 
 function renderRooms() {
   if (!roomListElement) return;
+  // 归档只影响默认列表与总览搜索；房间与消息仍可按 /c/<room_id> 使用。
+  const visibleEntries = roomEntries.filter(function (entry) {
+    return !isArchivedAgentRoom(entry);
+  });
   const query = searchQuery.trim().toLowerCase();
-  const entries = query ? roomEntries.filter(function (entry) {
+  const entries = query ? visibleEntries.filter(function (entry) {
     return roomMatches(entry, query);
-  }) : roomEntries;
+  }) : visibleEntries;
   const scroller = roomListElement.parentElement;
   const previousScroll = scroller ? scroller.scrollTop : 0;
   roomListElement.replaceChildren();
@@ -183,8 +187,12 @@ function renderRooms() {
   }
   if (query && entries.length === 0) {
     setListHint('没有匹配的会话');
-  } else if (roomEntries.length === 0) {
-    setListHint(emptyListMessage);
+  } else if (visibleEntries.length === 0) {
+    if (roomEntries.length > 0) {
+      setListHint('会话已归档，可在已归档 Agents 中恢复。');
+    } else {
+      setListHint(emptyListMessage);
+    }
   } else {
     setListHint('');
   }
@@ -252,7 +260,10 @@ async function fillDirectPeers(me) {
   const queue = roomEntries.filter(function (entry) {
     return entry.kind === 'direct' && !entry.peer_loaded;
   });
-  if (queue.length === 0) return;
+  if (queue.length === 0) {
+    await refreshArchivedAgentState(false);
+    return;
+  }
   let index = 0;
   let renderScheduled = false;
   function scheduleRoomsRender() {
@@ -293,6 +304,7 @@ async function fillDirectPeers(me) {
   const limit = Math.min(4, queue.length);
   for (let slot = 0; slot < limit; slot += 1) workers.push(worker());
   await Promise.all(workers);
+  await refreshArchivedAgentState(false);
 }
 
 /**

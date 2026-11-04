@@ -7,10 +7,10 @@
  */
 
 /**
- * 左下角用户区块：头像、名称、复制 ID、新建 Agent 与“手机扫码”入口。
+ * 左下角用户区块：头像、名称、复制 ID、新建 Agent、手机扫码与已归档入口。
  *
- * 侧栏不再渲染 Agents 管理入口；本地注册表仍由“新建 Agent”写入，并供
- * direct Agent 会话右键提示词复用。
+ * 已归档入口只是一个图标按钮，打开轻量浮层；不再提供 Agents 管理弹窗。
+ * 本地注册表仍由“新建 Agent”写入，并供 direct Agent 会话右键提示词复用。
  */
 export function deviceHandoffAccount(): string {
   return `<div class="account" id="account">
@@ -24,6 +24,15 @@ export function deviceHandoffAccount(): string {
           aria-haspopup="dialog" aria-controls="new-agent-modal" aria-expanded="false">新建 Agent</button>
         <button class="account-scan" id="device-handoff" type="button"
           aria-haspopup="dialog" aria-controls="handoff-modal" aria-expanded="false">手机扫码</button>
+        <button class="account-icon" id="archived-agents" type="button"
+          aria-label="已归档 Agents" title="已归档 Agents"
+          aria-haspopup="dialog" aria-controls="archive-popover" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M4 7h16v3H4z"></path>
+            <path d="M6 10v9h12v-9"></path>
+            <path d="M10 13h4"></path>
+          </svg>
+        </button>
       </div>
     </div>
   </div>`;
@@ -197,11 +206,18 @@ export const DEVICE_HANDOFF_STYLE = `
   .account-main { flex: 1 1 auto; min-width: 0; }
   .account-name { display: block; font-size: 13px; font-weight: 500; color: var(--wx-text, #333);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* 三个文字按钮在 280–320px 侧栏与 390px 移动端允许换行，不横向溢出。 */
-  .account-actions { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 1px; }
+  /* 三个文字按钮与单个归档图标在 280–320px 侧栏与 390px 移动端允许换行。 */
+  .account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px;
+    margin-top: 1px; }
   .account-scan { padding: 0; border: 0; background: none;
     color: var(--wx-link, #576b95); font-size: 12px; cursor: pointer; }
   .account-scan:hover { text-decoration: underline; }
+  .account-icon { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: 0;
+    border-radius: 4px; background: none; color: var(--wx-muted, #999);
+    display: grid; place-items: center; cursor: pointer; }
+  .account-icon:hover { background: var(--wx-hover, #ececec); color: var(--wx-text, #333); }
+  .account-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
+    stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .handoff-card { width: min(340px, 100%); text-align: center; }
   .handoff-card h2 { margin-bottom: 6px; }
   .handoff-qr-wrap { display: grid; place-items: center; margin: 10px 0 12px; padding: 8px;

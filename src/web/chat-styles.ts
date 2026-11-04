@@ -108,6 +108,41 @@ export const APP_STYLE = `
     color: var(--wx-green); }
   .room-menu-status[hidden] { display: none; }
   .room-menu-status.error { color: var(--wx-unread); }
+  /* 已归档 Agents：账号区图标上方的轻量浮层，不是全屏弹窗。 */
+  .archive-popover { position: fixed; z-index: 30; box-sizing: border-box;
+    width: min(320px, calc(100vw - 16px)); max-height: min(60vh, calc(100vh - 16px));
+    display: flex; flex-direction: column; padding: 10px; border-radius: 8px;
+    background: var(--wx-panel); border: 1px solid var(--wx-line);
+    box-shadow: var(--wx-shadow); }
+  .archive-popover[hidden] { display: none; }
+  .archive-popover-head { flex: 0 0 auto; display: flex; align-items: center;
+    justify-content: space-between; gap: 8px; padding: 2px 2px 8px; }
+  .archive-popover-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  .archive-popover-close { flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
+    border: 0; background: transparent; color: var(--wx-muted); font-size: 18px;
+    line-height: 1; }
+  .archive-popover-close:hover { background: var(--wx-hover); color: var(--wx-text); }
+  .archive-popover-status { flex: 0 0 auto; margin: 0 2px 6px; font-size: 12px;
+    line-height: 1.5; color: var(--wx-muted); overflow-wrap: anywhere; }
+  .archive-popover-status[hidden] { display: none; }
+  .archive-popover-status.error { color: var(--wx-unread); }
+  .archive-popover-list { flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    list-style: none; margin: 0; padding: 0; }
+  .archive-item { display: flex; align-items: center; gap: 8px; padding: 6px 2px; }
+  .archive-avatar { width: 32px; height: 32px; border-radius: 6px; font-size: 13px; }
+  .archive-name { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--wx-text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .archive-restore { flex: 0 0 auto; padding: 4px 10px; font-size: 12px; }
+  .archive-popover-empty { flex: 0 0 auto; margin: 0; padding: 18px 8px;
+    color: var(--wx-muted); font-size: 13px; text-align: center; }
+  .archive-popover-empty[hidden] { display: none; }
+  /* 归档/恢复反馈：轻量、不可点击，不遮挡输入区操作。 */
+  .toast { position: fixed; z-index: 50; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom));
+    transform: translateX(-50%); max-width: calc(100vw - 32px); box-sizing: border-box;
+    padding: 8px 14px; border-radius: 6px; background: rgb(0 0 0 / 78%);
+    color: #fff; font-size: 13px; line-height: 1.5; text-align: center;
+    overflow-wrap: anywhere; pointer-events: none; }
+  .toast[hidden] { display: none; }
   .avatar-wrap { position: relative; flex: 0 0 auto; display: block; width: 40px; height: 40px; }
   .unread { position: absolute; top: -1px; right: -1px; width: 9px; height: 9px;
     border-radius: 50%; background: var(--wx-unread); box-sizing: content-box;
