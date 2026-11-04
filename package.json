@@ -1,0 +1,28 @@
+{
+  "name": "@peri-code/agent-network",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent Network: Bun-hosted MCP 2026-07-28 service with MCPP Files v1 drive",
+  "scripts": {
+    "dev": "bun --watch src/bun/main.ts",
+    "start": "bun src/bun/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test:protocol": "bun scripts/verify-protocol.ts",
+    "test:acceptance": "bun scripts/acceptance.ts",
+    "test:drive": "bun scripts/verify-drive.ts",
+    "db:migrate": "bun src/bun/migrate.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.3.1",
+    "@peri-code/mcpp": "0.9.0",
+    "flydrive": "2.2.0",
+    "hono": "^4.13.13",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
+    "@types/bun": "^1.4.2",
+    "typescript": "^7.0.2"
+  }
+}
