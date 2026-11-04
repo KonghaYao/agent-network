@@ -1784,7 +1784,7 @@ async function main(): Promise<void> {
       await context.close();
     }
 
-    // 2b-2. Agents 弹窗：本地注册表、默认隐藏归档、归档/取消归档、错误与移动端。
+    // 2b-2. 侧栏不再提供 Agents 入口；扫码弹窗复制当前身份的 fragment 链接。
     {
       const { context, page } = await makeContext(
         browser,
@@ -1794,7 +1794,14 @@ async function main(): Promise<void> {
       );
       await page.goto(`${server.base}/`);
       await page.locator('#room-list .room-item').first().waitFor();
-      check('账号区显示 Agents 入口', await page.locator('#agents').isVisible());
+      checkEqual('侧栏不再渲染 Agents 按钮', await page.locator('#agents').count(), 0);
+      checkEqual('Agents 弹窗已移除', await page.locator('#agents-modal').count(), 0);
+      const accountActions = await page.locator('#account .account-actions button').allTextContents();
+      checkEqual(
+        '账号区只保留复制 ID、新建 Agent 与手机扫码',
+        accountActions.map((label) => label.trim()).join('|'),
+        '复制 ID|新建 Agent|手机扫码',
+      );
       check(
         '300px 侧栏账号区不横向溢出',
         (await page.evaluate(`(() => {
@@ -1805,291 +1812,141 @@ async function main(): Promise<void> {
         })()`)) as boolean,
       );
 
-      await page.locator('#agents').click();
-      check('Agents 弹窗打开', await page.locator('#agents-modal').isVisible());
-      const agentsHint = (await page.locator('.agents-hint').textContent()) ?? '';
-      check(
-        'Agents 弹窗提示本地保存、安全边界与归档语义',
-        agentsHint.includes('MCP URL（含长期 token）仅保存在此浏览器') &&
-          agentsHint.includes('localStorage 可被同源脚本读取') &&
-          agentsHint.includes('清除站点数据会丢失记录，但 Agent 身份仍存在') &&
-          agentsHint.includes('归档不会恢复 MCP URL/token'),
-        agentsHint,
-      );
-      check(
-        '无本地记录时显示空态',
-        ((await page.locator('#agents-empty').textContent()) ?? '').includes('还没有 Agent'),
-      );
-      checkEqual('默认隐藏已归档分组', await page.locator('#agents-archived-section').isHidden(), true);
-      await page.locator('#agents-close').click();
-      checkEqual('Agents 弹窗可关闭', await page.locator('#agents-modal').isHidden(), true);
-
-      await page.locator('#new-agent').click();
-      await page.fill('#new-agent-name', '归档测试 Agent');
-      await page.locator('#new-agent-create').click();
-      await page.locator('#new-agent-result').waitFor({ state: 'visible' });
-      const archivedAgentMcpUrl = await page.inputValue('#new-agent-url');
-      const archivedAgentShareUrl = await page.inputValue('#new-agent-share');
-      await page.locator('#new-agent-close').click();
-
-      const registry = (await page.evaluate(`(() => {
-        try { return JSON.parse(localStorage.getItem('agent-network-agents-v1') || 'null'); }
-        catch (error) { return null; }
-      })()`)) as { v: number; items: Record<string, unknown>[] } | null;
-      check(
-        '新建 Agent 写入本地注册表',
-        Boolean(registry) && registry!.v === 1 && registry!.items.length === 1,
-      );
-      const registryItem = (registry?.items[0] ?? {}) as Record<string, unknown>;
-      checkEqual(
-        '注册表保存 Agent 自己的 MCP URL 但不含 human token',
-        Object.keys(registryItem).sort().join(','),
-        'actor_id,agent_session_id,created_at,mcp_url,name,owner_actor_id',
-      );
-      checkEqual('注册表按当前 human 隔离', registryItem.owner_actor_id, data.human.actor_id);
-      checkEqual('注册表记录 Agent 名称', registryItem.name, '归档测试 Agent');
-      checkEqual('注册表记录 Agent MCP URL', registryItem.mcp_url, archivedAgentMcpUrl);
-      const registryDump = JSON.stringify(registry);
-      check(
-        '注册表不含 human token、提示词或分享链接',
-        registryDump.includes(archivedAgentMcpUrl) &&
-          !registryDump.includes(data.humanToken) &&
-          !registryDump.includes(archivedAgentShareUrl),
-      );
-      const archivedAgentId = String(registryItem.actor_id ?? '');
-      check('注册表 actor_id 与页面创建一致', archivedAgentId.startsWith('agt_'));
-
-      await page.locator('#agents').click();
-      await page.waitForFunction(`(() => {
-        const button = document.querySelector('#agents-list button[data-action="copy-share"]');
-        return Boolean(button) && !button.disabled;
-      })()`);
-      checkEqual('Agents 列表显示本地 Agent', await page.locator('#agents-list .agents-item').count(), 1);
-      checkEqual(
-        'Agents 条目显示服务端分享链接',
-        await page.locator('#agents-list .agents-item-share').textContent(),
-        archivedAgentShareUrl,
-      );
-      check(
-        'Agents 条目显示 Agent 名称',
-        ((await page.locator('#agents-list .agents-item-name').textContent()) ?? '').includes(
-          '归档测试 Agent',
-        ),
-      );
-      checkEqual('默认不展开已归档', await page.locator('#agents-archived-section').isHidden(), true);
-      checkEqual(
-        '默认显示已归档计数 0',
-        await page.locator('#agents-toggle').textContent(),
-        '显示已归档 (0)',
-      );
-
       await page.evaluate(`(() => {
-        window.__copiedShare = null;
+        window.__copiedHandoff = null;
+        window.__consoleText = '';
+        ['log', 'info', 'debug', 'warn'].forEach(function (method) {
+          const original = console[method];
+          console[method] = function () {
+            window.__consoleText += Array.prototype.map.call(arguments, String).join(' ') + '\\n';
+            return original.apply(console, arguments);
+          };
+        });
         Object.defineProperty(navigator, 'clipboard', {
           configurable: true,
           value: {
             writeText: function (text) {
-              window.__copiedShare = text;
+              window.__copiedHandoff = text;
               return Promise.resolve();
             }
           }
         });
       })()`);
-      await page.locator('#agents-list button[data-action="copy-share"]').click();
-      await page.waitForFunction(
-        `(document.getElementById('agents-note').textContent || '').includes('已复制')`,
-      );
+
+      await page.locator('#device-handoff').click();
+      check('扫码弹窗打开', await page.locator('#handoff-modal').isVisible());
+      checkEqual('扫码弹窗显示复制按钮', await page.locator('#handoff-copy').isVisible(), true);
+      checkEqual('有 token 时复制按钮可用', await page.locator('#handoff-copy').isEnabled(), true);
       checkEqual(
-        '复制分享链接内容正确',
-        await page.evaluate('window.__copiedShare'),
-        archivedAgentShareUrl,
+        '扫码弹窗保留复制按钮文案',
+        (await page.locator('#handoff-copy').textContent())?.trim(),
+        '复制扫码内容',
+      );
+      const handoffWarning = (await page.locator('#handoff-modal .handoff-warning').textContent()) ?? '';
+      check(
+        '扫码弹窗保留凭据警告',
+        handoffWarning.includes('请勿截图或分享') && handoffWarning.includes('凭据泄露'),
+        handoffWarning,
       );
 
-      await page.locator('#agents-list button[data-action="archive"]').click();
-      await page.waitForFunction(`document.getElementById('agents-list').children.length === 0`);
-      checkEqual('归档后默认列表隐藏条目', await page.locator('#agents-list .agents-item').count(), 0);
+      await page.locator('#handoff-copy').click();
+      await page.waitForFunction(`document.getElementById('handoff-copy').textContent === '已复制'`);
       checkEqual(
-        '归档后计数变为 1',
-        await page.locator('#agents-toggle').textContent(),
-        '显示已归档 (1)',
-      );
-      checkEqual('归档后已归档分组仍隐藏', await page.locator('#agents-archived-section').isHidden(), true);
-      check(
-        '归档后显示状态提示',
-        ((await page.locator('#agents-note').textContent()) ?? '').includes('已归档'),
-      );
-      await page.locator('#agents-toggle').click();
-      checkEqual('点击后展开已归档分组', await page.locator('#agents-archived-section').isVisible(), true);
-      checkEqual(
-        '已归档条目显示 badge',
-        await page.locator('#agents-archived-list .agents-badge').first().textContent(),
-        '已归档',
-      );
-      check(
-        '已归档条目提供取消归档',
-        await page.locator('#agents-archived-list button[data-action="unarchive"]').isVisible(),
-      );
-      await page.locator('#agents-toggle').click();
-      checkEqual('再次点击隐藏已归档分组', await page.locator('#agents-archived-section').isHidden(), true);
-
-      await page.locator('#agents-close').click();
-      await page.locator('#agents').click();
-      await page.waitForFunction(`(() => {
-        const button = document.querySelector('#agents-archived-list button[data-action="unarchive"]');
-        return Boolean(button) && !button.disabled;
-      })()`);
-      checkEqual(
-        '重开弹窗默认仍隐藏已归档',
-        await page.locator('#agents-archived-section').isHidden(),
+        '复制内容以当前 origin 与 #t= 开头',
+        await page.evaluate(`window.__copiedHandoff.indexOf(location.origin + '/#t=') === 0`),
         true,
       );
-      checkEqual('重开弹窗未归档列表为空', await page.locator('#agents-list .agents-item').count(), 0);
-      await page.locator('#agents-toggle').click();
-      await page.locator('#agents-archived-list button[data-action="unarchive"]').click();
-      await page.waitForFunction(`document.querySelectorAll('#agents-list .agents-item').length === 1`);
       checkEqual(
-        '取消归档后条目回到未归档列表',
-        await page.locator('#agents-archived-list .agents-item').count(),
-        0,
-      );
-      checkEqual(
-        '取消归档后计数为 0',
-        await page.locator('#agents-toggle').textContent(),
-        '隐藏已归档 (0)',
-      );
-
-      await page.locator('#agents-list button[data-action="archive"]').click();
-      await page.waitForFunction(`document.getElementById('agents-list').children.length === 0`);
-      await page.locator('#agents-close').click();
-      await page.reload();
-      await page.locator('#room-list .room-item').first().waitFor();
-      await page.locator('#agents').click();
-      await page.waitForFunction(`(() => {
-        const button = document.querySelector('#agents-archived-list button[data-action="unarchive"]');
-        return Boolean(button) && !button.disabled;
-      })()`);
-      checkEqual('刷新后归档状态保持', await page.locator('#agents-list .agents-item').count(), 0);
-      checkEqual(
-        '刷新后默认仍隐藏已归档',
-        await page.locator('#agents-archived-section').isHidden(),
+        '复制内容与当前浏览器 token 一致',
+        await page.evaluate(`(() => {
+          const copied = window.__copiedHandoff;
+          const prefix = location.origin + '/#t=';
+          if (!copied || copied.indexOf(prefix) !== 0) return false;
+          return decodeURIComponent(copied.slice(prefix.length)) ===
+            localStorage.getItem('agent-network-token');
+        })()`),
         true,
       );
-      await page.locator('#agents-toggle').click();
       checkEqual(
-        '刷新后可展开已归档',
-        await page.locator('#agents-archived-list .agents-item').count(),
-        1,
+        '复制成功显示凭据警告',
+        ((await page.locator('#handoff-hint').textContent()) ?? '').includes('请勿分享或截图'),
+        true,
       );
-      await page.locator('#agents-archived-list button[data-action="unarchive"]').click();
-      await page.waitForFunction(`document.querySelectorAll('#agents-list .agents-item').length === 1`);
-      await page.locator('#agents-close').click();
+      checkEqual(
+        '页面 DOM 不展示 token',
+        await page.evaluate(`(() => {
+          const token = localStorage.getItem('agent-network-token');
+          return Boolean(token) && document.documentElement.outerHTML.indexOf(token) === -1;
+        })()`),
+        true,
+      );
+      checkEqual(
+        '控制台不输出 token',
+        await page.evaluate(`(() => {
+          const token = localStorage.getItem('agent-network-token');
+          return Boolean(token) && window.__consoleText.indexOf(token) === -1;
+        })()`),
+        true,
+      );
 
-      const savedRegistry = (await page.evaluate(
-        `localStorage.getItem('agent-network-agents-v1') || ''`,
-      )) as string;
-
-      await page.route('**/mcp', async (route) => {
-        const name = route.request().headers()['mcp-name'];
-        if (name !== 'network_agents_get' && name !== 'network_agent_archive') {
-          await route.continue();
-          return;
-        }
-        let id: unknown = null;
-        try {
-          id = (route.request().postDataJSON() as { id?: unknown }).id;
-        } catch {
-          id = null;
-        }
-        await route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id,
-            error: {
-              code: -32603,
-              message: name === 'network_agents_get' ? '模拟同步失败' : '模拟归档失败',
-              data: { code: 'INTERNAL_ERROR' },
-            },
-          }),
+      // 剪贴板 API 拒绝时回退到 textarea + execCommand。
+      await page.evaluate(`(() => {
+        window.__fallbackCopy = null;
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: function () {
+              return Promise.reject(new Error('denied'));
+            }
+          }
         });
-      });
-      await page.locator('#agents').click();
-      await page.waitForFunction(
-        `(document.getElementById('agents-error').textContent || '').includes('同步失败')`,
-      );
-      checkEqual('同步失败时仍显示本地记录', await page.locator('#agents-list .agents-item').count(), 1);
-      check(
-        '同步失败显示可读错误',
-        ((await page.locator('#agents-error').textContent()) ?? '').includes('显示本地记录'),
-      );
-      await page.locator('#agents-list button[data-action="archive"]').click();
-      await page.waitForFunction(
-        `(document.getElementById('agents-error').textContent || '').includes('归档失败')`,
-      );
-      checkEqual('归档失败后条目保持未归档', await page.locator('#agents-list .agents-item').count(), 1);
+        document.execCommand = function (command) {
+          if (command !== 'copy') return false;
+          const active = document.activeElement;
+          window.__fallbackCopy = active && active.value ? active.value : null;
+          return true;
+        };
+      })()`);
+      await page.locator('#handoff-copy').click();
+      await page.waitForFunction(`window.__fallbackCopy !== null`);
       checkEqual(
-        '归档失败不更新计数',
-        await page.locator('#agents-toggle').textContent(),
-        '显示已归档 (0)',
+        '剪贴板 API 失败时回退 execCommand',
+        await page.evaluate(`window.__fallbackCopy === window.__copiedHandoff`),
+        true,
       );
-      await page.locator('#agents-close').click();
-      await page.unroute('**/mcp');
-      await context.close();
 
-      const otherToken = crypto.randomUUID();
-      await rawTool<Actor>(otherToken, 'network_register', {
-        request_id: requestId('web_other_human'),
-        kind: 'human',
-        name: '隔离访客',
-      });
-      const isolated = await makeContext(
-        browser,
-        otherToken,
-        { width: 1280, height: 800 },
-        allErrors,
-      );
-      await isolated.page.goto(`${server.base}/`);
-      await isolated.page.waitForFunction(
-        `document.getElementById('account-name') && document.getElementById('account-name').textContent !== '未登录'`,
-      );
-      await isolated.page.evaluate(
-        (value) => localStorage.setItem('agent-network-agents-v1', value),
-        savedRegistry,
-      );
-      await isolated.page.reload();
-      await isolated.page.waitForFunction(
-        `document.getElementById('account-name') && document.getElementById('account-name').textContent !== '未登录'`,
-      );
-      await isolated.page.locator('#agents').click();
-      checkEqual(
-        '其他 human 看不到上一个身份的本地 Agent',
-        await isolated.page.locator('#agents-list .agents-item').count(),
-        0,
+      await page.evaluate(`(() => {
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: function () {
+              return Promise.reject(new Error('denied'));
+            }
+          }
+        });
+        document.execCommand = function () { return false; };
+      })()`);
+      await page.locator('#handoff-copy').click();
+      await page.waitForFunction(
+        `(document.getElementById('handoff-hint').textContent || '').includes('复制失败')`,
       );
       check(
-        '其他 human 显示空态',
-        ((await isolated.page.locator('#agents-empty').textContent()) ?? '').includes('还没有 Agent'),
-      );
-      await isolated.page.evaluate(`localStorage.setItem('agent-network-agents-v1', '{broken json')`);
-      await isolated.page.reload();
-      await isolated.page.waitForFunction(
-        `document.getElementById('account-name') && document.getElementById('account-name').textContent !== '未登录'`,
-      );
-      await isolated.page.locator('#agents').click();
-      await isolated.page.waitForFunction(
-        `(document.getElementById('agents-error').textContent || '').includes('已损坏')`,
+        '复制失败显示可读错误',
+        ((await page.locator('#handoff-hint').textContent()) ?? '').includes('剪贴板权限'),
       );
       checkEqual(
-        '注册表解析失败回退空列表',
-        await isolated.page.locator('#agents-list .agents-item').count(),
-        0,
+        '复制失败后按钮文案恢复',
+        (await page.locator('#handoff-copy').textContent())?.trim(),
+        '复制扫码内容',
       );
-      check(
-        '注册表解析失败显示提示',
-        ((await isolated.page.locator('#agents-empty').textContent()) ?? '').includes('还没有 Agent'),
-      );
-      await isolated.context.close();
+
+      await page.locator('#handoff-close').click();
+      await page.evaluate(`localStorage.removeItem('agent-network-token')`);
+      await page.locator('#device-handoff').click();
+      checkEqual('无 token 时复制按钮禁用', await page.locator('#handoff-copy').isDisabled(), true);
+      checkEqual('无 token 时二维码隐藏', await page.locator('#handoff-qr').isHidden(), true);
+      await page.locator('#handoff-close').click();
+      await context.close();
 
       const mobile = await makeContext(
         browser,
@@ -2099,29 +1956,29 @@ async function main(): Promise<void> {
       );
       await mobile.page.goto(`${server.base}/`);
       await mobile.page.locator('#room-list .room-item').first().waitFor();
-      await mobile.page.evaluate(
-        (value) => localStorage.setItem('agent-network-agents-v1', value),
-        savedRegistry,
-      );
-      await mobile.page.reload();
-      await mobile.page.locator('#room-list .room-item').first().waitFor();
-      await mobile.page.locator('#agents').click();
-      await mobile.page.waitForFunction(`(() => {
-        const button = document.querySelector('#agents-list button[data-action="copy-share"]');
-        return Boolean(button) && !button.disabled;
+      await mobile.page.evaluate(`(() => {
+        window.__copiedHandoff = null;
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: function (text) {
+              window.__copiedHandoff = text;
+              return Promise.resolve();
+            }
+          }
+        });
       })()`);
-      const mobileAgentsMetrics = (await mobile.page.evaluate(`(() => {
-        const card = document.querySelector('#agents-modal .modal-card');
-        const sidebar = document.querySelector('.sidebar');
+      await mobile.page.locator('#device-handoff').click();
+      const handoffMetrics = (await mobile.page.evaluate(`(() => {
+        const card = document.querySelector('#handoff-modal .modal-card');
         const account = document.getElementById('account');
-        if (!card || !sidebar || !account) return null;
+        if (!card || !account) return null;
         return {
           view: window.innerWidth,
           doc: document.documentElement.scrollWidth,
           cardLeft: card.getBoundingClientRect().left,
           cardRight: card.getBoundingClientRect().right,
-          accountRight: account.getBoundingClientRect().right,
-          sidebarRight: sidebar.getBoundingClientRect().right
+          accountRight: account.getBoundingClientRect().right
         };
       })()`)) as {
         view: number;
@@ -2129,28 +1986,21 @@ async function main(): Promise<void> {
         cardLeft: number;
         cardRight: number;
         accountRight: number;
-        sidebarRight: number;
       } | null;
       check(
-        '390px Agents 弹窗不横向溢出',
-        Boolean(mobileAgentsMetrics) &&
-          mobileAgentsMetrics!.doc <= mobileAgentsMetrics!.view &&
-          mobileAgentsMetrics!.cardLeft >= 0 &&
-          mobileAgentsMetrics!.cardRight <= mobileAgentsMetrics!.view + 1,
-        mobileAgentsMetrics,
+        '390px 扫码弹窗不横向溢出',
+        Boolean(handoffMetrics) &&
+          handoffMetrics!.doc <= handoffMetrics!.view &&
+          handoffMetrics!.cardLeft >= 0 &&
+          handoffMetrics!.cardRight <= handoffMetrics!.view + 1,
+        handoffMetrics,
       );
-      check(
-        '390px 账号区不横向溢出',
-        Boolean(mobileAgentsMetrics) &&
-          mobileAgentsMetrics!.accountRight <= mobileAgentsMetrics!.sidebarRight + 1,
-        mobileAgentsMetrics,
-      );
-      check('390px Agents 归档按钮可见', await mobile.page.locator('#agents-list button[data-action="archive"]').isVisible());
-      check('390px Agents 切换按钮可见', await mobile.page.locator('#agents-toggle').isVisible());
-      await mobile.page.locator('#agents-toggle').click();
+      check('390px 复制按钮可见', await mobile.page.locator('#handoff-copy').isVisible());
+      await mobile.page.locator('#handoff-copy').click();
+      await mobile.page.waitForFunction(`document.getElementById('handoff-copy').textContent === '已复制'`);
       checkEqual(
-        '390px 可以展开已归档分组',
-        await mobile.page.locator('#agents-archived-section').isVisible(),
+        '390px 复制扫码内容成功',
+        await mobile.page.evaluate(`window.__copiedHandoff.indexOf(location.origin + '/#t=') === 0`),
         true,
       );
       await mobile.context.close();

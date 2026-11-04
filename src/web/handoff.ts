@@ -6,7 +6,12 @@
  * 代价是二维码本身就是长期凭据：任何看到二维码的人都能获得同一身份。
  */
 
-/** 左下角用户区块：头像、名称、复制 ID、新建 Agent、Agents 与“手机扫码”入口。 */
+/**
+ * 左下角用户区块：头像、名称、复制 ID、新建 Agent 与“手机扫码”入口。
+ *
+ * 侧栏不再渲染 Agents 管理入口；本地注册表仍由“新建 Agent”写入，并供
+ * direct Agent 会话右键提示词复用。
+ */
 export function deviceHandoffAccount(): string {
   return `<div class="account" id="account">
     <span class="account-avatar" id="account-avatar" aria-hidden="true">?</span>
@@ -17,8 +22,6 @@ export function deviceHandoffAccount(): string {
           aria-label="复制当前 actor ID" title="复制当前 actor ID">复制 ID</button>
         <button class="account-scan" id="new-agent" type="button"
           aria-haspopup="dialog" aria-controls="new-agent-modal" aria-expanded="false">新建 Agent</button>
-        <button class="account-scan" id="agents" type="button"
-          aria-haspopup="dialog" aria-controls="agents-modal" aria-expanded="false">Agents</button>
         <button class="account-scan" id="device-handoff" type="button"
           aria-haspopup="dialog" aria-controls="handoff-modal" aria-expanded="false">手机扫码</button>
       </div>
@@ -38,6 +41,7 @@ export function deviceHandoffDialog(): string {
     <p class="handoff-warning">二维码包含当前身份的完整登录凭据，请勿截图或分享。任何人看到二维码都能以你的身份操作；凭据泄露后需在服务端撤销该 token。</p>
     <p class="handoff-hint">二维码在凭据被撤销前一直可用；页面不会显示“已扫码”状态。</p>
     <div class="handoff-actions">
+      <button id="handoff-copy" type="button" disabled>复制扫码内容</button>
       <button class="primary" id="handoff-close" type="button">关闭</button>
     </div>
   </div>
@@ -84,9 +88,20 @@ export const HANDOFF_CONTROLLER_SCRIPT = `
   var modal = document.getElementById('handoff-modal');
   var canvas = document.getElementById('handoff-qr');
   var closeButton = document.getElementById('handoff-close');
+  var copyButton = document.getElementById('handoff-copy');
   var hint = document.getElementById('handoff-hint');
-  if (!button || !modal || !canvas || !closeButton || !hint) return;
+  if (!button || !modal || !canvas || !closeButton || !copyButton || !hint) return;
   var opener = null;
+  var copyUrl = null;
+  var copyResetTimer = null;
+
+  function resetCopyButton() {
+    if (copyResetTimer) {
+      clearTimeout(copyResetTimer);
+      copyResetTimer = null;
+    }
+    copyButton.textContent = '复制扫码内容';
+  }
 
   function closeDialog() {
     modal.hidden = true;
@@ -101,11 +116,16 @@ export const HANDOFF_CONTROLLER_SCRIPT = `
     } catch (error) {
       token = null;
     }
+    resetCopyButton();
     if (!token) {
+      copyUrl = null;
+      copyButton.disabled = true;
       canvas.hidden = true;
       hint.textContent = '浏览器身份正在初始化，请稍后再试；若持续失败，刷新页面重试。';
     } else {
       var url = window.location.origin + '/#t=' + encodeURIComponent(token);
+      copyUrl = url;
+      copyButton.disabled = false;
       try {
         window.agentNetworkQr.draw(canvas, url);
         canvas.hidden = false;
@@ -121,8 +141,44 @@ export const HANDOFF_CONTROLLER_SCRIPT = `
     closeButton.focus();
   }
 
+  function fallbackCopy(text, onSuccess, onFailure) {
+    try {
+      legacyCopyText(text);
+      onSuccess();
+    } catch (error) {
+      onFailure(error);
+    }
+  }
+
+  function copyText(text, onSuccess, onFailure) {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      fallbackCopy(text, onSuccess, onFailure);
+      return;
+    }
+    try {
+      navigator.clipboard.writeText(text).then(onSuccess, function () {
+        fallbackCopy(text, onSuccess, onFailure);
+      });
+    } catch (error) {
+      fallbackCopy(text, onSuccess, onFailure);
+    }
+  }
+
   button.addEventListener('click', openDialog);
   closeButton.addEventListener('click', closeDialog);
+  copyButton.addEventListener('click', function () {
+    if (!copyUrl || copyButton.disabled) return;
+    copyText(copyUrl, function () {
+      // 只反馈复制动作，不把凭据写入页面文本。
+      hint.textContent = '扫码内容已复制到剪贴板；该链接即长期凭据，请勿分享或截图。';
+      copyButton.textContent = '已复制';
+      copyResetTimer = setTimeout(resetCopyButton, 1500);
+    }, function (error) {
+      resetCopyButton();
+      hint.textContent = '复制失败：' + (error && error.message ? error.message : String(error)) +
+        '；请检查浏览器剪贴板权限后重试。';
+    });
+  });
   modal.addEventListener('click', function (event) {
     if (event.target === modal) closeDialog();
   });
@@ -141,7 +197,7 @@ export const DEVICE_HANDOFF_STYLE = `
   .account-main { flex: 1 1 auto; min-width: 0; }
   .account-name { display: block; font-size: 13px; font-weight: 500; color: var(--wx-text, #333);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* 四个文字按钮在 280–320px 侧栏与 390px 移动端允许换行，不横向溢出。 */
+  /* 三个文字按钮在 280–320px 侧栏与 390px 移动端允许换行，不横向溢出。 */
   .account-actions { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 1px; }
   .account-scan { padding: 0; border: 0; background: none;
     color: var(--wx-link, #576b95); font-size: 12px; cursor: pointer; }
@@ -157,8 +213,9 @@ export const DEVICE_HANDOFF_STYLE = `
     line-height: 1.6; }
   .handoff-warning { margin: 0 0 12px; padding: 8px 10px; border-radius: 4px;
     background: #fff7ed; color: #9a3412; font-size: 12px; line-height: 1.6; text-align: left; }
-  .handoff-actions { display: flex; }
+  .handoff-actions { display: flex; gap: 8px; }
   .handoff-actions button { flex: 1 1 auto; height: 40px; }
+  #handoff-copy[disabled] { opacity: 0.5; cursor: not-allowed; }
   @media (prefers-color-scheme: dark) {
     .handoff-warning { background: #3a2a1a; color: #fdba74; }
   }

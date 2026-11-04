@@ -1,5 +1,4 @@
 import {
-  agentsDialog,
   chatPane,
   emptyPane,
   filePreviewDialog,
@@ -11,7 +10,6 @@ import {
   sidebarPane,
 } from './chat-panels';
 import { chatClientScript } from './chat-script';
-import { AGENTS_STYLE } from './chat-agents-styles';
 import { FILES_STYLE } from './chat-files-styles';
 import { MARKDOWN_STYLE } from './chat-markdown-styles';
 import { MESSAGE_FILES_STYLE } from './chat-message-files-styles';
@@ -48,10 +46,9 @@ ${filePreviewDialog()}
 ${groupDialog()}
 ${membersDialog()}
 ${newAgentDialog()}
-${agentsDialog()}
 ${deviceHandoffDialog()}
 ${chatClientScript(roomId)}`,
-    APP_STYLE + FILES_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + AGENTS_STYLE + DEVICE_HANDOFF_STYLE,
+    APP_STYLE + FILES_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE,
     { wide: true, bodyClass: isHome ? 'page-home' : 'page-room' },
   );
 }

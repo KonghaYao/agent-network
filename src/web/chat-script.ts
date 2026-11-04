@@ -35,8 +35,7 @@ const INVOKE_MAX = ${LIMITS.invokeMax};
 const ACTOR_NAME_MAX = ${LIMITS.actorNameMax};
 const MEMBER_CHANGE_MAX = ${LIMITS.memberChangeMax};
 const GROUP_MEMBERS_MAX = ${LIMITS.groupMembersMax};
-// Agents 弹窗与本地注册表上限；阈值只在 limits.ts 维护。
-const AGENT_LOOKUP_MAX = ${LIMITS.agentLookupMax};
+// 本地 Agent 注册表上限；阈值只在 limits.ts 维护。
 const AGENT_REGISTRY_MAX = ${LIMITS.webAgentRegistryMax};
 // 与服务端共享的 fileId 片段与链接上限，避免客户端/服务端规则漂移。
 const MESSAGE_FILE_ID_SOURCE = ${jsonForScript(MESSAGE_FILE_ID_SOURCE)};
