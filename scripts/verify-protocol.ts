@@ -976,6 +976,71 @@ async function main(): Promise<void> {
       text.slice(0, 200),
     );
   }
+
+  const codexBridge = await fetch(`${baseUrl()}/skills/harness-codex.md`);
+  checkEqual('GET /skills/harness-codex.md 返回 200（桥接指南）', codexBridge.status, 200);
+  const codexBridgeText = await codexBridge.text();
+  const codexBridgeMarkers = [
+    'agentnet://stream',
+    'notifications/subscriptions/acknowledged',
+    'network_login',
+    'network_inbox_list',
+    'network_delivery_claim',
+    'network_delivery_complete',
+    'turn/start',
+    'AGENTNET_MCP_URL',
+    'share_url',
+    'Unix WebSocket',
+    'thread/read',
+    'initialize',
+    'codex app-server daemon version',
+    'socketPath',
+  ];
+  check(
+    'Codex 桥接指南覆盖订阅、上线、补读与 app-server 唤醒标记',
+    codexBridgeMarkers.every((marker) => codexBridgeText.includes(marker)),
+    { missing: codexBridgeMarkers.filter((marker) => !codexBridgeText.includes(marker)) },
+  );
+  check(
+    'Codex 桥接指南要求 ack 后再 login，并在上线后补读 inbox',
+    codexBridgeText.includes('收到 `notifications/subscriptions/acknowledged` 后') &&
+      codexBridgeText.includes('network_login') &&
+      codexBridgeText.includes('network_inbox_list') &&
+      codexBridgeText.includes('补读'),
+  );
+  check(
+    'Codex 桥接指南区分 MCP enabled 与 app-server turn 唤醒',
+    codexBridgeText.includes('不代表') &&
+      codexBridgeText.includes('不会让 app-server 主动消费') &&
+      codexBridgeText.includes('https://developers.openai.com/codex/app-server'),
+  );
+  check(
+    'Codex 桥接指南说明 room.message 与 delivery.created 去重',
+    codexBridgeText.includes('room.message') &&
+      codexBridgeText.includes('delivery.created') &&
+      codexBridgeText.includes('不能分别回复两次'),
+  );
+  check(
+    'Codex 桥接指南记录临时桥接器与单聊局限',
+    codexBridgeText.includes('/tmp') &&
+      codexBridgeText.includes('不是开机服务') &&
+      codexBridgeText.includes('单聊') &&
+      codexBridgeText.includes('不是通用多用户服务'),
+  );
+  check(
+    'Codex 桥接指南说明 Unix WebSocket 与 app-server 省略 jsonrpc',
+    codexBridgeText.includes('Unix WebSocket') &&
+      codexBridgeText.includes('codex app-server proxy') &&
+      codexBridgeText.includes('不能推断') &&
+      codexBridgeText.includes('省略 `jsonrpc`'),
+  );
+  check(
+    'Codex 桥接指南不包含真实 token 或完整含 token URL',
+    !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(codexBridgeText) &&
+      !/[?&]token=[0-9a-f]{8}-[0-9a-f]{4}/iu.test(codexBridgeText) &&
+      !/\b[0-9a-f]{32,}\b/iu.test(codexBridgeText),
+  );
+
   // 房间文件工具由文档 agent 单独补写；这里只要求已归档工具全部覆盖。
   const documentedTools = toolNames.filter((name) => !roomFileTools.includes(name));
   const missingTools = documentedTools.filter((name) => !skillDocText.includes(name));
