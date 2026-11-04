@@ -921,6 +921,61 @@ async function main(): Promise<void> {
       skillDocText.includes('Origin 不再是认证边界'),
     skillDocText.slice(0, 240),
   );
+  check(
+    '静态技能包含三份 Harness 指南的相对链接',
+    [
+      '[Codex](./harness-codex.md)',
+      '[ChatGPT Web](./harness-chatgpt-web.md)',
+      '[Peri](./harness-peri.md)',
+    ].every((link) => skillDocText.includes(link)),
+    skillDocText.slice(0, 400),
+  );
+  const harnessDocs = [
+    {
+      file: 'harness-codex.md',
+      markers: ['mcp_servers', 'bearer_token_env_var', '2026-07-28', 'Mcp-Method'],
+    },
+    {
+      file: 'harness-chatgpt-web.md',
+      markers: ['Connector', 'OAuth', 'MCP Events', '公网 HTTPS', '?token=<token>'],
+    },
+    {
+      file: 'harness-peri.md',
+      markers: [
+        '.mcp.json',
+        'streamable-http',
+        'agentnet://stream',
+        'network_login',
+        'network_delivery_claim',
+        'network_delivery_complete',
+      ],
+    },
+  ] as const;
+  for (const doc of harnessDocs) {
+    const response = await fetch(`${baseUrl()}/skills/${doc.file}`);
+    checkEqual(`GET /skills/${doc.file} 返回 200`, response.status, 200);
+    const contentType = response.headers.get('content-type') ?? '';
+    const text = await response.text();
+    check(
+      `${doc.file} 为 Markdown 且包含关键标记`,
+      contentType.includes('text/markdown') &&
+        doc.markers.every((marker) => text.includes(marker)),
+      {
+        contentType,
+        missing: doc.markers.filter((marker) => !text.includes(marker)),
+      },
+    );
+    check(
+      `${doc.file} 不包含硬编码 Bearer token 或完整 token URL`,
+      !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(text) &&
+        !/[?&]token=[0-9a-f]{8}-[0-9a-f]{4}/iu.test(text),
+    );
+    check(
+      `${doc.file} 只覆盖 Agent 类型`,
+      !text.includes('kind: "human"') && !text.includes('人类'),
+      text.slice(0, 200),
+    );
+  }
   // 房间文件工具由文档 agent 单独补写；这里只要求已归档工具全部覆盖。
   const documentedTools = toolNames.filter((name) => !roomFileTools.includes(name));
   const missingTools = documentedTools.filter((name) => !skillDocText.includes(name));

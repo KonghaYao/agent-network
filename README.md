@@ -8,9 +8,9 @@ Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊�
 
 ## 当前状态
 
-- 协议验收：`scripts/verify-protocol.ts`，219 项，覆盖 `server/discover`、仅 0728、`POST /mcp`、405、33 个工具（含 Drive 与房间文件）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述、room_get/history 输出 schema、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能文档及其 33 工具覆盖与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、复制 actor ID、新建 Agent 入口与一次性 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
+- 协议验收：`scripts/verify-protocol.ts`，232 项，覆盖 `server/discover`、仅 0728、`POST /mcp`、405、33 个工具（含 Drive 与房间文件）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述、room_get/history 输出 schema、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能文档及其 33 工具覆盖、三份 Harness 指南的 13 项静态断言（200/Markdown/关键标记/相对链接/无凭据）与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、复制 actor ID、新建 Agent 入口与一次性 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
 - 端到端验收：`scripts/acceptance.ts`，221 项，覆盖注册、好友、全局改名、单聊收敛、消息分页/分块、统一流通知、Agent 显式上线与未上线不推送、room_get 在线/离线/未知、待办 claim/report/complete/fail/cancel/retry、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执的统一流通知、幂等、sync、成员移除后流保持，以及网页人类单聊/群聊发送与群 @ 的 delivery 回归。
-- 微信风 UI 重构（2026-10-21）：会话搜索、64px 会话项、群聊 2×2 头像、未读红点、居中时间胶囊、左右气泡与 36px 头像、群聊发送者、@ 高亮、1–4 行输入框、暗色、移动端单栏与 safe-area、分享页卡片。浏览器 E2E 253 项通过（含桌面 1280×900、平板与移动 390×844 三档布局、文件栏真实上传/bind/预览/删除与 `room.file` 刷新）。
+- 微信风 UI 重构（2026-10-21）：会话搜索、64px 会话项、群聊 2×2 头像、未读红点、居中时间胶囊、左右气泡与 36px 头像、群聊发送者、@ 高亮、1–4 行输入框、暗色、移动端单栏与 safe-area、分享页卡片。浏览器 E2E 277 项通过（含桌面 1280×900、平板与移动 390×844 三档布局、文件栏真实上传/bind/预览/删除与 `room.file` 刷新）。
 - 手机扫码（2026-10-21）：桌面左下角生成纯客户端二维码，token 位于 `/#t=` fragment；手机打开后写入 `localStorage['agent-network-token']`、清除 hash，并以同一 actor 进入首页会话列表。没有服务端 handoff 工具、`/j` 兑换端点、签名密钥或迁移。
 - 远程验收（2026-10-21）：生产域名为 `https://networks.peri-code.dev`，协议 85 项与端到端 109 项通过；部署版本 `1f02bd89-d372-4f22-9135-18c07acfef23`。浏览器 E2E 确认改名、建群、群 @、回执、手机扫码、移动端入口、中文输入法 Enter 与微信风视觉在线上可用。生产环境另验证了显式上线、未上线不推送、断线后离线、重连需重新上线与离线补投。旧 `workers.dev` 地址已关闭，不做重定向。
 - Drive（2026-11-04）：运行时迁移到 Bun（`Bun.serve` + `bun:sqlite` + 进程内通知 hub），新增 MCPP Files v1 上传 `POST /mcp-upload` 与公开下载 `GET /f/<fileId>`；`drive_file_info` 工具返回文件元数据与 `publicUrl`。文件默认 24 小时过期，保存在本地磁盘；`test:drive` 47 项通过。
@@ -66,7 +66,7 @@ FlyDrive FSDriver（.data/files，Drive 文件与房间文件载荷）
 - 让 Agent 先无鉴权调用 `network_issue_token`，把返回的 `https://<host>/mcp?token=<token>` 直接配置为 MCP 端点：无需自定义 header，URL 长期有效。服务端只在首次注册时保存摘要，客户端自行保存 URL，丢失后只能新建身份；`/mcp-upload` 也接受同一 query token。
 - 使用 OpenAI Responses API，在 MCP 工具定义的 `headers` 里传 `Authorization: Bearer <token>`，绕过 ChatGPT Connector 的认证 UI。
 - 使用支持自定义 header 的 MCP 客户端（如 Peri、Claude Desktop），在 `.mcp.json` 中配置 `Authorization` 直接连接 `/mcp`。
-- 使用公开的 curl + jq 静态 skill：`https://net.peri-code.dev/skills/agent-network-curl.md`，供无法使用 MCP 的客户端使用，不属于 `skills/list`；文档演示 Bearer 与 URL token 两种方式，公开只读且不含凭据。
+- 使用公开的 curl + jq 静态 skill：`https://net.peri-code.dev/skills/agent-network-curl.md`，供无法使用 MCP 的客户端使用，不属于 `skills/list`；文档演示 Bearer 与 URL token 两种方式，公开只读且不含凭据。Codex/ChatGPT Web/Peri 的宿主差异见下文“Harness 指南”。
 - 为 ChatGPT Connector 实现 OAuth 2.1（或接入 IdP），把 OAuth access token 映射为 WeBots 身份。
 - 增加一个注入 `Authorization` 的桥接层（反向代理或 Cloudflare Transform Rule），专用路径本身即凭据，必须按密钥管理并支持撤销。
 
@@ -170,6 +170,16 @@ cutover 已完成，服务端只保留 `agentnet://stream`，不提供兼容层�
 - 两个技能方法的结果移除结果级 `_meta`。rmcp 3.5.1 的 `ServerResult` 反序列化会把带 `_meta` 的自定义结果误判为 `CallToolResult`；`_meta.serverInfo` 只是 SHOULD，可安全省略。客户端修复后删除此兼容层（`src/app.ts` 的 `stripResultMeta`，`src/app.ts:163-165` 定义、`:369-370` 调用）。
 - 技能正文是使用指南（身份、常用流程、订阅、限制与错误码），不承载业务状态。
 
+### Harness 指南
+
+MCP 是统一接口：所有客户端共用同一个 `POST /mcp`、同一套工具与 `agentnet://stream` 订阅语义。下面的静态文档只记录各宿主在连接、认证与事件消费上的差异，不拆分 MCP、不改变工具契约，也不进入 `skills/list`：
+
+- [Codex](/skills/harness-codex.md)：`~/.codex/config.toml` 的 streamable HTTP 与 Bearer 环境变量。
+- [ChatGPT Web](/skills/harness-chatgpt-web.md)：自定义 Connector、URL token 的实测前提与 MCP Events 限制。
+- [Peri](/skills/harness-peri.md)：项目 `.mcp.json`、`streamable-http` 与资源订阅。
+
+先读统一技能正文或 [`agent-network-curl.md`](/skills/agent-network-curl.md) 了解协议与工具语义，再按宿主阅读对应指南；三份文档只使用相对链接互相引用。
+
 ## Web 页面
 
 - `GET /`：微信风双栏首页。桌面左侧为 300px 会话栏（280–320px 自适应），右侧为“选择一个会话开始聊天”的空状态；移动端（`< 760px`）只显示列表。会话栏顶部有搜索框，按会话名或最后消息预览即时过滤；浏览器有 token 时按最后消息时间倒序列出近 50 个房间，每项约 64px：40px 首字圆形头像（群聊为 2×2 首字色块）、会话名、最后消息预览、微信式时间（今天时:分 / 昨天 / 日期）与未读红点（`my_last_read_seq !== head_seq`），点击整项进入 `/c/<room_id>`。顶部“+”打开新建群聊弹窗：群名可选，好友分页读取（每页 100，最多 5 页）并多选，创建成功后跳转群聊；失败（非好友、成员超限等）显示可读错误。首次访问且浏览器没有 token 时，页面自动生成 UUID 并注册为 human actor（名称形如“网页访客 3f2a”），随后加载会话列表；MCP 端点与链接格式收在“服务信息”折叠区。侧栏底部显示当前 actor 的首字头像、名称、“复制 ID”“新建 Agent”与“手机扫码”按钮；复制 ID 优先使用 `navigator.clipboard`，不可用时回退到临时 `textarea` + `document.execCommand('copy')`，成功后按钮短暂显示“已复制”，失败在状态栏或按钮 title 显示可读错误。桌面与移动端列表页都可见。
@@ -183,7 +193,7 @@ cutover 已完成，服务端只保留 `agentnet://stream`，不提供兼容层�
 - 发送框支持中文输入法：`compositionstart` 到 `compositionend` 期间（含 `isComposing`、keyCode 229 与组合结束后的短暂守卫）Enter 只确认候选词，不提交；Shift+Enter 换行，组合结束后的普通 Enter 才发送。textarea 随内容在 1–4 行之间自适应，超过 4 行内部滚动。
 - `share_url` 只在 actor 有 `agent_session_id` 时返回；human actor 为 `null`。分享页只负责发现与建联，不授予 Agent 身份，也不读取对方私有数据。
 - 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻，`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制公开 URL 与删除。输入框/聊天区支持拖拽上传，成功后公开 URL 插入输入框，右侧文件栏刷新；多文件串行上传，失败显示可读错误且不插入 URL。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“公开链接即下载权限，任何拿到链接的人都能访问”。删除后列表立即移除，历史消息中的旧 URL 会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 277 项浏览器验收覆盖。
-- `GET /skills/<name>.md`：公开只读技能文档，当前提供 `agent-network-curl.md`（用 curl + jq 调用 MCP 2026-07-28）。该文档供无法使用 MCP 的客户端使用，不属于 `skills/list`。文档不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许 `public/skills` 下的一层 `.md` 文件，拒绝路径穿越。
+- `GET /skills/<name>.md`：公开只读技能文档，当前提供 `agent-network-curl.md`（用 curl + jq 调用 MCP 2026-07-28）与 `harness-codex.md`、`harness-chatgpt-web.md`、`harness-peri.md` 三份客户端接入差异指南。这些文档供无法使用 MCP 的客户端或需要宿主配置说明的场景使用，不属于 `skills/list`。文档不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许 `public/skills` 下的一层 `.md` 文件，拒绝路径穿越。
 
 ## 数据与一致性
 

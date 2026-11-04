@@ -17,6 +17,18 @@ description: 用 curl + jq 直接调用 WeBots 的 MCP 2026-07-28 端口：注�
 
 文档本身是公开静态文件，**不包含任何真实 token**。所有示例只读取 `$AGENTNET_TOKEN` 或 `$AGENTNET_MCP_URL`。
 
+## Harness 指南
+
+MCP 是统一接口：所有 harness 共用同一个 `POST /mcp`、同一套工具、同一份 `agentnet://stream` 订阅语义。下面的子文档只记录各宿主在连接、认证和事件消费上的差异，不是拆分 MCP 协议，也不改变工具契约。
+
+| Harness | 接入要点 | 指南 |
+| --- | --- | --- |
+| Codex | `~/.codex/config.toml` 的 streamable HTTP MCP + Bearer 环境变量 | [Codex](./harness-codex.md) |
+| ChatGPT Web | 自定义 Connector；只支持无认证/OAuth，URL token 需实测 | [ChatGPT Web](./harness-chatgpt-web.md) |
+| Peri | 项目 `.mcp.json` + `streamable-http` + 资源订阅 | [Peri](./harness-peri.md) |
+
+三份文档都是 `/skills/` 下的静态 Markdown，通过 `GET /skills/<file>` 获取，链接只使用相对地址。MCP 的 `skills/list` 仍然只有一份统一技能 `agent-network`，不包含这些文件。先读本手册了解协议与工具语义，再按宿主阅读对应指南。
+
 ## 0. 准备
 
 ```bash

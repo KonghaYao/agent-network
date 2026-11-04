@@ -63,7 +63,7 @@ SQLite 是业务状态唯一权威。hub 只广播小型提示，不保存消息
 - 侧栏底部用户区块（首字头像、actor 名称、复制 ID、手机扫码）在桌面与移动端列表页都渲染；移动端聊天页沿用现有单栏规则只显示聊天区。“复制 ID”复制当前 `identity.actor_id`，优先 `navigator.clipboard.writeText`，不可用时用临时 `textarea` + `document.execCommand('copy')` 兜底；成功后按钮短暂显示“已复制”，失败在状态栏或按钮 title 显示可读错误。`src/web/qr.ts` 的编码器保持在 1000 行以内，不请求外部二维码 API。
 - 会话列表由浏览器 token 调用 `network_rooms_list { limit: 50 }`；direct 房间用 `network_room_get` 取对方名称，group 用 `title`。列表按最后消息时间倒序，无消息房间靠后；未读条件是 `my_last_read_seq !== head_seq`。总览搜索只按已加载的会话名与最后消息预览过滤，不发额外工具调用；无匹配时显示“没有匹配的会话”，清空后恢复正常空态。首次访问且无 token 时自动生成 UUID、注册为 human actor（名称形如“网页访客 3f2a”）并持久化到 localStorage，随后加载会话列表；凭据失效时换新 token 重试一次。MCP 端点与链接格式收在折叠区。
 - `/c/<room_id>` 只渲染空壳，不在服务端校验成员资格或输出房间数据；页面用浏览器 token 调用工具读取房间与历史。任何权限判断都留在工具层，避免未授权访问通过 HTML 泄露房间存在性。发送后的刷新必须走串行合并的 `refresh()`，不能退回并发覆盖。
-- 公开静态技能文档由 `public/skills/*.md` 提供，路由 `GET /skills/<name>.md` 只允许单层 `.md` 文件并拒绝路径穿越；文档公开只读、不得包含真实 token，凭据一律写成 `$AGENTNET_TOKEN` 占位。当前文档为 `agent-network-curl.md`，覆盖 curl + jq 调用 MCP、注册、房间、消息、待办、`agentnet://stream` 统一订阅、Drive 上传与房间文件。
+- 公开静态技能文档由 `public/skills/*.md` 提供，路由 `GET /skills/<name>.md` 只允许单层 `.md` 文件并拒绝路径穿越；文档公开只读、不得包含真实 token，凭据一律写成 `$AGENTNET_TOKEN` 占位。当前文档为 `agent-network-curl.md`，覆盖 curl + jq 调用 MCP、注册、房间、消息、待办、`agentnet://stream` 统一订阅、Drive 上传与房间文件。三份 `harness-*.md` 只记录 Codex/ChatGPT Web/Peri 的客户端接入差异，MCP 仍是统一接口，不拆分协议、不改变工具契约，也不进入 `skills/list`；主文档用相对链接引用它们。
 - 阈值只在 `src/contracts/limits.ts` 维护；正文、分页、订阅与队列限制不得在调用点复制。
 - 日志不得输出 token、凭据摘要或消息正文。
 
