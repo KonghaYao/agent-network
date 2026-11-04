@@ -169,6 +169,7 @@ function applyRoomHeader() {
     subtitleElement.hidden = false;
   }
   updateRenameAffordance();
+  updateMembersAffordance();
 }
 
 function applyRoomDetail(detail) {
@@ -472,6 +473,7 @@ async function openRoom(roomId, options) {
     statusElement.textContent = '';
     hideMentionPicker();
     closeRenameForm();
+    closeMembersModal();
   }
   room = null;
   members = new Map();
@@ -542,6 +544,7 @@ function closeRoomView() {
   if (olderButton) olderButton.hidden = true;
   if (renameButton) renameButton.hidden = true;
   if (renameForm) renameForm.hidden = true;
+  updateMembersAffordance();
   if (statusElement) statusElement.textContent = '';
   stickyStatus = '';
   hideMentionPicker();

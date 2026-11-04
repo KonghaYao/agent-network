@@ -2,6 +2,7 @@ import { LIMITS } from '../contracts/limits';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
 import { CHAT_LIST_SCRIPT } from './chat-list-script';
+import { CHAT_MEMBERS_SCRIPT } from './chat-members-script';
 import { CHAT_MESSAGE_FILES_SCRIPT } from './chat-message-files-script';
 import { CHAT_RENDER_SCRIPT } from './chat-render-script';
 import { CHAT_ROUTER_SCRIPT } from './chat-router-script';
@@ -28,6 +29,8 @@ const MAX_CHUNKS = 8;
 // 服务端 LIMITS.invokeMax 的内联值：阈值只在 limits.ts 维护，页面不复制字面量。
 const INVOKE_MAX = ${LIMITS.invokeMax};
 const ACTOR_NAME_MAX = ${LIMITS.actorNameMax};
+const MEMBER_CHANGE_MAX = ${LIMITS.memberChangeMax};
+const GROUP_MEMBERS_MAX = ${LIMITS.groupMembersMax};
 // claimed 超过该时长未更新时显示提示；只做本地重绘，不轮询服务端。
 const CLAIM_STALE_MS = ${LIMITS.claimedStaleMs};
 const WEB_REQUEST_TIMEOUT_MS = ${LIMITS.webRequestTimeoutMs};
@@ -82,6 +85,7 @@ let pendingRoomRefreshId = null;
 let stickyStatus = '';
 
 ${CHAT_LIST_SCRIPT}
+${CHAT_MEMBERS_SCRIPT}
 ${CHAT_MESSAGE_FILES_SCRIPT}
 ${CHAT_RENDER_SCRIPT}
 ${NEW_AGENT_SCRIPT}

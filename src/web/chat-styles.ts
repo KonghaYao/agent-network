@@ -284,6 +284,15 @@ export const APP_STYLE = `
   .picker-label { margin: 14px 0 6px; font-size: 12px; color: var(--wx-muted); }
   .contact-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px;
     overflow-y: auto; margin: 0 0 8px; }
+  .member-roster { list-style: none; margin: 0 0 8px; padding: 0;
+    max-height: 180px; overflow-y: auto; }
+  .member-roster-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    border-radius: 4px; font-size: 14px; }
+  .member-roster-item + .member-roster-item { border-top: 1px solid var(--wx-line); }
+  .member-roster-name { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .member-roster-role { flex: 0 0 auto; margin-left: auto; font-size: 11px;
+    color: var(--wx-muted); }
   .contact-choice { display: flex; align-items: center; gap: 9px; padding: 8px;
     border-radius: 4px; font-size: 14px; }
   .contact-choice:hover { background: var(--wx-hover); }
@@ -321,13 +330,16 @@ export const APP_STYLE = `
   }
 
   .messages::-webkit-scrollbar, .sidebar-list::-webkit-scrollbar,
-  .mention-picker::-webkit-scrollbar, .contact-list::-webkit-scrollbar { width: 6px; }
+  .mention-picker::-webkit-scrollbar, .contact-list::-webkit-scrollbar,
+  .member-roster::-webkit-scrollbar { width: 6px; }
   .messages::-webkit-scrollbar-thumb, .sidebar-list::-webkit-scrollbar-thumb,
-  .mention-picker::-webkit-scrollbar-thumb, .contact-list::-webkit-scrollbar-thumb {
+  .mention-picker::-webkit-scrollbar-thumb, .contact-list::-webkit-scrollbar-thumb,
+  .member-roster::-webkit-scrollbar-thumb {
     background: rgb(0 0 0 / 14%); border-radius: 3px; }
   @media (prefers-color-scheme: dark) {
     .messages::-webkit-scrollbar-thumb, .sidebar-list::-webkit-scrollbar-thumb,
-    .mention-picker::-webkit-scrollbar-thumb, .contact-list::-webkit-scrollbar-thumb {
+    .mention-picker::-webkit-scrollbar-thumb, .contact-list::-webkit-scrollbar-thumb,
+    .member-roster::-webkit-scrollbar-thumb {
       background: rgb(255 255 255 / 16%); }
     .msg-time span { background: rgb(255 255 255 / 7%); }
   }

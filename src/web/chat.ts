@@ -5,6 +5,7 @@ import {
   filesBackdrop,
   filesPane,
   groupDialog,
+  membersDialog,
   newAgentDialog,
   sidebarPane,
 } from './chat-panels';
@@ -42,6 +43,7 @@ ${filesBackdrop()}
 ${filesPane()}
 ${filePreviewDialog()}
 ${groupDialog()}
+${membersDialog()}
 ${newAgentDialog()}
 ${deviceHandoffDialog()}
 ${chatClientScript(roomId)}`,

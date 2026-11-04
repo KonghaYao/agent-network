@@ -300,6 +300,38 @@ async function sendRoomMessage(token: string, roomId: string, body: string): Pro
   });
 }
 
+/** 注册一个 Agent 并加为指定人类的好友，用于群成员添加场景。 */
+async function createAgentFriend(token: string, name: string): Promise<Actor> {
+  const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+  const agent = await rawTool<Actor>(agentToken, 'network_register', {
+    request_id: requestId('reg'),
+    kind: 'agent',
+    name,
+    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+  });
+  await rawTool(token, 'network_contact_add', {
+    request_id: requestId('contact'),
+    agent_session_id: agent.agent_session_id,
+  });
+  return agent;
+}
+
+/** 批量创建好友，覆盖 network_contacts_list 的 100 条分页与第 2 页读取。 */
+async function createFillerFriends(token: string, count: number): Promise<Actor[]> {
+  const actors: Actor[] = [];
+  const batchSize = 10;
+  for (let start = 0; start < count; start += batchSize) {
+    const size = Math.min(batchSize, count - start);
+    const batch = await Promise.all(
+      Array.from({ length: size }, (_, offset) =>
+        createAgentFriend(token, `分页好友 ${String(start + offset + 1).padStart(3, '0')}`),
+      ),
+    );
+    actors.push(...batch);
+  }
+  return actors;
+}
+
 async function waitForText(page: Page, selector: string, text: string, timeout = 10_000): Promise<void> {
   await page.waitForFunction(
     `(() => {
@@ -1033,6 +1065,266 @@ async function main(): Promise<void> {
           escapedState.skill === '' &&
           escapedState.prompt === '',
       );
+      await context.close();
+    }
+
+    // 2b-2. 群聊创建后添加成员：owner 权限、分页好友、排除现有成员、重复与失败错误、移动端。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await createFillerFriends(data.humanToken, 100);
+      const agentC = await createAgentFriend(data.humanToken, '加人候选 C');
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+
+      await page.locator('#new-group').click();
+      await page.locator('#group-contacts input[type=checkbox]').first().waitFor();
+      await page
+        .locator('#group-contacts .contact-choice')
+        .filter({ hasText: data.agentA.name })
+        .locator('input')
+        .check();
+      await page.fill('#group-title', '加人测试群');
+      await page.locator('#group-create').click();
+      await page.waitForURL(/\/c\/rm_/);
+      const groupId = decodeURIComponent(page.url().split('/c/')[1] ?? '');
+      await waitRoom(page, groupId, '加人测试群');
+      check(
+        '创建群后成员数为 2',
+        ((await page.locator('#subtitle').textContent()) ?? '').includes('2 人'),
+      );
+      check('群聊头部显示添加成员入口', await page.locator('#add-members').isVisible());
+
+      await page.locator(roomLink(data.direct.room.room_id)).click();
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      checkEqual('单聊不显示添加成员入口', await page.locator('#add-members').isHidden(), true);
+      await page.locator(roomLink(groupId)).click();
+      await waitRoom(page, groupId, '加人测试群');
+
+      const contactsCallsBefore = await mcpCallCount(page, 'network_contacts_list');
+      const roomGetBefore = await mcpCallCount(page, 'network_room_get');
+      await page.locator('#add-members').click();
+      await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
+      checkEqual('添加成员弹窗打开', await page.locator('#members-modal').isVisible(), true);
+      checkEqual(
+        '当前成员列表显示 2 人',
+        await page.locator('#members-current .member-roster-item').count(),
+        2,
+      );
+      const rosterText = (await page.locator('#members-current').textContent()) ?? '';
+      check(
+        '当前成员显示名称、类型与群主',
+        rosterText.includes(data.human.name) &&
+          rosterText.includes(data.agentA.name) &&
+          rosterText.includes('群主') &&
+          rosterText.includes('Agent'),
+      );
+      checkEqual(
+        '好友列表排除当前成员',
+        await page
+          .locator('#members-contacts .contact-choice')
+          .filter({ hasText: data.agentA.name })
+          .count(),
+        0,
+      );
+      checkEqual(
+        '好友列表排除自己',
+        await page
+          .locator('#members-contacts .contact-choice')
+          .filter({ hasText: data.human.name })
+          .count(),
+        0,
+      );
+      checkEqual(
+        '好友分页加载并排除现有成员',
+        await page.locator('#members-contacts input[type=checkbox]').count(),
+        102,
+      );
+      const contactsCallsAfter = await mcpCallCount(page, 'network_contacts_list');
+      check(
+        '好友列表读取至少两页',
+        contactsCallsAfter - contactsCallsBefore >= 2,
+        { contactsCallsBefore, contactsCallsAfter },
+      );
+
+      const candidate = page
+        .locator('#members-contacts .contact-choice')
+        .filter({ hasText: agentC.name });
+      checkEqual('候选好友包含未入群好友', await candidate.count(), 1);
+      await candidate.locator('input').check();
+      await page.locator('#members-add').click();
+      await waitForText(page, '#subtitle', '3 人');
+      checkEqual('添加成功后弹窗关闭', await page.locator('#members-modal').isHidden(), true);
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_room_get')) > roomGetBefore,
+        '添加成员后重新读取房间',
+        5_000,
+      );
+      check('添加成员后刷新 network_room_get', true);
+
+      await page.locator('#add-members').click();
+      await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
+      checkEqual(
+        '当前成员列表更新为 3 人',
+        await page.locator('#members-current .member-roster-item').count(),
+        3,
+      );
+      check(
+        '新成员出现在当前成员列表',
+        ((await page.locator('#members-current').textContent()) ?? '').includes(agentC.name),
+      );
+      checkEqual(
+        '已入群好友不再出现在候选',
+        await page
+          .locator('#members-contacts .contact-choice')
+          .filter({ hasText: agentC.name })
+          .count(),
+        0,
+      );
+
+      const duplicateCandidate = page
+        .locator('#members-contacts .contact-choice')
+        .filter({ hasText: data.agentB.name });
+      await rawTool(data.humanToken, 'network_room_members_update', {
+        request_id: requestId('members'),
+        room_id: groupId,
+        add: [data.agentB.actor_id],
+      });
+      await waitForText(page, '#subtitle', '4 人');
+      await duplicateCandidate.locator('input').check();
+      await page.locator('#members-add').click();
+      await waitForText(page, '#members-error', '已在群里');
+      check(
+        '重复添加显示可读错误',
+        ((await page.locator('#members-error').textContent()) ?? '').includes(data.agentB.name),
+      );
+      await page.locator('#members-cancel').click();
+
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_room_members_update') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as { id?: string } | null;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    code: 'ROOM_FULL',
+                    message: '群成员数量达到上限',
+                    retryable: false,
+                  }),
+                },
+              ],
+            },
+          }),
+        });
+      });
+      await page.locator('#add-members').click();
+      await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
+      await page
+        .locator('#members-contacts .contact-choice')
+        .filter({ hasText: '分页好友 050' })
+        .locator('input')
+        .check();
+      await page.locator('#members-add').click();
+      await waitForText(page, '#members-error', '上限');
+      check('成员超限显示可读错误', true);
+      await page.unroute('**/mcp');
+      await page.locator('#members-cancel').click();
+      await context.close();
+    }
+
+    // 2b-3. 非 owner 打开添加成员：只读展示成员并明确提示，不发送写入。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.agentBToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/c/${data.group.room.room_id}`);
+      await waitRoom(page, data.group.room.room_id, '测试群');
+      check('群成员也显示添加成员入口', await page.locator('#add-members').isVisible());
+      await page.locator('#add-members').click();
+      await page.locator('#members-current .member-roster-item').first().waitFor();
+      checkEqual('非 owner 不能提交添加', await page.locator('#members-add').isDisabled(), true);
+      check(
+        '非 owner 显示明确提示',
+        ((await page.locator('#members-error').textContent()) ?? '').includes('只有群 owner'),
+      );
+      checkEqual(
+        '非 owner 不显示好友多选',
+        await page.locator('#members-contacts input[type=checkbox]').count(),
+        0,
+      );
+      await context.close();
+    }
+
+    // 2b-4. 390px 添加成员弹窗可用、无横向溢出，成功后成员数更新。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/c/${data.group.room.room_id}`);
+      await waitRoom(page, data.group.room.room_id, '测试群');
+      await page.locator('#add-members').click();
+      await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
+      checkEqual('390px 添加成员弹窗可见', await page.locator('#members-modal').isVisible(), true);
+      checkEqual('390px 只显示聊天区', await page.locator('.sidebar').isHidden(), true);
+      const mobileMetrics = (await page.evaluate(`(() => {
+        const card = document.querySelector('#members-modal .modal-card');
+        const contacts = document.getElementById('members-contacts');
+        if (!card || !contacts) return null;
+        const cardRect = card.getBoundingClientRect();
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          cardLeft: cardRect.left,
+          cardRight: cardRect.right,
+          contactsRight: contacts.getBoundingClientRect().right
+        };
+      })()`)) as {
+        view: number;
+        doc: number;
+        cardLeft: number;
+        cardRight: number;
+        contactsRight: number;
+      } | null;
+      check(
+        '390px 添加成员弹窗不横向溢出',
+        Boolean(mobileMetrics) &&
+          mobileMetrics!.doc <= mobileMetrics!.view &&
+          mobileMetrics!.cardLeft >= -1 &&
+          mobileMetrics!.cardRight <= mobileMetrics!.view + 1 &&
+          mobileMetrics!.contactsRight <= mobileMetrics!.view + 1,
+        mobileMetrics,
+      );
+      await page
+        .locator('#members-contacts .contact-choice')
+        .filter({ hasText: '分页好友 060' })
+        .locator('input')
+        .check();
+      await page.locator('#members-add').click();
+      await waitForText(page, '#subtitle', '4 人');
+      check('390px 添加成员后成员数更新', true);
+      checkEqual('390px 添加成功后弹窗关闭', await page.locator('#members-modal').isHidden(), true);
       await context.close();
     }
 

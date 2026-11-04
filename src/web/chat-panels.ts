@@ -76,6 +76,7 @@ export function chatPane(): string {
       <div class="title-row">
         <h2 id="title">单聊</h2>
         <button class="link-btn" id="rename" type="button" hidden>改名</button>
+        <button class="link-btn" id="add-members" type="button" hidden>添加成员</button>
       </div>
       <p class="muted" id="subtitle">正在加载…</p>
     </div>
@@ -148,6 +149,31 @@ export function groupDialog(): string {
       <div class="row modal-actions">
         <button id="group-cancel" type="button">取消</button>
         <button class="primary" id="group-create" type="submit">创建</button>
+      </div>
+    </form>
+  </div>
+</div>`;
+}
+
+/**
+ * 群聊添加成员弹窗：上方只读展示当前成员，下方分页好友多选。
+ *
+ * 只有群 owner 能提交；非 owner 打开时显示明确提示并禁用“添加”。
+ * 好友列表在客户端排除自己与当前成员，服务端仍会再次校验所有权与好友关系。
+ */
+export function membersDialog(): string {
+  return `<div class="modal" id="members-modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="members-modal-title">
+    <h2 id="members-modal-title">添加成员</h2>
+    <form id="members-form">
+      <p class="muted picker-label">当前成员</p>
+      <ul id="members-current" class="member-roster" aria-label="当前群成员"></ul>
+      <p class="muted picker-label">选择好友加入</p>
+      <div id="members-contacts" class="contact-list"></div>
+      <p id="members-error" class="form-error" role="status"></p>
+      <div class="row modal-actions">
+        <button id="members-cancel" type="button">取消</button>
+        <button class="primary" id="members-add" type="submit">添加</button>
       </div>
     </form>
   </div>
