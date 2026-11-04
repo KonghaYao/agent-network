@@ -243,6 +243,8 @@ export const APP_STYLE = `
     font-size: 12px; overflow-wrap: anywhere; }
   .modal-actions { justify-content: flex-end; }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  /* 账号区两个文字按钮并排：复制 ID 与手机扫码。 */
+  .account-scan + .account-scan { margin-left: 10px; }
 
   .messages::-webkit-scrollbar, .sidebar-list::-webkit-scrollbar,
   .mention-picker::-webkit-scrollbar, .contact-list::-webkit-scrollbar { width: 6px; }

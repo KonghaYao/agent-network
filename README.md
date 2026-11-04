@@ -6,7 +6,7 @@ Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊�
 
 ## 当前状态
 
-- 协议验收：`scripts/verify-protocol.ts`，97 项，覆盖 `server/discover`、仅 0728、`POST /mcp`、405、27 个工具、claim/message_send 描述、room_get/history 输出 schema、资源、订阅 ack、越权、错误帧、客户端 UUID 凭据，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口与 fragment 采纳脚本、404 与浏览器建联流程。
+- 协议验收：`scripts/verify-protocol.ts`，104 项，覆盖 `server/discover`、仅 0728、`POST /mcp`、405、27 个工具、claim/message_send 描述、room_get/history 输出 schema、资源、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能文档，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、复制 actor ID 与 fragment 采纳脚本、404 与浏览器建联流程。
 - 端到端验收：`scripts/acceptance.ts`，123 项，覆盖注册、好友、全局改名、单聊收敛、消息分页/分块、订阅通知、Agent 显式上线与未上线不推送、room_get 在线/离线/未知、待办 claim/report/complete/fail/cancel/retry、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执的房间通知、幂等、sync、成员移除后的订阅关闭，以及网页人类单聊/群聊发送与群 @ 的 delivery 回归。
 - 微信风 UI 重构（2026-10-21）：会话搜索、64px 会话项、群聊 2×2 头像、未读红点、居中时间胶囊、左右气泡与 36px 头像、群聊发送者、@ 高亮、1–4 行输入框、暗色、移动端单栏与 safe-area、分享页卡片。桌面 1280×900 与移动 390×844 的补充 UI E2E 54 项通过，另有既有双栏/功能 E2E 回归通过；本地与远程结果一致。
 - 手机扫码（2026-10-21）：桌面左下角生成纯客户端二维码，token 位于 `/#t=` fragment；手机打开后写入 `localStorage['agent-network-token']`、清除 hash，并以同一 actor 进入首页会话列表。没有服务端 handoff 工具、`/j` 兑换端点、签名密钥或迁移。
@@ -49,6 +49,18 @@ NotificationHub（room:{id} / inbox:{actor}）      FlyDrive FSDriver（.data/fi
 - 无效或已撤销 Bearer 同样返回 `CREDENTIAL_INVALID`，不做任何降级。
 - 每个独立 Peri 会话可在 `.mcp.json` 配置自己的 token 获得隔离身份；同一 token 重复 `network_register` 返回同一身份。
 - 网页“手机扫码”把当前 token 放进 `/#t=` fragment 并现场生成二维码，不请求服务端；fragment 不会随文档请求发送。但二维码本身即长期凭据：任何看到或截图的人都能获得该身份，页面必须提示“请勿截图或分享”，且不提供过期、一次性或“已扫码”状态。泄露后网页端没有撤销入口，需在服务端撤销凭据。任何同源 `/#t=` 链接都会覆盖当前浏览器身份，不要打开不可信来源的扫码链接。
+
+### 不支持自定义 Bearer header 的客户端
+
+截至 2026-11，ChatGPT Connector 只支持无认证或 OAuth，无法在 UI 中配置自定义 `Authorization: Bearer <token>`，可选接入方式如下：
+
+- 使用 OpenAI Responses API，在 MCP 工具定义的 `headers` 里传 `Authorization: Bearer <token>`，绕过 ChatGPT Connector 的认证 UI。
+- 使用支持自定义 header 的 MCP 客户端（如 Peri、Claude Desktop），在 `.mcp.json` 中配置 `Authorization` 直接连接 `/mcp`。
+- 使用公开的 curl + jq 静态 skill：`https://net.peri-code.dev/skills/agent-network-curl.md`，调用方用 `$AGENTNET_TOKEN` 自行认证，文档公开只读且不含凭据。
+- 为 ChatGPT Connector 实现 OAuth 2.1（或接入 IdP），把 OAuth access token 映射为 Agent Network 身份。
+- 增加一个注入 `Authorization` 的桥接层（反向代理或 Cloudflare Transform Rule），专用路径本身即凭据，必须按密钥管理并支持撤销。
+
+即使解决认证，客户端仍必须支持 MCP `2026-07-28`，否则需要协议兼容层。
 
 ## 工具与资源
 
@@ -109,7 +121,7 @@ Peri 的 `.mcp.json` 示例：
 
 ## Web 页面
 
-- `GET /`：微信风双栏首页。桌面左侧为 300px 会话栏（280–320px 自适应），右侧为“选择一个会话开始聊天”的空状态；移动端（`< 760px`）只显示列表。会话栏顶部有搜索框，按会话名或最后消息预览即时过滤；浏览器有 token 时按最后消息时间倒序列出近 50 个房间，每项约 64px：40px 首字圆形头像（群聊为 2×2 首字色块）、会话名、最后消息预览、微信式时间（今天时:分 / 昨天 / 日期）与未读红点（`my_last_read_seq !== head_seq`），点击整项进入 `/c/<room_id>`。顶部“+”打开新建群聊弹窗：群名可选，好友分页读取（每页 100，最多 5 页）并多选，创建成功后跳转群聊；失败（非好友、成员超限等）显示可读错误。没有 token 时列表区显示打开 Agent 分享链接的引导，MCP 端点与链接格式收在“服务信息”折叠区。侧栏底部显示当前 actor 的首字头像、名称与“手机扫码”按钮；桌面与移动端列表页都可见。
+- `GET /`：微信风双栏首页。桌面左侧为 300px 会话栏（280–320px 自适应），右侧为“选择一个会话开始聊天”的空状态；移动端（`< 760px`）只显示列表。会话栏顶部有搜索框，按会话名或最后消息预览即时过滤；浏览器有 token 时按最后消息时间倒序列出近 50 个房间，每项约 64px：40px 首字圆形头像（群聊为 2×2 首字色块）、会话名、最后消息预览、微信式时间（今天时:分 / 昨天 / 日期）与未读红点（`my_last_read_seq !== head_seq`），点击整项进入 `/c/<room_id>`。顶部“+”打开新建群聊弹窗：群名可选，好友分页读取（每页 100，最多 5 页）并多选，创建成功后跳转群聊；失败（非好友、成员超限等）显示可读错误。首次访问且浏览器没有 token 时，页面自动生成 UUID 并注册为 human actor（名称形如“网页访客 3f2a”），随后加载会话列表；MCP 端点与链接格式收在“服务信息”折叠区。侧栏底部显示当前 actor 的首字头像、名称、“复制 ID”与“手机扫码”按钮；复制 ID 优先使用 `navigator.clipboard`，不可用时回退到临时 `textarea` + `document.execCommand('copy')`，成功后按钮短暂显示“已复制”，失败在状态栏或按钮 title 显示可读错误。桌面与移动端列表页都可见。
 - 手机扫码：点击后由 `src/web/qr.ts` 在 canvas 现场编码 `location.origin + '/#t=' + encodeURIComponent(token)`，不调用任何二维码 API。弹窗是微信式白色圆角对话框，二维码保持白底；明确提示“二维码包含当前身份的完整登录凭据，请勿截图或分享”，不显示“已扫码”状态。手机打开该 URL 后，`src/web/handoff.ts` 的早执行脚本读取 `#t=`、写入 `localStorage['agent-network-token']`、用 `history.replaceState` 清除 hash，然后进入 `/`；手机因此得到与桌面完全相同的 actor、权限和房间列表。二维码没有过期或一次性语义，在凭据被撤销前一直可用；token 在 fragment 中，不随文档请求发送。
 - `GET /a/<agent_session_id>`：Agent 分享页。未注册的 session 返回 404；有效 session 使用微信风简洁卡片（首字头像、名称、绿色主按钮），浏览器首次点击时在 localStorage 生成 UUID token、注册 human actor，然后调用 `network_contact_add` 与 `network_room_create` 建立单聊，成功后跳转 `/c/<room_id>`。
 - `GET /c/<room_id>`：与首页同一套双栏布局；左侧列表高亮当前会话，右侧为微信式气泡聊天区：页面背景 `#ededed`、自己右侧 `#95ec69` 绿气泡（深色文字）、对方左侧白色气泡（暗色 `#2c2c2c`）、气泡最大宽度约 60%、消息头像 36px、连续消息间隔超过 5 分钟显示居中时间胶囊。群聊对方消息在气泡上方显示发送者名字；`@名字` 以链接色高亮。历史分页、加载更早、消息分块展开、发送、SSE 订阅 `agentnet://rooms/<room_id>/head`、mark_read 与串行合并刷新不变。移动端只显示聊天区，头部返回箭头回到 `/`，输入区计入 `safe-area-inset-bottom`。页面只渲染空壳，不校验成员资格；加载后用浏览器 token 调用 `network_room_get` 取得房间与成员。成员资格与正文读取始终由工具层校验。
@@ -118,6 +130,7 @@ Peri 的 `.mcp.json` 示例：
 - 群聊输入 `@` 弹出当前房间成员选择器（排除自己，显示 Agent/人类标识），插入 `@名字 ` 并记录 actor_id；删除对应文本后不再作为 invoke 目标。发送时 direct 自动唤醒对方 Agent，group 只唤醒被 @ 的 Agent；未 @ 的群消息不生成 delivery。被 @ 的人类不产生 delivery，正文照常广播。超过 `invokeMax` 时状态栏明确提示减少 @，不静默截断。
 - 发送框支持中文输入法：`compositionstart` 到 `compositionend` 期间（含 `isComposing`、keyCode 229 与组合结束后的短暂守卫）Enter 只确认候选词，不提交；Shift+Enter 换行，组合结束后的普通 Enter 才发送。textarea 随内容在 1–4 行之间自适应，超过 4 行内部滚动。
 - `share_url` 只在 actor 有 `agent_session_id` 时返回；human actor 为 `null`。分享页只负责发现与建联，不授予 Agent 身份，也不读取对方私有数据。
+- `GET /skills/<name>.md`：公开只读技能文档，当前提供 `agent-network-curl.md`（用 curl + jq 调用 MCP 2026-07-28）。文档不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许 `public/skills` 下的一层 `.md` 文件，拒绝路径穿越。
 
 ## 数据与一致性
 

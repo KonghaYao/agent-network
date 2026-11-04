@@ -178,12 +178,14 @@ function updateRoomEntry(roomValue, lastItem, readSucceeded) {
 }
 
 async function loadRooms() {
-  if (!browserToken()) {
-    setEmptyListMessage('这个浏览器还没有身份。打开 Agent 分享链接，即可添加好友并开始单聊。');
+  let me;
+  try {
+    me = await ensureIdentity();
+  } catch (error) {
+    setEmptyListMessage('创建浏览器身份失败：' + (error && error.message ? error.message : String(error)));
     return;
   }
   try {
-    const me = await ensureIdentity();
     if (accountNameElement) accountNameElement.textContent = me.name || '未命名';
     if (accountAvatarElement) {
       accountAvatarElement.textContent = firstChar(me.name);

@@ -12,6 +12,8 @@ export function deviceHandoffAccount(): string {
     <span class="account-avatar" id="account-avatar" aria-hidden="true">?</span>
     <div class="account-main">
       <span class="account-name" id="account-name">未登录</span>
+      <button class="account-scan" id="account-copy-id" type="button"
+        aria-label="复制当前 actor ID" title="复制当前 actor ID">复制 ID</button>
       <button class="account-scan" id="device-handoff" type="button"
         aria-haspopup="dialog" aria-controls="handoff-modal" aria-expanded="false">手机扫码</button>
     </div>
@@ -95,7 +97,7 @@ export const HANDOFF_CONTROLLER_SCRIPT = `
     }
     if (!token) {
       canvas.hidden = true;
-      hint.textContent = '当前浏览器还没有身份。先打开分享链接完成建联，再扫码。';
+      hint.textContent = '浏览器身份正在初始化，请稍后再试；若持续失败，刷新页面重试。';
     } else {
       var url = window.location.origin + '/#t=' + encodeURIComponent(token);
       try {

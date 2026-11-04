@@ -286,12 +286,26 @@ async function main(): Promise<void> {
   check('首页包含新建群聊弹窗', homeHtml.includes('id="group-modal"'));
   check('首页包含手机扫码入口', homeHtml.includes('id="device-handoff"') && homeHtml.includes('手机扫码'));
   check(
+    '首页包含复制 actor ID 按钮',
+    homeHtml.includes('id="account-copy-id"') && homeHtml.includes('复制 ID'),
+  );
+  check(
+    '首页脚本包含剪贴板复制与 execCommand 兜底',
+    homeHtml.includes('navigator.clipboard') &&
+      homeHtml.includes('writeText') &&
+      homeHtml.includes("execCommand('copy')"),
+  );
+  check(
     '首页包含扫码弹窗与二维码画布',
     homeHtml.includes('id="handoff-modal"') && homeHtml.includes('id="handoff-qr"'),
   );
   check(
     '扫码页内联 fragment 采纳脚本',
     homeHtml.includes("#t=") && homeHtml.includes('history.replaceState'),
+  );
+  check(
+    '首页脚本首次访问自动注册 human 身份',
+    homeHtml.includes("requestId('web_reg')") && homeHtml.includes("kind: 'human'"),
   );
   check('扫码弹窗标明凭据泄露风险', homeHtml.includes('请勿截图或分享'));
   const removedHandoff = await fetch(`${baseUrl()}/j/removed`);
@@ -310,6 +324,21 @@ async function main(): Promise<void> {
       homeHtml.includes('在线') &&
       homeHtml.includes('离线') &&
       homeHtml.includes('未知'),
+  );
+
+  const skillDoc = await fetch(`${baseUrl()}/skills/agent-network-curl.md`);
+  checkEqual('GET /skills/agent-network-curl.md 返回 200', skillDoc.status, 200);
+  const skillDocText = await skillDoc.text();
+  check(
+    '静态技能为 Markdown 且包含 MCP 版本与 token 环境变量说明',
+    (skillDoc.headers.get('content-type') ?? '').includes('text/markdown') &&
+      skillDocText.includes('MCP-Protocol-Version') &&
+      skillDocText.includes('AGENTNET_TOKEN'),
+    skillDoc.headers.get('content-type'),
+  );
+  check(
+    '静态技能不包含硬编码 Bearer token',
+    !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(skillDocText),
   );
 
   const browserToken = newToken();

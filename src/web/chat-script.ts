@@ -28,6 +28,7 @@ const listStatusElement = document.getElementById('room-list-status');
 const searchInput = document.getElementById('room-search');
 const accountNameElement = document.getElementById('account-name');
 const accountAvatarElement = document.getElementById('account-avatar');
+const accountCopyButton = document.getElementById('account-copy-id');
 const titleElement = document.getElementById('title');
 const subtitleElement = document.getElementById('subtitle');
 const messagesElement = document.getElementById('messages');
@@ -62,6 +63,7 @@ let mentionTargets = new Map();
 let activeMention = null;
 let composing = false;
 let ignoreEnterUntil = 0;
+let copyResetTimer = null;
 // 发送失败/投递缺失/截断提示必须跨过 SSE 触发的刷新，不能在 300ms 后被清空。
 let stickyStatus = '';
 
@@ -78,7 +80,7 @@ function requestId(prefix) {
 
 async function api(method, params, toolName) {
   const token = browserToken();
-  if (!token) throw new Error('没有浏览器身份，请通过邀请链接进入');
+  if (!token) throw new Error('浏览器身份尚未初始化，请刷新页面后重试');
   const headers = {
     'content-type': 'application/json',
     accept: method === 'subscriptions/listen' ? 'text/event-stream' : 'application/json, text/event-stream',
@@ -110,7 +112,12 @@ async function rpc(method, params, toolName) {
   const response = await api(method, params, toolName);
   const payload = await response.json().catch(function () { return null; });
   if (!payload) throw new Error('服务无响应');
-  if (payload.error) throw new Error(payload.error.message || '请求失败');
+  if (payload.error) {
+    const failure = new Error(payload.error.message || '请求失败');
+    const code = payload.error.data && payload.error.data.code;
+    if (typeof code === 'string') failure.code = code;
+    throw failure;
+  }
   return payload.result;
 }
 
@@ -131,8 +138,49 @@ async function callTool(name, args) {
   return item ? JSON.parse(item.text) : {};
 }
 
+/**
+ * 首次访问自动生成并绑定 human 身份。
+ *
+ * token 在注册前写入 localStorage，重复打开沿用同一身份；凭据被撤销时
+ * 换一个新 token 重试一次，避免浏览器永久卡在失效凭据上。
+ */
 async function ensureIdentity() {
-  if (!identity) identity = await callTool('network_me', {});
+  if (identity) return identity;
+  let token = browserToken();
+  if (!token) {
+    token = crypto.randomUUID();
+    try {
+      localStorage.setItem(TOKEN_KEY, token);
+    } catch (error) {
+      throw new Error('浏览器无法保存身份，请允许本地存储后刷新页面');
+    }
+  }
+  try {
+    identity = await callTool('network_me', {});
+    return identity;
+  } catch (error) {
+    if (!error || error.code !== 'CREDENTIAL_INVALID') throw error;
+  }
+  const register = function (value) {
+    return callTool('network_register', {
+      request_id: requestId('web_reg'),
+      kind: 'human',
+      name: '网页访客 ' + value.replaceAll('-', '').slice(0, 4)
+    });
+  };
+  try {
+    identity = await register(token);
+    return identity;
+  } catch (error) {
+    if (!error || error.code !== 'CREDENTIAL_INVALID') throw error;
+  }
+  token = crypto.randomUUID();
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+  } catch (error) {
+    throw new Error('浏览器无法保存身份，请允许本地存储后刷新页面');
+  }
+  identity = await register(token);
   return identity;
 }
 
@@ -183,6 +231,79 @@ function showError(error) {
   }
   if (sendButton) sendButton.disabled = true;
   if (bodyInput) bodyInput.disabled = true;
+}
+
+/** 非安全上下文没有 navigator.clipboard 时的兜底复制。 */
+function legacyCopyText(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.left = '-9999px';
+  area.style.top = '0';
+  document.body.appendChild(area);
+  area.select();
+  area.setSelectionRange(0, area.value.length);
+  let copied = false;
+  try {
+    copied = document.execCommand('copy');
+  } finally {
+    document.body.removeChild(area);
+  }
+  if (!copied) throw new Error('浏览器拒绝了复制操作');
+}
+
+function showCopyIdError(error) {
+  const message = '复制 ID 失败：' + (error && error.message ? error.message : String(error));
+  if (accountCopyButton) accountCopyButton.title = message;
+  if (statusElement) {
+    statusElement.textContent = message;
+  } else if (listStatusElement) {
+    listStatusElement.hidden = false;
+    listStatusElement.textContent = message;
+  }
+}
+
+/** 复制当前 actor ID；成功后按钮短暂显示“已复制”，不改变任何身份状态。 */
+async function copyActorId() {
+  let me;
+  try {
+    me = await ensureIdentity();
+  } catch (error) {
+    showCopyIdError(error);
+    return;
+  }
+  const actorId = me && me.actor_id;
+  if (!actorId) {
+    showCopyIdError(new Error('当前身份缺少 actor ID'));
+    return;
+  }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(actorId);
+      } catch (error) {
+        legacyCopyText(actorId);
+      }
+    } else {
+      legacyCopyText(actorId);
+    }
+  } catch (error) {
+    showCopyIdError(error);
+    return;
+  }
+  if (!accountCopyButton) return;
+  accountCopyButton.textContent = '已复制';
+  accountCopyButton.title = '已复制当前 actor ID';
+  if (statusElement && statusElement.textContent.indexOf('复制 ID 失败：') === 0) {
+    statusElement.textContent = '';
+  }
+  if (copyResetTimer) clearTimeout(copyResetTimer);
+  copyResetTimer = setTimeout(function () {
+    accountCopyButton.textContent = '复制 ID';
+    accountCopyButton.title = '复制当前 actor ID';
+    copyResetTimer = null;
+  }, 1500);
 }
 
 function directPeer() {
@@ -526,10 +647,6 @@ async function listen() {
 }
 
 async function initChat() {
-  if (!browserToken()) {
-    showError('没有浏览器身份，请通过邀请链接进入');
-    return;
-  }
   try {
     await ensureIdentity();
     await refresh(true);
@@ -692,6 +809,8 @@ if (groupForm) {
     }
   });
 }
+
+if (accountCopyButton) accountCopyButton.addEventListener('click', copyActorId);
 
 (async function init() {
   await loadRooms();

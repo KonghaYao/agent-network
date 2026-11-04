@@ -1,6 +1,7 @@
 import { createMcpHandler, type McpHttpHandler, type McpRequestContext } from '@modelcontextprotocol/server';
 import { FILE_ID_PATTERN, fileScopeFor, type FileMount } from '@peri-code/mcpp/files';
 import { Hono } from 'hono';
+import { resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 
 import { LIMITS } from './contracts/limits';
@@ -30,6 +31,7 @@ interface ListenBody {
 const PROTOCOL_VERSION_META = 'io.modelcontextprotocol/protocolVersion';
 const MODERN_VERSION = '2026-07-28';
 const FILE_ID = new RegExp(FILE_ID_PATTERN);
+const SKILLS_ROOT = resolve(import.meta.dir, '../public/skills');
 
 /**
  * 需要移除结果级 `_meta` 的自定义方法。
@@ -216,6 +218,23 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
   app.get('/health', (c) =>
     c.json({ ok: true, env: env.ENVIRONMENT, drive: env.FILES ? 'enabled' : 'disabled' }),
   );
+
+  // 公开只读技能文档：只允许 public/skills 下的一层 .md，拒绝路径穿越。
+  // 文档本身不含凭据；调用方自行通过 AGENTNET_TOKEN 提供 Bearer。
+  app.get('/skills/:file', async (c) => {
+    const file = c.req.param('file');
+    if (!/^[a-z0-9][a-z0-9._-]*\.md$/u.test(file)) return c.notFound();
+    const path = resolve(SKILLS_ROOT, file);
+    if (!path.startsWith(`${SKILLS_ROOT}${sep}`)) return c.notFound();
+    const body = await Bun.file(path).text().catch(() => null);
+    if (body === null) return c.notFound();
+    return c.body(body, 200, {
+      'content-type': 'text/markdown; charset=utf-8',
+      'cache-control': 'public, max-age=60',
+      'access-control-allow-origin': '*',
+    });
+  });
+
   app.get('/', (c) => c.html(renderHomePage(), 200, { 'cache-control': 'no-store' }));
   app.get('/a/:sessionId', async (c) => {
     const actor = await getActorBySession(env.DB, c.req.param('sessionId'));
