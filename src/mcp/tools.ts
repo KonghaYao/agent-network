@@ -472,7 +472,7 @@ export function registerTools(
   register(
     server,
     'network_history_list',
-    '按固定快照上界和 keyset 游标分页读取房间历史预览；正文用 network_message_read。',
+    '按固定快照上界和 keyset 游标分页读取房间历史预览；默认 messages 视图保持旧契约。人类可显式传 view:"timeline" 读取包含 Agent 上下线系统消息的时间线；Agent 请求 timeline 返回 INVALID_ARGUMENT。正文用 network_message_read。',
     historyListSchema,
     historyPageSchema,
     async (input) => {

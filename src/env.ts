@@ -1,6 +1,7 @@
 import type { FileService } from '@peri-code/mcpp/files';
 
 import type { NotificationHub } from './realtime/hub';
+import type { AgentPresenceTimeline } from './realtime/presence-timeline';
 
 /** MCP Events 运行配置；只有 EVENTS_ENABLED=1 且密钥有效时才构造。 */
 export interface EventsConfig {
@@ -21,6 +22,8 @@ export interface EventsConfig {
 export interface Env {
   DB: D1Database;
   NOTIFICATION_HUB: NotificationHub;
+  /** Agent 上下线持久化时间线；缺失时只保留 hub 的进程内在线状态。 */
+  PRESENCE?: AgentPresenceTimeline;
   ENVIRONMENT: string;
   PUBLIC_ORIGIN: string;
   /** 启用 MCPP Files 时存在；关闭后 drive 工具与上传路由不注册。 */

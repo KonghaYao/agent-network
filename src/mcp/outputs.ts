@@ -124,12 +124,37 @@ export const roomPageSchema = z.object({
   has_more: z.boolean(),
 });
 
+export const timelinePresenceSchema = z.object({
+  kind: z.literal('presence'),
+  presence_event_id: z.string(),
+  room_id: z.string(),
+  agent_id: z.string(),
+  transition: z.enum(['online', 'offline']),
+  occurred_at: z.string(),
+  recorded_at: z.string(),
+  timeline_seq: z.string(),
+  time_basis: z.enum(['observed', 'inferred']),
+});
+
+export const timelineMessageSchema = historyMessageSchema.extend({
+  kind: z.literal('message'),
+});
+
+export const timelineItemSchema = z.union([timelineMessageSchema, timelinePresenceSchema]);
+
 export const historyPageSchema = z.object({
   items: z.array(historyMessageSchema),
   next_cursor: z.string().nullable(),
   has_more: z.boolean(),
   snapshot: z.string(),
   head_seq: z.string(),
+  /** timeline 模式下存在；messages 默认不返回。 */
+  view: z.enum(['messages', 'timeline']).optional(),
+  timeline_items: z.array(timelineItemSchema).optional(),
+  timeline_next_cursor: z.string().nullable().optional(),
+  timeline_has_more: z.boolean().optional(),
+  timeline_snapshot: z.string().optional(),
+  timeline_resume_cursor: z.string().optional(),
 });
 
 export const inboxPageSchema = z.object({

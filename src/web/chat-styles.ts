@@ -254,6 +254,11 @@ export const APP_STYLE = `
     margin: 0; padding: 12px 20px 18px; }
   .msg-time { margin: 10px 0; text-align: center; font-size: 11px; color: var(--wx-muted); }
   .msg-time span { padding: 2px 7px; border-radius: 3px; background: rgb(0 0 0 / 4%); }
+  /* 上下线系统行：居中、无头像/气泡/回执，桌面与移动端一致。 */
+  .msg-presence { display: flex; justify-content: center; margin: 10px 0; list-style: none; }
+  .msg-presence span { max-width: 88%; padding: 2px 8px; border-radius: 3px;
+    background: rgb(0 0 0 / 4%); color: var(--wx-muted); font-size: 11px;
+    text-align: center; overflow-wrap: anywhere; }
   .msg { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 18px; }
   .msg.mine { flex-direction: row-reverse; }
   .msg-avatar { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 6px;
@@ -393,6 +398,7 @@ export const APP_STYLE = `
     .member-roster::-webkit-scrollbar-thumb {
       background: rgb(255 255 255 / 16%); }
     .msg-time span { background: rgb(255 255 255 / 7%); }
+    .msg-presence span { background: rgb(255 255 255 / 7%); }
   }
 
   @media (max-width: 759px) {

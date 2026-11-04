@@ -15,8 +15,18 @@ import { Database } from 'bun:sqlite';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 
 import { extractMessageFileLinks } from '../src/contracts/file-links';
-import { check, checkEqual, checksPassed, rawRpc, sleep } from './lib/harness';
+import {
+  callTool,
+  check,
+  checkEqual,
+  checksPassed,
+  connectClient,
+  openSubscription,
+  rawRpc,
+  sleep,
+} from './lib/harness';
 import { messageFileLinkFixtures } from './lib/room-file-archive';
+import { runPresenceRestartAcceptance } from './lib/presence-restart';
 
 interface Actor {
   actor_id: string;
@@ -101,6 +111,9 @@ async function startServer(): Promise<{
       PORT: String(port),
       DATA_DIR: dataDir,
       PUBLIC_ORIGIN: base,
+      // 测试专用短宽限；生产默认仍由 contracts/limits.ts 决定。
+      AGENT_PRESENCE_GRACE_MS: '1200',
+      AGENT_PRESENCE_SWEEP_MS: '150',
     },
     stdout: 'ignore',
     stderr: 'inherit',
@@ -351,6 +364,39 @@ async function waitForText(page: Page, selector: string, text: string, timeout =
   );
 }
 
+interface PresenceTimelineItem {
+  kind: 'message' | 'presence';
+  transition?: 'online' | 'offline';
+  presence_event_id?: string;
+  message_id?: string;
+}
+
+/** 用真实 stream + login 生成一组上线/下线，供浏览器时间线断言。 */
+async function seedPresence(agentToken: string, humanToken: string, roomId: string): Promise<void> {
+  const connection = await connectClient(agentToken);
+  await openSubscription(connection.client, ['agentnet://stream']);
+  await callTool(connection.client, 'network_login', {});
+  await sleep(100);
+  await connection.close();
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const page = await rawTool<{ timeline_items?: PresenceTimelineItem[] }>(
+      humanToken,
+      'network_history_list',
+      { room_id: roomId, view: 'timeline', limit: 100 },
+    );
+    const items = (page.timeline_items ?? []).filter((item) => item.kind === 'presence');
+    if (
+      items.some((item) => item.transition === 'online') &&
+      items.some((item) => item.transition === 'offline')
+    ) {
+      return;
+    }
+    if (Date.now() > deadline) throw new Error('等待上下线时间线写入超时');
+    await sleep(100);
+  }
+}
+
 async function fixture(): Promise<{
   humanToken: string;
   human: Actor;
@@ -426,6 +472,17 @@ async function fixture(): Promise<{
       client_message_id: crypto.randomUUID(),
       room_id: extra.room.room_id,
       body: `E 消息 ${index + 1}`,
+    });
+  }
+  await seedPresence(agentAToken, humanToken, direct.room.room_id);
+  // 所有房间标记已读；presence 不改变 head，之后不应因上下线出现红点。
+  for (const room of [direct, group, extra]) {
+    const current = await rawTool<RoomDetail>(humanToken, 'network_room_get', {
+      room_id: room.room.room_id,
+    });
+    await rawTool(humanToken, 'network_room_mark_read', {
+      room_id: room.room.room_id,
+      through_seq: current.room.head_seq,
     });
   }
   return { humanToken, human, agentAToken, agentBToken, agentA, agentB, direct, group, extra };
@@ -721,6 +778,147 @@ async function main(): Promise<void> {
         'direct 在线状态点后台补全',
         await page.locator(`${roomLink(data.direct.room.room_id)} .presence-dot`).count(),
         1,
+      );
+      await context.close();
+    }
+
+    // 1a. 上下线时间线：居中系统行、侧栏预览/未读不变量、明暗与移动端。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await page.waitForFunction(
+        'document.querySelectorAll("#messages .msg-presence").length >= 2',
+      );
+      checkEqual(
+        '时间线渲染上线/下线条',
+        await page.locator('#messages .msg-presence').count(),
+        2,
+      );
+      const presenceText = (await page.locator('#messages .msg-presence').allTextContents()).join('\n');
+      check(
+        '上线文案包含 Agent 名与上线',
+        presenceText.includes(`${data.agentA.name} 上线`),
+        presenceText,
+      );
+      check(
+        '下线文案包含 Agent 名与下线',
+        presenceText.includes(`${data.agentA.name} 下线`),
+        presenceText,
+      );
+      check('presence 行包含本地时间', /(上线|下线) · \d{1,2}:\d{2}/u.test(presenceText), presenceText);
+      checkEqual(
+        'presence 无头像',
+        await page.locator('#messages .msg-presence .msg-avatar').count(),
+        0,
+      );
+      checkEqual(
+        'presence 无回执',
+        await page.locator('#messages .msg-presence .msg-receipt').count(),
+        0,
+      );
+      checkEqual(
+        'presence 无展开按钮',
+        await page.locator('#messages .msg-presence .expand').count(),
+        0,
+      );
+      checkEqual(
+        'presence 行居中',
+        await page.locator('#messages .msg-presence').first().evaluate(
+          (element) => getComputedStyle(element).justifyContent,
+        ),
+        'center',
+      );
+      checkEqual(
+        'presence 不产生未读红点',
+        await page.locator(`${roomLink(data.direct.room.room_id)} .unread`).count(),
+        0,
+      );
+      const preview =
+        (await page.locator(`${roomLink(data.direct.room.room_id)} .room-preview`).textContent()) ??
+        '';
+      check('侧栏预览仍为最后真实消息', preview.includes('D 消息 30'), preview);
+      const timelineCalls = await page.evaluate(
+        `(window.__mcpCalls || []).filter(function (call) {
+          return call.name === 'network_history_list' && call.body &&
+            call.body.params && call.body.params.arguments &&
+            call.body.params.arguments.view === 'timeline';
+        }).length`,
+      );
+      check('网页使用 timeline 视图', Number(timelineCalls) > 0, timelineCalls);
+      const readCalls = await page.evaluate(
+        `(window.__mcpCalls || []).filter(function (call) {
+          return call.name === 'network_message_read';
+        }).length`,
+      );
+      checkEqual('presence 不触发正文读取', Number(readCalls), 0);
+      await context.close();
+    }
+
+    // 1a-dark. 暗色主题下上下线行仍居中可见。
+    {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        colorScheme: 'dark',
+      });
+      await context.addInitScript({ content: initScript(data.humanToken) });
+      const page = await context.newPage();
+      page.setDefaultTimeout(15_000);
+      page.on('pageerror', (error) => allErrors.push(`pageerror: ${error.message}`));
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await page.waitForFunction(
+        'document.querySelectorAll("#messages .msg-presence").length >= 2',
+      );
+      checkEqual(
+        '暗色时间线仍显示上下线',
+        await page.locator('#messages .msg-presence').count(),
+        2,
+      );
+      check(
+        '暗色时间线使用暗色主题',
+        await page.evaluate(`matchMedia('(prefers-color-scheme: dark)').matches`),
+      );
+      await context.close();
+    }
+
+    // 1a-mobile. 390px 下上下线行不横向溢出，且不串到其他房间。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await page.waitForFunction(
+        'document.querySelectorAll("#messages .msg-presence").length >= 2',
+      );
+      checkEqual(
+        '390px 时间线显示上下线',
+        await page.locator('#messages .msg-presence').count(),
+        2,
+      );
+      check(
+        '390px 上下线行不横向溢出',
+        await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth + 1'),
+      );
+      await page.goto(`${server.base}/c/${data.group.room.room_id}`);
+      await page.waitForFunction(
+        `document.getElementById('title') && document.getElementById('title').textContent.indexOf('测试群') >= 0`,
+      );
+      checkEqual(
+        '快速切房不把 presence 串到群聊',
+        await page.locator('#messages .msg-presence').count(),
+        0,
+      );
+      checkEqual(
+        '非当前房间不因 presence 出现红点',
+        await page.locator(`${roomLink(data.direct.room.room_id)} .unread`).count(),
+        0,
       );
       await context.close();
     }
@@ -5386,6 +5584,8 @@ async function main(): Promise<void> {
       );
       await mobile.context.close();
     }
+
+    await runPresenceRestartAcceptance();
 
     checkEqual('无未捕获页面错误', allErrors.length, 0);
     console.log(`\n浏览器验收通过 ${checksPassed()} 项`);

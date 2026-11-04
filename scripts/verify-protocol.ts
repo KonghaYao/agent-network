@@ -19,6 +19,7 @@ import {
   rawRpc,
 } from './lib/harness';
 import { runStreamProtocolChecks } from './lib/stream-protocol';
+import { runAgentPresenceUnitChecks } from './lib/presence-unit';
 
 const STREAM_URI = 'agentnet://stream';
 
@@ -1414,6 +1415,7 @@ async function main(): Promise<void> {
 
   if (!secondToken) throw new Error('missing registered agent token');
   await runStreamProtocolChecks(secondToken, newAgentIdentity?.actor_id);
+  await runAgentPresenceUnitChecks();
 
   console.log(`协议验收通过: ${checksPassed()} 项`);
 }

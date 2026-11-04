@@ -95,6 +95,12 @@ export const LIMITS = {
   reconnectJitterRatio: 0.2,
   /** 连接稳定多久后重置重连计数。 */
   reconnectStableMs: 30_000,
+  /** Agent 最后连接断开后等待重连的宽限；期间重连不产生上下线记录。 */
+  agentPresenceGraceMs: 30_000,
+  /** 上下线宽限扫描周期。 */
+  agentPresenceSweepMs: 5_000,
+  /** 单次扫描确认的 pending 数量上限。 */
+  agentPresenceSweepBatch: 50,
   /** 连续失败多少次后显示非阻塞提示。 */
   reconnectBannerAfterFailures: 5,
   /** 连续无 ack 多久后显示非阻塞提示。 */

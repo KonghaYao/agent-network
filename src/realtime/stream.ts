@@ -37,6 +37,9 @@ export interface StreamItem {
   /** 房间文件事件的 file_id 与 room_file_id。 */
   file_id?: string;
   ref_id?: string;
+  /** Agent 上下线通知：仅用于当前房间刷新，不产生未读。 */
+  presence_event_id?: string;
+  transition?: string;
   pending_count?: number;
   inbox_head_seq?: string;
   created_at?: string;
@@ -67,6 +70,7 @@ export interface OutboxStreamRow {
 
 interface RoomMemberRow {
   actor_id: string;
+  kind: 'human' | 'agent';
   status: 'active' | 'left' | 'removed';
   role: 'owner' | 'member';
   joined_seq: number;
@@ -336,6 +340,25 @@ function roomStreamItems(
       }
       return result;
     }
+    case 'agent_presence_changed': {
+      // 只通知 active human；Agent 成员不可见，也不写 inbox/未读。
+      const agentId = stringField(metadata, 'agent_id');
+      const transition = stringField(metadata, 'transition');
+      const presenceEventId = stringField(metadata, 'presence_event_id');
+      for (const member of activeRecipients(members, eventSeq)) {
+        if (member.kind !== 'human') continue;
+        const item = withLocation(
+          baseItem(row, 'room.presence', 'presence', 'informational'),
+          row,
+          metadata,
+        );
+        if (agentId) item.subject_id = agentId;
+        if (transition) item.transition = transition;
+        if (presenceEventId) item.presence_event_id = presenceEventId;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
     default: {
       for (const member of activeRecipients(members, eventSeq)) {
         result.push({
@@ -478,7 +501,9 @@ export async function fanoutStreamItems(
     if (cached) return cached;
     const result = await db
       .prepare(
-        'SELECT actor_id, status, role, joined_seq FROM room_members WHERE room_id = ?',
+        `SELECT m.actor_id, m.status, m.role, m.joined_seq, a.kind
+           FROM room_members m JOIN actors a ON a.actor_id = m.actor_id
+          WHERE m.room_id = ?`,
       )
       .bind(roomId)
       .all<RoomMemberRow>();

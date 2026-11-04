@@ -279,17 +279,23 @@ function applyCachedRoom(cache) {
 }
 
 async function loadLatest(roomId, epoch, options) {
-  const page = await callTool('network_history_list', {
+  const humanTimeline = Boolean(identity && identity.kind === 'human');
+  const args = {
     room_id: roomId,
     direction: 'before',
     limit: 50
-  }, undefined, sessionSignal());
+  };
+  if (humanTimeline) args.view = 'timeline';
+  const page = await callTool('network_history_list', args, undefined, sessionSignal());
   if (!isActiveRoom(roomId, epoch)) return null;
   const previousTop = messagesElement ? messagesElement.scrollTop : 0;
   const wasNearBottom = isNearBottom();
-  nextOlder = page.has_more ? page.next_cursor : null;
+  const rawItems = humanTimeline ? (page.timeline_items || []) : page.items;
+  nextOlder = humanTimeline
+    ? (page.timeline_has_more ? page.timeline_next_cursor : null)
+    : (page.has_more ? page.next_cursor : null);
   if (olderButton) olderButton.hidden = !nextOlder;
-  currentItems = page.items.slice().reverse();
+  currentItems = mergeTimelineItems([], rawItems.slice().reverse());
   renderMessageList(currentItems);
   if ((options && options.forceScroll) || wasNearBottom) {
     scrollToBottom(true);
@@ -297,6 +303,59 @@ async function loadLatest(roomId, epoch, options) {
     messagesElement.scrollTop = previousTop;
   }
   return page;
+}
+
+/** 消息与 presence 共用稳定 ID；跨页/同页只保留首次出现的一条。 */
+function timelineItemKey(item) {
+  if (item && item.kind === 'presence') return 'presence:' + item.presence_event_id;
+  return 'message:' + (item && item.message_id ? item.message_id : '');
+}
+
+/**
+ * 合并时间线并按稳定 ID 去重。
+ *
+ * before 页返回展示顺序倒序，调用方先 reverse 得到正序；after 补读遵循
+ * “按展示 key 插入”而不是简单 append。
+ */
+function mergeTimelineItems(base, incoming) {
+  const seen = new Set();
+  const merged = [];
+  for (const item of base || []) {
+    const key = timelineItemKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  for (const item of incoming || []) {
+    const key = timelineItemKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  merged.sort(function (a, b) {
+    const left = timelineTimestamp(a);
+    const right = timelineTimestamp(b);
+    if (left !== right) return left - right;
+    return timelineCommitSeq(a) - timelineCommitSeq(b);
+  });
+  return merged;
+}
+
+function timelineTimestamp(item) {
+  if (!item) return 0;
+  return Number(item.kind === 'presence' ? item.occurred_at : item.created_at) || 0;
+}
+
+function timelineCommitSeq(item) {
+  if (!item) return 0;
+  return Number(item.kind === 'presence' ? item.timeline_seq : item.created_seq) || 0;
+}
+
+/** 侧栏预览只取真实消息；presence 永远不能覆盖 last_message。 */
+function latestRealMessage(page) {
+  if (room && room.last_message) return room.last_message;
+  const items = page.timeline_items || page.items || [];
+  return items.find(function (item) { return item.kind !== 'presence'; }) || null;
 }
 
 async function markRoomRead(roomId, headSeq, epoch) {
@@ -322,17 +381,18 @@ async function doRefresh(roomId, epoch, forceScroll) {
   setChatLoading(false);
   clearChatError();
   statusElement.textContent = stickyStatus;
+  const lastMessage = latestRealMessage(page);
   cacheRoomState(roomId, {
     room: room,
     members: Array.from(members.values()),
     items: currentItems.slice(),
     nextOlder: nextOlder,
     scrollTop: messagesElement ? messagesElement.scrollTop : 0,
-    lastMessage: page.items[0] || null
+    lastMessage: lastMessage
   });
   const readSucceeded = await markRoomRead(roomId, room.head_seq, epoch);
   if (!isActiveRoom(roomId, epoch)) return;
-  updateRoomEntry(room, page.items[0] || null, readSucceeded);
+  updateRoomEntry(room, lastMessage, readSucceeded);
 }
 
 /**
@@ -368,23 +428,33 @@ async function loadOlder() {
   const roomId = activeRoomId;
   if (!roomId || !nextOlder) return;
   const epoch = roomEpoch;
+  const humanTimeline = Boolean(identity && identity.kind === 'human');
   if (olderButton) olderButton.disabled = true;
   try {
-    const page = await callTool('network_history_list', {
+    const args = {
       room_id: roomId,
       direction: 'before',
       cursor: nextOlder,
       limit: 50
-    }, undefined, sessionSignal());
+    };
+    if (humanTimeline) args.view = 'timeline';
+    const page = await callTool('network_history_list', args, undefined, sessionSignal());
     if (!isActiveRoom(roomId, epoch)) return;
     const previousHeight = messagesElement.scrollHeight;
-    const olderItems = page.items.slice().reverse();
+    const rawItems = humanTimeline ? (page.timeline_items || []) : page.items;
+    const merged = mergeTimelineItems(currentItems, rawItems.slice().reverse());
+    const known = new Set(currentItems.map(timelineItemKey));
+    const olderItems = merged.filter(function (item) {
+      return !known.has(timelineItemKey(item));
+    });
     const fragment = document.createDocumentFragment();
     appendHistory(fragment, olderItems);
     messagesElement.prepend(fragment);
     messagesElement.scrollTop += messagesElement.scrollHeight - previousHeight;
-    currentItems = olderItems.concat(currentItems);
-    nextOlder = page.has_more ? page.next_cursor : null;
+    currentItems = merged;
+    nextOlder = humanTimeline
+      ? (page.timeline_has_more ? page.timeline_next_cursor : null)
+      : (page.has_more ? page.next_cursor : null);
     if (olderButton) olderButton.hidden = !nextOlder;
     cacheRoomState(roomId, {
       items: currentItems,

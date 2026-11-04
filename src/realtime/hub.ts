@@ -44,12 +44,21 @@ export interface HubPresence {
   since: number | null;
 }
 
+export interface HubPresenceHooks {
+  /** Agent 已显式 login，且建立了至少一条连接。 */
+  onAgentStreamOpened?: (actorId: string) => void;
+  /** Agent 的最后一条连接断开；调用时 hub 已置为离线。 */
+  onAgentLastConnectionClosed?: (actorId: string) => void;
+}
+
 export class NotificationHub {
   readonly #actorStreams = new Map<string, ActorStreamState>();
+  readonly #hooks: HubPresenceHooks;
   #counter = 0;
 
-  constructor(_db: Database) {
+  constructor(_db: Database, hooks: HubPresenceHooks = {}) {
     // 保留构造参数以维持 main.ts 的装配方式；hub 不读取业务表。
+    this.#hooks = hooks;
   }
 
   /**
@@ -81,6 +90,9 @@ export class NotificationHub {
     state.subscribers.set(connectionId, send);
     state.subscriptionIds.add(subscriptionId);
     if (onShutdown) state.shutdown.set(connectionId, onShutdown);
+    if (kind === 'agent' && state.online && state.subscribers.size === 1) {
+      this.#hooks.onAgentStreamOpened?.(actorId);
+    }
     return {
       unsubscribe: () => {
         const current = this.#actorStreams.get(actorTopic(actorId));
@@ -88,7 +100,13 @@ export class NotificationHub {
         current.subscribers.delete(connectionId);
         current.subscriptionIds.delete(subscriptionId);
         current.shutdown.delete(connectionId);
-        if (current.subscribers.size === 0) current.online = false;
+        if (current.subscribers.size === 0) {
+          const wasOnline = current.online;
+          current.online = false;
+          if (wasOnline && kind === 'agent') {
+            this.#hooks.onAgentLastConnectionClosed?.(actorId);
+          }
+        }
       },
     };
   }

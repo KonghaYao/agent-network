@@ -299,6 +299,10 @@ function handleStreamEventFrame(payload) {
         // 文件通知只刷新文件面板；非当前房间标脏缓存，下次打开再拉取。
         if (roomId) scheduleFilesRefresh(roomId);
         break;
+      case 'room.presence':
+        // 上下线只更新当前房间时间线；不改 head、不产生未读或侧栏预览。
+        if (roomId && roomId === activeRoomId) refreshRoom = true;
+        break;
       case 'profile.updated':
         refreshList = true;
         break;

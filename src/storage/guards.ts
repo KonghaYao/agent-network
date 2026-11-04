@@ -20,6 +20,7 @@ export const GUARD_TABLES = {
   notFileOwner: 'guard_not_file_owner',
   eventSubscriptionLimit: 'guard_event_subscription_limit',
   eventSubscriptionGlobal: 'guard_event_subscription_global',
+  presenceStale: 'guard_presence_stale',
 } as const;
 
 export type GuardName = keyof typeof GUARD_TABLES;

@@ -25,6 +25,7 @@ const GUARD_CODES: Record<string, BusinessErrorCode> = {
   notFileOwner: 'NOT_OWNER',
   eventSubscriptionLimit: 'RESOURCE_EXHAUSTED',
   eventSubscriptionGlobal: 'RESOURCE_EXHAUSTED',
+  presenceStale: 'CONFLICT',
 };
 
 const GUARD_MESSAGES: Record<string, string> = {
@@ -43,6 +44,7 @@ const GUARD_MESSAGES: Record<string, string> = {
   notFileOwner: '只有上传者或群 owner 可以删除该文件',
   eventSubscriptionLimit: '该身份的事件订阅数量达到上限',
   eventSubscriptionGlobal: '全局事件订阅数量达到上限',
+  presenceStale: '在线状态已变化',
 };
 
 /** 限额类 guard 的稳定 data，供 MCP Events 映射 -32025。 */

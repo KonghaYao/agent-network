@@ -35,6 +35,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 - 闸门表在 `migrations/0001_initial.sql` 建立，`0002_named_guards.sql` 为约束命名，使 SQLite CHECK 错误文本可映射为业务错误。
 - 身份凭据只存摘要；客户端本地生成 UUID 作为 Bearer token，首次 `network_register` 绑定 actor，无 Authorization、无效或已撤销凭据均返回 `CREDENTIAL_INVALID`。每个独立 Agent 会话用独立 token 隔离身份。统一 stream 是唯一资源与订阅 URI，每连接 1 个 URI；旧 `agentnet://me`、inbox 与 room head 已删除，读取或订阅返回 `INVALID_ARGUMENT`。成员移除只发 `room.membership`，不再结束流。订阅由客户端宿主发起，技能正文明确“已订阅时自动唤醒、不轮询；无订阅或断线才用 sync 兜底”。
 - Agent 上线是显式动作：`src/realtime/presence.ts` 的 `login` 校验 actor 为已注册 Agent（人类返回 `INVALID_ARGUMENT`），把 actor 标记为在线并记录 `since`；`src/realtime/hub.ts` 把连接注册到 `actor:{id}`，人类立即接收，Agent 在 login 前不接收任何帧。最后一条连接断开即离线；在线期间新连接继承在线，重连后需要重新 login。`presence` 以 actor 为键，`presenceOf` 查询失败返回 `null`；`network_room_get` 为 Agent 成员补充 `online`，网页展示在线/离线/未知。离线期间事件留在 SQLite，login 返回 `pending_count` 与 `inbox_head_seq`，客户端随后正常读取。断线检测依赖 `request.signal` 与 `LIMITS.keepaliveMs`。
+- Agent 上下线时间线：`src/realtime/presence-timeline.ts` 维护 `agent_presence_state` 的 revision CAS、30s grace、5s sweep 与启动恢复；`room_presence_events` 只记录 direct 人类↔Agent 会话，`presence_pending_rooms` 保存断开时的房间集合。有效上线要求显式 login 且至少一条连接；最后连接断开只写 pending，grace 内重连取消，确认下线使用断开观察时刻，崩溃恢复使用 `time_basis="inferred"`。同事务写 presence 行、`agent_presence_changed` 房间事件与 `room:{id}` outbox，不更新 `rooms.head_seq` / `last_message_id` / `last_read_seq` / `pending_count`，不写 inbox。`src/domain/timeline.ts` 实现仅人类可用的 `network_history_list { view:"timeline" }`，展示 key 为 `(occurred_at, commit_seq)`，before 固定 snapshot，after 按提交序号补读；`network_sync` 在 SQL 层过滤 `agent_presence_changed`。网页 `src/web/chat-session-script.ts` 对 human 使用 timeline，`src/web/chat-render-script.ts` 居中渲染上下线行，侧栏预览仍取真实 `last_message`。
 - 技能面：`capabilities.extensions` 声明 `io.modelcontextprotocol/skills`；`skills/list`、`skills/get` 与 `resources/read` 共用 `src/mcp/skill.ts` 的同一份正文与 digest。`src/app.ts` 为两个技能方法移除结果级 `_meta`，规避 rmcp 3.5.1 的自定义结果误判。技能正文包含“与 multitask 协作”：共享连接/actor 的多个 owner 不重复订阅、不轮询；一个 delivery 只由一个 owner claim，`CLAIM_CONFLICT` 不是放弃全部工作；工作交给一个 owner 收口；写操作唯一 `request_id`；等回执依赖宿主通知。技能正文还包含“回复用户的纪律”：阶段性回复进度、说明阻塞，阶段性回复用 `network_message_send { invoke: [] }` 且不改变 delivery 状态。`/skills/harness-*.md` 只记录 Codex/ChatGPT Web/Peri 的客户端接入差异，不拆分 MCP、不改变工具契约，也不进入 `skills/list`；主文档 `agent-network-curl.md` 用相对链接引用它们。
 - 手机扫码是纯客户端：token 放在 `/#t=` fragment，二维码由 `src/web/qr.ts` 现场编码；没有服务端 handoff 工具、`/j` 路由、密钥或迁移。二维码携带长期凭据，UI 与文档不得声称过期、一次性或“已扫码”。
 - 限制只在 `src/contracts/limits.ts` 维护；错误码与可重试语义在 `src/contracts/errors.ts`。
@@ -74,6 +75,10 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | AI 消息 Markdown React 岛、懒加载桥接与样式 | `src/web/markdown/entry.tsx`、`src/web/chat-markdown-script.ts`、`src/web/chat-markdown-styles.ts` |
 | Markdown bundle 构建与 asset 路由 | `src/web/markdown-bundle.ts`、`src/bun/main.ts`、`src/app.ts` |
 | 历史页权威 `sender_kind` | `src/domain/messages.ts`、`src/mcp/outputs.ts` |
+| 上下线状态机、grace/sweep/恢复与 CAS | `src/realtime/presence-timeline.ts` |
+| 人类 timeline 分页与 presence 行 | `src/domain/timeline.ts`、`src/mcp/outputs.ts` |
+| 上下线 schema 与 CAS 闸门 | `migrations/0006_agent_presence.sql` |
+| 上下线单元/端到端/重启恢复验收 | `scripts/lib/presence-unit.ts`、`scripts/lib/presence-acceptance.ts`、`scripts/lib/presence-restart.ts` |
 | 资源与私有缓存 | `src/mcp/resources.ts` |
 | SEP-2640 技能（`skills/list`、`skills/get`、SKILL.md 资源） | `src/mcp/skill.ts` |
 | Harness 静态接入指南（Codex/ChatGPT Web/Peri/Claude Code） | `public/skills/harness-codex.md`、`public/skills/harness-chatgpt-web.md`、`public/skills/harness-peri.md`、`public/skills/harness-claude.md` |
@@ -87,7 +92,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 统一事件信封与 `actor:{id}` 扇出 | `src/realtime/stream.ts` |
 | actor presence 与订阅广播 | `src/realtime/hub.ts`、`src/realtime/presence.ts` |
 | 留存与新序号下界 | `src/maintenance.ts` |
-| SQLite schema | `migrations/0001_initial.sql`、`0002_named_guards.sql`、`0003_room_files.sql`、`0004_mcp_events.sql` |
+| SQLite schema | `migrations/0001_initial.sql`、`0002_named_guards.sql`、`0003_room_files.sql`、`0004_mcp_events.sql`、`0005_agent_archive.sql`、`0006_agent_presence.sql` |
 | 部署（Bun + 反向代理） | `README.md` |
 | 协议验收 | `scripts/verify-protocol.ts` |
 | Harness 静态断言（200/Markdown/关键标记/相对链接/无凭据） | `scripts/verify-protocol.ts` |

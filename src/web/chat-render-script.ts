@@ -148,11 +148,30 @@ function timeDivider(value) {
   return element;
 }
 
+/**
+ * 居中的系统行：上下线时间线只使用 textContent，不进入 Markdown、
+ * 文件卡片、头像、回复或回执路径。
+ */
+function presenceItem(item) {
+  const element = document.createElement('li');
+  element.className = 'msg-presence';
+  element.dataset.presenceId = item.presence_event_id;
+  const label = document.createElement('span');
+  const name = senderName(item.agent_id);
+  const action = item.transition === 'online' ? '上线' : '下线';
+  const time = chatTime(item.occurred_at);
+  label.textContent = name + ' ' + action + (time ? ' · ' + time : '');
+  label.title = item.time_basis === 'inferred' ? '下线时间为崩溃后推断' : '';
+  element.append(label);
+  return element;
+}
+
 function messageItem(item) {
   const mine = Boolean(identity && item.sender_id === identity.actor_id);
   const agent = isAgentMessage(item);
   const element = document.createElement('li');
   element.className = 'msg' + (mine ? ' mine' : '');
+  element.dataset.messageId = item.message_id;
   const sender = senderName(item.sender_id);
   const avatar = avatarElement(mine && identity ? identity.name : sender, null, 'msg-avatar');
   const content = document.createElement('div');
@@ -214,14 +233,18 @@ function renderMessageList(items) {
   appendHistory(messagesElement, items);
 }
 
-/** 连续消息间隔超过 5 分钟时插入居中时间胶囊。 */
+/** 连续消息间隔超过 5 分钟时插入居中时间胶囊；presence 行自带时间。 */
 function appendHistory(container, items) {
   let previous = 0;
   for (const item of items) {
-    const created = Number(item.created_at) || 0;
-    if (!previous || created - previous > TIME_GAP) container.append(timeDivider(created));
-    container.append(messageItem(item));
-    previous = created;
+    const created = timelineTimestamp(item);
+    if (item.kind === 'presence') {
+      container.append(presenceItem(item));
+    } else {
+      if (!previous || created - previous > TIME_GAP) container.append(timeDivider(created));
+      container.append(messageItem(item));
+    }
+    if (created) previous = created;
   }
 }
 

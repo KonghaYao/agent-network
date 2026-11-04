@@ -10,6 +10,7 @@ import { loadEncryptionKey } from '../events/security';
 import { initEventsFileLog } from '../events/log-file';
 import type { FileMount } from '@peri-code/mcpp/files';
 import { NotificationHub } from '../realtime/hub';
+import { AgentPresenceTimeline } from '../realtime/presence-timeline';
 import { buildMarkdownBundle } from '../web/markdown-bundle';
 import { createD1 } from './d1';
 import { migrate } from './migrate';
@@ -95,13 +96,29 @@ if (applied.length > 0) {
 const environment = process.env.ENVIRONMENT ?? 'development';
 const eventsConfig = await loadEventsConfig(environment);
 
+let hubRef: NotificationHub | null = null;
+const d1 = createD1(db);
+const presence = new AgentPresenceTimeline(d1, {
+  graceMs: positiveInt(process.env.AGENT_PRESENCE_GRACE_MS, LIMITS.agentPresenceGraceMs),
+  isOnline: (actorId) => hubRef?.actorPresence(actorId).online === true,
+});
+const hub = new NotificationHub(db, {
+  onAgentStreamOpened: (actorId) => presence.connectionOpened(actorId),
+  onAgentLastConnectionClosed: (actorId) => presence.connectionClosed(actorId),
+});
+hubRef = hub;
+
 const env: Env = {
-  DB: createD1(db),
-  NOTIFICATION_HUB: new NotificationHub(db),
+  DB: d1,
+  NOTIFICATION_HUB: hub,
+  PRESENCE: presence,
   ENVIRONMENT: environment,
   PUBLIC_ORIGIN: publicOrigin,
   ...(eventsConfig ? { EVENTS: eventsConfig } : {}),
 };
+
+// 启动扫描：崩溃遗留的 online 转为 pending/inferred；已到期的 pending 立即确认。
+await presence.recover();
 
 if (eventsConfig) {
   initEventsFileLog({ dataDir });
@@ -155,13 +172,23 @@ const schedule = setInterval(() => {
   void runScheduled(env);
 }, 60_000);
 
+// 上下线 grace 扫描独立于 60s 维护周期；阈值只在 contracts/limits.ts 维护。
+const presenceSweep = setInterval(() => {
+  void env.PRESENCE?.sweep().catch((error) => {
+    console.error('agent-network presence sweep failed', error);
+  });
+}, LIMITS.agentPresenceSweepMs);
+
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {
     clearInterval(schedule);
+    clearInterval(presenceSweep);
     // 先给活动 SSE 发 graceful close，再停止接收新请求。
     if (env.NOTIFICATION_HUB.closeAllStreams() > 0) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+    // closeAllStreams 会触发 pending 写入；尽量在退出前落库。
+    await env.PRESENCE?.flush();
     server.stop();
     await closeDrive?.();
     db.close();

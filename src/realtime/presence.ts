@@ -41,6 +41,12 @@ export async function login(env: Env, principal: Principal): Promise<LoginView> 
     JSON.stringify(buildSessionLoginFrame(actor)),
   );
 
+  // login 先于连接时，等连接建立后由 hub 的 onAgentStreamOpened 补记；
+  // 已有连接时在这里等待持久化时间线写入。写入失败不影响 login 结果。
+  if (presence.connections > 0) {
+    await env.PRESENCE?.recordLogin(actor.actor_id);
+  }
+
   return {
     actor_id: actor.actor_id,
     online: true,

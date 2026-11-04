@@ -110,6 +110,8 @@ export const historyListSchema = z.object({
   direction: z.enum(['before', 'after']).optional(),
   cursor,
   limit: z.number().int().min(1).max(LIMITS.historyPageMax).optional(),
+  /** 默认 messages 保持 Agent 与旧客户端契约；timeline 仅人类可用。 */
+  view: z.enum(['messages', 'timeline']).optional(),
 });
 
 export const messageReadSchema = z.object({

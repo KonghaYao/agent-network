@@ -96,10 +96,13 @@ export async function sync(
   }
 
   const start = cursor?.seq ?? info.min;
+  // 上下线时间线是独立历史，不属于普通 sync 契约；在 LIMIT 前过滤，
+  // 避免 presence 事件占用分页额度或让客户端误以为房间有新消息。
   const rows = await db
     .prepare(
       `SELECT * FROM events
         WHERE scope_kind = ? AND scope_id = ? AND event_seq > ?
+          AND event_type <> 'agent_presence_changed'
         ORDER BY event_seq ASC LIMIT ?`,
     )
     .bind(info.kind, info.id, start, limit + 1)

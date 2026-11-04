@@ -35,12 +35,19 @@ import {
 } from '../storage/queries';
 import type { DeliveryRow, MessageRow } from '../storage/rows';
 import {
+  deliveryStatesFor,
+  nullableString,
+  summarizeDeliveryStates,
+  type DeliveryStateRow,
+} from './message-view-helpers';
+import {
   isMessageConflict,
   operationsStatement,
   runIdempotent,
 } from '../storage/transactions/runner';
 import { actorId, type Principal } from './principal';
 import type { MessagePreviewView } from './rooms';
+import { timelineList, type TimelinePage } from './timeline';
 
 export interface MessageView extends MessagePreviewView {
   room_id: string;
@@ -94,47 +101,6 @@ export interface MessageCore {
   deliveries: DeliverySeed[];
   eventKey: string;
   at: number;
-}
-
-interface DeliveryStateRow {
-  message_id?: string;
-  state: string;
-  n: number;
-  max_claimed_at: number | null;
-  max_updated_at: number | null;
-}
-
-interface DeliveryStateSummary {
-  states: Record<string, number>;
-  claimedAt: number | null;
-  updatedAt: number | null;
-}
-
-function nullableString(value: number | null): string | null {
-  return value === null ? null : String(value);
-}
-
-/**
- * 聚合 delivery 状态与 claimed 时间。
- *
- * 网页用 claimed_at/updated_at 判断“处理中未更新”，不新增 DB 字段；
- * 取所有 claimed 投递中的最早领取与最近更新，兼容多条 Agent 投递。
- */
-function summarizeDeliveryStates(rows: DeliveryStateRow[]): DeliveryStateSummary {
-  const states: Record<string, number> = {};
-  let claimedAt: number | null = null;
-  let updatedAt: number | null = null;
-  for (const row of rows) {
-    states[row.state] = row.n;
-    if (row.state !== 'claimed') continue;
-    if (row.max_claimed_at !== null) {
-      claimedAt = claimedAt === null ? row.max_claimed_at : Math.min(claimedAt, row.max_claimed_at);
-    }
-    if (row.max_updated_at !== null) {
-      updatedAt = updatedAt === null ? row.max_updated_at : Math.max(updatedAt, row.max_updated_at);
-    }
-  }
-  return { states, claimedAt, updatedAt };
 }
 
 export async function messageView(
@@ -560,44 +526,24 @@ export async function finalMessagePlan(
   };
 }
 
-async function deliveryStatesFor(
-  db: D1Database,
-  messageIds: string[],
-): Promise<Map<string, DeliveryStateSummary>> {
-  if (messageIds.length === 0) return new Map();
-  const placeholders = messageIds.map(() => '?').join(',');
-  const rows = await db
-    .prepare(
-      `SELECT message_id, state, COUNT(*) AS n,
-              MAX(CASE WHEN state = 'claimed' THEN claimed_at END) AS max_claimed_at,
-              MAX(CASE WHEN state = 'claimed' THEN updated_at END) AS max_updated_at
-         FROM deliveries
-        WHERE message_id IN (${placeholders}) GROUP BY message_id, state`,
-    )
-    .bind(...messageIds)
-    .all<DeliveryStateRow & { message_id: string }>();
-  const grouped = new Map<string, DeliveryStateRow[]>();
-  for (const row of rows.results) {
-    const list = grouped.get(row.message_id) ?? [];
-    list.push(row);
-    grouped.set(row.message_id, list);
-  }
-  const map = new Map<string, DeliveryStateSummary>();
-  for (const [messageId, list] of grouped) map.set(messageId, summarizeDeliveryStates(list));
-  return map;
-}
-
 export async function historyList(
   db: D1Database,
   principal: Principal,
   input: HistoryListInput,
-): Promise<MessagePage> {
+): Promise<MessagePage | TimelinePage> {
   const viewer = actorId(principal);
   const room = await getRoom(db, input.room_id);
   if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
   const member = await getMember(db, room.room_id, viewer);
   if (!member || member.status !== 'active') {
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
+  }
+
+  if (input.view === 'timeline') {
+    if (principal.actor?.kind !== 'human') {
+      throw new BusinessError('INVALID_ARGUMENT', 'timeline 视图仅对人类身份开放');
+    }
+    return timelineList(db, room, input);
   }
 
   const scope = `room:${room.room_id}:history`;

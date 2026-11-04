@@ -42,6 +42,7 @@ import {
 import { runUnifiedStreamAcceptance } from './lib/stream-acceptance';
 import { runRoomFileAcceptance } from './lib/room-file-acceptance';
 import { runAgentArchiveAcceptance } from './lib/agent-archive-acceptance';
+import { runAgentPresenceAcceptance } from './lib/presence-acceptance';
 import {
   ensureTestCertificate,
   removeTestData,
@@ -1167,6 +1168,7 @@ async function main(): Promise<void> {
     await runUnifiedStreamAcceptance();
     await runRoomFileAcceptance();
     await runAgentArchiveAcceptance();
+    await runAgentPresenceAcceptance();
 
     console.log(`端到端验收通过: ${checksPassed()} 项`);
   } finally {
