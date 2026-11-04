@@ -24,6 +24,33 @@ function chunks<T>(items: T[], size: number): T[][] {
   return result;
 }
 
+interface DrainCoordinator {
+  active: Promise<DrainResult> | null;
+  queued: Promise<DrainResult> | null;
+}
+
+/**
+ * 同一 Env 上的 drain 单飞状态。
+ *
+ * 请求 fast-path、定时维护与 presence sweep 可能同时到达；串行化后既能
+ * 避免重复扫描/写 SQLite，也能保证在 drain 已开始后才提交的 outbox 行
+ * 由一轮后续 drain 覆盖。`drainOutbox` 自身仍以租约和条件更新保证幂等。
+ */
+const drainCoordinators = new WeakMap<Env, DrainCoordinator>();
+
+function startDrain(env: Env, coordinator: DrainCoordinator): Promise<DrainResult> {
+  const running = drainOutbox(env);
+  coordinator.active = running;
+  const settle = () => {
+    // 有待执行轮次时保留 active，让新触发合并到 queued。
+    if (coordinator.queued === null && coordinator.active === running) {
+      coordinator.active = null;
+    }
+  };
+  void running.then(settle, settle);
+  return running;
+}
+
 /**
  * 发布 SQLite outbox 中的变更提示。
  *
@@ -128,4 +155,32 @@ export async function drainOutbox(env: Env, limit = LIMITS.outboxBatchMax): Prom
       oldest?.oldest === null || oldest?.oldest === undefined ? null : now - oldest.oldest,
     ...streamStats,
   };
+}
+
+/**
+ * 触发一次 outbox drain，并对同一 Env 做单飞与合并。
+ *
+ * - 空闲时立即开始；
+ * - 已有 drain 运行时最多排队一轮，覆盖本次触发前刚提交的行；
+ * - 调用方仍需处理返回的 rejection（outbox 行会保留，下一轮可重试）。
+ */
+export function scheduleOutboxDrain(env: Env): Promise<DrainResult> {
+  let coordinator = drainCoordinators.get(env);
+  if (!coordinator) {
+    coordinator = { active: null, queued: null };
+    drainCoordinators.set(env, coordinator);
+  }
+  const state = coordinator;
+  if (state.active === null) return startDrain(env, state);
+  if (state.queued !== null) return state.queued;
+
+  const runNext = () => {
+    if (state.queued === holder.queued) state.queued = null;
+    return startDrain(env, state);
+  };
+  const holder: { queued: Promise<DrainResult> | null } = { queued: null };
+  const queued: Promise<DrainResult> = state.active.then(runNext, runNext);
+  holder.queued = queued;
+  state.queued = queued;
+  return queued;
 }

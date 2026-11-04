@@ -27,6 +27,7 @@ import {
 } from './lib/harness';
 import { messageFileLinkFixtures } from './lib/room-file-archive';
 import { runPresenceRestartAcceptance } from './lib/presence-restart';
+import { runPresenceIdleNotificationCheck } from './lib/presence-idle';
 
 interface Actor {
   actor_id: string;
@@ -5586,6 +5587,7 @@ async function main(): Promise<void> {
     }
 
     await runPresenceRestartAcceptance();
+    await runPresenceIdleNotificationCheck();
 
     checkEqual('无未捕获页面错误', allErrors.length, 0);
     console.log(`\n浏览器验收通过 ${checksPassed()} 项`);

@@ -20,7 +20,7 @@ import { authenticate } from './mcp/auth';
 import { buildServer } from './mcp/server';
 import { serveActorStream } from './mcp/stream';
 import { maintain } from './maintenance';
-import { drainOutbox } from './realtime/outbox';
+import { scheduleOutboxDrain } from './realtime/outbox';
 import { STREAM_URI } from './realtime/stream';
 import { getActorBySession } from './storage/queries';
 import { renderChatPage } from './web/chat';
@@ -476,7 +476,7 @@ async function handleMcp(request: Request, env: Env, mount?: FileMount): Promise
       ? await stripResultMeta(response)
       : response;
   if (body?.method === 'tools/call') {
-    void drainOutbox(env).catch((error) => {
+    void scheduleOutboxDrain(env).catch((error) => {
       console.error('agent-network fast-path outbox drain failed', error);
     });
     scheduleEventsTick(env);
@@ -737,7 +737,7 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
 /** 定时任务：outbox 投递、MCP Events tick 与历史清理；由 Bun 入口的 setInterval 调用。 */
 export async function runScheduled(env: Env): Promise<void> {
   try {
-    const result = await drainOutbox(env);
+    const result = await scheduleOutboxDrain(env);
     if (result.oldestPendingAgeMs !== null && result.oldestPendingAgeMs > 5 * 60_000) {
       console.warn('agent-network outbox backlog', result);
     }

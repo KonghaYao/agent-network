@@ -10,6 +10,7 @@ import { loadEncryptionKey } from '../events/security';
 import { initEventsFileLog } from '../events/log-file';
 import type { FileMount } from '@peri-code/mcpp/files';
 import { NotificationHub } from '../realtime/hub';
+import { scheduleOutboxDrain } from '../realtime/outbox';
 import { AgentPresenceTimeline } from '../realtime/presence-timeline';
 import { buildMarkdownBundle } from '../web/markdown-bundle';
 import { createD1 } from './d1';
@@ -97,10 +98,18 @@ const environment = process.env.ENVIRONMENT ?? 'development';
 const eventsConfig = await loadEventsConfig(environment);
 
 let hubRef: NotificationHub | null = null;
+let envRef: Env | null = null;
 const d1 = createD1(db);
 const presence = new AgentPresenceTimeline(d1, {
   graceMs: positiveInt(process.env.AGENT_PRESENCE_GRACE_MS, LIMITS.agentPresenceGraceMs),
   isOnline: (actorId) => hubRef?.actorPresence(actorId).online === true,
+  // 下线由 sweep 在空闲时确认；提交后必须主动 drain，不能等 60s 定时任务。
+  onPresenceCommitted: () => {
+    if (!envRef) return;
+    void scheduleOutboxDrain(envRef).catch((error) => {
+      console.error('agent-network presence outbox drain failed', error);
+    });
+  },
 });
 const hub = new NotificationHub(db, {
   onAgentStreamOpened: (actorId) => presence.connectionOpened(actorId),
@@ -116,6 +125,7 @@ const env: Env = {
   PUBLIC_ORIGIN: publicOrigin,
   ...(eventsConfig ? { EVENTS: eventsConfig } : {}),
 };
+envRef = env;
 
 // 启动扫描：崩溃遗留的 online 转为 pending/inferred；已到期的 pending 立即确认。
 await presence.recover();

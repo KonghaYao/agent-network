@@ -10,6 +10,9 @@ import { resolve } from 'node:path';
 
 import { migrate } from '../../src/bun/migrate';
 import { createD1 } from '../../src/bun/d1';
+import type { Env } from '../../src/env';
+import { NotificationHub } from '../../src/realtime/hub';
+import { scheduleOutboxDrain } from '../../src/realtime/outbox';
 import { AgentPresenceTimeline } from '../../src/realtime/presence-timeline';
 import { check, checkEqual } from './harness';
 
@@ -46,6 +49,14 @@ function seed(db: Database): void {
 
 function presenceCount(db: Database): number {
   return (db.prepare('SELECT COUNT(*) AS n FROM room_presence_events').get() as { n: number }).n;
+}
+
+function pendingOutbox(db: Database): number {
+  return (
+    db
+      .prepare("SELECT COUNT(*) AS n FROM outbox WHERE status IN ('pending', 'processing')")
+      .get() as { n: number }
+  ).n;
 }
 
 function presenceRows(db: Database): {
@@ -87,10 +98,32 @@ export async function runAgentPresenceUnitChecks(): Promise<void> {
   const d1 = createD1(db);
   let now = 1_700_000_000_000;
   const errors: unknown[] = [];
+  const hub = new NotificationHub(db);
+  const frames: string[] = [];
+  const humanStream = hub.subscribeActor('usr_unit', 'human', 'sub_presence_unit', (frame) => {
+    frames.push(frame);
+  });
+  const env: Env = {
+    DB: d1,
+    NOTIFICATION_HUB: hub,
+    ENVIRONMENT: 'test',
+    PUBLIC_ORIGIN: 'http://127.0.0.1',
+  };
+  let committed = 0;
+  const drains: Promise<unknown>[] = [];
+  const settleDrains = async (): Promise<void> => {
+    while (drains.length > 0) {
+      await Promise.allSettled(drains.splice(0));
+    }
+  };
   const service = new AgentPresenceTimeline(d1, {
     graceMs: 1_000,
     now: () => now,
     onError: (error) => errors.push(error),
+    onPresenceCommitted: () => {
+      committed += 1;
+      drains.push(scheduleOutboxDrain(env));
+    },
   });
 
   const before = snapshotInvariants(db);
@@ -101,6 +134,17 @@ export async function runAgentPresenceUnitChecks(): Promise<void> {
   checkEqual('上线事件 transition', presenceRows(db)[0]?.transition, 'online');
   checkEqual('上线 occurred_at 为实际发生时间', presenceRows(db)[0]?.occurred_at, onlineAt);
   checkEqual('上线不改变 head/未读/pending', snapshotInvariants(db), before);
+
+  await settleDrains();
+  check('上线提交后触发 outbox drain', committed >= 1, committed);
+  checkEqual('上线 outbox 已被消费', pendingOutbox(db), 0);
+  check(
+    '人类 stream 收到上线 presence 通知',
+    frames.some(
+      (frame) => frame.includes('"source":"room.presence"') && frame.includes('"transition":"online"'),
+    ),
+    frames,
+  );
 
   await service.recordLogin('agt_unit');
   checkEqual('重复 login 不新增记录', presenceCount(db), 1);
@@ -133,7 +177,27 @@ export async function runAgentPresenceUnitChecks(): Promise<void> {
   service.connectionClosed('agt_unit');
   await service.flush();
   now += 1_500;
+  await settleDrains();
+  const committedBeforeSweep = committed;
+  const frameCountBeforeSweep = frames.length;
   await service.sweep();
+  await settleDrains();
+  check(
+    'sweep 确认下线后触发 outbox drain',
+    committed > committedBeforeSweep,
+    { committed, committedBeforeSweep },
+  );
+  check(
+    '人类 stream 收到 sweep 确认的下线通知',
+    frames
+      .slice(frameCountBeforeSweep)
+      .some(
+        (frame) =>
+          frame.includes('"source":"room.presence"') && frame.includes('"transition":"offline"'),
+      ),
+    frames.slice(frameCountBeforeSweep),
+  );
+  checkEqual('下线 outbox 已被消费', pendingOutbox(db), 0);
   await service.sweep();
   checkEqual('重复 close/sweep 只写一条下线', presenceCount(db), 2);
   const offline = presenceRows(db).find((row) => row.transition === 'offline');
@@ -227,6 +291,8 @@ export async function runAgentPresenceUnitChecks(): Promise<void> {
   db.exec('DROP TRIGGER fail_presence_insert');
   await service.recordLogin('agt_unit');
   checkEqual('移除失败注入后可正常上线', presenceRows(db).at(-1)?.transition, 'online');
+  await settleDrains();
 
+  humanStream.unsubscribe();
   db.close();
 }

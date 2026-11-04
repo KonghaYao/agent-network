@@ -25,6 +25,13 @@ export interface AgentPresenceTimelineOptions {
   onError?: (error: unknown) => void;
   /** 执行写入前复查 hub 在线状态，避免 login/断线竞态写出虚假上线。 */
   isOnline?: (actorId: string) => boolean;
+  /**
+   * 上下线事件与 outbox 在同一事务提交后触发。
+   *
+   * 只在该次转换确实写入房间事件时调用；实现必须自行处理异步失败，
+   * 不能把通知通道的问题传回状态机。
+   */
+  onPresenceCommitted?: () => void;
 }
 
 interface PresenceStateRow {
@@ -61,6 +68,7 @@ export class AgentPresenceTimeline {
   readonly #now: () => number;
   readonly #onError: (error: unknown) => void;
   readonly #isOnline: ((actorId: string) => boolean) | undefined;
+  readonly #onPresenceCommitted: (() => void) | undefined;
   readonly #queues = new Map<string, Promise<void>>();
 
   constructor(db: D1Database, options: AgentPresenceTimelineOptions = {}) {
@@ -68,6 +76,7 @@ export class AgentPresenceTimeline {
     this.#graceMs = options.graceMs ?? LIMITS.agentPresenceGraceMs;
     this.#now = options.now ?? nowMs;
     this.#isOnline = options.isOnline;
+    this.#onPresenceCommitted = options.onPresenceCommitted;
     this.#onError =
       options.onError ??
       ((error) => console.error('agent-network presence transition failed', errorText(error)));
@@ -256,6 +265,7 @@ export class AgentPresenceTimeline {
       ],
       at,
     );
+    if (rooms.length > 0) this.#notifyCommitted();
   }
 
   async #resume(actorId: string, state: PresenceStateRow, at: number): Promise<void> {
@@ -437,6 +447,7 @@ export class AgentPresenceTimeline {
         .prepare('DELETE FROM presence_pending_rooms WHERE generation_id = ?')
         .bind(generationId),
     ], at);
+    if (rooms.length > 0) this.#notifyCommitted();
   }
 
   /**
@@ -555,6 +566,16 @@ export class AgentPresenceTimeline {
       .prepare('SELECT * FROM agent_presence_state WHERE actor_id = ?')
       .bind(actorId)
       .first<PresenceStateRow>();
+  }
+
+  /** 通知通道是旁路：失败只记录，不能回滚或阻塞已经提交的状态转换。 */
+  #notifyCommitted(): void {
+    if (!this.#onPresenceCommitted) return;
+    try {
+      this.#onPresenceCommitted();
+    } catch (error) {
+      this.#onError(error);
+    }
   }
 
   /** 所有状态转换统一经过 runIdempotent；batch 首条固定为 operations。 */
