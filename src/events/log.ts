@@ -4,8 +4,11 @@
  * 只允许记录标识、阶段、耗时、结果与原因：
  * - 不记录 Bearer、delivery.secret、签名、完整 callback URL 或事件正文；
  * - callback 只记录 host，用于区分目标；
- * - request_id 使用 JSON-RPC id，订阅阶段附 subscription_id 便于串联。
+ * - request_id 使用 JSON-RPC id，订阅阶段附 subscription_id 便于串联；
+ * - 每行同时写入 stdout/journald 与可选的 `EVENTS_LOG_FILE`。
  */
+
+import { writeEventsLogLine } from './log-file';
 
 export type EventsLogValue = string | number | boolean | null | undefined | string[];
 
@@ -17,6 +20,57 @@ export type EventsLogLevel = 'info' | 'warn' | 'error';
 
 const PREFIX = 'agent-network events';
 
+const URL_PATTERN = /\bhttps?:\/\/[^\s"'`<>]+/giu;
+const SECRET_PATTERNS: ReadonlyArray<[RegExp, string]> = [
+  [/\bwhsec_[A-Za-z0-9+/=_-]+/gu, '[redacted-secret]'],
+  [/\bank_[A-Za-z0-9_-]{8,}/gu, '[redacted-token]'],
+  [/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [redacted]'],
+  [/\bv1,[A-Za-z0-9+/=]+/gu, 'v1,[redacted]'],
+];
+
+const SENSITIVE_KEYS = new Set([
+  'authorization',
+  'body',
+  'callback_url',
+  'challenge',
+  'cookie',
+  'payload',
+  'secret',
+  'signature',
+  'token',
+  'url',
+  'webhook-signature',
+  'webhook_signature',
+]);
+
+function isSensitiveKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return (
+    SENSITIVE_KEYS.has(normalized) ||
+    normalized.endsWith('_secret') ||
+    normalized.endsWith('_token') ||
+    normalized.endsWith('_signature')
+  );
+}
+
+/**
+ * 诊断文本脱敏：去掉完整 URL、secret/签名形态，压缩控制字符并截断。
+ * 只用于日志与错误对象的 message，绝不回写协议响应。
+ */
+export function sanitizeDiagnosticText(input: string, maxLength = 240): string {
+  let text = input.replace(URL_PATTERN, '[redacted-url]');
+  for (const [pattern, replacement] of SECRET_PATTERNS) {
+    text = text.replace(pattern, replacement);
+  }
+  return text.replace(/[\u0000-\u001F\u007F]+/gu, ' ').slice(0, maxLength);
+}
+
+function sanitizeValue(value: EventsLogValue): EventsLogValue {
+  if (typeof value === 'string') return sanitizeDiagnosticText(value);
+  if (Array.isArray(value)) return value.map((item) => sanitizeDiagnosticText(item));
+  return value;
+}
+
 function emit(level: EventsLogLevel, stage: string, fields: EventsLogFields): void {
   const record: Record<string, unknown> = {
     level,
@@ -25,12 +79,17 @@ function emit(level: EventsLogLevel, stage: string, fields: EventsLogFields): vo
   };
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined) continue;
-    record[key] = value;
+    record[key] = isSensitiveKey(key) ? '[redacted]' : sanitizeValue(value);
   }
   const line = `${PREFIX} ${JSON.stringify(record)}`;
   if (level === 'error') console.error(line);
   else if (level === 'warn') console.warn(line);
   else console.log(line);
+  try {
+    writeEventsLogLine(line);
+  } catch {
+    // 文件 sink 自身 fail-open；这里再兜底，确保不影响请求。
+  }
 }
 
 export function logEventsInfo(stage: string, fields: EventsLogFields = {}): void {

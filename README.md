@@ -16,9 +16,9 @@ Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊�
 - Drive（2026-11-04）：运行时迁移到 Bun（`Bun.serve` + `bun:sqlite` + 进程内通知 hub），新增 MCPP Files v1 上传 `POST /mcp-upload` 与公开下载 `GET /f/<fileId>`；`drive_file_info` 工具返回文件元数据与 `publicUrl`。文件默认 24 小时过期，保存在本地磁盘；`test:drive` 47 项通过。
 - 房间文件（2026-11-04）：新增 `network_room_file_bind`、`network_room_file_list`、`network_room_file_get`、`network_room_file_delete` 4 个 MCP 工具。`room_files` 只保存房间/文件/上传者/名称/MIME/大小/SHA-256/时间与删除墓碑，字节仍由 FlyDrive 保存；`public_url` 由 `PUBLIC_ORIGIN + /f/<file_id>` 派生。房间 TTL 最长 30 天（且不超过底层文件剩余有效期），每房间 200 个 / 1 GiB，列表 20/100；`/f` 支持 HEAD、单段 Range、`If-None-Match` 304 与 `?download=1`；删除写墓碑并立即 404。`scripts/verify-room-files.ts` 187 项通过。
 - 消息文件自动归档（2026-11-04）：`network_message_send` 与带 `final_body` 的 `network_delivery_complete` 成功后在消息事务之外 best-effort 解析正文中的同源 `/f/<fileId>`，仅归档发送者自己拥有、未过期且未绑定的文件；最多 8 个、串行、幂等。跨房间不复制，历史消息仍不补归档；失败只跳过当前文件，详见“消息文件自动归档”。
-- Agent 归档（2026-11-04）：迁移 `0005_agent_archive.sql` 给 `actors` 增加可空 `archived_at`/`archived_by`；新增 `network_agent_archive`、`network_agent_unarchive`、`network_agents_get` 3 个工具（总数 36，关闭 Drive 31）。归档只影响管理列表，不改变消息、好友、房间、投递、stream、presence、login 或凭据。网页新增 `Agents` 按钮/弹窗与浏览器本地 Agents 注册表，默认隐藏已归档项。`test:protocol` 249/264 项、`test:acceptance` 263 项、`test:web` 451 项通过。
-- AI 消息 Markdown（2026-11-04）：`network_history_list` 新增权威 `sender_kind`；网页只对 Agent 气泡用懒加载的 `streamdown` React 岛渲染 Markdown，人类消息保持纯文本。启动时 `Bun.build` 生成 `/assets/chat-markdown.js`，失败或 asset 404 自动回退；sanitize + harden、禁用图片与原始 HTML、链接固定安全属性。文件卡片仍在气泡外，`@` 高亮与 512B 展开逻辑保持。`test:protocol` 249/264 项、`test:acceptance` 263 项、`test:web` 451 项通过。
-- MCP Events（2026-11-04）：顶层 `capabilities.events`、`events/list|subscribe|unsubscribe`、`agentnet.message.created` webhook 订阅；Standard Webhooks HMAC、challenge 验证、`-32015`、持久订阅、重试/暂停、AES-256-GCM secret、全球单播 SSRF allowlist 与 DNS 固定。`bun run test:events` 255 项通过；ChatGPT Connector 的 URL token/OAuth 认证仍是 Phase 0 阻塞项。
+- Agent 归档（2026-11-04）：迁移 `0005_agent_archive.sql` 给 `actors` 增加可空 `archived_at`/`archived_by`；新增 `network_agent_archive`、`network_agent_unarchive`、`network_agents_get` 3 个工具（总数 36，关闭 Drive 31）。归档只影响管理列表，不改变消息、好友、房间、投递、stream、presence、login 或凭据。网页新增 `Agents` 按钮/弹窗与浏览器本地 Agents 注册表，默认隐藏已归档项。`test:protocol` 251/266 项、`test:acceptance` 263 项、`test:web` 451 项通过。
+- AI 消息 Markdown（2026-11-04）：`network_history_list` 新增权威 `sender_kind`；网页只对 Agent 气泡用懒加载的 `streamdown` React 岛渲染 Markdown，人类消息保持纯文本。启动时 `Bun.build` 生成 `/assets/chat-markdown.js`，失败或 asset 404 自动回退；sanitize + harden、禁用图片与原始 HTML、链接固定安全属性。文件卡片仍在气泡外，`@` 高亮与 512B 展开逻辑保持。`test:protocol` 251/266 项、`test:acceptance` 263 项、`test:web` 451 项通过。
+- MCP Events（2026-11-04）：顶层 `capabilities.events`、`events/list|subscribe|unsubscribe`、`agentnet.message.created` webhook 订阅；Standard Webhooks HMAC、challenge 验证、`-32015`、持久订阅、重试/暂停、AES-256-GCM secret、全球单播 SSRF allowlist 与 DNS 固定。回调每次解析全部 A/AAAA、逐个校验并 IPv4 优先回退，单地址超时与总预算分离；失败只暴露脱敏的 errno/attempt，日志另记地址族与已校验地址。阶段日志同时写入 `${DATA_DIR}/logs/events.log`（`EVENTS_LOG_FILE` 可覆盖，10 MiB × 5 轮转，fail-open）。`bun run test:events` 314 项通过；ChatGPT Connector 的 URL token/OAuth 认证仍是 Phase 0 阻塞项。
 - 会话右键凭据（2026-11-04）：新建 Agent 时把该 Agent 自己的 `mcp_url` 写入浏览器 `localStorage['agent-network-agents-v1']`（按 human 隔离，不含 human token）；direct/group 会话右键复制提示词时查找命中的 Agent，写入 `AGENTNET_MCP_URL` 与提取的 `AGENTNET_TOKEN`，未命中时明确提示缺少凭据。菜单不展示 token，复制反馈区分“含凭据，勿转发”与“未包含凭据”。`bun run test:web` 471 项通过。
 - 本地 Bun 运行时与 `migrations/*.sql` 使用同一份 schema；启动时自动应用未执行的迁移。
 - 未验证：生产负载、长时运行、限流/配额告警、备份恢复、工作卡与 IndexedDB 展示缓存等完整 Web 客户端能力。
@@ -353,7 +353,8 @@ MCP Events 让 ChatGPT Work chat 等客户端通过 HTTPS webhook 订阅服务�
 安全与投递：
 
 - 验证：订阅时服务端向 callback 发送 `{ "type": "verification", "challenge": "..." }`，带 `webhook-id`、`webhook-timestamp`、`webhook-signature` 与 `X-MCP-Subscription-Id`；回调必须返回 2xx 且回显同一 challenge。失败返回 `-32015`（OpenAI 集成文档；draft 写 `-32027`，代码集中保留 `-32015` 常量）；`data.reason` 保持 `connection_refused` / `timeout` / `tls_error` / `http_4xx` / `http_5xx` / `challenge_failed`，并附 `data.detail`（`timeout`、`http_status`、`challenge_mismatch`、`challenge_malformed`、`invalid_signature` 等）与 HTTP `data.status`。
-- 阶段日志：每个 `events/*` 请求输出一行 `agent-network events {...}` JSON，包含 `method`、`request_id`、`subscription_id`、`stage`、`duration_ms`、`result`/`reason`/`detail`、`callback_host`、`http_status` 等；不记录 Bearer、secret、签名、challenge、正文、完整 callback URL 或 query。可据此区分“未收到 subscribe”“参数校验失败”“callback 验证失败”“已持久化/已投递”。
+- 阶段日志：每个 `events/*` 请求输出一行 `agent-network events {...}` JSON，包含 `method`、`request_id`、`subscription_id`、`stage`、`duration_ms`、`result`/`reason`/`detail`、`callback_host`、`http_status` 等；不记录 Bearer、secret、签名、challenge、正文、完整 callback URL 或 query。可据此区分“未收到 subscribe”“参数校验失败”“callback 验证失败”“已持久化/已投递”。每行同时追加到文件 sink：默认 `${DATA_DIR}/logs/events.log`，可用 `EVENTS_LOG_FILE` 覆盖；单文件 10 MiB、保留 5 个轮转备份，目录创建/写入/轮转失败时 fail-open，不影响请求与 stdout/journald。文件日志只接收已脱敏行，不含 token、secret、签名、challenge、正文或完整 URL。
+- 回调地址：每次验证/投递重新解析全部 A/AAAA 地址，对每个候选单独做 SSRF 校验，按 IPv4 优先、解析器原始顺序稳定排序后逐个尝试；单个地址超时 5 秒，总预算仍由 challenge/投递超时控制，网络失败立即回退下一个地址，全部失败才返回错误。协议错误只附带 `attempts` 与脱敏的 `error_code`（如 `ETIMEDOUT`），不返回 callback URL、地址或底层正文；日志可记录地址族、已校验地址、errno 与尝试序号，用于定位双栈/单地址故障。
 - 签名：Standard Webhooks HMAC-SHA256，签名内容为 `webhook-id.timestamp.rawBody`；secret 用 AES-256-GCM 加密后落库，只保存密文与 nonce。
 - SSRF：只允许 HTTPS、不跟随重定向；每次验证/投递都重新解析 DNS，并把连接固定到已验证 IP，同时保留原 Host 与 TLS SNI。只允许全球单播：IPv6 必须在 `2000::/3` 且排除 Teredo `2001::/32`、ORCHID `2001:10::/28` / `2001:20::/28`、6to4 `2002::/16`、文档/benchmark 等特殊前缀；`fec0::/10`、`100::/64`、`64:ff9b::/96`、`64:ff9b:1::/48` 等不在允许范围。IPv4 拒绝私网、loopback、link-local、CGNAT、文档、benchmark、multicast、reserved 与元数据地址。
 - 生产默认 fail closed，不允许私网 callback。`EVENTS_TEST_ALLOW_PRIVATE=1` 只能与 `ENVIRONMENT=test` 一起使用，允许 loopback/私网与自签证书；不得用于生产。
@@ -371,6 +372,7 @@ MCP Events 让 ChatGPT Work chat 等客户端通过 HTTPS webhook 订阅服务�
 | `EVENTS_VERIFICATION_TIMEOUT_MS` | 可选；challenge 超时，默认 5000。 |
 | `EVENTS_WEBHOOK_TIMEOUT_MS` | 可选；事件投递超时，默认 10000。 |
 | `EVENTS_VERIFICATION_PER_HOST_PER_MINUTE` | 可选；每 callback host 每分钟 challenge 上限，默认 10。 |
+| `EVENTS_LOG_FILE` | 可选；事件阶段日志文件路径，默认 `${DATA_DIR}/logs/events.log`。文件按 10 MiB × 5 轮转，写入/轮转失败 fail-open；内容已脱敏，不得包含 token、secret、签名或完整 callback URL。 |
 
 本地启用示例（密钥在 shell 中生成，不要写进仓库）：
 

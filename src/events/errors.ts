@@ -31,15 +31,19 @@ export function invalidEventsArgument(
 /**
  * `reason` 保持 OpenAI 文档 / 草案的固定分类；`detail` 提供更细的失败阶段，
  * 例如 timeout、http_status、challenge_mismatch、invalid_signature。
+ * `diagnostics` 只放可分类的非敏感字段（errno、尝试次数），不得包含
+ * callback URL、secret、签名或响应正文。
  */
 export function callbackFailure(
   reason: EventsCallbackFailureReason,
   detail?: string,
   status?: number,
+  diagnostics?: Record<string, unknown>,
 ): EventsError {
   return new EventsError('callback', 'callback endpoint verification failed', {
     reason,
     ...(detail !== undefined ? { detail } : {}),
     ...(status !== undefined ? { status } : {}),
+    ...(diagnostics ?? {}),
   });
 }

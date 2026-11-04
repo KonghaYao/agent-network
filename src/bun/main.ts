@@ -7,6 +7,7 @@ import { LIMITS } from '../contracts/limits';
 import { createDrive } from '../drive/service';
 import type { Env, EventsConfig } from '../env';
 import { loadEncryptionKey } from '../events/security';
+import { initEventsFileLog } from '../events/log-file';
 import type { FileMount } from '@peri-code/mcpp/files';
 import { NotificationHub } from '../realtime/hub';
 import { buildMarkdownBundle } from '../web/markdown-bundle';
@@ -103,6 +104,7 @@ const env: Env = {
 };
 
 if (eventsConfig) {
+  initEventsFileLog({ dataDir });
   console.log(
     `MCP Events enabled (callback allowlist: ${eventsConfig.callbackAllowlist ? [...eventsConfig.callbackAllowlist].join(',') : 'none'})`,
   );

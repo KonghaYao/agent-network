@@ -22,7 +22,7 @@ AI 消息 Markdown：`src/web/markdown/entry.tsx` 是唯一的 React 子树（Re
 
 消息文件自动归档：`src/contracts/file-links.ts` 从完整正文提取同源绝对/相对 `/f/<fileId>`（忽略 query/hash、外站、`/f/<id>/extra` 与非法 ID，去重，最多 `LIMITS.messageFileLinksMax` 个；字面量 `\n` 只在提取副本中归一化，Markdown 包裹不影响）；`src/mcp/tools.ts` 的 `afterMessageCommitted` 钩子在 `network_message_send` 与带 `final_body` 的 `network_delivery_complete` 消息事务提交后触发 `src/mcp/room-files.ts` 的 `createMessageFileArchiver`。只有当前身份自己拥有、未过期、尚未绑定/未删除的文件才调用 `roomFileBind` 等价逻辑，`request_id = auto_bind:<message_id>:<file_id>`，串行、幂等、best-effort；失败只跳过当前文件。跨房间不复制，历史消息仍不补归档，`DRIVE_DISABLED=1` 时不注册钩子；成功归档仍写 `room_file_added` 与 informational `room.file`、不推进 head。验收在 `scripts/lib/room-file-archive.ts`。
 
-MCP Events：`src/contracts/events.ts` 固定事件名与错误码 `-32015`；`src/events/definitions.ts` 定义 `agentnet.message.created` 的 input/payload schema 与确定性订阅 ID；`src/events/security.ts` 负责 URL 校验、全球单播 allowlist、DNS 目标固定、Standard Webhooks HMAC 与 AES-256-GCM secret；`src/events/subscriptions.ts` 处理 subscribe/unsubscribe、challenge 验证、TTL/配额/刷新与暂停恢复；`src/events/scanner.ts` 从既有 `events` 表生成投递，`dispatcher.ts` 执行租约/重试/410/413 分类，`client.ts` 固定 IP 并保留 Host/SNI，`runtime.ts` 合并请求内快速路径与每分钟 tick。`src/mcp/events.ts` 只在 `env.EVENTS` 有效时注册 `events/list|subscribe|unsubscribe`；`src/mcp/server.ts` 在 `server/discover` 顶层声明 `events`，不在 `extensions`。订阅/投递/验证缓存持久化在 `migrations/0004_mcp_events.sql`，消息与投递业务事务不变。
+MCP Events：`src/contracts/events.ts` 固定事件名与错误码 `-32015`；`src/events/definitions.ts` 定义 `agentnet.message.created` 的 input/payload schema 与确定性订阅 ID；`src/events/security.ts` 负责 URL 校验、全球单播 allowlist、DNS 目标固定、Standard Webhooks HMAC 与 AES-256-GCM secret，`resolveCallbackTargets` 解析全部 A/AAAA、逐地址校验并按 IPv4 优先返回候选；`src/events/subscriptions.ts` 处理 subscribe/unsubscribe、challenge 验证、TTL/配额/刷新与暂停恢复；`src/events/scanner.ts` 从既有 `events` 表生成投递，`dispatcher.ts` 执行租约/重试/410/413 分类，`client.ts` 在候选地址上逐个尝试（单地址 5 秒超时、总预算不变）并固定已验证 IP、保留 Host/SNI，`runtime.ts` 合并请求内快速路径与每分钟 tick。`src/events/log.ts` 输出脱敏阶段行，`src/events/log-file.ts` 同步追加到 `${DATA_DIR}/logs/events.log`（`EVENTS_LOG_FILE` 可覆盖，10 MiB × 5 轮转，fail-open）。`src/mcp/events.ts` 只在 `env.EVENTS` 有效时注册 `events/list|subscribe|unsubscribe`；`src/mcp/server.ts` 在 `server/discover` 顶层声明 `events`，不在 `extensions`。订阅/投递/验证缓存持久化在 `migrations/0004_mcp_events.sql`，消息与投递业务事务不变。
 
 
 改名与建群：`network_agent_rename` 直接更新 `actors.name`，任何已注册身份均可调用，目标必须是 `kind = 'agent'`；没有 alias 列或迁移，这是产品接受的开放边界。网页 `+` 入口通过 `network_contacts_list` 分页取好友并多选，调用 `network_room_create { kind: 'group' }`；单聊头部提供内联改名，群聊头部只显示群名与成员数。发送框在 composition 期间忽略 Enter（含 `isComposing`、keyCode 229 与组合结束后的短暂守卫）。
@@ -62,10 +62,11 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | `/f` 公开下载、HEAD/Range/304 与安全头 | `src/app.ts`、`src/drive/service.ts` |
 | `room_files` schema 与配额/权限闸门 | `migrations/0003_room_files.sql` |
 | MCP Events 定义、订阅、扫描、投递、安全与运行时 | `src/events/definitions.ts`、`subscriptions.ts`、`scanner.ts`、`dispatcher.ts`、`security.ts`、`client.ts`、`runtime.ts` |
+| Events 阶段日志与脱敏文件 sink | `src/events/log.ts`、`src/events/log-file.ts` |
 | MCP Events 方法与顶层能力声明 | `src/mcp/events.ts`、`src/mcp/server.ts` |
 | Events 契约（事件名/错误码 `-32015`） | `src/contracts/events.ts` |
 | Events schema（订阅、投递、验证缓存与闸门） | `migrations/0004_mcp_events.sql` |
-| MCP Events 验收 | `scripts/verify-events.ts`、`scripts/lib/events-validation.ts` |
+| MCP Events 验收 | `scripts/verify-events.ts`、`scripts/lib/events-validation.ts`、`scripts/lib/events-client-check.ts`、`scripts/lib/events-file-log-check.ts` |
 | 自动归档验收（解析器、幂等、跨房间、跳过） | `scripts/lib/room-file-archive.ts` |
 | AI 消息 Markdown React 岛、懒加载桥接与样式 | `src/web/markdown/entry.tsx`、`src/web/chat-markdown-script.ts`、`src/web/chat-markdown-styles.ts` |
 | Markdown bundle 构建与 asset 路由 | `src/web/markdown-bundle.ts`、`src/bun/main.ts`、`src/app.ts` |
@@ -94,11 +95,11 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 ## 验证
 
 - `bun run typecheck`
-- `bun run test:protocol`：默认 `http://127.0.0.1:8792`，249 项（events 启用 264 项；含 36 个工具、房间文件工具与 Drive 开关联动、Agent 归档描述与 `agents_get` 输入/输出 schema、唯一 `agentnet://stream` 资源、旧 URI 读取/订阅返回 `INVALID_ARGUMENT`、claim/message_send 描述、room_get 的 online 与 history 的 claimed 时间/`sender_kind` schema、`network_login` 注册与未注册调用返回 `CREDENTIAL_INVALID`、四份 Harness 指南的 200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界断言、微信风首页空状态、会话搜索框、扫码入口、弹窗、fragment 采纳脚本与 `/j` 端点不存在）
+- `bun run test:protocol`：默认 `http://127.0.0.1:8792`，251 项（events 启用 266 项；含 36 个工具、房间文件工具与 Drive 开关联动、Agent 归档描述与 `agents_get` 输入/输出 schema、唯一 `agentnet://stream` 资源、旧 URI 读取/订阅返回 `INVALID_ARGUMENT`、claim/message_send 描述、room_get 的 online 与 history 的 claimed 时间/`sender_kind` schema、`network_login` 注册与未注册调用返回 `CREDENTIAL_INVALID`、四份 Harness 指南的 200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界断言、微信风首页空状态、会话搜索框、扫码入口、弹窗、fragment 采纳脚本与 `/j` 端点不存在）
 - `bun run test:acceptance`：263 项（`EVENTS_ACCEPTANCE=1`；未启用 events 闭环时 244 项；含显式上线、未上线订阅收不到提示、离线排队与上线补读、断线后重新上线、room_get 在线/离线/未知、人类 login 返回 `INVALID_ARGUMENT`、全局改名、Agent 归档/取消归档/重复归档幂等与 `agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变、群 @、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执与统一 stream 通知、旧 URI 拒绝、网页 human 单聊/群聊 invoke 回归）
 - `bun run test:drive`：47 项（MCPP Files 上传、公开下载、`drive_file_info` 与 Drive 生命周期）
 - `DATA_DIR=.data bun scripts/verify-room-files.ts`：187 项（bind/list/get/delete、上传者与群 owner 权限、200 个 / 1 GiB 配额、30 天 TTL 上限、墓碑、公开 URL、HEAD/Range/416/304/`?download=1`、P0 安全头、`room.file` informational 事件，以及同源文件链接解析与消息提交后自动归档（含 final_body）的幂等/跨房间/他人/删除/过期/配额跳过）
-- `bun run test:events`：255 项（能力与 schema 描述、challenge/HMAC、订阅过滤、动作/信息事件、500 重试与 410/413 停止、暂停/刷新恢复、撤销/移除/过期、重启持久化、cursor/truncated、双签、订阅配额、日志脱敏、全球单播 SSRF allowlist 与公网 IPv4/IPv6、DRIVE_DISABLED 下含文件链接消息仍成功）
+- `bun run test:events`：314 项（能力与 schema 描述、challenge/HMAC、订阅过滤、动作/信息事件、500 重试与 410/413 停止、暂停/刷新恢复、撤销/移除/过期、重启持久化、cursor/truncated、双签、订阅配额、日志脱敏、文件日志落盘/轮转/fail-open、IPv4 优先多地址回退与单地址超时、全球单播 SSRF allowlist 与公网 IPv4/IPv6、DRIVE_DISABLED 下含文件链接消息仍成功）
 - 浏览器 E2E：Playwright + 本机 Chrome，覆盖搜索过滤、选中高亮、未读红点、气泡左右/头像/时间胶囊/回执、群聊 2×2 头像与 @ 高亮、改名、建群、中文输入法 Enter、扫码弹窗与移动端 hash 采纳、暗色、移动端单栏/返回/输入框自适应/滚动、无 token 引导、Agents 弹窗（本地注册表、默认隐藏归档、归档/取消归档、刷新持久化、per-human 隔离、坏数据回退、同步/归档错误注入、390px）；`bun run test:web` 471 项通过，另含 AI 消息 Markdown（类型/安全/懒加载/回退/移动端/滚动）、三档文件栏布局、真实上传/bind/预览/删除与 `room.file` 刷新
 - 远程：`AGENTNET_URL=https://net.peri-code.dev bun run test:protocol` / `test:acceptance`；2026-10-21 在旧域名 `networks.peri-code.dev` 上 85/109 项通过，部署版本 `1f02bd89-d372-4f22-9135-18c07acfef23`。生产唯一入口为自定义域名，`workers_dev: false`，旧 `workers.dev` 已关闭且无重定向
 

@@ -1,9 +1,12 @@
-import { isIP } from 'node:net';
+import { isIP, type LookupFunction } from 'node:net';
 import { request as httpsRequest } from 'node:https';
 
+import { LIMITS } from '../contracts/limits';
+import { sanitizeDiagnosticText } from './log';
 import {
   CallbackTargetError,
-  resolveCallbackTarget,
+  resolveCallbackTargets,
+  type CallbackTarget,
   type CallbackUrlRules,
 } from './security';
 
@@ -14,13 +17,43 @@ export type CallbackFailure =
   | 'blocked_address'
   | 'network_error';
 
+/** 单个已校验地址的一次尝试；只保留诊断需要的字段。 */
+export interface CallbackAttempt {
+  attempt: number;
+  family: 4 | 6;
+  address: string;
+  durationMs: number;
+  code: string | null;
+  reason: CallbackFailure;
+  /** 已去除 URL 并截断的底层错误文本，禁止写入 secret/signature/body。 */
+  message: string;
+}
+
 export class CallbackRequestError extends Error {
   readonly reason: CallbackFailure;
+  /** 底层 errno（ECONNREFUSED、ETIMEDOUT 等），已限制为安全字符集。 */
+  readonly code: string | null;
+  readonly attempts: readonly CallbackAttempt[];
 
-  constructor(reason: CallbackFailure, message: string) {
+  constructor(
+    reason: CallbackFailure,
+    code: string | null,
+    message: string,
+    attempts: readonly CallbackAttempt[] = [],
+  ) {
     super(message);
     this.name = 'CallbackRequestError';
     this.reason = reason;
+    this.code = code;
+    this.attempts = attempts;
+  }
+
+  get attemptCount(): number {
+    return this.attempts.length;
+  }
+
+  get lastFamily(): 4 | 6 | null {
+    return this.attempts.at(-1)?.family ?? null;
   }
 }
 
@@ -40,8 +73,13 @@ export interface PostCallbackResult {
   truncated: boolean;
 }
 
+function errorCode(error: Error): string | null {
+  const code = (error as NodeJS.ErrnoException).code;
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/u.test(code) ? code : null;
+}
+
 function classify(error: Error): CallbackFailure {
-  const code = (error as NodeJS.ErrnoException).code ?? '';
+  const code = errorCode(error) ?? '';
   if (code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT') return 'timeout';
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'EAI_FAIL') {
     return 'connection_refused';
@@ -55,37 +93,24 @@ function classify(error: Error): CallbackFailure {
   return 'network_error';
 }
 
-/**
- * SSRF-hardened HTTPS POST。
- *
- * - 每次请求重新解析并固定一个已校验地址；
- * - Host 保持原 host（含非 443 端口），TLS SNI/servername 保持原 hostname；
- * - 不跟随重定向；3xx 作为普通状态返回，由调用方分类；
- * - 响应体最多读取 maxResponseBytes。
- */
-export async function postCallback(input: PostCallbackInput): Promise<PostCallbackResult> {
-  let target;
-  try {
-    target = await resolveCallbackTarget(input.url, input.rules);
-  } catch (error) {
-    if (error instanceof CallbackTargetError) {
-      throw new CallbackRequestError(
-        error.reason === 'blocked_address' ? 'blocked_address' : 'connection_refused',
-        error.message,
-      );
-    }
-    throw error;
-  }
-
-  const authority = input.url.host;
-  const headers: Record<string, string> = {
+function requestHeaders(input: PostCallbackInput): Record<string, string> {
+  return {
     ...input.headers,
-    host: authority,
+    host: input.url.host,
     'content-length': String(Buffer.byteLength(input.body, 'utf8')),
   };
+}
+
+/** 固定地址发起一次 HTTPS POST；Host/SNI 保持原 host，不跟随重定向。 */
+function postPinnedAddress(
+  input: PostCallbackInput,
+  target: CallbackTarget,
+  timeoutMs: number,
+): Promise<PostCallbackResult> {
+  const headers = requestHeaders(input);
   const rejectUnauthorized = input.rules.allowPrivateCallbacks && !input.tlsCa ? false : true;
 
-  return await new Promise<PostCallbackResult>((resolve, reject) => {
+  return new Promise<PostCallbackResult>((resolve, reject) => {
     let settled = false;
     const settle = (fn: () => void) => {
       if (settled) return;
@@ -102,9 +127,23 @@ export async function postCallback(input: PostCallbackInput): Promise<PostCallba
         path: `${input.url.pathname}${input.url.search}`,
         method: 'POST',
         headers,
-        lookup: (_hostname, _options, callback) => {
-          callback(null, target.address, target.family);
-        },
+        lookup: ((_hostname, options, callback) => {
+          // Node 的 Happy Eyeballs 路径会以 all:true 调用 lookup；此时必须返回数组。
+          if ('all' in options && options.all) {
+            (
+              callback as unknown as (
+                error: null,
+                addresses: { address: string; family: number }[],
+              ) => void
+            )(null, [{ address: target.address, family: target.family }]);
+            return;
+          }
+          (callback as unknown as (error: null, address: string, family: number) => void)(
+            null,
+            target.address,
+            target.family,
+          );
+        }) as LookupFunction,
         ...(isIP(target.hostname) === 0 ? { servername: target.hostname } : {}),
         minVersion: 'TLSv1.2',
         rejectUnauthorized,
@@ -135,19 +174,110 @@ export async function postCallback(input: PostCallbackInput): Promise<PostCallba
           );
         });
         response.on('error', (error: Error) => {
-          settle(() => reject(new CallbackRequestError(classify(error), error.message)));
+          settle(() => reject(toRequestError(error)));
         });
       },
     );
 
     const timer = setTimeout(() => {
       request.destroy(Object.assign(new Error('callback timeout'), { code: 'ETIMEDOUT' }));
-    }, input.timeoutMs);
+    }, timeoutMs);
     timer.unref?.();
 
     request.on('error', (error: Error) => {
-      settle(() => reject(new CallbackRequestError(classify(error), error.message)));
+      settle(() => reject(toRequestError(error)));
     });
     request.end(input.body);
   });
+}
+
+function toRequestError(error: Error): CallbackRequestError {
+  return new CallbackRequestError(
+    classify(error),
+    errorCode(error),
+    sanitizeDiagnosticText(error.message),
+  );
+}
+
+/**
+ * 在已解析、已校验的地址列表上依次尝试。
+ *
+ * - 单地址超时 5s，总预算为 input.timeoutMs；
+ * - 某个地址网络失败后立即回退到下一个，只有全部失败才抛错；
+ * - TLS/Host/SNI 与 HTTP 状态处理与单地址请求完全一致。
+ */
+export async function postCallbackToTargets(
+  input: PostCallbackInput,
+  targets: readonly CallbackTarget[],
+): Promise<PostCallbackResult> {
+  if (targets.length === 0) {
+    throw new CallbackRequestError('blocked_address', null, 'callback address is not public');
+  }
+
+  const startedAt = Date.now();
+  const deadline = startedAt + input.timeoutMs;
+  const perAttemptTimeoutMs = Math.max(
+    1,
+    Math.min(input.timeoutMs, LIMITS.eventsCallbackAttemptTimeoutMs),
+  );
+  const attempts: CallbackAttempt[] = [];
+
+  for (const target of targets) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    const attemptStartedAt = Date.now();
+    try {
+      return await postPinnedAddress(
+        input,
+        target,
+        Math.min(perAttemptTimeoutMs, remaining),
+      );
+    } catch (error) {
+      const requestError =
+        error instanceof CallbackRequestError ? error : toRequestError(error as Error);
+      attempts.push({
+        attempt: attempts.length + 1,
+        family: target.family,
+        address: target.address,
+        durationMs: Math.max(0, Date.now() - attemptStartedAt),
+        code: requestError.code,
+        reason: requestError.reason,
+        message: requestError.message,
+      });
+    }
+  }
+
+  const last = attempts.at(-1);
+  const reason: CallbackFailure = last?.reason ?? 'timeout';
+  const code = last?.code ?? (reason === 'timeout' ? 'ETIMEDOUT' : null);
+  const message =
+    last?.message ??
+    (reason === 'timeout' ? 'callback timeout' : 'callback request failed');
+  throw new CallbackRequestError(reason, code, message, attempts);
+}
+
+/**
+ * SSRF-hardened HTTPS POST。
+ *
+ * - 每次请求重新解析全部 A/AAAA 地址并逐个校验；
+ * - 按 IPv4 优先顺序尝试，网络失败时回退到下一个地址；
+ * - 每次尝试固定已验证 IP，Host 保持原 host（含非 443 端口），TLS SNI 保持原 hostname；
+ * - 不跟随重定向；3xx 作为普通状态返回，由调用方分类；
+ * - 响应体最多读取 maxResponseBytes。
+ */
+export async function postCallback(input: PostCallbackInput): Promise<PostCallbackResult> {
+  let targets: CallbackTarget[];
+  try {
+    targets = await resolveCallbackTargets(input.url, input.rules);
+  } catch (error) {
+    if (error instanceof CallbackTargetError) {
+      throw new CallbackRequestError(
+        error.reason === 'blocked_address' ? 'blocked_address' : 'connection_refused',
+        null,
+        error.message,
+      );
+    }
+    throw error;
+  }
+  return postCallbackToTargets(input, targets);
 }

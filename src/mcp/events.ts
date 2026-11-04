@@ -103,6 +103,13 @@ function toProtocolError(error: unknown): unknown {
           reason: error.data.reason,
           ...(typeof error.data.detail === 'string' ? { detail: error.data.detail } : {}),
           ...(typeof error.data.status === 'number' ? { status: error.data.status } : {}),
+          // 只透传可分类的 errno 与尝试次数；不含地址、URL、secret 或签名。
+          ...(typeof error.data.error_code === 'string'
+            ? { error_code: error.data.error_code }
+            : {}),
+          ...(typeof error.data.attempts === 'number'
+            ? { attempts: error.data.attempts }
+            : {}),
         });
       case 'unauthorized':
         return new ProtocolError(EVENTS_ERROR_CODES.unauthorized, error.message, {
