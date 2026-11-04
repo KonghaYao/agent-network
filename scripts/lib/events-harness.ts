@@ -137,6 +137,18 @@ export function startTestReceiver(input: {
         if (url.pathname === '/verify-bad') {
           return Response.json({ challenge: 'wrong-challenge' });
         }
+        if (url.pathname === '/verify-malformed') {
+          return new Response('not-json', {
+            status: 200,
+            headers: { 'content-type': 'text/plain' },
+          });
+        }
+        if (url.pathname === '/verify-redirect') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: '/redirect-target' },
+          });
+        }
         if (url.pathname === '/verify-slow') {
           await sleep(2_000);
         }

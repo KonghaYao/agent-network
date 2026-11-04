@@ -9,6 +9,12 @@ import {
 } from './security';
 import { postCallback, CallbackRequestError } from './client';
 import { MESSAGE_CREATED_ARGUMENTS } from './definitions';
+import {
+  callbackHostOf,
+  elapsedMs,
+  logEventsInfo,
+  logEventsWarn,
+} from './log';
 
 interface FreshSubscriptionRow {
   active: number;
@@ -69,6 +75,10 @@ async function suspendSubscription(
   reason: string,
   now: number,
 ): Promise<void> {
+  logEventsWarn('delivery.suspend', {
+    subscription_id: subscriptionId,
+    reason,
+  });
   await env.DB.batch([
     env.DB
       .prepare(
@@ -125,6 +135,7 @@ async function deliverOne(
   now: number,
 ): Promise<'delivered' | 'retried' | 'abandoned' | 'skipped'> {
   const events = env.EVENTS!;
+  const startedAt = Date.now();
 
   // 领取后重新读取订阅，尽量缩小刷新轮换/撤销与在途投递的竞态。
   const fresh = await env.DB
@@ -135,7 +146,14 @@ async function deliverOne(
     )
     .bind(row.subscription_id)
     .first<FreshSubscriptionRow>();
-  if (!fresh) return 'skipped';
+  if (!fresh) {
+    logEventsWarn('delivery.skip', {
+      subscription_id: row.subscription_id,
+      event_id: row.event_id,
+      reason: 'subscription_missing',
+    });
+    return 'skipped';
+  }
 
   if (fresh.active !== 1 || fresh.refresh_before <= now) {
     await suspendSubscription(env, row.subscription_id, 'subscription_expired', now);
@@ -176,10 +194,11 @@ async function deliverOne(
         fresh.previous_secret_nonce,
       )));
     }
-  } catch (error) {
-    console.error('agent-network events secret unavailable', {
+  } catch {
+    logEventsWarn('delivery.skip', {
       subscription_id: row.subscription_id,
-      error: error instanceof Error ? error.message : 'unknown',
+      event_id: row.event_id,
+      reason: 'secret_unavailable',
     });
     await suspendSubscription(env, row.subscription_id, 'secret_unavailable', now);
     return 'skipped';
@@ -189,6 +208,16 @@ async function deliverOne(
   const signature = secrets
     .map((secret) => signWebhook(secret, row.event_id, timestamp, row.payload_json))
     .join(' ');
+  logEventsInfo('delivery.attempt', {
+    subscription_id: row.subscription_id,
+    event_id: row.event_id,
+    event_seq: row.event_seq,
+    attempt: row.attempts + 1,
+    callback_host: callbackHostOf(row.callback_url),
+    // webhook 投递只依赖 active 订阅、凭据与房间成员资格，不依赖 SSE/login/presence。
+    presence_required: false,
+    secret_count: secrets.length,
+  });
   let outcome: DeliveryOutcome;
   try {
     const response = await postCallback({
@@ -272,6 +301,15 @@ async function deliverOne(
       )
       .bind(now, now, row.subscription_id)
       .run();
+    logEventsInfo('delivery.result', {
+      subscription_id: row.subscription_id,
+      event_id: row.event_id,
+      status: 'delivered',
+      http_status: outcome.status ?? null,
+      attempt: attempts,
+      duration_ms: elapsedMs(startedAt),
+      presence_required: false,
+    });
     return 'delivered';
   }
 
@@ -294,21 +332,27 @@ async function deliverOne(
       .run();
   }
   if (status === 'abandoned') {
-    console.warn('agent-network events delivery abandoned', {
+    logEventsWarn('delivery.result', {
       subscription_id: row.subscription_id,
       event_id: row.event_id,
-      status: outcome.status ?? null,
+      status: 'abandoned',
+      http_status: outcome.status ?? null,
       category: lastError,
       attempt: attempts,
+      duration_ms: elapsedMs(startedAt),
+      presence_required: false,
     });
     return 'abandoned';
   }
-  console.warn('agent-network events delivery retry', {
+  logEventsWarn('delivery.result', {
     subscription_id: row.subscription_id,
     event_id: row.event_id,
-    status: outcome.status ?? null,
+    status: 'retry',
+    http_status: outcome.status ?? null,
     category: lastError,
     attempt: attempts,
+    duration_ms: elapsedMs(startedAt),
+    presence_required: false,
   });
   return 'retried';
 }

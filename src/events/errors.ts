@@ -28,6 +28,18 @@ export function invalidEventsArgument(
   return new EventsError('invalid', message, details ? { details } : {});
 }
 
-export function callbackFailure(reason: EventsCallbackFailureReason): EventsError {
-  return new EventsError('callback', 'callback endpoint verification failed', { reason });
+/**
+ * `reason` 保持 OpenAI 文档 / 草案的固定分类；`detail` 提供更细的失败阶段，
+ * 例如 timeout、http_status、challenge_mismatch、invalid_signature。
+ */
+export function callbackFailure(
+  reason: EventsCallbackFailureReason,
+  detail?: string,
+  status?: number,
+): EventsError {
+  return new EventsError('callback', 'callback endpoint verification failed', {
+    reason,
+    ...(detail !== undefined ? { detail } : {}),
+    ...(status !== undefined ? { status } : {}),
+  });
 }

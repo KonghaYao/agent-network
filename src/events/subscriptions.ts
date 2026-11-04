@@ -23,6 +23,12 @@ import {
   EventsError,
   invalidEventsArgument,
 } from './errors';
+import {
+  callbackHostOf,
+  elapsedMs,
+  silentEventsLogger,
+  type EventsLogger,
+} from './log';
 import { postCallback, CallbackRequestError } from './client';
 import {
   CallbackTargetError,
@@ -41,7 +47,7 @@ export interface SubscribeInput {
   name: string;
   arguments?: unknown;
   delivery: { mode: string; url: string; secret: string };
-  cursor?: string | null;
+  cursor?: string | number | null;
   ttlMs?: number | null;
 }
 
@@ -55,7 +61,7 @@ export interface SubscribeResult {
   [key: string]: unknown;
   id: string;
   refreshBefore: string;
-  cursor: string;
+  cursor: string | null;
   truncated: boolean;
 }
 
@@ -94,8 +100,17 @@ async function assertRoomMembership(env: Env, actorIdValue: string, roomId: stri
   }
 }
 
-function parseCursor(value: string | null | undefined): number | null {
+function parseCursor(value: string | number | null | undefined): number | null {
   if (value === null || value === undefined) return null;
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw invalidEventsArgument('cursor 必须是非负整数或十进制 event_seq 字符串');
+    }
+    return value;
+  }
+  if (typeof value !== 'string') {
+    throw invalidEventsArgument('cursor 必须是非负整数或十进制 event_seq 字符串');
+  }
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw invalidEventsArgument('cursor 必须是十进制 event_seq 字符串');
@@ -181,10 +196,30 @@ async function verifyCallback(
   callbackUrl: URL,
   subscriptionId: string,
   secretBytes: Uint8Array,
+  log: EventsLogger,
 ): Promise<void> {
   const events = env.EVENTS!;
   const now = nowMs();
-  beginVerification(callbackUrl.hostname, now, events.verificationPerHostPerMinute);
+  const startedAt = Date.now();
+  const host = callbackUrl.hostname;
+  log.info('verification', {
+    stage: 'verification.start',
+    subscription_id: subscriptionId,
+    callback_host: host,
+    timeout_ms: events.verificationTimeoutMs,
+  });
+
+  try {
+    beginVerification(host, now, events.verificationPerHostPerMinute);
+  } catch (error) {
+    log.warn('verification', {
+      stage: 'verification.rate_limit',
+      subscription_id: subscriptionId,
+      callback_host: host,
+      duration_ms: elapsedMs(startedAt),
+    });
+    throw error;
+  }
 
   // 先解析一次，保证私网地址以 -32602 策略拒绝，而不是伪装成连接失败。
   try {
@@ -192,13 +227,34 @@ async function verifyCallback(
   } catch (error) {
     if (error instanceof CallbackTargetError) {
       if (error.reason === 'blocked_address') {
+        log.warn('verification', {
+          stage: 'verification.failed',
+          subscription_id: subscriptionId,
+          callback_host: host,
+          reason: 'blocked_address',
+          duration_ms: elapsedMs(startedAt),
+        });
         throw invalidEventsArgument('callback URL 解析到非公网地址', {
           code: 'INVALID_CALLBACK_URL',
           reason: 'private_address',
         });
       }
-      throw callbackFailure('connection_refused');
+      log.warn('verification', {
+        stage: 'verification.failed',
+        subscription_id: subscriptionId,
+        callback_host: host,
+        reason: 'connection_refused',
+        duration_ms: elapsedMs(startedAt),
+      });
+      throw callbackFailure('connection_refused', 'connection_refused');
     }
+    log.warn('verification', {
+      stage: 'verification.failed',
+      subscription_id: subscriptionId,
+      callback_host: host,
+      reason: 'internal',
+      duration_ms: elapsedMs(startedAt),
+    });
     throw error;
   }
 
@@ -206,7 +262,26 @@ async function verifyCallback(
   const body = JSON.stringify({ type: 'verification', challenge });
   const webhookId = `msg_${crypto.randomUUID()}`;
   const timestamp = webhookTimestamp(now);
-  const signature = signWebhook(secretBytes, webhookId, timestamp, body);
+  let signature: string;
+  try {
+    signature = signWebhook(secretBytes, webhookId, timestamp, body);
+  } catch {
+    log.warn('verification', {
+      stage: 'verification.failed',
+      subscription_id: subscriptionId,
+      callback_host: host,
+      reason: 'invalid_signature',
+      duration_ms: elapsedMs(startedAt),
+    });
+    throw callbackFailure('challenge_failed', 'invalid_signature');
+  }
+
+  log.info('verification', {
+    stage: 'verification.request',
+    subscription_id: subscriptionId,
+    callback_host: host,
+    webhook_id: webhookId,
+  });
 
   let response;
   try {
@@ -229,30 +304,114 @@ async function verifyCallback(
   } catch (error) {
     if (error instanceof CallbackRequestError) {
       if (error.reason === 'blocked_address') {
+        log.warn('verification', {
+          stage: 'verification.failed',
+          subscription_id: subscriptionId,
+          callback_host: host,
+          reason: 'blocked_address',
+          duration_ms: elapsedMs(startedAt),
+        });
         throw invalidEventsArgument('callback URL 解析到非公网地址', {
           code: 'INVALID_CALLBACK_URL',
           reason: 'private_address',
         });
       }
-      if (error.reason === 'tls_error') throw callbackFailure('tls_error');
-      if (error.reason === 'timeout') throw callbackFailure('timeout');
-      throw callbackFailure('connection_refused');
+      if (error.reason === 'tls_error') {
+        log.warn('verification', {
+          stage: 'verification.failed',
+          subscription_id: subscriptionId,
+          callback_host: host,
+          reason: 'tls_error',
+          duration_ms: elapsedMs(startedAt),
+        });
+        throw callbackFailure('tls_error', 'tls_error');
+      }
+      if (error.reason === 'timeout') {
+        log.warn('verification', {
+          stage: 'verification.failed',
+          subscription_id: subscriptionId,
+          callback_host: host,
+          reason: 'timeout',
+          detail: 'timeout',
+          duration_ms: elapsedMs(startedAt),
+        });
+        throw callbackFailure('timeout', 'timeout');
+      }
+      log.warn('verification', {
+        stage: 'verification.failed',
+        subscription_id: subscriptionId,
+        callback_host: host,
+        reason: 'connection_refused',
+        detail: error.reason,
+        duration_ms: elapsedMs(startedAt),
+      });
+      throw callbackFailure('connection_refused', error.reason);
     }
+    log.warn('verification', {
+      stage: 'verification.failed',
+      subscription_id: subscriptionId,
+      callback_host: host,
+      reason: 'internal',
+      duration_ms: elapsedMs(startedAt),
+    });
     throw error;
   }
 
+  log.info('verification', {
+    stage: 'verification.response',
+    subscription_id: subscriptionId,
+    callback_host: host,
+    status: response.status,
+    response_bytes: response.body.length,
+    duration_ms: elapsedMs(startedAt),
+  });
+
   if (response.status < 200 || response.status >= 300) {
-    throw callbackFailure(response.status >= 500 ? 'http_5xx' : 'http_4xx');
+    const reason = response.status >= 500 ? 'http_5xx' : 'http_4xx';
+    log.warn('verification', {
+      stage: 'verification.failed',
+      subscription_id: subscriptionId,
+      callback_host: host,
+      reason,
+      detail: 'http_status',
+      status: response.status,
+      duration_ms: elapsedMs(startedAt),
+    });
+    throw callbackFailure(reason, 'http_status', response.status);
   }
   let echoed: unknown;
   try {
     echoed = (JSON.parse(response.body) as { challenge?: unknown }).challenge;
   } catch {
-    throw callbackFailure('challenge_failed');
+    log.warn('verification', {
+      stage: 'verification.failed',
+      subscription_id: subscriptionId,
+      callback_host: host,
+      reason: 'challenge_failed',
+      detail: 'challenge_malformed',
+      duration_ms: elapsedMs(startedAt),
+    });
+    throw callbackFailure('challenge_failed', 'challenge_malformed');
   }
   if (typeof echoed !== 'string' || !constantTimeEqual(echoed, challenge)) {
-    throw callbackFailure('challenge_failed');
+    log.warn('verification', {
+      stage: 'verification.failed',
+      subscription_id: subscriptionId,
+      callback_host: host,
+      reason: 'challenge_failed',
+      detail: 'challenge_mismatch',
+      duration_ms: elapsedMs(startedAt),
+    });
+    throw callbackFailure('challenge_failed', 'challenge_mismatch');
   }
+
+  log.info('verification', {
+    stage: 'verification.ok',
+    subscription_id: subscriptionId,
+    callback_host: host,
+    status: response.status,
+    duration_ms: elapsedMs(startedAt),
+  });
 }
 
 async function safeCursor(env: Env, subscriptionId: string, scanned: number): Promise<string> {
@@ -277,8 +436,17 @@ export async function subscribeEvents(
   env: Env,
   principal: Principal,
   input: SubscribeInput,
+  log: EventsLogger = silentEventsLogger('events/subscribe'),
 ): Promise<SubscribeResult> {
+  const startedAt = Date.now();
   const events = env.EVENTS;
+  log.info('subscribe', {
+    stage: 'subscribe.start',
+    event_name: input.name,
+    has_identity: principal.actor !== null,
+    delivery_mode: input.delivery.mode,
+    callback_host: callbackHostOf(input.delivery.url),
+  });
   if (!events) throw new BusinessError('INVALID_ARGUMENT', 'MCP Events 未启用');
   const identity = requireIdentity(principal);
   assertEventName(input.name);
@@ -290,10 +458,39 @@ export async function subscribeEvents(
     });
   }
 
-  const argumentsValue = canonicalArguments(input.arguments);
-  if (argumentsValue.values.room_id !== undefined) {
-    await assertRoomMembership(env, identity.actorId, argumentsValue.values.room_id);
+  let argumentsValue: ReturnType<typeof canonicalArguments>;
+  try {
+    argumentsValue = canonicalArguments(input.arguments);
+  } catch {
+    throw invalidEventsArgument('arguments 必须是对象，且 room_id/attention 类型正确', {
+      code: 'INVALID_ARGUMENT',
+      field: 'arguments',
+    });
   }
+  log.info('subscribe', {
+    stage: 'subscribe.arguments',
+    room_id: argumentsValue.values.room_id ?? null,
+    attention: argumentsValue.values.attention ?? null,
+    ignored_argument_keys: argumentsValue.ignoredKeys.sort(),
+  });
+
+  if (argumentsValue.values.room_id !== undefined) {
+    try {
+      await assertRoomMembership(env, identity.actorId, argumentsValue.values.room_id);
+    } catch (error) {
+      log.warn('subscribe', {
+        stage: 'subscribe.membership',
+        result: 'denied',
+        room_id: argumentsValue.values.room_id,
+      });
+      throw error;
+    }
+  }
+  log.info('subscribe', {
+    stage: 'subscribe.membership',
+    result: 'ok',
+    room_id: argumentsValue.values.room_id ?? null,
+  });
 
   let callbackUrl: URL;
   try {
@@ -328,6 +525,14 @@ export async function subscribeEvents(
     input.name,
     argumentsValue.json,
   );
+  log.info('subscribe', {
+    stage: 'subscribe.identity',
+    subscription_id: subscriptionId,
+    actor_id: identity.actorId,
+    callback_host: callbackUrl.hostname,
+    cursor: requestedCursor,
+    refresh_before: new Date(refreshBefore).toISOString(),
+  });
 
   const existing = await env.DB
     .prepare('SELECT * FROM mcp_event_subscriptions WHERE subscription_id = ?')
@@ -399,8 +604,13 @@ export async function subscribeEvents(
   }
 
   const verified = await verificationCached(env, identity.actorId, callbackUrlKey, now);
+  log.info('subscribe', {
+    stage: 'subscribe.verification_cache',
+    subscription_id: subscriptionId,
+    result: verified ? 'hit' : 'miss',
+  });
   if (!verified) {
-    await verifyCallback(env, callbackUrl, subscriptionId, secretBytes);
+    await verifyCallback(env, callbackUrl, subscriptionId, secretBytes, log);
   }
 
   const statements = [
@@ -495,14 +705,38 @@ export async function subscribeEvents(
     await env.DB.batch(statements);
   } catch (error) {
     const business = mapBatchError(error);
-    if (business) throw business;
+    if (business) {
+      log.warn('persist', {
+        stage: 'subscribe.persist',
+        subscription_id: subscriptionId,
+        result: 'rejected',
+        reason: business.code,
+      });
+      throw business;
+    }
+    log.error('persist', {
+      stage: 'subscribe.persist',
+      subscription_id: subscriptionId,
+      result: 'failed',
+      reason: 'internal',
+    });
     throw error;
   }
 
+  const cursor = requestedCursor === null ? null : await safeCursor(env, subscriptionId, scannedSeq);
+  log.info('persist', {
+    stage: 'subscribe.persist',
+    subscription_id: subscriptionId,
+    result: existing === null ? 'created' : 'updated',
+    active: true,
+    truncated,
+    cursor_kind: cursor === null ? 'null' : 'string',
+    duration_ms: elapsedMs(startedAt),
+  });
   return {
     id: subscriptionId,
     refreshBefore: new Date(refreshBefore).toISOString(),
-    cursor: await safeCursor(env, subscriptionId, scannedSeq),
+    cursor,
     truncated,
   };
 }
@@ -511,7 +745,14 @@ export async function unsubscribeEvents(
   env: Env,
   principal: Principal,
   input: UnsubscribeInput,
+  log: EventsLogger = silentEventsLogger('events/unsubscribe'),
 ): Promise<Record<string, unknown>> {
+  const startedAt = Date.now();
+  log.info('unsubscribe', {
+    stage: 'unsubscribe.start',
+    event_name: input.name,
+    callback_host: callbackHostOf(input.delivery.url),
+  });
   const identity = requireIdentity(principal);
   assertEventName(input.name);
   if (input.delivery.mode !== undefined && input.delivery.mode !== 'webhook') {
@@ -521,7 +762,15 @@ export async function unsubscribeEvents(
       code: EVENTS_ERROR_CODES.unsupportedDelivery,
     });
   }
-  const argumentsValue = canonicalArguments(input.arguments);
+  let argumentsValue: ReturnType<typeof canonicalArguments>;
+  try {
+    argumentsValue = canonicalArguments(input.arguments);
+  } catch {
+    throw invalidEventsArgument('arguments 必须是对象，且 room_id/attention 类型正确', {
+      code: 'INVALID_ARGUMENT',
+      field: 'arguments',
+    });
+  }
   let callbackUrl: URL;
   try {
     // 取消只要求与订阅时同一 URL；allowlist/私网策略可能已变化，不阻止取消。
@@ -544,10 +793,16 @@ export async function unsubscribeEvents(
     input.name,
     argumentsValue.json,
   );
-  await env.DB
+  const deleted = await env.DB
     .prepare('DELETE FROM mcp_event_subscriptions WHERE subscription_id = ?')
     .bind(subscriptionId)
     .run();
+  log.info('unsubscribe', {
+    stage: 'unsubscribe.persist',
+    subscription_id: subscriptionId,
+    result: (deleted.meta.changes ?? 0) > 0 ? 'deleted' : 'absent',
+    duration_ms: elapsedMs(startedAt),
+  });
   return {};
 }
 

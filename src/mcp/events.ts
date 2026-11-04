@@ -12,48 +12,64 @@ import {
 } from '../contracts/events';
 import type { Env } from '../env';
 import type { Principal } from '../domain/principal';
-import { MESSAGE_CREATED_ARGUMENTS } from '../events/definitions';
-import { EventsError } from '../events/errors';
+import { EventsError, invalidEventsArgument } from '../events/errors';
+import {
+  asRecord,
+  callbackHostOf,
+  createEventsLogger,
+  type EventsLogger,
+} from '../events/log';
 import {
   listEventDefinitions,
   subscribeEvents,
   unsubscribeEvents,
+  type SubscribeInput,
+  type UnsubscribeInput,
 } from '../events/subscriptions';
 
-const META = z.record(z.string(), z.unknown()).optional();
+/**
+ * 自定义方法用宽松对象接收参数，由本文件做显式校验：
+ * SDK 的 schema 失败发生在 handler 之前，会丢失阶段日志；ChatGPT 也可能
+ * 发送未知字段或显式 null，这些都不应直接变成 -32602。
+ */
+const RAW_PARAMS = z.record(z.string(), z.unknown());
 
-const EVENTS_LIST_PARAMS = z.strictObject({
-  cursor: z.string().optional(),
-  _meta: META,
-});
-
-const SUBSCRIBE_DELIVERY = z.strictObject({
+const SUBSCRIBE_DELIVERY = z.object({
   mode: z.string().min(1),
   url: z.string().min(1),
   secret: z.string().min(1),
 });
 
-const EVENTS_SUBSCRIBE_PARAMS = z.strictObject({
+const EVENTS_SUBSCRIBE_PARAMS = z.object({
   name: z.string().min(1),
-  arguments: MESSAGE_CREATED_ARGUMENTS.optional(),
+  arguments: z.unknown().optional(),
   delivery: SUBSCRIBE_DELIVERY,
-  cursor: z.string().regex(/^\d{1,18}$/u).nullable().optional(),
-  ttlMs: z.number().int().nonnegative().nullable().optional(),
-  _meta: META,
+  cursor: z.union([z.string(), z.number()]).nullish(),
+  ttlMs: z.number().int().nonnegative().nullish(),
 });
 
-const UNSUBSCRIBE_DELIVERY = z.strictObject({
+const UNSUBSCRIBE_DELIVERY = z.object({
   mode: z.string().min(1).optional(),
   url: z.string().min(1),
   secret: z.string().min(1).optional(),
 });
 
-const EVENTS_UNSUBSCRIBE_PARAMS = z.strictObject({
+const EVENTS_UNSUBSCRIBE_PARAMS = z.object({
   name: z.string().min(1),
-  arguments: MESSAGE_CREATED_ARGUMENTS.optional(),
+  arguments: z.unknown().optional(),
   delivery: UNSUBSCRIBE_DELIVERY,
-  _meta: META,
 });
+
+const SUBSCRIBE_KEYS = new Set([
+  'name',
+  'arguments',
+  'delivery',
+  'cursor',
+  'ttlMs',
+  '_meta',
+]);
+const DELIVERY_KEYS = new Set(['mode', 'url', 'secret']);
+const UNSUBSCRIBE_KEYS = new Set(['name', 'arguments', 'delivery', '_meta']);
 
 function businessErrorData(error: BusinessError): Record<string, unknown> {
   return {
@@ -85,6 +101,8 @@ function toProtocolError(error: unknown): unknown {
       case 'callback':
         return new ProtocolError(EVENTS_CALLBACK_ERROR_CODE, error.message, {
           reason: error.data.reason,
+          ...(typeof error.data.detail === 'string' ? { detail: error.data.detail } : {}),
+          ...(typeof error.data.status === 'number' ? { status: error.data.status } : {}),
         });
       case 'unauthorized':
         return new ProtocolError(EVENTS_ERROR_CODES.unauthorized, error.message, {
@@ -134,21 +152,156 @@ function toProtocolError(error: unknown): unknown {
   return error;
 }
 
+function validationFailure(
+  log: EventsLogger,
+  field: string,
+  reason: string,
+): EventsError {
+  log.warn('validate', {
+    stage: 'validate',
+    result: 'invalid',
+    field,
+    reason,
+  });
+  return invalidEventsArgument('events 参数不合法', {
+    code: 'INVALID_ARGUMENT',
+    field,
+    reason,
+  });
+}
+
+function parseSubscribeInput(raw: Record<string, unknown>, log: EventsLogger): SubscribeInput {
+  const parsed = EVENTS_SUBSCRIBE_PARAMS.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw validationFailure(
+      log,
+      issue?.path.join('.') || 'params',
+      issue?.code ?? 'invalid_type',
+    );
+  }
+  const delivery = asRecord(raw.delivery) ?? {};
+  const ignoredParams = Object.keys(raw).filter((key) => !SUBSCRIBE_KEYS.has(key));
+  const ignoredDelivery = Object.keys(delivery).filter((key) => !DELIVERY_KEYS.has(key));
+  log.info('validate', {
+    stage: 'validate',
+    result: 'ok',
+    event_name: parsed.data.name,
+    has_arguments: parsed.data.arguments !== undefined && parsed.data.arguments !== null,
+    delivery_mode: parsed.data.delivery.mode,
+    callback_host: callbackHostOf(parsed.data.delivery.url),
+    cursor_kind:
+      parsed.data.cursor === null || parsed.data.cursor === undefined
+        ? 'null'
+        : typeof parsed.data.cursor,
+    ttl_kind:
+      parsed.data.ttlMs === null
+        ? 'null'
+        : parsed.data.ttlMs === undefined
+          ? 'absent'
+          : 'number',
+    ignored_params: ignoredParams.sort(),
+    ignored_delivery_keys: ignoredDelivery.sort(),
+  });
+  return {
+    name: parsed.data.name,
+    ...(parsed.data.arguments !== undefined ? { arguments: parsed.data.arguments } : {}),
+    delivery: parsed.data.delivery,
+    cursor: parsed.data.cursor,
+    ttlMs: parsed.data.ttlMs,
+  };
+}
+
+function parseUnsubscribeInput(
+  raw: Record<string, unknown>,
+  log: EventsLogger,
+): UnsubscribeInput {
+  const parsed = EVENTS_UNSUBSCRIBE_PARAMS.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw validationFailure(
+      log,
+      issue?.path.join('.') || 'params',
+      issue?.code ?? 'invalid_type',
+    );
+  }
+  const delivery = asRecord(raw.delivery) ?? {};
+  log.info('validate', {
+    stage: 'validate',
+    result: 'ok',
+    event_name: parsed.data.name,
+    has_arguments: parsed.data.arguments !== undefined && parsed.data.arguments !== null,
+    callback_host: callbackHostOf(parsed.data.delivery.url),
+    ignored_params: Object.keys(raw)
+      .filter((key) => !UNSUBSCRIBE_KEYS.has(key))
+      .sort(),
+    ignored_delivery_keys: Object.keys(delivery)
+      .filter((key) => !DELIVERY_KEYS.has(key))
+      .sort(),
+  });
+  return {
+    name: parsed.data.name,
+    ...(parsed.data.arguments !== undefined ? { arguments: parsed.data.arguments } : {}),
+    delivery: parsed.data.delivery,
+  };
+}
+
+function failureFields(error: unknown): Record<string, string | number | null> {
+  if (error instanceof EventsError) {
+    return {
+      error_kind: error.kind,
+      error_code:
+        error.kind === 'callback'
+          ? EVENTS_CALLBACK_ERROR_CODE
+          : typeof error.data.code === 'number'
+            ? error.data.code
+            : null,
+      reason: typeof error.data.reason === 'string' ? error.data.reason : null,
+      detail: typeof error.data.detail === 'string' ? error.data.detail : null,
+      status: typeof error.data.status === 'number' ? error.data.status : null,
+    };
+  }
+  if (isBusinessError(error)) {
+    return { error_kind: 'business', error_code: error.code, reason: null, detail: null, status: null };
+  }
+  return { error_kind: 'internal', error_code: null, reason: null, detail: null, status: null };
+}
+
 /** 只在 EVENTS 配置有效时注册；未声明能力时客户端应得到 -32601。 */
 export function registerEvents(server: McpServer, env: Env, principal: Principal): void {
-  server.server.setRequestHandler(
-    'events/list',
-    { params: EVENTS_LIST_PARAMS },
-    async () => listEventDefinitions(),
-  );
+  server.server.setRequestHandler('events/list', { params: RAW_PARAMS }, async (raw, ctx) => {
+    const log = createEventsLogger('events/list', ctx.mcpReq.id);
+    log.info('list', {
+      stage: 'list',
+      param_keys: Object.keys(raw).sort(),
+    });
+    const result = await listEventDefinitions();
+    log.info('list', { stage: 'list', result: 'ok', event_count: result.events.length });
+    return result;
+  });
 
   server.server.setRequestHandler(
     'events/subscribe',
-    { params: EVENTS_SUBSCRIBE_PARAMS },
-    async (params) => {
+    { params: RAW_PARAMS },
+    async (raw, ctx) => {
+      const log = createEventsLogger('events/subscribe', ctx.mcpReq.id);
       try {
-        return await subscribeEvents(env, principal, params);
+        const input = parseSubscribeInput(raw, log);
+        const result = await subscribeEvents(env, principal, input, log);
+        log.info('subscribe', {
+          stage: 'subscribe',
+          result: 'ok',
+          subscription_id: result.id,
+          cursor_kind: result.cursor === null ? 'null' : 'string',
+          truncated: result.truncated,
+        });
+        return result;
       } catch (error) {
+        log.warn('subscribe', {
+          stage: 'subscribe',
+          result: 'failed',
+          ...failureFields(error),
+        });
         throw toProtocolError(error);
       }
     },
@@ -156,11 +309,20 @@ export function registerEvents(server: McpServer, env: Env, principal: Principal
 
   server.server.setRequestHandler(
     'events/unsubscribe',
-    { params: EVENTS_UNSUBSCRIBE_PARAMS },
-    async (params) => {
+    { params: RAW_PARAMS },
+    async (raw, ctx) => {
+      const log = createEventsLogger('events/unsubscribe', ctx.mcpReq.id);
       try {
-        return await unsubscribeEvents(env, principal, params);
+        const input = parseUnsubscribeInput(raw, log);
+        const result = await unsubscribeEvents(env, principal, input, log);
+        log.info('unsubscribe', { stage: 'unsubscribe', result: 'ok' });
+        return result;
       } catch (error) {
+        log.warn('unsubscribe', {
+          stage: 'unsubscribe',
+          result: 'failed',
+          ...failureFields(error),
+        });
         throw toProtocolError(error);
       }
     },
