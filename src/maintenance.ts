@@ -75,4 +75,59 @@ export async function maintain(env: Env): Promise<void> {
     )
     .bind(now - LIMITS.roomFileTombstoneGraceMs)
     .run();
+
+  // MCP Events：先停用过期订阅，再在宽限期后删除（级联清投递）。
+  await db
+    .prepare(
+      'UPDATE mcp_event_subscriptions SET active = 0, updated_at = ? WHERE active = 1 AND refresh_before < ?',
+    )
+    .bind(now, now)
+    .run();
+
+  await db
+    .prepare(
+      `DELETE FROM mcp_event_subscriptions
+        WHERE rowid IN (
+          SELECT rowid FROM mcp_event_subscriptions
+           WHERE refresh_before < ? LIMIT 100
+        )`,
+    )
+    .bind(now - LIMITS.eventsSubscriptionGraceMs)
+    .run();
+
+  await db
+    .prepare(
+      `UPDATE mcp_event_subscriptions
+          SET previous_secret_ciphertext = NULL,
+              previous_secret_nonce = NULL,
+              previous_secret_expires_at = NULL
+        WHERE previous_secret_expires_at IS NOT NULL
+          AND previous_secret_expires_at < ?`,
+    )
+    .bind(now)
+    .run();
+
+  await db
+    .prepare(
+      `DELETE FROM mcp_event_deliveries
+        WHERE rowid IN (
+          SELECT rowid FROM mcp_event_deliveries
+           WHERE status IN ('delivered', 'abandoned')
+             AND created_at < ?
+           LIMIT 100
+        )`,
+    )
+    .bind(now - LIMITS.eventsDeliveryRetentionMs)
+    .run();
+
+  await db
+    .prepare(
+      `DELETE FROM webhook_verifications
+        WHERE rowid IN (
+          SELECT rowid FROM webhook_verifications
+           WHERE expires_at < ? LIMIT 100
+        )`,
+    )
+    .bind(now)
+    .run();
 }

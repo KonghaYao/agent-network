@@ -8,6 +8,7 @@ import { LIMITS } from './contracts/limits';
 import { isBusinessError, type BusinessErrorBody } from './contracts/errors';
 import { attachPublicUrl, publicFileHeaders } from './drive/service';
 import { roomFileIsDownloadable } from './domain/room-files';
+import { runEventsTick, scheduleEventsTick } from './events/runtime';
 import { authenticate } from './mcp/auth';
 import { buildServer } from './mcp/server';
 import { serveActorStream } from './mcp/stream';
@@ -373,6 +374,9 @@ async function handleMcp(request: Request, env: Env, mount?: FileMount): Promise
     void drainOutbox(env).catch((error) => {
       console.error('agent-network fast-path outbox drain failed', error);
     });
+    scheduleEventsTick(env);
+  } else if (body?.method === 'events/subscribe' || body?.method === 'events/unsubscribe') {
+    scheduleEventsTick(env);
   }
   return finalResponse;
 }
@@ -609,7 +613,7 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
   return app;
 }
 
-/** 定时任务：outbox 投递与历史清理；由 Bun 入口的 setInterval 调用。 */
+/** 定时任务：outbox 投递、MCP Events tick 与历史清理；由 Bun 入口的 setInterval 调用。 */
 export async function runScheduled(env: Env): Promise<void> {
   try {
     const result = await drainOutbox(env);
@@ -618,6 +622,11 @@ export async function runScheduled(env: Env): Promise<void> {
     }
   } catch (error) {
     console.error('agent-network outbox drain failed', error);
+  }
+  try {
+    await runEventsTick(env);
+  } catch (error) {
+    console.error('agent-network events tick failed', error);
   }
   try {
     await maintain(env);

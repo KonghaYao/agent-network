@@ -11,6 +11,7 @@
     "test:protocol": "bun scripts/verify-protocol.ts",
     "test:acceptance": "bun scripts/acceptance.ts",
     "test:drive": "bun scripts/verify-drive.ts",
+    "test:events": "bun scripts/verify-events.ts",
     "test:web": "bun scripts/verify-web.ts",
     "db:migrate": "bun src/bun/migrate.ts"
   },

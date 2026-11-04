@@ -100,6 +100,56 @@ export const LIMITS = {
   webRequestTimeoutMs: 15_000,
   /** 网页收到房间通知后的刷新合并窗口（毫秒）。 */
   webRefreshDebounceMs: 300,
+  /** MCP Events 默认订阅寿命（毫秒）。 */
+  eventsSubscriptionTtlMs: 24 * 60 * 60_000,
+  /** MCP Events 最小授权寿命（毫秒）。 */
+  eventsSubscriptionTtlMinMs: 5 * 60_000,
+  /** MCP Events 最大授权寿命（毫秒）；拒绝无过期订阅。 */
+  eventsSubscriptionTtlMaxMs: 7 * 24 * 60 * 60_000,
+  /** 过期订阅删除前的宽限期（毫秒）。 */
+  eventsSubscriptionGraceMs: 24 * 60 * 60_000,
+  /** 每个 actor 的活跃订阅上限。 */
+  eventsSubscriptionsPerActor: 20,
+  /** 全局活跃订阅上限。 */
+  eventsSubscriptionsGlobal: 1000,
+  /** 单订阅 pending + processing 投递上限（扫描背压）。 */
+  eventsPendingDeliveriesPerSubscription: 500,
+  /** 单次扫描事件数。 */
+  eventsScanBatchMax: 50,
+  /** 单 tick 扫描订阅数。 */
+  eventsScanSubscriptionsPerTick: 50,
+  /** 单 tick 领取投递数。 */
+  eventsDeliveryBatchMax: 50,
+  /** 出站 webhook 并发。 */
+  eventsWebhookConcurrency: 4,
+  /** challenge 验证超时（毫秒）。 */
+  eventsVerificationTimeoutMs: 5_000,
+  /** webhook 投递超时（毫秒）。 */
+  eventsWebhookTimeoutMs: 10_000,
+  /** webhook 响应最多读取字节数。 */
+  eventsWebhookResponseBytes: 4096,
+  /** callback URL 最大字节数。 */
+  eventsCallbackUrlMaxBytes: 4096,
+  /** webhook 最大尝试次数。 */
+  eventsWebhookMaxAttempts: 8,
+  /** webhook 最大重试窗口（毫秒）。 */
+  eventsWebhookMaxAgeMs: 24 * 60 * 60_000,
+  /** webhook 重试退避基数（毫秒）。 */
+  eventsWebhookRetryBaseMs: 1_000,
+  /** webhook 重试退避上限（毫秒）。 */
+  eventsWebhookRetryMaxMs: 60 * 60_000,
+  /** delivered/abandoned 投递留存（毫秒）。 */
+  eventsDeliveryRetentionMs: 7 * 24 * 60 * 60_000,
+  /** challenge 验证缓存（毫秒）。 */
+  eventsVerificationCacheMs: 24 * 60 * 60_000,
+  /** 旧 secret 双签宽限（毫秒）。 */
+  eventsSecretRotationGraceMs: 60 * 60_000,
+  /** 连续失败多少次后暂停订阅。 */
+  eventsFailureSuspensionThreshold: 20,
+  /** 单事件 webhook body 硬上限（字节）。 */
+  eventsWebhookMaxPayloadBytes: 256 * 1024,
+  /** 每 callback host 每分钟 challenge 上限。 */
+  eventsVerificationPerHostPerMinute: 10,
 } as const;
 
 export function clampPage(value: number | undefined, fallback: number, max: number): number {

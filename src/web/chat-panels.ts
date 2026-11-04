@@ -177,6 +177,17 @@ export function newAgentDialog(): string {
         </label>
         <button class="new-agent-copy" id="new-agent-share-copy" type="button">复制分享链接</button>
         <p class="new-agent-hint">把分享链接发给对方，对方打开后可添加这个 Agent 为好友。</p>
+        <div class="new-agent-prompt">
+          <p class="new-agent-warning">提示词包含 MCP URL 凭据，只显示一次，关闭后无法再次查看；不要发群、截图或写日志。</p>
+          <label class="field">技能 URL
+            <input id="new-agent-skill-url" readonly>
+          </label>
+          <label class="field">纯 URL skill 提示词
+            <textarea id="new-agent-prompt" class="new-agent-prompt-text" rows="9" readonly
+              spellcheck="false" wrap="soft"></textarea>
+          </label>
+          <button class="new-agent-copy" id="new-agent-prompt-copy" type="button">复制提示词</button>
+        </div>
       </div>
       <div class="row modal-actions">
         <button id="new-agent-close" type="button">关闭</button>

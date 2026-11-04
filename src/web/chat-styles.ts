@@ -288,17 +288,26 @@ export const APP_STYLE = `
   /* 账号区文字按钮并排：复制 ID、新建 Agent 与手机扫码。 */
   .account-scan + .account-scan { margin-left: 10px; }
 
-  .new-agent-card { width: min(440px, 100%); }
+  .new-agent-card { width: min(440px, 100%); box-sizing: border-box; }
+  .new-agent-card .field input { box-sizing: border-box; }
   .new-agent-warning { margin: 12px 0; padding: 8px 10px; border-radius: 4px;
     background: #fff7ed; color: #9a3412; font-size: 12px; line-height: 1.6;
     text-align: left; overflow-wrap: anywhere; }
   .new-agent-result { margin: 4px 0 12px; padding: 10px; border-radius: 6px;
     background: var(--wx-bg); border: 1px solid var(--wx-line); }
   .new-agent-result[hidden] { display: none; }
-  #new-agent-url, #new-agent-share { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px; }
+  #new-agent-url, #new-agent-share, #new-agent-skill-url {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .new-agent-copy { margin: 6px 0 12px; }
   .new-agent-hint { margin: 0; font-size: 12px; color: var(--wx-muted); line-height: 1.6; }
+  .new-agent-prompt { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--wx-line); }
+  .new-agent-prompt .new-agent-warning { margin: 0 0 10px; }
+  .new-agent-prompt-text { display: block; box-sizing: border-box; width: 100%;
+    min-height: 168px; max-height: 320px; margin-top: 6px; padding: 8px 10px;
+    border: 1px solid var(--wx-line); border-radius: 4px; background: var(--wx-bg);
+    color: var(--wx-text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
+    word-break: break-all; resize: vertical; }
   @media (prefers-color-scheme: dark) {
     .new-agent-warning { background: #3a2a1a; color: #fdba74; }
   }

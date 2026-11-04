@@ -141,3 +141,56 @@ export interface RoomFileRow {
   deleted_at: number | null;
   deleted_by: string | null;
 }
+
+/** MCP Events webhook 订阅；secret 以 AES-GCM 密文落库。 */
+export interface EventSubscriptionRow {
+  subscription_id: string;
+  actor_id: string;
+  event_name: string;
+  arguments_json: string;
+  callback_url: string;
+  callback_url_key: string;
+  credential_id: string;
+  secret_ciphertext: string;
+  secret_nonce: string;
+  previous_secret_ciphertext: string | null;
+  previous_secret_nonce: string | null;
+  previous_secret_expires_at: number | null;
+  refresh_before: number;
+  scanned_seq: number;
+  last_scan_at: number;
+  last_delivery_at: number | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  active: number;
+  verified_at: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export type EventDeliveryStatus = 'pending' | 'processing' | 'delivered' | 'abandoned';
+
+/** MCP Events 单事件投递；payload_json 是发送时的精确字节。 */
+export interface EventDeliveryRow {
+  delivery_id: string;
+  subscription_id: string;
+  event_seq: number;
+  event_id: string;
+  payload_json: string;
+  status: EventDeliveryStatus;
+  attempts: number;
+  next_attempt_at: number;
+  lease_token: string | null;
+  lease_until: number | null;
+  last_http_status: number | null;
+  last_error: string | null;
+  created_at: number;
+  delivered_at: number | null;
+}
+
+export interface WebhookVerificationRow {
+  actor_id: string;
+  callback_url_key: string;
+  verified_at: number;
+  expires_at: number;
+}

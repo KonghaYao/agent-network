@@ -2,6 +2,7 @@ import { LIMITS } from '../contracts/limits';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
 import { CHAT_LIST_SCRIPT } from './chat-list-script';
+import { CHAT_MESSAGE_FILES_SCRIPT } from './chat-message-files-script';
 import { CHAT_RENDER_SCRIPT } from './chat-render-script';
 import { CHAT_ROUTER_SCRIPT } from './chat-router-script';
 import { CHAT_SESSION_SCRIPT } from './chat-session-script';
@@ -81,6 +82,7 @@ let pendingRoomRefreshId = null;
 let stickyStatus = '';
 
 ${CHAT_LIST_SCRIPT}
+${CHAT_MESSAGE_FILES_SCRIPT}
 ${CHAT_RENDER_SCRIPT}
 ${NEW_AGENT_SCRIPT}
 ${CHAT_SESSION_SCRIPT}

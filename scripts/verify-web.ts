@@ -522,6 +522,43 @@ async function observeFileRanges(page: Page): Promise<{ ranges: Record<string, s
   return { ranges };
 }
 
+interface HeadCall {
+  path: string;
+  at: number;
+}
+
+interface HeadObserver {
+  heads: HeadCall[];
+  maxActive: number;
+  delayMs: number;
+}
+
+/** 记录消息卡片的 HEAD；可临时延迟以观察客户端并发上限。 */
+async function observeFileHeads(page: Page): Promise<HeadObserver> {
+  const state: HeadObserver = { heads: [], maxActive: 0, delayMs: 0 };
+  let active = 0;
+  await page.route('**/f/**', async (route) => {
+    if (route.request().method() !== 'HEAD') {
+      await route.fallback();
+      return;
+    }
+    state.heads.push({ path: new URL(route.request().url()).pathname, at: Date.now() });
+    active += 1;
+    if (active > state.maxActive) state.maxActive = active;
+    try {
+      if (state.delayMs > 0) await sleep(state.delayMs);
+      await route.fallback();
+    } finally {
+      active -= 1;
+    }
+  });
+  return state;
+}
+
+function headCount(observer: HeadObserver, fileId: string): number {
+  return observer.heads.filter((call) => call.path === `/f/${fileId}`).length;
+}
+
 async function mcpCallCount(page: Page, name: string): Promise<number> {
   return (await page.evaluate(
     `(window.__mcpCalls || []).filter(function (call) { return call.name === ${JSON.stringify(name)}; }).length`,
@@ -751,20 +788,180 @@ async function main(): Promise<void> {
       );
 
       await page.locator('#new-agent').click();
+      checkEqual('创建前提示词块隐藏', await page.locator('#new-agent-result').isHidden(), true);
       await page.fill('#new-agent-name', '网页新建 Agent');
       await page.locator('#new-agent-create').click();
       await page.locator('#new-agent-result').waitFor({ state: 'visible' });
-      check('新建 Agent 返回 MCP URL', (await page.inputValue('#new-agent-url')).startsWith('http'));
+      const newAgentMcpUrl = await page.inputValue('#new-agent-url');
+      const newAgentShareUrl = await page.inputValue('#new-agent-share');
+      const newAgentSkillUrl = await page.inputValue('#new-agent-skill-url');
+      const newAgentPrompt = await page.inputValue('#new-agent-prompt');
+      check('新建 Agent 返回 MCP URL', newAgentMcpUrl.startsWith('http'));
+      check('新建 Agent 返回分享链接', newAgentShareUrl.startsWith('http'));
+      checkEqual('技能 URL 使用当前 origin', newAgentSkillUrl, `${server.base}/skills/agent-network-curl.md`);
+      check('提示词包含 skill URL', newAgentPrompt.includes('/skills/agent-network-curl.md'));
+      check('提示词包含 MCP URL 前缀', newAgentPrompt.includes('/mcp?token='));
+      check('提示词包含 network_me', newAgentPrompt.includes('network_me'));
+      check('提示词包含 share_url', newAgentPrompt.includes('share_url'));
+      check('提示词包含 Agent 名称', newAgentPrompt.includes('网页新建 Agent'));
+      check(
+        '提示词区块提示凭据只显示一次',
+        ((await page.locator('.new-agent-prompt .new-agent-warning').textContent()) ?? '')
+          .includes('提示词包含 MCP URL 凭据，只显示一次'),
+      );
+
+      await page.evaluate(`(() => {
+        window.__copiedPrompt = null;
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: function (text) {
+              window.__copiedPrompt = text;
+              return Promise.resolve();
+            }
+          }
+        });
+      })()`);
+      await page.locator('#new-agent-prompt-copy').click();
+      await page.waitForFunction(
+        `document.getElementById('new-agent-prompt-copy').textContent === '已复制'`,
+      );
+      check('复制提示词按钮反馈已复制', true);
+      checkEqual(
+        '复制的是整段提示词',
+        (await page.evaluate(
+          `window.__copiedPrompt === document.getElementById('new-agent-prompt').value`,
+        )) as boolean,
+        true,
+      );
+
+      const storageDump = (await page.evaluate(`(() => {
+        const values = [];
+        for (let index = 0; index < localStorage.length; index += 1) {
+          values.push(localStorage.getItem(localStorage.key(index)) || '');
+        }
+        for (let index = 0; index < sessionStorage.length; index += 1) {
+          values.push(sessionStorage.getItem(sessionStorage.key(index)) || '');
+        }
+        return values.join('\\n');
+      })()`)) as string;
+      check(
+        'localStorage/sessionStorage 不含 MCP URL 或提示词',
+        !storageDump.includes(newAgentMcpUrl) && !storageDump.includes(newAgentPrompt),
+      );
+
       await page.locator('#new-agent-close').click();
+      const closedState = (await page.evaluate(`(() => ({
+        resultHidden: document.getElementById('new-agent-result').hidden,
+        url: document.getElementById('new-agent-url').value,
+        share: document.getElementById('new-agent-share').value,
+        skill: document.getElementById('new-agent-skill-url').value,
+        prompt: document.getElementById('new-agent-prompt').value
+      }))()`)) as {
+        resultHidden: boolean;
+        url: string;
+        share: string;
+        skill: string;
+        prompt: string;
+      };
+      check(
+        '关闭后清空 URL、分享链接与提示词',
+        closedState.resultHidden &&
+          closedState.url === '' &&
+          closedState.share === '' &&
+          closedState.skill === '' &&
+          closedState.prompt === '',
+      );
+
       await page.locator('#new-agent').click();
       checkEqual('关闭后重开不显示旧 URL', await page.locator('#new-agent-result').isHidden(), true);
       checkEqual('重开后 URL 输入清空', await page.inputValue('#new-agent-url'), '');
+      checkEqual('重开后提示词清空', await page.inputValue('#new-agent-prompt'), '');
+      checkEqual('重开后技能 URL 清空', await page.inputValue('#new-agent-skill-url'), '');
       checkEqual(
         'localStorage 只保存浏览器 token',
         await page.evaluate('Object.keys(localStorage).join(",")'),
         'agent-network-token',
       );
       await page.locator('#new-agent-close').click();
+      await context.close();
+    }
+
+    // 2b-1. 390px 新建 Agent 提示词可用、无横向溢出，Escape 关闭后清空。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.locator('#new-agent').click();
+      await page.fill('#new-agent-name', '移动端 Agent');
+      await page.locator('#new-agent-create').click();
+      await page.locator('#new-agent-result').waitFor({ state: 'visible' });
+      check('390px 提示词可见', await page.locator('#new-agent-prompt').isVisible());
+      const mobilePrompt = await page.inputValue('#new-agent-prompt');
+      check(
+        '390px 提示词包含 skill URL 与 MCP URL 前缀',
+        mobilePrompt.includes('/skills/agent-network-curl.md') &&
+          mobilePrompt.includes('/mcp?token='),
+      );
+      const mobileMetrics = (await page.evaluate(`(() => {
+        const card = document.querySelector('#new-agent-modal .modal-card');
+        const prompt = document.getElementById('new-agent-prompt');
+        if (!card || !prompt) return null;
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          cardRight: card.getBoundingClientRect().right,
+          promptRight: prompt.getBoundingClientRect().right,
+          promptScroll: prompt.scrollWidth,
+          promptClient: prompt.clientWidth
+        };
+      })()`)) as {
+        view: number;
+        doc: number;
+        cardRight: number;
+        promptRight: number;
+        promptScroll: number;
+        promptClient: number;
+      } | null;
+      check(
+        '390px 新建 Agent 弹窗不横向溢出',
+        Boolean(mobileMetrics) &&
+          mobileMetrics!.doc <= mobileMetrics!.view &&
+          mobileMetrics!.cardRight <= mobileMetrics!.view + 1 &&
+          mobileMetrics!.promptRight <= mobileMetrics!.view + 1 &&
+          mobileMetrics!.promptScroll <= mobileMetrics!.promptClient + 1,
+        mobileMetrics,
+      );
+      await page.keyboard.press('Escape');
+      const escapedState = (await page.evaluate(`(() => ({
+        modalHidden: document.getElementById('new-agent-modal').hidden,
+        resultHidden: document.getElementById('new-agent-result').hidden,
+        url: document.getElementById('new-agent-url').value,
+        share: document.getElementById('new-agent-share').value,
+        skill: document.getElementById('new-agent-skill-url').value,
+        prompt: document.getElementById('new-agent-prompt').value
+      }))()`)) as {
+        modalHidden: boolean;
+        resultHidden: boolean;
+        url: string;
+        share: string;
+        skill: string;
+        prompt: string;
+      };
+      check(
+        'Escape 关闭后清空凭据与提示词',
+        escapedState.modalHidden &&
+          escapedState.resultHidden &&
+          escapedState.url === '' &&
+          escapedState.share === '' &&
+          escapedState.skill === '' &&
+          escapedState.prompt === '',
+      );
       await context.close();
     }
 
@@ -1655,6 +1852,548 @@ async function main(): Promise<void> {
       await waitRoom(page, emptyRoomId, '空文件群');
       await page.locator('#files-empty').waitFor({ state: 'visible' });
       checkEqual('空房间显示空态', await page.locator('#files-list .file-item').count(), 0);
+      await context.close();
+    }
+
+    // 11. 消息正文文件卡片：识别、HEAD 元数据、安全预览、缓存/并发与移动端。
+    {
+      const cardGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '卡片文件群',
+        members: [data.agentA.actor_id],
+      });
+      const cardRoomId = cardGroup.room.room_id;
+      const longFileName = `超长文件名-${'很长的名字'.repeat(12)}.txt`;
+      const xssFileName = '文件名 <b> 粗体 "引号".txt';
+      const cardFiles = await seedRoomFiles(data.humanToken, server.base, cardRoomId, [
+        { name: '卡片图片.png', mimeType: 'image/png', body: PNG_BYTES },
+        { name: '卡片报告.pdf', mimeType: 'application/pdf', body: PDF_BYTES },
+        { name: '卡片说明.txt', mimeType: 'text/plain', body: '卡片第一行\n卡片第二行' },
+        { name: '卡片语音.mp3', mimeType: 'audio/mpeg', body: Buffer.from('ID3card') },
+        { name: '卡片演示.mp4', mimeType: 'video/mp4', body: Buffer.from('videocard') },
+        { name: '卡片归档.zip', mimeType: 'application/zip', body: Buffer.from('zipcard') },
+        { name: '卡片页面.html', mimeType: 'text/html', body: '<script>alert(1)</script>' },
+        {
+          name: '卡片图标.svg',
+          mimeType: 'image/svg+xml',
+          body: '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+        },
+        { name: '卡片数据.xml', mimeType: 'application/xml', body: '<root/>' },
+        { name: '卡片脚本.js', mimeType: 'application/javascript', body: 'alert(1)' },
+        { name: '去重文件.txt', mimeType: 'text/plain', body: 'dedupe' },
+        { name: '第二文件.txt', mimeType: 'text/plain', body: 'second' },
+        { name: xssFileName, mimeType: 'text/plain', body: 'xss' },
+        { name: longFileName, mimeType: 'text/plain', body: 'long' },
+      ]);
+      const byName = new Map(cardFiles.map((file) => [file.name, file]));
+      const cardFile = (name: string): RealUpload => {
+        const file = byName.get(name);
+        if (!file) throw new Error(`卡片 fixture 缺少文件：${name}`);
+        return file;
+      };
+      const image = cardFile('卡片图片.png');
+      const pdf = cardFile('卡片报告.pdf');
+      const textFile = cardFile('卡片说明.txt');
+      const audio = cardFile('卡片语音.mp3');
+      const video = cardFile('卡片演示.mp4');
+      const zip = cardFile('卡片归档.zip');
+      const html = cardFile('卡片页面.html');
+      const svg = cardFile('卡片图标.svg');
+      const xml = cardFile('卡片数据.xml');
+      const js = cardFile('卡片脚本.js');
+      const dedupeOne = cardFile('去重文件.txt');
+      const dedupeTwo = cardFile('第二文件.txt');
+      const xssFile = cardFile(xssFileName);
+      const longFile = cardFile(longFileName);
+
+      const typesMarker = '卡片附件清单';
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        [
+          typesMarker,
+          '图片文件',
+          image.publicUrl,
+          '报告文件',
+          `/f/${pdf.fileId}`,
+          '文本文件',
+          `/f/${textFile.fileId}?download=1#文本`,
+          '音频文件',
+          `/f/${audio.fileId}`,
+          '视频文件',
+          `[视频](${video.publicUrl})`,
+          '未知文件',
+          zip.publicUrl,
+        ].join('\n'),
+      );
+      const unsafeMarker = '不安全类型清单';
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        [
+          unsafeMarker,
+          'HTML 文件',
+          html.publicUrl,
+          'SVG 文件',
+          svg.publicUrl,
+          'XML 文件',
+          xml.publicUrl,
+          'JS 文件',
+          js.publicUrl,
+        ].join('\n'),
+      );
+      const failureId = `f_${'A'.repeat(22)}`;
+      const failureMarker = '故障文件清单';
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        [failureMarker, '故障报告.pdf', `/f/${failureId}`].join('\n'),
+      );
+      const bareFailureId = `f_${'B'.repeat(22)}`;
+      await sendRoomMessage(data.humanToken, cardRoomId, `/f/${bareFailureId}`);
+      const newlineId = `f_${'D'.repeat(22)}`;
+      const newlineMarker = '换行文件名安全';
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        [newlineMarker, '恶意文件', `/f/${newlineId}`].join('\n'),
+      );
+      const xssMarker = '真实文件名安全';
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        [xssMarker, xssFile.publicUrl].join('\n'),
+      );
+      const dedupeMarker = '去重与外站';
+      const externalUrl = `https://external.example/f/f_${'C'.repeat(22)}`;
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        [
+          dedupeMarker,
+          '同一文件',
+          dedupeOne.publicUrl,
+          `同文件相对 /f/${dedupeOne.fileId}?download=1#片段`,
+          `Markdown [同一文件](${dedupeOne.publicUrl})`,
+          `外站 ${externalUrl}`,
+          '第二文件',
+          dedupeTwo.publicUrl,
+        ].join('\n'),
+      );
+      const maxMarker = '最多八张卡片';
+      const maxIds = Array.from({ length: 10 }, (_, index) => {
+        const suffix = (index + 10).toString(36).padStart(2, '0');
+        return `f_${suffix}${'Z'.repeat(20)}`;
+      });
+      const maxParts = [maxMarker];
+      maxIds.forEach((fileId, index) => {
+        maxParts.push(`候选文件 ${index + 1}`, `/f/${fileId}`);
+      });
+      const longMarker = '长文本';
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        `${longMarker.repeat(300)}\n长文文件\n${dedupeTwo.publicUrl}`,
+      );
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        `@${data.agentA.name} 请看卡片 ${image.publicUrl}`,
+      );
+      const longNameMarker = '长文件名请检查';
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        [longNameMarker, longFile.publicUrl].join('\n'),
+      );
+
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const rangeObserver = await observeFileRanges(page);
+      const headObserver = await observeFileHeads(page);
+      let externalRequests = 0;
+      page.on('request', (request) => {
+        try {
+          if (new URL(request.url()).host === 'external.example') externalRequests += 1;
+        } catch {
+          // 忽略无法解析的请求地址。
+        }
+      });
+      let dialogs = 0;
+      page.on('dialog', async (dialog) => {
+        dialogs += 1;
+        await dialog.dismiss().catch(() => undefined);
+      });
+      const newlineName = '<b>恶意</b>"引号"\n换行.txt';
+      await page.route(`**/f/${newlineId}`, async (route) => {
+        if (route.request().method() !== 'HEAD') {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          headers: {
+            'content-type': 'text/plain; charset=utf-8',
+            'content-length': '7',
+            'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(newlineName)}`,
+          },
+        });
+      });
+      await page.goto(`${server.base}/c/${cardRoomId}`);
+      await waitRoom(page, cardRoomId, '卡片文件群');
+
+      const typesMessage = page.locator('#messages .msg').filter({ hasText: typesMarker });
+      await typesMessage.scrollIntoViewIfNeeded();
+      for (const name of ['卡片图片.png', '卡片报告.pdf', '卡片说明.txt', '卡片语音.mp3', '卡片演示.mp4', '卡片归档.zip']) {
+        await typesMessage.locator('.msg-file-name').filter({ hasText: name }).first().waitFor();
+      }
+      checkEqual('同一消息渲染 6 张文件卡片', await typesMessage.locator('.msg-file').count(), 6);
+      checkEqual('卡片位于 bubble 外', await typesMessage.locator('.bubble .msg-file').count(), 0);
+      checkEqual(
+        '卡片容器是 msg-content 直接子节点',
+        await typesMessage.locator('.msg-content > .msg-files').count(),
+        1,
+      );
+      const typesBubbleText = (await typesMessage.locator('.bubble').textContent()) ?? '';
+      check(
+        '正文保留 query/hash 与 Markdown',
+        typesBubbleText.includes(`/f/${textFile.fileId}?download=1#文本`) &&
+          typesBubbleText.includes(`[视频](${video.publicUrl})`),
+        typesBubbleText,
+      );
+      checkEqual(
+        '真实上传文件出现卡片',
+        await typesMessage.locator(`.msg-file[data-file-id="${image.fileId}"]`).count(),
+        1,
+      );
+      const imageCard = typesMessage.locator('.msg-file').filter({ hasText: '卡片图片.png' });
+      const pdfCard = typesMessage.locator('.msg-file').filter({ hasText: '卡片报告.pdf' });
+      const textCard = typesMessage.locator('.msg-file').filter({ hasText: '卡片说明.txt' });
+      const audioCard = typesMessage.locator('.msg-file').filter({ hasText: '卡片语音.mp3' });
+      const videoCard = typesMessage.locator('.msg-file').filter({ hasText: '卡片演示.mp4' });
+      const zipCard = typesMessage.locator('.msg-file').filter({ hasText: '卡片归档.zip' });
+      checkEqual('图片类型徽标', await imageCard.locator('.msg-file-kind').textContent(), '图片');
+      checkEqual('PDF 类型徽标', await pdfCard.locator('.msg-file-kind').textContent(), 'PDF');
+      checkEqual('文本类型徽标', await textCard.locator('.msg-file-kind').textContent(), 'TXT');
+      checkEqual('音频类型徽标', await audioCard.locator('.msg-file-kind').textContent(), '音频');
+      checkEqual('视频类型徽标', await videoCard.locator('.msg-file-kind').textContent(), '视频');
+      checkEqual('未知类型徽标', await zipCard.locator('.msg-file-kind').textContent(), '文件');
+      check(
+        'HEAD 大小格式化',
+        /(?:B|KB|MB)$/u.test(((await imageCard.locator('.msg-file-size').textContent()) ?? '').trim()),
+        await imageCard.locator('.msg-file-size').textContent(),
+      );
+      checkEqual('卡片不内联未知类型', await zipCard.locator('img, iframe, video, audio, pre').count(), 0);
+      checkEqual('未知类型不提供预览', await zipCard.locator('.msg-file-preview').count(), 0);
+      const zipDownload = zipCard.locator('a.msg-file-download');
+      const zipDownloadHref = (await zipDownload.getAttribute('href')) ?? '';
+      const zipDownloadUrl = new URL(zipDownloadHref);
+      checkEqual('下载链接路径', zipDownloadUrl.pathname, `/f/${zip.fileId}`);
+      checkEqual('下载链接强制 attachment', zipDownloadUrl.search, '?download=1');
+      checkEqual('下载链接 rel', await zipDownload.getAttribute('rel'), 'noopener noreferrer');
+      checkEqual(
+        '下载链接 referrerpolicy',
+        await zipDownload.getAttribute('referrerpolicy'),
+        'no-referrer',
+      );
+
+      await imageCard.locator('.msg-file-preview').click();
+      await page.locator('#file-preview-body img').waitFor();
+      await page.waitForFunction(
+        `(() => { const img = document.querySelector('#file-preview-body img'); return Boolean(img && img.complete && img.naturalWidth > 0); })()`,
+      );
+      checkEqual('图片卡片预览使用 img', await page.locator('#file-preview-body img').count(), 1);
+      checkEqual('图片卡片预览不创建 iframe', await page.locator('#file-preview-body iframe').count(), 0);
+      await page.locator('#file-preview-close').click();
+
+      await pdfCard.locator('.msg-file-preview').click();
+      await page.locator('#file-preview-body iframe').waitFor();
+      checkEqual(
+        'PDF 卡片预览 sandbox 为空',
+        await page.locator('#file-preview-body iframe').getAttribute('sandbox'),
+        '',
+      );
+      checkEqual(
+        'PDF 卡片预览 no-referrer',
+        await page.locator('#file-preview-body iframe').getAttribute('referrerpolicy'),
+        'no-referrer',
+      );
+      await page.locator('#file-preview-close').click();
+
+      await textCard.locator('.msg-file-preview').click();
+      await waitForText(page, '#file-preview-body pre', '卡片第一行');
+      checkEqual(
+        '文本卡片预览 Range 上限 262143',
+        rangeObserver.ranges[new URL(textFile.publicUrl).pathname],
+        'bytes=0-262143',
+      );
+      await page.locator('#file-preview-close').click();
+
+      await audioCard.locator('.msg-file-preview').click();
+      checkEqual(
+        '音频卡片预览使用原生控件',
+        await page.locator('#file-preview-body audio[controls]').count(),
+        1,
+      );
+      await page.locator('#file-preview-close').click();
+      await videoCard.locator('.msg-file-preview').click();
+      checkEqual(
+        '视频卡片预览使用原生控件',
+        await page.locator('#file-preview-body video[controls]').count(),
+        1,
+      );
+      await page.locator('#file-preview-close').click();
+
+      const unsafeMessage = page.locator('#messages .msg').filter({ hasText: unsafeMarker });
+      await unsafeMessage.scrollIntoViewIfNeeded();
+      for (const name of ['卡片页面.html', '卡片图标.svg', '卡片数据.xml', '卡片脚本.js']) {
+        await unsafeMessage.locator('.msg-file-name').filter({ hasText: name }).first().waitFor();
+      }
+      checkEqual('主动内容仍显示卡片', await unsafeMessage.locator('.msg-file').count(), 4);
+      checkEqual('主动内容不提供预览', await unsafeMessage.locator('.msg-file-preview').count(), 0);
+      checkEqual(
+        '主动内容不内联渲染',
+        await unsafeMessage.locator('.msg-file img, .msg-file iframe, .msg-file video, .msg-file audio, .msg-file pre').count(),
+        0,
+      );
+
+      const failureMessage = page.locator('#messages .msg').filter({ hasText: failureMarker });
+      await failureMessage.scrollIntoViewIfNeeded();
+      await failureMessage.locator('.msg-file.unavailable').waitFor();
+      const failureCard = failureMessage.locator('.msg-file');
+      checkEqual(
+        'HEAD 失败回退前一行文件名',
+        await failureCard.locator('.msg-file-name').textContent(),
+        '故障报告.pdf',
+      );
+      checkEqual('HEAD 失败不显示大小', await failureCard.locator('.msg-file-size').textContent(), '');
+      checkEqual('HEAD 失败不提供预览', await failureCard.locator('.msg-file-preview').count(), 0);
+      check('HEAD 失败仍可下载', ((await failureCard.locator('a.msg-file-download').getAttribute('href')) ?? '').includes(`/f/${failureId}`));
+      checkEqual('HEAD 失败确实发起 HEAD', headCount(headObserver, failureId), 1);
+
+      const bareFailureMessage = page.locator('#messages .msg').filter({ hasText: bareFailureId });
+      await bareFailureMessage.scrollIntoViewIfNeeded();
+      await bareFailureMessage.locator('.msg-file.unavailable').waitFor();
+      checkEqual(
+        '无前一行时回退为“文件”',
+        await bareFailureMessage.locator('.msg-file-name').textContent(),
+        '文件',
+      );
+
+      const dedupeMessage = page.locator('#messages .msg').filter({ hasText: dedupeMarker });
+      await dedupeMessage.scrollIntoViewIfNeeded();
+      for (const name of ['去重文件.txt', '第二文件.txt']) {
+        await dedupeMessage.locator('.msg-file-name').filter({ hasText: name }).first().waitFor();
+      }
+      checkEqual('同消息多文件与重复 URL 去重', await dedupeMessage.locator('.msg-file').count(), 2);
+      checkEqual(
+        '同 fileId 只保留一张卡片',
+        await dedupeMessage.locator(`.msg-file[data-file-id="${dedupeOne.fileId}"]`).count(),
+        1,
+      );
+      checkEqual('外站 URL 不发起请求', externalRequests, 0);
+      checkEqual('同 fileId 只发起一次 HEAD', headCount(headObserver, dedupeOne.fileId), 1);
+
+      const maxMessage = page.locator('#messages .msg').filter({ hasText: maxMarker });
+      await sleep(300);
+      headObserver.maxActive = 0;
+      headObserver.delayMs = 120;
+      await sendRoomMessage(data.agentAToken, cardRoomId, maxParts.join('\n'));
+      await maxMessage.waitFor();
+      await maxMessage.evaluate((element) => element.scrollIntoView({ block: 'start' }));
+      await maxMessage.locator('.msg-file').nth(7).waitFor();
+      await maxMessage.locator('.msg-file').nth(7).scrollIntoViewIfNeeded();
+      await waitUntil(
+        () => maxIds.slice(0, 8).every((fileId) => headCount(headObserver, fileId) === 1),
+        '八张卡片 HEAD',
+        15_000,
+      );
+      headObserver.delayMs = 0;
+      checkEqual('单消息最多 8 张卡片', await maxMessage.locator('.msg-file').count(), 8);
+      checkEqual(
+        '第 8 张卡片回退正文文件名',
+        await maxMessage.locator('.msg-file-name').nth(7).textContent(),
+        '候选文件 8',
+      );
+      checkEqual(
+        '第 9 个文件不渲染',
+        await maxMessage.locator(`.msg-file[data-file-id="${maxIds[8]}"]`).count(),
+        0,
+      );
+      checkEqual('超出上限的文件不发起 HEAD', headCount(headObserver, maxIds[8]!), 0);
+      check(
+        'HEAD 并发不超过 4',
+        headObserver.maxActive >= 2 && headObserver.maxActive <= 4,
+        headObserver.maxActive,
+      );
+
+      const longMessage = page.locator('#messages .msg').filter({ hasText: '长文本' }).first();
+      await longMessage.scrollIntoViewIfNeeded();
+      checkEqual('长消息预览不含文件卡片', await longMessage.locator('.msg-file').count(), 0);
+      await longMessage.locator('.expand').click();
+      await longMessage.locator('.msg-file-name').filter({ hasText: '第二文件.txt' }).waitFor();
+      checkEqual('展开全文后补文件卡片', await longMessage.locator('.msg-file').count(), 1);
+      check(
+        '展开后正文包含完整 URL',
+        ((await longMessage.locator('.bubble').textContent()) ?? '').includes(`/f/${dedupeTwo.fileId}`),
+      );
+
+      const atMessage = page.locator('#messages .msg').filter({ hasText: `@${data.agentA.name} 请看卡片` });
+      await atMessage.scrollIntoViewIfNeeded();
+      await atMessage.locator('.msg-file').waitFor();
+      checkEqual(
+        '@ 名字高亮保持',
+        await atMessage.locator('.bubble .mention').first().textContent(),
+        `@${data.agentA.name}`,
+      );
+      check(
+        '@ 与 URL 仍在同一气泡',
+        ((await atMessage.locator('.bubble').textContent()) ?? '').includes(image.publicUrl),
+      );
+      checkEqual('自消息标记保持', await atMessage.evaluate((element) => element.classList.contains('mine')), true);
+      checkEqual('卡片仍在 bubble 外', await atMessage.locator('.bubble .msg-file').count(), 0);
+      const atAlignment = (await atMessage.evaluate((element) => {
+        const content = element.querySelector('.msg-content');
+        const files = element.querySelector('.msg-files');
+        const card = element.querySelector('.msg-file');
+        if (!content || !files || !card) return null;
+        return {
+          contentRight: content.getBoundingClientRect().right,
+          filesRight: files.getBoundingClientRect().right,
+          cardRight: card.getBoundingClientRect().right,
+        };
+      })) as { contentRight: number; filesRight: number; cardRight: number } | null;
+      check(
+        '自消息文件卡片右对齐',
+        Boolean(atAlignment) &&
+          Math.abs(atAlignment!.filesRight - atAlignment!.contentRight) <= 1 &&
+          Math.abs(atAlignment!.cardRight - atAlignment!.contentRight) <= 1,
+        atAlignment,
+      );
+
+      const xssMessage = page.locator('#messages .msg').filter({ hasText: xssMarker });
+      await xssMessage.scrollIntoViewIfNeeded();
+      await xssMessage.locator('.msg-file-name').filter({ hasText: xssFileName }).waitFor();
+      checkEqual(
+        '文件名含标签与引号按 textContent 渲染',
+        await xssMessage.locator('.msg-file-name').textContent(),
+        xssFileName,
+      );
+      checkEqual(
+        '文件名不解析 HTML',
+        await xssMessage.locator('.msg-file-name b, .msg-file-name img').count(),
+        0,
+      );
+      checkEqual(
+        '卡片无内联事件属性',
+        await xssMessage.locator('.msg-file [onerror], .msg-file [onclick]').count(),
+        0,
+      );
+
+      const newlineMessage = page.locator('#messages .msg').filter({ hasText: newlineMarker });
+      await newlineMessage.scrollIntoViewIfNeeded();
+      await newlineMessage
+        .locator('.msg-file-name')
+        .filter({ hasText: '<b>恶意</b>' })
+        .waitFor();
+      checkEqual(
+        '文件名换行清洗为空格',
+        await newlineMessage.locator('.msg-file-name').textContent(),
+        '<b>恶意</b>"引号" 换行.txt',
+      );
+      checkEqual(
+        '换行文件名不解析 HTML',
+        await newlineMessage.locator('.msg-file-name b, .msg-file-name img').count(),
+        0,
+      );
+      checkEqual('未触发脚本对话框', dialogs, 0);
+
+      await page.locator(roomLink(data.group.room.room_id)).click();
+      await waitRoom(page, data.group.room.room_id, '测试群');
+      await page.locator(roomLink(cardRoomId)).click();
+      await waitRoom(page, cardRoomId, '卡片文件群');
+      await dedupeMessage.locator('.msg-file').nth(1).waitFor();
+      checkEqual(
+        '切换房间后命中成功缓存',
+        await dedupeMessage.locator(`.msg-file[data-file-id="${dedupeOne.fileId}"]`).count(),
+        1,
+      );
+      checkEqual(
+        '缓存卡片立即恢复 HEAD 文件名',
+        await dedupeMessage.locator('.msg-file-name').filter({ hasText: '去重文件.txt' }).count(),
+        1,
+      );
+      checkEqual('成功缓存 5 分钟内不重复 HEAD', headCount(headObserver, dedupeOne.fileId), 1);
+      await failureMessage.locator('.msg-file.unavailable').waitFor();
+      checkEqual('失败缓存 60 秒内不重复 HEAD', headCount(headObserver, failureId), 1);
+
+      const mobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await mobile.page.goto(`${server.base}/c/${cardRoomId}`);
+      await waitRoom(mobile.page, cardRoomId, '卡片文件群');
+      const mobileLongMessage = mobile.page
+        .locator('#messages .msg')
+        .filter({ hasText: longNameMarker });
+      await mobileLongMessage.scrollIntoViewIfNeeded();
+      await mobileLongMessage
+        .locator('.msg-file-name')
+        .filter({ hasText: '超长文件名' })
+        .first()
+        .waitFor();
+      const mobileMetrics = (await mobile.page.evaluate(`(() => {
+        const messages = document.getElementById('messages');
+        const msg = Array.from(messages.querySelectorAll('.msg')).find(function (item) {
+          return item.textContent && item.textContent.indexOf(${JSON.stringify(longNameMarker)}) >= 0;
+        });
+        if (!msg) return null;
+        const card = msg.querySelector('.msg-file');
+        const name = msg.querySelector('.msg-file-name');
+        if (!card || !name) return null;
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          cardRight: card.getBoundingClientRect().right,
+          listScroll: messages.scrollWidth,
+          listClient: messages.clientWidth,
+          nameScroll: name.scrollWidth,
+          nameClient: name.clientWidth
+        };
+      })()`)) as {
+        view: number;
+        doc: number;
+        cardRight: number;
+        listScroll: number;
+        listClient: number;
+        nameScroll: number;
+        nameClient: number;
+      } | null;
+      check(
+        '390px 卡片不横向溢出',
+        Boolean(mobileMetrics) &&
+          mobileMetrics!.doc <= mobileMetrics!.view &&
+          mobileMetrics!.cardRight <= mobileMetrics!.view + 1,
+        mobileMetrics,
+      );
+      check(
+        '390px 消息区不横向滚动',
+        Boolean(mobileMetrics) && mobileMetrics!.listScroll <= mobileMetrics!.listClient + 1,
+        mobileMetrics,
+      );
+      check(
+        '390px 长文件名约束在卡片内',
+        Boolean(mobileMetrics) && mobileMetrics!.nameScroll <= mobileMetrics!.nameClient + 1,
+        mobileMetrics,
+      );
+      await mobile.context.close();
       await context.close();
     }
 

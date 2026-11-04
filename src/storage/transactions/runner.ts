@@ -1,3 +1,4 @@
+import { LIMITS } from '../../contracts/limits';
 import { BusinessError, type BusinessErrorCode } from '../../contracts/errors';
 import { guardMessageMatch } from '../guards';
 import type { OperationRow } from '../rows';
@@ -22,6 +23,8 @@ const GUARD_CODES: Record<string, BusinessErrorCode> = {
   recoveryInvalid: 'RECOVERY_INVALID',
   roomFileLimit: 'ROOM_FILE_LIMIT',
   notFileOwner: 'NOT_OWNER',
+  eventSubscriptionLimit: 'RESOURCE_EXHAUSTED',
+  eventSubscriptionGlobal: 'RESOURCE_EXHAUSTED',
 };
 
 const GUARD_MESSAGES: Record<string, string> = {
@@ -38,6 +41,20 @@ const GUARD_MESSAGES: Record<string, string> = {
   recoveryInvalid: '恢复 ticket 无效、已过期或已被使用',
   roomFileLimit: '房间文件数量或总大小达到上限',
   notFileOwner: '只有上传者或群 owner 可以删除该文件',
+  eventSubscriptionLimit: '该身份的事件订阅数量达到上限',
+  eventSubscriptionGlobal: '全局事件订阅数量达到上限',
+};
+
+/** 限额类 guard 的稳定 data，供 MCP Events 映射 -32025。 */
+const GUARD_DETAILS: Record<string, Record<string, unknown>> = {
+  eventSubscriptionLimit: {
+    limit: 'subscriptions',
+    max: LIMITS.eventsSubscriptionsPerActor,
+  },
+  eventSubscriptionGlobal: {
+    limit: 'global_subscriptions',
+    max: LIMITS.eventsSubscriptionsGlobal,
+  },
 };
 
 /** 把 D1 batch 抛出的约束错误映射成有类型的业务错误。 */
@@ -48,7 +65,11 @@ export function mapBatchError(error: unknown): BusinessError | null {
   }
   const guard = guardMessageMatch(text);
   if (guard) {
-    return new BusinessError(GUARD_CODES[guard] ?? 'CONFLICT', GUARD_MESSAGES[guard] ?? '事务条件不满足');
+    return new BusinessError(
+      GUARD_CODES[guard] ?? 'CONFLICT',
+      GUARD_MESSAGES[guard] ?? '事务条件不满足',
+      GUARD_DETAILS[guard],
+    );
   }
   return null;
 }

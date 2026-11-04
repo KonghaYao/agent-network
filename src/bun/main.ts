@@ -3,8 +3,10 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import { createApp, runScheduled } from '../app';
+import { LIMITS } from '../contracts/limits';
 import { createDrive } from '../drive/service';
-import type { Env } from '../env';
+import type { Env, EventsConfig } from '../env';
+import { loadEncryptionKey } from '../events/security';
 import type { FileMount } from '@peri-code/mcpp/files';
 import { NotificationHub } from '../realtime/hub';
 import { createD1 } from './d1';
@@ -13,6 +15,64 @@ import { migrate } from './migrate';
 function positiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseAllowlist(value: string | undefined): ReadonlySet<string> | null {
+  if (!value) return null;
+  const hosts = value
+    .split(',')
+    .map((host) => host.trim().toLowerCase())
+    .filter((host) => host.length > 0);
+  return hosts.length > 0 ? new Set(hosts) : null;
+}
+
+/**
+ * MCP Events 配置 fail closed：
+ * - 必须显式 EVENTS_ENABLED=1 且 EVENTS_ENCRYPTION_KEY 是 base64 32 字节；
+ * - 任一缺失/非法只告警一次，不声明 events、不注册方法；
+ * - EVENTS_TEST_ALLOW_PRIVATE 只能与 ENVIRONMENT=test 一起使用。
+ */
+async function loadEventsConfig(environment: string): Promise<EventsConfig | undefined> {
+  const allowPrivateRequested = process.env.EVENTS_TEST_ALLOW_PRIVATE === '1';
+  if (allowPrivateRequested && environment !== 'test') {
+    throw new Error('EVENTS_TEST_ALLOW_PRIVATE is only allowed when ENVIRONMENT=test');
+  }
+  if (process.env.EVENTS_ENABLED !== '1') return undefined;
+
+  const rawKey = process.env.EVENTS_ENCRYPTION_KEY;
+  if (!rawKey) {
+    console.warn('MCP Events disabled: EVENTS_ENCRYPTION_KEY is required when EVENTS_ENABLED=1');
+    return undefined;
+  }
+  const encryptionKey = await loadEncryptionKey(rawKey);
+  if (!encryptionKey) {
+    console.warn(
+      'MCP Events disabled: EVENTS_ENCRYPTION_KEY must be base64-encoded 32 bytes',
+    );
+    return undefined;
+  }
+
+  const allowPrivateCallbacks = environment === 'test' && allowPrivateRequested;
+  return {
+    encryptionKey,
+    callbackAllowlist: parseAllowlist(process.env.EVENTS_CALLBACK_ALLOWLIST),
+    allowPrivateCallbacks,
+    ...(allowPrivateCallbacks && process.env.EVENTS_TEST_CA
+      ? { tlsCa: process.env.EVENTS_TEST_CA }
+      : {}),
+    verificationTimeoutMs: positiveInt(
+      process.env.EVENTS_VERIFICATION_TIMEOUT_MS,
+      LIMITS.eventsVerificationTimeoutMs,
+    ),
+    deliveryTimeoutMs: positiveInt(
+      process.env.EVENTS_WEBHOOK_TIMEOUT_MS,
+      LIMITS.eventsWebhookTimeoutMs,
+    ),
+    verificationPerHostPerMinute: positiveInt(
+      process.env.EVENTS_VERIFICATION_PER_HOST_PER_MINUTE,
+      LIMITS.eventsVerificationPerHostPerMinute,
+    ),
+  };
 }
 
 const port = positiveInt(process.env.PORT, 8792);
@@ -30,12 +90,22 @@ if (applied.length > 0) {
   console.log(`applied migrations: ${applied.join(', ')}`);
 }
 
+const environment = process.env.ENVIRONMENT ?? 'development';
+const eventsConfig = await loadEventsConfig(environment);
+
 const env: Env = {
   DB: createD1(db),
   NOTIFICATION_HUB: new NotificationHub(db),
-  ENVIRONMENT: process.env.ENVIRONMENT ?? 'development',
+  ENVIRONMENT: environment,
   PUBLIC_ORIGIN: publicOrigin,
+  ...(eventsConfig ? { EVENTS: eventsConfig } : {}),
 };
+
+if (eventsConfig) {
+  console.log(
+    `MCP Events enabled (callback allowlist: ${eventsConfig.callbackAllowlist ? [...eventsConfig.callbackAllowlist].join(',') : 'none'})`,
+  );
+}
 
 let mount: FileMount | undefined;
 let closeDrive: (() => Promise<void>) | undefined;

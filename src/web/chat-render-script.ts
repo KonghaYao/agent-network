@@ -167,6 +167,8 @@ function messageItem(item) {
   bubble.title = fullTime(item.created_at);
   renderRichText(bubble, item.preview);
   content.append(bubble);
+  let filesElement = mountMessageFiles(item.preview, null);
+  if (filesElement) content.append(filesElement);
   if (item.body_bytes > new TextEncoder().encode(item.preview).length) {
     const expand = document.createElement('button');
     expand.type = 'button';
@@ -175,7 +177,12 @@ function messageItem(item) {
     expand.addEventListener('click', async function () {
       expand.disabled = true;
       try {
-        renderRichText(bubble, await readMessage(item.message_id));
+        const fullText = await readMessage(item.message_id);
+        renderRichText(bubble, fullText);
+        filesElement = mountMessageFiles(fullText, filesElement);
+        if (filesElement && !filesElement.isConnected) {
+          content.insertBefore(filesElement, expand);
+        }
         expand.remove();
       } catch (error) {
         expand.disabled = false;
@@ -198,6 +205,7 @@ function messageItem(item) {
 /** 全量替换消息区；缓存切换与首屏加载共用同一套渲染逻辑。 */
 function renderMessageList(items) {
   if (!messagesElement) return;
+  resetMessageFileCards();
   messagesElement.replaceChildren();
   appendHistory(messagesElement, items);
 }

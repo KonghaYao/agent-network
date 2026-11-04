@@ -10,6 +10,7 @@ import {
 } from './chat-panels';
 import { chatClientScript } from './chat-script';
 import { FILES_STYLE } from './chat-files-styles';
+import { MESSAGE_FILES_STYLE } from './chat-message-files-styles';
 import { APP_STYLE } from './chat-styles';
 import {
   DEVICE_HANDOFF_STYLE,
@@ -44,7 +45,7 @@ ${groupDialog()}
 ${newAgentDialog()}
 ${deviceHandoffDialog()}
 ${chatClientScript(roomId)}`,
-    APP_STYLE + FILES_STYLE + DEVICE_HANDOFF_STYLE,
+    APP_STYLE + FILES_STYLE + MESSAGE_FILES_STYLE + DEVICE_HANDOFF_STYLE,
     { wide: true, bodyClass: isHome ? 'page-home' : 'page-room' },
   );
 }

@@ -1,13 +1,17 @@
 import { McpServer } from '@modelcontextprotocol/server';
+import type { ServerCapabilities } from '@modelcontextprotocol/server';
 import type { FileScope, FileService } from '@peri-code/mcpp/files';
 
 import { registerDriveTool } from '../drive/tool';
 import type { Env } from '../env';
 import type { Principal } from '../domain/principal';
+import { registerEvents } from './events';
 import { registerResources } from './resources';
 import { registerRoomFileTools } from './room-files';
 import { registerSkill } from './skill';
 import { registerTools } from './tools';
+
+type WeBotsCapabilities = ServerCapabilities & { events?: Record<string, unknown> };
 
 export interface DriveBinding {
   fileService: FileService;
@@ -34,21 +38,28 @@ const INSTRUCTIONS = [
 ].join('\n');
 
 export function buildServer(env: Env, principal: Principal, drive?: DriveBinding): McpServer {
+  const instructions = env.EVENTS
+    ? `${INSTRUCTIONS}\nMCP Events：客户端可用 webhook 订阅 agentnet.message.created；事件只含 ID、状态与时间，收到后先用工具读取正文，并按 eventId 去重。`
+    : INSTRUCTIONS;
+  const capabilities: WeBotsCapabilities = {
+    tools: {},
+    resources: { subscribe: true },
+    // SEP-2640：声明 Skills 扩展后，客户端才走 skills/list 发现路径。
+    extensions: { 'io.modelcontextprotocol/skills': {} },
+    // MCP Events 是顶层能力（不是 extensions）；配置无效时不声明。
+    ...(env.EVENTS ? { events: {} } : {}),
+  };
   const server = new McpServer(
     { name: 'peri-agent-network', title: 'WeBots', version: '0.1.0' },
     {
-      capabilities: {
-        tools: {},
-        resources: { subscribe: true },
-        // SEP-2640：声明 Skills 扩展后，客户端才走 skills/list 发现路径。
-        extensions: { 'io.modelcontextprotocol/skills': {} },
-      },
-      instructions: INSTRUCTIONS,
+      capabilities,
+      instructions,
     },
   );
   registerTools(server, env, principal);
   registerResources(server, env, principal);
   registerSkill(server);
+  if (env.EVENTS) registerEvents(server, env, principal);
   if (env.FILES && drive) {
     registerDriveTool(server, {
       ...drive,

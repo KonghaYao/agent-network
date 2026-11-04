@@ -18,6 +18,8 @@ export const GUARD_TABLES = {
   recoveryInvalid: 'guard_recovery_invalid',
   roomFileLimit: 'guard_room_file_limit',
   notFileOwner: 'guard_not_file_owner',
+  eventSubscriptionLimit: 'guard_event_subscription_limit',
+  eventSubscriptionGlobal: 'guard_event_subscription_global',
 } as const;
 
 export type GuardName = keyof typeof GUARD_TABLES;

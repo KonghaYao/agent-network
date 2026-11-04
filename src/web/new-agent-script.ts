@@ -3,8 +3,8 @@
  *
  * 由 `chatClientScript` 拼进主脚本共享作用域，因此可复用
  * `ensureIdentity`、`callTool`、`callToolWithToken`、`requestId` 与
- * `legacyCopyText`。新 Agent 的 token/URL 只保存在本片段的闭包变量与
- * 弹窗输入框里，关闭即清空，不写 localStorage/sessionStorage 或 console。
+ * `legacyCopyText`。新 Agent 的 token/URL/提示词只保存在本片段的闭包变量与
+ * 弹窗输入框/文本区里，关闭即清空，不写 localStorage/sessionStorage 或 console。
  */
 export const NEW_AGENT_SCRIPT = `
 const newAgentButton = document.getElementById('new-agent');
@@ -17,8 +17,12 @@ const newAgentErrorElement = document.getElementById('new-agent-error');
 const newAgentResultElement = document.getElementById('new-agent-result');
 const newAgentUrlInput = document.getElementById('new-agent-url');
 const newAgentShareInput = document.getElementById('new-agent-share');
+const newAgentSkillUrlInput = document.getElementById('new-agent-skill-url');
+const newAgentPromptInput = document.getElementById('new-agent-prompt');
 const newAgentCopyButton = document.getElementById('new-agent-copy');
 const newAgentShareCopyButton = document.getElementById('new-agent-share-copy');
+const newAgentPromptCopyButton = document.getElementById('new-agent-prompt-copy');
+const NEW_AGENT_SKILL_PATH = '/skills/agent-network-curl.md';
 
 let newAgentToken = '';
 let newAgentUrl = '';
@@ -27,6 +31,19 @@ let newAgentCreated = false;
 let newAgentRequestSeq = 0;
 let newAgentOpener = null;
 const newAgentCopyTimers = new Map();
+
+function newAgentSkillUrl() {
+  return location.origin + NEW_AGENT_SKILL_PATH;
+}
+
+/** 纯 URL skill 提示词：只拼接页面内存里的值，不写入 DOM 以外的地方。 */
+function newAgentBuildPrompt(skillUrl, mcpUrl, name) {
+  return '你是 WeBots Agent。请先阅读技能：\\n' + skillUrl +
+    '\\n\\n使用这个 MCP 端点接入（URL 已包含你的 Agent token）：\\n' + mcpUrl +
+    '\\n\\n你的 Agent 名称：' + name +
+    '\\n按技能文档把它作为 AGENTNET_MCP_URL，或从 URL 取出 token 作为 Bearer。' +
+    '\\n先调用 network_me 确认身份，把返回的 share_url 发给用户；之后保持异步监听，收到用户消息后回复。';
+}
 
 function newAgentSetError(message) {
   if (newAgentErrorElement) newAgentErrorElement.textContent = message || '';
@@ -50,6 +67,8 @@ function newAgentReset() {
   newAgentCreated = false;
   if (newAgentUrlInput) newAgentUrlInput.value = '';
   if (newAgentShareInput) newAgentShareInput.value = '';
+  if (newAgentSkillUrlInput) newAgentSkillUrlInput.value = '';
+  if (newAgentPromptInput) newAgentPromptInput.value = '';
   if (newAgentResultElement) newAgentResultElement.hidden = true;
   if (newAgentNameInput) newAgentNameInput.disabled = false;
   if (newAgentCreateButton) {
@@ -59,6 +78,7 @@ function newAgentReset() {
   if (newAgentCloseButton) newAgentCloseButton.disabled = false;
   newAgentResetCopyButton(newAgentCopyButton);
   newAgentResetCopyButton(newAgentShareCopyButton);
+  newAgentResetCopyButton(newAgentPromptCopyButton);
   newAgentSetError('');
 }
 
@@ -184,6 +204,11 @@ async function newAgentCreate(event) {
       newAgentShareInput.value =
         typeof registered.share_url === 'string' ? registered.share_url : '';
     }
+    const skillUrl = newAgentSkillUrl();
+    if (newAgentSkillUrlInput) newAgentSkillUrlInput.value = skillUrl;
+    if (newAgentPromptInput) {
+      newAgentPromptInput.value = newAgentBuildPrompt(skillUrl, newAgentUrl, name);
+    }
     if (newAgentResultElement) newAgentResultElement.hidden = false;
     if (newAgentCreateButton) {
       newAgentCreateButton.disabled = true;
@@ -204,6 +229,8 @@ async function newAgentCreate(event) {
     newAgentUrl = '';
     if (newAgentUrlInput) newAgentUrlInput.value = '';
     if (newAgentShareInput) newAgentShareInput.value = '';
+    if (newAgentSkillUrlInput) newAgentSkillUrlInput.value = '';
+    if (newAgentPromptInput) newAgentPromptInput.value = '';
     if (newAgentResultElement) newAgentResultElement.hidden = true;
     if (newAgentCreateButton) {
       newAgentCreateButton.disabled = false;
@@ -232,6 +259,11 @@ if (newAgentCopyButton) {
 if (newAgentShareCopyButton) {
   newAgentShareCopyButton.addEventListener('click', function () {
     newAgentCopy(newAgentShareCopyButton, newAgentShareInput, '分享链接');
+  });
+}
+if (newAgentPromptCopyButton) {
+  newAgentPromptCopyButton.addEventListener('click', function () {
+    newAgentCopy(newAgentPromptCopyButton, newAgentPromptInput, '提示词');
   });
 }
 `;

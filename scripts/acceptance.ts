@@ -5,6 +5,9 @@
  * 通过 AGENTNET_URL 可对本地 wrangler dev 或部署后的 Cloudflare 服务运行。
  */
 
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
 import {
   baseUrl,
   callTool,
@@ -38,6 +41,12 @@ import {
 } from './lib/acceptance-helpers';
 import { runUnifiedStreamAcceptance } from './lib/stream-acceptance';
 import { runRoomFileAcceptance } from './lib/room-file-acceptance';
+import {
+  ensureTestCertificate,
+  removeTestData,
+  startTestReceiver,
+} from './lib/events-harness';
+import { runEventsAcceptance } from './lib/events-acceptance';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META = 'io.agent-network/event';
@@ -69,6 +78,58 @@ function hasStreamItem(
 
 async function main(): Promise<void> {
   console.log(`端到端验收: ${baseUrl()}`);
+
+  const discover = await rawRpc('server/discover');
+  const discoverResult = discover.body.result as
+    | { capabilities?: { events?: unknown } }
+    | undefined;
+  if (discoverResult?.capabilities?.events !== undefined) {
+    check('server/discover 声明 events', true);
+    const eventsList = await rawRpc('events/list');
+    const eventsResult = eventsList.body.result as
+      | { events?: { name?: string }[] }
+      | undefined;
+    check(
+      'events/list 返回 agentnet.message.created',
+      eventsResult?.events?.[0]?.name === 'agentnet.message.created',
+      eventsResult,
+    );
+    const unauth = await rawRpc('events/subscribe', {
+      name: 'agentnet.message.created',
+      arguments: {},
+      delivery: {
+        mode: 'webhook',
+        url: 'https://127.0.0.1:9/callback',
+        secret: `whsec_${Buffer.from('01234567890123456789012345678901').toString('base64')}`,
+      },
+    });
+    const unauthError = unauth.body.error as { code?: number } | undefined;
+    checkEqual('未注册身份 events/subscribe 返回 -32024', unauthError?.code, -32024);
+
+    if (process.env.EVENTS_ACCEPTANCE === '1') {
+      const directory = join(
+        tmpdir(),
+        `an-events-acceptance-${crypto.randomUUID().replaceAll('-', '')}`,
+      );
+      const certificate = await ensureTestCertificate(join(directory, 'certs'));
+      const receiver = startTestReceiver({ certificate });
+      try {
+        const secret = `whsec_${Buffer.from(
+          crypto.getRandomValues(new Uint8Array(32)),
+        ).toString('base64')}`;
+        await runEventsAcceptance({ receiver, secret });
+      } finally {
+        receiver.stop();
+        removeTestData(directory);
+      }
+    } else {
+      console.log(
+        '  · events 已声明但未设置 EVENTS_ACCEPTANCE=1，跳过本地 webhook 闭环',
+      );
+    }
+  } else {
+    console.log('  · 目标未声明 events 能力，跳过 MCP Events 验收');
+  }
 
   const agentA = await connectClient(newToken());
   const agentB = await connectClient(newToken());

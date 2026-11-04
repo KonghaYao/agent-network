@@ -19,6 +19,7 @@ export type BusinessErrorCode =
   | 'FILE_UNAVAILABLE'
   | 'DRIVE_UNAVAILABLE'
   | 'ROOM_FILE_LIMIT'
+  | 'RESOURCE_EXHAUSTED'
   | 'CONFLICT';
 
 export interface BusinessErrorBody {

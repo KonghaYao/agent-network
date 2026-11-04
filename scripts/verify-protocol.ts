@@ -58,13 +58,120 @@ async function main(): Promise<void> {
   checkEqual('discover ttlMs 为 0', discoverResult?.ttlMs, 0);
   checkEqual('discover cacheScope 为 private', discoverResult?.cacheScope, 'private');
   const discoverCapabilities = discoverResult?.capabilities as
-    | { extensions?: Record<string, unknown> }
+    | { extensions?: Record<string, unknown>; events?: unknown }
     | undefined;
   check(
     'server/discover 声明 Skills 扩展',
     discoverCapabilities?.extensions?.['io.modelcontextprotocol/skills'] !== undefined,
     discoverCapabilities?.extensions,
   );
+
+  if (discoverCapabilities?.events !== undefined) {
+    check('server/discover 声明顶层 events', discoverCapabilities.events !== null, discoverCapabilities);
+    checkEqual(
+      'events 是顶层能力而不是扩展',
+      (discoverCapabilities.extensions as Record<string, unknown> | undefined)?.events,
+      undefined,
+    );
+
+    const eventsList = await rawRpc('events/list');
+    const eventsResult = eventsList.body.result as
+      | { events?: Record<string, unknown>[]; resultType?: string; _meta?: unknown }
+      | undefined;
+    check('events/list 返回事件目录', Array.isArray(eventsResult?.events), eventsResult);
+    checkEqual('events/list 只有一个事件', eventsResult?.events?.length, 1);
+    const eventDefinition = eventsResult?.events?.[0] ?? {};
+    checkEqual('事件名为 agentnet.message.created', eventDefinition.name, 'agentnet.message.created');
+    checkEqual(
+      '事件 delivery 只有 webhook',
+      JSON.stringify(eventDefinition.delivery),
+      '["webhook"]',
+    );
+    checkEqual(
+      'events/list inputSchema additionalProperties:false',
+      (eventDefinition.inputSchema as Record<string, unknown>)?.additionalProperties,
+      false,
+    );
+    checkEqual(
+      'events/list payloadSchema additionalProperties:false',
+      (eventDefinition.payloadSchema as Record<string, unknown>)?.additionalProperties,
+      false,
+    );
+    checkEqual('events/list 保留 resultType', eventsResult?.resultType, 'complete');
+    console.log(
+      `  · events/list wire shape: result keys = ${Object.keys(eventsResult ?? {}).join(',')}`,
+    );
+
+    const unauthSubscribe = await rawRpc('events/subscribe', {
+      name: 'agentnet.message.created',
+      arguments: {},
+      delivery: {
+        mode: 'webhook',
+        url: 'https://127.0.0.1:9/callback',
+        secret: `whsec_${Buffer.from('01234567890123456789012345678901').toString('base64')}`,
+      },
+    });
+    const unauthError = unauthSubscribe.body.error as { code?: number } | undefined;
+    checkEqual('未注册身份 events/subscribe 返回 -32024', unauthError?.code, -32024);
+
+    const eventsAgentToken = newToken();
+    const eventsAgent = await connectClient(eventsAgentToken);
+    try {
+      await callTool(eventsAgent.client, 'network_register', {
+        request_id: newRequestId('reg-events'),
+        kind: 'agent',
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+        name: 'Events 协议验收',
+      });
+      const invalidUrl = await rawRpc(
+        'events/subscribe',
+        {
+          name: 'agentnet.message.created',
+          arguments: {},
+          delivery: {
+            mode: 'webhook',
+            url: 'http://127.0.0.1:9/callback',
+            secret: `whsec_${Buffer.from('01234567890123456789012345678901').toString('base64')}`,
+          },
+        },
+        { token: eventsAgentToken },
+      );
+      const invalidUrlError = invalidUrl.body.error as { code?: number } | undefined;
+      checkEqual('非 HTTPS callback 返回 -32602', invalidUrlError?.code, -32602);
+
+      const nonMember = await rawRpc(
+        'events/subscribe',
+        {
+          name: 'agentnet.message.created',
+          arguments: { room_id: 'room_missing_events' },
+          delivery: {
+            mode: 'webhook',
+            url: 'https://127.0.0.1:9/callback',
+            secret: `whsec_${Buffer.from('01234567890123456789012345678901').toString('base64')}`,
+          },
+        },
+        { token: eventsAgentToken },
+      );
+      const nonMemberError = nonMember.body.error as { code?: number } | undefined;
+      checkEqual('非成员 room_id 返回 -32024', nonMemberError?.code, -32024);
+
+      const invalidSecret = await rawRpc(
+        'events/subscribe',
+        {
+          name: 'agentnet.message.created',
+          arguments: {},
+          delivery: { mode: 'webhook', url: 'https://127.0.0.1:9/callback', secret: 'not-a-secret' },
+        },
+        { token: eventsAgentToken },
+      );
+      const invalidSecretError = invalidSecret.body.error as { code?: number } | undefined;
+      checkEqual('非法 secret 返回 -32602', invalidSecretError?.code, -32602);
+    } finally {
+      await eventsAgent.close();
+    }
+  } else {
+    console.log('  · 目标未声明 events 能力（EVENTS_ENABLED != 1），跳过 events 协议断言');
+  }
 
   const inconsistent = await rawRpc('initialize', {
     protocolVersion: '2025-06-18',
