@@ -188,7 +188,9 @@ export function membersDialog(): string {
 /**
  * 新建 Agent 弹窗：名称输入与一次性 MCP URL。
  *
- * token 只保存在页面内存；关闭后清空输入与结果，不写 localStorage。
+ * token 与 MCP URL 在创建时只存在于页面内存与只读输入框；注册成功后
+ * 该 Agent 自己的 MCP URL 会写入当前 human 的本地 Agents 注册表，供会话
+ * 右键提示词复用。提示词与 human token 不写入注册表。
  * 结果区默认隐藏，注册成功后才显示，避免把失败请求的 URL 当可用凭据。
  */
 export function newAgentDialog(): string {
@@ -200,7 +202,7 @@ export function newAgentDialog(): string {
         <input id="new-agent-name" maxlength="${LIMITS.actorNameMax}" placeholder="例如：翻译助手"
           autocomplete="off" required>
       </label>
-      <p class="new-agent-warning">MCP URL 是长期凭据，只显示一次。关闭弹窗后无法再次查看；不要截图、发群或写入日志。</p>
+      <p class="new-agent-warning">MCP URL 含长期 token，创建成功后保存在此浏览器的 Agents 注册表，供会话右键提示词使用。localStorage 可被同源脚本读取：只在本机使用，不要截图、发群或写入日志；泄露需新建 Agent 或撤销。</p>
       <p id="new-agent-error" class="form-error" role="status"></p>
       <div id="new-agent-result" class="new-agent-result" hidden>
         <label class="field">MCP URL
@@ -213,7 +215,7 @@ export function newAgentDialog(): string {
         <button class="new-agent-copy" id="new-agent-share-copy" type="button">复制分享链接</button>
         <p class="new-agent-hint">把分享链接发给对方，对方打开后可添加这个 Agent 为好友。</p>
         <div class="new-agent-prompt">
-          <p class="new-agent-warning">提示词包含 MCP URL 凭据，只显示一次，关闭后无法再次查看；不要发群、截图或写日志。</p>
+          <p class="new-agent-warning">提示词包含 MCP URL 凭据；不要发群、截图或写日志。关闭弹窗后仍可右键该 Agent 的会话重新生成。</p>
           <label class="field">技能 URL
             <input id="new-agent-skill-url" readonly>
           </label>
@@ -237,7 +239,8 @@ export function newAgentDialog(): string {
  * Agents 管理弹窗：本地注册表 + 服务端归档状态。
  *
  * 默认只显示未归档条目；已归档分组必须点“显示已归档”才展开，每次重开
- * 都重置为隐藏。列表仅在浏览器本地保存，不包含 token、MCP URL 或提示词。
+ * 都重置为隐藏。列表仅在浏览器本地保存；注册表包含各 Agent 自己的 MCP
+ * URL（敏感），但不包含 human token、提示词或 share_url。
  */
 export function agentsDialog(): string {
   return `<div class="modal" id="agents-modal" hidden>
@@ -246,7 +249,7 @@ export function agentsDialog(): string {
       <h2 id="agents-title">Agents</h2>
       <button class="agents-toggle" id="agents-toggle" type="button" aria-pressed="false">显示已归档 (0)</button>
     </div>
-    <p class="agents-hint">列表仅保存在此浏览器，清除站点数据会丢失。MCP URL 与 token 只在创建时显示一次，归档不会恢复 MCP URL/token。</p>
+    <p class="agents-hint">列表与其中保存的 Agent MCP URL（含长期 token）仅保存在此浏览器；localStorage 可被同源脚本读取，只在本机使用，不要发群、截图或写日志。清除站点数据会丢失记录，但 Agent 身份仍存在；归档不会恢复 MCP URL/token，泄露需新建 Agent 或撤销。</p>
     <p id="agents-note" class="agents-note" role="status"></p>
     <p id="agents-error" class="form-error" role="alert"></p>
     <div id="agents-active-section">

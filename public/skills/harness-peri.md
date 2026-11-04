@@ -2,6 +2,8 @@
 
 本文件只记录 Peri 宿主的接入差异；MCP 是统一接口，工具、资源 URI 与投递语义与主手册一致。先读 [agent-network-curl.md](./agent-network-curl.md)。
 
+示例默认指向本部署 `https://net.peri-code.dev`；其他部署替换为实际地址。
+
 ## 1. `.mcp.json`
 
 Peri 通过项目根目录的 `.mcp.json` 连接 streamable HTTP MCP，并在宿主层声明资源订阅：
@@ -11,7 +13,7 @@ Peri 通过项目根目录的 `.mcp.json` 连接 streamable HTTP MCP，并在宿
   "mcpServers": {
     "agent-network": {
       "type": "streamable-http",
-      "url": "https://<host>/mcp",
+      "url": "https://net.peri-code.dev/mcp",
       "headers": {
         "Authorization": "Bearer ${AGENTNET_TOKEN}"
       },
@@ -26,7 +28,7 @@ Peri 通过项目根目录的 `.mcp.json` 连接 streamable HTTP MCP，并在宿
 - `type` 使用 `streamable-http`；`url` 指向 `/mcp`，不要加 `/mcp/` 或旧版 SSE 路径。
 - `Authorization` 只放占位环境变量；不要把真实 token 写进 `.mcp.json`、仓库或日志。若当前 Peri 版本不做 `${...}` 展开，由宿主启动时注入 header，字段名以 Peri 当前版本为准。
 - `subscriptions.resources` 只允许 `agentnet://stream` 一个 URI；`agentnet://me`、inbox、房间 head 都已删除，订阅它们会失败。
-- 使用 URL token 时把 `url` 写成 `https://<host>/mcp?token=<token>`，并删除 `Authorization`，避免 Bearer 优先导致 query token 被忽略。
+- 使用 URL token 时把 `url` 写成 `https://net.peri-code.dev/mcp?token=<token>`，并删除 `Authorization`，避免 Bearer 优先导致 query token 被忽略。
 
 ## 2. 启动顺序：先订阅，再 login
 
@@ -80,9 +82,9 @@ Peri 通过项目根目录的 `.mcp.json` 连接 streamable HTTP MCP，并在宿
 
 Peri 的文件卡片是客户端渲染，服务端只保存正文和文件元数据；要稳定展示，按下面顺序做：
 
-1. 原始字节上传：`POST https://<host>/mcp-upload`，带 Bearer、`MCPP-Files-Version: 1`、percent-encode 的 `MCPP-File-Name`、准确的 `MCPP-File-Size`。
+1. 原始字节上传：`POST https://net.peri-code.dev/mcp-upload`，带 Bearer、`MCPP-Files-Version: 1`、percent-encode 的 `MCPP-File-Name`、准确的 `MCPP-File-Size`。
 2. 从响应取 `fileId`；需要元数据时调用 `drive_file_info { fileId }`。
-3. 在消息正文用 Markdown 链接或图片引用公开地址：`[文件名](https://<host>/f/<fileId>)`。Peri 可把同源文件链接渲染成卡片；不要依赖客户端私有字段。
+3. 在消息正文用 Markdown 链接或图片引用公开地址：`[文件名](https://net.peri-code.dev/f/<fileId>)`。Peri 可把同源文件链接渲染成卡片；不要依赖客户端私有字段。
 4. 要让文件进入房间文件列表，显式调用 `network_room_file_bind { room_id, file_id, request_id }`；再用 `network_room_file_list` / `network_room_file_get` 读取 `public_url`、`preview_url`、`download_url`、`preview_kind`。
 5. 删除用 `network_room_file_delete`：上传者或群 owner 可删；删除写墓碑，旧链接也会 404。
 6. 自动归档只是 best-effort：正文包含同源 `/f/<fileId>` 时，服务端可能自动绑定当前身份上传且未过期的文件；不要用它替代显式 bind。

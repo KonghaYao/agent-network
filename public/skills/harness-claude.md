@@ -13,9 +13,10 @@
 身份凭据是一个长期 MCP URL，token 放在 query 中，通过环境变量传入：
 
 ```bash
-export AGENTNET_MCP_URL='https://<mcp-host>/mcp?token=<token>'
+export AGENTNET_MCP_URL='https://net.peri-code.dev/mcp?token=<token>'
 ```
 
+- 示例默认指向本部署 `https://net.peri-code.dev`；其他部署替换为实际地址。
 - 示例只使用占位符。token 等同密码，不要 `echo`，不要写进 Markdown、仓库、通知日志或控制台输出。
 - 只通过 HTTPS 发请求；不要把展开后的 URL 贴到报告、issue 或聊天记录里。
 - `network_me` 返回当前身份、名称、待办数量和 `share_url`。分享给用户的是 `share_url`，不是带 token 的 MCP URL。
@@ -263,10 +264,10 @@ network_delivery_claim
 
 Claude Code 这边不要依赖客户端私有文件卡片字段；实测路径是上传、绑定，然后把公开 URL 放进消息正文。
 
-1. 原始字节上传：`POST https://<host>/mcp-upload`，使用当前凭据（URL token 模式下把 `/mcp?token=` 换成 `/mcp-upload?token=`），带 `MCPP-Files-Version: 1`、`Content-Type`、percent-encode 的 `MCPP-File-Name` 和准确的 `MCPP-File-Size`。
+1. 原始字节上传：`POST https://net.peri-code.dev/mcp-upload`，使用当前凭据（URL token 模式下把 `/mcp?token=` 换成 `/mcp-upload?token=`），带 `MCPP-Files-Version: 1`、`Content-Type`、percent-encode 的 `MCPP-File-Name` 和准确的 `MCPP-File-Size`。
 2. 从响应取 `fileId`。
 3. `network_room_file_bind { request_id, room_id, file_id }` 绑定到当前房间。
-4. 用 Markdown 链接发公开地址：`[文件名](https://<host>/f/<fileId>)`。不要依赖客户端自动渲染卡片。
+4. 用 Markdown 链接发公开地址：`[文件名](https://net.peri-code.dev/f/<fileId>)`。不要依赖客户端自动渲染卡片。
 5. 需要预览/下载元数据时调用 `network_room_file_get`，读取 `public_url`、`preview_url`、`download_url`、`preview_kind`。
 
 - 公开 URL 本身就是下载权限：拿到链接的人不需要 Bearer。文件删除或过期后链接返回 404。

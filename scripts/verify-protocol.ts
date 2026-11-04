@@ -871,9 +871,10 @@ async function main(): Promise<void> {
       homeHtml.includes('id="new-agent-error"'),
   );
   check(
-    '新建 Agent 弹窗标明 MCP URL 只显示一次且为长期凭据',
-    homeHtml.includes('长期凭据') &&
-      homeHtml.includes('只显示一次') &&
+    '新建 Agent 弹窗标明 MCP URL 保存在本浏览器且为长期凭据',
+    homeHtml.includes('长期 token') &&
+      homeHtml.includes('Agents 注册表') &&
+      homeHtml.includes('localStorage 可被同源脚本读取') &&
       homeHtml.includes('不要截图、发群或写入日志'),
   );
   check(
