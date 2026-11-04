@@ -180,6 +180,15 @@ export const recoveredIdentitySchema = identitySchema.extend({ recovered: z.lite
 
 export const profileResultSchema = identitySchema;
 
+/** 重发结果只在首次响应返回 raw token；重放不返回 token。 */
+export const agentReissueTokenResultSchema = z.object({
+  actor_id: z.string(),
+  token: z.string(),
+  mcp_url: z.string(),
+  revoked_count: z.number(),
+  issued_at: z.string(),
+});
+
 export const agentRenameResultSchema = z.object({
   actor_id: z.string(),
   name: z.string(),

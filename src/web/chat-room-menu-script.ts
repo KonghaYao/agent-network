@@ -16,6 +16,13 @@ const ROOM_MENU_COPYING_LABEL = '正在准备…';
 const ROOM_MENU_COPIED_LABEL = '已复制';
 const ROOM_MENU_COPIED_WITH_CREDENTIALS = '已复制（含凭据，勿转发）';
 const ROOM_MENU_COPIED_WITHOUT_CREDENTIALS = '已复制（未包含凭据）';
+const ROOM_MENU_REISSUE_LABEL = '注销并重发 token';
+const ROOM_MENU_REISSUING_LABEL = '正在重发…';
+const ROOM_MENU_REISSUED_LABEL = '已重发';
+const ROOM_MENU_REISSUE_CONFIRM =
+  '这会注销该 Agent 的旧 token，现有 MCP/SSE/事件连接会失效；新 token 只显示一次。';
+const ROOM_MENU_REISSUED_STATUS = '已重发并复制新提示词；旧连接需改用新 token。';
+const ROOM_MENU_REISSUE_CANCELLED = '已取消重发 token。';
 const ROOM_MENU_MISSING_CREDENTIALS =
   '本浏览器没有保存该 Agent 的 token/MCP URL；请让用户提供，或让用户新建 Agent 并把提示词给你。';
 // URL 会被放进 shell 的双引号 export 行；只接受生成器会产出的 ASCII 字符集，
@@ -62,6 +69,11 @@ function closeRoomMenu() {
     button.textContent = ROOM_MENU_COPY_LABEL;
     button.disabled = false;
   }
+  const reissueButton = document.getElementById('room-menu-reissue-token');
+  if (reissueButton) {
+    reissueButton.textContent = ROOM_MENU_REISSUE_LABEL;
+    reissueButton.disabled = false;
+  }
   roomMenuResetStatus();
 }
 
@@ -88,6 +100,7 @@ function positionRoomMenu(menu, x, y) {
 function openRoomMenu(link, x, y) {
   const menu = roomMenuNode();
   const button = document.getElementById('room-menu-copy-prompt');
+  const reissueButton = document.getElementById('room-menu-reissue-token');
   if (!menu || !button) return;
   const roomId = link.getAttribute('data-room-id') || '';
   if (!roomId) return;
@@ -105,6 +118,13 @@ function openRoomMenu(link, x, y) {
   roomMenuBusy = false;
   button.textContent = ROOM_MENU_COPY_LABEL;
   button.disabled = false;
+  if (reissueButton) {
+    // 只对单聊 Agent 显示；群聊与人类会话不提供注销入口。
+    reissueButton.hidden = !(kind === 'direct' && entry &&
+      entry.peer_actor_id && entry.peer_kind === 'agent');
+    reissueButton.textContent = ROOM_MENU_REISSUE_LABEL;
+    reissueButton.disabled = false;
+  }
   roomMenuResetStatus();
   positionRoomMenu(menu, x, y);
   try {
@@ -140,6 +160,20 @@ function roomMenuPeerFromDetail(detail, me) {
   return others.length === 1 ? others[0] : null;
 }
 
+/** 解析 direct 对方；只在对方是 Agent 时返回，供提示词与重发共用。 */
+async function roomMenuPeerAgent(target, me) {
+  if (target.kind !== 'direct') return null;
+  let peer = target.peer_actor_id
+    ? { actor_id: target.peer_actor_id, kind: target.peer_kind }
+    : null;
+  if (!peer || !peer.kind) {
+    const detail = await callTool('network_room_get', { room_id: target.roomId });
+    peer = roomMenuPeerFromDetail(detail, me);
+  }
+  if (!peer || peer.kind !== 'agent') return null;
+  return peer;
+}
+
 /**
  * 解析提示词凭据：direct 找对方 Agent，group 找房间内第一个有本地
  * MCP URL 的 Agent。需要房间详情且读取失败时抛出，由调用方显示错误。
@@ -159,14 +193,8 @@ async function roomMenuCredentialFor(target, me) {
     }
   }
   if (target.kind === 'direct') {
-    let peer = target.peer_actor_id
-      ? { actor_id: target.peer_actor_id, kind: target.peer_kind }
-      : null;
-    if (!peer || !peer.kind) {
-      const detail = await callTool('network_room_get', { room_id: target.roomId });
-      peer = roomMenuPeerFromDetail(detail, me);
-    }
-    if (!peer || peer.kind !== 'agent') return null;
+    const peer = await roomMenuPeerAgent(target, me);
+    if (!peer) return null;
     return byActor.get(peer.actor_id) || null;
   }
   const detail = await callTool('network_room_get', { room_id: target.roomId });
@@ -223,6 +251,19 @@ function roomAgentPrompt(roomId, roomName, kind, credential) {
   return prompt;
 }
 
+async function roomMenuWriteClipboard(text) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (error) {
+      legacyCopyText(text);
+      return;
+    }
+  }
+  legacyCopyText(text);
+}
+
 async function copyRoomAgentPrompt() {
   const target = roomMenuTarget;
   if (!target || roomMenuBusy) return;
@@ -241,15 +282,7 @@ async function copyRoomAgentPrompt() {
     const credential = await roomMenuCredentialFor(target, me);
     if (roomMenuTarget !== target) return;
     const prompt = roomAgentPrompt(target.roomId, target.roomName, target.kind, credential);
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-      try {
-        await navigator.clipboard.writeText(prompt);
-      } catch (error) {
-        legacyCopyText(prompt);
-      }
-    } else {
-      legacyCopyText(prompt);
-    }
+    await roomMenuWriteClipboard(prompt);
     if (roomMenuTarget !== target) return;
     copied = true;
     if (status) {
@@ -275,6 +308,97 @@ async function copyRoomAgentPrompt() {
       button.disabled = false;
       if (!copied && roomMenuTarget === target) button.textContent = ROOM_MENU_COPY_LABEL;
     }
+  }
+}
+
+/**
+ * 注销当前 direct Agent 的旧 token 并签发新 token。
+ *
+ * token 只在本次响应返回，不进入菜单、页面文本或 console；成功后先写入本地
+ * Agents 注册表，再自动复制新提示词，复制失败时仍可从注册表重新生成。
+ */
+async function reissueRoomAgentToken() {
+  const target = roomMenuTarget;
+  if (!target || roomMenuBusy) return;
+  const status = document.getElementById('room-menu-status');
+  const copyButton = document.getElementById('room-menu-copy-prompt');
+  const button = document.getElementById('room-menu-reissue-token');
+  if (!window.confirm(ROOM_MENU_REISSUE_CONFIRM)) {
+    if (roomMenuTarget === target && status) {
+      status.textContent = ROOM_MENU_REISSUE_CANCELLED;
+      status.hidden = false;
+      status.classList.remove('error', 'ok');
+    }
+    return;
+  }
+  roomMenuBusy = true;
+  if (button) {
+    button.disabled = true;
+    button.textContent = ROOM_MENU_REISSUING_LABEL;
+  }
+  if (copyButton) copyButton.disabled = true;
+  roomMenuResetStatus();
+  let tokenIssued = false;
+  try {
+    const me = await ensureIdentity();
+    if (roomMenuTarget !== target) return;
+    const peer = await roomMenuPeerAgent(target, me);
+    if (!peer) throw new Error('该会话不是单聊 Agent');
+    const local = agentRegistryEntry(me.actor_id, peer.actor_id);
+    const result = await callTool('network_agent_reissue_token', {
+      request_id: requestId('web_agent_reissue'),
+      actor_id: peer.actor_id
+    });
+    tokenIssued = true;
+    const credential = result ? roomMenuCredential(result.mcp_url) : null;
+    if (!result || !credential || credential.token !== result.token ||
+        result.actor_id !== peer.actor_id) {
+      throw new Error('重发结果不完整');
+    }
+    const name = roomMenuSafeName(
+      local.item ? local.item.name : target.roomName,
+      'Agent',
+      ROOM_MENU_AGENT_NAME_MAX
+    );
+    // 先持久化新 URL，再复制；即使复制失败也能从注册表重新生成提示词。
+    const registryError = agentRegistryReissue(me.actor_id, peer.actor_id, credential.mcpUrl, {
+      name: name,
+      agent_session_id: local.item ? local.item.agent_session_id : null,
+      created_at: local.item ? local.item.created_at : String(Date.now())
+    });
+    const prompt = roomAgentPrompt(target.roomId, target.roomName, target.kind, {
+      mcpUrl: credential.mcpUrl,
+      token: credential.token,
+      name: name,
+      actorId: result.actor_id
+    });
+    await roomMenuWriteClipboard(prompt);
+    if (roomMenuTarget !== target) return;
+    if (status) {
+      status.textContent = registryError
+        ? ROOM_MENU_REISSUED_STATUS + '本地 Agent 列表保存失败：' + registryError
+        : ROOM_MENU_REISSUED_STATUS;
+      status.hidden = false;
+      status.classList.toggle('error', Boolean(registryError));
+      status.classList.toggle('ok', !registryError);
+    }
+    if (button) button.textContent = ROOM_MENU_REISSUED_LABEL;
+  } catch (error) {
+    if (roomMenuTarget !== target) return;
+    const detail = error && error.message ? error.message : String(error);
+    if (status) {
+      status.textContent = tokenIssued
+        ? '新 token 已签发，但后续处理失败：' + detail + '；请重新打开菜单复制提示词。'
+        : '重发失败：' + detail;
+      status.hidden = false;
+      status.classList.remove('ok');
+      status.classList.add('error');
+    }
+    if (button) button.textContent = tokenIssued ? ROOM_MENU_REISSUED_LABEL : ROOM_MENU_REISSUE_LABEL;
+  } finally {
+    roomMenuBusy = false;
+    if (button) button.disabled = false;
+    if (copyButton) copyButton.disabled = false;
   }
 }
 
@@ -334,6 +458,12 @@ const roomMenuCopyButton = document.getElementById('room-menu-copy-prompt');
 if (roomMenuCopyButton) {
   roomMenuCopyButton.addEventListener('click', function () {
     copyRoomAgentPrompt().catch(function () {});
+  });
+}
+const roomMenuReissueButton = document.getElementById('room-menu-reissue-token');
+if (roomMenuReissueButton) {
+  roomMenuReissueButton.addEventListener('click', function () {
+    reissueRoomAgentToken().catch(function () {});
   });
 }
 

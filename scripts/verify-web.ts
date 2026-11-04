@@ -11,6 +11,7 @@
 import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { Database } from 'bun:sqlite';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 
 import { extractMessageFileLinks } from '../src/contracts/file-links';
@@ -85,7 +86,11 @@ function requestId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`;
 }
 
-async function startServer(): Promise<{ base: string; stop: () => Promise<void> }> {
+async function startServer(): Promise<{
+  base: string;
+  dataDir: string;
+  stop: () => Promise<void>;
+}> {
   const port = 18900 + Math.floor(Math.random() * 700);
   const base = `http://127.0.0.1:${port}`;
   const dataDir = `/tmp/agentnet-web-${process.pid}-${Date.now()}`;
@@ -121,6 +126,7 @@ async function startServer(): Promise<{ base: string; stop: () => Promise<void> 
   }
   return {
     base,
+    dataDir,
     async stop() {
       proc.kill();
       await proc.exited.catch(() => undefined);
@@ -4705,6 +4711,449 @@ async function main(): Promise<void> {
       );
       checkEqual('asset 404 无未处理页面错误', fallbackUnexpected.length, 0);
       await fallback.context.close();
+    }
+
+    // 2f. Agent token 注销重发：二次确认、取消、成功自动复制、失败、入口限制、移动端与 DB 不落原文。
+    {
+      interface RegistryItem {
+        owner_actor_id: string;
+        actor_id: string;
+        name: string;
+        agent_session_id: string | null;
+        created_at: string;
+        mcp_url: string;
+      }
+      interface RegistryFile {
+        v: number;
+        items: RegistryItem[];
+      }
+
+      const reissueOldToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+      const reissueAgent = await rawTool<Actor>(reissueOldToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'agent',
+        name: '重发验收 Agent',
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      await rawTool(data.humanToken, 'network_contact_add', {
+        request_id: requestId('contact'),
+        agent_session_id: reissueAgent.agent_session_id,
+      });
+      const reissueRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [reissueAgent.actor_id],
+      });
+      const humanPeerToken = crypto.randomUUID();
+      const humanPeer = await rawTool<Actor>(humanPeerToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'human',
+        name: '重发人类目标',
+      });
+      const humanPeerRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [humanPeer.actor_id],
+      });
+      const reissueOldUrl = `${server.base}/mcp?token=${reissueOldToken}`;
+      const reissueLink = roomLink(reissueRoom.room.room_id);
+      const humanPeerLink = roomLink(humanPeerRoom.room.room_id);
+
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator(reissueLink).waitFor();
+      await page.waitForFunction(
+        `(() => {
+          const link = document.querySelector(${JSON.stringify(reissueLink)});
+          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(reissueAgent.name)}));
+        })()`,
+      );
+      await page.waitForFunction(
+        `(() => {
+          const link = document.querySelector(${JSON.stringify(humanPeerLink)});
+          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(humanPeer.name)}));
+        })()`,
+      );
+      const seedReissueRegistry = async (mcpUrl: string): Promise<void> => {
+        await page.evaluate(
+          (entry) => localStorage.setItem('agent-network-agents-v1', entry),
+          JSON.stringify({
+            v: 1,
+            items: [
+              {
+                owner_actor_id: data.human.actor_id,
+                actor_id: reissueAgent.actor_id,
+                name: reissueAgent.name,
+                agent_session_id: reissueAgent.agent_session_id,
+                created_at: String(Date.now()),
+                mcp_url: mcpUrl,
+              },
+            ],
+          }),
+        );
+      };
+      const readRegistry = async (): Promise<RegistryFile> =>
+        JSON.parse(
+          (await page.evaluate(`localStorage.getItem('agent-network-agents-v1')`)) as string,
+        ) as RegistryFile;
+      await seedReissueRegistry(reissueOldUrl);
+      await page.evaluate(`(() => {
+        window.__copiedRoomPrompt = null;
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: function (text) {
+              window.__copiedRoomPrompt = text;
+              return Promise.resolve();
+            }
+          }
+        });
+        window.__consoleText = '';
+        ['log', 'info', 'debug', 'warn'].forEach(function (method) {
+          const original = console[method];
+          console[method] = function () {
+            window.__consoleText += Array.prototype.map.call(arguments, String).join(' ') + '\\n';
+            return original.apply(console, arguments);
+          };
+        });
+      })()`);
+
+      await page.locator(reissueLink).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      check(
+        'direct Agent 会话右键显示重发 token 入口',
+        await page.locator('#room-menu-reissue-token').isVisible(),
+      );
+      check(
+        '重发入口不展示旧 token',
+        !((await page.locator('#room-menu').innerText()) ?? '').includes(reissueOldToken),
+      );
+
+      let cancelMessage = '';
+      page.once('dialog', async (dialog) => {
+        cancelMessage = dialog.message();
+        await dialog.dismiss();
+      });
+      const reissueCallsBefore = await mcpCallCount(page, 'network_agent_reissue_token');
+      await page.locator('#room-menu-reissue-token').click();
+      await page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已取消重发 token。'`,
+      );
+      check(
+        '重发二次确认说明旧连接失效且 token 只显示一次',
+        cancelMessage.includes('现有 MCP/SSE/事件连接会失效') &&
+          cancelMessage.includes('只显示一次'),
+        cancelMessage,
+      );
+      checkEqual(
+        '取消重发不调用工具',
+        await mcpCallCount(page, 'network_agent_reissue_token'),
+        reissueCallsBefore,
+      );
+      const stillOld = await rawTool<Actor>(reissueOldToken, 'network_me', {});
+      checkEqual('取消后旧 token 仍有效', stillOld.actor_id, reissueAgent.actor_id);
+
+      page.once('dialog', async (dialog) => {
+        await dialog.accept();
+      });
+      await page.locator('#room-menu-reissue-token').click();
+      await page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已重发并复制新提示词；旧连接需改用新 token。'`,
+      );
+      const reissuePrompt = (await page.evaluate('window.__copiedRoomPrompt')) as string | null;
+      const registryAfterReissue = await readRegistry();
+      const reissueEntry = registryAfterReissue.items.find(
+        (item) => item.actor_id === reissueAgent.actor_id,
+      );
+      const reissuedUrl = reissueEntry?.mcp_url ?? '';
+      const reissuedToken = new URL(reissuedUrl).searchParams.get('token') ?? '';
+      check(
+        '重发后本地注册表 URL 包含新 token 且旧 token 被替换',
+        Boolean(reissueEntry) &&
+          reissuedUrl.startsWith(`${server.base}/mcp?token=`) &&
+          reissuedToken.length > 20 &&
+          reissuedToken !== reissueOldToken,
+        { url: reissuedUrl.replace(/token=[^&]+/u, 'token=<redacted>') },
+      );
+      check(
+        '重发后自动复制含新凭据的提示词',
+        Boolean(reissuePrompt) &&
+          reissuePrompt!.includes(`AGENTNET_MCP_URL="${reissuedUrl}"`) &&
+          reissuePrompt!.includes(`AGENTNET_TOKEN="${reissuedToken}"`) &&
+          !reissuePrompt!.includes(reissueOldToken),
+      );
+      check(
+        '重发提示词仍包含房间、技能 URL、Agent 身份与安全提示',
+        Boolean(reissuePrompt) &&
+          reissuePrompt!.includes(reissueRoom.room.room_id) &&
+          reissuePrompt!.includes(reissueAgent.name) &&
+          reissuePrompt!.includes(`${server.base}/skills/agent-network-curl.md`) &&
+          reissuePrompt!.includes('凭据只给目标 Agent，勿发群、日志或截图'),
+        reissuePrompt,
+      );
+      check(
+        '重发后菜单与页面文本不展示新 token',
+        !((await page.locator('#room-menu').innerText()) ?? '').includes(reissuedToken) &&
+          !((await page.locator('body').innerText()) ?? '').includes(reissuedToken),
+      );
+      const reissueConsoleText = (await page.evaluate('window.__consoleText')) as string;
+      check(
+        '重发不把凭据写入 console',
+        !reissueConsoleText.includes(reissuedToken) &&
+          !reissueConsoleText.includes(reissueOldToken) &&
+          !reissueConsoleText.includes('AGENTNET_MCP_URL'),
+        reissueConsoleText,
+      );
+      const oldTokenCall = await rawRpc(
+        'tools/call',
+        { name: 'network_me', arguments: {} },
+        { token: reissueOldToken },
+      );
+      const oldTokenError = oldTokenCall.body.error as { data?: { code?: string } } | undefined;
+      checkEqual('重发后旧 token 立即失效', oldTokenError?.data?.code, 'CREDENTIAL_INVALID');
+      const newTokenIdentity = await rawTool<Actor>(reissuedToken, 'network_me', {});
+      checkEqual('重发后新 token 可读取同一 actor', newTokenIdentity.actor_id, reissueAgent.actor_id);
+      const otherIdentity = await rawTool<Actor>(data.agentAToken, 'network_me', {});
+      checkEqual('重发不影响其他 Agent 凭据', otherIdentity.actor_id, data.agentA.actor_id);
+
+      // 直接读取测试实例 SQLite：凭据表只保存摘要，operations 不保存 raw token。
+      const reissueDb = new Database(`${server.dataDir}/agent-network.sqlite`, { readonly: true });
+      try {
+        const rawHashRows = reissueDb
+          .query('SELECT COUNT(*) AS n FROM credentials WHERE token_hash = ?')
+          .get(reissuedToken) as { n: number };
+        const rawOperationRows = reissueDb
+          .query('SELECT COUNT(*) AS n FROM operations WHERE instr(result_json, ?) > 0')
+          .get(reissuedToken) as { n: number };
+        const credentialRows = reissueDb
+          .query('SELECT token_hash, revoked_at FROM credentials WHERE actor_id = ?')
+          .all(reissueAgent.actor_id) as { token_hash: string; revoked_at: number | null }[];
+        const activeCredentials = credentialRows.filter((row) => row.revoked_at === null);
+        checkEqual('数据库不保存 raw token', rawHashRows.n, 0);
+        checkEqual('operations 结果不保存 raw token', rawOperationRows.n, 0);
+        check(
+          '数据库凭据只保存 SHA-256 摘要',
+          credentialRows.length >= 2 &&
+            credentialRows.every((row) => /^[0-9a-f]{64}$/u.test(row.token_hash)),
+          credentialRows.length,
+        );
+        checkEqual('旧凭据已撤销且只剩一条新凭据', activeCredentials.length, 1);
+      } finally {
+        reissueDb.close();
+      }
+
+      await page.keyboard.press('Escape');
+      await page.locator(data.group ? roomLink(data.group.room.room_id) : 'body').click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      check(
+        '群聊右键不显示重发 token 入口',
+        await page.locator('#room-menu-reissue-token').isHidden(),
+      );
+      await page.keyboard.press('Escape');
+      await page.locator(humanPeerLink).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      check(
+        '人类 direct 会话不显示重发 token 入口',
+        await page.locator('#room-menu-reissue-token').isHidden(),
+      );
+      await page.keyboard.press('Escape');
+
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_agent_reissue_token') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as { id?: unknown } | null;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    code: 'CONFLICT',
+                    message: '模拟重发失败',
+                    retryable: false,
+                  }),
+                },
+              ],
+            },
+          }),
+        });
+      });
+      await page.locator(reissueLink).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      page.once('dialog', async (dialog) => {
+        await dialog.accept();
+      });
+      await page.locator('#room-menu-reissue-token').click();
+      await page.waitForFunction(
+        `(document.getElementById('room-menu-status').textContent || '').includes('重发失败：模拟重发失败')`,
+      );
+      check('重发失败显示可读错误', true);
+      const registryAfterFailure = await readRegistry();
+      checkEqual(
+        '重发失败不覆盖本地注册表',
+        registryAfterFailure.items.find((item) => item.actor_id === reissueAgent.actor_id)?.mcp_url,
+        reissuedUrl,
+      );
+      await context.close();
+
+      // 390px：长按同一 direct Agent，二次确认后仍能重发并自动复制。
+      const mobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await mobile.page.goto(`${server.base}/`);
+      await mobile.page.locator(reissueLink).waitFor();
+      await mobile.page.waitForFunction(
+        `(() => {
+          const link = document.querySelector(${JSON.stringify(reissueLink)});
+          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(reissueAgent.name)}));
+        })()`,
+      );
+      await mobile.page.evaluate(
+        (entry) => localStorage.setItem('agent-network-agents-v1', entry),
+        JSON.stringify({
+          v: 1,
+          items: [
+            {
+              owner_actor_id: data.human.actor_id,
+              actor_id: reissueAgent.actor_id,
+              name: reissueAgent.name,
+              agent_session_id: reissueAgent.agent_session_id,
+              created_at: String(Date.now()),
+              mcp_url: reissuedUrl,
+            },
+          ],
+        }),
+      );
+      await mobile.page.evaluate(`(() => {
+        window.__copiedRoomPrompt = null;
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: function (text) {
+              window.__copiedRoomPrompt = text;
+              return Promise.resolve();
+            }
+          }
+        });
+        window.__consoleText = '';
+        ['log', 'info', 'debug', 'warn'].forEach(function (method) {
+          const original = console[method];
+          console[method] = function () {
+            window.__consoleText += Array.prototype.map.call(arguments, String).join(' ') + '\\n';
+            return original.apply(console, arguments);
+          };
+        });
+      })()`);
+      await mobile.page.evaluate(`(() => {
+        const link = document.querySelector(${JSON.stringify(reissueLink)});
+        const rect = link.getBoundingClientRect();
+        link.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          pointerType: 'touch',
+          isPrimary: true,
+          pointerId: 21,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2
+        }));
+      })()`);
+      await sleep(650);
+      checkEqual(
+        '390px 长按 direct Agent 打开含重发入口的菜单',
+        await mobile.page.locator('#room-menu-reissue-token').isVisible(),
+        true,
+      );
+      const mobileMenuMetrics = (await mobile.page.evaluate(`(() => {
+        const rect = document.getElementById('room-menu').getBoundingClientRect();
+        return {
+          left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+          view: window.innerWidth, viewHeight: window.innerHeight,
+          doc: document.documentElement.scrollWidth
+        };
+      })()`)) as {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+        view: number;
+        viewHeight: number;
+        doc: number;
+      };
+      check(
+        '390px 重发菜单不横向溢出',
+        mobileMenuMetrics.left >= 0 &&
+          mobileMenuMetrics.top >= 0 &&
+          mobileMenuMetrics.right <= mobileMenuMetrics.view + 1 &&
+          mobileMenuMetrics.bottom <= mobileMenuMetrics.viewHeight + 1 &&
+          mobileMenuMetrics.doc <= mobileMenuMetrics.view,
+        mobileMenuMetrics,
+      );
+      let mobileConfirmMessage = '';
+      mobile.page.once('dialog', async (dialog) => {
+        mobileConfirmMessage = dialog.message();
+        await dialog.accept();
+      });
+      await mobile.page.locator('#room-menu-reissue-token').click();
+      await mobile.page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已重发并复制新提示词；旧连接需改用新 token。'`,
+      );
+      const mobileRegistry = JSON.parse(
+        (await mobile.page.evaluate(`localStorage.getItem('agent-network-agents-v1')`)) as string,
+      ) as RegistryFile;
+      const mobileEntry = mobileRegistry.items.find(
+        (item) => item.actor_id === reissueAgent.actor_id,
+      );
+      const mobileUrl = mobileEntry?.mcp_url ?? '';
+      const mobileToken = new URL(mobileUrl).searchParams.get('token') ?? '';
+      const mobilePrompt = (await mobile.page.evaluate('window.__copiedRoomPrompt')) as string | null;
+      check(
+        '390px 重发有二次确认',
+        mobileConfirmMessage.includes('新 token 只显示一次'),
+        mobileConfirmMessage,
+      );
+      check(
+        '390px 重发更新注册表并自动复制新提示词',
+        mobileToken.length > 20 &&
+          mobileToken !== reissuedToken &&
+          Boolean(mobilePrompt) &&
+          mobilePrompt!.includes(`AGENTNET_MCP_URL="${mobileUrl}"`) &&
+          mobilePrompt!.includes(`AGENTNET_TOKEN="${mobileToken}"`),
+      );
+      check(
+        '390px 重发后菜单不展示新 token',
+        !((await mobile.page.locator('#room-menu').innerText()) ?? '').includes(mobileToken),
+      );
+      const mobileConsoleText = (await mobile.page.evaluate('window.__consoleText')) as string;
+      check(
+        '390px 重发不把凭据写入 console',
+        !mobileConsoleText.includes(mobileToken) &&
+          !mobileConsoleText.includes('AGENTNET_MCP_URL'),
+        mobileConsoleText,
+      );
+      const mobileNewIdentity = await rawTool<Actor>(mobileToken, 'network_me', {});
+      checkEqual(
+        '390px 重发的新 token 可读取同一 actor',
+        mobileNewIdentity.actor_id,
+        reissueAgent.actor_id,
+      );
+      await mobile.context.close();
     }
 
     checkEqual('无未捕获页面错误', allErrors.length, 0);

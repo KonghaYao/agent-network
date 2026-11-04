@@ -63,6 +63,8 @@ export function sidebarPane(): string {
   <div class="room-menu" id="room-menu" role="menu" aria-label="会话操作" hidden>
     <button class="room-menu-item" id="room-menu-copy-prompt" type="button"
       role="menuitem">复制 Agent 连接提示词</button>
+    <button class="room-menu-item danger" id="room-menu-reissue-token" type="button"
+      role="menuitem" hidden>注销并重发 token</button>
     <p class="room-menu-status" id="room-menu-status" role="status" aria-live="polite" hidden></p>
   </div>
 </aside>`;

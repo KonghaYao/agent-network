@@ -13,6 +13,7 @@ import { Disk } from 'flydrive';
 import { FSDriver } from 'flydrive/drivers/fs';
 
 import type { Env } from '../env';
+import { isBusinessError } from '../contracts/errors';
 import { authenticate } from '../mcp/auth';
 
 export interface DriveOptions {
@@ -59,7 +60,13 @@ export function createDrive(env: Env, options: DriveOptions): DriveRuntime {
       let principal: Awaited<ReturnType<typeof authenticate>>;
       try {
         principal = await authenticate(env.DB, request);
-      } catch {
+      } catch (error) {
+        // 已撤销凭据交给 handleMcp 返回 CREDENTIAL_INVALID；MCPP 的
+        // resolveScope 不能把它提前改写成 UNAUTHENTICATED。此时返回占位
+        // scope 仅用于进入 handler，真正执行文件工具前仍会再次鉴权。
+        if (operation === 'mcp' && isBusinessError(error) && error.code === 'CREDENTIAL_INVALID') {
+          return { key: 'credential:revoked' };
+        }
         throw new FileError('UNAUTHENTICATED');
       }
       if (principal.actor) return { key: `actor:${principal.actor.actor_id}` };

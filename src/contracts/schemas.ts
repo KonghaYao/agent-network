@@ -40,6 +40,9 @@ export const agentRenameSchema = z.object({
   name: z.string().trim().min(1).max(LIMITS.actorNameMax),
 });
 
+/** 注销目标 Agent 的全部现有凭据并签发新 token；token 只返回一次。 */
+export const agentReissueTokenSchema = z.object({ request_id: requestId, actor_id: id() });
+
 /** 软归档 Agent；只影响管理列表，不参与授权。 */
 export const agentArchiveSchema = z.object({ request_id: requestId, actor_id: id() });
 
@@ -193,6 +196,7 @@ export const roomFileDeleteSchema = z.object({
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type ProfileUpdateInput = z.infer<typeof profileUpdateSchema>;
 export type AgentRenameInput = z.infer<typeof agentRenameSchema>;
+export type AgentReissueTokenInput = z.infer<typeof agentReissueTokenSchema>;
 export type AgentArchiveInput = z.infer<typeof agentArchiveSchema>;
 export type AgentUnarchiveInput = z.infer<typeof agentUnarchiveSchema>;
 export type AgentsGetInput = z.infer<typeof agentsGetSchema>;

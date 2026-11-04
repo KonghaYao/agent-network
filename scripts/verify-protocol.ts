@@ -231,6 +231,7 @@ async function main(): Promise<void> {
     'network_login',
     'network_profile_update',
     'network_agent_rename',
+    'network_agent_reissue_token',
     'network_agent_archive',
     'network_agent_unarchive',
     'network_agents_get',
@@ -281,6 +282,7 @@ async function main(): Promise<void> {
     'network_me',
     'network_login',
     'network_agent_rename',
+    'network_agent_reissue_token',
     'network_agent_archive',
     'network_agent_unarchive',
     'network_agents_get',
@@ -334,6 +336,34 @@ async function main(): Promise<void> {
     'history 输出 schema 包含权威 sender_kind',
     historySchema.includes('"sender_kind"'),
     historyTool?.outputSchema,
+  );
+
+  const reissueTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_agent_reissue_token',
+  );
+  const reissueDescription = reissueTool?.description ?? '';
+  check(
+    'reissue 描述声明旧凭据撤销且 token 只返回一次',
+    reissueDescription.includes('注销目标 Agent 的全部现有凭据') &&
+      reissueDescription.includes('只返回一次') &&
+      reissueDescription.includes('TOKEN_NOT_REPLAYABLE') &&
+      reissueDescription.includes('任何已注册身份'),
+    reissueTool?.description,
+  );
+  const reissueInput = JSON.stringify(reissueTool?.inputSchema ?? {});
+  check(
+    'reissue 输入包含 request_id 与 actor_id',
+    reissueInput.includes('"request_id"') && reissueInput.includes('"actor_id"'),
+    reissueTool?.inputSchema,
+  );
+  const reissueOutput = JSON.stringify(reissueTool?.outputSchema ?? {});
+  check(
+    'reissue 输出包含 token/mcp_url/revoked_count/issued_at',
+    reissueOutput.includes('"token"') &&
+      reissueOutput.includes('"mcp_url"') &&
+      reissueOutput.includes('"revoked_count"') &&
+      reissueOutput.includes('"issued_at"'),
+    reissueTool?.outputSchema,
   );
 
   const archiveTool = listed?.tools?.find((tool) => tool.name === 'network_agent_archive');

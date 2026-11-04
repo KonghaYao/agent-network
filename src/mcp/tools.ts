@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { isBusinessError } from '../contracts/errors';
 import {
   agentArchiveSchema,
+  agentReissueTokenSchema,
   agentRenameSchema,
   agentUnarchiveSchema,
   agentsGetSchema,
@@ -51,6 +52,7 @@ import {
   recoveryCreate,
   recoveryRedeem,
   register as registerActor,
+  reissueAgentToken,
   renameAgent,
   updateProfile,
 } from '../domain/identity';
@@ -74,6 +76,7 @@ import { login, presenceOf } from '../realtime/presence';
 import { requireActor } from './auth';
 import {
   agentArchiveResultSchema,
+  agentReissueTokenResultSchema,
   agentRenameResultSchema,
   agentUnarchiveResultSchema,
   agentsGetResultSchema,
@@ -280,6 +283,18 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       return renameAgent(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_reissue_token',
+    '注销目标 Agent 的全部现有凭据并签发新 token。任何已注册身份都可调用，权限与 network_agent_rename 一致；人类 actor 返回 INVALID_ARGUMENT，未知 actor 返回 NOT_FOUND。旧 token 立即失效，已有 MCP 连接需改用新 token，SSE/事件订阅因凭据撤销停止。新 token 与 mcp_url 只返回一次（仅首次响应），服务端不保存原文；同一 request_id 重放返回 TOKEN_NOT_REPLAYABLE，必须使用新的 request_id。',
+    agentReissueTokenSchema,
+    agentReissueTokenResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return reissueAgentToken(db, principal, input, origin);
     },
   );
 

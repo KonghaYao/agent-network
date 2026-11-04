@@ -158,6 +158,44 @@ function agentRegistryRename(actorId, name) {
   if (changed) agentRegistryWrite(items);
 }
 
+/**
+ * token 重发成功后更新本地 MCP URL。
+ *
+ * token 是该 actor 的全局凭据，因此更新所有同 actor 条目；本浏览器从未保存过
+ * 该 Agent 时按 fallback 补一条，保证新 token 至少能从右键提示词再次复制。
+ */
+function agentRegistryReissue(ownerActorId, actorId, mcpUrl, fallback) {
+  const read = agentRegistryRead();
+  if (read.error) return read.error;
+  let changed = false;
+  const items = read.items.map(function (item) {
+    if (item.actor_id !== actorId || item.mcp_url === mcpUrl) return item;
+    changed = true;
+    return {
+      owner_actor_id: item.owner_actor_id,
+      actor_id: item.actor_id,
+      name: item.name,
+      agent_session_id: item.agent_session_id,
+      created_at: item.created_at,
+      mcp_url: mcpUrl
+    };
+  });
+  if (!changed) {
+    if (!ownerActorId) return '当前浏览器身份不可用，未能保存新 MCP URL';
+    items.unshift({
+      owner_actor_id: ownerActorId,
+      actor_id: actorId,
+      name: typeof fallback.name === 'string' ? fallback.name : 'Agent',
+      agent_session_id: typeof fallback.agent_session_id === 'string'
+        ? fallback.agent_session_id
+        : null,
+      created_at: typeof fallback.created_at === 'string' ? fallback.created_at : String(Date.now()),
+      mcp_url: mcpUrl
+    });
+  }
+  return agentRegistryWrite(agentsSortByCreated(items));
+}
+
 function agentsSummaryOf(entry) {
   return agentsSummaries.get(entry.actor_id) || null;
 }

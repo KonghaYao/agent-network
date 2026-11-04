@@ -102,6 +102,8 @@ export const APP_STYLE = `
     color: var(--wx-text); font: inherit; font-size: 13px; text-align: left;
     white-space: nowrap; }
   .room-menu-item:hover, .room-menu-item:focus-visible { background: var(--wx-hover); }
+  .room-menu-item.danger { color: var(--wx-unread); }
+  .room-menu-item[hidden] { display: none; }
   .room-menu-status { margin: 4px 0 0; padding: 0 10px 2px; font-size: 12px;
     color: var(--wx-green); }
   .room-menu-status[hidden] { display: none; }

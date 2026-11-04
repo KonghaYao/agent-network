@@ -214,6 +214,94 @@ async function main(): Promise<void> {
       'IDEMPOTENCY_CONFLICT',
     );
 
+    // Agent token 注销重发：使用独立 Agent，避免影响主流程后续调用。
+    const reissueOldToken = newToken();
+    const reissueAgent = await connectClient(reissueOldToken);
+    try {
+      const reissueTarget = await registerIdentity(reissueAgent, {
+        kind: 'agent',
+        name: '验收重发 Agent',
+        sessionId: `sess_${crypto.randomUUID()}`,
+      });
+      const reissueRequest = newRequestId('reissue');
+      const reissued = await callTool<{
+        actor_id: string;
+        token: string;
+        mcp_url: string;
+        revoked_count: number;
+        issued_at: string;
+      }>(humanC.client, 'network_agent_reissue_token', {
+        request_id: reissueRequest,
+        actor_id: reissueTarget.actor_id,
+      });
+      checkEqual('reissue 保持 actor_id 不变', reissued.actor_id, reissueTarget.actor_id);
+      check(
+        'reissue 返回撤销数量',
+        Number.isInteger(reissued.revoked_count) && reissued.revoked_count >= 1,
+        reissued.revoked_count,
+      );
+      check(
+        'reissue 返回新的 mcp_url 与 token',
+        reissued.token !== reissueOldToken &&
+          new URL(reissued.mcp_url).searchParams.get('token') === reissued.token,
+        { mcp_url: reissued.mcp_url.replace(/token=[^&]+/u, 'token=<redacted>') },
+      );
+      const oldTokenCall = await rawRpc(
+        'tools/call',
+        { name: 'network_me', arguments: {} },
+        { token: reissueOldToken },
+      );
+      const oldTokenError = oldTokenCall.body.error as
+        | { data?: { code?: string } }
+        | undefined;
+      checkEqual(
+        'reissue 后旧 token 立即返回 CREDENTIAL_INVALID',
+        oldTokenError?.data?.code,
+        'CREDENTIAL_INVALID',
+      );
+      const newTokenCall = await rawRpc(
+        'tools/call',
+        { name: 'network_me', arguments: {} },
+        { token: reissued.token },
+      );
+      const newTokenIdentity = (
+        newTokenCall.body.result as
+          | { structuredContent?: { actor_id?: string } }
+          | undefined
+      )?.structuredContent;
+      checkEqual('reissue 新 token 可读取同一 actor', newTokenIdentity?.actor_id, reissueTarget.actor_id);
+      const otherMe = await callTool<Identity>(agentA.client, 'network_me');
+      checkEqual('reissue 不影响其他 Agent 的凭据', otherMe.actor_id, a.actor_id);
+      const callerMe = await callTool<Identity>(humanC.client, 'network_me');
+      checkEqual('reissue 不撤销 human 调用者凭据', callerMe.actor_id, c.actor_id);
+      await expectToolError(
+        'reissue 目标为人类时返回 INVALID_ARGUMENT',
+        callTool(humanC.client, 'network_agent_reissue_token', {
+          request_id: newRequestId('reissue'),
+          actor_id: c.actor_id,
+        }),
+        'INVALID_ARGUMENT',
+      );
+      await expectToolError(
+        'reissue 未知 actor 返回 NOT_FOUND',
+        callTool(humanC.client, 'network_agent_reissue_token', {
+          request_id: newRequestId('reissue'),
+          actor_id: 'agt_missing_reissue',
+        }),
+        'NOT_FOUND',
+      );
+      await expectToolError(
+        'reissue 同一 request_id 重放不返回 token',
+        callTool(humanC.client, 'network_agent_reissue_token', {
+          request_id: reissueRequest,
+          actor_id: reissueTarget.actor_id,
+        }),
+        'TOKEN_NOT_REPLAYABLE',
+      );
+    } finally {
+      await reissueAgent.close();
+    }
+
     await callTool(agentA.client, 'network_contact_add', {
       request_id: newRequestId('contact'),
       actor_id: b.actor_id,

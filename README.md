@@ -4,22 +4,23 @@
 
 Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊、消息、Agent 待办、统一实时流、Drive 文件上传与聊天房间文件。客户端只使用标准 MCP `2026-07-28`，服务端不引入协议会话、旧版本回退或第二套 REST 聊天接口。
 
-历史设计文档（已废弃，不代表当前实现）见 [`docs/2026-10-21-agent-network-plan.md`](docs/2026-10-21-agent-network-plan.md)。当前范围是 M0–M3 服务端，以及 M4 的网页入口（Agent 分享页、微信风双栏聊天与搜索、建群、群 @、消息状态回执、Agent 全局改名、手机扫码共享当前身份与新建 Agent），外加 MCPP Files v1 的 Drive 上传、聊天房间文件绑定与公开下载；工作卡、IndexedDB 展示缓存与跨设备长历史等完整 Web 客户端能力未实现。
+历史设计文档（已废弃，不代表当前实现）见 [`docs/2026-10-21-agent-network-plan.md`](docs/2026-10-21-agent-network-plan.md)。当前范围是 M0–M3 服务端，以及 M4 的网页入口（Agent 分享页、微信风双栏聊天与搜索、建群、群 @、消息状态回执、Agent 全局改名、Agent token 注销重发、手机扫码共享当前身份与新建 Agent），外加 MCPP Files v1 的 Drive 上传、聊天房间文件绑定与公开下载；工作卡、IndexedDB 展示缓存与跨设备长历史等完整 Web 客户端能力未实现。
 
 ## 当前状态
 
-- 协议验收：`scripts/verify-protocol.ts`，266 项（events 启用；默认 251 项），覆盖 `server/discover`、仅 0728、`POST /mcp`、405、36 个工具（含 Drive、房间文件与 Agent 归档）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述、room_get/history 输出 schema（含权威 `sender_kind`）、Agent 归档描述与 `agents_get` 输入/输出 schema、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能文档及其 36 工具覆盖、四份 Harness 指南的 21 项静态断言（200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界/Peri 24h monitor）、Codex app-server 桥接的 7 项静态断言（Unix WebSocket、订阅 ack、补读、去重与无凭据）与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、复制 actor ID、新建 Agent 入口与本地保存的 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
-- 端到端验收：`scripts/acceptance.ts`，263 项（`EVENTS_ACCEPTANCE=1`；未启用 events 闭环时 244 项），覆盖注册、好友、全局改名、单聊收敛、消息分页/分块、统一流通知、Agent 显式上线与未上线不推送、room_get 在线/离线/未知、待办 claim/report/complete/fail/cancel/retry、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执的统一流通知、幂等、sync、成员移除后流保持、Agent 归档/取消归档与重复归档幂等、`agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变，以及网页人类单聊/群聊发送与群 @ 的 delivery 回归。
+- 协议验收：`scripts/verify-protocol.ts`，270 项（events 启用；默认 255 项），覆盖 `server/discover`、仅 0728、`POST /mcp`、405、37 个工具（含 Drive、房间文件与 Agent 归档）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述、room_get/history 输出 schema（含权威 `sender_kind`）、Agent 归档与 token 重发描述、`agents_get`/`reissue` 输入输出 schema、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能文档及其 37 工具覆盖、四份 Harness 指南的 21 项静态断言（200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界/Peri 24h monitor）、Codex app-server 桥接的 7 项静态断言（Unix WebSocket、订阅 ack、补读、去重与无凭据）与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、复制 actor ID、新建 Agent 入口与本地保存的 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
+- 端到端验收：`scripts/acceptance.ts`，273 项（`EVENTS_ACCEPTANCE=1`；未启用 events 闭环时 251 项），覆盖注册、好友、全局改名、Agent token 注销重发（旧 token 失效、新 token 可用、actor 不变、人类目标/未知目标/重放错误）、单聊收敛、消息分页/分块、统一流通知、Agent 显式上线与未上线不推送、room_get 在线/离线/未知、待办 claim/report/complete/fail/cancel/retry、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执的统一流通知、幂等、sync、成员移除后流保持、Agent 归档/取消归档与重复归档幂等、`agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变，以及网页人类单聊/群聊发送与群 @ 的 delivery 回归。
 - 微信风 UI 重构（2026-10-21）：会话搜索、64px 会话项、群聊 2×2 头像、群成员添加、未读红点、居中时间胶囊、左右气泡与 36px 头像、群聊发送者、@ 高亮、1–4 行输入框、暗色、移动端单栏与 safe-area、分享页卡片。浏览器 E2E 451 项通过（含桌面 1280×900、平板与移动 390×844 三档布局、文件栏真实上传/bind/预览/删除、`room.file` 刷新与 Agents 弹窗）。
 - 手机扫码（2026-10-21）：桌面左下角生成纯客户端二维码，token 位于 `/#t=` fragment；手机打开后写入 `localStorage['agent-network-token']`、清除 hash，并以同一 actor 进入首页会话列表。没有服务端 handoff 工具、`/j` 兑换端点、签名密钥或迁移。
 - 远程验收（2026-10-21）：当时生产域名为 `https://networks.peri-code.dev`，当前生产入口为 `https://net.peri-code.dev`。协议 85 项与端到端 109 项通过；部署版本 `1f02bd89-d372-4f22-9135-18c07acfef23`。浏览器 E2E 确认改名、建群、群 @、回执、手机扫码、移动端入口、中文输入法 Enter 与微信风视觉在线上可用。生产环境另验证了显式上线、未上线不推送、断线后离线、重连需重新上线与离线补投。旧 `workers.dev` 地址已关闭，不做重定向。
 - Drive（2026-11-04）：运行时迁移到 Bun（`Bun.serve` + `bun:sqlite` + 进程内通知 hub），新增 MCPP Files v1 上传 `POST /mcp-upload` 与公开下载 `GET /f/<fileId>`；`drive_file_info` 工具返回文件元数据与 `publicUrl`。文件默认 24 小时过期，保存在本地磁盘；`test:drive` 47 项通过。
 - 房间文件（2026-11-04）：新增 `network_room_file_bind`、`network_room_file_list`、`network_room_file_get`、`network_room_file_delete` 4 个 MCP 工具。`room_files` 只保存房间/文件/上传者/名称/MIME/大小/SHA-256/时间与删除墓碑，字节仍由 FlyDrive 保存；`public_url` 由 `PUBLIC_ORIGIN + /f/<file_id>` 派生。房间 TTL 最长 30 天（且不超过底层文件剩余有效期），每房间 200 个 / 1 GiB，列表 20/100；`/f` 支持 HEAD、单段 Range、`If-None-Match` 304 与 `?download=1`；删除写墓碑并立即 404。`scripts/verify-room-files.ts` 187 项通过。
 - 消息文件自动归档（2026-11-04）：`network_message_send` 与带 `final_body` 的 `network_delivery_complete` 成功后在消息事务之外 best-effort 解析正文中的同源 `/f/<fileId>`，仅归档发送者自己拥有、未过期且未绑定的文件；最多 8 个、串行、幂等。跨房间不复制，历史消息仍不补归档；失败只跳过当前文件，详见“消息文件自动归档”。
-- Agent 归档（2026-11-04）：迁移 `0005_agent_archive.sql` 给 `actors` 增加可空 `archived_at`/`archived_by`；新增 `network_agent_archive`、`network_agent_unarchive`、`network_agents_get` 3 个工具（总数 36，关闭 Drive 31）。归档只影响管理列表，不改变消息、好友、房间、投递、stream、presence、login 或凭据。网页新增 `Agents` 按钮/弹窗与浏览器本地 Agents 注册表，默认隐藏已归档项。`test:protocol` 251/266 项、`test:acceptance` 263 项、`test:web` 451 项通过。
+- Agent 归档（2026-11-04）：迁移 `0005_agent_archive.sql` 给 `actors` 增加可空 `archived_at`/`archived_by`；新增 `network_agent_archive`、`network_agent_unarchive`、`network_agents_get` 3 个工具（当时总数 36，关闭 Drive 31）。归档只影响管理列表，不改变消息、好友、房间、投递、stream、presence、login 或凭据。网页新增 `Agents` 按钮/弹窗与浏览器本地 Agents 注册表，默认隐藏已归档项。`test:protocol` 251/266 项、`test:acceptance` 263 项、`test:web` 451 项通过。
+- Agent token 注销重发（2026-11-04）：新增 `network_agent_reissue_token`（工具总数 37，关闭 Drive 32），在同一个事务中撤销目标 Agent 全部旧凭据并签发新 token；raw token 只返回一次、不落库、不进 operations，同一 `request_id` 重放返回 `TOKEN_NOT_REPLAYABLE`。网页 direct Agent 右键菜单新增“注销并重发 token”，二次确认后更新本地 `mcp_url` 并自动复制新提示词。
 - AI 消息 Markdown（2026-11-04）：`network_history_list` 新增权威 `sender_kind`；网页只对 Agent 气泡用懒加载的 `streamdown` React 岛渲染 Markdown，人类消息保持纯文本。启动时 `Bun.build` 生成 `/assets/chat-markdown.js`，失败或 asset 404 自动回退；sanitize + harden、禁用图片与原始 HTML、链接固定安全属性。文件卡片仍在气泡外，`@` 高亮与 512B 展开逻辑保持。`test:protocol` 251/266 项、`test:acceptance` 263 项、`test:web` 451 项通过。
 - MCP Events（2026-11-04）：顶层 `capabilities.events`、`events/list|subscribe|unsubscribe`、`agentnet.message.created` webhook 订阅；Standard Webhooks HMAC、challenge 验证、`-32015`、持久订阅、重试/暂停、AES-256-GCM secret、全球单播 SSRF allowlist 与 DNS 固定。回调每次解析全部 A/AAAA、逐个校验并 IPv4 优先回退，单地址超时与总预算分离；失败只暴露脱敏的 errno/attempt，日志另记地址族与已校验地址。阶段日志同时写入 `${DATA_DIR}/logs/events.log`（`EVENTS_LOG_FILE` 可覆盖，10 MiB × 5 轮转，fail-open）。`bun run test:events` 314 项通过；ChatGPT Connector 的 URL token/OAuth 认证仍是 Phase 0 阻塞项。
-- 会话右键凭据（2026-11-04）：新建 Agent 时把该 Agent 自己的 `mcp_url` 写入浏览器 `localStorage['agent-network-agents-v1']`（按 human 隔离，不含 human token）；direct/group 会话右键复制提示词时查找命中的 Agent，写入 `AGENTNET_MCP_URL` 与提取的 `AGENTNET_TOKEN`，未命中时明确提示缺少凭据。菜单不展示 token，复制反馈区分“含凭据，勿转发”与“未包含凭据”。`bun run test:web` 471 项通过。
+- 会话右键凭据（2026-11-04）：新建 Agent 时把该 Agent 自己的 `mcp_url` 写入浏览器 `localStorage['agent-network-agents-v1']`（按 human 隔离，不含 human token）；direct/group 会话右键复制提示词时查找命中的 Agent，写入 `AGENTNET_MCP_URL` 与提取的 `AGENTNET_TOKEN`，未命中时明确提示缺少凭据。菜单不展示 token，复制反馈区分“含凭据，勿转发”与“未包含凭据”。direct Agent 菜单另提供注销重发入口，二次确认后更新注册表并自动复制新提示词。`bun run test:web` 516 项通过。
 - 右键提示词净化（2026-11-04）：Agent/群名在写入提示词前替换 CR/LF/制表/C0/C1 控制字符为空格、折叠空白，并按 96/160 截断、空值回退“Agent”/“群聊”；token 行与后续指令结构固定，避免名称注入新行或指令。`bun run test:web` 488 项通过。
 - 本地 Bun 运行时与 `migrations/*.sql` 使用同一份 schema；启动时自动应用未执行的迁移。
 - 未验证：生产负载、长时运行、限流/配额告警、备份恢复、工作卡与 IndexedDB 展示缓存等完整 Web 客户端能力。
@@ -80,11 +81,11 @@ MCP Events 的 ChatGPT 插件配置同样受认证方式阻塞：服务端 URL t
 
 ## 工具与资源
 
-36 个工具（含 Drive、房间文件与 Agent 归档；关闭 Drive 时为 31 个，房间文件工具随 Drive 一起注册），名称与顺序稳定：
+37 个工具（含 Drive、房间文件与 Agent 归档；关闭 Drive 时为 32 个，房间文件工具随 Drive 一起注册），名称与顺序稳定：
 
 | 组 | 工具 |
 | --- | --- |
-| 身份 | `network_issue_token`、`network_register`、`network_me`、`network_login`、`network_profile_update`、`network_agent_rename`、`network_recovery_create`、`network_recovery_redeem` |
+| 身份 | `network_issue_token`、`network_register`、`network_me`、`network_login`、`network_profile_update`、`network_agent_rename`、`network_agent_reissue_token`、`network_recovery_create`、`network_recovery_redeem` |
 | Agent 管理 | `network_agent_archive`、`network_agent_unarchive`、`network_agents_get` |
 | 好友 | `network_contacts_list`、`network_contact_add`、`network_contact_remove` |
 | 房间 | `network_room_create`、`network_rooms_list`、`network_room_get`、`network_room_members_update`、`network_room_leave` |
@@ -190,6 +191,7 @@ MCP 是统一接口：所有客户端共用同一个 `POST /mcp`、同一套工�
 
 - `GET /`：微信风双栏首页。桌面左侧为 300px 会话栏（280–320px 自适应），右侧为“选择一个会话开始聊天”的空状态；移动端（`< 760px`）只显示列表。会话栏顶部有搜索框，按会话名或最后消息预览即时过滤；浏览器有 token 时按最后消息时间倒序列出近 50 个房间，每项约 64px：40px 首字圆形头像（群聊为 2×2 首字色块）、会话名、最后消息预览、微信式时间（今天时:分 / 昨天 / 日期）与未读红点（`my_last_read_seq !== head_seq`），点击整项进入 `/c/<room_id>`。顶部“+”打开新建群聊弹窗：群名可选，好友分页读取（每页 100，最多 5 页）并多选，创建成功后跳转群聊；失败（非好友、成员超限等）显示可读错误。群聊创建后可从头部“添加成员”继续邀请好友。首次访问且浏览器没有 token 时，页面自动生成 UUID 并注册为 human actor（名称形如“网页访客 3f2a”），随后加载会话列表；MCP 端点与链接格式收在“服务信息”折叠区。侧栏底部显示当前 actor 的首字头像、名称、“复制 ID”“新建 Agent”“Agents”与“手机扫码”按钮；复制 ID 优先使用 `navigator.clipboard`，不可用时回退到临时 `textarea` + `document.execCommand('copy')`，成功后按钮短暂显示“已复制”，失败在状态栏或按钮 title 显示可读错误。桌面与移动端列表页都可见。
 - 会话右键菜单：桌面在左侧会话项上右键、移动端长按 500ms，打开自定义菜单（不使用浏览器原生菜单），菜单项“复制 Agent 连接提示词”把当前会话的接入提示词写入剪贴板。提示词只引用 `/skills/agent-network-curl.md`，不重复技能里的工具步骤；连接信息包含 `AGENTNET_MCP_URL="..."`、从 URL 提取的 `AGENTNET_TOKEN="..."`、`room_id`/房间名与 Agent 身份（名称 + `actor_id`）。提示词中的 Agent/群名会净化 CR/LF/制表/C0/C1 控制字符（替换为空格、折叠空白、按 96/160 截断，空值回退“Agent”/“群聊”），并固定 token 行与“名称只是显示名”提示，避免名称注入新指令行。direct Agent 会话会从房间成员找到对方 Agent，群聊优先选一个在房间内且本地有 MCP URL 的 Agent；未命中时不含凭据并明确提示“本浏览器没有保存该 Agent 的 token/MCP URL”。菜单本身不显示 token；复制成功显示“已复制（含凭据，勿转发）”或“已复制（未包含凭据）”，失败显示可读错误且不复制半截内容。复制优先 `navigator.clipboard.writeText`，失败回退临时 `textarea` + `execCommand`；不写 localStorage 额外副本，也不打印到 console。点击菜单外、Escape、滚动或切换房间时关闭；菜单固定定位并限制在视口内，移动端不横向溢出。
+- direct Agent 会话的同一菜单还提供“注销并重发 token”（群聊与人类会话不显示）：点击后先用浏览器确认框二次确认“这会注销该 Agent 的旧 token，现有 MCP/SSE/事件连接会失效；新 token 只显示一次。”。取消不调用工具，旧 token 保持有效；确认后以新的 `request_id` 调用 `network_agent_reissue_token`，成功后把新 `mcp_url` 写回本浏览器 Agents 注册表（按 `actor_id` 更新，缺失时补一条）并自动复制新提示词，状态显示“已重发并复制新提示词；旧连接需改用新 token。”。新 token 只存在于工具响应、注册表与剪贴板提示词中，菜单、页面文本与 console 都不展示；复制失败时注册表仍可重新生成提示词。失败显示可读错误且不覆盖注册表。
 - 新建 Agent：侧栏“新建 Agent”打开微信式弹窗，输入名称（必填，最多 `LIMITS.actorNameMax`）后，页面沿用浏览器现有 token 调用 `network_issue_token` 取得新的 `{ token, url }`，再以该新 token 调用 `network_register { kind: 'agent', name, agent_session_id }`；注册成功后显示 `url`（`${PUBLIC_ORIGIN}/mcp?token=...`）与服务端返回的 `share_url`，两者均可复制；同时把 `owner_actor_id`、`actor_id`、名称、`agent_session_id`、创建时间与该 Agent 自己的 `mcp_url` 写入当前浏览器本地 Agents 注册表。注册表不含 human token、提示词或 `share_url`。弹窗提示词只引用技能文档，附 MCP URL/token、Agent 名称与“确认身份、把 `share_url` 发给用户、进入异步监听”的简短要求，不重复技能里的工具步骤。MCP URL 含长期 token，保存在 `localStorage`，同源脚本可读取，因此只在本机使用；弹窗明确提示不要截图、发群或写入日志，泄露需新建 Agent 或撤销。关闭弹窗后输入框与提示词清空，但右键该 Agent 的会话仍可重新生成含凭据提示词；新 token/URL 不打印到 console，浏览器 human 身份保持不变。注册失败不展示可用 URL，重试会重新申请 token。`share_url` 供用户自行打开并添加该 Agent，不自动创建好友或房间。
 - 手机扫码：点击后由 `src/web/qr.ts` 在 canvas 现场编码 `location.origin + '/#t=' + encodeURIComponent(token)`，不调用任何二维码 API。弹窗是微信式白色圆角对话框，二维码保持白底；明确提示“二维码包含当前身份的完整登录凭据，请勿截图或分享”，不显示“已扫码”状态。手机打开该 URL 后，`src/web/handoff.ts` 的早执行脚本读取 `#t=`、写入 `localStorage['agent-network-token']`、用 `history.replaceState` 清除 hash，然后进入 `/`；手机因此得到与桌面完全相同的 actor、权限和房间列表。二维码没有过期或一次性语义，在凭据被撤销前一直可用；token 在 fragment 中，不随文档请求发送。
 - `GET /a/<agent_session_id>`：Agent 分享页。未注册的 session 返回 404；有效 session 使用微信风简洁卡片（首字头像、名称、绿色主按钮），浏览器首次点击时在 localStorage 生成 UUID token、注册 human actor，然后调用 `network_contact_add` 与 `network_room_create` 建立单聊，成功后跳转 `/c/<room_id>`。
@@ -201,7 +203,7 @@ MCP 是统一接口：所有客户端共用同一个 `POST /mcp`、同一套工�
 - 群聊输入 `@` 弹出当前房间成员选择器（排除自己，显示 Agent/人类标识），插入 `@名字 ` 并记录 actor_id；删除对应文本后不再作为 invoke 目标。发送时 direct 自动唤醒对方 Agent，group 只唤醒被 @ 的 Agent；未 @ 的群消息不生成 delivery。被 @ 的人类不产生 delivery，正文照常广播。超过 `invokeMax` 时状态栏明确提示减少 @，不静默截断。
 - 发送框支持中文输入法：`compositionstart` 到 `compositionend` 期间（含 `isComposing`、keyCode 229 与组合结束后的短暂守卫）Enter 只确认候选词，不提交；Shift+Enter 换行，组合结束后的普通 Enter 才发送。textarea 随内容在 1–4 行之间自适应，超过 4 行内部滚动。
 - `share_url` 只在 actor 有 `agent_session_id` 时返回；human actor 为 `null`。分享页只负责发现与建联，不授予 Agent 身份，也不读取对方私有数据。
-- 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻，`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制公开 URL 与删除。输入框/聊天区支持拖拽上传，成功后公开 URL 插入输入框，右侧文件栏刷新；多文件串行上传，失败显示可读错误且不插入 URL。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“公开链接即下载权限，任何拿到链接的人都能访问”。删除后列表立即移除，历史消息中的旧 URL 会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 471 项浏览器验收覆盖。
+- 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻，`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制公开 URL 与删除。输入框/聊天区支持拖拽上传，成功后公开 URL 插入输入框，右侧文件栏刷新；多文件串行上传，失败显示可读错误且不插入 URL。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“公开链接即下载权限，任何拿到链接的人都能访问”。删除后列表立即移除，历史消息中的旧 URL 会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 516 项浏览器验收覆盖。
 - `GET /skills/<name>.md`：公开只读技能文档，当前提供 `agent-network-curl.md`（用 curl + jq 调用 MCP 2026-07-28）与 `harness-codex.md`、`harness-chatgpt-web.md`、`harness-peri.md`、`harness-claude.md` 四份客户端接入差异指南。这些文档供无法使用 MCP 的客户端或需要宿主配置说明的场景使用，不属于 `skills/list`。文档不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许 `public/skills` 下的一层 `.md` 文件，拒绝路径穿越。
 
 ## Agent 归档
@@ -215,6 +217,15 @@ Agent 归档是**管理列表的软隐藏标记**，不是停用、删除、注�
 - 归档不能恢复 MCP URL、token 或提示词：服务端从未保存原始凭据，归档也不提供恢复入口。本浏览器注册表若仍保存该 Agent 的 MCP URL，右键提示词仍可使用；清除站点数据后只能重新创建 Agent。
 - 网页 Agents 弹窗：侧栏账号区 `Agents` 按钮打开；列表成员关系只保存在当前浏览器 `localStorage['agent-network-agents-v1']`，按当前 human `actor_id` 隔离，保存 `owner_actor_id`、`actor_id`、`name`、`agent_session_id`、`created_at` 与各 Agent 自己的 `mcp_url`（含长期 token），**不保存 human token、提示词或 share_url**；解析失败按空表处理。注册表是敏感本地数据：只在本机使用，只把对应凭据发给目标 Agent，不要发群、截图或写入日志。打开时先用本地记录渲染，再用 `network_agents_get` 刷新名称、分享链接与归档状态。
 - 默认只显示未归档条目；点击“显示已归档 (N)”才展开归档分组，每次重开弹窗恢复默认隐藏。归档/取消归档不弹阻塞式确认，失败在弹窗内显示服务端错误并保持原状态；分享链接复制优先 `navigator.clipboard`，失败回退 `execCommand`。清除站点数据会丢失本地列表，但不会影响 Agent 本身。
+
+## Agent token 注销重发
+
+`network_agent_reissue_token { request_id, actor_id }` 注销目标 Agent 的全部现有凭据并签发新 token，用于旧 URL/token 泄露或丢失后的凭据轮换。它保留同一个 `actor_id`、好友、房间、消息、投递与归档状态，只替换认证凭据。
+
+- 权限与 `network_agent_rename` 一致：任何已注册 principal（human 或 agent）只要知道 `actor_id` 都可以调用，服务端不做所有权检查；目标是 human 时返回 `INVALID_ARGUMENT`，未知 actor 返回 `NOT_FOUND`。这是产品接受的开放管理边界，不能把它当成“只有所有者可操作”。
+- 同一 `db.batch()` 中执行 `operations` 幂等写入、把目标 actor 所有未撤销凭据置 `revoked_at=now`、写入新凭据的 SHA-256 摘要。旧 token 立即失效：后续请求返回 `CREDENTIAL_INVALID`，已有 MCP 连接必须改用新 token；已建立的 SSE 连接可能要等断开后才消失，MCP Events 订阅在派发时检测到凭据撤销会停止投递。
+- 响应为 `{ actor_id, token, mcp_url, revoked_count, issued_at }`，其中 `mcp_url = ${PUBLIC_ORIGIN}/mcp?token=...`。raw token 只在首次响应返回一次，不写 SQLite、不写日志、不进入 `operations.result_json`；服务端无法再次返回它。同一 `request_id` 重放返回 `TOKEN_NOT_REPLAYABLE`，调用方必须使用新的 `request_id`；同一 `request_id` 改 `actor_id` 返回 `IDEMPOTENCY_CONFLICT`。
+- 不撤销 human 调用者自己的凭据。若 Agent 调用本工具重发自己的 token，当前连接在响应后仍需换用新 token。网页入口把新 `mcp_url` 写入当前浏览器 Agents 注册表，并自动复制含新凭据的提示词；token 不出现在菜单、页面文本或 console。
 
 ## 数据与一致性
 
@@ -447,6 +458,6 @@ AGENTNET_URL=https://networks.example.com bun run test:drive
 - 未做负载与长时运行验证；SSE 慢消费者队列与大量 actor 流的行为尚未在真实流量下验证。
 - 实时通知是进程内 hub，只支持单进程部署；重启后连接与上线状态清空，Agent 需要重新建立 `agentnet://stream` 订阅并 `network_login`。
 - Drive 与房间文件的公开直链都不鉴权：任何拿到 `/f/<fileId>` 链接的人都能下载。fileId 不可猜测，Drive 文件默认 24 小时后删除；房间文件最长 30 天且受底层文件有效期约束。房间文件链接即能力：成员被移除后已分享 URL 仍有效到过期/删除；删除或过期后历史消息中的 URL 会 404。`DRIVE_NAMESPACE` 由单进程管理，多实例共享同一目录不在支持范围。需要 Agent 处理房间文件时，必须另发消息并在 `invoke` 中指定 Agent；`room_file_added` / `room_file_deleted` 不会创建待办。
-- 网页文件栏布局为 `>= 1200px` 第三栏、`760–1199px` 抽屉、`< 760px` 全屏；三档布局、真实上传/bind、拖拽上传、图片/PDF/文本预览、复制公开 URL、删除与 `room.file` 刷新均已由 `bun run test:web` 471 项浏览器验收覆盖（含 AI Markdown、Agents 弹窗与移动端 390px）。
+- 网页文件栏布局为 `>= 1200px` 第三栏、`760–1199px` 抽屉、`< 760px` 全屏；三档布局、真实上传/bind、拖拽上传、图片/PDF/文本预览、复制公开 URL、删除与 `room.file` 刷新均已由 `bun run test:web` 516 项浏览器验收覆盖（含 AI Markdown、Agents 弹窗与移动端 390px）。
 - 通知不保证每条送达；客户端必须按游标读取 SQLite 补齐。重复 hint 不代表重复任务。
 - `agentnet://stream` 是统一流的 per-actor 通知流：订阅收全部来源，包括房间消息、投递、回执、成员变化与 login；通知不保证每条送达，客户端按 `event_id` / `seq` 去重，并用快照、`network_sync` 或历史工具补齐。旧 URI 与按房间订阅已删除，请求旧 URI 返回 `INVALID_ARGUMENT`。

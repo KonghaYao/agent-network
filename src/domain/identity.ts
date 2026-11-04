@@ -1,7 +1,15 @@
 import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
-import type { AgentRenameInput, RegisterInput } from '../contracts/schemas';
-import { newId, nowMs, randomToken, sha256Hex, stableStringify, utf8Bytes } from '../storage/db';
+import type { AgentReissueTokenInput, AgentRenameInput, RegisterInput } from '../contracts/schemas';
+import {
+  hashToken,
+  newId,
+  nowMs,
+  randomToken,
+  sha256Hex,
+  stableStringify,
+  utf8Bytes,
+} from '../storage/db';
 import { eventStatement, inboxHeadStatement, inboxTopic, outboxStatement } from '../storage/events';
 import { guardSql } from '../storage/guards';
 import { getActor, getActorBySession, getCredentialByHash } from '../storage/queries';
@@ -255,6 +263,93 @@ export async function renameAgent(
   });
 
   return result;
+}
+
+export interface AgentReissueTokenResult {
+  actor_id: string;
+  token: string;
+  mcp_url: string;
+  revoked_count: number;
+  issued_at: string;
+}
+
+interface AgentReissueTokenStored {
+  actor_id: string;
+  revoked_count: number;
+  issued_at: string;
+}
+
+/**
+ * 注销目标 Agent 的全部现有凭据并签发新 token。
+ *
+ * 权限与 `network_agent_rename` 一致：任何已注册 principal 都可调用，
+ * 不做所有权检查；human 目标返回 INVALID_ARGUMENT。
+ *
+ * raw token 只存在于本次响应：operations 只保存 actor_id/revoked_count/issued_at。
+ * 同一 request_id 重放时 runIdempotent 返回反序列化的结果对象，与本次新建的
+ * stored 引用不同，因此可明确拒绝重放而不泄露 token。
+ */
+export async function reissueAgentToken(
+  db: D1Database,
+  principal: Principal,
+  input: AgentReissueTokenInput,
+  origin: string,
+): Promise<AgentReissueTokenResult> {
+  const caller = actorId(principal);
+  const target = await getActor(db, input.actor_id);
+  if (!target) throw new BusinessError('NOT_FOUND', '目标 actor 不存在');
+  if (target.kind !== 'agent') {
+    throw new BusinessError('INVALID_ARGUMENT', '只能为 agent actor 重发 token');
+  }
+
+  const at = nowMs();
+  const token = randomToken(32);
+  const tokenHash = await hashToken(token);
+  const credentialId = newId('cred');
+  const active = await db
+    .prepare('SELECT COUNT(*) AS n FROM credentials WHERE actor_id = ? AND revoked_at IS NULL')
+    .bind(target.actor_id)
+    .first<{ n: number }>();
+  const stored: AgentReissueTokenStored = {
+    actor_id: target.actor_id,
+    revoked_count: active?.n ?? 0,
+    issued_at: String(at),
+  };
+  const payloadHash = await sha256Hex(stableStringify(input));
+
+  const outcome = await runIdempotent(db, {
+    actorId: caller,
+    requestId: input.request_id,
+    payloadHash,
+    result: stored,
+    build: (resultJson) => [
+      operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
+      db
+        .prepare('UPDATE credentials SET revoked_at = ? WHERE actor_id = ? AND revoked_at IS NULL')
+        .bind(at, target.actor_id),
+      db
+        .prepare(
+          `INSERT INTO credentials (credential_id, actor_id, device_id, token_hash, revoked_at, created_at)
+           VALUES (?, ?, 'reissue', ?, NULL, ?)`,
+        )
+        .bind(credentialId, target.actor_id, tokenHash, at),
+    ],
+  });
+
+  // 首次写入返回 stored 本身；重放返回 JSON.parse 出的新对象（见上方注释）。
+  if (outcome !== stored) {
+    throw new BusinessError(
+      'TOKEN_NOT_REPLAYABLE',
+      '新 token 只在首次响应返回一次；请使用新的 request_id 重新签发',
+    );
+  }
+
+  const base = origin.replace(/\/+$/u, '');
+  return {
+    ...stored,
+    token,
+    mcp_url: `${base}/mcp?token=${encodeURIComponent(token)}`,
+  };
 }
 
 export async function recoveryCreate(
