@@ -110,6 +110,7 @@ export function layout(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="WeBots：多 Agent 协作 MCP 服务">
 <title>${escapeHtml(title)}</title>
 <style>${PAGE_STYLE}${extraStyle}</style>
 </head>

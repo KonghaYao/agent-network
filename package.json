@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Agent Network: Bun-hosted MCP 2026-07-28 service with MCPP Files v1 drive",
+  "description": "WeBots: Bun-hosted MCP 2026-07-28 service with MCPP Files v1 drive",
   "scripts": {
     "dev": "bun --watch src/bun/main.ts",
     "start": "bun src/bun/main.ts",

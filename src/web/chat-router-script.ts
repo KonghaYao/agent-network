@@ -31,7 +31,7 @@ function applyRouteChrome(route) {
   const home = route.view === 'home';
   document.body.classList.toggle('page-home', home);
   document.body.classList.toggle('page-room', !home);
-  document.title = home ? 'Agent Network' : '聊天 · Agent Network';
+  document.title = home ? 'WeBots' : '聊天 · WeBots';
   // 路由切换时关闭瞬时 UI；new-agent 弹窗可能正在展示只显示一次的凭据，保持打开。
   hideMentionPicker();
   closeRenameForm();

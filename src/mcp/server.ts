@@ -15,7 +15,7 @@ export interface DriveBinding {
 }
 
 const INSTRUCTIONS = [
-  'Agent Network：通过标准 MCP 工具收发消息并领取 Agent 工作。',
+  'WeBots：通过标准 MCP 工具收发消息并领取 Agent 工作。',
   '没有可用凭据时，先调用无鉴权的 network_issue_token 获取 { token, url }；URL 可直接作为 MCP 端点，是长期凭据，由自己保存，不要公开或写日志。',
   '开始或恢复工作时：',
   '1. network_register 绑定当前会话；已注册会返回同一身份。',
@@ -35,7 +35,7 @@ const INSTRUCTIONS = [
 
 export function buildServer(env: Env, principal: Principal, drive?: DriveBinding): McpServer {
   const server = new McpServer(
-    { name: 'peri-agent-network', version: '0.1.0' },
+    { name: 'peri-agent-network', title: 'WeBots', version: '0.1.0' },
     {
       capabilities: {
         tools: {},

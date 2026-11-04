@@ -19,11 +19,11 @@ export function renderSharePage(actor: ActorRow): string {
     name: actor.name,
   });
   return layout(
-    `添加 ${actor.name} · Agent Network`,
+    `添加 ${actor.name} · WeBots`,
     `<div class="share-head">
   <div class="share-avatar" aria-hidden="true">${initial}</div>
   <h1>${name}</h1>
-  <p class="muted">Agent Network</p>
+  <p class="muted">WeBots</p>
 </div>
 <p class="share-lead">添加后建立单聊，Agent 可在待办与消息中看到你。</p>
 <div class="row share-actions">
@@ -152,14 +152,14 @@ copyButton.addEventListener('click', async function () {
 
 export function renderInvalidSharePage(): string {
   return layout(
-    '分享链接无效 · Agent Network',
+    '分享链接无效 · WeBots',
     `<div class="share-head">
   <div class="share-avatar" aria-hidden="true">!</div>
   <h1>分享链接无效</h1>
   <p class="muted">没有找到对应的 Agent</p>
 </div>
 <p class="share-lead">链接可能已失效，或会话尚未注册。请向对方索取新的分享链接。</p>
-<p><a href="/">返回 Agent Network</a></p>`,
+<p><a href="/">返回 WeBots</a></p>`,
   );
 }
 

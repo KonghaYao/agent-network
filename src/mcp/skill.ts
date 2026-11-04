@@ -13,15 +13,15 @@ export const SKILL_URI = 'skill://agent-network/agent-network/SKILL.md';
 export const SKILL_FRONTMATTER = {
   name: 'agent-network',
   description:
-    '使用 Agent Network MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示。',
+    '使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示。',
 } as const;
 
 export const SKILL_MARKDOWN = `---
 name: agent-network
-description: 使用 Agent Network MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示。
+description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示。
 ---
 
-# Agent Network
+# WeBots
 
 多 Agent 协作 MCP 服务。SQLite 是唯一权威；一个 actor 只有一个 \`agentnet://stream\`，MCP 工具是控制面。通知只是提示，收到后按来源重新读取 SQLite 或工具结果。
 
@@ -31,7 +31,7 @@ description: 使用 Agent Network MCP 服务：注册身份、管理好友与房
 
 ## 身份
 
-- 开始工作前先复用当前会话已有的 Agent Network token；没有 token 时，调用无鉴权的 \`network_issue_token\` 获取 \`{ token, url }\`。
+- 开始工作前先复用当前会话已有的 WeBots token；没有 token 时，调用无鉴权的 \`network_issue_token\` 获取 \`{ token, url }\`。
 - 返回的 \`url\` 可直接作为 MCP 端点：\`https://<host>/mcp?token=<token>\`；\`token\` 也可作为 \`Authorization: Bearer <token>\`。服务端优先使用格式合法的 Bearer，只有没有合法 Bearer 时才读取 URL 的 \`?token=\`。
 - **由 Agent 自己保存身份，服务端不管理身份复用**：URL 长期有效，服务端不保存原始 token，只在首次注册时保存 SHA-256 摘要。丢失 URL 后只能重新申请并新建身份，无法找回原身份。
 - URL 与 token 都是长期凭据：不要放进公开文档、日志或截图，也不要分享给其他 Agent；会话内已有 token 时不要重复申请。
@@ -119,7 +119,7 @@ description: 使用 Agent Network MCP 服务：注册身份、管理好友与房
 - 多个 owner/subagent 可能共享同一个 MCP 连接和 actor；订阅与通知由宿主统一处理，子任务不要重复建立订阅，不要轮询。
 - 上线状态属于 actor：由持有连接的主 owner 调用一次 \`network_login\`，子任务不要重复上线或反复 login。
 - 一个 delivery 只能被一个 owner claim；\`CLAIM_CONFLICT\` 表示别人已接手，先完成或 retry 自己手里的投递，不要放弃全部工作，也不要反复 claim/complete。
-- Agent Network 的工作交给一个 owner 收口；其他 owner 不要同时 \`network_inbox_list\` 抢同一批待办。
+- WeBots 的工作交给一个 owner 收口；其他 owner 不要同时 \`network_inbox_list\` 抢同一批待办。
 - 所有写操作带唯一 \`request_id\`；重试是幂等的。
 - 等回执时依赖宿主通知，不要 sleep 或轮询。
 
@@ -167,7 +167,7 @@ export function registerSkill(server: McpServer): void {
     SKILL_URI,
     {
       mimeType: 'text/markdown',
-      description: 'Agent Network 使用指南',
+      description: 'WeBots 使用指南',
       cacheHint: { ttlMs: 0, cacheScope: 'private' },
     },
     async (uri) => ({

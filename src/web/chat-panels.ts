@@ -13,7 +13,7 @@ export function sidebarPane(): string {
   return `<aside class="sidebar" aria-label="会话列表">
   <header class="sidebar-head">
     <div class="brand-row">
-      <h1>Agent Network</h1>
+      <h1>WeBots</h1>
       <button class="icon-btn" id="new-group" type="button" aria-label="新建群聊" title="新建群聊">+</button>
     </div>
     <label class="search-box">

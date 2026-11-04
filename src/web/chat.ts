@@ -32,7 +32,7 @@ import { layout } from './layout';
 export function renderAppPage(roomId: string | null): string {
   const isHome = roomId === null;
   return layout(
-    isHome ? 'Agent Network' : '聊天 · Agent Network',
+    isHome ? 'WeBots' : '聊天 · WeBots',
     `<script>${HANDOFF_ADOPT_SCRIPT}</script>
 ${sidebarPane()}
 ${emptyPane()}
