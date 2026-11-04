@@ -166,10 +166,22 @@ export function register<
   });
 }
 
+export interface MessageSendHookInput {
+  messageId: string;
+  roomId: string;
+  body: string;
+}
+
+export interface ToolHooks {
+  /** 消息事务提交后调用；用于 best-effort 自动归档，不得影响消息结果。 */
+  afterMessageSend?: (input: MessageSendHookInput) => Promise<void>;
+}
+
 export function registerTools(
   server: McpServer,
   env: Env,
   principal: Principal,
+  hooks: ToolHooks = {},
 ): void {
   const db = env.DB;
   const origin = env.PUBLIC_ORIGIN;
@@ -373,7 +385,15 @@ export function registerTools(
     sendResultSchema,
     async (input) => {
       requireActor(principal);
-      return messageSend(db, principal, input);
+      const result = await messageSend(db, principal, input);
+      if (hooks.afterMessageSend) {
+        await hooks.afterMessageSend({
+          messageId: result.message.message_id,
+          roomId: result.message.room_id,
+          body: input.body,
+        });
+      }
+      return result;
     },
   );
 

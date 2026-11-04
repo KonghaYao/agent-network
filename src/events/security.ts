@@ -18,7 +18,17 @@ const BLOCKED_HOSTS = new Set([
   'instance-data.ec2.internal',
 ]);
 
-const blocked = new BlockList();
+/**
+ * SSRF 目标地址策略：只允许全球单播。
+ *
+ * - IPv4：拒绝 IANA 特殊用途注册表中的非全球地址；其余 IPv4 即全球单播。
+ * - IPv6：先要求落在 `2000::/3` 全球单播，再排除其中的特殊用途前缀。
+ *   因此 `fec0::/10`、`100::/64`、`64:ff9b::/96`、`64:ff9b:1::/48`
+ *   等不在 `2000::/3` 内的 site-local、discard-only 与转换前缀天然被拒；
+ *   `2002::/16`（6to4）、Teredo、ORCHID 等位于 `2000::/3` 内的特殊前缀
+ *   额外拒绝。
+ */
+const NON_GLOBAL_V4 = new BlockList();
 for (const [network, prefix] of [
   ['0.0.0.0', 8],
   ['10.0.0.0', 8],
@@ -28,6 +38,7 @@ for (const [network, prefix] of [
   ['172.16.0.0', 12],
   ['192.0.0.0', 24],
   ['192.0.2.0', 24],
+  ['192.88.99.0', 24],
   ['192.168.0.0', 16],
   ['198.18.0.0', 15],
   ['198.51.100.0', 24],
@@ -35,17 +46,24 @@ for (const [network, prefix] of [
   ['224.0.0.0', 4],
   ['240.0.0.0', 4],
 ] as const) {
-  blocked.addSubnet(network, prefix, 'ipv4');
+  NON_GLOBAL_V4.addSubnet(network, prefix, 'ipv4');
 }
+
+const GLOBAL_UNICAST_V6 = new BlockList();
+GLOBAL_UNICAST_V6.addSubnet('2000::', 3, 'ipv6');
+
+const NON_GLOBAL_V6 = new BlockList();
 for (const [network, prefix] of [
-  ['::', 128],
-  ['::1', 128],
-  ['fc00::', 7],
-  ['fe80::', 10],
-  ['ff00::', 8],
+  ['2001::', 32],
+  ['2001:2::', 48],
+  ['2001:10::', 28],
+  ['2001:20::', 28],
+  ['2001:30::', 28],
   ['2001:db8::', 32],
+  ['2002::', 16],
+  ['3fff::', 20],
 ] as const) {
-  blocked.addSubnet(network, prefix, 'ipv6');
+  NON_GLOBAL_V6.addSubnet(network, prefix, 'ipv6');
 }
 
 /** 严格 base64 / base64url 解码；非法字符或非规范长度返回 null。 */
@@ -96,10 +114,12 @@ export function isPublicAddress(raw: string): boolean {
   const address = stripBrackets(raw);
   const family = isIP(address);
   if (family === 0) return false;
-  if (family === 4) return !blocked.check(address, 'ipv4');
+  if (family === 4) return !NON_GLOBAL_V4.check(address, 'ipv4');
   const mapped = ipv4FromMapped(address);
-  if (mapped) return !blocked.check(mapped.address, 'ipv4');
-  return !blocked.check(address, 'ipv6');
+  if (mapped) return !NON_GLOBAL_V4.check(mapped.address, 'ipv4');
+  return (
+    GLOBAL_UNICAST_V6.check(address, 'ipv6') && !NON_GLOBAL_V6.check(address, 'ipv6')
+  );
 }
 
 function blockedHostname(hostname: string): boolean {

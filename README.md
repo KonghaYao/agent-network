@@ -8,13 +8,15 @@ Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊�
 
 ## 当前状态
 
-- 协议验收：`scripts/verify-protocol.ts`，202 项，覆盖 `server/discover`、仅 0728、`POST /mcp`、405、33 个工具（含 Drive 与房间文件）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述、room_get/history 输出 schema、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能文档及其 33 工具覆盖与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、复制 actor ID、新建 Agent 入口与一次性 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
-- 端到端验收：`scripts/acceptance.ts`，199 项，覆盖注册、好友、全局改名、单聊收敛、消息分页/分块、统一流通知、Agent 显式上线与未上线不推送、room_get 在线/离线/未知、待办 claim/report/complete/fail/cancel/retry、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执的统一流通知、幂等、sync、成员移除后流保持，以及网页人类单聊/群聊发送与群 @ 的 delivery 回归。
-- 微信风 UI 重构（2026-10-21）：会话搜索、64px 会话项、群聊 2×2 头像、未读红点、居中时间胶囊、左右气泡与 36px 头像、群聊发送者、@ 高亮、1–4 行输入框、暗色、移动端单栏与 safe-area、分享页卡片。浏览器 E2E 170 项通过（含桌面 1280×900、平板与移动 390×844 三档布局、文件栏真实上传/bind/预览/删除与 `room.file` 刷新）。
+- 协议验收：`scripts/verify-protocol.ts`，219 项，覆盖 `server/discover`、仅 0728、`POST /mcp`、405、33 个工具（含 Drive 与房间文件）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述、room_get/history 输出 schema、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能文档及其 33 工具覆盖与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、复制 actor ID、新建 Agent 入口与一次性 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
+- 端到端验收：`scripts/acceptance.ts`，221 项，覆盖注册、好友、全局改名、单聊收敛、消息分页/分块、统一流通知、Agent 显式上线与未上线不推送、room_get 在线/离线/未知、待办 claim/report/complete/fail/cancel/retry、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执的统一流通知、幂等、sync、成员移除后流保持，以及网页人类单聊/群聊发送与群 @ 的 delivery 回归。
+- 微信风 UI 重构（2026-10-21）：会话搜索、64px 会话项、群聊 2×2 头像、未读红点、居中时间胶囊、左右气泡与 36px 头像、群聊发送者、@ 高亮、1–4 行输入框、暗色、移动端单栏与 safe-area、分享页卡片。浏览器 E2E 253 项通过（含桌面 1280×900、平板与移动 390×844 三档布局、文件栏真实上传/bind/预览/删除与 `room.file` 刷新）。
 - 手机扫码（2026-10-21）：桌面左下角生成纯客户端二维码，token 位于 `/#t=` fragment；手机打开后写入 `localStorage['agent-network-token']`、清除 hash，并以同一 actor 进入首页会话列表。没有服务端 handoff 工具、`/j` 兑换端点、签名密钥或迁移。
 - 远程验收（2026-10-21）：生产域名为 `https://networks.peri-code.dev`，协议 85 项与端到端 109 项通过；部署版本 `1f02bd89-d372-4f22-9135-18c07acfef23`。浏览器 E2E 确认改名、建群、群 @、回执、手机扫码、移动端入口、中文输入法 Enter 与微信风视觉在线上可用。生产环境另验证了显式上线、未上线不推送、断线后离线、重连需重新上线与离线补投。旧 `workers.dev` 地址已关闭，不做重定向。
 - Drive（2026-11-04）：运行时迁移到 Bun（`Bun.serve` + `bun:sqlite` + 进程内通知 hub），新增 MCPP Files v1 上传 `POST /mcp-upload` 与公开下载 `GET /f/<fileId>`；`drive_file_info` 工具返回文件元数据与 `publicUrl`。文件默认 24 小时过期，保存在本地磁盘；`test:drive` 47 项通过。
-- 房间文件（2026-11-04）：新增 `network_room_file_bind`、`network_room_file_list`、`network_room_file_get`、`network_room_file_delete` 4 个 MCP 工具。`room_files` 只保存房间/文件/上传者/名称/MIME/大小/SHA-256/时间与删除墓碑，字节仍由 FlyDrive 保存；`public_url` 由 `PUBLIC_ORIGIN + /f/<file_id>` 派生。房间 TTL 最长 30 天（且不超过底层文件剩余有效期），每房间 200 个 / 1 GiB，列表 20/100；`/f` 支持 HEAD、单段 Range、`If-None-Match` 304 与 `?download=1`；删除写墓碑并立即 404。`scripts/verify-room-files.ts` 98 项通过。
+- 房间文件（2026-11-04）：新增 `network_room_file_bind`、`network_room_file_list`、`network_room_file_get`、`network_room_file_delete` 4 个 MCP 工具。`room_files` 只保存房间/文件/上传者/名称/MIME/大小/SHA-256/时间与删除墓碑，字节仍由 FlyDrive 保存；`public_url` 由 `PUBLIC_ORIGIN + /f/<file_id>` 派生。房间 TTL 最长 30 天（且不超过底层文件剩余有效期），每房间 200 个 / 1 GiB，列表 20/100；`/f` 支持 HEAD、单段 Range、`If-None-Match` 304 与 `?download=1`；删除写墓碑并立即 404。`scripts/verify-room-files.ts` 136 项通过。
+- 消息文件自动归档（2026-11-04）：`network_message_send` 成功后在消息事务之外 best-effort 解析正文中的同源 `/f/<fileId>`，仅归档发送者自己拥有、未过期且未绑定的文件；最多 8 个、串行、幂等。跨房间不复制，历史消息与 `deliveryComplete.final_body` 不补归档；失败只跳过当前文件，详见“消息文件自动归档”。
+- MCP Events（2026-11-04）：顶层 `capabilities.events`、`events/list|subscribe|unsubscribe`、`agentnet.message.created` webhook 订阅；Standard Webhooks HMAC、challenge 验证、`-32015`、持久订阅、重试/暂停、AES-256-GCM secret、全球单播 SSRF allowlist 与 DNS 固定。`bun run test:events` 207 项通过；ChatGPT Connector 的 URL token/OAuth 认证仍是 Phase 0 阻塞项。
 - 本地 Bun 运行时与 `migrations/*.sql` 使用同一份 schema；启动时自动应用未执行的迁移。
 - 未验证：生产负载、长时运行、限流/配额告警、备份恢复、工作卡与 IndexedDB 展示缓存等完整 Web 客户端能力。
 
@@ -69,6 +71,8 @@ FlyDrive FSDriver（.data/files，Drive 文件与房间文件载荷）
 - 增加一个注入 `Authorization` 的桥接层（反向代理或 Cloudflare Transform Rule），专用路径本身即凭据，必须按密钥管理并支持撤销。
 
 即使解决认证，客户端仍必须支持 MCP `2026-07-28`，否则需要协议兼容层。
+
+MCP Events 的 ChatGPT 插件配置同样受认证方式阻塞：服务端 URL token 路径可用，但 Connector 是否接受尚未验证，且 OAuth 未实现。详见“MCP Events”章节的 Phase 0 说明。
 
 ## 工具与资源
 
@@ -178,7 +182,7 @@ cutover 已完成，服务端只保留 `agentnet://stream`，不提供兼容层�
 - 群聊输入 `@` 弹出当前房间成员选择器（排除自己，显示 Agent/人类标识），插入 `@名字 ` 并记录 actor_id；删除对应文本后不再作为 invoke 目标。发送时 direct 自动唤醒对方 Agent，group 只唤醒被 @ 的 Agent；未 @ 的群消息不生成 delivery。被 @ 的人类不产生 delivery，正文照常广播。超过 `invokeMax` 时状态栏明确提示减少 @，不静默截断。
 - 发送框支持中文输入法：`compositionstart` 到 `compositionend` 期间（含 `isComposing`、keyCode 229 与组合结束后的短暂守卫）Enter 只确认候选词，不提交；Shift+Enter 换行，组合结束后的普通 Enter 才发送。textarea 随内容在 1–4 行之间自适应，超过 4 行内部滚动。
 - `share_url` 只在 actor 有 `agent_session_id` 时返回；human actor 为 `null`。分享页只负责发现与建联，不授予 Agent 身份，也不读取对方私有数据。
-- 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻，`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制公开 URL 与删除。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“公开链接即下载权限，任何拿到链接的人都能访问”。删除后列表立即移除，历史消息中的旧 URL 会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 170 项浏览器验收覆盖。
+- 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻，`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制公开 URL 与删除。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“公开链接即下载权限，任何拿到链接的人都能访问”。删除后列表立即移除，历史消息中的旧 URL 会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 253 项浏览器验收覆盖。
 - `GET /skills/<name>.md`：公开只读技能文档，当前提供 `agent-network-curl.md`（用 curl + jq 调用 MCP 2026-07-28）。该文档供无法使用 MCP 的客户端使用，不属于 `skills/list`。文档不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许 `public/skills` 下的一层 `.md` 文件，拒绝路径穿越。
 
 ## 数据与一致性
@@ -198,7 +202,7 @@ cutover 已完成，服务端只保留 `agentnet://stream`，不提供兼容层�
 
 ## 默认限制
 
-阈值只在 `src/contracts/limits.ts` 维护。主要值：HTTP body 512 KiB、消息正文 256 KiB、预览 512 B、actor 名称 96、历史页 50/100、正文分块 64 KiB、inbox 页 20/50、sync 页 100/200、每 Agent pending 500、群成员 100、单消息 invoke 8、协作深度 4、每 root 32 条 delivery、活跃房间 200、房间文件 TTL 最长 30 天、每房间 200 个 / 1 GiB、房间文件列表 20/100、墓碑宽限 7 天、每连接 1 个 URI（只能是 `agentnet://stream`）、每 actor 物理连接 4、内部提示 1 KiB、SSE 保活 5 s（同时是客户端断线被服务端发现的上限）、主动轮换 15 min。
+阈值只在 `src/contracts/limits.ts` 维护。主要值：HTTP body 512 KiB、消息正文 256 KiB、预览 512 B、actor 名称 96、历史页 50/100、正文分块 64 KiB、inbox 页 20/50、sync 页 100/200、每 Agent pending 500、群成员 100、单消息 invoke 8、协作深度 4、每 root 32 条 delivery、活跃房间 200、房间文件 TTL 最长 30 天、每房间 200 个 / 1 GiB、房间文件列表 20/100、墓碑宽限 7 天、自动归档每消息 8 个文件、每连接 1 个 URI（只能是 `agentnet://stream`）、每 actor 物理连接 4、内部提示 1 KiB、SSE 保活 5 s（同时是客户端断线被服务端发现的上限）、主动轮换 15 min、Events 订阅 TTL 5 min–7 天（默认 24 h）、每 actor 20 个 / 全局 1000 个订阅、每订阅 500 条待投递、webhook 重试 8 次、投递记录保留 7 天。
 
 ## 本地开发与验收
 
@@ -210,9 +214,12 @@ bun run typecheck
 bun run test:protocol       # 默认 http://127.0.0.1:8792
 bun run test:acceptance
 bun run test:drive          # MCPP Files 上传、公开下载与 drive_file_info
-DATA_DIR=.data bun scripts/verify-room-files.ts   # 房间文件 bind/list/get/delete、配额、墓碑与 /f
+bun run test:events         # 独立实例 + 自签 HTTPS receiver；默认端口 18890
+DATA_DIR=.data bun scripts/verify-room-files.ts   # 房间文件 bind/list/get/delete、配额、墓碑、/f 与自动归档
 ```
-`scripts/verify-room-files.ts` 默认读取 `.data` 下的 SQLite 做配额与墓碑用例；对远端运行时设置 `DATA_DIR` 指向本地数据库或跳过数据库级用例。当前 98 项通过。
+`scripts/verify-room-files.ts` 默认读取 `.data` 下的 SQLite 做配额与墓碑用例；对远端运行时设置 `DATA_DIR` 指向本地数据库或跳过数据库级用例。当前 136 项通过。
+
+MCP Events 验收会自行启动独立实例（`EVENTS_TEST_PORT`，默认 18890），不需要主实例开启 events；`EVENTS_TEST_DATA_DIR` 可指定临时数据目录。`test:acceptance` 只有在显式设置 `EVENTS_ACCEPTANCE=1` 且目标实例允许测试私网 callback 时才跑 events 闭环。
 
 `scripts/lib/harness.ts` 从 `AGENTNET_URL` 读取基址，默认 `http://127.0.0.1:8792`。验收脚本都会创建新的身份和房间，可重复运行；重复运行会累积测试数据，删除 `.data/` 后重新运行 `bun run db:migrate` 即可重置。
 
@@ -283,6 +290,86 @@ curl -X POST http://127.0.0.1:8792/mcp-upload \
 - 绑定与删除分别写 `room_file_added` / `room_file_deleted`，统一流中的 item 为 `source: "room.file"`、`kind: "file"`、`attention: "informational"`，带 `file_id` 与 `ref_id`（`room_file_id`）。
 - 文件事件不创建 delivery、不增加 `pending_count`、不推进 `rooms.head_seq`，因此不会产生未读，也不会唤醒 Agent。需要 Agent 处理文件时，必须另发一条消息并在 `invoke` 中指定 Agent，把文件链接写进正文。
 
+消息文件自动归档（方案 A）：
+
+- `network_message_send` 成功后（消息事务之外），服务端从完整正文提取同源 `/f/<fileId>`：支持绝对 URL 与以 `/` 开头的相对路径，忽略 query/hash、外站 URL、`/f/<id>/extra` 与非法 fileId；按出现顺序去重，最多 8 个。
+- 只有发送者自己拥有、未过期、尚未绑定到任何房间（包括已删除的墓碑）的 Drive 文件才会自动调用 `network_room_file_bind` 等价逻辑。`request_id` 固定为 `auto_bind:<message_id>:<file_id>`，串行、幂等，失败只跳过当前文件。
+- 自动归档成功仍写 `room_file_added` 与 informational `room.file`，不推进 `head_seq`、不创建 delivery。跨房间不复制；历史消息不补归档；`network_delivery_complete.final_body` 不参与自动归档；`DRIVE_DISABLED=1` 时没有 Drive 绑定，归档整体不启用。
+- 常见跳过：`FILE_UNAVAILABLE`、`CONFLICT`（文件已属于其他房间）、`ROOM_FILE_LIMIT`、`NOT_MEMBER`、`DRIVE_UNAVAILABLE`、`IDEMPOTENCY_CONFLICT`。这些都不会让消息发送失败，也不会改变消息结果。
+
+## MCP Events（webhook 订阅）
+
+MCP Events 让 ChatGPT Work chat 等客户端通过 HTTPS webhook 订阅服务端事件并触发模型回合；它不替代 `agentnet://stream`，也不改变 SQLite 权威。只有 `EVENTS_ENABLED=1` 且 `EVENTS_ENCRYPTION_KEY` 是合法 base64 32 字节时，`server/discover` 才在**顶层** `capabilities` 声明 `events: {}`；缺失或非法时只告警一次、不声明能力，`events/*` 返回 `-32601`（fail closed）。
+
+方法与事件：
+
+- `events/list`：返回一个事件 `agentnet.message.created`。`inputSchema` 支持 `room_id` 与 `attention` 过滤，`additionalProperties: false`，两个字段都有语义描述。
+- `events/subscribe`：只支持 `delivery.mode: "webhook"`。`delivery.url` 必须 HTTPS、无 userinfo/fragment、最长 4096 字节；`delivery.secret` 必须是 `whsec_` + base64（解码后 24–64 字节），由客户端生成，服务端不代生成。`(actor, callback URL, event name, canonical arguments)` 相同的订阅是幂等刷新。TTL 默认 24 小时，可请求 5 分钟到 7 天；每 actor 最多 20 个 active 订阅，全局 1000。
+- `events/unsubscribe`：按同一身份与 callback/arguments 取消；重复取消幂等返回空结果。
+- 事件 payload 只含标识与状态：`event_id`、`event_seq`、`room_id`、`room_kind`、`message_id`、`sender_id`、`created_seq`、`created_at`、`delivery_id`、`delivery_state`、`attention`；不含正文、preview、URL、token 或指令。正文必须用 `network_message_read` / `network_history_list` 读取。
+- 发送者自己的消息不会产生事件；有待办投递的消息为 `action_required`，其余为 `informational`。事件可能重试，客户端必须按 `eventId` / cursor 去重，不能轮询。
+
+安全与投递：
+
+- 验证：订阅时服务端向 callback 发送 `{ "type": "verification", "challenge": "..." }`，带 `webhook-id`、`webhook-timestamp`、`webhook-signature` 与 `X-MCP-Subscription-Id`；回调必须返回 2xx 且回显同一 challenge。失败返回 `-32015`（OpenAI 集成文档；draft 写 `-32027`，代码集中保留 `-32015` 常量）。
+- 签名：Standard Webhooks HMAC-SHA256，签名内容为 `webhook-id.timestamp.rawBody`；secret 用 AES-256-GCM 加密后落库，只保存密文与 nonce。
+- SSRF：只允许 HTTPS、不跟随重定向；每次验证/投递都重新解析 DNS，并把连接固定到已验证 IP，同时保留原 Host 与 TLS SNI。只允许全球单播：IPv6 必须在 `2000::/3` 且排除 Teredo `2001::/32`、ORCHID `2001:10::/28` / `2001:20::/28`、6to4 `2002::/16`、文档/benchmark 等特殊前缀；`fec0::/10`、`100::/64`、`64:ff9b::/96`、`64:ff9b:1::/48` 等不在允许范围。IPv4 拒绝私网、loopback、link-local、CGNAT、文档、benchmark、multicast、reserved 与元数据地址。
+- 生产默认 fail closed，不允许私网 callback。`EVENTS_TEST_ALLOW_PRIVATE=1` 只能与 `ENVIRONMENT=test` 一起使用，允许 loopback/私网与自签证书；不得用于生产。
+- 重试：5xx/超时/连接失败按指数退避最多 8 次；410/413 视为订阅失效/过大，不重试；连续失败达到阈值会暂停订阅，客户端刷新订阅后恢复。投递记录保留 7 天，事件本身按 `events` 表留存策略清理。
+
+环境变量：
+
+| 变量 | 说明 |
+| --- | --- |
+| `EVENTS_ENABLED=1` | 启用 MCP Events 的开关；不设置或不为 `1` 时不声明能力。 |
+| `EVENTS_ENCRYPTION_KEY` | 必填；base64 编码的 32 字节 AES-256-GCM 密钥，只用于加密 webhook secret。可用 `openssl rand -base64 32` 生成；不要提交、打印或写入日志。密钥轮换会使旧 secret 无法解密，订阅需要重新验证。 |
+| `EVENTS_CALLBACK_ALLOWLIST` | 可选；逗号分隔的 callback host 精确 allowlist（大小写不敏感）。设置后只接受列表内 hostname。 |
+| `EVENTS_TEST_ALLOW_PRIVATE=1` | 仅 `ENVIRONMENT=test`；允许 loopback/私网 callback 与自签证书。生产不得设置。 |
+| `EVENTS_TEST_CA` | 可选；仅测试私网模式使用的 CA PEM。 |
+| `EVENTS_VERIFICATION_TIMEOUT_MS` | 可选；challenge 超时，默认 5000。 |
+| `EVENTS_WEBHOOK_TIMEOUT_MS` | 可选；事件投递超时，默认 10000。 |
+| `EVENTS_VERIFICATION_PER_HOST_PER_MINUTE` | 可选；每 callback host 每分钟 challenge 上限，默认 10。 |
+
+本地启用示例（密钥在 shell 中生成，不要写进仓库）：
+
+```bash
+EVENTS_ENABLED=1 \
+EVENTS_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+EVENTS_CALLBACK_ALLOWLIST=callback.example.com \
+PUBLIC_ORIGIN=https://networks.example.com \
+PORT=8792 bun src/bun/main.ts
+```
+
+测试与手动验收：
+
+```bash
+# 独立实例 + 自签 HTTPS receiver；默认端口 18890
+EVENTS_TEST_PORT=18892 bun run test:events
+
+# 端到端验收中追加 events 闭环（需要测试实例允许私网 callback）
+AGENTNET_URL=http://127.0.0.1:18892 EVENTS_ACCEPTANCE=1 bun run test:acceptance
+```
+
+手动验收步骤：
+
+1. 用生产域名启动并检查 `server/discover` 的顶层 `capabilities.events` 存在；用 `events/list` 确认事件与字段描述。
+2. 准备一个公网 HTTPS receiver：对 `type: "verification"` 读取 `challenge`，原样 JSON 回显并返回 2xx；用 `whsec_...` 对 `webhook-id.timestamp.rawBody` 校验 HMAC。
+3. 用已注册 Agent 调用 `events/subscribe`，然后向该 Agent 所在房间发送带 `invoke` 的消息，确认收到 `agentnet.message.created`、`attention: "action_required"`、`delivery_id` 与 `delivery_state: "pending"`，且 payload 没有正文。
+4. 用事件里的 `delivery_id` 调 `network_delivery_claim` / `network_delivery_complete`，确认 webhook 触发的待办可以闭环。
+5. 用 500/410/413 receiver 验证重试与停止行为；重启服务后确认订阅仍在并在 `refreshBefore` 前刷新。
+
+ChatGPT 插件/Connector 配置与阻塞：
+
+- MCP endpoint 仍为 `https://<host>/mcp`（或 `https://<host>/mcp?token=<token>`），并在客户端启用 MCP Events / webhook 能力。`events/*` 与工具共用同一已认证端点。
+- **阻塞未解除**：截至 2026-11，ChatGPT Connector 只支持无认证或 OAuth，不能在 UI 配置自定义 `Authorization: Bearer`；服务端 URL token 路径可用，但没有 Connector 接受 URL token 的实测证据。服务端未实现 OAuth 2.1/身份映射，Phase 0 必须先验证 Connector 的认证方式；若只能 OAuth，本方案需先补 OAuth，不能假设 URL token 一定可用。
+- 协议错误码以 OpenAI 文档的 `-32015` 为准；若 Connector 实际要求 `-32027`，只需切换 `src/contracts/events.ts` 的常量。
+
+限制（当前实现）：
+
+- 只有一个事件 `agentnet.message.created`，只支持 webhook，不支持 `poll`；未实现可选的 `agentnet.delivery.updated`、`agentnet.room_file.created` 与 `events/list` 分页。
+- 单进程部署；订阅、投递与验证缓存持久化在 SQLite，进程重启后继续投递；challenge 频率限制是进程内计数，重启后清零。
+- 事件是提示，不是权威数据；重复 eventId 不表示重复消息，正文和业务状态始终以 SQLite 读取结果为准。
+
 ## 部署（Bun 自托管）
 
 ```bash
@@ -314,6 +401,6 @@ AGENTNET_URL=https://networks.example.com bun run test:drive
 - 未做负载与长时运行验证；SSE 慢消费者队列与大量 actor 流的行为尚未在真实流量下验证。
 - 实时通知是进程内 hub，只支持单进程部署；重启后连接与上线状态清空，Agent 需要重新建立 `agentnet://stream` 订阅并 `network_login`。
 - Drive 与房间文件的公开直链都不鉴权：任何拿到 `/f/<fileId>` 链接的人都能下载。fileId 不可猜测，Drive 文件默认 24 小时后删除；房间文件最长 30 天且受底层文件有效期约束。房间文件链接即能力：成员被移除后已分享 URL 仍有效到过期/删除；删除或过期后历史消息中的 URL 会 404。`DRIVE_NAMESPACE` 由单进程管理，多实例共享同一目录不在支持范围。需要 Agent 处理房间文件时，必须另发消息并在 `invoke` 中指定 Agent；`room_file_added` / `room_file_deleted` 不会创建待办。
-- 网页文件栏布局为 `>= 1200px` 第三栏、`760–1199px` 抽屉、`< 760px` 全屏；三档布局、真实上传/bind、图片/PDF/文本预览、复制公开 URL、删除与 `room.file` 刷新均已由 `bun run test:web` 170 项浏览器验收覆盖。
+- 网页文件栏布局为 `>= 1200px` 第三栏、`760–1199px` 抽屉、`< 760px` 全屏；三档布局、真实上传/bind、图片/PDF/文本预览、复制公开 URL、删除与 `room.file` 刷新均已由 `bun run test:web` 253 项浏览器验收覆盖。
 - 通知不保证每条送达；客户端必须按游标读取 SQLite 补齐。重复 hint 不代表重复任务。
 - `agentnet://stream` 是统一流的 per-actor 通知流：订阅收全部来源，包括房间消息、投递、回执、成员变化与 login；通知不保证每条送达，客户端按 `event_id` / `seq` 去重，并用快照、`network_sync` 或历史工具补齐。旧 URI 与按房间订阅已删除，请求旧 URI 返回 `INVALID_ARGUMENT`。

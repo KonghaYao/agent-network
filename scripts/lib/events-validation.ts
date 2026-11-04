@@ -151,10 +151,60 @@ export async function runEventsValidationChecks(input: {
   );
 
   // SSRF 单元：只验证拒绝，不探测内部网络。
-  for (const address of ['127.0.0.1', '10.1.2.3', '169.254.169.254', '::1', 'fc00::1', 'fe80::1']) {
+  // IPv4 特殊用途与 IPv6 非全球单播/特殊前缀必须全部拒绝。
+  for (const address of [
+    '0.0.0.0',
+    '127.0.0.1',
+    '10.1.2.3',
+    '100.64.0.1',
+    '169.254.169.254',
+    '172.16.0.1',
+    '192.0.2.1',
+    '192.168.1.1',
+    '198.18.0.1',
+    '198.51.100.1',
+    '203.0.113.1',
+    '224.0.0.1',
+    '255.255.255.255',
+    '::',
+    '::1',
+    'fc00::1',
+    'fdff::1',
+    'fe80::1',
+    'fec0::1',
+    'ff02::1',
+    '100::1',
+    '2001::1',
+    '2001:2::1',
+    '2001:10::1',
+    '2001:20::1',
+    '2001:30::1',
+    '2001:db8::1',
+    '2002::1',
+    '2002:7f00:1::',
+    '3fff::1',
+    '64:ff9b::7f00:1',
+    '64:ff9b:1::1',
+    '::ffff:127.0.0.1',
+    '::ffff:169.254.169.254',
+  ]) {
     check(`非公网地址被拒绝: ${address}`, !isPublicAddress(address));
   }
-  check('公网地址被接受: 8.8.8.8', isPublicAddress('8.8.8.8'));
+  for (const address of ['8.8.8.8', '1.1.1.1', '2606:4700:4700::1111', '2001:4860:4860::8888']) {
+    check(`全球单播地址被接受: ${address}`, isPublicAddress(address));
+  }
+  const pinned = await resolveCallbackTarget(new URL('https://8.8.8.8:443/callback'), {
+    allowPrivateCallbacks: false,
+    callbackAllowlist: null,
+  });
+  checkEqual('公网 IPv4 字面量固定为已验证地址', pinned.address, '8.8.8.8');
+  checkEqual('公网 IPv4 字面量保留 family', pinned.family, 4);
+  const pinnedV6 = await resolveCallbackTarget(new URL('https://[2606:4700:4700::1111]/callback'), {
+    allowPrivateCallbacks: false,
+    callbackAllowlist: null,
+  });
+  checkEqual('公网 IPv6 字面量固定为已验证地址', pinnedV6.address, '2606:4700:4700::1111');
+  checkEqual('公网 IPv6 字面量保留 family', pinnedV6.family, 6);
   try {
     await resolveCallbackTarget(new URL('https://127.0.0.1:1/callback'), {
       allowPrivateCallbacks: false,

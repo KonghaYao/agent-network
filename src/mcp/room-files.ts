@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import type { FileScope, FileService } from '@peri-code/mcpp/files';
 
 import { BusinessError } from '../contracts/errors';
+import { extractMessageFileLinks } from '../contracts/file-links';
 import {
   roomFileBindSchema,
   roomFileDeleteSchema,
@@ -18,9 +19,10 @@ import {
 import type { Principal } from '../domain/principal';
 import { purgeFilePayloads } from '../drive/service';
 import type { Env } from '../env';
+import { getRoomFile } from '../storage/queries';
 import { requireActor } from './auth';
 import { roomFileDeletedSchema, roomFilePageSchema, roomFileResultSchema } from './outputs';
-import { register } from './tools';
+import { register, type MessageSendHookInput } from './tools';
 
 export interface RoomFileToolBinding {
   fileService: FileService;
@@ -28,22 +30,9 @@ export interface RoomFileToolBinding {
   scope: () => FileScope;
 }
 
-/**
- * 房间文件工具。
- *
- * 只在启用 MCPP Files 时注册；公开 URL 仍由 `/f/<file_id>` 提供，
- * 绑定/删除不会改变文件本身的过期时间，也不提供续期接口。
- */
-export function registerRoomFileTools(
-  server: McpServer,
-  env: Env,
-  principal: Principal,
-  binding: RoomFileToolBinding,
-): void {
-  const db = env.DB;
-  const origin = env.PUBLIC_ORIGIN;
-
-  const source: RoomFileSource = {
+/** 绑定与自动归档共用的文件前置：只返回当前身份自己的记录。 */
+function createRoomFileSource(binding: RoomFileToolBinding): RoomFileSource {
+  return {
     async readFile(fileId) {
       let current: FileScope;
       try {
@@ -68,6 +57,67 @@ export function registerRoomFileTools(
       };
     },
   };
+}
+
+/**
+ * 消息发送成功后的自动归档（best-effort）。
+ *
+ * 只处理正文中的同源 `/f/<fileId>`，且仅当发送者拥有该文件、文件未过期、
+ * 尚未绑定到任何房间时才调用 `roomFileBind`。任何失败（他人文件、跨房间
+ * CONFLICT、配额、Drive 不可用、幂等冲突等）都只跳过当前文件，不影响已
+ * 提交的消息响应。归档在消息事务之外串行执行，消息事务本身不感知文件。
+ */
+export function createMessageFileArchiver(
+  env: Env,
+  principal: Principal,
+  binding: RoomFileToolBinding,
+): (input: MessageSendHookInput) => Promise<void> {
+  const source = createRoomFileSource(binding);
+  return async (input) => {
+    const fileIds = extractMessageFileLinks(input.body, env.PUBLIC_ORIGIN);
+    if (fileIds.length === 0) return;
+
+    for (const fileId of fileIds) {
+      try {
+        // 已绑定（含跨房间与墓碑）不重复处理；新消息不能改写旧绑定。
+        if (await getRoomFile(env.DB, fileId)) continue;
+        const file = await source.readFile(fileId);
+        if (!file || Date.parse(file.expiresAt) <= Date.now()) continue;
+        await roomFileBind(
+          env.DB,
+          principal,
+          {
+            request_id: `auto_bind:${input.messageId}:${fileId}`,
+            room_id: input.roomId,
+            file_id: fileId,
+          },
+          source,
+          env.PUBLIC_ORIGIN,
+        );
+      } catch {
+        // best-effort：FILE_UNAVAILABLE / CONFLICT / ROOM_FILE_LIMIT /
+        // NOT_MEMBER / DRIVE_UNAVAILABLE / IDEMPOTENCY_CONFLICT 等一律跳过。
+        continue;
+      }
+    }
+  };
+}
+
+/**
+ * 房间文件工具。
+ *
+ * 只在启用 MCPP Files 时注册；公开 URL 仍由 `/f/<file_id>` 提供，
+ * 绑定/删除不会改变文件本身的过期时间，也不提供续期接口。
+ */
+export function registerRoomFileTools(
+  server: McpServer,
+  env: Env,
+  principal: Principal,
+  binding: RoomFileToolBinding,
+): void {
+  const db = env.DB;
+  const origin = env.PUBLIC_ORIGIN;
+  const source = createRoomFileSource(binding);
 
   register(
     server,

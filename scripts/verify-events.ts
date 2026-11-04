@@ -185,6 +185,19 @@ async function main(): Promise<void> {
       })
     ).room.room_id;
 
+    // 测试实例以 DRIVE_DISABLED=1 启动：自动归档没有 Drive 绑定可注册，
+    // 含合法 fileId 的消息仍必须正常提交，不能因为解析到链接而失败。
+    const driveDisabledFileId = `f_${'d'.repeat(22)}`;
+    const driveDisabledSent = await sendMessage(
+      agentA,
+      roomAB,
+      `drive disabled /f/${driveDisabledFileId}`,
+    );
+    check(
+      'DRIVE_DISABLED 下含文件链接的消息仍成功',
+      Boolean(driveDisabledSent.message.message_id),
+    );
+
     // ---------- 能力 / 目录 ----------
     const discover = await rawRpc('server/discover');
     const discoverResult = discover.body.result as

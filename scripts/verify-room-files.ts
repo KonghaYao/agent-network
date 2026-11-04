@@ -38,7 +38,8 @@ import {
   type McpConnection,
   type UploadedTestFile,
 } from './lib/harness';
-import { registerIdentity, type RoomDetail } from './lib/acceptance-helpers';
+import { registerIdentity, sendMessage, type RoomDetail } from './lib/acceptance-helpers';
+import { runAutoArchiveCases, runFileLinkParserCases } from './lib/room-file-archive';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META = 'io.agent-network/event';
@@ -125,22 +126,30 @@ interface StreamItemView {
   kind?: string;
   attention?: string;
   room_id?: string;
+  message_id?: string;
   file_id?: string;
   ref_id?: string;
 }
 
-function streamFileItems(
+function streamItems(
   events: { params: Record<string, unknown> }[],
+  source: string,
 ): StreamItemView[] {
   const items: StreamItemView[] = [];
   for (const event of events) {
     const meta = event.params._meta as Record<string, unknown> | undefined;
     const payload = meta?.[STREAM_EVENT_META] as { items?: StreamItemView[] } | undefined;
     for (const item of payload?.items ?? []) {
-      if (item.source === 'room.file') items.push(item);
+      if (item.source === source) items.push(item);
     }
   }
   return items;
+}
+
+function streamFileItems(
+  events: { params: Record<string, unknown> }[],
+): StreamItemView[] {
+  return streamItems(events, 'room.file');
 }
 
 /** 直连同一 SQLite 的数据库级用例；没有本地库（远端验收）时返回 null。 */
@@ -212,6 +221,30 @@ async function databaseCases(
       '数量配额：超过 200 个返回 ROOM_FILE_LIMIT',
       bind(connection, rooms.quota, overflowFile.fileId),
       'ROOM_FILE_LIMIT',
+    );
+
+    // 配额满时消息仍成功；自动归档 best-effort 跳过，不新增 room_files。
+    const archiveOverflow = await uploadTestFile(connection.token, {
+      name: 'quota-auto.txt',
+      mimeType: 'text/plain',
+      body: 'q',
+    });
+    const quotaMessage = await sendMessage(
+      connection,
+      rooms.quota,
+      `配额满自动归档 ${archiveOverflow.publicUrl}`,
+    );
+    check('数量配额满时含文件链接的消息仍成功', Boolean(quotaMessage.message.message_id));
+    const quotaCount = db
+      .prepare(
+        'SELECT COUNT(*) AS n FROM room_files WHERE room_id = ? AND deleted_at IS NULL AND expires_at > ?',
+      )
+      .get(rooms.quota, now) as { n: number };
+    checkEqual('数量配额满时自动归档跳过', quotaCount.n, LIMITS.roomFilesPerRoom);
+    check(
+      '数量配额满时新文件未写入 room_files',
+      db.prepare('SELECT 1 AS ok FROM room_files WHERE file_id = ?').get(archiveOverflow.fileId) ===
+        null,
     );
 
     // 字节配额：预置接近 1 GiB 的占用，再绑定小文件触发上限。
@@ -299,6 +332,7 @@ async function databaseCases(
 
 async function main(): Promise<void> {
   console.log(`房间文件验收: ${baseUrl()}`);
+  runFileLinkParserCases();
   const aConn = await connectClient(newToken());
   const bConn = await connectClient(newToken());
   const cConn = await connectClient(newToken());
@@ -331,6 +365,8 @@ async function main(): Promise<void> {
     const byteRoom = await createGroup(aConn, b.actor_id, '房间文件字节群');
     const expiryRoom = await createGroup(aConn, b.actor_id, '房间文件过期群');
     const cleanupRoom = await createGroup(aConn, b.actor_id, '房间文件清理群');
+    const archiveRoom = await createGroup(aConn, b.actor_id, '消息文件自动归档群');
+    const archiveSecondRoom = await createGroup(aConn, b.actor_id, '消息文件自动归档二群');
 
     const textBody = 'room file payload';
     const uploaded = await uploadTestFile(aConn.token, {
@@ -708,6 +744,13 @@ async function main(): Promise<void> {
       '成员移出后无法再 list 房间文件',
       listFiles(bConn, membershipRoom),
       'NOT_MEMBER',
+    );
+
+    await runAutoArchiveCases(
+      aConn,
+      bConn,
+      { archive: archiveRoom, second: archiveSecondRoom },
+      { bind, listFiles, deleteFile },
     );
 
     await databaseCases(aConn, a.actor_id, {

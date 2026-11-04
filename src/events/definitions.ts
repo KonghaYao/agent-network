@@ -5,8 +5,20 @@ import { sha256Hex, stableStringify } from '../storage/db';
 
 /** 订阅过滤器：strict，未知字段与 inputSchema.additionalProperties:false 一致。 */
 export const MESSAGE_CREATED_ARGUMENTS = z.strictObject({
-  room_id: z.string().min(1).max(128).optional(),
-  attention: z.enum(['action_required', 'informational']).optional(),
+  room_id: z
+    .string()
+    .min(1)
+    .max(128)
+    .describe(
+      'Only deliver messages from this room. The subscribed actor must be an active member. Omit to receive events from every room the actor belongs to.',
+    )
+    .optional(),
+  attention: z
+    .enum(['action_required', 'informational'])
+    .describe(
+      'Filter by attention level. Use action_required to receive only messages that create a pending delivery for the subscribed actor; informational for other messages. Omit to receive both.',
+    )
+    .optional(),
 });
 
 export type MessageCreatedArguments = z.infer<typeof MESSAGE_CREATED_ARGUMENTS>;

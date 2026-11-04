@@ -7,9 +7,9 @@ import type { Env } from '../env';
 import type { Principal } from '../domain/principal';
 import { registerEvents } from './events';
 import { registerResources } from './resources';
-import { registerRoomFileTools } from './room-files';
+import { createMessageFileArchiver, registerRoomFileTools } from './room-files';
 import { registerSkill } from './skill';
-import { registerTools } from './tools';
+import { registerTools, type ToolHooks } from './tools';
 
 type WeBotsCapabilities = ServerCapabilities & { events?: Record<string, unknown> };
 
@@ -56,7 +56,11 @@ export function buildServer(env: Env, principal: Principal, drive?: DriveBinding
       instructions,
     },
   );
-  registerTools(server, env, principal);
+  const hooks: ToolHooks =
+    env.FILES && drive
+      ? { afterMessageSend: createMessageFileArchiver(env, principal, drive) }
+      : {};
+  registerTools(server, env, principal, hooks);
   registerResources(server, env, principal);
   registerSkill(server);
   if (env.EVENTS) registerEvents(server, env, principal);

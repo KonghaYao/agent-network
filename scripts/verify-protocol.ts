@@ -97,6 +97,23 @@ async function main(): Promise<void> {
       (eventDefinition.payloadSchema as Record<string, unknown>)?.additionalProperties,
       false,
     );
+    const inputProperties = (
+      (eventDefinition.inputSchema as Record<string, unknown>)?.properties as
+        | Record<string, { description?: unknown }>
+        | undefined
+    ) ?? {};
+    check(
+      'events/list room_id 有语义描述',
+      typeof inputProperties.room_id?.description === 'string' &&
+        inputProperties.room_id.description.length > 0,
+      inputProperties.room_id,
+    );
+    check(
+      'events/list attention 有语义描述',
+      typeof inputProperties.attention?.description === 'string' &&
+        inputProperties.attention.description.length > 0,
+      inputProperties.attention,
+    );
     checkEqual('events/list 保留 resultType', eventsResult?.resultType, 'complete');
     console.log(
       `  · events/list wire shape: result keys = ${Object.keys(eventsResult ?? {}).join(',')}`,
@@ -645,6 +662,13 @@ async function main(): Promise<void> {
     skillText.slice(0, 200),
   );
   check(
+    '技能正文要求超过 10 秒先发简短确认',
+    skillText.includes('超过 10 秒') &&
+      skillText.includes('简短确认') &&
+      skillText.includes('不算完成'),
+    skillText.slice(0, 240),
+  );
+  check(
     '技能正文说明 CLAIM_CONFLICT 不代表放弃全部工作',
     skillText.includes('CLAIM_CONFLICT') && skillText.includes('不代表放弃全部任务'),
     skillText.slice(0, 200),
@@ -882,6 +906,13 @@ async function main(): Promise<void> {
       skillDocText.includes('唯一 subscription id') &&
       skillDocText.includes('重新 `network_login`'),
     skillDocText.slice(0, 200),
+  );
+  check(
+    '静态技能要求超过 10 秒先发简短确认',
+    skillDocText.includes('超过 10 秒') &&
+      skillDocText.includes('简短确认') &&
+      skillDocText.includes('不算完成'),
+    skillDocText.slice(0, 240),
   );
   check(
     '静态技能说明 URL token 流程与 Origin 边界',
