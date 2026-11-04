@@ -85,10 +85,10 @@ SQLite 是业务状态唯一权威。hub 只广播小型提示，不保存消息
 在本目录执行：
 
 - `bun run db:migrate`、`bun run dev`：Bun + 本地 SQLite，默认端口 8792。
-- `bun run typecheck`：TypeScript 检查。
+- `bun run typecheck`：`tsrs --noEmit`（Rust 版 tsc，读取 `tsconfig.json`）；`bun run typecheck:tsc` 保留为官方 `tsc --noEmit` 对照/回退。
 - `bun run test:protocol`：协议逐帧验收，默认本地地址。
 - `bun run test:acceptance`：端到端业务与通知验收。
 - `AGENTNET_URL=https://net.peri-code.dev bun run test:protocol` / `test:acceptance`：生产验收（唯一远端基址）。
 - `bun run db:migrate:remote`、`bun run deploy`：远程迁移与发布；生产操作不隐含在测试或 build 中。
 
-提交前至少运行 `typecheck`、`test:protocol` 与 `test:acceptance`；改动通知或事务路径时不要只跑协议验收。
+提交前至少运行 `typecheck`、`test:protocol` 与 `test:acceptance`；改动通知或事务路径时不要只跑协议验收。`typecheck` 使用 tsrs，怀疑工具差异时用 `typecheck:tsc` 复核。

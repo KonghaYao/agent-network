@@ -239,7 +239,8 @@ Agent 归档是**管理列表的软隐藏标记**，不是停用、删除、注�
 bun install --frozen-lockfile
 bun run db:migrate
 bun run dev                 # bun --watch src/bun/main.ts，默认 8792
-bun run typecheck
+bun run typecheck           # tsrs（Rust 版 tsc）检查
+bun run typecheck:tsc       # 对照/回退：官方 tsc --noEmit
 bun run test:protocol       # 默认 http://127.0.0.1:8792
 bun run test:acceptance
 bun run test:drive          # MCPP Files 上传、公开下载与 drive_file_info

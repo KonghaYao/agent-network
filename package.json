@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "bun --watch src/bun/main.ts",
     "start": "bun src/bun/main.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsrs --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
     "test:protocol": "bun scripts/verify-protocol.ts",
     "test:acceptance": "bun scripts/acceptance.ts",
     "test:drive": "bun scripts/verify-drive.ts",
@@ -32,6 +33,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "playwright": "^1.64.1",
+    "tsrs": "0.21.0-ts7.1.0-beta",
     "typescript": "^7.0.2"
   }
 }
