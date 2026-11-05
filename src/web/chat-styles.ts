@@ -370,10 +370,9 @@ export const APP_STYLE = `
   .msg-avatar { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 6px;
     display: grid; place-items: center; overflow: hidden; color: #fff;
     font-size: 14px; font-weight: 500; }
-  /* 气泡列尽量铺满右侧，只给 36px 头像、10px 间距和 10px 边距留空间；
-     短消息仍由内容决定宽度，不强制拉满。 */
+  /* 气泡列保留右侧留白，约占消息区 82%；短消息仍由内容决定宽度，不强制拉满。 */
   .msg-content { display: flex; flex-direction: column; align-items: flex-start;
-    min-width: 0; max-width: calc(100% - 56px); }
+    min-width: 0; max-width: min(82%, calc(100% - 72px)); }
   .msg.mine .msg-content { align-items: flex-end; }
   .msg-sender { max-width: 100%; margin: 0 0 4px 2px; font-size: 11px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

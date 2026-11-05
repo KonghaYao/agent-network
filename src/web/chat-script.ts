@@ -4,6 +4,7 @@ import { CHAT_ACCOUNT_RENAME_SCRIPT } from './chat-account-rename-script';
 import { CHAT_AGENTS_SCRIPT } from './chat-agents-script';
 import { CHAT_ARCHIVE_SCRIPT } from './chat-archive-script';
 import { CHAT_AVATAR_SCRIPT } from './chat-avatar-script';
+import { CHAT_DRAWBOARD_SCRIPT } from './chat-drawboard-script';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
 import { CHAT_GROUP_COPY_SCRIPT } from './chat-group-copy-script';
@@ -38,6 +39,7 @@ export function chatClientScript(
   roomId: string | null,
   markdownVersion: string | null = null,
   resizerVersion: string | null = null,
+  drawboardVersion: string | null = null,
 ): string {
   const roomJson = roomId === null ? 'null' : jsonForScript(roomId);
   const markdownAssetUrl = markdownVersion
@@ -46,10 +48,14 @@ export function chatClientScript(
   const resizerAssetUrl = resizerVersion
     ? `/assets/chat-resizer.js?v=${encodeURIComponent(resizerVersion)}`
     : '/assets/chat-resizer.js';
+  const drawboardAssetUrl = drawboardVersion
+    ? `/assets/chat-drawboard.js?v=${encodeURIComponent(drawboardVersion)}`
+    : '/assets/chat-drawboard.js';
   return `<script>
 const initialRoomId = ${roomJson};
 const MARKDOWN_ASSET_URL = ${jsonForScript(markdownAssetUrl)};
 const RESIZER_ASSET_URL = ${jsonForScript(resizerAssetUrl)};
+const DRAWBOARD_ASSET_URL = ${jsonForScript(drawboardAssetUrl)};
 const TOKEN_KEY = 'agent-network-token';
 const MAX_CHUNKS = 8;
 const ACTOR_NAME_MAX = ${LIMITS.actorNameMax};
@@ -134,6 +140,7 @@ ${CHAT_STREAM_SCRIPT}
 ${CHAT_FILES_SCRIPT}
 ${CHAT_FILES_ACTIONS_SCRIPT}
 ${CHAT_UPLOAD_SCRIPT}
+${CHAT_DRAWBOARD_SCRIPT}
 ${CHAT_MONITOR_SCRIPT}
 ${CHAT_RESIZER_SCRIPT}
 ${CHAT_ROUTER_SCRIPT}
@@ -602,6 +609,8 @@ composer.addEventListener('submit', async function (event) {
   const sendEpoch = roomEpoch;
   const text = bodyInput.value.trim();
   const body = composerOutgoingBody(sendRoomId, text);
+  // 只清空本次真拼进正文的文件；发送请求期间的附件不能丢。
+  const sentFileKeys = composerReadyKeys(sendRoomId);
   if (!body) return;
   stickyStatus = '';
   statusElement.textContent = '';
@@ -626,9 +635,9 @@ composer.addEventListener('submit', async function (event) {
     const result = await callTool('network_message_send', args);
     // 发送请求不绑定 roomAbort；切换房间后只丢弃 UI 更新，不取消写入。
     const deliveryIds = Array.isArray(result.delivery_ids) ? result.delivery_ids : [];
-    // 消息已发出，旧房间草稿与待发送文件必须清除；但不要覆盖新房间的输入框。
+    // 消息已发出，只清除本次已拼入正文的旧房间草稿与 chips；不要覆盖新房间的输入框。
     drafts.delete(sendRoomId);
-    clearComposerFiles(sendRoomId);
+    clearComposerFiles(sendRoomId, sentFileKeys);
     if (!isActiveRoom(sendRoomId, sendEpoch)) return;
     bodyInput.value = '';
     hideMentionPicker();

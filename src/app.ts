@@ -512,6 +512,10 @@ export interface AppDeps {
   resizerAsset?: string | null;
   /** 拖拽 bundle 内容哈希；与 Markdown 共用同样的版本化 URL 策略。 */
   resizerAssetVersion?: string | null;
+  /** 按需加载的 Fabric 画板 bundle；null 表示构建失败、打开时显示可读错误。 */
+  drawboardAsset?: string | null;
+  /** 画板 bundle 内容哈希；只在首次打开画板时请求带版本 URL。 */
+  drawboardAssetVersion?: string | null;
 }
 
 interface ByteRange {
@@ -650,6 +654,19 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     });
   });
 
+  // Fabric 画板岛：只在打开画板时动态导入；构建失败时 404，页面显示可读错误。
+  app.get('/assets/chat-drawboard.js', (c) => {
+    if (!deps.drawboardAsset) {
+      return c.text('Not Found', 404, { 'cache-control': 'no-store' });
+    }
+    return c.body(deps.drawboardAsset, 200, {
+      'content-type': 'text/javascript; charset=utf-8',
+      'cache-control': 'public, max-age=300',
+      'x-content-type-options': 'nosniff',
+      ...(deps.drawboardAssetVersion ? { etag: `"${deps.drawboardAssetVersion}"` } : {}),
+    });
+  });
+
   // 公开只读技能文档与脚本：只允许 public/skills 下的一层 .md / .sh，拒绝路径穿越。
   // 文件本身不含凭据；调用方自行通过 AGENTNET_TOKEN 提供 Bearer。
   app.get('/skills/:file', async (c) => {
@@ -699,6 +716,7 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
       renderHomePage(
         deps.markdownAssetVersion ?? null,
         deps.resizerAssetVersion ?? null,
+        deps.drawboardAssetVersion ?? null,
       ),
       200,
       { 'cache-control': 'no-store' },
@@ -717,6 +735,7 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
         c.req.param('roomId'),
         deps.markdownAssetVersion ?? null,
         deps.resizerAssetVersion ?? null,
+        deps.drawboardAssetVersion ?? null,
       ),
       200,
       {

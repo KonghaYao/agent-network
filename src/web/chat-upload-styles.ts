@@ -14,6 +14,17 @@ export const UPLOAD_STYLE = `
   .attach-btn.busy { opacity: .6; cursor: progress; }
   .attach-btn[aria-busy="true"] { cursor: progress; }
 
+  .composer { position: relative; }
+  .attach-menu { position: absolute; left: 16px; bottom: calc(100% - 2px); z-index: 8;
+    min-width: 148px; padding: 6px; border: 1px solid var(--wx-line);
+    border-radius: 8px; background: var(--wx-panel); box-shadow: var(--wx-shadow); }
+  .attach-menu[hidden] { display: none; }
+  .attach-menu-item { display: flex; width: 100%; align-items: center; padding: 8px 10px;
+    border: 0; border-radius: 5px; background: none; color: var(--wx-text);
+    font-size: 13px; line-height: 20px; text-align: left; cursor: pointer;
+    touch-action: manipulation; }
+  .attach-menu-item:hover, .attach-menu-item:focus { background: var(--wx-hover); }
+
   .composer-files { display: flex; flex-wrap: wrap; gap: 6px; max-height: 88px;
     overflow-y: auto; }
   .composer-files[hidden] { display: none; }

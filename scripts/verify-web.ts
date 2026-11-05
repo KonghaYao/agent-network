@@ -769,6 +769,15 @@ async function bubbleLayout(locator: Locator): Promise<BubbleLayout> {
     const sender = node.querySelector('.msg-sender');
     const maxWidthRaw = getComputedStyle(content).maxWidth;
     const parsedMaxWidth = Number.parseFloat(maxWidthRaw);
+    // Chrome 对 min()/calc() 返回未解析表达式；按行宽换算成实际上限。
+    const percentLimit = /min\(\s*([\d.]+)%/u.exec(maxWidthRaw);
+    const subtractLimit = /-\s*([\d.]+)px/u.exec(maxWidthRaw);
+    const resolvedMaxWidth = Number.isFinite(parsedMaxWidth)
+      ? parsedMaxWidth
+      : Math.min(
+          percentLimit ? (row.width * Number(percentLimit[1])) / 100 : Number.POSITIVE_INFINITY,
+          subtractLimit ? row.width - Number(subtractLimit[1]) : Number.POSITIVE_INFINITY,
+        );
     return {
       view: window.innerWidth,
       doc: document.documentElement.scrollWidth,
@@ -776,7 +785,7 @@ async function bubbleLayout(locator: Locator): Promise<BubbleLayout> {
       messagesScroll: messages.scrollWidth,
       rowWidth: row.width,
       contentWidth: contentRect.width,
-      contentMaxWidth: Number.isFinite(parsedMaxWidth) ? parsedMaxWidth : row.width - 56,
+      contentMaxWidth: Number.isFinite(resolvedMaxWidth) ? resolvedMaxWidth : row.width - 56,
       maxWidthRaw,
       bubbleWidth: bubbleRect.width,
       bubbleClientWidth: bubble.clientWidth,
@@ -795,6 +804,99 @@ async function messagesScrollTop(page: Page): Promise<number> {
   return (await page.evaluate(
     `document.getElementById('messages') ? document.getElementById('messages').scrollTop : 0`,
   )) as number;
+}
+
+interface DrawboardPixels {
+  colored: number;
+  opaque: number;
+  red: number;
+  width: number;
+  height: number;
+}
+
+interface DrawboardState {
+  objects: number;
+  undoEnabled: boolean;
+  redoEnabled: boolean;
+  insertEnabled: boolean;
+}
+
+/** 画板 canvas 的双帧等待：Fabric 在 pointerup 后异步渲染。 */
+async function settleDrawboard(page: Page): Promise<void> {
+  await page.evaluate(`new Promise(function (resolve) {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () { resolve(true); });
+    });
+  })`);
+}
+
+async function drawboardPixels(page: Page): Promise<DrawboardPixels | null> {
+  return (await page.evaluate(`(() => {
+    const lower = document.querySelector('[data-drawboard-overlay="1"] .lower-canvas');
+    if (!lower) return null;
+    const data = lower.getContext('2d').getImageData(0, 0, lower.width, lower.height).data;
+    let colored = 0;
+    let opaque = 0;
+    let red = 0;
+    for (let index = 0; index < data.length; index += 4) {
+      if (data[index + 3] === 0) continue;
+      opaque += 1;
+      if (data[index] < 250 || data[index + 1] < 250 || data[index + 2] < 250) colored += 1;
+      if (data[index] > 180 && data[index + 1] < 130 && data[index + 2] < 130) red += 1;
+    }
+    return { colored, opaque, red, width: lower.width, height: lower.height };
+  })()`)) as DrawboardPixels | null;
+}
+
+async function drawboardState(page: Page): Promise<DrawboardState | null> {
+  return (await page.evaluate(`(() => {
+    const overlay = document.querySelector('[data-drawboard-overlay="1"]');
+    if (!overlay) return null;
+    const undo = document.getElementById('db-undo');
+    const redo = document.getElementById('db-redo');
+    const insert = document.getElementById('db-insert');
+    return {
+      objects: Number(overlay.dataset.dbObjects || 0),
+      undoEnabled: Boolean(undo && !undo.disabled),
+      redoEnabled: Boolean(redo && !redo.disabled),
+      insertEnabled: Boolean(insert && !insert.disabled)
+    };
+  })()`)) as DrawboardState | null;
+}
+
+async function waitDrawboardObjects(page: Page, count: number): Promise<void> {
+  await page.waitForFunction(
+    `(function () {
+      const overlay = document.querySelector('[data-drawboard-overlay="1"]');
+      return overlay ? Number(overlay.dataset.dbObjects || 0) === ${count} : false;
+    })()`,
+  );
+  await settleDrawboard(page);
+}
+
+/** 在画板 canvas 上按相对坐标拖拽，避开 Retina/CSS 缩放细节。 */
+async function drawboardDrag(
+  page: Page,
+  from: [number, number],
+  to: [number, number],
+): Promise<void> {
+  const box = await page.locator('[data-drawboard-overlay="1"] canvas.upper-canvas').boundingBox();
+  if (!box) throw new Error('画板 canvas 不可见');
+  const startX = box.x + box.width * from[0];
+  const startY = box.y + box.height * from[1];
+  const endX = box.x + box.width * to[0];
+  const endY = box.y + box.height * to[1];
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(endX, endY, { steps: 10 });
+  await page.mouse.up();
+}
+
+async function openDrawboard(page: Page): Promise<void> {
+  await page.locator('#attach-file').click();
+  await page.locator('#attach-menu-draw').click();
+  await page.locator('[data-drawboard-overlay="1"]').waitFor();
+  await settleDrawboard(page);
 }
 
 /** 与 captureAnchor 一致：视口内第一个相交的消息（忽略时间胶囊/底部 sentinel）。 */
@@ -2466,7 +2568,11 @@ async function main(): Promise<void> {
         presenceText.includes(`${data.agentA.name} 下线`),
         presenceText,
       );
-      check('presence 行包含本地时间', /(上线|下线) · \d{1,2}:\d{2}/u.test(presenceText), presenceText);
+      check(
+        'presence 行包含本地时间',
+        /(上线|下线) · (?:昨天 )?\d{1,2}:\d{2}/u.test(presenceText),
+        presenceText,
+      );
       checkEqual(
         'presence 无头像',
         await page.locator('#messages .msg-presence .msg-avatar').count(),
@@ -6136,7 +6242,7 @@ async function main(): Promise<void> {
       await page.locator('#body').fill('');
 
       const groupMarker = '群聊手输省略 invoke';
-      const groupBody = `@${data.agentA.name} ${groupMarker}\n@WeBots 维护员`;
+      const groupBody = `@${data.agentA.name} ${groupMarker}`;
       await page.locator('#body').fill(`@${data.agentA.name} ${groupMarker}`);
       await page.locator('#send').click();
       await page.waitForFunction(
@@ -6173,7 +6279,7 @@ async function main(): Promise<void> {
       await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       const directMarker = 'direct 仍自动 invoke';
-      const directBody = `${directMarker}\n@WeBots 维护员`;
+      const directBody = directMarker;
       await page.locator('#body').fill(directMarker);
       await page.locator('#send').click();
       await waitForText(page, '#messages', directMarker, 12_000);
@@ -9639,7 +9745,7 @@ async function main(): Promise<void> {
       checkEqual('聊天页显示附件按钮', await page.locator('#attach-file').isVisible(), true);
       checkEqual(
         '附件按钮可访问名',
-        await page.getByRole('button', { name: '上传文件' }).count(),
+        await page.getByRole('button', { name: '添加附件' }).count(),
         1,
       );
       checkEqual('附件按钮不提交表单', await page.locator('#attach-file').getAttribute('type'), 'button');
@@ -9671,9 +9777,10 @@ async function main(): Promise<void> {
       const attachBindBase = await mcpCallCount(page, 'network_room_file_bind');
       upload.delayMs = 300;
       const chooserPromise = page.waitForEvent('filechooser');
-      await page.getByRole('button', { name: '上传文件' }).click();
+      await page.locator('#attach-file').click();
+      await page.locator('#attach-menu-file').click();
       const chooser = await chooserPromise;
-      checkEqual('点击附件按钮打开文件选择器', chooser.isMultiple(), true);
+      checkEqual('点击上传文件菜单打开文件选择器', chooser.isMultiple(), true);
       await chooser.setFiles([
         { name: '输入框 图片 一.png', mimeType: 'image/png', buffer: PNG_BYTES },
         { name: '说明 文档.txt', mimeType: 'text/plain', buffer: Buffer.from('附件说明') },
@@ -10181,6 +10288,878 @@ async function main(): Promise<void> {
           !mobileConsoleText.includes('Bearer '),
       );
       await mobile.context.close();
+      await context.close();
+    }
+
+    // 12c. 画板：`+` 菜单、Fabric 工具、白底 PNG 导出、chip/发送复用与失败回退。
+    {
+      const drawGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '画板验收群',
+        members: [data.agentA.actor_id],
+      });
+      const drawRoomId = drawGroup.room.room_id;
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await context.addInitScript(`(() => {
+        window.__consoleText = '';
+        ['log', 'info', 'warn', 'error', 'debug'].forEach(function (level) {
+          const original = console[level];
+          console[level] = function () {
+            window.__consoleText += Array.prototype.map.call(arguments, String).join(' ') + '\\n';
+            original.apply(console, arguments);
+          };
+        });
+      })()`);
+      const upload = await observeDropUploads(page);
+      const drawboardRequests: string[] = [];
+      const externalRequests: string[] = [];
+      page.on('request', (request) => {
+        const url = new URL(request.url());
+        if (request.url().includes('/assets/chat-drawboard.js')) {
+          drawboardRequests.push(request.url());
+        }
+        if (
+          (url.protocol === 'http:' || url.protocol === 'https:') &&
+          url.origin !== server.base
+        ) {
+          externalRequests.push(request.url());
+        }
+      });
+
+      const drawAssetResponse = await fetch(`${server.base}/assets/chat-drawboard.js`);
+      checkEqual('画板 asset 返回 200', drawAssetResponse.status, 200);
+      check(
+        '画板 asset 为 text/javascript',
+        (drawAssetResponse.headers.get('content-type') ?? '').includes('text/javascript'),
+        drawAssetResponse.headers.get('content-type'),
+      );
+      checkEqual(
+        '画板 asset 禁止 MIME 嗅探',
+        drawAssetResponse.headers.get('x-content-type-options'),
+        'nosniff',
+      );
+      check(
+        '画板 asset 可缓存',
+        (drawAssetResponse.headers.get('cache-control') ?? '').includes('max-age=300'),
+        drawAssetResponse.headers.get('cache-control'),
+      );
+      const drawAssetBody = await drawAssetResponse.text();
+      check('画板 asset 独立打包且包含 Fabric', drawAssetBody.length > 100_000, drawAssetBody.length);
+      check(
+        '画板 asset 不包含开发版 React',
+        !drawAssetBody.includes('react-dom.development'),
+        drawAssetBody.slice(0, 80),
+      );
+      check('画板 asset 不含浏览器 token', !drawAssetBody.includes(data.humanToken));
+      const drawPageHtml = await (await fetch(`${server.base}/c/${drawRoomId}`)).text();
+      const drawVersionMatch = drawPageHtml.match(
+        /\/assets\/chat-drawboard\.js\?v=([0-9a-f]{12})/u,
+      );
+      const drawVersion = drawVersionMatch?.[1] ?? '';
+      check('页面引用带内容版本的画板 bundle', Boolean(drawVersion), drawVersionMatch?.[0]);
+      if (drawVersion) {
+        const versionedDraw = await fetch(
+          `${server.base}/assets/chat-drawboard.js?v=${drawVersion}`,
+        );
+        checkEqual('带版本画板 asset 返回 200', versionedDraw.status, 200);
+        checkEqual(
+          '画板 asset ETag 与版本一致',
+          versionedDraw.headers.get('etag'),
+          `"${drawVersion}"`,
+        );
+        checkEqual(
+          '画板 asset 版本为内容哈希前 12 位',
+          drawVersion,
+          createHash('sha256').update(await versionedDraw.text()).digest('hex').slice(0, 12),
+        );
+      }
+
+      await page.goto(`${server.base}/c/${drawRoomId}`);
+      await waitRoom(page, drawRoomId, '画板验收群');
+      checkEqual('打开画板前不请求画板 asset', drawboardRequests.length, 0);
+
+      checkEqual(
+        '附件按钮可访问名改为添加附件',
+        await page.getByRole('button', { name: '添加附件' }).count(),
+        1,
+      );
+      checkEqual(
+        '附件按钮声明菜单关系',
+        await page.locator('#attach-file').getAttribute('aria-haspopup'),
+        'menu',
+      );
+      checkEqual(
+        '附件菜单默认关闭',
+        await page.locator('#attach-menu').isHidden(),
+        true,
+      );
+      await page.locator('#attach-file').click();
+      checkEqual('点击 + 打开附件菜单', await page.locator('#attach-menu').isVisible(), true);
+      checkEqual(
+        '附件菜单 aria-expanded',
+        await page.locator('#attach-file').getAttribute('aria-expanded'),
+        'true',
+      );
+      checkEqual(
+        '附件菜单包含上传文件与画板',
+        (await page.locator('#attach-menu .attach-menu-item').allTextContents()).join('|'),
+        '上传文件|画板',
+      );
+      checkEqual(
+        '菜单打开后焦点在第一个入口',
+        await page.evaluate(`document.activeElement && document.activeElement.id`),
+        'attach-menu-file',
+      );
+      await page.keyboard.press('ArrowDown');
+      checkEqual(
+        '菜单方向键切换入口',
+        await page.evaluate(`document.activeElement && document.activeElement.id`),
+        'attach-menu-draw',
+      );
+      await page.keyboard.press('Escape');
+      checkEqual('Esc 关闭附件菜单', await page.locator('#attach-menu').isHidden(), true);
+      checkEqual(
+        '关闭菜单后焦点回到 +',
+        await page.evaluate(`document.activeElement && document.activeElement.id`),
+        'attach-file',
+      );
+
+      await page.locator('#attach-file').click();
+      checkEqual('再次点击 + 重新打开菜单', await page.locator('#attach-menu').isVisible(), true);
+      await page.locator('#body').click();
+      checkEqual('点击菜单外部关闭菜单', await page.locator('#attach-menu').isHidden(), true);
+
+      await page.locator('#attach-file').click();
+      const drawChooserPromise = page.waitForEvent('filechooser');
+      await page.locator('#attach-menu-file').click();
+      const drawChooser = await drawChooserPromise;
+      checkEqual('文件入口仍打开文件选择器', drawChooser.isMultiple(), true);
+      checkEqual('文件入口不产生上传', upload.calls.length, 0);
+
+      await openDrawboard(page);
+      checkEqual('打开画板只请求一次 asset', drawboardRequests.length, 1);
+      check(
+        '画板请求带内容版本',
+        drawboardRequests[0]?.includes(`v=${drawVersion}`) === true,
+        drawboardRequests[0],
+      );
+      checkEqual(
+        '画板覆盖层与菜单互斥',
+        await page.locator('#attach-menu').isHidden(),
+        true,
+      );
+      const drawShellMetrics = (await page.evaluate(`(() => {
+        const overlay = document.querySelector('[data-drawboard-overlay="1"]');
+        const shell = overlay ? overlay.querySelector('.db-shell') : null;
+        const canvas = overlay ? overlay.querySelector('canvas.upper-canvas') : null;
+        if (!overlay || !shell || !canvas) return null;
+        const shellRect = shell.getBoundingClientRect();
+        const canvasRect = canvas.getBoundingClientRect();
+        return {
+          view: window.innerWidth,
+          viewHeight: window.innerHeight,
+          doc: document.documentElement.scrollWidth,
+          shellLeft: shellRect.left,
+          shellRight: shellRect.right,
+          canvasWidth: canvasRect.width,
+          canvasHeight: canvasRect.height
+        };
+      })()`)) as {
+        view: number;
+        viewHeight: number;
+        doc: number;
+        shellLeft: number;
+        shellRight: number;
+        canvasWidth: number;
+        canvasHeight: number;
+      } | null;
+      check(
+        '桌面画板居中且画布足够大',
+        Boolean(drawShellMetrics) &&
+          drawShellMetrics!.doc <= drawShellMetrics!.view + 1 &&
+          drawShellMetrics!.shellLeft >= 0 &&
+          drawShellMetrics!.shellRight <= drawShellMetrics!.view + 1 &&
+          drawShellMetrics!.canvasWidth > 900 &&
+          drawShellMetrics!.canvasHeight > 400,
+        drawShellMetrics,
+      );
+      const initialCanvas = await drawboardPixels(page);
+      check(
+        '画板打开时为白底无笔迹',
+        Boolean(initialCanvas) &&
+          initialCanvas!.colored === 0 &&
+          initialCanvas!.width > 900 &&
+          initialCanvas!.height > 400 &&
+          initialCanvas!.opaque === initialCanvas!.width * initialCanvas!.height,
+        initialCanvas,
+      );
+      const initialDrawState = await drawboardState(page);
+      checkEqual('画板初始无对象', initialDrawState?.objects, 0);
+      checkEqual('画板初始插入禁用', initialDrawState?.insertEnabled, false);
+      checkEqual('画板初始撤销/重做禁用', initialDrawState?.undoEnabled, false);
+      checkEqual('画板初始重做禁用', initialDrawState?.redoEnabled, false);
+
+      await drawboardDrag(page, [0.08, 0.16], [0.46, 0.24]);
+      await waitDrawboardObjects(page, 1);
+      const penPixels = await drawboardPixels(page);
+      const penState = await drawboardState(page);
+      check(
+        '画笔画线改变 canvas',
+        Boolean(penPixels) && penPixels!.colored > 100 && penPixels!.red === 0,
+        penPixels,
+      );
+      check('画笔后撤销可用', penState?.undoEnabled === true, penState);
+      checkEqual('画笔后重做仍禁用', penState?.redoEnabled, false);
+      check('画笔后插入可用', penState?.insertEnabled === true, penState);
+
+      await page.locator('[data-db-color="#e5484d"]').click();
+      checkEqual(
+        '切换红色颜色态',
+        await page.locator('[data-db-color="#e5484d"]').getAttribute('aria-pressed'),
+        'true',
+      );
+      checkEqual(
+        '旧颜色取消选中',
+        await page.locator('[data-db-color="#1f2329"]').getAttribute('aria-pressed'),
+        'false',
+      );
+      await page.locator('#db-width').evaluate((node) => {
+        const input = node as HTMLInputElement;
+        input.value = '10';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      checkEqual('切换粗细值', await page.locator('#db-width').inputValue(), '10');
+      checkEqual(
+        '切换粗细同步画笔',
+        await page.locator('#db-width').getAttribute('data-db-width'),
+        '10',
+      );
+      await drawboardDrag(page, [0.08, 0.34], [0.56, 0.34]);
+      await waitDrawboardObjects(page, 2);
+      const redPixels = await drawboardPixels(page);
+      check('切换颜色后画出红色笔迹', Boolean(redPixels) && redPixels!.red > 100, redPixels);
+
+      await page.locator('#db-undo').click();
+      await waitDrawboardObjects(page, 1);
+      const undoState = await drawboardState(page);
+      checkEqual('撤销后剩一个对象', undoState?.objects, 1);
+      check('撤销后重做可用', undoState?.redoEnabled === true, undoState);
+      await page.locator('#db-redo').click();
+      await waitDrawboardObjects(page, 2);
+      const redoState = await drawboardState(page);
+      checkEqual('重做后恢复两个对象', redoState?.objects, 2);
+      checkEqual('重做后重做禁用', redoState?.redoEnabled, false);
+
+      await page.locator('[data-db-tool="rect"]').click();
+      await drawboardDrag(page, [0.62, 0.12], [0.78, 0.28]);
+      await waitDrawboardObjects(page, 3);
+      await page.locator('[data-db-tool="ellipse"]').click();
+      await drawboardDrag(page, [0.62, 0.34], [0.78, 0.5]);
+      await waitDrawboardObjects(page, 4);
+      await page.locator('[data-db-tool="line"]').click();
+      await drawboardDrag(page, [0.62, 0.56], [0.82, 0.7]);
+      await waitDrawboardObjects(page, 5);
+      checkEqual(
+        '形状工具切换态正确',
+        await page.locator('[data-db-tool="line"]').getAttribute('aria-pressed'),
+        'true',
+      );
+      const shapePixels = await drawboardPixels(page);
+      check(
+        '矩形/椭圆/直线产生可见笔迹',
+        Boolean(shapePixels) && shapePixels!.colored > 500,
+        shapePixels,
+      );
+
+      await page.locator('[data-db-tool="text"]').click();
+      const textBox = await page
+        .locator('[data-drawboard-overlay="1"] canvas.upper-canvas')
+        .boundingBox();
+      if (!textBox) throw new Error('画板 canvas 不可见');
+      await page.mouse.click(textBox.x + textBox.width * 0.12, textBox.y + textBox.height * 0.72);
+      await page.keyboard.type('Hello 画板');
+      await page.keyboard.press('Escape');
+      await waitDrawboardObjects(page, 6);
+      checkEqual(
+        'Esc 结束文本编辑但保留画板',
+        await page.locator('[data-drawboard-overlay="1"]').isVisible(),
+        true,
+      );
+      const textPixels = await drawboardPixels(page);
+      check(
+        '文本工具写入 canvas',
+        Boolean(textPixels) && textPixels!.colored > shapePixels!.colored,
+        { before: shapePixels, after: textPixels },
+      );
+
+      await page.locator('#db-clear').click();
+      await waitDrawboardObjects(page, 0);
+      const clearedPixels = await drawboardPixels(page);
+      const clearedState = await drawboardState(page);
+      check('清空后 canvas 恢复白底', Boolean(clearedPixels) && clearedPixels!.colored === 0);
+      checkEqual('清空后插入禁用', clearedState?.insertEnabled, false);
+      check('清空可撤销', clearedState?.undoEnabled === true, clearedState);
+      await page.locator('#db-undo').click();
+      await waitDrawboardObjects(page, 6);
+      check(
+        '撤销清空恢复全部笔迹',
+        ((await drawboardPixels(page))?.colored ?? 0) > 0,
+      );
+
+      const beforeCancelMessages = await messageCount(page);
+      const beforeCancelUploads = upload.calls.length;
+      const beforeCancelBinds = await mcpCallCount(page, 'network_room_file_bind');
+      await page.keyboard.press('Escape');
+      await page.locator('[data-drawboard-overlay="1"]').waitFor({ state: 'detached' });
+      checkEqual('Esc 关闭画板不上传', upload.calls.length, beforeCancelUploads);
+      checkEqual(
+        'Esc 关闭画板不 bind',
+        await mcpCallCount(page, 'network_room_file_bind'),
+        beforeCancelBinds,
+      );
+      checkEqual('Esc 关闭画板不生成 chip', await page.locator('#composer-files .composer-file').count(), 0);
+      checkEqual('Esc 关闭画板不发送', await messageCount(page), beforeCancelMessages);
+
+      await openDrawboard(page);
+      const reopened = await drawboardState(page);
+      checkEqual('再次打开画板对象已释放', reopened?.objects, 0);
+      check(
+        '再次打开画板仍是白底',
+        ((await drawboardPixels(page))?.colored ?? -1) === 0,
+      );
+      await page.locator('#db-cancel').click();
+      await page.locator('[data-drawboard-overlay="1"]').waitFor({ state: 'detached' });
+      checkEqual('取消按钮关闭画板不上传', upload.calls.length, beforeCancelUploads);
+
+      await openDrawboard(page);
+      await drawboardDrag(page, [0.1, 0.2], [0.5, 0.3]);
+      await waitDrawboardObjects(page, 1);
+      const beforeInsertMessages = await messageCount(page);
+      const beforeInsertUploads = upload.calls.length;
+      const beforeInsertBinds = await mcpCallCount(page, 'network_room_file_bind');
+      await page.locator('#db-insert').click();
+      await page.locator('[data-drawboard-overlay="1"]').waitFor({ state: 'detached' });
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 1,
+        '画板插入生成一个 chip',
+      );
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file-remove:disabled').count()) === 0,
+        '画板 chip 上传完成',
+      );
+      const drawChipName = (
+        (await page.locator('#composer-files .composer-file-name').textContent()) ?? ''
+      ).trim();
+      check(
+        '画板导出 PNG 文件名',
+        /^drawing-\d+\.png$/u.test(drawChipName),
+        drawChipName,
+      );
+      checkEqual('画板插入触发一次上传', upload.calls.length, beforeInsertUploads + 1);
+      check(
+        '画板导出文件为 PNG 名称',
+        upload.calls[upload.calls.length - 1]?.name === drawChipName,
+        upload.calls[upload.calls.length - 1],
+      );
+      check(
+        '画板导出文件非空',
+        (upload.calls[upload.calls.length - 1]?.bodySize ?? 0) > 100,
+        upload.calls[upload.calls.length - 1],
+      );
+      checkEqual(
+        '画板插入执行一次 bind',
+        await mcpCallCount(page, 'network_room_file_bind'),
+        beforeInsertBinds + 1,
+      );
+      checkEqual('画板插入不自动发送', await messageCount(page), beforeInsertMessages);
+      checkEqual('画板插入不改写正文', await page.locator('#body').inputValue(), '');
+      checkEqual('画板 chip 出现在待发送区', await page.locator('#composer-files .composer-file').count(), 1);
+
+      await page.locator('#body').fill('画板消息');
+      const beforeDrawSend = await mcpCallCount(page, 'network_message_send');
+      await page.locator('#send').click();
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_message_send')) > beforeDrawSend,
+        '画板消息发送',
+      );
+      const drawMessage = page.locator('#messages .msg').filter({ hasText: '画板消息' }).last();
+      await drawMessage.waitFor();
+      await waitUntil(
+        async () => (await drawMessage.locator('.msg-file').count()) === 1,
+        '画板消息出现图片文件卡片',
+        15_000,
+      );
+      const drawSentArgs = (await page.evaluate(
+        `(function () {
+          const calls = (window.__mcpCalls || []).filter(function (call) {
+            return call.name === 'network_message_send';
+          });
+          return calls.length ? calls[calls.length - 1].body.params.arguments : null;
+        })()`,
+      )) as { body?: string } | null;
+      check(
+        '画板消息包含 /f/ URL 与固定 @',
+        Boolean(drawSentArgs?.body) &&
+          /\/f\/f_[A-Za-z0-9_-]{22}/u.test(drawSentArgs!.body!) &&
+          drawSentArgs!.body!.trim().endsWith('@WeBots 维护员'),
+        drawSentArgs?.body,
+      );
+      await waitUntil(
+        async () => (await drawMessage.locator('.msg-file-kind').first().textContent()) === '图片',
+        '画板图片卡片识别类型',
+        15_000,
+      );
+      checkEqual('画板图片文件卡片', await drawMessage.locator('.msg-file-kind').first().textContent(), '图片');
+      const drawFileUrlMatch = /(https?:\/\/[^\s]+\/f\/f_[A-Za-z0-9_-]{22})/u.exec(
+        drawSentArgs?.body ?? '',
+      );
+      check('画板消息包含可访问的公开文件 URL', Boolean(drawFileUrlMatch));
+      if (drawFileUrlMatch) {
+        const drawPngResponse = await fetch(drawFileUrlMatch[1]!);
+        checkEqual('画板导出的公开文件返回 200', drawPngResponse.status, 200);
+        const drawPngBytes = Buffer.from(await drawPngResponse.arrayBuffer());
+        check(
+          '画板导出内容是 PNG',
+          drawPngBytes.subarray(0, 8).equals(
+            Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+          ),
+          drawPngBytes.subarray(0, 8).toString('hex'),
+        );
+        const cornerPixels = (await page.evaluate(`(async function () {
+          const image = new Image();
+          image.src = ${JSON.stringify(drawFileUrlMatch[1])};
+          await image.decode();
+          const probe = document.createElement('canvas');
+          probe.width = image.naturalWidth;
+          probe.height = image.naturalHeight;
+          const context = probe.getContext('2d');
+          context.drawImage(image, 0, 0);
+          const points = [[1, 1], [probe.width - 2, 1], [1, probe.height - 2],
+            [probe.width - 2, probe.height - 2]];
+          return {
+            width: probe.width,
+            height: probe.height,
+            corners: points.map(function (point) {
+              return Array.from(context.getImageData(point[0], point[1], 1, 1).data);
+            })
+          };
+        })()`)) as { width: number; height: number; corners: number[][] };
+        check(
+          '画板导出 PNG 为白底',
+          cornerPixels.width > 0 &&
+            cornerPixels.height > 0 &&
+            cornerPixels.corners.every(
+              (pixel) =>
+                (pixel[0] ?? 0) >= 250 &&
+                (pixel[1] ?? 0) >= 250 &&
+                (pixel[2] ?? 0) >= 250 &&
+                (pixel[3] ?? 0) === 255,
+            ),
+          cornerPixels,
+        );
+      }
+      checkEqual(
+        '画板发送后 chips 清空',
+        await page.locator('#composer-files .composer-file').count(),
+        0,
+      );
+      check('画板过程无外部请求', externalRequests.length === 0, externalRequests);
+      const drawConsoleText = (await page.evaluate('window.__consoleText')) as string;
+      check(
+        '画板不把 token 写入 console',
+        !drawConsoleText.includes(data.humanToken) && !drawConsoleText.includes('Bearer '),
+      );
+      const drawBodyText = (await page.locator('body').innerText()) as string;
+      check('画板不把 token 写入页面', !drawBodyText.includes(data.humanToken));
+
+      // 加载失败：新页面首次导入即 404，显示可读提示；重试使用新 query 成功后关闭。
+      const failContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const failUpload = await observeDropUploads(failContext.page);
+      await failContext.page.route('**/assets/chat-drawboard.js*', async (route) => {
+        await route.fulfill({
+          status: 404,
+          contentType: 'text/plain',
+          body: 'Not Found',
+        });
+      });
+      await failContext.page.goto(`${server.base}/c/${drawRoomId}`);
+      await waitRoom(failContext.page, drawRoomId, '画板验收群');
+      await failContext.page.locator('#attach-file').click();
+      await failContext.page.locator('#attach-menu-draw').click();
+      await failContext.page.locator('[data-drawboard-fallback="error"]').waitFor();
+      checkEqual(
+        '画板加载失败显示可读标题',
+        await failContext.page.locator('[data-drawboard-fallback="error"] .drawboard-fallback-title').textContent(),
+        '画板加载失败',
+      );
+      check(
+        '画板加载失败提示检查网络',
+        ((await failContext.page.locator('[data-drawboard-fallback="error"] .drawboard-fallback-text').textContent()) ?? '')
+          .includes('检查网络'),
+      );
+      checkEqual(
+        '画板加载失败不创建 overlay',
+        await failContext.page.locator('[data-drawboard-overlay="1"]').count(),
+        0,
+      );
+      checkEqual('画板加载失败不产生上传', failUpload.calls.length, 0);
+      await failContext.page.unroute('**/assets/chat-drawboard.js*');
+      await failContext.page.locator('#drawboard-retry').click();
+      await failContext.page.locator('[data-drawboard-overlay="1"]').waitFor();
+      await settleDrawboard(failContext.page);
+      checkEqual(
+        '画板加载失败重试成功',
+        await failContext.page.locator('[data-drawboard-overlay="1"]').isVisible(),
+        true,
+      );
+      await failContext.page.keyboard.press('Escape');
+      await failContext.page.locator('[data-drawboard-overlay="1"]').waitFor({ state: 'detached' });
+      await failContext.context.close();
+
+      // 390px：菜单不溢出，画板铺满视口，暗色可读且不产生上传。
+      const mobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      const mobileUpload = await observeDropUploads(mobile.page);
+      const mobileDrawRequests: string[] = [];
+      mobile.page.on('request', (request) => {
+        if (request.url().includes('/assets/chat-drawboard.js')) {
+          mobileDrawRequests.push(request.url());
+        }
+      });
+      await mobile.page.goto(`${server.base}/c/${drawRoomId}`);
+      await waitRoom(mobile.page, drawRoomId, '画板验收群');
+      await mobile.page.locator('#attach-file').click();
+      const mobileMenu = (await mobile.page.evaluate(`(() => {
+        const menu = document.getElementById('attach-menu');
+        if (!menu) return null;
+        const rect = menu.getBoundingClientRect();
+        return {
+          view: window.innerWidth,
+          viewHeight: window.innerHeight,
+          doc: document.documentElement.scrollWidth,
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom
+        };
+      })()`)) as {
+        view: number;
+        viewHeight: number;
+        doc: number;
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+      } | null;
+      check(
+        '390px 附件菜单不横向/纵向溢出',
+        Boolean(mobileMenu) &&
+          mobileMenu!.doc <= mobileMenu!.view &&
+          mobileMenu!.left >= 0 &&
+          mobileMenu!.right <= mobileMenu!.view + 1 &&
+          mobileMenu!.top >= 0 &&
+          mobileMenu!.bottom <= mobileMenu!.viewHeight + 1,
+        mobileMenu,
+      );
+      await mobile.page.locator('#attach-menu-draw').click();
+      await mobile.page.locator('[data-drawboard-overlay="1"]').waitFor();
+      await settleDrawboard(mobile.page);
+      checkEqual('390px 打开画板请求 asset', mobileDrawRequests.length, 1);
+      const mobileDrawMetrics = (await mobile.page.evaluate(`(() => {
+        const overlay = document.querySelector('[data-drawboard-overlay="1"]');
+        const shell = overlay ? overlay.querySelector('.db-shell') : null;
+        const canvas = overlay ? overlay.querySelector('canvas.upper-canvas') : null;
+        if (!overlay || !shell || !canvas) return null;
+        const rect = shell.getBoundingClientRect();
+        const canvasRect = canvas.getBoundingClientRect();
+        return {
+          view: window.innerWidth,
+          viewHeight: window.innerHeight,
+          doc: document.documentElement.scrollWidth,
+          width: rect.width,
+          height: rect.height,
+          canvasWidth: canvasRect.width,
+          canvasHeight: canvasRect.height,
+          overflowY: document.documentElement.scrollHeight > window.innerHeight + 1
+        };
+      })()`)) as {
+        view: number;
+        viewHeight: number;
+        doc: number;
+        width: number;
+        height: number;
+        canvasWidth: number;
+        canvasHeight: number;
+        overflowY: boolean;
+      } | null;
+      check(
+        '390px 画板铺满视口且无横向溢出',
+        Boolean(mobileDrawMetrics) &&
+          mobileDrawMetrics!.doc <= mobileDrawMetrics!.view + 1 &&
+          mobileDrawMetrics!.width >= mobileDrawMetrics!.view - 1 &&
+          mobileDrawMetrics!.height >= mobileDrawMetrics!.viewHeight - 1 &&
+          mobileDrawMetrics!.canvasWidth <= mobileDrawMetrics!.view + 1 &&
+          mobileDrawMetrics!.canvasHeight > 300,
+        mobileDrawMetrics,
+      );
+      await drawboardDrag(mobile.page, [0.12, 0.2], [0.7, 0.3]);
+      await waitDrawboardObjects(mobile.page, 1);
+      check(
+        '390px 画板可画线',
+        ((await drawboardPixels(mobile.page))?.colored ?? 0) > 100,
+      );
+      await mobile.page.emulateMedia({ colorScheme: 'dark' });
+      const mobileDrawDark = (await mobile.page.evaluate(`(() => {
+        const overlay = document.querySelector('[data-drawboard-overlay="1"]');
+        const shell = overlay ? overlay.querySelector('.db-shell') : null;
+        const stage = overlay ? overlay.querySelector('.db-stage') : null;
+        if (!shell || !stage) return null;
+        return {
+          dark: matchMedia('(prefers-color-scheme: dark)').matches,
+          shell: getComputedStyle(shell).backgroundColor,
+          stage: getComputedStyle(stage).backgroundColor
+        };
+      })()`)) as { dark: boolean; shell: string; stage: string } | null;
+      checkEqual('390px 画板暗色生效', mobileDrawDark?.dark, true);
+      checkEqual('390px 暗色画板使用深色面板', mobileDrawDark?.shell, 'rgb(43, 43, 43)');
+      checkEqual('390px 暗色画板画布区为深色', mobileDrawDark?.stage, 'rgb(25, 25, 25)');
+      await mobile.page.keyboard.press('Escape');
+      await mobile.page.locator('[data-drawboard-overlay="1"]').waitFor({ state: 'detached' });
+      checkEqual('390px Esc 关闭画板不上传', mobileUpload.calls.length, 0);
+      await mobile.context.close();
+
+      await context.close();
+    }
+
+    // 12d. 跨房附件隔离：A 的 chips/自动 @ 不得进入 B，切回 A 仍恢复自身附件。
+    {
+      const crossA = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '跨房附件 A',
+        members: [data.agentA.actor_id],
+      });
+      const crossB = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '跨房附件 B',
+        members: [data.agentA.actor_id],
+      });
+      const crossAId = crossA.room.room_id;
+      const crossBId = crossB.room.room_id;
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const upload = await observeDropUploads(page);
+      const sendArgsFor = async (roomId: string): Promise<{ body?: string } | null> =>
+        (await page.evaluate(
+          `(function () {
+            const calls = (window.__mcpCalls || []).filter(function (call) {
+              return call.name === 'network_message_send' &&
+                call.body.params.arguments.room_id === ${JSON.stringify(roomId)};
+            });
+            return calls.length ? calls[calls.length - 1].body.params.arguments : null;
+          })()`,
+        )) as { body?: string } | null;
+
+      await page.goto(`${server.base}/c/${crossAId}`);
+      await waitRoom(page, crossAId, '跨房附件 A');
+      await page.setInputFiles('#composer-file-input', [
+        { name: '跨房 A 文件.txt', mimeType: 'text/plain', buffer: Buffer.from('cross room A') },
+      ]);
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 1 &&
+          (await page.locator('#composer-files .composer-file-remove:disabled').count()) === 0,
+        '跨房 A 文件 chip 就绪',
+      );
+      const crossAFiles = await rawTool<{ items: { name: string; public_url: string }[] }>(
+        data.humanToken,
+        'network_room_file_list',
+        { room_id: crossAId, limit: 100 },
+      );
+      const crossAUrl = crossAFiles.items.find((item) => item.name === '跨房 A 文件.txt')?.public_url ?? '';
+      check('跨房 A 文件获得公开 URL', Boolean(crossAUrl));
+      await page.locator('#body').fill('A 草稿');
+
+      await page.locator(roomLink(crossBId)).click();
+      await waitRoom(page, crossBId, '跨房附件 B');
+      const crossBView = (await page.evaluate(`(() => ({
+        chips: document.querySelectorAll('#composer-files .composer-file').length,
+        chipHidden: document.getElementById('composer-files').hidden,
+        text: document.getElementById('body').value
+      }))()`)) as { chips: number; chipHidden: boolean; text: string };
+      checkEqual('切到群 B 不显示 A 的 chips', crossBView.chips, 0);
+      checkEqual('切到群 B 隐藏 chips 容器', crossBView.chipHidden, true);
+      checkEqual('切到群 B 不保留 A 的文本草稿', crossBView.text, '');
+      await page.locator('#body').fill('B 纯文本');
+      const beforeBSend = await mcpCallCount(page, 'network_message_send');
+      await page.locator('#send').click();
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_message_send')) > beforeBSend,
+        '群 B 发送',
+      );
+      const bSendArgs = await sendArgsFor(crossBId);
+      checkEqual('群 B 正文不包含 A 的自动 @', bSendArgs?.body, 'B 纯文本');
+      check(
+        '群 B 正文不包含 A 的 /f/ URL',
+        !(bSendArgs?.body ?? '').includes('/f/') &&
+          !(bSendArgs?.body ?? '').includes(crossAUrl),
+        bSendArgs?.body,
+      );
+
+      await page.setInputFiles('#composer-file-input', [
+        { name: '跨房 B 文件.txt', mimeType: 'text/plain', buffer: Buffer.from('cross room B') },
+      ]);
+      await waitUntil(
+        async () =>
+          (await page.locator('#composer-files .composer-file-name').allTextContents())
+            .map((value) => value.trim())
+            .includes('跨房 B 文件.txt'),
+        '跨房 B 文件 chip 就绪',
+      );
+      await page.locator(roomLink(crossAId)).click();
+      await waitRoom(page, crossAId, '跨房附件 A');
+      const crossAView = (await page.evaluate(`(() => ({
+        chips: document.querySelectorAll('#composer-files .composer-file-name').length,
+        names: Array.from(document.querySelectorAll('#composer-files .composer-file-name')).map(function (node) { return node.textContent.trim(); }),
+        text: document.getElementById('body').value
+      }))()`)) as { chips: number; names: string[]; text: string };
+      checkEqual('切回群 A 恢复 A 的 chip 数量', crossAView.chips, 1);
+      checkEqual('切回群 A 恢复 A 的 chip 名称', crossAView.names[0], '跨房 A 文件.txt');
+      check('切回群 A 不出现 B 的附件', !crossAView.names.includes('跨房 B 文件.txt'));
+      checkEqual('切回群 A 恢复 A 的文本草稿', crossAView.text, 'A 草稿');
+      const beforeASend = await mcpCallCount(page, 'network_message_send');
+      await page.locator('#send').click();
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_message_send')) > beforeASend,
+        '群 A 发送',
+      );
+      const aSendArgs = await sendArgsFor(crossAId);
+      check(
+        '群 A 正文只包含 A 的 URL 与自动 @',
+        (aSendArgs?.body ?? '').includes(crossAUrl) &&
+          !(aSendArgs?.body ?? '').includes('cross room B') &&
+          aSendArgs!.body!.trim().endsWith('@WeBots 维护员'),
+        aSendArgs?.body,
+      );
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 0,
+        '群 A 发送后清空 A 的 chips',
+      );
+      checkEqual('群 A 发送后清空 A 的 chips', await page.locator('#composer-files .composer-file').count(), 0);
+
+      await page.locator(roomLink(crossBId)).click();
+      await waitRoom(page, crossBId, '跨房附件 B');
+      await waitUntil(
+        async () =>
+          (await page.locator('#composer-files .composer-file-name').allTextContents())
+            .map((value) => value.trim())
+            .includes('跨房 B 文件.txt'),
+        '切回群 B 恢复 B 的 chip',
+      );
+      const backB = (await page.evaluate(`(() => ({
+        names: Array.from(document.querySelectorAll('#composer-files .composer-file-name')).map(function (node) { return node.textContent.trim(); }),
+        text: document.getElementById('body').value,
+        status: document.getElementById('status').textContent,
+        chips: document.querySelectorAll('#composer-files .composer-file').length
+      }))()`)) as { names: string[]; text: string; status: string; chips: number };
+      check(
+        '切回群 B 恢复 B 的 chip',
+        backB.names[0] === '跨房 B 文件.txt',
+        backB,
+      );
+      check('切回群 B 不出现 A 的附件', !backB.names.includes('跨房 A 文件.txt'));
+      checkEqual('切回群 B 恢复 B 的草稿', backB.text, '');
+      await page.locator('#composer-files .composer-file-remove').first().click();
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 0,
+        '清理群 B 的待发送 chip',
+      );
+
+      await page.locator('#room-filter-direct').click();
+      await page.locator(roomLink(data.direct.room.room_id)).click();
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      const directView = (await page.evaluate(`(() => ({
+        chips: document.querySelectorAll('#composer-files .composer-file').length,
+        text: document.getElementById('body').value
+      }))()`)) as { chips: number; text: string };
+      checkEqual('切到单聊不显示群 B 的 chips', directView.chips, 0);
+      checkEqual('切到单聊不保留群 B 的草稿', directView.text, '');
+      await page.locator('#body').fill('单聊纯文本');
+      const beforeDirectSend = await mcpCallCount(page, 'network_message_send');
+      await page.locator('#send').click();
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_message_send')) > beforeDirectSend,
+        '单聊发送',
+      );
+      const directSendArgs = await sendArgsFor(data.direct.room.room_id);
+      checkEqual('单聊纯文本不自动追加 @', directSendArgs?.body, '单聊纯文本');
+
+      // 上传进行中切房：完成后也只回到原房间，不污染新房间。
+      await page.locator('#room-filter-group').click();
+      await page.locator(roomLink(crossAId)).click();
+      await waitRoom(page, crossAId, '跨房附件 A');
+      upload.delayMs = 600;
+      const beforeRaceUploads = upload.calls.length;
+      await page.setInputFiles('#composer-file-input', [
+        { name: '慢 A 文件.txt', mimeType: 'text/plain', buffer: Buffer.from('slow cross room A') },
+      ]);
+      await page.locator(roomLink(crossBId)).click();
+      await waitRoom(page, crossBId, '跨房附件 B');
+      await waitUntil(
+        () => upload.calls.length === beforeRaceUploads + 1,
+        '慢速上传已发起',
+      );
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 0,
+        '慢速上传期间 B 不出现 chip',
+      );
+      upload.delayMs = 0;
+      await page.locator('#body').fill('竞态消息');
+      const beforeRaceSend = await mcpCallCount(page, 'network_message_send');
+      await page.locator('#send').click();
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_message_send')) > beforeRaceSend,
+        '切房竞态发送',
+      );
+      const raceSendArgs = await sendArgsFor(crossBId);
+      check(
+        '上传中切房后 B 发送不带 A 的附件/@',
+        raceSendArgs?.body === '竞态消息',
+        raceSendArgs?.body,
+      );
+      await page.locator(roomLink(crossAId)).click();
+      await waitRoom(page, crossAId, '跨房附件 A');
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file-name').allTextContents())
+          .map((value) => value.trim())
+          .includes('慢 A 文件.txt'),
+        '慢速上传完成后回到 A 的 chip',
+      );
+      check(
+        '慢速上传完成后 A 的 chip 出现',
+        (await page.locator('#composer-files .composer-file-name').allTextContents())
+          .map((value) => value.trim())
+          .includes('慢 A 文件.txt'),
+      );
       await context.close();
     }
 
@@ -12437,20 +13416,24 @@ async function main(): Promise<void> {
       const groupCodeTable = await bubbleLayout(codeTableMessage);
 
       check(
-        '1280px 长消息气泡铺满可用宽度',
+        '1280px 长消息气泡使用约 82% 列宽',
         groupLongAgent.bubbleWidth >= groupLongAgent.contentMaxWidth - 2 &&
-          groupLongAgent.bubbleWidth > groupLongAgent.rowWidth * 0.85,
+          groupLongAgent.bubbleWidth > groupLongAgent.rowWidth * 0.79 &&
+          groupLongAgent.bubbleWidth < groupLongAgent.rowWidth * 0.85,
         groupLongAgent,
       );
       check(
-        '气泡列使用铺满宽度规则',
-        groupLongAgent.maxWidthRaw.includes('calc(100% - 56px)'),
-        groupLongAgent.maxWidthRaw,
+        '气泡列使用 82% 上限并保留右侧留白',
+        groupLongAgent.contentMaxWidth >= groupLongAgent.rowWidth * 0.79 &&
+          groupLongAgent.contentMaxWidth <= groupLongAgent.rowWidth * 0.84 &&
+          groupLongAgent.maxWidthRaw !== '' &&
+          !groupLongAgent.maxWidthRaw.includes('none'),
+        { maxWidth: groupLongAgent.maxWidthRaw, layout: groupLongAgent },
       );
       check(
-        '气泡列保留头像与边距',
-        groupLongAgent.contentMaxWidth <= groupLongAgent.rowWidth - 50 &&
-          groupLongAgent.contentMaxWidth >= groupLongAgent.rowWidth - 60,
+        '气泡列保留头像与右边距',
+        groupLongAgent.contentMaxWidth <= groupLongAgent.rowWidth - 60 &&
+          groupLongAgent.contentMaxWidth >= groupLongAgent.rowWidth * 0.75,
         groupLongAgent,
       );
       check(
@@ -12525,15 +13508,16 @@ async function main(): Promise<void> {
       const mobileLongAgent = await bubbleLayout(longAgentMessage);
       const mobileShortAgent = await bubbleLayout(shortAgentMessage);
       check(
-        '390px 长消息气泡铺满可用宽度',
+        '390px 长消息气泡使用约 80% 列宽',
         mobileLongAgent.bubbleWidth >= mobileLongAgent.contentMaxWidth - 2 &&
-          mobileLongAgent.bubbleWidth > mobileLongAgent.rowWidth * 0.8,
+          mobileLongAgent.bubbleWidth > mobileLongAgent.rowWidth * 0.75 &&
+          mobileLongAgent.bubbleWidth < mobileLongAgent.rowWidth * 0.85,
         mobileLongAgent,
       );
       check(
-        '390px 气泡仍保留头像与边距',
-        mobileLongAgent.contentMaxWidth <= mobileLongAgent.rowWidth - 50 &&
-          mobileLongAgent.contentMaxWidth >= mobileLongAgent.rowWidth - 60,
+        '390px 气泡仍保留头像与右边距',
+        mobileLongAgent.contentMaxWidth <= mobileLongAgent.rowWidth - 60 &&
+          mobileLongAgent.contentMaxWidth >= mobileLongAgent.rowWidth * 0.74,
         mobileLongAgent,
       );
       check(
@@ -12575,8 +13559,10 @@ async function main(): Promise<void> {
       const directLongAgent = await bubbleLayout(directLongAgentMessage);
       const directShortHuman = await bubbleLayout(directShortHumanMessage);
       check(
-        '直聊长消息气泡铺满可用宽度',
-        directLongAgent.bubbleWidth >= directLongAgent.contentMaxWidth - 2,
+        '直聊长消息气泡使用约 82% 列宽',
+        directLongAgent.bubbleWidth >= directLongAgent.contentMaxWidth - 2 &&
+          directLongAgent.contentMaxWidth >= directLongAgent.rowWidth * 0.79 &&
+          directLongAgent.contentMaxWidth <= directLongAgent.rowWidth * 0.84,
         directLongAgent,
       );
       check(
@@ -12610,9 +13596,10 @@ async function main(): Promise<void> {
       await waitUntil(async () => (await bubbleLayout(directLongAgentMessage)).view === 390, '390px 直聊气泡重排');
       const directMobile = await bubbleLayout(directLongAgentMessage);
       check(
-        '390px 直聊长消息气泡铺满可用宽度',
+        '390px 直聊长消息气泡使用约 80% 列宽',
         directMobile.bubbleWidth >= directMobile.contentMaxWidth - 2 &&
-          directMobile.bubbleWidth > directMobile.rowWidth * 0.8,
+          directMobile.bubbleWidth > directMobile.rowWidth * 0.75 &&
+          directMobile.contentMaxWidth <= directMobile.rowWidth - 60,
         directMobile,
       );
       check(

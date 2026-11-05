@@ -12,6 +12,7 @@ import type { FileMount } from '@peri-code/mcpp/files';
 import { NotificationHub } from '../realtime/hub';
 import { scheduleOutboxDrain } from '../realtime/outbox';
 import { AgentPresenceTimeline } from '../realtime/presence-timeline';
+import { buildDrawboardBundle } from '../web/drawboard-bundle';
 import { buildMarkdownBundle } from '../web/markdown-bundle';
 import { buildResizerBundle } from '../web/resizer-bundle';
 import { createD1 } from './d1';
@@ -170,9 +171,10 @@ if (process.env.DRIVE_DISABLED !== '1') {
   );
 }
 
-const [markdownBundle, resizerBundle] = await Promise.all([
+const [markdownBundle, resizerBundle, drawboardBundle] = await Promise.all([
   buildMarkdownBundle(),
   buildResizerBundle(),
+  buildDrawboardBundle(),
 ]);
 if (markdownBundle) {
   console.log(
@@ -184,6 +186,11 @@ if (resizerBundle) {
     `resizer asset ready: ${(resizerBundle.code.length / 1024).toFixed(0)} KiB (v${resizerBundle.version})`,
   );
 }
+if (drawboardBundle) {
+  console.log(
+    `drawboard asset ready: ${(drawboardBundle.code.length / 1024).toFixed(0)} KiB (v${drawboardBundle.version})`,
+  );
+}
 
 const app = createApp(env, {
   mount,
@@ -191,6 +198,8 @@ const app = createApp(env, {
   markdownAssetVersion: markdownBundle?.version ?? null,
   resizerAsset: resizerBundle?.code ?? null,
   resizerAssetVersion: resizerBundle?.version ?? null,
+  drawboardAsset: drawboardBundle?.code ?? null,
+  drawboardAssetVersion: drawboardBundle?.version ?? null,
 });
 
 const server = Bun.serve({

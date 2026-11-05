@@ -168,6 +168,7 @@ export function renderInvalidSharePage(): string {
 export function renderHomePage(
   markdownVersion: string | null = null,
   resizerVersion: string | null = null,
+  drawboardVersion: string | null = null,
 ): string {
-  return renderAppPage(null, markdownVersion, resizerVersion);
+  return renderAppPage(null, markdownVersion, resizerVersion, drawboardVersion);
 }

@@ -1,10 +1,10 @@
 /**
  * 输入框附件入口与待发送文件 chips。
  *
- * 左侧“+”、隐藏文件选择器、粘贴图片与聊天区拖拽共用
- * `enqueueDroppedFiles`（`POST /mcp-upload` → bind），上传成功后只在正文上方
+ * 左侧“+”菜单的文件入口、隐藏文件选择器、粘贴图片、画板导出与聊天区拖拽
+ * 共用 `enqueueDroppedFiles`（`POST /mcp-upload` → bind），上传成功后只在正文上方
  * 生成 chip，不再把公开 URL 插入 textarea。发送时由 `composerOutgoingBody`
- * 统一拼接正文、文件公开 URL 与固定的 `@WeBots 维护员`。
+ * 按当前房间拼接正文、文件公开 URL 与 `@WeBots 维护员`；没有附件时不自动 @。
  *
  * 删除 chip 是用户显式操作，直接调用 `network_room_file_delete` 并刷新右侧文件栏；
  * 文件名与 URL 只用 textContent 写入 DOM，不输出到 console。
@@ -185,15 +185,37 @@ async function removeComposerFile(roomId, key) {
   setDropStatusFor(roomId, '已删除「' + entry.name + '」。', { transient: true });
 }
 
-/** 发送成功后只清空本地 chips，不删除已进入房间文件列表的文件。 */
-function clearComposerFiles(roomId) {
-  composerFileEntries.delete(roomId);
+/** 发送成功只清空本次已拼入正文的文件，保留发送期间新上传/仍在传输的 chips。 */
+function clearComposerFiles(roomId, sentKeys) {
+  const entries = composerFileEntries.get(roomId);
+  if (!entries) {
+    if (activeRoomId === roomId) renderComposerFiles(roomId);
+    return;
+  }
+  if (!sentKeys) {
+    composerFileEntries.delete(roomId);
+  } else {
+    const keep = entries.filter(function (entry) { return !sentKeys.has(entry.key); });
+    if (keep.length === 0) composerFileEntries.delete(roomId);
+    else composerFileEntries.set(roomId, keep);
+  }
   if (activeRoomId === roomId) renderComposerFiles(roomId);
+}
+
+/** 发送前快照已就绪文件；只有这些 key 会进入正文并在成功后清除。 */
+function composerReadyKeys(roomId) {
+  const keys = new Set();
+  const entries = composerFileEntries.get(roomId) || [];
+  for (const entry of entries) {
+    if (entry.status === 'ready' && entry.public_url) keys.add(entry.key);
+  }
+  return keys;
 }
 
 /**
  * 构建发送正文：用户文本（trim）+ 各文件 public_url（每行一个）
- * + 末尾固定 @WeBots 维护员。用户文本已包含该字符串时不重复。
+ * + 有附件时末尾固定 @WeBots 维护员。用户文本已包含该字符串时不重复。
+ * pending attachments 按 room 读取，切房后不会带上另一房间的文件或自动 @；
  * 没有文本与可发送文件时返回空串，阻止空消息。
  */
 function composerOutgoingBody(roomId, text) {
@@ -208,7 +230,7 @@ function composerOutgoingBody(roomId, text) {
   if (trimmed) parts.push(trimmed);
   for (const url of urls) parts.push(url);
   let body = parts.join('\\n');
-  if (body.indexOf(COMPOSER_MENTION) < 0) {
+  if (urls.length > 0 && body.indexOf(COMPOSER_MENTION) < 0) {
     body += (body ? '\\n' : '') + COMPOSER_MENTION;
   }
   return body;
@@ -220,7 +242,7 @@ function updateAttachBusy() {
   const busy = filesUploadRunning || filesUploadTasks.length > 0;
   attachFileButton.classList.toggle('busy', busy);
   attachFileButton.setAttribute('aria-busy', busy ? 'true' : 'false');
-  attachFileButton.title = busy ? '正在上传文件…' : '上传文件';
+  attachFileButton.title = busy ? '正在上传文件…' : '添加附件';
 }
 
 function composerUploadReady() {
@@ -263,14 +285,7 @@ function clipboardImageFiles(event) {
   return files;
 }
 
-if (attachFileButton && attachFileInput) {
-  attachFileButton.addEventListener('click', function () {
-    if (!composerUploadReady()) {
-      setDropStatus('请先打开一个会话再上传文件。');
-      return;
-    }
-    attachFileInput.click();
-  });
+if (attachFileInput) {
   attachFileInput.addEventListener('change', function () {
     const picked = Array.prototype.slice.call(attachFileInput.files || []);
     // 先复制 FileList 再清空，允许再次选择同一文件；失败后也可直接重选。

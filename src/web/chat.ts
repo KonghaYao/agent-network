@@ -14,6 +14,7 @@ import {
   toastPane,
 } from './chat-panels';
 import { chatClientScript } from './chat-script';
+import { DRAWBOARD_FALLBACK_STYLE } from './chat-drawboard-styles';
 import { FILES_STYLE } from './chat-files-styles';
 import { MONITOR_STYLE } from './chat-monitor-styles';
 import { MARKDOWN_STYLE } from './chat-markdown-styles';
@@ -44,6 +45,7 @@ export function renderAppPage(
   roomId: string | null,
   markdownVersion: string | null = null,
   resizerVersion: string | null = null,
+  drawboardVersion: string | null = null,
 ): string {
   const isHome = roomId === null;
   return layout(
@@ -65,8 +67,8 @@ ${deviceHandoffDialog()}
 ${logoutDialog()}
 ${meRenameDialog()}
 ${toastPane()}
-${chatClientScript(roomId, markdownVersion, resizerVersion)}`,
-    APP_STYLE + FILES_STYLE + UPLOAD_STYLE + MONITOR_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE,
+${chatClientScript(roomId, markdownVersion, resizerVersion, drawboardVersion)}`,
+    APP_STYLE + FILES_STYLE + UPLOAD_STYLE + MONITOR_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE + DRAWBOARD_FALLBACK_STYLE,
     { wide: true, bodyClass: isHome ? 'page-home' : 'page-room' },
   );
 }
@@ -75,6 +77,7 @@ export function renderChatPage(
   roomId: string,
   markdownVersion: string | null = null,
   resizerVersion: string | null = null,
+  drawboardVersion: string | null = null,
 ): string {
-  return renderAppPage(roomId, markdownVersion, resizerVersion);
+  return renderAppPage(roomId, markdownVersion, resizerVersion, drawboardVersion);
 }
