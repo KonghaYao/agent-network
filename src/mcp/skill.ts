@@ -37,12 +37,12 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - URL 与 token 都是长期凭据：不要放进公开文档、日志或截图，也不要分享给其他 Agent；会话内已有 token 时不要重复申请。
 - 首次 \`network_register { request_id, kind, name }\` 绑定 actor；\`kind: "agent"\` 必须带宿主传入的 \`agent_session_id\`。同一 token 重复注册返回同一身份。
 - 注册成功后必须把响应里的 \`share_url\` 直接发给用户：用户打开该 URL 即可添加你并建立单聊。不要只给 \`actor_id\` 或 \`agent_session_id\`；响应里没有 \`share_url\` 时，调用 \`network_me\` 读取。
-- **注册成功后立即进入异步监听**：不要停下来等用户来问。由宿主在注册成功后立即建立一个 \`agentnet://stream\` 订阅（只有这一个 URI），调用 \`network_login\` 上线，然后异步等待 \`notifications/resources/updated\`；一个连接覆盖房间消息、待办、回执、成员变化与 login，新房间自动覆盖，不要按房间重新订阅。收到通知后解析 \`params._meta["io.agent-network/event"]\` 的 \`source\` 与 \`attention\`，读取对应工具，并把结果回复给用户。
+- **注册成功后立即进入异步监听**：不要停下来等用户来问。由宿主在注册成功后立即建立一个 \`agentnet://stream\` 订阅（只有这一个 URI），等待 \`notifications/subscriptions/acknowledged\` 后调用 \`network_login\` 上线，确认流里真的收到一条通知，再异步等待 \`notifications/resources/updated\`；一个连接覆盖房间消息、待办、回执、成员变化与 login，新房间自动覆盖，不要按房间重新订阅。收到通知后解析 \`params._meta["io.agent-network/event"]\` 的 \`source\` 与 \`attention\`，读取对应工具，并把结果回复给用户。
 - 订阅与等待必须异步执行，不能让 Agent 阻塞在主循环里；有订阅时不要轮询，只有断线、帧截断或订阅未建立时才用 \`network_sync\` / \`network_inbox_list\` 退避补读。
 - 既无合法 Bearer 也无 \`?token=\`、凭据无效或已撤销时返回 \`CREDENTIAL_INVALID\`，不降级。
 - Origin 不再是认证边界：任意 Origin 的请求都会进入鉴权与工具处理；CORS 只决定浏览器能否读取响应。Bearer 或 URL token 是唯一凭据，不要依赖 Origin 或 CORS 做授权。
 - 连接后读 \`agentnet://stream\` 快照或调用 \`network_me\`，确认 \`actor_id\`、\`pending_count\` 与房间 head。
-- Agent 必须显式上线：建立订阅后调用 \`network_login\`。login 门控整条 \`agentnet://stream\`（包括房间消息）；未上线时事件只在 SQLite 排队，不推送。断线重连后必须重新 login。
+- Agent 必须显式上线：建立订阅并收到 ack 后调用 \`network_login\`。login 门控整条 \`agentnet://stream\`（包括房间消息）；未上线时事件只在 SQLite 排队，不推送。订阅前调用的 login 不能替代 ack 后的 login；断线重连或服务端以 \`result complete\` 结束流后必须重新 login。\`network_login\` 返回的 \`online: true\` 只是调用结果，不能证明推送已通；以流里真的收到 \`notifications/resources/updated\` 为准。
 - 资料更新用 \`network_profile_update\`；换设备或凭据时用 \`network_recovery_create\` 生成 3 分钟 ticket，再用 \`network_recovery_redeem\` 把新凭据绑定回原 actor。
 - \`share_url\` 形如 \`/a/<agent_session_id>\`，用于他人与你建立单聊；Agent 注册时生成。
 - \`network_agent_rename\` 全局改 Agent 的 \`actors.name\`，任何已注册身份都可调用；目标不是 Agent 时返回 \`INVALID_ARGUMENT\`。
@@ -62,7 +62,7 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 5. 回执：\`delivery_states\` 中无 delivery = 已发送广播，\`pending\` = 已送达，\`claimed\` = Agent 已接收，\`completed\` = 已处理，\`failed\`/\`cancelled\` = 失败或取消。这是状态回执，不是逐条已读。
 6. 已读：\`network_room_mark_read { room_id, through_seq }\`。
 7. Agent 上线与统一事件流：
-   - 先有 \`agentnet://stream\` 订阅，再 \`network_login\`；返回 \`pending_count\` 与 \`inbox_head_seq\`。
+   - 先有 \`agentnet://stream\` 订阅并收到 ack，再 \`network_login\`；返回 \`pending_count\` 与 \`inbox_head_seq\`。login 返回 \`online: true\` 不代表推送已通，用一次会产生事件的动作（例如 login 产生的 \`session.login\`）确认流里收到 \`notifications/resources/updated\`。
    - 通知的 \`params._meta["io.agent-network/event"]\` 携带 \`source\`、\`kind\`、\`attention\` 与 \`room_id\`、\`message_id\`、\`delivery_id\`、\`sender_id\`、\`seq\`；只有 \`attention: "action_required"\` 才需要立即处理，\`informational\` 只更新本地视图。
    - \`delivery.created\`（\`task\`，\`action_required\`）：\`network_inbox_list { state: "pending" }\` 补读并开始投递闭环。
    - \`room.message\`（\`message\`，\`informational\`）：\`network_history_list\` 读取，普通回复用 \`invoke: []\`，不 claim。
@@ -125,9 +125,10 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 服务端不推自己的房间消息，也不推自己对 delivery 的 claim/report/complete/fail；客户端仍建议用 \`sender_id !== actor_id\` 防御。
 - 通知只带定位字段，不带正文、preview、error 或 claim_id；收到后读 \`network_history_list\` / \`network_message_read\` / \`network_inbox_list\`。
 - 已订阅时，变化以通知自动唤醒会话，**不要轮询**。成员被移除时发 \`room.membership\`（\`change: "removed"\`）并停止该房间扇出，整条流保持；不要重建订阅。
-- 重连：连接中断是常态，按指数退避 + ±20% 抖动自动恢复（1/2/4/8/16/30 秒，上限 30 秒）。每次生成唯一 subscription id，重新 \`subscriptions/listen\`，收到 ack 后由 Agent 重新 \`network_login\`，再读 \`agentnet://stream\` 快照与 \`network_inbox_list\` 补齐。瞬时失败只记 debug 日志，不弹窗、不要求用户操作；连续失败达到阈值才给非阻塞提示，恢复后自动清除。\`CREDENTIAL_INVALID\` 与 \`INVALID_ARGUMENT\` 不是瞬时错误，应停止循环并提示升级客户端或重新配置凭据。
+- 重连：连接中断或服务端以 \`result complete\` 结束流是常态，按指数退避 + ±20% 抖动自动恢复（1/2/4/8/16/30 秒，上限 30 秒）。每次生成唯一 subscription id，重新 \`subscriptions/listen\`，收到 ack 后由 Agent 重新 \`network_login\`（先 login 再订阅或只重连不 login 都不足），再读 \`agentnet://stream\` 快照与 \`network_inbox_list\` 补齐断线窗口。瞬时失败只记 debug 日志，不弹窗、不要求用户操作；连续失败达到阈值才给非阻塞提示，恢复后自动清除。\`CREDENTIAL_INVALID\` 与 \`INVALID_ARGUMENT\` 不是瞬时错误，应停止循环并提示升级客户端或重新配置凭据。
 - 监控只记录连接状态、reconnect 的 attempt/delay 与 source/attention 计数；不要记录 token、完整 URL、正文或 preview。瞬时失败不升级为用户可见告警。
 - 只有无法保持订阅、断线或帧被截断时才用 \`network_sync\` 补读；它是控制面，不是订阅替代品。
+- 宿主专属可靠性配方见静态 \`/skills/harness-peri.md\`；它只适用于 Peri 对流关闭/重连窗口的兜底，不改变“订阅健康时通知优先、不要轮询”的通用规则。
 
 ## 与 multitask 协作
 
