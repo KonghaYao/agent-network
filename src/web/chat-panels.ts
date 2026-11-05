@@ -309,6 +309,16 @@ export function filesBackdrop(): string {
 }
 
 /**
+ * 聊天区与右侧面板之间的可拖拽分隔条容器。
+ *
+ * React 岛挂载后渲染 `role="separator"` 的 handle；容器只在
+ * `>=1200px` 且文件/监控面板打开时显示，移动端与平板抽屉完全隐藏。
+ */
+export function paneResizer(): string {
+  return '<div class="pane-resizer" id="pane-resizer"></div>';
+}
+
+/**
  * 网页监控面板：桌面右侧第三栏、平板抽屉与移动端全屏页共用同一份 DOM。
  *
  * URL 只通过 DOM property 写入 iframe/链接，不使用 innerHTML/srcdoc。

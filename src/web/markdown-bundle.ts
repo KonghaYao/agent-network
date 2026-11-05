@@ -8,62 +8,16 @@
 
 import { resolve } from 'node:path';
 
+import { buildClientBundle, type ClientBundleAsset } from './client-bundle';
+
 const ENTRY = resolve(import.meta.dir, 'markdown/entry.tsx');
 
-export interface MarkdownAsset {
-  /** 完整 JS 文本；内存缓存，不在这里写文件。 */
-  code: string;
-  /** 内容哈希前 12 位，用于页面引用带版本 URL，绕过 CDN 的旧 bundle 缓存。 */
-  version: string;
-}
+export type MarkdownAsset = ClientBundleAsset;
 
 /**
  * 构建失败或没有入口产物时返回 null。
  * 开发、测试与生产都复用同一份内存产物。
  */
-export async function buildMarkdownBundle(): Promise<MarkdownAsset | null> {
-  try {
-    // bun-types 1.4.2 的 BuildConfig 尚未声明 `write`，运行时支持 write:false。
-    const config = {
-      entrypoints: [ENTRY],
-      target: 'browser',
-      format: 'esm',
-      minify: true,
-      write: false,
-      splitting: false,
-      define: {
-        'process.env.NODE_ENV': '"production"',
-      },
-    } as unknown as Bun.BuildConfig;
-    const result = await Bun.build(config);
-    if (!result.success) {
-      const messages = result.logs
-        .map((log) => log.message)
-        .filter((message) => message.length > 0)
-        .slice(0, 5);
-      console.warn('markdown bundle disabled:', messages.join(' | '));
-      return null;
-    }
-    const entry = result.outputs.find((output) => output.kind === 'entry-point');
-    if (!entry) {
-      console.warn('markdown bundle disabled: entry output missing');
-      return null;
-    }
-    const text = await entry.text();
-    if (!text || text.length === 0) {
-      console.warn('markdown bundle disabled: empty entry output');
-      return null;
-    }
-    return { code: text, version: bundleVersion(text) };
-  } catch (error) {
-    // 只记录错误类型/路径，不输出消息正文或凭据。
-    const reason = error instanceof Error ? error.message : String(error);
-    console.warn('markdown bundle disabled:', reason.slice(0, 300));
-    return null;
-  }
-}
-
-/** 内容哈希前 12 位；URL 与 ETag 共用，部署后 HTML 自然引用新资源。 */
-function bundleVersion(text: string): string {
-  return new Bun.CryptoHasher('sha256').update(text).digest('hex').slice(0, 12);
+export function buildMarkdownBundle(): Promise<MarkdownAsset | null> {
+  return buildClientBundle(ENTRY, 'markdown');
 }

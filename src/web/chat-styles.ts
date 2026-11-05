@@ -25,6 +25,10 @@ export const APP_STYLE = `
     --wx-link: #576b95;
     --wx-search: #e6e6e6;
     --wx-shadow: 0 12px 32px rgb(0 0 0 / 14%);
+    /* 右侧面板与聊天区之间分隔条的宽度；拖拽岛只改比例，不改这里。 */
+    --pane-resizer-width: 6px;
+    /* 桌面端右栏占比，默认一半一半；拖拽岛按 localStorage 覆盖。 */
+    --right-pane-ratio: 0.5;
     /* 品牌图标统一浅色底：单色 SVG 以 currentColor 编码，<img> 中会渲染为黑色。 */
     --wx-avatar-icon-bg: #f2f3f5;
   }
@@ -201,6 +205,20 @@ export const APP_STYLE = `
 
   .chat-pane { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex;
     flex-direction: column; background: var(--wx-bg); }
+  /* 可拖拽分隔条：默认隐藏，仅桌面端且右侧面板打开时由下方媒体查询显示。 */
+  .pane-resizer { display: none; flex: 0 0 var(--pane-resizer-width);
+    width: var(--pane-resizer-width); align-self: stretch; position: relative;
+    z-index: 6; touch-action: none; }
+  .pane-resizer-handle { display: flex; align-items: center; justify-content: center;
+    width: 100%; height: 100%; cursor: col-resize; touch-action: none; outline: none; }
+  .pane-resizer-handle::before { content: ""; width: 1px; height: 100%;
+    background: var(--wx-line); transition: background-color .12s, width .12s; }
+  .pane-resizer-handle:hover::before,
+  .pane-resizer-handle:focus-visible::before,
+  .pane-resizer-handle.dragging::before {
+    width: 2px; background: var(--wx-green); }
+  .pane-resizer-handle:focus-visible { outline: 2px solid var(--wx-green);
+    outline-offset: -2px; }
   /* 壳同时包含空状态与聊天面板，由 body class 决定桌面端显示哪一个。 */
   body.page-home .chat-pane:not(.empty-pane) { display: none; }
   body.page-room .empty-pane { display: none; }
@@ -430,6 +448,13 @@ export const APP_STYLE = `
     .msg-time span { background: rgb(255 255 255 / 7%); }
     .msg-system span { background: rgb(255 255 255 / 7%); }
     .msg-receipt.stale span { color: #e0a458; }
+  }
+
+  @media (min-width: 1200px) {
+    /* 文件/监控面板打开时显示分隔条；没有右栏、平板抽屉与移动端都不显示。 */
+    body.page-room:has(#files-pane:not([hidden]), #monitor-pane:not([hidden])) .pane-resizer {
+      display: block;
+    }
   }
 
   @media (max-width: 759px) {

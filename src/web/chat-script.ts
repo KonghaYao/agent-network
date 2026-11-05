@@ -13,6 +13,7 @@ import { CHAT_MEMBERS_SCRIPT } from './chat-members-script';
 import { CHAT_MESSAGE_FILES_SCRIPT } from './chat-message-files-script';
 import { CHAT_MONITOR_SCRIPT } from './chat-monitor-script';
 import { CHAT_RENDER_SCRIPT } from './chat-render-script';
+import { CHAT_RESIZER_SCRIPT } from './chat-resizer-script';
 import { CHAT_ROOM_MENU_SCRIPT } from './chat-room-menu-script';
 import { CHAT_ROUTER_SCRIPT } from './chat-router-script';
 import { CHAT_SCROLL_SCRIPT } from './chat-scroll-script';
@@ -33,14 +34,19 @@ import { QR_ENCODER_SCRIPT } from './qr';
 export function chatClientScript(
   roomId: string | null,
   markdownVersion: string | null = null,
+  resizerVersion: string | null = null,
 ): string {
   const roomJson = roomId === null ? 'null' : jsonForScript(roomId);
   const markdownAssetUrl = markdownVersion
     ? `/assets/chat-markdown.js?v=${encodeURIComponent(markdownVersion)}`
     : '/assets/chat-markdown.js';
+  const resizerAssetUrl = resizerVersion
+    ? `/assets/chat-resizer.js?v=${encodeURIComponent(resizerVersion)}`
+    : '/assets/chat-resizer.js';
   return `<script>
 const initialRoomId = ${roomJson};
 const MARKDOWN_ASSET_URL = ${jsonForScript(markdownAssetUrl)};
+const RESIZER_ASSET_URL = ${jsonForScript(resizerAssetUrl)};
 const TOKEN_KEY = 'agent-network-token';
 const MAX_CHUNKS = 8;
 // 服务端 LIMITS.invokeMax 的内联值：阈值只在 limits.ts 维护，页面不复制字面量。
@@ -126,6 +132,7 @@ ${CHAT_STREAM_SCRIPT}
 ${CHAT_FILES_SCRIPT}
 ${CHAT_FILES_ACTIONS_SCRIPT}
 ${CHAT_MONITOR_SCRIPT}
+${CHAT_RESIZER_SCRIPT}
 ${CHAT_ROUTER_SCRIPT}
 
 function browserToken() {

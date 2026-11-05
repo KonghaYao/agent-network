@@ -508,6 +508,10 @@ export interface AppDeps {
   markdownAsset?: string | null;
   /** bundle 内容哈希；页面用它生成带版本 URL，避免 CDN 继续命中旧缓存。 */
   markdownAssetVersion?: string | null;
+  /** 启动时构建的右侧面板拖拽 bundle；null 表示构建失败、保留默认 50/50。 */
+  resizerAsset?: string | null;
+  /** 拖拽 bundle 内容哈希；与 Markdown 共用同样的版本化 URL 策略。 */
+  resizerAssetVersion?: string | null;
 }
 
 interface ByteRange {
@@ -632,6 +636,20 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     });
   });
 
+  // 右侧面板拖拽岛：与 Markdown 岛相同的独立 bundle 与缓存策略。
+  // 构建失败时 404，页面保留 CSS 默认 50/50，分隔条不响应拖动。
+  app.get('/assets/chat-resizer.js', (c) => {
+    if (!deps.resizerAsset) {
+      return c.text('Not Found', 404, { 'cache-control': 'no-store' });
+    }
+    return c.body(deps.resizerAsset, 200, {
+      'content-type': 'text/javascript; charset=utf-8',
+      'cache-control': 'public, max-age=300',
+      'x-content-type-options': 'nosniff',
+      ...(deps.resizerAssetVersion ? { etag: `"${deps.resizerAssetVersion}"` } : {}),
+    });
+  });
+
   // 公开只读技能文档与脚本：只允许 public/skills 下的一层 .md / .sh，拒绝路径穿越。
   // 文件本身不含凭据；调用方自行通过 AGENTNET_TOKEN 提供 Bearer。
   app.get('/skills/:file', async (c) => {
@@ -669,7 +687,14 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
   });
 
   app.get('/', (c) =>
-    c.html(renderHomePage(deps.markdownAssetVersion ?? null), 200, { 'cache-control': 'no-store' }),
+    c.html(
+      renderHomePage(
+        deps.markdownAssetVersion ?? null,
+        deps.resizerAssetVersion ?? null,
+      ),
+      200,
+      { 'cache-control': 'no-store' },
+    ),
   );
   app.get('/a/:sessionId', async (c) => {
     const actor = await getActorBySession(env.DB, c.req.param('sessionId'));
@@ -679,9 +704,17 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     return c.html(renderSharePage(actor), 200, { 'cache-control': 'no-store' });
   });
   app.get('/c/:roomId', (c) =>
-    c.html(renderChatPage(c.req.param('roomId'), deps.markdownAssetVersion ?? null), 200, {
-      'cache-control': 'no-store',
-    }),
+    c.html(
+      renderChatPage(
+        c.req.param('roomId'),
+        deps.markdownAssetVersion ?? null,
+        deps.resizerAssetVersion ?? null,
+      ),
+      200,
+      {
+        'cache-control': 'no-store',
+      },
+    ),
   );
 
   // 公开下载：文件 ID 是唯一地址，不做目录遍历；过期或删除墓碑后直接 404。

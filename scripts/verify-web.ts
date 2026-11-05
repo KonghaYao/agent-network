@@ -512,6 +512,48 @@ async function waitForText(page: Page, selector: string, text: string, timeout =
   );
 }
 
+interface PaneLayout {
+  chatWidth: number;
+  paneWidth: number;
+  paneId: string | null;
+  ratio: number;
+  viewport: number;
+  docWidth: number;
+}
+
+/** 读取聊天区与当前右侧面板（文件或监控）的实际宽度。 */
+async function paneLayout(page: Page): Promise<PaneLayout> {
+  return (await page.evaluate(`(() => {
+    const chat = document.querySelector('.chat-pane:not(.empty-pane)');
+    const files = document.getElementById('files-pane');
+    const monitor = document.getElementById('monitor-pane');
+    const pane = files && !files.hidden ? files : (monitor && !monitor.hidden ? monitor : null);
+    const chatWidth = chat ? chat.getBoundingClientRect().width : 0;
+    const paneWidth = pane ? pane.getBoundingClientRect().width : 0;
+    return {
+      chatWidth: chatWidth,
+      paneWidth: paneWidth,
+      paneId: pane ? pane.id : null,
+      ratio: chatWidth + paneWidth > 0 ? paneWidth / (chatWidth + paneWidth) : 0,
+      viewport: window.innerWidth,
+      docWidth: document.documentElement.scrollWidth
+    };
+  })()`)) as PaneLayout;
+}
+
+/** 把分隔条拖到指定的视口 x 坐标；调用方负责等待 React 岛已完成挂载。 */
+async function dragPaneResizerTo(page: Page, targetX: number): Promise<void> {
+  const box = await page.locator('#pane-resizer-handle').boundingBox();
+  if (!box) throw new Error('分隔条不可见，无法拖动');
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(targetX, y, { steps: 12 });
+  await page.mouse.up();
+  await sleep(80);
+}
+
 interface PresenceTimelineItem {
   kind: 'message' | 'presence';
   transition?: 'online' | 'offline';
@@ -5370,8 +5412,8 @@ async function main(): Promise<void> {
       const desktopFileRatio = desktopFileLayout.fileWidth /
         (desktopFileLayout.chatWidth + desktopFileLayout.fileWidth);
       check(
-        '桌面文件栏约占主内容区 20%',
-        Math.abs(desktopFileRatio - 0.2) <= 0.02,
+        '桌面文件栏默认约占主内容区 50%',
+        Math.abs(desktopFileRatio - 0.5) <= 0.02,
         { ...desktopFileLayout, ratio: desktopFileRatio },
       );
       const imageItem = page.locator('#files-list .file-item').filter({
@@ -5608,6 +5650,305 @@ async function main(): Promise<void> {
       await context.close();
     }
 
+    // 7b. 右侧面板可拖拽：默认 50/50、clamp、持久化、键盘/双击、互斥与资源安全。
+    {
+      const directId = data.direct.room.room_id;
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      const externalRequests: string[] = [];
+      page.on('request', (request) => {
+        const url = new URL(request.url());
+        if (
+          (url.protocol === 'http:' || url.protocol === 'https:') &&
+          url.origin !== server.base
+        ) {
+          externalRequests.push(request.url());
+        }
+      });
+      await page.goto(`${server.base}/c/${directId}`);
+      await waitRoom(page, directId, data.agentA.name);
+      await page.locator('#files-pane').waitFor({ state: 'visible' });
+      await page.locator('#pane-resizer-handle').waitFor({ state: 'visible' });
+
+      const resizerResponse = await fetch(`${server.base}/assets/chat-resizer.js`);
+      checkEqual('拖拽 asset 返回 200', resizerResponse.status, 200);
+      check(
+        '拖拽 asset 为 text/javascript',
+        (resizerResponse.headers.get('content-type') ?? '').includes('text/javascript'),
+        resizerResponse.headers.get('content-type'),
+      );
+      checkEqual(
+        '拖拽 asset 禁止 MIME 嗅探',
+        resizerResponse.headers.get('x-content-type-options'),
+        'nosniff',
+      );
+      check(
+        '拖拽 asset 可缓存',
+        (resizerResponse.headers.get('cache-control') ?? '').includes('max-age=300'),
+        resizerResponse.headers.get('cache-control'),
+      );
+      const resizerBody = await resizerResponse.text();
+      check('拖拽 asset 非空且独立打包 React', resizerBody.length > 1000, resizerBody.length);
+      check(
+        '拖拽 asset 不包含开发版 React',
+        !resizerBody.includes('react-dom.development'),
+        resizerBody.slice(0, 80),
+      );
+
+      const pageHtml = await (await fetch(`${server.base}/c/${directId}`)).text();
+      check('页面 HTML 不含浏览器 token', !pageHtml.includes(data.humanToken));
+      check('拖拽 asset 不含浏览器 token', !resizerBody.includes(data.humanToken));
+      const resizerVersionMatch = pageHtml.match(
+        /\/assets\/chat-resizer\.js\?v=([0-9a-f]{12})/u,
+      );
+      const resizerVersion = resizerVersionMatch?.[1] ?? '';
+      check('页面引用带内容版本的拖拽 bundle', Boolean(resizerVersion), resizerVersionMatch?.[0]);
+      if (resizerVersion) {
+        const versionedResponse = await fetch(
+          `${server.base}/assets/chat-resizer.js?v=${resizerVersion}`,
+        );
+        checkEqual('带版本拖拽 asset 返回 200', versionedResponse.status, 200);
+        checkEqual(
+          '拖拽 asset ETag 与版本一致',
+          versionedResponse.headers.get('etag'),
+          `"${resizerVersion}"`,
+        );
+        checkEqual(
+          '拖拽 asset 版本为内容哈希前 12 位',
+          resizerVersion,
+          createHash('sha256').update(await versionedResponse.text()).digest('hex').slice(0, 12),
+        );
+      }
+
+      for (const width of [1280, 1440, 1920]) {
+        await page.setViewportSize({ width, height: 900 });
+        await sleep(120);
+        const layout = await paneLayout(page);
+        check(
+          `桌面 ${width}px 默认 50/50`,
+          Math.abs(layout.ratio - 0.5) <= 0.02,
+          layout,
+        );
+        check(`桌面 ${width}px 聊天区不少于 320px`, layout.chatWidth >= 318, layout);
+        check(`桌面 ${width}px 右栏不少于 280px`, layout.paneWidth >= 278, layout);
+        check(
+          `桌面 ${width}px 双栏无横向溢出`,
+          layout.docWidth <= layout.viewport + 1,
+          layout,
+        );
+        checkEqual(
+          `桌面 ${width}px 分隔条可见`,
+          await page.locator('#pane-resizer').isVisible(),
+          true,
+        );
+      }
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await sleep(120);
+      checkEqual(
+        '分隔条 role=separator',
+        await page.locator('#pane-resizer-handle').getAttribute('role'),
+        'separator',
+      );
+      checkEqual(
+        '分隔条 aria-orientation=vertical',
+        await page.locator('#pane-resizer-handle').getAttribute('aria-orientation'),
+        'vertical',
+      );
+      checkEqual(
+        '分隔条可聚焦',
+        await page.locator('#pane-resizer-handle').getAttribute('tabindex'),
+        '0',
+      );
+
+      // 拖到最右：右栏收缩到 280px，聊天仍 >=320px。
+      await dragPaneResizerTo(page, 1278);
+      const minRight = await paneLayout(page);
+      check(
+        '拖拽 clamp 右栏最小 280px',
+        Math.abs(minRight.paneWidth - 280) <= 2,
+        minRight,
+      );
+      check('右栏最小时聊天区仍 >=320px', minRight.chatWidth >= 318, minRight);
+      check(
+        '右栏最小时无横向溢出',
+        minRight.docWidth <= minRight.viewport + 1,
+        minRight,
+      );
+
+      // 拖到最左：聊天区收缩到 320px，右栏仍 >=280px。
+      await dragPaneResizerTo(page, 302);
+      const minChat = await paneLayout(page);
+      check(
+        '拖拽 clamp 聊天区最小 320px',
+        Math.abs(minChat.chatWidth - 320) <= 2,
+        minChat,
+      );
+      check('聊天区最小时右栏仍 >=280px', minChat.paneWidth >= 278, minChat);
+      check(
+        '聊天区最小时无横向溢出',
+        minChat.docWidth <= minChat.viewport + 1,
+        minChat,
+      );
+
+      await page.locator('#pane-resizer-handle').dblclick();
+      await sleep(80);
+      const afterReset = await paneLayout(page);
+      check(
+        '双击分隔条重置 50/50',
+        Math.abs(afterReset.ratio - 0.5) <= 0.02,
+        afterReset,
+      );
+
+      const fileCallsBeforeDrag = await fileListCallCount(page);
+      await dragPaneResizerTo(page, (await paneLayout(page)).viewport - 380);
+      const dragged = await paneLayout(page);
+      check(
+        '拖动分隔条改变右侧文件栏宽度',
+        dragged.paneWidth < afterReset.paneWidth - 40,
+        { afterReset, dragged },
+      );
+      check(
+        '拖动后文件列表不重新加载',
+        (await fileListCallCount(page)) === fileCallsBeforeDrag,
+        { before: fileCallsBeforeDrag, after: await fileListCallCount(page) },
+      );
+      const storedRatio = Number(
+        await page.evaluate(`localStorage.getItem('agent-network-right-pane-ratio')`),
+      );
+      check(
+        '拖动比例写入 localStorage',
+        Number.isFinite(storedRatio) && Math.abs(storedRatio - dragged.ratio) <= 0.01,
+        { storedRatio, ratio: dragged.ratio },
+      );
+
+      await page.reload();
+      await waitRoom(page, directId, data.agentA.name);
+      await page.locator('#pane-resizer-handle').waitFor({ state: 'visible' });
+      const afterReload = await paneLayout(page);
+      check(
+        '刷新后恢复拖拽比例',
+        Math.abs(afterReload.ratio - dragged.ratio) <= 0.02,
+        { dragged, afterReload },
+      );
+
+      await page.locator(roomLink(data.group.room.room_id)).click();
+      await page.waitForURL(`**/c/${data.group.room.room_id}`);
+      await page.locator('#title').filter({ hasText: '测试群' }).waitFor();
+      await page.locator('#pane-resizer-handle').waitFor({ state: 'visible' });
+      const afterSwitch = await paneLayout(page);
+      check(
+        '切换房间后恢复拖拽比例',
+        Math.abs(afterSwitch.ratio - afterReload.ratio) <= 0.02,
+        { afterReload, afterSwitch },
+      );
+      await page.locator(roomLink(directId)).click();
+      await waitRoom(page, directId, data.agentA.name);
+      await page.locator('#pane-resizer-handle').waitFor({ state: 'visible' });
+
+      const beforeKeyboard = await paneLayout(page);
+      await page.locator('#pane-resizer-handle').focus();
+      await page.keyboard.press('ArrowLeft');
+      await sleep(60);
+      const afterLeft = await paneLayout(page);
+      check(
+        '键盘左箭头收窄右栏',
+        afterLeft.paneWidth <= beforeKeyboard.paneWidth - 16,
+        { beforeKeyboard, afterLeft },
+      );
+      await page.keyboard.press('ArrowRight');
+      await sleep(60);
+      const afterRight = await paneLayout(page);
+      check(
+        '键盘右箭头加宽右栏',
+        afterRight.paneWidth >= afterLeft.paneWidth + 16,
+        { afterLeft, afterRight },
+      );
+      const ariaNow = Number(
+        await page.locator('#pane-resizer-handle').getAttribute('aria-valuenow'),
+      );
+      check(
+        '分隔条 aria-valuenow 跟随比例',
+        Number.isFinite(ariaNow) && Math.abs(ariaNow / 100 - afterRight.ratio) <= 0.03,
+        { ariaNow, ratio: afterRight.ratio },
+      );
+
+      await page.locator('#pane-resizer-handle').dblclick();
+      await sleep(80);
+      await page.locator('#files-toggle').click();
+      await page.locator('#files-pane').waitFor({ state: 'hidden' });
+      checkEqual('关闭右栏后分隔条隐藏', await page.locator('#pane-resizer').isHidden(), true);
+      const closedLayout = await paneLayout(page);
+      check(
+        '关闭右栏后聊天占满主内容区',
+        Math.abs(closedLayout.chatWidth - (closedLayout.viewport - 300)) <= 2,
+        closedLayout,
+      );
+      await page.locator('#files-toggle').click();
+      await page.locator('#files-pane').waitFor({ state: 'visible' });
+      const reopened = await paneLayout(page);
+      check(
+        '重新打开右栏恢复 50/50',
+        Math.abs(reopened.ratio - 0.5) <= 0.02,
+        reopened,
+      );
+
+      // 监控面板复用同一分隔条与比例；拖动只改宽度，不重载 iframe。
+      await page.locator('#monitor-toggle').click();
+      await page.locator('#monitor-pane').waitFor({ state: 'visible' });
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_room_monitor_get')) >= 1,
+        '拖拽监控验收读取配置',
+      );
+      await page.locator('#monitor-empty').waitFor({ state: 'visible' });
+      await sleep(100);
+      checkEqual('打开监控后文件面板保持互斥关闭', await page.locator('#files-pane').isHidden(), true);
+      checkEqual('监控面板显示同一分隔条', await page.locator('#pane-resizer').isVisible(), true);
+      const monitorBefore = await paneLayout(page);
+      check(
+        '监控面板默认 50/50',
+        Math.abs(monitorBefore.ratio - 0.5) <= 0.02,
+        monitorBefore,
+      );
+      await page.evaluate(`(() => {
+        const frame = document.getElementById('monitor-frame');
+        window.__resizerFrameLoads = 0;
+        if (!frame) return;
+        frame.addEventListener('load', function () { window.__resizerFrameLoads += 1; });
+        frame.hidden = false;
+        frame.src = ${JSON.stringify(`${server.base}/health`)};
+      })()`);
+      await page.waitForFunction('window.__resizerFrameLoads >= 1');
+      const frameLoadsBefore = await page.evaluate('window.__resizerFrameLoads');
+      await dragPaneResizerTo(page, monitorBefore.viewport - 330);
+      const monitorAfter = await paneLayout(page);
+      check(
+        '拖动分隔条改变监控面板宽度',
+        monitorAfter.paneWidth < monitorBefore.paneWidth - 20,
+        { monitorBefore, monitorAfter },
+      );
+      await sleep(250);
+      checkEqual(
+        '拖动分隔条不重新加载监控 iframe',
+        await page.evaluate('window.__resizerFrameLoads'),
+        frameLoadsBefore,
+      );
+      await page.locator('#pane-resizer-handle').dblclick();
+      await sleep(80);
+      const monitorReset = await paneLayout(page);
+      check(
+        '监控面板双击重置 50/50',
+        Math.abs(monitorReset.ratio - 0.5) <= 0.02,
+        monitorReset,
+      );
+      checkEqual('拖拽页面无外部 CDN 请求', externalRequests.length, 0);
+      await context.close();
+    }
+
     // 8. 文件分页、按房间缓存、滚动恢复与快速切换守卫（真实列表分页）。
     {
       const pagedGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
@@ -5746,6 +6087,19 @@ async function main(): Promise<void> {
       checkEqual('平板文件栏为固定抽屉', drawer.position, 'fixed');
       checkEqual('平板抽屉宽度 320px', drawer.width, '320px');
       checkEqual('平板抽屉显示遮罩', await tablet.page.locator('#files-backdrop').isVisible(), true);
+      checkEqual(
+        '平板抽屉打开时不显示分隔条',
+        await tablet.page.locator('#pane-resizer').isHidden(),
+        true,
+      );
+      const tabletChatWidth = (await tablet.page.evaluate(
+        `document.querySelector('.chat-pane:not(.empty-pane)').getBoundingClientRect().width`,
+      )) as number;
+      check(
+        '平板抽屉不挤压聊天区',
+        Math.abs(tabletChatWidth - 600) <= 2,
+        tabletChatWidth,
+      );
       await tablet.page.locator('#files-backdrop').click();
       checkEqual('点击遮罩关闭抽屉', await tablet.page.locator('#files-pane').isHidden(), true);
       await tablet.context.close();
@@ -5759,6 +6113,29 @@ async function main(): Promise<void> {
       await mobile.page.goto(`${server.base}/c/${directId}`);
       await waitRoom(mobile.page, directId, data.agentA.name);
       checkEqual('移动端默认不显示文件栏', await mobile.page.locator('#files-pane').isHidden(), true);
+      checkEqual(
+        '移动端不显示分隔条',
+        await mobile.page.locator('#pane-resizer').isHidden(),
+        true,
+      );
+      const mobileChatLayout = (await mobile.page.evaluate(`(() => {
+        const chat = document.querySelector('.chat-pane:not(.empty-pane)');
+        return {
+          width: chat ? chat.getBoundingClientRect().width : 0,
+          viewport: window.innerWidth,
+          docWidth: document.documentElement.scrollWidth
+        };
+      })()`)) as { width: number; viewport: number; docWidth: number };
+      check(
+        '移动端聊天区占满单栏',
+        Math.abs(mobileChatLayout.width - 390) <= 2,
+        mobileChatLayout,
+      );
+      check(
+        '移动端无横向溢出',
+        mobileChatLayout.docWidth <= mobileChatLayout.viewport + 1,
+        mobileChatLayout,
+      );
       await mobile.page.locator('#files-toggle').click();
       await mobile.page.locator('#files-pane').waitFor({ state: 'visible' });
       await mobile.page.waitForFunction('document.querySelectorAll("#files-list .file-item").length > 0');
@@ -5955,8 +6332,8 @@ async function main(): Promise<void> {
       const desktopMonitorRatio = desktopMonitorLayout.monitorWidth /
         (desktopMonitorLayout.chatWidth + desktopMonitorLayout.monitorWidth);
       check(
-        '桌面监控面板约占主内容区 20%',
-        Math.abs(desktopMonitorRatio - 0.2) <= 0.02,
+        '桌面监控面板默认约占主内容区 50%',
+        Math.abs(desktopMonitorRatio - 0.5) <= 0.02,
         { ...desktopMonitorLayout, ratio: desktopMonitorRatio },
       );
       checkEqual(
@@ -6291,6 +6668,11 @@ async function main(): Promise<void> {
       )) as { position: string; width: string };
       checkEqual('平板监控为固定抽屉', tabletMonitorStyle.position, 'fixed');
       checkEqual('平板监控抽屉宽度 420px', tabletMonitorStyle.width, '420px');
+      checkEqual(
+        '平板监控抽屉不显示分隔条',
+        await tablet.page.locator('#pane-resizer').isHidden(),
+        true,
+      );
       checkEqual('平板监控显示遮罩', await tablet.page.locator('#monitor-backdrop').isVisible(), true);
       await tablet.page.locator('#monitor-backdrop').click();
       await tablet.page.locator('#monitor-pane').waitFor({ state: 'hidden' });
@@ -6322,6 +6704,11 @@ async function main(): Promise<void> {
       )) as { position: string; width: string };
       checkEqual('移动端监控全屏宽度', mobileMonitorStyle.width, '390px');
       checkEqual('移动端监控固定定位', mobileMonitorStyle.position, 'fixed');
+      checkEqual(
+        '移动端监控全屏不显示分隔条',
+        await mobileMonitor.page.locator('#pane-resizer').isHidden(),
+        true,
+      );
       checkEqual('移动端监控隐藏聊天区', await mobileMonitor.page.locator('#composer').isHidden(), true);
       checkEqual('移动端监控隐藏会话列表', await mobileMonitor.page.locator('.sidebar').isHidden(), true);
       checkEqual(
@@ -8650,7 +9037,7 @@ async function main(): Promise<void> {
       );
       await expandContext.context.close();
 
-      // 14h. 桌面 80/20 右栏与平板抽屉：聊天不被挤窄，页面不横向溢出。
+      // 14h. 桌面 50/50 右栏与平板抽屉：聊天不被挤窄，页面不横向溢出。
       for (const width of [1280, 1440, 1920]) {
         const layoutContext = await makeContext(
           browser,
@@ -8688,13 +9075,13 @@ async function main(): Promise<void> {
         };
         const chatRatio = layout.chat / (layout.chat + layout.files);
         check(
-          `${width}px 聊天区约占主内容区 80%`,
-          Math.abs(chatRatio - 0.8) <= 0.02,
+          `${width}px 聊天区约占主内容区 50%`,
+          Math.abs(chatRatio - 0.5) <= 0.02,
           { ...layout, chatRatio },
         );
         check(
-          `${width}px 文件栏约占 20%`,
-          Math.abs(layout.files / (layout.chat + layout.files) - 0.2) <= 0.02,
+          `${width}px 文件栏约占 50%`,
+          Math.abs(layout.files / (layout.chat + layout.files) - 0.5) <= 0.02,
           layout,
         );
         check(`${width}px 三栏不横向溢出`, layout.doc <= layout.view + 1, layout);

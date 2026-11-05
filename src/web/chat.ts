@@ -9,6 +9,7 @@ import {
   monitorBackdrop,
   monitorPane,
   newAgentDialog,
+  paneResizer,
   sidebarPane,
   toastPane,
 } from './chat-panels';
@@ -38,7 +39,11 @@ import { layout } from './layout';
  * 移动端（`< 760px`）沿用同一套 body class 切为单栏：
  * 首页只显示列表，聊天页只显示聊天区与返回箭头。
  */
-export function renderAppPage(roomId: string | null, markdownVersion: string | null = null): string {
+export function renderAppPage(
+  roomId: string | null,
+  markdownVersion: string | null = null,
+  resizerVersion: string | null = null,
+): string {
   const isHome = roomId === null;
   return layout(
     isHome ? 'WeBots' : '聊天 · WeBots',
@@ -46,6 +51,7 @@ export function renderAppPage(roomId: string | null, markdownVersion: string | n
 ${sidebarPane()}
 ${emptyPane()}
 ${chatPane()}
+${paneResizer()}
 ${filesBackdrop()}
 ${filesPane()}
 ${monitorBackdrop()}
@@ -58,12 +64,16 @@ ${deviceHandoffDialog()}
 ${logoutDialog()}
 ${meRenameDialog()}
 ${toastPane()}
-${chatClientScript(roomId, markdownVersion)}`,
+${chatClientScript(roomId, markdownVersion, resizerVersion)}`,
     APP_STYLE + FILES_STYLE + MONITOR_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE,
     { wide: true, bodyClass: isHome ? 'page-home' : 'page-room' },
   );
 }
 
-export function renderChatPage(roomId: string, markdownVersion: string | null = null): string {
-  return renderAppPage(roomId, markdownVersion);
+export function renderChatPage(
+  roomId: string,
+  markdownVersion: string | null = null,
+  resizerVersion: string | null = null,
+): string {
+  return renderAppPage(roomId, markdownVersion, resizerVersion);
 }

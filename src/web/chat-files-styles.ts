@@ -130,11 +130,13 @@ export const FILES_STYLE = `
 
   @media (min-width: 1200px) {
     .files-backdrop { display: none !important; }
-    /* 有右侧文件栏时聊天区占主内容区（侧栏之外）80%，文件栏占 20%。 */
-    .chat-pane { flex: 1 1 auto; min-width: 0; }
-    /* 百分比 flex-basis 相对整个 main，需要先减去 300px 会话栏再取 20%。 */
-    .files-pane { flex: 0 0 calc((100% - 300px) * 0.2);
-      width: calc((100% - 300px) * 0.2); min-width: 0; max-width: none;
+    /* 聊天区与右侧文件栏默认 50/50，可拖动分隔条调整；宽度变量由 React 岛写入。 */
+    .chat-pane { flex: 1 1 auto; min-width: 320px; }
+    /* 先减去 300px 会话栏和分隔条，再按比例分配；min/max 保证双栏可用。 */
+    .files-pane { flex: 0 0 calc((100% - 300px - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
+      width: calc((100% - 300px - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
+      min-width: 280px;
+      max-width: calc(100% - 300px - var(--pane-resizer-width) - 320px);
       box-sizing: border-box; }
   }
 

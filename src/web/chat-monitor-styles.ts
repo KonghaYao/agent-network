@@ -76,10 +76,12 @@ export const MONITOR_STYLE = `
 
   @media (min-width: 1200px) {
     .monitor-backdrop { display: none !important; }
-    /* 与文件栏一致：聊天区 80%，监控栏 20%，不把聊天挤窄。 */
-    .chat-pane { flex: 1 1 auto; min-width: 0; }
-    .monitor-pane { flex: 0 0 calc((100% - 300px) * 0.2);
-      width: calc((100% - 300px) * 0.2); min-width: 0; max-width: none;
+    /* 与文件栏共用分隔条和比例变量；默认 50/50，不再固定 20%。 */
+    .chat-pane { flex: 1 1 auto; min-width: 320px; }
+    .monitor-pane { flex: 0 0 calc((100% - 300px - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
+      width: calc((100% - 300px - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
+      min-width: 280px;
+      max-width: calc(100% - 300px - var(--pane-resizer-width) - 320px);
       box-sizing: border-box; }
   }
 

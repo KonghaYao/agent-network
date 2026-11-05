@@ -13,6 +13,7 @@ import { NotificationHub } from '../realtime/hub';
 import { scheduleOutboxDrain } from '../realtime/outbox';
 import { AgentPresenceTimeline } from '../realtime/presence-timeline';
 import { buildMarkdownBundle } from '../web/markdown-bundle';
+import { buildResizerBundle } from '../web/resizer-bundle';
 import { createD1 } from './d1';
 import { migrate } from './migrate';
 
@@ -169,10 +170,18 @@ if (process.env.DRIVE_DISABLED !== '1') {
   );
 }
 
-const markdownBundle = await buildMarkdownBundle();
+const [markdownBundle, resizerBundle] = await Promise.all([
+  buildMarkdownBundle(),
+  buildResizerBundle(),
+]);
 if (markdownBundle) {
   console.log(
     `markdown asset ready: ${(markdownBundle.code.length / 1024).toFixed(0)} KiB (v${markdownBundle.version})`,
+  );
+}
+if (resizerBundle) {
+  console.log(
+    `resizer asset ready: ${(resizerBundle.code.length / 1024).toFixed(0)} KiB (v${resizerBundle.version})`,
   );
 }
 
@@ -180,6 +189,8 @@ const app = createApp(env, {
   mount,
   markdownAsset: markdownBundle?.code ?? null,
   markdownAssetVersion: markdownBundle?.version ?? null,
+  resizerAsset: resizerBundle?.code ?? null,
+  resizerAssetVersion: resizerBundle?.version ?? null,
 });
 
 const server = Bun.serve({
