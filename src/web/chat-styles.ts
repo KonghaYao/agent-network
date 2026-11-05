@@ -317,8 +317,10 @@ export const APP_STYLE = `
   .msg-avatar { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 6px;
     display: grid; place-items: center; overflow: hidden; color: #fff;
     font-size: 14px; font-weight: 500; }
+  /* 气泡列尽量铺满右侧，只给 36px 头像、10px 间距和 10px 边距留空间；
+     短消息仍由内容决定宽度，不强制拉满。 */
   .msg-content { display: flex; flex-direction: column; align-items: flex-start;
-    min-width: 0; max-width: min(60%, 560px); }
+    min-width: 0; max-width: calc(100% - 56px); }
   .msg.mine .msg-content { align-items: flex-end; }
   .msg-sender { max-width: 100%; margin: 0 0 4px 2px; font-size: 11px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -477,7 +479,6 @@ export const APP_STYLE = `
       padding-top: env(safe-area-inset-top); }
     .messages { padding: 10px 12px 14px; }
     .jump-latest { bottom: calc(64px + env(safe-area-inset-bottom)); }
-    .msg-content { max-width: 74%; }
     .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
     .composer textarea { font-size: 16px; }
     .composer-drop { inset: 6px; }

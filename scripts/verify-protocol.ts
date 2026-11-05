@@ -1232,6 +1232,17 @@ async function main(): Promise<void> {
     skillText.slice(0, 240),
   );
   check(
+    '技能正文包含 Markdown 写法与空行规范',
+    skillText.includes('### Markdown 写法') &&
+      skillText.includes('至少留一个空行') &&
+      skillText.includes('不要把多段正文') &&
+      skillText.includes('列表一项一行') &&
+      skillText.includes('围栏代码块') &&
+      skillText.includes('标注语言') &&
+      skillText.includes('聊天只发摘要和链接'),
+    skillText.slice(0, 260),
+  );
+  check(
     '技能正文要求超过 10 秒先发简短确认',
     skillText.includes('超过 10 秒') &&
       skillText.includes('简短确认') &&
@@ -1521,6 +1532,32 @@ async function main(): Promise<void> {
     '静态技能包含短回复与长内容文件指引',
     skillDocText.includes('回复长度与长内容') && skillDocText.includes('一行摘要'),
     skillDocText.slice(0, 240),
+  );
+  const markdownSection = (text: string): string => {
+    const heading = '### Markdown 写法';
+    const start = text.indexOf(heading);
+    if (start < 0) return '';
+    const rest = text.slice(start + heading.length);
+    const next = rest.search(/\n#{2,3} /u);
+    return (next < 0 ? rest : rest.slice(0, next)).trim();
+  };
+  const mainMarkdownSection = markdownSection(skillText);
+  const staticMarkdownSection = markdownSection(skillDocText);
+  check(
+    '静态技能包含 Markdown 写法与空行规范',
+    staticMarkdownSection.includes('至少留一个空行') &&
+      staticMarkdownSection.includes('列表一项一行') &&
+      staticMarkdownSection.includes('围栏代码块') &&
+      staticMarkdownSection.includes('标注语言') &&
+      staticMarkdownSection.includes('摘要和链接'),
+    staticMarkdownSection,
+  );
+  const sectionDigest = (text: string): string =>
+    new Bun.CryptoHasher('sha256').update(text).digest('hex');
+  checkEqual(
+    '静态/主 skill Markdown 写法 digest 一致',
+    sectionDigest(staticMarkdownSection),
+    sectionDigest(mainMarkdownSection),
   );
   check(
     '静态技能包含首次进入会话规范',

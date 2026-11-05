@@ -13,7 +13,7 @@ import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { Database } from 'bun:sqlite';
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright';
 
 import { extractMessageFileLinks } from '../src/contracts/file-links';
 import {
@@ -729,6 +729,65 @@ async function bottomGap(page: Page): Promise<number> {
 
 async function waitForBottom(page: Page, label: string, timeout = 8_000): Promise<void> {
   await waitUntil(async () => (await bottomGap(page)) <= 2, label, timeout);
+}
+
+interface BubbleLayout {
+  view: number;
+  doc: number;
+  messagesClient: number;
+  messagesScroll: number;
+  rowWidth: number;
+  contentWidth: number;
+  contentMaxWidth: number;
+  maxWidthRaw: string;
+  bubbleWidth: number;
+  bubbleClientWidth: number;
+  bubbleScrollWidth: number;
+  background: string;
+  sender: string;
+  preScroll: number;
+  preClient: number;
+  tableScroll: number;
+  tableClient: number;
+}
+
+/** 读取单条消息的气泡几何与滚动边界，用于宽度、暗色和溢出断言。 */
+async function bubbleLayout(locator: Locator): Promise<BubbleLayout> {
+  return locator.evaluate((node) => {
+    const messages = document.getElementById('messages');
+    const content = node.querySelector('.msg-content');
+    const bubble = node.querySelector('.bubble');
+    const pre = node.querySelector('.msg-markdown .md-pre');
+    const table = node.querySelector('.msg-markdown .md-table-wrap');
+    if (!messages || !content || !bubble) {
+      throw new Error('消息缺少 .msg-content 或 .bubble');
+    }
+    const row = node.getBoundingClientRect();
+    const contentRect = content.getBoundingClientRect();
+    const bubbleRect = bubble.getBoundingClientRect();
+    const sender = node.querySelector('.msg-sender');
+    const maxWidthRaw = getComputedStyle(content).maxWidth;
+    const parsedMaxWidth = Number.parseFloat(maxWidthRaw);
+    return {
+      view: window.innerWidth,
+      doc: document.documentElement.scrollWidth,
+      messagesClient: messages.clientWidth,
+      messagesScroll: messages.scrollWidth,
+      rowWidth: row.width,
+      contentWidth: contentRect.width,
+      contentMaxWidth: Number.isFinite(parsedMaxWidth) ? parsedMaxWidth : row.width - 56,
+      maxWidthRaw,
+      bubbleWidth: bubbleRect.width,
+      bubbleClientWidth: bubble.clientWidth,
+      bubbleScrollWidth: bubble.scrollWidth,
+      background: getComputedStyle(bubble).backgroundColor,
+      sender: sender ? (sender.textContent || '').trim() : '',
+      preScroll: pre ? pre.scrollWidth : 0,
+      preClient: pre ? pre.clientWidth : 0,
+      tableScroll: table ? table.scrollWidth : 0,
+      tableClient: table ? table.clientWidth : 0,
+    };
+  });
 }
 
 async function messagesScrollTop(page: Page): Promise<number> {
@@ -10356,6 +10415,284 @@ async function main(): Promise<void> {
         { before: tabletBefore.chat, after: tabletDrawer.chat },
       );
       await tabletLayout.context.close();
+    }
+
+    // 15. 气泡宽度：长内容铺满可用宽度、短内容收缩、卡片/系统行不受影响，覆盖 1280/390 与暗色。
+    {
+      const bubbleGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '气泡宽度群',
+        members: [data.agentA.actor_id],
+      });
+      const bubbleRoomId = bubbleGroup.room.room_id;
+      const bubbleFile = await uploadRealFile(data.humanToken, server.base, {
+        name: '气泡宽度附件.txt',
+        mimeType: 'text/plain',
+        body: 'bubble width attachment',
+      });
+      await bindRealFile(data.humanToken, bubbleRoomId, bubbleFile.fileId);
+
+      const shortAgentMarker = '气泡短消息';
+      const shortHumanMarker = '用户短消息';
+      const longUrlMarker = '长链接消息';
+      const codeTableMarker = '宽内容表格';
+      const longAgentMarker = '长文气泡';
+      const fileCardMarker = '附件气泡';
+      const directAgentMarker = '直聊 Agent 长消息';
+      const directHumanMarker = '直聊用户长消息';
+      const longUrl = `https://example.com/${'a'.repeat(320)}`;
+      const longProse = `长文本内容 ${'段落内容 '.repeat(120)}结尾`;
+      const codeTableBody = [
+        codeTableMarker,
+        '',
+        '| 列A | 列B |',
+        '| --- | --- |',
+        `| ${'a'.repeat(120)} | ${'b'.repeat(120)} |`,
+        '',
+        '```ts',
+        `const longLine = '${'x'.repeat(150)}';`,
+        '```',
+      ].join('\n');
+      const send = async (token: string, body: string): Promise<void> => {
+        await rawTool(token, 'network_message_send', {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: bubbleRoomId,
+          body,
+        });
+      };
+      await send(data.agentAToken, shortAgentMarker);
+      await send(data.humanToken, shortHumanMarker);
+      await send(data.agentAToken, `${longUrlMarker}\n${longUrl}`);
+      await send(data.agentAToken, codeTableBody);
+      await send(data.agentAToken, `${longAgentMarker}\n\n${longProse}`);
+      await send(data.agentAToken, `${fileCardMarker}\n${bubbleFile.publicUrl}`);
+      await rawTool(data.humanToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: data.direct.room.room_id,
+        body: `${directHumanMarker}\n${longProse}`,
+      });
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: data.direct.room.room_id,
+        body: `${directAgentMarker}\n${longProse}`,
+      });
+
+      const groupContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      const page = groupContext.page;
+      await page.goto(`${server.base}/c/${bubbleRoomId}`);
+      await waitRoom(page, bubbleRoomId, '气泡宽度群');
+      const messageByText = (text: string): Locator =>
+        page.locator('#messages .msg').filter({ hasText: text }).last();
+      const shortAgentMessage = messageByText(shortAgentMarker);
+      const shortHumanMessage = messageByText(shortHumanMarker);
+      const longUrlMessage = messageByText(longUrlMarker);
+      const codeTableMessage = messageByText(codeTableMarker);
+      const longAgentMessage = messageByText(longAgentMarker);
+      await longAgentMessage.locator('.msg-markdown').waitFor();
+      await codeTableMessage.locator('.msg-markdown .md-pre').waitFor();
+      await longUrlMessage.locator('.msg-markdown').waitFor();
+
+      const groupShortAgent = await bubbleLayout(shortAgentMessage);
+      const groupShortHuman = await bubbleLayout(shortHumanMessage);
+      const groupLongAgent = await bubbleLayout(longAgentMessage);
+      const groupLongUrl = await bubbleLayout(longUrlMessage);
+      const groupCodeTable = await bubbleLayout(codeTableMessage);
+
+      check(
+        '1280px 长消息气泡铺满可用宽度',
+        groupLongAgent.bubbleWidth >= groupLongAgent.contentMaxWidth - 2 &&
+          groupLongAgent.bubbleWidth > groupLongAgent.rowWidth * 0.85,
+        groupLongAgent,
+      );
+      check(
+        '气泡列使用铺满宽度规则',
+        groupLongAgent.maxWidthRaw.includes('calc(100% - 56px)'),
+        groupLongAgent.maxWidthRaw,
+      );
+      check(
+        '气泡列保留头像与边距',
+        groupLongAgent.contentMaxWidth <= groupLongAgent.rowWidth - 50 &&
+          groupLongAgent.contentMaxWidth >= groupLongAgent.rowWidth - 60,
+        groupLongAgent,
+      );
+      check(
+        '短消息气泡仍按内容收缩',
+        groupShortAgent.bubbleWidth < groupShortAgent.contentMaxWidth * 0.6 &&
+          groupShortHuman.bubbleWidth < groupShortHuman.contentMaxWidth * 0.6,
+        { agent: groupShortAgent, human: groupShortHuman },
+      );
+      checkEqual('群聊他人消息仍显示发送者', groupShortAgent.sender, data.agentA.name);
+      checkEqual('群聊自己的消息不显示发送者', groupShortHuman.sender, '');
+      check(
+        '长 URL 不撑破气泡',
+        groupLongUrl.bubbleWidth <= groupLongUrl.contentMaxWidth + 1 &&
+          groupLongUrl.bubbleScrollWidth <= groupLongUrl.bubbleClientWidth + 1,
+        groupLongUrl,
+      );
+      check(
+        '代码块保留在气泡内',
+        groupCodeTable.bubbleWidth <= groupCodeTable.contentMaxWidth + 1 &&
+          groupCodeTable.preClient > 0 &&
+          groupCodeTable.preClient <= groupCodeTable.bubbleClientWidth,
+        groupCodeTable,
+      );
+      check(
+        '表格在气泡内横向滚动',
+        groupCodeTable.bubbleWidth <= groupCodeTable.contentMaxWidth + 1 &&
+          groupCodeTable.tableScroll > groupCodeTable.tableClient,
+        groupCodeTable,
+      );
+      check(
+        '1280px 气泡加宽后消息区不横向溢出',
+        groupCodeTable.messagesScroll <= groupCodeTable.messagesClient + 1 &&
+          groupCodeTable.doc <= groupCodeTable.view + 1,
+        groupCodeTable,
+      );
+
+      const cardMessage = messageByText(fileCardMarker);
+      await cardMessage.locator(`.msg-file[data-file-id="${bubbleFile.fileId}"]`).waitFor();
+      const cardWidth = (await cardMessage.locator('.msg-files').evaluate(
+        (node) => node.getBoundingClientRect().width,
+      )) as number;
+      check('文件卡片仍不超过 320px', cardWidth <= 320.5, cardWidth);
+      checkEqual(
+        '文件卡片仍在气泡外',
+        await cardMessage.locator('.bubble .msg-file').count(),
+        0,
+      );
+      check('时间胶囊仍存在', (await page.locator('.msg-time').count()) > 0);
+      checkEqual('时间胶囊不生成气泡', await page.locator('.msg-time .bubble').count(), 0);
+      check('回执仍存在', (await page.locator('.msg-receipt').count()) > 0);
+      checkEqual('回执不生成气泡', await page.locator('.msg-receipt .bubble').count(), 0);
+
+      await page.emulateMedia({ colorScheme: 'dark' });
+      const darkOther = await bubbleLayout(longAgentMessage);
+      const darkMine = await bubbleLayout(shortHumanMessage);
+      checkEqual('暗色对方气泡使用深色面板', darkOther.background, 'rgb(44, 44, 44)');
+      checkEqual('暗色自己气泡保持绿色', darkMine.background, 'rgb(149, 236, 105)');
+      check(
+        '暗色不改变气泡宽度',
+        Math.abs(darkOther.contentMaxWidth - groupLongAgent.contentMaxWidth) <= 1,
+        { light: groupLongAgent.contentMaxWidth, dark: darkOther.contentMaxWidth },
+      );
+      await page.emulateMedia({ colorScheme: 'light' });
+
+      // 390px 文件栏会变成全屏面板，先关闭，确保测量的是聊天页。
+      if (await page.locator('#files-pane').isVisible()) {
+        await page.locator('#files-toggle').click();
+        await page.locator('#files-pane').waitFor({ state: 'hidden' });
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      await waitUntil(async () => (await bubbleLayout(longAgentMessage)).view === 390, '390px 气泡重排');
+      const mobileLongAgent = await bubbleLayout(longAgentMessage);
+      const mobileShortAgent = await bubbleLayout(shortAgentMessage);
+      check(
+        '390px 长消息气泡铺满可用宽度',
+        mobileLongAgent.bubbleWidth >= mobileLongAgent.contentMaxWidth - 2 &&
+          mobileLongAgent.bubbleWidth > mobileLongAgent.rowWidth * 0.8,
+        mobileLongAgent,
+      );
+      check(
+        '390px 气泡仍保留头像与边距',
+        mobileLongAgent.contentMaxWidth <= mobileLongAgent.rowWidth - 50 &&
+          mobileLongAgent.contentMaxWidth >= mobileLongAgent.rowWidth - 60,
+        mobileLongAgent,
+      );
+      check(
+        '390px 短消息气泡仍按内容收缩',
+        mobileShortAgent.bubbleWidth < mobileShortAgent.contentMaxWidth * 0.6,
+        mobileShortAgent,
+      );
+      check(
+        '390px 页面与消息区不横向溢出',
+        mobileLongAgent.doc <= mobileLongAgent.view + 1 &&
+          mobileLongAgent.messagesScroll <= mobileLongAgent.messagesClient + 1,
+        mobileLongAgent,
+      );
+      await groupContext.context.close();
+
+      const directContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      const directPage = directContext.page;
+      await directPage.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await waitRoom(directPage, data.direct.room.room_id, data.agentA.name);
+      await directPage.locator('.msg-system.msg-presence').first().waitFor({ state: 'attached' });
+      const directLongAgentMessage = directPage
+        .locator('#messages .msg')
+        .filter({ hasText: directAgentMarker })
+        .last();
+      const directLongHumanMessage = directPage
+        .locator('#messages .msg')
+        .filter({ hasText: directHumanMarker })
+        .last();
+      const directShortHumanMessage = directPage
+        .locator('#messages .msg')
+        .filter({ hasText: 'D 消息 30' })
+        .last();
+      await directLongAgentMessage.locator('.msg-markdown').waitFor();
+      const directLongAgent = await bubbleLayout(directLongAgentMessage);
+      const directShortHuman = await bubbleLayout(directShortHumanMessage);
+      check(
+        '直聊长消息气泡铺满可用宽度',
+        directLongAgent.bubbleWidth >= directLongAgent.contentMaxWidth - 2,
+        directLongAgent,
+      );
+      check(
+        '直聊短消息气泡仍按内容收缩',
+        directShortHuman.bubbleWidth < directShortHuman.contentMaxWidth * 0.6,
+        directShortHuman,
+      );
+      const systemMetrics = (await directPage.locator('.msg-system.msg-presence').last().evaluate((node) => {
+        const messages = document.getElementById('messages');
+        const span = node.querySelector('span');
+        return {
+          bubbles: node.querySelectorAll('.bubble').length,
+          width: span ? span.getBoundingClientRect().width : 0,
+          available: messages ? messages.clientWidth : 0,
+        };
+      })) as { bubbles: number; width: number; available: number };
+      checkEqual('系统行仍不生成气泡', systemMetrics.bubbles, 0);
+      check(
+        '系统行宽度仍限制在 88%',
+        systemMetrics.available > 0 && systemMetrics.width <= systemMetrics.available * 0.88 + 1,
+        systemMetrics,
+      );
+      await directPage.emulateMedia({ colorScheme: 'dark' });
+      const directDark = await bubbleLayout(directLongAgentMessage);
+      checkEqual('直聊暗色对方气泡使用深色面板', directDark.background, 'rgb(44, 44, 44)');
+      if (await directPage.locator('#files-pane').isVisible()) {
+        await directPage.locator('#files-toggle').click();
+        await directPage.locator('#files-pane').waitFor({ state: 'hidden' });
+      }
+      await directPage.setViewportSize({ width: 390, height: 844 });
+      await waitUntil(async () => (await bubbleLayout(directLongAgentMessage)).view === 390, '390px 直聊气泡重排');
+      const directMobile = await bubbleLayout(directLongAgentMessage);
+      check(
+        '390px 直聊长消息气泡铺满可用宽度',
+        directMobile.bubbleWidth >= directMobile.contentMaxWidth - 2 &&
+          directMobile.bubbleWidth > directMobile.rowWidth * 0.8,
+        directMobile,
+      );
+      check(
+        '390px 直聊不横向溢出',
+        directMobile.doc <= directMobile.view + 1 &&
+          directMobile.messagesScroll <= directMobile.messagesClient + 1,
+        directMobile,
+      );
+      await directContext.context.close();
     }
 
     // 2f. Agent token 注销重发：二次确认、取消、成功自动复制、失败、入口限制、移动端与 DB 不落原文。
