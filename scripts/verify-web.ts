@@ -1686,6 +1686,11 @@ async function main(): Promise<void> {
       checkEqual('列表骨架在摘要渲染后清除', await page.locator('.room-skeleton').count(), 0);
       const initialText = (await page.locator(roomLink(data.direct.room.room_id)).textContent()) ?? '';
       check('direct 先显示占位名称', initialText.includes('单聊'), initialText);
+      checkEqual(
+        'direct 详情补全前（未知）不显示状态点',
+        await page.locator(`${roomLink(data.direct.room.room_id)} .presence-dot`).count(),
+        0,
+      );
       await page.waitForFunction(
         `(() => {
           const link = document.querySelector(${JSON.stringify(roomLink(data.direct.room.room_id))});
@@ -1694,10 +1699,164 @@ async function main(): Promise<void> {
       );
       check('direct 名称后台补全', true);
       checkEqual(
-        'direct 在线状态点后台补全',
-        await page.locator(`${roomLink(data.direct.room.room_id)} .presence-dot`).count(),
+        'direct 离线状态点后台补全',
+        await page.locator(`${roomLink(data.direct.room.room_id)} .presence-dot.offline`).count(),
         1,
       );
+      checkEqual(
+        '列表不渲染在线或未知状态点',
+        await page.locator('#room-list .presence-dot:not(.offline)').count(),
+        0,
+      );
+      await context.close();
+    }
+
+    // 1b. 侧栏状态点：只有 direct Agent 明确离线显示灰点；在线/人类/群聊均不显示。
+    {
+      const agentConnection = await connectClient(data.agentBToken);
+      await openSubscription(agentConnection.client, ['agentnet://stream']);
+      await callTool(agentConnection.client, 'network_login', {});
+      const humanPeerToken = crypto.randomUUID();
+      const humanPeer = await rawTool<Actor>(humanPeerToken, 'network_register', {
+        request_id: requestId('web_human_peer'),
+        kind: 'human',
+        name: '验收人类同事',
+      });
+      const humanDirect = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [humanPeer.actor_id],
+      });
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await waitRoomListName(page, data.agentA.name);
+      await waitRoomListName(page, data.agentB.name);
+      await waitRoomListName(page, humanPeer.name);
+      checkEqual(
+        '在线 direct Agent 不显示状态点',
+        await page.locator(`${roomLink(data.extra.room.room_id)} .presence-dot`).count(),
+        0,
+      );
+      checkEqual(
+        '人类直聊不显示状态点',
+        await page.locator(`${roomLink(humanDirect.room.room_id)} .presence-dot`).count(),
+        0,
+      );
+      checkEqual(
+        '群聊不显示状态点',
+        await page.locator(`${roomLink(data.group.room.room_id)} .presence-dot`).count(),
+        0,
+      );
+      checkEqual(
+        '侧栏不存在绿色状态点',
+        await page.locator('#room-list .presence-dot.online').count(),
+        0,
+      );
+      await agentConnection.close();
+      const offlineDeadline = Date.now() + 10_000;
+      for (;;) {
+        const detail = await rawTool<{
+          members: { actor_id: string; online?: boolean | null }[];
+        }>(data.humanToken, 'network_room_get', { room_id: data.extra.room.room_id });
+        const peer = detail.members.find((member) => member.actor_id === data.agentB.actor_id);
+        if (peer?.online === false) break;
+        if (Date.now() > offlineDeadline) {
+          throw new Error(`等待 Agent 离线超时: ${JSON.stringify(peer)}`);
+        }
+        await sleep(100);
+      }
+      await page.reload();
+      await waitRoomListName(page, data.agentA.name);
+      await waitRoomListName(page, data.agentB.name);
+      await waitRoomListName(page, humanPeer.name);
+      checkEqual(
+        'Agent 下线后刷新显示一个灰色离线点',
+        await page.locator(`${roomLink(data.extra.room.room_id)} .presence-dot.offline`).count(),
+        1,
+      );
+
+      // 未读红点仍按 head_seq 判断；与离线灰点分居右上/右下。
+      await rawTool(data.agentBToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: data.extra.room.room_id,
+        body: '未读与灰点共存',
+      });
+      await page.waitForFunction(
+        `document.querySelectorAll(${JSON.stringify(`${roomLink(data.extra.room.room_id)} .unread`)}).length === 1`,
+      );
+      checkEqual(
+        '未读红点仍显示',
+        await page.locator(`${roomLink(data.extra.room.room_id)} .unread`).count(),
+        1,
+      );
+      checkEqual(
+        '未读会话同时保留离线灰点',
+        await page.locator(`${roomLink(data.extra.room.room_id)} .presence-dot.offline`).count(),
+        1,
+      );
+      const dotStyles = await page.locator(roomLink(data.extra.room.room_id)).evaluate((link) => {
+        const unread = link.querySelector('.unread');
+        const presence = link.querySelector('.presence-dot.offline');
+        if (!unread || !presence) return null;
+        const unreadBox = unread.getBoundingClientRect();
+        const presenceBox = presence.getBoundingClientRect();
+        return {
+          unreadColor: getComputedStyle(unread).backgroundColor,
+          presenceColor: getComputedStyle(presence).backgroundColor,
+          overlap:
+            unreadBox.left < presenceBox.right &&
+            unreadBox.right > presenceBox.left &&
+            unreadBox.top < presenceBox.bottom &&
+            unreadBox.bottom > presenceBox.top,
+        };
+      });
+      check(
+        '未读红点与离线灰点颜色不同',
+        Boolean(dotStyles) && dotStyles!.unreadColor !== dotStyles!.presenceColor,
+        dotStyles,
+      );
+      check('未读红点与离线灰点不重叠', Boolean(dotStyles) && !dotStyles!.overlap, dotStyles);
+
+      // 390px + 暗色：灰点与红点都可见、不越出头像、不横向溢出色。
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await page.waitForFunction(
+        `window.matchMedia('(prefers-color-scheme: dark)').matches &&
+          document.querySelector(${JSON.stringify(`${roomLink(data.extra.room.room_id)} .unread`)}) !== null`,
+      );
+      const mobileDots = await page.locator(roomLink(data.extra.room.room_id)).evaluate((link) => {
+        const wrap = link.querySelector('.avatar-wrap');
+        const unread = link.querySelector('.unread');
+        const presence = link.querySelector('.presence-dot.offline');
+        if (!wrap || !unread || !presence) return null;
+        const wrapBox = wrap.getBoundingClientRect();
+        const presenceBox = presence.getBoundingClientRect();
+        return {
+          unreadColor: getComputedStyle(unread).backgroundColor,
+          presenceColor: getComputedStyle(presence).backgroundColor,
+          visible: presenceBox.width > 0 && presenceBox.height > 0,
+          insideAvatar:
+            presenceBox.top >= wrapBox.top - 3 &&
+            presenceBox.bottom <= wrapBox.bottom + 3 &&
+            presenceBox.left >= wrapBox.left - 3 &&
+            presenceBox.right <= wrapBox.right + 3,
+          overflowX: document.documentElement.scrollWidth - window.innerWidth,
+        };
+      });
+      check('390px 暗色下离线灰点仍可见', Boolean(mobileDots) && mobileDots!.visible, mobileDots);
+      check('390px 暗色下灰点不超出头像范围', Boolean(mobileDots) && mobileDots!.insideAvatar, mobileDots);
+      check(
+        '390px 暗色下未读红点与灰点颜色仍不同',
+        Boolean(mobileDots) && mobileDots!.unreadColor !== mobileDots!.presenceColor,
+        mobileDots,
+      );
+      check('390px 列表不横向溢出', Boolean(mobileDots) && mobileDots!.overflowX <= 0, mobileDots);
       await context.close();
     }
 

@@ -215,12 +215,16 @@ function renderRooms() {
     const avatarWrap = document.createElement('span');
     avatarWrap.className = 'avatar-wrap';
     avatarWrap.append(avatar);
-    if (entry.kind === 'direct' && entry.peer_kind === 'agent') {
+    // 侧栏只提示明确离线：在线、未知和无法确认都不渲染状态点。
+    if (
+      entry.kind === 'direct' &&
+      entry.peer_kind === 'agent' &&
+      entry.peer_online === false
+    ) {
       const presence = document.createElement('span');
-      const state = entry.peer_online === true ? 'online' : entry.peer_online === false ? 'offline' : 'unknown';
-      presence.className = 'presence-dot ' + state;
-      presence.setAttribute('aria-label', 'Agent ' + presenceLabel(entry.peer_online));
-      presence.title = presenceLabel(entry.peer_online);
+      presence.className = 'presence-dot offline';
+      presence.setAttribute('aria-label', 'Agent 离线');
+      presence.title = '离线';
       avatarWrap.append(presence);
     }
     if (entry.my_last_read_seq !== entry.head_seq) {

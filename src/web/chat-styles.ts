@@ -161,13 +161,11 @@ export const APP_STYLE = `
   .unread { position: absolute; top: -1px; right: -1px; width: 9px; height: 9px;
     border-radius: 50%; background: var(--wx-unread); box-sizing: content-box;
     border: 2px solid var(--wx-sidebar); }
-  /* Agent 在线状态点：与未读点分居右下/右上，人类会话不渲染。 */
+  /* 侧栏只标离线：灰色圆点位于右下，在线/未知不渲染，与右上未读点分离。 */
   .presence-dot { position: absolute; right: -1px; bottom: -1px; width: 9px; height: 9px;
     border-radius: 50%; box-sizing: content-box; background: var(--wx-muted);
     border: 2px solid var(--wx-sidebar); }
-  .presence-dot.online { background: var(--wx-green); }
   .presence-dot.offline { background: var(--wx-muted); }
-  .presence-dot.unknown { background: transparent; border-color: var(--wx-muted); }
   .room-item:hover .unread, .room-item:hover .presence-dot { border-color: var(--wx-hover); }
   .room-item.active .unread, .room-item.active .presence-dot { border-color: var(--wx-active); }
   .list-hint { margin: 0; padding: 32px 20px; color: var(--wx-muted); font-size: 13px;
