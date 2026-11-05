@@ -1,6 +1,11 @@
 import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
-import type { AgentReissueTokenInput, AgentRenameInput, RegisterInput } from '../contracts/schemas';
+import type {
+  AgentReissueTokenInput,
+  AgentRenameInput,
+  MeRenameInput,
+  RegisterInput,
+} from '../contracts/schemas';
 import {
   hashToken,
   newId,
@@ -224,6 +229,76 @@ export interface AgentRenameResult {
   actor_id: string;
   name: string;
   updated_at: string;
+}
+
+export interface MeRenameResult {
+  actor_id: string;
+  name: string;
+  updated_at: string;
+}
+
+/** C0/C1 控制字符、换行与 Unicode 行/段分隔符；名称不能借此注入新行。 */
+const ACTOR_NAME_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
+
+/**
+ * 自助改名校验：trim、非空、字符/字节上限、拒绝控制字符。
+ *
+ * 错误信息只描述规则，不回显输入内容，避免把潜在凭据或注入文本写进响应。
+ */
+export function normalizeActorName(raw: string): string {
+  const name = raw.trim();
+  if (!name) throw new BusinessError('INVALID_ARGUMENT', '名称不能为空');
+  if (Array.from(name).length > LIMITS.actorNameMax) {
+    throw new BusinessError('INVALID_ARGUMENT', `名称不能超过 ${LIMITS.actorNameMax} 个字符`);
+  }
+  if (utf8Bytes(name) > LIMITS.actorNameBytes) {
+    throw new BusinessError('INVALID_ARGUMENT', `名称不能超过 ${LIMITS.actorNameBytes} 字节`);
+  }
+  if (ACTOR_NAME_CONTROL.test(name)) {
+    throw new BusinessError('INVALID_ARGUMENT', '名称不能包含控制字符或换行');
+  }
+  return name;
+}
+
+/**
+ * 修改当前 principal 自己的展示名称。
+ *
+ * 没有目标 actor 参数，权限只来自当前 Bearer；任何 principal 都只能改自己。
+ * 与 `network_agent_rename` 的开放管理边界无关，不改变其 human 限制。
+ * 幂等写入同时发出 profile_updated 事件，供订阅方刷新显示名。
+ */
+export async function renameMe(
+  db: D1Database,
+  principal: Principal,
+  input: MeRenameInput,
+): Promise<MeRenameResult> {
+  const id = actorId(principal);
+  const name = normalizeActorName(input.name);
+  const at = nowMs();
+  const eventKey = `profile:${id}:${input.request_id}`;
+  const result: MeRenameResult = { actor_id: id, name, updated_at: String(at) };
+  const payloadHash = await sha256Hex(stableStringify(input));
+
+  await runIdempotent(db, {
+    actorId: id,
+    requestId: input.request_id,
+    payloadHash,
+    result,
+    build: (resultJson) => [
+      operationsStatement(db, id, input.request_id, payloadHash, resultJson, at),
+      db.prepare(guardSql('notMember', 'NOT EXISTS (SELECT 1 FROM actors WHERE actor_id = ?)')).bind(id),
+      db.prepare('UPDATE actors SET name = ?, updated_at = ? WHERE actor_id = ?').bind(name, at, id),
+      eventStatement(
+        db,
+        { eventKey, scopeKind: 'inbox', scopeId: id, eventType: 'profile_updated', refId: id },
+        at,
+      ),
+      outboxStatement(db, { topic: inboxTopic(id), eventKey }, at),
+      inboxHeadStatement(db, id, eventKey, at, 0),
+    ],
+  });
+
+  return result;
 }
 
 /**

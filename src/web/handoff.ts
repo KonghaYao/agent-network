@@ -6,6 +6,8 @@
  * 代价是二维码本身就是长期凭据：任何看到二维码的人都能获得同一身份。
  */
 
+import { LIMITS } from '../contracts/limits';
+
 /**
  * 左下角用户区块：头像、名称、新建 Agent、手机扫码与已归档入口。
  *
@@ -16,7 +18,17 @@ export function deviceHandoffAccount(): string {
   return `<div class="account" id="account">
     <span class="account-avatar" id="account-avatar" aria-hidden="true">?</span>
     <div class="account-main">
-      <span class="account-name" id="account-name">未登录</span>
+      <div class="account-name-row">
+        <span class="account-name" id="account-name">未登录</span>
+        <button class="account-edit" id="account-rename" type="button"
+          aria-label="编辑姓名" title="编辑姓名"
+          aria-haspopup="dialog" aria-controls="me-rename-modal" aria-expanded="false" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M4 20h4l10-10-4-4L4 16z"></path>
+            <path d="M13.5 6.5l4 4"></path>
+          </svg>
+        </button>
+      </div>
       <div class="account-actions">
         <button class="account-scan" id="new-agent" type="button"
           aria-haspopup="dialog" aria-controls="new-agent-modal" aria-expanded="false">新建 Agent</button>
@@ -61,6 +73,32 @@ export function logoutDialog(): string {
       <button id="logout-cancel" type="button" aria-label="取消退出登录">取消</button>
       <button class="danger" id="logout-confirm" type="button" aria-label="确认退出登录">退出登录</button>
     </div>
+  </div>
+</div>`;
+}
+
+/**
+ * 修改本人姓名弹窗：输入框只提交到 self-only 工具，不接收 actor_id。
+ *
+ * 保存成功后页面原地更新显示名，不重新加载房间或凭据。
+ */
+export function meRenameDialog(): string {
+  return `<div class="modal" id="me-rename-modal" hidden>
+  <div class="modal-card me-rename-card" role="dialog" aria-modal="true"
+    aria-labelledby="me-rename-title">
+    <h2 id="me-rename-title">修改姓名</h2>
+    <form id="me-rename-form">
+      <label class="field">姓名
+        <input id="me-rename-input" maxlength="${LIMITS.actorNameMax}" autocomplete="off"
+          placeholder="输入新的姓名" aria-describedby="me-rename-hint" required>
+      </label>
+      <p class="me-rename-hint" id="me-rename-hint">姓名会显示给你自己和与你协作的成员，最多 ${LIMITS.actorNameMax} 个字符。</p>
+      <p id="me-rename-error" class="form-error" role="alert"></p>
+      <div class="row modal-actions">
+        <button id="me-rename-cancel" type="button">取消</button>
+        <button class="primary" id="me-rename-save" type="submit">保存</button>
+      </div>
+    </form>
   </div>
 </div>`;
 }
@@ -233,8 +271,17 @@ export const DEVICE_HANDOFF_STYLE = `
     background: #5b8def; color: #fff; display: grid; place-items: center;
     font-size: 15px; font-weight: 500; }
   .account-main { flex: 1 1 auto; min-width: 0; }
-  .account-name { display: block; font-size: 13px; font-weight: 500; color: var(--wx-text, #333);
+  .account-name-row { display: flex; align-items: center; gap: 2px; min-width: 0; }
+  .account-name { display: block; flex: 0 1 auto; min-width: 0; font-size: 13px;
+    font-weight: 500; color: var(--wx-text, #333);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .account-edit { flex: 0 0 auto; width: 20px; height: 20px; padding: 0; border: 0;
+    border-radius: 4px; background: none; color: var(--wx-muted, #999);
+    display: grid; place-items: center; cursor: pointer; }
+  .account-edit:hover { background: var(--wx-hover, #ececec); color: var(--wx-text, #333); }
+  .account-edit[hidden] { display: none; }
+  .account-edit svg { width: 14px; height: 14px; fill: none; stroke: currentColor;
+    stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   /* 三个文字按钮与单个归档图标在 280–320px 侧栏与 390px 移动端允许换行。 */
   .account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px;
     margin-top: 1px; }
@@ -250,6 +297,9 @@ export const DEVICE_HANDOFF_STYLE = `
   .account-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
     stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .logout-card { width: min(400px, 100%); box-sizing: border-box; }
+  .me-rename-card { width: min(400px, 100%); box-sizing: border-box; }
+  .me-rename-hint { margin: 0 0 12px; font-size: 12px; color: var(--wx-muted, #666);
+    line-height: 1.6; }
   .logout-warning { margin: 0 0 10px; padding: 10px; border-radius: 4px;
     background: #fff7ed; color: #9a3412; font-size: 13px; line-height: 1.6;
     overflow-wrap: anywhere; }

@@ -165,6 +165,47 @@ async function main(): Promise<void> {
     });
     checkEqual('profile_update 更新名称', profile.name, '验收 Agent A+');
 
+    const selfRenameRequest = newRequestId('me_rename');
+    const selfRenamed = await callTool<{ actor_id: string; name: string }>(
+      humanC.client,
+      'network_me_rename',
+      { request_id: selfRenameRequest, name: '  验收人类 C 新名  ' },
+    );
+    checkEqual('human 可自助改名并 trim', selfRenamed.name, '验收人类 C 新名');
+    checkEqual('self rename 返回调用者 actor_id', selfRenamed.actor_id, c.actor_id);
+    const selfRenamedMe = await callTool<Identity>(humanC.client, 'network_me');
+    checkEqual('self rename 后 network_me 返回新名称', selfRenamedMe.name, '验收人类 C 新名');
+    const selfRenamedReplay = await callTool<{ name: string }>(
+      humanC.client,
+      'network_me_rename',
+      { request_id: selfRenameRequest, name: '  验收人类 C 新名  ' },
+    );
+    checkEqual('self rename 幂等重放返回同一名称', selfRenamedReplay.name, '验收人类 C 新名');
+    await expectToolError(
+      'self rename 同一 request_id 改不同名称返回 IDEMPOTENCY_CONFLICT',
+      callTool(humanC.client, 'network_me_rename', {
+        request_id: selfRenameRequest,
+        name: '另一个名字',
+      }),
+      'IDEMPOTENCY_CONFLICT',
+    );
+    await expectToolError(
+      'self rename 拒绝空名称',
+      callTool(humanC.client, 'network_me_rename', {
+        request_id: newRequestId('me_rename_empty'),
+        name: '   ',
+      }),
+      'INVALID_ARGUMENT',
+    );
+    await expectToolError(
+      'self rename 拒绝控制字符',
+      callTool(humanC.client, 'network_me_rename', {
+        request_id: newRequestId('me_rename_control'),
+        name: '坏\n名',
+      }),
+      'INVALID_ARGUMENT',
+    );
+
     const renameRequest = newRequestId('rename');
     const renamed = await callTool<{ actor_id: string; name: string }>(
       humanC.client,

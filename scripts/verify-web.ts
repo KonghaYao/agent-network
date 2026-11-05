@@ -3556,6 +3556,193 @@ async function main(): Promise<void> {
       await mobile.context.close();
     }
 
+    // 2b-2c. 服务信息入口移除；本人姓名可编辑，保存后原地更新显示名。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const renameConsole: string[] = [];
+      page.on('console', (message) => renameConsole.push(message.text()));
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.waitForFunction(
+        `document.getElementById('account-name').textContent === '浏览器验收人类'`,
+      );
+      checkEqual(
+        '侧栏底部不再包含服务信息折叠面板',
+        await page.locator('.sidebar-foot details').count(),
+        0,
+      );
+      checkEqual('服务信息样式类不再渲染', await page.locator('.service-info').count(), 0);
+      check(
+        '侧栏底部不再出现服务信息文案',
+        !((await page.locator('.sidebar-foot').textContent()) ?? '').includes('服务信息'),
+      );
+      checkEqual(
+        '服务信息移除后账号区仍显示姓名',
+        (await page.locator('#account-name').textContent())?.trim(),
+        '浏览器验收人类',
+      );
+      checkEqual('服务信息移除后新建 Agent 仍可见', await page.locator('#new-agent').isVisible(), true);
+      checkEqual('服务信息移除后手机扫码仍可见', await page.locator('#device-handoff').isVisible(), true);
+      checkEqual('服务信息移除后已归档入口仍可见', await page.locator('#archived-agents').isVisible(), true);
+      checkEqual('服务信息移除后退出登录仍可见', await page.locator('#logout').isVisible(), true);
+
+      const editButton = page.locator('#account-rename');
+      checkEqual('账号姓名旁显示编辑按钮', await editButton.isVisible(), true);
+      checkEqual('编辑姓名按钮有 aria-label', await editButton.getAttribute('aria-label'), '编辑姓名');
+      checkEqual('编辑姓名按钮有 title', await editButton.getAttribute('title'), '编辑姓名');
+      checkEqual(
+        '编辑姓名按钮只有图标没有文字',
+        ((await editButton.textContent()) ?? '').trim(),
+        '',
+      );
+
+      await editButton.click();
+      checkEqual('编辑姓名弹窗打开', await page.locator('#me-rename-modal').isVisible(), true);
+      checkEqual(
+        '编辑姓名输入框预填当前姓名',
+        await page.inputValue('#me-rename-input'),
+        '浏览器验收人类',
+      );
+      checkEqual(
+        '编辑姓名弹窗打开时聚焦输入框',
+        await page.evaluate(
+          `document.activeElement === document.getElementById('me-rename-input')`,
+        ),
+        true,
+      );
+      await page.fill('#me-rename-input', '不会保存的名字');
+      await page.locator('#me-rename-cancel').click();
+      checkEqual('取消后关闭编辑姓名弹窗', await page.locator('#me-rename-modal').isHidden(), true);
+      checkEqual(
+        '取消后姓名保持不变',
+        (await page.locator('#account-name').textContent())?.trim(),
+        '浏览器验收人类',
+      );
+
+      await editButton.click();
+      await page.fill('#me-rename-input', '   ');
+      await page.locator('#me-rename-save').click();
+      await waitForText(page, '#me-rename-error', '姓名不能为空');
+      checkEqual('空姓名错误留在弹窗内', await page.locator('#me-rename-modal').isVisible(), true);
+      checkEqual(
+        '空姓名不发送改名请求',
+        (await page.evaluate(
+          `(window.__mcpCalls || []).filter(function (call) { return call.name === 'network_me_rename'; }).length`,
+        )) as number,
+        0,
+      );
+
+      await page.evaluate(
+        `document.getElementById('me-rename-input').value = '名'.repeat(97)`,
+      );
+      await page.locator('#me-rename-save').click();
+      await waitForText(page, '#me-rename-error', '姓名不能超过');
+      await page.evaluate(
+        `document.getElementById('me-rename-input').value = '坏\\u0001名'`,
+      );
+      await page.locator('#me-rename-save').click();
+      await waitForText(page, '#me-rename-error', '姓名不能包含控制字符或换行');
+
+      const newHumanName = '新名字验收';
+      await page.fill('#me-rename-input', newHumanName);
+      await page.locator('#me-rename-save').click();
+      await page.waitForFunction(
+        `document.getElementById('account-name').textContent === ${JSON.stringify(newHumanName)}`,
+      );
+      checkEqual('保存后关闭编辑姓名弹窗', await page.locator('#me-rename-modal').isHidden(), true);
+      checkEqual(
+        '保存后左下角显示新姓名',
+        (await page.locator('#account-name').textContent())?.trim(),
+        newHumanName,
+      );
+      checkEqual(
+        '保存后左下角头像首字更新',
+        (await page.locator('#account-avatar').textContent())?.trim(),
+        '新',
+      );
+      const renamedMe = await rawTool<{ name: string }>(data.humanToken, 'network_me', {});
+      checkEqual('保存后服务端 network_me 返回新姓名', renamedMe.name, newHumanName);
+      data.human.name = newHumanName;
+      checkEqual(
+        '改名请求没有附带 token',
+        await page.evaluate(`(() => {
+          const calls = (window.__mcpCalls || []).filter(function (call) {
+            return call.name === 'network_me_rename';
+          });
+          return calls.length === 1 && calls[0].hasAuth === true &&
+            !JSON.stringify(calls[0].body).includes(localStorage.getItem('agent-network-token'));
+        })()`),
+        true,
+      );
+      check(
+        '改名后控制台与页面不泄露 token',
+        !renameConsole.join('\n').includes(data.humanToken) &&
+          !(await page.content()).includes(data.humanToken),
+      );
+      await context.close();
+
+      const mobileContext = await browser.newContext({
+        viewport: { width: 390, height: 800 },
+        colorScheme: 'dark',
+      });
+      await mobileContext.addInitScript({ content: initScript(data.humanToken) });
+      const mobilePage = await mobileContext.newPage();
+      mobilePage.setDefaultTimeout(15_000);
+      await mobilePage.goto(`${server.base}/`);
+      await mobilePage.locator('#room-list .room-item').first().waitFor();
+      await mobilePage.waitForFunction(
+        `document.getElementById('account-name').textContent === ${JSON.stringify(newHumanName)}`,
+      );
+      checkEqual('390px 暗色下编辑姓名入口可见', await mobilePage.locator('#account-rename').isVisible(), true);
+      await mobilePage.locator('#account-rename').click();
+      checkEqual('390px 暗色下编辑姓名弹窗打开', await mobilePage.locator('#me-rename-modal').isVisible(), true);
+      const renameMetrics = (await mobilePage.evaluate(`(() => {
+        const card = document.querySelector('#me-rename-modal .me-rename-card');
+        const modal = document.getElementById('me-rename-modal');
+        if (!card || !modal) return null;
+        const rect = card.getBoundingClientRect();
+        const style = getComputedStyle(card);
+        return {
+          doc: document.documentElement.scrollWidth,
+          view: document.documentElement.clientWidth,
+          left: rect.left,
+          right: rect.right,
+          background: style.backgroundColor,
+          text: getComputedStyle(document.getElementById('me-rename-title')).color
+        };
+      })()`)) as {
+        doc: number;
+        view: number;
+        left: number;
+        right: number;
+        background: string;
+        text: string;
+      } | null;
+      check(
+        '390px 编辑姓名弹窗不横向溢出',
+        Boolean(renameMetrics) &&
+          renameMetrics!.doc <= renameMetrics!.view &&
+          renameMetrics!.left >= 0 &&
+          renameMetrics!.right <= renameMetrics!.view + 1,
+        renameMetrics,
+      );
+      check(
+        '暗色下编辑姓名弹窗有可读的卡片与文字颜色',
+        Boolean(renameMetrics) &&
+          renameMetrics!.background !== 'rgba(0, 0, 0, 0)' &&
+          parseRgbColor(renameMetrics!.text).join(',') !== '0,0,0',
+        renameMetrics,
+      );
+      await mobilePage.locator('#me-rename-cancel').click();
+      checkEqual('390px 取消后关闭编辑姓名弹窗', await mobilePage.locator('#me-rename-modal').isHidden(), true);
+      await mobileContext.close();
+    }
+
     // 2b-3. 左下角退出登录：本机清理、停止 SSE、跳转首页；token 不吊销。
     {
       const { context, page } = await makeContext(

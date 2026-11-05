@@ -54,12 +54,6 @@ export function sidebarPane(): string {
   <footer class="sidebar-foot">
     <span id="stream-dot" class="stream-dot" role="status" title="" aria-label="" hidden></span>
     ${deviceHandoffAccount()}
-    <details class="service-info">
-      <summary>服务信息</summary>
-      <p>MCP 端点 <code>/mcp</code></p>
-      <p>分享链接 <code>/a/&lt;agent_session_id&gt;</code></p>
-      <p>单聊页面 <code>/c/&lt;room_id&gt;</code></p>
-    </details>
   </footer>
   <div class="room-menu" id="room-menu" role="menu" aria-label="会话操作" hidden>
     <button class="room-menu-item" id="room-menu-copy-prompt" type="button"

@@ -40,6 +40,17 @@ export const agentRenameSchema = z.object({
   name: z.string().trim().min(1).max(LIMITS.actorNameMax),
 });
 
+/**
+ * 修改自己的展示名称；没有 actor_id，任何 principal 只能改自己。
+ *
+ * 字符/字节/控制字符校验在领域层完成，以便返回可读的 INVALID_ARGUMENT；
+ * schema 只做宽松上限，避免超长请求进入业务。
+ */
+export const meRenameSchema = z.object({
+  request_id: requestId,
+  name: z.string().trim().max(LIMITS.actorNameMax * 2),
+});
+
 /** 注销目标 Agent 的全部现有凭据并签发新 token；token 只返回一次。 */
 export const agentReissueTokenSchema = z.object({ request_id: requestId, actor_id: id() });
 
@@ -207,6 +218,7 @@ export const roomMonitorSetSchema = z.object({
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type ProfileUpdateInput = z.infer<typeof profileUpdateSchema>;
 export type AgentRenameInput = z.infer<typeof agentRenameSchema>;
+export type MeRenameInput = z.infer<typeof meRenameSchema>;
 export type AgentReissueTokenInput = z.infer<typeof agentReissueTokenSchema>;
 export type AgentArchiveInput = z.infer<typeof agentArchiveSchema>;
 export type AgentUnarchiveInput = z.infer<typeof agentUnarchiveSchema>;

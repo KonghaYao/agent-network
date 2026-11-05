@@ -1,5 +1,6 @@
 import { MESSAGE_FILE_ID_SOURCE } from '../contracts/file-links';
 import { LIMITS } from '../contracts/limits';
+import { CHAT_ACCOUNT_RENAME_SCRIPT } from './chat-account-rename-script';
 import { CHAT_AGENTS_SCRIPT } from './chat-agents-script';
 import { CHAT_ARCHIVE_SCRIPT } from './chat-archive-script';
 import { CHAT_AVATAR_SCRIPT } from './chat-avatar-script';
@@ -118,6 +119,7 @@ ${CHAT_RENDER_SCRIPT}
 ${NEW_AGENT_SCRIPT}
 ${CHAT_AGENTS_SCRIPT}
 ${CHAT_LOGOUT_SCRIPT}
+${CHAT_ACCOUNT_RENAME_SCRIPT}
 ${CHAT_SCROLL_SCRIPT}
 ${CHAT_SESSION_SCRIPT}
 ${CHAT_STREAM_SCRIPT}

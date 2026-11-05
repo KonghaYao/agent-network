@@ -220,6 +220,9 @@ export const agentRenameResultSchema = z.object({
   updated_at: z.string(),
 });
 
+/** 自助改名结果：actor_id 恒为调用者自己，不返回其他 actor 信息。 */
+export const meRenameResultSchema = agentRenameResultSchema;
+
 /** 软归档结果；archived_at 保留首次归档时间，重复归档不刷新。 */
 export const agentArchiveResultSchema = z.object({
   actor_id: z.string(),

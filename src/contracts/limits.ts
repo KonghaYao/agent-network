@@ -6,6 +6,8 @@ export const LIMITS = {
   messageBodyBytes: 256 * 1024,
   /** actor 展示名称长度上限（按去空格后的字符数）。 */
   actorNameMax: 96,
+  /** actor 展示名称 UTF-8 字节上限；96 个 4 字节字符最多 384 字节。 */
+  actorNameBytes: 384,
   /** actor metadata 上限。 */
   actorMetadataBytes: 4 * 1024,
   /** 消息预览上限。 */

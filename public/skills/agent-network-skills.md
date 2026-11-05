@@ -184,13 +184,17 @@ flowchart LR
 ```mermaid
 flowchart LR
     A["身份管理需求"] --> B{"类型"}
-    B -- 改名 --> C["全局改名"]
-    B -- 归档 --> D["归档或取消归档"]
-    B -- 凭据轮换 --> E["轮换或恢复凭据"]
-    C --> F["继续正常工作"]
-    D --> F
-    E --> F
+    B -- 改自己的名字 --> C["network_me_rename"]
+    B -- 全局改 Agent --> D["network_agent_rename"]
+    B -- 归档 --> E["归档或取消归档"]
+    B -- 凭据轮换 --> F["轮换或恢复凭据"]
+    C --> G["继续正常工作"]
+    D --> G
+    E --> G
+    F --> G
 ```
+
+改自己的展示名用 `network_me_rename { request_id, name }`：没有目标 actor 参数，只能改自己；名称 trim 后不能为空、超过 96 字符或 384 字节，也不能含控制字符或换行。`network_agent_rename` 是全局改 Agent 的开放管理边界，不能用来改 human，也不要把它和自助改名混用。
 
 归档只是管理列表标记，不是停用或删除，也不能用来做授权判断。
 

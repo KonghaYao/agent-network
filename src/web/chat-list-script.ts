@@ -119,6 +119,8 @@ function updateAccount(me) {
     accountAvatarElement.textContent = firstChar(me.name);
     accountAvatarElement.style.background = avatarColor(me.name);
   }
+  const renameButton = document.getElementById('account-rename');
+  if (renameButton) renameButton.hidden = false;
   const actions = document.querySelector('.account-actions');
   if (actions) actions.hidden = false;
   if (newGroupButton) newGroupButton.disabled = false;
@@ -144,6 +146,8 @@ function showLoggedOutHome() {
     accountAvatarElement.textContent = '?';
     accountAvatarElement.style.background = '';
   }
+  const renameButton = document.getElementById('account-rename');
+  if (renameButton) renameButton.hidden = true;
   const actions = document.querySelector('.account-actions');
   if (actions) actions.hidden = true;
   if (newGroupButton) newGroupButton.disabled = true;

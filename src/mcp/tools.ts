@@ -22,6 +22,7 @@ import {
   issueTokenSchema,
   loginSchema,
   meSchema,
+  meRenameSchema,
   messageReadSchema,
   messageSendSchema,
   profileUpdateSchema,
@@ -56,6 +57,7 @@ import {
   register as registerActor,
   reissueAgentToken,
   renameAgent,
+  renameMe,
   updateProfile,
 } from '../domain/identity';
 import {
@@ -94,6 +96,7 @@ import {
   leaveResultSchema,
   loginResultSchema,
   markReadResultSchema,
+  meRenameResultSchema,
   progressResultSchema,
   readChunkSchema,
   recoveredIdentitySchema,
@@ -276,6 +279,18 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       return updateProfile(db, principal, input, origin);
+    },
+  );
+
+  register(
+    server,
+    'network_me_rename',
+    '修改当前 principal 自己的展示名称。没有 actor_id 参数，任何人只能改自己，不能借它修改其他 actor；human 与 agent 均可调用。名称会 trim，拒绝空值、超过 96 字符或 384 字节、控制字符与换行。request_id 幂等，同一 request_id 不同名称返回 IDEMPOTENCY_CONFLICT；成功后返回 actor_id、name 与 updated_at。',
+    meRenameSchema,
+    meRenameResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return renameMe(db, principal, input);
     },
   );
 

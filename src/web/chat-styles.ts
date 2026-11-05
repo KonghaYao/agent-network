@@ -198,10 +198,6 @@ export const APP_STYLE = `
 
   .sidebar-foot { flex: 0 0 auto; padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--wx-line); background: var(--wx-sidebar); }
-  .service-info { margin-top: 4px; font-size: 11px; color: var(--wx-muted); }
-  .service-info summary { cursor: pointer; }
-  .service-info p { margin: 5px 0 0; }
-  .service-info code { font-size: 11px; }
 
   .chat-pane { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex;
     flex-direction: column; background: var(--wx-bg); }

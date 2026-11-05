@@ -258,6 +258,7 @@ async function main(): Promise<void> {
     'network_issue_token',
     'network_register',
     'network_me',
+    'network_me_rename',
     'network_login',
     'network_profile_update',
     'network_agent_rename',
@@ -297,7 +298,7 @@ async function main(): Promise<void> {
     'network_room_file_delete',
   ];
   const toolNames = listed?.tools?.map((tool) => tool.name) ?? [];
-  // 工具集随 drive 开关变化：核心 34 + drive_file_info + 4 个房间文件工具。
+  // 工具集随 drive 开关变化：核心 35 + drive_file_info + 4 个房间文件工具。
   const hasDrive = toolNames.includes('drive_file_info');
   const hasRoomFiles = roomFileTools.every((name) => toolNames.includes(name));
   check(
@@ -312,6 +313,7 @@ async function main(): Promise<void> {
     'network_issue_token',
     'network_register',
     'network_me',
+    'network_me_rename',
     'network_login',
     'network_agent_rename',
     'network_agent_reissue_token',
@@ -337,6 +339,25 @@ async function main(): Promise<void> {
   ]) {
     check(`工具 ${required} 已注册`, toolNames.includes(required), toolNames);
   }
+
+  const meRenameTool = listed?.tools?.find((tool) => tool.name === 'network_me_rename');
+  const meRenameProperties =
+    ((meRenameTool?.inputSchema as { properties?: Record<string, unknown> } | undefined)
+      ?.properties) ?? {};
+  check(
+    'network_me_rename 只接受自己的名字（无 actor_id 参数）',
+    'name' in meRenameProperties &&
+      'request_id' in meRenameProperties &&
+      !('actor_id' in meRenameProperties),
+    meRenameProperties,
+  );
+  check(
+    'network_me_rename 描述声明只能改自己',
+    typeof meRenameTool?.description === 'string' &&
+      meRenameTool.description.includes('自己的展示名称') &&
+      meRenameTool.description.includes('只能改自己'),
+    meRenameTool?.description,
+  );
 
   const claimTool = listed?.tools?.find((tool) => tool.name === 'network_delivery_claim');
   check(
@@ -1038,8 +1059,18 @@ async function main(): Promise<void> {
   const removedHandoff = await fetch(`${baseUrl()}/j/removed`);
   checkEqual('服务端不提供 /j 扫码兑换端点', removedHandoff.status, 404);
   check(
-    '首页服务信息收在折叠区',
-    homeHtml.includes('<details') && homeHtml.includes('/a/&lt;agent_session_id&gt;'),
+    '首页不再包含服务信息入口与折叠面板',
+    !homeHtml.includes('服务信息') &&
+      !homeHtml.includes('class="service-info"') &&
+      !homeHtml.includes('/a/&lt;agent_session_id&gt;'),
+  );
+  check(
+    '首页包含本人姓名编辑入口与弹窗',
+    homeHtml.includes('id="account-rename"') &&
+      homeHtml.includes('aria-label="编辑姓名"') &&
+      homeHtml.includes('id="me-rename-modal"') &&
+      homeHtml.includes('id="me-rename-input"') &&
+      homeHtml.includes("callTool('network_me_rename'"),
   );
   check(
     '首页脚本内联 claimed 超时提示与阈值',
@@ -1397,6 +1428,104 @@ async function main(): Promise<void> {
       | undefined
   )?.structuredContent;
   checkEqual('human actor 不生成 share_url', browserIdentity?.share_url, null);
+
+  // network_me_rename：只能改自己，trim/长度/控制字符校验与 request_id 幂等。
+  const selfRenameRequest = `self_rename_${crypto.randomUUID().replaceAll('-', '')}`;
+  const selfRenamed = await rawToolCall<{ actor_id: string; name: string; updated_at: string }>(
+    browserToken,
+    'network_me_rename',
+    { request_id: selfRenameRequest, name: '  协议自助改名  ' },
+  );
+  checkEqual('self rename 只改调用者并 trim', selfRenamed.data?.actor_id, browserIdentity?.actor_id);
+  checkEqual('self rename 返回 trim 后的名称', selfRenamed.data?.name, '协议自助改名');
+  const selfRenamedMe = await rawToolCall<{ name: string }>(browserToken, 'network_me', {});
+  checkEqual('self rename 后 network_me 返回新名称', selfRenamedMe.data?.name, '协议自助改名');
+  const selfRenameReplay = await rawToolCall<{ actor_id: string; name: string }>(
+    browserToken,
+    'network_me_rename',
+    { request_id: selfRenameRequest, name: '  协议自助改名  ' },
+  );
+  checkEqual('self rename 幂等重放返回同一名称', selfRenameReplay.data?.name, '协议自助改名');
+  const selfRenameConflict = await rawToolCall(
+    browserToken,
+    'network_me_rename',
+    { request_id: selfRenameRequest, name: '另一个名字' },
+  );
+  checkEqual(
+    'self rename 同一 request_id 改不同名称返回 IDEMPOTENCY_CONFLICT',
+    selfRenameConflict.code,
+    'IDEMPOTENCY_CONFLICT',
+  );
+  const selfRenameTargetAttempt = await rawToolCall<{ actor_id: string; name: string }>(
+    browserToken,
+    'network_me_rename',
+    {
+      request_id: `self_rename_target_${crypto.randomUUID().replaceAll('-', '')}`,
+      name: '不能借工具改别人',
+      actor_id: shareIdentity?.actor_id,
+    },
+  );
+  checkEqual(
+    'self rename 忽略伪造 actor_id 且仍只改自己',
+    selfRenameTargetAttempt.data?.actor_id,
+    browserIdentity?.actor_id,
+  );
+  const shareAfterTargetAttempt = await rawToolCall<{ name: string }>(shareToken, 'network_me', {});
+  checkEqual(
+    'self rename 不能修改其他 actor',
+    shareAfterTargetAttempt.data?.name,
+    '分享页检查',
+  );
+  for (const [label, value] of [
+    ['空名称', '   '],
+    ['超过 96 字符', '名'.repeat(97)],
+    ['控制字符', '坏\n名'],
+  ] as const) {
+    const rejected = await rawToolCall(browserToken, 'network_me_rename', {
+      request_id: `self_rename_bad_${crypto.randomUUID().replaceAll('-', '')}`,
+      name: value,
+    });
+    checkEqual(`self rename 拒绝${label}`, rejected.code, 'INVALID_ARGUMENT');
+    check(
+      `self rename ${label}错误不回显凭据`,
+      !JSON.stringify(rejected.body).includes(browserToken),
+      rejected.body,
+    );
+  }
+  const agentSelfRenamed = await rawToolCall<{ actor_id: string; name: string }>(
+    shareToken,
+    'network_me_rename',
+    {
+      request_id: `self_rename_agent_${crypto.randomUUID().replaceAll('-', '')}`,
+      name: '分享页检查 Agent 自助名',
+    },
+  );
+  checkEqual('Agent 可调用 self rename 修改自己', agentSelfRenamed.data?.name, '分享页检查 Agent 自助名');
+  const agentGlobalRenamed = await rawToolCall<{ actor_id: string; name: string }>(
+    browserToken,
+    'network_agent_rename',
+    {
+      request_id: `agent_rename_compat_${crypto.randomUUID().replaceAll('-', '')}`,
+      actor_id: shareIdentity?.actor_id,
+      name: '分享页检查全局名',
+    },
+  );
+  checkEqual(
+    'self rename 不改变 network_agent_rename 的开放边界',
+    agentGlobalRenamed.data?.name,
+    '分享页检查全局名',
+  );
+  const humanTarget = await rawToolCall(browserToken, 'network_agent_rename', {
+    request_id: `agent_rename_human_${crypto.randomUUID().replaceAll('-', '')}`,
+    actor_id: browserIdentity?.actor_id,
+    name: '人类不能这样改',
+  });
+  checkEqual(
+    'network_agent_rename 仍拒绝 human 目标',
+    humanTarget.code,
+    'INVALID_ARGUMENT',
+  );
+
   const browserContact = await rawRpc(
     'tools/call',
     {

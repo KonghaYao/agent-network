@@ -23,6 +23,7 @@ import {
   HANDOFF_ADOPT_SCRIPT,
   deviceHandoffDialog,
   logoutDialog,
+  meRenameDialog,
 } from './handoff';
 import { layout } from './layout';
 
@@ -55,6 +56,7 @@ ${membersDialog()}
 ${newAgentDialog()}
 ${deviceHandoffDialog()}
 ${logoutDialog()}
+${meRenameDialog()}
 ${toastPane()}
 ${chatClientScript(roomId, markdownVersion)}`,
     APP_STYLE + FILES_STYLE + MONITOR_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE,
