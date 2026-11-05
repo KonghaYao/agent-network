@@ -398,6 +398,7 @@ function enqueueSelectedFiles(fileList) {
 async function runUploadTasks() {
   if (filesUploadRunning) return;
   filesUploadRunning = true;
+  updateAttachBusy();
   try {
     while (filesUploadTasks.length > 0) {
       const task = filesUploadTasks.shift();
@@ -446,6 +447,7 @@ async function runUploadTasks() {
     }
   } finally {
     filesUploadRunning = false;
+    updateAttachBusy();
   }
 }
 
@@ -701,8 +703,21 @@ function enqueueDroppedFiles(fileList) {
 /**
  * 在光标处插入公开 URL，不覆盖已有文本与选区。
  * 每个文件独占一行；实际发送仍由用户决定，不自动提交。
+ * IME 组合期间先排队，等 compositionend 的同步监听器跑完再写回，避免打断候选。
  */
+let pendingComposerFileUrls = [];
+
 function insertComposerFileUrl(roomId, url) {
+  if (!bodyInput || !url || activeRoomId !== roomId) return false;
+  if (!document.body.classList.contains('page-room')) return false;
+  if (composing) {
+    pendingComposerFileUrls.push({ roomId: roomId, url: url });
+    return true;
+  }
+  return writeComposerFileUrl(roomId, url);
+}
+
+function writeComposerFileUrl(roomId, url) {
   if (!bodyInput || !url || activeRoomId !== roomId) return false;
   if (!document.body.classList.contains('page-room')) return false;
   const value = bodyInput.value;
@@ -712,8 +727,32 @@ function insertComposerFileUrl(roomId, url) {
   bodyInput.setRangeText(inserted, start, start, 'end');
   drafts.set(roomId, bodyInput.value);
   resizeComposer();
-  bodyInput.focus();
+  // 用户正在搜索框等其他位置输入时不抢焦点；按钮属于 composer，仍会回到正文。
+  if (composerHasFocus()) bodyInput.focus();
   return true;
+}
+
+function composerHasFocus() {
+  if (!composer || !bodyInput) return false;
+  const active = document.activeElement;
+  if (!active || active === document.body) return true;
+  return composer.contains(active);
+}
+
+function flushPendingComposerFileUrls() {
+  if (composing || pendingComposerFileUrls.length === 0) return;
+  const pending = pendingComposerFileUrls;
+  pendingComposerFileUrls = [];
+  for (let index = 0; index < pending.length; index += 1) {
+    writeComposerFileUrl(pending[index].roomId, pending[index].url);
+  }
+}
+
+if (bodyInput) {
+  // 该监听器先于主脚本注册；setTimeout(0) 等到 composing 已被主监听器置为 false。
+  bodyInput.addEventListener('compositionend', function () {
+    setTimeout(flushPendingComposerFileUrls, 0);
+  });
 }
 
 if (chatBodyElement) {

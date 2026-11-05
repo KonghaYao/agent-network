@@ -19,6 +19,7 @@ import { MONITOR_STYLE } from './chat-monitor-styles';
 import { MARKDOWN_STYLE } from './chat-markdown-styles';
 import { MESSAGE_FILES_STYLE } from './chat-message-files-styles';
 import { APP_STYLE } from './chat-styles';
+import { UPLOAD_STYLE } from './chat-upload-styles';
 import {
   DEVICE_HANDOFF_STYLE,
   HANDOFF_ADOPT_SCRIPT,
@@ -65,7 +66,7 @@ ${logoutDialog()}
 ${meRenameDialog()}
 ${toastPane()}
 ${chatClientScript(roomId, markdownVersion, resizerVersion)}`,
-    APP_STYLE + FILES_STYLE + MONITOR_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE,
+    APP_STYLE + FILES_STYLE + UPLOAD_STYLE + MONITOR_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE,
     { wide: true, bodyClass: isHome ? 'page-home' : 'page-room' },
   );
 }

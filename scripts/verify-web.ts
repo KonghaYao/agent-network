@@ -856,11 +856,48 @@ async function dispatchDrag(
   }
 }
 
+/** 在页面内构造 ClipboardEvent 并派发；返回是否被 preventDefault。 */
+async function pasteFiles(
+  page: Page,
+  selector: string,
+  files: DragFileSpec[],
+  text = '',
+): Promise<boolean> {
+  return (await page.evaluate(`(() => {
+    const payload = ${JSON.stringify({ files, text })};
+    const transfer = new DataTransfer();
+    for (const file of payload.files) {
+      const bytes = file.base64
+        ? Uint8Array.from(atob(file.base64), function (char) { return char.charCodeAt(0); })
+        : new TextEncoder().encode(file.text || '');
+      transfer.items.add(new File([bytes], file.name, { type: file.mimeType }));
+    }
+    if (payload.text) transfer.setData('text/plain', payload.text);
+    const node = document.querySelector(${JSON.stringify(selector)});
+    if (!node) return false;
+    let event = null;
+    try {
+      event = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: transfer
+      });
+    } catch (error) {
+      event = new ClipboardEvent('paste', { bubbles: true, cancelable: true });
+    }
+    if (!event.clipboardData) {
+      Object.defineProperty(event, 'clipboardData', { value: transfer });
+    }
+    node.dispatchEvent(event);
+    return event.defaultPrevented;
+  })()`)) as boolean;
+}
+
 /** 记录拖拽上传，并支持用一次 413 模拟超大文件，不真正构造大文件。 */
 async function observeDropUploads(
   page: Page,
-): Promise<{ calls: UploadCall[]; failNext: boolean }> {
-  const state = { calls: [] as UploadCall[], failNext: false };
+): Promise<{ calls: UploadCall[]; failNext: boolean; delayMs: number }> {
+  const state = { calls: [] as UploadCall[], failNext: false, delayMs: 0 };
   await page.route('**/mcp-upload', async (route) => {
     const request = route.request();
     const headers = request.headers();
@@ -879,6 +916,7 @@ async function observeDropUploads(
       version: headers['mcpp-files-version'] ?? null,
       at: Date.now(),
     });
+    if (state.delayMs > 0) await sleep(state.delayMs);
     if (state.failNext) {
       state.failNext = false;
       await route.fulfill({
@@ -7865,6 +7903,433 @@ async function main(): Promise<void> {
         dropMetrics,
       );
       await dispatchDrag(mobile.page, '#chat-body', 'dragleave', []);
+      await mobile.context.close();
+      await context.close();
+    }
+
+    // 12b. 输入框附件按钮与粘贴图片：复用拖拽上传、草稿保留、失败与 IME。
+    {
+      const attachGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '输入框附件群',
+        members: [data.agentA.actor_id],
+      });
+      const attachRoomId = attachGroup.room.room_id;
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await context.addInitScript(`(() => {
+        window.__consoleText = '';
+        ['log', 'info', 'warn', 'error', 'debug'].forEach(function (level) {
+          const original = console[level];
+          console[level] = function () {
+            window.__consoleText += Array.prototype.map.call(arguments, String).join(' ') + '\\n';
+            original.apply(console, arguments);
+          };
+        });
+      })()`);
+      const upload = await observeDropUploads(page);
+      const uploadUrls: string[] = [];
+      page.on('request', (request) => {
+        if (request.url().includes('/mcp-upload')) uploadUrls.push(request.url());
+      });
+      let failNextBind = false;
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (failNextBind && request.headers()['mcp-name'] === 'network_room_file_bind') {
+          failNextBind = false;
+          const body = request.postDataJSON() as {
+            params?: { arguments?: Record<string, unknown> };
+          };
+          const args = body?.params?.arguments;
+          if (args) {
+            args.file_id = 'f_0000000000000000000000';
+            try {
+              const response = await route.fetch({ postData: JSON.stringify(body) });
+              await route.fulfill({ response });
+              return;
+            } catch {
+              await route.continue().catch(() => undefined);
+              return;
+            }
+          }
+        }
+        await route.continue();
+      });
+
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      checkEqual('首页隐藏附件按钮', await page.locator('#attach-file').isHidden(), true);
+
+      await page.goto(`${server.base}/c/${attachRoomId}`);
+      await waitRoom(page, attachRoomId, '输入框附件群');
+      checkEqual('聊天页显示附件按钮', await page.locator('#attach-file').isVisible(), true);
+      checkEqual(
+        '附件按钮可访问名',
+        await page.getByRole('button', { name: '上传文件' }).count(),
+        1,
+      );
+      checkEqual('附件按钮不提交表单', await page.locator('#attach-file').getAttribute('type'), 'button');
+      checkEqual('附件文件选择器隐藏', await page.locator('#composer-file-input').isHidden(), true);
+      const attachInputAttrs = (await page.evaluate(`(() => {
+        const input = document.getElementById('composer-file-input');
+        return { multiple: input.multiple, accept: input.getAttribute('accept') || '' };
+      })()`)) as { multiple: boolean; accept: string };
+      checkEqual('附件选择支持多文件', attachInputAttrs.multiple, true);
+      checkEqual('附件选择不限制类型', attachInputAttrs.accept, '');
+      const composerOrder = (await page.evaluate(`(() => {
+        const attach = document.getElementById('attach-file').getBoundingClientRect();
+        const body = document.getElementById('body').getBoundingClientRect();
+        const send = document.getElementById('send').getBoundingClientRect();
+        return { attach: attach.left, body: body.left, send: send.left };
+      })()`)) as { attach: number; body: number; send: number };
+      check(
+        '输入框顺序为附件 → 正文 → 发送',
+        composerOrder.attach < composerOrder.body && composerOrder.body < composerOrder.send,
+        composerOrder,
+      );
+
+      const messagesBeforeAttach = await messageCount(page);
+      await page.locator('#body').fill('附件草稿');
+      await page.evaluate(
+        `(() => { const box = document.getElementById('body'); box.focus(); box.setSelectionRange(box.value.length, box.value.length); })()`,
+      );
+      const attachUploadBase = upload.calls.length;
+      const attachBindBase = await mcpCallCount(page, 'network_room_file_bind');
+      upload.delayMs = 300;
+      const chooserPromise = page.waitForEvent('filechooser');
+      await page.getByRole('button', { name: '上传文件' }).click();
+      const chooser = await chooserPromise;
+      checkEqual('点击附件按钮打开文件选择器', chooser.isMultiple(), true);
+      await chooser.setFiles([
+        { name: '输入框 图片 一.png', mimeType: 'image/png', buffer: PNG_BYTES },
+        { name: '说明 文档.txt', mimeType: 'text/plain', buffer: Buffer.from('附件说明') },
+      ]);
+      await waitUntil(
+        async () => (await page.locator('#attach-file').getAttribute('aria-busy')) === 'true',
+        '上传期间附件按钮 aria-busy',
+      );
+      const sawProgress = await page
+        .waitForFunction(`document.getElementById('status').textContent.indexOf('正在上传') >= 0`)
+        .then(() => true)
+        .catch(() => false);
+      check('上传中显示进度文案', sawProgress);
+      checkEqual('上传中不禁用附件按钮', await page.locator('#attach-file').isEnabled(), true);
+      checkEqual('上传中不禁用输入框', await page.locator('#body').isEnabled(), true);
+      await waitUntil(() => upload.calls.length === attachUploadBase + 2, '附件选择上传两个文件');
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_room_file_bind')) >= attachBindBase + 2,
+        '附件选择执行两次 bind',
+      );
+      upload.delayMs = 0;
+      const attachUploads = upload.calls.slice(attachUploadBase);
+      const attachBinds = (await page.evaluate(
+        `(window.__mcpCalls || []).filter(function (call) { return call.name === 'network_room_file_bind'; }).slice(-2).map(function (call) { return { args: call.body.params.arguments, at: call.at }; })`,
+      )) as { args: { room_id?: string; file_id?: string }; at: number }[];
+      checkEqual('附件上传解码中文与空格文件名', attachUploads[0]!.name, '输入框 图片 一.png');
+      checkEqual('附件上传图片大小头', attachUploads[0]!.size, PNG_BYTES.length);
+      checkEqual('附件上传请求体大小', attachUploads[0]!.bodySize, PNG_BYTES.length);
+      check('附件上传携带 Bearer', attachUploads[0]!.authorization);
+      checkEqual('附件上传使用 MCPP Files v1', attachUploads[0]!.version, '1');
+      checkEqual('附件 bind 使用当前房间', attachBinds[0]!.args.room_id, attachRoomId);
+      check(
+        '附件多文件串行：第二次上传在第一次 bind 之后',
+        attachUploads[1]!.at >= attachBinds[0]!.at,
+      );
+
+      await waitUntil(async () => {
+        const value = await page.locator('#body').inputValue();
+        return (value.match(/\/f\/f_/g) || []).length === 2;
+      }, '附件 URL 插入输入框');
+      const attachDraft = await page.locator('#body').inputValue();
+      check('附件上传保留已有草稿', attachDraft.startsWith('附件草稿'));
+      const attachLines = attachDraft.split('\n').map((line) => line.trim()).filter(Boolean);
+      checkEqual('附件与两个文件各占一行', attachLines.length, 3);
+      check(
+        '附件 URL 各占一行',
+        attachLines[1]!.includes('/f/') && attachLines[2]!.includes('/f/'),
+      );
+      checkEqual(
+        '附件插入后光标在末尾',
+        (await page.evaluate(
+          `(() => { const box = document.getElementById('body'); return box.selectionStart === box.value.length; })()`,
+        )) as boolean,
+        true,
+      );
+      await waitForText(page, '#status', '链接已插入输入框');
+      checkEqual(
+        '上传完成清除 aria-busy',
+        await page.locator('#attach-file').getAttribute('aria-busy'),
+        'false',
+      );
+      checkEqual('附件上传不自动发送', await messageCount(page), messagesBeforeAttach);
+      await waitForText(page, '#files-list', '输入框 图片 一.png');
+      await waitForText(page, '#files-list', '说明 文档.txt');
+
+      const beforeAttachSend = await messageCount(page);
+      await page.locator('#send').click();
+      await page.waitForFunction(
+        `document.querySelectorAll('#messages .msg').length > ${beforeAttachSend}`,
+      );
+      const attachMessage = page.locator('#messages .msg').filter({ hasText: '附件草稿' }).last();
+      await attachMessage.waitFor();
+      await waitUntil(
+        async () => (await attachMessage.locator('.msg-file').count()) === 2,
+        '发送附件后出现两张文件卡片',
+        15_000,
+      );
+      checkEqual('发送附件后出现两张文件卡片', await attachMessage.locator('.msg-file').count(), 2);
+      checkEqual('发送附件后输入框清空', await page.locator('#body').inputValue(), '');
+
+      await page.locator('#body').fill('失败草稿');
+      await page.evaluate(
+        `(() => { const box = document.getElementById('body'); box.focus(); box.setSelectionRange(box.value.length, box.value.length); })()`,
+      );
+      const failedAttachDraft = await page.locator('#body').inputValue();
+      const bindBeforeAttachFailure = await mcpCallCount(page, 'network_room_file_bind');
+      const attachFailBase = upload.calls.length;
+      upload.failNext = true;
+      await page.setInputFiles('#composer-file-input', [
+        { name: '超限 附件.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(2048, 1) },
+      ]);
+      await waitForText(page, '#status', '文件超过大小限制');
+      check(
+        '附件失败显示文件名',
+        ((await page.locator('#status').textContent()) ?? '').includes('超限 附件.bin'),
+      );
+      checkEqual('附件失败保留草稿', await page.locator('#body').inputValue(), failedAttachDraft);
+      checkEqual(
+        '附件失败不 bind',
+        await mcpCallCount(page, 'network_room_file_bind'),
+        bindBeforeAttachFailure,
+      );
+      check('附件失败不插 URL', !(await page.locator('#body').inputValue()).includes('/f/'));
+      checkEqual(
+        '附件失败清空文件选择器',
+        await page.evaluate(`document.getElementById('composer-file-input').value`),
+        '',
+      );
+      checkEqual(
+        '附件失败后按钮恢复',
+        await page.locator('#attach-file').getAttribute('aria-busy'),
+        'false',
+      );
+      await page.setInputFiles('#composer-file-input', [
+        { name: '超限 附件.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(2048, 1) },
+      ]);
+      await waitUntil(() => upload.calls.length === attachFailBase + 2, '失败后可重选同一文件');
+      await waitUntil(
+        async () => (await page.locator('#body').inputValue()).includes('/f/'),
+        '重选后插入 URL',
+      );
+      check(
+        '失败后可重选同一文件并成功插入',
+        (await page.locator('#body').inputValue()).includes('/f/'),
+      );
+
+      await page.locator('#body').fill('绑定草稿');
+      await page.evaluate(
+        `(() => { const box = document.getElementById('body'); box.focus(); box.setSelectionRange(box.value.length, box.value.length); })()`,
+      );
+      const bindDraft = await page.locator('#body').inputValue();
+      const bindRetryUploadBase = upload.calls.length;
+      failNextBind = true;
+      await page.setInputFiles('#composer-file-input', [
+        { name: '绑定失败.txt', mimeType: 'text/plain', buffer: Buffer.from('retry') },
+      ]);
+      await waitForText(page, '#status', '不会重复上传');
+      checkEqual('附件 bind 失败只上传一次', upload.calls.length, bindRetryUploadBase + 1);
+      checkEqual('附件 bind 失败不插 URL', await page.locator('#body').inputValue(), bindDraft);
+      await page.locator('#files-bind-retry').waitFor({ state: 'visible' });
+      await page.locator('#files-bind-retry').click();
+      await page.waitForFunction('document.getElementById("files-bind-retry").hidden === true');
+      checkEqual('附件 bind 重试不重复上传', upload.calls.length, bindRetryUploadBase + 1);
+      checkEqual('附件 bind 重试不写新的 URL', await page.locator('#body').inputValue(), bindDraft);
+      await waitForText(page, '#files-list', '绑定失败.txt');
+
+      await page.locator('#body').fill('粘贴草稿');
+      await page.evaluate(
+        `(() => { const box = document.getElementById('body'); box.focus(); box.setSelectionRange(box.value.length, box.value.length); })()`,
+      );
+      const pasteCount = await messageCount(page);
+      const pasteUploadBase = upload.calls.length;
+      const pastePrevented = await pasteFiles(page, '#body', [
+        { name: '粘贴 图片.png', mimeType: 'image/png', base64: PNG_BYTES.toString('base64') },
+      ]);
+      checkEqual('粘贴图片阻止默认行为', pastePrevented, true);
+      await waitUntil(() => upload.calls.length === pasteUploadBase + 1, '粘贴图片触发上传');
+      await waitUntil(
+        async () => (await page.locator('#body').inputValue()).includes('/f/'),
+        '粘贴图片插入 URL',
+      );
+      check(
+        '粘贴图片保留草稿',
+        (await page.locator('#body').inputValue()).startsWith('粘贴草稿'),
+      );
+      checkEqual('粘贴图片使用真实文件名', upload.calls[pasteUploadBase]!.name, '粘贴 图片.png');
+      checkEqual('粘贴图片不自动发送', await messageCount(page), pasteCount);
+
+      const textPasteBase = upload.calls.length;
+      const textDraft = await page.locator('#body').inputValue();
+      const textPastePrevented = await pasteFiles(page, '#body', [], '纯文本粘贴');
+      checkEqual('纯文本粘贴不阻止默认行为', textPastePrevented, false);
+      await sleep(150);
+      checkEqual('纯文本粘贴不触发上传', upload.calls.length, textPasteBase);
+      checkEqual('纯文本粘贴不改动草稿', await page.locator('#body').inputValue(), textDraft);
+
+      await page.locator('#body').fill('输入法草稿');
+      await page.evaluate(
+        `(() => { const box = document.getElementById('body'); box.focus(); box.setSelectionRange(box.value.length, box.value.length); })()`,
+      );
+      const imeDraft = await page.locator('#body').inputValue();
+      const imeBindBase = await mcpCallCount(page, 'network_room_file_bind');
+      const imeUploadBase = upload.calls.length;
+      await page.evaluate(
+        `document.getElementById('body').dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))`,
+      );
+      const imePrevented = await pasteFiles(page, '#body', [
+        { name: 'IME 图片 一.png', mimeType: 'image/png', base64: PNG_BYTES.toString('base64') },
+        { name: 'IME 图片 二.png', mimeType: 'image/png', base64: PNG_BYTES.toString('base64') },
+      ]);
+      checkEqual('IME 组合期间粘贴图片仍阻止默认行为', imePrevented, true);
+      await waitUntil(() => upload.calls.length === imeUploadBase + 2, 'IME 组合期间上传两张图片');
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_room_file_bind')) >= imeBindBase + 2,
+        'IME 上传完成 bind',
+      );
+      await sleep(200);
+      checkEqual(
+        'IME 组合期间不插入 URL',
+        await page.locator('#body').inputValue(),
+        imeDraft,
+      );
+      await page.evaluate(
+        `document.getElementById('body').dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))`,
+      );
+      await waitUntil(
+        async () => (await page.locator('#body').inputValue()).includes('/f/'),
+        'IME 结束后插入 URL',
+      );
+      const imeValue = await page.locator('#body').inputValue();
+      check('IME 结束后保留草稿', imeValue.startsWith('输入法草稿'));
+      const imeLines = imeValue.split('\n').map((line) => line.trim()).filter(Boolean);
+      checkEqual('IME 结束后两个 URL 各占一行', imeLines.length, 3);
+      checkEqual('IME 结束后两张图片都插入', (imeValue.match(/\/f\/f_/g) || []).length, 2);
+      checkEqual(
+        'IME 结束后焦点仍在正文',
+        await page.evaluate(`document.activeElement && document.activeElement.id`),
+        'body',
+      );
+
+      check(
+        '附件上传 URL 不含 token',
+        uploadUrls.length > 0 && uploadUrls.every((url) => !url.includes(data.humanToken)),
+      );
+      const attachConsoleText = (await page.evaluate('window.__consoleText')) as string;
+      check(
+        '附件上传不把 token 写入 console',
+        !attachConsoleText.includes(data.humanToken) &&
+          !attachConsoleText.includes('Bearer '),
+      );
+      const attachPageText = (await page.locator('body').innerText()) as string;
+      check('附件上传不把 token 写入页面', !attachPageText.includes(data.humanToken));
+      const attachButtonHtml = (await page.locator('#attach-file').evaluate(
+        (node) => node.outerHTML,
+      )) as string;
+      check('附件按钮不含 token', !attachButtonHtml.includes(data.humanToken));
+
+      const mobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await mobile.context.addInitScript(`(() => {
+        window.__consoleText = '';
+        ['log', 'info', 'warn', 'error', 'debug'].forEach(function (level) {
+          const original = console[level];
+          console[level] = function () {
+            window.__consoleText += Array.prototype.map.call(arguments, String).join(' ') + '\\n';
+            original.apply(console, arguments);
+          };
+        });
+      })()`);
+      const mobileUpload = await observeDropUploads(mobile.page);
+      await mobile.page.goto(`${server.base}/c/${attachRoomId}`);
+      await waitRoom(mobile.page, attachRoomId, '输入框附件群');
+      checkEqual('390px 显示附件按钮', await mobile.page.locator('#attach-file').isVisible(), true);
+      const mobileComposer = (await mobile.page.evaluate(`(() => {
+        const attach = document.getElementById('attach-file').getBoundingClientRect();
+        const body = document.getElementById('body').getBoundingClientRect();
+        const send = document.getElementById('send').getBoundingClientRect();
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          attach: attach.left,
+          body: body.left,
+          bodyWidth: body.width,
+          send: send.left
+        };
+      })()`)) as {
+        view: number;
+        doc: number;
+        attach: number;
+        body: number;
+        bodyWidth: number;
+        send: number;
+      };
+      check(
+        '390px 输入框顺序为附件 → 正文 → 发送',
+        mobileComposer.attach < mobileComposer.body &&
+          mobileComposer.body < mobileComposer.send,
+        mobileComposer,
+      );
+      check(
+        '390px 输入框无横向溢出',
+        mobileComposer.doc <= mobileComposer.view && mobileComposer.bodyWidth > 0,
+        mobileComposer,
+      );
+      await mobile.page.emulateMedia({ colorScheme: 'dark' });
+      const darkAttach = (await mobile.page.evaluate(`(() => {
+        const node = document.getElementById('attach-file');
+        const style = getComputedStyle(node);
+        return {
+          dark: matchMedia('(prefers-color-scheme: dark)').matches,
+          background: style.backgroundColor,
+          color: style.color
+        };
+      })()`)) as { dark: boolean; background: string; color: string };
+      checkEqual('暗色附件按钮跟随主题', darkAttach.dark, true);
+      checkEqual('暗色附件按钮使用面板变量', darkAttach.background, 'rgb(43, 43, 43)');
+      const mobileMessagesBefore = await messageCount(mobile.page);
+      const mobileUploadBase = mobileUpload.calls.length;
+      await mobile.page.setInputFiles('#composer-file-input', [
+        { name: '移动 附件.txt', mimeType: 'text/plain', buffer: Buffer.from('mobile attach') },
+      ]);
+      await waitUntil(
+        async () => (await mobile.page.locator('#body').inputValue()).includes('/f/'),
+        '390px 上传插入 URL',
+      );
+      checkEqual('390px 上传只触发一次', mobileUpload.calls.length, mobileUploadBase + 1);
+      checkEqual('390px 上传不自动发送', await messageCount(mobile.page), mobileMessagesBefore);
+      const mobileOverflow = (await mobile.page.evaluate(
+        `({ doc: document.documentElement.scrollWidth, view: window.innerWidth })`,
+      )) as { doc: number; view: number };
+      check(
+        '390px 上传后仍无横向溢出',
+        mobileOverflow.doc <= mobileOverflow.view,
+        mobileOverflow,
+      );
+      const mobileConsoleText = (await mobile.page.evaluate('window.__consoleText')) as string;
+      check(
+        '390px 附件上传不把 token 写入 console',
+        !mobileConsoleText.includes(data.humanToken) &&
+          !mobileConsoleText.includes('Bearer '),
+      );
       await mobile.context.close();
       await context.close();
     }

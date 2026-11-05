@@ -19,6 +19,7 @@ import { CHAT_ROUTER_SCRIPT } from './chat-router-script';
 import { CHAT_SCROLL_SCRIPT } from './chat-scroll-script';
 import { CHAT_SESSION_SCRIPT } from './chat-session-script';
 import { CHAT_STREAM_SCRIPT } from './chat-stream-script';
+import { CHAT_UPLOAD_SCRIPT } from './chat-upload-script';
 import { HANDOFF_CONTROLLER_SCRIPT } from './handoff';
 import { jsonForScript } from './layout';
 import { NEW_AGENT_SCRIPT } from './new-agent-script';
@@ -131,6 +132,7 @@ ${CHAT_SESSION_SCRIPT}
 ${CHAT_STREAM_SCRIPT}
 ${CHAT_FILES_SCRIPT}
 ${CHAT_FILES_ACTIONS_SCRIPT}
+${CHAT_UPLOAD_SCRIPT}
 ${CHAT_MONITOR_SCRIPT}
 ${CHAT_RESIZER_SCRIPT}
 ${CHAT_ROUTER_SCRIPT}

@@ -144,6 +144,8 @@ export function chatPane(): string {
     <p id="status" role="status"></p>
     <div id="mention-picker" class="mention-picker" hidden role="listbox" aria-label="选择要 @ 的成员"></div>
     <form id="composer" class="composer">
+      <button class="attach-btn" id="attach-file" type="button" aria-label="上传文件" title="上传文件">+</button>
+      <input id="composer-file-input" type="file" multiple hidden>
       <textarea id="body" rows="1" maxlength="262144" placeholder="输入消息…" aria-label="消息正文"></textarea>
       <button class="send-btn primary" id="send" type="submit">发送</button>
     </form>
