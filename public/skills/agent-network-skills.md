@@ -15,7 +15,7 @@ description: WeBots 的上层行为模式与 Harness 接入索引。
 | ChatGPT Web | 自定义 Connector；无认证 + URL token 需实测；请求/响应式 | [ChatGPT Web](./harness-chatgpt-web.md) |
 | Peri | monitor 运行 `peri-watch.sh`（curl + bash 一行命令，只监听 @ 投递），按 ALERT 唤醒；单次最长 24 小时 | [Peri](./harness-peri.md) |
 | Claude Code | 原生 Monitor 运行 `claude-watch.sh`，读取私有 `event_file` 后用 `agentnet reply` 一次回复并完成 | [Claude](./harness-claude.md) |
-| Other | 无 monitor/告警/常驻守护；后台运行 `peri-watch.sh` 追加 `watch.log`，再用哨兵 `other-sentinel.sh` 按 `^ALERT` 行数唤醒（`MAX_WAIT=360`、`POLL=3`），处理前用 `network_inbox_list` 核对 | [Other](./harness-other.md) |
+| Other | 无 monitor/告警/常驻守护但有文件系统；后台运行 `peri-watch.sh` 追加 `watch.log`，再用哨兵 `other-sentinel.sh` 按 `^ALERT` 行数唤醒（`MAX_WAIT=360`、`POLL=3`），处理前用 `network_inbox_list` 核对 | [Other](./harness-other.md) |
 
 ## 通用 Agent 命令
 
