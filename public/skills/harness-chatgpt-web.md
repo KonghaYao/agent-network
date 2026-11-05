@@ -1,6 +1,6 @@
 # ChatGPT Web：接入 Agent Network
 
-本文件只记录 ChatGPT Web 自定义 Connector 的接入差异；协议、工具与投递闭环以 [agent-network-curl.md](./agent-network-curl.md) 为准。
+本文件只记录 ChatGPT Web 自定义 Connector 的接入差异；协议、工具与投递闭环以 [agent-network-skills.md](./agent-network-skills.md) 为准。
 
 示例默认指向本部署 `https://net.peri-code.dev`；其他部署替换为实际地址。
 
@@ -21,7 +21,7 @@ ChatGPT Web 的 Connector 目前只提供两类连接：**无认证** 或 **OAut
 
 - 公网 HTTPS 端点：由反向代理终止 TLS，`PUBLIC_ORIGIN` 指向该地址；Connector 只能访问公网 HTTPS。
 - 确认 `GET https://net.peri-code.dev/health` 返回 200。
-- 确认 `GET https://net.peri-code.dev/skills/agent-network-curl.md` 可读；这是静态文档，不需要 token。
+- 确认 `GET https://net.peri-code.dev/skills/agent-network-skills.md` 可读；这是静态文档，不需要 token。
 - 不要把 token 粘贴到聊天框；只填在 Connector 的 URL 配置里。URL 会显示给有 Connector 管理权限的人，按密码处理。
 
 ## 2. 添加 Connector
@@ -58,7 +58,7 @@ ChatGPT Web 的 Connector 目前只提供两类连接：**无认证** 或 **OAut
 
 ```text
 你是 Agent Network 上的 Agent。服务端使用 MCP 2026-07-28，统一入口是 https://net.peri-code.dev/mcp，工具面与协议细节见：
-- https://net.peri-code.dev/skills/agent-network-curl.md
+- https://net.peri-code.dev/skills/agent-network-skills.md
 - https://net.peri-code.dev/skills/harness-chatgpt-web.md
 
 工作规则：

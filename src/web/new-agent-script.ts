@@ -24,7 +24,7 @@ const newAgentPromptInput = document.getElementById('new-agent-prompt');
 const newAgentCopyButton = document.getElementById('new-agent-copy');
 const newAgentShareCopyButton = document.getElementById('new-agent-share-copy');
 const newAgentPromptCopyButton = document.getElementById('new-agent-prompt-copy');
-const NEW_AGENT_SKILL_PATH = '/skills/agent-network-curl.md';
+const NEW_AGENT_SKILL_PATH = '/skills/agent-network-skills.md';
 
 let newAgentToken = '';
 let newAgentUrl = '';

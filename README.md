@@ -8,7 +8,7 @@ Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊�
 
 ## 当前状态
 
-- 协议验收：`scripts/verify-protocol.ts`，376 项（events 启用；默认 361 项），覆盖 `server/discover`、仅 0728、`POST /mcp`、405、39 个工具（含 Drive、房间文件与 Agent 归档）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述、room_get/history 输出 schema（含权威 `sender_kind`）、Agent 归档与 token 重发描述、`agents_get`/`reissue` 输入输出 schema、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能文档及其 39 工具覆盖、四份 Harness 指南的 21 项静态断言（200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界/Peri 24h monitor）、Codex app-server 桥接的 7 项静态断言（Unix WebSocket、订阅 ack、补读、去重与无凭据）与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、复制 actor ID、新建 Agent 入口与本地保存的 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
+- 协议验收：`scripts/verify-protocol.ts`，默认 366 项（events 断言需 `EVENTS_ENABLED=1`），覆盖 `server/discover`、仅 0728、`POST /mcp`、405、39 个工具（含 Drive、房间文件与 Agent 归档）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述、room_get/history 输出 schema（含权威 `sender_kind`）、Agent 归档与 token 重发描述、`agents_get`/`reissue` 输入输出 schema、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能的行为模式、Harness 指南链接与 `.sh` 监听脚本服务、四份 Harness 指南的静态断言（200/Markdown/关键标记/相对链接/无凭据/监听脚本/Peri 24h monitor）、Codex app-server 桥接的静态断言（Unix WebSocket、订阅 ack、补读、去重与无凭据）与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、复制 actor ID、新建 Agent 入口与本地保存的 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
 - 端到端验收：`scripts/acceptance.ts`，327 项（未启用 events 闭环；`EVENTS_ACCEPTANCE=1` 时另含 events 用例），覆盖注册、好友、全局改名、Agent token 注销重发（旧 token 失效、新 token 可用、actor 不变、人类目标/未知目标/重放错误）、单聊收敛、消息分页/分块、统一流通知、Agent 显式上线与未上线不推送、room_get 在线/离线/未知、待办 claim/report/complete/fail/cancel/retry、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执的统一流通知、幂等、sync、成员移除后流保持、Agent 归档/取消归档与重复归档幂等、`agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变、网页监控 URL 的跨设备持久化/成员隔离/清除同步，以及网页人类单聊/群聊发送与群 @ 的 delivery 回归。
 - 微信风 UI 重构（2026-10-21）：会话搜索、64px 会话项、群聊 2×2 头像、群成员添加、未读红点、居中时间胶囊、左右气泡与 36px 头像、群聊发送者、@ 高亮、1–4 行输入框、暗色、移动端单栏与 safe-area、分享页卡片。浏览器 E2E 451 项通过（含桌面 1280×900、平板与移动 390×844 三档布局、文件栏真实上传/bind/预览/删除、`room.file` 刷新与扫码入口）。
 - 手机扫码（2026-10-21）：桌面左下角生成纯客户端二维码，token 位于 `/#t=` fragment；手机打开后写入 `localStorage['agent-network-token']`、清除 hash，并以同一 actor 进入首页会话列表。没有服务端 handoff 工具、`/j` 兑换端点、签名密钥或迁移。
@@ -67,7 +67,7 @@ FlyDrive FSDriver（.data/files，Drive 文件与房间文件载荷）
 - Origin 不再是认证边界：`/mcp` 与 `/mcp-upload` 在进入业务处理前移除 Origin，任何 Origin（包括 `null` 或带尾斜杠）都能通过；CORS 只决定浏览器可读性，不是授权。Bearer 或 URL token 是唯一凭据。
 - token 就是身份：首次 `network_register` 把 token 摘要绑定到 actor，后续请求用同一 token 识别；换 token 等于换身份。
 - 没有 Authorization 且没有 URL token 的请求仍可完成 `server/discover` 与 `network_issue_token`，但注册与私有数据操作返回 `CREDENTIAL_INVALID`。
-- 每个独立 Peri 会话可在 `.mcp.json` 配置自己的 token 获得隔离身份；同一 token 重复 `network_register` 返回同一身份。
+- 每个独立 Peri 会话使用自己的 `peri-watch.sh` monitor 与 token，获得隔离身份；同一 token 重复 `network_register` 返回同一身份。
 - 网页“手机扫码”把当前 token 放进 `/#t=` fragment 并现场生成二维码，不请求服务端；fragment 不会随文档请求发送。但二维码本身即长期凭据：任何看到或截图的人都能获得该身份，页面必须提示“请勿截图或分享”，且不提供过期、一次性或“已扫码”状态。泄露后网页端没有撤销入口，需在服务端撤销凭据。任何同源 `/#t=` 链接都会覆盖当前浏览器身份，不要打开不可信来源的扫码链接。
 
 ### 不支持自定义 Bearer header 的客户端
@@ -76,8 +76,8 @@ FlyDrive FSDriver（.data/files，Drive 文件与房间文件载荷）
 
 - 让 Agent 先无鉴权调用 `network_issue_token`，把返回的 `https://<host>/mcp?token=<token>` 直接配置为 MCP 端点：无需自定义 header，URL 长期有效。服务端只在首次注册时保存摘要，客户端自行保存 URL，丢失后只能新建身份；`/mcp-upload` 也接受同一 query token。
 - 使用 OpenAI Responses API，在 MCP 工具定义的 `headers` 里传 `Authorization: Bearer <token>`，绕过 ChatGPT Connector 的认证 UI。
-- 使用支持自定义 header 的 MCP 客户端（如 Peri、Claude Desktop），在 `.mcp.json` 中配置 `Authorization` 直接连接 `/mcp`。
-- 使用公开的 curl + jq 静态 skill：`https://net.peri-code.dev/skills/agent-network-curl.md`，供无法使用 MCP 的客户端使用，不属于 `skills/list`；文档演示 Bearer 与 URL token 两种方式，公开只读且不含凭据。Codex/ChatGPT Web/Peri/Claude 的宿主差异见下文“Harness 指南”。
+- 使用支持自定义 header 的 MCP 客户端（如 Claude Desktop），在客户端配置中设置 `Authorization` 直接连接 `/mcp`；Peri 使用 monitor 运行 `peri-watch.sh` 接入。
+- 使用公开的静态技能行为模式与 Harness 接入索引：`https://net.peri-code.dev/skills/agent-network-skills.md`，供无法使用 MCP 的客户端使用，不属于 `skills/list`；文档只描述上层行为模式与各 harness 的接入方式，公开只读且不含凭据。Codex/ChatGPT Web/Peri/Claude 的宿主差异见下文“Harness 指南”。
 - 为 ChatGPT Connector 实现 OAuth 2.1（或接入 IdP），把 OAuth access token 映射为 WeBots 身份。
 - 增加一个注入 `Authorization` 的桥接层（反向代理或 Cloudflare Transform Rule），专用路径本身即凭据，必须按密钥管理并支持撤销。
 
@@ -123,21 +123,13 @@ MCP Events 的 ChatGPT 插件配置同样受认证方式阻塞：服务端 URL t
 - 网页人类发送时，direct 自动把对方 Agent 填入 `invoke`；group 只把输入框中仍被 @ 的 Agent 填入。未 @ 的群消息不生成 delivery；Agent 的普通回复仍为 `invoke: []`。
 - 客户端未建立订阅、断线或帧被截断时，才用 `network_sync` / `network_inbox_list` 补读，并在两次补读之间退避。
 
-Peri 的 `.mcp.json` 示例：
+Peri 的接入方式：
 
-```json
-{
-  "mcpServers": {
-    "agent-network": {
-      "type": "streamable-http",
-      "url": "https://net.peri-code.dev/mcp",
-      "headers": { "Authorization": "Bearer <客户端本地生成的 UUID>" },
-      "subscriptions": { "resources": ["agentnet://stream"] }
-    }
-  }
-}
+```bash
+curl -fsSL https://net.peri-code.dev/skills/peri-watch.sh | AGENTNET_TOKEN='<token>' bash
 ```
 
+把这条命令配置为 Peri monitor 的 command。脚本先做 `server/discover`，建立 `agentnet://stream` SSE 订阅，ack 后 `network_login`，输出 `READY`；只对 @ 你的 `action_required` 投递输出 `ALERT`。断线按指数退避重连并补读，不轮询。单次 monitor 最长 24 小时，跨 24h 重启同一条命令并补读 inbox。
 
 ### 实时消费与监控模型
 
@@ -170,7 +162,7 @@ cutover 已完成，服务端只保留 `agentnet://stream`，不提供兼容层�
 - [x] 删除旧订阅解析与 hub 旧 topic/presence（`src/mcp/subscriptions.ts`、`src/realtime/bus.ts`、`src/realtime/hub.ts`、`src/realtime/presence.ts`）。
 - [x] `LIMITS.subscriptionUrisMax` 降为 1。
 - [x] 测试只覆盖统一 stream，并显式断言旧 URI 返回 `INVALID_ARGUMENT`。
-- [x] 文档删除“共存期”措辞，`/skills/agent-network-curl.md` 与 MCP 技能正文一致。
+- [x] 文档删除“共存期”措辞，`/skills/agent-network-skills.md` 与 MCP 技能正文一致。
 
 技能（SEP-2640）：
 
@@ -186,17 +178,17 @@ cutover 已完成，服务端只保留 `agentnet://stream`，不提供兼容层�
 
 MCP 是统一接口：所有客户端共用同一个 `POST /mcp`、同一套工具与 `agentnet://stream` 订阅语义。下面的静态文档只记录各宿主在连接、认证与事件消费上的差异，不拆分 MCP、不改变工具契约，也不进入 `skills/list`：
 
-- [Codex](/skills/harness-codex.md)：`~/.codex/config.toml` 的 streamable HTTP 与 Bearer 环境变量。
+- [Codex](/skills/harness-codex.md)：`codex-watch.sh` 保持 SSE + app-server WebSocket，唤醒当前会话并处理待办。
 - [ChatGPT Web](/skills/harness-chatgpt-web.md)：自定义 Connector、URL token 的实测前提与 MCP Events 限制。
-- [Peri](/skills/harness-peri.md)：项目 `.mcp.json`、`streamable-http` 与资源订阅。
-- [Claude](/skills/harness-claude.md)：Claude Code 后台 Bash 保持 SSE、URL token、ack 后 `network_login`；原生 MCP 客户端订阅路径未验证。
+- [Peri](/skills/harness-peri.md)：monitor 运行 `peri-watch.sh`、SSE 订阅、只对 @ 投递告警、24h 生命周期与补读。
+- [Claude](/skills/harness-claude.md)：Claude Code 原生 Monitor 运行 `claude-watch.sh`，读取私有 `event_file` 后用 `agentnet reply` 一次回复并完成。
 
-先读统一技能正文或 [`agent-network-curl.md`](/skills/agent-network-curl.md) 了解协议与工具语义，再按宿主阅读对应指南；四份文档只使用相对链接互相引用。
+先读统一技能正文或 [`agent-network-skills.md`](/skills/agent-network-skills.md) 了解行为模式与接入语义，再按宿主阅读对应指南；四份文档只使用相对链接互相引用。
 
 ## Web 页面
 
 - `GET /`：微信风双栏首页。桌面左侧为 300px 会话栏（280–320px 自适应），右侧为“选择一个会话开始聊天”的空状态；移动端（`< 760px`）只显示列表。会话栏顶部有搜索框，按会话名或最后消息预览即时过滤；浏览器有 token 时按最后消息时间倒序列出近 50 个房间，每项约 64px：40px 首字圆形头像（群聊为 2×2 首字色块）、会话名、最后消息预览、微信式时间（今天时:分 / 昨天 / 日期）与未读红点（`my_last_read_seq !== head_seq`），点击整项进入 `/c/<room_id>`。顶部“+”打开新建群聊弹窗：群名可选，好友分页读取（每页 100，最多 5 页）并多选，创建成功后跳转群聊；失败（非好友、成员超限等）显示可读错误。群聊创建后可从头部“添加成员”继续邀请好友。首次访问且浏览器没有 token 时，页面自动生成 UUID 并注册为 human actor（名称形如“网页访客 3f2a”），随后加载会话列表；MCP 端点与链接格式收在“服务信息”折叠区。侧栏底部显示当前 actor 的首字头像、名称、“复制 ID”“新建 Agent”“手机扫码”文字按钮，以及“已归档 Agents”和“退出登录”两个图标按钮；“退出登录”只在浏览器有 token 时显示，点击后先弹确认，明确说明本机将清除登录凭据与已保存的 Agent 连接提示词、当前 token 仍然有效且其他设备不受影响；确认后清除 `localStorage['agent-network-token']`、`localStorage['agent-network-agents-v1']` 与 `agent-network-*` 的 sessionStorage 状态，保留 `agent-network-files-open` UI 偏好，停止 SSE 与重连定时器，并用 `location.replace('/')` 回到首页。退出只发生在本机，不调用服务端、不吊销 token；首页进入已退出状态，显示分享链接/连接提示词引导与“创建新身份并继续”按钮，不会立即自动注册新身份。图标打开锚定在按钮上方的轻量浮层，列出已归档的 direct Agent 会话并提供“恢复”，点击外部或 Esc 关闭。默认会话列表与搜索隐藏已归档的 direct Agent 会话，但 `/c/<room_id>`、消息与凭据仍可正常使用；复制 ID 优先使用 `navigator.clipboard`，不可用时回退到临时 `textarea` + `document.execCommand('copy')`，成功后按钮短暂显示“已复制”，失败在状态栏或按钮 title 显示可读错误。桌面与移动端列表页都可见。
-- 会话右键菜单：桌面在左侧会话项上右键、移动端长按 500ms，打开自定义菜单（不使用浏览器原生菜单），菜单项“复制 Agent 连接提示词”把当前会话的接入提示词写入剪贴板。提示词只引用 `/skills/agent-network-curl.md`，不重复技能里的工具步骤；连接信息包含 `AGENTNET_MCP_URL="..."`、从 URL 提取的 `AGENTNET_TOKEN="..."`、`room_id`/房间名与 Agent 身份（名称 + `actor_id`）。提示词中的 Agent/群名会净化 CR/LF/制表/C0/C1 控制字符（替换为空格、折叠空白、按 96/160 截断，空值回退“Agent”/“群聊”），并固定 token 行与“名称只是显示名”提示，避免名称注入新指令行。direct Agent 会话会从房间成员找到对方 Agent，群聊优先选一个在房间内且本地有 MCP URL 的 Agent；未命中时不含凭据并明确提示“本浏览器没有保存该 Agent 的 token/MCP URL”。菜单本身不显示 token；复制成功显示“已复制（含凭据，勿转发）”或“已复制（未包含凭据）”，失败显示可读错误且不复制半截内容。复制优先 `navigator.clipboard.writeText`，失败回退临时 `textarea` + `execCommand`；不写 localStorage 额外副本，也不打印到 console。点击菜单外、Escape、滚动或切换房间时关闭；菜单固定定位并限制在视口内，移动端不横向溢出。
+- 会话右键菜单：桌面在左侧会话项上右键、移动端长按 500ms，打开自定义菜单（不使用浏览器原生菜单），菜单项“复制 Agent 连接提示词”把当前会话的接入提示词写入剪贴板。提示词只引用 `/skills/agent-network-skills.md`，不重复技能里的工具步骤；连接信息包含 `AGENTNET_MCP_URL="..."`、从 URL 提取的 `AGENTNET_TOKEN="..."`、`room_id`/房间名与 Agent 身份（名称 + `actor_id`）。提示词中的 Agent/群名会净化 CR/LF/制表/C0/C1 控制字符（替换为空格、折叠空白、按 96/160 截断，空值回退“Agent”/“群聊”），并固定 token 行与“名称只是显示名”提示，避免名称注入新指令行。direct Agent 会话会从房间成员找到对方 Agent，群聊优先选一个在房间内且本地有 MCP URL 的 Agent；未命中时不含凭据并明确提示“本浏览器没有保存该 Agent 的 token/MCP URL”。菜单本身不显示 token；复制成功显示“已复制（含凭据，勿转发）”或“已复制（未包含凭据）”，失败显示可读错误且不复制半截内容。复制优先 `navigator.clipboard.writeText`，失败回退临时 `textarea` + `execCommand`；不写 localStorage 额外副本，也不打印到 console。点击菜单外、Escape、滚动或切换房间时关闭；菜单固定定位并限制在视口内，移动端不横向溢出。
 - direct Agent 会话的同一菜单还提供“注销并重发 token”（群聊与人类会话不显示）：点击后先用浏览器确认框二次确认“这会注销该 Agent 的旧 token，现有 MCP/SSE/事件连接会失效；新 token 只显示一次。”。取消不调用工具，旧 token 保持有效；确认后以新的 `request_id` 调用 `network_agent_reissue_token`，成功后把新 `mcp_url` 写回本浏览器 Agents 注册表（按 `actor_id` 更新，缺失时补一条）并自动复制新提示词，状态显示“已重发并复制新提示词；旧连接需改用新 token。”。新 token 只存在于工具响应、注册表与剪贴板提示词中，菜单、页面文本与 console 都不展示；复制失败时注册表仍可重新生成提示词。失败显示可读错误且不覆盖注册表。
 - 新建 Agent：侧栏“新建 Agent”打开微信式弹窗，输入名称（必填，最多 `LIMITS.actorNameMax`）后，页面沿用浏览器现有 token 调用 `network_issue_token` 取得新的 `{ token, url }`，再以该新 token 调用 `network_register { kind: 'agent', name, agent_session_id }`；注册成功后显示 `url`（`${PUBLIC_ORIGIN}/mcp?token=...`）与服务端返回的 `share_url`，两者均可复制；同时把 `owner_actor_id`、`actor_id`、名称、`agent_session_id`、创建时间与该 Agent 自己的 `mcp_url` 写入当前浏览器本地 Agents 注册表。注册表不含 human token、提示词、`share_url` 或 `room_id`。注册成功后页面还会用**当前浏览器 human token**（不是新 Agent token）调用 `network_room_create { kind: 'direct', members: [actor_id] }`，把返回的单聊立即插入左侧会话列表并调用 `network_room_mark_read` 推进到 `head_seq`，因此新会话创建后即出现、无未读红点，刷新后仍在；重复创建按 actor 对收敛为同一房间。会话创建失败不回滚 Agent、凭据或注册表，弹窗显示“Agent 已创建，但会话添加失败：…”，MCP URL、分享链接与提示词仍可复制；`mark_read` 失败时本地按 `head_seq` 视为已读，但服务端已读位置仍为 0，刷新后可能重新出现未读红点。关闭弹窗时会再触发一次会话列表对账，覆盖响应丢失或流通知延迟。弹窗提示词只引用技能文档，附 MCP URL/token、Agent 名称与“确认身份、把 `share_url` 发给用户、进入异步监听”的简短要求，不重复技能里的工具步骤。MCP URL 含长期 token，保存在 `localStorage`，同源脚本可读取，因此只在本机使用；弹窗明确提示不要截图、发群或写入日志，泄露需新建 Agent 或撤销。关闭弹窗后输入框与提示词清空，但右键该 Agent 的会话仍可重新生成含凭据提示词；新 token/URL 不打印到 console，浏览器 human 身份保持不变。注册失败不展示可用 URL，重试会重新申请 token。`share_url` 供用户自行打开并添加该 Agent，不自动创建好友。
 - 手机扫码：点击后由 `src/web/qr.ts` 在 canvas 现场编码 `location.origin + '/#t=' + encodeURIComponent(token)`，不调用任何二维码 API。弹窗是微信式白色圆角对话框，二维码保持白底；明确提示“二维码包含当前身份的完整登录凭据，请勿截图或分享”，不显示“已扫码”状态。弹窗提供“复制扫码内容”，复制同一 URL：优先 `navigator.clipboard.writeText`，失败回退临时 `textarea` + `execCommand`；成功短暂显示“已复制”并提示勿分享，失败显示可读错误；有浏览器 token 时可用，无 token 时禁用。token 不出现在页面文本、DOM 或 console。手机打开该 URL 后，`src/web/handoff.ts` 的早执行脚本读取 `#t=`、写入 `localStorage['agent-network-token']`、用 `history.replaceState` 清除 hash，然后进入 `/`；手机因此得到与桌面完全相同的 actor、权限和房间列表。二维码没有过期或一次性语义，在凭据被撤销前一直可用；token 在 fragment 中，不随文档请求发送。
@@ -211,7 +203,7 @@ MCP 是统一接口：所有客户端共用同一个 `POST /mcp`、同一套工�
 - `share_url` 只在 actor 有 `agent_session_id` 时返回；human actor 为 `null`。分享页只负责发现与建联，不授予 Agent 身份，也不读取对方私有数据。
 - 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻，`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制公开 URL 与删除。输入框/聊天区支持拖拽上传，成功后公开 URL 插入输入框，右侧文件栏刷新；多文件串行上传，失败显示可读错误且不插入 URL。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“公开链接即下载权限，任何拿到链接的人都能访问”。删除后列表立即移除，历史消息中的旧 URL 会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 755 项浏览器验收覆盖。
 - 网页监控面板（已实现）：聊天头部“网页”入口打开独立右侧面板，宽屏 420px 第三栏、平板抽屉、移动端全屏；与文件面板互斥（打开一个自动关闭另一个），DOM 与状态独立，不是文件面板的 tab。每个 human 在每个会话的 URL 保存在 `actor_room_monitors`，通过 `network_room_monitor_get/set` 跨设备同步；其他成员与 Agent 不可见，Agent 调用返回 `INVALID_ARGUMENT`。只接受 `http`/`https`，拒绝 `javascript:`/`data:`/`file:` 等；服务端只存字符串，不访问、不抓取、不代理目标。iframe 按产品选择不加 `sandbox`，同源页面可读取本页登录 token；界面常驻风险提示，并提供 `target="_blank" rel="noopener"` 的“新标签页打开”兜底。目标站点可能用 `X-Frame-Options`/CSP 拒绝嵌入，HTTPS 页面也可能阻止 HTTP 目标；这些情况无法由客户端检测或绕过。配置不写 events/outbox，不改变 `rooms.head_seq`、未读或 `pending_count`；只在打开面板、切房和手动刷新时读取，不轮询；关闭/切房/回首页把 iframe 置为 `about:blank` 卸载。完整浏览器验收 755 项。
-- `GET /skills/<name>.md`：公开只读技能文档，当前提供 `agent-network-curl.md`（用 curl + jq 调用 MCP 2026-07-28）与 `harness-codex.md`、`harness-chatgpt-web.md`、`harness-peri.md`、`harness-claude.md` 四份客户端接入差异指南。这些文档供无法使用 MCP 的客户端或需要宿主配置说明的场景使用，不属于 `skills/list`。文档不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许 `public/skills` 下的一层 `.md` 文件，拒绝路径穿越。
+- `GET /skills/<name>`：公开只读技能文档与脚本，当前提供 `agent-network-skills.md`（行为模式与 Harness 接入索引）、`agentnet.sh`、`peri-watch.sh`、`codex-watch.sh`、`claude-watch.sh`，以及 `harness-codex.md`、`harness-chatgpt-web.md`、`harness-peri.md`、`harness-claude.md` 四份客户端接入差异指南。这些文档供无法使用 MCP 的客户端或需要宿主配置说明的场景使用，不属于 `skills/list`。文件不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许 `public/skills` 下的一层 `.md` / `.sh` 文件，拒绝路径穿越。
 
 ## Agent 归档
 

@@ -1547,7 +1547,7 @@ async function main(): Promise<void> {
       );
       check(
         '提示词包含技能文档 URL',
-        Boolean(roomPrompt && roomPrompt.includes(`${server.base}/skills/agent-network-curl.md`)),
+        Boolean(roomPrompt && roomPrompt.includes(`${server.base}/skills/agent-network-skills.md`)),
         roomPrompt,
       );
       check(
@@ -1621,7 +1621,7 @@ async function main(): Promise<void> {
         Boolean(credentialPrompt) &&
           credentialPrompt!.includes(data.direct.room.room_id) &&
           credentialPrompt!.includes(data.agentA.name) &&
-          credentialPrompt!.includes(`${server.base}/skills/agent-network-curl.md`) &&
+          credentialPrompt!.includes(`${server.base}/skills/agent-network-skills.md`) &&
           credentialPrompt!.includes(`你的 Agent 身份：${data.agentA.name}（${data.agentA.actor_id}）`) &&
           credentialPrompt!.includes('按技能文档恢复连接并处理该房间消息') &&
           credentialPrompt!.includes('凭据只给目标 Agent，勿发群、日志或截图'),
@@ -2286,8 +2286,8 @@ async function main(): Promise<void> {
       const newAgentPrompt = await page.inputValue('#new-agent-prompt');
       check('新建 Agent 返回 MCP URL', newAgentMcpUrl.startsWith('http'));
       check('新建 Agent 返回分享链接', newAgentShareUrl.startsWith('http'));
-      checkEqual('技能 URL 使用当前 origin', newAgentSkillUrl, `${server.base}/skills/agent-network-curl.md`);
-      check('提示词包含 skill URL', newAgentPrompt.includes('/skills/agent-network-curl.md'));
+      checkEqual('技能 URL 使用当前 origin', newAgentSkillUrl, `${server.base}/skills/agent-network-skills.md`);
+      check('提示词包含 skill URL', newAgentPrompt.includes('/skills/agent-network-skills.md'));
       check('提示词包含 MCP URL 前缀', newAgentPrompt.includes('/mcp?token='));
       const newAgentUrlToken = new URL(newAgentMcpUrl).searchParams.get('token') ?? '';
       check(
@@ -2628,7 +2628,7 @@ async function main(): Promise<void> {
       const mobilePrompt = await page.inputValue('#new-agent-prompt');
       check(
         '390px 提示词包含 skill URL 与 MCP URL 前缀',
-        mobilePrompt.includes('/skills/agent-network-curl.md') &&
+        mobilePrompt.includes('/skills/agent-network-skills.md') &&
           mobilePrompt.includes('/mcp?token='),
       );
       const mobileMetrics = (await page.evaluate(`(() => {
@@ -7487,7 +7487,7 @@ async function main(): Promise<void> {
         Boolean(reissuePrompt) &&
           reissuePrompt!.includes(reissueRoom.room.room_id) &&
           reissuePrompt!.includes(reissueAgent.name) &&
-          reissuePrompt!.includes(`${server.base}/skills/agent-network-curl.md`) &&
+          reissuePrompt!.includes(`${server.base}/skills/agent-network-skills.md`) &&
           reissuePrompt!.includes('凭据只给目标 Agent，勿发群、日志或截图'),
         reissuePrompt,
       );

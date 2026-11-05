@@ -1034,14 +1034,14 @@ async function main(): Promise<void> {
       homeHtml.includes('未知'),
   );
 
-  const skillDoc = await fetch(`${baseUrl()}/skills/agent-network-curl.md`);
-  checkEqual('GET /skills/agent-network-curl.md 返回 200', skillDoc.status, 200);
+  const skillDoc = await fetch(`${baseUrl()}/skills/agent-network-skills.md`);
+  checkEqual('GET /skills/agent-network-skills.md 返回 200', skillDoc.status, 200);
   const skillDocText = await skillDoc.text();
   check(
-    '静态技能为 Markdown 且包含 MCP 版本与 token 环境变量说明',
+    '静态技能为 Markdown 且包含行为模式与 Harness 指南',
     (skillDoc.headers.get('content-type') ?? '').includes('text/markdown') &&
-      skillDocText.includes('MCP-Protocol-Version') &&
-      skillDocText.includes('AGENTNET_TOKEN'),
+      skillDocText.includes('行为模式') &&
+      skillDocText.includes('Harness 指南'),
     skillDoc.headers.get('content-type'),
   );
   check(
@@ -1054,43 +1054,10 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 200),
   );
   check(
-    '静态技能面向无法使用 MCP 的客户端且不属于 skills/list',
-    skillDocText.includes('无法使用 MCP') && skillDocText.includes('不属于 `skills/list`'),
-    skillDocText.slice(0, 240),
-  );
-  check(
-    '静态技能说明注册后向用户提供 share_url',
-    skillDocText.includes('SHARE_URL') &&
-      skillDocText.includes('.share_url') &&
-      skillDocText.includes('发给用户'),
-    skillDocText.slice(0, 200),
-  );
-  check(
-    '静态技能说明注册后异步监听并包含 subscriptions/listen 与 network_login',
-    skillDocText.includes('异步') &&
-      skillDocText.includes('subscriptions/listen') &&
-      skillDocText.includes('network_login'),
-    skillDocText.slice(0, 200),
-  );
-  check(
-    '静态技能说明 SSE 使用 --http1.1、唯一 subscription id 并重新 login',
-    skillDocText.includes('--http1.1') &&
-      skillDocText.includes('唯一 subscription id') &&
-      skillDocText.includes('重新 `network_login`'),
-    skillDocText.slice(0, 200),
-  );
-  check(
-    '静态技能要求超过 10 秒先发简短确认',
-    skillDocText.includes('超过 10 秒') &&
-      skillDocText.includes('简短确认') &&
-      skillDocText.includes('不算完成'),
-    skillDocText.slice(0, 240),
-  );
-  check(
-    '静态技能说明 URL token 流程与 Origin 边界',
-    skillDocText.includes('network_issue_token') &&
-      skillDocText.includes('AGENTNET_MCP_URL') &&
-      skillDocText.includes('Origin 不再是认证边界'),
+    '静态技能包含四种命令与监听脚本',
+    ['agentnet.sh', 'peri-watch.sh', 'codex-watch.sh', 'claude-watch.sh'].every((name) =>
+      skillDocText.includes(name),
+    ),
     skillDocText.slice(0, 240),
   );
   check(
@@ -1106,7 +1073,7 @@ async function main(): Promise<void> {
   const harnessDocs = [
     {
       file: 'harness-codex.md',
-      markers: ['mcp_servers', 'bearer_token_env_var', '2026-07-28', 'Mcp-Method'],
+      markers: ['codex-watch.sh', 'AGENTNET_TOKEN', 'CODEX_THREAD_ID', 'turn/steer'],
     },
     {
       file: 'harness-chatgpt-web.md',
@@ -1115,10 +1082,11 @@ async function main(): Promise<void> {
     {
       file: 'harness-peri.md',
       markers: [
-        '.mcp.json',
-        'streamable-http',
-        'agentnet://stream',
-        'network_login',
+        'monitor',
+        'peri-watch.sh',
+        'AGENTNET_TOKEN',
+        'network_inbox_list',
+        'ALERT',
         'network_delivery_claim',
         'network_delivery_complete',
       ],
@@ -1126,23 +1094,17 @@ async function main(): Promise<void> {
     {
       file: 'harness-claude.md',
       markers: [
-        'agentnet://stream',
-        'notifications/subscriptions/acknowledged',
-        'network_login',
-        'network_inbox_list',
-        'network_delivery_claim',
+        'claude-watch.sh',
+        'Monitor',
+        'AGENTNET_TOKEN',
+        'share_url',
+        'event_file',
+        'agentnet.sh reply',
         'network_delivery_complete',
-        'AGENTNET_MCP_URL',
+        'network_delivery_fail',
         '10 秒',
         '简短确认',
-        '退避',
-        'Claude Code',
-        '后台 Bash',
-        'mcp-upload',
-        'MCPP-Files-Version',
-        'network_room_file_bind',
-        '/f/<fileId>',
-        'public_url',
+        '持续',
       ],
     },
   ] as const;
@@ -1180,13 +1142,13 @@ async function main(): Promise<void> {
     '24 小时',
     '24h',
     'monitor',
-    'network_login',
-    'agentnet://stream',
-    'Monitor 生命周期',
-    'notifications/subscriptions/acknowledged',
+    'peri-watch.sh',
+    'network_inbox_list',
+    'ALERT',
+    'READY',
   ];
   check(
-    'Peri 指南标注单次 monitor 最长 24h 并要求续期后重新订阅、login 与补读 inbox',
+    'Peri 指南标注单次 monitor 最长 24h 并说明脚本重启与 ALERT',
     periGuideType.includes('text/markdown') &&
       periMonitorMarkers.every((marker) => periGuideText.includes(marker)) &&
       !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(periGuideText) &&
@@ -1197,28 +1159,154 @@ async function main(): Promise<void> {
     },
   );
 
-  const claudeGuide = await fetch(`${baseUrl()}/skills/harness-claude.md`);
-  const claudeGuideText = await claudeGuide.text();
+  const periScript = await fetch(`${baseUrl()}/skills/peri-watch.sh`);
+  checkEqual('GET /skills/peri-watch.sh 返回 200', periScript.status, 200);
+  const periScriptType = periScript.headers.get('content-type') ?? '';
+  const periScriptText = await periScript.text();
   check(
-    'Claude 指南覆盖会话级后台监听、10 秒确认与退避重连',
-    ['后台 Bash', '10 秒', '简短确认', '退避'].every((marker) =>
-      claudeGuideText.includes(marker),
-    ),
-    {
-      missing: ['后台 Bash', '10 秒', '简短确认', '退避'].filter(
-        (marker) => !claudeGuideText.includes(marker),
+    'Peri monitor 脚本只监听投递并包含 ALERT',
+    periScriptType.includes('text/x-shellscript') &&
+      ['ALERT', 'AGENTNET_TOKEN', 'network_inbox_list', 'delivery_id', 'ERROR type=inbox', 'agentnet://stream', 'subscriptions/listen', 'sender_id', '--connect-timeout'].every((marker) =>
+        periScriptText.includes(marker),
       ),
+    { contentType: periScriptType },
+  );
+  check(
+    'Peri monitor 脚本不轮询房间，也不要求 ROOM_ID',
+    !periScriptText.includes('ROOM_ID') &&
+      !periScriptText.includes('network_rooms_list') &&
+      !periScriptText.includes('network_room_get'),
+  );
+  check(
+    'Peri monitor 脚本不包含硬编码 Bearer token',
+    !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(periScriptText),
+  );
+
+  const codexScript = await fetch(`${baseUrl()}/skills/codex-watch.sh`);
+  checkEqual('GET /skills/codex-watch.sh 返回 200', codexScript.status, 200);
+  const codexScriptText = await codexScript.text();
+  check(
+    'Codex 脚本独立保持 SSE 与 Unix WebSocket 并处理投递',
+    (codexScript.headers.get('content-type') ?? '').includes('text/x-shellscript') &&
+      ['subscriptions/listen', 'agentnet://stream', 'network_login', 'network_delivery_claim',
+       'network_message_read', 'network_delivery_complete', 'network_delivery_fail',
+       'websockets.unix_connect', 'turn/start', 'turn/steer', 'expectedTurnId',
+       'turn/completed', 'CODEX_THREAD_ID'].every(
+        (marker) => codexScriptText.includes(marker),
+      ) &&
+      !codexScriptText.includes('peri-watch.sh') &&
+      !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(codexScriptText),
+  );
+
+  const claudeScript = await fetch(`${baseUrl()}/skills/claude-watch.sh`);
+  checkEqual('GET /skills/claude-watch.sh 返回 200', claudeScript.status, 200);
+  const claudeScriptType = claudeScript.headers.get('content-type') ?? '';
+  const claudeScriptText = await claudeScript.text();
+  const claudeScriptMarkers = [
+    'AGENTNET_TOKEN',
+    'subscriptions/listen',
+    'agentnet://stream',
+    'notifications/subscriptions/acknowledged',
+    'network_login',
+    'network_inbox_list',
+    'network_message_read',
+    'event_file',
+    'action_required',
+    'delivery_id',
+    'READY',
+    'reconnect_delay',
+    '--connect-timeout',
+  ];
+  check(
+    'Claude Code 监听脚本订阅统一流并在 ack 后登录补读',
+    claudeScriptType.includes('text/x-shellscript') &&
+      claudeScriptMarkers.every((marker) => claudeScriptText.includes(marker)),
+    {
+      contentType: claudeScriptType,
+      missing: claudeScriptMarkers.filter((marker) => !claudeScriptText.includes(marker)),
     },
   );
   check(
-    'Claude 指南区分已验证监听与未验证的原生 MCP 客户端路径',
-    claudeGuideText.includes('不能把') &&
-      claudeGuideText.includes('未实测') &&
-      claudeGuideText.includes('后台 Bash'),
+    'Claude Code 监听脚本不包含硬编码 Bearer token',
+    !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(claudeScriptText),
+  );
+  const claudeEmitFoundBody =
+    claudeScriptText.match(/emit_found\(\) \{([\s\S]*?)^\}/mu)?.[1] ?? '';
+  check(
+    'Claude Code 监听脚本输出事件后保持同一条持续监听',
+    claudeEmitFoundBody.includes("printf '%s\\n'") &&
+      !/\bexit\b/u.test(claudeEmitFoundBody) &&
+      claudeScriptText.includes('while :; do'),
+    claudeEmitFoundBody,
+  );
+  const claudeWriteEventBody =
+    claudeScriptText.match(/write_event_file\(\) \{([\s\S]*?)^\}/mu)?.[1] ?? '';
+  check(
+    'Claude Code 监听脚本把完整正文写入 0600 私有事件文件',
+    claudeWriteEventBody.includes('network_message_read') &&
+      claudeWriteEventBody.includes('next_cursor') &&
+      claudeWriteEventBody.includes('--rawfile body') &&
+      claudeWriteEventBody.includes('chmod 600') &&
+      claudeEmitFoundBody.includes('event_file') &&
+      !claudeEmitFoundBody.includes('body:$body'),
+    { claudeWriteEventBody, claudeEmitFoundBody },
+  );
+
+  const agentnetScript = await fetch(`${baseUrl()}/skills/agentnet.sh`);
+  checkEqual('GET /skills/agentnet.sh 返回 200', agentnetScript.status, 200);
+  const agentnetScriptType = agentnetScript.headers.get('content-type') ?? '';
+  const agentnetScriptText = await agentnetScript.text();
+  check(
+    '通用 Agent 命令脚本可通过 /skills 下载并包含核心子命令',
+    agentnetScriptType.includes('text/x-shellscript') &&
+      ['login', 'send', 'reply', 'send-file', 'inbox', 'upload', 'contact-add', 'room-create', 'mark-read', 'sync', 'network_message_send', 'network_delivery_claim', 'network_delivery_complete', 'network_contact_add', 'network_room_create', 'network_room_mark_read', 'network_sync', 'network_delivery_report', 'network_room_file_bind', 'mcp-upload', 'MCPP-Files-Version', '--connect-timeout'].every(
+        (marker) => agentnetScriptText.includes(marker),
+      ),
+    { contentType: agentnetScriptType },
+  );
+  check(
+    '通用 Agent 命令脚本不包含硬编码 Bearer token',
+    !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(agentnetScriptText),
+  );
+  check(
+    'agentnet reply 自动恢复投递状态并一次完成最终回复',
+    ['cmd_reply', 'find_inbox_delivery', 'network_delivery_claim',
+     'network_delivery_complete', 'final_body'].every((marker) =>
+      agentnetScriptText.includes(marker),
+    ),
+  );
+
+  const claudeGuide = await fetch(`${baseUrl()}/skills/harness-claude.md`);
+  const claudeGuideText = await claudeGuide.text();
+  const claudeGuideMarkers = [
+    'claude-watch.sh',
+    'Monitor 工具',
+    'AGENTNET_TOKEN',
+    'share_url',
+    'event_file',
+    'agentnet.sh reply',
+    'network_delivery_complete.final_body',
+    'network_delivery_fail',
+    '10 秒',
+    '简短确认',
+    '持续运行',
+  ];
+  check(
+    'Claude 指南覆盖原生 Monitor、持续监听与投递处理闭环',
+    claudeGuideMarkers.every((marker) => claudeGuideText.includes(marker)),
+    {
+      missing: claudeGuideMarkers.filter((marker) => !claudeGuideText.includes(marker)),
+    },
+  );
+  check(
+    'Claude 指南要求原生 Monitor，不使用 MCP 客户端载入方式',
+    claudeGuideText.includes('不要使用普通后台 Bash') &&
+      !claudeGuideText.includes('claude mcp') &&
+      !claudeGuideText.includes('.mcp.json'),
   );
   check(
     'Claude 指南只使用 token 占位符且不含 32 位以上十六进制凭据',
-    claudeGuideText.includes('token=<token>') &&
+    claudeGuideText.includes("AGENTNET_TOKEN='<token>'") &&
       !/\b[0-9a-f]{32,}\b/iu.test(claudeGuideText),
   );
 
@@ -1226,58 +1314,29 @@ async function main(): Promise<void> {
   checkEqual('GET /skills/harness-codex.md 返回 200（桥接指南）', codexBridge.status, 200);
   const codexBridgeText = await codexBridge.text();
   const codexBridgeMarkers = [
-    'agentnet://stream',
-    'notifications/subscriptions/acknowledged',
-    'network_login',
-    'network_inbox_list',
-    'network_delivery_claim',
-    'network_delivery_complete',
-    'turn/start',
-    'AGENTNET_MCP_URL',
+    'codex-watch.sh',
+    'CODEX_THREAD_ID',
+    'CODEX_READY',
+    'READY',
+    'AGENTNET_TOKEN',
     'share_url',
-    'Unix WebSocket',
-    'thread/read',
-    'initialize',
     'codex app-server daemon version',
-    'socketPath',
+    'websockets',
+    'SSE 长连接',
+    'turn/steer',
+    '10 秒',
   ];
   check(
-    'Codex 桥接指南覆盖订阅、上线、补读与 app-server 唤醒标记',
+    'Codex 指南覆盖身份、启动和持续监听操作',
     codexBridgeMarkers.every((marker) => codexBridgeText.includes(marker)),
     { missing: codexBridgeMarkers.filter((marker) => !codexBridgeText.includes(marker)) },
   );
   check(
-    'Codex 桥接指南要求 ack 后再 login，并在上线后补读 inbox',
-    codexBridgeText.includes('收到 `notifications/subscriptions/acknowledged` 后') &&
-      codexBridgeText.includes('network_login') &&
-      codexBridgeText.includes('network_inbox_list') &&
-      codexBridgeText.includes('补读'),
-  );
-  check(
-    'Codex 桥接指南区分 MCP enabled 与 app-server turn 唤醒',
-    codexBridgeText.includes('不代表') &&
-      codexBridgeText.includes('不会让 app-server 主动消费') &&
-      codexBridgeText.includes('https://developers.openai.com/codex/app-server'),
-  );
-  check(
-    'Codex 桥接指南说明 room.message 与 delivery.created 去重',
-    codexBridgeText.includes('room.message') &&
-      codexBridgeText.includes('delivery.created') &&
-      codexBridgeText.includes('不能分别回复两次'),
-  );
-  check(
-    'Codex 桥接指南记录临时桥接器与单聊局限',
-    codexBridgeText.includes('/tmp') &&
-      codexBridgeText.includes('不是开机服务') &&
-      codexBridgeText.includes('单聊') &&
-      codexBridgeText.includes('不是通用多用户服务'),
-  );
-  check(
-    'Codex 桥接指南说明 Unix WebSocket 与 app-server 省略 jsonrpc',
-    codexBridgeText.includes('Unix WebSocket') &&
-      codexBridgeText.includes('codex app-server proxy') &&
-      codexBridgeText.includes('不能推断') &&
-      codexBridgeText.includes('省略 `jsonrpc`'),
+    'Codex 指南说明工作中插话、任务排队与异常时人工核对',
+    codexBridgeText.includes('排队') &&
+      codexBridgeText.includes('即时交给') &&
+      codexBridgeText.includes('人工核对') &&
+      codexBridgeText.includes('不轮询'),
   );
   check(
     'Codex 桥接指南不包含真实 token 或完整含 token URL',
@@ -1286,20 +1345,6 @@ async function main(): Promise<void> {
       !/\b[0-9a-f]{32,}\b/iu.test(codexBridgeText),
   );
 
-  // 房间文件工具由文档 agent 单独补写；这里只要求已归档工具全部覆盖。
-  const documentedTools = toolNames.filter((name) => !roomFileTools.includes(name));
-  const missingTools = documentedTools.filter((name) => !skillDocText.includes(name));
-  check(
-    `静态技能覆盖 tools/list 全部 ${documentedTools.length} 个已归档工具`,
-    missingTools.length === 0,
-    missingTools,
-  );
-  const pendingDocTools = roomFileTools.filter(
-    (name) => toolNames.includes(name) && !skillDocText.includes(name),
-  );
-  if (pendingDocTools.length > 0) {
-    console.log(`  · 房间文件工具文档待补: ${pendingDocTools.join(', ')}`);
-  }
 
   const browserToken = newToken();
   const browserRegister = await rawRpc(

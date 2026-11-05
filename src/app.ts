@@ -631,17 +631,20 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     });
   });
 
-  // 公开只读技能文档：只允许 public/skills 下的一层 .md，拒绝路径穿越。
-  // 文档本身不含凭据；调用方自行通过 AGENTNET_TOKEN 提供 Bearer。
+  // 公开只读技能文档与脚本：只允许 public/skills 下的一层 .md / .sh，拒绝路径穿越。
+  // 文件本身不含凭据；调用方自行通过 AGENTNET_TOKEN 提供 Bearer。
   app.get('/skills/:file', async (c) => {
     const file = c.req.param('file');
-    if (!/^[a-z0-9][a-z0-9._-]*\.md$/u.test(file)) return c.notFound();
+    if (!/^[a-z0-9][a-z0-9._-]*\.(?:md|sh)$/u.test(file)) return c.notFound();
     const path = resolve(SKILLS_ROOT, file);
     if (!path.startsWith(`${SKILLS_ROOT}${sep}`)) return c.notFound();
     const body = await Bun.file(path).text().catch(() => null);
     if (body === null) return c.notFound();
+    const contentType = file.endsWith('.sh')
+      ? 'text/x-shellscript; charset=utf-8'
+      : 'text/markdown; charset=utf-8';
     return c.body(body, 200, {
-      'content-type': 'text/markdown; charset=utf-8',
+      'content-type': contentType,
       'cache-control': 'public, max-age=60',
       'access-control-allow-origin': '*',
     });

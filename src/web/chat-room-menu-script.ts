@@ -238,7 +238,7 @@ function roomMenuSafeName(value, fallback, maxLength) {
 
 /** 提示词只引用技能文档，附恢复连接所需信息；不重复技能里的工具步骤。 */
 function roomAgentPrompt(roomId, roomName, kind, credential) {
-  const skillUrl = location.origin + '/skills/agent-network-curl.md';
+  const skillUrl = location.origin + '/skills/agent-network-skills.md';
   const safeRoomName = roomMenuSafeName(
     roomName,
     kind === 'group' ? '群聊' : 'Agent',
