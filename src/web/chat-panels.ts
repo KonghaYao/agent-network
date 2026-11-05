@@ -323,31 +323,42 @@ export function paneResizer(): string {
 /**
  * 网页监控面板：桌面右侧第三栏、平板抽屉与移动端全屏页共用同一份 DOM。
  *
+ * 顶部只有一行工具栏：标题、地址框、保存/清除/外链/刷新/关闭图标。
  * URL 只通过 DOM property 写入 iframe/链接，不使用 innerHTML/srcdoc。
  * 按产品选择不设置 sandbox；完整风险保留在 README/CLAUDE，界面不显示
- * 长段说明，只在“新标签页打开”的 title/aria-label 保留精简提示。
+ * 长段说明，只在“新标签页打开”图标的 title/aria-label 保留精简提示。
  * iframe 初始为 about:blank，关闭/切房后也回到该地址以卸载文档。
  */
 export function monitorPane(): string {
   return `<aside class="monitor-pane" id="monitor-pane" aria-labelledby="monitor-title" hidden>
-  <header class="monitor-head">
-    <h2 id="monitor-title">网页监控</h2>
-    <div class="monitor-head-actions">
-      <button class="monitor-refresh" id="monitor-refresh" type="button"
-        aria-label="重新读取网页地址" title="重新读取网页地址">刷新</button>
-      <button class="monitor-close" id="monitor-close" type="button"
-        aria-label="关闭网页监控" title="关闭网页监控">关闭</button>
-    </div>
-  </header>
-  <form id="monitor-form" class="monitor-form">
-    <label class="monitor-field">
-      <span class="monitor-label">网页地址</span>
-      <input id="monitor-url" type="text" inputmode="url" autocomplete="off" spellcheck="false"
-        maxlength="${LIMITS.roomMonitorUrlMax}" placeholder="https://…">
-    </label>
-    <div class="monitor-form-actions">
-      <button class="primary" id="monitor-save" type="submit">保存</button>
-      <button id="monitor-clear" type="button">清除</button>
+  <form id="monitor-form" class="monitor-toolbar">
+    <h2 id="monitor-title" class="monitor-title">网页监控</h2>
+    <input id="monitor-url" type="text" inputmode="url" enterkeyhint="go"
+      autocomplete="off" spellcheck="false" aria-label="网页地址"
+      maxlength="${LIMITS.roomMonitorUrlMax}" placeholder="https://…">
+    <div class="monitor-actions">
+      <button class="monitor-icon primary" id="monitor-save" type="submit"
+        aria-label="保存网页地址" title="保存网页地址（Enter）">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12.5l4.2 4.2L19 7"></path></svg>
+      </button>
+      <button class="monitor-icon" id="monitor-clear" type="button"
+        aria-label="清除网页地址" title="清除网页地址">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M9 7V5h6v2M6.5 7l.9 12h9.2l.9-12M10 11v4M14 11v4"></path></svg>
+      </button>
+      <a class="monitor-icon monitor-external" id="monitor-external" href="#"
+        target="_blank" rel="noopener" aria-disabled="true"
+        title="仅打开可信网页；目标站点可能拒绝嵌入（X-Frame-Options/CSP），HTTPS 可能阻止 HTTP 目标；iframe 未加 sandbox，同源页面可读取本页登录凭据。"
+        aria-label="新标签页打开网页；仅限可信地址，iframe 未加 sandbox，同源页面可读取本页登录凭据">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 16L16 8M9.5 8H16v6.5"></path></svg>
+      </a>
+      <button class="monitor-icon" id="monitor-refresh" type="button"
+        aria-label="刷新网页" title="刷新网页（重新读取地址）">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12a7 7 0 1 1-2.05-4.95"></path><path d="M19 5v4h-4"></path></svg>
+      </button>
+      <button class="monitor-icon monitor-close" id="monitor-close" type="button"
+        aria-label="关闭网页监控" title="关闭网页监控">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 7l10 10M17 7L7 17"></path></svg>
+      </button>
     </div>
   </form>
   <p id="monitor-status" class="monitor-status" role="status" aria-live="polite"></p>
@@ -355,17 +366,11 @@ export function monitorPane(): string {
     <p id="monitor-error-text"></p>
     <button id="monitor-retry" type="button">重试</button>
   </div>
+  <p id="monitor-mixed" class="monitor-hint" hidden>HTTPS 页面可能阻止 HTTP 目标。</p>
   <div id="monitor-frame-wrap" class="monitor-frame-wrap">
     <p id="monitor-empty" class="monitor-empty">暂无网页</p>
     <iframe id="monitor-frame" class="monitor-frame" title="网页内容" src="about:blank" hidden></iframe>
   </div>
-  <footer class="monitor-foot">
-    <a id="monitor-external" class="monitor-external" href="#" target="_blank" rel="noopener"
-      aria-disabled="true"
-      title="仅打开可信网页；目标站点可能拒绝嵌入（X-Frame-Options/CSP），HTTPS 可能阻止 HTTP 目标；iframe 未加 sandbox，同源页面可读取本页登录凭据。"
-      aria-label="新标签页打开网页；仅限可信地址，iframe 未加 sandbox，同源页面可读取本页登录凭据">新标签页打开</a>
-    <p id="monitor-mixed" class="monitor-hint" hidden>HTTPS 页面可能阻止 HTTP 目标。</p>
-  </footer>
 </aside>`;
 }
 

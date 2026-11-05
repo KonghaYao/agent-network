@@ -215,8 +215,9 @@ function syncMonitorChrome() {
   }
   if (monitorCloseButton) {
     const mobilePage = onRoom && isMonitorMobile();
-    monitorCloseButton.textContent = mobilePage ? '返回' : '关闭';
-    monitorCloseButton.setAttribute('aria-label', mobilePage ? '返回聊天' : '关闭网页监控');
+    const closeLabel = mobilePage ? '返回聊天' : '关闭网页监控';
+    monitorCloseButton.setAttribute('aria-label', closeLabel);
+    monitorCloseButton.setAttribute('title', closeLabel);
   }
   if (!onRoom) monitorOverlayOpen = false;
   if (!visible) {
@@ -382,7 +383,7 @@ async function commitMonitor(url, options) {
     if (!monitorEpochCurrent(roomId, epoch)) return false;
     const monitor = result && result.monitor ? result.monitor : null;
     renderMonitorResult(monitor, { forceReload: true });
-    setMonitorStatus(url ? '已保存；其他设备打开或刷新后会同步。' : '已清除。');
+    setMonitorStatus(url ? '已保存' : '已清除。');
     return true;
   } catch (error) {
     if (isAbortError(error) || !monitorEpochCurrent(roomId, epoch)) return false;

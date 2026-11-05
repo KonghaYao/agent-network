@@ -6680,6 +6680,94 @@ async function main(): Promise<void> {
           !monitorPaneText.includes('iframe 未加 sandbox') &&
           !monitorPaneText.includes('只填入可信地址'),
       );
+      checkEqual('监控面板不显示网页地址标签', await page.locator('.monitor-label').count(), 0);
+      checkEqual('监控面板不再有底部链接区', await page.locator('.monitor-foot').count(), 0);
+      check(
+        '监控面板不显示新标签页长文案',
+        !monitorPaneText.includes('新标签页打开') && !monitorPaneText.includes('网页地址'),
+      );
+      const monitorToolbarLayout = (await page.evaluate(`(() => {
+        const toolbar = document.querySelector('.monitor-toolbar');
+        const input = document.getElementById('monitor-url');
+        const save = document.getElementById('monitor-save');
+        const close = document.getElementById('monitor-close');
+        if (!toolbar || !input || !save || !close) return null;
+        const tb = toolbar.getBoundingClientRect();
+        const ib = input.getBoundingClientRect();
+        const sb = save.getBoundingClientRect();
+        const cb = close.getBoundingClientRect();
+        return {
+          height: tb.height,
+          inputWidth: ib.width,
+          sameRow: Math.abs(sb.top - ib.top) <= 1 && Math.abs(cb.top - sb.top) <= 1,
+          scrollWidth: toolbar.scrollWidth,
+          clientWidth: toolbar.clientWidth
+        };
+      })()`)) as {
+        height: number;
+        inputWidth: number;
+        sameRow: boolean;
+        scrollWidth: number;
+        clientWidth: number;
+      } | null;
+      check(
+        '监控工具栏压缩为一行',
+        monitorToolbarLayout !== null &&
+          monitorToolbarLayout.height <= 56 &&
+          monitorToolbarLayout.sameRow,
+        monitorToolbarLayout,
+      );
+      check(
+        '监控工具栏无横向溢出且地址框占满剩余宽度',
+        monitorToolbarLayout !== null &&
+          monitorToolbarLayout.scrollWidth <= monitorToolbarLayout.clientWidth + 1 &&
+          monitorToolbarLayout.inputWidth > 120,
+        monitorToolbarLayout,
+      );
+      for (const [iconId, keyword] of [
+        ['monitor-save', '保存'],
+        ['monitor-clear', '清除'],
+        ['monitor-external', '新标签页'],
+        ['monitor-refresh', '刷新'],
+        ['monitor-close', '关闭'],
+      ] as const) {
+        const icon = page.locator(`#${iconId}`);
+        const aria = (await icon.getAttribute('aria-label')) ?? '';
+        const title = (await icon.getAttribute('title')) ?? '';
+        const text = ((await icon.textContent()) ?? '').trim();
+        check(
+          `监控 ${iconId} 为带可访问名称的图标按钮`,
+          aria.includes(keyword) && title.length > 0 && text === '',
+          { aria, title, text },
+        );
+      }
+      const monitorFrameFill = (await page.evaluate(`(() => {
+        const pane = document.getElementById('monitor-pane');
+        const toolbar = document.querySelector('.monitor-toolbar');
+        const wrap = document.getElementById('monitor-frame-wrap');
+        if (!pane || !toolbar || !wrap) return null;
+        const pb = pane.getBoundingClientRect();
+        const tb = toolbar.getBoundingClientRect();
+        const wb = wrap.getBoundingClientRect();
+        return {
+          paneHeight: pb.height,
+          toolbarHeight: tb.height,
+          wrapHeight: wb.height,
+          bottomGap: pb.bottom - wb.bottom
+        };
+      })()`)) as {
+        paneHeight: number;
+        toolbarHeight: number;
+        wrapHeight: number;
+        bottomGap: number;
+      } | null;
+      check(
+        '监控 iframe 容器填满工具栏以下高度',
+        monitorFrameFill !== null &&
+          monitorFrameFill.wrapHeight > monitorFrameFill.paneHeight - monitorFrameFill.toolbarHeight - 40 &&
+          monitorFrameFill.bottomGap <= 12,
+        monitorFrameFill,
+      );
       checkEqual('无配置时 iframe 隐藏', await page.locator('#monitor-frame').isHidden(), true);
       checkEqual('无配置时输入框为空', await page.locator('#monitor-url').inputValue(), '');
       checkEqual(
@@ -6757,6 +6845,19 @@ async function main(): Promise<void> {
         await page.locator('#monitor-frame').evaluate((element) => element.getAttribute('src')),
         'about:blank',
       );
+      const monitorErrorRow = await page.locator('#monitor-error').evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          height: rect.height,
+          scrollWidth: element.scrollWidth,
+          clientWidth: element.clientWidth,
+        };
+      });
+      check(
+        '错误提示保持紧凑单行',
+        monitorErrorRow.height <= 40 && monitorErrorRow.scrollWidth <= monitorErrorRow.clientWidth + 1,
+        monitorErrorRow,
+      );
 
       failNextMonitorSet = true;
       await page.locator('#monitor-url').fill(monitorUrlOne);
@@ -6779,8 +6880,24 @@ async function main(): Promise<void> {
       );
       checkEqual('保存失败不写入服务端', afterFailedSave.monitor, null);
 
-      await page.locator('#monitor-save').click();
+      const getCallsBeforeSave = await mcpCallCount(page, 'network_room_monitor_get');
+      await page.locator('#monitor-url').press('Enter');
       await page.locator('#monitor-frame').waitFor({ state: 'visible' });
+      checkEqual(
+        'Enter 保存不额外读取配置',
+        await mcpCallCount(page, 'network_room_monitor_get'),
+        getCallsBeforeSave,
+      );
+      checkEqual(
+        'Enter 保存后仍是单行输入框',
+        await page.locator('#monitor-url').evaluate((element) => element.tagName),
+        'INPUT',
+      );
+      check(
+        'Enter 保存不跳转页面',
+        page.url().endsWith(`/c/${monitorGroupId}`),
+        page.url(),
+      );
       await page.waitForFunction(
         `document.getElementById('monitor-frame').getAttribute('src') === ${JSON.stringify(monitorUrlOne)}`,
       );
@@ -6874,6 +6991,10 @@ async function main(): Promise<void> {
         { room_id: monitorGroupId },
       );
       checkEqual('清除同步到服务端', cleared.monitor, null);
+      check(
+        '清除成功显示状态',
+        ((await page.locator('#monitor-status').textContent()) ?? '').includes('已清除'),
+      );
 
       await page.locator('#monitor-url').fill(monitorUrlOne);
       await page.locator('#monitor-save').click();
@@ -7037,10 +7158,61 @@ async function main(): Promise<void> {
           'sandbox',
         ),
       );
+      const mobileMonitorLayout = (await mobileMonitor.page.evaluate(`(() => {
+        const pane = document.getElementById('monitor-pane');
+        const toolbar = document.querySelector('.monitor-toolbar');
+        const input = document.getElementById('monitor-url');
+        const close = document.getElementById('monitor-close');
+        if (!pane || !toolbar || !input || !close) return null;
+        const tb = toolbar.getBoundingClientRect();
+        const ib = input.getBoundingClientRect();
+        return {
+          paneScrollWidth: pane.scrollWidth,
+          paneClientWidth: pane.clientWidth,
+          toolbarHeight: tb.height,
+          toolbarScrollWidth: toolbar.scrollWidth,
+          toolbarClientWidth: toolbar.clientWidth,
+          inputWidth: ib.width,
+          inputRight: ib.right,
+          toolbarRight: tb.right,
+          closeRight: close.getBoundingClientRect().right
+        };
+      })()`)) as {
+        paneScrollWidth: number;
+        paneClientWidth: number;
+        toolbarHeight: number;
+        toolbarScrollWidth: number;
+        toolbarClientWidth: number;
+        inputWidth: number;
+        inputRight: number;
+        toolbarRight: number;
+        closeRight: number;
+      } | null;
+      check(
+        '390px 监控无横向溢出',
+        mobileMonitorLayout !== null &&
+          mobileMonitorLayout.paneScrollWidth <= mobileMonitorLayout.paneClientWidth + 1 &&
+          mobileMonitorLayout.toolbarScrollWidth <= mobileMonitorLayout.toolbarClientWidth + 1 &&
+          mobileMonitorLayout.inputRight <= mobileMonitorLayout.toolbarRight + 1 &&
+          mobileMonitorLayout.closeRight <= mobileMonitorLayout.toolbarRight + 1,
+        mobileMonitorLayout,
+      );
+      check(
+        '390px 监控工具栏保持单行',
+        mobileMonitorLayout !== null && mobileMonitorLayout.toolbarHeight <= 56,
+        mobileMonitorLayout,
+      );
+      check(
+        '390px 地址框保留可用宽度',
+        mobileMonitorLayout !== null && mobileMonitorLayout.inputWidth >= 150,
+        mobileMonitorLayout,
+      );
+      const mobileCloseLabel = (await mobileMonitor.page.locator('#monitor-close').getAttribute('aria-label')) ?? '';
+      check('移动端关闭按钮 aria-label 为返回聊天', mobileCloseLabel.includes('返回'), mobileCloseLabel);
       checkEqual(
-        '移动端关闭按钮文案为返回',
-        await mobileMonitor.page.locator('#monitor-close').textContent(),
-        '返回',
+        '移动端关闭按钮仍为图标',
+        ((await mobileMonitor.page.locator('#monitor-close').textContent()) ?? '').trim(),
+        '',
       );
       await mobileMonitor.page.waitForFunction(
         'document.activeElement && document.activeElement.id === "monitor-close"',
@@ -7080,6 +7252,11 @@ async function main(): Promise<void> {
       checkEqual(
         '暗色监控保留新标签页入口',
         await darkPage.locator('#monitor-external').isVisible(),
+        true,
+      );
+      checkEqual(
+        '暗色监控工具栏图标可见',
+        await darkPage.locator('#monitor-save').isVisible(),
         true,
       );
       check(
