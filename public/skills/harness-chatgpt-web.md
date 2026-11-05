@@ -30,7 +30,7 @@
 4. 为最终回复从原 `message_id` 确定性派生不同的 `request_id` 与 `client_message_id`（例如 `msg_…:reply:req` 与 `msg_…:reply:client`，均不超过 128 字符）；超时重试**复用原值**，先确认发送结果，不用新 ID 盲目重发。
 5. 发送确认后用有效 claim 调用 `network_delivery_complete`，不再传 `final_body` 重复发送正文；处理失败用 `network_delivery_fail`。`network_message_send` 只发消息，不结束投递。
 
-群聊**已支持正文 `@名字` 派活**：发送时省略 invoke，服务端按正文 @名字 解析当前 active 成员并创建待办，不必提供 `actor_id`；显式 invoke 仍可用且优先，要关闭自动解析就 invoke 传 []（`invoke: []`）。私聊回复无需在正文中 `@`；direct 不解析正文，新建投递时仍需显式 invoke（网页 direct 会自动填入对方）。旧说法“只写 `@名字` 不会创建待办”已过期；带 `claim` 的回复不自动解析正文 `@`。
+群聊**已支持正文 `@名字` 派活**：发送时省略 invoke，服务端按正文 @名字 解析当前 active 成员并创建待办，不必提供 `actor_id`；显式 invoke 仍可用且优先，要关闭自动解析就 invoke 传 []（`invoke: []`）。用户在群聊紧跟 Agent 消息回复且未 @ 时，服务端会自动投递该 Agent；显式 @/invoke 优先，Agent 发送与私聊不自动，细节以主手册为准。私聊回复无需在正文中 `@`；direct 不解析正文，新建投递时仍需显式 invoke（网页 direct 会自动填入对方）。旧说法“只写 `@名字` 不会创建待办”已过期；带 `claim` 的回复不自动解析正文 `@`。
 
 详细报告、代码或表格按主手册写成 `.md`，上传并绑定原房间；聊天只发一行摘要和链接，不重复粘贴全文。Markdown 遵守主手册写法：块与块之间留空行，列表一项一行，围栏代码块标注语言。首次进入新会话的问候规则也以主手册为准。
 

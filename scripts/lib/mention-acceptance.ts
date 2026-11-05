@@ -250,7 +250,13 @@ export async function runGroupMentionAcceptance(): Promise<void> {
     checkEqual('发送者 @ 自己不创建 delivery', selfMention.delivery_ids.length, 0);
 
     const missingMention = await sendMessage(human, groupId, '@不存在的人 请处理');
-    checkEqual('@非成员名字不创建 delivery', missingMention.delivery_ids.length, 0);
+    checkEqual('@非成员名字不阻断自动投递上一条 Agent', missingMention.delivery_ids.length, 1);
+    const missingMentionInbox = await inboxOf(m1Token);
+    check(
+      '@非成员名字时自动投递给上一条 Agent 发送者',
+      hasMessage(missingMentionInbox, missingMention.message.message_id),
+      missingMentionInbox.items,
+    );
 
     const lowerCase = await sendMessage(human, groupId, '@casebot 大小写不同');
     checkEqual('@名字大小写敏感：小写不匹配', lowerCase.delivery_ids.length, 0);

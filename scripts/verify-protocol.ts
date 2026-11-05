@@ -1705,7 +1705,8 @@ async function main(): Promise<void> {
     '静态技能包含 MCP Events 硬过滤与群聊补读规范',
     skillDocText.includes('### MCP Events 订阅过滤') &&
       skillDocText.includes('硬过滤') &&
-      skillDocText.includes('群聊普通消息不产生 delivery') &&
+      skillDocText.includes('群聊普通消息默认不产生 delivery') &&
+      skillDocText.includes('紧邻上一条来自 active Agent') &&
       skillDocText.includes('默认为 active') &&
       skillDocText.includes('events/unsubscribe'),
     skillDocText.slice(0, 240),

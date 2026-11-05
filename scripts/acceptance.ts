@@ -47,6 +47,7 @@ import { runRoomMonitorAcceptance } from './lib/room-monitor-acceptance';
 import { runRoomTaskAcceptance } from './lib/room-task-acceptance';
 import { runFeedbackAcceptance } from './lib/feedback-acceptance';
 import { runGroupMentionAcceptance } from './lib/mention-acceptance';
+import { runGroupAutoDeliverAcceptance } from './lib/auto-deliver-acceptance';
 import {
   ensureTestCertificate,
   removeTestData,
@@ -1284,6 +1285,7 @@ async function main(): Promise<void> {
     await runRoomTaskAcceptance();
     await runFeedbackAcceptance();
     await runGroupMentionAcceptance();
+    await runGroupAutoDeliverAcceptance();
 
     console.log(`端到端验收通过: ${checksPassed()} 项`);
   } finally {

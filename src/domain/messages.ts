@@ -359,6 +359,13 @@ interface MentionMember {
   name: string;
 }
 
+interface GroupMentionResolution {
+  /** 正文 @ 解析出的唯一 active Agent 目标。 */
+  invoke: string[];
+  /** 正文是否命中任一 active 成员名，含 human 与发送者本人。 */
+  hadMemberMention: boolean;
+}
+
 /**
  * 群聊省略 `invoke` 时按正文 `@名字` 解析投递目标。
  *
@@ -366,14 +373,16 @@ interface MentionMember {
  * 不 trim、不做 Unicode 归一化、不识别 Markdown 或转义。非 Agent 成员与发送者
  * 参与最长匹配（避免被更短的 Agent 名字前缀误命中），但只有唯一的
  * active Agent 成员会进入结果。正文里的非成员名字只是普通文本。
+ * `hadMemberMention` 用于阻止“回复上一条消息”的自动投递：只要命中任一成员名
+ * （即使是 human 或发送者本人）就视为显式 @，不再自动补目标。
  */
 async function resolveGroupMentionInvoke(
   db: D1Database,
   roomId: string,
   sender: string,
   body: string,
-): Promise<string[]> {
-  if (!body.includes('@')) return [];
+): Promise<GroupMentionResolution> {
+  if (!body.includes('@')) return { invoke: [], hadMemberMention: false };
   const rows = await db
     .prepare(
       `SELECT m.actor_id, a.kind, a.name
@@ -395,11 +404,13 @@ async function resolveGroupMentionInvoke(
   });
 
   const targets = new Set<string>();
+  let hadMemberMention = false;
   for (let index = 0; index < body.length; index += 1) {
     if (body[index] !== '@') continue;
     const start = index + 1;
     const matched = names.find((name) => body.startsWith(name, start));
     if (!matched) continue;
+    hadMemberMention = true;
     const members = byName.get(matched) ?? [];
     const agents = members.filter((member) => member.kind === 'agent');
     if (agents.length > 1) {
@@ -413,7 +424,43 @@ async function resolveGroupMentionInvoke(
     }
     index = start + matched.length - 1;
   }
-  return [...targets];
+  return { invoke: [...targets], hadMemberMention };
+}
+
+interface AdjacentSenderRow {
+  sender_id: string;
+  kind: 'human' | 'agent' | null;
+  status: 'active' | 'left' | 'removed' | null;
+}
+
+/**
+ * 群聊 human 回复的自动投递目标：紧邻上一条普通消息的发送者。
+ *
+ * 只读 `messages`（按 `created_seq` 倒序），不依赖 delivery/outbox 事件；
+ * 上一条消息的发送者必须仍是当前 active 的 Agent 成员，且不能是发送者本人。
+ * 查询发生在新消息插入之前，因此拿到的是“上一条”而不是自己。
+ */
+async function resolveAdjacentAgentSender(
+  db: D1Database,
+  roomId: string,
+  sender: string,
+): Promise<string | null> {
+  const row = await db
+    .prepare(
+      `SELECT msg.sender_id, a.kind, m.status
+         FROM messages msg
+         LEFT JOIN actors a ON a.actor_id = msg.sender_id
+         LEFT JOIN room_members m
+           ON m.room_id = msg.room_id AND m.actor_id = msg.sender_id
+        WHERE msg.room_id = ?
+        ORDER BY msg.created_seq DESC
+        LIMIT 1`,
+    )
+    .bind(roomId)
+    .first<AdjacentSenderRow>();
+  if (!row || row.sender_id === sender) return null;
+  if (row.kind !== 'agent' || row.status !== 'active') return null;
+  return row.sender_id;
 }
 
 function assertInvoke(invoke: string[] | undefined, sender: string): string[] {
@@ -451,10 +498,20 @@ export async function messageSend(
       body_bytes: bodyBytes,
     });
   }
-  const resolvedInvoke =
+  const mentionResolution =
     input.invoke === undefined && !input.claim && room.kind === 'group'
       ? await resolveGroupMentionInvoke(db, room.room_id, sender, input.body)
-      : input.invoke;
+      : null;
+  let resolvedInvoke = input.invoke;
+  if (mentionResolution) {
+    resolvedInvoke = mentionResolution.invoke;
+    // 群聊 human 回复紧邻上一条 Agent 消息时自动投递；显式 @ 任意 active 成员
+    // 都视为明确目标，不再补上一条 Agent。Agent 发送不改行为。
+    if (principal.actor?.kind === 'human' && !mentionResolution.hadMemberMention) {
+      const adjacentAgent = await resolveAdjacentAgentSender(db, room.room_id, sender);
+      if (adjacentAgent) resolvedInvoke = [adjacentAgent];
+    }
+  }
   const invoke = assertInvoke(resolvedInvoke, sender);
   const link = await resolveRootLink(db, sender, room.room_id, input);
 
