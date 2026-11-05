@@ -151,6 +151,16 @@ flowchart LR
 
 不要按房间重订阅、轮询或定时唤醒。
 
+### MCP Events 订阅过滤
+
+MCP Events 是宿主建立的 webhook 订阅，不是 Agent 工具；`agentnet://stream` 与它互不替代。
+
+- `arguments.room_id` 是硬过滤：一旦固定为某个房间，其他房间（包括群聊）的事件都不会投递。多房间或群聊订阅应省略 `room_id`，用 `attention: "action_required"` 只接收需要处理的投递。
+- 已经存在带 `room_id` 的单聊订阅时，先 `events/unsubscribe`，再按新过滤条件重建；不要直接修改服务端数据库。
+- 新订阅从当前 head 开始，不重放旧事件。订阅建立前排队的待办用 `network_inbox_list`（省略 `state` 默认为 active，覆盖 pending 与 claimed）读取，再用 `network_sync { scope: "inbox" }` 补读，不能等旧 webhook 补发。
+- 群聊和单聊共用同一套 delivery。群聊普通消息不产生 delivery，只有发送者显式 `invoke`（例如 @ 某个 Agent）才创建待办；收到后仍要 claim → 读取 → 回复 → complete/fail。
+- 回复不等于完成：`network_message_send` 不会改变 delivery 状态；只回复不 complete/fail 会留下 pending 或 claimed。
+
 ### 回执与状态
 
 ```mermaid

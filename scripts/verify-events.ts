@@ -637,6 +637,110 @@ async function main(): Promise<void> {
       'informational',
     );
 
+    // ---------- 群聊：不带 room_id 的订阅与 direct 硬过滤 ----------
+    await callTool(agentA.client, 'network_contact_add', {
+      request_id: newRequestId('contact'),
+      actor_id: b.actor_id,
+    });
+    await callTool(agentB.client, 'network_contact_add', {
+      request_id: newRequestId('contact'),
+      actor_id: a.actor_id,
+    });
+    const groupAB = (
+      await callTool<RoomDetail>(agentA.client, 'network_room_create', {
+        request_id: newRequestId('room'),
+        kind: 'group',
+        members: [b.actor_id],
+        title: 'Events 群聊',
+      })
+    ).room.room_id;
+
+    // 订阅建立前的旧群聊待办：新订阅不会补发，但 inbox/sync 必须能补读。
+    const groupBefore = await sendMessage(agentA, groupAB, 'group-before-subscribe', {
+      invoke: [b.actor_id],
+    });
+    const groupActionSub = await subscribe(tokenB, {
+      url: receiver.url('/callback', '?group-action=1'),
+      secret: secret1,
+      arguments: { attention: 'action_required' },
+    });
+
+    const activeInbox = await callTool<{
+      items: { delivery_id: string; message_id: string; room_id: string }[];
+    }>(agentB.client, 'network_inbox_list', {});
+    const activeGroupItem = activeInbox.items.find(
+      (item) => item.delivery_id === groupBefore.delivery_ids[0],
+    );
+    check(
+      'inbox 默认 active 能补读订阅前的群聊待办',
+      activeGroupItem !== undefined && activeGroupItem.room_id === groupAB,
+      activeInbox.items,
+    );
+    const groupSync = await callTool<{
+      items: { type: string; ref_id: string | null }[];
+      scope: string;
+    }>(agentB.client, 'network_sync', { scope: 'inbox', limit: 200 });
+    check(
+      'inbox sync 能看到订阅前的群聊待办',
+      groupSync.items.some(
+        (item) => item.type === 'delivery_created' && item.ref_id === groupBefore.delivery_ids[0],
+      ),
+      groupSync.items,
+    );
+
+    const groupAfter = await sendMessage(agentA, groupAB, 'group-after-subscribe', {
+      invoke: [b.actor_id],
+    });
+    const groupEvent = await receiver.waitForEvent(
+      (request) =>
+        request.subscriptionId === groupActionSub.id &&
+        payloadOf(request).data.message_id === groupAfter.message.message_id,
+      '等待群聊 action_required 事件',
+    );
+    const groupPayload = payloadOf(groupEvent);
+    checkEqual('群聊事件 room_kind=group', groupPayload.data.room_kind, 'group');
+    checkEqual('群聊事件带 delivery_id', groupPayload.data.delivery_id, groupAfter.delivery_ids[0]);
+    checkEqual('群聊事件 attention=action_required', groupPayload.data.attention, 'action_required');
+    checkEqual('群聊事件 delivery_state=pending', groupPayload.data.delivery_state, 'pending');
+    // 新事件已到达说明扫描已越过旧 groupBefore；旧待办仍不应被补发。
+    check(
+      '新订阅不重放订阅前的群聊事件',
+      countEvents(
+        receiver,
+        (request) =>
+          request.subscriptionId === groupActionSub.id &&
+          payloadOf(request).data.message_id === groupBefore.message.message_id,
+      ) === 0,
+    );
+
+    const directOnlySub = await subscribe(tokenB, {
+      url: receiver.url('/callback', '?direct-only=1'),
+      secret: secret1,
+      arguments: { room_id: roomAB, attention: 'action_required' },
+    });
+    const groupForDirect = await sendMessage(agentA, groupAB, 'group-hidden-from-direct', {
+      invoke: [b.actor_id],
+    });
+    // 同一订阅的后续 direct 事件到达，证明扫描已越过群聊事件 seq。
+    const directControl = await sendMessage(agentA, roomAB, 'direct-control-after-group', {
+      invoke: [b.actor_id],
+    });
+    await receiver.waitForEvent(
+      (request) =>
+        request.subscriptionId === directOnlySub.id &&
+        payloadOf(request).data.message_id === directControl.message.message_id,
+      '等待 direct 订阅的控制事件',
+    );
+    check(
+      '带 room_id 的单聊订阅收不到群聊事件',
+      countEvents(
+        receiver,
+        (request) =>
+          request.subscriptionId === directOnlySub.id &&
+          payloadOf(request).data.message_id === groupForDirect.message.message_id,
+      ) === 0,
+    );
+
     // ---------- 离线投递：无 SSE、无 network_login ----------
     const tokenD = newToken();
     const agentD = await connectClient(tokenD);

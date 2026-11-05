@@ -890,6 +890,16 @@ async function main(): Promise<void> {
     skillText.slice(0, 200),
   );
   check(
+    '技能正文说明 MCP Events room_id 硬过滤与群聊订阅',
+    skillText.includes('arguments.room_id') &&
+      skillText.includes('硬过滤') &&
+      skillText.includes('群聊') &&
+      skillText.includes('action_required') &&
+      skillText.includes('默认为 active') &&
+      skillText.includes('events/unsubscribe'),
+    skillText.slice(0, 240),
+  );
+  check(
     '技能正文要求注册后向用户提供 share_url',
     skillText.includes('share_url') && skillText.includes('发给用户'),
     skillText.slice(0, 200),
@@ -1124,6 +1134,15 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 240),
   );
   check(
+    '静态技能包含 MCP Events 硬过滤与群聊补读规范',
+    skillDocText.includes('### MCP Events 订阅过滤') &&
+      skillDocText.includes('硬过滤') &&
+      skillDocText.includes('群聊普通消息不产生 delivery') &&
+      skillDocText.includes('默认为 active') &&
+      skillDocText.includes('events/unsubscribe'),
+    skillDocText.slice(0, 240),
+  );
+  check(
     '静态技能包含四份 Harness 指南的相对链接',
     [
       '[Codex](./harness-codex.md)',
@@ -1196,6 +1215,38 @@ async function main(): Promise<void> {
       text.slice(0, 200),
     );
   }
+
+  const chatgptGuide = await fetch(`${baseUrl()}/skills/harness-chatgpt-web.md`);
+  checkEqual('GET /skills/harness-chatgpt-web.md 返回 200（群聊订阅）', chatgptGuide.status, 200);
+  const chatgptGuideText = await chatgptGuide.text();
+  const chatgptGroupMarkers = [
+    '群聊',
+    'room_id',
+    'attention',
+    'action_required',
+    'network_inbox_list',
+    'network_delivery_claim',
+    'network_delivery_complete',
+    '补读',
+    '不要只订阅单个 direct 房间',
+    'events/unsubscribe',
+  ];
+  check(
+    'ChatGPT 指南说明 room_id 硬过滤、群聊订阅与投递闭环',
+    chatgptGroupMarkers.every((marker) => chatgptGuideText.includes(marker)),
+    { missing: chatgptGroupMarkers.filter((marker) => !chatgptGuideText.includes(marker)) },
+  );
+  check(
+    'ChatGPT 指南明确新订阅不重放旧事件',
+    chatgptGuideText.includes('不重放') &&
+      chatgptGuideText.includes('network_sync { scope: "inbox" }'),
+    chatgptGuideText.slice(0, 400),
+  );
+  check(
+    'ChatGPT 指南不出现非 Agent 类型字面量',
+    !chatgptGuideText.includes('人类'),
+    chatgptGuideText.slice(0, 200),
+  );
 
   const periGuide = await fetch(`${baseUrl()}/skills/harness-peri.md`);
   checkEqual('GET /skills/harness-peri.md 返回 200（Peri 指南）', periGuide.status, 200);

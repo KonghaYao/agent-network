@@ -133,6 +133,98 @@ export async function runEventsAcceptance(input: {
     );
     checkEqual('events/unsubscribe HTTP 200', unsubscribed.status, 200);
     check('events/unsubscribe 返回空结果', unsubscribed.body.error === undefined, unsubscribed.body);
+
+    // 群聊：省略 room_id，只按 attention 订阅；群聊待办同样走 claim/complete 闭环。
+    await callTool(agentA.client, 'network_contact_add', {
+      request_id: newRequestId('contact'),
+      actor_id: b.actor_id,
+    });
+    await callTool(agentB.client, 'network_contact_add', {
+      request_id: newRequestId('contact'),
+      actor_id: a.actor_id,
+    });
+    const group = await callTool<RoomDetail>(agentA.client, 'network_room_create', {
+      request_id: newRequestId('room'),
+      kind: 'group',
+      members: [b.actor_id],
+      title: 'Events 验收群聊',
+    });
+    const groupId = group.room.room_id;
+    const groupCallbackUrl = input.receiver.url('/callback', `?group=${crypto.randomUUID()}`);
+    const groupSubscribe = await rawRpc(
+      'events/subscribe',
+      {
+        name: 'agentnet.message.created',
+        arguments: { attention: 'action_required' },
+        delivery: { mode: 'webhook', url: groupCallbackUrl, secret: input.secret },
+        cursor: null,
+        ttlMs: 3_600_000,
+      },
+      { token: tokenB },
+    );
+    checkEqual('群聊 events/subscribe HTTP 200', groupSubscribe.status, 200);
+    const groupSubscription = groupSubscribe.body.result as SubscribeResult | undefined;
+    check('群聊 events/subscribe 返回订阅 id', typeof groupSubscription?.id === 'string');
+
+    const groupVerification = await input.receiver.waitForRequest(
+      (request) => request.isVerification && request.query.includes('group='),
+      '等待群聊 MCP Events challenge',
+    );
+    check('群聊 challenge 请求签名合法', verifyWebhookSignature(input.secret, groupVerification));
+    checkEqual(
+      '群聊 challenge 带 X-MCP-Subscription-Id',
+      groupVerification.subscriptionId,
+      groupSubscription!.id,
+    );
+
+    const groupSent = await sendMessage(agentA, groupId, 'events group acceptance body', {
+      invoke: [b.actor_id],
+    });
+    const groupEvent = await input.receiver.waitForEvent(
+      (request) =>
+        request.subscriptionId === groupSubscription!.id &&
+        JSON.parse(request.body).data?.message_id === groupSent.message.message_id,
+      '等待群聊 MCP Events webhook',
+    );
+    check('群聊事件签名合法', verifyWebhookSignature(input.secret, groupEvent));
+    const groupOccurrence = JSON.parse(groupEvent.body) as {
+      data?: Record<string, unknown>;
+    };
+    checkEqual('群聊事件 room_kind=group', groupOccurrence.data?.room_kind, 'group');
+    checkEqual('群聊事件 payload room_id 正确', groupOccurrence.data?.room_id, groupId);
+    checkEqual('群聊事件 delivery_id 正确', groupOccurrence.data?.delivery_id, groupSent.delivery_ids[0]);
+    checkEqual('群聊事件 attention 正确', groupOccurrence.data?.attention, 'action_required');
+
+    const groupDeliveryId = groupSent.delivery_ids[0]!;
+    const groupClaimed = await callTool<Delivery>(agentB.client, 'network_delivery_claim', {
+      request_id: newRequestId('claim'),
+      delivery_id: groupDeliveryId,
+    });
+    checkEqual('群聊 webhook 触发的 delivery 可 claim', groupClaimed.state, 'claimed');
+    const groupCompleted = await callTool<{ delivery: Delivery }>(
+      agentB.client,
+      'network_delivery_complete',
+      {
+        request_id: newRequestId('complete'),
+        delivery_id: groupDeliveryId,
+        attempt: groupClaimed.attempt,
+        claim_id: groupClaimed.claim_id,
+        final_body: 'events group acceptance done',
+      },
+    );
+    checkEqual('群聊 webhook 触发的 delivery 可 complete', groupCompleted.delivery.state, 'completed');
+
+    const groupUnsubscribed = await rawRpc(
+      'events/unsubscribe',
+      {
+        name: 'agentnet.message.created',
+        arguments: { attention: 'action_required' },
+        delivery: { mode: 'webhook', url: groupCallbackUrl },
+      },
+      { token: tokenB },
+    );
+    checkEqual('群聊 events/unsubscribe HTTP 200', groupUnsubscribed.status, 200);
+    check('群聊 events/unsubscribe 返回空结果', groupUnsubscribed.body.error === undefined);
   } finally {
     await agentA.close();
     await agentB.close();

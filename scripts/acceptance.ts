@@ -1163,6 +1163,63 @@ async function main(): Promise<void> {
       groupHumanInbox.items,
     );
 
+    // 群聊 delivery 与单聊共用回执状态：pending → claimed → completed。
+    const groupDeliveryA = groupInboxA.items.find(
+      (item) => item.message_id === groupSend.message.message_id && item.recipient_id === a.actor_id,
+    );
+    const groupDeliveryB = groupInboxB.items.find(
+      (item) => item.message_id === groupSend.message.message_id && item.recipient_id === b.actor_id,
+    );
+    checkEqual('群聊 delivery 初始为 pending', groupDeliveryA?.state, 'pending');
+    const groupClaimedA = await callTool<Delivery>(agentA.client, 'network_delivery_claim', {
+      request_id: newRequestId('claim'),
+      delivery_id: groupDeliveryA!.delivery_id,
+    });
+    const groupClaimedHistory = await callTool<HistoryPage>(humanC.client, 'network_history_list', {
+      room_id: webGroupId,
+      limit: 20,
+    });
+    const groupClaimedRow = groupClaimedHistory.items.find(
+      (item) => item.message_id === groupSend.message.message_id,
+    );
+    checkEqual('群聊 claim 后发送方 history 显示 claimed 回执', groupClaimedRow?.delivery_states.claimed, 1);
+    checkEqual('群聊 claim 后另一条投递仍为 pending', groupClaimedRow?.delivery_states.pending, 1);
+    await callTool(agentA.client, 'network_delivery_complete', {
+      request_id: newRequestId('complete'),
+      delivery_id: groupDeliveryA!.delivery_id,
+      attempt: groupClaimedA.attempt,
+      claim_id: groupClaimedA.claim_id,
+      final_body: 'group completed by A',
+    });
+    const groupCompletedHistory = await callTool<HistoryPage>(humanC.client, 'network_history_list', {
+      room_id: webGroupId,
+      limit: 20,
+    });
+    const groupCompletedRow = groupCompletedHistory.items.find(
+      (item) => item.message_id === groupSend.message.message_id,
+    );
+    checkEqual('群聊 complete 后发送方 history 显示 completed 回执', groupCompletedRow?.delivery_states.completed, 1);
+    const groupClaimedB = await callTool<Delivery>(agentB.client, 'network_delivery_claim', {
+      request_id: newRequestId('claim'),
+      delivery_id: groupDeliveryB!.delivery_id,
+    });
+    await callTool(agentB.client, 'network_delivery_complete', {
+      request_id: newRequestId('complete'),
+      delivery_id: groupDeliveryB!.delivery_id,
+      attempt: groupClaimedB.attempt,
+      claim_id: groupClaimedB.claim_id,
+      final_body: 'group completed by B',
+    });
+    const groupAllCompletedHistory = await callTool<HistoryPage>(humanC.client, 'network_history_list', {
+      room_id: webGroupId,
+      limit: 20,
+    });
+    const groupAllCompletedRow = groupAllCompletedHistory.items.find(
+      (item) => item.message_id === groupSend.message.message_id,
+    );
+    checkEqual('群聊所有投递完成后 completed 回执为 2', groupAllCompletedRow?.delivery_states.completed, 2);
+    checkEqual('群聊所有投递完成后没有 pending 回执', groupAllCompletedRow?.delivery_states.pending, undefined);
+
     const mentionSend = await sendMessage(
       humanC,
       webGroupId,
