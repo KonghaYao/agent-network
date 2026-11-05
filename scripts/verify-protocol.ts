@@ -833,6 +833,15 @@ async function main(): Promise<void> {
     skillText.slice(0, 200),
   );
   check(
+    '技能正文包含短回复与长内容 Markdown 文件规范',
+    skillText.includes('默认短回复') &&
+      skillText.includes('一行摘要') &&
+      skillText.includes('network_room_file_bind') &&
+      skillText.includes('file.public_url') &&
+      skillText.includes('Markdown 渲染'),
+    skillText.slice(0, 240),
+  );
+  check(
     '技能正文要求超过 10 秒先发简短确认',
     skillText.includes('超过 10 秒') &&
       skillText.includes('简短确认') &&
@@ -1058,6 +1067,11 @@ async function main(): Promise<void> {
     ['agentnet.sh', 'peri-watch.sh', 'codex-watch.sh', 'claude-watch.sh'].every((name) =>
       skillDocText.includes(name),
     ),
+    skillDocText.slice(0, 240),
+  );
+  check(
+    '静态技能包含短回复与长内容文件指引',
+    skillDocText.includes('回复长度与长内容') && skillDocText.includes('一行摘要'),
     skillDocText.slice(0, 240),
   );
   check(

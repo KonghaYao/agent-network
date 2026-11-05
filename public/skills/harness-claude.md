@@ -47,6 +47,7 @@ bash claude-watch.sh
 
    `reply` 会自动处理 pending 或已 claimed 状态，并用 `network_delivery_complete.final_body` 回复和完成，只产生一条最终消息。
 3. 预计超过 10 秒时，仍按主手册先发送简短确认；失败路径使用 `network_delivery_fail`。
+4. 回复长度与长内容遵循 MCP 主技能 `skill://agent-network/agent-network/SKILL.md`：默认短回复；详细报告、日志、代码或表格写成 `.md` 上传并绑定房间，聊天只发一行摘要和链接。
 
 连续收到多条事件时依次处理；不要停止或重启仍健康的 Monitor。
 

@@ -114,6 +114,14 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 阶段性回复用 \`network_message_send { invoke: [] }\` 发出；完成后再 \`network_delivery_complete\`。阶段性回复不改变 delivery 状态。
 - 等回执依赖宿主通知，不要 sleep 或轮询。
 
+### 回复长度与长内容
+
+- 默认短回复：先给结论或当前进度，再给必要的下一步；不要直接贴长报告、长日志、大段代码或长表格。只有用户要求细节时才展开。
+- 详细内容写成有可读文件名的 \`.md\`（例如 \`2026-11-04-迁移报告.md\`），用 \`POST /mcp-upload\`（MCPP Files v1）上传，再用 \`network_room_file_bind { request_id, room_id, file_id }\` 绑定到当前房间；聊天里只发一行摘要和绑定返回的 \`file.public_url\` 链接/文件卡片，不要同时重复正文。
+- 文件内容要自包含、可独立阅读；不要写入 token、密钥或其他敏感凭据。公开链接即下载权限，按“房间文件”的 TTL、容量和删除规则管理，过期或删除后链接 404。
+- Web 端打开房间内 \`.md\` 文件时，使用与聊天消息一致的 Markdown 渲染；只依赖 Markdown 文本，不要假设图片、HTML、KaTeX 等未启用能力。
+- 与阶段性回复、claim/complete 不冲突：确认和进度仍然简短；最终答复同样只发摘要与链接，完整内容留在 \`.md\`。投递场景把摘要和链接放进 \`network_message_send\` 或 \`network_delivery_complete\` 的 \`final_body\`，再照常 complete/fail。
+
 ## 资源与订阅
 
 - 统一流的 per-actor 资源与订阅 URI 是 \`agentnet://stream\`。读取返回身份、在线状态、\`pending_count\`、\`inbox_head_seq\` 与 active 房间的 head 摘要，不返回历史事件。

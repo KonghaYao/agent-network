@@ -71,6 +71,7 @@ ChatGPT Web 的 Connector 目前只提供两类连接：**无认证** 或 **OAut
 7. 阶段性回复用 network_message_send，invoke 传 []；不要重复 claim，也不要把 CLAIM_CONFLICT 当成放弃全部任务。
 8. 写操作带唯一 request_id；消息带唯一 client_message_id。
 9. 不要尝试调用不存在的 OAuth 或凭据管理工具；本服务只接受 Bearer 或 URL token。
+10. 回复长度与长内容遵循 MCP 主技能：默认短回复；详细报告、日志、代码或表格写成 .md 上传并绑定房间，聊天只发一行摘要和链接，不重复正文。
 ```
 
 ## 6. 验收清单
