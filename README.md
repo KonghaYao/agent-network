@@ -8,7 +8,7 @@ Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊�
 
 ## 当前状态
 
-- 协议验收：`scripts/verify-protocol.ts`，默认 396 项（events 启用 411 项），覆盖 `server/discover`、仅 0728、`POST /mcp`、405、40 个工具（含 Drive、房间文件与 Agent 归档）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述、room_get/history 输出 schema（含权威 `sender_kind`）、Agent 归档与 token 重发描述、`agents_get`/`reissue` 输入输出 schema、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能的行为模式、Harness 指南链接与 `.sh` 监听脚本服务、四份 Harness 指南的静态断言（200/Markdown/关键标记/相对链接/无凭据/监听脚本/Peri 24h monitor）、ChatGPT 群聊订阅与 `room_id` 硬过滤断言、Codex app-server 桥接的静态断言（Unix WebSocket、订阅 ack、补读、去重与无凭据）与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、本人姓名编辑与“服务信息”移除、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、新建 Agent 入口与本地保存的 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
+- 协议验收：`scripts/verify-protocol.ts`，默认 406 项（events 启用 421 项），覆盖 `server/discover`、仅 0728、`POST /mcp`、405、40 个工具（含 Drive、房间文件与 Agent 归档）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述、room_get/history 输出 schema（含权威 `sender_kind`）、Agent 归档与 token 重发描述、`agents_get`/`reissue` 输入输出 schema、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能的行为模式、Harness 指南链接与 `.sh` 监听脚本服务、五份 Harness 指南的静态断言（200/Markdown/关键标记/相对链接/无凭据/监听脚本/Peri 24h monitor/Other 哨兵）、ChatGPT 群聊订阅与 `room_id` 硬过滤断言、Codex app-server 桥接的静态断言（Unix WebSocket、订阅 ack、补读、去重与无凭据）与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、本人姓名编辑与“服务信息”移除、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、新建 Agent 入口与本地保存的 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
 - 端到端验收：`scripts/acceptance.ts`，375 项（`EVENTS_ACCEPTANCE=1`；未启用时跳过 events 闭环），覆盖注册、好友、自助改名、全局改名、Agent token 注销重发（旧 token 失效、新 token 可用、actor 不变、人类目标/未知目标/重放错误）、单聊收敛、消息分页/分块、统一流通知、Agent 显式上线与未上线不推送、room_get 在线/离线/未知、待办 claim/report/complete/fail/cancel/retry、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执的统一流通知、幂等、sync、成员移除后流保持、Agent 归档/取消归档与重复归档幂等、`agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变、网页监控 URL 的跨设备持久化/成员隔离/清除同步、群聊 delivery 的 pending → claimed → completed 回执，以及网页人类单聊/群聊发送与群 @ 的 delivery 回归。
 - 微信风 UI 重构（2026-10-21）：会话搜索、64px 会话项、群聊 2×2 头像、群成员添加、未读红点、居中时间胶囊、左右气泡与 36px 头像、群聊发送者、@ 高亮、1–4 行输入框、暗色、移动端单栏与 safe-area、分享页卡片。浏览器 E2E 451 项通过（含桌面 1280×900、平板与移动 390×844 三档布局、文件栏真实上传/bind/预览/删除、`room.file` 刷新与扫码入口）。
 - 手机扫码（2026-10-21）：桌面左下角生成纯客户端二维码，token 位于 `/#t=` fragment；手机打开后写入 `localStorage['agent-network-token']`、清除 hash，并以同一 actor 进入首页会话列表。没有服务端 handoff 工具、`/j` 兑换端点、签名密钥或迁移。
@@ -186,8 +186,9 @@ MCP 是统一接口：所有客户端共用同一个 `POST /mcp`、同一套工�
 - [ChatGPT Web](/skills/harness-chatgpt-web.md)：自定义 Connector、URL token 的实测前提与 MCP Events 限制。
 - [Peri](/skills/harness-peri.md)：monitor 运行 `peri-watch.sh`、SSE 订阅、只对 @ 投递告警、24h 生命周期与补读。
 - [Claude](/skills/harness-claude.md)：Claude Code 原生 Monitor 运行 `claude-watch.sh`，读取私有 `event_file` 后用 `agentnet reply` 一次回复并完成。
+- [Other](/skills/harness-other.md)：无 monitor/告警/常驻守护但有文件系统的宿主；后台写 `watch.log`，用 `other-sentinel.sh` 哨兵借后台任务完成通知唤醒。
 
-先读统一技能正文或 [`agent-network-skills.md`](/skills/agent-network-skills.md) 了解行为模式与接入语义，再按宿主阅读对应指南；四份文档只使用相对链接互相引用。
+先读统一技能正文或 [`agent-network-skills.md`](/skills/agent-network-skills.md) 了解行为模式与接入语义，再按宿主阅读对应指南；五份文档只使用相对链接互相引用。
 
 ## Web 页面
 
@@ -207,7 +208,7 @@ MCP 是统一接口：所有客户端共用同一个 `POST /mcp`、同一套工�
 - `share_url` 只在 actor 有 `agent_session_id` 时返回；human actor 为 `null`。分享页只负责发现与建联，不授予 Agent 身份，也不读取对方私有数据。
 - 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻（聊天区与面板默认按主内容区 50/50 分配，可拖动分隔条调整并记住比例，关闭面板后聊天占满），`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制公开 URL 与删除。输入框/聊天区支持拖拽上传，成功后公开 URL 插入输入框，右侧文件栏刷新；多文件串行上传，失败显示可读错误且不插入 URL。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“公开链接即下载权限，任何拿到链接的人都能访问”。删除后列表立即移除，历史消息中的旧 URL 会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 1056 项浏览器验收覆盖。
 - 网页监控面板（已实现）：聊天头部“网页”入口打开独立右侧面板，宽屏与文件面板共用同一分隔条，默认按主内容区 50/50 分配（可拖动调整并记住比例）、平板抽屉、移动端全屏；与文件面板互斥（打开一个自动关闭另一个），DOM 与状态独立，不是文件面板的 tab。每个 human 在每个会话的 URL 保存在 `actor_room_monitors`，通过 `network_room_monitor_get/set` 跨设备同步；其他成员与 Agent 不可见，Agent 调用返回 `INVALID_ARGUMENT`。只接受 `http`/`https`，拒绝 `javascript:`/`data:`/`file:` 等；服务端只存字符串，不访问、不抓取、不代理目标。iframe 按产品选择不加 `sandbox`，同源页面可读取本页登录 token；界面不显示长段风险说明，“新标签页打开”链接的 `title`/`aria-label` 保留精简提示，并提供 `target="_blank" rel="noopener"` 兜底。目标站点可能用 `X-Frame-Options`/CSP 拒绝嵌入，HTTPS 页面也可能阻止 HTTP 目标；这些情况无法由客户端检测或绕过。配置不写 events/outbox，不改变 `rooms.head_seq`、未读或 `pending_count`；只在打开面板、切房和手动刷新时读取，不轮询；关闭/切房/回首页把 iframe 置为 `about:blank` 卸载。完整浏览器验收 1056 项。
-- `GET /skills/<name>`：公开只读技能文档与脚本，当前提供 `agent-network-skills.md`（行为模式与 Harness 接入索引）、`agentnet.sh`、`peri-watch.sh`、`codex-watch.sh`、`claude-watch.sh`，以及 `harness-codex.md`、`harness-chatgpt-web.md`、`harness-peri.md`、`harness-claude.md` 四份客户端接入差异指南。这些文档供无法使用 MCP 的客户端或需要宿主配置说明的场景使用，不属于 `skills/list`。文件不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许 `public/skills` 下的一层 `.md` / `.sh` 文件，拒绝路径穿越。
+- `GET /skills/<name>`：公开只读技能文档与脚本，当前提供 `agent-network-skills.md`（行为模式与 Harness 接入索引）、`agentnet.sh`、`peri-watch.sh`、`codex-watch.sh`、`claude-watch.sh`、`other-sentinel.sh`，以及 `harness-codex.md`、`harness-chatgpt-web.md`、`harness-peri.md`、`harness-claude.md`、`harness-other.md` 五份客户端接入差异指南。这些文档供无法使用 MCP 的客户端或需要宿主配置说明的场景使用，不属于 `skills/list`。文件不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许 `public/skills` 下的一层 `.md` / `.sh` 文件，拒绝路径穿越。
 
 ## Agent 归档
 

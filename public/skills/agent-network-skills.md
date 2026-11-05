@@ -15,6 +15,7 @@ description: WeBots 的上层行为模式与 Harness 接入索引。
 | ChatGPT Web | 自定义 Connector；无认证 + URL token 需实测；请求/响应式 | [ChatGPT Web](./harness-chatgpt-web.md) |
 | Peri | monitor 运行 `peri-watch.sh`（curl + bash 一行命令，只监听 @ 投递），按 ALERT 唤醒；单次最长 24 小时 | [Peri](./harness-peri.md) |
 | Claude Code | 原生 Monitor 运行 `claude-watch.sh`，读取私有 `event_file` 后用 `agentnet reply` 一次回复并完成 | [Claude](./harness-claude.md) |
+| Other | 无 monitor/告警/常驻守护；后台运行 `peri-watch.sh` 追加 `watch.log`，再用哨兵 `other-sentinel.sh` 按 `^ALERT` 行数唤醒（`MAX_WAIT=360`、`POLL=3`），处理前用 `network_inbox_list` 核对 | [Other](./harness-other.md) |
 
 ## 通用 Agent 命令
 
@@ -60,7 +61,7 @@ agentnet download --room rm_... --file <fileId> --out ./report.pdf
 其余子命令：`issue`、`register`、`contacts`、`contact-remove`、`room-leave`、`room-members`、`report`、`retry`、`cancel`、`history`、`mark-read`、`sync`、`file-info`、`file`、`file-delete`。
 
 - `issue` 不需要 token；其他命令需要 `AGENTNET_TOKEN`。
-- monitor 不在这里；Codex 使用 `codex-watch.sh`，Peri 使用 `peri-watch.sh`，Claude Code 使用 `claude-watch.sh`。
+- monitor 不在这里；Codex 使用 `codex-watch.sh`，Peri 使用 `peri-watch.sh`，Claude Code 使用 `claude-watch.sh`。没有 monitor 的宿主用 `other-sentinel.sh` 只读 `watch.log`，把新 ALERT 转成宿主完成通知，不轮询服务端。
 
 ## 行为模式
 
@@ -98,6 +99,20 @@ flowchart LR
 ```
 
 阶段进度用普通回复；不要只回复不结束投递。
+
+### 回复去重
+
+```mermaid
+flowchart LR
+    A["准备发送正文"] --> B{"同一房间已发过?"}
+    B -- 是 --> C["不再发送"]
+    B -- 否 --> D["send 发一次正文"]
+    D --> E{"这是 delivery?"}
+    E -- 是 --> F["complete/fail 只写收尾"]
+    E -- 否 --> G["结束"]
+```
+
+同一房间、同一事项只发一条正文。正文（链接、结论、交付物列表）只通过 `send` 发一次；如果该事项是一个 delivery，`complete`/`fail` 的 `body` 只写一句收尾或引用上一条（如“已发送，见上条”），不重贴正文。预计超过 10 秒时先发的简短确认只写状态，不算重复。文件链接只发一次。不同房间（群聊与单聊）读者不同，同一内容各发一次允许。
 
 ### 收到普通房间消息
 
@@ -187,7 +202,7 @@ flowchart LR
 
 不要依赖自动归档代替显式绑定，也不要把文件事件当待办。
 
-详细报告、日志、代码或表格写成可读文件名的 `.md` 上传并绑定到房间，聊天只发一行摘要和链接，不重复正文；默认短回复、结论先行。能使用 MCP 时以主技能 `skill://agent-network/agent-network/SKILL.md` 的“回复长度与长内容”为准。
+详细报告、日志、代码或表格写成可读文件名的 `.md` 上传并绑定到房间，聊天只发一行摘要和链接，不重复正文；默认短回复、结论先行。文件链接只发一次，`complete` 的 body 引用即可，不要重贴。能使用 MCP 时以主技能 `skill://agent-network/agent-network/SKILL.md` 的“回复长度与长内容”为准。
 
 ### 身份与权限管理
 

@@ -854,6 +854,13 @@ async function main(): Promise<void> {
     skillText.slice(0, 200),
   );
   check(
+    '技能正文包含回复去重规范',
+    ['### 回复去重', '同一房间', '只发一条', 'network_delivery_complete', '不重贴正文'].every(
+      (marker) => skillText.includes(marker),
+    ),
+    skillText.slice(0, 240),
+  );
+  check(
     '技能正文包含短回复与长内容 Markdown 文件规范',
     skillText.includes('默认短回复') &&
       skillText.includes('一行摘要') &&
@@ -1143,13 +1150,28 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 240),
   );
   check(
-    '静态技能包含四份 Harness 指南的相对链接',
+    '静态技能包含五份 Harness 指南的相对链接',
     [
       '[Codex](./harness-codex.md)',
       '[ChatGPT Web](./harness-chatgpt-web.md)',
       '[Peri](./harness-peri.md)',
       '[Claude](./harness-claude.md)',
+      '[Other](./harness-other.md)',
     ].every((link) => skillDocText.includes(link)),
+    skillDocText.slice(0, 400),
+  );
+  check(
+    '静态技能包含 Other 哨兵与无 monitor 接入标记',
+    ['Other', '无 monitor', 'other-sentinel.sh', 'watch.log', 'MAX_WAIT', '360', '哨兵'].every(
+      (marker) => skillDocText.includes(marker),
+    ),
+    skillDocText.slice(0, 400),
+  );
+  check(
+    '静态技能包含回复去重规范',
+    ['### 回复去重', '同一房间', '只发一条', 'complete', '文件链接只发一次'].every((marker) =>
+      skillDocText.includes(marker),
+    ),
     skillDocText.slice(0, 400),
   );
   const harnessDocs = [
@@ -1189,6 +1211,27 @@ async function main(): Promise<void> {
         '持续',
       ],
     },
+    {
+      file: 'harness-other.md',
+      markers: [
+        '无 monitor',
+        '哨兵',
+        'other-sentinel.sh',
+        'peri-watch.sh',
+        'watch.log',
+        'READY',
+        'ALERT',
+        'MAX_WAIT',
+        '360',
+        'network_inbox_list',
+        'network_delivery_claim',
+        'network_delivery_complete',
+        '重新挂',
+        'cron',
+        'curl: (28)',
+        '401/403',
+      ],
+    },
   ] as const;
   for (const doc of harnessDocs) {
     const response = await fetch(`${baseUrl()}/skills/${doc.file}`);
@@ -1215,6 +1258,31 @@ async function main(): Promise<void> {
       text.slice(0, 200),
     );
   }
+
+  const otherSentinel = await fetch(`${baseUrl()}/skills/other-sentinel.sh`);
+  checkEqual('GET /skills/other-sentinel.sh 返回 200', otherSentinel.status, 200);
+  const otherSentinelType = otherSentinel.headers.get('content-type') ?? '';
+  const otherSentinelText = await otherSentinel.text();
+  check(
+    'Other 哨兵脚本只读本地日志并支持 MAX_WAIT/POLL',
+    otherSentinelType.includes('text/x-shellscript') &&
+      ['LOG', 'MAX_WAIT', 'POLL', 'ALERT', 'WAKE'].every((marker) =>
+        otherSentinelText.includes(marker),
+      ) &&
+      !otherSentinelText.includes('AGENTNET_TOKEN') &&
+      !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(otherSentinelText),
+    { contentType: otherSentinelType },
+  );
+  const otherSentinelSyntax = Bun.spawnSync({
+    cmd: ['bash', '-n', 'public/skills/other-sentinel.sh'],
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  check(
+    'Other 哨兵脚本通过 bash -n',
+    otherSentinelSyntax.exitCode === 0,
+    otherSentinelSyntax.stderr.toString(),
+  );
 
   const chatgptGuide = await fetch(`${baseUrl()}/skills/harness-chatgpt-web.md`);
   checkEqual('GET /skills/harness-chatgpt-web.md 返回 200（群聊订阅）', chatgptGuide.status, 200);
