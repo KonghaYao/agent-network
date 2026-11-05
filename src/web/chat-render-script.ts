@@ -122,9 +122,19 @@ function claimStale(item) {
 }
 
 function applyReceipt(receipt, item) {
+  const scroller = messagesElement;
+  const scrollerTop = scroller ? scroller.getBoundingClientRect().top : 0;
+  const aboveViewport = scroller ? receipt.getBoundingClientRect().bottom < scrollerTop : false;
+  const beforeHeight = receipt.getBoundingClientRect().height;
   const label = receipt.firstElementChild;
   if (label) label.textContent = receiptText(item);
   receipt.classList.toggle('stale', claimStale(item));
+  // 异步回执文本变化可能加高；上翻阅读时补偿锚点，pinned 时由控制器补钉底。
+  const afterHeight = receipt.getBoundingClientRect().height;
+  if (!scrollController.isPinned() && aboveViewport && afterHeight !== beforeHeight) {
+    scrollController.adjustScroll(afterHeight - beforeHeight);
+  }
+  scrollController.noteContentChanged();
 }
 
 /** 未到阈值时用一次性本地定时器补上提示，页面刷新会重新计算。 */
@@ -299,13 +309,20 @@ function renderMessageList(items) {
   if (!messagesElement) return;
   resetMarkdownHandles();
   resetMessageFileCards();
+  scrollController.beginContentChange();
   messagesElement.replaceChildren();
   appendHistory(messagesElement, items);
+  ensureMessagesEnd();
+  scrollController.noteContentChanged();
 }
 
-/** 连续消息间隔超过 5 分钟时插入居中时间胶囊；presence 行自带时间。 */
-function appendHistory(container, items) {
-  let previous = 0;
+/**
+ * 连续消息间隔超过 5 分钟时插入居中时间胶囊；presence 行自带时间。
+ *
+ * previousTimestamp 供预置历史块使用；返回值是本段最后一条的时间。
+ */
+function appendHistory(container, items, options) {
+  let previous = Number(options && options.previousTimestamp) || 0;
   for (const item of items) {
     const created = timelineTimestamp(item);
     if (item.kind === 'presence') {
@@ -316,6 +333,7 @@ function appendHistory(container, items) {
     }
     if (created) previous = created;
   }
+  return previous;
 }
 
 async function readMessage(messageId) {

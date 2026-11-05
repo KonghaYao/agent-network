@@ -272,7 +272,11 @@ function handleStreamEventFrame(payload) {
         // 服务端已排除发送者；保留防御，避免自己的发送刷新造成重复渲染。
         if (selfId && rawItem.sender_id === selfId) break;
         refreshList = true;
-        if (roomId && roomId === activeRoomId) refreshRoom = true;
+        if (roomId && roomId === activeRoomId) {
+          refreshRoom = true;
+          // 上翻阅读时不打断；只显示通用“有新消息”，不伪造条数。
+          if (!scrollController.isPinned()) scrollController.noteNewMessage();
+        }
         break;
       case 'delivery.created':
       case 'delivery.updated':

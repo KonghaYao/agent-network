@@ -259,7 +259,18 @@ export const APP_STYLE = `
     border: 0; background: transparent; color: var(--wx-link); font-size: 11px; }
   #older[hidden] { display: none; }
   .messages { flex: 1 1 auto; min-height: 0; overflow-y: auto; list-style: none;
-    margin: 0; padding: 12px 20px 18px; }
+    margin: 0; padding: 12px 20px 18px;
+    overflow-anchor: none; overscroll-behavior: contain; scrollbar-gutter: stable; }
+  /* 消息末尾的 1px 观察点：只参与 IntersectionObserver，不占视觉空间。 */
+  .messages-end { height: 1px; margin: 0; padding: 0; list-style: none; }
+  .jump-latest { position: absolute; left: 50%; z-index: 5;
+    bottom: calc(70px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    display: inline-flex; align-items: center; gap: 4px; max-width: calc(100% - 32px);
+    padding: 7px 14px; border: 1px solid var(--wx-line); border-radius: 999px;
+    background: var(--wx-panel); color: var(--wx-link); font-size: 12px;
+    line-height: 1.2; white-space: nowrap; box-shadow: var(--wx-shadow); }
+  .jump-latest[hidden] { display: none; }
+  .jump-latest:hover { background: var(--wx-hover); }
   .msg-time { margin: 10px 0; text-align: center; font-size: 11px; color: var(--wx-muted); }
   .msg-time span { padding: 2px 7px; border-radius: 3px; background: rgb(0 0 0 / 4%); }
   /* 系统行：上下线时间线与投递回执共用，居中、无头像/气泡。 */
@@ -267,7 +278,7 @@ export const APP_STYLE = `
   .msg-system span { max-width: 88%; padding: 2px 8px; border-radius: 3px;
     background: rgb(0 0 0 / 4%); color: var(--wx-muted); font-size: 11px;
     text-align: center; overflow-wrap: anywhere; }
-  .msg { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 18px; }
+  .msg { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 18px; min-width: 0; }
   .msg.mine { flex-direction: row-reverse; }
   .msg-avatar { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 6px;
     display: grid; place-items: center; overflow: hidden; color: #fff;
@@ -422,6 +433,7 @@ export const APP_STYLE = `
     .chat-head { min-height: calc(56px + env(safe-area-inset-top));
       padding-top: env(safe-area-inset-top); }
     .messages { padding: 10px 12px 14px; }
+    .jump-latest { bottom: calc(64px + env(safe-area-inset-bottom)); }
     .msg-content { max-width: 74%; }
     .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
     .composer textarea { font-size: 16px; }

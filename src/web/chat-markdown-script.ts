@@ -110,11 +110,11 @@ function upgradeBubbleMarkdown(bubble, text, options) {
     // 期间展开了全文或切换了房间：旧请求不得覆盖新文本。
     if (bubble.__markdownText !== text) return false;
     const scroller = messagesElement;
-    const wasNearBottom = isNearBottom();
+    const wasPinned = scrollController.isPinned();
     const scrollerTop = scroller ? scroller.getBoundingClientRect().top : 0;
-    const aboveViewport = scroller
-      ? bubble.getBoundingClientRect().bottom < scrollerTop
-      : false;
+    const bubbleTop = bubble.getBoundingClientRect().top;
+    // 包含“顶部已越过视口上沿”的气泡：它加高会推动下方可见内容。
+    const startsAboveViewport = scroller ? bubbleTop < scrollerTop : false;
     const beforeHeight = bubble.getBoundingClientRect().height;
     const mountOptions = { mentions: mentionNames(), preview: preview };
     let handle = markdownHandles.get(bubble);
@@ -136,11 +136,11 @@ function upgradeBubbleMarkdown(bubble, text, options) {
     }
     clearBubbleMarkdownFailure(bubble);
     const afterHeight = bubble.getBoundingClientRect().height;
-    if (wasNearBottom) {
-      if (scroller) scroller.scrollTop = scroller.scrollHeight;
-    } else if (aboveViewport && scroller) {
-      scroller.scrollTop += afterHeight - beforeHeight;
+    if (!wasPinned && startsAboveViewport && scroller) {
+      // 上翻阅读时补偿视口上沿以上的气泡；控制器随后用阅读锚点校正残差。
+      scrollController.adjustScroll(afterHeight - beforeHeight);
     }
+    scrollController.noteContentChanged();
     return true;
   });
 }

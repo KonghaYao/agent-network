@@ -494,6 +494,7 @@ function applyMessageFileMeta(card, meta) {
   const download = card.querySelector('.msg-file-download');
   if (download) download.setAttribute('download', name);
   updateMessageFileActions(card, meta);
+  scrollController.noteContentChanged();
 }
 
 function applyMessageFileFailure(card) {
@@ -507,6 +508,7 @@ function applyMessageFileFailure(card) {
   }
   const sizeNode = card.querySelector('.msg-file-size');
   if (sizeNode) sizeNode.textContent = '';
+  scrollController.noteContentChanged();
 }
 
 function openMessageFilePreview(card) {

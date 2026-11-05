@@ -121,6 +121,14 @@ export const LIMITS = {
   webRequestTimeoutMs: 15_000,
   /** 网页收到房间通知后的刷新合并窗口（毫秒）。 */
   webRefreshDebounceMs: 300,
+  /** 网页消息区距底不超过该值时视为“跟随底部”。 */
+  webScrollStickyPx: 80,
+  /** 只有距底超过该值才因滚动事件取消跟随，避免 80/81 抖动。 */
+  webScrollUnpinPx: 120,
+  /** 滚轮/触摸上翻意图的最小位移（像素）。 */
+  webScrollIntentPx: 6,
+  /** 回到最新后的 mark_read 去抖窗口（毫秒）。 */
+  webScrollMarkReadDelayMs: 250,
   /** MCP Events 默认订阅寿命（毫秒）。 */
   eventsSubscriptionTtlMs: 24 * 60 * 60_000,
   /** MCP Events 最小授权寿命（毫秒）。 */

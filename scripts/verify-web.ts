@@ -678,6 +678,36 @@ async function waitUntil(
   throw new Error(`等待超时：${label}`);
 }
 
+async function bottomGap(page: Page): Promise<number> {
+  return (await page.evaluate(`(() => {
+    const node = document.getElementById('messages');
+    return node ? node.scrollHeight - node.scrollTop - node.clientHeight : 0;
+  })()`)) as number;
+}
+
+async function waitForBottom(page: Page, label: string, timeout = 8_000): Promise<void> {
+  await waitUntil(async () => (await bottomGap(page)) <= 2, label, timeout);
+}
+
+async function messagesScrollTop(page: Page): Promise<number> {
+  return (await page.evaluate(
+    `document.getElementById('messages') ? document.getElementById('messages').scrollTop : 0`,
+  )) as number;
+}
+
+/** 只统计当前房间的 mark_read，避免其他会话的定时已读干扰断言。 */
+async function markReadCalls(page: Page, roomId: string): Promise<number> {
+  return (await page.evaluate(`(window.__mcpCalls || []).filter(function (call) {
+    const args = call.body && call.body.params ? call.body.params.arguments : null;
+    return call.name === 'network_room_mark_read' && args && args.room_id === ${JSON.stringify(roomId)};
+  }).length`)) as number;
+}
+
+async function timelineMessageIds(page: Page): Promise<string[]> {
+  return (await page.evaluate(`Array.from(document.querySelectorAll('#messages .msg'))
+    .map(function (node) { return node.getAttribute('data-message-id') || ''; })`)) as string[];
+}
+
 /** 用真实 MCPP Files 上传；返回真实 fileId 与公开地址。 */
 async function uploadRealFile(
   token: string,
@@ -2221,12 +2251,11 @@ async function main(): Promise<void> {
         (await messageCount(page)) >= 20,
         await messageCount(page),
       );
-      const restoredTop = (await page.evaluate(
-        `document.getElementById('messages') ? document.getElementById('messages').scrollTop : 0`,
-      )) as number;
-      check('缓存命中恢复滚动位置', Math.abs(restoredTop - savedTop) <= 60, {
+      await waitForBottom(page, '缓存命中进入仍滚到最新');
+      const restoredGap = await bottomGap(page);
+      check('缓存命中进入仍滚到最新消息', restoredGap <= 2, {
         savedTop,
-        restoredTop,
+        restoredGap,
       });
 
       await page.locator('#back').dispatchEvent('click');
@@ -6130,6 +6159,12 @@ async function main(): Promise<void> {
 
       const maxMessage = page.locator('#messages .msg').filter({ hasText: maxMarker });
       await sleep(300);
+      // 上翻查看旧卡片后先回到底部，新的 Agent 消息才会按粘底策略追加。
+      await page.evaluate(
+        `document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight`,
+      );
+      await sleep(150);
+      await waitForBottom(page, '文件卡片测试回到底部');
       headObserver.maxActive = 0;
       headObserver.delayMs = 120;
       await sendRoomMessage(data.agentAToken, cardRoomId, maxParts.join('\n'));
@@ -7156,11 +7191,9 @@ async function main(): Promise<void> {
         '首屏 AI 消息升级 Markdown',
         20_000,
       );
-      const bottomGap = (await scrollContext.page.evaluate(`(() => {
-        const node = document.getElementById('messages');
-        return node.scrollHeight - node.scrollTop - node.clientHeight;
-      })()`)) as number;
-      check('Markdown 升级后保持接近底部', bottomGap < 80, bottomGap);
+      await waitForBottom(scrollContext.page, 'Markdown 升级后回到底部', 10_000);
+      const markdownGap = await bottomGap(scrollContext.page);
+      check('Markdown 升级后保持底部', markdownGap <= 2, markdownGap);
 
       const anchor = scrollContext.page
         .locator('#messages .msg')
@@ -7186,7 +7219,7 @@ async function main(): Promise<void> {
       )) as number;
       check(
         '加载更早消息后视口不跳动',
-        Math.abs(anchorTopAfter - anchorTopBefore) <= 80,
+        Math.abs(anchorTopAfter - anchorTopBefore) <= 24,
         { anchorTopBefore, anchorTopAfter },
       );
       const scrollMetrics = (await scrollContext.page.evaluate(`(() => {
@@ -7352,6 +7385,448 @@ async function main(): Promise<void> {
         !((await recoverLong.locator('.bubble').textContent()) ?? '').includes('**下载**'),
       );
       await recover.context.close();
+    }
+
+    // 14. 消息区滚动：进入到底、粘底、上翻冻结、mark_read 门控、older 保留与长内容。
+    {
+      const scrollRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '滚动进入群',
+        members: [data.agentA.actor_id],
+      });
+      const scrollRoomId = scrollRoom.room.room_id;
+      const tableBody = (index: number): string =>
+        [
+          `**滚动表格 ${index}**`,
+          '',
+          '| 列 A | 列 B |',
+          '| --- | --- |',
+          ...Array.from({ length: 8 }, (_, row) => `| 行 ${index}.${row + 1} | 值 ${row + 1} |`),
+        ].join('\n');
+      const codeBody = (index: number): string =>
+        [
+          `**滚动代码 ${index}**`,
+          '',
+          '```js',
+          ...Array.from({ length: 10 }, (_, row) => `const value${row} = ${index + row};`),
+          '```',
+        ].join('\n');
+      const richBody = (index: number): string => {
+        if (index % 5 === 0) return tableBody(index);
+        if (index % 5 === 1) return codeBody(index);
+        return `**滚动消息 ${index}**\n\n滚动锚点 ${index}`;
+      };
+      for (let index = 1; index <= 60; index += 1) {
+        await rawTool(data.agentAToken, 'network_message_send', {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: scrollRoomId,
+          body: richBody(index),
+        });
+      }
+
+      // 14a. Markdown bundle 延迟 800ms：首条出现后 1s 内到底，升级完成仍贴底。
+      const enterContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      await enterContext.page.route('**/assets/chat-markdown.js*', async (route) => {
+        await sleep(800);
+        await route.continue();
+      });
+      await enterContext.page.goto(`${server.base}/c/${scrollRoomId}`);
+      await waitRoom(enterContext.page, scrollRoomId, '滚动进入群');
+      await enterContext.page.waitForFunction(
+        'document.querySelectorAll("#messages .msg").length > 0',
+        undefined,
+        { timeout: 15_000 },
+      );
+      const firstMessageAt = Date.now();
+      await waitUntil(
+        async () => (await bottomGap(enterContext.page)) <= 2,
+        '首条消息出现后 1s 内到底',
+        1_200,
+      );
+      const enterElapsed = Date.now() - firstMessageAt;
+      check('进入会话 1s 内滚到最新', enterElapsed <= 1_000, { enterElapsed });
+      checkEqual(
+        '消息区存在底部 sentinel',
+        await enterContext.page.locator('#messages-end.messages-end').count(),
+        1,
+      );
+      const enterMetrics = (await enterContext.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        return { scrollHeight: node.scrollHeight, clientHeight: node.clientHeight };
+      })()`)) as { scrollHeight: number; clientHeight: number };
+      check('进入会话内容足够长', enterMetrics.scrollHeight > enterMetrics.clientHeight + 400, enterMetrics);
+      await waitUntil(
+        async () => (await enterContext.page.locator('#messages .msg-markdown').count()) >= 30,
+        '延迟 Markdown 升级完成',
+        20_000,
+      );
+      await waitForBottom(enterContext.page, 'Markdown 升级后回到底部', 10_000);
+      const upgradedGap = await bottomGap(enterContext.page);
+      await sleep(1_000);
+      const settledGap = await bottomGap(enterContext.page);
+      check('延迟 Markdown 升级后贴底', upgradedGap <= 2, { upgradedGap });
+      check('等待 1s 后仍贴底', settledGap <= 2, { settledGap });
+      await enterContext.context.close();
+
+      // 14b. 文件卡片 HEAD 延迟 600ms：回填后仍贴底。
+      const fileRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '文件滚动群',
+        members: [data.agentA.actor_id],
+      });
+      const fileRoomId = fileRoom.room.room_id;
+      const fileSpecs: UploadSpec[] = Array.from({ length: 4 }, (_, index) => ({
+        name: `滚动附件 ${index + 1}.txt`,
+        mimeType: 'text/plain',
+        body: `fixture ${index + 1}`,
+      }));
+      const uploadedFiles = await seedRoomFiles(data.humanToken, server.base, fileRoomId, fileSpecs);
+      for (let index = 1; index <= 3; index += 1) {
+        await rawTool(data.agentAToken, 'network_message_send', {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: fileRoomId,
+          body: `文件滚动前置 ${index}\n\n${'内容 '.repeat(16)}`,
+        });
+      }
+      for (const [index, uploaded] of uploadedFiles.entries()) {
+        await rawTool(data.agentAToken, 'network_message_send', {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: fileRoomId,
+          body: `文件卡片 ${index + 1}：${uploaded.publicUrl}`,
+        });
+      }
+      const fileContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      const headObserver = await observeFileHeads(fileContext.page);
+      headObserver.delayMs = 600;
+      await fileContext.page.goto(`${server.base}/c/${fileRoomId}`);
+      await waitRoom(fileContext.page, fileRoomId, '文件滚动群');
+      await waitForBottom(fileContext.page, '文件卡片进入后贴底', 10_000);
+      await waitUntil(
+        async () => (await fileContext.page.locator('#messages .msg-file').count()) >= 4,
+        '文件卡片渲染完成',
+        15_000,
+      );
+      await waitUntil(
+        async () => headObserver.heads.length >= 4,
+        '文件卡片 HEAD 回填完成',
+        15_000,
+      );
+      await sleep(800);
+      await waitForBottom(fileContext.page, '文件卡片回填后贴底', 10_000);
+      const fileGap = await bottomGap(fileContext.page);
+      check('文件卡片 HEAD 回填后贴底', fileGap <= 2, { fileGap });
+      await fileContext.context.close();
+
+      // 14c. 用户上翻 40%：新消息冻结 DOM、保留红点、mark_read 不增加；按钮回到底部。
+      const readContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await readContext.page.goto(`${server.base}/c/${scrollRoomId}`);
+      await waitRoom(readContext.page, scrollRoomId, '滚动进入群');
+      await readContext.page.waitForFunction('document.querySelectorAll("#messages .msg").length >= 40');
+      await waitForBottom(readContext.page, '上翻测试初始到底');
+      await sleep(500);
+      const markReadBefore = await markReadCalls(readContext.page, scrollRoomId);
+      await readContext.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        node.scrollTop = Math.floor((node.scrollHeight - node.clientHeight) * 0.4);
+      })()`);
+      await sleep(250);
+      const frozenTop = await messagesScrollTop(readContext.page);
+      for (let index = 1; index <= 3; index += 1) {
+        await rawTool(data.agentAToken, 'network_message_send', {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: scrollRoomId,
+          body: `上翻冻结 ${index}`,
+        });
+      }
+      await waitForText(readContext.page, roomLink(scrollRoomId), '上翻冻结 3');
+      await waitUntil(
+        async () => readContext.page.locator('#jump-latest').isVisible(),
+        '上翻后出现回到最新按钮',
+        10_000,
+      );
+      await sleep(500);
+      const frozenTopAfter = await messagesScrollTop(readContext.page);
+      const frozenText = (await readContext.page.locator('#messages').textContent()) ?? '';
+      check('上翻时新消息不改变 scrollTop', Math.abs(frozenTopAfter - frozenTop) <= 2, {
+        frozenTop,
+        frozenTopAfter,
+      });
+      check('上翻时消息 DOM 冻结', !frozenText.includes('上翻冻结 3'));
+      check(
+        '回到最新按钮说明有新消息',
+        ((await readContext.page.locator('#jump-latest-label').textContent()) ?? '').includes('新消息'),
+      );
+      checkEqual(
+        '上翻时侧栏保留未读红点',
+        await readContext.page.locator(`${roomLink(scrollRoomId)} .unread`).count(),
+        1,
+      );
+      checkEqual(
+        '上翻时 mark_read 不增加',
+        await markReadCalls(readContext.page, scrollRoomId),
+        markReadBefore,
+      );
+      await readContext.page.locator('#jump-latest').click();
+      await waitForBottom(readContext.page, '点击回到最新后到底', 10_000);
+      await waitUntil(
+        async () => (await readContext.page.locator(`${roomLink(scrollRoomId)} .unread`).count()) === 0,
+        '点击回到最新后清除红点',
+        10_000,
+      );
+      checkEqual(
+        '点击回到最新后按钮消失',
+        await readContext.page.locator('#jump-latest').isVisible(),
+        false,
+      );
+      check(
+        '点击回到最新后显示新消息',
+        ((await readContext.page.locator('#messages').textContent()) ?? '').includes('上翻冻结 3'),
+      );
+      checkEqual(
+        '点击回到最新只补一次 mark_read',
+        await markReadCalls(readContext.page, scrollRoomId),
+        markReadBefore + 1,
+      );
+      await readContext.page.fill('#body', '上翻回归普通消息');
+      await readContext.page.locator('#send').click();
+      await waitForText(readContext.page, '#messages', '上翻回归普通消息');
+      checkEqual(
+        '上翻回归后普通消息只出现一次',
+        await readContext.page.locator('#messages .msg', { hasText: '上翻回归普通消息' }).count(),
+        1,
+      );
+      await waitForBottom(readContext.page, '发送后回到底部');
+      await readContext.context.close();
+
+      // 14d. 210 条长会话：三页 older 后新消息到达仍保留历史；锚点漂移 <=24。
+      const longRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '长会话滚动群',
+        members: [data.agentA.actor_id],
+      });
+      const longRoomId = longRoom.room.room_id;
+      for (let index = 1; index <= 210; index += 1) {
+        await rawTool(data.agentAToken, 'network_message_send', {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: longRoomId,
+          body: `**长消息 ${index}**\n\n长会话内容 ${index}`,
+        });
+      }
+      const longContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      await longContext.page.goto(`${server.base}/c/${longRoomId}`);
+      await waitRoom(longContext.page, longRoomId, '长会话滚动群');
+      await waitForBottom(longContext.page, '长会话进入到底', 15_000);
+      await sleep(500);
+      const longAnchor = longContext.page
+        .locator('#messages .msg')
+        .filter({ hasText: '长消息 200' })
+        .last();
+      await longAnchor.evaluate((node) => node.scrollIntoView({ block: 'start' }));
+      await sleep(300);
+      const longAnchorTopBefore = (await longAnchor.evaluate(
+        (node) => node.getBoundingClientRect().top,
+      )) as number;
+      for (let pageIndex = 1; pageIndex <= 3; pageIndex += 1) {
+        const beforeCount = await messageCount(longContext.page);
+        await longContext.page.locator('#older').click();
+        await waitUntil(
+          async () => (await messageCount(longContext.page)) >= beforeCount + 40,
+          `加载第 ${pageIndex} 页更早消息`,
+          15_000,
+        );
+        await sleep(250);
+      }
+      await waitUntil(
+        async () => (await longContext.page.locator('#messages .msg-markdown').count()) >= 160,
+        '三页历史 Markdown 升级',
+        20_000,
+      );
+      await sleep(500);
+      const longAnchorTopAfter = (await longAnchor.evaluate(
+        (node) => node.getBoundingClientRect().top,
+      )) as number;
+      check(
+        '三页 older 与 Markdown 升级后锚点漂移 <=24',
+        Math.abs(longAnchorTopAfter - longAnchorTopBefore) <= 24,
+        { longAnchorTopBefore, longAnchorTopAfter },
+      );
+      check('加载 older 后不自动滚底', (await bottomGap(longContext.page)) > 100, {
+        gap: await bottomGap(longContext.page),
+      });
+      const loadedLongCount = await messageCount(longContext.page);
+      check('三页 older 已加载 200 条以上', loadedLongCount >= 200, { loadedLongCount });
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: longRoomId,
+        body: '长会话新消息',
+      });
+      await waitForText(longContext.page, roomLink(longRoomId), '长会话新消息');
+      await waitUntil(
+        async () => longContext.page.locator('#jump-latest').isVisible(),
+        '长会话上翻时出现新消息按钮',
+        10_000,
+      );
+      await sleep(500);
+      checkEqual(
+        '上翻时长会话 DOM 不追加新消息',
+        await messageCount(longContext.page),
+        loadedLongCount,
+      );
+      check(
+        '上翻冻结时旧历史仍在',
+        ((await longContext.page.locator('#messages').textContent()) ?? '').includes('长消息 120'),
+      );
+      await longContext.page.locator('#jump-latest').click();
+      await waitForText(longContext.page, '#messages', '长会话新消息');
+      await waitForBottom(longContext.page, '长会话点击按钮后到底', 15_000);
+      const mergedIds = await timelineMessageIds(longContext.page);
+      check(
+        '新消息到达后仍保留已加载历史',
+        (await messageCount(longContext.page)) >= 200 &&
+          ((await longContext.page.locator('#messages').textContent()) ?? '').includes('长消息 120'),
+        { count: await messageCount(longContext.page) },
+      );
+      checkEqual(
+        '合并后消息 ID 不重复',
+        new Set(mergedIds).size,
+        mergedIds.length,
+      );
+      const dividerState = (await longContext.page.evaluate(`(() => {
+        const children = Array.from(document.getElementById('messages').children);
+        let adjacent = 0;
+        for (let index = 1; index < children.length; index += 1) {
+          if (children[index].classList.contains('msg-time') &&
+              children[index - 1].classList.contains('msg-time')) adjacent += 1;
+        }
+        return { adjacent: adjacent };
+      })()`)) as { adjacent: number };
+      checkEqual('合并后没有连续时间胶囊', dividerState.adjacent, 0);
+      await longContext.context.close();
+
+      // 14e. 2KB 无断点 URL、40 行表格、300 行代码块：1280/390 均不横向溢出。
+      const wideRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '长内容滚动群',
+        members: [data.agentA.actor_id],
+      });
+      const wideRoomId = wideRoom.room.room_id;
+      const longUrl = `https://example.com/${'a'.repeat(2000)}`;
+      const wideTable = Array.from(
+        { length: 40 },
+        (_, index) => `| ${index + 1} | 长内容列 ${index + 1} |`,
+      ).join('\n');
+      const wideCode = Array.from(
+        { length: 300 },
+        (_, index) => `const wideLine${index + 1} = ${index + 1};`,
+      ).join('\n');
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: wideRoomId,
+        body: [
+          '长内容回归',
+          '',
+          longUrl,
+          '',
+          '| 序号 | 值 |',
+          '| --- | --- |',
+          wideTable,
+          '',
+          '```js',
+          wideCode,
+          '```',
+        ].join('\n'),
+      });
+      const wideBrowser: Browser = browser;
+      const checkWideLayout = async (
+        width: number,
+        label: string,
+      ): Promise<void> => {
+        const wideContext = await makeContext(
+          wideBrowser,
+          data.humanToken,
+          { width, height: 900 },
+          allErrors,
+        );
+        await wideContext.page.goto(`${server.base}/c/${wideRoomId}`);
+        await waitRoom(wideContext.page, wideRoomId, '长内容滚动群');
+        await wideContext.page.locator('.msg-markdown .md-table').first().waitFor();
+        await wideContext.page.locator('.msg-markdown .md-pre').first().waitFor();
+        await waitForBottom(wideContext.page, `${label} 长内容进入到底`, 15_000);
+        const metrics = (await wideContext.page.evaluate(`(() => {
+          const messages = document.getElementById('messages');
+          const table = document.querySelector('.msg-markdown .md-table-wrap');
+          const pre = document.querySelector('.msg-markdown .md-pre');
+          return {
+            view: window.innerWidth,
+            doc: document.documentElement.scrollWidth,
+            listScroll: messages.scrollWidth,
+            listClient: messages.clientWidth,
+            tableScroll: table ? table.scrollWidth : 0,
+            tableClient: table ? table.clientWidth : 0,
+            preScroll: pre ? pre.scrollWidth : 0,
+            preClient: pre ? pre.clientWidth : 0
+          };
+        })()`)) as {
+          view: number;
+          doc: number;
+          listScroll: number;
+          listClient: number;
+          tableScroll: number;
+          tableClient: number;
+          preScroll: number;
+          preClient: number;
+        };
+        check(`${label} 长内容不撑破页面`, metrics.doc <= metrics.view + 1, metrics);
+        check(
+          `${label} 消息区不横向滚动`,
+          metrics.listScroll <= metrics.listClient + 1,
+          metrics,
+        );
+        check(
+          `${label} 表格在容器内横向滚动`,
+          metrics.tableScroll >= metrics.tableClient,
+          metrics,
+        );
+        check(
+          `${label} 代码块在容器内横向滚动`,
+          metrics.preScroll >= metrics.preClient,
+          metrics,
+        );
+        await wideContext.context.close();
+      };
+      await checkWideLayout(1280, '1280px');
+      await checkWideLayout(390, '390px');
     }
 
     // 2f. Agent token 注销重发：二次确认、取消、成功自动复制、失败、入口限制、移动端与 DB 不落原文。

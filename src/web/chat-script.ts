@@ -13,6 +13,7 @@ import { CHAT_MONITOR_SCRIPT } from './chat-monitor-script';
 import { CHAT_RENDER_SCRIPT } from './chat-render-script';
 import { CHAT_ROOM_MENU_SCRIPT } from './chat-room-menu-script';
 import { CHAT_ROUTER_SCRIPT } from './chat-router-script';
+import { CHAT_SCROLL_SCRIPT } from './chat-scroll-script';
 import { CHAT_SESSION_SCRIPT } from './chat-session-script';
 import { CHAT_STREAM_SCRIPT } from './chat-stream-script';
 import { HANDOFF_CONTROLLER_SCRIPT } from './handoff';
@@ -67,6 +68,8 @@ const accountCopyButton = document.getElementById('account-copy-id');
 const titleElement = document.getElementById('title');
 const subtitleElement = document.getElementById('subtitle');
 const messagesElement = document.getElementById('messages');
+const jumpLatestButton = document.getElementById('jump-latest');
+const jumpLatestLabel = document.getElementById('jump-latest-label');
 const olderButton = document.getElementById('older');
 const composer = document.getElementById('composer');
 const bodyInput = document.getElementById('body');
@@ -116,6 +119,7 @@ ${CHAT_RENDER_SCRIPT}
 ${NEW_AGENT_SCRIPT}
 ${CHAT_AGENTS_SCRIPT}
 ${CHAT_LOGOUT_SCRIPT}
+${CHAT_SCROLL_SCRIPT}
 ${CHAT_SESSION_SCRIPT}
 ${CHAT_STREAM_SCRIPT}
 ${CHAT_FILES_SCRIPT}
@@ -635,6 +639,8 @@ function resizeComposer() {
   const height = Math.min(bodyInput.scrollHeight, max);
   bodyInput.style.height = height + 'px';
   bodyInput.style.overflowY = bodyInput.scrollHeight > max ? 'auto' : 'hidden';
+  // 输入框变高会压缩消息视口；pinned 时在下一帧重新钉到底。
+  scrollController.noteContentChanged();
 }
 
 /**
@@ -675,6 +681,8 @@ composer.addEventListener('submit', async function (event) {
     return;
   }
   sendButton.disabled = true;
+  // 自己的消息必须出现在底部；独立标志避免 refresh 合并时丢失强制滚底。
+  scrollController.pinNextApply();
   try {
     const args = {
       request_id: requestId('web_msg'),
@@ -703,6 +711,7 @@ composer.addEventListener('submit', async function (event) {
       statusElement.textContent = stickyStatus;
     }
   } catch (error) {
+    scrollController.clearPinNextApply();
     if (!isActiveRoom(sendRoomId, sendEpoch)) return;
     stickyStatus = '发送失败：' + (error && error.message ? error.message : error);
     statusElement.textContent = stickyStatus;
@@ -743,7 +752,21 @@ bodyInput.addEventListener('keydown', function (event) {
 });
 
 olderButton.addEventListener('click', function () {
-  if (activeRoomId) loadOlder();
+  if (!activeRoomId) return;
+  scrollController.unpin();
+  loadOlder();
+});
+
+if (jumpLatestButton) jumpLatestButton.addEventListener('click', function () {
+  const jumpRoomId = activeRoomId;
+  if (!jumpRoomId) return;
+  const jumpEpoch = roomEpoch;
+  // 先立即回到底部并置位，再强制刷新；合并等待中的刷新也不会丢掉。
+  scrollController.pinNextApply();
+  refresh(true).catch(function (error) {
+    if (isAbortError(error) || !isActiveRoom(jumpRoomId, jumpEpoch)) return;
+    statusElement.textContent = '刷新会话失败：' + (error && error.message ? error.message : error);
+  });
 });
 
 if (renameButton) renameButton.addEventListener('click', function () {

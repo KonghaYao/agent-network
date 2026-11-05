@@ -142,7 +142,12 @@ export function chatPane(): string {
       </div>
     </div>
     <p id="stream-status" class="stream-status" role="status" hidden></p>
-    <ol id="messages" class="messages" aria-live="polite"></ol>
+    <ol id="messages" class="messages" aria-live="polite">
+      <li id="messages-end" class="messages-end" aria-hidden="true"></li>
+    </ol>
+    <button id="jump-latest" class="jump-latest" type="button" hidden>
+      <span id="jump-latest-label">回到最新</span>
+    </button>
     <p id="status" role="status"></p>
     <div id="mention-picker" class="mention-picker" hidden role="listbox" aria-label="选择要 @ 的成员"></div>
     <form id="composer" class="composer">

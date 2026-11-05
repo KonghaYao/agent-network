@@ -18,6 +18,7 @@ let identityPromise = null;
 let refreshChain = Promise.resolve();
 let refreshQueued = false;
 let refreshRoomId = null;
+let refreshForcePending = false;
 let reloadTimer = null;
 let sidebarScrollTop = 0;
 let room = null;
@@ -41,6 +42,7 @@ function resetRefreshChain() {
   refreshChain = Promise.resolve();
   refreshQueued = false;
   refreshRoomId = null;
+  refreshForcePending = false;
 }
 
 function pruneRoomCache() {
@@ -191,26 +193,6 @@ function applyRoomDetail(detail) {
   }
 }
 
-function isNearBottom() {
-  if (!messagesElement) return true;
-  return messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 80;
-}
-
-function scrollToBottom(force) {
-  if (!messagesElement) return;
-  if (force || isNearBottom()) messagesElement.scrollTop = messagesElement.scrollHeight;
-}
-
-function restoreScroll(top) {
-  if (!messagesElement) return;
-  const roomId = activeRoomId;
-  const epoch = roomEpoch;
-  messagesElement.scrollTop = top;
-  requestAnimationFrame(function () {
-    if (isActiveRoom(roomId, epoch)) messagesElement.scrollTop = top;
-  });
-}
-
 function setChatLoading(loading, options) {
   const settings = options || {};
   if (chatBodyElement) chatBodyElement.setAttribute('aria-busy', loading ? 'true' : 'false');
@@ -220,6 +202,7 @@ function setChatLoading(loading, options) {
   }
   if (loading && !settings.keepContent && messagesElement) {
     resetMarkdownHandles();
+    scrollController.beginContentChange();
     messagesElement.replaceChildren();
   }
 }
@@ -234,6 +217,7 @@ function setChatError(message) {
   }
   if (messagesElement) {
     resetMarkdownHandles();
+    scrollController.beginContentChange();
     messagesElement.replaceChildren();
   }
   if (sendButton) sendButton.disabled = true;
@@ -273,12 +257,13 @@ function applyCachedRoom(cache) {
   if (olderButton) olderButton.hidden = !nextOlder;
   applyRoomHeader();
   renderMessageList(currentItems);
-  restoreScroll(Number(cache.scrollTop) || 0);
+  // 缓存只用于立即绘制；进入会话一律看最新消息，不再恢复旧 scrollTop。
+  scrollController.scrollToBottom();
   if (bodyInput) bodyInput.value = drafts.get(activeRoomId) || '';
   resizeComposer();
 }
 
-async function loadLatest(roomId, epoch, options) {
+async function fetchLatestPage(roomId, epoch) {
   const humanTimeline = Boolean(identity && identity.kind === 'human');
   const args = {
     room_id: roomId,
@@ -288,27 +273,48 @@ async function loadLatest(roomId, epoch, options) {
   if (humanTimeline) args.view = 'timeline';
   const page = await callTool('network_history_list', args, undefined, sessionSignal());
   if (!isActiveRoom(roomId, epoch)) return null;
-  const previousTop = messagesElement ? messagesElement.scrollTop : 0;
-  const wasNearBottom = isNearBottom();
   const rawItems = humanTimeline ? (page.timeline_items || []) : page.items;
-  nextOlder = humanTimeline
-    ? (page.timeline_has_more ? page.timeline_next_cursor : null)
-    : (page.has_more ? page.next_cursor : null);
+  return {
+    page: page,
+    items: mergeTimelineItems([], rawItems.slice().reverse()),
+    nextOlder: humanTimeline
+      ? (page.timeline_has_more ? page.timeline_next_cursor : null)
+      : (page.has_more ? page.next_cursor : null)
+  };
+}
+
+/**
+ * 用最新页合并已加载时间线：更早页保留，按 stable key 去重后整体重绘。
+ *
+ * Phase 1 仍是整表渲染，但不再用最新 50 条覆盖 currentItems；因此上翻
+ * 加载过的历史不会因新消息到达而消失。
+ */
+function applyLatestPage(result) {
+  const incomingKeys = new Set(result.items.map(timelineItemKey));
+  const hasLoadedOlder = currentItems.some(function (item) {
+    return !incomingKeys.has(timelineItemKey(item));
+  });
+  currentItems = mergeTimelineItems(currentItems, result.items);
+  // 已加载更早页时保留原游标；否则让最新页决定是否还能继续往前翻。
+  if (!hasLoadedOlder || !nextOlder) nextOlder = result.nextOlder;
   if (olderButton) olderButton.hidden = !nextOlder;
-  currentItems = mergeTimelineItems([], rawItems.slice().reverse());
   renderMessageList(currentItems);
-  if ((options && options.forceScroll) || wasNearBottom) {
-    scrollToBottom(true);
-  } else if (messagesElement) {
-    messagesElement.scrollTop = previousTop;
-  }
-  return page;
+  scrollController.clearPinNextApply();
+  scrollController.noteContentChanged();
 }
 
 /** 消息与 presence 共用稳定 ID；跨页/同页只保留首次出现的一条。 */
 function timelineItemKey(item) {
   if (item && item.kind === 'presence') return 'presence:' + item.presence_event_id;
   return 'message:' + (item && item.message_id ? item.message_id : '');
+}
+
+function hasLoadedTimelineItem(item) {
+  if (!item) return false;
+  const key = timelineItemKey(item);
+  return currentItems.some(function (known) {
+    return timelineItemKey(known) === key;
+  });
 }
 
 /**
@@ -318,18 +324,23 @@ function timelineItemKey(item) {
  * “按展示 key 插入”而不是简单 append。
  */
 function mergeTimelineItems(base, incoming) {
-  const seen = new Set();
+  const indexByKey = new Map();
   const merged = [];
   for (const item of base || []) {
     const key = timelineItemKey(item);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (indexByKey.has(key)) continue;
+    indexByKey.set(key, merged.length);
     merged.push(item);
   }
   for (const item of incoming || []) {
     const key = timelineItemKey(item);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex !== undefined) {
+      // 同一消息以最新一次响应为准：回执状态、预览与正文长度可能已更新。
+      merged[existingIndex] = item;
+      continue;
+    }
+    indexByKey.set(key, merged.length);
     merged.push(item);
   }
   merged.sort(function (a, b) {
@@ -372,16 +383,48 @@ async function markRoomRead(roomId, headSeq, epoch) {
   }
 }
 
+async function performMarkRead(roomId, epoch, headSeq) {
+  if (!isActiveRoom(roomId, epoch)) return false;
+  const succeeded = await markRoomRead(roomId, headSeq, epoch);
+  if (!succeeded || !isActiveRoom(roomId, epoch) || !room || room.room_id !== roomId) return false;
+  // head 已前进时不把本地已读位置推到新 head，留给下一轮刷新。
+  const atHead = String(room.head_seq == null ? '' : room.head_seq) === String(headSeq == null ? '' : headSeq);
+  updateRoomEntry(room, room.last_message || null, atHead);
+  return true;
+}
+
 async function doRefresh(roomId, epoch, forceScroll) {
   const detail = await callTool('network_room_get', { room_id: roomId }, undefined, sessionSignal());
   if (!isActiveRoom(roomId, epoch)) return;
   applyRoomDetail(detail);
-  const page = await loadLatest(roomId, epoch, { forceScroll: forceScroll });
-  if (!page || !isActiveRoom(roomId, epoch)) return;
+  // 首次渲染（含切换房间后的空 currentItems）总是到底，不能被旧房间的上翻状态打断。
+  const hadContent = currentItems.length > 0;
+  const force = Boolean(forceScroll) || scrollController.hasPinNextApply() || !hadContent;
+  const freeze = !force && !scrollController.isPinned() && hadContent;
+  let result = null;
+  if (!freeze) {
+    result = await fetchLatestPage(roomId, epoch);
+    if (!result || !isActiveRoom(roomId, epoch)) return;
+    // 拉取期间用户上翻：丢弃本轮页面，消息区完全冻结。
+    if (!force && !scrollController.isPinned() && currentItems.length > 0) result = null;
+  }
+  if (result) {
+    applyLatestPage(result);
+    if (!hadContent) scrollController.scrollToBottom();
+  }
   setChatLoading(false);
   clearChatError();
   statusElement.textContent = stickyStatus;
-  const lastMessage = latestRealMessage(page);
+  const lastMessage = room && room.last_message
+    ? room.last_message
+    : (result ? latestRealMessage(result.page) : null);
+  if (!result && lastMessage && !hasLoadedTimelineItem(lastMessage)) {
+    // 通知丢失/重连补拉时也能提示有新消息，不伪造条数。
+    scrollController.noteNewMessage();
+  }
+  if (scrollController.isPinned()) {
+    scrollController.scrollToBottom();
+  }
   cacheRoomState(roomId, {
     room: room,
     members: Array.from(members.values()),
@@ -390,16 +433,16 @@ async function doRefresh(roomId, epoch, forceScroll) {
     scrollTop: messagesElement ? messagesElement.scrollTop : 0,
     lastMessage: lastMessage
   });
-  const readSucceeded = await markRoomRead(roomId, room.head_seq, epoch);
-  if (!isActiveRoom(roomId, epoch)) return;
-  updateRoomEntry(room, lastMessage, readSucceeded);
+  updateRoomEntry(room, lastMessage, false);
+  // 只有仍跟随底部且实际 gap <= 80 时控制器才会真正调用 mark_read。
+  scrollController.scheduleMarkRead(roomId, epoch, room.head_seq);
 }
 
 /**
  * 串行刷新，且合并等待中的请求。
  *
  * 刷新期间到达的新消息或自己刚发出的消息会再排一次，
- * 不会被“正在刷新”直接丢弃；切换房间时链按 roomId 重置。
+ * 不会被“正在刷新”直接丢弃；force 标志独立保存，合并后仍生效。
  */
 function refresh(forceScroll) {
   const roomId = activeRoomId;
@@ -409,6 +452,7 @@ function refresh(forceScroll) {
     resetRefreshChain();
     refreshRoomId = roomId;
   }
+  if (forceScroll || scrollController.hasPinNextApply()) refreshForcePending = true;
   if (refreshQueued) return refreshChain;
   refreshQueued = true;
   const chainRoomId = roomId;
@@ -419,9 +463,42 @@ function refresh(forceScroll) {
       if (refreshRoomId !== chainRoomId) return;
       refreshQueued = false;
       if (!isActiveRoom(roomId, epoch)) return;
-      return doRefresh(roomId, epoch, forceScroll);
+      const force = refreshForcePending;
+      refreshForcePending = false;
+      return doRefresh(roomId, epoch, force);
     });
   return refreshChain;
+}
+
+function findTimelineElement(item) {
+  if (!messagesElement || !item) return null;
+  for (const child of messagesElement.children) {
+    if (!child.dataset) continue;
+    if (item.kind === 'presence') {
+      if (child.dataset.presenceId === item.presence_event_id) return child;
+    } else if (child.dataset.messageId === item.message_id) {
+      return child;
+    }
+  }
+  return null;
+}
+
+/**
+ * 修 prepend 接缝：新插入块的最后一条与旧首条间隔 <=5 分钟时，
+ * 删除旧首条前的重复时间胶囊；>5 分钟则保证恰好一个。
+ */
+function reconcilePrependSeam(oldFirstItem, olderLastItem) {
+  if (!oldFirstItem || !olderLastItem || oldFirstItem.kind === 'presence') return;
+  const oldFirstElement = findTimelineElement(oldFirstItem);
+  if (!oldFirstElement) return;
+  const previous = oldFirstElement.previousElementSibling;
+  const divider = previous && previous.classList.contains('msg-time') ? previous : null;
+  const gap = timelineTimestamp(oldFirstItem) - timelineTimestamp(olderLastItem);
+  if (gap > TIME_GAP) {
+    if (!divider) messagesElement.insertBefore(timeDivider(timelineTimestamp(oldFirstItem)), oldFirstElement);
+  } else if (divider) {
+    divider.remove();
+  }
 }
 
 async function loadOlder() {
@@ -429,6 +506,9 @@ async function loadOlder() {
   if (!roomId || !nextOlder) return;
   const epoch = roomEpoch;
   const humanTimeline = Boolean(identity && identity.kind === 'human');
+  // 加载更早是明确的离底阅读：立即停止跟随，后续异步高度不得把用户拉回底部。
+  scrollController.unpin();
+  scrollController.captureAnchor();
   if (olderButton) olderButton.disabled = true;
   try {
     const args = {
@@ -441,21 +521,27 @@ async function loadOlder() {
     const page = await callTool('network_history_list', args, undefined, sessionSignal());
     if (!isActiveRoom(roomId, epoch)) return;
     const previousHeight = messagesElement.scrollHeight;
+    const oldFirstItem = currentItems[0] || null;
     const rawItems = humanTimeline ? (page.timeline_items || []) : page.items;
     const merged = mergeTimelineItems(currentItems, rawItems.slice().reverse());
     const known = new Set(currentItems.map(timelineItemKey));
     const olderItems = merged.filter(function (item) {
       return !known.has(timelineItemKey(item));
     });
-    const fragment = document.createDocumentFragment();
-    appendHistory(fragment, olderItems);
-    messagesElement.prepend(fragment);
-    messagesElement.scrollTop += messagesElement.scrollHeight - previousHeight;
+    if (olderItems.length > 0) {
+      const fragment = document.createDocumentFragment();
+      appendHistory(fragment, olderItems);
+      messagesElement.prepend(fragment);
+      reconcilePrependSeam(oldFirstItem, olderItems[olderItems.length - 1]);
+    }
+    scrollController.adjustScroll(messagesElement.scrollHeight - previousHeight);
+    scrollController.restoreAnchor();
     currentItems = merged;
     nextOlder = humanTimeline
       ? (page.timeline_has_more ? page.timeline_next_cursor : null)
       : (page.has_more ? page.next_cursor : null);
     if (olderButton) olderButton.hidden = !nextOlder;
+    scrollController.noteContentChanged();
     cacheRoomState(roomId, {
       items: currentItems,
       nextOlder: nextOlder,
@@ -542,6 +628,7 @@ async function openRoom(roomId, options) {
   if (roomAbort) roomAbort.abort();
   roomAbort = new AbortController();
   resetRefreshChain();
+  scrollController.reset(roomId, epoch);
   activateFilesRoom(roomId);
   activateMonitorRoom(roomId);
   if (previousId !== roomId) {
@@ -584,7 +671,8 @@ async function openRoom(roomId, options) {
   }
   if (!isActiveRoom(roomId, epoch)) return;
   try {
-    await refresh(!cache);
+    // 缓存只用于立即绘制：进入房间后一律取最新页并回到底部。
+    await refresh(true);
   } catch (error) {
     if (isAbortError(error) || !isActiveRoom(roomId, epoch)) return;
     if (cache) {
@@ -625,5 +713,6 @@ function closeRoomView() {
   if (statusElement) statusElement.textContent = '';
   stickyStatus = '';
   hideMentionPicker();
+  scrollController.close();
 }
 `;

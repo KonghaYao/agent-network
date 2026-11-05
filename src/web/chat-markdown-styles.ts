@@ -38,11 +38,12 @@ export const MARKDOWN_STYLE = `
     overflow-wrap: anywhere; }
   .msg-markdown .md-pre { box-sizing: border-box; max-width: 100%; margin: 8px 0;
     padding: 8px 10px; border-radius: 6px; background: var(--wx-search);
-    overflow-x: auto; overflow-y: hidden; white-space: pre; }
+    overflow-x: auto; overflow-y: hidden; white-space: pre; overscroll-behavior-x: contain; }
   .msg-markdown .md-pre .md-code { display: block; min-width: max-content;
     padding: 0; background: none; color: var(--wx-text); white-space: pre; }
   .msg-markdown .md-table-wrap { box-sizing: border-box; width: 100%; max-width: 100%;
-    margin: 8px 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    margin: 8px 0; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain; }
   .msg-markdown .md-table { border-collapse: collapse; min-width: max-content;
     max-width: none; font-size: 13px; }
   .msg-markdown .md-table th, .msg-markdown .md-table td {
