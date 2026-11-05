@@ -250,14 +250,19 @@ export const APP_STYLE = `
     overflow-wrap: anywhere; }
   .chat-error-actions { display: flex; align-items: center; justify-content: center; gap: 14px; }
   .chat-error-actions a { color: var(--wx-link); font-size: 12px; }
-  .stream-status { margin: 0; padding: 4px 16px 0; font-size: 11px; color: var(--wx-muted); }
-  .stream-status[hidden] { display: none; }
-  /* 实时连接持续失败时才显示；非阻塞，不遮挡会话或输入框。 */
-  .stream-banner { margin: 0 0 6px; font-size: 11px; line-height: 1.5; color: var(--wx-muted); }
-  .stream-banner[hidden] { display: none; }
-  #older { align-self: center; flex: 0 0 auto; margin: 10px 0 0; padding: 3px 10px;
-    border: 0; background: transparent; color: var(--wx-link); font-size: 11px; }
+  /* 实时连接持续失败时只在侧栏显示一个点；详细状态在 title/aria-label。 */
+  .stream-dot { display: block; width: 6px; height: 6px; margin: 0 4px 6px auto;
+    border-radius: 50%; background: #d69e2e; }
+  .stream-dot[data-state="stopped"] { background: var(--wx-danger); }
+  .stream-dot[hidden] { display: none; }
+  /* 固定在聊天区顶部，不随消息滚动；显示时给消息区留出顶部空间。 */
+  #older { position: absolute; top: 8px; left: 50%; z-index: 4;
+    transform: translateX(-50%); margin: 0; padding: 4px 12px;
+    border: 1px solid var(--wx-line); border-radius: 999px;
+    background: var(--wx-panel); color: var(--wx-link); font-size: 11px;
+    box-shadow: var(--wx-shadow); white-space: nowrap; }
   #older[hidden] { display: none; }
+  #older:not([hidden]) ~ .messages { padding-top: 40px; }
   .messages { flex: 1 1 auto; min-height: 0; overflow-y: auto; list-style: none;
     margin: 0; padding: 12px 20px 18px;
     overflow-anchor: none; overscroll-behavior: contain; scrollbar-gutter: stable; }

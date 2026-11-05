@@ -76,6 +76,11 @@ export const MONITOR_STYLE = `
 
   @media (min-width: 1200px) {
     .monitor-backdrop { display: none !important; }
+    /* 与文件栏一致：聊天区 80%，监控栏 20%，不把聊天挤窄。 */
+    .chat-pane { flex: 1 1 auto; min-width: 0; }
+    .monitor-pane { flex: 0 0 calc((100% - 300px) * 0.2);
+      width: calc((100% - 300px) * 0.2); min-width: 0; max-width: none;
+      box-sizing: border-box; }
   }
 
   @media (max-width: 759px) {

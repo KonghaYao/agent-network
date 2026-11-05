@@ -52,7 +52,7 @@ export function sidebarPane(): string {
     <button id="logged-out-start" class="list-retry" type="button" hidden>创建新身份并继续</button>
   </div>
   <footer class="sidebar-foot">
-    <p id="stream-banner" class="stream-banner" role="status" hidden></p>
+    <span id="stream-dot" class="stream-dot" role="status" title="" aria-label="" hidden></span>
     ${deviceHandoffAccount()}
     <details class="service-info">
       <summary>服务信息</summary>
@@ -141,7 +141,6 @@ export function chatPane(): string {
         <a id="chat-error-back" href="/">返回会话列表</a>
       </div>
     </div>
-    <p id="stream-status" class="stream-status" role="status" hidden></p>
     <ol id="messages" class="messages" aria-live="polite">
       <li id="messages-end" class="messages-end" aria-hidden="true"></li>
     </ol>

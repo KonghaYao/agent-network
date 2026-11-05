@@ -4397,7 +4397,7 @@ async function main(): Promise<void> {
       check('重连后补拉当前房间历史', true);
       await waitForText(page, roomLink(data.direct.room.room_id), '断线补拉消息');
       check('重连后刷新会话列表', true);
-      checkEqual('瞬时失败不显示非阻塞提示', await page.locator('#stream-banner').isHidden(), true);
+      checkEqual('瞬时失败不显示断线状态点', await page.locator('#stream-dot').isHidden(), true);
       checkEqual(
         '重连后只有一条未中止的 stream',
         (await page.evaluate('window.__streamSignals.filter(function (signal) { return !signal.aborted; }).length')) as number,
@@ -4418,18 +4418,26 @@ async function main(): Promise<void> {
       await page.locator('#room-list .room-item').first().waitFor();
       await page.waitForFunction(`${streamCallsExpression()}.length >= 1`);
       await page.evaluate(`window.__failStreams = true; window.__abortStream();`);
-      await page.locator('#stream-banner').waitFor({ state: 'visible', timeout: 12_000 });
-      check(
-        '持续失败显示非阻塞提示',
-        ((await page.locator('#stream-banner').textContent()) ?? '').includes('实时连接暂时不可用'),
+      await page.locator('#stream-dot').waitFor({ state: 'visible', timeout: 12_000 });
+      checkEqual(
+        '持续失败只显示极小状态点',
+        ((await page.locator('#stream-dot').textContent()) ?? '').trim(),
+        '',
       );
-      checkEqual('提示区 role=status', await page.locator('#stream-banner').getAttribute('role'), 'status');
+      check(
+        '断线原因只放在 title/aria-label',
+        ((await page.locator('#stream-dot').getAttribute('title')) ?? '').includes('实时连接暂时不可用') &&
+          ((await page.locator('#stream-dot').getAttribute('aria-label')) ?? '').includes('实时连接暂时不可用'),
+      );
+      const dotBox = (await page.locator('#stream-dot').boundingBox()) as { width: number; height: number } | null;
+      check('状态点为 6px 小点', Boolean(dotBox && dotBox.width <= 8 && dotBox.height <= 8), dotBox);
+      checkEqual('状态点 role=status', await page.locator('#stream-dot').getAttribute('role'), 'status');
       checkEqual('持续失败不弹出阻塞错误', await page.locator('#chat-error').isHidden(), true);
       await page.evaluate(
         `window.__failStreams = false; window.dispatchEvent(new Event('online'));`,
       );
       await page.waitForFunction(
-        `document.getElementById('stream-banner') && document.getElementById('stream-banner').hidden`,
+        `document.getElementById('stream-dot') && document.getElementById('stream-dot').hidden`,
         undefined,
         { timeout: 8_000 },
       );
@@ -4478,10 +4486,15 @@ async function main(): Promise<void> {
       });
       await page.goto(`${server.base}/`);
       await page.locator('#room-list .room-item').first().waitFor();
-      await page.locator('#stream-banner').waitFor({ state: 'visible', timeout: 8_000 });
+      await page.locator('#stream-dot').waitFor({ state: 'visible', timeout: 8_000 });
       check(
-        '非 SSE 响应显示可读提示',
-        ((await page.locator('#stream-banner').textContent()) ?? '').includes('实时连接已停止'),
+        '非 SSE 响应通过状态点 title 说明停止原因',
+        ((await page.locator('#stream-dot').getAttribute('title')) ?? '').includes('实时连接已停止'),
+      );
+      checkEqual(
+        '停止态状态点使用危险色标记',
+        await page.locator('#stream-dot').getAttribute('data-state'),
+        'stopped',
       );
       await sleep(1_500);
       checkEqual('INVALID_ARGUMENT 不重试', streamAttempts, 1);
@@ -4706,10 +4719,19 @@ async function main(): Promise<void> {
       checkEqual('桌面文件栏无遮罩', await page.locator('#files-backdrop').isHidden(), true);
       checkEqual('桌面保留会话列表', await page.locator('.sidebar').isVisible(), true);
       checkEqual('桌面保留聊天区', await page.locator('#composer').isVisible(), true);
-      checkEqual(
-        '桌面文件栏宽度 300px',
-        await page.evaluate(`getComputedStyle(document.getElementById('files-pane')).width`),
-        '300px',
+      const desktopFileLayout = (await page.evaluate(`(() => {
+        const chat = document.querySelector('.chat-pane:not(.empty-pane)');
+        const files = document.getElementById('files-pane');
+        const chatWidth = chat ? chat.getBoundingClientRect().width : 0;
+        const fileWidth = files ? files.getBoundingClientRect().width : 0;
+        return { chatWidth: chatWidth, fileWidth: fileWidth };
+      })()`)) as { chatWidth: number; fileWidth: number };
+      const desktopFileRatio = desktopFileLayout.fileWidth /
+        (desktopFileLayout.chatWidth + desktopFileLayout.fileWidth);
+      check(
+        '桌面文件栏约占主内容区 20%',
+        Math.abs(desktopFileRatio - 0.2) <= 0.02,
+        { ...desktopFileLayout, ratio: desktopFileRatio },
       );
       const imageItem = page.locator('#files-list .file-item').filter({
         hasText: '图片 <b>一.png',
@@ -5282,10 +5304,19 @@ async function main(): Promise<void> {
       checkEqual('打开监控后文件面板自动关闭', await page.locator('#files-pane').isHidden(), true);
       checkEqual('桌面监控面板保留会话列表', await page.locator('.sidebar').isVisible(), true);
       checkEqual('桌面监控面板保留聊天区', await page.locator('#composer').isVisible(), true);
-      checkEqual(
-        '桌面监控面板宽度 420px',
-        await page.evaluate(`getComputedStyle(document.getElementById('monitor-pane')).width`),
-        '420px',
+      const desktopMonitorLayout = (await page.evaluate(`(() => {
+        const chat = document.querySelector('.chat-pane:not(.empty-pane)');
+        const monitor = document.getElementById('monitor-pane');
+        const chatWidth = chat ? chat.getBoundingClientRect().width : 0;
+        const monitorWidth = monitor ? monitor.getBoundingClientRect().width : 0;
+        return { chatWidth: chatWidth, monitorWidth: monitorWidth };
+      })()`)) as { chatWidth: number; monitorWidth: number };
+      const desktopMonitorRatio = desktopMonitorLayout.monitorWidth /
+        (desktopMonitorLayout.chatWidth + desktopMonitorLayout.monitorWidth);
+      check(
+        '桌面监控面板约占主内容区 20%',
+        Math.abs(desktopMonitorRatio - 0.2) <= 0.02,
+        { ...desktopMonitorLayout, ratio: desktopMonitorRatio },
       );
       checkEqual(
         '监控入口 aria-expanded=true',
@@ -7548,6 +7579,7 @@ async function main(): Promise<void> {
       await readContext.page.evaluate(`(() => {
         const node = document.getElementById('messages');
         node.scrollTop = Math.floor((node.scrollHeight - node.clientHeight) * 0.4);
+        node.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -120 }));
       })()`);
       await sleep(250);
       const frozenTop = await messagesScrollTop(readContext.page);
@@ -7780,8 +7812,15 @@ async function main(): Promise<void> {
         );
         await wideContext.page.goto(`${server.base}/c/${wideRoomId}`);
         await waitRoom(wideContext.page, wideRoomId, '长内容滚动群');
-        await wideContext.page.locator('.msg-markdown .md-table').first().waitFor();
-        await wideContext.page.locator('.msg-markdown .md-pre').first().waitFor();
+        // 512B 预览只含长 URL；展开全文后才是 40 行表格与 300 行代码块。
+        const wideMessage = wideContext.page
+          .locator('#messages .msg')
+          .filter({ hasText: '长内容回归' })
+          .first();
+        await wideMessage.locator('.expand').waitFor();
+        await wideMessage.locator('.expand').click();
+        await wideMessage.locator('.msg-markdown .md-table').waitFor();
+        await wideMessage.locator('.msg-markdown .md-pre').waitFor();
         await waitForBottom(wideContext.page, `${label} 长内容进入到底`, 15_000);
         const metrics = (await wideContext.page.evaluate(`(() => {
           const messages = document.getElementById('messages');
@@ -7827,6 +7866,273 @@ async function main(): Promise<void> {
       };
       await checkWideLayout(1280, '1280px');
       await checkWideLayout(390, '390px');
+
+      // 14f. “加载更早”固定在聊天区顶部，不随消息滚动。
+      const olderContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      await olderContext.page.goto(`${server.base}/c/${scrollRoomId}`);
+      await waitRoom(olderContext.page, scrollRoomId, '滚动进入群');
+      await olderContext.page.locator('#older').waitFor({ state: 'visible' });
+      const olderMetrics = (await olderContext.page.evaluate(`(() => {
+        const older = document.getElementById('older');
+        const messages = document.getElementById('messages');
+        const body = document.getElementById('chat-body');
+        const olderRect = older.getBoundingClientRect();
+        return {
+          olderTop: olderRect.top,
+          olderBottom: olderRect.bottom,
+          bodyTop: body.getBoundingClientRect().top,
+          messagesTop: messages.getBoundingClientRect().top,
+          insideMessages: messages.contains(older)
+        };
+      })()`)) as {
+        olderTop: number;
+        olderBottom: number;
+        bodyTop: number;
+        messagesTop: number;
+        insideMessages: boolean;
+      };
+      check('加载更早在消息滚动容器之外', !olderMetrics.insideMessages, olderMetrics);
+      check(
+        '加载更早固定在聊天区顶部',
+        Math.abs(olderMetrics.olderTop - olderMetrics.bodyTop - 8) <= 2,
+        olderMetrics,
+      );
+      await olderContext.page.evaluate(
+        `document.getElementById('messages').scrollTop = 0`,
+      );
+      await sleep(250);
+      const olderStill = (await olderContext.page.evaluate(`(() => {
+        const older = document.getElementById('older');
+        const body = document.getElementById('chat-body');
+        const rect = older.getBoundingClientRect();
+        return {
+          hidden: older.hidden,
+          top: rect.top,
+          bodyTop: body.getBoundingClientRect().top
+        };
+      })()`)) as { hidden: boolean; top: number; bodyTop: number };
+      check(
+        '滚动消息后加载更早仍固定在顶部',
+        !olderStill.hidden && Math.abs(olderStill.top - olderStill.bodyTop - 8) <= 2,
+        olderStill,
+      );
+      await olderContext.context.close();
+
+      // 14g. 已展开的长消息在粘底刷新与上翻冻结/回到底部后都保持展开。
+      const expandMarker = '展开保留标记';
+      const expandTail = '展开后的结尾标记';
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: scrollRoomId,
+        body: `${expandMarker}\n\n${'长内容前缀 '.repeat(120)}\n\n**${expandTail}**`,
+      });
+      const expandContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      await expandContext.page.goto(`${server.base}/c/${scrollRoomId}`);
+      await waitRoom(expandContext.page, scrollRoomId, '滚动进入群');
+      const expandLocator = (): ReturnType<Page['locator']> =>
+        expandContext.page.locator('#messages .msg').filter({ hasText: expandMarker }).last();
+      await expandLocator().locator('.expand').waitFor();
+      await expandLocator().locator('.expand').click();
+      await expandLocator().locator('.expand').waitFor({ state: 'detached' });
+      await waitForText(expandContext.page, '#messages', expandTail, 15_000);
+      checkEqual(
+        '展开后 Markdown 与完整正文存在',
+        await expandLocator().locator('.msg-markdown').count(),
+        1,
+      );
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: scrollRoomId,
+        body: '展开后新消息 A',
+      });
+      await waitForText(expandContext.page, '#messages', '展开后新消息 A', 15_000);
+      await waitForBottom(expandContext.page, '粘底刷新后回到底部');
+      checkEqual(
+        '粘底刷新后展开按钮不回来',
+        await expandLocator().locator('.expand').count(),
+        0,
+      );
+      check(
+        '粘底刷新后完整正文仍在',
+        ((await expandLocator().locator('.bubble').textContent()) ?? '').includes(expandTail),
+      );
+      await expandContext.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        node.scrollTop = Math.floor((node.scrollHeight - node.clientHeight) * 0.4);
+        node.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -120 }));
+      })()`);
+      await sleep(250);
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: scrollRoomId,
+        body: '展开后新消息 B',
+      });
+      await waitForText(expandContext.page, roomLink(scrollRoomId), '展开后新消息 B', 15_000);
+      await waitUntil(
+        async () => expandContext.page.locator('#jump-latest').isVisible(),
+        '展开测试上翻后出现新消息按钮',
+        10_000,
+      );
+      checkEqual(
+        '上翻冻结时展开按钮不回来',
+        await expandLocator().locator('.expand').count(),
+        0,
+      );
+      check(
+        '上翻冻结时完整正文仍在',
+        ((await expandLocator().locator('.bubble').textContent()) ?? '').includes(expandTail),
+      );
+      await expandContext.page.locator('#jump-latest').click();
+      await waitForText(expandContext.page, '#messages', '展开后新消息 B', 15_000);
+      await waitForBottom(expandContext.page, '展开测试点击按钮后到底');
+      checkEqual(
+        '合并刷新后展开按钮仍不回来',
+        await expandLocator().locator('.expand').count(),
+        0,
+      );
+      check(
+        '合并刷新后完整正文仍在',
+        ((await expandLocator().locator('.bubble').textContent()) ?? '').includes(expandTail),
+      );
+      await expandContext.context.close();
+
+      // 14h. 桌面 80/20 右栏与平板抽屉：聊天不被挤窄，页面不横向溢出。
+      for (const width of [1280, 1440, 1920]) {
+        const layoutContext = await makeContext(
+          browser,
+          data.humanToken,
+          { width, height: 900 },
+          allErrors,
+        );
+        await layoutContext.page.goto(`${server.base}/c/${fileRoomId}`);
+        await waitRoom(layoutContext.page, fileRoomId, '文件滚动群');
+        await layoutContext.page.locator('#files-pane').waitFor({ state: 'visible' });
+        const layout = (await layoutContext.page.evaluate(`(() => {
+          const main = document.querySelector('main');
+          const sidebar = document.querySelector('.sidebar');
+          const chat = document.querySelector('.chat-pane:not(.empty-pane)');
+          const files = document.getElementById('files-pane');
+          return {
+            view: window.innerWidth,
+            doc: document.documentElement.scrollWidth,
+            main: main.getBoundingClientRect().width,
+            sidebar: sidebar.getBoundingClientRect().width,
+            chat: chat.getBoundingClientRect().width,
+            files: files.getBoundingClientRect().width,
+            listScroll: document.getElementById('messages').scrollWidth,
+            listClient: document.getElementById('messages').clientWidth
+          };
+        })()`)) as {
+          view: number;
+          doc: number;
+          main: number;
+          sidebar: number;
+          chat: number;
+          files: number;
+          listScroll: number;
+          listClient: number;
+        };
+        const chatRatio = layout.chat / (layout.chat + layout.files);
+        check(
+          `${width}px 聊天区约占主内容区 80%`,
+          Math.abs(chatRatio - 0.8) <= 0.02,
+          { ...layout, chatRatio },
+        );
+        check(
+          `${width}px 文件栏约占 20%`,
+          Math.abs(layout.files / (layout.chat + layout.files) - 0.2) <= 0.02,
+          layout,
+        );
+        check(`${width}px 三栏不横向溢出`, layout.doc <= layout.view + 1, layout);
+        check(
+          `${width}px 消息区不横向溢出`,
+          layout.listScroll <= layout.listClient + 1,
+          layout,
+        );
+        await layoutContext.page.locator('#files-toggle').click();
+        await layoutContext.page.locator('#files-pane').waitFor({ state: 'hidden' });
+        const noPanel = (await layoutContext.page.evaluate(`(() => {
+          const main = document.querySelector('main');
+          const sidebar = document.querySelector('.sidebar');
+          const chat = document.querySelector('.chat-pane:not(.empty-pane)');
+          return {
+            main: main.getBoundingClientRect().width,
+            sidebar: sidebar.getBoundingClientRect().width,
+            chat: chat.getBoundingClientRect().width
+          };
+        })()`)) as { main: number; sidebar: number; chat: number };
+        check(
+          `${width}px 无面板时聊天区占满`,
+          Math.abs(noPanel.chat - (noPanel.main - noPanel.sidebar)) <= 2,
+          noPanel,
+        );
+        await layoutContext.context.close();
+      }
+      const tabletLayout = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 900, height: 800 },
+        allErrors,
+      );
+      await tabletLayout.page.goto(`${server.base}/c/${fileRoomId}`);
+      await waitRoom(tabletLayout.page, fileRoomId, '文件滚动群');
+      const tabletBefore = (await tabletLayout.page.evaluate(`(() => {
+        const main = document.querySelector('main');
+        const sidebar = document.querySelector('.sidebar');
+        const chat = document.querySelector('.chat-pane:not(.empty-pane)');
+        return {
+          main: main.getBoundingClientRect().width,
+          sidebar: sidebar.getBoundingClientRect().width,
+          chat: chat.getBoundingClientRect().width
+        };
+      })()`)) as { main: number; sidebar: number; chat: number };
+      check(
+        '平板无抽屉时聊天区占满',
+        Math.abs(tabletBefore.chat - (tabletBefore.main - tabletBefore.sidebar)) <= 2,
+        tabletBefore,
+      );
+      await tabletLayout.page.locator('#files-toggle').click();
+      await tabletLayout.page.locator('#files-pane').waitFor({ state: 'visible' });
+      const tabletDrawer = (await tabletLayout.page.evaluate(`(() => {
+        const pane = document.getElementById('files-pane');
+        const style = getComputedStyle(pane);
+        const chat = document.querySelector('.chat-pane:not(.empty-pane)');
+        return {
+          position: style.position,
+          width: style.width,
+          doc: document.documentElement.scrollWidth,
+          view: window.innerWidth,
+          chat: chat.getBoundingClientRect().width
+        };
+      })()`)) as {
+        position: string;
+        width: string;
+        doc: number;
+        view: number;
+        chat: number;
+      };
+      checkEqual('平板抽屉仍为固定定位', tabletDrawer.position, 'fixed');
+      checkEqual('平板抽屉宽度 320px', tabletDrawer.width, '320px');
+      check('平板打开抽屉不横向溢出', tabletDrawer.doc <= tabletDrawer.view + 1, tabletDrawer);
+      check(
+        '平板抽屉覆盖而不是挤窄聊天',
+        Math.abs(tabletDrawer.chat - tabletBefore.chat) <= 2,
+        { before: tabletBefore.chat, after: tabletDrawer.chat },
+      );
+      await tabletLayout.context.close();
     }
 
     // 2f. Agent token 注销重发：二次确认、取消、成功自动复制、失败、入口限制、移动端与 DB 不落原文。
@@ -7895,6 +8201,28 @@ async function main(): Promise<void> {
           return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(humanPeer.name)}));
         })()`,
       );
+      // 会话列表较长时 Playwright 会先滚动目标；等滚动事件落定后再开菜单，
+      // 避免菜单被紧随其后的 scroll 监听关闭。
+      const openMenu = async (selector: string): Promise<void> => {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            await page.waitForFunction(
+              `Boolean(document.querySelector(${JSON.stringify(selector)}))`,
+            );
+            await page.evaluate((target) => {
+              const link = document.querySelector(target);
+              if (link) link.scrollIntoView({ block: 'nearest' });
+            }, selector);
+            await sleep(200);
+            await page.locator(selector).click({ button: 'right' });
+            await page.locator('#room-menu').waitFor({ state: 'visible' });
+            return;
+          } catch (error) {
+            if (attempt === 2) throw error;
+            await sleep(150);
+          }
+        }
+      };
       const seedReissueRegistry = async (mcpUrl: string): Promise<void> => {
         await page.evaluate(
           (entry) => localStorage.setItem('agent-network-agents-v1', entry),
@@ -7939,8 +8267,7 @@ async function main(): Promise<void> {
         });
       })()`);
 
-      await page.locator(reissueLink).click({ button: 'right' });
-      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      await openMenu(reissueLink);
       check(
         'direct Agent 会话右键显示重发 token 入口',
         await page.locator('#room-menu-reissue-token').isVisible(),
@@ -8064,15 +8391,13 @@ async function main(): Promise<void> {
       }
 
       await page.keyboard.press('Escape');
-      await page.locator(data.group ? roomLink(data.group.room.room_id) : 'body').click({ button: 'right' });
-      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      await openMenu(roomLink(data.group.room.room_id));
       check(
         '群聊右键不显示重发 token 入口',
         await page.locator('#room-menu-reissue-token').isHidden(),
       );
       await page.keyboard.press('Escape');
-      await page.locator(humanPeerLink).click({ button: 'right' });
-      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      await openMenu(humanPeerLink);
       check(
         '人类 direct 会话不显示重发 token 入口',
         await page.locator('#room-menu-reissue-token').isHidden(),
@@ -8108,8 +8433,7 @@ async function main(): Promise<void> {
           }),
         });
       });
-      await page.locator(reissueLink).click({ button: 'right' });
-      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      await openMenu(reissueLink);
       page.once('dialog', async (dialog) => {
         await dialog.accept();
       });
@@ -8177,6 +8501,12 @@ async function main(): Promise<void> {
           };
         });
       })()`);
+      // 列表变长后目标可能只露出半行；先滚到完整可见再按坐标长按。
+      await mobile.page.evaluate((selector) => {
+        const link = document.querySelector(selector);
+        if (link) link.scrollIntoView({ block: 'nearest' });
+      }, reissueLink);
+      await sleep(200);
       await mobile.page.evaluate(`(() => {
         const link = document.querySelector(${JSON.stringify(reissueLink)});
         const rect = link.getBoundingClientRect();

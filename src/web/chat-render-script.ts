@@ -6,6 +6,8 @@
  */
 export const CHAT_RENDER_SCRIPT = `
 const TIME_GAP = 5 * 60 * 1000;
+// 已展开全文的消息正文；刷新重建 DOM 后仍直接渲染完整正文。
+const expandedMessageBodies = new Map();
 
 function senderName(senderId) {
   if (identity && senderId === identity.actor_id) return '我';
@@ -256,11 +258,15 @@ function messageItem(item) {
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   bubble.title = fullTime(item.created_at);
-  const truncated = item.body_bytes > new TextEncoder().encode(item.preview).length;
+  // 已展开过的消息优先使用完整正文；刷新/重建不能让它退回预览。
+  const expandedBody = expandedMessageBodies.get(item.message_id);
+  const bodyText = expandedBody === undefined ? item.preview : expandedBody;
+  const truncated = expandedBody === undefined &&
+    item.body_bytes > new TextEncoder().encode(item.preview).length;
   // 预览也渲染 Markdown；截断可能切断语法，由 Markdown 岛用 remend 闭合。
-  renderMessageBody(bubble, item.preview, item, agent, truncated);
+  renderMessageBody(bubble, bodyText, item, agent, truncated);
   content.append(bubble);
-  let filesElement = mountMessageFiles(item.preview, null);
+  let filesElement = mountMessageFiles(bodyText, null);
   if (filesElement) content.append(filesElement);
   if (truncated) {
     const expand = document.createElement('button');
@@ -279,10 +285,11 @@ function messageItem(item) {
         if (filesElement && !filesElement.isConnected) {
           content.insertBefore(filesElement, expand);
         }
-        if (rendered) {
+        if (rendered || !agent) {
+          expandedMessageBodies.set(item.message_id, fullText);
           expand.remove();
         } else {
-          // bundle 重试仍失败：正文已是完整纯文本，保留按钮供稍后再试。
+          // bundle 重试仍失败：不记展开态，正文已是完整纯文本，保留按钮供稍后再试。
           expand.disabled = false;
           expand.textContent = '展开全文';
         }

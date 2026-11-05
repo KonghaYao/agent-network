@@ -81,8 +81,7 @@ const chatSkeletonElement = document.getElementById('chat-skeleton');
 const chatErrorElement = document.getElementById('chat-error');
 const chatErrorTextElement = document.getElementById('chat-error-text');
 const chatErrorRetryButton = document.getElementById('chat-error-retry');
-const streamStatusElement = document.getElementById('stream-status');
-const streamBannerElement = document.getElementById('stream-banner');
+const streamDotElement = document.getElementById('stream-dot');
 const renameButton = document.getElementById('rename');
 const renameForm = document.getElementById('rename-form');
 const renameInput = document.getElementById('rename-input');
@@ -640,6 +639,9 @@ function resizeComposer() {
   bodyInput.style.height = height + 'px';
   bodyInput.style.overflowY = bodyInput.scrollHeight > max ? 'auto' : 'hidden';
   // 输入框变高会压缩消息视口；pinned 时在下一帧重新钉到底。
+  if (jumpLatestButton && composer) {
+    jumpLatestButton.style.bottom = Math.ceil(composer.getBoundingClientRect().height + 14) + 'px';
+  }
   scrollController.noteContentChanged();
 }
 

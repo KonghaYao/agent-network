@@ -52,16 +52,20 @@ function streamDebug(message, detail) {
   else console.debug('[agentnet-stream] ' + message, detail);
 }
 
-/** 只写实时连接自己的提示位；聊天页与侧栏各有一个，均不阻塞操作。 */
+/** 断线状态只用侧栏一个小圆点表示；详细原因放 title/aria-label，不显示长句。 */
 function setStreamStatus(text) {
   const value = text || '';
-  if (streamStatusElement) {
-    streamStatusElement.textContent = value;
-    streamStatusElement.hidden = !value;
-  }
-  if (streamBannerElement) {
-    streamBannerElement.textContent = value;
-    streamBannerElement.hidden = !value;
+  if (!streamDotElement) return;
+  streamDotElement.textContent = '';
+  streamDotElement.hidden = !value;
+  streamDotElement.title = value;
+  streamDotElement.setAttribute('aria-label', value);
+  if (!value) {
+    streamDotElement.removeAttribute('data-state');
+  } else if (value.indexOf('已停止') >= 0) {
+    streamDotElement.setAttribute('data-state', 'stopped');
+  } else {
+    streamDotElement.removeAttribute('data-state');
   }
 }
 
