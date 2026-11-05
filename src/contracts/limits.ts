@@ -183,6 +183,14 @@ export const LIMITS = {
   eventsWebhookMaxPayloadBytes: 256 * 1024,
   /** 每 callback host 每分钟 challenge 上限。 */
   eventsVerificationPerHostPerMinute: 10,
+  /** feedback request_id 字节上限（ASCII）。 */
+  feedbackRequestIdBytes: 128,
+  /** feedback harness 原始 UTF-8 字节上限。 */
+  feedbackHarnessBytes: 128,
+  /** feedback environment 原始 UTF-8 字节上限。 */
+  feedbackEnvironmentBytes: 4 * 1024,
+  /** feedback problem 原始 UTF-8 字节上限。 */
+  feedbackProblemBytes: 16 * 1024,
 } as const;
 
 export function clampPage(value: number | undefined, fallback: number, max: number): number {

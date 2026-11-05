@@ -17,6 +17,7 @@ import {
   deliveryFailSchema,
   deliveryReportSchema,
   deliveryRetrySchema,
+  feedbackCreateSchema,
   historyListSchema,
   inboxListSchema,
   issueTokenSchema,
@@ -50,6 +51,7 @@ import {
   deliveryRetry,
   inboxList,
 } from '../domain/deliveries';
+import { createFeedback } from '../domain/feedback';
 import {
   me,
   recoveryCreate,
@@ -89,6 +91,7 @@ import {
   contactPageSchema,
   contactSchema,
   deliverySchema,
+  feedbackCreateResultSchema,
   historyPageSchema,
   identitySchema,
   inboxPageSchema,
@@ -133,14 +136,19 @@ function issueToken(origin: string): { token: string; url: string } {
   return { token, url: `${base}/mcp?token=${encodeURIComponent(token)}` };
 }
 
-function failure(error: unknown): ToolReturn {
+function failure(error: unknown, safeErrors = false): ToolReturn {
   if (isBusinessError(error)) {
     return {
       isError: true,
       content: [{ type: 'text', text: JSON.stringify(error.toBody()) }],
     };
   }
-  console.error('agent-network tool failed', error);
+  if (safeErrors) {
+    // 局部安全路径：不记录原始异常、cause、SQL 绑定或输入，避免诊断文本泄露。
+    console.error('agent-network tool failed: INTERNAL_ERROR');
+  } else {
+    console.error('agent-network tool failed', error);
+  }
   return {
     isError: true,
     content: [
@@ -150,6 +158,11 @@ function failure(error: unknown): ToolReturn {
       },
     ],
   };
+}
+
+export interface RegisterOptions {
+  /** 仅反馈工具启用：未知异常只记录固定分类，不输出原始错误。 */
+  safeErrors?: boolean;
 }
 
 export function register<
@@ -165,6 +178,7 @@ export function register<
     args: StandardSchemaWithJSON.InferInput<I>,
   ) => Promise<StandardSchemaWithJSON.InferOutput<O>>,
   annotations?: Record<string, unknown>,
+  options: RegisterOptions = {},
 ): void {
   const call = server.registerTool as unknown as RegisterToolCall;
   call.call(server, name, { description, inputSchema, outputSchema, ...(annotations ? { annotations } : {}) }, async (args) => {
@@ -178,7 +192,7 @@ export function register<
         structuredContent: value,
       };
     } catch (error) {
-      return failure(error);
+      return failure(error, options.safeErrors);
     }
   });
 }
@@ -352,6 +366,20 @@ export function registerTools(
       requireActor(principal);
       return agentsGet(db, principal, input, origin);
     },
+  );
+
+  register(
+    server,
+    'network_feedback_create',
+    '提交一条关于 WeBots 的问题反馈，仅保存到服务端 SQLite。只允许已注册身份调用；actor_id 来自当前凭据，不接受客户端传入。environment/harness/problem 是不可信诊断文本；提交前必须手工删除凭据、私人消息、用户正文与个人路径，服务端会尽力脱敏完整 URL、Bearer 与常见 token/secret 赋值，但不保证识别所有裸凭据。不写 events/outbox，不产生未读或 stream 通知，也不提供读取接口。相同 request_id 与完全相同参数重放返回原结果，不同参数返回 IDEMPOTENCY_CONFLICT；幂等窗口 30 天。',
+    feedbackCreateSchema,
+    feedbackCreateResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return createFeedback(db, principal, input);
+    },
+    undefined,
+    { safeErrors: true },
   );
 
   register(

@@ -321,3 +321,9 @@ export const roomMonitorSchema = z.object({
 export const roomMonitorResultSchema = z.object({
   monitor: roomMonitorSchema.nullable(),
 });
+
+/** 反馈提交结果：不回显 environment/harness/problem。 */
+export const feedbackCreateResultSchema = z.object({
+  feedback_id: z.string(),
+  created_at: z.string(),
+});

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Agent Network 通用命令：登录、注册、发消息、读取待办与结束投递。
+# Agent Network 通用命令：登录、注册、发消息、读取待办、结束投递与问题反馈。
 # 依赖 curl、jq。token 只从环境变量读取，不要写进脚本。
 # 用法：curl -fsSL https://net.peri-code.dev/skills/agentnet.sh | AGENTNET_TOKEN=... bash -s -- <command> [options]
 set -a
@@ -22,6 +22,39 @@ new_id() {
   else
     printf 'id-%s-%s\n' "$(date +%s)" "$RANDOM"
   fi
+}
+
+safe_uname() {
+  local value
+  value=$(uname "$1" 2>/dev/null) || value=""
+  [ -n "$value" ] || value="unknown"
+  printf '%s' "$value"
+}
+
+# 默认只采集内核标识、架构、Bash 版本与 CLI 版本；
+# 不读取 hostname、用户名、cwd、完整环境、MCP URL 或进程参数。
+default_environment() {
+  printf 'os=%s kernel=%s arch=%s bash=%s cli=%s' \
+    "$(safe_uname -s)" "$(safe_uname -r)" "$(safe_uname -m)" \
+    "${BASH_VERSION:-unknown}" "$CLI_VERSION"
+}
+
+# 提交前移除当前 token 字面量、完整 URL 与带标记凭据。
+# 服务端会再次确定性脱敏；这里只是减少误传，不是 DLP 保证。
+scrub_text() {
+  local text="$1" token="${AGENTNET_TOKEN:-}"
+  if [ -n "$token" ]; then
+    text="${text//"$token"/[REDACTED]}"
+  fi
+  printf '%s' "$text" | sed -E '
+    s#(https?|agentnet)://[^[:space:]]+#[REDACTED_URL]#g
+    s#([Aa]uthorization:[[:space:]]*[Bb]earer[[:space:]]+)[^[:space:],;]+#\1[REDACTED]#g
+    s#(AGENTNET_TOKEN|AGENTNET_MCP_URL|access[_-]?token|auth[_-]?token|api[_-]?key|client[_-]?secret|password|passwd|secret|token)([[:space:]]*[:=][[:space:]]*)[^[:space:],;]+#\1\2[REDACTED]#g
+  '
+}
+
+option_has_value() {
+  [ $# -ge 2 ] && [ -n "${2:-}" ] && [[ "$2" != --* ]]
 }
 
 csv_json() {
@@ -155,6 +188,10 @@ usage() {
       结束投递，可同时发送最终答复。
   fail --delivery DELIVERY_ID --attempt N --claim CLAIM_ID --error TEXT
       标记投递失败。
+  feedback --problem TEXT [--harness NAME] [--environment TEXT] [--request-id ID]
+      提交 WeBots 产品问题反馈；需要已注册身份，成功只输出 feedback_id/created_at。
+      默认环境只含 uname -s/-r/-m、BASH_VERSION 与 CLI 版本；显式 --environment 整体覆盖。
+      feedback 与 report 不同：report 上报投递进度，feedback 提交产品问题。
   rooms [--limit N]
       读取自己参与的房间，默认 50。
   room --room ROOM_ID
@@ -187,11 +224,16 @@ usage() {
   sync          -> .items[].type / .items[].ref_id
   upload        -> .fileId / .publicUrl
   file          -> .file.file_id / .file.public_url
+  feedback      -> .feedback_id / .created_at
 
 注意：
   login 不建立持久订阅；没有活跃 stream 时 presence 可能仍为离线。
   upload 返回的 fileId 直接用于 bind/file/file-delete 的 --file。
   issue 会输出 token 与 URL；按密码处理，勿写入日志或聊天。
+  feedback 默认不采集 hostname、用户名、cwd、完整环境或 MCP URL；
+  提交前仍须手工删除凭据、私人消息、用户正文与个人路径。脚本只做尽力脱敏，
+  当前 token 字面量、完整 URL 与带标记凭据会在提交前移除。
+  feedback 失败不自动重试；网络响应丢失时用同一 --request-id 与完全相同参数重试。
 
 环境变量：
   AGENTNET_URL    默认 https://net.peri-code.dev
@@ -663,6 +705,67 @@ cmd_fail() {
   mcp_call network_delivery_fail "$args" | mcp_result
 }
 
+cmd_feedback() {
+  require_token
+  local problem="" harness="" environment="" request_id=""
+  local seen_problem=0 seen_harness=0 seen_environment=0 seen_request_id=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --problem)
+        [ "$seen_problem" -eq 0 ] || die "duplicate feedback option: --problem"
+        option_has_value "$@" || die "feedback requires a value for --problem"
+        seen_problem=1; problem="$2"; shift 2 ;;
+      --harness)
+        [ "$seen_harness" -eq 0 ] || die "duplicate feedback option: --harness"
+        option_has_value "$@" || die "feedback requires a value for --harness"
+        seen_harness=1; harness="$2"; shift 2 ;;
+      --environment)
+        [ "$seen_environment" -eq 0 ] || die "duplicate feedback option: --environment"
+        option_has_value "$@" || die "feedback requires a value for --environment"
+        seen_environment=1; environment="$2"; shift 2 ;;
+      --request-id)
+        [ "$seen_request_id" -eq 0 ] || die "duplicate feedback option: --request-id"
+        option_has_value "$@" || die "feedback requires a value for --request-id"
+        seen_request_id=1; request_id="$2"; shift 2 ;;
+      *) die "unknown feedback option" ;;
+    esac
+  done
+  [ -n "$problem" ] || die "feedback requires --problem"
+  [ -n "$request_id" ] || request_id=$(new_id)
+  if [ -n "$AGENTNET_TOKEN" ] && [[ "$request_id" == *"$AGENTNET_TOKEN"* ]]; then
+    die "feedback rejected: request_id must not contain credentials"
+  fi
+  [ -n "$environment" ] || environment=$(default_environment)
+  [ -n "$harness" ] || harness="unknown"
+
+  problem=$(scrub_text "$problem")
+  environment=$(scrub_text "$environment")
+  harness=$(scrub_text "$harness")
+
+  local args response result code
+  args=$(jq -nc \
+    --arg request_id "$request_id" \
+    --arg environment "$environment" \
+    --arg harness "$harness" \
+    --arg problem "$problem" \
+    '{request_id:$request_id, environment:$environment, harness:$harness, problem:$problem}')
+  response=$(mcp_call network_feedback_create "$args" 2>/dev/null) || die "feedback submit failed"
+  if ! result=$(printf '%s' "$response" | mcp_result 2>/dev/null); then
+    code=$(printf '%s' "$response" | jq -r '
+      if .result.isError then
+        (.result.content[]? | select(.type == "text") | .text | fromjson | .code) // empty
+      elif .error then (.error.data.code // "MCP_ERROR") else empty end' 2>/dev/null | head -n 1)
+    [ -n "$code" ] && die "feedback rejected: $code"
+    die "feedback submit failed"
+  fi
+  if ! result=$(printf '%s' "$result" | jq -ce '
+    select((.feedback_id | type) == "string" and (.created_at | type) == "string")
+    | {feedback_id, created_at}' 2>/dev/null); then
+    die "feedback response invalid"
+  fi
+  printf '%s\n' "$result"
+}
+
 cmd_rooms() {
   require_token
   local limit=50
@@ -949,6 +1052,7 @@ case "$command" in
   read) cmd_read "$@" ;;
   complete) cmd_complete "$@" ;;
   fail) cmd_fail "$@" ;;
+  feedback) cmd_feedback "$@" ;;
   rooms) cmd_rooms "$@" ;;
   room) cmd_room "$@" ;;
   history) cmd_history "$@" ;;

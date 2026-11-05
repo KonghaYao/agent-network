@@ -1,6 +1,6 @@
 # WeBots 代码索引
 
-状态：M0–M3 服务端与 M4 网页入口已实现（分享页建联、微信风双栏首页/聊天、会话搜索、建群、群 @、消息状态回执、Agent 全局改名、本人姓名编辑、Agent token 注销重发、Agent 软归档（侧栏 direct Agent 右键归档与账号区已归档浮层）、左下角手机扫码共享当前身份与复制扫码内容、左下角本机退出登录、显式上线与离线补发、新建 Agent 自动建会话并补齐联系人、按 human+会话私有的网页监控面板、右侧文件/监控面板与聊天区默认 50/50 且可拖拽调整、Agent 品牌头像、暗色与移动端单栏）；聊天房间文件服务端已实现（绑定、列表、读取、删除墓碑、公开下载与配额），网页文件栏已实现并由 `bun run test:web` 1056 项覆盖；MCP Events webhook 订阅、消息文件自动归档、五份 Harness 静态接入指南（Codex/ChatGPT Web/Peri/Claude Code/Other）与相关文档已实现。本地与远程协议/端到端验收通过。生产负载、限流与远程运营仍未验证。使用说明由 [包 README](../../npm-packages/agent-network/README.md) 维护，实施契约见 [active spec](../../spec/issues/2026-10-21-agent-network.md)。
+状态：M0–M3 服务端与 M4 网页入口已实现（分享页建联、微信风双栏首页/聊天、会话搜索、建群、群 @、消息状态回执、Agent 全局改名、本人姓名编辑、Agent token 注销重发、Agent 软归档（侧栏 direct Agent 右键归档与账号区已归档浮层）、问题反馈、左下角手机扫码共享当前身份与复制扫码内容、左下角本机退出登录、显式上线与离线补发、新建 Agent 自动建会话并补齐联系人、按 human+会话私有的网页监控面板、右侧文件/监控面板与聊天区默认 50/50 且可拖拽调整、Agent 品牌头像、暗色与移动端单栏）；聊天房间文件服务端已实现（绑定、列表、读取、删除墓碑、公开下载与配额），网页文件栏已实现并由 `bun run test:web` 1056 项覆盖；MCP Events webhook 订阅、消息文件自动归档、五份 Harness 静态接入指南（Codex/ChatGPT Web/Peri/Claude Code/Other）与相关文档已实现。本地与远程协议/端到端验收通过。生产负载、限流与远程运营仍未验证。使用说明由 [包 README](../../npm-packages/agent-network/README.md) 维护，实施契约见 [active spec](../../spec/issues/2026-10-21-agent-network.md)。
 
 ## 边界与数据流
 
@@ -32,6 +32,8 @@ MCP Events：`src/contracts/events.ts` 固定事件名与错误码 `-32015`；`s
 改名与建群：`network_agent_rename` 直接更新 `actors.name`，任何已注册身份均可调用，目标必须是 `kind = 'agent'`；没有 alias 列或迁移，这是产品接受的开放边界。网页 `+` 入口通过 `network_contacts_list` 分页取好友并多选，调用 `network_room_create { kind: 'group' }`；单聊头部提供内联改名，群聊头部只显示群名与成员数。发送框在 composition 期间忽略 Enter（含 `isComposing`、keyCode 229 与组合结束后的短暂守卫）。
 
 Agent token 注销重发：`src/domain/identity.ts` 的 `reissueAgentToken` 在同一个 `runIdempotent` 事务中把目标 Agent 所有未撤销凭据置 `revoked_at`，并写入新 token 的 `hashToken` 摘要；`operations.result_json` 只保存 `actor_id`/`revoked_count`/`issued_at`，不保存 raw token，因此同一 `request_id` 重放返回 `TOKEN_NOT_REPLAYABLE`。权限与 `network_agent_rename` 一致，human 目标 `INVALID_ARGUMENT`、未知 `NOT_FOUND`。`src/mcp/tools.ts` 注册 `network_agent_reissue_token`（工具总数 37，关闭 Drive 32），输出 schema 在 `src/mcp/outputs.ts`；`src/web/chat-room-menu-script.ts` 只在 direct Agent 会话显示“注销并重发 token”，使用 `window.confirm` 二次确认，成功后通过 `agentRegistryReissue` 更新 `agent-network-agents-v1` 中的 `mcp_url` 并自动复制新提示词；菜单、页面与 console 不展示 token。
+
+问题反馈：`migrations/0009_feedback.sql` 新增 `feedback`（`feedback_id`、`actor_id`、`environment`、`harness`、`problem`、`created_at`）与 `created_at DESC, feedback_id` 索引。`src/domain/feedback.ts` 的 `createFeedback` 只从 principal 取 `actor_id`，校验 `request_id` ASCII 格式与三个文本字段的原始 UTF-8 上限（4096/128/16384），做确定性 URL/Bearer/token 赋值脱敏，并用 `runIdempotent` 在同一 `db.batch()` 写 `operations` 与 `feedback`；幂等 hash 取原始输入，`operations.result_json` 只保存 `feedback_id`/`created_at`。`src/mcp/tools.ts` 注册 `network_feedback_create`（当前工具总数 41，关闭 Drive 36），输出 schema 在 `src/mcp/outputs.ts`。反馈不写 events/outbox、不改 `pending_count`/`rooms.head_seq`，不产生 stream/webhook 或未读，也不提供读取/管理工具；未知异常走局部 `safeErrors`，只记录固定分类。`scripts/lib/feedback-unit.ts` 覆盖内存迁移/旧库升级/事务回滚/脱敏/安全错误，`feedback-cli.ts` 覆盖离线 CLI，`feedback-acceptance.ts` 覆盖认证提交、并发幂等与无通知副作用；均由 `verify-protocol.ts` / `acceptance.ts` 调用。
 
 Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `archived_at` / `archived_by`（不建索引、不建独立表）；`src/domain/agents.ts` 的 `archiveAgent` / `unarchiveAgent` 走 `runIdempotent`，保留首次归档时间与操作者，目标必须是 Agent（human → `INVALID_ARGUMENT`，未知 → `NOT_FOUND`），权限与 `network_agent_rename` 一致；`agentsGet` 只按已知 `actor_ids` 批量读取（1–100，去重保序，人类/未知进 `missing_actor_ids`），不返回 metadata 或凭据。归档不写 events/outbox、不改 `pending_count` / `rooms.head_seq`，也不影响认证、好友、房间、消息、delivery、stream、presence 或 login；`identityView` 不暴露归档字段。`src/mcp/tools.ts` 注册 3 个工具（总数 37，关闭 Drive 32），输出 schema 在 `src/mcp/outputs.ts`。网页 `src/web/chat-agents-script.ts` 只维护浏览器本地注册表（不再提供旧 Agents 管理弹窗或旧归档界面）；`src/web/chat-archive-script.ts` 维护 `network_agents_get` 归档状态、侧栏 direct Agent 过滤、账号区“已归档 Agents”浮层与恢复/toast，`src/web/chat-room-menu-script.ts` 在 direct Agent 右键菜单提供“归档”，群聊与人类会话不显示。归档状态不写 localStorage，也不新增全局枚举端点；浮层只覆盖当前会话列表中的 direct Agent。注册表 key 为 `agent-network-agents-v1`，按当前 human `actor_id` 隔离，保存 `owner_actor_id`/`actor_id`/`name`/`agent_session_id`/`created_at`/`mcp_url`（Agent 自己的长期 URL，含 token），不保存 human token、提示词或 `share_url`；`src/web/chat-room-menu-script.ts` 在 direct/group 会话右键时把命中的 MCP URL 与提取的 token 写入复制提示词，未命中时明确提示。
 
@@ -92,6 +94,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 上下线状态机、grace/sweep/恢复与 CAS | `src/realtime/presence-timeline.ts` |
 | 人类 timeline 分页与 presence 行 | `src/domain/timeline.ts`、`src/mcp/outputs.ts` |
 | 上下线 schema 与 CAS 闸门 | `migrations/0006_agent_presence.sql`、`migrations/0007_agent_presence_activity.sql` |
+| `feedback` schema 与 created_at 索引 | `migrations/0009_feedback.sql` |
 | 上下线单元/端到端/重启恢复验收 | `scripts/lib/presence-unit.ts`、`scripts/lib/presence-acceptance.ts`、`scripts/lib/presence-restart.ts` |
 | 资源与私有缓存 | `src/mcp/resources.ts` |
 | SEP-2640 技能（`skills/list`、`skills/get`、SKILL.md 资源） | `src/mcp/skill.ts` |
@@ -106,7 +109,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 统一事件信封与 `actor:{id}` 扇出 | `src/realtime/stream.ts` |
 | actor presence 与订阅广播 | `src/realtime/hub.ts`、`src/realtime/presence.ts` |
 | 留存与新序号下界 | `src/maintenance.ts` |
-| SQLite schema | `migrations/0001_initial.sql`、`0002_named_guards.sql`、`0003_room_files.sql`、`0004_mcp_events.sql`、`0005_agent_archive.sql`、`0006_agent_presence.sql`、`0007_agent_presence_activity.sql` |
+| SQLite schema | `migrations/0001_initial.sql`、`0002_named_guards.sql`、`0003_room_files.sql`、`0004_mcp_events.sql`、`0005_agent_archive.sql`、`0006_agent_presence.sql`、`0007_agent_presence_activity.sql`、`0008_actor_room_monitors.sql`、`0009_feedback.sql` |
 | 部署（Bun + 反向代理） | `README.md` |
 | 协议验收 | `scripts/verify-protocol.ts` |
 | Harness 静态断言（200/Markdown/关键标记/相对链接/无凭据） | `scripts/verify-protocol.ts` |

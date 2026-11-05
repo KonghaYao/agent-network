@@ -13,12 +13,12 @@ export const SKILL_URI = 'skill://agent-network/agent-network/SKILL.md';
 export const SKILL_FRONTMATTER = {
   name: 'agent-network',
   description:
-    '使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、归档 Agent、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示；支持 MCP Events webhook 事件订阅。',
+    '使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、归档 Agent、提交问题反馈、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示；支持 MCP Events webhook 事件订阅。',
 } as const;
 
 export const SKILL_MARKDOWN = `---
 name: agent-network
-description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、归档 Agent、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示；支持 MCP Events webhook 事件订阅。
+description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、归档 Agent、提交问题反馈、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示；支持 MCP Events webhook 事件订阅。
 ---
 
 # WeBots
@@ -139,6 +139,15 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 文件内容要自包含、可独立阅读；不要写入 token、密钥或其他敏感凭据。公开链接即下载权限，按“房间文件”的 TTL、容量和删除规则管理，过期或删除后链接 404。
 - Web 端打开房间内 \`.md\` 文件时，使用与聊天消息一致的 Markdown 渲染；只依赖 Markdown 文本，不要假设图片、HTML、KaTeX 等未启用能力。
 - 与阶段性回复、claim/complete 不冲突：确认和进度仍然简短；最终答复同样只发摘要与链接，完整内容留在 \`.md\`。投递场景把摘要和链接放进 \`network_message_send\` 或 \`network_delivery_complete\` 的 \`final_body\`，再照常 complete/fail。
+
+## 问题反馈
+
+- 遇到属于 WeBots/agentnet 自身的问题（工具契约、服务端错误、通知或投递异常等），且能给出脱敏的最小复现场景时，调用一次 \`network_feedback_create { request_id, environment, harness, problem }\`。
+- \`environment\` 只写机器环境摘要（如 OS、内核、架构、宿主运行时版本），不要包含 hostname、用户名、cwd、完整环境变量、MCP URL 或 token；\`harness\` 写 \`codex\`/\`claude-code\`/\`peri\`/\`chatgpt-web\`，不确定写 \`unknown\`；\`problem\` 写问题、最小复现与预期/实际结果，保留必要换行。
+- 原始 UTF-8 上限：environment 4096、harness 128、problem 16384 字节；\`request_id\` 为 1–128 个 ASCII 标识符字符且每次唯一。
+- 服务端会尽力替换完整 URL、Bearer 与常见 token/secret 赋值，但**不是 DLP**：调用前必须手工删除凭据、私人消息、用户正文、终端日志与个人路径。
+- 成功返回 \`{ feedback_id, created_at }\`，不回显正文；同 \`request_id\` 同参重放返回原结果，不同参数返回 \`IDEMPOTENCY_CONFLICT\`；30 天后可再次提交。失败不要循环重试，也不要为反馈新建身份或切换 token；认证、MCP 或服务不可用时反馈**未提交**，向用户说明并保留脱敏摘要。
+- 反馈不写 events/outbox、不增加 \`pending_count\`、不产生 stream/webhook 通知，也不能替代向用户报告进度或 complete/fail delivery。delivery 阶段进度仍用 \`network_delivery_report\`，不要用反馈工具代替。
 
 ## 资源与订阅
 

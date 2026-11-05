@@ -215,6 +215,42 @@ export const roomMonitorSetSchema = z.object({
   url: z.string().trim().max(LIMITS.roomMonitorUrlMax).nullable(),
 });
 
+/**
+ * 认证反馈：只接受已注册 actor 主动提交的三段诊断文本。
+ *
+ * request_id 限制为 ASCII 标识符，避免把凭据或 URL 误当操作 ID；
+ * 文本字段的最终上限按原始 UTF-8 字节在领域层校验，这里不用
+ * Zod 的字符数 max 冒充字节限额。
+ */
+export const feedbackCreateSchema = z.strictObject({
+  request_id: z
+    .string()
+    .min(1)
+    .max(LIMITS.feedbackRequestIdBytes)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)
+    .describe(
+      'Unique operation ID for idempotent replay; 1-128 ASCII characters, suggested pattern [A-Za-z0-9][A-Za-z0-9._:-]*. Must not contain credentials.',
+    ),
+  environment: z
+    .string()
+    .min(1)
+    .describe(
+      `Machine environment summary. Raw UTF-8 must be at most ${LIMITS.feedbackEnvironmentBytes} bytes and must not be blank after trimming. Remove credentials, private messages, personal paths and unrelated environment variables before submitting; automatic redaction is best-effort.`,
+    ),
+  harness: z
+    .string()
+    .min(1)
+    .describe(
+      `Harness identifier such as codex, claude-code, peri, chatgpt-web or unknown. Raw UTF-8 must be at most ${LIMITS.feedbackHarnessBytes} bytes, must not be blank after trimming, and must not contain control characters.`,
+    ),
+  problem: z
+    .string()
+    .min(1)
+    .describe(
+      `Problem description and minimal reproduction. Raw UTF-8 must be at most ${LIMITS.feedbackProblemBytes} bytes and must not be blank after trimming; internal newlines are preserved. Do not include credentials, private messages, user content or terminal logs; automatic redaction is best-effort.`,
+    ),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type ProfileUpdateInput = z.infer<typeof profileUpdateSchema>;
 export type AgentRenameInput = z.infer<typeof agentRenameSchema>;
@@ -249,3 +285,4 @@ export type RoomFileGetInput = z.infer<typeof roomFileGetSchema>;
 export type RoomFileDeleteInput = z.infer<typeof roomFileDeleteSchema>;
 export type RoomMonitorGetInput = z.infer<typeof roomMonitorGetSchema>;
 export type RoomMonitorSetInput = z.infer<typeof roomMonitorSetSchema>;
+export type FeedbackCreateInput = z.infer<typeof feedbackCreateSchema>;

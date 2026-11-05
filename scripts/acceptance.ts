@@ -44,6 +44,7 @@ import { runRoomFileAcceptance } from './lib/room-file-acceptance';
 import { runAgentArchiveAcceptance } from './lib/agent-archive-acceptance';
 import { runAgentPresenceAcceptance } from './lib/presence-acceptance';
 import { runRoomMonitorAcceptance } from './lib/room-monitor-acceptance';
+import { runFeedbackAcceptance } from './lib/feedback-acceptance';
 import {
   ensureTestCertificate,
   removeTestData,
@@ -1265,10 +1266,20 @@ async function main(): Promise<void> {
     check('未知 scope 错误可读', typeof badScope.body.message === 'string', badScope.body);
 
     await runUnifiedStreamAcceptance();
-    await runRoomFileAcceptance();
+    const toolList = await rawRpc('tools/list');
+    const hasDrive =
+      (toolList.body.result as { tools?: { name?: string }[] } | undefined)?.tools?.some(
+        (tool) => tool.name === 'drive_file_info',
+      ) ?? false;
+    if (hasDrive) {
+      await runRoomFileAcceptance();
+    } else {
+      console.log('  · Drive 未启用，跳过房间文件端到端片段');
+    }
     await runAgentArchiveAcceptance();
     await runAgentPresenceAcceptance();
     await runRoomMonitorAcceptance();
+    await runFeedbackAcceptance();
 
     console.log(`端到端验收通过: ${checksPassed()} 项`);
   } finally {

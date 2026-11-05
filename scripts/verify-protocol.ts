@@ -20,6 +20,8 @@ import {
 } from './lib/harness';
 import { runStreamProtocolChecks } from './lib/stream-protocol';
 import { runAgentPresenceUnitChecks } from './lib/presence-unit';
+import { runFeedbackUnitChecks } from './lib/feedback-unit';
+import { runFeedbackCliChecks } from './lib/feedback-cli';
 
 const STREAM_URI = 'agentnet://stream';
 
@@ -70,6 +72,23 @@ async function rawToolCall<T>(
     data: result?.structuredContent,
     code: toolErrorCode(response.body),
   };
+}
+
+/** SDK 的输入校验失败可能是 JSON-RPC -32602 或 isError 的 Input validation error。 */
+function isInputValidationFailure(body: Record<string, unknown>): boolean {
+  const error = body.error as { code?: number; message?: string } | undefined;
+  if (error?.code === -32602) return true;
+  const result = body.result as
+    | { isError?: boolean; content?: { type?: string; text?: string }[] }
+    | undefined;
+  if (result?.isError !== true) return false;
+  return (result.content ?? []).some(
+    (item) => item.type === 'text' && (item.text ?? '').includes('Input validation error'),
+  );
+}
+
+function toolStructured<T>(body: Record<string, unknown>): T | undefined {
+  return (body.result as { structuredContent?: T } | undefined)?.structuredContent;
 }
 
 async function main(): Promise<void> {
@@ -266,6 +285,7 @@ async function main(): Promise<void> {
     'network_agent_archive',
     'network_agent_unarchive',
     'network_agents_get',
+    'network_feedback_create',
     'network_recovery_create',
     'network_recovery_redeem',
     'network_contacts_list',
@@ -298,7 +318,7 @@ async function main(): Promise<void> {
     'network_room_file_delete',
   ];
   const toolNames = listed?.tools?.map((tool) => tool.name) ?? [];
-  // 工具集随 drive 开关变化：核心 35 + drive_file_info + 4 个房间文件工具。
+  // 工具集随 drive 开关变化：核心 36 + drive_file_info + 4 个房间文件工具。
   const hasDrive = toolNames.includes('drive_file_info');
   const hasRoomFiles = roomFileTools.every((name) => toolNames.includes(name));
   check(
@@ -309,7 +329,7 @@ async function main(): Promise<void> {
   const expectedToolCount =
     coreToolNames.length + (hasDrive ? 1 : 0) + (hasRoomFiles ? roomFileTools.length : 0);
   check(`tools/list 返回 ${expectedToolCount} 个工具`, toolNames.length === expectedToolCount, toolNames.length);
-  for (const required of [
+  const requiredCoreTools = [
     'network_issue_token',
     'network_register',
     'network_me',
@@ -320,6 +340,7 @@ async function main(): Promise<void> {
     'network_agent_archive',
     'network_agent_unarchive',
     'network_agents_get',
+    'network_feedback_create',
     'network_message_send',
     'network_room_monitor_get',
     'network_room_monitor_set',
@@ -331,13 +352,21 @@ async function main(): Promise<void> {
     'network_delivery_cancel',
     'network_delivery_retry',
     'network_sync',
-    'drive_file_info',
-    'network_room_file_bind',
-    'network_room_file_list',
-    'network_room_file_get',
-    'network_room_file_delete',
-  ]) {
+  ];
+  for (const required of requiredCoreTools) {
     check(`工具 ${required} 已注册`, toolNames.includes(required), toolNames);
+  }
+  if (hasDrive) {
+    for (const required of ['drive_file_info', ...roomFileTools]) {
+      check(`工具 ${required} 已注册`, toolNames.includes(required), toolNames);
+    }
+  } else {
+    check(
+      '关闭 Drive 时不注册 drive_file_info 与房间文件工具',
+      !toolNames.includes('drive_file_info') &&
+        roomFileTools.every((name) => !toolNames.includes(name)),
+      toolNames,
+    );
   }
 
   const meRenameTool = listed?.tools?.find((tool) => tool.name === 'network_me_rename');
@@ -503,6 +532,58 @@ async function main(): Promise<void> {
       !agentsGetOutput.includes('token'),
     agentsGetTool?.outputSchema,
   );
+
+  const feedbackTool = listed?.tools?.find((tool) => tool.name === 'network_feedback_create');
+  const feedbackInput = feedbackTool?.inputSchema as
+    | {
+        type?: string;
+        properties?: Record<string, { type?: string; description?: string; pattern?: string }>;
+        required?: string[];
+        additionalProperties?: boolean;
+      }
+    | undefined;
+  checkEqual(
+    'feedback 输入字段精确为四个',
+    Object.keys(feedbackInput?.properties ?? {}).sort().join(','),
+    'environment,harness,problem,request_id',
+  );
+  checkEqual(
+    'feedback 输入四个字段全部必填',
+    [...(feedbackInput?.required ?? [])].sort().join(','),
+    'environment,harness,problem,request_id',
+  );
+  check('feedback 输入 schema 为严格对象', feedbackInput?.additionalProperties === false);
+  check(
+    'feedback 输入字段均为 string',
+    Object.values(feedbackInput?.properties ?? {}).every((property) => property.type === 'string'),
+    feedbackInput?.properties,
+  );
+  check(
+    'feedback 字段 describe 包含 UTF-8 字节上限',
+    JSON.stringify(feedbackTool?.inputSchema ?? {}).includes('4096') &&
+      JSON.stringify(feedbackTool?.inputSchema ?? {}).includes('16384') &&
+      JSON.stringify(feedbackTool?.inputSchema ?? {}).includes('128'),
+    feedbackTool?.inputSchema,
+  );
+  check(
+    'feedback request_id 限制为 ASCII 标识符',
+    typeof feedbackInput?.properties?.request_id?.pattern === 'string' &&
+      feedbackInput.properties.request_id.pattern.includes('A-Za-z0-9'),
+    feedbackInput?.properties?.request_id?.pattern,
+  );
+  const feedbackOutput = feedbackTool?.outputSchema as
+    | { properties?: Record<string, unknown> }
+    | undefined;
+  checkEqual(
+    'feedback 输出只含 feedback_id/created_at',
+    Object.keys(feedbackOutput?.properties ?? {}).sort().join(','),
+    'created_at,feedback_id',
+  );
+  check(
+    'feedback 未被标记为只读工具',
+    (feedbackTool as { annotations?: { readOnlyHint?: boolean } } | undefined)?.annotations
+      ?.readOnlyHint !== true,
+  );
   for (const [label, tool] of [
     ['network_me', listed?.tools?.find((item) => item.name === 'network_me')],
     ['network_room_get', roomGetTool],
@@ -604,6 +685,276 @@ async function main(): Promise<void> {
     newAgentIdentity?.actor_id,
   );
   checkEqual('新建 Agent 流程：network_me 返回注册名称', newAgentMeIdentity?.name, newAgentName);
+
+  // 问题反馈：已注册但未 login 的 Agent 可提交；认证失败时返回 CREDENTIAL_INVALID。
+  const feedbackArgs = {
+    request_id: newRequestId('feedback_protocol'),
+    environment: 'os=Protocol kernel=test arch=test bash=5 cli=1.0.0',
+    harness: 'protocol',
+    problem: '协议反馈\n多行中文与特殊字符 <>&"`',
+  };
+  const feedbackMeBefore = toolStructured<{ pending_count?: number }>(
+    (await rawRpc('tools/call', { name: 'network_me', arguments: {} }, { token: secondToken }))
+      .body,
+  );
+  const feedbackCall = await rawRpc(
+    'tools/call',
+    { name: 'network_feedback_create', arguments: feedbackArgs },
+    { token: secondToken },
+  );
+  const feedbackResult = toolStructured<Record<string, unknown>>(feedbackCall.body);
+  check(
+    '已注册未 login 的 Agent 可提交反馈',
+    typeof feedbackResult?.feedback_id === 'string' &&
+      typeof feedbackResult?.created_at === 'string',
+  );
+  checkEqual(
+    'feedback 输出只含 feedback_id/created_at',
+    Object.keys(feedbackResult ?? {}).sort().join(','),
+    'created_at,feedback_id',
+  );
+  check(
+    'feedback created_at 为毫秒字符串',
+    Number.isInteger(Number(feedbackResult?.created_at)),
+  );
+  check(
+    'feedback 响应不回显正文',
+    !JSON.stringify(feedbackResult ?? {}).includes('协议反馈'),
+  );
+  const feedbackReplay = toolStructured<Record<string, unknown>>(
+    (
+      await rawRpc(
+        'tools/call',
+        { name: 'network_feedback_create', arguments: feedbackArgs },
+        { token: secondToken },
+      )
+    ).body,
+  );
+  checkEqual(
+    'feedback 同参重放返回原 feedback_id',
+    feedbackReplay?.feedback_id,
+    feedbackResult?.feedback_id,
+  );
+  checkEqual(
+    'feedback 同参重放返回原 created_at',
+    feedbackReplay?.created_at,
+    feedbackResult?.created_at,
+  );
+  const feedbackConflict = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_feedback_create',
+      arguments: { ...feedbackArgs, problem: '不同的问题正文' },
+    },
+    { token: secondToken },
+  );
+  checkEqual(
+    'feedback 同 request_id 改参数返回 IDEMPOTENCY_CONFLICT',
+    toolErrorCode(feedbackConflict.body),
+    'IDEMPOTENCY_CONFLICT',
+  );
+
+  const feedbackMissing = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_feedback_create',
+      arguments: { request_id: newRequestId('feedback'), environment: 'x', harness: 'h' },
+    },
+    { token: secondToken },
+  );
+  check('feedback 缺 problem 被输入校验拒绝', isInputValidationFailure(feedbackMissing.body));
+  const feedbackExtra = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_feedback_create',
+      arguments: { ...feedbackArgs, request_id: newRequestId('feedback'), actor_id: 'agt_nope' },
+    },
+    { token: secondToken },
+  );
+  check('feedback 额外字段被严格 schema 拒绝', isInputValidationFailure(feedbackExtra.body));
+  const feedbackWrongType = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_feedback_create',
+      arguments: { ...feedbackArgs, request_id: newRequestId('feedback'), problem: 123 },
+    },
+    { token: secondToken },
+  );
+  check('feedback problem 类型错误被拒绝', isInputValidationFailure(feedbackWrongType.body));
+  const feedbackBlank = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_feedback_create',
+      arguments: { ...feedbackArgs, request_id: newRequestId('feedback'), environment: ' \n\t ' },
+    },
+    { token: secondToken },
+  );
+  checkEqual(
+    'feedback 全空白 environment 返回 INVALID_ARGUMENT',
+    toolErrorCode(feedbackBlank.body),
+    'INVALID_ARGUMENT',
+  );
+  const feedbackBadId = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_feedback_create',
+      arguments: { ...feedbackArgs, request_id: 'bad request id' },
+    },
+    { token: secondToken },
+  );
+  check(
+    'feedback 非法 request_id 被拒绝',
+    isInputValidationFailure(feedbackBadId.body) ||
+      toolErrorCode(feedbackBadId.body) === 'INVALID_ARGUMENT',
+  );
+  const feedbackControlHarness = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_feedback_create',
+      arguments: { ...feedbackArgs, request_id: newRequestId('feedback'), harness: 'codex\nperi' },
+    },
+    { token: secondToken },
+  );
+  checkEqual(
+    'feedback harness 控制字符返回 INVALID_ARGUMENT',
+    toolErrorCode(feedbackControlHarness.body),
+    'INVALID_ARGUMENT',
+  );
+
+  const feedbackCanary = `canary-${crypto.randomUUID()}`;
+  const feedbackOverlong = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_feedback_create',
+      arguments: {
+        ...feedbackArgs,
+        request_id: newRequestId('feedback'),
+        problem: `${feedbackCanary}${'测'.repeat(5462)}`,
+      },
+    },
+    { token: secondToken },
+  );
+  checkEqual(
+    'feedback 多字节超长 problem 返回 PAYLOAD_TOO_LARGE',
+    toolErrorCode(feedbackOverlong.body),
+    'PAYLOAD_TOO_LARGE',
+  );
+  check(
+    'feedback 超长错误不回显正文 canary',
+    !JSON.stringify(feedbackOverlong.body).includes(feedbackCanary),
+  );
+
+  const feedbackAnonymous = await rawRpc('tools/call', {
+    name: 'network_feedback_create',
+    arguments: feedbackArgs,
+  });
+  checkEqual(
+    '无凭据调用 feedback 返回 CREDENTIAL_INVALID',
+    toolErrorCode(feedbackAnonymous.body),
+    'CREDENTIAL_INVALID',
+  );
+  const feedbackUnknown = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_feedback_create',
+      arguments: { ...feedbackArgs, request_id: newRequestId('feedback') },
+    },
+    { token: newToken() },
+  );
+  checkEqual(
+    '未知/未注册凭据调用 feedback 返回 CREDENTIAL_INVALID',
+    toolErrorCode(feedbackUnknown.body),
+    'CREDENTIAL_INVALID',
+  );
+
+  const revokedFeedbackToken = toolStructured<{ token?: string }>(
+    (await rawRpc('tools/call', { name: 'network_issue_token', arguments: {} })).body,
+  )?.token;
+  const revokedFeedbackRegister = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_register',
+      arguments: {
+        request_id: newRequestId('revoked_feedback_reg'),
+        kind: 'agent',
+        name: '撤销反馈检查 Agent',
+        agent_session_id: `sess_revoked_feedback_${crypto.randomUUID().replaceAll('-', '')}`,
+      },
+    },
+    { token: revokedFeedbackToken },
+  );
+  const revokedFeedbackActor = toolStructured<{ actor_id?: string }>(
+    revokedFeedbackRegister.body,
+  )?.actor_id;
+  check('撤销前反馈目标 Agent 注册成功', typeof revokedFeedbackActor === 'string');
+  const revokedFeedbackReissue = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_agent_reissue_token',
+      arguments: { request_id: newRequestId('revoked_feedback_reissue'), actor_id: revokedFeedbackActor },
+    },
+    { token: secondToken },
+  );
+  check(
+    '撤销反馈目标 Agent 凭据成功',
+    (revokedFeedbackReissue.body.result as { isError?: boolean } | undefined)?.isError !== true,
+  );
+  const revokedFeedback = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_feedback_create',
+      arguments: { ...feedbackArgs, request_id: newRequestId('feedback') },
+    },
+    { token: revokedFeedbackToken },
+  );
+  const revokedFeedbackError = revokedFeedback.body.error as
+    | { data?: { code?: string } }
+    | undefined;
+  checkEqual(
+    '已撤销凭据调用 feedback 返回 CREDENTIAL_INVALID',
+    toolErrorCode(revokedFeedback.body) ?? revokedFeedbackError?.data?.code,
+    'CREDENTIAL_INVALID',
+  );
+
+  const humanFeedbackToken = newToken();
+  const humanFeedbackRegister = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_register',
+      arguments: {
+        request_id: newRequestId('human_feedback_reg'),
+        kind: 'human',
+        name: '反馈协议人类',
+      },
+    },
+    { token: humanFeedbackToken },
+  );
+  check(
+    '反馈协议人类注册成功',
+    typeof toolStructured<{ actor_id?: string }>(humanFeedbackRegister.body)?.actor_id === 'string',
+  );
+  const humanFeedbackCall = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_feedback_create',
+      arguments: { ...feedbackArgs, request_id: newRequestId('feedback'), harness: 'human-protocol' },
+    },
+    { token: humanFeedbackToken },
+  );
+  check(
+    '人类身份可提交反馈',
+    typeof toolStructured<Record<string, unknown>>(humanFeedbackCall.body)?.feedback_id === 'string',
+  );
+
+  const feedbackMeAfter = toolStructured<{ pending_count?: number }>(
+    (await rawRpc('tools/call', { name: 'network_me', arguments: {} }, { token: secondToken }))
+      .body,
+  );
+  checkEqual(
+    '反馈不改变调用者 pending_count',
+    feedbackMeAfter?.pending_count,
+    feedbackMeBefore?.pending_count,
+  );
 
   const issuedUrl = new URL(issuedUrlValue ?? `${baseUrl()}/mcp?token=missing`);
 
@@ -2140,6 +2491,8 @@ async function main(): Promise<void> {
   if (!secondToken) throw new Error('missing registered agent token');
   await runStreamProtocolChecks(secondToken, newAgentIdentity?.actor_id);
   await runAgentPresenceUnitChecks();
+  await runFeedbackUnitChecks();
+  await runFeedbackCliChecks();
 
   console.log(`协议验收通过: ${checksPassed()} 项`);
 }
