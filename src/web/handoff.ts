@@ -258,9 +258,15 @@ export const DEVICE_HANDOFF_STYLE = `
   .logout-hint { margin: 0 0 16px; font-size: 12px; color: var(--wx-muted, #666);
     line-height: 1.6; }
   .logout-actions { justify-content: flex-end; }
-  button.danger { background: var(--wx-unread, #fa5151); border-color: var(--wx-unread, #fa5151);
-    color: #fff; }
-  button.danger:hover { background: #e04848; border-color: #e04848; }
+  /* 只作用于退出确认弹窗；避免全局 .danger 泄漏到会话菜单/文件操作。 */
+  .logout-card button.danger { background: var(--wx-danger, #c0392b);
+    border-color: var(--wx-danger, #c0392b); color: #fff; }
+  .logout-card button.danger:hover { background: var(--wx-danger-strong, #a93226);
+    border-color: var(--wx-danger-strong, #a93226); }
+  .logout-card button.danger:focus-visible { outline: 2px solid var(--wx-text, #1a1a1a);
+    outline-offset: 2px; }
+  .logout-card button.danger:disabled { opacity: 1; background: #f6d5d5;
+    border-color: #f6d5d5; color: #7f1d1d; cursor: not-allowed; }
   @media (prefers-color-scheme: dark) {
     .logout-warning { background: #3a2a1a; color: #fdba74; }
   }

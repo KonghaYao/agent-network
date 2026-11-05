@@ -20,6 +20,8 @@ export const APP_STYLE = `
     --wx-mine: #95ec69;
     --wx-mine-text: #111111;
     --wx-unread: #fa5151;
+    --wx-danger: #c0392b;
+    --wx-danger-strong: #a93226;
     --wx-link: #576b95;
     --wx-search: #e6e6e6;
     --wx-shadow: 0 12px 32px rgb(0 0 0 / 14%);
@@ -102,7 +104,13 @@ export const APP_STYLE = `
     color: var(--wx-text); font: inherit; font-size: 13px; text-align: left;
     white-space: nowrap; }
   .room-menu-item:hover, .room-menu-item:focus-visible { background: var(--wx-hover); }
-  .room-menu-item.danger { color: var(--wx-unread); }
+  /* 危险动作：红底白字；hover 更深，focus 用文字色轮廓，disabled 浅红底深红字。 */
+  .room-menu-item.danger { background: var(--wx-danger); color: #fff; }
+  .room-menu-item.danger:hover, .room-menu-item.danger:focus-visible {
+    background: var(--wx-danger-strong); }
+  .room-menu-item.danger:focus-visible { outline: 2px solid var(--wx-text); outline-offset: 2px; }
+  .room-menu-item.danger:disabled { opacity: 1; background: #f6d5d5; color: #7f1d1d;
+    cursor: not-allowed; }
   .room-menu-item[hidden] { display: none; }
   .room-menu-status { margin: 4px 0 0; padding: 0 10px 2px; font-size: 12px;
     color: var(--wx-green); }

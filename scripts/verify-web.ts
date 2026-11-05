@@ -99,6 +99,30 @@ function requestId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`;
 }
 
+function parseRgbColor(value: string): [number, number, number] {
+  const match = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/u.exec(value);
+  if (!match) throw new Error(`无法解析颜色：${value}`);
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function relativeLuminance(color: string): number {
+  const [r, g, b] = parseRgbColor(color);
+  const channel = (value: number): number => {
+    const unit = value / 255;
+    return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+/** WCAG 对比度；用于断言 danger 按钮的文字与背景始终可读。 */
+function contrastRatio(foreground: string, background: string): number {
+  const first = relativeLuminance(foreground);
+  const second = relativeLuminance(background);
+  const lighter = Math.max(first, second);
+  const darker = Math.min(first, second);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 async function startServer(): Promise<{
   base: string;
   dataDir: string;
@@ -1008,6 +1032,80 @@ async function main(): Promise<void> {
         (await page.locator('#room-menu-copy-prompt').textContent())?.trim(),
         '复制 Agent 连接提示词',
       );
+      // danger 项红底红字回归：计算样式必须是白字 + danger 红底，且对比度达标。
+      const dangerMenuStyle = (await page.evaluate(`(() => {
+        const node = document.getElementById('room-menu-reissue-token');
+        const style = getComputedStyle(node);
+        return {
+          visible: !node.hidden,
+          color: style.color,
+          background: style.backgroundColor,
+          opacity: style.opacity
+        };
+      })()`)) as {
+        visible: boolean;
+        color: string;
+        background: string;
+        opacity: string;
+      };
+      checkEqual('Agent 单聊右键显示注销并重发 token', dangerMenuStyle.visible, true);
+      checkEqual('危险菜单项文字为白色', dangerMenuStyle.color, 'rgb(255, 255, 255)');
+      checkEqual('危险菜单项背景为 danger 红', dangerMenuStyle.background, 'rgb(192, 57, 43)');
+      check(
+        '危险菜单项文字与背景对比度不低于 4.5:1',
+        contrastRatio(dangerMenuStyle.color, dangerMenuStyle.background) >= 4.5,
+        { ...dangerMenuStyle, contrast: contrastRatio(dangerMenuStyle.color, dangerMenuStyle.background) },
+      );
+      const disabledDangerStyle = (await page.evaluate(`(() => {
+        const node = document.getElementById('room-menu-reissue-token');
+        node.disabled = true;
+        const style = getComputedStyle(node);
+        const result = {
+          color: style.color,
+          background: style.backgroundColor,
+          opacity: style.opacity
+        };
+        node.disabled = false;
+        return result;
+      })()`)) as { color: string; background: string; opacity: string };
+      check(
+        '危险菜单项 disabled 状态仍可读',
+        disabledDangerStyle.opacity === '1' &&
+          contrastRatio(disabledDangerStyle.color, disabledDangerStyle.background) >= 4.5,
+        {
+          ...disabledDangerStyle,
+          contrast: contrastRatio(disabledDangerStyle.color, disabledDangerStyle.background),
+        },
+      );
+      await page.locator('#room-menu-reissue-token').hover();
+      const hoverDangerStyle = (await page.evaluate(`(() => {
+        const style = getComputedStyle(document.getElementById('room-menu-reissue-token'));
+        return { color: style.color, background: style.backgroundColor };
+      })()`)) as { color: string; background: string };
+      check(
+        '危险菜单项 hover 为更深红色且对比度足够',
+        hoverDangerStyle.background === 'rgb(169, 50, 38)' &&
+          contrastRatio(hoverDangerStyle.color, hoverDangerStyle.background) >= 4.5,
+        {
+          ...hoverDangerStyle,
+          contrast: contrastRatio(hoverDangerStyle.color, hoverDangerStyle.background),
+        },
+      );
+      await page.mouse.move(0, 0);
+      await page.emulateMedia({ colorScheme: 'dark' });
+      const darkDangerStyle = (await page.evaluate(`(() => {
+        const style = getComputedStyle(document.getElementById('room-menu-reissue-token'));
+        return { color: style.color, background: style.backgroundColor };
+      })()`)) as { color: string; background: string };
+      check(
+        '暗色模式危险菜单项对比度足够',
+        contrastRatio(darkDangerStyle.color, darkDangerStyle.background) >= 4.5,
+        {
+          ...darkDangerStyle,
+          contrast: contrastRatio(darkDangerStyle.color, darkDangerStyle.background),
+        },
+      );
+      await page.emulateMedia({ colorScheme: 'light' });
       const menuMetrics = (await page.evaluate(`(() => {
         const rect = document.getElementById('room-menu').getBoundingClientRect();
         return {
@@ -2744,6 +2842,19 @@ async function main(): Promise<void> {
         '退出登录弹窗默认聚焦取消',
         await page.evaluate(`document.activeElement && document.activeElement.id`),
         'logout-cancel',
+      );
+      const logoutDangerStyle = (await page.evaluate(`(() => {
+        const style = getComputedStyle(document.getElementById('logout-confirm'));
+        return { color: style.color, background: style.backgroundColor };
+      })()`)) as { color: string; background: string };
+      check(
+        '退出确认危险按钮文字与背景对比度不低于 4.5:1',
+        logoutDangerStyle.color === 'rgb(255, 255, 255)' &&
+          contrastRatio(logoutDangerStyle.color, logoutDangerStyle.background) >= 4.5,
+        {
+          ...logoutDangerStyle,
+          contrast: contrastRatio(logoutDangerStyle.color, logoutDangerStyle.background),
+        },
       );
       const logoutWarning =
         (await page.locator('#logout-modal .logout-warning').textContent()) ?? '';
