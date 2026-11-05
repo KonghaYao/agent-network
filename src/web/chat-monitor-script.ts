@@ -349,7 +349,7 @@ async function loadMonitor(roomId, options) {
     renderMonitorResult(monitor, { forceReload: settings.forceReload === true });
     monitorLoaded = true;
     monitorLoadedRoomId = roomId;
-    setMonitorStatus(monitor ? (settings.refresh ? '已刷新。' : '') : '还没有保存网页地址。');
+    setMonitorStatus(monitor ? (settings.refresh ? '已刷新。' : '') : '');
   } catch (error) {
     if (isAbortError(error) || !monitorEpochCurrent(roomId, epoch) || requestSeq !== monitorRequestSeq) {
       return;
@@ -413,7 +413,7 @@ async function clearMonitor() {
   if (!activeRoomId || monitorBusy) return;
   const hasValue = Boolean(monitorUrl) || Boolean(monitorInput && monitorInput.value.trim());
   if (!hasValue) {
-    setMonitorStatus('还没有保存网页地址。');
+    setMonitorStatus('');
     return;
   }
   if (!window.confirm('清除此会话的网址？其他设备也会同步清除。')) return;

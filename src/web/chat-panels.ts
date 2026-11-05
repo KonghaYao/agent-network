@@ -314,16 +314,14 @@ export function filesBackdrop(): string {
  * 网页监控面板：桌面右侧第三栏、平板抽屉与移动端全屏页共用同一份 DOM。
  *
  * URL 只通过 DOM property 写入 iframe/链接，不使用 innerHTML/srcdoc。
- * 按产品选择不设置 sandbox；风险提示必须如实保留。iframe 初始为
- * about:blank，关闭/切房后也回到该地址以卸载文档。
+ * 按产品选择不设置 sandbox；完整风险保留在 README/CLAUDE，界面不显示
+ * 长段说明，只在“新标签页打开”的 title/aria-label 保留精简提示。
+ * iframe 初始为 about:blank，关闭/切房后也回到该地址以卸载文档。
  */
 export function monitorPane(): string {
   return `<aside class="monitor-pane" id="monitor-pane" aria-labelledby="monitor-title" hidden>
   <header class="monitor-head">
-    <div class="monitor-head-id">
-      <h2 id="monitor-title">网页监控</h2>
-      <p class="monitor-subtitle">仅自己可见 · 按会话保存</p>
-    </div>
+    <h2 id="monitor-title">网页监控</h2>
     <div class="monitor-head-actions">
       <button class="monitor-refresh" id="monitor-refresh" type="button"
         aria-label="重新读取网页地址" title="重新读取网页地址">刷新</button>
@@ -348,15 +346,15 @@ export function monitorPane(): string {
     <button id="monitor-retry" type="button">重试</button>
   </div>
   <div id="monitor-frame-wrap" class="monitor-frame-wrap">
-    <p id="monitor-empty" class="monitor-empty">还没有为这个会话保存网页。填写地址后点击保存。</p>
+    <p id="monitor-empty" class="monitor-empty">暂无网页</p>
     <iframe id="monitor-frame" class="monitor-frame" title="网页内容" src="about:blank" hidden></iframe>
   </div>
   <footer class="monitor-foot">
     <a id="monitor-external" class="monitor-external" href="#" target="_blank" rel="noopener"
-      aria-disabled="true">新标签页打开</a>
-    <p class="monitor-hint">目标站点可能通过 X-Frame-Options 或 CSP 禁止嵌入；HTTPS 页面可能阻止 HTTP 目标。</p>
-    <p id="monitor-mixed" class="monitor-hint" hidden>当前页面是 HTTPS，浏览器可能阻止 HTTP 目标；请改用 HTTPS 或在新标签页打开。</p>
-    <p class="monitor-risk">iframe 未加 sandbox；只填入可信地址，同源页面可读取本页登录凭据。</p>
+      aria-disabled="true"
+      title="仅打开可信网页；目标站点可能拒绝嵌入（X-Frame-Options/CSP），HTTPS 可能阻止 HTTP 目标；iframe 未加 sandbox，同源页面可读取本页登录凭据。"
+      aria-label="新标签页打开网页；仅限可信地址，iframe 未加 sandbox，同源页面可读取本页登录凭据">新标签页打开</a>
+    <p id="monitor-mixed" class="monitor-hint" hidden>HTTPS 页面可能阻止 HTTP 目标。</p>
   </footer>
 </aside>`;
 }

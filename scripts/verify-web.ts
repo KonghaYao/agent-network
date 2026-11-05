@@ -5268,7 +5268,25 @@ async function main(): Promise<void> {
         '打开面板只读取一次监控配置',
       );
       await page.locator('#monitor-empty').waitFor({ state: 'visible' });
-      check('空态说明尚未保存网页', ((await page.locator('#monitor-empty').textContent()) ?? '').includes('还没有'));
+      checkEqual(
+        '空态只保留极短占位',
+        ((await page.locator('#monitor-empty').textContent()) ?? '').trim(),
+        '暂无网页',
+      );
+      checkEqual('监控面板不再显示副标题', await page.locator('.monitor-subtitle').count(), 0);
+      const monitorPaneText = (await page.locator('#monitor-pane').textContent()) ?? '';
+      check(
+        '监控面板不显示长空态说明',
+        !monitorPaneText.includes('还没有为这个会话保存网页') &&
+          !monitorPaneText.includes('还没有保存网页地址'),
+      );
+      check('监控面板不显示副标题文案', !monitorPaneText.includes('仅自己可见'));
+      check(
+        '监控面板不显示长风险段落',
+        !monitorPaneText.includes('目标站点可能通过 X-Frame-Options') &&
+          !monitorPaneText.includes('iframe 未加 sandbox') &&
+          !monitorPaneText.includes('只填入可信地址'),
+      );
       checkEqual('无配置时 iframe 隐藏', await page.locator('#monitor-frame').isHidden(), true);
       checkEqual('无配置时输入框为空', await page.locator('#monitor-url').inputValue(), '');
       checkEqual(
@@ -5296,16 +5314,19 @@ async function main(): Promise<void> {
         await page.locator('#monitor-frame').evaluate((element) => element.hasAttribute('referrerpolicy')),
         false,
       );
+      const externalTitle = (await page.locator('#monitor-external').getAttribute('title')) ?? '';
       check(
-        '面板提示 XFO/CSP 嵌入限制',
-        ((await page.locator('.monitor-foot').textContent()) ?? '').includes('X-Frame-Options') &&
-          ((await page.locator('.monitor-foot').textContent()) ?? '').includes('CSP') &&
-          ((await page.locator('.monitor-foot').textContent()) ?? '').includes('HTTPS 页面可能阻止 HTTP 目标'),
+        '新标签页 title 保留精简嵌入限制',
+        externalTitle.includes('X-Frame-Options') && externalTitle.includes('CSP'),
       );
       check(
-        '面板如实提示 iframe 未加 sandbox 的同源风险',
-        ((await page.locator('.monitor-foot').textContent()) ?? '').includes('iframe 未加 sandbox') &&
-          ((await page.locator('.monitor-foot').textContent()) ?? '').includes('本页登录凭据'),
+        '新标签页 title 保留 sandbox 与凭据风险',
+        externalTitle.includes('iframe 未加 sandbox') && externalTitle.includes('本页登录凭据'),
+      );
+      const externalAria = (await page.locator('#monitor-external').getAttribute('aria-label')) ?? '';
+      check(
+        '新标签页 aria-label 提示可信地址',
+        externalAria.includes('可信') && externalAria.includes('sandbox'),
       );
       checkEqual(
         '新标签页链接 target=_blank',
@@ -5443,6 +5464,11 @@ async function main(): Promise<void> {
       });
       await page.locator('#monitor-clear').click();
       await page.locator('#monitor-empty').waitFor({ state: 'visible' });
+      checkEqual(
+        '清除后空态只显示暂无网页',
+        ((await page.locator('#monitor-empty').textContent()) ?? '').trim(),
+        '暂无网页',
+      );
       checkEqual(
         '清除后 iframe 卸载到 about:blank',
         await page.locator('#monitor-frame').evaluate((element) => element.getAttribute('src')),
@@ -5598,6 +5624,17 @@ async function main(): Promise<void> {
       checkEqual('移动端监控隐藏聊天区', await mobileMonitor.page.locator('#composer').isHidden(), true);
       checkEqual('移动端监控隐藏会话列表', await mobileMonitor.page.locator('.sidebar').isHidden(), true);
       checkEqual(
+        '移动端保留新标签页入口',
+        await mobileMonitor.page.locator('#monitor-external').isVisible(),
+        true,
+      );
+      check(
+        '移动端保留精简风险 title',
+        ((await mobileMonitor.page.locator('#monitor-external').getAttribute('title')) ?? '').includes(
+          'sandbox',
+        ),
+      );
+      checkEqual(
         '移动端关闭按钮文案为返回',
         await mobileMonitor.page.locator('#monitor-close').textContent(),
         '返回',
@@ -5636,6 +5673,15 @@ async function main(): Promise<void> {
         '暗色监控面板使用暗色背景',
         await darkPage.evaluate(`getComputedStyle(document.getElementById('monitor-pane')).backgroundColor`),
         'rgb(43, 43, 43)',
+      );
+      checkEqual(
+        '暗色监控保留新标签页入口',
+        await darkPage.locator('#monitor-external').isVisible(),
+        true,
+      );
+      check(
+        '暗色监控保留精简风险 title',
+        ((await darkPage.locator('#monitor-external').getAttribute('title')) ?? '').includes('sandbox'),
       );
       await darkContext.close();
     }

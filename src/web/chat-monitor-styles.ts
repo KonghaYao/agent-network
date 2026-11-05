@@ -22,9 +22,7 @@ export const MONITOR_STYLE = `
   .monitor-head { flex: 0 0 auto; display: flex; align-items: center;
     justify-content: space-between; gap: 8px; min-height: 56px; padding: 0 12px;
     border-bottom: 1px solid var(--wx-line); }
-  .monitor-head-id { min-width: 0; }
   .monitor-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
-  .monitor-subtitle { margin: 2px 0 0; font-size: 11px; color: var(--wx-muted); }
   .monitor-head-actions { display: flex; align-items: center; gap: 6px; }
   .monitor-head-actions button { padding: 5px 9px; font-size: 12px; }
   .monitor-close, .monitor-refresh { border: 0; background: transparent; color: var(--wx-link); }
@@ -66,8 +64,6 @@ export const MONITOR_STYLE = `
   .monitor-external[aria-disabled="true"] { color: var(--wx-muted); cursor: default; }
   .monitor-hint { margin: 6px 0 0; font-size: 11px; line-height: 1.6; color: var(--wx-muted); }
   .monitor-hint[hidden] { display: none; }
-  .monitor-risk { margin: 7px 0 0; padding: 6px 8px; border-radius: 5px;
-    background: var(--wx-bg); color: var(--wx-text); font-size: 11px; line-height: 1.6; }
 
   .monitor-backdrop { position: fixed; inset: 0; z-index: 23; background: rgb(0 0 0 / 40%); }
   .monitor-backdrop[hidden] { display: none; }
