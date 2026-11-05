@@ -8,6 +8,7 @@
  * 运行：bun run test:web
  */
 
+import { createHash } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -5652,11 +5653,18 @@ async function main(): Promise<void> {
       });
 
       const longMarker = '长文标题';
+      const longLink = 'https://net.peri-code.dev/f/f_preview_download';
+      const longTail = '展开后的完整结尾标记';
       const longBody = [
         `## ${longMarker}`,
-        '长文本内容 '.repeat(120),
-        '**展开后的粗体**',
+        '**下载** `长文卡片.txt` 与 `sha256` 校验',
+        `链接：[下载地址](${longLink})`,
+        '1. 第一步',
+        '2. 第二步',
         `长文卡片：${longCardFile.publicUrl}`,
+        '**展开后的粗体**',
+        '长文本内容 '.repeat(120),
+        longTail,
       ].join('\n');
       await rawTool(data.agentAToken, 'network_message_send', {
         request_id: requestId('msg'),
@@ -5664,6 +5672,43 @@ async function main(): Promise<void> {
         room_id: mdRoomId,
         body: longBody,
       });
+
+      // 把 512B 切口精确落在语法中间：预览必须闭合/降级，不能留下字面标记。
+      const cutInside = (marker: string, token: string, offset: number, tail: string): string => {
+        const encoder = new TextEncoder();
+        const head = `${marker}\n`;
+        // token 独占一行，代码围栏/列表标记才能按块级语法解析。
+        const fill = 512 - encoder.encode(head).length - 1 - offset;
+        if (fill < 0) throw new Error(`截断用例前缀过长: ${marker}`);
+        return `${head}${'a'.repeat(fill)}\n${token}\n${tail}`;
+      };
+      const cutCases = [
+        { kind: 'bold', marker: '截断粗体用例', token: '**bold**', offset: 4, tail: '粗体尾部' },
+        { kind: 'code', marker: '截断代码用例', token: '`code`', offset: 3, tail: '代码尾部' },
+        {
+          kind: 'link',
+          marker: '截断链接用例',
+          token: '[label](https://example.com/very/long/path)',
+          offset: 20,
+          tail: '链接尾部',
+        },
+        {
+          kind: 'fence',
+          marker: '截断围栏用例',
+          token: '```js\nconst value = 1;\n```',
+          offset: 10,
+          tail: '围栏尾部',
+        },
+        { kind: 'list', marker: '截断列表用例', token: '1. first\n2. ', offset: 11, tail: '列表尾部' },
+      ];
+      for (const cutCase of cutCases) {
+        await rawTool(data.agentAToken, 'network_message_send', {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: mdRoomId,
+          body: cutInside(cutCase.marker, cutCase.token, cutCase.offset, cutCase.tail),
+        });
+      }
 
       const finalMarker = '最终回答标记';
       const invoke = await rawTool<{ delivery_ids: string[] }>(
@@ -5716,6 +5761,28 @@ async function main(): Promise<void> {
         !assetBody.includes('react-dom.development'),
         assetBody.slice(0, 80),
       );
+
+      const homeResponse = await fetch(`${server.base}/`);
+      const homeHtml = await homeResponse.text();
+      const bundleVersionMatch = homeHtml.match(
+        /\/assets\/chat-markdown\.js\?v=([0-9a-f]{12})/,
+      );
+      const bundleVersion = bundleVersionMatch?.[1] ?? '';
+      check('首页 Markdown bundle URL 带内容版本', Boolean(bundleVersion), bundleVersionMatch?.[0]);
+      if (bundleVersion) {
+        const versionedResponse = await fetch(
+          `${server.base}/assets/chat-markdown.js?v=${bundleVersion}`,
+        );
+        checkEqual('带版本 Markdown asset 返回 200', versionedResponse.status, 200);
+        checkEqual(
+          'Markdown asset ETag 与版本一致',
+          versionedResponse.headers.get('etag'),
+          `"${bundleVersion}"`,
+        );
+        const versionedBody = await versionedResponse.text();
+        const contentHash = createHash('sha256').update(versionedBody).digest('hex').slice(0, 12);
+        checkEqual('Markdown asset 版本为内容哈希前 12 位', bundleVersion, contentHash);
+      }
 
       const { context, page } = await makeContext(
         browser,
@@ -5837,26 +5904,111 @@ async function main(): Promise<void> {
 
       const longMessage = page.locator('#messages .msg').filter({ hasText: longMarker }).last();
       await longMessage.locator('.expand').waitFor();
-      checkEqual(
-        '截断 AI 消息先保持纯文本',
-        await longMessage.locator('.msg-markdown').count(),
-        0,
-      );
-      checkEqual('截断 AI 消息预览不含卡片', await longMessage.locator('.msg-file').count(), 0);
-      await longMessage.locator('.expand').click();
       await longMessage.locator('.msg-markdown').waitFor();
-      await longMessage.locator(`.msg-file[data-file-id="${longCardFile.fileId}"]`).waitFor();
-      checkEqual(
-        '展开全文后渲染 Markdown',
-        (await longMessage.locator('.msg-markdown strong').first().textContent())?.trim(),
-        '展开后的粗体',
+      checkEqual('截断 AI 消息预览也渲染 Markdown', await longMessage.locator('.msg-markdown').count(), 1);
+      check(
+        '截断预览粗体渲染',
+        (await longMessage.locator('.msg-markdown strong').allTextContents()).some((text) =>
+          text.includes('下载'),
+        ),
+        await longMessage.locator('.msg-markdown strong').allTextContents(),
       );
-      checkEqual('展开全文后补文件卡片', await longMessage.locator('.msg-file').count(), 1);
-      checkEqual(
-        '展开后的卡片仍在 bubble 外',
-        await longMessage.locator('.bubble .msg-file').count(),
-        0,
+      check(
+        '截断预览行内代码至少两个',
+        (await longMessage.locator('.msg-markdown code').count()) >= 2,
+        await longMessage.locator('.msg-markdown code').count(),
       );
+      checkEqual(
+        '截断预览完整链接可点击',
+        await longMessage.locator(`.msg-markdown a[href="${longLink}"]`).count(),
+        1,
+      );
+      check(
+        '截断预览有序列表至少两项',
+        (await longMessage.locator('.msg-markdown ol li').count()) >= 2,
+        await longMessage.locator('.msg-markdown ol li').count(),
+      );
+      checkEqual(
+        '截断预览文件卡片仍存在',
+        await longMessage.locator(`.msg-file[data-file-id="${longCardFile.fileId}"]`).count(),
+        1,
+      );
+      check(
+        '截断预览不显示字面粗体标记',
+        !((await longMessage.locator('.bubble').textContent()) ?? '').includes('**下载**'),
+      );
+      const requestsBeforeExpand = markdownRequests.length;
+      await longMessage.locator('.expand').click();
+      await longMessage.locator('.expand').waitFor({ state: 'detached' });
+      await waitUntil(
+        async () =>
+          ((await longMessage.locator('.bubble').textContent()) ?? '').includes(longTail),
+        '展开后出现完整结尾',
+        15_000,
+      );
+      checkEqual('展开后不再有展开按钮', await longMessage.locator('.expand').count(), 0);
+      checkEqual('展开后 Markdown 容器仍只有一个', await longMessage.locator('.msg-markdown').count(), 1);
+      checkEqual('展开后文件卡片仍为一张', await longMessage.locator('.msg-file').count(), 1);
+      checkEqual(
+        '展开后粗体完整出现',
+        await longMessage.locator('.msg-markdown strong').filter({ hasText: '展开后的粗体' }).count(),
+        1,
+      );
+      check(
+        '展开后不显示字面粗体标记',
+        !((await longMessage.locator('.bubble').textContent()) ?? '').includes('**展开后的粗体**'),
+      );
+      checkEqual('预览与展开共用一次 bundle 请求', markdownRequests.length, 1);
+      checkEqual('预览阶段已请求 bundle', requestsBeforeExpand, 1);
+
+      for (const cutCase of cutCases) {
+        const cutMessage = page
+          .locator('#messages .msg')
+          .filter({ hasText: cutCase.marker })
+          .last();
+        await cutMessage.locator('.msg-markdown').waitFor();
+        const cutText = (await cutMessage.locator('.bubble').textContent()) ?? '';
+        checkEqual(
+          `${cutCase.marker} 保留 Markdown 容器`,
+          await cutMessage.locator('.msg-markdown').count(),
+          1,
+        );
+        if (cutCase.kind === 'bold') {
+          check(
+            '截断粗体被闭合',
+            (await cutMessage.locator('.msg-markdown strong').count()) >= 1,
+          );
+          check('截断粗体无字面双星', !cutText.includes('**'));
+        } else if (cutCase.kind === 'code') {
+          check(
+            '截断行内代码被闭合',
+            (await cutMessage.locator('.msg-markdown code').count()) >= 1,
+          );
+          check('截断行内代码无孤立反引号', !cutText.includes('`'));
+        } else if (cutCase.kind === 'link') {
+          checkEqual(
+            '截断链接不生成残缺链接',
+            await cutMessage.locator('.msg-markdown a').count(),
+            0,
+          );
+          check('截断链接保留 label 文本', cutText.includes('label'));
+        } else if (cutCase.kind === 'fence') {
+          checkEqual(
+            '截断代码围栏仍生成代码块',
+            await cutMessage.locator('.msg-markdown pre').count(),
+            1,
+          );
+          check('截断代码围栏无字面反引号', !cutText.includes('```'));
+        } else if (cutCase.kind === 'list') {
+          const listTexts = await cutMessage.locator('.msg-markdown li').allTextContents();
+          check('截断列表至少保留一项', listTexts.length >= 1, listTexts);
+          check(
+            '截断列表没有空 li',
+            listTexts.every((text) => text.trim().length > 0),
+            listTexts,
+          );
+        }
+      }
 
       const finalMessage = page
         .locator('#messages .msg')
@@ -5888,6 +6040,11 @@ async function main(): Promise<void> {
         (await page.locator('#files-list .file-item').filter({ hasText: 'Markdown 附件.txt' }).count()) === 1,
       );
       checkEqual('多条 AI 消息只请求一次 Markdown bundle', markdownRequests.length, 1);
+      check(
+        'Markdown bundle 请求带内容版本',
+        /\/assets\/chat-markdown\.js\?v=[0-9a-f]{12}$/.test(markdownRequests[0] ?? ''),
+        markdownRequests[0],
+      );
 
       const mobile = await makeContext(
         browser,
@@ -6014,7 +6171,7 @@ async function main(): Promise<void> {
       );
       await scrollContext.context.close();
 
-      // asset 404：保留纯文本、文件卡片与发送能力，不抛未处理异常。
+      // asset 404：预览纯文本 + 可见 fallback；展开显示完整纯文本，重试最多一次。
       const fallbackErrors: string[] = [];
       const fallback = await makeContext(
         browser,
@@ -6022,9 +6179,11 @@ async function main(): Promise<void> {
         { width: 1280, height: 900 },
         fallbackErrors,
       );
-      await fallback.page.route('**/assets/chat-markdown.js', (route) =>
-        route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' }),
-      );
+      let fallbackBundleRequests = 0;
+      await fallback.page.route('**/assets/chat-markdown.js*', (route) => {
+        fallbackBundleRequests += 1;
+        return route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' });
+      });
       await fallback.page.goto(`${server.base}/c/${mdRoomId}`);
       await waitRoom(fallback.page, mdRoomId, 'AI Markdown 群');
       const fallbackRich = fallback.page
@@ -6032,11 +6191,22 @@ async function main(): Promise<void> {
         .filter({ hasText: richMarker })
         .last();
       await fallbackRich.locator('.msg-file').first().waitFor();
-      await sleep(400);
+      await fallbackRich.locator('.md-unavailable').first().waitFor();
       checkEqual(
         'asset 404 时回退纯文本',
         await fallbackRich.locator('.msg-markdown').count(),
         0,
+      );
+      check(
+        'asset 404 时显示可见 fallback',
+        ((await fallbackRich.locator('.md-unavailable').first().textContent()) ?? '').includes(
+          'Markdown 渲染不可用，已显示纯文本',
+        ),
+      );
+      checkEqual(
+        'asset 404 时气泡标记不可用',
+        await fallbackRich.locator('.bubble').getAttribute('data-markdown-unavailable'),
+        '1',
       );
       check(
         'asset 404 时保留 Markdown 原文',
@@ -6046,6 +6216,48 @@ async function main(): Promise<void> {
         'asset 404 时文件卡片仍可用',
         (await fallbackRich.locator('.msg-file').count()) === 1,
       );
+
+      const fallbackLong = fallback.page
+        .locator('#messages .msg')
+        .filter({ hasText: longMarker })
+        .last();
+      await fallbackLong.locator('.expand').waitFor();
+      await fallbackLong.locator('.md-unavailable').first().waitFor();
+      checkEqual(
+        'asset 404 时长消息预览仍为纯文本',
+        await fallbackLong.locator('.msg-markdown').count(),
+        0,
+      );
+      const fallbackExpand = fallbackLong.locator('.expand');
+      await fallbackExpand.click();
+      await waitUntil(
+        async () =>
+          ((await fallbackLong.locator('.bubble').textContent()) ?? '').includes(longTail),
+        'asset 404 展开显示完整纯文本',
+        15_000,
+      );
+      checkEqual(
+        'asset 404 展开后仍是纯文本',
+        await fallbackLong.locator('.msg-markdown').count(),
+        0,
+      );
+      checkEqual('asset 404 展开失败保留按钮', await fallbackExpand.count(), 1);
+      checkEqual(
+        'asset 404 展开失败恢复按钮文案',
+        (await fallbackExpand.textContent())?.trim(),
+        '展开全文',
+      );
+      checkEqual('asset 404 展开失败恢复按钮可用', await fallbackExpand.isDisabled(), false);
+      checkEqual('asset 404 首次加载加一次重试', fallbackBundleRequests, 2);
+      await fallbackExpand.click();
+      await sleep(400);
+      checkEqual('asset 404 重试最多一次', fallbackBundleRequests, 2);
+      checkEqual(
+        'asset 404 展开后仍显示 fallback',
+        await fallbackLong.locator('.md-unavailable').count(),
+        1,
+      );
+
       const fallbackBefore = await messageCount(fallback.page);
       await fallback.page.locator('#body').fill('asset 失败仍可发送');
       await fallback.page.locator('#send').click();
@@ -6061,6 +6273,56 @@ async function main(): Promise<void> {
       );
       checkEqual('asset 404 无未处理页面错误', fallbackUnexpected.length, 0);
       await fallback.context.close();
+
+      // 首次 404、展开重试 200：验证一次强制重试可以恢复 Markdown。
+      const recoverErrors: string[] = [];
+      const recover = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        recoverErrors,
+      );
+      let recoverBundleRequests = 0;
+      await recover.page.route('**/assets/chat-markdown.js*', (route) => {
+        recoverBundleRequests += 1;
+        if (recoverBundleRequests === 1) {
+          return route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' });
+        }
+        return route.continue();
+      });
+      await recover.page.goto(`${server.base}/c/${mdRoomId}`);
+      await waitRoom(recover.page, mdRoomId, 'AI Markdown 群');
+      const recoverLong = recover.page
+        .locator('#messages .msg')
+        .filter({ hasText: longMarker })
+        .last();
+      await recoverLong.locator('.expand').waitFor();
+      await recoverLong.locator('.md-unavailable').first().waitFor();
+      checkEqual(
+        'bundle 首次失败时预览纯文本',
+        await recoverLong.locator('.msg-markdown').count(),
+        0,
+      );
+      await recoverLong.locator('.expand').click();
+      await recoverLong.locator('.msg-markdown').waitFor();
+      await waitUntil(
+        async () => ((await recoverLong.locator('.bubble').textContent()) ?? '').includes(longTail),
+        '重试成功后出现完整结尾',
+        15_000,
+      );
+      checkEqual('展开重试一次恢复 Markdown', await recoverLong.locator('.msg-markdown').count(), 1);
+      checkEqual(
+        '恢复后移除 fallback 标记',
+        await recoverLong.locator('.md-unavailable').count(),
+        0,
+      );
+      checkEqual('恢复后移除展开按钮', await recoverLong.locator('.expand').count(), 0);
+      checkEqual('恢复后只重试一次 bundle', recoverBundleRequests, 2);
+      check(
+        '恢复后不显示字面粗体标记',
+        !((await recoverLong.locator('.bubble').textContent()) ?? '').includes('**下载**'),
+      );
+      await recover.context.close();
     }
 
     // 2f. Agent token 注销重发：二次确认、取消、成功自动复制、失败、入口限制、移动端与 DB 不落原文。

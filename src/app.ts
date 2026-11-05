@@ -505,6 +505,8 @@ export interface AppDeps {
   mount?: FileMount;
   /** 启动时构建的 AI 消息 Markdown bundle；null 表示构建失败、页面回退纯文本。 */
   markdownAsset?: string | null;
+  /** bundle 内容哈希；页面用它生成带版本 URL，避免 CDN 继续命中旧缓存。 */
+  markdownAssetVersion?: string | null;
 }
 
 interface ByteRange {
@@ -625,6 +627,7 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
       'content-type': 'text/javascript; charset=utf-8',
       'cache-control': 'public, max-age=300',
       'x-content-type-options': 'nosniff',
+      ...(deps.markdownAssetVersion ? { etag: `"${deps.markdownAssetVersion}"` } : {}),
     });
   });
 
@@ -644,7 +647,9 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     });
   });
 
-  app.get('/', (c) => c.html(renderHomePage(), 200, { 'cache-control': 'no-store' }));
+  app.get('/', (c) =>
+    c.html(renderHomePage(deps.markdownAssetVersion ?? null), 200, { 'cache-control': 'no-store' }),
+  );
   app.get('/a/:sessionId', async (c) => {
     const actor = await getActorBySession(env.DB, c.req.param('sessionId'));
     if (!actor) {
@@ -653,7 +658,9 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     return c.html(renderSharePage(actor), 200, { 'cache-control': 'no-store' });
   });
   app.get('/c/:roomId', (c) =>
-    c.html(renderChatPage(c.req.param('roomId')), 200, { 'cache-control': 'no-store' }),
+    c.html(renderChatPage(c.req.param('roomId'), deps.markdownAssetVersion ?? null), 200, {
+      'cache-control': 'no-store',
+    }),
   );
 
   // 公开下载：文件 ID 是唯一地址，不做目录遍历；过期或删除墓碑后直接 404。

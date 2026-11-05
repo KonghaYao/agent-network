@@ -10,11 +10,18 @@ import { resolve } from 'node:path';
 
 const ENTRY = resolve(import.meta.dir, 'markdown/entry.tsx');
 
+export interface MarkdownAsset {
+  /** 完整 JS 文本；内存缓存，不在这里写文件。 */
+  code: string;
+  /** 内容哈希前 12 位，用于页面引用带版本 URL，绕过 CDN 的旧 bundle 缓存。 */
+  version: string;
+}
+
 /**
- * 返回值是完整 JS 文本；构建失败或没有入口产物时返回 null。
- * 不在这里写文件：开发、测试与生产都复用同一份内存产物。
+ * 构建失败或没有入口产物时返回 null。
+ * 开发、测试与生产都复用同一份内存产物。
  */
-export async function buildMarkdownBundle(): Promise<string | null> {
+export async function buildMarkdownBundle(): Promise<MarkdownAsset | null> {
   try {
     // bun-types 1.4.2 的 BuildConfig 尚未声明 `write`，运行时支持 write:false。
     const config = {
@@ -47,11 +54,16 @@ export async function buildMarkdownBundle(): Promise<string | null> {
       console.warn('markdown bundle disabled: empty entry output');
       return null;
     }
-    return text;
+    return { code: text, version: bundleVersion(text) };
   } catch (error) {
     // 只记录错误类型/路径，不输出消息正文或凭据。
     const reason = error instanceof Error ? error.message : String(error);
     console.warn('markdown bundle disabled:', reason.slice(0, 300));
     return null;
   }
+}
+
+/** 内容哈希前 12 位；URL 与 ETag 共用，部署后 HTML 自然引用新资源。 */
+function bundleVersion(text: string): string {
+  return new Bun.CryptoHasher('sha256').update(text).digest('hex').slice(0, 12);
 }

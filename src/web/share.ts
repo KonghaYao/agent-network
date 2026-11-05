@@ -165,6 +165,6 @@ export function renderInvalidSharePage(): string {
   );
 }
 
-export function renderHomePage(): string {
-  return renderAppPage(null);
+export function renderHomePage(markdownVersion: string | null = null): string {
+  return renderAppPage(null, markdownVersion);
 }

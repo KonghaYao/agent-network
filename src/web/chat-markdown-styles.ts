@@ -51,6 +51,9 @@ export const MARKDOWN_STYLE = `
   .msg-markdown .md-table th { background: var(--wx-search); font-weight: 600; }
   .msg-markdown .md-table tr:nth-child(even) td { background: rgb(0 0 0 / 2%); }
   .msg-markdown .md-fallback { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg-markdown .md-fallback-note, .bubble .md-unavailable {
+    display: block; margin-top: 4px; font-size: 11px; line-height: 1.4;
+    color: var(--wx-muted); font-weight: 400; font-style: normal; }
 
   @media (prefers-color-scheme: dark) {
     .msg-markdown .md-table tr:nth-child(even) td { background: rgb(255 255 255 / 3%); }

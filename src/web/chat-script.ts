@@ -26,10 +26,17 @@ import { QR_ENCODER_SCRIPT } from './qr';
  * 通过 `openRoom` 加载房间。所有片段拼进同一个 `<script>` 共享作用域，
  * 拆文件只为控制单文件行数，不改变工具契约或页面行为。
  */
-export function chatClientScript(roomId: string | null): string {
+export function chatClientScript(
+  roomId: string | null,
+  markdownVersion: string | null = null,
+): string {
   const roomJson = roomId === null ? 'null' : jsonForScript(roomId);
+  const markdownAssetUrl = markdownVersion
+    ? `/assets/chat-markdown.js?v=${encodeURIComponent(markdownVersion)}`
+    : '/assets/chat-markdown.js';
   return `<script>
 const initialRoomId = ${roomJson};
+const MARKDOWN_ASSET_URL = ${jsonForScript(markdownAssetUrl)};
 const TOKEN_KEY = 'agent-network-token';
 const MAX_CHUNKS = 8;
 // 服务端 LIMITS.invokeMax 的内联值：阈值只在 limits.ts 维护，页面不复制字面量。

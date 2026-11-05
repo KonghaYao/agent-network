@@ -23,6 +23,7 @@ import {
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { harden } from 'rehype-harden';
+import remend from 'remend';
 import type { PluggableList } from 'unified';
 import {
   Streamdown,
@@ -35,6 +36,8 @@ import {
 export interface MarkdownOptions {
   /** 已知成员名；按最长优先匹配 `@名字`。 */
   mentions?: string[];
+  /** 512B 截断预览：先用 remend 闭合被截断的粗体/行内代码/链接。 */
+  preview?: boolean;
 }
 
 export interface MarkdownHandle {
@@ -303,8 +306,17 @@ const rehypePlugins: PluggableList = [
   ],
 ];
 
+/** 512B 切口可能只剩一个列表标记；去掉它，避免渲染出空 `<li>`。 */
+function closeIncompletePreview(text: string): string {
+  const remended = remend(text, { linkMode: 'text-only' });
+  return remended.replace(/(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]*$/u, '');
+}
+
 function MarkdownBody({ text, options }: { text: string; options: MarkdownOptions }) {
   const mentions = normalizeMentions(options);
+  // 截断切口可能落在语法中间；`text-only` 让残缺链接退化为文本，不生成
+  // 可点击的残缺 URL。完整展开路径不做 remend，保持原文。
+  const source = options.preview ? closeIncompletePreview(text) : text;
   return (
     <MentionContext.Provider value={mentions}>
       <Streamdown
@@ -320,7 +332,7 @@ function MarkdownBody({ text, options }: { text: string; options: MarkdownOption
         remarkPlugins={[...remarkPlugins]}
         rehypePlugins={[...rehypePlugins]}
       >
-        {text}
+        {source}
       </Streamdown>
     </MentionContext.Provider>
   );
@@ -344,7 +356,12 @@ class MarkdownErrorBoundary extends Component<BoundaryProps, { failed: boolean }
 
   render(): ReactNode {
     if (this.state.failed) {
-      return <div className="md-fallback">{this.props.text}</div>;
+      return (
+        <div className="md-fallback" data-markdown-fallback="1">
+          <span className="md-fallback-note">Markdown 渲染失败，已显示纯文本</span>
+          {this.props.text}
+        </div>
+      );
     }
     return this.props.children;
   }

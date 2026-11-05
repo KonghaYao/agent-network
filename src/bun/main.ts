@@ -169,12 +169,18 @@ if (process.env.DRIVE_DISABLED !== '1') {
   );
 }
 
-const markdownAsset = await buildMarkdownBundle();
-if (markdownAsset) {
-  console.log(`markdown asset ready: ${(markdownAsset.length / 1024).toFixed(0)} KiB`);
+const markdownBundle = await buildMarkdownBundle();
+if (markdownBundle) {
+  console.log(
+    `markdown asset ready: ${(markdownBundle.code.length / 1024).toFixed(0)} KiB (v${markdownBundle.version})`,
+  );
 }
 
-const app = createApp(env, { mount, markdownAsset });
+const app = createApp(env, {
+  mount,
+  markdownAsset: markdownBundle?.code ?? null,
+  markdownAssetVersion: markdownBundle?.version ?? null,
+});
 
 const server = Bun.serve({
   hostname,

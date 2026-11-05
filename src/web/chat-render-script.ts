@@ -186,8 +186,8 @@ function messageItem(item) {
   bubble.className = 'bubble';
   bubble.title = fullTime(item.created_at);
   const truncated = item.body_bytes > new TextEncoder().encode(item.preview).length;
-  // 截断可能切断 Markdown 语法：先保留纯文本预览，展开全文后再升级。
-  renderMessageBody(bubble, item.preview, item, agent && !truncated);
+  // 预览也渲染 Markdown；截断可能切断语法，由 Markdown 岛用 remend 闭合。
+  renderMessageBody(bubble, item.preview, item, agent, truncated);
   content.append(bubble);
   let filesElement = mountMessageFiles(item.preview, null);
   if (filesElement) content.append(filesElement);
@@ -198,16 +198,26 @@ function messageItem(item) {
     expand.textContent = '展开全文';
     expand.addEventListener('click', async function () {
       expand.disabled = true;
+      expand.textContent = '正在展开…';
+      // 预览阶段 bundle 失败时，展开只强制重试一次，避免每次点击都打 404。
+      const retry = bubble.dataset.markdownUnavailable === '1';
       try {
         const fullText = await readMessage(item.message_id);
-        renderMessageBody(bubble, fullText, item, agent);
+        const rendered = await renderMessageBody(bubble, fullText, item, agent, false, retry);
         filesElement = mountMessageFiles(fullText, filesElement);
         if (filesElement && !filesElement.isConnected) {
           content.insertBefore(filesElement, expand);
         }
-        expand.remove();
+        if (rendered) {
+          expand.remove();
+        } else {
+          // bundle 重试仍失败：正文已是完整纯文本，保留按钮供稍后再试。
+          expand.disabled = false;
+          expand.textContent = '展开全文';
+        }
       } catch (error) {
         expand.disabled = false;
+        expand.textContent = '展开全文';
         statusElement.textContent = '读取正文失败：' + error.message;
       }
     });
