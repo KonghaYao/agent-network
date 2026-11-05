@@ -298,8 +298,9 @@ async function makeContext(
   allErrors: string[],
   watchConsole = true,
   seedTokenOnce = false,
+  contextOptions: { colorScheme?: 'dark' | 'light'; hasTouch?: boolean } = {},
 ): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await browser.newContext({ viewport });
+  const context = await browser.newContext({ viewport, ...contextOptions });
   await context.addInitScript({ content: initScript(token, seedTokenOnce) });
   const page = await context.newPage();
   page.setDefaultTimeout(15_000);
@@ -794,6 +795,34 @@ async function messagesScrollTop(page: Page): Promise<number> {
   return (await page.evaluate(
     `document.getElementById('messages') ? document.getElementById('messages').scrollTop : 0`,
   )) as number;
+}
+
+/** 与 captureAnchor 一致：视口内第一个相交的消息（忽略时间胶囊/底部 sentinel）。 */
+async function firstVisibleMessageId(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const list = document.getElementById('messages');
+    if (!list) return null;
+    const listTop = list.getBoundingClientRect().top;
+    const listBottom = list.getBoundingClientRect().bottom;
+    for (const node of Array.from(list.children)) {
+      if (node.classList.contains('messages-end')) continue;
+      const rect = node.getBoundingClientRect();
+      if (rect.top >= listBottom || rect.bottom <= listTop) continue;
+      const messageId = node.getAttribute('data-message-id');
+      if (messageId) return messageId;
+    }
+    return null;
+  });
+}
+
+/** 读取某条消息相对消息区顶部的偏移；消息不在 DOM 中时返回 null。 */
+async function messageOffset(page: Page, messageId: string): Promise<number | null> {
+  return page.evaluate((id) => {
+    const list = document.getElementById('messages');
+    const node = list ? list.querySelector(`[data-message-id="${id}"]`) : null;
+    if (!list || !node) return null;
+    return node.getBoundingClientRect().top - list.getBoundingClientRect().top;
+  }, messageId);
 }
 
 /** 只统计当前房间的 mark_read，避免其他会话的定时已读干扰断言。 */
@@ -7994,7 +8023,8 @@ async function main(): Promise<void> {
       await page.locator('#file-preview-close').click();
 
       const unsafeMessage = page.locator('#messages .msg').filter({ hasText: unsafeMarker });
-      await unsafeMessage.scrollIntoViewIfNeeded();
+      // 整条消息对齐到顶部：消息只在视口底边露出一部分时，卡片不会进入观察区。
+      await unsafeMessage.evaluate((element) => element.scrollIntoView({ block: 'start' }));
       for (const name of ['卡片页面.html', '卡片图标.svg', '卡片数据.xml', '卡片脚本.js']) {
         await unsafeMessage.locator('.msg-file-name').filter({ hasText: name }).first().waitFor();
       }
@@ -9932,6 +9962,301 @@ async function main(): Promise<void> {
       );
       await waitForBottom(readContext.page, '发送后回到底部');
       await readContext.context.close();
+
+      // 14c-2. 吸底上翻不抖动：连续上翻不被拽回、异步高度不回底、显式滚底恢复跟随。
+      const jitterContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const jitterPage = jitterContext.page;
+      await jitterPage.goto(`${server.base}/c/${scrollRoomId}`);
+      await waitRoom(jitterPage, scrollRoomId, '滚动进入群');
+      await jitterPage.waitForFunction('document.querySelectorAll("#messages .msg").length >= 40');
+      await waitForBottom(jitterPage, '抖动测试初始到底', 10_000);
+      await sleep(500);
+      const jitterBox = await jitterPage.locator('#messages').boundingBox();
+      if (!jitterBox) throw new Error('抖动测试：消息区不可见');
+      await jitterPage.mouse.move(
+        jitterBox.x + jitterBox.width / 2,
+        jitterBox.y + jitterBox.height / 2,
+      );
+      const upSamples: number[] = [await messagesScrollTop(jitterPage)];
+      for (let step = 0; step < 8; step += 1) {
+        await jitterPage.mouse.wheel(0, -120);
+        await sleep(90);
+        upSamples.push(await messagesScrollTop(jitterPage));
+      }
+      const upMonotonic = upSamples.every(
+        (value, index) => index === 0 || value <= (upSamples[index - 1] ?? 0) + 2,
+      );
+      check('连续上翻 scrollTop 不回调（≤2px）', upMonotonic, { upSamples });
+      const upGap = await bottomGap(jitterPage);
+      check('连续上翻后离开底部', upGap > 120, { upGap });
+      await sleep(1_000);
+      const idleGap = await bottomGap(jitterPage);
+      check('上翻停止后不被异步高度拽回底部', idleGap > 120, { upGap, idleGap });
+
+      const jitterFrozenTopBefore = await messagesScrollTop(jitterPage);
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: scrollRoomId,
+        body: '抖动期间新消息',
+      });
+      await waitForText(jitterPage, roomLink(scrollRoomId), '抖动期间新消息');
+      await waitUntil(
+        async () => jitterPage.locator('#jump-latest').isVisible(),
+        '抖动测试：上翻后出现回到最新',
+        10_000,
+      );
+      await sleep(600);
+      const jitterFrozenTopAfter = await messagesScrollTop(jitterPage);
+      check('上翻时新消息不改变滚动位置', Math.abs(jitterFrozenTopAfter - jitterFrozenTopBefore) <= 2, {
+        jitterFrozenTopBefore,
+        jitterFrozenTopAfter,
+      });
+      check(
+        '上翻时新消息 DOM 保持冻结',
+        !((await jitterPage.locator('#messages').textContent()) ?? '').includes('抖动期间新消息'),
+      );
+      await jitterPage.setViewportSize({ width: 1280, height: 700 });
+      await sleep(500);
+      const resizedGap = await bottomGap(jitterPage);
+      check('上翻时视口高度变化（ResizeObserver）不回底', resizedGap > 120, { resizedGap });
+
+      for (let step = 0; step < 12; step += 1) {
+        await jitterPage.mouse.wheel(0, 600);
+        await sleep(60);
+        if ((await bottomGap(jitterPage)) <= 2) break;
+      }
+      await waitForBottom(jitterPage, '显式滚底后到底', 10_000);
+      await waitUntil(
+        async () => !(await jitterPage.locator('#jump-latest').isVisible()),
+        '显式滚底后隐藏回到最新',
+        5_000,
+      );
+      checkEqual(
+        '显式滚底后恢复跟随（回到最新按钮隐藏）',
+        await jitterPage.locator('#jump-latest').isVisible(),
+        false,
+      );
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: scrollRoomId,
+        body: '抖动回归贴底消息',
+      });
+      await waitForText(jitterPage, '#messages', '抖动回归贴底消息');
+      await waitForBottom(jitterPage, '恢复跟随后新消息贴底', 10_000);
+      const followGap = await bottomGap(jitterPage);
+      check('恢复跟随后新消息继续贴底', followGap <= 2, { followGap });
+      check(
+        '恢复跟随后补齐上翻期间的新消息',
+        ((await jitterPage.locator('#messages').textContent()) ?? '').includes('抖动期间新消息'),
+      );
+      await jitterContext.context.close();
+
+      // 14c-3. 上翻后 Markdown 异步升级不回底，阅读锚点漂移 <=24。
+      const markdownJitter = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await markdownJitter.page.route('**/assets/chat-markdown.js*', async (route) => {
+        await sleep(1_200);
+        await route.continue();
+      });
+      await markdownJitter.page.goto(`${server.base}/c/${scrollRoomId}`);
+      await waitRoom(markdownJitter.page, scrollRoomId, '滚动进入群');
+      await markdownJitter.page.waitForFunction(
+        'document.querySelectorAll("#messages .msg").length >= 20',
+      );
+      const markdownBox = await markdownJitter.page.locator('#messages').boundingBox();
+      if (!markdownBox) throw new Error('Markdown 抖动测试：消息区不可见');
+      await markdownJitter.page.mouse.move(
+        markdownBox.x + markdownBox.width / 2,
+        markdownBox.y + markdownBox.height / 2,
+      );
+      for (let step = 0; step < 6; step += 1) {
+        await markdownJitter.page.mouse.wheel(0, -120);
+        await sleep(60);
+      }
+      const markdownAnchorId = await firstVisibleMessageId(markdownJitter.page);
+      const markdownAnchorBefore = markdownAnchorId
+        ? await messageOffset(markdownJitter.page, markdownAnchorId)
+        : null;
+      check(
+        'Markdown 升级前已有可见锚点',
+        Boolean(markdownAnchorId) && markdownAnchorBefore !== null,
+        { markdownAnchorId, markdownAnchorBefore },
+      );
+      await waitUntil(
+        async () => (await markdownJitter.page.locator('#messages .msg-markdown').count()) >= 30,
+        '上翻后延迟 Markdown 升级',
+        20_000,
+      );
+      await sleep(800);
+      const markdownUpGap = await bottomGap(markdownJitter.page);
+      check('上翻后 Markdown 异步升级不回底', markdownUpGap > 120, { markdownUpGap });
+      const markdownAnchorAfter = markdownAnchorId
+        ? await messageOffset(markdownJitter.page, markdownAnchorId)
+        : null;
+      check(
+        '上翻后 Markdown 升级锚点漂移 <=24',
+        markdownAnchorBefore !== null &&
+          markdownAnchorAfter !== null &&
+          Math.abs(markdownAnchorAfter - markdownAnchorBefore) <= 24,
+        { markdownAnchorBefore, markdownAnchorAfter },
+      );
+      await markdownJitter.context.close();
+
+      // 14c-4. 上翻后文件卡片 HEAD 回填变高不回底，阅读锚点漂移 <=24。
+      for (let index = 1; index <= 20; index += 1) {
+        await rawTool(data.agentAToken, 'network_message_send', {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: fileRoomId,
+          body: `文件抖动尾部 ${index}\n\n${'尾部内容 '.repeat(8)}`,
+        });
+      }
+      const fileJitter = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const fileJitterHeads = await observeFileHeads(fileJitter.page);
+      fileJitterHeads.delayMs = 1_500;
+      await fileJitter.page.goto(`${server.base}/c/${fileRoomId}`);
+      await waitRoom(fileJitter.page, fileRoomId, '文件滚动群');
+      await waitUntil(
+        async () => (await fileJitter.page.locator('#messages .msg-file').count()) >= 4,
+        '文件抖动测试卡片渲染',
+        15_000,
+      );
+      await waitForBottom(fileJitter.page, '文件抖动测试初始到底', 10_000);
+      await sleep(300);
+      // 先把文件卡片滚入视口触发 HEAD（延迟 1.5s），再向下滚到卡片下方阅读。
+      await fileJitter.page.locator('#messages .msg-file').first().scrollIntoViewIfNeeded();
+      await waitUntil(
+        async () => fileJitterHeads.heads.length >= 1,
+        '文件卡片开始 HEAD',
+        15_000,
+      );
+      const fileBox = await fileJitter.page.locator('#messages').boundingBox();
+      if (!fileBox) throw new Error('文件抖动测试：消息区不可见');
+      await fileJitter.page.mouse.move(
+        fileBox.x + fileBox.width / 2,
+        fileBox.y + fileBox.height / 2,
+      );
+      for (let step = 0; step < 5; step += 1) {
+        await fileJitter.page.mouse.wheel(0, 120);
+        await sleep(60);
+      }
+      const fileAnchorId = await firstVisibleMessageId(fileJitter.page);
+      const fileAnchorBefore = fileAnchorId
+        ? await messageOffset(fileJitter.page, fileAnchorId)
+        : null;
+      await waitUntil(
+        async () => fileJitterHeads.heads.length >= 4,
+        '上翻后文件卡片 HEAD 回填',
+        15_000,
+      );
+      await waitUntil(
+        async () =>
+          (await fileJitter.page.locator('#messages .msg-file-size').allTextContents()).filter(
+            (text) => text && text !== '正在读取…',
+          ).length >= 4,
+        '上翻后文件卡片元数据应用',
+        15_000,
+      );
+      await sleep(300);
+      const fileUpGap = await bottomGap(fileJitter.page);
+      check('上翻后文件卡片变高不回底', fileUpGap > 120, { fileUpGap });
+      const fileAnchorAfter = fileAnchorId
+        ? await messageOffset(fileJitter.page, fileAnchorId)
+        : null;
+      check(
+        '上翻后文件卡片变高锚点漂移 <=24',
+        fileAnchorBefore !== null &&
+          fileAnchorAfter !== null &&
+          Math.abs(fileAnchorAfter - fileAnchorBefore) <= 24,
+        { fileAnchorBefore, fileAnchorAfter },
+      );
+      await fileJitter.context.close();
+
+      // 14c-5. 390px 暗色触摸上翻：主题、横向布局与触摸滚动都不回底。
+      const mobileJitter = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+        true,
+        false,
+        { colorScheme: 'dark', hasTouch: true },
+      );
+      const mobileJitterPage = mobileJitter.page;
+      await mobileJitterPage.goto(`${server.base}/c/${scrollRoomId}`);
+      await waitRoom(mobileJitterPage, scrollRoomId, '滚动进入群');
+      await mobileJitterPage.waitForFunction(
+        'document.querySelectorAll("#messages .msg").length >= 40',
+      );
+      await waitForBottom(mobileJitterPage, '390px 抖动测试初始到底', 10_000);
+      const mobileTheme = (await mobileJitterPage.evaluate(`(() => ({
+        dark: matchMedia('(prefers-color-scheme: dark)').matches,
+        doc: document.documentElement.scrollWidth,
+        view: window.innerWidth,
+        bg: getComputedStyle(document.querySelector('.chat-body')).backgroundColor
+      }))()`)) as { dark: boolean; doc: number; view: number; bg: string };
+      checkEqual('390px 暗色主题生效', mobileTheme.dark, true);
+      check('390px 暗色页面不横向滚动', mobileTheme.doc <= mobileTheme.view + 1, mobileTheme);
+      check('390px 暗色聊天区使用暗色背景', mobileTheme.bg === 'rgb(25, 25, 25)', mobileTheme);
+      const touchSamples = (await mobileJitterPage.evaluate(`new Promise(function (resolve) {
+        const node = document.getElementById('messages');
+        function makeTouch(y) {
+          return new Touch({ identifier: 9, target: node, clientX: 195, clientY: y });
+        }
+        let y = 500;
+        const start = makeTouch(y);
+        node.dispatchEvent(new TouchEvent('touchstart', {
+          bubbles: true, cancelable: true,
+          touches: [start], targetTouches: [start], changedTouches: [start]
+        }));
+        const samples = [];
+        let frame = 0;
+        function step() {
+          frame += 1;
+          y += 24;
+          const move = makeTouch(y);
+          node.dispatchEvent(new TouchEvent('touchmove', {
+            bubbles: true, cancelable: true,
+            touches: [move], targetTouches: [move], changedTouches: [move]
+          }));
+          node.scrollTop = Math.max(0, node.scrollTop - 70);
+          samples.push(node.scrollTop);
+          if (frame < 8) {
+            requestAnimationFrame(step);
+            return;
+          }
+          node.dispatchEvent(new TouchEvent('touchend', {
+            bubbles: true, cancelable: true,
+            touches: [], targetTouches: [], changedTouches: [makeTouch(y)]
+          }));
+          resolve(samples);
+        }
+        requestAnimationFrame(step);
+      })`)) as number[];
+      const touchMonotonic = touchSamples.every(
+        (value, index) => index === 0 || value <= (touchSamples[index - 1] ?? 0) + 2,
+      );
+      check('390px 触摸连续上翻 scrollTop 不回调（≤2px）', touchMonotonic, { touchSamples });
+      await sleep(800);
+      const touchGap = await bottomGap(mobileJitterPage);
+      check('390px 触摸上翻后不自动回底', touchGap > 120, { touchGap });
+      await mobileJitter.context.close();
 
       // 14d. 210 条长会话：三页 older 后新消息到达仍保留历史；锚点漂移 <=24。
       const longRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {

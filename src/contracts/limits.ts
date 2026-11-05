@@ -125,10 +125,16 @@ export const LIMITS = {
   webRefreshDebounceMs: 300,
   /** 网页消息区距底不超过该值时视为“跟随底部”。 */
   webScrollStickyPx: 80,
-  /** 只有距底超过该值才因滚动事件取消跟随，避免 80/81 抖动。 */
-  webScrollUnpinPx: 120,
   /** 滚轮/触摸上翻意图的最小位移（像素）。 */
   webScrollIntentPx: 6,
+  /** 用户上翻后的短窗口：期间异步高度与 scroll 事件都不得自动回底（毫秒）。 */
+  webScrollSuppressPinMs: 250,
+  /** 全量重建时落点未知，用于忽略钳制 scroll 事件的兜底窗口（毫秒）。 */
+  webScrollProgrammaticMs: 200,
+  /** 用户滚动停止多久后才做阅读锚点补偿（毫秒）。 */
+  webScrollUserIdleMs: 160,
+  /** 阅读锚点单次最大补偿位移；超过说明锚点已过期，直接丢弃（像素）。 */
+  webScrollAnchorMaxShiftPx: 240,
   /** 回到最新后的 mark_read 去抖窗口（毫秒）。 */
   webScrollMarkReadDelayMs: 250,
   /** MCP Events 默认订阅寿命（毫秒）。 */

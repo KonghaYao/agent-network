@@ -94,7 +94,14 @@ function closeFilePreview(restoreFocus) {
   const focus = filesPreviewFocus;
   filesPreviewFocus = null;
   if (restoreFocus && focus && focus.isConnected && focus.focus) {
-    requestAnimationFrame(function () { focus.focus(); });
+    // 关闭预览只还焦点，不把消息区滚回触发按钮的位置。
+    requestAnimationFrame(function () {
+      try {
+        focus.focus({ preventScroll: true });
+      } catch (error) {
+        focus.focus();
+      }
+    });
   }
 }
 

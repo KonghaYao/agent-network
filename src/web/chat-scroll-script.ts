@@ -8,20 +8,25 @@ import { LIMITS } from '../contracts/limits';
  * `chat-session-script.ts` 负责。阈值只来自 `src/contracts/limits.ts`。
  *
  * 关键不变量：
- * - 进入/切换房间一律 pinned；用户上翻由 wheel/touch/按键意图立即取消；
- * - pinned 时任何异步高度变化都通过 `noteContentChanged()` 在 rAF 中钉底；
+ * - 进入/切换房间一律 pinned；用户上翻由 wheel/touch/按键/滚动方向立即取消；
+ * - 上翻后进入短 suppressPin 窗口，异步高度与 scroll 事件都不得自动回底；
+ * - 只有“回到最新”按钮或用户明确向下滚回底部才重新 pinned；
+ * - 程序化 scrollTop 写入期间产生的 scroll 事件不得改变 pinned；
+ * - pinned 时异步高度变化合并到单个 rAF 钉底，不再每帧重复；
  * - unpinned 时不重绘消息，也不 mark_read，未读红点保留到用户回到底部。
  */
 export const CHAT_SCROLL_SCRIPT = `
 const SCROLL_STICKY_PX = ${LIMITS.webScrollStickyPx};
-const SCROLL_UNPIN_PX = ${LIMITS.webScrollUnpinPx};
 const SCROLL_INTENT_PX = ${LIMITS.webScrollIntentPx};
 const SCROLL_MARK_READ_DELAY_MS = ${LIMITS.webScrollMarkReadDelayMs};
+const SCROLL_SUPPRESS_PIN_MS = ${LIMITS.webScrollSuppressPinMs};
+const SCROLL_PROGRAMMATIC_MS = ${LIMITS.webScrollProgrammaticMs};
+const SCROLL_USER_IDLE_MS = ${LIMITS.webScrollUserIdleMs};
+const SCROLL_ANCHOR_MAX_SHIFT_PX = ${LIMITS.webScrollAnchorMaxShiftPx};
 
 let messagesEndElement = null;
 let messagesScrollObserver = null;
 let messagesResizeObserver = null;
-let scrollFrame = 0;
 let scrollTouchY = null;
 
 /** 末尾 1px sentinel：内容被整体重建后重新挂到列表末尾。 */
@@ -50,13 +55,34 @@ const scrollController = (function () {
   let markReadLastKey = null;
   let markReadInFlightKey = null;
   let markReadNext = null;
-  let suppressScrollUntil = 0;
+  /** 用户上翻后的短窗口：期间任何异步高度都不得把视图拽回底部。 */
+  let suppressPinUntil = 0;
+  /** 全量重建时落点未知，短窗口内忽略 scroll 事件；已知落点按精确位置判断。 */
+  let programmaticUntil = 0;
+  /** 程序化写入后的真实 scrollTop；用于识别迟到一帧以上的 scroll 事件。 */
+  let programmaticTop = -1;
+  /** 用户正在滚动的空闲窗口；期间不做阅读锚点补偿，避免和手势打架。 */
+  let userScrollUntil = 0;
+  let lastScrollTop = null;
+  let lastScrollHeight = -1;
+  /** 最近一次钉底后的真实 scrollTop；用于识别外部/用户已经把视口移走。 */
+  let lastPinnedBottomTop = -1;
+  /** 全量重建消息 DOM 期间 scrollTop 会被钳制，不能据此判定用户上翻。 */
+  let contentRebuild = false;
+  let pinFrame = 0;
+  let trailingPinFrame = 0;
+  let captureFrame = 0;
   let anchorElement = null;
   let anchorOffset = 0;
   let anchorUntil = 0;
   let anchorRaf = 0;
   let anchorTimer = 0;
   let anchorSettleTimer = 0;
+  let anchorIdleTimer = 0;
+
+  function nowMs() {
+    return performance.now();
+  }
 
   function distanceFromBottom() {
     if (!messagesElement) return 0;
@@ -77,30 +103,51 @@ const scrollController = (function () {
     jumpLatestButton.hidden = false;
   }
 
-  /** 程序化滚动会立刻产生 scroll 事件，短窗口内忽略，避免误判用户上翻。 */
+  function cancelPendingPins() {
+    if (pinFrame) {
+      cancelAnimationFrame(pinFrame);
+      pinFrame = 0;
+    }
+    if (trailingPinFrame) {
+      cancelAnimationFrame(trailingPinFrame);
+      trailingPinFrame = 0;
+    }
+  }
+
+  /** 记住程序化写入后的真实位置；浏览器会把 scrollTop 钳制到合法范围。 */
+  function markProgrammatic() {
+    programmaticUntil = nowMs() + SCROLL_PROGRAMMATIC_MS;
+    programmaticTop = messagesElement ? messagesElement.scrollTop : -1;
+  }
+
+  /** 钉底：只在 pinned 状态调用；写入期间产生的 scroll 事件会被静默。 */
   function pinToBottom() {
     if (!messagesElement) return;
-    suppressScrollUntil = performance.now() + 50;
     messagesElement.scrollTop = messagesElement.scrollHeight;
+    markProgrammatic();
+    lastPinnedBottomTop = messagesElement.scrollTop;
+    contentRebuild = false;
   }
 
   /**
    * 全量替换消息 DOM 时 scrollTop 会被浏览器夹到 0，随后产生的 scroll
-   * 事件不是用户上翻。替换前打开更长的静默窗口。
+   * 事件不是用户上翻。替换前打开静默窗口。
    */
   function beginContentChange() {
-    suppressScrollUntil = performance.now() + 150;
+    contentRebuild = true;
+    programmaticUntil = nowMs() + SCROLL_PROGRAMMATIC_MS;
+    programmaticTop = -1;
   }
 
   /** 高度补偿产生的 scroll 事件不得被当作“用户上翻”而重设阅读锚点。 */
   function adjustScroll(delta) {
     if (!messagesElement || !delta) return;
-    suppressScrollUntil = performance.now() + 80;
     messagesElement.scrollTop += delta;
+    markProgrammatic();
   }
 
   /**
-   * 上翻阅读锚点：记录视口内最下方消息的 top。之后 Markdown/文件卡片/
+   * 上翻阅读锚点：记录视口内最先相交的消息。之后 Markdown/文件卡片/
    * 回执在上方加高时，用它把同一元素拉回原位置，避免逐项补偿累积漂移。
    */
   function captureAnchor() {
@@ -124,9 +171,17 @@ const scrollController = (function () {
     anchorUntil = performance.now() + 30_000;
   }
 
-  function clearAnchor() {
-    anchorElement = null;
-    anchorUntil = 0;
+  /** 滚动事件里每帧最多重算一次锚点，避免 200 条消息时每个事件都遍历布局。 */
+  function captureAnchorSoon() {
+    if (pinned || !messagesElement || captureFrame) return;
+    captureFrame = requestAnimationFrame(function () {
+      captureFrame = 0;
+      if (!pinned) captureAnchor();
+    });
+  }
+
+  /** 取消待执行的锚点恢复；锚点元素保留，等 captureAnchorSoon 用新位置重算。 */
+  function cancelAnchorRestore() {
     if (anchorRaf) {
       cancelAnimationFrame(anchorRaf);
       anchorRaf = 0;
@@ -139,10 +194,25 @@ const scrollController = (function () {
       clearTimeout(anchorSettleTimer);
       anchorSettleTimer = 0;
     }
+    if (anchorIdleTimer) {
+      clearTimeout(anchorIdleTimer);
+      anchorIdleTimer = 0;
+    }
+  }
+
+  function clearAnchor() {
+    anchorElement = null;
+    anchorUntil = 0;
+    if (captureFrame) {
+      cancelAnimationFrame(captureFrame);
+      captureFrame = 0;
+    }
+    cancelAnchorRestore();
   }
 
   function restoreAnchor() {
     if (pinned || !messagesElement || !anchorElement) return;
+    if (nowMs() < userScrollUntil) return;
     if (!anchorElement.isConnected || performance.now() > anchorUntil) {
       anchorElement = null;
       return;
@@ -151,11 +221,27 @@ const scrollController = (function () {
     const current = anchorElement.getBoundingClientRect().top - listTop;
     const delta = current - anchorOffset;
     if (Math.abs(delta) < 0.5) return;
+    // 锚点被甩出太远：说明视口已经换位置，旧锚点不能再把用户拉回去。
+    if (Math.abs(delta) > SCROLL_ANCHOR_MAX_SHIFT_PX) {
+      anchorElement = null;
+      return;
+    }
     adjustScroll(delta);
   }
 
   function scheduleAnchorRestore() {
     if (pinned || !anchorElement) return;
+    // 用户仍在滚动时先等待手势结束，否则补偿会抵消惯性滚动。
+    const delay = userScrollUntil - nowMs();
+    if (delay > 0) {
+      if (!anchorIdleTimer) {
+        anchorIdleTimer = setTimeout(function () {
+          anchorIdleTimer = 0;
+          scheduleAnchorRestore();
+        }, delay + 16);
+      }
+      return;
+    }
     if (!anchorRaf) {
       anchorRaf = requestAnimationFrame(function () {
         anchorRaf = 0;
@@ -176,26 +262,57 @@ const scrollController = (function () {
     }
   }
 
-  function nextFramePin() {
-    if (!pinned) return;
-    requestAnimationFrame(function () {
-      if (!pinned) return;
-      pinToBottom();
-    });
+  /**
+   * 视口是否已离开上次钉底位置：内容变高本身不会改变 scrollTop，
+   * 只有用户/外部 scrollIntoView 才会把它移走；此时不能再钉底。
+   */
+  function viewportLeftPinnedBottom() {
+    if (!messagesElement || contentRebuild || lastPinnedBottomTop < 0) return false;
+    return messagesElement.scrollTop < lastPinnedBottomTop - 1 &&
+      distanceFromBottom() > SCROLL_STICKY_PX;
   }
 
+  /**
+   * 视口已经离开上次钉底位置时立即取消跟随。
+   *
+   * 外部 scrollIntoView 的 scroll 事件可能被全量重建窗口吞掉；只依赖事件
+   * 会让 pinned 停留在 true，随后的刷新/异步高度就会把用户拽回底部。
+   */
+  function reconcilePinned() {
+    if (!pinned || !viewportLeftPinnedBottom()) return false;
+    userScrollUntil = nowMs() + SCROLL_USER_IDLE_MS;
+    suppressPinUntil = nowMs() + SCROLL_SUPPRESS_PIN_MS;
+    unpin();
+    return true;
+  }
+
+  /**
+   * 内容高度变化：pinned 时合并到单个 rAF 钉底，user 上翻后不再自动回底。
+   * 第二个尾帧只覆盖 React/Markdown 在同一任务后继续提交的高度。
+   */
   function noteContentChanged() {
+    if (!messagesElement) return;
+    reconcilePinned();
     if (!pinned) {
       scheduleAnchorRestore();
       return;
     }
-    if (scrollFrame) return;
-    scrollFrame = requestAnimationFrame(function () {
-      scrollFrame = 0;
+    if (nowMs() < suppressPinUntil) return;
+    if (pinFrame) return;
+    pinFrame = requestAnimationFrame(function () {
+      pinFrame = 0;
+      if (!pinned || nowMs() < suppressPinUntil) return;
+      reconcilePinned();
       if (!pinned) return;
       pinToBottom();
-      // 第二帧覆盖同一任务内继续挂载 Markdown / 文件卡片造成的高度。
-      nextFramePin();
+      if (trailingPinFrame) return;
+      trailingPinFrame = requestAnimationFrame(function () {
+        trailingPinFrame = 0;
+        if (!pinned || nowMs() < suppressPinUntil) return;
+        reconcilePinned();
+        if (!pinned) return;
+        pinToBottom();
+      });
     });
   }
 
@@ -254,36 +371,49 @@ const scrollController = (function () {
     }, SCROLL_MARK_READ_DELAY_MS);
   }
 
+  /**
+   * 用户上翻意图：立即取消跟随并打开 suppressPin 窗口。
+   * 已经在 unpinned 时只刷新窗口，不再重复计算阅读锚点。
+   */
   function unpin() {
-    if (!pinned) {
-      captureAnchor();
-      return;
-    }
+    suppressPinUntil = nowMs() + SCROLL_SUPPRESS_PIN_MS;
+    cancelPendingPins();
+    if (!pinned) return;
     pinned = false;
     clearMarkReadTimer();
     captureAnchor();
   }
 
+  /** 用户明确要求回到底部（按钮/回到最新），或明确向下滚回底部。 */
   function pinNow() {
     pinned = true;
+    suppressPinUntil = 0;
     clearAnchor();
     hideJumpLatest();
     pinToBottom();
-    noteContentChanged();
     scheduleMarkRead();
   }
 
   function reset(nextRoomId, nextEpoch) {
     clearMarkReadTimer();
     clearAnchor();
+    cancelPendingPins();
     markReadLastKey = null;
     markReadInFlightKey = null;
     markReadNext = null;
     pinned = true;
     forceNextApply = false;
+    suppressPinUntil = 0;
+    programmaticUntil = 0;
+    programmaticTop = -1;
+    userScrollUntil = 0;
+    lastScrollTop = null;
+    lastScrollHeight = -1;
+    lastPinnedBottomTop = -1;
+    contentRebuild = false;
+    scrollTouchY = null;
     roomId = nextRoomId || null;
     epoch = Number(nextEpoch) || 0;
-    scrollTouchY = null;
     hideJumpLatest();
     ensureMessagesEnd();
     noteContentChanged();
@@ -294,24 +424,70 @@ const scrollController = (function () {
     showJumpLatest();
   }
 
+  /**
+   * scroll 事件只用于“方向意图”：
+   * - 向上（delta < 0，且不是内容变矮被钳制）立即 unpin；
+   * - 向下且已进入 sticky 区才重新 pin；
+   * - 程序化写入（钉底/高度补偿）一律忽略。
+   */
   function handleScroll() {
-    if (performance.now() < suppressScrollUntil) return;
+    if (!messagesElement) return;
+    const target = messagesElement.scrollTop;
+    const height = messagesElement.scrollHeight;
+    const previous = lastScrollTop;
+    const heightChanged = lastScrollHeight >= 0 && height !== lastScrollHeight;
+    lastScrollTop = target;
+    lastScrollHeight = height;
+    const current = nowMs();
     const gap = distanceFromBottom();
-    if (gap <= SCROLL_STICKY_PX) {
-      if (!pinned) pinNow();
+    // 钉底/高度补偿：只有落点正是我们写入的位置才忽略，迟到的 scroll 事件也能识别；
+    // 位置对不上说明是用户的滚动或外部 scrollIntoView，必须按真实意图处理。
+    const programmatic = programmaticTop >= 0
+      ? Math.abs(target - programmaticTop) <= 1
+      : current < programmaticUntil;
+    if (programmatic) {
+      // 外部写入恰好落在底部（或迟到事件）：恢复跟随，避免锚点补偿再把视图拉走。
+      if (!pinned && gap <= 0.5) pinNow();
       return;
     }
-    if (gap > SCROLL_UNPIN_PX) {
-      if (pinned) unpin();
-      else captureAnchor();
+    if (previous === null) return;
+    const delta = target - previous;
+    if (Math.abs(delta) < 0.5) return;
+    // 真实滚动：旧锚点的恢复定时器作废，避免把刚滚到的位置拉回去。
+    cancelAnchorRestore();
+    if (delta > 0) {
+      userScrollUntil = current + SCROLL_USER_IDLE_MS;
+      if (pinned) return;
+      if (gap <= SCROLL_STICKY_PX) pinNow();
+      else captureAnchorSoon();
+      return;
     }
+    // 内容变矮时浏览器会把 scrollTop 钳制回新的最大值：仍在底部，不是上翻。
+    if (gap <= 0.5) return;
+    // 与高度变化同一事件的负位移通常来自钳制（Markdown 先变矮再长高）；
+    // 真正的上翻会由 wheel/touch 意图或下一次 scroll 补上。
+    if (heightChanged) {
+      captureAnchorSoon();
+      return;
+    }
+    userScrollUntil = current + SCROLL_USER_IDLE_MS;
+    suppressPinUntil = current + SCROLL_SUPPRESS_PIN_MS;
+    if (pinned) unpin();
+    else captureAnchorSoon();
+  }
+
+  function noteUserScrolling() {
+    userScrollUntil = nowMs() + SCROLL_USER_IDLE_MS;
+    cancelAnchorRestore();
   }
 
   function install() {
     if (!messagesElement) return;
     messagesElement.addEventListener('scroll', handleScroll, { passive: true });
     messagesElement.addEventListener('wheel', function (event) {
-      if (event.deltaY < 0 && distanceFromBottom() > 0) unpin();
+      if (event.deltaY >= 0) return;
+      noteUserScrolling();
+      unpin();
     }, { passive: true });
     messagesElement.addEventListener('touchstart', function (event) {
       const touch = event.touches && event.touches[0];
@@ -321,9 +497,14 @@ const scrollController = (function () {
       if (scrollTouchY === null) return;
       const touch = event.touches && event.touches[0];
       if (!touch) return;
-      if (touch.clientY - scrollTouchY > SCROLL_INTENT_PX) {
-        scrollTouchY = null;
+      const delta = touch.clientY - scrollTouchY;
+      if (delta > SCROLL_INTENT_PX) {
+        scrollTouchY = touch.clientY;
+        noteUserScrolling();
         unpin();
+      } else if (delta < -SCROLL_INTENT_PX) {
+        // 反向移动超过阈值后重设基准，避免累计位移误判方向。
+        scrollTouchY = touch.clientY;
       }
     }, { passive: true });
     messagesElement.addEventListener('touchend', function () {
@@ -335,7 +516,8 @@ const scrollController = (function () {
       const target = event.target;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ||
           target.isContentEditable)) return;
-      if (distanceFromBottom() > 0) unpin();
+      noteUserScrolling();
+      unpin();
     });
     if (typeof IntersectionObserver === 'function') {
       messagesScrollObserver = new IntersectionObserver(function (entries) {
@@ -368,7 +550,10 @@ const scrollController = (function () {
   return {
     install: install,
     reset: reset,
-    isPinned: function () { return pinned; },
+    isPinned: function () {
+      reconcilePinned();
+      return pinned;
+    },
     distanceFromBottom: distanceFromBottom,
     noteContentChanged: noteContentChanged,
     beginContentChange: beginContentChange,
@@ -380,6 +565,7 @@ const scrollController = (function () {
     unpin: unpin,
     scrollToBottom: function () {
       pinned = true;
+      suppressPinUntil = 0;
       clearAnchor();
       pinToBottom();
       noteContentChanged();
@@ -387,6 +573,7 @@ const scrollController = (function () {
     pinNextApply: function () {
       pinned = true;
       forceNextApply = true;
+      suppressPinUntil = 0;
       clearAnchor();
       hideJumpLatest();
       pinToBottom();
