@@ -4502,6 +4502,59 @@ async function main(): Promise<void> {
       await context.close();
     }
 
+    // 2f. 连接数上限：不是网络抖动，停止循环并提示关闭其他标签页。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      let streamAttempts = 0;
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-method'] !== 'subscriptions/listen') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as { id?: string } | null;
+        streamAttempts += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            error: {
+              code: -32602,
+              message: '当前 actor 的 stream 连接数已达上限',
+              data: {
+                code: 'RATE_LIMITED',
+                message: '当前 actor 的 stream 连接数已达上限',
+                retryable: true,
+                details: { limit: 4 },
+              },
+            },
+          }),
+        });
+      });
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.locator('#stream-dot').waitFor({ state: 'visible', timeout: 8_000 });
+      const label = (await page.locator('#stream-dot').getAttribute('title')) ?? '';
+      check('连接数上限提示关闭其他页面', label.includes('关闭其他页面后刷新'), label);
+      checkEqual(
+        '连接数上限状态点为 stopped',
+        await page.locator('#stream-dot').getAttribute('data-state'),
+        'stopped',
+      );
+      checkEqual('连接数上限不显示长句', ((await page.locator('#stream-dot').textContent()) ?? '').trim(), '');
+      await sleep(1_500);
+      checkEqual('RATE_LIMITED 不重试', streamAttempts, 1);
+      await page.unroute('**/mcp');
+      await context.close();
+    }
+
     // 3. 移动端单栏、返回箭头、后退/前进。
     {
       const { context, page } = await makeContext(

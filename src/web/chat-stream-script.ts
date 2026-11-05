@@ -13,6 +13,8 @@ export const CHAT_STREAM_SCRIPT = `
 const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META_KEY = 'io.agent-network/event';
 // 这些错误不是网络抖动：继续退避只会制造无意义请求。
+// RATE_LIMITED 在 stream 路径上只表示当前身份已有上限条物理连接
+// （其他标签页/设备），重试不会自愈，必须停下来提示用户处理。
 const STREAM_FATAL_CODES = [
   'CREDENTIAL_INVALID',
   'INVALID_ARGUMENT',
@@ -20,8 +22,10 @@ const STREAM_FATAL_CODES = [
   'FORBIDDEN',
   'PERMISSION_DENIED',
   'UNAUTHORIZED',
-  'ACTOR_NOT_FOUND'
+  'ACTOR_NOT_FOUND',
+  'RATE_LIMITED'
 ];
+const STREAM_CONNECTION_LIMIT = ${LIMITS.streamConnectionsPerActor};
 const STREAM_RECONNECT_BASE_MS = ${LIMITS.reconnectBaseMs};
 const STREAM_RECONNECT_MAX_MS = ${LIMITS.reconnectMaxMs};
 const STREAM_RECONNECT_JITTER_RATIO = ${LIMITS.reconnectJitterRatio};
@@ -80,6 +84,16 @@ function parseSseBlock(block) {
 
 function isFatalStreamCode(code) {
   return typeof code === 'string' && STREAM_FATAL_CODES.indexOf(code) >= 0;
+}
+
+/** 终止提示按错误码区分：连接数上限需要用户关闭其他页面，不是网络故障。 */
+function streamStopStatus(failure) {
+  if (failure && failure.code === 'RATE_LIMITED') {
+    return '实时连接已停止：当前身份已有 ' + STREAM_CONNECTION_LIMIT +
+      ' 条实时连接（可能在其他标签页或设备打开），请关闭其他页面后刷新';
+  }
+  return '实时连接已停止：' +
+    (failure && failure.message ? failure.message : '未知错误');
 }
 
 function computeStreamBackoff(attempt) {
@@ -188,7 +202,9 @@ function noteStreamFailure(failure) {
   if (streamFailures === 0) streamFailureStartedAt = Date.now();
   streamFailures += 1;
   streamDebug(
-    'stream disconnected: ' + (failure && failure.message ? failure.message : 'unknown')
+    'stream disconnected: ' +
+      (failure && failure.message ? failure.message : 'unknown') +
+      (failure && failure.code ? ' [' + failure.code + ']' : '')
   );
   const elapsed = Date.now() - streamFailureStartedAt;
   if (streamFailures >= STREAM_BANNER_AFTER_FAILURES || elapsed >= STREAM_BANNER_AFTER_MS) {
@@ -424,19 +440,20 @@ async function streamResponseFailure(response) {
     }
   }
   if (response.status === 401 || response.status === 403) {
-    return { fatal: true, message: message || '凭据无效' };
+    return { fatal: true, code: code, message: message || '凭据无效' };
   }
-  if (isFatalStreamCode(code)) return { fatal: true, message: message || code };
-  return { fatal: false, message: message || ('HTTP ' + response.status) };
+  if (isFatalStreamCode(code)) return { fatal: true, code: code, message: message || code };
+  return { fatal: false, code: code, message: message || ('HTTP ' + response.status) };
 }
 
 function streamThrownFailure(error) {
   const code = error && typeof error.code === 'string' ? error.code : '';
   if (isFatalStreamCode(code)) {
-    return { fatal: true, message: error.message || code };
+    return { fatal: true, code: code, message: error.message || code };
   }
   return {
     fatal: false,
+    code: code,
     message: error && error.message ? error.message : '网络中断'
   };
 }
@@ -491,7 +508,7 @@ async function runActorStream(task) {
         const failure = streamThrownFailure(error);
         if (failure.fatal) {
           streamConnected = false;
-          setStreamStatus('实时连接已停止：' + failure.message);
+          setStreamStatus(streamStopStatus(failure));
           return;
         }
         noteStreamFailure(failure);
@@ -512,7 +529,7 @@ async function runActorStream(task) {
 
     if (result.failure && result.failure.fatal) {
       streamConnected = false;
-      setStreamStatus('实时连接已停止：' + result.failure.message);
+      setStreamStatus(streamStopStatus(result.failure));
       return;
     }
 
