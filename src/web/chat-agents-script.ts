@@ -9,6 +9,9 @@
  * `AGENT_REGISTRY_MAX`。本地注册表保存 owner/actor/session/名称/创建时间与
  * 该 Agent 自己的 MCP URL（含长期 token）；不保存 human token、提示词或
  * share_url。注册表只在本浏览器，按当前 human 隔离。
+ *
+ * 群聊服务端只接受好友，因此选择器打开时还要用当前 human token 把注册表中
+ * 缺失的 Agent 补成联系人；联系人添加是单向、幂等、无需对方接受的。
  */
 export const CHAT_AGENTS_SCRIPT = `
 const AGENT_REGISTRY_KEY = 'agent-network-agents-v1';
@@ -171,5 +174,90 @@ function agentRegistryReissue(ownerActorId, actorId, mcpUrl, fallback) {
     });
   }
   return agentRegistryWrite(agentsSortByCreated(items));
+}
+
+/** 当前 human 在本机注册、但不在给定好友列表中的 Agent actor_id。 */
+function agentContactGaps(ownerActorId, contacts) {
+  if (!ownerActorId) return [];
+  const known = new Set();
+  for (const contact of contacts || []) {
+    if (contact && typeof contact.actor_id === 'string') known.add(contact.actor_id);
+  }
+  const gaps = [];
+  for (const item of agentRegistryItems(ownerActorId).items) {
+    if (!item.actor_id || item.actor_id === ownerActorId) continue;
+    if (known.has(item.actor_id) || gaps.indexOf(item.actor_id) >= 0) continue;
+    gaps.push(item.actor_id);
+  }
+  return gaps;
+}
+
+/**
+ * 用当前 human token 补齐本机创建的 Agent 好友关系。
+ *
+ * network_contact_add 是单向、幂等且不需要对方接受的；并发上限 4，避免
+ * 注册表较大时串行阻塞。单个失败只收集可读信息，不阻断已有好友展示。
+ * 返回合并后的联系人列表，调用方据此重绘选择器。
+ */
+async function addOwnedAgentContacts(ownerActorId, contacts) {
+  const gaps = agentContactGaps(ownerActorId, contacts);
+  if (gaps.length === 0) {
+    return { contacts: (contacts || []).slice(), added: [], failed: [] };
+  }
+  const added = [];
+  const failed = [];
+  let index = 0;
+  async function worker() {
+    while (index < gaps.length) {
+      const actorId = gaps[index];
+      index += 1;
+      try {
+        const result = await callTool('network_contact_add', {
+          request_id: requestId('agent_contact'),
+          actor_id: actorId
+        });
+        const contact = result && result.contact;
+        if (contact && typeof contact.actor_id === 'string') {
+          added.push(contact);
+        } else {
+          added.push({
+            actor_id: actorId,
+            kind: 'agent',
+            name: actorId,
+            agent_session_id: null,
+            created_at: String(Date.now())
+          });
+        }
+      } catch (error) {
+        failed.push({
+          actor_id: actorId,
+          message: error && error.message ? String(error.message) : String(error)
+        });
+      }
+    }
+  }
+  const workers = [];
+  const width = Math.min(4, gaps.length);
+  for (let slot = 0; slot < width; slot += 1) workers.push(worker());
+  await Promise.all(workers);
+  const merged = (contacts || []).slice();
+  const seen = new Set();
+  for (const contact of merged) {
+    if (contact && typeof contact.actor_id === 'string') seen.add(contact.actor_id);
+  }
+  for (const contact of added) {
+    if (!seen.has(contact.actor_id)) {
+      seen.add(contact.actor_id);
+      merged.push(contact);
+    }
+  }
+  return { contacts: merged, added: added, failed: failed };
+}
+
+/** 好友补齐失败只显示数量与首个错误，不把凭据或请求体写入页面。 */
+function agentContactSyncError(failed) {
+  if (!failed || failed.length === 0) return '';
+  const first = failed[0] && failed[0].message ? '：' + failed[0].message : '';
+  return '有 ' + failed.length + ' 个本机 Agent 添加好友失败' + first + '；可稍后重试';
 }
 `;

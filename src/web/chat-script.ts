@@ -94,6 +94,7 @@ let composing = false;
 let ignoreEnterUntil = 0;
 let copyResetTimer = null;
 let pendingRoomRefreshId = null;
+let groupLoadSeq = 0;
 // 发送失败/投递缺失/截断提示必须跨过 SSE 触发的刷新，不能在 300ms 后被清空。
 let stickyStatus = '';
 
@@ -523,24 +524,37 @@ function insertMention(member) {
 
 async function loadGroupContacts() {
   const contacts = [];
+  const seen = new Set();
   let cursor = null;
   for (let page = 0; page < 5; page += 1) {
     const args = { limit: 100 };
     if (cursor) args.cursor = cursor;
     const result = await callTool('network_contacts_list', args);
-    contacts.push.apply(contacts, result.items || []);
+    for (const contact of result.items || []) {
+      if (!contact || typeof contact.actor_id !== 'string') continue;
+      if (seen.has(contact.actor_id)) continue;
+      seen.add(contact.actor_id);
+      contacts.push(contact);
+    }
     if (!result.has_more || !result.next_cursor) break;
     cursor = result.next_cursor;
   }
   return contacts;
 }
 
-function renderGroupContacts(contacts) {
+function renderGroupContacts(contacts, note) {
   if (!groupContactsElement || !identity) return;
+  const checked = new Set();
+  for (const input of groupContactsElement.querySelectorAll('input[type=checkbox]:checked')) {
+    checked.add(input.value);
+  }
   groupContactsElement.replaceChildren();
   const others = contacts.filter(function (contact) { return contact.actor_id !== identity.actor_id; });
   if (others.length === 0) {
-    groupContactsElement.textContent = '还没有好友。先打开 Agent 分享链接添加好友。';
+    const empty = document.createElement('p');
+    empty.className = 'list-hint';
+    empty.textContent = note || '还没有好友。先打开 Agent 分享链接添加好友。';
+    groupContactsElement.append(empty);
     return;
   }
   for (const contact of others) {
@@ -549,6 +563,7 @@ function renderGroupContacts(contacts) {
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.value = contact.actor_id;
+    if (checked.has(contact.actor_id)) input.checked = true;
     const name = document.createElement('span');
     name.textContent = contact.name;
     const kind = document.createElement('span');
@@ -557,14 +572,23 @@ function renderGroupContacts(contacts) {
     label.append(input, name, kind);
     groupContactsElement.append(label);
   }
+  if (note) {
+    const hint = document.createElement('p');
+    hint.className = 'list-hint';
+    hint.textContent = note;
+    groupContactsElement.append(hint);
+  }
 }
 
 function closeGroupModal() {
+  groupLoadSeq += 1;
   if (groupModal) groupModal.hidden = true;
 }
 
 async function openGroupModal() {
   if (!groupModal || !groupContactsElement) return;
+  groupLoadSeq += 1;
+  const loadSeq = groupLoadSeq;
   groupModal.hidden = false;
   if (groupTitleInput) groupTitleInput.value = '';
   if (groupErrorElement) groupErrorElement.textContent = '';
@@ -575,8 +599,18 @@ async function openGroupModal() {
   groupContactsElement.textContent = '正在读取好友…';
   try {
     await ensureIdentity();
-    renderGroupContacts(await loadGroupContacts());
+    if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
+    const contacts = await loadGroupContacts();
+    if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
+    renderGroupContacts(contacts);
+    const ownerActorId = identity ? identity.actor_id : '';
+    if (agentContactGaps(ownerActorId, contacts).length === 0) return;
+    renderGroupContacts(contacts, '正在同步本机创建的 Agent…');
+    const synced = await addOwnedAgentContacts(ownerActorId, contacts);
+    if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
+    renderGroupContacts(synced.contacts, agentContactSyncError(synced.failed));
   } catch (error) {
+    if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
     groupContactsElement.replaceChildren();
     if (groupErrorElement) {
       groupErrorElement.textContent = '读取好友失败：' + (error && error.message ? error.message : error);

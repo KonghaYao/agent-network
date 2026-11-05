@@ -225,6 +225,17 @@ async function newAgentCreate(event) {
       created_at: String(Date.now()),
       mcp_url: newAgentUrl
     });
+    // 群聊只接受好友；用浏览器 human token 幂等添加该 Agent，不使用新 Agent token。
+    // 失败不回滚 Agent、凭据或注册表，打开群聊选择器时会按注册表重试。
+    let contactError = '';
+    try {
+      await callTool('network_contact_add', {
+        request_id: requestId('web_agent_contact'),
+        actor_id: registered.actor_id
+      });
+    } catch (error) {
+      contactError = error && error.message ? String(error.message) : String(error);
+    }
     // 用浏览器 human token 建立与该 Agent 的 direct 会话，使其立即出现在左侧；
     // 会话创建失败不回滚 Agent、凭据或注册表。
     let roomError = '';
@@ -277,10 +288,12 @@ async function newAgentCreate(event) {
     }
     if (!newAgentShareInput || !newAgentShareInput.value) {
       newAgentSetError('Agent 已创建，但服务端未返回分享链接');
-    } else if (roomError) {
-      newAgentSetError('Agent 已创建，但会话添加失败：' + roomError);
-    } else if (registryError) {
-      newAgentSetError('Agent 已创建，但' + registryError);
+    } else if (roomError || contactError || registryError) {
+      const warnings = [];
+      if (roomError) warnings.push('会话添加失败：' + roomError);
+      if (contactError) warnings.push('添加好友失败：' + contactError);
+      if (registryError) warnings.push(registryError);
+      newAgentSetError('Agent 已创建，但' + warnings.join('；'));
     }
     if (newAgentUrlInput) {
       newAgentUrlInput.focus();

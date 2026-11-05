@@ -63,15 +63,22 @@ function renderCurrentMembers() {
   }
 }
 
-function renderMembersContacts(contacts) {
+function renderMembersContacts(contacts, note) {
   if (!membersContactsElement) return;
+  const checked = new Set();
+  for (const input of membersContactsElement.querySelectorAll('input[type=checkbox]:checked')) {
+    checked.add(input.value);
+  }
   membersContactsElement.replaceChildren();
   if (!isGroupOwner()) {
     membersContactsElement.textContent = '只有群 owner 可以添加成员';
     return;
   }
   if (contacts.length === 0) {
-    membersContactsElement.textContent = '没有可添加的好友：好友都已在群里。';
+    const empty = document.createElement('p');
+    empty.className = 'list-hint';
+    empty.textContent = note || '没有可添加的好友：好友都已在群里。';
+    membersContactsElement.append(empty);
     return;
   }
   for (const contact of contacts) {
@@ -80,6 +87,7 @@ function renderMembersContacts(contacts) {
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.value = contact.actor_id;
+    if (checked.has(contact.actor_id)) input.checked = true;
     const name = document.createElement('span');
     name.textContent = contact.name;
     const kind = document.createElement('span');
@@ -87,6 +95,12 @@ function renderMembersContacts(contacts) {
     kind.textContent = contact.kind === 'agent' ? 'Agent' : '人';
     label.append(input, name, kind);
     membersContactsElement.append(label);
+  }
+  if (note) {
+    const hint = document.createElement('p');
+    hint.className = 'list-hint';
+    hint.textContent = note;
+    membersContactsElement.append(hint);
   }
 }
 
@@ -99,6 +113,14 @@ function closeMembersModal() {
     membersAddButton.disabled = true;
     membersAddButton.textContent = '添加';
   }
+}
+
+function membersCandidates(contacts) {
+  const excluded = new Set(members.keys());
+  if (identity) excluded.add(identity.actor_id);
+  return contacts.filter(function (contact) {
+    return !excluded.has(contact.actor_id);
+  });
 }
 
 async function openMembersModal() {
@@ -129,12 +151,27 @@ async function openMembersModal() {
     ) {
       return;
     }
-    const excluded = new Set(members.keys());
-    if (identity) excluded.add(identity.actor_id);
-    const candidates = contacts.filter(function (contact) {
-      return !excluded.has(contact.actor_id);
-    });
-    renderMembersContacts(candidates);
+    renderMembersContacts(membersCandidates(contacts));
+    setMembersBusy(false);
+    const ownerActorId = identity ? identity.actor_id : '';
+    if (agentContactGaps(ownerActorId, contacts).length === 0) return;
+    renderMembersContacts(
+      membersCandidates(contacts),
+      '正在同步本机创建的 Agent…'
+    );
+    const synced = await addOwnedAgentContacts(ownerActorId, contacts);
+    if (
+      loadToken !== membersLoadToken ||
+      !isActiveRoom(roomId, epoch) ||
+      !membersModal ||
+      membersModal.hidden
+    ) {
+      return;
+    }
+    renderMembersContacts(
+      membersCandidates(synced.contacts),
+      agentContactSyncError(synced.failed)
+    );
     setMembersBusy(false);
   } catch (error) {
     if (loadToken !== membersLoadToken || !isActiveRoom(roomId, epoch)) return;
