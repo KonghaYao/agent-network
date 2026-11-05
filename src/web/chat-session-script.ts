@@ -480,7 +480,8 @@ function ensureRoomEntry(detail) {
       kind: detailRoom.kind,
       name: summary.name,
       head_seq: detailRoom.head_seq || 0,
-      my_last_read_seq: 0,
+      // 新建单聊时调用方会先写入本地已读位置，避免刚创建的会话闪出未读红点。
+      my_last_read_seq: detailRoom.my_last_read_seq != null ? detailRoom.my_last_read_seq : 0,
       last_message: null,
       updated_at: detailRoom.updated_at || Date.now(),
       peer_kind: summary.peer_kind,

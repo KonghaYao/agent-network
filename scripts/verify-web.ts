@@ -41,6 +41,7 @@ interface RoomDetail {
     kind: string;
     title?: string;
     head_seq: string;
+    my_last_read_seq?: string;
     updated_at: string;
     member_count?: number;
   };
@@ -212,6 +213,9 @@ function initScript(token: string, seedOnce = false): string {
       body: body,
       id: body && body.id,
       subscriptions: Array.isArray(subscriptions) ? subscriptions : null,
+      // 只记录布尔值，避免把 token 放进可打印的调用记录。
+      hasAuth: Boolean(headers['authorization']),
+      humanAuth: headers['authorization'] === 'Bearer ' + TOKEN,
       stream: isStream,
       aborted: false,
       at: Date.now()
@@ -286,6 +290,19 @@ async function makeContext(
 
 function roomLink(roomId: string): string {
   return `#room-list a.room-item[href="/c/${encodeURIComponent(roomId)}"]`;
+}
+
+/** 等待左侧会话列表出现指定名称的条目（direct 名称会由后台补全）。 */
+async function waitRoomListName(page: Page, name: string): Promise<void> {
+  await page.waitForFunction(
+    `(function () {
+      const items = Array.from(document.querySelectorAll('#room-list a.room-item'));
+      return items.some(function (item) {
+        const label = item.querySelector('.room-name');
+        return label && label.textContent === ${JSON.stringify(name)};
+      });
+    })()`,
+  );
 }
 
 async function waitRoom(page: Page, roomId: string, expectedTitle: string): Promise<void> {
@@ -1855,7 +1872,115 @@ async function main(): Promise<void> {
       );
       check('localStorage 不保存整段提示词', !storageDump.includes(newAgentPrompt));
 
+      // 新建 Agent 自动建立 direct 会话，立即出现在左侧且无未读。
+      const webAgentName = '网页新建 Agent';
+      await waitRoomListName(page, webAgentName);
+      const webAgentRoomItem = page.locator('#room-list a.room-item').filter({
+        hasText: webAgentName,
+      });
+      checkEqual('新建 Agent 后左侧立即出现 direct 会话', await webAgentRoomItem.count(), 1);
+      checkEqual(
+        '新建 Agent 会话预览为还没有消息',
+        ((await webAgentRoomItem.locator('.room-preview').textContent()) ?? '').trim(),
+        '还没有消息',
+      );
+      checkEqual('新建 Agent 会话无未读红点', await webAgentRoomItem.locator('.unread').count(), 0);
+      const webAgentRoomHref = await webAgentRoomItem.getAttribute('href');
+      check(
+        '新建 Agent 会话链接可导航',
+        Boolean(webAgentRoomHref && webAgentRoomHref.indexOf('/c/rm_') === 0),
+      );
+      const webAgentRoomId = decodeURIComponent((webAgentRoomHref ?? '').split('/c/')[1] ?? '');
+      const webAgentRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_get', {
+        room_id: webAgentRoomId,
+      });
+      checkEqual(
+        '新建 Agent 会话已读位置推进到 head',
+        webAgentRoom.room.my_last_read_seq ?? '',
+        webAgentRoom.room.head_seq,
+      );
+      const webAgentCalls = (await page.evaluate(`(() => {
+        const registry = JSON.parse(localStorage.getItem('agent-network-agents-v1') || '{"items":[]}');
+        const item = (registry.items || []).find(function (entry) {
+          return entry.name === ${JSON.stringify(webAgentName)};
+        }) || {};
+        const calls = window.__mcpCalls || [];
+        const argsOf = function (call) {
+          return call.body && call.body.params ? call.body.params.arguments : null;
+        };
+        const roomCreates = calls.filter(function (call) {
+          const args = argsOf(call);
+          return call.name === 'network_room_create' && args && item.actor_id &&
+            args.kind === 'direct' && (args.members || []).indexOf(item.actor_id) >= 0;
+        });
+        const markReads = calls.filter(function (call) {
+          const args = argsOf(call);
+          return call.name === 'network_room_mark_read' && args && args.room_id;
+        });
+        const register = calls.find(function (call) {
+          const args = argsOf(call);
+          return call.name === 'network_register' && args &&
+            args.name === ${JSON.stringify(webAgentName)};
+        });
+        return {
+          actorId: item.actor_id || null,
+          directCount: roomCreates.length,
+          directMembers: roomCreates.map(function (call) { return argsOf(call).members || []; }),
+          directHumanAuth: roomCreates.every(function (call) { return call.humanAuth === true; }),
+          markReadCount: markReads.length,
+          markReadSeqs: markReads.map(function (call) { return argsOf(call).through_seq; }),
+          markReadHumanAuth: markReads.every(function (call) { return call.humanAuth === true; }),
+          registerHumanAuth: register ? register.humanAuth === true : null,
+          registerHasAuth: register ? register.hasAuth === true : null,
+          contactAddCount: calls.filter(function (call) {
+            return call.name === 'network_contact_add';
+          }).length
+        };
+      })()`)) as {
+        actorId: string | null;
+        directCount: number;
+        directMembers: string[][];
+        directHumanAuth: boolean;
+        markReadCount: number;
+        markReadSeqs: string[];
+        markReadHumanAuth: boolean;
+        registerHumanAuth: boolean | null;
+        registerHasAuth: boolean | null;
+        contactAddCount: number;
+      };
+      const firstDirectMembers = webAgentCalls.directMembers[0] ?? [];
+      check(
+        '新建 Agent 只创建一个 direct 会话且成员为注册的 Agent',
+        webAgentCalls.directCount === 1 &&
+          webAgentCalls.directMembers.length === 1 &&
+          firstDirectMembers.length === 1 &&
+          firstDirectMembers[0] === webAgentCalls.actorId &&
+          Boolean(webAgentCalls.actorId),
+        { directCount: webAgentCalls.directCount },
+      );
+      check(
+        '创建会话使用 human token 而不是新 Agent token',
+        webAgentCalls.directHumanAuth &&
+          webAgentCalls.markReadHumanAuth &&
+          webAgentCalls.registerHumanAuth === false &&
+          webAgentCalls.registerHasAuth === true,
+        {
+          directHumanAuth: webAgentCalls.directHumanAuth,
+          registerHumanAuth: webAgentCalls.registerHumanAuth,
+        },
+      );
+      check(
+        '创建会话后按 head 标记已读',
+        webAgentCalls.markReadCount >= 1 &&
+          webAgentCalls.markReadSeqs.indexOf(webAgentRoom.room.head_seq) >= 0,
+        { markReadCount: webAgentCalls.markReadCount },
+      );
+      checkEqual('新建 Agent 不自动添加好友', webAgentCalls.contactAddCount, 0);
+
       await page.locator('#new-agent-close').click();
+      await waitRoomListName(page, webAgentName);
+      checkEqual('关闭弹窗后新建会话仍在左侧', await webAgentRoomItem.count(), 1);
+
       const closedState = (await page.evaluate(`(() => ({
         resultHidden: document.getElementById('new-agent-result').hidden,
         url: document.getElementById('new-agent-url').value,
@@ -1909,6 +2034,11 @@ async function main(): Promise<void> {
           !registryDump.includes(newAgentShareUrl),
       );
       await page.locator('#new-agent-close').click();
+      await page.reload();
+      await waitRoomListName(page, webAgentName);
+      checkEqual('刷新后新建 Agent 会话仍存在', await webAgentRoomItem.count(), 1);
+      checkEqual('刷新后仍是同一会话', await webAgentRoomItem.getAttribute('href'), webAgentRoomHref);
+      checkEqual('刷新后新建 Agent 会话无未读红点', await webAgentRoomItem.locator('.unread').count(), 0);
       await context.close();
     }
 
@@ -1987,6 +2117,112 @@ async function main(): Promise<void> {
           escapedState.skill === '' &&
           escapedState.prompt === '',
       );
+      const mobileAgentName = '移动端 Agent';
+      await waitRoomListName(page, mobileAgentName);
+      const mobileAgentRoomItem = page.locator('#room-list a.room-item').filter({
+        hasText: mobileAgentName,
+      });
+      checkEqual('390px 新建 Agent 会话出现在列表', await mobileAgentRoomItem.count(), 1);
+      checkEqual('390px 新建 Agent 会话可见', await mobileAgentRoomItem.isVisible(), true);
+      checkEqual(
+        '390px 新建 Agent 会话无未读红点',
+        await mobileAgentRoomItem.locator('.unread').count(),
+        0,
+      );
+      await context.close();
+    }
+
+    // 2b-1b. 会话创建失败不回滚 Agent：凭据、注册表与“已创建”状态保留。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_room_create') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as { id?: unknown } | null;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    code: 'CONFLICT',
+                    message: '模拟会话创建失败',
+                    retryable: false,
+                  }),
+                },
+              ],
+            },
+          }),
+        });
+      });
+      const failedAgentName = '会话失败 Agent';
+      await page.locator('#new-agent').click();
+      await page.fill('#new-agent-name', failedAgentName);
+      await page.locator('#new-agent-create').click();
+      await page.locator('#new-agent-result').waitFor({ state: 'visible' });
+      await page.waitForFunction(
+        `document.getElementById('new-agent-error').textContent.indexOf(
+          'Agent 已创建，但会话添加失败：模拟会话创建失败'
+        ) >= 0`,
+      );
+      const failedMcpUrl = await page.inputValue('#new-agent-url');
+      const failedShareUrl = await page.inputValue('#new-agent-share');
+      const failedPrompt = await page.inputValue('#new-agent-prompt');
+      check(
+        '会话创建失败仍展示 MCP URL、分享链接与提示词',
+        failedMcpUrl.startsWith('http') &&
+          failedShareUrl.startsWith('http') &&
+          failedPrompt.includes('/mcp?token='),
+      );
+      checkEqual(
+        '会话创建失败仍显示已创建',
+        ((await page.locator('#new-agent-create').textContent()) ?? '').trim(),
+        '已创建',
+      );
+      const failedState = (await page.evaluate(`(() => {
+        const registry = JSON.parse(localStorage.getItem('agent-network-agents-v1') || '{"items":[]}');
+        const item = (registry.items || []).find(function (entry) {
+          return entry.name === ${JSON.stringify(failedAgentName)};
+        });
+        return {
+          registrySaved: Boolean(item && item.mcp_url),
+          registryHasRoomId: Boolean(item && ('room_id' in item || 'roomId' in item)),
+          roomItems: Array.from(document.querySelectorAll('#room-list a.room-item .room-name'))
+            .filter(function (label) {
+              return label.textContent === ${JSON.stringify(failedAgentName)};
+            }).length,
+          contactAddCount: (window.__mcpCalls || []).filter(function (call) {
+            return call.name === 'network_contact_add';
+          }).length
+        };
+      })()`)) as {
+        registrySaved: boolean;
+        registryHasRoomId: boolean;
+        roomItems: number;
+        contactAddCount: number;
+      };
+      check('会话创建失败仍写入本地 Agents 注册表', failedState.registrySaved);
+      checkEqual('注册表不写入 room_id', failedState.registryHasRoomId, false);
+      checkEqual('会话创建失败不插入左侧列表', failedState.roomItems, 0);
+      checkEqual('会话创建失败也不添加好友', failedState.contactAddCount, 0);
+      await page.unroute('**/mcp');
+      await page.locator('#new-agent-close').click();
       await context.close();
     }
 
