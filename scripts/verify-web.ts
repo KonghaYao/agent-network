@@ -10267,9 +10267,73 @@ async function main(): Promise<void> {
         body: [humanMarker, '**人类不应加粗** 和 `人类代码`'].join('\n'),
       });
 
+      const humanBlankMarker = '人类空行保持';
+      await rawTool(data.humanToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: [humanBlankMarker, '', '第二段纯文本'].join('\n'),
+      });
+
+      // 单换行/双换行/CRLF/三换行：Markdown 段内软换行与段落边界。
+      const singleMarker = '单换行保留标记';
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: [singleMarker, '第二行紧随其后'].join('\n'),
+      });
+
+      const doubleMarker = '双换行分段标记';
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: [doubleMarker, '', '第二段独立'].join('\n'),
+      });
+
+      const crlfMarker = 'CRLF 换行标记';
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: `${crlfMarker}\r\n第二行紧随其后\r\n第三行结尾`,
+      });
+
+      const tripleMarker = '三换行折叠标记';
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: `${tripleMarker}\n\n\n第三段内容`,
+      });
+
+      const quoteMarker = '引用换行标记';
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: [quoteMarker, '> 引用第一行', '> 引用第二行'].join('\n'),
+      });
+
       const longMarker = '长文标题';
       const longLink = 'https://net.peri-code.dev/f/f_preview_download';
       const longTail = '展开后的完整结尾标记';
+      const previewMarker = '预览单换行标记';
+      const previewBody = [
+        previewMarker,
+        '第二行保持单换行',
+        '',
+        `预览附件：${longCardFile.publicUrl}`,
+        '',
+        '填充内容 '.repeat(160),
+      ].join('\n');
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: previewBody,
+      });
       const longBody = [
         `## ${longMarker}`,
         '**下载** `长文卡片.txt` 与 `sha256` 校验',
@@ -10474,6 +10538,65 @@ async function main(): Promise<void> {
         'AI 气泡内不再显示 Markdown 标记',
         !((await richMessage.locator('.bubble').textContent()) ?? '').includes('**粗体**'),
       );
+      checkEqual(
+        '代码块结构不生成意外 br',
+        await richMessage.locator('.msg-markdown pre br').count(),
+        0,
+      );
+      checkEqual(
+        'GFM 表格结构不生成意外 br',
+        await richMessage.locator('.msg-markdown .md-table br').count(),
+        0,
+      );
+      checkEqual(
+        '列表项结构不生成意外 br',
+        await richMessage.locator('.msg-markdown li br').count(),
+        0,
+      );
+      checkEqual(
+        '行内代码不生成意外 br',
+        await richMessage.locator('.msg-markdown .md-code-inline br').count(),
+        0,
+      );
+
+      const singleMessage = page.locator('#messages .msg').filter({ hasText: singleMarker }).last();
+      await singleMessage.locator('.msg-markdown').waitFor();
+      checkEqual(
+        'Markdown 根节点保持 white-space normal',
+        await singleMessage.locator('.msg-markdown').evaluate(
+          (element) => getComputedStyle(element).whiteSpace,
+        ),
+        'normal',
+      );
+      checkEqual(
+        '单换行生成一个 br',
+        await singleMessage.locator('.msg-markdown p br').count(),
+        1,
+      );
+      checkEqual('单换行仍是一个段落', await singleMessage.locator('.msg-markdown p').count(), 1);
+
+      const doubleMessage = page.locator('#messages .msg').filter({ hasText: doubleMarker }).last();
+      await doubleMessage.locator('.msg-markdown').waitFor();
+      checkEqual('双换行生成两个段落', await doubleMessage.locator('.msg-markdown p').count(), 2);
+      checkEqual('双换行不生成 br', await doubleMessage.locator('.msg-markdown p br').count(), 0);
+
+      const crlfMessage = page.locator('#messages .msg').filter({ hasText: crlfMarker }).last();
+      await crlfMessage.locator('.msg-markdown').waitFor();
+      checkEqual('CRLF 单换行保留为两处 br', await crlfMessage.locator('.msg-markdown p br').count(), 2);
+      checkEqual('CRLF 仍是一个段落', await crlfMessage.locator('.msg-markdown p').count(), 1);
+
+      const tripleMessage = page.locator('#messages .msg').filter({ hasText: tripleMarker }).last();
+      await tripleMessage.locator('.msg-markdown').waitFor();
+      checkEqual('三换行折叠为两个段落', await tripleMessage.locator('.msg-markdown p').count(), 2);
+      checkEqual('三换行不生成 br', await tripleMessage.locator('.msg-markdown p br').count(), 0);
+
+      const quoteMessage = page.locator('#messages .msg').filter({ hasText: quoteMarker }).last();
+      await quoteMessage.locator('.msg-markdown').waitFor();
+      checkEqual(
+        '引用内单换行只生成一个 br',
+        await quoteMessage.locator('.msg-markdown blockquote p br').count(),
+        1,
+      );
 
       const mentionMessage = page
         .locator('#messages .msg')
@@ -10515,6 +10638,184 @@ async function main(): Promise<void> {
         ((await humanMessage.locator('.bubble').textContent()) ?? '').includes(
           '**人类不应加粗**',
         ),
+      );
+      checkEqual(
+        '人类气泡保持 pre-wrap',
+        await humanMessage.locator('.bubble').evaluate(
+          (element) => getComputedStyle(element).whiteSpace,
+        ),
+        'pre-wrap',
+      );
+      check(
+        '人类单换行保留',
+        (await humanMessage.locator('.bubble').innerText()).includes('\n'),
+      );
+      const humanBlankMessage = page
+        .locator('#messages .msg')
+        .filter({ hasText: humanBlankMarker })
+        .last();
+      await humanBlankMessage.waitFor();
+      checkEqual(
+        '人类消息不生成 Markdown 容器（空行）',
+        await humanBlankMessage.locator('.msg-markdown').count(),
+        0,
+      );
+      check(
+        '人类双换行保留为空行',
+        (await humanBlankMessage.locator('.bubble').innerText()).includes(
+          `${humanBlankMarker}\n\n第二段纯文本`,
+        ),
+        await humanBlankMessage.locator('.bubble').innerText(),
+      );
+
+      // 文件 chips 多行正文：人类气泡 pre-wrap，Agent 气泡 br，卡片仍在气泡外。
+      const chipMarker = '文件 chips 多行正文';
+      await page.locator('#body').fill(`${chipMarker}第一行\n${chipMarker}第二行`);
+      await dispatchDrag(page, '#chat-body', 'drop', [
+        { name: '多行正文卡片.txt', mimeType: 'text/plain', text: 'multiline chip body' },
+      ]);
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 1,
+        '多行正文生成文件 chip',
+      );
+      const beforeChip = await messageCount(page);
+      await page.locator('#send').click();
+      await page.waitForFunction(
+        `document.querySelectorAll('#messages .msg').length > ${beforeChip}`,
+      );
+      const chipArgs = (await page.evaluate(
+        `(function () {
+          const calls = (window.__mcpCalls || []).filter(function (call) {
+            return call.name === 'network_message_send';
+          });
+          return calls.length ? calls[calls.length - 1].body.params.arguments : null;
+        })()`,
+      )) as { body?: string } | null;
+      const chipLines = (chipArgs?.body ?? '').trim().split('\n');
+      check(
+        '文件 chips 正文保留内部换行',
+        chipLines[0] === `${chipMarker}第一行` && chipLines[1] === `${chipMarker}第二行`,
+        chipLines,
+      );
+      check(
+        '文件 chips 的 URL 与固定 @ 各占一行',
+        chipLines.length === 4 &&
+          chipLines[2]!.includes('/f/') &&
+          chipLines[3] === '@WeBots 维护员',
+        chipLines,
+      );
+      const chipHumanMessage = page
+        .locator('#messages .msg')
+        .filter({ hasText: chipMarker })
+        .last();
+      await chipHumanMessage.waitFor();
+      checkEqual(
+        '文件 chips 人类消息无 Markdown 容器',
+        await chipHumanMessage.locator('.msg-markdown').count(),
+        0,
+      );
+      checkEqual(
+        '文件 chips 人类气泡保持 pre-wrap',
+        await chipHumanMessage.locator('.bubble').evaluate(
+          (element) => getComputedStyle(element).whiteSpace,
+        ),
+        'pre-wrap',
+      );
+      check(
+        '文件 chips 人类气泡保留多行',
+        (await chipHumanMessage.locator('.bubble').innerText()).includes(
+          `${chipMarker}第一行\n${chipMarker}第二行`,
+        ),
+        await chipHumanMessage.locator('.bubble').innerText(),
+      );
+      checkEqual(
+        '文件 chips 人类消息一张卡片',
+        await chipHumanMessage.locator('.msg-file').count(),
+        1,
+      );
+      checkEqual(
+        '文件 chips 人类卡片在气泡外',
+        await chipHumanMessage.locator('.bubble .msg-file').count(),
+        0,
+      );
+      const chipReplyMarker = 'Agent 多行回复';
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: [
+          `${chipReplyMarker}第一行`,
+          `${chipReplyMarker}第二行`,
+          chipLines[2]!,
+          '@WeBots 维护员',
+        ].join('\n'),
+      });
+      const chipReply = page.locator('#messages .msg').filter({ hasText: chipReplyMarker }).last();
+      await chipReply.locator('.msg-markdown').waitFor();
+      checkEqual(
+        'Agent 文件回复单换行生成 br',
+        await chipReply.locator('.msg-markdown p br').count(),
+        3,
+      );
+      checkEqual(
+        'Agent 文件回复仍是一个段落',
+        await chipReply.locator('.msg-markdown p').count(),
+        1,
+      );
+      checkEqual('Agent 文件回复卡片一张', await chipReply.locator('.msg-file').count(), 1);
+      checkEqual(
+        'Agent 文件回复卡片在气泡外',
+        await chipReply.locator('.bubble .msg-file').count(),
+        0,
+      );
+
+      const previewMessage = page
+        .locator('#messages .msg')
+        .filter({ hasText: previewMarker })
+        .last();
+      await previewMessage.locator('.expand').waitFor();
+      await previewMessage.locator('.msg-markdown').waitFor();
+      checkEqual(
+        '512B preview 单换行生成 br',
+        await previewMessage.locator('.msg-markdown p br').count(),
+        1,
+      );
+      const previewParagraphCount = await previewMessage
+        .locator('.msg-markdown p')
+        .count();
+      checkEqual('512B preview 保留三个段落', previewParagraphCount, 3);
+      check(
+        '512B preview 首段保留两行',
+        (await previewMessage.locator('.msg-markdown p').first().innerText()).includes(
+          '第二行保持单换行',
+        ),
+      );
+      checkEqual(
+        '512B preview 文件卡片仍为一张',
+        await previewMessage.locator('.msg-file').count(),
+        1,
+      );
+      checkEqual(
+        '512B preview 文件卡片在气泡外',
+        await previewMessage.locator('.bubble .msg-file').count(),
+        0,
+      );
+      await previewMessage.locator('.expand').click();
+      await previewMessage.locator('.expand').waitFor({ state: 'detached' });
+      checkEqual(
+        '展开后段落结构与 preview 一致',
+        await previewMessage.locator('.msg-markdown p').count(),
+        previewParagraphCount,
+      );
+      checkEqual(
+        '展开后单换行仍为一个 br',
+        await previewMessage.locator('.msg-markdown p br').count(),
+        1,
+      );
+      checkEqual(
+        '展开后文件卡片仍为一张',
+        await previewMessage.locator('.msg-file').count(),
+        1,
       );
 
       const longMessage = page.locator('#messages .msg').filter({ hasText: longMarker }).last();
@@ -10711,6 +11012,56 @@ async function main(): Promise<void> {
         mobileMetrics,
       );
       await mobile.context.close();
+
+      const darkMobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+        true,
+        false,
+        { colorScheme: 'dark' },
+      );
+      await darkMobile.page.goto(`${server.base}/c/${mdRoomId}`);
+      await waitRoom(darkMobile.page, mdRoomId, 'AI Markdown 群');
+      const darkSingle = darkMobile.page
+        .locator('#messages .msg')
+        .filter({ hasText: singleMarker })
+        .last();
+      await darkSingle.locator('.msg-markdown').waitFor();
+      const darkMetrics = (await darkMobile.page.evaluate(`(() => {
+        const messages = document.getElementById('messages');
+        const markdown = document.querySelector('.msg-markdown');
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          listScroll: messages.scrollWidth,
+          listClient: messages.clientWidth,
+          whiteSpace: markdown ? getComputedStyle(markdown).whiteSpace : '',
+          dark: window.matchMedia('(prefers-color-scheme: dark)').matches
+        };
+      })()`)) as {
+        view: number;
+        doc: number;
+        listScroll: number;
+        listClient: number;
+        whiteSpace: string;
+        dark: boolean;
+      };
+      check('390px 暗色媒体查询生效', darkMetrics.dark, darkMetrics);
+      check('390px 暗色 Markdown 不撑破页面', darkMetrics.doc <= darkMetrics.view + 1, darkMetrics);
+      check(
+        '390px 暗色消息区不横向滚动',
+        darkMetrics.listScroll <= darkMetrics.listClient + 1,
+        darkMetrics,
+      );
+      checkEqual('暗色 Markdown 根节点仍为 normal', darkMetrics.whiteSpace, 'normal');
+      checkEqual(
+        '暗色单换行仍生成 br',
+        await darkSingle.locator('.msg-markdown p br').count(),
+        1,
+      );
+      await darkMobile.context.close();
       await context.close();
 
       // 60 条 AI 消息覆盖「加载更早消息」与 Markdown 升级的高度补偿。
@@ -10829,6 +11180,19 @@ async function main(): Promise<void> {
         'asset 404 时文件卡片仍可用',
         (await fallbackRich.locator('.msg-file').count()) === 1,
       );
+      checkEqual(
+        'asset 404 时气泡保持 pre-wrap',
+        await fallbackRich.locator('.bubble').evaluate(
+          (element) => getComputedStyle(element).whiteSpace,
+        ),
+        'pre-wrap',
+      );
+      const fallbackLines = (await fallbackRich.locator('.bubble').innerText()).split('\n');
+      check(
+        'asset 404 时纯文本保留换行',
+        fallbackLines[0] === richMarker && fallbackLines[1] === '## 标题',
+        fallbackLines.slice(0, 4),
+      );
 
       const fallbackLong = fallback.page
         .locator('#messages .msg')
@@ -10916,6 +11280,12 @@ async function main(): Promise<void> {
         await recoverLong.locator('.msg-markdown').count(),
         0,
       );
+      const recoverSingle = recover.page
+        .locator('#messages .msg')
+        .filter({ hasText: singleMarker })
+        .last();
+      const recoverFallbackHeight =
+        (await recoverSingle.locator('.bubble').boundingBox())?.height ?? 0;
       await recoverLong.locator('.expand').click();
       await recoverLong.locator('.msg-markdown').waitFor();
       await waitUntil(
@@ -10934,6 +11304,32 @@ async function main(): Promise<void> {
       check(
         '恢复后不显示字面粗体标记',
         !((await recoverLong.locator('.bubble').textContent()) ?? '').includes('**下载**'),
+      );
+      check(
+        '恢复后的气泡保留单换行',
+        (await recoverLong.locator('.msg-markdown p br').count()) >= 1,
+        await recoverLong.locator('.msg-markdown p br').count(),
+      );
+      await recover.page.reload();
+      await waitRoom(recover.page, mdRoomId, 'AI Markdown 群');
+      const reloadedSingle = recover.page
+        .locator('#messages .msg')
+        .filter({ hasText: singleMarker })
+        .last();
+      await reloadedSingle.locator('.msg-markdown').waitFor();
+      checkEqual(
+        '重新加载后单换行渲染为 br',
+        await reloadedSingle.locator('.msg-markdown p br').count(),
+        1,
+      );
+      const recoverMarkdownHeight =
+        (await reloadedSingle.locator('.bubble').boundingBox())?.height ?? 0;
+      check(
+        '恢复后短消息高度未明显跳变',
+        recoverFallbackHeight > 0 &&
+          recoverMarkdownHeight >= recoverFallbackHeight * 0.65 &&
+          recoverMarkdownHeight <= recoverFallbackHeight * 1.35,
+        { recoverFallbackHeight, recoverMarkdownHeight },
       );
       await recover.context.close();
     }

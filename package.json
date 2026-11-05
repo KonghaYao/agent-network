@@ -25,6 +25,7 @@
     "react": "19",
     "react-dom": "19",
     "rehype-harden": "^1.1.8",
+    "remark-breaks": "^4.0.0",
     "remend": "1.4.0",
     "streamdown": "2.7.0",
     "zod": "^4.6.5"

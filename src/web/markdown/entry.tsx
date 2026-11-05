@@ -24,6 +24,7 @@ import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { harden } from 'rehype-harden';
 import remend from 'remend';
+import remarkBreaks from 'remark-breaks';
 import type { PluggableList } from 'unified';
 import {
   Streamdown,
@@ -288,6 +289,9 @@ const components: Components = {
 
 const remarkPlugins: PluggableList = [
   defaultRemarkPlugins.gfm!,
+  // 单个换行保留为 <br>；双换行仍是独立段落。根节点保持 white-space: normal，
+  // 不改成 pre-wrap，避免段落之间再叠加空行。
+  remarkBreaks,
   defaultRemarkPlugins.codeMeta!,
 ];
 
