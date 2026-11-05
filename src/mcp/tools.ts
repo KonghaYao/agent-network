@@ -527,7 +527,7 @@ export function registerTools(
   register(
     server,
     'network_message_send',
-    '向房间发送消息，并为 invoke 中每个 Agent 成员创建一条 delivery。普通回复不要填写 invoke。claim 参数只把回复挂到当前领取，不改变投递状态；回复不等于完成。',
+    '向房间发送消息。群聊省略 invoke 时服务端按正文 @名字 解析当前 active Agent 成员并创建 delivery；显式 invoke 优先且不再解析正文；invoke: [] 表示显式不投递；带 claim 的回复不自动解析。claim 参数只把回复挂到当前领取，不改变投递状态；回复不等于完成。',
     messageSendSchema,
     sendResultSchema,
     async (input) => {

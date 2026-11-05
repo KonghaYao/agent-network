@@ -353,6 +353,69 @@ async function resolveRootLink(
   };
 }
 
+interface MentionMember {
+  actor_id: string;
+  kind: 'human' | 'agent';
+  name: string;
+}
+
+/**
+ * 群聊省略 `invoke` 时按正文 `@名字` 解析投递目标。
+ *
+ * 只用房间当前 active 成员名做精确、大小写敏感、最长优先的原文匹配；
+ * 不 trim、不做 Unicode 归一化、不识别 Markdown 或转义。非 Agent 成员与发送者
+ * 参与最长匹配（避免被更短的 Agent 名字前缀误命中），但只有唯一的
+ * active Agent 成员会进入结果。正文里的非成员名字只是普通文本。
+ */
+async function resolveGroupMentionInvoke(
+  db: D1Database,
+  roomId: string,
+  sender: string,
+  body: string,
+): Promise<string[]> {
+  if (!body.includes('@')) return [];
+  const rows = await db
+    .prepare(
+      `SELECT m.actor_id, a.kind, a.name
+         FROM room_members m JOIN actors a ON a.actor_id = m.actor_id
+        WHERE m.room_id = ? AND m.status = 'active'`,
+    )
+    .bind(roomId)
+    .all<MentionMember>();
+
+  const byName = new Map<string, MentionMember[]>();
+  for (const row of rows.results) {
+    const list = byName.get(row.name);
+    if (list) list.push(row);
+    else byName.set(row.name, [row]);
+  }
+  const names = [...byName.keys()].sort((a, b) => {
+    if (a.length !== b.length) return b.length - a.length;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+
+  const targets = new Set<string>();
+  for (let index = 0; index < body.length; index += 1) {
+    if (body[index] !== '@') continue;
+    const start = index + 1;
+    const matched = names.find((name) => body.startsWith(name, start));
+    if (!matched) continue;
+    const members = byName.get(matched) ?? [];
+    const agents = members.filter((member) => member.kind === 'agent');
+    if (agents.length > 1) {
+      throw new BusinessError(
+        'INVALID_ARGUMENT',
+        '群内有多个同名 Agent，无法按 @ 名字唯一投递；请改名或显式使用 invoke',
+      );
+    }
+    if (agents.length === 1 && agents[0]!.actor_id !== sender) {
+      targets.add(agents[0]!.actor_id);
+    }
+    index = start + matched.length - 1;
+  }
+  return [...targets];
+}
+
 function assertInvoke(invoke: string[] | undefined, sender: string): string[] {
   const list = [...new Set(invoke ?? [])];
   if (list.length > LIMITS.invokeMax) {
@@ -388,7 +451,11 @@ export async function messageSend(
       body_bytes: bodyBytes,
     });
   }
-  const invoke = assertInvoke(input.invoke, sender);
+  const resolvedInvoke =
+    input.invoke === undefined && !input.claim && room.kind === 'group'
+      ? await resolveGroupMentionInvoke(db, room.room_id, sender, input.body)
+      : input.invoke;
+  const invoke = assertInvoke(resolvedInvoke, sender);
   const link = await resolveRootLink(db, sender, room.room_id, input);
 
   const at = nowMs();

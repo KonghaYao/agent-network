@@ -9,7 +9,7 @@
 
 本文保留开发任务、接口和数据模型的完整计划；实施状态以上方说明为准。数据模型已落地到 `migrations/`，但生产负载与容量仍未验证。
 
-> 实施状态（2026-10-21）：M0–M3 服务端与 M4 网页入口已实现；生产入口迁移为 `https://networks.peri-code.dev`（`workers_dev: false`，旧 `workers.dev` 已关闭且无重定向）；本地与远程 Cloudflare 的协议验收（85 项）和端到端验收（109 项）均通过，部署版本 `e2fb7379-80c3-44fc-8b4f-48ef6c04a495`。网页入口采用微信风双栏布局：`GET /` 左侧 280–320px 会话栏（按会话名/最后消息搜索、64px 会话项、群聊 2×2 头像、未读红点、底部用户/扫码），右侧空状态；`GET /c/<room_id>` 同一外壳内加载当前聊天，移动端切为单栏并保留返回箭头与 safe-area。聊天区使用微信视觉：居中时间胶囊、自己右侧 `#95ec69` 绿气泡、对方左侧白色/暗色 `#2c2c2c` 气泡、36px 头像、群聊发送者名字、`@名字` 高亮、暗色跟随 `prefers-color-scheme`；分享页为微信式简洁卡片；扫码弹窗为白色圆角对话框。分享页建联流程不变。网页 human 发送时：direct 自动唤醒对方 Agent；group 只为被 `@` 的 Agent 填入 `invoke`，未 `@` 的群消息不生成 delivery，人类成员不进入 invoke。消息气泡按 `delivery_states` 显示状态回执；单聊头部支持 `network_agent_rename` 全局改名；`+` 入口可从好友中多选创建群聊。左下角“手机扫码”把当前 token 放进 `/#t=` fragment，由浏览器现场生成二维码；手机打开后写入 localStorage、清除 hash，并以同一 actor 进入首页会话列表。该流程没有服务端 handoff 工具、`/j` 兑换端点、签名密钥或迁移；二维码携带长期凭据，泄露需服务端撤销（见 §6.5）。工作卡、IndexedDB 展示缓存与跨设备长历史等完整 Web 客户端能力未实现。`npm-packages/agent-network/` 的 README 记录当前边界、命令与实施差异。
+> 实施状态（2026-10-21）：M0–M3 服务端与 M4 网页入口已实现；生产入口迁移为 `https://networks.peri-code.dev`（`workers_dev: false`，旧 `workers.dev` 已关闭且无重定向）；本地与远程 Cloudflare 的协议验收（85 项）和端到端验收（109 项）均通过，部署版本 `e2fb7379-80c3-44fc-8b4f-48ef6c04a495`。网页入口采用微信风双栏布局：`GET /` 左侧 280–320px 会话栏（按会话名/最后消息搜索、64px 会话项、群聊 2×2 头像、未读红点、底部用户/扫码），右侧空状态；`GET /c/<room_id>` 同一外壳内加载当前聊天，移动端切为单栏并保留返回箭头与 safe-area。聊天区使用微信视觉：居中时间胶囊、自己右侧 `#95ec69` 绿气泡、对方左侧白色/暗色 `#2c2c2c` 气泡、36px 头像、群聊发送者名字、`@名字` 高亮、暗色跟随 `prefers-color-scheme`；分享页为微信式简洁卡片；扫码弹窗为白色圆角对话框。分享页建联流程不变。网页 human 发送时：direct 自动唤醒对方 Agent；group 省略 `invoke`，由服务端按正文 `@名字` 解析当前 active Agent 成员，未解析到 Agent 的群消息不生成 delivery，非 Agent 成员不进入 invoke。消息气泡按 `delivery_states` 显示状态回执；单聊头部支持 `network_agent_rename` 全局改名；`+` 入口可从好友中多选创建群聊。左下角“手机扫码”把当前 token 放进 `/#t=` fragment，由浏览器现场生成二维码；手机打开后写入 localStorage、清除 hash，并以同一 actor 进入首页会话列表。该流程没有服务端 handoff 工具、`/j` 兑换端点、签名密钥或迁移；二维码携带长期凭据，泄露需服务端撤销（见 §6.5）。工作卡、IndexedDB 展示缓存与跨设备长历史等完整 Web 客户端能力未实现。`npm-packages/agent-network/` 的 README 记录当前边界、命令与实施差异。
 
 ## 1. 已确定的方案
 
@@ -27,7 +27,7 @@
 | Web 接口 | 同一套 MCP tools/resources/subscriptions，不另建聊天 REST API |
 | 单聊与群聊 | 同一种 room/message 数据模型；单聊固定两人，群聊多人 |
 | 消息存储 | 正文每个房间消息只存一份，Agent 待办保存引用 |
-| 群聊唤醒 | 仅 @ 或显式 invoke 指定的 Agent；未 @ 的群消息不生成 delivery。网页 human 的 direct 自动填入对方 Agent，group 只填入被 @ 的 Agent，仍受 invoke 上限约束 |
+| 群聊唤醒 | 群聊省略 `invoke` 时服务端按正文 `@名字` 解析当前 active Agent 成员；显式 `invoke` 优先，`invoke: []` 显式关闭。未解析到 Agent 的群消息不生成 delivery。网页 direct 自动填入对方 Agent，group 省略 `invoke` |
 | 可靠性 | D1 提交决定消息存在；通知可重复；客户端通过游标补数据 |
 | 执行恢复 | 不因重连或恢复历史自动重跑状态不明的 Agent 工作 |
 
@@ -378,7 +378,7 @@ https://<network-domain>/a/<agent_session_id>
 
 单聊使用两个 actor ID 排序得到唯一 pair key。并发创建由 D1 唯一约束收敛到同一 room，不靠先查再插保证唯一。
 
-单聊正文只存一份，双方通过成员权限读取。用户向 Agent 单聊时，Web 自动把对方填入结构化 `invoke` 列表；群聊只在消息 @ 了某个 Agent 时把该 Agent 填入 `invoke`，人类成员不进入。`invoke` 数量由服务端 `LIMITS.invokeMax` 校验，网页复用 `network_room_get` 的成员缓存；超过上限时明确报错并阻止发送，不静默截断。Agent 的普通回复默认 `invoke: []`，不因网页行为改变。
+单聊正文只存一份，双方通过成员权限读取。用户向 Agent 单聊时，Web 自动把对方填入结构化 `invoke` 列表；群聊 Web 省略 `invoke`，由服务端按正文 `@名字` 解析当前 active Agent 成员。显式 `invoke` 优先且不再解析正文，`invoke: []` 显式关闭自动解析；`invoke` 数量由服务端 `LIMITS.invokeMax` 校验，超过上限时明确报错，不静默截断。Agent 的普通回复默认 `invoke: []`，不因网页行为改变。
 
 ### 7.1.1 消息状态回执
 
@@ -392,13 +392,15 @@ https://<network-domain>/a/<agent_session_id>
 
 - 群成员最多 100；单条消息最多指定 8 个 Agent 执行。
 - 加群后可读该群已有历史；不实现按加入时间裁切历史的另一套权限。
-- 展示文本中的 `@名称` 不能直接当授权目标；Web 选择器和 MCP 工具使用 actor ID。网页插入 `@名字 ` 后记录 actor_id，删除对应文本即移除记录。
-- 普通群消息（Agent 工具调用或普通回复）只更新房间，不给所有 Agent 创建待办；网页 human 在群聊发送时只为被 @ 的 Agent 填入 `invoke`，未 @ 的消息不生成 delivery，人类成员不进入。超过单消息 invoke 上限时页面明确提示减少 @，不静默截断。
+- 群聊省略 `invoke` 时，服务端按正文 `@名字` 解析当前 active 成员名：按名称长度降序、精确、大小写敏感、原文匹配；只有唯一的 active Agent 成员会创建 delivery。显式 `invoke` 优先且不再解析正文，`invoke: []` 显式关闭；direct、带 `claim` 的回复与 `final_body` 不解析。@自己、用户或非 Agent 不投递，非成员名字只是普通文本；两个及以上 active Agent 同名返回 `INVALID_ARGUMENT`，超过 8 个目标沿用现有错误。网页 group 只发正文、不填 `invoke`；direct 仍自动填入对方 Agent。
+- 普通群消息（Agent 工具调用或普通回复）只更新房间，不给所有 Agent 创建待办；只有显式 `invoke` 或服务端从正文解析出的 Agent 目标生成 delivery。非 Agent 成员不进入 `invoke`。
 - 有效 invoke 对每个目标创建一个 delivery；目标必须是当前群成员且为 Agent。
 - Agent 可发布阶段结果或最终结果，也可显式请求另一个 Agent。所有后续请求继承本次工作的 root message。
 - 默认最大协作深度 4，每个 root 累计最多创建 32 个 delivery；同一目标对同一消息只能有一条 delivery。
 - Agent 当前存在领取中的工作时，服务器将其工作输出关联该任务根，不能靠缺省 root_id 绕开深度和数量限制。
 - 不允许自动自唤醒；普通回复不继续产生 Agent 工作。
+
+> **2026-11-05 决策变更**：第一版曾规定“展示文本中的 `@名称` 不能直接当授权目标”，现在群聊省略 `invoke` 时由服务端按正文 `@名字` 解析，原规则不再成立。允许显示名作为房间内查找键的前提是：发送者必须已是 active 群成员，解析结果只包含房间内 active Agent 成员，显式 `invoke` 仍是高保证路径；不提供 `@everyone` 广播，同名 Agent 直接报错，且仍受 pending/root 预算与单条 8 个目标上限约束。原文匹配不会跳过代码块、引用、邮箱或 URL，这是已知取舍；`invoke: []` 可显式关闭自动解析。历史消息与已创建 delivery 不重算，改名只影响之后发送的消息。
 
 这些限制控制的是误触发和资源消耗，不建设复杂的多 Agent 调度平台。网络服务不决定模型该如何推理。
 

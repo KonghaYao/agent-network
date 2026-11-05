@@ -403,6 +403,17 @@ async function main(): Promise<void> {
       sendTool.description.includes('不改变投递状态'),
     sendTool?.description,
   );
+  check(
+    'message_send 描述声明群聊省略 invoke 时按 @名字 解析',
+    typeof sendTool?.description === 'string' &&
+      sendTool.description.includes('群聊') &&
+      sendTool.description.includes('@名字') &&
+      sendTool.description.includes('省略 invoke') &&
+      sendTool.description.includes('显式 invoke 优先') &&
+      sendTool.description.includes('invoke: []') &&
+      sendTool.description.includes('claim'),
+    sendTool?.description,
+  );
   const roomGetTool = listed?.tools?.find((tool) => tool.name === 'network_room_get');
   check(
     'room_get 输出 schema 包含成员 online',
@@ -1234,7 +1245,7 @@ async function main(): Promise<void> {
       skillText.includes('自我介绍') &&
       skillText.includes('每个房间只发一次') &&
       skillText.includes('不要向所有房间批量群发或刷屏') &&
-      skillText.includes('网页也不会用人类 token 冒充 Agent 发送'),
+      skillText.includes('网页也不会用用户身份冒充 Agent 发送'),
     skillText.slice(0, 240),
   );
   check(
@@ -1246,6 +1257,24 @@ async function main(): Promise<void> {
     '技能正文说明状态变更不自我唤醒',
     skillText.includes('claim/report/complete/fail 不会再触发自己的 inbox 提示'),
     skillText.slice(0, 200),
+  );
+  check(
+    '技能正文说明群聊 @ 名字由服务端解析',
+    skillText.includes('群聊派活') &&
+      skillText.includes('省略 `invoke`') &&
+      skillText.includes('不需要 actor_id') &&
+      skillText.includes('仍可用且优先') &&
+      skillText.includes('invoke: []') &&
+      skillText.includes('同名 Agent') &&
+      skillText.includes('direct 仍需显式'),
+    skillText.slice(0, 300),
+  );
+  check(
+    '技能正文说明群聊 @ 解析的原文匹配边界',
+    skillText.includes('@自己') &&
+      skillText.includes('非 Agent') &&
+      skillText.includes('代码块'),
+    skillText.slice(0, 300),
   );
   check(
     '技能正文说明 MCP Events room_id 硬过滤与群聊订阅',
@@ -1463,6 +1492,16 @@ async function main(): Promise<void> {
     skillDoc.headers.get('content-type'),
   );
   check(
+    '静态技能说明群聊 @ 名字由服务端解析',
+    skillDocText.includes('群聊派活') &&
+      skillDocText.includes('省略 `invoke`') &&
+      skillDocText.includes('不需要 actor_id') &&
+      skillDocText.includes('`--no-invoke`') &&
+      skillDocText.includes('同名 Agent') &&
+      !skillDocText.includes('仅在正文写 @ 不等于指定 invoke'),
+    skillDocText.slice(0, 300),
+  );
+  check(
     '静态技能不包含硬编码 Bearer token',
     !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(skillDocText),
   );
@@ -1640,6 +1679,9 @@ async function main(): Promise<void> {
   const chatgptGuideText = await chatgptGuide.text();
   const chatgptGroupMarkers = [
     '群聊',
+    '省略 invoke',
+    '@名字',
+    'invoke 传 []',
     'room_id',
     'attention',
     'action_required',
@@ -1654,6 +1696,13 @@ async function main(): Promise<void> {
     'ChatGPT 指南说明 room_id 硬过滤、群聊订阅与投递闭环',
     chatgptGroupMarkers.every((marker) => chatgptGuideText.includes(marker)),
     { missing: chatgptGroupMarkers.filter((marker) => !chatgptGuideText.includes(marker)) },
+  );
+  check(
+    'ChatGPT 指南说明群聊 @ 名字服务端解析',
+    chatgptGuideText.includes('服务端按正文 @名字 解析') &&
+      chatgptGuideText.includes('direct 不解析正文') &&
+      !chatgptGuideText.includes('只有发送者显式 invoke'),
+    chatgptGuideText.slice(0, 400),
   );
   check(
     'ChatGPT 指南明确新订阅不重放旧事件',
@@ -1807,6 +1856,14 @@ async function main(): Promise<void> {
      'network_delivery_complete', 'final_body'].every((marker) =>
       agentnetScriptText.includes(marker),
     ),
+  );
+  check(
+    'agentnet send 默认省略 invoke 并提供 --no-invoke',
+    agentnetScriptText.includes('--no-invoke') &&
+      agentnetScriptText.includes('群聊默认省略 invoke') &&
+      agentnetScriptText.includes('if $invoke == null then {} else {invoke:$invoke} end') &&
+      agentnetScriptText.includes('--no-invoke) invoke=\'[]\''),
+    agentnetScriptText.slice(0, 300),
   );
 
   const claudeGuide = await fetch(`${baseUrl()}/skills/harness-claude.md`);

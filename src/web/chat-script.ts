@@ -50,8 +50,6 @@ const MARKDOWN_ASSET_URL = ${jsonForScript(markdownAssetUrl)};
 const RESIZER_ASSET_URL = ${jsonForScript(resizerAssetUrl)};
 const TOKEN_KEY = 'agent-network-token';
 const MAX_CHUNKS = 8;
-// 服务端 LIMITS.invokeMax 的内联值：阈值只在 limits.ts 维护，页面不复制字面量。
-const INVOKE_MAX = ${LIMITS.invokeMax};
 const ACTOR_NAME_MAX = ${LIMITS.actorNameMax};
 const MEMBER_CHANGE_MAX = ${LIMITS.memberChangeMax};
 const GROUP_MEMBERS_MAX = ${LIMITS.groupMembersMax};
@@ -106,7 +104,6 @@ const groupCancelButton = document.getElementById('group-cancel');
 
 let identity = null;
 let roomEntries = [];
-let mentionTargets = new Map();
 let activeMention = null;
 let composing = false;
 let ignoreEnterUntil = 0;
@@ -304,14 +301,14 @@ function ensureIdentity() {
 }
 
 /**
- * 收集网页人类发送消息时要唤醒的 Agent 成员。
+ * 收集网页用户发送单聊消息时要唤醒的 Agent 成员。
  *
- * direct 自动唤醒对方 Agent；group 只唤醒文本中仍然存在的 @Agent 记录。
- * 只使用当前 active 房间已加载的 members，不额外发请求；人类成员与
- * 发送者自己不进入 invoke。超过上限时返回错误，由调用方明确提示，
- * 不静默截断。
+ * direct 自动唤醒对方 Agent；group 完全省略 invoke，由服务端按正文
+ * @名字 解析，页面不再本地记录 actor_id 或复制 invoke 上限。
+ * 只使用当前房间已加载的 members，不额外发请求；非 Agent 成员与发送者
+ * 自己不进入 invoke。
  */
-function agentInvokeTargets() {
+function directInvokeTargets() {
   if (!identity || identity.kind !== 'human') return { targets: [], error: null };
   if (!room) return { targets: [], error: '房间成员尚未加载，请稍后重试' };
   if (room.kind === 'direct') {
@@ -320,23 +317,8 @@ function agentInvokeTargets() {
         return { targets: [member.actor_id], error: null };
       }
     }
-    return { targets: [], error: null };
   }
-  const text = bodyInput ? bodyInput.value : '';
-  const targets = [];
-  for (const actorId of mentionTargets.keys()) {
-    const member = members.get(actorId);
-    if (member && member.kind === 'agent' && text.includes('@' + member.name)) {
-      targets.push(actorId);
-    }
-  }
-  if (targets.length > INVOKE_MAX) {
-    return {
-      targets: [],
-      error: '单条消息最多 @ ' + INVOKE_MAX + ' 个 Agent，请减少 @ 后重试。'
-    };
-  }
-  return { targets: targets, error: null };
+  return { targets: [], error: null };
 }
 
 /** 非安全上下文没有 navigator.clipboard 时的兜底复制。 */
@@ -417,14 +399,6 @@ function hideMentionPicker() {
   activeMention = null;
 }
 
-/** 文本中已不存在的 @名字 不再作为 invoke 目标。 */
-function pruneMentions() {
-  const value = bodyInput ? bodyInput.value : '';
-  for (const entry of Array.from(mentionTargets.entries())) {
-    if (!value.includes('@' + entry[1])) mentionTargets.delete(entry[0]);
-  }
-}
-
 function updateMentionPicker() {
   if (!mentionPicker || !bodyInput || !room || room.kind !== 'group' || !identity) {
     hideMentionPicker();
@@ -478,7 +452,6 @@ function insertMention(member) {
   bodyInput.value = value.slice(0, activeMention.start) + insert + value.slice(activeMention.end);
   const position = activeMention.start + insert.length;
   bodyInput.setSelectionRange(position, position);
-  mentionTargets.set(member.actor_id, member.name);
   if (activeRoomId) drafts.set(activeRoomId, bodyInput.value);
   hideMentionPicker();
   resizeComposer();
@@ -627,7 +600,7 @@ composer.addEventListener('submit', async function (event) {
   if (!body) return;
   stickyStatus = '';
   statusElement.textContent = '';
-  const invoke = agentInvokeTargets();
+  const invoke = directInvokeTargets();
   if (invoke.error) {
     stickyStatus = invoke.error;
     statusElement.textContent = stickyStatus;
@@ -643,7 +616,7 @@ composer.addEventListener('submit', async function (event) {
       room_id: sendRoomId,
       body: body
     };
-    // direct 自动唤醒对方 Agent；group 只唤醒被 @ 的 Agent。
+    // direct 自动唤醒对方 Agent；group 省略 invoke，由服务端解析正文 @名字。
     if (invoke.targets.length > 0) args.invoke = invoke.targets;
     const result = await callTool('network_message_send', args);
     // 发送请求不绑定 roomAbort；切换房间后只丢弃 UI 更新，不取消写入。
@@ -652,7 +625,6 @@ composer.addEventListener('submit', async function (event) {
     drafts.delete(sendRoomId);
     if (!isActiveRoom(sendRoomId, sendEpoch)) return;
     bodyInput.value = '';
-    mentionTargets.clear();
     hideMentionPicker();
     resizeComposer();
     await refresh(true);
@@ -679,7 +651,6 @@ composer.addEventListener('submit', async function (event) {
 bodyInput.addEventListener('input', function () {
   if (activeRoomId) drafts.set(activeRoomId, bodyInput.value);
   resizeComposer();
-  pruneMentions();
   updateMentionPicker();
 });
 bodyInput.addEventListener('compositionstart', function () {

@@ -109,7 +109,12 @@ export async function sendMessage(
   connection: McpConnection,
   roomId: string,
   body: string,
-  options: { invoke?: string[]; clientMessageId?: string; requestId?: string } = {},
+  options: {
+    invoke?: string[];
+    clientMessageId?: string;
+    requestId?: string;
+    claim?: { delivery_id: string; attempt: number; claim_id: string };
+  } = {},
 ): Promise<SendResult> {
   return callTool<SendResult>(connection.client, 'network_message_send', {
     request_id: options.requestId ?? newRequestId('send'),
@@ -117,6 +122,7 @@ export async function sendMessage(
     room_id: roomId,
     body,
     ...(options.invoke ? { invoke: options.invoke } : {}),
+    ...(options.claim ? { claim: options.claim } : {}),
   });
 }
 

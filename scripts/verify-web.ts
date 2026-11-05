@@ -5251,6 +5251,106 @@ async function main(): Promise<void> {
       await context.close();
     }
 
+    // 2c-2. 群聊手输 @ 省略 invoke 由服务端解析；direct 仍自动填入对方。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/c/${data.group.room.room_id}`);
+      await waitRoom(page, data.group.room.room_id, '测试群');
+
+      // 选择器仍插入 "@名字 "，但不再记录 actor_id。
+      await page.locator('#body').fill('@');
+      await page.locator('#mention-picker').waitFor({ state: 'visible' });
+      const agentChoice = page
+        .locator('#mention-picker .mention-item')
+        .filter({ hasText: data.agentA.name })
+        .first();
+      await agentChoice.waitFor({ state: 'visible' });
+      await agentChoice.click();
+      checkEqual(
+        '群聊 @ 选择器插入名字与空格',
+        await page.locator('#body').inputValue(),
+        `@${data.agentA.name} `,
+      );
+      await page.locator('#body').fill('');
+
+      const groupMarker = '群聊手输省略 invoke';
+      await page.locator('#body').fill(`@${data.agentA.name} ${groupMarker}`);
+      await page.locator('#send').click();
+      await page.waitForFunction(
+        `(window.__mcpCalls || []).some(function (call) {
+          return call.name === 'network_message_send' &&
+            call.body && call.body.params && call.body.params.arguments &&
+            call.body.params.arguments.body === ${JSON.stringify(`@${data.agentA.name} ${groupMarker}`)};
+        })`,
+        undefined,
+        { timeout: 12_000 },
+      );
+      await waitForText(page, '#messages', groupMarker, 12_000);
+      const groupCalls = (await page.evaluate(
+        `(window.__mcpCalls || []).filter(function (call) { return call.name === 'network_message_send'; }).map(function (call) { return call.body.params.arguments; })`,
+      )) as { body?: string; invoke?: unknown }[];
+      const groupArgs = groupCalls.find((args) => args.body === `@${data.agentA.name} ${groupMarker}`);
+      check('群聊发送记录存在', Boolean(groupArgs), groupCalls);
+      check('群聊发送省略 invoke 字段', groupArgs !== undefined && !('invoke' in groupArgs), groupArgs);
+      checkEqual('群聊发送 arguments.invoke 为 undefined', groupArgs?.invoke, undefined);
+
+      const groupHistory = await rawTool<{ items: { message_id: string; preview: string }[] }>(
+        data.humanToken,
+        'network_history_list',
+        { room_id: data.group.room.room_id, limit: 20 },
+      );
+      const groupMessage = groupHistory.items.find((item) => item.preview.includes(groupMarker));
+      check('群聊 @ 消息已写入历史', Boolean(groupMessage), groupHistory.items);
+      await waitUntil(
+        async () => Boolean(await pendingDeliveryFor(data.agentAToken, groupMessage!.message_id)),
+        '群聊 @ 消息产生 Agent delivery',
+      );
+      check('群聊手输 @ 产生 Agent delivery', true);
+
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      const directMarker = 'direct 仍自动 invoke';
+      await page.locator('#body').fill(directMarker);
+      await page.locator('#send').click();
+      await waitForText(page, '#messages', directMarker, 12_000);
+      const directCalls = (await page.evaluate(
+        `(window.__mcpCalls || []).filter(function (call) { return call.name === 'network_message_send'; }).map(function (call) { return call.body.params.arguments; })`,
+      )) as { body?: string; invoke?: unknown }[];
+      const directArgs = directCalls.find((args) => args.body === directMarker);
+      checkEqual(
+        'direct 发送仍自动填入对方 Agent',
+        JSON.stringify(directArgs?.invoke),
+        JSON.stringify([data.agentA.actor_id]),
+      );
+
+      const directHistory = await rawTool<{ items: { message_id: string; preview: string }[] }>(
+        data.humanToken,
+        'network_history_list',
+        { room_id: data.direct.room.room_id, limit: 20 },
+      );
+      const directMessage = directHistory.items.find((item) => item.preview.includes(directMarker));
+      check('direct 消息已写入历史', Boolean(directMessage), directHistory.items);
+      await waitUntil(
+        async () => Boolean(await pendingDeliveryFor(data.agentAToken, directMessage!.message_id)),
+        'direct 消息产生 Agent delivery',
+      );
+      check('direct 自动 invoke 产生 Agent delivery', true);
+
+      const groupDelivery = await pendingDeliveryFor(data.agentAToken, groupMessage!.message_id);
+      const groupClaim = await claimDelivery(data.agentAToken, groupDelivery.delivery_id);
+      await completeDelivery(data.agentAToken, groupClaim);
+      const directDelivery = await pendingDeliveryFor(data.agentAToken, directMessage!.message_id);
+      const directClaim = await claimDelivery(data.agentAToken, directDelivery.delivery_id);
+      await completeDelivery(data.agentAToken, directClaim);
+      await context.close();
+      check('群聊/direct 发送验收清理投递', true);
+    }
+
     // 2d. 持续失败才显示非阻塞提示，恢复后自动消失。
     {
       const { context, page } = await makeContext(

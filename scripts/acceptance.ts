@@ -45,6 +45,7 @@ import { runAgentArchiveAcceptance } from './lib/agent-archive-acceptance';
 import { runAgentPresenceAcceptance } from './lib/presence-acceptance';
 import { runRoomMonitorAcceptance } from './lib/room-monitor-acceptance';
 import { runFeedbackAcceptance } from './lib/feedback-acceptance';
+import { runGroupMentionAcceptance } from './lib/mention-acceptance';
 import {
   ensureTestCertificate,
   removeTestData,
@@ -1137,7 +1138,7 @@ async function main(): Promise<void> {
     );
     await webSubscription.close();
 
-    // 群聊：服务端按 invoke 显式创建 delivery；页面只把被 @ 的 Agent 填入 invoke。
+    // 群聊：显式 invoke 仍创建 delivery；新 Web group 省略 invoke，由服务端解析正文 @。
     const webGroup = await callTool<RoomDetail>(agentA.client, 'network_room_create', {
       request_id: newRequestId('room'),
       kind: 'group',
@@ -1280,6 +1281,7 @@ async function main(): Promise<void> {
     await runAgentPresenceAcceptance();
     await runRoomMonitorAcceptance();
     await runFeedbackAcceptance();
+    await runGroupMentionAcceptance();
 
     console.log(`端到端验收通过: ${checksPassed()} 项`);
   } finally {
