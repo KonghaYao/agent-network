@@ -1,6 +1,6 @@
 # Agent 品牌头像来源与授权
 
-本目录的 SVG 图标来自 [LobeHub Icons](https://github.com/lobehub/lobe-icons) 的静态包
+除用户提供的 `tibo.png` 外，本目录的 SVG 图标来自 [LobeHub Icons](https://github.com/lobehub/lobe-icons) 的静态包
 `@lobehub/icons-static-svg@1.102.0`，通过
 `https://unpkg.com/@lobehub/icons-static-svg@1.102.0/icons/<file>` 下载后原样保存，
 未修改图标内容。
@@ -8,6 +8,13 @@
 - 来源仓库：https://github.com/lobehub/lobe-icons
 - 静态包版本：`1.102.0`
 - 许可证：MIT，全文见同目录 `LICENSE`（Copyright (c) 2023 LobeHub）
+
+## 用户提供的专用头像
+
+- `tibo.png`：由项目用户提供的 Tibo Agent 专用头像（192×192 PNG），仅用于名称包含
+  `tibo` 的 Agent。
+- 该文件不是来自 LobeHub Icons，也不在 MIT 许可覆盖范围内；其权利与使用授权由提供者
+  自行负责，本项目不声称 LobeHub 对其授权。
 
 ## 品牌商标
 

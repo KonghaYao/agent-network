@@ -672,15 +672,23 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
   // 本地品牌头像与授权说明：只允许 agent-icons 目录下的白名单文件，拒绝路径穿越。
   app.get('/agent-icons/:file', async (c) => {
     const file = c.req.param('file');
-    if (!/^(?:[a-z0-9][a-z0-9-]*\.svg|LICENSE|ATTRIBUTION\.md)$/u.test(file)) return c.notFound();
+    if (!/^(?:[a-z0-9][a-z0-9-]*\.(?:svg|png)|LICENSE|ATTRIBUTION\.md)$/u.test(file)) {
+      return c.notFound();
+    }
     const path = resolve(AGENT_ICONS_ROOT, file);
     if (!path.startsWith(`${AGENT_ICONS_ROOT}${sep}`)) return c.notFound();
-    const body = await Bun.file(path).text().catch(() => null);
+    const isPng = file.endsWith('.png');
+    const body = await (isPng
+      ? Bun.file(path).bytes()
+      : Bun.file(path).text()
+    ).catch(() => null);
     if (body === null) return c.notFound();
     return c.body(body, 200, {
-      'content-type': file.endsWith('.svg')
-        ? 'image/svg+xml; charset=utf-8'
-        : 'text/plain; charset=utf-8',
+      'content-type': isPng
+        ? 'image/png'
+        : file.endsWith('.svg')
+          ? 'image/svg+xml; charset=utf-8'
+          : 'text/plain; charset=utf-8',
       'cache-control': 'public, max-age=86400',
       'x-content-type-options': 'nosniff',
     });

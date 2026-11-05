@@ -1,7 +1,8 @@
 /**
  * Agent 品牌头像映射片段。
  *
- * 按 Agent 名称关键词匹配本地 `public/agent-icons` 下的 LobeHub 图标；
+ * 按 Agent 名称关键词匹配本地 `public/agent-icons` 下的图标；
+ * 其中 `tibo.png` 为用户提供的专用头像，不属于 LobeHub/MIT；
  * 未命中或名称为 `peri` 时返回 null，继续使用首字/颜色头像。
  * 由 `chatClientScript` 拼进主脚本共享作用域，因此不使用模块 import。
  *
@@ -12,6 +13,8 @@
  */
 export const CHAT_AVATAR_SCRIPT = `
 const AGENT_AVATAR_RULES = [
+  // 用户提供的专用头像，优先于品牌图标规则。
+  { keys: ['tibo'], file: 'tibo.png', brand: 'Tibo', mono: false },
   { keys: ['codex'], file: 'codex-color.svg', brand: 'Codex', mono: false },
   { keys: ['claude'], file: 'claude-color.svg', brand: 'Claude', mono: false },
   { keys: ['anthropic'], file: 'anthropic.svg', brand: 'Anthropic', mono: true },

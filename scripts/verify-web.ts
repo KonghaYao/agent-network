@@ -974,7 +974,13 @@ const AVATAR_ICON_FILES = [
   'meta-color.svg',
 ];
 
+const TIBO_ICON_FILE = 'tibo.png';
+const TIBO_ICON_SRC = '/agent-icons/tibo.png';
+
 const AVATAR_MAPPINGS: [string, string | null][] = [
+  ['Tibo Reset', TIBO_ICON_SRC],
+  ['tibo-agent', TIBO_ICON_SRC],
+  ['Agent Tibo', TIBO_ICON_SRC],
   ['Codex 测试', '/agent-icons/codex-color.svg'],
   ['Claude 测试员', '/agent-icons/claude-color.svg'],
   ['Gemini 2.5', '/agent-icons/gemini-color.svg'],
@@ -1044,6 +1050,35 @@ async function runAvatarAcceptance(
     );
     check(`图标 ${file} 非空且为 SVG`, body.trimStart().startsWith('<svg') && body.length > 0);
   }
+  const tiboResponse = await fetch(`${base}/agent-icons/${TIBO_ICON_FILE}`);
+  const tiboBytes = new Uint8Array(await tiboResponse.arrayBuffer());
+  const tiboLocalBytes = new Uint8Array(
+    await Bun.file(resolve(import.meta.dir, '../public/agent-icons', TIBO_ICON_FILE)).arrayBuffer(),
+  );
+  checkEqual('图标 tibo.png HTTP 200', tiboResponse.status, 200);
+  checkEqual(
+    '图标 tibo.png content-type',
+    tiboResponse.headers.get('content-type'),
+    'image/png',
+  );
+  check(
+    '图标 tibo.png 字节与本地一致',
+    tiboBytes.length === tiboLocalBytes.length &&
+      tiboBytes.every((value, index) => value === tiboLocalBytes[index]),
+    { remote: tiboBytes.length, local: tiboLocalBytes.length },
+  );
+  const tiboView = new DataView(tiboBytes.buffer, tiboBytes.byteOffset, tiboBytes.byteLength);
+  check(
+    '图标 tibo.png 为 192×192 PNG',
+    tiboBytes.length > 24 &&
+      tiboBytes[0] === 0x89 &&
+      tiboBytes[1] === 0x50 &&
+      tiboBytes[2] === 0x4e &&
+      tiboBytes[3] === 0x47 &&
+      tiboView.getUint32(16) === 192 &&
+      tiboView.getUint32(20) === 192,
+    `${tiboView.getUint32(16)}×${tiboView.getUint32(20)}`,
+  );
   const licenseResponse = await fetch(`${base}/agent-icons/LICENSE`);
   const licenseText = await licenseResponse.text();
   check(
@@ -1056,6 +1091,13 @@ async function runAvatarAcceptance(
   check(
     '图标 ATTRIBUTION 可访问',
     attributionResponse.status === 200 && attributionText.includes('LobeHub Icons'),
+  );
+  check(
+    'ATTRIBUTION 标明 tibo.png 为用户提供且不属于 LobeHub/MIT',
+    attributionText.includes('tibo.png') &&
+      attributionText.includes('用户提供') &&
+      attributionText.includes('不是来自 LobeHub Icons') &&
+      attributionText.includes('不在 MIT'),
   );
   checkEqual(
     '未知图标返回 404',
@@ -1071,6 +1113,7 @@ async function runAvatarAcceptance(
   const codex = await registerAvatarAgent(humanToken, 'Codex 测试');
   const plain = await registerAvatarAgent(humanToken, '琶洲-dsh-dsh');
   const gemini = await registerAvatarAgent(humanToken, 'Gemini 候选');
+  const tibo = await registerAvatarAgent(humanToken, 'Tibo Reset');
   const codexRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
     request_id: requestId('avatar_room'),
     kind: 'direct',
@@ -1081,11 +1124,16 @@ async function runAvatarAcceptance(
     kind: 'direct',
     members: [plain.actor.actor_id],
   });
+  const tiboRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('avatar_room'),
+    kind: 'direct',
+    members: [tibo.actor.actor_id],
+  });
   const groupRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
     request_id: requestId('avatar_room'),
     kind: 'group',
     title: '头像测试群',
-    members: [codex.actor.actor_id, plain.actor.actor_id],
+    members: [codex.actor.actor_id, plain.actor.actor_id, tibo.actor.actor_id],
   });
   await rawTool(codex.token, 'network_message_send', {
     request_id: requestId('avatar_msg'),
@@ -1098,6 +1146,18 @@ async function runAvatarAcceptance(
     client_message_id: crypto.randomUUID(),
     room_id: groupRoom.room.room_id,
     body: '群里的 Codex 消息',
+  });
+  await rawTool(tibo.token, 'network_message_send', {
+    request_id: requestId('avatar_msg'),
+    client_message_id: crypto.randomUUID(),
+    room_id: tiboRoom.room.room_id,
+    body: 'Tibo 的直聊消息',
+  });
+  await rawTool(tibo.token, 'network_message_send', {
+    request_id: requestId('avatar_msg'),
+    client_message_id: crypto.randomUUID(),
+    room_id: groupRoom.room.room_id,
+    body: '群里的 Tibo 消息',
   });
 
   const { context, page } = await makeContext(
@@ -1114,6 +1174,7 @@ async function runAvatarAcceptance(
   });
   await page.goto(`${base}/`);
   await waitRoomListName(page, 'Codex 测试');
+  await waitRoomListName(page, 'Tibo Reset');
   await page.waitForFunction(
     `(() => {
       const img = document.querySelector(${JSON.stringify(`${roomLink(codexRoom.room.room_id)} .avatar-img`)});
@@ -1139,6 +1200,14 @@ async function runAvatarAcceptance(
   for (const item of mapping) {
     checkEqual(`关键词映射 ${item.name}`, item.src, expectedByName.get(item.name) ?? null);
   }
+  const tiboBrand = (await page.evaluate(
+    `(() => {
+      const value = agentAvatarFor('Tibo Reset');
+      return value ? { brand: value.brand, mono: value.mono } : null;
+    })()`,
+  )) as { brand: string | null; mono: boolean | null } | null;
+  checkEqual('Tibo 品牌标记', tiboBrand?.brand, 'Tibo');
+  checkEqual('Tibo 使用彩色专用头像', tiboBrand?.mono, false);
   const monoFlags = (await page.evaluate(
     `(() => {
       const names = ['OpenAI', 'Anthropic', 'Grok', 'xAI', 'Cursor', 'GitHub Copilot', 'Codex', 'Claude'];
@@ -1171,11 +1240,14 @@ async function runAvatarAcceptance(
       return {
         codex: read(${JSON.stringify(codexRoom.room.room_id)}),
         plain: read(${JSON.stringify(plainRoom.room.room_id)}),
+        tibo: read(${JSON.stringify(tiboRoom.room.room_id)}),
         group: read(${JSON.stringify(groupRoom.room.room_id)})
       };
     })()`,
   )) as Record<string, { src: string | null; text: string | null; icon: boolean; cells: number } | null>;
   checkEqual('侧栏 Codex 品牌图标', sidebar.codex?.src, '/agent-icons/codex-color.svg');
+  checkEqual('侧栏 Tibo 专用头像', sidebar.tibo?.src, TIBO_ICON_SRC);
+  checkEqual('侧栏 Tibo 标记品牌图标', sidebar.tibo?.icon, true);
   checkEqual('侧栏未命中保留首字', sidebar.plain?.src, null);
   checkEqual('侧栏未命中显示首字', sidebar.plain?.text, '琶');
   checkEqual('侧栏未命中不标记品牌图标', sidebar.plain?.icon, false);
@@ -1203,6 +1275,20 @@ async function runAvatarAcceptance(
     '/agent-icons/codex-color.svg',
   );
 
+  await page.goto(`${base}/c/${tiboRoom.room.room_id}`);
+  await waitRoom(page, tiboRoom.room.room_id, 'Tibo Reset');
+  await page.waitForFunction(
+    `(() => {
+      const img = document.querySelector('#messages .msg .msg-avatar img.avatar-img');
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  checkEqual(
+    'Tibo 直聊消息使用专用头像',
+    await page.locator('#messages .msg .msg-avatar img.avatar-img').first().getAttribute('src'),
+    TIBO_ICON_SRC,
+  );
+
   await page.goto(`${base}/c/${groupRoom.room.room_id}`);
   await waitRoom(page, groupRoom.room.room_id, '头像测试群');
   await page.waitForFunction(
@@ -1216,6 +1302,27 @@ async function runAvatarAcceptance(
     await page.locator('#messages .msg .msg-avatar img.avatar-img').first().getAttribute('src'),
     '/agent-icons/codex-color.svg',
   );
+  await page.waitForFunction(
+    `(() => {
+      const messages = Array.from(document.querySelectorAll('#messages .msg'));
+      const target = messages.find(function (item) {
+        return item.textContent.indexOf('群里的 Tibo 消息') >= 0;
+      });
+      const img = target ? target.querySelector('.msg-avatar img.avatar-img') : null;
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  const groupTiboAvatar = await page.evaluate(
+    `(() => {
+      const messages = Array.from(document.querySelectorAll('#messages .msg'));
+      const target = messages.find(function (item) {
+        return item.textContent.indexOf('群里的 Tibo 消息') >= 0;
+      });
+      const img = target ? target.querySelector('.msg-avatar img.avatar-img') : null;
+      return img ? img.getAttribute('src') : null;
+    })()`,
+  );
+  checkEqual('群聊 Tibo 消息使用专用头像', groupTiboAvatar, TIBO_ICON_SRC);
 
   await page.locator('#add-members').click();
   await page.locator('#members-modal').waitFor({ state: 'visible' });
@@ -1241,11 +1348,13 @@ async function runAvatarAcceptance(
   )) as { name: string; src: string | null; text: string | null }[];
   const codexMember = roster.find((item) => item.name.includes('Codex 测试'));
   const plainMember = roster.find((item) => item.name.includes('琶洲-dsh-dsh'));
+  const tiboMember = roster.find((item) => item.name.includes('Tibo Reset'));
   checkEqual(
     '群成员列表 Codex 品牌图标',
     codexMember?.src,
     '/agent-icons/codex-color.svg',
   );
+  checkEqual('群成员列表 Tibo 专用头像', tiboMember?.src, TIBO_ICON_SRC);
   checkEqual('群成员列表未命中无图标', plainMember?.src, null);
   checkEqual('群成员列表未命中保留首字', plainMember?.text, '琶');
   const candidates = (await page.evaluate(
@@ -1265,6 +1374,10 @@ async function runAvatarAcceptance(
   await rawTool(humanToken, 'network_agent_archive', {
     request_id: requestId('avatar_archive'),
     actor_id: codex.actor.actor_id,
+  });
+  await rawTool(humanToken, 'network_agent_archive', {
+    request_id: requestId('avatar_archive'),
+    actor_id: tibo.actor.actor_id,
   });
   await page.goto(`${base}/`);
   await waitRoomListName(page, '琶洲-dsh-dsh');
@@ -1287,9 +1400,31 @@ async function runAvatarAcceptance(
       .getAttribute('src'),
     '/agent-icons/codex-color.svg',
   );
+  await page.waitForFunction(
+    `(() => {
+      const row = document.querySelector(${JSON.stringify(
+        `#archive-popover-list .archive-item[data-actor-id="${tibo.actor.actor_id}"]`,
+      )});
+      const img = row ? row.querySelector('img.avatar-img') : null;
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  checkEqual(
+    '已归档 Agents Tibo 专用头像',
+    await page
+      .locator(
+        `#archive-popover-list .archive-item[data-actor-id="${tibo.actor.actor_id}"] img.avatar-img`,
+      )
+      .getAttribute('src'),
+    TIBO_ICON_SRC,
+  );
   await rawTool(humanToken, 'network_agent_unarchive', {
     request_id: requestId('avatar_unarchive'),
     actor_id: codex.actor.actor_id,
+  });
+  await rawTool(humanToken, 'network_agent_unarchive', {
+    request_id: requestId('avatar_unarchive'),
+    actor_id: tibo.actor.actor_id,
   });
   await context.close();
 
@@ -1331,6 +1466,37 @@ async function runAvatarAcceptance(
   checkEqual('390px 页面不横向溢出（头像）', mobileMetrics?.pageFits, true);
   checkEqual('390px 品牌头像不溢出', mobileMetrics?.inside, true);
   checkEqual('暗色模式品牌图标仍为浅色底', mobileMetrics?.background, 'rgb(242, 243, 245)');
+  await darkPage.waitForFunction(
+    `(() => {
+      const img = document.querySelector(${JSON.stringify(`${roomLink(tiboRoom.room.room_id)} .avatar-img`)});
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  const tiboMobileMetrics = (await darkPage.evaluate(
+    `(() => {
+      const link = document.querySelector(${JSON.stringify(roomLink(tiboRoom.room.room_id))});
+      const avatar = link ? link.querySelector('.avatar-icon') : null;
+      const image = avatar ? avatar.querySelector('img.avatar-img') : null;
+      if (!avatar || !image) return null;
+      const avatarBox = avatar.getBoundingClientRect();
+      const imageBox = image.getBoundingClientRect();
+      return {
+        pageFits: document.documentElement.scrollWidth <= window.innerWidth,
+        inside: imageBox.left >= avatarBox.left - 0.5 &&
+          imageBox.right <= avatarBox.right + 0.5 &&
+          imageBox.top >= avatarBox.top - 0.5 &&
+          imageBox.bottom <= avatarBox.bottom + 0.5,
+        background: getComputedStyle(image).backgroundColor
+      };
+    })()`,
+  )) as { pageFits: boolean; inside: boolean; background: string } | null;
+  checkEqual('390px 页面不横向溢出（Tibo 头像）', tiboMobileMetrics?.pageFits, true);
+  checkEqual('390px Tibo 专用头像不溢出', tiboMobileMetrics?.inside, true);
+  checkEqual(
+    '暗色模式 Tibo 专用头像仍为浅色底',
+    tiboMobileMetrics?.background,
+    'rgb(242, 243, 245)',
+  );
   await darkContext.close();
 
   const failContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -1338,6 +1504,9 @@ async function runAvatarAcceptance(
   const failPage = await failContext.newPage();
   failPage.setDefaultTimeout(15_000);
   await failPage.route('**/agent-icons/codex-color.svg', async (route) => {
+    await route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' });
+  });
+  await failPage.route('**/agent-icons/tibo.png', async (route) => {
     await route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' });
   });
   await failPage.goto(`${base}/`);
@@ -1349,7 +1518,15 @@ async function runAvatarAcceptance(
       return Boolean(avatar && !avatar.querySelector('img.avatar-img') && avatar.textContent === 'C');
     })()`,
   );
+  await failPage.waitForFunction(
+    `(() => {
+      const link = document.querySelector(${JSON.stringify(roomLink(tiboRoom.room.room_id))});
+      const avatar = link ? link.querySelector('.avatar') : null;
+      return Boolean(avatar && !avatar.querySelector('img.avatar-img') && avatar.textContent === 'T');
+    })()`,
+  );
   check('品牌图标加载失败回退首字', true);
+  check('Tibo 专用头像加载失败回退首字', true);
   await failContext.close();
 }
 
