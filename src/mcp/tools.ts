@@ -225,8 +225,9 @@ export function registerTools(
   /**
    * 为 Agent 成员补充在线快照；人类保持 null。
    *
-   * 只在 room_get 出口查询，域层继续只读 SQLite；hub 查询失败时 presenceOf 返回
-   * null，页面显示“未知”而不是误报离线。
+   * 只在 room_get 出口查询，域层继续只读 SQLite；online 表示可用性
+   * （SSE 连接或最近活动窗口内），hub/DB 查询失败时 presenceOf 返回 null，
+   * 页面显示“未知”而不是误报离线。pending 在确认下线前仍显示在线，避免闪烁。
    */
   async function withPresence(detail: RoomDetail): Promise<RoomDetail> {
     const members = await Promise.all(
@@ -418,7 +419,7 @@ export function registerTools(
   register(
     server,
     'network_room_get',
-    '读取房间摘要与当前有效成员；Agent 成员的 online 来自上线状态，null 表示未知，人类成员恒为 null。',
+    '读取房间摘要与当前有效成员；Agent 成员的 online 表示可用性（保持 SSE 连接，或最近 60 秒内有 MCP 请求），null 表示未知，人类成员恒为 null。',
     roomGetSchema,
     roomDetailSchema,
     async (input) => {

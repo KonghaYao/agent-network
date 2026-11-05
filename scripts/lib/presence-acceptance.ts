@@ -83,8 +83,14 @@ function graceMs(): number {
   return Number.isFinite(value) && value > 0 ? value : 30_000;
 }
 
-function waitAfterGrace(extra = 1_500): Promise<void> {
-  return sleep(graceMs() + extra);
+function activityTtlMs(): number {
+  const value = Number(process.env.AGENT_PRESENCE_ACTIVITY_TTL_MS);
+  return Number.isFinite(value) && value > 0 ? value : 60_000;
+}
+
+/** 可用性过期 + grace 的最坏等待；本地验收注入短 TTL。 */
+function offlineBudgetMs(): number {
+  return activityTtlMs() + graceMs() + 8_000;
 }
 
 async function timeline(
@@ -358,14 +364,15 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
     );
     checkEqual('关闭非最后连接后仍在线', await agentOnline(human, direct, a.actor_id), true);
 
-    // 最后连接断开：hub 立即离线，grace 前不落历史。
+    // 最后连接断开：活动窗口内仍算在线；TTL + grace 后才确认下线。
+    const lastAgentActivity = Date.now();
     await agentASession.close();
-    await waitUntil(
-      '最后连接断开后 hub 立即离线',
-      async () => (await agentOnline(human, direct, a.actor_id)) === false,
-      3_000,
+    await sleep(300);
+    checkEqual(
+      '最后连接断开后 pending 期间仍显示在线',
+      await agentOnline(human, direct, a.actor_id),
+      true,
     );
-    check('最后连接断开后 hub 立即离线', true);
     await sleep(Math.max(200, Math.floor(graceMs() / 2)));
     checkEqual(
       'grace 前不写下线',
@@ -398,21 +405,29 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
     );
     const resumeCursor = resumed.timeline_resume_cursor as string;
 
-    // grace 到期：一条下线，时间为断开观察时刻。
+    // TTL + grace 到期：一条下线，时间为“最后活动 + TTL”或断连时刻的较大者。
     const closeAt = Date.now();
     await reconnect.close();
     const offlineItems = await waitForPresence(
       human,
       direct,
-      '等待 grace 到期下线',
+      '等待 TTL/grace 到期下线',
       (items) => items.filter((item) => item.transition === 'offline').length === 1,
+      offlineBudgetMs(),
     );
     const firstOffline = offlineItems.find((item) => item.transition === 'offline') as PresenceItem;
-    check('下线 occurred_at 接近实际断开时间', Math.abs(Number(firstOffline.occurred_at) - closeAt) < 3_000, {
-      occurred_at: firstOffline.occurred_at,
-      closeAt,
-    });
-    checkEqual('确认下线 time_basis 为 observed', firstOffline.time_basis, 'observed');
+    check(
+      '下线 occurred_at 落在断连时刻与 最后活动+TTL 之间',
+      Number(firstOffline.occurred_at) >= closeAt - 1_000 &&
+        Number(firstOffline.occurred_at) <= closeAt + activityTtlMs() + 3_000,
+      {
+        occurred_at: firstOffline.occurred_at,
+        closeAt,
+        ttl: activityTtlMs(),
+        lastAgentActivity,
+      },
+    );
+    checkEqual('确认下线 time_basis 为 inferred', firstOffline.time_basis, 'inferred');
 
     const latePage = await timeline(human, direct, {
       direction: 'after',
@@ -439,28 +454,18 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
     checkEqual('presence 不改变 pending_count', meAfter.pending_count, readState.pending);
     checkEqual('presence 不改变 inbox head', meAfter.inbox_head_seq, readState.inboxHead);
 
-    // 仅重订阅不 login：不取消 pending，到期仍确认下线。
-    const onlineAgain = await openAgent(agentAToken);
-    extra.push(onlineAgain);
-    await login(onlineAgain.connection);
-    await sleep(200);
-    await onlineAgain.close();
-    const resubscribeOnly = await openAgent(agentAToken);
-    extra.push(resubscribeOnly);
+    // 离线后第一个请求（无 SSE）：先写新上线，再执行业务；room_get 同步在线。
+    checkEqual('确认下线后 room_get 离线', await agentOnline(human, direct, a.actor_id), false);
+    await callTool(agentA.client, 'network_me', {});
     await waitForPresence(
       human,
       direct,
-      '仅重订阅后仍确认下线',
-      (items) => items.filter((item) => item.transition === 'offline').length === 2,
+      '离线后请求恢复上线',
+      (items) => items.filter((item) => item.transition === 'online').length === 2,
+      offlineBudgetMs(),
     );
-    checkEqual('仅重订阅不 login 不取消 pending', await agentOnline(human, direct, a.actor_id), false);
-    await login(resubscribeOnly.connection);
-    await waitForPresence(
-      human,
-      direct,
-      '重订阅后 login 重新上线',
-      (items) => items.filter((item) => item.transition === 'online').length === 3,
-    );
+    checkEqual('请求恢复上线后 room_get 在线', await agentOnline(human, direct, a.actor_id), true);
+    const idleReply = await sendMessage(agentA, direct, 'presence after idle reply');
     const afterReconnect = presenceItems(await timeline(human, direct, { limit: 100 }));
     const latestOnline = afterReconnect
       .filter((item) => item.transition === 'online')
@@ -471,10 +476,50 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
       .sort((left, right) => Number(left.timeline_seq) - Number(right.timeline_seq))
       .at(-1);
     check(
-      '超 due 后重连先下线再上线',
-      Number(latestOnline?.timeline_seq) > Number(latestOffline?.timeline_seq),
-      { online: latestOnline?.timeline_seq, offline: latestOffline?.timeline_seq },
+      '离线后首个请求先于回复产生新上线',
+      Number(latestOnline?.timeline_seq) > Number(latestOffline?.timeline_seq) &&
+        Number(latestOnline?.timeline_seq) < Number(idleReply.message.created_seq),
+      {
+        online: latestOnline?.timeline_seq,
+        offline: latestOffline?.timeline_seq,
+        reply: idleReply.message.created_seq,
+      },
     );
+
+    // 无 SSE、只靠轮询：TTL 内的重复请求保持在线；停止后按最后活动 + TTL 下线。
+    for (let round = 0; round < 2; round += 1) {
+      await sleep(Math.ceil(activityTtlMs() / 2));
+      await callTool(agentA.client, 'network_me', {});
+    }
+    await sleep(Math.ceil(activityTtlMs() / 2));
+    checkEqual(
+      '无 SSE 轮询期间不产生下线',
+      presenceItems(await timeline(human, direct, { limit: 100 })).filter(
+        (item) => item.transition === 'offline',
+      ).length,
+      1,
+    );
+    checkEqual('无 SSE 轮询期间 room_get 在线', await agentOnline(human, direct, a.actor_id), true);
+    const lastPollAt = Date.now();
+    const polledOfflineItems = await waitForPresence(
+      human,
+      direct,
+      '停止轮询后按活动 TTL 下线',
+      (items) => items.filter((item) => item.transition === 'offline').length === 2,
+      offlineBudgetMs(),
+    );
+    const polledOffline = polledOfflineItems
+      .filter((item) => item.transition === 'offline')
+      .sort((left, right) => Number(left.timeline_seq) - Number(right.timeline_seq))
+      .at(-1) as PresenceItem;
+    check(
+      '停止轮询后的下线时间为最后活动 + TTL',
+      Number(polledOffline.occurred_at) >= lastPollAt - 1_000 &&
+        Number(polledOffline.occurred_at) <= lastPollAt + activityTtlMs() + 3_000,
+      { occurred_at: polledOffline.occurred_at, lastPollAt, ttl: activityTtlMs() },
+    );
+    checkEqual('停止轮询下线 basis 为 inferred', polledOffline.time_basis, 'inferred');
+    checkEqual('停止轮询后 room_get 离线', await agentOnline(human, direct, a.actor_id), false);
 
     // 分页：limit=1、同毫秒排序、snapshot 中途新增、cursor 混用。
     await sendMessage(human, direct, 'presence page 1');

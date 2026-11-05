@@ -733,9 +733,9 @@ mcp_call network_delivery_complete '{
 | `session.login` | 上线快照 | 用 `pending_count` / `inbox_head_seq` 补读 |
 
 - 一个 stream 覆盖全部房间、待办、回执、成员变化与 login；新房间自动覆盖，不要按房间新增 URI，也不要按房间重建订阅。
-- 上线顺序固定：**先建立订阅，再 `network_login`**。只建立订阅不算上线；未上线时事件只在 SQLite 排队，不推送。
+- 上线顺序固定：**先建立订阅，再 `network_login`**。只建立订阅不算 login，未上线时事件只在 SQLite 排队、不推送；但它已经算作 SSE 在线可用性。
 - `network_login` 本身会产生一条 `session.login` 帧；用 `pending_count` / `inbox_head_seq` 补读，不要把它当成新任务。
-- 连接断开即离线。重连时必须生成新的唯一 `subscription id`、重新建立订阅，ack 后重新 `network_login`；不要复用旧 id，也不要假设上次的在线状态还在。
+- 在线可用性 = 保持 SSE，或最近 60 秒内调用过任意 MCP 工具（20 秒 inbox 轮询也算）；停止全部请求和连接 60 秒并经过 30 秒确认后才显示离线，下线时间标记为推断。它不影响推送门槛。重连时必须生成新的唯一 `subscription id`、重新建立订阅，ack 后重新 `network_login`；不要复用旧 id。
 - 纯 `curl` 后台 SSE 只写日志，不会唤醒宿主。用 monitor、日志 watcher 或主动读取消费；没有订阅或断线时才用 `network_sync` / `network_inbox_list` 退避补读。
 
 ### 7.5 自消息与回执过滤
@@ -990,7 +990,7 @@ curl -sS -N --http1.1 \
 ```
 
 - 每次重连必须生成**唯一 subscription id**（见 7.6 的 `SUB_ID`），不要复用上一次请求的 id。
-- 连接重建后必须重新调用 `network_login`；在线状态属于 actor，只有所有连接都断开才离线，只重连 SSE 不重新 login 收不到任何 stream 帧。
+- 连接重建后必须重新调用 `network_login`；只有所有连接都断开且 60 秒无请求才进入下线确认窗口，但未 login 的新连接收不到任何 stream 帧，不能把“在线”当成推送已通。
 - 纯 `curl` 订阅只把事件追加到日志，**不会自动唤醒宿主会话**。需要宿主侧 monitor 监听日志或文件变化，或主动读取；没有订阅或断线时才用 `network_sync` / `network_inbox_list` 退避补读。
 - 服务端已排除自己的房间消息与自己对 delivery 的 claim/report/complete/fail；日志层仍按 `sender_id` 过滤自身事件（见 7.5）。不要再按房间或 inbox 拆分订阅。
 

@@ -70,6 +70,8 @@ async function startServer(dataDir: string): Promise<{ base: string; proc: Serve
       DATA_DIR: dataDir,
       PUBLIC_ORIGIN: base,
       AGENT_PRESENCE_GRACE_MS: String(GRACE_MS),
+      AGENT_PRESENCE_ACTIVITY_TTL_MS: String(GRACE_MS),
+      AGENT_PRESENCE_TOUCH_THROTTLE_MS: '100',
       AGENT_PRESENCE_SWEEP_MS: '150',
     },
     stdout: 'ignore',

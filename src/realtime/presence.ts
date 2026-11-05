@@ -59,13 +59,22 @@ export async function login(env: Env, principal: Principal): Promise<LoginView> 
 /**
  * 读取 Agent 的在线快照。
  *
- * 统一 stream 是唯一权威来源：没有连接或最后一条连接已断开即离线。
- * 人类成员不查询上线状态；hub 查询失败返回 `null`，表示“未知”。
- * 调用方必须把 `null` 与 `false`（明确离线）区分开，不能把未知误报成离线。
+ * “在线”是可用性：SSE 连接/已登录的 hub 状态，或最近 TTL 内有任意已认证
+ * MCP 请求（持久化在 agent_presence_state 的 online/pending_offline）。
+ * pending 仍算在线，确认下线前不制造闪烁。人类成员不查询在线状态；
+ * hub/数据库查询失败返回 `null`，表示“未知”。调用方必须把 `null` 与
+ * `false`（明确离线）区分开，不能把未知误报成离线。
  */
 export async function presenceOf(env: Env, actorId: string): Promise<ActorPresence | null> {
   try {
-    return env.NOTIFICATION_HUB.actorPresence(actorId);
+    const hub = env.NOTIFICATION_HUB.actorPresence(actorId);
+    if (hub.online || env.NOTIFICATION_HUB.actorConnectionCount(actorId) > 0) {
+      return { online: true, since: hub.since };
+    }
+    if (!env.PRESENCE) return hub;
+    const phase = await env.PRESENCE.phaseOf(actorId);
+    const online = phase === 'online' || phase === 'pending_offline';
+    return { online, since: null };
   } catch {
     return null;
   }

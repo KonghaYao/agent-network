@@ -382,6 +382,20 @@ async function handleMcp(request: Request, env: Env, mount?: FileMount): Promise
     return new Response(response.body, { status: 405, statusText: response.statusText, headers });
   }
 
+  // 可用性 presence：任意已认证 Agent 的 MCP 请求都算活动（轮询、claim、
+  // 回复、history、sync、resources/read、订阅建立等）。先于业务处理写入，
+  // 保证离线后的第一个动作先产生上线记录；失败只记录，不影响响应。
+  if (principal.actor?.kind === 'agent') {
+    try {
+      await env.PRESENCE?.touch(principal.actor.actor_id);
+    } catch (error) {
+      console.error(
+        'agent-network presence touch failed',
+        error instanceof Error ? error.name : 'UnknownError',
+      );
+    }
+  }
+
   const meta = body?._meta ?? body?.params?._meta;
   const requestedSubscriptions = body?.params?.notifications?.resourceSubscriptions;
 

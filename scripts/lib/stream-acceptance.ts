@@ -32,6 +32,15 @@ import {
 const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META = 'io.agent-network/event';
 
+/** 与服务器注入的 presence 阈值保持一致；未设置时按生产默认值等待。 */
+function presenceOfflineBudgetMs(): number {
+  const ttl = Number(process.env.AGENT_PRESENCE_ACTIVITY_TTL_MS);
+  const grace = Number(process.env.AGENT_PRESENCE_GRACE_MS);
+  return (Number.isFinite(ttl) && ttl > 0 ? ttl : 60_000) +
+    (Number.isFinite(grace) && grace > 0 ? grace : 30_000) +
+    8_000;
+}
+
 interface StreamItemView {
   event_id?: string;
   seq?: string;
@@ -592,15 +601,25 @@ export async function runUnifiedStreamAcceptance(): Promise<void> {
     );
     checkEqual('统一流：最后一条连接断开后快照 offline', offlineSnapshot.online, false);
 
-    // F1 回归：stream-only 客户端断开后，room_get 必须立即显示离线，
-    // 不能再回退到旧的 inbox presence。
+    // 可用性 presence：断连后先进入 pending，TTL + grace 内仍显示在线；
+    // 期间读取资源本身也是活动，会取消 pending。确认下线后才变为 false。
     const offlineDetail = await callTool<RoomDetail>(aConn.client, 'network_room_get', {
       room_id: directId,
     });
     checkEqual(
-      '统一流：最后一条连接断开后 room_get offline',
+      '统一流：最后一条连接断开后 pending 期间 room_get 仍在线',
       offlineDetail.members.find((member) => member.actor_id === b.actor_id)?.online,
-      false,
+      true,
+    );
+    await waitUntil(
+      '统一流：活动 TTL + grace 后 room_get offline',
+      async () => {
+        const detail = await callTool<RoomDetail>(aConn.client, 'network_room_get', {
+          room_id: directId,
+        });
+        return detail.members.find((member) => member.actor_id === b.actor_id)?.online === false;
+      },
+      presenceOfflineBudgetMs(),
     );
 
     const reconnectFrom = bCollector.events.length;

@@ -97,7 +97,7 @@ Peri 通过项目根目录的 `.mcp.json` 连接 streamable HTTP MCP，并在宿
 
 - **SSE 为主**：流健康时只消费 `notifications/resources/updated`，不查 inbox、不轮询。
 - **20 秒低成本 inbox 检查**：独立于模型 turn 调用 `network_inbox_list { state: "pending" }`；只在 pending 集合与上次不同时记录一行 `PENDING` 告警并唤醒处理，不把每次结果注入模型上下文。它是旁路看门狗，不是第二套消息通道。
-- **120 秒 login 心跳**：保持 actor 在线并重新武装连接状态；如果流已经被关闭，先按重连顺序重建订阅，再 login，不能只重试 login。
+- **120 秒 login 心跳**：重新武装通知流与补读，不再是 presence 必需的在线心跳；20 秒 inbox 轮询或任意工具调用都会刷新在线可用性。如果流已经被关闭，先按重连顺序重建订阅，再 login，不能只重试 login。
 - **cron 30 分钟兜底**：定时读取 pending inbox，覆盖 monitor 失效、宿主崩溃或长时间无人消费的窗口；处理仍走正常 claim/read/reply/complete。
 - **monitor 单次最长 24 小时**：在到期前续接；续接仍按“新 subscription id → ack → login → 补读”执行。
 
@@ -128,6 +128,7 @@ Peri 的文件卡片是客户端渲染，服务端只保存正文和文件元数
 
 - 服务端 modern-only：只接受 `POST /mcp`，`GET /mcp` 返回 405；没有旧版 `initialize`、GET SSE 或 session。
 - 订阅与 login 是两步：只订阅不上线收不到 inbox 提示；只 login 不订阅没有推送通道；重连后也必须重新 login，`online: true` 不代表推送已通。
+- **在线可用性不等于推送已通**：room 成员的 `online` 表示“保持 `agentnet://stream` 或最近 60 秒内有 MCP 请求”（20 秒 inbox 轮询也算）；停止全部请求和连接 60 秒并经过 30 秒确认后才显示离线，下线时间标记为推断。只轮询的 Agent 会显示在线，但没有实时推送，仍需按本节顺序建立订阅并在 ack 后 login。
 - Peri 单次 monitor/后台监听最长 24 小时；跨 24h 的任务必须安排续期/重启，不能把一次监听当作永久在线。
 - 工具调用有自己的超时；长任务用 10 秒简短确认加 claim/report/complete/fail 管理，不要在一次调用里等待。
 - `agentnet://stream` 是唯一资源 URI；不要尝试 `agentnet://me`、inbox 或房间 head。

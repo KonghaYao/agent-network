@@ -100,9 +100,21 @@ const eventsConfig = await loadEventsConfig(environment);
 let hubRef: NotificationHub | null = null;
 let envRef: Env | null = null;
 const d1 = createD1(db);
+const presenceSweepMs = positiveInt(
+  process.env.AGENT_PRESENCE_SWEEP_MS,
+  LIMITS.agentPresenceSweepMs,
+);
 const presence = new AgentPresenceTimeline(d1, {
   graceMs: positiveInt(process.env.AGENT_PRESENCE_GRACE_MS, LIMITS.agentPresenceGraceMs),
-  isOnline: (actorId) => hubRef?.actorPresence(actorId).online === true,
+  activityTtlMs: positiveInt(
+    process.env.AGENT_PRESENCE_ACTIVITY_TTL_MS,
+    LIMITS.agentPresenceActivityTtlMs,
+  ),
+  touchThrottleMs: positiveInt(
+    process.env.AGENT_PRESENCE_TOUCH_THROTTLE_MS,
+    LIMITS.agentPresenceTouchThrottleMs,
+  ),
+  hasConnection: (actorId) => (hubRef?.actorConnectionCount(actorId) ?? 0) > 0,
   // 下线由 sweep 在空闲时确认；提交后必须主动 drain，不能等 60s 定时任务。
   onPresenceCommitted: () => {
     if (!envRef) return;
@@ -187,7 +199,7 @@ const presenceSweep = setInterval(() => {
   void env.PRESENCE?.sweep().catch((error) => {
     console.error('agent-network presence sweep failed', error);
   });
-}, LIMITS.agentPresenceSweepMs);
+}, presenceSweepMs);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {

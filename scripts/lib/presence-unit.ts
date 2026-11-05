@@ -1,11 +1,13 @@
 /**
  * Agent 上下线状态机的本地事务测试。
  *
- * 使用内存 SQLite + 可控时钟，不依赖正在运行的服务；由协议验收调用，
- * 覆盖 grace、CAS 去重、重启恢复与事务回滚。
+ * 使用内存 SQLite + 可控时钟，不依赖正在运行的服务；由协议验收调用。
+ * 在线判定是“SSE 连接或最近活动”：覆盖请求触碰、活动 TTL、最后连接关闭、
+ * pending 取消/超期、sweep 兜底、重启恢复、节流与事务回滚。
  */
 
 import { Database } from 'bun:sqlite';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { migrate } from '../../src/bun/migrate';
@@ -17,6 +19,9 @@ import { AgentPresenceTimeline } from '../../src/realtime/presence-timeline';
 import { check, checkEqual } from './harness';
 
 const MIGRATIONS = resolve(import.meta.dir, '../../migrations');
+const GRACE_MS = 1_000;
+const ACTIVITY_TTL_MS = 2_000;
+const TOUCH_THROTTLE_MS = 100;
 
 function seed(db: Database): void {
   const at = 1;
@@ -65,10 +70,11 @@ function presenceRows(db: Database): {
   occurred_at: number;
   timeline_seq: number;
   time_basis: string;
+  generation_id: string;
 }[] {
   return db
     .prepare(
-      'SELECT room_id, transition, occurred_at, timeline_seq, time_basis FROM room_presence_events ORDER BY timeline_seq',
+      'SELECT room_id, transition, occurred_at, timeline_seq, time_basis, generation_id FROM room_presence_events ORDER BY timeline_seq',
     )
     .all() as {
     room_id: string;
@@ -76,7 +82,30 @@ function presenceRows(db: Database): {
     occurred_at: number;
     timeline_seq: number;
     time_basis: string;
+    generation_id: string;
   }[];
+}
+
+function stateOf(db: Database): {
+  phase: string;
+  generation_id: string;
+  online_at: number;
+  last_seen_at: number | null;
+  disconnect_observed_at: number | null;
+  offline_due_at: number | null;
+} {
+  return db
+    .prepare(
+      'SELECT phase, generation_id, online_at, last_seen_at, disconnect_observed_at, offline_due_at FROM agent_presence_state WHERE actor_id = ?',
+    )
+    .get('agt_unit') as {
+    phase: string;
+    generation_id: string;
+    online_at: number;
+    last_seen_at: number | null;
+    disconnect_observed_at: number | null;
+    offline_due_at: number | null;
+  };
 }
 
 function snapshotInvariants(db: Database): string {
@@ -91,12 +120,46 @@ function snapshotInvariants(db: Database): string {
   });
 }
 
+/** 0007 回填：online 行取 online_at，pending/offline 保持 NULL。 */
+function checkActivityMigrationBackfill(): void {
+  const db = new Database(':memory:');
+  const files = [
+    '0001_initial.sql',
+    '0002_named_guards.sql',
+    '0003_room_files.sql',
+    '0004_mcp_events.sql',
+    '0005_agent_archive.sql',
+    '0006_agent_presence.sql',
+  ];
+  for (const file of files) db.exec(readFileSync(resolve(MIGRATIONS, file), 'utf8'));
+  seed(db);
+  db.exec(`
+    INSERT INTO agent_presence_state
+      (actor_id, revision, generation_id, phase, online_at, disconnect_observed_at,
+       offline_due_at, time_basis, updated_at)
+    VALUES ('agt_unit', 1, 'gen_backfill', 'online', 111, NULL, NULL, 'observed', 111),
+           ('agt_other', 1, 'gen_old', 'offline', 222, NULL, NULL, 'observed', 222);
+  `);
+  db.exec(readFileSync(resolve(MIGRATIONS, '0007_agent_presence_activity.sql'), 'utf8'));
+  const rows = db
+    .prepare('SELECT actor_id, phase, last_seen_at FROM agent_presence_state ORDER BY actor_id')
+    .all() as { actor_id: string; phase: string; last_seen_at: number | null }[];
+  const onlineRow = rows.find((row) => row.actor_id === 'agt_unit');
+  const offlineRow = rows.find((row) => row.actor_id === 'agt_other');
+  checkEqual('0007 回填 online 的 last_seen_at', onlineRow?.last_seen_at, 111);
+  checkEqual('0007 不给 offline 伪造心跳', offlineRow?.last_seen_at, null);
+  db.close();
+}
+
 export async function runAgentPresenceUnitChecks(): Promise<void> {
+  checkActivityMigrationBackfill();
+
   const db = new Database(':memory:');
   migrate(db, MIGRATIONS);
   seed(db);
   const d1 = createD1(db);
   let now = 1_700_000_000_000;
+  let connected = false;
   const errors: unknown[] = [];
   const hub = new NotificationHub(db);
   const frames: string[] = [];
@@ -117,8 +180,11 @@ export async function runAgentPresenceUnitChecks(): Promise<void> {
     }
   };
   const service = new AgentPresenceTimeline(d1, {
-    graceMs: 1_000,
+    graceMs: GRACE_MS,
+    activityTtlMs: ACTIVITY_TTL_MS,
+    touchThrottleMs: TOUCH_THROTTLE_MS,
     now: () => now,
+    hasConnection: () => connected,
     onError: (error) => errors.push(error),
     onPresenceCommitted: () => {
       committed += 1;
@@ -127,13 +193,16 @@ export async function runAgentPresenceUnitChecks(): Promise<void> {
   });
 
   const before = snapshotInvariants(db);
-  const onlineAt = now;
-  await service.recordLogin('agt_unit');
-  checkEqual('首条上线只写 direct 人类会话', presenceCount(db), 1);
-  checkEqual('上线房间是 direct human-agent', presenceRows(db)[0]?.room_id, 'rm_direct');
-  checkEqual('上线事件 transition', presenceRows(db)[0]?.transition, 'online');
-  checkEqual('上线 occurred_at 为实际发生时间', presenceRows(db)[0]?.occurred_at, onlineAt);
-  checkEqual('上线不改变 head/未读/pending', snapshotInvariants(db), before);
+  const firstTouchAt = now;
+
+  // 1. 无 SSE、只有请求：第一次请求就产生 observed 上线。
+  await service.touch('agt_unit');
+  checkEqual('首个请求写入一条上线', presenceCount(db), 1);
+  checkEqual('上线只写 direct 人类会话', presenceRows(db)[0]?.room_id, 'rm_direct');
+  checkEqual('请求上线 transition', presenceRows(db)[0]?.transition, 'online');
+  checkEqual('请求上线 occurred_at', presenceRows(db)[0]?.occurred_at, firstTouchAt);
+  checkEqual('请求上线 basis 为 observed', presenceRows(db)[0]?.time_basis, 'observed');
+  checkEqual('请求上线写 last_seen_at', stateOf(db).last_seen_at, firstTouchAt);
 
   await settleDrains();
   check('上线提交后触发 outbox drain', committed >= 1, committed);
@@ -145,120 +214,192 @@ export async function runAgentPresenceUnitChecks(): Promise<void> {
     ),
     frames,
   );
+  checkEqual('上线不改变 head/未读/pending', snapshotInvariants(db), before);
 
-  await service.recordLogin('agt_unit');
-  checkEqual('重复 login 不新增记录', presenceCount(db), 1);
-
-  // 最后连接断开：先 pending，grace 前不落历史。
-  now += 100;
-  const disconnectAt = now;
-  service.connectionClosed('agt_unit');
-  await service.flush();
-  checkEqual('grace 前不写离线记录', presenceCount(db), 1);
-  now = disconnectAt + 999;
+  // 2. 20 秒轮询的等价场景：TTL 内持续 touch，不产生新 generation/事件。
+  const firstGeneration = presenceRows(db)[0]?.generation_id;
+  now = firstTouchAt + 1_000;
+  await service.touch('agt_unit');
+  now = firstTouchAt + 1_900;
+  await service.touch('agt_unit');
   await service.sweep();
-  checkEqual('未到 due 不确认下线', presenceCount(db), 1);
+  checkEqual('轮询保持在线不新增事件', presenceCount(db), 1);
+  checkEqual('轮询不换 generation', stateOf(db).generation_id, firstGeneration);
+  checkEqual('轮询保持在 online', stateOf(db).phase, 'online');
+  checkEqual('轮询刷新 last_seen_at', stateOf(db).last_seen_at, firstTouchAt + 1_900);
 
-  // grace 内重连：清除 pending，保留原上线时间。
-  now = disconnectAt + 500;
-  await service.recordLogin('agt_unit');
-  checkEqual('grace 内重连不新增上下线', presenceCount(db), 1);
-  now = disconnectAt + 5_000;
+  // 3. 节流：间隔小于阈值不重复写库，但状态不丢。
+  await service.touch('agt_unit', firstTouchAt + 1_950);
+  checkEqual('节流窗口内不写 last_seen_at', stateOf(db).last_seen_at, firstTouchAt + 1_900);
+  now = firstTouchAt + 2_050;
+  await service.touch('agt_unit');
+  checkEqual('超过节流窗口后写入', stateOf(db).last_seen_at, firstTouchAt + 2_050);
+
+  // 4. 停止请求：TTL 到期后 sweep 兜底进入 pending，再到 due 确认 inferred 下线。
+  const lastActivity = stateOf(db).last_seen_at as number;
+  now = lastActivity + ACTIVITY_TTL_MS + 100;
   await service.sweep();
-  checkEqual('重连后旧 pending 不再确认', presenceCount(db), 1);
-  const stateAfterResume = db
-    .prepare('SELECT phase, generation_id, online_at FROM agent_presence_state WHERE actor_id = ?')
-    .get('agt_unit') as { phase: string; generation_id: string; online_at: number };
-  checkEqual('重连后保持 online', stateAfterResume.phase, 'online');
-  checkEqual('重连后保留原上线时间', stateAfterResume.online_at, onlineAt);
-
-  // 重复 close / 重复 sweep：只产生一条离线。
-  service.connectionClosed('agt_unit');
-  service.connectionClosed('agt_unit');
-  await service.flush();
-  now += 1_500;
-  await settleDrains();
-  const committedBeforeSweep = committed;
-  const frameCountBeforeSweep = frames.length;
+  checkEqual('活动 TTL 到期进入 pending', stateOf(db).phase, 'pending_offline');
+  checkEqual('pending 记录可用性过期点', stateOf(db).disconnect_observed_at, lastActivity + ACTIVITY_TTL_MS);
+  checkEqual('进入 pending 不立即写下线', presenceCount(db), 1);
+  now = lastActivity + ACTIVITY_TTL_MS + GRACE_MS - 100;
+  await service.sweep();
+  checkEqual('grace 前不确认下线', presenceCount(db), 1);
+  now = lastActivity + ACTIVITY_TTL_MS + GRACE_MS + 100;
   await service.sweep();
   await settleDrains();
-  check(
-    'sweep 确认下线后触发 outbox drain',
-    committed > committedBeforeSweep,
-    { committed, committedBeforeSweep },
-  );
-  check(
-    '人类 stream 收到 sweep 确认的下线通知',
-    frames
-      .slice(frameCountBeforeSweep)
-      .some(
-        (frame) =>
-          frame.includes('"source":"room.presence"') && frame.includes('"transition":"offline"'),
-      ),
-    frames.slice(frameCountBeforeSweep),
-  );
-  checkEqual('下线 outbox 已被消费', pendingOutbox(db), 0);
-  await service.sweep();
-  checkEqual('重复 close/sweep 只写一条下线', presenceCount(db), 2);
-  const offline = presenceRows(db).find((row) => row.transition === 'offline');
-  checkEqual('下线 occurred_at 为断开观察时刻', offline?.occurred_at, disconnectAt + 5_000);
-  checkEqual('正常下线 basis 为 observed', offline?.time_basis, 'observed');
+  checkEqual('grace 到期确认下线', presenceCount(db), 2);
+  const firstOffline = presenceRows(db).at(-1);
+  checkEqual('TTL 下线 transition', firstOffline?.transition, 'offline');
+  checkEqual('TTL 下线时间为最后活动 + TTL', firstOffline?.occurred_at, lastActivity + ACTIVITY_TTL_MS);
+  checkEqual('TTL 下线 basis 为 inferred', firstOffline?.time_basis, 'inferred');
+  checkEqual('下线后 phase 为 offline', stateOf(db).phase, 'offline');
 
-  // 超过 due 才重连：先确认旧下线，再写新上线。
-  now += 10_000;
-  await service.recordLogin('agt_unit');
-  const expiredDisconnectAt = now;
+  // 5. 离线后的第一个请求：先写新 generation 上线，再处理业务。
+  const offlineSeq = firstOffline?.timeline_seq ?? 0;
+  const restartAt = lastActivity + 10_000;
+  now = restartAt;
+  await service.touch('agt_unit');
+  const afterRestart = presenceRows(db).at(-1);
+  checkEqual('离线后请求写新上线', afterRestart?.transition, 'online');
+  check(
+    '新上线排在此前下线之后',
+    Boolean(afterRestart && afterRestart.timeline_seq > offlineSeq),
+    { offlineSeq, onlineSeq: afterRestart?.timeline_seq },
+  );
+  check(
+    '离线后请求使用新 generation',
+    afterRestart?.generation_id !== firstOffline?.generation_id,
+    { before: firstOffline?.generation_id, after: afterRestart?.generation_id },
+  );
+  const restartedGeneration = afterRestart?.generation_id;
+  await service.touch('agt_unit', restartAt);
+  await service.touch('agt_unit', restartAt + 1);
+  checkEqual('重复请求不重复 generation', presenceRows(db).filter((row) => row.transition === 'online').length, 2);
+  checkEqual('重复请求保持同一 generation', stateOf(db).generation_id, restartedGeneration);
+
+  // 6. pending 窗口内请求取消 pending，不产生新的上下线。
+  connected = false;
+  const closeAt = restartAt + 5_000;
+  now = closeAt;
   service.connectionClosed('agt_unit');
   await service.flush();
-  now = expiredDisconnectAt + 2_000;
-  await service.recordLogin('agt_unit');
+  const ttlExpiry = restartAt + ACTIVITY_TTL_MS;
+  checkEqual(
+    '最后连接关闭后可用性取 max(断连, 最后活动+TTL)',
+    stateOf(db).disconnect_observed_at,
+    Math.max(closeAt, ttlExpiry),
+  );
+  now = closeAt + 200;
+  await service.touch('agt_unit');
+  checkEqual('pending 窗口内请求取消 pending', stateOf(db).phase, 'online');
+  checkEqual('取消 pending 不新增事件', presenceCount(db), 3);
+  checkEqual('取消 pending 保留原 generation', stateOf(db).generation_id, restartedGeneration);
+  checkEqual('取消 pending 刷新 last_seen_at', stateOf(db).last_seen_at, closeAt + 200);
+
+  // 7. SSE 存活但长期无请求：sweep 兜底不能下线。
+  connected = true;
+  now = closeAt + 200_000;
+  await service.sweep();
+  checkEqual('有连接时长期无请求仍在线', stateOf(db).phase, 'online');
+  checkEqual('有连接时不写离线', presenceCount(db), 3);
+
+  // 8. 最后连接关闭且无请求：TTL + grace 后下线。
+  connected = false;
+  const lastSeen = stateOf(db).last_seen_at as number;
+  const closedAfterIdle = now;
+  service.connectionClosed('agt_unit');
+  await service.flush();
+  const idleExpiry = Math.max(closedAfterIdle, lastSeen + ACTIVITY_TTL_MS);
+  checkEqual('空闲断连的过期点', stateOf(db).disconnect_observed_at, idleExpiry);
+  now = idleExpiry + GRACE_MS + 1;
+  await service.sweep();
+  await settleDrains();
+  checkEqual('空闲断连后确认下线', presenceCount(db), 4);
+  checkEqual('空闲断连下线时间', presenceRows(db).at(-1)?.occurred_at, idleExpiry);
+  checkEqual('空闲断连下线 inferred', presenceRows(db).at(-1)?.time_basis, 'inferred');
+
+  // 9. 超 due 的请求：先确认旧下线，再写新上线。
+  now = idleExpiry + 20_000;
+  await service.touch('agt_unit');
+  const reopenedAt = now;
+  connected = false;
+  service.connectionClosed('agt_unit');
+  await service.flush();
+  const reopenExpiry = Math.max(reopenedAt, stateOf(db).last_seen_at! + ACTIVITY_TTL_MS);
+  now = reopenExpiry + GRACE_MS + 1;
+  await service.touch('agt_unit');
   const ordered = presenceRows(db).slice(-2);
-  const oldOffline = ordered[0];
-  const newOnline = ordered[1];
-  checkEqual('超 due 重连先写旧下线', oldOffline?.transition, 'offline');
-  checkEqual('超 due 重连后写新上线', newOnline?.transition, 'online');
+  checkEqual('超 due 请求先写旧下线', ordered[0]?.transition, 'offline');
+  checkEqual('超 due 请求后写新上线', ordered[1]?.transition, 'online');
   check(
-    '超 due 重连事件顺序为旧下线在前',
-    Boolean(oldOffline && newOnline && oldOffline.timeline_seq < newOnline.timeline_seq),
+    '超 due 事件顺序为旧下线在前',
+    Boolean(ordered[0] && ordered[1] && ordered[0].timeline_seq < ordered[1].timeline_seq),
     ordered,
   );
-  checkEqual('超 due 下线时间仍为断开时刻', oldOffline?.occurred_at, expiredDisconnectAt);
+  checkEqual('超 due 旧下线时间为过期点', ordered[0]?.occurred_at, reopenExpiry);
+  checkEqual('超 due 后状态为 online', stateOf(db).phase, 'online');
 
-  // pending 重启恢复：同一 DB 新建 service，无需内存状态。
-  now += 100;
-  const pendingDisconnectAt = now;
-  service.connectionClosed('agt_unit');
-  await service.flush();
+  // 10. 重启恢复：last_seen_at 从 SQLite 恢复，online 收敛为 pending。
+  const recoveryTouch = now;
+  connected = true;
+  await service.touch('agt_unit');
   const restarted = new AgentPresenceTimeline(d1, {
-    graceMs: 1_000,
+    graceMs: GRACE_MS,
+    activityTtlMs: ACTIVITY_TTL_MS,
+    touchThrottleMs: TOUCH_THROTTLE_MS,
     now: () => now,
+    hasConnection: () => false,
     onError: (error) => errors.push(error),
   });
-  const pendingBefore = presenceCount(db);
-  now = pendingDisconnectAt + 1_500;
-  await restarted.sweep();
-  checkEqual('重启后确认遗留 pending 下线', presenceCount(db), pendingBefore + 1);
-
-  // 崩溃恢复：online 转 pending inferred，确认后如实标记 inferred。
-  await restarted.recordLogin('agt_unit');
-  const crashAt = now;
-  const crashed = new AgentPresenceTimeline(d1, {
-    graceMs: 1_000,
-    now: () => now,
-    onError: (error) => errors.push(error),
-  });
-  const recovered = await crashed.recover();
+  const beforeRecover = presenceCount(db);
+  now = recoveryTouch + 500;
+  const recovered = await restarted.recover();
   checkEqual('启动扫描恢复一条 online', recovered, 1);
-  checkEqual('崩溃恢复不立即写离线', presenceCount(db), pendingBefore + 2);
-  now = crashAt + 1_500;
-  await crashed.sweep();
-  const inferred = presenceRows(db).at(-1);
-  checkEqual('崩溃恢复写离线', inferred?.transition, 'offline');
-  checkEqual('崩溃恢复标记 inferred', inferred?.time_basis, 'inferred');
-  checkEqual('崩溃恢复 occurred_at 为重启观察时刻', inferred?.occurred_at, crashAt);
+  checkEqual('恢复后 phase 为 pending', stateOf(db).phase, 'pending_offline');
+  checkEqual(
+    '恢复使用持久化的 last_seen_at',
+    stateOf(db).disconnect_observed_at,
+    recoveryTouch + ACTIVITY_TTL_MS,
+  );
+  checkEqual('恢复不立即写离线', presenceCount(db), beforeRecover);
+  now = recoveryTouch + ACTIVITY_TTL_MS + GRACE_MS + 1;
+  await restarted.sweep();
+  checkEqual('恢复后到期确认下线', presenceCount(db), beforeRecover + 1);
+  checkEqual('恢复下线 basis 为 inferred', presenceRows(db).at(-1)?.time_basis, 'inferred');
+  checkEqual('恢复下线时间为最后活动 + TTL', presenceRows(db).at(-1)?.occurred_at, recoveryTouch + ACTIVITY_TTL_MS);
+
+  // 11. 迁移后遗留的 online 行（last_seen 为 NULL）不崩溃：回退到 online_at。
+  await restarted.touch('agt_unit');
+  db.prepare('UPDATE agent_presence_state SET last_seen_at = NULL WHERE actor_id = ?').run('agt_unit');
+  const legacyOnlineAt = stateOf(db).online_at;
+  now += 500;
+  const legacyRecover = new AgentPresenceTimeline(d1, {
+    graceMs: GRACE_MS,
+    activityTtlMs: ACTIVITY_TTL_MS,
+    now: () => now,
+    hasConnection: () => false,
+    onError: (error) => errors.push(error),
+  });
+  await legacyRecover.recover();
+  checkEqual('last_seen 为空时 pending 不崩溃', stateOf(db).phase, 'pending_offline');
+  checkEqual(
+    'last_seen 为空时回退 online_at',
+    stateOf(db).disconnect_observed_at,
+    legacyOnlineAt + ACTIVITY_TTL_MS,
+  );
+  now = legacyOnlineAt + ACTIVITY_TTL_MS + GRACE_MS + 1;
+  await legacyRecover.sweep();
+  checkEqual('遗留 online 行收敛为 offline', stateOf(db).phase, 'offline');
+  checkEqual(
+    '遗留行离线时间为 online_at + TTL',
+    presenceRows(db).at(-1)?.occurred_at,
+    legacyOnlineAt + ACTIVITY_TTL_MS,
+  );
+
   checkEqual('状态机测试运行期间 invariants 不变', snapshotInvariants(db), before);
 
-  // 事务回滚：触发器让 presence 行写入失败，state/events/outbox 必须整体回滚。
+  // 12. 事务回滚：触发器让 presence 行写入失败，state/events/outbox 必须整体回滚。
   db.exec(`
     CREATE TRIGGER fail_presence_insert BEFORE INSERT ON room_presence_events
     BEGIN SELECT RAISE(ABORT, 'presence test failure'); END;
@@ -268,9 +409,9 @@ export async function runAgentPresenceUnitChecks(): Promise<void> {
     events: (db.prepare('SELECT COUNT(*) AS n FROM events').get() as { n: number }).n,
     outbox: (db.prepare('SELECT COUNT(*) AS n FROM outbox').get() as { n: number }).n,
     presence: presenceCount(db),
-    state: db.prepare('SELECT phase FROM agent_presence_state WHERE actor_id = ?').get('agt_unit'),
+    state: db.prepare('SELECT phase, revision FROM agent_presence_state WHERE actor_id = ?').get('agt_unit'),
   };
-  await service.recordLogin('agt_unit');
+  await service.touch('agt_unit').catch((error) => errors.push(error));
   check('写入失败进入错误处理而不是静默成功', errors.length > 0, errors.length);
   checkEqual('失败后 presence 不新增', presenceCount(db), beforeFailure.presence);
   checkEqual(
@@ -286,10 +427,10 @@ export async function runAgentPresenceUnitChecks(): Promise<void> {
   checkEqual(
     '失败后状态不推进',
     JSON.stringify(db.prepare('SELECT phase FROM agent_presence_state WHERE actor_id = ?').get('agt_unit')),
-    JSON.stringify(beforeFailure.state),
+    JSON.stringify({ phase: (beforeFailure.state as { phase: string }).phase }),
   );
   db.exec('DROP TRIGGER fail_presence_insert');
-  await service.recordLogin('agt_unit');
+  await service.touch('agt_unit');
   checkEqual('移除失败注入后可正常上线', presenceRows(db).at(-1)?.transition, 'online');
   await settleDrains();
 

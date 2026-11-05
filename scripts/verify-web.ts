@@ -115,6 +115,8 @@ async function startServer(): Promise<{
       PUBLIC_ORIGIN: base,
       // 测试专用短宽限；生产默认仍由 contracts/limits.ts 决定。
       AGENT_PRESENCE_GRACE_MS: '1200',
+      AGENT_PRESENCE_ACTIVITY_TTL_MS: '1200',
+      AGENT_PRESENCE_TOUCH_THROTTLE_MS: '100',
       AGENT_PRESENCE_SWEEP_MS: '150',
     },
     stdout: 'ignore',

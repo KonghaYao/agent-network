@@ -96,6 +96,8 @@ async function startServer(dataDir: string): Promise<{
       DATA_DIR: dataDir,
       PUBLIC_ORIGIN: base,
       AGENT_PRESENCE_GRACE_MS: String(GRACE_MS),
+      AGENT_PRESENCE_ACTIVITY_TTL_MS: String(GRACE_MS),
+      AGENT_PRESENCE_TOUCH_THROTTLE_MS: '100',
       AGENT_PRESENCE_SWEEP_MS: '150',
     },
     stdout: 'ignore',
@@ -145,13 +147,12 @@ export async function runPresenceRestartAcceptance(): Promise<void> {
       name: 'Restart Human',
     });
     const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
-    await rawTool(agentToken, 'network_register', {
+    const agentIdentity = await rawTool<{ actor_id: string }>(agentToken, 'network_register', {
       request_id: requestId('restart_agent'),
       kind: 'agent',
       name: 'Restart Agent',
       agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
     });
-    const agentIdentity = await rawTool<{ actor_id: string }>(agentToken, 'network_me', {});
     const roomDetail = await rawTool<{ room: { room_id: string; head_seq: string } }>(
       humanToken,
       'network_room_create',
@@ -203,9 +204,10 @@ export async function runPresenceRestartAcceptance(): Promise<void> {
     );
     checkEqual('崩溃恢复写一条 inferred 下线', inferred?.time_basis, 'inferred');
     check(
-      '崩溃恢复时间取重启观察时刻',
-      Math.abs(Number(inferred?.occurred_at) - restartAt) < 5_000,
-      { occurred_at: inferred?.occurred_at, restartAt },
+      '崩溃恢复时间取最后活动 + TTL，不晚于重启观察 + TTL',
+      Number(inferred?.occurred_at) <= restartAt + GRACE_MS + 1_000 &&
+        Number(inferred?.occurred_at) >= restartAt - (GRACE_MS + 8_000),
+      { occurred_at: inferred?.occurred_at, restartAt, ttl: GRACE_MS },
     );
     checkEqual(
       '崩溃恢复不伪造上线',
@@ -243,11 +245,11 @@ export async function runPresenceRestartAcceptance(): Promise<void> {
       .filter((item) => item.transition === 'offline')
       .sort((left, right) => Number(left.occurred_at) - Number(right.occurred_at))
       .at(-1);
-    checkEqual('pending 重启后 basis 为 observed', observed?.time_basis, 'observed');
+    checkEqual('pending 重启后 basis 为 inferred', observed?.time_basis, 'inferred');
     check(
-      'pending 重启后 occurred_at 为断开时刻',
-      Math.abs(Number(observed?.occurred_at) - closeAt) < 5_000,
-      { occurred_at: observed?.occurred_at, closeAt },
+      'pending 重启后 occurred_at 为可用性过期点附近',
+      Math.abs(Number(observed?.occurred_at) - closeAt) < GRACE_MS + 3_000,
+      { occurred_at: observed?.occurred_at, closeAt, ttl: GRACE_MS },
     );
 
     const headAfter = (

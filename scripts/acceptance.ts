@@ -348,10 +348,10 @@ async function main(): Promise<void> {
       room_id: roomId,
     });
     check(
-      '未 login 的 Agent 成员显示离线',
+      '近期有请求的 Agent 无需 login 也显示在线',
       presenceBeforeLogin.members
         .filter((member) => member.kind === 'agent')
-        .every((member) => member.online === false),
+        .every((member) => member.online === true),
       presenceBeforeLogin.members,
     );
 

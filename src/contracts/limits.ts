@@ -97,6 +97,13 @@ export const LIMITS = {
   reconnectStableMs: 30_000,
   /** Agent 最后连接断开后等待重连的宽限；期间重连不产生上下线记录。 */
   agentPresenceGraceMs: 30_000,
+  /**
+   * 无 SSE 连接时，最近一次 Agent MCP 请求仍视为在线的窗口（毫秒）。
+   * 20 秒 inbox 轮询与任意工具调用都会刷新；超过该窗口才进入 pending。
+   */
+  agentPresenceActivityTtlMs: 60_000,
+  /** 活动时间写库节流；小于该间隔的重复请求只读不写，避免写放大。 */
+  agentPresenceTouchThrottleMs: 5_000,
   /** 上下线宽限扫描周期。 */
   agentPresenceSweepMs: 5_000,
   /** 单次扫描确认的 pending 数量上限。 */

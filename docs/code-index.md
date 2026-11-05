@@ -36,7 +36,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 - 写操作全部经 `src/storage/transactions/runner.ts` 的 `runIdempotent`；`operations` 唯一键取得所有权，业务写入与 `src/storage/guards.ts` 条件闸门在同一 `db.batch()` 中提交。
 - 闸门表在 `migrations/0001_initial.sql` 建立，`0002_named_guards.sql` 为约束命名，使 SQLite CHECK 错误文本可映射为业务错误。
 - 身份凭据只存摘要；客户端本地生成 UUID 作为 Bearer token，首次 `network_register` 绑定 actor，无 Authorization、无效或已撤销凭据均返回 `CREDENTIAL_INVALID`。每个独立 Agent 会话用独立 token 隔离身份。统一 stream 是唯一资源与订阅 URI，每连接 1 个 URI；旧 `agentnet://me`、inbox 与 room head 已删除，读取或订阅返回 `INVALID_ARGUMENT`。成员移除只发 `room.membership`，不再结束流。订阅由客户端宿主发起，技能正文明确“已订阅时自动唤醒、不轮询；无订阅或断线才用 sync 兜底”。
-- Agent 上线是显式动作：`src/realtime/presence.ts` 的 `login` 校验 actor 为已注册 Agent（人类返回 `INVALID_ARGUMENT`），把 actor 标记为在线并记录 `since`；`src/realtime/hub.ts` 把连接注册到 `actor:{id}`，人类立即接收，Agent 在 login 前不接收任何帧。最后一条连接断开即离线；在线期间新连接继承在线，重连后需要重新 login。`presence` 以 actor 为键，`presenceOf` 查询失败返回 `null`；`network_room_get` 为 Agent 成员补充 `online`，网页展示在线/离线/未知。离线期间事件留在 SQLite，login 返回 `pending_count` 与 `inbox_head_seq`，客户端随后正常读取。断线检测依赖 `request.signal` 与 `LIMITS.keepaliveMs`。
+- Agent 上线门控与在线可用性分离：`src/realtime/presence.ts` 的 `login` 校验 actor 为已注册 Agent（人类返回 `INVALID_ARGUMENT`），把 actor 标记为“已武装推送”并记录 `since`；`src/realtime/hub.ts` 把连接注册到 `actor:{id}`，人类立即接收，Agent 在 login 前不接收任何帧。`network_room_get.online` 读取可用性：保持 SSE 连接，或 `agent_presence_state.phase` 为 `online`/`pending_offline`（最近 60 秒内有任意已认证 MCP 请求）；`presenceOf` 查询失败返回 `null`。`src/app.ts` 在认证后对每个 Agent POST 触碰 `AgentPresenceTimeline.touch`，在线刷新按 5 秒节流，离线→上线与 pending 取消不节流；写失败只记录日志，不影响业务响应。最后一条连接关闭或 sweep 发现无连接且超过活动 TTL 时进入 pending，30 秒 grace 后确认下线，时间线 `occurred_at` 取最后活动 + TTL，`time_basis = 'inferred'`；请求/连接恢复上线为 `observed`。`0007_agent_presence_activity.sql` 增加 `last_seen_at`（仅 online 行以 `online_at` 回填）。离线期间事件留在 SQLite，login 返回 `pending_count` 与 `inbox_head_seq`，客户端随后正常读取。
 - Agent 上下线时间线：`src/realtime/presence-timeline.ts` 维护 `agent_presence_state` 的 revision CAS、30s grace、5s sweep 与启动恢复；`room_presence_events` 只记录 direct 人类↔Agent 会话，`presence_pending_rooms` 保存断开时的房间集合。有效上线要求显式 login 且至少一条连接；最后连接断开只写 pending，grace 内重连取消，确认下线使用断开观察时刻，崩溃恢复使用 `time_basis="inferred"`。同事务写 presence 行、`agent_presence_changed` 房间事件与 `room:{id}` outbox，不更新 `rooms.head_seq` / `last_message_id` / `last_read_seq` / `pending_count`，不写 inbox。`src/domain/timeline.ts` 实现仅人类可用的 `network_history_list { view:"timeline" }`，展示 key 为 `(occurred_at, commit_seq)`，before 固定 snapshot，after 按提交序号补读；`network_sync` 在 SQL 层过滤 `agent_presence_changed`。网页 `src/web/chat-session-script.ts` 对 human 使用 timeline，`src/web/chat-render-script.ts` 居中渲染上下线行，侧栏预览仍取真实 `last_message`。
 - 技能面：`capabilities.extensions` 声明 `io.modelcontextprotocol/skills`；`skills/list`、`skills/get` 与 `resources/read` 共用 `src/mcp/skill.ts` 的同一份正文与 digest。`src/app.ts` 为两个技能方法移除结果级 `_meta`，规避 rmcp 3.5.1 的自定义结果误判。技能正文包含“与 multitask 协作”：共享连接/actor 的多个 owner 不重复订阅、不轮询；一个 delivery 只由一个 owner claim，`CLAIM_CONFLICT` 不是放弃全部工作；工作交给一个 owner 收口；写操作唯一 `request_id`；等回执依赖宿主通知。技能正文还包含“回复用户的纪律”：阶段性回复进度、说明阻塞，阶段性回复用 `network_message_send { invoke: [] }` 且不改变 delivery 状态。`/skills/harness-*.md` 只记录 Codex/ChatGPT Web/Peri 的客户端接入差异，不拆分 MCP、不改变工具契约，也不进入 `skills/list`；主文档 `agent-network-curl.md` 用相对链接引用它们。
 - 手机扫码是纯客户端：token 放在 `/#t=` fragment，二维码由 `src/web/qr.ts` 现场编码；没有服务端 handoff 工具、`/j` 路由、密钥或迁移。二维码携带长期凭据，UI 与文档不得声称过期、一次性或“已扫码”。
@@ -81,7 +81,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 历史页权威 `sender_kind` | `src/domain/messages.ts`、`src/mcp/outputs.ts` |
 | 上下线状态机、grace/sweep/恢复与 CAS | `src/realtime/presence-timeline.ts` |
 | 人类 timeline 分页与 presence 行 | `src/domain/timeline.ts`、`src/mcp/outputs.ts` |
-| 上下线 schema 与 CAS 闸门 | `migrations/0006_agent_presence.sql` |
+| 上下线 schema 与 CAS 闸门 | `migrations/0006_agent_presence.sql`、`migrations/0007_agent_presence_activity.sql` |
 | 上下线单元/端到端/重启恢复验收 | `scripts/lib/presence-unit.ts`、`scripts/lib/presence-acceptance.ts`、`scripts/lib/presence-restart.ts` |
 | 资源与私有缓存 | `src/mcp/resources.ts` |
 | SEP-2640 技能（`skills/list`、`skills/get`、SKILL.md 资源） | `src/mcp/skill.ts` |
@@ -96,7 +96,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 统一事件信封与 `actor:{id}` 扇出 | `src/realtime/stream.ts` |
 | actor presence 与订阅广播 | `src/realtime/hub.ts`、`src/realtime/presence.ts` |
 | 留存与新序号下界 | `src/maintenance.ts` |
-| SQLite schema | `migrations/0001_initial.sql`、`0002_named_guards.sql`、`0003_room_files.sql`、`0004_mcp_events.sql`、`0005_agent_archive.sql`、`0006_agent_presence.sql` |
+| SQLite schema | `migrations/0001_initial.sql`、`0002_named_guards.sql`、`0003_room_files.sql`、`0004_mcp_events.sql`、`0005_agent_archive.sql`、`0006_agent_presence.sql`、`0007_agent_presence_activity.sql` |
 | 部署（Bun + 反向代理） | `README.md` |
 | 协议验收 | `scripts/verify-protocol.ts` |
 | Harness 静态断言（200/Markdown/关键标记/相对链接/无凭据） | `scripts/verify-protocol.ts` |
@@ -107,8 +107,8 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 ## 验证
 
 - `bun run typecheck`
-- `bun run test:protocol`：默认 `http://127.0.0.1:8792`，255 项（events 启用 270 项；含 37 个工具、房间文件工具与 Drive 开关联动、Agent 归档描述、token 重发描述与输入/输出 schema、`agents_get` 输入/输出 schema、唯一 `agentnet://stream` 资源、旧 URI 读取/订阅返回 `INVALID_ARGUMENT`、claim/message_send 描述、room_get 的 online 与 history 的 claimed 时间/`sender_kind` schema、`network_login` 注册与未注册调用返回 `CREDENTIAL_INVALID`、四份 Harness 指南的 200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界断言、微信风首页空状态、会话搜索框、扫码入口、弹窗、fragment 采纳脚本与 `/j` 端点不存在）
-- `bun run test:acceptance`：251 项（`EVENTS_ACCEPTANCE=1` 时 273 项；含显式上线、未上线订阅收不到提示、离线排队与上线补读、断线后重新上线、room_get 在线/离线/未知、人类 login 返回 `INVALID_ARGUMENT`、全局改名、Agent token 注销重发与重放拒绝、Agent 归档/取消归档/重复归档幂等与 `agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变、群 @、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执与统一 stream 通知、旧 URI 拒绝、网页 human 单聊/群聊 invoke 回归）
+- `bun run test:protocol`：默认 `http://127.0.0.1:8792`，321 项（events 启用 336 项；含 37 个工具、房间文件工具与 Drive 开关联动、Agent 归档描述、token 重发描述与输入/输出 schema、`agents_get` 输入/输出 schema、唯一 `agentnet://stream` 资源、旧 URI 读取/订阅返回 `INVALID_ARGUMENT`、claim/message_send 描述、room_get 的 online 与 history 的 claimed 时间/`sender_kind` schema、`network_login` 注册与未注册调用返回 `CREDENTIAL_INVALID`、四份 Harness 指南的 200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界断言、微信风首页空状态、会话搜索框、扫码入口、弹窗、fragment 采纳脚本与 `/j` 端点不存在，以及 presence 活动 TTL/pending/节流/回填单元检查）
+- `bun run test:acceptance`：313 项（未启用 events 闭环；`EVENTS_ACCEPTANCE=1` 时另含 events 用例；含显式上线、未上线订阅收不到提示、离线排队与上线补读、断线后重新上线、无 SSE 轮询保持在线与停止后按最后活动 + TTL 下线、离线后首个请求先上线再回复、room_get 在线/离线/未知、人类 login 返回 `INVALID_ARGUMENT`、全局改名、Agent token 注销重发与重放拒绝、Agent 归档/取消归档/重复归档幂等与 `agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变、群 @、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执与统一 stream 通知、旧 URI 拒绝、网页 human 单聊/群聊 invoke 回归）
 - `bun run test:drive`：47 项（MCPP Files 上传、公开下载、`drive_file_info` 与 Drive 生命周期）
 - `DATA_DIR=.data bun scripts/verify-room-files.ts`：187 项（bind/list/get/delete、上传者与群 owner 权限、200 个 / 1 GiB 配额、30 天 TTL 上限、墓碑、公开 URL、HEAD/Range/416/304/`?download=1`、P0 安全头、`room.file` informational 事件，以及同源文件链接解析与消息提交后自动归档（含 final_body）的幂等/跨房间/他人/删除/过期/配额跳过）
 - `bun run test:events`：314 项（能力与 schema 描述、challenge/HMAC、订阅过滤、动作/信息事件、500 重试与 410/413 停止、暂停/刷新恢复、撤销/移除/过期、重启持久化、cursor/truncated、双签、订阅配额、日志脱敏、文件日志落盘/轮转/fail-open、IPv4 优先多地址回退与单地址超时、全球单播 SSRF allowlist 与公网 IPv4/IPv6、DRIVE_DISABLED 下含文件链接消息仍成功）

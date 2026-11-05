@@ -662,9 +662,9 @@ async function main(): Promise<void> {
       room_id: roomAD,
     });
     checkEqual(
-      '未 login 的 Agent 在线状态为 false',
+      '无 SSE 但近期请求的 Agent 显示在线',
       offlineDetail.members.find((member) => member.actor_id === d.actor_id)?.online,
-      false,
+      true,
     );
     const offlineSent = await sendMessage(agentA, roomAD, 'offline-message', {
       invoke: [d.actor_id],
