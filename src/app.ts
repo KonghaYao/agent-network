@@ -43,6 +43,7 @@ const PROTOCOL_VERSION_META = 'io.modelcontextprotocol/protocolVersion';
 const MODERN_VERSION = '2026-07-28';
 const FILE_ID = new RegExp(FILE_ID_PATTERN);
 const SKILLS_ROOT = resolve(import.meta.dir, '../public/skills');
+const AGENT_ICONS_ROOT = resolve(import.meta.dir, '../public/agent-icons');
 
 const MCP_CORS_METHODS = 'POST, GET, DELETE';
 const UPLOAD_CORS_METHODS = 'POST';
@@ -647,6 +648,23 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
       'content-type': contentType,
       'cache-control': 'public, max-age=60',
       'access-control-allow-origin': '*',
+    });
+  });
+
+  // 本地品牌头像与授权说明：只允许 agent-icons 目录下的白名单文件，拒绝路径穿越。
+  app.get('/agent-icons/:file', async (c) => {
+    const file = c.req.param('file');
+    if (!/^(?:[a-z0-9][a-z0-9-]*\.svg|LICENSE|ATTRIBUTION\.md)$/u.test(file)) return c.notFound();
+    const path = resolve(AGENT_ICONS_ROOT, file);
+    if (!path.startsWith(`${AGENT_ICONS_ROOT}${sep}`)) return c.notFound();
+    const body = await Bun.file(path).text().catch(() => null);
+    if (body === null) return c.notFound();
+    return c.body(body, 200, {
+      'content-type': file.endsWith('.svg')
+        ? 'image/svg+xml; charset=utf-8'
+        : 'text/plain; charset=utf-8',
+      'cache-control': 'public, max-age=86400',
+      'x-content-type-options': 'nosniff',
     });
   });
 

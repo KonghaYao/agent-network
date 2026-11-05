@@ -2,6 +2,7 @@ import { MESSAGE_FILE_ID_SOURCE } from '../contracts/file-links';
 import { LIMITS } from '../contracts/limits';
 import { CHAT_AGENTS_SCRIPT } from './chat-agents-script';
 import { CHAT_ARCHIVE_SCRIPT } from './chat-archive-script';
+import { CHAT_AVATAR_SCRIPT } from './chat-avatar-script';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
 import { CHAT_LIST_SCRIPT } from './chat-list-script';
@@ -107,6 +108,7 @@ let groupLoadSeq = 0;
 let stickyStatus = '';
 
 ${CHAT_LIST_SCRIPT}
+${CHAT_AVATAR_SCRIPT}
 ${CHAT_ARCHIVE_SCRIPT}
 ${CHAT_ROOM_MENU_SCRIPT}
 ${CHAT_MEMBERS_SCRIPT}

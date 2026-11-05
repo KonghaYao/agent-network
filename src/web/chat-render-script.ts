@@ -246,7 +246,11 @@ function messageItem(item) {
   element.className = 'msg' + (mine ? ' mine has-receipt' : '');
   element.dataset.messageId = item.message_id;
   const sender = senderName(item.sender_id);
-  const avatar = avatarElement(mine && identity ? identity.name : sender, null, 'msg-avatar');
+  const avatar = avatarElement(
+    mine && identity ? identity.name : sender,
+    agent ? 'agent' : null,
+    'msg-avatar'
+  );
   const content = document.createElement('div');
   content.className = 'msg-content';
   if (!mine && room && room.kind === 'group') {

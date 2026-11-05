@@ -915,6 +915,402 @@ async function fileListCallCount(page: Page): Promise<number> {
   return mcpCallCount(page, 'network_room_file_list');
 }
 
+const AVATAR_ICON_FILES = [
+  'codex-color.svg',
+  'claude-color.svg',
+  'anthropic.svg',
+  'gemini-color.svg',
+  'deepseek-color.svg',
+  'qwen-color.svg',
+  'grok.svg',
+  'xai.svg',
+  'mistral-color.svg',
+  'perplexity-color.svg',
+  'cursor.svg',
+  'githubcopilot.svg',
+  'openai.svg',
+  'meta-color.svg',
+];
+
+const AVATAR_MAPPINGS: [string, string | null][] = [
+  ['Codex 测试', '/agent-icons/codex-color.svg'],
+  ['Claude 测试员', '/agent-icons/claude-color.svg'],
+  ['Gemini 2.5', '/agent-icons/gemini-color.svg'],
+  ['DeepSeek R1', '/agent-icons/deepseek-color.svg'],
+  ['Qwen 通义千问', '/agent-icons/qwen-color.svg'],
+  ['通义千问', '/agent-icons/qwen-color.svg'],
+  ['千问', '/agent-icons/qwen-color.svg'],
+  ['Grok 4', '/agent-icons/grok.svg'],
+  ['xAI', '/agent-icons/xai.svg'],
+  ['Mistral Large', '/agent-icons/mistral-color.svg'],
+  ['Perplexity Sonar', '/agent-icons/perplexity-color.svg'],
+  ['Cursor Agent', '/agent-icons/cursor.svg'],
+  ['GitHub Copilot', '/agent-icons/githubcopilot.svg'],
+  ['Copilot', '/agent-icons/githubcopilot.svg'],
+  ['OpenAI GPT', '/agent-icons/openai.svg'],
+  ['GPT-5', '/agent-icons/openai.svg'],
+  ['ChatGPT', '/agent-icons/openai.svg'],
+  ['Anthropic', '/agent-icons/anthropic.svg'],
+  ['Meta Llama', '/agent-icons/meta-color.svg'],
+  ['Llama 3', '/agent-icons/meta-color.svg'],
+  ['Google Bard', '/agent-icons/gemini-color.svg'],
+  ['琶洲-dsh-dsh', null],
+  ['Ver 部署 Agent', null],
+  ['Peri 部署 Agent', null],
+];
+
+interface AvatarAgent {
+  actor: Actor;
+  token: string;
+}
+
+async function registerAvatarAgent(humanToken: string, name: string): Promise<AvatarAgent> {
+  const token = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+  const actor = await rawTool<Actor>(token, 'network_register', {
+    request_id: requestId('avatar_reg'),
+    kind: 'agent',
+    name,
+    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+  });
+  await rawTool(humanToken, 'network_contact_add', {
+    request_id: requestId('avatar_contact'),
+    agent_session_id: actor.agent_session_id,
+  });
+  return { actor, token };
+}
+
+/**
+ * 品牌头像验收：资源可访问、关键词映射、侧栏/消息/成员/归档集成、
+ * 群聊 2×2 不变、暗色 390px 与图片失败回退。
+ *
+ * 独立创建 Agent 与房间，放在主流程末尾执行，避免影响既有列表/联系人计数。
+ */
+async function runAvatarAcceptance(
+  browser: Browser,
+  base: string,
+  humanToken: string,
+): Promise<void> {
+  console.log('  品牌头像');
+  for (const file of AVATAR_ICON_FILES) {
+    const response = await fetch(`${base}/agent-icons/${file}`);
+    const body = await response.text();
+    checkEqual(`图标 ${file} HTTP 200`, response.status, 200);
+    check(
+      `图标 ${file} content-type`,
+      (response.headers.get('content-type') ?? '').startsWith('image/svg+xml'),
+      response.headers.get('content-type'),
+    );
+    check(`图标 ${file} 非空且为 SVG`, body.trimStart().startsWith('<svg') && body.length > 0);
+  }
+  const licenseResponse = await fetch(`${base}/agent-icons/LICENSE`);
+  const licenseText = await licenseResponse.text();
+  check(
+    '图标 LICENSE 可访问且为 MIT',
+    licenseResponse.status === 200 && licenseText.includes('MIT License') &&
+      licenseText.includes('LobeHub'),
+  );
+  const attributionResponse = await fetch(`${base}/agent-icons/ATTRIBUTION.md`);
+  const attributionText = await attributionResponse.text();
+  check(
+    '图标 ATTRIBUTION 可访问',
+    attributionResponse.status === 200 && attributionText.includes('LobeHub Icons'),
+  );
+  checkEqual(
+    '未知图标返回 404',
+    (await fetch(`${base}/agent-icons/unknown.svg`)).status,
+    404,
+  );
+  checkEqual(
+    '图标路径穿越返回 404',
+    (await fetch(`${base}/agent-icons/..%2Fpackage.json`)).status,
+    404,
+  );
+
+  const codex = await registerAvatarAgent(humanToken, 'Codex 测试');
+  const plain = await registerAvatarAgent(humanToken, '琶洲-dsh-dsh');
+  const gemini = await registerAvatarAgent(humanToken, 'Gemini 候选');
+  const codexRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('avatar_room'),
+    kind: 'direct',
+    members: [codex.actor.actor_id],
+  });
+  const plainRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('avatar_room'),
+    kind: 'direct',
+    members: [plain.actor.actor_id],
+  });
+  const groupRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('avatar_room'),
+    kind: 'group',
+    title: '头像测试群',
+    members: [codex.actor.actor_id, plain.actor.actor_id],
+  });
+  await rawTool(codex.token, 'network_message_send', {
+    request_id: requestId('avatar_msg'),
+    client_message_id: crypto.randomUUID(),
+    room_id: codexRoom.room.room_id,
+    body: 'Codex 的直聊消息',
+  });
+  await rawTool(codex.token, 'network_message_send', {
+    request_id: requestId('avatar_msg'),
+    client_message_id: crypto.randomUUID(),
+    room_id: groupRoom.room.room_id,
+    body: '群里的 Codex 消息',
+  });
+
+  const { context, page } = await makeContext(
+    browser,
+    humanToken,
+    { width: 1280, height: 800 },
+    [],
+    false,
+  );
+  const externalRequests: string[] = [];
+  page.on('request', (request) => {
+    const url = request.url();
+    if (url.startsWith('http') && !url.startsWith(base)) externalRequests.push(url);
+  });
+  await page.goto(`${base}/`);
+  await waitRoomListName(page, 'Codex 测试');
+  await page.waitForFunction(
+    `(() => {
+      const img = document.querySelector(${JSON.stringify(`${roomLink(codexRoom.room.room_id)} .avatar-img`)});
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+
+  const mapping = (await page.evaluate(
+    `(() => {
+      const names = ${JSON.stringify(AVATAR_MAPPINGS.map(([name]) => name))};
+      return names.map(function (name) {
+        const value = agentAvatarFor(name);
+        return {
+          name: name,
+          src: value ? value.src : null,
+          brand: value ? value.brand : null,
+          mono: value ? value.mono : null
+        };
+      });
+    })()`,
+  )) as { name: string; src: string | null; brand: string | null; mono: boolean | null }[];
+  const expectedByName = new Map(AVATAR_MAPPINGS);
+  for (const item of mapping) {
+    checkEqual(`关键词映射 ${item.name}`, item.src, expectedByName.get(item.name) ?? null);
+  }
+  const monoFlags = (await page.evaluate(
+    `(() => {
+      const names = ['OpenAI', 'Anthropic', 'Grok', 'xAI', 'Cursor', 'GitHub Copilot', 'Codex', 'Claude'];
+      return names.map(function (name) {
+        const value = agentAvatarFor(name);
+        return value ? value.mono : null;
+      });
+    })()`,
+  )) as (boolean | null)[];
+  check(
+    '单色与彩色图标标记正确',
+    monoFlags.every((value, index) => value === (index < 6)),
+    monoFlags,
+  );
+
+  const sidebar = (await page.evaluate(
+    `(() => {
+      function read(roomId) {
+        const link = document.querySelector('#room-list a.room-item[href="/c/' + roomId + '"]');
+        if (!link) return null;
+        const avatar = link.querySelector('.avatar');
+        const image = avatar ? avatar.querySelector('img.avatar-img') : null;
+        return {
+          src: image ? image.getAttribute('src') : null,
+          text: avatar ? avatar.textContent : null,
+          icon: avatar ? avatar.classList.contains('avatar-icon') : false,
+          cells: link.querySelectorAll('.avatar-cell').length
+        };
+      }
+      return {
+        codex: read(${JSON.stringify(codexRoom.room.room_id)}),
+        plain: read(${JSON.stringify(plainRoom.room.room_id)}),
+        group: read(${JSON.stringify(groupRoom.room.room_id)})
+      };
+    })()`,
+  )) as Record<string, { src: string | null; text: string | null; icon: boolean; cells: number } | null>;
+  checkEqual('侧栏 Codex 品牌图标', sidebar.codex?.src, '/agent-icons/codex-color.svg');
+  checkEqual('侧栏未命中保留首字', sidebar.plain?.src, null);
+  checkEqual('侧栏未命中显示首字', sidebar.plain?.text, '琶');
+  checkEqual('侧栏未命中不标记品牌图标', sidebar.plain?.icon, false);
+  checkEqual('群聊头像仍为 2×2', sidebar.group?.cells, 4);
+  checkEqual('群聊不渲染单图图标', sidebar.group?.src, null);
+
+  const pageHtml = await page.content();
+  check(
+    '页面不引用外链图标',
+    !pageHtml.includes('unpkg.com') && !pageHtml.includes('raw.githubusercontent.com'),
+  );
+  check('页面无外部请求', externalRequests.length === 0, externalRequests);
+
+  await page.goto(`${base}/c/${codexRoom.room.room_id}`);
+  await waitRoom(page, codexRoom.room.room_id, 'Codex 测试');
+  await page.waitForFunction(
+    `(() => {
+      const img = document.querySelector('#messages .msg .msg-avatar img.avatar-img');
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  checkEqual(
+    'Agent 消息气泡使用品牌图标',
+    await page.locator('#messages .msg .msg-avatar img.avatar-img').first().getAttribute('src'),
+    '/agent-icons/codex-color.svg',
+  );
+
+  await page.goto(`${base}/c/${groupRoom.room.room_id}`);
+  await waitRoom(page, groupRoom.room.room_id, '头像测试群');
+  await page.waitForFunction(
+    `(() => {
+      const img = document.querySelector('#messages .msg .msg-avatar img.avatar-img');
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  checkEqual(
+    '群聊 Agent 消息使用品牌图标',
+    await page.locator('#messages .msg .msg-avatar img.avatar-img').first().getAttribute('src'),
+    '/agent-icons/codex-color.svg',
+  );
+
+  await page.locator('#add-members').click();
+  await page.locator('#members-modal').waitFor({ state: 'visible' });
+  await page.waitForFunction(
+    `document.querySelectorAll('#members-current .member-roster-item').length >= 3`,
+  );
+  await page.waitForFunction(
+    `Array.from(document.querySelectorAll('#members-contacts .contact-choice')).some(function (item) {
+      return item.textContent.indexOf('Gemini 候选') >= 0;
+    })`,
+  );
+  const roster = (await page.evaluate(
+    `(() => Array.from(document.querySelectorAll('#members-current .member-roster-item')).map(function (item) {
+      const image = item.querySelector('img.avatar-img');
+      const name = item.querySelector('.member-roster-name');
+      const avatar = item.querySelector('.avatar');
+      return {
+        name: name ? name.textContent : '',
+        src: image ? image.getAttribute('src') : null,
+        text: avatar ? avatar.textContent : null
+      };
+    }))()`,
+  )) as { name: string; src: string | null; text: string | null }[];
+  const codexMember = roster.find((item) => item.name.includes('Codex 测试'));
+  const plainMember = roster.find((item) => item.name.includes('琶洲-dsh-dsh'));
+  checkEqual(
+    '群成员列表 Codex 品牌图标',
+    codexMember?.src,
+    '/agent-icons/codex-color.svg',
+  );
+  checkEqual('群成员列表未命中无图标', plainMember?.src, null);
+  checkEqual('群成员列表未命中保留首字', plainMember?.text, '琶');
+  const candidates = (await page.evaluate(
+    `(() => Array.from(document.querySelectorAll('#members-contacts .contact-choice')).map(function (item) {
+      const image = item.querySelector('img.avatar-img');
+      return { name: item.textContent, src: image ? image.getAttribute('src') : null };
+    }))()`,
+  )) as { name: string; src: string | null }[];
+  const geminiCandidate = candidates.find((item) => item.name.includes('Gemini 候选'));
+  checkEqual(
+    '成员候选 Gemini 品牌图标',
+    geminiCandidate?.src,
+    '/agent-icons/gemini-color.svg',
+  );
+  await page.locator('#members-cancel').click();
+
+  await rawTool(humanToken, 'network_agent_archive', {
+    request_id: requestId('avatar_archive'),
+    actor_id: codex.actor.actor_id,
+  });
+  await page.goto(`${base}/`);
+  await waitRoomListName(page, '琶洲-dsh-dsh');
+  await page.locator('#archived-agents').click();
+  await page.waitForFunction(
+    `(() => {
+      const row = document.querySelector(${JSON.stringify(
+        `#archive-popover-list .archive-item[data-actor-id="${codex.actor.actor_id}"]`,
+      )});
+      const img = row ? row.querySelector('img.avatar-img') : null;
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  checkEqual(
+    '已归档 Agents 使用品牌图标',
+    await page
+      .locator(
+        `#archive-popover-list .archive-item[data-actor-id="${codex.actor.actor_id}"] img.avatar-img`,
+      )
+      .getAttribute('src'),
+    '/agent-icons/codex-color.svg',
+  );
+  await rawTool(humanToken, 'network_agent_unarchive', {
+    request_id: requestId('avatar_unarchive'),
+    actor_id: codex.actor.actor_id,
+  });
+  await context.close();
+
+  const darkContext = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    colorScheme: 'dark',
+  });
+  await darkContext.addInitScript({ content: initScript(humanToken) });
+  const darkPage = await darkContext.newPage();
+  darkPage.setDefaultTimeout(15_000);
+  await darkPage.goto(`${base}/`);
+  await waitRoomListName(darkPage, 'Codex 测试');
+  await darkPage.waitForFunction(
+    `(() => {
+      const img = document.querySelector(${JSON.stringify(`${roomLink(codexRoom.room.room_id)} .avatar-img`)});
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  const mobileMetrics = (await darkPage.evaluate(
+    `(() => {
+      const link = document.querySelector(${JSON.stringify(roomLink(codexRoom.room.room_id))});
+      const avatar = link ? link.querySelector('.avatar-icon') : null;
+      const image = avatar ? avatar.querySelector('img.avatar-img') : null;
+      if (!avatar || !image) return null;
+      const avatarBox = avatar.getBoundingClientRect();
+      const imageBox = image.getBoundingClientRect();
+      return {
+        dark: window.matchMedia('(prefers-color-scheme: dark)').matches,
+        pageFits: document.documentElement.scrollWidth <= window.innerWidth,
+        inside: imageBox.left >= avatarBox.left - 0.5 &&
+          imageBox.right <= avatarBox.right + 0.5 &&
+          imageBox.top >= avatarBox.top - 0.5 &&
+          imageBox.bottom <= avatarBox.bottom + 0.5,
+        background: getComputedStyle(image).backgroundColor
+      };
+    })()`,
+  )) as { dark: boolean; pageFits: boolean; inside: boolean; background: string } | null;
+  checkEqual('暗色主题生效', mobileMetrics?.dark, true);
+  checkEqual('390px 页面不横向溢出（头像）', mobileMetrics?.pageFits, true);
+  checkEqual('390px 品牌头像不溢出', mobileMetrics?.inside, true);
+  checkEqual('暗色模式品牌图标仍为浅色底', mobileMetrics?.background, 'rgb(242, 243, 245)');
+  await darkContext.close();
+
+  const failContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  await failContext.addInitScript({ content: initScript(humanToken) });
+  const failPage = await failContext.newPage();
+  failPage.setDefaultTimeout(15_000);
+  await failPage.route('**/agent-icons/codex-color.svg', async (route) => {
+    await route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' });
+  });
+  await failPage.goto(`${base}/`);
+  await waitRoomListName(failPage, 'Codex 测试');
+  await failPage.waitForFunction(
+    `(() => {
+      const link = document.querySelector(${JSON.stringify(roomLink(codexRoom.room.room_id))});
+      const avatar = link ? link.querySelector('.avatar') : null;
+      return Boolean(avatar && !avatar.querySelector('img.avatar-img') && avatar.textContent === 'C');
+    })()`,
+  );
+  check('品牌图标加载失败回退首字', true);
+  await failContext.close();
+}
+
 async function main(): Promise<void> {
   const server = await startServer();
   process.env.AGENTNET_URL = server.base;
@@ -8659,6 +9055,8 @@ async function main(): Promise<void> {
       );
       await mobile.context.close();
     }
+
+    await runAvatarAcceptance(browser, server.base, data.humanToken);
 
     await runPresenceRestartAcceptance();
     await runPresenceIdleNotificationCheck();

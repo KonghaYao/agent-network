@@ -25,6 +25,8 @@ export const APP_STYLE = `
     --wx-link: #576b95;
     --wx-search: #e6e6e6;
     --wx-shadow: 0 12px 32px rgb(0 0 0 / 14%);
+    /* 品牌图标统一浅色底：单色 SVG 以 currentColor 编码，<img> 中会渲染为黑色。 */
+    --wx-avatar-icon-bg: #f2f3f5;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -188,6 +190,11 @@ export const APP_STYLE = `
     gap: 1px; border-radius: 6px; background: var(--wx-line); }
   .avatar-cell { display: grid; place-items: center; width: 100%; height: 100%;
     font-size: 10px; line-height: 1; color: #fff; }
+  /* 品牌图标：容器保留首字供图片失败时回退，img 覆盖并遮住首字。 */
+  .avatar-icon { position: relative; background: var(--wx-avatar-icon-bg); color: #1f2329; }
+  .avatar-icon .avatar-img { position: absolute; inset: 0; box-sizing: border-box;
+    width: 100%; height: 100%; padding: 14%; border-radius: inherit;
+    background: var(--wx-avatar-icon-bg); object-fit: contain; display: block; }
 
   .sidebar-foot { flex: 0 0 auto; padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--wx-line); background: var(--wx-sidebar); }
@@ -371,6 +378,7 @@ export const APP_STYLE = `
     max-height: 180px; overflow-y: auto; }
   .member-roster-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px;
     border-radius: 4px; font-size: 14px; }
+  .member-avatar { width: 28px; height: 28px; border-radius: 6px; font-size: 12px; }
   .member-roster-item + .member-roster-item { border-top: 1px solid var(--wx-line); }
   .member-roster-name { min-width: 0; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; }
@@ -378,6 +386,7 @@ export const APP_STYLE = `
     color: var(--wx-muted); }
   .contact-choice { display: flex; align-items: center; gap: 9px; padding: 8px;
     border-radius: 4px; font-size: 14px; }
+  .contact-avatar { width: 24px; height: 24px; border-radius: 5px; font-size: 11px; }
   .contact-choice:hover { background: var(--wx-hover); }
   .contact-choice input { width: 16px; height: 16px; accent-color: var(--wx-green); }
   .contact-kind { margin-left: auto; font-size: 11px; color: var(--wx-muted); }

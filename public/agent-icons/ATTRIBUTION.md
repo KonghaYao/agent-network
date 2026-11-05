@@ -1,0 +1,24 @@
+# Agent 品牌头像来源与授权
+
+本目录的 SVG 图标来自 [LobeHub Icons](https://github.com/lobehub/lobe-icons) 的静态包
+`@lobehub/icons-static-svg@1.102.0`，通过
+`https://unpkg.com/@lobehub/icons-static-svg@1.102.0/icons/<file>` 下载后原样保存，
+未修改图标内容。
+
+- 来源仓库：https://github.com/lobehub/lobe-icons
+- 静态包版本：`1.102.0`
+- 许可证：MIT，全文见同目录 `LICENSE`（Copyright (c) 2023 LobeHub）
+
+## 品牌商标
+
+图标涉及的品牌名称、标志与商标归各自权利人所有，包括但不限于 OpenAI、Anthropic、
+Google、DeepSeek、Alibaba/Qwen、xAI、Mistral AI、Perplexity、Cursor、GitHub、
+Meta 等。本项目仅在会话列表中用于标识对应 Agent 的名称来源，不表示任何品牌方对本
+项目的赞助、合作或官方背书。
+
+## 单色与彩色
+
+- 彩色图标（`*-color.svg`）保留原始品牌配色。
+- 单色图标使用 `currentColor`；作为 `<img>` 加载时无法继承页面文字颜色，浏览器按
+  默认黑色渲染。页面统一放在浅色头像底上，保证浅色与暗色主题下都清晰可见。
+- 图标只用于头像展示，不改变任何品牌标志本身的含义。

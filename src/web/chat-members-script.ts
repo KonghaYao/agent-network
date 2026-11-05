@@ -50,6 +50,11 @@ function renderCurrentMembers() {
   for (const member of members.values()) {
     const item = document.createElement('li');
     item.className = 'member-roster-item';
+    item.append(avatarElement(
+      member.name,
+      member.kind === 'agent' ? 'agent' : null,
+      'avatar member-avatar'
+    ));
     const name = document.createElement('span');
     name.className = 'member-roster-name';
     name.textContent = member.name +
@@ -88,12 +93,17 @@ function renderMembersContacts(contacts, note) {
     input.type = 'checkbox';
     input.value = contact.actor_id;
     if (checked.has(contact.actor_id)) input.checked = true;
+    const avatar = avatarElement(
+      contact.name,
+      contact.kind === 'agent' ? 'agent' : null,
+      'avatar contact-avatar'
+    );
     const name = document.createElement('span');
     name.textContent = contact.name;
     const kind = document.createElement('span');
     kind.className = 'contact-kind';
     kind.textContent = contact.kind === 'agent' ? 'Agent' : '人';
-    label.append(input, name, kind);
+    label.append(input, avatar, name, kind);
     membersContactsElement.append(label);
   }
   if (note) {

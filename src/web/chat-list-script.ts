@@ -29,7 +29,10 @@ function presenceLabel(online) {
   return '未知';
 }
 
-/** 会话列表圆形头像；群聊为 2×2 首字色块，避免所有群共用同一个字。 */
+/**
+ * 会话列表圆形头像；群聊为 2×2 首字色块，避免所有群共用同一个字。
+ * kind 为 agent 时优先匹配本地品牌图标，未命中保留首字/颜色 fallback。
+ */
 function avatarElement(name, kind, className) {
   const element = document.createElement('span');
   element.className = (className || 'avatar') + (kind === 'group' ? ' avatar-grid' : '');
@@ -46,7 +49,7 @@ function avatarElement(name, kind, className) {
       cell.style.background = AVATAR_COLORS[index % AVATAR_COLORS.length];
       element.append(cell);
     }
-  } else {
+  } else if (kind !== 'agent' || !applyAgentAvatar(element, name)) {
     element.textContent = firstChar(name);
     element.style.background = avatarColor(name);
   }
@@ -188,7 +191,8 @@ function renderRooms() {
     link.dataset.roomName = entry.name;
     link.dataset.roomKind = entry.kind;
     if (entry.room_id === activeRoomId) link.setAttribute('aria-current', 'page');
-    const avatar = avatarElement(entry.name, entry.kind);
+    const agentPeer = entry.kind === 'direct' && entry.peer_kind === 'agent';
+    const avatar = avatarElement(entry.name, agentPeer ? 'agent' : entry.kind);
     const main = document.createElement('div');
     main.className = 'room-main';
     const top = document.createElement('div');

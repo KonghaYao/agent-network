@@ -1,0 +1,64 @@
+/**
+ * Agent 品牌头像映射片段。
+ *
+ * 按 Agent 名称关键词匹配本地 `public/agent-icons` 下的 LobeHub 图标；
+ * 未命中或名称为 `peri` 时返回 null，继续使用首字/颜色头像。
+ * 由 `chatClientScript` 拼进主脚本共享作用域，因此不使用模块 import。
+ *
+ * 图标只在本地加载，运行时不请求 unpkg 等外链。彩色图标保留品牌配色；
+ * 单色图标作为 `<img>` 加载时无法继承 `currentColor`，浏览器按黑色渲染，
+ * 因此样式统一给图标白/浅色底。图片加载失败时移除 `<img>`，容器内保留的
+ * 首字自然回退，不显示破图。
+ */
+export const CHAT_AVATAR_SCRIPT = `
+const AGENT_AVATAR_RULES = [
+  { keys: ['codex'], file: 'codex-color.svg', brand: 'Codex', mono: false },
+  { keys: ['claude'], file: 'claude-color.svg', brand: 'Claude', mono: false },
+  { keys: ['anthropic'], file: 'anthropic.svg', brand: 'Anthropic', mono: true },
+  { keys: ['openai', 'gpt', 'chatgpt'], file: 'openai.svg', brand: 'OpenAI', mono: true },
+  { keys: ['gemini', 'google', 'bard'], file: 'gemini-color.svg', brand: 'Gemini', mono: false },
+  { keys: ['deepseek'], file: 'deepseek-color.svg', brand: 'DeepSeek', mono: false },
+  { keys: ['qwen', '通义', '千问'], file: 'qwen-color.svg', brand: 'Qwen', mono: false },
+  { keys: ['grok'], file: 'grok.svg', brand: 'Grok', mono: true },
+  { keys: ['xai'], file: 'xai.svg', brand: 'xAI', mono: true },
+  { keys: ['mistral'], file: 'mistral-color.svg', brand: 'Mistral', mono: false },
+  { keys: ['perplexity'], file: 'perplexity-color.svg', brand: 'Perplexity', mono: false },
+  { keys: ['cursor'], file: 'cursor.svg', brand: 'Cursor', mono: true },
+  { keys: ['copilot', 'github'], file: 'githubcopilot.svg', brand: 'GitHub Copilot', mono: true },
+  { keys: ['meta', 'llama'], file: 'meta-color.svg', brand: 'Meta', mono: false }
+];
+
+/** 名称关键词 → 本地品牌图标；未命中或名称为 peri 时返回 null，保留首字 fallback。 */
+function agentAvatarFor(name) {
+  const normalized = String(name || '').toLowerCase().replace(/\\s+/gu, '');
+  if (!normalized || normalized.indexOf('peri') === 0) return null;
+  for (const rule of AGENT_AVATAR_RULES) {
+    for (const key of rule.keys) {
+      if (normalized.indexOf(key) >= 0) {
+        return { src: '/agent-icons/' + rule.file, brand: rule.brand, mono: rule.mono };
+      }
+    }
+  }
+  return null;
+}
+
+/** 在已创建的头像容器内叠加品牌图标；失败时移除图片，首字仍可见。 */
+function applyAgentAvatar(element, name) {
+  const brand = agentAvatarFor(name);
+  if (!brand) return false;
+  element.classList.add('avatar-icon');
+  element.classList.toggle('avatar-mono', brand.mono);
+  element.dataset.brand = brand.brand;
+  element.textContent = firstChar(name);
+  const image = document.createElement('img');
+  image.className = 'avatar-img';
+  image.alt = '';
+  image.decoding = 'async';
+  image.addEventListener('error', function () {
+    image.remove();
+  });
+  image.src = brand.src;
+  element.append(image);
+  return true;
+}
+`;
