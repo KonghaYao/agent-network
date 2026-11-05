@@ -106,6 +106,9 @@ export const APP_STYLE = `
   .room-name { flex: 1 1 auto; min-width: 0; font-size: 14px; color: var(--wx-text);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .room-time { flex: 0 0 auto; margin-left: auto; font-size: 11px; color: var(--wx-muted); }
+  .room-task-badge { flex: 0 0 auto; padding: 0 5px; border-radius: 8px;
+    background: var(--wx-search); color: var(--wx-muted); font-size: 10px;
+    line-height: 16px; white-space: nowrap; }
   .room-preview { margin-top: 3px; font-size: 12px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 会话右键/长按菜单：固定定位，靠近指针并限制在视口内。 */
@@ -231,7 +234,7 @@ export const APP_STYLE = `
   body.page-room .empty-pane { display: none; }
   .chat-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
     min-height: 56px; padding: 0 16px; background: var(--wx-sidebar);
-    border-bottom: 1px solid var(--wx-line); }
+    border-bottom: 1px solid var(--wx-line); position: relative; }
   .back { display: none; flex: 0 0 auto; align-items: center; justify-content: center;
     width: 36px; height: 36px; margin-left: -8px; border-radius: 6px;
     color: inherit; text-decoration: none; }
@@ -262,6 +265,49 @@ export const APP_STYLE = `
   .rename-form input { flex: 1 1 auto; min-width: 0; height: 32px; padding: 0 10px;
     border: 1px solid var(--wx-line); border-radius: 4px; background: var(--wx-panel);
     color: var(--wx-text); font: inherit; font-size: 13px; }
+
+  /* 房间任务：头部一行进度，hover/focus/点击展开同一浮层。 */
+  .task-toggle { flex: 0 0 auto; display: inline-flex; align-items: center;
+    height: 28px; padding: 0 10px; border: 1px solid var(--wx-line);
+    border-radius: 14px; background: var(--wx-panel); color: var(--wx-muted);
+    font-size: 12px; line-height: 1; white-space: nowrap; }
+  .task-toggle:hover, .task-toggle[aria-expanded="true"] {
+    background: var(--wx-hover); color: var(--wx-text); }
+  .task-toggle[hidden] { display: none; }
+  .task-popover { position: absolute; z-index: 24; top: calc(100% - 2px);
+    right: 12px; width: min(360px, calc(100vw - 24px));
+    max-height: min(60vh, 420px); box-sizing: border-box;
+    display: flex; flex-direction: column; padding: 10px;
+    border-radius: 8px; background: var(--wx-panel); border: 1px solid var(--wx-line);
+    box-shadow: var(--wx-shadow); }
+  .task-popover[hidden] { display: none; }
+  .task-popover-head { flex: 0 0 auto; display: flex; align-items: center;
+    justify-content: space-between; gap: 8px; padding: 0 2px 8px; }
+  .task-popover-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .task-popover-close { flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
+    border: 0; background: transparent; color: var(--wx-muted); font-size: 18px;
+    line-height: 1; }
+  .task-popover-close:hover { background: var(--wx-hover); color: var(--wx-text); }
+  .task-list { flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    list-style: none; margin: 0; padding: 0; }
+  .task-item { padding: 8px 2px; border-top: 1px solid var(--wx-line); }
+  .task-item:first-child { border-top: 0; }
+  .task-item-top { display: flex; align-items: flex-start; gap: 8px; }
+  .task-desc { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--wx-text);
+    overflow-wrap: anywhere; }
+  .task-status { flex: 0 0 auto; padding: 1px 6px; border-radius: 8px;
+    background: var(--wx-search); color: var(--wx-muted); font-size: 10px;
+    line-height: 16px; white-space: nowrap; }
+  .task-status.claimed { color: var(--wx-link); }
+  .task-status.done { color: var(--wx-green); }
+  .task-status.failed { color: var(--wx-danger); }
+  .task-meta { margin-top: 2px; font-size: 11px; color: var(--wx-muted); }
+  .task-result { margin: 4px 0 0; font-size: 12px; color: var(--wx-text);
+    overflow-wrap: anywhere; }
+  .task-result.failed { color: var(--wx-danger); }
+  .task-popover-empty { flex: 0 0 auto; margin: 0; padding: 18px 8px;
+    font-size: 12px; color: var(--wx-muted); text-align: center; }
+  .task-popover-empty[hidden] { display: none; }
 
   .chat-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
     position: relative; background: var(--wx-bg); }
@@ -492,6 +538,8 @@ export const APP_STYLE = `
     .composer textarea { font-size: 16px; }
     .composer-drop { inset: 6px; }
     .mention-picker { left: 10px; bottom: 64px; }
+    /* 移动端浮层占满头部下方宽度，避免横向溢出；点击展开、Esc/外部关闭。 */
+    .task-popover { left: 8px; right: 8px; width: auto; max-height: 50vh; }
   }
 
   @media (prefers-reduced-motion: reduce) {

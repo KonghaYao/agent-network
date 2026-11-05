@@ -322,6 +322,49 @@ export const roomMonitorResultSchema = z.object({
   monitor: roomMonitorSchema.nullable(),
 });
 
+/** 房间任务短视图；不包含房间成员列表或任何凭据。 */
+export const roomTaskSchema = z.object({
+  task_id: z.string(),
+  room_id: z.string(),
+  description: z.string(),
+  status: z.enum(['pending', 'claimed', 'done', 'failed']),
+  assignee_actor_id: z.string().nullable(),
+  assignee_name: z.string().nullable(),
+  result: z.string().nullable(),
+  created_by: z.string(),
+  created_by_name: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  completed_at: z.string().nullable(),
+  can_edit: z.boolean(),
+  can_claim: z.boolean(),
+  can_complete: z.boolean(),
+});
+
+export const roomTaskResultSchema = z.object({ task: roomTaskSchema });
+
+export const roomTaskListSchema = z.object({
+  tasks: z.array(roomTaskSchema),
+  total: z.number(),
+  done: z.number(),
+});
+
+export const roomTaskDeletedSchema = z.object({
+  task_id: z.string(),
+  deleted: z.literal(true),
+});
+
+/** 侧栏任务进度；一次返回多个 active 房间，避免 N 次 list。 */
+export const roomTaskSummarySchema = z.object({
+  items: z.array(
+    z.object({
+      room_id: z.string(),
+      total: z.number(),
+      done: z.number(),
+    }),
+  ),
+});
+
 /** 反馈提交结果：不回显 environment/harness/problem。 */
 export const feedbackCreateResultSchema = z.object({
   feedback_id: z.string(),

@@ -115,6 +115,11 @@ export function chatPane(): string {
         <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
       </svg>
     </button>
+    <button class="task-toggle" id="task-toggle" type="button" hidden
+      aria-haspopup="dialog" aria-controls="task-popover" aria-expanded="false"
+      title="查看房间任务">
+      <span id="task-toggle-label">任务 0/0</span>
+    </button>
     <button class="monitor-toggle" id="monitor-toggle" type="button"
       aria-controls="monitor-pane" aria-expanded="false"
       aria-label="打开网页监控" title="网页监控">
@@ -126,6 +131,15 @@ export function chatPane(): string {
     </button>
     <button class="files-toggle" id="files-toggle" type="button"
       aria-controls="files-pane" aria-expanded="false">文件</button>
+    <div class="task-popover" id="task-popover" role="dialog" aria-label="房间任务" hidden>
+      <header class="task-popover-head">
+        <h3>房间任务</h3>
+        <button class="task-popover-close" id="task-popover-close" type="button"
+          aria-label="关闭任务列表" title="关闭">×</button>
+      </header>
+      <ul class="task-list" id="task-list" aria-label="房间任务列表"></ul>
+      <p class="task-popover-empty" id="task-popover-empty" role="status" hidden>暂无任务</p>
+    </div>
   </header>
   <form id="rename-form" class="rename-form" hidden>
     <input id="rename-input" maxlength="${LIMITS.actorNameMax}" aria-label="Agent 新名称"

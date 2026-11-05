@@ -1675,6 +1675,290 @@ async function runAvatarAcceptance(
   await failContext.close();
 }
 
+async function runTaskAcceptance(
+  browser: Browser,
+  base: string,
+  allErrors: string[],
+): Promise<void> {
+  console.log('· 房间任务 UI');
+  const humanToken = crypto.randomUUID();
+  const human = await rawTool<Actor>(humanToken, 'network_register', {
+    request_id: requestId('task_human'),
+    kind: 'human',
+    name: '任务 UI 人类',
+  });
+  const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+  const agent = await rawTool<Actor>(agentToken, 'network_register', {
+    request_id: requestId('task_agent'),
+    kind: 'agent',
+    name: '任务 UI Agent',
+    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+  });
+  await rawTool(humanToken, 'network_contact_add', {
+    request_id: requestId('contact'),
+    actor_id: agent.actor_id,
+  });
+  const room = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('room'),
+    kind: 'group',
+    title: '任务 UI 验收群',
+    members: [agent.actor_id],
+  });
+  const roomId = room.room.room_id;
+  await rawTool(humanToken, 'network_room_mark_read', {
+    room_id: roomId,
+    through_seq: room.room.head_seq,
+  });
+  const headBefore = (await rawTool<RoomDetail>(humanToken, 'network_room_get', {
+    room_id: roomId,
+  })).room.head_seq;
+
+  const doneTask = await rawTool<{ task: { task_id: string } }>(
+    humanToken,
+    'network_task_add',
+    {
+      request_id: requestId('task_add'),
+      room_id: roomId,
+      description: '准备验收报告',
+    },
+  );
+  await rawTool(agentToken, 'network_task_claim', {
+    request_id: requestId('task_claim'),
+    task_id: doneTask.task.task_id,
+  });
+  await rawTool(agentToken, 'network_task_complete', {
+    request_id: requestId('task_done'),
+    task_id: doneTask.task.task_id,
+    result: '已生成报告',
+  });
+  const injectionTask = await rawTool<{ task: { task_id: string } }>(
+    humanToken,
+    'network_task_add',
+    {
+      request_id: requestId('task_add'),
+      room_id: roomId,
+      description: '<b>注入测试</b>',
+    },
+  );
+
+  const { context, page } = await makeContext(
+    browser,
+    humanToken,
+    { width: 1280, height: 800 },
+    allErrors,
+  );
+  try {
+    await page.goto(`${base}/c/${roomId}`);
+    await waitRoom(page, roomId, '任务 UI 验收群');
+    await page.waitForFunction(
+      `document.getElementById('task-toggle') && !document.getElementById('task-toggle').hidden &&
+        document.getElementById('task-toggle-label').textContent === '任务 1/2'`,
+    );
+    check('聊天头部显示任务 done/total', true);
+    const badge = page.locator(`${roomLink(roomId)} .room-task-badge`);
+    await page.waitForFunction(
+      `(() => {
+        const item = document.querySelector(${JSON.stringify(roomLink(roomId))});
+        const badge = item ? item.querySelector('.room-task-badge') : null;
+        return Boolean(badge && badge.textContent === '1/2');
+      })()`,
+    );
+    checkEqual('侧栏房间项显示任务 badge', await badge.textContent(), '1/2');
+
+    await page.locator('#task-toggle').hover();
+    await page.locator('#task-popover').waitFor({ state: 'visible' });
+    checkEqual(
+      'hover 打开任务浮层并列出全部任务',
+      await page.locator('#task-list .task-item').count(),
+      2,
+    );
+    const doneItem = page.locator(
+      `#task-list .task-item[data-task-id="${doneTask.task.task_id}"]`,
+    );
+    const doneText = (await doneItem.innerText()) ?? '';
+    check(
+      '浮层显示状态、assignee 与结果',
+      doneText.includes('已完成') &&
+        doneText.includes('任务 UI Agent') &&
+        doneText.includes('已生成报告'),
+      doneText,
+    );
+    const injectionItem = page.locator(
+      `#task-list .task-item[data-task-id="${injectionTask.task.task_id}"]`,
+    );
+    checkEqual(
+      '任务描述按纯文本渲染',
+      await injectionItem.locator('.task-desc').textContent(),
+      '<b>注入测试</b>',
+    );
+    checkEqual('任务描述不注入 HTML', await injectionItem.locator('b').count(), 0);
+    check(
+      '任务浮层不输出 token',
+      !((await page.locator('#task-popover').innerText()) ?? '').includes(humanToken),
+    );
+
+    await page.mouse.move(2, 2);
+    await page.locator('#task-popover').waitFor({ state: 'hidden' });
+    check('鼠标移出后浮层关闭', true);
+    await page.locator('#task-toggle').focus();
+    await page.locator('#task-popover').waitFor({ state: 'visible' });
+    check('focus 打开任务浮层', true);
+    await page.keyboard.press('Escape');
+    await page.locator('#task-popover').waitFor({ state: 'hidden' });
+    check('Esc 关闭任务浮层', true);
+
+    await page.locator('#task-toggle').click();
+    await page.locator('#task-popover').waitFor({ state: 'visible' });
+    check('点击固定打开任务浮层', true);
+    await page.locator('#task-popover-close').click();
+    await page.locator('#task-popover').waitFor({ state: 'hidden' });
+    check('关闭按钮关闭任务浮层且不因聚焦重新打开', true);
+    await page.locator('#task-toggle').click();
+    await page.locator('#task-popover').waitFor({ state: 'visible' });
+    await page.mouse.click(4, 4);
+    await page.locator('#task-popover').waitFor({ state: 'hidden' });
+    check('点击外部关闭任务浮层', true);
+
+    const listCallsBefore = (await page.evaluate(
+      `(window.__mcpCalls || []).filter(function (call) {
+        return call.name === 'network_task_list_get';
+      }).length`,
+    )) as number;
+    await sleep(800);
+    const listCallsAfter = (await page.evaluate(
+      `(window.__mcpCalls || []).filter(function (call) {
+        return call.name === 'network_task_list_get';
+      }).length`,
+    )) as number;
+    checkEqual('任务 UI 不轮询 list', listCallsAfter, listCallsBefore);
+
+    // 任务事件驱动刷新头部与侧栏 badge，不刷新消息、不产生未读。
+    const eventTask = await rawTool<{ task: { task_id: string } }>(
+      agentToken,
+      'network_task_add',
+      {
+        request_id: requestId('task_add'),
+        room_id: roomId,
+        description: '事件任务',
+      },
+    );
+    await page.waitForFunction(
+      `document.getElementById('task-toggle-label').textContent === '任务 1/3'`,
+    );
+    checkEqual('任务事件刷新头部进度', await page.locator('#task-toggle-label').textContent(), '任务 1/3');
+    checkEqual('任务事件刷新侧栏 badge', await badge.textContent(), '1/3');
+    await rawTool(agentToken, 'network_task_claim', {
+      request_id: requestId('task_claim'),
+      task_id: eventTask.task.task_id,
+    });
+    await rawTool(agentToken, 'network_task_complete', {
+      request_id: requestId('task_done'),
+      task_id: eventTask.task.task_id,
+      result: '事件任务完成',
+    });
+    await page.waitForFunction(
+      `document.getElementById('task-toggle-label').textContent === '任务 2/3'`,
+    );
+    checkEqual('任务完成后头部进度更新', await page.locator('#task-toggle-label').textContent(), '任务 2/3');
+    checkEqual('任务完成后侧栏 badge 更新', await badge.textContent(), '2/3');
+    checkEqual(
+      '任务变更不产生未读红点',
+      await page.locator(`${roomLink(roomId)} .unread`).count(),
+      0,
+    );
+    const headAfter = (await rawTool<RoomDetail>(humanToken, 'network_room_get', {
+      room_id: roomId,
+    })).room.head_seq;
+    checkEqual('任务变更不推进 head_seq', headAfter, headBefore);
+
+    const mobile = await makeContext(
+      browser,
+      humanToken,
+      { width: 390, height: 844 },
+      allErrors,
+      true,
+      false,
+      { hasTouch: true },
+    );
+    try {
+      await mobile.page.goto(`${base}/c/${roomId}`);
+      await waitRoom(mobile.page, roomId, '任务 UI 验收群');
+      await mobile.page.waitForFunction(
+        `document.getElementById('task-toggle') && !document.getElementById('task-toggle').hidden`,
+      );
+      await mobile.page.locator('#task-toggle').tap();
+      await mobile.page.locator('#task-popover').waitFor({ state: 'visible' });
+      const metrics = (await mobile.page.evaluate(
+        `(() => {
+          const box = document.getElementById('task-popover').getBoundingClientRect();
+          return {
+            left: box.left,
+            right: box.right,
+            width: box.width,
+            view: window.innerWidth,
+            doc: document.documentElement.scrollWidth,
+            sidebar: getComputedStyle(document.querySelector('.sidebar')).display
+          };
+        })()`,
+      )) as {
+        left: number;
+        right: number;
+        width: number;
+        view: number;
+        doc: number;
+        sidebar: string;
+      };
+      check(
+        '390px 任务浮层不横向溢出',
+        metrics.left >= 0 && metrics.right <= metrics.view + 1 && metrics.doc <= metrics.view,
+        metrics,
+      );
+      checkEqual('390px 聊天页仍为单栏', metrics.sidebar, 'none');
+      await mobile.page.keyboard.press('Escape');
+      await mobile.page.locator('#task-popover').waitFor({ state: 'hidden' });
+      check('390px 任务浮层可关闭', true);
+    } finally {
+      await mobile.context.close();
+    }
+
+    const dark = await makeContext(
+      browser,
+      humanToken,
+      { width: 1280, height: 800 },
+      allErrors,
+      true,
+      false,
+      { colorScheme: 'dark' },
+    );
+    try {
+      await dark.page.goto(`${base}/c/${roomId}`);
+      await waitRoom(dark.page, roomId, '任务 UI 验收群');
+      await dark.page.waitForFunction(
+        `document.getElementById('task-toggle') && !document.getElementById('task-toggle').hidden`,
+      );
+      await dark.page.locator('#task-toggle').hover();
+      await dark.page.locator('#task-popover').waitFor({ state: 'visible' });
+      const colors = (await dark.page.evaluate(
+        `(() => {
+          const style = getComputedStyle(document.getElementById('task-popover'));
+          const text = getComputedStyle(document.querySelector('#task-list .task-desc'));
+          return { background: style.backgroundColor, color: text.color };
+        })()`,
+      )) as { background: string; color: string };
+      check(
+        '暗色任务浮层使用暗色面板且文字可读',
+        contrastRatio(colors.color, colors.background) >= 4.5 &&
+          relativeLuminance(colors.background) < 0.2,
+        colors,
+      );
+    } finally {
+      await dark.context.close();
+    }
+  } finally {
+    await context.close();
+  }
+}
+
 async function main(): Promise<void> {
   const server = await startServer();
   process.env.AGENTNET_URL = server.base;
@@ -12414,6 +12698,8 @@ async function main(): Promise<void> {
     }
 
     await runAvatarAcceptance(browser, server.base, data.humanToken);
+
+    await runTaskAcceptance(browser, server.base, allErrors);
 
     await runPresenceRestartAcceptance();
     await runPresenceIdleNotificationCheck();

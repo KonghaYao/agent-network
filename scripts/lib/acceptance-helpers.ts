@@ -71,6 +71,7 @@ export interface RoomDetail {
     kind: string;
     owner_id: string | null;
     head_seq: string;
+    my_last_read_seq: string;
     member_count: number;
     my_role: string;
     last_message: { message_id: string; preview: string } | null;

@@ -340,6 +340,30 @@ function roomStreamItems(
       }
       return result;
     }
+    case 'room_task_added':
+    case 'room_task_claimed':
+    case 'room_task_completed':
+    case 'room_task_failed':
+    case 'room_task_updated':
+    case 'room_task_deleted': {
+      // 任务只通知 active human 刷新视图；Agent 不收到任务提示，也不会被唤醒。
+      const change = row.event_type.replace('room_task_', '');
+      const changedBy = stringField(metadata, 'changed_by');
+      const taskId = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
+      for (const member of activeRecipients(members, eventSeq)) {
+        if (member.kind !== 'human') continue;
+        const item = withLocation(
+          baseItem(row, 'room.tasks', 'tasks', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = change;
+        if (taskId) item.ref_id = taskId;
+        if (changedBy) item.changed_by = changedBy;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
     case 'agent_presence_changed': {
       // 只通知 active human；Agent 成员不可见，也不写 inbox/未读。
       const agentId = stringField(metadata, 'agent_id');

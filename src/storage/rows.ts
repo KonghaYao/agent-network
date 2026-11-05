@@ -154,6 +154,22 @@ export interface ActorRoomMonitorRow {
   updated_at: number;
 }
 
+/** 房间任务；状态机 pending -> claimed -> done|failed。 */
+export interface RoomTaskRow {
+  task_id: string;
+  room_id: string;
+  list_id: string;
+  description: string;
+  status: 'pending' | 'claimed' | 'done' | 'failed';
+  assignee_actor_id: string | null;
+  result: string | null;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
+  sort_order: number;
+}
+
 /** MCP Events webhook 订阅；secret 以 AES-GCM 密文落库。 */
 export interface EventSubscriptionRow {
   subscription_id: string;

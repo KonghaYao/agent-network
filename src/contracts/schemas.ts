@@ -216,6 +216,48 @@ export const roomMonitorSetSchema = z.object({
 });
 
 /**
+ * 房间任务：描述与结果都只接受短文本。
+ *
+ * Zod 的 max 按 UTF-16 码元计，最多放宽到 2 倍字符上限；最终按 Unicode
+ * 码点与换行/控制字符在领域层校验，错误返回可读的 INVALID_ARGUMENT。
+ */
+const taskText = z.string().trim().min(1).max(LIMITS.roomTaskTextMax * 2);
+
+export const taskListGetSchema = z.object({ room_id: id() });
+
+export const taskSummarySchema = z.object({
+  room_ids: z.array(id()).min(1).max(LIMITS.taskLookupMax).optional(),
+});
+
+export const taskAddSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  description: taskText,
+});
+
+export const taskClaimSchema = z.object({ request_id: requestId, task_id: id() });
+
+export const taskCompleteSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  result: taskText,
+});
+
+export const taskFailSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  error: taskText,
+});
+
+export const taskUpdateSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  description: taskText,
+});
+
+export const taskDeleteSchema = z.object({ request_id: requestId, task_id: id() });
+
+/**
  * 认证反馈：只接受已注册 actor 主动提交的三段诊断文本。
  *
  * request_id 限制为 ASCII 标识符，避免把凭据或 URL 误当操作 ID；
@@ -285,4 +327,12 @@ export type RoomFileGetInput = z.infer<typeof roomFileGetSchema>;
 export type RoomFileDeleteInput = z.infer<typeof roomFileDeleteSchema>;
 export type RoomMonitorGetInput = z.infer<typeof roomMonitorGetSchema>;
 export type RoomMonitorSetInput = z.infer<typeof roomMonitorSetSchema>;
+export type TaskListGetInput = z.infer<typeof taskListGetSchema>;
+export type TaskSummaryInput = z.infer<typeof taskSummarySchema>;
+export type TaskAddInput = z.infer<typeof taskAddSchema>;
+export type TaskClaimInput = z.infer<typeof taskClaimSchema>;
+export type TaskCompleteInput = z.infer<typeof taskCompleteSchema>;
+export type TaskFailInput = z.infer<typeof taskFailSchema>;
+export type TaskUpdateInput = z.infer<typeof taskUpdateSchema>;
+export type TaskDeleteInput = z.infer<typeof taskDeleteSchema>;
 export type FeedbackCreateInput = z.infer<typeof feedbackCreateSchema>;

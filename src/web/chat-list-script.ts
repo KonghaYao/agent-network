@@ -267,7 +267,20 @@ function renderRooms() {
     const time = document.createElement('span');
     time.className = 'room-time';
     time.textContent = relativeTime(entry.last_message ? entry.last_message.created_at : entry.updated_at);
-    top.append(name, time);
+    top.append(name);
+    const taskProgress = taskSummary.get(entry.room_id);
+    if (taskProgress && taskProgress.total > 0) {
+      const taskBadge = document.createElement('span');
+      taskBadge.className = 'room-task-badge';
+      taskBadge.textContent = taskProgress.done + '/' + taskProgress.total;
+      taskBadge.title = '任务完成 ' + taskProgress.done + '/' + taskProgress.total;
+      taskBadge.setAttribute(
+        'aria-label',
+        '任务已完成 ' + taskProgress.done + ' 个，共 ' + taskProgress.total + ' 个'
+      );
+      top.append(taskBadge);
+    }
+    top.append(time);
     const preview = document.createElement('div');
     preview.className = 'room-preview';
     preview.textContent = entry.last_message ? entry.last_message.preview : '还没有消息';
@@ -432,7 +445,12 @@ async function loadRooms(options) {
     try {
       const me = await ensureIdentity();
       updateAccount(me);
+      // 侧栏任务 badge 一次汇总，避免对每个房间调用 list；失败不影响会话列表。
+      const summaryPromise = callTool('network_task_summary', {}).catch(function () {
+        return null;
+      });
       const page = await callTool('network_rooms_list', { limit: 50 });
+      const taskSummaryResult = await summaryPromise;
       const summaries = page.items.map(function (entry) {
         const cached = entry.kind === 'direct' ? cachedPeerSummary(entry.room_id, me) : null;
         return {
@@ -455,6 +473,7 @@ async function loadRooms(options) {
         };
       });
       roomEntries = sortRooms(mergeActiveRoom(summaries));
+      if (taskSummaryResult) applyTaskSummary(taskSummaryResult);
       // 首次加载（含深链）按当前房间选分类；后台刷新不覆盖用户手动切换。
       if (!hadEntries) syncRoomFilterForRoom(activeRoomId);
       // 空态文案由当前分类决定；错误与退出登录文案仍由 emptyListMessage 覆盖。

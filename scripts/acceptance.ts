@@ -44,6 +44,7 @@ import { runRoomFileAcceptance } from './lib/room-file-acceptance';
 import { runAgentArchiveAcceptance } from './lib/agent-archive-acceptance';
 import { runAgentPresenceAcceptance } from './lib/presence-acceptance';
 import { runRoomMonitorAcceptance } from './lib/room-monitor-acceptance';
+import { runRoomTaskAcceptance } from './lib/room-task-acceptance';
 import { runFeedbackAcceptance } from './lib/feedback-acceptance';
 import { runGroupMentionAcceptance } from './lib/mention-acceptance';
 import {
@@ -1280,6 +1281,7 @@ async function main(): Promise<void> {
     await runAgentArchiveAcceptance();
     await runAgentPresenceAcceptance();
     await runRoomMonitorAcceptance();
+    await runRoomTaskAcceptance();
     await runFeedbackAcceptance();
     await runGroupMentionAcceptance();
 

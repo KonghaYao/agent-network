@@ -222,6 +222,8 @@ function scheduleStreamCatchUp() {
       streamDebug('catch-up list failed', error && error.message ? error.message : String(error));
     });
     if (activeRoomId) {
+      // 断线期间可能错过任务事件；让房间刷新重新读取任务列表。
+      invalidateRoomTasks();
       scheduleRoomRefresh(activeRoomId);
       scheduleFilesRefresh(activeRoomId);
     }
@@ -326,6 +328,10 @@ function handleStreamEventFrame(payload) {
       case 'room.presence':
         // 上下线只更新当前房间时间线；不改 head、不产生未读或侧栏预览。
         if (roomId && roomId === activeRoomId) refreshRoom = true;
+        break;
+      case 'room.tasks':
+        // 任务事件只刷新任务行与侧栏 badge，不触发消息历史刷新或未读。
+        scheduleRoomTasksRefresh(roomId);
         break;
       case 'profile.updated':
         refreshList = true;

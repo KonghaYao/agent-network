@@ -206,13 +206,18 @@ function checkMigrationUpgrade(): void {
   const before = JSON.stringify(old.prepare('SELECT * FROM actors WHERE actor_id = ?').get('usr_legacy'));
 
   const applied = migrate(old, MIGRATIONS);
-  checkEqual('旧库升级只应用 0009', applied.join(','), '0009_feedback.sql');
+  checkEqual(
+    '旧库升级按顺序应用 0009 与 0010',
+    applied.join(','),
+    '0009_feedback.sql,0010_room_tasks.sql',
+  );
   checkEqual(
     '旧库升级保留原业务数据',
     JSON.stringify(old.prepare('SELECT * FROM actors WHERE actor_id = ?').get('usr_legacy')),
     before,
   );
   checkEqual('旧库升级后 feedback 表可用', count(old, 'feedback'), 0);
+  checkEqual('旧库升级后 room_tasks 表可用', count(old, 'room_tasks'), 0);
   old.close();
 }
 

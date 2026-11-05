@@ -296,6 +296,14 @@ async function main(): Promise<void> {
     'network_room_get',
     'network_room_monitor_get',
     'network_room_monitor_set',
+    'network_task_list_get',
+    'network_task_summary',
+    'network_task_add',
+    'network_task_claim',
+    'network_task_complete',
+    'network_task_fail',
+    'network_task_update',
+    'network_task_delete',
     'network_room_members_update',
     'network_room_leave',
     'network_message_send',
@@ -344,6 +352,14 @@ async function main(): Promise<void> {
     'network_message_send',
     'network_room_monitor_get',
     'network_room_monitor_set',
+    'network_task_list_get',
+    'network_task_summary',
+    'network_task_add',
+    'network_task_claim',
+    'network_task_complete',
+    'network_task_fail',
+    'network_task_update',
+    'network_task_delete',
     'network_inbox_list',
     'network_delivery_claim',
     'network_delivery_complete',
@@ -476,6 +492,84 @@ async function main(): Promise<void> {
     (monitorGetTool as { annotations?: { readOnlyHint?: boolean } } | undefined)?.annotations
       ?.readOnlyHint === true,
     (monitorGetTool as { annotations?: unknown } | undefined)?.annotations,
+  );
+
+  const taskTools = new Map(
+    listed?.tools
+      ?.filter((tool) => tool.name.startsWith('network_task_'))
+      .map((tool) => [tool.name, tool]) ?? [],
+  );
+  const taskToolNames = [
+    'network_task_list_get',
+    'network_task_summary',
+    'network_task_add',
+    'network_task_claim',
+    'network_task_complete',
+    'network_task_fail',
+    'network_task_update',
+    'network_task_delete',
+  ];
+  check(
+    '房间任务 8 个工具全部注册',
+    taskToolNames.every((name) => taskTools.has(name)),
+    taskToolNames.filter((name) => !taskTools.has(name)),
+  );
+  const taskAddInput = JSON.stringify(taskTools.get('network_task_add')?.inputSchema ?? {});
+  check(
+    'task_add 输入含 request_id/room_id/description',
+    ['request_id', 'room_id', 'description'].every((key) => taskAddInput.includes(`"${key}"`)),
+    taskTools.get('network_task_add')?.inputSchema,
+  );
+  const taskClaimInput = JSON.stringify(taskTools.get('network_task_claim')?.inputSchema ?? {});
+  check(
+    'task_claim 只接受 request_id/task_id（房间由任务推导）',
+    taskClaimInput.includes('"task_id"') && !taskClaimInput.includes('"room_id"'),
+    taskTools.get('network_task_claim')?.inputSchema,
+  );
+  const taskListOutput = JSON.stringify(taskTools.get('network_task_list_get')?.outputSchema ?? {});
+  check(
+    'task_list 输出含 tasks/total/done',
+    ['tasks', 'total', 'done'].every((key) => taskListOutput.includes(`"${key}"`)),
+    taskTools.get('network_task_list_get')?.outputSchema,
+  );
+  const taskAddDescription = taskTools.get('network_task_add')?.description ?? '';
+  check(
+    'task_add 描述声明 120 字、informational 且不写 inbox/未读',
+    taskAddDescription.includes('120') &&
+      taskAddDescription.includes('informational') &&
+      taskAddDescription.includes('不写 inbox') &&
+      taskAddDescription.includes('不产生未读'),
+    taskAddDescription,
+  );
+  const taskClaimDescription = taskTools.get('network_task_claim')?.description ?? '';
+  check(
+    'task_claim 描述声明仅 Agent、human 拒绝与不唤醒',
+    taskClaimDescription.includes('Agent 成员') &&
+      taskClaimDescription.includes('human 调用返回 INVALID_ARGUMENT') &&
+      taskClaimDescription.includes('不唤醒'),
+    taskClaimDescription,
+  );
+  const taskCompleteDescription = taskTools.get('network_task_complete')?.description ?? '';
+  check(
+    'task_complete 描述声明仅 assignee 且不写 inbox',
+    taskCompleteDescription.includes('assignee') &&
+      taskCompleteDescription.includes('不写 inbox'),
+    taskCompleteDescription,
+  );
+  const taskUpdateDescription = taskTools.get('network_task_update')?.description ?? '';
+  const taskDeleteDescription = taskTools.get('network_task_delete')?.description ?? '';
+  check(
+    'task_update/delete 描述声明创建者或房间 owner',
+    taskUpdateDescription.includes('创建者或房间 owner') &&
+      taskDeleteDescription.includes('创建者或房间 owner'),
+    { taskUpdateDescription, taskDeleteDescription },
+  );
+  check(
+    'task_list 与 task_summary 注册为只读工具',
+    (taskTools.get('network_task_list_get') as { annotations?: { readOnlyHint?: boolean } } | undefined)
+      ?.annotations?.readOnlyHint === true &&
+      (taskTools.get('network_task_summary') as { annotations?: { readOnlyHint?: boolean } } | undefined)
+        ?.annotations?.readOnlyHint === true,
   );
 
   const reissueTool = listed?.tools?.find(
@@ -1270,6 +1364,22 @@ async function main(): Promise<void> {
     skillText.slice(0, 200),
   );
   check(
+    '技能正文包含房间任务完整工具与不唤醒语义',
+    ['## 房间任务', 'network_task_list_get', 'network_task_summary', 'network_task_add',
+      'network_task_claim', 'network_task_complete', 'network_task_fail',
+      'network_task_update', 'network_task_delete', 'room.tasks',
+      '不写 inbox', '不推进 `head_seq`', '不要轮询任务列表',
+      'agent_tasks.sh'].every((marker) => skillText.includes(marker)),
+    skillText.slice(0, 320),
+  );
+  check(
+    '技能正文声明任务文本 120 字与长内容 .md',
+    skillText.includes('1–120') &&
+      skillText.includes('拒绝换行与控制字符') &&
+      skillText.includes('.md'),
+    skillText.slice(0, 260),
+  );
+  check(
     '技能正文说明群聊 @ 名字由服务端解析',
     skillText.includes('群聊派活') &&
       skillText.includes('省略 `invoke`') &&
@@ -1491,6 +1601,22 @@ async function main(): Promise<void> {
       homeHtml.includes('离线') &&
       homeHtml.includes('未知'),
   );
+  check(
+    '首页包含房间任务行、浮层与侧栏 badge 脚本',
+    homeHtml.includes('id="task-toggle"') &&
+      homeHtml.includes('id="task-popover"') &&
+      homeHtml.includes('id="task-list"') &&
+      homeHtml.includes('room-task-badge') &&
+      homeHtml.includes('network_task_list_get') &&
+      homeHtml.includes("callTool('network_task_summary'"),
+  );
+  check(
+    '任务 UI 使用 textContent 且不写 token',
+    homeHtml.includes('description.textContent') &&
+      homeHtml.includes('result.textContent') &&
+      !homeHtml.includes('taskPopoverElement.innerHTML') &&
+      !homeHtml.includes('taskListElement.innerHTML'),
+  );
 
   const skillDoc = await fetch(`${baseUrl()}/skills/agent-network-skills.md`);
   checkEqual('GET /skills/agent-network-skills.md 返回 200', skillDoc.status, 200);
@@ -1527,6 +1653,14 @@ async function main(): Promise<void> {
       skillDocText.includes(name),
     ),
     skillDocText.slice(0, 240),
+  );
+  check(
+    '静态技能包含房间任务命令与不唤醒规范',
+    ['agent_tasks.sh', '### 房间任务', 'network_task_list_get', 'network_task_claim',
+      'network_task_summary', 'room.tasks', '不写 inbox', '不会唤醒 Agent'].every((marker) =>
+      skillDocText.includes(marker),
+    ),
+    skillDocText.slice(0, 300),
   );
   check(
     '静态技能包含短回复与长内容文件指引',
@@ -1901,6 +2035,48 @@ async function main(): Promise<void> {
       agentnetScriptText.includes('if $invoke == null then {} else {invoke:$invoke} end') &&
       agentnetScriptText.includes('--no-invoke) invoke=\'[]\''),
     agentnetScriptText.slice(0, 300),
+  );
+
+  const agentTasksScript = await fetch(`${baseUrl()}/skills/agent_tasks.sh`);
+  checkEqual('GET /skills/agent_tasks.sh 返回 200', agentTasksScript.status, 200);
+  const agentTasksType = agentTasksScript.headers.get('content-type') ?? '';
+  const agentTasksText = await agentTasksScript.text();
+  check(
+    '任务命令脚本可通过 /skills 下载并包含全部子命令',
+    agentTasksType.includes('text/x-shellscript') &&
+      ['list', 'summary', 'add', 'claim', 'complete', 'fail', 'update', 'delete'].every(
+        (marker) => agentTasksText.includes(`  ${marker}`),
+      ) &&
+      ['network_task_list_get', 'network_task_summary', 'network_task_add',
+        'network_task_claim', 'network_task_complete', 'network_task_fail',
+        'network_task_update', 'network_task_delete'].every((marker) =>
+        agentTasksText.includes(marker),
+      ),
+    { contentType: agentTasksType },
+  );
+  check(
+    '任务命令脚本使用 Bearer、--json 与 0600 curl 配置且不轮询',
+    agentTasksText.includes('Authorization: Bearer') &&
+      agentTasksText.includes('--json') &&
+      agentTasksText.includes('chmod 600') &&
+      agentTasksText.includes('umask 077') &&
+      agentTasksText.includes('不轮询') &&
+      !/\bwhile true\b/u.test(agentTasksText),
+    agentTasksText.slice(0, 320),
+  );
+  check(
+    '任务命令脚本不包含硬编码 Bearer token',
+    !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(agentTasksText),
+  );
+  const agentTasksSyntax = Bun.spawnSync({
+    cmd: ['bash', '-n', 'public/skills/agent_tasks.sh'],
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  check(
+    'agent_tasks.sh 通过 bash -n',
+    agentTasksSyntax.exitCode === 0,
+    agentTasksSyntax.stderr.toString(),
   );
 
   const claudeGuide = await fetch(`${baseUrl()}/skills/harness-claude.md`);

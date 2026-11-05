@@ -39,6 +39,14 @@ import {
   roomMonitorSetSchema,
   roomsListSchema,
   syncSchema,
+  taskAddSchema,
+  taskClaimSchema,
+  taskCompleteSchema,
+  taskDeleteSchema,
+  taskFailSchema,
+  taskListGetSchema,
+  taskSummarySchema,
+  taskUpdateSchema,
 } from '../contracts/schemas';
 import { agentsGet, archiveAgent, unarchiveAgent } from '../domain/agents';
 import { contactAdd, contactRemove, contactsList } from '../domain/contacts';
@@ -77,6 +85,16 @@ import {
   type RoomDetail,
 } from '../domain/rooms';
 import { roomMonitorGet, roomMonitorSet } from '../domain/room-monitors';
+import {
+  taskAdd,
+  taskClaim,
+  taskComplete,
+  taskDelete,
+  taskFail,
+  taskListGet,
+  taskSummary,
+  taskUpdate,
+} from '../domain/tasks';
 import { sync } from '../domain/sync';
 import type { Env } from '../env';
 import { login, presenceOf } from '../realtime/presence';
@@ -108,6 +126,10 @@ import {
   roomDetailSchema,
   roomMonitorResultSchema,
   roomPageSchema,
+  roomTaskDeletedSchema,
+  roomTaskListSchema,
+  roomTaskResultSchema,
+  roomTaskSummarySchema,
   sendResultSchema,
   syncPageSchema,
 } from './outputs';
@@ -497,6 +519,104 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       return roomMonitorSet(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_list_get',
+    '读取房间任务列表（默认列表）：active 成员可用，返回短描述、状态、assignee 与结果，以及 total/done。任务变更是 informational，不产生未读、inbox 或交付；Agent 应在定时或唤醒后主动 list，不要轮询。',
+    taskListGetSchema,
+    roomTaskListSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskListGet(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_summary',
+    '一次读取当前身份所有 active 房间的任务进度（可传 room_ids 过滤，仅返回本人仍有效的房间），供侧栏 badge 使用；避免对每个房间调用 list。只读，不轮询。',
+    taskSummarySchema,
+    roomTaskSummarySchema,
+    async (input) => {
+      requireActor(principal);
+      return taskSummary(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_add',
+    '向房间添加一个 pending 任务；任何 active 成员（含 human）都可添加。description trim 后必须为 1–120 个字符且不含换行/控制字符；长内容请写成 .md 文件。任务变更只写 room informational 事件，不写 inbox、不推进 head、不产生未读。',
+    taskAddSchema,
+    roomTaskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskAdd(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_claim',
+    'Agent 成员领取一个 pending 任务，原子转为 claimed 并记录 assignee。human 调用返回 INVALID_ARGUMENT；并发或被他人领取返回 CLAIM_CONFLICT。任务通知不唤醒 Agent，需在定时或唤醒后 list。',
+    taskClaimSchema,
+    roomTaskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskClaim(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_complete',
+    '仅任务 assignee 可把 claimed 任务完成为 done；result 必须为 1–120 个字符且不含换行/控制字符。任务完成不写 inbox、不产生未读或 head 变化。',
+    taskCompleteSchema,
+    roomTaskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskComplete(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_fail',
+    '仅任务 assignee 可把 claimed 任务标记为 failed；error 必须为 1–120 个字符且不含换行/控制字符。任务失败不写 inbox、不产生未读或 head 变化。',
+    taskFailSchema,
+    roomTaskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskFail(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_update',
+    '任务创建者或房间 owner 修改任务描述，不改变状态、assignee、结果或完成时间。description 限制同 add。',
+    taskUpdateSchema,
+    roomTaskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskUpdate(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_delete',
+    '任务创建者或房间 owner 删除任务；不改变消息、未读、head 或 inbox。',
+    taskDeleteSchema,
+    roomTaskDeletedSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskDelete(db, principal, input);
     },
   );
 

@@ -5,6 +5,7 @@ import type {
   RoomFileRow,
   RoomMemberRow,
   RoomRow,
+  RoomTaskRow,
 } from './rows';
 
 export interface D1Like {
@@ -79,6 +80,11 @@ export async function getActorRoomMonitor(
     .prepare('SELECT * FROM actor_room_monitors WHERE actor_id = ? AND room_id = ?')
     .bind(actorId, roomId)
     .first<import('./rows').ActorRoomMonitorRow>();
+}
+
+/** 按 task_id 读取任务；房间归属由调用方校验。 */
+export async function getRoomTask(db: D1Like, taskId: string): Promise<RoomTaskRow | null> {
+  return db.prepare('SELECT * FROM room_tasks WHERE task_id = ?').bind(taskId).first<RoomTaskRow>();
 }
 
 export async function getDelivery(db: D1Like, deliveryId: string): Promise<DeliveryRow | null> {
