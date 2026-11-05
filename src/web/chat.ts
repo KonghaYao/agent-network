@@ -19,6 +19,7 @@ import {
   DEVICE_HANDOFF_STYLE,
   HANDOFF_ADOPT_SCRIPT,
   deviceHandoffDialog,
+  logoutDialog,
 } from './handoff';
 import { layout } from './layout';
 
@@ -48,6 +49,7 @@ ${groupDialog()}
 ${membersDialog()}
 ${newAgentDialog()}
 ${deviceHandoffDialog()}
+${logoutDialog()}
 ${toastPane()}
 ${chatClientScript(roomId)}`,
     APP_STYLE + FILES_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE,

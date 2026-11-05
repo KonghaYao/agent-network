@@ -116,6 +116,46 @@ function updateAccount(me) {
     accountAvatarElement.textContent = firstChar(me.name);
     accountAvatarElement.style.background = avatarColor(me.name);
   }
+  const actions = document.querySelector('.account-actions');
+  if (actions) actions.hidden = false;
+  if (newGroupButton) newGroupButton.disabled = false;
+  const startButton = document.getElementById('logged-out-start');
+  if (startButton) startButton.hidden = true;
+  syncLogoutVisibility();
+}
+
+/**
+ * 已退出登录的本机首页：不自动注册新身份，显示分享链接/连接提示词引导。
+ *
+ * 只调整现有 DOM，不请求服务端；创建新身份由“创建新身份并继续”按钮显式触发。
+ */
+function showLoggedOutHome() {
+  if (roomListElement) roomListElement.replaceChildren();
+  clearListSkeleton();
+  setListRetry(false);
+  setEmptyListMessage(
+    '已退出登录。本机登录凭据与已保存的 Agent 连接提示词已清除；当前 token 仍然有效，其他设备不受影响。打开 Agent 分享链接或使用已有连接提示词即可继续；需要新身份时点击下方按钮。'
+  );
+  if (accountNameElement) accountNameElement.textContent = '未登录';
+  if (accountAvatarElement) {
+    accountAvatarElement.textContent = '?';
+    accountAvatarElement.style.background = '';
+  }
+  const actions = document.querySelector('.account-actions');
+  if (actions) actions.hidden = true;
+  if (newGroupButton) newGroupButton.disabled = true;
+  const startButton = document.getElementById('logged-out-start');
+  if (startButton) {
+    startButton.hidden = false;
+    startButton.disabled = false;
+  }
+  const emptyTitle = document.getElementById('empty-title');
+  if (emptyTitle) emptyTitle.textContent = '已退出登录';
+  const emptyHint = document.getElementById('empty-hint');
+  if (emptyHint) {
+    emptyHint.textContent = '打开 Agent 分享链接，或使用已有连接提示词；需要新身份时点击左侧“创建新身份并继续”。';
+  }
+  syncLogoutVisibility();
 }
 
 function roomMatches(entry, query) {

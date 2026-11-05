@@ -149,11 +149,17 @@ async function startServer(): Promise<{
   };
 }
 
-function initScript(token: string): string {
+function initScript(token: string, seedOnce = false): string {
   return `(() => {
   const TOKEN = ${JSON.stringify(token)};
+  const SEED_ONCE = ${seedOnce ? 'true' : 'false'};
+  let skipTokenSeed = false;
+  if (SEED_ONCE) {
+    try { skipTokenSeed = sessionStorage.getItem('__tokenSeeded') === '1'; } catch (error) {}
+  }
   try {
-    localStorage.setItem('agent-network-token', TOKEN);
+    if (!skipTokenSeed) localStorage.setItem('agent-network-token', TOKEN);
+    if (SEED_ONCE) sessionStorage.setItem('__tokenSeeded', '1');
     const prior = Number(sessionStorage.getItem('__spaMarker') || '0');
     window.__spaMarker = prior + 1;
     sessionStorage.setItem('__spaMarker', String(prior + 1));
@@ -260,9 +266,10 @@ async function makeContext(
   viewport: { width: number; height: number },
   allErrors: string[],
   watchConsole = true,
+  seedTokenOnce = false,
 ): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ viewport });
-  await context.addInitScript({ content: initScript(token) });
+  await context.addInitScript({ content: initScript(token, seedTokenOnce) });
   const page = await context.newPage();
   page.setDefaultTimeout(15_000);
   page.on('pageerror', (error) => allErrors.push(`pageerror: ${error.message}`));
@@ -2017,6 +2024,27 @@ async function main(): Promise<void> {
         ((await page.locator('#archived-agents').textContent()) ?? '').trim(),
         '',
       );
+      checkEqual('有 token 时显示退出登录图标', await page.locator('#logout').isVisible(), true);
+      checkEqual(
+        '退出登录图标有 aria-label',
+        await page.locator('#logout').getAttribute('aria-label'),
+        '退出登录',
+      );
+      checkEqual(
+        '退出登录图标有 title',
+        await page.locator('#logout').getAttribute('title'),
+        '退出登录',
+      );
+      checkEqual(
+        '退出登录图标不显示文字',
+        ((await page.locator('#logout').textContent()) ?? '').trim(),
+        '',
+      );
+      checkEqual(
+        '账号区只新增退出登录与归档两个图标',
+        await page.locator('#account .account-icon').count(),
+        2,
+      );
       check(
         '300px 侧栏账号区不横向溢出',
         (await page.evaluate(`(() => {
@@ -2218,6 +2246,282 @@ async function main(): Promise<void> {
         await mobile.page.evaluate(`window.__copiedHandoff.indexOf(location.origin + '/#t=') === 0`),
         true,
       );
+      await mobile.context.close();
+    }
+
+    // 2b-3. 左下角退出登录：本机清理、停止 SSE、跳转首页；token 不吊销。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+        true,
+        true,
+      );
+      const logoutConsole: string[] = [];
+      page.on('console', (message) => logoutConsole.push(message.text()));
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      await page.locator('#logout').waitFor({ state: 'visible' });
+
+      const fakeAgentUrl = `${server.base}/mcp?token=ank_logout_fixture_${crypto.randomUUID()}`;
+      await page.evaluate(
+        (entry) => localStorage.setItem('agent-network-agents-v1', entry),
+        JSON.stringify({
+          v: 1,
+          items: [
+            {
+              owner_actor_id: data.human.actor_id,
+              actor_id: data.agentA.actor_id,
+              name: data.agentA.name,
+              agent_session_id: data.agentA.agent_session_id,
+              created_at: String(Date.now()),
+              mcp_url: fakeAgentUrl,
+            },
+          ],
+        }),
+      );
+      await page.evaluate(`(() => {
+        window.__copiedLogoutPrompt = null;
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: function (text) {
+              window.__copiedLogoutPrompt = text;
+              return Promise.resolve();
+            }
+          }
+        });
+      })()`);
+
+      // 退出前右键入口保持可用：复制提示词成功，重发入口可打开二次确认。
+      const directLink = roomLink(data.direct.room.room_id);
+      await page.locator(directLink).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      checkEqual(
+        '退出前右键显示复制提示词',
+        await page.locator('#room-menu-copy-prompt').isVisible(),
+        true,
+      );
+      checkEqual(
+        '退出前右键显示重发 token',
+        await page.locator('#room-menu-reissue-token').isVisible(),
+        true,
+      );
+      await page.locator('#room-menu-copy-prompt').click();
+      await page.waitForFunction(`Boolean(window.__copiedLogoutPrompt)`);
+      const copiedLogoutPrompt = (await page.evaluate(
+        'window.__copiedLogoutPrompt',
+      )) as string | null;
+      check(
+        '退出前复制提示词仍包含 MCP URL 凭据',
+        Boolean(copiedLogoutPrompt) &&
+          copiedLogoutPrompt!.includes('AGENTNET_MCP_URL=') &&
+          copiedLogoutPrompt!.includes(fakeAgentUrl),
+      );
+      await page.keyboard.press('Escape');
+      const registryBeforeReissue = await page.evaluate(
+        `localStorage.getItem('agent-network-agents-v1')`,
+      );
+      await page.locator(directLink).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      const dismissed = new Promise<void>((resolve) => {
+        page.once('dialog', async (dialog) => {
+          await dialog.dismiss();
+          resolve();
+        });
+      });
+      await page.locator('#room-menu-reissue-token').click();
+      await dismissed;
+      await page.waitForFunction(
+        `(document.getElementById('room-menu-status').textContent || '').includes('已取消重发')`,
+      );
+      check(
+        '退出前取消重发不改变本地注册表',
+        (await page.evaluate(`localStorage.getItem('agent-network-agents-v1')`)) ===
+          registryBeforeReissue,
+      );
+      await page.keyboard.press('Escape');
+
+      // 取消退出：对话框关闭，凭据与注册表保持不变。
+      await page.locator('#logout').click();
+      checkEqual('退出登录弹窗打开', await page.locator('#logout-modal').isVisible(), true);
+      checkEqual(
+        '退出登录弹窗默认聚焦取消',
+        await page.evaluate(`document.activeElement && document.activeElement.id`),
+        'logout-cancel',
+      );
+      const logoutWarning =
+        (await page.locator('#logout-modal .logout-warning').textContent()) ?? '';
+      check(
+        '退出确认说明本机清理与 token 仍有效',
+        logoutWarning.includes('本机将清除登录凭据与已保存的 Agent 连接提示词') &&
+          logoutWarning.includes('当前 token 仍然有效') &&
+          logoutWarning.includes('其他设备不受影响'),
+        logoutWarning,
+      );
+      check(
+        '退出确认弹窗不展示 token',
+        !((await page.locator('#logout-modal').innerText()) ?? '').includes(data.humanToken),
+      );
+      await page.locator('#logout-cancel').click();
+      checkEqual('取消退出关闭弹窗', await page.locator('#logout-modal').isHidden(), true);
+      check(
+        '取消退出保留 token',
+        (await page.evaluate(`localStorage.getItem('agent-network-token')`)) ===
+          data.humanToken,
+      );
+      check(
+        '取消退出保留 Agent 注册表',
+        (await page.evaluate(`localStorage.getItem('agent-network-agents-v1')`)) ===
+          registryBeforeReissue,
+      );
+
+      // 确认退出：清除两个凭据 key、离开旧身份并跳转首页。
+      await page.locator('#logout').click();
+      await page.locator('#logout-confirm').click();
+      await page.waitForURL(`${server.base}/`);
+      await page.locator('#logged-out-start').waitFor({ state: 'visible' });
+      checkEqual('退出后跳转首页', page.url(), `${server.base}/`);
+      check(
+        '退出后清除浏览器 token',
+        (await page.evaluate(`localStorage.getItem('agent-network-token')`)) === null,
+      );
+      check(
+        '退出后清除本地 Agent 注册表',
+        (await page.evaluate(`localStorage.getItem('agent-network-agents-v1')`)) === null,
+      );
+      checkEqual(
+        '退出后只留下非敏感退出状态',
+        (await page.evaluate(`Object.keys(localStorage).sort().join(',')`)) as string,
+        'agent-network-logged-out',
+      );
+      checkEqual(
+        '退出后未登录不显示退出入口',
+        await page.locator('#logout').isHidden(),
+        true,
+      );
+      checkEqual('退出后隐藏账号操作', await page.locator('#account .account-actions').isHidden(), true);
+      checkEqual('退出后显示创建新身份入口', await page.locator('#logged-out-start').isVisible(), true);
+      const loggedOutStatus = (await page.locator('#room-list-status').textContent()) ?? '';
+      check(
+        '退出后首页显示分享链接与 token 仍有效引导',
+        loggedOutStatus.includes('已退出登录') &&
+          loggedOutStatus.includes('分享链接') &&
+          loggedOutStatus.includes('token 仍然有效'),
+        loggedOutStatus,
+      );
+      checkEqual(
+        '退出后桌面空状态同步',
+        (await page.locator('#empty-title').textContent())?.trim(),
+        '已退出登录',
+      );
+      const loggedOutHtml = await page.content();
+      check(
+        '退出后页面不含旧 token',
+        !loggedOutHtml.includes(data.humanToken) &&
+          !((await page.evaluate('document.body.innerText')) as string).includes(data.humanToken),
+      );
+      check(
+        '退出后 console 不含旧 token',
+        !logoutConsole.join('\n').includes(data.humanToken),
+      );
+      check(
+        '退出使用 location.replace 跳转',
+        loggedOutHtml.includes("window.location.replace('/')"),
+      );
+      await page.waitForTimeout(900);
+      checkEqual(
+        '退出后不自动注册新身份、不建立 SSE',
+        (await page.evaluate('window.__mcpCalls.length')) as number,
+        0,
+      );
+
+      // 显式创建新身份后可继续使用；旧 token 不复用。
+      await page.locator('#logged-out-start').click();
+      await page.waitForFunction(
+        `localStorage.getItem('agent-network-token') !== null &&
+         document.getElementById('account-name').textContent !== '未登录'`,
+      );
+      const newToken = (await page.evaluate(
+        `localStorage.getItem('agent-network-token')`,
+      )) as string;
+      check('退出后可创建新身份', newToken !== data.humanToken && newToken.length > 0);
+      checkEqual(
+        '创建新身份后移除退出状态',
+        await page.evaluate(`localStorage.getItem('agent-network-logged-out')`),
+        null,
+      );
+      checkEqual(
+        '创建新身份后重新显示退出入口',
+        await page.locator('#logout').isVisible(),
+        true,
+      );
+      checkEqual(
+        '创建新身份后隐藏创建入口',
+        await page.locator('#logged-out-start').isHidden(),
+        true,
+      );
+      await context.close();
+    }
+
+    // 2b-3a. 退出登录弹窗在 390px 与暗色下可访问。
+    {
+      const mobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await mobile.page.emulateMedia({ colorScheme: 'dark' });
+      await mobile.page.goto(`${server.base}/`);
+      await mobile.page.locator('#room-list .room-item').first().waitFor();
+      await mobile.page.locator('#logout').click();
+      checkEqual('390px 退出弹窗可见', await mobile.page.locator('#logout-modal').isVisible(), true);
+      const darkMetrics = (await mobile.page.evaluate(`(() => {
+        const card = document.querySelector('#logout-modal .modal-card');
+        const confirm = document.getElementById('logout-confirm');
+        if (!card || !confirm) return null;
+        const rect = card.getBoundingClientRect();
+        return {
+          dark: window.matchMedia('(prefers-color-scheme: dark)').matches,
+          background: getComputedStyle(card).backgroundColor,
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          left: rect.left,
+          right: rect.right
+        };
+      })()`)) as {
+        dark: boolean;
+        background: string;
+        view: number;
+        doc: number;
+        left: number;
+        right: number;
+      } | null;
+      check(
+        '390px 暗色退出弹窗不横向溢出',
+        Boolean(darkMetrics) &&
+          darkMetrics!.dark &&
+          darkMetrics!.doc <= darkMetrics!.view &&
+          darkMetrics!.left >= 0 &&
+          darkMetrics!.right <= darkMetrics!.view + 1,
+        darkMetrics,
+      );
+      checkEqual('暗色退出弹窗使用暗色面板', darkMetrics?.background, 'rgb(43, 43, 43)');
+      checkEqual(
+        '390px 取消按钮有可读标签',
+        await mobile.page.locator('#logout-cancel').getAttribute('aria-label'),
+        '取消退出登录',
+      );
+      checkEqual(
+        '390px 确认按钮有可读标签',
+        await mobile.page.locator('#logout-confirm').getAttribute('aria-label'),
+        '确认退出登录',
+      );
+      await mobile.page.locator('#logout-cancel').click();
+      checkEqual('390px 取消关闭退出弹窗', await mobile.page.locator('#logout-modal').isHidden(), true);
       await mobile.context.close();
     }
 

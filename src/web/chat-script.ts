@@ -5,6 +5,7 @@ import { CHAT_ARCHIVE_SCRIPT } from './chat-archive-script';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
 import { CHAT_LIST_SCRIPT } from './chat-list-script';
+import { CHAT_LOGOUT_SCRIPT } from './chat-logout-script';
 import { CHAT_MARKDOWN_SCRIPT } from './chat-markdown-script';
 import { CHAT_MEMBERS_SCRIPT } from './chat-members-script';
 import { CHAT_MESSAGE_FILES_SCRIPT } from './chat-message-files-script';
@@ -105,6 +106,7 @@ ${CHAT_MARKDOWN_SCRIPT}
 ${CHAT_RENDER_SCRIPT}
 ${NEW_AGENT_SCRIPT}
 ${CHAT_AGENTS_SCRIPT}
+${CHAT_LOGOUT_SCRIPT}
 ${CHAT_SESSION_SCRIPT}
 ${CHAT_STREAM_SCRIPT}
 ${CHAT_FILES_SCRIPT}
@@ -227,6 +229,11 @@ function callToolWithToken(name, args, token) {
  * 写入 localStorage，重复打开沿用同一身份；凭据被撤销时换新 token 重试一次。
  */
 function ensureIdentity() {
+  if (isLoggedOut()) {
+    return Promise.reject(
+      new Error('已退出登录。请先在首页创建新身份，或打开 Agent 分享链接。')
+    );
+  }
   if (identity) return Promise.resolve(identity);
   if (identityPromise) return identityPromise;
   identityPromise = (async function () {
@@ -796,7 +803,44 @@ if (groupForm) {
 
 if (accountCopyButton) accountCopyButton.addEventListener('click', copyActorId);
 
+const loggedOutStartButton = document.getElementById('logged-out-start');
+if (loggedOutStartButton) {
+  loggedOutStartButton.addEventListener('click', async function () {
+    if (loggedOutStartButton.disabled) return;
+    loggedOutStartButton.disabled = true;
+    // 显式点击后才清除“已退出”状态并自动注册新身份。
+    clearLoggedOutState();
+    identity = null;
+    identityPromise = null;
+    roomsPromise = null;
+    roomsLoadedAt = 0;
+    setEmptyListMessage('正在创建新身份…');
+    const emptyTitle = document.getElementById('empty-title');
+    if (emptyTitle) emptyTitle.textContent = '选择一个会话开始聊天';
+    const emptyHint = document.getElementById('empty-hint');
+    if (emptyHint) emptyHint.textContent = '从左侧选择单聊或群聊，也可以新建群聊。';
+    try {
+      await loadRooms();
+      if (identity) startActorStream();
+    } finally {
+      loggedOutStartButton.disabled = false;
+      if (identity) loggedOutStartButton.hidden = true;
+      syncLogoutVisibility();
+    }
+  });
+}
+
 (async function init() {
+  // 退出后通过 location.replace('/') 回到本页；不自动注册新身份，也不建 SSE。
+  if (isLoggedOut()) {
+    if (location.pathname !== '/') {
+      window.location.replace('/');
+      return;
+    }
+    bootstrapRoute(null);
+    showLoggedOutHome();
+    return;
+  }
   bootstrapRoute(initialRoomId);
   // 首页也启动；每页只有这一条 agentnet://stream，切换房间不重建。
   startActorStream();

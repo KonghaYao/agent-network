@@ -52,6 +52,8 @@ function browserToken() {
   if (value) return value;
   value = crypto.randomUUID();
   localStorage.setItem(TOKEN_KEY, value);
+  // 打开分享页并建立身份即重新登录；清除本机“已退出”引导状态。
+  localStorage.removeItem('agent-network-logged-out');
   return value;
 }
 

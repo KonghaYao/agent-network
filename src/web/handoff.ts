@@ -33,9 +33,38 @@ export function deviceHandoffAccount(): string {
             <path d="M10 13h4"></path>
           </svg>
         </button>
+        <button class="account-icon" id="logout" type="button"
+          aria-label="退出登录" title="退出登录"
+          aria-haspopup="dialog" aria-controls="logout-modal" aria-expanded="false" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M14 4h5v16h-5"></path>
+            <path d="M10 8l4 4-4 4"></path>
+            <path d="M14 12H4"></path>
+          </svg>
+        </button>
       </div>
     </div>
   </div>`;
+}
+
+/**
+ * 退出登录确认弹窗。
+ *
+ * 只清除本机凭据与 Agents 注册表；明确告知 token 仍然有效、其他设备不受影响。
+ * 不提供“吊销 token”选项，也不调用服务端。
+ */
+export function logoutDialog(): string {
+  return `<div class="modal" id="logout-modal" hidden>
+  <div class="modal-card logout-card" role="dialog" aria-modal="true" aria-labelledby="logout-title">
+    <h2 id="logout-title">退出登录</h2>
+    <p class="logout-warning">本机将清除登录凭据与已保存的 Agent 连接提示词；当前 token 仍然有效，其他设备不受影响。</p>
+    <p class="logout-hint">只在本机退出，不调用服务端，也不会吊销 token。退出后本机显示分享链接引导；需要继续使用时可创建新身份、重新扫码或打开 Agent 分享链接。</p>
+    <div class="row modal-actions logout-actions">
+      <button id="logout-cancel" type="button" aria-label="取消退出登录">取消</button>
+      <button class="danger" id="logout-confirm" type="button" aria-label="确认退出登录">退出登录</button>
+    </div>
+  </div>
+</div>`;
 }
 
 /** 扫码弹窗；不显示“已扫码”，服务端无感知。 */
@@ -77,6 +106,8 @@ export const HANDOFF_ADOPT_SCRIPT = `
   if (!token || token.length > 512 || token.trim() !== token) return;
   try {
     window.localStorage.setItem('agent-network-token', token);
+    // 扫码/分享链接即重新登录；清除本机“已退出”引导状态。
+    window.localStorage.removeItem('agent-network-logged-out');
   } catch (error) {
     return;
   }
@@ -209,6 +240,7 @@ export const DEVICE_HANDOFF_STYLE = `
   /* 三个文字按钮与单个归档图标在 280–320px 侧栏与 390px 移动端允许换行。 */
   .account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px;
     margin-top: 1px; }
+  .account-actions[hidden] { display: none; }
   .account-scan { padding: 0; border: 0; background: none;
     color: var(--wx-link, #576b95); font-size: 12px; cursor: pointer; }
   .account-scan:hover { text-decoration: underline; }
@@ -216,8 +248,22 @@ export const DEVICE_HANDOFF_STYLE = `
     border-radius: 4px; background: none; color: var(--wx-muted, #999);
     display: grid; place-items: center; cursor: pointer; }
   .account-icon:hover { background: var(--wx-hover, #ececec); color: var(--wx-text, #333); }
+  .account-icon[hidden] { display: none; }
   .account-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
     stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .logout-card { width: min(400px, 100%); box-sizing: border-box; }
+  .logout-warning { margin: 0 0 10px; padding: 10px; border-radius: 4px;
+    background: #fff7ed; color: #9a3412; font-size: 13px; line-height: 1.6;
+    overflow-wrap: anywhere; }
+  .logout-hint { margin: 0 0 16px; font-size: 12px; color: var(--wx-muted, #666);
+    line-height: 1.6; }
+  .logout-actions { justify-content: flex-end; }
+  button.danger { background: var(--wx-unread, #fa5151); border-color: var(--wx-unread, #fa5151);
+    color: #fff; }
+  button.danger:hover { background: #e04848; border-color: #e04848; }
+  @media (prefers-color-scheme: dark) {
+    .logout-warning { background: #3a2a1a; color: #fdba74; }
+  }
   .handoff-card { width: min(340px, 100%); text-align: center; }
   .handoff-card h2 { margin-bottom: 6px; }
   .handoff-qr-wrap { display: grid; place-items: center; margin: 10px 0 12px; padding: 8px;

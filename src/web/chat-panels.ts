@@ -49,6 +49,7 @@ export function sidebarPane(): string {
     </ol>
     <p id="room-list-status" class="list-hint" role="status">正在读取…</p>
     <button id="room-list-retry" class="list-retry" type="button" hidden>重试</button>
+    <button id="logged-out-start" class="list-retry" type="button" hidden>创建新身份并继续</button>
   </div>
   <footer class="sidebar-foot">
     <p id="stream-banner" class="stream-banner" role="status" hidden></p>
@@ -155,8 +156,8 @@ export function emptyPane(): string {
       <span class="empty-bubble left"></span>
       <span class="empty-bubble right"></span>
     </div>
-    <p class="empty-title">选择一个会话开始聊天</p>
-    <p class="empty-hint">从左侧选择单聊或群聊，也可以新建群聊。</p>
+    <p class="empty-title" id="empty-title">选择一个会话开始聊天</p>
+    <p class="empty-hint" id="empty-hint">从左侧选择单聊或群聊，也可以新建群聊。</p>
   </div>
 </section>`;
 }
