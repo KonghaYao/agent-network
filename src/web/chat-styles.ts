@@ -241,6 +241,14 @@ export const APP_STYLE = `
     color: var(--wx-link); font-size: 12px; }
   .link-btn:hover { background: var(--wx-hover); }
   .link-btn[hidden] { display: none; }
+  .copy-group-info { flex: 0 0 auto; display: inline-flex; align-items: center;
+    justify-content: center; width: 32px; height: 32px; padding: 0; border: 0;
+    border-radius: 6px; background: none; color: var(--wx-text); }
+  .copy-group-info:hover { background: var(--wx-hover); }
+  .copy-group-info:disabled { opacity: 0.55; }
+  .copy-group-info[hidden] { display: none; }
+  .copy-group-info svg { width: 17px; height: 17px; fill: none;
+    stroke: currentColor; stroke-width: 1.8; }
   .rename-form { flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
     padding: 8px 12px; background: var(--wx-sidebar); border-bottom: 1px solid var(--wx-line); }
   .rename-form[hidden] { display: none; }

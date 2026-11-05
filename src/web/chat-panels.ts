@@ -102,6 +102,13 @@ export function chatPane(): string {
       </div>
       <p class="muted" id="subtitle">正在加载…</p>
     </div>
+    <button class="copy-group-info" id="copy-group-info" type="button" hidden
+      aria-label="复制群信息" title="复制群信息">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="8" y="8" width="11" height="11" rx="2"></rect>
+        <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
+      </svg>
+    </button>
     <button class="monitor-toggle" id="monitor-toggle" type="button"
       aria-controls="monitor-pane" aria-expanded="false"
       aria-label="打开网页监控" title="网页监控">

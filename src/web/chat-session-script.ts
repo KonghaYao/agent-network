@@ -172,6 +172,7 @@ function applyRoomHeader() {
   }
   updateRenameAffordance();
   updateMembersAffordance();
+  updateCopyGroupInfoAffordance();
 }
 
 function applyRoomDetail(detail) {
@@ -644,6 +645,7 @@ async function openRoom(roomId, options) {
   currentItems = [];
   renderRooms();
   clearChatError();
+  updateCopyGroupInfoAffordance();
   if (sendButton) sendButton.disabled = false;
   const cache = roomCache.get(roomId);
   if (cache) {
@@ -710,6 +712,7 @@ function closeRoomView() {
   if (renameButton) renameButton.hidden = true;
   if (renameForm) renameForm.hidden = true;
   updateMembersAffordance();
+  updateCopyGroupInfoAffordance();
   if (statusElement) statusElement.textContent = '';
   stickyStatus = '';
   hideMentionPicker();

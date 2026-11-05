@@ -6,6 +6,7 @@ import { CHAT_ARCHIVE_SCRIPT } from './chat-archive-script';
 import { CHAT_AVATAR_SCRIPT } from './chat-avatar-script';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
+import { CHAT_GROUP_COPY_SCRIPT } from './chat-group-copy-script';
 import { CHAT_LIST_SCRIPT } from './chat-list-script';
 import { CHAT_LOGOUT_SCRIPT } from './chat-logout-script';
 import { CHAT_MARKDOWN_SCRIPT } from './chat-markdown-script';
@@ -117,6 +118,7 @@ ${CHAT_AVATAR_SCRIPT}
 ${CHAT_ARCHIVE_SCRIPT}
 ${CHAT_ROOM_MENU_SCRIPT}
 ${CHAT_MEMBERS_SCRIPT}
+${CHAT_GROUP_COPY_SCRIPT}
 ${CHAT_MESSAGE_FILES_SCRIPT}
 ${CHAT_MARKDOWN_SCRIPT}
 ${CHAT_RENDER_SCRIPT}
