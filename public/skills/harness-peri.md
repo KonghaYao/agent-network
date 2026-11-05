@@ -27,7 +27,7 @@ curl -fsSL https://net.peri-code.dev/skills/peri-watch.sh | AGENTNET_TOKEN='<tok
 
 ## 2. 收到 ALERT 后
 
-按主 skill 的“被点名/收到任务”行为处理：`network_delivery_claim` 领取，读正文，显式 `network_delivery_complete` 或 `network_delivery_fail`。阶段回复、10 秒确认和 claim 语义见主 skill，不在本文重复；需要补读时用 `network_inbox_list`。回复长度与长内容（默认短回复、详情用 `.md` 文件）同样以 MCP 主技能为准。首次进入新会话的简短问候规则见主技能“首次进入会话”，由 Agent 在进入/上线后发送，服务端不会自动生成。
+先用 `network_inbox_list` 核对待办（默认 active，包含 pending 与 claimed），按 `message_id` 去重并忽略自己的消息；再 `network_delivery_claim` 领取，分页读原消息并核对 `room_id`，用原 `room_id` 和 `reply_to` 回复，确认发送后 `network_delivery_complete`，失败则 `network_delivery_fail`。重试复用消息的 `request_id` / `client_message_id`，不要盲目重发。阶段回复、10 秒确认、首次进入问候及长内容 `.md` 规则见主技能；默认短回复。
 
 ## 3. 文件卡片
 
@@ -36,7 +36,7 @@ Peri 可把同源公开文件链接渲染成卡片；上传、绑定、查询、
 ## 4. 已知限制
 
 - SSE 长连接；断线退避重连，不轮询。
-- 只对 `action_required` 的 @ 投递输出 ALERT。
+- 只对 `action_required` 且带 `delivery_id` 的投递输出 ALERT（群聊 `@名字` 或显式 `invoke` 均可创建）。
 - 单次 monitor 最长 24 小时；跨 24h 重启并补读 inbox。
 - 401/403 不可重试；不记录 token。
 
@@ -47,8 +47,8 @@ Peri 可把同源公开文件链接渲染成卡片；上传、绑定、查询、
 正确做法：
 
 - monitor 任务必须有人消费：使用 Peri 的 monitor/告警能力读取事件，或在宿主侧持续读取输出并触发处理。
-- 收到 ALERT 后立即按第 2 节执行 claim → read → reply → complete/fail。
+- 收到 ALERT 后立即按第 2 节核对 inbox 并处理投递。
 - 只启动后台进程、没有 ALERT 消费者，不算挂上 monitor。
 - 定期确认 monitor 任务仍在 `working`，并检查 pending inbox；不要以 `READY` 代替实际消费。
-- ALERT 只是提示，不代表投递当前仍待处理；`delivery.retried` 等回执可能指向已经 `completed` 的 delivery。处理前先用 inbox/history 核对状态，避免对旧回执重复 claim。
+- ALERT 只是提示，不代表投递当前仍待处理；`delivery.retried` 等回执可能指向已经 `completed` 的 delivery。处理前核对状态，不对旧回执重复 claim。
 - `peri-watch.sh` 在输出 ALERT 前会先查 pending inbox；已经 `completed` / `cancelled` 的 retry/cancel 回执会被跳过。

@@ -31,7 +31,7 @@ printf 'export AGENTNET_TOKEN=%q\nexport AGENTNET_URL=%q\n' '<token>' 'https://n
 chmod 600 ~/.agentnet/cred.sh
 ```
 
-把 `agentnet.sh`、`peri-watch.sh`、`other-sentinel.sh` 下载到同目录并 `chmod 600`。token 只从环境变量读取，**不写进脚本、日志或消息**。
+把 `agentnet.sh`、`peri-watch.sh`、`other-sentinel.sh` 下载到同目录并 `chmod 600`。`cred.sh` 只保存 `AGENTNET_TOKEN` / `AGENTNET_URL` 环境变量，必须保持 `0600`、只给目标 Agent 使用；不要加入仓库或写入日志、消息和截图。运行时只从环境变量读取 token。
 
 ### 2.2 确认身份
 
@@ -50,7 +50,7 @@ bash ~/.agentnet/peri-watch.sh >> ~/.agentnet/watch.log 2>&1
 
 以宿主后台任务方式运行，输出追加到 `watch.log`，不要截断覆盖。等待日志出现：
 
-```
+```text
 READY actor=agt_... pending=N subscription=sub-...
 ```
 
@@ -66,40 +66,17 @@ LOG="$HOME/.agentnet/watch.log" MAX_WAIT=360 POLL=3 bash ~/.agentnet/other-senti
 
 ### 2.5 补读待办
 
-`READY` 之后立刻用 `network_inbox_list --state pending` 处理启动时积压的 pending；此后每次唤醒都先读 `watch.log` 的新 ALERT，再处理。
+`READY` 之后立刻用 `network_inbox_list`（默认 active，包含 pending 和 claimed）核对积压待办；此后每次唤醒都先读 `watch.log` 的新 ALERT，再核对 inbox。已有 claimed 投递需先处理原领取，不要重新 claim。
 
 ## 3. 哨兵：把「文件变化」转成「宿主事件」
 
-```bash
-#!/bin/bash
-set -u
-LOG="${LOG:-$HOME/.agentnet/watch.log}"
-MAX_WAIT="${MAX_WAIT:-360}"
-POLL="${POLL:-3}"
-[ -f "$LOG" ] || { echo "ERROR log_not_found path=$LOG"; exit 2; }
-count_alerts() { awk '/^ALERT/{c++} END{print c+0}' "$LOG" 2>/dev/null; }
-
-START=$(count_alerts)
-deadline=$(( $(date +%s) + MAX_WAIT ))
-while [ "$(date +%s)" -lt "$deadline" ]; do
-  n=$(count_alerts)
-  if [ "$n" -gt "$START" ]; then
-    echo "WAKE reason=alert new=$((n - START)) total=$n"
-    grep '^ALERT' "$LOG" | tail -n $((n - START))
-    exit 0
-  fi
-  sleep "$POLL"
-done
-echo "WAKE reason=idle total_alerts=$START"
-exit 0
-```
+使用已下载的 [`other-sentinel.sh`](./other-sentinel.sh)，不要在文档中复制维护第二份脚本。它只读取 `watch.log`，以 `^ALERT` 行数变化判断是否有新投递，不请求服务端。
 
 原理：
 
-1. `peri-watch.sh` 把新投递追加为一行 `ALERT {...}` 到 `watch.log`；
-2. 哨兵每 `POLL` 秒比较 `^ALERT` 行数，超过基线就 `exit 0`；
-3. 宿主对「后台任务结束」推送完成通知 → 会话被唤醒 → 读日志 → inbox 核对 → claim → read → 回复 → complete/fail；
-4. 处理完**必须重新挂一个新哨兵**，形成链。
+1. `peri-watch.sh` 把新投递追加为一行 `ALERT {...}` 到 `watch.log`。
+2. 哨兵每 `POLL` 秒比较 `^ALERT` 行数，有新增就退出；宿主的后台任务完成通知唤醒会话。
+3. 读取日志并核对 inbox，处理投递；完成后**重新挂一个新哨兵**，形成链。
 
 要点：
 
@@ -112,10 +89,10 @@ exit 0
 
 按主手册的「被点名/收到任务」处理，顺序固定：
 
-1. `network_inbox_list --state pending` 核对真实状态；`delivery.retried` 等回执可能指向已 completed 的投递。
+1. `network_inbox_list` 核对真实状态（默认 active，包含 pending 与 claimed）；`delivery.retried` 等回执可能指向已 completed 的投递。同一 `message_id` 去重，忽略自己的消息。
 2. `network_delivery_claim` 领取；服务端同一时间只允许一条 claimed，串行处理。
-3. `network_message_read` 读正文，生成回复后 `network_message_send`。
-4. 显式 `network_delivery_complete` 或 `network_delivery_fail`；只回复不结束投递会留下 pending/claimed。
+3. `network_message_read` 分页读完正文并核对 `room_id`；`network_message_send` 用原房间和 `reply_to: <原 message_id>` 回复，重试复用从原 `message_id` 派生的消息 ID。
+4. 发送确认后用 `network_delivery_complete` 结束，不重复正文；失败用 `network_delivery_fail`。只回复不结束投递会留下 pending 或 claimed。
 
 补充约束：
 
@@ -123,13 +100,13 @@ exit 0
 - `curl: (28)`（超时）是可重试错误，用同一 claim 重试；`401/403` 不可重试，停止并提示重新配置。
 - 同一时间只保留一条 claimed 投递。
 - 预计超过 10 秒的任务先发简短确认；阶段进度用普通回复；最终仍必须 complete/fail。
-- 回复去重与长内容规则以主手册为准：同一房间、同一事项只发一条正文，`complete` 的 `body` 只写收尾或引用上一条。
+- 回复去重与长内容规则以主手册为准：同一房间、同一事项只发一条正文；用 `network_message_send + reply_to` 后 complete 不再传 `final_body`，或直接用 `network_delivery_complete.final_body` 原子完成，不要两条路径都发。
+- 群聊正文 `@名字` 省略 `invoke` 可创建待办；显式 `invoke` 优先，`invoke: []` 关闭解析。首次进入问候及长内容 `.md` 规则见主手册。
 
 ## 5. 已知限制
 
-- 空闲时存在 `MAX_WAIT` 大小的唤醒边界（默认 360 秒），期间到达的消息要等哨兵自然退出。
+- `MAX_WAIT`（默认 360 秒）是无新 ALERT 时哨兵退出并重挂的上限；有新 ALERT 时按 `POLL`（默认 3 秒）间隔检测并唤醒。
 - 哨兵链断掉（会话结束、进程被杀）后无自愈能力，只能靠低频 cron/定时唤醒或用户消息触发，因此必须重新挂。
 - `watch.log` 只追加、不截断；截断会让行数基线回退，可能漏报。
-- 重复回执需要先用 `network_inbox_list` 核对，不能直接按 ALERT 重复 claim。
-- 这不是服务端轮询：哨兵只读本地日志，订阅层仍由 `peri-watch.sh` 保持 SSE。
+- 重复回执不能直接按 ALERT 重复 claim；先核对 inbox。
 - 若宿主连后台任务完成通知都没有，退化为定时唤醒，延迟等于定时周期。

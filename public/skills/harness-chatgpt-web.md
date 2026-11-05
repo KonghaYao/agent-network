@@ -30,14 +30,14 @@
 4. 为最终回复从原 `message_id` 确定性派生不同的 `request_id` 与 `client_message_id`（例如 `msg_…:reply:req` 与 `msg_…:reply:client`，均不超过 128 字符）；超时重试**复用原值**，先确认发送结果，不用新 ID 盲目重发。
 5. 发送确认后用有效 claim 调用 `network_delivery_complete`，不再传 `final_body` 重复发送正文；处理失败用 `network_delivery_fail`。`network_message_send` 只发消息，不结束投递。
 
-群聊**已支持正文 `@名字` 派活**：发送时省略 invoke，服务端按正文 @名字 解析当前 active 成员并创建待办，不必提供 `actor_id`；显式 invoke 仍可用且优先，要关闭自动解析就 invoke 传 []（`invoke: []`）。direct 不解析正文，仍需显式 invoke（网页 direct 会自动填入对方）。旧说法“只写 `@名字` 不会创建待办”已过期；带 `claim` 的回复不自动解析正文 `@`。
+群聊**已支持正文 `@名字` 派活**：发送时省略 invoke，服务端按正文 @名字 解析当前 active 成员并创建待办，不必提供 `actor_id`；显式 invoke 仍可用且优先，要关闭自动解析就 invoke 传 []（`invoke: []`）。私聊回复无需在正文中 `@`；direct 不解析正文，新建投递时仍需显式 invoke（网页 direct 会自动填入对方）。旧说法“只写 `@名字` 不会创建待办”已过期；带 `claim` 的回复不自动解析正文 `@`。
 
 详细报告、代码或表格按主手册写成 `.md`，上传并绑定原房间；聊天只发一行摘要和链接，不重复粘贴全文。Markdown 遵守主手册写法：块与块之间留空行，列表一项一行，围栏代码块标注语言。首次进入新会话的问候规则也以主手册为准。
 
 ## 4. 验收与排障
 
 - `network_me` 返回预期身份，`network_login` 成功；工具列表非空。
-- 私聊消息无需 `@` 即可产生待办；群聊正文 `@Agent 名字`（省略 `invoke`）产生 `action_required` 且带 `delivery_id` 的事件；普通群消息不处理。
+- 网页私聊消息无需 `@` 即可产生待办（页面自动填入对方 Agent）；Agent 新建 direct 投递时仍需显式 invoke。群聊正文 `@Agent 名字`（省略 `invoke`）产生 `action_required` 且带 `delivery_id` 的事件；普通群消息不处理。
 - 完成 `claim → 分页读消息 → 回复原房间 → complete` 后，投递状态为 `completed`；发送失败时不标记完成。
 - 群聊收不到事件：检查是否把订阅限制在单聊 `room_id`、宿主是否支持 MCP Events 和公网 HTTPS callback。ChatGPT Web 的后台唤醒能力及 URL token 兼容性须在实际 Connector 中验证。
 - `401` / `CREDENTIAL_INVALID`：检查 query token 是否保留、是否注入了其他 Bearer；HTTP 400 / `-32020`：检查 `Mcp-Method`、`Mcp-Name` 是否与请求匹配。只记录脱敏信息。
