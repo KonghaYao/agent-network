@@ -261,6 +261,7 @@ function applyCachedRoom(cache) {
   // 缓存只用于立即绘制；进入会话一律看最新消息，不再恢复旧 scrollTop。
   scrollController.scrollToBottom();
   if (bodyInput) bodyInput.value = drafts.get(activeRoomId) || '';
+  renderComposerFiles(activeRoomId);
   resizeComposer();
 }
 
@@ -588,6 +589,7 @@ function ensureRoomEntry(detail) {
     entry.updated_at = detailRoom.updated_at;
   }
   roomEntries = sortRooms(roomEntries);
+  syncRoomFilterForRoom(detailRoom.room_id);
   renderRooms();
   return entry;
 }
@@ -625,6 +627,7 @@ async function openRoom(roomId, options) {
   const previousId = activeRoomId;
   snapshotActiveRoom();
   activeRoomId = roomId;
+  syncRoomFilterForRoom(roomId);
   const epoch = ++roomEpoch;
   if (roomAbort) roomAbort.abort();
   roomAbort = new AbortController();
@@ -663,6 +666,7 @@ async function openRoom(roomId, options) {
       subtitleElement.hidden = false;
     }
     if (bodyInput) bodyInput.value = drafts.get(roomId) || '';
+    renderComposerFiles(roomId);
     resizeComposer();
   }
   try {
@@ -703,6 +707,7 @@ function closeRoomView() {
   if (chatErrorElement) chatErrorElement.hidden = true;
   if (chatErrorTextElement) chatErrorTextElement.textContent = '';
   if (sendButton) sendButton.disabled = false;
+  renderComposerFiles(null);
   if (titleElement) titleElement.textContent = '单聊';
   if (subtitleElement) {
     subtitleElement.textContent = '';

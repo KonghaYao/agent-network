@@ -11,7 +11,7 @@
 export const CHAT_LOGOUT_SCRIPT = `
 const LOGGED_OUT_KEY = 'agent-network-logged-out';
 // 搜索确认后，只有这两个 key 与凭据/会话相关。
-// agent-network-files-open 是文件栏 UI 偏好，退出时保留。
+// agent-network-files-open 与 agent-network-room-filter 是 UI 偏好，退出时保留。
 const LOGOUT_CREDENTIAL_KEYS = ['agent-network-token', 'agent-network-agents-v1'];
 
 function isLoggedOut() {

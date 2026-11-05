@@ -10,7 +10,7 @@
 
 退出登录：`src/web/chat-logout-script.ts` 在主脚本共享作用域内提供 `#logout` 图标与 `#logout-modal` 确认弹窗；入口只在有 token 时显示，带 `aria-label`/`title`“退出登录”，默认聚焦“取消”，支持 Esc/遮罩关闭、暗色与 390px。确认后只删除本机 `localStorage['agent-network-token']` 与 `localStorage['agent-network-agents-v1']`（`agent-network-files-open` 等 UI 偏好保留），删除 `agent-network-*` sessionStorage 状态，调用 `stopActorStream()` 断开 SSE/重连/补读定时器，然后 `location.replace('/')`；不调用服务端、不吊销 token。退出后首页读取非敏感 `localStorage['agent-network-logged-out']`，不自动注册新身份、不建 SSE，列表与桌面空状态显示分享链接/连接提示词引导及“创建新身份并继续”；点击该按钮、`#t=` 采纳或分享页新建身份时清除标记。弹窗与文档必须写明 token 仍然有效、其他设备不受影响；token 不进入弹窗文本、DOM、console 或测试输出。
 
-应用页按职责拆分：`src/web/chat.ts` 只保留 `renderAppPage` / `renderChatPage` 与外壳组合；样式在 `chat-styles.ts`，静态标记与搜索框在 `chat-panels.ts`，通信/刷新/事件在 `chat-script.ts`，输入框附件按钮与粘贴图片在 `chat-upload-script.ts`、样式在 `chat-upload-styles.ts`，会话列表与搜索在 `chat-list-script.ts`，Agent 品牌头像映射与图片回退在 `chat-avatar-script.ts`，退出登录清理与确认弹窗在 `chat-logout-script.ts`，本人姓名编辑在 `chat-account-rename-script.ts`，归档状态、已归档浮层与 toast 在 `chat-archive-script.ts`，群聊头部复制群信息提示词在 `chat-group-copy-script.ts`，消息渲染（时间胶囊、@ 高亮、回执）在 `chat-render-script.ts`。右侧面板分栏由 `src/web/resizer/entry.tsx`（React 岛，`@use-gesture/react`）与 `src/web/chat-resizer-script.ts` 负责，构建在 `src/web/resizer-bundle.ts`，只写 `--right-pane-ratio`，不重建聊天/文件/监控 DOM。列表与渲染片段拼进同一个 `<script>` 共享作用域；拆分不改变工具契约、DOM id/class 或页面行为。所有 `src/web/*.ts` 均低于 `STD-SIZE-001` 的 1000 行上限。
+应用页按职责拆分：`src/web/chat.ts` 只保留 `renderAppPage` / `renderChatPage` 与外壳组合；样式在 `chat-styles.ts`，静态标记与搜索框在 `chat-panels.ts`，通信/刷新/事件在 `chat-script.ts`，输入框附件按钮、待发送文件 chips 与粘贴图片在 `chat-upload-script.ts`、样式在 `chat-upload-styles.ts`，会话列表、单聊/群聊分类与搜索在 `chat-list-script.ts`，Agent 品牌头像映射与图片回退在 `chat-avatar-script.ts`，退出登录清理与确认弹窗在 `chat-logout-script.ts`，本人姓名编辑在 `chat-account-rename-script.ts`，归档状态、已归档浮层与 toast 在 `chat-archive-script.ts`，群聊头部复制群信息提示词在 `chat-group-copy-script.ts`，消息渲染（时间胶囊、@ 高亮、回执）在 `chat-render-script.ts`。右侧面板分栏由 `src/web/resizer/entry.tsx`（React 岛，`@use-gesture/react`）与 `src/web/chat-resizer-script.ts` 负责，构建在 `src/web/resizer-bundle.ts`，只写 `--right-pane-ratio`，不重建聊天/文件/监控 DOM。列表与渲染片段拼进同一个 `<script>` 共享作用域；拆分不改变工具契约、DOM id/class 或页面行为。所有 `src/web/*.ts` 均低于 `STD-SIZE-001` 的 1000 行上限。
 
 AI 消息 Markdown：`src/web/markdown/entry.tsx` 是唯一的 React 子树（React 19 + `streamdown` 2.7.0，`mode="static"`、`parseIncompleteMarkdown={false}`），只接收 `sender_kind === 'agent'` 的气泡；`src/web/chat-markdown-script.ts` 在首条 AI 消息出现时懒加载 `/assets/chat-markdown.js`（失败只请求一次并保留纯文本），负责 mount/update/destroy 与滚动补偿；样式在 `src/web/chat-markdown-styles.ts`。`src/web/markdown-bundle.ts` 在 `src/bun/main.ts` 启动时用 `Bun.build` 生成单文件浏览器 bundle，`src/app.ts` 以正确 content-type、`nosniff` 与 5 分钟缓存提供；构建失败返回 404。安全配置为 sanitize + harden（`http/https/mailto`、无图片、无 data image、`defaultOrigin=location.origin`），不启用 `rehype-raw`，不内置图片，不使用 `dangerouslySetInnerHTML`；链接强制 `target=_blank`/`rel`/`referrerPolicy`，错误边界回退纯文本。服务端 `network_history_list` 在 `messageSchema` 上增加只读 `sender_kind`，网页优先该字段并回退 `members`；人类消息始终纯文本，512B 截断的 AI 消息展开后再渲染 Markdown。文件卡片仍由正文扫描生成在气泡外，`@名字` 在文本节点内高亮、代码块内不误高亮。
 
@@ -62,8 +62,8 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 浏览器 bundle 共用构建器 | `src/web/client-bundle.ts` |
 | 拖拽 bundle 构建与 asset 路由 | `src/web/resizer-bundle.ts`、`src/bun/main.ts`、`src/app.ts` |
 | 应用页内联客户端脚本（通信、刷新、建群、@、扫码弹窗） | `src/web/chat-script.ts` |
-| 输入框附件按钮、隐藏文件选择器与粘贴图片上传 | `src/web/chat-upload-script.ts`、`src/web/chat-upload-styles.ts`、`src/web/chat-panels.ts` |
-| 会话列表、搜索过滤、头像与未读 | `src/web/chat-list-script.ts` |
+| 输入框附件按钮、隐藏文件选择器、拖拽/粘贴上传与待发送文件 chips | `src/web/chat-upload-script.ts`、`src/web/chat-upload-styles.ts`、`src/web/chat-panels.ts`、`src/web/chat-files-actions-script.ts` |
+| 会话列表、单聊/群聊分类切换、搜索过滤、头像与未读 | `src/web/chat-list-script.ts`、`src/web/chat-panels.ts`、`src/web/chat-styles.ts` |
 | 消息气泡、时间胶囊、@ 高亮与回执 | `src/web/chat-render-script.ts` |
 | 本地 Agent 注册表（不含归档状态） | `src/web/chat-agents-script.ts` |
 | 新建 Agent（注册、自动建 direct 会话、已读与关闭对账） | `src/web/new-agent-script.ts` |

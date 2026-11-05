@@ -1349,7 +1349,8 @@ async function runAvatarAcceptance(
     monoFlags,
   );
 
-  const sidebar = (await page.evaluate(
+  await page.locator('#room-filter-direct').click();
+  const directSidebar = (await page.evaluate(
     `(() => {
       function read(roomId) {
         const link = document.querySelector('#room-list a.room-item[href="/c/' + roomId + '"]');
@@ -1366,11 +1367,28 @@ async function runAvatarAcceptance(
       return {
         codex: read(${JSON.stringify(codexRoom.room.room_id)}),
         plain: read(${JSON.stringify(plainRoom.room.room_id)}),
-        tibo: read(${JSON.stringify(tiboRoom.room.room_id)}),
-        group: read(${JSON.stringify(groupRoom.room.room_id)})
+        tibo: read(${JSON.stringify(tiboRoom.room.room_id)})
       };
     })()`,
-  )) as Record<string, { src: string | null; text: string | null; icon: boolean; cells: number } | null>;
+  )) as {
+    codex: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
+    plain: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
+    tibo: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
+  };
+  await page.locator('#room-filter-group').click();
+  const groupSidebar = (await page.evaluate(
+    `(() => {
+      const link = document.querySelector('#room-list a.room-item[href="/c/' + ${JSON.stringify(groupRoom.room.room_id)} + '"]');
+      if (!link) return null;
+      return {
+        src: null,
+        text: link.querySelector('.avatar') ? link.querySelector('.avatar').textContent : null,
+        icon: false,
+        cells: link.querySelectorAll('.avatar-cell').length
+      };
+    })()`,
+  )) as { src: string | null; text: string | null; icon: boolean; cells: number } | null;
+  const sidebar = { ...directSidebar, group: groupSidebar };
   checkEqual('侧栏 Codex 品牌图标', sidebar.codex?.src, '/agent-icons/codex-color.svg');
   checkEqual('侧栏 Tibo 专用头像', sidebar.tibo?.src, TIBO_ICON_SRC);
   checkEqual('侧栏 Tibo 标记品牌图标', sidebar.tibo?.icon, true);
@@ -1506,6 +1524,7 @@ async function runAvatarAcceptance(
     actor_id: tibo.actor.actor_id,
   });
   await page.goto(`${base}/`);
+  await page.locator('#room-filter-direct').click();
   await waitRoomListName(page, '琶洲-dsh-dsh');
   await page.locator('#archived-agents').click();
   await page.waitForFunction(
@@ -1665,6 +1684,281 @@ async function main(): Promise<void> {
     const data = await fixture();
     browser = await chromium.launch({ headless: true });
     console.log(`浏览器验收: ${server.base}`);
+
+    // 1. 侧栏分类：单聊/群聊切换、搜索范围、未读、排序、归档、持久化与移动端暗色。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      checkEqual('侧栏分类容器为 tablist', await page.locator('#room-filter').getAttribute('role'), 'tablist');
+      checkEqual(
+        '侧栏默认单聊分类',
+        await page.locator('#room-filter-direct').getAttribute('aria-selected'),
+        'true',
+      );
+      const directKinds = (await page.evaluate(
+        `Array.from(document.querySelectorAll('#room-list .room-item')).map(function (node) { return node.dataset.roomKind; })`,
+      )) as string[];
+      check(
+        '单聊分类只渲染 direct 会话',
+        directKinds.length === 2 && directKinds.every((kind) => kind === 'direct'),
+        directKinds,
+      );
+      checkEqual(
+        '单聊分类隐藏群聊',
+        await page.locator(roomLink(data.group.room.room_id)).count(),
+        0,
+      );
+
+      await page.locator('#room-filter-group').click();
+      checkEqual(
+        '切换后群聊 aria-selected',
+        await page.locator('#room-filter-group').getAttribute('aria-selected'),
+        'true',
+      );
+      checkEqual(
+        '切换后单聊 aria-selected 取消',
+        await page.locator('#room-filter-direct').getAttribute('aria-selected'),
+        'false',
+      );
+      await page.waitForFunction(
+        `document.querySelectorAll('#room-list .room-item').length === 1`,
+      );
+      checkEqual(
+        '群聊分类显示群聊',
+        await page.locator(roomLink(data.group.room.room_id)).count(),
+        1,
+      );
+      const groupKinds = (await page.evaluate(
+        `Array.from(document.querySelectorAll('#room-list .room-item')).map(function (node) { return node.dataset.roomKind; })`,
+      )) as string[];
+      check('群聊分类只渲染 group 会话', groupKinds.every((kind) => kind === 'group'), groupKinds);
+
+      await page.fill('#room-search', '测试群');
+      await page.waitForFunction(
+        `document.querySelectorAll('#room-list .room-item').length === 1`,
+      );
+      checkEqual(
+        '群聊分类搜索命中群聊',
+        await page.locator(roomLink(data.group.room.room_id)).count(),
+        1,
+      );
+      await page.locator('#room-filter-direct').click();
+      await page.waitForFunction(
+        `document.querySelectorAll('#room-list .room-item').length === 0`,
+      );
+      await waitForText(page, '#room-list-status', '没有匹配的会话');
+      check(
+        '搜索只作用于当前分类',
+        (await page.locator('#room-list .room-item').count()) === 0,
+      );
+      await page.fill('#room-search', '');
+      await waitUntil(
+        async () => (await page.locator('#room-list .room-item').count()) === 2,
+        '清空搜索恢复单聊分类',
+      );
+
+      // 未读与排序：用独立临时 Agent 制造未读，避免刷新 Agent A/B 的在线状态。
+      const segmentAgentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+      const segmentAgent = await rawTool<Actor>(segmentAgentToken, 'network_register', {
+        request_id: requestId('segment_agent'),
+        kind: 'agent',
+        name: '分类未读 Agent',
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      const segmentRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [segmentAgent.actor_id],
+      });
+      await rawTool(segmentAgentToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: segmentRoom.room.room_id,
+        body: '分类未读消息',
+      });
+      await sleep(20);
+      await rawTool(data.humanToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: data.extra.room.room_id,
+        body: '分类排序消息',
+      });
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await waitUntil(
+        async () => (await page.locator(`${roomLink(segmentRoom.room.room_id)} .unread`).count()) === 1,
+        '单聊分类保留未读红点',
+      );
+      checkEqual(
+        '单聊分类保留未读红点',
+        await page.locator(`${roomLink(segmentRoom.room.room_id)} .unread`).count(),
+        1,
+      );
+      checkEqual(
+        '单聊分类按最后消息排序',
+        await page.locator('#room-list .room-item').first().getAttribute('href'),
+        `/c/${encodeURIComponent(data.extra.room.room_id)}`,
+      );
+      await page.locator('#room-filter-group').click();
+      checkEqual(
+        '群聊分类不混入单聊未读',
+        await page.locator(roomLink(segmentRoom.room.room_id)).count(),
+        0,
+      );
+
+      // 归档只影响 direct Agent 会话，不改变群聊分类。
+      await rawTool(data.humanToken, 'network_agent_archive', {
+        request_id: requestId('archive'),
+        actor_id: data.agentB.actor_id,
+      });
+      await page.reload();
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.locator('#room-filter-direct').click();
+      await waitUntil(
+        async () => (await page.locator(roomLink(data.extra.room.room_id)).count()) === 0,
+        '归档后单聊分类隐藏已归档 Agent',
+      );
+      checkEqual(
+        '归档后单聊分类隐藏已归档 Agent',
+        await page.locator(roomLink(data.extra.room.room_id)).count(),
+        0,
+      );
+      checkEqual(
+        '归档不影响未归档单聊',
+        await page.locator(roomLink(segmentRoom.room.room_id)).count(),
+        1,
+      );
+      await page.locator('#room-filter-group').click();
+      checkEqual(
+        '归档 Agent 不影响群聊分类',
+        await page.locator(roomLink(data.group.room.room_id)).count(),
+        1,
+      );
+      await rawTool(data.humanToken, 'network_agent_unarchive', {
+        request_id: requestId('unarchive'),
+        actor_id: data.agentB.actor_id,
+      });
+      const segmentNow = await rawTool<RoomDetail>(data.humanToken, 'network_room_get', {
+        room_id: segmentRoom.room.room_id,
+      });
+      await rawTool(data.humanToken, 'network_room_mark_read', {
+        room_id: segmentRoom.room.room_id,
+        through_seq: segmentNow.room.head_seq,
+      });
+
+      // 选择持久化：群聊分类刷新后仍保持。
+      await page.reload();
+      await page.locator('#room-list .room-item').first().waitFor();
+      checkEqual(
+        '刷新后保持群聊分类',
+        await page.locator('#room-filter-group').getAttribute('aria-selected'),
+        'true',
+      );
+      checkEqual(
+        '刷新后群聊分类仍只显示群聊',
+        await page.locator(roomLink(data.group.room.room_id)).count(),
+        1,
+      );
+      checkEqual('分类切换不影响新建群聊 +', await page.locator('#new-group').isEnabled(), true);
+
+      // 空分类各自的空态文案。
+      const emptyToken = crypto.randomUUID();
+      await rawTool(emptyToken, 'network_register', {
+        request_id: requestId('empty_human'),
+        kind: 'human',
+        name: '空分类人类',
+      });
+      const empty = await makeContext(
+        browser,
+        emptyToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await empty.page.goto(`${server.base}/`);
+      await waitForText(empty.page, '#room-list-status', '还没有单聊');
+      await empty.page.locator('#room-filter-group').click();
+      await waitForText(empty.page, '#room-list-status', '还没有群聊');
+      checkEqual(
+        '空群聊分类提示新建入口',
+        await empty.page.locator('#room-list-status').textContent(),
+        '还没有群聊。点击右上角 + 新建群聊。',
+      );
+      await empty.page.locator('#room-filter-direct').click();
+      await waitForText(empty.page, '#room-list-status', '还没有单聊');
+      check('空分类按 segment 显示空态', true);
+      await empty.context.close();
+      await context.close();
+
+      const mobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+        true,
+        false,
+        { colorScheme: 'dark' },
+      );
+      await mobile.page.goto(`${server.base}/`);
+      await mobile.page.locator('#room-list .room-item').first().waitFor();
+      await mobile.page.locator('#room-filter-group').click();
+      const filterMetrics = (await mobile.page.evaluate(`(() => {
+        const filter = document.getElementById('room-filter');
+        const direct = document.getElementById('room-filter-direct');
+        const group = document.getElementById('room-filter-group');
+        const rect = filter ? filter.getBoundingClientRect() : null;
+        const selected = getComputedStyle(group);
+        const other = getComputedStyle(direct);
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          left: rect ? rect.left : 0,
+          right: rect ? rect.right : 0,
+          directWidth: direct ? direct.getBoundingClientRect().width : 0,
+          groupWidth: group ? group.getBoundingClientRect().width : 0,
+          selectedBg: selected.backgroundColor,
+          selectedColor: selected.color,
+          otherColor: other.color,
+          dark: matchMedia('(prefers-color-scheme: dark)').matches
+        };
+      })()`)) as {
+        view: number;
+        doc: number;
+        left: number;
+        right: number;
+        directWidth: number;
+        groupWidth: number;
+        selectedBg: string;
+        selectedColor: string;
+        otherColor: string;
+        dark: boolean;
+      };
+      checkEqual('390px 暗色分类生效', filterMetrics.dark, true);
+      check(
+        '390px 分类不横向溢出',
+        filterMetrics.doc <= filterMetrics.view &&
+          filterMetrics.left >= -1 &&
+          filterMetrics.right <= filterMetrics.view + 1,
+        filterMetrics,
+      );
+      check(
+        '390px 分类两个 tab 等宽可见',
+        filterMetrics.directWidth > 0 && filterMetrics.groupWidth > 0,
+        filterMetrics,
+      );
+      check(
+        '暗色分类选中项使用面板色',
+        filterMetrics.selectedBg !== 'rgba(0, 0, 0, 0)' &&
+          filterMetrics.selectedColor !== filterMetrics.otherColor,
+        filterMetrics,
+      );
+      await mobile.context.close();
+    }
 
     // 1. 两阶段列表：摘要先出现，direct 名称/在线状态后台补全。
     {
@@ -2615,6 +2909,7 @@ async function main(): Promise<void> {
 
       // group 优先选房间内且本地有 MCP URL 的 Agent；没有凭据时回退通用提示词。
       await page.locator('#empty-state').click();
+      await page.locator('#room-filter-group').click();
       await page.locator(roomLink(data.group.room.room_id)).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
       const savedGroupToken = crypto.randomUUID();
@@ -2690,6 +2985,7 @@ async function main(): Promise<void> {
       await page.locator('#empty-state').click();
       checkEqual('点击菜单外关闭菜单', await page.locator('#room-menu').isHidden(), true);
 
+      await page.locator('#room-filter-direct').click();
       await directLink.click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
       await page.keyboard.press('Escape');
@@ -2707,6 +3003,7 @@ async function main(): Promise<void> {
       );
       checkEqual('滚动关闭菜单', await page.locator('#room-menu').isHidden(), true);
 
+      await page.locator('#room-filter-group').click();
       await page.locator(roomLink(data.group.room.room_id)).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
       await page.locator(roomLink(data.group.room.room_id)).click();
@@ -2738,6 +3035,7 @@ async function main(): Promise<void> {
         });
       })()`);
       const groupSelector = roomLink(data.group.room.room_id);
+      await page.locator('#room-filter-group').click();
       await page.evaluate(`(() => {
         const link = document.querySelector(${JSON.stringify(groupSelector)});
         const rect = link.getBoundingClientRect();
@@ -2954,6 +3252,7 @@ async function main(): Promise<void> {
       );
 
       await page.locator('#empty-state').click();
+      await page.locator('#room-filter-group').click();
       const groupPrompt = await copyPrompt(groupSelector, credentialStatus);
       const groupLines = groupPrompt.split('\n');
       checkEqual('恶意群名不改变提示词行数', groupLines.length, 12);
@@ -3003,6 +3302,7 @@ async function main(): Promise<void> {
       checkEqual('无凭据提示词行数固定', groupFallbackLines.length, 9);
 
       await page.locator('#empty-state').click();
+      await page.locator('#room-filter-direct').click();
       await page.evaluate(
         `document.querySelector(${JSON.stringify(directSelector)}).setAttribute('data-room-name', ${JSON.stringify('\u0001\u0085')})`,
       );
@@ -3081,6 +3381,7 @@ async function main(): Promise<void> {
           !(await page.locator('#empty-state').isVisible()),
       );
 
+      await page.locator('#room-filter-group').click();
       await page.locator(roomLink(data.group.room.room_id)).click();
       await waitRoom(page, data.group.room.room_id, '测试群');
       check(
@@ -3122,10 +3423,19 @@ async function main(): Promise<void> {
       );
       await page.fill('#room-search', '');
       await page.waitForFunction(
-        'document.querySelectorAll("#room-list .room-item").length >= 3',
+        'document.querySelectorAll("#room-list .room-item").length > 1',
       );
-      check('清空搜索恢复完整列表', true);
+      const clearedGroupKinds = (await page.evaluate(
+        `Array.from(document.querySelectorAll('#room-list .room-item')).map(function (node) { return node.dataset.roomKind; })`,
+      )) as string[];
+      check(
+        '清空搜索恢复当前分类完整列表',
+        clearedGroupKinds.length > 1 &&
+          clearedGroupKinds.every((kind) => kind === 'group'),
+        clearedGroupKinds,
+      );
 
+      await page.locator('#room-filter-direct').click();
       await page.locator(roomLink(data.direct.room.room_id)).click();
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       await page.waitForFunction('document.querySelectorAll("#messages .msg").length >= 20');
@@ -3140,8 +3450,10 @@ async function main(): Promise<void> {
         `document.getElementById('messages') ? document.getElementById('messages').scrollTop : 0`,
       )) as number;
       await page.fill('#body', '未发送的草稿');
+      await page.locator('#room-filter-group').click();
       await page.locator(roomLink(data.group.room.room_id)).click();
       await waitRoom(page, data.group.room.room_id, '测试群');
+      await page.locator('#room-filter-direct').click();
       await page.locator(roomLink(data.direct.room.room_id)).click();
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       await sleep(600);
@@ -3464,7 +3776,7 @@ async function main(): Promise<void> {
       checkEqual(
         'localStorage 保存浏览器 token 与含 Agent MCP URL 的注册表',
         await page.evaluate('Object.keys(localStorage).sort().join(",")'),
-        'agent-network-agents-v1,agent-network-token',
+        'agent-network-agents-v1,agent-network-room-filter,agent-network-token',
       );
       const registryDump = (await page.evaluate(
         `localStorage.getItem('agent-network-agents-v1') || ''`,
@@ -3488,6 +3800,7 @@ async function main(): Promise<void> {
       );
       await page.locator('#new-agent-close').click();
       await page.reload();
+      await page.locator('#room-filter-direct').click();
       await waitRoomListName(page, webAgentName);
       checkEqual('刷新后新建 Agent 会话仍存在', await webAgentRoomItem.count(), 1);
       checkEqual('刷新后仍是同一会话', await webAgentRoomItem.getAttribute('href'), webAgentRoomHref);
@@ -4403,10 +4716,16 @@ async function main(): Promise<void> {
         '退出后清除本地 Agent 注册表',
         (await page.evaluate(`localStorage.getItem('agent-network-agents-v1')`)) === null,
       );
-      checkEqual(
-        '退出后只留下非敏感退出状态',
-        (await page.evaluate(`Object.keys(localStorage).sort().join(',')`)) as string,
-        'agent-network-logged-out',
+      const loggedOutKeys = ((await page.evaluate(
+        `Object.keys(localStorage).sort().join(',')`,
+      )) as string).split(',');
+      check(
+        '退出后只留下非敏感 UI 偏好与退出状态',
+        loggedOutKeys.includes('agent-network-logged-out') &&
+          loggedOutKeys.every((key) =>
+            key === 'agent-network-logged-out' || key === 'agent-network-room-filter'
+          ),
+        loggedOutKeys,
       );
       checkEqual(
         '退出后未登录不显示退出入口',
@@ -4582,6 +4901,7 @@ async function main(): Promise<void> {
         })()`,
       );
 
+      await page.locator('#room-filter-group').click();
       await page.locator(roomLink(data.group.room.room_id)).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
       checkEqual(
@@ -4590,6 +4910,7 @@ async function main(): Promise<void> {
         true,
       );
       await page.keyboard.press('Escape');
+      await page.locator('#room-filter-direct').click();
       await page.locator(humanLink).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
       checkEqual(
@@ -5080,6 +5401,7 @@ async function main(): Promise<void> {
           }),
         )})`,
       );
+      await page.locator('#room-filter-group').click();
       await page.locator(roomLink(data.group.room.room_id)).click();
       await waitRoom(page, data.group.room.room_id, '测试群');
       await page.locator('#add-members').click();
@@ -5146,9 +5468,11 @@ async function main(): Promise<void> {
       );
       check('群聊头部显示添加成员入口', await page.locator('#add-members').isVisible());
 
+      await page.locator('#room-filter-direct').click();
       await page.locator(roomLink(data.direct.room.room_id)).click();
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       checkEqual('单聊不显示添加成员入口', await page.locator('#add-members').isHidden(), true);
+      await page.locator('#room-filter-group').click();
       await page.locator(roomLink(groupId)).click();
       await waitRoom(page, groupId, '加人测试群');
 
@@ -5415,6 +5739,7 @@ async function main(): Promise<void> {
 
       // 非当前房间：侧栏预览与未读随事件更新。
       await sendRoomMessage(data.agentAToken, data.group.room.room_id, '群实时预览');
+      await page.locator('#room-filter-group').click();
       await waitForText(page, roomLink(data.group.room.room_id), '群实时预览');
       check('stream 事件刷新侧栏预览', true);
       checkEqual('非当前房间显示未读', await page.locator(`${roomLink(data.group.room.room_id)} .unread`).count(), 1);
@@ -5432,6 +5757,7 @@ async function main(): Promise<void> {
           data.extra.room.room_id,
         )}, ms: 900 }`,
       );
+      await page.locator('#room-filter-direct').click();
       await page.locator(roomLink(data.extra.room.room_id)).click();
       await sleep(200);
       check('无缓存切换保留旧内容', (await messageCount(page)) >= 20, await messageCount(page));
@@ -5526,13 +5852,14 @@ async function main(): Promise<void> {
       await page.locator('#body').fill('');
 
       const groupMarker = '群聊手输省略 invoke';
+      const groupBody = `@${data.agentA.name} ${groupMarker}\n@WeBots 维护员`;
       await page.locator('#body').fill(`@${data.agentA.name} ${groupMarker}`);
       await page.locator('#send').click();
       await page.waitForFunction(
         `(window.__mcpCalls || []).some(function (call) {
           return call.name === 'network_message_send' &&
             call.body && call.body.params && call.body.params.arguments &&
-            call.body.params.arguments.body === ${JSON.stringify(`@${data.agentA.name} ${groupMarker}`)};
+            call.body.params.arguments.body === ${JSON.stringify(groupBody)};
         })`,
         undefined,
         { timeout: 12_000 },
@@ -5541,7 +5868,7 @@ async function main(): Promise<void> {
       const groupCalls = (await page.evaluate(
         `(window.__mcpCalls || []).filter(function (call) { return call.name === 'network_message_send'; }).map(function (call) { return call.body.params.arguments; })`,
       )) as { body?: string; invoke?: unknown }[];
-      const groupArgs = groupCalls.find((args) => args.body === `@${data.agentA.name} ${groupMarker}`);
+      const groupArgs = groupCalls.find((args) => args.body === groupBody);
       check('群聊发送记录存在', Boolean(groupArgs), groupCalls);
       check('群聊发送省略 invoke 字段', groupArgs !== undefined && !('invoke' in groupArgs), groupArgs);
       checkEqual('群聊发送 arguments.invoke 为 undefined', groupArgs?.invoke, undefined);
@@ -5562,13 +5889,14 @@ async function main(): Promise<void> {
       await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       const directMarker = 'direct 仍自动 invoke';
+      const directBody = `${directMarker}\n@WeBots 维护员`;
       await page.locator('#body').fill(directMarker);
       await page.locator('#send').click();
       await waitForText(page, '#messages', directMarker, 12_000);
       const directCalls = (await page.evaluate(
         `(window.__mcpCalls || []).filter(function (call) { return call.name === 'network_message_send'; }).map(function (call) { return call.body.params.arguments; })`,
       )) as { body?: string; invoke?: unknown }[];
-      const directArgs = directCalls.find((args) => args.body === directMarker);
+      const directArgs = directCalls.find((args) => args.body === directBody);
       checkEqual(
         'direct 发送仍自动填入对方 Agent',
         JSON.stringify(directArgs?.invoke),
@@ -6674,6 +7002,7 @@ async function main(): Promise<void> {
         { dragged, afterReload },
       );
 
+      await page.locator('#room-filter-group').click();
       await page.locator(roomLink(data.group.room.room_id)).click();
       await page.waitForURL(`**/c/${data.group.room.room_id}`);
       await page.locator('#title').filter({ hasText: '测试群' }).waitFor();
@@ -6684,6 +7013,7 @@ async function main(): Promise<void> {
         Math.abs(afterSwitch.ratio - afterReload.ratio) <= 0.02,
         { afterReload, afterSwitch },
       );
+      await page.locator('#room-filter-direct').click();
       await page.locator(roomLink(directId)).click();
       await waitRoom(page, directId, data.agentA.name);
       await page.locator('#pane-resizer-handle').waitFor({ state: 'visible' });
@@ -8596,26 +8926,33 @@ async function main(): Promise<void> {
         dropUploads[1]!.at >= dropBinds[0]!.at,
       );
 
-      await waitUntil(async () => {
-        const value = await page.locator('#body').inputValue();
-        return (value.match(/\/f\/f_/g) || []).length === 2;
-      }, '两个公开 URL 插入输入框');
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 2,
+        '两个文件生成 chip',
+      );
       const draftValue = await page.locator('#body').inputValue();
-      check('拖拽上传保留已有草稿', draftValue.startsWith('已有草稿'));
-      const draftLines = draftValue.split('\n').map((line) => line.trim()).filter(Boolean);
-      checkEqual('草稿与两个文件各占一行', draftLines.length, 3);
+      checkEqual('拖拽上传不再改写草稿', draftValue, '已有草稿');
+      check('拖拽上传不在正文插入 URL', !draftValue.includes('/f/'));
+      const chipNames = (await page.locator('#composer-files .composer-file-name').allTextContents())
+        .map((value) => value.trim());
       check(
-        '两个公开 URL 各占一行',
-        draftLines[1]!.includes('/f/') && draftLines[2]!.includes('/f/'),
+        '两个文件各生成一个 chip',
+        chipNames.includes('拖拽图片.png') && chipNames.includes('拖拽说明.txt'),
+        chipNames,
+      );
+      const chipMetas = (await page.locator('#composer-files .composer-file-meta').allTextContents())
+        .map((value) => value.trim());
+      check(
+        'chip 显示文件大小',
+        chipMetas.every((value) => /(?:B|KB|MB)$/u.test(value)),
+        chipMetas,
       );
       checkEqual(
-        '拖拽后光标位于插入内容之后',
-        (await page.evaluate(
-          `(() => { const box = document.getElementById('body'); return box.selectionStart === box.value.length; })()`,
-        )) as boolean,
-        true,
+        '上传完成 chip 删除按钮可用',
+        await page.locator('#composer-files .composer-file-remove:disabled').count(),
+        0,
       );
-      await waitForText(page, '#status', '链接已插入输入框');
+      await waitForText(page, '#status', '已加入待发送列表');
       await waitForText(page, '#files-list', '拖拽图片.png');
       await waitForText(page, '#files-list', '拖拽说明.txt');
       check(
@@ -8625,12 +8962,13 @@ async function main(): Promise<void> {
       const droppedImageItem = page.locator('#files-list .file-item').filter({
         hasText: '拖拽图片.png',
       });
+      const droppedTextItem = page.locator('#files-list .file-item').filter({
+        hasText: '拖拽说明.txt',
+      });
       const droppedImageUrl = await droppedImageItem.locator('a.file-action').getAttribute('href');
+      const droppedTextUrl = await droppedTextItem.locator('a.file-action').getAttribute('href');
       const droppedImagePath = droppedImageUrl ? new URL(droppedImageUrl).pathname : '';
-      check(
-        '输入框插入的是公开 URL',
-        Boolean(droppedImagePath && draftValue.includes(server.base + droppedImagePath)),
-      );
+      check('文件栏展示公开 URL', Boolean(droppedImagePath));
 
       const beforeSend = await messageCount(page);
       await page.locator('#send').click();
@@ -8646,6 +8984,172 @@ async function main(): Promise<void> {
       );
       checkEqual('发送后出现两张文件卡片', await dropMessage.locator('.msg-file').count(), 2);
       checkEqual('发送后输入框清空', await page.locator('#body').inputValue(), '');
+      checkEqual('发送成功后清空 chips', await page.locator('#composer-files .composer-file').count(), 0);
+      const sentWithFiles = (await page.evaluate(
+        `(function () {
+          const calls = (window.__mcpCalls || []).filter(function (call) {
+            return call.name === 'network_message_send';
+          });
+          return calls.length ? calls[calls.length - 1].body.params.arguments : null;
+        })()`,
+      )) as { body?: string; invoke?: unknown[]; room_id?: string } | null;
+      check('发送请求包含正文', Boolean(sentWithFiles && sentWithFiles.body), sentWithFiles);
+      checkEqual('文件消息保留用户文本', sentWithFiles?.body?.split('\n')[0], '已有草稿');
+      check(
+        '文件消息包含两个公开 URL',
+        Boolean(sentWithFiles?.body?.includes(server.base + droppedImagePath)) &&
+          Boolean(droppedTextUrl && sentWithFiles?.body?.includes(server.base + new URL(droppedTextUrl).pathname)),
+        sentWithFiles?.body,
+      );
+      checkEqual(
+        '文件消息末尾固定 @WeBots 维护员',
+        sentWithFiles?.body?.trim().split('\n').pop(),
+        '@WeBots 维护员',
+      );
+      checkEqual(
+        '文件消息只包含一个 @WeBots 维护员',
+        (sentWithFiles?.body?.match(/@WeBots 维护员/g) ?? []).length,
+        1,
+      );
+      checkEqual('群聊文件消息不传 invoke', sentWithFiles?.invoke, undefined);
+
+      // 无文本时只发文件链接 + 固定 @。
+      await page.locator('#body').fill('');
+      await dispatchDrag(page, '#chat-body', 'drop', [
+        { name: '仅文件.txt', mimeType: 'text/plain', text: 'file only' },
+      ]);
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 1,
+        '无文本上传生成 chip',
+      );
+      const beforeFileOnly = await messageCount(page);
+      await page.locator('#send').click();
+      await page.waitForFunction(
+        `document.querySelectorAll('#messages .msg').length > ${beforeFileOnly}`,
+      );
+      const fileOnlyMessage = page.locator('#messages .msg').filter({
+        hasText: '仅文件.txt',
+      }).last();
+      await fileOnlyMessage.waitFor();
+      const fileOnlyArgs = (await page.evaluate(
+        `(function () {
+          const calls = (window.__mcpCalls || []).filter(function (call) {
+            return call.name === 'network_message_send';
+          });
+          return calls.length ? calls[calls.length - 1].body.params.arguments : null;
+        })()`,
+      )) as { body?: string } | null;
+      check(
+        '无文本时正文只有文件 URL 与 @',
+        Boolean(fileOnlyArgs?.body) &&
+          fileOnlyArgs!.body!.includes('/f/') &&
+          fileOnlyArgs!.body!.trim().split('\n').length === 2 &&
+          fileOnlyArgs!.body!.trim().endsWith('@WeBots 维护员'),
+        fileOnlyArgs?.body,
+      );
+      checkEqual(
+        '仅文件发送后 chips 清空',
+        await page.locator('#composer-files .composer-file').count(),
+        0,
+      );
+
+      // 用户文本已包含固定 @ 时不重复。
+      await page.locator('#body').fill('请处理 @WeBots 维护员，谢谢');
+      await dispatchDrag(page, '#chat-body', 'drop', [
+        { name: '去重.txt', mimeType: 'text/plain', text: 'dedupe' },
+      ]);
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 1,
+        '去重用例生成 chip',
+      );
+      const beforeDedupe = await messageCount(page);
+      await page.locator('#send').click();
+      await page.waitForFunction(
+        `document.querySelectorAll('#messages .msg').length > ${beforeDedupe}`,
+      );
+      const dedupeArgs = (await page.evaluate(
+        `(function () {
+          const calls = (window.__mcpCalls || []).filter(function (call) {
+            return call.name === 'network_message_send';
+          });
+          return calls.length ? calls[calls.length - 1].body.params.arguments : null;
+        })()`,
+      )) as { body?: string } | null;
+      checkEqual(
+        '正文已有 @WeBots 维护员 时不重复',
+        (dedupeArgs?.body?.match(/@WeBots 维护员/g) ?? []).length,
+        1,
+      );
+      const dedupeMessage = page.locator('#messages .msg').filter({
+        hasText: '请处理 @WeBots 维护员，谢谢',
+      }).last();
+      await dedupeMessage.waitFor();
+      check(
+        '未知 @ 名字前的正文完整显示',
+        ((await dedupeMessage.locator('.bubble').textContent()) ?? '').startsWith(
+          '请处理 @WeBots 维护员，谢谢',
+        ),
+        await dedupeMessage.locator('.bubble').textContent(),
+      );
+
+      // 发送失败保留文本与 chips，重试成功后再清空。
+      let failNextMessageSend = false;
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (
+          !failNextMessageSend ||
+          request.headers()['mcp-name'] !== 'network_message_send'
+        ) {
+          await route.continue();
+          return;
+        }
+        failNextMessageSend = false;
+        const body = request.postDataJSON() as { id?: unknown } | null;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    code: 'CONFLICT',
+                    message: '模拟发送失败',
+                    retryable: false,
+                  }),
+                },
+              ],
+            },
+          }),
+        });
+      });
+      await page.locator('#body').fill('发送失败草稿');
+      await dispatchDrag(page, '#chat-body', 'drop', [
+        { name: '保留文件.txt', mimeType: 'text/plain', text: 'keep' },
+      ]);
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 1,
+        '发送失败用例生成 chip',
+      );
+      failNextMessageSend = true;
+      await page.locator('#send').click();
+      await waitForText(page, '#status', '发送失败：模拟发送失败');
+      checkEqual('发送失败保留文本', await page.locator('#body').inputValue(), '发送失败草稿');
+      checkEqual(
+        '发送失败保留 chips',
+        await page.locator('#composer-files .composer-file').count(),
+        1,
+      );
+      await page.locator('#send').click();
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 0,
+        '重试成功后清空 chips',
+        15_000,
+      );
 
       await page.locator('#body').fill('失败草稿');
       await page.evaluate(
@@ -8667,6 +9171,11 @@ async function main(): Promise<void> {
         ((await page.locator('#status').textContent()) ?? '').includes('拖拽超大.bin'),
       );
       checkEqual('拖拽上传失败保留草稿', await page.locator('#body').inputValue(), failedDraft);
+      checkEqual(
+        '拖拽上传失败不生成 chip',
+        await page.locator('#composer-files .composer-file').count(),
+        0,
+      );
       await sleep(200);
       checkEqual(
         '拖拽上传失败不执行 bind',
@@ -8704,6 +9213,61 @@ async function main(): Promise<void> {
         dropMetrics,
       );
       await dispatchDrag(mobile.page, '#chat-body', 'dragleave', []);
+      await dispatchDrag(mobile.page, '#chat-body', 'drop', [
+        { name: '移动拖拽.txt', mimeType: 'text/plain', text: 'mobile' },
+      ]);
+      await waitUntil(
+        async () => (await mobile.page.locator('#composer-files .composer-file').count()) === 1,
+        '390px 拖拽生成 chip',
+      );
+      await mobile.page.emulateMedia({ colorScheme: 'dark' });
+      const mobileChip = (await mobile.page.evaluate(`(() => {
+        const chip = document.querySelector('#composer-files .composer-file');
+        const name = document.querySelector('#composer-files .composer-file-name');
+        const remove = document.querySelector('#composer-files .composer-file-remove');
+        const chipRect = chip ? chip.getBoundingClientRect() : null;
+        const nameRect = name ? name.getBoundingClientRect() : null;
+        const style = chip ? getComputedStyle(chip) : null;
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          chips: document.querySelectorAll('#composer-files .composer-file').length,
+          text: document.getElementById('body').value,
+          chipLeft: chipRect ? chipRect.left : 0,
+          chipRight: chipRect ? chipRect.right : 0,
+          nameWidth: nameRect ? nameRect.width : 0,
+          removeVisible: Boolean(remove && remove.getBoundingClientRect().width > 0),
+          background: style ? style.backgroundColor : '',
+          dark: matchMedia('(prefers-color-scheme: dark)').matches
+        };
+      })()`)) as {
+        view: number;
+        doc: number;
+        chips: number;
+        text: string;
+        chipLeft: number;
+        chipRight: number;
+        nameWidth: number;
+        removeVisible: boolean;
+        background: string;
+        dark: boolean;
+      };
+      checkEqual('390px 拖拽后正文无 URL', mobileChip.text, '');
+      check(
+        '390px 文件 chip 不横向溢出',
+        mobileChip.doc <= mobileChip.view &&
+          mobileChip.chipLeft >= -1 &&
+          mobileChip.chipRight <= mobileChip.view + 1 &&
+          mobileChip.nameWidth > 0,
+        mobileChip,
+      );
+      checkEqual('390px 文件 chip 删除按钮可见', mobileChip.removeVisible, true);
+      checkEqual('暗色文件 chip 跟随主题', mobileChip.dark, true);
+      check(
+        '暗色文件 chip 使用面板变量',
+        mobileChip.background === 'rgb(43, 43, 43)',
+        mobileChip.background,
+      );
       await mobile.context.close();
       await context.close();
     }
@@ -8739,9 +9303,29 @@ async function main(): Promise<void> {
         if (request.url().includes('/mcp-upload')) uploadUrls.push(request.url());
       });
       let failNextBind = false;
+      let failNextDelete = false;
       await page.route('**/mcp', async (route) => {
         const request = route.request();
-        if (failNextBind && request.headers()['mcp-name'] === 'network_room_file_bind') {
+        const toolName = request.headers()['mcp-name'];
+        if (failNextDelete && toolName === 'network_room_file_delete') {
+          failNextDelete = false;
+          const body = request.postDataJSON() as {
+            params?: { arguments?: Record<string, unknown> };
+          };
+          const args = body?.params?.arguments;
+          if (args) {
+            args.file_id = 'f_0000000000000000000000';
+            try {
+              const response = await route.fetch({ postData: JSON.stringify(body) });
+              await route.fulfill({ response });
+              return;
+            } catch {
+              await route.continue().catch(() => undefined);
+              return;
+            }
+          }
+        }
+        if (failNextBind && toolName === 'network_room_file_bind') {
           failNextBind = false;
           const body = request.postDataJSON() as {
             params?: { arguments?: Record<string, unknown> };
@@ -8814,6 +9398,21 @@ async function main(): Promise<void> {
         async () => (await page.locator('#attach-file').getAttribute('aria-busy')) === 'true',
         '上传期间附件按钮 aria-busy',
       );
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) >= 1,
+        '上传期间生成 chip',
+      );
+      checkEqual(
+        '上传中 chip 删除按钮禁用',
+        await page.locator('#composer-files .composer-file-remove:disabled').count(),
+        1,
+      );
+      check(
+        '上传中 chip 显示进度',
+        ((await page.locator('#composer-files .composer-file-meta').first().textContent()) ?? '')
+          .includes('上传中'),
+        await page.locator('#composer-files .composer-file-meta').first().textContent(),
+      );
       const sawProgress = await page
         .waitForFunction(`document.getElementById('status').textContent.indexOf('正在上传') >= 0`)
         .then(() => true)
@@ -8842,34 +9441,108 @@ async function main(): Promise<void> {
         attachUploads[1]!.at >= attachBinds[0]!.at,
       );
 
-      await waitUntil(async () => {
-        const value = await page.locator('#body').inputValue();
-        return (value.match(/\/f\/f_/g) || []).length === 2;
-      }, '附件 URL 插入输入框');
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 2,
+        '附件上传生成两个 chip',
+      );
       const attachDraft = await page.locator('#body').inputValue();
-      check('附件上传保留已有草稿', attachDraft.startsWith('附件草稿'));
-      const attachLines = attachDraft.split('\n').map((line) => line.trim()).filter(Boolean);
-      checkEqual('附件与两个文件各占一行', attachLines.length, 3);
-      check(
-        '附件 URL 各占一行',
-        attachLines[1]!.includes('/f/') && attachLines[2]!.includes('/f/'),
-      );
-      checkEqual(
-        '附件插入后光标在末尾',
-        (await page.evaluate(
-          `(() => { const box = document.getElementById('body'); return box.selectionStart === box.value.length; })()`,
-        )) as boolean,
-        true,
-      );
-      await waitForText(page, '#status', '链接已插入输入框');
+      checkEqual('附件上传不改写已有草稿', attachDraft, '附件草稿');
+      check('附件上传不在正文插入 URL', !attachDraft.includes('/f/'));
       checkEqual(
         '上传完成清除 aria-busy',
         await page.locator('#attach-file').getAttribute('aria-busy'),
         'false',
       );
+      checkEqual(
+        '上传完成 chip 删除按钮可用',
+        await page.locator('#composer-files .composer-file-remove:disabled').count(),
+        0,
+      );
+      await waitForText(page, '#status', '已加入待发送列表');
       checkEqual('附件上传不自动发送', await messageCount(page), messagesBeforeAttach);
       await waitForText(page, '#files-list', '输入框 图片 一.png');
       await waitForText(page, '#files-list', '说明 文档.txt');
+      const attachChipNames = (await page.locator('#composer-files .composer-file-name').allTextContents())
+        .map((value) => value.trim());
+      check(
+        '附件多文件逐个 chip',
+        attachChipNames.includes('输入框 图片 一.png') && attachChipNames.includes('说明 文档.txt'),
+        attachChipNames,
+      );
+      const attachImageItem = page.locator('#files-list .file-item').filter({
+        hasText: '输入框 图片 一.png',
+      });
+      const attachTextItem = page.locator('#files-list .file-item').filter({
+        hasText: '说明 文档.txt',
+      });
+      const attachImageUrl = await attachImageItem.locator('a.file-action').getAttribute('href');
+      const attachTextUrl = await attachTextItem.locator('a.file-action').getAttribute('href');
+      check('附件文件栏提供公开 URL', Boolean(attachImageUrl && attachTextUrl));
+
+      // chip 的 x 直接调用后端删除（无二次确认），成功后刷新右侧文件栏。
+      const deleteBase = await mcpCallCount(page, 'network_room_file_delete');
+      await page.locator('#composer-files .composer-file-remove').first().click();
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_room_file_delete')) === deleteBase + 1,
+        'chip 删除调用后端工具',
+      );
+      const deleteCalls = (await page.evaluate(
+        `(window.__mcpCalls || []).filter(function (call) { return call.name === 'network_room_file_delete'; }).map(function (call) { return call.body.params.arguments; })`,
+      )) as { room_id?: string; file_id?: string }[];
+      checkEqual('chip 删除使用当前房间', deleteCalls[0]!.room_id, attachRoomId);
+      check(
+        'chip 删除使用 file_id',
+        /^f_[A-Za-z0-9_-]{22}$/u.test(String(deleteCalls[0]!.file_id ?? '')),
+        deleteCalls[0],
+      );
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 1,
+        '删除成功后移除 chip',
+      );
+      checkEqual(
+        '删除成功后移除 chip',
+        await page.locator('#composer-files .composer-file').count(),
+        1,
+      );
+      await waitUntil(
+        async () => (await page.locator('#files-list .file-item').filter({
+          hasText: '输入框 图片 一.png',
+        }).count()) === 0,
+        '删除成功后刷新文件列表',
+      );
+      checkEqual(
+        '删除成功后文件列表不再显示该文件',
+        await page.locator('#files-list .file-item').filter({
+          hasText: '输入框 图片 一.png',
+        }).count(),
+        0,
+      );
+
+      // 删除失败保留 chip 与可读错误。
+      failNextDelete = true;
+      await page.locator('#composer-files .composer-file-remove').first().click();
+      await waitForText(page, '#status', '删除');
+      await waitUntil(
+        async () => ((await page.locator('#status').textContent()) ?? '').includes('失败'),
+        '删除失败状态',
+      );
+      check(
+        '删除失败显示可读错误',
+        ((await page.locator('#status').textContent()) ?? '').includes('删除') &&
+          ((await page.locator('#status').textContent()) ?? '').includes('失败'),
+        await page.locator('#status').textContent(),
+      );
+      checkEqual(
+        '删除失败保留 chip',
+        await page.locator('#composer-files .composer-file').count(),
+        1,
+      );
+      check(
+        '删除失败文件列表保持不变',
+        (await page.locator('#files-list .file-item').filter({
+          hasText: '说明 文档.txt',
+        }).count()) === 1,
+      );
 
       const beforeAttachSend = await messageCount(page);
       await page.locator('#send').click();
@@ -8879,12 +9552,32 @@ async function main(): Promise<void> {
       const attachMessage = page.locator('#messages .msg').filter({ hasText: '附件草稿' }).last();
       await attachMessage.waitFor();
       await waitUntil(
-        async () => (await attachMessage.locator('.msg-file').count()) === 2,
-        '发送附件后出现两张文件卡片',
+        async () => (await attachMessage.locator('.msg-file').count()) === 1,
+        '发送附件后出现文件卡片',
         15_000,
       );
-      checkEqual('发送附件后出现两张文件卡片', await attachMessage.locator('.msg-file').count(), 2);
+      checkEqual('发送附件后出现文件卡片', await attachMessage.locator('.msg-file').count(), 1);
       checkEqual('发送附件后输入框清空', await page.locator('#body').inputValue(), '');
+      checkEqual(
+        '发送附件后 chips 清空',
+        await page.locator('#composer-files .composer-file').count(),
+        0,
+      );
+      const attachSentArgs = (await page.evaluate(
+        `(function () {
+          const calls = (window.__mcpCalls || []).filter(function (call) {
+            return call.name === 'network_message_send';
+          });
+          return calls.length ? calls[calls.length - 1].body.params.arguments : null;
+        })()`,
+      )) as { body?: string } | null;
+      check(
+        '附件发送正文包含公开 URL 与固定 @',
+        Boolean(attachSentArgs?.body) &&
+          attachSentArgs!.body!.includes(server.base + new URL(attachTextUrl!).pathname) &&
+          attachSentArgs!.body!.trim().endsWith('@WeBots 维护员'),
+        attachSentArgs?.body,
+      );
 
       await page.locator('#body').fill('失败草稿');
       await page.evaluate(
@@ -8910,6 +9603,11 @@ async function main(): Promise<void> {
       );
       check('附件失败不插 URL', !(await page.locator('#body').inputValue()).includes('/f/'));
       checkEqual(
+        '附件失败不生成 chip',
+        await page.locator('#composer-files .composer-file').count(),
+        0,
+      );
+      checkEqual(
         '附件失败清空文件选择器',
         await page.evaluate(`document.getElementById('composer-file-input').value`),
         '',
@@ -8924,12 +9622,24 @@ async function main(): Promise<void> {
       ]);
       await waitUntil(() => upload.calls.length === attachFailBase + 2, '失败后可重选同一文件');
       await waitUntil(
-        async () => (await page.locator('#body').inputValue()).includes('/f/'),
-        '重选后插入 URL',
+        async () => (await page.locator('#composer-files .composer-file').count()) === 1,
+        '重选成功后生成 chip',
       );
       check(
-        '失败后可重选同一文件并成功插入',
-        (await page.locator('#body').inputValue()).includes('/f/'),
+        '失败后可重选同一文件并生成 chip',
+        (await page.locator('#composer-files .composer-file-name').first().textContent()) ===
+          '超限 附件.bin',
+      );
+      checkEqual(
+        '重选成功不改写草稿',
+        await page.locator('#body').inputValue(),
+        failedAttachDraft,
+      );
+      await page.locator('#send').click();
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 0,
+        '重选文件发送后清空 chip',
+        15_000,
       );
 
       await page.locator('#body').fill('绑定草稿');
@@ -8945,11 +9655,21 @@ async function main(): Promise<void> {
       await waitForText(page, '#status', '不会重复上传');
       checkEqual('附件 bind 失败只上传一次', upload.calls.length, bindRetryUploadBase + 1);
       checkEqual('附件 bind 失败不插 URL', await page.locator('#body').inputValue(), bindDraft);
+      checkEqual(
+        '附件 bind 失败不生成 chip',
+        await page.locator('#composer-files .composer-file').count(),
+        0,
+      );
       await page.locator('#files-bind-retry').waitFor({ state: 'visible' });
       await page.locator('#files-bind-retry').click();
       await page.waitForFunction('document.getElementById("files-bind-retry").hidden === true');
       checkEqual('附件 bind 重试不重复上传', upload.calls.length, bindRetryUploadBase + 1);
       checkEqual('附件 bind 重试不写新的 URL', await page.locator('#body').inputValue(), bindDraft);
+      checkEqual(
+        '附件 bind 重试不生成 chip',
+        await page.locator('#composer-files .composer-file').count(),
+        0,
+      );
       await waitForText(page, '#files-list', '绑定失败.txt');
 
       await page.locator('#body').fill('粘贴草稿');
@@ -8964,12 +9684,22 @@ async function main(): Promise<void> {
       checkEqual('粘贴图片阻止默认行为', pastePrevented, true);
       await waitUntil(() => upload.calls.length === pasteUploadBase + 1, '粘贴图片触发上传');
       await waitUntil(
-        async () => (await page.locator('#body').inputValue()).includes('/f/'),
-        '粘贴图片插入 URL',
+        async () => (await page.locator('#composer-files .composer-file').count()) === 1,
+        '粘贴图片生成 chip',
+      );
+      checkEqual(
+        '粘贴图片保留草稿',
+        await page.locator('#body').inputValue(),
+        '粘贴草稿',
       );
       check(
-        '粘贴图片保留草稿',
-        (await page.locator('#body').inputValue()).startsWith('粘贴草稿'),
+        '粘贴图片不在正文插入 URL',
+        !(await page.locator('#body').inputValue()).includes('/f/'),
+      );
+      checkEqual(
+        '粘贴图片 chip 使用真实文件名',
+        (await page.locator('#composer-files .composer-file-name').first().textContent())?.trim(),
+        '粘贴 图片.png',
       );
       checkEqual('粘贴图片使用真实文件名', upload.calls[pasteUploadBase]!.name, '粘贴 图片.png');
       checkEqual('粘贴图片不自动发送', await messageCount(page), pasteCount);
@@ -8981,6 +9711,12 @@ async function main(): Promise<void> {
       await sleep(150);
       checkEqual('纯文本粘贴不触发上传', upload.calls.length, textPasteBase);
       checkEqual('纯文本粘贴不改动草稿', await page.locator('#body').inputValue(), textDraft);
+
+      await page.locator('#composer-files .composer-file-remove').first().click();
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 0,
+        '清理粘贴图片 chip',
+      );
 
       await page.locator('#body').fill('输入法草稿');
       await page.evaluate(
@@ -9002,24 +9738,32 @@ async function main(): Promise<void> {
         async () => (await mcpCallCount(page, 'network_room_file_bind')) >= imeBindBase + 2,
         'IME 上传完成 bind',
       );
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 2,
+        'IME 组合期间生成两个 chip',
+      );
       await sleep(200);
       checkEqual(
-        'IME 组合期间不插入 URL',
+        'IME 组合期间正文保持原样',
         await page.locator('#body').inputValue(),
         imeDraft,
       );
       await page.evaluate(
         `document.getElementById('body').dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))`,
       );
-      await waitUntil(
-        async () => (await page.locator('#body').inputValue()).includes('/f/'),
-        'IME 结束后插入 URL',
+      await sleep(50);
+      checkEqual(
+        'IME 结束后正文仍保持原样',
+        await page.locator('#body').inputValue(),
+        imeDraft,
       );
-      const imeValue = await page.locator('#body').inputValue();
-      check('IME 结束后保留草稿', imeValue.startsWith('输入法草稿'));
-      const imeLines = imeValue.split('\n').map((line) => line.trim()).filter(Boolean);
-      checkEqual('IME 结束后两个 URL 各占一行', imeLines.length, 3);
-      checkEqual('IME 结束后两张图片都插入', (imeValue.match(/\/f\/f_/g) || []).length, 2);
+      const imeChipNames = (await page.locator('#composer-files .composer-file-name').allTextContents())
+        .map((value) => value.trim());
+      check(
+        'IME 期间上传的两张图片各生成 chip',
+        imeChipNames.includes('IME 图片 一.png') && imeChipNames.includes('IME 图片 二.png'),
+        imeChipNames,
+      );
       checkEqual(
         'IME 结束后焦点仍在正文',
         await page.evaluate(`document.activeElement && document.activeElement.id`),
@@ -9112,17 +9856,38 @@ async function main(): Promise<void> {
         { name: '移动 附件.txt', mimeType: 'text/plain', buffer: Buffer.from('mobile attach') },
       ]);
       await waitUntil(
-        async () => (await mobile.page.locator('#body').inputValue()).includes('/f/'),
-        '390px 上传插入 URL',
+        async () => (await mobile.page.locator('#composer-files .composer-file').count()) === 1,
+        '390px 上传生成 chip',
+      );
+      checkEqual(
+        '390px 上传不改写正文',
+        await mobile.page.locator('#body').inputValue(),
+        '',
+      );
+      checkEqual(
+        '390px chip 显示文件名',
+        (await mobile.page.locator('#composer-files .composer-file-name').first().textContent())?.trim(),
+        '移动 附件.txt',
       );
       checkEqual('390px 上传只触发一次', mobileUpload.calls.length, mobileUploadBase + 1);
       checkEqual('390px 上传不自动发送', await messageCount(mobile.page), mobileMessagesBefore);
       const mobileOverflow = (await mobile.page.evaluate(
-        `({ doc: document.documentElement.scrollWidth, view: window.innerWidth })`,
-      )) as { doc: number; view: number };
+        `(() => {
+          const chip = document.querySelector('#composer-files .composer-file');
+          const rect = chip ? chip.getBoundingClientRect() : null;
+          return {
+            doc: document.documentElement.scrollWidth,
+            view: window.innerWidth,
+            chipLeft: rect ? rect.left : 0,
+            chipRight: rect ? rect.right : 0
+          };
+        })()`,
+      )) as { doc: number; view: number; chipLeft: number; chipRight: number };
       check(
         '390px 上传后仍无横向溢出',
-        mobileOverflow.doc <= mobileOverflow.view,
+        mobileOverflow.doc <= mobileOverflow.view &&
+          mobileOverflow.chipLeft >= -1 &&
+          mobileOverflow.chipRight <= mobileOverflow.view + 1,
         mobileOverflow,
       );
       const mobileConsoleText = (await mobile.page.evaluate('window.__consoleText')) as string;
@@ -11435,12 +12200,14 @@ async function main(): Promise<void> {
       }
 
       await page.keyboard.press('Escape');
+      await page.locator('#room-filter-group').click();
       await openMenu(roomLink(data.group.room.room_id));
       check(
         '群聊右键不显示重发 token 入口',
         await page.locator('#room-menu-reissue-token').isHidden(),
       );
       await page.keyboard.press('Escape');
+      await page.locator('#room-filter-direct').click();
       await openMenu(humanPeerLink);
       check(
         '人类 direct 会话不显示重发 token 入口',

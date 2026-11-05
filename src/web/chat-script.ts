@@ -598,7 +598,8 @@ composer.addEventListener('submit', async function (event) {
   const sendRoomId = activeRoomId;
   if (!sendRoomId) return;
   const sendEpoch = roomEpoch;
-  const body = bodyInput.value.trim();
+  const text = bodyInput.value.trim();
+  const body = composerOutgoingBody(sendRoomId, text);
   if (!body) return;
   stickyStatus = '';
   statusElement.textContent = '';
@@ -623,8 +624,9 @@ composer.addEventListener('submit', async function (event) {
     const result = await callTool('network_message_send', args);
     // 发送请求不绑定 roomAbort；切换房间后只丢弃 UI 更新，不取消写入。
     const deliveryIds = Array.isArray(result.delivery_ids) ? result.delivery_ids : [];
-    // 消息已发出，旧房间草稿必须清除；但不要覆盖新房间的输入框。
+    // 消息已发出，旧房间草稿与待发送文件必须清除；但不要覆盖新房间的输入框。
     drafts.delete(sendRoomId);
+    clearComposerFiles(sendRoomId);
     if (!isActiveRoom(sendRoomId, sendEpoch)) return;
     bodyInput.value = '';
     hideMentionPicker();

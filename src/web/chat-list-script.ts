@@ -7,6 +7,62 @@
 export const CHAT_LIST_SCRIPT = `
 let searchQuery = '';
 let emptyListMessage = '';
+const ROOM_FILTER_KEY = 'agent-network-room-filter';
+const roomFilterElement = document.getElementById('room-filter');
+const roomFilterButtons = roomFilterElement
+  ? Array.prototype.slice.call(roomFilterElement.querySelectorAll('[data-room-filter]'))
+  : [];
+let roomFilter = readRoomFilter();
+
+function readRoomFilter() {
+  try {
+    return localStorage.getItem(ROOM_FILTER_KEY) === 'group' ? 'group' : 'direct';
+  } catch (error) {
+    return 'direct';
+  }
+}
+
+function persistRoomFilter(value) {
+  try {
+    localStorage.setItem(ROOM_FILTER_KEY, value);
+  } catch (error) {
+    // 隐私模式禁用存储时只影响记忆，不影响本次筛选。
+  }
+}
+
+function updateRoomFilterTabs() {
+  for (const button of roomFilterButtons) {
+    const selected = button.dataset.roomFilter === roomFilter;
+    button.setAttribute('aria-selected', selected ? 'true' : 'false');
+    button.tabIndex = selected ? 0 : -1;
+  }
+}
+
+function setRoomFilter(value, options) {
+  if (value !== 'direct' && value !== 'group') return;
+  const settings = options || {};
+  if (value !== roomFilter) {
+    roomFilter = value;
+    persistRoomFilter(value);
+    updateRoomFilterTabs();
+  }
+  if (settings.render !== false) renderRooms();
+}
+
+/** 进入房间时切到对应分类，避免当前会话被另一分类隐藏。 */
+function syncRoomFilterForRoom(roomId) {
+  if (!roomId) return;
+  const entry = roomEntries.find(function (item) { return item.room_id === roomId; });
+  if (!entry || (entry.kind !== 'direct' && entry.kind !== 'group')) return;
+  if (entry.kind !== roomFilter) setRoomFilter(entry.kind, { render: false });
+}
+
+function roomFilterEmptyMessage() {
+  if (emptyListMessage) return emptyListMessage;
+  return roomFilter === 'group'
+    ? '还没有群聊。点击右上角 + 新建群聊。'
+    : '还没有单聊。打开 Agent 分享链接即可开始。';
+}
 
 const AVATAR_COLORS = ['#5b8def', '#e8a33d', '#6aa84f', '#d96459', '#8e7cc3', '#3d9a9a'];
 
@@ -174,14 +230,18 @@ function roomMatches(entry, query) {
 
 function renderRooms() {
   if (!roomListElement) return;
+  roomListElement.setAttribute('aria-label', roomFilter === 'group' ? '群聊' : '单聊');
   // 归档只影响默认列表与总览搜索；房间与消息仍可按 /c/<room_id> 使用。
   const visibleEntries = roomEntries.filter(function (entry) {
-    return !isArchivedAgentRoom(entry);
+    return !isArchivedAgentRoom(entry) && entry.kind === roomFilter;
   });
   const query = searchQuery.trim().toLowerCase();
   const entries = query ? visibleEntries.filter(function (entry) {
     return roomMatches(entry, query);
   }) : visibleEntries;
+  const unarchivedEntries = roomEntries.filter(function (entry) {
+    return !isArchivedAgentRoom(entry);
+  });
   const scroller = roomListElement.parentElement;
   const previousScroll = scroller ? scroller.scrollTop : 0;
   roomListElement.replaceChildren();
@@ -239,11 +299,11 @@ function renderRooms() {
   }
   if (query && entries.length === 0) {
     setListHint('没有匹配的会话');
-  } else if (visibleEntries.length === 0) {
-    if (roomEntries.length > 0) {
+  } else if (entries.length === 0) {
+    if (roomEntries.length > 0 && unarchivedEntries.length === 0) {
       setListHint('会话已归档，可在已归档 Agents 中恢复。');
     } else {
-      setListHint(emptyListMessage);
+      setListHint(roomFilterEmptyMessage());
     }
   } else {
     setListHint('');
@@ -395,14 +455,13 @@ async function loadRooms(options) {
         };
       });
       roomEntries = sortRooms(mergeActiveRoom(summaries));
+      // 首次加载（含深链）按当前房间选分类；后台刷新不覆盖用户手动切换。
+      if (!hadEntries) syncRoomFilterForRoom(activeRoomId);
+      // 空态文案由当前分类决定；错误与退出登录文案仍由 emptyListMessage 覆盖。
+      emptyListMessage = '';
       renderRooms();
       clearListSkeleton();
       setListRetry(false);
-      if (roomEntries.length === 0) {
-        setEmptyListMessage('还没有单聊。打开 Agent 分享链接即可开始。');
-      } else {
-        setEmptyListMessage('');
-      }
       await fillDirectPeers(me);
       roomsLoadedAt = Date.now();
     } catch (error) {
@@ -442,4 +501,31 @@ if (searchInput) {
     renderRooms();
   });
 }
+
+if (roomFilterElement) {
+  roomFilterElement.addEventListener('click', function (event) {
+    const button = event.target && event.target.closest
+      ? event.target.closest('[data-room-filter]')
+      : null;
+    if (!button) return;
+    setRoomFilter(button.dataset.roomFilter);
+  });
+  roomFilterElement.addEventListener('keydown', function (event) {
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].indexOf(event.key) < 0) return;
+    event.preventDefault();
+    const index = roomFilterButtons.findIndex(function (button) {
+      return button.getAttribute('aria-selected') === 'true';
+    });
+    let next = index;
+    if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = roomFilterButtons.length - 1;
+    else if (event.key === 'ArrowLeft') next = (index - 1 + roomFilterButtons.length) % roomFilterButtons.length;
+    else next = (index + 1) % roomFilterButtons.length;
+    const target = roomFilterButtons[next];
+    if (!target) return;
+    setRoomFilter(target.dataset.roomFilter);
+    target.focus();
+  });
+}
+updateRoomFilterTabs();
 `;

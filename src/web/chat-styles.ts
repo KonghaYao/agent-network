@@ -84,6 +84,15 @@ export const APP_STYLE = `
   #room-search::placeholder { color: var(--wx-muted); }
   #room-search::-webkit-search-cancel-button { -webkit-appearance: none; }
 
+  .room-filter { display: flex; gap: 2px; margin-top: 8px; padding: 2px;
+    background: var(--wx-search); border-radius: 6px; }
+  .room-filter button { flex: 1 1 0; min-width: 0; height: 26px; padding: 0 8px;
+    border: 0; border-radius: 4px; background: transparent; color: var(--wx-muted);
+    font-size: 12px; }
+  .room-filter button:hover { background: var(--wx-hover); color: var(--wx-text); }
+  .room-filter button[aria-selected="true"] { background: var(--wx-panel);
+    color: var(--wx-text); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 8%); }
+
   .sidebar-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
   .room-list { list-style: none; margin: 0; padding: 2px 8px 12px; }
   .room-list li { margin: 0; }
@@ -354,7 +363,9 @@ export const APP_STYLE = `
   .composer { flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
     padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
     background: var(--wx-sidebar); border-top: 1px solid var(--wx-line); }
-  .composer textarea { flex: 1 1 auto; min-width: 0; min-height: 38px; max-height: 96px;
+  .composer-main { flex: 1 1 auto; min-width: 0; display: flex;
+    flex-direction: column; gap: 6px; }
+  .composer-main textarea { width: 100%; flex: 1 1 auto; min-width: 0; min-height: 38px; max-height: 96px;
     padding: 8px 10px; border: 1px solid var(--wx-line); border-radius: 4px;
     background: var(--wx-panel); color: var(--wx-text); font: inherit;
     font-size: 14px; line-height: 22px; resize: none; overflow-y: auto; }

@@ -23,6 +23,12 @@ export function sidebarPane(): string {
       </svg>
       <input id="room-search" type="search" placeholder="搜索" autocomplete="off" aria-label="搜索会话">
     </label>
+    <div class="room-filter" id="room-filter" role="tablist" aria-label="会话类型">
+      <button id="room-filter-direct" type="button" role="tab" data-room-filter="direct"
+        aria-selected="true" aria-controls="room-list" tabindex="0">单聊</button>
+      <button id="room-filter-group" type="button" role="tab" data-room-filter="group"
+        aria-selected="false" aria-controls="room-list" tabindex="-1">群聊</button>
+    </div>
   </header>
   <div class="sidebar-list">
     <ol id="room-list" class="room-list" aria-label="单聊">
@@ -153,12 +159,15 @@ export function chatPane(): string {
     <form id="composer" class="composer">
       <button class="attach-btn" id="attach-file" type="button" aria-label="上传文件" title="上传文件">+</button>
       <input id="composer-file-input" type="file" multiple hidden>
-      <textarea id="body" rows="1" maxlength="262144" placeholder="输入消息…" aria-label="消息正文"></textarea>
+      <div class="composer-main">
+        <div id="composer-files" class="composer-files" role="list" aria-label="待发送文件" hidden></div>
+        <textarea id="body" rows="1" maxlength="262144" placeholder="输入消息…" aria-label="消息正文"></textarea>
+      </div>
       <button class="send-btn primary" id="send" type="submit">发送</button>
     </form>
     <div id="composer-drop" class="composer-drop" hidden aria-hidden="true">
       <span class="composer-drop-title">松开即可上传文件</span>
-      <span class="composer-drop-hint">文件会加入当前会话，公开链接插入输入框</span>
+      <span class="composer-drop-hint">文件会加入当前会话并在发送时附带公开链接</span>
     </div>
   </div>
 </section>`;

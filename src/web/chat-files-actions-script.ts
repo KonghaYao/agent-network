@@ -412,42 +412,32 @@ async function runUploadTasks() {
       let complete = true;
       for (let index = 0; index < task.files.length; index += 1) {
         const file = task.files[index];
+        const composerEntry = task.composer ? beginComposerUpload(task.roomId, file) : null;
         const bound = await uploadAndBind(
           task.roomId,
           file,
           index + 1,
           task.files.length,
-          Boolean(task.insertUrl)
+          Boolean(task.composer),
+          composerEntry
         );
         if (!bound) {
+          if (composerEntry) abortComposerUpload(composerEntry);
           complete = false;
           break;
         }
-        if (task.insertUrl) {
-          // bind 返回 { file: {...} }；只接受同源 /f/ 公开地址。
-          const boundFile = bound.file && typeof bound.file === 'object' ? bound.file : bound;
-          const publicUrl = fileSafeUrl(boundFile.public_url);
-          if (!publicUrl) {
-            complete = false;
-            if (activeRoomId === task.roomId) {
-              setDropStatus('「' + file.name + '」已上传，但响应缺少公开链接。');
-            }
-            break;
-          }
-          if (!insertComposerFileUrl(task.roomId, publicUrl)) {
-            // 用户已切到其他房间：上传与 bind 保留在原房间，不再写新房间输入框。
-            complete = false;
-            break;
-          }
+        if (composerEntry && !completeComposerUpload(composerEntry, bound)) {
+          complete = false;
+          break;
         }
       }
       if (complete && filesActiveRoomId === task.roomId) {
         if (filesProgressElement) filesProgressElement.hidden = true;
         setFilesStatus('已上传 ' + task.files.length + ' 个文件。', { transient: true });
       }
-      if (complete && task.insertUrl && activeRoomId === task.roomId) {
+      if (complete && task.composer && activeRoomId === task.roomId) {
         setDropStatus(
-          '已上传 ' + task.files.length + ' 个文件，链接已插入输入框。',
+          '已上传 ' + task.files.length + ' 个文件，已加入待发送列表。',
           { transient: true }
         );
       }
@@ -458,10 +448,11 @@ async function runUploadTasks() {
   }
 }
 
-async function uploadAndBind(roomId, file, index, total, announce) {
+async function uploadAndBind(roomId, file, index, total, announce, composerEntry) {
   const startText = '正在上传（' + index + '/' + total + '）：' + file.name;
   updateFilesProgress(roomId, startText, 0);
   if (announce) setDropStatusFor(roomId, startText);
+  updateComposerUpload(composerEntry, 0, 'upload');
   let token = null;
   try {
     await ensureIdentity();
@@ -476,6 +467,7 @@ async function uploadAndBind(roomId, file, index, total, announce) {
     uploaded = await uploadFileToDrive(file, token, function (percent) {
       const text = '正在上传（' + index + '/' + total + '）：' + file.name + ' · ' + percent + '%';
       updateFilesProgress(roomId, text, percent);
+      updateComposerUpload(composerEntry, percent, 'upload');
       if (announce) setDropStatusFor(roomId, text);
     });
   } catch (error) {
@@ -489,6 +481,7 @@ async function uploadAndBind(roomId, file, index, total, announce) {
   }
   const bindText = '正在加入房间：' + file.name;
   updateFilesProgress(roomId, bindText, 100);
+  updateComposerUpload(composerEntry, 100, 'join');
   if (announce) setDropStatusFor(roomId, bindText);
   let bound = null;
   try {
@@ -701,65 +694,10 @@ function enqueueDroppedFiles(fileList) {
     return file && typeof file.name === 'string' && file.name.length > 0;
   });
   if (files.length === 0) return;
-  filesUploadTasks.push({ roomId: activeRoomId, files: files, insertUrl: true });
+  filesUploadTasks.push({ roomId: activeRoomId, files: files, composer: true });
   updateFilesBindRetry();
   setDropStatusFor(activeRoomId, '正在上传（1/' + files.length + '）：' + files[0].name);
   if (!filesUploadRunning) runUploadTasks();
-}
-
-/**
- * 在光标处插入公开 URL，不覆盖已有文本与选区。
- * 每个文件独占一行；实际发送仍由用户决定，不自动提交。
- * IME 组合期间先排队，等 compositionend 的同步监听器跑完再写回，避免打断候选。
- */
-let pendingComposerFileUrls = [];
-
-function insertComposerFileUrl(roomId, url) {
-  if (!bodyInput || !url || activeRoomId !== roomId) return false;
-  if (!document.body.classList.contains('page-room')) return false;
-  if (composing) {
-    pendingComposerFileUrls.push({ roomId: roomId, url: url });
-    return true;
-  }
-  return writeComposerFileUrl(roomId, url);
-}
-
-function writeComposerFileUrl(roomId, url) {
-  if (!bodyInput || !url || activeRoomId !== roomId) return false;
-  if (!document.body.classList.contains('page-room')) return false;
-  const value = bodyInput.value;
-  const start = bodyInput.selectionStart === null ? value.length : bodyInput.selectionStart;
-  const prefix = start > 0 && value.charAt(start - 1) !== '\\n' ? '\\n' : '';
-  const inserted = prefix + url + '\\n';
-  bodyInput.setRangeText(inserted, start, start, 'end');
-  drafts.set(roomId, bodyInput.value);
-  resizeComposer();
-  // 用户正在搜索框等其他位置输入时不抢焦点；按钮属于 composer，仍会回到正文。
-  if (composerHasFocus()) bodyInput.focus();
-  return true;
-}
-
-function composerHasFocus() {
-  if (!composer || !bodyInput) return false;
-  const active = document.activeElement;
-  if (!active || active === document.body) return true;
-  return composer.contains(active);
-}
-
-function flushPendingComposerFileUrls() {
-  if (composing || pendingComposerFileUrls.length === 0) return;
-  const pending = pendingComposerFileUrls;
-  pendingComposerFileUrls = [];
-  for (let index = 0; index < pending.length; index += 1) {
-    writeComposerFileUrl(pending[index].roomId, pending[index].url);
-  }
-}
-
-if (bodyInput) {
-  // 该监听器先于主脚本注册；setTimeout(0) 等到 composing 已被主监听器置为 false。
-  bodyInput.addEventListener('compositionend', function () {
-    setTimeout(flushPendingComposerFileUrls, 0);
-  });
 }
 
 if (chatBodyElement) {

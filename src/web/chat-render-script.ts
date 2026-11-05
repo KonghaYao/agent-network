@@ -169,9 +169,11 @@ function renderRichText(element, text) {
     element.textContent = text;
     return;
   }
-  let index = 0;
-  while (index < text.length) {
-    const at = text.indexOf('@', index);
+  // last 是“已写入”的位置；scan 可以跳过未知 @，但不能因此丢掉它前面的正文。
+  let scan = 0;
+  let last = 0;
+  while (scan < text.length) {
+    const at = text.indexOf('@', scan);
     if (at < 0) break;
     let matched = null;
     for (const name of names) {
@@ -181,17 +183,18 @@ function renderRichText(element, text) {
       }
     }
     if (!matched) {
-      index = at + 1;
+      scan = at + 1;
       continue;
     }
-    if (at > index) element.append(document.createTextNode(text.slice(index, at)));
+    if (at > last) element.append(document.createTextNode(text.slice(last, at)));
     const span = document.createElement('span');
     span.className = 'mention';
     span.textContent = '@' + matched;
     element.append(span);
-    index = at + 1 + matched.length;
+    last = at + 1 + matched.length;
+    scan = last;
   }
-  if (index < text.length) element.append(document.createTextNode(text.slice(index)));
+  if (last < text.length) element.append(document.createTextNode(text.slice(last)));
 }
 
 function timeDivider(value) {
