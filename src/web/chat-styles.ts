@@ -262,9 +262,9 @@ export const APP_STYLE = `
     margin: 0; padding: 12px 20px 18px; }
   .msg-time { margin: 10px 0; text-align: center; font-size: 11px; color: var(--wx-muted); }
   .msg-time span { padding: 2px 7px; border-radius: 3px; background: rgb(0 0 0 / 4%); }
-  /* 上下线系统行：居中、无头像/气泡/回执，桌面与移动端一致。 */
-  .msg-presence { display: flex; justify-content: center; margin: 10px 0; list-style: none; }
-  .msg-presence span { max-width: 88%; padding: 2px 8px; border-radius: 3px;
+  /* 系统行：上下线时间线与投递回执共用，居中、无头像/气泡。 */
+  .msg-system { display: flex; justify-content: center; margin: 10px 0; list-style: none; }
+  .msg-system span { max-width: 88%; padding: 2px 8px; border-radius: 3px;
     background: rgb(0 0 0 / 4%); color: var(--wx-muted); font-size: 11px;
     text-align: center; overflow-wrap: anywhere; }
   .msg { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 18px; }
@@ -289,9 +289,10 @@ export const APP_STYLE = `
   .msg.mine .mention { color: #2f6b45; }
   .msg .expand { margin-top: 4px; border: 0; background: none; padding: 0;
     color: var(--wx-link); font-size: 12px; }
-  .msg-receipt { margin-top: 3px; font-size: 11px; color: var(--wx-muted); text-align: right; }
-  /* claimed 超时是提醒而非错误，用暖色但不使用失败红。 */
-  .msg-receipt.stale { color: #b26a00; }
+  /* 回执紧贴消息下方，外观与上下线系统行一致。 */
+  .msg.has-receipt { margin-bottom: 6px; }
+  .msg-receipt { margin-top: 0; }
+  .msg-receipt.stale span { color: #b26a00; }
 
   .mention-picker { position: absolute; left: 16px; bottom: 74px; z-index: 5;
     min-width: 190px; max-width: min(320px, calc(100% - 32px)); max-height: 220px;
@@ -406,7 +407,8 @@ export const APP_STYLE = `
     .member-roster::-webkit-scrollbar-thumb {
       background: rgb(255 255 255 / 16%); }
     .msg-time span { background: rgb(255 255 255 / 7%); }
-    .msg-presence span { background: rgb(255 255 255 / 7%); }
+    .msg-system span { background: rgb(255 255 255 / 7%); }
+    .msg-receipt.stale span { color: #e0a458; }
   }
 
   @media (max-width: 759px) {

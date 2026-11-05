@@ -373,6 +373,83 @@ async function sendRoomMessage(token: string, roomId: string, body: string): Pro
   });
 }
 
+/** 发送带 invoke 的消息并返回 message_id，用于投递回执验收。 */
+async function sendInvokeMessage(
+  token: string,
+  roomId: string,
+  body: string,
+  invoke: string[],
+): Promise<string> {
+  const sent = await rawTool<{ message: { message_id: string } }>(token, 'network_message_send', {
+    request_id: requestId('send'),
+    client_message_id: crypto.randomUUID(),
+    room_id: roomId,
+    body,
+    invoke,
+  });
+  return sent.message.message_id;
+}
+
+interface PendingDeliveryRef {
+  delivery_id: string;
+  message_id: string;
+}
+
+async function pendingDeliveryFor(token: string, messageId: string): Promise<PendingDeliveryRef> {
+  const inbox = await rawTool<{ items: PendingDeliveryRef[] }>(token, 'network_inbox_list', {
+    state: 'pending',
+    limit: 50,
+  });
+  const found = inbox.items.find((item) => item.message_id === messageId);
+  if (!found) throw new Error(`消息 ${messageId} 没有 pending 投递`);
+  return found;
+}
+
+interface DeliveryClaimRef {
+  delivery_id: string;
+  attempt: number;
+  claim_id: string;
+}
+
+async function claimDelivery(token: string, deliveryId: string): Promise<DeliveryClaimRef> {
+  return rawTool<DeliveryClaimRef>(token, 'network_delivery_claim', {
+    request_id: requestId('claim'),
+    delivery_id: deliveryId,
+  });
+}
+
+async function completeDelivery(token: string, claim: DeliveryClaimRef): Promise<void> {
+  await rawTool(token, 'network_delivery_complete', {
+    request_id: requestId('complete'),
+    delivery_id: claim.delivery_id,
+    attempt: claim.attempt,
+    claim_id: claim.claim_id,
+  });
+}
+
+async function failDelivery(token: string, claim: DeliveryClaimRef): Promise<void> {
+  await rawTool(token, 'network_delivery_fail', {
+    request_id: requestId('fail'),
+    delivery_id: claim.delivery_id,
+    attempt: claim.attempt,
+    claim_id: claim.claim_id,
+    error: '验收失败',
+  });
+}
+
+/** 等待实时订阅建立，避免状态变更通知在页面订阅前发出。 */
+async function waitStreamConnected(page: Page): Promise<void> {
+  await page.waitForFunction(
+    `(window.__fetchLog || []).some(function (entry) {
+      return entry.name === 'subscriptions/listen' && entry.phase === 'resolved';
+    })`,
+  );
+}
+
+function receiptSelector(messageId: string): string {
+  return `#messages li.msg-receipt[data-receipt-for="${messageId}"]`;
+}
+
 /** 注册一个 Agent 并加为指定人类的好友，用于群成员添加场景。 */
 async function createAgentFriend(token: string, name: string): Promise<Actor> {
   const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -992,6 +1069,315 @@ async function main(): Promise<void> {
         0,
       );
       await context.close();
+    }
+
+    // 1a-delivery. 投递回执与上下线共用系统行：居中、弱化、本地时间与原地更新。
+    {
+      const directMessageId = await sendInvokeMessage(
+        data.humanToken,
+        data.direct.room.room_id,
+        '回执样式验收',
+        [data.agentA.actor_id],
+      );
+      const groupMessageId = await sendInvokeMessage(
+        data.humanToken,
+        data.group.room.room_id,
+        '群回执样式验收',
+        [data.agentA.actor_id, data.agentB.actor_id],
+      );
+      // 群回执先领取 B，保留 A 为 pending，页面首屏应显示部分已接收。
+      const groupClaimB = await claimDelivery(
+        data.agentBToken,
+        (await pendingDeliveryFor(data.agentBToken, groupMessageId)).delivery_id,
+      );
+
+      // 长 Agent 名称 + 390px：系统行必须换行而不是撑破页面。
+      const longAgentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+      const longAgentName = `超长名称验收Agent${'长'.repeat(40)}`;
+      const longAgent = await rawTool<Actor>(longAgentToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'agent',
+        name: longAgentName,
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      await rawTool(data.humanToken, 'network_contact_add', {
+        request_id: requestId('contact'),
+        agent_session_id: longAgent.agent_session_id,
+      });
+      const longRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [longAgent.actor_id],
+      });
+      const longMessageId = await sendInvokeMessage(
+        data.humanToken,
+        longRoom.room.room_id,
+        '长名称回执验收',
+        [longAgent.actor_id],
+      );
+      await claimDelivery(
+        longAgentToken,
+        (await pendingDeliveryFor(longAgentToken, longMessageId)).delivery_id,
+      );
+
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      const directSelector = receiptSelector(directMessageId);
+      await page.waitForFunction(`Boolean(document.querySelector(${JSON.stringify(directSelector)}))`);
+      await waitStreamConnected(page);
+      const presenceCount = await page.locator('#messages .msg-presence').count();
+      check('presence 行仍存在', presenceCount >= 2, presenceCount);
+
+      const directStyle = (await page.evaluate(`(() => {
+        const receipt = document.querySelector(${JSON.stringify(directSelector)});
+        const presence = document.querySelector('#messages .msg-presence');
+        const label = receipt && receipt.firstElementChild;
+        const presenceLabel = presence && presence.firstElementChild;
+        if (!receipt || !label || !presence || !presenceLabel) return null;
+        const labelStyle = getComputedStyle(label);
+        const presenceStyle = getComputedStyle(presenceLabel);
+        return {
+          className: String(receipt.className),
+          justify: getComputedStyle(receipt).justifyContent,
+          presenceJustify: getComputedStyle(presence).justifyContent,
+          background: labelStyle.backgroundColor,
+          presenceBackground: presenceStyle.backgroundColor,
+          color: labelStyle.color,
+          presenceColor: presenceStyle.color,
+          fontSize: labelStyle.fontSize,
+          presenceFontSize: presenceStyle.fontSize,
+          avatarCount: receipt.querySelectorAll('.msg-avatar, .bubble').length,
+          followsMessage: Boolean(receipt.previousElementSibling &&
+            receipt.previousElementSibling.dataset.messageId === ${JSON.stringify(directMessageId)}),
+          text: label.textContent
+        };
+      })()`)) as {
+        className: string;
+        justify: string;
+        presenceJustify: string;
+        background: string;
+        presenceBackground: string;
+        color: string;
+        presenceColor: string;
+        fontSize: string;
+        presenceFontSize: string;
+        avatarCount: number;
+        followsMessage: boolean;
+        text: string;
+      } | null;
+      check('回执渲染为系统行', Boolean(directStyle), directStyle);
+      check(
+        '回执复用系统行 class',
+        Boolean(directStyle?.className.includes('msg-system') && directStyle?.className.includes('msg-receipt')),
+        directStyle?.className,
+      );
+      checkEqual('回执与 presence 同样居中', directStyle?.justify, 'center');
+      checkEqual('回执居中方式与 presence 一致', directStyle?.justify, directStyle?.presenceJustify);
+      checkEqual('回执无头像或气泡', directStyle?.avatarCount, 0);
+      checkEqual('回执背景与 presence 一致', directStyle?.background, directStyle?.presenceBackground);
+      checkEqual('回执文字颜色与 presence 一致', directStyle?.color, directStyle?.presenceColor);
+      checkEqual('回执字号与 presence 一致', directStyle?.fontSize, directStyle?.presenceFontSize);
+      checkEqual('回执紧跟对应消息', directStyle?.followsMessage, true);
+      check(
+        '回执带 Agent 名称与已送达',
+        Boolean(directStyle?.text.includes(`${data.agentA.name} 已送达`)),
+        directStyle?.text,
+      );
+      check(
+        '回执带本地时间',
+        /已送达 · \d{1,2}:\d{2}/u.test(directStyle?.text ?? ''),
+        directStyle?.text,
+      );
+      checkEqual(
+        '回执不再位于消息气泡列',
+        await page.locator(`#messages .msg[data-message-id="${directMessageId}"] .msg-content .msg-receipt`).count(),
+        0,
+      );
+
+      const directClaim = await claimDelivery(
+        data.agentAToken,
+        (await pendingDeliveryFor(data.agentAToken, directMessageId)).delivery_id,
+      );
+      await page.waitForFunction(`(() => {
+        const receipt = document.querySelector(${JSON.stringify(directSelector)});
+        return Boolean(receipt && receipt.textContent.indexOf(${JSON.stringify(`${data.agentA.name} 已接收`)}) >= 0);
+      })()`);
+      const claimedText = (await page.locator(directSelector).textContent()) ?? '';
+      check('回执实时更新为已接收', claimedText.includes(`${data.agentA.name} 已接收`), claimedText);
+      check('已接收回执保留本地时间', /已接收 · \d{1,2}:\d{2}/u.test(claimedText), claimedText);
+      checkEqual('状态更新不重复回执行', await page.locator(directSelector).count(), 1);
+      checkEqual(
+        '状态更新不重复消息',
+        await page.locator(`#messages .msg[data-message-id="${directMessageId}"]`).count(),
+        1,
+      );
+
+      await completeDelivery(data.agentAToken, directClaim);
+      await page.waitForFunction(`(() => {
+        const receipt = document.querySelector(${JSON.stringify(directSelector)});
+        return Boolean(receipt && receipt.textContent.indexOf(${JSON.stringify(`${data.agentA.name} 已处理`)}) >= 0);
+      })()`);
+      const completedText = (await page.locator(directSelector).textContent()) ?? '';
+      check('回执实时更新为已处理', completedText.includes(`${data.agentA.name} 已处理`), completedText);
+      check('已处理回执保留本地时间', /已处理 · \d{1,2}:\d{2}/u.test(completedText), completedText);
+      checkEqual('完成后仍只有一条回执', await page.locator(directSelector).count(), 1);
+      checkEqual(
+        '回执行不带 presence class',
+        await page.locator(`${directSelector}.msg-presence`).count(),
+        0,
+      );
+      checkEqual(
+        'presence 行不包含回执',
+        await page.locator('#messages .msg-presence .msg-receipt').count(),
+        0,
+      );
+      checkEqual(
+        '普通消息仍渲染气泡',
+        await page.locator(`#messages .msg[data-message-id="${directMessageId}"] .bubble`).count(),
+        1,
+      );
+      await context.close();
+
+      // 多 Agent 群回执：列出收件人名称，部分状态不拆成多行。
+      const group = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await group.page.goto(`${server.base}/c/${data.group.room.room_id}`);
+      const groupSelector = receiptSelector(groupMessageId);
+      await group.page.waitForFunction(`Boolean(document.querySelector(${JSON.stringify(groupSelector)}))`);
+      await waitStreamConnected(group.page);
+      const groupInitial = (await group.page.locator(groupSelector).textContent()) ?? '';
+      check(
+        '多 Agent 回执列出收件人名称',
+        groupInitial.includes(data.agentA.name) && groupInitial.includes(data.agentB.name),
+        groupInitial,
+      );
+      check(
+        '多 Agent 回执聚合部分状态',
+        groupInitial.includes('1/2 已送达') && groupInitial.includes('1/2 已接收'),
+        groupInitial,
+      );
+      check('多 Agent 回执带本地时间', / · \d{1,2}:\d{2}$/u.test(groupInitial), groupInitial);
+
+      await completeDelivery(data.agentBToken, groupClaimB);
+      await group.page.waitForFunction(`(() => {
+        const receipt = document.querySelector(${JSON.stringify(groupSelector)});
+        return Boolean(receipt && receipt.textContent.indexOf('1 已处理') >= 0 &&
+          receipt.textContent.indexOf('1/2 已送达') >= 0);
+      })()`);
+      checkEqual('群回执更新后仍为单行', await group.page.locator(groupSelector).count(), 1);
+
+      const groupClaimA = await claimDelivery(
+        data.agentAToken,
+        (await pendingDeliveryFor(data.agentAToken, groupMessageId)).delivery_id,
+      );
+      await group.page.waitForFunction(`(() => {
+        const receipt = document.querySelector(${JSON.stringify(groupSelector)});
+        return Boolean(receipt && receipt.textContent.indexOf('1/2 已接收') >= 0 &&
+          receipt.textContent.indexOf('1 已处理') >= 0);
+      })()`);
+      await failDelivery(data.agentAToken, groupClaimA);
+      await group.page.waitForFunction(`(() => {
+        const receipt = document.querySelector(${JSON.stringify(groupSelector)});
+        return Boolean(receipt && receipt.textContent.indexOf('1 已处理') >= 0 &&
+          receipt.textContent.indexOf('1 发送失败') >= 0);
+      })()`);
+      const failedText = (await group.page.locator(groupSelector).textContent()) ?? '';
+      check(
+        '失败回执保留收件人名称',
+        failedText.includes(data.agentA.name) && failedText.includes(data.agentB.name),
+        failedText,
+      );
+      check('失败回执带本地时间', /发送失败 · \d{1,2}:\d{2}/u.test(failedText), failedText);
+      checkEqual('失败后仍只有一条回执行', await group.page.locator(groupSelector).count(), 1);
+      await group.context.close();
+
+      // 暗色：回执与 presence 使用同一套弱化色。
+      const darkContext = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        colorScheme: 'dark',
+      });
+      await darkContext.addInitScript({ content: initScript(data.humanToken) });
+      const darkPage = await darkContext.newPage();
+      darkPage.setDefaultTimeout(15_000);
+      darkPage.on('pageerror', (error) => allErrors.push(`pageerror: ${error.message}`));
+      await darkPage.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await darkPage.waitForFunction(`Boolean(document.querySelector(${JSON.stringify(directSelector)}))`);
+      const darkStyle = (await darkPage.evaluate(`(() => {
+        const receipt = document.querySelector(${JSON.stringify(directSelector)});
+        const presence = document.querySelector('#messages .msg-presence');
+        const label = receipt && receipt.firstElementChild;
+        const presenceLabel = presence && presence.firstElementChild;
+        if (!receipt || !label || !presence || !presenceLabel) return null;
+        return {
+          dark: matchMedia('(prefers-color-scheme: dark)').matches,
+          justify: getComputedStyle(receipt).justifyContent,
+          background: getComputedStyle(label).backgroundColor,
+          presenceBackground: getComputedStyle(presenceLabel).backgroundColor,
+          color: getComputedStyle(label).color,
+          presenceColor: getComputedStyle(presenceLabel).color
+        };
+      })()`)) as {
+        dark: boolean;
+        justify: string;
+        background: string;
+        presenceBackground: string;
+        color: string;
+        presenceColor: string;
+      } | null;
+      checkEqual('暗色主题生效', darkStyle?.dark, true);
+      checkEqual('暗色回执仍居中', darkStyle?.justify, 'center');
+      checkEqual('暗色回执背景与 presence 一致', darkStyle?.background, darkStyle?.presenceBackground);
+      checkEqual('暗色回执文字与 presence 一致', darkStyle?.color, darkStyle?.presenceColor);
+      await darkContext.close();
+
+      // 390px + 超长 Agent 名称：换行且不横向溢出。
+      const mobile = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await mobile.page.goto(`${server.base}/c/${longRoom.room.room_id}`);
+      const longSelector = receiptSelector(longMessageId);
+      await mobile.page.waitForFunction(`Boolean(document.querySelector(${JSON.stringify(longSelector)}))`);
+      const longMetrics = (await mobile.page.evaluate(`(() => {
+        const receipt = document.querySelector(${JSON.stringify(longSelector)});
+        const label = receipt && receipt.firstElementChild;
+        const messages = document.getElementById('messages');
+        return {
+          text: label ? label.textContent : '',
+          labelWidth: label ? label.getBoundingClientRect().width : 0,
+          labelHeight: label ? label.getBoundingClientRect().height : 0,
+          messagesWidth: messages ? messages.getBoundingClientRect().width : 0,
+          pageFits: document.documentElement.scrollWidth <= window.innerWidth + 1,
+          messagesFit: messages ? messages.scrollWidth <= messages.clientWidth + 1 : false
+        };
+      })()`)) as {
+        text: string;
+        labelWidth: number;
+        labelHeight: number;
+        messagesWidth: number;
+        pageFits: boolean;
+        messagesFit: boolean;
+      };
+      check('390px 长名称回执显示 Agent 名称', longMetrics.text.includes(longAgentName), longMetrics.text);
+      checkEqual('390px 页面不横向溢出', longMetrics.pageFits, true);
+      checkEqual('390px 消息区不横向溢出', longMetrics.messagesFit, true);
+      check(
+        '390px 长名称回执在系统行内换行',
+        longMetrics.labelWidth <= longMetrics.messagesWidth && longMetrics.labelHeight > 20,
+        longMetrics,
+      );
+      await mobile.context.close();
     }
 
     // 1b. 会话右键菜单：复制 Agent 连接提示词、关闭方式与移动端长按。

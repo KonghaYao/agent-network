@@ -34,13 +34,42 @@ function fullTime(value) {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
 }
 
+const DELIVERY_STATES = ['pending', 'claimed', 'completed', 'failed', 'cancelled'];
+
+function deliveryTotal(states) {
+  let total = 0;
+  for (const state of DELIVERY_STATES) total += Number(states[state] || 0);
+  return total;
+}
+
+/**
+ * 回执收件人前缀：能确定收件人时展示名字，无法确定时不猜测。
+ *
+ * delivery_states 只有状态计数，没有逐收件人映射；因此仅在“收件人数等于
+ * 房间内其他 Agent 数”时列出全部名字，单收件人且只有一个 Agent 时直接命名。
+ * 其余情况保留计数，避免把未收到消息的 Agent 误写成收件人。
+ */
+function receiptRecipients(states) {
+  const total = deliveryTotal(states);
+  if (total === 0) return '';
+  const agents = [];
+  for (const member of members.values()) {
+    if (member.kind !== 'agent' || !member.name) continue;
+    if (identity && member.actor_id === identity.actor_id) continue;
+    agents.push(member.name);
+  }
+  if (agents.length === 1 && total === 1) return agents[0] + ' ';
+  if (agents.length > 1 && agents.length === total) return agents.join('、') + ' · ';
+  return '';
+}
+
 /**
  * 把 history_list 的 delivery_states 聚合成一条状态回执。
  *
  * 没有 delivery 表示消息只完成了广播（人类对人类的单聊、群聊未 @），
  * 显示为“已发送”；多 Agent 时按状态计数聚合，避免堆叠多行。
  */
-function receiptText(states) {
+function receiptStatus(states, named) {
   const pending = Number(states.pending || 0);
   const claimed = Number(states.claimed || 0);
   const completed = Number(states.completed || 0);
@@ -50,18 +79,33 @@ function receiptText(states) {
   if (total === 0) return '已发送';
   if (total === 1) {
     if (pending === 1) return '已送达';
-    if (claimed === 1) return 'Agent 已接收';
+    if (claimed === 1) return named ? '已接收' : 'Agent 已接收';
     if (completed === 1) return '已处理';
     if (failed === 1) return '发送失败';
     return '已取消';
   }
   const parts = [];
   if (pending > 0) parts.push(pending + '/' + total + ' 已送达');
-  if (claimed > 0) parts.push(claimed + '/' + total + ' 处理中');
+  if (claimed > 0) parts.push(claimed + '/' + total + ' 已接收');
   if (completed > 0) parts.push(completed + ' 已处理');
   if (failed > 0) parts.push(failed + ' 发送失败');
   if (cancelled > 0) parts.push(cancelled + ' 已取消');
   return parts.join(' · ');
+}
+
+/** 状态时间优先领取/更新时间；完成态没有独立时间，回退到消息时间。 */
+function receiptTime(item) {
+  return Number(item.delivery_updated_at || item.delivery_claimed_at || item.created_at) || 0;
+}
+
+function receiptText(item) {
+  const states = item.delivery_states || {};
+  const names = receiptRecipients(states);
+  let text = names + receiptStatus(states, names.length > 0);
+  const time = chatTime(receiptTime(item));
+  if (time) text += ' · ' + time;
+  if (claimStale(item)) text += ' · 处理中未更新';
+  return text;
 }
 
 /**
@@ -78,10 +122,9 @@ function claimStale(item) {
 }
 
 function applyReceipt(receipt, item) {
-  const states = item.delivery_states || {};
-  const stale = claimStale(item);
-  receipt.textContent = receiptText(states) + (stale ? ' · 处理中未更新' : '');
-  receipt.classList.toggle('stale', stale);
+  const label = receipt.firstElementChild;
+  if (label) label.textContent = receiptText(item);
+  receipt.classList.toggle('stale', claimStale(item));
 }
 
 /** 未到阈值时用一次性本地定时器补上提示，页面刷新会重新计算。 */
@@ -149,20 +192,38 @@ function timeDivider(value) {
 }
 
 /**
- * 居中的系统行：上下线时间线只使用 textContent，不进入 Markdown、
- * 文件卡片、头像、回复或回执路径。
+ * 系统行：上下线时间线与投递回执共用居中、弱化的行结构。
+ *
+ * 只使用 textContent，不进入 Markdown、文件卡片、头像或气泡路径。
  */
-function presenceItem(item) {
+function systemLineItem(className, labelText) {
   const element = document.createElement('li');
-  element.className = 'msg-presence';
-  element.dataset.presenceId = item.presence_event_id;
+  element.className = 'msg-system ' + className;
   const label = document.createElement('span');
+  label.textContent = labelText;
+  element.append(label);
+  return element;
+}
+
+/** 上下线时间线只使用 textContent，不进入 Markdown、文件卡片、头像或回执路径。 */
+function presenceItem(item) {
   const name = senderName(item.agent_id);
   const action = item.transition === 'online' ? '上线' : '下线';
   const time = chatTime(item.occurred_at);
-  label.textContent = name + ' ' + action + (time ? ' · ' + time : '');
-  label.title = item.time_basis === 'inferred' ? '下线时间为崩溃后推断' : '';
-  element.append(label);
+  const element = systemLineItem('msg-presence', name + ' ' + action + (time ? ' · ' + time : ''));
+  element.dataset.presenceId = item.presence_event_id;
+  if (item.time_basis === 'inferred') {
+    element.firstElementChild.title = '下线时间为崩溃后推断';
+  }
+  return element;
+}
+
+/** 投递回执与上下线共用系统行；状态变化时只更新同一行文本。 */
+function receiptItem(item) {
+  const element = systemLineItem('msg-receipt', '');
+  element.dataset.receiptFor = item.message_id;
+  applyReceipt(element, item);
+  scheduleReceipt(element, item);
   return element;
 }
 
@@ -170,7 +231,7 @@ function messageItem(item) {
   const mine = Boolean(identity && item.sender_id === identity.actor_id);
   const agent = isAgentMessage(item);
   const element = document.createElement('li');
-  element.className = 'msg' + (mine ? ' mine' : '');
+  element.className = 'msg' + (mine ? ' mine has-receipt' : '');
   element.dataset.messageId = item.message_id;
   const sender = senderName(item.sender_id);
   const avatar = avatarElement(mine && identity ? identity.name : sender, null, 'msg-avatar');
@@ -223,14 +284,13 @@ function messageItem(item) {
     });
     content.append(expand);
   }
-  if (mine) {
-    const receipt = document.createElement('div');
-    receipt.className = 'msg-receipt';
-    applyReceipt(receipt, item);
-    scheduleReceipt(receipt, item);
-    content.append(receipt);
-  }
   element.append(avatar, content);
+  if (mine) {
+    // 回执是消息下方的独立系统行，不放进气泡列，避免看起来像一条卡片。
+    const fragment = document.createDocumentFragment();
+    fragment.append(element, receiptItem(item));
+    return fragment;
+  }
   return element;
 }
 
