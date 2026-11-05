@@ -33,6 +33,8 @@ import {
   roomLeaveSchema,
   roomMarkReadSchema,
   roomMembersUpdateSchema,
+  roomMonitorGetSchema,
+  roomMonitorSetSchema,
   roomsListSchema,
   syncSchema,
 } from '../contracts/schemas';
@@ -70,6 +72,7 @@ import {
   roomsList,
   type RoomDetail,
 } from '../domain/rooms';
+import { roomMonitorGet, roomMonitorSet } from '../domain/room-monitors';
 import { sync } from '../domain/sync';
 import type { Env } from '../env';
 import { login, presenceOf } from '../realtime/presence';
@@ -97,6 +100,7 @@ import {
   recoveryTicketSchema,
   removedResultSchema,
   roomDetailSchema,
+  roomMonitorResultSchema,
   roomPageSchema,
   sendResultSchema,
   syncPageSchema,
@@ -425,6 +429,31 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       return withPresence(await roomGet(db, principal, input.room_id));
+    },
+  );
+
+  register(
+    server,
+    'network_room_monitor_get',
+    '读取当前 human 身份在该会话私有的网页监控地址；仅本人可见，其他成员与 Agent 不可读。只保存 http/https URL，服务端不访问目标地址；目标站点可能用 X-Frame-Options 或 CSP frame-ancestors 拒绝 iframe 嵌入。无配置时 monitor 为 null。不写 events/outbox，不改变未读、head 或 pending_count。',
+    roomMonitorGetSchema,
+    roomMonitorResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomMonitorGet(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_room_monitor_set',
+    '设置或清除当前 human 身份在该会话私有的网页监控地址；仅本人可见，其他成员与 Agent 不可见。url 为 null、空串或纯空白时删除配置；只允许 http/https，拒绝 javascript/data/file 等协议。设置与清除均需幂等 request_id，重放返回同一结果，同一 request_id 不同参数返回 IDEMPOTENCY_CONFLICT。服务端不访问该地址；目标站点可能用 X-Frame-Options 或 CSP frame-ancestors 禁止 iframe 嵌入。不写 events/outbox，不改变未读、head 或 pending_count。仅人类网页身份可用，Agent 调用返回 INVALID_ARGUMENT。',
+    roomMonitorSetSchema,
+    roomMonitorResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomMonitorSet(db, principal, input);
     },
   );
 

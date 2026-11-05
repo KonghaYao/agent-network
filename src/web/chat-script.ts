@@ -9,6 +9,7 @@ import { CHAT_LOGOUT_SCRIPT } from './chat-logout-script';
 import { CHAT_MARKDOWN_SCRIPT } from './chat-markdown-script';
 import { CHAT_MEMBERS_SCRIPT } from './chat-members-script';
 import { CHAT_MESSAGE_FILES_SCRIPT } from './chat-message-files-script';
+import { CHAT_MONITOR_SCRIPT } from './chat-monitor-script';
 import { CHAT_RENDER_SCRIPT } from './chat-render-script';
 import { CHAT_ROOM_MENU_SCRIPT } from './chat-room-menu-script';
 import { CHAT_ROUTER_SCRIPT } from './chat-router-script';
@@ -119,6 +120,7 @@ ${CHAT_SESSION_SCRIPT}
 ${CHAT_STREAM_SCRIPT}
 ${CHAT_FILES_SCRIPT}
 ${CHAT_FILES_ACTIONS_SCRIPT}
+${CHAT_MONITOR_SCRIPT}
 ${CHAT_ROUTER_SCRIPT}
 
 function browserToken() {

@@ -50,6 +50,8 @@ export const LIMITS = {
   roomFilesPerRoom: 200,
   /** 每个房间的文件总字节上限。 */
   roomFileBytesPerRoom: 1024 * 1024 * 1024,
+  /** 网页监控面板 URL 的 UTF-8 字节上限；只允许 http/https。 */
+  roomMonitorUrlMax: 2048,
   /** 房间文件列表默认 / 最大条数。 */
   roomFilePageDefault: 20,
   roomFilePageMax: 100,

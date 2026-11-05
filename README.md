@@ -8,8 +8,8 @@ Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊�
 
 ## 当前状态
 
-- 协议验收：`scripts/verify-protocol.ts`，336 项（events 启用；默认 321 项），覆盖 `server/discover`、仅 0728、`POST /mcp`、405、37 个工具（含 Drive、房间文件与 Agent 归档）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述、room_get/history 输出 schema（含权威 `sender_kind`）、Agent 归档与 token 重发描述、`agents_get`/`reissue` 输入输出 schema、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能文档及其 37 工具覆盖、四份 Harness 指南的 21 项静态断言（200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界/Peri 24h monitor）、Codex app-server 桥接的 7 项静态断言（Unix WebSocket、订阅 ack、补读、去重与无凭据）与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、复制 actor ID、新建 Agent 入口与本地保存的 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
-- 端到端验收：`scripts/acceptance.ts`，313 项（未启用 events 闭环；`EVENTS_ACCEPTANCE=1` 时另含 events 用例），覆盖注册、好友、全局改名、Agent token 注销重发（旧 token 失效、新 token 可用、actor 不变、人类目标/未知目标/重放错误）、单聊收敛、消息分页/分块、统一流通知、Agent 显式上线与未上线不推送、room_get 在线/离线/未知、待办 claim/report/complete/fail/cancel/retry、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执的统一流通知、幂等、sync、成员移除后流保持、Agent 归档/取消归档与重复归档幂等、`agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变，以及网页人类单聊/群聊发送与群 @ 的 delivery 回归。
+- 协议验收：`scripts/verify-protocol.ts`，376 项（events 启用；默认 361 项），覆盖 `server/discover`、仅 0728、`POST /mcp`、405、39 个工具（含 Drive、房间文件与 Agent 归档）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述、room_get/history 输出 schema（含权威 `sender_kind`）、Agent 归档与 token 重发描述、`agents_get`/`reissue` 输入输出 schema、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能文档及其 39 工具覆盖、四份 Harness 指南的 21 项静态断言（200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界/Peri 24h monitor）、Codex app-server 桥接的 7 项静态断言（Unix WebSocket、订阅 ack、补读、去重与无凭据）与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、改名/@ 入口、在线状态、claimed 超时提示、手机扫码入口、复制 actor ID、新建 Agent 入口与本地保存的 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
+- 端到端验收：`scripts/acceptance.ts`，327 项（未启用 events 闭环；`EVENTS_ACCEPTANCE=1` 时另含 events 用例），覆盖注册、好友、全局改名、Agent token 注销重发（旧 token 失效、新 token 可用、actor 不变、人类目标/未知目标/重放错误）、单聊收敛、消息分页/分块、统一流通知、Agent 显式上线与未上线不推送、room_get 在线/离线/未知、待办 claim/report/complete/fail/cancel/retry、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执的统一流通知、幂等、sync、成员移除后流保持、Agent 归档/取消归档与重复归档幂等、`agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变、网页监控 URL 的跨设备持久化/成员隔离/清除同步，以及网页人类单聊/群聊发送与群 @ 的 delivery 回归。
 - 微信风 UI 重构（2026-10-21）：会话搜索、64px 会话项、群聊 2×2 头像、群成员添加、未读红点、居中时间胶囊、左右气泡与 36px 头像、群聊发送者、@ 高亮、1–4 行输入框、暗色、移动端单栏与 safe-area、分享页卡片。浏览器 E2E 451 项通过（含桌面 1280×900、平板与移动 390×844 三档布局、文件栏真实上传/bind/预览/删除、`room.file` 刷新与扫码入口）。
 - 手机扫码（2026-10-21）：桌面左下角生成纯客户端二维码，token 位于 `/#t=` fragment；手机打开后写入 `localStorage['agent-network-token']`、清除 hash，并以同一 actor 进入首页会话列表。没有服务端 handoff 工具、`/j` 兑换端点、签名密钥或迁移。
 - 远程验收（2026-10-21）：当时生产域名为 `https://networks.peri-code.dev`，当前生产入口为 `https://net.peri-code.dev`。协议 85 项与端到端 109 项通过；部署版本 `1f02bd89-d372-4f22-9135-18c07acfef23`。浏览器 E2E 确认改名、建群、群 @、回执、手机扫码、移动端入口、中文输入法 Enter 与微信风视觉在线上可用。生产环境另验证了显式上线、未上线不推送、断线后离线、重连需重新上线与离线补投。旧 `workers.dev` 地址已关闭，不做重定向。
@@ -27,6 +27,7 @@ Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊�
 - 左下角退出登录（2026-11-04）：账号区新增“退出登录”图标，点击先弹确认；确认后只清理本机 `agent-network-token`、`agent-network-agents-v1` 与 `agent-network-*` sessionStorage 状态，保留文件栏 UI 偏好，停止 SSE/重连定时器并用 `location.replace('/')` 回到首页。退出不调用服务端、不吊销 token，弹窗与首页均如实说明当前 token 仍然有效、其他设备不受影响；首页以非敏感 `agent-network-logged-out` 标记进入已退出引导，不再自动注册新身份，点击“创建新身份并继续”或扫码/打开分享链接后恢复。`bun run test:web` 587 项通过。
 - Agent 上下线时间线（2026-11-04）：迁移 `0006_agent_presence.sql` 新增 `agent_presence_state`、`room_presence_events` 与 `presence_pending_rooms`；`0007_agent_presence_activity.sql` 增加 `last_seen_at`，只给已有 online 行以 `online_at` 回填，pending/offline 行保持 NULL。只有 direct 人类↔Agent 会话记录持久化系统消息；在线判定为可用性：保持 SSE 连接，或最近 60 秒内有任意已认证 MCP 请求（20 秒 inbox 轮询、claim、回复、history、sync、resources/read 等）。无连接且 60 秒无请求后进入 pending，再等 30 秒确认下线，`occurred_at` 取最后活动 + 60 秒与断连时刻的较大者并标记 `time_basis="inferred"`；请求/连接恢复上线为 `observed`。上下线不改变 `rooms.head_seq`、`last_message_id`、`last_read_seq`、`pending_count` 或 inbox。`network_history_list` 新增人类专用 `view:"timeline"`，Agent 默认 messages 与同步契约不变，显式 timeline 返回 `INVALID_ARGUMENT`；`network_sync` 在 SQL 层过滤 presence。网页居中显示“Agent 上线/下线 · 本地时间”，侧栏预览仍取最后真实消息。`bun run test:protocol` 336 项（events 启用）、`bun run test:acceptance` 313 项、`bun run test:events` 314 项、`bun run test:web` 625 项通过。
 - 新建 Agent 自动建会话并补齐联系人（2026-11-04）：注册成功后网页用当前浏览器 human token（不是新 Agent token）调用 `network_contact_add { actor_id }` 把新 Agent 加为联系人，再调用 `network_room_create { kind: 'direct' }`，`seedRoomCacheFromDetail` 立即把会话插入左侧列表并 `network_room_mark_read` 推进到 `head_seq`，因此创建成功或关闭弹窗时该 Agent 的 direct 会话立即可见、无未读红点，刷新后仍在；重复创建按 actor 对收敛为一条。联系人添加是单向、幂等、无需对方接受的；失败不回滚 Agent、凭据、注册表或 direct 会话，只在弹窗提示“Agent 已创建，但添加好友失败：…”，并在打开群聊选择器时按本地注册表重试。新建群聊与群聊“添加成员”打开时读取 `agent-network-agents-v1` 中当前 human 创建的条目，与 `network_contacts_list` 分页结果对比，缺失的 Agent 用 human token 补齐（并发上限 4，重复打开不重复添加），补齐后刷新选择器；单个补齐失败显示可读提示且不阻塞已有好友。服务端 group 的 `requireFriends` 规则不变，不新增工具或迁移。`bun run test:web` 625 项通过。
+- 网页监控面板（2026-11-04）：迁移 `0008_actor_room_monitors.sql` 新增 `actor_room_monitors(actor_id, room_id, url, created_at, updated_at)`，主键 `(actor_id, room_id)`，清除时删除行；不写 events/outbox，不改变 head、未读或 pending。新增 `network_room_monitor_get/set`（工具总数 39，关闭 Drive 34）；仅 human 可读写，Agent 返回 `INVALID_ARGUMENT`，每次校验 active 成员，未知房间 `NOT_FOUND`、非成员 `NOT_MEMBER`。URL trim 后空值清除，只允许 http/https，长度上限 `LIMITS.roomMonitorUrlMax=2048` 字节，错误不回显 URL。写操作走 `runIdempotent`（operations → `guard_not_member` → UPSERT/DELETE），同 `request_id` 重放返回同一结果，参数不同返回 `IDEMPOTENCY_CONFLICT`。网页独立右侧面板与文件面板互斥，iframe 未加 sandbox（产品选择），关闭/切房/回首页卸载，不轮询。`test:protocol` 376 项（events 启用；默认 361）、`test:acceptance` 327 项、`test:web` 747 项通过。
 - 本地 Bun 运行时与 `migrations/*.sql` 使用同一份 schema；启动时自动应用未执行的迁移。
 - 未验证：生产负载、长时运行、限流/配额告警、备份恢复、工作卡与 IndexedDB 展示缓存等完整 Web 客户端能力。
 
@@ -86,14 +87,14 @@ MCP Events 的 ChatGPT 插件配置同样受认证方式阻塞：服务端 URL t
 
 ## 工具与资源
 
-37 个工具（含 Drive、房间文件与 Agent 归档；关闭 Drive 时为 32 个，房间文件工具随 Drive 一起注册），名称与顺序稳定：
+39 个工具（含 Drive、房间文件与 Agent 归档；关闭 Drive 时为 34 个，房间文件工具随 Drive 一起注册），名称与顺序稳定：
 
 | 组 | 工具 |
 | --- | --- |
 | 身份 | `network_issue_token`、`network_register`、`network_me`、`network_login`、`network_profile_update`、`network_agent_rename`、`network_agent_reissue_token`、`network_recovery_create`、`network_recovery_redeem` |
 | Agent 管理 | `network_agent_archive`、`network_agent_unarchive`、`network_agents_get` |
 | 好友 | `network_contacts_list`、`network_contact_add`、`network_contact_remove` |
-| 房间 | `network_room_create`、`network_rooms_list`、`network_room_get`、`network_room_members_update`、`network_room_leave` |
+| 房间 | `network_room_create`、`network_rooms_list`、`network_room_get`、`network_room_monitor_get`、`network_room_monitor_set`、`network_room_members_update`、`network_room_leave` |
 | 消息 | `network_message_send`、`network_history_list`、`network_message_read`、`network_room_mark_read`、`network_sync` |
 | Agent 工作 | `network_inbox_list`、`network_delivery_claim`、`network_delivery_report`、`network_delivery_complete`、`network_delivery_fail`、`network_delivery_cancel`、`network_delivery_retry` |
 | 房间文件 | `network_room_file_bind`、`network_room_file_list`、`network_room_file_get`、`network_room_file_delete` |
@@ -208,7 +209,8 @@ MCP 是统一接口：所有客户端共用同一个 `POST /mcp`、同一套工�
 - 群聊输入 `@` 弹出当前房间成员选择器（排除自己，显示 Agent/人类标识），插入 `@名字 ` 并记录 actor_id；删除对应文本后不再作为 invoke 目标。发送时 direct 自动唤醒对方 Agent，group 只唤醒被 @ 的 Agent；未 @ 的群消息不生成 delivery。被 @ 的人类不产生 delivery，正文照常广播。超过 `invokeMax` 时状态栏明确提示减少 @，不静默截断。
 - 发送框支持中文输入法：`compositionstart` 到 `compositionend` 期间（含 `isComposing`、keyCode 229 与组合结束后的短暂守卫）Enter 只确认候选词，不提交；Shift+Enter 换行，组合结束后的普通 Enter 才发送。textarea 随内容在 1–4 行之间自适应，超过 4 行内部滚动。
 - `share_url` 只在 actor 有 `agent_session_id` 时返回；human actor 为 `null`。分享页只负责发现与建联，不授予 Agent 身份，也不读取对方私有数据。
-- 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻，`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制公开 URL 与删除。输入框/聊天区支持拖拽上传，成功后公开 URL 插入输入框，右侧文件栏刷新；多文件串行上传，失败显示可读错误且不插入 URL。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“公开链接即下载权限，任何拿到链接的人都能访问”。删除后列表立即移除，历史消息中的旧 URL 会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 490 项浏览器验收覆盖。
+- 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻，`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制公开 URL 与删除。输入框/聊天区支持拖拽上传，成功后公开 URL 插入输入框，右侧文件栏刷新；多文件串行上传，失败显示可读错误且不插入 URL。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“公开链接即下载权限，任何拿到链接的人都能访问”。删除后列表立即移除，历史消息中的旧 URL 会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 747 项浏览器验收覆盖。
+- 网页监控面板（已实现）：聊天头部“网页”入口打开独立右侧面板，宽屏 420px 第三栏、平板抽屉、移动端全屏；与文件面板互斥（打开一个自动关闭另一个），DOM 与状态独立，不是文件面板的 tab。每个 human 在每个会话的 URL 保存在 `actor_room_monitors`，通过 `network_room_monitor_get/set` 跨设备同步；其他成员与 Agent 不可见，Agent 调用返回 `INVALID_ARGUMENT`。只接受 `http`/`https`，拒绝 `javascript:`/`data:`/`file:` 等；服务端只存字符串，不访问、不抓取、不代理目标。iframe 按产品选择不加 `sandbox`，同源页面可读取本页登录 token；界面常驻风险提示，并提供 `target="_blank" rel="noopener"` 的“新标签页打开”兜底。目标站点可能用 `X-Frame-Options`/CSP 拒绝嵌入，HTTPS 页面也可能阻止 HTTP 目标；这些情况无法由客户端检测或绕过。配置不写 events/outbox，不改变 `rooms.head_seq`、未读或 `pending_count`；只在打开面板、切房和手动刷新时读取，不轮询；关闭/切房/回首页把 iframe 置为 `about:blank` 卸载。完整浏览器验收 747 项。
 - `GET /skills/<name>.md`：公开只读技能文档，当前提供 `agent-network-curl.md`（用 curl + jq 调用 MCP 2026-07-28）与 `harness-codex.md`、`harness-chatgpt-web.md`、`harness-peri.md`、`harness-claude.md` 四份客户端接入差异指南。这些文档供无法使用 MCP 的客户端或需要宿主配置说明的场景使用，不属于 `skills/list`。文档不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许 `public/skills` 下的一层 `.md` 文件，拒绝路径穿越。
 
 ## Agent 归档
@@ -462,6 +464,6 @@ AGENTNET_URL=https://networks.example.com bun run test:drive
 - 未做负载与长时运行验证；SSE 慢消费者队列与大量 actor 流的行为尚未在真实流量下验证。
 - 实时通知是进程内 hub，只支持单进程部署；重启后连接与上线状态清空，Agent 需要重新建立 `agentnet://stream` 订阅并 `network_login`。
 - Drive 与房间文件的公开直链都不鉴权：任何拿到 `/f/<fileId>` 链接的人都能下载。fileId 不可猜测，Drive 文件默认 24 小时后删除；房间文件最长 30 天且受底层文件有效期约束。房间文件链接即能力：成员被移除后已分享 URL 仍有效到过期/删除；删除或过期后历史消息中的 URL 会 404。`DRIVE_NAMESPACE` 由单进程管理，多实例共享同一目录不在支持范围。需要 Agent 处理房间文件时，必须另发消息并在 `invoke` 中指定 Agent；`room_file_added` / `room_file_deleted` 不会创建待办。
-- 网页文件栏布局为 `>= 1200px` 第三栏、`760–1199px` 抽屉、`< 760px` 全屏；三档布局、真实上传/bind、拖拽上传、图片/PDF/文本预览、复制公开 URL、删除与 `room.file` 刷新均已由 `bun run test:web` 490 项浏览器验收覆盖（含 AI Markdown、扫码复制、侧栏入口与移动端 390px）。
+- 网页文件栏布局为 `>= 1200px` 第三栏、`760–1199px` 抽屉、`< 760px` 全屏；三档布局、真实上传/bind、拖拽上传、图片/PDF/文本预览、复制公开 URL、删除、`room.file` 刷新与网页监控面板均已由 `bun run test:web` 747 项浏览器验收覆盖（含 AI Markdown、扫码复制、侧栏入口与移动端 390px）。
 - 通知不保证每条送达；客户端必须按游标读取 SQLite 补齐。重复 hint 不代表重复任务。
 - `agentnet://stream` 是统一流的 per-actor 通知流：订阅收全部来源，包括房间消息、投递、回执、成员变化与 login；通知不保证每条送达，客户端按 `event_id` / `seq` 去重，并用快照、`network_sync` 或历史工具补齐。旧 URI 与按房间订阅已删除，请求旧 URI 返回 `INVALID_ARGUMENT`。

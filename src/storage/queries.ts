@@ -69,6 +69,18 @@ export async function getRoomFile(db: D1Like, fileId: string): Promise<RoomFileR
     .first<RoomFileRow>();
 }
 
+/** 读取当前 actor 在房间内的网页监控配置；无行表示未配置。 */
+export async function getActorRoomMonitor(
+  db: D1Like,
+  actorId: string,
+  roomId: string,
+): Promise<import('./rows').ActorRoomMonitorRow | null> {
+  return db
+    .prepare('SELECT * FROM actor_room_monitors WHERE actor_id = ? AND room_id = ?')
+    .bind(actorId, roomId)
+    .first<import('./rows').ActorRoomMonitorRow>();
+}
+
 export async function getDelivery(db: D1Like, deliveryId: string): Promise<DeliveryRow | null> {
   return db
     .prepare('SELECT * FROM deliveries WHERE delivery_id = ?')

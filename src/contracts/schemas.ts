@@ -195,6 +195,15 @@ export const roomFileDeleteSchema = z.object({
   file_id: fileId,
 });
 
+/** 当前 human 在此会话私有的网页监控地址；null 表示清除。 */
+export const roomMonitorGetSchema = z.object({ room_id: id() });
+
+export const roomMonitorSetSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  url: z.string().trim().max(LIMITS.roomMonitorUrlMax).nullable(),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type ProfileUpdateInput = z.infer<typeof profileUpdateSchema>;
 export type AgentRenameInput = z.infer<typeof agentRenameSchema>;
@@ -226,3 +235,5 @@ export type RoomFileBindInput = z.infer<typeof roomFileBindSchema>;
 export type RoomFileListInput = z.infer<typeof roomFileListSchema>;
 export type RoomFileGetInput = z.infer<typeof roomFileGetSchema>;
 export type RoomFileDeleteInput = z.infer<typeof roomFileDeleteSchema>;
+export type RoomMonitorGetInput = z.infer<typeof roomMonitorGetSchema>;
+export type RoomMonitorSetInput = z.infer<typeof roomMonitorSetSchema>;

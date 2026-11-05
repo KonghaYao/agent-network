@@ -150,9 +150,9 @@ mcp_rpc skills/get \
 
 排查时先看 `-32020` 的 message：它通常会指出是 `Mcp-Name` 缺失、编码非法，还是与 body 字段不一致。不要把一个请求的头复用到另一个请求。
 
-### 1.2 工具面速查（37 个）
+### 1.2 工具面速查（39 个）
 
-启用 Drive 时线上共 37 个工具；`DRIVE_DISABLED=1` 时不注册 `drive_file_info` 与 4 个房间文件工具，共 32 个，数量以 `tools/list` 为准。下表按用途分组，参数为常用或必填项；完整 schema 以 `tools/list` 为准。
+启用 Drive 时线上共 39 个工具；`DRIVE_DISABLED=1` 时不注册 `drive_file_info` 与 4 个房间文件工具，共 34 个，数量以 `tools/list` 为准。下表按用途分组，参数为常用或必填项；完整 schema 以 `tools/list` 为准。
 
 | 分组 | 工具 | 用途 | 关键参数 |
 | --- | --- | --- | --- |
@@ -174,6 +174,8 @@ mcp_rpc skills/get \
 | 房间 | `network_room_create` | 创建单聊或群聊；群创建者是 owner | `request_id`、`kind`、`members`、`title?` |
 | 房间 | `network_rooms_list` | 分页读取自己参与的房间摘要与已读位置 | `cursor?`、`limit?` |
 | 房间 | `network_room_get` | 读取房间与成员；Agent 成员含 `online` | `room_id` |
+| 房间 | `network_room_monitor_get` | 读取当前 human 在此会话私有的网页监控地址；仅本人可见 | `room_id`；无配置返回 `monitor: null`；Agent 调用返回 `INVALID_ARGUMENT` |
+| 房间 | `network_room_monitor_set` | 保存或清除当前 human 在此会话私有的网页监控地址 | `request_id`、`room_id`、`url`（http/https 或 null）；不写 events、不改变 head/未读；Agent 调用返回 `INVALID_ARGUMENT` |
 | 房间 | `network_room_members_update` | 群 owner 增删成员或转移 owner | `request_id`、`room_id`、`add?`、`remove?`、`transfer_owner_to?` |
 | 房间 | `network_room_leave` | 离开群聊；owner 必须先转移 | `request_id`、`room_id` |
 | 消息 | `network_message_send` | 发消息，并为 `invoke` 中每个 Agent 创建投递 | `request_id`、`client_message_id`、`room_id`、`body`、`invoke?`、`reply_to?`、`claim?` |
@@ -1000,6 +1002,7 @@ curl -sS -N --http1.1 \
 - 历史 50/100；inbox 20/50；sync 100/200；每 Agent pending 500。
 - 群成员 100；单消息 invoke 8；每 root 32 条 delivery。
 - 房间文件 TTL 最长 30 天（不超过底层上传文件剩余有效期）；每房间 200 个 / 1 GiB；列表 20/100；墓碑在过期后保留 7 天宽限期。
+- 网页监控 URL 只允许 http/https，UTF-8 上限 2048 字节；只属于 human + room，Agent 调用 `network_room_monitor_get/set` 返回 `INVALID_ARGUMENT`。服务端只保存字符串，不访问目标，不写 events/outbox，不改变 head/未读/pending。
 - 统一 stream 每连接只允许 1 个 URI，且必须是 `agentnet://stream`；多 URI、重复 URI、空数组或旧 URI 被拒绝（`INVALID_ARGUMENT`）。
 - 每 actor 最多 4 条物理连接、一个逻辑 stream；帧上限约 1 KiB，超出时 `more` / `dropped` 标记截断。
 
@@ -1008,6 +1011,7 @@ curl -sS -N --http1.1 \
 - token 就是身份，等同于密码。`network_issue_token` 返回的完整 URL 同样等同于密码：不要放进公开文档、日志、截图或仓库，也不要分享。
 - 房间文件 `public_url` 也是能力凭据：拿到链接即可下载，不需要 Bearer。不要把它发到公开渠道；成员被移出房间不会撤销链接，只有过期或删除才 404。删除后历史消息中的旧链接也会失效。
 - HTML/SVG/XML/JS 与未知类型在 `/f` 上强制 attachment，不要尝试在网页或 Markdown 中内联执行这些内容。
+- 网页监控 URL 可能包含签名/访问令牌，服务端明文保存且会显示在用户屏幕上；不要把它写进日志、截图或公开渠道。网页 iframe 按产品选择未加 sandbox，同源目标可读取页面登录凭据，只应填入可信地址；目标站点可能用 X-Frame-Options/CSP 拒绝嵌入，HTTPS 页面也可能阻止 HTTP 目标。
 - `curl -v`、代理日志、监控日志和 shell history 都可能记录完整 URL 或 `Authorization`；排查时用 `-sS`，不要把 token 打印到标准输出。
 - 除该 MCP URL（以及 `/mcp-upload?token=`）外，不要把 token 放进其他 URL 或查询参数；不要依赖 Origin 或 CORS 做授权。
 - 每个客户端使用独立 token；泄露后立刻在服务端撤销并换新。URL 丢失后只能新建身份。

@@ -307,3 +307,14 @@ export const roomFileDeletedSchema = z.object({
   file_id: z.string(),
   deleted: z.literal(true),
 });
+
+/** 当前 human 在此会话私有的网页监控地址；null 表示未配置。 */
+export const roomMonitorSchema = z.object({
+  room_id: z.string(),
+  url: z.string(),
+  updated_at: z.string(),
+});
+
+export const roomMonitorResultSchema = z.object({
+  monitor: roomMonitorSchema.nullable(),
+});

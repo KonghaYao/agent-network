@@ -43,6 +43,35 @@ function toolErrorCode(body: Record<string, unknown>): string | undefined {
   }
 }
 
+interface RawToolCall<T> {
+  status: number;
+  body: Record<string, unknown>;
+  data: T | undefined;
+  code: string | undefined;
+}
+
+/** 直接走 JSON-RPC 的工具调用，保留 schema 错误与业务错误码。 */
+async function rawToolCall<T>(
+  token: string | null,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<RawToolCall<T>> {
+  const response = await rawRpc(
+    'tools/call',
+    { name, arguments: args },
+    token ? { token } : {},
+  );
+  const result = response.body.result as
+    | { isError?: boolean; structuredContent?: T }
+    | undefined;
+  return {
+    status: response.status,
+    body: response.body,
+    data: result?.structuredContent,
+    code: toolErrorCode(response.body),
+  };
+}
+
 async function main(): Promise<void> {
   console.log(`协议验收: ${baseUrl()}`);
 
@@ -244,6 +273,8 @@ async function main(): Promise<void> {
     'network_room_create',
     'network_rooms_list',
     'network_room_get',
+    'network_room_monitor_get',
+    'network_room_monitor_set',
     'network_room_members_update',
     'network_room_leave',
     'network_message_send',
@@ -266,7 +297,7 @@ async function main(): Promise<void> {
     'network_room_file_delete',
   ];
   const toolNames = listed?.tools?.map((tool) => tool.name) ?? [];
-  // 工具集随 drive 开关变化：核心 31 + drive_file_info + 4 个房间文件工具。
+  // 工具集随 drive 开关变化：核心 34 + drive_file_info + 4 个房间文件工具。
   const hasDrive = toolNames.includes('drive_file_info');
   const hasRoomFiles = roomFileTools.every((name) => toolNames.includes(name));
   check(
@@ -288,6 +319,8 @@ async function main(): Promise<void> {
     'network_agent_unarchive',
     'network_agents_get',
     'network_message_send',
+    'network_room_monitor_get',
+    'network_room_monitor_set',
     'network_inbox_list',
     'network_delivery_claim',
     'network_delivery_complete',
@@ -337,6 +370,51 @@ async function main(): Promise<void> {
     'history 输出 schema 包含权威 sender_kind',
     historySchema.includes('"sender_kind"'),
     historyTool?.outputSchema,
+  );
+
+  const monitorGetTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_room_monitor_get',
+  );
+  const monitorSetTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_room_monitor_set',
+  );
+  const monitorGetDescription = monitorGetTool?.description ?? '';
+  const monitorSetDescription = monitorSetTool?.description ?? '';
+  check(
+    'monitor_get 描述声明 human 私有、服务端不访问且不写 events',
+    monitorGetDescription.includes('当前 human 身份') &&
+      monitorGetDescription.includes('仅本人可见') &&
+      monitorGetDescription.includes('服务端不访问') &&
+      monitorGetDescription.includes('不写 events/outbox'),
+    monitorGetTool?.description,
+  );
+  check(
+    'monitor_set 描述声明 http/https、幂等与 human-only',
+    monitorSetDescription.includes('只允许 http/https') &&
+      monitorSetDescription.includes('IDEMPOTENCY_CONFLICT') &&
+      monitorSetDescription.includes('仅人类网页身份可用') &&
+      monitorSetDescription.includes('Agent 调用返回 INVALID_ARGUMENT'),
+    monitorSetTool?.description,
+  );
+  check(
+    'monitor_set 描述声明 XFO/CSP 与不改变未读/head/pending',
+    monitorSetDescription.includes('X-Frame-Options') &&
+      monitorSetDescription.includes('CSP') &&
+      monitorSetDescription.includes('不改变未读、head 或 pending_count'),
+    monitorSetTool?.description,
+  );
+  const monitorOutput = JSON.stringify(monitorGetTool?.outputSchema ?? {});
+  check(
+    'monitor 输出 schema 允许 monitor 为 null',
+    monitorOutput.includes('"monitor"') &&
+      (monitorOutput.includes('"type":"null"') || monitorOutput.includes('null')),
+    monitorGetTool?.outputSchema,
+  );
+  check(
+    'monitor_get 注册为只读工具',
+    (monitorGetTool as { annotations?: { readOnlyHint?: boolean } } | undefined)?.annotations
+      ?.readOnlyHint === true,
+    (monitorGetTool as { annotations?: unknown } | undefined)?.annotations,
   );
 
   const reissueTool = listed?.tools?.find(
@@ -1336,6 +1414,327 @@ async function main(): Promise<void> {
         item.sender_kind === undefined,
     ),
     historyResult?.items?.map((item) => item.sender_kind),
+  );
+
+  // 网页监控：human + room 私有配置、URL 校验、幂等与不改变房间状态。
+  const monitorBToken = newToken();
+  const monitorBRegister = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_register',
+      arguments: {
+        request_id: `monitor_b_reg_${crypto.randomUUID().replaceAll('-', '')}`,
+        kind: 'human',
+        name: '监控成员 B',
+      },
+    },
+    { token: monitorBToken },
+  );
+  const monitorB = (
+    monitorBRegister.body.result as
+      | { structuredContent?: { actor_id?: string } }
+      | undefined
+  )?.structuredContent;
+  const monitorOutsiderToken = newToken();
+  const monitorOutsiderRegister = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_register',
+      arguments: {
+        request_id: `monitor_c_reg_${crypto.randomUUID().replaceAll('-', '')}`,
+        kind: 'human',
+        name: '监控非成员 C',
+      },
+    },
+    { token: monitorOutsiderToken },
+  );
+  const monitorOutsider = (
+    monitorOutsiderRegister.body.result as
+      | { structuredContent?: { actor_id?: string } }
+      | undefined
+  )?.structuredContent;
+  await rawRpc(
+    'tools/call',
+    {
+      name: 'network_contact_add',
+      arguments: {
+        request_id: `monitor_contact_${crypto.randomUUID().replaceAll('-', '')}`,
+        actor_id: monitorB?.actor_id,
+      },
+    },
+    { token: browserToken },
+  );
+  const monitorRoomResponse = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_room_create',
+      arguments: {
+        request_id: `monitor_room_${crypto.randomUUID().replaceAll('-', '')}`,
+        kind: 'group',
+        title: '监控面板协议群',
+        members: [monitorB?.actor_id, shareIdentity?.actor_id],
+      },
+    },
+    { token: browserToken },
+  );
+  const monitorRoomId =
+    (
+      monitorRoomResponse.body.result as
+        | { structuredContent?: { room?: { room_id?: string } } }
+        | undefined
+    )?.structuredContent?.room?.room_id ?? '';
+  check('监控测试群创建成功', monitorRoomId.length > 0, monitorRoomResponse.body);
+
+  const monitorHeadBefore =
+    (
+      (
+        await rawToolCall<{ room: { head_seq: string } }>(
+          browserToken,
+          'network_room_get',
+          { room_id: monitorRoomId },
+        )
+      ).data
+    )?.room.head_seq ?? '';
+  const monitorPendingBefore =
+    (await rawToolCall<{ pending_count: number }>(browserToken, 'network_me', {}))
+      .data?.pending_count ?? -1;
+
+  const monitorEmpty = await rawToolCall<{ monitor: unknown }>(
+    browserToken,
+    'network_room_monitor_get',
+    { room_id: monitorRoomId },
+  );
+  checkEqual('监控 get 无配置返回 monitor:null', monitorEmpty.data?.monitor, null);
+
+  const monitorAUrl = 'http://DSH.Example/panel?token=secret-monitor-value';
+  const monitorANormalized = 'http://dsh.example/panel?token=secret-monitor-value';
+  const monitorASetRequest = `monitor_set_${crypto.randomUUID().replaceAll('-', '')}`;
+  const monitorASet = await rawToolCall<{
+    monitor: { room_id: string; url: string; updated_at: string } | null;
+  }>(browserToken, 'network_room_monitor_set', {
+    request_id: monitorASetRequest,
+    room_id: monitorRoomId,
+    url: monitorAUrl,
+  });
+  checkEqual('监控 set 返回规范化 URL', monitorASet.data?.monitor?.url, monitorANormalized);
+  checkEqual('监控 set 返回 room_id', monitorASet.data?.monitor?.room_id, monitorRoomId);
+  check(
+    '监控 set 返回 updated_at',
+    typeof monitorASet.data?.monitor?.updated_at === 'string' &&
+      monitorASet.data.monitor.updated_at.length > 0,
+    monitorASet.data,
+  );
+
+  const monitorReplay = await rawToolCall<{ monitor: { updated_at: string } | null }>(
+    browserToken,
+    'network_room_monitor_set',
+    {
+      request_id: monitorASetRequest,
+      room_id: monitorRoomId,
+      url: monitorAUrl,
+    },
+  );
+  checkEqual(
+    '同一 request_id 重放返回同一结果',
+    monitorReplay.data?.monitor?.updated_at,
+    monitorASet.data?.monitor?.updated_at,
+  );
+  const monitorConflict = await rawToolCall(
+    browserToken,
+    'network_room_monitor_set',
+    {
+      request_id: monitorASetRequest,
+      room_id: monitorRoomId,
+      url: 'https://different.example/',
+    },
+  );
+  checkEqual('同一 request_id 不同参数返回 IDEMPOTENCY_CONFLICT', monitorConflict.code, 'IDEMPOTENCY_CONFLICT');
+
+  const monitorAGet = await rawToolCall<{ monitor: { url: string } | null }>(
+    browserToken,
+    'network_room_monitor_get',
+    { room_id: monitorRoomId },
+  );
+  checkEqual('监控 get 返回本人保存的 URL', monitorAGet.data?.monitor?.url, monitorANormalized);
+  const monitorBGetEmpty = await rawToolCall<{ monitor: unknown }>(
+    monitorBToken,
+    'network_room_monitor_get',
+    { room_id: monitorRoomId },
+  );
+  checkEqual('同房间另一成员看不到 A 的 URL', monitorBGetEmpty.data?.monitor, null);
+  const monitorBSet = await rawToolCall<{ monitor: { url: string } | null }>(
+    monitorBToken,
+    'network_room_monitor_set',
+    {
+      request_id: `monitor_b_set_${crypto.randomUUID().replaceAll('-', '')}`,
+      room_id: monitorRoomId,
+      url: 'https://b.example/panel',
+    },
+  );
+  checkEqual('另一成员可保存自己的 URL', monitorBSet.data?.monitor?.url, 'https://b.example/panel');
+  const monitorAGetAgain = await rawToolCall<{ monitor: { url: string } | null }>(
+    browserToken,
+    'network_room_monitor_get',
+    { room_id: monitorRoomId },
+  );
+  checkEqual(
+    '其他成员写入不覆盖 A 的配置',
+    monitorAGetAgain.data?.monitor?.url,
+    monitorANormalized,
+  );
+
+  const monitorAgentGet = await rawToolCall(
+    shareToken,
+    'network_room_monitor_get',
+    { room_id: monitorRoomId },
+  );
+  checkEqual('Agent 读取监控配置返回 INVALID_ARGUMENT', monitorAgentGet.code, 'INVALID_ARGUMENT');
+  const monitorAgentSet = await rawToolCall(
+    shareToken,
+    'network_room_monitor_set',
+    {
+      request_id: `monitor_agent_${crypto.randomUUID().replaceAll('-', '')}`,
+      room_id: monitorRoomId,
+      url: 'https://agent.example/',
+    },
+  );
+  checkEqual('Agent 写入监控配置返回 INVALID_ARGUMENT', monitorAgentSet.code, 'INVALID_ARGUMENT');
+
+  const monitorOutsiderGet = await rawToolCall(
+    monitorOutsiderToken,
+    'network_room_monitor_get',
+    { room_id: monitorRoomId },
+  );
+  checkEqual('非成员读取监控配置返回 NOT_MEMBER', monitorOutsiderGet.code, 'NOT_MEMBER');
+  const monitorOutsiderSet = await rawToolCall(
+    monitorOutsiderToken,
+    'network_room_monitor_set',
+    {
+      request_id: `monitor_out_${crypto.randomUUID().replaceAll('-', '')}`,
+      room_id: monitorRoomId,
+      url: 'https://outsider.example/',
+    },
+  );
+  checkEqual('非成员写入监控配置返回 NOT_MEMBER', monitorOutsiderSet.code, 'NOT_MEMBER');
+  const monitorUnknown = await rawToolCall(browserToken, 'network_room_monitor_get', {
+    room_id: 'rm_missing_monitor',
+  });
+  checkEqual('未知房间读取监控配置返回 NOT_FOUND', monitorUnknown.code, 'NOT_FOUND');
+
+  for (const invalidUrl of [
+    'javascript:alert(1)',
+    'data:text/html,<script>alert(1)</script>',
+    'file:///etc/passwd',
+    'ftp://example.com/panel',
+    '/relative-panel',
+  ]) {
+    const invalid = await rawToolCall(browserToken, 'network_room_monitor_set', {
+      request_id: `monitor_invalid_${crypto.randomUUID().replaceAll('-', '')}`,
+      room_id: monitorRoomId,
+      url: invalidUrl,
+    });
+    checkEqual(`监控拒绝非 http/https URL：${invalidUrl.slice(0, 24)}`, invalid.code, 'INVALID_ARGUMENT');
+  }
+  const monitorTooManyBytes = await rawToolCall(browserToken, 'network_room_monitor_set', {
+    request_id: `monitor_bytes_${crypto.randomUUID().replaceAll('-', '')}`,
+    room_id: monitorRoomId,
+    url: `https://example.com/${'你'.repeat(1000)}`,
+  });
+  checkEqual('监控拒绝超过字节上限的 URL', monitorTooManyBytes.code, 'INVALID_ARGUMENT');
+  const monitorTooManyChars = await rawToolCall(browserToken, 'network_room_monitor_set', {
+    request_id: `monitor_chars_${crypto.randomUUID().replaceAll('-', '')}`,
+    room_id: monitorRoomId,
+    url: `https://example.com/${'a'.repeat(2049)}`,
+  });
+  const monitorTooManyCharsResult = monitorTooManyChars.body.result as
+    | { isError?: boolean; content?: { type?: string; text?: string }[] }
+    | undefined;
+  const monitorTooManyCharsText =
+    monitorTooManyCharsResult?.content?.find((item) => item.type === 'text')?.text ?? '';
+  check(
+    '监控超长 URL 在 schema 层被拒绝',
+    monitorTooManyCharsResult?.isError === true &&
+      (monitorTooManyCharsText.includes('2048') || monitorTooManyCharsText.includes('Too big')),
+    monitorTooManyCharsText,
+  );
+
+  const monitorClearRequest = `monitor_clear_${crypto.randomUUID().replaceAll('-', '')}`;
+  const monitorClear = await rawToolCall<{ monitor: unknown }>(
+    browserToken,
+    'network_room_monitor_set',
+    {
+      request_id: monitorClearRequest,
+      room_id: monitorRoomId,
+      url: null,
+    },
+  );
+  checkEqual('监控 set null 清除配置', monitorClear.data?.monitor, null);
+  const monitorClearReplay = await rawToolCall<{ monitor: unknown }>(
+    browserToken,
+    'network_room_monitor_set',
+    {
+      request_id: monitorClearRequest,
+      room_id: monitorRoomId,
+      url: null,
+    },
+  );
+  checkEqual('清除配置可用同一 request_id 重放', monitorClearReplay.data?.monitor, null);
+  const monitorAfterClear = await rawToolCall<{ monitor: unknown }>(
+    browserToken,
+    'network_room_monitor_get',
+    { room_id: monitorRoomId },
+  );
+  checkEqual('清除后 get 返回 monitor:null', monitorAfterClear.data?.monitor, null);
+  const monitorWhitespaceClear = await rawToolCall<{ monitor: unknown }>(
+    browserToken,
+    'network_room_monitor_set',
+    {
+      request_id: `monitor_ws_${crypto.randomUUID().replaceAll('-', '')}`,
+      room_id: monitorRoomId,
+      url: '   ',
+    },
+  );
+  checkEqual('纯空白 URL 视为清除', monitorWhitespaceClear.data?.monitor, null);
+  await rawToolCall(browserToken, 'network_room_monitor_set', {
+    request_id: `monitor_refill_${crypto.randomUUID().replaceAll('-', '')}`,
+    room_id: monitorRoomId,
+    url: monitorAUrl,
+  });
+
+  const monitorNoAuth = await rawToolCall(null, 'network_room_monitor_get', {
+    room_id: monitorRoomId,
+  });
+  checkEqual('无凭据读取监控配置返回 CREDENTIAL_INVALID', monitorNoAuth.code, 'CREDENTIAL_INVALID');
+  const monitorNoAuthSet = await rawToolCall(null, 'network_room_monitor_set', {
+    request_id: `monitor_noauth_${crypto.randomUUID().replaceAll('-', '')}`,
+    room_id: monitorRoomId,
+    url: monitorAUrl,
+  });
+  checkEqual('无凭据写入监控配置返回 CREDENTIAL_INVALID', monitorNoAuthSet.code, 'CREDENTIAL_INVALID');
+
+  const monitorHeadAfter =
+    (
+      (
+        await rawToolCall<{ room: { head_seq: string } }>(
+          browserToken,
+          'network_room_get',
+          { room_id: monitorRoomId },
+        )
+      ).data
+    )?.room.head_seq ?? '';
+  checkEqual('监控配置不改变房间 head_seq', monitorHeadAfter, monitorHeadBefore);
+  const monitorPendingAfter =
+    (await rawToolCall<{ pending_count: number }>(browserToken, 'network_me', {}))
+      .data?.pending_count ?? -2;
+  checkEqual('监控配置不改变 pending_count', monitorPendingAfter, monitorPendingBefore);
+
+  const monitorShell = await fetch(`${baseUrl()}/c/${monitorRoomId}`);
+  const monitorShellHtml = await monitorShell.text();
+  checkEqual('无 token 的聊天页仍返回 200', monitorShell.status, 200);
+  check(
+    '无 token 的 HTML 不包含已保存 URL',
+    !monitorShellHtml.includes(monitorANormalized) &&
+      !monitorShellHtml.includes('secret-monitor-value'),
   );
 
   const chatPage = await fetch(`${baseUrl()}/c/${roomResult?.room?.room_id ?? ''}`);

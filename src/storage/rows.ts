@@ -145,6 +145,15 @@ export interface RoomFileRow {
   deleted_by: string | null;
 }
 
+/** 每个 human 在每个房间私有的网页监控地址；无行表示未配置。 */
+export interface ActorRoomMonitorRow {
+  actor_id: string;
+  room_id: string;
+  url: string;
+  created_at: number;
+  updated_at: number;
+}
+
 /** MCP Events webhook 订阅；secret 以 AES-GCM 密文落库。 */
 export interface EventSubscriptionRow {
   subscription_id: string;

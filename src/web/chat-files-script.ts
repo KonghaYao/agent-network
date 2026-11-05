@@ -175,7 +175,9 @@ function restoreFilesFocus() {
 function toggleFilesPane() {
   if (!activeRoomId) return;
   if (isFilesDesktop()) {
-    filesDesktopOpen = !filesDesktopOpen;
+    const willOpen = !filesDesktopOpen;
+    if (willOpen) closeMonitorPane({ restoreFocus: false });
+    filesDesktopOpen = willOpen;
     writeFilesPreference(filesDesktopOpen);
     syncFilesChrome();
     if (filesDesktopOpen) {
@@ -186,6 +188,7 @@ function toggleFilesPane() {
     return;
   }
   const willOpen = !filesOverlayOpen;
+  if (willOpen) closeMonitorPane({ restoreFocus: false });
   filesOverlayOpen = willOpen;
   if (willOpen) {
     filesFocusBeforeOpen = document.activeElement;
@@ -204,9 +207,11 @@ function toggleFilesPane() {
   }
 }
 
-function closeFilesPane() {
+function closeFilesPane(options) {
+  const settings = options && typeof options === 'object' ? options : {};
+  const restoreFocus = settings.restoreFocus !== false;
   if (!filesPaneElement || filesPaneElement.hidden) {
-    restoreFilesFocus();
+    if (restoreFocus) restoreFilesFocus();
     return;
   }
   if (isFilesDesktop()) {
@@ -216,7 +221,7 @@ function closeFilesPane() {
     filesOverlayOpen = false;
   }
   syncFilesChrome();
-  restoreFilesFocus();
+  if (restoreFocus) restoreFilesFocus();
 }
 
 function activateFilesRoom(roomId) {

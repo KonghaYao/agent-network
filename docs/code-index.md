@@ -1,6 +1,6 @@
 # WeBots 代码索引
 
-状态：M0–M3 服务端与 M4 网页入口已实现（分享页建联、微信风双栏首页/聊天、会话搜索、建群、群 @、消息状态回执、Agent 全局改名、Agent token 注销重发、Agent 软归档（侧栏 direct Agent 右键归档与账号区已归档浮层）、左下角手机扫码共享当前身份与复制扫码内容、左下角本机退出登录、显式上线与离线补发、新建 Agent 自动建会话并补齐联系人、暗色与移动端单栏）；聊天房间文件服务端已实现（绑定、列表、读取、删除墓碑、公开下载与配额），网页文件栏已实现并由 `bun run test:web` 625 项覆盖；MCP Events webhook 订阅、消息文件自动归档、四份 Harness 静态接入指南（Codex/ChatGPT Web/Peri/Claude Code）与相关文档已实现。本地与远程协议/端到端验收通过。生产负载、限流与远程运营仍未验证。使用说明由 [包 README](../../npm-packages/agent-network/README.md) 维护，实施契约见 [active spec](../../spec/issues/2026-10-21-agent-network.md)。
+状态：M0–M3 服务端与 M4 网页入口已实现（分享页建联、微信风双栏首页/聊天、会话搜索、建群、群 @、消息状态回执、Agent 全局改名、Agent token 注销重发、Agent 软归档（侧栏 direct Agent 右键归档与账号区已归档浮层）、左下角手机扫码共享当前身份与复制扫码内容、左下角本机退出登录、显式上线与离线补发、新建 Agent 自动建会话并补齐联系人、按 human+会话私有的网页监控面板、暗色与移动端单栏）；聊天房间文件服务端已实现（绑定、列表、读取、删除墓碑、公开下载与配额），网页文件栏已实现并由 `bun run test:web` 747 项覆盖；MCP Events webhook 订阅、消息文件自动归档、四份 Harness 静态接入指南（Codex/ChatGPT Web/Peri/Claude Code）与相关文档已实现。本地与远程协议/端到端验收通过。生产负载、限流与远程运营仍未验证。使用说明由 [包 README](../../npm-packages/agent-network/README.md) 维护，实施契约见 [active spec](../../spec/issues/2026-10-21-agent-network.md)。
 
 ## 边界与数据流
 
@@ -20,7 +20,9 @@ AI 消息 Markdown：`src/web/markdown/entry.tsx` 是唯一的 React 子树（Re
 
 回执与实时：`network_history_list` 的 `delivery_states` 是唯一回执来源；`src/domain/deliveries.ts` 在 claim/report/complete/fail/cancel/retry 的同一事务内写 room scope 事件与 `room:{id}` 内部 outbox，发送方页面的统一流收到 `delivery.updated` 后走串行 `refresh()`。claim/report/complete/fail 仍写 inbox 事件维护 `pending_count` 与 sync，但不推回 recipient 自己。回执事件不推进 `rooms.head_seq`，因此不会产生“没有新消息”的未读点。`messages.ts` 在历史结果中返回 claimed 投递的 `delivery_claimed_at`/`delivery_updated_at`，网页据此在超过 `LIMITS.claimedStaleMs` 时提示“处理中未更新”。
 
-房间文件：`src/domain/room-files.ts` 负责 bind/list/get/delete、成员与上传者/群 owner 权限、每房间 200 个 / 1 GiB 配额、最长 30 天 TTL（`min(now + 30d, upload.expires_at)`）、删除墓碑与 `PUBLIC_ORIGIN + /f/<file_id>` 派生；`src/mcp/room-files.ts` 在 MCPP Files 挂载时注册 4 个工具，bind 只接受当前身份且未过期的 `fileId`，同一 `file_id` 只能属于一个房间。`src/app.ts` 的 `/f/:fileId` 提供无 Bearer 下载，`src/drive/service.ts` 的 `publicFileHeaders` 负责 HEAD/Range/ETag/P0 安全头，`purgeFilePayloads` 在墓碑提交后 best-effort 回收载荷。`src/realtime/stream.ts` 把 `room_file_added` / `room_file_deleted` 映射为 `source: "room.file"`、`kind: "file"` 的 informational item，不创建 delivery、不增加 `pending_count`、不推进 `rooms.head_seq`。网页文件栏为 `>= 1200px` 右侧第三栏、`760–1199px` 抽屉、`< 760px` 全屏；SVG/HTML 不内联预览，复制 URL 提示公开链接即下载权限；三档布局、真实上传/bind/预览/删除与 `room.file` 刷新由 `bun run test:web` 490 项覆盖（含 AI Markdown、扫码复制与 390px）。
+房间文件：`src/domain/room-files.ts` 负责 bind/list/get/delete、成员与上传者/群 owner 权限、每房间 200 个 / 1 GiB 配额、最长 30 天 TTL（`min(now + 30d, upload.expires_at)`）、删除墓碑与 `PUBLIC_ORIGIN + /f/<file_id>` 派生；`src/mcp/room-files.ts` 在 MCPP Files 挂载时注册 4 个工具，bind 只接受当前身份且未过期的 `fileId`，同一 `file_id` 只能属于一个房间。`src/app.ts` 的 `/f/:fileId` 提供无 Bearer 下载，`src/drive/service.ts` 的 `publicFileHeaders` 负责 HEAD/Range/ETag/P0 安全头，`purgeFilePayloads` 在墓碑提交后 best-effort 回收载荷。`src/realtime/stream.ts` 把 `room_file_added` / `room_file_deleted` 映射为 `source: "room.file"`、`kind: "file"` 的 informational item，不创建 delivery、不增加 `pending_count`、不推进 `rooms.head_seq`。网页文件栏为 `>= 1200px` 右侧第三栏、`760–1199px` 抽屉、`< 760px` 全屏；SVG/HTML 不内联预览，复制 URL 提示公开链接即下载权限；三档布局、真实上传/bind/预览/删除与 `room.file` 刷新由 `bun run test:web` 747 项覆盖（含 AI Markdown、扫码复制、网页监控与 390px）。
+
+网页监控：`migrations/0008_actor_room_monitors.sql` 新增 `actor_room_monitors(actor_id, room_id, url, created_at, updated_at)`，主键 `(actor_id, room_id)`，`url <> ''`，清除删除行。`src/domain/room-monitors.ts` 做 human-only、active 成员、http/https 与 2048 字节上限校验，`set` 走 `runIdempotent`（operations → `guard_not_member` → UPSERT/DELETE），不写 events/outbox，不改变 head/未读/pending，错误不回显 URL。工具 `network_room_monitor_get/set` 只按当前 principal + room 读写，没有 actor_id 参数；Agent 调用返回 `INVALID_ARGUMENT`。网页由 `src/web/chat-monitor-script.ts` / `chat-monitor-styles.ts` 实现独立右侧面板（桌面 420px、平板抽屉、移动全屏），与 `files-pane` 互斥；iframe 无 sandbox，URL 只用 DOM `src`，关闭/切房/回首页置 `about:blank`，打开/切房/手动刷新时才 get，不轮询；URL 不写 localStorage、console 或 SSR HTML。
 
 消息文件自动归档：`src/contracts/file-links.ts` 从完整正文提取同源绝对/相对 `/f/<fileId>`（忽略 query/hash、外站、`/f/<id>/extra` 与非法 ID，去重，最多 `LIMITS.messageFileLinksMax` 个；字面量 `\n` 只在提取副本中归一化，Markdown 包裹不影响）；`src/mcp/tools.ts` 的 `afterMessageCommitted` 钩子在 `network_message_send` 与带 `final_body` 的 `network_delivery_complete` 消息事务提交后触发 `src/mcp/room-files.ts` 的 `createMessageFileArchiver`。只有当前身份自己拥有、未过期、尚未绑定/未删除的文件才调用 `roomFileBind` 等价逻辑，`request_id = auto_bind:<message_id>:<file_id>`，串行、幂等、best-effort；失败只跳过当前文件。跨房间不复制，历史消息仍不补归档，`DRIVE_DISABLED=1` 时不注册钩子；成功归档仍写 `room_file_added` 与 informational `room.file`、不推进 head。验收在 `scripts/lib/room-file-archive.ts`。
 
@@ -52,6 +54,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 微信式双栏组合入口（`renderAppPage` / `renderChatPage`） | `src/web/chat.ts` |
 | 应用页内联样式 | `src/web/chat-styles.ts` |
 | 聊天面板与空状态标记 | `src/web/chat-panels.ts` |
+| 网页监控面板标记、状态机与样式 | `src/web/chat-panels.ts`、`src/web/chat-monitor-script.ts`、`src/web/chat-monitor-styles.ts` |
 | 应用页内联客户端脚本（通信、刷新、建群、@、扫码弹窗） | `src/web/chat-script.ts` |
 | 会话列表、搜索过滤、头像与未读 | `src/web/chat-list-script.ts` |
 | 消息气泡、时间胶囊、@ 高亮与回执 | `src/web/chat-render-script.ts` |
@@ -67,6 +70,8 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 消息文件链接解析（同源 `/f/<fileId>`、去重、上限） | `src/contracts/file-links.ts` |
 | 房间文件 MCP 工具（bind/list/get/delete）与消息提交后自动归档钩子 | `src/mcp/room-files.ts` |
 | 房间文件业务规则、墓碑与公开 URL | `src/domain/room-files.ts` |
+| 网页监控配置（human + room、URL 校验、幂等） | `src/domain/room-monitors.ts` |
+| `actor_room_monitors` schema | `migrations/0008_actor_room_monitors.sql` |
 | `/f` 公开下载、HEAD/Range/304 与安全头 | `src/app.ts`、`src/drive/service.ts` |
 | `room_files` schema 与配额/权限闸门 | `migrations/0003_room_files.sql` |
 | MCP Events 定义、订阅、扫描、投递、安全与运行时 | `src/events/definitions.ts`、`subscriptions.ts`、`scanner.ts`、`dispatcher.ts`、`security.ts`、`client.ts`、`runtime.ts` |
@@ -107,12 +112,12 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 ## 验证
 
 - `bun run typecheck`
-- `bun run test:protocol`：默认 `http://127.0.0.1:8792`，321 项（events 启用 336 项；含 37 个工具、房间文件工具与 Drive 开关联动、Agent 归档描述、token 重发描述与输入/输出 schema、`agents_get` 输入/输出 schema、唯一 `agentnet://stream` 资源、旧 URI 读取/订阅返回 `INVALID_ARGUMENT`、claim/message_send 描述、room_get 的 online 与 history 的 claimed 时间/`sender_kind` schema、`network_login` 注册与未注册调用返回 `CREDENTIAL_INVALID`、四份 Harness 指南的 200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界断言、微信风首页空状态、会话搜索框、扫码入口、弹窗、fragment 采纳脚本与 `/j` 端点不存在，以及 presence 活动 TTL/pending/节流/回填单元检查）
-- `bun run test:acceptance`：313 项（未启用 events 闭环；`EVENTS_ACCEPTANCE=1` 时另含 events 用例；含显式上线、未上线订阅收不到提示、离线排队与上线补读、断线后重新上线、无 SSE 轮询保持在线与停止后按最后活动 + TTL 下线、离线后首个请求先上线再回复、room_get 在线/离线/未知、人类 login 返回 `INVALID_ARGUMENT`、全局改名、Agent token 注销重发与重放拒绝、Agent 归档/取消归档/重复归档幂等与 `agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变、群 @、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执与统一 stream 通知、旧 URI 拒绝、网页 human 单聊/群聊 invoke 回归）
+- `bun run test:protocol`：默认 `http://127.0.0.1:8792`，361 项（events 启用 376 项；含 39 个工具、房间文件工具与 Drive 开关联动、网页监控 human-only/成员校验/URL 校验/幂等/isolation、Agent 归档描述、token 重发描述与输入/输出 schema、`agents_get` 输入/输出 schema、唯一 `agentnet://stream` 资源、旧 URI 读取/订阅返回 `INVALID_ARGUMENT`、claim/message_send 描述、room_get 的 online 与 history 的 claimed 时间/`sender_kind` schema、`network_login` 注册与未注册调用返回 `CREDENTIAL_INVALID`、四份 Harness 指南的 200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界断言、微信风首页空状态、会话搜索框、扫码入口、弹窗、fragment 采纳脚本与 `/j` 端点不存在，以及 presence 活动 TTL/pending/节流/回填单元检查）
+- `bun run test:acceptance`：327 项（未启用 events 闭环；`EVENTS_ACCEPTANCE=1` 时另含 events 用例；含显式上线、未上线订阅收不到提示、离线排队与上线补读、断线后重新上线、无 SSE 轮询保持在线与停止后按最后活动 + TTL 下线、离线后首个请求先上线再回复、room_get 在线/离线/未知、人类 login 返回 `INVALID_ARGUMENT`、全局改名、Agent token 注销重发与重放拒绝、Agent 归档/取消归档/重复归档幂等与 `agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变、群 @、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执与统一 stream 通知、旧 URI 拒绝、网页监控 URL 的跨设备持久化/成员隔离/清除同步、网页 human 单聊/群聊 invoke 回归）
 - `bun run test:drive`：47 项（MCPP Files 上传、公开下载、`drive_file_info` 与 Drive 生命周期）
 - `DATA_DIR=.data bun scripts/verify-room-files.ts`：187 项（bind/list/get/delete、上传者与群 owner 权限、200 个 / 1 GiB 配额、30 天 TTL 上限、墓碑、公开 URL、HEAD/Range/416/304/`?download=1`、P0 安全头、`room.file` informational 事件，以及同源文件链接解析与消息提交后自动归档（含 final_body）的幂等/跨房间/他人/删除/过期/配额跳过）
 - `bun run test:events`：314 项（能力与 schema 描述、challenge/HMAC、订阅过滤、动作/信息事件、500 重试与 410/413 停止、暂停/刷新恢复、撤销/移除/过期、重启持久化、cursor/truncated、双签、订阅配额、日志脱敏、文件日志落盘/轮转/fail-open、IPv4 优先多地址回退与单地址超时、全球单播 SSRF allowlist 与公网 IPv4/IPv6、DRIVE_DISABLED 下含文件链接消息仍成功）
-- 浏览器 E2E：Playwright + 本机 Chrome，覆盖搜索过滤、选中高亮、未读红点、气泡左右/头像/时间胶囊/回执、群聊 2×2 头像与 @ 高亮、改名、建群、中文输入法 Enter、扫码弹窗与移动端 hash 采纳、暗色、移动端单栏/返回/输入框自适应/滚动、无 token 引导、侧栏归档入口（右键归档、默认列表过滤、空态/加载/错误、恢复、点击外部/Esc、390px 与暗色）、扫码复制（有/无 token、复制内容、execCommand 回退、失败提示、390px）、direct Agent 注销重发（二次确认/取消/成功自动复制/失败/旧 token 失效/DB 不落原文/移动端）、左侧退出登录（确认/取消/清理 token 与注册表/跳转/已退出引导/创建新身份/暗色与 390px）、新建 Agent 自动建 direct 会话并补齐联系人（human token、单条收敛、无未读、关闭与刷新后仍在、390px、联系人/会话失败保留凭据与注册表、非好友存量 Agent 在选择器中自动补齐与失败非致命、重复打开不重复添加、token 不入页面/console）；`bun run test:web` 625 项通过，另含 AI 消息 Markdown（类型/安全/懒加载/回退/移动端/滚动）、三档文件栏布局、真实上传/bind/预览/删除与 `room.file` 刷新
+- 浏览器 E2E：Playwright + 本机 Chrome，覆盖搜索过滤、选中高亮、未读红点、气泡左右/头像/时间胶囊/回执、群聊 2×2 头像与 @ 高亮、改名、建群、中文输入法 Enter、扫码弹窗与移动端 hash 采纳、暗色、移动端单栏/返回/输入框自适应/滚动、无 token 引导、侧栏归档入口（右键归档、默认列表过滤、空态/加载/错误、恢复、点击外部/Esc、390px 与暗色）、扫码复制（有/无 token、复制内容、execCommand 回退、失败提示、390px）、direct Agent 注销重发（二次确认/取消/成功自动复制/失败/旧 token 失效/DB 不落原文/移动端）、左侧退出登录（确认/取消/清理 token 与注册表/跳转/已退出引导/创建新身份/暗色与 390px）、新建 Agent 自动建 direct 会话并补齐联系人（human token、单条收敛、无未读、关闭与刷新后仍在、390px、联系人/会话失败保留凭据与注册表、非好友存量 Agent 在选择器中自动补齐与失败非致命、重复打开不重复添加、token 不入页面/console）、网页监控面板（入口/打开/关闭、保存后 iframe、切房、手动刷新、清除、空态/错误、无轮询、关闭卸载、文件面板互斥、iframe 无 sandbox、无 token/URL 泄露、XFO 提示与新标签链接、平板/移动/暗色）；`bun run test:web` 747 项通过，另含 AI 消息 Markdown（类型/安全/懒加载/回退/移动端/滚动）、三档文件栏布局、真实上传/bind/预览/删除与 `room.file` 刷新
 - 远程：`AGENTNET_URL=https://net.peri-code.dev bun run test:protocol` / `test:acceptance`；2026-10-21 在旧域名 `networks.peri-code.dev` 上 85/109 项通过，部署版本 `1f02bd89-d372-4f22-9135-18c07acfef23`。生产唯一入口为自定义域名，`workers_dev: false`，旧 `workers.dev` 已关闭且无重定向
 
 验收脚本会创建新身份与房间；远程验收不要指向生产数据。本地 dev 状态在 `DATA_DIR`（默认 `.data`）的 `agent-network.sqlite` 与 `files/`；迁移变更后执行 `bun run db:migrate`。

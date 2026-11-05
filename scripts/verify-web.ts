@@ -4768,6 +4768,492 @@ async function main(): Promise<void> {
       await context.close();
     }
 
+    // 10b. 网页监控面板：按会话保存、iframe、互斥、跨设备刷新与响应式布局。
+    {
+      const monitorBToken = crypto.randomUUID();
+      const monitorB = await rawTool<Actor>(monitorBToken, 'network_register', {
+        request_id: requestId('monitor_b_reg'),
+        kind: 'human',
+        name: '监控成员 B',
+      });
+      await rawTool(data.humanToken, 'network_contact_add', {
+        request_id: requestId('monitor_contact'),
+        actor_id: monitorB.actor_id,
+      });
+      const monitorGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('monitor_room'),
+        kind: 'group',
+        title: '监控面板群',
+        members: [monitorB.actor_id, data.agentA.actor_id],
+      });
+      const monitorGroupId = monitorGroup.room.room_id;
+      const monitorRoom2 = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('monitor_room2'),
+        kind: 'group',
+        title: '监控第二群',
+        members: [data.agentA.actor_id],
+      });
+      const monitorRoom2Id = monitorRoom2.room.room_id;
+      const monitorUrlOne = 'https://monitor.test/room-one';
+      const monitorUrlTwo = 'https://monitor.test/room-two';
+      const monitorUrlRefresh = 'https://monitor.test/refreshed';
+      await rawTool(data.humanToken, 'network_room_monitor_set', {
+        request_id: requestId('monitor_seed2'),
+        room_id: monitorRoom2Id,
+        url: monitorUrlTwo,
+      });
+
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      let monitorFrameRequests = 0;
+      let failNextMonitorSet = false;
+      await page.route('https://monitor.test/**', async (route) => {
+        monitorFrameRequests += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: 'text/html',
+          body: '<!doctype html><html><body><h1 id="probe">monitor-probe</h1></body></html>',
+        });
+      });
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (failNextMonitorSet && request.headers()['mcp-name'] === 'network_room_monitor_set') {
+          failNextMonitorSet = false;
+          const body = request.postDataJSON() as { id?: unknown };
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: body?.id,
+              result: {
+                isError: true,
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({ code: 'INVALID_ARGUMENT', message: '模拟保存失败' }),
+                  },
+                ],
+              },
+            }),
+          });
+          return;
+        }
+        await route.continue();
+      });
+      await page.goto(`${server.base}/c/${monitorGroupId}`);
+      await waitRoom(page, monitorGroupId, '监控面板群');
+      checkEqual('监控入口存在', await page.locator('#monitor-toggle').count(), 1);
+      checkEqual('监控面板默认隐藏', await page.locator('#monitor-pane').isHidden(), true);
+      checkEqual(
+        '监控入口 aria-controls 指向面板',
+        await page.locator('#monitor-toggle').getAttribute('aria-controls'),
+        'monitor-pane',
+      );
+      checkEqual(
+        '监控入口初始 aria-expanded=false',
+        await page.locator('#monitor-toggle').getAttribute('aria-expanded'),
+        'false',
+      );
+      checkEqual('默认文件面板仍可见', await page.locator('#files-pane').isVisible(), true);
+
+      await page.locator('#monitor-toggle').focus();
+      await page.locator('#monitor-toggle').click();
+      await page.locator('#monitor-pane').waitFor({ state: 'visible' });
+      checkEqual('打开监控后文件面板自动关闭', await page.locator('#files-pane').isHidden(), true);
+      checkEqual('桌面监控面板保留会话列表', await page.locator('.sidebar').isVisible(), true);
+      checkEqual('桌面监控面板保留聊天区', await page.locator('#composer').isVisible(), true);
+      checkEqual(
+        '桌面监控面板宽度 420px',
+        await page.evaluate(`getComputedStyle(document.getElementById('monitor-pane')).width`),
+        '420px',
+      );
+      checkEqual(
+        '监控入口 aria-expanded=true',
+        await page.locator('#monitor-toggle').getAttribute('aria-expanded'),
+        'true',
+      );
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_room_monitor_get')) === 1,
+        '打开面板只读取一次监控配置',
+      );
+      await page.locator('#monitor-empty').waitFor({ state: 'visible' });
+      check('空态说明尚未保存网页', ((await page.locator('#monitor-empty').textContent()) ?? '').includes('还没有'));
+      checkEqual('无配置时 iframe 隐藏', await page.locator('#monitor-frame').isHidden(), true);
+      checkEqual('无配置时输入框为空', await page.locator('#monitor-url').inputValue(), '');
+      checkEqual(
+        '其他成员配置未串入当前输入框',
+        (await page.locator('#monitor-url').inputValue()).includes('b-monitor'),
+        false,
+      );
+      checkEqual(
+        'iframe 没有 sandbox 属性',
+        await page.locator('#monitor-frame').getAttribute('sandbox'),
+        null,
+      );
+      checkEqual(
+        'iframe 没有 srcdoc 属性',
+        await page.locator('#monitor-frame').evaluate((element) => element.hasAttribute('srcdoc')),
+        false,
+      );
+      checkEqual(
+        'iframe 没有 allow 属性',
+        await page.locator('#monitor-frame').evaluate((element) => element.hasAttribute('allow')),
+        false,
+      );
+      checkEqual(
+        'iframe 没有 referrerpolicy 属性',
+        await page.locator('#monitor-frame').evaluate((element) => element.hasAttribute('referrerpolicy')),
+        false,
+      );
+      check(
+        '面板提示 XFO/CSP 嵌入限制',
+        ((await page.locator('.monitor-foot').textContent()) ?? '').includes('X-Frame-Options') &&
+          ((await page.locator('.monitor-foot').textContent()) ?? '').includes('CSP') &&
+          ((await page.locator('.monitor-foot').textContent()) ?? '').includes('HTTPS 页面可能阻止 HTTP 目标'),
+      );
+      check(
+        '面板如实提示 iframe 未加 sandbox 的同源风险',
+        ((await page.locator('.monitor-foot').textContent()) ?? '').includes('iframe 未加 sandbox') &&
+          ((await page.locator('.monitor-foot').textContent()) ?? '').includes('本页登录凭据'),
+      );
+      checkEqual(
+        '新标签页链接 target=_blank',
+        await page.locator('#monitor-external').getAttribute('target'),
+        '_blank',
+      );
+      check(
+        '新标签页链接 rel 包含 noopener',
+        ((await page.locator('#monitor-external').getAttribute('rel')) ?? '').includes('noopener'),
+      );
+
+      const getCallsBeforeWait = await mcpCallCount(page, 'network_room_monitor_get');
+      await sleep(800);
+      checkEqual(
+        '监控面板不轮询',
+        await mcpCallCount(page, 'network_room_monitor_get'),
+        getCallsBeforeWait,
+      );
+
+      checkEqual(
+        '错误块初始隐藏',
+        await page.locator('#monitor-error').isHidden(),
+        true,
+      );
+      await page.locator('#monitor-url').fill('javascript:alert(1)');
+      await page.locator('#monitor-save').click();
+      await page.locator('#monitor-error').waitFor({ state: 'visible' });
+      check(
+        '客户端拒绝 javascript: URL 且不发请求',
+        ((await page.locator('#monitor-error-text').textContent()) ?? '').includes('http 或 https') &&
+          (await mcpCallCount(page, 'network_room_monitor_set')) === 0,
+      );
+      checkEqual(
+        '非法 URL 不改变 iframe',
+        await page.locator('#monitor-frame').evaluate((element) => element.getAttribute('src')),
+        'about:blank',
+      );
+
+      failNextMonitorSet = true;
+      await page.locator('#monitor-url').fill(monitorUrlOne);
+      await page.locator('#monitor-save').click();
+      await page.locator('#monitor-error').waitFor({ state: 'visible' });
+      check(
+        '保存失败显示可读的 callTool 错误',
+        ((await page.locator('#monitor-error-text').textContent()) ?? '').includes('保存失败') &&
+          ((await page.locator('#monitor-error-text').textContent()) ?? '').includes('模拟保存失败'),
+      );
+      checkEqual(
+        '保存失败保留空 iframe',
+        await page.locator('#monitor-frame').evaluate((element) => element.getAttribute('src')),
+        'about:blank',
+      );
+      const afterFailedSave = await rawTool<{ monitor: unknown }>(
+        data.humanToken,
+        'network_room_monitor_get',
+        { room_id: monitorGroupId },
+      );
+      checkEqual('保存失败不写入服务端', afterFailedSave.monitor, null);
+
+      await page.locator('#monitor-save').click();
+      await page.locator('#monitor-frame').waitFor({ state: 'visible' });
+      await page.waitForFunction(
+        `document.getElementById('monitor-frame').getAttribute('src') === ${JSON.stringify(monitorUrlOne)}`,
+      );
+      await page.frameLocator('#monitor-frame').locator('#probe').waitFor();
+      checkEqual(
+        '保存后 iframe 加载目标页面',
+        await page.frameLocator('#monitor-frame').locator('#probe').textContent(),
+        'monitor-probe',
+      );
+      checkEqual('保存后输入框为规范化 URL', await page.locator('#monitor-url').inputValue(), monitorUrlOne);
+      checkEqual(
+        '外部链接 href 指向保存的 URL',
+        await page.locator('#monitor-external').getAttribute('href'),
+        monitorUrlOne,
+      );
+      checkEqual(
+        '有 URL 时外部链接可用',
+        await page.locator('#monitor-external').getAttribute('aria-disabled'),
+        'false',
+      );
+      check(
+        '保存成功显示状态',
+        ((await page.locator('#monitor-status').textContent()) ?? '').includes('已保存'),
+      );
+      checkEqual(
+        'iframe 标题只包含 hostname',
+        await page.locator('#monitor-frame').getAttribute('title'),
+        '网页内容 · monitor.test',
+      );
+      const rawMonitor = await rawTool<{
+        monitor: { room_id: string; url: string } | null;
+      }>(data.humanToken, 'network_room_monitor_get', { room_id: monitorGroupId });
+      checkEqual('服务端保存了当前会话 URL', rawMonitor.monitor?.url, monitorUrlOne);
+      const storageDump = (await page.evaluate('JSON.stringify(localStorage)')) as string;
+      check('localStorage 不保存监控 URL', !storageDump.includes(monitorUrlOne));
+      check('localStorage 只记忆面板开关', storageDump.includes('agent-network-monitor-open'));
+      const bodyHtml = (await page.evaluate('document.body.innerHTML')) as string;
+      check('页面 DOM 不包含 human token', !bodyHtml.includes(data.humanToken));
+
+      const noTokenHtml = await (await fetch(`${server.base}/c/${monitorGroupId}`)).text();
+      check(
+        '无 token 的 HTML 不包含已保存 URL',
+        !noTokenHtml.includes(monitorUrlOne) && !noTokenHtml.includes('room-one'),
+      );
+
+      await rawTool(data.humanToken, 'network_room_monitor_set', {
+        request_id: requestId('monitor_refresh'),
+        room_id: monitorGroupId,
+        url: monitorUrlRefresh,
+      });
+      const getCallsBeforeRefresh = await mcpCallCount(page, 'network_room_monitor_get');
+      await page.locator('#monitor-refresh').click();
+      await page.waitForFunction(
+        `document.getElementById('monitor-frame').getAttribute('src') === ${JSON.stringify(monitorUrlRefresh)}`,
+      );
+      checkEqual(
+        '手动刷新读取跨设备修改',
+        await page.locator('#monitor-url').inputValue(),
+        monitorUrlRefresh,
+      );
+      checkEqual(
+        '手动刷新只额外读取一次',
+        await mcpCallCount(page, 'network_room_monitor_get'),
+        getCallsBeforeRefresh + 1,
+      );
+      check(
+        '刷新成功显示状态',
+        ((await page.locator('#monitor-status').textContent()) ?? '').includes('已刷新'),
+      );
+
+      page.once('dialog', async (dialog) => {
+        check('清除前提示其他设备同步', dialog.message().includes('其他设备'));
+        await dialog.accept();
+      });
+      await page.locator('#monitor-clear').click();
+      await page.locator('#monitor-empty').waitFor({ state: 'visible' });
+      checkEqual(
+        '清除后 iframe 卸载到 about:blank',
+        await page.locator('#monitor-frame').evaluate((element) => element.getAttribute('src')),
+        'about:blank',
+      );
+      checkEqual('清除后外部链接禁用', await page.locator('#monitor-external').getAttribute('aria-disabled'), 'true');
+      const cleared = await rawTool<{ monitor: unknown }>(
+        data.humanToken,
+        'network_room_monitor_get',
+        { room_id: monitorGroupId },
+      );
+      checkEqual('清除同步到服务端', cleared.monitor, null);
+
+      await page.locator('#monitor-url').fill(monitorUrlOne);
+      await page.locator('#monitor-save').click();
+      await page.waitForFunction(
+        `document.getElementById('monitor-frame').getAttribute('src') === ${JSON.stringify(monitorUrlOne)}`,
+      );
+      const getCallsBeforeSwitch = await mcpCallCount(page, 'network_room_monitor_get');
+      await page.locator(roomLink(monitorRoom2Id)).click();
+      await waitRoom(page, monitorRoom2Id, '监控第二群');
+      await page.waitForFunction(
+        `document.getElementById('monitor-url').value === ${JSON.stringify(monitorUrlTwo)}`,
+      );
+      await page.waitForFunction(
+        `document.getElementById('monitor-frame').getAttribute('src') === ${JSON.stringify(monitorUrlTwo)}`,
+      );
+      checkEqual(
+        '切换会话读取新会话配置',
+        await mcpCallCount(page, 'network_room_monitor_get'),
+        getCallsBeforeSwitch + 1,
+      );
+      check(
+        '切换会话不残留旧 URL',
+        !String(await page.evaluate(`document.getElementById('monitor-frame').src`)).includes('room-one'),
+      );
+      await page.locator(roomLink(monitorGroupId)).click();
+      await waitRoom(page, monitorGroupId, '监控面板群');
+      await page.waitForFunction(
+        `document.getElementById('monitor-url').value === ${JSON.stringify(monitorUrlOne)}`,
+      );
+
+      await page.locator('#monitor-close').click();
+      await page.locator('#monitor-pane').waitFor({ state: 'hidden' });
+      checkEqual(
+        '关闭面板卸载 iframe',
+        await page.locator('#monitor-frame').evaluate((element) => element.getAttribute('src')),
+        'about:blank',
+      );
+      await page.waitForFunction(
+        'document.activeElement && document.activeElement.id === "monitor-toggle"',
+      );
+      check('关闭面板后焦点回到入口', true);
+      const callsAfterClose = await mcpCallCount(page, 'network_room_monitor_get');
+      await sleep(500);
+      checkEqual(
+        '面板隐藏后不再读取监控配置',
+        await mcpCallCount(page, 'network_room_monitor_get'),
+        callsAfterClose,
+      );
+
+      await page.locator('#files-toggle').click();
+      await page.locator('#files-pane').waitFor({ state: 'visible' });
+      checkEqual('打开文件面板时监控保持隐藏', await page.locator('#monitor-pane').isHidden(), true);
+      await page.locator('#monitor-toggle').click();
+      await page.locator('#monitor-pane').waitFor({ state: 'visible' });
+      checkEqual('从文件面板切到监控会关闭文件面板', await page.locator('#files-pane').isHidden(), true);
+      await page.locator('#files-toggle').click();
+      await page.locator('#files-pane').waitFor({ state: 'visible' });
+      checkEqual('从监控切到文件会关闭监控', await page.locator('#monitor-pane').isHidden(), true);
+      await page.locator('#monitor-toggle').click();
+      await page.locator('#monitor-pane').waitFor({ state: 'visible' });
+
+      await page.evaluate("navigateTo('/')");
+      await page.waitForFunction(`document.body.classList.contains('page-home')`);
+      checkEqual('回首页隐藏监控面板', await page.locator('#monitor-pane').isHidden(), true);
+      checkEqual(
+        '回首页卸载 iframe',
+        await page.locator('#monitor-frame').evaluate((element) => element.getAttribute('src')),
+        'about:blank',
+      );
+      check('iframe 请求过保存的目标页面', monitorFrameRequests > 0, monitorFrameRequests);
+      await context.close();
+
+      // 第二个人类成员：同一群聊中看不到 A 的 URL。
+      const second = await makeContext(
+        browser,
+        monitorBToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await second.page.goto(`${server.base}/c/${monitorGroupId}`);
+      await waitRoom(second.page, monitorGroupId, '监控面板群');
+      await second.page.locator('#monitor-toggle').click();
+      await second.page.locator('#monitor-pane').waitFor({ state: 'visible' });
+      await second.page.locator('#monitor-empty').waitFor({ state: 'visible' });
+      checkEqual('第二个人类成员空态', await second.page.locator('#monitor-url').inputValue(), '');
+      checkEqual(
+        '第二个人类成员看不到 A 的 URL',
+        await second.page.locator('#monitor-frame').evaluate((element) => element.getAttribute('src')),
+        'about:blank',
+      );
+      await second.context.close();
+
+      // 平板抽屉、Esc 关闭与焦点恢复。
+      const tablet = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 900, height: 800 },
+        allErrors,
+      );
+      await tablet.page.goto(`${server.base}/c/${monitorGroupId}`);
+      await waitRoom(tablet.page, monitorGroupId, '监控面板群');
+      checkEqual('平板默认不显示监控', await tablet.page.locator('#monitor-pane').isHidden(), true);
+      await tablet.page.locator('#monitor-toggle').click();
+      await tablet.page.locator('#monitor-pane').waitFor({ state: 'visible' });
+      const tabletMonitorStyle = (await tablet.page.evaluate(
+        `(() => { const style = getComputedStyle(document.getElementById('monitor-pane')); return { position: style.position, width: style.width }; })()`,
+      )) as { position: string; width: string };
+      checkEqual('平板监控为固定抽屉', tabletMonitorStyle.position, 'fixed');
+      checkEqual('平板监控抽屉宽度 420px', tabletMonitorStyle.width, '420px');
+      checkEqual('平板监控显示遮罩', await tablet.page.locator('#monitor-backdrop').isVisible(), true);
+      await tablet.page.locator('#monitor-backdrop').click();
+      await tablet.page.locator('#monitor-pane').waitFor({ state: 'hidden' });
+      await tablet.page.waitForFunction(
+        'document.activeElement && document.activeElement.id === "monitor-toggle"',
+      );
+      check('平板点击遮罩关闭后焦点回到入口', true);
+      await tablet.page.locator('#monitor-toggle').click();
+      await tablet.page.locator('#monitor-pane').waitFor({ state: 'visible' });
+      await tablet.page.keyboard.press('Escape');
+      await tablet.page.locator('#monitor-pane').waitFor({ state: 'hidden' });
+      check('平板 Esc 关闭监控面板', true);
+      await tablet.context.close();
+
+      // 移动端全屏、返回文案与焦点。
+      const mobileMonitor = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await mobileMonitor.page.goto(`${server.base}/c/${monitorGroupId}`);
+      await waitRoom(mobileMonitor.page, monitorGroupId, '监控面板群');
+      checkEqual('移动端默认不显示监控', await mobileMonitor.page.locator('#monitor-pane').isHidden(), true);
+      await mobileMonitor.page.locator('#monitor-toggle').click();
+      await mobileMonitor.page.locator('#monitor-pane').waitFor({ state: 'visible' });
+      const mobileMonitorStyle = (await mobileMonitor.page.evaluate(
+        `(() => { const style = getComputedStyle(document.getElementById('monitor-pane')); return { position: style.position, width: style.width }; })()`,
+      )) as { position: string; width: string };
+      checkEqual('移动端监控全屏宽度', mobileMonitorStyle.width, '390px');
+      checkEqual('移动端监控固定定位', mobileMonitorStyle.position, 'fixed');
+      checkEqual('移动端监控隐藏聊天区', await mobileMonitor.page.locator('#composer').isHidden(), true);
+      checkEqual('移动端监控隐藏会话列表', await mobileMonitor.page.locator('.sidebar').isHidden(), true);
+      checkEqual(
+        '移动端关闭按钮文案为返回',
+        await mobileMonitor.page.locator('#monitor-close').textContent(),
+        '返回',
+      );
+      await mobileMonitor.page.waitForFunction(
+        'document.activeElement && document.activeElement.id === "monitor-close"',
+      );
+      check('移动端打开后聚焦关闭按钮', true);
+      await mobileMonitor.page.locator('#monitor-close').click();
+      await mobileMonitor.page.locator('#composer').waitFor({ state: 'visible' });
+      checkEqual('移动端关闭监控返回聊天', await mobileMonitor.page.locator('#monitor-pane').isHidden(), true);
+      await mobileMonitor.page.waitForFunction(
+        'document.activeElement && document.activeElement.id === "monitor-toggle"',
+      );
+      check('移动端关闭后焦点回到入口', true);
+      await mobileMonitor.page.locator('#monitor-toggle').click();
+      await mobileMonitor.page.keyboard.press('Escape');
+      await mobileMonitor.page.locator('#monitor-pane').waitFor({ state: 'hidden' });
+      check('移动端 Esc 关闭监控面板', true);
+      await mobileMonitor.context.close();
+
+      // 暗色：只换 chrome；iframe 内容不强制反色。
+      const darkContext = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        colorScheme: 'dark',
+      });
+      await darkContext.addInitScript({ content: initScript(data.humanToken) });
+      const darkPage = await darkContext.newPage();
+      darkPage.setDefaultTimeout(15_000);
+      darkPage.on('pageerror', (error) => allErrors.push(`pageerror: ${error.message}`));
+      await darkPage.goto(`${server.base}/c/${monitorGroupId}`);
+      await waitRoom(darkPage, monitorGroupId, '监控面板群');
+      await darkPage.locator('#monitor-toggle').click();
+      await darkPage.locator('#monitor-pane').waitFor({ state: 'visible' });
+      checkEqual(
+        '暗色监控面板使用暗色背景',
+        await darkPage.evaluate(`getComputedStyle(document.getElementById('monitor-pane')).backgroundColor`),
+        'rgb(43, 43, 43)',
+      );
+      await darkContext.close();
+    }
+
     // 11. 消息正文文件卡片：识别、HEAD 元数据、安全预览、缓存/并发与移动端。
     {
       const cardGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {

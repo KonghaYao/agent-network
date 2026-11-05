@@ -6,12 +6,15 @@ import {
   filesPane,
   groupDialog,
   membersDialog,
+  monitorBackdrop,
+  monitorPane,
   newAgentDialog,
   sidebarPane,
   toastPane,
 } from './chat-panels';
 import { chatClientScript } from './chat-script';
 import { FILES_STYLE } from './chat-files-styles';
+import { MONITOR_STYLE } from './chat-monitor-styles';
 import { MARKDOWN_STYLE } from './chat-markdown-styles';
 import { MESSAGE_FILES_STYLE } from './chat-message-files-styles';
 import { APP_STYLE } from './chat-styles';
@@ -44,6 +47,8 @@ ${emptyPane()}
 ${chatPane()}
 ${filesBackdrop()}
 ${filesPane()}
+${monitorBackdrop()}
+${monitorPane()}
 ${filePreviewDialog()}
 ${groupDialog()}
 ${membersDialog()}
@@ -52,7 +57,7 @@ ${deviceHandoffDialog()}
 ${logoutDialog()}
 ${toastPane()}
 ${chatClientScript(roomId, markdownVersion)}`,
-    APP_STYLE + FILES_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE,
+    APP_STYLE + FILES_STYLE + MONITOR_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE,
     { wide: true, bodyClass: isHome ? 'page-home' : 'page-room' },
   );
 }

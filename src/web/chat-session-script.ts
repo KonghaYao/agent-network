@@ -543,6 +543,7 @@ async function openRoom(roomId, options) {
   roomAbort = new AbortController();
   resetRefreshChain();
   activateFilesRoom(roomId);
+  activateMonitorRoom(roomId);
   if (previousId !== roomId) {
     stickyStatus = '';
     statusElement.textContent = '';
@@ -598,6 +599,7 @@ async function openRoom(roomId, options) {
 function closeRoomView() {
   snapshotActiveRoom();
   deactivateFilesRoom();
+  deactivateMonitorRoom();
   activeRoomId = null;
   roomEpoch += 1;
   if (roomAbort) roomAbort.abort();

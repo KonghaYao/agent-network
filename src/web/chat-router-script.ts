@@ -39,6 +39,7 @@ function applyRouteChrome(route) {
   closeGroupModal();
   hideComposerDrop();
   syncFilesChrome();
+  syncMonitorChrome();
 }
 
 function navigateTo(path, options) {

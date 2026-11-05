@@ -108,6 +108,15 @@ export function chatPane(): string {
       </div>
       <p class="muted" id="subtitle">正在加载…</p>
     </div>
+    <button class="monitor-toggle" id="monitor-toggle" type="button"
+      aria-controls="monitor-pane" aria-expanded="false"
+      aria-label="打开网页监控" title="网页监控">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+        <path d="M3 9h18M7 6.5h.01M10 6.5h.01"></path>
+      </svg>
+      <span>网页</span>
+    </button>
     <button class="files-toggle" id="files-toggle" type="button"
       aria-controls="files-pane" aria-expanded="false">文件</button>
   </header>
@@ -299,6 +308,62 @@ export function filesPane(): string {
 /** 文件面板的抽屉遮罩；只在 760–1199px 打开时显示。 */
 export function filesBackdrop(): string {
   return '<div class="files-backdrop" id="files-backdrop" hidden></div>';
+}
+
+/**
+ * 网页监控面板：桌面右侧第三栏、平板抽屉与移动端全屏页共用同一份 DOM。
+ *
+ * URL 只通过 DOM property 写入 iframe/链接，不使用 innerHTML/srcdoc。
+ * 按产品选择不设置 sandbox；风险提示必须如实保留。iframe 初始为
+ * about:blank，关闭/切房后也回到该地址以卸载文档。
+ */
+export function monitorPane(): string {
+  return `<aside class="monitor-pane" id="monitor-pane" aria-labelledby="monitor-title" hidden>
+  <header class="monitor-head">
+    <div class="monitor-head-id">
+      <h2 id="monitor-title">网页监控</h2>
+      <p class="monitor-subtitle">仅自己可见 · 按会话保存</p>
+    </div>
+    <div class="monitor-head-actions">
+      <button class="monitor-refresh" id="monitor-refresh" type="button"
+        aria-label="重新读取网页地址" title="重新读取网页地址">刷新</button>
+      <button class="monitor-close" id="monitor-close" type="button"
+        aria-label="关闭网页监控" title="关闭网页监控">关闭</button>
+    </div>
+  </header>
+  <form id="monitor-form" class="monitor-form">
+    <label class="monitor-field">
+      <span class="monitor-label">网页地址</span>
+      <input id="monitor-url" type="text" inputmode="url" autocomplete="off" spellcheck="false"
+        maxlength="${LIMITS.roomMonitorUrlMax}" placeholder="https://…">
+    </label>
+    <div class="monitor-form-actions">
+      <button class="primary" id="monitor-save" type="submit">保存</button>
+      <button id="monitor-clear" type="button">清除</button>
+    </div>
+  </form>
+  <p id="monitor-status" class="monitor-status" role="status" aria-live="polite"></p>
+  <div id="monitor-error" class="monitor-error" role="alert" hidden>
+    <p id="monitor-error-text"></p>
+    <button id="monitor-retry" type="button">重试</button>
+  </div>
+  <div id="monitor-frame-wrap" class="monitor-frame-wrap">
+    <p id="monitor-empty" class="monitor-empty">还没有为这个会话保存网页。填写地址后点击保存。</p>
+    <iframe id="monitor-frame" class="monitor-frame" title="网页内容" src="about:blank" hidden></iframe>
+  </div>
+  <footer class="monitor-foot">
+    <a id="monitor-external" class="monitor-external" href="#" target="_blank" rel="noopener"
+      aria-disabled="true">新标签页打开</a>
+    <p class="monitor-hint">目标站点可能通过 X-Frame-Options 或 CSP 禁止嵌入；HTTPS 页面可能阻止 HTTP 目标。</p>
+    <p id="monitor-mixed" class="monitor-hint" hidden>当前页面是 HTTPS，浏览器可能阻止 HTTP 目标；请改用 HTTPS 或在新标签页打开。</p>
+    <p class="monitor-risk">iframe 未加 sandbox；只填入可信地址，同源页面可读取本页登录凭据。</p>
+  </footer>
+</aside>`;
+}
+
+/** 网页监控面板的抽屉遮罩；只在 760–1199px 打开时显示。 */
+export function monitorBackdrop(): string {
+  return '<div class="monitor-backdrop" id="monitor-backdrop" hidden></div>';
 }
 
 /**
