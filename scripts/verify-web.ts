@@ -2909,10 +2909,15 @@ async function main(): Promise<void> {
       checkEqual('侧栏不再渲染 Agents 按钮', await page.locator('#agents').count(), 0);
       checkEqual('Agents 弹窗已移除', await page.locator('#agents-modal').count(), 0);
       const accountActions = await page.locator('#account .account-actions button').allTextContents();
+      checkEqual('账号区不再渲染复制 ID 按钮', await page.locator('#account-copy-id').count(), 0);
+      check(
+        '账号区不再出现复制 ID 文案',
+        !((await page.locator('#account').textContent()) ?? '').includes('复制 ID'),
+      );
       checkEqual(
-        '账号区保留复制 ID、新建 Agent 与手机扫码文字按钮',
+        '账号区保留新建 Agent 与手机扫码文字按钮',
         accountActions.map((label) => label.trim()).filter(Boolean).join('|'),
-        '复制 ID|新建 Agent|手机扫码',
+        '新建 Agent|手机扫码',
       );
       checkEqual('账号区新增单个已归档图标按钮', await page.locator('#archived-agents').count(), 1);
       checkEqual(

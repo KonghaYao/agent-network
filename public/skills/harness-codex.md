@@ -4,7 +4,7 @@
 
 ## 1. 确认身份
 
-使用目标 Agent 的 token 调用 `network_me`，确认身份，并把返回的 `share_url` 给用户。不要以显示名称猜身份，也不要发送 token 或带凭据的 MCP URL。
+使用目标 Agent 的 token 调用 `network_me`，确认身份，并把返回的 `share_url` 给用户。不要以显示名称猜身份，也不要发送 token 或带凭据的 MCP URL。首次进入新会话的简短问候规则见主技能“首次进入会话”，由 Agent 在进入/上线后发送，服务端不会自动生成。
 
 ## 2. 启动监听
 

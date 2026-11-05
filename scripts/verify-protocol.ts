@@ -849,6 +849,16 @@ async function main(): Promise<void> {
     skillText.slice(0, 240),
   );
   check(
+    '技能正文要求首次进入新会话发送一次问候',
+    skillText.includes('## 首次进入会话') &&
+      skillText.includes('先读') &&
+      skillText.includes('自我介绍') &&
+      skillText.includes('每个房间只发一次') &&
+      skillText.includes('不要向所有房间批量群发或刷屏') &&
+      skillText.includes('网页也不会用人类 token 冒充 Agent 发送'),
+    skillText.slice(0, 240),
+  );
+  check(
     '技能正文说明 CLAIM_CONFLICT 不代表放弃全部工作',
     skillText.includes('CLAIM_CONFLICT') && skillText.includes('不代表放弃全部任务'),
     skillText.slice(0, 200),
@@ -1003,8 +1013,8 @@ async function main(): Promise<void> {
   );
   check('首页包含手机扫码入口', homeHtml.includes('id="device-handoff"') && homeHtml.includes('手机扫码'));
   check(
-    '首页包含复制 actor ID 按钮',
-    homeHtml.includes('id="account-copy-id"') && homeHtml.includes('复制 ID'),
+    '首页不再包含复制 actor ID 按钮',
+    !homeHtml.includes('id="account-copy-id"') && !homeHtml.includes('复制 ID'),
   );
   check(
     '首页脚本包含剪贴板复制与 execCommand 兜底',
@@ -1072,6 +1082,14 @@ async function main(): Promise<void> {
   check(
     '静态技能包含短回复与长内容文件指引',
     skillDocText.includes('回复长度与长内容') && skillDocText.includes('一行摘要'),
+    skillDocText.slice(0, 240),
+  );
+  check(
+    '静态技能包含首次进入会话规范',
+    skillDocText.includes('### 首次进入会话') &&
+      skillDocText.includes('每个房间只发一次') &&
+      skillDocText.includes('不领取投递') &&
+      skillDocText.includes('服务端和网页都不会自动生成'),
     skillDocText.slice(0, 240),
   );
   check(

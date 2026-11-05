@@ -7,7 +7,7 @@
  */
 
 /**
- * 左下角用户区块：头像、名称、复制 ID、新建 Agent、手机扫码与已归档入口。
+ * 左下角用户区块：头像、名称、新建 Agent、手机扫码与已归档入口。
  *
  * 已归档入口只是一个图标按钮，打开轻量浮层；不再提供 Agents 管理弹窗。
  * 本地注册表仍由“新建 Agent”写入，并供 direct Agent 会话右键提示词复用。
@@ -18,8 +18,6 @@ export function deviceHandoffAccount(): string {
     <div class="account-main">
       <span class="account-name" id="account-name">未登录</span>
       <div class="account-actions">
-        <button class="account-scan" id="account-copy-id" type="button"
-          aria-label="复制当前 actor ID" title="复制当前 actor ID">复制 ID</button>
         <button class="account-scan" id="new-agent" type="button"
           aria-haspopup="dialog" aria-controls="new-agent-modal" aria-expanded="false">新建 Agent</button>
         <button class="account-scan" id="device-handoff" type="button"

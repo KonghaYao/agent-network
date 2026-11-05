@@ -64,7 +64,6 @@ const sidebarListElement = document.querySelector('.sidebar-list');
 const searchInput = document.getElementById('room-search');
 const accountNameElement = document.getElementById('account-name');
 const accountAvatarElement = document.getElementById('account-avatar');
-const accountCopyButton = document.getElementById('account-copy-id');
 const titleElement = document.getElementById('title');
 const subtitleElement = document.getElementById('subtitle');
 const messagesElement = document.getElementById('messages');
@@ -102,7 +101,6 @@ let mentionTargets = new Map();
 let activeMention = null;
 let composing = false;
 let ignoreEnterUntil = 0;
-let copyResetTimer = null;
 let pendingRoomRefreshId = null;
 let groupLoadSeq = 0;
 // 发送失败/投递缺失/截断提示必须跨过 SSE 触发的刷新，不能在 300ms 后被清空。
@@ -292,18 +290,6 @@ function ensureIdentity() {
   return identityPromise;
 }
 
-/** 首页错误写可见的列表状态，聊天页写聊天状态；不往隐藏元素里写。 */
-function showStatusMessage(message) {
-  if (activeRoomId && document.body.classList.contains('page-room') && statusElement) {
-    statusElement.textContent = message;
-    return;
-  }
-  if (listStatusElement) {
-    listStatusElement.hidden = false;
-    listStatusElement.textContent = message;
-  }
-}
-
 /**
  * 收集网页人类发送消息时要唤醒的 Agent 成员。
  *
@@ -358,54 +344,6 @@ function legacyCopyText(text) {
     document.body.removeChild(area);
   }
   if (!copied) throw new Error('浏览器拒绝了复制操作');
-}
-
-function showCopyIdError(error) {
-  const message = '复制 ID 失败：' + (error && error.message ? error.message : String(error));
-  if (accountCopyButton) accountCopyButton.title = message;
-  showStatusMessage(message);
-}
-
-/** 复制当前 actor ID；成功后按钮短暂显示“已复制”，不改变任何身份状态。 */
-async function copyActorId() {
-  let me;
-  try {
-    me = await ensureIdentity();
-  } catch (error) {
-    showCopyIdError(error);
-    return;
-  }
-  const actorId = me && me.actor_id;
-  if (!actorId) {
-    showCopyIdError(new Error('当前身份缺少 actor ID'));
-    return;
-  }
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      try {
-        await navigator.clipboard.writeText(actorId);
-      } catch (error) {
-        legacyCopyText(actorId);
-      }
-    } else {
-      legacyCopyText(actorId);
-    }
-  } catch (error) {
-    showCopyIdError(error);
-    return;
-  }
-  if (!accountCopyButton) return;
-  accountCopyButton.textContent = '已复制';
-  accountCopyButton.title = '已复制当前 actor ID';
-  if (statusElement && statusElement.textContent.indexOf('复制 ID 失败：') === 0) {
-    statusElement.textContent = '';
-  }
-  if (copyResetTimer) clearTimeout(copyResetTimer);
-  copyResetTimer = setTimeout(function () {
-    accountCopyButton.textContent = '复制 ID';
-    accountCopyButton.title = '复制当前 actor ID';
-    copyResetTimer = null;
-  }, 1500);
 }
 
 function directPeer() {
@@ -868,8 +806,6 @@ if (groupForm) {
     }
   });
 }
-
-if (accountCopyButton) accountCopyButton.addEventListener('click', copyActorId);
 
 const loggedOutStartButton = document.getElementById('logged-out-start');
 if (loggedOutStartButton) {
