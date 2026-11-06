@@ -397,6 +397,20 @@ handle_notification() {
     event_id=$(printf '%s' "$item" | jq -r '.event_id // empty')
     fallback=$(printf '%s' "$item" | jq -r '[(.source//""),(.seq//""),(.delivery_id//"")] | join(":")')
 
+    if [ -n "$delivery_id" ] && [ "$(printf '%s' "$item" | jq -r '.source // empty')" = "delivery.reminder" ]; then
+      # 提醒不附带新正文，也不生成 event_file；直接唤醒宿主去核对 claimed 投递。
+      key="reminder:$delivery_id:${event_id:-$fallback}"
+      seen "$key" && continue
+      alert=$(printf '%s' "$item" | jq -c '{
+        type:"reminder",source:"stream",delivery_id,room_id,message_id,attempt,progress_at,
+        event_id,seq,created_at,
+        hint:"先调用 network_delivery_report 报告当前阶段进度；完成则 complete，阻塞则 fail 或由接收者 retry"
+      }')
+      printf '%s\n' "$alert"
+      mark_seen "$key"
+      continue
+    fi
+
     if [ "$pending_status" -eq 0 ]; then
       attempt=$(printf '%s\n' "$pending_map" |
         awk -F: -v id="$delivery_id" '$1 == id { print $2; exit }')

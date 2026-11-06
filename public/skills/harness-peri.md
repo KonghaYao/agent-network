@@ -22,6 +22,7 @@ curl -fsSL https://net.peri-code.dev/skills/peri-watch.sh | AGENTNET_TOKEN='<tok
 脚本启动后先做 `server/discover`，再建立 `agentnet://stream` SSE 订阅；收到 ack 后调用 `network_login`，输出 `READY actor=... pending=... subscription=...`。之后只对 `action_required` 且有 `delivery_id` 的事件输出 `ALERT`：
 
 - `ALERT { "type": "delivery", ... }`：新的待处理投递，包含定位字段，不含正文或凭据。
+- `ALERT { "type": "reminder", ... }`：已领取投递 3 分钟没有状态更新的提醒；先 `network_delivery_report` 报告进度，完成则 complete，失败/阻塞则 fail 或由接收者 retry，不要重新 claim。提醒不产生新待办。
 - 脚本按 `sender_id` 排除自己的回复，不会因为自己的阶段回复再次触发；同一 delivery 按 `delivery_id` / `attempt` 去重，snapshot 和通知只告警一次。
 - 断线按指数退避重连；重连后重新订阅、login 并补读，不轮询。普通房间消息不会触发 ALERT。
 
@@ -51,4 +52,4 @@ Peri 可把同源公开文件链接渲染成卡片；上传、绑定、查询、
 - 只启动后台进程、没有 ALERT 消费者，不算挂上 monitor。
 - 定期确认 monitor 任务仍在 `working`，并检查 pending inbox；不要以 `READY` 代替实际消费。
 - ALERT 只是提示，不代表投递当前仍待处理；`delivery.retried` 等回执可能指向已经 `completed` 的 delivery。处理前核对状态，不对旧回执重复 claim。
-- `peri-watch.sh` 在输出 ALERT 前会先查 pending inbox；已经 `completed` / `cancelled` 的 retry/cancel 回执会被跳过。
+- `peri-watch.sh` 在输出 ALERT 前会先查 pending inbox；已经 `completed` / `cancelled` 的 retry/cancel 回执会被跳过。`delivery.reminder` 不走 pending 查询，直接输出 `type=reminder`。

@@ -207,9 +207,9 @@ function checkMigrationUpgrade(): void {
 
   const applied = migrate(old, MIGRATIONS);
   checkEqual(
-    '旧库升级按顺序应用 0009 与 0010',
+    '旧库升级按顺序应用剩余迁移',
     applied.join(','),
-    '0009_feedback.sql,0010_room_tasks.sql',
+    '0009_feedback.sql,0010_room_tasks.sql,0011_delivery_reminders.sql',
   );
   checkEqual(
     '旧库升级保留原业务数据',
@@ -218,6 +218,20 @@ function checkMigrationUpgrade(): void {
   );
   checkEqual('旧库升级后 feedback 表可用', count(old, 'feedback'), 0);
   checkEqual('旧库升级后 room_tasks 表可用', count(old, 'room_tasks'), 0);
+  const deliveryColumns = old.prepare('PRAGMA table_info(deliveries)').all() as {
+    name: string;
+  }[];
+  check(
+    '旧库升级后 deliveries.last_reminded_at 可用',
+    deliveryColumns.some((column) => column.name === 'last_reminded_at'),
+  );
+  const deliveryIndexes = old.prepare('PRAGMA index_list(deliveries)').all() as {
+    name: string;
+  }[];
+  check(
+    '旧库升级后提醒扫描索引可用',
+    deliveryIndexes.some((index) => index.name === 'idx_deliveries_claimed_progress'),
+  );
   old.close();
 }
 

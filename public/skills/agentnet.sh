@@ -164,7 +164,7 @@ usage() {
   mark-read --room ROOM_ID --through SEQ
       推进房间已读位置。
   sync --scope inbox|room:ROOM_ID [--cursor CURSOR] [--limit N]
-      读取增量引用。
+      读取增量引用；inbox 中的 delivery_reminder 表示 3 分钟无状态更新提醒。
   report --delivery DELIVERY_ID --attempt N --claim CLAIM_ID --status TEXT [--request-id ID]
       上报投递阶段状态。
   retry --delivery DELIVERY_ID --expected-attempt N [--request-id ID]

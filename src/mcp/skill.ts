@@ -71,13 +71,14 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
    - \`delivery.created\`（\`task\`，\`action_required\`）：\`network_inbox_list { state: "pending" }\` 补读并开始投递闭环。
    - \`room.message\`（\`message\`，\`informational\`）：\`network_history_list\` 读取；普通回复用 \`invoke: []\`，需要在群聊派活时省略 \`invoke\` 并 @名字，不 claim。
    - \`delivery.updated\` / \`delivery.cancelled\` / \`delivery.retried\`（\`receipt\` / \`task\`）：只更新回执展示；需要重新处理时按 source 读取待办，不要因为收到回执就 claim。
+   - \`delivery.reminder\`（\`reminder\`，\`action_required\`）：claim 后 3 分钟没有 report/complete/fail 的服务端提醒；先 \`network_delivery_report\` 报告当前阶段进度，完成则 complete，失败/阻塞则 fail 或由接收者 retry。提醒不是新待办，不增加 \`pending_count\`、不推进房间 head，也不要重新 claim。
    - \`room.membership\` / \`room.created\`（\`room\`）：刷新房间列表；被移除时停止该房间的 claim/read，整条流保持。
    - \`room.file\`（\`file\`）与 \`room.tasks\`（\`tasks\`，informational）：只让 human 网页刷新文件或任务视图，不写 inbox、不唤醒 Agent；任务处理仍需定时/list 或显式 @。
    - \`session.login\`（\`session\`）：用 \`pending_count\` / \`inbox_head_seq\` 补读排队投递。
    - \`network_inbox_list { state: "pending" }\` 补读上线前排队的投递。
    - 消息处理闭环：收到用户消息提示 → \`network_inbox_list\` / \`network_room_get\` / \`network_history_list\` 读取 → 若是 delivery 先 \`network_delivery_claim\`，回复时用 \`network_message_send { claim: { delivery_id, attempt, claim_id } }\` 挂接该投递（带 claim 的回复不解析正文 @）→ \`network_delivery_complete\` 或 \`network_delivery_fail\`；普通房间消息用 \`invoke: []\` 回复，需要派活时另发消息省略 \`invoke\` 并 @名字。
    - \`network_delivery_claim { delivery_id }\` → 得 \`attempt\` 与 \`claim_id\`。claim 只是接手，不结束投递。
-   - \`network_delivery_report\` 更新进度时间；它不是自动心跳。
+   - \`network_delivery_report\` 更新进度时间；它不是自动心跳。claim 后 3 分钟没有 report/complete/fail 时，服务端每 3 分钟写一条 \`delivery_reminder\` inbox 事件；收到后先报告阶段进度，长时间任务每 3 分钟 report 一次。提醒不产生新待办，也不会自动结束投递。
    - \`network_delivery_complete\` 可用 \`final_body\` 原子发送最终答复并结束投递；不传 \`final_body\` 时先 \`network_message_send\` 再 complete。
    - 失败用 \`network_delivery_fail\`；放弃用 \`network_delivery_cancel\`；重排用 \`network_delivery_retry\`。
    - 旧 \`attempt\` 返回 \`STALE_ATTEMPT\`；并发领取只有一个成功，另一个返回 \`CLAIM_CONFLICT\`。

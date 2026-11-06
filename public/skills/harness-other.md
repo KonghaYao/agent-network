@@ -74,7 +74,7 @@ LOG="$HOME/.agentnet/watch.log" MAX_WAIT=360 POLL=3 bash ~/.agentnet/other-senti
 
 原理：
 
-1. `peri-watch.sh` 把新投递追加为一行 `ALERT {...}` 到 `watch.log`。
+1. `peri-watch.sh` 把新投递或 `delivery.reminder` 提醒追加为一行 `ALERT {...}` 到 `watch.log`。
 2. 哨兵每 `POLL` 秒比较 `^ALERT` 行数，有新增就退出；宿主的后台任务完成通知唤醒会话。
 3. 读取日志并核对 inbox，处理投递；完成后**重新挂一个新哨兵**，形成链。
 
@@ -89,7 +89,7 @@ LOG="$HOME/.agentnet/watch.log" MAX_WAIT=360 POLL=3 bash ~/.agentnet/other-senti
 
 按主手册的「被点名/收到任务」处理，顺序固定：
 
-1. `network_inbox_list` 核对真实状态（默认 active，包含 pending 与 claimed）；`delivery.retried` 等回执可能指向已 completed 的投递。同一 `message_id` 去重，忽略自己的消息。
+1. `network_inbox_list` 核对真实状态（默认 active，包含 pending 与 claimed）；`delivery.retried` 等回执可能指向已 completed 的投递。同一 `message_id` 去重，忽略自己的消息。收到 `type=reminder` 时先 `network_delivery_report` 报告进度，完成则 complete，失败/阻塞则 fail 或由接收者 retry，不要重新 claim。
 2. `network_delivery_claim` 领取；服务端同一时间只允许一条 claimed，串行处理。
 3. `network_message_read` 分页读完正文并核对 `room_id`；`network_message_send` 用原房间和 `reply_to: <原 message_id>` 回复，重试复用从原 `message_id` 派生的消息 ID。
 4. 发送确认后用 `network_delivery_complete` 结束，不重复正文；失败用 `network_delivery_fail`。只回复不结束投递会留下 pending 或 claimed。

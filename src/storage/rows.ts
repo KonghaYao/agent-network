@@ -79,6 +79,8 @@ export interface DeliveryRow {
   claim_id: string | null;
   claimed_at: number | null;
   progress_at: number | null;
+  /** 上一次 3 分钟无进度提醒的时间；claim/report/retry 时重置。 */
+  last_reminded_at: number | null;
   result_message_id: string | null;
   error: string | null;
   created_seq: number;

@@ -22,6 +22,7 @@ import { runStreamProtocolChecks } from './lib/stream-protocol';
 import { runAgentPresenceUnitChecks } from './lib/presence-unit';
 import { runFeedbackUnitChecks } from './lib/feedback-unit';
 import { runFeedbackCliChecks } from './lib/feedback-cli';
+import { runDeliveryReminderUnitChecks } from './lib/delivery-reminder-unit';
 
 const STREAM_URI = 'agentnet://stream';
 
@@ -1702,6 +1703,15 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 240),
   );
   check(
+    '静态技能说明 3 分钟无进度提醒且不产生新待办',
+    skillDocText.includes('delivery_reminder') &&
+      skillDocText.includes('3 分钟') &&
+      skillDocText.includes('network_delivery_report') &&
+      skillDocText.includes('pending_count') &&
+      skillDocText.includes('head_seq'),
+    skillDocText.slice(0, 240),
+  );
+  check(
     '静态技能包含 MCP Events 硬过滤与群聊补读规范',
     skillDocText.includes('### MCP Events 订阅过滤') &&
       skillDocText.includes('硬过滤') &&
@@ -1932,6 +1942,12 @@ async function main(): Promise<void> {
       !periScriptText.includes('network_room_get'),
   );
   check(
+    'Peri monitor 脚本识别 3 分钟提醒并输出 reminder ALERT',
+    periScriptText.includes('delivery.reminder') &&
+      periScriptText.includes('type:"reminder"') &&
+      periScriptText.includes('network_delivery_report'),
+  );
+  check(
     'Peri monitor 脚本不包含硬编码 Bearer token',
     !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(periScriptText),
   );
@@ -1950,6 +1966,13 @@ async function main(): Promise<void> {
       ) &&
       !codexScriptText.includes('peri-watch.sh') &&
       !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(codexScriptText),
+  );
+  check(
+    'Codex 脚本识别提醒并交给当前会话',
+    codexScriptText.includes('delivery.reminder') &&
+      codexScriptText.includes('wake_reminder') &&
+      codexScriptText.includes('REMINDER_STEERED') &&
+      codexScriptText.includes('network_delivery_report'),
   );
 
   const claudeScript = await fetch(`${baseUrl()}/skills/claude-watch.sh`);
@@ -1983,6 +2006,12 @@ async function main(): Promise<void> {
   check(
     'Claude Code 监听脚本不包含硬编码 Bearer token',
     !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(claudeScriptText),
+  );
+  check(
+    'Claude Code 监听脚本识别 3 分钟提醒并输出 reminder',
+    claudeScriptText.includes('delivery.reminder') &&
+      claudeScriptText.includes('type:"reminder"') &&
+      claudeScriptText.includes('network_delivery_report'),
   );
   const claudeEmitFoundBody =
     claudeScriptText.match(/emit_found\(\) \{([\s\S]*?)^\}/mu)?.[1] ?? '';
@@ -2764,6 +2793,7 @@ async function main(): Promise<void> {
   await runAgentPresenceUnitChecks();
   await runFeedbackUnitChecks();
   await runFeedbackCliChecks();
+  await runDeliveryReminderUnitChecks();
 
   console.log(`协议验收通过: ${checksPassed()} 项`);
 }

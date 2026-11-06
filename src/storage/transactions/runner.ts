@@ -101,6 +101,10 @@ export function isRoomFileConflict(error: unknown): boolean {
   return errorText(error).includes('UNIQUE constraint failed: room_files.file_id');
 }
 
+export function isEventKeyConflict(error: unknown): boolean {
+  return errorText(error).includes('UNIQUE constraint failed: events.event_key');
+}
+
 export function isOneClaimedConflict(error: unknown): boolean {
   const text = errorText(error);
   if (text.includes('idx_deliveries_one_claimed')) return true;

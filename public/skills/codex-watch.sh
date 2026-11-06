@@ -130,6 +130,41 @@ def complete_delivery(claim, text):
     })
 
 
+def reminder_prompt(params):
+    return (
+        "Agent Network 提醒：以下投递已领取但 3 分钟没有状态更新。"
+        "请先调用 network_inbox_list 核对状态，再用 network_delivery_report 报告当前阶段进度；"
+        "如果已完成则 network_delivery_complete，失败/阻塞则 network_delivery_fail，"
+        "确实无法继续时由接收者调用 network_delivery_retry。"
+        "不要重复 claim，不要泄露凭据或把正文发到无关房间。\n\n"
+        f"delivery_id={params.get('delivery_id', '')} "
+        f"room_id={params.get('room_id', '')} "
+        f"message_id={params.get('message_id', '')} "
+        f"attempt={params.get('attempt', '')}"
+    )
+
+
+async def wake_reminder(connection, thread_id, params):
+    prompt = reminder_prompt(params)
+    status = (await connection.call("thread/read", {"threadId": thread_id}))["thread"]["status"]["type"]
+    if status == "active":
+        turns = (await connection.call("thread/turns/list", {"threadId": thread_id, "limit": 1}))["data"]
+        current_turn = turns[0] if turns else {}
+        if current_turn.get("status") == "inProgress":
+            await connection.call("turn/steer", {
+                "threadId": thread_id,
+                "expectedTurnId": current_turn["id"],
+                "input": [{"type": "text", "text": prompt}],
+            })
+            log(f"REMINDER_STEERED delivery={params.get('delivery_id', '')}")
+        return
+    if status == "idle":
+        await connection.call("turn/start", {
+            "threadId": thread_id, "input": [{"type": "text", "text": prompt}],
+        })
+        log(f"REMINDER_STARTED delivery={params.get('delivery_id', '')}")
+
+
 class CodexConnection:
     def __init__(self, socket, events):
         self.socket = socket
@@ -233,14 +268,17 @@ async def stream_events(events, actor_id):
                             continue
                         envelope = (message.get("params", {}).get("_meta") or {}).get("io.agent-network/event") or {}
                         for item in envelope.get("items", []):
-                            if (item.get("attention") == "action_required" and item.get("delivery_id")
-                                    and item.get("sender_id") != actor_id):
+                            reminder = item.get("source") == "delivery.reminder"
+                            if ((item.get("attention") == "action_required" and item.get("delivery_id")
+                                    and item.get("sender_id") != actor_id)
+                                    or (reminder and item.get("delivery_id"))):
                                 await events.put({"method": "codex-watch/alert", "params": item})
                         if envelope.get("more") or envelope.get("dropped"):
                             await snapshot(events, actor_id)
                 code = await process.wait()
                 if not acknowledged and code == 22:
                     raise RuntimeError("subscription rejected; verify credential and protocol")
+                log(f"DEGRADED stream_closed code={code} acknowledged={acknowledged}; reconnecting")
             except asyncio.TimeoutError:
                 log("DEGRADED stream_idle; reconnecting")
             finally:
@@ -302,6 +340,7 @@ async def main():
     outstanding = {}
     delivered = set()
     notified = {}
+    reminders_seen = {}
     active_turn = None
     final_message = None
     ack_task = None
@@ -317,9 +356,18 @@ async def main():
             method = event.get("method")
             params = event.get("params") or {}
             if method == "codex-watch/disconnected":
-                log("ERROR app_server_disconnected; restart watcher to reconcile pending inbox")
-                break
+                raise ConnectionError("app_server_disconnected; restart watcher to reconcile pending inbox and claimed deliveries")
             if method == "codex-watch/alert":
+                if params.get("source") == "delivery.reminder" or params.get("kind") == "reminder":
+                    delivery_id = params.get("delivery_id")
+                    key = (params.get("event_id"), params.get("attempt"), params.get("progress_at"))
+                    if delivery_id and reminders_seen.get(delivery_id) != key:
+                        reminders_seen[delivery_id] = key
+                        try:
+                            await wake_reminder(connection, thread_id, params)
+                        except Exception:
+                            log(f"ERROR reminder_wake_failed delivery={delivery_id}")
+                    continue
                 delivery_id = params["delivery_id"]
                 attempt = params.get("attempt")
                 if (delivery_id, attempt) not in delivered and (
@@ -366,8 +414,7 @@ async def main():
             try:
                 items = await asyncio.to_thread(inbox)
             except Exception:
-                log("ERROR inbox_unavailable; restart watcher to reconcile")
-                break
+                raise RuntimeError("inbox_unavailable; restart watcher to reconcile")
             match = next((item for item in items if item.get("delivery_id") == delivery_id), None)
             if (not match or (match.get("message") or {}).get("sender_id") == actor_id or
                     (alert.get("attempt") is not None and match.get("attempt") != alert["attempt"])):

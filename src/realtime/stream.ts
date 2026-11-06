@@ -1,4 +1,5 @@
 import { LIMITS } from '../contracts/limits';
+import { DELIVERY_REMINDER_EVENT, DELIVERY_REMINDER_SOURCE } from '../contracts/events';
 import type { Env } from '../env';
 import { utf8Bytes } from '../storage/db';
 import type { ActorRow } from '../storage/rows';
@@ -31,6 +32,8 @@ export interface StreamItem {
   sender_id?: string;
   state?: string;
   attempt?: number;
+  /** 提醒事件对应的最近一次 progress 更新时间。 */
+  progress_at?: string;
   change?: string;
   subject_id?: string;
   changed_by?: string;
@@ -428,6 +431,21 @@ function inboxStreamItem(
       item.state = row.event_type === 'delivery_retried' ? 'pending' : 'cancelled';
       const attempt = numberField(metadata, 'attempt');
       if (attempt !== undefined) item.attempt = attempt;
+      return item;
+    }
+    case DELIVERY_REMINDER_EVENT: {
+      // 提醒不是新待办：只唤醒 recipient 去 report/complete/fail，不改变 pending。
+      const item = withLocation(
+        baseItem(row, DELIVERY_REMINDER_SOURCE, 'reminder', 'action_required'),
+        row,
+        metadata,
+      );
+      item.delivery_id = row.ref_id ?? stringField(metadata, 'delivery_id');
+      item.state = 'claimed';
+      const attempt = numberField(metadata, 'attempt');
+      if (attempt !== undefined) item.attempt = attempt;
+      const progressAt = numberField(metadata, 'progress_at');
+      if (progressAt !== undefined) item.progress_at = String(progressAt);
       return item;
     }
     case 'profile_updated':

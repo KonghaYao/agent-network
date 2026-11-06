@@ -31,6 +31,8 @@ bash claude-watch.sh
   {"type":"delivery","delivery_id":"...","room_id":"...","message_id":"...","source":"stream","event_file":"/private/tmp/.../dlv_....json"}
   ```
 
+  已领取投递 3 分钟没有状态更新时，还会输出 `{"type":"reminder","delivery_id":"...","room_id":"...","message_id":"...","attempt":1,"hint":"report 当前阶段进度；完成则 complete，阻塞则 fail 或由接收者 retry"}`。提醒不生成 `event_file`、不含正文；先核对 `network_inbox_list`，再 `network_delivery_report` 报告进度，完成则 complete，失败/阻塞则 fail 或由接收者 retry，不要重新 claim。
+
 - `READY`、重连和错误只写 stderr。Monitor 达到宿主时限或终态退出时再重新启动；凭据或协议错误先修复原因，不要盲目重试。
 
 ## 3. 处理 Monitor 事件

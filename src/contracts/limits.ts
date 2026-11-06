@@ -86,6 +86,15 @@ export const LIMITS = {
    * 仅前端展示阈值，不轮询、不改变 delivery 状态。
    */
   claimedStaleMs: 2 * 60_000,
+  /**
+   * claimed 投递超过该时长没有 progress 更新时，向 recipient 的 inbox
+   * 写入一条 `delivery_reminder` 事件；持续无更新时按同一周期重复提醒。
+   */
+  deliveryReminderMs: 3 * 60_000,
+  /** 提醒扫描周期（毫秒）；与 60s 的维护周期解耦，保证提醒及时。 */
+  deliveryReminderScanMs: 30_000,
+  /** 单轮提醒扫描最多处理的投递数。 */
+  deliveryReminderBatchMax: 50,
   /** 恢复 ticket 有效期（毫秒）。 */
   recoveryTicketMs: 3 * 60_000,
   /** 幂等窗口（毫秒）。 */

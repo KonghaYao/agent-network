@@ -9,6 +9,7 @@ import type { Env, EventsConfig } from '../env';
 import { loadEncryptionKey } from '../events/security';
 import { initEventsFileLog } from '../events/log-file';
 import type { FileMount } from '@peri-code/mcpp/files';
+import { remindStaleDeliveries } from '../domain/delivery-reminders';
 import { NotificationHub } from '../realtime/hub';
 import { scheduleOutboxDrain } from '../realtime/outbox';
 import { AgentPresenceTimeline } from '../realtime/presence-timeline';
@@ -227,10 +228,34 @@ const presenceSweep = setInterval(() => {
   });
 }, presenceSweepMs);
 
+// claimed 投递 3 分钟无 progress 更新时提醒 recipient；扫描周期与维护周期解耦。
+// 同一进程内只允许一轮扫描在跑，避免慢查询叠加重入；跨进程/重启由
+// deliveries.last_reminded_at 与 event_key 唯一约束收敛。
+let reminderSweepRunning = false;
+const reminderSweep = setInterval(() => {
+  if (reminderSweepRunning) return;
+  reminderSweepRunning = true;
+  void remindStaleDeliveries(env.DB)
+    .then(async (result) => {
+      if (result.failed > 0) {
+        console.error('agent-network delivery reminder sweep had failures', result.failed);
+      }
+      if (result.reminded > 0) await scheduleOutboxDrain(env);
+    })
+    .catch(() => {
+      // 不记录 SQL bind、token 或消息正文；下一轮继续。
+      console.error('agent-network delivery reminder sweep failed');
+    })
+    .finally(() => {
+      reminderSweepRunning = false;
+    });
+}, LIMITS.deliveryReminderScanMs);
+
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {
     clearInterval(schedule);
     clearInterval(presenceSweep);
+    clearInterval(reminderSweep);
     // 先给活动 SSE 发 graceful close，再停止接收新请求。
     if (env.NOTIFICATION_HUB.closeAllStreams() > 0) {
       await new Promise((resolve) => setTimeout(resolve, 50));

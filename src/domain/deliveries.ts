@@ -331,7 +331,7 @@ export async function deliveryClaim(
           .prepare(
             `UPDATE deliveries
                 SET state = 'claimed', attempt = attempt + 1, claim_id = ?,
-                    claimed_at = ?, progress_at = ?, updated_at = ?
+                    claimed_at = ?, progress_at = ?, last_reminded_at = NULL, updated_at = ?
               WHERE delivery_id = ? AND recipient_id = ? AND state = 'pending'`,
           )
           .bind(claimId, at, at, at, delivery.delivery_id, actor),
@@ -395,7 +395,11 @@ export async function deliveryReport(
       operationsStatement(db, actor, input.request_id, payloadHash, resultJson, at),
       claimedGuard(db, input.delivery_id, input.attempt, input.claim_id),
       db
-        .prepare('UPDATE deliveries SET progress_at = ?, updated_at = ? WHERE delivery_id = ?')
+        .prepare(
+          `UPDATE deliveries
+              SET progress_at = ?, last_reminded_at = NULL, updated_at = ?
+            WHERE delivery_id = ?`,
+        )
         .bind(at, at, delivery.delivery_id),
       ...inboxEventStatements(
         db,
@@ -722,7 +726,7 @@ export async function deliveryRetry(
         .prepare(
           `UPDATE deliveries
               SET state = 'pending', claim_id = NULL, claimed_at = NULL, progress_at = NULL,
-                  error = NULL, updated_at = ?
+                  last_reminded_at = NULL, error = NULL, updated_at = ?
             WHERE delivery_id = ? AND attempt = ? AND state IN ('failed', 'cancelled', 'claimed')`,
         )
         .bind(at, delivery.delivery_id, input.expected_attempt),

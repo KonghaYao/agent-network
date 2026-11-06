@@ -8,7 +8,7 @@
 #   LOG="$HOME/.agentnet/watch.log" MAX_WAIT=360 POLL=3 bash other-sentinel.sh
 #
 # 约定：
-#   - peri-watch.sh 每次新投递向 LOG 追加一行 `ALERT {...}`
+#   - peri-watch.sh 每次新投递或 delivery.reminder 提醒向 LOG 追加一行 `ALERT {...}`
 #   - 每次唤醒处理完后必须重新挂一个新的哨兵
 #   - token 只从环境变量读取，本脚本不接触凭据
 set -u

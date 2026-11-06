@@ -701,7 +701,7 @@ export function registerTools(
   register(
     server,
     'network_sync',
-    '读取已授权 scope（inbox 或 room:<room_id>）的变更引用与下一游标。',
+    '读取已授权 scope（inbox 或 room:<room_id>）的变更引用与下一游标。inbox scope 中的 delivery_reminder 是 3 分钟无状态更新提醒。',
     syncSchema,
     syncPageSchema,
     async (input) => {
@@ -737,7 +737,7 @@ export function registerTools(
   register(
     server,
     'network_delivery_report',
-    '上报当前 attempt 的阶段状态；这不是自动心跳，也不会结束投递。需要持续回复用户时用 network_message_send 发阶段性消息。',
+    '上报当前 attempt 的阶段状态；这不是自动心跳，也不会结束投递。claimed 后 3 分钟没有 report/complete/fail 会收到 delivery_reminder，收到后先报告阶段进度。需要持续回复用户时用 network_message_send 发阶段性消息。',
     deliveryReportSchema,
     progressResultSchema,
     async (input) => {

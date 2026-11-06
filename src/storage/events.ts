@@ -156,3 +156,28 @@ export function inboxHeadStatement(
     )
     .bind(eventKey, pendingDelta, at, actorId);
 }
+
+/**
+ * 仅在事件确实已插入时推进 inbox head。
+ *
+ * 用于由后台扫描条件写入的事件：并发扫描或状态已被 report 改变时，
+ * INSERT ... SELECT 可能不产生行，此时不能用 NULL 覆盖 head。
+ * `pendingDelta` 仍走同一字段；提醒类事件固定传 0。
+ */
+export function inboxHeadStatementIfEvent(
+  db: D1Database,
+  actorId: string,
+  eventKey: string,
+  at: number,
+  pendingDelta: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE actors
+         SET inbox_head_seq = MAX(inbox_head_seq, (SELECT event_seq FROM events WHERE event_key = ?)),
+             pending_count = pending_count + ?,
+             updated_at = ?
+       WHERE actor_id = ? AND EXISTS (SELECT 1 FROM events WHERE event_key = ?)`,
+    )
+    .bind(eventKey, pendingDelta, at, actorId, eventKey);
+}
