@@ -150,6 +150,8 @@ export const LIMITS = {
   webScrollUserIdleMs: 160,
   /** 阅读锚点单次最大补偿位移；超过说明锚点已过期，直接丢弃（像素）。 */
   webScrollAnchorMaxShiftPx: 240,
+  /** 距可滚动顶部不超过该比例时自动加载更早；0.1 即“距顶 10% 内”。 */
+  webOlderAutoTopRatio: 0.1,
   /** 回到最新后的 mark_read 去抖窗口（毫秒）。 */
   webScrollMarkReadDelayMs: 250,
   /** MCP Events 默认订阅寿命（毫秒）。 */

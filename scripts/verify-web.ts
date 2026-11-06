@@ -12289,17 +12289,39 @@ async function main(): Promise<void> {
       const markdownGap = await bottomGap(scrollContext.page);
       check('Markdown 升级后保持底部', markdownGap <= 2, markdownGap);
 
-      const anchor = scrollContext.page
-        .locator('#messages .msg')
-        .filter({ hasText: '滚动锚点 55' })
-        .last();
-      await anchor.scrollIntoViewIfNeeded();
-      await sleep(300);
-      const anchorTopBefore = (await anchor.evaluate(
-        (node) => node.getBoundingClientRect().top,
-      )) as number;
       const markdownBefore = await scrollContext.page.locator('#messages .msg-markdown').count();
-      await scrollContext.page.locator('#older').click();
+      let releaseMarkdownOlder: (() => void) | null = null;
+      let markdownOlderStarted = false;
+      await scrollContext.page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_history_list') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as {
+          params?: { arguments?: { cursor?: string | null } };
+        } | null;
+        if (!body?.params?.arguments?.cursor) {
+          await route.continue();
+          return;
+        }
+        markdownOlderStarted = true;
+        await new Promise<void>((resolve) => {
+          releaseMarkdownOlder = resolve;
+        });
+        await route.continue();
+      });
+      await scrollContext.page.evaluate(`document.getElementById('messages').scrollTop = 0`);
+      await waitUntil(
+        async () => markdownOlderStarted && releaseMarkdownOlder !== null,
+        '更早消息请求开始',
+        5_000,
+      );
+      const markdownAnchorId = await firstVisibleMessageId(scrollContext.page);
+      const markdownAnchorTopBefore = markdownAnchorId
+        ? await messageOffset(scrollContext.page, markdownAnchorId)
+        : null;
+      releaseMarkdownOlder!();
       await waitUntil(
         async () =>
           (await scrollContext.page.locator('#messages .msg-markdown').count()) >
@@ -12308,14 +12330,17 @@ async function main(): Promise<void> {
         20_000,
       );
       await sleep(300);
-      const anchorTopAfter = (await anchor.evaluate(
-        (node) => node.getBoundingClientRect().top,
-      )) as number;
+      const markdownAnchorTopAfter = markdownAnchorId
+        ? await messageOffset(scrollContext.page, markdownAnchorId)
+        : null;
       check(
         '加载更早消息后视口不跳动',
-        Math.abs(anchorTopAfter - anchorTopBefore) <= 24,
-        { anchorTopBefore, anchorTopAfter },
+        markdownAnchorTopBefore !== null &&
+          markdownAnchorTopAfter !== null &&
+          Math.abs(markdownAnchorTopAfter - markdownAnchorTopBefore) <= 24,
+        { markdownAnchorId, markdownAnchorTopBefore, markdownAnchorTopAfter },
       );
+      await scrollContext.page.unroute('**/mcp');
       const scrollMetrics = (await scrollContext.page.evaluate(`(() => {
         const node = document.getElementById('messages');
         return { scroll: node.scrollWidth, client: node.clientWidth };
@@ -13080,39 +13105,67 @@ async function main(): Promise<void> {
       await waitRoom(longContext.page, longRoomId, '长会话滚动群');
       await waitForBottom(longContext.page, '长会话进入到底', 15_000);
       await sleep(500);
-      const longAnchor = longContext.page
-        .locator('#messages .msg')
-        .filter({ hasText: '长消息 200' })
-        .last();
-      await longAnchor.evaluate((node) => node.scrollIntoView({ block: 'start' }));
-      await sleep(300);
-      const longAnchorTopBefore = (await longAnchor.evaluate(
-        (node) => node.getBoundingClientRect().top,
-      )) as number;
+      let releaseLongOlder: (() => void) | null = null;
+      let longOlderStarted = false;
+      await longContext.page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_history_list') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as {
+          params?: { arguments?: { cursor?: string | null } };
+        } | null;
+        if (!body?.params?.arguments?.cursor) {
+          await route.continue();
+          return;
+        }
+        longOlderStarted = true;
+        await new Promise<void>((resolve) => {
+          releaseLongOlder = resolve;
+        });
+        await route.continue();
+      });
       for (let pageIndex = 1; pageIndex <= 3; pageIndex += 1) {
         const beforeCount = await messageCount(longContext.page);
-        await longContext.page.locator('#older').click();
+        longOlderStarted = false;
+        // 真实上翻到顶部，由 10% 自动加载触发；不再用合成点击。
+        await longContext.page.evaluate(`document.getElementById('messages').scrollTop = 0`);
         await waitUntil(
-          async () => (await messageCount(longContext.page)) >= beforeCount + 40,
+          async () => longOlderStarted && releaseLongOlder !== null,
+          `第 ${pageIndex} 页更早请求开始`,
+          5_000,
+        );
+        const pageAnchorId = await firstVisibleMessageId(longContext.page);
+        const pageAnchorBefore = pageAnchorId
+          ? await messageOffset(longContext.page, pageAnchorId)
+          : null;
+        releaseLongOlder!();
+        releaseLongOlder = null;
+        await waitUntil(
+          async () => (await messageCount(longContext.page)) >= beforeCount + 50,
           `加载第 ${pageIndex} 页更早消息`,
           15_000,
         );
         await sleep(250);
+        const pageAnchorAfter = pageAnchorId
+          ? await messageOffset(longContext.page, pageAnchorId)
+          : null;
+        check(
+          `第 ${pageIndex} 页前插锚点漂移 <=24`,
+          pageAnchorBefore !== null &&
+            pageAnchorAfter !== null &&
+            Math.abs(pageAnchorAfter - pageAnchorBefore) <= 24,
+          { pageIndex, pageAnchorId, pageAnchorBefore, pageAnchorAfter },
+        );
       }
+      await longContext.page.unroute('**/mcp');
       await waitUntil(
         async () => (await longContext.page.locator('#messages .msg-markdown').count()) >= 160,
         '三页历史 Markdown 升级',
         20_000,
       );
       await sleep(500);
-      const longAnchorTopAfter = (await longAnchor.evaluate(
-        (node) => node.getBoundingClientRect().top,
-      )) as number;
-      check(
-        '三页 older 与 Markdown 升级后锚点漂移 <=24',
-        Math.abs(longAnchorTopAfter - longAnchorTopBefore) <= 24,
-        { longAnchorTopBefore, longAnchorTopAfter },
-      );
       check('加载 older 后不自动滚底', (await bottomGap(longContext.page)) > 100, {
         gap: await bottomGap(longContext.page),
       });
@@ -13270,7 +13323,7 @@ async function main(): Promise<void> {
       await checkWideLayout(1280, '1280px');
       await checkWideLayout(390, '390px');
 
-      // 14f. “加载更早”固定在聊天区顶部，不随消息滚动。
+      // 14f. “加载更早”内联在消息列表首行，随消息滚动且不占用聊天头部。
       const olderContext = await makeContext(
         browser,
         data.humanToken,
@@ -13279,61 +13332,79 @@ async function main(): Promise<void> {
       );
       await olderContext.page.goto(`${server.base}/c/${scrollRoomId}`);
       await waitRoom(olderContext.page, scrollRoomId, '滚动进入群');
-      await olderContext.page.locator('#older').waitFor({ state: 'visible' });
+      await waitUntil(
+        async () => !(await olderUiState(olderContext.page)).pagerHidden,
+        '加载更早内联行初始化',
+        5_000,
+      );
       const olderMetrics = (await olderContext.page.evaluate(`(() => {
-        const older = document.getElementById('older');
+        const pager = document.getElementById('history-pager');
         const messages = document.getElementById('messages');
-        const body = document.getElementById('chat-body');
-        const olderRect = older.getBoundingClientRect();
+        const style = getComputedStyle(pager);
         return {
-          olderTop: olderRect.top,
-          olderBottom: olderRect.bottom,
-          bodyTop: body.getBoundingClientRect().top,
-          messagesTop: messages.getBoundingClientRect().top,
-          insideMessages: messages.contains(older)
+          tagName: pager.tagName,
+          parentId: pager.parentElement ? pager.parentElement.id : '',
+          firstElement: messages.firstElementChild === pager,
+          standalone: Boolean(document.querySelector('#chat-body > #history-pager')),
+          position: style.position,
+          justify: style.justifyContent,
+          pagerScroll: pager.scrollWidth,
+          pagerClient: pager.clientWidth,
+          messagesScroll: messages.scrollWidth,
+          messagesClient: messages.clientWidth
         };
       })()`)) as {
-        olderTop: number;
-        olderBottom: number;
-        bodyTop: number;
-        messagesTop: number;
-        insideMessages: boolean;
+        tagName: string;
+        parentId: string;
+        firstElement: boolean;
+        standalone: boolean;
+        position: string;
+        justify: string;
+        pagerScroll: number;
+        pagerClient: number;
+        messagesScroll: number;
+        messagesClient: number;
       };
-      check('加载更早在消息滚动容器之外', !olderMetrics.insideMessages, olderMetrics);
+      check('加载更早是消息列表内的首行', olderMetrics.parentId === 'messages', olderMetrics);
+      check('加载更早使用列表项结构', olderMetrics.tagName === 'LI', olderMetrics);
+      check('加载更早位于消息列表最顶部', olderMetrics.firstElement, olderMetrics);
+      check('聊天区上方不再有独立加载更早栏', !olderMetrics.standalone, olderMetrics);
       check(
-        '加载更早固定在聊天区顶部',
-        Math.abs(olderMetrics.olderTop - olderMetrics.bodyTop - 8) <= 2,
+        '加载更早不固定在聊天区顶部',
+        olderMetrics.position !== 'sticky' && olderMetrics.position !== 'fixed',
         olderMetrics,
       );
-      await olderContext.page.evaluate(
-        `document.getElementById('messages').scrollTop = 0`,
-      );
-      await sleep(250);
-      const olderStill = (await olderContext.page.evaluate(`(() => {
-        const older = document.getElementById('older');
-        const body = document.getElementById('chat-body');
-        const rect = older.getBoundingClientRect();
-        return {
-          hidden: older.hidden,
-          top: rect.top,
-          bodyTop: body.getBoundingClientRect().top
-        };
-      })()`)) as { hidden: boolean; top: number; bodyTop: number };
+      check('加载更早内联行居中', olderMetrics.justify === 'center', olderMetrics);
       check(
-        '滚动消息后加载更早仍固定在顶部',
-        !olderStill.hidden && Math.abs(olderStill.top - olderStill.bodyTop - 8) <= 2,
-        olderStill,
+        '加载更早内联行不横向溢出',
+        olderMetrics.pagerScroll <= olderMetrics.pagerClient + 1 &&
+          olderMetrics.messagesScroll <= olderMetrics.messagesClient + 1,
+        olderMetrics,
+      );
+      const olderScrollMax = (await olderContext.page.evaluate(`(() => {
+        const messages = document.getElementById('messages');
+        const max = messages.scrollHeight - messages.clientHeight;
+        messages.scrollTop = Math.floor(max * 0.5);
+        return max;
+      })()`)) as number;
+      await sleep(200);
+      const pagerTopAtHalf = (await olderContext.page.evaluate(
+        `document.getElementById('history-pager').getBoundingClientRect().top`,
+      )) as number;
+      await olderContext.page.evaluate(
+        `document.getElementById('messages').scrollTop = Math.floor(${olderScrollMax} * 0.4)`,
+      );
+      await sleep(200);
+      const pagerTopAtForty = (await olderContext.page.evaluate(
+        `document.getElementById('history-pager').getBoundingClientRect().top`,
+      )) as number;
+      check(
+        '加载更早随消息一起滚动',
+        Math.abs(pagerTopAtForty - pagerTopAtHalf - olderScrollMax * 0.1) <= 4,
+        { pagerTopAtHalf, pagerTopAtForty, olderScrollMax },
       );
 
-      // 14f-1. 加载更早：单飞、加载态、锚点保持、到底提示与停止请求。
-      const olderAnchor = olderContext.page
-        .locator('#messages .msg')
-        .filter({ hasText: '滚动锚点 53' })
-        .last();
-      await olderAnchor.evaluate((node) => node.scrollIntoView({ block: 'start' }));
-      await sleep(300);
-      const olderAnchorId = (await olderAnchor.getAttribute('data-message-id')) ?? '';
-      const olderAnchorOffsetBefore = await messageOffset(olderContext.page, olderAnchorId);
+      // 14f-1. 距顶自动加载：单飞、加载态、锚点保持、到底提示与停止请求。
       const markdownCountBefore = await olderContext.page.locator('#messages .msg-markdown').count();
       let releaseOlder: (() => void) | null = null;
       let olderRouteHits = 0;
@@ -13356,18 +13427,35 @@ async function main(): Promise<void> {
         });
         await route.continue();
       });
-      await olderContext.page.evaluate(`(() => {
-        const button = document.getElementById('older');
-        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      })()`);
-      await waitUntil(async () => olderRouteHits >= 1, '加载更早请求进入等待', 5_000);
+      // 真实上翻到顶部，由 10% 自动加载触发；不再合成按钮点击。
+      await olderContext.page.evaluate(`document.getElementById('messages').scrollTop = 0`);
+      await waitUntil(
+        async () => olderRouteHits >= 1 && releaseOlder !== null,
+        '加载更早请求进入等待',
+        5_000,
+      );
       await sleep(150);
+      const olderAnchorId = await firstVisibleMessageId(olderContext.page);
+      const olderAnchorOffsetBefore = olderAnchorId
+        ? await messageOffset(olderContext.page, olderAnchorId)
+        : null;
       const olderDuring = await olderUiState(olderContext.page);
       checkEqual('加载更早期间按钮禁用', olderDuring.disabled, true);
-      checkEqual('加载更早期间显示 loading', olderDuring.text, '正在加载…');
+      checkEqual('加载更早期间显示 loading', olderDuring.text, '正在加载更早…');
       checkEqual(
-        '重复触发加载更早只发一个请求',
+        '连续触发加载更早只发一个请求',
+        (await olderCursors(olderContext.page)).length,
+        1,
+      );
+      await olderContext.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        for (let index = 0; index < 5; index += 1) {
+          node.dispatchEvent(new Event('scroll'));
+        }
+      })()`);
+      await sleep(150);
+      checkEqual(
+        '加载更早期间继续滚动不排队第二个请求',
         (await olderCursors(olderContext.page)).length,
         1,
       );
@@ -13386,13 +13474,15 @@ async function main(): Promise<void> {
         20_000,
       );
       await sleep(400);
-      const olderAnchorOffsetAfter = await messageOffset(olderContext.page, olderAnchorId);
+      const olderAnchorOffsetAfter = olderAnchorId
+        ? await messageOffset(olderContext.page, olderAnchorId)
+        : null;
       check(
         '加载更早前后锚点偏移保持 <=24',
         olderAnchorOffsetBefore !== null &&
           olderAnchorOffsetAfter !== null &&
           Math.abs(olderAnchorOffsetAfter - olderAnchorOffsetBefore) <= 24,
-        { olderAnchorOffsetBefore, olderAnchorOffsetAfter },
+        { olderAnchorId, olderAnchorOffsetBefore, olderAnchorOffsetAfter },
       );
       const olderEndedState = await olderUiState(olderContext.page);
       checkEqual('到底后隐藏加载更早按钮', olderEndedState.hidden, true);
@@ -13400,12 +13490,13 @@ async function main(): Promise<void> {
       checkEqual('到底提示可见', olderEndedState.statusHidden, false);
       const olderCallsAtEnd = (await olderCursors(olderContext.page)).length;
       await olderContext.page.evaluate(`(() => {
-        const button = document.getElementById('older');
-        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        const node = document.getElementById('messages');
+        node.scrollTop = 0;
+        node.dispatchEvent(new Event('scroll'));
       })()`);
       await sleep(400);
       checkEqual(
-        '到底后不再请求更早消息',
+        '到底后滚动到顶部不再请求更早消息',
         (await olderCursors(olderContext.page)).length,
         olderCallsAtEnd,
       );
@@ -13442,6 +13533,103 @@ async function main(): Promise<void> {
         (await olderCursors(olderContext.page)).length,
         olderCallsAtEnd,
       );
+
+      // 14f-1c. 距顶 10% 自动加载：80%/中部不触发，边界只发一个请求。
+      const autoOlder = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      await autoOlder.page.goto(`${server.base}/c/${longRoomId}`);
+      await waitRoom(autoOlder.page, longRoomId, '长会话滚动群');
+      await waitForBottom(autoOlder.page, '自动加载场景进入到底', 15_000);
+      await sleep(300);
+      let releaseAutoOlder: (() => void) | null = null;
+      await autoOlder.page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_history_list') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as {
+          params?: { arguments?: { cursor?: string | null } };
+        } | null;
+        if (!body?.params?.arguments?.cursor) {
+          await route.continue();
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          releaseAutoOlder = resolve;
+        });
+        await route.continue();
+      });
+      const autoScrollMax = (await autoOlder.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        return node.scrollHeight - node.clientHeight;
+      })()`)) as number;
+      check('自动加载场景有足够滚动距离', autoScrollMax > 400, { autoScrollMax });
+      const scrollOlderTo = async (fraction: number): Promise<void> => {
+        await autoOlder.page.evaluate(`(() => {
+          const node = document.getElementById('messages');
+          node.scrollTop = Math.floor(${autoScrollMax} * ${fraction});
+          node.dispatchEvent(new Event('scroll'));
+        })()`);
+      };
+      await scrollOlderTo(0.8);
+      await sleep(250);
+      checkEqual('滚动到 80% 不自动加载', (await olderCursors(autoOlder.page)).length, 0);
+      await scrollOlderTo(0.5);
+      await sleep(250);
+      checkEqual('滚动到中部不自动加载', (await olderCursors(autoOlder.page)).length, 0);
+      await scrollOlderTo(0.2);
+      await sleep(250);
+      checkEqual('滚动到距顶 20% 不自动加载', (await olderCursors(autoOlder.page)).length, 0);
+      await autoOlder.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        node.scrollTop = Math.floor(${autoScrollMax} * 0.1) + 8;
+        node.dispatchEvent(new Event('scroll'));
+      })()`);
+      await sleep(250);
+      checkEqual('越过距顶 10% 边界不自动加载', (await olderCursors(autoOlder.page)).length, 0);
+      await autoOlder.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        node.scrollTop = Math.floor(${autoScrollMax} * 0.1);
+        for (let index = 0; index < 5; index += 1) {
+          node.dispatchEvent(new Event('scroll'));
+        }
+      })()`);
+      await waitUntil(
+        async () => (await olderCursors(autoOlder.page)).length >= 1,
+        '到达距顶 10% 自动加载',
+        5_000,
+      );
+      await sleep(200);
+      checkEqual(
+        '自动加载连续 scroll 只发一个请求',
+        (await olderCursors(autoOlder.page)).length,
+        1,
+      );
+      const autoDuring = await olderUiState(autoOlder.page);
+      checkEqual('自动加载期间按钮禁用', autoDuring.disabled, true);
+      checkEqual('自动加载期间显示 loading', autoDuring.text, '正在加载更早…');
+      await autoOlder.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        node.scrollTop = Math.floor(${autoScrollMax} * 0.08);
+        for (let index = 0; index < 3; index += 1) {
+          node.dispatchEvent(new Event('scroll'));
+        }
+      })()`);
+      await sleep(300);
+      checkEqual(
+        '自动加载期间继续滚动不产生第二个请求',
+        (await olderCursors(autoOlder.page)).length,
+        1,
+      );
+      releaseAutoOlder!();
+      await sleep(400);
+      await autoOlder.page.unroute('**/mcp');
+      await autoOlder.context.close();
 
       // 切到从未加载过的长会话：最新页仍能继续加载更早。
       await olderContext.page.locator(roomLink(longRoomId)).click();
@@ -13486,41 +13674,147 @@ async function main(): Promise<void> {
       );
       await mobileOlder.page.goto(`${server.base}/c/${scrollRoomId}`);
       await waitRoom(mobileOlder.page, scrollRoomId, '滚动进入群');
-      const mobileOlderAnchor = mobileOlder.page
-        .locator('#messages .msg')
-        .filter({ hasText: '滚动锚点 53' })
-        .last();
-      await mobileOlderAnchor.evaluate((node) => node.scrollIntoView({ block: 'start' }));
-      await sleep(300);
-      const mobileAnchorId = (await mobileOlderAnchor.getAttribute('data-message-id')) ?? '';
-      const mobileAnchorBefore = await messageOffset(mobileOlder.page, mobileAnchorId);
-      await mobileOlder.page.locator('#older').click();
+      await waitUntil(
+        async () => !(await olderUiState(mobileOlder.page)).pagerHidden,
+        '390px 加载更早可用',
+        10_000,
+      );
+      let releaseMobileOlder: (() => void) | null = null;
+      let mobileOlderStarted = false;
+      await mobileOlder.page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_history_list') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as {
+          params?: { arguments?: { cursor?: string | null } };
+        } | null;
+        if (!body?.params?.arguments?.cursor) {
+          await route.continue();
+          return;
+        }
+        mobileOlderStarted = true;
+        await new Promise<void>((resolve) => {
+          releaseMobileOlder = resolve;
+        });
+        await route.continue();
+      });
+      await mobileOlder.page.evaluate(`document.getElementById('messages').scrollTop = 0`);
+      await waitUntil(
+        async () => mobileOlderStarted && releaseMobileOlder !== null,
+        '390px 更早请求开始',
+        5_000,
+      );
+      const mobileAnchorId = await firstVisibleMessageId(mobileOlder.page);
+      const mobileAnchorBefore = mobileAnchorId
+        ? await messageOffset(mobileOlder.page, mobileAnchorId)
+        : null;
+      releaseMobileOlder!();
       await waitUntil(
         async () => (await mobileOlder.page.locator('#messages .msg').count()) >= 60,
         '390px 加载更早完成',
         15_000,
       );
+      await mobileOlder.page.unroute('**/mcp');
       await sleep(500);
-      const mobileAnchorAfter = await messageOffset(mobileOlder.page, mobileAnchorId);
+      const mobileAnchorAfter = mobileAnchorId
+        ? await messageOffset(mobileOlder.page, mobileAnchorId)
+        : null;
       check(
         '390px 加载更早不跳动',
         mobileAnchorBefore !== null &&
           mobileAnchorAfter !== null &&
           Math.abs(mobileAnchorAfter - mobileAnchorBefore) <= 24,
-        { mobileAnchorBefore, mobileAnchorAfter },
+        { mobileAnchorId, mobileAnchorBefore, mobileAnchorAfter },
       );
       const mobileOlderMetrics = (await mobileOlder.page.evaluate(`(() => {
+        const pager = document.getElementById('history-pager');
+        const older = document.getElementById('older');
+        const status = document.getElementById('older-status');
         const node = document.getElementById('messages');
-        return { scroll: node.scrollWidth, client: node.clientWidth };
-      })()`)) as { scroll: number; client: number };
+        return {
+          parentId: pager.parentElement ? pager.parentElement.id : '',
+          firstElement: node.firstElementChild === pager,
+          scroll: node.scrollWidth,
+          client: node.clientWidth,
+          pagerScroll: pager.scrollWidth,
+          pagerClient: pager.clientWidth,
+          buttonHidden: older.hidden,
+          statusHidden: status.hidden,
+          statusText: status.textContent,
+          justify: getComputedStyle(pager).justifyContent
+        };
+      })()`)) as {
+        parentId: string;
+        firstElement: boolean;
+        scroll: number;
+        client: number;
+        pagerScroll: number;
+        pagerClient: number;
+        buttonHidden: boolean;
+        statusHidden: boolean;
+        statusText: string;
+        justify: string;
+      };
+      check('390px 历史消息不横向溢出', mobileOlderMetrics.scroll <= mobileOlderMetrics.client + 1, {
+        scroll: mobileOlderMetrics.scroll,
+        client: mobileOlderMetrics.client,
+      });
       check(
-        '390px 历史消息不横向溢出',
-        mobileOlderMetrics.scroll <= mobileOlderMetrics.client + 1,
+        '390px 加载更早仍在消息列表首行',
+        mobileOlderMetrics.parentId === 'messages' &&
+          mobileOlderMetrics.firstElement &&
+          mobileOlderMetrics.justify === 'center',
         mobileOlderMetrics,
+      );
+      check(
+        '390px 加载更早内联行不横向溢出',
+        mobileOlderMetrics.pagerScroll <= mobileOlderMetrics.pagerClient + 1,
+        mobileOlderMetrics,
+      );
+      checkEqual('390px 到底后隐藏加载更早按钮', mobileOlderMetrics.buttonHidden, true);
+      checkEqual('390px 到底提示可读', mobileOlderMetrics.statusText, '没有更早的消息');
+      checkEqual('390px 到底提示可见', mobileOlderMetrics.statusHidden, false);
+      await mobileOlder.page.emulateMedia({ colorScheme: 'dark' });
+      await sleep(150);
+      const darkOlderMetrics = (await mobileOlder.page.evaluate(`(() => {
+        const pager = document.getElementById('history-pager');
+        const status = document.getElementById('older-status');
+        const body = document.getElementById('chat-body');
+        return {
+          dark: matchMedia('(prefers-color-scheme: dark)').matches,
+          color: getComputedStyle(status).color,
+          background: getComputedStyle(body).backgroundColor,
+          fontSize: Number.parseFloat(getComputedStyle(status).fontSize),
+          pagerScroll: pager.scrollWidth,
+          pagerClient: pager.clientWidth,
+          statusVisible: !status.hidden
+        };
+      })()`)) as {
+        dark: boolean;
+        color: string;
+        background: string;
+        fontSize: number;
+        pagerScroll: number;
+        pagerClient: number;
+        statusVisible: boolean;
+      };
+      check(
+        '390px 暗色加载更早内联行可读',
+        darkOlderMetrics.dark &&
+          darkOlderMetrics.statusVisible &&
+          darkOlderMetrics.fontSize >= 11 &&
+          contrastRatio(darkOlderMetrics.color, darkOlderMetrics.background) >= 3 &&
+          darkOlderMetrics.pagerScroll <= darkOlderMetrics.pagerClient + 1,
+        {
+          ...darkOlderMetrics,
+          contrast: contrastRatio(darkOlderMetrics.color, darkOlderMetrics.background),
+        },
       );
       await mobileOlder.context.close();
 
-      // 14f-3. 停在底部预加载更早：新消息仍置底、不出现“回到最新”。
+      // 14f-3. 底部不会自动加载更早：pager 在消息视口外，滚动不产生 cursor 请求。
       const bottomOlder = await makeContext(
         browser,
         data.humanToken,
@@ -13529,36 +13823,137 @@ async function main(): Promise<void> {
       );
       await bottomOlder.page.goto(`${server.base}/c/${scrollRoomId}`);
       await waitRoom(bottomOlder.page, scrollRoomId, '滚动进入群');
-      await waitForBottom(bottomOlder.page, '底部预加载前在底部', 10_000);
-      await bottomOlder.page.locator('#older').click();
+      await waitForBottom(bottomOlder.page, '底部场景进入到底', 10_000);
+      await sleep(300);
+      const bottomPager = (await bottomOlder.page.evaluate(`(() => {
+        const messages = document.getElementById('messages');
+        const pager = document.getElementById('history-pager');
+        const older = document.getElementById('older');
+        const messagesRect = messages.getBoundingClientRect();
+        const pagerRect = pager.getBoundingClientRect();
+        const centerX = pagerRect.left + pagerRect.width / 2;
+        const centerY = pagerRect.top + pagerRect.height / 2;
+        const hit = document.elementFromPoint(centerX, centerY);
+        return {
+          gap: messages.scrollHeight - messages.clientHeight - messages.scrollTop,
+          pagerTop: pagerRect.top,
+          pagerBottom: pagerRect.bottom,
+          messagesTop: messagesRect.top,
+          messagesBottom: messagesRect.bottom,
+          inViewport:
+            pagerRect.bottom > messagesRect.top && pagerRect.top < messagesRect.bottom,
+          hitOlder: Boolean(hit && (hit === older || older.contains(hit)))
+        };
+      })()`)) as {
+        gap: number;
+        pagerTop: number;
+        pagerBottom: number;
+        messagesTop: number;
+        messagesBottom: number;
+        inViewport: boolean;
+        hitOlder: boolean;
+      };
+      check('底部时仍保持置底', Math.abs(bottomPager.gap) <= 2, bottomPager);
+      check(
+        '底部时 pager 完全在消息视口上方',
+        !bottomPager.inViewport && bottomPager.pagerBottom <= bottomPager.messagesTop + 1,
+        bottomPager,
+      );
+      check('底部时 pager 中心不是点击目标', !bottomPager.hitOlder, bottomPager);
+      const bottomCallsBefore = (await olderCursors(bottomOlder.page)).length;
+      const bottomMessagesBox = await bottomOlder.page.locator('#messages').boundingBox();
+      if (bottomMessagesBox) {
+        await bottomOlder.page.mouse.move(
+          bottomMessagesBox.x + bottomMessagesBox.width / 2,
+          bottomMessagesBox.y + bottomMessagesBox.height / 2,
+        );
+        await bottomOlder.page.mouse.wheel(0, -160);
+      }
+      await sleep(300);
+      await bottomOlder.page.evaluate(
+        `document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight - 20`,
+      );
+      await sleep(300);
+      checkEqual(
+        '底部滚动不请求更早消息',
+        (await olderCursors(bottomOlder.page)).length,
+        bottomCallsBefore,
+      );
+
+      let releaseBottomOlder: (() => void) | null = null;
+      let bottomOlderHits = 0;
+      await bottomOlder.page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_history_list') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as {
+          params?: { arguments?: { cursor?: string | null } };
+        } | null;
+        if (!body?.params?.arguments?.cursor) {
+          await route.continue();
+          return;
+        }
+        bottomOlderHits += 1;
+        await new Promise<void>((resolve) => {
+          releaseBottomOlder = resolve;
+        });
+        await route.continue();
+      });
+      const bottomScrollMax = (await bottomOlder.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        return node.scrollHeight - node.clientHeight;
+      })()`)) as number;
+      await bottomOlder.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        node.scrollTop = Math.floor(${bottomScrollMax} * 0.1);
+      })()`);
+      await waitUntil(
+        async () => bottomOlderHits >= 1 && releaseBottomOlder !== null,
+        '距顶 10% 自动加载开始',
+        5_000,
+      );
+      await sleep(150);
+      checkEqual('距顶 10% 自动加载只发一个请求', bottomOlderHits, 1);
+      const bottomAnchorId = await firstVisibleMessageId(bottomOlder.page);
+      const bottomAnchorBefore = bottomAnchorId
+        ? await messageOffset(bottomOlder.page, bottomAnchorId)
+        : null;
+      await bottomOlder.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        for (let index = 0; index < 3; index += 1) {
+          node.dispatchEvent(new Event('scroll'));
+        }
+      })()`);
+      await sleep(150);
+      checkEqual(
+        '自动加载期间继续滚动不排队第二个请求',
+        bottomOlderHits,
+        1,
+      );
+      releaseBottomOlder!();
       await waitUntil(
         async () => (await bottomOlder.page.locator('#messages .msg').count()) >= 60,
-        '底部预加载更早完成',
+        '距顶 10% 自动加载完成',
         15_000,
       );
-      await sleep(400);
-      check(
-        '底部预加载后仍保持置底',
-        (await bottomGap(bottomOlder.page)) <= 2,
-        { gap: await bottomGap(bottomOlder.page) },
-      );
-      const markReadBeforeNew = await markReadCalls(bottomOlder.page, scrollRoomId);
-      await sendRoomMessage(data.agentAToken, scrollRoomId, '底部预加载后的新消息');
-      await waitForText(bottomOlder.page, '#messages', '底部预加载后的新消息');
+      await bottomOlder.page.unroute('**/mcp');
       await sleep(500);
+      const bottomAnchorAfter = bottomAnchorId
+        ? await messageOffset(bottomOlder.page, bottomAnchorId)
+        : null;
       check(
-        '底部预加载后新消息继续置底',
-        (await bottomGap(bottomOlder.page)) <= 8,
+        '距顶 10% 自动加载后锚点保持 <=24',
+        bottomAnchorBefore !== null &&
+          bottomAnchorAfter !== null &&
+          Math.abs(bottomAnchorAfter - bottomAnchorBefore) <= 24,
+        { bottomAnchorId, bottomAnchorBefore, bottomAnchorAfter },
+      );
+      check(
+        '自动加载更早后不自动滚底',
+        (await bottomGap(bottomOlder.page)) > 100,
         { gap: await bottomGap(bottomOlder.page) },
-      );
-      checkEqual(
-        '底部预加载后不显示回到最新',
-        await bottomOlder.page.locator('#jump-latest').isHidden(),
-        true,
-      );
-      check(
-        '底部预加载后新消息仍标记已读',
-        (await markReadCalls(bottomOlder.page, scrollRoomId)) > markReadBeforeNew,
       );
       await bottomOlder.context.close();
 
@@ -13610,18 +14005,41 @@ async function main(): Promise<void> {
         }
         await route.continue();
       });
-      await retryContext.page.locator('#older').click();
-      await waitForText(retryContext.page, '#older-status', '加载更早失败');
+      // 通过真实上翻到顶部触发自动加载；失败后顶部手动入口可见，再用真实点击重试。
+      await retryContext.page.evaluate(`document.getElementById('messages').scrollTop = 0`);
+      await waitUntil(
+        async () => (await olderUiState(retryContext.page)).text === '加载失败，点击重试',
+        '显示加载失败重试',
+        10_000,
+      );
       checkEqual('失败保留已有消息', await messageCount(retryContext.page), retryBefore);
       checkEqual(
         '失败后按钮改为重试',
         (await olderUiState(retryContext.page)).text,
-        '重试加载更早',
+        '加载失败，点击重试',
       );
       checkEqual(
         '失败后仍可继续加载',
         (await olderUiState(retryContext.page)).disabled,
         false,
+      );
+      const failedPager = (await retryContext.page.evaluate(`(() => {
+        const pager = document.getElementById('history-pager');
+        const messages = document.getElementById('messages');
+        const older = document.getElementById('older');
+        const pagerRect = pager.getBoundingClientRect();
+        const messagesRect = messages.getBoundingClientRect();
+        return {
+          visible:
+            pagerRect.bottom > messagesRect.top && pagerRect.top < messagesRect.bottom,
+          buttonHidden: older.hidden,
+          buttonDisabled: older.disabled
+        };
+      })()`)) as { visible: boolean; buttonHidden: boolean; buttonDisabled: boolean };
+      check(
+        '失败后顶部手动入口在视口内且可点击',
+        failedPager.visible && !failedPager.buttonHidden && !failedPager.buttonDisabled,
+        failedPager,
       );
       await retryContext.page.locator('#older').click();
       await waitUntil(
@@ -13666,7 +14084,8 @@ async function main(): Promise<void> {
           }),
         });
       });
-      await retryContext.page.locator('#older').click();
+      // 游标不前进场景同样通过真实滚动触发，不再合成点击。
+      await retryContext.page.evaluate(`document.getElementById('messages').scrollTop = 0`);
       await waitForText(retryContext.page, '#older-status', '没有更早的消息');
       const stuckState = await olderUiState(retryContext.page);
       checkEqual('游标不前进时停止请求', stuckState.hidden, true);
@@ -13677,9 +14096,10 @@ async function main(): Promise<void> {
         stuckCallsBefore + 1,
       );
       await retryContext.page.evaluate(`(() => {
-        document.getElementById('older').dispatchEvent(
-          new MouseEvent('click', { bubbles: true })
-        );
+        const node = document.getElementById('messages');
+        node.scrollTop = 5;
+        node.scrollTop = 0;
+        node.dispatchEvent(new Event('scroll'));
       })()`);
       await sleep(400);
       checkEqual(
@@ -13727,8 +14147,13 @@ async function main(): Promise<void> {
         });
         await route.continue();
       });
-      await switchContext.page.locator('#older').click();
-      await waitUntil(async () => switchRequestStarted, '切换房间前加载更早已发出', 5_000);
+      await waitForBottom(switchContext.page, '切换前进入到底', 15_000);
+      await switchContext.page.evaluate(`document.getElementById('messages').scrollTop = 0`);
+      await waitUntil(
+        async () => switchRequestStarted && releaseSwitch !== null,
+        '切换房间前加载更早已发出',
+        5_000,
+      );
       await switchContext.page.locator(roomLink(switchRoom.room.room_id)).click();
       await waitRoom(switchContext.page, switchRoom.room.room_id, '分页重置群');
       releaseSwitch!();

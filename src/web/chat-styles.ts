@@ -337,17 +337,24 @@ export const APP_STYLE = `
     border-radius: 50%; background: #d69e2e; }
   .stream-dot[data-state="stopped"] { background: var(--wx-danger); }
   .stream-dot[hidden] { display: none; }
-  /* 固定在聊天区顶部，不随消息滚动；加载态与到底提示共用同一行。 */
-  .history-pager { flex: 0 0 auto; display: flex; align-items: flex-start;
-    justify-content: center; gap: 8px; padding: 8px 12px 0; }
+  /* 内联在消息流顶部，随消息一起滚动；加载态、失败与到底提示共用同一行。 */
+  .history-pager { display: flex; flex-wrap: wrap; align-items: center;
+    justify-content: center; gap: 4px 8px; max-width: 100%; min-width: 0;
+    margin: 0 0 8px; padding: 0; list-style: none; }
   .history-pager[hidden] { display: none; }
-  #older { margin: 0; padding: 4px 12px;
+  #older { max-width: 100%; margin: 0; padding: 4px 12px;
     border: 1px solid var(--wx-line); border-radius: 999px;
     background: var(--wx-panel); color: var(--wx-link); font-size: 11px;
     box-shadow: var(--wx-shadow); white-space: nowrap; }
   #older[hidden] { display: none; }
-  .history-status { padding: 5px 8px; color: var(--wx-muted); font-size: 11px;
-    line-height: 16px; text-align: center; }
+  #older[aria-busy="true"]::before { content: ""; display: inline-block;
+    width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px;
+    border: 1.5px solid currentColor; border-right-color: transparent;
+    border-radius: 50%; animation: history-spin 0.8s linear infinite; }
+  @keyframes history-spin { to { transform: rotate(360deg); } }
+  .history-status { max-width: 100%; padding: 5px 8px; color: var(--wx-muted);
+    font-size: 11px; line-height: 16px; text-align: center;
+    overflow-wrap: anywhere; }
   .history-status[hidden] { display: none; }
   .messages { flex: 1 1 auto; min-height: 0; overflow-y: auto; list-style: none;
     margin: 0; padding: 12px 20px 18px;
@@ -600,5 +607,6 @@ export const APP_STYLE = `
   @media (prefers-reduced-motion: reduce) {
     .skeleton-avatar, .skeleton-lines span, .skeleton-bubble { animation: none; }
     .chat-loading::after { animation: none; width: 100%; }
+    #older[aria-busy="true"]::before { animation: none; }
   }
 `;

@@ -325,6 +325,7 @@ function renderMessageList(items) {
   resetMessageFileCards();
   scrollController.beginContentChange();
   messagesElement.replaceChildren();
+  ensureHistoryPager();
   appendHistory(messagesElement, items);
   ensureMessagesEnd();
   scrollController.noteContentChanged();

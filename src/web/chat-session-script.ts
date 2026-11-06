@@ -1,3 +1,5 @@
+import { LIMITS } from '../contracts/limits';
+
 /**
  * 房间状态层：active 房间、代次、缓存、草稿、滚动与刷新链。
  *
@@ -6,6 +8,7 @@
  * 旧请求只允许被丢弃，不得写入新房间的 DOM。
  */
 export const CHAT_SESSION_SCRIPT = `
+const OLDER_AUTO_TOP_RATIO = ${LIMITS.webOlderAutoTopRatio};
 let activeRoomId = initialRoomId;
 let roomEpoch = 0;
 let roomAbort = null;
@@ -28,6 +31,7 @@ let currentItems = [];
 let olderLoading = false;
 let olderEnded = false;
 let olderError = '';
+let olderAutoFrame = 0;
 
 function isAbortError(error) {
   return Boolean(error) && (error.name === 'AbortError' || error.code === 'ABORT_ERR');
@@ -37,27 +41,77 @@ function isActiveRoom(roomId, epoch) {
   return activeRoomId === roomId && roomEpoch === epoch;
 }
 
+/**
+ * pager 是消息流内部的首行：全量重绘/前插后都要把它放回列表最顶部。
+ * 元素引用不变，点击监听也不需要重新绑定。
+ */
+function ensureHistoryPager() {
+  if (!messagesElement || !historyPagerElement) return;
+  if (historyPagerElement.parentNode !== messagesElement) {
+    messagesElement.insertBefore(historyPagerElement, messagesElement.firstElementChild);
+    return;
+  }
+  if (messagesElement.firstElementChild !== historyPagerElement) {
+    messagesElement.insertBefore(historyPagerElement, messagesElement.firstElementChild);
+  }
+}
+
 /** 加载更早按钮、加载态、失败重试与到底提示共用同一处状态收口。 */
 function updateOlderAffordance() {
   const hasOlder = Boolean(nextOlder);
+  ensureHistoryPager();
   if (olderButton) {
-    olderButton.hidden = !hasOlder;
+    olderButton.hidden = !hasOlder && !olderError;
     olderButton.disabled = olderLoading;
     olderButton.textContent = olderLoading
-      ? '正在加载…'
-      : (olderError ? '重试加载更早' : '加载更早');
+      ? '正在加载更早…'
+      : (olderError ? '加载失败，点击重试' : '加载更早');
     olderButton.setAttribute('aria-busy', olderLoading ? 'true' : 'false');
+    olderButton.title = olderError || '';
   }
   if (olderStatusElement) {
     const message = olderLoading
       ? ''
-      : (olderError || (olderEnded && !hasOlder ? '没有更早的消息' : ''));
+      : (olderEnded && !hasOlder ? '没有更早的消息' : '');
     olderStatusElement.textContent = message;
     olderStatusElement.hidden = !message;
   }
   if (historyPagerElement) {
     historyPagerElement.hidden = !hasOlder && !olderEnded && !olderError;
   }
+}
+
+/** 距可滚动顶部不超过 10% 才自动加载；内容不足一屏时不自动触发。 */
+function olderAutoTopReached() {
+  if (!messagesElement) return false;
+  const maxTop = messagesElement.scrollHeight - messagesElement.clientHeight;
+  if (maxTop <= 0) return false;
+  return messagesElement.scrollTop <= maxTop * OLDER_AUTO_TOP_RATIO;
+}
+
+function cancelOlderAutoLoad() {
+  if (!olderAutoFrame) return;
+  cancelAnimationFrame(olderAutoFrame);
+  olderAutoFrame = 0;
+}
+
+/**
+ * scroll 事件只合并到下一帧检查一次；自动、手动与脚本恢复最终都走
+ * loadOlder 的同一个 olderLoading 单飞锁，不排队第二个请求。
+ */
+function scheduleOlderAutoLoad() {
+  if (olderAutoFrame) return;
+  olderAutoFrame = requestAnimationFrame(function () {
+    olderAutoFrame = 0;
+    if (!activeRoomId || olderLoading || olderError || olderEnded || !nextOlder) return;
+    if (!olderAutoTopReached()) return;
+    loadOlder();
+  });
+}
+
+function installOlderAutoLoad() {
+  if (!messagesElement) return;
+  messagesElement.addEventListener('scroll', scheduleOlderAutoLoad, { passive: true });
 }
 
 function sessionSignal() {
@@ -235,6 +289,7 @@ function setChatLoading(loading, options) {
     resetMarkdownHandles();
     scrollController.beginContentChange();
     messagesElement.replaceChildren();
+    ensureHistoryPager();
   }
 }
 
@@ -250,6 +305,7 @@ function setChatError(message) {
     resetMarkdownHandles();
     scrollController.beginContentChange();
     messagesElement.replaceChildren();
+    ensureHistoryPager();
   }
   if (sendButton) sendButton.disabled = true;
 }
@@ -552,7 +608,7 @@ async function loadOlder() {
   const epoch = roomEpoch;
   const cursor = nextOlder;
   const humanTimeline = Boolean(identity && identity.kind === 'human');
-  // 只有已离底时才需要取消跟随；停在底部点击只预加载，不破坏置底与已读。
+  // 只有已离底时才需要取消跟随；手动/自动入口都在消息流顶部，底部不会触发加载。
   if (!scrollController.isPinned()) scrollController.unpin();
   const anchorSnapshot = scrollController.capturePrependAnchor();
   olderLoading = true;
@@ -579,6 +635,7 @@ async function loadOlder() {
       const fragment = document.createDocumentFragment();
       appendHistory(fragment, olderItems);
       messagesElement.prepend(fragment);
+      ensureHistoryPager();
       reconcilePrependSeam(oldFirstItem, olderItems[olderItems.length - 1]);
       scrollController.restorePrependAnchor(anchorSnapshot);
     }
@@ -690,6 +747,7 @@ async function openRoom(roomId, options) {
   roomAbort = new AbortController();
   resetRefreshChain();
   scrollController.reset(roomId, epoch);
+  cancelOlderAutoLoad();
   activateFilesRoom(roomId);
   activateMonitorRoom(roomId);
   if (previousId !== roomId) {
@@ -761,6 +819,7 @@ function closeRoomView() {
   if (roomAbort) roomAbort.abort();
   roomAbort = null;
   resetRefreshChain();
+  cancelOlderAutoLoad();
   room = null;
   members = new Map();
   nextOlder = null;

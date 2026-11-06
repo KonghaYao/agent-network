@@ -155,7 +155,7 @@ const scrollController = (function () {
     const listTop = messagesElement.getBoundingClientRect().top;
     const listBottom = messagesElement.getBoundingClientRect().bottom;
     for (const child of messagesElement.children) {
-      if (child === messagesEndElement) continue;
+      if (child === messagesEndElement || child.id === 'history-pager') continue;
       const rect = child.getBoundingClientRect();
       if (rect.top >= listBottom || rect.bottom <= listTop) continue;
       return { element: child, offset: rect.top - listTop };

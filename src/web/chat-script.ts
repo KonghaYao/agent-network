@@ -696,6 +696,7 @@ olderButton.addEventListener('click', function () {
   if (!activeRoomId) return;
   loadOlder();
 });
+installOlderAutoLoad();
 
 if (jumpLatestButton) jumpLatestButton.addEventListener('click', function () {
   const jumpRoomId = activeRoomId;

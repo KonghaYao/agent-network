@@ -154,10 +154,6 @@ export function chatPane(): string {
       <div class="skeleton-row mine"><span class="skeleton-avatar"></span><span class="skeleton-bubble"></span></div>
       <div class="skeleton-row"><span class="skeleton-avatar"></span><span class="skeleton-bubble"></span></div>
     </div>
-    <div id="history-pager" class="history-pager" hidden>
-      <button id="older" type="button">加载更早</button>
-      <span id="older-status" class="history-status" role="status" aria-live="polite" hidden></span>
-    </div>
     <div id="chat-error" class="chat-error" role="alert" hidden>
       <p id="chat-error-text"></p>
       <div class="chat-error-actions">
@@ -166,6 +162,10 @@ export function chatPane(): string {
       </div>
     </div>
     <ol id="messages" class="messages" aria-live="polite">
+      <li id="history-pager" class="history-pager" hidden>
+        <button id="older" type="button">加载更早</button>
+        <span id="older-status" class="history-status" role="status" aria-live="polite" hidden></span>
+      </li>
       <li id="messages-end" class="messages-end" aria-hidden="true"></li>
     </ol>
     <button id="jump-latest" class="jump-latest" type="button" hidden>
