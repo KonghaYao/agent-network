@@ -1,5 +1,5 @@
 /**
- * 群聊成员管理片段：群聊头部“添加成员”入口、当前成员只读列表与好友分页选择。
+ * 群聊成员管理片段：左右双栏的“已在群 / 未在群”选择器与好友分页。
  *
  * 服务端 `network_room_members_update` 只允许群 owner 调用，页面据此在
  * 非 owner 打开时给出明确提示，而不是静默失败。片段与其它脚本拼进同一个
@@ -9,12 +9,21 @@ export const CHAT_MEMBERS_SCRIPT = `
 const membersButton = document.getElementById('add-members');
 const membersModal = document.getElementById('members-modal');
 const membersForm = document.getElementById('members-form');
+const membersCloseButton = document.getElementById('members-close');
 const membersCurrentElement = document.getElementById('members-current');
+const membersCurrentCountElement = document.getElementById('members-current-count');
+const membersCurrentEmptyElement = document.getElementById('members-current-empty');
 const membersContactsElement = document.getElementById('members-contacts');
+const membersContactsCountElement = document.getElementById('members-contacts-count');
+const membersSelectionElement = document.getElementById('members-selection');
 const membersErrorElement = document.getElementById('members-error');
 const membersAddButton = document.getElementById('members-add');
 const membersCancelButton = document.getElementById('members-cancel');
 let membersLoadToken = 0;
+let membersContactsCache = [];
+let membersContactNote = '';
+let membersBusy = false;
+let membersOpener = null;
 
 function isGroupOwner() {
   return Boolean(room && room.kind === 'group' && room.my_role === 'owner');
@@ -32,16 +41,41 @@ function setMembersError(message) {
   if (membersErrorElement) membersErrorElement.textContent = message || '';
 }
 
-function hasMemberChoices() {
-  return Boolean(
-    membersContactsElement && membersContactsElement.querySelector('input[type=checkbox]')
-  );
+function selectedMemberIds() {
+  const selected = [];
+  if (!membersContactsElement) return selected;
+  for (const input of membersContactsElement.querySelectorAll('input[type=checkbox]:checked')) {
+    selected.push(input.value);
+  }
+  return selected;
+}
+
+/** 选中态同时驱动勾选背景、底部计数与“添加”按钮可用性。 */
+function updateMembersSelection() {
+  const selected = selectedMemberIds();
+  if (membersSelectionElement) {
+    membersSelectionElement.textContent = selected.length
+      ? '已选 ' + selected.length + ' 人'
+      : '未选择';
+  }
+  if (membersContactsElement) {
+    for (const choice of membersContactsElement.querySelectorAll('.contact-choice')) {
+      const input = choice.querySelector('input[type=checkbox]');
+      choice.classList.toggle('selected', Boolean(input && input.checked));
+    }
+  }
+  if (membersAddButton) {
+    membersAddButton.disabled = membersBusy || !isGroupOwner() || selected.length === 0;
+  }
 }
 
 function setMembersBusy(busy, label) {
-  if (!membersAddButton) return;
-  membersAddButton.disabled = busy || !isGroupOwner() || !hasMemberChoices();
-  membersAddButton.textContent = busy ? (label || '正在添加…') : '添加';
+  membersBusy = busy;
+  if (membersAddButton) {
+    membersAddButton.textContent = busy ? (label || '正在添加…') : '添加';
+  }
+  if (membersForm) membersForm.setAttribute('aria-busy', busy ? 'true' : 'false');
+  updateMembersSelection();
 }
 
 function renderCurrentMembers() {
@@ -66,24 +100,36 @@ function renderCurrentMembers() {
     item.append(name, role);
     membersCurrentElement.append(item);
   }
+  if (membersCurrentCountElement) {
+    membersCurrentCountElement.textContent = String(members.size);
+  }
+  if (membersCurrentEmptyElement) membersCurrentEmptyElement.hidden = members.size > 0;
+}
+
+function renderMembersEmpty(message) {
+  if (!membersContactsElement) return;
+  membersContactsElement.replaceChildren();
+  const empty = document.createElement('p');
+  empty.className = 'members-empty';
+  empty.textContent = message;
+  membersContactsElement.append(empty);
+  if (membersContactsCountElement) membersContactsCountElement.textContent = '0';
+  updateMembersSelection();
 }
 
 function renderMembersContacts(contacts, note) {
   if (!membersContactsElement) return;
-  const checked = new Set();
-  for (const input of membersContactsElement.querySelectorAll('input[type=checkbox]:checked')) {
-    checked.add(input.value);
-  }
+  const checked = new Set(selectedMemberIds());
   membersContactsElement.replaceChildren();
+  if (membersContactsCountElement) {
+    membersContactsCountElement.textContent = String(isGroupOwner() ? contacts.length : 0);
+  }
   if (!isGroupOwner()) {
-    membersContactsElement.textContent = '只有群 owner 可以添加成员';
+    renderMembersEmpty('只有群 owner 可以添加成员');
     return;
   }
   if (contacts.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'list-hint';
-    empty.textContent = note || '没有可添加的好友：好友都已在群里。';
-    membersContactsElement.append(empty);
+    renderMembersEmpty(note || '没有可添加的好友：好友都已在群里。');
     return;
   }
   for (const contact of contacts) {
@@ -92,7 +138,10 @@ function renderMembersContacts(contacts, note) {
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.value = contact.actor_id;
-    if (checked.has(contact.actor_id)) input.checked = true;
+    if (checked.has(contact.actor_id)) {
+      input.checked = true;
+      label.classList.add('selected');
+    }
     const avatar = avatarElement(
       contact.name,
       contact.kind === 'agent' ? 'agent' : null,
@@ -108,48 +157,59 @@ function renderMembersContacts(contacts, note) {
   }
   if (note) {
     const hint = document.createElement('p');
-    hint.className = 'list-hint';
+    hint.className = 'members-empty';
     hint.textContent = note;
     membersContactsElement.append(hint);
   }
+  updateMembersSelection();
 }
 
 function closeMembersModal() {
   membersLoadToken += 1;
   if (membersModal) membersModal.hidden = true;
   setMembersError('');
+  membersContactsCache = [];
+  membersContactNote = '';
   if (membersContactsElement) membersContactsElement.replaceChildren();
-  if (membersAddButton) {
-    membersAddButton.disabled = true;
-    membersAddButton.textContent = '添加';
-  }
+  if (membersContactsCountElement) membersContactsCountElement.textContent = '0';
+  setMembersBusy(false);
+  const opener = membersOpener;
+  membersOpener = null;
+  if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
 }
 
+/** 好友 - 当前成员 - 自己；同时去重，避免分页边界重复候选。 */
 function membersCandidates(contacts) {
   const excluded = new Set(members.keys());
   if (identity) excluded.add(identity.actor_id);
+  const seen = new Set();
   return contacts.filter(function (contact) {
-    return !excluded.has(contact.actor_id);
+    if (!contact || typeof contact.actor_id !== 'string') return false;
+    if (excluded.has(contact.actor_id) || seen.has(contact.actor_id)) return false;
+    seen.add(contact.actor_id);
+    return true;
   });
 }
 
 async function openMembersModal() {
   if (!membersModal || !room || room.kind !== 'group') return;
+  membersOpener = document.activeElement;
   membersModal.hidden = false;
   setMembersError('');
+  membersContactsCache = [];
+  membersContactNote = '';
   renderCurrentMembers();
+  setMembersBusy(false);
+  if (membersCloseButton) membersCloseButton.focus();
   const roomId = activeRoomId;
   const epoch = roomEpoch;
   const loadToken = ++membersLoadToken;
   if (!isGroupOwner()) {
-    if (membersContactsElement) {
-      membersContactsElement.textContent = '只有群 owner 可以添加成员';
-    }
+    renderMembersEmpty('只有群 owner 可以添加成员');
     setMembersError('只有群 owner 可以添加成员。');
-    setMembersBusy(false);
     return;
   }
-  if (membersContactsElement) membersContactsElement.textContent = '正在读取好友…';
+  renderMembersEmpty('正在读取好友…');
   setMembersBusy(true, '读取好友…');
   try {
     const contacts = await loadGroupContacts();
@@ -161,14 +221,13 @@ async function openMembersModal() {
     ) {
       return;
     }
+    membersContactsCache = contacts;
     renderMembersContacts(membersCandidates(contacts));
     setMembersBusy(false);
     const ownerActorId = identity ? identity.actor_id : '';
     if (agentContactGaps(ownerActorId, contacts).length === 0) return;
-    renderMembersContacts(
-      membersCandidates(contacts),
-      '正在同步本机创建的 Agent…'
-    );
+    membersContactNote = '正在同步本机创建的 Agent…';
+    renderMembersContacts(membersCandidates(contacts), membersContactNote);
     const synced = await addOwnedAgentContacts(ownerActorId, contacts);
     if (
       loadToken !== membersLoadToken ||
@@ -178,14 +237,13 @@ async function openMembersModal() {
     ) {
       return;
     }
-    renderMembersContacts(
-      membersCandidates(synced.contacts),
-      agentContactSyncError(synced.failed)
-    );
+    membersContactsCache = synced.contacts;
+    membersContactNote = agentContactSyncError(synced.failed) || '';
+    renderMembersContacts(membersCandidates(synced.contacts), membersContactNote);
     setMembersBusy(false);
   } catch (error) {
     if (loadToken !== membersLoadToken || !isActiveRoom(roomId, epoch)) return;
-    if (membersContactsElement) membersContactsElement.replaceChildren();
+    renderMembersEmpty('读取好友失败，请重试。');
     setMembersError('读取好友失败：' + (error && error.message ? error.message : error));
     setMembersBusy(false);
   }
@@ -209,17 +267,13 @@ async function submitMembersForm(event) {
   event.preventDefault();
   const roomId = activeRoomId;
   if (!roomId || !room || room.kind !== 'group' || !membersModal || membersModal.hidden) return;
+  if (membersBusy) return;
   const epoch = roomEpoch;
   if (!isGroupOwner()) {
     setMembersError('只有群 owner 可以添加成员。');
     return;
   }
-  const selected = [];
-  if (membersContactsElement) {
-    for (const input of membersContactsElement.querySelectorAll('input[type=checkbox]:checked')) {
-      selected.push(input.value);
-    }
-  }
+  const selected = selectedMemberIds();
   if (selected.length === 0) {
     setMembersError('请至少选择一个好友');
     return;
@@ -253,11 +307,14 @@ async function submitMembersForm(event) {
     });
     if (added.length === 0) {
       setMembersError('所选好友已在群里，成员没有变化。');
-      setMembersBusy(false);
+      renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
       return;
     }
     applyRoomDetail(result);
-    closeMembersModal();
+    // 新成员从右侧候选消失、出现在左侧；弹窗保持打开，便于连续添加。
+    renderCurrentMembers();
+    renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
+    setMembersError('');
     statusElement.textContent = '已添加 ' + added.length + ' 名成员';
     // 更新响应已立即刷新头部与成员；后台再读一次 room_get 校准侧栏。
     refresh(false).catch(function (error) {
@@ -267,8 +324,10 @@ async function submitMembersForm(event) {
     });
   } catch (error) {
     if (!isActiveRoom(roomId, epoch)) return;
+    // 失败保留已选候选，用户可直接重试。
     setMembersError(membersUpdateError(error));
-    setMembersBusy(false);
+  } finally {
+    if (isActiveRoom(roomId, epoch)) setMembersBusy(false);
   }
 }
 
@@ -281,11 +340,25 @@ if (membersButton) {
     });
   });
 }
+if (membersCloseButton) membersCloseButton.addEventListener('click', closeMembersModal);
 if (membersCancelButton) membersCancelButton.addEventListener('click', closeMembersModal);
 if (membersModal) {
   membersModal.addEventListener('click', function (event) {
+    // 只关闭遮罩本身；点击卡片内部不会误提交，也不会关闭。
     if (event.target === membersModal) closeMembersModal();
   });
 }
+if (membersContactsElement) {
+  membersContactsElement.addEventListener('change', function (event) {
+    const target = event.target;
+    if (!target || target.type !== 'checkbox') return;
+    updateMembersSelection();
+  });
+}
+document.addEventListener('keydown', function (event) {
+  if (event.key !== 'Escape' || !membersModal || membersModal.hidden) return;
+  event.preventDefault();
+  closeMembersModal();
+});
 if (membersForm) membersForm.addEventListener('submit', submitMembersForm);
 `;

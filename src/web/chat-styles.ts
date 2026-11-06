@@ -337,14 +337,18 @@ export const APP_STYLE = `
     border-radius: 50%; background: #d69e2e; }
   .stream-dot[data-state="stopped"] { background: var(--wx-danger); }
   .stream-dot[hidden] { display: none; }
-  /* 固定在聊天区顶部，不随消息滚动；显示时给消息区留出顶部空间。 */
-  #older { position: absolute; top: 8px; left: 50%; z-index: 4;
-    transform: translateX(-50%); margin: 0; padding: 4px 12px;
+  /* 固定在聊天区顶部，不随消息滚动；加载态与到底提示共用同一行。 */
+  .history-pager { flex: 0 0 auto; display: flex; align-items: flex-start;
+    justify-content: center; gap: 8px; padding: 8px 12px 0; }
+  .history-pager[hidden] { display: none; }
+  #older { margin: 0; padding: 4px 12px;
     border: 1px solid var(--wx-line); border-radius: 999px;
     background: var(--wx-panel); color: var(--wx-link); font-size: 11px;
     box-shadow: var(--wx-shadow); white-space: nowrap; }
   #older[hidden] { display: none; }
-  #older:not([hidden]) ~ .messages { padding-top: 40px; }
+  .history-status { padding: 5px 8px; color: var(--wx-muted); font-size: 11px;
+    line-height: 16px; text-align: center; }
+  .history-status[hidden] { display: none; }
   .messages { flex: 1 1 auto; min-height: 0; overflow-y: auto; list-style: none;
     margin: 0; padding: 12px 20px 18px;
     overflow-anchor: none; overscroll-behavior: contain; scrollbar-gutter: stable; }
@@ -452,22 +456,59 @@ export const APP_STYLE = `
   .picker-label { margin: 14px 0 6px; font-size: 12px; color: var(--wx-muted); }
   .contact-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px;
     overflow-y: auto; margin: 0 0 8px; }
-  .member-roster { list-style: none; margin: 0 0 8px; padding: 0;
-    max-height: 180px; overflow-y: auto; }
+  .members-card { width: min(680px, 100%); display: flex; flex-direction: column; }
+  .members-head { flex: 0 0 auto; display: flex; align-items: center;
+    justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+  .members-head h2 { margin: 0; }
+  .members-close { flex: 0 0 auto; width: 30px; height: 30px; padding: 0;
+    border: 0; background: transparent; color: var(--wx-muted);
+    font-size: 20px; line-height: 1; }
+  .members-close:hover { background: var(--wx-hover); color: var(--wx-text); }
+  .members-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px; align-items: stretch; }
+  .members-column { min-width: 0; display: flex; flex-direction: column;
+    border: 1px solid var(--wx-line); border-radius: 8px; overflow: hidden;
+    background: var(--wx-bg); }
+  .members-column-head { flex: 0 0 auto; display: flex; align-items: center;
+    justify-content: space-between; gap: 8px; padding: 8px 10px;
+    border-bottom: 1px solid var(--wx-line); background: var(--wx-panel); }
+  .members-column-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .members-count { flex: 0 0 auto; min-width: 22px; padding: 1px 7px;
+    border-radius: 999px; background: var(--wx-search); color: var(--wx-muted);
+    font-size: 11px; text-align: center; }
+  .member-roster { list-style: none; margin: 0; padding: 4px;
+    max-height: min(46dvh, 360px); overflow-y: auto; }
   .member-roster-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px;
-    border-radius: 4px; font-size: 14px; }
-  .member-avatar { width: 28px; height: 28px; border-radius: 6px; font-size: 12px; }
-  .member-roster-item + .member-roster-item { border-top: 1px solid var(--wx-line); }
-  .member-roster-name { min-width: 0; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; }
+    border-radius: 6px; font-size: 13px; }
+  .member-roster-item:hover { background: var(--wx-hover); }
+  .member-avatar { flex: 0 0 auto; width: 24px; height: 24px; border-radius: 5px;
+    font-size: 11px; }
+  .member-roster-name { min-width: 0; flex: 1 1 auto; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
   .member-roster-role { flex: 0 0 auto; margin-left: auto; font-size: 11px;
     color: var(--wx-muted); }
+  .members-card .contact-list { margin: 0; padding: 4px;
+    max-height: min(46dvh, 360px); }
   .contact-choice { display: flex; align-items: center; gap: 9px; padding: 8px;
     border-radius: 4px; font-size: 14px; }
-  .contact-avatar { width: 24px; height: 24px; border-radius: 5px; font-size: 11px; }
+  .members-card .contact-choice { gap: 8px; padding: 7px 8px; font-size: 13px;
+    border: 1px solid transparent; cursor: pointer; }
+  .members-card .contact-avatar { flex: 0 0 auto; width: 24px; height: 24px;
+    border-radius: 5px; font-size: 11px; }
   .contact-choice:hover { background: var(--wx-hover); }
-  .contact-choice input { width: 16px; height: 16px; accent-color: var(--wx-green); }
-  .contact-kind { margin-left: auto; font-size: 11px; color: var(--wx-muted); }
+  .members-card .contact-choice.selected { background: rgb(7 193 96 / 12%);
+    border-color: rgb(7 193 96 / 35%); }
+  .contact-choice input { flex: 0 0 auto; width: 16px; height: 16px;
+    accent-color: var(--wx-green); }
+  .contact-kind { flex: 0 0 auto; margin-left: auto; font-size: 11px;
+    color: var(--wx-muted); }
+  .members-card .contact-choice > span:not(.contact-kind) { min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .members-empty { margin: 0; padding: 18px 10px; color: var(--wx-muted);
+    font-size: 12px; line-height: 1.6; text-align: center; }
+  .members-empty[hidden] { display: none; }
+  .members-actions { align-items: center; }
+  .members-selection { margin-right: auto; font-size: 12px; color: var(--wx-muted); }
   .form-error { min-height: 1.2em; margin: 0 0 8px; color: var(--wx-unread);
     font-size: 12px; overflow-wrap: anywhere; }
   .modal-actions { justify-content: flex-end; }
@@ -537,6 +578,21 @@ export const APP_STYLE = `
     .composer textarea { font-size: 16px; }
     .composer-drop { inset: 6px; }
     .mention-picker { left: 10px; bottom: 64px; }
+    /* 双栏添加成员在窄屏压缩间距与头像，仍保持左右可读且不横向溢出。 */
+    .members-card { padding: 14px; }
+    .members-columns { gap: 8px; }
+    .members-column-head { padding: 6px 8px; }
+    .members-column-head h3 { font-size: 12px; }
+    .members-card .contact-list, .members-card .member-roster {
+      max-height: min(50dvh, 320px); }
+    .members-card .contact-avatar, .members-card .member-avatar {
+      width: 22px; height: 22px; }
+    .members-card .contact-choice, .members-card .member-roster-item {
+      gap: 6px; padding: 6px; }
+    .members-card .contact-kind { display: none; }
+    .members-card .member-roster-role { font-size: 10px; }
+    .members-actions { gap: 8px; }
+    .members-selection { flex: 1 1 100%; margin-right: 0; }
     /* 移动端浮层占满头部下方宽度，避免横向溢出；点击展开、Esc/外部关闭。 */
     .task-popover { left: 8px; right: 8px; width: auto; max-height: 50vh; }
   }

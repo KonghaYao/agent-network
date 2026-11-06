@@ -150,25 +150,72 @@ const scrollController = (function () {
    * 上翻阅读锚点：记录视口内最先相交的消息。之后 Markdown/文件卡片/
    * 回执在上方加高时，用它把同一元素拉回原位置，避免逐项补偿累积漂移。
    */
-  function captureAnchor() {
-    if (!messagesElement) return;
+  function firstVisibleChild() {
+    if (!messagesElement) return null;
     const listTop = messagesElement.getBoundingClientRect().top;
     const listBottom = messagesElement.getBoundingClientRect().bottom;
-    let target = null;
     for (const child of messagesElement.children) {
       if (child === messagesEndElement) continue;
       const rect = child.getBoundingClientRect();
       if (rect.top >= listBottom || rect.bottom <= listTop) continue;
-      target = child;
-      break;
+      return { element: child, offset: rect.top - listTop };
     }
+    return null;
+  }
+
+  function captureAnchor() {
+    const target = firstVisibleChild();
     if (!target) {
       anchorElement = null;
       return;
     }
-    anchorElement = target;
-    anchorOffset = target.getBoundingClientRect().top - listTop;
+    anchorElement = target.element;
+    anchorOffset = target.offset;
     anchorUntil = performance.now() + 30_000;
+  }
+
+  /**
+   * 记录“向前插入历史”前的视口快照。
+   *
+   * 只用 scrollTop/scrollHeight 不够：异步 Markdown 高度变化会让高度差失效。
+   * 这里同时记住视口首条消息及其相对列表顶部的位置，插入后优先按元素恢复。
+   */
+  function capturePrependAnchor() {
+    if (!messagesElement) return null;
+    const target = firstVisibleChild();
+    return {
+      scrollTop: messagesElement.scrollTop,
+      height: messagesElement.scrollHeight,
+      element: target ? target.element : null,
+      offset: target ? target.offset : 0
+    };
+  }
+
+  /**
+   * 前插完成后恢复视口。
+   *
+   * - 先按内容高度差补偿，保证前插的消息不会把当前视口推走；
+   * - 请求期间用户自己滚动过时，只做高度补偿，不用旧锚点把用户拉回去；
+   * - 用户没滚动且锚点仍在 DOM 中时，再按锚点相对位置修正渲染误差，
+   *   并把锚点交给后续异步高度恢复使用。
+   */
+  function restorePrependAnchor(snapshot) {
+    if (!messagesElement || !snapshot) return;
+    const currentTop = messagesElement.scrollTop;
+    const userMoved = Math.abs(currentTop - snapshot.scrollTop) > 1;
+    const heightDelta = messagesElement.scrollHeight - snapshot.height;
+    if (heightDelta) messagesElement.scrollTop = currentTop + heightDelta;
+    if (!userMoved && snapshot.element && snapshot.element.isConnected) {
+      const listTop = messagesElement.getBoundingClientRect().top;
+      const drift = snapshot.element.getBoundingClientRect().top - listTop - snapshot.offset;
+      if (Math.abs(drift) >= 0.5 && Math.abs(drift) <= SCROLL_ANCHOR_MAX_SHIFT_PX) {
+        messagesElement.scrollTop += drift;
+      }
+      anchorElement = snapshot.element;
+      anchorOffset = snapshot.offset;
+      anchorUntil = performance.now() + 30_000;
+    }
+    markProgrammatic();
   }
 
   /** 滚动事件里每帧最多重算一次锚点，避免 200 条消息时每个事件都遍历布局。 */
@@ -560,6 +607,8 @@ const scrollController = (function () {
     adjustScroll: adjustScroll,
     captureAnchor: captureAnchor,
     restoreAnchor: restoreAnchor,
+    capturePrependAnchor: capturePrependAnchor,
+    restorePrependAnchor: restorePrependAnchor,
     noteNewMessage: noteNewMessage,
     pinNow: pinNow,
     unpin: unpin,

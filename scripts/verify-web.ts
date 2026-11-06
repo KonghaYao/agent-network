@@ -1181,6 +1181,41 @@ async function mcpCallCount(page: Page, name: string): Promise<number> {
   )) as number;
 }
 
+/** 带 cursor 的历史请求 = “加载更早”；首屏不带 cursor。 */
+async function olderCursors(page: Page): Promise<string[]> {
+  return (await page.evaluate(`(() => {
+    return (window.__mcpCalls || []).filter(function (call) {
+      const args = call.body && call.body.params ? call.body.params.arguments : null;
+      return call.name === 'network_history_list' && args && args.cursor;
+    }).map(function (call) { return call.body.params.arguments.cursor; });
+  })()`)) as string[];
+}
+
+interface OlderUiState {
+  hidden: boolean;
+  disabled: boolean;
+  text: string;
+  statusText: string;
+  statusHidden: boolean;
+  pagerHidden: boolean;
+}
+
+async function olderUiState(page: Page): Promise<OlderUiState> {
+  return (await page.evaluate(`(() => {
+    const older = document.getElementById('older');
+    const status = document.getElementById('older-status');
+    const pager = document.getElementById('history-pager');
+    return {
+      hidden: Boolean(older && older.hidden),
+      disabled: Boolean(older && older.disabled),
+      text: older ? older.textContent : '',
+      statusText: status ? status.textContent : '',
+      statusHidden: Boolean(status && status.hidden),
+      pagerHidden: Boolean(pager && pager.hidden)
+    };
+  })()`)) as OlderUiState;
+}
+
 async function fileListCallCount(page: Page): Promise<number> {
   return mcpCallCount(page, 'network_room_file_list');
 }
@@ -5872,10 +5907,23 @@ async function main(): Promise<void> {
       await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
       checkEqual('添加成员弹窗打开', await page.locator('#members-modal').isVisible(), true);
       checkEqual(
+        '添加成员弹窗使用 dialog 语义',
+        await page.locator('#members-modal .modal-card').getAttribute('role'),
+        'dialog',
+      );
+      checkEqual(
+        '添加成员弹窗为模态',
+        await page.locator('#members-modal .modal-card').getAttribute('aria-modal'),
+        'true',
+      );
+      checkEqual('左栏标题为已在群', await page.locator('#members-current-title').textContent(), '已在群');
+      checkEqual('右栏标题为未在群', await page.locator('#members-candidates-title').textContent(), '未在群');
+      checkEqual(
         '当前成员列表显示 2 人',
         await page.locator('#members-current .member-roster-item').count(),
         2,
       );
+      checkEqual('左栏数量显示 2', await page.locator('#members-current-count').textContent(), '2');
       const rosterText = (await page.locator('#members-current').textContent()) ?? '';
       check(
         '当前成员显示名称、类型与群主',
@@ -5915,6 +5963,21 @@ async function main(): Promise<void> {
         await page.locator('#members-contacts input[type=checkbox]').count(),
         expectedCandidateCount,
       );
+      checkEqual(
+        '右栏数量与候选一致',
+        await page.locator('#members-contacts-count').textContent(),
+        String(expectedCandidateCount),
+      );
+      checkEqual('未选择时添加按钮禁用', await page.locator('#members-add').isDisabled(), true);
+      const duplicateCandidateIds = (await page.evaluate(
+        `Array.from(document.querySelectorAll('#members-contacts input[type=checkbox]'))
+          .map(function (input) { return input.value; })`,
+      )) as string[];
+      checkEqual(
+        '右侧候选无重复 actor',
+        new Set(duplicateCandidateIds).size,
+        duplicateCandidateIds.length,
+      );
       const contactsCallsAfter = await mcpCallCount(page, 'network_contacts_list');
       check(
         '好友列表读取至少两页',
@@ -5927,9 +5990,65 @@ async function main(): Promise<void> {
         .filter({ hasText: agentC.name });
       checkEqual('候选好友包含未入群好友', await candidate.count(), 1);
       await candidate.locator('input').check();
+      checkEqual('选中候选显示已选 1 人', await page.locator('#members-selection').textContent(), '已选 1 人');
+      check(
+        '选中候选有高亮态',
+        ((await candidate.getAttribute('class')) ?? '').includes('selected'),
+      );
+      checkEqual('选中后添加按钮可用', await page.locator('#members-add').isDisabled(), false);
+      let releaseMembers: (() => void) | null = null;
+      let membersRouteSettled = false;
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_room_members_update') {
+          await route.continue();
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          releaseMembers = resolve;
+        });
+        try {
+          await route.continue();
+        } finally {
+          membersRouteSettled = true;
+        }
+      });
       await page.locator('#members-add').click();
+      await waitUntil(async () => releaseMembers !== null, '添加请求进入等待', 5_000);
+      checkEqual('添加中按钮禁用', await page.locator('#members-add').isDisabled(), true);
+      checkEqual(
+        '添加中显示 loading',
+        await page.locator('#members-add').textContent(),
+        '正在添加…',
+      );
+      releaseMembers!();
       await waitForText(page, '#subtitle', '3 人');
-      checkEqual('添加成功后弹窗关闭', await page.locator('#members-modal').isHidden(), true);
+      await waitUntil(async () => membersRouteSettled, '添加请求完成', 5_000);
+      await page.unroute('**/mcp');
+      checkEqual('添加成功后弹窗保持打开', await page.locator('#members-modal').isVisible(), true);
+      checkEqual(
+        '左栏数量更新为 3',
+        await page.locator('#members-current-count').textContent(),
+        '3',
+      );
+      check(
+        '新成员出现在左栏',
+        ((await page.locator('#members-current').textContent()) ?? '').includes(agentC.name),
+      );
+      checkEqual(
+        '新成员从右栏消失',
+        await page
+          .locator('#members-contacts .contact-choice')
+          .filter({ hasText: agentC.name })
+          .count(),
+        0,
+      );
+      checkEqual(
+        '添加成功后清空选择',
+        await page.locator('#members-selection').textContent(),
+        '未选择',
+      );
+      checkEqual('添加成功后按钮再次禁用', await page.locator('#members-add').isDisabled(), true);
       await waitUntil(
         async () => (await mcpCallCount(page, 'network_room_get')) > roomGetBefore,
         '添加成员后重新读取房间',
@@ -5937,8 +6056,6 @@ async function main(): Promise<void> {
       );
       check('添加成员后刷新 network_room_get', true);
 
-      await page.locator('#add-members').click();
-      await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
       checkEqual(
         '当前成员列表更新为 3 人',
         await page.locator('#members-current .member-roster-item').count(),
@@ -5973,7 +6090,37 @@ async function main(): Promise<void> {
         '重复添加显示可读错误',
         ((await page.locator('#members-error').textContent()) ?? '').includes(data.agentB.name),
       );
+      checkEqual(
+        '重复添加失败保留选择',
+        await duplicateCandidate.locator('input').isChecked(),
+        true,
+      );
       await page.locator('#members-cancel').click();
+
+      const updateCallsBeforeClose = await mcpCallCount(page, 'network_room_members_update');
+      await page.locator('#add-members').click();
+      await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
+      await page.locator('#members-close').click();
+      checkEqual('关闭按钮收起添加成员弹窗', await page.locator('#members-modal').isHidden(), true);
+      await page.locator('#add-members').click();
+      await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
+      await page.keyboard.press('Escape');
+      checkEqual('Esc 收起添加成员弹窗', await page.locator('#members-modal').isHidden(), true);
+      checkEqual(
+        'Esc 关闭后焦点回到添加成员入口',
+        await page.evaluate(`document.activeElement ? document.activeElement.id : ''`),
+        'add-members',
+      );
+      await page.locator('#add-members').click();
+      await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
+      const membersBox = await page.locator('#members-modal').boundingBox();
+      await page.mouse.click((membersBox?.x ?? 0) + 3, (membersBox?.y ?? 0) + 3);
+      checkEqual('点击遮罩收起添加成员弹窗', await page.locator('#members-modal').isHidden(), true);
+      checkEqual(
+        '关闭弹窗不会误提交添加',
+        await mcpCallCount(page, 'network_room_members_update'),
+        updateCallsBeforeClose,
+      );
 
       await page.route('**/mcp', async (route) => {
         const request = route.request();
@@ -6006,14 +6153,23 @@ async function main(): Promise<void> {
       });
       await page.locator('#add-members').click();
       await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
-      await page
+      const failureCandidate = page
         .locator('#members-contacts .contact-choice')
-        .filter({ hasText: '分页好友 050' })
-        .locator('input')
-        .check();
+        .filter({ hasText: '分页好友 050' });
+      await failureCandidate.locator('input').check();
       await page.locator('#members-add').click();
       await waitForText(page, '#members-error', '上限');
       check('成员超限显示可读错误', true);
+      checkEqual(
+        '添加失败保留已选候选',
+        await failureCandidate.locator('input').isChecked(),
+        true,
+      );
+      checkEqual(
+        '添加失败后弹窗保持打开',
+        await page.locator('#members-modal').isVisible(),
+        true,
+      );
       await page.unroute('**/mcp');
       await page.locator('#members-cancel').click();
       await context.close();
@@ -6041,6 +6197,15 @@ async function main(): Promise<void> {
         '非 owner 不显示好友多选',
         await page.locator('#members-contacts input[type=checkbox]').count(),
         0,
+      );
+      check(
+        '非 owner 右栏显示空态说明',
+        ((await page.locator('#members-contacts').textContent()) ?? '').includes('只有群 owner'),
+      );
+      checkEqual(
+        '非 owner 左栏仍显示成员数',
+        await page.locator('#members-current-count').textContent(),
+        String(await page.locator('#members-current .member-roster-item').count()),
       );
       await context.close();
     }
@@ -6095,7 +6260,50 @@ async function main(): Promise<void> {
       await page.locator('#members-add').click();
       await waitForText(page, '#subtitle', '4 人');
       check('390px 添加成员后成员数更新', true);
-      checkEqual('390px 添加成功后弹窗关闭', await page.locator('#members-modal').isHidden(), true);
+      checkEqual('390px 添加成功后弹窗保持打开', await page.locator('#members-modal').isVisible(), true);
+      checkEqual(
+        '390px 添加成功后左栏更新为 4 人',
+        await page.locator('#members-current-count').textContent(),
+        '4',
+      );
+      checkEqual(
+        '390px 添加成功后候选从右栏移除',
+        await page
+          .locator('#members-contacts .contact-choice')
+          .filter({ hasText: '分页好友 060' })
+          .count(),
+        0,
+      );
+      await page.emulateMedia({ colorScheme: 'dark' });
+      const memberDark = (await page.evaluate(`(() => {
+        const card = document.querySelector('#members-modal .members-card');
+        const column = document.querySelector('#members-modal .members-column');
+        if (!card || !column) return null;
+        const cardStyle = getComputedStyle(card);
+        return {
+          color: cardStyle.color,
+          background: cardStyle.backgroundColor,
+          columnBackground: getComputedStyle(column).backgroundColor
+        };
+      })()`)) as {
+        color: string;
+        background: string;
+        columnBackground: string;
+      } | null;
+      check(
+        '390px 暗色添加成员弹窗使用暗色面板',
+        Boolean(memberDark) &&
+          relativeLuminance(memberDark!.background) < 0.2 &&
+          relativeLuminance(memberDark!.columnBackground) < 0.2,
+        memberDark,
+      );
+      check(
+        '390px 暗色添加成员文字可读',
+        Boolean(memberDark) && contrastRatio(memberDark!.color, memberDark!.background) >= 4.5,
+        memberDark,
+      );
+      await page.emulateMedia({ colorScheme: 'light' });
+      await page.locator('#members-cancel').click();
       await context.close();
     }
 
@@ -9836,6 +10044,11 @@ async function main(): Promise<void> {
         async () => (await page.locator('#composer-files .composer-file').count()) === 2,
         '附件上传生成两个 chip',
       );
+      // chip 数量在第二个文件仍上传时就可能达标；aria-busy=false 表示队列与 bind 都已结束。
+      await waitUntil(
+        async () => (await page.locator('#attach-file').getAttribute('aria-busy')) === 'false',
+        '附件上传完成清除 aria-busy',
+      );
       const attachDraft = await page.locator('#body').inputValue();
       checkEqual('附件上传不改写已有草稿', attachDraft, '附件草稿');
       check('附件上传不在正文插入 URL', !attachDraft.includes('/f/'));
@@ -13111,7 +13324,428 @@ async function main(): Promise<void> {
         !olderStill.hidden && Math.abs(olderStill.top - olderStill.bodyTop - 8) <= 2,
         olderStill,
       );
+
+      // 14f-1. 加载更早：单飞、加载态、锚点保持、到底提示与停止请求。
+      const olderAnchor = olderContext.page
+        .locator('#messages .msg')
+        .filter({ hasText: '滚动锚点 53' })
+        .last();
+      await olderAnchor.evaluate((node) => node.scrollIntoView({ block: 'start' }));
+      await sleep(300);
+      const olderAnchorId = (await olderAnchor.getAttribute('data-message-id')) ?? '';
+      const olderAnchorOffsetBefore = await messageOffset(olderContext.page, olderAnchorId);
+      const markdownCountBefore = await olderContext.page.locator('#messages .msg-markdown').count();
+      let releaseOlder: (() => void) | null = null;
+      let olderRouteHits = 0;
+      await olderContext.page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_history_list') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as {
+          params?: { arguments?: { cursor?: string | null } };
+        } | null;
+        if (!body?.params?.arguments?.cursor) {
+          await route.continue();
+          return;
+        }
+        olderRouteHits += 1;
+        await new Promise<void>((resolve) => {
+          releaseOlder = resolve;
+        });
+        await route.continue();
+      });
+      await olderContext.page.evaluate(`(() => {
+        const button = document.getElementById('older');
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      })()`);
+      await waitUntil(async () => olderRouteHits >= 1, '加载更早请求进入等待', 5_000);
+      await sleep(150);
+      const olderDuring = await olderUiState(olderContext.page);
+      checkEqual('加载更早期间按钮禁用', olderDuring.disabled, true);
+      checkEqual('加载更早期间显示 loading', olderDuring.text, '正在加载…');
+      checkEqual(
+        '重复触发加载更早只发一个请求',
+        (await olderCursors(olderContext.page)).length,
+        1,
+      );
+      releaseOlder!();
+      await waitUntil(
+        async () => (await olderContext.page.locator('#messages .msg').count()) >= 60,
+        '加载更早加载全部历史',
+        15_000,
+      );
+      await olderContext.page.unroute('**/mcp');
+      await waitUntil(
+        async () =>
+          (await olderContext.page.locator('#messages .msg-markdown').count()) >
+          markdownCountBefore,
+        '更早消息 Markdown 升级',
+        20_000,
+      );
+      await sleep(400);
+      const olderAnchorOffsetAfter = await messageOffset(olderContext.page, olderAnchorId);
+      check(
+        '加载更早前后锚点偏移保持 <=24',
+        olderAnchorOffsetBefore !== null &&
+          olderAnchorOffsetAfter !== null &&
+          Math.abs(olderAnchorOffsetAfter - olderAnchorOffsetBefore) <= 24,
+        { olderAnchorOffsetBefore, olderAnchorOffsetAfter },
+      );
+      const olderEndedState = await olderUiState(olderContext.page);
+      checkEqual('到底后隐藏加载更早按钮', olderEndedState.hidden, true);
+      checkEqual('到底显示没有更早的消息', olderEndedState.statusText, '没有更早的消息');
+      checkEqual('到底提示可见', olderEndedState.statusHidden, false);
+      const olderCallsAtEnd = (await olderCursors(olderContext.page)).length;
+      await olderContext.page.evaluate(`(() => {
+        const button = document.getElementById('older');
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      })()`);
+      await sleep(400);
+      checkEqual(
+        '到底后不再请求更早消息',
+        (await olderCursors(olderContext.page)).length,
+        olderCallsAtEnd,
+      );
+      checkEqual(
+        '到底后提示保持可见',
+        (await olderUiState(olderContext.page)).statusText,
+        '没有更早的消息',
+      );
+
+      // 14f-1b. 到底后新消息刷新不得恢复游标；缓存房间往返仍保持到底。
+      await olderContext.page.evaluate(
+        `document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight`,
+      );
+      await sleep(150);
+      await waitForBottom(olderContext.page, '到底后回到底部');
+      const olderCountBeforeNew = await messageCount(olderContext.page);
+      await sendRoomMessage(data.agentAToken, scrollRoomId, '到底后刷新新消息');
+      await waitForText(olderContext.page, '#messages', '到底后刷新新消息', 15_000);
+      await sleep(400);
+      check(
+        '到底后新消息刷新追加消息',
+        (await messageCount(olderContext.page)) > olderCountBeforeNew,
+        { olderCountBeforeNew, olderCountAfter: await messageCount(olderContext.page) },
+      );
+      const olderAfterRefresh = await olderUiState(olderContext.page);
+      checkEqual('到底后新消息刷新仍隐藏加载更早', olderAfterRefresh.hidden, true);
+      checkEqual(
+        '到底后新消息刷新仍显示到底提示',
+        olderAfterRefresh.statusText,
+        '没有更早的消息',
+      );
+      checkEqual(
+        '到底后新消息刷新不新增更早请求',
+        (await olderCursors(olderContext.page)).length,
+        olderCallsAtEnd,
+      );
+
+      // 切到从未加载过的长会话：最新页仍能继续加载更早。
+      await olderContext.page.locator(roomLink(longRoomId)).click();
+      await waitRoom(olderContext.page, longRoomId, '长会话滚动群');
+      await waitUntil(
+        async () => !(await olderUiState(olderContext.page)).hidden,
+        '新房间显示加载更早',
+        15_000,
+      );
+      const newRoomOlder = await olderUiState(olderContext.page);
+      checkEqual('新房间显示加载更早按钮', newRoomOlder.hidden, false);
+      checkEqual('新房间按钮文案正常', newRoomOlder.text, '加载更早');
+      checkEqual('新房间按钮可点击', newRoomOlder.disabled, false);
+      checkEqual('新房间不显示到底提示', newRoomOlder.statusHidden, true);
+
+      // 在长会话中给旧房间发消息，再切回：刷新完成后仍应保持到底。
+      await sendRoomMessage(data.agentAToken, scrollRoomId, '切回前的到底新消息');
+      await olderContext.page.locator(roomLink(scrollRoomId)).click();
+      await waitRoom(olderContext.page, scrollRoomId, '滚动进入群');
+      await waitForText(olderContext.page, '#messages', '切回前的到底新消息', 15_000);
+      await sleep(400);
+      const olderAfterSwitchBack = await olderUiState(olderContext.page);
+      checkEqual('切回已到底房间后仍隐藏加载更早', olderAfterSwitchBack.hidden, true);
+      checkEqual(
+        '切回已到底房间后仍显示到底提示',
+        olderAfterSwitchBack.statusText,
+        '没有更早的消息',
+      );
+      checkEqual(
+        '切回已到底房间后不新增更早请求',
+        (await olderCursors(olderContext.page)).length,
+        olderCallsAtEnd,
+      );
       await olderContext.context.close();
+
+      // 14f-2. 390px：加载更早同样保持锚点且不横向溢出。
+      const mobileOlder = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await mobileOlder.page.goto(`${server.base}/c/${scrollRoomId}`);
+      await waitRoom(mobileOlder.page, scrollRoomId, '滚动进入群');
+      const mobileOlderAnchor = mobileOlder.page
+        .locator('#messages .msg')
+        .filter({ hasText: '滚动锚点 53' })
+        .last();
+      await mobileOlderAnchor.evaluate((node) => node.scrollIntoView({ block: 'start' }));
+      await sleep(300);
+      const mobileAnchorId = (await mobileOlderAnchor.getAttribute('data-message-id')) ?? '';
+      const mobileAnchorBefore = await messageOffset(mobileOlder.page, mobileAnchorId);
+      await mobileOlder.page.locator('#older').click();
+      await waitUntil(
+        async () => (await mobileOlder.page.locator('#messages .msg').count()) >= 60,
+        '390px 加载更早完成',
+        15_000,
+      );
+      await sleep(500);
+      const mobileAnchorAfter = await messageOffset(mobileOlder.page, mobileAnchorId);
+      check(
+        '390px 加载更早不跳动',
+        mobileAnchorBefore !== null &&
+          mobileAnchorAfter !== null &&
+          Math.abs(mobileAnchorAfter - mobileAnchorBefore) <= 24,
+        { mobileAnchorBefore, mobileAnchorAfter },
+      );
+      const mobileOlderMetrics = (await mobileOlder.page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        return { scroll: node.scrollWidth, client: node.clientWidth };
+      })()`)) as { scroll: number; client: number };
+      check(
+        '390px 历史消息不横向溢出',
+        mobileOlderMetrics.scroll <= mobileOlderMetrics.client + 1,
+        mobileOlderMetrics,
+      );
+      await mobileOlder.context.close();
+
+      // 14f-3. 停在底部预加载更早：新消息仍置底、不出现“回到最新”。
+      const bottomOlder = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      await bottomOlder.page.goto(`${server.base}/c/${scrollRoomId}`);
+      await waitRoom(bottomOlder.page, scrollRoomId, '滚动进入群');
+      await waitForBottom(bottomOlder.page, '底部预加载前在底部', 10_000);
+      await bottomOlder.page.locator('#older').click();
+      await waitUntil(
+        async () => (await bottomOlder.page.locator('#messages .msg').count()) >= 60,
+        '底部预加载更早完成',
+        15_000,
+      );
+      await sleep(400);
+      check(
+        '底部预加载后仍保持置底',
+        (await bottomGap(bottomOlder.page)) <= 2,
+        { gap: await bottomGap(bottomOlder.page) },
+      );
+      const markReadBeforeNew = await markReadCalls(bottomOlder.page, scrollRoomId);
+      await sendRoomMessage(data.agentAToken, scrollRoomId, '底部预加载后的新消息');
+      await waitForText(bottomOlder.page, '#messages', '底部预加载后的新消息');
+      await sleep(500);
+      check(
+        '底部预加载后新消息继续置底',
+        (await bottomGap(bottomOlder.page)) <= 8,
+        { gap: await bottomGap(bottomOlder.page) },
+      );
+      checkEqual(
+        '底部预加载后不显示回到最新',
+        await bottomOlder.page.locator('#jump-latest').isHidden(),
+        true,
+      );
+      check(
+        '底部预加载后新消息仍标记已读',
+        (await markReadCalls(bottomOlder.page, scrollRoomId)) > markReadBeforeNew,
+      );
+      await bottomOlder.context.close();
+
+      // 14f-4. 失败可重试：失败不丢已有消息，重试成功后清除错误。
+      const retryContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      await retryContext.page.goto(`${server.base}/c/${longRoomId}`);
+      await waitRoom(retryContext.page, longRoomId, '长会话滚动群');
+      await waitForBottom(retryContext.page, '重试场景进入到底', 15_000);
+      const retryBefore = await messageCount(retryContext.page);
+      let failedOlderOnce = false;
+      await retryContext.page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_history_list') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as {
+          id?: string;
+          params?: { arguments?: { cursor?: string | null } };
+        } | null;
+        if (!failedOlderOnce && body?.params?.arguments?.cursor) {
+          failedOlderOnce = true;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: body?.id ?? null,
+              result: {
+                isError: true,
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      code: 'INTERNAL',
+                      message: '注入的加载更早失败',
+                    }),
+                  },
+                ],
+              },
+            }),
+          });
+          return;
+        }
+        await route.continue();
+      });
+      await retryContext.page.locator('#older').click();
+      await waitForText(retryContext.page, '#older-status', '加载更早失败');
+      checkEqual('失败保留已有消息', await messageCount(retryContext.page), retryBefore);
+      checkEqual(
+        '失败后按钮改为重试',
+        (await olderUiState(retryContext.page)).text,
+        '重试加载更早',
+      );
+      checkEqual(
+        '失败后仍可继续加载',
+        (await olderUiState(retryContext.page)).disabled,
+        false,
+      );
+      await retryContext.page.locator('#older').click();
+      await waitUntil(
+        async () => (await messageCount(retryContext.page)) > retryBefore,
+        '重试加载更早成功',
+        15_000,
+      );
+      const retryState = await olderUiState(retryContext.page);
+      checkEqual('重试成功后隐藏错误', retryState.statusHidden, true);
+      checkEqual('重试成功后按钮恢复', retryState.text, '加载更早');
+      const stuckCallsBefore = (await olderCursors(retryContext.page)).length;
+      let stuckServed = false;
+      await retryContext.page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_history_list') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as {
+          id?: string;
+          params?: { arguments?: { cursor?: string | null } };
+        } | null;
+        const cursor = body?.params?.arguments?.cursor;
+        if (!cursor || stuckServed) {
+          await route.continue();
+          return;
+        }
+        stuckServed = true;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              structuredContent: {
+                items: [],
+                has_more: true,
+                next_cursor: cursor,
+              },
+            },
+          }),
+        });
+      });
+      await retryContext.page.locator('#older').click();
+      await waitForText(retryContext.page, '#older-status', '没有更早的消息');
+      const stuckState = await olderUiState(retryContext.page);
+      checkEqual('游标不前进时停止请求', stuckState.hidden, true);
+      checkEqual('游标不前进时显示到底提示', stuckState.statusText, '没有更早的消息');
+      checkEqual(
+        '游标不前进时只请求一次',
+        (await olderCursors(retryContext.page)).length,
+        stuckCallsBefore + 1,
+      );
+      await retryContext.page.evaluate(`(() => {
+        document.getElementById('older').dispatchEvent(
+          new MouseEvent('click', { bubbles: true })
+        );
+      })()`);
+      await sleep(400);
+      checkEqual(
+        '游标不前进后不再请求',
+        (await olderCursors(retryContext.page)).length,
+        stuckCallsBefore + 1,
+      );
+      await retryContext.page.unroute('**/mcp');
+      await retryContext.context.close();
+
+      // 14f-5. 切换房间：进行中的请求不得写入新房间，分页与滚动状态重置。
+      const switchRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '分页重置群',
+        members: [data.agentA.actor_id],
+      });
+      await sendRoomMessage(data.agentAToken, switchRoom.room.room_id, '分页重置群消息');
+      const switchContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      await switchContext.page.goto(`${server.base}/c/${longRoomId}`);
+      await waitRoom(switchContext.page, longRoomId, '长会话滚动群');
+      let releaseSwitch: (() => void) | null = null;
+      let switchRequestStarted = false;
+      await switchContext.page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_history_list') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as {
+          params?: { arguments?: { cursor?: string | null } };
+        } | null;
+        if (!body?.params?.arguments?.cursor) {
+          await route.continue();
+          return;
+        }
+        switchRequestStarted = true;
+        await new Promise<void>((resolve) => {
+          releaseSwitch = resolve;
+        });
+        await route.continue();
+      });
+      await switchContext.page.locator('#older').click();
+      await waitUntil(async () => switchRequestStarted, '切换房间前加载更早已发出', 5_000);
+      await switchContext.page.locator(roomLink(switchRoom.room.room_id)).click();
+      await waitRoom(switchContext.page, switchRoom.room.room_id, '分页重置群');
+      releaseSwitch!();
+      await sleep(800);
+      const switchedText = (await switchContext.page.locator('#messages').textContent()) ?? '';
+      check('切换房间后只显示新房间消息', switchedText.includes('分页重置群消息'));
+      check('切换房间后不串入旧房间历史', !switchedText.includes('长消息 1'));
+      const switchedUi = await olderUiState(switchContext.page);
+      checkEqual('切换房间后隐藏加载更早', switchedUi.hidden, true);
+      checkEqual('切换房间后清除到底提示', switchedUi.statusHidden, true);
+      check(
+        '切换房间后回到新房间底部',
+        (await bottomGap(switchContext.page)) <= 2,
+        { gap: await bottomGap(switchContext.page) },
+      );
+      await switchContext.page.unroute('**/mcp');
+      await switchContext.context.close();
 
       // 14g. 已展开的长消息在粘底刷新与上翻冻结/回到底部后都保持展开。
       const expandMarker = '展开保留标记';

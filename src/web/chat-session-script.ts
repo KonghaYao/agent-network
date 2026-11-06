@@ -25,6 +25,9 @@ let room = null;
 let members = new Map();
 let nextOlder = null;
 let currentItems = [];
+let olderLoading = false;
+let olderEnded = false;
+let olderError = '';
 
 function isAbortError(error) {
   return Boolean(error) && (error.name === 'AbortError' || error.code === 'ABORT_ERR');
@@ -32,6 +35,29 @@ function isAbortError(error) {
 
 function isActiveRoom(roomId, epoch) {
   return activeRoomId === roomId && roomEpoch === epoch;
+}
+
+/** 加载更早按钮、加载态、失败重试与到底提示共用同一处状态收口。 */
+function updateOlderAffordance() {
+  const hasOlder = Boolean(nextOlder);
+  if (olderButton) {
+    olderButton.hidden = !hasOlder;
+    olderButton.disabled = olderLoading;
+    olderButton.textContent = olderLoading
+      ? '正在加载…'
+      : (olderError ? '重试加载更早' : '加载更早');
+    olderButton.setAttribute('aria-busy', olderLoading ? 'true' : 'false');
+  }
+  if (olderStatusElement) {
+    const message = olderLoading
+      ? ''
+      : (olderError || (olderEnded && !hasOlder ? '没有更早的消息' : ''));
+    olderStatusElement.textContent = message;
+    olderStatusElement.hidden = !message;
+  }
+  if (historyPagerElement) {
+    historyPagerElement.hidden = !hasOlder && !olderEnded && !olderError;
+  }
 }
 
 function sessionSignal() {
@@ -70,6 +96,7 @@ function cacheRoomState(roomId, patch) {
     members: [],
     items: [],
     nextOlder: null,
+    olderEnded: false,
     scrollTop: 0,
     lastMessage: null
   };
@@ -78,6 +105,7 @@ function cacheRoomState(roomId, patch) {
     if ('members' in patch) cache.members = patch.members;
     if ('items' in patch) cache.items = patch.items.slice();
     if ('nextOlder' in patch) cache.nextOlder = patch.nextOlder;
+    if ('olderEnded' in patch) cache.olderEnded = Boolean(patch.olderEnded);
     if ('scrollTop' in patch) cache.scrollTop = patch.scrollTop;
     if ('lastMessage' in patch) cache.lastMessage = patch.lastMessage;
   }
@@ -93,6 +121,7 @@ function snapshotActiveRoom() {
     members: Array.from(members.values()),
     items: currentItems.slice(),
     nextOlder: nextOlder,
+    olderEnded: olderEnded,
     scrollTop: messagesElement ? messagesElement.scrollTop : 0
   });
 }
@@ -255,8 +284,12 @@ function applyCachedRoom(cache) {
     return [member.actor_id, member];
   }));
   currentItems = (cache.items || []).slice();
-  nextOlder = cache.nextOlder || null;
-  if (olderButton) olderButton.hidden = !nextOlder;
+  // 到底状态属于房间自身：切走再切回时不能因为重新取最新页而恢复按钮。
+  olderEnded = Boolean(cache.olderEnded);
+  nextOlder = olderEnded ? null : (cache.nextOlder || null);
+  olderLoading = false;
+  olderError = '';
+  updateOlderAffordance();
   applyRoomHeader();
   renderMessageList(currentItems);
   // 缓存只用于立即绘制；进入会话一律看最新消息，不再恢复旧 scrollTop。
@@ -299,8 +332,13 @@ function applyLatestPage(result) {
   });
   currentItems = mergeTimelineItems(currentItems, result.items);
   // 已加载更早页时保留原游标；否则让最新页决定是否还能继续往前翻。
-  if (!hasLoadedOlder || !nextOlder) nextOlder = result.nextOlder;
-  if (olderButton) olderButton.hidden = !nextOlder;
+  // 已到底后最新页不得再写回游标，否则新消息刷新会让“加载更早”复活。
+  if (olderEnded) {
+    nextOlder = null;
+  } else if (!hasLoadedOlder || !nextOlder) {
+    nextOlder = result.nextOlder;
+  }
+  updateOlderAffordance();
   renderMessageList(currentItems);
   scrollController.clearPinNextApply();
   scrollController.noteContentChanged();
@@ -433,6 +471,7 @@ async function doRefresh(roomId, epoch, forceScroll) {
     members: Array.from(members.values()),
     items: currentItems.slice(),
     nextOlder: nextOlder,
+    olderEnded: olderEnded,
     scrollTop: messagesElement ? messagesElement.scrollTop : 0,
     lastMessage: lastMessage
   });
@@ -508,24 +547,27 @@ function reconcilePrependSeam(oldFirstItem, olderLastItem) {
 
 async function loadOlder() {
   const roomId = activeRoomId;
-  if (!roomId || !nextOlder) return;
+  // 单飞：按钮禁用只是 UI 保护，重复事件/键盘仍可能再次触发。
+  if (!roomId || !nextOlder || olderLoading) return;
   const epoch = roomEpoch;
+  const cursor = nextOlder;
   const humanTimeline = Boolean(identity && identity.kind === 'human');
-  // 加载更早是明确的离底阅读：立即停止跟随，后续异步高度不得把用户拉回底部。
-  scrollController.unpin();
-  scrollController.captureAnchor();
-  if (olderButton) olderButton.disabled = true;
+  // 只有已离底时才需要取消跟随；停在底部点击只预加载，不破坏置底与已读。
+  if (!scrollController.isPinned()) scrollController.unpin();
+  const anchorSnapshot = scrollController.capturePrependAnchor();
+  olderLoading = true;
+  olderError = '';
+  updateOlderAffordance();
   try {
     const args = {
       room_id: roomId,
       direction: 'before',
-      cursor: nextOlder,
+      cursor: cursor,
       limit: 50
     };
     if (humanTimeline) args.view = 'timeline';
     const page = await callTool('network_history_list', args, undefined, sessionSignal());
     if (!isActiveRoom(roomId, epoch)) return;
-    const previousHeight = messagesElement.scrollHeight;
     const oldFirstItem = currentItems[0] || null;
     const rawItems = humanTimeline ? (page.timeline_items || []) : page.items;
     const merged = mergeTimelineItems(currentItems, rawItems.slice().reverse());
@@ -538,26 +580,37 @@ async function loadOlder() {
       appendHistory(fragment, olderItems);
       messagesElement.prepend(fragment);
       reconcilePrependSeam(oldFirstItem, olderItems[olderItems.length - 1]);
+      scrollController.restorePrependAnchor(anchorSnapshot);
     }
-    scrollController.adjustScroll(messagesElement.scrollHeight - previousHeight);
-    scrollController.restoreAnchor();
     currentItems = merged;
-    nextOlder = humanTimeline
+    const nextCursor = humanTimeline
       ? (page.timeline_has_more ? page.timeline_next_cursor : null)
       : (page.has_more ? page.next_cursor : null);
-    if (olderButton) olderButton.hidden = !nextOlder;
+    // 游标不前进说明这一页无法再向前推进；停止请求并给出到底提示。
+    if (!nextCursor || nextCursor === cursor) {
+      nextOlder = null;
+      olderEnded = true;
+    } else {
+      nextOlder = nextCursor;
+      olderEnded = false;
+    }
+    olderError = '';
     scrollController.noteContentChanged();
     cacheRoomState(roomId, {
       items: currentItems,
       nextOlder: nextOlder,
-      scrollTop: messagesElement.scrollTop
+      olderEnded: olderEnded,
+      scrollTop: messagesElement ? messagesElement.scrollTop : 0
     });
   } catch (error) {
     if (!isAbortError(error) && isActiveRoom(roomId, epoch)) {
-      statusElement.textContent = '加载更早消息失败：' + error.message;
+      olderError = '加载更早失败：' + (error && error.message ? error.message : error);
     }
   } finally {
-    if (isActiveRoom(roomId, epoch) && olderButton) olderButton.disabled = false;
+    if (isActiveRoom(roomId, epoch)) {
+      olderLoading = false;
+      updateOlderAffordance();
+    }
   }
 }
 
@@ -605,6 +658,7 @@ function seedRoomCacheFromDetail(detail) {
     members: detail.members,
     items: [],
     nextOlder: null,
+    olderEnded: false,
     scrollTop: 0,
     lastMessage: entry.last_message || null
   });
@@ -649,6 +703,10 @@ async function openRoom(roomId, options) {
   members = new Map();
   nextOlder = null;
   currentItems = [];
+  olderLoading = false;
+  olderEnded = false;
+  olderError = '';
+  updateOlderAffordance();
   resetRoomTasks();
   renderRooms();
   clearChatError();
@@ -707,6 +765,10 @@ function closeRoomView() {
   members = new Map();
   nextOlder = null;
   currentItems = [];
+  olderLoading = false;
+  olderEnded = false;
+  olderError = '';
+  updateOlderAffordance();
   resetRoomTasks();
   setChatLoading(false);
   if (chatErrorElement) chatErrorElement.hidden = true;

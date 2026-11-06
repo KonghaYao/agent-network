@@ -85,6 +85,8 @@ const messagesElement = document.getElementById('messages');
 const jumpLatestButton = document.getElementById('jump-latest');
 const jumpLatestLabel = document.getElementById('jump-latest-label');
 const olderButton = document.getElementById('older');
+const olderStatusElement = document.getElementById('older-status');
+const historyPagerElement = document.getElementById('history-pager');
 const composer = document.getElementById('composer');
 const bodyInput = document.getElementById('body');
 const sendButton = document.getElementById('send');
@@ -692,7 +694,6 @@ bodyInput.addEventListener('keydown', function (event) {
 
 olderButton.addEventListener('click', function () {
   if (!activeRoomId) return;
-  scrollController.unpin();
   loadOlder();
 });
 

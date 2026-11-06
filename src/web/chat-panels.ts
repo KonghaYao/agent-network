@@ -154,7 +154,10 @@ export function chatPane(): string {
       <div class="skeleton-row mine"><span class="skeleton-avatar"></span><span class="skeleton-bubble"></span></div>
       <div class="skeleton-row"><span class="skeleton-avatar"></span><span class="skeleton-bubble"></span></div>
     </div>
-    <button id="older" type="button" hidden>加载更早</button>
+    <div id="history-pager" class="history-pager" hidden>
+      <button id="older" type="button">加载更早</button>
+      <span id="older-status" class="history-status" role="status" aria-live="polite" hidden></span>
+    </div>
     <div id="chat-error" class="chat-error" role="alert" hidden>
       <p id="chat-error-text"></p>
       <div class="chat-error-actions">
@@ -231,22 +234,42 @@ export function groupDialog(): string {
 }
 
 /**
- * 群聊添加成员弹窗：上方只读展示当前成员，下方分页好友多选。
+ * 群聊添加成员弹窗：左右双栏，左侧只读展示当前成员，右侧多选好友候选。
  *
- * 只有群 owner 能提交；非 owner 打开时显示明确提示并禁用“添加”。
+ * 只有群 owner 能提交；非 owner 打开时右侧显示明确提示并禁用“添加”。
  * 好友列表在客户端排除自己与当前成员，服务端仍会再次校验所有权与好友关系。
  */
 export function membersDialog(): string {
   return `<div class="modal" id="members-modal" hidden>
-  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="members-modal-title">
-    <h2 id="members-modal-title">添加成员</h2>
+  <div class="modal-card members-card" role="dialog" aria-modal="true"
+    aria-labelledby="members-modal-title">
+    <header class="members-head">
+      <h2 id="members-modal-title">添加成员</h2>
+      <button class="members-close" id="members-close" type="button"
+        aria-label="关闭添加成员" title="关闭">×</button>
+    </header>
     <form id="members-form">
-      <p class="muted picker-label">当前成员</p>
-      <ul id="members-current" class="member-roster" aria-label="当前群成员"></ul>
-      <p class="muted picker-label">选择好友加入</p>
-      <div id="members-contacts" class="contact-list"></div>
-      <p id="members-error" class="form-error" role="status"></p>
-      <div class="row modal-actions">
+      <div class="members-columns">
+        <section class="members-column" aria-labelledby="members-current-title">
+          <header class="members-column-head">
+            <h3 id="members-current-title">已在群</h3>
+            <span id="members-current-count" class="members-count" aria-live="polite">0</span>
+          </header>
+          <ul id="members-current" class="member-roster" aria-label="当前群成员"></ul>
+          <p id="members-current-empty" class="members-empty" role="status" hidden>群里还没有成员</p>
+        </section>
+        <section class="members-column" aria-labelledby="members-candidates-title">
+          <header class="members-column-head">
+            <h3 id="members-candidates-title">未在群</h3>
+            <span id="members-contacts-count" class="members-count" aria-live="polite">0</span>
+          </header>
+          <div id="members-contacts" class="contact-list" aria-label="可添加的好友"></div>
+        </section>
+      </div>
+      <p id="members-error" class="form-error" role="status" aria-live="polite"></p>
+      <div class="row modal-actions members-actions">
+        <span id="members-selection" class="members-selection" role="status"
+          aria-live="polite">未选择</span>
         <button id="members-cancel" type="button">取消</button>
         <button class="primary" id="members-add" type="submit">添加</button>
       </div>
