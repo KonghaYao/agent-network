@@ -87,7 +87,8 @@ function presenceLabel(online) {
 
 /**
  * 会话列表圆形头像；群聊为 2×2 首字色块，避免所有群共用同一个字。
- * kind 为 agent 时优先匹配本地品牌图标，未命中保留首字/颜色 fallback。
+ * 非群聊优先匹配本地头像映射（品牌图标仅 Agent，用户头像按规则），
+ * 未命中保留首字/颜色 fallback。
  */
 function avatarElement(name, kind, className) {
   const element = document.createElement('span');
@@ -105,7 +106,7 @@ function avatarElement(name, kind, className) {
       cell.style.background = AVATAR_COLORS[index % AVATAR_COLORS.length];
       element.append(cell);
     }
-  } else if (kind !== 'agent' || !applyAgentAvatar(element, name)) {
+  } else if (!applyAgentAvatar(element, name, kind)) {
     element.textContent = firstChar(name);
     element.style.background = avatarColor(name);
   }
@@ -173,7 +174,9 @@ function updateAccount(me) {
   if (accountNameElement) accountNameElement.textContent = me.name || '未命名';
   if (accountAvatarElement) {
     accountAvatarElement.textContent = firstChar(me.name);
-    accountAvatarElement.style.background = avatarColor(me.name);
+    if (!applyAgentAvatar(accountAvatarElement, me.name, me.kind || 'human')) {
+      accountAvatarElement.style.background = avatarColor(me.name);
+    }
   }
   const renameButton = document.getElementById('account-rename');
   if (renameButton) renameButton.hidden = false;
@@ -199,6 +202,7 @@ function showLoggedOutHome() {
   );
   if (accountNameElement) accountNameElement.textContent = '未登录';
   if (accountAvatarElement) {
+    resetAgentAvatar(accountAvatarElement);
     accountAvatarElement.textContent = '?';
     accountAvatarElement.style.background = '';
   }

@@ -1239,11 +1239,19 @@ const AVATAR_ICON_FILES = [
 
 const TIBO_ICON_FILE = 'tibo.png';
 const TIBO_ICON_SRC = '/agent-icons/tibo.png';
+const POTETO_ICON_FILE = 'poteto.png';
+const POTETO_ICON_SRC = '/agent-icons/poteto.png';
+const KONGHAYAO_ICON_FILE = 'konghayao.png';
+const KONGHAYAO_ICON_SRC = '/agent-icons/konghayao.png';
 
 const AVATAR_MAPPINGS: [string, string | null][] = [
   ['Tibo Reset', TIBO_ICON_SRC],
   ['tibo-agent', TIBO_ICON_SRC],
   ['Agent Tibo', TIBO_ICON_SRC],
+  ['poteto', POTETO_ICON_SRC],
+  ['Poteto Agent', POTETO_ICON_SRC],
+  ['KonghaYao', KONGHAYAO_ICON_SRC],
+  ['konghayao', KONGHAYAO_ICON_SRC],
   ['Codex 测试', '/agent-icons/codex-color.svg'],
   ['Claude 测试员', '/agent-icons/claude-color.svg'],
   ['Gemini 2.5', '/agent-icons/gemini-color.svg'],
@@ -1342,6 +1350,33 @@ async function runAvatarAcceptance(
       tiboView.getUint32(20) === 192,
     `${tiboView.getUint32(16)}×${tiboView.getUint32(20)}`,
   );
+  for (const file of [POTETO_ICON_FILE, KONGHAYAO_ICON_FILE]) {
+    const response = await fetch(`${base}/agent-icons/${file}`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const localBytes = new Uint8Array(
+      await Bun.file(resolve(import.meta.dir, '../public/agent-icons', file)).arrayBuffer(),
+    );
+    checkEqual(`图标 ${file} HTTP 200`, response.status, 200);
+    checkEqual(`图标 ${file} content-type`, response.headers.get('content-type'), 'image/png');
+    check(
+      `图标 ${file} 字节与本地一致`,
+      bytes.length === localBytes.length &&
+        bytes.every((value, index) => value === localBytes[index]),
+      { remote: bytes.length, local: localBytes.length },
+    );
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    check(
+      `图标 ${file} 为 192×192 PNG`,
+      bytes.length > 24 &&
+        bytes[0] === 0x89 &&
+        bytes[1] === 0x50 &&
+        bytes[2] === 0x4e &&
+        bytes[3] === 0x47 &&
+        view.getUint32(16) === 192 &&
+        view.getUint32(20) === 192,
+      `${view.getUint32(16)}×${view.getUint32(20)}`,
+    );
+  }
   const licenseResponse = await fetch(`${base}/agent-icons/LICENSE`);
   const licenseText = await licenseResponse.text();
   check(
@@ -1362,6 +1397,13 @@ async function runAvatarAcceptance(
       attributionText.includes('不是来自 LobeHub Icons') &&
       attributionText.includes('不在 MIT'),
   );
+  check(
+    'ATTRIBUTION 标明 poteto.png 与 konghayao.png 为用户提供',
+    attributionText.includes('poteto.png') &&
+      attributionText.includes('konghayao.png') &&
+      attributionText.includes('KonghaYao') &&
+      attributionText.includes('用户提供'),
+  );
   checkEqual(
     '未知图标返回 404',
     (await fetch(`${base}/agent-icons/unknown.svg`)).status,
@@ -1377,6 +1419,17 @@ async function runAvatarAcceptance(
   const plain = await registerAvatarAgent(humanToken, '琶洲-dsh-dsh');
   const gemini = await registerAvatarAgent(humanToken, 'Gemini 候选');
   const tibo = await registerAvatarAgent(humanToken, 'Tibo Reset');
+  const poteto = await registerAvatarAgent(humanToken, 'poteto');
+  const kongToken = crypto.randomUUID();
+  const kong = await rawTool<Actor>(kongToken, 'network_register', {
+    request_id: requestId('avatar_reg'),
+    kind: 'human',
+    name: 'KonghaYao',
+  });
+  await rawTool(humanToken, 'network_contact_add', {
+    request_id: requestId('avatar_contact'),
+    actor_id: kong.actor_id,
+  });
   const codexRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
     request_id: requestId('avatar_room'),
     kind: 'direct',
@@ -1392,11 +1445,27 @@ async function runAvatarAcceptance(
     kind: 'direct',
     members: [tibo.actor.actor_id],
   });
+  const potetoRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('avatar_room'),
+    kind: 'direct',
+    members: [poteto.actor.actor_id],
+  });
+  const kongRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('avatar_room'),
+    kind: 'direct',
+    members: [kong.actor_id],
+  });
   const groupRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
     request_id: requestId('avatar_room'),
     kind: 'group',
     title: '头像测试群',
-    members: [codex.actor.actor_id, plain.actor.actor_id, tibo.actor.actor_id],
+    members: [
+      codex.actor.actor_id,
+      plain.actor.actor_id,
+      tibo.actor.actor_id,
+      poteto.actor.actor_id,
+      kong.actor_id,
+    ],
   });
   await rawTool(codex.token, 'network_message_send', {
     request_id: requestId('avatar_msg'),
@@ -1422,6 +1491,30 @@ async function runAvatarAcceptance(
     room_id: groupRoom.room.room_id,
     body: '群里的 Tibo 消息',
   });
+  await rawTool(poteto.token, 'network_message_send', {
+    request_id: requestId('avatar_msg'),
+    client_message_id: crypto.randomUUID(),
+    room_id: potetoRoom.room.room_id,
+    body: 'poteto 的直聊消息',
+  });
+  await rawTool(poteto.token, 'network_message_send', {
+    request_id: requestId('avatar_msg'),
+    client_message_id: crypto.randomUUID(),
+    room_id: groupRoom.room.room_id,
+    body: '群里的 poteto 消息',
+  });
+  await rawTool(kongToken, 'network_message_send', {
+    request_id: requestId('avatar_msg'),
+    client_message_id: crypto.randomUUID(),
+    room_id: kongRoom.room.room_id,
+    body: 'KonghaYao 的直聊消息',
+  });
+  await rawTool(kongToken, 'network_message_send', {
+    request_id: requestId('avatar_msg'),
+    client_message_id: crypto.randomUUID(),
+    room_id: groupRoom.room.room_id,
+    body: '群里的 KonghaYao 消息',
+  });
 
   const { context, page } = await makeContext(
     browser,
@@ -1438,6 +1531,37 @@ async function runAvatarAcceptance(
   await page.goto(`${base}/`);
   await waitRoomListName(page, 'Codex 测试');
   await waitRoomListName(page, 'Tibo Reset');
+  await waitRoomListName(page, 'poteto');
+  await waitRoomListName(page, 'KonghaYao');
+  const ownAccount = (await page.evaluate(
+    `(() => {
+      const avatar = document.getElementById('account-avatar');
+      const name = document.getElementById('account-name');
+      if (!avatar || !name) return null;
+      return {
+        name: name.textContent,
+        text: avatar.textContent,
+        image: Boolean(avatar.querySelector('img.avatar-img')),
+        icon: avatar.classList.contains('avatar-icon'),
+        background: avatar.style.background
+      };
+    })()`,
+  )) as {
+    name: string;
+    text: string;
+    image: boolean;
+    icon: boolean;
+    background: string;
+  } | null;
+  check(
+    '本人账号未命中名称保留首字',
+    Boolean(ownAccount) &&
+      ownAccount!.image === false &&
+      ownAccount!.icon === false &&
+      ownAccount!.text === Array.from(ownAccount!.name ?? '')[0] &&
+      ownAccount!.background !== '',
+    ownAccount,
+  );
   await page.waitForFunction(
     `(() => {
       const img = document.querySelector(${JSON.stringify(`${roomLink(codexRoom.room.room_id)} .avatar-img`)});
@@ -1485,6 +1609,35 @@ async function runAvatarAcceptance(
     monoFlags.every((value, index) => value === (index < 6)),
     monoFlags,
   );
+  const kindMapping = (await page.evaluate(
+    `(() => {
+      function read(name, kind) {
+        const value = agentAvatarFor(name, kind);
+        return value ? value.src : null;
+      }
+      return [
+        read('KonghaYao', 'human'),
+        read('KonghaYao', 'direct'),
+        read('KonghaYao', 'agent'),
+        read('poteto', 'agent'),
+        read('Codex 测试', 'human'),
+        read('Codex 测试', 'agent')
+      ];
+    })()`,
+  )) as (string | null)[];
+  check(
+    '用户头像对人类与 Agent 均生效',
+    kindMapping[0] === KONGHAYAO_ICON_SRC &&
+      kindMapping[1] === KONGHAYAO_ICON_SRC &&
+      kindMapping[2] === KONGHAYAO_ICON_SRC &&
+      kindMapping[3] === POTETO_ICON_SRC,
+    kindMapping,
+  );
+  check(
+    '品牌图标仍只用于 Agent',
+    kindMapping[4] === null && kindMapping[5] === '/agent-icons/codex-color.svg',
+    kindMapping,
+  );
 
   await page.locator('#room-filter-direct').click();
   const directSidebar = (await page.evaluate(
@@ -1504,13 +1657,17 @@ async function runAvatarAcceptance(
       return {
         codex: read(${JSON.stringify(codexRoom.room.room_id)}),
         plain: read(${JSON.stringify(plainRoom.room.room_id)}),
-        tibo: read(${JSON.stringify(tiboRoom.room.room_id)})
+        tibo: read(${JSON.stringify(tiboRoom.room.room_id)}),
+        poteto: read(${JSON.stringify(potetoRoom.room.room_id)}),
+        kong: read(${JSON.stringify(kongRoom.room.room_id)})
       };
     })()`,
   )) as {
     codex: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
     plain: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
     tibo: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
+    poteto: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
+    kong: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
   };
   await page.locator('#room-filter-group').click();
   const groupSidebar = (await page.evaluate(
@@ -1529,6 +1686,10 @@ async function runAvatarAcceptance(
   checkEqual('侧栏 Codex 品牌图标', sidebar.codex?.src, '/agent-icons/codex-color.svg');
   checkEqual('侧栏 Tibo 专用头像', sidebar.tibo?.src, TIBO_ICON_SRC);
   checkEqual('侧栏 Tibo 标记品牌图标', sidebar.tibo?.icon, true);
+  checkEqual('侧栏 poteto 专用头像', sidebar.poteto?.src, POTETO_ICON_SRC);
+  checkEqual('侧栏 poteto 标记品牌图标', sidebar.poteto?.icon, true);
+  checkEqual('侧栏 KonghaYao 专用头像', sidebar.kong?.src, KONGHAYAO_ICON_SRC);
+  checkEqual('侧栏 KonghaYao 标记品牌图标', sidebar.kong?.icon, true);
   checkEqual('侧栏未命中保留首字', sidebar.plain?.src, null);
   checkEqual('侧栏未命中显示首字', sidebar.plain?.text, '琶');
   checkEqual('侧栏未命中不标记品牌图标', sidebar.plain?.icon, false);
@@ -1570,6 +1731,34 @@ async function runAvatarAcceptance(
     TIBO_ICON_SRC,
   );
 
+  await page.goto(`${base}/c/${potetoRoom.room.room_id}`);
+  await waitRoom(page, potetoRoom.room.room_id, 'poteto');
+  await page.waitForFunction(
+    `(() => {
+      const img = document.querySelector('#messages .msg .msg-avatar img.avatar-img');
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  checkEqual(
+    'poteto 直聊消息使用专用头像',
+    await page.locator('#messages .msg .msg-avatar img.avatar-img').first().getAttribute('src'),
+    POTETO_ICON_SRC,
+  );
+
+  await page.goto(`${base}/c/${kongRoom.room.room_id}`);
+  await waitRoom(page, kongRoom.room.room_id, 'KonghaYao');
+  await page.waitForFunction(
+    `(() => {
+      const img = document.querySelector('#messages .msg .msg-avatar img.avatar-img');
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  checkEqual(
+    'KonghaYao 人类消息使用专用头像',
+    await page.locator('#messages .msg .msg-avatar img.avatar-img').first().getAttribute('src'),
+    KONGHAYAO_ICON_SRC,
+  );
+
   await page.goto(`${base}/c/${groupRoom.room.room_id}`);
   await waitRoom(page, groupRoom.room.room_id, '头像测试群');
   await page.waitForFunction(
@@ -1604,6 +1793,32 @@ async function runAvatarAcceptance(
     })()`,
   );
   checkEqual('群聊 Tibo 消息使用专用头像', groupTiboAvatar, TIBO_ICON_SRC);
+  for (const [body, expected] of [
+    ['群里的 poteto 消息', POTETO_ICON_SRC],
+    ['群里的 KonghaYao 消息', KONGHAYAO_ICON_SRC],
+  ] as const) {
+    await page.waitForFunction(
+      `(() => {
+        const messages = Array.from(document.querySelectorAll('#messages .msg'));
+        const target = messages.find(function (item) {
+          return item.textContent.indexOf(${JSON.stringify(body)}) >= 0;
+        });
+        const img = target ? target.querySelector('.msg-avatar img.avatar-img') : null;
+        return Boolean(img && img.complete && img.naturalWidth > 0);
+      })()`,
+    );
+    const groupAvatar = await page.evaluate(
+      `(() => {
+        const messages = Array.from(document.querySelectorAll('#messages .msg'));
+        const target = messages.find(function (item) {
+          return item.textContent.indexOf(${JSON.stringify(body)}) >= 0;
+        });
+        const img = target ? target.querySelector('.msg-avatar img.avatar-img') : null;
+        return img ? img.getAttribute('src') : null;
+      })()`,
+    );
+    checkEqual(`群聊 ${body} 使用专用头像`, groupAvatar, expected);
+  }
 
   await page.locator('#add-members').click();
   await page.locator('#members-modal').waitFor({ state: 'visible' });
@@ -1630,12 +1845,16 @@ async function runAvatarAcceptance(
   const codexMember = roster.find((item) => item.name.includes('Codex 测试'));
   const plainMember = roster.find((item) => item.name.includes('琶洲-dsh-dsh'));
   const tiboMember = roster.find((item) => item.name.includes('Tibo Reset'));
+  const potetoMember = roster.find((item) => item.name.includes('poteto'));
+  const kongMember = roster.find((item) => item.name.includes('KonghaYao'));
   checkEqual(
     '群成员列表 Codex 品牌图标',
     codexMember?.src,
     '/agent-icons/codex-color.svg',
   );
   checkEqual('群成员列表 Tibo 专用头像', tiboMember?.src, TIBO_ICON_SRC);
+  checkEqual('群成员列表 poteto 专用头像', potetoMember?.src, POTETO_ICON_SRC);
+  checkEqual('群成员列表 KonghaYao 专用头像', kongMember?.src, KONGHAYAO_ICON_SRC);
   checkEqual('群成员列表未命中无图标', plainMember?.src, null);
   checkEqual('群成员列表未命中保留首字', plainMember?.text, '琶');
   const candidates = (await page.evaluate(
@@ -1659,6 +1878,10 @@ async function runAvatarAcceptance(
   await rawTool(humanToken, 'network_agent_archive', {
     request_id: requestId('avatar_archive'),
     actor_id: tibo.actor.actor_id,
+  });
+  await rawTool(humanToken, 'network_agent_archive', {
+    request_id: requestId('avatar_archive'),
+    actor_id: poteto.actor.actor_id,
   });
   await page.goto(`${base}/`);
   await page.locator('#room-filter-direct').click();
@@ -1700,6 +1923,24 @@ async function runAvatarAcceptance(
       .getAttribute('src'),
     TIBO_ICON_SRC,
   );
+  await page.waitForFunction(
+    `(() => {
+      const row = document.querySelector(${JSON.stringify(
+        `#archive-popover-list .archive-item[data-actor-id="${poteto.actor.actor_id}"]`,
+      )});
+      const img = row ? row.querySelector('img.avatar-img') : null;
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  checkEqual(
+    '已归档 Agents poteto 专用头像',
+    await page
+      .locator(
+        `#archive-popover-list .archive-item[data-actor-id="${poteto.actor.actor_id}"] img.avatar-img`,
+      )
+      .getAttribute('src'),
+    POTETO_ICON_SRC,
+  );
   await rawTool(humanToken, 'network_agent_unarchive', {
     request_id: requestId('avatar_unarchive'),
     actor_id: codex.actor.actor_id,
@@ -1708,7 +1949,141 @@ async function runAvatarAcceptance(
     request_id: requestId('avatar_unarchive'),
     actor_id: tibo.actor.actor_id,
   });
+  await rawTool(humanToken, 'network_agent_unarchive', {
+    request_id: requestId('avatar_unarchive'),
+    actor_id: poteto.actor.actor_id,
+  });
   await context.close();
+
+  const kongAccountContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  await kongAccountContext.addInitScript({ content: initScript(kongToken) });
+  const kongAccountPage = await kongAccountContext.newPage();
+  kongAccountPage.setDefaultTimeout(15_000);
+  await kongAccountPage.goto(`${base}/`);
+  await kongAccountPage.waitForFunction(
+    `document.getElementById('account-name').textContent === 'KonghaYao'`,
+  );
+  await kongAccountPage.waitForFunction(
+    `(() => {
+      const avatar = document.getElementById('account-avatar');
+      const image = avatar ? avatar.querySelector('img.avatar-img') : null;
+      return Boolean(image && image.complete && image.naturalWidth > 0);
+    })()`,
+  );
+  checkEqual(
+    '本人账号 KonghaYao 显示专用头像',
+    await kongAccountPage.locator('#account-avatar img.avatar-img').getAttribute('src'),
+    KONGHAYAO_ICON_SRC,
+  );
+  checkEqual(
+    '本人账号 KonghaYao 标记品牌图标',
+    await kongAccountPage.evaluate(
+      `document.getElementById('account-avatar').classList.contains('avatar-icon')`,
+    ),
+    true,
+  );
+  await kongAccountPage.evaluate('window.__accountAvatarInPlace = true');
+  await kongAccountPage.locator('#account-rename').click();
+  await kongAccountPage.fill('#me-rename-input', '普通人类');
+  await kongAccountPage.locator('#me-rename-save').click();
+  await kongAccountPage.waitForFunction(
+    `document.getElementById('account-name').textContent === '普通人类'`,
+  );
+  await kongAccountPage.waitForFunction(
+    `(() => {
+      const avatar = document.getElementById('account-avatar');
+      return Boolean(avatar && !avatar.querySelector('img.avatar-img') &&
+        !avatar.classList.contains('avatar-icon') && avatar.textContent === '普');
+    })()`,
+  );
+  checkEqual(
+    '改名后本人账号立即回退首字',
+    (await kongAccountPage.locator('#account-avatar').textContent())?.trim(),
+    '普',
+  );
+  check(
+    '改名后本人账号回退颜色',
+    Boolean(
+      await kongAccountPage.evaluate(
+        `document.getElementById('account-avatar').style.background`,
+      ),
+    ),
+  );
+  await kongAccountPage.locator('#account-rename').click();
+  await kongAccountPage.fill('#me-rename-input', 'KonghaYao');
+  await kongAccountPage.locator('#me-rename-save').click();
+  await kongAccountPage.waitForFunction(
+    `document.getElementById('account-name').textContent === 'KonghaYao'`,
+  );
+  await kongAccountPage.waitForFunction(
+    `(() => {
+      const avatar = document.getElementById('account-avatar');
+      const image = avatar ? avatar.querySelector('img.avatar-img') : null;
+      return Boolean(image && image.complete && image.naturalWidth > 0);
+    })()`,
+  );
+  checkEqual(
+    '改名回 KonghaYao 后原地恢复专用头像',
+    await kongAccountPage.locator('#account-avatar img.avatar-img').getAttribute('src'),
+    KONGHAYAO_ICON_SRC,
+  );
+  checkEqual(
+    '本人账号头像不重复叠加',
+    await kongAccountPage.locator('#account-avatar img.avatar-img').count(),
+    1,
+  );
+  checkEqual(
+    '改名后头像原地更新未整页刷新',
+    await kongAccountPage.evaluate('window.__accountAvatarInPlace === true'),
+    true,
+  );
+  await kongAccountContext.close();
+
+  const kongDarkContext = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    colorScheme: 'dark',
+  });
+  await kongDarkContext.addInitScript({ content: initScript(kongToken) });
+  const kongDarkPage = await kongDarkContext.newPage();
+  kongDarkPage.setDefaultTimeout(15_000);
+  await kongDarkPage.goto(`${base}/`);
+  await kongDarkPage.waitForFunction(
+    `document.getElementById('account-name').textContent === 'KonghaYao'`,
+  );
+  await kongDarkPage.waitForFunction(
+    `(() => {
+      const avatar = document.getElementById('account-avatar');
+      const image = avatar ? avatar.querySelector('img.avatar-img') : null;
+      return Boolean(image && image.complete && image.naturalWidth > 0);
+    })()`,
+  );
+  const accountMobileMetrics = (await kongDarkPage.evaluate(
+    `(() => {
+      const avatar = document.getElementById('account-avatar');
+      const image = avatar ? avatar.querySelector('img.avatar-img') : null;
+      if (!avatar || !image) return null;
+      const avatarBox = avatar.getBoundingClientRect();
+      const imageBox = image.getBoundingClientRect();
+      return {
+        dark: window.matchMedia('(prefers-color-scheme: dark)').matches,
+        pageFits: document.documentElement.scrollWidth <= window.innerWidth,
+        inside: imageBox.left >= avatarBox.left - 0.5 &&
+          imageBox.right <= avatarBox.right + 0.5 &&
+          imageBox.top >= avatarBox.top - 0.5 &&
+          imageBox.bottom <= avatarBox.bottom + 0.5,
+        background: getComputedStyle(image).backgroundColor
+      };
+    })()`,
+  )) as { dark: boolean; pageFits: boolean; inside: boolean; background: string } | null;
+  checkEqual('390px 暗色本人账号头像可见', Boolean(accountMobileMetrics), true);
+  checkEqual('390px 页面不横向溢出（本人账号头像）', accountMobileMetrics?.pageFits, true);
+  checkEqual('390px 本人账号专用头像不溢出', accountMobileMetrics?.inside, true);
+  checkEqual(
+    '暗色模式本人账号专用头像仍为浅色底',
+    accountMobileMetrics?.background,
+    'rgb(242, 243, 245)',
+  );
+  await kongDarkContext.close();
 
   const darkContext = await browser.newContext({
     viewport: { width: 390, height: 844 },
@@ -1779,6 +2154,37 @@ async function runAvatarAcceptance(
     tiboMobileMetrics?.background,
     'rgb(242, 243, 245)',
   );
+  await darkPage.waitForFunction(
+    `(() => {
+      const img = document.querySelector(${JSON.stringify(`${roomLink(potetoRoom.room.room_id)} .avatar-img`)});
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  const potetoMobileMetrics = (await darkPage.evaluate(
+    `(() => {
+      const link = document.querySelector(${JSON.stringify(roomLink(potetoRoom.room.room_id))});
+      const avatar = link ? link.querySelector('.avatar-icon') : null;
+      const image = avatar ? avatar.querySelector('img.avatar-img') : null;
+      if (!avatar || !image) return null;
+      const avatarBox = avatar.getBoundingClientRect();
+      const imageBox = image.getBoundingClientRect();
+      return {
+        pageFits: document.documentElement.scrollWidth <= window.innerWidth,
+        inside: imageBox.left >= avatarBox.left - 0.5 &&
+          imageBox.right <= avatarBox.right + 0.5 &&
+          imageBox.top >= avatarBox.top - 0.5 &&
+          imageBox.bottom <= avatarBox.bottom + 0.5,
+        background: getComputedStyle(image).backgroundColor
+      };
+    })()`,
+  )) as { pageFits: boolean; inside: boolean; background: string } | null;
+  checkEqual('390px 页面不横向溢出（poteto 头像）', potetoMobileMetrics?.pageFits, true);
+  checkEqual('390px poteto 专用头像不溢出', potetoMobileMetrics?.inside, true);
+  checkEqual(
+    '暗色模式 poteto 专用头像仍为浅色底',
+    potetoMobileMetrics?.background,
+    'rgb(242, 243, 245)',
+  );
   await darkContext.close();
 
   const failContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -1789,6 +2195,9 @@ async function runAvatarAcceptance(
     await route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' });
   });
   await failPage.route('**/agent-icons/tibo.png', async (route) => {
+    await route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' });
+  });
+  await failPage.route('**/agent-icons/poteto.png', async (route) => {
     await route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' });
   });
   await failPage.goto(`${base}/`);
@@ -1805,6 +2214,13 @@ async function runAvatarAcceptance(
       const link = document.querySelector(${JSON.stringify(roomLink(tiboRoom.room.room_id))});
       const avatar = link ? link.querySelector('.avatar') : null;
       return Boolean(avatar && !avatar.querySelector('img.avatar-img') && avatar.textContent === 'T');
+    })()`,
+  );
+  await failPage.waitForFunction(
+    `(() => {
+      const link = document.querySelector(${JSON.stringify(roomLink(potetoRoom.room.room_id))});
+      const avatar = link ? link.querySelector('.avatar') : null;
+      return Boolean(avatar && !avatar.querySelector('img.avatar-img') && avatar.textContent === 'p');
     })()`,
   );
   check('品牌图标加载失败回退首字', true);

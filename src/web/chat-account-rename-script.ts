@@ -55,8 +55,12 @@ export const CHAT_ACCOUNT_RENAME_SCRIPT = `
     if (messagesElement) {
       var avatars = messagesElement.querySelectorAll('.msg.mine .msg-avatar');
       for (var index = 0; index < avatars.length; index += 1) {
-        avatars[index].textContent = firstChar(name);
-        avatars[index].style.background = avatarColor(name);
+        var avatar = avatars[index];
+        avatar.textContent = firstChar(name);
+        if (typeof applyAgentAvatar !== 'function' ||
+            !applyAgentAvatar(avatar, name, identity.kind || 'human')) {
+          avatar.style.background = avatarColor(name);
+        }
       }
     }
     if (typeof renderCurrentMembers === 'function') renderCurrentMembers();
