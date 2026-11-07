@@ -248,6 +248,8 @@ function messageItem(item) {
   const element = document.createElement('li');
   element.className = 'msg' + (mine ? ' mine has-receipt' : '');
   element.dataset.messageId = item.message_id;
+  // 任务入口由后续任务片段按同一 message_id 补齐；这里只保留定位数据。
+  element.dataset.messagePreview = String(item.preview || '');
   const sender = senderName(item.sender_id);
   const avatar = avatarElement(
     mine && identity ? identity.name : sender,
@@ -308,6 +310,10 @@ function messageItem(item) {
     });
     content.append(expand);
   }
+  const taskSlot = document.createElement('div');
+  taskSlot.className = 'msg-task-slot';
+  taskSlot.hidden = true;
+  content.append(taskSlot);
   element.append(avatar, content);
   if (mine) {
     // 回执是消息下方的独立系统行，不放进气泡列，避免看起来像一条卡片。
@@ -331,6 +337,8 @@ function renderMessageList(items) {
   appendHistory(messagesElement, items);
   outboxAppendRows(messagesElement, activeRoomId);
   ensureMessagesEnd();
+  // 任务面板可能晚于消息加载；同一 message_id 的卡片/来源标记在这里补齐。
+  syncTaskCardMarkers(messagesElement);
   scrollController.noteContentChanged();
 }
 

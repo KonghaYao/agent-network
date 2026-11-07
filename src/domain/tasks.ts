@@ -1,149 +1,237 @@
+/**
+ * D01 任务工作流（tasks / task_assignments / task_deliveries / task_cards）。
+ *
+ * 设计约束：
+ * - 旧 `room_tasks` 迁移后只读；新写入不再写 `room_task_*` 事件。
+ * - `title` 只用于列表短展示；详细目标与验收条件保存在受控正文列，不塞进
+ *   120 字短字段，也不复制进聊天消息正文。
+ * - 指定负责人只形成 `offered` assignment，不等于接单；Agent 明确指派只生成
+ *   一条绑定 task/assignment/version 的 delivery，human 使用持久个人通知。
+ * - 公开任务创建不产生 delivery、不增加 `pending_count`、不唤醒 Agent；任务
+ *   卡片本身是普通房间消息，聊天未读按消息本义维护。
+ * - 所有写操作走 `runIdempotent`；同一来源消息至多一个任务，同一 assignment
+ *   至多一条 offer delivery。
+ */
+
 import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
 import type {
-  TaskAddInput,
+  TaskCancelInput,
   TaskClaimInput,
-  TaskCompleteInput,
-  TaskDeleteInput,
-  TaskFailInput,
-  TaskListGetInput,
+  TaskCreateInput,
+  TaskGetInput,
+  TaskListInput,
+  TaskOfferInput,
   TaskSummaryInput,
-  TaskUpdateInput,
 } from '../contracts/schemas';
-import { nowMs, sha256Hex, stableStringify } from '../storage/db';
-import { eventStatement, outboxStatement, roomTopic } from '../storage/events';
+import { newId, nowMs, sha256Hex, stableStringify, truncateUtf8, utf8Bytes } from '../storage/db';
+import {
+  eventStatement,
+  inboxHeadStatement,
+  inboxTopic,
+  outboxStatement,
+  roomTopic,
+} from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getMember, getOperation, getRoom, getRoomTask } from '../storage/queries';
-import type { RoomMemberRow, RoomRow, RoomTaskRow } from '../storage/rows';
+import {
+  getActor,
+  getDelivery,
+  getMember,
+  getMessage,
+  getOperation,
+  getRoom,
+  getRoomFile,
+  getTask,
+  getTaskAssignment,
+  getTaskBySourceMessage,
+  getTaskCard,
+} from '../storage/queries';
+import type {
+  ActorRow,
+  MessageRow,
+  RoomMemberRow,
+  RoomRow,
+  TaskAssignmentRow,
+  TaskAttachmentRow,
+  TaskDeliveryRow,
+  TaskRow,
+} from '../storage/rows';
 import {
   operationsStatement,
   resolveOperation,
   runIdempotent,
 } from '../storage/transactions/runner';
+import { contactBlockGuardStatement, findActiveBlockBetween } from './contact-blocks';
 import { actorId, type Principal } from './principal';
-import { capabilityGuardStatement } from './room-access';
+import { capabilityGuardStatement, roomCapabilitiesFor } from './room-access';
 import {
-  createdHistoryFilter,
   historyBoundary,
   historySnapshot,
-  visibleCreated,
+  visibleMessage,
   type HistoryBoundary,
   type HistorySnapshot,
 } from './room-history';
+import { messageCoreStatements, type MessageCore } from './messages';
 
-/**
- * 房间任务列表（room_tasks）。
- *
- * - 每个房间一个 `default` 列表；`list_id` 只是为未来多列表预留。
- * - 任何 active 成员都能添加任务；只有 Agent 成员能 claim/complete/fail；
- *   创建者或房间 owner 能修改描述/删除。
- * - 描述与结果只保存短文本（≤120 码点，拒绝换行/控制字符）；长内容走 .md 文件。
- * - 任务变更只写 room scope informational 事件与 room outbox，不碰
- *   `rooms.head_seq`、`last_message_id`、inbox 或 `pending_count`，因此不会
- *   产生未读，也不会唤醒 Agent。Agent 在定时/唤醒后自行 list。
- */
+export type TaskStatus = TaskRow['status'];
+export type TaskAssignmentStatus = TaskAssignmentRow['status'];
 
-const DEFAULT_LIST_ID = 'default';
-const CONTROL_CHARS = /[\u0000-\u001F\u007F\u2028\u2029]/u;
-
-export interface RoomTaskView {
-  task_id: string;
-  room_id: string;
-  description: string;
-  status: 'pending' | 'claimed' | 'done' | 'failed';
-  assignee_actor_id: string | null;
-  assignee_name: string | null;
-  result: string | null;
-  created_by: string;
-  created_by_name: string;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
-  can_edit: boolean;
-  can_claim: boolean;
-  can_complete: boolean;
+export interface TaskAssignmentView {
+  assignment_id: string;
+  assignment_version: number;
+  owner_actor_id: string;
+  owner_name: string | null;
+  status: TaskAssignmentStatus;
+  offer_expires_at: string | null;
+  delivery_id: string | null;
 }
 
-export interface RoomTaskListResult {
-  tasks: RoomTaskView[];
-  total: number;
-  done: number;
-  /** 本次任务读取采用的授权快照；与房间、历史、文件读取一致。 */
+export interface TaskAttachmentView {
+  file_id: string;
+  label: string;
+}
+
+export interface TaskView {
+  task_id: string;
+  room_id: string;
+  title: string;
+  description: string;
+  acceptance_criteria: string;
+  status: TaskStatus;
+  revision: number;
+  source_message_id: string | null;
+  card_message_id: string | null;
+  created_by: string;
+  created_by_name: string;
+  owner_actor_id: string | null;
+  owner_name: string | null;
+  reviewer_actor_id: string;
+  reviewer_name: string;
+  due_at: string | null;
+  blocked_reason: string | null;
+  blocked_at: string | null;
+  last_progress_at: string | null;
+  business_authority: 'native' | 'external';
+  external_binding_id: string | null;
+  created_at: string;
+  updated_at: string;
+  accepted_at: string | null;
+  cancelled_at: string | null;
+  assignment: TaskAssignmentView | null;
+  delivery_ids: string[];
+  attachments: TaskAttachmentView[];
+  can_offer: boolean;
+  can_claim: boolean;
+  can_cancel: boolean;
+  can_accept: boolean;
+  can_decline: boolean;
+}
+
+export interface TaskResult {
+  task: TaskView;
   authorization: HistorySnapshot;
 }
 
-export interface RoomTaskResult {
-  task: RoomTaskView;
+export interface TaskListResult {
+  tasks: TaskView[];
+  next_cursor: null;
+  has_more: false;
+  authorization: HistorySnapshot | null;
 }
 
-export interface RoomTaskDeletedResult {
-  task_id: string;
-  deleted: true;
-}
-
-export interface RoomTaskSummaryItem {
+export interface TaskSummaryItem {
   room_id: string;
-  /** 房间内未领取的任务数。 */
+  /** 公开未领取任务数。 */
   pending: number;
-  /** 当前身份在该房间领取的任务数；不含他人领取。 */
+  /** 当前身份当前负责的进行中任务数；不含他人。 */
   claimed: number;
-  /** 房间内已完成的任务数。 */
+  /** 已验收 + 历史完成。 */
   done: number;
-  /** 房间内失败的任务数。 */
   failed: number;
-  /** 房间内全部任务数；含他人 claimed，因此四项之和可能小于 total。 */
+  /** 当前身份可见的全部任务数。 */
   total: number;
 }
 
-export interface RoomTaskSummaryResult {
-  items: RoomTaskSummaryItem[];
+export interface TaskSummaryResult {
+  items: TaskSummaryItem[];
 }
 
-/** 当前身份所有 active 房间的任务计数；只读，用于登录结果里的任务概览。 */
 export interface TaskCounts {
-  /** 未领取的任务总数（跨 active 房间）。 */
   pending: number;
-  /** 仅当前身份领取的任务数；不含他人 claimed。 */
   claimed: number;
   done: number;
   failed: number;
-  /** 全部任务数；含他人 claimed，因此四项之和可能小于 total。 */
   total: number;
 }
 
-interface ViewContext {
+interface TaskContext {
   caller: string;
   callerKind: 'human' | 'agent';
-  room: Pick<RoomRow, 'room_id' | 'owner_id'>;
+  room: RoomRow;
+  member: RoomMemberRow;
+  boundary: HistoryBoundary;
+}
+
+interface NamedTaskContext extends TaskContext {
   names: Map<string, string>;
 }
 
-function canEditTask(task: RoomTaskRow, context: ViewContext): boolean {
-  return task.created_by === context.caller || context.room.owner_id === context.caller;
+const TASK_TITLE_CONTROL = /[\u0000-\u001F\u007F\u2028\u2029]/u;
+const TASK_BODY_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u;
+
+function invalid(label: string, message: string): BusinessError {
+  return new BusinessError('INVALID_ARGUMENT', `${label}${message}`);
 }
 
-function taskView(task: RoomTaskRow, context: ViewContext): RoomTaskView {
-  const assignee = task.assignee_actor_id;
-  return {
-    task_id: task.task_id,
-    room_id: task.room_id,
-    description: task.description,
-    status: task.status,
-    assignee_actor_id: assignee,
-    assignee_name: assignee ? (context.names.get(assignee) ?? null) : null,
-    result: task.result,
-    created_by: task.created_by,
-    created_by_name: context.names.get(task.created_by) ?? '',
-    created_at: String(task.created_at),
-    updated_at: String(task.updated_at),
-    completed_at: task.completed_at === null ? null : String(task.completed_at),
-    can_edit: canEditTask(task, context),
-    can_claim: context.callerKind === 'agent' && task.status === 'pending',
-    can_complete:
-      context.callerKind === 'agent' &&
-      task.status === 'claimed' &&
-      task.assignee_actor_id === context.caller,
-  };
+export function normalizeTaskTitle(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new BusinessError('INVALID_ARGUMENT', '任务标题不能为空');
+  if (TASK_TITLE_CONTROL.test(trimmed)) {
+    throw new BusinessError('INVALID_ARGUMENT', '任务标题不能包含换行或控制字符');
+  }
+  if (Array.from(trimmed).length > LIMITS.taskTitleMax) {
+    throw new BusinessError(
+      'INVALID_ARGUMENT',
+      `任务标题不能超过 ${LIMITS.taskTitleMax} 个字符；详细目标请写入 description`,
+    );
+  }
+  return trimmed;
+}
+
+/** 受控 Markdown/结构化正文：允许换行与制表，拒绝 NUL/其他控制字符。 */
+export function normalizeTaskBody(
+  value: string | undefined,
+  label: string,
+  maxBytes: number,
+): string {
+  if (value === undefined) return '';
+  const normalized = value.replace(/\r\n?/gu, '\n').trim();
+  if (!normalized) return '';
+  if (TASK_BODY_CONTROL.test(normalized)) {
+    throw invalid(label, '不能包含 NUL 或其他不可见控制字符');
+  }
+  const bytes = utf8Bytes(normalized);
+  if (bytes > maxBytes) {
+    throw new BusinessError('PAYLOAD_TOO_LARGE', `${label}超过 ${maxBytes} 字节`, {
+      bytes,
+      max: maxBytes,
+    });
+  }
+  return normalized;
+}
+
+function normalizeCancelReason(value: string): string {
+  return normalizeTaskBody(value, '取消原因', LIMITS.taskCancelReasonBytes);
+}
+
+function parseDueAt(value: string | undefined): number | null {
+  if (value === undefined) return null;
+  const at = Date.parse(value);
+  if (!Number.isFinite(at)) throw invalid('due_at', '必须是合法的 ISO 8601 时间');
+  const now = nowMs();
+  if (at < now) throw invalid('due_at', '不能早于当前时间');
+  if (at - now > LIMITS.taskDueMaxAheadMs) throw invalid('due_at', '超出允许的期限范围');
+  return at;
 }
 
 async function actorNames(db: D1Database, actorIds: string[]): Promise<Map<string, string>> {
@@ -155,21 +243,6 @@ async function actorNames(db: D1Database, actorIds: string[]): Promise<Map<strin
     .bind(...unique)
     .all<{ actor_id: string; name: string }>();
   return new Map(result.results.map((row) => [row.actor_id, row.name]));
-}
-
-export function normalizeTaskText(value: string, label: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) throw new BusinessError('INVALID_ARGUMENT', `${label}不能为空`);
-  if (CONTROL_CHARS.test(trimmed)) {
-    throw new BusinessError('INVALID_ARGUMENT', `${label}不能包含换行或控制字符`);
-  }
-  if (Array.from(trimmed).length > LIMITS.roomTaskTextMax) {
-    throw new BusinessError(
-      'INVALID_ARGUMENT',
-      `${label}不能超过 ${LIMITS.roomTaskTextMax} 个字符；长内容请写成 .md 文件`,
-    );
-  }
-  return trimmed;
 }
 
 async function requireRoomMember(
@@ -187,10 +260,206 @@ async function requireRoomMember(
   return { caller, room, member, boundary: historyBoundary(room, member) };
 }
 
-function requireAgent(principal: Principal): void {
-  if (!principal.actor || principal.actor.kind !== 'agent') {
-    throw new BusinessError('INVALID_ARGUMENT', '只有 Agent 成员可以领取或结束任务');
+/**
+ * 任务直读的唯一授权入口。
+ *
+ * 非成员、历史边界外与不存在统一返回 `NOT_FOUND`，不能靠 task_id 探测任务
+ * 是否存在；只有已知任务且当前成员可见时才继续。
+ */
+async function requireVisibleTask(
+  db: D1Database,
+  principal: Principal,
+  taskId: string,
+): Promise<{ task: TaskRow; context: TaskContext }> {
+  const task = await getTask(db, taskId);
+  if (!task) throw new BusinessError('NOT_FOUND', '任务不存在');
+  const room = await getRoom(db, task.room_id);
+  if (!room) throw new BusinessError('NOT_FOUND', '任务不存在');
+  const caller = actorId(principal);
+  const member = await getMember(db, room.room_id, caller);
+  if (!member || member.status !== 'active') {
+    throw new BusinessError('NOT_FOUND', '任务不存在');
   }
+  const boundary = historyBoundary(room, member);
+  if (!boundary.full && task.created_at < boundary.fromAt) {
+    throw new BusinessError('NOT_FOUND', '任务不存在');
+  }
+  return {
+    task,
+    context: {
+      caller,
+      callerKind: principal.actor?.kind ?? 'human',
+      room,
+      member,
+      boundary,
+    },
+  };
+}
+
+async function memberBoundary(
+  db: D1Database,
+  room: RoomRow,
+  actor: string,
+): Promise<{ actor: ActorRow; member: RoomMemberRow; boundary: HistoryBoundary } | null> {
+  const actorRow = await getActor(db, actor);
+  if (!actorRow) return null;
+  const member = await getMember(db, room.room_id, actor);
+  if (!member || member.status !== 'active') return null;
+  return { actor: actorRow, member, boundary: historyBoundary(room, member) };
+}
+
+/** 负责人/验收人必须有任务访问资格：有效成员且当前历史边界内可见。 */
+async function assertTaskParticipant(
+  db: D1Database,
+  room: RoomRow,
+  actor: string,
+  label: string,
+  taskCreatedAt?: number,
+): Promise<ActorRow> {
+  const found = await memberBoundary(db, room, actor);
+  if (!found) throw invalid(label, '必须是该房间的有效成员');
+  if (found.actor.disabled_at !== null) {
+    throw new BusinessError('ACTOR_DISABLED', `${label}已停用`);
+  }
+  if (
+    taskCreatedAt !== undefined &&
+    !found.boundary.full &&
+    taskCreatedAt < found.boundary.fromAt
+  ) {
+    throw invalid(label, '无权访问该任务');
+  }
+  return found.actor;
+}
+
+function isOwnerOrAdmin(room: RoomRow, member: RoomMemberRow): boolean {
+  return room.owner_id === member.actor_id || member.role === 'owner' || member.role === 'admin';
+}
+
+function canDispatch(task: TaskRow, context: TaskContext): boolean {
+  if (task.created_by === context.caller) return true;
+  return isOwnerOrAdmin(context.room, context.member);
+}
+
+async function buildTaskView(
+  db: D1Database,
+  context: TaskContext,
+  task: TaskRow,
+  names?: Map<string, string>,
+): Promise<TaskView> {
+  const card = await getTaskCard(db, task.task_id);
+  const assignment = task.current_assignment_id
+    ? await getTaskAssignment(db, task.current_assignment_id)
+    : null;
+  const deliveries = await db
+    .prepare(
+      `SELECT * FROM task_deliveries
+        WHERE task_id = ? ORDER BY created_at ASC, delivery_id ASC`,
+    )
+    .bind(task.task_id)
+    .all<TaskDeliveryRow>();
+  const attachments = await db
+    .prepare(
+      `SELECT * FROM task_attachments
+        WHERE task_id = ? ORDER BY created_at ASC, file_id ASC`,
+    )
+    .bind(task.task_id)
+    .all<TaskAttachmentRow>();
+  const nameMap =
+    names ??
+    (await actorNames(db, [
+      task.created_by,
+      task.reviewer_actor_id,
+      ...(task.owner_actor_id ? [task.owner_actor_id] : []),
+      ...(assignment ? [assignment.owner_actor_id] : []),
+    ]));
+  const owner = task.owner_actor_id;
+  const isAdmin = isOwnerOrAdmin(context.room, context.member);
+  const canCancel =
+    task.status !== 'accepted' &&
+    task.status !== 'cancelled' &&
+    task.status !== 'legacy_completed' &&
+    (task.created_by === context.caller || owner === context.caller || isAdmin);
+  const canActOnOffer =
+    task.status === 'offered' &&
+    assignment !== null &&
+    assignment.status === 'offered' &&
+    assignment.owner_actor_id === context.caller;
+  return {
+    task_id: task.task_id,
+    room_id: task.room_id,
+    title: task.title,
+    description: task.description,
+    acceptance_criteria: task.acceptance_criteria,
+    status: task.status,
+    revision: task.revision,
+    source_message_id: task.source_message_id,
+    card_message_id: card?.message_id ?? null,
+    created_by: task.created_by,
+    created_by_name: nameMap.get(task.created_by) ?? '',
+    owner_actor_id: owner,
+    owner_name: owner ? (nameMap.get(owner) ?? null) : null,
+    reviewer_actor_id: task.reviewer_actor_id,
+    reviewer_name: nameMap.get(task.reviewer_actor_id) ?? '',
+    due_at: task.due_at === null ? null : String(task.due_at),
+    blocked_reason: task.blocked_reason,
+    blocked_at: task.blocked_at === null ? null : String(task.blocked_at),
+    last_progress_at:
+      task.last_progress_at === null ? null : String(task.last_progress_at),
+    business_authority: task.business_authority,
+    external_binding_id: task.external_binding_id,
+    created_at: String(task.created_at),
+    updated_at: String(task.updated_at),
+    accepted_at: task.accepted_at === null ? null : String(task.accepted_at),
+    cancelled_at: task.cancelled_at === null ? null : String(task.cancelled_at),
+    assignment:
+      assignment === null
+        ? null
+        : {
+            assignment_id: assignment.assignment_id,
+            assignment_version: assignment.assignment_version,
+            owner_actor_id: assignment.owner_actor_id,
+            owner_name: nameMap.get(assignment.owner_actor_id) ?? null,
+            status: assignment.status,
+            offer_expires_at:
+              assignment.offer_expires_at === null
+                ? null
+                : String(assignment.offer_expires_at),
+            delivery_id: assignment.delivery_id,
+          },
+    delivery_ids: deliveries.results.map((row) => row.delivery_id),
+    attachments: attachments.results.map((row) => ({
+      file_id: row.file_id,
+      label: row.label,
+    })),
+    can_offer:
+      task.status === 'unassigned' &&
+      canDispatch(task, context) &&
+      roomCapabilitiesFor(context.room, context.member).create_task,
+    can_claim:
+      task.status === 'unassigned' &&
+      task.reviewer_actor_id !== context.caller &&
+      (await blockedBetween(db, context.caller, task.created_by)) === false,
+    can_cancel: canCancel,
+    can_accept: canActOnOffer,
+    can_decline: canActOnOffer,
+  };
+}
+
+async function blockedBetween(db: D1Database, a: string, b: string): Promise<boolean> {
+  if (a === b) return false;
+  return (await findActiveBlockBetween(db, a, b)) !== null;
+}
+
+async function resultFor(
+  db: D1Database,
+  context: TaskContext,
+  task: TaskRow,
+  names?: Map<string, string>,
+): Promise<TaskResult> {
+  return {
+    task: await buildTaskView(db, context, task, names),
+    authorization: historySnapshot(context.boundary),
+  };
 }
 
 function memberGuard(db: D1Database, roomId: string, actor: string): D1PreparedStatement {
@@ -198,137 +467,1381 @@ function memberGuard(db: D1Database, roomId: string, actor: string): D1PreparedS
     .prepare(
       guardSql(
         'notMember',
-        'NOT EXISTS (SELECT 1 FROM room_members WHERE room_id = ? AND actor_id = ? AND status = \'active\')',
+        "NOT EXISTS (SELECT 1 FROM room_members WHERE room_id = ? AND actor_id = ? AND status = 'active')",
       ),
     )
     .bind(roomId, actor);
 }
 
-function taskEditorGuard(
+function participantGuard(
   db: D1Database,
-  taskId: string,
+  roomId: string,
   actor: string,
 ): D1PreparedStatement {
   return db
     .prepare(
       guardSql(
-        'taskEditor',
-        `NOT EXISTS (
-           SELECT 1 FROM room_tasks t
-            WHERE t.task_id = ?
-              AND (t.created_by = ? OR EXISTS (
-                SELECT 1 FROM rooms r WHERE r.room_id = t.room_id AND r.owner_id = ?
-              ))
-         )`,
+        'invalidTarget',
+        "NOT EXISTS (SELECT 1 FROM room_members WHERE room_id = ? AND actor_id = ? AND status = 'active')",
       ),
     )
-    .bind(taskId, actor, actor);
+    .bind(roomId, actor);
 }
 
-function taskEventStatement(
+function taskStateGuard(
   db: D1Database,
-  task: Pick<RoomTaskRow, 'task_id' | 'room_id' | 'status'>,
+  taskId: string,
+  predicate: string,
+  ...binds: unknown[]
+): D1PreparedStatement {
+  return db
+    .prepare(
+      guardSql(
+        'taskState',
+        `NOT EXISTS (SELECT 1 FROM tasks WHERE task_id = ? AND ${predicate})`,
+      ),
+    )
+    .bind(taskId, ...binds);
+}
+
+function taskRoomEvent(
+  db: D1Database,
+  task: Pick<TaskRow, 'task_id' | 'room_id' | 'status' | 'revision'>,
   eventType: string,
-  changedBy: string,
+  eventKey: string,
   at: number,
-): { eventKey: string; statement: D1PreparedStatement; outbox: D1PreparedStatement } {
-  const eventKey = `room_task:${eventType}:${task.task_id}:${crypto.randomUUID().replaceAll('-', '')}`;
+  metadata: Record<string, unknown>,
+): { eventKey: string; statements: D1PreparedStatement[] } {
   return {
     eventKey,
-    statement: eventStatement(
+    statements: [
+      eventStatement(
+        db,
+        {
+          eventKey,
+          scopeKind: 'room',
+          scopeId: task.room_id,
+          eventType,
+          refId: task.task_id,
+          metadata: {
+            task_id: task.task_id,
+            room_id: task.room_id,
+            status: task.status,
+            revision: task.revision,
+            ...metadata,
+          },
+        },
+        at,
+      ),
+      outboxStatement(db, { topic: roomTopic(task.room_id), eventKey }, at),
+    ],
+  };
+}
+
+function inboxTaskEvent(
+  db: D1Database,
+  actor: string,
+  eventKey: string,
+  eventType: string,
+  task: TaskRow,
+  assignment: TaskAssignmentRow | null,
+  cardMessageId: string,
+  at: number,
+  pendingDelta: number,
+  extra: Record<string, unknown> = {},
+): D1PreparedStatement[] {
+  return [
+    eventStatement(
       db,
       {
         eventKey,
-        scopeKind: 'room',
-        scopeId: task.room_id,
+        scopeKind: 'inbox',
+        scopeId: actor,
         eventType,
         refId: task.task_id,
-        metadata: { task_id: task.task_id, status: task.status, changed_by: changedBy },
+        metadata: {
+          task_id: task.task_id,
+          room_id: task.room_id,
+          message_id: cardMessageId,
+          reviewer_actor_id: task.reviewer_actor_id,
+          changed_by: task.created_by,
+          ...(assignment
+            ? {
+                assignment_id: assignment.assignment_id,
+                assignment_version: assignment.assignment_version,
+              }
+            : {}),
+          ...extra,
+        },
       },
       at,
     ),
-    outbox: outboxStatement(db, { topic: roomTopic(task.room_id), eventKey }, at),
-  };
+    outboxStatement(db, { topic: inboxTopic(actor), eventKey }, at),
+    inboxHeadStatement(db, actor, eventKey, at, pendingDelta),
+  ];
 }
 
-async function contextFor(
+function offerDeliveryStatements(
+  db: D1Database,
+  input: {
+    deliveryId: string;
+    recipientId: string;
+    roomId: string;
+    cardMessageId: string;
+    cardEventKey: string;
+    senderId: string;
+    task: TaskRow;
+    assignment: TaskAssignmentRow;
+    at: number;
+  },
+): D1PreparedStatement[] {
+  const inboxKey = `inbox:${input.recipientId}:${input.cardMessageId}`;
+  return [
+    db
+      .prepare(
+        `INSERT INTO deliveries
+           (delivery_id, recipient_id, message_id, room_id, state, attempt, claim_id, claimed_at,
+            progress_at, result_message_id, error, created_seq, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL, NULL, NULL,
+           (SELECT event_seq FROM events WHERE event_key = ?), ?, ?)`,
+      )
+      .bind(
+        input.deliveryId,
+        input.recipientId,
+        input.cardMessageId,
+        input.roomId,
+        input.cardEventKey,
+        input.at,
+        input.at,
+      ),
+    db
+      .prepare(
+        `INSERT INTO task_deliveries
+           (delivery_id, task_id, assignment_id, assignment_version, task_revision, kind, created_at)
+         VALUES (?, ?, ?, ?, ?, 'task_offer', ?)`,
+      )
+      .bind(
+        input.deliveryId,
+        input.task.task_id,
+        input.assignment.assignment_id,
+        input.assignment.assignment_version,
+        input.task.revision,
+        input.at,
+      ),
+    eventStatement(
+      db,
+      {
+        eventKey: inboxKey,
+        scopeKind: 'inbox',
+        scopeId: input.recipientId,
+        eventType: 'delivery_created',
+        refId: input.deliveryId,
+        metadata: {
+          message_id: input.cardMessageId,
+          room_id: input.roomId,
+          sender_id: input.senderId,
+          task_id: input.task.task_id,
+          assignment_id: input.assignment.assignment_id,
+          assignment_version: input.assignment.assignment_version,
+        },
+      },
+      input.at,
+    ),
+    outboxStatement(db, { topic: inboxTopic(input.recipientId), eventKey: inboxKey }, input.at),
+    inboxHeadStatement(db, input.recipientId, inboxKey, input.at, 1),
+  ];
+}
+
+async function validateAttachments(
+  db: D1Database,
+  room: RoomRow,
+  fileIds: string[] | undefined,
+): Promise<Array<{ file_id: string; label: string }>> {
+  const unique = Array.from(new Set(fileIds ?? []));
+  if (unique.length > LIMITS.taskAttachmentsMax) {
+    throw invalid('附件', `一次最多引用 ${LIMITS.taskAttachmentsMax} 个文件`);
+  }
+  const attachments: Array<{ file_id: string; label: string }> = [];
+  for (const fileId of unique) {
+    const file = await getRoomFile(db, fileId);
+    if (!file || file.room_id !== room.room_id || file.deleted_at !== null) {
+      throw new BusinessError('FILE_UNAVAILABLE', '附件不存在、已删除或不属于该房间', {
+        file_id: fileId,
+      });
+    }
+    attachments.push({ file_id: fileId, label: '' });
+  }
+  return attachments;
+}
+
+/** 同一来源消息的并发/重复创建收敛到已有任务；参数不同则明确冲突。 */
+async function convergeSourceTask(
+  db: D1Database,
+  context: TaskContext,
+  existing: TaskRow,
+  expected: {
+    title: string;
+    reviewer: string;
+    assignee: string | null;
+  },
+): Promise<TaskResult> {
+  if (
+    existing.room_id !== context.room.room_id ||
+    existing.created_by !== context.caller ||
+    existing.title !== expected.title ||
+    existing.reviewer_actor_id !== expected.reviewer
+  ) {
+    throw new BusinessError('CONFLICT', '该消息已关联另一个任务', {
+      task_id: existing.task_id,
+      source_message_id: existing.source_message_id,
+    });
+  }
+  if (expected.assignee) {
+    const assignment = existing.current_assignment_id
+      ? await getTaskAssignment(db, existing.current_assignment_id)
+      : null;
+    if (!assignment || assignment.owner_actor_id !== expected.assignee) {
+      throw new BusinessError('CONFLICT', '该消息已关联另一个任务或负责人', {
+        task_id: existing.task_id,
+      });
+    }
+  }
+  return resultFor(db, context, existing);
+}
+
+export async function taskCreate(
   db: D1Database,
   principal: Principal,
-  caller: string,
-  room: RoomRow,
-  tasks: RoomTaskRow[],
-): Promise<ViewContext> {
-  const ids: string[] = [];
-  for (const task of tasks) {
-    ids.push(task.created_by);
-    if (task.assignee_actor_id) ids.push(task.assignee_actor_id);
+  input: TaskCreateInput,
+): Promise<TaskResult> {
+  const { caller, room, member, boundary } = await requireRoomMember(db, principal, input.room_id);
+  const capabilities = roomCapabilitiesFor(room, member);
+  if (!capabilities.create_task) {
+    throw new BusinessError('PERMISSION_DENIED', '当前身份没有创建任务的权限');
   }
-  return {
+  const title = normalizeTaskTitle(input.title);
+  const description = normalizeTaskBody(
+    input.description,
+    '任务详细目标',
+    LIMITS.taskDescriptionBytes,
+  );
+  const acceptance = normalizeTaskBody(
+    input.acceptance_criteria,
+    '验收条件',
+    LIMITS.taskAcceptanceBytes,
+  );
+  const reviewerId = input.reviewer_actor_id ?? caller;
+  const assigneeId = input.assignee_actor_id ?? null;
+  if (reviewerId === assigneeId && assigneeId !== null) {
+    throw invalid('验收人', '不能与当前负责人相同；执行者不能验收自己的交付');
+  }
+  if (assigneeId === caller && reviewerId === caller) {
+    throw invalid('验收人', '自己执行任务时必须指定独立验收人');
+  }
+  const reviewer = await assertTaskParticipant(db, room, reviewerId, '验收人');
+  void reviewer;
+  let assignee: ActorRow | null = null;
+  if (assigneeId) {
+    assignee = await assertTaskParticipant(db, room, assigneeId, '候选负责人');
+    if (await blockedBetween(db, caller, assigneeId)) {
+      throw new BusinessError('BLOCKED', '对方已拉黑，不能直接指派任务');
+    }
+    if (reviewerId !== caller && (await blockedBetween(db, reviewerId, assigneeId))) {
+      throw new BusinessError('BLOCKED', '验收人与候选负责人之间存在拉黑关系');
+    }
+  }
+
+  let source: MessageRow | null = null;
+  if (input.source_message_id) {
+    source = await getMessage(db, input.source_message_id);
+    if (
+      !source ||
+      source.room_id !== room.room_id ||
+      !visibleMessage(source, boundary)
+    ) {
+      throw new BusinessError('NOT_FOUND', '来源消息不存在或当前不可见');
+    }
+  }
+  const dueAt = parseDueAt(input.due_at);
+  const attachments = await validateAttachments(db, room, input.attachment_file_ids);
+  const payloadHash = await sha256Hex(
+    stableStringify({
+      room_id: room.room_id,
+      title,
+      description,
+      acceptance_criteria: acceptance,
+      source_message_id: source?.message_id ?? null,
+      assignee_actor_id: assigneeId,
+      reviewer_actor_id: reviewerId,
+      due_at: dueAt,
+      attachment_file_ids: attachments.map((item) => item.file_id),
+    }),
+  );
+  const replay = await getOperation(db, caller, input.request_id);
+  if (replay) return resolveOperation(replay, payloadHash) as TaskResult;
+
+  const context: TaskContext = {
     caller,
     callerKind: principal.actor?.kind ?? 'human',
     room,
-    names: await actorNames(db, ids),
+    member,
+    boundary,
+  };
+  if (source) {
+    const existing = await getTaskBySourceMessage(db, source.message_id);
+    if (existing) {
+      return convergeSourceTask(db, context, existing, {
+        title,
+        reviewer: reviewerId,
+        assignee: assigneeId,
+      });
+    }
+  }
+
+  const at = nowMs();
+  const taskId = newId('tsk');
+  const cardMessageId = newId('msg');
+  const cardEventKey = `message:${cardMessageId}`;
+  const assignmentId = assigneeId ? newId('asg') : null;
+  const recipientKind = assignee?.kind ?? null;
+  const deliveryId =
+    assigneeId && recipientKind === 'agent' && assigneeId !== caller ? newId('dlv') : null;
+  const cardBody = `【任务卡】${title}`;
+  const rootId = source ? (source.root_id ?? source.message_id) : null;
+  const cardCore: MessageCore = {
+    messageId: cardMessageId,
+    roomId: room.room_id,
+    senderId: caller,
+    clientMessageId: `taskcard_${taskId}`,
+    body: cardBody,
+    preview: truncateUtf8(cardBody, LIMITS.previewBytes),
+    bodyBytes: utf8Bytes(cardBody),
+    replyTo: source?.message_id ?? null,
+    rootId,
+    rootKey: rootId ?? cardMessageId,
+    hop: source ? source.hop + 1 : 0,
+    invoke: [],
+    mentionAll: false,
+    mentions: [],
+    reminders: [],
+    deliveries: [],
+    eventKey: cardEventKey,
+    at,
+  };
+  const task: TaskRow = {
+    task_id: taskId,
+    room_id: room.room_id,
+    created_by: caller,
+    source_message_id: source?.message_id ?? null,
+    title,
+    description,
+    acceptance_criteria: acceptance,
+    status: assigneeId ? 'offered' : 'unassigned',
+    revision: 1,
+    owner_actor_id: null,
+    current_assignment_id: assignmentId,
+    reviewer_actor_id: reviewerId,
+    due_at: dueAt,
+    blocked_reason: null,
+    blocked_at: null,
+    last_progress_at: null,
+    business_authority: 'native',
+    external_binding_id: null,
+    created_at: at,
+    updated_at: at,
+    accepted_at: null,
+    cancelled_at: null,
+  };
+  const assignment: TaskAssignmentRow | null =
+    assigneeId && assignmentId
+      ? {
+          assignment_id: assignmentId,
+          task_id: taskId,
+          assignment_version: 1,
+          owner_actor_id: assigneeId,
+          status: 'offered',
+          offered_by: caller,
+          offer_expires_at: at + LIMITS.taskOfferTtlMs,
+          accepted_at: null,
+          ended_at: null,
+          last_progress_at: null,
+          delivery_id: deliveryId,
+          created_at: at,
+          updated_at: at,
+        }
+      : null;
+  const names = await actorNames(db, [
+    caller,
+    reviewerId,
+    ...(assigneeId ? [assigneeId] : []),
+  ]);
+  const view = await viewFromKnownRow(db, context, task, cardMessageId, assignment, deliveryId ? [deliveryId] : [], attachments, names);
+  const result: TaskResult = {
+    task: view,
+    authorization: historySnapshot(boundary),
+  };
+
+  const createdEvent = taskRoomEvent(db, task, 'task_created', `task:created:${taskId}`, at, {
+    changed_by: caller,
+    card_message_id: cardMessageId,
+    source_message_id: source?.message_id ?? null,
+    reviewer_actor_id: reviewerId,
+    owner_actor_id: null,
+  });
+
+  await runIdempotent(db, {
+    actorId: caller,
+    requestId: input.request_id,
+    payloadHash,
+    result,
+    build: (resultJson) => [
+      operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
+      memberGuard(db, room.room_id, caller),
+      capabilityGuardStatement(db, room.room_id, caller, 'create_task'),
+      participantGuard(db, room.room_id, reviewerId),
+      ...(assigneeId ? [participantGuard(db, room.room_id, assigneeId)] : []),
+      ...(assigneeId ? [contactBlockGuardStatement(db, caller, assigneeId)] : []),
+      ...(assigneeId && reviewerId !== caller
+        ? [contactBlockGuardStatement(db, reviewerId, assigneeId)]
+        : []),
+      ...messageCoreStatements(db, cardCore),
+      db
+        .prepare(
+          `INSERT INTO tasks
+             (task_id, room_id, created_by, source_message_id, title, description,
+              acceptance_criteria, status, revision, owner_actor_id, current_assignment_id,
+              reviewer_actor_id, due_at, blocked_reason, blocked_at, last_progress_at,
+              business_authority, external_binding_id, created_at, updated_at,
+              accepted_at, cancelled_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, ?, NULL, NULL, NULL,
+             'native', NULL, ?, ?, NULL, NULL)`,
+        )
+        .bind(
+          taskId,
+          room.room_id,
+          caller,
+          source?.message_id ?? null,
+          title,
+          description,
+          acceptance,
+          task.status,
+          assignmentId,
+          reviewerId,
+          dueAt,
+          at,
+          at,
+        ),
+      db
+        .prepare(
+          `INSERT INTO task_cards (task_id, message_id, room_id, created_at)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .bind(taskId, cardMessageId, room.room_id, at),
+      ...(assignment
+        ? [
+            db
+              .prepare(
+                `INSERT INTO task_assignments
+                   (assignment_id, task_id, assignment_version, owner_actor_id, status,
+                    offered_by, offer_expires_at, accepted_at, ended_at, last_progress_at,
+                    delivery_id, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, 'offered', ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
+              )
+              .bind(
+                assignment.assignment_id,
+                taskId,
+                assignment.assignment_version,
+                assignment.owner_actor_id,
+                caller,
+                assignment.offer_expires_at,
+                deliveryId,
+                at,
+                at,
+              ),
+          ]
+        : []),
+      ...(deliveryId && assignment
+        ? offerDeliveryStatements(db, {
+            deliveryId,
+            recipientId: assignment.owner_actor_id,
+            roomId: room.room_id,
+            cardMessageId,
+            cardEventKey,
+            senderId: caller,
+            task,
+            assignment,
+            at,
+          })
+        : []),
+      ...attachments.map((attachment) =>
+        db
+          .prepare(
+            `INSERT INTO task_attachments (task_id, file_id, label, created_at)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .bind(taskId, attachment.file_id, attachment.label, at),
+      ),
+      ...createdEvent.statements,
+      ...(assignment
+        ? taskRoomEvent(
+            db,
+            task,
+            'task_offered',
+            `task:offered:${assignment.assignment_id}`,
+            at,
+            {
+              changed_by: caller,
+              assignment_id: assignment.assignment_id,
+              assignment_version: assignment.assignment_version,
+              owner_actor_id: assignment.owner_actor_id,
+            },
+          ).statements
+        : []),
+      ...(assignment && recipientKind === 'human' && assignment.owner_actor_id !== caller
+        ? inboxTaskEvent(
+            db,
+            assignment.owner_actor_id,
+            `task:offer:${assignment.assignment_id}`,
+            'task_offered',
+            task,
+            assignment,
+            cardMessageId,
+            at,
+            0,
+          )
+        : []),
+    ],
+    onUniqueConflict: async (error) => {
+      const text = String(error);
+      if (
+        !text.includes('UNIQUE constraint failed: tasks.source_message_id') &&
+        !text.includes('idx_tasks_source_message')
+      ) {
+        return undefined;
+      }
+      if (!source) return undefined;
+      const existing = await getTaskBySourceMessage(db, source.message_id);
+      if (!existing) return undefined;
+      return convergeSourceTask(db, context, existing, {
+        title,
+        reviewer: reviewerId,
+        assignee: assigneeId,
+      });
+    },
+  });
+  return result;
+}
+
+/** 已知新任务行时构造视图；只为返回结果，不重新查询任务本身。 */
+async function viewFromKnownRow(
+  db: D1Database,
+  context: TaskContext,
+  task: TaskRow,
+  cardMessageId: string,
+  assignment: TaskAssignmentRow | null,
+  deliveryIds: string[],
+  attachments: Array<{ file_id: string; label: string }>,
+  names: Map<string, string>,
+): Promise<TaskView> {
+  const isAdmin = isOwnerOrAdmin(context.room, context.member);
+  const canCancel =
+    task.status !== 'accepted' &&
+    task.status !== 'cancelled' &&
+    task.status !== 'legacy_completed' &&
+    (task.created_by === context.caller ||
+      task.owner_actor_id === context.caller ||
+      isAdmin);
+  const canActOnOffer =
+    task.status === 'offered' &&
+    assignment !== null &&
+    assignment.status === 'offered' &&
+    assignment.owner_actor_id === context.caller;
+  return {
+    task_id: task.task_id,
+    room_id: task.room_id,
+    title: task.title,
+    description: task.description,
+    acceptance_criteria: task.acceptance_criteria,
+    status: task.status,
+    revision: task.revision,
+    source_message_id: task.source_message_id,
+    card_message_id: cardMessageId,
+    created_by: task.created_by,
+    created_by_name: names.get(task.created_by) ?? '',
+    owner_actor_id: task.owner_actor_id,
+    owner_name: task.owner_actor_id
+      ? (names.get(task.owner_actor_id) ?? null)
+      : null,
+    reviewer_actor_id: task.reviewer_actor_id,
+    reviewer_name: names.get(task.reviewer_actor_id) ?? '',
+    due_at: task.due_at === null ? null : String(task.due_at),
+    blocked_reason: task.blocked_reason,
+    blocked_at: task.blocked_at === null ? null : String(task.blocked_at),
+    last_progress_at:
+      task.last_progress_at === null ? null : String(task.last_progress_at),
+    business_authority: task.business_authority,
+    external_binding_id: task.external_binding_id,
+    created_at: String(task.created_at),
+    updated_at: String(task.updated_at),
+    accepted_at: task.accepted_at === null ? null : String(task.accepted_at),
+    cancelled_at: task.cancelled_at === null ? null : String(task.cancelled_at),
+    assignment:
+      assignment === null
+        ? null
+        : {
+            assignment_id: assignment.assignment_id,
+            assignment_version: assignment.assignment_version,
+            owner_actor_id: assignment.owner_actor_id,
+            owner_name: names.get(assignment.owner_actor_id) ?? null,
+            status: assignment.status,
+            offer_expires_at:
+              assignment.offer_expires_at === null
+                ? null
+                : String(assignment.offer_expires_at),
+            delivery_id: assignment.delivery_id,
+          },
+    delivery_ids: deliveryIds,
+    attachments,
+    can_offer:
+      task.status === 'unassigned' &&
+      canDispatch(task, context) &&
+      roomCapabilitiesFor(context.room, context.member).create_task,
+    can_claim:
+      task.status === 'unassigned' &&
+      task.reviewer_actor_id !== context.caller,
+    can_cancel: canCancel,
+    can_accept: canActOnOffer,
+    can_decline: canActOnOffer,
   };
 }
 
-export async function taskListGet(
+export async function taskGet(
   db: D1Database,
   principal: Principal,
-  input: TaskListGetInput,
-): Promise<RoomTaskListResult> {
-  const { caller, room, boundary } = await requireRoomMember(db, principal, input.room_id);
-  const history = createdHistoryFilter('t', boundary);
-  const result = await db
+  input: TaskGetInput,
+): Promise<TaskResult> {
+  const { task, context } = await requireVisibleTask(db, principal, input.task_id);
+  return resultFor(db, context, task);
+}
+
+export async function taskList(
+  db: D1Database,
+  principal: Principal,
+  input: TaskListInput,
+): Promise<TaskListResult> {
+  const caller = actorId(principal);
+  const limit = Math.min(input.limit ?? LIMITS.taskListDefault, LIMITS.taskListMax);
+  if (input.scope === 'mine') {
+    const filters = input.status ? 'AND t.status = ?' : '';
+    const binds: unknown[] = [caller];
+    if (input.status) binds.push(input.status);
+    if (input.room_id) binds.push(input.room_id);
+    // 五个位置参数按 SQL 出现顺序：创建者、负责人、验收人、offer/active 负责人、limit。
+    binds.push(caller, caller, caller, caller, limit);
+    const rows = await db
+      .prepare(
+        `SELECT t.* FROM tasks t
+           JOIN room_members m
+             ON m.room_id = t.room_id AND m.actor_id = ? AND m.status = 'active'
+           JOIN rooms r ON r.room_id = t.room_id
+          WHERE (r.kind = 'direct' OR r.member_history_policy = 'full' OR t.created_at >= m.joined_at)
+            ${filters}
+            ${input.room_id ? 'AND t.room_id = ?' : ''}
+            AND (t.created_by = ? OR t.owner_actor_id = ? OR t.reviewer_actor_id = ?
+                 OR EXISTS (
+                   SELECT 1 FROM task_assignments a
+                    WHERE a.task_id = t.task_id AND a.owner_actor_id = ?
+                      AND a.status IN ('offered','active')
+                 ))
+          ORDER BY t.updated_at DESC, t.task_id DESC
+          LIMIT ?`,
+      )
+      .bind(...binds)
+      .all<TaskRow>();
+    const tasks: TaskView[] = [];
+    for (const task of rows.results) {
+      const room = await getRoom(db, task.room_id);
+      if (!room) continue;
+      const member = await getMember(db, room.room_id, caller);
+      if (!member || member.status !== 'active') continue;
+      const boundary = historyBoundary(room, member);
+      tasks.push(
+        await buildTaskView(db, {
+          caller,
+          callerKind: principal.actor?.kind ?? 'human',
+          room,
+          member,
+          boundary,
+        }, task),
+      );
+    }
+    return { tasks, next_cursor: null, has_more: false, authorization: null };
+  }
+
+  if (!input.room_id) {
+    throw new BusinessError('INVALID_ARGUMENT', 'room_id 与 scope=mine 至少提供一个');
+  }
+  const { caller: roomCaller, room, member, boundary } = await requireRoomMember(
+    db,
+    principal,
+    input.room_id,
+  );
+  const filters: string[] = [];
+  const binds: unknown[] = [room.room_id];
+  if (input.status) {
+    filters.push('AND status = ?');
+    binds.push(input.status);
+  }
+  if (!boundary.full) {
+    filters.push('AND created_at >= ?');
+    binds.push(boundary.fromAt);
+  }
+  binds.push(limit);
+  const rows = await db
     .prepare(
-      `SELECT * FROM room_tasks t
-        WHERE t.room_id = ? AND t.list_id = ? AND (${history.sql})
-        ORDER BY t.sort_order ASC, t.task_id ASC`,
+      `SELECT * FROM tasks
+        WHERE room_id = ? ${filters.join(' ')}
+        ORDER BY updated_at DESC, task_id DESC
+        LIMIT ?`,
     )
-    .bind(room.room_id, DEFAULT_LIST_ID, ...history.binds)
-    .all<RoomTaskRow>();
-  const context = await contextFor(db, principal, caller, room, result.results);
-  const tasks = result.results.map((task) => taskView(task, context));
+    .bind(...binds)
+    .all<TaskRow>();
+  const context: TaskContext = {
+    caller: roomCaller,
+    callerKind: principal.actor?.kind ?? 'human',
+    room,
+    member,
+    boundary,
+  };
+  const assignmentIds = rows.results
+    .map((task) => task.current_assignment_id)
+    .filter((value): value is string => value !== null);
+  const assignmentOwners =
+    assignmentIds.length === 0
+      ? []
+      : (
+          await db
+            .prepare(
+              `SELECT owner_actor_id FROM task_assignments
+                WHERE assignment_id IN (${assignmentIds.map(() => '?').join(', ')})`,
+            )
+            .bind(...assignmentIds)
+            .all<{ owner_actor_id: string }>()
+        ).results.map((row) => row.owner_actor_id);
+  const names = await actorNames(
+    db,
+    [
+      ...rows.results.flatMap((task) => [
+        task.created_by,
+        task.reviewer_actor_id,
+        ...(task.owner_actor_id ? [task.owner_actor_id] : []),
+      ]),
+      ...assignmentOwners,
+    ],
+  );
+  const tasks = await Promise.all(
+    rows.results.map((task) => buildTaskView(db, context, task, names)),
+  );
   return {
     tasks,
-    total: tasks.length,
-    done: tasks.filter((task) => task.status === 'done').length,
+    next_cursor: null,
+    has_more: false,
     authorization: historySnapshot(boundary),
   };
 }
 
-/**
- * 一次汇总当前身份所有 active 房间的任务进度。
- *
- * 可选 room_ids 只用于过滤；非成员房间不会出现在结果里，也不暴露房间是否存在。
- */
+export async function taskOffer(
+  db: D1Database,
+  principal: Principal,
+  input: TaskOfferInput,
+): Promise<TaskResult> {
+  const { task, context } = await requireVisibleTask(db, principal, input.task_id);
+  const payloadHash = await sha256Hex(
+    stableStringify({
+      task_id: task.task_id,
+      assignee_actor_id: input.assignee_actor_id,
+      expected_revision: input.expected_revision ?? null,
+    }),
+  );
+  const replay = await getOperation(db, context.caller, input.request_id);
+  if (replay) return resolveOperation(replay, payloadHash) as TaskResult;
+  if (!canDispatch(task, context)) {
+    throw new BusinessError('PERMISSION_DENIED', '只有创建者、群 owner 或管理员可以派发任务');
+  }
+  if (task.status !== 'unassigned') {
+    throw new BusinessError('CONFLICT', '只有未指派任务可以发起 offer', {
+      task_id: task.task_id,
+      status: task.status,
+    });
+  }
+  if (input.expected_revision !== undefined && input.expected_revision !== task.revision) {
+    throw new BusinessError('VERSION_CONFLICT', '任务版本已变化，请刷新后重试', {
+      expected: input.expected_revision,
+      actual: task.revision,
+    });
+  }
+  if (input.assignee_actor_id === task.reviewer_actor_id) {
+    throw invalid('候选负责人', '不能是当前验收人；执行者不能验收自己的交付');
+  }
+  const candidate = await assertTaskParticipant(
+    db,
+    context.room,
+    input.assignee_actor_id,
+    '候选负责人',
+    task.created_at,
+  );
+  if (await blockedBetween(db, context.caller, input.assignee_actor_id)) {
+    throw new BusinessError('BLOCKED', '对方已拉黑，不能派发任务');
+  }
+  if (
+    task.reviewer_actor_id !== context.caller &&
+    (await blockedBetween(db, task.reviewer_actor_id, input.assignee_actor_id))
+  ) {
+    throw new BusinessError('BLOCKED', '验收人与候选负责人之间存在拉黑关系');
+  }
+  const card = await getTaskCard(db, task.task_id);
+  if (!card) throw new BusinessError('CONFLICT', '任务卡片不存在，不能派发');
+  const canDeliver = candidate.kind === 'agent' && candidate.actor_id !== context.caller;
+
+  const at = nowMs();
+  const assignmentId = newId('asg');
+  const deliveryId = canDeliver ? newId('dlv') : null;
+  const nextRevision = task.revision + 1;
+  const versionRow = await db
+    .prepare(
+      'SELECT COALESCE(MAX(assignment_version), 0) + 1 AS version FROM task_assignments WHERE task_id = ?',
+    )
+    .bind(task.task_id)
+    .first<{ version: number }>();
+  const assignmentVersion = versionRow?.version ?? 1;
+  const assignment: TaskAssignmentRow = {
+    assignment_id: assignmentId,
+    task_id: task.task_id,
+    assignment_version: assignmentVersion,
+    owner_actor_id: candidate.actor_id,
+    status: 'offered',
+    offered_by: context.caller,
+    offer_expires_at: at + LIMITS.taskOfferTtlMs,
+    accepted_at: null,
+    ended_at: null,
+    last_progress_at: null,
+    delivery_id: deliveryId,
+    created_at: at,
+    updated_at: at,
+  };
+  const updated: TaskRow = {
+    ...task,
+    status: 'offered',
+    current_assignment_id: assignmentId,
+    revision: nextRevision,
+    updated_at: at,
+  };
+  const names = await actorNames(db, [
+    context.caller,
+    task.reviewer_actor_id,
+    candidate.actor_id,
+  ]);
+  const view = await viewFromKnownRow(
+    db,
+    context,
+    updated,
+    card.message_id,
+    assignment,
+    deliveryId ? [deliveryId] : [],
+    [],
+    names,
+  );
+  const result: TaskResult = {
+    task: view,
+    authorization: historySnapshot(context.boundary),
+  };
+
+  await runIdempotent(db, {
+    actorId: context.caller,
+    requestId: input.request_id,
+    payloadHash,
+    result,
+    build: (resultJson) => [
+      operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
+      memberGuard(db, context.room.room_id, context.caller),
+      taskStateGuard(db, task.task_id, 'status = ? AND revision = ?', 'unassigned', task.revision),
+      db
+        .prepare(
+          guardSql(
+            'taskState',
+            "EXISTS (SELECT 1 FROM task_assignments WHERE task_id = ? AND status IN ('offered','active'))",
+          ),
+        )
+        .bind(task.task_id),
+      participantGuard(db, context.room.room_id, candidate.actor_id),
+      contactBlockGuardStatement(db, context.caller, candidate.actor_id),
+      ...(task.reviewer_actor_id !== context.caller
+        ? [contactBlockGuardStatement(db, task.reviewer_actor_id, candidate.actor_id)]
+        : []),
+      db
+        .prepare(
+          `UPDATE tasks
+              SET status = 'offered', current_assignment_id = ?, revision = revision + 1,
+                  updated_at = ?
+            WHERE task_id = ? AND status = 'unassigned' AND revision = ?`,
+        )
+        .bind(assignmentId, at, task.task_id, task.revision),
+      db
+        .prepare(
+          `INSERT INTO task_assignments
+             (assignment_id, task_id, assignment_version, owner_actor_id, status,
+              offered_by, offer_expires_at, accepted_at, ended_at, last_progress_at,
+              delivery_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'offered', ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
+        )
+        .bind(
+          assignmentId,
+          task.task_id,
+          assignmentVersion,
+          candidate.actor_id,
+          context.caller,
+          assignment.offer_expires_at,
+          deliveryId,
+          at,
+          at,
+        ),
+      ...(deliveryId
+        ? offerDeliveryStatements(db, {
+            deliveryId,
+            recipientId: candidate.actor_id,
+            roomId: task.room_id,
+            cardMessageId: card.message_id,
+            cardEventKey: `message:${card.message_id}`,
+            senderId: task.created_by,
+            task: updated,
+            assignment,
+            at,
+          })
+        : []),
+      ...taskRoomEvent(
+        db,
+        updated,
+        'task_offered',
+        `task:offered:${assignmentId}`,
+        at,
+        {
+          changed_by: context.caller,
+          assignment_id: assignmentId,
+          assignment_version: assignmentVersion,
+          owner_actor_id: candidate.actor_id,
+        },
+      ).statements,
+      ...(candidate.kind === 'human' && candidate.actor_id !== context.caller
+        ? inboxTaskEvent(
+            db,
+            candidate.actor_id,
+            `task:offer:${assignmentId}`,
+            'task_offered',
+            updated,
+            assignment,
+            card.message_id,
+            at,
+            0,
+          )
+        : []),
+    ],
+    onUniqueConflict: async (error) => {
+      const text = String(error);
+      if (
+        text.includes('idx_task_assignments_current') ||
+        text.includes('idx_task_deliveries_assignment_kind') ||
+        text.includes('UNIQUE constraint failed: task_assignments.task_id') ||
+        text.includes('UNIQUE constraint failed: deliveries.recipient_id, deliveries.message_id')
+      ) {
+        throw new BusinessError('CONFLICT', '该任务已被派发或该卡片已向该 Agent 派发过', {
+          task_id: task.task_id,
+        });
+      }
+      return undefined;
+    },
+  });
+  return result;
+}
+
+export async function taskClaim(
+  db: D1Database,
+  principal: Principal,
+  input: TaskClaimInput,
+): Promise<TaskResult> {
+  const { task, context } = await requireVisibleTask(db, principal, input.task_id);
+  const payloadHash = await sha256Hex(stableStringify({ task_id: task.task_id }));
+  const replay = await getOperation(db, context.caller, input.request_id);
+  if (replay) return resolveOperation(replay, payloadHash) as TaskResult;
+  if (task.status !== 'unassigned') {
+    throw new BusinessError('CLAIM_CONFLICT', '任务已被领取或状态已变化', {
+      task_id: task.task_id,
+    });
+  }
+  if (task.reviewer_actor_id === context.caller) {
+    throw new BusinessError('PERMISSION_DENIED', '验收人不能领取自己验收的任务');
+  }
+  if (await blockedBetween(db, context.caller, task.created_by)) {
+    throw new BusinessError('BLOCKED', '对方已拉黑，不能领取该任务');
+  }
+  const at = nowMs();
+  const assignmentId = newId('asg');
+  const versionRow = await db
+    .prepare(
+      'SELECT COALESCE(MAX(assignment_version), 0) + 1 AS version FROM task_assignments WHERE task_id = ?',
+    )
+    .bind(task.task_id)
+    .first<{ version: number }>();
+  const assignmentVersion = versionRow?.version ?? 1;
+  const updated: TaskRow = {
+    ...task,
+    status: 'in_progress',
+    owner_actor_id: context.caller,
+    current_assignment_id: assignmentId,
+    revision: task.revision + 1,
+    last_progress_at: at,
+    updated_at: at,
+  };
+  const assignment: TaskAssignmentRow = {
+    assignment_id: assignmentId,
+    task_id: task.task_id,
+    assignment_version: assignmentVersion,
+    owner_actor_id: context.caller,
+    status: 'active',
+    offered_by: context.caller,
+    offer_expires_at: null,
+    accepted_at: at,
+    ended_at: null,
+    last_progress_at: at,
+    delivery_id: null,
+    created_at: at,
+    updated_at: at,
+  };
+  const names = await actorNames(db, [
+    task.created_by,
+    task.reviewer_actor_id,
+    context.caller,
+  ]);
+  const view = await viewFromKnownRow(
+    db,
+    context,
+    updated,
+    (await getTaskCard(db, task.task_id))?.message_id ?? '',
+    assignment,
+    [],
+    [],
+    names,
+  );
+  const result: TaskResult = {
+    task: view,
+    authorization: historySnapshot(context.boundary),
+  };
+
+  await runIdempotent(db, {
+    actorId: context.caller,
+    requestId: input.request_id,
+    payloadHash,
+    result,
+    build: (resultJson) => [
+      operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
+      memberGuard(db, task.room_id, context.caller),
+      // 领取竞争必须映射为 CLAIM_CONFLICT，而不是通用的任务状态 CONFLICT。
+      db
+        .prepare(
+          guardSql(
+            'claimConflict',
+            "NOT EXISTS (SELECT 1 FROM tasks WHERE task_id = ? AND status = ? AND revision = ?)",
+          ),
+        )
+        .bind(task.task_id, 'unassigned', task.revision),
+      db
+        .prepare(
+          guardSql(
+            'taskState',
+            "EXISTS (SELECT 1 FROM task_assignments WHERE task_id = ? AND status IN ('offered','active'))",
+          ),
+        )
+        .bind(task.task_id),
+      contactBlockGuardStatement(db, context.caller, task.created_by),
+      db
+        .prepare(
+          `UPDATE tasks
+              SET status = 'in_progress', owner_actor_id = ?, current_assignment_id = ?,
+                  revision = revision + 1, last_progress_at = ?, updated_at = ?
+            WHERE task_id = ? AND status = 'unassigned' AND revision = ?`,
+        )
+        .bind(context.caller, assignmentId, at, at, task.task_id, task.revision),
+      db
+        .prepare(
+          `INSERT INTO task_assignments
+             (assignment_id, task_id, assignment_version, owner_actor_id, status,
+              offered_by, offer_expires_at, accepted_at, ended_at, last_progress_at,
+              delivery_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'active', ?, NULL, ?, NULL, ?, NULL, ?, ?)`,
+        )
+        .bind(assignmentId, task.task_id, assignmentVersion, context.caller, context.caller, at, at, at, at),
+      ...taskRoomEvent(
+        db,
+        updated,
+        'task_claimed',
+        `task:claimed:${assignmentId}`,
+        at,
+        {
+          changed_by: context.caller,
+          assignment_id: assignmentId,
+          assignment_version: assignmentVersion,
+          owner_actor_id: context.caller,
+        },
+      ).statements,
+    ],
+    onUniqueConflict: async (error) => {
+      const text = String(error);
+      if (
+        text.includes('idx_task_assignments_current') ||
+        text.includes('UNIQUE constraint failed: task_assignments.task_id')
+      ) {
+        throw new BusinessError('CLAIM_CONFLICT', '任务已被他人领取', {
+          task_id: task.task_id,
+        });
+      }
+      return undefined;
+    },
+  });
+  return result;
+}
+
+export async function taskCancel(
+  db: D1Database,
+  principal: Principal,
+  input: TaskCancelInput,
+): Promise<TaskResult> {
+  const { task, context } = await requireVisibleTask(db, principal, input.task_id);
+  const reason = normalizeCancelReason(input.reason);
+  const payloadHash = await sha256Hex(
+    stableStringify({ task_id: task.task_id, reason }),
+  );
+  const replay = await getOperation(db, context.caller, input.request_id);
+  if (replay) return resolveOperation(replay, payloadHash) as TaskResult;
+  if (
+    task.status === 'accepted' ||
+    task.status === 'cancelled' ||
+    task.status === 'legacy_completed'
+  ) {
+    throw new BusinessError('CONFLICT', '终态任务不能取消', { status: task.status });
+  }
+  const canCancel =
+    task.created_by === context.caller ||
+    task.owner_actor_id === context.caller ||
+    isOwnerOrAdmin(context.room, context.member);
+  if (!canCancel) {
+    throw new BusinessError('PERMISSION_DENIED', '只有创建者、当前负责人或群管理员可以取消任务');
+  }
+  const at = nowMs();
+  const assignment = task.current_assignment_id
+    ? await getTaskAssignment(db, task.current_assignment_id)
+    : null;
+  const deliveries = assignment
+    ? await db
+        .prepare(
+          `SELECT * FROM task_deliveries
+            WHERE assignment_id = ? AND kind = 'task_offer'`,
+        )
+        .bind(assignment.assignment_id)
+        .all<TaskDeliveryRow>()
+    : { results: [] as TaskDeliveryRow[] };
+  const updated: TaskRow = {
+    ...task,
+    status: 'cancelled',
+    owner_actor_id: null,
+    current_assignment_id: null,
+    revision: task.revision + 1,
+    cancelled_at: at,
+    updated_at: at,
+  };
+  const card = await getTaskCard(db, task.task_id);
+  const names = await actorNames(db, [
+    task.created_by,
+    task.reviewer_actor_id,
+    ...(task.owner_actor_id ? [task.owner_actor_id] : []),
+  ]);
+  const keptDeliveryIds = deliveries.results.map((row) => row.delivery_id);
+  const view = await viewFromKnownRow(
+    db,
+    context,
+    updated,
+    card?.message_id ?? '',
+    null,
+    keptDeliveryIds,
+    await attachmentsFor(db, task.task_id),
+    names,
+  );
+  const result: TaskResult = {
+    task: view,
+    authorization: historySnapshot(context.boundary),
+  };
+
+  const deliveryStatements: D1PreparedStatement[] = [];
+  const inboxHumanStatements: D1PreparedStatement[] = [];
+  for (const row of deliveries.results) {
+    const delivery = await getDelivery(db, row.delivery_id);
+    if (!delivery) continue;
+    if (delivery.state !== 'pending' && delivery.state !== 'claimed') continue;
+    const inboxKey = `cancel:${delivery.delivery_id}:${input.request_id}`;
+    deliveryStatements.push(
+      db
+        .prepare(
+          `UPDATE actors
+              SET pending_count = pending_count - (
+                    SELECT CASE WHEN state = 'pending' THEN 1 ELSE 0 END
+                      FROM deliveries WHERE delivery_id = ?
+                  ),
+                  updated_at = ?
+            WHERE actor_id = ?`,
+        )
+        .bind(delivery.delivery_id, at, delivery.recipient_id),
+      db
+        .prepare(
+          `UPDATE deliveries SET state = 'cancelled', error = ?, updated_at = ?
+            WHERE delivery_id = ? AND state IN ('pending', 'claimed')`,
+        )
+        .bind(reason, at, delivery.delivery_id),
+      eventStatement(
+        db,
+        {
+          eventKey: inboxKey,
+          scopeKind: 'inbox',
+          scopeId: delivery.recipient_id,
+          eventType: 'delivery_cancelled',
+          refId: delivery.delivery_id,
+          metadata: {
+            reason,
+            actor_id: context.caller,
+            room_id: delivery.room_id,
+            message_id: delivery.message_id,
+            sender_id: task.created_by,
+            task_id: task.task_id,
+          },
+        },
+        at,
+      ),
+      outboxStatement(db, { topic: inboxTopic(delivery.recipient_id), eventKey: inboxKey }, at),
+      inboxHeadStatement(db, delivery.recipient_id, inboxKey, at, 0),
+    );
+  }
+  // human 没有 delivery；offer/接单状态被取消时用持久个人通知说明控制变化，
+  // 不产生新任务、新 delivery 或 pending_count。
+  if (
+    assignment &&
+    assignment.delivery_id === null &&
+    assignment.owner_actor_id !== context.caller &&
+    (assignment.status === 'offered' || assignment.status === 'active')
+  ) {
+    inboxHumanStatements.push(
+      ...inboxTaskEvent(
+        db,
+        assignment.owner_actor_id,
+        `task:cancel:${assignment.assignment_id}`,
+        'task_cancelled',
+        updated,
+        assignment,
+        card?.message_id ?? '',
+        at,
+        0,
+        { reason },
+      ),
+    );
+  }
+
+  await runIdempotent(db, {
+    actorId: context.caller,
+    requestId: input.request_id,
+    payloadHash,
+    result,
+    build: (resultJson) => [
+      operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
+      memberGuard(db, task.room_id, context.caller),
+      taskStateGuard(
+        db,
+        task.task_id,
+        "status NOT IN ('accepted','cancelled','legacy_completed')",
+      ),
+      db
+        .prepare(
+          `UPDATE tasks
+              SET status = 'cancelled', owner_actor_id = NULL, current_assignment_id = NULL,
+                  revision = revision + 1, cancelled_at = ?, updated_at = ?
+            WHERE task_id = ? AND status NOT IN ('accepted','cancelled','legacy_completed')`,
+        )
+        .bind(at, at, task.task_id),
+      ...(assignment
+        ? [
+            db
+              .prepare(
+                `UPDATE task_assignments
+                    SET status = 'revoked', ended_at = ?, updated_at = ?
+                  WHERE assignment_id = ? AND status IN ('offered','active')`,
+              )
+              .bind(at, at, assignment.assignment_id),
+          ]
+        : []),
+      ...deliveryStatements,
+      ...inboxHumanStatements,
+      ...taskRoomEvent(
+        db,
+        updated,
+        'task_cancelled',
+        `task:cancelled:${task.task_id}:${updated.revision}`,
+        at,
+        {
+          changed_by: context.caller,
+          reason,
+        },
+      ).statements,
+    ],
+  });
+  return result;
+}
+
+async function attachmentsFor(
+  db: D1Database,
+  taskId: string,
+): Promise<Array<{ file_id: string; label: string }>> {
+  const rows = await db
+    .prepare(
+      `SELECT * FROM task_attachments
+        WHERE task_id = ? ORDER BY created_at ASC, file_id ASC`,
+    )
+    .bind(taskId)
+    .all<TaskAttachmentRow>();
+  return rows.results.map((row) => ({ file_id: row.file_id, label: row.label }));
+}
+
 export async function taskSummary(
   db: D1Database,
   principal: Principal,
   input: TaskSummaryInput,
-): Promise<RoomTaskSummaryResult> {
+): Promise<TaskSummaryResult> {
   const caller = actorId(principal);
   const filters = input.room_ids ?? [];
-  const placeholders = filters.length > 0 ? ` AND m.room_id IN (${filters.map(() => '?').join(', ')})` : '';
+  const placeholders =
+    filters.length > 0 ? ` AND m.room_id IN (${filters.map(() => '?').join(', ')})` : '';
   const result = await db
     .prepare(
       `SELECT m.room_id AS room_id,
               COUNT(t.task_id) AS total,
-              COALESCE(SUM(CASE WHEN t.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
-              COALESCE(SUM(CASE WHEN t.status = 'claimed' AND t.assignee_actor_id = ? THEN 1 ELSE 0 END), 0) AS claimed,
-              COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) AS done,
+              COALESCE(SUM(CASE WHEN t.status = 'unassigned' THEN 1 ELSE 0 END), 0) AS pending,
+              COALESCE(SUM(CASE WHEN t.status = 'in_progress' AND t.owner_actor_id = ? THEN 1 ELSE 0 END), 0) AS claimed,
+              COALESCE(SUM(CASE WHEN t.status IN ('accepted','legacy_completed') THEN 1 ELSE 0 END), 0) AS done,
               COALESCE(SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
          FROM room_members m
          JOIN rooms r ON r.room_id = m.room_id
-         LEFT JOIN room_tasks t
-           ON t.room_id = m.room_id AND t.list_id = ?
-          AND (r.kind = 'direct' OR r.member_history_policy = 'full'
-            OR (t.created_seq IS NOT NULL AND t.created_seq >= m.joined_seq)
-            OR (t.created_seq IS NULL AND t.created_at >= m.joined_at))
+         LEFT JOIN tasks t
+           ON t.room_id = m.room_id
+          AND (r.kind = 'direct' OR r.member_history_policy = 'full' OR t.created_at >= m.joined_at)
         WHERE m.actor_id = ? AND m.status = 'active'${placeholders}
         GROUP BY m.room_id
         ORDER BY m.room_id ASC`,
     )
-    .bind(caller, DEFAULT_LIST_ID, caller, ...filters)
+    .bind(caller, caller, ...filters)
     .all<{
       room_id: string;
       total: number;
@@ -349,31 +1862,23 @@ export async function taskSummary(
   };
 }
 
-/**
- * 汇总当前身份所有 active 房间的任务计数。
- *
- * 只读；不写事件、outbox 或 inbox，不改变 `pending_count`、房间 head 或未读。
- * 用于 `network_login` 的只读任务概览，避免 Agent 上线后不知道有任务。
- */
 export async function taskCounts(db: D1Database, principal: Principal): Promise<TaskCounts> {
   const caller = actorId(principal);
   const row = await db
     .prepare(
       `SELECT COUNT(t.task_id) AS total,
-              COALESCE(SUM(CASE WHEN t.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
-              COALESCE(SUM(CASE WHEN t.status = 'claimed' AND t.assignee_actor_id = ? THEN 1 ELSE 0 END), 0) AS claimed,
-              COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) AS done,
+              COALESCE(SUM(CASE WHEN t.status = 'unassigned' THEN 1 ELSE 0 END), 0) AS pending,
+              COALESCE(SUM(CASE WHEN t.status = 'in_progress' AND t.owner_actor_id = ? THEN 1 ELSE 0 END), 0) AS claimed,
+              COALESCE(SUM(CASE WHEN t.status IN ('accepted','legacy_completed') THEN 1 ELSE 0 END), 0) AS done,
               COALESCE(SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
          FROM room_members m
          JOIN rooms r ON r.room_id = m.room_id
-         LEFT JOIN room_tasks t
-           ON t.room_id = m.room_id AND t.list_id = ?
-          AND (r.kind = 'direct' OR r.member_history_policy = 'full'
-            OR (t.created_seq IS NOT NULL AND t.created_seq >= m.joined_seq)
-            OR (t.created_seq IS NULL AND t.created_at >= m.joined_at))
+         LEFT JOIN tasks t
+           ON t.room_id = m.room_id
+          AND (r.kind = 'direct' OR r.member_history_policy = 'full' OR t.created_at >= m.joined_at)
         WHERE m.actor_id = ? AND m.status = 'active'`,
     )
-    .bind(caller, DEFAULT_LIST_ID, caller)
+    .bind(caller, caller)
     .first<{ total: number; pending: number; claimed: number; done: number; failed: number }>();
   return {
     pending: row?.pending ?? 0,
@@ -382,346 +1887,4 @@ export async function taskCounts(db: D1Database, principal: Principal): Promise<
     failed: row?.failed ?? 0,
     total: row?.total ?? 0,
   };
-}
-
-export async function taskAdd(
-  db: D1Database,
-  principal: Principal,
-  input: TaskAddInput,
-): Promise<RoomTaskResult> {
-  const { caller, room } = await requireRoomMember(db, principal, input.room_id);
-  const description = normalizeTaskText(input.description, '任务描述');
-  const payloadHash = await sha256Hex(
-    stableStringify({ room_id: room.room_id, description }),
-  );
-  const replay = await getOperation(db, caller, input.request_id);
-  if (replay) return resolveOperation(replay, payloadHash) as RoomTaskResult;
-
-  const at = nowMs();
-  const task: RoomTaskRow = {
-    task_id: `task_${crypto.randomUUID().replaceAll('-', '')}`,
-    room_id: room.room_id,
-    list_id: DEFAULT_LIST_ID,
-    description,
-    status: 'pending',
-    assignee_actor_id: null,
-    result: null,
-    created_by: caller,
-    created_at: at,
-    created_seq: null,
-    updated_at: at,
-    completed_at: null,
-    sort_order: 0,
-  };
-  const context: ViewContext = {
-    caller,
-    callerKind: principal.actor?.kind ?? 'human',
-    room,
-    names: await actorNames(db, [caller]),
-  };
-  const result: RoomTaskResult = { task: taskView(task, context) };
-  const event = taskEventStatement(db, task, 'room_task_added', caller, at);
-
-  await runIdempotent(db, {
-    actorId: caller,
-    requestId: input.request_id,
-    payloadHash,
-    result,
-    build: (resultJson) => [
-      operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
-      memberGuard(db, room.room_id, caller),
-      // 群策略：owner_admin 时普通成员不能创建任务；管理员和 owner 始终可以。
-      capabilityGuardStatement(db, room.room_id, caller, 'create_task'),
-      db
-        .prepare(
-          guardSql(
-            'roomTaskLimit',
-            '(SELECT COUNT(*) FROM room_tasks WHERE room_id = ? AND list_id = ?) >= ?',
-          ),
-        )
-        .bind(room.room_id, DEFAULT_LIST_ID, LIMITS.roomTasksPerRoom),
-      event.statement,
-      db
-        .prepare(
-          `INSERT INTO room_tasks
-             (task_id, room_id, list_id, description, status, assignee_actor_id,
-              result, created_by, created_at, created_seq, updated_at, completed_at, sort_order)
-           VALUES (?, ?, ?, ?, 'pending', NULL, NULL, ?, ?,
-             (SELECT event_seq FROM events WHERE event_key = ?), ?, NULL,
-             (SELECT COALESCE(MAX(sort_order), 0) + 1
-                FROM room_tasks WHERE room_id = ? AND list_id = ?))`,
-        )
-        .bind(
-          task.task_id,
-          task.room_id,
-          task.list_id,
-          task.description,
-          task.created_by,
-          task.created_at,
-          event.eventKey,
-          task.updated_at,
-          task.room_id,
-          task.list_id,
-        ),
-      event.outbox,
-    ],
-  });
-  return result;
-}
-
-export async function taskClaim(
-  db: D1Database,
-  principal: Principal,
-  input: TaskClaimInput,
-): Promise<RoomTaskResult> {
-  requireAgent(principal);
-  const caller = actorId(principal);
-  const payloadHash = await sha256Hex(stableStringify({ task_id: input.task_id }));
-  // 幂等重放先于状态校验：任务被领取/完成后，相同 request_id 仍返回原结果。
-  const replay = await getOperation(db, caller, input.request_id);
-  if (replay) return resolveOperation(replay, payloadHash) as RoomTaskResult;
-
-  const existing = await getRoomTask(db, input.task_id);
-  if (!existing) throw new BusinessError('NOT_FOUND', '任务不存在');
-  const { room, boundary } = await requireRoomMember(db, principal, existing.room_id);
-  if (!visibleCreated(existing, boundary)) {
-    throw new BusinessError('NOT_FOUND', '任务不存在或当前不可见');
-  }
-  if (existing.status !== 'pending') {
-    throw new BusinessError('CLAIM_CONFLICT', '任务已被领取或状态已变化', {
-      task_id: existing.task_id,
-    });
-  }
-
-  const at = nowMs();
-  const task: RoomTaskRow = {
-    ...existing,
-    status: 'claimed',
-    assignee_actor_id: caller,
-    updated_at: at,
-  };
-  const context = await contextFor(db, principal, caller, room, [task]);
-  const result: RoomTaskResult = { task: taskView(task, context) };
-  const event = taskEventStatement(db, task, 'room_task_claimed', caller, at);
-
-  await runIdempotent(db, {
-    actorId: caller,
-    requestId: input.request_id,
-    payloadHash,
-    result,
-    build: (resultJson) => [
-      operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
-      memberGuard(db, room.room_id, caller),
-      db
-        .prepare(
-          `UPDATE room_tasks
-              SET status = 'claimed', assignee_actor_id = ?, updated_at = ?
-            WHERE task_id = ? AND status = 'pending'`,
-        )
-        .bind(caller, at, task.task_id),
-      db
-        .prepare(
-          guardSql(
-            'taskConflict',
-            `NOT EXISTS (
-               SELECT 1 FROM room_tasks
-                WHERE task_id = ? AND status = 'claimed' AND assignee_actor_id = ?
-             )`,
-          ),
-        )
-        .bind(task.task_id, caller),
-      event.statement,
-      event.outbox,
-    ],
-  });
-  return result;
-}
-
-async function finishTask(
-  db: D1Database,
-  principal: Principal,
-  input: TaskCompleteInput | TaskFailInput,
-  status: 'done' | 'failed',
-): Promise<RoomTaskResult> {
-  requireAgent(principal);
-  const caller = actorId(principal);
-  const text =
-    status === 'done'
-      ? normalizeTaskText((input as TaskCompleteInput).result, '任务结果')
-      : normalizeTaskText((input as TaskFailInput).error, '失败原因');
-  const payloadHash = await sha256Hex(stableStringify({ task_id: input.task_id, result: text }));
-  // 幂等重放先于状态校验：任务已完成/失败后，相同 request_id 仍返回原结果。
-  const replay = await getOperation(db, caller, input.request_id);
-  if (replay) return resolveOperation(replay, payloadHash) as RoomTaskResult;
-
-  const existing = await getRoomTask(db, input.task_id);
-  if (!existing) throw new BusinessError('NOT_FOUND', '任务不存在');
-  const { room, boundary } = await requireRoomMember(db, principal, existing.room_id);
-  // 历史收紧或重新加入后任务材料失权：拒绝完成，避免把不可见材料当成
-  // 已验收成果。任务需要重新派发或由群主恢复可见性。
-  if (!visibleCreated(existing, boundary)) {
-    throw new BusinessError('NOT_FOUND', '任务不存在或当前不可见');
-  }
-  if (existing.status !== 'claimed' || existing.assignee_actor_id !== caller) {
-    throw new BusinessError('CLAIM_CONFLICT', '任务不是由当前身份领取或状态已变化', {
-      task_id: existing.task_id,
-    });
-  }
-
-  const at = nowMs();
-  const task: RoomTaskRow = {
-    ...existing,
-    status,
-    result: text,
-    updated_at: at,
-    completed_at: at,
-  };
-  const context = await contextFor(db, principal, caller, room, [task]);
-  const result: RoomTaskResult = { task: taskView(task, context) };
-  const event = taskEventStatement(
-    db,
-    task,
-    status === 'done' ? 'room_task_completed' : 'room_task_failed',
-    caller,
-    at,
-  );
-
-  await runIdempotent(db, {
-    actorId: caller,
-    requestId: input.request_id,
-    payloadHash,
-    result,
-    build: (resultJson) => [
-      operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
-      memberGuard(db, room.room_id, caller),
-      db
-        .prepare(
-          `UPDATE room_tasks
-              SET status = ?, result = ?, updated_at = ?, completed_at = ?
-            WHERE task_id = ? AND status = 'claimed' AND assignee_actor_id = ?`,
-        )
-        .bind(status, text, at, at, task.task_id, caller),
-      db
-        .prepare(
-          guardSql(
-            'taskConflict',
-            `NOT EXISTS (
-               SELECT 1 FROM room_tasks
-                WHERE task_id = ? AND status = ? AND assignee_actor_id = ?
-             )`,
-          ),
-        )
-        .bind(task.task_id, status, caller),
-      event.statement,
-      event.outbox,
-    ],
-  });
-  return result;
-}
-
-export function taskComplete(
-  db: D1Database,
-  principal: Principal,
-  input: TaskCompleteInput,
-): Promise<RoomTaskResult> {
-  return finishTask(db, principal, input, 'done');
-}
-
-export function taskFail(
-  db: D1Database,
-  principal: Principal,
-  input: TaskFailInput,
-): Promise<RoomTaskResult> {
-  return finishTask(db, principal, input, 'failed');
-}
-
-export async function taskUpdate(
-  db: D1Database,
-  principal: Principal,
-  input: TaskUpdateInput,
-): Promise<RoomTaskResult> {
-  const caller = actorId(principal);
-  const description = normalizeTaskText(input.description, '任务描述');
-  const payloadHash = await sha256Hex(
-    stableStringify({ task_id: input.task_id, description }),
-  );
-  // 幂等重放先于权限/状态校验；任务被删除后仍能返回原结果。
-  const replay = await getOperation(db, caller, input.request_id);
-  if (replay) return resolveOperation(replay, payloadHash) as RoomTaskResult;
-
-  const existing = await getRoomTask(db, input.task_id);
-  if (!existing) throw new BusinessError('NOT_FOUND', '任务不存在');
-  const { room, boundary } = await requireRoomMember(db, principal, existing.room_id);
-  if (!visibleCreated(existing, boundary)) {
-    throw new BusinessError('NOT_FOUND', '任务不存在或当前不可见');
-  }
-  if (existing.created_by !== caller && room.owner_id !== caller) {
-    throw new BusinessError('NOT_OWNER', '只有任务创建者或房间 owner 可以修改任务');
-  }
-
-  const at = nowMs();
-  const task: RoomTaskRow = { ...existing, description, updated_at: at };
-  const context = await contextFor(db, principal, caller, room, [task]);
-  const result: RoomTaskResult = { task: taskView(task, context) };
-  const event = taskEventStatement(db, task, 'room_task_updated', caller, at);
-
-  await runIdempotent(db, {
-    actorId: caller,
-    requestId: input.request_id,
-    payloadHash,
-    result,
-    build: (resultJson) => [
-      operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
-      memberGuard(db, room.room_id, caller),
-      taskEditorGuard(db, task.task_id, caller),
-      db
-        .prepare('UPDATE room_tasks SET description = ?, updated_at = ? WHERE task_id = ?')
-        .bind(description, at, task.task_id),
-      event.statement,
-      event.outbox,
-    ],
-  });
-  return result;
-}
-
-export async function taskDelete(
-  db: D1Database,
-  principal: Principal,
-  input: TaskDeleteInput,
-): Promise<RoomTaskDeletedResult> {
-  const caller = actorId(principal);
-  const payloadHash = await sha256Hex(stableStringify({ task_id: input.task_id }));
-  // 删除成功后任务行已不存在；重放必须先读 operations。
-  const replay = await getOperation(db, caller, input.request_id);
-  if (replay) return resolveOperation(replay, payloadHash) as RoomTaskDeletedResult;
-
-  const existing = await getRoomTask(db, input.task_id);
-  if (!existing) throw new BusinessError('NOT_FOUND', '任务不存在');
-  const { room, boundary } = await requireRoomMember(db, principal, existing.room_id);
-  if (!visibleCreated(existing, boundary)) {
-    throw new BusinessError('NOT_FOUND', '任务不存在或当前不可见');
-  }
-  if (existing.created_by !== caller && room.owner_id !== caller) {
-    throw new BusinessError('NOT_OWNER', '只有任务创建者或房间 owner 可以删除任务');
-  }
-
-  const at = nowMs();
-  const result: RoomTaskDeletedResult = { task_id: existing.task_id, deleted: true };
-  const event = taskEventStatement(db, existing, 'room_task_deleted', caller, at);
-
-  await runIdempotent(db, {
-    actorId: caller,
-    requestId: input.request_id,
-    payloadHash,
-    result,
-    build: (resultJson) => [
-      operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
-      memberGuard(db, room.room_id, caller),
-      taskEditorGuard(db, existing.task_id, caller),
-      db.prepare('DELETE FROM room_tasks WHERE task_id = ?').bind(existing.task_id),
-      event.statement,
-      event.outbox,
-    ],
-  });
-  return result;
 }

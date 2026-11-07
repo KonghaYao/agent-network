@@ -50,30 +50,63 @@ function seed(db: Database): void {
       ('rm_three', 'usr_owner', 'owner', 'active', 0, 0, ${AT}),
       ('rm_three', 'agt_b', 'member', 'active', 0, 0, ${AT});
 
-    INSERT INTO room_tasks
-      (task_id, room_id, list_id, description, status, assignee_actor_id, result,
-       created_by, created_at, updated_at, completed_at, sort_order)
+    INSERT INTO tasks
+      (task_id, room_id, created_by, source_message_id, title, description,
+       acceptance_criteria, status, revision, owner_actor_id, current_assignment_id,
+       reviewer_actor_id, due_at, blocked_reason, blocked_at, last_progress_at,
+       business_authority, external_binding_id, created_at, updated_at,
+       accepted_at, cancelled_at)
     VALUES
-      ('tsk_pending_1', 'rm_one', 'default', 'pending one', 'pending', NULL, NULL,
-       'usr_owner', ${AT}, ${AT}, NULL, 0),
-      ('tsk_claimed_a', 'rm_one', 'default', 'claimed by A', 'claimed', 'agt_a', NULL,
-       'usr_owner', ${AT}, ${AT}, NULL, 1),
-      ('tsk_claimed_b', 'rm_one', 'default', 'claimed by B', 'claimed', 'agt_b', NULL,
-       'usr_owner', ${AT}, ${AT}, NULL, 2),
-      ('tsk_done', 'rm_one', 'default', 'done one', 'done', 'agt_a', 'ok',
-       'usr_owner', ${AT}, ${AT}, ${AT + 1}, 3),
-      ('tsk_failed', 'rm_one', 'default', 'failed one', 'failed', 'agt_b', 'nope',
-       'usr_owner', ${AT}, ${AT}, ${AT + 1}, 4),
-      ('tsk_pending_2', 'rm_two', 'default', 'pending two', 'pending', NULL, NULL,
-       'usr_owner', ${AT}, ${AT}, NULL, 0),
-      ('tsk_claimed_a_2', 'rm_two', 'default', 'claimed by A in two', 'claimed', 'agt_a', NULL,
-       'usr_owner', ${AT}, ${AT}, NULL, 1),
-      ('tsk_done_2', 'rm_two', 'default', 'done two', 'done', 'agt_a', 'ok',
-       'usr_owner', ${AT}, ${AT}, ${AT + 1}, 2),
-      ('tsk_pending_3', 'rm_three', 'default', 'pending three', 'pending', NULL, NULL,
-       'usr_owner', ${AT}, ${AT}, NULL, 0),
-      ('tsk_claimed_b_3', 'rm_three', 'default', 'claimed by B in three', 'claimed', 'agt_b', NULL,
-       'usr_owner', ${AT}, ${AT}, NULL, 1);
+      ('tsk_pending_1', 'rm_one', 'usr_owner', NULL, 'pending one', 'pending one',
+       '', 'unassigned', 1, NULL, NULL, 'usr_owner', NULL, NULL, NULL, NULL,
+       'native', NULL, ${AT}, ${AT}, NULL, NULL),
+      ('tsk_claimed_a', 'rm_one', 'usr_owner', NULL, 'claimed by A', 'claimed by A',
+       '', 'in_progress', 2, 'agt_a', 'asg_claimed_a', 'usr_owner', NULL, NULL, NULL, ${AT},
+       'native', NULL, ${AT}, ${AT}, NULL, NULL),
+      ('tsk_claimed_b', 'rm_one', 'usr_owner', NULL, 'claimed by B', 'claimed by B',
+       '', 'in_progress', 2, 'agt_b', 'asg_claimed_b', 'usr_owner', NULL, NULL, NULL, ${AT},
+       'native', NULL, ${AT}, ${AT}, NULL, NULL),
+      ('tsk_done', 'rm_one', 'usr_owner', NULL, 'done one', 'done one',
+       '', 'accepted', 3, 'agt_a', 'asg_done', 'usr_owner', NULL, NULL, NULL, ${AT + 1},
+       'native', NULL, ${AT}, ${AT + 1}, ${AT + 1}, NULL),
+      ('tsk_failed', 'rm_one', 'usr_owner', NULL, 'failed one', 'failed one',
+       '', 'failed', 2, 'agt_b', 'asg_failed', 'usr_owner', NULL, NULL, NULL, ${AT + 1},
+       'native', NULL, ${AT}, ${AT + 1}, NULL, NULL),
+      ('tsk_pending_2', 'rm_two', 'usr_owner', NULL, 'pending two', 'pending two',
+       '', 'unassigned', 1, NULL, NULL, 'usr_owner', NULL, NULL, NULL, NULL,
+       'native', NULL, ${AT}, ${AT}, NULL, NULL),
+      ('tsk_claimed_a_2', 'rm_two', 'usr_owner', NULL, 'claimed by A in two', 'claimed by A in two',
+       '', 'in_progress', 2, 'agt_a', 'asg_claimed_a_2', 'usr_owner', NULL, NULL, NULL, ${AT},
+       'native', NULL, ${AT}, ${AT}, NULL, NULL),
+      ('tsk_done_2', 'rm_two', 'usr_owner', NULL, 'done two', 'done two',
+       '', 'legacy_completed', 1, 'agt_a', 'asg_done_2', 'usr_owner', NULL, NULL, NULL, ${AT + 1},
+       'native', NULL, ${AT}, ${AT + 1}, NULL, NULL),
+      ('tsk_pending_3', 'rm_three', 'usr_owner', NULL, 'pending three', 'pending three',
+       '', 'unassigned', 1, NULL, NULL, 'usr_owner', NULL, NULL, NULL, NULL,
+       'native', NULL, ${AT}, ${AT}, NULL, NULL),
+      ('tsk_claimed_b_3', 'rm_three', 'usr_owner', NULL, 'claimed by B in three', 'claimed by B in three',
+       '', 'in_progress', 2, 'agt_b', 'asg_claimed_b_3', 'usr_owner', NULL, NULL, NULL, ${AT},
+       'native', NULL, ${AT}, ${AT}, NULL, NULL);
+
+    INSERT INTO task_assignments
+      (assignment_id, task_id, assignment_version, owner_actor_id, status,
+       offered_by, offer_expires_at, accepted_at, ended_at, last_progress_at,
+       delivery_id, created_at, updated_at)
+    VALUES
+      ('asg_claimed_a', 'tsk_claimed_a', 1, 'agt_a', 'active', 'usr_owner', NULL,
+       ${AT}, NULL, ${AT}, NULL, ${AT}, ${AT}),
+      ('asg_claimed_b', 'tsk_claimed_b', 1, 'agt_b', 'active', 'usr_owner', NULL,
+       ${AT}, NULL, ${AT}, NULL, ${AT}, ${AT}),
+      ('asg_done', 'tsk_done', 1, 'agt_a', 'active', 'usr_owner', NULL,
+       ${AT}, NULL, ${AT + 1}, NULL, ${AT}, ${AT + 1}),
+      ('asg_failed', 'tsk_failed', 1, 'agt_b', 'active', 'usr_owner', NULL,
+       ${AT}, NULL, ${AT + 1}, NULL, ${AT}, ${AT + 1}),
+      ('asg_claimed_a_2', 'tsk_claimed_a_2', 1, 'agt_a', 'active', 'usr_owner', NULL,
+       ${AT}, NULL, ${AT}, NULL, ${AT}, ${AT}),
+      ('asg_done_2', 'tsk_done_2', 1, 'agt_a', 'active', 'usr_owner', NULL,
+       ${AT}, NULL, ${AT + 1}, NULL, ${AT}, ${AT + 1}),
+      ('asg_claimed_b_3', 'tsk_claimed_b_3', 1, 'agt_b', 'active', 'usr_owner', NULL,
+       ${AT}, NULL, ${AT}, NULL, ${AT}, ${AT});
   `);
 }
 
@@ -94,7 +127,7 @@ function snapshot(db: Database): string {
       .prepare('SELECT room_id, actor_id, last_read_seq FROM room_members ORDER BY room_id, actor_id')
       .all(),
     tasks: db
-      .prepare('SELECT task_id, status, assignee_actor_id FROM room_tasks ORDER BY task_id')
+      .prepare('SELECT task_id, status, owner_actor_id FROM tasks ORDER BY task_id')
       .all(),
   });
 }

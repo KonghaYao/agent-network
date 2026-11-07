@@ -455,6 +455,81 @@ export interface RoomTaskRow {
   sort_order: number;
 }
 
+/** D01 任务；旧 `room_tasks` 迁移后只读保留。 */
+export interface TaskRow {
+  task_id: string;
+  room_id: string;
+  created_by: string;
+  source_message_id: string | null;
+  title: string;
+  description: string;
+  acceptance_criteria: string;
+  status:
+    | 'unassigned'
+    | 'offered'
+    | 'in_progress'
+    | 'blocked'
+    | 'submitted'
+    | 'accepted'
+    | 'failed'
+    | 'cancelled'
+    | 'legacy_completed';
+  revision: number;
+  owner_actor_id: string | null;
+  current_assignment_id: string | null;
+  reviewer_actor_id: string;
+  due_at: number | null;
+  blocked_reason: string | null;
+  blocked_at: number | null;
+  last_progress_at: number | null;
+  business_authority: 'native' | 'external';
+  external_binding_id: string | null;
+  created_at: number;
+  updated_at: number;
+  accepted_at: number | null;
+  cancelled_at: number | null;
+}
+
+export interface TaskAssignmentRow {
+  assignment_id: string;
+  task_id: string;
+  assignment_version: number;
+  owner_actor_id: string;
+  status: 'offered' | 'active' | 'submitted' | 'declined' | 'revoked' | 'expired';
+  offered_by: string;
+  offer_expires_at: number | null;
+  accepted_at: number | null;
+  ended_at: number | null;
+  last_progress_at: number | null;
+  delivery_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface TaskCardRow {
+  task_id: string;
+  message_id: string;
+  room_id: string;
+  created_at: number;
+}
+
+export interface TaskAttachmentRow {
+  task_id: string;
+  file_id: string;
+  label: string;
+  created_at: number;
+}
+
+export interface TaskDeliveryRow {
+  delivery_id: string;
+  task_id: string;
+  assignment_id: string;
+  assignment_version: number;
+  task_revision: number;
+  kind: 'task_offer' | 'task_reminder';
+  created_at: number;
+}
+
 /** MCP Events webhook 订阅；secret 以 AES-GCM 密文落库。 */
 export interface EventSubscriptionRow {
   subscription_id: string;

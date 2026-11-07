@@ -45,6 +45,10 @@ export interface StreamItem {
   /** 房间文件事件的 file_id 与 room_file_id。 */
   file_id?: string;
   ref_id?: string;
+  /** 任务事件的稳定定位：task_id 与当前 assignment 版本。 */
+  task_id?: string;
+  assignment_id?: string;
+  status?: string;
   /** Agent 上下线通知：仅用于当前房间刷新，不产生未读。 */
   presence_event_id?: string;
   transition?: string;
@@ -510,6 +514,36 @@ function roomStreamItems(
       }
       return result;
     }
+    case 'task_created':
+    case 'task_offered':
+    case 'task_claimed':
+    case 'task_cancelled': {
+      // 任务事件只让 active human 刷新任务视图。Agent 的工作唤醒只来自
+      // 明确指派生成的 delivery，房间任务事件不推进 head、不产生未读。
+      const change = row.event_type.replace('task_', '');
+      const changedBy = stringField(metadata, 'changed_by');
+      const taskId = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
+      const assignmentId = stringField(metadata, 'assignment_id');
+      const status = stringField(metadata, 'status');
+      for (const member of activeRecipients(members, eventSeq)) {
+        if (member.kind !== 'human') continue;
+        const item = withLocation(
+          baseItem(row, 'task.updated', 'task', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = change;
+        if (taskId) {
+          item.task_id = taskId;
+          item.ref_id = taskId;
+        }
+        if (assignmentId) item.assignment_id = assignmentId;
+        if (status) item.status = status;
+        if (changedBy) item.changed_by = changedBy;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
     case 'room_task_added':
     case 'room_task_claimed':
     case 'room_task_completed':
@@ -701,6 +735,31 @@ function inboxStreamItem(
         metadata,
       );
       item.mention_all = metadata.mention_all === true;
+      return item;
+    }
+    case 'task_offered':
+    case 'task_cancelled': {
+      // 人类接手请求/撤回是持久个人通知，不是 delivery；Agent 的指派
+      // 唤醒由 delivery_created 独立承担。
+      const offered = row.event_type === 'task_offered';
+      const item = withLocation(
+        baseItem(
+          row,
+          'task.updated',
+          'task',
+          offered ? 'action_required' : 'informational',
+        ),
+        row,
+        metadata,
+      );
+      item.task_id = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
+      item.ref_id = item.task_id;
+      item.change = offered ? 'offered' : 'cancelled';
+      const assignmentId = stringField(metadata, 'assignment_id');
+      const status = stringField(metadata, 'status');
+      if (assignmentId) item.assignment_id = assignmentId;
+      if (status) item.status = status;
+      item.changed_by = stringField(metadata, 'changed_by');
       return item;
     }
     case 'room_read':

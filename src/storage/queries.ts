@@ -9,6 +9,9 @@ import type {
   RoomMemberRow,
   RoomRow,
   RoomTaskRow,
+  TaskAssignmentRow,
+  TaskCardRow,
+  TaskRow,
 } from './rows';
 
 export interface D1Like {
@@ -127,6 +130,36 @@ export async function getActorRoomMonitor(
 /** 按 task_id 读取任务；房间归属由调用方校验。 */
 export async function getRoomTask(db: D1Like, taskId: string): Promise<RoomTaskRow | null> {
   return db.prepare('SELECT * FROM room_tasks WHERE task_id = ?').bind(taskId).first<RoomTaskRow>();
+}
+
+/** 按 task_id 读取 D01 任务；房间归属与可见性由调用方校验。 */
+export async function getTask(db: D1Like, taskId: string): Promise<TaskRow | null> {
+  return db.prepare('SELECT * FROM tasks WHERE task_id = ?').bind(taskId).first<TaskRow>();
+}
+
+/** 来源消息到任务的唯一映射；用于把重复创建收敛到同一任务。 */
+export async function getTaskBySourceMessage(
+  db: D1Like,
+  messageId: string,
+): Promise<TaskRow | null> {
+  return db
+    .prepare('SELECT * FROM tasks WHERE source_message_id = ?')
+    .bind(messageId)
+    .first<TaskRow>();
+}
+
+export async function getTaskCard(db: D1Like, taskId: string): Promise<TaskCardRow | null> {
+  return db.prepare('SELECT * FROM task_cards WHERE task_id = ?').bind(taskId).first<TaskCardRow>();
+}
+
+export async function getTaskAssignment(
+  db: D1Like,
+  assignmentId: string,
+): Promise<TaskAssignmentRow | null> {
+  return db
+    .prepare('SELECT * FROM task_assignments WHERE assignment_id = ?')
+    .bind(assignmentId)
+    .first<TaskAssignmentRow>();
 }
 
 export async function getDelivery(db: D1Like, deliveryId: string): Promise<DeliveryRow | null> {

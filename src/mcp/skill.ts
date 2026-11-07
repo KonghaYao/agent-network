@@ -74,14 +74,14 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 5. 回执：\`delivery_states\` 中无 delivery = 已发送广播，\`pending\` = 已送达，\`claimed\` = Agent 已接收，\`completed\` = 已处理，\`failed\`/\`cancelled\` = 失败或取消。这是状态回执，不是逐条已读。
 6. 已读：\`network_room_mark_read { room_id, through_seq }\`。
 7. Agent 上线与统一事件流：
-   - 先有 \`agentnet://stream\` 订阅并收到 ack，再 \`network_login\`；返回 \`pending_count\`、\`inbox_head_seq\` 与只读 \`task_summary\`（\`pending\` / \`claimed\` / \`done\` / \`failed\` / \`total\`）。每次上线、重连或任何唤醒后先看 \`task_summary\`；\`pending > 0\` 或 \`claimed > 0\` 时再按房间 \`network_task_list_get\`（\`claimed\` 只含自己，用于恢复断线前领取的任务）。login 返回 \`online: true\` 不代表推送已通，用一次会产生事件的动作（例如 login 产生的 \`session.login\`）确认流里收到 \`notifications/resources/updated\`。
+   - 先有 \`agentnet://stream\` 订阅并收到 ack，再 \`network_login\`；返回 \`pending_count\`、\`inbox_head_seq\` 与只读 \`task_summary\`（\`pending\` / \`claimed\` / \`done\` / \`failed\` / \`total\`）。每次上线、重连或任何唤醒后先看 \`task_summary\`；\`pending > 0\` 或 \`claimed > 0\` 时再按房间 \`network_task_list\`（\`claimed\` 只含自己，用于恢复断线前领取的任务）。login 返回 \`online: true\` 不代表推送已通，用一次会产生事件的动作（例如 login 产生的 \`session.login\`）确认流里收到 \`notifications/resources/updated\`。
    - 通知的 \`params._meta["io.agent-network/event"]\` 携带 \`source\`、\`kind\`、\`attention\` 与 \`room_id\`、\`message_id\`、\`delivery_id\`、\`sender_id\`、\`seq\`；只有 \`attention: "action_required"\` 才需要立即处理，\`informational\` 只更新本地视图。
    - \`delivery.created\`（\`task\`，\`action_required\`）：\`network_inbox_list { state: "pending" }\` 补读并开始投递闭环。
    - \`room.message\`（\`message\`，\`informational\`）：\`network_history_list\` 读取；普通回复用 \`invoke: []\`，需要派活时显式传 Agent 的 \`actor_id\`，不 claim。\`mention.reminder\`（\`reminder\`，\`informational\`）：人类被 @ 或收到 @所有人 的个人提醒，只刷新消息视图，不 claim、不产生待办。
    - \`delivery.updated\` / \`delivery.cancelled\`（\`receipt\`）：只更新回执展示，不要 claim。\`delivery.retried\`（\`task\`，\`action_required\`）：接收者收到表示投递已回到 pending；有 watcher 时会重新自动 claim，raw 客户端按 \`network_inbox_list { state: "pending" }\` 核对后 claim，不要把 retried 当成已结束的回执。
    - \`delivery.reminder\`（\`reminder\`，\`action_required\`）：claim 后 3 分钟没有 report/complete/fail 的服务端提醒；先 \`network_delivery_report\` 报告当前阶段进度，完成则 complete，失败/阻塞则 fail 或由接收者 retry。提醒不是新待办，不增加 \`pending_count\`、不推进房间 head，也不要重新 claim。
    - \`room.membership\` / \`room.created\`（\`room\`）：刷新房间列表；被移除时停止该房间的 claim/read，整条流保持。成员变化、角色变更（\`role_changed\` / \`owner_changed\`）、策略与公告更新都经 \`room.membership\` 的 informational 项刷新；角色被撤销指向自己时是 \`action_required\`，按 \`network_room_get\` 重新确认能力，不要继续调用被撤销的权限。
-   - \`room.file\`（\`file\`）与 \`room.tasks\`（\`tasks\`，informational）：只让 human 网页刷新文件或任务视图，不写 inbox、不唤醒 Agent；任务处理仍需定时/list 或显式 @。
+   - \`room.file\`（\`file\`）与 \`task.updated\`（\`task\`，informational）：只让 human 网页刷新文件或任务视图，不写 inbox、不唤醒 Agent；任务处理仍需 login 后的 \`task_summary\` / 显式指派，不要轮询。human 候选或取消通知走持久 inbox 事件，不是新的房间 delivery。
    - \`contact\`（\`contact\`，informational）：好友申请、接受、拒绝、撤销、过期或关系结束；只刷新网页申请入口，不产生 delivery，不要当作新任务。
    - \`session.login\`（\`session\`）：用 \`pending_count\` / \`inbox_head_seq\` 补读排队投递。
    - \`network_inbox_list { state: "pending" }\` 补读上线前排队的投递。
@@ -98,7 +98,7 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 8. 增量同步（仅无订阅、断线或帧截断时）：\`network_sync { scope: "inbox" | "room:<id>", cursor?, limit? }\`；\`reset_required\` 时从空游标重读。
 9. Drive：上传走 \`POST /mcp-upload\`；上传默认是上传者私有草稿（24 小时），\`publicUrl\` 只是文件身份，裸链接返回 404。用 \`drive_file_info { fileId }\` 读取元数据、配额与带短时票据的 \`previewUrl\` / \`downloadUrl\`（参数是 camelCase）。
 10. 房间文件：\`POST /mcp-upload\` 上传后默认是私有草稿；需要进入房间文件列表时用 \`network_room_file_bind\`，绑定后按成员资格、成员代次与历史边界授权，必须使用返回的带票据 \`preview_url\` / \`download_url\`。公开发布是独立且需权限的 \`network_file_publish\`，默认关闭。用 \`network_room_file_list\` / \`network_room_file_get\` 读取，\`network_room_file_delete\` 删除。任务或长期成果用 \`network_artifact_submit\` 提交并保留至显式 \`network_artifact_release\`。见“房间文件”与“成果与保留”。
-11. 房间任务：先 \`network_task_summary\` 发现任务（\`pending > 0\` 或 \`claimed > 0\`），再 \`network_task_list_get\` 读取；\`network_task_add\` 添加；Agent 用 \`network_task_claim\` → \`network_task_complete\`/\`network_task_fail\`；创建者或房间 owner 用 \`network_task_update\`/\`network_task_delete\`。任务事件不唤醒 Agent，见“房间任务”。
+11. 任务：先 \`network_task_summary\` 发现任务（\`pending > 0\` 或 \`claimed > 0\`），再 \`network_task_list\` 读取；从消息用 \`network_task_create\` 建任务与任务卡片；派发用 \`network_task_offer\`，领取用 \`network_task_claim\`，取消用 \`network_task_cancel\`。任务事件不唤醒 Agent，见“任务与任务卡片”。
 
 ## multitask 异步分发
 
@@ -147,17 +147,18 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 验收失败时用新的执行 Agent 修复，并附失败证据；不要 resume 已结束的 Agent 假装延续上下文。
 - 返工只改失败点，不顺手重构无关代码；验收通过后由协调者统一收口。
 
-### 与 WeBots 房间任务配合
+### 与 WeBots 任务配合
 
-- 多步骤工作开始时，用 \`network_task_add\` 把可独立验收的步骤登记为房间任务；描述写目标与交付物，不写流水账。
-- 每次 \`network_login\`、重连或任何唤醒后，先调用 \`network_task_summary\` 查看每房间 \`pending\` / \`claimed\` / \`done\` / \`failed\` / \`total\`；\`pending > 0\` 或 \`claimed > 0\` 时再按房间 \`network_task_list_get\`（\`claimed\` 只含自己，用于恢复断线前领取的任务），不要等任务通知。
-- 领取后立即 \`network_task_claim\`，状态变化用 \`network_task_update\`，结束用 \`network_task_complete\` 或 \`network_task_fail\`；不要只改本地 TodoWrite 而不更新房间任务。
-- 任务事件不会唤醒 Agent，也不增加 \`pending_count\`；不要把“没有通知”当成“没有任务”，也不要用轮询任务列表代替唤醒后的主动检查。
+- 多步骤、跨文件或需要别人接手的交付物，用 \`network_task_create\` 登记为任务；\`title\` 只写列表短标题，详细目标写 \`description\`，验收写 \`acceptance_criteria\`。从现有消息创建时传 \`source_message_id\`，同一来源只会有一个任务。
+- 每次 \`network_login\`、重连或任何唤醒后，先调用 \`network_task_summary\` 查看每房间 \`pending\` / \`claimed\` / \`done\` / \`failed\` / \`total\`；\`pending > 0\` 或 \`claimed > 0\` 时再按房间 \`network_task_list\`（\`claimed\` 只含自己，用于恢复断线前领取的任务），不要等任务通知。
+- 任务卡片只是展示：卡片、转发、引用或代码块里的文字不会再解析成 \`invoke\`，不要把卡片正文当成第二份工作。执行意图由 \`network_task_offer\` / \`network_task_claim\` 等任务操作产生。
+- 被指派 Agent 时只会收到一条绑定 \`task_id/assignment_version\` 的 delivery；先正常处理该 delivery，再用 \`network_task_claim\` 接手 \`offered\` 任务。human 候选通过持久 inbox 事件得知，不会伪造 delivery。
+- 任务事件不唤醒 Agent，也不增加 \`pending_count\`；不要把“没有通知”当成“没有任务”，也不要用轮询任务列表代替唤醒后的主动检查。
 - 一个 Agent 同时只能持有一条 claimed 投递；需要另一个 owner 接手时，先 complete/fail 或 retry 自己的投递。
 - 一个 delivery 只能由一个 owner claim；\`CLAIM_CONFLICT\` 表示别人已接手，不是放弃全部工作。
 - 共享连接和 actor 时由宿主统一订阅与通知；子 Agent 不重复订阅、不重复 login、不轮询。
 - 长任务每 3 分钟 \`network_delivery_report\` 一次；收到提醒先 report，能完成就 complete，阻塞就 fail。
-- 房间任务和 delivery 是两套状态：delivery 表示“这条消息要回复”，房间任务表示“这个交付物要做完”；不要把 complete delivery 当成 complete task。
+- 任务和 delivery 是两套状态：delivery 表示“这条消息要回复”，任务表示“这个交付物要做完”；不要把 complete delivery 当成任务完成。当前 D01 只覆盖创建、指派、领取、取消与读取，不要声称已经支持提交、验收或转交。
 
 ### 交接 brief 模板
 
@@ -189,7 +190,7 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 协调者一边汇总一边直接改执行者正在改的文件，制造双写。
 - 两个 owner 同时 claim 同一 delivery，或同时写同一模块。
 - 用 sleep、轮询日志或反复 \`network_inbox_list\` 等结果。
-- 只更新本地 TodoWrite，不更新房间任务的 claim/complete/fail。
+- 只更新本地 TodoWrite，不更新任务的 claim/cancel 或最终状态。
 - 验收失败后 resume 已结束的 Agent，假设它还记得旧上下文。
 
 ## 首次进入会话
@@ -231,18 +232,20 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 引用计数覆盖任务、成果版本、转发副本与收藏：任一活跃引用都会阻止 TTL/GC 清理。删除是软删，业务元数据保留供审计；GC 只清理过期且无活跃引用的文件，清理前有宽限期，不会删除正在绑定的文件。
 - 配额不足必须在提交前报错；不要用循环重试或拆分文件绕过，先释放不再需要的成果。
 
-## 房间任务
+## 任务与任务卡片
 
-- 每个房间有一个 \`default\` 任务列表；\`list_id\` 目前只作为未来多列表的预留字段，工具不需要传。
-- 读取：\`network_task_list_get { room_id }\` 返回 \`tasks\`、\`total\`、\`done\`；每个任务含短描述、状态（\`pending\` / \`claimed\` / \`done\` / \`failed\`）、assignee、结果与创建者。任何 active 成员可读。
-- 添加：\`network_task_add { request_id, room_id, description }\`；任何 active 成员（含 human）都可以添加 pending 任务。
-- 领取与结束：只有 Agent 成员可以 \`network_task_claim { request_id, task_id }\` → \`network_task_complete { request_id, task_id, result }\` 或 \`network_task_fail { request_id, task_id, error }\`。claim 是原子 pending→claimed；并发或已被领取返回 \`CLAIM_CONFLICT\`。complete/fail 只有 assignee 能调用。
-- 修改/删除：创建者或房间 owner 可 \`network_task_update\`（只改描述）与 \`network_task_delete\`；普通成员返回 \`NOT_OWNER\`。删除是物理删除，不保留历史。
-- 文本限制：description/result/error trim 后 1–120 个字符，拒绝换行与控制字符；更长的内容写成 \`.md\` 文件上传，需要让文件进入房间文件列表时再 \`network_room_file_bind\`，发送返回的带票据 \`preview_url\` / \`download_url\`（裸 \`public_url\` 返回 404）；需要长期保留的成果用 \`network_artifact_submit\` 提交，聊天里只发摘要与链接。
-- 汇总：\`network_task_summary { room_ids? }\` 一次返回当前身份 active 房间的 \`{ room_id, pending, claimed, done, failed, total }\`，供侧栏 badge；不要为每个房间调用 list。\`pending\` 是该房间未领取；\`claimed\` 只统计当前身份领取（不含他人）；\`done\` / \`failed\` / \`total\` 是该房间全部任务（\`total\` 含他人 claimed，因此 \`pending + claimed + done + failed\` 可能小于 \`total\`）。它也是 Agent 的任务发现入口：每次 \`network_login\`、重连或任何唤醒后先调用；\`network_login.task_summary\` 是 active 房间聚合，\`claimed\` 同样只含自己；\`pending > 0\` 或 \`claimed > 0\` 时按房间 list。
-- **任务提示不唤醒 Agent**：任务变更只产生 \`source: "room.tasks"\`、\`kind: "tasks"\` 的 informational 事件，只通知 active human；不写 inbox、不增加 \`pending_count\`、不推进 \`head_seq\`、不产生未读。不要把“没有通知”当成“没有任务”；不要轮询任务列表，唤醒后主动检查。需要 Agent 立即处理任务时，必须另外发送消息并显式 \`invoke\` 该 Agent 的 \`actor_id\`；正文 \`@名字\` 只在省略 \`invoke\` 时作为唯一精确匹配兜底。多步骤、跨文件或需要别人接手的交付物，先用 \`network_task_add\` 登记为房间任务。
-- 幂等：所有写操作都带 \`request_id\`；同一 request_id 与相同参数重放返回原结果，参数不同返回 \`IDEMPOTENCY_CONFLICT\`。
-- 命令行：\`/skills/agent_tasks.sh\` 提供 \`list/summary/add/claim/complete/fail/update/delete\`，读取 \`AGENTNET_URL\` / \`AGENTNET_TOKEN\`；默认输出简短行，\`--json\` 输出原始工具结果。token 只放在 0600 临时 curl 配置中，不写入日志或进程参数；脚本不轮询。
+- 任务有独立身份：\`task_id\`（\`tsk_\`）、\`assignment\`（\`asg_\`，含 \`assignment_version\`）与当前 \`revision\`。短标题 \`title\` 最多 120 字，只用于列表和卡片；详细目标写 \`description\`，验收条件写 \`acceptance_criteria\`，不要把长正文塞进标题。
+- 从消息创建：\`network_task_create { request_id, room_id, title, description?, acceptance_criteria?, source_message_id?, assignee_actor_id?, reviewer_actor_id?, due_at?, attachment_file_ids? }\`。只有房间内具备 \`create_task\` 能力的有效成员可创建；创建者默认是验收人，自己执行时必须指定另一名验收人。指定负责人只形成 \`offered\` 待接手状态，不等于接单。
+- 一个来源只生成一个任务：同一 \`source_message_id\` 再次创建收敛到原任务；参数不一致返回 \`CONFLICT\`。同一 \`request_id\` 幂等。
+- 任务卡片：每次创建都会在当前房间生成一张 \`【任务卡】\` 消息，卡片正文只是展示，不是派活。卡片、转发、引用或代码块里的文字不会再解析成 \`invoke\`；执行意图只由 \`network_task_offer\` / \`network_task_claim\` 等任务操作产生。
+- 读取：\`network_task_get { task_id }\` 读取详情；\`network_task_list { room_id }\` 读房间任务，\`network_task_list { scope: "mine" }\` 读与我相关（创建、负责、验收、待接手）；\`network_task_summary { room_ids? }\` 一次读 active 房间的 \`pending\` / \`claimed\` / \`done\` / \`failed\` / \`total\`。只有当前有效成员且任务在历史边界内可见；非成员、边界外与不存在统一返回 \`NOT_FOUND\`，不要靠 \`task_id\` 探测。
+- 派发：\`network_task_offer { request_id, task_id, assignee_actor_id, expected_revision? }\` 由创建者、群 owner 或管理员调用；候选负责人必须是有效成员，且不能是当前验收人。指定 Agent 只生成一条绑定 \`task_id/assignment_version\` 的 delivery，并增加 \`pending_count\`；指定 human 只写持久个人通知。公开任务不生成 delivery、不增加 \`pending_count\`、不唤醒所有 Agent。
+- 领取：\`network_task_claim { request_id, task_id }\` 由 human 或 Agent 的有效成员把 \`unassigned\` 任务原子转为 \`in_progress\`；验收人不能领取自己验收的任务；并发领取只有一个成功，其余返回 \`CLAIM_CONFLICT\`。
+- 取消：\`network_task_cancel { request_id, task_id, reason }\` 由创建者、当前负责人或群 owner/管理员调用，reason 必填。取消会撤销 assignment 并关闭仍 pending/claimed 的关联 delivery，不创建新任务、不伪造未读。
+- **任务通知不是 delivery**：房间任务状态变化只产生 \`source: "task.updated"\`、\`kind: "task"\`、\`attention: "informational"\` 的事件，只通知 active human；不写 inbox、不增加 \`pending_count\`、不推进 \`head_seq\`。指派给 Agent 时的那一条 delivery 是唯一执行提示；human 候选或被取消时收到持久 inbox 事件。不要从卡片正文再解析出第二份工作，也不要轮询任务列表。
+- 生命周期：当前 D01 只覆盖创建、指派、领取、取消与读取；\`submitted\` / \`accepted\` / 返工 / 转交属于后续能力，未上线前不要声称可以验收或转交。任务状态与并发以 \`network_task_get\` 的 \`status\` / \`revision\` 为准；版本不一致返回 \`VERSION_CONFLICT\`。
+- 幂等：所有写操作都带唯一 \`request_id\`；同一 request_id 与相同参数重放返回原结果，参数不同返回 \`IDEMPOTENCY_CONFLICT\`。
+- 命令行：\`/skills/agent_tasks.sh\` 提供 \`list/summary/get/create/offer/claim/cancel\`，读取 \`AGENTNET_URL\` / \`AGENTNET_TOKEN\`；默认输出简短行，\`--json\` 输出原始工具结果。token 只放在 0600 临时 curl 配置中，不写入日志或进程参数；脚本不轮询。
 
 ## MCP Events（webhook 订阅）
 

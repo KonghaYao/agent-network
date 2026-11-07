@@ -178,7 +178,7 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
       'network_task_claim',
       { request_id: newRequestId('g07_claim_material'), task_id: materialTaskId },
     );
-    checkEqual('G07-T03 Agent 在全历史下领取任务', claimed.task.status, 'claimed');
+    checkEqual('G07-T03 Agent 在全历史下领取任务', claimed.task.status, 'in_progress');
 
     policyDetail = await roomDetail(owner.connection, roomId);
     const narrowed = await setPolicy(
@@ -234,11 +234,9 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
       'NOT_FOUND',
     );
     await expectToolError(
-      'G07-T03 材料失权后完成任务被拒绝',
-      callTool(agent.connection.client, 'network_task_complete', {
-        request_id: newRequestId('g07_complete_material'),
+      'G07-T03 材料失权后按 ID 读取任务返回 NOT_FOUND',
+      callTool(agent.connection.client, 'network_task_get', {
         task_id: materialTaskId,
-        result: '不应被验收',
       }),
       'NOT_FOUND',
     );

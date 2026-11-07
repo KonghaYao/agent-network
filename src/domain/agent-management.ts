@@ -71,12 +71,21 @@ export async function pendingWork(db: D1Database, agentId: string): Promise<Pend
     states.results.find((row) => row.state === state)?.n ?? 0;
   const tasks = await db
     .prepare(
-      `SELECT task_id, room_id, description, status, updated_at
-         FROM room_tasks
-        WHERE assignee_actor_id = ? AND status IN ('pending', 'claimed')
-        ORDER BY updated_at DESC, task_id ASC`,
+      `SELECT t.task_id,
+              t.room_id,
+              t.title AS description,
+              CASE WHEN t.owner_actor_id IS NULL THEN 'pending' ELSE 'claimed' END AS status,
+              t.updated_at
+         FROM tasks t
+        WHERE (t.owner_actor_id = ? AND t.status IN ('in_progress', 'blocked', 'submitted'))
+           OR (t.owner_actor_id IS NULL AND t.status = 'offered' AND EXISTS (
+                 SELECT 1 FROM task_assignments a
+                  WHERE a.task_id = t.task_id
+                    AND a.owner_actor_id = ?
+                    AND a.status = 'offered'))
+        ORDER BY t.updated_at DESC, t.task_id ASC`,
     )
-    .bind(agentId)
+    .bind(agentId, agentId)
     .all<{
       task_id: string;
       room_id: string;

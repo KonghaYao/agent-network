@@ -15,6 +15,7 @@ export function sidebarPane(): string {
     <div class="brand-row">
       <h1>WeBots</h1>
       <button class="icon-btn" id="contact-requests" type="button" aria-label="好友申请" title="好友申请">友<span class="request-badge" id="contact-requests-badge" hidden>0</span></button>
+      <button class="icon-btn" id="my-tasks" type="button" aria-label="我的任务" title="我的任务">任</button>
       <button class="icon-btn" id="new-group" type="button" aria-label="新建群聊" title="新建群聊">+</button>
     </div>
     <label class="search-box">
@@ -144,6 +145,8 @@ export function chatPane(): string {
       title="查看房间任务">
       <span id="task-toggle-label">任务 0/0</span>
     </button>
+    <button class="link-btn" id="task-create" type="button" hidden
+      title="从消息或任务面板创建任务">新建任务</button>
     <button class="monitor-toggle" id="monitor-toggle" type="button"
       aria-controls="monitor-pane" aria-expanded="false"
       aria-label="打开网页监控" title="网页监控">
@@ -625,6 +628,77 @@ export function reportDialog(): string {
       <button id="report-cancel" type="button">取消</button>
       <button id="report-submit" class="primary" type="button">提交举报</button>
     </div>
+  </div>
+</div>`;
+}
+
+/**
+ * 任务弹窗：我的任务、任务详情与新建任务。
+ *
+ * 文本全部由客户端以 textContent 写入；详情里的长目标保留换行，
+ * 卡片/来源消息按钮只滚动到同一条消息，不复制任务或生成新授权。
+ */
+export function taskDialogs(): string {
+  return `<div class="modal" id="my-tasks-modal" hidden>
+  <div class="modal-card task-modal-card" role="dialog" aria-modal="true"
+    aria-labelledby="my-tasks-title">
+    <header class="task-modal-head">
+      <h2 id="my-tasks-title">我的任务</h2>
+      <button class="task-popover-close" id="my-tasks-close" type="button"
+        aria-label="关闭我的任务" title="关闭">×</button>
+    </header>
+    <ul class="task-list task-list-wide" id="my-tasks-list" aria-label="我的任务列表"></ul>
+    <p class="task-popover-empty" id="my-tasks-empty" role="status" hidden>暂无任务</p>
+  </div>
+</div>
+<div class="modal" id="task-detail-modal" hidden>
+  <div class="modal-card task-modal-card" role="dialog" aria-modal="true"
+    aria-labelledby="task-detail-title">
+    <header class="task-modal-head">
+      <h2 id="task-detail-title">任务详情</h2>
+      <button class="task-popover-close" id="task-detail-close" type="button"
+        aria-label="关闭任务详情" title="关闭">×</button>
+    </header>
+    <dl class="task-detail-grid" id="task-detail-body"></dl>
+    <div class="task-detail-actions" id="task-detail-actions"></div>
+  </div>
+</div>
+<div class="modal" id="task-create-modal" hidden>
+  <div class="modal-card task-modal-card" role="dialog" aria-modal="true"
+    aria-labelledby="task-create-title">
+    <header class="task-modal-head">
+      <h2 id="task-create-title">新建任务</h2>
+    </header>
+    <form id="task-create-form">
+      <p class="muted task-source-hint" id="task-source-hint" hidden></p>
+      <label class="field">短标题
+        <input id="task-title" maxlength="${LIMITS.taskTitleMax}" required
+          placeholder="列表展示用短标题">
+      </label>
+      <label class="field">详细目标
+        <textarea id="task-description" rows="4"
+          placeholder="交接背景、目标与约束；完整正文不会塞进短标题"></textarea>
+      </label>
+      <label class="field">验收条件
+        <textarea id="task-acceptance" rows="3" placeholder="怎样算完成"></textarea>
+      </label>
+      <div class="task-form-row">
+        <label class="field">负责人
+          <select id="task-assignee"></select>
+        </label>
+        <label class="field">验收人
+          <select id="task-reviewer"></select>
+        </label>
+      </div>
+      <label class="field">期限（可选）
+        <input id="task-due" type="datetime-local">
+      </label>
+      <p class="form-error" id="task-form-error" role="alert"></p>
+      <div class="row modal-actions">
+        <button id="task-create-cancel" type="button">取消</button>
+        <button class="primary" type="submit">创建任务</button>
+      </div>
+    </form>
   </div>
 </div>`;
 }

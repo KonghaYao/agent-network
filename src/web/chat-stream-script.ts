@@ -333,8 +333,14 @@ function handleStreamEventFrame(payload) {
         // 上下线只更新当前房间时间线；不改 head、不产生未读或侧栏预览。
         if (roomId && roomId === activeRoomId) refreshRoom = true;
         break;
+      case 'task.updated':
+        // 任务事件只刷新任务面板、我的任务与侧栏 badge，不触发消息未读；
+        // 任务卡片本身是普通消息，历史仍由 room.message 维护。
+        if (rawItem.change === 'offered') showToast('收到任务接手请求');
+        scheduleRoomTasksRefresh(roomId);
+        break;
       case 'room.tasks':
-        // 任务事件只刷新任务行与侧栏 badge，不触发消息历史刷新或未读。
+        // 历史房间任务事件只刷新任务行与侧栏 badge，不触发消息历史刷新或未读。
         scheduleRoomTasksRefresh(roomId);
         break;
       case 'profile.updated':

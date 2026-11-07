@@ -76,14 +76,13 @@ import {
   roomRoleSetSchema,
   roomsListSchema,
   syncSchema,
-  taskAddSchema,
+  taskCancelSchema,
   taskClaimSchema,
-  taskCompleteSchema,
-  taskDeleteSchema,
-  taskFailSchema,
-  taskListGetSchema,
+  taskCreateSchema,
+  taskGetSchema,
+  taskListSchema,
+  taskOfferSchema,
   taskSummarySchema,
-  taskUpdateSchema,
 } from '../contracts/schemas';
 import { agentsGet, archiveAgent, unarchiveAgent } from '../domain/agents';
 import {
@@ -174,14 +173,13 @@ import {
   roomOwnerTransferRespond,
 } from '../domain/owner-transfers';
 import {
-  taskAdd,
+  taskCancel,
   taskClaim,
-  taskComplete,
-  taskDelete,
-  taskFail,
-  taskListGet,
+  taskCreate,
+  taskGet,
+  taskList,
+  taskOffer,
   taskSummary,
-  taskUpdate,
 } from '../domain/tasks';
 import { sync } from '../domain/sync';
 import type { Env } from '../env';
@@ -242,10 +240,9 @@ import {
   roomNoticePageSchema,
   roomPolicySetResultSchema,
   roomRoleHistorySchema as roomRoleHistoryResultSchema,
-  roomTaskDeletedSchema,
-  roomTaskListSchema,
-  roomTaskResultSchema,
-  roomTaskSummarySchema,
+  taskListResultSchema,
+  taskResultSchema,
+  taskSummaryResultSchema,
   sendResultSchema,
   messageSendStatusPageSchema,
   syncPageSchema,
@@ -979,23 +976,10 @@ export function registerTools(
 
   register(
     server,
-    'network_task_list_get',
-    '读取房间任务列表（默认列表）：active 成员可用，返回短描述、状态、assignee 与结果，以及 total/done。先看 network_task_summary 或 network_login.task_summary 的 pending/claimed：pending > 0 或 claimed > 0 时按房间 list。任务变更不会唤醒 Agent，不要轮询。',
-    taskListGetSchema,
-    roomTaskListSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskListGet(db, principal, input);
-    },
-    { readOnlyHint: true },
-  );
-
-  register(
-    server,
     'network_task_summary',
-    'Agent 的任务发现入口：一次读当前身份所有 active 房间的任务进度（可传 room_ids 过滤，仅返回本人仍有效的房间），每房间返回 pending/claimed/done/failed/total。pending 是未领取；claimed 只统计当前身份领取（不含他人）；done/failed/total 是房间总量，total 含他人 claimed。每次 network_login、重连或任何唤醒后先调用；pending > 0 或 claimed > 0 时再按房间 network_task_list_get（claimed 用于恢复自己断线前领取的任务）。也供侧栏 badge 使用，避免逐房间 list。只读，不轮询，不改变 pending_count、房间 head 或未读。',
+    'Agent 的任务发现入口：一次读当前身份所有 active 房间的任务进度（可传 room_ids 过滤，仅返回本人仍有效的房间），每房间返回 pending/claimed/done/failed/total。pending 是公开未领取；claimed 只统计当前身份负责的进行中任务（不含他人）；done 含已验收与历史完成。每次 network_login、重连或任何唤醒后先调用；pending > 0 或 claimed > 0 时再按房间 network_task_list。也供侧栏 badge 使用。只读，不轮询，不改变 pending_count、房间 head 或未读。',
     taskSummarySchema,
-    roomTaskSummarySchema,
+    taskSummaryResultSchema,
     async (input) => {
       requireActor(principal);
       return taskSummary(db, principal, input);
@@ -1005,22 +989,60 @@ export function registerTools(
 
   register(
     server,
-    'network_task_add',
-    '向房间添加一个 pending 任务；任何 active 成员（含 human）都可添加。多步骤、跨文件或需要别人接手的交付物应先登记为任务，描述写目标与交付物。description trim 后必须为 1–120 个字符且不含换行/控制字符；长内容请写成 .md 文件。任务变更只写 room informational 事件，不写 inbox、不推进 head、不产生未读，也不唤醒 Agent；需要立即处理时另发消息并 @ 名字。',
-    taskAddSchema,
-    roomTaskResultSchema,
+    'network_task_list',
+    '读取任务列表：传 room_id 读取房间任务；传 scope=mine 读取与我相关（创建、负责、验收或待接手）的任务。active 成员可用，按更新时间倒序，返回短标题、状态、负责人、验收人与卡片/source 消息引用。任务事件不会唤醒 Agent，不要轮询；先看 network_task_summary 或 network_login.task_summary 的 pending/claimed。',
+    taskListSchema,
+    taskListResultSchema,
     async (input) => {
       requireActor(principal);
-      return taskAdd(db, principal, input);
+      return taskList(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_get',
+    '按 task_id 读取任务详情：短标题、受控长目标、验收条件、状态、revision、负责人/验收人、期限、业务权威来源、assignment 与关联 delivery。只有当前有效成员且任务在历史边界内可见时返回；非成员、边界外与不存在统一返回 NOT_FOUND，不能靠 task_id 探测任务是否存在。',
+    taskGetSchema,
+    taskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskGet(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_create',
+    '从消息或任务面板创建任务：title 是列表短标题，详细目标与验收条件写入受控 description/acceptance_criteria，不能塞进 120 字短字段。可指定候选负责人、独立验收人、期限与附件引用；默认创建者为验收人，自己执行时必须指定另一名验收人。指定只形成待接手 offer，不等于接单。同一 request_id 幂等；同一 source_message_id 只生成一个任务。Agent 的明确指派只生成一条绑定 task/assignment/version 的 delivery；human 使用持久个人通知；公开任务不创建 delivery、不增加 pending_count、不唤醒所有 Agent。',
+    taskCreateSchema,
+    taskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskCreate(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_offer',
+    '向未指派任务发起指定接手 offer：只有创建者、群 owner 或管理员可调用。候选负责人必须是有效成员且有任务访问资格，不能是当前验收人。offer 只表示等待接手，不把任务置为进行中；Agent 候选生成单条关联 task_id/assignment_version 的 delivery，human 候选收到持久个人通知。幂等重放返回同一 assignment/delivery；已有待接手或进行中 assignment 时返回 CONFLICT。',
+    taskOfferSchema,
+    taskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskOffer(db, principal, input);
     },
   );
 
   register(
     server,
     'network_task_claim',
-    'Agent 成员领取一个 pending 任务，原子转为 claimed 并记录 assignee。human 调用返回 INVALID_ARGUMENT；并发或被他人领取返回 CLAIM_CONFLICT。任务通知不唤醒 Agent；先看 task_summary 的 pending/claimed，再按房间 list 后 claim。',
+    '公开领取一个 unassigned 任务：human 或 Agent 的有效成员都可调用，原子转为 in_progress 并生成 current assignment。验收人不能领取自己验收的任务；并发领取只有一个成功，其余返回 CLAIM_CONFLICT。领取不创建 delivery、不改变 pending_count；先看 task_summary 的 pending/claimed，再按房间 list 后 claim。',
     taskClaimSchema,
-    roomTaskResultSchema,
+    taskResultSchema,
     async (input) => {
       requireActor(principal);
       return taskClaim(db, principal, input);
@@ -1029,49 +1051,13 @@ export function registerTools(
 
   register(
     server,
-    'network_task_complete',
-    '仅任务 assignee 可把 claimed 任务完成为 done；result 必须为 1–120 个字符且不含换行/控制字符。任务完成不写 inbox、不产生未读或 head 变化。',
-    taskCompleteSchema,
-    roomTaskResultSchema,
+    'network_task_cancel',
+    '取消任务：创建者、当前负责人或群 owner/管理员可用，reason 必填并保存为审计。取消会撤销当前 assignment、关闭仍 pending/claimed 的关联 delivery，并向被取消的 human 候选发送控制通知；不创建新任务、不增加 pending_count、不伪造聊天未读。已验收/已取消/历史完成的任务不能再次取消。',
+    taskCancelSchema,
+    taskResultSchema,
     async (input) => {
       requireActor(principal);
-      return taskComplete(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_fail',
-    '仅任务 assignee 可把 claimed 任务标记为 failed；error 必须为 1–120 个字符且不含换行/控制字符。任务失败不写 inbox、不产生未读或 head 变化。',
-    taskFailSchema,
-    roomTaskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskFail(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_update',
-    '任务创建者或房间 owner 修改任务描述，不改变状态、assignee、结果或完成时间。description 限制同 add。',
-    taskUpdateSchema,
-    roomTaskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskUpdate(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_delete',
-    '任务创建者或房间 owner 删除任务；不改变消息、未读、head 或 inbox。',
-    taskDeleteSchema,
-    roomTaskDeletedSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskDelete(db, principal, input);
+      return taskCancel(db, principal, input);
     },
   );
 

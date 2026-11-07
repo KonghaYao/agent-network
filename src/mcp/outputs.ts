@@ -956,41 +956,82 @@ export const roomMonitorResultSchema = z.object({
   monitor: roomMonitorSchema.nullable(),
 });
 
-/** 房间任务短视图；不包含房间成员列表或任何凭据。 */
-export const roomTaskSchema = z.object({
-  task_id: z.string(),
-  room_id: z.string(),
-  description: z.string(),
-  status: z.enum(['pending', 'claimed', 'done', 'failed']),
-  assignee_actor_id: z.string().nullable(),
-  assignee_name: z.string().nullable(),
-  result: z.string().nullable(),
-  created_by: z.string(),
-  created_by_name: z.string(),
-  created_at: z.string(),
-  updated_at: z.string(),
-  completed_at: z.string().nullable(),
-  can_edit: z.boolean(),
-  can_claim: z.boolean(),
-  can_complete: z.boolean(),
+/** D01 任务视图；短标题与受控长正文分离，不包含成员列表或凭据。 */
+export const taskAssignmentViewSchema = z.object({
+  assignment_id: z.string(),
+  assignment_version: z.number(),
+  owner_actor_id: z.string(),
+  owner_name: z.string().nullable(),
+  status: z.enum(['offered', 'active', 'submitted', 'declined', 'revoked', 'expired']),
+  offer_expires_at: z.string().nullable(),
+  delivery_id: z.string().nullable(),
 });
 
-export const roomTaskResultSchema = z.object({ task: roomTaskSchema });
+export const taskAttachmentViewSchema = z.object({
+  file_id: z.string(),
+  label: z.string(),
+});
 
-export const roomTaskListSchema = z.object({
-  tasks: z.array(roomTaskSchema),
-  total: z.number(),
-  done: z.number(),
+export const taskSchema = z.object({
+  task_id: z.string(),
+  room_id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  acceptance_criteria: z.string(),
+  status: z.enum([
+    'unassigned',
+    'offered',
+    'in_progress',
+    'blocked',
+    'submitted',
+    'accepted',
+    'failed',
+    'cancelled',
+    'legacy_completed',
+  ]),
+  revision: z.number(),
+  source_message_id: z.string().nullable(),
+  card_message_id: z.string().nullable(),
+  created_by: z.string(),
+  created_by_name: z.string(),
+  owner_actor_id: z.string().nullable(),
+  owner_name: z.string().nullable(),
+  reviewer_actor_id: z.string(),
+  reviewer_name: z.string(),
+  due_at: z.string().nullable(),
+  blocked_reason: z.string().nullable(),
+  blocked_at: z.string().nullable(),
+  last_progress_at: z.string().nullable(),
+  business_authority: z.enum(['native', 'external']),
+  external_binding_id: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  accepted_at: z.string().nullable(),
+  cancelled_at: z.string().nullable(),
+  assignment: taskAssignmentViewSchema.nullable(),
+  delivery_ids: z.array(z.string()),
+  attachments: z.array(taskAttachmentViewSchema),
+  can_offer: z.boolean(),
+  can_claim: z.boolean(),
+  can_cancel: z.boolean(),
+  can_accept: z.boolean(),
+  can_decline: z.boolean(),
+});
+
+export const taskResultSchema = z.object({
+  task: taskSchema,
   authorization: authorizationSnapshotSchema,
 });
 
-export const roomTaskDeletedSchema = z.object({
-  task_id: z.string(),
-  deleted: z.literal(true),
+export const taskListResultSchema = z.object({
+  tasks: z.array(taskSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+  authorization: authorizationSnapshotSchema.nullable(),
 });
 
 /** 侧栏任务进度；一次返回多个 active 房间，避免 N 次 list。 */
-export const roomTaskSummarySchema = z.object({
+export const taskSummaryResultSchema = z.object({
   items: z.array(
     taskCountsSchema.extend({
       room_id: z.string(),

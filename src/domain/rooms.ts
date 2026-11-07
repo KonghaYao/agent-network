@@ -1334,15 +1334,16 @@ async function policyImpactFor(
       .bind(roomId)
       .first<{ n: number }>();
     affectedMembers = memberRow?.n ?? 0;
+    // D01 起任务权威表是 `tasks`；旧 `room_tasks` 已回填且只读。
+    // 新表没有 created_seq，按与任务读取一致的 created_at 边界统计。
     const taskRow = await db
       .prepare(
-        `SELECT COUNT(*) AS n FROM room_tasks t
+        `SELECT COUNT(*) AS n FROM tasks t
           WHERE t.room_id = ?
             AND EXISTS (
               SELECT 1 FROM room_members m
                WHERE m.room_id = t.room_id AND m.status = 'active' AND m.joined_seq > 0
-                 AND ((t.created_seq IS NOT NULL AND t.created_seq < m.joined_seq)
-                   OR (t.created_seq IS NULL AND t.created_at < m.joined_at))
+                 AND t.created_at < m.joined_at
             )`,
       )
       .bind(roomId)

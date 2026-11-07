@@ -326,14 +326,13 @@ async function main(): Promise<void> {
     'network_room_join_request_respond',
     'network_room_monitor_get',
     'network_room_monitor_set',
-    'network_task_list_get',
     'network_task_summary',
-    'network_task_add',
+    'network_task_list',
+    'network_task_get',
+    'network_task_create',
+    'network_task_offer',
     'network_task_claim',
-    'network_task_complete',
-    'network_task_fail',
-    'network_task_update',
-    'network_task_delete',
+    'network_task_cancel',
     'network_room_members_update',
     'network_room_role_set',
     'network_room_owner_transfer',
@@ -414,14 +413,13 @@ async function main(): Promise<void> {
     'network_room_owner_transfer_propose',
     'network_room_owner_transfer_respond',
     'network_room_owner_transfer_cancel',
-    'network_task_list_get',
     'network_task_summary',
-    'network_task_add',
+    'network_task_list',
+    'network_task_get',
+    'network_task_create',
+    'network_task_offer',
     'network_task_claim',
-    'network_task_complete',
-    'network_task_fail',
-    'network_task_update',
-    'network_task_delete',
+    'network_task_cancel',
     'network_inbox_list',
     'network_delivery_claim',
     'network_delivery_complete',
@@ -664,37 +662,70 @@ async function main(): Promise<void> {
       .map((tool) => [tool.name, tool]) ?? [],
   );
   const taskToolNames = [
-    'network_task_list_get',
     'network_task_summary',
-    'network_task_add',
+    'network_task_list',
+    'network_task_get',
+    'network_task_create',
+    'network_task_offer',
     'network_task_claim',
-    'network_task_complete',
-    'network_task_fail',
-    'network_task_update',
-    'network_task_delete',
+    'network_task_cancel',
   ];
   check(
-    '房间任务 8 个工具全部注册',
-    taskToolNames.every((name) => taskTools.has(name)),
-    taskToolNames.filter((name) => !taskTools.has(name)),
+    '任务 7 个工具全部注册且旧工具已退役',
+    taskToolNames.every((name) => taskTools.has(name)) &&
+      taskTools.size === taskToolNames.length &&
+      !taskTools.has('network_task_list_get') &&
+      !taskTools.has('network_task_add') &&
+      !taskTools.has('network_task_complete') &&
+      !taskTools.has('network_task_fail') &&
+      !taskTools.has('network_task_update') &&
+      !taskTools.has('network_task_delete'),
+    [...taskTools.keys()],
   );
-  const taskAddInput = JSON.stringify(taskTools.get('network_task_add')?.inputSchema ?? {});
+  const taskCreateInput = JSON.stringify(taskTools.get('network_task_create')?.inputSchema ?? {});
   check(
-    'task_add 输入含 request_id/room_id/description',
-    ['request_id', 'room_id', 'description'].every((key) => taskAddInput.includes(`"${key}"`)),
-    taskTools.get('network_task_add')?.inputSchema,
+    'task_create 输入含 request_id/room_id/title/description/acceptance_criteria',
+    ['request_id', 'room_id', 'title', 'description', 'acceptance_criteria'].every((key) =>
+      taskCreateInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_create')?.inputSchema,
   );
-  const taskClaimInput = JSON.stringify(taskTools.get('network_task_claim')?.inputSchema ?? {});
   check(
-    'task_claim 只接受 request_id/task_id（房间由任务推导）',
-    taskClaimInput.includes('"task_id"') && !taskClaimInput.includes('"room_id"'),
-    taskTools.get('network_task_claim')?.inputSchema,
+    'task_create 输入支持 source_message_id/assignee_actor_id/reviewer_actor_id/due_at/attachment_file_ids',
+    [
+      'source_message_id',
+      'assignee_actor_id',
+      'reviewer_actor_id',
+      'due_at',
+      'attachment_file_ids',
+    ].every((key) => taskCreateInput.includes(`"${key}"`)),
+    taskTools.get('network_task_create')?.inputSchema,
   );
-  const taskListOutput = JSON.stringify(taskTools.get('network_task_list_get')?.outputSchema ?? {});
+  const taskGetInput = JSON.stringify(taskTools.get('network_task_get')?.inputSchema ?? {});
   check(
-    'task_list 输出含 tasks/total/done',
-    ['tasks', 'total', 'done'].every((key) => taskListOutput.includes(`"${key}"`)),
-    taskTools.get('network_task_list_get')?.outputSchema,
+    'task_get 只接受 task_id',
+    taskGetInput.includes('"task_id"') && !taskGetInput.includes('"room_id"'),
+    taskTools.get('network_task_get')?.inputSchema,
+  );
+  const taskGetOutput = JSON.stringify(taskTools.get('network_task_get')?.outputSchema ?? {});
+  check(
+    'task_get 输出含状态/版本/assignment/来源与任务卡片',
+    ['task_id', 'status', 'revision', 'assignment', 'source_message_id', 'card_message_id'].every(
+      (key) => taskGetOutput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_get')?.outputSchema,
+  );
+  const taskListInput = JSON.stringify(taskTools.get('network_task_list')?.inputSchema ?? {});
+  check(
+    'task_list 输入支持 room_id/scope/status/limit',
+    ['room_id', 'scope', 'status', 'limit'].every((key) => taskListInput.includes(`"${key}"`)),
+    taskTools.get('network_task_list')?.inputSchema,
+  );
+  const taskListOutput = JSON.stringify(taskTools.get('network_task_list')?.outputSchema ?? {});
+  check(
+    'task_list 输出含 tasks/next_cursor/has_more',
+    ['tasks', 'next_cursor', 'has_more'].every((key) => taskListOutput.includes(`"${key}"`)),
+    taskTools.get('network_task_list')?.outputSchema,
   );
   const taskSummaryOutput = JSON.stringify(
     taskTools.get('network_task_summary')?.outputSchema ?? {},
@@ -709,52 +740,56 @@ async function main(): Promise<void> {
   const taskSummaryDescription = taskTools.get('network_task_summary')?.description ?? '';
   check(
     'task_summary 描述声明 claimed 只含本人且 pending>0 或 claimed>0 才 list',
-    taskSummaryDescription.includes('claimed 只统计当前身份领取') &&
+    taskSummaryDescription.includes('claimed 只统计当前身份负责的进行中任务') &&
       taskSummaryDescription.includes('pending > 0 或 claimed > 0'),
     taskSummaryDescription,
   );
-  const taskListDescription = taskTools.get('network_task_list_get')?.description ?? '';
+  const taskListDescription = taskTools.get('network_task_list')?.description ?? '';
   check(
-    'task_list 描述使用 pending/claimed 触发条件',
-    taskListDescription.includes('pending > 0 或 claimed > 0'),
+    'task_list 描述声明 room_id/scope=mine 且任务事件不唤醒',
+    taskListDescription.includes('scope=mine') &&
+      taskListDescription.includes('任务事件不会唤醒 Agent'),
     taskListDescription,
   );
-  const taskAddDescription = taskTools.get('network_task_add')?.description ?? '';
+  const taskCreateDescription = taskTools.get('network_task_create')?.description ?? '';
   check(
-    'task_add 描述声明 120 字、informational 且不写 inbox/未读',
-    taskAddDescription.includes('120') &&
-      taskAddDescription.includes('informational') &&
-      taskAddDescription.includes('不写 inbox') &&
-      taskAddDescription.includes('不产生未读'),
-    taskAddDescription,
+    'task_create 描述声明 120 字短标题、来源幂等与不伪造未读',
+    taskCreateDescription.includes('120 字短字段') &&
+      taskCreateDescription.includes('同一 request_id 幂等') &&
+      taskCreateDescription.includes('同一 source_message_id 只生成一个任务') &&
+      taskCreateDescription.includes('不增加 pending_count'),
+    taskCreateDescription,
+  );
+  const taskOfferDescription = taskTools.get('network_task_offer')?.description ?? '';
+  check(
+    'task_offer 描述声明派发权限、单条 delivery 与 CONFLICT',
+    taskOfferDescription.includes('只有创建者、群 owner 或管理员可调用') &&
+      taskOfferDescription.includes('单条关联 task_id/assignment_version 的 delivery') &&
+      taskOfferDescription.includes('CONFLICT'),
+    taskOfferDescription,
   );
   const taskClaimDescription = taskTools.get('network_task_claim')?.description ?? '';
   check(
-    'task_claim 描述声明仅 Agent、human 拒绝与不唤醒',
-    taskClaimDescription.includes('Agent 成员') &&
-      taskClaimDescription.includes('human 调用返回 INVALID_ARGUMENT') &&
-      taskClaimDescription.includes('不唤醒'),
+    'task_claim 描述声明 human/Agent 可领取、CLAIM_CONFLICT 且不建 delivery',
+    taskClaimDescription.includes('human 或 Agent 的有效成员都可调用') &&
+      taskClaimDescription.includes('CLAIM_CONFLICT') &&
+      taskClaimDescription.includes('领取不创建 delivery、不改变 pending_count'),
     taskClaimDescription,
   );
-  const taskCompleteDescription = taskTools.get('network_task_complete')?.description ?? '';
+  const taskCancelDescription = taskTools.get('network_task_cancel')?.description ?? '';
   check(
-    'task_complete 描述声明仅 assignee 且不写 inbox',
-    taskCompleteDescription.includes('assignee') &&
-      taskCompleteDescription.includes('不写 inbox'),
-    taskCompleteDescription,
-  );
-  const taskUpdateDescription = taskTools.get('network_task_update')?.description ?? '';
-  const taskDeleteDescription = taskTools.get('network_task_delete')?.description ?? '';
-  check(
-    'task_update/delete 描述声明创建者或房间 owner',
-    taskUpdateDescription.includes('创建者或房间 owner') &&
-      taskDeleteDescription.includes('创建者或房间 owner'),
-    { taskUpdateDescription, taskDeleteDescription },
+    'task_cancel 描述声明权限、必填 reason 与关闭关联 delivery',
+    taskCancelDescription.includes('创建者、当前负责人或群 owner/管理员可用') &&
+      taskCancelDescription.includes('reason 必填') &&
+      taskCancelDescription.includes('关闭仍 pending/claimed 的关联 delivery'),
+    taskCancelDescription,
   );
   check(
-    'task_list 与 task_summary 注册为只读工具',
-    (taskTools.get('network_task_list_get') as { annotations?: { readOnlyHint?: boolean } } | undefined)
+    'task_get/list/summary 注册为只读工具',
+    (taskTools.get('network_task_get') as { annotations?: { readOnlyHint?: boolean } } | undefined)
       ?.annotations?.readOnlyHint === true &&
+      (taskTools.get('network_task_list') as { annotations?: { readOnlyHint?: boolean } } | undefined)
+        ?.annotations?.readOnlyHint === true &&
       (taskTools.get('network_task_summary') as { annotations?: { readOnlyHint?: boolean } } | undefined)
         ?.annotations?.readOnlyHint === true,
   );
@@ -1656,11 +1691,11 @@ async function main(): Promise<void> {
     skillText.slice(0, 200),
   );
   check(
-    '技能正文包含房间任务完整工具与不唤醒语义',
-    ['## 房间任务', 'network_task_list_get', 'network_task_summary', 'network_task_add',
-      'network_task_claim', 'network_task_complete', 'network_task_fail',
-      'network_task_update', 'network_task_delete', 'room.tasks',
-      '不写 inbox', '不推进 `head_seq`', '不要轮询任务列表',
+    '技能正文包含任务与任务卡片完整工具与不唤醒语义',
+    ['## 任务与任务卡片', 'network_task_list', 'network_task_summary',
+      'network_task_get', 'network_task_create', 'network_task_offer',
+      'network_task_claim', 'network_task_cancel', 'task.updated',
+      '任务卡片', '不写 inbox', '不推进 `head_seq`', '不要轮询',
       'agent_tasks.sh'].every((marker) => skillText.includes(marker)),
     skillText.slice(0, 320),
   );
@@ -1672,7 +1707,7 @@ async function main(): Promise<void> {
       skillText.includes('claimed > 0') &&
       skillText.includes('network_task_summary') &&
       skillText.includes('多步骤') &&
-      skillText.includes('network_task_add'),
+      skillText.includes('network_task_create'),
     skillText.slice(0, 320),
   );
   check(
@@ -1694,9 +1729,10 @@ async function main(): Promise<void> {
     skillText.slice(0, 320),
   );
   check(
-    '技能正文声明任务文本 120 字与长内容 .md',
-    skillText.includes('1–120') &&
-      skillText.includes('拒绝换行与控制字符') &&
+    '技能正文声明任务短标题 120 字与受控长正文',
+    skillText.includes('最多 120 字') &&
+      skillText.includes('description') &&
+      skillText.includes('acceptance_criteria') &&
       skillText.includes('.md'),
     skillText.slice(0, 260),
   );
@@ -1940,20 +1976,24 @@ async function main(): Promise<void> {
       homeHtml.includes('未知'),
   );
   check(
-    '首页包含房间任务行、浮层与侧栏 badge 脚本',
+    '首页包含任务入口、任务卡片浮层与我的任务弹窗',
     homeHtml.includes('id="task-toggle"') &&
       homeHtml.includes('id="task-popover"') &&
       homeHtml.includes('id="task-list"') &&
-      homeHtml.includes('room-task-badge') &&
-      homeHtml.includes('network_task_list_get') &&
+      homeHtml.includes('id="task-create"') &&
+      homeHtml.includes('id="my-tasks"') &&
+      homeHtml.includes('id="task-detail-modal"') &&
+      homeHtml.includes('msg-task-slot') &&
+      homeHtml.includes('network_task_list') &&
       homeHtml.includes("callTool('network_task_summary'"),
   );
   check(
     '任务 UI 使用 textContent 且不写 token',
-    homeHtml.includes('description.textContent') &&
-      homeHtml.includes('result.textContent') &&
-      !homeHtml.includes('taskPopoverElement.innerHTML') &&
-      !homeHtml.includes('taskListElement.innerHTML'),
+    homeHtml.includes('title.textContent') &&
+      homeHtml.includes('badge.textContent') &&
+      !homeHtml.includes('taskListElement.innerHTML') &&
+      !homeHtml.includes('taskDetailBodyElement.innerHTML') &&
+      !homeHtml.includes('myTasksListElement.innerHTML'),
   );
 
   const skillDoc = await fetch(`${baseUrl()}/skills/agent-network-skills.md`);
@@ -2003,11 +2043,12 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 300),
   );
   check(
-    '静态技能包含房间任务命令与不唤醒规范',
-    ['agent_tasks.sh', '### 房间任务', 'network_task_list_get', 'network_task_claim',
-      'network_task_summary', 'room.tasks', '不写 inbox', '不会唤醒 Agent',
+    '静态技能包含任务命令与不唤醒规范',
+    ['agent_tasks.sh', '### 任务与任务卡片', 'network_task_list', 'network_task_create',
+      'network_task_offer', 'network_task_claim', 'network_task_cancel',
+      'task.updated', '不写 inbox', '不会唤醒 Agent',
       'task_summary', '每次上线', 'pending > 0', 'claimed > 0', '只含自己',
-      'network_task_add'].every((marker) =>
+      '任务卡片'].every((marker) =>
       skillDocText.includes(marker),
     ),
     skillDocText.slice(0, 300),
@@ -2623,12 +2664,12 @@ async function main(): Promise<void> {
   check(
     '任务命令脚本可通过 /skills 下载并包含全部子命令',
     agentTasksType.includes('text/x-shellscript') &&
-      ['list', 'summary', 'add', 'claim', 'complete', 'fail', 'update', 'delete'].every(
+      ['list', 'summary', 'get', 'create', 'offer', 'claim', 'cancel'].every(
         (marker) => agentTasksText.includes(`  ${marker}`),
       ) &&
-      ['network_task_list_get', 'network_task_summary', 'network_task_add',
-        'network_task_claim', 'network_task_complete', 'network_task_fail',
-        'network_task_update', 'network_task_delete'].every((marker) =>
+      ['network_task_list', 'network_task_summary', 'network_task_get',
+        'network_task_create', 'network_task_offer', 'network_task_claim',
+        'network_task_cancel'].every((marker) =>
         agentTasksText.includes(marker),
       ),
     { contentType: agentTasksType },

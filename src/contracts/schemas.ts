@@ -586,46 +586,66 @@ export const roomMonitorSetSchema = z.object({
 });
 
 /**
- * 房间任务：描述与结果都只接受短文本。
+ * 任务工作流：短标题与受控长正文分离。
  *
- * Zod 的 max 按 UTF-16 码元计，最多放宽到 2 倍字符上限；最终按 Unicode
- * 码点与换行/控制字符在领域层校验，错误返回可读的 INVALID_ARGUMENT。
+ * Zod 的 max 按 UTF-16 码元/字符计，标题最多放宽到 2 倍字符上限；最终按
+ * Unicode 码点、UTF-8 字节与控制字符在领域层校验。
  */
-const taskText = z.string().trim().min(1).max(LIMITS.roomTaskTextMax * 2);
+const taskTitle = z.string().trim().min(1).max(LIMITS.taskTitleMax * 2);
+const taskBodyText = z.string().max(LIMITS.taskDescriptionBytes);
 
-export const taskListGetSchema = z.object({ room_id: id() });
+export const taskCreateSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  title: taskTitle,
+  description: taskBodyText.optional(),
+  acceptance_criteria: taskBodyText.optional(),
+  source_message_id: id().optional(),
+  assignee_actor_id: id().optional(),
+  reviewer_actor_id: id().optional(),
+  due_at: z.iso.datetime({ offset: true }).optional(),
+  attachment_file_ids: z.array(id()).max(LIMITS.taskAttachmentsMax).optional(),
+});
+
+export const taskGetSchema = z.object({ task_id: id() });
+
+export const taskListSchema = z.object({
+  room_id: id().optional(),
+  scope: z.enum(['room', 'mine']).optional(),
+  status: z
+    .enum([
+      'unassigned',
+      'offered',
+      'in_progress',
+      'blocked',
+      'submitted',
+      'accepted',
+      'failed',
+      'cancelled',
+      'legacy_completed',
+    ])
+    .optional(),
+  limit: z.number().int().min(1).max(LIMITS.taskListMax).optional(),
+});
 
 export const taskSummarySchema = z.object({
   room_ids: z.array(id()).min(1).max(LIMITS.taskLookupMax).optional(),
 });
 
-export const taskAddSchema = z.object({
+export const taskOfferSchema = z.object({
   request_id: requestId,
-  room_id: id(),
-  description: taskText,
+  task_id: id(),
+  assignee_actor_id: id(),
+  expected_revision: z.number().int().min(1).optional(),
 });
 
 export const taskClaimSchema = z.object({ request_id: requestId, task_id: id() });
 
-export const taskCompleteSchema = z.object({
+export const taskCancelSchema = z.object({
   request_id: requestId,
   task_id: id(),
-  result: taskText,
+  reason: z.string().trim().min(1).max(LIMITS.taskCancelReasonBytes),
 });
-
-export const taskFailSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  error: taskText,
-});
-
-export const taskUpdateSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  description: taskText,
-});
-
-export const taskDeleteSchema = z.object({ request_id: requestId, task_id: id() });
 
 /**
  * 认证反馈：只接受已注册 actor 主动提交的三段诊断文本。
@@ -738,12 +758,11 @@ export type ArtifactListInput = z.infer<typeof artifactListSchema>;
 export type ArtifactReleaseInput = z.infer<typeof artifactReleaseSchema>;
 export type RoomMonitorGetInput = z.infer<typeof roomMonitorGetSchema>;
 export type RoomMonitorSetInput = z.infer<typeof roomMonitorSetSchema>;
-export type TaskListGetInput = z.infer<typeof taskListGetSchema>;
+export type TaskCreateInput = z.infer<typeof taskCreateSchema>;
+export type TaskGetInput = z.infer<typeof taskGetSchema>;
+export type TaskListInput = z.infer<typeof taskListSchema>;
 export type TaskSummaryInput = z.infer<typeof taskSummarySchema>;
-export type TaskAddInput = z.infer<typeof taskAddSchema>;
+export type TaskOfferInput = z.infer<typeof taskOfferSchema>;
 export type TaskClaimInput = z.infer<typeof taskClaimSchema>;
-export type TaskCompleteInput = z.infer<typeof taskCompleteSchema>;
-export type TaskFailInput = z.infer<typeof taskFailSchema>;
-export type TaskUpdateInput = z.infer<typeof taskUpdateSchema>;
-export type TaskDeleteInput = z.infer<typeof taskDeleteSchema>;
+export type TaskCancelInput = z.infer<typeof taskCancelSchema>;
 export type FeedbackCreateInput = z.infer<typeof feedbackCreateSchema>;

@@ -150,10 +150,27 @@ export const LIMITS = {
   fileTicketTtlMs: 60 * 60_000,
   /** 网页监控面板 URL 的 UTF-8 字节上限；只允许 http/https。 */
   roomMonitorUrlMax: 2048,
-  /** 单个房间任务列表的短描述/结果字符上限（按 Unicode 码点）。 */
+  /** 旧房间任务板的短描述/结果字符上限；新任务只用于列表短标题。 */
   roomTaskTextMax: 120,
-  /** 每个房间任务数量上限。 */
+  /** 旧房间任务板的每房间数量上限；保留给只读旧表。 */
   roomTasksPerRoom: 200,
+  /** 新任务短标题字符上限（按 Unicode 码点）；详细目标写入 description。 */
+  taskTitleMax: 120,
+  /** 任务详细目标 UTF-8 字节上限；受控 Markdown/结构化正文。 */
+  taskDescriptionBytes: 64 * 1024,
+  /** 任务验收条件 UTF-8 字节上限。 */
+  taskAcceptanceBytes: 16 * 1024,
+  /** 单个任务引用的附件数量上限；只保存 file_id 与标签。 */
+  taskAttachmentsMax: 20,
+  /** 任务列表默认 / 最大条数。 */
+  taskListDefault: 50,
+  taskListMax: 100,
+  /** 指定 offer 的有效期（毫秒）；过期由后续任务处理，不在这里自动改状态。 */
+  taskOfferTtlMs: 24 * 60 * 60_000,
+  /** 任务取消原因 UTF-8 字节上限。 */
+  taskCancelReasonBytes: 1024,
+  /** 任务期限允许的最远未来时间（毫秒）。 */
+  taskDueMaxAheadMs: 10 * 365 * 24 * 60 * 60_000,
   /** `network_task_summary` 单次 room_ids 过滤上限。 */
   taskLookupMax: 100,
   /** 房间文件列表默认 / 最大条数。 */

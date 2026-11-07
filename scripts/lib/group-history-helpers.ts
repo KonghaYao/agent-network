@@ -133,14 +133,14 @@ export interface FilePageView {
 
 export interface TaskView {
   task_id: string;
-  description: string;
+  title: string;
   status: string;
 }
 
 export interface TaskPageView {
   tasks: TaskView[];
-  total: number;
-  done: number;
+  next_cursor: string | null;
+  has_more: boolean;
   authorization: AuthorizationSnapshot;
 }
 
@@ -312,11 +312,11 @@ export async function addTask(
 ): Promise<string> {
   const created = await callTool<{ task: { task_id: string } }>(
     connection.client,
-    'network_task_add',
+    'network_task_create',
     {
       request_id: newRequestId('g07_task'),
       room_id: roomId,
-      description,
+      title: description,
     },
   );
   return created.task.task_id;
@@ -326,7 +326,7 @@ export async function taskPage(
   connection: McpConnection,
   roomId: string,
 ): Promise<TaskPageView> {
-  return callTool<TaskPageView>(connection.client, 'network_task_list_get', { room_id: roomId });
+  return callTool<TaskPageView>(connection.client, 'network_task_list', { room_id: roomId });
 }
 
 export function assertAuthorization(

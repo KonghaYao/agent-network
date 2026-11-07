@@ -92,13 +92,13 @@ interface ReissueView {
 interface TaskView {
   task_id: string;
   status: string;
-  assignee_actor_id: string | null;
+  title: string;
 }
 
 interface TaskListResult {
   tasks: TaskView[];
-  total: number;
-  done: number;
+  next_cursor: string | null;
+  has_more: boolean;
 }
 
 interface AgentSummaryView {
@@ -512,10 +512,10 @@ export async function runAgentIdentityAcceptance(): Promise<void> {
     const archivedMe = await callTool<Identity>(targetConn.client, 'network_me');
     checkEqual('归档不阻止 Agent 工具调用', archivedMe.actor_id, target.actor_id);
 
-    const task = await callTool<{ task: TaskView }>(managerConn.client, 'network_task_add', {
+    const task = await callTool<{ task: TaskView }>(managerConn.client, 'network_task_create', {
       request_id: newRequestId('a01_t04_task'),
       room_id: roomId,
-      description: '停用后必须保持未完成的任务',
+      title: '停用后必须保持未完成的任务',
     });
     await callTool(targetConn.client, 'network_task_claim', {
       request_id: newRequestId('a01_t04_claim'),
@@ -579,12 +579,16 @@ export async function runAgentIdentityAcceptance(): Promise<void> {
       ),
       afterDisable.pending_work.open_tasks,
     );
-    const taskList = await callTool<TaskListResult>(managerConn.client, 'network_task_list_get', {
+    const taskList = await callTool<TaskListResult>(managerConn.client, 'network_task_list', {
       room_id: roomId,
     });
     const taskAfterDisable = taskList.tasks.find((item) => item.task_id === task.task.task_id);
-    checkEqual('任务列表仍显示 claimed', taskAfterDisable?.status, 'claimed');
-    checkEqual('任务没有被计为 done', taskList.done, 0);
+    checkEqual('任务列表仍显示进行中', taskAfterDisable?.status, 'in_progress');
+    checkEqual(
+      '任务没有被计为已验收',
+      taskList.tasks.filter((item) => item.status === 'accepted').length,
+      0,
+    );
 
     const summaries = await callTool<AgentsGetView>(managerConn.client, 'network_agents_get', {
       actor_ids: [target.actor_id],
@@ -598,12 +602,10 @@ export async function runAgentIdentityAcceptance(): Promise<void> {
     });
     const enabledMe = await callTool<Identity>(targetConn.client, 'network_me');
     checkEqual('启用后旧凭据恢复可用', enabledMe.actor_id, target.actor_id);
-    const completed = await callTool<{ task: TaskView }>(targetConn.client, 'network_task_complete', {
-      request_id: newRequestId('a01_t04_complete'),
+    const enabledTask = await callTool<{ task: TaskView }>(targetConn.client, 'network_task_get', {
       task_id: task.task.task_id,
-      result: '停用未静默完成，由 Agent 在启用后显式完成',
     });
-    checkEqual('启用后 Agent 可显式完成任务', completed.task.status, 'done');
+    checkEqual('启用后 Agent 可读取自己的未完成任务', enabledTask.task.status, 'in_progress');
   } finally {
     for (const connection of extraConns) await connection.close();
     await managerConn.close();

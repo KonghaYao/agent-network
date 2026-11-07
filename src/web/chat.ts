@@ -14,6 +14,7 @@ import {
   paneResizer,
   reportDialog,
   sidebarPane,
+  taskDialogs,
   toastPane,
 } from './chat-panels';
 import { chatClientScript } from './chat-script';
@@ -66,6 +67,7 @@ ${filePreviewDialog()}
 ${contactRequestsDialog()}
 ${reportDialog()}
 ${groupDialog()}
+${taskDialogs()}
 ${membersDialog()}
 ${announcementDialog()}
 ${newAgentDialog()}

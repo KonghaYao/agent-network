@@ -218,7 +218,8 @@ function checkMigrationUpgrade(): void {
     '旧库升级按顺序应用剩余迁移',
     applied.join(','),
     '0009_feedback.sql,0010_room_tasks.sql,0011_delivery_reminders.sql,' +
-      '0012_identity_management_devices.sql,0018_p0_guards.sql,0019_contact_relations.sql,' +
+      '0012_identity_management_devices.sql,0017_task_workflow.sql,0018_p0_guards.sql,' +
+      '0019_contact_relations.sql,' +
       '0020_group_roles.sql,0021_owner_leave_guard.sql,0022_contact_blocks_reports.sql,' +
       '0023_room_invitations.sql,0024_room_owner_transfers.sql,0025_group_history_boundary.sql,' +
       '0026_private_files_retention.sql,0027_group_invite_links.sql,0028_message_mentions.sql',
@@ -232,6 +233,9 @@ function checkMigrationUpgrade(): void {
   );
   checkEqual('旧库升级后 feedback 表可用', count(old, 'feedback'), 0);
   checkEqual('旧库升级后 room_tasks 表可用', count(old, 'room_tasks'), 0);
+  checkEqual('旧库升级后 tasks 表可用', count(old, 'tasks'), 0);
+  checkEqual('旧库升级后 task_assignments 表可用', count(old, 'task_assignments'), 0);
+  checkEqual('旧库升级后 task_cards 表可用', count(old, 'task_cards'), 0);
   const deliveryColumns = old.prepare('PRAGMA table_info(deliveries)').all() as {
     name: string;
   }[];

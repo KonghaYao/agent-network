@@ -2431,35 +2431,40 @@ async function runTaskAcceptance(
     room_id: roomId,
     through_seq: room.room.head_seq,
   });
-  const headBefore = (await rawTool<RoomDetail>(humanToken, 'network_room_get', {
-    room_id: roomId,
-  })).room.head_seq;
 
-  const doneTask = await rawTool<{ task: { task_id: string } }>(
+  const reportTask = await rawTool<{ task: { task_id: string } }>(
     humanToken,
-    'network_task_add',
+    'network_task_create',
     {
-      request_id: requestId('task_add'),
+      request_id: requestId('task_create'),
       room_id: roomId,
-      description: '准备验收报告',
+      title: '准备验收报告',
+      description: '输出 PDF 并附上测试结论',
+      acceptance_criteria: '报告可打开且包含结论',
     },
   );
   await rawTool(agentToken, 'network_task_claim', {
     request_id: requestId('task_claim'),
-    task_id: doneTask.task.task_id,
-  });
-  await rawTool(agentToken, 'network_task_complete', {
-    request_id: requestId('task_done'),
-    task_id: doneTask.task.task_id,
-    result: '已生成报告',
+    task_id: reportTask.task.task_id,
   });
   const injectionTask = await rawTool<{ task: { task_id: string } }>(
     humanToken,
-    'network_task_add',
+    'network_task_create',
     {
-      request_id: requestId('task_add'),
+      request_id: requestId('task_create'),
       room_id: roomId,
-      description: '<b>注入测试</b>',
+      title: '<b>注入测试</b>',
+      description: '标题按纯文本渲染',
+    },
+  );
+  const offeredTask = await rawTool<{ task: { task_id: string } }>(
+    humanToken,
+    'network_task_create',
+    {
+      request_id: requestId('task_create'),
+      room_id: roomId,
+      title: '等待 Agent 接手',
+      assignee_actor_id: agent.actor_id,
     },
   );
 
@@ -2474,7 +2479,7 @@ async function runTaskAcceptance(
     await waitRoom(page, roomId, '任务 UI 验收群');
     await page.waitForFunction(
       `document.getElementById('task-toggle') && !document.getElementById('task-toggle').hidden &&
-        document.getElementById('task-toggle-label').textContent === '任务 1/2'`,
+        document.getElementById('task-toggle-label').textContent === '任务 0/3'`,
     );
     check('聊天头部显示任务 done/total', true);
     const badge = page.locator(`${roomLink(roomId)} .room-task-badge`);
@@ -2482,38 +2487,47 @@ async function runTaskAcceptance(
       `(() => {
         const item = document.querySelector(${JSON.stringify(roomLink(roomId))});
         const badge = item ? item.querySelector('.room-task-badge') : null;
-        return Boolean(badge && badge.textContent === '1/2');
+        return Boolean(badge && badge.textContent === '0/3');
       })()`,
     );
-    checkEqual('侧栏房间项显示任务 badge', await badge.textContent(), '1/2');
+    checkEqual('侧栏房间项显示任务 badge', await badge.textContent(), '0/3');
 
     await page.locator('#task-toggle').hover();
     await page.locator('#task-popover').waitFor({ state: 'visible' });
     checkEqual(
       'hover 打开任务浮层并列出全部任务',
       await page.locator('#task-list .task-item').count(),
-      2,
+      3,
     );
-    const doneItem = page.locator(
-      `#task-list .task-item[data-task-id="${doneTask.task.task_id}"]`,
+    const reportItem = page.locator(
+      `#task-list .task-item[data-task-id="${reportTask.task.task_id}"]`,
     );
-    const doneText = (await doneItem.innerText()) ?? '';
+    const reportText = (await reportItem.innerText()) ?? '';
     check(
-      '浮层显示状态、assignee 与结果',
-      doneText.includes('已完成') &&
-        doneText.includes('任务 UI Agent') &&
-        doneText.includes('已生成报告'),
-      doneText,
+      '浮层显示状态、负责人与验收人',
+      reportText.includes('进行中') &&
+        reportText.includes('负责人：任务 UI Agent') &&
+        reportText.includes('验收：任务 UI 人类'),
+      reportText,
+    );
+    const offeredItem = page.locator(
+      `#task-list .task-item[data-task-id="${offeredTask.task.task_id}"]`,
+    );
+    const offeredText = (await offeredItem.innerText()) ?? '';
+    check(
+      '指定 Agent 但未接手的任务显示待接手',
+      offeredText.includes('待接手') && offeredText.includes('待接手：任务 UI Agent'),
+      offeredText,
     );
     const injectionItem = page.locator(
       `#task-list .task-item[data-task-id="${injectionTask.task.task_id}"]`,
     );
     checkEqual(
-      '任务描述按纯文本渲染',
+      '任务标题按纯文本渲染',
       await injectionItem.locator('.task-desc').textContent(),
       '<b>注入测试</b>',
     );
-    checkEqual('任务描述不注入 HTML', await injectionItem.locator('b').count(), 0);
+    checkEqual('任务标题不注入 HTML', await injectionItem.locator('b').count(), 0);
     check(
       '任务浮层不输出 token',
       !((await page.locator('#task-popover').innerText()) ?? '').includes(humanToken),
@@ -2543,46 +2557,73 @@ async function runTaskAcceptance(
 
     const listCallsBefore = (await page.evaluate(
       `(window.__mcpCalls || []).filter(function (call) {
-        return call.name === 'network_task_list_get';
+        return call.name === 'network_task_list';
       }).length`,
     )) as number;
     await sleep(800);
     const listCallsAfter = (await page.evaluate(
       `(window.__mcpCalls || []).filter(function (call) {
-        return call.name === 'network_task_list_get';
+        return call.name === 'network_task_list';
       }).length`,
     )) as number;
     checkEqual('任务 UI 不轮询 list', listCallsAfter, listCallsBefore);
 
-    // 任务事件驱动刷新头部与侧栏 badge，不刷新消息、不产生未读。
+    // 任务事件驱动刷新头部、侧栏 badge 与浮层；状态变化不新建卡片、不产生未读。
     const eventTask = await rawTool<{ task: { task_id: string } }>(
-      agentToken,
-      'network_task_add',
+      humanToken,
+      'network_task_create',
       {
-        request_id: requestId('task_add'),
+        request_id: requestId('task_create'),
         room_id: roomId,
-        description: '事件任务',
+        title: '事件任务',
       },
     );
     await page.waitForFunction(
-      `document.getElementById('task-toggle-label').textContent === '任务 1/3'`,
+      `document.getElementById('task-toggle-label').textContent === '任务 0/4'`,
     );
-    checkEqual('任务事件刷新头部进度', await page.locator('#task-toggle-label').textContent(), '任务 1/3');
-    checkEqual('任务事件刷新侧栏 badge', await badge.textContent(), '1/3');
+    checkEqual('任务创建事件刷新头部进度', await page.locator('#task-toggle-label').textContent(), '任务 0/4');
+    checkEqual('任务创建事件刷新侧栏 badge', await badge.textContent(), '0/4');
+    const headAfterCreate = (await rawTool<RoomDetail>(humanToken, 'network_room_get', {
+      room_id: roomId,
+    })).room.head_seq;
+    await page.locator('#task-toggle').hover();
+    await page.locator('#task-popover').waitFor({ state: 'visible' });
+    const eventItemSelector = `#task-list .task-item[data-task-id="${eventTask.task.task_id}"]`;
+    checkEqual(
+      '新任务在浮层显示为待领取',
+      await page.locator(eventItemSelector).locator('.task-status').textContent(),
+      '待领取',
+    );
     await rawTool(agentToken, 'network_task_claim', {
       request_id: requestId('task_claim'),
       task_id: eventTask.task.task_id,
     });
-    await rawTool(agentToken, 'network_task_complete', {
-      request_id: requestId('task_done'),
+    await page.waitForFunction(
+      `(() => {
+        const item = document.querySelector(${JSON.stringify(eventItemSelector)});
+        const status = item ? item.querySelector('.task-status') : null;
+        return Boolean(status && status.textContent === '进行中');
+      })()`,
+    );
+    check('领取事件刷新浮层状态', true);
+    await rawTool(humanToken, 'network_task_cancel', {
+      request_id: requestId('task_cancel'),
       task_id: eventTask.task.task_id,
-      result: '事件任务完成',
+      reason: '事件验收结束',
     });
     await page.waitForFunction(
-      `document.getElementById('task-toggle-label').textContent === '任务 2/3'`,
+      `(() => {
+        const item = document.querySelector(${JSON.stringify(eventItemSelector)});
+        const status = item ? item.querySelector('.task-status') : null;
+        return Boolean(status && status.textContent === '已取消');
+      })()`,
     );
-    checkEqual('任务完成后头部进度更新', await page.locator('#task-toggle-label').textContent(), '任务 2/3');
-    checkEqual('任务完成后侧栏 badge 更新', await badge.textContent(), '2/3');
+    check('取消事件刷新浮层状态', true);
+    checkEqual(
+      '任务状态变化不改变 done/total',
+      await page.locator('#task-toggle-label').textContent(),
+      '任务 0/4',
+    );
     checkEqual(
       '任务变更不产生未读红点',
       await page.locator(`${roomLink(roomId)} .unread`).count(),
@@ -2591,7 +2632,7 @@ async function runTaskAcceptance(
     const headAfter = (await rawTool<RoomDetail>(humanToken, 'network_room_get', {
       room_id: roomId,
     })).room.head_seq;
-    checkEqual('任务变更不推进 head_seq', headAfter, headBefore);
+    checkEqual('任务状态变化不推进 head_seq', headAfter, headAfterCreate);
 
     const mobile = await makeContext(
       browser,
@@ -7003,11 +7044,11 @@ async function main(): Promise<void> {
       );
       const openTask = await rawTool<{ task: { task_id: string } }>(
         data.humanToken,
-        'network_task_add',
+        'network_task_create',
         {
-          request_id: requestId('task_add'),
+          request_id: requestId('task_create'),
           room_id: pendingRoom.room.room_id,
-          description: '停用前未完成任务',
+          title: '停用前未完成任务',
         },
       );
       await rawTool(pendingAgent.token, 'network_task_claim', {

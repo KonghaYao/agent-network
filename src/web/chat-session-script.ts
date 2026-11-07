@@ -715,6 +715,7 @@ async function loadOlder() {
       appendHistory(fragment, olderItems);
       messagesElement.prepend(fragment);
       ensureHistoryPager();
+      syncTaskCardMarkers(messagesElement);
       reconcilePrependSeam(oldFirstItem, olderItems[olderItems.length - 1]);
       scrollController.restorePrependAnchor(anchorSnapshot);
     }
