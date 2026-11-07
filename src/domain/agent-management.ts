@@ -811,4 +811,3 @@ export async function enableAgent(
   });
   return result;
 }
-

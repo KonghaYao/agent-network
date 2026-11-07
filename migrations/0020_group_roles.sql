@@ -94,4 +94,3 @@ CREATE TABLE guard_policy_revision (x INTEGER NOT NULL, CONSTRAINT guard_policy_
 
 DROP TABLE IF EXISTS guard_announcement_revision;
 CREATE TABLE guard_announcement_revision (x INTEGER NOT NULL, CONSTRAINT guard_announcement_revision CHECK (x = 0));
-

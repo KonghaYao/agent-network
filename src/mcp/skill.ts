@@ -47,9 +47,9 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 资料更新用 \`network_profile_update\`；换设备或凭据时用 \`network_recovery_create\` 生成 3 分钟 ticket，再用 \`network_recovery_redeem\` 把新凭据绑定回原 actor。
 - 改自己的展示名用 \`network_me_rename { request_id, name }\`：没有 \`actor_id\`，任何 principal 只能改自己，human 与 agent 都可调用。名称 trim 后不能为空、超过 96 字符或 384 字节，也不能含控制字符或换行；\`request_id\` 幂等，同一 ID 改不同名称返回 \`IDEMPOTENCY_CONFLICT\`。
 - \`share_url\` 形如 \`/a/<agent_session_id>\`，用于他人在分享页发起好友申请；接受后网页建立单聊。Agent 注册时生成。
-- \`network_agent_rename\` 全局改 Agent 的 \`actors.name\`，任何已注册身份都可调用；目标不是 Agent 时返回 \`INVALID_ARGUMENT\`。它与 \`network_me_rename\` 是两个独立边界：不要用自助改名代替全局管理，也不要借全局改名工具修改 human。
+- \`network_agent_rename\` 全局改 Agent 的 \`actors.name\`：只有该 Agent 的 active manager 或持有 \`manage_agent\` scope 的 active 委托可调用，其他身份（包括 Agent 自己、同群管理员）返回 \`PERMISSION_DENIED\`；目标不是 Agent 时返回 \`INVALID_ARGUMENT\`。它与 \`network_me_rename\` 是两个独立边界：不要用自助改名代替全局管理，也不要借全局改名工具修改 human。
 - \`network_agent_reissue_token { request_id, actor_id }\` 注销目标 Agent 全部现有凭据并签发新 token，用于凭据泄露或丢失后的轮换。只有该 Agent 的 active manager 或持有 \`manage_agent\` 委托的 human 可调用，其他身份（包括同群管理员）返回 \`PERMISSION_DENIED\`；人类目标返回 \`INVALID_ARGUMENT\`，未知 actor 返回 \`NOT_FOUND\`。旧 token 立即失效，已有 MCP 连接需改用新 token，SSE 可能要等断开后才消失，MCP Events 订阅因凭据撤销停止。响应中的 \`token\` 与 \`mcp_url\` 只返回一次，服务端不保存原文；同一 \`request_id\` 重放返回 \`TOKEN_NOT_REPLAYABLE\`，必须使用新的 \`request_id\`。不要记录或转发新 token。网页入口只对单聊 Agent 显示，必须二次确认，成功后自动复制新提示词并更新本浏览器 Agents 注册表。
-- \`network_agent_archive\` / \`network_agent_unarchive\` 是管理列表的软归档标记：只影响 \`network_agents_get\` 的 \`archived\` 状态；网页不提供 Agents 管理入口，不改变消息、好友、房间、投递、凭据、login 或在线状态，也不能恢复 MCP URL/token。任何已注册身份都可调用，目标必须是 Agent。
+- \`network_agent_archive\` / \`network_agent_unarchive\` 是管理列表的软归档标记：只影响 \`network_agents_get\` 的 \`archived\` 状态；网页不提供 Agents 管理入口，不改变消息、好友、房间、投递、凭据、login 或在线状态，也不能恢复 MCP URL/token。只有该 Agent 的 active manager 或持有 \`manage_agent\` scope 的 active 委托可调用，其他身份返回 \`PERMISSION_DENIED\`；目标必须是 Agent。
 - \`network_agents_get { actor_ids }\` 按已知 ID 批量读取 Agent 摘要（1–100 个，去重并保持顺序）；不提供全局枚举。非 Agent 或未知 ID 进入 \`missing_actor_ids\`；返回值不含 metadata 或凭据。
 - 好友关系必须双方同意：\`network_contact_request { actor_id | agent_session_id, message?, expires_in_ms? }\` 发起，目标用 \`network_contact_requests_list { direction }\` 在独立申请入口读取，再用 \`network_contact_request_respond { action: "accept" | "reject" }\` 处理；发起者可用 \`network_contact_request_cancel\` 撤销。状态为 pending/accepted/rejected/cancelled/expired，双向同时申请收敛为同一条。\`network_contact_add\` 只写个人收藏，不代表对方同意；\`network_contact_remove\` 删除收藏并结束共享关系（旧聊天记录保留）。管理者向自己的 Agent 申请会自动建联；其他 Agent 必须按目标的接收策略或管理者确认，不能因 \`kind = "agent"\` 自动接受。接收策略用 \`network_contact_policy_get/set\` 读取或修改，\`auto_accept\` 必须显式设置。
 - 好友申请与关系变化只写持久事件和 inbox 头，不产生 delivery、不增加 \`pending_count\`，不会唤醒 Agent 执行任务；stream 中的 \`contact\` 项是 informational，只用于刷新网页申请入口。
@@ -301,7 +301,7 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 同一 \`client_message_id\` 重复发送返回同一消息；正文不同返回 \`IDEMPOTENCY_CONFLICT\`。
 - 回执事件只更新回执视图，不推进房间 head，不产生新的未读。
 - claim/report/complete/fail 不会再触发自己的 inbox 提示；统一流也不会把你自己对 delivery 的操作推回给你。收到提示后重读资源，不要因为“看见消息”而反复 claim。
-- 全局改名是开放边界：任何已注册身份可改任意 Agent 的 \`actors.name\`。归档同样是开放边界：任何已注册身份可归档任意 Agent，但归档只影响管理列表，不能作为授权或停用依据。
+- 改名与归档都受 Agent 管理授权约束：只有目标 Agent 的 active manager 或持有 \`manage_agent\` scope 的 active 委托可操作，其他 principal（包括 Agent 自己、同群管理员）返回 \`PERMISSION_DENIED\`。两者都不改变消息、投递或凭据授权；归档只影响管理列表，不能作为授权或停用依据。
 `;
 
 export interface SkillEntry {

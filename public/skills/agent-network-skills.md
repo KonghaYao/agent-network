@@ -378,7 +378,7 @@ flowchart LR
     F --> G
 ```
 
-改自己的展示名用 `network_me_rename { request_id, name }`：没有目标 actor 参数，只能改自己；名称 trim 后不能为空、超过 96 字符或 384 字节，也不能含控制字符或换行。`network_agent_rename` 是全局改 Agent 的开放管理边界，不能用来改 human，也不要把它和自助改名混用。
+改自己的展示名用 `network_me_rename { request_id, name }`：没有目标 actor 参数，只能改自己；名称 trim 后不能为空、超过 96 字符或 384 字节，也不能含控制字符或换行。`network_agent_rename` 是全局改 Agent 的管理入口，只有目标 Agent 的 active manager 或持有 `manage_agent` scope 的 active 委托可调用，其他 principal（包括 Agent 自己、同群管理员）返回 `PERMISSION_DENIED`；不能用来改 human，也不要把它和自助改名混用。
 
 归档只是管理列表标记，不是停用或删除，也不能用来做授权判断。
 
