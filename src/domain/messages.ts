@@ -556,6 +556,20 @@ export function instructionText(body: string): string {
  * 消歧；正文只做便利兜底，不能猜。`collectTargets=false` 时只检测
  * `@所有人` 控制符，用于显式 invoke 的消息仍允许群级提醒。
  */
+
+/** `@` 前一个字符若是邮箱本地部分或单词字符，就不是独立提及。 */
+const MENTION_PREV_BLOCKED = /[\p{L}\p{N}_.%+\-]/u;
+/** 名字后紧跟字母、数字或下划线时仍属于同一个词，不是完整提及。 */
+const MENTION_WORD_CHAR = /[\p{L}\p{N}_]/u;
+
+function mentionStartsAt(text: string, at: number): boolean {
+  return at === 0 || !MENTION_PREV_BLOCKED.test(text[at - 1]!);
+}
+
+function mentionEndsAt(text: string, end: number): boolean {
+  return end >= text.length || !MENTION_WORD_CHAR.test(text[end]!);
+}
+
 async function resolveGroupTextMentions(
   db: D1Database,
   roomId: string,
@@ -596,18 +610,30 @@ async function resolveGroupTextMentions(
   let mentionAll = false;
   for (let index = 0; index < text.length; index += 1) {
     if (text[index] !== '@') continue;
+    // `foo@Bot.com` 之类的邮箱地址不是提及；`@` 必须是独立 token 的开头。
+    if (!mentionStartsAt(text, index)) continue;
     const start = index + 1;
     // 优先识别更长的成员名（例如“所有人2”）；否则 `@所有人` 是保留控制符，
     // 不会因为存在名为“所有”的成员而被当成普通前缀匹配。
     const longerAllMember = names.some(
-      (name) => name.length > '所有人'.length && name.startsWith('所有人') && text.startsWith(name, start),
+      (name) =>
+        name.length > '所有人'.length &&
+        name.startsWith('所有人') &&
+        text.startsWith(name, start) &&
+        mentionEndsAt(text, start + name.length),
     );
-    if (!longerAllMember && text.startsWith('所有人', start)) {
+    if (
+      !longerAllMember &&
+      text.startsWith('所有人', start) &&
+      mentionEndsAt(text, start + '所有人'.length)
+    ) {
       mentionAll = true;
       index = start + '所有人'.length - 1;
       continue;
     }
-    const matched = names.find((name) => text.startsWith(name, start));
+    const matched = names.find(
+      (name) => text.startsWith(name, start) && mentionEndsAt(text, start + name.length),
+    );
     if (!matched) continue;
     const members = byName.get(matched) ?? [];
     if (collectTargets && members.length > 1) {

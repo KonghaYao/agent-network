@@ -43,6 +43,16 @@ export interface RoomInviteCreateResult {
   share_url: string | null;
 }
 
+/**
+ * `operations.result_json` 只保存非秘密字段。
+ *
+ * 明文 key 与分享 URL 只在首次响应出现；重放时读取该快照也只能拿到邀请
+ * 状态，不会恢复或伪造明文链接。
+ */
+interface RoomInviteCreateStored {
+  invitation: RoomInvitationView;
+}
+
 const INVITATION_SELECT = `SELECT i.*, r.title AS room_title, a.name AS inviter_name,
         r.member_join_policy,
         (SELECT COUNT(*) FROM room_members mm
@@ -136,7 +146,17 @@ export async function roomInviteCreate(
   const access = await requireGroupAccess(db, input.room_id, viewer, 'invite_members');
   const payloadHash = await sha256Hex(stableStringify(input));
   const replay = await getOperation(db, viewer, input.request_id);
-  if (replay) return resolveOperation(replay, payloadHash) as RoomInviteCreateResult;
+  if (replay) {
+    const replayed = resolveOperation(replay, payloadHash) as RoomInviteCreateStored;
+    // 链接明文只在首次响应出现一次；撤销后也不能由重放恢复旧 key/旧状态。
+    if (!input.target_actor_id) {
+      throw new BusinessError(
+        'TOKEN_NOT_REPLAYABLE',
+        '邀请链接明文只在首次响应返回一次；请使用新的 request_id 重新创建',
+      );
+    }
+    return { ...replayed, invite_key: null, share_url: null };
+  }
 
   const expiresAt = at + (input.expires_in_ms ?? LIMITS.roomInviteTtlMs);
   const inviterName = (await getActor(db, viewer))?.name ?? '';
@@ -202,16 +222,12 @@ export async function roomInviteCreate(
       expiresAt,
     });
     const invitation = invitations[0]!;
-    const result: RoomInviteCreateResult = {
-      invitation: viewFor(invitation),
-      invite_key: null,
-      share_url: null,
-    };
+    const stored: RoomInviteCreateStored = { invitation: viewFor(invitation) };
     await runIdempotent(db, {
       actorId: viewer,
       requestId: input.request_id,
       payloadHash,
-      result,
+      result: stored,
       build: (resultJson) => [
         operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, at),
         capabilityGuardStatement(db, input.room_id, viewer, 'invite_members'),
@@ -260,7 +276,7 @@ export async function roomInviteCreate(
         ...invitationInboxStatements(db, invitations, at),
       ],
     });
-    return result;
+    return { ...stored, invite_key: null, share_url: null };
   }
 
   const inviteKey = randomToken(LIMITS.roomInviteKeyBytes);
@@ -279,16 +295,13 @@ export async function roomInviteCreate(
     created_at: at,
     updated_at: at,
   };
-  const result: RoomInviteCreateResult = {
-    invitation: viewFor(invitation),
-    invite_key: inviteKey,
-    share_url: `${origin.replace(/\/+$/u, '')}/j/${inviteKey}`,
-  };
-  await runIdempotent(db, {
+  const shareUrl = `${origin.replace(/\/+$/u, '')}/j/${inviteKey}`;
+  const stored: RoomInviteCreateStored = { invitation: viewFor(invitation) };
+  const outcome = await runIdempotent(db, {
     actorId: viewer,
     requestId: input.request_id,
     payloadHash,
-    result,
+    result: stored,
     build: (resultJson) => [
       operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, at),
       capabilityGuardStatement(db, input.room_id, viewer, 'invite_members'),
@@ -339,7 +352,14 @@ export async function roomInviteCreate(
       ),
     ],
   });
-  return result;
+  // 首次写入返回 stored 本身；重放返回 JSON.parse 出的新对象，不能重放明文。
+  if (outcome !== stored) {
+    throw new BusinessError(
+      'TOKEN_NOT_REPLAYABLE',
+      '邀请链接明文只在首次响应返回一次；请使用新的 request_id 重新创建',
+    );
+  }
+  return { ...stored, invite_key: inviteKey, share_url: shareUrl };
 }
 
 /**

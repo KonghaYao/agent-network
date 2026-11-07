@@ -187,17 +187,19 @@ export async function runGroupMentionAcceptance(): Promise<void> {
     });
 
     const caseBot = await registerRawAgent('CaseBot');
+    const exactBot = await registerRawAgent('ExactBot');
     const sameA = await registerRawAgent('同名机器人');
     const sameB = await registerRawAgent('同名机器人');
     const extras: RawAgent[] = [];
     for (let index = 1; index <= 6; index += 1) {
       extras.push(await registerRawAgent(`并行 Agent ${index}`));
     }
-    const agents = [m1Identity, m2Identity, caseBot.identity, sameA.identity, sameB.identity, ...extras.map((item) => item.identity)];
+    const agents = [m1Identity, m2Identity, caseBot.identity, exactBot.identity, sameA.identity, sameB.identity, ...extras.map((item) => item.identity)];
     const agentTokens = [
       m1Token,
       m2Token,
       caseBot.token,
+      exactBot.token,
       sameA.token,
       sameB.token,
       ...extras.map((item) => item.token),
@@ -378,6 +380,51 @@ export async function runGroupMentionAcceptance(): Promise<void> {
       hasMessage(longestInbox, longest.message.message_id) &&
         !hasMessage(longestM1, longest.message.message_id),
       { m2: longestInbox.items, m1: longestM1.items },
+    );
+
+    // M03 边界：名字后缀、邮箱地址与 @所有人 后缀都不能误触发。
+    const suffixLetter = await sendMessage(human, groupId, '@ExactBotX 不是点名');
+    checkEqual('@ 名字后紧跟字母不创建 delivery', suffixLetter.delivery_ids.length, 0);
+    checkEqual('@ 名字后紧跟字母不记录提及', suffixLetter.message.mentions.length, 0);
+    const suffixWord = await sendMessage(human, groupId, '@ExactBottle 不是点名');
+    checkEqual('@ 名字后紧跟更多字母不创建 delivery', suffixWord.delivery_ids.length, 0);
+    const emailText = await sendMessage(human, groupId, 'foo@ExactBot.com 是邮箱地址');
+    checkEqual('邮箱地址中的 @ 不创建 delivery', emailText.delivery_ids.length, 0);
+    checkEqual('邮箱地址中的 @ 不记录提及', emailText.message.mentions.length, 0);
+    const exactInbox = await inboxOf(exactBot.token);
+    check(
+      '边界文本不投递给 ExactBot',
+      !hasMessage(exactInbox, suffixLetter.message.message_id) &&
+        !hasMessage(exactInbox, suffixWord.message.message_id) &&
+        !hasMessage(exactInbox, emailText.message.message_id),
+      exactInbox.items,
+    );
+
+    const allSuffix = await sendMessage(human, groupId, '@所有人X 不是全体提醒');
+    checkEqual('@所有人 后紧跟字母不创建 delivery', allSuffix.delivery_ids.length, 0);
+    checkEqual('@所有人X 不记录群级提及', allSuffix.message.mentions.length, 0);
+    checkEqual(
+      '@所有人X 不写个人提醒',
+      reminderOf(await inboxEvents(peerToken), allSuffix.message.message_id),
+      undefined,
+    );
+
+    const spaceBoundary = await sendMessage(human, groupId, '@ExactBot 空格边界');
+    checkEqual('@ 名字后接空格正常创建 delivery', spaceBoundary.delivery_ids.length, 1);
+    const commaBoundary = await sendMessage(human, groupId, '@ExactBot，中文标点边界');
+    checkEqual('@ 名字后接中文标点正常创建 delivery', commaBoundary.delivery_ids.length, 1);
+    const allPunctuation = await sendMessage(human, groupId, '@所有人，标点边界');
+    checkEqual('@所有人 后接中文标点仍触发群级提醒', allPunctuation.delivery_ids.length, 0);
+    checkEqual(
+      '@所有人，标点边界记录 all 来源人类成员',
+      JSON.stringify(allPunctuation.message.mentions),
+      JSON.stringify([{ actor_id: peerIdentity.actor_id, kind: 'human', source: 'all' }]),
+    );
+    checkEqual(
+      '@所有人，标点边界写入个人提醒',
+      reminderOf(await inboxEvents(peerToken), allPunctuation.message.message_id)?.metadata
+        .mention_all,
+      true,
     );
 
     // M03-T01：同名 Agent 只能通过显式 actor_id 区分；纯文本同名必须报歧义且不投递。

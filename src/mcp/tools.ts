@@ -892,7 +892,7 @@ export function registerTools(
   register(
     server,
     'network_room_invite_create',
-    '创建群邀请。不指定 target_actor_id 时创建可分享链接/二维码：默认 7 天、20 次成功加入，明文 invite_key 与 /j/<key> 分享 URL 只在本次响应出现一次，服务端只保存 SHA-256 摘要；指定 target_actor_id 时创建单人定向邀请（固定 1 次），目标必须是好友。邀请不包含任何 actor 登录凭据。',
+    '创建群邀请。不指定 target_actor_id 时创建可分享链接/二维码：默认 7 天、20 次成功加入，明文 invite_key 与 /j/<key> 分享 URL 只在本次响应出现一次，服务端只保存 SHA-256 摘要；同一 request_id 重放返回 TOKEN_NOT_REPLAYABLE，不会重放明文。指定 target_actor_id 时创建单人定向邀请（固定 1 次），目标必须是好友。邀请不包含任何 actor 登录凭据。',
     roomInviteCreateSchema,
     roomInviteCreateResultSchema,
     async (input) => {

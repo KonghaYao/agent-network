@@ -24,6 +24,7 @@ import { runFeedbackUnitChecks } from './lib/feedback-unit';
 import { runFeedbackCliChecks } from './lib/feedback-cli';
 import { runDeliveryReminderUnitChecks } from './lib/delivery-reminder-unit';
 import { runRoomTaskSummaryUnitChecks } from './lib/room-task-summary-unit';
+import { runRoomInviteReplayUnitChecks } from './lib/room-invite-replay-unit';
 
 const STREAM_URI = 'agentnet://stream';
 
@@ -3407,6 +3408,7 @@ async function main(): Promise<void> {
   await runFeedbackCliChecks();
   await runDeliveryReminderUnitChecks();
   await runRoomTaskSummaryUnitChecks();
+  await runRoomInviteReplayUnitChecks();
 
   console.log(`协议验收通过: ${checksPassed()} 项`);
 }

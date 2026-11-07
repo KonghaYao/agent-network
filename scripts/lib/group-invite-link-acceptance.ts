@@ -310,6 +310,49 @@ async function runT01(): Promise<void> {
       'revoked',
     );
 
+    // 同一 request_id 重放不能恢复明文 key；撤销后也不能伪装成 pending。
+    const replayRequestId = newRequestId('g02_replay');
+    const replayCreate = () =>
+      callTool<InviteCreateView>(ownerConn.client, 'network_room_invite_create', {
+        request_id: replayRequestId,
+        room_id: roomId,
+        max_uses: 5,
+      });
+    const replayLink = await replayCreate();
+    check('G02 重放样本首次创建返回明文 key', Boolean(replayLink.invite_key));
+    await expectToolError(
+      'G02 同一 request_id 重放返回 TOKEN_NOT_REPLAYABLE',
+      replayCreate(),
+      'TOKEN_NOT_REPLAYABLE',
+    );
+    await callTool(ownerConn.client, 'network_room_invite_revoke', {
+      request_id: newRequestId('g02_replay_revoke'),
+      invitation_id: replayLink.invitation.invitation_id,
+      expected_revision: replayLink.invitation.revision,
+    });
+    await expectToolError(
+      'G02 撤销后重放仍返回 TOKEN_NOT_REPLAYABLE 而不是旧状态',
+      replayCreate(),
+      'TOKEN_NOT_REPLAYABLE',
+    );
+    const replayRows = await callTool<InvitationPageView>(
+      ownerConn.client,
+      'network_room_invite_get',
+      { room_id: roomId, limit: 50 },
+    );
+    checkEqual(
+      'G02 撤销后重放不把链接恢复成 pending',
+      replayRows.items.find(
+        (item) => item.invitation_id === replayLink.invitation.invitation_id,
+      )?.status,
+      'revoked',
+    );
+    check(
+      'G02 链接列表仍不返回明文 key',
+      !('invite_key' in (replayRows.items[0] ?? {})),
+      replayRows.items[0],
+    );
+
     // 次数用尽：首个用户成功加入后，第二台设备统一 INVITE_EXHAUSTED。
     const singleUse = await createLink(ownerConn, roomId, { maxUses: 1 });
     const joined = await acceptLink(
