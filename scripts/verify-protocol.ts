@@ -409,6 +409,36 @@ async function main(): Promise<void> {
     for (const required of ['drive_file_info', ...roomFileTools]) {
       check(`工具 ${required} 已注册`, toolNames.includes(required), toolNames);
     }
+    const driveTool = listed?.tools?.find((tool) => tool.name === 'drive_file_info');
+    check(
+      'drive_file_info 描述声明上传后可直接分享且绑定只用于文件列表',
+      typeof driveTool?.description === 'string' &&
+        driveTool.description.includes('本地路径') &&
+        driveTool.description.includes('file://') &&
+        driveTool.description.includes('POST /mcp-upload') &&
+        driveTool.description.includes('publicUrl') &&
+        driveTool.description.includes('不需要先绑定') &&
+        driveTool.description.includes('network_room_file_bind') &&
+        driveTool.description.includes('房间文件列表') &&
+        driveTool.description.includes('不是下载前提') &&
+        !driveTool.description.includes('分享文件必须') &&
+        !driveTool.description.includes('移出房间后已分享'),
+      driveTool?.description,
+    );
+    const bindTool = listed?.tools?.find((tool) => tool.name === 'network_room_file_bind');
+    check(
+      'room_file_bind 描述声明绑定只用于列表且删除或过期才 404',
+      typeof bindTool?.description === 'string' &&
+        bindTool.description.includes('不是下载前提') &&
+        bindTool.description.includes('未绑定') &&
+        bindTool.description.includes('房间文件列表') &&
+        bindTool.description.includes('public_url') &&
+        bindTool.description.includes('network_room_file_list') &&
+        bindTool.description.includes('成员被移出房间') &&
+        bindTool.description.includes('删除房间文件或过期才 404') &&
+        !bindTool.description.includes('文件移出房间'),
+      bindTool?.description,
+    );
   } else {
     check(
       '关闭 Drive 时不注册 drive_file_info 与房间文件工具',
@@ -461,6 +491,20 @@ async function main(): Promise<void> {
       sendTool.description.includes('显式 invoke 优先') &&
       sendTool.description.includes('invoke: []') &&
       sendTool.description.includes('claim'),
+    sendTool?.description,
+  );
+  check(
+    'message_send 描述声明上传后可直接发送链接且绑定只用于文件列表',
+    typeof sendTool?.description === 'string' &&
+      sendTool.description.includes('本地路径') &&
+      sendTool.description.includes('file://') &&
+      sendTool.description.includes('POST /mcp-upload') &&
+      sendTool.description.includes('publicUrl') &&
+      sendTool.description.includes('不需要先绑定') &&
+      sendTool.description.includes('network_room_file_bind') &&
+      sendTool.description.includes('房间文件列表') &&
+      sendTool.description.includes('不是下载前提') &&
+      !sendTool.description.includes('分享文件先'),
     sendTool?.description,
   );
   const roomGetTool = listed?.tools?.find((tool) => tool.name === 'network_room_get');
@@ -1469,6 +1513,21 @@ async function main(): Promise<void> {
     skillText.slice(0, 240),
   );
   check(
+    '技能正文说明上传后可直接分享且绑定只用于文件列表',
+    [
+      '上传后可直接分享',
+      'POST /mcp-upload',
+      'publicUrl',
+      '不需要先绑定',
+      'network_room_file_bind',
+      '绑定只用于文件列表',
+      '房间文件列表',
+      '成员被移出房间不影响已分享 URL',
+      '删除房间文件或过期才 404',
+    ].every((marker) => skillText.includes(marker)),
+    skillText.slice(0, 400),
+  );
+  check(
     '技能正文包含 Markdown 写法与空行规范',
     skillText.includes('### Markdown 写法') &&
       skillText.includes('至少留一个空行') &&
@@ -1858,6 +1917,21 @@ async function main(): Promise<void> {
     skillDocText.includes('回复长度与长内容') && skillDocText.includes('一行摘要'),
     skillDocText.slice(0, 240),
   );
+  check(
+    '静态技能说明上传后可直接分享且绑定只用于文件列表',
+    [
+      '上传后可直接分享',
+      'POST /mcp-upload',
+      'publicUrl',
+      '不需要先绑定',
+      'network_room_file_bind',
+      '绑定只用于文件列表',
+      '房间文件列表',
+      '成员被移出房间不影响已分享 URL',
+      '删除房间文件或过期才 404',
+    ].every((marker) => skillDocText.includes(marker)),
+    skillDocText.slice(0, 400),
+  );
   const markdownSection = (text: string): string => {
     const heading = '### Markdown 写法';
     const start = text.indexOf(heading);
@@ -1906,6 +1980,23 @@ async function main(): Promise<void> {
     '静态/主 skill multitask 异步分发 digest 一致',
     sectionDigest(staticMultitaskSection),
     sectionDigest(mainMultitaskSection),
+  );
+  const fileShareRules = (text: string): string => {
+    const marker = '- **上传后可直接分享**';
+    const endMarker = '不要假设链接只对房间成员可见。';
+    const start = text.indexOf(marker);
+    const end = start < 0 ? -1 : text.indexOf(endMarker, start);
+    if (start < 0 || end < 0) return '';
+    return text.slice(start, end + endMarker.length).trim();
+  };
+  const mainFileShareRules = fileShareRules(skillText);
+  const staticFileShareRules = fileShareRules(skillDocText);
+  check(
+    '静态/主 skill 文件分享规则 digest 一致',
+    mainFileShareRules.length > 0 &&
+      staticFileShareRules.length > 0 &&
+      sectionDigest(staticFileShareRules) === sectionDigest(mainFileShareRules),
+    { main: mainFileShareRules, static: staticFileShareRules },
   );
   check(
     '静态技能包含首次进入会话规范',
@@ -2104,6 +2195,26 @@ async function main(): Promise<void> {
     chatgptGuideText.includes('不重放') &&
       chatgptGuideText.includes('network_sync { scope: "inbox" }'),
     chatgptGuideText.slice(0, 400),
+  );
+  const chatgptFileMarkers = [
+    '本地路径',
+    'file://',
+    'POST /mcp-upload',
+    'publicUrl',
+    'public_url',
+    '不需要先绑定',
+    'network_room_file_bind',
+    'network_room_file_list',
+    'network_room_file_get',
+    'network_message_send',
+    '房间文件列表',
+    '成员被移出房间不影响已分享 URL',
+    '删除房间文件或过期才 404',
+  ];
+  check(
+    'ChatGPT 指南说明上传后可直接分享且绑定只用于文件列表',
+    chatgptFileMarkers.every((marker) => chatgptGuideText.includes(marker)),
+    { missing: chatgptFileMarkers.filter((marker) => !chatgptGuideText.includes(marker)) },
   );
   check(
     'ChatGPT 指南不出现非 Agent 类型字面量',

@@ -124,7 +124,7 @@ export function registerRoomFileTools(
   register(
     server,
     'network_room_file_bind',
-    '把当前身份上传且未过期的 fileId 绑定到房间，返回公开下载地址。公开 URL 即下载权限：其他 Agent 无需 Bearer；文件移出房间后已分享的 URL 仍有效到过期或删除。',
+    '把当前身份上传且未过期的 fileId 绑定到房间，返回公开下载地址 file.public_url。绑定只用于让文件出现在房间文件列表，房间成员可用 network_room_file_list / network_room_file_get 发现；它不是下载前提，上传后拿到 publicUrl 即可直接分享。未绑定的上传文件不在房间文件列表，只能靠上传响应的 publicUrl 或已知 /f/<fileId> 链接下载。公开 URL 即下载权限：其他 Agent 无需 Bearer；成员被移出房间不影响已分享 URL，删除房间文件或过期才 404。',
     roomFileBindSchema,
     roomFileResultSchema,
     async (input) => {

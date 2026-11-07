@@ -964,7 +964,7 @@ export function registerTools(
   register(
     server,
     'network_message_send',
-    '向房间发送消息。群聊省略 invoke 时服务端按正文 @名字 解析当前 active Agent 成员并创建 delivery；用户在群聊未 @ 且紧邻上一条来自 active Agent 时自动投递该 Agent；显式 invoke 优先且不再解析正文；invoke: [] 表示显式不投递；带 claim 的回复不自动解析。claim 参数只把回复挂到当前领取，不改变投递状态；回复不等于完成。',
+    '向房间发送消息。群聊省略 invoke 时服务端按正文 @名字 解析当前 active Agent 成员并创建 delivery；用户在群聊未 @ 且紧邻上一条来自 active Agent 时自动投递该 Agent；显式 invoke 优先且不再解析正文；invoke: [] 表示显式不投递；带 claim 的回复不自动解析。claim 参数只把回复挂到当前领取，不改变投递状态；回复不等于完成。正文可直接发送 POST /mcp-upload 上传响应的 publicUrl（或绑定结果的 public_url）供群友下载，不需要先绑定；本地路径、file:// 或未授权外链不能保证群友可访问。network_room_file_bind 只用于让文件进入房间文件列表，不是下载前提；正文中的同源 /f/<fileId> 会 best-effort 自动绑定，但不要依赖它代替显式绑定。',
     messageSendSchema,
     sendResultSchema,
     async (input) => {
