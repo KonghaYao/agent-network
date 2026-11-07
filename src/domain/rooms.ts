@@ -53,6 +53,7 @@ import {
   directInvitationStatements,
   invitationInboxStatements,
   loadInvitedMembers,
+  revokeDirectInvitationStatement,
   type InvitedMemberView,
 } from './room-invitations';
 import {
@@ -1230,6 +1231,14 @@ export async function roomMembersUpdate(
           .bind(at, room.room_id, member),
         ...cancelDeliveriesForMemberStatements(db, room.room_id, member, 'member_removed', at),
       ]),
+      // 直接加人已绕过邀请，移除成员会让旧邀请变成重入后门；两者都在
+      // 同一事务撤销该目标的 pending 定向邀请。
+      ...add.map((member) =>
+        revokeDirectInvitationStatement(db, room.room_id, member, at),
+      ),
+      ...remove.map((member) =>
+        revokeDirectInvitationStatement(db, room.room_id, member, at),
+      ),
       ...(input.transfer_owner_to
         ? [
             db

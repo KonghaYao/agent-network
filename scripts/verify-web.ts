@@ -4167,6 +4167,19 @@ async function main(): Promise<void> {
 
     // 1c2. 安全菜单：删除 / 拉黑 / 举报 / 退群入口与文案必须可区分。
     {
+      // 真实拉黑/解封使用独立好友与单聊，避免结束 fixture 好友关系影响后续用例。
+      const safetyPeerToken = crypto.randomUUID();
+      const safetyPeer = await rawTool<Actor>(safetyPeerToken, 'network_register', {
+        request_id: requestId('web_reg'),
+        kind: 'human',
+        name: '浏览器验收拉黑对象',
+      });
+      await rawBefriend(data.humanToken, safetyPeerToken, { actor_id: safetyPeer.actor_id });
+      const safetyRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [safetyPeer.actor_id],
+      });
       const { context, page } = await makeContext(
         browser,
         data.humanToken,
@@ -4249,7 +4262,99 @@ async function main(): Promise<void> {
         deleteCopy,
       );
 
+      // 真实拉黑 → 状态验证 → 解封 → 状态验证，不只 dismiss 确认框。
+      await page.mouse.click(200, 600);
+      await page.locator(roomLink(safetyRoom.room.room_id)).waitFor();
+      await page.locator(roomLink(safetyRoom.room.room_id)).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      await page.waitForFunction(
+        `document.getElementById('room-menu-block').textContent.trim() === '拉黑'`,
+      );
+      const blockAccepted = new Promise<string>((resolve) => {
+        page.once('dialog', async (dialog) => {
+          const message = dialog.message();
+          await dialog.accept();
+          resolve(message);
+        });
+      });
+      await page.locator('#room-menu-block').click();
+      const acceptedBlockCopy = await blockAccepted;
+      check(
+        '浏览器确认后实际执行拉黑',
+        acceptedBlockCopy.includes('解除拉黑不会自动恢复好友'),
+        acceptedBlockCopy,
+      );
+      await page.waitForFunction(`document.getElementById('room-menu').hidden === true`);
+      const activeBlocks = await rawTool<{
+        items: { active: boolean; blocked_actor: { actor_id: string } }[];
+      }>(data.humanToken, 'network_contact_blocks_list', { limit: 100 });
+      check(
+        '浏览器拉黑后服务端状态为 active',
+        activeBlocks.items.some(
+          (item) => item.active && item.blocked_actor.actor_id === safetyPeer.actor_id,
+        ),
+        activeBlocks.items,
+      );
+      const contactsAfterBlock = await rawTool<{
+        items: { actor_id: string; relation: 'active' | 'none' }[];
+      }>(data.humanToken, 'network_contacts_list', { limit: 100 });
+      checkEqual(
+        '浏览器拉黑后好友关系结束',
+        contactsAfterBlock.items.find((item) => item.actor_id === safetyPeer.actor_id)?.relation ??
+          'none',
+        'none',
+      );
+
+      await page.locator(roomLink(safetyRoom.room.room_id)).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      await page.waitForFunction(
+        `document.getElementById('room-menu-block').textContent.trim() === '解除拉黑'`,
+      );
+      checkEqual(
+        '浏览器拉黑后菜单切换为解除拉黑',
+        (await page.locator('#room-menu-block').textContent())?.trim(),
+        '解除拉黑',
+      );
+      const unblockAccepted = new Promise<string>((resolve) => {
+        page.once('dialog', async (dialog) => {
+          const message = dialog.message();
+          await dialog.accept();
+          resolve(message);
+        });
+      });
+      await page.locator('#room-menu-block').click();
+      const acceptedUnblockCopy = await unblockAccepted;
+      check(
+        '浏览器确认后实际执行解封',
+        acceptedUnblockCopy.includes('不会自动恢复好友关系'),
+        acceptedUnblockCopy,
+      );
+      await page.waitForFunction(`document.getElementById('room-menu').hidden === true`);
+      const releasedBlocks = await rawTool<{
+        items: { active: boolean; blocked_actor: { actor_id: string } }[];
+      }>(data.humanToken, 'network_contact_blocks_list', { limit: 100 });
+      checkEqual(
+        '浏览器解封后服务端状态为已释放',
+        releasedBlocks.items.find(
+          (item) => item.blocked_actor.actor_id === safetyPeer.actor_id,
+        )?.active,
+        false,
+      );
+      await page.locator(roomLink(safetyRoom.room.room_id)).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      await page.waitForFunction(
+        `document.getElementById('room-menu-block').textContent.trim() === '拉黑'`,
+      );
+      checkEqual(
+        '浏览器解封后菜单恢复为拉黑',
+        (await page.locator('#room-menu-block').textContent())?.trim(),
+        '拉黑',
+      );
+      await page.mouse.click(200, 600);
+
       // 举报弹窗：选择成员、提交后显示受控接收状态，不创建向外发送。
+      await page.locator(roomLink(data.direct.room.room_id)).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
       await page.locator('#room-menu-report').click();
       await page.locator('#report-modal').waitFor({ state: 'visible' });
       await page.waitForFunction(`document.getElementById('report-submit').disabled === false`);

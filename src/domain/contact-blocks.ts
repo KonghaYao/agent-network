@@ -280,7 +280,13 @@ export function contactReportRateGuardStatement(
     .bind(reporter, at - LIMITS.contactReportWindowMs, LIMITS.contactReportWindowMax);
 }
 
-/** 群成员邀请/添加窗口限额；只统计显式成员添加审计。 */
+/**
+ * 群成员邀请/添加窗口限额；只统计主动成员添加审计。
+ *
+ * 接受邀请也写 `member_added` 审计以保留完整成员历史，但 `detail_json`
+ * 标记 `via = invitation`。接受别人的邀请是响应，不是自己的邀请额度，
+ * 因此必须排除，否则大量接受邀请会提前耗尽主动加人的窗口。
+ */
 export function roomInviteRateGuardStatement(
   db: D1Database,
   inviter: string,
@@ -291,7 +297,8 @@ export function roomInviteRateGuardStatement(
       guardSql(
         'rateLimited',
         `(SELECT COUNT(*) FROM room_management_audit
-           WHERE changed_by = ? AND action = 'member_added' AND created_at > ?) >= ?`,
+           WHERE changed_by = ? AND action = 'member_added' AND created_at > ?
+             AND COALESCE(json_extract(detail_json, '$.via'), '') <> 'invitation') >= ?`,
       ),
     )
     .bind(inviter, at - LIMITS.roomInviteWindowMs, LIMITS.roomInviteWindowMax);

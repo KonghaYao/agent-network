@@ -52,6 +52,7 @@ interface GroupMemberView {
   name: string;
   role: 'owner' | 'admin' | 'member';
   role_revision?: number;
+  joined_seq?: string;
 }
 
 interface InvitedMemberView {
@@ -72,6 +73,8 @@ interface GroupDetailView {
     title: string;
     member_count: number;
     my_role: string;
+    head_seq: string;
+    my_last_read_seq: string;
   };
   members: GroupMemberView[];
   invited: InvitedMemberView[];
@@ -265,6 +268,21 @@ export async function runGroupInviteAcceptance(): Promise<void> {
   checkEqual('G01-T01 邀请携带群名', pending?.room_title, 'G01 混合成员群');
   if (!pending) throw new Error('缺少 U2 的 pending 邀请');
 
+  // 邀请接受不制造聊天未读：先把邀请人追到当前 head，再接受。
+  const u1BeforeAccept = await callTool<GroupDetailView>(u1Connection.client, 'network_room_get', {
+    room_id: roomId,
+  });
+  await callTool(u1Connection.client, 'network_room_mark_read', {
+    room_id: roomId,
+    through_seq: u1BeforeAccept.room.head_seq,
+  });
+  const u1Read = await callTool<GroupDetailView>(u1Connection.client, 'network_room_get', {
+    room_id: roomId,
+  });
+  const headBeforeAccept = u1Read.room.head_seq;
+  const readBeforeAccept = u1Read.room.my_last_read_seq;
+  checkEqual('G01-T01 接受前邀请人无未读', readBeforeAccept, headBeforeAccept);
+
   const accepted = await callTool<RespondView>(u2Connection.client, 'network_room_invite_respond', {
     request_id: newRequestId('g01_accept'),
     invitation_id: pending.invitation_id,
@@ -286,6 +304,24 @@ export async function runGroupInviteAcceptance(): Promise<void> {
     'G01-T01 接受后 U2 出现在有效成员中',
     u1Detail.members.some((member) => member.actor_id === u2.actor_id),
   );
+  checkEqual('G01-T01 接受邀请不推进邀请人 head_seq', u1Detail.room.head_seq, headBeforeAccept);
+  checkEqual(
+    'G01-T01 接受邀请不改变邀请人已读位置',
+    u1Detail.room.my_last_read_seq,
+    readBeforeAccept,
+  );
+  checkEqual(
+    'G01-T01 接受邀请不制造邀请人未读',
+    u1Detail.room.my_last_read_seq,
+    u1Detail.room.head_seq,
+  );
+  const u2JoinedSeq = u1Detail.members.find((member) => member.actor_id === u2.actor_id)
+    ?.joined_seq;
+  check(
+    'G01-T01 新成员 joined_seq 记录接受事件且高于消息 head',
+    Number(u2JoinedSeq) > Number(headBeforeAccept),
+    { joined_seq: u2JoinedSeq, head_seq: headBeforeAccept },
+  );
 
   const after = await callTool<InvitationPageView>(u2Connection.client, 'network_room_invite_get', {
     invitation_id: pending.invitation_id,
@@ -301,6 +337,104 @@ export async function runGroupInviteAcceptance(): Promise<void> {
     }),
     'CONFLICT',
   );
+
+  // ---- G01-T04：直接加人/移除后旧邀请不能重入 ----
+  const lifecycleConn = await connectClient(newToken());
+  const lifecycleOwner = await registerIdentity(lifecycleConn, {
+    kind: 'human',
+    name: 'G01 生命周期 owner',
+  });
+  await befriend(lifecycleConn, lifecycleOwner.actor_id, u2Connection, u2.actor_id);
+  await befriend(lifecycleConn, lifecycleOwner.actor_id, strangerConnection, stranger.actor_id);
+
+  const staleGroup = await callTool<GroupDetailView>(lifecycleConn.client, 'network_room_create', {
+    request_id: newRequestId('g01_stale'),
+    kind: 'group',
+    title: 'G01 旧邀请重入',
+    members: [u2.actor_id],
+  });
+  const staleInvitation = staleGroup.invited[0];
+  check('G01-T04 旧邀请初始为 pending', Boolean(staleInvitation?.invitation_id));
+  if (!staleInvitation) throw new Error('缺少旧邀请');
+
+  const staleDirectAdd = await callTool<GroupDetailView>(
+    lifecycleConn.client,
+    'network_room_members_update',
+    {
+      request_id: newRequestId('g01_stale_add'),
+      room_id: staleGroup.room.room_id,
+      add: [u2.actor_id],
+    },
+  );
+  check(
+    'G01-T04 直接加人后 U2 为 active',
+    staleDirectAdd.members.some((member) => member.actor_id === u2.actor_id),
+  );
+  checkEqual('G01-T04 直接加人消耗 pending 邀请', staleDirectAdd.invited.length, 0);
+  const consumed = await callTool<InvitationPageView>(
+    u2Connection.client,
+    'network_room_invite_get',
+    { invitation_id: staleInvitation.invitation_id },
+  );
+  checkEqual('G01-T04 被直接加入的旧邀请已撤销', consumed.items[0]?.status, 'revoked');
+
+  await callTool(lifecycleConn.client, 'network_room_members_update', {
+    request_id: newRequestId('g01_stale_remove'),
+    room_id: staleGroup.room.room_id,
+    remove: [u2.actor_id],
+  });
+  const afterRemove = await callTool<GroupDetailView>(lifecycleConn.client, 'network_room_get', {
+    room_id: staleGroup.room.room_id,
+  });
+  check(
+    'G01-T04 移除后 U2 不再是 active',
+    !afterRemove.members.some((member) => member.actor_id === u2.actor_id),
+  );
+  await expectToolError(
+    'G01-T04 移除后旧邀请不能重新接受',
+    callTool(u2Connection.client, 'network_room_invite_respond', {
+      request_id: newRequestId('g01_stale_accept'),
+      invitation_id: staleInvitation.invitation_id,
+      action: 'accept',
+    }),
+    'CONFLICT',
+  );
+  await expectToolError(
+    'G01-T04 旧邀请重入失败后仍非成员',
+    callTool(u2Connection.client, 'network_room_get', {
+      room_id: staleGroup.room.room_id,
+    }),
+    'NOT_MEMBER',
+  );
+
+  // ---- G01-T05：接受邀请在事务内复核拉黑 ----
+  const blockedGroup = await callTool<GroupDetailView>(lifecycleConn.client, 'network_room_create', {
+    request_id: newRequestId('g01_blocked_invite'),
+    kind: 'group',
+    title: 'G01 接受邀请拉黑复核',
+    members: [stranger.actor_id],
+  });
+  const blockedInvitation = blockedGroup.invited[0];
+  if (!blockedInvitation) throw new Error('缺少拉黑复核邀请');
+  await callTool(lifecycleConn.client, 'network_contact_block', {
+    request_id: newRequestId('g01_block'),
+    actor_id: stranger.actor_id,
+  });
+  await expectToolError(
+    'G01-T05 接受邀请在事务内复核拉黑',
+    callTool(strangerConnection.client, 'network_room_invite_respond', {
+      request_id: newRequestId('g01_blocked_accept'),
+      invitation_id: blockedInvitation.invitation_id,
+      action: 'accept',
+    }),
+    'BLOCKED',
+  );
+  const blockedAfter = await callTool<InvitationPageView>(
+    strangerConnection.client,
+    'network_room_invite_get',
+    { invitation_id: blockedInvitation.invitation_id },
+  );
+  checkEqual('G01-T05 拉黑拒绝后邀请保持 pending', blockedAfter.items[0]?.status, 'pending');
 
   // ---- G01-T02：100 人上限边界并发接受 ----
   // 显式加人受 A05 限额约束（每身份 10 分钟 60 次），因此由群主与协管
@@ -431,13 +565,84 @@ export async function runGroupInviteAcceptance(): Promise<void> {
     'CONFLICT',
   );
 
+  // ---- G01-T06：接受邀请不消耗自己的主动邀请窗口 ----
+  // 旧实现把接受也记成 changed_by=接受者 的 member_added，接受 60 次后
+  // 自己主动加第一个好友会命中 RATE_LIMITED。这里先接受 60 个邀请，
+  // 再创建自己的群并直接添加好友，必须仍然允许。
+  const rateConn = await connectClient(newToken());
+  const rateFriendConn = await connectClient(newToken());
+  const rateUser = await registerIdentity(rateConn, {
+    kind: 'human',
+    name: 'G01 接受限额用户',
+  });
+  const rateFriend = await registerIdentity(rateFriendConn, {
+    kind: 'human',
+    name: 'G01 接受限额好友',
+  });
+  await befriend(rateConn, rateUser.actor_id, rateFriendConn, rateFriend.actor_id);
+  await befriend(u1Connection, u1.actor_id, rateConn, rateUser.actor_id);
+
+  const rateInvitationIds: string[] = [];
+  for (let offset = 0; offset < 60; offset += 10) {
+    const created = await Promise.all(
+      Array.from({ length: 10 }, (_, index) =>
+        callTool<GroupDetailView>(u1Connection.client, 'network_room_create', {
+          request_id: newRequestId('g01_rate_room'),
+          kind: 'group',
+          title: `G01 接受限额 ${offset + index + 1}`,
+          members: [rateUser.actor_id],
+        }),
+      ),
+    );
+    for (const group of created) {
+      const invitation = group.invited[0];
+      if (!invitation) throw new Error('接受限额群缺少邀请');
+      rateInvitationIds.push(invitation.invitation_id);
+    }
+  }
+  for (let offset = 0; offset < rateInvitationIds.length; offset += 10) {
+    await Promise.all(
+      rateInvitationIds.slice(offset, offset + 10).map((invitationId) =>
+        callTool<RespondView>(rateConn.client, 'network_room_invite_respond', {
+          request_id: newRequestId('g01_rate_accept'),
+          invitation_id: invitationId,
+          action: 'accept',
+        }),
+      ),
+    );
+  }
+  checkEqual('G01-T06 接受 60 个邀请全部成功', rateInvitationIds.length, 60);
+
+  const rateGroup = await callTool<GroupDetailView>(rateConn.client, 'network_room_create', {
+    request_id: newRequestId('g01_rate_own'),
+    kind: 'group',
+    title: 'G01 接受邀请后的首个群',
+    members: [rateFriend.actor_id],
+  });
+  checkEqual('G01-T06 自己建群的首个好友仍为 pending', rateGroup.invited.length, 1);
+  const rateAdded = await callTool<GroupDetailView>(
+    rateConn.client,
+    'network_room_members_update',
+    {
+      request_id: newRequestId('g01_rate_add'),
+      room_id: rateGroup.room.room_id,
+      add: [rateFriend.actor_id],
+    },
+  );
+  checkEqual('G01-T06 接受大量邀请后仍能主动添加第一个好友', rateAdded.room.member_count, 2);
+  checkEqual('G01-T06 主动添加消耗自己群里的 pending 邀请', rateAdded.invited.length, 0);
+
   await Promise.all([
     u1Connection.close(),
     u2Connection.close(),
     strangerConnection.close(),
+    lifecycleConn.close(),
     capUaConnection.close(),
     capUbConnection.close(),
+    capAdminConnection.close(),
     orphanOwnerConn.close(),
     orphanConn.close(),
+    rateConn.close(),
+    rateFriendConn.close(),
   ]);
 }

@@ -8,21 +8,33 @@
 | A05 实现提交 | `32d294c`（`feat(identity): A05 删除拉黑与骚扰控制`） |
 | G01 实现提交 | `18c515d`（`feat(groups): G01 建群与批量选人（邀请独立于成员、逐对象结果与共享成员选择器）`） |
 | 集成修复提交 | `af0ca34`（`fix(events): 验收群聊在 invoke 前接受 G01 邀请`） |
+| 独立验收修复提交 | 本文件所在提交（`git log -1 -- reports/INTEGRATION.md`） |
 | 报告提交 | 本文件所在提交（`git log -1 -- reports/INTEGRATION.md`） |
-| 运行环境 | Bun 1.4.2，macOS；临时数据目录 `/tmp/an-integration-a05g01`，端口 `8792` |
+| 运行环境 | Bun 1.4.2，macOS；临时数据目录 `/tmp/an-fix-a05g01`，端口 `8792` |
 | Presence 环境 | 服务端与测试进程一致：`AGENT_PRESENCE_ACTIVITY_TTL_MS=5000`、`AGENT_PRESENCE_GRACE_MS=2000`、`AGENT_PRESENCE_SWEEP_MS=1000` |
-| 结论 | typecheck、protocol、acceptance、web、events、drive 全部通过；无阻塞项 |
+| 结论 | 独立验收 FAIL：G01 旧邀请重入、接受邀请消耗限额、接受事务拉黑复核、接受邀请推进未读；本提交修复后六套门禁通过。A05 保持 PARTIAL（任务提议拒绝依赖 D01/D02） |
+
+## 0. 独立验收缺陷与修复
+
+| 优先级 | 缺陷 | 修复 |
+|---|---|---|
+| P1 | 旧 pending 邀请可让被移除成员重新入群 | `network_room_members_update` 的直接 add 与 remove 在同一事务撤销目标 pending 定向邀请；接受邀请拒绝 `removed` 成员，事务内增加成员状态 guard |
+| P2 | 接受邀请消耗自己的邀请限额 | `roomInviteRateGuardStatement` 排除 `detail_json.via = invitation` 的接受审计；接受邀请不再占用主动邀请窗口 |
+| P1 | 接受邀请事务内缺少拉黑复核 | 把 `contactBlockGuardStatement` 放入接受邀请的 `runIdempotent` batch；拉黑返回 `BLOCKED` 且邀请保持 pending |
+| P2 | 接受邀请推进 `rooms.head_seq`、制造邀请人未读 | 新增 `roomMemberVersionStatement` 只推进 `member_seq`；接受/拒绝不改变 `head_seq`，新成员边界继续由 `joined_seq` 记录 |
+
+A05 的“拒绝任务提议”没有可验证入口：仓库尚无 D01/D02 的定向任务提议/交接 API。本提交不伪造实现，`src/mcp/skill.ts`、README、`reports/A05.md` 已标明依赖与 `PARTIAL/BLOCKED`；Web 端补了真实拉黑→状态验证→解封→状态验证用例。
 
 ## 1. 命令与结果
 
 | 命令 | 结果 | 说明 |
 |---|---|---|
 | `bun install` | 跳过 | 工作树已有 `node_modules`，本轮 `package.json` 与锁文件未改动 |
-| `bun run typecheck` | 通过 | `tsrs --noEmit`，退出码 0（集成修复后复跑） |
+| `bun run typecheck` | 通过 | `tsrs --noEmit`，退出码 0（独立验收修复后复跑） |
 | `bun run test:protocol` | 通过 | `协议验收通过: 731 项` |
-| `bun run test:acceptance` | 通过 | `端到端验收通过: 936 项`（含 A05 段与 G01-T01/T02） |
-| `bun run test:web` | 通过 | `浏览器验收通过 1785 项`（含 A05 安全菜单与 G01-T03） |
-| `bun run test:events` | 通过 | `MCP Events 验收通过: 339 项`（集成修复后） |
+| `bun run test:acceptance` | 通过 | `端到端验收通过: 954 项`（含 A05 段与 G01-T01/T02/T04/T05/T06） |
+| `bun run test:web` | 通过 | `浏览器验收通过 1792 项`（含 A05 真实拉黑/解封与 G01-T03） |
+| `bun run test:events` | 通过 | `MCP Events 验收通过: 339 项`（独立验收修复后） |
 | `bun run test:drive` | 通过 | `drive checks passed: 47` |
 | `git diff --check` | 通过 | 无 whitespace 错误 |
 
@@ -66,7 +78,8 @@ PORT=8792 bun run start
 
 - 邀请不是成员：pending 不写 `room_members`、不计入 `member_count`、不占 100 人上限，也不出现在被邀请人的 `rooms_list`/`room_get`。
 - `roomCreate` 群聊路径：预检按对象列出失败原因并整体拒绝；自有 Agent 直接 active，其他好友写 pending 邀请；提交时用条件 `INSERT … SELECT` 与 `guard_invite_targets_missing` 处理竞态，已成功成员不回滚。
-- 接受邀请在同一 `db.batch()` 内复核 pending、目标、有效期、拉黑与容量，并发接受由 `guard_invitation_stale` 裁决；成员插入对已 active 行使用条件 upsert，不会重复计成员。
+- 接受邀请在同一 `db.batch()` 内复核 pending、目标、`removed` 状态、有效期、拉黑与容量，并发接受由 `guard_invitation_stale` 裁决；成员插入对已 active 行使用条件 upsert，不会重复计成员。接受邀请只推进 `member_seq`，不推进 `head_seq`，不制造聊天未读。
+- 直接加人与移除成员在同一事务撤销该 actor 的 pending 定向邀请；被移除成员不能凭旧 `invitation_id` 重新激活。接受邀请产生的 `member_added` 审计带 `via = invitation`，不计入主动邀请窗口。
 - 群聊 `request_id` 重放读取已存 `room_id`，收敛为同一群；owner 作为唯一 active 成员退群时同批撤销该群全部 pending 邀请。
 - 网页侧建群/加人共用选择器，邀请中成员显示“等待确认”且不计入有效成员；`test:web` 的 G01-T03 断言通过。
 
@@ -79,15 +92,17 @@ PORT=8792 bun run start
 
 以下为 A05/G01 报告已声明的范围外能力，不是本次集成回归：
 
-- **A05**：定向任务提议子系统不存在，拉黑目前只覆盖私聊、申请、建群与群邀请；举报只有接收与自查列表，没有管理后台；陌生私聊没有独立限额（非好友 direct 仍是 `FRIEND_REQUIRED`）。技能正文提到“任务提议”和“陌生私聊限频”，与当前实现存在措辞差异，归属 A05 后续文档收敛。
+- **A05**：定向任务提议子系统不存在，拉黑目前只覆盖私聊、申请、建群与群邀请；技能正文与 README 已改为如实说明任务提议拒绝依赖 D01/D02、当前不可用，不再宣称已支持。举报只有接收与自查列表，没有管理后台；陌生私聊没有独立限额（非好友 direct 仍是 `FRIEND_REQUIRED`）。
+- **A05 验收状态**：A05-T01 的“拒绝任务提议”子项为 PARTIAL/BLOCKED；其余已实现路径通过。不能把 A05 标为完全 VERIFIED。
 - **G01**：只实现定向邀请；链接/二维码/审批/撤销属于 G02；`network_room_members_update` 仍是 owner/admin 直接加人；被邀请人的网页处理入口尚未实现；接受邀请后的历史可见范围由 G07 决定。
 - **契约基线**：`reports/CONTRACT_BASELINE.md` 中 G02/G05/G06/G07 的规划名不代表已实现。
 - 任务报告 `reports/A05.md`、`reports/G01.md` 的状态仍为 `READY_FOR_REVIEW`，需独立验证者在集成 SHA 上签收。
 
 ## 4. 失败与阻塞
 
-- 失败用例：无（首次 acceptance 失败为 presence 环境变量未同时设置，重跑通过）。
-- 阻塞项：无。
+- 独立验收失败（已修复）：G01 旧邀请重入、接受邀请消耗邀请限额、接受邀请事务内缺少拉黑复核、接受邀请推进 `head_seq` 并制造未读；对应回归见 `scripts/lib/group-invite-acceptance.ts` 的 G01-T04/T05/T06 与 G01-T01 未读断言。
+- 剩余阻塞：A05-T01 的“拒绝任务提议”依赖 D01/D02 的提议/交接 API，当前仓库未实现，无法验证，A05 标记 `PARTIAL/BLOCKED`。这不是本波次可伪造实现的缺口。
+- 已知限制：G01 只实现定向邀请，链接/二维码/审批/撤销属于 G02。
 
 ## 5. 未完成的 P0
 
@@ -95,13 +110,13 @@ PORT=8792 bun run start
 
 - **A 组**：A06。
 - **G 组**：G02、G05、G06、G07。
-- **M 组**：M02、M03。
+- **M 组**：M02、M03、M07。
 - **D 组**：D01–D08。
 - **Q 组**：Q01、Q02、Q04、Q05。
 
 ## 6. 最终状态
 
 - 集成修复提交：`af0ca34116b74f27c7c51d6db766bc9fdd07e16d`。
+- 独立验收修复提交：本文件所在提交（`git log -1 -- reports/INTEGRATION.md`），普通 push，无强制推送；未部署、未创建 PR、未触发生产验收。
 - 报告提交：本文件所在提交。
-- 测试计数：typecheck 通过、protocol 731、acceptance 936、web 1785、events 339、drive 47。
-- 报告提交后执行 `git push origin HEAD`（无强制推送），供后续创建 draft PR；未部署、未创建 PR、未触发生产验收。
+- 测试计数：typecheck 通过、protocol 731、acceptance 954、web 1792、events 339、drive 47。

@@ -148,6 +148,29 @@ export function roomMemberSeqStatement(
     .bind(eventKey, eventKey, at, roomId);
 }
 
+/**
+ * 只推进成员版本，不推进消息 head。
+ *
+ * 接受邀请等成员变化对客户端可见，但不是聊天消息：推进 head 会让
+ * `last_read_seq !== head_seq`，在邀请人会话里制造一条没有内容的未读。
+ * 历史边界仍由成员的 `joined_seq` 独立表达。
+ */
+export function roomMemberVersionStatement(
+  db: D1Database,
+  roomId: string,
+  eventKey: string,
+  at: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE rooms
+         SET member_seq = MAX(member_seq, (SELECT event_seq FROM events WHERE event_key = ?)),
+             updated_at = ?
+       WHERE room_id = ?`,
+    )
+    .bind(eventKey, at, roomId);
+}
+
 export function inboxHeadStatement(
   db: D1Database,
   actorId: string,

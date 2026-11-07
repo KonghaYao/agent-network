@@ -13,7 +13,7 @@ import {
   inboxTopic,
   outboxStatement,
   outboxStatementIfAbsent,
-  roomMemberSeqStatement,
+  roomMemberVersionStatement,
   roomTopic,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
@@ -24,7 +24,7 @@ import {
   resolveOperation,
   runIdempotent,
 } from '../storage/transactions/runner';
-import { isBlockedBetween } from './contact-blocks';
+import { contactBlockGuardStatement } from './contact-blocks';
 import { actorId, type Principal } from './principal';
 
 /**
@@ -190,6 +190,28 @@ export function directInvitationStatements(
     );
   }
   return { invitations, statements };
+}
+
+/**
+ * 撤销单个目标在该群的 pending 定向邀请。
+ *
+ * 直接加人后邀请已被绕过，移除成员后旧邀请必须失效；两者都在
+ * `roomMembersUpdate` 的同一事务里撤销，避免旧 invitation_id 之后
+ * 把 removed 成员重新激活。没有 pending 邀请时是空操作。
+ */
+export function revokeDirectInvitationStatement(
+  db: D1Database,
+  roomId: string,
+  targetActorId: string,
+  at: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE room_invitations
+          SET status = 'revoked', revision = revision + 1, updated_at = ?
+        WHERE room_id = ? AND target_actor_id = ? AND kind = 'direct' AND status = 'pending'`,
+    )
+    .bind(at, roomId, targetActorId);
 }
 
 /**
@@ -376,10 +398,13 @@ async function requireAcceptTarget(
   if (actor.disabled_at !== null) {
     throw new BusinessError('ACTOR_DISABLED', '当前身份已停用，不能接受邀请');
   }
-  if (await isBlockedBetween(db, row.inviter_id, viewer)) {
-    throw new BusinessError('BLOCKED', '双方存在拉黑关系，不能加入该群');
-  }
   const member = await getMember(db, row.room_id, viewer);
+  if (member?.status === 'removed') {
+    throw new BusinessError('CONFLICT', '你已被移出该群，不能使用旧邀请重新加入', {
+      current_state: 'removed',
+      expected_state: 'invited',
+    });
+  }
   if (member?.status === 'active') {
     throw new BusinessError('CONFLICT', '你已经是该群成员', {
       current_state: 'active',
@@ -418,6 +443,19 @@ export async function roomInvitationAccept(
     result: { invitation_id: row.invitation_id, room_id: row.room_id, status: 'accepted' },
     build: (resultJson) => [
       operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, at),
+      // 拉黑必须在事务内复核：预检后、提交前对方可能刚拉黑。
+      contactBlockGuardStatement(db, row.inviter_id, viewer),
+      db
+        .prepare(
+          guardSql(
+            'invitationStale',
+            `EXISTS (
+               SELECT 1 FROM room_members
+                WHERE room_id = ? AND actor_id = ? AND status IN ('active', 'removed')
+             )`,
+          ),
+        )
+        .bind(row.room_id, viewer),
       db
         .prepare(
           guardSql(
@@ -504,7 +542,7 @@ export async function roomInvitationAccept(
           JSON.stringify({ invitation_id: row.invitation_id, via: 'invitation' }),
           at,
         ),
-      roomMemberSeqStatement(db, row.room_id, eventKey, at),
+      roomMemberVersionStatement(db, row.room_id, eventKey, at),
       eventStatementIfAbsent(
         db,
         {
