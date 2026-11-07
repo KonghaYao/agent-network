@@ -171,9 +171,12 @@ usage() {
       重新排队一条投递。
   cancel --delivery DELIVERY_ID --reason TEXT [--request-id ID]
       取消一条投递。
-  send --room ROOM_ID --body TEXT [--invoke actor1,actor2 | --no-invoke] [--reply-to MESSAGE_ID] [--claim delivery:attempt:claim_id]
-      发送消息；群聊默认省略 invoke，由服务端按正文 @名字 解析投递。
-      --invoke 显式指定 Agent；--no-invoke 显式发送 invoke: []，关闭自动解析。
+  send --room ROOM_ID --body TEXT [--invoke actor1,actor2 | --no-invoke] [--mention actor1,actor2] [--reply-to MESSAGE_ID] [--claim delivery:attempt:claim_id]
+      发送消息；显式 invoke 是 Agent 执行目标，最多 8 个。
+      --invoke 用稳定 actor_id 指定 Agent；--no-invoke 显式发送 invoke: [],
+      表示本条不派活；--mention 用 actor_id 指定人类成员，只生成个人提醒。
+      省略 invoke 时服务端只按正文顶层唯一精确成员名兜底；同名、代码、引用、
+      附件 URL 不参与，普通回复与上传附件不会自动唤醒 Agent。
   inbox [--state pending|claimed] [--limit N]
       读取待办，默认 pending / 20。
   reply --delivery DELIVERY_ID --body TEXT [--request-id ID]
@@ -201,7 +204,7 @@ usage() {
       读取历史预览，默认 50。
   upload --file PATH [--name NAME] [--mime TYPE] [--room ROOM_ID] [--request-id ID]
       上传原始字节；带 --room 时同时绑定。
-  send-file --room ROOM_ID --file PATH [--name NAME] [--mime TYPE] [--body TEXT] [--invoke actor1,actor2 | --no-invoke]
+  send-file --room ROOM_ID --file PATH [--name NAME] [--mime TYPE] [--body TEXT] [--invoke actor1,actor2 | --no-invoke] [--mention actor1,actor2]
       上传、绑定并发送带公开链接的消息；invoke 规则同 send。
   file-info --file-id FILE_ID
       读取 Drive 文件元数据。
@@ -506,13 +509,14 @@ cmd_cancel() {
 
 cmd_send() {
   require_token
-  local room="" body="" invoke="" reply_to="" claim_arg="" request_id="" client_message_id=""
+  local room="" body="" invoke="" mentions="" reply_to="" claim_arg="" request_id="" client_message_id=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --room) room="${2:-}"; shift 2 ;;
       --body) body="${2:-}"; shift 2 ;;
       --invoke) invoke=$(csv_json "${2:-}"); shift 2 ;;
-      --no-invoke) invoke='[]'; shift 2 ;;
+      --no-invoke) invoke='[]'; shift 1 ;;
+      --mention) mentions=$(csv_json "${2:-}"); shift 2 ;;
       --reply-to) reply_to="${2:-}"; shift 2 ;;
       --claim) claim_arg="${2:-}"; shift 2 ;;
       --request-id) request_id="${2:-}"; shift 2 ;;
@@ -540,10 +544,12 @@ cmd_send() {
     --arg room_id "$room" \
     --arg body "$body" \
     --argjson invoke "${invoke:-null}" \
+    --argjson mentions "${mentions:-null}" \
     --arg reply_to "$reply_to" \
     --argjson claim "$claim_json" \
     '{request_id:$request_id, client_message_id:$client_message_id, room_id:$room_id, body:$body}
      + (if $invoke == null then {} else {invoke:$invoke} end)
+     + (if $mentions == null then {} else {mentions:$mentions} end)
      + (if $reply_to == "" then {} else {reply_to:$reply_to} end)
      + (if $claim == null then {} else {claim:$claim} end)')
   mcp_call network_message_send "$args" | mcp_result
@@ -867,7 +873,7 @@ cmd_upload() {
 
 cmd_send_file() {
   require_token
-  local room="" file="" name="" mime="" body="" invoke="" no_invoke=0
+  local room="" file="" name="" mime="" body="" invoke="" mentions="" no_invoke=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --room) room="${2:-}"; shift 2 ;;
@@ -876,7 +882,8 @@ cmd_send_file() {
       --mime) mime="${2:-}"; shift 2 ;;
       --body) body="${2:-}"; shift 2 ;;
       --invoke) invoke="${2:-}"; no_invoke=0; shift 2 ;;
-      --no-invoke) invoke=""; no_invoke=1; shift 2 ;;
+      --no-invoke) invoke=""; no_invoke=1; shift 1 ;;
+      --mention) mentions="${2:-}"; shift 2 ;;
       *) die "unknown send-file option: $1" ;;
     esac
   done
@@ -904,6 +911,7 @@ $link"
   elif [ -n "$invoke" ]; then
     send_args+=(--invoke "$invoke")
   fi
+  [ -n "$mentions" ] && send_args+=(--mention "$mentions")
   send_result=$(cmd_send "${send_args[@]}")
   jq -nc --argjson upload "$upload_result" --argjson send "$send_result" \
     '{upload:$upload.upload, bind:$upload.bind, send:$send}'

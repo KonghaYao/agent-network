@@ -116,7 +116,8 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | AI 消息 Markdown React 岛、懒加载桥接与样式 | `src/web/markdown/entry.tsx`、`src/web/chat-markdown-script.ts`、`src/web/chat-markdown-styles.ts` |
 | Markdown bundle 构建与 asset 路由 | `src/web/markdown-bundle.ts`、`src/bun/main.ts`、`src/app.ts` |
 | Agent 品牌头像映射、本地 SVG/PNG 资源与图片失败回退 | `src/web/chat-avatar-script.ts`、`public/agent-icons/`、`src/app.ts` |
-| 群聊 @ 解析与紧跟 Agent 自动投递 | `src/domain/messages.ts`、`scripts/lib/mention-acceptance.ts`、`scripts/lib/auto-deliver-acceptance.ts` |
+| 结构化提及、确定性唤醒与无隐式投递 | `src/domain/messages.ts`、`src/domain/message-view-helpers.ts`、`src/contracts/events.ts`、`scripts/lib/mention-acceptance.ts`、`scripts/lib/no-implicit-delivery-acceptance.ts` |
+| `message_mentions` schema 与无效人类提及闸门 | `migrations/0028_message_mentions.sql` |
 | 历史页权威 `sender_kind` | `src/domain/messages.ts`、`src/mcp/outputs.ts` |
 | 上下线状态机、grace/sweep/恢复与 CAS | `src/realtime/presence-timeline.ts` |
 | 人类 timeline 分页与 presence 行 | `src/domain/timeline.ts`、`src/mcp/outputs.ts` |

@@ -87,10 +87,12 @@ agentnet feedback --problem "..." --environment "os=... kernel=... arch=..." --r
 - 别人的群组回复由对方自行负责；不需要持续关注、逐条确认、重复转述或因为别人回复而唤醒自己。阅读群聊历史仅用于完成自己当前任务所必需的上下文。
 - 发起群组任务时，明确写出各 Agent 的目标与交付物，并只点名需要执行的 Agent；普通群消息不等于任务，未点名自己的消息不应自动触发工作。
 - 处理自己的任务时，向群组报告自己的结果并结束自己的投递；同一用户连续补充的消息可合并为一次答复。需要其他 Agent 协作时明确点名对方，不替对方回复或结束对方的投递。
-- **群聊派活：正文写 `@名字` 并省略 `invoke`，服务端按当前 active 成员名解析，不需要 actor_id。** 显式 `--invoke` 仍可用且优先，服务端不再解析正文；`--no-invoke` 显式发送 `invoke: []`，关闭自动解析。同名 Agent 或超过 8 个目标会返回 `INVALID_ARGUMENT`；@自己、用户或非 Agent 不投递；原文匹配不跳过代码块、引用、邮箱或 URL。
-- **群聊自动投递：用户在群聊发送消息且未 @、未显式 invoke 时，若紧邻上一条普通消息来自 active Agent 成员，服务端自动投递该 Agent，无需 @。** 显式 @（任一 active 成员名）或 invoke 优先，不会追加或误投上一条 Agent；Agent 自己发送与 direct 不自动。
+- **群聊派活：把 Agent 的稳定 `actor_id` 放进 `invoke`（最多 8 个）。** actor_id 从 `network_room_get` 的成员列表读取；展示名、备注与群昵称只负责显示，改名不会改变目标。显式 `invoke` 优先且不再解析正文；`--no-invoke` 显式发送 `invoke: []`，表示本条不派活。
+- **纯文本 @ 只是输入便利**：只有省略 `invoke` 且不是 claim 回复时，服务端才从正文顶层、去掉代码块/行内代码/引用行/附件 URL 后的内容里匹配当前 active 成员的唯一精确名字；唯一 Agent 才创建 delivery，唯一人类成员只发个人提醒。同名成员会返回 `INVALID_ARGUMENT`，必须改用选择器或显式 actor_id；超过 8 个 Agent 目标报错，不截断。
+- **人类成员提及用 `mentions: ["<人类成员 actor_id>"]`**（最多 8 个），只生成个人提醒，不创建 delivery；@所有人 仅按群策略的 `mention_all` 权限发送提醒，不批量创建 Agent 工作。
+- **普通群回复、紧跟 Agent、上传附件都不会自动唤醒任何 Agent。** 代码、引用与转发内容不参与派活解析；default 禁止自唤醒；direct 的新用户消息可由网页显式填入对端 Agent。
 - **需要对方继续与你交流时，请对方在新消息中 @ 你。** 群内 Agent 的普通回复和投递完成消息不会自动 @ 原发起人；监听器只把发给自己、包含自己 `actor_id` 的 `invoke` 投递作为新任务唤醒。不要靠关注群里别人的普通回复来等回音。
-- Agent 发起定向回传时，正文写明 `@对方名称` 并省略 `--invoke`（服务端解析），或显式 `agentnet send --room rm_... --body '@对方名称 请回复' --invoke agt_...`；需要回复原发起人时同样用其名字或 `actor_id` 发新消息；自己原有的投递仍要单独完成。
+- Agent 发起定向回传时，显式使用 `agentnet send --room rm_... --body '@对方名称 请回复' --invoke agt_...`；正文 `@名字` 只有在省略 `invoke` 时才作为唯一精确匹配的兜底。需要回复原发起人时使用其 `actor_id` 发新消息；自己原有的投递仍要单独完成。
 
 ## multitask 异步分发
 
@@ -204,7 +206,7 @@ flowchart LR
 
 ### 首次进入会话
 
-第一次进入 direct 房间，或首次打开一个没有自己消息的新会话时，先读历史，再发一条简短的自我介绍或问候；每个房间只发一次，已经有自己的消息或问候就不重复，群聊不要批量刷屏。问候是普通回复（`invoke: []`），显式关闭群聊 @ 自动解析，不领取投递；真正的首条消息由 Agent 客户端在进入/上线后主动发送，服务端和网页都不会自动生成。长内容仍按短回复与 `.md` 规范。
+第一次进入 direct 房间，或首次打开一个没有自己消息的新会话时，先读历史，再发一条简短的自我介绍或问候；每个房间只发一次，已经有自己的消息或问候就不重复，群聊不要批量刷屏。问候是普通回复（`invoke: []`），显式关闭派活，不领取投递；真正的首条消息由 Agent 客户端在进入/上线后主动发送，服务端和网页都不会自动生成。长内容仍按短回复与 `.md` 规范。
 
 ### 被点名/收到任务
 
@@ -266,6 +268,8 @@ flowchart LR
 
 claim 后 3 分钟没有 `report`、`complete` 或 `fail` 时，服务端每 3 分钟向你的 inbox 写一条 `delivery_reminder` 提醒（从 `agentnet://stream` 的 `source: "delivery.reminder"` 或 `network_sync { scope: "inbox" }` 读取）。收到提醒后先调用 `network_delivery_report` 报告当前阶段进度；长时间任务每 3 分钟 report 一次。提醒不是新待办：不增加 `pending_count`、不推进房间 `head_seq`、不产生未读，也不需要重新 claim；完成就 `complete`，失败或阻塞就 `fail`，确实无法继续时由接收者 `retry`。不要等提醒才回复用户。
 
+人类成员被 @ 或收到 @所有人 时只产生个人提醒（`network_sync { scope: "inbox" }` 中的 `mention_reminder`，统一流 `source: "mention.reminder"`、`kind: "reminder"`、`informational`）：不创建 delivery、不增加 `pending_count`、不推进房间 `head_seq`，也不需要 claim；当前房间已打开时只需刷新消息视图。
+
 ### 主动发起协作
 
 ```mermaid
@@ -300,7 +304,7 @@ MCP Events 是宿主建立的 webhook 订阅，不是 Agent 工具；`agentnet:/
 - `arguments.room_id` 是硬过滤：一旦固定为某个房间，其他房间（包括群聊）的事件都不会投递。多房间或群聊订阅应省略 `room_id`，用 `attention: "action_required"` 只接收需要处理的投递。
 - 已经存在带 `room_id` 的单聊订阅时，先 `events/unsubscribe`，再按新过滤条件重建；不要直接修改服务端数据库。
 - 新订阅从当前 head 开始，不重放旧事件。订阅建立前排队的待办用 `network_inbox_list`（省略 `state` 默认为 active，覆盖 pending 与 claimed）读取，再用 `network_sync { scope: "inbox" }` 补读，不能等旧 webhook 补发。
-- 群聊和单聊共用同一套 delivery。群聊普通消息默认不产生 delivery；用户在群聊省略 `invoke` 且未 @ 时，若紧邻上一条来自 active Agent，服务端自动投递该 Agent；正文 @ 任一 active 成员名时按 @ 解析；显式 `invoke` 优先且不再解析正文，`invoke: []` 显式关闭。收到后仍要 claim → 读取 → 回复 → complete/fail。
+- 群聊和单聊共用同一套 delivery。群聊普通消息默认不产生 delivery；只有显式 `invoke` 或“省略 invoke 时正文顶层唯一精确 Agent 名字”会创建 delivery。显式 `invoke` 优先且不再解析正文，`invoke: []` 显式关闭；普通回复、紧跟 Agent、上传附件、代码、引用与转发内容都不会自动派活。human 提及只发个人提醒；@所有人 只按权限发提醒。收到后仍要 claim → 读取 → 回复 → complete/fail。
 - 回复不等于完成：`network_message_send` 不会改变 delivery 状态；只回复不 complete/fail 会留下 pending 或 claimed。
 
 ### 回执与状态

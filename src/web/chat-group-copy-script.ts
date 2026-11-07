@@ -33,32 +33,35 @@ function updateCopyGroupInfoAffordance() {
 }
 
 function groupCopyMemberLines() {
-  const agentNames = [];
-  const humanNames = [];
+  const agents = [];
+  const humans = [];
   for (const member of members.values()) {
-    if (member.kind === 'agent') {
-      agentNames.push(groupCopySafeName(member.name, 'Agent', GROUP_COPY_MEMBER_MAX));
-    } else {
-      humanNames.push(groupCopySafeName(member.name, '成员', GROUP_COPY_MEMBER_MAX));
-    }
+    const name = groupCopySafeName(member.name, member.kind === 'agent' ? 'Agent' : '成员', GROUP_COPY_MEMBER_MAX);
+    const actorId = groupCopySafeName(member.actor_id, '', 128);
+    if (!actorId) continue;
+    const entry = { name: name, actorId: actorId };
+    if (member.kind === 'agent') agents.push(entry);
+    else humans.push(entry);
   }
-  agentNames.sort();
-  humanNames.sort();
-  return { agentNames, humanNames };
+  agents.sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
+  humans.sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
+  return { agents: agents, humans: humans };
 }
 
 function groupCopyPrompt() {
   const safeTitle = groupCopySafeName(room.title, '群聊', GROUP_COPY_TITLE_MAX);
   const roomId = room.room_id;
   const lines = groupCopyMemberLines();
-  const example = lines.agentNames.length > 0 ? lines.agentNames[0] : 'Agent名';
-  const agentList = lines.agentNames.length > 0
-    ? lines.agentNames.map(function (name) { return '- @' + name + '（Agent）'; }).join('\\n')
+  const example = lines.agents.length > 0 ? lines.agents[0].name : 'Agent名';
+  const agentList = lines.agents.length > 0
+    ? lines.agents.map(function (entry) {
+      return '- @' + entry.name + '（Agent，actor_id: ' + entry.actorId + '）';
+    }).join('\\n')
     : '- （暂无 Agent 成员）';
-  const humanList = lines.humanNames.length > 0
-    ? lines.humanNames.map(function (name) {
-      return '- ' + name + '（人，不是投递目标；回复时 @' + name +
-        ' 仅用于提醒，不会生成 delivery）';
+  const humanList = lines.humans.length > 0
+    ? lines.humans.map(function (entry) {
+      return '- @' + entry.name + '（人类，actor_id: ' + entry.actorId +
+        '；只发个人提醒，不会生成 delivery）';
     }).join('\\n')
     : '- （暂无人类成员）';
   return [
@@ -73,10 +76,14 @@ function groupCopyPrompt() {
     '',
     '发送方式：',
     '- 调用 network_message_send，room_id 使用 ' + roomId + '，body 写要发送的内容。',
-    '- 群聊正文用 @Agent名 指定目标，例如 @' + example +
-      '；不要传 invoke 或 actor_id，服务端会按正文里的 @名字 解析当前成员。',
-    '- 人类成员不是投递目标，@ 人类不会生成 delivery；但在群聊里回复人类时仍必须 ' +
-      '@ 该人类（例如 @人类名），仅用于提醒对方查看、避免漏看，不能不带 @ 直接回复。',
+    '- 明确派活：把 Agent 的 actor_id 放进 invoke（最多 ' + ${LIMITS.invokeMax} + ' 个），' +
+      '例如 invoke: ["' + (lines.agents.length > 0 ? lines.agents[0].actorId : 'agt_...') + '"]；' +
+      '不要靠正文名字猜目标。',
+    '- 只提醒人类：把人类 actor_id 放进 mentions；人类不会收到 delivery，也不会产生待办。',
+    '- 正文里的 @名字（例如 @' + example + '）只负责显示。只有未传 invoke 时，' +
+      '服务端才会按正文中唯一精确的成员名兜底解析；同名成员必须用 actor_id 明确选择。',
+    '- 传 invoke: [] 表示本条消息明确不派活；普通回复、上传附件都不会自动唤醒任何 Agent。',
+    '- @所有人 只有群主/管理员可用，只发送提醒，不批量创建 Agent 工作。',
     '- 如果不确定成员名或成员已变化，先调用 network_room_get 读取该 room_id 的当前成员。',
     '- 如果需要处理投递：先 network_delivery_claim 接手，读取消息和房间历史，回复后用 ' +
       'network_delivery_complete 收口；失败用 network_delivery_fail。带 claim 的回复不会解析正文 @；' +

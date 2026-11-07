@@ -1216,7 +1216,7 @@ export function registerTools(
   register(
     server,
     'network_message_send',
-    '向房间发送消息。群聊省略 invoke 时服务端按正文 @名字 解析当前 active Agent 成员并创建 delivery；用户在群聊未 @ 且紧邻上一条来自 active Agent 时自动投递该 Agent；显式 invoke 优先且不再解析正文；invoke: [] 表示显式不投递；带 claim 的回复不自动解析。claim 参数只把回复挂到当前领取，不改变投递状态；回复不等于完成。正文可发送 POST /mcp-upload 上传响应中的 publicUrl；上传默认是上传者私有草稿，裸 publicUrl 返回 404，只有 network_file_publish 显式公开后才可裸链读取。同源 /f/<fileId> 在发送后会 best-effort 绑定到当前房间并进入房间文件列表，绑定后改用 network_room_file_bind / network_room_file_get / network_room_file_list 返回的带票据 preview_url / download_url，不要依赖自动绑定代替显式绑定。本地路径、file:// 或未授权外链不能保证群友可访问。正文中的同源 /f/<fileId> 会 best-effort 自动绑定，但不要依赖它代替显式绑定；已复制或转发的内容无法收回。',
+    '向房间发送消息。显式 invoke 是 Agent 执行目标：每个 actor_id 必须是当前 active Agent 成员，最多 8 个，invoke: [] 表示本条明确不派活；显式传入 invoke 后不再解析正文。mentions 是显式提及的人类成员（最多 8 个），只生成个人提醒，不创建 delivery。群聊省略 invoke 时，服务端只从正文顶层、去掉代码/引用/附件 URL 后的内容里按当前 active 成员名做唯一精确匹配：唯一 Agent 才创建 delivery，唯一人类只发提醒；同名成员返回 INVALID_ARGUMENT，必须改用选择器或显式 actor_id。普通群回复、紧跟 Agent、上传附件都不会自动唤醒上一位 Agent 或维护员；@所有人 仅按 mention_all 权限发送提醒，不批量创建 Agent 工作。direct 的新用户消息可由网页显式填入对端 Agent；带 claim 的回复与 final_body 不解析正文。claim 参数只把回复挂到当前领取，不改变投递状态；回复不等于完成。正文可发送 POST /mcp-upload 上传响应中的 publicUrl；上传默认是上传者私有草稿，裸 publicUrl 返回 404，只有 network_file_publish 显式公开后才可裸链读取。同源 /f/<fileId> 在发送后会 best-effort 绑定到当前房间并进入房间文件列表，绑定后改用 network_room_file_bind / network_room_file_get / network_room_file_list 返回的带票据 preview_url / download_url，不要依赖自动绑定代替显式绑定。本地路径、file:// 或未授权外链不能保证群友可访问。正文中的同源 /f/<fileId> 会 best-effort 自动绑定，但不要依赖它代替显式绑定；已复制或转发的内容无法收回。',
     messageSendSchema,
     sendResultSchema,
     async (input) => {

@@ -127,6 +127,8 @@ const groupCancelButton = document.getElementById('group-cancel');
 let identity = null;
 let roomEntries = [];
 let activeMention = null;
+// 按房间保存选择器选中的稳定 actor_id；展示名只用于正文与去重，不参与派活解析。
+const mentionSelections = new Map();
 let composing = false;
 let ignoreEnterUntil = 0;
 let pendingRoomRefreshId = null;
@@ -328,12 +330,11 @@ function ensureIdentity() {
 }
 
 /**
- * 收集网页用户发送单聊消息时要唤醒的 Agent 成员。
+ * 收集网页用户发送消息时的明确目标。
  *
- * direct 自动唤醒对方 Agent；group 完全省略 invoke，由服务端按正文
- * @名字 解析，页面不再本地记录 actor_id 或复制 invoke 上限。
- * 只使用当前房间已加载的 members，不额外发请求；非 Agent 成员与发送者
- * 自己不进入 invoke。
+ * direct 自动唤醒对方 Agent；group 只使用选择器保存的 actor_id：
+ * Agent 进入 invoke，人类进入 mentions。正文「@名字」仅用于显示与
+ * “未显式选择时”的服务端兜底解析，页面不靠名字猜目标。
  */
 function directInvokeTargets() {
   if (!identity || identity.kind !== 'human') return { targets: [], error: null };
@@ -459,6 +460,11 @@ function updateMentionPicker() {
       item.type = 'button';
       item.className = 'mention-item';
       item.setAttribute('role', 'option');
+      const selected = mentionSelectionsFor(activeRoomId).some(function (entry) {
+        return entry.actor_id === member.actor_id;
+      });
+      item.setAttribute('aria-selected', selected ? 'true' : 'false');
+      if (selected) item.classList.add('selected');
       const name = document.createElement('span');
       name.textContent = member.name;
       const kind = document.createElement('span');
@@ -473,7 +479,15 @@ function updateMentionPicker() {
 }
 
 function insertMention(member) {
-  if (!activeMention || !bodyInput) return;
+  if (!activeMention || !bodyInput || !activeRoomId) return;
+  const selections = mentionSelectionsFor(activeRoomId);
+  const existing = selections.find(function (item) { return item.actor_id === member.actor_id; });
+  if (existing) {
+    existing.name = member.name;
+    existing.kind = member.kind;
+  } else {
+    selections.push({ actor_id: member.actor_id, name: member.name, kind: member.kind });
+  }
   const value = bodyInput.value;
   const insert = '@' + member.name + ' ';
   bodyInput.value = value.slice(0, activeMention.start) + insert + value.slice(activeMention.end);
@@ -483,6 +497,77 @@ function insertMention(member) {
   hideMentionPicker();
   resizeComposer();
   bodyInput.focus();
+}
+
+function mentionSelectionsFor(roomId) {
+  let selections = mentionSelections.get(roomId);
+  if (!selections) {
+    selections = [];
+    mentionSelections.set(roomId, selections);
+  }
+  return selections;
+}
+
+/**
+ * 只保留正文中仍然存在的选择器目标。
+ *
+ * 同名成员按 token 出现次数分配：先选中的先占用；删除一个「@名字」只移除
+ * 一个目标。长名字先匹配，避免「@小明」抢占「@小明 同学」的出现位置。
+ * 返回的 actor_id 是发送的唯一依据，展示名变化不会把目标指向别人。
+ */
+function resolvedMentionSelection(roomId, body) {
+  const selections = mentionSelectionsFor(roomId);
+  if (selections.length === 0) return { items: [], error: null };
+  for (const selection of selections) {
+    const member = members.get(selection.actor_id);
+    if (!member || member.status === 'removed' || member.status === 'left') {
+      return { items: [], error: '所选成员已不在房间，请重新选择' };
+    }
+    selection.name = member.name;
+    selection.kind = member.kind;
+  }
+  const byName = new Map();
+  for (const selection of selections) {
+    const list = byName.get(selection.name) || [];
+    list.push(selection);
+    byName.set(selection.name, list);
+  }
+  const names = Array.from(byName.keys()).sort(function (a, b) {
+    return b.length - a.length;
+  });
+  const used = new Array(body.length).fill(false);
+  const counts = new Map();
+  for (const name of names) {
+    const token = '@' + name;
+    let from = 0;
+    let count = 0;
+    while (from <= body.length - token.length) {
+      const at = body.indexOf(token, from);
+      if (at < 0) break;
+      let overlap = false;
+      for (let index = at; index < at + token.length; index += 1) {
+        if (used[index]) {
+          overlap = true;
+          break;
+        }
+      }
+      if (!overlap) {
+        for (let index = at; index < at + token.length; index += 1) used[index] = true;
+        count += 1;
+      }
+      from = at + token.length;
+    }
+    counts.set(name, count);
+  }
+  const kept = [];
+  for (const name of names) {
+    const list = byName.get(name) || [];
+    const count = counts.get(name) || 0;
+    for (let index = 0; index < Math.min(count, list.length); index += 1) {
+      kept.push(list[index]);
+    }
+  }
+  return { items: kept, error: null };
 }
 
 async function loadGroupContacts() {
@@ -627,15 +712,44 @@ composer.addEventListener('submit', async function (event) {
   if (!body) return;
   stickyStatus = '';
   statusElement.textContent = '';
-  const invoke = directInvokeTargets();
-  if (invoke.error) {
-    stickyStatus = invoke.error;
+  // 群聊只信选择器保存的 actor_id：Agent 进 invoke，人类进 mentions；
+  // 没有任何选择时不传 invoke，保留服务端对正文唯一精确成员的兜底解析。
+  let invokeTargets = [];
+  let mentionTargets = [];
+  let invokeExplicit = false;
+  let selectionError = null;
+  if (room && room.kind === 'group') {
+    const selection = resolvedMentionSelection(sendRoomId, body);
+    selectionError = selection.error;
+    if (!selectionError) {
+      for (const entry of selection.items) {
+        if (entry.kind === 'agent') invokeTargets.push(entry.actor_id);
+        else mentionTargets.push(entry.actor_id);
+      }
+      // 只要选择器里有仍存在于正文的目标，就显式发送 invoke（可能是 []），
+      // 不让服务端再从正文猜测其他 Agent。
+      invokeExplicit = selection.items.length > 0;
+    }
+  } else {
+    const direct = directInvokeTargets();
+    selectionError = direct.error;
+    invokeTargets = direct.targets;
+    invokeExplicit = invokeTargets.length > 0;
+  }
+  if (selectionError) {
+    stickyStatus = selectionError;
     statusElement.textContent = stickyStatus;
     return;
   }
   // 同房间、同正文、同目标的失败意图复用原 client_message_id/request_id；
   // 修改正文会生成新意图，旧 ID 与新内容由服务端返回冲突。
-  let intent = outboxFindReusable(sendRoomId, body, invoke.targets);
+  let intent = outboxFindReusable(
+    sendRoomId,
+    body,
+    invokeTargets,
+    mentionTargets,
+    invokeExplicit,
+  );
   const reused = Boolean(intent);
   if (intent) {
     // 响应丢失后先对账；确认已提交就不再发送第二条。
@@ -647,6 +761,7 @@ composer.addEventListener('submit', async function (event) {
         if (decision === 'committed') {
           if (outboxComposerMatches(intent)) {
             drafts.delete(sendRoomId);
+            mentionSelections.delete(sendRoomId);
             clearComposerFiles(sendRoomId, sentFileKeys);
             bodyInput.value = '';
             hideMentionPicker();
@@ -666,18 +781,23 @@ composer.addEventListener('submit', async function (event) {
       return;
     }
   } else {
-    intent = outboxCreate(sendRoomId, body, invoke.targets);
+    intent = outboxCreate(
+      sendRoomId,
+      body,
+      invokeTargets,
+      mentionTargets,
+      invokeExplicit,
+    );
   }
   sendButton.disabled = true;
   // 自己的消息必须出现在底部；独立标志避免 refresh 合并时丢失强制滚底。
   scrollController.pinNextApply();
   try {
-    // direct 自动唤醒对方 Agent；group 省略 invoke，由服务端解析正文 @名字。
     await outboxSubmit(intent, {
       epoch: sendEpoch,
       sentFileKeys: sentFileKeys,
       fromRetry: reused,
-      invokeTargets: invoke.targets.length
+      invokeTargets: invokeTargets.length
     });
   } finally {
     if (isActiveRoom(sendRoomId, sendEpoch)) {

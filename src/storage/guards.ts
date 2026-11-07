@@ -10,6 +10,7 @@ export const GUARD_TABLES = {
   queueFull: 'guard_queue_full',
   budgetExceeded: 'guard_budget_exceeded',
   invalidTarget: 'guard_invalid_target',
+  invalidMention: 'guard_invalid_mention',
   claimConflict: 'guard_claim_conflict',
   staleAttempt: 'guard_stale_attempt',
   roomFull: 'guard_room_full',

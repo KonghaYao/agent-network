@@ -1,5 +1,10 @@
 import { LIMITS } from '../contracts/limits';
-import { DELIVERY_REMINDER_EVENT, DELIVERY_REMINDER_SOURCE } from '../contracts/events';
+import {
+  DELIVERY_REMINDER_EVENT,
+  DELIVERY_REMINDER_SOURCE,
+  MENTION_REMINDER_EVENT,
+  MENTION_REMINDER_SOURCE,
+} from '../contracts/events';
 import type { Env } from '../env';
 import { utf8Bytes } from '../storage/db';
 import type { ActorRow } from '../storage/rows';
@@ -45,6 +50,8 @@ export interface StreamItem {
   transition?: string;
   pending_count?: number;
   inbox_head_seq?: string;
+  /** human 提及提醒是否来自 @所有人；不是待办，不产生 delivery。 */
+  mention_all?: boolean;
   created_at?: string;
 }
 
@@ -683,6 +690,17 @@ function inboxStreamItem(
       if (attempt !== undefined) item.attempt = attempt;
       const progressAt = numberField(metadata, 'progress_at');
       if (progressAt !== undefined) item.progress_at = String(progressAt);
+      return item;
+    }
+    case MENTION_REMINDER_EVENT: {
+      // 个人提醒不是待办：只提示人类查看消息，不增加 pending_count、
+      // 不创建 delivery，也不该被 Agent 当成新的执行工作。
+      const item = withLocation(
+        baseItem(row, MENTION_REMINDER_SOURCE, 'reminder', 'informational'),
+        row,
+        metadata,
+      );
+      item.mention_all = metadata.mention_all === true;
       return item;
     }
     case 'room_read':

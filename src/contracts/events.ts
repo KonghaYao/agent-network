@@ -6,6 +6,10 @@ export const MESSAGE_CREATED_EVENT_NAME = 'agentnet.message.created';
 export const DELIVERY_REMINDER_EVENT = 'delivery_reminder';
 /** 提醒在统一 stream 中的 source；不等于普通 delivery 回执。 */
 export const DELIVERY_REMINDER_SOURCE = 'delivery.reminder';
+/** human 被提及（含 @所有人）时写入 recipient inbox 的个人提醒。 */
+export const MENTION_REMINDER_EVENT = 'mention_reminder';
+/** 提及提醒在统一 stream 中的 source；不产生 delivery 或待办。 */
+export const MENTION_REMINDER_SOURCE = 'mention.reminder';
 
 /**
  * Callback endpoint 验证失败的错误码。

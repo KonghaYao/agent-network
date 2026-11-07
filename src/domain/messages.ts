@@ -1,4 +1,5 @@
 import { BusinessError } from '../contracts/errors';
+import { MENTION_REMINDER_EVENT } from '../contracts/events';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { clampPage, LIMITS } from '../contracts/limits';
 import type {
@@ -43,9 +44,12 @@ import {
 import type { DeliveryRow, MessageRow } from '../storage/rows';
 import {
   deliveryStatesFor,
+  mentionsFor,
   nullableString,
   summarizeDeliveryStates,
   type DeliveryStateRow,
+  type MentionSource,
+  type MentionView,
 } from './message-view-helpers';
 import {
   isMessageConflict,
@@ -72,6 +76,8 @@ export interface MessageView extends MessagePreviewView {
   root_id: string | null;
   hop: number;
   delivery_states: Record<string, number>;
+  /** 该消息的提及集合；human 只产生个人提醒，agent 才可能有 delivery。 */
+  mentions: MentionView[];
   /** 该消息当前 claimed 投递中最早的领取时间；无 claimed 时为 null。 */
   delivery_claimed_at: string | null;
   /** 该消息 claimed 投递最近一次 claim/report 的更新时间；无 claimed 时为 null。 */
@@ -103,6 +109,20 @@ export interface DeliverySeed {
   recipientId: string;
 }
 
+/** 持久化到 `message_mentions` 的提及；同一消息内按 actor 去重。 */
+export interface MentionSeed {
+  actorId: string;
+  kind: 'human' | 'agent';
+  source: MentionSource;
+}
+
+/** human 提及对应的 inbox 个人提醒；不创建 delivery、不增加 pending_count。 */
+export interface MentionReminderSeed {
+  actorId: string;
+  source: MentionSource;
+  mentionAll: boolean;
+}
+
 export interface MessageCore {
   messageId: string;
   roomId: string;
@@ -117,8 +137,12 @@ export interface MessageCore {
   rootKey: string;
   hop: number;
   invoke: string[];
-  /** 正文包含 `@所有人`；受群策略能力约束，但不创建批量投递。 */
+  /** 正文包含 `@所有人`；受群策略能力约束，只发提醒，不创建批量投递。 */
   mentionAll: boolean;
+  /** 全部提及（显式选择 + 正文解析 + @所有人）。 */
+  mentions: MentionSeed[];
+  /** human 的个人提醒；与 mentions 中的 human 一一对应。 */
+  reminders: MentionReminderSeed[];
   deliveries: DeliverySeed[];
   eventKey: string;
   at: number;
@@ -138,6 +162,7 @@ export async function messageView(
     .bind(row.message_id)
     .all<DeliveryStateRow>();
   const summary = summarizeDeliveryStates(states.results);
+  const mentions = await mentionsFor(db, [row.message_id]);
   return {
     message_id: row.message_id,
     room_id: row.room_id,
@@ -150,6 +175,7 @@ export async function messageView(
     root_id: row.root_id,
     hop: row.hop,
     delivery_states: summary.states,
+    mentions: mentions.get(row.message_id) ?? [],
     delivery_claimed_at: nullableString(summary.claimedAt),
     delivery_updated_at: nullableString(summary.updatedAt),
   };
@@ -160,7 +186,7 @@ export function messageGuardStatements(
   db: D1Database,
   core: Pick<
     MessageCore,
-    'roomId' | 'senderId' | 'hop' | 'rootKey' | 'invoke' | 'mentionAll' | 'at'
+    'roomId' | 'senderId' | 'hop' | 'rootKey' | 'invoke' | 'mentions' | 'mentionAll' | 'at'
   >,
 ): D1PreparedStatement[] {
   const statements: D1PreparedStatement[] = [
@@ -181,6 +207,26 @@ export function messageGuardStatements(
   // @所有人 只发提醒，不批量创建 delivery；权限在事务内与发送同一闸门复核。
   if (core.mentionAll) {
     statements.push(capabilityGuardStatement(db, core.roomId, core.senderId, 'mention_all'));
+  }
+
+  // 显式 mentions 必须在发送事务内复核：Web 选择器可能持有过期成员列表。
+  // 正文解析与 @所有人 的提醒范围来自同一事务前的 active 成员查询，属于提示性
+  // 写入；成员并发移除时最多留下一条不会被读取的历史提醒，不阻断群消息。
+  for (const mention of core.mentions) {
+    if (mention.source !== 'explicit' || mention.kind !== 'human') continue;
+    statements.push(
+      db
+        .prepare(
+          guardSql(
+            'invalidMention',
+            `NOT EXISTS (
+               SELECT 1 FROM room_members m JOIN actors a ON a.actor_id = m.actor_id
+                WHERE m.room_id = ? AND m.actor_id = ? AND m.status = 'active' AND a.kind = 'human'
+             )`,
+          ),
+        )
+        .bind(core.roomId, mention.actorId),
+    );
   }
 
   if (core.hop > LIMITS.cooperationDepthMax) {
@@ -319,6 +365,41 @@ export function messageCoreStatements(
           core.at,
         ),
     ),
+    ...core.mentions.map((mention) =>
+      db
+        .prepare(
+          `INSERT INTO message_mentions (message_id, actor_id, actor_kind, source, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .bind(core.messageId, mention.actorId, mention.kind, mention.source, core.at),
+    ),
+    // human 提醒是 inbox 事件而非 delivery：不增加 pending_count、不推进房间
+    // head，也不写入 room scope；@所有人 与普通 human 提及共用同一事件类型。
+    ...core.reminders.flatMap((reminder) => {
+      const inboxKey = `mention_reminder:${core.messageId}:${reminder.actorId}`;
+      return [
+        eventStatement(
+          db,
+          {
+            eventKey: inboxKey,
+            scopeKind: 'inbox',
+            scopeId: reminder.actorId,
+            eventType: MENTION_REMINDER_EVENT,
+            refId: core.messageId,
+            metadata: {
+              message_id: core.messageId,
+              room_id: core.roomId,
+              sender_id: core.senderId,
+              source: reminder.source,
+              mention_all: reminder.mentionAll,
+            },
+          },
+          core.at,
+        ),
+        outboxStatement(db, { topic: inboxTopic(reminder.actorId), eventKey: inboxKey }, core.at),
+        inboxHeadStatement(db, reminder.actorId, inboxKey, core.at, 0),
+      ];
+    }),
     roomHeadStatement(db, core.roomId, core.eventKey, core.at, core.messageId),
     outboxStatement(db, { topic: roomTopic(core.roomId), eventKey: core.eventKey }, core.at),
   ];
@@ -421,30 +502,71 @@ interface MentionMember {
   name: string;
 }
 
-interface GroupMentionResolution {
-  /** 正文 @ 解析出的唯一 active Agent 目标。 */
-  invoke: string[];
-  /** 正文是否命中任一 active 成员名，含 human 与发送者本人。 */
-  hadMemberMention: boolean;
+interface GroupTextResolution {
+  /** 正文唯一精确匹配到的 active Agent（不含发送者）。 */
+  agents: string[];
+  /** 正文唯一精确匹配到的 active 人类成员（不含发送者）。 */
+  humans: string[];
+  /** 正文顶层出现 `@所有人`。 */
+  mentionAll: boolean;
+  /** 房间当前 active 人类成员；`@所有人` 的提醒范围。 */
+  allHumans: string[];
 }
 
 /**
- * 群聊省略 `invoke` 时按正文 `@名字` 解析投递目标。
+ * 只保留可以参与派活解析的正文。
  *
- * 只用房间当前 active 成员名做精确、大小写敏感、最长优先的原文匹配；
- * 不 trim、不做 Unicode 归一化、不识别 Markdown 或转义。非 Agent 成员与发送者
- * 参与最长匹配（避免被更短的 Agent 名字前缀误命中），但只有唯一的
- * active Agent 成员会进入结果。正文里的非成员名字只是普通文本。
- * `hadMemberMention` 用于阻止“回复上一条消息”的自动投递：只要命中任一成员名
- * （即使是 human 或发送者本人）就视为显式 @，不再自动补目标。
+ * Markdown 围栏/行内代码、引用行（含粘贴的聊天记录）与附件 URL 都只是
+ * 展示内容，不是新的指令；替换为空白后，服务端再按 active 成员名做精确、
+ * 大小写敏感、最长优先的匹配。未闭合的围栏视为延伸到正文末尾。
  */
-async function resolveGroupMentionInvoke(
+export function instructionText(body: string): string {
+  const lines = body.split('\n');
+  const kept: string[] = [];
+  let fence: string | null = null;
+  for (const line of lines) {
+    const match = line.match(/^\s{0,3}(`{3,}|~{3,})/u);
+    if (fence) {
+      if (match && match[1]!.startsWith(fence[0]!)) fence = null;
+      kept.push('');
+      continue;
+    }
+    if (match) {
+      fence = match[1]!;
+      kept.push('');
+      continue;
+    }
+    if (/^\s{0,3}>/u.test(line)) {
+      kept.push('');
+      continue;
+    }
+    kept.push(line);
+  }
+  return kept
+    .join('\n')
+    .replace(/(`+)([\s\S]*?)\1/gu, ' ')
+    .replace(/https?:\/\/[^\s<>()]+/gu, ' ');
+}
+
+/**
+ * 群聊省略 `invoke` 时的正文提及解析。
+ *
+ * 只在正文顶层（去掉代码、引用与 URL 后）按 active 成员名做精确、大小写
+ * 敏感、最长优先匹配。同名成员必须由选择器或显式 `invoke`/`mentions`
+ * 消歧；正文只做便利兜底，不能猜。`collectTargets=false` 时只检测
+ * `@所有人` 控制符，用于显式 invoke 的消息仍允许群级提醒。
+ */
+async function resolveGroupTextMentions(
   db: D1Database,
   roomId: string,
   sender: string,
   body: string,
-): Promise<GroupMentionResolution> {
-  if (!body.includes('@')) return { invoke: [], hadMemberMention: false };
+  collectTargets: boolean,
+): Promise<GroupTextResolution> {
+  const text = instructionText(body);
+  if (!text.includes('@')) {
+    return { agents: [], humans: [], mentionAll: false, allHumans: [] };
+  }
   const rows = await db
     .prepare(
       `SELECT m.actor_id, a.kind, a.name
@@ -453,6 +575,10 @@ async function resolveGroupMentionInvoke(
     )
     .bind(roomId)
     .all<MentionMember>();
+
+  const allHumans = rows.results
+    .filter((row) => row.kind === 'human' && row.actor_id !== sender)
+    .map((row) => row.actor_id);
 
   const byName = new Map<string, MentionMember[]>();
   for (const row of rows.results) {
@@ -465,71 +591,41 @@ async function resolveGroupMentionInvoke(
     return a < b ? -1 : a > b ? 1 : 0;
   });
 
-  const targets = new Set<string>();
-  let hadMemberMention = false;
-  for (let index = 0; index < body.length; index += 1) {
-    if (body[index] !== '@') continue;
+  const agents = new Set<string>();
+  const humans = new Set<string>();
+  let mentionAll = false;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== '@') continue;
     const start = index + 1;
-    const matched = names.find((name) => body.startsWith(name, start));
-    if (!matched) continue;
-    hadMemberMention = true;
-    // `@所有人` 是群级提醒控制符，不是对名为“所有人”的 Agent 的派活；
-    // 仍视为显式提及，避免再自动补投上一条 Agent 消息。
-    if (matched === '所有人') {
-      index = start + matched.length - 1;
+    // 优先识别更长的成员名（例如“所有人2”）；否则 `@所有人` 是保留控制符，
+    // 不会因为存在名为“所有”的成员而被当成普通前缀匹配。
+    const longerAllMember = names.some(
+      (name) => name.length > '所有人'.length && name.startsWith('所有人') && text.startsWith(name, start),
+    );
+    if (!longerAllMember && text.startsWith('所有人', start)) {
+      mentionAll = true;
+      index = start + '所有人'.length - 1;
       continue;
     }
+    const matched = names.find((name) => text.startsWith(name, start));
+    if (!matched) continue;
     const members = byName.get(matched) ?? [];
-    const agents = members.filter((member) => member.kind === 'agent');
-    if (agents.length > 1) {
+    if (collectTargets && members.length > 1) {
       throw new BusinessError(
         'INVALID_ARGUMENT',
-        '群内有多个同名 Agent，无法按 @ 名字唯一投递；请改名或显式使用 invoke',
+        '群内有多个同名成员，无法按 @ 名字唯一确定目标；请从成员选择器选择或显式使用 invoke/mentions',
       );
     }
-    if (agents.length === 1 && agents[0]!.actor_id !== sender) {
-      targets.add(agents[0]!.actor_id);
+    if (collectTargets && members.length === 1) {
+      const member = members[0]!;
+      if (member.actor_id !== sender) {
+        if (member.kind === 'agent') agents.add(member.actor_id);
+        else humans.add(member.actor_id);
+      }
     }
     index = start + matched.length - 1;
   }
-  return { invoke: [...targets], hadMemberMention };
-}
-
-interface AdjacentSenderRow {
-  sender_id: string;
-  kind: 'human' | 'agent' | null;
-  status: 'active' | 'left' | 'removed' | null;
-}
-
-/**
- * 群聊 human 回复的自动投递目标：紧邻上一条普通消息的发送者。
- *
- * 只读 `messages`（按 `created_seq` 倒序），不依赖 delivery/outbox 事件；
- * 上一条消息的发送者必须仍是当前 active 的 Agent 成员，且不能是发送者本人。
- * 查询发生在新消息插入之前，因此拿到的是“上一条”而不是自己。
- */
-async function resolveAdjacentAgentSender(
-  db: D1Database,
-  roomId: string,
-  sender: string,
-  boundary: HistoryBoundary,
-): Promise<string | null> {
-  const row = await db
-    .prepare(
-      `SELECT msg.sender_id, a.kind, m.status
-         FROM messages msg
-         LEFT JOIN actors a ON a.actor_id = msg.sender_id
-         LEFT JOIN room_members m
-           ON m.room_id = msg.room_id AND m.actor_id = msg.sender_id
-        WHERE msg.room_id = ? AND msg.created_seq >= ?
-        ORDER BY msg.created_seq DESC
-        LIMIT 1`,
-    )
-    .bind(roomId, boundary.fromSeq)
-    .first<AdjacentSenderRow>();
-  if (!row || row.sender_id === sender) return null;
-  if (row.kind !== 'agent' || row.status !== 'active') return null;
-  return row.sender_id;
+  return { agents: [...agents], humans: [...humans], mentionAll, allHumans };
 }
 
 function assertInvoke(invoke: string[] | undefined, sender: string): string[] {
@@ -539,6 +635,18 @@ function assertInvoke(invoke: string[] | undefined, sender: string): string[] {
   }
   if (list.includes(sender)) {
     throw new BusinessError('INVALID_ARGUMENT', '不能把消息发送者自己加入 invoke');
+  }
+  return list;
+}
+
+/** 显式 mentions 只接受人类成员；Agent 派活必须走 invoke。 */
+function assertMentions(mentions: string[] | undefined, sender: string): string[] {
+  const list = [...new Set(mentions ?? [])];
+  if (list.length > LIMITS.invokeMax) {
+    throw new BusinessError('INVALID_ARGUMENT', `单条消息最多指定 ${LIMITS.invokeMax} 个提醒对象`);
+  }
+  if (list.includes(sender)) {
+    throw new BusinessError('INVALID_ARGUMENT', '不能把消息发送者自己加入 mentions');
   }
   return list;
 }
@@ -568,27 +676,52 @@ export async function messageSend(
       body_bytes: bodyBytes,
     });
   }
-  const mentionResolution =
-    input.invoke === undefined && !input.claim && room.kind === 'group'
-      ? await resolveGroupMentionInvoke(db, room.room_id, sender, input.body)
+  // 正文解析只在群聊、未显式给 invoke 且不是 claim 回复时参与派活。
+  // 显式 invoke 仍识别 `@所有人` 控制符，但不从正文追加 Agent 目标。
+  const textResolution =
+    room.kind === 'group' && !input.claim
+      ? await resolveGroupTextMentions(
+          db,
+          room.room_id,
+          sender,
+          input.body,
+          input.invoke === undefined,
+        )
       : null;
-  let resolvedInvoke = input.invoke;
-  if (mentionResolution) {
-    resolvedInvoke = mentionResolution.invoke;
-    // 群聊 human 回复紧邻上一条 Agent 消息时自动投递；显式 @ 任意 active 成员
-    // 都视为明确目标，不再补上一条 Agent。Agent 发送不改行为。
-    if (principal.actor?.kind === 'human' && !mentionResolution.hadMemberMention) {
-      const adjacentAgent = await resolveAdjacentAgentSender(db, room.room_id, sender, boundary);
-      if (adjacentAgent) resolvedInvoke = [adjacentAgent];
-    }
-  }
+  const resolvedInvoke =
+    input.invoke === undefined ? (textResolution?.agents ?? []) : input.invoke;
+  const explicitMentions = assertMentions(input.mentions, sender);
   // 拉黑只静默定向通知（delivery），不改变群消息本体、正文 @ 或成员资格。
-  const invoke = await filterMutedMentions(
-    db,
-    room.kind,
-    sender,
-    assertInvoke(resolvedInvoke, sender),
-  );
+  const requestedInvoke = assertInvoke(resolvedInvoke, sender);
+  const invoke = await filterMutedMentions(db, room.kind, sender, requestedInvoke);
+
+  const mentionAll = textResolution?.mentionAll ?? false;
+  const mentionMap = new Map<string, MentionSeed>();
+  const mentionRank: Record<MentionSource, number> = { all: 0, text: 1, explicit: 2 };
+  const addMention = (actor: string, kind: 'human' | 'agent', source: MentionSource) => {
+    const existing = mentionMap.get(actor);
+    if (existing && mentionRank[existing.source] >= mentionRank[source]) return;
+    mentionMap.set(actor, { actorId: actor, kind, source });
+  };
+  if (mentionAll && textResolution) {
+    for (const actor of textResolution.allHumans) addMention(actor, 'human', 'all');
+  }
+  if (input.invoke === undefined) {
+    for (const actor of textResolution?.agents ?? []) addMention(actor, 'agent', 'text');
+    for (const actor of textResolution?.humans ?? []) addMention(actor, 'human', 'text');
+  } else {
+    // 记录全部显式选择；被拉黑静默的目标仍保留提及事实，只是没有 delivery。
+    for (const actor of requestedInvoke) addMention(actor, 'agent', 'explicit');
+  }
+  for (const actor of explicitMentions) addMention(actor, 'human', 'explicit');
+  const mentions = [...mentionMap.values()];
+  const reminders: MentionReminderSeed[] = mentions
+    .filter((mention) => mention.kind === 'human' && mention.actorId !== sender)
+    .map((mention) => ({
+      actorId: mention.actorId,
+      source: mention.source,
+      mentionAll,
+    }));
   const link = await resolveRootLink(db, sender, room.room_id, input, boundary);
 
   const at = nowMs();
@@ -611,7 +744,9 @@ export async function messageSend(
     rootKey: link.rootKey || messageId,
     hop: link.hop,
     invoke,
-    mentionAll: room.kind === 'group' && input.body.includes('@所有人'),
+    mentionAll,
+    mentions,
+    reminders,
     deliveries,
     eventKey,
     at,
@@ -816,6 +951,8 @@ export async function finalMessagePlan(
     hop: parent.hop + 1,
     invoke: [],
     mentionAll: false,
+    mentions: [],
+    reminders: [],
     deliveries: [],
     eventKey: `message:${messageId}`,
     at: nowMs(),
@@ -893,6 +1030,10 @@ export async function historyList(
     db,
     page.map((row) => row.message_id),
   );
+  const mentions = await mentionsFor(
+    db,
+    page.map((row) => row.message_id),
+  );
   // 一次 IN 查询取权威 kind，避免网页依赖成员列表或在成员被移出后丢失 AI 属性。
   const senderIds = [...new Set(page.map((row) => row.sender_id))];
   const senders = await getActorsByIds(db, senderIds);
@@ -913,6 +1054,7 @@ export async function historyList(
       root_id: row.root_id,
       hop: row.hop,
       delivery_states: summary?.states ?? {},
+      mentions: mentions.get(row.message_id) ?? [],
       delivery_claimed_at: nullableString(summary?.claimedAt ?? null),
       delivery_updated_at: nullableString(summary?.updatedAt ?? null),
     };

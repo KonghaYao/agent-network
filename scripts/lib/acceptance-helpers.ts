@@ -38,6 +38,12 @@ export interface InboxPage {
   claimed_delivery_id: string | null;
 }
 
+export interface MentionView {
+  actor_id: string;
+  kind: 'human' | 'agent';
+  source: 'explicit' | 'text' | 'all';
+}
+
 export interface MessageView {
   message_id: string;
   sender_id: string;
@@ -48,6 +54,7 @@ export interface MessageView {
   root_id: string | null;
   hop: number;
   delivery_states: Record<string, number>;
+  mentions: MentionView[];
   delivery_claimed_at: string | null;
   delivery_updated_at: string | null;
 }
@@ -252,6 +259,7 @@ export async function sendMessage(  connection: McpConnection,
   body: string,
   options: {
     invoke?: string[];
+    mentions?: string[];
     clientMessageId?: string;
     requestId?: string;
     claim?: { delivery_id: string; attempt: number; claim_id: string };
@@ -263,6 +271,7 @@ export async function sendMessage(  connection: McpConnection,
     room_id: roomId,
     body,
     ...(options.invoke ? { invoke: options.invoke } : {}),
+    ...(options.mentions ? { mentions: options.mentions } : {}),
     ...(options.claim ? { claim: options.claim } : {}),
   });
 }

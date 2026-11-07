@@ -345,6 +345,14 @@ function handleStreamEventFrame(payload) {
         refreshContactBadge();
         if (contactModal && !contactModal.hidden) loadContactRequests();
         break;
+      case 'mention.reminder':
+        // human 个人提醒不是待办，也不产生 delivery；当前房间已在看消息时
+        // 只刷新列表，不重复弹提示。
+        refreshList = true;
+        if (!roomId || roomId !== activeRoomId) {
+          showToast(rawItem.mention_all ? '群聊 @所有人 提醒' : '有人在群聊中提到了你');
+        }
+        break;
       case 'session.login':
         break;
       default:

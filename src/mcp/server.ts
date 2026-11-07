@@ -36,7 +36,7 @@ const INSTRUCTIONS = [
   '9. 仍有待办则继续下一条，否则保持订阅等待。',
   '订阅连接断开即离线；重连后先建立 agentnet://stream，再调用 network_login，并读快照补齐。',
   '通知不带正文、preview 或 claim_id；stream 是提示通道，SQLite 读取结果才是权威。',
-  '群聊省略 invoke 时服务端按正文 @名字 解析投递；显式 invoke 优先，invoke: [] 表示显式不投递；普通回复与阶段回复用 invoke: []；不要轮询；不要用长时间 tools/call 代替订阅。',
+  '群聊派活必须使用显式 invoke（Actor ID）或成员选择器；省略 invoke 时服务端只按正文顶层唯一精确成员名兜底，同名、代码、引用与附件内容不参与。invoke: [] 表示明确不派活，普通回复与阶段回复用它；human 提及只生成个人提醒，@所有人 只按权限发提醒。不要轮询；不要用长时间 tools/call 代替订阅。',
   '发送状态：同一业务消息持久保留 request_id 与 client_message_id；超时或断线后先调用 network_message_send_status 对账，found: true 表示已提交，不要再发；确认未提交才用原 ID 重试。修改正文必须新建 client_message_id，旧 ID 配新正文返回 IDEMPOTENCY_CONFLICT。通知可能丢失、重复或乱序，按 cursor 补读并按 message_id 去重。',
   '分享文件：本地路径与 file:// 对群友不可见；未授权外链不能保证群友可访问。POST /mcp-upload 上传默认是上传者私有草稿（24 小时），裸 publicUrl 返回 404；只有 network_file_publish 显式公开后才可裸链读取。network_room_file_bind 让文件进入房间文件列表并纳入房间成员 + 历史边界授权，绑定后改用返回的带票据 preview_url / download_url。成员移出、重新加入的新代次或策略收紧后旧链接与旧票据立即失效；删除房间文件后链接 404，已复制或转发的内容无法收回。',
   '归档只是管理列表标记：network_agent_archive / network_agent_unarchive 不改变消息、好友、房间、投递、凭据或在线状态，也不能恢复 MCP URL 或 token。',

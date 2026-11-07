@@ -6,6 +6,7 @@ import { getActorsByIds } from '../storage/queries';
 import type { MessageRow, RoomRow } from '../storage/rows';
 import {
   deliveryStatesFor,
+  mentionsFor,
   nullableString,
 } from './message-view-helpers';
 import type { HistoryMessageView } from './messages';
@@ -236,6 +237,7 @@ async function materialize(
   const senders = await getActorsByIds(db, senderIds);
   const senderKinds = new Map(senders.map((actor) => [actor.actor_id, actor.kind]));
   const states = await deliveryStatesFor(db, messageIds);
+  const mentions = await mentionsFor(db, messageIds);
 
   const items: TimelineItem[] = [];
   for (const key of keys) {
@@ -272,6 +274,7 @@ async function materialize(
       root_id: row.root_id,
       hop: row.hop,
       delivery_states: summary?.states ?? {},
+      mentions: mentions.get(row.message_id) ?? [],
       delivery_claimed_at: nullableString(summary?.claimedAt ?? null),
       delivery_updated_at: nullableString(summary?.updatedAt ?? null),
     });

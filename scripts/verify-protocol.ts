@@ -537,15 +537,38 @@ async function main(): Promise<void> {
     sendTool?.description,
   );
   check(
-    'message_send 描述声明群聊省略 invoke 时按 @名字 解析',
+    'message_send 描述声明 actor_id 显式派活与正文唯一精确兜底',
     typeof sendTool?.description === 'string' &&
-      sendTool.description.includes('群聊') &&
-      sendTool.description.includes('@名字') &&
-      sendTool.description.includes('省略 invoke') &&
-      sendTool.description.includes('显式 invoke 优先') &&
+      sendTool.description.includes('actor_id') &&
       sendTool.description.includes('invoke: []') &&
+      sendTool.description.includes('不再解析正文') &&
+      sendTool.description.includes('mentions') &&
+      sendTool.description.includes('只生成个人提醒') &&
+      sendTool.description.includes('去掉代码/引用/附件 URL') &&
+      sendTool.description.includes('唯一精确匹配') &&
+      sendTool.description.includes('同名成员') &&
+      sendTool.description.includes('不会自动唤醒') &&
+      sendTool.description.includes('@所有人') &&
       sendTool.description.includes('claim'),
     sendTool?.description,
+  );
+  check(
+    'message_send 输入 schema 包含 mentions 且声明最多 8 个',
+    (() => {
+      const schema = JSON.stringify(sendTool?.inputSchema ?? {});
+      return (
+        schema.includes('"mentions"') &&
+        (sendTool?.description ?? '').includes('最多 8 个')
+      );
+    })(),
+    sendTool?.inputSchema,
+  );
+  check(
+    '消息输出 schema 包含结构化 mentions 来源',
+    ['"mentions"', '"source"', '"explicit"', '"text"', '"all"'].every((marker) =>
+      JSON.stringify(sendTool?.outputSchema ?? {}).includes(marker),
+    ),
+    sendTool?.outputSchema,
   );
   check(
     'message_send 描述声明上传默认私有、绑定后须用带票据地址',
@@ -1677,21 +1700,22 @@ async function main(): Promise<void> {
     skillText.slice(0, 260),
   );
   check(
-    '技能正文说明群聊 @ 名字由服务端解析',
+    '技能正文说明 actor_id 显式派活与正文唯一精确兜底',
     skillText.includes('群聊派活') &&
-      skillText.includes('省略 `invoke`') &&
-      skillText.includes('不需要 actor_id') &&
-      skillText.includes('仍可用且优先') &&
-      skillText.includes('invoke: []') &&
-      skillText.includes('同名 Agent') &&
-      skillText.includes('direct 仍需显式'),
+      skillText.includes('actor_id') &&
+      skillText.includes('纯文本 @') &&
+      skillText.includes('唯一精确') &&
+      skillText.includes('同名') &&
+      skillText.includes('mentions') &&
+      skillText.includes('@所有人') &&
+      skillText.includes('不会自动唤醒'),
     skillText.slice(0, 300),
   );
   check(
-    '技能正文说明群聊 @ 解析的原文匹配边界',
-    skillText.includes('@自己') &&
-      skillText.includes('非 Agent') &&
-      skillText.includes('代码块'),
+    '技能正文说明代码、引用与附件 URL 不参与派活',
+    skillText.includes('代码块') &&
+      skillText.includes('引用行') &&
+      skillText.includes('附件 URL'),
     skillText.slice(0, 300),
   );
   check(
@@ -1942,13 +1966,15 @@ async function main(): Promise<void> {
     skillDoc.headers.get('content-type'),
   );
   check(
-    '静态技能说明群聊 @ 名字由服务端解析',
+    '静态技能说明 actor_id 显式派活与正文唯一精确兜底',
     skillDocText.includes('群聊派活') &&
-      skillDocText.includes('省略 `invoke`') &&
-      skillDocText.includes('不需要 actor_id') &&
+      skillDocText.includes('actor_id') &&
+      skillDocText.includes('纯文本 @') &&
+      skillDocText.includes('唯一精确') &&
+      skillDocText.includes('同名') &&
       skillDocText.includes('`--no-invoke`') &&
-      skillDocText.includes('同名 Agent') &&
-      !skillDocText.includes('仅在正文写 @ 不等于指定 invoke'),
+      skillDocText.includes('不会自动唤醒') &&
+      !skillDocText.includes('不需要 actor_id'),
     skillDocText.slice(0, 300),
   );
   check(
@@ -2108,7 +2134,8 @@ async function main(): Promise<void> {
     skillDocText.includes('### MCP Events 订阅过滤') &&
       skillDocText.includes('硬过滤') &&
       skillDocText.includes('群聊普通消息默认不产生 delivery') &&
-      skillDocText.includes('紧邻上一条来自 active Agent') &&
+      skillDocText.includes('紧跟 Agent') &&
+      skillDocText.includes('不会自动派活') &&
       skillDocText.includes('默认为 active') &&
       skillDocText.includes('events/unsubscribe'),
     skillDocText.slice(0, 240),
@@ -2276,9 +2303,11 @@ async function main(): Promise<void> {
   const chatgptGuideText = await chatgptGuide.text();
   const chatgptGroupMarkers = [
     '群聊',
-    '省略 invoke',
-    '@名字',
+    'actor_id',
+    '唯一精确',
     'invoke 传 []',
+    '@所有人',
+    'mentions',
     'room_id',
     'attention',
     'action_required',
@@ -2295,10 +2324,12 @@ async function main(): Promise<void> {
     { missing: chatgptGroupMarkers.filter((marker) => !chatgptGuideText.includes(marker)) },
   );
   check(
-    'ChatGPT 指南说明群聊 @ 名字服务端解析',
-    chatgptGuideText.includes('服务端按正文 @名字 解析') &&
-      chatgptGuideText.includes('direct 不解析正文') &&
-      !chatgptGuideText.includes('只有发送者显式 invoke'),
+    'ChatGPT 指南说明显式 actor_id 与无隐式自动投递',
+    chatgptGuideText.includes('显式选择目标') &&
+      chatgptGuideText.includes('代码、引用与转发内容不参与') &&
+      chatgptGuideText.includes('不会自动投递上一位 Agent') &&
+      chatgptGuideText.includes('human 提及') &&
+      !chatgptGuideText.includes('服务端按正文 @名字 解析'),
     chatgptGuideText.slice(0, 400),
   );
   check(
@@ -2573,11 +2604,14 @@ async function main(): Promise<void> {
     ),
   );
   check(
-    'agentnet send 默认省略 invoke 并提供 --no-invoke',
+    'agentnet send/send-file 支持显式 invoke、opt-out 与 human mentions',
     agentnetScriptText.includes('--no-invoke') &&
-      agentnetScriptText.includes('群聊默认省略 invoke') &&
-      agentnetScriptText.includes('if $invoke == null then {} else {invoke:$invoke} end') &&
-      agentnetScriptText.includes('--no-invoke) invoke=\'[]\''),
+      agentnetScriptText.includes('--mention') &&
+      agentnetScriptText.includes("--no-invoke) invoke='[]'; shift 1") &&
+      agentnetScriptText.includes('--no-invoke) invoke=""; no_invoke=1; shift 1') &&
+      agentnetScriptText.includes('if $mentions == null then {} else {mentions:$mentions} end') &&
+      agentnetScriptText.includes('send_args+=(--mention "$mentions")') &&
+      agentnetScriptText.includes('显式 invoke 是 Agent 执行目标'),
     agentnetScriptText.slice(0, 300),
   );
 

@@ -58,7 +58,8 @@ function outboxValid(item) {
     typeof item.request_id === 'string' &&
     typeof item.room_id === 'string' &&
     typeof item.body === 'string' &&
-    Array.isArray(item.invoke);
+    Array.isArray(item.invoke) &&
+    (item.mentions === undefined || Array.isArray(item.mentions));
 }
 
 /** 读取时按 TTL、已提交保留窗口和总量上限收敛，避免本地无限增长。 */
@@ -104,24 +105,28 @@ function outboxRemove(clientMessageId) {
   }));
 }
 
-function outboxInvokeKey(invoke) {
-  return (invoke || []).slice().sort().join(',');
+function outboxInvokeKey(invoke, mentions, invokeExplicit) {
+  return (invokeExplicit ? 'explicit:' : 'omit:') +
+    (invoke || []).slice().sort().join(',') + '|' +
+    (mentions || []).slice().sort().join(',');
 }
 
 /** 只有同房间、同正文、同目标且可重试的失败意图才允许复用原 ID。 */
-function outboxFindReusable(roomId, body, invoke) {
+function outboxFindReusable(roomId, body, invoke, mentions, invokeExplicit) {
   const items = outboxItems();
-  const key = outboxInvokeKey(invoke);
+  const key = outboxInvokeKey(invoke, mentions, invokeExplicit);
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (item.room_id !== roomId || item.status !== 'failed' || !item.retryable) continue;
-    if (item.body !== body || outboxInvokeKey(item.invoke) !== key) continue;
+    if (item.body !== body) continue;
+    const itemExplicit = item.invoke_explicit === true || item.invoke.length > 0;
+    if (outboxInvokeKey(item.invoke, item.mentions || [], itemExplicit) !== key) continue;
     return item;
   }
   return null;
 }
 
-function outboxCreate(roomId, body, invoke) {
+function outboxCreate(roomId, body, invoke, mentions, invokeExplicit) {
   const at = Date.now();
   const item = {
     client_message_id: crypto.randomUUID(),
@@ -129,6 +134,8 @@ function outboxCreate(roomId, body, invoke) {
     room_id: roomId,
     body: body,
     invoke: invoke.slice(),
+    mentions: mentions.slice(),
+    invoke_explicit: Boolean(invokeExplicit),
     status: 'sending',
     retryable: false,
     error: '',
@@ -371,10 +378,19 @@ function outboxComposerMatches(intent) {
 /** 发送成功后的收尾：只有当前房间且输入框仍是该意图内容时才清草稿。 */
 function outboxFinishCommitted(intent, options) {
   const settings = options || {};
+  const matches = outboxComposerMatches(intent);
   if (settings.fromRetry) {
-    if (!outboxComposerMatches(intent)) return;
+    if (!matches) return;
+  } else {
+    // 选择器和本次实际发送的附件已被这条消息消费；即使用户在响应返回前
+    // 已经改写了输入，也不能让旧选择影响下一条消息。
+    mentionSelections.delete(intent.room_id);
+    if (settings.sentFileKeys) clearComposerFiles(intent.room_id, settings.sentFileKeys);
+    // 当前房间仍显示该意图时才清空输入；响应迟到或用户已改写时保留新内容。
+    if (isActiveRoom(intent.room_id, roomEpoch) && !matches) return;
   }
   drafts.delete(intent.room_id);
+  mentionSelections.delete(intent.room_id);
   if (settings.sentFileKeys) clearComposerFiles(intent.room_id, settings.sentFileKeys);
   if (!isActiveRoom(intent.room_id, settings.epoch)) return;
   bodyInput.value = '';
@@ -404,7 +420,12 @@ async function outboxSubmit(intent, options) {
     room_id: intent.room_id,
     body: intent.body
   };
-  if (intent.invoke.length > 0) args.invoke = intent.invoke;
+  // 旧本地意图没有 invoke_explicit：有目标时按显式发送，空列表保持省略。
+  const explicitInvoke = intent.invoke_explicit === true || intent.invoke.length > 0;
+  if (explicitInvoke) args.invoke = intent.invoke;
+  if (Array.isArray(intent.mentions) && intent.mentions.length > 0) {
+    args.mentions = intent.mentions;
+  }
   let failure = null;
   try {
     const result = await callTool('network_message_send', args);

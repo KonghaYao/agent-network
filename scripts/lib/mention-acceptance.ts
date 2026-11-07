@@ -1,12 +1,15 @@
 /**
- * 群聊 @ 名字服务端解析的端到端验收。
+ * 群聊结构化提及、确定性唤醒与正文兜底解析的端到端验收。
  *
- * 覆盖省略 invoke、显式 invoke 优先、invoke: [] opt-out、direct/claim/
- * final_body 不解析、最长匹配、同名与超限错误、幂等重放、成员移除、
- * pending_count 与统一 stream 通知。不修改全局验收流程的其他用例。
+ * 覆盖显式 invoke/mentions、唯一精确正文兜底、代码/引用/URL 不参与、
+ * 同名歧义与超限错误、@所有人 权限、human 个人提醒事件、幂等重放、
+ * 成员移除、pending_count 与统一 stream 通知。
  */
 
+import { resolve } from 'node:path';
+
 import {
+  baseUrl,
   callTool,
   check,
   checkEqual,
@@ -90,6 +93,30 @@ async function roomHead(humanToken: string, roomId: string): Promise<string> {
   return room.room.head_seq;
 }
 
+interface InboxEventRef {
+  type: string;
+  ref_id: string | null;
+  metadata: Record<string, unknown>;
+}
+
+/** 读取 inbox 事件（human 没有 delivery，也用同一入口验证个人提醒）。 */
+async function inboxEvents(token: string): Promise<InboxEventRef[]> {
+  const page = await rawTool<{ items: InboxEventRef[] }>(token, 'network_sync', {
+    scope: 'inbox',
+    limit: 100,
+  });
+  return page.items;
+}
+
+function reminderOf(
+  events: InboxEventRef[],
+  messageId: string,
+): InboxEventRef | undefined {
+  return events.find(
+    (event) => event.type === 'mention_reminder' && event.metadata.message_id === messageId,
+  );
+}
+
 interface RawAgent {
   token: string;
   identity: Identity;
@@ -135,9 +162,11 @@ async function rawBefriend(
 }
 
 export async function runGroupMentionAcceptance(): Promise<void> {
-  console.log('  · 群聊 @ 名字服务端解析');
+  console.log('  · 群聊结构化提及与确定性唤醒');
   const humanToken = newToken();
   const human = await connectClient(humanToken);
+  const peerToken = newToken();
+  const peer = await connectClient(peerToken);
   const m1Token = newToken();
   const m1 = await connectClient(m1Token);
   const m2Token = newToken();
@@ -145,6 +174,7 @@ export async function runGroupMentionAcceptance(): Promise<void> {
   let subscription: Awaited<ReturnType<typeof openSubscription>> | null = null;
   try {
     const owner = await registerIdentity(human, { kind: 'human', name: '小明 🤖 同学 用户' });
+    const peerIdentity = await registerIdentity(peer, { kind: 'human', name: '提醒人类' });
     const m1Identity = await registerIdentity(m1, {
       kind: 'agent',
       name: '小明 🤖',
@@ -180,14 +210,15 @@ export async function runGroupMentionAcceptance(): Promise<void> {
         (agents[index] as Identity).actor_id,
       );
     }
+    await rawBefriend(humanToken, peerToken, peerIdentity.actor_id);
     const group = await callTool<RoomDetail>(human.client, 'network_room_create', {
       request_id: newRequestId('mention_room'),
       kind: 'group',
       title: '@解析验收群',
-      members: agents.map((agent) => agent.actor_id),
+      members: [...agents.map((agent) => agent.actor_id), peerIdentity.actor_id],
     });
     const groupId = group.room.room_id;
-    for (const token of agentTokens) {
+    for (const token of [...agentTokens, peerToken]) {
       await acceptGroupInvitesWithToken(token as string, groupId);
     }
     const direct = await callTool<RoomDetail>(human.client, 'network_room_create', {
@@ -228,6 +259,22 @@ export async function runGroupMentionAcceptance(): Promise<void> {
       (item) => item.message_id === first.message.message_id && item.recipient_id === m1Identity.actor_id,
     );
     checkEqual('群 @ delivery 属于被 @ 的 Agent', firstDelivery?.recipient_id, m1Identity.actor_id);
+    checkEqual(
+      '正文唯一匹配记录为 text 提及',
+      JSON.stringify(first.message.mentions),
+      JSON.stringify([{ actor_id: m1Identity.actor_id, kind: 'agent', source: 'text' }]),
+    );
+    const firstHistory = await rawTool<{
+      items: { message_id: string; mentions: { actor_id: string; source: string }[] }[];
+    }>(humanToken, 'network_history_list', { room_id: groupId, limit: 20 });
+    const firstHistoryItem = firstHistory.items.find(
+      (item) => item.message_id === first.message.message_id,
+    );
+    checkEqual(
+      '历史列表回读同一条提及记录',
+      JSON.stringify(firstHistoryItem?.mentions),
+      JSON.stringify([{ actor_id: m1Identity.actor_id, kind: 'agent', source: 'text' }]),
+    );
 
     const multi = await sendMessage(human, groupId, '@小明 🤖 和 @CaseBot 请处理');
     checkEqual('多个 @Agent 各创建一条 delivery', multi.delivery_ids.length, 2);
@@ -279,23 +326,38 @@ export async function runGroupMentionAcceptance(): Promise<void> {
     );
 
     const humanMention = await sendMessage(human, groupId, '@小明 🤖 同学 用户 请处理');
-    checkEqual('@非 Agent 成员不创建 delivery', humanMention.delivery_ids.length, 0);
+    checkEqual('@人类成员不创建 delivery', humanMention.delivery_ids.length, 0);
     const humanMentionM2 = await inboxOf(m2Token);
     check(
-      '更长非 Agent 名字阻断短 Agent 前缀',
+      '更长人类名字阻断短 Agent 前缀',
       !hasMessage(humanMentionM2, humanMention.message.message_id),
       humanMentionM2.items,
     );
+    checkEqual(
+      '发送者 @ 自己不生成个人提醒',
+      reminderOf(await inboxEvents(humanToken), humanMention.message.message_id),
+      undefined,
+    );
+
+    const peerMention = await sendMessage(human, groupId, `@${peerIdentity.name} 请看一下`);
+    checkEqual('正文 @人类成员不创建 delivery', peerMention.delivery_ids.length, 0);
+    const peerReminder = reminderOf(
+      await inboxEvents(peerToken),
+      peerMention.message.message_id,
+    );
+    checkEqual('正文 @人类成员写入个人提醒事件', peerReminder?.type, 'mention_reminder');
+    checkEqual('正文 @人类提醒来源为 text', peerReminder?.metadata.source, 'text');
+    checkEqual('正文 @人类提醒不标记 @所有人', peerReminder?.metadata.mention_all, false);
 
     const selfMention = await sendMessage(m1, groupId, '@小明 🤖 自我回复');
     checkEqual('发送者 @ 自己不创建 delivery', selfMention.delivery_ids.length, 0);
 
     const missingMention = await sendMessage(human, groupId, '@不存在的人 请处理');
-    checkEqual('@非成员名字不阻断自动投递上一条 Agent', missingMention.delivery_ids.length, 1);
+    checkEqual('@非成员名字不创建 delivery', missingMention.delivery_ids.length, 0);
     const missingMentionInbox = await inboxOf(m1Token);
     check(
-      '@非成员名字时自动投递给上一条 Agent 发送者',
-      hasMessage(missingMentionInbox, missingMention.message.message_id),
+      '@非成员名字不投递给任何 Agent',
+      !hasMessage(missingMentionInbox, missingMention.message.message_id),
       missingMentionInbox.items,
     );
 
@@ -318,6 +380,7 @@ export async function runGroupMentionAcceptance(): Promise<void> {
       { m2: longestInbox.items, m1: longestM1.items },
     );
 
+    // M03-T01：同名 Agent 只能通过显式 actor_id 区分；纯文本同名必须报歧义且不投递。
     const sameABefore = await inboxOf(sameA.token);
     const sameBBefore = await inboxOf(sameB.token);
     const headBeforeDuplicate = await roomHead(humanToken, groupId);
@@ -327,9 +390,11 @@ export async function runGroupMentionAcceptance(): Promise<void> {
       'INVALID_ARGUMENT',
     );
     check(
-      '同名错误不回显成员名字',
+      '同名错误不回显成员名字并提示选择器或显式目标',
       typeof duplicateError.body.message === 'string' &&
-        !duplicateError.body.message.includes('同名机器人'),
+        !duplicateError.body.message.includes('同名机器人') &&
+        (duplicateError.body.message.includes('选择器') ||
+          duplicateError.body.message.includes('invoke/mentions')),
       duplicateError.body,
     );
     checkEqual('同名解析失败不推进房间 head', await roomHead(humanToken, groupId), headBeforeDuplicate);
@@ -349,6 +414,18 @@ export async function runGroupMentionAcceptance(): Promise<void> {
       hasMessage(sameAInbox, explicitSame.message.message_id) &&
         !hasMessage(sameBInbox, explicitSame.message.message_id),
       { a: sameAInbox.items, b: sameBInbox.items },
+    );
+    const explicitSameB = await sendMessage(human, groupId, '@同名机器人 显式指定另一个', {
+      invoke: [sameB.identity.actor_id],
+    });
+    checkEqual('同名场景可显式指定另一个 Agent', explicitSameB.delivery_ids.length, 1);
+    const sameAByB = await inboxOf(sameA.token);
+    const sameBByB = await inboxOf(sameB.token);
+    check(
+      '第二次显式 invoke 只投给另一个同名 Agent',
+      !hasMessage(sameAByB, explicitSameB.message.message_id) &&
+        hasMessage(sameBByB, explicitSameB.message.message_id),
+      { a: sameAByB.items, b: sameBByB.items },
     );
 
     const manyMentions = [
@@ -373,8 +450,205 @@ export async function runGroupMentionAcceptance(): Promise<void> {
     );
     checkEqual('超限解析失败不推进房间 head', await roomHead(humanToken, groupId), headBeforeMany);
 
+    // M03-T02：代码、引用、附件 URL 与普通回复都不参与派活解析。
     const codeBlock = await sendMessage(human, groupId, '```\n@CaseBot\n```');
-    checkEqual('原文解析不跳过 Markdown 代码块', codeBlock.delivery_ids.length, 1);
+    checkEqual('Markdown 围栏代码块不参与派活解析', codeBlock.delivery_ids.length, 0);
+    const inlineCode = await sendMessage(human, groupId, '示例：`@CaseBot` 只是代码');
+    checkEqual('行内代码不参与派活解析', inlineCode.delivery_ids.length, 0);
+    const quoted = await sendMessage(human, groupId, '> @CaseBot 历史引用\n普通回复');
+    checkEqual('引用行（粘贴历史）不参与派活解析', quoted.delivery_ids.length, 0);
+    const urlOnly = await sendMessage(
+      human,
+      groupId,
+      '附件：https://example.com/f/@CaseBot.png 请查收',
+    );
+    checkEqual('附件 URL 中的 @ 不参与派活解析', urlOnly.delivery_ids.length, 0);
+
+    const explicitHuman = await sendMessage(human, groupId, '结构化人类提醒', {
+      mentions: [peerIdentity.actor_id],
+    });
+    checkEqual('显式 mentions 不创建 delivery', explicitHuman.delivery_ids.length, 0);
+    checkEqual(
+      '显式 mentions 记录为 explicit 人类提及',
+      JSON.stringify(explicitHuman.message.mentions),
+      JSON.stringify([{ actor_id: peerIdentity.actor_id, kind: 'human', source: 'explicit' }]),
+    );
+    const explicitHumanReminder = reminderOf(
+      await inboxEvents(peerToken),
+      explicitHuman.message.message_id,
+    );
+    checkEqual('显式 mentions 写入个人提醒事件', explicitHumanReminder?.type, 'mention_reminder');
+    checkEqual('显式 mentions 提醒来源为 explicit', explicitHumanReminder?.metadata.source, 'explicit');
+
+    const mixedTargets = await sendMessage(human, groupId, '结构化派活与提醒', {
+      invoke: [caseBot.identity.actor_id],
+      mentions: [peerIdentity.actor_id],
+    });
+    checkEqual('显式 invoke + mentions 只创建 Agent delivery', mixedTargets.delivery_ids.length, 1);
+    const mixedInbox = await inboxOf(caseBot.token);
+    check(
+      '显式 invoke 投给指定 Agent 而不投给被提醒人类',
+      hasMessage(mixedInbox, mixedTargets.message.message_id),
+      mixedInbox.items,
+    );
+    checkEqual(
+      '混合目标按 source 分别记录',
+      JSON.stringify(
+        [...mixedTargets.message.mentions].sort((a, b) => a.actor_id.localeCompare(b.actor_id)),
+      ),
+      JSON.stringify(
+        [
+          { actor_id: caseBot.identity.actor_id, kind: 'agent', source: 'explicit' },
+          { actor_id: peerIdentity.actor_id, kind: 'human', source: 'explicit' },
+        ].sort((a, b) => a.actor_id.localeCompare(b.actor_id)),
+      ),
+    );
+
+    // M03-T04：CLI 与 MCP 对同样输入产生相同的提醒与派活结果。
+    const cliScript = resolve(import.meta.dir, '../../public/skills/agentnet.sh');
+    const cliEnv = { ...process.env, AGENTNET_URL: baseUrl(), AGENTNET_TOKEN: humanToken };
+    const cliRun = Bun.spawnSync(
+      [
+        'bash',
+        cliScript,
+        'send',
+        '--room',
+        groupId,
+        '--body',
+        '结构化派活与提醒',
+        '--invoke',
+        caseBot.identity.actor_id,
+        '--mention',
+        peerIdentity.actor_id,
+        '--request-id',
+        newRequestId('mention_cli'),
+        '--client-message-id',
+        `cm_${crypto.randomUUID()}`,
+      ],
+      { env: cliEnv, stdout: 'pipe', stderr: 'pipe' },
+    );
+    checkEqual('CLI send 退出码为 0', cliRun.exitCode, 0);
+    const cliResult = JSON.parse(cliRun.stdout.toString()) as {
+      message: {
+        message_id: string;
+        mentions: { actor_id: string; kind: string; source: string }[];
+      };
+      delivery_ids: string[];
+    };
+    checkEqual('CLI 显式 invoke 只创建一个 delivery', cliResult.delivery_ids.length, 1);
+    checkEqual(
+      'CLI 与 MCP 的提及记录一致',
+      JSON.stringify(
+        [...cliResult.message.mentions].sort((a, b) => a.actor_id.localeCompare(b.actor_id)),
+      ),
+      JSON.stringify(
+        [...mixedTargets.message.mentions].sort((a, b) => a.actor_id.localeCompare(b.actor_id)),
+      ),
+    );
+    const cliInbox = await inboxOf(caseBot.token);
+    check('CLI 派活进入指定 Agent 待办', hasMessage(cliInbox, cliResult.message.message_id), cliInbox.items);
+    const cliReminder = reminderOf(await inboxEvents(peerToken), cliResult.message.message_id);
+    checkEqual('CLI 人类提及产生个人提醒', cliReminder?.type, 'mention_reminder');
+    checkEqual('CLI 人类提醒来源为 explicit', cliReminder?.metadata.source, 'explicit');
+
+    const cliOptOutRun = Bun.spawnSync(
+      [
+        'bash',
+        cliScript,
+        'send',
+        '--room',
+        groupId,
+        '--body',
+        '@CaseBot CLI 显式不派活',
+        '--no-invoke',
+        '--request-id',
+        newRequestId('mention_cli_opt_out'),
+        '--client-message-id',
+        `cm_${crypto.randomUUID()}`,
+      ],
+      { env: cliEnv, stdout: 'pipe', stderr: 'pipe' },
+    );
+    checkEqual('CLI --no-invoke 退出码为 0', cliOptOutRun.exitCode, 0);
+    const cliOptOut = JSON.parse(cliOptOutRun.stdout.toString()) as {
+      message: { mentions: unknown[] };
+      delivery_ids: string[];
+    };
+    checkEqual('CLI --no-invoke 显式关闭派活', cliOptOut.delivery_ids.length, 0);
+    checkEqual('CLI --no-invoke 不产生提及', cliOptOut.message.mentions.length, 0);
+
+    const headBeforeInvalidMention = await roomHead(humanToken, groupId);
+    await expectToolError(
+      'mentions 指向 Agent 时返回 INVALID_ARGUMENT',
+      sendMessage(human, groupId, '错误提醒目标', {
+        mentions: [caseBot.identity.actor_id],
+      }),
+      'INVALID_ARGUMENT',
+    );
+    checkEqual(
+      '无效 mentions 不推进房间 head',
+      await roomHead(humanToken, groupId),
+      headBeforeInvalidMention,
+    );
+    await expectToolError(
+      'mentions 指向非成员时返回 INVALID_ARGUMENT',
+      sendMessage(human, groupId, '未知提醒目标', {
+        mentions: ['act_missing_mention'],
+      }),
+      'INVALID_ARGUMENT',
+    );
+    await expectToolError(
+      'mentions 包含发送者自己时返回 INVALID_ARGUMENT',
+      sendMessage(human, groupId, '提醒自己', {
+        mentions: [owner.actor_id],
+      }),
+      'INVALID_ARGUMENT',
+    );
+    await expectToolError(
+      'mentions 超过 8 个时显式报错',
+      sendMessage(human, groupId, '过多提醒目标', {
+        mentions: Array.from({ length: 9 }, (_, index) => `act_missing_${index}`),
+      }),
+      'INVALID_ARGUMENT',
+    );
+
+    // M03-T03：定向 @ 只产生一条投递；@所有人 只发提醒，越权与超限稳定拒绝。
+    const ownerAll = await sendMessage(human, groupId, '@所有人 群主提醒');
+    checkEqual('@所有人 不创建批量 delivery', ownerAll.delivery_ids.length, 0);
+    checkEqual(
+      '@所有人 以 all 来源记录人类成员',
+      JSON.stringify(ownerAll.message.mentions),
+      JSON.stringify([{ actor_id: peerIdentity.actor_id, kind: 'human', source: 'all' }]),
+    );
+    const ownerAllReminder = reminderOf(
+      await inboxEvents(peerToken),
+      ownerAll.message.message_id,
+    );
+    checkEqual('@所有人 写入个人提醒事件', ownerAllReminder?.type, 'mention_reminder');
+    checkEqual('@所有人 提醒标记 mention_all', ownerAllReminder?.metadata.mention_all, true);
+    checkEqual(
+      '发送者不因自己的 @所有人 收到提醒',
+      reminderOf(await inboxEvents(humanToken), ownerAll.message.message_id),
+      undefined,
+    );
+
+    const quotedAll = await sendMessage(peer, groupId, '> @所有人 引用历史\n普通回复');
+    checkEqual('引用中的 @所有人 不创建 delivery', quotedAll.delivery_ids.length, 0);
+    checkEqual(
+      '引用中的 @所有人 不触发提醒',
+      reminderOf(await inboxEvents(humanToken), quotedAll.message.message_id),
+      undefined,
+    );
+    const headBeforeDeniedAll = await roomHead(humanToken, groupId);
+    await expectToolError(
+      '普通成员 @所有人 返回 PERMISSION_DENIED',
+      sendMessage(peer, groupId, '@所有人 越权提醒'),
+      'PERMISSION_DENIED',
+    );
+    checkEqual(
+      '越权 @所有人 不推进房间 head',
+      await roomHead(humanToken, groupId),
+      headBeforeDeniedAll,
+    );
 
     const directSend = await sendMessage(human, direct.room.room_id, '@小明 🤖 同学 单聊不解析');
     checkEqual('direct 省略 invoke 不解析正文 @', directSend.delivery_ids.length, 0);
@@ -451,6 +725,6 @@ export async function runGroupMentionAcceptance(): Promise<void> {
     );
   } finally {
     await subscription?.close().catch(() => undefined);
-    await Promise.all([m1.close(), m2.close(), human.close()]);
+    await Promise.all([m1.close(), m2.close(), peer.close(), human.close()]);
   }
 }

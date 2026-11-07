@@ -28,12 +28,21 @@ export const messagePreviewSchema = z.object({
   created_at: z.string(),
 });
 
+export const mentionSchema = z.object({
+  actor_id: z.string(),
+  kind: z.enum(['human', 'agent']),
+  /** explicit 显式选择、text 正文唯一精确匹配、all @所有人。 */
+  source: z.enum(['explicit', 'text', 'all']),
+});
+
 export const messageSchema = messagePreviewSchema.extend({
   room_id: z.string(),
   reply_to: z.string().nullable(),
   root_id: z.string().nullable(),
   hop: z.number(),
   delivery_states: z.record(z.string(), z.number()),
+  /** 该消息的提及集合；human 只产生个人提醒，agent 才可能有 delivery。 */
+  mentions: z.array(mentionSchema),
   /** claimed 投递的领取时间与最近更新时间；用于网页“处理中未更新”提示。 */
   delivery_claimed_at: z.string().nullable(),
   delivery_updated_at: z.string().nullable(),

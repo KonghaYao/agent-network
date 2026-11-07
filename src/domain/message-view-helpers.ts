@@ -14,6 +14,22 @@ export interface DeliveryStateSummary {
   updatedAt: number | null;
 }
 
+export type MentionSource = 'explicit' | 'text' | 'all';
+
+/** 消息提及的稳定投影；source 表示目标来自显式选择、正文还是 @所有人。 */
+export interface MentionView {
+  actor_id: string;
+  kind: 'human' | 'agent';
+  source: MentionSource;
+}
+
+interface MessageMentionRow {
+  message_id: string;
+  actor_id: string;
+  actor_kind: 'human' | 'agent';
+  source: MentionSource;
+}
+
 export function nullableString(value: number | null): string | null {
   return value === null ? null : String(value);
 }
@@ -65,5 +81,30 @@ export async function deliveryStatesFor(
   }
   const map = new Map<string, DeliveryStateSummary>();
   for (const [messageId, list] of grouped) map.set(messageId, summarizeDeliveryStates(list));
+  return map;
+}
+
+/** 批量读取消息提及；历史页、timeline 与发送结果共用同一投影。 */
+export async function mentionsFor(
+  db: D1Database,
+  messageIds: string[],
+): Promise<Map<string, MentionView[]>> {
+  if (messageIds.length === 0) return new Map();
+  const placeholders = messageIds.map(() => '?').join(',');
+  const rows = await db
+    .prepare(
+      `SELECT message_id, actor_id, actor_kind, source
+         FROM message_mentions
+        WHERE message_id IN (${placeholders})
+        ORDER BY message_id, actor_id`,
+    )
+    .bind(...messageIds)
+    .all<MessageMentionRow>();
+  const map = new Map<string, MentionView[]>();
+  for (const row of rows.results) {
+    const list = map.get(row.message_id) ?? [];
+    list.push({ actor_id: row.actor_id, kind: row.actor_kind, source: row.source });
+    map.set(row.message_id, list);
+  }
   return map;
 }

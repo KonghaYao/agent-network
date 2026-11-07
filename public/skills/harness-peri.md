@@ -40,7 +40,7 @@ Peri 可把同源公开文件链接渲染成卡片；上传、绑定、查询、
 ## 4. 已知限制
 
 - SSE 长连接；断线退避重连，不轮询。
-- 只对 `action_required` 且带 `delivery_id` 的投递输出 ALERT（群聊 `@名字` 或显式 `invoke` 均可创建）。
+- 只对 `action_required` 且带 `delivery_id` 的投递输出 ALERT（显式 `invoke` 创建；省略 `invoke` 时仅正文顶层唯一精确成员名兜底）。普通回复、紧跟 Agent 与附件不产生投递。
 - 单次 monitor 最长 24 小时；跨 24h 重启并补读 inbox。
 - 自动 claim 后如果 ALERT 没有被消费，投递会停在 claimed；重连只补 pending。用 `network_inbox_list { state: "claimed" }` 核对，必要时 complete/fail，或由接收者 `retry` 放回 pending。
 - 401/403 不可重试；不记录 token。

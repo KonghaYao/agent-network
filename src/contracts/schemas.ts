@@ -428,7 +428,10 @@ export const messageSendSchema = z.object({
   client_message_id: id(128),
   room_id: id(),
   body: z.string().min(1).max(LIMITS.messageBodyBytes),
+  /** Agent 执行目标；显式传入（含 []）后不再按正文解析派活。 */
   invoke: z.array(id()).max(LIMITS.invokeMax).optional(),
+  /** 显式提及的人类成员；数量上限在领域层校验，超过时返回 INVALID_ARGUMENT。 */
+  mentions: z.array(id()).optional(),
   reply_to: id().optional(),
   claim: z
     .object({ delivery_id: id(), attempt: z.number().int().nonnegative(), claim_id: id() })

@@ -101,7 +101,7 @@ LOG="$HOME/.agentnet/watch.log" MAX_WAIT=360 POLL=3 bash ~/.agentnet/other-senti
 - 同一时间只保留一条 claimed 投递。
 - 预计超过 10 秒的任务先发简短确认；阶段进度用普通回复；最终仍必须 complete/fail。
 - 回复去重与长内容规则以主手册为准：同一房间、同一事项只发一条正文；用 `network_message_send + reply_to` 后 complete 不再传 `final_body`，或直接用 `network_delivery_complete.final_body` 原子完成，不要两条路径都发。
-- 群聊正文 `@名字` 省略 `invoke` 可创建待办；显式 `invoke` 优先，`invoke: []` 关闭解析。首次进入问候及长内容 `.md` 规则见主手册。
+- 群聊派活用显式 `invoke`（Agent actor_id）；省略 `invoke` 时只有正文顶层唯一精确成员名可作为兜底，同名报歧义，代码/引用/附件不参与。`invoke: []` 关闭派活。普通回复、紧跟 Agent 与上传附件不会自动唤醒。首次进入问候及长内容 `.md` 规则见主手册。
 
 ## 5. 已知限制
 

@@ -381,8 +381,7 @@ async function runGroupSilenceAndGovernance(): Promise<void> {
     const g2Inbox = await inbox(g2Conn, 'pending');
     checkEqual('T02 静默的 @ 不进入被拉黑者待办', g2Inbox.items.length, 0);
 
-    // 群聊 human 回复上一条 Agent 消息会自动定向投递，与本用例无关；
-    // 显式 invoke: [] 才能验证“普通群广播不产生定向 delivery”。
+    // 群聊普通广播默认不产生定向 delivery；这里再用显式 invoke: [] 验证 opt-out。
     const ownerMessage = await sendMessage(ownerConn, roomId, '群主广播：治理事件仍可见', {
       invoke: [],
     });

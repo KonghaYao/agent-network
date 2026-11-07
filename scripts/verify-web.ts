@@ -441,13 +441,21 @@ interface PendingDeliveryRef {
 }
 
 async function pendingDeliveryFor(token: string, messageId: string): Promise<PendingDeliveryRef> {
+  const found = await pendingDeliveryOrNull(token, messageId);
+  if (!found) throw new Error(`消息 ${messageId} 没有 pending 投递`);
+  return found;
+}
+
+/** 负向断言使用：没有 pending 投递时返回 null，而不是让等待/断言提前抛错。 */
+async function pendingDeliveryOrNull(
+  token: string,
+  messageId: string,
+): Promise<PendingDeliveryRef | null> {
   const inbox = await rawTool<{ items: PendingDeliveryRef[] }>(token, 'network_inbox_list', {
     state: 'pending',
     limit: 50,
   });
-  const found = inbox.items.find((item) => item.message_id === messageId);
-  if (!found) throw new Error(`消息 ${messageId} 没有 pending 投递`);
-  return found;
+  return inbox.items.find((item) => item.message_id === messageId) ?? null;
 }
 
 interface DeliveryClaimRef {
@@ -8586,7 +8594,7 @@ async function main(): Promise<void> {
       await context.close();
     }
 
-    // 2c-2. 群聊手输 @ 省略 invoke 由服务端解析；direct 仍自动填入对方。
+    // 2c-2. 群聊选择器保存 actor_id；手输唯一精确名字保留服务端兜底；direct 仍自动填入对方。
     {
       const { context, page } = await makeContext(
         browser,
@@ -8597,7 +8605,7 @@ async function main(): Promise<void> {
       await page.goto(`${server.base}/c/${data.group.room.room_id}`);
       await waitRoom(page, data.group.room.room_id, '测试群');
 
-      // 选择器仍插入 "@名字 "，但不再记录 actor_id。
+      // 选择器插入 "@名字 "，同时把 actor_id 记为显式执行目标。
       await page.locator('#body').fill('@');
       await page.locator('#mention-picker').waitFor({ state: 'visible' });
       const agentChoice = page
@@ -8611,11 +8619,10 @@ async function main(): Promise<void> {
         await page.locator('#body').inputValue(),
         `@${data.agentA.name} `,
       );
-      await page.locator('#body').fill('');
 
-      const groupMarker = '群聊手输省略 invoke';
+      const groupMarker = '群聊选择器显式目标';
       const groupBody = `@${data.agentA.name} ${groupMarker}`;
-      await page.locator('#body').fill(`@${data.agentA.name} ${groupMarker}`);
+      await page.locator('#body').fill(groupBody);
       await page.locator('#send').click();
       await page.waitForFunction(
         `(window.__mcpCalls || []).some(function (call) {
@@ -8629,11 +8636,15 @@ async function main(): Promise<void> {
       await waitForText(page, '#messages', groupMarker, 12_000);
       const groupCalls = (await page.evaluate(
         `(window.__mcpCalls || []).filter(function (call) { return call.name === 'network_message_send'; }).map(function (call) { return call.body.params.arguments; })`,
-      )) as { body?: string; invoke?: unknown }[];
+      )) as { body?: string; invoke?: unknown; mentions?: unknown }[];
       const groupArgs = groupCalls.find((args) => args.body === groupBody);
       check('群聊发送记录存在', Boolean(groupArgs), groupCalls);
-      check('群聊发送省略 invoke 字段', groupArgs !== undefined && !('invoke' in groupArgs), groupArgs);
-      checkEqual('群聊发送 arguments.invoke 为 undefined', groupArgs?.invoke, undefined);
+      checkEqual(
+        '选择器发送把 actor_id 放进 invoke',
+        JSON.stringify(groupArgs?.invoke),
+        JSON.stringify([data.agentA.actor_id]),
+      );
+      check('选择器发送不产生 mentions', groupArgs !== undefined && !('mentions' in groupArgs), groupArgs);
 
       const groupHistory = await rawTool<{ items: { message_id: string; preview: string }[] }>(
         data.humanToken,
@@ -8641,12 +8652,47 @@ async function main(): Promise<void> {
         { room_id: data.group.room.room_id, limit: 20 },
       );
       const groupMessage = groupHistory.items.find((item) => item.preview.includes(groupMarker));
-      check('群聊 @ 消息已写入历史', Boolean(groupMessage), groupHistory.items);
+      check('选择器消息已写入历史', Boolean(groupMessage), groupHistory.items);
       await waitUntil(
         async () => Boolean(await pendingDeliveryFor(data.agentAToken, groupMessage!.message_id)),
-        '群聊 @ 消息产生 Agent delivery',
+        '选择器消息产生 Agent delivery',
       );
-      check('群聊手输 @ 产生 Agent delivery', true);
+      check('选择器显式 invoke 产生 Agent delivery', true);
+
+      // 手输唯一精确名字：页面不传 invoke，由服务端兜底解析。
+      const typedMarker = '群聊手输唯一精确名字';
+      const typedBody = `@${data.agentA.name} ${typedMarker}`;
+      await page.locator('#body').fill(typedBody);
+      await page.locator('#send').click();
+      await page.waitForFunction(
+        `(window.__mcpCalls || []).some(function (call) {
+          return call.name === 'network_message_send' &&
+            call.body && call.body.params && call.body.params.arguments &&
+            call.body.params.arguments.body === ${JSON.stringify(typedBody)};
+        })`,
+        undefined,
+        { timeout: 12_000 },
+      );
+      await waitForText(page, '#messages', typedMarker, 12_000);
+      const typedCalls = (await page.evaluate(
+        `(window.__mcpCalls || []).filter(function (call) { return call.name === 'network_message_send'; }).map(function (call) { return call.body.params.arguments; })`,
+      )) as { body?: string; invoke?: unknown }[];
+      const typedArgs = typedCalls.find((args) => args.body === typedBody);
+      check('手输群聊发送记录存在', Boolean(typedArgs), typedCalls);
+      check('手输唯一精确名字仍省略 invoke', typedArgs !== undefined && !('invoke' in typedArgs), typedArgs);
+      const typedHistory = await rawTool<{ items: { message_id: string; preview: string; mentions: unknown[] }[] }>(
+        data.humanToken,
+        'network_history_list',
+        { room_id: data.group.room.room_id, limit: 20 },
+      );
+      const typedMessage = typedHistory.items.find((item) => item.preview.includes(typedMarker));
+      check('手输 @ 消息已写入历史', Boolean(typedMessage), typedHistory.items);
+      checkEqual('手输 @ 记录 text 提及', typedMessage?.mentions.length, 1);
+      await waitUntil(
+        async () => Boolean(await pendingDeliveryFor(data.agentAToken, typedMessage!.message_id)),
+        '手输 @ 消息产生 Agent delivery',
+      );
+      check('手输唯一精确 @ 产生 Agent delivery', true);
 
       await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
@@ -8681,11 +8727,309 @@ async function main(): Promise<void> {
       const groupDelivery = await pendingDeliveryFor(data.agentAToken, groupMessage!.message_id);
       const groupClaim = await claimDelivery(data.agentAToken, groupDelivery.delivery_id);
       await completeDelivery(data.agentAToken, groupClaim);
+      const typedDelivery = await pendingDeliveryFor(data.agentAToken, typedMessage!.message_id);
+      const typedClaim = await claimDelivery(data.agentAToken, typedDelivery.delivery_id);
+      await completeDelivery(data.agentAToken, typedClaim);
       const directDelivery = await pendingDeliveryFor(data.agentAToken, directMessage!.message_id);
       const directClaim = await claimDelivery(data.agentAToken, directDelivery.delivery_id);
       await completeDelivery(data.agentAToken, directClaim);
       await context.close();
       check('群聊/direct 发送验收清理投递', true);
+    }
+
+    // 2c-2b. M03 结构化提及：同名 Agent 选择、human 提醒、同名歧义与紧跟回复不派活。
+    {
+      const sameName = '同名验收代理';
+      const peerName = '提醒验收人类';
+      const sameAToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+      const sameBToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+      const peerToken = crypto.randomUUID();
+      const sameA = await rawTool<Actor>(sameAToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'agent',
+        name: sameName,
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      const sameB = await rawTool<Actor>(sameBToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'agent',
+        name: sameName,
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      const peer = await rawTool<Actor>(peerToken, 'network_register', {
+        request_id: requestId('web_reg'),
+        kind: 'human',
+        name: peerName,
+      });
+      await rawBefriend(data.humanToken, sameAToken, { actor_id: sameA.actor_id });
+      await rawBefriend(data.humanToken, sameBToken, { actor_id: sameB.actor_id });
+      await rawBefriend(peerToken, data.humanToken, { actor_id: data.human.actor_id });
+      const mentionRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: 'M03 结构化提及群',
+        members: [sameA.actor_id, sameB.actor_id, peer.actor_id],
+      });
+      const mentionRoomId = mentionRoom.room.room_id;
+      for (const token of [sameAToken, sameBToken, peerToken]) {
+        await acceptRoomInvites(token, mentionRoomId);
+      }
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/c/${mentionRoomId}`);
+      await waitRoom(page, mentionRoomId, 'M03 结构化提及群');
+      const sendInMentionRoom = async (
+        body: string,
+        marker: string,
+      ): Promise<{ body?: string; invoke?: unknown[]; mentions?: unknown[] }> => {
+        await page.locator('#body').fill(body);
+        const before = await mcpCallCount(page, 'network_message_send');
+        await page.locator('#send').click();
+        await waitUntil(
+          async () => (await mcpCallCount(page, 'network_message_send')) > before,
+          `发送 ${marker}`,
+        );
+        await waitForText(page, '#messages', marker, 12_000);
+        const calls = (await page.evaluate(
+          `(window.__mcpCalls || []).filter(function (call) {
+            return call.name === 'network_message_send';
+          }).map(function (call) { return call.body.params.arguments; })`,
+        )) as { body?: string; invoke?: unknown[]; mentions?: unknown[] }[];
+        const args = calls.find((item) => item.body === body);
+        if (!args) throw new Error(`没有找到发送记录: ${body}`);
+        return args;
+      };
+
+      await page.locator('#body').fill('@');
+      await page.locator('#mention-picker').waitFor({ state: 'visible' });
+      const sameItems = page
+        .locator('#mention-picker .mention-item')
+        .filter({ hasText: sameName });
+      checkEqual('同名 Agent 在选择器中显示为两个独立项', await sameItems.count(), 2);
+      checkEqual(
+        '同名 Agent 选择器项文本相同',
+        (await sameItems.nth(0).textContent())?.trim(),
+        (await sameItems.nth(1).textContent())?.trim(),
+      );
+      checkEqual(
+        '同名 Agent 初始都是未选中',
+        await page.locator('#mention-picker .mention-item[aria-selected="true"]').count(),
+        0,
+      );
+
+      await sameItems.nth(0).click();
+      const sameFirstBody = `@${sameName} 同名选择一`;
+      const sameFirst = await sendInMentionRoom(sameFirstBody, '同名选择一');
+      checkEqual('第一次同名选择只传一个 invoke', sameFirst.invoke?.length, 1);
+      const firstTarget = String(sameFirst.invoke?.[0] ?? '');
+      check(
+        '第一次同名选择命中两个同名 Agent 之一',
+        [sameA.actor_id, sameB.actor_id].includes(firstTarget),
+        firstTarget,
+      );
+      const secondTarget = firstTarget === sameA.actor_id ? sameB.actor_id : sameA.actor_id;
+
+      await page.locator('#body').fill('@');
+      await page.locator('#mention-picker').waitFor({ state: 'visible' });
+      await page
+        .locator('#mention-picker .mention-item')
+        .filter({ hasText: sameName })
+        .nth(1)
+        .click();
+      const sameSecondBody = `@${sameName} 同名选择二`;
+      const sameSecond = await sendInMentionRoom(sameSecondBody, '同名选择二');
+      checkEqual('第二次同名选择只传一个 invoke', sameSecond.invoke?.length, 1);
+      checkEqual('两个同名选择项指向不同 actor_id', String(sameSecond.invoke?.[0] ?? ''), secondTarget);
+
+      const sameFirstHistory = await rawTool<{ items: { message_id: string; preview: string }[] }>(
+        data.humanToken,
+        'network_history_list',
+        { room_id: mentionRoomId, limit: 20 },
+      );
+      const sameFirstMessage = sameFirstHistory.items.find((item) =>
+        item.preview.includes('同名选择一'),
+      );
+      const sameSecondMessage = sameFirstHistory.items.find((item) =>
+        item.preview.includes('同名选择二'),
+      );
+      check('同名选择消息都已写入历史', Boolean(sameFirstMessage && sameSecondMessage));
+      await waitUntil(
+        async () =>
+          Boolean(await pendingDeliveryOrNull(sameAToken, sameFirstMessage!.message_id)) ||
+          Boolean(await pendingDeliveryOrNull(sameBToken, sameFirstMessage!.message_id)),
+        '第一次同名选择产生 delivery',
+      );
+      check(
+        '第一次同名选择只投给被选中的 Agent',
+        Boolean(
+          await pendingDeliveryOrNull(
+            firstTarget === sameA.actor_id ? sameAToken : sameBToken,
+            sameFirstMessage!.message_id,
+          ),
+        ),
+      );
+      check(
+        '第一次同名选择不投给另一个同名 Agent',
+        !(await pendingDeliveryOrNull(
+          firstTarget === sameA.actor_id ? sameBToken : sameAToken,
+          sameFirstMessage!.message_id,
+        )),
+      );
+      check(
+        '第二次同名选择只投给另一个 Agent',
+        Boolean(
+          await pendingDeliveryOrNull(
+            secondTarget === sameA.actor_id ? sameAToken : sameBToken,
+            sameSecondMessage!.message_id,
+          ),
+        ),
+      );
+      const firstDeliverToken = firstTarget === sameA.actor_id ? sameAToken : sameBToken;
+      const secondDeliverToken = secondTarget === sameA.actor_id ? sameAToken : sameBToken;
+      for (const [token, message] of [
+        [firstDeliverToken, sameFirstMessage],
+        [secondDeliverToken, sameSecondMessage],
+      ] as const) {
+        const delivery = await pendingDeliveryFor(token, message!.message_id);
+        if (delivery.delivery_id) {
+          await completeDelivery(token, await claimDelivery(token, delivery.delivery_id));
+        }
+      }
+
+      const peerBase = await rawTool<{ pending_count: number; items: unknown[] }>(
+        peerToken,
+        'network_inbox_list',
+        { state: 'pending' },
+      );
+      await page.locator('#body').fill('@');
+      await page.locator('#mention-picker').waitFor({ state: 'visible' });
+      await page
+        .locator('#mention-picker .mention-item')
+        .filter({ hasText: peerName })
+        .first()
+        .click();
+      const peerBody = `@${peerName} 结构化人类提醒`;
+      const peerSend = await sendInMentionRoom(peerBody, '结构化人类提醒');
+      checkEqual('选择人类成员发送 invoke: []', JSON.stringify(peerSend.invoke), '[]');
+      checkEqual(
+        '选择人类成员把 actor_id 放进 mentions',
+        JSON.stringify(peerSend.mentions),
+        JSON.stringify([peer.actor_id]),
+      );
+      const peerHistory = await rawTool<{
+        items: { message_id: string; preview: string; mentions: { actor_id: string; source: string }[] }[];
+      }>(data.humanToken, 'network_history_list', { room_id: mentionRoomId, limit: 20 });
+      const peerMessage = peerHistory.items.find((item) => item.preview.includes('结构化人类提醒'));
+      check('人类提醒消息已写入历史', Boolean(peerMessage), peerHistory.items);
+      checkEqual(
+        '人类提醒以 explicit 来源持久化',
+        JSON.stringify(peerMessage?.mentions),
+        JSON.stringify([{ actor_id: peer.actor_id, kind: 'human', source: 'explicit' }]),
+      );
+      const peerAfter = await rawTool<{ pending_count: number; items: unknown[] }>(
+        peerToken,
+        'network_inbox_list',
+        { state: 'pending' },
+      );
+      checkEqual('人类提醒不创建 delivery', peerAfter.items.length, 0);
+      checkEqual('人类提醒不改变 pending_count', peerAfter.pending_count, peerBase.pending_count);
+      const peerInboxSync = await rawTool<{
+        items: { type: string; metadata: Record<string, unknown> }[];
+      }>(peerToken, 'network_sync', { scope: 'inbox', limit: 100 });
+      check(
+        '人类提醒写入 mention_reminder 事件',
+        peerInboxSync.items.some(
+          (event) =>
+            event.type === 'mention_reminder' &&
+            event.metadata.message_id === peerMessage?.message_id &&
+            event.metadata.source === 'explicit',
+        ),
+        peerInboxSync.items,
+      );
+
+      const sameAbaseA = await rawTool<{ pending_count: number }>(sameAToken, 'network_inbox_list', {
+        state: 'pending',
+      });
+      const sameAbaseB = await rawTool<{ pending_count: number }>(sameBToken, 'network_inbox_list', {
+        state: 'pending',
+      });
+      const ambiguousBody = `@${sameName} 纯文本歧义`;
+      await page.locator('#body').fill(ambiguousBody);
+      const beforeAmbiguous = await mcpCallCount(page, 'network_message_send');
+      await page.locator('#send').click();
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_message_send')) > beforeAmbiguous,
+        '同名纯文本发送请求',
+      );
+      await waitForText(page, '#status', '同名', 12_000);
+      const ambiguousCalls = (await page.evaluate(
+        `(window.__mcpCalls || []).filter(function (call) {
+          return call.name === 'network_message_send';
+        }).map(function (call) { return call.body.params.arguments; })`,
+      )) as { body?: string; invoke?: unknown[] }[];
+      const ambiguousArgs = ambiguousCalls.find((item) => item.body === ambiguousBody);
+      check('同名纯文本发送记录存在', Boolean(ambiguousArgs), ambiguousCalls);
+      check('同名纯文本不发送 invoke', ambiguousArgs !== undefined && !('invoke' in ambiguousArgs));
+      check(
+        '同名纯文本不在时间线制造消息',
+        (await page.locator('#messages .msg').filter({ hasText: '纯文本歧义' }).count()) === 0,
+      );
+      const sameAfterAmbiguousA = await rawTool<{ pending_count: number }>(
+        sameAToken,
+        'network_inbox_list',
+        { state: 'pending' },
+      );
+      const sameAfterAmbiguousB = await rawTool<{ pending_count: number }>(
+        sameBToken,
+        'network_inbox_list',
+        { state: 'pending' },
+      );
+      checkEqual(
+        '同名歧义不改变第一个 Agent pending_count',
+        sameAfterAmbiguousA.pending_count,
+        sameAbaseA.pending_count,
+      );
+      checkEqual(
+        '同名歧义不改变第二个 Agent pending_count',
+        sameAfterAmbiguousB.pending_count,
+        sameAbaseB.pending_count,
+      );
+      await page.locator('#body').fill('');
+
+      await rawTool(sameAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mentionRoomId,
+        body: '同名 Agent 先说一句',
+      });
+      const immediate = await sendInMentionRoom('紧跟 Agent 的普通回复', '紧跟 Agent 的普通回复');
+      check('紧跟 Agent 的页面发送省略 invoke', !('invoke' in immediate));
+      check('紧跟 Agent 的页面发送没有 mentions', !('mentions' in immediate));
+      const sameAfterReplyA = await rawTool<{ pending_count: number }>(
+        sameAToken,
+        'network_inbox_list',
+        { state: 'pending' },
+      );
+      const sameAfterReplyB = await rawTool<{ pending_count: number }>(
+        sameBToken,
+        'network_inbox_list',
+        { state: 'pending' },
+      );
+      checkEqual(
+        '紧跟 Agent 的普通回复不改变第一个 Agent pending_count',
+        sameAfterReplyA.pending_count,
+        sameAfterAmbiguousA.pending_count,
+      );
+      checkEqual(
+        '紧跟 Agent 的普通回复不改变第二个 Agent pending_count',
+        sameAfterReplyB.pending_count,
+        sameAfterAmbiguousB.pending_count,
+      );
+      await context.close();
     }
 
     // 2c-3. 群聊头部复制群信息：内容、安全清洗、失败反馈与移动端/暗色。
@@ -8796,23 +9140,27 @@ async function main(): Promise<void> {
         groupPrompt,
       );
       check(
-        '复制内容包含 @Agent 成员',
+        '复制内容包含 @Agent 成员与 actor_id',
         groupPrompt.includes(`@${data.agentA.name}`) &&
-          groupPrompt.includes(`- @${safeMemberName}（Agent）`),
+          groupPrompt.includes(
+            `- @${safeMemberName}（Agent，actor_id: ${data.agentB.actor_id}）`,
+          ),
         groupPrompt,
       );
       check(
-        '复制内容包含人类成员并标明非投递目标',
-        groupPrompt.includes(data.human.name) && groupPrompt.includes('不是投递目标'),
+        '复制内容包含人类成员并标明只提醒不投递',
+        groupPrompt.includes(data.human.name) &&
+          groupPrompt.includes(
+            `- @${data.human.name}（人类，actor_id: ${data.human.actor_id}；只发个人提醒，不会生成 delivery）`,
+          ),
         groupPrompt,
       );
       check(
-        '复制内容要求群聊回复人类时 @ 该人类提醒',
-        groupPrompt.includes('@ 该人类') &&
-          groupPrompt.includes('仅用于提醒') &&
-          groupPrompt.includes('避免漏看') &&
-          groupPrompt.includes('不能不带 @ 直接回复') &&
-          groupPrompt.includes(`@${data.human.name}`),
+        '复制内容要求群聊回复人类时用 mentions 提醒',
+        groupPrompt.includes('只提醒人类') &&
+          groupPrompt.includes('把人类 actor_id 放进 mentions') &&
+          groupPrompt.includes('只发个人提醒') &&
+          groupPrompt.includes('不会生成 delivery'),
         groupPrompt,
       );
       check(
@@ -8821,11 +9169,16 @@ async function main(): Promise<void> {
         groupPrompt,
       );
       check(
-        '复制内容包含发送与 @ 解析指令',
+        '复制内容包含 actor_id 派活与 human mentions 指令',
         groupPrompt.includes('network_message_send') &&
-          groupPrompt.includes('@Agent名') &&
-          groupPrompt.includes('不要传 invoke 或 actor_id') &&
-          groupPrompt.includes('服务端会按正文里的 @名字 解析当前成员'),
+          groupPrompt.includes('actor_id') &&
+          groupPrompt.includes('invoke') &&
+          groupPrompt.includes('mentions') &&
+          groupPrompt.includes('只发个人提醒') &&
+          groupPrompt.includes('invoke: []') &&
+          groupPrompt.includes('唯一精确') &&
+          groupPrompt.includes('不会自动唤醒') &&
+          !groupPrompt.includes('不要传 invoke 或 actor_id'),
         groupPrompt,
       );
       check(
@@ -14070,7 +14423,7 @@ async function main(): Promise<void> {
       await context.close();
     }
 
-    // 12e. 自动 @ 精确匹配：只有当前群唯一同名维护员才追加，direct 与跨房都不串。
+    // 12e. 附件不自动 @：即使群内存在唯一精确维护员，上传也不会追加目标或创建投递。
     {
       const prefixAgentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
       const prefixAgent = await rawTool<Actor>(prefixAgentToken, 'network_register', {
@@ -14103,19 +14456,19 @@ async function main(): Promise<void> {
       const prefixGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
         kind: 'group',
-        title: '自动 @ 前缀群',
+        title: '附件不自动 @ 前缀群',
         members: [prefixAgent.actor_id],
       });
       const exactGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
         kind: 'group',
-        title: '自动 @ 精确群',
+        title: '附件不自动 @ 精确群',
         members: [maintainer.actor_id, prefixAgent.actor_id],
       });
       const duplicateGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
         kind: 'group',
-        title: '自动 @ 重名群',
+        title: '附件不自动 @ 重名群',
         members: [maintainer.actor_id, duplicateMaintainer.actor_id],
       });
       const prefixRoomId = prefixGroup.room.room_id;
@@ -14220,7 +14573,7 @@ async function main(): Promise<void> {
 
       // 只有前缀 WeBots、没有精确维护员：不追加，也不把 WeBots 当目标。
       await page.goto(`${server.base}/c/${prefixRoomId}`);
-      await waitRoom(page, prefixRoomId, '自动 @ 前缀群');
+      await waitRoom(page, prefixRoomId, '附件不自动 @ 前缀群');
       await prepareChip('前缀群 附件.txt');
       const prefixUrl = await fileUrlFor(prefixRoomId, '前缀群 附件.txt');
       check('前缀群附件获得公开 URL', Boolean(prefixUrl));
@@ -14245,9 +14598,9 @@ async function main(): Promise<void> {
         prefixPending,
       );
 
-      // 唯一精确维护员：追加一次并投递给它，不误投同群的 WeBots。
+      // 即使群内存在唯一精确维护员，附件也不追加 @、不创建投递。
       await page.goto(`${server.base}/c/${exactRoomId}`);
-      await waitRoom(page, exactRoomId, '自动 @ 精确群');
+      await waitRoom(page, exactRoomId, '附件不自动 @ 精确群');
       await prepareChip('精确群 附件.txt');
       const exactUrl = await fileUrlFor(exactRoomId, '精确群 附件.txt');
       check('精确群附件获得公开 URL', Boolean(exactUrl));
@@ -14255,29 +14608,32 @@ async function main(): Promise<void> {
       await sendInRoom(exactRoomId);
       const exactArgs = await sendArgsFor(exactRoomId);
       check(
-        '唯一精确维护员时只追加一次自动 @',
+        '唯一精确维护员时附件仍不追加 @',
         Boolean(exactArgs?.body) &&
           exactArgs!.body!.includes(exactUrl) &&
-          exactArgs!.body!.trim().endsWith('@WeBots 维护员') &&
-          (exactArgs!.body!.match(/@WeBots 维护员/g) ?? []).length === 1,
+          exactArgs!.body!.trim().split('\n').length === 2 &&
+          !exactArgs!.body!.includes('@WeBots 维护员'),
         exactArgs?.body,
       );
       checkEqual('精确群文件消息不传 invoke', exactArgs?.invoke, undefined);
       const exactMessage = await historyItemFor(exactRoomId, '精确群消息');
       check('精确群消息已写入历史', Boolean(exactMessage), exactMessage);
-      const exactDelivery = await pendingDeliveryFor(maintainerToken, exactMessage!.message_id);
-      check('自动 @ 投递给唯一维护员', Boolean(exactDelivery.delivery_id), exactDelivery);
+      const exactPending = await pendingIdsFor(maintainerToken);
+      check(
+        '唯一维护员不会因附件获得投递',
+        !exactPending.includes(exactMessage?.message_id ?? ''),
+        exactPending,
+      );
       const prefixAfterExact = await pendingIdsFor(prefixAgentToken);
       check(
-        '同群 WeBots 不会被精确 @ 误投',
-        !prefixAfterExact.includes(exactMessage!.message_id),
+        '同群 WeBots 不会因附件获得投递',
+        !prefixAfterExact.includes(exactMessage?.message_id ?? ''),
         prefixAfterExact,
       );
-      await completeDelivery(maintainerToken, await claimDelivery(maintainerToken, exactDelivery.delivery_id));
 
       // 两个同名维护员：无法唯一投递，不追加自动 @。
       await page.goto(`${server.base}/c/${duplicateRoomId}`);
-      await waitRoom(page, duplicateRoomId, '自动 @ 重名群');
+      await waitRoom(page, duplicateRoomId, '附件不自动 @ 重名群');
       await prepareChip('重名群 附件.txt');
       await page.locator('#body').fill('重名群消息');
       await sendInRoom(duplicateRoomId);
@@ -14323,15 +14679,15 @@ async function main(): Promise<void> {
       check('单聊附件仍建立 Agent 投递', Boolean(directDelivery.delivery_id), directDelivery);
       await completeDelivery(data.agentAToken, await claimDelivery(data.agentAToken, directDelivery.delivery_id));
 
-      // 切房隔离：精确群的附件与自动 @ 不进入前缀群，切回后仍只属于精确群。
+      // 切房隔离：精确群的附件不进入前缀群，切回后仍只属于精确群。
       await page.goto(`${server.base}/c/${exactRoomId}`);
-      await waitRoom(page, exactRoomId, '自动 @ 精确群');
+      await waitRoom(page, exactRoomId, '附件不自动 @ 精确群');
       await prepareChip('跨房精确 A.txt');
       const crossExactUrl = await fileUrlFor(exactRoomId, '跨房精确 A.txt');
       check('跨房精确群附件获得公开 URL', Boolean(crossExactUrl));
       await page.locator('#body').fill('跨房 A 草稿');
       await page.locator(roomLink(prefixRoomId)).click();
-      await waitRoom(page, prefixRoomId, '自动 @ 前缀群');
+      await waitRoom(page, prefixRoomId, '附件不自动 @ 前缀群');
       const prefixView = (await page.evaluate(`(() => ({
         chips: document.querySelectorAll('#composer-files .composer-file').length,
         text: document.getElementById('body').value
@@ -14341,9 +14697,9 @@ async function main(): Promise<void> {
       await page.locator('#body').fill('跨房 B 纯文本');
       await sendInRoom(prefixRoomId);
       const crossBPrefixArgs = await sendArgsFor(prefixRoomId);
-      checkEqual('前缀群发送不带上精确群的附件或自动 @', crossBPrefixArgs?.body, '跨房 B 纯文本');
+      checkEqual('前缀群发送不带上精确群的附件', crossBPrefixArgs?.body, '跨房 B 纯文本');
       await page.locator(roomLink(exactRoomId)).click();
-      await waitRoom(page, exactRoomId, '自动 @ 精确群');
+      await waitRoom(page, exactRoomId, '附件不自动 @ 精确群');
       await waitUntil(
         async () =>
           (await page.locator('#composer-files .composer-file-name').allTextContents())
@@ -14355,11 +14711,11 @@ async function main(): Promise<void> {
       await sendInRoom(exactRoomId);
       const crossExactArgs = await sendArgsFor(exactRoomId);
       check(
-        '精确群发送只带自己的 URL 与自动 @',
+        '精确群发送只带自己的 URL，不追加 @',
         Boolean(crossExactArgs?.body) &&
           crossExactArgs!.body!.includes(crossExactUrl) &&
           !crossExactArgs!.body!.includes('跨房 B 纯文本') &&
-          crossExactArgs!.body!.trim().endsWith('@WeBots 维护员'),
+          !crossExactArgs!.body!.includes('@WeBots 维护员'),
         crossExactArgs?.body,
       );
 
@@ -14379,14 +14735,14 @@ async function main(): Promise<void> {
       );
       const heldArgs = await sendArgsFor(exactRoomId);
       check(
-        '发送期间快照包含当前群附件与自动 @',
+        '发送期间快照包含当前群附件且不追加 @',
         Boolean(heldArgs?.body) &&
           heldArgs!.body!.includes(sendingUrl) &&
-          heldArgs!.body!.trim().endsWith('@WeBots 维护员'),
+          !heldArgs!.body!.includes('@WeBots 维护员'),
         heldArgs?.body,
       );
       await page.locator(roomLink(prefixRoomId)).click();
-      await waitRoom(page, prefixRoomId, '自动 @ 前缀群');
+      await waitRoom(page, prefixRoomId, '附件不自动 @ 前缀群');
       await prepareChip('发送中 B.txt');
       const sendingBUrl = await fileUrlFor(prefixRoomId, '发送中 B.txt');
       check('发送期间另一群附件获得公开 URL', Boolean(sendingBUrl));
@@ -14414,7 +14770,7 @@ async function main(): Promise<void> {
         '发送中 B.txt',
       );
       await page.locator(roomLink(exactRoomId)).click();
-      await waitRoom(page, exactRoomId, '自动 @ 精确群');
+      await waitRoom(page, exactRoomId, '附件不自动 @ 精确群');
       await waitUntil(
         async () => (await page.locator('#composer-files .composer-file').count()) === 0,
         '精确群发送后清空自己的 chip',
