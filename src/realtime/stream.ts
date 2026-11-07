@@ -49,6 +49,8 @@ export interface StreamItem {
   task_id?: string;
   assignment_id?: string;
   status?: string;
+  /** 任务业务修订号；客户端按它丢弃乱序旧事件并补读权威状态。 */
+  revision?: number;
   /** Agent 上下线通知：仅用于当前房间刷新，不产生未读。 */
   presence_event_id?: string;
   transition?: string;
@@ -530,6 +532,7 @@ function roomStreamItems(
       const taskId = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
       const assignmentId = stringField(metadata, 'assignment_id');
       const status = stringField(metadata, 'status');
+      const revision = numberField(metadata, 'revision');
       for (const member of activeRecipients(members, eventSeq)) {
         if (member.kind !== 'human') continue;
         const item = withLocation(
@@ -544,6 +547,7 @@ function roomStreamItems(
         }
         if (assignmentId) item.assignment_id = assignmentId;
         if (status) item.status = status;
+        if (revision !== undefined) item.revision = revision;
         if (changedBy) item.changed_by = changedBy;
         result.push({ actorId: member.actor_id, item });
       }

@@ -142,6 +142,7 @@ interface StreamItemView {
   delivery_id?: string;
   change?: string;
   status?: string;
+  revision?: number;
   changed_by?: string;
 }
 
@@ -677,6 +678,7 @@ export async function runTaskStatusAcceptance(): Promise<void> {
       3_000,
     );
     checkEqual('D03-T03 进度提示是 informational', t03Notice.attention, 'informational');
+    checkEqual('D03-T03 进度提示携带业务 revision', t03Notice.revision, t03First.revision);
     checkEqual('D03-T03 进度提示记录操作者', t03Notice.changed_by, b1.actor_id);
     checkEqual('D03-T03 进度提示不带 delivery', t03Notice.delivery_id, undefined);
 
