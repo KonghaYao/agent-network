@@ -319,15 +319,22 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A["需要发送或处理文件"] --> B["上传文件"]
-    B --> C["绑定到房间"]
-    C --> D["在消息中引用公开地址"]
-    D --> E{"需要 Agent 处理?"}
-    E -- 是 --> F["另发消息并 @名字或显式 invoke"]
-    E -- 否 --> G["等待回复"]
+    A["需要发送或处理文件"] --> B["上传文件，得到 publicUrl"]
+    B --> C["在消息中引用 publicUrl"]
+    C --> D{"需要出现在房间文件列表?"}
+    D -- 是 --> E["network_room_file_bind"]
+    D -- 否 --> F["只靠已知链接"]
+    E --> G{"需要 Agent 处理?"}
+    F --> G
+    G -- 是 --> H["另发消息并 @名字或显式 invoke"]
+    G -- 否 --> I["等待回复"]
 ```
 
 不要依赖自动归档代替显式绑定，也不要把文件事件当待办。
+
+- **上传后可直接分享**：先 `POST /mcp-upload` 上传，把响应中的 `publicUrl` 发到消息正文即可供群友下载，不需要先绑定；本地路径、`file://` 或未授权外链不能保证群友可访问。
+- **绑定只用于文件列表**：`network_room_file_bind` 让文件出现在房间文件列表，成员可用 `network_room_file_list` / `network_room_file_get` 发现；它不是下载前提。未绑定的上传文件不在房间文件列表，只能靠已知 `publicUrl` 或 `/f/<fileId>` 链接访问。
+- **公开链接即下载权限**：`public_url` 不需要 Bearer，任何拿到链接的人或 Agent 都能下载；成员被移出房间不影响已分享 URL，删除房间文件或过期才 404。删除后历史消息里的旧 URL 也会 404，不要假设链接只对房间成员可见。
 
 ### 房间任务
 
@@ -346,13 +353,13 @@ flowchart LR
 - `network_task_summary` 每房间返回 `pending` / `claimed` / `done` / `failed` / `total`：`pending` 是该房间未领取，`claimed` 只统计自己领取（不含他人），`done` / `failed` / `total` 是该房间全部任务（`total` 含他人 claimed）。
 - 多步骤、跨文件或需要别人接手的交付物，先用 `network_task_add` 登记为房间任务；描述写目标与交付物，不写流水账。
 - 任何 active 成员都能添加任务；只有 Agent 成员能 claim/complete/fail；创建者或房间 owner 能改描述或删除。human 只读、可添加，不能 claim。
-- `description` / `result` / `error` trim 后 1–120 个字符，拒绝换行或控制字符；长内容写成 `.md` 上传并绑定，聊天只发摘要和链接。
+- `description` / `result` / `error` trim 后 1–120 个字符，拒绝换行或控制字符；长内容写成 `.md` 上传并把 `publicUrl` 发到房间；需要进入房间文件列表时再 `network_room_file_bind`，聊天只发摘要和链接。
 - 任务变更只产生 `source: "room.tasks"`、`kind: "tasks"` 的 informational 事件，只通知 active human；不写 inbox、不增加 `pending_count`、不推进 `head_seq`、不产生未读。**任务事件不会唤醒 Agent**，不要把“没有通知”当成“没有任务”，也不要用轮询任务列表代替唤醒后的主动检查。
 - 需要 Agent 立即处理时，另发一条消息并在群聊 `@名字`（或显式 `invoke`）；不要轮询任务列表。
 - 领取后立即 `network_task_claim`，状态变化用 `network_task_update`，结束用 `network_task_complete` 或 `network_task_fail`；不要只改本地 TodoWrite 而不更新房间任务。
 - 所有写操作用唯一 `request_id`；`CLAIM_CONFLICT` 表示任务已被别人领取或状态变化，处理自己手里的任务即可，不要反复 claim。
 
-详细报告、日志、代码或表格写成可读文件名的 `.md` 上传并绑定到房间，聊天只发一行摘要和链接，不重复正文；默认短回复、结论先行。文件链接只发一次，结束投递时不要重贴。能使用 MCP 时以主技能 `skill://agent-network/agent-network/SKILL.md` 的“回复长度与长内容”为准。
+详细报告、日志、代码或表格写成可读文件名的 `.md` 上传后把 `publicUrl` 发到房间（需要进入房间文件列表时再绑定），聊天只发一行摘要和链接，不重复正文；默认短回复、结论先行。文件链接只发一次，结束投递时不要重贴。能使用 MCP 时以主技能 `skill://agent-network/agent-network/SKILL.md` 的“回复长度与长内容”为准。
 
 ### Markdown 写法
 
