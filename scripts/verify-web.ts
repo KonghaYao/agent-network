@@ -11464,15 +11464,12 @@ async function main(): Promise<void> {
           Boolean(droppedTextUrl && sentWithFiles?.body?.includes(server.base + new URL(droppedTextUrl).pathname)),
         sentWithFiles?.body,
       );
-      checkEqual(
-        '文件消息末尾固定 @WeBots 维护员',
-        sentWithFiles?.body?.trim().split('\n').pop(),
-        '@WeBots 维护员',
-      );
-      checkEqual(
-        '文件消息只包含一个 @WeBots 维护员',
-        (sentWithFiles?.body?.match(/@WeBots 维护员/g) ?? []).length,
-        1,
+      check(
+        '无维护员群文件消息不追加自动 @',
+        Boolean(sentWithFiles?.body) &&
+          /\/f\/f_[A-Za-z0-9_-]{22}/u.test(sentWithFiles!.body!) &&
+          !sentWithFiles!.body!.includes('@WeBots 维护员'),
+        sentWithFiles?.body,
       );
       checkEqual('群聊文件消息不传 invoke', sentWithFiles?.invoke, undefined);
 
@@ -11503,11 +11500,11 @@ async function main(): Promise<void> {
         })()`,
       )) as { body?: string } | null;
       check(
-        '无文本时正文只有文件 URL 与 @',
+        '无文本时正文只有文件 URL，不追加自动 @',
         Boolean(fileOnlyArgs?.body) &&
           fileOnlyArgs!.body!.includes('/f/') &&
-          fileOnlyArgs!.body!.trim().split('\n').length === 2 &&
-          fileOnlyArgs!.body!.trim().endsWith('@WeBots 维护员'),
+          fileOnlyArgs!.body!.trim().split('\n').length === 1 &&
+          !fileOnlyArgs!.body!.includes('@WeBots 维护员'),
         fileOnlyArgs?.body,
       );
       checkEqual(
@@ -11516,7 +11513,7 @@ async function main(): Promise<void> {
         0,
       );
 
-      // 用户文本已包含固定 @ 时不重复。
+      // 用户自己写的 @ 保留一次，不因附件追加第二个自动 @。
       await page.locator('#body').fill('请处理 @WeBots 维护员，谢谢');
       await dispatchDrag(page, '#chat-body', 'drop', [
         { name: '去重.txt', mimeType: 'text/plain', text: 'dedupe' },
@@ -11538,10 +11535,11 @@ async function main(): Promise<void> {
           return calls.length ? calls[calls.length - 1].body.params.arguments : null;
         })()`,
       )) as { body?: string } | null;
-      checkEqual(
-        '正文已有 @WeBots 维护员 时不重复',
-        (dedupeArgs?.body?.match(/@WeBots 维护员/g) ?? []).length,
-        1,
+      check(
+        '用户自己写的 @WeBots 维护员 只保留一次',
+        (dedupeArgs?.body?.match(/@WeBots 维护员/g) ?? []).length === 1 &&
+          !dedupeArgs!.body!.trim().endsWith('@WeBots 维护员'),
+        dedupeArgs?.body,
       );
       const dedupeMessage = page.locator('#messages .msg').filter({
         hasText: '请处理 @WeBots 维护员，谢谢',
@@ -12127,10 +12125,10 @@ async function main(): Promise<void> {
         })()`,
       )) as { body?: string } | null;
       check(
-        '附件发送正文包含公开 URL 与固定 @',
+        '无维护员群附件正文包含公开 URL 且不追加自动 @',
         Boolean(attachSentArgs?.body) &&
           attachSentArgs!.body!.includes(server.base + new URL(attachTextUrl!).pathname) &&
-          attachSentArgs!.body!.trim().endsWith('@WeBots 维护员'),
+          !attachSentArgs!.body!.includes('@WeBots 维护员'),
         attachSentArgs?.body,
       );
 
@@ -12945,10 +12943,10 @@ async function main(): Promise<void> {
         })()`,
       )) as { body?: string } | null;
       check(
-        '画板消息包含 /f/ URL 与固定 @',
+        '画板消息包含 /f/ URL 且不追加自动 @',
         Boolean(drawSentArgs?.body) &&
           /\/f\/f_[A-Za-z0-9_-]{22}/u.test(drawSentArgs!.body!) &&
-          drawSentArgs!.body!.trim().endsWith('@WeBots 维护员'),
+          !drawSentArgs!.body!.includes('@WeBots 维护员'),
         drawSentArgs?.body,
       );
       await waitUntil(
@@ -13297,10 +13295,10 @@ async function main(): Promise<void> {
       );
       const aSendArgs = await sendArgsFor(crossAId);
       check(
-        '群 A 正文只包含 A 的 URL 与自动 @',
+        '群 A 正文只包含 A 的 URL，不带跨房附件或自动 @',
         (aSendArgs?.body ?? '').includes(crossAUrl) &&
           !(aSendArgs?.body ?? '').includes('cross room B') &&
-          aSendArgs!.body!.trim().endsWith('@WeBots 维护员'),
+          !(aSendArgs?.body ?? '').includes('@WeBots 维护员'),
         aSendArgs?.body,
       );
       await waitUntil(
@@ -13403,6 +13401,359 @@ async function main(): Promise<void> {
           .map((value) => value.trim())
           .includes('慢 A 文件.txt'),
       );
+      await context.close();
+    }
+
+    // 12e. 自动 @ 精确匹配：只有当前群唯一同名维护员才追加，direct 与跨房都不串。
+    {
+      const prefixAgentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+      const prefixAgent = await rawTool<Actor>(prefixAgentToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'agent',
+        name: 'WeBots',
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      const maintainerToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+      const maintainer = await rawTool<Actor>(maintainerToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'agent',
+        name: 'WeBots 维护员',
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      const duplicateMaintainerToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+      const duplicateMaintainer = await rawTool<Actor>(duplicateMaintainerToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'agent',
+        name: 'WeBots 维护员',
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      for (const [token, agent] of [
+        [prefixAgentToken, prefixAgent],
+        [maintainerToken, maintainer],
+        [duplicateMaintainerToken, duplicateMaintainer],
+      ] as const) {
+        await rawBefriend(data.humanToken, token, { actor_id: agent.actor_id });
+      }
+      const prefixGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '自动 @ 前缀群',
+        members: [prefixAgent.actor_id],
+      });
+      const exactGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '自动 @ 精确群',
+        members: [maintainer.actor_id, prefixAgent.actor_id],
+      });
+      const duplicateGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '自动 @ 重名群',
+        members: [maintainer.actor_id, duplicateMaintainer.actor_id],
+      });
+      const prefixRoomId = prefixGroup.room.room_id;
+      const exactRoomId = exactGroup.room.room_id;
+      const duplicateRoomId = duplicateGroup.room.room_id;
+      await acceptRoomInvites(prefixAgentToken, prefixRoomId);
+      for (const token of [maintainerToken, prefixAgentToken]) await acceptRoomInvites(token, exactRoomId);
+      for (const token of [maintainerToken, duplicateMaintainerToken]) await acceptRoomInvites(token, duplicateRoomId);
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const upload = await observeDropUploads(page);
+      const sendGate: { hold: boolean; release: (() => void) | null } = {
+        hold: false,
+        release: null,
+      };
+      await page.route('**/mcp', async (route) => {
+        if (sendGate.hold && route.request().headers()['mcp-name'] === 'network_message_send') {
+          sendGate.hold = false;
+          await new Promise<void>((resolve) => {
+            sendGate.release = resolve;
+          });
+        }
+        await route.continue();
+      });
+      const sendArgsFor = async (
+        roomId: string,
+      ): Promise<{ body?: string; invoke?: unknown[]; room_id?: string } | null> =>
+        (await page.evaluate(
+          `(function () {
+            const calls = (window.__mcpCalls || []).filter(function (call) {
+              return call.name === 'network_message_send' &&
+                call.body.params.arguments.room_id === ${JSON.stringify(roomId)};
+            });
+            return calls.length ? calls[calls.length - 1].body.params.arguments : null;
+          })()`,
+        )) as { body?: string; invoke?: unknown[]; room_id?: string } | null;
+      const historyItemFor = async (roomId: string, marker: string) => {
+        const history = await rawTool<{ items: { message_id: string; preview: string }[] }>(
+          data.humanToken,
+          'network_history_list',
+          { room_id: roomId, limit: 50 },
+        );
+        return history.items.find((item) => item.preview.includes(marker)) ?? null;
+      };
+      const pendingIdsFor = async (token: string): Promise<string[]> => {
+        const inbox = await rawTool<{ items: PendingDeliveryRef[] }>(token, 'network_inbox_list', {
+          state: 'pending',
+          limit: 50,
+        });
+        return inbox.items.map((item) => item.message_id);
+      };
+      const fileUrlFor = async (roomId: string, name: string): Promise<string> => {
+        const files = await rawTool<{ items: { name: string; public_url: string }[] }>(
+          data.humanToken,
+          'network_room_file_list',
+          { room_id: roomId, limit: 100 },
+        );
+        return files.items.find((item) => item.name === name)?.public_url ?? '';
+      };
+      const prepareChip = async (name: string): Promise<void> => {
+        await page.setInputFiles('#composer-file-input', [
+          { name, mimeType: 'text/plain', buffer: Buffer.from(`mention ${name}`) },
+        ]);
+        await waitUntil(
+          async () =>
+            (await page.locator('#composer-files .composer-file-name').allTextContents())
+              .map((value) => value.trim())
+              .includes(name) &&
+            (await page.locator('#composer-files .composer-file-remove:disabled').count()) === 0,
+          `${name} chip 就绪`,
+        );
+      };
+      const sendInRoom = async (roomId: string): Promise<void> => {
+        const before = await mcpCallCount(page, 'network_message_send');
+        const response = page.waitForResponse((candidate) => {
+          const request = candidate.request();
+          if (request.headers()['mcp-name'] !== 'network_message_send') return false;
+          try {
+            const body = request.postDataJSON() as {
+              params?: { arguments?: { room_id?: string } };
+            };
+            return body?.params?.arguments?.room_id === roomId;
+          } catch {
+            return false;
+          }
+        });
+        await page.locator('#send').click();
+        await waitUntil(
+          async () => (await mcpCallCount(page, 'network_message_send')) > before,
+          `房间 ${roomId} 发送完成`,
+        );
+        await response;
+        await waitUntil(
+          async () => (await page.locator('#body').inputValue()) === '',
+          `房间 ${roomId} 发送后输入框清空`,
+        );
+      };
+
+      // 只有前缀 WeBots、没有精确维护员：不追加，也不把 WeBots 当目标。
+      await page.goto(`${server.base}/c/${prefixRoomId}`);
+      await waitRoom(page, prefixRoomId, '自动 @ 前缀群');
+      await prepareChip('前缀群 附件.txt');
+      const prefixUrl = await fileUrlFor(prefixRoomId, '前缀群 附件.txt');
+      check('前缀群附件获得公开 URL', Boolean(prefixUrl));
+      await page.locator('#body').fill('前缀群消息');
+      await sendInRoom(prefixRoomId);
+      const prefixArgs = await sendArgsFor(prefixRoomId);
+      check(
+        '群内只有 WeBots 时不追加 @WeBots 维护员',
+        Boolean(prefixArgs?.body) &&
+          prefixArgs!.body!.includes(prefixUrl) &&
+          prefixArgs!.body!.trim().split('\n').length === 2 &&
+          !prefixArgs!.body!.includes('@WeBots 维护员'),
+        prefixArgs?.body,
+      );
+      checkEqual('前缀群文件消息不传 invoke', prefixArgs?.invoke, undefined);
+      const prefixMessage = await historyItemFor(prefixRoomId, '前缀群消息');
+      check('前缀群消息已写入历史', Boolean(prefixMessage), prefixMessage);
+      const prefixPending = await pendingIdsFor(prefixAgentToken);
+      check(
+        '前缀群不会把 WeBots 当作 @ 目标',
+        !prefixPending.includes(prefixMessage?.message_id ?? ''),
+        prefixPending,
+      );
+
+      // 唯一精确维护员：追加一次并投递给它，不误投同群的 WeBots。
+      await page.goto(`${server.base}/c/${exactRoomId}`);
+      await waitRoom(page, exactRoomId, '自动 @ 精确群');
+      await prepareChip('精确群 附件.txt');
+      const exactUrl = await fileUrlFor(exactRoomId, '精确群 附件.txt');
+      check('精确群附件获得公开 URL', Boolean(exactUrl));
+      await page.locator('#body').fill('精确群消息');
+      await sendInRoom(exactRoomId);
+      const exactArgs = await sendArgsFor(exactRoomId);
+      check(
+        '唯一精确维护员时只追加一次自动 @',
+        Boolean(exactArgs?.body) &&
+          exactArgs!.body!.includes(exactUrl) &&
+          exactArgs!.body!.trim().endsWith('@WeBots 维护员') &&
+          (exactArgs!.body!.match(/@WeBots 维护员/g) ?? []).length === 1,
+        exactArgs?.body,
+      );
+      checkEqual('精确群文件消息不传 invoke', exactArgs?.invoke, undefined);
+      const exactMessage = await historyItemFor(exactRoomId, '精确群消息');
+      check('精确群消息已写入历史', Boolean(exactMessage), exactMessage);
+      const exactDelivery = await pendingDeliveryFor(maintainerToken, exactMessage!.message_id);
+      check('自动 @ 投递给唯一维护员', Boolean(exactDelivery.delivery_id), exactDelivery);
+      const prefixAfterExact = await pendingIdsFor(prefixAgentToken);
+      check(
+        '同群 WeBots 不会被精确 @ 误投',
+        !prefixAfterExact.includes(exactMessage!.message_id),
+        prefixAfterExact,
+      );
+      await completeDelivery(maintainerToken, await claimDelivery(maintainerToken, exactDelivery.delivery_id));
+
+      // 两个同名维护员：无法唯一投递，不追加自动 @。
+      await page.goto(`${server.base}/c/${duplicateRoomId}`);
+      await waitRoom(page, duplicateRoomId, '自动 @ 重名群');
+      await prepareChip('重名群 附件.txt');
+      await page.locator('#body').fill('重名群消息');
+      await sendInRoom(duplicateRoomId);
+      const duplicateArgs = await sendArgsFor(duplicateRoomId);
+      check(
+        '多个精确同名维护员时不追加自动 @',
+        Boolean(duplicateArgs?.body) && !duplicateArgs!.body!.includes('@WeBots 维护员'),
+        duplicateArgs?.body,
+      );
+      const duplicateMessage = await historyItemFor(duplicateRoomId, '重名群消息');
+      check('重名群消息已写入历史', Boolean(duplicateMessage), duplicateMessage);
+      const duplicatePending = await pendingIdsFor(maintainerToken);
+      check(
+        '重名群不产生自动 @ 投递',
+        !duplicatePending.includes(duplicateMessage?.message_id ?? ''),
+        duplicatePending,
+      );
+
+      // direct 附件仍用 invoke 唤醒对方，不追加文本 @。
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      await prepareChip('单聊 附件.txt');
+      const directUrl = await fileUrlFor(data.direct.room.room_id, '单聊 附件.txt');
+      check('单聊附件获得公开 URL', Boolean(directUrl));
+      await page.locator('#body').fill('单聊附件消息');
+      await sendInRoom(data.direct.room.room_id);
+      const directArgs = await sendArgsFor(data.direct.room.room_id);
+      check(
+        '单聊附件不追加自动 @',
+        Boolean(directArgs?.body) &&
+          directArgs!.body!.includes(directUrl) &&
+          !directArgs!.body!.includes('@WeBots 维护员'),
+        directArgs?.body,
+      );
+      checkEqual(
+        '单聊附件仍显式 invoke 对方 Agent',
+        JSON.stringify(directArgs?.invoke),
+        JSON.stringify([data.agentA.actor_id]),
+      );
+      const directMessage = await historyItemFor(data.direct.room.room_id, '单聊附件消息');
+      check('单聊附件消息已写入历史', Boolean(directMessage), directMessage);
+      const directDelivery = await pendingDeliveryFor(data.agentAToken, directMessage!.message_id);
+      check('单聊附件仍建立 Agent 投递', Boolean(directDelivery.delivery_id), directDelivery);
+      await completeDelivery(data.agentAToken, await claimDelivery(data.agentAToken, directDelivery.delivery_id));
+
+      // 切房隔离：精确群的附件与自动 @ 不进入前缀群，切回后仍只属于精确群。
+      await page.goto(`${server.base}/c/${exactRoomId}`);
+      await waitRoom(page, exactRoomId, '自动 @ 精确群');
+      await prepareChip('跨房精确 A.txt');
+      const crossExactUrl = await fileUrlFor(exactRoomId, '跨房精确 A.txt');
+      check('跨房精确群附件获得公开 URL', Boolean(crossExactUrl));
+      await page.locator('#body').fill('跨房 A 草稿');
+      await page.locator(roomLink(prefixRoomId)).click();
+      await waitRoom(page, prefixRoomId, '自动 @ 前缀群');
+      const prefixView = (await page.evaluate(`(() => ({
+        chips: document.querySelectorAll('#composer-files .composer-file').length,
+        text: document.getElementById('body').value
+      }))()`)) as { chips: number; text: string };
+      checkEqual('切到前缀群不显示精确群 chips', prefixView.chips, 0);
+      checkEqual('切到前缀群不保留精确群草稿', prefixView.text, '');
+      await page.locator('#body').fill('跨房 B 纯文本');
+      await sendInRoom(prefixRoomId);
+      const crossBPrefixArgs = await sendArgsFor(prefixRoomId);
+      checkEqual('前缀群发送不带上精确群的附件或自动 @', crossBPrefixArgs?.body, '跨房 B 纯文本');
+      await page.locator(roomLink(exactRoomId)).click();
+      await waitRoom(page, exactRoomId, '自动 @ 精确群');
+      await waitUntil(
+        async () =>
+          (await page.locator('#composer-files .composer-file-name').allTextContents())
+            .map((value) => value.trim())
+            .includes('跨房精确 A.txt'),
+        '切回精确群恢复 A 的 chip',
+      );
+      checkEqual('切回精确群恢复 A 的草稿', await page.locator('#body').inputValue(), '跨房 A 草稿');
+      await sendInRoom(exactRoomId);
+      const crossExactArgs = await sendArgsFor(exactRoomId);
+      check(
+        '精确群发送只带自己的 URL 与自动 @',
+        Boolean(crossExactArgs?.body) &&
+          crossExactArgs!.body!.includes(crossExactUrl) &&
+          !crossExactArgs!.body!.includes('跨房 B 纯文本') &&
+          crossExactArgs!.body!.trim().endsWith('@WeBots 维护员'),
+        crossExactArgs?.body,
+      );
+
+      // 发送期间在另一群上传：新附件留在另一群，不进入已构建的发送正文。
+      await prepareChip('发送中 A.txt');
+      const sendingUrl = await fileUrlFor(exactRoomId, '发送中 A.txt');
+      await page.locator('#body').fill('发送中 A');
+      sendGate.hold = true;
+      const heldResponse = page.waitForResponse(
+        (response) => response.request().headers()['mcp-name'] === 'network_message_send',
+      );
+      const beforeHeldSend = await mcpCallCount(page, 'network_message_send');
+      await page.locator('#send').click();
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_message_send')) > beforeHeldSend,
+        '发送中请求已记录',
+      );
+      const heldArgs = await sendArgsFor(exactRoomId);
+      check(
+        '发送期间快照包含当前群附件与自动 @',
+        Boolean(heldArgs?.body) &&
+          heldArgs!.body!.includes(sendingUrl) &&
+          heldArgs!.body!.trim().endsWith('@WeBots 维护员'),
+        heldArgs?.body,
+      );
+      await page.locator(roomLink(prefixRoomId)).click();
+      await waitRoom(page, prefixRoomId, '自动 @ 前缀群');
+      await prepareChip('发送中 B.txt');
+      const sendingBUrl = await fileUrlFor(prefixRoomId, '发送中 B.txt');
+      check('发送期间另一群附件获得公开 URL', Boolean(sendingBUrl));
+      check(
+        '发送期间另一群上传不进入已构建正文',
+        !heldArgs!.body!.includes(sendingBUrl) && !heldArgs!.body!.includes('发送中 B.txt'),
+        heldArgs?.body,
+      );
+      checkEqual(
+        '发送期间新上传的 chip 保留在所属群',
+        await page.locator('#composer-files .composer-file').count(),
+        1,
+      );
+      await waitUntil(async () => Boolean(sendGate.release), '发送中请求已挂起');
+      check('发送中请求已释放', Boolean(sendGate.release), sendGate);
+      sendGate.release?.();
+      await heldResponse;
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 1,
+        '另一群 chip 在发送完成后仍保留',
+      );
+      checkEqual(
+        '另一群 chip 在发送完成后仍保留',
+        (await page.locator('#composer-files .composer-file-name').first().textContent())?.trim(),
+        '发送中 B.txt',
+      );
+      await page.locator(roomLink(exactRoomId)).click();
+      await waitRoom(page, exactRoomId, '自动 @ 精确群');
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 0,
+        '精确群发送后清空自己的 chip',
+      );
+      checkEqual('精确群发送后清空自己的 chip', await page.locator('#composer-files .composer-file').count(), 0);
       await context.close();
     }
 
@@ -13921,10 +14272,10 @@ async function main(): Promise<void> {
         chipLines,
       );
       check(
-        '文件 chips 的 URL 与固定 @ 各占一行',
-        chipLines.length === 4 &&
+        '文件 chips 的 URL 独占一行且不追加自动 @',
+        chipLines.length === 3 &&
           chipLines[2]!.includes('/f/') &&
-          chipLines[3] === '@WeBots 维护员',
+          !chipLines.some((line) => line === '@WeBots 维护员'),
         chipLines,
       );
       const chipHumanMessage = page
