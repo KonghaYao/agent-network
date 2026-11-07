@@ -3640,6 +3640,17 @@ async function main(): Promise<void> {
         roomPrompt,
       );
       check(
+        '提示词先更新脚本、再重新加载 skill、最后连接',
+        Boolean(roomPrompt) &&
+          roomPrompt!.includes('更新脚本') &&
+          roomPrompt!.includes('重新加载 skill') &&
+          roomPrompt!.includes('agentnet.sh') &&
+          roomPrompt!.includes('skills/get') &&
+          roomPrompt!.indexOf('更新脚本') < roomPrompt!.indexOf('重新加载 skill') &&
+          roomPrompt!.indexOf('重新加载 skill') < roomPrompt!.indexOf('最后再连接并使用'),
+        roomPrompt,
+      );
+      check(
         '未保存凭据时提示词明确说明缺少 MCP URL/token',
         Boolean(roomPrompt) &&
           roomPrompt!.includes('本浏览器没有保存该 Agent 的 token/MCP URL') &&
@@ -3714,6 +3725,16 @@ async function main(): Promise<void> {
           credentialPrompt!.includes(`你的 Agent 身份：${data.agentA.name}（${data.agentA.actor_id}）`) &&
           credentialPrompt!.includes('按技能文档恢复连接并处理该房间消息') &&
           credentialPrompt!.includes('凭据只给目标 Agent，勿发群、日志或截图'),
+        credentialPrompt,
+      );
+      check(
+        '含凭据提示词仍要求先更新脚本并重新加载 skill',
+        Boolean(credentialPrompt) &&
+          credentialPrompt!.includes('更新脚本') &&
+          credentialPrompt!.includes('重新加载 skill') &&
+          credentialPrompt!.indexOf('更新脚本') < credentialPrompt!.indexOf('重新加载 skill') &&
+          credentialPrompt!.indexOf('重新加载 skill') <
+            credentialPrompt!.indexOf('最后再连接并使用'),
         credentialPrompt,
       );
       check(
@@ -4073,15 +4094,15 @@ async function main(): Promise<void> {
       await writeRegistry(maliciousCredentialName);
       const directPrompt = await copyPrompt(directSelector, credentialStatus);
       const directLines = directPrompt.split('\n');
-      checkEqual('恶意名字不改变含凭据提示词行数', directLines.length, 12);
+      checkEqual('恶意名字不改变含凭据提示词行数', directLines.length, 16);
       checkEqual(
         '恶意名字不改变 MCP URL 固定行',
-        directLines[4],
+        directLines[8],
         `AGENTNET_MCP_URL="${savedUrl}"`,
       );
       checkEqual(
         '恶意名字不改变 token 固定行',
-        directLines[5],
+        directLines[9],
         `AGENTNET_TOKEN="${savedToken}"`,
       );
       check(
@@ -4096,12 +4117,12 @@ async function main(): Promise<void> {
       );
       checkEqual(
         'direct 房间名净化后仍在房间行',
-        directLines[6],
+        directLines[10],
         `房间：${injectionDirect.room.room_id}（注入 ${injectionLine}）`,
       );
       const identityPrefix = '你的 Agent 身份：';
       const identitySuffix = `（${maliciousAgent.actor_id}）`;
-      const identityLine = directLines[7] ?? '';
+      const identityLine = directLines[11] ?? '';
       const identityPart = identityLine.slice(
         identityPrefix.length,
         identityLine.length - identitySuffix.length,
@@ -4120,15 +4141,15 @@ async function main(): Promise<void> {
       await page.locator('#room-filter-group').click();
       const groupPrompt = await copyPrompt(groupSelector, credentialStatus);
       const groupLines = groupPrompt.split('\n');
-      checkEqual('恶意群名不改变提示词行数', groupLines.length, 12);
+      checkEqual('恶意群名不改变提示词行数', groupLines.length, 16);
       checkEqual(
         '恶意群名不改变 token 固定行',
-        groupLines[5],
+        groupLines[9],
         `AGENTNET_TOKEN="${savedToken}"`,
       );
       checkEqual(
         'group 群名净化后仍在房间行',
-        groupLines[6],
+        groupLines[10],
         `房间：${injectionGroup.room.room_id}（注入群 ${injectionLine}）`,
       );
       checkEqual(
@@ -4144,7 +4165,7 @@ async function main(): Promise<void> {
       const truncatedGroupPrompt = await copyPrompt(groupSelector, credentialStatus);
       const truncatedGroupLines = truncatedGroupPrompt.split('\n');
       const groupRoomPrefix = `房间：${injectionGroup.room.room_id}（`;
-      const truncatedGroupLine = truncatedGroupLines[6] ?? '';
+      const truncatedGroupLine = truncatedGroupLines[10] ?? '';
       const truncatedGroupName = truncatedGroupLine.slice(
         groupRoomPrefix.length,
         truncatedGroupLine.length - 1,
@@ -4163,8 +4184,8 @@ async function main(): Promise<void> {
       );
       const groupFallbackPrompt = await copyPrompt(groupSelector, missingStatus);
       const groupFallbackLines = groupFallbackPrompt.split('\n');
-      checkEqual('空群名回退为“群聊”', groupFallbackLines[5], `房间：${injectionGroup.room.room_id}（群聊）`);
-      checkEqual('无凭据提示词行数固定', groupFallbackLines.length, 9);
+      checkEqual('空群名回退为“群聊”', groupFallbackLines[9], `房间：${injectionGroup.room.room_id}（群聊）`);
+      checkEqual('无凭据提示词行数固定', groupFallbackLines.length, 13);
 
       await page.locator('#empty-state').click();
       await page.locator('#room-filter-direct').click();
@@ -4175,7 +4196,7 @@ async function main(): Promise<void> {
       const directFallbackLines = directFallbackPrompt.split('\n');
       checkEqual(
         '空 direct 名称回退为 Agent',
-        directFallbackLines[5],
+        directFallbackLines[9],
         `房间：${injectionDirect.room.room_id}（Agent）`,
       );
 
@@ -4395,6 +4416,16 @@ async function main(): Promise<void> {
       checkEqual('技能 URL 使用当前 origin', newAgentSkillUrl, `${server.base}/skills/agent-network-skills.md`);
       check('提示词包含 skill URL', newAgentPrompt.includes('/skills/agent-network-skills.md'));
       check('提示词包含 MCP URL 前缀', newAgentPrompt.includes('/mcp?token='));
+      check(
+        '新建 Agent 提示词先更新脚本、再重新加载 skill、最后连接',
+        newAgentPrompt.includes('更新脚本') &&
+          newAgentPrompt.includes('重新加载 skill') &&
+          newAgentPrompt.includes('agentnet.sh') &&
+          newAgentPrompt.includes('skills/get') &&
+          newAgentPrompt.indexOf('更新脚本') < newAgentPrompt.indexOf('重新加载 skill') &&
+          newAgentPrompt.indexOf('重新加载 skill') <
+            newAgentPrompt.indexOf('最后再连接并使用'),
+      );
       const newAgentUrlToken = new URL(newAgentMcpUrl).searchParams.get('token') ?? '';
       check(
         '新建 Agent 提示词包含 MCP URL/token 与 Agent 名称',
@@ -4449,12 +4480,18 @@ async function main(): Promise<void> {
         `document.getElementById('new-agent-prompt-copy').textContent === '已复制'`,
       );
       check('复制提示词按钮反馈已复制', true);
-      checkEqual(
-        '复制的是整段提示词',
-        (await page.evaluate(
-          `window.__copiedPrompt === document.getElementById('new-agent-prompt').value`,
-        )) as boolean,
-        true,
+      const copiedNewAgentPrompt = (await page.evaluate('window.__copiedPrompt')) as string | null;
+      check(
+        '复制的是包含接入顺序的整段提示词',
+        Boolean(copiedNewAgentPrompt) &&
+          copiedNewAgentPrompt === newAgentPrompt &&
+          copiedNewAgentPrompt!.includes('更新脚本') &&
+          copiedNewAgentPrompt!.includes('重新加载 skill') &&
+          copiedNewAgentPrompt!.indexOf('更新脚本') <
+            copiedNewAgentPrompt!.indexOf('重新加载 skill') &&
+          copiedNewAgentPrompt!.indexOf('重新加载 skill') <
+            copiedNewAgentPrompt!.indexOf('最后再连接并使用'),
+        copiedNewAgentPrompt,
       );
 
       const storageDump = (await page.evaluate(`(() => {

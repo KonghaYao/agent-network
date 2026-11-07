@@ -236,7 +236,10 @@ function roomMenuSafeName(value, fallback, maxLength) {
   return text || fallback;
 }
 
-/** 提示词只引用技能文档，附恢复连接所需信息；不重复技能里的工具步骤。 */
+/**
+ * 提示词只引用技能文档，附恢复连接所需信息；先更新脚本、再重新加载 skill、
+ * 最后连接，不重复技能里的工具步骤。
+ */
 function roomAgentPrompt(roomId, roomName, kind, credential) {
   const skillUrl = location.origin + '/skills/agent-network-skills.md';
   const safeRoomName = roomMenuSafeName(
@@ -244,7 +247,10 @@ function roomAgentPrompt(roomId, roomName, kind, credential) {
     kind === 'group' ? '群聊' : 'Agent',
     kind === 'group' ? ROOM_MENU_ROOM_NAME_MAX : ROOM_MENU_AGENT_NAME_MAX
   );
-  let prompt = '你是 WeBots Agent。请先阅读并严格按技能文档执行：\\n' +
+  let prompt = '你是 WeBots Agent。接入前必须按顺序完成，避免旧脚本或旧技能接入：\\n' +
+    '1. 先更新脚本：把 agentnet.sh / watcher 脚本更新到最新版本。\\n' +
+    '2. 再重新加载 skill（skills/get、SKILL.md 或宿主对应的重载方式），确认使用最新版本。\\n' +
+    '3. 最后再连接并使用。\\n\\n' +
     skillUrl + '\\n\\n连接信息：\\n';
   if (credential) {
     const safeAgentName = roomMenuSafeName(
