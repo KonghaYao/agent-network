@@ -17,6 +17,7 @@ import {
   type RoomFileSource,
 } from '../domain/room-files';
 import type { Principal } from '../domain/principal';
+import { fileTicketSecret } from '../domain/file-ticket';
 import { purgeFilePayloads } from '../drive/service';
 import type { Env } from '../env';
 import { getRoomFile } from '../storage/queries';
@@ -75,6 +76,7 @@ export function createMessageFileArchiver(
   binding: RoomFileToolBinding,
 ): (input: MessageCommittedHookInput) => Promise<void> {
   const source = createRoomFileSource(binding);
+  const ticketSecret = fileTicketSecret(env.FILE_TICKET_SECRET);
   return async (input) => {
     const fileIds = extractMessageFileLinks(input.body, env.PUBLIC_ORIGIN);
     if (fileIds.length === 0) return;
@@ -95,6 +97,7 @@ export function createMessageFileArchiver(
           },
           source,
           env.PUBLIC_ORIGIN,
+          ticketSecret,
         );
       } catch {
         // best-effort：FILE_UNAVAILABLE / CONFLICT / ROOM_FILE_LIMIT /
@@ -119,29 +122,30 @@ export function registerRoomFileTools(
 ): void {
   const db = env.DB;
   const origin = env.PUBLIC_ORIGIN;
+  const ticketSecret = fileTicketSecret(env.FILE_TICKET_SECRET);
   const source = createRoomFileSource(binding);
 
   register(
     server,
     'network_room_file_bind',
-    '把当前身份上传且未过期的 fileId 绑定到房间，返回公开下载地址 file.public_url。绑定只用于让文件出现在房间文件列表，房间成员可用 network_room_file_list / network_room_file_get 发现；它不是下载前提，上传后拿到 publicUrl 即可直接分享。未绑定的上传文件不在房间文件列表，只能靠上传响应的 publicUrl 或已知 /f/<fileId> 链接下载。公开 URL 即下载权限：其他 Agent 无需 Bearer；成员被移出房间不影响已分享 URL，删除房间文件或过期才 404。',
+    '把当前身份上传且未过期的 fileId 绑定到房间，返回 file.public_url（文件身份）以及带短时票据的 file.preview_url / file.download_url。绑定让文件出现在房间文件列表；房间成员按当前历史边界读取，移出、重新加入的新代次或策略收紧后旧链接与旧票据立即失效。未绑定的上传文件仍按公开上传语义提供，私有文件完整授权由后续任务收敛。',
     roomFileBindSchema,
     roomFileResultSchema,
     async (input) => {
       requireActor(principal);
-      return roomFileBind(db, principal, input, source, origin);
+      return roomFileBind(db, principal, input, source, origin, ticketSecret);
     },
   );
 
   register(
     server,
     'network_room_file_list',
-    '分页读取房间内未删除、未过期的文件，按绑定时间倒序。成员才可读取；后加入的成员可见历史文件。',
+    '分页读取当前身份可见的房间文件，按绑定时间倒序。默认新成员只能看到本次加入后绑定的文件；群主开启全历史才可见加入前文件。历史边界外的文件不出现在列表，按 ID 读取也返回 FILE_UNAVAILABLE。游标绑定成员代次，重新加入后旧游标返回 CURSOR_EXPIRED。',
     roomFileListSchema,
     roomFilePageSchema,
     async (input) => {
       requireActor(principal);
-      return roomFileList(db, principal, input, origin);
+      return roomFileList(db, principal, input, origin, ticketSecret);
     },
     { readOnlyHint: true },
   );
@@ -149,12 +153,12 @@ export function registerRoomFileTools(
   register(
     server,
     'network_room_file_get',
-    '读取房间内单个文件的元数据与公开地址；已删除或已过期返回 FILE_UNAVAILABLE。',
+    '读取房间内单个文件的元数据与带票据地址；已删除、已过期或不在当前历史边界内返回 FILE_UNAVAILABLE。按 ID 直读与列表使用同一可见性判定。',
     roomFileGetSchema,
     roomFileResultSchema,
     async (input) => {
       requireActor(principal);
-      return roomFileGet(db, principal, input, origin);
+      return roomFileGet(db, principal, input, origin, ticketSecret);
     },
     { readOnlyHint: true },
   );
@@ -162,7 +166,7 @@ export function registerRoomFileTools(
   register(
     server,
     'network_room_file_delete',
-    '删除房间文件。上传者可删除自己的文件，单聊只有上传者可以删除，群 owner 可删除群内任意文件。删除写墓碑：公开 URL 立即 404 且不会复活。',
+    '删除房间文件。上传者可删除自己的文件，单聊只有上传者可以删除，群 owner 可删除群内任意文件。删除写墓碑：已签发链接立即 404 且不会复活。',
     roomFileDeleteSchema,
     roomFileDeletedSchema,
     async (input) => {

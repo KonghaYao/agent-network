@@ -9,6 +9,13 @@ import {
   nullableString,
 } from './message-view-helpers';
 import type { HistoryMessageView } from './messages';
+import {
+  decodeHistoryCursor,
+  historyCursorScope,
+  historySnapshot,
+  type HistoryBoundary,
+  type HistorySnapshot,
+} from './room-history';
 
 /**
  * 人类可见的房间时间线：普通消息与 Agent 上下线系统消息共用展示顺序。
@@ -47,6 +54,8 @@ export interface TimelinePage {
   timeline_has_more: boolean;
   timeline_snapshot: string;
   timeline_resume_cursor: string;
+  /** 本次读取采用的授权快照；与消息、文件、任务读取一致。 */
+  authorization: HistorySnapshot;
 }
 
 interface TimelineKeyRow {
@@ -126,21 +135,29 @@ async function keyPage(
   cursor: ReturnType<typeof decodeCursor> | null,
   snapshot: number,
   limit: number,
+  boundary: HistoryBoundary,
 ): Promise<TimelineKeyRow[]> {
   const union = `
     SELECT 'message' AS kind, message_id AS item_id, created_at AS occurred_at, created_seq AS commit_seq
       FROM messages
-     WHERE room_id = ? AND created_seq <= ?
+     WHERE room_id = ? AND created_seq <= ? AND created_seq >= ?
     UNION ALL
     SELECT 'presence' AS kind, presence_event_id AS item_id, occurred_at, timeline_seq AS commit_seq
       FROM room_presence_events
-     WHERE room_id = ? AND timeline_seq <= ?`;
+     WHERE room_id = ? AND timeline_seq <= ? AND timeline_seq >= ?`;
 
   if (direction === 'before') {
     const predicate = cursor
       ? 'WHERE occurred_at < ? OR (occurred_at = ? AND commit_seq < ?)'
       : '';
-    const binds: unknown[] = [room.room_id, snapshot, room.room_id, snapshot];
+    const binds: unknown[] = [
+      room.room_id,
+      snapshot,
+      boundary.fromSeq,
+      room.room_id,
+      snapshot,
+      boundary.fromSeq,
+    ];
     if (cursor) binds.push(cursor.seq, cursor.seq, cursorCommit(cursor));
     binds.push(limit + 1);
     const rows = await db
@@ -156,7 +173,7 @@ async function keyPage(
     return rows.results;
   }
 
-  const start = cursor?.seq ?? snapshot;
+  const start = Math.max(cursor?.seq ?? snapshot, boundary.fromSeq);
   const rows = await db
     .prepare(
       `SELECT kind, item_id, occurred_at, commit_seq
@@ -165,7 +182,17 @@ async function keyPage(
         ORDER BY commit_seq ASC
         LIMIT ?`,
     )
-    .bind(room.room_id, snapshot, room.room_id, snapshot, start, snapshot, limit + 1)
+    .bind(
+      room.room_id,
+      snapshot,
+      boundary.fromSeq,
+      room.room_id,
+      snapshot,
+      boundary.fromSeq,
+      start,
+      snapshot,
+      limit + 1,
+    )
     .all<TimelineKeyRow>();
   return rows.results;
 }
@@ -256,18 +283,24 @@ export async function timelineList(
   db: D1Database,
   room: RoomRow,
   input: HistoryListInput,
+  boundary: HistoryBoundary,
 ): Promise<TimelinePage> {
-  const scope = `room:${room.room_id}:timeline`;
+  const scope = historyCursorScope('timeline', room.room_id, boundary.memberGeneration);
   const limit = clampPage(input.limit, LIMITS.historyPageDefault, LIMITS.historyPageMax);
-  const cursor = input.cursor ? decodeCursor(input.cursor, scope) : null;
+  const cursor = input.cursor
+    ? decodeHistoryCursor(input.cursor, scope, room.room_id)
+    : null;
   const direction = input.direction ?? 'before';
   if (cursor && cursor.dir !== direction) {
     throw new BusinessError('INVALID_ARGUMENT', 'cursor 方向与请求不一致');
   }
 
   const max = await currentMaxSeq(db, room);
-  const snapshot = direction === 'after' ? max : (cursor?.snapshot ?? max);
-  const rows = await keyPage(db, room, direction, cursor, snapshot, limit);
+  const snapshot =
+    direction === 'after'
+      ? Math.max(max, boundary.fromSeq)
+      : Math.max(cursor?.snapshot ?? max, boundary.fromSeq);
+  const rows = await keyPage(db, room, direction, cursor, snapshot, limit, boundary);
   const page = rows.slice(0, limit);
   const hasMore = rows.length > limit;
   const items = await materialize(db, room, page);
@@ -298,5 +331,6 @@ export async function timelineList(
     timeline_has_more: hasMore,
     timeline_snapshot: String(snapshot),
     timeline_resume_cursor: resumeCursor,
+    authorization: historySnapshot(boundary),
   };
 }

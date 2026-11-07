@@ -5,6 +5,7 @@ import type { SyncInput } from '../contracts/schemas';
 import { getActor, getMember, getRoom } from '../storage/queries';
 import type { EventRow } from '../storage/rows';
 import { actorId, type Principal } from './principal';
+import { historyBoundary } from './room-history';
 
 export interface EventRef {
   seq: string;
@@ -51,7 +52,14 @@ async function resolveScope(
     if (!member || member.status !== 'active') {
       throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
     }
-    return { kind: 'room', id: roomId, head: room.head_seq, min: room.events_min_seq };
+    // 旧游标只定位数据；加入前的事件不属于当前代次，不能通过补读重新获得。
+    const floor = historyBoundary(room, member).fromSeq;
+    return {
+      kind: 'room',
+      id: roomId,
+      head: room.head_seq,
+      min: Math.max(room.events_min_seq, floor),
+    };
   }
   throw new BusinessError('INVALID_ARGUMENT', 'scope 只支持 inbox 或 room:<room_id>');
 }

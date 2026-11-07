@@ -26,6 +26,11 @@ export interface Env {
   PRESENCE?: AgentPresenceTimeline;
   ENVIRONMENT: string;
   PUBLIC_ORIGIN: string;
+  /**
+   * 房间文件下载票据密钥。缺省时使用进程级随机密钥；多进程部署必须配置
+   * 同一值，否则一个进程签发的票据无法在另一个进程验证。
+   */
+  FILE_TICKET_SECRET?: string;
   /** 启用 MCPP Files 时存在；关闭后 drive 工具与上传路由不注册。 */
   FILES?: FileService;
   /** 启用 MCP Events 时存在；缺失时不声明 events 能力、不注册方法。 */

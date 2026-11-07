@@ -97,12 +97,19 @@ export async function runRoomFileAcceptance(): Promise<void> {
       mimeType: 'text/plain',
       body: 'room file acceptance',
     });
-    const bound = await callTool<{ file: { room_file_id: string; public_url: string } }>(
-      ownerConn.client,
-      'network_room_file_bind',
-      { request_id: newRequestId('bind'), room_id: roomId, file_id: uploaded.fileId },
-    );
+    const bound = await callTool<{
+      file: { room_file_id: string; public_url: string; preview_url: string };
+    }>(ownerConn.client, 'network_room_file_bind', {
+      request_id: newRequestId('bind'),
+      room_id: roomId,
+      file_id: uploaded.fileId,
+    });
     checkEqual('房间文件绑定返回公开 URL', bound.file.public_url, `${baseUrl()}/f/${uploaded.fileId}`);
+    check(
+      '房间文件预览地址携带票据',
+      new URL(bound.file.preview_url).searchParams.get('t') !== null,
+      bound.file.preview_url,
+    );
 
     const items = await waitForFileItems(collector.events, 1, '统一流收到 room.file 新增');
     checkEqual('room.file kind 为 file', items[0]?.kind, 'file');
@@ -117,9 +124,14 @@ export async function runRoomFileAcceptance(): Promise<void> {
     const pendingAfter = await callTool<{ pending_count: number }>(memberConn.client, 'network_me');
     checkEqual('房间文件事件不创建待办', pendingAfter.pending_count, pendingBefore.pending_count);
 
-    const download = await fetch(uploaded.publicUrl);
-    checkEqual('房间文件公开下载无需 Bearer', download.status, 200);
+    const download = await fetch(bound.file.preview_url);
+    checkEqual('房间文件票据下载无需 Bearer', download.status, 200);
     checkEqual('房间文件公开内容一致', await download.text(), 'room file acceptance');
+    checkEqual(
+      '绑定后的裸 public_url 不能绕过票据',
+      (await fetch(uploaded.publicUrl)).status,
+      404,
+    );
 
     await callTool(ownerConn.client, 'network_room_file_delete', {
       request_id: newRequestId('rmfile'),

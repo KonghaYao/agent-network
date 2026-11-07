@@ -58,6 +58,8 @@ export const memberSchema = z.object({
   agent_session_id: z.string().nullable(),
   role: z.enum(['owner', 'admin', 'member']),
   role_revision: z.number(),
+  /** 成员代次；重新加入后递增，旧游标/旧票据不能跨代次。 */
+  member_generation: z.number(),
   joined_seq: z.string(),
   joined_at: z.string(),
   last_read_seq: z.string(),
@@ -68,6 +70,15 @@ export const memberSchema = z.object({
 });
 
 const groupPolicySchema = z.enum(['members', 'owner_admin']);
+const groupHistoryPolicySchema = z.enum(['from_join', 'full']);
+const groupJoinPolicySchema = z.enum(['open', 'approval']);
+
+/** 读取请求采用的授权快照；用于跨入口核对同一份策略/代次。 */
+export const authorizationSnapshotSchema = z.object({
+  policy_revision: z.number(),
+  history_from_seq: z.string(),
+  member_generation: z.string(),
+});
 
 const roomCapabilitiesSchema = z.object({
   send_message: z.boolean(),
@@ -79,6 +90,7 @@ const roomCapabilitiesSchema = z.object({
   manage_policy: z.boolean(),
   transfer_owner: z.boolean(),
   approve_joins: z.boolean(),
+  mention_all: z.boolean(),
   view_role_history: z.boolean(),
 });
 
@@ -93,11 +105,18 @@ export const roomSchema = z.object({
   my_role: z.enum(['owner', 'admin', 'member']),
   my_role_revision: z.number(),
   my_last_read_seq: z.string(),
+  my_member_generation: z.number(),
+  history_from_seq: z.string(),
+  authorization: authorizationSnapshotSchema,
   policy_revision: z.number(),
   policies: z.object({
     member_message: groupPolicySchema,
     member_invite: groupPolicySchema,
     member_task: groupPolicySchema,
+    member_history: groupHistoryPolicySchema,
+    member_join: groupJoinPolicySchema,
+    member_profile: groupPolicySchema,
+    member_mention_all: groupPolicySchema,
   }),
   announcement: z.string(),
   announcement_revision: z.number(),
@@ -157,6 +176,20 @@ export const roomCreateMemberResultSchema = z.object({
 /** 建群返回额外的逐对象结果；room_get 仍是纯 RoomDetail。 */
 export const roomCreateResultSchema = roomDetailSchema.extend({
   results: z.array(roomCreateMemberResultSchema).optional(),
+});
+
+/** 策略变更影响；只在 network_room_policy_set 返回。 */
+export const roomPolicyImpactSchema = z.object({
+  history_policy: groupHistoryPolicySchema,
+  affected_members: z.number(),
+  hidden_tasks: z.number(),
+  hidden_files: z.number(),
+  material_loss: z.boolean(),
+  message: z.string(),
+});
+
+export const roomPolicySetResultSchema = roomDetailSchema.extend({
+  policy_impact: roomPolicyImpactSchema.optional(),
 });
 
 export const roomInvitationSchema = z.object({
@@ -365,6 +398,7 @@ export const historyPageSchema = z.object({
   has_more: z.boolean(),
   snapshot: z.string(),
   head_seq: z.string(),
+  authorization: authorizationSnapshotSchema.optional(),
   /** timeline 模式下存在；messages 默认不返回。 */
   view: z.enum(['messages', 'timeline']).optional(),
   timeline_items: z.array(timelineItemSchema).optional(),
@@ -683,6 +717,37 @@ export const roomRoleHistorySchema = z.object({
   has_more: z.boolean(),
 });
 
+/** 普通成员可见的管理事件摘要；不含 request_id、detail 或版本字段。 */
+export const roomNoticeSchema = z.object({
+  audit_id: z.string(),
+  action: z.enum([
+    'member_added',
+    'member_removed',
+    'member_left',
+    'admin_appointed',
+    'admin_revoked',
+    'owner_transferred',
+    'owner_transfer_proposed',
+    'owner_transfer_accepted',
+    'owner_transfer_rejected',
+    'owner_transfer_cancelled',
+    'owner_transfer_expired',
+    'policy_updated',
+    'announcement_updated',
+  ]),
+  target_actor_id: z.string().nullable(),
+  changed_by: z.string(),
+  changed_by_name: z.string().nullable(),
+  summary: z.string(),
+  created_at: z.string(),
+});
+
+export const roomNoticePageSchema = z.object({
+  items: z.array(roomNoticeSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+});
+
 export const markReadResultSchema = z.object({ room_id: z.string(), last_read_seq: z.string() });
 
 export const progressResultSchema = z.object({
@@ -711,12 +776,16 @@ export const roomFileSchema = z.object({
   expires_at: z.string(),
 });
 
-export const roomFileResultSchema = z.object({ file: roomFileSchema });
+export const roomFileResultSchema = z.object({
+  file: roomFileSchema,
+  authorization: authorizationSnapshotSchema,
+});
 
 export const roomFilePageSchema = z.object({
   items: z.array(roomFileSchema),
   next_cursor: z.string().nullable(),
   has_more: z.boolean(),
+  authorization: authorizationSnapshotSchema,
 });
 
 export const roomFileDeletedSchema = z.object({
@@ -760,6 +829,7 @@ export const roomTaskListSchema = z.object({
   tasks: z.array(roomTaskSchema),
   total: z.number(),
   done: z.number(),
+  authorization: authorizationSnapshotSchema,
 });
 
 export const roomTaskDeletedSchema = z.object({

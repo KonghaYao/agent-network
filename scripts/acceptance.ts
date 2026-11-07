@@ -54,6 +54,8 @@ import { runGroupAutoDeliverAcceptance } from './lib/auto-deliver-acceptance';
 import { runGroupRoleAcceptance } from './lib/group-role-acceptance';
 import { runOwnerTransferAcceptance } from './lib/owner-transfer-acceptance';
 import { runGroupInviteAcceptance } from './lib/group-invite-acceptance';
+import { runGroupHistoryAcceptance } from './lib/group-history-acceptance';
+import { runGroupPolicyAcceptance } from './lib/group-policy-acceptance';
 import {
   ensureTestCertificate,
   removeTestData,
@@ -1324,6 +1326,8 @@ async function main(): Promise<void> {
     await runGroupRoleAcceptance();
     await runOwnerTransferAcceptance();
     await runGroupInviteAcceptance();
+    await runGroupHistoryAcceptance({ hasDrive });
+    await runGroupPolicyAcceptance({ hasDrive });
 
     console.log(`端到端验收通过: ${checksPassed()} 项`);
   } finally {

@@ -7,7 +7,8 @@ import { Readable } from 'node:stream';
 import { LIMITS } from './contracts/limits';
 import { isBusinessError, type BusinessErrorBody } from './contracts/errors';
 import { attachPublicUrl, publicFileHeaders } from './drive/service';
-import { roomFileIsDownloadable } from './domain/room-files';
+import { fileTicketSecret } from './domain/file-ticket';
+import { authorizeRoomFileDownload } from './domain/room-files';
 import {
   asRecord,
   callbackHostOf,
@@ -744,13 +745,21 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     ),
   );
 
-  // 公开下载：文件 ID 是唯一地址，不做目录遍历；过期或删除墓碑后直接 404。
+  // 公开下载：未绑定房间的文件按公开语义提供；已绑定房间的文件必须携带
+  // 短时票据 `?t=`，并在每次使用时复核成员资格、代次与历史边界。
   app.get('/f/:fileId', async (c) => {
     const fileId = c.req.param('fileId');
     if (!FILE_ID.test(fileId) || !env.FILES) return c.text('Not Found', 404);
     try {
       const now = Date.now();
-      if (!(await roomFileIsDownloadable(env.DB, fileId, now))) return c.text('Not Found', 404);
+      const access = await authorizeRoomFileDownload(
+        env.DB,
+        fileId,
+        c.req.query('t') ?? null,
+        fileTicketSecret(env.FILE_TICKET_SECRET),
+        now,
+      );
+      if (access === null) return c.text('Not Found', 404);
       const record = await env.FILES.readRecord(fileId);
       if (!record || Date.parse(record.expiresAt) <= now) return c.text('Not Found', 404);
 

@@ -47,6 +47,8 @@ function beginComposerUpload(roomId, file) {
     imageFailed: false,
     file_id: null,
     public_url: null,
+    preview_url: null,
+    download_url: null,
     status: 'uploading',
     phase: 'upload',
     percent: 0,
@@ -64,7 +66,7 @@ function updateComposerUpload(entry, percent, phase) {
   if (activeRoomId === entry.roomId) renderComposerFiles(entry.roomId);
 }
 
-/** bind 返回公开 URL 后才可发送与删除；响应缺字段按失败处理。 */
+/** bind 返回文件身份与带票据地址后才可发送与删除；响应缺字段按失败处理。 */
 function completeComposerUpload(entry, bound) {
   if (!entry) return false;
   const boundFile = bound && bound.file && typeof bound.file === 'object' ? bound.file : bound;
@@ -74,8 +76,13 @@ function completeComposerUpload(entry, bound) {
     abortComposerUpload(entry);
     return false;
   }
+  const previewUrl = fileSafeUrl(boundFile && boundFile.preview_url) || publicUrl;
+  const downloadUrl = fileSafeUrl(boundFile && boundFile.download_url) ||
+    previewUrl + (previewUrl.indexOf('?') >= 0 ? '&' : '?') + 'download=1';
   entry.file_id = String(fileId);
   entry.public_url = publicUrl;
+  entry.preview_url = previewUrl;
+  entry.download_url = downloadUrl;
   entry.mime = String(boundFile.mime_type || boundFile.mimeType || entry.mime || '');
   entry.status = 'ready';
   entry.percent = 100;
@@ -120,7 +127,7 @@ function composerImageReady(entry) {
 
 /** 待发送图片点击后复用房间文件的大图预览，关闭时焦点回到缩略图。 */
 function openComposerImagePreview(entry, trigger) {
-  if (!entry.public_url) return;
+  if (!entry.preview_url) return;
   const imageMime = previewImageMime(entry.mime, entry.name);
   if (!imageMime) return;
   openFilePreview({
@@ -128,8 +135,8 @@ function openComposerImagePreview(entry, trigger) {
     mime_type: imageMime,
     size: entry.size,
     preview_kind: 'image',
-    preview_url: entry.public_url,
-    download_url: entry.public_url + (entry.public_url.indexOf('?') >= 0 ? '&' : '?') + 'download=1',
+    preview_url: entry.preview_url,
+    download_url: entry.download_url || entry.preview_url,
     public_url: entry.public_url
   }, trigger);
 }
@@ -142,7 +149,7 @@ function composerFileThumb(entry) {
   button.title = '预览 ' + entry.name;
   button.setAttribute('aria-label', '预览图片 ' + entry.name);
   const image = document.createElement('img');
-  image.src = entry.public_url;
+  image.src = entry.preview_url || entry.public_url;
   image.alt = entry.name;
   image.loading = 'lazy';
   image.decoding = 'async';

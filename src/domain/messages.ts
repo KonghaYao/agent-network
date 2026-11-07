@@ -54,6 +54,15 @@ import {
 import { actorId, type Principal } from './principal';
 import { capabilityGuardStatement } from './room-access';
 import type { MessagePreviewView } from './rooms';
+import {
+  decodeHistoryCursor,
+  historyBoundary,
+  historyCursorScope,
+  historySnapshot,
+  visibleMessage,
+  type HistoryBoundary,
+  type HistorySnapshot,
+} from './room-history';
 import { timelineList, type TimelinePage } from './timeline';
 
 export interface MessageView extends MessagePreviewView {
@@ -74,6 +83,8 @@ export interface MessagePage {
   has_more: boolean;
   snapshot: string;
   head_seq: string;
+  /** 本次读取采用的授权快照；与房间、文件、任务读取使用同一计算入口。 */
+  authorization: HistorySnapshot;
 }
 
 /**
@@ -105,6 +116,8 @@ export interface MessageCore {
   rootKey: string;
   hop: number;
   invoke: string[];
+  /** 正文包含 `@所有人`；受群策略能力约束，但不创建批量投递。 */
+  mentionAll: boolean;
   deliveries: DeliverySeed[];
   eventKey: string;
   at: number;
@@ -144,7 +157,10 @@ export async function messageView(
 /** 深度、root 派发预算、成员资格、目标有效性与队列上限的同一事务校验。 */
 export function messageGuardStatements(
   db: D1Database,
-  core: Pick<MessageCore, 'roomId' | 'senderId' | 'hop' | 'rootKey' | 'invoke' | 'at'>,
+  core: Pick<
+    MessageCore,
+    'roomId' | 'senderId' | 'hop' | 'rootKey' | 'invoke' | 'mentionAll' | 'at'
+  >,
 ): D1PreparedStatement[] {
   const statements: D1PreparedStatement[] = [
     db
@@ -161,6 +177,10 @@ export function messageGuardStatements(
     // 群策略：owner_admin 时普通成员不能发言；管理员和 owner 始终可以。
     capabilityGuardStatement(db, core.roomId, core.senderId, 'send_message'),
   ];
+  // @所有人 只发提醒，不批量创建 delivery；权限在事务内与发送同一闸门复核。
+  if (core.mentionAll) {
+    statements.push(capabilityGuardStatement(db, core.roomId, core.senderId, 'mention_all'));
+  }
 
   if (core.hop > LIMITS.cooperationDepthMax) {
     statements.push(
@@ -342,6 +362,7 @@ async function resolveRootLink(
   sender: string,
   roomId: string,
   input: MessageSendInput,
+  boundary: HistoryBoundary,
 ): Promise<RootLink> {
   let parent: MessageRow | null = null;
 
@@ -370,11 +391,15 @@ async function resolveRootLink(
   let replyTo = input.reply_to ?? parent?.message_id ?? null;
   if (input.reply_to) {
     const replied = await getMessage(db, input.reply_to);
-    if (!replied || replied.room_id !== roomId) {
-      throw new BusinessError('INVALID_ARGUMENT', 'reply_to 不是当前房间的消息');
+    if (!replied || replied.room_id !== roomId || !visibleMessage(replied, boundary)) {
+      // 不区分“不存在”和“在加入前/策略外”，避免按 ID 探测历史内容。
+      throw new BusinessError('NOT_FOUND', '消息不存在或当前不可见');
     }
     replyTo = replied.message_id;
     if (!parent) parent = replied;
+  }
+  if (parent && !visibleMessage(parent, boundary)) {
+    throw new BusinessError('NOT_FOUND', '消息不存在或当前不可见');
   }
 
   if (!parent) {
@@ -447,6 +472,12 @@ async function resolveGroupMentionInvoke(
     const matched = names.find((name) => body.startsWith(name, start));
     if (!matched) continue;
     hadMemberMention = true;
+    // `@所有人` 是群级提醒控制符，不是对名为“所有人”的 Agent 的派活；
+    // 仍视为显式提及，避免再自动补投上一条 Agent 消息。
+    if (matched === '所有人') {
+      index = start + matched.length - 1;
+      continue;
+    }
     const members = byName.get(matched) ?? [];
     const agents = members.filter((member) => member.kind === 'agent');
     if (agents.length > 1) {
@@ -480,6 +511,7 @@ async function resolveAdjacentAgentSender(
   db: D1Database,
   roomId: string,
   sender: string,
+  boundary: HistoryBoundary,
 ): Promise<string | null> {
   const row = await db
     .prepare(
@@ -488,11 +520,11 @@ async function resolveAdjacentAgentSender(
          LEFT JOIN actors a ON a.actor_id = msg.sender_id
          LEFT JOIN room_members m
            ON m.room_id = msg.room_id AND m.actor_id = msg.sender_id
-        WHERE msg.room_id = ?
+        WHERE msg.room_id = ? AND msg.created_seq >= ?
         ORDER BY msg.created_seq DESC
         LIMIT 1`,
     )
-    .bind(roomId)
+    .bind(roomId, boundary.fromSeq)
     .first<AdjacentSenderRow>();
   if (!row || row.sender_id === sender) return null;
   if (row.kind !== 'agent' || row.status !== 'active') return null;
@@ -527,6 +559,7 @@ export async function messageSend(
   if (!member || member.status !== 'active') {
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
   }
+  const boundary = historyBoundary(room, member);
 
   const bodyBytes = utf8Bytes(input.body);
   if (bodyBytes > LIMITS.messageBodyBytes) {
@@ -544,7 +577,7 @@ export async function messageSend(
     // 群聊 human 回复紧邻上一条 Agent 消息时自动投递；显式 @ 任意 active 成员
     // 都视为明确目标，不再补上一条 Agent。Agent 发送不改行为。
     if (principal.actor?.kind === 'human' && !mentionResolution.hadMemberMention) {
-      const adjacentAgent = await resolveAdjacentAgentSender(db, room.room_id, sender);
+      const adjacentAgent = await resolveAdjacentAgentSender(db, room.room_id, sender, boundary);
       if (adjacentAgent) resolvedInvoke = [adjacentAgent];
     }
   }
@@ -555,7 +588,7 @@ export async function messageSend(
     sender,
     assertInvoke(resolvedInvoke, sender),
   );
-  const link = await resolveRootLink(db, sender, room.room_id, input);
+  const link = await resolveRootLink(db, sender, room.room_id, input, boundary);
 
   const at = nowMs();
   const messageId = newId('msg');
@@ -577,6 +610,7 @@ export async function messageSend(
     rootKey: link.rootKey || messageId,
     hop: link.hop,
     invoke,
+    mentionAll: room.kind === 'group' && input.body.includes('@所有人'),
     deliveries,
     eventKey,
     at,
@@ -686,6 +720,7 @@ export async function finalMessagePlan(
     rootKey: parent.root_id ?? parent.message_id,
     hop: parent.hop + 1,
     invoke: [],
+    mentionAll: false,
     deliveries: [],
     eventKey: `message:${messageId}`,
     at: nowMs(),
@@ -704,43 +739,54 @@ export async function historyList(
   if (!member || member.status !== 'active') {
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
   }
+  // 本次请求只使用这一份授权快照：即使策略在查询期间变化，列表、游标与
+  // 返回的 authorization 仍按同一代次/边界解释；下一次请求重新计算。
+  const boundary = historyBoundary(room, member);
+  const authorization = historySnapshot(boundary);
 
   if (input.view === 'timeline') {
     if (principal.actor?.kind !== 'human') {
       throw new BusinessError('INVALID_ARGUMENT', 'timeline 视图仅对人类身份开放');
     }
-    return timelineList(db, room, input);
+    return timelineList(db, room, input, boundary);
   }
 
-  const scope = `room:${room.room_id}:history`;
+  const scope = historyCursorScope('history', room.room_id, boundary.memberGeneration);
   const limit = clampPage(input.limit, LIMITS.historyPageDefault, LIMITS.historyPageMax);
-  const cursor = input.cursor ? decodeCursor(input.cursor, scope) : null;
+  const cursor = input.cursor
+    ? decodeHistoryCursor(input.cursor, scope, room.room_id)
+    : null;
   const direction = input.direction ?? 'before';
   // 快照上界只用于向前翻旧页；after 是追新，必须允许超过首次查询时的 head。
-  const snapshot = direction === 'after' ? room.head_seq : (cursor?.snapshot ?? room.head_seq);
+  const snapshot =
+    direction === 'after'
+      ? room.head_seq
+      : Math.max(boundary.fromSeq, cursor?.snapshot ?? room.head_seq);
 
   let rows: MessageRow[];
   if (direction === 'before') {
     const predicate = cursor ? 'AND created_seq < ?' : '';
-    const binds: unknown[] = cursor ? [room.room_id, snapshot, cursor.seq, limit + 1] : [room.room_id, snapshot, limit + 1];
+    const binds: unknown[] = cursor
+      ? [room.room_id, snapshot, boundary.fromSeq, cursor.seq, limit + 1]
+      : [room.room_id, snapshot, boundary.fromSeq, limit + 1];
     const result = await db
       .prepare(
         `SELECT * FROM messages
-          WHERE room_id = ? AND created_seq <= ? ${predicate}
+          WHERE room_id = ? AND created_seq <= ? AND created_seq >= ? ${predicate}
           ORDER BY created_seq DESC LIMIT ?`,
       )
       .bind(...binds)
       .all<MessageRow>();
     rows = result.results;
   } else {
-    const start = cursor?.seq ?? snapshot;
+    const start = Math.max(boundary.fromSeq, cursor?.seq ?? snapshot);
     const result = await db
       .prepare(
         `SELECT * FROM messages
-          WHERE room_id = ? AND created_seq <= ? AND created_seq > ?
+          WHERE room_id = ? AND created_seq <= ? AND created_seq > ? AND created_seq >= ?
           ORDER BY created_seq ASC LIMIT ?`,
       )
-      .bind(room.room_id, snapshot, start, limit + 1)
+      .bind(room.room_id, snapshot, start, boundary.fromSeq, limit + 1)
       .all<MessageRow>();
     rows = result.results;
   }
@@ -800,6 +846,7 @@ export async function historyList(
     has_more: hasMore,
     snapshot: String(snapshot),
     head_seq: String(room.head_seq),
+    authorization,
   };
 }
 
@@ -825,6 +872,12 @@ export async function messageRead(
   const member = await getMember(db, message.room_id, viewer);
   if (!member || member.status !== 'active') {
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
+  }
+  const room = await getRoom(db, message.room_id);
+  if (!room) throw new BusinessError('NOT_FOUND', '消息不存在');
+  if (!visibleMessage(message, historyBoundary(room, member))) {
+    // 按 ID 直读与列表共用同一可见性；不区分“不存在”和“加入前”，避免探测。
+    throw new BusinessError('NOT_FOUND', '消息不存在或当前不可见');
   }
 
   let offset = 0;
@@ -863,6 +916,13 @@ export async function roomMarkRead(
   }
   const room = await getRoom(db, input.room_id);
   if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
+  const current = await getMember(db, room.room_id, viewer);
+  if (!current || current.status !== 'active') {
+    throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
+  }
+  // 加入前的内容不属于当前代次，阅读水位不能低于本次加入边界。
+  const floor = historyBoundary(room, current).fromSeq;
+  const clampThrough = Math.max(through, floor);
 
   const at = nowMs();
   const eventKey = newId('room_read');
@@ -891,16 +951,16 @@ export async function roomMarkRead(
         at,
         room.room_id,
         viewer,
-        through,
+        clampThrough,
       ),
     db
       .prepare(
         `UPDATE room_members
-            SET last_read_seq = MIN(?, (SELECT head_seq FROM rooms WHERE room_id = ?))
+            SET last_read_seq = MAX(last_read_seq, MIN(?, (SELECT head_seq FROM rooms WHERE room_id = ?)))
           WHERE room_id = ? AND actor_id = ? AND status = 'active'
             AND EXISTS (SELECT 1 FROM events WHERE event_key = ?)`,
       )
-      .bind(through, room.room_id, room.room_id, viewer, eventKey),
+      .bind(clampThrough, room.room_id, room.room_id, viewer, eventKey),
     db
       .prepare(
         `INSERT INTO outbox (outbox_id, topic, event_seq, status, attempts, next_attempt_at, created_at)

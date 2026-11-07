@@ -440,8 +440,26 @@ async function main(): Promise<void> {
     checkEqual('bind 返回大小', bound.file.size, new TextEncoder().encode(textBody).length);
     checkEqual('bind 返回 sha256', bound.file.sha256, uploaded.sha256);
     checkEqual('public_url 由 PUBLIC_ORIGIN 派生', bound.file.public_url, `${baseUrl()}/f/${uploaded.fileId}`);
-    checkEqual('preview_url 与 public_url 一致', bound.file.preview_url, bound.file.public_url);
-    checkEqual('download_url 强制下载', bound.file.download_url, `${bound.file.public_url}?download=1`);
+    const boundPreview = new URL(bound.file.preview_url);
+    const boundDownload = new URL(bound.file.download_url);
+    checkEqual(
+      'preview_url 指向同一公开路径',
+      `${boundPreview.origin}${boundPreview.pathname}`,
+      bound.file.public_url,
+    );
+    check('preview_url 携带短时票据', Boolean(boundPreview.searchParams.get('t')), bound.file.preview_url);
+    checkEqual(
+      'download_url 仍指向同一公开路径',
+      `${boundDownload.origin}${boundDownload.pathname}`,
+      bound.file.public_url,
+    );
+    checkEqual('download_url 强制下载', boundDownload.searchParams.get('download'), '1');
+    checkEqual(
+      'download_url 与 preview_url 使用同一票据',
+      boundDownload.searchParams.get('t'),
+      boundPreview.searchParams.get('t'),
+    );
+    checkEqual('绑定的裸 public_url 无票据时 404', (await fetch(bound.file.public_url)).status, 404);
     checkEqual('text/plain 预览分类为 text', bound.file.preview_kind, 'text');
     checkEqual('上传者可以删除', bound.file.can_delete, true);
     check(
@@ -664,7 +682,7 @@ async function main(): Promise<void> {
     });
     const pngBound = await bind(aConn, roomId, png.fileId);
     checkEqual('光栅图片预览分类为 image', pngBound.file.preview_kind, 'image');
-    checkEqual('光栅图片公开下载返回 image/png', (await fetch(pngBound.file.public_url)).headers.get('content-type'), 'image/png');
+    checkEqual('光栅图片公开下载返回 image/png', (await fetch(pngBound.file.preview_url)).headers.get('content-type'), 'image/png');
 
     // 跨 chunk 的 Range：200 KB 文本取中间 11 字节，验证跳过逻辑。
     const largeBody = 'abcdefghijklmnopqrstuvwxyz'.repeat(8_000).slice(0, 200_000);
@@ -674,12 +692,12 @@ async function main(): Promise<void> {
       body: largeBody,
     });
     const largeBound = await bind(aConn, roomId, large.fileId);
-    const middle = await fetch(largeBound.file.public_url, {
+    const middle = await fetch(largeBound.file.preview_url, {
       headers: { range: 'bytes=65530-65540' },
     });
     checkEqual('跨 chunk Range 返回 206', middle.status, 206);
     checkEqual('跨 chunk Range 内容正确', await middle.text(), largeBody.slice(65530, 65541));
-    const htmlDownload = await fetch(htmlBound.file.public_url);
+    const htmlDownload = await fetch(htmlBound.file.preview_url);
     check(
       '绑定的 HTML 仍强制 attachment',
       (htmlDownload.headers.get('content-disposition') ?? '').startsWith('attachment'),
@@ -770,7 +788,7 @@ async function main(): Promise<void> {
       'NOT_OWNER',
     );
 
-    // 已分享 URL 不随成员移出房间失效（公开 URL 即下载权限，直到过期或删除）。
+    // 历史边界与票据复核：成员移出房间后，已分享票据 URL 立即失效。
     const membershipRoom = await createGroup(aConn, b.actor_id, '房间文件成员移出群');
     const surviving = await uploadTestFile(aConn.token, {
       name: 'surviving.txt',
@@ -778,14 +796,24 @@ async function main(): Promise<void> {
       body: 'still downloadable',
     });
     const survivingBound = await bind(aConn, membershipRoom, surviving.fileId);
+    const memberTicket = await callTool<{ file: { preview_url: string } }>(
+      bConn.client,
+      'network_room_file_get',
+      { room_id: membershipRoom, file_id: surviving.fileId },
+    );
     await callTool(aConn.client, 'network_room_members_update', {
       request_id: newRequestId('members'),
       room_id: membershipRoom,
       remove: [b.actor_id],
     });
     checkEqual(
-      '成员移出后已分享 URL 仍可下载',
-      (await fetch(survivingBound.file.public_url)).status,
+      '成员移出后旧票据 URL 立即失效',
+      (await fetch(memberTicket.file.preview_url)).status,
+      404,
+    );
+    checkEqual(
+      '上传者自己的票据仍可用',
+      (await fetch(survivingBound.file.preview_url)).status,
       200,
     );
     await expectToolError(

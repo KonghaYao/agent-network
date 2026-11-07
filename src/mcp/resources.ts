@@ -48,7 +48,8 @@ export function registerResources(
       if (!actor) throw new ResourceNotFoundError(uri.href, '凭据尚未注册');
       const rooms = await db
         .prepare(
-          `SELECT r.room_id, r.kind, r.title, r.head_seq, r.member_seq, m.last_read_seq
+          `SELECT r.room_id, r.kind, r.title, r.head_seq, r.member_seq,
+                  m.last_read_seq, m.joined_seq
              FROM room_members m JOIN rooms r ON r.room_id = m.room_id
             WHERE m.actor_id = ? AND m.status = 'active'
             ORDER BY r.updated_at DESC, r.room_id DESC`,
@@ -61,6 +62,7 @@ export function registerResources(
           head_seq: number;
           member_seq: number;
           last_read_seq: number;
+          joined_seq: number;
         }>();
       const online =
         actor.kind === 'agent'
@@ -76,15 +78,19 @@ export function registerResources(
         online,
         pending_count: actor.pending_count,
         inbox_head_seq: String(actor.inbox_head_seq),
-        rooms: rooms.results.map((room) => ({
-          room_id: room.room_id,
-          kind: room.kind,
-          title: room.title,
-          head_seq: String(room.head_seq),
-          my_last_read_seq: String(room.last_read_seq),
-          unread: room.last_read_seq !== room.head_seq,
-          member_seq: String(room.member_seq),
-        })),
+        rooms: rooms.results.map((room) => {
+          const readSeq = Math.max(room.last_read_seq, room.joined_seq);
+          return {
+            room_id: room.room_id,
+            kind: room.kind,
+            title: room.title,
+            head_seq: String(room.head_seq),
+            my_last_read_seq: String(readSeq),
+            // 加入前内容不属于当前代次，不能制造未读。
+            unread: readSeq < room.head_seq,
+            member_seq: String(room.member_seq),
+          };
+        }),
         limits: {
           stream_batch_max: LIMITS.streamBatchMax,
           stream_envelope_bytes: LIMITS.hintBytes,

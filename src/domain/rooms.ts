@@ -75,6 +75,13 @@ import {
   type RoomPolicies,
 } from './room-access';
 import { messagePreviewOf, type MessagePreviewView } from './views';
+import {
+  historyBoundary,
+  historySnapshot,
+  visibleMessage,
+  type HistoryBoundary,
+  type HistorySnapshot,
+} from './room-history';
 
 export type { MessagePreviewView } from './views';
 
@@ -89,6 +96,12 @@ export interface RoomView {
   my_role: 'owner' | 'admin' | 'member';
   my_role_revision: number;
   my_last_read_seq: string;
+  /** 当前这次加入的代次；重新加入后递增。 */
+  my_member_generation: number;
+  /** 当前身份可见历史的消息序号下界；`0` 表示全历史。 */
+  history_from_seq: string;
+  /** 本次读取采用的授权快照，跨入口用于核对同一份策略/代次。 */
+  authorization: HistorySnapshot;
   policy_revision: number;
   policies: RoomPolicies;
   announcement: string;
@@ -108,6 +121,8 @@ export interface MemberView {
   agent_session_id: string | null;
   role: 'owner' | 'admin' | 'member';
   role_revision: number;
+  /** 成员代次；重新加入后递增，旧游标/旧票据不能跨代次。 */
+  member_generation: number;
   joined_seq: string;
   joined_at: string;
   last_read_seq: string;
@@ -186,16 +201,46 @@ export interface RoomRoleHistoryPage {
   has_more: boolean;
 }
 
+/**
+ * 策略变更的影响说明。
+ *
+ * 历史策略收紧会让成员失去对加入前消息/文件/任务的读取；任务或发言权限
+ * 收紧会阻止普通成员继续使用现有材料。服务端把“材料失权”显式返回给群主，
+ * 避免把失败当成成功验收。
+ */
+export interface RoomPolicyImpact {
+  history_policy: RoomRow['member_history_policy'];
+  /** 历史改为 from_join 后会失去部分历史的 active 普通成员数。 */
+  affected_members: number;
+  /** 至少对一名 active 成员变为不可见的任务数。 */
+  hidden_tasks: number;
+  /** 至少对一名 active 成员变为不可见的文件数。 */
+  hidden_files: number;
+  /** 现有任务材料是否失权；true 时任务完成会按不可见失败。 */
+  material_loss: boolean;
+  message: string;
+}
+
+export interface RoomPolicySetResult extends RoomDetail {
+  /** 只在 `network_room_policy_set` 返回；`room_get` 不重复携带。 */
+  policy_impact?: RoomPolicyImpact;
+}
+
 function messagePreview(row: MessageRow | null): MessagePreviewView | null {
   return messagePreviewOf(row);
 }
 
 function roomView(
   room: RoomRow,
-  member: Pick<RoomMemberRow, 'role' | 'status' | 'last_read_seq' | 'role_revision'>,
+  member: Pick<
+    RoomMemberRow,
+    'role' | 'status' | 'last_read_seq' | 'role_revision' | 'joined_seq' | 'joined_at' | 'member_generation'
+  >,
   memberCount: number,
   lastMessage: MessageRow | null,
+  boundary: HistoryBoundary,
 ): RoomView {
+  const lastVisible = lastMessage && visibleMessage(lastMessage, boundary) ? lastMessage : null;
   return {
     room_id: room.room_id,
     kind: room.kind,
@@ -206,7 +251,10 @@ function roomView(
     member_count: memberCount,
     my_role: member.role,
     my_role_revision: member.role_revision,
-    my_last_read_seq: String(member.last_read_seq),
+    my_last_read_seq: String(Math.max(member.last_read_seq, member.joined_seq)),
+    my_member_generation: member.member_generation,
+    history_from_seq: String(boundary.fromSeq),
+    authorization: historySnapshot(boundary),
     policy_revision: room.policy_revision,
     policies: roomPolicies(room),
     announcement: room.announcement,
@@ -215,7 +263,7 @@ function roomView(
       room.announcement_updated_at === null ? null : String(room.announcement_updated_at),
     announcement_updated_by: room.announcement_updated_by,
     capabilities: roomCapabilitiesFor(room, member),
-    last_message: messagePreview(lastMessage),
+    last_message: messagePreview(lastVisible),
     created_at: String(room.created_at),
     updated_at: String(room.updated_at),
   };
@@ -238,7 +286,7 @@ async function loadRoomView(
     memberCount(db, room.room_id),
     room.last_message_id ? getMessage(db, room.last_message_id) : Promise.resolve(null),
   ]);
-  return roomView(room, member, count, last);
+  return roomView(room, member, count, last, historyBoundary(room, member));
 }
 
 async function loadMembers(
@@ -264,6 +312,7 @@ async function loadMembers(
     agent_session_id: row.agent_session_id,
     role: row.role,
     role_revision: row.role_revision,
+    member_generation: row.member_generation,
     joined_seq: String(row.joined_seq),
     joined_at: String(row.joined_at),
     last_read_seq: String(row.last_read_seq),
@@ -276,6 +325,9 @@ interface RoomListRow extends RoomRow {
   my_role: 'owner' | 'admin' | 'member';
   my_role_revision: number;
   my_last_read_seq: number;
+  my_joined_seq: number;
+  my_joined_at: number;
+  my_member_generation: number;
   member_count: number;
   lm_message_id: string | null;
   lm_sender_id: string | null;
@@ -302,7 +354,8 @@ export async function roomsList(
   const rows = await db
     .prepare(
       `SELECT r.*, m.role AS my_role, m.role_revision AS my_role_revision,
-              m.last_read_seq AS my_last_read_seq,
+              m.last_read_seq AS my_last_read_seq, m.joined_seq AS my_joined_seq,
+              m.joined_at AS my_joined_at, m.member_generation AS my_member_generation,
               (SELECT COUNT(*) FROM room_members mm WHERE mm.room_id = r.room_id AND mm.status = 'active') AS member_count,
               lm.message_id AS lm_message_id, lm.sender_id AS lm_sender_id, lm.preview AS lm_preview,
               lm.body_bytes AS lm_body_bytes, lm.created_seq AS lm_created_seq, lm.created_at AS lm_created_at
@@ -319,15 +372,19 @@ export async function roomsList(
   const page = rows.results.slice(0, limit);
   const hasMore = rows.results.length > limit;
   const last = page.at(-1);
-  const items = page.map((row) =>
-    roomView(
+  const items = page.map((row) => {
+    const member = {
+      role: row.my_role,
+      status: 'active' as const,
+      last_read_seq: row.my_last_read_seq,
+      role_revision: row.my_role_revision,
+      joined_seq: row.my_joined_seq,
+      joined_at: row.my_joined_at,
+      member_generation: row.my_member_generation,
+    };
+    return roomView(
       row,
-      {
-        role: row.my_role,
-        status: 'active' as const,
-        last_read_seq: row.my_last_read_seq,
-        role_revision: row.my_role_revision,
-      },
+      member,
       row.member_count,
       row.lm_message_id
         ? {
@@ -346,8 +403,9 @@ export async function roomsList(
             created_at: row.lm_created_at ?? 0,
           }
         : null,
-    ),
-  );
+      historyBoundary(row, member),
+    );
+  });
 
   return {
     items,
@@ -1098,8 +1156,10 @@ export async function roomMembersUpdate(
         db
           .prepare(
             `INSERT INTO room_members
-               (room_id, actor_id, role, status, joined_seq, last_read_seq, joined_at, role_revision, updated_at)
-             VALUES (?, ?, 'member', 'active', (SELECT event_seq FROM events WHERE event_key = ?), 0, ?, 1, ?)
+               (room_id, actor_id, role, status, joined_seq, last_read_seq, joined_at,
+                member_generation, role_revision, updated_at)
+             VALUES (?, ?, 'member', 'active', (SELECT event_seq FROM events WHERE event_key = ?),
+                     (SELECT event_seq FROM events WHERE event_key = ?), ?, 1, 1, ?)
              ON CONFLICT(room_id, actor_id) DO UPDATE SET
                status = 'active',
                role = CASE WHEN room_members.status = 'active' THEN room_members.role ELSE 'member' END,
@@ -1107,11 +1167,20 @@ export async function roomMembersUpdate(
                                     THEN room_members.role_revision ELSE room_members.role_revision + 1 END,
                joined_seq = CASE WHEN room_members.status = 'active'
                                  THEN room_members.joined_seq ELSE excluded.joined_seq END,
+               -- 重新加入是新代次的开始：加入前内容不成为未读，阅读水位从
+               -- 新加入事件起算。
+               last_read_seq = CASE WHEN room_members.status = 'active'
+                                    THEN room_members.last_read_seq ELSE excluded.joined_seq END,
                joined_at = CASE WHEN room_members.status = 'active'
                                 THEN room_members.joined_at ELSE excluded.joined_at END,
+               -- 只有非 active → active 的重新加入才递增代次；active 成员
+               -- 的重复添加保持原代次与阅读水位。
+               member_generation = CASE WHEN room_members.status = 'active'
+                                        THEN room_members.member_generation
+                                        ELSE room_members.member_generation + 1 END,
                updated_at = excluded.updated_at`,
           )
-          .bind(room.room_id, member, eventKey, at, at),
+          .bind(room.room_id, member, eventKey, eventKey, at, at),
       ),
       ...remove.flatMap((member) => [
         db
@@ -1245,12 +1314,86 @@ export async function roomRoleSet(
   return roomDetail(db, access.room.room_id, caller);
 }
 
-/** 群主设置普通成员的发言、邀请与创建任务策略。 */
+async function policyImpactFor(
+  db: D1Database,
+  roomId: string,
+  previous: RoomPolicies,
+  next: RoomPolicies,
+): Promise<RoomPolicyImpact> {
+  const historyChanged = previous.member_history !== next.member_history;
+  let affectedMembers = 0;
+  let hiddenTasks = 0;
+  let hiddenFiles = 0;
+
+  if (historyChanged && next.member_history === 'from_join') {
+    const memberRow = await db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM room_members
+          WHERE room_id = ? AND status = 'active' AND joined_seq > 0`,
+      )
+      .bind(roomId)
+      .first<{ n: number }>();
+    affectedMembers = memberRow?.n ?? 0;
+    const taskRow = await db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM room_tasks t
+          WHERE t.room_id = ?
+            AND EXISTS (
+              SELECT 1 FROM room_members m
+               WHERE m.room_id = t.room_id AND m.status = 'active' AND m.joined_seq > 0
+                 AND ((t.created_seq IS NOT NULL AND t.created_seq < m.joined_seq)
+                   OR (t.created_seq IS NULL AND t.created_at < m.joined_at))
+            )`,
+      )
+      .bind(roomId)
+      .first<{ n: number }>();
+    hiddenTasks = taskRow?.n ?? 0;
+    const fileRow = await db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM room_files rf
+          WHERE rf.room_id = ?
+            AND EXISTS (
+              SELECT 1 FROM room_members m
+               WHERE m.room_id = rf.room_id AND m.status = 'active' AND m.joined_seq > 0
+                 AND ((rf.created_seq IS NOT NULL AND rf.created_seq < m.joined_seq)
+                   OR (rf.created_seq IS NULL AND rf.created_at < m.joined_at))
+            )`,
+      )
+      .bind(roomId)
+      .first<{ n: number }>();
+    hiddenFiles = fileRow?.n ?? 0;
+  }
+
+  const materialLoss = hiddenTasks > 0 || hiddenFiles > 0;
+  let message: string;
+  if (historyChanged && next.member_history === 'full') {
+    message = '已开启全历史：成员可读取加入前消息、文件与任务；已复制内容无法回收。';
+  } else if (historyChanged) {
+    message =
+      '已收紧为本次加入后历史：加入前内容立即不可见；已复制内容无法回收。' +
+      (materialLoss
+        ? `有 ${hiddenTasks} 个任务、${hiddenFiles} 个文件失去访问，任务完成会被拒绝，需先重新派发或补充材料。`
+        : '');
+  } else {
+    message = '策略已更新；只影响后续操作，不追溯已复制内容。';
+  }
+
+  return {
+    history_policy: next.member_history,
+    affected_members: affectedMembers,
+    hidden_tasks: hiddenTasks,
+    hidden_files: hiddenFiles,
+    material_loss: materialLoss,
+    message,
+  };
+}
+
+/** 群主设置普通成员的发言、邀请、任务、历史、审批与 @所有人 策略。 */
 export async function roomPolicySet(
   db: D1Database,
   principal: Principal,
   input: RoomPolicySetInput,
-): Promise<RoomDetail> {
+): Promise<RoomPolicySetResult> {
   const caller = actorId(principal);
   const access = await requireGroupAccess(db, input.room_id, caller, 'manage_policy');
   const payloadHash = await sha256Hex(stableStringify(input));
@@ -1267,7 +1410,12 @@ export async function roomPolicySet(
     member_message: input.member_message_policy ?? previous.member_message,
     member_invite: input.member_invite_policy ?? previous.member_invite,
     member_task: input.member_task_policy ?? previous.member_task,
+    member_history: input.member_history_policy ?? previous.member_history,
+    member_join: input.member_join_policy ?? previous.member_join,
+    member_profile: input.member_profile_policy ?? previous.member_profile,
+    member_mention_all: input.member_mention_all_policy ?? previous.member_mention_all,
   };
+  const impact = await policyImpactFor(db, access.room.room_id, previous, next);
   const at = nowMs();
   const eventKey = `policy:${access.room.room_id}:${input.request_id}`;
 
@@ -1299,6 +1447,7 @@ export async function roomPolicySet(
             policies: next,
             previous_policies: previous,
             changed_by: caller,
+            impact,
           },
         },
         at,
@@ -1308,13 +1457,19 @@ export async function roomPolicySet(
         .prepare(
           `UPDATE rooms
               SET member_message_policy = ?, member_invite_policy = ?, member_task_policy = ?,
-                  policy_revision = policy_revision + 1, updated_at = ?
+                  member_history_policy = ?, member_join_policy = ?, member_profile_policy = ?,
+                  member_mention_all_policy = ?, policy_revision = policy_revision + 1,
+                  updated_at = ?
             WHERE room_id = ?`,
         )
         .bind(
           next.member_message,
           next.member_invite,
           next.member_task,
+          next.member_history,
+          next.member_join,
+          next.member_profile,
+          next.member_mention_all,
           at,
           access.room.room_id,
         ),
@@ -1327,14 +1482,15 @@ export async function roomPolicySet(
           resultingRevision: access.room.policy_revision + 1,
           changedBy: caller,
           requestId: input.request_id,
-          detail: { previous, next },
+          detail: { previous, next, impact },
         },
         at,
       ),
     ],
   });
 
-  return roomDetail(db, access.room.room_id, caller);
+  const detail = await roomDetail(db, access.room.room_id, caller);
+  return { ...detail, policy_impact: impact };
 }
 
 /** 群主/管理员维护公告；空字符串表示清除。 */

@@ -14,7 +14,7 @@ import { nowMs, sha256Hex, stableStringify } from '../storage/db';
 import { eventStatement, outboxStatement, roomTopic } from '../storage/events';
 import { guardSql } from '../storage/guards';
 import { getMember, getOperation, getRoom, getRoomTask } from '../storage/queries';
-import type { RoomRow, RoomTaskRow } from '../storage/rows';
+import type { RoomMemberRow, RoomRow, RoomTaskRow } from '../storage/rows';
 import {
   operationsStatement,
   resolveOperation,
@@ -22,6 +22,14 @@ import {
 } from '../storage/transactions/runner';
 import { actorId, type Principal } from './principal';
 import { capabilityGuardStatement } from './room-access';
+import {
+  createdHistoryFilter,
+  historyBoundary,
+  historySnapshot,
+  visibleCreated,
+  type HistoryBoundary,
+  type HistorySnapshot,
+} from './room-history';
 
 /**
  * 房间任务列表（room_tasks）。
@@ -60,6 +68,8 @@ export interface RoomTaskListResult {
   tasks: RoomTaskView[];
   total: number;
   done: number;
+  /** 本次任务读取采用的授权快照；与房间、历史、文件读取一致。 */
+  authorization: HistorySnapshot;
 }
 
 export interface RoomTaskResult {
@@ -166,7 +176,7 @@ async function requireRoomMember(
   db: D1Database,
   principal: Principal,
   roomId: string,
-): Promise<{ caller: string; room: RoomRow }> {
+): Promise<{ caller: string; room: RoomRow; member: RoomMemberRow; boundary: HistoryBoundary }> {
   const caller = actorId(principal);
   const room = await getRoom(db, roomId);
   if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
@@ -174,7 +184,7 @@ async function requireRoomMember(
   if (!member || member.status !== 'active') {
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
   }
-  return { caller, room };
+  return { caller, room, member, boundary: historyBoundary(room, member) };
 }
 
 function requireAgent(principal: Principal): void {
@@ -266,14 +276,15 @@ export async function taskListGet(
   principal: Principal,
   input: TaskListGetInput,
 ): Promise<RoomTaskListResult> {
-  const { caller, room } = await requireRoomMember(db, principal, input.room_id);
+  const { caller, room, boundary } = await requireRoomMember(db, principal, input.room_id);
+  const history = createdHistoryFilter('t', boundary);
   const result = await db
     .prepare(
-      `SELECT * FROM room_tasks
-        WHERE room_id = ? AND list_id = ?
-        ORDER BY sort_order ASC, task_id ASC`,
+      `SELECT * FROM room_tasks t
+        WHERE t.room_id = ? AND t.list_id = ? AND (${history.sql})
+        ORDER BY t.sort_order ASC, t.task_id ASC`,
     )
-    .bind(room.room_id, DEFAULT_LIST_ID)
+    .bind(room.room_id, DEFAULT_LIST_ID, ...history.binds)
     .all<RoomTaskRow>();
   const context = await contextFor(db, principal, caller, room, result.results);
   const tasks = result.results.map((task) => taskView(task, context));
@@ -281,6 +292,7 @@ export async function taskListGet(
     tasks,
     total: tasks.length,
     done: tasks.filter((task) => task.status === 'done').length,
+    authorization: historySnapshot(boundary),
   };
 }
 
@@ -306,8 +318,12 @@ export async function taskSummary(
               COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) AS done,
               COALESCE(SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
          FROM room_members m
+         JOIN rooms r ON r.room_id = m.room_id
          LEFT JOIN room_tasks t
            ON t.room_id = m.room_id AND t.list_id = ?
+          AND (r.kind = 'direct' OR r.member_history_policy = 'full'
+            OR (t.created_seq IS NOT NULL AND t.created_seq >= m.joined_seq)
+            OR (t.created_seq IS NULL AND t.created_at >= m.joined_at))
         WHERE m.actor_id = ? AND m.status = 'active'${placeholders}
         GROUP BY m.room_id
         ORDER BY m.room_id ASC`,
@@ -349,8 +365,12 @@ export async function taskCounts(db: D1Database, principal: Principal): Promise<
               COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) AS done,
               COALESCE(SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
          FROM room_members m
+         JOIN rooms r ON r.room_id = m.room_id
          LEFT JOIN room_tasks t
            ON t.room_id = m.room_id AND t.list_id = ?
+          AND (r.kind = 'direct' OR r.member_history_policy = 'full'
+            OR (t.created_seq IS NOT NULL AND t.created_seq >= m.joined_seq)
+            OR (t.created_seq IS NULL AND t.created_at >= m.joined_at))
         WHERE m.actor_id = ? AND m.status = 'active'`,
     )
     .bind(caller, DEFAULT_LIST_ID, caller)
@@ -388,6 +408,7 @@ export async function taskAdd(
     result: null,
     created_by: caller,
     created_at: at,
+    created_seq: null,
     updated_at: at,
     completed_at: null,
     sort_order: 0,
@@ -419,12 +440,14 @@ export async function taskAdd(
           ),
         )
         .bind(room.room_id, DEFAULT_LIST_ID, LIMITS.roomTasksPerRoom),
+      event.statement,
       db
         .prepare(
           `INSERT INTO room_tasks
              (task_id, room_id, list_id, description, status, assignee_actor_id,
-              result, created_by, created_at, updated_at, completed_at, sort_order)
-           VALUES (?, ?, ?, ?, 'pending', NULL, NULL, ?, ?, ?, NULL,
+              result, created_by, created_at, created_seq, updated_at, completed_at, sort_order)
+           VALUES (?, ?, ?, ?, 'pending', NULL, NULL, ?, ?,
+             (SELECT event_seq FROM events WHERE event_key = ?), ?, NULL,
              (SELECT COALESCE(MAX(sort_order), 0) + 1
                 FROM room_tasks WHERE room_id = ? AND list_id = ?))`,
         )
@@ -435,11 +458,11 @@ export async function taskAdd(
           task.description,
           task.created_by,
           task.created_at,
+          event.eventKey,
           task.updated_at,
           task.room_id,
           task.list_id,
         ),
-      event.statement,
       event.outbox,
     ],
   });
@@ -460,7 +483,10 @@ export async function taskClaim(
 
   const existing = await getRoomTask(db, input.task_id);
   if (!existing) throw new BusinessError('NOT_FOUND', '任务不存在');
-  const { room } = await requireRoomMember(db, principal, existing.room_id);
+  const { room, boundary } = await requireRoomMember(db, principal, existing.room_id);
+  if (!visibleCreated(existing, boundary)) {
+    throw new BusinessError('NOT_FOUND', '任务不存在或当前不可见');
+  }
   if (existing.status !== 'pending') {
     throw new BusinessError('CLAIM_CONFLICT', '任务已被领取或状态已变化', {
       task_id: existing.task_id,
@@ -530,7 +556,12 @@ async function finishTask(
 
   const existing = await getRoomTask(db, input.task_id);
   if (!existing) throw new BusinessError('NOT_FOUND', '任务不存在');
-  const { room } = await requireRoomMember(db, principal, existing.room_id);
+  const { room, boundary } = await requireRoomMember(db, principal, existing.room_id);
+  // 历史收紧或重新加入后任务材料失权：拒绝完成，避免把不可见材料当成
+  // 已验收成果。任务需要重新派发或由群主恢复可见性。
+  if (!visibleCreated(existing, boundary)) {
+    throw new BusinessError('NOT_FOUND', '任务不存在或当前不可见');
+  }
   if (existing.status !== 'claimed' || existing.assignee_actor_id !== caller) {
     throw new BusinessError('CLAIM_CONFLICT', '任务不是由当前身份领取或状态已变化', {
       task_id: existing.task_id,
@@ -620,7 +651,10 @@ export async function taskUpdate(
 
   const existing = await getRoomTask(db, input.task_id);
   if (!existing) throw new BusinessError('NOT_FOUND', '任务不存在');
-  const { room } = await requireRoomMember(db, principal, existing.room_id);
+  const { room, boundary } = await requireRoomMember(db, principal, existing.room_id);
+  if (!visibleCreated(existing, boundary)) {
+    throw new BusinessError('NOT_FOUND', '任务不存在或当前不可见');
+  }
   if (existing.created_by !== caller && room.owner_id !== caller) {
     throw new BusinessError('NOT_OWNER', '只有任务创建者或房间 owner 可以修改任务');
   }
@@ -663,7 +697,10 @@ export async function taskDelete(
 
   const existing = await getRoomTask(db, input.task_id);
   if (!existing) throw new BusinessError('NOT_FOUND', '任务不存在');
-  const { room } = await requireRoomMember(db, principal, existing.room_id);
+  const { room, boundary } = await requireRoomMember(db, principal, existing.room_id);
+  if (!visibleCreated(existing, boundary)) {
+    throw new BusinessError('NOT_FOUND', '任务不存在或当前不可见');
+  }
   if (existing.created_by !== caller && room.owner_id !== caller) {
     throw new BusinessError('NOT_OWNER', '只有任务创建者或房间 owner 可以删除任务');
   }

@@ -14,6 +14,8 @@ export const CHAT_MESSAGE_FILES_SCRIPT = `
 const MESSAGE_FILE_CACHE_MAX = 256;
 const MESSAGE_FILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const MESSAGE_FILE_FAILURE_TTL_MS = 60 * 1000;
+// 服务端票据 1 小时有效；客户端提前丢弃，避免长时间停留后反复使用失效地址。
+const MESSAGE_FILE_TICKET_MAX_AGE_MS = 55 * 60 * 1000;
 const MESSAGE_FILE_CONCURRENCY = 4;
 const MESSAGE_FILE_ESCAPED = /\\\\r\\\\n|\\\\n|\\\\r|\\\\t/g;
 const MESSAGE_FILE_ABSOLUTE = /^([A-Za-z][A-Za-z0-9+.-]*):\\/\\/([^/?#]+)$/;
@@ -41,6 +43,7 @@ const MESSAGE_FILE_ACTIVE = new Set([
 ]);
 const messageFileCache = new Map();
 const messageFileInflight = new Map();
+const messageFileTickets = new Map();
 const messageFileQueue = [];
 let messageFileActive = 0;
 let messageFileObserver;
@@ -61,6 +64,53 @@ function messageFileHref(fileId) {
 
 function messageFileDownloadHref(fileId) {
   return fileSafeUrl('/f/' + fileId + '?download=1');
+}
+
+/**
+ * 房间绑定文件的短时票据地址。
+ *
+ * 正文里的 \`/f/<id>\` 只是文件身份；绑定到房间后需要成员代次票据才能读取。
+ * HEAD 先试裸地址（未绑定上传仍公开），失败时用当前房间调用
+ * \`network_room_file_get\` 取带 \`?t=\` 的地址；票据按 fileId 缓存，超过
+ * 客户端安全年龄后丢弃，下次渲染会向服务端重新换取。
+ */
+function messageFileTicketUrl(fileId) {
+  const ticket = messageFileTickets.get(fileId);
+  if (!ticket) return messageFileHref(fileId);
+  if (Date.now() - ticket.at > MESSAGE_FILE_TICKET_MAX_AGE_MS) {
+    messageFileTickets.delete(fileId);
+    return messageFileHref(fileId);
+  }
+  return ticket.url;
+}
+
+function messageFileRememberTicket(fileId, url) {
+  if (!url || url.indexOf('?') < 0) return;
+  messageFileTickets.set(fileId, { url: url, at: Date.now() });
+}
+
+function messageFileResolveTicket(fileId) {
+  const cached = messageFileTicketUrl(fileId);
+  if (cached && cached.indexOf('?') >= 0) return Promise.resolve(cached);
+  if (typeof activeRoomId !== 'string' || !activeRoomId) return Promise.resolve(null);
+  const roomId = activeRoomId;
+  return callTool('network_room_file_get', { room_id: roomId, file_id: fileId }).then(
+    function (result) {
+      const file = result && result.file ? result.file : null;
+      const url = file ? file.preview_url || file.public_url : null;
+      if (url) messageFileRememberTicket(fileId, url);
+      return url || null;
+    }
+  ).catch(function () { return null; });
+}
+
+function messageFileDownloadUrl(fileId) {
+  const ticketUrl = messageFileTickets.get(fileId);
+  const usable = ticketUrl && Date.now() - ticketUrl.at <= MESSAGE_FILE_TICKET_MAX_AGE_MS
+    ? ticketUrl.url
+    : null;
+  if (!usable) return messageFileDownloadHref(fileId);
+  return fileSafeUrl(usable + (usable.indexOf('?') < 0 ? '?' : '&') + 'download=1');
 }
 
 /** 仅用于提取副本：字面量转义换行归一化，不回写消息。 */
@@ -262,31 +312,45 @@ function messageFileCacheSet(fileId, entry) {
 }
 
 /** 超时/Abort 与浏览器错误都归一为失败缓存，由卡片回退到正文文件名。 */
-function messageFileFetchMeta(href) {
-  const controller = new AbortController();
-  const timer = setTimeout(function () { controller.abort(); }, WEB_REQUEST_TIMEOUT_MS);
-  return fetch(href, {
-    method: 'HEAD',
-    credentials: 'omit',
-    redirect: 'error',
-    referrerPolicy: 'no-referrer',
-    signal: controller.signal
-  }).then(function (response) {
-    if (!response.ok) throw new Error('HTTP ' + response.status);
-    const mime = messageFileMime(response.headers.get('content-type'));
-    const length = response.headers.get('content-length');
-    const size = length === null ? null : Number(length);
-    const name = messageFileCleanName(
-      messageFileDispositionName(response.headers.get('content-disposition'))
-    );
-    return {
-      name: name,
-      mime: mime,
-      size: Number.isFinite(size) && size >= 0 ? size : null,
-      kind: messageFileKind(mime, name)
-    };
-  }).finally(function () {
-    clearTimeout(timer);
+function messageFileFetchMeta(fileId, href) {
+  function attempt(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(function () { controller.abort(); }, WEB_REQUEST_TIMEOUT_MS);
+    return fetch(url, {
+      method: 'HEAD',
+      credentials: 'omit',
+      redirect: 'error',
+      referrerPolicy: 'no-referrer',
+      signal: controller.signal
+    }).then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const mime = messageFileMime(response.headers.get('content-type'));
+      const length = response.headers.get('content-length');
+      const size = length === null ? null : Number(length);
+      const name = messageFileCleanName(
+        messageFileDispositionName(response.headers.get('content-disposition'))
+      );
+      return {
+        name: name,
+        mime: mime,
+        size: Number.isFinite(size) && size >= 0 ? size : null,
+        kind: messageFileKind(mime, name)
+      };
+    }).finally(function () {
+      clearTimeout(timer);
+    });
+  }
+  return attempt(href).catch(function (error) {
+    // 绑定到房间的文件裸 URL 不可读；用当前房间换取成员代次票据后重试。
+    return messageFileResolveTicket(fileId).then(function (ticketUrl) {
+      if (!ticketUrl || ticketUrl === href) throw error;
+      return attempt(ticketUrl).catch(function (ticketError) {
+        // 票据可能在服务端已失效（进程重启、移出、重新加入）；丢弃缓存，
+        // 让下次渲染重新换取绑定当前成员代次的地址。
+        messageFileTickets.delete(fileId);
+        throw ticketError;
+      });
+    });
   });
 }
 
@@ -327,7 +391,7 @@ function requestMessageFileMeta(fileId, href, priority) {
   enqueueMessageFileTask({
     priority: Boolean(priority),
     run: function () {
-      return messageFileFetchMeta(href).then(function (meta) {
+      return messageFileFetchMeta(fileId, href).then(function (meta) {
         messageFileCacheSet(fileId, { ok: true, at: Date.now(), meta: meta });
         messageFileInflight.delete(fileId);
         resolveTask(meta);
@@ -411,7 +475,7 @@ function messageFileActionButton(label, className) {
 }
 
 function messageFileDownloadLink(fileId, name) {
-  const href = messageFileDownloadHref(fileId);
+  const href = messageFileDownloadUrl(fileId);
   if (!href) return null;
   const link = document.createElement('a');
   link.className = 'msg-file-action msg-file-download';
@@ -481,7 +545,7 @@ function messageFileThumbnail(card, meta) {
   const fileId = card.getAttribute('data-file-id');
   const name = meta.name || card.__messageFileFallback || '图片';
   if (!fileId || !isPreviewImage(meta.mime, name)) return null;
-  const href = messageFileHref(fileId);
+  const href = messageFileTicketUrl(fileId);
   if (!href) return null;
   const button = document.createElement('button');
   button.type = 'button';
@@ -515,6 +579,7 @@ function messageFileThumbnail(card, meta) {
 
 function applyMessageFileMeta(card, meta) {
   card.removeAttribute('data-loading');
+  const fileId = card.getAttribute('data-file-id');
   const name = meta.name || card.__messageFileFallback || '文件';
   const badge = card.querySelector('.msg-file-kind');
   if (badge) badge.textContent = fileIconLabel(meta.kind);
@@ -531,7 +596,11 @@ function applyMessageFileMeta(card, meta) {
   }
   card.__messageFileMeta = meta;
   const download = card.querySelector('.msg-file-download');
-  if (download) download.setAttribute('download', name);
+  if (download) {
+    download.setAttribute('download', name);
+    const downloadHref = messageFileDownloadUrl(fileId);
+    if (downloadHref) download.href = downloadHref;
+  }
   updateMessageFileActions(card, meta);
   messageFileThumbnail(card, meta);
   scrollController.noteContentChanged();
@@ -558,8 +627,8 @@ function openMessageFilePreview(card, trigger) {
   const meta = card.__messageFileMeta;
   const fileId = card.getAttribute('data-file-id');
   if (!meta || !fileId) return;
-  const href = messageFileHref(fileId);
-  const download = messageFileDownloadHref(fileId);
+  const href = messageFileTicketUrl(fileId);
+  const download = messageFileDownloadUrl(fileId);
   if (!href) return;
   const nameNode = card.querySelector('.msg-file-name');
   const name = (nameNode && nameNode.textContent) || card.__messageFileFallback || '文件';

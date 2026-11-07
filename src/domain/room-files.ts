@@ -1,5 +1,5 @@
 import { BusinessError } from '../contracts/errors';
-import { decodeCursor, encodeCursor } from '../contracts/cursor';
+import { encodeCursor } from '../contracts/cursor';
 import { clampPage, LIMITS } from '../contracts/limits';
 import type {
   RoomFileBindInput,
@@ -17,7 +17,7 @@ import {
   getRoom,
   getRoomFile,
 } from '../storage/queries';
-import type { RoomFileRow, RoomRow } from '../storage/rows';
+import type { RoomFileRow, RoomMemberRow, RoomRow } from '../storage/rows';
 import {
   isRoomFileConflict,
   operationsStatement,
@@ -25,6 +25,17 @@ import {
   runIdempotent,
 } from '../storage/transactions/runner';
 import { actorId, type Principal } from './principal';
+import { appendFileTicket, issueFileTicket, verifyFileTicket } from './file-ticket';
+import {
+  createdHistoryFilter,
+  decodeHistoryCursor,
+  historyBoundary,
+  historyCursorScope,
+  historySnapshot,
+  visibleCreated,
+  type HistoryBoundary,
+  type HistorySnapshot,
+} from './room-history';
 
 /**
  * 聊天绑定文件（room_files）。
@@ -72,17 +83,28 @@ function publicFileUrl(publicOrigin: string, fileId: string): string {
 interface ViewContext {
   publicOrigin: string;
   viewerId: string;
-  room: Pick<RoomRow, 'kind' | 'owner_id'>;
+  room: RoomRow;
   uploaderName: string;
+  boundary: HistoryBoundary;
+  ticketSecret: string;
 }
 
 function canDelete(row: RoomFileRow, context: ViewContext): boolean {
+  if (!visibleCreated(row, context.boundary)) return false;
   if (row.uploader_id === context.viewerId) return true;
   return context.room.kind === 'group' && context.room.owner_id === context.viewerId;
 }
 
 function roomFileView(row: RoomFileRow, context: ViewContext): RoomFileView {
   const publicUrl = publicFileUrl(context.publicOrigin, row.file_id);
+  const ticket = issueFileTicket(context.ticketSecret, {
+    fileId: row.file_id,
+    roomId: row.room_id,
+    actorId: context.viewerId,
+    memberGeneration: context.boundary.memberGeneration,
+    expiresAt: Date.now() + LIMITS.fileTicketTtlMs,
+  });
+  const previewUrl = appendFileTicket(publicUrl, ticket);
   return {
     room_file_id: row.room_file_id,
     room_id: row.room_id,
@@ -92,8 +114,8 @@ function roomFileView(row: RoomFileRow, context: ViewContext): RoomFileView {
     size: row.size,
     sha256: row.sha256,
     public_url: publicUrl,
-    preview_url: publicUrl,
-    download_url: `${publicUrl}?download=1`,
+    preview_url: previewUrl,
+    download_url: appendFileTicket(`${publicUrl}?download=1`, ticket),
     preview_kind: filePreviewKind(row.mime_type),
     uploader_id: row.uploader_id,
     uploader_name: context.uploaderName,
@@ -115,7 +137,7 @@ async function requireRoomMember(
   db: D1Database,
   principal: Principal,
   roomId: string,
-): Promise<{ caller: string; room: RoomRow }> {
+): Promise<{ caller: string; room: RoomRow; member: RoomMemberRow; boundary: HistoryBoundary }> {
   const caller = actorId(principal);
   const room = await getRoom(db, roomId);
   if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
@@ -123,7 +145,7 @@ async function requireRoomMember(
   if (!member || member.status !== 'active') {
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
   }
-  return { caller, room };
+  return { caller, room, member, boundary: historyBoundary(room, member) };
 }
 
 function memberGuard(db: D1Database, roomId: string, actor: string): D1PreparedStatement {
@@ -143,13 +165,17 @@ export async function roomFileBind(
   input: RoomFileBindInput,
   source: RoomFileSource,
   publicOrigin: string,
-): Promise<{ file: RoomFileView }> {
-  const { caller, room } = await requireRoomMember(db, principal, input.room_id);
+  ticketSecret: string,
+): Promise<{ file: RoomFileView; authorization: HistorySnapshot }> {
+  const { caller, room, boundary } = await requireRoomMember(db, principal, input.room_id);
   const payloadHash = await sha256Hex(stableStringify(input));
 
   // 先查幂等重放，再读文件：重放不依赖文件是否仍然可读。
   const replay = await getOperation(db, caller, input.request_id);
-  if (replay) return resolveOperation(replay, payloadHash) as { file: RoomFileView };
+  if (replay) {
+    const replayed = resolveOperation(replay, payloadHash) as { file: RoomFileView };
+    return { ...replayed, authorization: historySnapshot(boundary) };
+  }
 
   const file = await source.readFile(input.file_id);
   const at = nowMs();
@@ -179,6 +205,7 @@ export async function roomFileBind(
     size: file.size,
     sha256: file.sha256,
     created_at: at,
+    created_seq: null,
     expires_at: expiresAt,
     deleted_at: null,
     deleted_by: null,
@@ -188,8 +215,10 @@ export async function roomFileBind(
     viewerId: caller,
     room,
     uploaderName: principal.actor?.name ?? '',
+    boundary,
+    ticketSecret,
   };
-  const result = { file: roomFileView(row, context) };
+  const result = { file: roomFileView(row, context), authorization: historySnapshot(boundary) };
   const eventKey = `room_file:added:${roomFileId}`;
 
   // 唯一键恢复分支返回已存在的行；必须使用 runIdempotent 的返回值。
@@ -253,6 +282,15 @@ export async function roomFileBind(
         },
         at,
       ),
+      // 文件的历史边界取绑定事件序号；与事件同一事务，读取方不会看到
+      // 已绑定但缺少序号的半状态。
+      db
+        .prepare(
+          `UPDATE room_files
+              SET created_seq = (SELECT event_seq FROM events WHERE event_key = ?)
+            WHERE room_file_id = ? AND created_seq IS NULL`,
+        )
+        .bind(eventKey, roomFileId),
       outboxStatement(db, { topic: roomTopic(room.room_id), eventKey }, at),
     ],
     onUniqueConflict: async (error) => {
@@ -276,11 +314,12 @@ export async function roomFileBind(
           ...context,
           uploaderName: await actorName(db, existing.uploader_id),
         }),
+        authorization: historySnapshot(boundary),
       };
     },
   });
 
-  return stored as { file: RoomFileView };
+  return stored as { file: RoomFileView; authorization: HistorySnapshot };
 }
 
 interface RoomFileListRow extends RoomFileRow {
@@ -292,22 +331,39 @@ export async function roomFileList(
   principal: Principal,
   input: RoomFileListInput,
   publicOrigin: string,
-): Promise<{ items: RoomFileView[]; next_cursor: string | null; has_more: boolean }> {
-  const { caller, room } = await requireRoomMember(db, principal, input.room_id);
+  ticketSecret: string,
+): Promise<{
+  items: RoomFileView[];
+  next_cursor: string | null;
+  has_more: boolean;
+  authorization: HistorySnapshot;
+}> {
+  const { caller, room, boundary } = await requireRoomMember(db, principal, input.room_id);
   const limit = clampPage(input.limit, LIMITS.roomFilePageDefault, LIMITS.roomFilePageMax);
-  const scope = `room_files:${room.room_id}`;
-  const cursor = input.cursor ? decodeCursor(input.cursor, scope) : null;
-  const keyset = cursor ? 'AND (rf.created_at < ? OR (rf.created_at = ? AND rf.room_file_id < ?))' : '';
+  const scope = historyCursorScope('files', room.room_id, boundary.memberGeneration);
+  const cursor = input.cursor ? decodeHistoryCursor(input.cursor, scope, room.room_id) : null;
+  const keyset = cursor
+    ? 'AND (rf.created_at < ? OR (rf.created_at = ? AND rf.room_file_id < ?))'
+    : '';
+  const history = createdHistoryFilter('rf', boundary);
   const binds: unknown[] = cursor
-    ? [room.room_id, Date.now(), cursor.seq, cursor.seq, cursor.key ?? '']
-    : [room.room_id, Date.now()];
+    ? [
+        room.room_id,
+        Date.now(),
+        ...history.binds,
+        cursor.seq,
+        cursor.seq,
+        cursor.key ?? '',
+      ]
+    : [room.room_id, Date.now(), ...history.binds];
 
   const rows = await db
     .prepare(
       `SELECT rf.*, a.name AS uploader_name
          FROM room_files rf
          JOIN actors a ON a.actor_id = rf.uploader_id
-        WHERE rf.room_id = ? AND rf.deleted_at IS NULL AND rf.expires_at > ? ${keyset}
+        WHERE rf.room_id = ? AND rf.deleted_at IS NULL AND rf.expires_at > ?
+          AND (${history.sql}) ${keyset}
         ORDER BY rf.created_at DESC, rf.room_file_id DESC
         LIMIT ?`,
     )
@@ -319,8 +375,16 @@ export async function roomFileList(
   const last = page.at(-1);
   return {
     items: page.map((row) =>
-      roomFileView(row, { publicOrigin, viewerId: caller, room, uploaderName: row.uploader_name }),
+      roomFileView(row, {
+        publicOrigin,
+        viewerId: caller,
+        room,
+        uploaderName: row.uploader_name,
+        boundary,
+        ticketSecret,
+      }),
     ),
+    authorization: historySnapshot(boundary),
     next_cursor:
       hasMore && last
         ? encodeCursor({
@@ -341,16 +405,18 @@ export async function roomFileGet(
   principal: Principal,
   input: RoomFileGetInput,
   publicOrigin: string,
-): Promise<{ file: RoomFileView }> {
-  const { caller, room } = await requireRoomMember(db, principal, input.room_id);
+  ticketSecret: string,
+): Promise<{ file: RoomFileView; authorization: HistorySnapshot }> {
+  const { caller, room, boundary } = await requireRoomMember(db, principal, input.room_id);
   const row = await getRoomFile(db, input.file_id);
   if (
     !row ||
     row.room_id !== room.room_id ||
     row.deleted_at !== null ||
-    row.expires_at <= Date.now()
+    row.expires_at <= Date.now() ||
+    !visibleCreated(row, boundary)
   ) {
-    throw new BusinessError('FILE_UNAVAILABLE', '文件不存在、已过期或已删除', {
+    throw new BusinessError('FILE_UNAVAILABLE', '文件不存在、已过期、已删除或当前不可见', {
       file_id: input.file_id,
     });
   }
@@ -360,7 +426,10 @@ export async function roomFileGet(
       viewerId: caller,
       room,
       uploaderName: await actorName(db, row.uploader_id),
+      boundary,
+      ticketSecret,
     }),
+    authorization: historySnapshot(boundary),
   };
 }
 
@@ -369,10 +438,12 @@ export async function roomFileDelete(
   principal: Principal,
   input: RoomFileDeleteInput,
 ): Promise<{ file_id: string; deleted: true }> {
-  const { caller, room } = await requireRoomMember(db, principal, input.room_id);
+  const { caller, room, boundary } = await requireRoomMember(db, principal, input.room_id);
   const row = await getRoomFile(db, input.file_id);
-  if (!row || row.room_id !== room.room_id) {
-    throw new BusinessError('FILE_UNAVAILABLE', '文件不在该房间', { file_id: input.file_id });
+  if (!row || row.room_id !== room.room_id || !visibleCreated(row, boundary)) {
+    throw new BusinessError('FILE_UNAVAILABLE', '文件不在该房间或当前不可见', {
+      file_id: input.file_id,
+    });
   }
   const allowed = row.uploader_id === caller || (room.kind === 'group' && room.owner_id === caller);
   if (!allowed) {
@@ -441,13 +512,39 @@ export async function roomFileDelete(
   return stored as { file_id: string; deleted: true };
 }
 
-/** 供 `/f` 路由复用：墓碑或过期都视为不可下载。 */
-export async function roomFileIsDownloadable(
+/**
+ * `/f` 路由的授权入口。
+ *
+ * - 没有房间绑定行的上传文件仍是公开文件（直到 M07 收敛私有文件模型）；
+ * - 已绑定房间的文件必须有有效票据，并在使用票据时重新检查成员资格、
+ *   成员代次与当前历史边界；移出、重新加入或策略收紧后旧链接立即失效。
+ * - 返回 null 时统一 404，不区分“文件不存在/无票据/权限已撤销”。
+ */
+export async function authorizeRoomFileDownload(
   db: D1Database,
   fileId: string,
+  ticket: string | null,
+  secret: string,
   at = Date.now(),
-): Promise<boolean> {
+): Promise<RoomFileRow | 'public' | null> {
   const row = await getRoomFile(db, fileId);
-  if (!row) return true;
-  return row.deleted_at === null && row.expires_at > at;
+  if (!row) return 'public';
+  if (row.deleted_at !== null || row.expires_at <= at) return null;
+  const payload = ticket ? verifyFileTicket(secret, ticket, at) : null;
+  if (!payload) return null;
+  if (
+    payload.fileId !== row.file_id ||
+    payload.roomId !== row.room_id
+  ) {
+    return null;
+  }
+  const [room, member] = await Promise.all([
+    getRoom(db, row.room_id),
+    getMember(db, row.room_id, payload.actorId),
+  ]);
+  if (!room || !member || member.status !== 'active') return null;
+  if (member.member_generation !== payload.memberGeneration) return null;
+  const boundary = historyBoundary(room, member);
+  if (!visibleCreated(row, boundary)) return null;
+  return row;
 }

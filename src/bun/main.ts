@@ -138,6 +138,7 @@ const env: Env = {
   PRESENCE: presence,
   ENVIRONMENT: environment,
   PUBLIC_ORIGIN: publicOrigin,
+  ...(process.env.FILE_TICKET_SECRET ? { FILE_TICKET_SECRET: process.env.FILE_TICKET_SECRET } : {}),
   ...(eventsConfig ? { EVENTS: eventsConfig } : {}),
 };
 envRef = env;

@@ -119,6 +119,11 @@ export const LIMITS = {
   roomFilesPerRoom: 200,
   /** 每个房间的文件总字节上限。 */
   roomFileBytesPerRoom: 1024 * 1024 * 1024,
+  /**
+   * 房间文件下载票据有效期（毫秒）。票据只用于 `<img>`/下载链接等不能携带
+   * Authorization 的场景；每次使用仍检查成员代次与当前历史边界。
+   */
+  fileTicketTtlMs: 60 * 60_000,
   /** 网页监控面板 URL 的 UTF-8 字节上限；只允许 http/https。 */
   roomMonitorUrlMax: 2048,
   /** 单个房间任务列表的短描述/结果字符上限（按 Unicode 码点）。 */

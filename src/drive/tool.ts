@@ -48,7 +48,7 @@ export function registerDriveTool(server: McpServer, binding: DriveToolBinding):
     'drive_file_info',
     {
       description:
-        '读取当前身份已上传文件的元数据，并返回公开下载 URL（publicUrl）。fileId 来自 POST /mcp-upload 的响应。上传后拿到 publicUrl 即可直接发到消息正文供群友下载，不需要先绑定。本地路径或 file:// 对群友不可见；未授权外链不能保证群友可访问。network_room_file_bind 仅用于让文件出现在房间文件列表、便于成员通过 network_room_file_list / network_room_file_get 发现，不是下载前提；未绑定的文件不在房间文件列表，只能靠已知链接下载。',
+        '读取当前身份已上传文件的元数据，并返回公开下载 URL（publicUrl）。fileId 来自 POST /mcp-upload 的响应。未绑定的上传文件按公开上传语义提供，拿到 publicUrl 可直接发到消息正文，不需要先绑定；绑定到房间后文件纳入历史边界与成员授权，裸 publicUrl 立即 404，必须使用 network_room_file_bind / network_room_file_get / network_room_file_list 返回的带票据 preview_url / download_url。本地路径或 file:// 对群友不可见；未授权外链不能保证群友可访问。绑定让文件出现在房间文件列表，便于成员通过 network_room_file_list / network_room_file_get 发现。',
       inputSchema: z.object({
         fileId: z
           .string()

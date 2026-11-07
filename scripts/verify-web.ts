@@ -10734,7 +10734,7 @@ async function main(): Promise<void> {
         await dialog.dismiss().catch(() => undefined);
       });
       const newlineName = '<b>恶意</b>"引号"\n换行.txt';
-      await page.route(`**/f/${newlineId}`, async (route) => {
+      await page.route(`**/f/${newlineId}**`, async (route) => {
         if (route.request().method() !== 'HEAD') {
           await route.fallback();
           return;
@@ -10748,7 +10748,7 @@ async function main(): Promise<void> {
           },
         });
       });
-      await page.route(`**/f/${dashId}`, async (route) => {
+      await page.route(`**/f/${dashId}**`, async (route) => {
         if (route.request().method() !== 'HEAD') {
           await route.fallback();
           return;
@@ -10763,7 +10763,7 @@ async function main(): Promise<void> {
         });
       });
       let brokenImageGets = 0;
-      await page.route(`**/f/${brokenImage.fileId}`, async (route) => {
+      await page.route(`**/f/${brokenImage.fileId}**`, async (route) => {
         if (route.request().method() === 'HEAD') {
           await route.fallback();
           return;
@@ -10834,7 +10834,12 @@ async function main(): Promise<void> {
       const zipDownloadHref = (await zipDownload.getAttribute('href')) ?? '';
       const zipDownloadUrl = new URL(zipDownloadHref);
       checkEqual('下载链接路径', zipDownloadUrl.pathname, `/f/${zip.fileId}`);
-      checkEqual('下载链接强制 attachment', zipDownloadUrl.search, '?download=1');
+      check(
+        '下载链接带票据并强制 attachment',
+        zipDownloadUrl.searchParams.get('download') === '1' &&
+          (zipDownloadUrl.searchParams.get('t')?.length ?? 0) > 0,
+        zipDownloadUrl.search,
+      );
       checkEqual('下载链接 rel', await zipDownload.getAttribute('rel'), 'noopener noreferrer');
       checkEqual(
         '下载链接 referrerpolicy',
@@ -11156,7 +11161,11 @@ async function main(): Promise<void> {
         1,
       );
       checkEqual('外站 URL 不发起请求', externalRequests, 0);
-      checkEqual('同 fileId 只发起一次 HEAD', headCount(headObserver, dedupeOne.fileId), 1);
+      checkEqual(
+        '同 fileId 共两次 HEAD（裸 URL 探测 + 票据重试）',
+        headCount(headObserver, dedupeOne.fileId),
+        2,
+      );
 
       const maxMessage = page.locator('#messages .msg').filter({ hasText: maxMarker });
       await sleep(300);
@@ -11379,7 +11388,7 @@ async function main(): Promise<void> {
         await dedupeMessage.locator('.msg-file-name').filter({ hasText: '去重文件.txt' }).count(),
         1,
       );
-      checkEqual('成功缓存 5 分钟内不重复 HEAD', headCount(headObserver, dedupeOne.fileId), 1);
+      checkEqual('成功缓存 5 分钟内不重复 HEAD', headCount(headObserver, dedupeOne.fileId), 2);
       await failureMessage.locator('.msg-file.unavailable').waitFor();
       checkEqual('失败缓存 60 秒内不重复 HEAD', headCount(headObserver, failureId), 1);
 
@@ -13164,10 +13173,16 @@ async function main(): Promise<void> {
       const drawFileUrlMatch = /(https?:\/\/[^\s]+\/f\/f_[A-Za-z0-9_-]{22})/u.exec(
         drawSentArgs?.body ?? '',
       );
-      check('画板消息包含可访问的公开文件 URL', Boolean(drawFileUrlMatch));
-      if (drawFileUrlMatch) {
-        const drawPngResponse = await fetch(drawFileUrlMatch[1]!);
-        checkEqual('画板导出的公开文件返回 200', drawPngResponse.status, 200);
+      check('画板消息包含公开文件 URL（绑定后需票据）', Boolean(drawFileUrlMatch));
+      const drawDownloadHref = await drawMessage
+        .locator('a.msg-file-download')
+        .first()
+        .getAttribute('href');
+      const drawFetchUrl = drawDownloadHref ? new URL(drawDownloadHref, server.base).href : '';
+      check('画板文件卡片提供带票据下载地址', drawFetchUrl.length > 0);
+      if (drawFileUrlMatch && drawFetchUrl) {
+        const drawPngResponse = await fetch(drawFetchUrl);
+        checkEqual('画板导出的绑定文件凭票据返回 200', drawPngResponse.status, 200);
         const drawPngBytes = Buffer.from(await drawPngResponse.arrayBuffer());
         check(
           '画板导出内容是 PNG',
@@ -13178,7 +13193,7 @@ async function main(): Promise<void> {
         );
         const cornerPixels = (await page.evaluate(`(async function () {
           const image = new Image();
-          image.src = ${JSON.stringify(drawFileUrlMatch[1])};
+          image.src = ${JSON.stringify(drawFetchUrl)};
           await image.decode();
           const probe = document.createElement('canvas');
           probe.width = image.naturalWidth;

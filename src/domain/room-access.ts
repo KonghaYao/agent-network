@@ -2,6 +2,8 @@ import { BusinessError } from '../contracts/errors';
 import { guardSql } from '../storage/guards';
 import { getMember, getRoom, type D1Like } from '../storage/queries';
 import type {
+  GroupHistoryPolicy,
+  GroupJoinPolicy,
   GroupMemberPolicy,
   RoomMemberRow,
   RoomRole,
@@ -26,12 +28,17 @@ export type RoomCapability =
   | 'manage_policy'
   | 'transfer_owner'
   | 'approve_joins'
+  | 'mention_all'
   | 'view_role_history';
 
 export interface RoomPolicies {
   member_message: GroupMemberPolicy;
   member_invite: GroupMemberPolicy;
   member_task: GroupMemberPolicy;
+  member_history: GroupHistoryPolicy;
+  member_join: GroupJoinPolicy;
+  member_profile: GroupMemberPolicy;
+  member_mention_all: GroupMemberPolicy;
 }
 
 export interface RoomCapabilities {
@@ -44,6 +51,8 @@ export interface RoomCapabilities {
   manage_policy: boolean;
   transfer_owner: boolean;
   approve_joins: boolean;
+  /** 群内 `@所有人`；默认仅 owner/admin，策略可放开给普通成员。 */
+  mention_all: boolean;
   view_role_history: boolean;
 }
 
@@ -87,6 +96,8 @@ const CAPABILITY_PREDICATES: Record<RoomCapability, string> = {
   manage_policy: "(r.kind = 'group' AND m.role = 'owner')",
   transfer_owner: "(r.kind = 'group' AND m.role = 'owner')",
   approve_joins: "(r.kind = 'group' AND m.role IN ('owner', 'admin'))",
+  mention_all:
+    "(r.kind = 'direct' OR m.role IN ('owner', 'admin') OR r.member_mention_all_policy = 'members')",
   view_role_history: "(r.kind = 'group' AND m.role IN ('owner', 'admin'))",
 };
 
@@ -108,12 +119,22 @@ const TRANSFER_TARGET_PREDICATE = `t.status = 'active'
 
 export function roomPolicies(room: Pick<
   RoomRow,
-  'member_message_policy' | 'member_invite_policy' | 'member_task_policy'
+  | 'member_message_policy'
+  | 'member_invite_policy'
+  | 'member_task_policy'
+  | 'member_history_policy'
+  | 'member_join_policy'
+  | 'member_profile_policy'
+  | 'member_mention_all_policy'
 >): RoomPolicies {
   return {
     member_message: room.member_message_policy,
     member_invite: room.member_invite_policy,
     member_task: room.member_task_policy,
+    member_history: room.member_history_policy,
+    member_join: room.member_join_policy,
+    member_profile: room.member_profile_policy,
+    member_mention_all: room.member_mention_all_policy,
   };
 }
 
@@ -123,7 +144,14 @@ function isAdmin(role: RoomRole): boolean {
 
 /** 只按房间策略与调用者角色计算能力；不读取联系人、Agent 管理或 localStorage。 */
 export function roomCapabilitiesFor(
-  room: Pick<RoomRow, 'kind' | 'member_message_policy' | 'member_invite_policy' | 'member_task_policy'>,
+  room: Pick<
+    RoomRow,
+    | 'kind'
+    | 'member_message_policy'
+    | 'member_invite_policy'
+    | 'member_task_policy'
+    | 'member_mention_all_policy'
+  >,
   member: Pick<RoomMemberRow, 'role' | 'status'>,
 ): RoomCapabilities {
   const active = member.status === 'active';
@@ -145,6 +173,9 @@ export function roomCapabilitiesFor(
     manage_policy: active && group && owner,
     transfer_owner: active && group && owner,
     approve_joins: active && group && admin,
+    mention_all:
+      active &&
+      (!group || admin || room.member_mention_all_policy === 'members'),
     view_role_history: active && group && admin,
   };
 }

@@ -247,6 +247,8 @@ export const roomMembersUpdateSchema = z.object({
 });
 
 const groupPolicy = z.enum(['members', 'owner_admin']);
+const groupHistoryPolicy = z.enum(['from_join', 'full']);
+const groupJoinPolicy = z.enum(['open', 'approval']);
 
 /** 群主任免管理员；expected revision 是目标成员当前 `role_revision`。 */
 export const roomRoleSetSchema = z.object({
@@ -284,7 +286,7 @@ export const roomOwnerTransferCancelSchema = z.object({
   expected_version: z.number().int().positive(),
 });
 
-/** 群主设置普通成员发言/邀请/创建任务策略。 */
+/** 群主设置普通成员发言/邀请/任务/历史/审批/@所有人策略。 */
 export const roomPolicySetSchema = z
   .object({
     request_id: requestId,
@@ -292,13 +294,25 @@ export const roomPolicySetSchema = z
     member_message_policy: groupPolicy.optional(),
     member_invite_policy: groupPolicy.optional(),
     member_task_policy: groupPolicy.optional(),
+    /** `from_join`（默认）只可见当前加入后；`full` 由群主显式开启。 */
+    member_history_policy: groupHistoryPolicy.optional(),
+    /** `approval` 由 G02 的邀请接受路径强制执行；G07 持久化并返回。 */
+    member_join_policy: groupJoinPolicy.optional(),
+    /** 群资料编辑权限；G04 消费。 */
+    member_profile_policy: groupPolicy.optional(),
+    /** `@所有人` 权限；默认 owner_admin。 */
+    member_mention_all_policy: groupPolicy.optional(),
     expected_policy_revision: z.number().int().positive(),
   })
   .refine(
     (value) =>
       value.member_message_policy !== undefined ||
       value.member_invite_policy !== undefined ||
-      value.member_task_policy !== undefined,
+      value.member_task_policy !== undefined ||
+      value.member_history_policy !== undefined ||
+      value.member_join_policy !== undefined ||
+      value.member_profile_policy !== undefined ||
+      value.member_mention_all_policy !== undefined,
     { message: '至少需要修改一项群策略' },
   );
 
@@ -311,6 +325,17 @@ export const roomAnnouncementSetSchema = z.object({
 });
 
 export const roomRoleHistorySchema = z.object({
+  room_id: id(),
+  cursor,
+  limit: z.number().int().min(1).max(LIMITS.roomRoleHistoryPageMax).optional(),
+});
+
+/**
+ * 普通成员可见的管理事件：只含影响自己、群公告与策略变更的摘要。
+ * 详细审计（角色版本、request_id、detail）仍由 owner/admin 的
+ * `network_room_role_history` 读取。
+ */
+export const roomNoticeListSchema = z.object({
   room_id: id(),
   cursor,
   limit: z.number().int().min(1).max(LIMITS.roomRoleHistoryPageMax).optional(),
@@ -577,6 +602,7 @@ export type RoomOwnerTransferCancelInput = z.infer<typeof roomOwnerTransferCance
 export type RoomPolicySetInput = z.infer<typeof roomPolicySetSchema>;
 export type RoomAnnouncementSetInput = z.infer<typeof roomAnnouncementSetSchema>;
 export type RoomRoleHistoryInput = z.infer<typeof roomRoleHistorySchema>;
+export type RoomNoticeListInput = z.infer<typeof roomNoticeListSchema>;
 export type RoomInviteGetInput = z.infer<typeof roomInviteGetSchema>;
 export type RoomInviteRespondInput = z.infer<typeof roomInviteRespondSchema>;
 export type RoomLeaveInput = z.infer<typeof roomLeaveSchema>;

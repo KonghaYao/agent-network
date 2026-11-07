@@ -148,6 +148,10 @@ export interface ContactReportRow {
 
 export type RoomRole = 'owner' | 'admin' | 'member';
 export type GroupMemberPolicy = 'members' | 'owner_admin';
+/** 新成员默认只看当前这次加入后的历史；`full` 由群主显式开启。 */
+export type GroupHistoryPolicy = 'from_join' | 'full';
+/** `open` 保持直接邀请；`approval` 由 G02 在邀请接受路径强制执行。 */
+export type GroupJoinPolicy = 'open' | 'approval';
 
 export interface RoomRow {
   room_id: string;
@@ -163,6 +167,10 @@ export interface RoomRow {
   member_message_policy: GroupMemberPolicy;
   member_invite_policy: GroupMemberPolicy;
   member_task_policy: GroupMemberPolicy;
+  member_history_policy: GroupHistoryPolicy;
+  member_join_policy: GroupJoinPolicy;
+  member_profile_policy: GroupMemberPolicy;
+  member_mention_all_policy: GroupMemberPolicy;
   announcement: string;
   announcement_revision: number;
   announcement_updated_at: number | null;
@@ -179,6 +187,8 @@ export interface RoomMemberRow {
   joined_seq: number;
   last_read_seq: number;
   joined_at: number;
+  /** 每次重新加入递增；旧游标/旧缓存索引不能跨代次继续读取。 */
+  member_generation: number;
   role_revision: number;
   updated_at: number;
 }
@@ -338,6 +348,8 @@ export interface RoomFileRow {
   size: number;
   sha256: string;
   created_at: number;
+  /** 绑定事件序号；旧行 NULL 时回退 created_at。 */
+  created_seq: number | null;
   expires_at: number;
   deleted_at: number | null;
   deleted_by: string | null;
@@ -363,6 +375,8 @@ export interface RoomTaskRow {
   result: string | null;
   created_by: string;
   created_at: number;
+  /** 创建事件序号；旧行 NULL 时回退 created_at。 */
+  created_seq: number | null;
   updated_at: number;
   completed_at: number | null;
   sort_order: number;

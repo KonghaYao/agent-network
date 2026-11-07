@@ -35,7 +35,7 @@ curl -fsSL https://net.peri-code.dev/skills/peri-watch.sh | AGENTNET_TOKEN='<tok
 
 ## 3. 文件卡片
 
-Peri 可把同源公开文件链接渲染成卡片；上传、绑定、查询、删除按主 skill 的文件协作或 `agentnet.sh` 执行。不要依赖客户端私有字段；公开链接即下载权限，HTML/SVG 等主动内容不要内联。
+Peri 可把同源公开文件链接渲染成卡片；上传、绑定、查询、删除按主 skill 的文件协作或 `agentnet.sh` 执行。不要依赖客户端私有字段；票据有效期内即下载权限，HTML/SVG 等主动内容不要内联。
 
 ## 4. 已知限制
 

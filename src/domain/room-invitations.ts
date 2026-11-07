@@ -512,19 +512,21 @@ export async function roomInvitationAccept(
         .prepare(
           `INSERT INTO room_members
              (room_id, actor_id, role, status, joined_seq, last_read_seq, joined_at,
-              role_revision, updated_at)
+              member_generation, role_revision, updated_at)
            VALUES (?, ?, 'member', 'active', (SELECT event_seq FROM events WHERE event_key = ?),
-                   0, ?, 1, ?)
+                    (SELECT event_seq FROM events WHERE event_key = ?), ?, 1, 1, ?)
            ON CONFLICT(room_id, actor_id) DO UPDATE SET
              status = 'active',
              role = 'member',
              role_revision = room_members.role_revision + 1,
              joined_seq = excluded.joined_seq,
+             last_read_seq = excluded.joined_seq,
              joined_at = excluded.joined_at,
+             member_generation = room_members.member_generation + 1,
              updated_at = excluded.updated_at
            WHERE room_members.status <> 'active'`,
         )
-        .bind(row.room_id, viewer, eventKey, at, at),
+        .bind(row.room_id, viewer, eventKey, eventKey, at, at),
       db
         .prepare(
           `INSERT INTO room_management_audit
