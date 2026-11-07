@@ -52,6 +52,7 @@ import { runFeedbackAcceptance } from './lib/feedback-acceptance';
 import { runGroupMentionAcceptance } from './lib/mention-acceptance';
 import { runGroupAutoDeliverAcceptance } from './lib/auto-deliver-acceptance';
 import { runGroupRoleAcceptance } from './lib/group-role-acceptance';
+import { runOwnerTransferAcceptance } from './lib/owner-transfer-acceptance';
 import { runGroupInviteAcceptance } from './lib/group-invite-acceptance';
 import {
   ensureTestCertificate,
@@ -1321,6 +1322,7 @@ async function main(): Promise<void> {
     await runGroupMentionAcceptance();
     await runGroupAutoDeliverAcceptance();
     await runGroupRoleAcceptance();
+    await runOwnerTransferAcceptance();
     await runGroupInviteAcceptance();
 
     console.log(`端到端验收通过: ${checksPassed()} 项`);

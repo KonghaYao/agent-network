@@ -44,6 +44,7 @@ export const GUARD_TABLES = {
   rateLimited: 'guard_rate_limited',
   invitationStale: 'guard_invitation_stale',
   inviteTargetsMissing: 'guard_invite_targets_missing',
+  ownerTransferStale: 'guard_owner_transfer_stale',
 } as const;
 
 export type GuardName = keyof typeof GUARD_TABLES;

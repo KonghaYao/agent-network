@@ -49,6 +49,7 @@ const GUARD_CODES: Record<string, BusinessErrorCode> = {
   rateLimited: 'RATE_LIMITED',
   invitationStale: 'CONFLICT',
   inviteTargetsMissing: 'FRIEND_REQUIRED',
+  ownerTransferStale: 'CONFLICT',
 };
 
 const GUARD_MESSAGES: Record<string, string> = {
@@ -91,6 +92,7 @@ const GUARD_MESSAGES: Record<string, string> = {
   rateLimited: '操作过于频繁，请稍后再试',
   invitationStale: '邀请状态已变化，请刷新后重试',
   inviteTargetsMissing: '成员资格在提交时已变化，群未创建',
+  ownerTransferStale: '群主转让提议状态已变化，请刷新后重试',
 };
 
 /** 限额类 guard 的稳定 data，供 MCP Events 映射 -32025。 */

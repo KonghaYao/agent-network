@@ -27,6 +27,8 @@ let sidebarScrollTop = 0;
 let room = null;
 let members = new Map();
 let invitedMembers = new Map();
+/** 当前房间待确认的群主转让提议；null 表示没有有效提议。 */
+let ownerTransfer = null;
 let nextOlder = null;
 let timelineResumeCursor = null;
 let currentItems = [];
@@ -162,6 +164,7 @@ function cacheRoomState(roomId, patch) {
     if ('room' in patch) cache.room = patch.room;
     if ('members' in patch) cache.members = patch.members;
     if ('invited' in patch) cache.invited = patch.invited;
+    if ('ownerTransfer' in patch) cache.ownerTransfer = patch.ownerTransfer;
     if ('items' in patch) cache.items = patch.items.slice();
     if ('nextOlder' in patch) cache.nextOlder = patch.nextOlder;
     if ('timelineResumeCursor' in patch) cache.timelineResumeCursor = patch.timelineResumeCursor;
@@ -180,6 +183,7 @@ function discardRoomCache(roomId) {
   if (roomId !== activeRoomId) return;
   room = null;
   invitedMembers = new Map();
+  ownerTransfer = null;
   currentItems = [];
   nextOlder = null;
   timelineResumeCursor = null;
@@ -194,6 +198,7 @@ function snapshotActiveRoom() {
     room: room,
     members: Array.from(members.values()),
     invited: Array.from(invitedMembers.values()),
+    ownerTransfer: ownerTransfer,
     items: currentItems.slice(),
     nextOlder: nextOlder,
     timelineResumeCursor: timelineResumeCursor,
@@ -290,6 +295,7 @@ function applyRoomDetail(detail) {
   invitedMembers = new Map((detail.invited || []).map(function (invited) {
     return [invited.actor_id, invited];
   }));
+  ownerTransfer = detail.owner_transfer || null;
   applyRoomHeader();
   const summary = directSummaryFromDetail(detail);
   if (detail.room.kind === 'direct') peerDetails.set(detail.room.room_id, summary);
@@ -371,6 +377,7 @@ function applyCachedRoom(cache) {
   invitedMembers = new Map((cache.invited || []).map(function (invited) {
     return [invited.actor_id, invited];
   }));
+  ownerTransfer = cache.ownerTransfer || null;
   currentItems = (cache.items || []).slice();
   // 到底状态属于房间自身：切走再切回时不能因为重新取最新页而恢复按钮。
   olderEnded = Boolean(cache.olderEnded);
@@ -786,6 +793,7 @@ function seedRoomCacheFromDetail(detail) {
     room: detail.room,
     members: detail.members,
     invited: detail.invited || [],
+    ownerTransfer: detail.owner_transfer || null,
     items: [],
     nextOlder: null,
     timelineResumeCursor: null,

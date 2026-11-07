@@ -100,6 +100,8 @@ export const LIMITS = {
   /** 群角色审计默认 / 最大条数。 */
   roomRoleHistoryPageDefault: 20,
   roomRoleHistoryPageMax: 100,
+  /** 群主转让提议默认有效期（毫秒）；接受前原群主继续负责。 */
+  roomOwnerTransferTtlMs: 24 * 60 * 60_000,
   /** 单条消息 invoke 上限。 */
   invokeMax: 8,
   /** 单条消息正文中自动归档的同源文件链接上限。 */

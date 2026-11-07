@@ -61,6 +61,9 @@ import {
   roomMembersUpdateSchema,
   roomMonitorGetSchema,
   roomMonitorSetSchema,
+  roomOwnerTransferCancelSchema,
+  roomOwnerTransferProposeSchema,
+  roomOwnerTransferRespondSchema,
   roomOwnerTransferSchema,
   roomPolicySetSchema,
   roomRoleHistorySchema as roomRoleHistoryQuerySchema,
@@ -138,7 +141,6 @@ import {
   roomGet,
   roomLeave,
   roomMembersUpdate,
-  roomOwnerTransfer,
   roomPolicySet,
   roomRoleHistory,
   roomRoleSet,
@@ -151,6 +153,11 @@ import {
   roomInvitationList,
   roomInvitationReject,
 } from '../domain/room-invitations';
+import {
+  roomOwnerTransferCancel,
+  roomOwnerTransferPropose,
+  roomOwnerTransferRespond,
+} from '../domain/owner-transfers';
 import {
   taskAdd,
   taskClaim,
@@ -368,7 +375,12 @@ export function registerTools(
         return { ...member, online: presence ? presence.online : null };
       }),
     );
-    return { room: detail.room, members, invited: detail.invited };
+    return {
+      room: detail.room,
+      members,
+      invited: detail.invited,
+      owner_transfer: detail.owner_transfer,
+    };
   }
 
   register(
@@ -993,7 +1005,7 @@ export function registerTools(
   register(
     server,
     'network_room_members_update',
-    '群 owner 或管理员添加/移除成员；管理员只能移除普通成员，不能移除 owner 或其他管理员。普通成员是否可邀请由群策略决定。移除会取消该成员在房间内未完成的工作。transfer_owner_to 仅兼容旧客户端，必须同时给出 expected_role_revision；新调用请使用 network_room_owner_transfer。',
+    '群 owner 或管理员添加/移除成员；管理员只能移除普通成员，不能移除 owner 或其他管理员。普通成员是否可邀请由群策略决定。移除会取消该成员在房间内未完成的工作。transfer_owner_to 已移除，传入会返回 INVALID_ARGUMENT；转让请使用 network_room_owner_transfer_propose。',
     roomMembersUpdateSchema,
     roomDetailSchema,
     async (input) => {
@@ -1017,12 +1029,52 @@ export function registerTools(
   register(
     server,
     'network_room_owner_transfer',
-    '转移群 owner。只有当前 owner 可以调用；目标必须是 active 非 owner 成员，expected_role_revision 为目标当前角色版本。新旧 owner 角色与 rooms.owner_id 在同一事务提交，唯一 owner 约束保证不会出现两个群主。转移后原 owner 变为普通成员。',
+    '兼容旧工具名：发起群主转让提议，不再直接切换 owner。只有当前 owner 可以调用；目标必须是 active 非 owner 成员。目标用 network_room_owner_transfer_respond 接受后才在同一事务内改变 rooms.owner_id 与双方角色；接受前原 owner 继续负责。新调用请使用 network_room_owner_transfer_propose。',
     roomOwnerTransferSchema,
     roomDetailSchema,
     async (input) => {
       requireActor(principal);
-      return roomOwnerTransfer(db, principal, input);
+      await roomOwnerTransferPropose(db, principal, input);
+      return roomGet(db, principal, input.room_id);
+    },
+  );
+
+  register(
+    server,
+    'network_room_owner_transfer_propose',
+    '发起群主转让提议。只有当前 owner 可以调用；目标必须是 active 非 owner 成员。同一群只允许一条有效 pending 提议，默认 24 小时有效；目标接受前 rooms.owner_id 与双方角色不变，原 owner 继续负责且不能借提议离群。返回房间详情中的 owner_transfer（含 version、expires_at 与 can_*）。',
+    roomOwnerTransferProposeSchema,
+    roomDetailSchema,
+    async (input) => {
+      requireActor(principal);
+      await roomOwnerTransferPropose(db, principal, input);
+      return roomGet(db, principal, input.room_id);
+    },
+  );
+
+  register(
+    server,
+    'network_room_owner_transfer_respond',
+    '目标接受或拒绝群主转让提议。只有目标本人可以响应；accept 在同一事务内复核提议版本、有效期、原 owner 仍负责、目标仍 active 且 role_revision 未漂移，然后原子换 owner 并把原 owner 降为普通成员。重复接受同一 request_id 返回同一结果；提议已接受后不能用新 request_id 再接受。不改变个人 Agent 归属、任务负责人或外部资源权限。',
+    roomOwnerTransferRespondSchema,
+    roomDetailSchema,
+    async (input) => {
+      requireActor(principal);
+      const result = await roomOwnerTransferRespond(db, principal, input);
+      return roomGet(db, principal, result.room_id);
+    },
+  );
+
+  register(
+    server,
+    'network_room_owner_transfer_cancel',
+    '发起人取消待确认的群主转让提议。只有原 owner 可以取消；expected_version 必须等于提议当前 version。取消不改变 owner 或任何成员角色。目标离群/被移除、原 owner 失去 owner 或提议过期后不能接受，下一次发起会在同一事务内把失效提议收敛为 expired。',
+    roomOwnerTransferCancelSchema,
+    roomDetailSchema,
+    async (input) => {
+      requireActor(principal);
+      const result = await roomOwnerTransferCancel(db, principal, input);
+      return roomGet(db, principal, result.room_id);
     },
   );
 

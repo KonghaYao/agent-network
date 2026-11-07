@@ -109,6 +109,23 @@ export const roomSchema = z.object({
   updated_at: z.string(),
 });
 
+/** 待确认群主转让；can_* 由服务端按调用者身份计算，页面只据此显示入口。 */
+export const ownerTransferSchema = z.object({
+  transfer_id: z.string(),
+  room_id: z.string(),
+  from_owner_id: z.string(),
+  from_owner_name: z.string(),
+  to_actor_id: z.string(),
+  to_actor_name: z.string(),
+  status: z.enum(['pending', 'accepted', 'rejected', 'cancelled', 'expired']),
+  version: z.number(),
+  expires_at: z.string(),
+  created_at: z.string(),
+  can_accept: z.boolean(),
+  can_reject: z.boolean(),
+  can_cancel: z.boolean(),
+});
+
 export const roomDetailSchema = z.object({
   room: roomSchema,
   members: z.array(memberSchema),
@@ -124,6 +141,8 @@ export const roomDetailSchema = z.object({
       expires_at: z.string(),
     }),
   ),
+  /** 当前有效的群主转让提议；没有 pending 时为 null。 */
+  owner_transfer: ownerTransferSchema.nullable(),
 });
 
 export const roomCreateMemberResultSchema = z.object({
@@ -635,6 +654,11 @@ export const roomRoleAuditSchema = z.object({
     'admin_appointed',
     'admin_revoked',
     'owner_transferred',
+    'owner_transfer_proposed',
+    'owner_transfer_accepted',
+    'owner_transfer_rejected',
+    'owner_transfer_cancelled',
+    'owner_transfer_expired',
     'policy_updated',
     'announcement_updated',
   ]),

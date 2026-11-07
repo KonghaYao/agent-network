@@ -556,6 +556,16 @@ export const APP_STYLE = `
   .contact-note { flex: 0 1 auto; max-width: 40%; font-size: 11px;
     color: var(--wx-muted); overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; }
+  .members-transfer { flex: 0 0 auto; margin: 6px; padding: 8px 10px;
+    border: 1px solid rgb(7 193 96 / 35%); border-radius: 6px;
+    background: rgb(7 193 96 / 8%); }
+  .members-transfer[hidden] { display: none; }
+  .members-transfer-title { margin: 0 0 4px; font-size: 12px; font-weight: 600; }
+  .members-transfer-line { margin: 0 0 2px; font-size: 12px; line-height: 1.5;
+    overflow-wrap: anywhere; }
+  .members-transfer-meta { margin: 0; font-size: 11px; color: var(--wx-muted); }
+  .members-transfer-actions { display: flex; flex-wrap: wrap; gap: 6px;
+    margin-top: 6px; }
   .members-invited { flex: 0 0 auto; border-top: 1px solid var(--wx-line);
     padding: 4px; }
   .members-invited-title { display: flex; align-items: center; gap: 6px;

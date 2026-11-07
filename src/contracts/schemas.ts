@@ -257,12 +257,31 @@ export const roomRoleSetSchema = z.object({
   expected_role_revision: z.number().int().positive(),
 });
 
-/** 群主转移；目标角色版本与事务内 owner 复核同时生效。 */
-export const roomOwnerTransferSchema = z.object({
+/** 发起群主转让提议；目标必须接受后才生效。 */
+export const roomOwnerTransferProposeSchema = z.object({
   request_id: requestId,
   room_id: id(),
   target_actor_id: id(),
-  expected_role_revision: z.number().int().positive(),
+  /** 读取时的目标角色版本；提供时在提交前复核，避免角色漂移。 */
+  expected_role_revision: z.number().int().positive().optional(),
+});
+
+/** 兼容旧工具名：`network_room_owner_transfer` 现在只发起待确认提议。 */
+export const roomOwnerTransferSchema = roomOwnerTransferProposeSchema;
+
+/** 目标接受或拒绝待确认转让；expected_version 是提议当前版本。 */
+export const roomOwnerTransferRespondSchema = z.object({
+  request_id: requestId,
+  transfer_id: id(),
+  action: z.enum(['accept', 'reject']),
+  expected_version: z.number().int().positive(),
+});
+
+/** 发起人取消待确认转让；expected_version 是提议当前版本。 */
+export const roomOwnerTransferCancelSchema = z.object({
+  request_id: requestId,
+  transfer_id: id(),
+  expected_version: z.number().int().positive(),
 });
 
 /** 群主设置普通成员发言/邀请/创建任务策略。 */
@@ -552,6 +571,9 @@ export type RoomsListInput = z.infer<typeof roomsListSchema>;
 export type RoomMembersUpdateInput = z.infer<typeof roomMembersUpdateSchema>;
 export type RoomRoleSetInput = z.infer<typeof roomRoleSetSchema>;
 export type RoomOwnerTransferInput = z.infer<typeof roomOwnerTransferSchema>;
+export type RoomOwnerTransferProposeInput = z.infer<typeof roomOwnerTransferProposeSchema>;
+export type RoomOwnerTransferRespondInput = z.infer<typeof roomOwnerTransferRespondSchema>;
+export type RoomOwnerTransferCancelInput = z.infer<typeof roomOwnerTransferCancelSchema>;
 export type RoomPolicySetInput = z.infer<typeof roomPolicySetSchema>;
 export type RoomAnnouncementSetInput = z.infer<typeof roomAnnouncementSetSchema>;
 export type RoomRoleHistoryInput = z.infer<typeof roomRoleHistorySchema>;

@@ -207,8 +207,30 @@ export type RoomManagementAction =
   | 'admin_appointed'
   | 'admin_revoked'
   | 'owner_transferred'
+  | 'owner_transfer_proposed'
+  | 'owner_transfer_accepted'
+  | 'owner_transfer_rejected'
+  | 'owner_transfer_cancelled'
+  | 'owner_transfer_expired'
   | 'policy_updated'
   | 'announcement_updated';
+
+/** 群主转让提议；pending 不改变 `rooms.owner_id` 与任何成员角色。 */
+export interface RoomOwnerTransferRow {
+  transfer_id: string;
+  room_id: string;
+  from_owner_id: string;
+  to_actor_id: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'cancelled' | 'expired';
+  version: number;
+  target_role_revision: number;
+  invalid_reason: string | null;
+  created_at: number;
+  updated_at: number;
+  expires_at: number;
+  responded_at: number | null;
+  responded_by: string | null;
+}
 
 export interface RoomManagementAuditRow {
   audit_id: string;

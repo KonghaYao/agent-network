@@ -291,6 +291,7 @@ export function membersDialog(): string {
           </header>
           <ul id="members-current" class="member-roster" aria-label="当前群成员"></ul>
           <p id="members-current-empty" class="members-empty" role="status" hidden>群里还没有成员</p>
+          <div id="members-transfer" class="members-transfer" aria-live="polite" hidden></div>
           <div id="members-invited-wrap" class="members-invited" hidden>
             <p class="members-invited-title">邀请中
               <span id="members-invited-count" class="members-count" aria-live="polite">0</span>

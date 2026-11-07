@@ -315,16 +315,18 @@ function roomStreamItems(
       return result;
     }
     case 'room_role_changed':
-    case 'owner_transferred': {
+    case 'owner_transferred':
+    case 'room_owner_transfer_accepted': {
       // 角色变更只刷新成员/能力视图；被撤销管理员本人收到 action_required。
       const target = stringField(metadata, 'target_actor_id')
         ?? stringField(metadata, 'new_owner_id')
+        ?? stringField(metadata, 'to_actor_id')
         ?? row.ref_id
         ?? undefined;
       const changedBy = stringField(metadata, 'changed_by');
-      const change = row.event_type === 'owner_transferred'
-        ? 'owner_changed'
-        : 'role_changed';
+      const change = row.event_type === 'room_role_changed'
+        ? 'role_changed'
+        : 'owner_changed';
       for (const member of activeRecipients(members, eventSeq)) {
         const demotedSelf = change === 'role_changed' &&
           target === member.actor_id &&
@@ -336,6 +338,29 @@ function roomStreamItems(
         );
         item.change = change;
         if (target) item.subject_id = target;
+        if (changedBy) item.changed_by = changedBy;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
+    case 'room_owner_transfer_proposed':
+    case 'room_owner_transfer_rejected':
+    case 'room_owner_transfer_cancelled':
+    case 'room_owner_transfer_expired': {
+      // 提议与关闭只刷新治理视图；目标本人的处理提醒走 inbox item，
+      // 不创建 delivery，也不把提议当作新的 Agent 工作。
+      const change = row.event_type === 'room_owner_transfer_proposed'
+        ? 'owner_transfer_pending'
+        : 'owner_transfer_closed';
+      const changedBy = stringField(metadata, 'changed_by');
+      for (const member of activeRecipients(members, eventSeq)) {
+        const item = withLocation(
+          baseItem(row, 'room.membership', 'room', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = change;
+        item.subject_id = stringField(metadata, 'to_actor_id');
         if (changedBy) item.changed_by = changedBy;
         result.push({ actorId: member.actor_id, item });
       }
@@ -491,6 +516,42 @@ function inboxStreamItem(
       );
       item.change = 'invited';
       item.changed_by = stringField(metadata, 'inviter_id') ?? undefined;
+      return item;
+    }
+    case 'room_owner_transfer_proposed': {
+      // 目标需要明确接受或拒绝；这是控制通知，不是 delivery。
+      const item = withLocation(
+        baseItem(row, 'room.membership', 'room', 'action_required'),
+        row,
+        metadata,
+      );
+      item.change = 'owner_transfer_pending';
+      item.subject_id = stringField(metadata, 'from_owner_id');
+      item.changed_by = stringField(metadata, 'from_owner_id');
+      return item;
+    }
+    case 'room_owner_transfer_accepted': {
+      const item = withLocation(
+        baseItem(row, 'room.membership', 'room', 'informational'),
+        row,
+        metadata,
+      );
+      item.change = 'owner_changed';
+      item.subject_id = stringField(metadata, 'to_actor_id');
+      item.changed_by = stringField(metadata, 'changed_by');
+      return item;
+    }
+    case 'room_owner_transfer_rejected':
+    case 'room_owner_transfer_cancelled':
+    case 'room_owner_transfer_expired': {
+      const item = withLocation(
+        baseItem(row, 'room.membership', 'room', 'informational'),
+        row,
+        metadata,
+      );
+      item.change = 'owner_transfer_closed';
+      item.subject_id = stringField(metadata, 'to_actor_id');
+      item.changed_by = stringField(metadata, 'changed_by');
       return item;
     }
     case 'room_created':

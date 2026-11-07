@@ -6,7 +6,6 @@ import type {
   RoomCreateInput,
   RoomLeaveInput,
   RoomMembersUpdateInput,
-  RoomOwnerTransferInput,
   RoomPolicySetInput,
   RoomRoleHistoryInput,
   RoomRoleSetInput,
@@ -49,6 +48,7 @@ import {
   roomInviteRateGuardStatement,
 } from './contact-blocks';
 import { actorId, type Principal } from './principal';
+import { loadOwnerTransferView, type OwnerTransferView } from './owner-transfers';
 import {
   directInvitationStatements,
   invitationInboxStatements,
@@ -56,9 +56,9 @@ import {
   revokeDirectInvitationStatement,
   type InvitedMemberView,
 } from './room-invitations';
+import { roomAuditStatement, type RoomAuditSpec } from './room-audit';
 import {
   capabilityGuardStatement,
-  currentOwnerGuardStatement,
   loadRoomAccess,
   memberActionsFor,
   memberRemovalGuardStatement,
@@ -70,7 +70,6 @@ import {
   roleTargetGuardStatement,
   roomCapabilitiesFor,
   roomPolicies,
-  transferTargetGuardStatement,
   type MemberActions,
   type RoomCapabilities,
   type RoomPolicies,
@@ -130,6 +129,11 @@ export interface RoomDetail {
    * 邀请不是成员，不计入 `member_count`，也不能渲染成已加入。
    */
   invited: InvitedMemberView[];
+  /**
+   * 当前有效的群主转让提议；没有 pending 或已过期/目标失效时为 null。
+   * 提议不改变 `owner_id` 与成员角色，接受前原群主继续负责。
+   */
+  owner_transfer: OwnerTransferView | null;
   /**
    * 建群时每个候选成员的逐对象结果；只有 `network_room_create` 返回。
    *
@@ -839,14 +843,15 @@ async function roomDetail(db: D1Database, roomId: string, viewer: string): Promi
   if (!member || member.status !== 'active') {
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
   }
-  const [view, members, invited] = await Promise.all([
+  const [view, members, invited, ownerTransfer] = await Promise.all([
     loadRoomView(db, room, member),
     loadMembers(db, room, member),
     roomCapabilitiesFor(room, member).approve_joins
       ? loadInvitedMembers(db, room.room_id, nowMs())
       : Promise.resolve([] as InvitedMemberView[]),
+    loadOwnerTransferView(db, room.room_id, viewer, nowMs()),
   ]);
-  return { room: view, members, invited };
+  return { room: view, members, invited, owner_transfer: ownerTransfer };
 }
 
 export async function roomGet(
@@ -887,53 +892,6 @@ function cancelDeliveriesForMemberStatements(
   ];
 }
 
-interface RoomAuditSpec {
-  roomId: string;
-  action: RoomManagementAuditRow['action'];
-  targetActorId?: string | null;
-  previousRole?: RoomManagementAuditRow['previous_role'];
-  newRole?: RoomManagementAuditRow['new_role'];
-  previousStatus?: RoomManagementAuditRow['previous_status'];
-  newStatus?: RoomManagementAuditRow['new_status'];
-  expectedRevision?: number | null;
-  resultingRevision: number;
-  changedBy: string;
-  requestId: string;
-  detail?: Record<string, unknown>;
-}
-
-/** 追加写管理审计；与角色/策略变更在同一事务内提交。 */
-function roomAuditStatement(
-  db: D1Database,
-  spec: RoomAuditSpec,
-  at: number,
-): D1PreparedStatement {
-  return db
-    .prepare(
-      `INSERT INTO room_management_audit
-         (audit_id, room_id, action, target_actor_id, previous_role, new_role,
-          previous_status, new_status, expected_revision, resulting_revision,
-          changed_by, request_id, detail_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      newId('raud'),
-      spec.roomId,
-      spec.action,
-      spec.targetActorId ?? null,
-      spec.previousRole ?? null,
-      spec.newRole ?? null,
-      spec.previousStatus ?? null,
-      spec.newStatus ?? null,
-      spec.expectedRevision ?? null,
-      spec.resultingRevision,
-      spec.changedBy,
-      spec.requestId,
-      JSON.stringify(spec.detail ?? {}),
-      at,
-    );
-}
-
 function membershipInboxStatements(
   db: D1Database,
   roomId: string,
@@ -972,13 +930,21 @@ export async function roomMembersUpdate(
   if (room.kind !== 'group') {
     throw new BusinessError('INVALID_ARGUMENT', '单聊不支持成员变更');
   }
+  // G05：直接切换 owner 已移除。旧字段仍可被客户端传入，但必须明确失败，
+  // 不能静默降级成未经目标确认的转让。
+  if (input.transfer_owner_to) {
+    throw new BusinessError(
+      'INVALID_ARGUMENT',
+      '直接转移群主已移除，请使用 network_room_owner_transfer_propose 发起待确认转让',
+    );
+  }
 
   const add = uniqueOthers(caller, input.add ?? []).filter((id) => id !== room.owner_id);
   const remove = uniqueOthers(caller, input.remove ?? []);
   if (add.length > LIMITS.memberChangeMax || remove.length > LIMITS.memberChangeMax) {
     throw new BusinessError('INVALID_ARGUMENT', '单次成员变更数量超过上限');
   }
-  if (add.length === 0 && remove.length === 0 && !input.transfer_owner_to) {
+  if (add.length === 0 && remove.length === 0) {
     return roomDetail(db, room.room_id, caller);
   }
   if (add.length > 0 && !access.capabilities.invite_members) {
@@ -994,11 +960,7 @@ export async function roomMembersUpdate(
   // 能力预检在前；同一 request_id 且仍有权限时不再被已变化的成员状态挡住。
   const replay = await resolveReplay(db, caller, input.request_id, payloadHash);
 
-  const targetIds = new Set([
-    ...add,
-    ...remove,
-    ...(input.transfer_owner_to ? [input.transfer_owner_to] : []),
-  ]);
+  const targetIds = new Set([...add, ...remove]);
   const existing = new Map<string, RoomMemberRow>();
   for (const actor of targetIds) {
     const row = await getMember(db, room.room_id, actor);
@@ -1032,35 +994,9 @@ export async function roomMembersUpdate(
     }
   }
 
-  let transferTarget: RoomMemberRow | null = null;
-  if (input.transfer_owner_to) {
-    if (!access.capabilities.transfer_owner) {
-      throw new BusinessError('NOT_OWNER', '只有群 owner 可以转移 owner');
-    }
-    if (input.expected_role_revision === undefined) {
-      throw new BusinessError('INVALID_ARGUMENT', '转移 owner 必须提供 expected_role_revision');
-    }
-    if (input.transfer_owner_to === caller) {
-      throw new BusinessError('INVALID_ARGUMENT', 'owner 已经是当前身份');
-    }
-    if (remove.includes(input.transfer_owner_to)) {
-      throw new BusinessError('INVALID_ARGUMENT', '不能在同一次操作中移除 owner 转移目标');
-    }
-    transferTarget = await requireTargetMember(db, room.room_id, input.transfer_owner_to);
-    if (!replay.found) {
-      requireExpectedRoleRevision(transferTarget, input.expected_role_revision);
-    }
-  }
-
   const at = nowMs();
   const eventKey = `members:${room.room_id}:${input.request_id}`;
-  const affected = [
-    ...new Set([
-      ...add,
-      ...remove,
-      ...(input.transfer_owner_to ? [input.transfer_owner_to] : []),
-    ]),
-  ];
+  const affected = [...new Set([...add, ...remove])];
 
   const audits: RoomAuditSpec[] = [];
   for (const member of add) {
@@ -1096,36 +1032,6 @@ export async function roomMembersUpdate(
       requestId: input.request_id,
     });
   }
-  if (transferTarget) {
-    audits.push(
-      {
-        roomId: room.room_id,
-        action: 'owner_transferred',
-        targetActorId: transferTarget.actor_id,
-        previousRole: transferTarget.role,
-        newRole: 'owner',
-        previousStatus: 'active',
-        newStatus: 'active',
-        expectedRevision: input.expected_role_revision ?? null,
-        resultingRevision: transferTarget.role_revision + 1,
-        changedBy: caller,
-        requestId: input.request_id,
-      },
-      {
-        roomId: room.room_id,
-        action: 'owner_transferred',
-        targetActorId: caller,
-        previousRole: 'owner',
-        newRole: 'member',
-        previousStatus: 'active',
-        newStatus: 'active',
-        resultingRevision: access.member.role_revision + 1,
-        changedBy: caller,
-        requestId: input.request_id,
-      },
-    );
-  }
-
   await runIdempotent(db, {
     actorId: caller,
     requestId: input.request_id,
@@ -1153,19 +1059,6 @@ export async function roomMembersUpdate(
       ...remove.map((member) =>
         memberRemovalGuardStatement(db, room.room_id, caller, member),
       ),
-      ...(input.transfer_owner_to
-        ? [
-            capabilityGuardStatement(db, room.room_id, caller, 'transfer_owner'),
-            currentOwnerGuardStatement(db, room.room_id, caller),
-            transferTargetGuardStatement(db, room.room_id, caller, input.transfer_owner_to),
-            roleRevisionGuardStatement(
-              db,
-              room.room_id,
-              input.transfer_owner_to,
-              input.expected_role_revision,
-            ),
-          ].filter((statement): statement is D1PreparedStatement => statement !== null)
-        : []),
       ...(remove.length === 1 && input.expected_role_revision !== undefined
         ? [
             roleRevisionGuardStatement(
@@ -1195,7 +1088,6 @@ export async function roomMembersUpdate(
           metadata: {
             add,
             remove,
-            transfer_owner_to: input.transfer_owner_to ?? null,
             changed_by: caller,
           },
         },
@@ -1239,27 +1131,6 @@ export async function roomMembersUpdate(
       ...remove.map((member) =>
         revokeDirectInvitationStatement(db, room.room_id, member, at),
       ),
-      ...(input.transfer_owner_to
-        ? [
-            db
-              .prepare(
-                `UPDATE room_members
-                    SET role = 'member', role_revision = role_revision + 1, updated_at = ?
-                  WHERE room_id = ? AND actor_id = ? AND status = 'active'`,
-              )
-              .bind(at, room.room_id, caller),
-            db
-              .prepare(
-                `UPDATE room_members
-                    SET role = 'owner', role_revision = role_revision + 1, updated_at = ?
-                  WHERE room_id = ? AND actor_id = ? AND status = 'active'`,
-              )
-              .bind(at, room.room_id, input.transfer_owner_to),
-            db
-              .prepare('UPDATE rooms SET owner_id = ?, updated_at = ? WHERE room_id = ?')
-              .bind(input.transfer_owner_to, at, room.room_id),
-          ]
-        : []),
       roomMemberSeqStatement(db, room.room_id, eventKey, at),
       ...audits.map((audit) => roomAuditStatement(db, audit, at)),
       ...membershipInboxStatements(db, room.room_id, input.request_id, [...affected, caller], at),
@@ -1356,126 +1227,6 @@ export async function roomRoleSet(
           newStatus: 'active',
           expectedRevision: input.expected_role_revision,
           resultingRevision,
-          changedBy: caller,
-          requestId: input.request_id,
-        },
-        at,
-      ),
-      ...membershipInboxStatements(
-        db,
-        access.room.room_id,
-        input.request_id,
-        [target.actor_id, caller],
-        at,
-      ),
-    ],
-  });
-
-  return roomDetail(db, access.room.room_id, caller);
-}
-
-/**
- * 群主转移。新旧 owner 角色和 `rooms.owner_id` 在同一事务内更新，
- * 部分唯一索引保证不会出现第二个 active owner。
- */
-export async function roomOwnerTransfer(
-  db: D1Database,
-  principal: Principal,
-  input: RoomOwnerTransferInput,
-): Promise<RoomDetail> {
-  const caller = actorId(principal);
-  const access = await requireGroupAccess(db, input.room_id, caller, 'transfer_owner');
-  if (input.target_actor_id === caller) {
-    throw new BusinessError('INVALID_ARGUMENT', 'owner 已经是当前身份');
-  }
-  const target = await requireTargetMember(db, input.room_id, input.target_actor_id);
-  const payloadHash = await sha256Hex(stableStringify(input));
-  const replay = await resolveReplay(db, caller, input.request_id, payloadHash);
-  if (!replay.found) requireExpectedRoleRevision(target, input.expected_role_revision);
-
-  const at = nowMs();
-  const eventKey = `owner_transfer:${access.room.room_id}:${input.request_id}`;
-  const revisionGuard = roleRevisionGuardStatement(
-    db,
-    access.room.room_id,
-    target.actor_id,
-    input.expected_role_revision,
-  );
-
-  await runIdempotent(db, {
-    actorId: caller,
-    requestId: input.request_id,
-    payloadHash,
-    result: { room_id: access.room.room_id },
-    build: (resultJson) => [
-      operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
-      capabilityGuardStatement(db, access.room.room_id, caller, 'transfer_owner'),
-      currentOwnerGuardStatement(db, access.room.room_id, caller),
-      transferTargetGuardStatement(db, access.room.room_id, caller, target.actor_id),
-      ...(revisionGuard ? [revisionGuard] : []),
-      eventStatement(
-        db,
-        {
-          eventKey,
-          scopeKind: 'room',
-          scopeId: access.room.room_id,
-          eventType: 'owner_transferred',
-          refId: target.actor_id,
-          metadata: {
-            previous_owner_id: caller,
-            new_owner_id: target.actor_id,
-            changed_by: caller,
-          },
-        },
-        at,
-      ),
-      outboxStatement(db, { topic: roomTopic(access.room.room_id), eventKey }, at),
-      db
-        .prepare(
-          `UPDATE room_members
-              SET role = 'member', role_revision = role_revision + 1, updated_at = ?
-            WHERE room_id = ? AND actor_id = ? AND status = 'active'`,
-        )
-        .bind(at, access.room.room_id, caller),
-      db
-        .prepare(
-          `UPDATE room_members
-              SET role = 'owner', role_revision = role_revision + 1, updated_at = ?
-            WHERE room_id = ? AND actor_id = ? AND status = 'active'`,
-        )
-        .bind(at, access.room.room_id, target.actor_id),
-      db
-        .prepare('UPDATE rooms SET owner_id = ?, updated_at = ? WHERE room_id = ?')
-        .bind(target.actor_id, at, access.room.room_id),
-      roomMemberSeqStatement(db, access.room.room_id, eventKey, at),
-      roomAuditStatement(
-        db,
-        {
-          roomId: access.room.room_id,
-          action: 'owner_transferred',
-          targetActorId: target.actor_id,
-          previousRole: target.role,
-          newRole: 'owner',
-          previousStatus: 'active',
-          newStatus: 'active',
-          expectedRevision: input.expected_role_revision,
-          resultingRevision: target.role_revision + 1,
-          changedBy: caller,
-          requestId: input.request_id,
-        },
-        at,
-      ),
-      roomAuditStatement(
-        db,
-        {
-          roomId: access.room.room_id,
-          action: 'owner_transferred',
-          targetActorId: caller,
-          previousRole: 'owner',
-          newRole: 'member',
-          previousStatus: 'active',
-          newStatus: 'active',
-          resultingRevision: access.member.role_revision + 1,
           changedBy: caller,
           requestId: input.request_id,
         },

@@ -332,6 +332,9 @@ async function main(): Promise<void> {
     'network_room_members_update',
     'network_room_role_set',
     'network_room_owner_transfer',
+    'network_room_owner_transfer_propose',
+    'network_room_owner_transfer_respond',
+    'network_room_owner_transfer_cancel',
     'network_room_policy_set',
     'network_room_announcement_set',
     'network_room_role_history',
@@ -356,7 +359,7 @@ async function main(): Promise<void> {
     'network_room_file_delete',
   ];
   const toolNames = listed?.tools?.map((tool) => tool.name) ?? [];
-  // 工具集随 drive 开关变化：核心 70 + drive_file_info + 4 个房间文件工具。
+  // 工具集随 drive 开关变化：核心 73 + drive_file_info + 4 个房间文件工具。
   const hasDrive = toolNames.includes('drive_file_info');
   const hasRoomFiles = roomFileTools.every((name) => toolNames.includes(name));
   check(
@@ -392,6 +395,9 @@ async function main(): Promise<void> {
     'network_message_send',
     'network_room_monitor_get',
     'network_room_monitor_set',
+    'network_room_owner_transfer_propose',
+    'network_room_owner_transfer_respond',
+    'network_room_owner_transfer_cancel',
     'network_task_list_get',
     'network_task_summary',
     'network_task_add',
@@ -518,6 +524,11 @@ async function main(): Promise<void> {
   check(
     'room_get 输出 schema 包含成员 online',
     JSON.stringify(roomGetTool?.outputSchema ?? {}).includes('"online"'),
+    roomGetTool?.outputSchema,
+  );
+  check(
+    'room_get 输出 schema 包含 owner_transfer 待确认提议',
+    JSON.stringify(roomGetTool?.outputSchema ?? {}).includes('"owner_transfer"'),
     roomGetTool?.outputSchema,
   );
   const historyTool = listed?.tools?.find((tool) => tool.name === 'network_history_list');

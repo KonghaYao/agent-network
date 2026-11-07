@@ -14,6 +14,8 @@ const membersCloseButton = document.getElementById('members-close');
 const membersCurrentElement = document.getElementById('members-current');
 const membersCurrentCountElement = document.getElementById('members-current-count');
 const membersCurrentEmptyElement = document.getElementById('members-current-empty');
+const membersTransferElement = document.getElementById('members-transfer');
+const membersModalTitleElement = document.getElementById('members-modal-title');
 const membersContactsElement = document.getElementById('members-contacts');
 const membersContactsCountElement = document.getElementById('members-contacts-count');
 const membersSearchElement = document.getElementById('members-search');
@@ -105,7 +107,8 @@ function setMembersBusy(busy, label) {
   }
   if (membersForm) membersForm.setAttribute('aria-busy', busy ? 'true' : 'false');
   for (const button of document.querySelectorAll('.member-action')) {
-    button.disabled = busy;
+    // 转让确认期间入口固定禁用，不能被 busy=false 误重新启用。
+    button.disabled = busy || button.dataset.locked === 'true';
   }
   if (membersPicker) membersPicker.setBusy(busy);
   updateMembersSelection();
@@ -166,9 +169,17 @@ function renderCurrentMembers() {
         }));
       }
       if (actions.can_transfer_owner) {
-        tools.append(memberActionButton('转让群主', false, function () {
-          return submitOwnerTransfer(member);
-        }));
+        // 同一群只允许一条有效提议：确认期间所有转让入口都锁定。
+        const transferButton = memberActionButton(
+          ownerTransfer ? '转让确认中' : '转让群主',
+          false,
+          function () { return submitOwnerTransfer(member); }
+        );
+        if (ownerTransfer) {
+          transferButton.dataset.locked = 'true';
+          transferButton.disabled = true;
+        }
+        tools.append(transferButton);
       }
       if (actions.can_remove) {
         tools.append(memberActionButton('移出群聊', true, function () {
@@ -184,6 +195,7 @@ function renderCurrentMembers() {
   }
   if (membersCurrentEmptyElement) membersCurrentEmptyElement.hidden = members.size > 0;
   renderInvitedMembers();
+  renderOwnerTransferPanel();
 }
 
 /**
@@ -215,6 +227,126 @@ function renderInvitedMembers() {
     membersInvitedCountElement.textContent = String(invited.length);
   }
   membersInvitedWrapElement.hidden = invited.length === 0;
+}
+
+/** 提议有效期展示只做本地估算；接受/拒绝仍由服务端按 expires_at 判定。 */
+function ownerTransferRemaining(expiresAt) {
+  const at = Date.parse(expiresAt);
+  if (!Number.isFinite(at)) return '';
+  const minutes = Math.max(0, Math.ceil((at - Date.now()) / 60000));
+  if (minutes <= 0) return '已到期';
+  if (minutes >= 120) return '剩余 ' + Math.ceil(minutes / 60) + ' 小时';
+  return '剩余 ' + minutes + ' 分钟';
+}
+
+/**
+ * 待确认的转让提议条：接受前责任仍在原 owner，按钮只按服务端
+ * can_accept / can_reject / can_cancel 渲染，页面不自行推断权限。
+ */
+function renderOwnerTransferPanel() {
+  if (!membersTransferElement) return;
+  membersTransferElement.replaceChildren();
+  const transfer = ownerTransfer;
+  const visible = Boolean(room && room.kind === 'group' && transfer);
+  membersTransferElement.hidden = !visible;
+  if (membersModalTitleElement) {
+    membersModalTitleElement.textContent = visible &&
+      (transfer.can_accept || transfer.can_reject || transfer.can_cancel)
+      ? '成员与群主转让'
+      : '添加成员';
+  }
+  if (!visible) return;
+  const title = document.createElement('p');
+  title.className = 'members-transfer-title';
+  title.textContent = '群主转让 · 等待确认';
+  const line = document.createElement('p');
+  line.className = 'members-transfer-line';
+  line.textContent = '「' + transfer.from_owner_name + '」提议把群主转让给「' +
+    transfer.to_actor_name + '」';
+  const meta = document.createElement('p');
+  meta.className = 'members-transfer-meta';
+  const remaining = ownerTransferRemaining(transfer.expires_at);
+  meta.textContent = '接受前仍由原群主负责群主事务' + (remaining ? ' · ' + remaining : '');
+  membersTransferElement.append(title, line, meta);
+  const actions = document.createElement('div');
+  actions.className = 'members-transfer-actions';
+  if (transfer.can_accept) {
+    actions.append(memberActionButton('接受转让', false, function () {
+      return submitOwnerTransferResponse('accept');
+    }));
+  }
+  if (transfer.can_reject) {
+    actions.append(memberActionButton('拒绝转让', false, function () {
+      return submitOwnerTransferResponse('reject');
+    }));
+  }
+  if (transfer.can_cancel) {
+    actions.append(memberActionButton('取消提议', true, function () {
+      return submitOwnerTransferCancel();
+    }));
+  }
+  if (actions.childElementCount > 0) membersTransferElement.append(actions);
+}
+
+/** 接受/拒绝按提议 version 提交；成功后房间详情会给出新的 owner 与角色。 */
+async function submitOwnerTransferResponse(action) {
+  if (!room || room.kind !== 'group' || membersBusy || !ownerTransfer) return;
+  const transfer = ownerTransfer;
+  const roomId = activeRoomId;
+  const epoch = roomEpoch;
+  if (!roomId) return;
+  setMembersError('');
+  setMembersBusy(true, action === 'accept' ? '正在接受…' : '正在拒绝…');
+  try {
+    const result = await callTool('network_room_owner_transfer_respond', {
+      request_id: requestId('owner-respond'),
+      transfer_id: transfer.transfer_id,
+      action,
+      expected_version: transfer.version
+    });
+    if (!isActiveRoom(roomId, epoch)) return;
+    applyRoomDetail(result);
+    renderCurrentMembers();
+    refreshMembersAfterChange(roomId, epoch, action === 'accept' ? '已接受群主转让' : '已拒绝群主转让');
+  } catch (error) {
+    if (!isActiveRoom(roomId, epoch)) return;
+    setMembersError(membersActionError(error, action === 'accept' ? '接受转让失败：' : '拒绝转让失败：'));
+  } finally {
+    if (isActiveRoom(roomId, epoch)) {
+      setMembersBusy(false);
+      renderCurrentMembers();
+    }
+  }
+}
+
+async function submitOwnerTransferCancel() {
+  if (!room || room.kind !== 'group' || membersBusy || !ownerTransfer) return;
+  const transfer = ownerTransfer;
+  if (!window.confirm('取消向「' + transfer.to_actor_name + '」的群主转让提议？')) return;
+  const roomId = activeRoomId;
+  const epoch = roomEpoch;
+  if (!roomId) return;
+  setMembersError('');
+  setMembersBusy(true, '正在取消…');
+  try {
+    const result = await callTool('network_room_owner_transfer_cancel', {
+      request_id: requestId('owner-cancel'),
+      transfer_id: transfer.transfer_id,
+      expected_version: transfer.version
+    });
+    if (!isActiveRoom(roomId, epoch)) return;
+    applyRoomDetail(result);
+    renderCurrentMembers();
+    refreshMembersAfterChange(roomId, epoch, '已取消群主转让提议');
+  } catch (error) {
+    if (!isActiveRoom(roomId, epoch)) return;
+    setMembersError(membersActionError(error, '取消转让失败：'));
+  } finally {
+    if (isActiveRoom(roomId, epoch)) {
+      setMembersBusy(false);
+      renderCurrentMembers();
+    }
+  }
 }
 
 function renderMembersEmpty(message) {
@@ -350,6 +482,7 @@ function membersActionError(error, prefix) {
   if (code === 'NOT_OWNER') return '只有群 owner 可以执行该操作。';
   if (code === 'PERMISSION_DENIED') return '当前群角色没有该操作权限。';
   if (code === 'VERSION_CONFLICT') return '群成员角色已变化，请刷新后重试。';
+  if (code === 'REQUEST_EXPIRED') return '群主转让提议已过期，请刷新后重试。';
   if (code === 'NOT_FOUND') return '房间不存在或已失效。';
   if (code === 'NOT_MEMBER') return '你已不在该群中。';
   const message = error && error.message ? String(error.message) : String(error);
@@ -407,14 +540,18 @@ async function submitOwnerTransfer(member) {
     setMembersError('只有群 owner 可以转让群主。');
     return;
   }
-  if (!window.confirm('把群主转让给「' + member.name + '」？转让后你将成为普通成员。')) return;
+  if (ownerTransfer) {
+    setMembersError('已有待确认的群主转让提议，请先取消或等待对方处理。');
+    return;
+  }
+  if (!window.confirm('向「' + member.name + '」发起群主转让？对方接受后才会生效，确认前你仍负责群主事务。')) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
   if (!roomId) return;
   setMembersError('');
-  setMembersBusy(true, '正在转让…');
+  setMembersBusy(true, '正在发起…');
   try {
-    const result = await callTool('network_room_owner_transfer', {
+    const result = await callTool('network_room_owner_transfer_propose', {
       request_id: requestId('owner'),
       room_id: roomId,
       target_actor_id: member.actor_id,
@@ -423,10 +560,10 @@ async function submitOwnerTransfer(member) {
     if (!isActiveRoom(roomId, epoch)) return;
     applyRoomDetail(result);
     renderCurrentMembers();
-    refreshMembersAfterChange(roomId, epoch, '已把群主转让给 ' + member.name);
+    refreshMembersAfterChange(roomId, epoch, '已向 ' + member.name + ' 发起群主转让，等待对方确认');
   } catch (error) {
     if (!isActiveRoom(roomId, epoch)) return;
-    setMembersError(membersActionError(error, '转让群主失败：'));
+    setMembersError(membersActionError(error, '发起群主转让失败：'));
   } finally {
     if (isActiveRoom(roomId, epoch)) {
       setMembersBusy(false);

@@ -7820,6 +7820,212 @@ async function main(): Promise<void> {
       await memberContext.context.close();
     }
 
+    // 2b-6. G05 群主转让确认：发起、目标接受、拒绝与取消入口同步。
+    {
+      interface TransferView {
+        transfer_id: string;
+        status: string;
+        from_owner_id: string;
+        to_actor_id: string;
+        can_accept: boolean;
+        can_reject: boolean;
+        can_cancel: boolean;
+      }
+      interface TransferRoomView {
+        room: { room_id: string; owner_id: string | null };
+        members: { actor_id: string; role: string }[];
+        owner_transfer: TransferView | null;
+      }
+      const transferGroup = await rawTool<TransferRoomView>(
+        data.humanToken,
+        'network_room_create',
+        {
+          request_id: requestId('g05_web_group'),
+          kind: 'group',
+          title: '转让确认界面群',
+          members: [data.agentB.actor_id],
+        },
+      );
+      const transferRoomId = transferGroup.room.room_id;
+
+      const ownerContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const targetContext = await makeContext(
+        browser,
+        data.agentBToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const ownerPage = ownerContext.page;
+      const targetPage = targetContext.page;
+      const rowOf = (page: Page, name: string) =>
+        page
+          .locator('#members-current .member-roster-item')
+          .filter({ hasText: name });
+
+      await ownerPage.goto(`${server.base}/c/${transferRoomId}`);
+      await waitRoom(ownerPage, transferRoomId, '转让确认界面群');
+      await ownerPage.locator('#add-members').click();
+      await rowOf(ownerPage, data.agentB.name).waitFor();
+      let proposeDialog = '';
+      ownerPage.once('dialog', async (dialog) => {
+        proposeDialog = dialog.message();
+        await dialog.accept();
+      });
+      await rowOf(ownerPage, data.agentB.name)
+        .locator('.member-action')
+        .filter({ hasText: '转让群主' })
+        .click();
+      await waitForText(ownerPage, '#members-transfer', '等待确认');
+      check('转让发起确认说明需对方接受后生效', proposeDialog.includes('对方接受后才会生效'));
+      check(
+        '发起后成员弹窗显示待确认提议与双方名称',
+        ((await ownerPage.locator('#members-transfer').textContent()) ?? '').includes(
+          data.agentB.name,
+        ),
+      );
+      checkEqual(
+        '发起后转让入口锁定',
+        await rowOf(ownerPage, data.agentB.name)
+          .locator('.member-action')
+          .filter({ hasText: '转让确认中' })
+          .isDisabled(),
+        true,
+      );
+      const proposedState = await rawTool<TransferRoomView>(
+        data.humanToken,
+        'network_room_get',
+        { room_id: transferRoomId },
+      );
+      checkEqual('界面发起后服务端仍是 pending', proposedState.owner_transfer?.status, 'pending');
+      checkEqual('界面发起后 owner 未变', proposedState.room.owner_id, data.human.actor_id);
+
+      await targetPage.goto(`${server.base}/c/${transferRoomId}`);
+      await waitRoom(targetPage, transferRoomId, '转让确认界面群');
+      await targetPage.locator('#add-members').click();
+      await targetPage.locator('#members-transfer').waitFor();
+      const targetTransferText = (await targetPage.locator('#members-transfer').textContent()) ?? '';
+      check(
+        '目标在网页看到待确认提议',
+        targetTransferText.includes('等待确认') && targetTransferText.includes(data.human.name),
+        targetTransferText,
+      );
+      checkEqual(
+        '目标看到接受按钮',
+        await targetPage.locator('#members-transfer .member-action').filter({ hasText: '接受转让' }).count(),
+        1,
+      );
+      checkEqual(
+        '目标看到拒绝按钮',
+        await targetPage.locator('#members-transfer .member-action').filter({ hasText: '拒绝转让' }).count(),
+        1,
+      );
+      checkEqual(
+        '目标看不到取消按钮',
+        await targetPage.locator('#members-transfer .member-action').filter({ hasText: '取消提议' }).count(),
+        0,
+      );
+      await targetPage.locator('#members-transfer .member-action').filter({ hasText: '接受转让' }).click();
+      await targetPage.waitForFunction(
+        `document.getElementById('members-transfer').hidden === true`,
+      );
+      await targetPage.waitForFunction(
+        `(() => {
+          const rows = Array.from(document.querySelectorAll('#members-current .member-roster-item'));
+          return rows.some(function (row) {
+            return row.textContent.includes(${JSON.stringify(data.agentB.name)}) &&
+              row.textContent.includes('群主');
+          });
+        })()`,
+      );
+      check('目标接受后网页显示自己成为群主', true);
+      await ownerPage.waitForFunction(
+        `(() => {
+          const rows = Array.from(document.querySelectorAll('#members-current .member-roster-item'));
+          return rows.some(function (row) {
+            return row.textContent.includes(${JSON.stringify(data.agentB.name)}) &&
+              row.textContent.includes('群主');
+          }) && document.getElementById('members-transfer').hidden === true;
+        })()`,
+      );
+      check('原 owner 页面同步新群主并关闭提议条', true);
+      checkEqual(
+        '原 owner 页面不再出现转让入口',
+        await ownerPage.locator('#members-current .member-action').filter({ hasText: '转让群主' }).count(),
+        0,
+      );
+      await ownerPage.waitForFunction(
+        `document.getElementById('room-announcement-edit').textContent === '查看公告'`,
+      );
+      check('原 owner 页面同步降为只读公告入口', true);
+      const acceptedState = await rawTool<TransferRoomView>(
+        data.humanToken,
+        'network_room_get',
+        { room_id: transferRoomId },
+      );
+      checkEqual('网页接受后 owner 变为目标', acceptedState.room.owner_id, data.agentB.actor_id);
+      checkEqual('网页接受后没有待确认提议', acceptedState.owner_transfer, null);
+
+      // 新 owner 在网页再次发起，原 owner 用拒绝入口关闭提议。
+      await targetPage.locator('#members-current .member-roster-item').first().waitFor();
+      targetPage.once('dialog', async (dialog) => {
+        await dialog.accept();
+      });
+      await rowOf(targetPage, data.human.name)
+        .locator('.member-action')
+        .filter({ hasText: '转让群主' })
+        .click();
+      await waitForText(targetPage, '#members-transfer', '等待确认');
+      await ownerPage
+        .locator('#members-transfer .member-action')
+        .filter({ hasText: '拒绝转让' })
+        .waitFor();
+      await ownerPage.locator('#members-transfer .member-action').filter({ hasText: '拒绝转让' }).click();
+      await ownerPage.waitForFunction(
+        `document.getElementById('members-transfer').hidden === true`,
+      );
+      await targetPage.waitForFunction(
+        `document.getElementById('members-transfer').hidden === true`,
+      );
+      const rejectedState = await rawTool<TransferRoomView>(
+        data.humanToken,
+        'network_room_get',
+        { room_id: transferRoomId },
+      );
+      checkEqual('网页拒绝后 owner 仍为原接任者', rejectedState.room.owner_id, data.agentB.actor_id);
+      checkEqual('网页拒绝后提议关闭', rejectedState.owner_transfer, null);
+
+      // 新 owner 再发起并由自己在网页取消。
+      targetPage.once('dialog', async (dialog) => {
+        await dialog.accept();
+      });
+      await rowOf(targetPage, data.human.name)
+        .locator('.member-action')
+        .filter({ hasText: '转让群主' })
+        .click();
+      await waitForText(targetPage, '#members-transfer', '等待确认');
+      targetPage.once('dialog', async (dialog) => {
+        await dialog.accept();
+      });
+      await targetPage.locator('#members-transfer .member-action').filter({ hasText: '取消提议' }).click();
+      await targetPage.waitForFunction(
+        `document.getElementById('members-transfer').hidden === true`,
+      );
+      const cancelledState = await rawTool<TransferRoomView>(
+        data.humanToken,
+        'network_room_get',
+        { room_id: transferRoomId },
+      );
+      checkEqual('网页取消后 owner 不变', cancelledState.room.owner_id, data.agentB.actor_id);
+      checkEqual('网页取消后提议关闭', cancelledState.owner_transfer, null);
+      await targetContext.context.close();
+      await ownerContext.context.close();
+    }
+
     // 2c. 单条统一 stream、慢加载、事件刷新、自消息、断线退避与重连补拉。
     {
       const { context, page } = await makeContext(
