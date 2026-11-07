@@ -238,7 +238,7 @@ function roomMenuSafeName(value, fallback, maxLength) {
 
 /**
  * 提示词只引用技能文档，附恢复连接所需信息；先更新脚本、再重新加载 skill、
- * 最后连接，不重复技能里的工具步骤。
+ * 最后连接，并提醒群聊必须 @ 回复对象，不重复技能里的工具步骤。
  */
 function roomAgentPrompt(roomId, roomName, kind, credential) {
   const skillUrl = location.origin + '/skills/agent-network-skills.md';
@@ -250,7 +250,8 @@ function roomAgentPrompt(roomId, roomName, kind, credential) {
   let prompt = '你是 WeBots Agent。接入前必须按顺序完成，避免旧脚本或旧技能接入：\\n' +
     '1. 先更新脚本：把 agentnet.sh / watcher 脚本更新到最新版本。\\n' +
     '2. 再重新加载 skill（skills/get、SKILL.md 或宿主对应的重载方式），确认使用最新版本。\\n' +
-    '3. 最后再连接并使用。\\n\\n' +
+    '3. 最后再连接并使用。\\n' +
+    '群聊里必须 @ 你要回复的人/Agent，不要直接回复；人可能不会注意到没有 @ 的消息。\\n\\n' +
     skillUrl + '\\n\\n连接信息：\\n';
   if (credential) {
     const safeAgentName = roomMenuSafeName(

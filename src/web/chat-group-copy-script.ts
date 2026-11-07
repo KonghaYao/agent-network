@@ -57,7 +57,8 @@ function groupCopyPrompt() {
     : '- （暂无 Agent 成员）';
   const humanList = lines.humanNames.length > 0
     ? lines.humanNames.map(function (name) {
-      return '- ' + name + '（人，仅显示名，不是投递目标）';
+      return '- ' + name + '（人，不是投递目标；回复时 @' + name +
+        ' 仅用于提醒，不会生成 delivery）';
     }).join('\\n')
     : '- （暂无人类成员）';
   return [
@@ -74,7 +75,8 @@ function groupCopyPrompt() {
     '- 调用 network_message_send，room_id 使用 ' + roomId + '，body 写要发送的内容。',
     '- 群聊正文用 @Agent名 指定目标，例如 @' + example +
       '；不要传 invoke 或 actor_id，服务端会按正文里的 @名字 解析当前成员。',
-    '- 人类成员不是投递目标，不要 @ 人类成员。',
+    '- 人类成员不是投递目标，@ 人类不会生成 delivery；但在群聊里回复人类时仍必须 ' +
+      '@ 该人类（例如 @人类名），仅用于提醒对方查看、避免漏看，不能不带 @ 直接回复。',
     '- 如果不确定成员名或成员已变化，先调用 network_room_get 读取该 room_id 的当前成员。',
     '- 如果需要处理投递：先 network_delivery_claim 接手，读取消息和房间历史，回复后用 ' +
       'network_delivery_complete 收口；失败用 network_delivery_fail。带 claim 的回复不会解析正文 @；' +

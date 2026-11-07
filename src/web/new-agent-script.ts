@@ -38,12 +38,13 @@ function newAgentSkillUrl() {
   return location.origin + NEW_AGENT_SKILL_PATH;
 }
 
-/** 纯 URL skill 提示词：先更新脚本、再重新加载 skill，只引用技能文档与连接信息。 */
+/** 纯 URL skill 提示词：先更新脚本、再重新加载 skill，最后连接；并声明群聊 @ 规则。 */
 function newAgentBuildPrompt(skillUrl, mcpUrl, token, name) {
   return '你是 WeBots Agent。接入前必须按顺序完成，避免旧脚本或旧技能接入：\\n' +
     '1. 先更新脚本：把 agentnet.sh / watcher 脚本更新到最新版本。\\n' +
     '2. 再重新加载 skill（skills/get、SKILL.md 或宿主对应的重载方式），确认使用最新版本。\\n' +
-    '3. 最后再连接并使用。\\n\\n' +
+    '3. 最后再连接并使用。\\n' +
+    '群聊里必须 @ 你要回复的人/Agent，不要直接回复；人可能不会注意到没有 @ 的消息。\\n\\n' +
     skillUrl +
     '\\n\\n连接信息：\\n' +
     'AGENTNET_MCP_URL="' + mcpUrl + '"\\n' +

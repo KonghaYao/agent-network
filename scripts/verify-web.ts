@@ -68,6 +68,8 @@ function roomHeadSubscriptionsExpression(): string {
 }
 
 const IGNORED_CONSOLE = ['Failed to load resource', 'net::ERR_'];
+const GROUP_AT_RULE =
+  '群聊里必须 @ 你要回复的人/Agent，不要直接回复；人可能不会注意到没有 @ 的消息。';
 
 async function rawTool<T>(token: string, name: string, args: Record<string, unknown>): Promise<T> {
   const response = await rawRpc('tools/call', { name, arguments: args }, { token });
@@ -3836,6 +3838,11 @@ async function main(): Promise<void> {
           !groupCredentialPrompt!.includes('network_room_get'),
         groupCredentialPrompt,
       );
+      check(
+        '群聊提示词要求 @ 回复对象',
+        Boolean(groupCredentialPrompt) && groupCredentialPrompt!.includes(GROUP_AT_RULE),
+        groupCredentialPrompt,
+      );
       await page.evaluate(`localStorage.removeItem('agent-network-agents-v1')`);
       await page.locator('#room-menu-copy-prompt').click();
       await page.waitForFunction(
@@ -3851,6 +3858,11 @@ async function main(): Promise<void> {
           groupFallbackPrompt!.includes('本浏览器没有保存该 Agent 的 token/MCP URL') &&
           !groupFallbackPrompt!.includes('AGENTNET_MCP_URL') &&
           !groupFallbackPrompt!.includes('AGENTNET_TOKEN'),
+        groupFallbackPrompt,
+      );
+      check(
+        '群聊无凭据提示词仍要求 @ 回复对象',
+        Boolean(groupFallbackPrompt) && groupFallbackPrompt!.includes(GROUP_AT_RULE),
         groupFallbackPrompt,
       );
       await page.evaluate(`localStorage.setItem('agent-network-agents-v1', '{broken json')`);
@@ -4094,15 +4106,15 @@ async function main(): Promise<void> {
       await writeRegistry(maliciousCredentialName);
       const directPrompt = await copyPrompt(directSelector, credentialStatus);
       const directLines = directPrompt.split('\n');
-      checkEqual('恶意名字不改变含凭据提示词行数', directLines.length, 16);
+      checkEqual('恶意名字不改变含凭据提示词行数', directLines.length, 17);
       checkEqual(
         '恶意名字不改变 MCP URL 固定行',
-        directLines[8],
+        directLines[9],
         `AGENTNET_MCP_URL="${savedUrl}"`,
       );
       checkEqual(
         '恶意名字不改变 token 固定行',
-        directLines[9],
+        directLines[10],
         `AGENTNET_TOKEN="${savedToken}"`,
       );
       check(
@@ -4117,12 +4129,12 @@ async function main(): Promise<void> {
       );
       checkEqual(
         'direct 房间名净化后仍在房间行',
-        directLines[10],
+        directLines[11],
         `房间：${injectionDirect.room.room_id}（注入 ${injectionLine}）`,
       );
       const identityPrefix = '你的 Agent 身份：';
       const identitySuffix = `（${maliciousAgent.actor_id}）`;
-      const identityLine = directLines[11] ?? '';
+      const identityLine = directLines[12] ?? '';
       const identityPart = identityLine.slice(
         identityPrefix.length,
         identityLine.length - identitySuffix.length,
@@ -4141,15 +4153,15 @@ async function main(): Promise<void> {
       await page.locator('#room-filter-group').click();
       const groupPrompt = await copyPrompt(groupSelector, credentialStatus);
       const groupLines = groupPrompt.split('\n');
-      checkEqual('恶意群名不改变提示词行数', groupLines.length, 16);
+      checkEqual('恶意群名不改变提示词行数', groupLines.length, 17);
       checkEqual(
         '恶意群名不改变 token 固定行',
-        groupLines[9],
+        groupLines[10],
         `AGENTNET_TOKEN="${savedToken}"`,
       );
       checkEqual(
         'group 群名净化后仍在房间行',
-        groupLines[10],
+        groupLines[11],
         `房间：${injectionGroup.room.room_id}（注入群 ${injectionLine}）`,
       );
       checkEqual(
@@ -4165,7 +4177,7 @@ async function main(): Promise<void> {
       const truncatedGroupPrompt = await copyPrompt(groupSelector, credentialStatus);
       const truncatedGroupLines = truncatedGroupPrompt.split('\n');
       const groupRoomPrefix = `房间：${injectionGroup.room.room_id}（`;
-      const truncatedGroupLine = truncatedGroupLines[10] ?? '';
+      const truncatedGroupLine = truncatedGroupLines[11] ?? '';
       const truncatedGroupName = truncatedGroupLine.slice(
         groupRoomPrefix.length,
         truncatedGroupLine.length - 1,
@@ -4184,8 +4196,8 @@ async function main(): Promise<void> {
       );
       const groupFallbackPrompt = await copyPrompt(groupSelector, missingStatus);
       const groupFallbackLines = groupFallbackPrompt.split('\n');
-      checkEqual('空群名回退为“群聊”', groupFallbackLines[9], `房间：${injectionGroup.room.room_id}（群聊）`);
-      checkEqual('无凭据提示词行数固定', groupFallbackLines.length, 13);
+      checkEqual('空群名回退为“群聊”', groupFallbackLines[10], `房间：${injectionGroup.room.room_id}（群聊）`);
+      checkEqual('无凭据提示词行数固定', groupFallbackLines.length, 14);
 
       await page.locator('#empty-state').click();
       await page.locator('#room-filter-direct').click();
@@ -4196,7 +4208,7 @@ async function main(): Promise<void> {
       const directFallbackLines = directFallbackPrompt.split('\n');
       checkEqual(
         '空 direct 名称回退为 Agent',
-        directFallbackLines[9],
+        directFallbackLines[10],
         `房间：${injectionDirect.room.room_id}（Agent）`,
       );
 
@@ -4449,6 +4461,14 @@ async function main(): Promise<void> {
         '新建 Agent 提示词包含凭据使用警告',
         newAgentPrompt.includes('凭据只给目标 Agent，勿发群、日志或截图'),
       );
+      check(
+        '新建 Agent 提示词包含群聊 @ 规则且位于接入步骤之后、技能 URL 之前',
+        newAgentPrompt.includes(GROUP_AT_RULE) &&
+          newAgentPrompt.indexOf('最后再连接并使用') <
+            newAgentPrompt.indexOf(GROUP_AT_RULE) &&
+          newAgentPrompt.indexOf(GROUP_AT_RULE) <
+            newAgentPrompt.indexOf('/skills/agent-network-skills.md'),
+      );
       const promptWarning =
         (await page.locator('.new-agent-prompt .new-agent-warning').textContent()) ?? '';
       const createWarning =
@@ -4490,7 +4510,8 @@ async function main(): Promise<void> {
           copiedNewAgentPrompt!.indexOf('更新脚本') <
             copiedNewAgentPrompt!.indexOf('重新加载 skill') &&
           copiedNewAgentPrompt!.indexOf('重新加载 skill') <
-            copiedNewAgentPrompt!.indexOf('最后再连接并使用'),
+            copiedNewAgentPrompt!.indexOf('最后再连接并使用') &&
+          copiedNewAgentPrompt!.includes(GROUP_AT_RULE),
         copiedNewAgentPrompt,
       );
 
@@ -7116,6 +7137,20 @@ async function main(): Promise<void> {
       check(
         '复制内容包含人类成员并标明非投递目标',
         groupPrompt.includes(data.human.name) && groupPrompt.includes('不是投递目标'),
+        groupPrompt,
+      );
+      check(
+        '复制内容要求群聊回复人类时 @ 该人类提醒',
+        groupPrompt.includes('@ 该人类') &&
+          groupPrompt.includes('仅用于提醒') &&
+          groupPrompt.includes('避免漏看') &&
+          groupPrompt.includes('不能不带 @ 直接回复') &&
+          groupPrompt.includes(`@${data.human.name}`),
+        groupPrompt,
+      );
+      check(
+        '复制内容不含 human token/Authorization',
+        !groupPrompt.includes(data.humanToken) && !/Authorization|Bearer\s/u.test(groupPrompt),
         groupPrompt,
       );
       check(
