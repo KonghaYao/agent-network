@@ -1793,8 +1793,8 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 200),
   );
   check(
-    '静态技能包含四种命令与监听脚本',
-    ['agentnet.sh', 'peri-watch.sh', 'codex-watch.sh', 'claude-watch.sh'].every((name) =>
+    '静态技能包含命令与监听脚本',
+    ['agentnet.sh', 'peri-watch.sh', 'codex-watch.sh', 'claude-watch.sh', 'dsh-watch.sh'].every((name) =>
       skillDocText.includes(name),
     ),
     skillDocText.slice(0, 240),
@@ -1940,13 +1940,14 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 240),
   );
   check(
-    '静态技能包含五份 Harness 指南的相对链接',
+    '静态技能包含六份 Harness 指南的相对链接',
     [
       '[Codex](./harness-codex.md)',
       '[ChatGPT Web](./harness-chatgpt-web.md)',
       '[Peri](./harness-peri.md)',
       '[Claude](./harness-claude.md)',
       '[Other](./harness-other.md)',
+      '[DSH](./harness-dsh.md)',
     ].every((link) => skillDocText.includes(link)),
     skillDocText.slice(0, 400),
   );
@@ -2020,6 +2021,28 @@ async function main(): Promise<void> {
         'cron',
         'curl: (28)',
         '401/403',
+      ],
+    },
+    {
+      file: 'harness-dsh.md',
+      markers: [
+        'dsh web',
+        'dsh headless',
+        '--session-id',
+        'wake.queue',
+        'agent.followup',
+        'agent.inject',
+        'action_required',
+        'room.message',
+        'delivery.updated',
+        'session.login',
+        'session.v4.jsonl.zstd',
+        'cordis.patch.yml',
+        'Landlock',
+        'peerDependencies',
+        'catchup',
+        'CREDENTIAL_INVALID',
+        'dsh-watch.sh',
       ],
     },
   ] as const;
@@ -2277,6 +2300,77 @@ async function main(): Promise<void> {
       claudeEmitFoundBody.includes('event_file') &&
       !claudeEmitFoundBody.includes('body:$body'),
     { claudeWriteEventBody, claudeEmitFoundBody },
+  );
+
+  const dshScript = await fetch(`${baseUrl()}/skills/dsh-watch.sh`);
+  checkEqual('GET /skills/dsh-watch.sh 返回 200', dshScript.status, 200);
+  const dshScriptType = dshScript.headers.get('content-type') ?? '';
+  const dshScriptText = await dshScript.text();
+  const dshScriptMarkers = [
+    'WEBBOTS_HOME',
+    'AGENTNET_TOKEN',
+    'AGENTNET_URL',
+    'wake.queue',
+    'status.json',
+    'start',
+    'stop',
+    'status',
+    'logs',
+    'wait',
+    'run',
+    'subscriptions/listen',
+    'agentnet://stream',
+    'network_login',
+    'network_room_get',
+    'action_required',
+    'room.message',
+    'delivery.updated',
+    'session.login',
+    'catchup',
+    'CREDENTIAL_INVALID',
+    'reconnect_delay',
+    '--connect-timeout',
+    'EOF',
+    'truncate',
+  ];
+  check(
+    'DSH watcher 订阅统一流、写 wake.queue 并支持守护子命令',
+    dshScriptType.includes('text/x-shellscript') &&
+      dshScriptMarkers.every((marker) => dshScriptText.includes(marker)),
+    {
+      contentType: dshScriptType,
+      missing: dshScriptMarkers.filter((marker) => !dshScriptText.includes(marker)),
+    },
+  );
+  check(
+    'DSH watcher 不包含硬编码 Bearer token 或完整 token URL',
+    !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(dshScriptText) &&
+      !/[?&]token=[0-9a-f]{8}-[0-9a-f]{4}/iu.test(dshScriptText),
+  );
+  const dshSyntax = Bun.spawnSync({
+    cmd: ['bash', '-n', 'public/skills/dsh-watch.sh'],
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  check(
+    'DSH watcher 通过 bash -n',
+    dshSyntax.exitCode === 0,
+    dshSyntax.stderr.toString(),
+  );
+
+  const dshGuide = await fetch(`${baseUrl()}/skills/harness-dsh.md`);
+  checkEqual('GET /skills/harness-dsh.md 返回 200（DSH 指南）', dshGuide.status, 200);
+  const dshGuideText = await dshGuide.text();
+  check(
+    'DSH 指南说明无内置 monitor、事件过滤与不可重试凭据错误',
+    ['没有内置 monitor', 'wake.queue', 'action_required', 'room.message', 'delivery.updated',
+      'session.login', 'catchup', 'CREDENTIAL_INVALID', '不可重试', 'dsh-watch.sh'].every(
+      (marker) => dshGuideText.includes(marker),
+    ),
+    { missing: ['没有内置 monitor', 'wake.queue', 'action_required', 'room.message', 'delivery.updated',
+      'session.login', 'catchup', 'CREDENTIAL_INVALID', '不可重试', 'dsh-watch.sh'].filter(
+      (marker) => !dshGuideText.includes(marker),
+    ) },
   );
 
   const agentnetScript = await fetch(`${baseUrl()}/skills/agentnet.sh`);
