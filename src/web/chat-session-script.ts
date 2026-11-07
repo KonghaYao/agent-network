@@ -272,6 +272,7 @@ function applyRoomHeader() {
   }
   updateRenameAffordance();
   updateMembersAffordance();
+  applyRoomAnnouncement();
   updateCopyGroupInfoAffordance();
   renderTaskRow();
 }

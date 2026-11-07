@@ -119,6 +119,9 @@ export interface ContactReceivePolicyRow {
   updated_at: number;
 }
 
+export type RoomRole = 'owner' | 'admin' | 'member';
+export type GroupMemberPolicy = 'members' | 'owner_admin';
+
 export interface RoomRow {
   room_id: string;
   kind: 'direct' | 'group';
@@ -129,6 +132,14 @@ export interface RoomRow {
   events_min_seq: number;
   member_seq: number;
   last_message_id: string | null;
+  policy_revision: number;
+  member_message_policy: GroupMemberPolicy;
+  member_invite_policy: GroupMemberPolicy;
+  member_task_policy: GroupMemberPolicy;
+  announcement: string;
+  announcement_revision: number;
+  announcement_updated_at: number | null;
+  announcement_updated_by: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -136,11 +147,40 @@ export interface RoomRow {
 export interface RoomMemberRow {
   room_id: string;
   actor_id: string;
-  role: 'owner' | 'member';
+  role: RoomRole;
   status: 'active' | 'left' | 'removed';
   joined_seq: number;
   last_read_seq: number;
   joined_at: number;
+  role_revision: number;
+  updated_at: number;
+}
+
+export type RoomManagementAction =
+  | 'member_added'
+  | 'member_removed'
+  | 'member_left'
+  | 'admin_appointed'
+  | 'admin_revoked'
+  | 'owner_transferred'
+  | 'policy_updated'
+  | 'announcement_updated';
+
+export interface RoomManagementAuditRow {
+  audit_id: string;
+  room_id: string;
+  action: RoomManagementAction;
+  target_actor_id: string | null;
+  previous_role: RoomRole | null;
+  new_role: RoomRole | null;
+  previous_status: 'active' | 'left' | 'removed' | null;
+  new_status: 'active' | 'left' | 'removed' | null;
+  expected_revision: number | null;
+  resulting_revision: number;
+  changed_by: string;
+  request_id: string;
+  detail_json: string;
+  created_at: number;
 }
 
 export interface MessageRow {

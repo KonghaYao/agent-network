@@ -314,6 +314,52 @@ function roomStreamItems(
       }
       return result;
     }
+    case 'room_role_changed':
+    case 'owner_transferred': {
+      // 角色变更只刷新成员/能力视图；被撤销管理员本人收到 action_required。
+      const target = stringField(metadata, 'target_actor_id')
+        ?? stringField(metadata, 'new_owner_id')
+        ?? row.ref_id
+        ?? undefined;
+      const changedBy = stringField(metadata, 'changed_by');
+      const change = row.event_type === 'owner_transferred'
+        ? 'owner_changed'
+        : 'role_changed';
+      for (const member of activeRecipients(members, eventSeq)) {
+        const demotedSelf = change === 'role_changed' &&
+          target === member.actor_id &&
+          stringField(metadata, 'new_role') === 'member';
+        const item = withLocation(
+          baseItem(row, 'room.membership', 'room', demotedSelf ? 'action_required' : 'informational'),
+          row,
+          metadata,
+        );
+        item.change = change;
+        if (target) item.subject_id = target;
+        if (changedBy) item.changed_by = changedBy;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
+    case 'room_policy_changed':
+    case 'room_announcement_updated': {
+      // 策略与公告变化只影响群管理视图；不推进 head、不产生未读。
+      const change = row.event_type === 'room_policy_changed'
+        ? 'policy_updated'
+        : 'announcement_updated';
+      const changedBy = stringField(metadata, 'changed_by');
+      for (const member of activeRecipients(members, eventSeq)) {
+        const item = withLocation(
+          baseItem(row, 'room.membership', 'room', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = change;
+        if (changedBy) item.changed_by = changedBy;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
     case 'room_created': {
       for (const member of activeRecipients(members, eventSeq)) {
         result.push({

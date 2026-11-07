@@ -108,6 +108,7 @@ export function chatPane(): string {
         <h2 id="title">单聊</h2>
         <button class="link-btn" id="rename" type="button" hidden>改名</button>
         <button class="link-btn" id="add-members" type="button" hidden>添加成员</button>
+        <button class="link-btn" id="room-announcement-edit" type="button" hidden>公告</button>
       </div>
       <p class="muted" id="subtitle">正在加载…</p>
     </div>
@@ -150,6 +151,7 @@ export function chatPane(): string {
     <button class="primary" type="submit">保存</button>
     <button type="button" id="rename-cancel">取消</button>
   </form>
+  <div id="room-announcement" class="room-announcement" role="note" hidden></div>
   <div class="chat-body" id="chat-body" aria-busy="false">
     <div id="chat-loading" class="chat-loading" role="status" hidden>正在加载会话…</div>
     <div id="chat-skeleton" class="chat-skeleton" aria-hidden="true" hidden>
@@ -275,6 +277,36 @@ export function membersDialog(): string {
           aria-live="polite">未选择</span>
         <button id="members-cancel" type="button">取消</button>
         <button class="primary" id="members-add" type="submit">添加</button>
+      </div>
+    </form>
+  </div>
+</div>`;
+}
+
+/**
+ * 群公告弹窗：owner 与管理员可编辑，普通成员只读查看。
+ *
+ * 提交带 `expected_announcement_revision`，并发修改时服务端返回 VERSION_CONFLICT，
+ * 页面保留草稿并提示刷新，不静默覆盖他人公告。
+ */
+export function announcementDialog(): string {
+  return `<div class="modal" id="announcement-modal" hidden>
+  <div class="modal-card announcement-card" role="dialog" aria-modal="true"
+    aria-labelledby="announcement-modal-title">
+    <header class="members-head">
+      <h2 id="announcement-modal-title">群公告</h2>
+      <button class="members-close" id="announcement-close" type="button"
+        aria-label="关闭群公告" title="关闭">×</button>
+    </header>
+    <form id="announcement-form">
+      <textarea id="announcement-input" class="announcement-input"
+        maxlength="${LIMITS.roomAnnouncementBytes}" rows="6"
+        placeholder="填写群公告，所有成员可见"></textarea>
+      <p id="announcement-error" class="form-error" role="status" aria-live="polite"></p>
+      <div class="row modal-actions">
+        <span id="announcement-meta" class="members-selection" role="status"></span>
+        <button id="announcement-cancel" type="button">取消</button>
+        <button class="primary" id="announcement-save" type="submit">保存</button>
       </div>
     </form>
   </div>

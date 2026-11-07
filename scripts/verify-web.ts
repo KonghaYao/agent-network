@@ -6956,6 +6956,166 @@ async function main(): Promise<void> {
       await context.close();
     }
 
+    // 2b-5. G03 群角色界面：owner 任免管理员、管理员操作入口与公告读写。
+    {
+      interface RoleMemberView {
+        actor_id: string;
+        role: 'owner' | 'admin' | 'member';
+        role_revision: number;
+      }
+      const uiGroup = await rawTool<RoomDetail & { members: RoleMemberView[] }>(
+        data.humanToken,
+        'network_room_create',
+        {
+          request_id: requestId('ui_group'),
+          kind: 'group',
+          title: '权限界面群',
+          members: [data.agentA.actor_id, data.agentB.actor_id],
+        },
+      );
+      const uiRoomId = uiGroup.room.room_id;
+      const ownerContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await ownerContext.page.goto(`${server.base}/c/${uiRoomId}`);
+      await waitRoom(ownerContext.page, uiRoomId, '权限界面群');
+      checkEqual(
+        '群主默认看到公告入口',
+        await ownerContext.page.locator('#room-announcement-edit').isVisible(),
+        true,
+      );
+      await ownerContext.page.locator('#add-members').click();
+      await ownerContext.page.locator('#members-current .member-roster-item').first().waitFor();
+      const ownerRoster = (await ownerContext.page.locator('#members-current').textContent()) ?? '';
+      check(
+        '群主成员列表显示群主与 Agent 角色',
+        ownerRoster.includes('群主') && ownerRoster.includes('Agent'),
+      );
+      const agentBRow = ownerContext.page
+        .locator('#members-current .member-roster-item')
+        .filter({ hasText: data.agentB.name });
+      checkEqual(
+        '群主可对成员设管理员',
+        await agentBRow.locator('.member-action').filter({ hasText: '设为管理员' }).count(),
+        1,
+      );
+      await agentBRow.locator('.member-action').filter({ hasText: '设为管理员' }).click();
+      await ownerContext.page.waitForFunction(
+        `(() => Array.from(document.querySelectorAll('#members-current .member-roster-role'))
+          .some((node) => node.textContent === '管理员 · Agent'))()`,
+      );
+      const appointedUi = await rawTool<{ members: RoleMemberView[] }>(
+        data.humanToken,
+        'network_room_get',
+        { room_id: uiRoomId },
+      );
+      checkEqual(
+        '界面设管理员写入服务端角色',
+        appointedUi.members.find((member) => member.actor_id === data.agentB.actor_id)?.role,
+        'admin',
+      );
+      checkEqual(
+        '群主界面出现撤销管理员入口',
+        await ownerContext.page
+          .locator('#members-current .member-action')
+          .filter({ hasText: '撤销管理员' })
+          .count(),
+        1,
+      );
+
+      const adminContext = await makeContext(
+        browser,
+        data.agentBToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await adminContext.page.goto(`${server.base}/c/${uiRoomId}`);
+      await waitRoom(adminContext.page, uiRoomId, '权限界面群');
+      await adminContext.page.locator('#add-members').click();
+      await adminContext.page.locator('#members-current .member-roster-item').first().waitFor();
+      const adminActions = (await adminContext.page.locator('#members-current').textContent()) ?? '';
+      check(
+        '管理员可移除普通成员但没有任免/转让入口',
+        adminActions.includes('移出群聊') &&
+          !adminActions.includes('设为管理员') &&
+          !adminActions.includes('转让群主'),
+        adminActions,
+      );
+      check(
+        '管理员不被提示只有群 owner 可添加',
+        !((await adminContext.page.locator('#members-error').textContent()) ?? '').includes(
+          '只有群 owner',
+        ) &&
+          !((await adminContext.page.locator('#members-contacts').textContent()) ?? '').includes(
+            '只有群 owner',
+          ),
+      );
+      await adminContext.page.locator('#members-cancel').click();
+      await adminContext.page.locator('#room-announcement-edit').click();
+      checkEqual(
+        '管理员可编辑公告',
+        await adminContext.page.locator('#announcement-input').isEditable(),
+        true,
+      );
+      await adminContext.page.fill('#announcement-input', 'G03 界面公告');
+      await adminContext.page.locator('#announcement-save').click();
+      await waitForText(adminContext.page, '#room-announcement', 'G03 界面公告');
+      check('管理员保存的公告显示在聊天区', true);
+
+      await agentBRow.locator('.member-action').filter({ hasText: '撤销管理员' }).click();
+      await ownerContext.page.waitForFunction(
+        `(() => Array.from(document.querySelectorAll('#members-current .member-roster-role'))
+          .some((node) => node.textContent === 'Agent'))()`,
+      );
+      const revokedUi = await rawTool<{ members: RoleMemberView[] }>(
+        data.humanToken,
+        'network_room_get',
+        { room_id: uiRoomId },
+      );
+      checkEqual(
+        '界面撤销管理员写入服务端角色',
+        revokedUi.members.find((member) => member.actor_id === data.agentB.actor_id)?.role,
+        'member',
+      );
+      await ownerContext.page.locator('#members-cancel').click();
+      await ownerContext.context.close();
+
+      const memberContext = await makeContext(
+        browser,
+        data.agentAToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await memberContext.page.goto(`${server.base}/c/${uiRoomId}`);
+      await waitRoom(memberContext.page, uiRoomId, '权限界面群');
+      checkEqual(
+        '普通成员看到公告条',
+        await memberContext.page.locator('#room-announcement').isVisible(),
+        true,
+      );
+      checkEqual(
+        '普通成员公告入口为只读查看',
+        await memberContext.page.locator('#room-announcement-edit').textContent(),
+        '查看公告',
+      );
+      await memberContext.page.locator('#room-announcement-edit').click();
+      checkEqual(
+        '普通成员公告输入框只读',
+        await memberContext.page.locator('#announcement-input').getAttribute('readonly'),
+        '',
+      );
+      checkEqual(
+        '普通成员公告不显示保存',
+        await memberContext.page.locator('#announcement-save').isHidden(),
+        true,
+      );
+      await memberContext.page.locator('#announcement-cancel').click();
+      await memberContext.context.close();
+    }
+
     // 2c. 单条统一 stream、慢加载、事件刷新、自消息、断线退避与重连补拉。
     {
       const { context, page } = await makeContext(

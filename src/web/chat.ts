@@ -1,4 +1,5 @@
 import {
+  announcementDialog,
   chatPane,
   contactRequestsDialog,
   emptyPane,
@@ -64,6 +65,7 @@ ${filePreviewDialog()}
 ${contactRequestsDialog()}
 ${groupDialog()}
 ${membersDialog()}
+${announcementDialog()}
 ${newAgentDialog()}
 ${deviceHandoffDialog()}
 ${logoutDialog()}

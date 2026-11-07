@@ -323,6 +323,11 @@ async function main(): Promise<void> {
     'network_task_update',
     'network_task_delete',
     'network_room_members_update',
+    'network_room_role_set',
+    'network_room_owner_transfer',
+    'network_room_policy_set',
+    'network_room_announcement_set',
+    'network_room_role_history',
     'network_room_leave',
     'network_message_send',
     'network_history_list',
@@ -344,7 +349,7 @@ async function main(): Promise<void> {
     'network_room_file_delete',
   ];
   const toolNames = listed?.tools?.map((tool) => tool.name) ?? [];
-  // 工具集随 drive 开关变化：核心 60 + drive_file_info + 4 个房间文件工具。
+  // 工具集随 drive 开关变化：核心 65 + drive_file_info + 4 个房间文件工具。
   const hasDrive = toolNames.includes('drive_file_info');
   const hasRoomFiles = roomFileTools.every((name) => toolNames.includes(name));
   check(

@@ -494,6 +494,12 @@ export const APP_STYLE = `
     text-overflow: ellipsis; white-space: nowrap; }
   .member-roster-role { flex: 0 0 auto; margin-left: auto; font-size: 11px;
     color: var(--wx-muted); }
+  .member-roster-actions { flex: 0 0 auto; display: flex; gap: 4px; }
+  .member-action { padding: 2px 6px; border: 1px solid var(--wx-line); border-radius: 4px;
+    background: var(--wx-panel); color: var(--wx-text); font-size: 11px; line-height: 1.5; }
+  .member-action:hover:not(:disabled) { background: var(--wx-hover); }
+  .member-action.danger { color: var(--wx-unread); }
+  .member-action:disabled { opacity: 0.5; cursor: default; }
   .members-card .contact-list { margin: 0; padding: 4px;
     max-height: min(46dvh, 360px); }
   .contact-choice { display: flex; align-items: center; gap: 9px; padding: 8px;
@@ -516,6 +522,16 @@ export const APP_STYLE = `
   .members-empty[hidden] { display: none; }
   .members-actions { align-items: center; }
   .members-selection { margin-right: auto; font-size: 12px; color: var(--wx-muted); }
+  .room-announcement { margin: 8px 16px 0; padding: 8px 12px; border-radius: 6px;
+    border: 1px solid var(--wx-line); background: var(--wx-panel); color: var(--wx-text);
+    font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .room-announcement[hidden] { display: none; }
+  .announcement-card { width: min(520px, 100%); box-sizing: border-box; }
+  .announcement-input { display: block; box-sizing: border-box; width: 100%;
+    min-height: 140px; padding: 8px 10px; border: 1px solid var(--wx-line);
+    border-radius: 4px; background: var(--wx-bg); color: var(--wx-text);
+    font: inherit; font-size: 13px; line-height: 1.6; resize: vertical; }
+  .announcement-input[readonly] { color: var(--wx-muted); }
   .form-error { min-height: 1.2em; margin: 0 0 8px; color: var(--wx-unread);
     font-size: 12px; overflow-wrap: anywhere; }
   .modal-actions { justify-content: flex-end; }

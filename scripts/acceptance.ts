@@ -50,6 +50,7 @@ import { runRoomTaskAcceptance } from './lib/room-task-acceptance';
 import { runFeedbackAcceptance } from './lib/feedback-acceptance';
 import { runGroupMentionAcceptance } from './lib/mention-acceptance';
 import { runGroupAutoDeliverAcceptance } from './lib/auto-deliver-acceptance';
+import { runGroupRoleAcceptance } from './lib/group-role-acceptance';
 import {
   ensureTestCertificate,
   removeTestData,
@@ -1310,6 +1311,7 @@ async function main(): Promise<void> {
     await runFeedbackAcceptance();
     await runGroupMentionAcceptance();
     await runGroupAutoDeliverAcceptance();
+    await runGroupRoleAcceptance();
 
     console.log(`端到端验收通过: ${checksPassed()} 项`);
   } finally {

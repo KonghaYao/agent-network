@@ -21,6 +21,7 @@ import {
   runIdempotent,
 } from '../storage/transactions/runner';
 import { actorId, type Principal } from './principal';
+import { capabilityGuardStatement } from './room-access';
 
 /**
  * 房间任务列表（room_tasks）。
@@ -408,6 +409,8 @@ export async function taskAdd(
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
       memberGuard(db, room.room_id, caller),
+      // 群策略：owner_admin 时普通成员不能创建任务；管理员和 owner 始终可以。
+      capabilityGuardStatement(db, room.room_id, caller, 'create_task'),
       db
         .prepare(
           guardSql(

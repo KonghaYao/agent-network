@@ -2,6 +2,7 @@ import { MESSAGE_FILE_ID_SOURCE } from '../contracts/file-links';
 import { LIMITS } from '../contracts/limits';
 import { CHAT_ACCOUNT_RENAME_SCRIPT } from './chat-account-rename-script';
 import { CHAT_AGENTS_SCRIPT } from './chat-agents-script';
+import { CHAT_ANNOUNCEMENT_SCRIPT } from './chat-announcement-script';
 import { CHAT_ARCHIVE_SCRIPT } from './chat-archive-script';
 import { CHAT_AVATAR_SCRIPT } from './chat-avatar-script';
 import { CHAT_CONTACTS_SCRIPT } from './chat-contacts-script';
@@ -62,6 +63,8 @@ const MAX_CHUNKS = 8;
 const ACTOR_NAME_MAX = ${LIMITS.actorNameMax};
 const MEMBER_CHANGE_MAX = ${LIMITS.memberChangeMax};
 const GROUP_MEMBERS_MAX = ${LIMITS.groupMembersMax};
+// 群公告上限与服务端 limits.ts 保持一致；客户端只做提前提示。
+const ROOM_ANNOUNCEMENT_BYTES = ${LIMITS.roomAnnouncementBytes};
 // 本地 Agent 注册表上限；阈值只在 limits.ts 维护。
 const AGENT_REGISTRY_MAX = ${LIMITS.webAgentRegistryMax};
 // 归档状态批量查询上限，与服务端 network_agents_get 一致。
@@ -128,6 +131,7 @@ ${CHAT_AVATAR_SCRIPT}
 ${CHAT_ARCHIVE_SCRIPT}
 ${CHAT_ROOM_MENU_SCRIPT}
 ${CHAT_MEMBERS_SCRIPT}
+${CHAT_ANNOUNCEMENT_SCRIPT}
 ${CHAT_GROUP_COPY_SCRIPT}
 ${CHAT_MESSAGE_FILES_SCRIPT}
 ${CHAT_MARKDOWN_SCRIPT}

@@ -1,9 +1,10 @@
 /**
  * 群聊成员管理片段：左右双栏的“已在群 / 未在群”选择器与好友分页。
  *
- * 服务端 `network_room_members_update` 只允许群 owner 调用，页面据此在
- * 非 owner 打开时给出明确提示，而不是静默失败。片段与其它脚本拼进同一个
- * 内联 `<script>` 共享作用域；不改变工具契约或既有 DOM id/class。
+ * 服务端返回的 `room.capabilities` 与 `member.actions` 是唯一授权来源：
+ * 邀请受 `invite_members` 控制，任免管理员受 `manage_admins` 控制，
+ * 移除/转让逐成员判定。页面只隐藏入口，服务端仍会阻止直接调用与重放。
+ * 片段与其它脚本拼进同一个内联 `<script>` 共享作用域；不改变工具契约。
  */
 export const CHAT_MEMBERS_SCRIPT = `
 const membersButton = document.getElementById('add-members');
@@ -25,8 +26,20 @@ let membersContactNote = '';
 let membersBusy = false;
 let membersOpener = null;
 
-function isGroupOwner() {
+/** 服务端 capabilities 优先；旧快照没有 capabilities 时按 owner 兼容。 */
+function roomCapability(name) {
+  if (room && room.capabilities && typeof room.capabilities === 'object') {
+    return Boolean(room.capabilities[name]);
+  }
   return Boolean(room && room.kind === 'group' && room.my_role === 'owner');
+}
+
+function canInviteMembers() {
+  return Boolean(room && room.kind === 'group') && roomCapability('invite_members');
+}
+
+function canManageAdmins() {
+  return Boolean(room && room.kind === 'group') && roomCapability('manage_admins');
 }
 
 /** 添加成员入口只在群聊出现；切到单聊或关闭房间时同时收起弹窗。 */
@@ -65,7 +78,7 @@ function updateMembersSelection() {
     }
   }
   if (membersAddButton) {
-    membersAddButton.disabled = membersBusy || !isGroupOwner() || selected.length === 0;
+    membersAddButton.disabled = membersBusy || !canInviteMembers() || selected.length === 0;
   }
 }
 
@@ -75,7 +88,31 @@ function setMembersBusy(busy, label) {
     membersAddButton.textContent = busy ? (label || '正在添加…') : '添加';
   }
   if (membersForm) membersForm.setAttribute('aria-busy', busy ? 'true' : 'false');
+  for (const button of document.querySelectorAll('.member-action')) {
+    button.disabled = busy;
+  }
   updateMembersSelection();
+}
+
+function memberRoleLabel(member) {
+  const kind = member.kind === 'agent' ? 'Agent' : '人';
+  if (member.role === 'owner') return '群主 · ' + kind;
+  if (member.role === 'admin') return '管理员 · ' + kind;
+  return kind;
+}
+
+function memberActionButton(label, danger, handler) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'member-action' + (danger ? ' danger' : '');
+  button.textContent = label;
+  button.disabled = membersBusy;
+  button.addEventListener('click', function () {
+    handler().catch(function (error) {
+      setMembersError(error && error.message ? error.message : String(error));
+    });
+  });
+  return button;
 }
 
 function renderCurrentMembers() {
@@ -95,9 +132,34 @@ function renderCurrentMembers() {
       (identity && member.actor_id === identity.actor_id ? '（我）' : '');
     const role = document.createElement('span');
     role.className = 'member-roster-role';
-    role.textContent = (member.role === 'owner' ? '群主 · ' : '') +
-      (member.kind === 'agent' ? 'Agent' : '人');
+    role.textContent = memberRoleLabel(member);
     item.append(name, role);
+    const actions = member.actions && typeof member.actions === 'object' ? member.actions : {};
+    if (actions.can_remove || actions.can_set_admin || actions.can_revoke_admin || actions.can_transfer_owner) {
+      const tools = document.createElement('span');
+      tools.className = 'member-roster-actions';
+      if (actions.can_set_admin) {
+        tools.append(memberActionButton('设为管理员', false, function () {
+          return submitMemberRole(member, 'admin');
+        }));
+      }
+      if (actions.can_revoke_admin) {
+        tools.append(memberActionButton('撤销管理员', false, function () {
+          return submitMemberRole(member, 'member');
+        }));
+      }
+      if (actions.can_transfer_owner) {
+        tools.append(memberActionButton('转让群主', false, function () {
+          return submitOwnerTransfer(member);
+        }));
+      }
+      if (actions.can_remove) {
+        tools.append(memberActionButton('移出群聊', true, function () {
+          return submitMemberRemoval(member);
+        }));
+      }
+      item.append(tools);
+    }
     membersCurrentElement.append(item);
   }
   if (membersCurrentCountElement) {
@@ -122,10 +184,10 @@ function renderMembersContacts(contacts, note) {
   const checked = new Set(selectedMemberIds());
   membersContactsElement.replaceChildren();
   if (membersContactsCountElement) {
-    membersContactsCountElement.textContent = String(isGroupOwner() ? contacts.length : 0);
+    membersContactsCountElement.textContent = String(canInviteMembers() ? contacts.length : 0);
   }
-  if (!isGroupOwner()) {
-    renderMembersEmpty('只有群 owner 可以添加成员');
+  if (!canInviteMembers()) {
+    renderMembersEmpty('只有群 owner 或管理员可以添加成员');
     return;
   }
   if (contacts.length === 0) {
@@ -204,9 +266,9 @@ async function openMembersModal() {
   const roomId = activeRoomId;
   const epoch = roomEpoch;
   const loadToken = ++membersLoadToken;
-  if (!isGroupOwner()) {
-    renderMembersEmpty('只有群 owner 可以添加成员');
-    setMembersError('只有群 owner 可以添加成员。');
+  if (!canInviteMembers()) {
+    renderMembersEmpty('只有群 owner 或管理员可以添加成员');
+    setMembersError('只有群 owner 或管理员可以添加成员。');
     return;
   }
   renderMembersEmpty('正在读取好友…');
@@ -252,7 +314,9 @@ async function openMembersModal() {
 /** 把服务端错误码映射成可读提示；未知错误保留原始 message。 */
 function membersUpdateError(error) {
   const code = error && error.code;
-  if (code === 'NOT_OWNER') return '只有群 owner 可以添加成员。';
+  if (code === 'NOT_OWNER') return '只有群 owner 可以执行该操作。';
+  if (code === 'PERMISSION_DENIED') return '当前群角色没有该操作权限。';
+  if (code === 'VERSION_CONFLICT') return '群成员角色已变化，请刷新后重试。';
   if (code === 'FRIEND_REQUIRED') return '只能添加好友；请先把对方添加为好友。';
   if (code === 'ROOM_FULL') {
     return '群成员已达上限（' + GROUP_MEMBERS_MAX + ' 人），无法继续添加。';
@@ -263,14 +327,140 @@ function membersUpdateError(error) {
   return '添加成员失败：' + message;
 }
 
+function membersActionError(error, prefix) {
+  const code = error && error.code;
+  if (code === 'NOT_OWNER') return '只有群 owner 可以执行该操作。';
+  if (code === 'PERMISSION_DENIED') return '当前群角色没有该操作权限。';
+  if (code === 'VERSION_CONFLICT') return '群成员角色已变化，请刷新后重试。';
+  if (code === 'NOT_FOUND') return '房间不存在或已失效。';
+  if (code === 'NOT_MEMBER') return '你已不在该群中。';
+  const message = error && error.message ? String(error.message) : String(error);
+  return prefix + message;
+}
+
+/** 角色/移除/转让成功后统一刷新侧栏；失败不清空当前成员列表。 */
+function refreshMembersAfterChange(roomId, epoch, message) {
+  statusElement.textContent = message;
+  refresh(false).catch(function (error) {
+    if (!isActiveRoom(roomId, epoch)) return;
+    statusElement.textContent = message + '，但刷新会话失败：' +
+      (error && error.message ? error.message : error);
+  });
+}
+
+async function submitMemberRole(member, role) {
+  if (!room || room.kind !== 'group' || membersBusy) return;
+  if (!canManageAdmins()) {
+    setMembersError('只有群 owner 可以任免管理员。');
+    return;
+  }
+  const roomId = activeRoomId;
+  const epoch = roomEpoch;
+  if (!roomId) return;
+  setMembersError('');
+  setMembersBusy(true, '正在保存…');
+  try {
+    const result = await callTool('network_room_role_set', {
+      request_id: requestId('role'),
+      room_id: roomId,
+      actor_id: member.actor_id,
+      role,
+      expected_role_revision: member.role_revision
+    });
+    if (!isActiveRoom(roomId, epoch)) return;
+    applyRoomDetail(result);
+    renderCurrentMembers();
+    refreshMembersAfterChange(roomId, epoch, role === 'admin' ? '已设为管理员' : '已撤销管理员');
+  } catch (error) {
+    if (!isActiveRoom(roomId, epoch)) return;
+    setMembersError(membersActionError(error, role === 'admin' ? '设置管理员失败：' : '撤销管理员失败：'));
+  } finally {
+    if (isActiveRoom(roomId, epoch)) {
+      setMembersBusy(false);
+      renderCurrentMembers();
+    }
+  }
+}
+
+async function submitOwnerTransfer(member) {
+  if (!room || room.kind !== 'group' || membersBusy) return;
+  const actions = member.actions && typeof member.actions === 'object' ? member.actions : {};
+  if (!actions.can_transfer_owner) {
+    setMembersError('只有群 owner 可以转让群主。');
+    return;
+  }
+  if (!window.confirm('把群主转让给「' + member.name + '」？转让后你将成为普通成员。')) return;
+  const roomId = activeRoomId;
+  const epoch = roomEpoch;
+  if (!roomId) return;
+  setMembersError('');
+  setMembersBusy(true, '正在转让…');
+  try {
+    const result = await callTool('network_room_owner_transfer', {
+      request_id: requestId('owner'),
+      room_id: roomId,
+      target_actor_id: member.actor_id,
+      expected_role_revision: member.role_revision
+    });
+    if (!isActiveRoom(roomId, epoch)) return;
+    applyRoomDetail(result);
+    renderCurrentMembers();
+    refreshMembersAfterChange(roomId, epoch, '已把群主转让给 ' + member.name);
+  } catch (error) {
+    if (!isActiveRoom(roomId, epoch)) return;
+    setMembersError(membersActionError(error, '转让群主失败：'));
+  } finally {
+    if (isActiveRoom(roomId, epoch)) {
+      setMembersBusy(false);
+      renderCurrentMembers();
+    }
+  }
+}
+
+async function submitMemberRemoval(member) {
+  if (!room || room.kind !== 'group' || membersBusy) return;
+  const actions = member.actions && typeof member.actions === 'object' ? member.actions : {};
+  if (!actions.can_remove) {
+    setMembersError('当前群角色不能移除该成员。');
+    return;
+  }
+  if (!window.confirm('将「' + member.name + '」移出群聊？')) return;
+  const roomId = activeRoomId;
+  const epoch = roomEpoch;
+  if (!roomId) return;
+  setMembersError('');
+  setMembersBusy(true, '正在移除…');
+  try {
+    const result = await callTool('network_room_members_update', {
+      request_id: requestId('remove'),
+      room_id: roomId,
+      remove: [member.actor_id],
+      expected_role_revision: member.role_revision
+    });
+    if (!isActiveRoom(roomId, epoch)) return;
+    applyRoomDetail(result);
+    renderCurrentMembers();
+    renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
+    refreshMembersAfterChange(roomId, epoch, '已把 ' + member.name + ' 移出群聊');
+  } catch (error) {
+    if (!isActiveRoom(roomId, epoch)) return;
+    setMembersError(membersActionError(error, '移除成员失败：'));
+  } finally {
+    if (isActiveRoom(roomId, epoch)) {
+      setMembersBusy(false);
+      renderCurrentMembers();
+    }
+  }
+}
+
 async function submitMembersForm(event) {
   event.preventDefault();
   const roomId = activeRoomId;
   if (!roomId || !room || room.kind !== 'group' || !membersModal || membersModal.hidden) return;
   if (membersBusy) return;
   const epoch = roomEpoch;
-  if (!isGroupOwner()) {
-    setMembersError('只有群 owner 可以添加成员。');
+  if (!canInviteMembers()) {
+    setMembersError('只有群 owner 或管理员可以添加成员。');
     return;
   }
   const selected = selectedMemberIds();

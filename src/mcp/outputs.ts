@@ -44,17 +44,42 @@ export const historyMessageSchema = messageSchema.extend({
   sender_kind: z.enum(['human', 'agent']).nullable(),
 });
 
+const roomMemberActionsSchema = z.object({
+  can_remove: z.boolean(),
+  can_set_admin: z.boolean(),
+  can_revoke_admin: z.boolean(),
+  can_transfer_owner: z.boolean(),
+});
+
 export const memberSchema = z.object({
   actor_id: z.string(),
   kind: z.enum(['human', 'agent']),
   name: z.string(),
   agent_session_id: z.string().nullable(),
-  role: z.enum(['owner', 'member']),
+  role: z.enum(['owner', 'admin', 'member']),
+  role_revision: z.number(),
   joined_seq: z.string(),
   joined_at: z.string(),
   last_read_seq: z.string(),
   /** Agent 在线状态；null 表示未知，人类成员恒为 null。 */
   online: z.boolean().nullable(),
+  /** 服务端按调用者角色与目标角色计算的成员操作；前端只据此显示入口。 */
+  actions: roomMemberActionsSchema,
+});
+
+const groupPolicySchema = z.enum(['members', 'owner_admin']);
+
+const roomCapabilitiesSchema = z.object({
+  send_message: z.boolean(),
+  create_task: z.boolean(),
+  invite_members: z.boolean(),
+  remove_members: z.boolean(),
+  manage_admins: z.boolean(),
+  manage_announcement: z.boolean(),
+  manage_policy: z.boolean(),
+  transfer_owner: z.boolean(),
+  approve_joins: z.boolean(),
+  view_role_history: z.boolean(),
 });
 
 export const roomSchema = z.object({
@@ -65,8 +90,20 @@ export const roomSchema = z.object({
   head_seq: z.string(),
   member_seq: z.string(),
   member_count: z.number(),
-  my_role: z.enum(['owner', 'member']),
+  my_role: z.enum(['owner', 'admin', 'member']),
+  my_role_revision: z.number(),
   my_last_read_seq: z.string(),
+  policy_revision: z.number(),
+  policies: z.object({
+    member_message: groupPolicySchema,
+    member_invite: groupPolicySchema,
+    member_task: groupPolicySchema,
+  }),
+  announcement: z.string(),
+  announcement_revision: z.number(),
+  announcement_updated_at: z.string().nullable(),
+  announcement_updated_by: z.string().nullable(),
+  capabilities: roomCapabilitiesSchema,
   last_message: messagePreviewSchema.nullable(),
   created_at: z.string(),
   updated_at: z.string(),
@@ -486,6 +523,40 @@ export const removedResultSchema = z.object({
 });
 
 export const leaveResultSchema = z.object({ room_id: z.string(), left: z.literal(true) });
+
+export const roomRoleAuditSchema = z.object({
+  audit_id: z.string(),
+  room_id: z.string(),
+  action: z.enum([
+    'member_added',
+    'member_removed',
+    'member_left',
+    'admin_appointed',
+    'admin_revoked',
+    'owner_transferred',
+    'policy_updated',
+    'announcement_updated',
+  ]),
+  target_actor_id: z.string().nullable(),
+  target_name: z.string().nullable(),
+  previous_role: z.enum(['owner', 'admin', 'member']).nullable(),
+  new_role: z.enum(['owner', 'admin', 'member']).nullable(),
+  previous_status: z.enum(['active', 'left', 'removed']).nullable(),
+  new_status: z.enum(['active', 'left', 'removed']).nullable(),
+  expected_revision: z.number().nullable(),
+  resulting_revision: z.number(),
+  changed_by: z.string(),
+  changed_by_name: z.string().nullable(),
+  request_id: z.string(),
+  detail: z.record(z.string(), z.unknown()),
+  created_at: z.string(),
+});
+
+export const roomRoleHistorySchema = z.object({
+  items: z.array(roomRoleAuditSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+});
 
 export const markReadResultSchema = z.object({ room_id: z.string(), last_read_seq: z.string() });
 

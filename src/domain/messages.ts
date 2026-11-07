@@ -48,6 +48,7 @@ import {
   runIdempotent,
 } from '../storage/transactions/runner';
 import { actorId, type Principal } from './principal';
+import { capabilityGuardStatement } from './room-access';
 import type { MessagePreviewView } from './rooms';
 import { timelineList, type TimelinePage } from './timeline';
 
@@ -151,6 +152,8 @@ export function messageGuardStatements(
       )
       .bind(core.roomId, core.senderId),
     directMessageGuardStatement(db, core.roomId),
+    // 群策略：owner_admin 时普通成员不能发言；管理员和 owner 始终可以。
+    capabilityGuardStatement(db, core.roomId, core.senderId, 'send_message'),
   ];
 
   if (core.hop > LIMITS.cooperationDepthMax) {

@@ -210,9 +210,66 @@ export const roomMembersUpdateSchema = z.object({
   add: z.array(id()).max(LIMITS.memberChangeMax).optional(),
   remove: z.array(id()).max(LIMITS.memberChangeMax).optional(),
   transfer_owner_to: id().optional(),
+  /** 单个移除目标的角色版本；可选，提供时按事务提交序裁决。 */
+  expected_role_revision: z.number().int().positive().optional(),
 });
 
-export const roomLeaveSchema = z.object({ request_id: requestId, room_id: id() });
+const groupPolicy = z.enum(['members', 'owner_admin']);
+
+/** 群主任免管理员；expected revision 是目标成员当前 `role_revision`。 */
+export const roomRoleSetSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  actor_id: id(),
+  role: z.enum(['admin', 'member']),
+  expected_role_revision: z.number().int().positive(),
+});
+
+/** 群主转移；目标角色版本与事务内 owner 复核同时生效。 */
+export const roomOwnerTransferSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  target_actor_id: id(),
+  expected_role_revision: z.number().int().positive(),
+});
+
+/** 群主设置普通成员发言/邀请/创建任务策略。 */
+export const roomPolicySetSchema = z
+  .object({
+    request_id: requestId,
+    room_id: id(),
+    member_message_policy: groupPolicy.optional(),
+    member_invite_policy: groupPolicy.optional(),
+    member_task_policy: groupPolicy.optional(),
+    expected_policy_revision: z.number().int().positive(),
+  })
+  .refine(
+    (value) =>
+      value.member_message_policy !== undefined ||
+      value.member_invite_policy !== undefined ||
+      value.member_task_policy !== undefined,
+    { message: '至少需要修改一项群策略' },
+  );
+
+/** 群主/管理员维护公告；expected revision 防止覆盖并发修改。 */
+export const roomAnnouncementSetSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  announcement: z.string().max(LIMITS.roomAnnouncementBytes),
+  expected_announcement_revision: z.number().int().positive(),
+});
+
+export const roomRoleHistorySchema = z.object({
+  room_id: id(),
+  cursor,
+  limit: z.number().int().min(1).max(LIMITS.roomRoleHistoryPageMax).optional(),
+});
+
+export const roomLeaveSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  expected_role_revision: z.number().int().positive().optional(),
+});
 
 export const messageSendSchema = z.object({
   request_id: requestId,
@@ -434,6 +491,11 @@ export type ContactPolicySetInput = z.infer<typeof contactPolicySetSchema>;
 export type RoomCreateInput = z.infer<typeof roomCreateSchema>;
 export type RoomsListInput = z.infer<typeof roomsListSchema>;
 export type RoomMembersUpdateInput = z.infer<typeof roomMembersUpdateSchema>;
+export type RoomRoleSetInput = z.infer<typeof roomRoleSetSchema>;
+export type RoomOwnerTransferInput = z.infer<typeof roomOwnerTransferSchema>;
+export type RoomPolicySetInput = z.infer<typeof roomPolicySetSchema>;
+export type RoomAnnouncementSetInput = z.infer<typeof roomAnnouncementSetSchema>;
+export type RoomRoleHistoryInput = z.infer<typeof roomRoleHistorySchema>;
 export type RoomLeaveInput = z.infer<typeof roomLeaveSchema>;
 export type MessageSendInput = z.infer<typeof messageSendSchema>;
 export type HistoryListInput = z.infer<typeof historyListSchema>;

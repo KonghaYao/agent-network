@@ -55,6 +55,11 @@ export const LIMITS = {
   contactRequestExpiryBatchMax: 50,
   /** 群成员上限。 */
   groupMembersMax: 100,
+  /** 群公告 UTF-8 字节上限。 */
+  roomAnnouncementBytes: 4 * 1024,
+  /** 群角色审计默认 / 最大条数。 */
+  roomRoleHistoryPageDefault: 20,
+  roomRoleHistoryPageMax: 100,
   /** 单条消息 invoke 上限。 */
   invokeMax: 8,
   /** 单条消息正文中自动归档的同源文件链接上限。 */

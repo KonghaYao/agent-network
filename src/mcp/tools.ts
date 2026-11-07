@@ -46,6 +46,7 @@ import {
   recoveryCreateSchema,
   recoveryRedeemSchema,
   registerSchema,
+  roomAnnouncementSetSchema,
   roomCreateSchema,
   roomGetSchema,
   roomLeaveSchema,
@@ -53,6 +54,10 @@ import {
   roomMembersUpdateSchema,
   roomMonitorGetSchema,
   roomMonitorSetSchema,
+  roomOwnerTransferSchema,
+  roomPolicySetSchema,
+  roomRoleHistorySchema as roomRoleHistoryQuerySchema,
+  roomRoleSetSchema,
   roomsListSchema,
   syncSchema,
   taskAddSchema,
@@ -114,10 +119,15 @@ import {
   roomMarkRead,
 } from '../domain/messages';
 import {
+  roomAnnouncementSet,
   roomCreate,
   roomGet,
   roomLeave,
   roomMembersUpdate,
+  roomOwnerTransfer,
+  roomPolicySet,
+  roomRoleHistory,
+  roomRoleSet,
   roomsList,
   type RoomDetail,
 } from '../domain/rooms';
@@ -176,6 +186,7 @@ import {
   roomDetailSchema,
   roomMonitorResultSchema,
   roomPageSchema,
+  roomRoleHistorySchema as roomRoleHistoryResultSchema,
   roomTaskDeletedSchema,
   roomTaskListSchema,
   roomTaskResultSchema,
@@ -868,13 +879,74 @@ export function registerTools(
   register(
     server,
     'network_room_members_update',
-    '群 owner 添加/移除成员或转移 owner。移除会取消该成员在房间内未完成的工作。',
+    '群 owner 或管理员添加/移除成员；管理员只能移除普通成员，不能移除 owner 或其他管理员。普通成员是否可邀请由群策略决定。移除会取消该成员在房间内未完成的工作。transfer_owner_to 仅兼容旧客户端，必须同时给出 expected_role_revision；新调用请使用 network_room_owner_transfer。',
     roomMembersUpdateSchema,
     roomDetailSchema,
     async (input) => {
       requireActor(principal);
       return roomMembersUpdate(db, principal, input);
     },
+  );
+
+  register(
+    server,
+    'network_room_role_set',
+    '群主任免管理员：role=admin 授予管理员，role=member 撤销管理员。只有 owner 可以调用；管理员不能任免其他管理员，也不能修改 owner。expected_role_revision 必须等于目标成员当前 role_revision，过期返回 VERSION_CONFLICT；并发撤销管理员与管理员操作按事务提交序裁决。群角色不会授予 Agent 管理权或设备凭据权限。',
+    roomRoleSetSchema,
+    roomDetailSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomRoleSet(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_room_owner_transfer',
+    '转移群 owner。只有当前 owner 可以调用；目标必须是 active 非 owner 成员，expected_role_revision 为目标当前角色版本。新旧 owner 角色与 rooms.owner_id 在同一事务提交，唯一 owner 约束保证不会出现两个群主。转移后原 owner 变为普通成员。',
+    roomOwnerTransferSchema,
+    roomDetailSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomOwnerTransfer(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_room_policy_set',
+    '群主设置普通成员策略：member_message_policy/member_invite_policy/member_task_policy，值为 members（普通成员可用）或 owner_admin（仅 owner/管理员）。管理员始终可发言、邀请和创建任务。expected_policy_revision 必须匹配当前版本。修改只影响后续操作，不追溯已有消息或任务。',
+    roomPolicySetSchema,
+    roomDetailSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomPolicySet(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_room_announcement_set',
+    '群主或管理员维护群公告；空字符串表示清除。expected_announcement_revision 必须匹配当前版本。公告只作为房间信息返回，不创建消息、delivery 或未读，不唤醒 Agent。',
+    roomAnnouncementSetSchema,
+    roomDetailSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomAnnouncementSet(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_room_role_history',
+    '分页读取群管理审计（角色任免、成员增删、转移、策略和公告变更）。只有 owner/管理员可读。审计只含定位与版本，不包含消息正文或凭据。',
+    roomRoleHistoryQuerySchema,
+    roomRoleHistoryResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomRoleHistory(db, principal, input);
+    },
+    { readOnlyHint: true },
   );
 
   register(
