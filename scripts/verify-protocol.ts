@@ -303,6 +303,12 @@ async function main(): Promise<void> {
     'network_contacts_list',
     'network_contact_add',
     'network_contact_remove',
+    'network_contact_request',
+    'network_contact_requests_list',
+    'network_contact_request_respond',
+    'network_contact_request_cancel',
+    'network_contact_policy_get',
+    'network_contact_policy_set',
     'network_room_create',
     'network_rooms_list',
     'network_room_get',
@@ -338,7 +344,7 @@ async function main(): Promise<void> {
     'network_room_file_delete',
   ];
   const toolNames = listed?.tools?.map((tool) => tool.name) ?? [];
-  // 工具集随 drive 开关变化：核心 36 + drive_file_info + 4 个房间文件工具。
+  // 工具集随 drive 开关变化：核心 60 + drive_file_info + 4 个房间文件工具。
   const hasDrive = toolNames.includes('drive_file_info');
   const hasRoomFiles = roomFileTools.every((name) => toolNames.includes(name));
   check(
@@ -2526,7 +2532,7 @@ async function main(): Promise<void> {
   const browserContact = await rawRpc(
     'tools/call',
     {
-      name: 'network_contact_add',
+      name: 'network_contact_request',
       arguments: {
         request_id: `web_contact_${crypto.randomUUID().replaceAll('-', '')}`,
         agent_session_id: shareSession,
@@ -2536,14 +2542,25 @@ async function main(): Promise<void> {
   );
   const contactResult = (
     browserContact.body.result as
-      | { structuredContent?: { contact?: { actor_id?: string } } }
+      | {
+          structuredContent?: {
+            status?: string;
+            request?: { contact_request_id?: string } | null;
+          };
+        }
       | undefined
   )?.structuredContent;
-  checkEqual(
-    '浏览器身份可按 agent_session_id 添加好友',
-    contactResult?.contact?.actor_id,
-    shareIdentity?.actor_id,
+  checkEqual('浏览器身份可按 agent_session_id 发起好友申请', contactResult?.status, 'pending');
+  const shareAccepted = await rawToolCall<{ status: string }>(
+    shareToken,
+    'network_contact_request_respond',
+    {
+      request_id: `web_contact_accept_${crypto.randomUUID().replaceAll('-', '')}`,
+      contact_request_id: contactResult?.request?.contact_request_id,
+      action: 'accept',
+    },
   );
+  checkEqual('Agent 接受浏览器好友申请后关系建立', shareAccepted.data?.status, 'accepted');
   const browserRoom = await rawRpc(
     'tools/call',
     {
@@ -2656,10 +2673,10 @@ async function main(): Promise<void> {
       | { structuredContent?: { actor_id?: string } }
       | undefined
   )?.structuredContent;
-  await rawRpc(
+  const monitorContact = await rawRpc(
     'tools/call',
     {
-      name: 'network_contact_add',
+      name: 'network_contact_request',
       arguments: {
         request_id: `monitor_contact_${crypto.randomUUID().replaceAll('-', '')}`,
         actor_id: monitorB?.actor_id,
@@ -2667,6 +2684,27 @@ async function main(): Promise<void> {
     },
     { token: browserToken },
   );
+  const monitorContactResult = (
+    monitorContact.body.result as
+      | {
+          structuredContent?: {
+            status?: string;
+            request?: { contact_request_id?: string } | null;
+          };
+        }
+      | undefined
+  )?.structuredContent;
+  checkEqual('监控验收好友申请进入 pending', monitorContactResult?.status, 'pending');
+  const monitorAccepted = await rawToolCall<{ status: string }>(
+    monitorBToken,
+    'network_contact_request_respond',
+    {
+      request_id: `monitor_contact_accept_${crypto.randomUUID().replaceAll('-', '')}`,
+      contact_request_id: monitorContactResult?.request?.contact_request_id,
+      action: 'accept',
+    },
+  );
+  checkEqual('监控成员接受好友申请', monitorAccepted.data?.status, 'accepted');
   const monitorRoomResponse = await rawRpc(
     'tools/call',
     {

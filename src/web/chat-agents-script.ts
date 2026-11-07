@@ -195,9 +195,9 @@ function agentContactGaps(ownerActorId, contacts) {
 /**
  * 用当前 human token 补齐本机创建的 Agent 好友关系。
  *
- * network_contact_add 是单向、幂等且不需要对方接受的；并发上限 4，避免
- * 注册表较大时串行阻塞。单个失败只收集可读信息，不阻断已有好友展示。
- * 返回合并后的联系人列表，调用方据此重绘选择器。
+ * 管理者向自有 Agent 发送 network_contact_request 会按管理员策略自动建立
+ * 关系；并发上限 4，避免注册表较大时串行阻塞。单个失败只收集可读信息，
+ * 不阻断已有好友展示。返回合并后的联系人列表，调用方据此重绘选择器。
  */
 async function addOwnedAgentContacts(ownerActorId, contacts) {
   const gaps = agentContactGaps(ownerActorId, contacts);
@@ -212,22 +212,28 @@ async function addOwnedAgentContacts(ownerActorId, contacts) {
       const actorId = gaps[index];
       index += 1;
       try {
-        const result = await callTool('network_contact_add', {
+        const result = await callTool('network_contact_request', {
           request_id: requestId('agent_contact'),
           actor_id: actorId
         });
-        const contact = result && result.contact;
-        if (contact && typeof contact.actor_id === 'string') {
-          added.push(contact);
-        } else {
-          added.push({
-            actor_id: actorId,
-            kind: 'agent',
-            name: actorId,
-            agent_session_id: null,
-            created_at: String(Date.now())
-          });
+        if (!result || result.status !== 'accepted') {
+          failed.push({ actor_id: actorId, message: '好友申请待确认' });
+          continue;
         }
+        const request = result.request || {};
+        const view = request.to_actor && request.to_actor.actor_id === actorId
+          ? request.to_actor
+          : request.from_actor && request.from_actor.actor_id === actorId
+            ? request.from_actor
+            : null;
+        added.push({
+          actor_id: actorId,
+          kind: 'agent',
+          name: view && view.name ? view.name : actorId,
+          agent_session_id: view && view.agent_session_id ? view.agent_session_id : null,
+          relation: 'active',
+          created_at: String(Date.now())
+        });
       } catch (error) {
         failed.push({
           actor_id: actorId,

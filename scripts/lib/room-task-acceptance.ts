@@ -21,7 +21,7 @@ import {
   sleep,
   type McpConnection,
 } from './harness';
-import { inbox, registerIdentity, type LoginResult, type RoomDetail } from './acceptance-helpers';
+import { befriend, inbox, registerIdentity, type LoginResult, type RoomDetail } from './acceptance-helpers';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META = 'io.agent-network/event';
@@ -142,12 +142,8 @@ export async function runRoomTaskAcceptance(): Promise<void> {
       human.actor_id && agentA.actor_id && agentB.actor_id && outsider.actor_id,
     ));
 
-    for (const target of [agentA.actor_id, agentB.actor_id]) {
-      await callTool(humanConn.client, 'network_contact_add', {
-        request_id: newRequestId('contact'),
-        actor_id: target,
-      });
-    }
+    await befriend(humanConn, human.actor_id, agentAConn, agentA.actor_id);
+    await befriend(humanConn, human.actor_id, agentBConn, agentB.actor_id);
     const group = await callTool<RoomDetail>(humanConn.client, 'network_room_create', {
       request_id: newRequestId('room'),
       kind: 'group',

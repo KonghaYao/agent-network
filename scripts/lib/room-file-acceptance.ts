@@ -19,7 +19,7 @@ import {
   uploadTestFile,
   type McpConnection,
 } from './harness';
-import { registerIdentity, type RoomDetail } from './acceptance-helpers';
+import { befriend, registerIdentity, type RoomDetail } from './acceptance-helpers';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META = 'io.agent-network/event';
@@ -73,10 +73,7 @@ export async function runRoomFileAcceptance(): Promise<void> {
       name: '房间文件验收 Member',
       sessionId: `roomfile_member_${crypto.randomUUID()}`,
     });
-    await callTool(ownerConn.client, 'network_contact_add', {
-      request_id: newRequestId('friend'),
-      actor_id: member.actor_id,
-    });
+    await befriend(ownerConn, owner.actor_id, memberConn, member.actor_id);
     const room = await callTool<RoomDetail>(ownerConn.client, 'network_room_create', {
       request_id: newRequestId('room'),
       kind: 'group',

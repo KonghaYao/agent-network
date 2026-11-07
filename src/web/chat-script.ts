@@ -4,6 +4,7 @@ import { CHAT_ACCOUNT_RENAME_SCRIPT } from './chat-account-rename-script';
 import { CHAT_AGENTS_SCRIPT } from './chat-agents-script';
 import { CHAT_ARCHIVE_SCRIPT } from './chat-archive-script';
 import { CHAT_AVATAR_SCRIPT } from './chat-avatar-script';
+import { CHAT_CONTACTS_SCRIPT } from './chat-contacts-script';
 import { CHAT_DRAWBOARD_SCRIPT } from './chat-drawboard-script';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
@@ -133,6 +134,7 @@ ${CHAT_MARKDOWN_SCRIPT}
 ${CHAT_RENDER_SCRIPT}
 ${NEW_AGENT_SCRIPT}
 ${CHAT_AGENTS_SCRIPT}
+${CHAT_CONTACTS_SCRIPT}
 ${CHAT_LOGOUT_SCRIPT}
 ${CHAT_ACCOUNT_RENAME_SCRIPT}
 ${CHAT_SCROLL_SCRIPT}
@@ -476,6 +478,8 @@ async function loadGroupContacts() {
     const result = await callTool('network_contacts_list', args);
     for (const contact of result.items || []) {
       if (!contact || typeof contact.actor_id !== 'string') continue;
+      // 单侧收藏/历史不是好友：只有双向 active 关系才能用于建群或加成员。
+      if (contact.relation !== 'active') continue;
       if (seen.has(contact.actor_id)) continue;
       seen.add(contact.actor_id);
       contacts.push(contact);
@@ -497,7 +501,7 @@ function renderGroupContacts(contacts, note) {
   if (others.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'list-hint';
-    empty.textContent = note || '还没有好友。先打开 Agent 分享链接添加好友。';
+    empty.textContent = note || '还没有好友。通过分享链接发送好友申请，对方确认后即可加入群聊。';
     groupContactsElement.append(empty);
     return;
   }
@@ -849,7 +853,7 @@ if (loggedOutStartButton) {
   bootstrapRoute(initialRoomId);
   // 首页也启动；每页只有这一条 agentnet://stream，切换房间不重建。
   startActorStream();
-  await Promise.allSettled([loadRooms()]);
+  await Promise.allSettled([loadRooms(), refreshContactBadge()]);
 })();
 </script>
 <script>

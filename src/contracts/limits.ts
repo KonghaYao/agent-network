@@ -44,6 +44,15 @@ export const LIMITS = {
   webAgentRegistryMax: 100,
   /** 单次成员变更上限。 */
   memberChangeMax: 20,
+  /** 好友申请附言 UTF-8 字节上限。 */
+  contactRequestMessageBytes: 512,
+  /** 好友申请默认有效期（毫秒）。 */
+  contactRequestTtlMs: 7 * 24 * 60 * 60_000,
+  /** 好友申请页默认 / 最大条数。 */
+  contactRequestsPageDefault: 20,
+  contactRequestsPageMax: 100,
+  /** 单轮过期好友申请扫描上限。 */
+  contactRequestExpiryBatchMax: 50,
   /** 群成员上限。 */
   groupMembersMax: 100,
   /** 单条消息 invoke 上限。 */

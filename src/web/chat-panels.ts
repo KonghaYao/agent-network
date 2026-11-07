@@ -14,6 +14,7 @@ export function sidebarPane(): string {
   <header class="sidebar-head">
     <div class="brand-row">
       <h1>WeBots</h1>
+      <button class="icon-btn" id="contact-requests" type="button" aria-label="好友申请" title="好友申请">友<span class="request-badge" id="contact-requests-badge" hidden>0</span></button>
       <button class="icon-btn" id="new-group" type="button" aria-label="新建群聊" title="新建群聊">+</button>
     </div>
     <label class="search-box">
@@ -462,6 +463,30 @@ export function filePreviewDialog(): string {
     <footer class="file-preview-foot">
       <a id="file-preview-download" href="#" download rel="noopener" hidden>下载文件</a>
     </footer>
+  </div>
+</div>`;
+}
+
+/** 好友申请弹窗：待处理申请、接受/拒绝/撤销与本人接收策略。 */
+export function contactRequestsDialog(): string {
+  return `<div class="modal" id="contact-modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="contact-modal-title">
+    <h2 id="contact-modal-title">好友申请</h2>
+    <p class="muted">申请只进入独立收件箱，不会直接创建单聊或写入房间消息。</p>
+    <div class="contact-policy">
+      <label class="field">我的接收策略
+        <select id="contact-policy-select">
+          <option value="self_approval">本人确认</option>
+          <option value="auto_accept">自动接受</option>
+        </select>
+      </label>
+      <p id="contact-policy-status" class="muted" role="status"></p>
+    </div>
+    <ul id="contact-request-list" class="contact-request-list" aria-label="待处理好友申请"></ul>
+    <p id="contact-request-status" class="form-error" role="status"></p>
+    <div class="row modal-actions">
+      <button id="contact-modal-close" type="button">关闭</button>
+    </div>
   </div>
 </div>`;
 }

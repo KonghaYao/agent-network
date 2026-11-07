@@ -83,6 +83,42 @@ export interface ContactRow {
   created_at: number;
 }
 
+/** 双向好友关系；`contacts` 仍是单侧个人收藏，不代表同意。 */
+export interface ContactRelationRow {
+  pair_key: string;
+  actor_a: string;
+  actor_b: string;
+  status: 'active' | 'ended';
+  source: 'request' | 'auto_manager';
+  request_id: string | null;
+  created_at: number;
+  updated_at: number;
+  ended_at: number | null;
+  ended_by: string | null;
+}
+
+export interface ContactRequestRow {
+  contact_request_id: string;
+  pair_key: string;
+  from_actor_id: string;
+  to_actor_id: string;
+  message: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'cancelled' | 'expired';
+  auto_accepted: number;
+  created_at: number;
+  updated_at: number;
+  expires_at: number;
+  responded_at: number | null;
+  responded_by: string | null;
+}
+
+export interface ContactReceivePolicyRow {
+  actor_id: string;
+  policy: 'self_approval' | 'manager_approval' | 'auto_accept';
+  updated_by: string;
+  updated_at: number;
+}
+
 export interface RoomRow {
   room_id: string;
   kind: 'direct' | 'group';

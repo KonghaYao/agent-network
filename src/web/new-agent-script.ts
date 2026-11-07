@@ -233,60 +233,65 @@ async function newAgentCreate(event) {
       created_at: String(Date.now()),
       mcp_url: newAgentUrl
     });
-    // 群聊只接受好友；用浏览器 human token 幂等添加该 Agent，不使用新 Agent token。
-    // 失败不回滚 Agent、凭据或注册表，打开群聊选择器时会按注册表重试。
+    // 群聊只接受双向好友；管理者向自有 Agent 申请会按管理员策略自动建立关系，
+    // 不使用新 Agent token。失败不回滚 Agent、凭据或注册表。
     let contactError = '';
+    let linked = false;
     try {
-      await callTool('network_contact_add', {
+      const requested = await callTool('network_contact_request', {
         request_id: requestId('web_agent_contact'),
         actor_id: registered.actor_id
       });
+      linked = !!requested && requested.status === 'accepted';
+      if (!linked) contactError = '好友申请待确认';
     } catch (error) {
       contactError = error && error.message ? String(error.message) : String(error);
     }
-    // 用浏览器 human token 建立与该 Agent 的 direct 会话，使其立即出现在左侧；
+    // 关系建立后用浏览器 human token 创建 direct 会话，使其立即出现在左侧；
     // 会话创建失败不回滚 Agent、凭据或注册表。
     let roomError = '';
-    try {
-      const detail = await callTool('network_room_create', {
-        request_id: requestId('web_agent_room'),
-        kind: 'direct',
-        members: [registered.actor_id]
-      });
-      if (detail && detail.room && typeof detail.room.room_id === 'string') {
-        // 先按 head_seq 乐观标记为已读，避免刚创建的会话闪出未读红点。
-        detail.room.my_last_read_seq = detail.room.head_seq;
-        seedRoomCacheFromDetail(detail);
-        let readSeq = detail.room.head_seq;
-        try {
-          const marked = await callTool('network_room_mark_read', {
-            room_id: detail.room.room_id,
-            through_seq: detail.room.head_seq
-          });
-          if (marked && marked.last_read_seq != null) {
-            readSeq = String(marked.last_read_seq);
-          }
-        } catch (error) {
-          // 非致命：本地已按 head_seq 视为已读；服务端已读位置仍为 0，
-          // 刷新后可能重新出现未读红点。
-          if (window.console && console.warn) {
-            console.warn('新建 Agent 会话已读同步失败：' +
-              (error && error.message ? error.message : String(error)));
-          }
-        }
-        detail.room.my_last_read_seq = readSeq;
-        const entry = roomEntries.find(function (item) {
-          return item.room_id === detail.room.room_id;
+    if (linked) {
+      try {
+        const detail = await callTool('network_room_create', {
+          request_id: requestId('web_agent_room'),
+          kind: 'direct',
+          members: [registered.actor_id]
         });
-        if (entry) {
-          entry.head_seq = detail.room.head_seq;
-          entry.my_last_read_seq = readSeq;
-          roomEntries = sortRooms(roomEntries);
-          renderRooms();
+        if (detail && detail.room && typeof detail.room.room_id === 'string') {
+          // 先按 head_seq 乐观标记为已读，避免刚创建的会话闪出未读红点。
+          detail.room.my_last_read_seq = detail.room.head_seq;
+          seedRoomCacheFromDetail(detail);
+          let readSeq = detail.room.head_seq;
+          try {
+            const marked = await callTool('network_room_mark_read', {
+              room_id: detail.room.room_id,
+              through_seq: detail.room.head_seq
+            });
+            if (marked && marked.last_read_seq != null) {
+              readSeq = String(marked.last_read_seq);
+            }
+          } catch (error) {
+            // 非致命：本地已按 head_seq 视为已读；服务端已读位置仍为 0，
+            // 刷新后可能重新出现未读红点。
+            if (window.console && console.warn) {
+              console.warn('新建 Agent 会话已读同步失败：' +
+                (error && error.message ? error.message : String(error)));
+            }
+          }
+          detail.room.my_last_read_seq = readSeq;
+          const entry = roomEntries.find(function (item) {
+            return item.room_id === detail.room.room_id;
+          });
+          if (entry) {
+            entry.head_seq = detail.room.head_seq;
+            entry.my_last_read_seq = readSeq;
+            roomEntries = sortRooms(roomEntries);
+            renderRooms();
+          }
         }
+      } catch (error) {
+        roomError = error && error.message ? error.message : String(error);
       }
-    } catch (error) {
-      roomError = error && error.message ? error.message : String(error);
     }
     // 弹窗已在会话创建期间关闭：列表已更新，不再触碰已清空的弹窗字段。
     if (seq !== newAgentRequestSeq) return;

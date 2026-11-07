@@ -17,6 +17,7 @@ import {
   openSubscription,
 } from './harness';
 import {
+  befriend,
   inbox,
   registerIdentity,
   sendMessage,
@@ -84,11 +85,14 @@ export async function runGroupAutoDeliverAcceptance(): Promise<void> {
       sessionId: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
     });
     const agents: Identity[] = [agentA, agentB, agentC];
-    for (const agent of agents) {
-      await callTool(human.client, 'network_contact_add', {
-        request_id: newRequestId('auto_contact'),
-        actor_id: agent.actor_id,
-      });
+    const agentConnections = [agentAConnection, agentBConnection, agentCConnection];
+    for (let index = 0; index < agents.length; index += 1) {
+      await befriend(
+        human,
+        owner.actor_id,
+        agentConnections[index] as (typeof agentConnections)[number],
+        (agents[index] as Identity).actor_id,
+      );
     }
     const group = await callTool<RoomDetail>(human.client, 'network_room_create', {
       request_id: newRequestId('auto_room'),

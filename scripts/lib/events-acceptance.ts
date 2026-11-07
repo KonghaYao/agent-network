@@ -10,6 +10,7 @@ import {
   rawRpc,
 } from './harness';
 import {
+  befriend,
   registerIdentity,
   sendMessage,
   type Delivery,
@@ -46,6 +47,7 @@ export async function runEventsAcceptance(input: {
       name: 'Events 验收 Agent B',
       sessionId: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
     });
+    await befriend(agentA, a.actor_id, agentB, b.actor_id);
     const room = await callTool<RoomDetail>(agentA.client, 'network_room_create', {
       request_id: newRequestId('room'),
       kind: 'direct',
@@ -135,14 +137,6 @@ export async function runEventsAcceptance(input: {
     check('events/unsubscribe 返回空结果', unsubscribed.body.error === undefined, unsubscribed.body);
 
     // 群聊：省略 room_id，只按 attention 订阅；群聊待办同样走 claim/complete 闭环。
-    await callTool(agentA.client, 'network_contact_add', {
-      request_id: newRequestId('contact'),
-      actor_id: b.actor_id,
-    });
-    await callTool(agentB.client, 'network_contact_add', {
-      request_id: newRequestId('contact'),
-      actor_id: a.actor_id,
-    });
     const group = await callTool<RoomDetail>(agentA.client, 'network_room_create', {
       request_id: newRequestId('room'),
       kind: 'group',

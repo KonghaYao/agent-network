@@ -12,7 +12,7 @@ import { LIMITS } from '../../src/contracts/limits';
 import { StreamQueue } from '../../src/mcp/stream';
 import { buildStreamFrame, type StreamItem } from '../../src/realtime/stream';
 import type { Delivery, InboxPage, RoomDetail } from './acceptance-helpers';
-import { inbox, registerIdentity, sendMessage } from './acceptance-helpers';
+import { befriend, inbox, registerIdentity, sendMessage } from './acceptance-helpers';
 import {
   CheckFailure,
   callTool,
@@ -153,12 +153,9 @@ export async function runUnifiedStreamAcceptance(): Promise<void> {
       sessionId: `unified_c_${crypto.randomUUID()}`,
     });
     const h = await registerIdentity(hConn, { kind: 'human', name: '统一流人类 H' });
-    for (const target of [b.actor_id, c.actor_id, h.actor_id]) {
-      await callTool(aConn.client, 'network_contact_add', {
-        request_id: newRequestId('friend'),
-        actor_id: target,
-      });
-    }
+    await befriend(aConn, a.actor_id, bConn, b.actor_id);
+    await befriend(aConn, a.actor_id, cConn, c.actor_id);
+    await befriend(aConn, a.actor_id, hConn, h.actor_id);
     check(
       '统一流：注册返回 agentnet://stream 资源',
       a.resources.includes(STREAM_URI),

@@ -456,6 +456,19 @@ function inboxStreamItem(
         row,
         metadata,
       );
+    case 'contact_request_pending':
+    case 'contact_request_review':
+    case 'contact_request_accepted':
+    case 'contact_request_rejected':
+    case 'contact_request_cancelled':
+    case 'contact_request_expired':
+    case 'contact_relation_ended': {
+      // 好友申请与关系变化只提示刷新，不是待办：不产生 delivery，
+      // attention 必须保持 informational，避免唤醒 Agent 执行任务。
+      const item = withLocation(baseItem(row, 'contact', 'contact', 'informational'), row, metadata);
+      item.ref_id = row.ref_id ?? undefined;
+      return item;
+    }
     default:
       return withLocation(baseItem(row, 'unknown', 'raw', 'informational'), row, metadata);
   }

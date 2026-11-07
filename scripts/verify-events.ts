@@ -26,6 +26,7 @@ import {
   sleep,
 } from './lib/harness';
 import {
+  befriend,
   registerIdentity,
   sendMessage,
   type Delivery,
@@ -173,6 +174,8 @@ async function main(): Promise<void> {
     });
     void c;
 
+    await befriend(agentA, a.actor_id, agentB, b.actor_id);
+    await befriend(agentB, b.actor_id, agentC, c.actor_id);
     const roomAB = (
       await callTool<RoomDetail>(agentA.client, 'network_room_create', {
         request_id: newRequestId('room'),
@@ -638,14 +641,6 @@ async function main(): Promise<void> {
     );
 
     // ---------- 群聊：不带 room_id 的订阅与 direct 硬过滤 ----------
-    await callTool(agentA.client, 'network_contact_add', {
-      request_id: newRequestId('contact'),
-      actor_id: b.actor_id,
-    });
-    await callTool(agentB.client, 'network_contact_add', {
-      request_id: newRequestId('contact'),
-      actor_id: a.actor_id,
-    });
     const groupAB = (
       await callTool<RoomDetail>(agentA.client, 'network_room_create', {
         request_id: newRequestId('room'),
@@ -749,6 +744,7 @@ async function main(): Promise<void> {
       name: 'Events D Offline',
       sessionId: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
     });
+    await befriend(agentA, a.actor_id, agentD, d.actor_id);
     const roomAD = (
       await callTool<RoomDetail>(agentA.client, 'network_room_create', {
         request_id: newRequestId('room'),
@@ -1023,6 +1019,7 @@ async function main(): Promise<void> {
       name: 'Events R',
       sessionId: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
     });
+    await befriend(agentA, a.actor_id, agentR, r.actor_id);
     const roomAR = (
       await callTool<RoomDetail>(agentA.client, 'network_room_create', {
         request_id: newRequestId('room'),
@@ -1061,6 +1058,7 @@ async function main(): Promise<void> {
       name: 'Events M',
       sessionId: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
     });
+    await befriend(agentA, a.actor_id, agentM, m.actor_id);
     const roomAM = (
       await callTool<RoomDetail>(agentA.client, 'network_room_create', {
         request_id: newRequestId('room'),
@@ -1182,6 +1180,7 @@ async function main(): Promise<void> {
       name: 'Events T',
       sessionId: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
     });
+    await befriend(agentA, a.actor_id, agentT, t.actor_id);
     const roomAT = (
       await callTool<RoomDetail>(agentA.client, 'network_room_create', {
         request_id: newRequestId('room'),
@@ -1231,6 +1230,7 @@ async function main(): Promise<void> {
       name: 'Events G',
       sessionId: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
     });
+    await befriend(agentA, a.actor_id, agentG, g.actor_id);
     const roomAG = (
       await callTool<RoomDetail>(agentA.client, 'network_room_create', {
         request_id: newRequestId('room'),

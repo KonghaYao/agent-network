@@ -22,6 +22,7 @@ import {
   type McpConnection,
 } from './harness';
 import {
+  befriend,
   inbox,
   registerIdentity,
   sendMessage,
@@ -137,6 +138,7 @@ export async function runAgentArchiveAcceptance(): Promise<void> {
       request_id: newRequestId('contact'),
       actor_id: agent.actor_id,
     });
+    await befriend(agentConn, agent.actor_id, peerConn, peer.actor_id);
     const room = await callTool<RoomDetail>(agentConn.client, 'network_room_create', {
       request_id: newRequestId('room'),
       kind: 'direct',

@@ -15,7 +15,7 @@ import {
   newToken,
   type McpConnection,
 } from './harness';
-import { registerIdentity, type RoomDetail } from './acceptance-helpers';
+import { befriend, registerIdentity, type RoomDetail } from './acceptance-helpers';
 
 interface MonitorResult {
   monitor: { room_id: string; url: string; updated_at: string } | null;
@@ -42,12 +42,8 @@ export async function runRoomMonitorAcceptance(): Promise<void> {
     check('监控验收身份注册成功', Boolean(humanA.actor_id && humanB.actor_id && agent.actor_id));
     const device1 = aDevice1;
 
-    for (const target of [humanB.actor_id, agent.actor_id]) {
-      await callTool(device1.client, 'network_contact_add', {
-        request_id: newRequestId('contact'),
-        actor_id: target,
-      });
-    }
+    await befriend(device1, humanA.actor_id, bConnection, humanB.actor_id);
+    await befriend(device1, humanA.actor_id, agentConnection, agent.actor_id);
     const group = await callTool<RoomDetail>(device1.client, 'network_room_create', {
       request_id: newRequestId('room'),
       kind: 'group',

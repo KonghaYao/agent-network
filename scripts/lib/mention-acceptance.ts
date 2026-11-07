@@ -105,6 +105,34 @@ async function registerRawAgent(name: string): Promise<RawAgent> {
   return { token, identity };
 }
 
+interface RawContactRequestResult {
+  request: { contact_request_id: string } | null;
+  status: string;
+}
+
+/** raw token 之间的好友申请；目标自行接受，不因 kind=agent 自动同意。 */
+async function rawBefriend(
+  requesterToken: string,
+  targetToken: string,
+  targetActorId: string,
+): Promise<void> {
+  const requested = await rawTool<RawContactRequestResult>(
+    requesterToken,
+    'network_contact_request',
+    {
+      request_id: newRequestId('mention_contact'),
+      actor_id: targetActorId,
+    },
+  );
+  if (requested.status === 'accepted') return;
+  if (!requested.request) throw new Error('好友申请缺少 request');
+  await rawTool(targetToken, 'network_contact_request_respond', {
+    request_id: newRequestId('mention_contact_ok'),
+    contact_request_id: requested.request.contact_request_id,
+    action: 'accept',
+  });
+}
+
 export async function runGroupMentionAcceptance(): Promise<void> {
   console.log('  · 群聊 @ 名字服务端解析');
   const humanToken = newToken();
@@ -135,12 +163,21 @@ export async function runGroupMentionAcceptance(): Promise<void> {
       extras.push(await registerRawAgent(`并行 Agent ${index}`));
     }
     const agents = [m1Identity, m2Identity, caseBot.identity, sameA.identity, sameB.identity, ...extras.map((item) => item.identity)];
+    const agentTokens = [
+      m1Token,
+      m2Token,
+      caseBot.token,
+      sameA.token,
+      sameB.token,
+      ...extras.map((item) => item.token),
+    ];
 
-    for (const agent of agents) {
-      await rawTool(humanToken, 'network_contact_add', {
-        request_id: newRequestId('mention_contact'),
-        actor_id: agent.actor_id,
-      });
+    for (let index = 0; index < agents.length; index += 1) {
+      await rawBefriend(
+        humanToken,
+        agentTokens[index] as string,
+        (agents[index] as Identity).actor_id,
+      );
     }
     const group = await callTool<RoomDetail>(human.client, 'network_room_create', {
       request_id: newRequestId('mention_room'),

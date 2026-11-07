@@ -338,6 +338,11 @@ function handleStreamEventFrame(payload) {
       case 'profile.updated':
         refreshList = true;
         break;
+      case 'contact':
+        // 好友申请与关系变化只提示刷新，不是待办，也不产生房间刷新。
+        refreshContactBadge();
+        if (contactModal && !contactModal.hidden) loadContactRequests();
+        break;
       case 'session.login':
         break;
       default:

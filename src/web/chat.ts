@@ -1,5 +1,6 @@
 import {
   chatPane,
+  contactRequestsDialog,
   emptyPane,
   filePreviewDialog,
   filesBackdrop,
@@ -60,6 +61,7 @@ ${filesPane()}
 ${monitorBackdrop()}
 ${monitorPane()}
 ${filePreviewDialog()}
+${contactRequestsDialog()}
 ${groupDialog()}
 ${membersDialog()}
 ${newAgentDialog()}

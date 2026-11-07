@@ -8,6 +8,7 @@
 
 import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { Database } from 'bun:sqlite';
 
 import {
   callTool,
@@ -67,6 +68,56 @@ async function rawTool<T>(token: string, name: string, args: Record<string, unkn
 
 function requestId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`;
+}
+
+interface RawContactRequestView {
+  status: string;
+  request: { contact_request_id: string } | null;
+}
+
+/** 建立双向好友；A03 起 direct 房间要求有效关系。 */
+async function rawBefriend(
+  requesterToken: string,
+  targetToken: string,
+  targetActorId: string,
+): Promise<void> {
+  const requested = await rawTool<RawContactRequestView>(requesterToken, 'network_contact_request', {
+    request_id: requestId('contact_request'),
+    actor_id: targetActorId,
+  });
+  if (requested.status === 'accepted') return;
+  if (!requested.request) throw new Error(`好友申请未进入 pending: ${requested.status}`);
+  await rawTool(targetToken, 'network_contact_request_respond', {
+    request_id: requestId('contact_accept'),
+    contact_request_id: requested.request.contact_request_id,
+    action: 'accept',
+  });
+}
+
+/**
+ * 等请求触碰产生的在线状态自然过期。
+ *
+ * A03 起好友建联先用 Agent token 接受申请，请求触碰会留下 online 状态；
+ * 若此时直接建房，这次 generation 没有房间可写上线行，下线时却会补写
+ * 房间行。建房前等回 offline，保证后续 login 产生完整的一对上下线。
+ */
+async function waitAgentOffline(dataDir: string, agentId: string): Promise<void> {
+  const db = new Database(`${dataDir}/agent-network.sqlite`, { readonly: true });
+  try {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const row = db
+        .prepare('SELECT phase FROM agent_presence_state WHERE actor_id = ?')
+        .get(agentId) as { phase?: string } | null;
+      if (row?.phase === 'offline') return;
+      if (Date.now() > deadline) {
+        throw new Error(`等待 Agent 离线超时: ${JSON.stringify(row)}`);
+      }
+      await sleep(100);
+    }
+  } finally {
+    db.close();
+  }
 }
 
 async function waitForHealth(base: string): Promise<void> {
@@ -153,6 +204,8 @@ export async function runPresenceRestartAcceptance(): Promise<void> {
       name: 'Restart Agent',
       agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
     });
+    await rawBefriend(humanToken, agentToken, agentIdentity.actor_id);
+    await waitAgentOffline(dataDir, agentIdentity.actor_id);
     const roomDetail = await rawTool<{ room: { room_id: string; head_seq: string } }>(
       humanToken,
       'network_room_create',

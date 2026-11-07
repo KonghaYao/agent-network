@@ -38,7 +38,7 @@ import {
   type McpConnection,
   type UploadedTestFile,
 } from './lib/harness';
-import { registerIdentity, sendMessage, type RoomDetail } from './lib/acceptance-helpers';
+import { befriend, registerIdentity, sendMessage, type RoomDetail } from './lib/acceptance-helpers';
 import { runAutoArchiveCases, runFileLinkParserCases } from './lib/room-file-archive';
 
 const STREAM_URI = 'agentnet://stream';
@@ -403,10 +403,8 @@ async function main(): Promise<void> {
       name: '文件验收 Agent C',
       sessionId: `roomfiles_c_${crypto.randomUUID()}`,
     });
-    await callTool(aConn.client, 'network_contact_add', {
-      request_id: newRequestId('friend'),
-      actor_id: b.actor_id,
-    });
+    await befriend(aConn, a.actor_id, bConn, b.actor_id);
+    await befriend(aConn, a.actor_id, cConn, c.actor_id);
 
     const roomId = await createGroup(aConn, b.actor_id, '房间文件验收群');
     const conflictRoom = await createGroup(aConn, b.actor_id, '房间文件冲突群');

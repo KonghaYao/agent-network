@@ -113,6 +113,67 @@ export async function registerIdentity(
   });
 }
 
+export interface ContactRequestView {
+  contact_request_id: string;
+  status: string;
+  direction: 'incoming' | 'outgoing';
+  message: string;
+  auto_accepted: boolean;
+  from_actor: { actor_id: string; kind: string; name: string };
+  to_actor: { actor_id: string; kind: string; name: string };
+  can_respond: boolean;
+  can_cancel: boolean;
+}
+
+export interface ContactRequestResultView {
+  request: ContactRequestView | null;
+  relation: { pair_key: string; status: string; source: string } | null;
+  status: string;
+  already_friends: boolean;
+  auto_accepted: boolean;
+}
+
+/**
+ * 建立双向好友关系：先申请，再由目标本人接受。
+ *
+ * 目标若是管理者自有 Agent，申请会自动接受；其他 Agent 必须自己接受，
+ * 不能因为 kind=agent 被测试代劳成自动同意。
+ */
+export async function befriend(
+  requester: McpConnection,
+  requesterActorId: string,
+  target: McpConnection,
+  targetActorId: string,
+): Promise<ContactRequestResultView> {
+  const requested = await callTool<ContactRequestResultView>(
+    requester.client,
+    'network_contact_request',
+    {
+      request_id: newRequestId('creq'),
+      actor_id: targetActorId,
+    },
+  );
+  if (requested.status === 'accepted') return requested;
+  if (requested.status !== 'pending' || !requested.request) {
+    throw new Error(
+      `好友申请未进入 pending/accepted: ${requested.status} (${requesterActorId} -> ${targetActorId})`,
+    );
+  }
+  const accepted = await callTool<ContactRequestResultView>(
+    target.client,
+    'network_contact_request_respond',
+    {
+      request_id: newRequestId('cres'),
+      contact_request_id: requested.request.contact_request_id,
+      action: 'accept',
+    },
+  );
+  if (accepted.relation?.status !== 'active') {
+    throw new Error('好友申请接受后关系未激活');
+  }
+  return accepted;
+}
+
 export async function sendMessage(
   connection: McpConnection,
   roomId: string,

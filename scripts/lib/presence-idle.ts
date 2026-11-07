@@ -8,6 +8,7 @@
 
 import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { Database } from 'bun:sqlite';
 
 import {
   callTool,
@@ -21,7 +22,7 @@ import {
   sleep,
   type McpConnection,
 } from './harness';
-import { registerIdentity } from './acceptance-helpers';
+import { befriend, registerIdentity } from './acceptance-helpers';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_META = 'io.agent-network/event';
@@ -44,6 +45,31 @@ function streamItemsOf(event: { params: Record<string, unknown> }): StreamItemVi
   const meta = event.params._meta as Record<string, unknown> | undefined;
   const payload = meta?.[STREAM_META] as { items?: StreamItemView[] } | undefined;
   return payload?.items ?? [];
+}
+
+/**
+ * 等请求触碰产生的在线状态自然过期。
+ *
+ * A03 的建联会让 Agent 在房间出现前先被记为 online；先等回 offline，才能让
+ * 后续 login 产生本房间的上线事件与 room.presence 通知。
+ */
+async function waitAgentOffline(dataDir: string, agentId: string): Promise<void> {
+  const db = new Database(`${dataDir}/agent-network.sqlite`, { readonly: true });
+  try {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const row = db
+        .prepare('SELECT phase FROM agent_presence_state WHERE actor_id = ?')
+        .get(agentId) as { phase?: string } | null;
+      if (row?.phase === 'offline') return;
+      if (Date.now() > deadline) {
+        throw new Error(`等待 Agent 离线超时: ${JSON.stringify(row)}`);
+      }
+      await sleep(100);
+    }
+  } finally {
+    db.close();
+  }
 }
 
 async function waitForHealth(base: string): Promise<void> {
@@ -99,13 +125,16 @@ export async function runPresenceIdleNotificationCheck(): Promise<void> {
     process.env.AGENTNET_URL = server.base;
 
     human = await connectClient(newToken());
-    agent = await connectClient(newToken());
-    await registerIdentity(human, { kind: 'human', name: 'Idle Presence Human' });
-    const agentIdentity = await registerIdentity(agent, {
-      kind: 'agent',
-      name: 'Idle Presence Agent',
-      sessionId: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
-    });
+    const humanIdentity = await registerIdentity(human, { kind: 'human', name: 'Idle Presence Human' });
+    const created = await callTool<{ actor_id: string; token: string }>(
+      human.client,
+      'network_agent_create',
+      { request_id: newRequestId('idle_agent'), name: 'Idle Presence Agent' },
+    );
+    agent = await connectClient(created.token);
+    const agentIdentity = { actor_id: created.actor_id };
+    await befriend(human, humanIdentity.actor_id, agent, agentIdentity.actor_id);
+    await waitAgentOffline(dataDir, agentIdentity.actor_id);
     const detail = await callTool<{ room: { room_id: string } }>(
       human.client,
       'network_room_create',

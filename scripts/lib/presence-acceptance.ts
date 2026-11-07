@@ -21,7 +21,7 @@ import {
   type McpConnection,
   type RawListen,
 } from './harness';
-import { registerIdentity, sendMessage, type Identity } from './acceptance-helpers';
+import { befriend, registerIdentity, sendMessage, type Identity } from './acceptance-helpers';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_META = 'io.agent-network/event';
@@ -183,10 +183,8 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
   console.log(`  Agent 上下线时间线（grace ${graceMs()}ms）`);
   const human = await connectClient(newToken());
   const otherHuman = await connectClient(newToken());
-  const agentA = await connectClient(newToken());
-  const agentAToken = agentA.token;
-  const agentB = await connectClient(newToken());
-  const agentBToken = agentB.token;
+  let agentA: McpConnection | null = null;
+  let agentB: McpConnection | null = null;
   const extra: AgentSession[] = [];
   try {
     const humanIdentity = await registerIdentity(human, { kind: 'human', name: 'Presence Human' });
@@ -194,22 +192,19 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
       kind: 'human',
       name: 'Presence Human 2',
     });
-    const a = (await registerIdentity(agentA, {
-      kind: 'agent',
-      name: 'Presence Agent A',
-      sessionId: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
-    })) as Identity & { agent_session_id: string };
-    const b = (await registerIdentity(agentB, {
-      kind: 'agent',
-      name: 'Presence Agent B',
-      sessionId: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
-    })) as Identity & { agent_session_id: string };
-    for (const agent of [a, b]) {
-      await callTool(human.client, 'network_contact_add', {
-        request_id: newRequestId('presence_contact'),
-        agent_session_id: agent.agent_session_id,
-      });
-    }
+    const a = await callTool<Identity & { token: string; agent_session_id: string }>(
+      human.client,
+      'network_agent_create',
+      { request_id: newRequestId('presence_create'), name: 'Presence Agent A' },
+    );
+    const agentAToken = a.token;
+    const b = await callTool<Identity & { token: string; agent_session_id: string }>(
+      human.client,
+      'network_agent_create',
+      { request_id: newRequestId('presence_create'), name: 'Presence Agent B' },
+    );
+    const agentBToken = b.token;
+    await befriend(human, humanIdentity.actor_id, otherHuman, otherHumanIdentity.actor_id);
 
     const createRoom = async (
       connection: McpConnection,
@@ -230,14 +225,21 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
       return detail.room.room_id;
     };
 
+    // 与管理者的自有 Agent 建 direct 会同时建立双向关系，之后才能拉群。
     const direct = await createRoom(human, 'direct', [a.actor_id]);
+    const directB = await createRoom(human, 'direct', [b.actor_id]);
     const group = await createRoom(human, 'group', [a.actor_id, b.actor_id], 'Presence Group');
     const humanPair = await createRoom(human, 'direct', [otherHumanIdentity.actor_id]);
-    const directB = await createRoom(human, 'direct', [b.actor_id]);
     const beforeMessage = await sendMessage(human, direct, 'presence before login');
 
     const humanEvents = notificationCollector(human.client);
     await openSubscription(human.client, [STREAM_URI]);
+    // Agent 连接建立时的首个认证请求同样算活动：房间先就绪，才能把上线写入
+    // 对应 direct 时间线；这里不提前连接，避免上线发生在人类订阅之前。
+    const aConn = await connectClient(a.token);
+    agentA = aConn;
+    const bConn = await connectClient(b.token);
+    agentB = bConn;
     const agentASession = await openAgent(agentAToken);
     extra.push(agentASession);
 
@@ -260,7 +262,7 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
       0,
     );
     const agentHistory = await callTool<{ items: Record<string, unknown>[] }>(
-      agentA.client,
+      aConn.client,
       'network_history_list',
       { room_id: direct, limit: 100 },
     );
@@ -276,7 +278,7 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
     );
     await expectToolError(
       'Agent 显式 timeline 被拒绝',
-      callTool(agentA.client, 'network_history_list', {
+      callTool(aConn.client, 'network_history_list', {
         room_id: direct,
         view: 'timeline',
       }),
@@ -284,7 +286,7 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
     );
     await expectToolError(
       '非成员不能读取 timeline',
-      timeline(agentB, direct),
+      timeline(bConn, direct),
       'NOT_MEMBER',
     );
     await expectToolError(
@@ -457,7 +459,7 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
 
     // 离线后第一个请求（无 SSE）：先写新上线，再执行业务；room_get 同步在线。
     checkEqual('确认下线后 room_get 离线', await agentOnline(human, direct, a.actor_id), false);
-    await callTool(agentA.client, 'network_me', {});
+    await callTool(aConn.client, 'network_me', {});
     await waitForPresence(
       human,
       direct,
@@ -466,7 +468,7 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
       offlineBudgetMs(),
     );
     checkEqual('请求恢复上线后 room_get 在线', await agentOnline(human, direct, a.actor_id), true);
-    const idleReply = await sendMessage(agentA, direct, 'presence after idle reply');
+    const idleReply = await sendMessage(aConn, direct, 'presence after idle reply');
     const afterReconnect = presenceItems(await timeline(human, direct, { limit: 100 }));
     const latestOnline = afterReconnect
       .filter((item) => item.transition === 'online')
@@ -490,7 +492,7 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
     // 无 SSE、只靠轮询：TTL 内的重复请求保持在线；停止后按最后活动 + TTL 下线。
     for (let round = 0; round < 2; round += 1) {
       await sleep(Math.ceil(activityTtlMs() / 2));
-      await callTool(agentA.client, 'network_me', {});
+      await callTool(aConn.client, 'network_me', {});
     }
     await sleep(Math.ceil(activityTtlMs() / 2));
     checkEqual(
@@ -639,8 +641,8 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
     await Promise.all([
       human.close(),
       otherHuman.close(),
-      agentA.close(),
-      agentB.close(),
+      agentA?.close(),
+      agentB?.close(),
       ...extra.map((connection) => connection.close()),
     ]);
   }

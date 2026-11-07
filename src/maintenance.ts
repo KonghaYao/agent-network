@@ -1,4 +1,5 @@
 import { LIMITS } from './contracts/limits';
+import { expireContactRequests } from './domain/contact-relations';
 import { nowMs } from './storage/db';
 import type { Env } from './env';
 
@@ -130,4 +131,7 @@ export async function maintain(env: Env): Promise<void> {
     )
     .bind(now)
     .run();
+
+  // 好友申请到期只改变状态并写持久事件，不产生 delivery。
+  await expireContactRequests(db, now);
 }

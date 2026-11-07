@@ -29,7 +29,7 @@ import { guardSql } from '../storage/guards';
 import { getActor, getMember, getMessage, getRoom, isActiveMember } from '../storage/queries';
 import type { ActorRow, MessageRow, RoomMemberRow, RoomRow } from '../storage/rows';
 import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
-import { areContacts } from './contacts';
+import { directRelationStatements, getActiveRelation } from './contact-relations';
 import { actorId, type Principal } from './principal';
 import { messagePreviewOf, type MessagePreviewView } from './views';
 
@@ -261,7 +261,7 @@ async function requireFriends(
   targets: string[],
 ): Promise<void> {
   for (const target of targets) {
-    if (!(await areContacts(db, owner, target))) {
+    if (!(await getActiveRelation(db, owner, target))) {
       throw new BusinessError('FRIEND_REQUIRED', '只能把好友加入群聊', { actor_id: target });
     }
   }
@@ -394,6 +394,8 @@ async function createDirect(
 ): Promise<RoomDetail> {
   const owner = actorId(principal);
   const at = nowMs();
+  const targetActor = await getActor(db, target);
+  if (!targetActor) throw new BusinessError('NOT_FOUND', '目标 actor 不存在');
   const pairKey = sortedPairKey(owner, target);
   const roomId = `rm_${(await sha256Hex(`direct:${pairKey}`)).slice(0, 32)}`;
   const roomRef = `room_created:${roomId}`;
@@ -417,6 +419,7 @@ async function createDirect(
           ),
         )
         .bind(owner, LIMITS.activeRoomsPerActor),
+      ...directRelationStatements(db, owner, targetActor, at),
       db
         .prepare(
           `INSERT INTO rooms

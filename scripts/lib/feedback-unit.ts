@@ -218,7 +218,7 @@ function checkMigrationUpgrade(): void {
     '旧库升级按顺序应用剩余迁移',
     applied.join(','),
     '0009_feedback.sql,0010_room_tasks.sql,0011_delivery_reminders.sql,' +
-      '0012_identity_management_devices.sql,0018_p0_guards.sql',
+      '0012_identity_management_devices.sql,0018_p0_guards.sql,0019_contact_relations.sql',
   );
   checkEqual(
     '旧库升级保留原业务数据',

@@ -604,6 +604,26 @@ export const APP_STYLE = `
     .task-popover { left: 8px; right: 8px; width: auto; max-height: 50vh; }
   }
 
+  /* 好友申请入口与弹窗；单侧收藏不在群成员候选里，这里只处理双向关系。 */
+  #contact-requests { position: relative; font-size: 12px; }
+  .request-badge { position: absolute; top: -5px; right: -5px; min-width: 16px;
+    height: 16px; padding: 0 4px; border-radius: 8px; background: var(--wx-unread);
+    color: #ffffff; font-size: 10px; line-height: 16px; text-align: center; }
+  .contact-policy { margin: 10px 0 12px; padding: 10px; border: 1px solid var(--wx-line);
+    border-radius: 10px; background: var(--wx-sidebar); }
+  .contact-policy .field { margin: 0; }
+  .contact-request-list { list-style: none; margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 8px; max-height: 45vh; overflow: auto; }
+  .contact-request-item { display: flex; justify-content: space-between; gap: 10px;
+    padding: 10px; border: 1px solid var(--wx-line); border-radius: 10px; }
+  .contact-request-main { min-width: 0; }
+  .contact-request-title { margin: 0; font-weight: 600; }
+  .contact-request-message { margin: 4px 0 0; color: var(--wx-muted); font-size: 13px;
+    word-break: break-word; }
+  .contact-request-meta { margin: 4px 0 0; font-size: 12px; color: var(--wx-muted); }
+  .contact-request-actions { display: flex; flex: 0 0 auto; gap: 6px; align-items: flex-start; }
+  .contact-request-empty { padding: 12px 0; color: var(--wx-muted); font-size: 13px; }
+
   @media (prefers-reduced-motion: reduce) {
     .skeleton-avatar, .skeleton-lines span, .skeleton-bubble { animation: none; }
     .chat-loading::after { animation: none; width: 100%; }

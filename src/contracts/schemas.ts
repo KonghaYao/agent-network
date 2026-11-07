@@ -157,6 +157,42 @@ export const contactAddSchema = z.object({
 
 export const contactRemoveSchema = z.object({ request_id: requestId, actor_id: id() });
 
+export const contactRequestSchema = z.object({
+  request_id: requestId,
+  actor_id: id().optional(),
+  agent_session_id: id(256).optional(),
+  /** 申请附言；只进入好友申请入口，不写入任何 direct 房间。 */
+  message: z.string().trim().max(LIMITS.contactRequestMessageBytes * 2).optional(),
+  /** 测试与运营可缩短有效期；默认 LIMITS.contactRequestTtlMs。 */
+  expires_in_ms: z.number().int().min(1_000).max(LIMITS.contactRequestTtlMs).optional(),
+});
+
+export const contactRequestsListSchema = z.object({
+  direction: z.enum(['all', 'incoming', 'outgoing']).optional(),
+  status: z
+    .enum(['pending', 'accepted', 'rejected', 'cancelled', 'expired'])
+    .optional(),
+  cursor,
+  limit: z.number().int().min(1).max(LIMITS.contactRequestsPageMax).optional(),
+});
+
+export const contactRequestIdSchema = z.object({
+  request_id: requestId,
+  contact_request_id: id(),
+});
+
+export const contactRequestRespondSchema = contactRequestIdSchema.extend({
+  action: z.enum(['accept', 'reject']),
+});
+
+export const contactPolicyGetSchema = z.object({ actor_id: id().optional() });
+
+export const contactPolicySetSchema = z.object({
+  request_id: requestId,
+  actor_id: id().optional(),
+  policy: z.enum(['self_approval', 'manager_approval', 'auto_accept']),
+});
+
 export const roomCreateSchema = z.object({
   request_id: requestId,
   kind: z.enum(['direct', 'group']),
@@ -389,6 +425,12 @@ export type RecoveryRedeemInput = z.infer<typeof recoveryRedeemSchema>;
 export type ContactsListInput = z.infer<typeof contactsListSchema>;
 export type ContactAddInput = z.infer<typeof contactAddSchema>;
 export type ContactRemoveInput = z.infer<typeof contactRemoveSchema>;
+export type ContactRequestInput = z.infer<typeof contactRequestSchema>;
+export type ContactRequestsListInput = z.infer<typeof contactRequestsListSchema>;
+export type ContactRequestRespondInput = z.infer<typeof contactRequestRespondSchema>;
+export type ContactRequestCancelInput = z.infer<typeof contactRequestIdSchema>;
+export type ContactPolicyGetInput = z.infer<typeof contactPolicyGetSchema>;
+export type ContactPolicySetInput = z.infer<typeof contactPolicySetSchema>;
 export type RoomCreateInput = z.infer<typeof roomCreateSchema>;
 export type RoomsListInput = z.infer<typeof roomsListSchema>;
 export type RoomMembersUpdateInput = z.infer<typeof roomMembersUpdateSchema>;

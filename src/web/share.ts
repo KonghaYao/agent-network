@@ -3,10 +3,12 @@ import { renderAppPage } from './chat';
 import { escapeHtml, jsonForScript, layout } from './layout';
 
 /**
- * 分享页：把 `agent_session_id` 解析为 Agent 公开资料，并允许浏览器访客一键添加好友、建立单聊。
+ * 分享页：把 `agent_session_id` 解析为 Agent 公开资料，并允许浏览器访客发送好友申请。
  *
- * 浏览器身份（token）只保存在 localStorage，首次点击时注册为 human actor；
- * 页面不授予 Agent 身份，也不读取对方的私有数据。
+ * 好友申请进入独立的申请收件箱，不会直接创建单聊或写入房间消息；只有
+ * 目标接受（或目标显式配置 auto_accept）后才建立关系。浏览器身份（token）
+ * 只保存在 localStorage，首次点击时注册为 human actor；页面不授予 Agent
+ * 身份，也不读取对方的私有数据。
  */
 export function renderSharePage(actor: ActorRow): string {
   const name = escapeHtml(actor.name);
@@ -25,9 +27,9 @@ export function renderSharePage(actor: ActorRow): string {
   <h1>${name}</h1>
   <p class="muted">WeBots</p>
 </div>
-<p class="share-lead">添加后建立单聊，Agent 可在待办与消息中看到你。</p>
+<p class="share-lead">发送好友申请；对方确认后才建立好友关系与单聊。</p>
 <div class="row share-actions">
-  <button class="primary" id="add" type="button">添加为好友并开始单聊</button>
+  <button class="primary" id="add" type="button">发送好友申请</button>
   <button id="copy" type="button">复制 ID</button>
 </div>
 <p id="status" role="status"></p>
@@ -35,7 +37,7 @@ export function renderSharePage(actor: ActorRow): string {
   <summary>身份与手动添加</summary>
   <p>actor_id：<code id="actor-id">${actorId}</code></p>
   <p>会话：<code>${sessionId}</code></p>
-  <pre>network_contact_add {
+  <pre>network_contact_request {
   "request_id": "&lt;唯一 id&gt;",
   "agent_session_id": "${sessionId}"
 }</pre>
@@ -112,27 +114,38 @@ async function callTool(name, args) {
 addButton.addEventListener('click', async function () {
   addButton.disabled = true;
   delete statusElement.dataset.error;
-  statusElement.textContent = '正在添加…';
+  statusElement.textContent = '正在发送好友申请…';
   try {
     await callTool('network_register', {
       request_id: requestId('web_reg'),
       kind: 'human',
       name: '网页访客'
     });
-    const contact = await callTool('network_contact_add', {
-      request_id: requestId('web_contact'),
+    const requested = await callTool('network_contact_request', {
+      request_id: requestId('web_contact_request'),
       agent_session_id: target.agent_session_id
     });
-    const room = await callTool('network_room_create', {
-      request_id: requestId('web_room'),
-      kind: 'direct',
-      members: [contact.contact.actor_id]
-    });
-    statusElement.textContent = '已添加为好友，正在进入单聊…';
-    location.href = '/c/' + encodeURIComponent(room.room.room_id);
+    if (requested.status === 'accepted' && requested.relation) {
+      const room = await callTool('network_room_create', {
+        request_id: requestId('web_room'),
+        kind: 'direct',
+        members: [target.actor_id]
+      });
+      statusElement.textContent = '已建立好友关系，正在进入单聊…';
+      location.href = '/c/' + encodeURIComponent(room.room.room_id);
+      return;
+    }
+    if (requested.status === 'pending') {
+      statusElement.textContent = '好友申请已发送，等待对方确认。确认后可在会话列表找到对方。';
+      addButton.textContent = '好友申请待确认';
+      return;
+    }
+    statusElement.dataset.error = '1';
+    statusElement.textContent = '当前无法建立好友关系：' + requested.status;
+    addButton.disabled = false;
   } catch (error) {
     statusElement.dataset.error = '1';
-    statusElement.textContent = '添加失败：' + (error && error.message ? error.message : String(error));
+    statusElement.textContent = '发送失败：' + (error && error.message ? error.message : String(error));
     addButton.disabled = false;
   }
 });

@@ -97,6 +97,48 @@ async function rawTool<T>(token: string, name: string, args: Record<string, unkn
   return text ? (JSON.parse(text) as T) : ({} as T);
 }
 
+interface RawContactRequestView {
+  status: string;
+  request: { contact_request_id: string } | null;
+}
+
+/** 建立双向好友：申请后由目标本人接受，绝不因 kind=agent 自动同意。 */
+async function rawBefriend(
+  requesterToken: string,
+  targetToken: string,
+  target: { actor_id?: string; agent_session_id?: string },
+): Promise<void> {
+  const requested = await rawTool<RawContactRequestView>(requesterToken, 'network_contact_request', {
+    request_id: requestId('contact_request'),
+    ...(target.actor_id
+      ? { actor_id: target.actor_id }
+      : { agent_session_id: target.agent_session_id }),
+  });
+  if (requested.status === 'accepted') return;
+  if (!requested.request) throw new Error(`好友申请未进入 pending: ${requested.status}`);
+  await rawTool(targetToken, 'network_contact_request_respond', {
+    request_id: requestId('contact_accept'),
+    contact_request_id: requested.request.contact_request_id,
+    action: 'accept',
+  });
+}
+
+/** 管理者向自有 Agent 申请会自动接受；用于网络 Agent 创建后的建联。 */
+async function rawOwnAgentLink(
+  requesterToken: string,
+  target: { actor_id?: string; agent_session_id?: string },
+): Promise<void> {
+  const requested = await rawTool<RawContactRequestView>(requesterToken, 'network_contact_request', {
+    request_id: requestId('contact_request'),
+    ...(target.actor_id
+      ? { actor_id: target.actor_id }
+      : { agent_session_id: target.agent_session_id }),
+  });
+  if (requested.status !== 'accepted') {
+    throw new Error(`自有 Agent 未自动建立关系: ${requested.status}`);
+  }
+}
+
 function requestId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`;
 }
@@ -453,8 +495,18 @@ function receiptSelector(messageId: string): string {
   return `#messages li.msg-receipt[data-receipt-for="${messageId}"]`;
 }
 
-/** 创建由指定人类管理的 Agent 并加为好友，用于群成员添加场景。 */
+/** 创建由指定人类管理的 Agent 并建立双向关系，用于群成员添加场景。 */
 async function createAgentFriend(token: string, name: string): Promise<Actor> {
+  const created = await rawTool<Actor>(token, 'network_agent_create', {
+    request_id: requestId('create_agent'),
+    name,
+  });
+  await rawOwnAgentLink(token, { agent_session_id: created.agent_session_id ?? undefined });
+  return created;
+}
+
+/** 只写个人收藏；用于确认收藏不会被当作好友或群成员候选。 */
+async function createBookmarkFriend(token: string, name: string): Promise<Actor> {
   const created = await rawTool<Actor>(token, 'network_agent_create', {
     request_id: requestId('create_agent'),
     name,
@@ -466,7 +518,7 @@ async function createAgentFriend(token: string, name: string): Promise<Actor> {
   return created;
 }
 
-/** 批量创建好友，覆盖 network_contacts_list 的 100 条分页与第 2 页读取。 */
+/** 批量创建双向好友，覆盖 network_contacts_list 的 100 条分页与第 2 页读取。 */
 async function createFillerFriends(token: string, count: number): Promise<Actor[]> {
   const actors: Actor[] = [];
   const batchSize = 10;
@@ -482,7 +534,7 @@ async function createFillerFriends(token: string, count: number): Promise<Actor[
   return actors;
 }
 
-/** 分页读取全部好友，供“选择器候选数”断言避免依赖历史累计条数。 */
+/** 分页读取全部双向好友，供“选择器候选数”断言避免依赖历史累计条数。 */
 async function loadAllContacts(token: string): Promise<{ actor_id: string; name: string }[]> {
   const contacts: { actor_id: string; name: string }[] = [];
   let cursor: string | null = null;
@@ -490,11 +542,12 @@ async function loadAllContacts(token: string): Promise<{ actor_id: string; name:
     const args: Record<string, unknown> = { limit: 100 };
     if (cursor) args.cursor = cursor;
     const result = await rawTool<{
-      items: { actor_id: string; name: string }[];
+      items: { actor_id: string; name: string; relation: string }[];
       has_more: boolean;
       next_cursor: string | null;
     }>(token, 'network_contacts_list', args);
-    contacts.push(...result.items);
+    // 单侧收藏不是好友，不能成为群成员候选。
+    contacts.push(...result.items.filter((item) => item.relation === 'active'));
     if (!result.has_more || !result.next_cursor) break;
     cursor = result.next_cursor;
   }
@@ -561,33 +614,72 @@ interface PresenceTimelineItem {
   message_id?: string;
 }
 
+/**
+ * 等请求触碰产生的在线状态自然过期。
+ *
+ * A03 的建联 fixture 会先用 Agent token 接受好友申请；请求触碰把 Agent 记为
+ * online。若此时直接创建 direct 房间，这次上线的 generation 没有房间可写，
+ * 但下线时 `presence_pending_rooms` 已经包含新房间，会留下一条孤立的“下线”
+ * 行。因此在建房前等状态回到 offline，让后续真实连接生成完整的一对时间线。
+ */
+async function waitAgentOffline(dataDir: string, agentId: string): Promise<void> {
+  const db = new Database(`${dataDir}/agent-network.sqlite`, { readonly: true });
+  try {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const row = db
+        .prepare('SELECT phase FROM agent_presence_state WHERE actor_id = ?')
+        .get(agentId) as { phase?: string } | null;
+      if (row?.phase === 'offline') return;
+      if (Date.now() > deadline) {
+        throw new Error(`等待 Agent 离线超时: ${JSON.stringify(row)}`);
+      }
+      await sleep(100);
+    }
+  } finally {
+    db.close();
+  }
+}
+
 /** 用真实 stream + login 生成一组上线/下线，供浏览器时间线断言。 */
-async function seedPresence(agentToken: string, humanToken: string, roomId: string): Promise<void> {
+async function seedPresence(
+  agentToken: string,
+  humanToken: string,
+  roomId: string,
+  agentId: string,
+): Promise<void> {
   const connection = await connectClient(agentToken);
   await openSubscription(connection.client, ['agentnet://stream']);
   await callTool(connection.client, 'network_login', {});
   await sleep(100);
   await connection.close();
+  // 上一次转换留下的 offline 行会满足“存在 offline”这一条件，必须等本次
+  // generation 的 pending 被确认、房间快照明确回到 false，再核对时间线。
   const deadline = Date.now() + 10_000;
   for (;;) {
-    const page = await rawTool<{ timeline_items?: PresenceTimelineItem[] }>(
-      humanToken,
-      'network_history_list',
-      { room_id: roomId, view: 'timeline', limit: 100 },
-    );
-    const items = (page.timeline_items ?? []).filter((item) => item.kind === 'presence');
-    if (
-      items.some((item) => item.transition === 'online') &&
-      items.some((item) => item.transition === 'offline')
-    ) {
-      return;
-    }
+    const detail = await rawTool<{
+      members: { actor_id: string; online?: boolean | null }[];
+    }>(humanToken, 'network_room_get', { room_id: roomId });
+    const peer = detail.members.find((member) => member.actor_id === agentId);
+    if (peer?.online === false) break;
     if (Date.now() > deadline) throw new Error('等待上下线时间线写入超时');
     await sleep(100);
   }
+  const page = await rawTool<{ timeline_items?: PresenceTimelineItem[] }>(
+    humanToken,
+    'network_history_list',
+    { room_id: roomId, view: 'timeline', limit: 100 },
+  );
+  const items = (page.timeline_items ?? []).filter((item) => item.kind === 'presence');
+  if (
+    !items.some((item) => item.transition === 'online') ||
+    !items.some((item) => item.transition === 'offline')
+  ) {
+    throw new Error(`上下线时间线缺失: ${JSON.stringify(items)}`);
+  }
 }
 
-async function fixture(): Promise<{
+async function fixture(dataDir: string): Promise<{
   humanToken: string;
   human: Actor;
   agentAToken: string;
@@ -630,12 +722,14 @@ async function fixture(): Promise<{
     claim_id: claim.claim_id,
     code: claim.code,
   });
-  for (const agent of [agentA, agentB]) {
-    await rawTool(humanToken, 'network_contact_add', {
-      request_id: requestId('contact'),
-      agent_session_id: agent.agent_session_id,
-    });
-  }
+  // Agent A 是未认领的自注册 Agent，需本人接受；Agent B 已由 human 认领，
+  // 管理者申请会按 auto_manager 自动建联。
+  await rawBefriend(humanToken, agentAToken, {
+    agent_session_id: agentA.agent_session_id ?? undefined,
+  });
+  await rawOwnAgentLink(humanToken, { agent_session_id: agentB.agent_session_id ?? undefined });
+  // 等 A 的请求触碰过期后再建 direct，避免下线转换给新房间补写孤立下线行。
+  await waitAgentOffline(dataDir, agentA.actor_id);
   const direct = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
     request_id: requestId('room'),
     kind: 'direct',
@@ -676,7 +770,7 @@ async function fixture(): Promise<{
       body: `E 消息 ${index + 1}`,
     });
   }
-  await seedPresence(agentAToken, humanToken, direct.room.room_id);
+  await seedPresence(agentAToken, humanToken, direct.room.room_id, agentA.actor_id);
   // 所有房间标记已读；presence 不改变 head，之后不应因上下线出现红点。
   for (const room of [direct, group, extra]) {
     const current = await rawTool<RoomDetail>(humanToken, 'network_room_get', {
@@ -1323,10 +1417,7 @@ async function registerAvatarAgent(humanToken: string, name: string): Promise<Av
     request_id: requestId('avatar_create'),
     name,
   });
-  await rawTool(humanToken, 'network_contact_add', {
-    request_id: requestId('avatar_contact'),
-    agent_session_id: created.agent_session_id,
-  });
+  await rawOwnAgentLink(humanToken, { agent_session_id: created.agent_session_id ?? undefined });
   return {
     actor: {
       actor_id: created.actor_id,
@@ -1465,10 +1556,7 @@ async function runAvatarAcceptance(
     kind: 'human',
     name: 'KonghaYao',
   });
-  await rawTool(humanToken, 'network_contact_add', {
-    request_id: requestId('avatar_contact'),
-    actor_id: kong.actor_id,
-  });
+  await rawBefriend(humanToken, kongToken, { actor_id: kong.actor_id });
   const codexRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
     request_id: requestId('avatar_room'),
     kind: 'direct',
@@ -2286,10 +2374,7 @@ async function runTaskAcceptance(
     name: '任务 UI Agent',
     agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
   });
-  await rawTool(humanToken, 'network_contact_add', {
-    request_id: requestId('contact'),
-    actor_id: agent.actor_id,
-  });
+  await rawBefriend(humanToken, agentToken, { actor_id: agent.actor_id });
   const room = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
     request_id: requestId('room'),
     kind: 'group',
@@ -2557,7 +2642,7 @@ async function main(): Promise<void> {
   let browser: Browser | null = null;
   const allErrors: string[] = [];
   try {
-    const data = await fixture();
+    const data = await fixture(server.dataDir);
     browser = await chromium.launch({ headless: true });
     console.log(`浏览器验收: ${server.base}`);
 
@@ -2571,6 +2656,50 @@ async function main(): Promise<void> {
       );
       await page.goto(`${server.base}/`);
       await page.locator('#room-list .room-item').first().waitFor();
+
+      // 好友申请入口：独立收件箱、弹窗接受，不在申请时创建房间。
+      const uiRequesterToken = crypto.randomUUID();
+      await rawTool<Actor>(uiRequesterToken, 'network_register', {
+        request_id: requestId('web_reg'),
+        kind: 'human',
+        name: '好友申请界面用户',
+      });
+      await rawTool(uiRequesterToken, 'network_contact_request', {
+        request_id: requestId('contact_request'),
+        actor_id: data.human.actor_id,
+        message: '界面验收申请',
+      });
+      checkEqual(
+        '侧栏好友申请入口可见',
+        await page.locator('#contact-requests').isVisible(),
+        true,
+      );
+      checkEqual(
+        '好友申请弹窗默认关闭',
+        await page.locator('#contact-modal').isVisible(),
+        false,
+      );
+      await page.locator('#contact-requests').click();
+      await page.locator('#contact-modal').waitFor({ state: 'visible' });
+      await waitForText(page, '#contact-request-list', '界面验收申请');
+      check(
+        '好友申请弹窗显示申请附言',
+        ((await page.locator('#contact-request-list').textContent()) ?? '').includes('界面验收申请'),
+      );
+      await page.locator('#contact-request-list .contact-request-item button.primary').click();
+      await waitForText(page, '#contact-request-status', '已接受好友申请');
+      const uiRequesterRelation = await rawTool<{ items: { actor_id: string; relation: string }[] }>(
+        uiRequesterToken,
+        'network_contacts_list',
+        { limit: 100 },
+      );
+      checkEqual(
+        '网页接受后申请方看到 active 关系',
+        uiRequesterRelation.items.find((item) => item.actor_id === data.human.actor_id)?.relation,
+        'active',
+      );
+      await page.locator('#contact-modal-close').click();
+
       checkEqual('侧栏分类容器为 tablist', await page.locator('#room-filter').getAttribute('role'), 'tablist');
       checkEqual(
         '侧栏默认单聊分类',
@@ -2647,6 +2776,7 @@ async function main(): Promise<void> {
         name: '分类未读 Agent',
         agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
       });
+      await rawBefriend(data.humanToken, segmentAgentToken, { actor_id: segmentAgent.actor_id });
       const segmentRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
         kind: 'direct',
@@ -2892,6 +3022,7 @@ async function main(): Promise<void> {
         kind: 'human',
         name: '验收人类同事',
       });
+      await rawBefriend(data.humanToken, humanPeerToken, { actor_id: humanPeer.actor_id });
       const humanDirect = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
         kind: 'direct',
@@ -3204,10 +3335,7 @@ async function main(): Promise<void> {
         name: longAgentName,
         agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
       });
-      await rawTool(data.humanToken, 'network_contact_add', {
-        request_id: requestId('contact'),
-        agent_session_id: longAgent.agent_session_id,
-      });
+      await rawBefriend(data.humanToken, longAgentToken, { actor_id: longAgent.actor_id });
       const longRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
         kind: 'direct',
@@ -4026,9 +4154,8 @@ async function main(): Promise<void> {
         name: maliciousAgentName,
         agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
       });
-      await rawTool(data.humanToken, 'network_contact_add', {
-        request_id: requestId('contact'),
-        agent_session_id: maliciousAgent.agent_session_id,
+      await rawBefriend(data.humanToken, maliciousAgentToken, {
+        actor_id: maliciousAgent.actor_id,
       });
       const injectionDirect = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
@@ -4613,7 +4740,7 @@ async function main(): Promise<void> {
         });
         const contactAdds = calls.filter(function (call) {
           const args = argsOf(call);
-          return call.name === 'network_contact_add' && args && item.actor_id &&
+          return call.name === 'network_contact_request' && args && item.actor_id &&
             args.actor_id === item.actor_id;
         });
         return {
@@ -4967,7 +5094,7 @@ async function main(): Promise<void> {
               return label.textContent === ${JSON.stringify(failedAgentName)};
             }).length,
           contactAddCount: (window.__mcpCalls || []).filter(function (call) {
-            return call.name === 'network_contact_add';
+            return call.name === 'network_contact_request';
           }).length
         };
       })()`)) as {
@@ -4985,7 +5112,7 @@ async function main(): Promise<void> {
       await context.close();
     }
 
-    // 2b-1c. 联系人添加失败非致命：Agent、凭据、注册表与 direct 会话仍应保留。
+    // 2b-1c. 好友申请失败不创建 direct；Agent、凭据与注册表仍应保留。
     {
       const { context, page } = await makeContext(
         browser,
@@ -4997,7 +5124,7 @@ async function main(): Promise<void> {
       await page.locator('#room-list .room-item').first().waitFor();
       await page.route('**/mcp', async (route) => {
         const request = route.request();
-        if (request.headers()['mcp-name'] !== 'network_contact_add') {
+        if (request.headers()['mcp-name'] !== 'network_contact_request') {
           await route.continue();
           return;
         }
@@ -5034,24 +5161,23 @@ async function main(): Promise<void> {
           'Agent 已创建，但添加好友失败：模拟联系人添加失败'
         ) >= 0`,
       );
-      await waitRoomListName(page, contactFailedName);
       check(
-        '联系人添加失败仍展示 MCP URL 与分享链接',
+        '好友申请失败仍展示 MCP URL 与分享链接',
         (await page.inputValue('#new-agent-url')).startsWith('http') &&
           (await page.inputValue('#new-agent-share')).startsWith('http'),
       );
       checkEqual(
-        '联系人添加失败仍显示已创建',
+        '好友申请失败仍显示已创建',
         ((await page.locator('#new-agent-create').textContent()) ?? '').trim(),
         '已创建',
       );
       checkEqual(
-        '联系人添加失败仍创建 direct 会话',
+        '好友申请失败不创建 direct 会话',
         await page
           .locator('#room-list a.room-item')
           .filter({ hasText: contactFailedName })
           .count(),
-        1,
+        0,
       );
       await page.unroute('**/mcp');
       await page.locator('#new-agent-close').click();
@@ -5818,10 +5944,7 @@ async function main(): Promise<void> {
         kind: 'human',
         name: '人类单聊对象',
       });
-      await rawTool(data.humanToken, 'network_contact_add', {
-        request_id: requestId('contact'),
-        actor_id: humanPeer.actor_id,
-      });
+      await rawBefriend(data.humanToken, humanPeerToken, { actor_id: humanPeer.actor_id });
       const humanRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
         kind: 'direct',
@@ -6172,27 +6295,20 @@ async function main(): Promise<void> {
     }
 
     // 2b-2b. 已创建但非好友的本机 Agent：打开选择器时用 human token 补齐联系人。
+    // 用 network_agent_create 创建（浏览器 human 是管理者），补齐请求按
+    // auto_manager 自动接受；未认领的 network_register 只会停在 pending。
     {
-      const orphanToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
-      const orphan = await rawTool<Actor>(orphanToken, 'network_register', {
-        request_id: requestId('reg'),
-        kind: 'agent',
+      const orphan = await rawTool<Actor>(data.humanToken, 'network_agent_create', {
+        request_id: requestId('create_agent'),
         name: '存量未加好友 Agent',
-        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
       });
-      const orphanFailedToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
-      const orphanFailed = await rawTool<Actor>(orphanFailedToken, 'network_register', {
-        request_id: requestId('reg'),
-        kind: 'agent',
+      const orphanFailed = await rawTool<Actor>(data.humanToken, 'network_agent_create', {
+        request_id: requestId('create_agent'),
         name: '补齐失败 Agent',
-        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
       });
-      const memberOrphanToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
-      const memberOrphan = await rawTool<Actor>(memberOrphanToken, 'network_register', {
-        request_id: requestId('reg'),
-        kind: 'agent',
+      const memberOrphan = await rawTool<Actor>(data.humanToken, 'network_agent_create', {
+        request_id: requestId('create_agent'),
         name: '添加成员补齐 Agent',
-        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
       });
       const { context, page } = await makeContext(
         browser,
@@ -6230,7 +6346,7 @@ async function main(): Promise<void> {
       })()`);
       await page.route('**/mcp', async (route) => {
         const request = route.request();
-        if (request.headers()['mcp-name'] !== 'network_contact_add') {
+        if (request.headers()['mcp-name'] !== 'network_contact_request') {
           await route.continue();
           return;
         }
@@ -6267,7 +6383,7 @@ async function main(): Promise<void> {
       const contactCallsFor = async (actorId: string) =>
         (await page.evaluate(`(window.__mcpCalls || []).filter(function (call) {
           const args = call.body && call.body.params ? call.body.params.arguments : null;
-          return call.name === 'network_contact_add' && args && args.actor_id === ${JSON.stringify(actorId)};
+          return call.name === 'network_contact_request' && args && args.actor_id === ${JSON.stringify(actorId)};
         }).map(function (call) { return { humanAuth: call.humanAuth === true }; })`)) as {
           humanAuth: boolean;
         }[];
@@ -6395,6 +6511,7 @@ async function main(): Promise<void> {
         allErrors,
       );
       await createFillerFriends(data.humanToken, 100);
+      const bookmarkOnly = await createBookmarkFriend(data.humanToken, '仅收藏 Agent');
       const agentC = await createAgentFriend(data.humanToken, '加人候选 C');
       await page.goto(`${server.base}/`);
       await page.locator('#room-list .room-item').first().waitFor();
@@ -6486,6 +6603,14 @@ async function main(): Promise<void> {
         '好友分页加载并排除现有成员',
         await page.locator('#members-contacts input[type=checkbox]').count(),
         expectedCandidateCount,
+      );
+      checkEqual(
+        '个人收藏不出现在添加成员候选',
+        await page
+          .locator('#members-contacts .contact-choice')
+          .filter({ hasText: bookmarkOnly.name })
+          .count(),
+        0,
       );
       checkEqual(
         '右栏数量与候选一致',
@@ -8535,10 +8660,7 @@ async function main(): Promise<void> {
         kind: 'human',
         name: '监控成员 B',
       });
-      await rawTool(data.humanToken, 'network_contact_add', {
-        request_id: requestId('monitor_contact'),
-        actor_id: monitorB.actor_id,
-      });
+      await rawBefriend(data.humanToken, monitorBToken, { actor_id: monitorB.actor_id });
       const monitorGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('monitor_room'),
         kind: 'group',
@@ -15808,9 +15930,8 @@ async function main(): Promise<void> {
         claim_id: reissueClaim.claim_id,
         code: reissueClaim.code,
       });
-      await rawTool(data.humanToken, 'network_contact_add', {
-        request_id: requestId('contact'),
-        agent_session_id: reissueAgent.agent_session_id,
+      await rawOwnAgentLink(data.humanToken, {
+        agent_session_id: reissueAgent.agent_session_id ?? undefined,
       });
       const reissueRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
@@ -15823,6 +15944,7 @@ async function main(): Promise<void> {
         kind: 'human',
         name: '重发人类目标',
       });
+      await rawBefriend(data.humanToken, humanPeerToken, { actor_id: humanPeer.actor_id });
       const humanPeerRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
         kind: 'direct',

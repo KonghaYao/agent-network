@@ -26,6 +26,7 @@ import {
   roomTopic,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
+import { directMessageGuardStatement } from './contact-relations';
 import {
   getActorsByIds,
   getClaimedDelivery,
@@ -149,6 +150,7 @@ export function messageGuardStatements(
         ),
       )
       .bind(core.roomId, core.senderId),
+    directMessageGuardStatement(db, core.roomId),
   ];
 
   if (core.hop > LIMITS.cooperationDepthMax) {

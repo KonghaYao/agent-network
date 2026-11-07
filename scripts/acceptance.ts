@@ -27,6 +27,7 @@ import {
   waitUntil,
 } from './lib/harness';
 import {
+  befriend,
   inbox,
   readWholeMessage,
   registerIdentity,
@@ -55,6 +56,7 @@ import {
   startTestReceiver,
 } from './lib/events-harness';
 import { runEventsAcceptance } from './lib/events-acceptance';
+import { runContactRelationAcceptance } from './lib/contact-relation-acceptance';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META = 'io.agent-network/event';
@@ -378,14 +380,7 @@ async function main(): Promise<void> {
       await reissueAgent.close();
     }
 
-    await callTool(agentA.client, 'network_contact_add', {
-      request_id: newRequestId('contact'),
-      actor_id: b.actor_id,
-    });
-    await callTool(agentB.client, 'network_contact_add', {
-      request_id: newRequestId('contact'),
-      actor_id: a.actor_id,
-    });
+    await befriend(agentA, a.actor_id, agentB, b.actor_id);
     const contacts = await callTool<{ items: { actor_id: string }[] }>(
       agentA.client,
       'network_contacts_list',
@@ -585,10 +580,7 @@ async function main(): Promise<void> {
     );
     await callTool(agentA.client, 'network_login');
 
-    await callTool(agentA.client, 'network_contact_add', {
-      request_id: newRequestId('contact'),
-      actor_id: c.actor_id,
-    });
+    await befriend(agentA, a.actor_id, humanC, c.actor_id);
     const humanRoom = await callTool<RoomDetail>(agentA.client, 'network_room_create', {
       request_id: newRequestId('room'),
       kind: 'group',
@@ -1089,6 +1081,7 @@ async function main(): Promise<void> {
     await resubscribed.close();
 
     // 网页人类发送回归：页面把房间内 Agent 成员填入 invoke，人类成员不产生 delivery。
+    await befriend(humanC, c.actor_id, agentB, b.actor_id);
     const webCollector = notificationCollector(agentB.client);
     const webSubscription = await openSubscription(agentB.client, [STREAM_URI]);
     await waitUntil('等待网页回归统一 stream 建立', () =>
@@ -1309,6 +1302,7 @@ async function main(): Promise<void> {
       console.log('  · Drive 未启用，跳过房间文件端到端片段');
     }
     await runAgentIdentityAcceptance();
+    await runContactRelationAcceptance();
     await runAgentArchiveAcceptance();
     await runAgentPresenceAcceptance();
     await runRoomMonitorAcceptance();

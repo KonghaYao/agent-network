@@ -82,7 +82,67 @@ export const contactSchema = z.object({
   kind: z.enum(['human', 'agent']),
   name: z.string(),
   agent_session_id: z.string().nullable(),
+  /** active 表示双方已建立好友关系；none 只是自己的历史收藏。 */
+  relation: z.enum(['active', 'none']),
   created_at: z.string(),
+});
+
+export const contactActorSchema = z.object({
+  actor_id: z.string(),
+  kind: z.enum(['human', 'agent']),
+  name: z.string(),
+  agent_session_id: z.string().nullable(),
+});
+
+export const contactRelationSchema = z.object({
+  pair_key: z.string(),
+  actor_ids: z.array(z.string()),
+  status: z.enum(['active', 'ended']),
+  source: z.enum(['request', 'auto_manager']),
+  created_at: z.string(),
+  updated_at: z.string(),
+  ended_at: z.string().nullable(),
+});
+
+export const contactRequestSchema = z.object({
+  contact_request_id: z.string(),
+  status: z.enum(['pending', 'accepted', 'rejected', 'cancelled', 'expired']),
+  direction: z.enum(['incoming', 'outgoing']),
+  message: z.string(),
+  auto_accepted: z.boolean(),
+  from_actor: contactActorSchema,
+  to_actor: contactActorSchema,
+  created_at: z.string(),
+  updated_at: z.string(),
+  expires_at: z.string(),
+  responded_at: z.string().nullable(),
+  responded_by: z.string().nullable(),
+  can_respond: z.boolean(),
+  can_cancel: z.boolean(),
+});
+
+export const contactRequestResultSchema = z.object({
+  request: contactRequestSchema.nullable(),
+  relation: contactRelationSchema.nullable(),
+  status: z.enum(['pending', 'accepted', 'rejected', 'cancelled', 'expired']),
+  already_friends: z.boolean(),
+  auto_accepted: z.boolean(),
+});
+
+export const contactRequestPageSchema = z.object({
+  items: z.array(contactRequestSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+});
+
+export const contactPolicySchema = z.object({
+  actor_id: z.string(),
+  name: z.string(),
+  kind: z.enum(['human', 'agent']),
+  policy: z.enum(['self_approval', 'manager_approval', 'auto_accept']),
+  configured: z.boolean(),
+  approver_actor_id: z.string().nullable(),
+  approver_name: z.string().nullable(),
 });
 
 export const deliverySchema = z.object({

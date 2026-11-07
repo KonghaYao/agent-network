@@ -19,7 +19,13 @@ import {
   agentsGetSchema,
   agentsManagedListSchema,
   contactAddSchema,
+  contactPolicyGetSchema,
+  contactPolicySetSchema,
   contactRemoveSchema,
+  contactRequestIdSchema,
+  contactRequestRespondSchema,
+  contactRequestSchema,
+  contactRequestsListSchema,
   contactsListSchema,
   deliveryCancelSchema,
   deliveryClaimSchema,
@@ -74,6 +80,13 @@ import {
   enableAgent,
 } from '../domain/agent-management';
 import { contactAdd, contactRemove, contactsList } from '../domain/contacts';
+import { contactPolicyGet, contactPolicySet } from '../domain/contact-policies';
+import {
+  contactRequest,
+  contactRequestCancel,
+  contactRequestRespond,
+  contactRequestsList,
+} from '../domain/contact-requests';
 import {
   deliveryCancel,
   deliveryClaim,
@@ -141,6 +154,9 @@ import {
   agentsManagedListResultSchema,
   completeResultSchema,
   contactPageSchema,
+  contactPolicySchema,
+  contactRequestPageSchema,
+  contactRequestResultSchema,
   contactSchema,
   deliverySchema,
   feedbackCreateResultSchema,
@@ -585,7 +601,7 @@ export function registerTools(
   register(
     server,
     'network_contacts_list',
-    '按创建时间倒序分页读取自己的好友。',
+    '按创建时间倒序分页读取自己的联系人与收藏。relation=active 才是双向好友；none 只是个人历史收藏，不代表对方同意，也不能用于建群或单聊授权。',
     contactsListSchema,
     contactPageSchema,
     async (input) => {
@@ -597,7 +613,7 @@ export function registerTools(
   register(
     server,
     'network_contact_add',
-    '按 actor_id 或 agent_session_id 幂等添加好友。',
+    '幂等写入自己的个人收藏/历史。该操作不建立好友关系、不通知对方，也不能用于建群、创建单聊或发送 direct 消息；加好友请用 network_contact_request。',
     contactAddSchema,
     z.object({ contact: contactSchema }),
     async (input) => {
@@ -609,12 +625,84 @@ export function registerTools(
   register(
     server,
     'network_contact_remove',
-    '删除自己的好友关系；不删除历史消息或群成员身份。',
+    '删除自己的个人收藏，并结束双方好友关系；不删除历史消息或群成员身份。',
     contactRemoveSchema,
     removedResultSchema,
     async (input) => {
       requireActor(principal);
       return contactRemove(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_request',
+    '向 actor_id 或 agent_session_id 发起好友申请。申请只进入独立的申请收件箱，不创建 direct 房间、不发送房间消息，陌生人无法借此写入单聊。管理者向自有 Agent 申请时自动建立关系；其他目标按接收策略处理（human 默认本人确认、有管理者的 Agent 默认管理者确认、无管理者 Agent 默认自行确认），不会因为 kind=agent 自动接受。已存在 pending 时返回该申请；已是好友时 already_friends=true。通知只落持久事件，不产生 delivery，也不唤醒 Agent 执行任务。',
+    contactRequestSchema,
+    contactRequestResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactRequest(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_requests_list',
+    '分页读取好友申请。direction=incoming 同时包含自己管理的 Agent 的申请；status 可过滤状态。读取时会把已过期的 pending 就地标记为 expired，但不会因此产生 delivery 或唤醒 Agent。',
+    contactRequestsListSchema,
+    contactRequestPageSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactRequestsList(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_request_respond',
+    '接受或拒绝 pending 好友申请。只有申请目标、其管理者或受托人可以处理，发起者不能自批。接受后双方建立 active 关系并返回同一申请；重复接受返回同一结果，已过期返回 REQUEST_EXPIRED。拒绝不删除历史消息。',
+    contactRequestRespondSchema,
+    contactRequestResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactRequestRespond(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_request_cancel',
+    '撤销自己发起且仍 pending 的好友申请；已结束返回冲突，已过期返回 REQUEST_EXPIRED。',
+    contactRequestIdSchema,
+    contactRequestResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactRequestCancel(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_policy_get',
+    '读取好友接收策略；省略 actor_id 表示自己。人类可读自己，Agent 可由其管理者或持有 manage_agent 委托的 human 读取。configured=false 表示当前是按身份与管理者关系解析出的默认值。',
+    contactPolicyGetSchema,
+    contactPolicySchema,
+    async (input) => {
+      requireActor(principal);
+      return contactPolicyGet(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_policy_set',
+    '设置好友接收策略，仅人类管理者可调用。self_approval=本人确认；manager_approval=管理者确认（仅 Agent）；auto_accept=自动接受，必须显式设置，不是 kind=agent 的默认行为。人类不能使用 manager_approval。修改只影响后续申请，不改变已有关系。',
+    contactPolicySetSchema,
+    contactPolicySchema,
+    async (input) => {
+      requireActor(principal);
+      return contactPolicySet(db, principal, input);
     },
   );
 

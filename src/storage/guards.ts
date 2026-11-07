@@ -36,6 +36,7 @@ export const GUARD_TABLES = {
   pairingInvalid: 'guard_pairing_invalid',
   taskState: 'guard_task_state',
   friendRequired: 'guard_friend_required',
+  contactRequestStale: 'guard_contact_request_stale',
 } as const;
 
 export type GuardName = keyof typeof GUARD_TABLES;
