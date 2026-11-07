@@ -28,6 +28,58 @@ import websockets
 
 CURL_CONFIG = None
 
+
+class McpToolError(RuntimeError):
+    def __init__(self, tool, code, message):
+        super().__init__(f"{tool} failed: {code}: {message}")
+        self.tool = tool
+        self.code = code
+        self.message = message
+
+
+class DeliveryDeferred(RuntimeError):
+    def __init__(self, delivery_id, claimed_delivery_id):
+        super().__init__(f"deferred by claimed delivery {claimed_delivery_id}")
+        self.delivery_id = delivery_id
+        self.claimed_delivery_id = claimed_delivery_id
+
+
+class DeliveryConflict(RuntimeError):
+    def __init__(self, delivery_id, message):
+        super().__init__(message)
+        self.delivery_id = delivery_id
+
+
+class DeliveryClaimFailed(RuntimeError):
+    def __init__(self, delivery_id, code, message):
+        super().__init__(f"{code}: {message}")
+        self.delivery_id = delivery_id
+        self.code = code
+
+
+def tool_error(result, name):
+    if result.get("error"):
+        error = result["error"]
+        return McpToolError(name, str(error.get("code", "UNKNOWN")), error.get("message", "unknown"))
+    content = result.get("result") or {}
+    if not content.get("isError"):
+        return None
+    parsed = {}
+    for item in content.get("content") or []:
+        if item.get("type") != "text":
+            continue
+        try:
+            parsed = json.loads(item.get("text") or "")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(parsed, dict) and parsed.get("code"):
+            break
+    return McpToolError(
+        name,
+        str(parsed.get("code", "UNKNOWN")),
+        str(parsed.get("message", "unknown")),
+    )
+
 def log(message):
     print(message, flush=True)
 
@@ -59,8 +111,9 @@ def mcp_tool(name, arguments=None):
     if response.returncode or not status.startswith(b"2"):
         raise RuntimeError(name + " request failed")
     result = json.loads(payload)
-    if result.get("error") or result.get("result", {}).get("isError"):
-        raise RuntimeError(name + " failed")
+    error = tool_error(result, name)
+    if error:
+        raise error
     content = result["result"]
     if "structuredContent" in content:
         return content["structuredContent"]
@@ -85,12 +138,42 @@ def read_message(message_id):
             return "".join(chunks)
 
 
+def claimed_page():
+    return mcp_tool("network_inbox_list", {"state": "claimed", "limit": 50})
+
+
+def claim_delivery(delivery_id):
+    try:
+        return mcp_tool("network_delivery_claim", {
+            "request_id": os.urandom(16).hex(), "delivery_id": delivery_id,
+        })
+    except McpToolError as error:
+        if error.code != "CLAIM_CONFLICT":
+            raise DeliveryClaimFailed(delivery_id, error.code, error.message) from error
+        page = claimed_page()
+        own = next(
+            (item for item in page.get("items") or [] if item.get("delivery_id") == delivery_id),
+            None,
+        )
+        if own:
+            return own
+        held = page.get("claimed_delivery_id")
+        if held and "当前已有领取中的工作" in error.message:
+            raise DeliveryDeferred(delivery_id, held) from error
+        raise DeliveryConflict(delivery_id, error.message) from error
+
+
 def claim_and_read(item):
     delivery_id = item["delivery_id"]
-    claim = mcp_tool("network_delivery_claim", {
-        "request_id": os.urandom(16).hex(), "delivery_id": delivery_id,
-    })
-    claim_info = {"delivery_id": delivery_id, "attempt": claim["attempt"], "claim_id": claim["claim_id"]}
+    claim = claim_delivery(delivery_id)
+    claim_info = {
+        "delivery_id": delivery_id,
+        "attempt": claim["attempt"],
+        "claim_id": claim["claim_id"],
+        "claimed_at": claim.get("claimed_at"),
+    }
+    if "state" in claim:
+        claim_info["state"] = claim["state"]
     try:
         return claim_info, read_message(item["message_id"])
     except Exception:
@@ -338,9 +421,11 @@ async def main():
     actor_id = (await asyncio.to_thread(mcp_tool, "network_me"))["actor_id"]
     watcher = asyncio.create_task(stream_events(events, actor_id))
     outstanding = {}
-    delivered = set()
+    delivered = {}
     notified = {}
     reminders_seen = {}
+    claim_skipped = {}
+    steered = {}
     active_turn = None
     final_message = None
     ack_task = None
@@ -370,11 +455,20 @@ async def main():
                     continue
                 delivery_id = params["delivery_id"]
                 attempt = params.get("attempt")
-                if (delivery_id, attempt) not in delivered and (
-                    delivery_id not in outstanding or
-                    attempt is None or
-                    (outstanding[delivery_id].get("attempt") or -1) <= attempt
+                if params.get("source") == "delivery.retried":
+                    claim_skipped.pop(delivery_id, None)
+                    delivered.pop(delivery_id, None)
+                attempt_key = 0 if attempt is None else attempt
+                if claim_skipped.get(delivery_id) == attempt_key:
+                    continue
+                previous_attempt = delivered.get(delivery_id)
+                if previous_attempt is not None and (
+                    attempt is None or attempt <= previous_attempt
                 ):
+                    continue
+                if (delivery_id not in outstanding or
+                        attempt is None or
+                        (outstanding[delivery_id].get("attempt") or -1) <= attempt):
                     outstanding[delivery_id] = params
             if method == "item/completed" and active_turn and params.get("turnId") == active_turn[1]:
                 item = params.get("item") or {}
@@ -416,6 +510,15 @@ async def main():
             except Exception:
                 raise RuntimeError("inbox_unavailable; restart watcher to reconcile")
             match = next((item for item in items if item.get("delivery_id") == delivery_id), None)
+            if not match and delivery_id in steered:
+                # 已插话的投递在 claim 后不再出现在 pending；当前回合结束后从自己的 claimed 列表接手。
+                try:
+                    claimed_items = (await asyncio.to_thread(claimed_page)).get("items") or []
+                except Exception:
+                    raise RuntimeError("claimed_inbox_unavailable; restart watcher to reconcile")
+                match = next(
+                    (item for item in claimed_items if item.get("delivery_id") == delivery_id), None,
+                )
             if (not match or (match.get("message") or {}).get("sender_id") == actor_id or
                     (alert.get("attempt") is not None and match.get("attempt") != alert["attempt"])):
                 outstanding.pop(delivery_id)
@@ -427,29 +530,97 @@ async def main():
                 current_turn = turns[0] if turns else {}
                 if current_turn.get("status") != "inProgress":
                     continue
+                # 插话前先 claim；失败只记录分类，不读取、不 steer。
+                try:
+                    claim = await asyncio.to_thread(claim_delivery, delivery_id)
+                except DeliveryDeferred as error:
+                    log(
+                        f"DELIVERY_DEFERRED delivery={delivery_id} "
+                        f"claimed_delivery={error.claimed_delivery_id} "
+                        "hint=complete_or_fail_current_claim_first_then_claim_or_reconnect"
+                    )
+                    outstanding.pop(delivery_id)
+                    if outstanding:
+                        events.put_nowait({"method": "codex-watch/retry"})
+                    continue
+                except DeliveryConflict as error:
+                    claim_skipped[delivery_id] = 0 if match.get("attempt") is None else match["attempt"]
+                    log(f"DELIVERY_CONFLICT delivery={delivery_id} hint=skip_do_not_process")
+                    outstanding.pop(delivery_id)
+                    if outstanding:
+                        events.put_nowait({"method": "codex-watch/retry"})
+                    continue
+                except DeliveryClaimFailed as error:
+                    claim_skipped[delivery_id] = 0 if match.get("attempt") is None else match["attempt"]
+                    log(f"DELIVERY_CLAIM_FAILED delivery={delivery_id} code={error.code}")
+                    outstanding.pop(delivery_id)
+                    if outstanding:
+                        events.put_nowait({"method": "codex-watch/retry"})
+                    continue
+                except Exception:
+                    log(f"ERROR claim_failed delivery={delivery_id}")
+                    outstanding.pop(delivery_id)
+                    if outstanding:
+                        events.put_nowait({"method": "codex-watch/retry"})
+                    continue
+                claim_skipped.pop(delivery_id, None)
+                log(
+                    f"DELIVERY_CLAIMED delivery={delivery_id} attempt={claim['attempt']} "
+                    f"claim_id={claim['claim_id']} claimed_at={claim['claimed_at']} auto_claimed=true"
+                )
                 try:
                     body = await asyncio.to_thread(read_message, match["message_id"])
+                except Exception:
+                    try:
+                        await asyncio.to_thread(fail_delivery, claim, "读取消息失败")
+                    except Exception:
+                        log(f"ERROR steer_read_failed delivery={delivery_id}; manual reconciliation required")
+                    outstanding.pop(delivery_id)
+                    if outstanding:
+                        events.put_nowait({"method": "codex-watch/retry"})
+                    continue
+                steered_item = {
+                    **match, "attempt": claim["attempt"],
+                    "state": "claimed", "claim_id": claim["claim_id"], "claimed_at": claim["claimed_at"],
+                }
+                try:
                     await connection.call("turn/steer", {
                         "threadId": thread_id,
                         "expectedTurnId": current_turn["id"],
                         "input": [{"type": "text", "text": (
-                            "Agent Network 有一条新的用户消息在你工作期间到达。请立即阅读并酌情调整当前工作；"
-                            "它仍在待办队列中，当前回合结束后会单独处理并答复，不要在此重复结束投递。\n\n"
+                            "Agent Network 有一条新的用户消息在你工作期间到达。桥接器已自动领取该投递，"
+                            "本条只供你调整当前工作；当前回合结束后会单独处理并答复，不要在此重复结束投递。\n\n"
                             f"新消息：\n{body}"
                         )}],
                     })
                 except RuntimeError:
-                    log(f"STEER_DEFERRED delivery={delivery_id}")
+                    notified[delivery_id] = claim["attempt"]
+                    outstanding[delivery_id] = steered_item
+                    steered[delivery_id] = steered_item
+                    log(
+                        f"STEER_DEFERRED delivery={delivery_id} claim_state=claimed "
+                        "hint=process_after_current_turn"
+                    )
                     latest = (await connection.call("thread/read", {"threadId": thread_id}))["thread"]["status"]["type"]
                     if latest == "idle":
                         await events.put({"method": "codex-watch/retry"})
                     continue
                 except Exception:
-                    log(f"ERROR steer_read_failed delivery={delivery_id}")
+                    notified[delivery_id] = claim["attempt"]
+                    outstanding[delivery_id] = steered_item
+                    steered[delivery_id] = steered_item
+                    log(
+                        f"ERROR steer_failed delivery={delivery_id} claim_state=claimed "
+                        "hint=process_after_current_turn"
+                    )
                     continue
-                notified[delivery_id] = match["attempt"]
-                outstanding[delivery_id] = match
-                log(f"STEERED delivery={delivery_id} turn={current_turn['id']}")
+                notified[delivery_id] = claim["attempt"]
+                outstanding[delivery_id] = steered_item
+                steered[delivery_id] = steered_item
+                log(
+                    f"STEERED delivery={delivery_id} turn={current_turn['id']} "
+                    f"claim_id={claim['claim_id']}"
+                )
                 if next_alert(outstanding, notified, True):
                     events.put_nowait({"method": "codex-watch/retry"})
                 continue
@@ -457,14 +628,47 @@ async def main():
                 continue
             try:
                 claim, body = await asyncio.to_thread(claim_and_read, match)
+            except DeliveryDeferred as error:
+                # 不写永久跳过标记：完成后重连快照必须能重新 claim 这条。
+                log(
+                    f"DELIVERY_DEFERRED delivery={delivery_id} "
+                    f"claimed_delivery={error.claimed_delivery_id} "
+                    "hint=complete_or_fail_current_claim_first_then_claim_or_reconnect"
+                )
+                outstanding.pop(delivery_id)
+                if outstanding:
+                    events.put_nowait({"method": "codex-watch/retry"})
+                continue
+            except DeliveryConflict as error:
+                claim_skipped[delivery_id] = 0 if match.get("attempt") is None else match["attempt"]
+                log(f"DELIVERY_CONFLICT delivery={delivery_id} hint=skip_do_not_process")
+                outstanding.pop(delivery_id)
+                if outstanding:
+                    events.put_nowait({"method": "codex-watch/retry"})
+                continue
+            except DeliveryClaimFailed as error:
+                claim_skipped[delivery_id] = 0 if match.get("attempt") is None else match["attempt"]
+                log(f"DELIVERY_CLAIM_FAILED delivery={delivery_id} code={error.code}")
+                outstanding.pop(delivery_id)
+                if outstanding:
+                    events.put_nowait({"method": "codex-watch/retry"})
+                continue
             except Exception:
                 log(f"ERROR claim_or_read_failed delivery={delivery_id}")
                 outstanding.pop(delivery_id)
                 if outstanding:
                     events.put_nowait({"method": "codex-watch/retry"})
                 continue
+            claim_skipped.pop(delivery_id, None)
+            log(
+                f"DELIVERY_CLAIMED delivery={delivery_id} "
+                f"attempt={claim['attempt']} claim_id={claim['claim_id']} "
+                f"claimed_at={claim['claimed_at']} auto_claimed=true"
+            )
             prompt = (
-                "这是一条来自 Agent Network 的用户任务。桥接器已领取投递并读取正文；"
+                "这是一条来自 Agent Network 的用户任务。桥接器已自动领取投递并读取正文；"
+                f"claim 已就绪（delivery_id={delivery_id}, attempt={claim['attempt']}, "
+                f"claim_id={claim['claim_id']}）。"
                 "你只需要处理下面的任务，给出最终答复，桥接器会用该答复结束投递。"
                 "不要泄露凭据，不要调用其他 Agent 身份的 network_* 工具回复本任务。\n\n"
                 f"任务正文：\n{body}"
@@ -481,7 +685,8 @@ async def main():
             active_turn = (delivery_id, result["turn"]["id"], claim)
             ack_task = asyncio.create_task(ack_if_slow(claim, match["room_id"]))
             outstanding.pop(delivery_id)
-            delivered.add((delivery_id, claim["attempt"]))
+            steered.pop(delivery_id, None)
+            delivered[delivery_id] = claim["attempt"]
             log(f"TURN_STARTED delivery={delivery_id} turn={active_turn[1]}")
     finally:
         if ack_task:

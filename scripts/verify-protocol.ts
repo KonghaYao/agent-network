@@ -1348,6 +1348,15 @@ async function main(): Promise<void> {
     skillText.slice(0, 160),
   );
   check(
+    '技能正文声明 watcher 自动 claim 且 raw MCP 仍需自行 claim',
+    skillText.includes('watcher 自动 claim') &&
+      skillText.includes('auto_claimed:true') &&
+      skillText.includes('delivery_conflict') &&
+      skillText.includes('delivery_deferred') &&
+      skillText.includes('raw MCP 不自动 claim'),
+    skillText.slice(0, 200),
+  );
+  check(
     '技能正文声明回复不等于完成',
     skillText.includes('回复不等于完成') && skillText.includes('claim 只是接手'),
     skillText.slice(0, 200),
@@ -1732,6 +1741,14 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 240),
   );
   check(
+    '静态技能说明 watcher 自动 claim 与 raw MCP 差异',
+    ['watcher 自动 claim', 'network_delivery_claim', 'auto_claimed', 'delivery_conflict',
+      'delivery_deferred', 'delivery_claim_failed', 'raw MCP', '不自动 claim'].every((marker) =>
+      skillDocText.includes(marker),
+    ),
+    skillDocText.slice(0, 300),
+  );
+  check(
     '静态技能包含房间任务命令与不唤醒规范',
     ['agent_tasks.sh', '### 房间任务', 'network_task_list_get', 'network_task_claim',
       'network_task_summary', 'room.tasks', '不写 inbox', '不会唤醒 Agent',
@@ -2040,7 +2057,7 @@ async function main(): Promise<void> {
   check(
     'Peri monitor 脚本只监听投递并包含 ALERT',
     periScriptType.includes('text/x-shellscript') &&
-      ['ALERT', 'AGENTNET_TOKEN', 'network_inbox_list', 'delivery_id', 'ERROR type=inbox', 'agentnet://stream', 'subscriptions/listen', 'sender_id', '--connect-timeout'].every((marker) =>
+      ['ALERT', 'AGENTNET_TOKEN', 'network_inbox_list', 'delivery_id', 'ERROR type=inbox', 'agentnet://stream', 'subscriptions/listen', 'sender_id', '--connect-timeout', 'network_delivery_claim', 'auto_claimed', 'delivery_conflict', 'delivery_deferred', 'delivery_claim_failed'].every((marker) =>
         periScriptText.includes(marker),
       ),
     { contentType: periScriptType },
@@ -2071,7 +2088,8 @@ async function main(): Promise<void> {
       ['subscriptions/listen', 'agentnet://stream', 'network_login', 'network_delivery_claim',
        'network_message_read', 'network_delivery_complete', 'network_delivery_fail',
        'websockets.unix_connect', 'turn/start', 'turn/steer', 'expectedTurnId',
-       'turn/completed', 'CODEX_THREAD_ID'].every(
+       'turn/completed', 'CODEX_THREAD_ID', 'DELIVERY_CLAIMED', 'DELIVERY_DEFERRED',
+       'DELIVERY_CONFLICT', 'DELIVERY_CLAIM_FAILED', 'auto_claimed=true'].every(
         (marker) => codexScriptText.includes(marker),
       ) &&
       !codexScriptText.includes('peri-watch.sh') &&
@@ -2096,8 +2114,13 @@ async function main(): Promise<void> {
     'notifications/subscriptions/acknowledged',
     'network_login',
     'network_inbox_list',
+    'network_delivery_claim',
     'network_message_read',
     'event_file',
+    'auto_claimed',
+    'delivery_conflict',
+    'delivery_deferred',
+    'delivery_claim_failed',
     'action_required',
     'delivery_id',
     'READY',

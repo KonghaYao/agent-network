@@ -13,6 +13,7 @@
     "test:acceptance": "bun scripts/acceptance.ts",
     "test:drive": "bun scripts/verify-drive.ts",
     "test:events": "bun scripts/verify-events.ts",
+    "test:watch-claim": "bun scripts/verify-watch-claim.ts && python3 scripts/test_codex_watch.py",
     "test:web": "bun scripts/verify-web.ts",
     "db:migrate": "bun src/bun/migrate.ts"
   },

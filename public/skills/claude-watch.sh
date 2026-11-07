@@ -1,6 +1,6 @@
 #!/bin/bash
 # Claude Code 会话级监听器：持续等待需要处理的投递，每条投递输出一行紧凑 JSON。
-# 由 Claude Code 的 Monitor 工具承载；每行 stdout 事件唤醒当前会话，主会话再 claim/读取/回复/complete。
+# 由 Claude Code 的 Monitor 工具承载；脚本自动 claim 后每行 stdout 事件唤醒当前会话，主会话读取/回复/complete。
 # stdout 只输出事件信封，READY、重连与诊断全部写 stderr；正文、preview 和 token 不进入输出。
 # 依赖 bash、curl、jq、mkfifo。
 # 用法：curl -fsSL https://net.peri-code.dev/skills/claude-watch.sh | AGENTNET_TOKEN='<token>' bash
@@ -178,11 +178,150 @@ mcp_call_result() {
   printf '%s' "$parsed"
 }
 
+tool_error_code() {
+  jq -r '
+    if .result.isError then
+      ((.result.content[]? | select(.type=="text") | .text | fromjson? | .code) // "UNKNOWN")
+    elif .error then ((.error.code // "UNKNOWN") | tostring)
+    else "UNKNOWN" end'
+}
+
+tool_error_message() {
+  jq -r '
+    if .result.isError then
+      ((.result.content[]? | select(.type=="text") | .text | fromjson? | .message) // "")
+    elif .error then (.error.message // "")
+    else "" end'
+}
+
+# 领取投递。成功输出 {ok:true,...}；业务失败输出 {ok:false,kind:...}。
+# 只有传输/凭据错误返回非零，由调用方决定是否终止监听。
+claim_delivery() {
+  local delivery_id="$1" raw status parsed code message page page_status own held
+  raw=$(mcp_call network_delivery_claim \
+    "$(jq -nc --arg request_id "watch-claim-$(date +%s)-$$-$RANDOM" --arg delivery "$delivery_id" \
+      '{request_id:$request_id,delivery_id:$delivery}')")
+  status=$?
+  case "$status" in
+    0) ;;
+    41|42) return "$status" ;;
+    *) return 1 ;;
+  esac
+
+  parsed=$(printf '%s' "$raw" | mcp_result 2>/dev/null)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    printf '%s' "$parsed" | jq -c '{ok:true,delivery_id,state,attempt,claim_id,claimed_at}'
+    return 0
+  fi
+  if printf '%s' "$raw" | jq -e '
+    .result.isError == true
+    and any(.result.content[]?;
+      .type == "text" and ((.text | fromjson? | .code) == "CREDENTIAL_INVALID"))
+  ' >/dev/null 2>&1; then
+    return 41
+  fi
+
+  code=$(printf '%s' "$raw" | tool_error_code)
+  message=$(printf '%s' "$raw" | tool_error_message)
+  if [ "$code" != "CLAIM_CONFLICT" ]; then
+    jq -nc --arg code "$code" --arg message "$message" --arg delivery "$delivery_id" \
+      '{ok:false,kind:"failed",code:$code,message:$message,delivery_id:$delivery}'
+    return 0
+  fi
+
+  # CLAIM_CONFLICT 可能来自“自己已有另一条 claimed”，也可能来自“别人已领取”。
+  # 只在冲突时读一次 claimed inbox，不轮询；据此区分并复用自己已有的 claim。
+  page=$(mcp_call_result network_inbox_list '{"state":"claimed","limit":50}')
+  page_status=$?
+  case "$page_status" in
+    41|42) return "$page_status" ;;
+    0) ;;
+    *)
+      case "$message" in
+        *"当前已有领取中的工作"*)
+          jq -nc --arg delivery "$delivery_id" --arg message "$message" \
+            '{ok:false,kind:"deferred",code:"CLAIM_CONFLICT",message:$message,delivery_id:$delivery}'
+          ;;
+        *)
+          jq -nc --arg delivery "$delivery_id" --arg message "$message" \
+            '{ok:false,kind:"conflict",code:"CLAIM_CONFLICT",message:$message,delivery_id:$delivery}'
+          ;;
+      esac
+      return 0
+      ;;
+  esac
+
+  own=$(printf '%s' "$page" | jq -c --arg delivery "$delivery_id" \
+    '[.items[]? | select(.delivery_id == $delivery)][0] // empty')
+  if [ -n "$own" ]; then
+    printf '%s' "$own" | jq -c '{ok:true,delivery_id,state,attempt,claim_id,claimed_at}'
+    return 0
+  fi
+  held=$(printf '%s' "$page" | jq -r '.claimed_delivery_id // empty')
+  case "$message" in
+    *"当前已有领取中的工作"*)
+      jq -nc --arg delivery "$delivery_id" --arg held "$held" --arg message "$message" \
+        '{ok:false,kind:"deferred",code:"CLAIM_CONFLICT",message:$message,delivery_id:$delivery}
+         + (if $held == "" then {} else {claimed_delivery_id:$held} end)'
+      ;;
+    *)
+      jq -nc --arg delivery "$delivery_id" --arg message "$message" \
+        '{ok:false,kind:"conflict",code:"CLAIM_CONFLICT",message:$message,delivery_id:$delivery}'
+      ;;
+  esac
+  return 0
+}
+
+claim_notice() {
+  local item="$1" result="$2" source="$3"
+  local kind type claim_state hint code reason held
+  kind=$(printf '%s' "$result" | jq -r '.kind // "failed"')
+  code=$(printf '%s' "$result" | jq -r '.code // "UNKNOWN"')
+  reason=$(printf '%s' "$result" | jq -r '.message // ""')
+  held=$(printf '%s' "$result" | jq -r '.claimed_delivery_id // empty')
+  case "$kind" in
+    deferred)
+      type="delivery_deferred"
+      claim_state="deferred"
+      hint="先 complete/fail 当前 claim，再 network_inbox_list 核对并 claim 这条；watcher 不轮询，需手动 claim 或重连快照重试"
+      ;;
+    conflict)
+      type="delivery_conflict"
+      claim_state="conflict"
+      hint="跳过，不要处理；如需重新处理，由接收者用 network_delivery_retry 放回 pending"
+      ;;
+    *)
+      type="delivery_claim_failed"
+      claim_state="failed"
+      hint="不要处理；按 code 修复或等待人工核对后重试"
+      ;;
+  esac
+  printf '%s' "$item" | jq -c \
+    --arg source "$source" --arg type "$type" --arg claim_state "$claim_state" \
+    --arg hint "$hint" --arg code "$code" --arg reason "$reason" --arg held "$held" '{
+      type:$type,
+      source:$source,
+      delivery_id,
+      room_id:(.room_id // .message.room_id // ""),
+      message_id:(.message_id // .message.message_id // ""),
+      sender_id:(.sender_id // .message.sender_id // ""),
+      event_id:(.event_id // ""),
+      seq:(.seq // .created_seq // ""),
+      attempt:(.attempt // 0),
+      code:$code,
+      reason:$reason,
+      claim_state:$claim_state,
+      claimed_delivery_id:(if $held == "" then null else $held end),
+      hint:$hint
+    }'
+}
+
 seen() { grep -Fqx -- "$1" "$SEEN_FILE" 2>/dev/null; }
 mark_seen() { printf '%s\n' "$1" >>"$SEEN_FILE" 2>/dev/null || true; }
 
 write_event_file() {
-  local item="$1" attempt="$2" source="$3"
+  local item="$1" claim="$2" source="$3"
   local delivery_id message_id cursor="" result status eof next_cursor args
   local body_tmp event_tmp event_file
   delivery_id=$(printf '%s' "$item" | jq -r '.delivery_id // empty')
@@ -244,7 +383,7 @@ write_event_file() {
 
   jq -nc \
     --argjson item "$item" \
-    --argjson attempt "$attempt" \
+    --argjson claim "$claim" \
     --arg source "$source" \
     --rawfile body "$body_tmp" '{
       type:"delivery",
@@ -254,7 +393,12 @@ write_event_file() {
       sender_id:($item.sender_id // $item.message.sender_id // ""),
       event_id:($item.event_id // ""),
       seq:($item.seq // $item.created_seq // ""),
-      attempt:$attempt,
+      attempt:$claim.attempt,
+      claim_id:$claim.claim_id,
+      claimed_at:$claim.claimed_at,
+      auto_claimed:true,
+      claim_state:"claimed",
+      claim:{delivery_id:$item.delivery_id,attempt:$claim.attempt,claim_id:$claim.claim_id},
       source:$source,
       body:$body
     }' >"$event_tmp" || {
@@ -271,15 +415,67 @@ write_event_file() {
 }
 
 emit_found() {
-  local item="$1" attempt="$2" source="$3" alert event_file
+  local item="$1" attempt="$2" source="$3"
+  local delivery_id claim status ok event_file alert
+  delivery_id=$(printf '%s' "$item" | jq -r '.delivery_id // empty')
+  case "$delivery_id" in
+    ''|*[!A-Za-z0-9_-]*)
+      log 'ERROR type=format message=invalid_delivery_reference'
+      return 1
+      ;;
+  esac
+
   case "$attempt" in
     ''|*[!0-9]*) attempt=0 ;;
   esac
-  event_file=$(write_event_file "$item" "$attempt" "$source") || return 1
+
+  # 先 claim，再读正文并生成可处理事件；冲突只发不可处理的通知事件。
+  claim=$(claim_delivery "$delivery_id")
+  status=$?
+  case "$status" in
+    0) ;;
+    41) fatal_credential ;;
+    42) fatal_protocol ;;
+    *) return 1 ;;
+  esac
+
+  ok=$(printf '%s' "$claim" | jq -r '.ok // false')
+  if [ "$ok" != true ]; then
+    alert=$(claim_notice "$item" "$claim" "$source") || return 1
+    printf '%s\n' "$alert"
+    # deferred 不写永久 seen：当前 claim 结束后由重连快照重新 claim；watcher 不轮询。
+    [ "$(printf '%s' "$claim" | jq -r '.kind // empty')" = "deferred" ] && return 3
+    return 0
+  fi
+
+  event_file=$(write_event_file "$item" "$claim" "$source")
+  if [ $? -ne 0 ]; then
+    # claim 已占用但不能生成可处理事件：明确告知宿主，避免投递卡在 claimed 且无人知晓。
+    alert=$(printf '%s' "$item" | jq -c --arg source "$source" --argjson claim "$claim" '{
+      type:"delivery_claim_failed",
+      source:$source,
+      delivery_id,
+      room_id:(.room_id // .message.room_id // ""),
+      message_id:(.message_id // .message.message_id // ""),
+      event_id:(.event_id // ""),
+      seq:(.seq // .created_seq // ""),
+      attempt:$claim.attempt,
+      claim_id:$claim.claim_id,
+      claimed_at:$claim.claimed_at,
+      auto_claimed:true,
+      claim_state:"failed",
+      code:"READ_FAILED",
+      reason:"投递已 claim，但读取正文或写事件文件失败",
+      claim:{delivery_id,attempt:$claim.attempt,claim_id:$claim.claim_id},
+      hint:"claim 已占用；先重试读取，或 complete/fail 释放；不要当成可处理投递"
+    }') || return 1
+    printf '%s\n' "$alert"
+    return 0
+  fi
   alert=$(printf '%s' "$item" | jq -c \
     --arg source "$source" \
     --arg event_file "$event_file" \
-    --argjson attempt "$attempt" '{
+    --argjson claim "$claim" '{
       type:"delivery",
       delivery_id,
       room_id:(.room_id // .message.room_id // ""),
@@ -287,7 +483,12 @@ emit_found() {
       sender_id:(.sender_id // .message.sender_id // ""),
       event_id:(.event_id // ""),
       seq:(.seq // .created_seq // ""),
-      attempt:$attempt,
+      attempt:$claim.attempt,
+      claim_id:$claim.claim_id,
+      claimed_at:$claim.claimed_at,
+      auto_claimed:true,
+      claim_state:"claimed",
+      claim:{delivery_id,attempt:$claim.attempt,claim_id:$claim.claim_id},
       source:$source,
       event_file:$event_file
     }')
@@ -332,8 +533,13 @@ emit_pending_snapshot() {
     delivery_attempt=$(printf '%s' "$item" | jq -r '.attempt // 0')
     key="pending:$delivery_id:$delivery_attempt"
     seen "$key" && continue
-    emit_found "$item" "$delivery_attempt" "inbox.snapshot" || return 1
-    mark_seen "$key"
+    emit_found "$item" "$delivery_attempt" "inbox.snapshot"
+    status=$?
+    case "$status" in
+      0) mark_seen "$key" ;;
+      3) ;; # deferred：保留 pending，下一次快照（重连）可重新 claim
+      *) return 1 ;;
+    esac
   done < <(printf '%s' "$inbox" | jq -c --arg me "$MY_ID" '
     .items[]? | select((.message.sender_id // "") != $me)')
   return 0
@@ -372,7 +578,7 @@ handle_ack() {
 
 handle_notification() {
   local json="$1" envelope pending_map pending_status more dropped
-  local item delivery_id event_id fallback key attempt
+  local item delivery_id event_id fallback key attempt status
   envelope=$(printf '%s' "$json" | jq -c '
     select(.method=="notifications/resources/updated")
     | .params._meta["io.agent-network/event"] // empty') || return
@@ -425,8 +631,13 @@ handle_notification() {
     fi
 
     seen "$key" && continue
-    emit_found "$item" "$attempt" "stream" || return 1
-    mark_seen "$key"
+    emit_found "$item" "$attempt" "stream"
+    status=$?
+    case "$status" in
+      0) mark_seen "$key" ;;
+      3) ;; # deferred：不写永久 seen，后续事件或重连快照可重新 claim
+      *) return 1 ;;
+    esac
   done < <(printf '%s' "$envelope" | jq -c --arg me "$MY_ID" '
     .items[]?
     | select(.attention == "action_required")
