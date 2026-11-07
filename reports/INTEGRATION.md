@@ -8,28 +8,31 @@
 | 集成提交 | `fix: integrate A01/A03/G03` |
 | 独立验收前 HEAD | `f3d97c2`（`fix: integrate A01/A03/G03`） |
 | 独立验收修复提交 | `fix(groups): 修复 owner 退群并发与基础波次缺陷` |
-| 运行环境 | Bun 1.4.2，macOS；临时数据目录 `/tmp/an-verify-webots`，端口 `8792` |
+| 合并前基础波次 HEAD | `690795a`（`docs(reports): 校正独立验收修复后的计数与证据`） |
+| 合并的 main | `8c0194f`（ChatGPT 文件上传 / 群友下载语义） |
+| 合并提交 | `de9ef66aadb120f24b1b44269db71770c5708e6b` |
+| 运行环境 | Bun 1.4.2，macOS；临时数据目录 `/tmp/an-integration-merged-8c0194f`，端口 `8792` |
 | Presence 环境 | 服务端与测试进程一致：`AGENT_PRESENCE_ACTIVITY_TTL_MS=5000`、`AGENT_PRESENCE_GRACE_MS=2000`、`AGENT_PRESENCE_SWEEP_MS=1000` |
-| 结论 | typecheck、protocol、acceptance、web、events、drive 全部通过；无阻塞项 |
+| 结论 | 合并后 typecheck、protocol、acceptance、web、events、drive 全部通过；无阻塞项 |
 
 ## 1. 命令与结果
 
 | 命令 | 结果 | 说明 |
 |---|---|---|
-| `bun install` | 通过 | 安装 1 个包，耗时 81.19s |
+| `bun install` | 跳过 | 工作树已有 `node_modules`，合并未改动依赖 |
 | `bun run typecheck` | 通过 | `tsrs --noEmit`，退出码 0 |
-| `bun run test:protocol` | 通过 | `协议验收通过: 724 项` |
+| `bun run test:protocol` | 通过 | `协议验收通过: 731 项`（合并 main 新增检查后） |
 | `bun run test:acceptance` | 通过 | `端到端验收通过: 800 项`（含新增 G03-T04 / A03-T05） |
 | `bun run test:web` | 通过 | `浏览器验收通过 1743 项`（含停用待处理工作用例） |
 | `bun run test:events` | 通过 | `MCP Events 验收通过: 339 项` |
 | `bun run test:drive` | 通过 | `drive checks passed: 47` |
 | `git diff --check` | 通过 | 无 whitespace 错误 |
-| `git status --porcelain` | 干净 | 提交后无未跟踪/未提交文件 |
+| `git status --porcelain` | 干净 | 报告提交前已确认无未跟踪/未提交文件 |
 
 服务端启动方式：
 
 ```bash
-DATA_DIR=/tmp/an-verify-webots \
+DATA_DIR=/tmp/an-integration-merged-8c0194f \
 AGENT_PRESENCE_ACTIVITY_TTL_MS=5000 \
 AGENT_PRESENCE_GRACE_MS=2000 \
 AGENT_PRESENCE_SWEEP_MS=1000 \
@@ -38,6 +41,14 @@ PORT=8792 bun run start
 ```
 
 `AGENTNET_URL` 未设置，协议/端到端验收默认指向 `http://127.0.0.1:8792`；`test:web` 使用自己的临时实例与随机端口。
+
+### 1.1 合并 `origin/main`（`8c0194f`）
+
+- `git fetch origin` 后确认 `origin/main = 8c0194fa73dd5b8388a72f6202de68860fc90951`，与基础波次 HEAD `690795a` 无冲突合并，生成 merge commit `de9ef66`。
+- 自动合并 9 个文件，未产生冲突标记；`git diff --check` 通过。
+- 保留 main 的文件分享修正：`publicUrl` 上传后可直接发送到消息正文，`network_room_file_bind` 只用于进入房间文件列表，不是下载前提；`src/mcp/tools.ts`、`src/mcp/skill.ts`、`public/skills/agent-network-skills.md` 与 `public/skills/harness-chatgpt-web.md` 的描述一致。
+- 保留 A01/A03/G03 语义：Agent 管理授权、好友申请/策略、群角色/owner 转移/公告/审计、`0021` owner 退群 guard 均未回退；`scripts/verify-protocol.ts` 同时包含本波次工具清单检查与 main 新增的凭证/反馈检查，协议计数由 724 增至 731。
+- 合并后未重设计任何任务实现，仅验证集成一致性并记录门禁结果。
 
 ## 2. 审查结论
 
@@ -82,7 +93,7 @@ PORT=8792 bun run start
    - 专项运行：`/tmp/verify-run-a01.ts` → `A01 OK checks=67`；`/tmp/verify-run-a03.ts` → `A03 OK checks=89`；`/tmp/verify-run-g03.ts` → `G03 OK checks=95`。
    - 并发专项：`/tmp/verify-g03-owner-leave-race.ts` → `both_succeeded=0 bad_final_states=0`；`/tmp/verify-g03-orphan-repro.ts` → 40 次未复现（脚本以“未复现”退出 1）；`/tmp/verify-group-add-unfriend-race.ts` → `both_success=20 violations=0`（加人事务先提交，随后解除好友，未出现关系结束先于加人的提交）；`/tmp/verify-a03-idempotency-edge.ts` → `failures=0`。
 
-独立验收修复后重新运行全部门禁：`typecheck` 通过；`protocol` 724 项；`acceptance` 800 项；`web` 1743 项；`events` 339 项；`drive` 47 项。
+独立验收修复后、合并 main 前的门禁：`typecheck` 通过；`protocol` 724 项；`acceptance` 800 项；`web` 1743 项；`events` 339 项；`drive` 47 项。合并 `8c0194f` 后重跑结果见第 1 节，`protocol` 为 731 项，其余计数不变。
 
 ## 4. 失败与阻塞
 
@@ -90,6 +101,14 @@ PORT=8792 bun run start
 - 无阻塞项。
 
 ## 5. 已知限制 / 后续任务
+
+本 PR 只覆盖 F0 + A01/A03/G03，**不是 24 项 P0 全部完成**。以下 P0 仍未实现或未纳入本波次：
+
+- **A 组**：A05、A06。
+- **G 组**：G01、G02、G05、G06、G07。
+- **M 组**：M02、M03。
+- **D 组**：D01–D08。
+- **Q 组**：Q01、Q02、Q04、Q05。
 
 以下为各任务报告已声明的范围外能力，不是本次集成回归：
 
@@ -101,6 +120,8 @@ PORT=8792 bun run start
 
 ## 6. 最终状态
 
-- 代码提交：`fix(groups): 修复 owner 退群并发与基础波次缺陷`（父提交 `f3d97c2`）。
+- 合并代码提交：`de9ef66aadb120f24b1b44269db71770c5708e6b`（merge `origin/main` `8c0194f` 到 `fix/webots-parity-pack`）。
+- 报告提交：`chore: merge origin/main and record integration gates`（仅文档，位于合并提交之后）。
 - 工作树：干净。
-- 测试计数：protocol 724、acceptance 800、web 1743、events 339、drive 47。
+- 合并后测试计数：typecheck 通过、protocol 731、acceptance 800、web 1743、events 339、drive 47。
+- 未部署、未合并 PR、未触发生产验收；等待用户检查 draft PR。
