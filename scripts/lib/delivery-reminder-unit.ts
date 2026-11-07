@@ -137,6 +137,9 @@ function principalFor(db: Database, actorId: string): Principal {
       token_hash: `hash_${actorId}`,
       revoked_at: null,
       created_at: 1,
+      last_used_at: null,
+      revoked_by: null,
+      label: null,
     },
   };
 }

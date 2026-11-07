@@ -93,12 +93,22 @@ async function suspendSubscription(
   ]);
 }
 
-async function credentialUsable(env: Env, credentialId: string): Promise<boolean> {
+async function credentialState(
+  env: Env,
+  credentialId: string,
+): Promise<'ok' | 'credential_revoked' | 'actor_disabled'> {
   const row = await env.DB
-    .prepare('SELECT revoked_at FROM credentials WHERE credential_id = ?')
+    .prepare(
+      `SELECT c.revoked_at AS revoked_at, a.disabled_at AS disabled_at
+         FROM credentials c
+         JOIN actors a ON a.actor_id = c.actor_id
+        WHERE c.credential_id = ?`,
+    )
     .bind(credentialId)
-    .first<{ revoked_at: number | null }>();
-  return row !== null && row.revoked_at === null;
+    .first<{ revoked_at: number | null; disabled_at: number | null }>();
+  if (row === null || row.revoked_at !== null) return 'credential_revoked';
+  if (row.disabled_at !== null) return 'actor_disabled';
+  return 'ok';
 }
 
 async function isActiveMember(env: Env, actorIdValue: string, roomId: string): Promise<boolean> {
@@ -159,8 +169,9 @@ async function deliverOne(
     await suspendSubscription(env, row.subscription_id, 'subscription_expired', now);
     return 'skipped';
   }
-  if (!(await credentialUsable(env, fresh.credential_id))) {
-    await suspendSubscription(env, row.subscription_id, 'credential_revoked', now);
+  const credential = await credentialState(env, fresh.credential_id);
+  if (credential !== 'ok') {
+    await suspendSubscription(env, row.subscription_id, credential, now);
     return 'skipped';
   }
   let roomId: string | undefined;

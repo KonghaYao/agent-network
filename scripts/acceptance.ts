@@ -42,6 +42,7 @@ import {
 import { runUnifiedStreamAcceptance } from './lib/stream-acceptance';
 import { runRoomFileAcceptance } from './lib/room-file-acceptance';
 import { runAgentArchiveAcceptance } from './lib/agent-archive-acceptance';
+import { runAgentIdentityAcceptance } from './lib/agent-identity-acceptance';
 import { runAgentPresenceAcceptance } from './lib/presence-acceptance';
 import { runRoomMonitorAcceptance } from './lib/room-monitor-acceptance';
 import { runRoomTaskAcceptance } from './lib/room-task-acceptance';
@@ -155,6 +156,24 @@ async function main(): Promise<void> {
     });
     const c = await registerIdentity(humanC, { kind: 'human', name: '验收人类 C' });
     check('三个身份注册成功', Boolean(a.actor_id && b.actor_id && c.actor_id), { a: a.actor_id, b: b.actor_id, c: c.actor_id });
+
+    // 旧式自注册 Agent 默认 unclaimed；必须由 Agent 发起、human 确认两端绑定。
+    const mainClaim = await callTool<{ claim_id: string; code: string }>(
+      agentA.client,
+      'network_agent_claim_start',
+      { request_id: newRequestId('claim_start') },
+    );
+    const mainClaimConfirmed = await callTool<{ manager_id: string; agent_id: string }>(
+      humanC.client,
+      'network_agent_claim_confirm',
+      {
+        request_id: newRequestId('claim_confirm'),
+        claim_id: mainClaim.claim_id,
+        code: mainClaim.code,
+      },
+    );
+    check('认领后 human C 成为 Agent A 的管理者', mainClaimConfirmed.manager_id === c.actor_id && mainClaimConfirmed.agent_id === a.actor_id);
+
     check(
       '资源入口只包含统一 stream',
       a.resources.length === 1 && a.resources[0] === STREAM_URI,
@@ -220,7 +239,7 @@ async function main(): Promise<void> {
         name: '  验收 Agent A 全局名  ',
       },
     );
-    checkEqual('任何已注册身份可全局重命名 Agent', renamed.name, '验收 Agent A 全局名');
+    checkEqual('管理者可重命名自己创建的 Agent', renamed.name, '验收 Agent A 全局名');
     const renamedReplay = await callTool<{ actor_id: string; name: string }>(
       humanC.client,
       'network_agent_rename',
@@ -235,7 +254,7 @@ async function main(): Promise<void> {
     checkEqual('rename 对所有人全局生效', renamedMe.name, '验收 Agent A 全局名');
     await expectToolError(
       'rename 未知 actor 返回 NOT_FOUND',
-      callTool(agentA.client, 'network_agent_rename', {
+      callTool(humanC.client, 'network_agent_rename', {
         request_id: newRequestId('rename'),
         actor_id: 'agt_missing_actor',
         name: '不存在',
@@ -244,7 +263,7 @@ async function main(): Promise<void> {
     );
     await expectToolError(
       'rename 目标为人类时返回 INVALID_ARGUMENT',
-      callTool(agentA.client, 'network_agent_rename', {
+      callTool(humanC.client, 'network_agent_rename', {
         request_id: newRequestId('rename'),
         actor_id: c.actor_id,
         name: '人类不能这样改',
@@ -269,6 +288,16 @@ async function main(): Promise<void> {
         kind: 'agent',
         name: '验收重发 Agent',
         sessionId: `sess_${crypto.randomUUID()}`,
+      });
+      const reissueClaim = await callTool<{ claim_id: string; code: string }>(
+        reissueAgent.client,
+        'network_agent_claim_start',
+        { request_id: newRequestId('claim_start') },
+      );
+      await callTool(humanC.client, 'network_agent_claim_confirm', {
+        request_id: newRequestId('claim_confirm'),
+        claim_id: reissueClaim.claim_id,
+        code: reissueClaim.code,
       });
       const reissueRequest = newRequestId('reissue');
       const reissued = await callTool<{
@@ -1279,6 +1308,7 @@ async function main(): Promise<void> {
     } else {
       console.log('  · Drive 未启用，跳过房间文件端到端片段');
     }
+    await runAgentIdentityAcceptance();
     await runAgentArchiveAcceptance();
     await runAgentPresenceAcceptance();
     await runRoomMonitorAcceptance();

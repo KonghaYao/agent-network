@@ -66,6 +66,9 @@ function principalFor(actor: ActorRow): Principal {
       token_hash: 'feedback-unit-token-hash',
       revoked_at: null,
       created_at: 1,
+      last_used_at: null,
+      revoked_by: null,
+      label: null,
     },
   };
 }
@@ -203,17 +206,25 @@ function checkMigrationUpgrade(): void {
                         inbox_min_seq, pending_count, created_at, updated_at)
     VALUES ('usr_legacy', 'human', NULL, 'Legacy Human', '{}', 0, 0, 3, 1, 1);
   `);
-  const before = JSON.stringify(old.prepare('SELECT * FROM actors WHERE actor_id = ?').get('usr_legacy'));
+  const legacyColumns =
+    'actor_id, kind, agent_session_id, name, metadata, inbox_head_seq, inbox_min_seq, ' +
+    'pending_count, created_at, updated_at';
+  const before = JSON.stringify(
+    old.prepare(`SELECT ${legacyColumns} FROM actors WHERE actor_id = ?`).get('usr_legacy'),
+  );
 
   const applied = migrate(old, MIGRATIONS);
   checkEqual(
     '旧库升级按顺序应用剩余迁移',
     applied.join(','),
-    '0009_feedback.sql,0010_room_tasks.sql,0011_delivery_reminders.sql',
+    '0009_feedback.sql,0010_room_tasks.sql,0011_delivery_reminders.sql,' +
+      '0012_identity_management_devices.sql,0018_p0_guards.sql',
   );
   checkEqual(
     '旧库升级保留原业务数据',
-    JSON.stringify(old.prepare('SELECT * FROM actors WHERE actor_id = ?').get('usr_legacy')),
+    JSON.stringify(
+      old.prepare(`SELECT ${legacyColumns} FROM actors WHERE actor_id = ?`).get('usr_legacy'),
+    ),
     before,
   );
   checkEqual('旧库升级后 feedback 表可用', count(old, 'feedback'), 0);

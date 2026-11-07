@@ -29,6 +29,18 @@ const GUARD_CODES: Record<string, BusinessErrorCode> = {
   eventSubscriptionLimit: 'RESOURCE_EXHAUSTED',
   eventSubscriptionGlobal: 'RESOURCE_EXHAUSTED',
   presenceStale: 'CONFLICT',
+  permissionDenied: 'PERMISSION_DENIED',
+  membershipStale: 'MEMBERSHIP_STALE',
+  versionConflict: 'VERSION_CONFLICT',
+  assignmentStale: 'ASSIGNMENT_STALE',
+  quotaExceeded: 'QUOTA_EXCEEDED',
+  requestExpired: 'REQUEST_EXPIRED',
+  inviteExhausted: 'INVITE_EXHAUSTED',
+  blocked: 'BLOCKED',
+  actorDisabled: 'ACTOR_DISABLED',
+  pairingInvalid: 'PAIRING_INVALID',
+  taskState: 'CONFLICT',
+  friendRequired: 'FRIEND_REQUIRED',
 };
 
 const GUARD_MESSAGES: Record<string, string> = {
@@ -51,6 +63,18 @@ const GUARD_MESSAGES: Record<string, string> = {
   eventSubscriptionLimit: '该身份的事件订阅数量达到上限',
   eventSubscriptionGlobal: '全局事件订阅数量达到上限',
   presenceStale: '在线状态已变化',
+  permissionDenied: '当前身份没有执行该管理操作的权限',
+  membershipStale: '成员资格或加入边界已变化',
+  versionConflict: '权限版本已变化，请刷新后重试',
+  assignmentStale: '当前执行资格已失效',
+  quotaExceeded: '资源配额已用尽',
+  requestExpired: '请求已过期，请重新发起',
+  inviteExhausted: '邀请次数已用尽',
+  blocked: '对方已拉黑，操作被拒绝',
+  actorDisabled: 'Agent 已停用，不能继续执行或接收新投递',
+  pairingInvalid: '设备配对挑战无效或已被使用',
+  taskState: '任务状态已变化',
+  friendRequired: '需要有效的好友关系',
 };
 
 /** 限额类 guard 的稳定 data，供 MCP Events 映射 -32025。 */
@@ -126,6 +150,30 @@ export function resolveOperation(row: OperationRow, payloadHash: string): unknow
   } catch {
     throw new BusinessError('CONFLICT', '已保存的幂等结果不可读', { request_id: row.request_id });
   }
+}
+
+export interface ReplayOutcome {
+  found: boolean;
+  result?: unknown;
+}
+
+/**
+ * 在目标授权前解析既有幂等结果。
+ *
+ * `runIdempotent` 本身在目标不存在/非 Agent 时不需要先鉴权，但管理类操作
+ * 还要先读取目标确认 kind；同一 `request_id` 改参数必须在权限检查之前
+ * 收敛为 `IDEMPOTENCY_CONFLICT`，避免未授权的第二个目标把重放误报成
+ * `PERMISSION_DENIED`。命中后调用方直接返回结果，不再执行本次 batch。
+ */
+export async function resolveReplay(
+  db: D1Database,
+  actorId: string,
+  requestId: string,
+  payloadHash: string,
+): Promise<ReplayOutcome> {
+  const existing = await getOperation(db, actorId, requestId);
+  if (!existing) return { found: false };
+  return { found: true, result: resolveOperation(existing, payloadHash) };
 }
 
 export interface IdempotentOptions {

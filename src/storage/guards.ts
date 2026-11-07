@@ -24,6 +24,18 @@ export const GUARD_TABLES = {
   eventSubscriptionLimit: 'guard_event_subscription_limit',
   eventSubscriptionGlobal: 'guard_event_subscription_global',
   presenceStale: 'guard_presence_stale',
+  permissionDenied: 'guard_permission_denied',
+  membershipStale: 'guard_membership_stale',
+  versionConflict: 'guard_version_conflict',
+  assignmentStale: 'guard_assignment_stale',
+  quotaExceeded: 'guard_quota_exceeded',
+  requestExpired: 'guard_request_expired',
+  inviteExhausted: 'guard_invite_exhausted',
+  blocked: 'guard_blocked',
+  actorDisabled: 'guard_actor_disabled',
+  pairingInvalid: 'guard_pairing_invalid',
+  taskState: 'guard_task_state',
+  friendRequired: 'guard_friend_required',
 } as const;
 
 export type GuardName = keyof typeof GUARD_TABLES;

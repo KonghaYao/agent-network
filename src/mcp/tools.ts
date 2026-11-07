@@ -4,10 +4,20 @@ import { z } from 'zod';
 import { isBusinessError } from '../contracts/errors';
 import {
   agentArchiveSchema,
+  agentClaimCancelSchema,
+  agentClaimConfirmSchema,
+  agentClaimStartSchema,
+  agentCreateSchema,
+  agentDelegateGrantSchema,
+  agentDelegateRevokeSchema,
+  agentDisableSchema,
+  agentEnableSchema,
+  agentManagementGetSchema,
   agentReissueTokenSchema,
   agentRenameSchema,
   agentUnarchiveSchema,
   agentsGetSchema,
+  agentsManagedListSchema,
   contactAddSchema,
   contactRemoveSchema,
   contactsListSchema,
@@ -49,6 +59,20 @@ import {
   taskUpdateSchema,
 } from '../contracts/schemas';
 import { agentsGet, archiveAgent, unarchiveAgent } from '../domain/agents';
+import {
+  agentClaimCancel,
+  agentClaimConfirm,
+  agentClaimStart,
+  createAgent,
+} from '../domain/agent-lifecycle';
+import {
+  agentDelegateGrant,
+  agentDelegateRevoke,
+  agentManagementGet,
+  agentsManagedList,
+  disableAgent,
+  enableAgent,
+} from '../domain/agent-management';
 import { contactAdd, contactRemove, contactsList } from '../domain/contacts';
 import {
   deliveryCancel,
@@ -101,10 +125,20 @@ import { login, presenceOf } from '../realtime/presence';
 import { requireActor } from './auth';
 import {
   agentArchiveResultSchema,
+  agentClaimCancelResultSchema,
+  agentClaimConfirmResultSchema,
+  agentClaimStartResultSchema,
+  agentCreateResultSchema,
+  agentDelegateGrantResultSchema,
+  agentDelegateRevokeResultSchema,
+  agentDisableResultSchema,
+  agentEnableResultSchema,
+  agentManagementGetResultSchema,
   agentReissueTokenResultSchema,
   agentRenameResultSchema,
   agentUnarchiveResultSchema,
   agentsGetResultSchema,
+  agentsManagedListResultSchema,
   completeResultSchema,
   contactPageSchema,
   contactSchema,
@@ -332,8 +366,128 @@ export function registerTools(
 
   register(
     server,
+    'network_agent_create',
+    '以当前 human 凭据原子创建 Agent、管理绑定与初始凭据。只有已注册 human 可调用；agent 凭据返回 PERMISSION_DENIED。服务端生成新 token，它只在本工具首次响应出现一次（不会写入 operations 结果），同一 request_id 重放返回 TOKEN_NOT_REPLAYABLE。返回 actor_id、name、agent_session_id、share_url、token、mcp_url、issued_at 与 management（binding_id/permission_version/created_at）。创建的 Agent 默认未被登录，需要该 Agent 用自己的 token 调用 network_login。',
+    agentCreateSchema,
+    agentCreateResultSchema,
+    async (input) => createAgent(db, principal, input, origin),
+  );
+
+  register(
+    server,
+    'network_agent_management_get',
+    '读取 Agent 的管理关系、归档/停用状态、待处理工作与权限版本。允许 active manager、持有 manage_agent 委托的 human，以及 Agent 本人；其他已注册身份返回 PERMISSION_DENIED。management 为 null 表示该 Agent 尚未认领（unclaimed）。浏览器 localStorage 中的 owner 字段不参与判断。',
+    agentManagementGetSchema,
+    agentManagementGetResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentManagementGet(db, principal, input.actor_id, origin);
+    },
+  );
+
+  register(
+    server,
+    'network_agents_managed_list',
+    '按最近绑定时间倒序分页列出当前 human 作为 manager 或 delegate 管理的 Agent。只包含调用者确有权管理的目标；cursor/limit 分页（默认 50，最大 100）。',
+    agentsManagedListSchema,
+    agentsManagedListResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentsManagedList(db, principal, input, origin);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_claim_start',
+    '未认领 Agent 用自身凭据发起认领，生成一次性 claim code。只有 kind=agent 的凭据可调用；已有 active manager 或已有待确认认领时返回 CLAIM_CONFLICT。code 只在首次响应出现一次，服务端只保存 SHA-256；必须在另一端由 human 调用 network_agent_claim_confirm 完成绑定，单端请求不能建立管理权。',
+    agentClaimStartSchema,
+    agentClaimStartResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentClaimStart(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_claim_confirm',
+    'human 用 Agent 发起的一次性 code 完成双端认领并绑定管理者。只有已注册 human 可调用；claim 不存在返回 NOT_FOUND，已结束或已有 manager 返回 CLAIM_CONFLICT，过期返回 REQUEST_EXPIRED，错误 code 返回 PERMISSION_DENIED 并在达到尝试上限后拒绝认领。成功后写入 agent_claim_confirmed 与 agent_management_bound 事件。',
+    agentClaimConfirmSchema,
+    agentClaimConfirmResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentClaimConfirm(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_claim_cancel',
+    'Agent 取消自己尚未确认的认领；只有发起认领的 Agent 可调用，code 立即失效。已确认、已拒绝或已取消的认领返回 CLAIM_CONFLICT。',
+    agentClaimCancelSchema,
+    agentClaimCancelResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentClaimCancel(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_delegate_grant',
+    '当前 manager 给另一位已注册 human 授予 manage_agent 委托（rename/archive/reissue/disable/enable）。delegate 不能转授；不能授予自己或目标 Agent；目标必须是 human。已有 active 委托返回 CLAIM_CONFLICT。委托默认 30 天过期。',
+    agentDelegateGrantSchema,
+    agentDelegateGrantResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentDelegateGrant(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_delegate_revoke',
+    '当前 manager 撤销某位 delegate 的 active 委托；之后其读写立即重新受授权约束。没有 active 委托返回 NOT_FOUND。',
+    agentDelegateRevokeSchema,
+    agentDelegateRevokeResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentDelegateRevoke(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_disable',
+    '停用一个 Agent：拒绝该 Agent 的新写入、新投递、领取、上报、完成与失败；同一事务撤销 active 委托、取消 pending/claimed 投递并递增 permission_version。待处理任务保持未完成并随 stopped 返回。只有 active manager 或持有 manage_agent 委托的 human 可调用；归档状态不影响本操作。',
+    agentDisableSchema,
+    agentDisableResultSchema,
+    async (input) => {
+      requireActor(principal);
+      const result = await disableAgent(db, principal, input);
+      // 停用后不再向该 Agent 的既有连接推送任何新帧；重新启用后需重新连接并 login。
+      env.NOTIFICATION_HUB.closeActorStreams(input.actor_id);
+      return result;
+    },
+  );
+
+  register(
+    server,
+    'network_agent_enable',
+    '重新启用已停用的 Agent，使其凭据恢复可用。不会恢复已取消的投递或已撤销的委托。只有 active manager 或持有 manage_agent 委托的 human 可调用。',
+    agentEnableSchema,
+    agentEnableResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return enableAgent(db, principal, input);
+    },
+  );
+
+  register(
+    server,
     'network_agent_rename',
-    '全局重命名一个 Agent actor；任何已注册身份都可调用，人类 actor 不能被此工具改名。',
+    '重命名 Agent。只有该 Agent 的 active manager 或持有 manage_agent 委托的 human 可调用；其他已注册身份返回 PERMISSION_DENIED，人类目标返回 INVALID_ARGUMENT。名称会 trim，拒绝空值、超过 96 字符或 384 字节、控制字符与换行。可选 expected_permission_version 与当前权限版本不一致时返回 VERSION_CONFLICT。',
     agentRenameSchema,
     agentRenameResultSchema,
     async (input) => {
@@ -345,19 +499,22 @@ export function registerTools(
   register(
     server,
     'network_agent_reissue_token',
-    '注销目标 Agent 的全部现有凭据并签发新 token。任何已注册身份都可调用，权限与 network_agent_rename 一致；人类 actor 返回 INVALID_ARGUMENT，未知 actor 返回 NOT_FOUND。旧 token 立即失效，已有 MCP 连接需改用新 token，SSE/事件订阅因凭据撤销停止。新 token 与 mcp_url 只返回一次（仅首次响应），服务端不保存原文；同一 request_id 重放返回 TOKEN_NOT_REPLAYABLE，必须使用新的 request_id。',
+    '注销目标 Agent 的全部现有凭据并签发新 token。只有该 Agent 的 active manager 或持有 manage_agent 委托的 human 可调用，其他身份返回 PERMISSION_DENIED；人类 actor 返回 INVALID_ARGUMENT，未知 actor 返回 NOT_FOUND。可选 expected_permission_version 与当前权限版本不一致时返回 VERSION_CONFLICT；旧凭据对应的 stream 连接会被服务端关闭。旧 token 立即失效，已有 MCP 连接需改用新 token。新 token 与 mcp_url 只返回一次（仅首次响应），服务端不保存原文；同一 request_id 重放返回 TOKEN_NOT_REPLAYABLE，必须使用新的 request_id。',
     agentReissueTokenSchema,
     agentReissueTokenResultSchema,
     async (input) => {
       requireActor(principal);
-      return reissueAgentToken(db, principal, input, origin);
+      const result = await reissueAgentToken(db, principal, input, origin);
+      // 旧凭据已撤销：已建立的 stream 必须收敛，不能继续收到新帧。
+      env.NOTIFICATION_HUB.closeActorStreams(input.actor_id);
+      return result;
     },
   );
 
   register(
     server,
     'network_agent_archive',
-    '软归档一个 Agent。归档只影响 Agent 管理列表，不改变消息、好友、房间、投递、凭据或在线状态；归档可逆，不能恢复 MCP URL 或 token。任何已注册身份都可调用；目标必须是 Agent，人类 actor 返回 INVALID_ARGUMENT。',
+    '软归档一个 Agent。归档只影响 Agent 管理列表，不改变消息、好友、房间、投递、凭据、在线状态或登录；归档可逆，不能恢复 MCP URL 或 token。只有该 Agent 的 active manager 或持有 manage_agent 委托的 human 可调用；其他身份返回 PERMISSION_DENIED，人类目标返回 INVALID_ARGUMENT。',
     agentArchiveSchema,
     agentArchiveResultSchema,
     async (input) => {
@@ -369,7 +526,7 @@ export function registerTools(
   register(
     server,
     'network_agent_unarchive',
-    '取消 Agent 的软归档。只影响 Agent 管理列表的过滤，不改变消息、好友、房间、投递、凭据或在线状态。任何已注册身份都可调用；目标必须是 Agent。',
+    '取消 Agent 的软归档。只影响 Agent 管理列表的过滤，不改变消息、好友、房间、投递、凭据或在线状态。只有该 Agent 的 active manager 或持有 manage_agent 委托的 human 可调用；其他身份返回 PERMISSION_DENIED。',
     agentUnarchiveSchema,
     agentUnarchiveResultSchema,
     async (input) => {
@@ -381,7 +538,7 @@ export function registerTools(
   register(
     server,
     'network_agents_get',
-    '按 actor_id 批量读取 Agent 管理摘要（1–100 个，去重并保持输入顺序）；不提供全局枚举。返回名称、agent_session_id、share_url 与归档状态；不返回 metadata 或任何凭据。',
+    '按 actor_id 批量读取 Agent 管理摘要（1–100 个，去重并保持输入顺序）；不提供全局枚举。返回名称、agent_session_id、share_url、归档与停用状态；不返回 metadata、管理关系或任何凭据。',
     agentsGetSchema,
     agentsGetResultSchema,
     async (input) => {

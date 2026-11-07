@@ -21,6 +21,16 @@ export type BusinessErrorCode =
   | 'DRIVE_UNAVAILABLE'
   | 'ROOM_FILE_LIMIT'
   | 'RESOURCE_EXHAUSTED'
+  | 'PERMISSION_DENIED'
+  | 'MEMBERSHIP_STALE'
+  | 'VERSION_CONFLICT'
+  | 'ASSIGNMENT_STALE'
+  | 'QUOTA_EXCEEDED'
+  | 'REQUEST_EXPIRED'
+  | 'INVITE_EXHAUSTED'
+  | 'BLOCKED'
+  | 'ACTOR_DISABLED'
+  | 'PAIRING_INVALID'
   | 'CONFLICT';
 
 export interface BusinessErrorBody {

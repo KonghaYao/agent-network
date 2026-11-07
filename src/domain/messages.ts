@@ -173,6 +173,14 @@ export function messageGuardStatements(
       db
         .prepare(
           guardSql(
+            'actorDisabled',
+            "EXISTS (SELECT 1 FROM actors WHERE actor_id = ? AND disabled_at IS NOT NULL)",
+          ),
+        )
+        .bind(recipient),
+      db
+        .prepare(
+          guardSql(
             'queueFull',
             "(SELECT COUNT(*) FROM deliveries WHERE recipient_id = ? AND state = 'pending') + 1 > ?",
           ),

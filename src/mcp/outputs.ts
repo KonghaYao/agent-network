@@ -248,11 +248,159 @@ export const agentSummarySchema = z.object({
   archived: z.boolean(),
   archived_at: z.string().nullable(),
   archived_by: z.string().nullable(),
+  disabled: z.boolean(),
+  disabled_at: z.string().nullable(),
+  disabled_by: z.string().nullable(),
+  disabled_reason: z.string().nullable(),
 });
 
 export const agentsGetResultSchema = z.object({
   items: z.array(agentSummarySchema),
   missing_actor_ids: z.array(z.string()),
+});
+
+export const managementBindingSchema = z.object({
+  binding_id: z.string(),
+  manager_id: z.string(),
+  manager_name: z.string(),
+  status: z.literal('active'),
+  grant_source: z.enum(['created', 'claim', 'transfer', 'legacy']),
+  permission_version: z.number(),
+  created_at: z.string(),
+  confirmed_at: z.string().nullable(),
+});
+
+export const delegationViewSchema = z.object({
+  delegation_id: z.string(),
+  delegate_actor_id: z.string(),
+  scopes: z.array(z.string()),
+  permission_version: z.number(),
+  expires_at: z.string().nullable(),
+});
+
+export const openTaskSchema = z.object({
+  task_id: z.string(),
+  room_id: z.string(),
+  description: z.string(),
+  status: z.enum(['pending', 'claimed']),
+  updated_at: z.string(),
+});
+
+export const pendingWorkSchema = z.object({
+  pending_deliveries: z.number(),
+  claimed_deliveries: z.number(),
+  cancelled_deliveries: z.number(),
+  open_tasks: z.array(openTaskSchema),
+  open_task_count: z.number(),
+});
+
+export const agentManagementGetResultSchema = z.object({
+  actor_id: z.string(),
+  kind: z.literal('agent'),
+  name: z.string(),
+  agent_session_id: z.string().nullable(),
+  share_url: z.string().nullable(),
+  archived: z.boolean(),
+  archived_at: z.string().nullable(),
+  archived_by: z.string().nullable(),
+  disabled: z.boolean(),
+  disabled_at: z.string().nullable(),
+  disabled_by: z.string().nullable(),
+  disabled_reason: z.string().nullable(),
+  my_role: z.enum(['manager', 'delegate', 'agent']),
+  management: managementBindingSchema.nullable(),
+  delegation: delegationViewSchema.nullable(),
+  can_manage: z.boolean(),
+  can_delegate: z.boolean(),
+  pending_work: pendingWorkSchema,
+});
+
+export const agentManagedItemSchema = z.object({
+  actor_id: z.string(),
+  name: z.string(),
+  agent_session_id: z.string().nullable(),
+  share_url: z.string().nullable(),
+  archived: z.boolean(),
+  disabled: z.boolean(),
+  role: z.enum(['manager', 'delegate']),
+  permission_version: z.number(),
+  since: z.string(),
+});
+
+export const agentsManagedListResultSchema = z.object({
+  items: z.array(agentManagedItemSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+});
+
+export const agentCreateResultSchema = z.object({
+  actor_id: z.string(),
+  name: z.string(),
+  agent_session_id: z.string().nullable(),
+  share_url: z.string(),
+  token: z.string(),
+  mcp_url: z.string(),
+  issued_at: z.string(),
+  management: z.object({
+    binding_id: z.string(),
+    permission_version: z.number(),
+    created_at: z.string(),
+  }),
+});
+
+export const agentClaimStartResultSchema = z.object({
+  claim_id: z.string(),
+  agent_id: z.string(),
+  code: z.string(),
+  expires_at: z.string(),
+  max_attempts: z.number(),
+});
+
+export const agentClaimConfirmResultSchema = z.object({
+  claim_id: z.string(),
+  agent_id: z.string(),
+  manager_id: z.string(),
+  binding_id: z.string(),
+  permission_version: z.number(),
+  confirmed_at: z.string(),
+});
+
+export const agentClaimCancelResultSchema = z.object({
+  claim_id: z.string(),
+  status: z.literal('cancelled'),
+});
+
+export const agentDelegateGrantResultSchema = z.object({
+  delegation_id: z.string(),
+  actor_id: z.string(),
+  delegate_actor_id: z.string(),
+  scopes: z.array(z.string()),
+  permission_version: z.number(),
+  expires_at: z.string().nullable(),
+  created_at: z.string(),
+});
+
+export const agentDelegateRevokeResultSchema = z.object({
+  delegation_id: z.string(),
+  actor_id: z.string(),
+  delegate_actor_id: z.string(),
+  status: z.literal('revoked'),
+  revoked_at: z.string(),
+});
+
+export const agentDisableResultSchema = z.object({
+  actor_id: z.string(),
+  disabled: z.literal(true),
+  disabled_at: z.string(),
+  disabled_by: z.string(),
+  disabled_reason: z.string().nullable(),
+  stopped: pendingWorkSchema,
+});
+
+export const agentEnableResultSchema = z.object({
+  actor_id: z.string(),
+  disabled: z.literal(false),
+  enabled_at: z.string(),
 });
 
 export const taskCountsSchema = z.object({

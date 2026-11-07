@@ -453,20 +453,17 @@ function receiptSelector(messageId: string): string {
   return `#messages li.msg-receipt[data-receipt-for="${messageId}"]`;
 }
 
-/** 注册一个 Agent 并加为指定人类的好友，用于群成员添加场景。 */
+/** 创建由指定人类管理的 Agent 并加为好友，用于群成员添加场景。 */
 async function createAgentFriend(token: string, name: string): Promise<Actor> {
-  const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
-  const agent = await rawTool<Actor>(agentToken, 'network_register', {
-    request_id: requestId('reg'),
-    kind: 'agent',
+  const created = await rawTool<Actor>(token, 'network_agent_create', {
+    request_id: requestId('create_agent'),
     name,
-    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
   });
   await rawTool(token, 'network_contact_add', {
     request_id: requestId('contact'),
-    agent_session_id: agent.agent_session_id,
+    agent_session_id: created.agent_session_id,
   });
-  return agent;
+  return created;
 }
 
 /** 批量创建好友，覆盖 network_contacts_list 的 100 条分页与第 2 页读取。 */
@@ -620,6 +617,18 @@ async function fixture(): Promise<{
     kind: 'agent',
     name: '验收 Agent B',
     agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+  });
+  // A01：归档/重发等管理操作只允许管理者或委托；旧自注册 Agent 通过
+  // Agent 发起 + human 确认的双端认领绑定，不再依赖“知道 actor_id 即可管理”。
+  const claim = await rawTool<{ claim_id: string; code: string }>(
+    agentBToken,
+    'network_agent_claim_start',
+    { request_id: requestId('claim') },
+  );
+  await rawTool(humanToken, 'network_agent_claim_confirm', {
+    request_id: requestId('claim'),
+    claim_id: claim.claim_id,
+    code: claim.code,
   });
   for (const agent of [agentA, agentB]) {
     await rawTool(humanToken, 'network_contact_add', {
@@ -1310,18 +1319,22 @@ interface AvatarAgent {
 }
 
 async function registerAvatarAgent(humanToken: string, name: string): Promise<AvatarAgent> {
-  const token = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
-  const actor = await rawTool<Actor>(token, 'network_register', {
-    request_id: requestId('avatar_reg'),
-    kind: 'agent',
+  const created = await rawTool<Actor & { token: string }>(humanToken, 'network_agent_create', {
+    request_id: requestId('avatar_create'),
     name,
-    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
   });
   await rawTool(humanToken, 'network_contact_add', {
     request_id: requestId('avatar_contact'),
-    agent_session_id: actor.agent_session_id,
+    agent_session_id: created.agent_session_id,
   });
-  return { actor, token };
+  return {
+    actor: {
+      actor_id: created.actor_id,
+      name: created.name,
+      agent_session_id: created.agent_session_id,
+    },
+    token: created.token,
+  };
 }
 
 /**
@@ -4587,7 +4600,13 @@ async function main(): Promise<void> {
           const args = argsOf(call);
           return call.name === 'network_room_mark_read' && args && args.room_id;
         });
-        const register = calls.find(function (call) {
+        const agentCreates = calls.filter(function (call) {
+          const args = argsOf(call);
+          return call.name === 'network_agent_create' && args &&
+            args.name === ${JSON.stringify(webAgentName)};
+        });
+        const agentCreate = agentCreates.length === 1 ? agentCreates[0] : null;
+        const registerCalls = calls.filter(function (call) {
           const args = argsOf(call);
           return call.name === 'network_register' && args &&
             args.name === ${JSON.stringify(webAgentName)};
@@ -4605,8 +4624,10 @@ async function main(): Promise<void> {
           markReadCount: markReads.length,
           markReadSeqs: markReads.map(function (call) { return argsOf(call).through_seq; }),
           markReadHumanAuth: markReads.every(function (call) { return call.humanAuth === true; }),
-          registerHumanAuth: register ? register.humanAuth === true : null,
-          registerHasAuth: register ? register.hasAuth === true : null,
+          agentCreateCount: agentCreates.length,
+          agentCreateHumanAuth: agentCreate ? agentCreate.humanAuth === true : null,
+          agentCreateHasAuth: agentCreate ? agentCreate.hasAuth === true : null,
+          registerCount: registerCalls.length,
           contactAddCount: contactAdds.length,
           contactAddHumanAuth: contactAdds.length > 0 &&
             contactAdds.every(function (call) { return call.humanAuth === true; }),
@@ -4620,8 +4641,10 @@ async function main(): Promise<void> {
         markReadCount: number;
         markReadSeqs: string[];
         markReadHumanAuth: boolean;
-        registerHumanAuth: boolean | null;
-        registerHasAuth: boolean | null;
+        agentCreateCount: number;
+        agentCreateHumanAuth: boolean | null;
+        agentCreateHasAuth: boolean | null;
+        registerCount: number;
         contactAddCount: number;
         contactAddHumanAuth: boolean;
         contactAddActorIds: string[];
@@ -4637,14 +4660,17 @@ async function main(): Promise<void> {
         { directCount: webAgentCalls.directCount },
       );
       check(
-        '创建会话使用 human token 而不是新 Agent token',
+        '创建 Agent 使用 human token 调用 network_agent_create 而不是新 Agent token',
         webAgentCalls.directHumanAuth &&
           webAgentCalls.markReadHumanAuth &&
-          webAgentCalls.registerHumanAuth === false &&
-          webAgentCalls.registerHasAuth === true,
+          webAgentCalls.agentCreateCount === 1 &&
+          webAgentCalls.agentCreateHumanAuth === true &&
+          webAgentCalls.agentCreateHasAuth === true &&
+          webAgentCalls.registerCount === 0,
         {
           directHumanAuth: webAgentCalls.directHumanAuth,
-          registerHumanAuth: webAgentCalls.registerHumanAuth,
+          agentCreateHumanAuth: webAgentCalls.agentCreateHumanAuth,
+          registerCount: webAgentCalls.registerCount,
         },
       );
       check(
@@ -15770,6 +15796,17 @@ async function main(): Promise<void> {
         kind: 'agent',
         name: '重发验收 Agent',
         agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      // 自注册 Agent 保持 unclaimed；重发/归档等管理动作要求先完成双端认领。
+      const reissueClaim = await rawTool<{ claim_id: string; code: string }>(
+        reissueOldToken,
+        'network_agent_claim_start',
+        { request_id: requestId('claim_start') },
+      );
+      await rawTool(data.humanToken, 'network_agent_claim_confirm', {
+        request_id: requestId('claim_confirm'),
+        claim_id: reissueClaim.claim_id,
+        code: reissueClaim.code,
       });
       await rawTool(data.humanToken, 'network_contact_add', {
         request_id: requestId('contact'),

@@ -195,6 +195,28 @@ export class NotificationHub {
     return closed;
   }
 
+  /**
+   * 关闭指定 actor 的全部活动 stream 连接。
+   *
+   * 用于凭据轮换与 Agent 停用：旧连接可能持有已撤销/已停用的凭据，
+   * 不能继续接收新帧。传输层收到 graceful close 后发送 complete 帧；
+   * 返回触发的连接数。
+   */
+  closeActorStreams(actorId: string): number {
+    const state = this.#actorStreams.get(actorTopic(actorId));
+    if (!state) return 0;
+    let closed = 0;
+    for (const close of [...state.shutdown.values()]) {
+      try {
+        close();
+        closed += 1;
+      } catch {
+        // 单条连接关闭失败不能阻塞其他连接收口。
+      }
+    }
+    return closed;
+  }
+
   /** 统一 stream 连接统计，供健康检查与测试；actors 只统计仍有连接的 actor。 */
   streamStats(): { actors: number; connections: number; online: number } {
     let actors = 0;

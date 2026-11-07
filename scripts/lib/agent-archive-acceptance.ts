@@ -112,6 +112,18 @@ export async function runAgentArchiveAcceptance(): Promise<void> {
       sessionId: `archive_peer_${crypto.randomUUID()}`,
     });
 
+    // 自注册 Agent 默认 unclaimed；owner 必须先完成双端认领才能归档。
+    const archiveClaim = await callTool<{ claim_id: string; code: string }>(
+      agentConn.client,
+      'network_agent_claim_start',
+      { request_id: newRequestId('claim_start') },
+    );
+    await callTool(ownerConn.client, 'network_agent_claim_confirm', {
+      request_id: newRequestId('claim_confirm'),
+      claim_id: archiveClaim.claim_id,
+      code: archiveClaim.code,
+    });
+
     const collector = notificationCollector(agentConn.client);
     const subscription = await openSubscription(agentConn.client, [STREAM_URI]);
     const loginBefore = await callTool<LoginResult>(agentConn.client, 'network_login');

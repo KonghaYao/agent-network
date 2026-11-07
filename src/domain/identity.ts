@@ -20,6 +20,12 @@ import { guardSql } from '../storage/guards';
 import { getActor, getActorBySession, getCredentialByHash } from '../storage/queries';
 import type { ActorRow, CredentialRow, RecoveryTicketRow } from '../storage/rows';
 import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
+import { managementEventStatements } from './agent-management';
+import {
+  managementPermissionGuard,
+  managementVersionGuard,
+  requireManageAgent,
+} from './agent-access';
 import { actorId, actorResources, type Principal } from './principal';
 
 export interface IdentityView {
@@ -302,10 +308,11 @@ export async function renameMe(
 }
 
 /**
- * 全局重命名 Agent actor。
+ * 重命名 Agent actor。
  *
- * 产品负责人已确认：任何已注册 principal 都可以重命名任意 Agent，
- * 服务端不做所有权检查；人类 actor 不能通过此工具改名。
+ * 只有该 Agent 的 active manager 或持有 `manage_agent` 委托的 human 可调用；
+ * 目标必须是 Agent。群角色、联系人和浏览器本地 owner 字段都不构成授权。
+ * 事务内再次执行权限 guard，避免“先读后写”窗口。
  */
 export async function renameAgent(
   db: D1Database,
@@ -313,16 +320,17 @@ export async function renameAgent(
   input: AgentRenameInput,
 ): Promise<AgentRenameResult> {
   const caller = actorId(principal);
-  const target = await getActor(db, input.actor_id);
-  if (!target) throw new BusinessError('NOT_FOUND', '目标 actor 不存在');
-  if (target.kind !== 'agent') {
-    throw new BusinessError('INVALID_ARGUMENT', '只能重命名 agent actor');
-  }
-
-  const name = input.name.trim();
   const at = nowMs();
+  const { target } = await requireManageAgent(db, principal, input.actor_id, at);
+  const name = normalizeActorName(input.name);
+  const eventKey = `profile:${target.actor_id}:${input.request_id}`;
   const result = { actor_id: target.actor_id, name, updated_at: String(at) };
   const payloadHash = await sha256Hex(stableStringify(input));
+  const versionGuard = managementVersionGuard(
+    db,
+    target.actor_id,
+    input.expected_permission_version,
+  );
 
   await runIdempotent(db, {
     actorId: caller,
@@ -331,9 +339,25 @@ export async function renameAgent(
     result,
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
+      managementPermissionGuard(db, target.actor_id, caller, at),
+      ...(versionGuard ? [versionGuard] : []),
       db
         .prepare("UPDATE actors SET name = ?, updated_at = ? WHERE actor_id = ? AND kind = 'agent'")
         .bind(name, at, target.actor_id),
+      eventStatement(
+        db,
+        {
+          eventKey,
+          scopeKind: 'inbox',
+          scopeId: target.actor_id,
+          eventType: 'profile_updated',
+          refId: target.actor_id,
+          metadata: { actor_id: caller, name },
+        },
+        at,
+      ),
+      outboxStatement(db, { topic: inboxTopic(target.actor_id), eventKey }, at),
+      inboxHeadStatement(db, target.actor_id, eventKey, at, 0),
     ],
   });
 
@@ -357,8 +381,9 @@ interface AgentReissueTokenStored {
 /**
  * 注销目标 Agent 的全部现有凭据并签发新 token。
  *
- * 权限与 `network_agent_rename` 一致：任何已注册 principal 都可调用，
- * 不做所有权检查；human 目标返回 INVALID_ARGUMENT。
+ * 只有该 Agent 的 active manager 或持有 `manage_agent` 委托的 human 可调用；
+ * 权限 guard 与凭据写入在同一事务内执行，因此“撤销委托/停用”和“重发 token”
+ * 并发时按提交顺序裁决：失去权限的一方返回 PERMISSION_DENIED。
  *
  * raw token 只存在于本次响应：operations 只保存 actor_id/revoked_count/issued_at。
  * 同一 request_id 重放时 runIdempotent 返回反序列化的结果对象，与本次新建的
@@ -371,13 +396,8 @@ export async function reissueAgentToken(
   origin: string,
 ): Promise<AgentReissueTokenResult> {
   const caller = actorId(principal);
-  const target = await getActor(db, input.actor_id);
-  if (!target) throw new BusinessError('NOT_FOUND', '目标 actor 不存在');
-  if (target.kind !== 'agent') {
-    throw new BusinessError('INVALID_ARGUMENT', '只能为 agent actor 重发 token');
-  }
-
   const at = nowMs();
+  const { target } = await requireManageAgent(db, principal, input.actor_id, at);
   const token = randomToken(32);
   const tokenHash = await hashToken(token);
   const credentialId = newId('cred');
@@ -391,6 +411,12 @@ export async function reissueAgentToken(
     issued_at: String(at),
   };
   const payloadHash = await sha256Hex(stableStringify(input));
+  const eventKey = `credential_reissue:${target.actor_id}:${input.request_id}`;
+  const versionGuard = managementVersionGuard(
+    db,
+    target.actor_id,
+    input.expected_permission_version,
+  );
 
   const outcome = await runIdempotent(db, {
     actorId: caller,
@@ -399,15 +425,32 @@ export async function reissueAgentToken(
     result: stored,
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
+      managementPermissionGuard(db, target.actor_id, caller, at),
+      ...(versionGuard ? [versionGuard] : []),
       db
-        .prepare('UPDATE credentials SET revoked_at = ? WHERE actor_id = ? AND revoked_at IS NULL')
-        .bind(at, target.actor_id),
+        .prepare(
+          'UPDATE credentials SET revoked_at = ?, revoked_by = ? WHERE actor_id = ? AND revoked_at IS NULL',
+        )
+        .bind(at, caller, target.actor_id),
       db
         .prepare(
           `INSERT INTO credentials (credential_id, actor_id, device_id, token_hash, revoked_at, created_at)
            VALUES (?, ?, 'reissue', ?, NULL, ?)`,
         )
         .bind(credentialId, target.actor_id, tokenHash, at),
+      ...managementEventStatements(db, {
+        eventKey,
+        agentId: target.actor_id,
+        managerId: caller,
+        type: 'credential_reissued',
+        metadata: {
+          actor_id: target.actor_id,
+          revoked_count: stored.revoked_count,
+          changed_by: caller,
+        },
+        at,
+        notifyAgent: true,
+      }),
     ],
   });
 

@@ -38,6 +38,7 @@ export const agentRenameSchema = z.object({
   request_id: requestId,
   actor_id: id(),
   name: z.string().trim().min(1).max(LIMITS.actorNameMax),
+  expected_permission_version: z.number().int().positive().optional(),
 });
 
 /**
@@ -52,13 +53,86 @@ export const meRenameSchema = z.object({
 });
 
 /** 注销目标 Agent 的全部现有凭据并签发新 token；token 只返回一次。 */
-export const agentReissueTokenSchema = z.object({ request_id: requestId, actor_id: id() });
+export const agentReissueTokenSchema = z.object({
+  request_id: requestId,
+  actor_id: id(),
+  expected_permission_version: z.number().int().positive().optional(),
+});
 
 /** 软归档 Agent；只影响管理列表，不参与授权。 */
-export const agentArchiveSchema = z.object({ request_id: requestId, actor_id: id() });
+export const agentArchiveSchema = z.object({
+  request_id: requestId,
+  actor_id: id(),
+  expected_permission_version: z.number().int().positive().optional(),
+});
 
 /** 取消 Agent 归档；可逆且幂等。 */
-export const agentUnarchiveSchema = z.object({ request_id: requestId, actor_id: id() });
+export const agentUnarchiveSchema = z.object({
+  request_id: requestId,
+  actor_id: id(),
+  expected_permission_version: z.number().int().positive().optional(),
+});
+
+/**
+ * 创建 Agent：当前 human 凭据原子创建 Agent、管理绑定与初始 credential。
+ *
+ * 新 Agent token 由服务端生成且只在首次响应返回；agent_session_id 可省略，
+ * 由服务端生成。
+ */
+export const agentCreateSchema = z.object({
+  request_id: requestId,
+  name: z.string().min(1).max(LIMITS.actorNameMax),
+  agent_session_id: id(256).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const agentManagementGetSchema = z.object({ actor_id: id() });
+
+export const agentsManagedListSchema = z.object({
+  cursor,
+  limit: z.number().int().min(1).max(LIMITS.managedAgentsPageMax).optional(),
+});
+
+/** Agent 用自身凭据发起一次性认领；返回的 claim code 只在首次响应出现。 */
+export const agentClaimStartSchema = z.object({ request_id: requestId, expires_in_ms: z.number().int().min(60_000).max(3_600_000).optional() });
+
+/** human 用 claim code 完成双端认领。 */
+export const agentClaimConfirmSchema = z.object({
+  request_id: requestId,
+  claim_id: id(),
+  code: z.string().min(16).max(256),
+});
+
+/** Agent 取消自己尚未确认的认领。 */
+export const agentClaimCancelSchema = z.object({ request_id: requestId, claim_id: id() });
+
+/** 管理者授予有限管理委托；target 必须是已注册 human。 */
+export const agentDelegateGrantSchema = z.object({
+  request_id: requestId,
+  actor_id: id(),
+  delegate_actor_id: id(),
+  scopes: z.array(z.enum(['manage_agent'])).min(1).max(1).optional(),
+  expires_in_ms: z.number().int().min(60_000).max(365 * 24 * 60 * 60_000).optional(),
+});
+
+export const agentDelegateRevokeSchema = z.object({
+  request_id: requestId,
+  actor_id: id(),
+  delegate_actor_id: id(),
+});
+
+export const agentDisableSchema = z.object({
+  request_id: requestId,
+  actor_id: id(),
+  reason: z.string().max(LIMITS.agentDisableReasonBytes * 2).optional(),
+  expected_permission_version: z.number().int().positive().optional(),
+});
+
+export const agentEnableSchema = z.object({
+  request_id: requestId,
+  actor_id: id(),
+  expected_permission_version: z.number().int().positive().optional(),
+});
 
 /** 按已知 actor_id 批量读取 Agent 摘要；不做全局枚举。 */
 export const agentsGetSchema = z.object({
@@ -300,6 +374,16 @@ export type MeRenameInput = z.infer<typeof meRenameSchema>;
 export type AgentReissueTokenInput = z.infer<typeof agentReissueTokenSchema>;
 export type AgentArchiveInput = z.infer<typeof agentArchiveSchema>;
 export type AgentUnarchiveInput = z.infer<typeof agentUnarchiveSchema>;
+export type AgentCreateInput = z.infer<typeof agentCreateSchema>;
+export type AgentManagementGetInput = z.infer<typeof agentManagementGetSchema>;
+export type AgentsManagedListInput = z.infer<typeof agentsManagedListSchema>;
+export type AgentClaimStartInput = z.infer<typeof agentClaimStartSchema>;
+export type AgentClaimConfirmInput = z.infer<typeof agentClaimConfirmSchema>;
+export type AgentClaimCancelInput = z.infer<typeof agentClaimCancelSchema>;
+export type AgentDelegateGrantInput = z.infer<typeof agentDelegateGrantSchema>;
+export type AgentDelegateRevokeInput = z.infer<typeof agentDelegateRevokeSchema>;
+export type AgentDisableInput = z.infer<typeof agentDisableSchema>;
+export type AgentEnableInput = z.infer<typeof agentEnableSchema>;
 export type AgentsGetInput = z.infer<typeof agentsGetSchema>;
 export type RecoveryRedeemInput = z.infer<typeof recoveryRedeemSchema>;
 export type ContactsListInput = z.infer<typeof contactsListSchema>;

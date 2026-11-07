@@ -29,6 +29,13 @@ export async function authenticate(db: D1Database, request: Request): Promise<Pr
   }
   const actor = await getActor(db, credential.actor_id);
   if (!actor) throw new BusinessError('CREDENTIAL_INVALID', '凭据绑定的 actor 不存在');
+  if (actor.kind === 'agent' && actor.disabled_at !== null) {
+    // 停用后旧凭据不能继续工具调用、读取或建立流订阅；恢复只能由管理者调用
+    // network_agent_enable，disabled 状态本身不删除凭据。
+    throw new BusinessError('ACTOR_DISABLED', 'Agent 已停用，旧凭据不能继续使用', {
+      actor_id: actor.actor_id,
+    });
+  }
   return { credentialHash, actor, credential };
 }
 

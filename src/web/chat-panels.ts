@@ -66,6 +66,8 @@ export function sidebarPane(): string {
       role="menuitem">复制 Agent 连接提示词</button>
     <button class="room-menu-item" id="room-menu-archive" type="button"
       role="menuitem" hidden>归档</button>
+    <button class="room-menu-item danger" id="room-menu-toggle-disabled" type="button"
+      role="menuitem" hidden>停用 Agent</button>
     <button class="room-menu-item danger" id="room-menu-reissue-token" type="button"
       role="menuitem" hidden>注销并重发 token</button>
     <p class="room-menu-status" id="room-menu-status" role="status" aria-live="polite" hidden></p>

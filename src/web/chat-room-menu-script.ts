@@ -22,6 +22,16 @@ const ROOM_MENU_REISSUED_LABEL = '已重发';
 const ROOM_MENU_ARCHIVE_LABEL = '归档';
 const ROOM_MENU_ARCHIVING_LABEL = '正在归档…';
 const ROOM_MENU_ARCHIVED_STATUS = '已归档，可在已归档 Agents 中恢复';
+const ROOM_MENU_DISABLE_LABEL = '停用 Agent';
+const ROOM_MENU_ENABLE_LABEL = '启用 Agent';
+const ROOM_MENU_DISABLING_LABEL = '正在停用…';
+const ROOM_MENU_ENABLING_LABEL = '正在启用…';
+const ROOM_MENU_DISABLED_STATUS = '已停用：该 Agent 不能再执行或接收新投递';
+const ROOM_MENU_ENABLED_STATUS = '已启用：该 Agent 可以重新执行与接收投递';
+const ROOM_MENU_DISABLE_CONFIRM =
+  '停用后该 Agent 的旧凭据会被拒绝，领取/上报/完成/失败与新投递全部停止；' +
+  '待处理任务不会标记完成。确定继续？';
+const ROOM_MENU_PERMISSION_DENIED = '只有该 Agent 的管理者或受托人可以执行此操作。';
 const ROOM_MENU_REISSUE_CONFIRM =
   '这会注销该 Agent 的旧 token，现有 MCP/SSE/事件连接会失效；新 token 只显示一次。';
 const ROOM_MENU_REISSUED_STATUS = '已重发并复制新提示词；旧连接需改用新 token。';
@@ -82,6 +92,11 @@ function closeRoomMenu() {
     archiveButton.textContent = ROOM_MENU_ARCHIVE_LABEL;
     archiveButton.disabled = false;
   }
+  const toggleButton = document.getElementById('room-menu-toggle-disabled');
+  if (toggleButton) {
+    toggleButton.textContent = ROOM_MENU_DISABLE_LABEL;
+    toggleButton.disabled = false;
+  }
   roomMenuResetStatus();
 }
 
@@ -110,6 +125,7 @@ function openRoomMenu(link, x, y) {
   const button = document.getElementById('room-menu-copy-prompt');
   const reissueButton = document.getElementById('room-menu-reissue-token');
   const archiveButton = document.getElementById('room-menu-archive');
+  const toggleButton = document.getElementById('room-menu-toggle-disabled');
   if (!menu || !button) return;
   const roomId = link.getAttribute('data-room-id') || '';
   if (!roomId) return;
@@ -141,6 +157,12 @@ function openRoomMenu(link, x, y) {
     archiveButton.hidden = !isAgentDirect;
     archiveButton.textContent = ROOM_MENU_ARCHIVE_LABEL;
     archiveButton.disabled = false;
+  }
+  if (toggleButton) {
+    // 停用/启用只对单聊 Agent 显示；具体是停用还是启用由服务端管理状态决定。
+    toggleButton.hidden = !isAgentDirect;
+    toggleButton.textContent = ROOM_MENU_DISABLE_LABEL;
+    toggleButton.disabled = false;
   }
   roomMenuResetStatus();
   positionRoomMenu(menu, x, y);
@@ -480,6 +502,85 @@ async function archiveRoomAgent() {
   }
 }
 
+/**
+ * 停用/启用当前 direct Agent。
+ *
+ * 先读取管理关系确认当前状态，再调用对应工具；停用前必须二次确认。
+ * 只有该 Agent 的管理者或受托人成功；PERMISSION_DENIED 时显示明确提示，
+ * 不把按钮隐藏当作授权。
+ */
+async function toggleRoomAgentDisabled() {
+  const target = roomMenuTarget;
+  if (!target || roomMenuBusy) return;
+  const status = document.getElementById('room-menu-status');
+  const button = document.getElementById('room-menu-toggle-disabled');
+  const copyButton = document.getElementById('room-menu-copy-prompt');
+  const reissueButton = document.getElementById('room-menu-reissue-token');
+  const archiveButton = document.getElementById('room-menu-archive');
+  if (!button) return;
+  roomMenuBusy = true;
+  button.disabled = true;
+  if (copyButton) copyButton.disabled = true;
+  if (reissueButton) reissueButton.disabled = true;
+  if (archiveButton) archiveButton.disabled = true;
+  roomMenuResetStatus();
+  try {
+    const me = await ensureIdentity();
+    if (roomMenuTarget !== target) return;
+    const peer = await roomMenuPeerAgent(target, me);
+    if (!peer) throw new Error('该会话不是单聊 Agent');
+    const state = await callTool('network_agent_management_get', { actor_id: peer.actor_id });
+    if (roomMenuTarget !== target) return;
+    const disabled = Boolean(state && state.disabled);
+    if (!disabled && !window.confirm(ROOM_MENU_DISABLE_CONFIRM)) {
+      if (status) {
+        status.textContent = '已取消停用。';
+        status.hidden = false;
+      }
+      return;
+    }
+    button.textContent = disabled ? ROOM_MENU_ENABLING_LABEL : ROOM_MENU_DISABLING_LABEL;
+    let result;
+    if (disabled) {
+      result = await callTool('network_agent_enable', {
+        request_id: requestId('web_agent_enable'),
+        actor_id: peer.actor_id
+      });
+    } else {
+      result = await callTool('network_agent_disable', {
+        request_id: requestId('web_agent_disable'),
+        actor_id: peer.actor_id
+      });
+    }
+    if (!result || result.actor_id !== peer.actor_id) throw new Error('停用/启用结果不完整');
+    showToast(disabled ? ROOM_MENU_ENABLED_STATUS : ROOM_MENU_DISABLED_STATUS);
+    if (roomMenuTarget === target) closeRoomMenu();
+  } catch (error) {
+    const code = error && error.code ? error.code : '';
+    const detail = code === 'PERMISSION_DENIED'
+      ? ROOM_MENU_PERMISSION_DENIED
+      : (error && error.message ? error.message : String(error));
+    const message = '停用/启用失败：' + detail;
+    if (roomMenuTarget === target && status) {
+      status.textContent = message;
+      status.hidden = false;
+      status.classList.remove('ok');
+      status.classList.add('error');
+    } else {
+      showToast(message);
+    }
+  } finally {
+    roomMenuBusy = false;
+    if (button && roomMenuTarget === target) {
+      button.disabled = false;
+      button.textContent = ROOM_MENU_DISABLE_LABEL;
+    }
+    if (copyButton) copyButton.disabled = false;
+    if (reissueButton) reissueButton.disabled = false;
+    if (archiveButton) archiveButton.disabled = false;
+  }
+}
+
 function clearRoomMenuPress() {
   if (roomMenuPressTimer) {
     clearTimeout(roomMenuPressTimer);
@@ -548,6 +649,12 @@ const roomMenuArchiveButton = document.getElementById('room-menu-archive');
 if (roomMenuArchiveButton) {
   roomMenuArchiveButton.addEventListener('click', function () {
     archiveRoomAgent().catch(function () {});
+  });
+}
+const roomMenuToggleButton = document.getElementById('room-menu-toggle-disabled');
+if (roomMenuToggleButton) {
+  roomMenuToggleButton.addEventListener('click', function () {
+    toggleRoomAgentDisabled().catch(function () {});
   });
 }
 

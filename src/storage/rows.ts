@@ -10,7 +10,58 @@ export interface ActorRow {
   /** 管理列表软归档时间；NULL 表示未归档，不参与任何授权判断。 */
   archived_at: number | null;
   archived_by: string | null;
+  /** 非 NULL 表示停用：拒绝新写入、新投递、claim/report/complete/fail。 */
+  disabled_at: number | null;
+  disabled_by: string | null;
+  disabled_reason: string | null;
   created_at: number;
+  updated_at: number;
+}
+
+export interface AgentManagementRow {
+  binding_id: string;
+  agent_id: string;
+  manager_id: string;
+  status: 'active' | 'revoked' | 'expired';
+  grant_source: 'created' | 'claim' | 'transfer' | 'legacy';
+  scopes_json: string;
+  permission_version: number;
+  initiated_by: string;
+  confirmed_by: string | null;
+  created_at: number;
+  confirmed_at: number | null;
+  expires_at: number | null;
+  revoked_at: number | null;
+  revoked_by: string | null;
+  updated_at: number;
+}
+
+export interface AgentClaimRow {
+  claim_id: string;
+  agent_id: string;
+  claim_code_hash: string;
+  status: 'pending' | 'confirmed' | 'rejected' | 'cancelled' | 'expired';
+  attempts: number;
+  max_attempts: number;
+  created_at: number;
+  expires_at: number;
+  confirmed_by: string | null;
+  confirmed_at: number | null;
+  updated_at: number;
+}
+
+export interface AgentDelegationRow {
+  delegation_id: string;
+  agent_id: string;
+  delegate_actor_id: string;
+  status: 'active' | 'revoked' | 'expired';
+  scopes_json: string;
+  permission_version: number;
+  created_by: string;
+  created_at: number;
+  expires_at: number | null;
+  revoked_at: number | null;
+  revoked_by: string | null;
   updated_at: number;
 }
 
@@ -21,6 +72,9 @@ export interface CredentialRow {
   token_hash: string;
   revoked_at: number | null;
   created_at: number;
+  last_used_at: number | null;
+  revoked_by: string | null;
+  label: string | null;
 }
 
 export interface ContactRow {

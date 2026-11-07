@@ -282,6 +282,16 @@ async function main(): Promise<void> {
     'network_me_rename',
     'network_login',
     'network_profile_update',
+    'network_agent_create',
+    'network_agent_management_get',
+    'network_agents_managed_list',
+    'network_agent_claim_start',
+    'network_agent_claim_confirm',
+    'network_agent_claim_cancel',
+    'network_agent_delegate_grant',
+    'network_agent_delegate_revoke',
+    'network_agent_disable',
+    'network_agent_enable',
     'network_agent_rename',
     'network_agent_reissue_token',
     'network_agent_archive',
@@ -345,6 +355,16 @@ async function main(): Promise<void> {
     'network_me',
     'network_me_rename',
     'network_login',
+    'network_agent_create',
+    'network_agent_management_get',
+    'network_agents_managed_list',
+    'network_agent_claim_start',
+    'network_agent_claim_confirm',
+    'network_agent_claim_cancel',
+    'network_agent_delegate_grant',
+    'network_agent_delegate_revoke',
+    'network_agent_disable',
+    'network_agent_enable',
     'network_agent_rename',
     'network_agent_reissue_token',
     'network_agent_archive',
@@ -629,7 +649,8 @@ async function main(): Promise<void> {
     reissueDescription.includes('注销目标 Agent 的全部现有凭据') &&
       reissueDescription.includes('只返回一次') &&
       reissueDescription.includes('TOKEN_NOT_REPLAYABLE') &&
-      reissueDescription.includes('任何已注册身份'),
+      reissueDescription.includes('active manager') &&
+      reissueDescription.includes('PERMISSION_DENIED'),
     reissueTool?.description,
   );
   const reissueInput = JSON.stringify(reissueTool?.inputSchema ?? {});
@@ -654,7 +675,8 @@ async function main(): Promise<void> {
     'archive 描述声明只影响管理列表且不改变业务',
     archiveDescription.includes('只影响 Agent 管理列表') &&
       archiveDescription.includes('不改变消息') &&
-      archiveDescription.includes('任何已注册身份'),
+      archiveDescription.includes('active manager') &&
+      archiveDescription.includes('PERMISSION_DENIED'),
     archiveTool?.description,
   );
   check(
@@ -1040,13 +1062,66 @@ async function main(): Promise<void> {
     revokedFeedbackRegister.body,
   )?.actor_id;
   check('撤销前反馈目标 Agent 注册成功', typeof revokedFeedbackActor === 'string');
+  // 自注册 Agent 默认未被认领；先完成双端认领，再由其管理者重发 token。
+  const feedbackManagerIssued = await rawRpc('tools/call', {
+    name: 'network_issue_token',
+    arguments: {},
+  });
+  const feedbackManagerToken = (
+    feedbackManagerIssued.body.result as { structuredContent?: { token?: string } } | undefined
+  )?.structuredContent?.token;
+  check('反馈检查管理者取得 token', typeof feedbackManagerToken === 'string');
+  const feedbackManagerRegister = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_register',
+      arguments: {
+        request_id: newRequestId('feedback_manager_reg'),
+        kind: 'human',
+        name: '反馈检查管理者',
+      },
+    },
+    { token: feedbackManagerToken },
+  );
+  check(
+    '反馈检查管理者注册成功',
+    (feedbackManagerRegister.body.result as { isError?: boolean } | undefined)?.isError !== true,
+  );
+  const feedbackClaimStart = await rawRpc(
+    'tools/call',
+    { name: 'network_agent_claim_start', arguments: { request_id: newRequestId('feedback_claim') } },
+    { token: revokedFeedbackToken },
+  );
+  const feedbackClaim = toolStructured<{ claim_id?: string; code?: string }>(
+    feedbackClaimStart.body,
+  );
+  check(
+    '反馈目标 Agent 可发起认领',
+    typeof feedbackClaim?.claim_id === 'string' && typeof feedbackClaim?.code === 'string',
+  );
+  const feedbackClaimConfirm = await rawRpc(
+    'tools/call',
+    {
+      name: 'network_agent_claim_confirm',
+      arguments: {
+        request_id: newRequestId('feedback_claim_confirm'),
+        claim_id: feedbackClaim?.claim_id,
+        code: feedbackClaim?.code,
+      },
+    },
+    { token: feedbackManagerToken },
+  );
+  check(
+    '反馈检查管理者确认认领',
+    (feedbackClaimConfirm.body.result as { isError?: boolean } | undefined)?.isError !== true,
+  );
   const revokedFeedbackReissue = await rawRpc(
     'tools/call',
     {
       name: 'network_agent_reissue_token',
       arguments: { request_id: newRequestId('revoked_feedback_reissue'), actor_id: revokedFeedbackActor },
     },
-    { token: secondToken },
+    { token: feedbackManagerToken },
   );
   check(
     '撤销反馈目标 Agent 凭据成功',
@@ -1631,10 +1706,10 @@ async function main(): Promise<void> {
       homeHtml.includes('不要截图、发群或写入日志'),
   );
   check(
-    '新建 Agent 使用 issue_token 的新 token 注册',
-    homeHtml.includes('callToolWithToken') &&
-      homeHtml.includes('network_issue_token') &&
-      homeHtml.includes("requestId('web_agent_reg')"),
+    '新建 Agent 通过 network_agent_create 原子创建',
+    homeHtml.includes('network_agent_create') &&
+      homeHtml.includes("requestId('web_agent_create')") &&
+      !homeHtml.includes('network_issue_token'),
   );
   check('首页包含手机扫码入口', homeHtml.includes('id="device-handoff"') && homeHtml.includes('手机扫码'));
   check(
@@ -2423,9 +2498,19 @@ async function main(): Promise<void> {
     },
   );
   checkEqual(
-    'self rename 不改变 network_agent_rename 的开放边界',
-    agentGlobalRenamed.data?.name,
-    '分享页检查全局名',
+    'network_agent_rename 拒绝非管理者',
+    agentGlobalRenamed.code,
+    'PERMISSION_DENIED',
+  );
+  const shareAfterDeniedRename = await rawToolCall<{ name: string }>(
+    shareToken,
+    'network_me',
+    {},
+  );
+  checkEqual(
+    '非管理者改名失败后名称保持不变',
+    shareAfterDeniedRename.data?.name,
+    '分享页检查 Agent 自助名',
   );
   const humanTarget = await rawToolCall(browserToken, 'network_agent_rename', {
     request_id: `agent_rename_human_${crypto.randomUUID().replaceAll('-', '')}`,

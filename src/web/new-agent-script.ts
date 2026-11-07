@@ -2,9 +2,10 @@
  * 新建 Agent 弹窗的客户端片段。
  *
  * 由 `chatClientScript` 拼进主脚本共享作用域，因此可复用
- * `ensureIdentity`、`callTool`、`callToolWithToken`、`requestId` 与
- * `legacyCopyText`。新 Agent 的 token/URL/提示词只保存在本片段的闭包变量与
- * 弹窗输入框/文本区里，关闭即清空；注册成功后把该 Agent 自己的 MCP URL
+ * `ensureIdentity`、`callTool`、`requestId` 与 `legacyCopyText`。创建走
+ * `network_agent_create`：服务端在同一事务内建立 Agent、管理绑定与初始
+ * 凭据。新 Agent 的 token/URL/提示词只保存在本片段的闭包变量与弹窗
+ * 输入框/文本区里，关闭即清空；创建成功后把该 Agent 自己的 MCP URL
  * 写入当前 human 的本地 Agents 注册表，供会话右键提示词复用，不写
  * human token、提示词或 console。
  */
@@ -182,31 +183,33 @@ async function newAgentCreate(event) {
   if (newAgentResultElement) newAgentResultElement.hidden = true;
   newAgentSetError('');
   try {
-    // 只复用浏览器 human 身份来申请 token；注册必须使用下面返回的新 token。
+    // 用浏览器 human 身份创建 Agent；服务端在同一事务中绑定管理关系与初始凭据。
     const me = await ensureIdentity();
     if (seq !== newAgentRequestSeq) return;
-    const issued = await callTool('network_issue_token', {});
+    const created = await callTool('network_agent_create', {
+      request_id: requestId('web_agent_create'),
+      name: name
+    });
     if (seq !== newAgentRequestSeq) return;
-    const token = issued && issued.token;
-    const url = issued && issued.url;
+    const token = created && created.token;
+    const url = created && created.mcp_url;
     if (typeof token !== 'string' || token.length === 0 ||
         typeof url !== 'string' || url.length === 0) {
       throw new Error('服务端未返回有效的 MCP URL');
     }
-    // 在注册成功前只把 token 留在内存，失败时连同 URL 一起丢弃。
+    if (!created || typeof created.actor_id !== 'string') {
+      throw new Error('创建成功但未返回 actor 信息');
+    }
+    // token 只在首次响应返回一次；确认后才写入页面字段。
     newAgentToken = token;
     newAgentUrl = url;
-    const agentSessionId = 'sess_' + crypto.randomUUID().replaceAll('-', '');
-    const registered = await callToolWithToken('network_register', {
-      request_id: requestId('web_agent_reg'),
-      kind: 'agent',
-      name: name,
-      agent_session_id: agentSessionId
-    }, token);
-    if (seq !== newAgentRequestSeq) return;
-    if (!registered || typeof registered.actor_id !== 'string') {
-      throw new Error('注册成功但未返回 actor 信息');
-    }
+    const agentSessionId = typeof created.agent_session_id === 'string'
+      ? created.agent_session_id
+      : '';
+    const registered = {
+      actor_id: created.actor_id,
+      share_url: created.share_url
+    };
     newAgentCreated = true;
     newAgentBusy = false;
     if (newAgentNameInput) newAgentNameInput.disabled = true;

@@ -251,11 +251,6 @@ async function callTool(name, args, tokenOverride, signal) {
   return item ? JSON.parse(item.text) : {};
 }
 
-/** 用指定 token 调工具；新建 Agent 用它注册，不改变浏览器 human 身份。 */
-function callToolWithToken(name, args, token) {
-  return callTool(name, args, token);
-}
-
 /**
  * 首次访问自动生成并绑定 human 身份。
  *

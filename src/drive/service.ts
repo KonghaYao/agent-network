@@ -61,11 +61,11 @@ export function createDrive(env: Env, options: DriveOptions): DriveRuntime {
       try {
         principal = await authenticate(env.DB, request);
       } catch (error) {
-        // 已撤销凭据交给 handleMcp 返回 CREDENTIAL_INVALID；MCPP 的
-        // resolveScope 不能把它提前改写成 UNAUTHENTICATED。此时返回占位
+        // 凭据撤销/停用交给 handleMcp 返回 CREDENTIAL_INVALID 或 ACTOR_DISABLED；
+        // MCPP 的 resolveScope 不能把它提前改写成 UNAUTHENTICATED。此时返回占位
         // scope 仅用于进入 handler，真正执行文件工具前仍会再次鉴权。
-        if (operation === 'mcp' && isBusinessError(error) && error.code === 'CREDENTIAL_INVALID') {
-          return { key: 'credential:revoked' };
+        if (operation === 'mcp' && isBusinessError(error)) {
+          return { key: 'credential:rejected' };
         }
         throw new FileError('UNAUTHENTICATED');
       }

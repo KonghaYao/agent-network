@@ -29,6 +29,17 @@ export const LIMITS = {
   pendingPerActor: 500,
   /** `network_agents_get` 单次批量读取上限；不做全局枚举。 */
   agentLookupMax: 100,
+  /** `network_agents_managed_list` 默认 / 最大条数。 */
+  managedAgentsPageDefault: 50,
+  managedAgentsPageMax: 100,
+  /** 一次性认领码有效期（毫秒）。 */
+  agentClaimTtlMs: 15 * 60_000,
+  /** 认领码错误尝试上限；达到后 claim 置 rejected。 */
+  agentClaimMaxAttempts: 5,
+  /** 管理委托默认有效期（毫秒）。 */
+  agentDelegationTtlMs: 30 * 24 * 60 * 60_000,
+  /** 停用原因 UTF-8 字节上限。 */
+  agentDisableReasonBytes: 512,
   /** 浏览器本地 Agents 注册表上限；超过后保留最新条目。 */
   webAgentRegistryMax: 100,
   /** 单次成员变更上限。 */

@@ -1,13 +1,18 @@
-import { BusinessError } from '../contracts/errors';
 import type {
   AgentArchiveInput,
   AgentUnarchiveInput,
   AgentsGetInput,
 } from '../contracts/schemas';
 import { nowMs, sha256Hex, stableStringify } from '../storage/db';
-import { getActor, getActorsByIds } from '../storage/queries';
+import { getActorsByIds } from '../storage/queries';
 import type { ActorRow } from '../storage/rows';
-import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
+import { operationsStatement, resolveReplay, runIdempotent } from '../storage/transactions/runner';
+import {
+  managementPermissionGuard,
+  managementVersionGuard,
+  requireAgentTarget,
+  requireManageAgent,
+} from './agent-access';
 import { actorId, type Principal } from './principal';
 
 /**
@@ -15,6 +20,9 @@ import { actorId, type Principal } from './principal';
  * 与网页侧栏的默认会话过滤；网页只提供已归档列表的恢复入口，不提供 Agents
  * 管理/归档界面。不得用 `archived_at` 拒绝消息、登录、投递或凭据，
  * 也不写 events/outbox、不改变 `pending_count`、`rooms.head_seq` 或在线状态。
+ *
+ * 归档/取消归档属于 `agent.management.write`：只有 active manager 或持有
+ * `manage_agent` 委托的 human 可调用，事务内重放权限与权限版本 guard。
  */
 
 export interface AgentArchiveResult {
@@ -40,6 +48,10 @@ export interface AgentSummary {
   archived: boolean;
   archived_at: string | null;
   archived_by: string | null;
+  disabled: boolean;
+  disabled_at: string | null;
+  disabled_by: string | null;
+  disabled_reason: string | null;
 }
 
 export interface AgentsGetResult {
@@ -64,17 +76,11 @@ export function agentSummaryView(actor: ActorRow, origin: string): AgentSummary 
     archived: actor.archived_at !== null,
     archived_at: actor.archived_at === null ? null : String(actor.archived_at),
     archived_by: actor.archived_by,
+    disabled: actor.disabled_at !== null,
+    disabled_at: actor.disabled_at === null ? null : String(actor.disabled_at),
+    disabled_by: actor.disabled_by,
+    disabled_reason: actor.disabled_reason,
   };
-}
-
-/** 归档目标必须是已存在的 Agent；权限与 `network_agent_rename` 一致，不做所有权检查。 */
-async function requireAgentTarget(db: D1Database, targetId: string): Promise<ActorRow> {
-  const target = await getActor(db, targetId);
-  if (!target) throw new BusinessError('NOT_FOUND', '目标 actor 不存在');
-  if (target.kind !== 'agent') {
-    throw new BusinessError('INVALID_ARGUMENT', '只能归档 agent actor');
-  }
-  return target;
 }
 
 /** 软归档；重复归档保留首次 `archived_at` / `archived_by`，可逆且不删除数据。 */
@@ -84,15 +90,25 @@ export async function archiveAgent(
   input: AgentArchiveInput,
 ): Promise<AgentArchiveResult> {
   const caller = actorId(principal);
-  const target = await requireAgentTarget(db, input.actor_id);
   const at = nowMs();
+  const target = await requireAgentTarget(db, input.actor_id);
+  const payloadHash = await sha256Hex(stableStringify(input));
+  // 归档结果不含秘密；同一 request_id 改参数先收敛为 IDEMPOTENCY_CONFLICT，
+  // 保持幂等语义。真正的新写入仍由事务内 guard 重新授权。
+  const replay = await resolveReplay(db, caller, input.request_id, payloadHash);
+  if (replay.found) return replay.result as AgentArchiveResult;
+  await requireManageAgent(db, principal, input.actor_id, at);
   const result: AgentArchiveResult = {
     actor_id: target.actor_id,
     archived: true,
     archived_at: String(target.archived_at ?? at),
     archived_by: target.archived_by ?? caller,
   };
-  const payloadHash = await sha256Hex(stableStringify(input));
+  const versionGuard = managementVersionGuard(
+    db,
+    target.actor_id,
+    input.expected_permission_version,
+  );
 
   await runIdempotent(db, {
     actorId: caller,
@@ -101,6 +117,8 @@ export async function archiveAgent(
     result,
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
+      managementPermissionGuard(db, target.actor_id, caller, at),
+      ...(versionGuard ? [versionGuard] : []),
       db
         .prepare(
           `UPDATE actors SET archived_at = COALESCE(archived_at, ?),
@@ -121,15 +139,24 @@ export async function unarchiveAgent(
   input: AgentUnarchiveInput,
 ): Promise<AgentUnarchiveResult> {
   const caller = actorId(principal);
-  const target = await requireAgentTarget(db, input.actor_id);
   const at = nowMs();
+  const target = await requireAgentTarget(db, input.actor_id);
+  const payloadHash = await sha256Hex(stableStringify(input));
+  // 与归档一致：非秘密结果先按 request_id 重放，新写入再走事务 guard。
+  const replay = await resolveReplay(db, caller, input.request_id, payloadHash);
+  if (replay.found) return replay.result as AgentUnarchiveResult;
+  await requireManageAgent(db, principal, input.actor_id, at);
   const result: AgentUnarchiveResult = {
     actor_id: target.actor_id,
     archived: false,
     archived_at: null,
     archived_by: null,
   };
-  const payloadHash = await sha256Hex(stableStringify(input));
+  const versionGuard = managementVersionGuard(
+    db,
+    target.actor_id,
+    input.expected_permission_version,
+  );
 
   await runIdempotent(db, {
     actorId: caller,
@@ -138,6 +165,8 @@ export async function unarchiveAgent(
     result,
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
+      managementPermissionGuard(db, target.actor_id, caller, at),
+      ...(versionGuard ? [versionGuard] : []),
       db
         .prepare(
           `UPDATE actors SET archived_at = NULL, archived_by = NULL, updated_at = ?
