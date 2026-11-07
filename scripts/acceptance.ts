@@ -56,6 +56,7 @@ import { runOwnerTransferAcceptance } from './lib/owner-transfer-acceptance';
 import { runGroupInviteAcceptance } from './lib/group-invite-acceptance';
 import { runGroupHistoryAcceptance } from './lib/group-history-acceptance';
 import { runGroupPolicyAcceptance } from './lib/group-policy-acceptance';
+import { runMessageReliabilityAcceptance } from './lib/m02-acceptance';
 import {
   ensureTestCertificate,
   removeTestData,
@@ -1328,6 +1329,7 @@ async function main(): Promise<void> {
     await runGroupInviteAcceptance();
     await runGroupHistoryAcceptance({ hasDrive });
     await runGroupPolicyAcceptance({ hasDrive });
+    await runMessageReliabilityAcceptance();
 
     console.log(`端到端验收通过: ${checksPassed()} 项`);
   } finally {

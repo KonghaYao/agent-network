@@ -47,6 +47,7 @@ import {
   meRenameSchema,
   messageReadSchema,
   messageSendSchema,
+  messageSendStatusSchema,
   profileUpdateSchema,
   recoveryCreateSchema,
   recoveryRedeemSchema,
@@ -134,6 +135,7 @@ import {
   historyList,
   messageRead,
   messageSend,
+  messageSendStatus,
   roomMarkRead,
 } from '../domain/messages';
 import {
@@ -230,6 +232,7 @@ import {
   roomTaskResultSchema,
   roomTaskSummarySchema,
   sendResultSchema,
+  messageSendStatusPageSchema,
   syncPageSchema,
 } from './outputs';
 import type { Principal } from '../domain/principal';
@@ -1160,6 +1163,19 @@ export function registerTools(
       });
       return result;
     },
+  );
+
+  register(
+    server,
+    'network_message_send_status',
+    '按自己持久化的 client_message_id 对账发送结果，用于服务端已提交但响应丢失时判断是否还需要重试。只返回 message_id、room_id、created_seq、delivery_ids 与正文长度等定位信息，不返回正文或 preview；不要求当前仍是房间成员。found: false 才表示尚未提交。',
+    messageSendStatusSchema,
+    messageSendStatusPageSchema,
+    async (input) => {
+      requireActor(principal);
+      return messageSendStatus(db, principal, input);
+    },
+    { readOnlyHint: true },
   );
 
   register(

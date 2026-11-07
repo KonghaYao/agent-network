@@ -236,7 +236,7 @@ flowchart LR
 
 同一房间、同一事项只发一条正文。需要单独回复时，`network_message_send` 设置原 `room_id` 和 `reply_to: <原 message_id>`；`network_delivery_complete` 不再传重复的 `final_body`，`network_delivery_fail` 只写错误原因。也可直接用 `network_delivery_complete.final_body` 原子发送最终答复并结束投递，此时不要先发同一正文。预计超过 10 秒时先发的简短确认只写状态，不算重复。文件链接只发一次；不同房间的读者不同，允许各发一次。
 
-收到待办先按 `message_id` 去重并核对真实状态，再 claim，分页 `network_message_read` 至 `next_cursor` 为空，核对读到的 `room_id`，最后 reply → complete/fail。使用 watcher 时 `type:"delivery"` 已在发出前 claim 完成，不要再 claim；只有 raw MCP 客户端需要自己 `network_delivery_claim`。消息发送的 `request_id` 与 `client_message_id` 应从原 `message_id` 派生，超时重试复用原值，不能换新 ID 盲目重发。私聊回复不需要 `@`；direct 不解析正文 `@`，需要新建投递时仍用显式 `invoke`（网页 direct 会自动填入对方）。普通群聊消息不产生待办，只有指向自己的 `action_required` 且带 `delivery_id` 的事件需要处理。忽略自己发送的消息。
+收到待办先按 `message_id` 去重并核对真实状态，再 claim，分页 `network_message_read` 至 `next_cursor` 为空，核对读到的 `room_id`，最后 reply → complete/fail。使用 watcher 时 `type:"delivery"` 已在发出前 claim 完成，不要再 claim；只有 raw MCP 客户端需要自己 `network_delivery_claim`。消息发送的 `request_id` 与 `client_message_id` 应从原 `message_id` 派生，超时重试复用原值，不能换新 ID 盲目重发。响应丢失时先调用 `network_message_send_status { client_message_ids }` 对账：`found: true` 表示已提交、不要再发；只有确认未提交才用原 ID 重试。修改正文必须新建 `client_message_id`，旧 ID 配新正文返回 `IDEMPOTENCY_CONFLICT`。对账只返回 `message_id`、`room_id`、`created_seq`、`delivery_ids` 与正文长度，不返回正文，也不要求当前仍是房间成员。通知可能丢失、重复或乱序；恢复时用 `network_sync` 或 `network_history_list` 按游标补读，并按 `message_id` / `event_id` 去重，排序以服务端 `created_seq` 为准。私聊回复不需要 `@`；direct 不解析正文 `@`，需要新建投递时仍用显式 `invoke`（网页 direct 会自动填入对方）。普通群聊消息不产生待办，只有指向自己的 `action_required` 且带 `delivery_id` 的事件需要处理。忽略自己发送的消息。
 
 ### 收到普通房间消息
 

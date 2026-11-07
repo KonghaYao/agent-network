@@ -418,6 +418,13 @@ export const APP_STYLE = `
   .msg.has-receipt { margin-bottom: 6px; }
   .msg-receipt { margin-top: 0; }
   .msg-receipt.stale span { color: #b26a00; }
+  /* 本地发送意图：只展示状态，不进入时间线排序与未读；失败时提供重试。 */
+  .msg-outbox { gap: 6px; align-items: center; flex-wrap: wrap; }
+  .msg-outbox span { color: var(--wx-muted); }
+  .msg-outbox button { border: 0; padding: 2px 5px; border-radius: 3px;
+    background: transparent; color: var(--wx-link); font-size: 11px; cursor: pointer; }
+  .msg-outbox button:hover { background: var(--wx-hover); }
+  .msg-outbox .outbox-dismiss { color: var(--wx-muted); }
 
   .mention-picker { position: absolute; left: 16px; bottom: 74px; z-index: 5;
     min-width: 190px; max-width: min(320px, calc(100% - 32px)); max-height: 220px;

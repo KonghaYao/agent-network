@@ -583,6 +583,20 @@ async function waitForText(page: Page, selector: string, text: string, timeout =
   );
 }
 
+/** 等待服务端消息气泡（不含本地发送状态行），用于 UI 自发消息的断言。 */
+async function waitForMessageText(page: Page, text: string, timeout = 10_000): Promise<void> {
+  await page.waitForFunction(
+    `(() => {
+      const items = document.querySelectorAll('#messages .msg');
+      return Array.from(items).some(
+        (item) => item.textContent && item.textContent.indexOf(${JSON.stringify(text)}) >= 0,
+      );
+    })()`,
+    undefined,
+    { timeout },
+  );
+}
+
 interface PaneLayout {
   chatWidth: number;
   paneWidth: number;
@@ -2654,6 +2668,386 @@ async function runTaskAcceptance(
     } finally {
       await dark.context.close();
     }
+  } finally {
+    await context.close();
+  }
+}
+
+/**
+ * M02 网页发送状态：跨房隔离、响应丢失先对账、失败重试复用原 ID、刷新恢复。
+ *
+ * 故障注入只针对 `network_message_send`；对账与历史读取走真实服务端。
+ */
+async function runMessageOutboxAcceptance(
+  browser: Browser,
+  base: string,
+  allErrors: string[],
+): Promise<void> {
+  console.log('· M02 发送状态与可靠补读 UI');
+  const humanToken = crypto.randomUUID();
+  await rawTool<Actor>(humanToken, 'network_register', {
+    request_id: requestId('m02_human'),
+    kind: 'human',
+    name: 'M02 网页人类',
+  });
+  const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+  const agent = await rawTool<Actor>(agentToken, 'network_register', {
+    request_id: requestId('m02_agent'),
+    kind: 'agent',
+    name: 'M02 网页 Agent',
+    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+  });
+  await rawBefriend(humanToken, agentToken, { actor_id: agent.actor_id });
+  const roomA = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('m02_room'),
+    kind: 'group',
+    title: 'M02 发送状态群',
+    members: [agent.actor_id],
+  });
+  const roomB = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('m02_room'),
+    kind: 'group',
+    title: 'M02 第二会话',
+    members: [agent.actor_id],
+  });
+  const roomAId = roomA.room.room_id;
+  const roomBId = roomB.room.room_id;
+  await acceptRoomInvites(agentToken, roomAId);
+  await acceptRoomInvites(agentToken, roomBId);
+
+  const { context, page } = await makeContext(
+    browser,
+    humanToken,
+    { width: 1280, height: 800 },
+    allErrors,
+  );
+  let heldRelease: (() => void) | null = null;
+  let holdNext = false;
+  let loseNext = false;
+  let failNextRetryable = false;
+  let failNextPermanent = false;
+  const outboxRows = (): Locator => page.locator('#messages .msg-outbox');
+  /**
+   * 状态行按稳定 `client_message_id` 定位：正文预览会截断，文本匹配在
+   * 长正文下不可靠；意图被清理后返回不存在的 ID，count 仍为 0。
+   */
+  const outboxFor = async (marker: string): Promise<Locator> => {
+    const intent = (await outboxItems()).find((item) => item.body.includes(marker));
+    return page.locator(
+      `#messages .msg-outbox[data-client-message-id="${intent ? intent.client_message_id : '__missing__'}"]`,
+    );
+  };
+  const sendCallsFor = async (
+    marker: string,
+  ): Promise<{ request_id?: string; client_message_id?: string; body?: string }[]> =>
+    (await page.evaluate(
+      `(function () {
+        return (window.__mcpCalls || [])
+          .filter(function (call) {
+            return call.name === 'network_message_send' &&
+              call.body && call.body.params && call.body.params.arguments &&
+              String(call.body.params.arguments.body || '').indexOf(${JSON.stringify(marker)}) >= 0;
+          })
+          .map(function (call) { return call.body.params.arguments; });
+      })()`,
+    )) as { request_id?: string; client_message_id?: string; body?: string }[];
+  const outboxItems = async (): Promise<
+    { client_message_id: string; body: string; status: string; message_id?: string }[]
+  > =>
+    (await page.evaluate(
+      `(function () {
+        const items = [];
+        for (let index = 0; index < window.localStorage.length; index += 1) {
+          const key = window.localStorage.key(index);
+          if (!key || key.indexOf('agent-network-outbox:v1:') !== 0) continue;
+          try {
+            const parsed = JSON.parse(window.localStorage.getItem(key) || '[]');
+            if (Array.isArray(parsed)) items.push.apply(items, parsed);
+          } catch (error) {
+            // 损坏的本地意图不应让验收中断；生产代码同样按空列表处理。
+          }
+        }
+        return items;
+      })()`,
+    )) as {
+      client_message_id: string;
+      body: string;
+      status: string;
+      message_id?: string;
+    }[];
+
+  try {
+    await page.route('**/mcp', async (route) => {
+      const request = route.request();
+      if (request.headers()['mcp-name'] !== 'network_message_send') {
+        await route.continue();
+        return;
+      }
+      if (holdNext) {
+        holdNext = false;
+        await new Promise<void>((resolve) => {
+          heldRelease = resolve;
+        });
+        await route.continue();
+        return;
+      }
+      if (loseNext) {
+        loseNext = false;
+        // 服务端正常提交，但客户端拿不到响应。
+        await route.fetch();
+        await route.abort('failed');
+        return;
+      }
+      const body = request.postDataJSON() as { id?: unknown } | null;
+      if (failNextRetryable) {
+        failNextRetryable = false;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({ code: 'RATE_LIMITED', message: '模拟限流' }),
+                },
+              ],
+            },
+          }),
+        });
+        return;
+      }
+      if (failNextPermanent) {
+        failNextPermanent = false;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({ code: 'NOT_MEMBER', message: '模拟越权' }),
+                },
+              ],
+            },
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.goto(`${base}/c/${roomAId}`);
+    await waitRoom(page, roomAId, 'M02 发送状态群');
+
+    // A. 发送中切群：状态与草稿不跨房间，迟到响应不覆盖新房间。
+    const markerA = `M02 跨房发送 ${crypto.randomUUID()}`;
+    holdNext = true;
+    await page.locator('#body').fill(markerA);
+    await page.locator('#send').click();
+    await waitUntil(async () => (await outboxRows().count()) === 1, 'A 显示发送中状态行');
+    check(
+      '发送中状态行显示本地意图',
+      ((await outboxRows().first().textContent()) ?? '').includes('发送中'),
+      await outboxRows().first().textContent(),
+    );
+    await waitUntil(() => heldRelease !== null, 'A 的发送请求已挂起');
+    await page.locator(roomLink(roomBId)).click();
+    await waitRoom(page, roomBId, 'M02 第二会话');
+    checkEqual('切换房间后 B 不显示 A 的发送状态', await outboxRows().count(), 0);
+    checkEqual('切换房间后 B 草稿为空', await page.locator('#body').inputValue(), '');
+    await page.locator('#body').fill('B 的独立草稿');
+    heldRelease!();
+    await waitUntil(
+      async () => {
+        const items = await outboxItems();
+        return items.some((item) => item.body.includes(markerA) && item.status === 'committed');
+      },
+      'A 的意图在后台标记为已提交',
+    );
+    checkEqual(
+      'A 的迟到响应不覆盖 B 草稿',
+      await page.locator('#body').inputValue(),
+      'B 的独立草稿',
+    );
+    checkEqual('A 的已提交状态不渲染到 B', await outboxRows().count(), 0);
+    await page.locator(roomLink(roomAId)).click();
+    await waitRoom(page, roomAId, 'M02 发送状态群');
+    await waitUntil(
+      async () =>
+        (await page.locator('#messages .msg').filter({ hasText: markerA }).count()) === 1,
+      'A 时间线出现已提交消息',
+    );
+    await waitUntil(async () => (await outboxRows().count()) === 0, 'A 的已提交状态行清理');
+    checkEqual(
+      '切回 A 后只有一条跨房消息',
+      await page.locator('#messages .msg').filter({ hasText: markerA }).count(),
+      1,
+    );
+    const historyA = await rawTool<{ items: { preview: string }[] }>(
+      humanToken,
+      'network_history_list',
+      { room_id: roomAId, limit: 50 },
+    );
+    checkEqual(
+      '服务端只有一条跨房消息',
+      historyA.items.filter((item) => item.preview.includes(markerA)).length,
+      1,
+    );
+    await page.locator(roomLink(roomBId)).click();
+    await waitRoom(page, roomBId, 'M02 第二会话');
+    checkEqual(
+      '往返切换后 B 草稿保持',
+      await page.locator('#body').inputValue(),
+      'B 的独立草稿',
+    );
+    checkEqual('B 中仍不显示 A 的状态行', await outboxRows().count(), 0);
+    await page.locator(roomLink(roomAId)).click();
+    await waitRoom(page, roomAId, 'M02 发送状态群');
+
+    // B. 服务端已提交但响应丢失：先对账，不生成第二条消息。
+    const markerB = `M02 响应丢失 ${crypto.randomUUID()}`;
+    loseNext = true;
+    await page.locator('#body').fill(markerB);
+    await page.locator('#send').click();
+    await waitUntil(
+      async () =>
+        (await page.locator('#messages .msg').filter({ hasText: markerB }).count()) === 1,
+      '对账后补拉已提交消息',
+      15_000,
+    );
+    await waitUntil(async () => (await page.locator('#body').inputValue()) === '', '对账成功后清空草稿');
+    const statusB = (await page.locator('#status').textContent()) ?? '';
+    check('响应丢失不显示发送失败', !statusB.includes('发送失败'), statusB);
+    const reconcileCalls = (await page.evaluate(
+      `(window.__mcpCalls || []).filter(function (call) { return call.name === 'network_message_send_status'; }).length`,
+    )) as number;
+    check('响应丢失后先调用发送对账', reconcileCalls > 0, reconcileCalls);
+    const historyB = await rawTool<{ items: { preview: string }[] }>(
+      humanToken,
+      'network_history_list',
+      { room_id: roomAId, limit: 50 },
+    );
+    checkEqual(
+      '响应丢失后服务端只有一条消息',
+      historyB.items.filter((item) => item.preview.includes(markerB)).length,
+      1,
+    );
+    check(
+      '对账确认已提交后不保留本地意图',
+      !(await outboxItems()).some((item) => item.body.includes(markerB)),
+      await outboxItems(),
+    );
+    checkEqual('对账确认后不显示重试按钮', await (await outboxFor(markerB)).count(), 0);
+
+    // C. 可重试失败：显示重试，重试复用原 request_id/client_message_id。
+    const markerC = `M02 可重试失败 ${crypto.randomUUID()}`;
+    failNextRetryable = true;
+    await page.locator('#body').fill(markerC);
+    await page.locator('#send').click();
+    await waitForText(page, '#status', '发送失败：模拟限流');
+    await (await outboxFor(markerC)).waitFor();
+    checkEqual('可重试失败保留草稿', await page.locator('#body').inputValue(), markerC);
+    checkEqual('可重试失败提供重试按钮', await (await outboxFor(markerC)).locator('.outbox-retry').count(), 1);
+    await (await outboxFor(markerC)).locator('.outbox-retry').click();
+    await waitUntil(
+      async () =>
+        (await page.locator('#messages .msg').filter({ hasText: markerC }).count()) === 1,
+      '重试后出现消息',
+      15_000,
+    );
+    const retryCalls = await sendCallsFor(markerC);
+    checkEqual('重试共发出两次发送调用', retryCalls.length, 2);
+    checkEqual(
+      '重试复用原 client_message_id',
+      new Set(retryCalls.map((call) => call.client_message_id)).size,
+      1,
+    );
+    checkEqual(
+      '重试复用原 request_id',
+      new Set(retryCalls.map((call) => call.request_id)).size,
+      1,
+    );
+    const historyC = await rawTool<{ items: { preview: string }[] }>(
+      humanToken,
+      'network_history_list',
+      { room_id: roomAId, limit: 50 },
+    );
+    checkEqual(
+      '重试成功不生成第二条消息',
+      historyC.items.filter((item) => item.preview.includes(markerC)).length,
+      1,
+    );
+    await waitUntil(async () => (await (await outboxFor(markerC)).count()) === 0, '重试成功后清理状态行');
+
+    // D. 不可重试失败 + 刷新恢复 + 移除。
+    const markerD = `M02 失败持久化 ${crypto.randomUUID()}`;
+    failNextPermanent = true;
+    await page.locator('#body').fill(markerD);
+    await page.locator('#send').click();
+    await waitForText(page, '#status', '发送失败：模拟越权');
+    await (await outboxFor(markerD)).waitFor();
+    checkEqual('不可重试失败不提供重试按钮', await (await outboxFor(markerD)).locator('.outbox-retry').count(), 0);
+    checkEqual('不可重试失败提供移除按钮', await (await outboxFor(markerD)).locator('.outbox-dismiss').count(), 1);
+    await page.reload();
+    await waitRoom(page, roomAId, 'M02 发送状态群');
+    await waitUntil(
+      async () => (await (await outboxFor(markerD)).count()) === 1,
+      '刷新后恢复本地失败状态',
+    );
+    check(
+      '刷新后失败状态仍可读',
+      ((await (await outboxFor(markerD)).textContent()) ?? '').includes('发送失败'),
+      await (await outboxFor(markerD)).textContent(),
+    );
+    await (await outboxFor(markerD)).locator('.outbox-dismiss').click();
+    await waitUntil(async () => (await (await outboxFor(markerD)).count()) === 0, '移除本地失败意图');
+    check(
+      '移除后本地不再保留失败意图',
+      !(await outboxItems()).some((item) => item.body.includes(markerD)),
+      await outboxItems(),
+    );
+
+    // E. 修改正文后重发必须新建意图，旧 ID 不被复用。
+    const markerE = `M02 修改正文原意图 ${crypto.randomUUID()}`;
+    failNextRetryable = true;
+    await page.locator('#body').fill(markerE);
+    await page.locator('#send').click();
+    await waitForText(page, '#status', '发送失败：模拟限流');
+    const failedE = await sendCallsFor(markerE);
+    checkEqual('修改正文前有一次失败发送', failedE.length, 1);
+    const edited = `M02 修改正文新意图 ${crypto.randomUUID()}`;
+    await page.locator('#body').fill(edited);
+    await page.locator('#send').click();
+    await waitUntil(
+      async () =>
+        (await page.locator('#messages .msg').filter({ hasText: edited }).count()) === 1,
+      '修改正文后发送成功',
+      15_000,
+    );
+    const editedCalls = await sendCallsFor(edited);
+    checkEqual('修改正文后发出新请求', editedCalls.length, 1);
+    check(
+      '修改正文后使用新的 client_message_id',
+      editedCalls[0]?.client_message_id !== failedE[0]?.client_message_id,
+      { before: failedE[0]?.client_message_id, after: editedCalls[0]?.client_message_id },
+    );
+    check(
+      '原失败意图仍保留原正文',
+      (await outboxItems()).some(
+        (item) => item.body.includes(markerE) && item.status === 'failed',
+      ),
+      await outboxItems(),
+    );
+    await (await outboxFor(markerE)).locator('.outbox-dismiss').click();
+    await waitUntil(async () => (await (await outboxFor(markerE)).count()) === 0, '清理修改正文前的失败意图');
   } finally {
     await context.close();
   }
@@ -8064,7 +8458,7 @@ async function main(): Promise<void> {
       // 自消息：发送后的刷新不能被 stream 再触发一次重复渲染。
       await page.fill('#body', '自消息只出现一次');
       await page.locator('#send').click();
-      await waitForText(page, '#messages', '自消息只出现一次');
+      await waitForMessageText(page, '自消息只出现一次');
       checkEqual('自消息只渲染一次', await page.locator('#messages .msg', { hasText: '自消息只出现一次' }).count(), 1);
       checkEqual('发送不重建 stream', (await page.evaluate(`${streamCallsExpression()}.length`)) as number, 1);
 
@@ -15381,7 +15775,7 @@ async function main(): Promise<void> {
       );
       await readContext.page.fill('#body', '上翻回归普通消息');
       await readContext.page.locator('#send').click();
-      await waitForText(readContext.page, '#messages', '上翻回归普通消息');
+      await waitForMessageText(readContext.page, '上翻回归普通消息');
       checkEqual(
         '上翻回归后普通消息只出现一次',
         await readContext.page.locator('#messages .msg', { hasText: '上翻回归普通消息' }).count(),
@@ -17838,6 +18232,8 @@ async function main(): Promise<void> {
     await runAvatarAcceptance(browser, server.base, data.humanToken);
 
     await runTaskAcceptance(browser, server.base, allErrors);
+
+    await runMessageOutboxAcceptance(browser, server.base, allErrors);
 
     await runPresenceRestartAcceptance();
     await runPresenceIdleNotificationCheck();

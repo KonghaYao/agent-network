@@ -381,6 +381,19 @@ export const messageSendSchema = z.object({
     .optional(),
 });
 
+/**
+ * 发送回执对账：只按发送者自己的 client_message_id 查询是否已提交。
+ *
+ * 不读取正文或 preview，也不要求当前仍是房间成员；用于响应丢失后判断
+ * 是否还需要重发，避免生成第二条消息。
+ */
+export const messageSendStatusSchema = z.object({
+  client_message_ids: z
+    .array(id(128))
+    .min(1)
+    .max(LIMITS.messageSendStatusMax),
+});
+
 export const historyListSchema = z.object({
   room_id: id(),
   direction: z.enum(['before', 'after']).optional(),
@@ -607,6 +620,7 @@ export type RoomInviteGetInput = z.infer<typeof roomInviteGetSchema>;
 export type RoomInviteRespondInput = z.infer<typeof roomInviteRespondSchema>;
 export type RoomLeaveInput = z.infer<typeof roomLeaveSchema>;
 export type MessageSendInput = z.infer<typeof messageSendSchema>;
+export type MessageSendStatusInput = z.infer<typeof messageSendStatusSchema>;
 export type HistoryListInput = z.infer<typeof historyListSchema>;
 export type MessageReadInput = z.infer<typeof messageReadSchema>;
 export type RoomMarkReadInput = z.infer<typeof roomMarkReadSchema>;

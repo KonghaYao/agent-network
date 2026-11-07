@@ -17,6 +17,7 @@ import { CHAT_MEMBER_PICKER_SCRIPT } from './chat-member-picker';
 import { CHAT_MEMBERS_SCRIPT } from './chat-members-script';
 import { CHAT_MESSAGE_FILES_SCRIPT } from './chat-message-files-script';
 import { CHAT_MONITOR_SCRIPT } from './chat-monitor-script';
+import { CHAT_OUTBOX_SCRIPT } from './chat-outbox-script';
 import { CHAT_RENDER_SCRIPT } from './chat-render-script';
 import { CHAT_RESIZER_SCRIPT } from './chat-resizer-script';
 import { CHAT_ROOM_MENU_SCRIPT } from './chat-room-menu-script';
@@ -144,6 +145,7 @@ ${CHAT_GROUP_COPY_SCRIPT}
 ${CHAT_MESSAGE_FILES_SCRIPT}
 ${CHAT_MARKDOWN_SCRIPT}
 ${CHAT_RENDER_SCRIPT}
+${CHAT_OUTBOX_SCRIPT}
 ${NEW_AGENT_SCRIPT}
 ${CHAT_AGENTS_SCRIPT}
 ${CHAT_CONTACTS_SCRIPT}
@@ -611,6 +613,8 @@ function scheduleRoomRefresh(roomId) {
 
 composer.addEventListener('submit', async function (event) {
   event.preventDefault();
+  // 发送中再次回车不得新建第二条意图；按钮禁用是同一道闸。
+  if (sendButton.disabled) return;
   const sendRoomId = activeRoomId;
   if (!sendRoomId) return;
   const sendEpoch = roomEpoch;
@@ -627,41 +631,52 @@ composer.addEventListener('submit', async function (event) {
     statusElement.textContent = stickyStatus;
     return;
   }
+  // 同房间、同正文、同目标的失败意图复用原 client_message_id/request_id；
+  // 修改正文会生成新意图，旧 ID 与新内容由服务端返回冲突。
+  let intent = outboxFindReusable(sendRoomId, body, invoke.targets);
+  const reused = Boolean(intent);
+  if (intent) {
+    // 响应丢失后先对账；确认已提交就不再发送第二条。
+    sendButton.disabled = true;
+    const decision = await outboxCheckBeforeResend(intent);
+    if (decision !== 'send') {
+      outboxRefreshRows();
+      if (isActiveRoom(sendRoomId, sendEpoch)) {
+        if (decision === 'committed') {
+          if (outboxComposerMatches(intent)) {
+            drafts.delete(sendRoomId);
+            clearComposerFiles(sendRoomId, sentFileKeys);
+            bodyInput.value = '';
+            hideMentionPicker();
+            resizeComposer();
+          }
+          stickyStatus = '';
+          statusElement.textContent = '';
+          await refresh(true).catch(function () {});
+        } else if (decision === 'conflict') {
+          statusElement.textContent = '发送失败：' + (intent.error || 'client_message_id 冲突');
+        } else {
+          stickyStatus = '暂时无法对账，请稍后重试';
+          statusElement.textContent = stickyStatus;
+        }
+      }
+      sendButton.disabled = false;
+      return;
+    }
+  } else {
+    intent = outboxCreate(sendRoomId, body, invoke.targets);
+  }
   sendButton.disabled = true;
   // 自己的消息必须出现在底部；独立标志避免 refresh 合并时丢失强制滚底。
   scrollController.pinNextApply();
   try {
-    const args = {
-      request_id: requestId('web_msg'),
-      client_message_id: crypto.randomUUID(),
-      room_id: sendRoomId,
-      body: body
-    };
     // direct 自动唤醒对方 Agent；group 省略 invoke，由服务端解析正文 @名字。
-    if (invoke.targets.length > 0) args.invoke = invoke.targets;
-    const result = await callTool('network_message_send', args);
-    // 发送请求不绑定 roomAbort；切换房间后只丢弃 UI 更新，不取消写入。
-    const deliveryIds = Array.isArray(result.delivery_ids) ? result.delivery_ids : [];
-    // 消息已发出，只清除本次已拼入正文的旧房间草稿与 chips；不要覆盖新房间的输入框。
-    drafts.delete(sendRoomId);
-    clearComposerFiles(sendRoomId, sentFileKeys);
-    if (!isActiveRoom(sendRoomId, sendEpoch)) return;
-    bodyInput.value = '';
-    hideMentionPicker();
-    resizeComposer();
-    await refresh(true);
-    if (!isActiveRoom(sendRoomId, sendEpoch)) return;
-    if (invoke.targets.length > 0 && deliveryIds.length !== invoke.targets.length) {
-      stickyStatus =
-        '消息已发送，但 Agent 投递未建立（' + deliveryIds.length + '/' +
-        invoke.targets.length + '），请检查房间成员后重试。';
-      statusElement.textContent = stickyStatus;
-    }
-  } catch (error) {
-    scrollController.clearPinNextApply();
-    if (!isActiveRoom(sendRoomId, sendEpoch)) return;
-    stickyStatus = '发送失败：' + (error && error.message ? error.message : error);
-    statusElement.textContent = stickyStatus;
+    await outboxSubmit(intent, {
+      epoch: sendEpoch,
+      sentFileKeys: sentFileKeys,
+      fromRetry: reused,
+      invokeTargets: invoke.targets.length
+    });
   } finally {
     if (isActiveRoom(sendRoomId, sendEpoch)) {
       sendButton.disabled = false;
@@ -852,6 +867,8 @@ if (loggedOutStartButton) {
   // 首页也启动；每页只有这一条 agentnet://stream，切换房间不重建。
   startActorStream();
   await Promise.allSettled([loadRooms(), refreshContactBadge()]);
+  // 刷新/换设备后先对账本地意图，再决定是否提供重试。
+  outboxScheduleReconcile(0);
 })();
 </script>
 <script>

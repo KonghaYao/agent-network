@@ -219,6 +219,8 @@ function scheduleStreamCatchUp() {
     streamCatchUpTimer = null;
     if (streamStopped) return;
     scheduleRoomListRefresh(true);
+    // 断线期间可能有已提交但未收到响应的发送，重连后先对账。
+    outboxScheduleReconcile(0);
     if (activeRoomId) {
       // 断线期间可能错过任务事件；让房间刷新重新读取任务列表。
       invalidateRoomTasks();

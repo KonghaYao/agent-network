@@ -5,6 +5,7 @@ import type {
   HistoryListInput,
   MessageReadInput,
   MessageSendInput,
+  MessageSendStatusInput,
   RoomMarkReadInput,
 } from '../contracts/schemas';
 import {
@@ -690,6 +691,100 @@ export async function sendResultByClientId(
     .bind(senderId, clientMessageId)
     .first<MessageRow>();
   return row ? messageSendResult(db, row) : null;
+}
+
+export interface MessageSendStatusItem {
+  client_message_id: string;
+  found: boolean;
+  message_id: string | null;
+  room_id: string | null;
+  created_seq: string | null;
+  delivery_ids: string[];
+  body_bytes: number | null;
+  created_at: string | null;
+}
+
+interface MessageSendStatusRow {
+  message_id: string;
+  room_id: string;
+  client_message_id: string;
+  created_seq: number;
+  body_bytes: number;
+  created_at: number;
+}
+
+/**
+ * 按发送者自己的 client_message_id 对账发送结果。
+ *
+ * 只返回定位信息（消息、房间、顺序、delivery 数），不返回正文与 preview；
+ * 也不要求当前仍是房间成员。撤权后发送者仍能确认“是否已提交”，从而不会
+ * 因响应丢失而生成第二条消息；正文读取仍走各自入口的当前授权检查。
+ */
+export async function messageSendStatus(
+  db: D1Database,
+  principal: Principal,
+  input: MessageSendStatusInput,
+): Promise<{ items: MessageSendStatusItem[] }> {
+  const sender = actorId(principal);
+  const ids = [...new Set(input.client_message_ids)];
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await db
+    .prepare(
+      `SELECT message_id, room_id, client_message_id, created_seq, body_bytes, created_at
+         FROM messages WHERE sender_id = ? AND client_message_id IN (${placeholders})`,
+    )
+    .bind(sender, ...ids)
+    .all<MessageSendStatusRow>();
+  const byClient = new Map(rows.results.map((row) => [row.client_message_id, row]));
+
+  const messageIds = rows.results.map((row) => row.message_id);
+  const deliveryRows =
+    messageIds.length === 0
+      ? []
+      : (
+          await db
+            .prepare(
+              `SELECT message_id, delivery_id FROM deliveries
+                WHERE message_id IN (${messageIds.map(() => '?').join(',')})
+                ORDER BY delivery_id`,
+            )
+            .bind(...messageIds)
+            .all<{ message_id: string; delivery_id: string }>()
+        ).results;
+  const deliveriesByMessage = new Map<string, string[]>();
+  for (const delivery of deliveryRows) {
+    const list = deliveriesByMessage.get(delivery.message_id);
+    if (list) list.push(delivery.delivery_id);
+    else deliveriesByMessage.set(delivery.message_id, [delivery.delivery_id]);
+  }
+
+  return {
+    items: ids.map((clientMessageId) => {
+      const row = byClient.get(clientMessageId);
+      if (!row) {
+        return {
+          client_message_id: clientMessageId,
+          found: false,
+          message_id: null,
+          room_id: null,
+          created_seq: null,
+          delivery_ids: [],
+          body_bytes: null,
+          created_at: null,
+        };
+      }
+      return {
+        client_message_id: clientMessageId,
+        found: true,
+        message_id: row.message_id,
+        room_id: row.room_id,
+        created_seq: String(row.created_seq),
+        delivery_ids: deliveriesByMessage.get(row.message_id) ?? [],
+        body_bytes: row.body_bytes,
+        created_at: String(row.created_at),
+      };
+    }),
+  };
 }
 
 /** 完成 delivery 时附加的最终消息；不产生新的 invoke。 */

@@ -341,6 +341,7 @@ async function main(): Promise<void> {
     'network_room_notice_list',
     'network_room_leave',
     'network_message_send',
+    'network_message_send_status',
     'network_history_list',
     'network_message_read',
     'network_room_mark_read',
@@ -394,6 +395,7 @@ async function main(): Promise<void> {
     'network_agents_get',
     'network_feedback_create',
     'network_message_send',
+    'network_message_send_status',
     'network_room_monitor_get',
     'network_room_monitor_set',
     'network_room_owner_transfer_propose',
@@ -492,6 +494,29 @@ async function main(): Promise<void> {
     claimTool?.description,
   );
   const sendTool = listed?.tools?.find((tool) => tool.name === 'network_message_send');
+  const sendStatusTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_message_send_status',
+  ) as
+    | {
+        name: string;
+        description?: string;
+        inputSchema?: unknown;
+        outputSchema?: unknown;
+        annotations?: { readOnlyHint?: boolean };
+      }
+    | undefined;
+  check(
+    'message_send_status 只读对账且不返回正文',
+    sendStatusTool?.annotations?.readOnlyHint === true &&
+      typeof sendStatusTool.description === 'string' &&
+      sendStatusTool.description.includes('client_message_id') &&
+      sendStatusTool.description.includes('对账') &&
+      sendStatusTool.description.includes('不返回正文') &&
+      JSON.stringify(sendStatusTool.inputSchema ?? {}).includes('client_message_ids') &&
+      JSON.stringify(sendStatusTool.outputSchema ?? {}).includes('"found"') &&
+      !JSON.stringify(sendStatusTool.outputSchema ?? {}).includes('"preview"'),
+    sendStatusTool,
+  );
   check(
     'message_send 描述声明 claim 不改变投递状态',
     typeof sendTool?.description === 'string' &&

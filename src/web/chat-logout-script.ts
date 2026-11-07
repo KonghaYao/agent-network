@@ -10,7 +10,7 @@
  */
 export const CHAT_LOGOUT_SCRIPT = `
 const LOGGED_OUT_KEY = 'agent-network-logged-out';
-// 搜索确认后，只有这两个 key 与凭据/会话相关。
+// 凭据与本地会话状态；发送意图另按 agent-network-outbox: 前缀整体清除。
 // agent-network-files-open 与 agent-network-room-filter 是 UI 偏好，退出时保留。
 const LOGOUT_CREDENTIAL_KEYS = ['agent-network-token', 'agent-network-agents-v1'];
 
@@ -96,6 +96,17 @@ function syncLogoutVisibility() {
       } catch (error) {
         // 单个 key 删除失败不应阻止退出；继续清理其余 key。
       }
+    }
+    // 发送意图保存了未确认消息的正文与 client_message_id，退出时必须一并清除。
+    try {
+      for (var intentIndex = window.localStorage.length - 1; intentIndex >= 0; intentIndex -= 1) {
+        var intentKey = window.localStorage.key(intentIndex);
+        if (intentKey && intentKey.indexOf('agent-network-outbox:') === 0) {
+          window.localStorage.removeItem(intentKey);
+        }
+      }
+    } catch (error) {
+      // 本地存储清理失败不应阻止退出。
     }
     try {
       for (var sessionIndex = window.sessionStorage.length - 1; sessionIndex >= 0; sessionIndex -= 1) {

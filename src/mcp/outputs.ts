@@ -442,6 +442,22 @@ export const sendResultSchema = z.object({
   delivery_ids: z.array(z.string()),
 });
 
+/** 发送对账只返回定位信息，不返回正文、preview 或成员资格。 */
+export const messageSendStatusItemSchema = z.object({
+  client_message_id: z.string(),
+  found: z.boolean(),
+  message_id: z.string().nullable(),
+  room_id: z.string().nullable(),
+  created_seq: z.string().nullable(),
+  delivery_ids: z.array(z.string()),
+  body_bytes: z.number().nullable(),
+  created_at: z.string().nullable(),
+});
+
+export const messageSendStatusPageSchema = z.object({
+  items: z.array(messageSendStatusItemSchema),
+});
+
 export const completeResultSchema = z.object({
   delivery: deliverySchema,
   message: messageSchema.nullable(),

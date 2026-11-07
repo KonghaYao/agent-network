@@ -104,6 +104,8 @@ export const LIMITS = {
   roomOwnerTransferTtlMs: 24 * 60 * 60_000,
   /** 单条消息 invoke 上限。 */
   invokeMax: 8,
+  /** `network_message_send_status` 单次按 client_message_id 对账的数量上限。 */
+  messageSendStatusMax: 20,
   /** 单条消息正文中自动归档的同源文件链接上限。 */
   messageFileLinksMax: 8,
   /** 协作深度与每个 root 的累计 delivery 上限。 */
@@ -210,6 +212,12 @@ export const LIMITS = {
   webRequestTimeoutMs: 15_000,
   /** 网页收到房间通知后的刷新合并窗口（毫秒）。 */
   webRefreshDebounceMs: 300,
+  /** 浏览器本地发送意图上限；超出后保留最新条目。 */
+  webOutboxMax: 50,
+  /** 未确认/失败的本地发送意图保留时长（毫秒）。 */
+  webOutboxTtlMs: 24 * 60 * 60_000,
+  /** “已提交”本地提示保留时长（毫秒）；服务端消息出现后立即清理。 */
+  webOutboxCommittedMs: 60_000,
   /** 网页消息区距底不超过该值时视为“跟随底部”。 */
   webScrollStickyPx: 80,
   /** 滚轮/触摸上翻意图的最小位移（像素）。 */

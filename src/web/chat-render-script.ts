@@ -326,7 +326,10 @@ function renderMessageList(items) {
   scrollController.beginContentChange();
   messagesElement.replaceChildren();
   ensureHistoryPager();
+  // 服务端消息已出现在时间线时，先清掉对应的本地发送意图。
+  outboxPruneAgainstTimeline(items);
   appendHistory(messagesElement, items);
+  outboxAppendRows(messagesElement, activeRoomId);
   ensureMessagesEnd();
   scrollController.noteContentChanged();
 }
