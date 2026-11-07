@@ -300,7 +300,7 @@ export function registerTools(
   register(
     server,
     'network_login',
-    'Agent 显式上线，开始接收 inbox 投递通知；未上线时投递只在 D1 排队。重复调用幂等，返回待办数量。',
+    'Agent 显式上线，开始接收 inbox 投递通知；未上线时投递只在 D1 排队。重复调用幂等，返回待办数量与只读 task_summary（pending/claimed/done/failed/total）。pending 是未领取、claimed 只含当前身份已领取；done/failed/total 是 active 房间总量，total 含他人 claimed。每次上线、重连或唤醒后先看 task_summary；pending > 0 或 claimed > 0 时按房间 list（claimed 用于恢复自己断线前领取的任务）。任务概览不改变 pending_count、房间 head、未读或在线状态。',
     loginSchema,
     loginResultSchema,
     async () => login(env, principal),
@@ -525,7 +525,7 @@ export function registerTools(
   register(
     server,
     'network_task_list_get',
-    '读取房间任务列表（默认列表）：active 成员可用，返回短描述、状态、assignee 与结果，以及 total/done。任务变更是 informational，不产生未读、inbox 或交付；Agent 应在定时或唤醒后主动 list，不要轮询。',
+    '读取房间任务列表（默认列表）：active 成员可用，返回短描述、状态、assignee 与结果，以及 total/done。先看 network_task_summary 或 network_login.task_summary 的 pending/claimed：pending > 0 或 claimed > 0 时按房间 list。任务变更不会唤醒 Agent，不要轮询。',
     taskListGetSchema,
     roomTaskListSchema,
     async (input) => {
@@ -538,7 +538,7 @@ export function registerTools(
   register(
     server,
     'network_task_summary',
-    '一次读取当前身份所有 active 房间的任务进度（可传 room_ids 过滤，仅返回本人仍有效的房间），供侧栏 badge 使用；避免对每个房间调用 list。只读，不轮询。',
+    'Agent 的任务发现入口：一次读当前身份所有 active 房间的任务进度（可传 room_ids 过滤，仅返回本人仍有效的房间），每房间返回 pending/claimed/done/failed/total。pending 是未领取；claimed 只统计当前身份领取（不含他人）；done/failed/total 是房间总量，total 含他人 claimed。每次 network_login、重连或任何唤醒后先调用；pending > 0 或 claimed > 0 时再按房间 network_task_list_get（claimed 用于恢复自己断线前领取的任务）。也供侧栏 badge 使用，避免逐房间 list。只读，不轮询，不改变 pending_count、房间 head 或未读。',
     taskSummarySchema,
     roomTaskSummarySchema,
     async (input) => {
@@ -551,7 +551,7 @@ export function registerTools(
   register(
     server,
     'network_task_add',
-    '向房间添加一个 pending 任务；任何 active 成员（含 human）都可添加。description trim 后必须为 1–120 个字符且不含换行/控制字符；长内容请写成 .md 文件。任务变更只写 room informational 事件，不写 inbox、不推进 head、不产生未读。',
+    '向房间添加一个 pending 任务；任何 active 成员（含 human）都可添加。多步骤、跨文件或需要别人接手的交付物应先登记为任务，描述写目标与交付物。description trim 后必须为 1–120 个字符且不含换行/控制字符；长内容请写成 .md 文件。任务变更只写 room informational 事件，不写 inbox、不推进 head、不产生未读，也不唤醒 Agent；需要立即处理时另发消息并 @ 名字。',
     taskAddSchema,
     roomTaskResultSchema,
     async (input) => {
@@ -563,7 +563,7 @@ export function registerTools(
   register(
     server,
     'network_task_claim',
-    'Agent 成员领取一个 pending 任务，原子转为 claimed 并记录 assignee。human 调用返回 INVALID_ARGUMENT；并发或被他人领取返回 CLAIM_CONFLICT。任务通知不唤醒 Agent，需在定时或唤醒后 list。',
+    'Agent 成员领取一个 pending 任务，原子转为 claimed 并记录 assignee。human 调用返回 INVALID_ARGUMENT；并发或被他人领取返回 CLAIM_CONFLICT。任务通知不唤醒 Agent；先看 task_summary 的 pending/claimed，再按房间 list 后 claim。',
     taskClaimSchema,
     roomTaskResultSchema,
     async (input) => {

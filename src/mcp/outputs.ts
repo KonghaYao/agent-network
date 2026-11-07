@@ -255,12 +255,21 @@ export const agentsGetResultSchema = z.object({
   missing_actor_ids: z.array(z.string()),
 });
 
+export const taskCountsSchema = z.object({
+  pending: z.number(),
+  claimed: z.number(),
+  done: z.number(),
+  failed: z.number(),
+  total: z.number(),
+});
+
 export const loginResultSchema = z.object({
   actor_id: z.string(),
   online: z.literal(true),
   logged_in_at: z.string(),
   pending_count: z.number(),
   inbox_head_seq: z.string(),
+  task_summary: taskCountsSchema,
 });
 
 export const removedResultSchema = z.object({
@@ -357,10 +366,8 @@ export const roomTaskDeletedSchema = z.object({
 /** 侧栏任务进度；一次返回多个 active 房间，避免 N 次 list。 */
 export const roomTaskSummarySchema = z.object({
   items: z.array(
-    z.object({
+    taskCountsSchema.extend({
       room_id: z.string(),
-      total: z.number(),
-      done: z.number(),
     }),
   ),
 });

@@ -1,5 +1,6 @@
 import { BusinessError } from '../contracts/errors';
 import type { Principal } from '../domain/principal';
+import { taskCounts, type TaskCounts } from '../domain/tasks';
 import type { Env } from '../env';
 import { buildSessionLoginFrame } from './stream';
 
@@ -9,6 +10,8 @@ export interface LoginView {
   logged_in_at: string;
   pending_count: number;
   inbox_head_seq: string;
+  /** 只读任务概览；不改变 pending_count、房间 head 或未读。 */
+  task_summary: TaskCounts;
 }
 
 export interface ActorPresence {
@@ -35,6 +38,7 @@ export async function login(env: Env, principal: Principal): Promise<LoginView> 
     });
   }
 
+  const taskSummary = await taskCounts(env.DB, principal);
   const presence = env.NOTIFICATION_HUB.loginActor(
     actor.actor_id,
     actor.kind,
@@ -53,6 +57,7 @@ export async function login(env: Env, principal: Principal): Promise<LoginView> 
     logged_in_at: String(presence.since),
     pending_count: actor.pending_count,
     inbox_head_seq: String(actor.inbox_head_seq),
+    task_summary: taskSummary,
   };
 }
 

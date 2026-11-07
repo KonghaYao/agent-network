@@ -23,6 +23,7 @@ import { runAgentPresenceUnitChecks } from './lib/presence-unit';
 import { runFeedbackUnitChecks } from './lib/feedback-unit';
 import { runFeedbackCliChecks } from './lib/feedback-cli';
 import { runDeliveryReminderUnitChecks } from './lib/delivery-reminder-unit';
+import { runRoomTaskSummaryUnitChecks } from './lib/room-task-summary-unit';
 
 const STREAM_URI = 'agentnet://stream';
 
@@ -533,6 +534,29 @@ async function main(): Promise<void> {
     ['tasks', 'total', 'done'].every((key) => taskListOutput.includes(`"${key}"`)),
     taskTools.get('network_task_list_get')?.outputSchema,
   );
+  const taskSummaryOutput = JSON.stringify(
+    taskTools.get('network_task_summary')?.outputSchema ?? {},
+  );
+  check(
+    'task_summary 每房间输出含 pending/claimed/done/failed/total/room_id',
+    ['room_id', 'pending', 'claimed', 'done', 'failed', 'total'].every((key) =>
+      taskSummaryOutput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_summary')?.outputSchema,
+  );
+  const taskSummaryDescription = taskTools.get('network_task_summary')?.description ?? '';
+  check(
+    'task_summary 描述声明 claimed 只含本人且 pending>0 或 claimed>0 才 list',
+    taskSummaryDescription.includes('claimed 只统计当前身份领取') &&
+      taskSummaryDescription.includes('pending > 0 或 claimed > 0'),
+    taskSummaryDescription,
+  );
+  const taskListDescription = taskTools.get('network_task_list_get')?.description ?? '';
+  check(
+    'task_list 描述使用 pending/claimed 触发条件',
+    taskListDescription.includes('pending > 0 或 claimed > 0'),
+    taskListDescription,
+  );
   const taskAddDescription = taskTools.get('network_task_add')?.description ?? '';
   check(
     'task_add 描述声明 120 字、informational 且不写 inbox/未读',
@@ -571,6 +595,29 @@ async function main(): Promise<void> {
       ?.annotations?.readOnlyHint === true &&
       (taskTools.get('network_task_summary') as { annotations?: { readOnlyHint?: boolean } } | undefined)
         ?.annotations?.readOnlyHint === true,
+  );
+  const loginTool = listed?.tools?.find((tool) => tool.name === 'network_login');
+  const loginOutputSchema = JSON.stringify(loginTool?.outputSchema ?? {});
+  const loginDescription = loginTool?.description ?? '';
+  check(
+    'network_login 输出 schema 包含只读 task_summary 计数',
+    ['task_summary', 'pending', 'claimed', 'done', 'failed', 'total'].every((marker) =>
+      loginOutputSchema.includes(`"${marker}"`),
+    ),
+    loginTool?.outputSchema,
+  );
+  check(
+    'network_login 描述声明任务概览不改变状态',
+    loginDescription.includes('task_summary') &&
+      loginDescription.includes('不改变 pending_count') &&
+      loginDescription.includes('每次上线'),
+    loginDescription,
+  );
+  check(
+    'network_login 描述声明 claimed 只含本人且 pending>0 或 claimed>0 才 list',
+    loginDescription.includes('claimed 只含当前身份') &&
+      loginDescription.includes('pending > 0 或 claimed > 0'),
+    loginDescription,
   );
 
   const reissueTool = listed?.tools?.find(
@@ -1374,6 +1421,35 @@ async function main(): Promise<void> {
     skillText.slice(0, 320),
   );
   check(
+    '技能正文把任务概览作为上线/唤醒后的第一动作',
+    skillText.includes('task_summary') &&
+      skillText.includes('每次上线') &&
+      skillText.includes('pending > 0') &&
+      skillText.includes('claimed > 0') &&
+      skillText.includes('network_task_summary') &&
+      skillText.includes('多步骤') &&
+      skillText.includes('network_task_add'),
+    skillText.slice(0, 320),
+  );
+  check(
+    '技能正文声明 claimed 只含本人且 summary 返回每房间五字段',
+    skillText.includes('claimed') &&
+      skillText.includes('只含自己') &&
+      skillText.includes('pending') &&
+      skillText.includes('failed') &&
+      skillText.includes('total'),
+    skillText.slice(0, 320),
+  );
+  check(
+    '技能正文包含 multitask 异步分发行为模式',
+    ['## multitask 异步分发', '### 何时拆分', '### 角色分离', '### 异步分发',
+      '### 在途记录', '### 所有权与交接', 'TodoWrite', '一个交付物一个 owner',
+      '独立验收', '不 sleep', 'CLAIM_CONFLICT', '取消与清理'].every((marker) =>
+      skillText.includes(marker),
+    ),
+    skillText.slice(0, 320),
+  );
+  check(
     '技能正文声明任务文本 120 字与长内容 .md',
     skillText.includes('1–120') &&
       skillText.includes('拒绝换行与控制字符') &&
@@ -1658,10 +1734,21 @@ async function main(): Promise<void> {
   check(
     '静态技能包含房间任务命令与不唤醒规范',
     ['agent_tasks.sh', '### 房间任务', 'network_task_list_get', 'network_task_claim',
-      'network_task_summary', 'room.tasks', '不写 inbox', '不会唤醒 Agent'].every((marker) =>
+      'network_task_summary', 'room.tasks', '不写 inbox', '不会唤醒 Agent',
+      'task_summary', '每次上线', 'pending > 0', 'claimed > 0', '只含自己',
+      'network_task_add'].every((marker) =>
       skillDocText.includes(marker),
     ),
     skillDocText.slice(0, 300),
+  );
+  check(
+    '静态技能包含 multitask 异步分发行为模式',
+    ['## multitask 异步分发', '### 何时拆分', '### 角色分离', '### 异步分发',
+      '### 在途记录', '### 所有权与交接', 'TodoWrite', '一个交付物一个 owner',
+      '独立验收', '不 sleep', 'CLAIM_CONFLICT', '取消与清理'].every((marker) =>
+      skillDocText.includes(marker),
+    ),
+    skillDocText.slice(0, 320),
   );
   check(
     '静态技能包含短回复与长内容文件指引',
@@ -1693,6 +1780,29 @@ async function main(): Promise<void> {
     '静态/主 skill Markdown 写法 digest 一致',
     sectionDigest(staticMarkdownSection),
     sectionDigest(mainMarkdownSection),
+  );
+  const multitaskSection = (text: string): string => {
+    const heading = '## multitask 异步分发';
+    const start = text.indexOf(heading);
+    if (start < 0) return '';
+    const rest = text.slice(start + heading.length);
+    const next = rest.search(/\n## /u);
+    return (next < 0 ? rest : rest.slice(0, next)).trim();
+  };
+  const mainMultitaskSection = multitaskSection(skillText);
+  const staticMultitaskSection = multitaskSection(skillDocText);
+  check(
+    '静态技能包含 multitask 异步分发正文',
+    staticMultitaskSection.includes('### 何时拆分') &&
+      staticMultitaskSection.includes('### 角色分离') &&
+      staticMultitaskSection.includes('### 异步分发') &&
+      staticMultitaskSection.includes('### 推荐节奏'),
+    staticMultitaskSection.slice(0, 240),
+  );
+  checkEqual(
+    '静态/主 skill multitask 异步分发 digest 一致',
+    sectionDigest(staticMultitaskSection),
+    sectionDigest(mainMultitaskSection),
   );
   check(
     '静态技能包含首次进入会话规范',
@@ -2092,6 +2202,15 @@ async function main(): Promise<void> {
       agentTasksText.includes('umask 077') &&
       agentTasksText.includes('不轮询') &&
       !/\bwhile true\b/u.test(agentTasksText),
+    agentTasksText.slice(0, 320),
+  );
+  check(
+    '任务命令脚本 summary 帮助与实际输出字段一致',
+    agentTasksText.includes('claimed 只含本人') &&
+      agentTasksText.includes('pending 是未领取') &&
+      ['pending', 'claimed', 'done', 'failed', 'total'].every((field) =>
+        agentTasksText.includes(`"${field}=\\(.${field})"`),
+      ),
     agentTasksText.slice(0, 320),
   );
   check(
@@ -2794,6 +2913,7 @@ async function main(): Promise<void> {
   await runFeedbackUnitChecks();
   await runFeedbackCliChecks();
   await runDeliveryReminderUnitChecks();
+  await runRoomTaskSummaryUnitChecks();
 
   console.log(`协议验收通过: ${checksPassed()} 项`);
 }

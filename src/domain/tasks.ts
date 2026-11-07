@@ -70,8 +70,34 @@ export interface RoomTaskDeletedResult {
   deleted: true;
 }
 
+export interface RoomTaskSummaryItem {
+  room_id: string;
+  /** 房间内未领取的任务数。 */
+  pending: number;
+  /** 当前身份在该房间领取的任务数；不含他人领取。 */
+  claimed: number;
+  /** 房间内已完成的任务数。 */
+  done: number;
+  /** 房间内失败的任务数。 */
+  failed: number;
+  /** 房间内全部任务数；含他人 claimed，因此四项之和可能小于 total。 */
+  total: number;
+}
+
 export interface RoomTaskSummaryResult {
-  items: { room_id: string; total: number; done: number }[];
+  items: RoomTaskSummaryItem[];
+}
+
+/** 当前身份所有 active 房间的任务计数；只读，用于登录结果里的任务概览。 */
+export interface TaskCounts {
+  /** 未领取的任务总数（跨 active 房间）。 */
+  pending: number;
+  /** 仅当前身份领取的任务数；不含他人 claimed。 */
+  claimed: number;
+  done: number;
+  failed: number;
+  /** 全部任务数；含他人 claimed，因此四项之和可能小于 total。 */
+  total: number;
 }
 
 interface ViewContext {
@@ -274,7 +300,10 @@ export async function taskSummary(
     .prepare(
       `SELECT m.room_id AS room_id,
               COUNT(t.task_id) AS total,
-              COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) AS done
+              COALESCE(SUM(CASE WHEN t.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+              COALESCE(SUM(CASE WHEN t.status = 'claimed' AND t.assignee_actor_id = ? THEN 1 ELSE 0 END), 0) AS claimed,
+              COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) AS done,
+              COALESCE(SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
          FROM room_members m
          LEFT JOIN room_tasks t
            ON t.room_id = m.room_id AND t.list_id = ?
@@ -282,14 +311,55 @@ export async function taskSummary(
         GROUP BY m.room_id
         ORDER BY m.room_id ASC`,
     )
-    .bind(DEFAULT_LIST_ID, caller, ...filters)
-    .all<{ room_id: string; total: number; done: number }>();
+    .bind(caller, DEFAULT_LIST_ID, caller, ...filters)
+    .all<{
+      room_id: string;
+      total: number;
+      pending: number;
+      claimed: number;
+      done: number;
+      failed: number;
+    }>();
   return {
     items: result.results.map((row) => ({
       room_id: row.room_id,
-      total: row.total,
+      pending: row.pending,
+      claimed: row.claimed,
       done: row.done,
+      failed: row.failed,
+      total: row.total,
     })),
+  };
+}
+
+/**
+ * 汇总当前身份所有 active 房间的任务计数。
+ *
+ * 只读；不写事件、outbox 或 inbox，不改变 `pending_count`、房间 head 或未读。
+ * 用于 `network_login` 的只读任务概览，避免 Agent 上线后不知道有任务。
+ */
+export async function taskCounts(db: D1Database, principal: Principal): Promise<TaskCounts> {
+  const caller = actorId(principal);
+  const row = await db
+    .prepare(
+      `SELECT COUNT(t.task_id) AS total,
+              COALESCE(SUM(CASE WHEN t.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+              COALESCE(SUM(CASE WHEN t.status = 'claimed' AND t.assignee_actor_id = ? THEN 1 ELSE 0 END), 0) AS claimed,
+              COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) AS done,
+              COALESCE(SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
+         FROM room_members m
+         LEFT JOIN room_tasks t
+           ON t.room_id = m.room_id AND t.list_id = ?
+        WHERE m.actor_id = ? AND m.status = 'active'`,
+    )
+    .bind(caller, DEFAULT_LIST_ID, caller)
+    .first<{ total: number; pending: number; claimed: number; done: number; failed: number }>();
+  return {
+    pending: row?.pending ?? 0,
+    claimed: row?.claimed ?? 0,
+    done: row?.done ?? 0,
+    failed: row?.failed ?? 0,
+    total: row?.total ?? 0,
   };
 }
 

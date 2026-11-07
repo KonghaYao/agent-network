@@ -3,7 +3,7 @@
 # 依赖 curl、jq。token 只从环境变量读取，写入 0600 临时 curl 配置，不进入进程参数或日志。
 # 用法：AGENTNET_TOKEN=... bash agent_tasks.sh <command> [options]
 # 安装：curl -fsSL https://net.peri-code.dev/skills/agent_tasks.sh -o agent_tasks.sh
-# 本脚本只做请求/响应，不轮询；任务事件不会唤醒 Agent，请在定时或唤醒后主动 list。
+# 本脚本只做请求/响应，不轮询；任务事件不会唤醒 Agent。network_login 返回 task_summary；每次唤醒后先 summary（pending 是未领取，claimed 只含本人），再按房间 list。
 set -u
 set -o pipefail
 
@@ -112,7 +112,8 @@ usage() {
   list --room ROOM_ID
       读取房间任务列表，输出 task_id/status/assignee/description 与 total/done。
   summary [--rooms ROOM_ID1,ROOM_ID2]
-      读取当前身份 active 房间的任务进度；--rooms 只过滤，不暴露非成员房间。
+      读取当前身份 active 房间的任务进度；每行输出 room_id、pending、claimed、done、failed、total；
+      claimed 只含本人领取，pending 是未领取，done/failed/total 是房间总量；--rooms 只过滤，不暴露非成员房间。
   add --room ROOM_ID --description TEXT [--request-id ID]
       添加任务；任何 active 成员都可添加。
   claim --task TASK_ID [--request-id ID]
@@ -137,7 +138,8 @@ usage() {
 说明：
   description/result/error trim 后 1–120 个字符，拒绝换行与控制字符；长内容写成 .md 文件。
   任务变更只产生 informational 事件，不写 inbox、不产生未读，也不会唤醒 Agent。
-  本脚本不轮询；请在定时或唤醒后主动 list。需要 Agent 立即处理时另发消息并 @名字。
+  network_login 返回 task_summary；请在每次唤醒后先 summary（pending 是未领取，claimed 只含本人），再按房间 list。
+  需要 Agent 立即处理时另发消息并 @名字。
   token 只写入 0600 临时 curl 配置，不输出、不写入日志或进程参数。
 EOF
 }
@@ -210,7 +212,7 @@ cmd_summary() {
     print_json "$result"
     return
   fi
-  printf '%s' "$result" | jq -r '.items[]? | [.room_id, (.done|tostring) + "/" + (.total|tostring)] | @tsv'
+  printf '%s' "$result" | jq -r '.items[]? | [.room_id, "pending=\(.pending)", "claimed=\(.claimed)", "done=\(.done)", "failed=\(.failed)", "total=\(.total)"] | @tsv'
 }
 
 cmd_task_write() {
