@@ -134,6 +134,20 @@ export const APP_STYLE = `
     color: var(--wx-green); }
   .room-menu-status[hidden] { display: none; }
   .room-menu-status.error { color: var(--wx-unread); }
+  /* 停用后待处理工作：数量摘要 + 可折叠的未完成任务，空态单独一行。 */
+  .room-menu-stopped { margin: 4px 0 0; padding: 6px 10px 4px;
+    border-top: 1px solid var(--wx-line); font-size: 12px; line-height: 1.5;
+    color: var(--wx-text); }
+  .room-menu-stopped[hidden] { display: none; }
+  .room-menu-stopped-summary { margin: 0; overflow-wrap: anywhere; }
+  .room-menu-stopped-details { margin-top: 4px; color: var(--wx-muted); }
+  .room-menu-stopped-details[hidden] { display: none; }
+  .room-menu-stopped-details summary { cursor: pointer; color: var(--wx-text); }
+  .room-menu-stopped-tasks { margin: 4px 0 0; padding-left: 18px;
+    max-height: 132px; overflow-y: auto; }
+  .room-menu-stopped-tasks li { margin: 2px 0; overflow-wrap: anywhere; }
+  .room-menu-stopped-empty { margin: 4px 0 0; color: var(--wx-muted); }
+  .room-menu-stopped-empty[hidden] { display: none; }
   /* 已归档 Agents：账号区图标上方的轻量浮层，不是全屏弹窗。 */
   .archive-popover { position: fixed; z-index: 30; box-sizing: border-box;
     width: min(320px, calc(100vw - 16px)); max-height: min(60vh, calc(100vh - 16px));

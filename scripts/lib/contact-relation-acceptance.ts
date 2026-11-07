@@ -20,6 +20,7 @@ import {
   type McpConnection,
 } from './harness';
 import {
+  befriend,
   inbox,
   registerIdentity,
   sendMessage,
@@ -525,10 +526,112 @@ async function runLegacyBookmarks(): Promise<void> {
   }
 }
 
+/** T05：早返回结果也持久化；同一 request_id 在外部状态变化后仍返回首次结果。 */
+async function runIdempotencyEdges(): Promise<void> {
+  console.log('  · A03-T05 幂等结果持久化边界');
+  const aConn = await connectClient(newToken());
+  const bConn = await connectClient(newToken());
+  const cConn = await connectClient(newToken());
+  const dConn = await connectClient(newToken());
+  try {
+    const a = await registerIdentity(aConn, { kind: 'human', name: 'A03 幂等一' });
+    const b = await registerIdentity(bConn, { kind: 'human', name: 'A03 幂等二' });
+    const c = await registerIdentity(cConn, { kind: 'human', name: 'A03 幂等三' });
+    const d = await registerIdentity(dConn, { kind: 'human', name: 'A03 幂等四' });
+    await befriend(aConn, a.actor_id, bConn, b.actor_id);
+
+    const friendRequestId = newRequestId('idem_friend');
+    const friendFirst = await requestContact(aConn, b.actor_id, { requestId: friendRequestId });
+    checkEqual('T05 已是好友时返回 accepted', friendFirst.status, 'accepted');
+    checkEqual('T05 已是好友时标记 already_friends', friendFirst.already_friends, true);
+    checkEqual('T05 已是好友时没有申请对象', friendFirst.request, null);
+
+    await callTool(aConn.client, 'network_contact_remove', {
+      request_id: newRequestId('idem_remove'),
+      actor_id: b.actor_id,
+    });
+    checkEqual('T05 解除好友后关系结束', await relationOf(aConn, b.actor_id), null);
+    const friendReplay = await requestContact(aConn, b.actor_id, {
+      requestId: friendRequestId,
+    });
+    checkEqual('T05 解除好友后同一 request_id 仍返回 accepted', friendReplay.status, 'accepted');
+    checkEqual(
+      'T05 解除好友后重放仍返回首次 already_friends',
+      friendReplay.already_friends,
+      true,
+    );
+    checkEqual('T05 解除好友后重放不新建申请', friendReplay.request, null);
+    const afterUnfriend = await listRequests(aConn, 'outgoing', 'pending');
+    check(
+      'T05 解除好友后重放不产生 pending 申请',
+      !afterUnfriend.items.some((item) => item.to_actor.actor_id === b.actor_id),
+      afterUnfriend.items,
+    );
+
+    const original = await requestContact(cConn, d.actor_id, { message: 'T05 原始申请' });
+    const existingRequestId = newRequestId('idem_existing');
+    const existingFirst = await requestContact(cConn, d.actor_id, {
+      message: 'T05 早返回',
+      requestId: existingRequestId,
+    });
+    checkEqual(
+      'T05 已有 pending 时返回同一申请',
+      existingFirst.request?.contact_request_id,
+      original.request?.contact_request_id,
+    );
+    await cancelContact(cConn, original.request?.contact_request_id ?? '');
+    const existingReplay = await requestContact(cConn, d.actor_id, {
+      message: 'T05 早返回',
+      requestId: existingRequestId,
+    });
+    checkEqual(
+      'T05 申请撤销后同一 request_id 仍返回首次申请',
+      existingReplay.request?.contact_request_id,
+      original.request?.contact_request_id,
+    );
+    checkEqual('T05 申请撤销后重放仍返回 pending 快照', existingReplay.status, 'pending');
+    const afterCancel = await listRequests(cConn, 'outgoing', 'pending');
+    check(
+      'T05 撤销后重放不新建 pending 申请',
+      !afterCancel.items.some((item) => item.to_actor.actor_id === d.actor_id),
+      afterCancel.items,
+    );
+
+    const concurrentRequestId = newRequestId('idem_concurrent');
+    const [left, right] = await Promise.all([
+      requestContact(aConn, b.actor_id, { requestId: concurrentRequestId }),
+      requestContact(aConn, b.actor_id, { requestId: concurrentRequestId }),
+    ]);
+    checkEqual(
+      'T05 并发同 request_id 都返回 pending',
+      `${left.status}/${right.status}`,
+      'pending/pending',
+    );
+    check(
+      'T05 并发同 request_id 收敛到同一申请',
+      Boolean(left.request?.contact_request_id) &&
+        left.request?.contact_request_id === right.request?.contact_request_id,
+      {
+        left: left.request?.contact_request_id,
+        right: right.request?.contact_request_id,
+      },
+    );
+    const concurrentList = await listRequests(aConn, 'outgoing', 'pending');
+    const matching = concurrentList.items.filter((item) => item.to_actor.actor_id === b.actor_id);
+    checkEqual('T05 并发同 request_id 只创建一条 pending', matching.length, 1);
+  } finally {
+    await aConn.close();
+    await bConn.close();
+    await cConn.close();
+    await dConn.close();
+  }
+}
+
 export async function runContactRelationAcceptance(): Promise<void> {
   console.log('· 好友申请与双向联系人关系');
   await runBilateralConsent();
   await runConcurrencyAndExpiry();
   await runAgentPolicies();
   await runLegacyBookmarks();
+  await runIdempotencyEdges();
 }

@@ -186,6 +186,32 @@ function existingPendingResult(
   };
 }
 
+/**
+ * 早返回也走同一 `operations` 机制。
+ *
+ * `already_friends` 与既有 pending 都不写业务表，但如果不记录首次结果，
+ * 外部状态（解除好友、撤销申请）变化后同一 `request_id` 会重新落库，
+ * 违反“同一 request_id 返回首次结果”。这里只写 operations，不产生事件。
+ */
+async function recordEarlyResult(
+  db: D1Database,
+  owner: string,
+  requestId: string,
+  payloadHash: string,
+  result: ContactRequestResult,
+  at: number,
+): Promise<ContactRequestResult> {
+  return (await runIdempotent(db, {
+    actorId: owner,
+    requestId,
+    payloadHash,
+    result,
+    build: (resultJson) => [
+      operationsStatement(db, owner, requestId, payloadHash, resultJson, at),
+    ],
+  })) as ContactRequestResult;
+}
+
 export async function contactRequest(
   db: D1Database,
   principal: Principal,
@@ -213,17 +239,27 @@ export async function contactRequest(
 
   const relation = await getActiveRelation(db, owner, target.actor_id);
   if (relation) {
-    return {
-      request: null,
-      relation: relationView(relation),
-      status: 'accepted',
-      already_friends: true,
-      auto_accepted: false,
-    };
+    return recordEarlyResult(
+      db,
+      owner,
+      input.request_id,
+      payloadHash,
+      {
+        request: null,
+        relation: relationView(relation),
+        status: 'accepted',
+        already_friends: true,
+        auto_accepted: false,
+      },
+      at,
+    );
   }
 
   const existing = await pendingForPair(db, pairKey);
-  if (existing) return existingPendingResult(await liveRequestView(db, existing, owner));
+  if (existing) {
+    const result = existingPendingResult(await liveRequestView(db, existing, owner));
+    return recordEarlyResult(db, owner, input.request_id, payloadHash, result, at);
+  }
 
   const autoManager = await isManagerAgentPair(db, caller, target);
   const policy = autoManager ? null : await effectivePolicy(db, target, at);

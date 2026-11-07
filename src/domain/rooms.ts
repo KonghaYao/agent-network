@@ -851,6 +851,17 @@ export async function roomMembersUpdate(
       ...(add.length > 0
         ? [capabilityGuardStatement(db, room.room_id, caller, 'invite_members')]
         : []),
+      // 好友关系预检查同样有“先读后写”窗口；在提交时按 pair_key 复核。
+      ...add.map((member) =>
+        db
+          .prepare(
+            guardSql(
+              'friendRequired',
+              "NOT EXISTS (SELECT 1 FROM contact_relations WHERE pair_key = ? AND status = 'active')",
+            ),
+          )
+          .bind(sortedPairKey(caller, member)),
+      ),
       ...remove.map((member) =>
         memberRemovalGuardStatement(db, room.room_id, caller, member),
       ),
@@ -1494,6 +1505,20 @@ export async function roomLeave(
     result: { room_id: room.room_id, left: true as const },
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
+      // 预检查只负责可读错误；并发 add 可能在本事务提交前加入成员，
+      // 因此 owner 是否仍是唯一 active 成员必须在提交时重新判定。
+      db
+        .prepare(
+          guardSql(
+            'ownerTransferRequired',
+            `EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND owner_id = ?)
+             AND EXISTS (
+               SELECT 1 FROM room_members
+                WHERE room_id = ? AND status = 'active' AND actor_id <> ?
+             )`,
+          ),
+        )
+        .bind(room.room_id, caller, room.room_id, caller),
       db
         .prepare(
           guardSql(
@@ -1533,9 +1558,11 @@ export async function roomLeave(
         )
         .bind(at, room.room_id, caller),
       ...cancelDeliveriesForMemberStatements(db, room.room_id, caller, 'member_left', at),
-      ...(room.owner_id === caller
-        ? [db.prepare('UPDATE rooms SET owner_id = NULL WHERE room_id = ?').bind(room.room_id)]
-        : []),
+      // 无条件按 owner_id=caller 清理：即使 owner 在预检查后被并发转移，
+      // 也不会把新 owner 的 rooms.owner_id 置空；非 owner 退群时是空操作。
+      db
+        .prepare('UPDATE rooms SET owner_id = NULL WHERE room_id = ? AND owner_id = ?')
+        .bind(room.room_id, caller),
       roomMemberSeqStatement(db, room.room_id, eventKey, at),
       roomAuditStatement(
         db,

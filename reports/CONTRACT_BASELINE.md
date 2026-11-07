@@ -444,12 +444,15 @@ P0 不新增“提及事件”；提及信息属于 `message_created` 的 metada
 | 创建/撤销/读取邀请 | `network_room_invite_create` / `network_room_invite_revoke` / `network_room_invite_get` | 新增 |
 | 响应邀请 | `network_room_invite_respond` | 新增 |
 | 入群申请列表/审批 | `network_room_join_request_list` / `network_room_join_request_respond` | 新增 |
-| 任免管理员 | `network_room_role_set` | 新增 |
-| 群主转让 | `network_room_owner_transfer_propose` / `network_room_owner_transfer_respond` / `network_room_owner_transfer_cancel` | 新增 |
-| 群策略 | `network_room_policy_get` / `network_room_policy_update` | 新增 |
-| 管理审计 | `network_room_audit_list` | 新增 |
-| 解散 | `network_room_dissolve` | 新增 |
+| 任免管理员 | `network_room_role_set` | 新增；G03 已实现 |
+| 群主转让 | `network_room_owner_transfer` | 新增；G03 已实现 owner 直接转移。契约原计划的 `_propose` / `_respond` / `_cancel` 属于 G05，尚未实现 |
+| 群策略 | `network_room_policy_set`（读取随 `network_room_get`） | 新增；G03 已实现。契约原计划的 `network_room_policy_get` / `network_room_policy_update` 未拆分 |
+| 公告 | `network_room_announcement_set` | 新增；G03 已实现，读取随 `network_room_get` |
+| 管理审计 | `network_room_role_history` | 新增；G03 已实现。契约原计划的 `network_room_audit_list` 未使用 |
+| 解散 | `network_room_dissolve` | 新增；G05，尚未实现 |
 | 监控面板 | `network_room_monitor_get` / `network_room_monitor_set` | 保留 |
+
+> G03 实施对照（2026-11-07）：实际工具名以代码与 `reports/G03.md` 为准，即 `network_room_members_update`、`network_room_leave`、`network_room_role_set`、`network_room_owner_transfer`、`network_room_policy_set`、`network_room_announcement_set`、`network_room_role_history`。本表其余 G02/G05/G07 名称仍是契约规划名，不代表已实现。
 
 ### 6.4 消息 / delivery
 

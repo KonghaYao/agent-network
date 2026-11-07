@@ -71,6 +71,14 @@ export function sidebarPane(): string {
       role="menuitem" hidden>停用 Agent</button>
     <button class="room-menu-item danger" id="room-menu-reissue-token" type="button"
       role="menuitem" hidden>注销并重发 token</button>
+    <div class="room-menu-stopped" id="room-menu-stopped" hidden>
+      <p class="room-menu-stopped-summary" id="room-menu-stopped-summary" role="status"></p>
+      <details class="room-menu-stopped-details" id="room-menu-stopped-details">
+        <summary id="room-menu-stopped-toggle">未完成任务</summary>
+        <ul class="room-menu-stopped-tasks" id="room-menu-stopped-tasks"></ul>
+      </details>
+      <p class="room-menu-stopped-empty" id="room-menu-stopped-empty" hidden>没有未完成任务</p>
+    </div>
     <p class="room-menu-status" id="room-menu-status" role="status" aria-live="polite" hidden></p>
   </div>
   <div class="archive-popover" id="archive-popover" role="dialog"

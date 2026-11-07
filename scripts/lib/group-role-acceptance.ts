@@ -23,6 +23,7 @@ import {
   newRequestId,
   newToken,
   rawRpc,
+  ToolError,
   type McpConnection,
 } from './harness';
 
@@ -131,6 +132,29 @@ async function roomOf(connection: McpConnection, roomId: string): Promise<GroupR
   return callTool<GroupRoomView>(connection.client, 'network_room_get', { room_id: roomId });
 }
 
+/** 退群后不再是成员时返回 null，便于并发后从任一方读取最终状态。 */
+async function roomOfIfMember(
+  connection: McpConnection,
+  roomId: string,
+): Promise<GroupRoomView | null> {
+  try {
+    return await roomOf(connection, roomId);
+  } catch (error) {
+    if (error instanceof ToolError && error.code === 'NOT_MEMBER') return null;
+    throw error;
+  }
+}
+
+async function leaveRoom(
+  connection: McpConnection,
+  roomId: string,
+): Promise<{ room_id: string; left: true }> {
+  return callTool<{ room_id: string; left: true }>(connection.client, 'network_room_leave', {
+    request_id: newRequestId('g03_leave'),
+    room_id: roomId,
+  });
+}
+
 function memberOf(detail: GroupRoomView, actorId: string): GroupMemberView {
   const member = detail.members.find((item) => item.actor_id === actorId);
   if (!member) throw new Error(`成员 ${actorId} 不在房间成员列表中`);
@@ -151,6 +175,121 @@ async function addMembers(
       ? {}
       : { expected_role_revision: expectedRoleRevision }),
   });
+}
+
+/** T04：owner 退群与并发加人必须在同一事务裁决，不能产生无 owner 的非空群。 */
+async function runOwnerLeaveConcurrency(): Promise<void> {
+  console.log('  G03-T04 owner 退群与并发加人');
+  const ownerConn = await connectClient(newToken());
+  const memberConn = await connectClient(newToken());
+  try {
+    const owner = await registerIdentity(ownerConn, { kind: 'human', name: 'G03 退群 owner' });
+    const member = await registerIdentity(memberConn, { kind: 'human', name: 'G03 退群成员' });
+    await befriend(ownerConn, owner.actor_id, memberConn, member.actor_id);
+
+    const created = await callTool<GroupRoomView>(ownerConn.client, 'network_room_create', {
+      request_id: newRequestId('g03_leave_room'),
+      kind: 'group',
+      members: [member.actor_id],
+      title: 'G03 owner 退群确定性',
+    });
+    const roomId = created.room.room_id;
+    await expectToolError(
+      'G03 owner 有其他 active 成员时退群被拒绝',
+      leaveRoom(ownerConn, roomId),
+      'CONFLICT',
+    );
+    const afterRejection = await roomOf(ownerConn, roomId);
+    checkEqual('G03 拒绝退群后 owner 仍在位', afterRejection.room.owner_id, owner.actor_id);
+    checkEqual('G03 拒绝退群后 owner 角色未变', afterRejection.room.my_role, 'owner');
+    check(
+      'G03 拒绝退群后另一成员仍 active',
+      afterRejection.members.some((item) => item.actor_id === member.actor_id),
+      afterRejection.members,
+    );
+
+    // 最后一名 owner 退群仍然允许；随后任何一方都不能再向空群加人。
+    const solo = await callTool<GroupRoomView>(ownerConn.client, 'network_room_create', {
+      request_id: newRequestId('g03_solo_room'),
+      kind: 'group',
+      members: [member.actor_id],
+      title: 'G03 owner 独自退群',
+    });
+    const soloRoomId = solo.room.room_id;
+    await callTool(ownerConn.client, 'network_room_members_update', {
+      request_id: newRequestId('g03_solo_remove'),
+      room_id: soloRoomId,
+      remove: [member.actor_id],
+    });
+    await leaveRoom(ownerConn, soloRoomId);
+    checkEqual(
+      'G03 owner 是唯一 active 成员时允许退群',
+      await roomOfIfMember(ownerConn, soloRoomId),
+      null,
+    );
+    await expectToolError(
+      'G03 owner 退群后不能向空群加人',
+      addMembers(ownerConn, soloRoomId, [member.actor_id]),
+      'NOT_MEMBER',
+    );
+
+    let bothSucceeded = 0;
+    let nonEmptyWithoutOwner = 0;
+    let emptyRooms = 0;
+    let nonEmptyWithOwner = 0;
+    for (let round = 0; round < 40; round += 1) {
+      const room = await callTool<GroupRoomView>(ownerConn.client, 'network_room_create', {
+        request_id: newRequestId('g03_race_room'),
+        kind: 'group',
+        members: [member.actor_id],
+        title: `G03 owner 退群并发 ${round + 1}`,
+      });
+      const raceRoomId = room.room.room_id;
+      await callTool(ownerConn.client, 'network_room_members_update', {
+        request_id: newRequestId('g03_race_remove'),
+        room_id: raceRoomId,
+        remove: [member.actor_id],
+      });
+      const [addOutcome, leaveOutcome] = await Promise.allSettled([
+        callTool<GroupRoomView>(ownerConn.client, 'network_room_members_update', {
+          request_id: newRequestId('g03_race_add'),
+          room_id: raceRoomId,
+          add: [member.actor_id],
+        }),
+        leaveRoom(ownerConn, raceRoomId),
+      ]);
+      const addSucceeded = addOutcome.status === 'fulfilled';
+      const leaveSucceeded = leaveOutcome.status === 'fulfilled';
+      if (addSucceeded && leaveSucceeded) bothSucceeded += 1;
+
+      const detail =
+        (await roomOfIfMember(ownerConn, raceRoomId)) ??
+        (await roomOfIfMember(memberConn, raceRoomId));
+      if (!detail) {
+        emptyRooms += 1;
+        check(`G03 第 ${round + 1} 轮空群时 add 未成功`, addSucceeded === false);
+        continue;
+      }
+      const ownerRow = detail.members.find(
+        (item) => item.actor_id === detail.room.owner_id && item.role === 'owner',
+      );
+      check(
+        `G03 第 ${round + 1} 轮非空群仍有 owner`,
+        detail.room.owner_id !== null && Boolean(ownerRow),
+        { owner_id: detail.room.owner_id, members: detail.members },
+      );
+      if (!ownerRow) nonEmptyWithoutOwner += 1;
+      else nonEmptyWithOwner += 1;
+    }
+    checkEqual('G03 40 轮 owner 退群与加人不能同时成功', bothSucceeded, 0);
+    checkEqual('G03 40 轮没有“有成员但 owner 为空”', nonEmptyWithoutOwner, 0);
+    console.log(
+      `    owner 退群并发结果：空群 ${emptyRooms} 轮，保留 owner ${nonEmptyWithOwner} 轮`,
+    );
+  } finally {
+    await ownerConn.close();
+    await memberConn.close();
+  }
 }
 
 export async function runGroupRoleAcceptance(): Promise<void> {
@@ -660,4 +799,6 @@ export async function runGroupRoleAcceptance(): Promise<void> {
       ...agentConnections.map((connection) => connection.close()),
     ]);
   }
+
+  await runOwnerLeaveConcurrency();
 }

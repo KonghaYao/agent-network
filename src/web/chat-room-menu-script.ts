@@ -57,12 +57,68 @@ function roomMenuNode() {
   return document.getElementById('room-menu');
 }
 
+function roomMenuResetStopped() {
+  const panel = document.getElementById('room-menu-stopped');
+  if (panel) panel.hidden = true;
+  const summary = document.getElementById('room-menu-stopped-summary');
+  if (summary) summary.textContent = '';
+  const list = document.getElementById('room-menu-stopped-tasks');
+  if (list) list.textContent = '';
+  const empty = document.getElementById('room-menu-stopped-empty');
+  if (empty) empty.hidden = true;
+  const details = document.getElementById('room-menu-stopped-details');
+  if (details) {
+    details.hidden = false;
+    details.open = false;
+  }
+}
+
+function renderRoomMenuStopped(stopped) {
+  const panel = document.getElementById('room-menu-stopped');
+  if (!panel || !stopped) return;
+  const pending = Math.max(0, Number(stopped.pending_deliveries) || 0);
+  const claimed = Math.max(0, Number(stopped.claimed_deliveries) || 0);
+  const tasks = Array.isArray(stopped.open_tasks) ? stopped.open_tasks : [];
+  const summary = document.getElementById('room-menu-stopped-summary');
+  if (summary) {
+    summary.textContent =
+      '待处理投递 ' + pending + ' 条（已领取 ' + claimed + ' 条），未完成任务 ' +
+      tasks.length + ' 个';
+  }
+  const list = document.getElementById('room-menu-stopped-tasks');
+  if (list) {
+    list.textContent = '';
+    for (const task of tasks) {
+      const item = document.createElement('li');
+      const description = task && task.description ? String(task.description) : '未命名任务';
+      const status = task && task.status === 'claimed' ? '已领取' : '待领取';
+      item.textContent = status + '：' + description;
+      list.appendChild(item);
+    }
+  }
+  const details = document.getElementById('room-menu-stopped-details');
+  if (details) {
+    details.hidden = tasks.length === 0;
+    details.open = false;
+  }
+  const empty = document.getElementById('room-menu-stopped-empty');
+  if (empty) {
+    empty.textContent =
+      pending === 0 && claimed === 0 && tasks.length === 0
+        ? '没有待处理投递或未完成任务'
+        : '没有未完成任务';
+    empty.hidden = tasks.length > 0;
+  }
+  panel.hidden = false;
+}
+
 function roomMenuResetStatus() {
   const status = document.getElementById('room-menu-status');
   if (!status) return;
   status.textContent = '';
   status.hidden = true;
   status.classList.remove('error', 'ok');
+  roomMenuResetStopped();
 }
 
 function closeRoomMenu() {
@@ -524,6 +580,7 @@ async function toggleRoomAgentDisabled() {
   if (reissueButton) reissueButton.disabled = true;
   if (archiveButton) archiveButton.disabled = true;
   roomMenuResetStatus();
+  let nextDisabledLabel = null;
   try {
     const me = await ensureIdentity();
     if (roomMenuTarget !== target) return;
@@ -553,8 +610,17 @@ async function toggleRoomAgentDisabled() {
       });
     }
     if (!result || result.actor_id !== peer.actor_id) throw new Error('停用/启用结果不完整');
-    showToast(disabled ? ROOM_MENU_ENABLED_STATUS : ROOM_MENU_DISABLED_STATUS);
-    if (roomMenuTarget === target) closeRoomMenu();
+    if (!disabled && result.stopped) {
+      // 停用结果携带停用前的待处理工作；保留菜单让管理者看到数量与任务，
+      // 不把信息塞进会自动消失的 toast。
+      renderRoomMenuStopped(result.stopped);
+      showToast(ROOM_MENU_DISABLED_STATUS);
+      nextDisabledLabel = ROOM_MENU_ENABLE_LABEL;
+    } else {
+      roomMenuResetStopped();
+      showToast(disabled ? ROOM_MENU_ENABLED_STATUS : ROOM_MENU_DISABLED_STATUS);
+      if (roomMenuTarget === target) closeRoomMenu();
+    }
   } catch (error) {
     const code = error && error.code ? error.code : '';
     const detail = code === 'PERMISSION_DENIED'
@@ -573,7 +639,7 @@ async function toggleRoomAgentDisabled() {
     roomMenuBusy = false;
     if (button && roomMenuTarget === target) {
       button.disabled = false;
-      button.textContent = ROOM_MENU_DISABLE_LABEL;
+      button.textContent = nextDisabledLabel || ROOM_MENU_DISABLE_LABEL;
     }
     if (copyButton) copyButton.disabled = false;
     if (reissueButton) reissueButton.disabled = false;

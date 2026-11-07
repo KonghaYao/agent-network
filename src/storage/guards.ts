@@ -40,6 +40,7 @@ export const GUARD_TABLES = {
   taskState: 'guard_task_state',
   friendRequired: 'guard_friend_required',
   contactRequestStale: 'guard_contact_request_stale',
+  ownerTransferRequired: 'guard_owner_transfer_required',
 } as const;
 
 export type GuardName = keyof typeof GUARD_TABLES;

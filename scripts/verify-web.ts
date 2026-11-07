@@ -6294,6 +6294,233 @@ async function main(): Promise<void> {
       });
     }
 
+    // 2b-2b. 停用 Agent：确认后展示待处理投递与未完成任务，错误可见。
+    {
+      interface ManagedAgent {
+        actor_id: string;
+        token: string;
+        agent_session_id: string | null;
+        name: string;
+      }
+      const createManagedAgent = async (name: string): Promise<ManagedAgent> => {
+        const created = await rawTool<ManagedAgent>(data.humanToken, 'network_agent_create', {
+          request_id: requestId('create_agent'),
+          name,
+        });
+        await rawOwnAgentLink(data.humanToken, {
+          agent_session_id: created.agent_session_id ?? undefined,
+        });
+        return created;
+      };
+      const pendingAgent = await createManagedAgent('停用待处理 Agent');
+      const pendingRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [pendingAgent.actor_id],
+      });
+      await sendInvokeMessage(
+        data.humanToken,
+        pendingRoom.room.room_id,
+        '停用前待领取投递',
+        [pendingAgent.actor_id],
+      );
+      const openTask = await rawTool<{ task: { task_id: string } }>(
+        data.humanToken,
+        'network_task_add',
+        {
+          request_id: requestId('task_add'),
+          room_id: pendingRoom.room.room_id,
+          description: '停用前未完成任务',
+        },
+      );
+      await rawTool(pendingAgent.token, 'network_task_claim', {
+        request_id: requestId('task_claim'),
+        task_id: openTask.task.task_id,
+      });
+
+      const idleAgent = await createManagedAgent('停用空态 Agent');
+      const idleRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [idleAgent.actor_id],
+      });
+
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const openAgentMenu = async (agentName: string, roomId: string) => {
+        await waitRoomListName(page, agentName);
+        await page.locator(roomLink(roomId)).click({ button: 'right' });
+        await page.locator('#room-menu').waitFor({ state: 'visible' });
+        checkEqual(
+          `${agentName} 菜单显示停用入口`,
+          await page.locator('#room-menu-toggle-disabled').isVisible(),
+          true,
+        );
+      };
+      try {
+        await page.goto(`${server.base}/`);
+        await page.locator('#room-list .room-item').first().waitFor();
+
+        // 停用前 mock 失败：错误必须留在菜单状态行，不能静默。
+        await openAgentMenu(idleAgent.name, idleRoom.room.room_id);
+        await page.route('**/mcp', async (route) => {
+          if (route.request().headers()['mcp-name'] !== 'network_agent_disable') {
+            await route.continue();
+            return;
+          }
+          const body = route.request().postDataJSON() as { id?: unknown } | null;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: body?.id ?? null,
+              result: {
+                isError: true,
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      code: 'CONFLICT',
+                      message: '模拟停用失败',
+                      retryable: false,
+                    }),
+                  },
+                ],
+              },
+            }),
+          });
+        });
+        page.once('dialog', async (dialog) => {
+          check('停用确认说明任务不会被标记完成', dialog.message().includes('待处理任务不会标记完成'));
+          await dialog.accept();
+        });
+        await page.locator('#room-menu-toggle-disabled').click();
+        await page.waitForFunction(
+          `(document.getElementById('room-menu-status').textContent || '').includes('停用/启用失败：模拟停用失败')`,
+        );
+        checkEqual(
+          '停用失败显示可读错误',
+          await page.locator('#room-menu-status').isVisible(),
+          true,
+        );
+        await page.unroute('**/mcp');
+
+        page.once('dialog', async (dialog) => {
+          await dialog.accept();
+        });
+        await page.locator('#room-menu-toggle-disabled').click();
+        await page.waitForFunction(
+          `document.getElementById('room-menu-stopped').hidden === false`,
+        );
+        checkEqual(
+          '无待处理工作时显示空态摘要',
+          ((await page.locator('#room-menu-stopped-summary').textContent()) ?? '').trim(),
+          '待处理投递 0 条（已领取 0 条），未完成任务 0 个',
+        );
+        checkEqual(
+          '无待处理工作时显示空态文案',
+          ((await page.locator('#room-menu-stopped-empty').textContent()) ?? '').trim(),
+          '没有待处理投递或未完成任务',
+        );
+        checkEqual(
+          '停用成功后菜单保持打开',
+          await page.locator('#room-menu').isVisible(),
+          true,
+        );
+        checkEqual(
+          '停用成功后按钮切换为启用',
+          ((await page.locator('#room-menu-toggle-disabled').textContent()) ?? '').trim(),
+          '启用 Agent',
+        );
+
+        // 启用失败同样必须可见，并清空上一次的待处理面板。
+        await page.route('**/mcp', async (route) => {
+          if (route.request().headers()['mcp-name'] !== 'network_agent_enable') {
+            await route.continue();
+            return;
+          }
+          const body = route.request().postDataJSON() as { id?: unknown } | null;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: body?.id ?? null,
+              result: {
+                isError: true,
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      code: 'CONFLICT',
+                      message: '模拟启用失败',
+                      retryable: false,
+                    }),
+                  },
+                ],
+              },
+            }),
+          });
+        });
+        await page.locator('#room-menu-toggle-disabled').click();
+        await page.waitForFunction(
+          `(document.getElementById('room-menu-status').textContent || '').includes('停用/启用失败：模拟启用失败')`,
+        );
+        checkEqual(
+          '启用失败显示可读错误',
+          await page.locator('#room-menu-status').isVisible(),
+          true,
+        );
+        checkEqual(
+          '启用失败清空旧待处理面板',
+          await page.locator('#room-menu-stopped').isHidden(),
+          true,
+        );
+        await page.unroute('**/mcp');
+        await page.keyboard.press('Escape');
+
+        // 真实停用：展示 pending delivery 数与 claimed 任务描述。
+        await openAgentMenu(pendingAgent.name, pendingRoom.room.room_id);
+        page.once('dialog', async (dialog) => {
+          await dialog.accept();
+        });
+        await page.locator('#room-menu-toggle-disabled').click();
+        await page.waitForFunction(
+          `document.getElementById('room-menu-stopped').hidden === false`,
+        );
+        checkEqual(
+          '停用后展示待处理投递数量',
+          ((await page.locator('#room-menu-stopped-summary').textContent()) ?? '').trim(),
+          '待处理投递 1 条（已领取 0 条），未完成任务 1 个',
+        );
+        check(
+          '停用后展示未完成任务描述',
+          ((await page.locator('#room-menu-stopped-tasks').textContent()) ?? '').includes(
+            '停用前未完成任务',
+          ),
+          await page.locator('#room-menu-stopped-tasks').textContent(),
+        );
+        checkEqual(
+          '停用后任务列表可见',
+          await page.locator('#room-menu-stopped-details').isVisible(),
+          true,
+        );
+      } finally {
+        await context.close();
+        for (const actorId of [pendingAgent.actor_id, idleAgent.actor_id]) {
+          await rawTool(data.humanToken, 'network_contact_remove', {
+            request_id: requestId('contact'),
+            actor_id: actorId,
+          });
+        }
+      }
+    }
+
     // 2b-2b. 已创建但非好友的本机 Agent：打开选择器时用 human token 补齐联系人。
     // 用 network_agent_create 创建（浏览器 human 是管理者），补齐请求按
     // auto_manager 自动接受；未认领的 network_register 只会停在 pending。
