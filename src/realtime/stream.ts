@@ -516,6 +516,8 @@ function roomStreamItems(
     }
     case 'task_created':
     case 'task_offered':
+    case 'task_offer_accepted':
+    case 'task_offer_declined':
     case 'task_claimed':
     case 'task_cancelled': {
       // 任务事件只让 active human 刷新任务视图。Agent 的工作唤醒只来自

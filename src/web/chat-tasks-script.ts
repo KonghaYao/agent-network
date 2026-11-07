@@ -430,7 +430,37 @@ function renderTaskDetailActions(task) {
       syncTaskCardMarkers(messagesElement);
       return result.task;
     } catch (caught) {
-      error.textContent = failureLabel + '：' + (caught && caught.message ? caught.message : caught);
+      const code = caught && caught.code ? String(caught.code) : '';
+      let message = failureLabel + '：' + (caught && caught.message ? caught.message : caught);
+      if (
+        code === 'CLAIM_CONFLICT' ||
+        code === 'CONFLICT' ||
+        code === 'ASSIGNMENT_STALE' ||
+        code === 'VERSION_CONFLICT' ||
+        code === 'REQUEST_EXPIRED'
+      ) {
+        try {
+          const latest = await callTool('network_task_get', { task_id: task.task_id });
+          renderTaskDetail(latest.task);
+          const freshError = taskDetailActionsElement.querySelector('.form-error');
+          const owner =
+            latest.task.owner_name ||
+            (latest.task.assignment && latest.task.assignment.owner_name) ||
+            '';
+          if (freshError) {
+            freshError.textContent = message + (owner ? '；当前负责人：' + owner : '');
+          }
+          await loadTaskSummary().catch(function () {});
+          if (activeRoomId === latest.task.room_id) {
+            loadRoomTasks(activeRoomId, roomEpoch);
+          }
+          syncTaskCardMarkers(messagesElement);
+          return null;
+        } catch (refreshError) {
+          message += '；刷新权威状态失败';
+        }
+      }
+      error.textContent = message;
       actions.querySelectorAll('button').forEach(function (button) { button.disabled = false; });
       return null;
     }
@@ -468,6 +498,48 @@ function renderTaskDetailActions(task) {
     actions.append(select, offer);
   }
 
+  if (task.can_accept && task.assignment && task.assignment.status === 'offered') {
+    const accept = document.createElement('button');
+    accept.type = 'button';
+    accept.textContent = '接受任务';
+    accept.addEventListener('click', function () {
+      run(function () {
+        return callTool('network_task_accept', {
+          request_id: requestId('task_accept'),
+          task_id: task.task_id,
+          assignment_id: task.assignment.assignment_id,
+          expected_revision: task.revision
+        });
+      }, '接受失败');
+    });
+    actions.append(accept);
+  }
+
+  if (task.can_decline && task.assignment && task.assignment.status === 'offered') {
+    const reason = document.createElement('input');
+    reason.type = 'text';
+    reason.className = 'task-cancel-reason';
+    reason.maxLength = 300;
+    reason.placeholder = '拒绝原因（可选）';
+    reason.setAttribute('aria-label', '拒绝原因');
+    const decline = document.createElement('button');
+    decline.type = 'button';
+    decline.textContent = '拒绝任务';
+    decline.addEventListener('click', function () {
+      const args = {
+        request_id: requestId('task_decline'),
+        task_id: task.task_id,
+        assignment_id: task.assignment.assignment_id,
+        expected_revision: task.revision
+      };
+      if (reason.value.trim()) args.reason = reason.value.trim();
+      run(function () {
+        return callTool('network_task_decline', args);
+      }, '拒绝失败');
+    });
+    actions.append(reason, decline);
+  }
+
   if (task.can_claim) {
     const claim = document.createElement('button');
     claim.type = 'button';
@@ -476,7 +548,8 @@ function renderTaskDetailActions(task) {
       run(function () {
         return callTool('network_task_claim', {
           request_id: requestId('task_claim'),
-          task_id: task.task_id
+          task_id: task.task_id,
+          expected_revision: task.revision
         });
       }, '领取失败');
     });
@@ -503,7 +576,8 @@ function renderTaskDetailActions(task) {
         return callTool('network_task_cancel', {
           request_id: requestId('task_cancel'),
           task_id: task.task_id,
-          reason: reason.value.trim()
+          reason: reason.value.trim(),
+          expected_revision: task.revision
         });
       }, '取消失败');
     });

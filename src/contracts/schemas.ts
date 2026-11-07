@@ -639,12 +639,36 @@ export const taskOfferSchema = z.object({
   expected_revision: z.number().int().min(1).optional(),
 });
 
-export const taskClaimSchema = z.object({ request_id: requestId, task_id: id() });
+/**
+ * 接手指定 offer：`assignment_id` 缺失时使用任务当前 assignment；
+ * `expected_revision` 用于迟到接受不覆盖新指派，服务端在事务内再校验一次。
+ */
+export const taskAcceptSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  assignment_id: id().optional(),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+export const taskDeclineSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  assignment_id: id().optional(),
+  expected_revision: z.number().int().min(1).optional(),
+  reason: z.string().trim().max(LIMITS.taskCancelReasonBytes).optional(),
+});
+
+export const taskClaimSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  expected_revision: z.number().int().min(1).optional(),
+});
 
 export const taskCancelSchema = z.object({
   request_id: requestId,
   task_id: id(),
   reason: z.string().trim().min(1).max(LIMITS.taskCancelReasonBytes),
+  expected_revision: z.number().int().min(1).optional(),
 });
 
 /**
@@ -763,6 +787,8 @@ export type TaskGetInput = z.infer<typeof taskGetSchema>;
 export type TaskListInput = z.infer<typeof taskListSchema>;
 export type TaskSummaryInput = z.infer<typeof taskSummarySchema>;
 export type TaskOfferInput = z.infer<typeof taskOfferSchema>;
+export type TaskAcceptInput = z.infer<typeof taskAcceptSchema>;
+export type TaskDeclineInput = z.infer<typeof taskDeclineSchema>;
 export type TaskClaimInput = z.infer<typeof taskClaimSchema>;
 export type TaskCancelInput = z.infer<typeof taskCancelSchema>;
 export type FeedbackCreateInput = z.infer<typeof feedbackCreateSchema>;

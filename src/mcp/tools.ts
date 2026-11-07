@@ -76,9 +76,11 @@ import {
   roomRoleSetSchema,
   roomsListSchema,
   syncSchema,
+  taskAcceptSchema,
   taskCancelSchema,
   taskClaimSchema,
   taskCreateSchema,
+  taskDeclineSchema,
   taskGetSchema,
   taskListSchema,
   taskOfferSchema,
@@ -173,9 +175,11 @@ import {
   roomOwnerTransferRespond,
 } from '../domain/owner-transfers';
 import {
+  taskAccept,
   taskCancel,
   taskClaim,
   taskCreate,
+  taskDecline,
   taskGet,
   taskList,
   taskOffer,
@@ -1039,8 +1043,32 @@ export function registerTools(
 
   register(
     server,
+    'network_task_accept',
+    '接受指定接手 offer：只有当前 assignment 的候选负责人（human 或 Agent）可调用，原子把任务从 offered 转为 in_progress 并成为唯一 owner。建议同时传 assignment_id 与 expected_revision；版本已变化返回 VERSION_CONFLICT，旧 offer 或已被接受的 offer 返回 ASSIGNMENT_STALE，邀请过期返回 REQUEST_EXPIRED，非当前候选者返回 PERMISSION_DENIED。验收人不能接受自己的任务。接受只表示业务责任接手，不完成关联 delivery，更不把任务标为 accepted；通知处理与任务验收是不同事实。',
+    taskAcceptSchema,
+    taskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskAccept(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_decline',
+    '拒绝指定接手 offer：只有当前 assignment 的候选负责人（human 或 Agent）可调用，可附可选 reason 供审计。拒绝原子撤销当前 assignment、把任务退回 unassigned 并使该 offer 的投递失效，不会自动把任务转给全群其他成员，也不会产生新 assignment。建议同时传 assignment_id 与 expected_revision；旧 offer、已接受或已取消的任务返回 ASSIGNMENT_STALE/CONFLICT。',
+    taskDeclineSchema,
+    taskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskDecline(db, principal, input);
+    },
+  );
+
+  register(
+    server,
     'network_task_claim',
-    '公开领取一个 unassigned 任务：human 或 Agent 的有效成员都可调用，原子转为 in_progress 并生成 current assignment。验收人不能领取自己验收的任务；并发领取只有一个成功，其余返回 CLAIM_CONFLICT。领取不创建 delivery、不改变 pending_count；先看 task_summary 的 pending/claimed，再按房间 list 后 claim。',
+    '公开领取一个 unassigned 任务：human 或 Agent 的有效成员都可调用，原子转为 in_progress 并生成 current assignment。验收人不能领取自己验收的任务；并发领取只有一个成功，其余返回 CLAIM_CONFLICT 并携带权威 owner 状态。可传 expected_revision 阻止基于旧版本的迟到领取；领取不创建 delivery、不改变 pending_count；先看 task_summary 的 pending/claimed，再按房间 list 后 claim。',
     taskClaimSchema,
     taskResultSchema,
     async (input) => {
@@ -1052,7 +1080,7 @@ export function registerTools(
   register(
     server,
     'network_task_cancel',
-    '取消任务：创建者、当前负责人或群 owner/管理员可用，reason 必填并保存为审计。取消会撤销当前 assignment、关闭仍 pending/claimed 的关联 delivery，并向被取消的 human 候选发送控制通知；不创建新任务、不增加 pending_count、不伪造聊天未读。已验收/已取消/历史完成的任务不能再次取消。',
+    '取消任务：创建者、当前负责人或群 owner/管理员可用，reason 必填并保存为审计。可传 expected_revision 与读取时的任务版本做 CAS；并发接受、拒绝或取消只有一个按提交序生效，其余返回 CONFLICT/VERSION_CONFLICT。取消会撤销当前 assignment、关闭仍 pending/claimed 的关联 delivery，并向被取消的 human 候选发送控制通知；不创建新任务、不增加 pending_count、不伪造聊天未读。已验收/已取消/历史完成的任务不能再次取消。',
     taskCancelSchema,
     taskResultSchema,
     async (input) => {

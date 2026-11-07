@@ -2418,15 +2418,23 @@ async function runTaskAcceptance(
     name: '任务 UI Agent',
     agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
   });
+  const reviewerToken = crypto.randomUUID();
+  const reviewer = await rawTool<Actor>(reviewerToken, 'network_register', {
+    request_id: requestId('task_reviewer'),
+    kind: 'human',
+    name: '任务 UI 验收人',
+  });
   await rawBefriend(humanToken, agentToken, { actor_id: agent.actor_id });
+  await rawBefriend(humanToken, reviewerToken, { actor_id: reviewer.actor_id });
   const room = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
     request_id: requestId('room'),
     kind: 'group',
     title: '任务 UI 验收群',
-    members: [agent.actor_id],
+    members: [agent.actor_id, reviewer.actor_id],
   });
   const roomId = room.room.room_id;
   await acceptRoomInvites(agentToken, roomId);
+  await acceptRoomInvites(reviewerToken, roomId);
   await rawTool(humanToken, 'network_room_mark_read', {
     room_id: roomId,
     through_seq: room.room.head_seq,
@@ -2633,6 +2641,164 @@ async function runTaskAcceptance(
       room_id: roomId,
     })).room.head_seq;
     checkEqual('任务状态变化不推进 head_seq', headAfter, headAfterCreate);
+
+    // D02 网页入口：候选者可从详情接受/拒绝 offer，并带 revision CAS。
+    const uiAcceptTask = await rawTool<{ task: { task_id: string } }>(
+      humanToken,
+      'network_task_create',
+      {
+        request_id: requestId('task_create'),
+        room_id: roomId,
+        title: 'UI 接受任务',
+        assignee_actor_id: human.actor_id,
+        reviewer_actor_id: agent.actor_id,
+      },
+    );
+    if (!(await page.locator('#task-popover').isVisible())) {
+      await page.locator('#task-toggle').click();
+      await page.locator('#task-popover').waitFor({ state: 'visible' });
+    }
+    await page.waitForFunction(
+      `document.querySelector('#task-list .task-item[data-task-id="${uiAcceptTask.task.task_id}"]') !== null`,
+    );
+    await page
+      .locator(`#task-list .task-item[data-task-id="${uiAcceptTask.task.task_id}"]`)
+      .click();
+    await page.locator('#task-detail-modal').waitFor({ state: 'visible' });
+    const acceptButton = page
+      .locator('#task-detail-actions button')
+      .filter({ hasText: '接受任务' });
+    if ((await acceptButton.count()) === 0) throw new Error('任务详情缺少接受按钮');
+    await acceptButton.click();
+    await page.waitForFunction(
+      `document.getElementById('task-detail-body').innerText.includes('进行中')`,
+    );
+    checkEqual(
+      '网页接受 offer 后服务端为 in_progress',
+      (await rawTool<{ task: { status: string } }>(humanToken, 'network_task_get', {
+        task_id: uiAcceptTask.task.task_id,
+      })).task.status,
+      'in_progress',
+    );
+    await page.locator('#task-detail-close').click();
+
+    const uiDeclineTask = await rawTool<{ task: { task_id: string } }>(
+      humanToken,
+      'network_task_create',
+      {
+        request_id: requestId('task_create'),
+        room_id: roomId,
+        title: 'UI 拒绝任务',
+        assignee_actor_id: human.actor_id,
+        reviewer_actor_id: agent.actor_id,
+      },
+    );
+    if (!(await page.locator('#task-popover').isVisible())) {
+      await page.locator('#task-toggle').click();
+      await page.locator('#task-popover').waitFor({ state: 'visible' });
+    }
+    await page.waitForFunction(
+      `document.querySelector('#task-list .task-item[data-task-id="${uiDeclineTask.task.task_id}"]') !== null`,
+    );
+    await page
+      .locator(`#task-list .task-item[data-task-id="${uiDeclineTask.task.task_id}"]`)
+      .click();
+    await page.locator('#task-detail-modal').waitFor({ state: 'visible' });
+    const declineReason = page.locator('#task-detail-actions input[aria-label="拒绝原因"]');
+    await declineReason.fill('UI 拒绝原因');
+    const declineButton = page
+      .locator('#task-detail-actions button')
+      .filter({ hasText: '拒绝任务' });
+    if ((await declineButton.count()) === 0) throw new Error('任务详情缺少拒绝按钮');
+    await declineButton.click();
+    await page.waitForFunction(
+      `document.getElementById('task-detail-body').innerText.includes('待领取')`,
+    );
+    checkEqual(
+      '网页拒绝 offer 后服务端为 unassigned',
+      (await rawTool<{ task: { status: string } }>(humanToken, 'network_task_get', {
+        task_id: uiDeclineTask.task.task_id,
+      })).task.status,
+      'unassigned',
+    );
+    await page.locator('#task-detail-close').click();
+
+    // D02-T01 网页冲突：过期的“领取”操作失败后必须显示真实负责人。
+    const uiRaceTask = await rawTool<{ task: { task_id: string } }>(
+      humanToken,
+      'network_task_create',
+      {
+        request_id: requestId('task_create'),
+        room_id: roomId,
+        title: 'UI 领取冲突',
+        reviewer_actor_id: reviewer.actor_id,
+      },
+    );
+    if (!(await page.locator('#task-popover').isVisible())) {
+      await page.locator('#task-toggle').click();
+      await page.locator('#task-popover').waitFor({ state: 'visible' });
+    }
+    await page.waitForFunction(
+      `document.querySelector('#task-list .task-item[data-task-id="${uiRaceTask.task.task_id}"]') !== null`,
+    );
+    await page
+      .locator(`#task-list .task-item[data-task-id="${uiRaceTask.task.task_id}"]`)
+      .click();
+    await page.locator('#task-detail-modal').waitFor({ state: 'visible' });
+    const raceClaim = page
+      .locator('#task-detail-actions button')
+      .filter({ hasText: '领取任务' });
+    if ((await raceClaim.count()) === 0) throw new Error('任务详情缺少领取按钮');
+    // 延迟网页自己的领取请求，让 Agent 先完成领取；网页随后带着旧 revision
+    // 提交，必须收到冲突、刷新详情并显示真实负责人。
+    await page.evaluate(`(() => {
+      const original = window.fetch;
+      window.__restoreTaskFetch = () => { window.fetch = original; };
+      window.fetch = function (input, init) {
+        const body = init && typeof init.body === 'string' ? init.body : '';
+        if (body.includes('"network_task_claim"')) {
+          return new Promise((resolve) => setTimeout(resolve, 1500)).then(() =>
+            original.call(this, input, init)
+          );
+        }
+        return original.call(this, input, init);
+      };
+    })()`);
+    try {
+      await raceClaim.click();
+      await rawTool(agentToken, 'network_task_claim', {
+        request_id: requestId('task_claim'),
+        task_id: uiRaceTask.task.task_id,
+      });
+      await page.waitForFunction(
+        `(() => {
+          const body = document.getElementById('task-detail-body');
+          const error = document.querySelector('#task-detail-actions .form-error');
+          return Boolean(
+            body &&
+            body.innerText.includes('进行中') &&
+            error &&
+            error.innerText.includes('任务 UI Agent')
+          );
+        })()`,
+      );
+    } finally {
+      await page.evaluate(`window.__restoreTaskFetch && window.__restoreTaskFetch()`);
+    }
+    check(
+      '网页领取冲突后显示真实负责人',
+      (await page.locator('#task-detail-actions .form-error').innerText()).includes(
+        '任务 UI Agent',
+      ),
+    );
+    const raceActual = await rawTool<{ task: { status: string; owner_actor_id: string } }>(
+      humanToken,
+      'network_task_get',
+      { task_id: uiRaceTask.task.task_id },
+    );
+    checkEqual('网页领取冲突不覆盖服务端负责人', raceActual.task.owner_actor_id, agent.actor_id);
+    checkEqual('网页领取冲突后服务端为 in_progress', raceActual.task.status, 'in_progress');
+    await page.locator('#task-detail-close').click();
 
     const mobile = await makeContext(
       browser,

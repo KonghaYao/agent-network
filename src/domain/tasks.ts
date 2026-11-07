@@ -16,9 +16,11 @@
 import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
 import type {
+  TaskAcceptInput,
   TaskCancelInput,
   TaskClaimInput,
   TaskCreateInput,
+  TaskDeclineInput,
   TaskGetInput,
   TaskListInput,
   TaskOfferInput,
@@ -224,6 +226,70 @@ function normalizeCancelReason(value: string): string {
   return normalizeTaskBody(value, '取消原因', LIMITS.taskCancelReasonBytes);
 }
 
+function normalizeDeclineReason(value: string | undefined): string {
+  return normalizeTaskBody(value, '拒绝原因', LIMITS.taskCancelReasonBytes);
+}
+
+/**
+ * 冲突时返回权威状态快照，失败方不必靠轮询猜测真实负责人。
+ *
+ * 只用于错误 details，不包含成员列表、凭据或正文。
+ */
+async function actualTaskState(
+  db: D1Database,
+  taskId: string,
+): Promise<Record<string, unknown>> {
+  const task = await getTask(db, taskId);
+  if (!task) return { task_id: taskId, status: null };
+  const assignment = task.current_assignment_id
+    ? await getTaskAssignment(db, task.current_assignment_id)
+    : null;
+  const owner = task.owner_actor_id ?? assignment?.owner_actor_id ?? null;
+  const ownerRow = owner ? await getActor(db, owner) : null;
+  return {
+    task_id: task.task_id,
+    status: task.status,
+    revision: task.revision,
+    owner_actor_id: owner,
+    owner_name: ownerRow?.name ?? null,
+    assignment_id: assignment?.assignment_id ?? null,
+    assignment_version: assignment?.assignment_version ?? null,
+    assignment_status: assignment?.status ?? null,
+  };
+}
+
+async function staleTaskError(
+  db: D1Database,
+  taskId: string,
+  code: 'ASSIGNMENT_STALE' | 'CONFLICT' | 'VERSION_CONFLICT',
+  message: string,
+): Promise<BusinessError> {
+  return new BusinessError(code, message, await actualTaskState(db, taskId));
+}
+
+const ACTUAL_STATE_CODES: ReadonlySet<string> = new Set([
+  'ASSIGNMENT_STALE',
+  'CLAIM_CONFLICT',
+  'CONFLICT',
+  'VERSION_CONFLICT',
+  'REQUEST_EXPIRED',
+]);
+
+/** 竞态失败时把权威状态并入错误 details；失败方仍应重新 task_get 刷新 UI。 */
+async function rethrowWithActualState(
+  db: D1Database,
+  taskId: string,
+  error: unknown,
+): Promise<never> {
+  if (error instanceof BusinessError && ACTUAL_STATE_CODES.has(error.code)) {
+    throw new BusinessError(error.code, error.message, {
+      ...(error.details ?? {}),
+      ...(await actualTaskState(db, taskId)),
+    });
+  }
+  throw error;
+}
+
 function parseDueAt(value: string | undefined): number | null {
   if (value === undefined) return null;
   const at = Date.parse(value);
@@ -383,7 +449,8 @@ async function buildTaskView(
     task.status === 'offered' &&
     assignment !== null &&
     assignment.status === 'offered' &&
-    assignment.owner_actor_id === context.caller;
+    assignment.owner_actor_id === context.caller &&
+    (assignment.offer_expires_at === null || assignment.offer_expires_at > nowMs());
   return {
     task_id: task.task_id,
     room_id: task.room_id,
@@ -502,6 +569,67 @@ function taskStateGuard(
       ),
     )
     .bind(taskId, ...binds);
+}
+
+/** 迟到请求使用读取时的 task_revision 做 CAS，不能覆盖新指派。 */
+function taskRevisionGuard(
+  db: D1Database,
+  taskId: string,
+  revision: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      guardSql(
+        'versionConflict',
+        'NOT EXISTS (SELECT 1 FROM tasks WHERE task_id = ? AND revision = ?)',
+      ),
+    )
+    .bind(taskId, revision);
+}
+
+/**
+ * 接受/拒绝必须仍指向当前 `offered` assignment 且执行身份一致。
+ *
+ * 旧 offer 的 assignment 已不再 current，guard 失败映射为 ASSIGNMENT_STALE；
+ * 同一人两设备竞争时，后提交方同样在这里被拒绝。
+ */
+function assignmentOfferGuard(
+  db: D1Database,
+  taskId: string,
+  assignmentId: string,
+  ownerActorId: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      guardSql(
+        'assignmentStale',
+        `NOT EXISTS (
+           SELECT 1 FROM task_assignments
+            WHERE assignment_id = ? AND task_id = ? AND owner_actor_id = ?
+              AND status = 'offered'
+         )`,
+      ),
+    )
+    .bind(assignmentId, taskId, ownerActorId);
+}
+
+function offerExpiryGuard(
+  db: D1Database,
+  assignmentId: string,
+  at: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      guardSql(
+        'requestExpired',
+        `EXISTS (
+           SELECT 1 FROM task_assignments
+            WHERE assignment_id = ? AND offer_expires_at IS NOT NULL
+              AND offer_expires_at <= ?
+         )`,
+      ),
+    )
+    .bind(assignmentId, at);
 }
 
 function taskRoomEvent(
@@ -652,12 +780,96 @@ function offerDeliveryStatements(
   ];
 }
 
+/**
+ * 拒绝 offer 时关闭该 assignment 仍有效的投递。
+ *
+ * 拒绝由候选人自己发起，因此只写状态事件与 pending_count，不再向本人发
+ * `inbox:{actor}` outbox，避免自我唤醒；`reason` 保留在事件元数据中作为审计。
+ */
+async function closeOfferDeliveries(
+  db: D1Database,
+  assignment: TaskAssignmentRow,
+  task: TaskRow,
+  actor: string,
+  reason: string,
+  requestId: string,
+  at: number,
+): Promise<{ statements: D1PreparedStatement[]; deliveryIds: string[] }> {
+  const rows = await db
+    .prepare(
+      `SELECT * FROM task_deliveries
+        WHERE assignment_id = ? AND kind = 'task_offer'`,
+    )
+    .bind(assignment.assignment_id)
+    .all<TaskDeliveryRow>();
+  const statements: D1PreparedStatement[] = [];
+  const deliveryIds: string[] = [];
+  for (const row of rows.results) {
+    const delivery = await getDelivery(db, row.delivery_id);
+    if (!delivery) continue;
+    deliveryIds.push(delivery.delivery_id);
+    if (delivery.state !== 'pending' && delivery.state !== 'claimed') continue;
+    const inboxKey = `decline:${delivery.delivery_id}:${requestId}`;
+    statements.push(
+      db
+        .prepare(
+          `UPDATE actors
+              SET pending_count = pending_count - (
+                    SELECT CASE WHEN state = 'pending' THEN 1 ELSE 0 END
+                      FROM deliveries WHERE delivery_id = ?
+                  ),
+                  updated_at = ?
+            WHERE actor_id = ?`,
+        )
+        .bind(delivery.delivery_id, at, delivery.recipient_id),
+      db
+        .prepare(
+          `UPDATE deliveries SET state = 'cancelled', error = ?, updated_at = ?
+            WHERE delivery_id = ? AND state IN ('pending', 'claimed')`,
+        )
+        .bind(reason, at, delivery.delivery_id),
+      eventStatement(
+        db,
+        {
+          eventKey: inboxKey,
+          scopeKind: 'inbox',
+          scopeId: delivery.recipient_id,
+          eventType: 'delivery_cancelled',
+          refId: delivery.delivery_id,
+          metadata: {
+            reason,
+            actor_id: actor,
+            room_id: delivery.room_id,
+            message_id: delivery.message_id,
+            sender_id: task.created_by,
+            task_id: task.task_id,
+            assignment_id: assignment.assignment_id,
+          },
+        },
+        at,
+      ),
+      inboxHeadStatement(db, delivery.recipient_id, inboxKey, at, 0),
+    );
+  }
+  return { statements, deliveryIds };
+}
+
+async function taskDeliveryIds(db: D1Database, taskId: string): Promise<string[]> {
+  const rows = await db
+    .prepare(
+      `SELECT delivery_id FROM task_deliveries
+        WHERE task_id = ? ORDER BY created_at ASC, delivery_id ASC`,
+    )
+    .bind(taskId)
+    .all<{ delivery_id: string }>();
+  return rows.results.map((row) => row.delivery_id);
+}
+
 async function validateAttachments(
   db: D1Database,
   room: RoomRow,
   fileIds: string[] | undefined,
-): Promise<Array<{ file_id: string; label: string }>> {
-  const unique = Array.from(new Set(fileIds ?? []));
+): Promise<Array<{ file_id: string; label: string }>> {  const unique = Array.from(new Set(fileIds ?? []));
   if (unique.length > LIMITS.taskAttachmentsMax) {
     throw invalid('附件', `一次最多引用 ${LIMITS.taskAttachmentsMax} 个文件`);
   }
@@ -1055,7 +1267,8 @@ async function viewFromKnownRow(
     task.status === 'offered' &&
     assignment !== null &&
     assignment.status === 'offered' &&
-    assignment.owner_actor_id === context.caller;
+    assignment.owner_actor_id === context.caller &&
+    (assignment.offer_expires_at === null || assignment.offer_expires_at > nowMs());
   return {
     task_id: task.task_id,
     room_id: task.room_id,
@@ -1463,18 +1676,368 @@ export async function taskOffer(
   return result;
 }
 
+/**
+ * 接受指定 offer：原子把 `offered` 转为 `in_progress`。
+ *
+ * 只接受当前 assignment 的候选人；`expected_revision`、assignment 状态与
+ * offer 有效期都在事务内再次校验。接受不完成 delivery：通知处理完成不是
+ * 任务验收，也不是任务状态变化的替代品。
+ */
+export async function taskAccept(
+  db: D1Database,
+  principal: Principal,
+  input: TaskAcceptInput,
+): Promise<TaskResult> {
+  const { task, context } = await requireVisibleTask(db, principal, input.task_id);
+  const payloadHash = await sha256Hex(
+    stableStringify({
+      task_id: task.task_id,
+      assignment_id: input.assignment_id ?? null,
+      expected_revision: input.expected_revision ?? null,
+    }),
+  );
+  const replay = await getOperation(db, context.caller, input.request_id);
+  if (replay) return resolveOperation(replay, payloadHash) as TaskResult;
+
+  if (task.status !== 'offered' || task.current_assignment_id === null) {
+    throw await staleTaskError(
+      db,
+      task.task_id,
+      'ASSIGNMENT_STALE',
+      '任务已不是待接手状态',
+    );
+  }
+  const assignment = await getTaskAssignment(db, task.current_assignment_id);
+  if (!assignment || assignment.status !== 'offered') {
+    throw await staleTaskError(db, task.task_id, 'ASSIGNMENT_STALE', '当前接手邀请已失效');
+  }
+  if (input.assignment_id !== undefined && input.assignment_id !== assignment.assignment_id) {
+    throw await staleTaskError(db, task.task_id, 'ASSIGNMENT_STALE', '接手邀请版本已变化');
+  }
+  if (assignment.owner_actor_id !== context.caller) {
+    throw new BusinessError(
+      'PERMISSION_DENIED',
+      '只有当前被指派候选者可以接受任务',
+      await actualTaskState(db, task.task_id),
+    );
+  }
+  if (task.reviewer_actor_id === context.caller) {
+    throw new BusinessError('PERMISSION_DENIED', '验收人不能接受自己验收的任务', {
+      task_id: task.task_id,
+    });
+  }
+  if (input.expected_revision !== undefined && input.expected_revision !== task.revision) {
+    throw new BusinessError('VERSION_CONFLICT', '任务版本已变化，请刷新后重试', {
+      expected: input.expected_revision,
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+  const at = nowMs();
+  if (assignment.offer_expires_at !== null && assignment.offer_expires_at <= at) {
+    throw new BusinessError('REQUEST_EXPIRED', '接手邀请已过期', {
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+  if (await blockedBetween(db, context.caller, task.created_by)) {
+    throw new BusinessError('BLOCKED', '对方已拉黑，不能接受该任务');
+  }
+
+  const updated: TaskRow = {
+    ...task,
+    status: 'in_progress',
+    owner_actor_id: context.caller,
+    current_assignment_id: assignment.assignment_id,
+    revision: task.revision + 1,
+    last_progress_at: at,
+    updated_at: at,
+  };
+  const activeAssignment: TaskAssignmentRow = {
+    ...assignment,
+    status: 'active',
+    accepted_at: at,
+    updated_at: at,
+  };
+  const card = await getTaskCard(db, task.task_id);
+  const names = await actorNames(db, [
+    task.created_by,
+    task.reviewer_actor_id,
+    context.caller,
+  ]);
+  const view = await viewFromKnownRow(
+    db,
+    context,
+    updated,
+    card?.message_id ?? '',
+    activeAssignment,
+    await taskDeliveryIds(db, task.task_id),
+    await attachmentsFor(db, task.task_id),
+    names,
+  );
+  const result: TaskResult = {
+    task: view,
+    authorization: historySnapshot(context.boundary),
+  };
+
+  try {
+    await runIdempotent(db, {
+      actorId: context.caller,
+      requestId: input.request_id,
+      payloadHash,
+      result,
+      build: (resultJson) => [
+        operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
+        memberGuard(db, task.room_id, context.caller),
+        taskRevisionGuard(db, task.task_id, task.revision),
+        taskStateGuard(
+          db,
+          task.task_id,
+          'status = ? AND current_assignment_id = ?',
+          'offered',
+          assignment.assignment_id,
+        ),
+        assignmentOfferGuard(
+          db,
+          task.task_id,
+          assignment.assignment_id,
+          context.caller,
+        ),
+        offerExpiryGuard(db, assignment.assignment_id, at),
+        contactBlockGuardStatement(db, context.caller, task.created_by),
+        db
+          .prepare(
+            `UPDATE tasks
+                SET status = 'in_progress', owner_actor_id = ?, current_assignment_id = ?,
+                    revision = revision + 1, last_progress_at = ?, updated_at = ?
+              WHERE task_id = ? AND status = 'offered' AND revision = ?
+                AND current_assignment_id = ? AND owner_actor_id IS NULL`,
+          )
+          .bind(
+            context.caller,
+            assignment.assignment_id,
+            at,
+            at,
+            task.task_id,
+            task.revision,
+            assignment.assignment_id,
+          ),
+        db
+          .prepare(
+            `UPDATE task_assignments
+                SET status = 'active', accepted_at = ?, updated_at = ?
+              WHERE assignment_id = ? AND status = 'offered' AND owner_actor_id = ?`,
+          )
+          .bind(at, at, assignment.assignment_id, context.caller),
+        ...taskRoomEvent(
+          db,
+          updated,
+          'task_offer_accepted',
+          `task:offer-accepted:${assignment.assignment_id}`,
+          at,
+          {
+            changed_by: context.caller,
+            assignment_id: assignment.assignment_id,
+            assignment_version: assignment.assignment_version,
+            owner_actor_id: context.caller,
+          },
+        ).statements,
+      ],
+    });
+  } catch (error) {
+    await rethrowWithActualState(db, task.task_id, error);
+  }
+  return result;
+}
+
+/**
+ * 拒绝指定 offer：任务回到 `unassigned`，不自动尝试其他成员。
+ *
+ * 拒绝不会产生新 assignment；旧 assignment 标记为 declined，关联的待接手
+ * delivery 关闭并同步 `pending_count`。原因只进入事件审计，不复制到消息。
+ */
+export async function taskDecline(
+  db: D1Database,
+  principal: Principal,
+  input: TaskDeclineInput,
+): Promise<TaskResult> {
+  const { task, context } = await requireVisibleTask(db, principal, input.task_id);
+  const reason = normalizeDeclineReason(input.reason);
+  const payloadHash = await sha256Hex(
+    stableStringify({
+      task_id: task.task_id,
+      assignment_id: input.assignment_id ?? null,
+      expected_revision: input.expected_revision ?? null,
+      reason,
+    }),
+  );
+  const replay = await getOperation(db, context.caller, input.request_id);
+  if (replay) return resolveOperation(replay, payloadHash) as TaskResult;
+
+  if (task.status !== 'offered' || task.current_assignment_id === null) {
+    throw await staleTaskError(
+      db,
+      task.task_id,
+      'ASSIGNMENT_STALE',
+      '任务已不是待接手状态',
+    );
+  }
+  const assignment = await getTaskAssignment(db, task.current_assignment_id);
+  if (!assignment || assignment.status !== 'offered') {
+    throw await staleTaskError(db, task.task_id, 'ASSIGNMENT_STALE', '当前接手邀请已失效');
+  }
+  if (input.assignment_id !== undefined && input.assignment_id !== assignment.assignment_id) {
+    throw await staleTaskError(db, task.task_id, 'ASSIGNMENT_STALE', '接手邀请版本已变化');
+  }
+  if (assignment.owner_actor_id !== context.caller) {
+    throw new BusinessError(
+      'PERMISSION_DENIED',
+      '只有当前被指派候选者可以拒绝任务',
+      await actualTaskState(db, task.task_id),
+    );
+  }
+  if (input.expected_revision !== undefined && input.expected_revision !== task.revision) {
+    throw new BusinessError('VERSION_CONFLICT', '任务版本已变化，请刷新后重试', {
+      expected: input.expected_revision,
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+
+  const at = nowMs();
+  const updated: TaskRow = {
+    ...task,
+    status: 'unassigned',
+    owner_actor_id: null,
+    current_assignment_id: null,
+    revision: task.revision + 1,
+    updated_at: at,
+  };
+  const declinedAssignment: TaskAssignmentRow = {
+    ...assignment,
+    status: 'declined',
+    ended_at: at,
+    updated_at: at,
+  };
+  const closed = await closeOfferDeliveries(
+    db,
+    assignment,
+    task,
+    context.caller,
+    reason,
+    input.request_id,
+    at,
+  );
+  const card = await getTaskCard(db, task.task_id);
+  const names = await actorNames(db, [
+    task.created_by,
+    task.reviewer_actor_id,
+    context.caller,
+  ]);
+  const view = await viewFromKnownRow(
+    db,
+    context,
+    updated,
+    card?.message_id ?? '',
+    null,
+    closed.deliveryIds,
+    await attachmentsFor(db, task.task_id),
+    names,
+  );
+  const result: TaskResult = {
+    task: view,
+    authorization: historySnapshot(context.boundary),
+  };
+
+  try {
+    await runIdempotent(db, {
+      actorId: context.caller,
+      requestId: input.request_id,
+      payloadHash,
+      result,
+      build: (resultJson) => [
+        operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
+        memberGuard(db, task.room_id, context.caller),
+        taskRevisionGuard(db, task.task_id, task.revision),
+        taskStateGuard(
+          db,
+          task.task_id,
+          'status = ? AND current_assignment_id = ?',
+          'offered',
+          declinedAssignment.assignment_id,
+        ),
+        assignmentOfferGuard(
+          db,
+          task.task_id,
+          declinedAssignment.assignment_id,
+          context.caller,
+        ),
+        db
+          .prepare(
+            `UPDATE tasks
+                SET status = 'unassigned', owner_actor_id = NULL, current_assignment_id = NULL,
+                    revision = revision + 1, updated_at = ?
+              WHERE task_id = ? AND status = 'offered' AND revision = ?
+                AND current_assignment_id = ? AND owner_actor_id IS NULL`,
+          )
+          .bind(at, task.task_id, task.revision, declinedAssignment.assignment_id),
+        db
+          .prepare(
+            `UPDATE task_assignments
+                SET status = 'declined', ended_at = ?, updated_at = ?
+              WHERE assignment_id = ? AND status = 'offered' AND owner_actor_id = ?`,
+          )
+          .bind(at, at, declinedAssignment.assignment_id, context.caller),
+        ...closed.statements,
+        ...taskRoomEvent(
+          db,
+          updated,
+          'task_offer_declined',
+          `task:offer-declined:${declinedAssignment.assignment_id}`,
+          at,
+          {
+            changed_by: context.caller,
+            assignment_id: declinedAssignment.assignment_id,
+            assignment_version: declinedAssignment.assignment_version,
+            owner_actor_id: context.caller,
+            reason,
+          },
+        ).statements,
+      ],
+    });
+  } catch (error) {
+    await rethrowWithActualState(db, task.task_id, error);
+  }
+  return result;
+}
+
 export async function taskClaim(
   db: D1Database,
   principal: Principal,
   input: TaskClaimInput,
 ): Promise<TaskResult> {
   const { task, context } = await requireVisibleTask(db, principal, input.task_id);
-  const payloadHash = await sha256Hex(stableStringify({ task_id: task.task_id }));
+  const payloadHash = await sha256Hex(
+    stableStringify({
+      task_id: task.task_id,
+      expected_revision: input.expected_revision ?? null,
+    }),
+  );
   const replay = await getOperation(db, context.caller, input.request_id);
   if (replay) return resolveOperation(replay, payloadHash) as TaskResult;
+  // 已被他人领取时，即使请求携带的 revision 也已过期，也应归类为领取竞争；
+  // VERSION_CONFLICT 只用于任务仍待领取但 revision 已变化（例如标题或指派更新）。
+  if (task.status === 'in_progress' && task.owner_actor_id !== null) {
+    throw new BusinessError('CLAIM_CONFLICT', '任务已被他人领取', {
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+  if (input.expected_revision !== undefined && input.expected_revision !== task.revision) {
+    throw new BusinessError('VERSION_CONFLICT', '任务版本已变化，请刷新后重试', {
+      expected: input.expected_revision,
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
   if (task.status !== 'unassigned') {
     throw new BusinessError('CLAIM_CONFLICT', '任务已被领取或状态已变化', {
-      task_id: task.task_id,
+      ...(await actualTaskState(db, task.task_id)),
     });
   }
   if (task.reviewer_actor_id === context.caller) {
@@ -1536,76 +2099,80 @@ export async function taskClaim(
     authorization: historySnapshot(context.boundary),
   };
 
-  await runIdempotent(db, {
-    actorId: context.caller,
-    requestId: input.request_id,
-    payloadHash,
-    result,
-    build: (resultJson) => [
-      operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
-      memberGuard(db, task.room_id, context.caller),
-      // 领取竞争必须映射为 CLAIM_CONFLICT，而不是通用的任务状态 CONFLICT。
-      db
-        .prepare(
-          guardSql(
-            'claimConflict',
-            "NOT EXISTS (SELECT 1 FROM tasks WHERE task_id = ? AND status = ? AND revision = ?)",
-          ),
-        )
-        .bind(task.task_id, 'unassigned', task.revision),
-      db
-        .prepare(
-          guardSql(
-            'taskState',
-            "EXISTS (SELECT 1 FROM task_assignments WHERE task_id = ? AND status IN ('offered','active'))",
-          ),
-        )
-        .bind(task.task_id),
-      contactBlockGuardStatement(db, context.caller, task.created_by),
-      db
-        .prepare(
-          `UPDATE tasks
-              SET status = 'in_progress', owner_actor_id = ?, current_assignment_id = ?,
-                  revision = revision + 1, last_progress_at = ?, updated_at = ?
-            WHERE task_id = ? AND status = 'unassigned' AND revision = ?`,
-        )
-        .bind(context.caller, assignmentId, at, at, task.task_id, task.revision),
-      db
-        .prepare(
-          `INSERT INTO task_assignments
-             (assignment_id, task_id, assignment_version, owner_actor_id, status,
-              offered_by, offer_expires_at, accepted_at, ended_at, last_progress_at,
-              delivery_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'active', ?, NULL, ?, NULL, ?, NULL, ?, ?)`,
-        )
-        .bind(assignmentId, task.task_id, assignmentVersion, context.caller, context.caller, at, at, at, at),
-      ...taskRoomEvent(
-        db,
-        updated,
-        'task_claimed',
-        `task:claimed:${assignmentId}`,
-        at,
-        {
-          changed_by: context.caller,
-          assignment_id: assignmentId,
-          assignment_version: assignmentVersion,
-          owner_actor_id: context.caller,
-        },
-      ).statements,
-    ],
-    onUniqueConflict: async (error) => {
-      const text = String(error);
-      if (
-        text.includes('idx_task_assignments_current') ||
-        text.includes('UNIQUE constraint failed: task_assignments.task_id')
-      ) {
-        throw new BusinessError('CLAIM_CONFLICT', '任务已被他人领取', {
-          task_id: task.task_id,
-        });
-      }
-      return undefined;
-    },
-  });
+  try {
+    await runIdempotent(db, {
+      actorId: context.caller,
+      requestId: input.request_id,
+      payloadHash,
+      result,
+      build: (resultJson) => [
+        operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
+        memberGuard(db, task.room_id, context.caller),
+        // 领取竞争必须映射为 CLAIM_CONFLICT，而不是通用的任务状态 CONFLICT。
+        db
+          .prepare(
+            guardSql(
+              'claimConflict',
+              "NOT EXISTS (SELECT 1 FROM tasks WHERE task_id = ? AND status = ? AND revision = ?)",
+            ),
+          )
+          .bind(task.task_id, 'unassigned', task.revision),
+        db
+          .prepare(
+            guardSql(
+              'taskState',
+              "EXISTS (SELECT 1 FROM task_assignments WHERE task_id = ? AND status IN ('offered','active'))",
+            ),
+          )
+          .bind(task.task_id),
+        contactBlockGuardStatement(db, context.caller, task.created_by),
+        db
+          .prepare(
+            `UPDATE tasks
+                SET status = 'in_progress', owner_actor_id = ?, current_assignment_id = ?,
+                    revision = revision + 1, last_progress_at = ?, updated_at = ?
+              WHERE task_id = ? AND status = 'unassigned' AND revision = ?`,
+          )
+          .bind(context.caller, assignmentId, at, at, task.task_id, task.revision),
+        db
+          .prepare(
+            `INSERT INTO task_assignments
+               (assignment_id, task_id, assignment_version, owner_actor_id, status,
+                offered_by, offer_expires_at, accepted_at, ended_at, last_progress_at,
+                delivery_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'active', ?, NULL, ?, NULL, ?, NULL, ?, ?)`,
+          )
+          .bind(assignmentId, task.task_id, assignmentVersion, context.caller, context.caller, at, at, at, at),
+        ...taskRoomEvent(
+          db,
+          updated,
+          'task_claimed',
+          `task:claimed:${assignmentId}`,
+          at,
+          {
+            changed_by: context.caller,
+            assignment_id: assignmentId,
+            assignment_version: assignmentVersion,
+            owner_actor_id: context.caller,
+          },
+        ).statements,
+      ],
+      onUniqueConflict: async (error) => {
+        const text = String(error);
+        if (
+          text.includes('idx_task_assignments_current') ||
+          text.includes('UNIQUE constraint failed: task_assignments.task_id')
+        ) {
+          throw new BusinessError('CLAIM_CONFLICT', '任务已被他人领取', {
+            task_id: task.task_id,
+          });
+        }
+        return undefined;
+      },
+    });
+  } catch (error) {
+    await rethrowWithActualState(db, task.task_id, error);
+  }
   return result;
 }
 
@@ -1617,10 +2184,20 @@ export async function taskCancel(
   const { task, context } = await requireVisibleTask(db, principal, input.task_id);
   const reason = normalizeCancelReason(input.reason);
   const payloadHash = await sha256Hex(
-    stableStringify({ task_id: task.task_id, reason }),
+    stableStringify({
+      task_id: task.task_id,
+      reason,
+      expected_revision: input.expected_revision ?? null,
+    }),
   );
   const replay = await getOperation(db, context.caller, input.request_id);
   if (replay) return resolveOperation(replay, payloadHash) as TaskResult;
+  if (input.expected_revision !== undefined && input.expected_revision !== task.revision) {
+    throw new BusinessError('VERSION_CONFLICT', '任务版本已变化，请刷新后重试', {
+      expected: input.expected_revision,
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
   if (
     task.status === 'accepted' ||
     task.status === 'cancelled' ||
@@ -1751,53 +2328,59 @@ export async function taskCancel(
     );
   }
 
-  await runIdempotent(db, {
-    actorId: context.caller,
-    requestId: input.request_id,
-    payloadHash,
-    result,
-    build: (resultJson) => [
-      operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
-      memberGuard(db, task.room_id, context.caller),
-      taskStateGuard(
-        db,
-        task.task_id,
-        "status NOT IN ('accepted','cancelled','legacy_completed')",
-      ),
-      db
-        .prepare(
-          `UPDATE tasks
-              SET status = 'cancelled', owner_actor_id = NULL, current_assignment_id = NULL,
-                  revision = revision + 1, cancelled_at = ?, updated_at = ?
-            WHERE task_id = ? AND status NOT IN ('accepted','cancelled','legacy_completed')`,
-        )
-        .bind(at, at, task.task_id),
-      ...(assignment
-        ? [
-            db
-              .prepare(
-                `UPDATE task_assignments
-                    SET status = 'revoked', ended_at = ?, updated_at = ?
-                  WHERE assignment_id = ? AND status IN ('offered','active')`,
-              )
-              .bind(at, at, assignment.assignment_id),
-          ]
-        : []),
-      ...deliveryStatements,
-      ...inboxHumanStatements,
-      ...taskRoomEvent(
-        db,
-        updated,
-        'task_cancelled',
-        `task:cancelled:${task.task_id}:${updated.revision}`,
-        at,
-        {
-          changed_by: context.caller,
-          reason,
-        },
-      ).statements,
-    ],
-  });
+  try {
+    await runIdempotent(db, {
+      actorId: context.caller,
+      requestId: input.request_id,
+      payloadHash,
+      result,
+      build: (resultJson) => [
+        operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
+        memberGuard(db, task.room_id, context.caller),
+        taskRevisionGuard(db, task.task_id, task.revision),
+        taskStateGuard(
+          db,
+          task.task_id,
+          "status NOT IN ('accepted','cancelled','legacy_completed')",
+        ),
+        db
+          .prepare(
+            `UPDATE tasks
+                SET status = 'cancelled', owner_actor_id = NULL, current_assignment_id = NULL,
+                    revision = revision + 1, cancelled_at = ?, updated_at = ?
+              WHERE task_id = ? AND status NOT IN ('accepted','cancelled','legacy_completed')
+                AND revision = ?`,
+          )
+          .bind(at, at, task.task_id, task.revision),
+        ...(assignment
+          ? [
+              db
+                .prepare(
+                  `UPDATE task_assignments
+                      SET status = 'revoked', ended_at = ?, updated_at = ?
+                    WHERE assignment_id = ? AND status IN ('offered','active')`,
+                )
+                .bind(at, at, assignment.assignment_id),
+            ]
+          : []),
+        ...deliveryStatements,
+        ...inboxHumanStatements,
+        ...taskRoomEvent(
+          db,
+          updated,
+          'task_cancelled',
+          `task:cancelled:${task.task_id}:${updated.revision}`,
+          at,
+          {
+            changed_by: context.caller,
+            reason,
+          },
+        ).statements,
+      ],
+    });
+  } catch (error) {
+    await rethrowWithActualState(db, task.task_id, error);
+  }
   return result;
 }
 

@@ -49,6 +49,7 @@ import { runAgentIdentityAcceptance } from './lib/agent-identity-acceptance';
 import { runAgentPresenceAcceptance } from './lib/presence-acceptance';
 import { runRoomMonitorAcceptance } from './lib/room-monitor-acceptance';
 import { runRoomTaskAcceptance } from './lib/room-task-acceptance';
+import { runTaskAssignmentAcceptance } from './lib/task-assignment-acceptance';
 import { runFeedbackAcceptance } from './lib/feedback-acceptance';
 import { runGroupMentionAcceptance } from './lib/mention-acceptance';
 import { runGroupNoImplicitDeliveryAcceptance } from './lib/no-implicit-delivery-acceptance';
@@ -1324,6 +1325,7 @@ async function main(): Promise<void> {
     await runAgentPresenceAcceptance();
     await runRoomMonitorAcceptance();
     await runRoomTaskAcceptance();
+    await runTaskAssignmentAcceptance();
     await runFeedbackAcceptance();
     await runGroupMentionAcceptance();
     await runGroupNoImplicitDeliveryAcceptance();

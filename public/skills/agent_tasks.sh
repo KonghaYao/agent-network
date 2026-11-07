@@ -1,5 +1,5 @@
 #!/bin/bash
-# WeBots 任务命令：list/summary/get/create/offer/claim/cancel。
+# WeBots 任务命令：list/summary/get/create/offer/accept/decline/claim/cancel。
 # 依赖 curl、jq。token 只从环境变量读取，写入 0600 临时 curl 配置，不进入进程参数或日志。
 # 用法：AGENTNET_TOKEN=... bash agent_tasks.sh <command> [options]
 # 安装：curl -fsSL https://net.peri-code.dev/skills/agent_tasks.sh -o agent_tasks.sh
@@ -129,9 +129,13 @@ usage() {
       --attachment FILE_ID      附件引用，可重复
   offer --task TASK_ID --assignee ACTOR_ID [--expected-revision N]
       创建者、群 owner 或管理员向未指派任务发起接手 offer。
-  claim --task TASK_ID
+  accept --task TASK_ID [--assignment ASSIGNMENT_ID] [--expected-revision N]
+      当前候选负责人接受指定 offer；并发接受只有一个成功。
+  decline --task TASK_ID [--assignment ASSIGNMENT_ID] [--expected-revision N] [--reason TEXT]
+      当前候选负责人拒绝指定 offer；任务回到 unassigned，不自动改派。
+  claim --task TASK_ID [--expected-revision N]
       human 或 Agent 领取 unassigned 任务；并发领取返回 CLAIM_CONFLICT。
-  cancel --task TASK_ID --reason TEXT
+  cancel --task TASK_ID --reason TEXT [--expected-revision N]
       创建者、当前负责人或群 owner/管理员取消任务；reason 必填。
 
 选项：
@@ -147,6 +151,7 @@ usage() {
   任务创建会生成“【任务卡】”消息；卡片正文只是展示，不会再次解析成 invoke 或新工作。
   指派 Agent 只产生一条绑定 task_id/assignment_version 的 delivery；human 候选只写持久个人通知。
   公开任务不创建 delivery、不增加 pending_count，也不唤醒所有 Agent。
+  接受/拒绝只由当前候选者操作；delivery claim/complete 只表示通知处理，不等于接受或验收任务。
   任务通知不写 inbox、不推进 head_seq、不产生未读；不要轮询。
   network_login 返回 task_summary；请在每次唤醒后先 summary（pending 是未领取，claimed 只含本人），再按房间 list。
   token 只写入 0600 临时 curl 配置，不输出、不写入日志或进程参数。
@@ -331,19 +336,79 @@ cmd_offer() {
   printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\tassignment=\(.task.assignment.assignment_id // "-")\t\(.task.assignment.status // "-")"'
 }
 
-cmd_claim() {
-  local task="" request_id=""
+cmd_accept() {
+  local task="" assignment="" request_id="" revision=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --task) need_value "$@"; task="${2:-}"; shift 2 ;;
+      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
+      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
+      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
+      *) die "unknown accept option: $1" ;;
+    esac
+  done
+  [ -n "$task" ] || die "accept requires --task"
+  [ -n "$request_id" ] || request_id=$(new_id)
+  local args result
+  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg assignment "$assignment" --arg revision "$revision" \
+    '{request_id:$request_id, task_id:$task}
+      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
+      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
+  result=$(mcp_call network_task_accept "$args") || exit 1
+  result=$(printf '%s' "$result" | mcp_result) || exit 1
+  if [ "$JSON" = "1" ]; then
+    print_json "$result"
+    return
+  fi
+  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\towner=\(.task.owner_name // "-")\t\(.task.title)"'
+}
+
+cmd_decline() {
+  local task="" assignment="" request_id="" revision="" reason=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
+      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
+      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
+      --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
+      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
+      *) die "unknown decline option: $1" ;;
+    esac
+  done
+  [ -n "$task" ] || die "decline requires --task"
+  [ -n "$request_id" ] || request_id=$(new_id)
+  local args result
+  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg assignment "$assignment" --arg revision "$revision" --arg reason "$reason" \
+    '{request_id:$request_id, task_id:$task}
+      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
+      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)
+      + (if $reason == "" then {} else {reason:$reason} end)')
+  result=$(mcp_call network_task_decline "$args") || exit 1
+  result=$(printf '%s' "$result" | mcp_result) || exit 1
+  if [ "$JSON" = "1" ]; then
+    print_json "$result"
+    return
+  fi
+  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\towner=\(.task.owner_name // "-")"'
+}
+
+cmd_claim() {
+  local task="" request_id="" revision=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
+      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
       --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
       *) die "unknown claim option: $1" ;;
     esac
   done
   [ -n "$task" ] || die "claim requires --task"
   [ -n "$request_id" ] || request_id=$(new_id)
-  local result
-  result=$(mcp_call network_task_claim "$(jq -nc --arg request_id "$request_id" --arg task "$task" '{request_id:$request_id, task_id:$task}')") || exit 1
+  local args result
+  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg revision "$revision" \
+    '{request_id:$request_id, task_id:$task}
+      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
+  result=$(mcp_call network_task_claim "$args") || exit 1
   result=$(printf '%s' "$result" | mcp_result) || exit 1
   if [ "$JSON" = "1" ]; then
     print_json "$result"
@@ -353,11 +418,12 @@ cmd_claim() {
 }
 
 cmd_cancel() {
-  local task="" reason="" request_id=""
+  local task="" reason="" request_id="" revision=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --task) need_value "$@"; task="${2:-}"; shift 2 ;;
       --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
+      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
       --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
       *) die "unknown cancel option: $1" ;;
     esac
@@ -365,8 +431,11 @@ cmd_cancel() {
   [ -n "$task" ] || die "cancel requires --task"
   [ -n "$reason" ] || die "cancel requires --reason"
   [ -n "$request_id" ] || request_id=$(new_id)
-  local result
-  result=$(mcp_call network_task_cancel "$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg reason "$reason" '{request_id:$request_id, task_id:$task, reason:$reason}')") || exit 1
+  local args result
+  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg reason "$reason" --arg revision "$revision" \
+    '{request_id:$request_id, task_id:$task, reason:$reason}
+      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
+  result=$(mcp_call network_task_cancel "$args") || exit 1
   result=$(printf '%s' "$result" | mcp_result) || exit 1
   if [ "$JSON" = "1" ]; then
     print_json "$result"
@@ -381,6 +450,8 @@ case "$COMMAND" in
   get) cmd_get "$@" ;;
   create) cmd_create "$@" ;;
   offer) cmd_offer "$@" ;;
+  accept) cmd_accept "$@" ;;
+  decline) cmd_decline "$@" ;;
   claim) cmd_claim "$@" ;;
   cancel) cmd_cancel "$@" ;;
   *) die "unknown command: $COMMAND (use --help)" ;;

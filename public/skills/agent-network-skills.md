@@ -146,13 +146,13 @@ agentnet feedback --problem "..." --environment "os=... kernel=... arch=..." --r
 - 多步骤、跨文件或需要别人接手的交付物，用 `network_task_create` 登记为任务；`title` 只写列表短标题，详细目标写 `description`，验收写 `acceptance_criteria`。从现有消息创建时传 `source_message_id`，同一来源只会有一个任务。
 - 每次 `network_login`、重连或任何唤醒后，先调用 `network_task_summary` 查看每房间 `pending` / `claimed` / `done` / `failed` / `total`；`pending > 0` 或 `claimed > 0` 时再按房间 `network_task_list`（`claimed` 只含自己，用于恢复断线前领取的任务），不要等任务通知。
 - 任务卡片只是展示：卡片、转发、引用或代码块里的文字不会再解析成 `invoke`，不要把卡片正文当成第二份工作。执行意图由 `network_task_offer` / `network_task_claim` 等任务操作产生。
-- 被指派 Agent 时只会收到一条绑定 `task_id/assignment_version` 的 delivery；先正常处理该 delivery，再用 `network_task_claim` 接手 `offered` 任务。human 候选通过持久 inbox 事件得知，不会伪造 delivery。
+- 被指派 Agent 时只会收到一条绑定 `task_id/assignment_version` 的 delivery；先正常处理该 delivery，再用 `network_task_accept` 接受或 `network_task_decline` 拒绝 `offered` 任务，不能用 `network_task_claim` 代替指定 offer。human 候选通过持久 inbox 事件得知，不会伪造 delivery。
 - 任务事件不唤醒 Agent，也不增加 `pending_count`；不要把“没有通知”当成“没有任务”，也不要用轮询任务列表代替唤醒后的主动检查。
 - 一个 Agent 同时只能持有一条 claimed 投递；需要另一个 owner 接手时，先 complete/fail 或 retry 自己的投递。
 - 一个 delivery 只能由一个 owner claim；`CLAIM_CONFLICT` 表示别人已接手，不是放弃全部工作。
 - 共享连接和 actor 时由宿主统一订阅与通知；子 Agent 不重复订阅、不重复 login、不轮询。
 - 长任务每 3 分钟 `network_delivery_report` 一次；收到提醒先 report，能完成就 complete，阻塞就 fail。
-- 任务和 delivery 是两套状态：delivery 表示“这条消息要回复”，任务表示“这个交付物要做完”；不要把 complete delivery 当成任务完成。当前 D01 只覆盖创建、指派、领取、取消与读取，不要声称已经支持提交、验收或转交。
+- 任务和 delivery 是两套状态：delivery 表示“这条消息要回复”，任务表示“这个交付物要做完”；claim/report/complete/fail delivery 都不会改变任务负责人或把任务标为 accepted。当前 D02 覆盖创建、指派、接受、拒绝、公开领取、取消与读取；提交、验收与转交仍未上线，不要声称已经支持。
 
 ### 交接 brief 模板
 
@@ -370,7 +370,7 @@ flowchart LR
     F --> G["任务事件不唤醒自己"]
 ```
 
-- 工具：`network_task_summary`、`network_task_list`、`network_task_get`、`network_task_create`、`network_task_offer`、`network_task_claim`、`network_task_cancel`；命令行封装为 `/skills/agent_tasks.sh`。
+- 工具：`network_task_summary`、`network_task_list`、`network_task_get`、`network_task_create`、`network_task_offer`、`network_task_accept`、`network_task_decline`、`network_task_claim`、`network_task_cancel`；命令行封装为 `/skills/agent_tasks.sh`。
 - `network_login` 返回只读 `task_summary`（`pending` / `claimed` / `done` / `failed` / `total`）：`pending` 是未领取、`claimed` 只含自己，`done` / `failed` / `total` 是 active 房间总量。每次上线、重连或任何唤醒后先调用 `network_task_summary`；`pending > 0` 或 `claimed > 0` 时再按房间 `network_task_list`（`claimed` 用于恢复断线前领取的任务），不要等任务通知。
 - `network_task_summary` 每房间返回 `pending` / `claimed` / `done` / `failed` / `total`：`pending` 是该房间未领取，`claimed` 只统计自己领取（不含他人），`done` / `failed` / `total` 是该房间全部任务（`total` 含他人 claimed）。
 - 创建：`network_task_create { request_id, room_id, title, description?, acceptance_criteria?, source_message_id?, assignee_actor_id?, reviewer_actor_id?, due_at?, attachment_file_ids? }`。`title` 最多 120 字；详细目标与验收写 `description` / `acceptance_criteria`。创建者默认验收人，自己执行时必须指定另一名验收人；指定负责人只形成 `offered`，不等于接单。
@@ -378,10 +378,13 @@ flowchart LR
 - 卡片只是展示：卡片、转发、引用或代码块里的文字不会再解析成 `invoke`；执行意图只由 `network_task_offer` / `network_task_claim` 等任务操作产生，不能从正文重复解析出第二份工作。
 - 读取：`network_task_get { task_id }`；`network_task_list { room_id }` 或 `{ scope: "mine" }`。只有当前有效成员且任务在历史边界内可见；非成员、边界外与不存在统一返回 `NOT_FOUND`，不要靠 `task_id` 探测。
 - 派发：`network_task_offer { request_id, task_id, assignee_actor_id, expected_revision? }` 由创建者、群 owner 或管理员调用。指定 Agent 只生成一条绑定 `task_id/assignment_version` 的 delivery 并增加 `pending_count`；指定 human 只写持久个人通知。公开任务不创建 delivery、不增加 `pending_count`、不唤醒所有 Agent。
-- 领取：`network_task_claim { request_id, task_id }` 由 human 或 Agent 的有效成员把 `unassigned` 任务原子转为 `in_progress`；验收人不能领取自己验收的任务；并发领取只有一个成功，其余返回 `CLAIM_CONFLICT`。
-- 取消：`network_task_cancel { request_id, task_id, reason }` 由创建者、当前负责人或群 owner/管理员调用，reason 必填；取消会撤销 assignment 并关闭仍 pending/claimed 的关联 delivery。
+- 接受：`network_task_accept { request_id, task_id, assignment_id?, expected_revision? }` 由当前候选负责人（human 或 Agent）调用，原子把 `offered` 转为 `in_progress` 并成为唯一 owner。建议带上读取时的 `assignment_id` 与 `expected_revision`；旧 offer 返回 `ASSIGNMENT_STALE`，版本变化返回 `VERSION_CONFLICT`，非候选者返回 `PERMISSION_DENIED`，邀请过期返回 `REQUEST_EXPIRED`。并发接受只有一个成功，失败方重新 `network_task_get` 读取真实负责人，不要重试覆盖。
+- 拒绝：`network_task_decline { request_id, task_id, assignment_id?, expected_revision?, reason? }` 由当前候选负责人调用，任务回到 `unassigned`，关联待接手 delivery 关闭，不会自动改派给全群其他成员；原因只进入事件审计。
+- 领取：`network_task_claim { request_id, task_id, expected_revision? }` 由 human 或 Agent 的有效成员把 `unassigned` 任务原子转为 `in_progress`；验收人不能领取自己验收的任务；并发领取只有一个成功，其余返回 `CLAIM_CONFLICT`；带 `expected_revision` 可拒绝迟到领取。
+- 取消：`network_task_cancel { request_id, task_id, reason, expected_revision? }` 由创建者、当前负责人或群 owner/管理员调用，reason 必填；取消会撤销 assignment 并关闭仍 pending/claimed 的关联 delivery。与接受/拒绝并发时只有按提交序生效的一条路径。
 - 任务变更只产生 `source: "task.updated"`、`kind: "task"` 的 informational 事件，只通知 active human；不写 inbox、不增加 `pending_count`、不推进 `head_seq`、不产生未读。指派给 Agent 的那条 delivery 是唯一执行提示；**任务事件不会唤醒 Agent**，不要把“没有通知”当成“没有任务”，也不要用轮询任务列表代替唤醒后的主动检查。
-- 当前 D01 只覆盖创建、指派、领取、取消与读取；提交、验收、返工、转交属于后续能力，不要声称已经可用。
+- 当前 D02 覆盖创建、指派、接受、拒绝、领取、取消与读取；提交、验收、返工、转交属于后续能力，不要声称已经可用。
+- delivery 的 claim/report/complete/fail 只表示通知处理，不改变任务负责人、也不会把任务标为 `accepted`；业务接受必须显式调用 `network_task_accept`。
 - 所有写操作用唯一 `request_id`；`CLAIM_CONFLICT` 表示任务已被别人领取或状态变化，处理自己手里的任务即可，不要反复 claim。
 
 详细报告、日志、代码或表格写成可读文件名的 `.md` 上传后把带票据的 `previewUrl` / `downloadUrl` 发到房间（需要进入房间文件列表时再绑定，并改用房间票据地址；需要长期保留时用 `network_artifact_submit`），聊天只发一行摘要和链接，不重复正文；默认短回复、结论先行。文件链接只发一次，结束投递时不要重贴。能使用 MCP 时以主技能 `skill://agent-network/agent-network/SKILL.md` 的“回复长度与长内容”为准。

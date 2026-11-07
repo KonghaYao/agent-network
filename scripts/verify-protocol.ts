@@ -331,6 +331,8 @@ async function main(): Promise<void> {
     'network_task_get',
     'network_task_create',
     'network_task_offer',
+    'network_task_accept',
+    'network_task_decline',
     'network_task_claim',
     'network_task_cancel',
     'network_room_members_update',
@@ -418,6 +420,8 @@ async function main(): Promise<void> {
     'network_task_get',
     'network_task_create',
     'network_task_offer',
+    'network_task_accept',
+    'network_task_decline',
     'network_task_claim',
     'network_task_cancel',
     'network_inbox_list',
@@ -667,11 +671,13 @@ async function main(): Promise<void> {
     'network_task_get',
     'network_task_create',
     'network_task_offer',
+    'network_task_accept',
+    'network_task_decline',
     'network_task_claim',
     'network_task_cancel',
   ];
   check(
-    '任务 7 个工具全部注册且旧工具已退役',
+    '任务 9 个工具全部注册且旧工具已退役',
     taskToolNames.every((name) => taskTools.has(name)) &&
       taskTools.size === taskToolNames.length &&
       !taskTools.has('network_task_list_get') &&
@@ -767,6 +773,23 @@ async function main(): Promise<void> {
       taskOfferDescription.includes('单条关联 task_id/assignment_version 的 delivery') &&
       taskOfferDescription.includes('CONFLICT'),
     taskOfferDescription,
+  );
+  const taskAcceptDescription = taskTools.get('network_task_accept')?.description ?? '';
+  check(
+    'task_accept 描述声明仅候选者、版本冲突与不完成 delivery',
+    taskAcceptDescription.includes('只有当前 assignment 的候选负责人') &&
+      taskAcceptDescription.includes('VERSION_CONFLICT') &&
+      taskAcceptDescription.includes('ASSIGNMENT_STALE') &&
+      taskAcceptDescription.includes('不完成关联 delivery'),
+    taskAcceptDescription,
+  );
+  const taskDeclineDescription = taskTools.get('network_task_decline')?.description ?? '';
+  check(
+    'task_decline 描述声明仅候选者、可选原因与不自动改派',
+    taskDeclineDescription.includes('只有当前 assignment 的候选负责人') &&
+      taskDeclineDescription.includes('可选 reason') &&
+      taskDeclineDescription.includes('不会自动把任务转给全群其他成员'),
+    taskDeclineDescription,
   );
   const taskClaimDescription = taskTools.get('network_task_claim')?.description ?? '';
   check(
@@ -1694,6 +1717,7 @@ async function main(): Promise<void> {
     '技能正文包含任务与任务卡片完整工具与不唤醒语义',
     ['## 任务与任务卡片', 'network_task_list', 'network_task_summary',
       'network_task_get', 'network_task_create', 'network_task_offer',
+      'network_task_accept', 'network_task_decline',
       'network_task_claim', 'network_task_cancel', 'task.updated',
       '任务卡片', '不写 inbox', '不推进 `head_seq`', '不要轮询',
       'agent_tasks.sh'].every((marker) => skillText.includes(marker)),
@@ -2045,7 +2069,8 @@ async function main(): Promise<void> {
   check(
     '静态技能包含任务命令与不唤醒规范',
     ['agent_tasks.sh', '### 任务与任务卡片', 'network_task_list', 'network_task_create',
-      'network_task_offer', 'network_task_claim', 'network_task_cancel',
+      'network_task_offer', 'network_task_accept', 'network_task_decline',
+      'network_task_claim', 'network_task_cancel',
       'task.updated', '不写 inbox', '不会唤醒 Agent',
       'task_summary', '每次上线', 'pending > 0', 'claimed > 0', '只含自己',
       '任务卡片'].every((marker) =>
@@ -2664,11 +2689,12 @@ async function main(): Promise<void> {
   check(
     '任务命令脚本可通过 /skills 下载并包含全部子命令',
     agentTasksType.includes('text/x-shellscript') &&
-      ['list', 'summary', 'get', 'create', 'offer', 'claim', 'cancel'].every(
+      ['list', 'summary', 'get', 'create', 'offer', 'accept', 'decline', 'claim', 'cancel'].every(
         (marker) => agentTasksText.includes(`  ${marker}`),
       ) &&
       ['network_task_list', 'network_task_summary', 'network_task_get',
-        'network_task_create', 'network_task_offer', 'network_task_claim',
+        'network_task_create', 'network_task_offer', 'network_task_accept',
+        'network_task_decline', 'network_task_claim',
         'network_task_cancel'].every((marker) =>
         agentTasksText.includes(marker),
       ),
