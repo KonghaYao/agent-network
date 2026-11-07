@@ -10,6 +10,9 @@ set -o pipefail
 
 PROTOCOL_VERSION="2026-07-28"
 STREAM_URI="agentnet://stream"
+SSE_IDLE_TIMEOUT_SECONDS=15
+SSE_IDLE_SPEED_LIMIT=1
+LAST_DISCONNECT_REASON="connection_closed"
 RECONNECT_ATTEMPT=0
 FAIL_STARTED_AT=0
 DEGRADED=0
@@ -344,10 +347,11 @@ handle_ack() {
   if [ "$READY_EMITTED" -eq 0 ]; then
     printf 'READY actor=%s pending=%s subscription=%s\n' "$MY_ID" "$pending" "$SUB_ID"
     READY_EMITTED=1
-  elif [ "$DEGRADED" -eq 1 ]; then
-    printf 'RECOVERED pending=%s subscription=%s\n' "$pending" "$SUB_ID"
-    DEGRADED=0
+  else
+    printf 'READY actor=%s pending=%s subscription=%s reconnect=1 reason=%s\n' \
+      "$MY_ID" "$pending" "$SUB_ID" "$LAST_DISCONNECT_REASON"
   fi
+  DEGRADED=0
 
   emit_pending_snapshot
   snapshot_status=$?
@@ -457,6 +461,25 @@ reconnect_delay() {
   awk -v b="$base" 'BEGIN{srand(); printf "%.1f", b*(0.8+rand()*0.4)}'
 }
 
+disconnect_reason() {
+  local status="$1"
+  if [ "$ACKED" -eq 0 ]; then
+    case "$status" in
+      0|137|143) printf 'ack_timeout'; return ;;
+    esac
+  fi
+  case "$status" in
+    0) printf 'stream_closed' ;;
+    18) printf 'short_read' ;;
+    22) printf 'http_error' ;;
+    28) printf 'idle_timeout' ;;
+    52) printf 'empty_reply' ;;
+    55|56) printf 'connection_reset' ;;
+    137|143) printf 'terminated' ;;
+    *) printf 'curl_%s' "$status" ;;
+  esac
+}
+
 # 能力发现：只接受 MCP 2026-07-28，不降级。
 discover_raw=$(mcp_rpc server/discover '{}' '')
 discover_status=$?
@@ -502,6 +525,7 @@ while [ "$FATAL" -eq 0 ]; do
   ACKED_AT=0
 
   curl --config "$CURL_CONFIG" -sS -N --http1.1 --fail-with-body \
+    --speed-time "$SSE_IDLE_TIMEOUT_SECONDS" --speed-limit "$SSE_IDLE_SPEED_LIMIT" \
     "$AGENTNET_URL/mcp" \
     -H "Content-Type: application/json" \
     -H "Accept: text/event-stream" \
@@ -559,6 +583,8 @@ $fragment"
   fi
 
   now=$(date +%s)
+  reason=$(disconnect_reason "$curl_status")
+  LAST_DISCONNECT_REASON="$reason"
   if [ "$ACKED" -eq 1 ] && [ $((now - ACKED_AT)) -ge 30 ]; then
     RECONNECT_ATTEMPT=0
     FAIL_STARTED_AT=0
@@ -566,12 +592,15 @@ $fragment"
   fi
   RECONNECT_ATTEMPT=$((RECONNECT_ATTEMPT + 1))
   [ "$FAIL_STARTED_AT" -ne 0 ] || FAIL_STARTED_AT="$now"
+  delay=$(reconnect_delay "$RECONNECT_ATTEMPT")
+  printf 'RECONNECTING reason=%s status=%s attempt=%s delay=%s\n' \
+    "$reason" "$curl_status" "$RECONNECT_ATTEMPT" "$delay"
   if [ "$DEGRADED" -eq 0 ] && {
     [ "$RECONNECT_ATTEMPT" -ge 5 ] || [ $((now - FAIL_STARTED_AT)) -ge 60 ];
   }; then
-    printf 'DEGRADED attempts=%s last_status=%s\n' "$RECONNECT_ATTEMPT" "$curl_status"
+    printf 'DEGRADED attempts=%s last_reason=%s\n' "$RECONNECT_ATTEMPT" "$reason"
     DEGRADED=1
   fi
 
-  sleep "$(reconnect_delay "$RECONNECT_ATTEMPT")"
+  sleep "$delay"
 done

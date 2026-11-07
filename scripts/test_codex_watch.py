@@ -141,6 +141,18 @@ class StaticWatcherTests(unittest.TestCase):
         self.assertIn("claimed_items", EMBEDDED)
         self.assertIn("steered.pop(delivery_id, None)", EMBEDDED)
 
+    def test_sse_uses_idle_timeout_instead_of_max_time(self):
+        start = EMBEDDED.index("async def stream_events")
+        block = EMBEDDED[start:EMBEDDED.index("async def connect", start)]
+        self.assertIn('"--speed-time", "15"', block)
+        self.assertIn('"--speed-limit", "1"', block)
+        self.assertNotIn('"--max-time"', block)
+        self.assertIn("RECONNECTING reason={last_reason} status={code}", block)
+        self.assertIn("RECONNECTING reason=idle_timeout", block)
+        self.assertIn("last_reason = disconnect_reason(code)", block)
+        self.assertIn("timeout=20", block)
+        self.assertIn("reconnect=1 reason={last_reason}", block)
+
 
 def watcher_namespace():
     namespace = {"__name__": "codex_watch_test"}

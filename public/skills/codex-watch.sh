@@ -84,6 +84,17 @@ def log(message):
     print(message, flush=True)
 
 
+def disconnect_reason(code):
+    return {
+        18: "short_read",
+        22: "http_error",
+        28: "idle_timeout",
+        52: "empty_reply",
+        55: "connection_reset",
+        56: "connection_reset",
+    }.get(code, "stream_closed" if code == 0 else f"curl_{code}")
+
+
 def mcp_tool(name, arguments=None):
     body = {
         "jsonrpc": "2.0", "id": "codex-watch-" + name, "method": "tools/call",
@@ -304,6 +315,7 @@ def next_alert(outstanding, notified, active):
 
 async def stream_events(events, actor_id):
     attempts = 0
+    last_reason = "connection_closed"
     if True:
         while True:
             subscription_id = "codex-watch-" + os.urandom(12).hex()
@@ -316,7 +328,7 @@ async def stream_events(events, actor_id):
             }
             process = await asyncio.create_subprocess_exec(
                 "curl", "--config", CURL_CONFIG, "-sS", "-N", "--http1.1", "--fail",
-                "--connect-timeout", "10", "--max-time", "900",
+                "--connect-timeout", "10", "--speed-time", "15", "--speed-limit", "1",
                 os.environ["AGENTNET_URL"].rstrip("/") + "/mcp",
                 "-H", "Content-Type: application/json", "-H", "Accept: text/event-stream",
                 "-H", "MCP-Protocol-Version: 2026-07-28",
@@ -330,7 +342,7 @@ async def stream_events(events, actor_id):
                 process.stdin.close()
                 fragments = []
                 acknowledged = False
-                while line := await asyncio.wait_for(process.stdout.readline(), timeout=70):
+                while line := await asyncio.wait_for(process.stdout.readline(), timeout=20):
                     line = line.decode(errors="replace").rstrip("\r\n")
                     if line.startswith("data:"):
                         fragments.append(line[5:].lstrip(" "))
@@ -343,9 +355,11 @@ async def stream_events(events, actor_id):
                         fragments.clear()
                         if message.get("method") == "notifications/subscriptions/acknowledged" and not acknowledged:
                             acknowledged = True
+                            reconnected = attempts > 0
                             attempts = 0
                             await asyncio.to_thread(mcp_tool, "network_login")
-                            log(f"READY actor={actor_id} subscription={subscription_id}")
+                            suffix = f" reconnect=1 reason={last_reason}" if reconnected else ""
+                            log(f"READY actor={actor_id} subscription={subscription_id}{suffix}")
                             await snapshot(events, actor_id)
                         if message.get("method") != "notifications/resources/updated":
                             continue
@@ -361,9 +375,11 @@ async def stream_events(events, actor_id):
                 code = await process.wait()
                 if not acknowledged and code == 22:
                     raise RuntimeError("subscription rejected; verify credential and protocol")
-                log(f"DEGRADED stream_closed code={code} acknowledged={acknowledged}; reconnecting")
+                last_reason = disconnect_reason(code)
+                log(f"RECONNECTING reason={last_reason} status={code} acknowledged={int(acknowledged)}")
             except asyncio.TimeoutError:
-                log("DEGRADED stream_idle; reconnecting")
+                last_reason = "idle_timeout"
+                log("RECONNECTING reason=idle_timeout")
             finally:
                 if process.returncode is None:
                     process.terminate()

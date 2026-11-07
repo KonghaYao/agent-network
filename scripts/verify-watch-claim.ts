@@ -41,6 +41,7 @@ interface StreamState {
   claims: Map<string, MockDelivery>;
   claimCalls: Map<string, number>;
   controller: ReadableStreamDefaultController<Uint8Array> | null;
+  keepaliveTimer: ReturnType<typeof setInterval> | null;
   encoder: TextEncoder;
 }
 
@@ -49,6 +50,7 @@ interface MockServer {
   state: StreamState;
   stop: () => void;
   closeStream: () => void;
+  pauseKeepalives: () => void;
 }
 
 interface RpcRequest {
@@ -128,11 +130,32 @@ function createMock(): MockServer {
     claims: new Map(),
     claimCalls: new Map(),
     controller: null,
+    keepaliveTimer: null,
     encoder: new TextEncoder(),
+  };
+
+  const stopKeepalives = (): void => {
+    if (state.keepaliveTimer) {
+      clearInterval(state.keepaliveTimer);
+      state.keepaliveTimer = null;
+    }
+  };
+
+  const startKeepalives = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
+    stopKeepalives();
+    state.keepaliveTimer = setInterval(() => {
+      if (state.controller !== controller) return;
+      try {
+        controller.enqueue(state.encoder.encode(': keepalive\n\n'));
+      } catch {
+        stopKeepalives();
+      }
+    }, 1000);
   };
 
   const server = Bun.serve({
     port: 0,
+    idleTimeout: 60,
     async fetch(request) {
       const url = new URL(request.url);
       if (request.method !== 'POST' || url.pathname !== '/mcp') {
@@ -143,8 +166,10 @@ function createMock(): MockServer {
         return rpc(body.id, { supportedVersions: ['2026-07-28'] });
       }
       if (body.method === 'subscriptions/listen') {
+        let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
+            streamController = controller;
             state.controller = controller;
             controller.enqueue(
               state.encoder.encode(
@@ -155,9 +180,13 @@ function createMock(): MockServer {
                 })}\n\n`,
               ),
             );
+            startKeepalives(controller);
           },
           cancel() {
-            state.controller = null;
+            if (state.controller === streamController) {
+              stopKeepalives();
+              state.controller = null;
+            }
           },
         });
         return new Response(stream, {
@@ -256,8 +285,12 @@ function createMock(): MockServer {
   return {
     base: `http://127.0.0.1:${server.port}`,
     state,
-    stop: () => server.stop(true),
+    stop: () => {
+      stopKeepalives();
+      server.stop(true);
+    },
     closeStream: () => {
+      stopKeepalives();
       const controller = state.controller;
       state.controller = null;
       try {
@@ -266,6 +299,7 @@ function createMock(): MockServer {
         // 已关闭时忽略；watcher 会按退避重连。
       }
     },
+    pauseKeepalives: stopKeepalives,
   };
 }
 
@@ -425,6 +459,60 @@ function expect(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+async function assertIdleReconnect(options: {
+  mock: MockServer;
+  watcher: RunningWatcher;
+  logLines: string[];
+  readyLines: string[];
+  prefix: string;
+  label: string;
+}): Promise<void> {
+  const { mock, watcher, logLines, readyLines, prefix, label } = options;
+  mock.state.pending.clear();
+  mock.state.claims.clear();
+
+  const deliveryId = `dlv_idle_${label}`;
+  mock.state.pending.set(deliveryId, delivery(deliveryId));
+  sendItems(mock, [notificationItem(deliveryId, 'delivery.created', `evt_${label}_idle`)]);
+  const initial = await waitForEvent(watcher.stdout, prefix, 'delivery', deliveryId);
+  expect(initial.claim_state === 'claimed', `${label} idle probe must be claimed`);
+  const claimCount = mock.state.claimCalls.get(deliveryId) ?? 0;
+  expect(claimCount === 1, `${label} idle probe must claim once, got ${claimCount}`);
+
+  const previous = mock.state.controller;
+  expect(previous !== null, `${label} idle probe stream must be connected`);
+  const started = Date.now();
+  mock.pauseKeepalives();
+
+  await waitForLine(
+    logLines,
+    (line) => line.includes('RECONNECTING') && line.includes('reason=idle_timeout'),
+    `${label} idle RECONNECTING`,
+    45000,
+  );
+  await waitForReconnect(mock, previous, `${label} idle`, 30000);
+  await waitForLine(
+    readyLines,
+    (line) => line.includes('READY') && line.includes('reconnect=1'),
+    `${label} READY after idle reconnect`,
+    15000,
+  );
+
+  sendItems(mock, [
+    notificationItem(deliveryId, 'delivery.created', `evt_${label}_idle_replay`),
+  ]);
+  await Bun.sleep(800);
+  expect(
+    mock.state.claimCalls.get(deliveryId) === claimCount,
+    `${label} replay after reconnect must not claim again`,
+  );
+  expect(
+    eventCount(watcher.stdout, prefix, 'delivery', deliveryId) === 1,
+    `${label} replay after reconnect must not emit another delivery`,
+  );
+  console.log(`  ${label} idle reconnect observed after ${Date.now() - started}ms`);
+}
+
 async function runClaudeChecks(): Promise<void> {
   const mock = createMock();
   const watcher = startWatcher(CLAUDE_WATCH, mock.base);
@@ -574,6 +662,15 @@ async function runClaudeChecks(): Promise<void> {
       eventCount(watcher.stdout, '', 'delivery', 'dlv_snapshot') === 1,
       'reconnect snapshot must emit exactly one delivery event',
     );
+
+    await assertIdleReconnect({
+      mock,
+      watcher,
+      logLines: watcher.stderr,
+      readyLines: watcher.stderr,
+      prefix: '',
+      label: 'claude',
+    });
   } finally {
     await watcher.kill();
     mock.stop();
@@ -706,6 +803,15 @@ async function runPeriChecks(): Promise<void> {
       eventCount(watcher.stdout, 'ALERT ', 'delivery', 'dlv_snapshot') === 1,
       'peri reconnect snapshot must emit exactly one delivery event',
     );
+
+    await assertIdleReconnect({
+      mock,
+      watcher,
+      logLines: watcher.stdout,
+      readyLines: watcher.stdout,
+      prefix: 'ALERT ',
+      label: 'peri',
+    });
   } finally {
     await watcher.kill();
     mock.stop();
