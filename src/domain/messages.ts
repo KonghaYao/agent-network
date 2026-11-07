@@ -28,6 +28,10 @@ import {
 import { guardSql } from '../storage/guards';
 import { directMessageGuardStatement } from './contact-relations';
 import {
+  directBlockGuardStatement,
+  filterMutedMentions,
+} from './contact-blocks';
+import {
   getActorsByIds,
   getClaimedDelivery,
   getDelivery,
@@ -140,7 +144,7 @@ export async function messageView(
 /** 深度、root 派发预算、成员资格、目标有效性与队列上限的同一事务校验。 */
 export function messageGuardStatements(
   db: D1Database,
-  core: Pick<MessageCore, 'roomId' | 'senderId' | 'hop' | 'rootKey' | 'invoke'>,
+  core: Pick<MessageCore, 'roomId' | 'senderId' | 'hop' | 'rootKey' | 'invoke' | 'at'>,
 ): D1PreparedStatement[] {
   const statements: D1PreparedStatement[] = [
     db
@@ -151,6 +155,8 @@ export function messageGuardStatements(
         ),
       )
       .bind(core.roomId, core.senderId),
+    // 拉黑先于好友关系裁决，返回稳定的 BLOCKED 而不是 FRIEND_REQUIRED。
+    directBlockGuardStatement(db, core.roomId),
     directMessageGuardStatement(db, core.roomId),
     // 群策略：owner_admin 时普通成员不能发言；管理员和 owner 始终可以。
     capabilityGuardStatement(db, core.roomId, core.senderId, 'send_message'),
@@ -191,6 +197,22 @@ export function messageGuardStatements(
           ),
         )
         .bind(recipient, LIMITS.pendingPerActor),
+      // 重复 @ 的定向投递窗口限额；普通广播消息不受影响。
+      db
+        .prepare(
+          guardSql(
+            'rateLimited',
+            `(SELECT COUNT(*)
+                FROM deliveries d JOIN messages m ON m.message_id = d.message_id
+               WHERE d.recipient_id = ? AND m.sender_id = ? AND d.created_at > ?) >= ?`,
+          ),
+        )
+        .bind(
+          recipient,
+          core.senderId,
+          core.at - LIMITS.mentionDeliveryWindowMs,
+          LIMITS.mentionDeliveryWindowMax,
+        ),
     );
   }
 
@@ -526,7 +548,13 @@ export async function messageSend(
       if (adjacentAgent) resolvedInvoke = [adjacentAgent];
     }
   }
-  const invoke = assertInvoke(resolvedInvoke, sender);
+  // 拉黑只静默定向通知（delivery），不改变群消息本体、正文 @ 或成员资格。
+  const invoke = await filterMutedMentions(
+    db,
+    room.kind,
+    sender,
+    assertInvoke(resolvedInvoke, sender),
+  );
   const link = await resolveRootLink(db, sender, room.room_id, input);
 
   const at = nowMs();

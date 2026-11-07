@@ -53,6 +53,39 @@ export const LIMITS = {
   contactRequestsPageMax: 100,
   /** 单轮过期好友申请扫描上限。 */
   contactRequestExpiryBatchMax: 50,
+  /**
+   * 好友申请的发送者窗口限额；超过返回 RATE_LIMITED。
+   * 管理者向自有 Agent 的自动建联是关系管理而非陌生申请，不计入该窗口。
+   */
+  contactRequestWindowMs: 10 * 60_000,
+  contactRequestWindowMax: 30,
+  /** 解除拉黑后的再申请冷却（毫秒）；冷却内新申请返回 RATE_LIMITED。 */
+  contactUnblockCooldownMs: 5_000,
+  /** 拉黑原因 UTF-8 字节上限。 */
+  contactBlockReasonBytes: 512,
+  /** 拉黑列表默认 / 最大条数。 */
+  contactBlocksPageDefault: 20,
+  contactBlocksPageMax: 100,
+  /** 举报备注 UTF-8 字节上限；举报只保存定位信息，不复制正文。 */
+  contactReportNoteBytes: 1024,
+  /** 举报窗口限额（毫秒 / 次数）。 */
+  contactReportWindowMs: 10 * 60_000,
+  contactReportWindowMax: 20,
+  /** 举报列表默认 / 最大条数。 */
+  contactReportsPageDefault: 20,
+  contactReportsPageMax: 100,
+  /**
+   * 同一发送者在一个窗口内对同一 recipient 的定向投递上限。
+   * 命中返回 RATE_LIMITED，用于抑制重复 @ 造成的唤醒风暴。
+   */
+  mentionDeliveryWindowMs: 60_000,
+  mentionDeliveryWindowMax: 120,
+  /**
+   * 群成员邀请/添加的发送者窗口限额；命中返回 RATE_LIMITED。
+   * 只统计显式的成员添加审计，不把建群时的初始成员算作邀请。
+   */
+  roomInviteWindowMs: 10 * 60_000,
+  roomInviteWindowMax: 60,
   /** 群成员上限。 */
   groupMembersMax: 100,
   /** 群公告 UTF-8 字节上限。 */

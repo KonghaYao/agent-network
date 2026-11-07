@@ -119,6 +119,33 @@ export interface ContactReceivePolicyRow {
   updated_at: number;
 }
 
+/** 拉黑与好友关系分开存储；`released_at` 为 NULL 表示仍生效。 */
+export interface ContactBlockRow {
+  block_id: string;
+  blocker_actor_id: string;
+  blocked_actor_id: string;
+  reason: string;
+  mute_mentions: number;
+  created_at: number;
+  released_at: number | null;
+  released_by: string | null;
+}
+
+/** 举报只保存最小定位证据，不复制消息正文，也不对外发送。 */
+export interface ContactReportRow {
+  report_id: string;
+  reporter_actor_id: string;
+  target_actor_id: string;
+  category: 'harassment' | 'spam' | 'fraud' | 'other';
+  note: string;
+  room_id: string | null;
+  message_id: string | null;
+  evidence_json: string;
+  status: 'received';
+  created_at: number;
+  updated_at: number;
+}
+
 export type RoomRole = 'owner' | 'admin' | 'member';
 export type GroupMemberPolicy = 'members' | 'owner_admin';
 

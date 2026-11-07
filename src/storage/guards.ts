@@ -41,6 +41,7 @@ export const GUARD_TABLES = {
   friendRequired: 'guard_friend_required',
   contactRequestStale: 'guard_contact_request_stale',
   ownerTransferRequired: 'guard_owner_transfer_required',
+  rateLimited: 'guard_rate_limited',
 } as const;
 
 export type GuardName = keyof typeof GUARD_TABLES;

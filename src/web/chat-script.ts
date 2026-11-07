@@ -20,6 +20,7 @@ import { CHAT_RENDER_SCRIPT } from './chat-render-script';
 import { CHAT_RESIZER_SCRIPT } from './chat-resizer-script';
 import { CHAT_ROOM_MENU_SCRIPT } from './chat-room-menu-script';
 import { CHAT_ROUTER_SCRIPT } from './chat-router-script';
+import { CHAT_SAFETY_SCRIPT } from './chat-safety-script';
 import { CHAT_SCROLL_SCRIPT } from './chat-scroll-script';
 import { CHAT_SESSION_SCRIPT } from './chat-session-script';
 import { CHAT_STREAM_SCRIPT } from './chat-stream-script';
@@ -139,6 +140,7 @@ ${CHAT_RENDER_SCRIPT}
 ${NEW_AGENT_SCRIPT}
 ${CHAT_AGENTS_SCRIPT}
 ${CHAT_CONTACTS_SCRIPT}
+${CHAT_SAFETY_SCRIPT}
 ${CHAT_LOGOUT_SCRIPT}
 ${CHAT_ACCOUNT_RENAME_SCRIPT}
 ${CHAT_SCROLL_SCRIPT}

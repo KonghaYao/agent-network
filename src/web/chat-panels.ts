@@ -71,6 +71,18 @@ export function sidebarPane(): string {
       role="menuitem" hidden>停用 Agent</button>
     <button class="room-menu-item danger" id="room-menu-reissue-token" type="button"
       role="menuitem" hidden>注销并重发 token</button>
+    <button class="room-menu-item" id="room-menu-report" type="button"
+      role="menuitem" hidden>举报</button>
+    <button class="room-menu-item" id="room-menu-block" type="button"
+      role="menuitem" hidden>拉黑</button>
+    <button class="room-menu-item danger" id="room-menu-delete-friend" type="button"
+      role="menuitem" hidden>删除好友</button>
+    <button class="room-menu-item danger" id="room-menu-leave-group" type="button"
+      role="menuitem" hidden>退出群聊</button>
+    <p class="room-menu-status" id="room-menu-safety-hint" hidden>
+      删除好友只结束好友关系，历史保留；拉黑还会拒绝新的私聊、申请与邀请，但不会自动移出共同群；
+      举报只提交给受控管理流程，不会自动对外发送；退群只离开当前群，不影响好友关系。
+    </p>
     <div class="room-menu-stopped" id="room-menu-stopped" hidden>
       <p class="room-menu-stopped-summary" id="room-menu-stopped-summary" role="status"></p>
       <details class="room-menu-stopped-details" id="room-menu-stopped-details">
@@ -526,6 +538,35 @@ export function contactRequestsDialog(): string {
     <p id="contact-request-status" class="form-error" role="status"></p>
     <div class="row modal-actions">
       <button id="contact-modal-close" type="button">关闭</button>
+    </div>
+  </div>
+</div>`;
+}
+
+/** 举报弹窗：类别、可选备注与房间/消息定位；只进入受控管理流程。 */
+export function reportDialog(): string {
+  return `<div class="modal" id="report-modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="report-modal-title">
+    <h2 id="report-modal-title">举报</h2>
+    <p class="muted">举报只保存发送者、类别、短备注与消息定位，不复制消息正文，也不会自动对外发送。</p>
+    <label class="field">被举报成员
+      <select id="report-target"></select>
+    </label>
+    <label class="field">类别
+      <select id="report-category">
+        <option value="harassment">骚扰</option>
+        <option value="spam">垃圾信息</option>
+        <option value="fraud">诈骗</option>
+        <option value="other">其他</option>
+      </select>
+    </label>
+    <label class="field">补充说明（可选）
+      <textarea id="report-note" rows="3" maxlength="1024"></textarea>
+    </label>
+    <p id="report-status" class="form-error" role="status"></p>
+    <div class="row modal-actions">
+      <button id="report-cancel" type="button">取消</button>
+      <button id="report-submit" class="primary" type="button">提交举报</button>
     </div>
   </div>
 </div>`;

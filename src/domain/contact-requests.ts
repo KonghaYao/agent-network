@@ -18,6 +18,12 @@ import {
 } from '../storage/transactions/runner';
 import { canHandleRequest, canRespond, effectivePolicy } from './contact-policies';
 import {
+  contactBlockGuardStatement,
+  contactRequestRateGuardStatement,
+  contactUnblockCooldownGuardStatement,
+  isBlockedBetween,
+} from './contact-blocks';
+import {
   actorView,
   activateRelationStatements,
   expireContactRequests,
@@ -237,6 +243,10 @@ export async function contactRequest(
 
   await expireForPair(db, pairKey, at);
 
+  if (await isBlockedBetween(db, owner, target.actor_id)) {
+    throw new BusinessError('BLOCKED', '对方已拉黑，无法发起好友申请');
+  }
+
   const relation = await getActiveRelation(db, owner, target.actor_id);
   if (relation) {
     return recordEarlyResult(
@@ -293,6 +303,11 @@ export async function contactRequest(
         result,
         build: (resultJson) => [
           operationsStatement(db, owner, input.request_id, payloadHash, resultJson, at),
+          // 同一事务内裁决拉黑与骚扰限额，避免预检后并发绕过。
+          // 管理者向自有 Agent 的自动建联属于关系管理，不计入陌生申请窗口。
+          contactBlockGuardStatement(db, owner, target.actor_id),
+          ...(autoManager ? [] : [contactRequestRateGuardStatement(db, owner, at)]),
+          contactUnblockCooldownGuardStatement(db, owner, target.actor_id, at),
           db
             .prepare(
               `INSERT INTO contact_requests
@@ -389,6 +404,9 @@ export async function contactRequest(
       result,
       build: (resultJson) => [
         operationsStatement(db, owner, input.request_id, payloadHash, resultJson, at),
+        contactBlockGuardStatement(db, owner, target.actor_id),
+        contactRequestRateGuardStatement(db, owner, at),
+        contactUnblockCooldownGuardStatement(db, owner, target.actor_id, at),
         db
           .prepare(
             `INSERT INTO contact_requests
@@ -584,6 +602,10 @@ export async function contactRequestRespond(
   if (!(await canHandleRequest(db, viewer, row, target, at))) {
     throw new BusinessError('PERMISSION_DENIED', '当前身份不能处理该好友申请');
   }
+  // 拉黑后任何处理人（包括管理者）都不能替用户接受申请；拒绝仍允许清理申请。
+  if (input.action === 'accept' && (await isBlockedBetween(db, row.from_actor_id, row.to_actor_id))) {
+    throw new BusinessError('BLOCKED', '双方存在拉黑关系，不能建立好友关系');
+  }
   if (row.status === 'expired') {
     throw new BusinessError('REQUEST_EXPIRED', '好友申请已过期');
   }
@@ -658,6 +680,9 @@ export async function contactRequestRespond(
     build: (resultJson) => {
       const statements: D1PreparedStatement[] = [
         operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, at),
+        ...(accept
+          ? [contactBlockGuardStatement(db, row.from_actor_id, row.to_actor_id)]
+          : []),
         db
           .prepare(
             guardSql(

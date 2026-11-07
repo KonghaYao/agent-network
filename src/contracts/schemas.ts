@@ -193,6 +193,38 @@ export const contactPolicySetSchema = z.object({
   policy: z.enum(['self_approval', 'manager_approval', 'auto_accept']),
 });
 
+export const contactBlockSchema = z.object({
+  request_id: requestId,
+  actor_id: id(),
+  reason: z.string().max(LIMITS.contactBlockReasonBytes * 2).optional(),
+  /** 共同群里来自被拉黑者的定向 @ 是否静默；默认 true。 */
+  mute_mentions: z.boolean().optional(),
+});
+
+export const contactUnblockSchema = z.object({
+  request_id: requestId,
+  actor_id: id(),
+});
+
+export const contactBlocksListSchema = z.object({
+  cursor,
+  limit: z.number().int().min(1).max(LIMITS.contactBlocksPageMax).optional(),
+});
+
+export const contactReportSchema = z.object({
+  request_id: requestId,
+  target_actor_id: id(),
+  category: z.enum(['harassment', 'spam', 'fraud', 'other']),
+  note: z.string().max(LIMITS.contactReportNoteBytes * 2).optional(),
+  room_id: id().optional(),
+  message_id: id().optional(),
+});
+
+export const contactReportsListSchema = z.object({
+  cursor,
+  limit: z.number().int().min(1).max(LIMITS.contactReportsPageMax).optional(),
+});
+
 export const roomCreateSchema = z.object({
   request_id: requestId,
   kind: z.enum(['direct', 'group']),
@@ -488,6 +520,11 @@ export type ContactRequestRespondInput = z.infer<typeof contactRequestRespondSch
 export type ContactRequestCancelInput = z.infer<typeof contactRequestIdSchema>;
 export type ContactPolicyGetInput = z.infer<typeof contactPolicyGetSchema>;
 export type ContactPolicySetInput = z.infer<typeof contactPolicySetSchema>;
+export type ContactBlockInput = z.infer<typeof contactBlockSchema>;
+export type ContactUnblockInput = z.infer<typeof contactUnblockSchema>;
+export type ContactBlocksListInput = z.infer<typeof contactBlocksListSchema>;
+export type ContactReportInput = z.infer<typeof contactReportSchema>;
+export type ContactReportsListInput = z.infer<typeof contactReportsListSchema>;
 export type RoomCreateInput = z.infer<typeof roomCreateSchema>;
 export type RoomsListInput = z.infer<typeof roomsListSchema>;
 export type RoomMembersUpdateInput = z.infer<typeof roomMembersUpdateSchema>;

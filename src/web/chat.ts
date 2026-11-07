@@ -12,6 +12,7 @@ import {
   monitorPane,
   newAgentDialog,
   paneResizer,
+  reportDialog,
   sidebarPane,
   toastPane,
 } from './chat-panels';
@@ -63,6 +64,7 @@ ${monitorBackdrop()}
 ${monitorPane()}
 ${filePreviewDialog()}
 ${contactRequestsDialog()}
+${reportDialog()}
 ${groupDialog()}
 ${membersDialog()}
 ${announcementDialog()}

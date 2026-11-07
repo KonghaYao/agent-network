@@ -112,7 +112,8 @@ export const APP_STYLE = `
   .room-preview { margin-top: 3px; font-size: 12px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 会话右键/长按菜单：固定定位，靠近指针并限制在视口内。 */
-  .room-menu { position: fixed; z-index: 26; min-width: 208px;
+  /* 固定宽度：安全提示是长段落，shrink-to-fit 会把菜单撑满整屏并挡住聊天区。 */
+  .room-menu { position: fixed; z-index: 26; width: 260px;
     max-width: calc(100vw - 16px); box-sizing: border-box; padding: 6px;
     border-radius: 8px; background: var(--wx-panel); border: 1px solid var(--wx-line);
     box-shadow: var(--wx-shadow); }

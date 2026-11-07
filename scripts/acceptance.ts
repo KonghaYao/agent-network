@@ -58,6 +58,7 @@ import {
 } from './lib/events-harness';
 import { runEventsAcceptance } from './lib/events-acceptance';
 import { runContactRelationAcceptance } from './lib/contact-relation-acceptance';
+import { runContactBlockAcceptance } from './lib/contact-block-acceptance';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META = 'io.agent-network/event';
@@ -1304,6 +1305,7 @@ async function main(): Promise<void> {
     }
     await runAgentIdentityAcceptance();
     await runContactRelationAcceptance();
+    await runContactBlockAcceptance();
     await runAgentArchiveAcceptance();
     await runAgentPresenceAcceptance();
     await runRoomMonitorAcceptance();

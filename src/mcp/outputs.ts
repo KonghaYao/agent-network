@@ -182,6 +182,55 @@ export const contactPolicySchema = z.object({
   approver_name: z.string().nullable(),
 });
 
+export const contactBlockSchema = z.object({
+  block_id: z.string(),
+  blocker_actor_id: z.string(),
+  blocked_actor: contactActorSchema,
+  reason: z.string(),
+  mute_mentions: z.boolean(),
+  created_at: z.string(),
+  active: z.boolean(),
+  released_at: z.string().nullable(),
+  released_by: z.string().nullable(),
+});
+
+export const contactBlockResultSchema = z.object({
+  block: contactBlockSchema,
+  already_blocked: z.boolean(),
+});
+
+export const contactUnblockResultSchema = z.object({
+  block: contactBlockSchema.nullable(),
+  released: z.boolean(),
+});
+
+export const contactBlockPageSchema = z.object({
+  items: z.array(contactBlockSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+});
+
+export const contactReportSchema = z.object({
+  report_id: z.string(),
+  reporter_actor_id: z.string(),
+  target_actor: contactActorSchema,
+  category: z.enum(['harassment', 'spam', 'fraud', 'other']),
+  note: z.string(),
+  room_id: z.string().nullable(),
+  message_id: z.string().nullable(),
+  status: z.enum(['received']),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const contactReportResultSchema = z.object({ report: contactReportSchema });
+
+export const contactReportPageSchema = z.object({
+  items: z.array(contactReportSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+});
+
 export const deliverySchema = z.object({
   delivery_id: z.string(),
   recipient_id: z.string(),

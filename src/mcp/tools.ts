@@ -19,13 +19,18 @@ import {
   agentsGetSchema,
   agentsManagedListSchema,
   contactAddSchema,
+  contactBlockSchema,
+  contactBlocksListSchema,
   contactPolicyGetSchema,
   contactPolicySetSchema,
   contactRemoveSchema,
+  contactReportSchema,
+  contactReportsListSchema,
   contactRequestIdSchema,
   contactRequestRespondSchema,
   contactRequestSchema,
   contactRequestsListSchema,
+  contactUnblockSchema,
   contactsListSchema,
   deliveryCancelSchema,
   deliveryClaimSchema,
@@ -85,6 +90,13 @@ import {
   enableAgent,
 } from '../domain/agent-management';
 import { contactAdd, contactRemove, contactsList } from '../domain/contacts';
+import {
+  contactBlock,
+  contactBlocksList,
+  contactReport,
+  contactReportsList,
+  contactUnblock,
+} from '../domain/contact-blocks';
 import { contactPolicyGet, contactPolicySet } from '../domain/contact-policies';
 import {
   contactRequest,
@@ -163,11 +175,16 @@ import {
   agentsGetResultSchema,
   agentsManagedListResultSchema,
   completeResultSchema,
+  contactBlockPageSchema,
+  contactBlockResultSchema,
   contactPageSchema,
   contactPolicySchema,
+  contactReportPageSchema,
+  contactReportResultSchema,
   contactRequestPageSchema,
   contactRequestResultSchema,
   contactSchema,
+  contactUnblockResultSchema,
   deliverySchema,
   feedbackCreateResultSchema,
   historyPageSchema,
@@ -714,6 +731,66 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       return contactPolicySet(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_block',
+    '拉黑一个 actor：结束当前好友关系、取消同 pair 的 pending 申请，并拒绝后续私聊、好友申请与 direct 邀请。不会移除共同群成员、不会删除历史消息或单侧收藏。mute_mentions 默认 true，按个人设置静默共同群里来自被拉黑者的定向 @ 通知；普通群消息仍按群权限可见。拉黑不产生 delivery，也不唤醒 Agent。',
+    contactBlockSchema,
+    contactBlockResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactBlock(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_unblock',
+    '解除自己发起的拉黑。只释放拉黑状态，不会自动恢复好友关系；需要重新建立关系时必须重新发起好友申请。共同群成员身份与历史消息不受影响。',
+    contactUnblockSchema,
+    contactUnblockResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactUnblock(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_blocks_list',
+    '分页读取自己发起的拉黑记录（含已解除）。只返回 blocker 自己的记录，不暴露谁拉黑了自己。',
+    contactBlocksListSchema,
+    contactBlockPageSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactBlocksList(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_report',
+    '举报一个 actor，可选附带房间与消息定位。服务端只保存类别、短备注、房间/消息 ID 与消息序号等最小必要证据，不复制消息正文，不通知被举报者，也不对外发送。返回 status=received 作为接收回执；举报只进入受控管理流程。',
+    contactReportSchema,
+    contactReportResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactReport(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_reports_list',
+    '分页读取自己提交的举报及接收状态。举报不会产生 delivery，也不会唤醒 Agent。',
+    contactReportsListSchema,
+    contactReportPageSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactReportsList(db, principal, input);
     },
   );
 

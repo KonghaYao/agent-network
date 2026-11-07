@@ -41,6 +41,11 @@ import type {
 } from '../storage/rows';
 import { operationsStatement, resolveReplay, runIdempotent } from '../storage/transactions/runner';
 import { directRelationStatements, getActiveRelation } from './contact-relations';
+import {
+  contactBlockGuardStatement,
+  isBlockedBetween,
+  roomInviteRateGuardStatement,
+} from './contact-blocks';
 import { actorId, type Principal } from './principal';
 import {
   capabilityGuardStatement,
@@ -399,6 +404,14 @@ export async function roomCreate(
     return createDirect(db, principal, others[0] as string, input.request_id);
   }
 
+  // 拉黑先于好友关系裁决，返回稳定的 BLOCKED 而不是 FRIEND_REQUIRED。
+  for (const other of others) {
+    if (await isBlockedBetween(db, owner, other)) {
+      throw new BusinessError('BLOCKED', '双方存在拉黑关系，不能邀请对方加入群聊', {
+        actor_id: other,
+      });
+    }
+  }
   await requireFriends(db, owner, others);
   if (others.length + 1 > LIMITS.groupMembersMax) {
     throw new BusinessError('ROOM_FULL', '群成员数量超过上限');
@@ -417,6 +430,7 @@ export async function roomCreate(
     result: { room_id: roomId },
     build: (resultJson) => [
       operationsStatement(db, owner, input.request_id, payloadHash, resultJson, at),
+      ...others.map((member) => contactBlockGuardStatement(db, owner, member)),
       db
         .prepare(
           guardSql(
@@ -486,6 +500,9 @@ async function createDirect(
   const at = nowMs();
   const targetActor = await getActor(db, target);
   if (!targetActor) throw new BusinessError('NOT_FOUND', '目标 actor 不存在');
+  if (await isBlockedBetween(db, owner, target)) {
+    throw new BusinessError('BLOCKED', '双方存在拉黑关系，不能创建单聊');
+  }
   const pairKey = sortedPairKey(owner, target);
   const roomId = `rm_${(await sha256Hex(`direct:${pairKey}`)).slice(0, 32)}`;
   const roomRef = `room_created:${roomId}`;
@@ -729,6 +746,13 @@ export async function roomMembersUpdate(
 
   if (!replay.found && add.length > 0) {
     await ensureActors(db, add);
+    for (const member of add) {
+      if (await isBlockedBetween(db, caller, member)) {
+        throw new BusinessError('BLOCKED', '双方存在拉黑关系，不能邀请对方加入群聊', {
+          actor_id: member,
+        });
+      }
+    }
     await requireFriends(db, caller, add);
   }
   if (!replay.found) {
@@ -851,6 +875,9 @@ export async function roomMembersUpdate(
       ...(add.length > 0
         ? [capabilityGuardStatement(db, room.room_id, caller, 'invite_members')]
         : []),
+      // 拉黑先于好友关系裁决；邀请窗口限额只统计显式成员添加。
+      ...add.map((member) => contactBlockGuardStatement(db, caller, member)),
+      ...(add.length > 0 ? [roomInviteRateGuardStatement(db, caller, at)] : []),
       // 好友关系预检查同样有“先读后写”窗口；在提交时按 pair_key 复核。
       ...add.map((member) =>
         db

@@ -46,6 +46,7 @@ const GUARD_CODES: Record<string, BusinessErrorCode> = {
   friendRequired: 'FRIEND_REQUIRED',
   contactRequestStale: 'CONFLICT',
   ownerTransferRequired: 'CONFLICT',
+  rateLimited: 'RATE_LIMITED',
 };
 
 const GUARD_MESSAGES: Record<string, string> = {
@@ -85,6 +86,7 @@ const GUARD_MESSAGES: Record<string, string> = {
   friendRequired: '需要有效的好友关系',
   contactRequestStale: '好友申请状态已变化，请刷新后重试',
   ownerTransferRequired: '群 owner 离开前必须转移 owner',
+  rateLimited: '操作过于频繁，请稍后再试',
 };
 
 /** 限额类 guard 的稳定 data，供 MCP Events 映射 -32025。 */

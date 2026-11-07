@@ -14,6 +14,7 @@ import { getActor, getActorBySession, type D1Like } from '../storage/queries';
 import type { ActorRow, ContactRelationRow, ContactRequestRow } from '../storage/rows';
 import { mapBatchError } from '../storage/transactions/runner';
 import { getActiveManagement } from './agent-access';
+import { contactBlockGuardStatement } from './contact-blocks';
 
 /**
  * 双向联系人关系与好友申请共享的底层能力。
@@ -121,13 +122,19 @@ export async function getRelationByPair(
     .first<ContactRelationRow>();
 }
 
-/** 双方任意一人删除好友都会结束共享关系；个人收藏行由调用方处理。 */
+/**
+ * 双方任意一人删除好友都会结束共享关系；个人收藏行由调用方处理。
+ *
+ * `notifyTarget` 默认为 true（删除好友需要让对方刷新关系）；
+ * 拉黑传 false，避免把拉黑本身变成一条对对方的个人提醒。
+ */
 export function endRelationStatements(
   db: D1Database,
   owner: string,
   target: ActorRow,
   requestId: string,
   at: number,
+  options: { notifyTarget?: boolean } = {},
 ): D1PreparedStatement[] {
   const pairKey = sortedPairKey(owner, target.actor_id);
   const eventKey = `contact_relation_ended:${owner}:${requestId}`;
@@ -139,6 +146,9 @@ export function endRelationStatements(
           WHERE pair_key = ? AND status = 'active'`,
       )
       .bind(at, owner, at, pairKey),
+  ];
+  if (options.notifyTarget === false) return statements;
+  statements.push(
     db
       .prepare(
         `INSERT INTO events
@@ -161,7 +171,7 @@ export function endRelationStatements(
         at,
       ),
     inboxHeadStatementIfEvent(db, target.actor_id, eventKey, at, 0),
-  ];
+  );
   if (target.kind === 'human') {
     statements.push(outboxStatementIfAbsent(db, { topic: inboxTopic(target.actor_id), eventKey }, at));
   }
@@ -183,6 +193,8 @@ export function directRelationStatements(
   const pairKey = sortedPairKey(owner, target.actor_id);
   const [actorA, actorB] = [owner, target.actor_id].sort();
   return [
+    // 拉黑优先于好友关系：同一事务内先拒绝，避免预检后被另一端绕过。
+    contactBlockGuardStatement(db, owner, target.actor_id),
     db
       .prepare(
         guardSql(

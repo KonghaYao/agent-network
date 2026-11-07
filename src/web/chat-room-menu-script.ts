@@ -221,6 +221,8 @@ function openRoomMenu(link, x, y) {
     toggleButton.disabled = false;
   }
   roomMenuResetStatus();
+  // 删除/拉黑/举报/退群入口由 chat-safety-script 维护；这里只传当前会话目标。
+  if (typeof prepareRoomMenuSafety === 'function') prepareRoomMenuSafety(roomMenuTarget);
   positionRoomMenu(menu, x, y);
   try {
     button.focus({ preventScroll: true });

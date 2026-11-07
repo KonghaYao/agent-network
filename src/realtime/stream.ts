@@ -508,8 +508,10 @@ function inboxStreamItem(
     case 'contact_request_rejected':
     case 'contact_request_cancelled':
     case 'contact_request_expired':
+    case 'contact_blocked':
+    case 'contact_unblocked':
     case 'contact_relation_ended': {
-      // 好友申请与关系变化只提示刷新，不是待办：不产生 delivery，
+      // 好友申请、拉黑与关系变化只提示刷新，不是待办：不产生 delivery，
       // attention 必须保持 informational，避免唤醒 Agent 执行任务。
       const item = withLocation(baseItem(row, 'contact', 'contact', 'informational'), row, metadata);
       item.ref_id = row.ref_id ?? undefined;

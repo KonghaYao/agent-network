@@ -75,7 +75,14 @@ export function outboxStatement(
     .bind(newId('obx'), spec.topic, spec.eventKey, at, at);
 }
 
-/** 幂等 outbox：同一 (topic, event_seq) 只保留一行。 */
+/**
+ * 幂等 outbox：同一 (topic, event_seq) 只保留一行。
+ *
+ * 对应事件可能由 `INSERT ... SELECT ... WHERE EXISTS` 条件写入（例如并发
+ * 下状态已被另一端改变），此时不能写入 NULL `event_seq`：列声明为
+ * NOT NULL，一旦插入会回滚整个事务。这里从 events 取行，事件不存在时
+ * 直接不产生 outbox；提示本来也只对已落库的事件有意义。
+ */
 export function outboxStatementIfAbsent(
   db: D1Database,
   spec: OutboxSpec,
@@ -84,10 +91,12 @@ export function outboxStatementIfAbsent(
   return db
     .prepare(
       `INSERT INTO outbox (outbox_id, topic, event_seq, status, attempts, next_attempt_at, created_at)
-       VALUES (?, ?, (SELECT event_seq FROM events WHERE event_key = ?), 'pending', 0, ?, ?)
+       SELECT ?, ?, e.event_seq, 'pending', 0, ?, ?
+         FROM events e
+        WHERE e.event_key = ?
        ON CONFLICT(topic, event_seq) DO NOTHING`,
     )
-    .bind(newId('obx'), spec.topic, spec.eventKey, at, at);
+    .bind(newId('obx'), spec.topic, at, at, spec.eventKey);
 }
 
 export function roomTopic(roomId: string): string {
