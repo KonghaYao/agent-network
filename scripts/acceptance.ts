@@ -55,6 +55,7 @@ import { runGroupAutoDeliverAcceptance } from './lib/auto-deliver-acceptance';
 import { runGroupRoleAcceptance } from './lib/group-role-acceptance';
 import { runOwnerTransferAcceptance } from './lib/owner-transfer-acceptance';
 import { runGroupInviteAcceptance } from './lib/group-invite-acceptance';
+import { runGroupInviteLinkAcceptance } from './lib/group-invite-link-acceptance';
 import { runGroupHistoryAcceptance } from './lib/group-history-acceptance';
 import { runGroupPolicyAcceptance } from './lib/group-policy-acceptance';
 import { runMessageReliabilityAcceptance } from './lib/m02-acceptance';
@@ -1329,6 +1330,7 @@ async function main(): Promise<void> {
     await runGroupRoleAcceptance();
     await runOwnerTransferAcceptance();
     await runGroupInviteAcceptance();
+    await runGroupInviteLinkAcceptance();
     await runGroupHistoryAcceptance({ hasDrive });
     await runGroupPolicyAcceptance({ hasDrive });
     await runMessageReliabilityAcceptance();

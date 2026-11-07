@@ -25,6 +25,7 @@ import { scheduleOutboxDrain } from './realtime/outbox';
 import { STREAM_URI } from './realtime/stream';
 import { getActorBySession } from './storage/queries';
 import { renderChatPage } from './web/chat';
+import { renderInvalidJoinPage, renderJoinPage } from './web/join';
 import { renderHomePage, renderInvalidSharePage, renderSharePage } from './web/share';
 import type { Env } from './env';
 
@@ -43,6 +44,7 @@ interface RpcBody {
 const PROTOCOL_VERSION_META = 'io.modelcontextprotocol/protocolVersion';
 const MODERN_VERSION = '2026-07-28';
 const FILE_ID = new RegExp(FILE_ID_PATTERN);
+const INVITE_KEY = /^[A-Za-z0-9_-]{16,64}$/u;
 const SKILLS_ROOT = resolve(import.meta.dir, '../public/skills');
 const AGENT_ICONS_ROOT = resolve(import.meta.dir, '../public/agent-icons');
 
@@ -744,6 +746,16 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
       },
     ),
   );
+
+  // 群邀请落地页。邀请码只是加入能力，不是身份凭据：这里不解析任何群数据，
+  // 由页面用浏览器 token 调工具预览与确认，权限判定全部留在工具层。
+  app.get('/j/:inviteKey', (c) => {
+    const inviteKey = c.req.param('inviteKey');
+    if (!INVITE_KEY.test(inviteKey)) {
+      return c.html(renderInvalidJoinPage(), 404, { 'cache-control': 'no-store' });
+    }
+    return c.html(renderJoinPage(inviteKey), 200, { 'cache-control': 'no-store' });
+  });
 
   // 私有下载：新上传默认私有草稿；绑定房间后必须携带房间票据并在每次使用时
   // 复核成员资格、代次、策略版本与历史边界；公开链接只在显式发布后生效。

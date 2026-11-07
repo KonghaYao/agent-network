@@ -200,7 +200,7 @@ function renderCurrentMembers() {
 
 /**
  * 邀请中成员只用于展示，不计入 active 成员数，也不渲染成已加入。
- * 撤销/重发由 G02 的邀请工具负责，这里不提供操作入口。
+ * 定向邀请可在这里立即撤销；链接邀请在下方“邀请链接”区块管理。
  */
 function renderInvitedMembers() {
   if (!membersInvitedElement || !membersInvitedWrapElement) return;
@@ -221,6 +221,14 @@ function renderInvitedMembers() {
     role.className = 'member-roster-role';
     role.textContent = '等待确认 · ' + (entry.kind === 'agent' ? 'Agent' : '人');
     item.append(name, role);
+    if (entry.invitation_id) {
+      const tools = document.createElement('span');
+      tools.className = 'member-roster-actions';
+      tools.append(memberActionButton('撤销邀请', true, function () {
+        return submitInviteRevoke(entry.invitation_id, '定向邀请', undefined);
+      }));
+      item.append(tools);
+    }
     membersInvitedElement.append(item);
   }
   if (membersInvitedCountElement) {
@@ -416,6 +424,8 @@ async function openMembersModal() {
   const roomId = activeRoomId;
   const epoch = roomEpoch;
   const loadToken = ++membersLoadToken;
+  // 邀请链接与入群申请独立加载：失败只影响各自区块，不阻塞成员选择。
+  loadInvitePanel(roomId, epoch);
   if (!canInviteMembers()) {
     renderMembersEmpty('只有群 owner 或管理员可以添加成员');
     setMembersError('只有群 owner 或管理员可以添加成员。');

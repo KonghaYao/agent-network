@@ -7487,6 +7487,57 @@ async function main(): Promise<void> {
       );
       checkEqual('左栏标题为已在群', await page.locator('#members-current-title').textContent(), '已在群');
       checkEqual('右栏标题为未在群', await page.locator('#members-candidates-title').textContent(), '未在群');
+      // G02：成员弹窗内的邀请链接、二维码与审批入口。
+      await page.locator('#members-invites').waitFor({ state: 'visible' });
+      checkEqual(
+        '成员弹窗显示邀请链接区块',
+        await page.locator('#members-invites').isVisible(),
+        true,
+      );
+      checkEqual(
+        '成员弹窗显示入群申请区块',
+        await page.locator('#members-requests').isVisible(),
+        true,
+      );
+      checkEqual(
+        '没有待审批申请时显示空态',
+        await page.locator('#members-requests-empty').isVisible(),
+        true,
+      );
+      await page.locator('#members-invite-create').click();
+      await page.locator('#members-invite-share').waitFor({ state: 'visible' });
+      const inviteShareUrl = ((await page.locator('#members-invite-url').textContent()) ?? '').trim();
+      check('页面创建邀请链接返回 /j/ 地址', /\/j\/[A-Za-z0-9_-]{16,}$/u.test(inviteShareUrl));
+      await page.locator('#members-invite-qr').click();
+      check(
+        '邀请二维码在本地 canvas 绘制',
+        await page
+          .locator('#members-invite-qr-canvas')
+          .evaluate((canvas) => (canvas as HTMLCanvasElement).width > 0),
+      );
+      checkEqual(
+        '新建链接进入有效链接列表',
+        await page.locator('#members-invites-list .member-invite-item').count(),
+        1,
+      );
+      page.once('dialog', (dialog) => dialog.accept());
+      await page
+        .locator('#members-invites-list .member-invite-item .member-action')
+        .click();
+      await page.waitForFunction(() => {
+        const count = document.getElementById('members-invites-count');
+        return Boolean(count && count.textContent === '0');
+      });
+      checkEqual(
+        '撤销后链接从有效列表移除',
+        await page.locator('#members-invites-count').textContent(),
+        '0',
+      );
+      checkEqual(
+        '撤销后明文分享区收起',
+        await page.locator('#members-invite-share').isHidden(),
+        true,
+      );
       checkEqual(
         '当前成员列表显示 2 人',
         await page.locator('#members-current .member-roster-item').count(),

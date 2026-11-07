@@ -220,7 +220,8 @@ function checkMigrationUpgrade(): void {
     '0009_feedback.sql,0010_room_tasks.sql,0011_delivery_reminders.sql,' +
       '0012_identity_management_devices.sql,0018_p0_guards.sql,0019_contact_relations.sql,' +
       '0020_group_roles.sql,0021_owner_leave_guard.sql,0022_contact_blocks_reports.sql,' +
-      '0023_room_invitations.sql,0024_room_owner_transfers.sql,0025_group_history_boundary.sql,0026_private_files_retention.sql',
+      '0023_room_invitations.sql,0024_room_owner_transfers.sql,0025_group_history_boundary.sql,' +
+      '0026_private_files_retention.sql,0027_group_invite_links.sql',
   );
   checkEqual(
     '旧库升级保留原业务数据',

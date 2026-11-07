@@ -25,6 +25,7 @@ import {
   runIdempotent,
 } from '../storage/transactions/runner';
 import { contactBlockGuardStatement } from './contact-blocks';
+import { requestJoinApproval } from './room-join-requests';
 import { actorId, type Principal } from './principal';
 
 /**
@@ -47,6 +48,27 @@ export interface RoomInvitationView {
   status: 'pending' | 'accepted' | 'rejected' | 'revoked' | 'expired' | 'exhausted';
   expires_at: string;
   created_at: string;
+  revision: number;
+  max_uses: number;
+  used_count: number;
+  member_count: number;
+  requires_approval: boolean;
+  next_step:
+    | 'join'
+    | 'request'
+    | 'pending_approval'
+    | 'member'
+    | 'removed'
+    | 'blocked'
+    | 'invalid'
+    | 'share';
+  join_request_status:
+    | 'pending'
+    | 'approved'
+    | 'rejected'
+    | 'cancelled'
+    | 'expired'
+    | null;
   /** 仅当前目标、pending 且未过期时为 true。 */
   can_respond: boolean;
 }
@@ -70,12 +92,26 @@ export interface InvitedMemberView {
 export interface RoomInvitationRespondResult {
   invitation_id: string;
   room_id: string;
-  status: 'accepted' | 'rejected';
+  status: 'accepted' | 'rejected' | 'requested';
+  /** 进入审批流程时返回申请 id；直接加入/拒绝为 null。 */
+  join_request_id?: string | null;
 }
 
-interface InvitationJoinRow extends RoomInvitationRow {
+export interface InvitationJoinRow extends RoomInvitationRow {
   room_title: string;
   inviter_name: string;
+  member_count: number;
+  member_join_policy: 'open' | 'approval';
+  my_member_status: 'active' | 'left' | 'removed' | null;
+  member_updated_at: number | null;
+  blocked: number;
+  join_request_status:
+    | 'pending'
+    | 'approved'
+    | 'rejected'
+    | 'cancelled'
+    | 'expired'
+    | null;
 }
 
 /** 群主/管理员可见的待确认成员；普通成员不读取邀请目标。 */
@@ -265,11 +301,76 @@ export function invitationInboxStatements(
 }
 
 function invitationStatus(
-  row: Pick<RoomInvitationRow, 'status' | 'expires_at'>,
+  row: Pick<RoomInvitationRow, 'status' | 'expires_at' | 'used_count' | 'max_uses'>,
   at: number,
 ): RoomInvitationView['status'] {
   if (row.status === 'pending' && row.expires_at <= at) return 'expired';
+  if (row.status === 'pending' && row.used_count >= row.max_uses) return 'exhausted';
   return row.status;
+}
+
+/**
+ * 邀请视图的唯一出口。
+ *
+ * `share` 用于管理员查看本群链接：next_step 固定为 share，避免把管理员
+ * 自己显示成可以加入的目标。其余场景按当前身份、拉黑与审批策略计算。
+ */
+export function invitationView(
+  row: InvitationJoinRow,
+  at: number,
+  options: { share?: boolean } = {},
+): RoomInvitationView {
+  const status = invitationStatus(row, at);
+  const requiresApproval = row.member_join_policy === 'approval';
+  let nextStep: RoomInvitationView['next_step'];
+  if (options.share) {
+    nextStep = status === 'pending' ? 'share' : 'invalid';
+  } else if (status !== 'pending') {
+    nextStep = 'invalid';
+  } else if (row.my_member_status === 'active') {
+    nextStep = 'member';
+  } else if (row.my_member_status === 'removed') {
+    // 定向邀请只有在移除后新建才有效；链接永远不能绕过移除。
+    nextStep =
+      row.kind === 'direct' && row.created_at >= (row.member_updated_at ?? row.created_at)
+        ? requiresApproval
+          ? 'request'
+          : 'join'
+        : 'removed';
+  } else if (row.blocked > 0) {
+    nextStep = 'blocked';
+  } else if (row.join_request_status === 'pending') {
+    nextStep = 'pending_approval';
+  } else if (requiresApproval) {
+    nextStep = 'request';
+  } else {
+    nextStep = 'join';
+  }
+  return {
+    invitation_id: row.invitation_id,
+    room_id: row.room_id,
+    room_title: row.room_title,
+    inviter_id: row.inviter_id,
+    inviter_name: row.inviter_name,
+    target_actor_id: row.target_actor_id,
+    kind: row.kind,
+    status,
+    expires_at: String(row.expires_at),
+    created_at: String(row.created_at),
+    revision: row.revision,
+    max_uses: row.max_uses,
+    used_count: row.used_count,
+    member_count: row.member_count,
+    requires_approval: requiresApproval,
+    next_step: nextStep,
+    join_request_status: row.join_request_status,
+    can_respond:
+      status === 'pending' &&
+      nextStep !== 'member' &&
+      nextStep !== 'removed' &&
+      nextStep !== 'blocked' &&
+      nextStep !== 'invalid',
+  };
 }
 
 export async function roomInvitationList(
@@ -309,7 +410,23 @@ export async function roomInvitationList(
   }
   const rows = await db
     .prepare(
-      `SELECT i.*, r.title AS room_title, a.name AS inviter_name
+      `SELECT i.*, r.title AS room_title, a.name AS inviter_name,
+              r.member_join_policy,
+              (SELECT COUNT(*) FROM room_members mm
+                WHERE mm.room_id = i.room_id AND mm.status = 'active') AS member_count,
+              (SELECT mm.status FROM room_members mm
+                WHERE mm.room_id = i.room_id AND mm.actor_id = ?) AS my_member_status,
+              (SELECT mm.updated_at FROM room_members mm
+                WHERE mm.room_id = i.room_id AND mm.actor_id = ?) AS member_updated_at,
+              EXISTS (
+                SELECT 1 FROM contact_blocks b
+                 WHERE b.released_at IS NULL
+                   AND ((b.blocker_actor_id = i.inviter_id AND b.blocked_actor_id = ?)
+                     OR (b.blocker_actor_id = ? AND b.blocked_actor_id = i.inviter_id))
+              ) AS blocked,
+              (SELECT jr.status FROM room_join_requests jr
+                WHERE jr.invitation_id = i.invitation_id AND jr.applicant_id = ?
+                ORDER BY jr.created_at DESC LIMIT 1) AS join_request_status
          FROM room_invitations i
          JOIN rooms r ON r.room_id = i.room_id
          JOIN actors a ON a.actor_id = i.inviter_id
@@ -317,25 +434,13 @@ export async function roomInvitationList(
         ORDER BY i.created_at DESC, i.invitation_id DESC
         LIMIT ?`,
     )
-    .bind(...binds, limit + 1)
+    .bind(viewer, viewer, viewer, viewer, viewer, ...binds, limit + 1)
     .all<InvitationJoinRow>();
   const page = rows.results.slice(0, limit);
   const hasMore = rows.results.length > limit;
   const last = page.at(-1);
   return {
-    items: page.map((row) => ({
-      invitation_id: row.invitation_id,
-      room_id: row.room_id,
-      room_title: row.room_title,
-      inviter_id: row.inviter_id,
-      inviter_name: row.inviter_name,
-      target_actor_id: row.target_actor_id,
-      kind: row.kind,
-      status: invitationStatus(row, at),
-      expires_at: String(row.expires_at),
-      created_at: String(row.created_at),
-      can_respond: row.status === 'pending' && row.expires_at > at,
-    })),
+    items: page.map((row) => invitationView(row, at)),
     next_cursor:
       hasMore && last
         ? encodeCursor({
@@ -351,32 +456,60 @@ export async function roomInvitationList(
   };
 }
 
-async function requireTargetInvitation(
+/** 邀请链接 key 的域分隔摘要；数据库只保存该值，原文只在创建响应出现一次。 */
+export function hashRoomInviteKey(key: string): Promise<string> {
+  return sha256Hex(`agent-network:room-invite:${key}`);
+}
+
+async function requireInvitationForRespondent(
   db: D1Database,
   viewer: string,
   invitationId: string,
+  inviteKey: string | undefined,
 ): Promise<RoomInvitationRow> {
   const row = await db
-    .prepare("SELECT * FROM room_invitations WHERE invitation_id = ? AND kind = 'direct'")
+    .prepare('SELECT * FROM room_invitations WHERE invitation_id = ?')
     .bind(invitationId)
     .first<RoomInvitationRow>();
-  // 目标不匹配同样返回 NOT_FOUND，避免枚举其他 actor 的邀请。
-  if (!row || row.target_actor_id !== viewer) {
+  if (!row) {
     throw new BusinessError('NOT_FOUND', '邀请不存在或不属于当前身份');
+  }
+  if (row.kind === 'direct') {
+    // 目标不匹配同样返回 NOT_FOUND，避免枚举其他 actor 的邀请。
+    if (row.target_actor_id !== viewer) {
+      throw new BusinessError('NOT_FOUND', '邀请不存在或不属于当前身份');
+    }
+    return row;
+  }
+  // 链接是持有者能力：必须同时出示与摘要匹配的明文 key，单独猜中内部
+  // invitation_id 不能加入，也不能读取邀请人身份。
+  if (!inviteKey || !row.token_hash) {
+    throw new BusinessError('NOT_FOUND', '邀请链接无效或已失效');
+  }
+  const digest = await hashRoomInviteKey(inviteKey);
+  if (digest !== row.token_hash) {
+    throw new BusinessError('NOT_FOUND', '邀请链接无效或已失效');
   }
   return row;
 }
 
 function requirePending(row: RoomInvitationRow, at: number): void {
+  if (row.expires_at <= at) {
+    throw new BusinessError('REQUEST_EXPIRED', '邀请已过期', {
+      invitation_id: row.invitation_id,
+    });
+  }
+  // 链接用尽后状态落库为 exhausted；用尽与撤销/拒绝要返回不同错误码，
+  // 客户端才能区分“换新链接”与“状态已变化”。
+  if (row.kind === 'link' && (row.status === 'exhausted' || row.used_count >= row.max_uses)) {
+    throw new BusinessError('INVITE_EXHAUSTED', '邀请次数已用尽', {
+      invitation_id: row.invitation_id,
+    });
+  }
   if (row.status !== 'pending') {
     throw new BusinessError('CONFLICT', '邀请状态已变化，请刷新后重试', {
       current_state: row.status,
       expected_state: 'pending',
-    });
-  }
-  if (row.expires_at <= at) {
-    throw new BusinessError('REQUEST_EXPIRED', '邀请已过期', {
-      invitation_id: row.invitation_id,
     });
   }
 }
@@ -400,10 +533,16 @@ async function requireAcceptTarget(
   }
   const member = await getMember(db, row.room_id, viewer);
   if (member?.status === 'removed') {
-    throw new BusinessError('CONFLICT', '你已被移出该群，不能使用旧邀请重新加入', {
-      current_state: 'removed',
-      expected_state: 'invited',
-    });
+    // 移除会在同一事务撤销该目标的全部 pending 定向邀请，因此仍存在的
+    // 定向邀请只可能是移除后由 owner/admin 新建的批准入口；链接永远
+    // 不能作为移除后的重入后门。
+    const freshDirect = row.kind === 'direct' && row.created_at >= member.updated_at;
+    if (!freshDirect) {
+      throw new BusinessError('CONFLICT', '你已被移出该群，不能使用旧邀请重新加入', {
+        current_state: 'removed',
+        expected_state: 'invited',
+      });
+    }
   }
   if (member?.status === 'active') {
     throw new BusinessError('CONFLICT', '你已经是该群成员', {
@@ -431,9 +570,31 @@ export async function roomInvitationAccept(
   // 先回放已提交结果：接受后状态已变、成员已生效，不能再用前置校验拒绝重试。
   const replay = await getOperation(db, viewer, input.request_id);
   if (replay) return resolveOperation(replay, payloadHash) as RoomInvitationRespondResult;
-  const row = await requireTargetInvitation(db, viewer, input.invitation_id);
+  const row = await requireInvitationForRespondent(
+    db,
+    viewer,
+    input.invitation_id,
+    input.invite_key,
+  );
   requirePending(row, at);
-  await requireAcceptTarget(db, principal, row, at);
+  const { room } = await requireAcceptTarget(db, principal, row, at);
+  if (room.member_join_policy === 'approval') {
+    // G07 的审批策略在邀请接受路径强制执行：确认后先进入申请列表，
+    // 不是成员；邀请本身保持 pending，由批准事务消费次数。
+    const request = await requestJoinApproval(db, {
+      principal,
+      invitation: row,
+      at,
+      requestId: input.request_id,
+      payloadHash,
+    });
+    return {
+      invitation_id: row.invitation_id,
+      room_id: row.room_id,
+      status: 'requested',
+      join_request_id: request.join_request_id,
+    };
+  }
   const eventKey = `room_invitation_accepted:${row.invitation_id}`;
 
   const outcome = await runIdempotent(db, {
@@ -451,22 +612,44 @@ export async function roomInvitationAccept(
             'invitationStale',
             `EXISTS (
                SELECT 1 FROM room_members
-                WHERE room_id = ? AND actor_id = ? AND status IN ('active', 'removed')
+                WHERE room_id = ? AND actor_id = ?
+                  AND status = 'active'
+             )
+             OR EXISTS (
+               SELECT 1 FROM room_members
+                WHERE room_id = ? AND actor_id = ? AND status = 'removed'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM room_invitations
+                     WHERE invitation_id = ? AND kind = 'direct'
+                       AND created_at >= room_members.updated_at
+                  )
              )`,
           ),
         )
-        .bind(row.room_id, viewer),
+        .bind(row.room_id, viewer, row.room_id, viewer, row.invitation_id),
       db
         .prepare(
           guardSql(
             'invitationStale',
             `NOT EXISTS (
                SELECT 1 FROM room_invitations
-                WHERE invitation_id = ? AND status = 'pending' AND target_actor_id = ?
+                WHERE invitation_id = ? AND status = 'pending'
+                  AND (
+                    (kind = 'direct' AND target_actor_id = ?)
+                    OR kind = 'link'
+                  )
              )`,
           ),
         )
         .bind(row.invitation_id, viewer),
+      db
+        .prepare(
+          guardSql(
+            'inviteExhausted',
+            'EXISTS (SELECT 1 FROM room_invitations WHERE invitation_id = ? AND used_count >= max_uses)',
+          ),
+        )
+        .bind(row.invitation_id),
       db
         .prepare(
           guardSql(
@@ -503,7 +686,12 @@ export async function roomInvitationAccept(
       db
         .prepare(
           `UPDATE room_invitations
-              SET status = 'accepted', used_count = used_count + 1,
+              SET used_count = used_count + 1,
+                  status = CASE
+                    WHEN kind = 'link' AND used_count + 1 < max_uses THEN 'pending'
+                    WHEN kind = 'link' THEN 'exhausted'
+                    ELSE 'accepted'
+                  END,
                   revision = revision + 1, updated_at = ?
             WHERE invitation_id = ? AND status = 'pending'`,
         )
@@ -541,7 +729,11 @@ export async function roomInvitationAccept(
           viewer,
           viewer,
           input.request_id,
-          JSON.stringify({ invitation_id: row.invitation_id, via: 'invitation' }),
+          JSON.stringify({
+            invitation_id: row.invitation_id,
+            invitation_kind: row.kind,
+            via: 'invitation',
+          }),
           at,
         ),
       roomMemberVersionStatement(db, row.room_id, eventKey, at),
@@ -586,8 +778,33 @@ export async function roomInvitationReject(
   const payloadHash = await sha256Hex(stableStringify(input));
   const replay = await getOperation(db, viewer, input.request_id);
   if (replay) return resolveOperation(replay, payloadHash) as RoomInvitationRespondResult;
-  const row = await requireTargetInvitation(db, viewer, input.invitation_id);
+  const row = await requireInvitationForRespondent(
+    db,
+    viewer,
+    input.invitation_id,
+    input.invite_key,
+  );
   requirePending(row, at);
+  if (row.kind === 'link') {
+    // 链接是共享入口：打开者拒绝只代表自己不加入，不能把所有人的链接
+    // 置为 rejected。仅记录幂等结果，邀请保持 pending。
+    const result: RoomInvitationRespondResult = {
+      invitation_id: row.invitation_id,
+      room_id: row.room_id,
+      status: 'rejected',
+      join_request_id: null,
+    };
+    await runIdempotent(db, {
+      actorId: viewer,
+      requestId: input.request_id,
+      payloadHash,
+      result,
+      build: (resultJson) => [
+        operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, nowMs()),
+      ],
+    });
+    return result;
+  }
   const eventKey = `room_invitation_rejected:${row.invitation_id}`;
   const outcome = await runIdempotent(db, {
     actorId: viewer,

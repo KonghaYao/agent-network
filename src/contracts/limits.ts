@@ -92,9 +92,23 @@ export const LIMITS = {
   groupMembersMax: 100,
   /** 定向群邀请默认有效期（毫秒）。G02 的链接邀请复用同一初始值。 */
   roomInviteTtlMs: 7 * 24 * 60 * 60_000,
+  /** 邀请可配置的最长有效期；短于默认值用于测试与临时活动。 */
+  roomInviteTtlMaxMs: 30 * 24 * 60 * 60_000,
+  /** 邀请可配置的最短有效期；只用于临时活动与验收，默认远长于此。 */
+  roomInviteTtlMinMs: 1_000,
+  /** 链接邀请默认 / 最大成功加入次数。 */
+  roomInviteLinkDefaultUses: 20,
+  roomInviteLinkMaxUses: 100,
+  /** 同一群同时有效的链接邀请上限，防止无限堆积可分享入口。 */
+  roomInviteLinksPerRoom: 20,
+  /** 每个群邀请 key 的随机字节数；只保存 SHA-256 摘要。 */
+  roomInviteKeyBytes: 24,
   /** 群邀请列表默认 / 最大条数。 */
   roomInvitationsPageDefault: 20,
   roomInvitationsPageMax: 100,
+  /** 入群申请列表默认 / 最大条数。 */
+  roomJoinRequestsPageDefault: 20,
+  roomJoinRequestsPageMax: 100,
   /** 群公告 UTF-8 字节上限。 */
   roomAnnouncementBytes: 4 * 1024,
   /** 群角色审计默认 / 最大条数。 */

@@ -579,6 +579,43 @@ export const APP_STYLE = `
     margin: 4px 6px; font-size: 12px; color: var(--wx-muted); }
   .member-invited-item { opacity: 0.85; }
   .member-invited-item:hover { background: transparent; }
+  /* 邀请链接与入群申请：明文链接只保存在内存，列表只显示状态与次数。 */
+  .members-invites, .members-requests { margin-top: 10px; border: 1px solid var(--wx-line);
+    border-radius: 8px; overflow: hidden; background: var(--wx-bg); }
+  .members-invites[hidden], .members-requests[hidden] { display: none; }
+  .members-invite-hint { margin: 0; padding: 6px 10px; font-size: 11px;
+    line-height: 1.6; color: var(--wx-muted); border-bottom: 1px solid var(--wx-line); }
+  .members-invite-form { display: flex; flex-wrap: wrap; align-items: center;
+    gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--wx-line); }
+  .members-invite-form label { display: flex; align-items: center; gap: 4px;
+    font-size: 12px; color: var(--wx-muted); }
+  .members-invite-form input { width: 64px; box-sizing: border-box; padding: 4px 6px;
+    border: 1px solid var(--wx-line); border-radius: 4px; background: var(--wx-search);
+    color: var(--wx-text); font-size: 12px; }
+  .members-invite-form button { padding: 4px 10px; border: 1px solid var(--wx-line);
+    border-radius: 4px; background: var(--wx-panel); color: var(--wx-text);
+    font-size: 12px; }
+  .members-invite-form button:hover:not(:disabled) { background: var(--wx-hover); }
+  .members-invite-form button:disabled { opacity: 0.5; cursor: default; }
+  .members-invite-share { padding: 8px 10px; border-bottom: 1px solid var(--wx-line);
+    background: rgb(7 193 96 / 8%); }
+  .members-invite-share[hidden], .members-invite-qr[hidden] { display: none; }
+  .members-invite-url { margin: 0 0 6px; font-size: 11px; line-height: 1.5;
+    color: var(--wx-text); overflow-wrap: anywhere; }
+  .members-invite-share .row { gap: 6px; }
+  .members-invite-share button { padding: 3px 8px; border: 1px solid var(--wx-line);
+    border-radius: 4px; background: var(--wx-panel); color: var(--wx-text);
+    font-size: 11px; }
+  .members-invite-share button:hover { background: var(--wx-hover); }
+  .members-invite-qr { margin-top: 8px; text-align: center; }
+  .members-invite-qr canvas { width: 160px; height: 160px; max-width: 100%;
+    border-radius: 4px; background: #fff; }
+  .members-invite-qr .muted { margin: 4px 0 0; font-size: 11px; }
+  .members-invites .member-roster, .members-requests .member-roster {
+    max-height: min(28dvh, 220px); }
+  .member-invite-item .member-roster-role, .member-request-item .member-roster-role {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; text-align: right; }
   .room-announcement { margin: 8px 16px 0; padding: 8px 12px; border-radius: 6px;
     border: 1px solid var(--wx-line); background: var(--wx-panel); color: var(--wx-text);
     font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }

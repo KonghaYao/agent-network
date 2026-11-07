@@ -10,6 +10,7 @@ import { CHAT_DRAWBOARD_SCRIPT } from './chat-drawboard-script';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
 import { CHAT_GROUP_COPY_SCRIPT } from './chat-group-copy-script';
+import { CHAT_INVITES_SCRIPT } from './chat-invites-script';
 import { CHAT_LIST_SCRIPT } from './chat-list-script';
 import { CHAT_LOGOUT_SCRIPT } from './chat-logout-script';
 import { CHAT_MARKDOWN_SCRIPT } from './chat-markdown-script';
@@ -140,6 +141,7 @@ ${CHAT_ARCHIVE_SCRIPT}
 ${CHAT_ROOM_MENU_SCRIPT}
 ${CHAT_MEMBER_PICKER_SCRIPT}
 ${CHAT_MEMBERS_SCRIPT}
+${CHAT_INVITES_SCRIPT}
 ${CHAT_ANNOUNCEMENT_SCRIPT}
 ${CHAT_GROUP_COPY_SCRIPT}
 ${CHAT_MESSAGE_FILES_SCRIPT}

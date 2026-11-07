@@ -342,13 +342,17 @@ export const roomNoticeListSchema = z.object({
 });
 
 /**
- * 读取当前身份收到的定向邀请。
+ * 读取当前身份收到的定向邀请、某群的链接邀请或一个链接的预览。
  *
- * G01 只实现定向邀请的读取与响应；链接、撤销和审批由 G02 在同一对象上扩展。
- * 目标不匹配时服务端返回 NOT_FOUND，避免枚举他人的邀请。
+ * - 默认：G01 定向邀请列表，只返回当前身份收到的邀请。
+ * - `room_id`：该群当前有效的链接邀请，需要 `invite_members`。
+ * - `invite_key`：链接持有者的最小群介绍，不返回消息正文或邀请人凭据。
  */
 export const roomInviteGetSchema = z.object({
   invitation_id: id().optional(),
+  room_id: id().optional(),
+  /** 链接 URL 中的明文 key；服务端只保存摘要，不落库原文。 */
+  invite_key: z.string().min(16).max(256).optional(),
   status: z
     .enum(['pending', 'accepted', 'rejected', 'revoked', 'expired', 'exhausted'])
     .optional(),
@@ -356,11 +360,61 @@ export const roomInviteGetSchema = z.object({
   limit: z.number().int().min(1).max(LIMITS.roomInvitationsPageMax).optional(),
 });
 
-/** 接受/拒绝定向邀请；接受时在同一事务内复核状态、有效期与 100 人上限。 */
+/** 接受/拒绝定向邀请；链接邀请另需出示明文 key。 */
 export const roomInviteRespondSchema = z.object({
   request_id: requestId,
   invitation_id: id(),
   action: z.enum(['accept', 'reject']),
+  /** 链接邀请必须与 invitation_id 同时出示；定向邀请忽略。 */
+  invite_key: z.string().min(16).max(256).optional(),
+});
+
+/**
+ * 创建群邀请。
+ *
+ * `target_actor_id` 为空时创建可分享链接（默认 20 次、7 天），返回明文 key
+ * 与分享 URL 仅此一次；指定目标时创建单人定向邀请（1 次），目标必须是好友。
+ */
+export const roomInviteCreateSchema = z
+  .object({
+    request_id: requestId,
+    room_id: id(),
+    target_actor_id: id().optional(),
+    max_uses: z.number().int().min(1).max(LIMITS.roomInviteLinkMaxUses).optional(),
+    expires_in_ms: z
+      .number()
+      .int()
+      .min(LIMITS.roomInviteTtlMinMs)
+      .max(LIMITS.roomInviteTtlMaxMs)
+      .optional(),
+  })
+  .refine((value) => value.target_actor_id === undefined || value.max_uses === undefined, {
+    message: '定向邀请固定 1 次，不能设置 max_uses',
+  });
+
+/** 撤销群邀请；inviter 或 owner/admin 可立即撤销。 */
+export const roomInviteRevokeSchema = z.object({
+  request_id: requestId,
+  invitation_id: id(),
+  expected_revision: z.number().int().positive().optional(),
+});
+
+/** 分页读取某群的入群申请；只有 owner/admin 可读。 */
+export const roomJoinRequestListSchema = z.object({
+  room_id: id(),
+  status: z
+    .enum(['pending', 'approved', 'rejected', 'cancelled', 'expired'])
+    .optional(),
+  cursor,
+  limit: z.number().int().min(1).max(LIMITS.roomJoinRequestsPageMax).optional(),
+});
+
+/** 批准或拒绝入群申请；批准时在同一事务重新检查容量、邀请与拉黑。 */
+export const roomJoinRequestRespondSchema = z.object({
+  request_id: requestId,
+  join_request_id: id(),
+  action: z.enum(['approve', 'reject']),
+  expected_revision: z.number().int().positive().optional(),
 });
 
 export const roomLeaveSchema = z.object({
@@ -653,6 +707,10 @@ export type RoomRoleHistoryInput = z.infer<typeof roomRoleHistorySchema>;
 export type RoomNoticeListInput = z.infer<typeof roomNoticeListSchema>;
 export type RoomInviteGetInput = z.infer<typeof roomInviteGetSchema>;
 export type RoomInviteRespondInput = z.infer<typeof roomInviteRespondSchema>;
+export type RoomInviteCreateInput = z.infer<typeof roomInviteCreateSchema>;
+export type RoomInviteRevokeInput = z.infer<typeof roomInviteRevokeSchema>;
+export type RoomJoinRequestListInput = z.infer<typeof roomJoinRequestListSchema>;
+export type RoomJoinRequestRespondInput = z.infer<typeof roomJoinRequestRespondSchema>;
 export type RoomLeaveInput = z.infer<typeof roomLeaveSchema>;
 export type MessageSendInput = z.infer<typeof messageSendSchema>;
 export type MessageSendStatusInput = z.infer<typeof messageSendStatusSchema>;

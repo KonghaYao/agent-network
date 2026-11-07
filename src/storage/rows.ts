@@ -223,7 +223,27 @@ export type RoomManagementAction =
   | 'owner_transfer_cancelled'
   | 'owner_transfer_expired'
   | 'policy_updated'
-  | 'announcement_updated';
+  | 'announcement_updated'
+  | 'invite_created'
+  | 'invite_revoked'
+  | 'join_requested'
+  | 'join_approved'
+  | 'join_rejected';
+
+/** 入群申请：pending 不是成员，批准时才在同一事务写入 active 成员。 */
+export interface RoomJoinRequestRow {
+  join_request_id: string;
+  invitation_id: string;
+  room_id: string;
+  applicant_id: string;
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled' | 'expired';
+  message: string;
+  revision: number;
+  created_at: number;
+  updated_at: number;
+  decided_at: number | null;
+  decided_by: string | null;
+}
 
 /** 群主转让提议；pending 不改变 `rooms.owner_id` 与任何成员角色。 */
 export interface RoomOwnerTransferRow {

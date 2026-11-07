@@ -318,7 +318,11 @@ async function main(): Promise<void> {
     'network_rooms_list',
     'network_room_get',
     'network_room_invite_get',
+    'network_room_invite_create',
+    'network_room_invite_revoke',
     'network_room_invite_respond',
+    'network_room_join_request_list',
+    'network_room_join_request_respond',
     'network_room_monitor_get',
     'network_room_monitor_set',
     'network_task_list_get',
@@ -402,6 +406,10 @@ async function main(): Promise<void> {
     'network_message_send_status',
     'network_room_monitor_get',
     'network_room_monitor_set',
+    'network_room_invite_create',
+    'network_room_invite_revoke',
+    'network_room_join_request_list',
+    'network_room_join_request_respond',
     'network_room_owner_transfer_propose',
     'network_room_owner_transfer_respond',
     'network_room_owner_transfer_cancel',
@@ -1863,8 +1871,24 @@ async function main(): Promise<void> {
     homeHtml.includes("requestId('web_reg')") && homeHtml.includes("kind: 'human'"),
   );
   check('扫码弹窗标明凭据泄露风险', homeHtml.includes('请勿截图或分享'));
-  const removedHandoff = await fetch(`${baseUrl()}/j/removed`);
-  checkEqual('服务端不提供 /j 扫码兑换端点', removedHandoff.status, 404);
+  const invalidJoin = await fetch(`${baseUrl()}/j/not-a-valid-key`);
+  checkEqual('格式错误的邀请 key 落地页返回 404', invalidJoin.status, 404);
+  const handoffExchange = await fetch(`${baseUrl()}/j/${'a'.repeat(32)}`, { method: 'POST' });
+  checkEqual('服务端不提供 /j 扫码兑换端点', handoffExchange.status, 404);
+  const joinLanding = await fetch(`${baseUrl()}/j/${'a'.repeat(32)}`);
+  const joinLandingHtml = await joinLanding.text();
+  checkEqual('群邀请落地页可打开', joinLanding.status, 200);
+  checkEqual('群邀请落地页禁止缓存', joinLanding.headers.get('cache-control'), 'no-store');
+  check(
+    '群邀请落地页只展示最小介绍与确认入口',
+    joinLandingHtml.includes('id="join-action"') &&
+      joinLandingHtml.includes('邀请码有效不等于已加入') &&
+      joinLandingHtml.includes("callTool('network_room_invite_get'"),
+  );
+  check(
+    '群邀请落地页不内联邀请码以外的身份凭据',
+    !joinLandingHtml.includes('agent-network-token='),
+  );
   check(
     '首页不再包含服务信息入口与折叠面板',
     !homeHtml.includes('服务信息') &&

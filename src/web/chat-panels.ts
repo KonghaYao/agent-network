@@ -310,6 +310,44 @@ export function membersDialog(): string {
           <button id="members-more" class="member-picker-more" type="button" hidden>加载更多</button>
         </section>
       </div>
+      <section class="members-invites" id="members-invites" hidden>
+        <header class="members-column-head">
+          <h3>邀请链接</h3>
+          <span id="members-invites-count" class="members-count" aria-live="polite">0</span>
+        </header>
+        <p class="members-invite-hint">默认 7 天、20 次成功加入；明文链接只显示一次，服务端不能恢复。</p>
+        <div class="members-invite-form">
+          <label>有效天数
+            <input id="members-invite-days" type="number" min="1" max="30" value="7">
+          </label>
+          <label>可加入次数
+            <input id="members-invite-uses" type="number" min="1" max="100" value="20">
+          </label>
+          <button id="members-invite-create" type="button">创建邀请链接</button>
+        </div>
+        <div id="members-invite-share" class="members-invite-share" hidden>
+          <p id="members-invite-url" class="members-invite-url"></p>
+          <div class="row">
+            <button id="members-invite-copy" type="button">复制链接</button>
+            <button id="members-invite-qr" type="button">显示二维码</button>
+            <button id="members-invite-dismiss" type="button">收起</button>
+          </div>
+          <div id="members-invite-qr-wrap" class="members-invite-qr" hidden>
+            <canvas id="members-invite-qr-canvas" aria-label="邀请二维码"></canvas>
+            <p class="muted">二维码即加入链接，撤销后立即失效，请勿截图外传。</p>
+          </div>
+        </div>
+        <ul id="members-invites-list" class="member-roster" aria-label="本群邀请链接"></ul>
+      </section>
+      <section class="members-requests" id="members-requests" hidden>
+        <header class="members-column-head">
+          <h3>入群申请</h3>
+          <span id="members-requests-count" class="members-count" aria-live="polite">0</span>
+        </header>
+        <p class="members-invite-hint">申请 pending 不是成员，不计入成员数；批准时才复核容量与邀请状态。</p>
+        <ul id="members-requests-list" class="member-roster" aria-label="待审批的入群申请"></ul>
+        <p id="members-requests-empty" class="members-empty" hidden>没有待审批的申请</p>
+      </section>
       <p id="members-error" class="form-error" role="status" aria-live="polite"></p>
       <div class="row modal-actions members-actions">
         <span id="members-selection" class="members-selection" role="status"

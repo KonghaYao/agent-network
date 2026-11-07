@@ -55,8 +55,12 @@ import {
   roomAnnouncementSetSchema,
   roomCreateSchema,
   roomGetSchema,
+  roomInviteCreateSchema,
   roomInviteGetSchema,
   roomInviteRespondSchema,
+  roomInviteRevokeSchema,
+  roomJoinRequestListSchema,
+  roomJoinRequestRespondSchema,
   roomLeaveSchema,
   roomMarkReadSchema,
   roomMembersUpdateSchema,
@@ -158,6 +162,13 @@ import {
   roomInvitationReject,
 } from '../domain/room-invitations';
 import {
+  roomInviteCreate,
+  roomInviteLinkList,
+  roomInvitePreview,
+  roomInviteRevoke,
+} from '../domain/room-invite-links';
+import { roomJoinRequestList, roomJoinRequestRespond } from '../domain/room-join-requests';
+import {
   roomOwnerTransferCancel,
   roomOwnerTransferPropose,
   roomOwnerTransferRespond,
@@ -222,6 +233,10 @@ import {
   roomCreateResultSchema,
   roomInvitationPageSchema,
   roomInvitationRespondSchema,
+  roomInvitationSchema,
+  roomInviteCreateResultSchema,
+  roomJoinRequestPageSchema,
+  roomJoinRequestRespondResultSchema,
   roomMonitorResultSchema,
   roomPageSchema,
   roomNoticePageSchema,
@@ -862,11 +877,13 @@ export function registerTools(
   register(
     server,
     'network_room_invite_get',
-    '分页读取当前身份收到的定向群邀请。只返回自己的邀请，目标不匹配返回 NOT_FOUND；pending 是待确认，不是已加入。can_respond 只对未过期的 pending 为 true。G01 只提供定向邀请；链接、撤销与审批由 G02 扩展。',
+    '读取群邀请。默认分页读取当前身份收到的定向邀请；带 invite_key 时只返回该链接的最小群介绍（群名、人数、邀请人、有效期、审批策略），不返回消息正文；带 room_id 时读取本群有效链接，需要邀请权限。pending 是待确认，不是已加入。can_respond 只对可继续处理的 pending 为 true。',
     roomInviteGetSchema,
     roomInvitationPageSchema,
     async (input) => {
       requireActor(principal);
+      if (input.invite_key) return roomInvitePreview(db, principal, input);
+      if (input.room_id) return roomInviteLinkList(db, principal, input);
       return roomInvitationList(db, principal, input);
     },
     { readOnlyHint: true },
@@ -874,8 +891,57 @@ export function registerTools(
 
   register(
     server,
+    'network_room_invite_create',
+    '创建群邀请。不指定 target_actor_id 时创建可分享链接/二维码：默认 7 天、20 次成功加入，明文 invite_key 与 /j/<key> 分享 URL 只在本次响应出现一次，服务端只保存 SHA-256 摘要；指定 target_actor_id 时创建单人定向邀请（固定 1 次），目标必须是好友。邀请不包含任何 actor 登录凭据。',
+    roomInviteCreateSchema,
+    roomInviteCreateResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomInviteCreate(db, principal, input, origin);
+    },
+  );
+
+  register(
+    server,
+    'network_room_invite_revoke',
+    '立即撤销群邀请。邀请人、owner 或 admin 可撤销；同一事务把该邀请的 pending 入群申请置为 expired。撤销后旧二维码/链接在所有设备失效，明文 key 不能从服务端恢复。',
+    roomInviteRevokeSchema,
+    roomInvitationSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomInviteRevoke(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_room_join_request_list',
+    '分页读取某群的入群申请；只有 owner/admin 可读。pending 申请不是成员，不计入成员数。expires_at 来自邀请，邀请过期/撤销/用尽时该申请按 expired 展示且不能批准。',
+    roomJoinRequestListSchema,
+    roomJoinRequestPageSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomJoinRequestList(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_room_join_request_respond',
+    '批准或拒绝入群申请；只有 owner/admin 可操作。批准时在同一事务重新检查邀请 pending、有效期、次数、拉黑、申请人移除状态与 100 人上限，并消费一次邀请、写入 active 成员；并发批准同一申请只有一个成功。拒绝不消费邀请。重复 request_id 返回首次结果。',
+    roomJoinRequestRespondSchema,
+    roomJoinRequestRespondResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomJoinRequestRespond(db, principal, input);
+    },
+  );
+
+  register(
+    server,
     'network_room_invite_respond',
-    '接受或拒绝自己的定向群邀请。接受时在同一事务内复核 pending 状态、有效期、拉黑关系与 100 人上限；并发接受同一邀请只有一个成功。接受成功后成为 active 成员并收到 room_invitation_accepted 事件；拒绝后邀请失效，不能复用。重复 request_id 返回首次结果。',
+    '接受或拒绝自己的群邀请。链接邀请必须同时出示 invite_key；定向邀请忽略该字段。开启审批策略时接受只创建 pending 入群申请（返回 requested），不写成员；否则在同一事务复核 pending、有效期、拉黑、次数与 100 人上限后成为 active 成员。重复 request_id 返回首次结果。',
     roomInviteRespondSchema,
     roomInvitationRespondSchema,
     async (input) => {

@@ -414,6 +414,62 @@ function roomStreamItems(
       }
       return result;
     }
+    case 'room_invitation_revoked': {
+      const invitationId = stringField(metadata, 'invitation_id');
+      for (const member of activeRecipients(members, eventSeq)) {
+        const item = withLocation(
+          baseItem(row, 'room.membership', 'room', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = 'invitation_revoked';
+        if (invitationId) item.subject_id = invitationId;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
+    case 'room_join_requested': {
+      const applicantId = stringField(metadata, 'applicant_id');
+      for (const member of activeRecipients(members, eventSeq)) {
+        const item = withLocation(
+          baseItem(row, 'room.membership', 'room', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = 'join_requested';
+        if (applicantId) item.subject_id = applicantId;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
+    case 'room_join_approved': {
+      const target = stringField(metadata, 'actor_id') ?? undefined;
+      for (const member of activeRecipients(members, eventSeq)) {
+        const item = withLocation(
+          baseItem(row, 'room.membership', 'room', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = 'added';
+        if (target) item.subject_id = target;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
+    case 'room_join_rejected': {
+      const target = stringField(metadata, 'actor_id') ?? undefined;
+      for (const member of activeRecipients(members, eventSeq)) {
+        const item = withLocation(
+          baseItem(row, 'room.membership', 'room', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = 'join_rejected';
+        if (target) item.subject_id = target;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
     case 'room_created': {
       for (const member of activeRecipients(members, eventSeq)) {
         result.push({
@@ -520,6 +576,36 @@ function inboxStreamItem(
       );
       item.change = 'invited';
       item.changed_by = stringField(metadata, 'inviter_id') ?? undefined;
+      return item;
+    }
+    case 'room_join_requested': {
+      const item = withLocation(
+        baseItem(row, 'room.membership', 'room', 'action_required'),
+        row,
+        metadata,
+      );
+      item.change = 'join_requested';
+      item.subject_id = stringField(metadata, 'applicant_id') ?? undefined;
+      return item;
+    }
+    case 'room_join_approved': {
+      const item = withLocation(
+        baseItem(row, 'room.membership', 'room', 'informational'),
+        row,
+        metadata,
+      );
+      item.change = 'join_approved';
+      item.changed_by = stringField(metadata, 'decided_by') ?? undefined;
+      return item;
+    }
+    case 'room_join_rejected': {
+      const item = withLocation(
+        baseItem(row, 'room.membership', 'room', 'informational'),
+        row,
+        metadata,
+      );
+      item.change = 'join_rejected';
+      item.changed_by = stringField(metadata, 'decided_by') ?? undefined;
       return item;
     }
     case 'room_owner_transfer_proposed': {

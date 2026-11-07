@@ -44,6 +44,8 @@ export const GUARD_TABLES = {
   rateLimited: 'guard_rate_limited',
   invitationStale: 'guard_invitation_stale',
   inviteTargetsMissing: 'guard_invite_targets_missing',
+  joinRequestStale: 'guard_join_request_stale',
+  roomInviteLimit: 'guard_room_invite_limit',
   ownerTransferStale: 'guard_owner_transfer_stale',
   fileUnavailable: 'guard_file_unavailable',
   artifactConflict: 'guard_artifact_conflict',
