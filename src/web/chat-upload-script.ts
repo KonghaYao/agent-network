@@ -40,6 +40,8 @@ function beginComposerUpload(roomId, file) {
     roomId: roomId,
     name: file.name,
     size: Number(file.size) || 0,
+    mime: String(file.type || ''),
+    imageFailed: false,
     file_id: null,
     public_url: null,
     status: 'uploading',
@@ -71,6 +73,7 @@ function completeComposerUpload(entry, bound) {
   }
   entry.file_id = String(fileId);
   entry.public_url = publicUrl;
+  entry.mime = String(boundFile.mime_type || boundFile.mimeType || entry.mime || '');
   entry.status = 'ready';
   entry.percent = 100;
   if (activeRoomId === entry.roomId) renderComposerFiles(entry.roomId);
@@ -105,15 +108,68 @@ function composerFileMeta(entry) {
   return formatFileSize(entry.size) || '文件';
 }
 
+function composerImageReady(entry) {
+  return entry.status === 'ready' &&
+    Boolean(entry.public_url) &&
+    !entry.imageFailed &&
+    isPreviewImage(entry.mime, entry.name);
+}
+
+/** 待发送图片点击后复用房间文件的大图预览，关闭时焦点回到缩略图。 */
+function openComposerImagePreview(entry, trigger) {
+  if (!entry.public_url) return;
+  const imageMime = previewImageMime(entry.mime, entry.name);
+  if (!imageMime) return;
+  openFilePreview({
+    name: entry.name,
+    mime_type: imageMime,
+    size: entry.size,
+    preview_kind: 'image',
+    preview_url: entry.public_url,
+    download_url: entry.public_url + (entry.public_url.indexOf('?') >= 0 ? '&' : '?') + 'download=1',
+    public_url: entry.public_url
+  }, trigger);
+}
+
+/** 48px 缩略图；加载失败时降级回带扩展名徽标的普通文件 chip。 */
+function composerFileThumb(entry) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'composer-file-thumb';
+  button.title = '预览 ' + entry.name;
+  button.setAttribute('aria-label', '预览图片 ' + entry.name);
+  const image = document.createElement('img');
+  image.src = entry.public_url;
+  image.alt = entry.name;
+  image.loading = 'lazy';
+  image.decoding = 'async';
+  image.referrerPolicy = 'no-referrer';
+  image.addEventListener('error', function () {
+    entry.imageFailed = true;
+    if (activeRoomId === entry.roomId) renderComposerFiles(entry.roomId);
+  });
+  button.addEventListener('click', function () {
+    openComposerImagePreview(entry, button);
+  });
+  button.append(image);
+  return button;
+}
+
 function composerFileChip(entry) {
   const chip = document.createElement('div');
   chip.className = 'composer-file';
   chip.setAttribute('role', 'listitem');
   chip.dataset.fileId = entry.file_id || '';
-  const badge = document.createElement('span');
-  badge.className = 'composer-file-badge';
-  badge.setAttribute('aria-hidden', 'true');
-  badge.textContent = composerFileBadge(entry.name);
+  if (composerImageReady(entry)) {
+    chip.classList.add('composer-file-image');
+    chip.append(composerFileThumb(entry));
+  } else {
+    const badge = document.createElement('span');
+    badge.className = 'composer-file-badge';
+    badge.setAttribute('aria-hidden', 'true');
+    badge.textContent = composerFileBadge(entry.name);
+    chip.append(badge);
+  }
   const main = document.createElement('span');
   main.className = 'composer-file-main';
   const name = document.createElement('span');
@@ -134,7 +190,7 @@ function composerFileChip(entry) {
   remove.addEventListener('click', function () {
     removeComposerFile(entry.roomId, entry.key);
   });
-  chip.append(badge, main, remove);
+  chip.append(main, remove);
   return chip;
 }
 

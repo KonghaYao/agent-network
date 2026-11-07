@@ -63,16 +63,21 @@ async function deleteFile(button, roomId, item) {
   }
 }
 
-function openFilePreview(item) {
+function openFilePreview(item, trigger) {
   if (!filePreviewElement || !filePreviewBody) return;
   closeFilePreview(false);
-  filesPreviewFocus = document.activeElement;
-  const kind = filePreviewKind(item);
+  filesPreviewFocus = trigger && trigger.focus ? trigger : document.activeElement;
+  // 统一判定：image/jpg、octet-stream + 图片扩展名都按归一化后的图片 MIME 预览。
+  const imageMime = previewImageMime(item.mime_type, item.name);
+  const normalized = imageMime
+    ? Object.assign({}, item, { mime_type: imageMime, preview_kind: 'image' })
+    : item;
+  const kind = filePreviewKind(normalized);
   if (filePreviewTitle) filePreviewTitle.textContent = item.name || '文件预览';
   if (filePreviewMeta) filePreviewMeta.textContent = fileMetaText(item);
   updatePreviewDownload(item);
   filePreviewElement.hidden = false;
-  renderFilePreviewBody(item, kind);
+  renderFilePreviewBody(normalized, kind);
   if (filePreviewClose) filePreviewClose.focus();
 }
 
@@ -222,6 +227,7 @@ function filePreviewKind(item) {
   const kind = String(item.preview_kind || '').toLowerCase();
   const mime = String(item.mime_type || '').toLowerCase();
   if (kind === 'pdf' && mime.indexOf('application/pdf') !== 0) return 'other';
+  if (previewImageMime(item.mime_type, item.name)) return 'image';
   if (kind === 'image' || kind === 'pdf' || kind === 'text' || kind === 'audio' || kind === 'video') {
     return kind;
   }
@@ -239,11 +245,43 @@ function filePreviewKind(item) {
 }
 
 function isRasterImage(item) {
-  const mime = String(item.mime_type || '').toLowerCase();
-  if (mime.indexOf('svg') >= 0 || mime.indexOf('html') >= 0) return false;
-  // 未知类型不内联：宁可下载，也不把 HTML/SVG 交给图片解码器。
-  if (mime.indexOf('image/') !== 0) return false;
-  return true;
+  // 与缩略图/待发送共用同一判定：image/jpg 归一，octet-stream 按扩展名兜底；
+  // 未知类型不内联，宁可下载，也不把 HTML/SVG 交给图片解码器。
+  return previewImageMime(item.mime_type, item.name) !== null;
+}
+
+/**
+ * 消息/待发送缩略图只接受 png/jpeg/gif/webp。
+ *
+ * 服务端 MIME 优先；image/jpg 归一为 image/jpeg，空或 octet-stream 时按
+ * 文件名扩展名兜底。SVG、HTML 与未知主动内容即使扩展名像图片也不会进入 img。
+ * 缩略图、消息文件分类、预览弹窗与待发送 chip 共用这份判定。
+ */
+const PREVIEW_IMAGE_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp'
+]);
+const PREVIEW_IMAGE_EXTENSION = /\\.(png|jpe?g|gif|webp)$/iu;
+
+/** 返回归一化后的图片 MIME；不是可内联图片时返回 null。 */
+function previewImageMime(mime, name) {
+  const normalized = String(mime || '').split(';')[0].trim().toLowerCase();
+  if (normalized === 'image/jpg') return 'image/jpeg';
+  if (PREVIEW_IMAGE_MIMES.has(normalized)) return normalized;
+  if (normalized && normalized !== 'application/octet-stream') return null;
+  const match = PREVIEW_IMAGE_EXTENSION.exec(String(name || ''));
+  if (!match) return null;
+  const extension = match[1].toLowerCase();
+  if (extension === 'png') return 'image/png';
+  if (extension === 'gif') return 'image/gif';
+  if (extension === 'webp') return 'image/webp';
+  return 'image/jpeg';
+}
+
+function isPreviewImage(mime, name) {
+  return previewImageMime(mime, name) !== null;
 }
 
 function fileIconLabel(kind) {

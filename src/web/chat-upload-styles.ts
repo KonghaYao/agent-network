@@ -34,6 +34,12 @@ export const UPLOAD_STYLE = `
   .composer-file-badge { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 4px;
     display: grid; place-items: center; background: var(--wx-search);
     color: var(--wx-muted); font-size: 9px; font-weight: 600; letter-spacing: .2px; }
+  .composer-file-thumb { flex: 0 0 auto; width: 48px; height: 48px; margin: 0;
+    padding: 0; border: 0; border-radius: 6px; overflow: hidden;
+    background: var(--wx-search); cursor: zoom-in; }
+  .composer-file-thumb img { display: block; width: 100%; height: 100%;
+    object-fit: cover; }
+  .composer-file-thumb:focus-visible { outline: 2px solid var(--wx-green); outline-offset: 1px; }
   .composer-file-main { min-width: 0; display: flex; flex-direction: column; }
   .composer-file-name { max-width: min(180px, 46vw); overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; font-size: 12px;

@@ -25,17 +25,7 @@ const MESSAGE_FILE_EXACT = new RegExp('^/f/(' + MESSAGE_FILE_ID_SOURCE + ')$');
 const MESSAGE_FILE_MARKDOWN = /\\[([^\\]\\n]{0,200})\\]\\(\\s*<?([^)\\s>]+)>?\\s*\\)/g;
 const MESSAGE_FILE_TRAILING = '.,;:!?()[]{}<>"\\'' +
   '。，、；：！？）】》」』”’…·';
-// 与公开下载头共享同一份白名单：SVG/HTML/XML/JS 属于主动内容。
-const MESSAGE_FILE_RASTER = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-  'image/avif',
-  'image/bmp',
-  'image/x-icon',
-  'image/vnd.microsoft.icon'
-]);
+// 与公开下载头共享主动内容分类：SVG/HTML/XML/JS 仍只给下载。
 const MESSAGE_FILE_ACTIVE = new Set([
   'text/html',
   'application/xhtml+xml',
@@ -228,11 +218,14 @@ function messageFileMime(value) {
 /**
  * 安全分类：主动内容与未知类型只给下载，只有光栅图片/PDF/安全文本/
  * 音频/视频才允许复用预览弹窗。
+ *
+ * 图片与缩略图/待发送共用 previewImageMime：image/jpg 归一为
+ * image/jpeg，octet-stream 等缺失类型按文件名扩展名兜底。
  */
-function messageFileKind(value) {
+function messageFileKind(value, name) {
+  if (previewImageMime(value, name)) return 'image';
   const mime = messageFileMime(value);
   if (MESSAGE_FILE_ACTIVE.has(mime) || mime.endsWith('+xml')) return 'other';
-  if (MESSAGE_FILE_RASTER.has(mime)) return 'image';
   if (mime === 'application/pdf') return 'pdf';
   if (mime.indexOf('text/') === 0) return 'text';
   if (mime === 'application/json' || mime === 'application/x-ndjson' ||
@@ -283,13 +276,14 @@ function messageFileFetchMeta(href) {
     const mime = messageFileMime(response.headers.get('content-type'));
     const length = response.headers.get('content-length');
     const size = length === null ? null : Number(length);
+    const name = messageFileCleanName(
+      messageFileDispositionName(response.headers.get('content-disposition'))
+    );
     return {
-      name: messageFileCleanName(
-        messageFileDispositionName(response.headers.get('content-disposition'))
-      ),
+      name: name,
       mime: mime,
       size: Number.isFinite(size) && size >= 0 ? size : null,
-      kind: messageFileKind(mime)
+      kind: messageFileKind(mime, name)
     };
   }).finally(function () {
     clearTimeout(timer);
@@ -468,10 +462,55 @@ function updateMessageFileActions(card, meta) {
   if (!existing) {
     const preview = messageFileActionButton('预览', 'msg-file-preview');
     preview.addEventListener('click', function () {
-      openMessageFilePreview(card);
+      openMessageFilePreview(card, preview);
     });
     actions.insertBefore(preview, actions.firstChild);
   }
+}
+
+/**
+ * 图片卡片缩略图：只在 HEAD 确认可预览图片后加载同源 /f/ 地址。
+ *
+ * 图片加载失败时移除缩略图并保留原文件卡片，不出现破图图标；懒加载与
+ * 异步解码避免历史图片阻塞消息渲染。点击由现有预览弹窗显示大图。
+ */
+function messageFileThumbnail(card, meta) {
+  const existing = card.querySelector('.msg-file-thumb');
+  if (existing) return existing;
+  if (card.dataset.thumbFailed === '1') return null;
+  const fileId = card.getAttribute('data-file-id');
+  const name = meta.name || card.__messageFileFallback || '图片';
+  if (!fileId || !isPreviewImage(meta.mime, name)) return null;
+  const href = messageFileHref(fileId);
+  if (!href) return null;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'msg-file-thumb';
+  button.title = name;
+  button.setAttribute('aria-label', '预览图片 ' + name);
+  const image = document.createElement('img');
+  image.src = href;
+  image.alt = name;
+  image.loading = 'lazy';
+  image.decoding = 'async';
+  image.referrerPolicy = 'no-referrer';
+  image.addEventListener('load', function () {
+    if (image.isConnected) scrollController.noteContentChanged();
+  });
+  image.addEventListener('error', function () {
+    card.dataset.thumbFailed = '1';
+    card.classList.remove('has-image');
+    button.remove();
+    scrollController.noteContentChanged();
+  });
+  button.addEventListener('click', function () {
+    openMessageFilePreview(card, button);
+  });
+  button.append(image);
+  card.classList.add('has-image');
+  card.insertBefore(button, card.firstChild);
+  scrollController.noteContentChanged();
+  return button;
 }
 
 function applyMessageFileMeta(card, meta) {
@@ -494,12 +533,16 @@ function applyMessageFileMeta(card, meta) {
   const download = card.querySelector('.msg-file-download');
   if (download) download.setAttribute('download', name);
   updateMessageFileActions(card, meta);
+  messageFileThumbnail(card, meta);
   scrollController.noteContentChanged();
 }
 
 function applyMessageFileFailure(card) {
   card.removeAttribute('data-loading');
   card.classList.add('unavailable');
+  const thumb = card.querySelector('.msg-file-thumb');
+  if (thumb) thumb.remove();
+  card.classList.remove('has-image');
   const name = card.__messageFileFallback || '文件';
   const nameNode = card.querySelector('.msg-file-name');
   if (nameNode) {
@@ -511,7 +554,7 @@ function applyMessageFileFailure(card) {
   scrollController.noteContentChanged();
 }
 
-function openMessageFilePreview(card) {
+function openMessageFilePreview(card, trigger) {
   const meta = card.__messageFileMeta;
   const fileId = card.getAttribute('data-file-id');
   if (!meta || !fileId) return;
@@ -520,15 +563,17 @@ function openMessageFilePreview(card) {
   if (!href) return;
   const nameNode = card.querySelector('.msg-file-name');
   const name = (nameNode && nameNode.textContent) || card.__messageFileFallback || '文件';
+  // 点击缩略图时按归一化图片类型打开，不把 HEAD 原始 MIME 传给预览弹窗。
+  const imageMime = previewImageMime(meta.mime, name);
   openFilePreview({
     name: name,
-    mime_type: meta.mime,
+    mime_type: imageMime || meta.mime,
     size: meta.size === null ? undefined : meta.size,
-    preview_kind: meta.kind,
+    preview_kind: imageMime ? 'image' : meta.kind,
     preview_url: href,
     download_url: download || href,
     public_url: href
-  });
+  }, trigger);
 }
 
 /**

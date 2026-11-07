@@ -9170,6 +9170,10 @@ async function main(): Promise<void> {
       const xssFileName = '文件名 <b> 粗体 "引号".txt';
       const cardFiles = await seedRoomFiles(data.humanToken, server.base, cardRoomId, [
         { name: '卡片图片.png', mimeType: 'image/png', body: PNG_BYTES },
+        { name: '卡片图片二.png', mimeType: 'image/png', body: PNG_BYTES },
+        { name: '八位流图片.png', mimeType: 'application/octet-stream', body: PNG_BYTES },
+        { name: '兼容图片.jpg', mimeType: 'image/jpg', body: PNG_BYTES },
+        { name: '坏图.png', mimeType: 'image/png', body: PNG_BYTES },
         { name: '卡片报告.pdf', mimeType: 'application/pdf', body: PDF_BYTES },
         { name: '卡片说明.txt', mimeType: 'text/plain', body: '卡片第一行\n卡片第二行' },
         { name: '卡片语音.mp3', mimeType: 'audio/mpeg', body: Buffer.from('ID3card') },
@@ -9196,6 +9200,10 @@ async function main(): Promise<void> {
         return file;
       };
       const image = cardFile('卡片图片.png');
+      const imageTwo = cardFile('卡片图片二.png');
+      const octetImage = cardFile('八位流图片.png');
+      const jpgImage = cardFile('兼容图片.jpg');
+      const brokenImage = cardFile('坏图.png');
       const pdf = cardFile('卡片报告.pdf');
       const textFile = cardFile('卡片说明.txt');
       const audio = cardFile('卡片语音.mp3');
@@ -9229,6 +9237,30 @@ async function main(): Promise<void> {
           `[视频](${video.publicUrl})`,
           '未知文件',
           zip.publicUrl,
+        ].join('\n'),
+      );
+      const multiMarker = '多图预览';
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        [multiMarker, '第一张', image.publicUrl, '第二张', imageTwo.publicUrl].join('\n'),
+      );
+      const brokenMarker = '坏图回退';
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        [brokenMarker, '坏图.png', brokenImage.publicUrl].join('\n'),
+      );
+      const mimeMarker = 'MIME 兜底图片';
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        [
+          mimeMarker,
+          '八位流图片',
+          octetImage.publicUrl,
+          '兼容图片',
+          jpgImage.publicUrl,
         ].join('\n'),
       );
       const unsafeMarker = '不安全类型清单';
@@ -9431,6 +9463,15 @@ async function main(): Promise<void> {
           },
         });
       });
+      let brokenImageGets = 0;
+      await page.route(`**/f/${brokenImage.fileId}`, async (route) => {
+        if (route.request().method() === 'HEAD') {
+          await route.fallback();
+          return;
+        }
+        brokenImageGets += 1;
+        await route.fulfill({ status: 404, body: 'missing' });
+      });
       await page.goto(`${server.base}/c/${cardRoomId}`);
       await waitRoom(page, cardRoomId, '卡片文件群');
 
@@ -9502,6 +9543,72 @@ async function main(): Promise<void> {
         'no-referrer',
       );
 
+      const imageThumb = imageCard.locator('.msg-file-thumb');
+      await imageThumb.waitFor();
+      await page.waitForFunction(
+        `(() => { const img = document.querySelector('.msg-file[data-file-id="${image.fileId}"] .msg-file-thumb img'); return Boolean(img && img.complete && img.naturalWidth > 0); })()`,
+      );
+      checkEqual('图片消息显示缩略图', await imageThumb.locator('img').count(), 1);
+      checkEqual(
+        '缩略图 alt 使用文件名',
+        await imageThumb.locator('img').getAttribute('alt'),
+        '卡片图片.png',
+      );
+      checkEqual('缩略图懒加载', await imageThumb.locator('img').getAttribute('loading'), 'lazy');
+      checkEqual('缩略图异步解码', await imageThumb.locator('img').getAttribute('decoding'), 'async');
+      const thumbBox = await imageThumb.boundingBox();
+      check(
+        '缩略图限制最大宽高',
+        Boolean(thumbBox) && thumbBox!.width <= 240 && thumbBox!.height <= 220,
+        thumbBox,
+      );
+      checkEqual(
+        '缩略图拒绝 SVG/主动图片类型',
+        await page.evaluate(`isPreviewImage('image/svg+xml', '伪装.png')`),
+        false,
+      );
+      checkEqual(
+        '缩略图在缺少 MIME 时按扩展名兜底',
+        await page.evaluate(`isPreviewImage('application/octet-stream', '图片.webp')`),
+        true,
+      );
+      checkEqual(
+        '外部图片 URL 不进入预览',
+        await page.evaluate(`fileSafeUrl('https://external.example/f/f_${'C'.repeat(22)}')`),
+        null,
+      );
+
+      await imageThumb.click();
+      await page.locator('#file-preview-body img').waitFor();
+      checkEqual('点击缩略图打开大图预览', await page.locator('#file-preview').isVisible(), true);
+      await page.keyboard.press('Escape');
+      await page.locator('#file-preview').waitFor({ state: 'hidden' });
+      await page.waitForFunction(
+        `document.activeElement === document.querySelector('.msg-file[data-file-id="${image.fileId}"] .msg-file-thumb')`,
+      );
+      checkEqual(
+        'Esc 关闭预览后焦点回到缩略图',
+        await page.evaluate(
+          `document.activeElement === document.querySelector('.msg-file[data-file-id="${image.fileId}"] .msg-file-thumb')`,
+        ),
+        true,
+      );
+
+      await imageThumb.click();
+      await page.locator('#file-preview').waitFor({ state: 'visible' });
+      await page.mouse.click(4, 4);
+      await page.locator('#file-preview').waitFor({ state: 'hidden' });
+      await page.waitForFunction(
+        `document.activeElement === document.querySelector('.msg-file[data-file-id="${image.fileId}"] .msg-file-thumb')`,
+      );
+      checkEqual(
+        '点击遮罩关闭预览后焦点回到缩略图',
+        await page.evaluate(
+          `document.activeElement === document.querySelector('.msg-file[data-file-id="${image.fileId}"] .msg-file-thumb')`,
+        ),
+        true,
+      );
+
       await imageCard.locator('.msg-file-preview').click();
       await page.locator('#file-preview-body img').waitFor();
       await page.waitForFunction(
@@ -9510,6 +9617,96 @@ async function main(): Promise<void> {
       checkEqual('图片卡片预览使用 img', await page.locator('#file-preview-body img').count(), 1);
       checkEqual('图片卡片预览不创建 iframe', await page.locator('#file-preview-body iframe').count(), 0);
       await page.locator('#file-preview-close').click();
+
+      const mimeMessage = page.locator('#messages .msg').filter({ hasText: mimeMarker });
+      await mimeMessage.scrollIntoViewIfNeeded();
+      const octetCard = mimeMessage.locator('.msg-file').filter({ hasText: '八位流图片.png' });
+      const jpgCard = mimeMessage.locator('.msg-file').filter({ hasText: '兼容图片.jpg' });
+      await octetCard.locator('.msg-file-name').waitFor();
+      await jpgCard.locator('.msg-file-name').waitFor();
+      checkEqual('octet-stream PNG 图片徽标', await octetCard.locator('.msg-file-kind').textContent(), '图片');
+      checkEqual('image/jpg PNG 图片徽标', await jpgCard.locator('.msg-file-kind').textContent(), '图片');
+      await octetCard.locator('.msg-file-thumb img').waitFor();
+      await jpgCard.locator('.msg-file-thumb img').waitFor();
+      checkEqual(
+        'octet-stream PNG 显示缩略图',
+        await octetCard.locator('.msg-file-thumb img').count(),
+        1,
+      );
+      checkEqual(
+        'image/jpg PNG 显示缩略图',
+        await jpgCard.locator('.msg-file-thumb img').count(),
+        1,
+      );
+      checkEqual(
+        'messageFileKind 识别 octet-stream PNG',
+        await page.evaluate(`messageFileKind('application/octet-stream', '八位流图片.png')`),
+        'image',
+      );
+      checkEqual(
+        'previewImageMime 归一 image/jpg',
+        await page.evaluate(`previewImageMime('image/jpg', '兼容图片.jpg')`),
+        'image/jpeg',
+      );
+      checkEqual(
+        'previewImageMime 拒绝 SVG',
+        await page.evaluate(`previewImageMime('image/svg+xml', '伪装.png')`),
+        null,
+      );
+      checkEqual(
+        'previewImageMime 拒绝 HTML',
+        await page.evaluate(`previewImageMime('text/html', '伪装.png')`),
+        null,
+      );
+      checkEqual(
+        'messageFileKind 拒绝 SVG',
+        await page.evaluate(`messageFileKind('image/svg+xml', '伪装.png')`),
+        'other',
+      );
+
+      await octetCard.locator('.msg-file-thumb').click();
+      await page.locator('#file-preview-body img').waitFor();
+      checkEqual(
+        'octet-stream PNG 点击缩略图显示大图',
+        await page.locator('#file-preview-body img').count(),
+        1,
+      );
+      check(
+        'octet-stream PNG 预览不提示不支持',
+        !((await page.locator('#file-preview-body').textContent()) ?? '').includes('不支持在线预览'),
+        await page.locator('#file-preview-body').textContent(),
+      );
+      const octetPreviewSrc = (await page.locator('#file-preview-body img').getAttribute('src')) ?? '';
+      check(
+        'octet-stream PNG 预览使用同源 /f/',
+        new URL(octetPreviewSrc).origin === new URL(server.base).origin &&
+          new URL(octetPreviewSrc).pathname === `/f/${octetImage.fileId}`,
+        octetPreviewSrc,
+      );
+      await page.keyboard.press('Escape');
+      await page.locator('#file-preview').waitFor({ state: 'hidden' });
+
+      await jpgCard.locator('.msg-file-thumb').click();
+      await page.locator('#file-preview-body img').waitFor();
+      checkEqual(
+        'image/jpg PNG 点击缩略图显示大图',
+        await page.locator('#file-preview-body img').count(),
+        1,
+      );
+      check(
+        'image/jpg PNG 预览不提示不支持',
+        !((await page.locator('#file-preview-body').textContent()) ?? '').includes('不支持在线预览'),
+        await page.locator('#file-preview-body').textContent(),
+      );
+      const jpgPreviewSrc = (await page.locator('#file-preview-body img').getAttribute('src')) ?? '';
+      check(
+        'image/jpg PNG 预览使用同源 /f/',
+        new URL(jpgPreviewSrc).origin === new URL(server.base).origin &&
+          new URL(jpgPreviewSrc).pathname === `/f/${jpgImage.fileId}`,
+        jpgPreviewSrc,
+      );
+      await page.keyboard.press('Escape');
+      await page.locator('#file-preview').waitFor({ state: 'hidden' });
 
       await pdfCard.locator('.msg-file-preview').click();
       await page.locator('#file-preview-body iframe').waitFor();
@@ -9585,6 +9782,68 @@ async function main(): Promise<void> {
         await bareFailureMessage.locator('.msg-file-name').textContent(),
         '文件',
       );
+
+      const multiMessage = page.locator('#messages .msg').filter({ hasText: multiMarker });
+      await multiMessage.scrollIntoViewIfNeeded();
+      await waitUntil(
+        async () => (await multiMessage.locator('.msg-file.has-image').count()) === 2,
+        '同消息两张图片缩略图',
+      );
+      await waitUntil(async () => {
+        const images = multiMessage.locator('.msg-file.has-image .msg-file-thumb img');
+        if ((await images.count()) !== 2) return false;
+        return images.evaluateAll((nodes) =>
+          nodes.every((node) => {
+            const image = node as HTMLImageElement;
+            return image.complete && image.naturalWidth > 0;
+          }),
+        );
+      }, '同消息两张图片加载完成');
+      const multiLayout = (await multiMessage.evaluate((element) => {
+        const container = element.querySelector('.msg-files');
+        const cards = Array.from(element.querySelectorAll('.msg-file.has-image'));
+        const containerRect = container ? container.getBoundingClientRect() : null;
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          containerLeft: containerRect ? containerRect.left : 0,
+          containerRight: containerRect ? containerRect.right : 0,
+          cards: cards.map((card) => {
+            const rect = card.getBoundingClientRect();
+            return { left: rect.left, right: rect.right, top: rect.top, width: rect.width };
+          }),
+        };
+      })) as {
+        view: number;
+        doc: number;
+        containerLeft: number;
+        containerRight: number;
+        cards: { left: number; right: number; top: number; width: number }[];
+      };
+      check(
+        '多图缩略图换行且不溢出',
+        multiLayout.doc <= multiLayout.view &&
+          multiLayout.cards.length === 2 &&
+          multiLayout.cards.every(
+            (card) =>
+              card.width <= 240 &&
+              card.left >= multiLayout.containerLeft - 1 &&
+              card.right <= multiLayout.containerRight + 1,
+          ),
+        multiLayout,
+      );
+
+      const brokenMessage = page.locator('#messages .msg').filter({ hasText: brokenMarker });
+      await brokenMessage.scrollIntoViewIfNeeded();
+      await waitUntil(() => brokenImageGets > 0, '坏图缩略图发起 GET', 15_000);
+      await waitUntil(
+        async () => (await brokenMessage.locator('.msg-file-thumb').count()) === 0,
+        '坏图缩略图回退文件卡片',
+      );
+      const brokenCard = brokenMessage.locator('.msg-file').filter({ hasText: '坏图.png' });
+      checkEqual('图片加载失败回退文件名', await brokenCard.locator('.msg-file-name').textContent(), '坏图.png');
+      checkEqual('图片加载失败不保留破图', await brokenCard.locator('img').count(), 0);
+      checkEqual('图片加载失败仍保留文件卡片', await brokenCard.count(), 1);
 
       const dedupeMessage = page.locator('#messages .msg').filter({ hasText: dedupeMarker });
       await dedupeMessage.scrollIntoViewIfNeeded();
@@ -9886,6 +10145,78 @@ async function main(): Promise<void> {
         Boolean(mobileMetrics) && mobileMetrics!.nameScroll <= mobileMetrics!.nameClient + 1,
         mobileMetrics,
       );
+
+      const mobileMultiMessage = mobile.page
+        .locator('#messages .msg')
+        .filter({ hasText: multiMarker });
+      await mobileMultiMessage.scrollIntoViewIfNeeded();
+      await waitUntil(async () => {
+        const images = mobileMultiMessage.locator('.msg-file.has-image .msg-file-thumb img');
+        if ((await images.count()) !== 2) return false;
+        return images.evaluateAll((nodes) =>
+          nodes.every((node) => {
+            const image = node as HTMLImageElement;
+            return image.complete && image.naturalWidth > 0;
+          }),
+        );
+      }, '390px 多图缩略图加载');
+      await mobile.page.emulateMedia({ colorScheme: 'dark' });
+      const mobileImageMetrics = (await mobileMultiMessage.evaluate((element) => {
+        const messages = document.getElementById('messages');
+        const thumbs = Array.from(element.querySelectorAll('.msg-file.has-image .msg-file-thumb'));
+        const imageCards = Array.from(element.querySelectorAll('.msg-file.has-image'));
+        return {
+          dark: matchMedia('(prefers-color-scheme: dark)').matches,
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          listScroll: messages ? messages.scrollWidth : 0,
+          listClient: messages ? messages.clientWidth : 0,
+          thumbs: thumbs.map((thumb) => {
+            const rect = thumb.getBoundingClientRect();
+            const image = thumb.querySelector('img');
+            return {
+              left: rect.left,
+              right: rect.right,
+              width: rect.width,
+              height: rect.height,
+              alt: image ? image.getAttribute('alt') : '',
+            };
+          }),
+          cards: imageCards.map((card) => {
+            const rect = card.getBoundingClientRect();
+            return { left: rect.left, right: rect.right };
+          }),
+        };
+      })) as {
+        dark: boolean;
+        view: number;
+        doc: number;
+        listScroll: number;
+        listClient: number;
+        thumbs: { left: number; right: number; width: number; height: number; alt: string }[];
+        cards: { left: number; right: number }[];
+      };
+      checkEqual('390px 暗色图片缩略图生效', mobileImageMetrics.dark, true);
+      check(
+        '390px 图片缩略图不横向溢出',
+        mobileImageMetrics.doc <= mobileImageMetrics.view &&
+          mobileImageMetrics.listScroll <= mobileImageMetrics.listClient + 1 &&
+          mobileImageMetrics.thumbs.length === 2 &&
+          mobileImageMetrics.thumbs.every(
+            (thumb) =>
+              thumb.width > 0 &&
+              thumb.width <= 240 &&
+              thumb.height <= 220 &&
+              thumb.left >= -1 &&
+              thumb.right <= mobileImageMetrics.view + 1 &&
+              thumb.alt.length > 0,
+          ) &&
+          mobileImageMetrics.cards.every(
+            (card) => card.left >= -1 && card.right <= mobileImageMetrics.view + 1,
+          ),
+        mobileImageMetrics,
+      );
+
       await mobile.context.close();
       await context.close();
     }
@@ -10230,7 +10561,7 @@ async function main(): Promise<void> {
       await mobile.page.goto(`${server.base}/c/${dropRoomId}`);
       await waitRoom(mobile.page, dropRoomId, '拖拽文件群');
       await dispatchDrag(mobile.page, '#chat-body', 'dragenter', [
-        { name: '移动拖拽.txt', mimeType: 'text/plain', text: 'mobile' },
+        { name: '移动拖拽.png', mimeType: 'image/png', base64: PNG_BYTES.toString('base64') },
       ]);
       await mobile.page.locator('#composer-drop').waitFor({ state: 'visible' });
       const dropMetrics = (await mobile.page.evaluate(`(() => {
@@ -10252,19 +10583,25 @@ async function main(): Promise<void> {
       );
       await dispatchDrag(mobile.page, '#chat-body', 'dragleave', []);
       await dispatchDrag(mobile.page, '#chat-body', 'drop', [
-        { name: '移动拖拽.txt', mimeType: 'text/plain', text: 'mobile' },
+        { name: '移动拖拽.png', mimeType: 'image/png', base64: PNG_BYTES.toString('base64') },
       ]);
       await waitUntil(
         async () => (await mobile.page.locator('#composer-files .composer-file').count()) === 1,
         '390px 拖拽生成 chip',
       );
       await mobile.page.emulateMedia({ colorScheme: 'dark' });
+      await mobile.page.waitForFunction(
+        `(() => { const img = document.querySelector('#composer-files .composer-file-thumb img'); return Boolean(img && img.complete && img.naturalWidth > 0); })()`,
+      );
       const mobileChip = (await mobile.page.evaluate(`(() => {
         const chip = document.querySelector('#composer-files .composer-file');
         const name = document.querySelector('#composer-files .composer-file-name');
         const remove = document.querySelector('#composer-files .composer-file-remove');
+        const thumb = document.querySelector('#composer-files .composer-file-thumb');
+        const thumbImage = thumb ? thumb.querySelector('img') : null;
         const chipRect = chip ? chip.getBoundingClientRect() : null;
         const nameRect = name ? name.getBoundingClientRect() : null;
+        const thumbRect = thumb ? thumb.getBoundingClientRect() : null;
         const style = chip ? getComputedStyle(chip) : null;
         return {
           view: window.innerWidth,
@@ -10274,6 +10611,12 @@ async function main(): Promise<void> {
           chipLeft: chipRect ? chipRect.left : 0,
           chipRight: chipRect ? chipRect.right : 0,
           nameWidth: nameRect ? nameRect.width : 0,
+          thumbLeft: thumbRect ? thumbRect.left : 0,
+          thumbRight: thumbRect ? thumbRect.right : 0,
+          thumbWidth: thumbRect ? thumbRect.width : 0,
+          thumbHeight: thumbRect ? thumbRect.height : 0,
+          thumbAlt: thumbImage ? thumbImage.getAttribute('alt') : '',
+          thumbLoaded: Boolean(thumbImage && thumbImage.complete && thumbImage.naturalWidth > 0),
           removeVisible: Boolean(remove && remove.getBoundingClientRect().width > 0),
           background: style ? style.backgroundColor : '',
           dark: matchMedia('(prefers-color-scheme: dark)').matches
@@ -10286,6 +10629,12 @@ async function main(): Promise<void> {
         chipLeft: number;
         chipRight: number;
         nameWidth: number;
+        thumbLeft: number;
+        thumbRight: number;
+        thumbWidth: number;
+        thumbHeight: number;
+        thumbAlt: string;
+        thumbLoaded: boolean;
         removeVisible: boolean;
         background: string;
         dark: boolean;
@@ -10297,6 +10646,18 @@ async function main(): Promise<void> {
           mobileChip.chipLeft >= -1 &&
           mobileChip.chipRight <= mobileChip.view + 1 &&
           mobileChip.nameWidth > 0,
+        mobileChip,
+      );
+      check(
+        '390px 图片缩略图 48–64px 且不溢出',
+        mobileChip.thumbLoaded &&
+          mobileChip.thumbWidth >= 48 &&
+          mobileChip.thumbWidth <= 64 &&
+          mobileChip.thumbHeight >= 48 &&
+          mobileChip.thumbHeight <= 64 &&
+          mobileChip.thumbLeft >= -1 &&
+          mobileChip.thumbRight <= mobileChip.view + 1 &&
+          mobileChip.thumbAlt === '移动拖拽.png',
         mobileChip,
       );
       checkEqual('390px 文件 chip 删除按钮可见', mobileChip.removeVisible, true);
@@ -10523,6 +10884,61 @@ async function main(): Promise<void> {
       const attachTextUrl = await attachTextItem.locator('a.file-action').getAttribute('href');
       check('附件文件栏提供公开 URL', Boolean(attachImageUrl && attachTextUrl));
 
+      const attachImageChip = page.locator('#composer-files .composer-file.composer-file-image');
+      await attachImageChip.waitFor();
+      const attachThumb = attachImageChip.locator('.composer-file-thumb');
+      await page.waitForFunction(
+        `(() => { const img = document.querySelector('#composer-files .composer-file-image .composer-file-thumb img'); return Boolean(img && img.complete && img.naturalWidth > 0); })()`,
+      );
+      const attachThumbBox = await attachThumb.boundingBox();
+      check(
+        '待发送图片显示 48–64px 缩略图',
+        Boolean(attachThumbBox) &&
+          attachThumbBox!.width >= 48 &&
+          attachThumbBox!.width <= 64 &&
+          attachThumbBox!.height >= 48 &&
+          attachThumbBox!.height <= 64,
+        attachThumbBox,
+      );
+      checkEqual(
+        '待发送缩略图 alt 使用文件名',
+        await attachThumb.locator('img').getAttribute('alt'),
+        '输入框 图片 一.png',
+      );
+      checkEqual(
+        '待发送缩略图懒加载',
+        await attachThumb.locator('img').getAttribute('loading'),
+        'lazy',
+      );
+      const attachTextChip = page.locator('#composer-files .composer-file').filter({
+        hasText: '说明 文档.txt',
+      });
+      checkEqual(
+        '非图片待发送仍是文件 chip',
+        await attachTextChip.locator('.composer-file-thumb').count(),
+        0,
+      );
+      checkEqual(
+        '非图片待发送保留扩展名徽标',
+        await attachTextChip.locator('.composer-file-badge').count(),
+        1,
+      );
+      await attachThumb.click();
+      await page.locator('#file-preview-body img').waitFor();
+      checkEqual('点击待发送缩略图打开预览', await page.locator('#file-preview').isVisible(), true);
+      await page.keyboard.press('Escape');
+      await page.locator('#file-preview').waitFor({ state: 'hidden' });
+      await page.waitForFunction(
+        `document.activeElement === document.querySelector('#composer-files .composer-file-image .composer-file-thumb')`,
+      );
+      checkEqual(
+        '关闭待发送图片预览后焦点回到缩略图',
+        await page.evaluate(
+          `document.activeElement === document.querySelector('#composer-files .composer-file-image .composer-file-thumb')`,
+        ),
+        true,
+      );
+
       // chip 的 x 直接调用后端删除（无二次确认），成功后刷新右侧文件栏。
       const deleteBase = await mcpCallCount(page, 'network_room_file_delete');
       await page.locator('#composer-files .composer-file-remove').first().click();
@@ -10686,6 +11102,55 @@ async function main(): Promise<void> {
         15_000,
       );
 
+      // 待发送 octet-stream PNG：MIME 缺失时按扩展名显示缩略图并打开大图。
+      const octetComposerBase = upload.calls.length;
+      await page.setInputFiles('#composer-file-input', [
+        { name: '八位流 待发送.png', mimeType: 'application/octet-stream', buffer: PNG_BYTES },
+      ]);
+      await waitUntil(
+        () => upload.calls.length === octetComposerBase + 1,
+        '待发送八位流图片上传',
+      );
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file-image').count()) === 1,
+        '待发送八位流图片生成缩略图',
+      );
+      const octetComposerChip = page.locator('#composer-files .composer-file-image').first();
+      await page.waitForFunction(
+        `(() => { const img = document.querySelector('#composer-files .composer-file-image .composer-file-thumb img'); return Boolean(img && img.complete && img.naturalWidth > 0); })()`,
+      );
+      checkEqual(
+        '待发送八位流图片显示缩略图',
+        await octetComposerChip.locator('.composer-file-thumb img').count(),
+        1,
+      );
+      await octetComposerChip.locator('.composer-file-thumb').click();
+      await page.locator('#file-preview-body img').waitFor();
+      checkEqual(
+        '待发送八位流图片点击缩略图显示大图',
+        await page.locator('#file-preview-body img').count(),
+        1,
+      );
+      check(
+        '待发送八位流图片预览不提示不支持',
+        !((await page.locator('#file-preview-body').textContent()) ?? '').includes('不支持在线预览'),
+        await page.locator('#file-preview-body').textContent(),
+      );
+      const octetComposerSrc = (await page.locator('#file-preview-body img').getAttribute('src')) ?? '';
+      check(
+        '待发送八位流图片预览使用同源 /f/',
+        new URL(octetComposerSrc).origin === new URL(server.base).origin &&
+          new URL(octetComposerSrc).pathname.startsWith('/f/'),
+        octetComposerSrc,
+      );
+      await page.keyboard.press('Escape');
+      await page.locator('#file-preview').waitFor({ state: 'hidden' });
+      await page.locator('#composer-files .composer-file-remove').first().click();
+      await waitUntil(
+        async () => (await page.locator('#composer-files .composer-file').count()) === 0,
+        '删除待发送八位流图片后清空 chip',
+      );
+
       await page.locator('#body').fill('绑定草稿');
       await page.evaluate(
         `(() => { const box = document.getElementById('body'); box.focus(); box.setSelectionRange(box.value.length, box.value.length); })()`,
@@ -10812,6 +11277,33 @@ async function main(): Promise<void> {
         'IME 结束后焦点仍在正文',
         await page.evaluate(`document.activeElement && document.activeElement.id`),
         'body',
+      );
+
+      failNextDelete = true;
+      await waitUntil(
+        async () =>
+          (await page.locator('#composer-files .composer-file-image .composer-file-thumb').count()) === 2,
+        'IME 图片缩略图就绪',
+      );
+      const imageDeleteBase = await mcpCallCount(page, 'network_room_file_delete');
+      await page.locator('#composer-files .composer-file-image .composer-file-remove').first().click();
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_room_file_delete')) === imageDeleteBase + 1,
+        '图片删除请求完成',
+      );
+      await waitUntil(
+        async () => ((await page.locator('#status').textContent()) ?? '').includes('失败'),
+        '图片删除失败状态',
+      );
+      checkEqual(
+        '待发送图片删除失败保留 chip',
+        await page.locator('#composer-files .composer-file').count(),
+        2,
+      );
+      checkEqual(
+        '待发送图片删除失败保留缩略图',
+        await page.locator('#composer-files .composer-file-image .composer-file-thumb').count(),
+        2,
       );
 
       check(
