@@ -247,9 +247,18 @@ export function groupDialog(): string {
         <input id="group-title" maxlength="160" placeholder="留空显示为“群聊”">
       </label>
       <p class="muted picker-label">选择好友成员</p>
-      <div id="group-contacts" class="contact-list"></div>
+      <div class="member-picker-toolbar">
+        <input id="group-search" class="member-picker-search" type="search"
+          placeholder="搜索好友名称" aria-label="搜索好友名称" autocomplete="off">
+        <span id="group-contacts-count" class="members-count" aria-live="polite">0</span>
+      </div>
+      <div id="group-contacts" class="contact-list" role="group"
+        aria-label="好友候选"></div>
+      <button id="group-more" class="member-picker-more" type="button" hidden>加载更多</button>
       <p id="group-error" class="form-error" role="status"></p>
       <div class="row modal-actions">
+        <span id="group-selection" class="members-selection" role="status"
+          aria-live="polite">未选择</span>
         <button id="group-cancel" type="button">取消</button>
         <button class="primary" id="group-create" type="submit">创建</button>
       </div>
@@ -282,13 +291,22 @@ export function membersDialog(): string {
           </header>
           <ul id="members-current" class="member-roster" aria-label="当前群成员"></ul>
           <p id="members-current-empty" class="members-empty" role="status" hidden>群里还没有成员</p>
+          <div id="members-invited-wrap" class="members-invited" hidden>
+            <p class="members-invited-title">邀请中
+              <span id="members-invited-count" class="members-count" aria-live="polite">0</span>
+            </p>
+            <ul id="members-invited" class="member-roster" aria-label="等待确认的邀请"></ul>
+          </div>
         </section>
         <section class="members-column" aria-labelledby="members-candidates-title">
           <header class="members-column-head">
             <h3 id="members-candidates-title">未在群</h3>
             <span id="members-contacts-count" class="members-count" aria-live="polite">0</span>
           </header>
+          <input id="members-search" class="member-picker-search" type="search"
+            placeholder="搜索好友名称" aria-label="搜索好友名称" autocomplete="off">
           <div id="members-contacts" class="contact-list" aria-label="可添加的好友"></div>
+          <button id="members-more" class="member-picker-more" type="button" hidden>加载更多</button>
         </section>
       </div>
       <p id="members-error" class="form-error" role="status" aria-live="polite"></p>

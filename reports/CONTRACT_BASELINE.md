@@ -441,8 +441,8 @@ P0 不新增“提及事件”；提及信息属于 `message_created` 的 metada
 | 群详情/列表 | `network_room_get` / `network_rooms_list` | 保留；增加 role/policy/generation |
 | 成员增删 | `network_room_members_update` | 保留，只允许 add/remove；owner transfer 移出 |
 | 退群 | `network_room_leave` | 保留 |
-| 创建/撤销/读取邀请 | `network_room_invite_create` / `network_room_invite_revoke` / `network_room_invite_get` | 新增 |
-| 响应邀请 | `network_room_invite_respond` | 新增 |
+| 创建/撤销/读取邀请 | `network_room_invite_create` / `network_room_invite_revoke` / `network_room_invite_get` | 新增；G01 已实现 `network_room_invite_get`。`_create` / `_revoke`（链接、二维码与撤销）仍属 G02；定向邀请由 `network_room_create` 生成 |
+| 响应邀请 | `network_room_invite_respond` | 新增；G01 已实现接受/拒绝，接受时同事务复核状态、有效期、拉黑与 100 人上限 |
 | 入群申请列表/审批 | `network_room_join_request_list` / `network_room_join_request_respond` | 新增 |
 | 任免管理员 | `network_room_role_set` | 新增；G03 已实现 |
 | 群主转让 | `network_room_owner_transfer` | 新增；G03 已实现 owner 直接转移。契约原计划的 `_propose` / `_respond` / `_cancel` 属于 G05，尚未实现 |
@@ -453,6 +453,8 @@ P0 不新增“提及事件”；提及信息属于 `message_created` 的 metada
 | 监控面板 | `network_room_monitor_get` / `network_room_monitor_set` | 保留 |
 
 > G03 实施对照（2026-11-07）：实际工具名以代码与 `reports/G03.md` 为准，即 `network_room_members_update`、`network_room_leave`、`network_room_role_set`、`network_room_owner_transfer`、`network_room_policy_set`、`network_room_announcement_set`、`network_room_role_history`。本表其余 G02/G05/G07 名称仍是契约规划名，不代表已实现。
+>
+> G01 实施对照（2026-11-04）：迁移 `0023_room_invitations.sql` 按本表建立 `room_invitations`（`kind = direct | link`、六种状态、`token_hash`、`max_uses`、`used_count`、`revision`）。当前只写入 `kind = 'direct'` 的定向邀请：建群时由 `network_room_create` 生成，`network_room_invite_get` 只返回当前身份收到的定向邀请，`network_room_invite_respond` 接受或拒绝；链接/二维码/审批/撤销仍属 G02，`max_uses` 与 `used_count` 已预留但定向邀请固定为 1 次。pending 邀请不是 `room_members` 行，不计入 `member_count`，也不占 100 人上限。
 
 ### 6.4 消息 / delivery
 

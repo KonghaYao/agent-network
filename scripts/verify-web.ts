@@ -554,6 +554,24 @@ async function loadAllContacts(token: string): Promise<{ actor_id: string; name:
   return contacts;
 }
 
+/** 接受指定 token 在该房间的全部待确认邀请；夹具用于把 invited 转成 active。 */
+async function acceptRoomInvites(token: string, roomId: string): Promise<number> {
+  const listing = await rawTool<{
+    items: { invitation_id: string; room_id: string; can_respond: boolean }[];
+  }>(token, 'network_room_invite_get', { limit: 100 });
+  let accepted = 0;
+  for (const item of listing.items) {
+    if (item.room_id !== roomId || !item.can_respond) continue;
+    await rawTool(token, 'network_room_invite_respond', {
+      request_id: requestId('invite'),
+      invitation_id: item.invitation_id,
+      action: 'accept',
+    });
+    accepted += 1;
+  }
+  return accepted;
+}
+
 async function waitForText(page: Page, selector: string, text: string, timeout = 10_000): Promise<void> {
   await page.waitForFunction(
     `(() => {
@@ -741,6 +759,8 @@ async function fixture(dataDir: string): Promise<{
     title: '测试群',
     members: [agentA.actor_id, agentB.actor_id],
   });
+  // 未认领的 Agent A 得到待确认邀请；接受后夹具群才是 3 人 active。
+  await acceptRoomInvites(agentAToken, group.room.room_id);
   const extra = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
     request_id: requestId('room'),
     kind: 'direct',
@@ -1594,6 +1614,8 @@ async function runAvatarAcceptance(
       kong.actor_id,
     ],
   });
+  // 人类成员也先收到邀请；接受后才能发送群消息。
+  await acceptRoomInvites(kongToken, groupRoom.room.room_id);
   await rawTool(codex.token, 'network_message_send', {
     request_id: requestId('avatar_msg'),
     client_message_id: crypto.randomUUID(),
@@ -2382,6 +2404,7 @@ async function runTaskAcceptance(
     members: [agent.actor_id],
   });
   const roomId = room.room.room_id;
+  await acceptRoomInvites(agentToken, roomId);
   await rawTool(humanToken, 'network_room_mark_read', {
     room_id: roomId,
     through_seq: room.room.head_seq,
@@ -4313,6 +4336,8 @@ async function main(): Promise<void> {
         title: maliciousGroupTitle,
         members: [maliciousAgent.actor_id],
       });
+      // G01：好友入群先得到邀请；本段验证提示词凭据，需先让恶意 Agent 接受成为 active。
+      await acceptRoomInvites(maliciousAgentToken, injectionGroup.room.room_id);
 
       const { context, page } = await makeContext(
         browser,
@@ -6890,16 +6915,48 @@ async function main(): Promise<void> {
 
       await page.locator('#new-group').click();
       await page.locator('#group-contacts input[type=checkbox]').first().waitFor();
-      await page
+      // 好友超过一页时用搜索定位；选择保存在控制器里，不受过滤影响。
+      await page.fill('#group-search', data.agentA.name);
+      const agentAChoice = page
         .locator('#group-contacts .contact-choice')
-        .filter({ hasText: data.agentA.name })
-        .locator('input')
-        .check();
+        .filter({ hasText: data.agentA.name });
+      await agentAChoice.waitFor();
+      await agentAChoice.locator('input').check();
       await page.fill('#group-title', '加人测试群');
       await page.locator('#group-create').click();
       await page.waitForURL(/\/c\/rm_/);
       const groupId = decodeURIComponent(page.url().split('/c/')[1] ?? '');
       await waitRoom(page, groupId, '加人测试群');
+      // G01-T01 页面状态：邀请中不计入人数，也不出现在当前成员列表。
+      await waitForText(page, '#subtitle', '1 人');
+      await page.locator('#add-members').click();
+      await page.locator('#members-invited .member-roster-item').first().waitFor();
+      checkEqual(
+        '邀请中成员隐藏在当前成员之外',
+        await page
+          .locator('#members-current .member-roster-item')
+          .filter({ hasText: data.agentA.name })
+          .count(),
+        0,
+      );
+      check(
+        '邀请中成员显示等待确认',
+        ((await page.locator('#members-invited').textContent()) ?? '').includes('等待确认'),
+      );
+      checkEqual(
+        '邀请中数量为 1',
+        await page.locator('#members-invited-count').textContent(),
+        '1',
+      );
+      checkEqual(
+        '邀请中不计入 active 成员数',
+        await page.locator('#members-current-count').textContent(),
+        '1',
+      );
+      await page.locator('#members-cancel').click();
+      // Agent A 不是创建者管理的 Agent：先收到邀请，接受后才计入成员数。
+      await acceptRoomInvites(data.agentAToken, groupId);
+      await waitForText(page, '#subtitle', '2 人');
       check(
         '创建群后成员数为 2',
         ((await page.locator('#subtitle').textContent()) ?? '').includes('2 人'),
@@ -6961,6 +7018,11 @@ async function main(): Promise<void> {
           .count(),
         0,
       );
+      // 候选按页渲染；断言总数前先加载全部页，选择状态在分页间保留。
+      for (let pageCount = 0; pageCount < 10; pageCount += 1) {
+        if (!(await page.locator('#members-more').isVisible())) break;
+        await page.locator('#members-more').click();
+      }
       const contactsForGroup = await loadAllContacts(data.humanToken);
       const currentGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_get', {
         room_id: groupId,
@@ -7095,9 +7157,11 @@ async function main(): Promise<void> {
         0,
       );
 
+      await page.fill('#members-search', data.agentB.name);
       const duplicateCandidate = page
         .locator('#members-contacts .contact-choice')
         .filter({ hasText: data.agentB.name });
+      await duplicateCandidate.waitFor();
       await rawTool(data.humanToken, 'network_room_members_update', {
         request_id: requestId('members'),
         room_id: groupId,
@@ -7328,6 +7392,168 @@ async function main(): Promise<void> {
       await context.close();
     }
 
+    // 2b-4b. G01-T03 390px 建群：搜索多选、取消、失败保留选择、成功刷新成员。
+    {
+      const mobileFriend = await createAgentFriend(data.humanToken, '移动端建群 Agent');
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      const createCallsBefore = await mcpCallCount(page, 'network_room_create');
+
+      await page.locator('#new-group').click();
+      await page.locator('#group-contacts input[type=checkbox]').first().waitFor();
+      checkEqual('390px 建群弹窗可见', await page.locator('#group-modal').isVisible(), true);
+      const groupMetrics = (await page.evaluate(`(() => {
+        const card = document.querySelector('#group-modal .modal-card');
+        if (!card) return null;
+        const rect = card.getBoundingClientRect();
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          left: rect.left,
+          right: rect.right
+        };
+      })()`)) as {
+        view: number;
+        doc: number;
+        left: number;
+        right: number;
+      } | null;
+      check(
+        '390px 建群弹窗不横向溢出',
+        Boolean(groupMetrics) &&
+          groupMetrics!.doc <= groupMetrics!.view &&
+          groupMetrics!.left >= -1 &&
+          groupMetrics!.right <= groupMetrics!.view + 1,
+        groupMetrics,
+      );
+      await page.fill('#group-search', mobileFriend.name);
+      const mobileChoice = page
+        .locator('#group-contacts .contact-choice')
+        .filter({ hasText: mobileFriend.name });
+      await mobileChoice.waitFor();
+      checkEqual(
+        '390px 搜索只显示匹配候选',
+        await page.locator('#group-contacts .contact-choice').count(),
+        1,
+      );
+      await mobileChoice.locator('input').check();
+      checkEqual(
+        '390px 选中显示已选 1 人',
+        await page.locator('#group-selection').textContent(),
+        '已选 1 人',
+      );
+      check(
+        '390px 选中候选有高亮态',
+        ((await mobileChoice.getAttribute('class')) ?? '').includes('selected'),
+      );
+      await page.locator('#group-cancel').click();
+      checkEqual('390px 取消关闭建群弹窗', await page.locator('#group-modal').isHidden(), true);
+      checkEqual(
+        '390px 取消不提交建群',
+        await mcpCallCount(page, 'network_room_create'),
+        createCallsBefore,
+      );
+
+      await page.locator('#new-group').click();
+      await page.locator('#group-contacts input[type=checkbox]').first().waitFor();
+      checkEqual(
+        '390px 重新打开清空搜索',
+        await page.locator('#group-search').inputValue(),
+        '',
+      );
+      checkEqual(
+        '390px 重新打开清空选择',
+        await page.locator('#group-selection').textContent(),
+        '未选择',
+      );
+      checkEqual(
+        '390px 重新打开无勾选',
+        await page.locator('#group-contacts input[type=checkbox]:checked').count(),
+        0,
+      );
+
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_room_create') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as { id?: string } | null;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    code: 'FRIEND_REQUIRED',
+                    message: '以下成员不能加入群聊：移动端建群 Agent（只能把好友加入群聊）',
+                    retryable: false,
+                  }),
+                },
+              ],
+            },
+          }),
+        });
+      });
+      await page.fill('#group-search', mobileFriend.name);
+      const failedChoice = page
+        .locator('#group-contacts .contact-choice')
+        .filter({ hasText: mobileFriend.name });
+      await failedChoice.waitFor();
+      await failedChoice.locator('input').check();
+      await page.fill('#group-title', '移动端建群');
+      await page.locator('#group-create').click();
+      await waitForText(page, '#group-error', '创建失败');
+      checkEqual(
+        '390px 建群失败保留已选候选',
+        await failedChoice.locator('input').isChecked(),
+        true,
+      );
+      checkEqual(
+        '390px 建群失败保留已选计数',
+        await page.locator('#group-selection').textContent(),
+        '已选 1 人',
+      );
+      checkEqual('390px 建群失败弹窗保持打开', await page.locator('#group-modal').isVisible(), true);
+      checkEqual('390px 建群失败不跳转', new URL(page.url()).pathname, '/');
+      await page.unroute('**/mcp');
+
+      await page.locator('#group-create').click();
+      await page.waitForURL(/\/c\/rm_/);
+      const mobileGroupId = decodeURIComponent(page.url().split('/c/')[1] ?? '');
+      await waitRoom(page, mobileGroupId, '移动端建群');
+      // 创建者管理的 Agent 直接 active，不用等待邀请接受。
+      await waitForText(page, '#subtitle', '2 人');
+      check('390px 建群成功显示成员数', true);
+      await page.locator('#add-members').click();
+      await page.locator('#members-current .member-roster-item').first().waitFor();
+      check(
+        '390px 建群成功后成员列表包含新成员',
+        ((await page.locator('#members-current').textContent()) ?? '').includes(
+          mobileFriend.name,
+        ),
+      );
+      checkEqual(
+        '390px 建群成功后没有待确认邀请',
+        await page.locator('#members-invited-wrap').isHidden(),
+        true,
+      );
+      await page.locator('#members-cancel').click();
+      await context.close();
+    }
+
     // 2b-5. G03 群角色界面：owner 任免管理员、管理员操作入口与公告读写。
     {
       interface RoleMemberView {
@@ -7346,6 +7572,7 @@ async function main(): Promise<void> {
         },
       );
       const uiRoomId = uiGroup.room.room_id;
+      await acceptRoomInvites(data.agentAToken, uiRoomId);
       const ownerContext = await makeContext(
         browser,
         data.humanToken,
@@ -7725,6 +7952,7 @@ async function main(): Promise<void> {
         title: unsafeTitle,
         members: [data.agentA.actor_id, data.agentB.actor_id],
       });
+      await acceptRoomInvites(data.agentAToken, copyGroup.room.room_id);
       for (let index = 0; index < 30; index += 1) {
         await sendRoomMessage(
           data.humanToken,
@@ -8926,6 +9154,8 @@ async function main(): Promise<void> {
       });
       const pagedRoomId = pagedGroup.room.room_id;
       const cacheGroupId = cacheGroup.room.room_id;
+      await acceptRoomInvites(data.agentAToken, pagedRoomId);
+      await acceptRoomInvites(data.agentAToken, cacheGroupId);
       await seedRoomFiles(
         data.humanToken,
         server.base,
@@ -9138,6 +9368,8 @@ async function main(): Promise<void> {
       });
       const errorRoomId = errorGroup.room.room_id;
       const emptyRoomId = emptyGroup.room.room_id;
+      await acceptRoomInvites(data.agentAToken, errorRoomId);
+      await acceptRoomInvites(data.agentAToken, emptyRoomId);
       await seedRoomFiles(data.humanToken, server.base, errorRoomId, [
         { name: '重试文件.txt', mimeType: 'text/plain', body: 'retry' },
       ]);
@@ -9207,6 +9439,9 @@ async function main(): Promise<void> {
         members: [data.agentA.actor_id],
       });
       const monitorRoom2Id = monitorRoom2.room.room_id;
+      await acceptRoomInvites(monitorBToken, monitorGroupId);
+      await acceptRoomInvites(data.agentAToken, monitorGroupId);
+      await acceptRoomInvites(data.agentAToken, monitorRoom2Id);
       const monitorUrlOne = 'https://monitor.test/room-one';
       const monitorUrlTwo = 'https://monitor.test/room-two';
       const monitorUrlRefresh = 'https://monitor.test/refreshed';
@@ -9918,6 +10153,7 @@ async function main(): Promise<void> {
         members: [data.agentA.actor_id],
       });
       const cardRoomId = cardGroup.room.room_id;
+      await acceptRoomInvites(data.agentAToken, cardRoomId);
       const longFileName = `超长文件名-${'很长的名字'.repeat(12)}.txt`;
       const xssFileName = '文件名 <b> 粗体 "引号".txt';
       const cardFiles = await seedRoomFiles(data.humanToken, server.base, cardRoomId, [
@@ -10982,6 +11218,7 @@ async function main(): Promise<void> {
         members: [data.agentA.actor_id],
       });
       const dropRoomId = dropGroup.room.room_id;
+      await acceptRoomInvites(data.agentAToken, dropRoomId);
       const { context, page } = await makeContext(
         browser,
         data.humanToken,
@@ -11432,6 +11669,7 @@ async function main(): Promise<void> {
         members: [data.agentA.actor_id],
       });
       const attachRoomId = attachGroup.room.room_id;
+      await acceptRoomInvites(data.agentAToken, attachRoomId);
       const { context, page } = await makeContext(
         browser,
         data.humanToken,
@@ -12197,6 +12435,7 @@ async function main(): Promise<void> {
         members: [data.agentA.actor_id],
       });
       const drawRoomId = drawGroup.room.room_id;
+      await acceptRoomInvites(data.agentAToken, drawRoomId);
       const { context, page } = await makeContext(
         browser,
         data.humanToken,
@@ -12859,6 +13098,8 @@ async function main(): Promise<void> {
       });
       const crossAId = crossA.room.room_id;
       const crossBId = crossB.room.room_id;
+      await acceptRoomInvites(data.agentAToken, crossAId);
+      await acceptRoomInvites(data.agentAToken, crossBId);
       const { context, page } = await makeContext(
         browser,
         data.humanToken,
@@ -13069,6 +13310,7 @@ async function main(): Promise<void> {
         members: [data.agentA.actor_id],
       });
       const mdRoomId = mdGroup.room.room_id;
+      await acceptRoomInvites(data.agentAToken, mdRoomId);
       const mdFiles = await seedRoomFiles(data.humanToken, server.base, mdRoomId, [
         { name: 'Markdown 附件.txt', mimeType: 'text/plain', body: 'rich markdown attachment' },
         { name: '长文卡片.txt', mimeType: 'text/plain', body: 'long markdown attachment' },
@@ -13948,6 +14190,7 @@ async function main(): Promise<void> {
         members: [data.agentA.actor_id],
       });
       const scrollRoomId = scrollGroup.room.room_id;
+      await acceptRoomInvites(data.agentAToken, scrollRoomId);
       for (let index = 1; index <= 60; index += 1) {
         await rawTool(data.agentAToken, 'network_message_send', {
           request_id: requestId('msg'),
@@ -14244,6 +14487,7 @@ async function main(): Promise<void> {
         members: [data.agentA.actor_id],
       });
       const scrollRoomId = scrollRoom.room.room_id;
+      await acceptRoomInvites(data.agentAToken, scrollRoomId);
       const tableBody = (index: number): string =>
         [
           `**滚动表格 ${index}**`,
@@ -14331,6 +14575,7 @@ async function main(): Promise<void> {
         members: [data.agentA.actor_id],
       });
       const fileRoomId = fileRoom.room.room_id;
+      await acceptRoomInvites(data.agentAToken, fileRoomId);
       const fileSpecs: UploadSpec[] = Array.from({ length: 4 }, (_, index) => ({
         name: `滚动附件 ${index + 1}.txt`,
         mimeType: 'text/plain',
@@ -14771,6 +15016,7 @@ async function main(): Promise<void> {
         members: [data.agentA.actor_id],
       });
       const longRoomId = longRoom.room.room_id;
+      await acceptRoomInvites(data.agentAToken, longRoomId);
       for (let index = 1; index <= 210; index += 1) {
         await rawTool(data.agentAToken, 'network_message_send', {
           request_id: requestId('msg'),
@@ -14912,6 +15158,7 @@ async function main(): Promise<void> {
         members: [data.agentA.actor_id],
       });
       const wideRoomId = wideRoom.room.room_id;
+      await acceptRoomInvites(data.agentAToken, wideRoomId);
       const longUrl = `https://example.com/${'a'.repeat(2000)}`;
       const wideTable = Array.from(
         { length: 40 },
@@ -15876,6 +16123,7 @@ async function main(): Promise<void> {
         title: '分页重置群',
         members: [data.agentA.actor_id],
       });
+      await acceptRoomInvites(data.agentAToken, switchRoom.room.room_id);
       await sendRoomMessage(data.agentAToken, switchRoom.room.room_id, '分页重置群消息');
       const switchContext = await makeContext(
         browser,
@@ -16152,6 +16400,7 @@ async function main(): Promise<void> {
         members: [data.agentA.actor_id],
       });
       const bubbleRoomId = bubbleGroup.room.room_id;
+      await acceptRoomInvites(data.agentAToken, bubbleRoomId);
       const bubbleFile = await uploadRealFile(data.humanToken, server.base, {
         name: '气泡宽度附件.txt',
         mimeType: 'text/plain',

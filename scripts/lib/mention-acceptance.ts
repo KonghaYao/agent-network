@@ -19,6 +19,7 @@ import {
   rawRpc,
 } from './harness';
 import {
+  acceptGroupInvitesWithToken,
   registerIdentity,
   sendMessage,
   type Delivery,
@@ -186,6 +187,9 @@ export async function runGroupMentionAcceptance(): Promise<void> {
       members: agents.map((agent) => agent.actor_id),
     });
     const groupId = group.room.room_id;
+    for (const token of agentTokens) {
+      await acceptGroupInvitesWithToken(token as string, groupId);
+    }
     const direct = await callTool<RoomDetail>(human.client, 'network_room_create', {
       request_id: newRequestId('mention_room'),
       kind: 'direct',

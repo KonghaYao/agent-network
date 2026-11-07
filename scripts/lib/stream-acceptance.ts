@@ -12,7 +12,7 @@ import { LIMITS } from '../../src/contracts/limits';
 import { StreamQueue } from '../../src/mcp/stream';
 import { buildStreamFrame, type StreamItem } from '../../src/realtime/stream';
 import type { Delivery, InboxPage, RoomDetail } from './acceptance-helpers';
-import { befriend, inbox, registerIdentity, sendMessage } from './acceptance-helpers';
+import { acceptGroupInvites, befriend, inbox, registerIdentity, sendMessage } from './acceptance-helpers';
 import {
   CheckFailure,
   callTool,
@@ -214,19 +214,30 @@ export async function runUnifiedStreamAcceptance(): Promise<void> {
       title: '统一流验收群',
     });
     const groupId = group.room.room_id;
+    await acceptGroupInvites(bConn, groupId);
+    await acceptGroupInvites(cConn, groupId);
+    await acceptGroupInvites(hConn, groupId);
 
     await waitForItem(
       bCollector,
       0,
-      (item) => item.source === 'room.created' && item.room_id === groupId,
-      '等待 B 收到新群 room.created',
+      (item) =>
+        item.source === 'room.membership' &&
+        item.change === 'invited' &&
+        item.room_id === groupId,
+      '等待 B 收到群邀请',
     );
     await sleep(500);
-    checkEqual('统一流：未 login 的 C 收不到 room.created', streamEvents(cCollector).length, 0);
+    checkEqual('统一流：未 login 的 C 收不到邀请流', streamEvents(cCollector).length, 0);
     check(
-      '统一流：人类不 login 也收到 room.created',
+      '统一流：人类不 login 也收到群邀请',
       streamEvents(hCollector).some((event) =>
-        payloadOf(event)?.items.some((item) => item.source === 'room.created' && item.room_id === groupId),
+        payloadOf(event)?.items.some(
+          (item) =>
+            item.source === 'room.membership' &&
+            item.change === 'invited' &&
+            item.room_id === groupId,
+        ),
       ),
     );
 
@@ -476,6 +487,7 @@ export async function runUnifiedStreamAcceptance(): Promise<void> {
       title: '统一流加入时间验收群',
     });
     const group2Id = group2.room.room_id;
+    await acceptGroupInvites(hConn, group2Id);
     const beforeAddMessage = await sendMessage(aConn, group2Id, '统一流：加入前的旧消息');
     await sleep(500);
     const addStart = bCollector.events.length;

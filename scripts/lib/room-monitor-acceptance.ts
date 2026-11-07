@@ -15,7 +15,7 @@ import {
   newToken,
   type McpConnection,
 } from './harness';
-import { befriend, registerIdentity, type RoomDetail } from './acceptance-helpers';
+import { acceptGroupInvites, befriend, registerIdentity, type RoomDetail } from './acceptance-helpers';
 
 interface MonitorResult {
   monitor: { room_id: string; url: string; updated_at: string } | null;
@@ -51,7 +51,13 @@ export async function runRoomMonitorAcceptance(): Promise<void> {
       members: [humanB.actor_id, agent.actor_id],
     });
     const roomId = group.room.room_id;
-    const headBefore = group.room.head_seq;
+    await acceptGroupInvites(bConnection, roomId);
+    await acceptGroupInvites(agentConnection, roomId);
+    // 邀请接受会推进成员序号；以全部成员就位后的 head 作为监控基线。
+    const settled = await callTool<RoomDetail>(device1.client, 'network_room_get', {
+      room_id: roomId,
+    });
+    const headBefore = settled.room.head_seq;
 
     const initial = await callTool<MonitorResult>(device1.client, 'network_room_monitor_get', {
       room_id: roomId,

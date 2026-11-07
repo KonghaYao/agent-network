@@ -47,6 +47,8 @@ const GUARD_CODES: Record<string, BusinessErrorCode> = {
   contactRequestStale: 'CONFLICT',
   ownerTransferRequired: 'CONFLICT',
   rateLimited: 'RATE_LIMITED',
+  invitationStale: 'CONFLICT',
+  inviteTargetsMissing: 'FRIEND_REQUIRED',
 };
 
 const GUARD_MESSAGES: Record<string, string> = {
@@ -87,10 +89,15 @@ const GUARD_MESSAGES: Record<string, string> = {
   contactRequestStale: '好友申请状态已变化，请刷新后重试',
   ownerTransferRequired: '群 owner 离开前必须转移 owner',
   rateLimited: '操作过于频繁，请稍后再试',
+  invitationStale: '邀请状态已变化，请刷新后重试',
+  inviteTargetsMissing: '成员资格在提交时已变化，群未创建',
 };
 
 /** 限额类 guard 的稳定 data，供 MCP Events 映射 -32025。 */
 const GUARD_DETAILS: Record<string, Record<string, unknown>> = {
+  inviteTargetsMissing: {
+    reason: 'invite_targets_missing',
+  },
   eventSubscriptionLimit: {
     limit: 'subscriptions',
     max: LIMITS.eventsSubscriptionsPerActor,

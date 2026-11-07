@@ -7,7 +7,7 @@
 
 import type { McpSubscription } from '@modelcontextprotocol/client';
 
-import { callTool, check, newRequestId, sleep, type McpConnection } from './harness';
+import { callTool, check, newRequestId, rawRpc, sleep, type McpConnection } from './harness';
 
 export interface Identity {
   actor_id: string;
@@ -174,8 +174,80 @@ export async function befriend(
   return accepted;
 }
 
-export async function sendMessage(
+interface RoomInvitationView {
+  invitation_id: string;
+  room_id: string;
+  status: string;
+  can_respond: boolean;
+}
+
+interface RawToolResult<T> {
+  isError?: boolean;
+  structuredContent?: T;
+  content?: { type: string; text?: string }[];
+}
+
+async function rawToolWithToken<T>(
+  token: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<T> {
+  const response = await rawRpc('tools/call', { name, arguments: args }, { token });
+  const result = response.body.result as RawToolResult<T> | undefined;
+  if (!result) throw new Error(`工具 ${name} 无结果: ${JSON.stringify(response.body)}`);
+  if (result.isError) {
+    const text = result.content?.find((item) => item.type === 'text')?.text;
+    throw new Error(`工具 ${name} 返回错误: ${text ?? JSON.stringify(result)}`);
+  }
+  if (result.structuredContent) return result.structuredContent;
+  const text = result.content?.find((item) => item.type === 'text')?.text;
+  if (!text) throw new Error(`工具 ${name} 没有结构化结果`);
+  return JSON.parse(text) as T;
+}
+
+/**
+ * 用已有的 Bearer token 接受指定群的全部 pending 邀请。
+ *
+ * 适合只有 token、没有常驻 MCP 连接的验收 Agent；与连接版语义一致。
+ */
+export async function acceptGroupInvitesWithToken(
+  token: string,
+  roomId: string,
+): Promise<number> {
+  const page = await rawToolWithToken<{ items: RoomInvitationView[] }>(
+    token,
+    'network_room_invite_get',
+    { limit: 100 },
+  );
+  let accepted = 0;
+  for (const invitation of page.items) {
+    if (invitation.room_id !== roomId || invitation.status !== 'pending') continue;
+    if (!invitation.can_respond) continue;
+    await rawToolWithToken(token, 'network_room_invite_respond', {
+      request_id: newRequestId('invite_accept'),
+      invitation_id: invitation.invitation_id,
+      action: 'accept',
+    });
+    accepted += 1;
+  }
+  return accepted;
+}
+
+/**
+ * 让受邀成员接受指定群的全部 pending 邀请。
+ *
+ * G01 起建群不再把所有成员直接置为 active：非建群者自有 Agent 的成员
+ * 先生成邀请。依赖“成员已加入”的既有用例在创建后显式接受自己的邀请，
+ * 不通过 owner 直接加人绕过邀请状态。
+ */
+export async function acceptGroupInvites(
   connection: McpConnection,
+  roomId: string,
+): Promise<number> {
+  return acceptGroupInvitesWithToken(connection.token, roomId);
+}
+
+export async function sendMessage(  connection: McpConnection,
   roomId: string,
   body: string,
   options: {

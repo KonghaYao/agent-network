@@ -21,7 +21,7 @@ import {
   sleep,
   type McpConnection,
 } from './harness';
-import { befriend, inbox, registerIdentity, type LoginResult, type RoomDetail } from './acceptance-helpers';
+import { acceptGroupInvites, befriend, inbox, registerIdentity, type LoginResult, type RoomDetail } from './acceptance-helpers';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META = 'io.agent-network/event';
@@ -151,6 +151,8 @@ export async function runRoomTaskAcceptance(): Promise<void> {
       members: [agentA.actor_id, agentB.actor_id],
     });
     const roomId = group.room.room_id;
+    await acceptGroupInvites(agentAConn, roomId);
+    await acceptGroupInvites(agentBConn, roomId);
     // 第二/第三房间用于验证 login 与 per-room summary 的跨房间聚合和成员过滤。
     const secondRoom = await callTool<RoomDetail>(humanConn.client, 'network_room_create', {
       request_id: newRequestId('room'),
@@ -165,9 +167,13 @@ export async function runRoomTaskAcceptance(): Promise<void> {
     });
     const thirdRoomId = thirdRoom.room.room_id;
     for (const created of [group, secondRoom, thirdRoom]) {
+      // 邀请接受会推进成员序号；用当前 head 标记已读，避免把建群响应里的旧值当成终点。
+      const current = await callTool<RoomDetail>(humanConn.client, 'network_room_get', {
+        room_id: created.room.room_id,
+      });
       await callTool(humanConn.client, 'network_room_mark_read', {
         room_id: created.room.room_id,
-        through_seq: created.room.head_seq,
+        through_seq: current.room.head_seq,
       });
     }
     const headBefore = (await callTool<RoomDetail>(humanConn.client, 'network_room_get', {

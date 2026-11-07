@@ -297,6 +297,28 @@ export const roomRoleHistorySchema = z.object({
   limit: z.number().int().min(1).max(LIMITS.roomRoleHistoryPageMax).optional(),
 });
 
+/**
+ * 读取当前身份收到的定向邀请。
+ *
+ * G01 只实现定向邀请的读取与响应；链接、撤销和审批由 G02 在同一对象上扩展。
+ * 目标不匹配时服务端返回 NOT_FOUND，避免枚举他人的邀请。
+ */
+export const roomInviteGetSchema = z.object({
+  invitation_id: id().optional(),
+  status: z
+    .enum(['pending', 'accepted', 'rejected', 'revoked', 'expired', 'exhausted'])
+    .optional(),
+  cursor,
+  limit: z.number().int().min(1).max(LIMITS.roomInvitationsPageMax).optional(),
+});
+
+/** 接受/拒绝定向邀请；接受时在同一事务内复核状态、有效期与 100 人上限。 */
+export const roomInviteRespondSchema = z.object({
+  request_id: requestId,
+  invitation_id: id(),
+  action: z.enum(['accept', 'reject']),
+});
+
 export const roomLeaveSchema = z.object({
   request_id: requestId,
   room_id: id(),
@@ -533,6 +555,8 @@ export type RoomOwnerTransferInput = z.infer<typeof roomOwnerTransferSchema>;
 export type RoomPolicySetInput = z.infer<typeof roomPolicySetSchema>;
 export type RoomAnnouncementSetInput = z.infer<typeof roomAnnouncementSetSchema>;
 export type RoomRoleHistoryInput = z.infer<typeof roomRoleHistorySchema>;
+export type RoomInviteGetInput = z.infer<typeof roomInviteGetSchema>;
+export type RoomInviteRespondInput = z.infer<typeof roomInviteRespondSchema>;
 export type RoomLeaveInput = z.infer<typeof roomLeaveSchema>;
 export type MessageSendInput = z.infer<typeof messageSendSchema>;
 export type HistoryListInput = z.infer<typeof historyListSchema>;

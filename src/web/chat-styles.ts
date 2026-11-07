@@ -537,6 +537,31 @@ export const APP_STYLE = `
   .members-empty[hidden] { display: none; }
   .members-actions { align-items: center; }
   .members-selection { margin-right: auto; font-size: 12px; color: var(--wx-muted); }
+  /* 建群与添加成员共用成员选择器：搜索、分页、类型、备注与多选高亮。 */
+  .member-picker-toolbar { display: flex; align-items: center; gap: 8px;
+    margin: 0 0 6px; }
+  .member-picker-search { flex: 1 1 auto; min-width: 0; box-sizing: border-box;
+    padding: 7px 10px; border: 1px solid var(--wx-line); border-radius: 6px;
+    background: var(--wx-search); color: var(--wx-text); font-size: 13px; }
+  .member-picker-search:focus { outline: 2px solid rgb(7 193 96 / 35%);
+    outline-offset: 1px; }
+  .members-column .member-picker-search { flex: 0 0 auto; margin: 6px 8px 0; }
+  .member-picker-more { flex: 0 0 auto; align-self: center; margin: 6px 0;
+    padding: 4px 10px; border: 1px solid var(--wx-line); border-radius: 999px;
+    background: var(--wx-panel); color: var(--wx-text); font-size: 12px; }
+  .member-picker-more:hover:not(:disabled) { background: var(--wx-hover); }
+  .member-picker-more[hidden] { display: none; }
+  .contact-name { flex: 1 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .contact-note { flex: 0 1 auto; max-width: 40%; font-size: 11px;
+    color: var(--wx-muted); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .members-invited { flex: 0 0 auto; border-top: 1px solid var(--wx-line);
+    padding: 4px; }
+  .members-invited-title { display: flex; align-items: center; gap: 6px;
+    margin: 4px 6px; font-size: 12px; color: var(--wx-muted); }
+  .member-invited-item { opacity: 0.85; }
+  .member-invited-item:hover { background: transparent; }
   .room-announcement { margin: 8px 16px 0; padding: 8px 12px; border-radius: 6px;
     border: 1px solid var(--wx-line); background: var(--wx-panel); color: var(--wx-text);
     font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -628,6 +653,8 @@ export const APP_STYLE = `
     .members-card .contact-choice, .members-card .member-roster-item {
       gap: 6px; padding: 6px; }
     .members-card .contact-kind { display: none; }
+    .members-card .contact-note { max-width: 34%; font-size: 10px; }
+    .members-card .member-picker-search { font-size: 12px; }
     .members-card .member-roster-role { font-size: 10px; }
     .members-actions { gap: 8px; }
     .members-selection { flex: 1 1 100%; margin-right: 0; }

@@ -26,6 +26,7 @@ let reloadTimer = null;
 let sidebarScrollTop = 0;
 let room = null;
 let members = new Map();
+let invitedMembers = new Map();
 let nextOlder = null;
 let timelineResumeCursor = null;
 let currentItems = [];
@@ -149,6 +150,7 @@ function cacheRoomState(roomId, patch) {
   const cache = roomCache.get(roomId) || {
     room: null,
     members: [],
+    invited: [],
     items: [],
     nextOlder: null,
     timelineResumeCursor: null,
@@ -159,6 +161,7 @@ function cacheRoomState(roomId, patch) {
   if (patch) {
     if ('room' in patch) cache.room = patch.room;
     if ('members' in patch) cache.members = patch.members;
+    if ('invited' in patch) cache.invited = patch.invited;
     if ('items' in patch) cache.items = patch.items.slice();
     if ('nextOlder' in patch) cache.nextOlder = patch.nextOlder;
     if ('timelineResumeCursor' in patch) cache.timelineResumeCursor = patch.timelineResumeCursor;
@@ -176,6 +179,7 @@ function discardRoomCache(roomId) {
   peerDetails.delete(roomId);
   if (roomId !== activeRoomId) return;
   room = null;
+  invitedMembers = new Map();
   currentItems = [];
   nextOlder = null;
   timelineResumeCursor = null;
@@ -189,6 +193,7 @@ function snapshotActiveRoom() {
   cacheRoomState(activeRoomId, {
     room: room,
     members: Array.from(members.values()),
+    invited: Array.from(invitedMembers.values()),
     items: currentItems.slice(),
     nextOlder: nextOlder,
     timelineResumeCursor: timelineResumeCursor,
@@ -282,6 +287,9 @@ function applyRoomDetail(detail) {
   members = new Map(detail.members.map(function (member) {
     return [member.actor_id, member];
   }));
+  invitedMembers = new Map((detail.invited || []).map(function (invited) {
+    return [invited.actor_id, invited];
+  }));
   applyRoomHeader();
   const summary = directSummaryFromDetail(detail);
   if (detail.room.kind === 'direct') peerDetails.set(detail.room.room_id, summary);
@@ -294,6 +302,8 @@ function applyRoomDetail(detail) {
     entry.head_seq = detail.room.head_seq;
     renderRooms();
   }
+  // 邀请接受后 active/invited 会互换；弹窗开着时立即按新状态重绘。
+  if (membersModal && !membersModal.hidden) renderCurrentMembers();
 }
 
 function setChatLoading(loading, options) {
@@ -357,6 +367,9 @@ function applyCachedRoom(cache) {
   room = cache.room || null;
   members = new Map((cache.members || []).map(function (member) {
     return [member.actor_id, member];
+  }));
+  invitedMembers = new Map((cache.invited || []).map(function (invited) {
+    return [invited.actor_id, invited];
   }));
   currentItems = (cache.items || []).slice();
   // 到底状态属于房间自身：切走再切回时不能因为重新取最新页而恢复按钮。
@@ -772,6 +785,7 @@ function seedRoomCacheFromDetail(detail) {
   cacheRoomState(detail.room.room_id, {
     room: detail.room,
     members: detail.members,
+    invited: detail.invited || [],
     items: [],
     nextOlder: null,
     timelineResumeCursor: null,

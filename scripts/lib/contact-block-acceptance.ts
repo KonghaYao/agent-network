@@ -18,6 +18,7 @@ import {
   type McpConnection,
 } from './harness';
 import {
+  acceptGroupInvites,
   befriend,
   inbox,
   readWholeMessage,
@@ -194,6 +195,7 @@ async function runBlockedContactBypass(): Promise<void> {
         members: [s.actor_id],
         title: 'A05 B 的群',
       });
+      await acceptGroupInvites(sConn, bGroup.room.room_id);
 
       const blocked = await blockActor(aConn, b.actor_id);
       checkEqual('T01 拉黑结果 active', blocked.block.active, true);
@@ -341,7 +343,8 @@ async function runGroupSilenceAndGovernance(): Promise<void> {
       title: 'A05 共同群',
     });
     const roomId = group.room.room_id;
-
+    await acceptGroupInvites(g1Conn, roomId);
+    await acceptGroupInvites(g2Conn, roomId);
     // 拉黑前的定向 @ 投递必须被取消，避免拉黑后仍被旧提醒唤醒。
     const preBlockMention = await sendMessage(
       g1Conn,

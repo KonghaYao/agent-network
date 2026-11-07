@@ -13,6 +13,7 @@ import { CHAT_GROUP_COPY_SCRIPT } from './chat-group-copy-script';
 import { CHAT_LIST_SCRIPT } from './chat-list-script';
 import { CHAT_LOGOUT_SCRIPT } from './chat-logout-script';
 import { CHAT_MARKDOWN_SCRIPT } from './chat-markdown-script';
+import { CHAT_MEMBER_PICKER_SCRIPT } from './chat-member-picker';
 import { CHAT_MEMBERS_SCRIPT } from './chat-members-script';
 import { CHAT_MESSAGE_FILES_SCRIPT } from './chat-message-files-script';
 import { CHAT_MONITOR_SCRIPT } from './chat-monitor-script';
@@ -112,7 +113,11 @@ const newGroupButton = document.getElementById('new-group');
 const groupModal = document.getElementById('group-modal');
 const groupForm = document.getElementById('group-form');
 const groupTitleInput = document.getElementById('group-title');
+const groupSearchElement = document.getElementById('group-search');
 const groupContactsElement = document.getElementById('group-contacts');
+const groupContactsCountElement = document.getElementById('group-contacts-count');
+const groupMoreButton = document.getElementById('group-more');
+const groupSelectionElement = document.getElementById('group-selection');
 const groupErrorElement = document.getElementById('group-error');
 const groupCreateButton = document.getElementById('group-create');
 const groupCancelButton = document.getElementById('group-cancel');
@@ -124,6 +129,7 @@ let composing = false;
 let ignoreEnterUntil = 0;
 let pendingRoomRefreshId = null;
 let groupLoadSeq = 0;
+let groupPicker = null;
 // 发送失败/投递缺失/截断提示必须跨过 SSE 触发的刷新，不能在 300ms 后被清空。
 let stickyStatus = '';
 
@@ -131,6 +137,7 @@ ${CHAT_LIST_SCRIPT}
 ${CHAT_AVATAR_SCRIPT}
 ${CHAT_ARCHIVE_SCRIPT}
 ${CHAT_ROOM_MENU_SCRIPT}
+${CHAT_MEMBER_PICKER_SCRIPT}
 ${CHAT_MEMBERS_SCRIPT}
 ${CHAT_ANNOUNCEMENT_SCRIPT}
 ${CHAT_GROUP_COPY_SCRIPT}
@@ -496,42 +503,24 @@ async function loadGroupContacts() {
   return contacts;
 }
 
-function renderGroupContacts(contacts, note) {
-  if (!groupContactsElement || !identity) return;
-  const checked = new Set();
-  for (const input of groupContactsElement.querySelectorAll('input[type=checkbox]:checked')) {
-    checked.add(input.value);
-  }
-  groupContactsElement.replaceChildren();
-  const others = contacts.filter(function (contact) { return contact.actor_id !== identity.actor_id; });
-  if (others.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'list-hint';
-    empty.textContent = note || '还没有好友。通过分享链接发送好友申请，对方确认后即可加入群聊。';
-    groupContactsElement.append(empty);
-    return;
-  }
-  for (const contact of others) {
-    const label = document.createElement('label');
-    label.className = 'contact-choice';
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.value = contact.actor_id;
-    if (checked.has(contact.actor_id)) input.checked = true;
-    const name = document.createElement('span');
-    name.textContent = contact.name;
-    const kind = document.createElement('span');
-    kind.className = 'contact-kind';
-    kind.textContent = contact.kind === 'agent' ? 'Agent' : '人';
-    label.append(input, name, kind);
-    groupContactsElement.append(label);
-  }
-  if (note) {
-    const hint = document.createElement('p');
-    hint.className = 'list-hint';
-    hint.textContent = note;
-    groupContactsElement.append(hint);
-  }
+/** 建群与添加成员共用一个选择器；这里只绑定建群弹窗的 DOM。 */
+function groupPickerController() {
+  if (groupPicker) return groupPicker;
+  groupPicker = createMemberPicker({
+    root: groupContactsElement,
+    search: groupSearchElement,
+    more: groupMoreButton,
+    count: groupContactsCountElement,
+    selection: groupSelectionElement,
+    empty: '还没有好友。通过分享链接发送好友申请，对方确认后即可加入群聊。'
+  });
+  return groupPicker;
+}
+
+function showGroupPicker(contacts, note) {
+  const picker = groupPickerController();
+  picker.setContacts(contacts);
+  picker.setNote(note || '');
 }
 
 function closeGroupModal() {
@@ -550,22 +539,28 @@ async function openGroupModal() {
     groupCreateButton.disabled = false;
     groupCreateButton.textContent = '创建';
   }
-  groupContactsElement.textContent = '正在读取好友…';
+  const picker = groupPickerController();
+  const selfId = identity ? identity.actor_id : '';
+  picker.reset();
+  picker.setExcluded(selfId ? [selfId] : []);
+  picker.setNote('正在读取好友…');
   try {
     await ensureIdentity();
     if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
     const contacts = await loadGroupContacts();
     if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
-    renderGroupContacts(contacts);
+    picker.setExcluded(identity ? [identity.actor_id] : []);
+    showGroupPicker(contacts);
     const ownerActorId = identity ? identity.actor_id : '';
     if (agentContactGaps(ownerActorId, contacts).length === 0) return;
-    renderGroupContacts(contacts, '正在同步本机创建的 Agent…');
+    picker.setNote('正在同步本机创建的 Agent…');
     const synced = await addOwnedAgentContacts(ownerActorId, contacts);
     if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
-    renderGroupContacts(synced.contacts, agentContactSyncError(synced.failed));
+    showGroupPicker(synced.contacts, agentContactSyncError(synced.failed));
   } catch (error) {
     if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
-    groupContactsElement.replaceChildren();
+    picker.setContacts([]);
+    picker.setNote('');
     if (groupErrorElement) {
       groupErrorElement.textContent = '读取好友失败：' + (error && error.message ? error.message : error);
     }
@@ -786,10 +781,7 @@ if (groupModal) {
 if (groupForm) {
   groupForm.addEventListener('submit', async function (event) {
     event.preventDefault();
-    const selected = [];
-    for (const input of groupContactsElement.querySelectorAll('input[type=checkbox]:checked')) {
-      selected.push(input.value);
-    }
+    const selected = groupPicker ? groupPicker.selectedIds() : [];
     if (selected.length === 0) {
       groupErrorElement.textContent = '请至少选择一个成员';
       return;

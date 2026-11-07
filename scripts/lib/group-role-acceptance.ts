@@ -10,6 +10,7 @@
  */
 
 import {
+  acceptGroupInvites,
   befriend,
   registerIdentity,
   type Identity,
@@ -194,6 +195,7 @@ async function runOwnerLeaveConcurrency(): Promise<void> {
       title: 'G03 owner 退群确定性',
     });
     const roomId = created.room.room_id;
+    await acceptGroupInvites(memberConn, roomId);
     await expectToolError(
       'G03 owner 有其他 active 成员时退群被拒绝',
       leaveRoom(ownerConn, roomId),
@@ -216,6 +218,8 @@ async function runOwnerLeaveConcurrency(): Promise<void> {
       title: 'G03 owner 独自退群',
     });
     const soloRoomId = solo.room.room_id;
+    // G01 起建群生成邀请；先接受为 active 成员，再验证 owner 移除后独自退群。
+    await acceptGroupInvites(memberConn, soloRoomId);
     await callTool(ownerConn.client, 'network_room_members_update', {
       request_id: newRequestId('g03_solo_remove'),
       room_id: soloRoomId,
@@ -245,6 +249,7 @@ async function runOwnerLeaveConcurrency(): Promise<void> {
         title: `G03 owner 退群并发 ${round + 1}`,
       });
       const raceRoomId = room.room.room_id;
+      await acceptGroupInvites(memberConn, raceRoomId);
       await callTool(ownerConn.client, 'network_room_members_update', {
         request_id: newRequestId('g03_race_remove'),
         room_id: raceRoomId,
@@ -323,6 +328,12 @@ export async function runGroupRoleAcceptance(): Promise<void> {
       title: 'G03 权限验收群',
     });
     const roomId = created.room.room_id;
+    await acceptGroupInvites(adminConn, roomId);
+    await acceptGroupInvites(memberConn, roomId);
+    // G01：建群响应只含当时的 active 成员；接受邀请后重新读取快照。
+    const joined = await callTool<GroupRoomView>(ownerConn.client, 'network_room_get', {
+      room_id: roomId,
+    });
     checkEqual('G03 群主唯一且创建者为 owner', created.room.my_role, 'owner');
     checkEqual(
       'G03 默认策略：成员可发言/建任务，邀请仅 owner 或管理员',
@@ -343,13 +354,13 @@ export async function runGroupRoleAcceptance(): Promise<void> {
     );
     checkEqual(
       'G03 owner 视角可移除普通成员',
-      memberOf(created, plainMember.actor_id).actions.can_remove,
+      memberOf(joined, plainMember.actor_id).actions.can_remove,
       true,
     );
 
     // ------------------------------------------------------------------ T01
     console.log('  G03-T01 普通成员越权与管理边界');
-    const candidateRevision = memberOf(created, adminTarget.actor_id).role_revision;
+    const candidateRevision = memberOf(joined, adminTarget.actor_id).role_revision;
     await expectToolError(
       '普通成员不能任免管理员',
       callTool(memberConn.client, 'network_room_role_set', {

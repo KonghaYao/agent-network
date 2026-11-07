@@ -360,6 +360,35 @@ function roomStreamItems(
       }
       return result;
     }
+    case 'room_invitation_accepted': {
+      // 接受邀请后成员才 active；通知 active 成员刷新成员与能力视图。
+      const target = stringField(metadata, 'actor_id') ?? undefined;
+      for (const member of activeRecipients(members, eventSeq)) {
+        const item = withLocation(
+          baseItem(row, 'room.membership', 'room', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = 'added';
+        if (target) item.subject_id = target;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
+    case 'room_invitation_rejected': {
+      const target = stringField(metadata, 'actor_id') ?? undefined;
+      for (const member of activeRecipients(members, eventSeq)) {
+        const item = withLocation(
+          baseItem(row, 'room.membership', 'room', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = 'invitation_rejected';
+        if (target) item.subject_id = target;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
     case 'room_created': {
       for (const member of activeRecipients(members, eventSeq)) {
         result.push({
@@ -453,6 +482,17 @@ function inboxStreamItem(
   metadata: Record<string, unknown>,
 ): StreamItem | null {
   switch (row.event_type) {
+    case 'room_invited': {
+      // 邀请不是成员：只提醒目标处理，不把他们展示成已加入。
+      const item = withLocation(
+        baseItem(row, 'room.membership', 'room', 'action_required'),
+        row,
+        metadata,
+      );
+      item.change = 'invited';
+      item.changed_by = stringField(metadata, 'inviter_id') ?? undefined;
+      return item;
+    }
     case 'room_created':
     case 'room_members_changed':
     case 'room_left':

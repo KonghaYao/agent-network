@@ -112,6 +112,58 @@ export const roomSchema = z.object({
 export const roomDetailSchema = z.object({
   room: roomSchema,
   members: z.array(memberSchema),
+  /** 待确认邀请；只有群主/管理员可见，不计入 member_count。 */
+  invited: z.array(
+    z.object({
+      invitation_id: z.string(),
+      actor_id: z.string(),
+      kind: z.enum(['human', 'agent']),
+      name: z.string(),
+      invited_by: z.string(),
+      invited_at: z.string(),
+      expires_at: z.string(),
+    }),
+  ),
+});
+
+export const roomCreateMemberResultSchema = z.object({
+  actor_id: z.string(),
+  kind: z.enum(['human', 'agent']),
+  name: z.string(),
+  status: z.enum(['active', 'invited', 'failed']),
+  code: z.string().nullable(),
+  message: z.string().nullable(),
+});
+
+/** 建群返回额外的逐对象结果；room_get 仍是纯 RoomDetail。 */
+export const roomCreateResultSchema = roomDetailSchema.extend({
+  results: z.array(roomCreateMemberResultSchema).optional(),
+});
+
+export const roomInvitationSchema = z.object({
+  invitation_id: z.string(),
+  room_id: z.string(),
+  room_title: z.string(),
+  inviter_id: z.string(),
+  inviter_name: z.string(),
+  target_actor_id: z.string().nullable(),
+  kind: z.enum(['direct', 'link']),
+  status: z.enum(['pending', 'accepted', 'rejected', 'revoked', 'expired', 'exhausted']),
+  expires_at: z.string(),
+  created_at: z.string(),
+  can_respond: z.boolean(),
+});
+
+export const roomInvitationPageSchema = z.object({
+  items: z.array(roomInvitationSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+});
+
+export const roomInvitationRespondSchema = z.object({
+  invitation_id: z.string(),
+  room_id: z.string(),
+  status: z.enum(['accepted', 'rejected']),
 });
 
 export const contactSchema = z.object({

@@ -54,6 +54,8 @@ import {
   roomAnnouncementSetSchema,
   roomCreateSchema,
   roomGetSchema,
+  roomInviteGetSchema,
+  roomInviteRespondSchema,
   roomLeaveSchema,
   roomMarkReadSchema,
   roomMembersUpdateSchema,
@@ -145,6 +147,11 @@ import {
 } from '../domain/rooms';
 import { roomMonitorGet, roomMonitorSet } from '../domain/room-monitors';
 import {
+  roomInvitationAccept,
+  roomInvitationList,
+  roomInvitationReject,
+} from '../domain/room-invitations';
+import {
   taskAdd,
   taskClaim,
   taskComplete,
@@ -201,6 +208,9 @@ import {
   recoveryTicketSchema,
   removedResultSchema,
   roomDetailSchema,
+  roomCreateResultSchema,
+  roomInvitationPageSchema,
+  roomInvitationRespondSchema,
   roomMonitorResultSchema,
   roomPageSchema,
   roomRoleHistorySchema as roomRoleHistoryResultSchema,
@@ -358,7 +368,7 @@ export function registerTools(
         return { ...member, online: presence ? presence.online : null };
       }),
     );
-    return { room: detail.room, members };
+    return { room: detail.room, members, invited: detail.invited };
   }
 
   register(
@@ -797,9 +807,9 @@ export function registerTools(
   register(
     server,
     'network_room_create',
-    '创建单聊或群聊。单聊按 actor 对唯一收敛；群聊创建者成为 owner。',
+    '创建单聊或群聊。单聊按 actor 对唯一收敛；群聊创建者成为 owner。群聊中创建者管理的 Agent 直接 active，其他好友生成待确认邀请；返回 results 逐对象给出 active/invited/failed。预检不合格会在创建前整体拒绝并列出对象；提交时的竞态失效只影响对应目标，已成功成员不会重复添加。',
     roomCreateSchema,
-    roomDetailSchema,
+    roomCreateResultSchema,
     async (input) => {
       requireActor(principal);
       return roomCreate(db, principal, input);
@@ -827,6 +837,33 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       return withPresence(await roomGet(db, principal, input.room_id));
+    },
+  );
+
+  register(
+    server,
+    'network_room_invite_get',
+    '分页读取当前身份收到的定向群邀请。只返回自己的邀请，目标不匹配返回 NOT_FOUND；pending 是待确认，不是已加入。can_respond 只对未过期的 pending 为 true。G01 只提供定向邀请；链接、撤销与审批由 G02 扩展。',
+    roomInviteGetSchema,
+    roomInvitationPageSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomInvitationList(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_room_invite_respond',
+    '接受或拒绝自己的定向群邀请。接受时在同一事务内复核 pending 状态、有效期、拉黑关系与 100 人上限；并发接受同一邀请只有一个成功。接受成功后成为 active 成员并收到 room_invitation_accepted 事件；拒绝后邀请失效，不能复用。重复 request_id 返回首次结果。',
+    roomInviteRespondSchema,
+    roomInvitationRespondSchema,
+    async (input) => {
+      requireActor(principal);
+      return input.action === 'accept'
+        ? roomInvitationAccept(db, principal, input)
+        : roomInvitationReject(db, principal, input);
     },
   );
 

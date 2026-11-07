@@ -10,6 +10,7 @@ import {
   rawRpc,
 } from './harness';
 import {
+  acceptGroupInvites,
   befriend,
   registerIdentity,
   sendMessage,
@@ -144,6 +145,7 @@ export async function runEventsAcceptance(input: {
       title: 'Events 验收群聊',
     });
     const groupId = group.room.room_id;
+    await acceptGroupInvites(agentB, groupId);
     const groupCallbackUrl = input.receiver.url('/callback', `?group=${crypto.randomUUID()}`);
     const groupSubscribe = await rawRpc(
       'events/subscribe',

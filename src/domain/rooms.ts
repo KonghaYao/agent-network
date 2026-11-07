@@ -1,4 +1,4 @@
-import { BusinessError } from '../contracts/errors';
+import { BusinessError, type BusinessErrorCode } from '../contracts/errors';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { clampPage, LIMITS } from '../contracts/limits';
 import type {
@@ -23,6 +23,7 @@ import {
   eventStatement,
   eventStatementIfAbsent,
   inboxHeadStatement,
+  inboxHeadStatementIfEvent,
   inboxTopic,
   outboxStatement,
   outboxStatementIfAbsent,
@@ -40,6 +41,7 @@ import type {
   RoomRow,
 } from '../storage/rows';
 import { operationsStatement, resolveReplay, runIdempotent } from '../storage/transactions/runner';
+import { getActiveManagement } from './agent-access';
 import { directRelationStatements, getActiveRelation } from './contact-relations';
 import {
   contactBlockGuardStatement,
@@ -47,6 +49,12 @@ import {
   roomInviteRateGuardStatement,
 } from './contact-blocks';
 import { actorId, type Principal } from './principal';
+import {
+  directInvitationStatements,
+  invitationInboxStatements,
+  loadInvitedMembers,
+  type InvitedMemberView,
+} from './room-invitations';
 import {
   capabilityGuardStatement,
   currentOwnerGuardStatement,
@@ -116,6 +124,30 @@ export interface MemberView {
 export interface RoomDetail {
   room: RoomView;
   members: MemberView[];
+  /**
+   * 待确认的定向邀请成员；仅 `approve_joins` 能力持有者可见。
+   * 邀请不是成员，不计入 `member_count`，也不能渲染成已加入。
+   */
+  invited: InvitedMemberView[];
+  /**
+   * 建群时每个候选成员的逐对象结果；只有 `network_room_create` 返回。
+   *
+   * `failed` 只可能来自提交时的竞态（预检不合格会在提交前整体拒绝），
+   * 已成功写入的成员/邀请不会因为同批其他目标失败而回滚。
+   */
+  results?: RoomCreateMemberResult[];
+}
+
+export type RoomCreateMemberStatus = 'active' | 'invited' | 'failed';
+
+export interface RoomCreateMemberResult {
+  actor_id: string;
+  kind: 'human' | 'agent';
+  name: string;
+  status: RoomCreateMemberStatus;
+  /** 失败时的稳定错误码；成功加入或邀请为 null。 */
+  code: BusinessErrorCode | null;
+  message: string | null;
 }
 
 export interface RoomPage {
@@ -360,6 +392,104 @@ async function requireFriends(
   }
 }
 
+interface CreateTargetEvaluation {
+  actor: ActorRow;
+  status: 'active' | 'invited' | 'failed';
+  code: BusinessErrorCode | null;
+  message: string | null;
+}
+
+/**
+ * 建群候选的提交前判定：拉黑优先，其次好友关系，自有 Agent 直接 active。
+ *
+ * 失败的候选不会静默剔除：调用方把逐对象结果返回给客户端，整次建群
+ * 在提交前终止，避免用户以为所有人都已邀请。
+ */
+async function evaluateCreateTargets(
+  db: D1Database,
+  owner: string,
+  actors: ActorRow[],
+): Promise<CreateTargetEvaluation[]> {
+  const evaluations: CreateTargetEvaluation[] = [];
+  for (const actor of actors) {
+    if (await isBlockedBetween(db, owner, actor.actor_id)) {
+      evaluations.push({
+        actor,
+        status: 'failed',
+        code: 'BLOCKED',
+        message: '双方存在拉黑关系，不能邀请对方加入群聊',
+      });
+      continue;
+    }
+    let managed = false;
+    if (actor.kind === 'agent') {
+      const management = await getActiveManagement(db, actor.actor_id);
+      managed = management?.manager_id === owner;
+    }
+    if (managed) {
+      evaluations.push({ actor, status: 'active', code: null, message: null });
+      continue;
+    }
+    if (await getActiveRelation(db, owner, actor.actor_id)) {
+      evaluations.push({ actor, status: 'invited', code: null, message: null });
+      continue;
+    }
+    evaluations.push({
+      actor,
+      status: 'failed',
+      code: 'FRIEND_REQUIRED',
+      message: '只能把好友加入群聊',
+    });
+  }
+  return evaluations;
+}
+
+function evaluationResult(evaluation: CreateTargetEvaluation): RoomCreateMemberResult {
+  return {
+    actor_id: evaluation.actor.actor_id,
+    kind: evaluation.actor.kind,
+    name: evaluation.actor.name,
+    status: evaluation.status,
+    code: evaluation.code,
+    message: evaluation.message,
+  };
+}
+
+/** 提交后按真实成员/邀请状态生成逐对象结果，竞态失败给出可读原因。 */
+async function deriveCreateResults(
+  db: D1Database,
+  owner: string,
+  evaluations: CreateTargetEvaluation[],
+  detail: RoomDetail,
+): Promise<RoomCreateMemberResult[]> {
+  const active = new Set(detail.members.map((member) => member.actor_id));
+  const invited = new Set(detail.invited.map((invitation) => invitation.actor_id));
+  return Promise.all(
+    evaluations.map(async (evaluation) => {
+      if (active.has(evaluation.actor.actor_id)) {
+        return { ...evaluationResult(evaluation), status: 'active', code: null, message: null };
+      }
+      if (invited.has(evaluation.actor.actor_id)) {
+        return { ...evaluationResult(evaluation), status: 'invited', code: null, message: null };
+      }
+      if (await isBlockedBetween(db, owner, evaluation.actor.actor_id)) {
+        return {
+          ...evaluationResult(evaluation),
+          status: 'failed',
+          code: 'BLOCKED',
+          message: '提交时双方已建立拉黑关系，未加入群聊',
+        };
+      }
+      return {
+        ...evaluationResult(evaluation),
+        status: 'failed',
+        code: 'CONFLICT',
+        message: '提交时成员资格已变化，未加入群聊',
+      };
+    }),
+  );
+}
+
 /** 房间创建时所有参与者的 inbox 事件（含分享入口）。 */
 function inboxChangeStatements(
   db: D1Database,
@@ -368,18 +498,32 @@ function inboxChangeStatements(
   eventType: string,
   at: number,
   refId: string,
+  onlyIfMember = false,
 ): D1PreparedStatement[] {
   const statements: D1PreparedStatement[] = [];
   for (const actor of actorIds) {
     const eventKey = eventKeyFor(actor);
     statements.push(
-      eventStatementIfAbsent(
-        db,
-        { eventKey, scopeKind: 'inbox', scopeId: actor, eventType, refId },
-        at,
-      ),
+      onlyIfMember
+        ? db
+            .prepare(
+              `INSERT INTO events
+                 (scope_kind, scope_id, event_type, ref_id, metadata, event_key, created_at)
+               SELECT 'inbox', ?, ?, ?, ?, ?, ?
+                WHERE EXISTS (
+                  SELECT 1 FROM room_members
+                   WHERE room_id = ? AND actor_id = ? AND status = 'active'
+                )
+               ON CONFLICT(event_key) DO NOTHING`,
+            )
+            .bind(actor, eventType, refId, JSON.stringify({}), eventKey, at, refId, actor)
+        : eventStatementIfAbsent(
+            db,
+            { eventKey, scopeKind: 'inbox', scopeId: actor, eventType, refId },
+            at,
+          ),
       outboxStatementIfAbsent(db, { topic: inboxTopic(actor), eventKey }, at),
-      inboxHeadStatement(db, actor, eventKey, at, 0),
+      inboxHeadStatementIfEvent(db, actor, eventKey, at, 0),
     );
   }
   return statements;
@@ -395,7 +539,7 @@ export async function roomCreate(
   if (others.length === 0) {
     throw new BusinessError('INVALID_ARGUMENT', '房间至少需要另一个成员');
   }
-  await ensureActors(db, others);
+  const targetActors = await ensureActors(db, others);
 
   if (input.kind === 'direct') {
     if (others.length !== 1) {
@@ -404,90 +548,203 @@ export async function roomCreate(
     return createDirect(db, principal, others[0] as string, input.request_id);
   }
 
-  // 拉黑先于好友关系裁决，返回稳定的 BLOCKED 而不是 FRIEND_REQUIRED。
-  for (const other of others) {
-    if (await isBlockedBetween(db, owner, other)) {
-      throw new BusinessError('BLOCKED', '双方存在拉黑关系，不能邀请对方加入群聊', {
-        actor_id: other,
-      });
-    }
+  // 拉黑优先于好友关系裁决，返回稳定的 BLOCKED 而不是 FRIEND_REQUIRED。
+  const evaluations = await evaluateCreateTargets(db, owner, targetActors);
+  const failedEvaluations = evaluations.filter((evaluation) => evaluation.status === 'failed');
+  const memberResults = evaluations.map(evaluationResult);
+  if (failedEvaluations.length > 0) {
+    // 提交前解释所有不合格对象，不创建半成品群。
+    const first = failedEvaluations[0] as CreateTargetEvaluation;
+    const detailText = failedEvaluations
+      .map((evaluation) => `${evaluation.actor.name}（${evaluation.message}）`)
+      .join('、');
+    throw new BusinessError(
+      first.code ?? 'INVALID_ARGUMENT',
+      `以下成员不能加入群聊：${detailText}`,
+      { results: memberResults },
+    );
   }
-  await requireFriends(db, owner, others);
-  if (others.length + 1 > LIMITS.groupMembersMax) {
-    throw new BusinessError('ROOM_FULL', '群成员数量超过上限');
+
+  // 建群者与自有 Agent 直接 active；其他成员生成 pending 邀请，
+  // 邀请不是成员，不进入 room_members，也不计入 100 人上限。
+  const activeOthers = evaluations
+    .filter((evaluation) => evaluation.status === 'active')
+    .map((evaluation) => evaluation.actor.actor_id);
+  const inviteTargets = evaluations
+    .filter((evaluation) => evaluation.status === 'invited')
+    .map((evaluation) => evaluation.actor.actor_id);
+
+  if (activeOthers.length + 1 > LIMITS.groupMembersMax) {
+    throw new BusinessError('ROOM_FULL', '群成员数量超过上限', {
+      limit: LIMITS.groupMembersMax,
+      results: memberResults,
+    });
   }
 
   const at = nowMs();
   const roomId = newId('rm');
   const payloadHash = await sha256Hex(stableStringify(input));
   const roomRef = `room_created:${roomId}`;
-  const participants = [owner, ...others];
+  const participants = [owner, ...activeOthers];
+  const { invitations, statements: invitationStatements } = directInvitationStatements(db, {
+    roomId,
+    inviterId: owner,
+    targets: inviteTargets,
+    at,
+    expiresAt: at + LIMITS.roomInviteTtlMs,
+  });
 
-  await runIdempotent(db, {
-    actorId: owner,
-    requestId: input.request_id,
-    payloadHash,
-    result: { room_id: roomId },
-    build: (resultJson) => [
-      operationsStatement(db, owner, input.request_id, payloadHash, resultJson, at),
-      ...others.map((member) => contactBlockGuardStatement(db, owner, member)),
-      db
-        .prepare(
-          guardSql(
-            'roomLimit',
-            '(SELECT COUNT(*) FROM room_members WHERE actor_id = ? AND status = \'active\') >= ?',
-          ),
-        )
-        .bind(owner, LIMITS.activeRoomsPerActor),
-      db
-        .prepare(
-          `INSERT INTO rooms
-             (room_id, kind, owner_id, title, direct_pair_key, head_seq, events_min_seq, member_seq, last_message_id, created_at, updated_at)
-           VALUES (?, 'group', ?, ?, NULL, 0, 0, 0, NULL, ?, ?)`,
-        )
-        .bind(roomId, owner, input.title ?? '', at, at),
-      eventStatement(
-        db,
-        {
-          eventKey: roomRef,
-          scopeKind: 'room',
-          scopeId: roomId,
-          eventType: 'room_created',
-          refId: roomId,
-          metadata: { owner_id: owner, members: others },
-        },
-        at,
-      ),
-      outboxStatement(db, { topic: roomTopic(roomId), eventKey: roomRef }, at),
-      roomHeadStatement(db, roomId, roomRef, at),
-      ...participants.map((participant) =>
+  let outcome: unknown;
+  try {
+    outcome = await runIdempotent(db, {
+      actorId: owner,
+      requestId: input.request_id,
+      payloadHash,
+      result: { room_id: roomId },
+      build: (resultJson) => [
+        operationsStatement(db, owner, input.request_id, payloadHash, resultJson, at),
+        db
+          .prepare(
+            guardSql(
+              'roomLimit',
+              '(SELECT COUNT(*) FROM room_members WHERE actor_id = ? AND status = \'active\') >= ?',
+            ),
+          )
+          .bind(owner, LIMITS.activeRoomsPerActor),
+        db
+          .prepare(
+            `INSERT INTO rooms
+               (room_id, kind, owner_id, title, direct_pair_key, head_seq, events_min_seq, member_seq, last_message_id, created_at, updated_at)
+             VALUES (?, 'group', ?, ?, NULL, 0, 0, 0, NULL, ?, ?)`,
+          )
+          .bind(roomId, owner, input.title ?? '', at, at),
+        eventStatement(
+          db,
+          {
+            eventKey: roomRef,
+            scopeKind: 'room',
+            scopeId: roomId,
+            eventType: 'room_created',
+            refId: roomId,
+            metadata: {
+              owner_id: owner,
+              members: activeOthers,
+              invited: inviteTargets,
+            },
+          },
+          at,
+        ),
+        outboxStatement(db, { topic: roomTopic(roomId), eventKey: roomRef }, at),
+        roomHeadStatement(db, roomId, roomRef, at),
         db
           .prepare(
             `INSERT INTO room_members
                (room_id, actor_id, role, status, joined_seq, last_read_seq, joined_at, role_revision, updated_at)
-             VALUES (?, ?, ?, 'active', (SELECT event_seq FROM events WHERE event_key = ?), 0, ?, 1, ?)`,
+             VALUES (?, ?, 'owner', 'active', (SELECT event_seq FROM events WHERE event_key = ?), 0, ?, 1, ?)`,
           )
-          .bind(
-            roomId,
-            participant,
-            participant === owner ? 'owner' : 'member',
-            roomRef,
-            at,
-            at,
-          ),
-      ),
-      ...inboxChangeStatements(
-        db,
-        participants,
-        (actor) => `room_created:${roomId}:${actor}`,
-        'room_created',
-        at,
-        roomId,
-      ),
-    ],
-  });
+          .bind(roomId, owner, roomRef, at, at),
+        // 自有 Agent 直接 active；插入时复核拉黑/管理关系，竞态失败只影响该目标。
+        ...activeOthers.map((member) =>
+          db
+            .prepare(
+              `INSERT INTO room_members
+                 (room_id, actor_id, role, status, joined_seq, last_read_seq, joined_at, role_revision, updated_at)
+               SELECT ?, ?, 'member', 'active',
+                      (SELECT event_seq FROM events WHERE event_key = ?), 0, ?, 1, ?
+                WHERE NOT EXISTS (
+                        SELECT 1 FROM contact_blocks
+                         WHERE released_at IS NULL
+                           AND ((blocker_actor_id = ? AND blocked_actor_id = ?)
+                             OR (blocker_actor_id = ? AND blocked_actor_id = ?))
+                      )
+                  AND (
+                    EXISTS (
+                      SELECT 1 FROM contact_relations
+                       WHERE pair_key = ? AND status = 'active'
+                    )
+                    OR EXISTS (
+                      SELECT 1 FROM agent_managements
+                       WHERE status = 'active' AND agent_id = ? AND manager_id = ?
+                    )
+                  )`,
+            )
+            .bind(
+              roomId,
+              member,
+              roomRef,
+              at,
+              at,
+              owner,
+              member,
+              member,
+              owner,
+              sortedPairKey(owner, member),
+              member,
+              owner,
+            ),
+        ),
+        ...invitationStatements,
+        // 预检合格的候选在提交时全部失效时整批回滚，不能留下只有 owner 的群。
+        db
+          .prepare(
+            guardSql(
+              'inviteTargetsMissing',
+              `NOT EXISTS (
+                 SELECT 1 FROM room_members WHERE room_id = ? AND actor_id <> ?
+               )
+               AND NOT EXISTS (
+                 SELECT 1 FROM room_invitations
+                  WHERE room_id = ? AND kind = 'direct' AND status = 'pending'
+               )`,
+            ),
+          )
+          .bind(roomId, owner, roomId),
+        ...invitationInboxStatements(db, invitations, at),
+        ...inboxChangeStatements(
+          db,
+          participants,
+          (actor) => `room_created:${roomId}:${actor}`,
+          'room_created',
+          at,
+          roomId,
+          true,
+        ),
+      ],
+    });
+  } catch (error) {
+    if (
+      error instanceof BusinessError &&
+      error.details?.reason === 'invite_targets_missing'
+    ) {
+      const detail = {
+        room: { room_id: roomId },
+        members: [],
+        invited: [],
+      } as unknown as RoomDetail;
+      const results = await deriveCreateResults(db, owner, evaluations, detail);
+      throw new BusinessError(
+        firstFailureCode(results),
+        '成员资格在提交时已变化，群未创建',
+        { results, reason: 'invite_targets_missing' },
+      );
+    }
+    throw error;
+  }
 
-  return roomDetail(db, roomId, owner);
+  // 重放同一 request_id 时 runIdempotent 返回首次提交的 {room_id}；不能再用
+  // 本次随机生成的 roomId 读取详情，否则重放会得到 NOT_FOUND。
+  const committed = outcome as { room_id?: string } | undefined;
+  const committedRoomId =
+    typeof committed?.room_id === 'string' ? committed.room_id : roomId;
+  const detail = await roomDetail(db, committedRoomId, owner);
+  return {
+    ...detail,
+    results: await deriveCreateResults(db, owner, evaluations, detail),
+  };
+}
+
+function firstFailureCode(results: RoomCreateMemberResult[]): BusinessErrorCode {
+  return results.find((result) => result.status === 'failed')?.code ?? 'FRIEND_REQUIRED';
 }
 
 async function createDirect(
@@ -581,11 +838,14 @@ async function roomDetail(db: D1Database, roomId: string, viewer: string): Promi
   if (!member || member.status !== 'active') {
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
   }
-  const [view, members] = await Promise.all([
+  const [view, members, invited] = await Promise.all([
     loadRoomView(db, room, member),
     loadMembers(db, room, member),
+    roomCapabilitiesFor(room, member).approve_joins
+      ? loadInvitedMembers(db, room.room_id, nowMs())
+      : Promise.resolve([] as InvitedMemberView[]),
   ]);
-  return { room: view, members };
+  return { room: view, members, invited };
 }
 
 export async function roomGet(
@@ -1585,6 +1845,17 @@ export async function roomLeave(
         )
         .bind(at, room.room_id, caller),
       ...cancelDeliveriesForMemberStatements(db, room.room_id, caller, 'member_left', at),
+      // G01：owner 只能在群内没有其他 active 成员时退群；此时群已无人审批，
+      // 撤销遗留的 pending 定向邀请，避免空群事后被旧邀请变成无 owner 的非空群。
+      // 必须在清空 owner_id 之前按当前 owner 判定，非 owner 退群不受影响。
+      db
+        .prepare(
+          `UPDATE room_invitations
+              SET status = 'revoked', revision = revision + 1, updated_at = ?
+            WHERE room_id = ? AND kind = 'direct' AND status = 'pending'
+              AND EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND owner_id = ?)`,
+        )
+        .bind(at, room.room_id, room.room_id, caller),
       // 无条件按 owner_id=caller 清理：即使 owner 在预检查后被并发转移，
       // 也不会把新 owner 的 rooms.owner_id 置空；非 owner 退群时是空操作。
       db

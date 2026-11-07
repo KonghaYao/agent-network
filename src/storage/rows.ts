@@ -183,6 +183,23 @@ export interface RoomMemberRow {
   updated_at: number;
 }
 
+/** 群邀请独立于成员关系；pending 不计入 active 成员数。 */
+export interface RoomInvitationRow {
+  invitation_id: string;
+  room_id: string;
+  inviter_id: string;
+  target_actor_id: string | null;
+  token_hash: string | null;
+  kind: 'direct' | 'link';
+  status: 'pending' | 'accepted' | 'rejected' | 'revoked' | 'expired' | 'exhausted';
+  max_uses: number;
+  used_count: number;
+  expires_at: number;
+  revision: number;
+  created_at: number;
+  updated_at: number;
+}
+
 export type RoomManagementAction =
   | 'member_added'
   | 'member_removed'

@@ -19,7 +19,7 @@ import {
   uploadTestFile,
   type McpConnection,
 } from './harness';
-import { befriend, registerIdentity, type RoomDetail } from './acceptance-helpers';
+import { acceptGroupInvites, befriend, registerIdentity, type RoomDetail } from './acceptance-helpers';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META = 'io.agent-network/event';
@@ -81,6 +81,7 @@ export async function runRoomFileAcceptance(): Promise<void> {
       title: '端到端房间文件群',
     });
     const roomId = room.room.room_id;
+    await acceptGroupInvites(memberConn, roomId);
 
     const collector = notificationCollector(memberConn.client);
     const subscription = await openSubscription(memberConn.client, [STREAM_URI]);

@@ -317,6 +317,8 @@ async function main(): Promise<void> {
     'network_room_create',
     'network_rooms_list',
     'network_room_get',
+    'network_room_invite_get',
+    'network_room_invite_respond',
     'network_room_monitor_get',
     'network_room_monitor_set',
     'network_task_list_get',
@@ -2846,6 +2848,19 @@ async function main(): Promise<void> {
         | undefined
     )?.structuredContent?.room?.room_id ?? '';
   check('监控测试群创建成功', monitorRoomId.length > 0, monitorRoomResponse.body);
+
+  // G01：非创建者管理的成员先收到邀请；监控用例需要一个真实 active 成员。
+  const monitorInvitations = await rawToolCall<{
+    items: { invitation_id: string; room_id: string; can_respond: boolean }[];
+  }>(monitorBToken, 'network_room_invite_get', { limit: 100 });
+  for (const invitation of monitorInvitations.data?.items ?? []) {
+    if (invitation.room_id !== monitorRoomId || !invitation.can_respond) continue;
+    await rawToolCall(monitorBToken, 'network_room_invite_respond', {
+      request_id: `monitor_invite_${crypto.randomUUID().replaceAll('-', '')}`,
+      invitation_id: invitation.invitation_id,
+      action: 'accept',
+    });
+  }
 
   const monitorHeadBefore =
     (

@@ -27,6 +27,7 @@ import {
   waitUntil,
 } from './lib/harness';
 import {
+  acceptGroupInvites,
   befriend,
   inbox,
   readWholeMessage,
@@ -51,6 +52,7 @@ import { runFeedbackAcceptance } from './lib/feedback-acceptance';
 import { runGroupMentionAcceptance } from './lib/mention-acceptance';
 import { runGroupAutoDeliverAcceptance } from './lib/auto-deliver-acceptance';
 import { runGroupRoleAcceptance } from './lib/group-role-acceptance';
+import { runGroupInviteAcceptance } from './lib/group-invite-acceptance';
 import {
   ensureTestCertificate,
   removeTestData,
@@ -395,7 +397,7 @@ async function main(): Promise<void> {
       callTool(humanC.client, 'network_room_create', {
         request_id: newRequestId('room'),
         kind: 'group',
-        members: [a.actor_id],
+        members: [b.actor_id],
         title: '越权群',
       }),
       'FRIEND_REQUIRED',
@@ -589,6 +591,7 @@ async function main(): Promise<void> {
       members: [c.actor_id],
       title: '人类目标校验',
     });
+    await acceptGroupInvites(humanC, humanRoom.room.room_id);
     await expectToolError(
       'invoke 指向人类成员返回 INVALID_ARGUMENT',
       sendMessage(agentA, humanRoom.room.room_id, 'human-target', { invoke: [c.actor_id] }),
@@ -985,6 +988,8 @@ async function main(): Promise<void> {
     });
     const groupId = group.room.room_id;
     checkEqual('群聊创建者为 owner', group.room.my_role, 'owner');
+    // G01：非建群者自有 Agent 的成员先收到邀请，验收显式接受后才进入 active。
+    await acceptGroupInvites(agentB, groupId);
     const groupSubscription = await openSubscription(agentB.client, [STREAM_URI]);
     await waitUntil('等待统一 stream 建立', () =>
       Boolean(groupSubscription.honoredFilter.resourceSubscriptions?.length),
@@ -1172,6 +1177,8 @@ async function main(): Promise<void> {
       title: '网页群聊回归',
     });
     const webGroupId = webGroup.room.room_id;
+    await acceptGroupInvites(agentB, webGroupId);
+    await acceptGroupInvites(humanC, webGroupId);
     const groupSend = await sendMessage(humanC, webGroupId, 'web-group-hello', {
       invoke: [a.actor_id, b.actor_id],
     });
@@ -1314,6 +1321,7 @@ async function main(): Promise<void> {
     await runGroupMentionAcceptance();
     await runGroupAutoDeliverAcceptance();
     await runGroupRoleAcceptance();
+    await runGroupInviteAcceptance();
 
     console.log(`端到端验收通过: ${checksPassed()} 项`);
   } finally {

@@ -42,6 +42,8 @@ export const LIMITS = {
   agentDisableReasonBytes: 512,
   /** 浏览器本地 Agents 注册表上限；超过后保留最新条目。 */
   webAgentRegistryMax: 100,
+  /** 成员选择器每次渲染的候选数量；搜索过滤后再分页。 */
+  webMemberPickerPageSize: 100,
   /** 单次成员变更上限。 */
   memberChangeMax: 20,
   /** 好友申请附言 UTF-8 字节上限。 */
@@ -88,6 +90,11 @@ export const LIMITS = {
   roomInviteWindowMax: 60,
   /** 群成员上限。 */
   groupMembersMax: 100,
+  /** 定向群邀请默认有效期（毫秒）。G02 的链接邀请复用同一初始值。 */
+  roomInviteTtlMs: 7 * 24 * 60 * 60_000,
+  /** 群邀请列表默认 / 最大条数。 */
+  roomInvitationsPageDefault: 20,
+  roomInvitationsPageMax: 100,
   /** 群公告 UTF-8 字节上限。 */
   roomAnnouncementBytes: 4 * 1024,
   /** 群角色审计默认 / 最大条数。 */

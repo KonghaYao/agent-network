@@ -17,6 +17,7 @@ import {
   openSubscription,
 } from './harness';
 import {
+  acceptGroupInvites,
   befriend,
   inbox,
   registerIdentity,
@@ -101,6 +102,9 @@ export async function runGroupAutoDeliverAcceptance(): Promise<void> {
       members: agents.map((agent) => agent.actor_id),
     });
     const groupId = group.room.room_id;
+    for (const connection of agentConnections) {
+      await acceptGroupInvites(connection, groupId);
+    }
     const direct = await callTool<RoomDetail>(human.client, 'network_room_create', {
       request_id: newRequestId('auto_room'),
       kind: 'direct',
