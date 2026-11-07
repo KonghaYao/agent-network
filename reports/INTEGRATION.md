@@ -29,7 +29,7 @@
 服务端启动方式：
 
 ```bash
-DATA_DIR=/tmp/an-integration-webots \
+DATA_DIR=/tmp/an-verify-webots \
 AGENT_PRESENCE_ACTIVITY_TTL_MS=5000 \
 AGENT_PRESENCE_GRACE_MS=2000 \
 AGENT_PRESENCE_SWEEP_MS=1000 \
@@ -53,7 +53,7 @@ PORT=8792 bun run start
 - 在全新临时库上按文件名顺序成功应用全部 16 个迁移，无 SQL 错误、无重复对象。
 - `0020` 因 SQLite 不能修改 `CHECK` 约束，重建 `room_members`：`ALTER ... RENAME` → 建新表 → `INSERT ... SELECT` 保留全部旧行 → `DROP` 旧表；`role_revision` 对新旧行补默认值 `1`。属于数据保留型前向迁移，不是破坏性删除。
 - 迁移号与 `reports/CONTRACT_BASELINE.md` 的规划号存在偏差（A03/G03 使用 `0019/0020`，而非预留的 `0013/0014`），但实现文件互不冲突、按序应用；`0013`–`0017` 保持空缺，未占用其他任务的编号。
-- 验收使用 `/tmp/an-integration-webots`，未修改既有 `.data/` 数据库。
+- 验收使用 `/tmp/an-verify-webots`，未修改既有 `.data/` 数据库。
 
 ### 2.3 范围与无关文件
 
@@ -62,7 +62,9 @@ PORT=8792 bun run start
 
 ## 3. 集成修复
 
-仅修复文档与空白字符，不改变运行时行为：
+3.1 是历史集成提交的修复（仅文档与空白字符）；3.2 是独立验收后新增的运行时修复。
+
+### 3.1 历史集成修复（仅文档）
 
 1. `src/mcp/skill.ts`：把 `network_agent_rename`、`network_agent_archive`/`unarchive` 从“任何已注册身份均可调用”改为“目标 Agent 的 active manager 或持有 `manage_agent` scope 的 active 委托”，并同步结尾的“开放边界”段落，与 A01 实现和工具描述一致。
 2. `public/skills/agent-network-skills.md`：同步 `network_agent_rename` 的管理授权语义，移除“开放管理边界”表述。
@@ -80,7 +82,7 @@ PORT=8792 bun run start
    - 专项运行：`/tmp/verify-run-a01.ts` → `A01 OK checks=67`；`/tmp/verify-run-a03.ts` → `A03 OK checks=89`；`/tmp/verify-run-g03.ts` → `G03 OK checks=95`。
    - 并发专项：`/tmp/verify-g03-owner-leave-race.ts` → `both_succeeded=0 bad_final_states=0`；`/tmp/verify-g03-orphan-repro.ts` → 40 次未复现（脚本以“未复现”退出 1）；`/tmp/verify-group-add-unfriend-race.ts` → `both_success=20 violations=0`（加人事务先提交，随后解除好友，未出现关系结束先于加人的提交）；`/tmp/verify-a03-idempotency-edge.ts` → `failures=0`。
 
-修改后重新运行 `bun run typecheck` 与 `bun run test:protocol`，结果分别通过、724 项。文档修改不参与 acceptance/web 的行为断言，故未重复执行这两套（其 737/1730 项结果产生于同一运行时代码）。
+独立验收修复后重新运行全部门禁：`typecheck` 通过；`protocol` 724 项；`acceptance` 800 项；`web` 1743 项；`events` 339 项；`drive` 47 项。
 
 ## 4. 失败与阻塞
 
