@@ -1181,14 +1181,38 @@ async function mcpCallCount(page: Page, name: string): Promise<number> {
   )) as number;
 }
 
-/** 带 cursor 的历史请求 = “加载更早”；首屏不带 cursor。 */
+/**
+ * 带 cursor 的“更早”历史请求 = “加载更早”；首屏不带 cursor。
+ * after 是断线补页，单独统计，不能算作加载更早。
+ */
 async function olderCursors(page: Page): Promise<string[]> {
   return (await page.evaluate(`(() => {
     return (window.__mcpCalls || []).filter(function (call) {
       const args = call.body && call.body.params ? call.body.params.arguments : null;
-      return call.name === 'network_history_list' && args && args.cursor;
+      return call.name === 'network_history_list' && args && args.cursor &&
+        args.direction !== 'after';
     }).map(function (call) { return call.body.params.arguments.cursor; });
   })()`)) as string[];
+}
+
+interface TimelineAfterCall {
+  cursor?: string;
+  view?: string;
+  limit?: number;
+}
+
+/** 断线补页请求：只统计当前房间 direction=after 的时间线游标。 */
+async function timelineAfterCalls(
+  page: Page,
+  roomId: string,
+): Promise<TimelineAfterCall[]> {
+  return (await page.evaluate(`(() => {
+    return (window.__mcpCalls || []).filter(function (call) {
+      const args = call.body && call.body.params ? call.body.params.arguments : null;
+      return call.name === 'network_history_list' && args &&
+        args.room_id === ${JSON.stringify(roomId)} && args.direction === 'after';
+    }).map(function (call) { return call.body.params.arguments; });
+  })()`)) as TimelineAfterCall[];
 }
 
 interface OlderUiState {
@@ -13949,6 +13973,81 @@ async function main(): Promise<void> {
         (await olderCursors(olderContext.page)).length,
         olderCallsAtEnd,
       );
+
+      // 14f-1b-2. 断线缺口：恢复后只补一次 after 页，按序合并且不冒充更早请求。
+      const gapContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      await gapContext.page.goto(`${server.base}/c/${scrollRoomId}`);
+      await waitRoom(gapContext.page, scrollRoomId, '滚动进入群');
+      await gapContext.page.waitForFunction(
+        'document.querySelectorAll("#messages .msg").length >= 40',
+      );
+      await waitForBottom(gapContext.page, '断线补页场景进入到底', 15_000);
+      await sleep(300);
+      const resumeCursorBeforeGap = (await gapContext.page.evaluate(
+        'timelineResumeCursor',
+      )) as string | null;
+      check(
+        '断线补页场景已记录时间线水位',
+        typeof resumeCursorBeforeGap === 'string' && resumeCursorBeforeGap.length > 0,
+        { resumeCursorBeforeGap },
+      );
+      const olderBeforeGap = (await olderCursors(gapContext.page)).length;
+      const streamCallsBeforeGap = (await gapContext.page.evaluate(
+        `${streamCallsExpression()}.length`,
+      )) as number;
+      await gapContext.page.evaluate(
+        'window.__failStreams = true; window.__abortStream();',
+      );
+      await gapContext.page.waitForFunction(
+        `${streamCallsExpression()}.length > ${streamCallsBeforeGap}`,
+        undefined,
+        { timeout: 8_000 },
+      );
+      const gapMarkers = ['断线补页甲', '断线补页乙', '断线补页丙'] as const;
+      for (const marker of gapMarkers) {
+        await sendRoomMessage(data.agentAToken, scrollRoomId, marker);
+      }
+      await gapContext.page.evaluate(
+        `window.__failStreams = false; window.dispatchEvent(new Event('online'));`,
+      );
+      await waitForText(gapContext.page, '#messages', gapMarkers[2], 20_000);
+      await sleep(500);
+      const afterCalls = await timelineAfterCalls(gapContext.page, scrollRoomId);
+      checkEqual('断线补页只发一个 after 请求', afterCalls.length, 1);
+      checkEqual(
+        '断线补页携带断线前的时间线水位',
+        afterCalls[0]?.cursor,
+        resumeCursorBeforeGap,
+      );
+      checkEqual('断线补页使用 timeline 视图', afterCalls[0]?.view, 'timeline');
+      checkEqual(
+        '断线补页不增加更早请求',
+        (await olderCursors(gapContext.page)).length,
+        olderBeforeGap,
+      );
+      const gapText = (await gapContext.page.locator('#messages').textContent()) ?? '';
+      const gapIndexes = gapMarkers.map((marker) => gapText.indexOf(marker));
+      const firstGapIndex = gapIndexes[0];
+      const secondGapIndex = gapIndexes[1];
+      const thirdGapIndex = gapIndexes[2];
+      check(
+        '断线补页消息按到达顺序插入',
+        firstGapIndex !== undefined &&
+          secondGapIndex !== undefined &&
+          thirdGapIndex !== undefined &&
+          firstGapIndex >= 0 &&
+          firstGapIndex < secondGapIndex &&
+          secondGapIndex < thirdGapIndex,
+        { gapIndexes },
+      );
+      const gapIds = await timelineMessageIds(gapContext.page);
+      checkEqual('断线补页消息 ID 不重复', new Set(gapIds).size, gapIds.length);
+      await gapContext.context.close();
 
       // 14f-1c. 距顶 10% 自动加载：80%/中部不触发，边界只发一个请求。
       const autoOlder = await makeContext(

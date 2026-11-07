@@ -597,8 +597,13 @@ function scheduleRoomRefresh(roomId) {
     const targetRoomId = pendingRoomRefreshId;
     pendingRoomRefreshId = null;
     if (!targetRoomId || activeRoomId !== targetRoomId) return;
+    const epoch = roomEpoch;
     refresh(false).catch(function (error) {
-      if (isAbortError(error) || !isActiveRoom(targetRoomId, roomEpoch)) return;
+      if (isAbortError(error) || !isActiveRoom(targetRoomId, epoch)) return;
+      if (error && (error.code === 'NOT_MEMBER' || error.code === 'NOT_FOUND')) {
+        handleRoomError(error, targetRoomId, epoch);
+        return;
+      }
       statusElement.textContent = '刷新会话失败：' + (error && error.message ? error.message : error);
     });
   }, WEB_REFRESH_DEBOUNCE_MS);

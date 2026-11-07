@@ -218,9 +218,7 @@ function scheduleStreamCatchUp() {
   streamCatchUpTimer = setTimeout(function () {
     streamCatchUpTimer = null;
     if (streamStopped) return;
-    loadRooms().catch(function (error) {
-      streamDebug('catch-up list failed', error && error.message ? error.message : String(error));
-    });
+    scheduleRoomListRefresh(true);
     if (activeRoomId) {
       // 断线期间可能错过任务事件；让房间刷新重新读取任务列表。
       invalidateRoomTasks();
@@ -238,7 +236,9 @@ function scheduleRoomListRefresh(urgent) {
   if (roomListRefreshTimer) return;
   roomListRefreshTimer = setTimeout(function () {
     roomListRefreshTimer = null;
-    loadRooms().catch(function (error) {
+    Promise.resolve(roomsPromise).then(function () {
+      if (!streamStopped) return loadRooms();
+    }).catch(function (error) {
       streamDebug('list refresh failed', error && error.message ? error.message : String(error));
     });
   }, urgent ? 0 : WEB_REFRESH_DEBOUNCE_MS);
@@ -309,18 +309,20 @@ function handleStreamEventFrame(payload) {
         if (roomId && roomId === activeRoomId) refreshRoom = true;
         break;
       case 'room.created':
+      case 'room.read':
         refreshList = true;
         break;
-      case 'room.membership':
+      case 'room.membership': {
         refreshList = true;
+        const removedSelf = roomId && rawItem.change === 'removed' &&
+          selfId && rawItem.subject_id === selfId;
+        if (removedSelf) discardRoomCache(roomId);
         if (roomId && roomId === activeRoomId) {
-          if (rawItem.change === 'removed' && selfId && rawItem.subject_id === selfId) {
-            leaveRoom = true;
-          } else {
-            refreshRoom = true;
-          }
+          if (removedSelf) leaveRoom = true;
+          else refreshRoom = true;
         }
         break;
+      }
       case 'room.file':
         // 文件通知只刷新文件面板；非当前房间标脏缓存，下次打开再拉取。
         if (roomId) scheduleFilesRefresh(roomId);

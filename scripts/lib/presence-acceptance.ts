@@ -326,18 +326,19 @@ export async function runAgentPresenceAcceptance(): Promise<void> {
     );
 
     const roomBefore = await callTool<RoomGet>(human.client, 'network_room_get', { room_id: direct });
-    const meBefore = await callTool<Me>(human.client, 'network_me', {});
     await callTool(human.client, 'network_room_mark_read', {
       room_id: direct,
       through_seq: roomBefore.room.head_seq,
     });
     const roomRead = await callTool<RoomGet>(human.client, 'network_room_get', { room_id: direct });
+    // 标记已读会推进账号事件水位，之后的在线变化仍不得推进该水位。
+    const meRead = await callTool<Me>(human.client, 'network_me', {});
     const readState = {
       head: roomRead.room.head_seq,
       lastMessage: roomRead.room.last_message?.message_id ?? null,
       lastRead: roomRead.room.my_last_read_seq,
-      pending: meBefore.pending_count,
-      inboxHead: meBefore.inbox_head_seq,
+      pending: meRead.pending_count,
+      inboxHead: meRead.inbox_head_seq,
     };
 
     // 重复 login、第二条连接、关闭非最后连接都不产生新行。

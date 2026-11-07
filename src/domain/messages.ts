@@ -19,6 +19,7 @@ import {
 import {
   eventStatement,
   inboxHeadStatement,
+  inboxHeadStatementIfEvent,
   inboxTopic,
   outboxStatement,
   roomHeadStatement,
@@ -822,6 +823,8 @@ export async function roomMarkRead(
   const room = await getRoom(db, input.room_id);
   if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
 
+  const at = nowMs();
+  const eventKey = newId('room_read');
   await db.batch([
     db
       .prepare(
@@ -833,11 +836,37 @@ export async function roomMarkRead(
       .bind(room.room_id, viewer),
     db
       .prepare(
-        `UPDATE room_members
-            SET last_read_seq = MAX(last_read_seq, ?)
-          WHERE room_id = ? AND actor_id = ? AND status = 'active'`,
+        `INSERT INTO events (scope_kind, scope_id, event_type, ref_id, metadata, event_key, created_at)
+         SELECT 'inbox', ?, 'room_read', ?, ?, ?, ?
+           FROM room_members m JOIN rooms r ON r.room_id = m.room_id
+          WHERE m.room_id = ? AND m.actor_id = ? AND m.status = 'active'
+            AND m.last_read_seq < MIN(?, r.head_seq)`,
       )
-      .bind(through, room.room_id, viewer),
+      .bind(
+        viewer,
+        room.room_id,
+        JSON.stringify({ room_id: room.room_id }),
+        eventKey,
+        at,
+        room.room_id,
+        viewer,
+        through,
+      ),
+    db
+      .prepare(
+        `UPDATE room_members
+            SET last_read_seq = MIN(?, (SELECT head_seq FROM rooms WHERE room_id = ?))
+          WHERE room_id = ? AND actor_id = ? AND status = 'active'
+            AND EXISTS (SELECT 1 FROM events WHERE event_key = ?)`,
+      )
+      .bind(through, room.room_id, room.room_id, viewer, eventKey),
+    db
+      .prepare(
+        `INSERT INTO outbox (outbox_id, topic, event_seq, status, attempts, next_attempt_at, created_at)
+         SELECT ?, ?, event_seq, 'pending', 0, ?, ? FROM events WHERE event_key = ?`,
+      )
+      .bind(newId('obx'), inboxTopic(viewer), at, at, eventKey),
+    inboxHeadStatementIfEvent(db, viewer, eventKey, at, 0),
   ]);
 
   const member = await getMember(db, room.room_id, viewer);

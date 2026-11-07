@@ -304,7 +304,7 @@ function renderRooms() {
       presence.title = '离线';
       avatarWrap.append(presence);
     }
-    if (entry.my_last_read_seq !== entry.head_seq) {
+    if (Number(entry.my_last_read_seq) < Number(entry.head_seq)) {
       const dot = document.createElement('span');
       dot.className = 'unread';
       dot.setAttribute('aria-label', '未读');
@@ -331,10 +331,15 @@ function renderRooms() {
 function updateRoomEntry(roomValue, lastItem, readSucceeded) {
   const entry = roomEntries.find(function (item) { return item.room_id === roomValue.room_id; });
   if (!entry) return;
-  entry.head_seq = roomValue.head_seq;
-  entry.updated_at = roomValue.updated_at;
-  if (readSucceeded) entry.my_last_read_seq = roomValue.head_seq;
-  if (lastItem) entry.last_message = lastItem;
+  if (Number(roomValue.head_seq) >= Number(entry.head_seq)) {
+    entry.head_seq = roomValue.head_seq;
+    entry.updated_at = roomValue.updated_at;
+    if (lastItem) entry.last_message = lastItem;
+  }
+  const readThrough = readSucceeded ? roomValue.head_seq : roomValue.my_last_read_seq;
+  if (Number(readThrough) > Number(entry.my_last_read_seq)) {
+    entry.my_last_read_seq = readThrough;
+  }
   roomEntries = sortRooms(roomEntries);
   renderRooms();
 }

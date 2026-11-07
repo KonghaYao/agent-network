@@ -27,6 +27,7 @@ let sidebarScrollTop = 0;
 let room = null;
 let members = new Map();
 let nextOlder = null;
+let timelineResumeCursor = null;
 let currentItems = [];
 let olderLoading = false;
 let olderEnded = false;
@@ -150,6 +151,7 @@ function cacheRoomState(roomId, patch) {
     members: [],
     items: [],
     nextOlder: null,
+    timelineResumeCursor: null,
     olderEnded: false,
     scrollTop: 0,
     lastMessage: null
@@ -159,6 +161,7 @@ function cacheRoomState(roomId, patch) {
     if ('members' in patch) cache.members = patch.members;
     if ('items' in patch) cache.items = patch.items.slice();
     if ('nextOlder' in patch) cache.nextOlder = patch.nextOlder;
+    if ('timelineResumeCursor' in patch) cache.timelineResumeCursor = patch.timelineResumeCursor;
     if ('olderEnded' in patch) cache.olderEnded = Boolean(patch.olderEnded);
     if ('scrollTop' in patch) cache.scrollTop = patch.scrollTop;
     if ('lastMessage' in patch) cache.lastMessage = patch.lastMessage;
@@ -168,6 +171,19 @@ function cacheRoomState(roomId, patch) {
   pruneRoomCache();
 }
 
+function discardRoomCache(roomId) {
+  roomCache.delete(roomId);
+  peerDetails.delete(roomId);
+  if (roomId !== activeRoomId) return;
+  room = null;
+  currentItems = [];
+  nextOlder = null;
+  timelineResumeCursor = null;
+  olderEnded = false;
+  olderError = '';
+  updateOlderAffordance();
+}
+
 function snapshotActiveRoom() {
   if (!activeRoomId || !room) return;
   cacheRoomState(activeRoomId, {
@@ -175,6 +191,7 @@ function snapshotActiveRoom() {
     members: Array.from(members.values()),
     items: currentItems.slice(),
     nextOlder: nextOlder,
+    timelineResumeCursor: timelineResumeCursor,
     olderEnded: olderEnded,
     scrollTop: messagesElement ? messagesElement.scrollTop : 0
   });
@@ -320,6 +337,7 @@ function handleRoomError(error, roomId, epoch) {
   if (isAbortError(error) || !isActiveRoom(roomId, epoch)) return;
   const code = error && error.code;
   let message = error && error.message ? String(error.message) : String(error);
+  if (code === 'NOT_MEMBER' || code === 'NOT_FOUND') discardRoomCache(roomId);
   if (code === 'NOT_MEMBER') {
     message = '无法打开该会话：你不在会话中，或已被移出。';
   } else if (code === 'NOT_FOUND') {
@@ -343,6 +361,7 @@ function applyCachedRoom(cache) {
   // 到底状态属于房间自身：切走再切回时不能因为重新取最新页而恢复按钮。
   olderEnded = Boolean(cache.olderEnded);
   nextOlder = olderEnded ? null : (cache.nextOlder || null);
+  timelineResumeCursor = cache.timelineResumeCursor || null;
   olderLoading = false;
   olderError = '';
   updateOlderAffordance();
@@ -368,11 +387,48 @@ async function fetchLatestPage(roomId, epoch) {
   const rawItems = humanTimeline ? (page.timeline_items || []) : page.items;
   return {
     page: page,
-    items: mergeTimelineItems([], rawItems.slice().reverse()),
+    timelineResumeCursor: humanTimeline ? page.timeline_resume_cursor : null,
+    items: rawItems.slice().reverse(),
     nextOlder: humanTimeline
       ? (page.timeline_has_more ? page.timeline_next_cursor : null)
       : (page.has_more ? page.next_cursor : null)
   };
+}
+
+/**
+ * 最新页刷新已存在条目的状态。历史增量从最后一次成功应用的位置追到
+ * 本轮最新页的水位，避免离线超过一页时把中间消息跳过去。
+ */
+async function fetchRoomUpdate(roomId, epoch) {
+  const latest = await fetchLatestPage(roomId, epoch);
+  if (!latest || !timelineResumeCursor || !latest.timelineResumeCursor ||
+      timelineResumeCursor === latest.timelineResumeCursor) return latest;
+
+  const target = BigInt(latest.page.timeline_snapshot);
+  let cursor = timelineResumeCursor;
+  for (;;) {
+    const page = await callTool('network_history_list', {
+      room_id: roomId,
+      view: 'timeline',
+      direction: 'after',
+      cursor: cursor,
+      limit: 50
+    }, undefined, sessionSignal());
+    if (!isActiveRoom(roomId, epoch)) return null;
+    const items = page.timeline_items;
+    if (!Array.isArray(items) || !page.timeline_resume_cursor) {
+      throw new Error('无效的时间线补拉响应');
+    }
+    latest.items.push(...items);
+    latest.timelineResumeCursor = page.timeline_resume_cursor;
+    const last = items[items.length - 1];
+    const reachedTarget = last && BigInt(last.kind === 'presence' ? last.timeline_seq : last.created_seq) >= target;
+    if (!page.timeline_has_more || reachedTarget) return latest;
+    if (!page.timeline_next_cursor || page.timeline_next_cursor === cursor) {
+      throw new Error('时间线补拉游标未前进');
+    }
+    cursor = page.timeline_next_cursor;
+  }
 }
 
 /**
@@ -387,6 +443,7 @@ function applyLatestPage(result) {
     return !incomingKeys.has(timelineItemKey(item));
   });
   currentItems = mergeTimelineItems(currentItems, result.items);
+  timelineResumeCursor = result.timelineResumeCursor;
   // 已加载更早页时保留原游标；否则让最新页决定是否还能继续往前翻。
   // 已到底后最新页不得再写回游标，否则新消息刷新会让“加载更早”复活。
   if (olderEnded) {
@@ -500,7 +557,7 @@ async function doRefresh(roomId, epoch, forceScroll) {
   const freeze = !force && !scrollController.isPinned() && hadContent;
   let result = null;
   if (!freeze) {
-    result = await fetchLatestPage(roomId, epoch);
+    result = await fetchRoomUpdate(roomId, epoch);
     if (!result || !isActiveRoom(roomId, epoch)) return;
     // 拉取期间用户上翻：丢弃本轮页面，消息区完全冻结。
     if (!force && !scrollController.isPinned() && currentItems.length > 0) result = null;
@@ -527,6 +584,7 @@ async function doRefresh(roomId, epoch, forceScroll) {
     members: Array.from(members.values()),
     items: currentItems.slice(),
     nextOlder: nextOlder,
+    timelineResumeCursor: timelineResumeCursor,
     olderEnded: olderEnded,
     scrollTop: messagesElement ? messagesElement.scrollTop : 0,
     lastMessage: lastMessage
@@ -535,7 +593,7 @@ async function doRefresh(roomId, epoch, forceScroll) {
   // 任务列表只在进入房间/强制刷新/任务事件后读取；普通消息刷新不重复请求。
   if (force || roomTasksRoomId !== roomId) loadRoomTasks(roomId, epoch);
   // 只有仍跟随底部且实际 gap <= 80 时控制器才会真正调用 mark_read。
-  scrollController.scheduleMarkRead(roomId, epoch, room.head_seq);
+  if (result) scrollController.scheduleMarkRead(roomId, epoch, room.head_seq);
 }
 
 /**
@@ -715,6 +773,7 @@ function seedRoomCacheFromDetail(detail) {
     members: detail.members,
     items: [],
     nextOlder: null,
+    timelineResumeCursor: null,
     olderEnded: false,
     scrollTop: 0,
     lastMessage: entry.last_message || null
@@ -729,10 +788,15 @@ async function openRoom(roomId, options) {
     return;
   }
   if (activeRoomId === roomId && room && !settings.force) {
+    const epoch = roomEpoch;
     try {
       await refresh(false);
     } catch (error) {
-      if (!isAbortError(error) && isActiveRoom(roomId, roomEpoch)) {
+      if (!isAbortError(error) && isActiveRoom(roomId, epoch)) {
+        if (error && (error.code === 'NOT_MEMBER' || error.code === 'NOT_FOUND')) {
+          handleRoomError(error, roomId, epoch);
+          return;
+        }
         statusElement.textContent = '刷新失败：' + (error && error.message ? error.message : error);
       }
     }
@@ -760,6 +824,7 @@ async function openRoom(roomId, options) {
   room = null;
   members = new Map();
   nextOlder = null;
+  timelineResumeCursor = null;
   currentItems = [];
   olderLoading = false;
   olderEnded = false;
@@ -801,7 +866,9 @@ async function openRoom(roomId, options) {
     await refresh(true);
   } catch (error) {
     if (isAbortError(error) || !isActiveRoom(roomId, epoch)) return;
-    if (cache) {
+    if (error && (error.code === 'NOT_MEMBER' || error.code === 'NOT_FOUND')) {
+      handleRoomError(error, roomId, epoch);
+    } else if (cache) {
       setChatLoading(false);
       statusElement.textContent = '刷新失败：' + (error && error.message ? error.message : error);
     } else {
@@ -823,6 +890,7 @@ function closeRoomView() {
   room = null;
   members = new Map();
   nextOlder = null;
+  timelineResumeCursor = null;
   currentItems = [];
   olderLoading = false;
   olderEnded = false;

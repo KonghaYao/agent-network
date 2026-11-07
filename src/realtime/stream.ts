@@ -448,6 +448,8 @@ function inboxStreamItem(
       if (progressAt !== undefined) item.progress_at = String(progressAt);
       return item;
     }
+    case 'room_read':
+      return withLocation(baseItem(row, 'room.read', 'read', 'informational'), row, metadata);
     case 'profile_updated':
       return withLocation(
         baseItem(row, 'profile.updated', 'profile', 'informational'),
