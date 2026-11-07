@@ -12,6 +12,7 @@
     "test:protocol": "bun scripts/verify-protocol.ts",
     "test:acceptance": "bun scripts/acceptance.ts",
     "test:drive": "bun scripts/verify-drive.ts",
+    "test:m07": "bun scripts/verify-m07.ts",
     "test:events": "bun scripts/verify-events.ts",
     "test:watch-claim": "bun scripts/verify-watch-claim.ts && python3 scripts/test_codex_watch.py",
     "test:dsh-watch": "bun scripts/verify-dsh-watch.ts",

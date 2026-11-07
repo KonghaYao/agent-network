@@ -162,7 +162,9 @@ if (process.env.DRIVE_DISABLED !== '1') {
     directory: resolve(process.env.DRIVE_DIRECTORY ?? `${dataDir}/files`),
     namespace: process.env.DRIVE_NAMESPACE ?? 'agent-network',
     maxFileBytes: positiveInt(process.env.DRIVE_MAX_FILE_BYTES, 128 * 1024 * 1024),
-    ttlSeconds: positiveInt(process.env.DRIVE_TTL_SECONDS, 86400),
+    // 底层保留远长于业务 TTL：草稿 24h、普通附件 30d、成果保留至显式释放。
+    // 实际访问与清理以 drive_files/room_files 为准，载荷由维护任务回收。
+    ttlSeconds: positiveInt(process.env.DRIVE_TTL_SECONDS, 10 * 365 * 24 * 60 * 60),
   });
   await drive.fileService.ready;
   mount = drive.mount;

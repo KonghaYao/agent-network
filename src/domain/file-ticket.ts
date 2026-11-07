@@ -3,34 +3,54 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { BusinessError } from '../contracts/errors';
 
 /**
- * 房间文件下载票据。
+ * 同源文件下载票据（`/f/<fileId>?t=...`）。
  *
- * `/f/:fileId` 是浏览器 `<img>`、Range 与下载链接的入口，不能依赖
- * `Authorization` 头。绑定到房间的文件因此使用短时票据，而不是把长期
- * Bearer 放进 URL：
+ * 浏览器 `<img>`、`<video>`、Range 与下载链接不能携带 Authorization，因此
+ * 私有字节使用短时票据。票据只证明“某个身份在某个到期时间前请求过该文件”，
+ * 每次使用仍重新校验：
  *
- * - 票据只证明“某成员代次在某个到期时间前请求过该文件”，不携带消息正文；
- * - 每次使用票据仍重新检查成员是否 active、代次是否一致、当前历史策略是否
- *   允许该文件；移出、重新加入或策略收紧后旧票据立即失效；
- * - 未绑定到任何房间的上传文件没有 `room_files` 行，仍按 MCPP Files 的公开
- *   语义直接访问；私有的完整授权由 M07 收敛。
+ * - `scope: 'room'`：票据发给房间成员的某一成员代次，使用时检查成员仍 active、
+ *   代次一致、房间策略版本一致、当前历史边界仍允许该文件；移出、退群、重新
+ *   加入或策略收紧后旧票据立即失效。
+ * - `scope: 'file'`：票据发给上传身份（MCPP ownerScope），用于私有草稿、
+ *   旧公开文件收紧后的授权客户端访问，以及正式成果绑定前的预览。
  *
- * 密钥优先取部署方提供的 `FILE_TICKET_SECRET`；缺省时使用进程级随机密钥。
- * 进程重启后旧票据全部失效，这与短时票据的语义一致。
+ * 票据不携带长期 Bearer；密钥优先取部署方提供的 `FILE_TICKET_SECRET`，缺省
+ * 使用进程级随机密钥。进程重启后旧票据全部失效，与短时票据语义一致。
  */
 const DEFAULT_SECRET = randomBytes(32).toString('hex');
-const MAX_TICKET_LENGTH = 2048;
+const MAX_TICKET_LENGTH = 4096;
+
+export type FileTicketScope = 'room' | 'file';
 
 export interface FileTicketPayload {
+  fileId: string;
+  scope: FileTicketScope;
+  /** room scope 为 actor_id；file scope 为 MCPP Files 的 ownerScope。 */
+  subject: string;
+  roomId: string | null;
+  memberGeneration: number | null;
+  policyRevision: number | null;
+  expiresAt: number;
+}
+
+export interface RoomFileTicketInput {
   fileId: string;
   roomId: string;
   actorId: string;
   memberGeneration: number;
+  policyRevision: number;
+  expiresAt: number;
+}
+
+export interface PrivateFileTicketInput {
+  fileId: string;
+  ownerScope: string;
   expiresAt: number;
 }
 
 interface EncodedTicket extends FileTicketPayload {
-  v: 1;
+  v: 2;
 }
 
 export function fileTicketSecret(configured?: string): string {
@@ -40,11 +60,13 @@ export function fileTicketSecret(configured?: string): string {
 
 function signingInput(payload: FileTicketPayload): string {
   return [
-    'agent-network/file-ticket/v1',
+    'agent-network/file-ticket/v2',
+    payload.scope,
     payload.fileId,
-    payload.roomId,
-    payload.actorId,
-    String(payload.memberGeneration),
+    payload.subject,
+    payload.roomId ?? '',
+    payload.memberGeneration === null ? '' : String(payload.memberGeneration),
+    payload.policyRevision === null ? '' : String(payload.policyRevision),
     String(payload.expiresAt),
   ].join('\n');
 }
@@ -55,9 +77,33 @@ function sign(secret: string, payload: FileTicketPayload): string {
 
 /** 票据放在 query 的 `t` 参数；`download=1` 等既有参数保持原样。 */
 export function issueFileTicket(secret: string, payload: FileTicketPayload): string {
-  const body: EncodedTicket = { v: 1, ...payload };
+  const body: EncodedTicket = { v: 2, ...payload };
   const encoded = Buffer.from(JSON.stringify(body), 'utf8').toString('base64url');
   return `${encoded}.${sign(secret, payload)}`;
+}
+
+export function issueRoomFileTicket(secret: string, input: RoomFileTicketInput): string {
+  return issueFileTicket(secret, {
+    fileId: input.fileId,
+    scope: 'room',
+    subject: input.actorId,
+    roomId: input.roomId,
+    memberGeneration: input.memberGeneration,
+    policyRevision: input.policyRevision,
+    expiresAt: input.expiresAt,
+  });
+}
+
+export function issuePrivateFileTicket(secret: string, input: PrivateFileTicketInput): string {
+  return issueFileTicket(secret, {
+    fileId: input.fileId,
+    scope: 'file',
+    subject: input.ownerScope,
+    roomId: null,
+    memberGeneration: null,
+    policyRevision: null,
+    expiresAt: input.expiresAt,
+  });
 }
 
 export function appendFileTicket(url: string, ticket: string): string {
@@ -83,21 +129,35 @@ export function verifyFileTicket(
   }
   if (!parsed || typeof parsed !== 'object') return null;
   const body = parsed as Partial<EncodedTicket>;
+  if (body.v !== 2 || (body.scope !== 'room' && body.scope !== 'file')) return null;
   if (
-    body.v !== 1 ||
     typeof body.fileId !== 'string' ||
-    typeof body.roomId !== 'string' ||
-    typeof body.actorId !== 'string' ||
-    !Number.isSafeInteger(body.memberGeneration) ||
+    typeof body.subject !== 'string' ||
+    body.subject.length === 0 ||
     !Number.isSafeInteger(body.expiresAt)
+  ) {
+    return null;
+  }
+  const roomScoped = body.scope === 'room';
+  if (
+    roomScoped
+      ? typeof body.roomId !== 'string' ||
+        body.roomId.length === 0 ||
+        !Number.isSafeInteger(body.memberGeneration) ||
+        !Number.isSafeInteger(body.policyRevision)
+      : body.roomId !== null ||
+        body.memberGeneration !== null ||
+        body.policyRevision !== null
   ) {
     return null;
   }
   const payload: FileTicketPayload = {
     fileId: body.fileId,
-    roomId: body.roomId,
-    actorId: body.actorId,
-    memberGeneration: body.memberGeneration as number,
+    scope: body.scope,
+    subject: body.subject,
+    roomId: roomScoped ? (body.roomId as string) : null,
+    memberGeneration: roomScoped ? (body.memberGeneration as number) : null,
+    policyRevision: roomScoped ? (body.policyRevision as number) : null,
     expiresAt: body.expiresAt as number,
   };
   const expected = sign(secret, payload);

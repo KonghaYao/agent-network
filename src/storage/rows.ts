@@ -351,8 +351,61 @@ export interface RoomFileRow {
   /** 绑定事件序号；旧行 NULL 时回退 created_at。 */
   created_seq: number | null;
   expires_at: number;
+  /** 被有效任务/成果引用时置 1，不随 `expires_at` 清理。 */
+  retained: number;
   deleted_at: number | null;
   deleted_by: string | null;
+}
+
+/** 应用层上传登记；字节仍在 MCPP Files/FlyDrive。 */
+export interface DriveFileRow {
+  file_id: string;
+  owner_scope: string;
+  uploader_id: string | null;
+  name: string;
+  mime_type: string;
+  size: number;
+  sha256: string;
+  state: 'draft' | 'bound' | 'deleted';
+  visibility: 'private' | 'public';
+  room_id: string | null;
+  created_at: number;
+  /** NULL 表示保留中，不参与 TTL 清理。 */
+  expires_at: number | null;
+  retained: number;
+  deleted_at: number | null;
+  deleted_by: string | null;
+  purged_at: number | null;
+}
+
+/** 成果版本；每个 file_id 至多一条。 */
+export interface ArtifactRow {
+  artifact_id: string;
+  room_id: string;
+  task_id: string | null;
+  version: number;
+  file_id: string;
+  created_by: string;
+  summary: string;
+  status: 'delivered' | 'released';
+  created_at: number;
+  created_seq: number | null;
+  released_at: number | null;
+  released_by: string | null;
+}
+
+/** 任务/成果/转发/收藏对文件的保留引用。 */
+export interface FileReferenceRow {
+  reference_id: string;
+  file_id: string;
+  kind: 'task' | 'artifact' | 'forward' | 'favorite';
+  ref_id: string;
+  room_id: string | null;
+  actor_id: string;
+  state: 'active' | 'released';
+  created_at: number;
+  released_at: number | null;
+  released_by: string | null;
 }
 
 /** 每个 human 在每个房间私有的网页监控地址；无行表示未配置。 */

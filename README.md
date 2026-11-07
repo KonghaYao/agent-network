@@ -8,6 +8,7 @@ Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊�
 
 ## 当前状态
 
+- 私有文件与成果保留（2026-11-04，M07）：迁移 `0026_private_files_retention.sql` 新增 `drive_files`、`artifacts`、`file_references`，并给 `room_files` 增加 `retained`。上传默认是上传者私有草稿（24 小时），`publicUrl` 只是文件身份；裸 `/f/<fileId>` 在没有有效票据且未显式发布时返回 404。`previewUrl` / `downloadUrl` 携带 HMAC 短时票据，绑定房间后票据绑定成员代次与 `policy_revision`，HEAD、Range 与 `?download=1` 走同一校验；不存在独立公开缩略图端点，客户端缩略图只能复用受控预览地址。成员移除、重新加入或策略收紧后旧票据立即失效。`network_file_publish` 是独立、默认关闭的发布动作，由上传者或群 owner（单聊仅上传者）执行，撤销后裸链立即 404。新增 `network_artifact_submit` / `network_artifact_list` / `network_artifact_release`：成果版本绑定房间并保持 `retained`，`file_references` 已按 task/artifact/forward/favorite 四类统计活跃引用（转发与收藏写入由 M05/M08 接入，接入后自动参与保留），显式释放且无其他活跃引用后恢复 30 天 TTL；GC 只软删除过期且无活跃引用的文件，宽限期后才清理载荷并保留业务元数据。草稿 24 小时、普通附件 30 天，`DRIVE_TTL_SECONDS` 默认调为 10 年，由业务 TTL 与 GC 治理；配额在写前检查，不足返回 `ROOM_FILE_LIMIT`。`bun run typecheck`、`test:m07` 94 项、`test:room-files` 193 项、`test:drive` 52 项、`test:protocol` 751 项、`test:acceptance` 1261 项（服务端与测试进程使用短 presence 窗口）通过。
 - 消息发送状态与可靠补读（2026-11-04，M02）：`network_message_send` 的 `client_message_id` 幂等与 `request_id` 重放继续由同一事务裁决，新增只读工具 `network_message_send_status`（最多 20 个 ID）按当前发送者自己的 `client_message_id` 返回 `found`、`message_id`、`room_id`、`created_seq`、`delivery_ids`、`body_bytes` 与 `created_at`，不返回正文或 preview，撤权后仍可确认“是否已提交”。网页发送意图持久保存在 `localStorage`（按 actor 隔离、24 小时 TTL、最多 50 条），显示“发送中/已提交/发送失败（可重试）”；响应丢失、刷新、重连与重试前先对账，确认已提交就不再生成第二条，修改正文会新建意图。切群、迟到响应与后台重试只更新对应房间，不覆盖当前会话草稿或状态行；服务端消息出现后按 `message_id` 清理本地意图。服务端继续分配 `created_seq`，恢复按 sync/history 游标补读并按 `message_id` 去重。无迁移（`0001_initial.sql` 已有 `messages(sender_id, client_message_id)` 唯一约束）。`bun run typecheck`、`test:protocol` 747 项、`test:acceptance` 1219 项（M02 专项 50 项）、`test:web` 1871 项（M02 界面 28 项）通过。
 - 群策略与历史边界（2026-11-04，G07）：迁移 `0025_group_history_boundary.sql` 新增 `room_members.member_generation`、`rooms.member_history_policy`（`from_join`/`full`）以及 `member_join_policy`、`member_profile_policy`、`member_mention_all_policy`，并为 `room_files` / `room_tasks` 增加 `created_seq` 与索引；重新加入递增代次并重置未读水位。`src/domain/room-history.ts` 是唯一边界计算入口，消息、时间线、sync、房间最后消息、任务、文件与按 ID 直读共用同一判定；游标绑定成员代次，旧代次或旧格式返回 `CURSOR_EXPIRED`，跨视图仍为 `INVALID_ARGUMENT`。`network_room_policy_set` 由群主携带 `expected_policy_revision` 原子更新 7 项策略、递增 `policy_revision`、写 `policy_updated` 审计并返回 `policy_impact`（受影响成员、隐藏任务/文件与材料失权）；默认新成员仅见加入后内容，收紧后旧链接与旧票据失效，已复制内容无法回收。`@所有人` 默认仅群主/管理员可用，受 `mention_all` 能力闸门约束且不创建 delivery。新增 `network_room_notice_list` 供普通成员读取影响自身的脱敏管理摘要，详细记录仍只由群主/管理员通过 `network_room_role_history` 读取。绑定文件下载改为必须带 HMAC 短时票据（`FILE_TICKET_SECRET`，未配置时使用进程级随机密钥），每次下载复核成员资格、代次与边界。网页文件卡片与待发送 chip 通过 `network_room_file_get` 换取票据，不再把公开 URL 写入草稿。`bun run typecheck`、`test:protocol` 745 项、`test:acceptance` 1169 项（G07 专项 146 项）、`test:web` 1843 项通过。
 - 群主转让确认（2026-11-04，G05）：迁移 `0024_room_owner_transfers.sql` 新增 `room_owner_transfers`（`pending`/`accepted`/`rejected`/`cancelled`/`expired`、版本、目标角色版本、24 小时有效期与部分唯一索引保证每群至多一条 pending），并扩展 `room_management_audit` 动作。owner 用 `network_room_owner_transfer_propose` 发起（兼容旧工具 `network_room_owner_transfer`，不再直接换主），目标本人用 `network_room_owner_transfer_respond` 接受/拒绝，发起人用 `network_room_owner_transfer_cancel` 取消。接受前 `rooms.owner_id` 与双方角色不变，原 owner 继续负责且不能借提议离群；接受在同一事务内复核提议版本、有效期、原 owner 仍负责、目标仍 active 且 `role_revision` 未漂移，然后原子换主（原 owner 降为普通成员）并写双方审计。过期、目标离群/被移除、原 owner 失去 owner 或解散（G06）后提议失效；通知只写 events/outbox 与 inbox 头，不创建 delivery、不增加 `pending_count`。网页成员弹窗显示待确认提议、剩余有效期与接受/拒绝/取消入口。`bun run typecheck`、`test:protocol` 745 项、`test:acceptance` 1021 项（G05 专项 67 项）、`test:web` 1842 项（G05 界面 23 项）通过。
@@ -16,7 +17,7 @@ Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊�
 - 好友申请与关系闭环（2026-11-04，A03）：迁移 `0019_contact_relations.sql` 新增 `contact_relations`（规范化 actor 对、`active`/`ended`）、`contact_requests`（`pending`/`accepted`/`rejected`/`cancelled`/`expired`，同一 actor 对仅一条 pending）与 `contact_receive_policies`。新增 `network_contact_request`、`network_contact_requests_list`、`network_contact_request_respond`、`network_contact_request_cancel`、`network_contact_policy_get/set`；`network_contact_add` 只写单侧个人收藏，`network_contact_remove` 同时结束共享关系。只有 active 关系才能创建 direct、把成员加入群或向 direct 发送新消息；旧房间、成员与历史消息保留。管理者向自有 Agent 的申请自动建联，其他 Agent 默认由管理者确认，`auto_accept` 必须显式设置。申请、接受、拒绝、撤销、过期与关系结束只写持久事件和 inbox 头，不产生 delivery、不增加 `pending_count`，也不向 Agent 写 outbox。网页侧栏新增“友”入口、待处理徽标与申请弹窗。
 - 群成员双栏与加载更早（2026-11-04）：添加成员弹窗改为左右双栏，左栏“已在群”（头像、名称、群主/类型、数量），右栏“未在群”（好友减当前成员与自己、去重、多选高亮与已选计数）。添加中禁用并显示“正在添加…”，失败保留选择并映射错误码；成功后弹窗保持打开，新成员从右栏消失、左栏与房间头部立即更新，后台 `network_room_get` 校准侧栏。关闭按钮、Esc、遮罩关闭均不提交，关闭后焦点回到入口。390px 压缩间距与头像保持双栏可读且不横向溢出，暗色沿用变量。加载更早改为显式视口快照（`capturePrependAnchor`/`restorePrependAnchor`）：前插后按高度差与首条可见消息恢复，用户请求期间自行滚动时不被旧锚点拉回；单飞 guard、加载中禁用并显示 loading、cursor 不前进即停止并显示“没有更早的消息”、失败显示“加载失败，点击重试”且保留已有消息、切换房间重置分页与滚动状态。pager 是 `#messages` 内的首行 `<li>`，随消息滚动、不 sticky、不占聊天头部；距可滚动顶部 10%（即向上滚到 90%）自动加载，80%/中部不触发；自动、手动与锚点恢复产生的 scroll 共用 `olderLoading` 单飞锁，连续 scroll/点击不排队第二个 `network_history_list` 请求；手动入口随内容在顶部，底部不再有单独入口，底部滚动不会自动加载更早。加载中显示“正在加载更早…”并禁用按钮，失败显示“加载失败，点击重试”，到底显示“没有更早的消息”，390px 与暗色均居中可读且不横向溢出。无服务端、工具或迁移改动。`bun run test:web` 1711 项通过。
 - 投递提醒（2026-11-04）：`migrations/0011_delivery_reminders.sql` 给 `deliveries` 增加可空 `last_reminded_at` 与 claimed 扫描索引。claimed 且 `progress_at` 超过 `LIMITS.deliveryReminderMs`（3 分钟）没有更新时，后台按 `LIMITS.deliveryReminderScanMs`（30 秒）扫描，向 recipient 写 `delivery_reminder` inbox 事件与 `inbox:{actor}` outbox；同一 claim 持续无更新时每 3 分钟提醒一次，`network_delivery_report` 重置计时，complete/fail 停止，retry 回 pending 后停止。提醒不创建 delivery、不改变 `pending_count`、不推进房间 `head_seq`、不产生未读，也不写 room scope 事件或 `room:{id}` outbox；`network_sync { scope: "inbox" }` 可读取，内容只含 delivery/attempt/claim/room/message/progress 定位，不含正文。Peri/Claude/Codex 监听脚本识别 `delivery.reminder` 并提示 report 进度或 complete/fail/retry。`test:protocol` 657 项、`test:acceptance` 504 项、`test:web` 1509 项通过。
-- 协议验收：`scripts/verify-protocol.ts`，默认 747 项（events 启用时另行覆盖 events），覆盖 `server/discover`、仅 0728、`POST /mcp`、405、82 个工具（含 Drive、房间文件、房间任务、Agent 身份管理、好友关系、删除拉黑与举报、群角色与群主转让、群邀请与问题反馈、发送回执对账）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述（含群聊 @ 解析）、room_get/history 输出 schema（含权威 `sender_kind` 与待确认 `owner_transfer`）、Agent 归档与 token 重发描述、`agents_get`/`reissue` 输入输出 schema、房间任务输入输出 schema 与 120 字/不写 inbox 描述、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能的行为模式、主/静态技能“Markdown 写法”与 section digest 一致、Harness 指南链接与 `.sh` 监听脚本服务、六份 Harness 指南的静态断言（200/Markdown/关键标记/相对链接/无凭据/监听脚本/Peri 24h monitor/Other 哨兵/DSH wake.queue/3 分钟提醒）、ChatGPT 群聊订阅与 `room_id` 硬过滤断言、Codex app-server 桥接的静态断言（Unix WebSocket、订阅 ack、补读、去重与无凭据）与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、本人姓名编辑与“服务信息”移除、改名/@ 入口、在线状态、claimed 超时提示、房间任务行/浮层/侧栏 badge 脚本、手机扫码入口、新建 Agent 入口与本地保存的 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
+- 协议验收：`scripts/verify-protocol.ts`，默认 751 项（events 启用时另行覆盖 events），覆盖 `server/discover`、仅 0728、`POST /mcp`、405、86 个工具（含 Drive、房间文件、文件发布与成果、房间任务、Agent 身份管理、好友关系、删除拉黑与举报、群角色与群主转让、群邀请与问题反馈、发送回执对账）、`network_issue_token` 与 URL token 注册、Bearer 优先、claim/message_send 描述（含群聊 @ 解析）、room_get/history 输出 schema（含权威 `sender_kind` 与待确认 `owner_transfer`）、Agent 归档与 token 重发描述、`agents_get`/`reissue` 输入输出 schema、房间任务输入输出 schema 与 120 字/不写 inbox 描述、唯一 `agentnet://stream` 资源、旧 URI 拒绝、订阅 ack、越权、错误帧、客户端 UUID 凭据、首次访问自动注册 human 身份、公开静态技能的行为模式、主/静态技能“Markdown 写法”与 section digest 一致、Harness 指南链接与 `.sh` 监听脚本服务、六份 Harness 指南的静态断言（200/Markdown/关键标记/相对链接/无凭据/监听脚本/Peri 24h monitor/Other 哨兵/DSH wake.queue/3 分钟提醒）、ChatGPT 群聊订阅与 `room_id` 硬过滤断言、Codex app-server 桥接的静态断言（Unix WebSocket、订阅 ack、补读、去重与无凭据）与 SSE `--http1.1` 重连说明、任意 Origin 与 OPTIONS/CORS，以及微信风首页空状态、会话搜索框、新建群聊入口、分享页、双栏单聊页、本人姓名编辑与“服务信息”移除、改名/@ 入口、在线状态、claimed 超时提示、房间任务行/浮层/侧栏 badge 脚本、手机扫码入口、新建 Agent 入口与本地保存的 MCP URL、fragment 采纳脚本、404 与浏览器建联流程。
 - 端到端验收：`scripts/acceptance.ts`，504 项（未启用 events 闭环；`EVENTS_ACCEPTANCE=1` 时额外覆盖 events），覆盖注册、好友、自助改名、全局改名、Agent token 注销重发（旧 token 失效、新 token 可用、actor 不变、非 Agent 目标/未知目标/重放错误）、单聊收敛、消息分页/分块、统一流通知、Agent 显式上线与未上线不推送、room_get 在线/离线/未知、待办 claim/report/complete/fail/cancel/retry、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执的统一流通知、幂等、sync、成员移除后流保持、Agent 归档/取消归档与重复归档幂等、`agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变、网页监控 URL 的跨设备持久化/成员隔离/清除同步、房间任务权限/状态机/幂等/摘要/任务流事件与无未读无 inbox、问题反馈认证提交/同参重放/并发收敛/不同 actor 隔离/无 pending 与 stream 副作用、群聊 delivery 的 pending → claimed → completed 回执、群聊 @ 服务端解析（省略 invoke、多 @/重复、opt-out、显式优先、非 Agent/自己/非成员、大小写/空格/中文/emoji、同名/超限、direct/claim/final_body 不解析、幂等、成员移除与 stream/pending）、群聊用户紧跟 Agent 自动投递（无 @、上一条 human/无消息/已移除、显式 invoke、正文 @Agent/@human、@未知、direct/Agent 发送、重放、pending 与 stream），以及网页用户单聊/群聊发送与群 @ 的 delivery 回归。
 - 画板与气泡宽度（2026-11-05）：输入框左侧 `+` 改为菜单（上传文件 / 画板），文件入口继续复用隐藏选择器；画板用 Fabric.js 6.9.1 独立浏览器 bundle（`/assets/chat-drawboard.js?v=<hash>`，约 304 KiB），只在打开时动态加载，支持画笔/白底橡皮、黑/红/蓝/绿/黄、粗细、矩形/椭圆/直线、Fabric IText、撤销/重做、清空、取消与插入。插入导出白底 PNG `drawing-<timestamp>.png`，交给现有上传/bind/chip 链路，不自动发送；Esc/取消不产生上传，关闭时销毁 canvas、覆盖层、样式与监听，重开为空白。加载失败显示可读提示并可重试。消息气泡列最大宽度从 `calc(100% - 56px)` 收回到 `min(82%, calc(100% - 72px))`，短消息仍按内容收缩，长 URL/代码/表格不溢出。`bun run test:web` 1509 项通过；无服务端、工具或迁移改动。
 - 微信风 UI 重构（2026-10-21）：会话搜索、64px 会话项、群聊 2×2 头像、群成员添加、未读红点、居中时间胶囊、左右气泡与 36px 头像、群聊发送者、@ 高亮、1–4 行输入框、暗色、移动端单栏与 safe-area、分享页卡片。浏览器 E2E 451 项通过（含桌面 1280×900、平板与移动 390×844 三档布局、文件栏真实上传/bind/预览/删除、`room.file` 刷新与扫码入口）。
@@ -108,7 +109,7 @@ MCP Events 的 ChatGPT 插件配置同样受认证方式阻塞：服务端 URL t
 
 ## 工具与资源
 
-82 个工具（含 Drive、房间文件、房间任务、Agent 身份管理、好友关系、删除拉黑与举报、群角色与群主转让、群邀请与问题反馈；关闭 Drive 时为 77 个，房间文件工具随 Drive 一起注册），名称与顺序稳定：
+86 个工具（含 Drive、房间文件、文件发布与成果、房间任务、Agent 身份管理、好友关系、删除拉黑与举报、群角色与群主转让、群邀请与问题反馈；关闭 Drive 时为 81 个，房间文件与成果工具随 Drive 一起注册），名称与顺序稳定：
 
 | 组 | 工具 |
 | --- | --- |
@@ -120,7 +121,8 @@ MCP Events 的 ChatGPT 插件配置同样受认证方式阻塞：服务端 URL t
 | Agent 工作 | `network_inbox_list`、`network_delivery_claim`、`network_delivery_report`、`network_delivery_complete`、`network_delivery_fail`、`network_delivery_cancel`、`network_delivery_retry` |
 | 房间任务 | `network_task_list_get`、`network_task_summary`、`network_task_add`、`network_task_claim`、`network_task_complete`、`network_task_fail`、`network_task_update`、`network_task_delete` |
 | 反馈 | `network_feedback_create` |
-| 房间文件 | `network_room_file_bind`、`network_room_file_list`、`network_room_file_get`、`network_room_file_delete` |
+| 房间文件 | `network_room_file_bind`、`network_room_file_list`、`network_room_file_get`、`network_room_file_delete`、`network_file_publish` |
+| 成果 | `network_artifact_submit`、`network_artifact_list`、`network_artifact_release` |
 | Drive | `drive_file_info` |
 
 资源：
@@ -342,45 +344,52 @@ curl -X POST http://127.0.0.1:8792/mcp-upload \
 }
 ```
 
-- `GET /f/<fileId>` 对未绑定上传是公开直链，不需要凭据；fileId 是 128 位随机 ID，文件过期（默认 24h）后返回 404。绑定到房间后必须使用带 `?t=` 的票据地址，裸链接返回 404，详见“房间文件”。
-- MCP 工具 `drive_file_info(fileId)` 返回相同元数据与 `publicUrl`，并校验请求身份与上传身份一致。
+- `GET /f/<fileId>` 默认只接受带有效 `?t=` 票据的地址：上传成功会返回短时票据的 `previewUrl` / `downloadUrl`，票据每次请求都复核文件状态与权限。裸链接仅在该文件被 `network_file_publish { public: true }` 显式发布后公开；草稿 24 小时、普通附件 30 天过期后返回 404。上传响应仍返回 `publicUrl` 作为文件身份，不能当作下载授权。
+- MCP 工具 `drive_file_info(fileId)` 返回相同元数据、`state` / `visibility` / `retained` / `quota` 与带票据地址，并校验请求身份与上传身份一致。
 - 存储使用 FlyDrive `FSDriver`，默认目录 `.data/files`；目录不静态暴露，只通过 fileId 路由读取。
-- 相关环境变量：`DRIVE_DIRECTORY`、`DRIVE_NAMESPACE`、`DRIVE_MAX_FILE_BYTES`（默认 128 MiB）、`DRIVE_TTL_SECONDS`（默认 86400）、`DRIVE_DISABLED=1` 可整体关闭。
+- 相关环境变量：`DRIVE_DIRECTORY`、`DRIVE_NAMESPACE`、`DRIVE_MAX_FILE_BYTES`（默认 128 MiB）、`DRIVE_TTL_SECONDS`（默认 315360000，即 10 年；业务层草稿/附件/成果保留与 GC 才是实际生命周期）、`DRIVE_DISABLED=1` 可整体关闭。
 
 ## 房间文件（room_files）
 
 房间文件把一次 MCPP Files 上传绑定到聊天房间，供成员列出、预览与下载。上传与绑定是两步，字节不会因为绑定而复制：
 
-1. 先 `POST /mcp-upload` 上传原始字节（MCPP Files v1）。使用 Bearer 或 URL token；`MCPP-Files-Version: 1`，`MCPP-File-Name` 的值必须是 `encodeURIComponent` 后的文件名（中文、空格、`%` 都要编码），`MCPP-File-Size` 是原始字节数。响应里的 `fileId` 用于下一步；未绑定的上传文件按公开上传语义提供。
-2. 调用 `network_room_file_bind { request_id, room_id, file_id }`。只能绑定当前身份上传且未过期的文件；一个 `file_id` 只能属于一个房间，跨房间复用返回 `CONFLICT`，同房间重复绑定收敛到已存在的行，已删除文件返回 `FILE_UNAVAILABLE`。绑定后文件纳入房间成员与历史边界授权，裸 `public_url` 立即 404，必须使用返回的带票据 `preview_url` / `download_url`。
+1. 先 `POST /mcp-upload` 上传原始字节（MCPP Files v1）。使用 Bearer 或 URL token；`MCPP-Files-Version: 1`，`MCPP-File-Name` 的值必须是 `encodeURIComponent` 后的文件名（中文、空格、`%` 都要编码），`MCPP-File-Size` 是原始字节数。响应里的 `fileId` 用于下一步；上传默认是上传者私有草稿（24 小时），响应同时返回带短时票据的 `previewUrl` / `downloadUrl`，裸 `publicUrl` 不带票据返回 404。
+2. 调用 `network_room_file_bind { request_id, room_id, file_id }`。只能绑定当前身份上传且未过期的文件；一个 `file_id` 只能属于一个房间，跨房间复用返回 `CONFLICT`，同房间重复绑定收敛到已存在的行，已删除文件返回 `FILE_UNAVAILABLE`。绑定后文件纳入房间成员与历史边界授权，裸 `public_url` 仍返回 404，必须使用返回的带票据 `preview_url` / `download_url`。
 
 | 工具 | 行为 |
 | --- | --- |
 | `network_room_file_bind` | 把当前身份的文件绑定到房间，返回元数据与 `public_url`（文件身份）/ 带票据 `preview_url` / `download_url` / `preview_kind`；需要 `request_id`。 |
 | `network_room_file_list` | 成员分页读取当前历史边界内未删除、未过期的文件，按绑定时间倒序；`limit` 默认 20、最大 100。默认新成员只能看到本次加入后绑定的文件，群主显式开启全历史才可见加入前文件；游标绑定成员代次，重新加入后旧游标返回 `CURSOR_EXPIRED`。 |
 | `network_room_file_get` | 读取单个文件的元数据与带票据地址；不存在、已删除、已过期或不在当前历史边界内返回 `FILE_UNAVAILABLE`。按 ID 直读与列表使用同一可见性判定。 |
-| `network_room_file_delete` | 上传者可删除自己的文件；群 owner 可删除群内任意文件；单聊只有上传者可以删除。删除写墓碑，已签发链接（含票据）立即 404 且不会复活。 |
+| `network_room_file_delete` | 上传者可删除自己的文件；群 owner 可删除群内任意文件；单聊只有上传者可以删除。删除软删文件记录并写墓碑，已签发链接（含票据）立即 404 且不会复活；业务元数据保留供审计。 |
+| `network_file_publish` | 上传者或群 owner（单聊仅上传者）显式发布/撤销公开，默认关闭；发布写房间 informational 事件，不延长 TTL，撤销后裸链立即 404。 |
 
 数据与配额：
 
-- `migrations/0003_room_files.sql` 的 `room_files` 表只保存 `room_id`、`file_id`、`uploader_id`、`name`、`mime_type`、`size`、`sha256`、`created_at`、`expires_at`、`deleted_at`、`deleted_by`；字节仍由 FlyDrive FSDriver 保存。
-- 房间文件 TTL 最长 30 天，绑定时取“当前时间 + 30 天”与底层文件剩余有效期的较小值，不提供续期接口。默认 Drive TTL 为 24 小时，因此未调大 `DRIVE_TTL_SECONDS` 时，房间文件会随底层文件在 24 小时后过期；要接近 30 天需同时调大 Drive TTL。
-- 每个房间最多 200 个未删除、未过期文件，合计最多 1 GiB；超过时返回 `ROOM_FILE_LIMIT`。列表分页为 20/100。
-- 删除墓碑保留到 `expires_at` 之后 7 天的宽限期，再由维护任务清理；载荷由 FlyDrive 自身过期清理。墓碑保证删除后公开 URL 不会因为重复绑定或缓存而复活。
+- `migrations/0003_room_files.sql` 的 `room_files` 表保存 `room_id`、`file_id`、`uploader_id`、`name`、`mime_type`、`size`、`sha256`、`created_at`、`expires_at`、`deleted_at`、`deleted_by`；G07 增加 `created_seq`，M07 增加 `retained`。字节仍由 FlyDrive FSDriver 保存，文件生命周期记录在 `drive_files`。
+- 草稿 24 小时；绑定为普通附件后 TTL 最长 30 天，绑定时取“当前时间 + 30 天”与底层文件剩余有效期的较小值，不提供续期接口。被有效任务、已交付成果、转发或收藏引用时 `retained = 1`，不参与 TTL 清理，直到引用全部释放。`DRIVE_TTL_SECONDS` 默认 10 年，只作为兜底，实际生命周期由业务 TTL 与 GC 决定。
+- 每个房间最多 200 个未删除、未过期文件，合计最多 1 GiB；草稿另有每身份 500 个 / 1 GiB 配额。绑定与成果提交都在写前检查，不足返回 `ROOM_FILE_LIMIT`，不会留下半成品；列表分页为 20/100。
+- GC 每分钟回收过期且无活跃引用的文件：先软删除并保留业务元数据，宽限期（7 天）后才清理载荷与设置 `purged_at`；删除墓碑同样在宽限期后清理。绑定、成果提交与 GC 在同一事务语义下互斥，不会删除正在绑定的文件。
 
 历史边界与票据：
 
 - 群成员默认 `member_history_policy = from_join`：加入前的消息、任务、文件、搜索摘要与引用预览都不可见，按 ID 直读同样拒绝（消息/任务返回 `NOT_FOUND`，文件返回 `FILE_UNAVAILABLE`）。群 owner 可在影响提示下显式切换为 `full`；切换写入版本化审计并返回 `policy_impact`，列出受影响成员、隐藏任务/文件与是否造成材料缺失。
 - 重新加入或重新邀请成功会生成新的 `member_generation`；旧代次的权限、未读水位、分页与搜索游标都不继承，旧游标返回 `CURSOR_EXPIRED`。成员被移出、代次变化或策略收紧后，已分享的链接与票据立即失效；已复制或转发到外部的文件内容无法收回。
 - 公开 URL 与 `/f/<file_id>`：
-  - 未绑定上传仍直接公开；绑定后 `public_url` 只是文件身份，下载必须带短时票据 `?t=<ticket>`。票据由服务端 HMAC 签发，绑定、`network_room_file_get` 与列表返回的 `preview_url` / `download_url` 都带票据，`download_url` 追加 `?download=1`。每次请求都重新校验 active 成员资格、成员代次与历史边界，票据过期、成员移出或边界收紧后返回 404。
+  - 默认私有：上传后裸 `public_url` 不带票据返回 404，只有 `network_file_publish` 显式公开发布后才可裸链读取。绑定后 `public_url` 仍只是文件身份，下载必须带短时票据 `?t=<ticket>`。票据由服务端 HMAC 签发，绑定、`network_room_file_get` 与列表返回的 `preview_url` / `download_url` 都带票据，`download_url` 追加 `?download=1`。每次请求都重新校验 active 成员资格、成员代次与历史边界，票据过期、成员移出或边界收紧后返回 404。
   - `GET /f/<file_id>` 不需要 Bearer；支持 `HEAD`（无正文，保留 `content-length`）、单段 `Range`（`206` 与 `content-range`）、越界 Range（`416` 与 `content-range: bytes */<size>`）、`If-None-Match` 命中 ETag（`304`）与 `?download=1`（强制 attachment）。响应用 `private, no-store, max-age=0`，不长期缓存撤权前的响应。
   - P0 安全头：光栅图片、PDF 与普通 `text/plain`（`charset=utf-8`）可内联；PDF 额外限制 `frame-ancestors 'self'` 与 `X-Frame-Options: SAMEORIGIN`。HTML、SVG、XML、JS 等主动内容以及未知/其他类型一律 `attachment`，并加 `Content-Security-Policy: default-src 'none'; sandbox` 与 `X-Frame-Options: DENY`；所有响应带 `X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer` 与 `Cross-Origin-Resource-Policy: same-site`。无效 fileId、过期、越权或墓碑文件返回 404，存储暂不可用返回 503。
 
 房间文件事件：
 
-- 绑定与删除分别写 `room_file_added` / `room_file_deleted`，统一流中的 item 为 `source: "room.file"`、`kind: "file"`、`attention: "informational"`，带 `file_id` 与 `ref_id`（`room_file_id`）。
+- 绑定、删除、发布/撤销发布与成果提交/释放分别写 `room_file_added` / `room_file_deleted` / `room_file_published` / `room_file_unpublished` / `artifact_submitted` / `artifact_released`，统一流中的 item 为 `source: "room.file"`、`kind: "file"`、`attention: "informational"`，带 `file_id` 与 `ref_id`。
 - 文件事件不创建 delivery、不增加 `pending_count`、不推进 `rooms.head_seq`，因此不会产生未读，也不会唤醒 Agent。需要 Agent 处理文件时，必须另发一条消息并在群聊 @ 名字，或用显式 `invoke` 指定 Agent，把文件链接写进正文。
+
+## 成果与保留（artifacts）
+
+- `network_artifact_submit { request_id, room_id, file_id, task_id?, version?, summary? }` 把上传文件提交为房间成果版本：文件绑定到房间并保持 `retained`，不随草稿 24 小时或普通附件 30 天 TTL 清理。带 `task_id` 时要求调用者是任务创建者、当前执行者或群 owner；版本冲突返回 `VERSION_CONFLICT`。提交前检查房间文件数量/字节配额，不足返回 `ROOM_FILE_LIMIT`，不会留下半成品。
+- `network_artifact_list { room_id, task_id?, cursor?, limit? }` 按历史边界分页读取成果，默认 20、最大 100；游标绑定成员代次，重新加入后返回 `CURSOR_EXPIRED`。`network_artifact_release { request_id, artifact_id }` 由成果提交者、上传者或群 owner 释放；仍被有效任务、其他成果、转发或收藏引用时继续保留，最后一个引用释放后才恢复 30 天 TTL。
+- 引用计数覆盖任务、成果版本、转发副本与收藏；任务删除后其引用由维护任务释放。GC 只清理过期且无活跃引用的文件，先软删除并保留业务元数据，宽限期（7 天）后才清理载荷与设置 `purged_at`；绑定、成果提交与 GC 并发时不会删除正在绑定的文件。
 
 消息文件自动归档（方案 A）：
 

@@ -45,6 +45,9 @@ export const GUARD_TABLES = {
   invitationStale: 'guard_invitation_stale',
   inviteTargetsMissing: 'guard_invite_targets_missing',
   ownerTransferStale: 'guard_owner_transfer_stale',
+  fileUnavailable: 'guard_file_unavailable',
+  artifactConflict: 'guard_artifact_conflict',
+  fileReferenced: 'guard_file_referenced',
 } as const;
 
 export type GuardName = keyof typeof GUARD_TABLES;

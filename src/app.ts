@@ -8,7 +8,7 @@ import { LIMITS } from './contracts/limits';
 import { isBusinessError, type BusinessErrorBody } from './contracts/errors';
 import { attachPublicUrl, publicFileHeaders } from './drive/service';
 import { fileTicketSecret } from './domain/file-ticket';
-import { authorizeRoomFileDownload } from './domain/room-files';
+import { authorizeFileDownload } from './domain/file-access';
 import {
   asRecord,
   callbackHostOf,
@@ -745,23 +745,24 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     ),
   );
 
-  // 公开下载：未绑定房间的文件按公开语义提供；已绑定房间的文件必须携带
-  // 短时票据 `?t=`，并在每次使用时复核成员资格、代次与历史边界。
+  // 私有下载：新上传默认私有草稿；绑定房间后必须携带房间票据并在每次使用时
+  // 复核成员资格、代次、策略版本与历史边界；公开链接只在显式发布后生效。
   app.get('/f/:fileId', async (c) => {
     const fileId = c.req.param('fileId');
     if (!FILE_ID.test(fileId) || !env.FILES) return c.text('Not Found', 404);
     try {
       const now = Date.now();
-      const access = await authorizeRoomFileDownload(
+      const record = await env.FILES.readRecord(fileId);
+      if (!record || Date.parse(record.expiresAt) <= now) return c.text('Not Found', 404);
+      const access = await authorizeFileDownload(
         env.DB,
         fileId,
+        record.ownerScope,
         c.req.query('t') ?? null,
         fileTicketSecret(env.FILE_TICKET_SECRET),
         now,
       );
       if (access === null) return c.text('Not Found', 404);
-      const record = await env.FILES.readRecord(fileId);
-      if (!record || Date.parse(record.expiresAt) <= now) return c.text('Not Found', 404);
 
       const headers = new Headers(
         publicFileHeaders(record, {
@@ -834,8 +835,18 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     if (preflight) return preflight;
     const prepared = prepareUploadRequest(request);
     try {
+      const principal = await authenticate(env.DB, prepared.request).catch(() => null);
       const response = await deps.mount.fetchUpload(prepared.request);
-      return withCors(prepared.origin, await attachPublicUrl(response, env.PUBLIC_ORIGIN));
+      return withCors(
+        prepared.origin,
+        await attachPublicUrl(response, {
+          publicOrigin: env.PUBLIC_ORIGIN,
+          db: env.DB,
+          fileService: env.FILES!,
+          ticketSecret: fileTicketSecret(env.FILE_TICKET_SECRET),
+          uploaderId: principal?.actor?.actor_id ?? null,
+        }),
+      );
     } catch (error) {
       console.error('agent-network upload failed', error);
       throw error;

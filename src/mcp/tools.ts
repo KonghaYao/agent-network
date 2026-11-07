@@ -1150,7 +1150,7 @@ export function registerTools(
   register(
     server,
     'network_message_send',
-    '向房间发送消息。群聊省略 invoke 时服务端按正文 @名字 解析当前 active Agent 成员并创建 delivery；用户在群聊未 @ 且紧邻上一条来自 active Agent 时自动投递该 Agent；显式 invoke 优先且不再解析正文；invoke: [] 表示显式不投递；带 claim 的回复不自动解析。claim 参数只把回复挂到当前领取，不改变投递状态；回复不等于完成。正文可直接发送 POST /mcp-upload 上传响应的 publicUrl 供群友下载，未绑定的文件保持公开；文件进入房间文件列表并绑定后必须改用 network_room_file_bind / network_room_file_get / network_room_file_list 返回的带票据 preview_url / download_url，裸 public_url 立即 404。本地路径、file:// 或未授权外链不能保证群友可访问。正文中的同源 /f/<fileId> 会 best-effort 自动绑定，但不要依赖它代替显式绑定；已复制或转发的内容无法收回。',
+    '向房间发送消息。群聊省略 invoke 时服务端按正文 @名字 解析当前 active Agent 成员并创建 delivery；用户在群聊未 @ 且紧邻上一条来自 active Agent 时自动投递该 Agent；显式 invoke 优先且不再解析正文；invoke: [] 表示显式不投递；带 claim 的回复不自动解析。claim 参数只把回复挂到当前领取，不改变投递状态；回复不等于完成。正文可发送 POST /mcp-upload 上传响应中的 publicUrl；上传默认是上传者私有草稿，裸 publicUrl 返回 404，只有 network_file_publish 显式公开后才可裸链读取。同源 /f/<fileId> 在发送后会 best-effort 绑定到当前房间并进入房间文件列表，绑定后改用 network_room_file_bind / network_room_file_get / network_room_file_list 返回的带票据 preview_url / download_url，不要依赖自动绑定代替显式绑定。本地路径、file:// 或未授权外链不能保证群友可访问。正文中的同源 /f/<fileId> 会 best-effort 自动绑定，但不要依赖它代替显式绑定；已复制或转发的内容无法收回。',
     messageSendSchema,
     sendResultSchema,
     async (input) => {

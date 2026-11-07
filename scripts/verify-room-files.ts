@@ -38,8 +38,13 @@ import {
   type McpConnection,
   type UploadedTestFile,
 } from './lib/harness';
-import { befriend, registerIdentity, sendMessage, type RoomDetail } from './lib/acceptance-helpers';
-import { runAutoArchiveCases, runFileLinkParserCases } from './lib/room-file-archive';
+import {
+  acceptGroupInvites,
+  befriend,
+  registerIdentity,
+  sendMessage,
+  type RoomDetail,
+} from './lib/acceptance-helpers';import { runAutoArchiveCases, runFileLinkParserCases } from './lib/room-file-archive';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META = 'io.agent-network/event';
@@ -59,6 +64,7 @@ interface RoomFileView {
   uploader_id: string;
   uploader_name: string;
   can_delete: boolean;
+  retained: boolean;
   created_at: string;
   expires_at: string;
 }
@@ -415,6 +421,19 @@ async function main(): Promise<void> {
     const cleanupRoom = await createGroup(aConn, b.actor_id, '房间文件清理群');
     const archiveRoom = await createGroup(aConn, b.actor_id, '消息文件自动归档群');
     const archiveSecondRoom = await createGroup(aConn, b.actor_id, '消息文件自动归档二群');
+    for (const created of [
+      roomId,
+      conflictRoom,
+      pageRoom,
+      quotaRoom,
+      byteRoom,
+      expiryRoom,
+      cleanupRoom,
+      archiveRoom,
+      archiveSecondRoom,
+    ]) {
+      await acceptGroupInvites(bConn, created);
+    }
 
     const textBody = 'room file payload';
     const uploaded = await uploadTestFile(aConn.token, {
@@ -424,7 +443,9 @@ async function main(): Promise<void> {
     });
 
     const baseline = await fetch(uploaded.publicUrl);
-    checkEqual('未绑定的普通文件仍可公开下载', baseline.status, 200);
+    checkEqual('私有草稿裸 public_url 无票据时 404', baseline.status, 404);
+    const draftPreview = await fetch(uploaded.previewUrl);
+    checkEqual('私有草稿带票据可下载', draftPreview.status, 200);
 
     const requestId = newRequestId('bind');
     const bound = await bind(aConn, roomId, uploaded.fileId, requestId);
@@ -610,19 +631,19 @@ async function main(): Promise<void> {
     const expectedOrder = [...pageFiles].reverse().map((file) => file.fileId);
     checkEqual('列表按绑定时间倒序', pagedIds.join(','), expectedOrder.join(','));
 
-    // /f：公开无凭据、HEAD、Range、416、304、download=1 与 P0 安全头。
-    const publicText = await fetch(uploaded.publicUrl);
-    checkEqual('公开下载无需 Bearer', publicText.status, 200);
-    checkEqual('公开下载内容一致', await publicText.text(), textBody);
-    checkEqual('公开下载保留 nosniff', publicText.headers.get('x-content-type-options'), 'nosniff');
+    // /f：票据、HEAD、Range、416、304、download=1 与 P0 安全头。
+    const publicText = await fetch(bound.file.preview_url);
+    checkEqual('草稿票据下载无需 Bearer', publicText.status, 200);
+    checkEqual('草稿票据下载内容一致', await publicText.text(), textBody);
+    checkEqual('草稿票据下载保留 nosniff', publicText.headers.get('x-content-type-options'), 'nosniff');
 
-    const head = await fetch(uploaded.publicUrl, { method: 'HEAD' });
+    const head = await fetch(bound.file.preview_url, { method: 'HEAD' });
     checkEqual('HEAD 返回 200', head.status, 200);
     checkEqual('HEAD 返回 content-length', head.headers.get('content-length'), String(bound.file.size));
     checkEqual('HEAD 声明 accept-ranges', head.headers.get('accept-ranges'), 'bytes');
     checkEqual('HEAD 不返回正文', (await head.text()).length, 0);
 
-    const ranged = await fetch(uploaded.publicUrl, { headers: { range: 'bytes=0-3' } });
+    const ranged = await fetch(bound.file.preview_url, { headers: { range: 'bytes=0-3' } });
     checkEqual('Range 返回 206', ranged.status, 206);
     checkEqual('Range 正文长度正确', (await ranged.text()).length, 4);
     checkEqual(
@@ -632,11 +653,11 @@ async function main(): Promise<void> {
     );
     checkEqual('Range 保留 accept-ranges', ranged.headers.get('accept-ranges'), 'bytes');
 
-    const suffix = await fetch(uploaded.publicUrl, { headers: { range: 'bytes=-5' } });
+    const suffix = await fetch(bound.file.preview_url, { headers: { range: 'bytes=-5' } });
     checkEqual('后缀 Range 返回 206', suffix.status, 206);
     checkEqual('后缀 Range 正文长度正确', (await suffix.text()).length, 5);
 
-    const unsatisfiable = await fetch(uploaded.publicUrl, {
+    const unsatisfiable = await fetch(bound.file.preview_url, {
       headers: { range: `bytes=${bound.file.size}-` },
     });
     checkEqual('越界 Range 返回 416', unsatisfiable.status, 416);
@@ -647,8 +668,8 @@ async function main(): Promise<void> {
     );
 
     const etag = publicText.headers.get('etag') ?? '';
-    check('公开下载返回 ETag', etag.length > 2, etag);
-    const notModified = await fetch(uploaded.publicUrl, {
+    check('草稿票据下载返回 ETag', etag.length > 2, etag);
+    const notModified = await fetch(bound.file.preview_url, {
       headers: { 'if-none-match': etag },
     });
     checkEqual('If-None-Match 命中返回 304', notModified.status, 304);
@@ -790,6 +811,7 @@ async function main(): Promise<void> {
 
     // 历史边界与票据复核：成员移出房间后，已分享票据 URL 立即失效。
     const membershipRoom = await createGroup(aConn, b.actor_id, '房间文件成员移出群');
+    await acceptGroupInvites(bConn, membershipRoom);
     const surviving = await uploadTestFile(aConn.token, {
       name: 'surviving.txt',
       mimeType: 'text/plain',

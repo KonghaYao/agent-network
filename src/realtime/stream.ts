@@ -428,7 +428,11 @@ function roomStreamItems(
       return result;
     }
     case 'room_file_added':
-    case 'room_file_deleted': {
+    case 'room_file_deleted':
+    case 'room_file_published':
+    case 'room_file_unpublished':
+    case 'artifact_submitted':
+    case 'artifact_released': {
       // 文件事件只是让客户端刷新列表，不创建 delivery、不推进 head_seq。
       const fileId = stringField(metadata, 'file_id');
       for (const member of activeRecipients(members, eventSeq)) {

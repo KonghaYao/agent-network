@@ -97,6 +97,16 @@ export async function runRoomFileAcceptance(): Promise<void> {
       mimeType: 'text/plain',
       body: 'room file acceptance',
     });
+    checkEqual('上传默认为私有草稿', uploaded.state, 'draft');
+    checkEqual('上传默认不公开', uploaded.visibility, 'private');
+    checkEqual(
+      '私有草稿裸 publicUrl 不携带票据返回 404',
+      (await fetch(uploaded.publicUrl)).status,
+      404,
+    );
+    const draftPreview = await fetch(uploaded.previewUrl);
+    checkEqual('私有草稿凭预览票据可读', draftPreview.status, 200);
+    checkEqual('私有草稿预览内容一致', await draftPreview.text(), 'room file acceptance');
     const bound = await callTool<{
       file: { room_file_id: string; public_url: string; preview_url: string };
     }>(ownerConn.client, 'network_room_file_bind', {
@@ -140,6 +150,7 @@ export async function runRoomFileAcceptance(): Promise<void> {
     });
     await waitForFileItems(collector.events, 2, '统一流收到 room.file 删除');
     checkEqual('删除后公开 URL 返回 404', (await fetch(uploaded.publicUrl)).status, 404);
+    checkEqual('删除后已签发票据返回 404', (await fetch(bound.file.preview_url)).status, 404);
 
     await subscription.close();
   } finally {

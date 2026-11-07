@@ -12,6 +12,7 @@ import { nowMs, sha256Hex, stableStringify } from '../storage/db';
 import { eventStatement, outboxStatement, roomTopic } from '../storage/events';
 import { guardSql } from '../storage/guards';
 import {
+  getDriveFile,
   getMember,
   getOperation,
   getRoom,
@@ -25,7 +26,14 @@ import {
   runIdempotent,
 } from '../storage/transactions/runner';
 import { actorId, type Principal } from './principal';
-import { appendFileTicket, issueFileTicket, verifyFileTicket } from './file-ticket';
+import {
+  driveFileUsable,
+  quotaForRoom,
+  registerDriveFile,
+  roomFileUsable,
+  roomFileUrls,
+  type FileQuota,
+} from './file-access';
 import {
   createdHistoryFilter,
   decodeHistoryCursor,
@@ -60,6 +68,8 @@ export interface RoomFileView {
   uploader_id: string;
   uploader_name: string;
   can_delete: boolean;
+  /** 被有效任务/成果引用，不随 expires_at 清理。 */
+  retained: boolean;
   created_at: string;
   expires_at: string;
 }
@@ -67,20 +77,18 @@ export interface RoomFileView {
 /** 绑定前置：当前身份自己的、未过期的 MCPP Files 记录。 */
 export interface RoomFileSource {
   readFile(fileId: string): Promise<{
+    fileId: string;
     name: string;
     mimeType: string;
     size: number;
     sha256: string;
+    createdAt: string;
     expiresAt: string;
     ownerScope: string;
   } | null>;
 }
 
-function publicFileUrl(publicOrigin: string, fileId: string): string {
-  return `${publicOrigin.replace(/\/+$/u, '')}/f/${fileId}`;
-}
-
-interface ViewContext {
+export interface ViewContext {
   publicOrigin: string;
   viewerId: string;
   room: RoomRow;
@@ -95,16 +103,15 @@ function canDelete(row: RoomFileRow, context: ViewContext): boolean {
   return context.room.kind === 'group' && context.room.owner_id === context.viewerId;
 }
 
-function roomFileView(row: RoomFileRow, context: ViewContext): RoomFileView {
-  const publicUrl = publicFileUrl(context.publicOrigin, row.file_id);
-  const ticket = issueFileTicket(context.ticketSecret, {
-    fileId: row.file_id,
-    roomId: row.room_id,
-    actorId: context.viewerId,
-    memberGeneration: context.boundary.memberGeneration,
-    expiresAt: Date.now() + LIMITS.fileTicketTtlMs,
-  });
-  const previewUrl = appendFileTicket(publicUrl, ticket);
+export function roomFileView(row: RoomFileRow, context: ViewContext): RoomFileView {
+  const urls = roomFileUrls(
+    context.ticketSecret,
+    context.publicOrigin,
+    row.file_id,
+    row.room_id,
+    context.viewerId,
+    context.boundary,
+  );
   return {
     room_file_id: row.room_file_id,
     room_id: row.room_id,
@@ -113,13 +120,14 @@ function roomFileView(row: RoomFileRow, context: ViewContext): RoomFileView {
     mime_type: row.mime_type,
     size: row.size,
     sha256: row.sha256,
-    public_url: publicUrl,
-    preview_url: previewUrl,
-    download_url: appendFileTicket(`${publicUrl}?download=1`, ticket),
+    public_url: urls.public_url,
+    preview_url: urls.preview_url,
+    download_url: urls.download_url,
     preview_kind: filePreviewKind(row.mime_type),
     uploader_id: row.uploader_id,
     uploader_name: context.uploaderName,
     can_delete: canDelete(row, context),
+    retained: row.retained === 1,
     created_at: String(row.created_at),
     expires_at: String(row.expires_at),
   };
@@ -189,7 +197,29 @@ export async function roomFileBind(
     });
   }
 
-  const expiresAt = Math.min(at + LIMITS.roomFileTtlMs, Date.parse(file.expiresAt));
+  const drive = await registerDriveFile(db, file, caller, { at });
+  if (drive.state === 'deleted' || drive.owner_scope !== `actor:${caller}`) {
+    throw new BusinessError('FILE_UNAVAILABLE', '文件已删除或不属于当前身份', {
+      file_id: input.file_id,
+    });
+  }
+  if (drive.state === 'bound' && drive.room_id !== room.room_id) {
+    throw new BusinessError('CONFLICT', '该文件已绑定到其他房间', {
+      file_id: input.file_id,
+      room_id: drive.room_id,
+    });
+  }
+  if (!driveFileUsable(drive, at)) {
+    throw new BusinessError('FILE_UNAVAILABLE', '文件已过期或已删除', {
+      file_id: input.file_id,
+    });
+  }
+  // 绑定把草稿转成普通附件：按绑定时间重新给 30 天，而不是继续沿用草稿的
+  // 24 小时期限；底层 MCPP 记录更早到期时仍以底层记录为准。
+  const expiresAt = Math.min(
+    at + LIMITS.roomFileTtlMs,
+    Date.parse(file.expiresAt),
+  );
   if (expiresAt <= at) {
     throw new BusinessError('FILE_UNAVAILABLE', '文件已过期', { file_id: input.file_id });
   }
@@ -207,6 +237,7 @@ export async function roomFileBind(
     created_at: at,
     created_seq: null,
     expires_at: expiresAt,
+    retained: 0,
     deleted_at: null,
     deleted_by: null,
   };
@@ -234,7 +265,7 @@ export async function roomFileBind(
         .prepare(
           guardSql(
             'roomFileLimit',
-            '(SELECT COUNT(*) FROM room_files WHERE room_id = ? AND deleted_at IS NULL AND expires_at > ?) >= ?',
+            '(SELECT COUNT(*) FROM room_files WHERE room_id = ? AND deleted_at IS NULL AND (retained = 1 OR expires_at > ?)) >= ?',
           ),
         )
         .bind(room.room_id, at, LIMITS.roomFilesPerRoom),
@@ -242,16 +273,24 @@ export async function roomFileBind(
         .prepare(
           guardSql(
             'roomFileLimit',
-            '(SELECT COALESCE(SUM(size), 0) FROM room_files WHERE room_id = ? AND deleted_at IS NULL AND expires_at > ?) + ? > ?',
+            '(SELECT COALESCE(SUM(size), 0) FROM room_files WHERE room_id = ? AND deleted_at IS NULL AND (retained = 1 OR expires_at > ?)) + ? > ?',
           ),
         )
         .bind(room.room_id, at, row.size, LIMITS.roomFileBytesPerRoom),
       db
         .prepare(
+          guardSql(
+            'fileUnavailable',
+            'NOT EXISTS (SELECT 1 FROM drive_files WHERE file_id = ? AND state != \'deleted\' AND owner_scope = ?)',
+          ),
+        )
+        .bind(row.file_id, `actor:${caller}`),
+      db
+        .prepare(
           `INSERT INTO room_files
              (room_file_id, room_id, file_id, uploader_id, name, mime_type, size, sha256,
-              created_at, expires_at, deleted_at, deleted_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+              created_at, expires_at, retained, deleted_at, deleted_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL)`,
         )
         .bind(
           row.room_file_id,
@@ -265,6 +304,14 @@ export async function roomFileBind(
           row.created_at,
           row.expires_at,
         ),
+      db
+        .prepare(
+          `UPDATE drive_files
+              SET state = 'bound', room_id = ?, expires_at = ?,
+                  retained = CASE WHEN retained = 1 THEN 1 ELSE 0 END
+            WHERE file_id = ? AND state != 'deleted'`,
+        )
+        .bind(room.room_id, expiresAt, row.file_id),
       eventStatement(
         db,
         {
@@ -337,6 +384,7 @@ export async function roomFileList(
   next_cursor: string | null;
   has_more: boolean;
   authorization: HistorySnapshot;
+  quota: FileQuota;
 }> {
   const { caller, room, boundary } = await requireRoomMember(db, principal, input.room_id);
   const limit = clampPage(input.limit, LIMITS.roomFilePageDefault, LIMITS.roomFilePageMax);
@@ -362,7 +410,8 @@ export async function roomFileList(
       `SELECT rf.*, a.name AS uploader_name
          FROM room_files rf
          JOIN actors a ON a.actor_id = rf.uploader_id
-        WHERE rf.room_id = ? AND rf.deleted_at IS NULL AND rf.expires_at > ?
+        WHERE rf.room_id = ? AND rf.deleted_at IS NULL
+          AND (rf.retained = 1 OR rf.expires_at > ?)
           AND (${history.sql}) ${keyset}
         ORDER BY rf.created_at DESC, rf.room_file_id DESC
         LIMIT ?`,
@@ -385,6 +434,7 @@ export async function roomFileList(
       }),
     ),
     authorization: historySnapshot(boundary),
+    quota: await quotaForRoom(db, room.room_id),
     next_cursor:
       hasMore && last
         ? encodeCursor({
@@ -412,8 +462,7 @@ export async function roomFileGet(
   if (
     !row ||
     row.room_id !== room.room_id ||
-    row.deleted_at !== null ||
-    row.expires_at <= Date.now() ||
+    !roomFileUsable(row) ||
     !visibleCreated(row, boundary)
   ) {
     throw new BusinessError('FILE_UNAVAILABLE', '文件不存在、已过期、已删除或当前不可见', {
@@ -451,7 +500,7 @@ export async function roomFileDelete(
   }
   // 已删除：结果已经达成，重复调用直接成功且不重复发事件。
   if (row.deleted_at !== null) return { file_id: input.file_id, deleted: true };
-  if (row.expires_at <= Date.now()) {
+  if (!roomFileUsable(row)) {
     throw new BusinessError('FILE_UNAVAILABLE', '文件已过期', { file_id: input.file_id });
   }
 
@@ -484,10 +533,26 @@ export async function roomFileDelete(
         .bind(input.file_id, room.room_id, at, caller, caller),
       db
         .prepare(
-          `UPDATE room_files SET deleted_at = ?, deleted_by = ?
+          guardSql(
+            'fileReferenced',
+            `EXISTS (SELECT 1 FROM file_references WHERE file_id = ? AND state = 'active')
+               OR EXISTS (SELECT 1 FROM artifacts WHERE file_id = ? AND status = 'delivered')`,
+          ),
+        )
+        .bind(input.file_id, input.file_id),
+      db
+        .prepare(
+          `UPDATE room_files SET deleted_at = ?, deleted_by = ?, retained = 0
             WHERE file_id = ? AND room_id = ? AND deleted_at IS NULL`,
         )
         .bind(at, caller, input.file_id, room.room_id),
+      db
+        .prepare(
+          `UPDATE drive_files
+              SET state = 'deleted', deleted_at = ?, deleted_by = ?, retained = 0
+            WHERE file_id = ? AND state != 'deleted'`,
+        )
+        .bind(at, caller, input.file_id),
       eventStatement(
         db,
         {
@@ -510,41 +575,4 @@ export async function roomFileDelete(
   });
 
   return stored as { file_id: string; deleted: true };
-}
-
-/**
- * `/f` 路由的授权入口。
- *
- * - 没有房间绑定行的上传文件仍是公开文件（直到 M07 收敛私有文件模型）；
- * - 已绑定房间的文件必须有有效票据，并在使用票据时重新检查成员资格、
- *   成员代次与当前历史边界；移出、重新加入或策略收紧后旧链接立即失效。
- * - 返回 null 时统一 404，不区分“文件不存在/无票据/权限已撤销”。
- */
-export async function authorizeRoomFileDownload(
-  db: D1Database,
-  fileId: string,
-  ticket: string | null,
-  secret: string,
-  at = Date.now(),
-): Promise<RoomFileRow | 'public' | null> {
-  const row = await getRoomFile(db, fileId);
-  if (!row) return 'public';
-  if (row.deleted_at !== null || row.expires_at <= at) return null;
-  const payload = ticket ? verifyFileTicket(secret, ticket, at) : null;
-  if (!payload) return null;
-  if (
-    payload.fileId !== row.file_id ||
-    payload.roomId !== row.room_id
-  ) {
-    return null;
-  }
-  const [room, member] = await Promise.all([
-    getRoom(db, row.room_id),
-    getMember(db, row.room_id, payload.actorId),
-  ]);
-  if (!room || !member || member.status !== 'active') return null;
-  if (member.member_generation !== payload.memberGeneration) return null;
-  const boundary = historyBoundary(room, member);
-  if (!visibleCreated(row, boundary)) return null;
-  return row;
 }

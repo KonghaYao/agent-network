@@ -5,9 +5,11 @@ import type { FileScope, FileService } from '@peri-code/mcpp/files';
 import { registerDriveTool } from '../drive/tool';
 import type { Env } from '../env';
 import type { Principal } from '../domain/principal';
+import { fileTicketSecret } from '../domain/file-ticket';
 import { registerEvents } from './events';
 import { registerResources } from './resources';
 import { createMessageFileArchiver, registerRoomFileTools } from './room-files';
+import { registerArtifactTools } from './artifacts';
 import { registerSkill } from './skill';
 import { registerTools, type ToolHooks } from './tools';
 
@@ -36,7 +38,7 @@ const INSTRUCTIONS = [
   '通知不带正文、preview 或 claim_id；stream 是提示通道，SQLite 读取结果才是权威。',
   '群聊省略 invoke 时服务端按正文 @名字 解析投递；显式 invoke 优先，invoke: [] 表示显式不投递；普通回复与阶段回复用 invoke: []；不要轮询；不要用长时间 tools/call 代替订阅。',
   '发送状态：同一业务消息持久保留 request_id 与 client_message_id；超时或断线后先调用 network_message_send_status 对账，found: true 表示已提交，不要再发；确认未提交才用原 ID 重试。修改正文必须新建 client_message_id，旧 ID 配新正文返回 IDEMPOTENCY_CONFLICT。通知可能丢失、重复或乱序，按 cursor 补读并按 message_id 去重。',
-  '分享文件：本地路径与 file:// 对群友不可见；未授权外链不能保证群友可访问。POST /mcp-upload 上传后，未绑定的文件可把 publicUrl 发到消息正文；network_room_file_bind 让文件进入房间文件列表并纳入房间成员 + 历史边界授权，绑定后裸 public_url 立即 404，改用返回的带票据 preview_url / download_url。成员移出、重新加入的新代次或策略收紧后旧链接与旧票据立即失效；删除房间文件后链接 404，已复制或转发的内容无法收回。',
+  '分享文件：本地路径与 file:// 对群友不可见；未授权外链不能保证群友可访问。POST /mcp-upload 上传默认是上传者私有草稿（24 小时），裸 publicUrl 返回 404；只有 network_file_publish 显式公开后才可裸链读取。network_room_file_bind 让文件进入房间文件列表并纳入房间成员 + 历史边界授权，绑定后改用返回的带票据 preview_url / download_url。成员移出、重新加入的新代次或策略收紧后旧链接与旧票据立即失效；删除房间文件后链接 404，已复制或转发的内容无法收回。',
   '归档只是管理列表标记：network_agent_archive / network_agent_unarchive 不改变消息、好友、房间、投递、凭据或在线状态，也不能恢复 MCP URL 或 token。',
   '通知只表示资源发生变化，正文和业务状态始终以 SQLite 读取结果为准。',
 ].join('\n');
@@ -73,8 +75,11 @@ export function buildServer(env: Env, principal: Principal, drive?: DriveBinding
       ...drive,
       publicOrigin: env.PUBLIC_ORIGIN,
       principal,
+      db: env.DB,
+      ticketSecret: fileTicketSecret(env.FILE_TICKET_SECRET),
     });
     registerRoomFileTools(server, env, principal, drive);
+    registerArtifactTools(server, env, principal, drive);
   }
   return server;
 }

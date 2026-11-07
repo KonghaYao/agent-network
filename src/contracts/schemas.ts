@@ -484,6 +484,41 @@ export const roomFileDeleteSchema = z.object({
   file_id: fileId,
 });
 
+/**
+ * 公开发布是独立、需有权限的动作，默认关闭。
+ *
+ * - 已绑定文件：上传者或群 owner 可切换；单聊只有上传者。
+ * - 未绑定草稿：只有上传身份可以切换，`room_id` 省略。
+ */
+export const filePublishSchema = z.object({
+  request_id: requestId,
+  file_id: fileId,
+  public: z.boolean(),
+  room_id: id().optional(),
+});
+
+/** 成果提交：把当前身份自己的文件绑定为房间成果版本并进入保留。 */
+export const artifactSubmitSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  file_id: fileId,
+  task_id: id().optional(),
+  version: z.number().int().min(1).max(LIMITS.artifactVersionMax).optional(),
+  summary: z.string().trim().max(LIMITS.artifactSummaryBytes).optional(),
+});
+
+export const artifactListSchema = z.object({
+  room_id: id(),
+  task_id: id().optional(),
+  cursor,
+  limit: z.number().int().min(1).max(LIMITS.artifactPageMax).optional(),
+});
+
+export const artifactReleaseSchema = z.object({
+  request_id: requestId,
+  artifact_id: id(),
+});
+
 /** 当前 human 在此会话私有的网页监控地址；null 表示清除。 */
 export const roomMonitorGetSchema = z.object({ room_id: id() });
 
@@ -636,6 +671,10 @@ export type RoomFileBindInput = z.infer<typeof roomFileBindSchema>;
 export type RoomFileListInput = z.infer<typeof roomFileListSchema>;
 export type RoomFileGetInput = z.infer<typeof roomFileGetSchema>;
 export type RoomFileDeleteInput = z.infer<typeof roomFileDeleteSchema>;
+export type FilePublishInput = z.infer<typeof filePublishSchema>;
+export type ArtifactSubmitInput = z.infer<typeof artifactSubmitSchema>;
+export type ArtifactListInput = z.infer<typeof artifactListSchema>;
+export type ArtifactReleaseInput = z.infer<typeof artifactReleaseSchema>;
 export type RoomMonitorGetInput = z.infer<typeof roomMonitorGetSchema>;
 export type RoomMonitorSetInput = z.infer<typeof roomMonitorSetSchema>;
 export type TaskListGetInput = z.infer<typeof taskListGetSchema>;

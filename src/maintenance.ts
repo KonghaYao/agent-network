@@ -1,5 +1,6 @@
 import { LIMITS } from './contracts/limits';
 import { expireContactRequests } from './domain/contact-relations';
+import { purgeFilePayloads } from './drive/service';
 import { nowMs } from './storage/db';
 import type { Env } from './env';
 
@@ -7,6 +8,137 @@ interface ExpiredScope {
   scope_kind: 'room' | 'inbox';
   scope_id: string;
   max_seq: number;
+}
+
+/**
+ * 文件保留与 GC。
+ *
+ * 权威引用状态在 `file_references` / `artifacts` / `room_files.retained`：
+ * 1. 任务已删除时释放对应 task 引用；
+ * 2. 只有无 active 引用、无 delivered 成果且未被 retained 的过期文件才软删；
+ * 3. 软删后保留 `LIMITS.fileGcGraceMs` 再删除载荷，业务元数据永久保留；
+ * 4. 删除载荷前再次检查引用，绑定/提交与 GC 由 SQLite 事务串行化，成果不会
+ *    指向已清理字节。
+ */
+async function maintainFiles(env: Env, now: number): Promise<void> {
+  const db = env.DB;
+
+  await db
+    .prepare(
+      `UPDATE file_references
+          SET state = 'released', released_at = ?, released_by = 'maintenance'
+        WHERE kind = 'task' AND state = 'active'
+          AND NOT EXISTS (SELECT 1 FROM room_tasks t WHERE t.task_id = file_references.ref_id)`,
+    )
+    .bind(now)
+    .run();
+
+  // 引用全部释放后恢复普通 30 天 TTL；仍在保留中的文件保持 retained=1。
+  await db
+    .prepare(
+      `UPDATE room_files
+          SET retained = 0,
+              expires_at = CASE WHEN expires_at <= ? THEN ? ELSE expires_at END
+        WHERE retained = 1 AND deleted_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM file_references fr
+                           WHERE fr.file_id = room_files.file_id AND fr.state = 'active')
+          AND NOT EXISTS (SELECT 1 FROM artifacts a
+                           WHERE a.file_id = room_files.file_id AND a.status = 'delivered')`,
+    )
+    .bind(now, now + LIMITS.roomFileTtlMs)
+    .run();
+
+  await db
+    .prepare(
+      `UPDATE drive_files
+          SET retained = 0,
+              expires_at = CASE
+                WHEN expires_at IS NULL OR expires_at <= ? THEN ?
+                ELSE expires_at END
+        WHERE retained = 1 AND state != 'deleted'
+          AND NOT EXISTS (SELECT 1 FROM file_references fr
+                           WHERE fr.file_id = drive_files.file_id AND fr.state = 'active')
+          AND NOT EXISTS (SELECT 1 FROM artifacts a
+                           WHERE a.file_id = drive_files.file_id AND a.status = 'delivered')`,
+    )
+    .bind(now, now + LIMITS.roomFileTtlMs)
+    .run();
+
+  // 软删：先提交状态，保留元数据；载荷在宽限期后清理。
+  await db
+    .prepare(
+      `UPDATE drive_files
+          SET state = 'deleted', deleted_at = ?, deleted_by = 'retention', retained = 0
+        WHERE file_id IN (
+          SELECT df.file_id FROM drive_files df
+           WHERE df.state IN ('draft', 'bound')
+             AND df.expires_at IS NOT NULL AND df.expires_at < ?
+             AND NOT EXISTS (SELECT 1 FROM file_references fr
+                              WHERE fr.file_id = df.file_id AND fr.state = 'active')
+             AND NOT EXISTS (SELECT 1 FROM artifacts a
+                              WHERE a.file_id = df.file_id AND a.status = 'delivered')
+             AND NOT EXISTS (SELECT 1 FROM room_files rf
+                              WHERE rf.file_id = df.file_id
+                                AND rf.retained = 1 AND rf.deleted_at IS NULL)
+           LIMIT 100
+        )`,
+    )
+    .bind(now, now)
+    .run();
+
+  // 宽限期后清理载荷；每次只取一批，失败留待下一轮重试。
+  if (env.FILES) {
+    const expired = await db
+      .prepare(
+        `SELECT file_id FROM drive_files
+          WHERE state = 'deleted' AND purged_at IS NULL AND deleted_at < ?
+          LIMIT 50`,
+      )
+      .bind(now - LIMITS.fileGcGraceMs)
+      .all<{ file_id: string }>();
+    for (const row of expired.results) {
+      const active = await db
+        .prepare(
+          `SELECT 1 AS n FROM file_references
+            WHERE file_id = ? AND state = 'active' LIMIT 1`,
+        )
+        .bind(row.file_id)
+        .first<{ n: number }>();
+      const delivered = await db
+        .prepare(
+          `SELECT 1 AS n FROM artifacts
+            WHERE file_id = ? AND status = 'delivered' LIMIT 1`,
+        )
+        .bind(row.file_id)
+        .first<{ n: number }>();
+      if (active || delivered) continue;
+      const complete = await purgeFilePayloads(env.FILES, row.file_id);
+      if (!complete) continue;
+      await db
+        .prepare('UPDATE drive_files SET purged_at = ? WHERE file_id = ?')
+        .bind(now, row.file_id)
+        .run();
+    }
+  }
+
+  // 最后清理房间文件墓碑的元数据；有效引用/成果仍在时永不删除，避免成果
+  // 指向已不存在的房间文件行。顺序放在释放与载荷回收之后，GC 扫描不会
+  // 与成果绑定产生“先删行、后绑定”的窗口。
+  await db
+    .prepare(
+      `DELETE FROM room_files
+        WHERE rowid IN (
+          SELECT rf.rowid FROM room_files rf
+           WHERE rf.retained = 0 AND rf.expires_at < ?
+             AND NOT EXISTS (SELECT 1 FROM file_references fr
+                              WHERE fr.file_id = rf.file_id AND fr.state = 'active')
+             AND NOT EXISTS (SELECT 1 FROM artifacts a
+                              WHERE a.file_id = rf.file_id AND a.status = 'delivered')
+           LIMIT 100
+        )`,
+    )
+    .bind(now - LIMITS.roomFileTombstoneGraceMs)
+    .run();
 }
 
 /**
@@ -69,13 +201,8 @@ export async function maintain(env: Env): Promise<void> {
     .bind(now - 24 * 60 * 60_000)
     .run();
 
-  // 房间文件墓碑在过期后保留宽限期，防止删除/过期后 URL 复活；载荷由 FlyDrive 自身过期清理。
-  await db
-    .prepare(
-      'DELETE FROM room_files WHERE rowid IN (SELECT rowid FROM room_files WHERE expires_at < ? LIMIT 100)',
-    )
-    .bind(now - LIMITS.roomFileTombstoneGraceMs)
-    .run();
+  // 房间文件墓碑与载荷由 maintainFiles 按引用状态统一回收。
+  await maintainFiles(env, now);
 
   // MCP Events：先停用过期订阅，再在宽限期后删除（级联清投递）。
   await db

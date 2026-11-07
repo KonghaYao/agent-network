@@ -436,9 +436,21 @@ export interface UploadedTestFile {
   createdAt: string;
   expiresAt: string;
   publicUrl: string;
+  previewUrl: string;
+  downloadUrl: string;
+  state: 'draft' | 'bound' | 'deleted';
+  visibility: 'private' | 'public';
+  retained: boolean;
+  quota?: {
+    used_bytes: number;
+    limit_bytes: number;
+    used_files: number;
+    limit_files: number;
+    retained_bytes: number;
+  };
 }
 
-/** MCPP Files v1 上传；返回服务端追加的 publicUrl，供房间文件用例复用。 */
+/** MCPP Files v1 上传；返回服务端追加的私有票据地址，供房间文件用例复用。 */
 export async function uploadTestFile(
   token: string,
   input: { name: string; mimeType: string; body: string | Uint8Array },

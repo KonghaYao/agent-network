@@ -50,6 +50,9 @@ const GUARD_CODES: Record<string, BusinessErrorCode> = {
   invitationStale: 'CONFLICT',
   inviteTargetsMissing: 'FRIEND_REQUIRED',
   ownerTransferStale: 'CONFLICT',
+  fileUnavailable: 'FILE_UNAVAILABLE',
+  artifactConflict: 'CONFLICT',
+  fileReferenced: 'CONFLICT',
 };
 
 const GUARD_MESSAGES: Record<string, string> = {
@@ -93,6 +96,9 @@ const GUARD_MESSAGES: Record<string, string> = {
   invitationStale: '邀请状态已变化，请刷新后重试',
   inviteTargetsMissing: '成员资格在提交时已变化，群未创建',
   ownerTransferStale: '群主转让提议状态已变化，请刷新后重试',
+  fileUnavailable: '文件不存在、已删除、已过期或正在被清理',
+  artifactConflict: '成果版本已变化或文件已被其他成果占用',
+  fileReferenced: '文件仍被有效任务或成果引用，不能删除或释放保留',
 };
 
 /** 限额类 guard 的稳定 data，供 MCP Events 映射 -32025。 */
@@ -144,6 +150,17 @@ export function isDeliveryConflict(error: unknown): boolean {
 /** 同一 file_id 只能绑定一次；命中后按房间/墓碑状态收敛或报错。 */
 export function isRoomFileConflict(error: unknown): boolean {
   return errorText(error).includes('UNIQUE constraint failed: room_files.file_id');
+}
+
+/** 同一 file_id/任务版本只能有一个成果；命中后按幂等请求或 CONFLICT 收敛。 */
+export function isArtifactConflict(error: unknown): boolean {
+  const text = errorText(error);
+  return (
+    text.includes('UNIQUE constraint failed: artifacts.file_id') ||
+    text.includes('UNIQUE constraint failed: artifacts.room_id, artifacts.task_id, artifacts.version') ||
+    text.includes('idx_artifacts_file') ||
+    text.includes('idx_artifacts_task_version')
+  );
 }
 
 export function isEventKeyConflict(error: unknown): boolean {

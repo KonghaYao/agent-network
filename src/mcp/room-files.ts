@@ -18,7 +18,6 @@ import {
 } from '../domain/room-files';
 import type { Principal } from '../domain/principal';
 import { fileTicketSecret } from '../domain/file-ticket';
-import { purgeFilePayloads } from '../drive/service';
 import type { Env } from '../env';
 import { getRoomFile } from '../storage/queries';
 import { requireActor } from './auth';
@@ -32,7 +31,7 @@ export interface RoomFileToolBinding {
 }
 
 /** 绑定与自动归档共用的文件前置：只返回当前身份自己的记录。 */
-function createRoomFileSource(binding: RoomFileToolBinding): RoomFileSource {
+export function createRoomFileSource(binding: RoomFileToolBinding): RoomFileSource {
   return {
     async readFile(fileId) {
       let current: FileScope;
@@ -49,10 +48,12 @@ function createRoomFileSource(binding: RoomFileToolBinding): RoomFileSource {
       }
       if (!record || record.ownerScope !== current.key) return null;
       return {
+        fileId: record.fileId,
         name: record.name,
         mimeType: record.mimeType,
         size: record.size,
         sha256: record.sha256,
+        createdAt: record.createdAt,
         expiresAt: record.expiresAt,
         ownerScope: record.ownerScope,
       };
@@ -128,7 +129,7 @@ export function registerRoomFileTools(
   register(
     server,
     'network_room_file_bind',
-    '把当前身份上传且未过期的 fileId 绑定到房间，返回 file.public_url（文件身份）以及带短时票据的 file.preview_url / file.download_url。绑定让文件出现在房间文件列表；房间成员按当前历史边界读取，移出、重新加入的新代次或策略收紧后旧链接与旧票据立即失效。未绑定的上传文件仍按公开上传语义提供，私有文件完整授权由后续任务收敛。',
+    '把当前身份上传且未过期的 fileId 绑定到房间，返回 file.public_url（文件身份）以及带短时票据的 file.preview_url / file.download_url。上传默认是私有草稿，裸 public_url 不携带票据时 404；绑定后按房间成员资格、成员代次与历史边界授权，移出、重新加入的新代次或策略收紧后旧链接与旧票据立即失效。公开发布是独立、需有权限的动作（network_file_publish），默认关闭。',
     roomFileBindSchema,
     roomFileResultSchema,
     async (input) => {
@@ -171,10 +172,7 @@ export function registerRoomFileTools(
     roomFileDeletedSchema,
     async (input) => {
       requireActor(principal);
-      const result = await roomFileDelete(db, principal, input);
-      // 墓碑已提交；磁盘回收失败不回滚业务结果。
-      void purgeFilePayloads(binding.fileService, input.file_id).catch(() => undefined);
-      return result;
+      return roomFileDelete(db, principal, input);
     },
   );
 }

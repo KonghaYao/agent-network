@@ -788,8 +788,18 @@ export const roomFileSchema = z.object({
   uploader_id: z.string(),
   uploader_name: z.string(),
   can_delete: z.boolean(),
+  /** 被有效任务/成果引用，不随 expires_at 清理。 */
+  retained: z.boolean(),
   created_at: z.string(),
   expires_at: z.string(),
+});
+
+export const fileQuotaSchema = z.object({
+  used_bytes: z.number(),
+  limit_bytes: z.number(),
+  used_files: z.number(),
+  limit_files: z.number(),
+  retained_bytes: z.number(),
 });
 
 export const roomFileResultSchema = z.object({
@@ -802,11 +812,54 @@ export const roomFilePageSchema = z.object({
   next_cursor: z.string().nullable(),
   has_more: z.boolean(),
   authorization: authorizationSnapshotSchema,
+  quota: fileQuotaSchema,
 });
 
 export const roomFileDeletedSchema = z.object({
   file_id: z.string(),
   deleted: z.literal(true),
+});
+
+export const filePublishResultSchema = z.object({
+  file_id: z.string(),
+  public: z.boolean(),
+  public_url: z.string(),
+  preview_url: z.string(),
+  download_url: z.string(),
+});
+
+export const artifactSchema = z.object({
+  artifact_id: z.string(),
+  room_id: z.string(),
+  task_id: z.string().nullable(),
+  version: z.number(),
+  file_id: z.string(),
+  summary: z.string(),
+  status: z.enum(['delivered', 'released']),
+  created_by: z.string(),
+  created_at: z.string(),
+  released_at: z.string().nullable(),
+});
+
+export const artifactResultSchema = z.object({
+  artifact: artifactSchema,
+  file: roomFileSchema,
+  authorization: authorizationSnapshotSchema,
+  quota: fileQuotaSchema,
+});
+
+export const artifactPageSchema = z.object({
+  items: z.array(artifactResultSchema.omit({ authorization: true, quota: true })),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+  authorization: authorizationSnapshotSchema,
+  quota: fileQuotaSchema,
+});
+
+export const artifactReleasedSchema = z.object({
+  artifact_id: z.string(),
+  released: z.literal(true),
+  retained: z.boolean(),
 });
 
 /** 当前 human 在此会话私有的网页监控地址；null 表示未配置。 */

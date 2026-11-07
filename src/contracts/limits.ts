@@ -115,6 +115,14 @@ export const LIMITS = {
   activeRoomsPerActor: 200,
   /** 房间文件保留上限（毫秒）；不提供续期接口。 */
   roomFileTtlMs: 30 * 24 * 60 * 60_000,
+  /** 未绑定上传草稿的默认保留期（毫秒）。 */
+  fileDraftTtlMs: 24 * 60 * 60_000,
+  /** 软删文件在清理载荷前的宽限期（毫秒）；期间元数据可审计、可恢复。 */
+  fileGcGraceMs: 7 * 24 * 60 * 60_000,
+  /** 单个上传者未绑定草稿的总字节上限。 */
+  draftBytesPerActor: 1024 * 1024 * 1024,
+  /** 单个上传者未绑定草稿数量上限。 */
+  draftFilesPerActor: 500,
   /** 过期房间文件墓碑在 expires_at 之后的额外保留期（毫秒）。 */
   roomFileTombstoneGraceMs: 7 * 24 * 60 * 60_000,
   /** 每个房间的文件数量上限。 */
@@ -137,6 +145,13 @@ export const LIMITS = {
   /** 房间文件列表默认 / 最大条数。 */
   roomFilePageDefault: 20,
   roomFilePageMax: 100,
+  /** 成果列表默认 / 最大条数。 */
+  artifactPageDefault: 20,
+  artifactPageMax: 100,
+  /** 成果摘要 UTF-8 字节上限。 */
+  artifactSummaryBytes: 1024,
+  /** 单次成果提交/释放的幂等结果上限（内部）。 */
+  artifactVersionMax: 1_000_000,
   /** 每条流式订阅的 URI 上限；只允许 `agentnet://stream`。 */
   subscriptionUrisMax: 1,
   /** 统一 actor stream 单帧最多包含的 item 数。 */

@@ -43,6 +43,7 @@ import {
 } from './lib/acceptance-helpers';
 import { runUnifiedStreamAcceptance } from './lib/stream-acceptance';
 import { runRoomFileAcceptance } from './lib/room-file-acceptance';
+import { runPrivateFileAcceptance } from './lib/m07-acceptance';
 import { runAgentArchiveAcceptance } from './lib/agent-archive-acceptance';
 import { runAgentIdentityAcceptance } from './lib/agent-identity-acceptance';
 import { runAgentPresenceAcceptance } from './lib/presence-acceptance';
@@ -1311,6 +1312,7 @@ async function main(): Promise<void> {
       ) ?? false;
     if (hasDrive) {
       await runRoomFileAcceptance();
+      await runPrivateFileAcceptance();
     } else {
       console.log('  · Drive 未启用，跳过房间文件端到端片段');
     }

@@ -13,8 +13,14 @@ import { Disk } from 'flydrive';
 import { FSDriver } from 'flydrive/drivers/fs';
 
 import type { Env } from '../env';
+import { LIMITS } from '../contracts/limits';
 import { isBusinessError } from '../contracts/errors';
 import { authenticate } from '../mcp/auth';
+import {
+  privateFileUrls,
+  quotaForOwnerScope,
+  registerDriveFile,
+} from '../domain/file-access';
 
 export interface DriveOptions {
   directory: string;
@@ -79,8 +85,27 @@ export function createDrive(env: Env, options: DriveOptions): DriveRuntime {
   return { fileService, mount };
 }
 
-/** 上传成功响应追加公开下载地址；不改变 MCPP Files 的既有字段。 */
-export async function attachPublicUrl(response: Response, publicOrigin: string): Promise<Response> {
+/** 上传成功响应追加私有访问地址；不改变 MCPP Files 的既有字段。 */
+export interface UploadAccessOptions {
+  publicOrigin: string;
+  db: D1Database;
+  fileService: FileService;
+  ticketSecret: string;
+  uploaderId: string | null;
+}
+
+/**
+ * 登记上传为上传者私有草稿，并返回带短时票据的预览/下载地址。
+ *
+ * 上传响应中的 `publicUrl` 仍是文件身份，但新上传默认私有；裸链接返回 404。
+ * `previewUrl` / `downloadUrl` 携带 `ownerScope` 文件票据，供 `<img>`、Range
+ * 与下载链接在不携带 Bearer 的情况下使用。票据每次使用仍校验文件登记状态
+ * 与所有权；发布为公开文件必须另走 `network_file_publish`。
+ */
+export async function attachPublicUrl(
+  response: Response,
+  options: UploadAccessOptions,
+): Promise<Response> {
   if (response.status !== 201) return response;
   const contentType = response.headers.get('content-type') ?? '';
   if (!contentType.includes('application/json')) return response;
@@ -91,7 +116,59 @@ export async function attachPublicUrl(response: Response, publicOrigin: string):
     return response;
   }
   if (typeof payload.fileId !== 'string') return response;
-  payload.publicUrl = `${publicOrigin.replace(/\/+$/u, '')}/f/${payload.fileId}`;
+  let record: Awaited<ReturnType<FileService['readRecord']>>;
+  try {
+    record = await options.fileService.readRecord(payload.fileId);
+    if (!record) throw new Error('upload record missing');
+    const drive = await registerDriveFile(options.db, record, options.uploaderId, {
+      draftTtlMs: LIMITS.fileDraftTtlMs,
+    });
+    const urls = privateFileUrls(
+      options.ticketSecret,
+      options.publicOrigin,
+      record.fileId,
+      record.ownerScope,
+    );
+    payload.publicUrl = urls.public_url;
+    payload.previewUrl = urls.preview_url;
+    payload.downloadUrl = urls.download_url;
+    payload.expiresAt = new Date(
+      drive.expires_at ?? Date.parse(record.expiresAt),
+    ).toISOString();
+    payload.state = drive.state;
+    payload.visibility = drive.visibility;
+    payload.retained = drive.retained === 1;
+    const quota = await quotaForOwnerScope(options.db, record.ownerScope);
+    // 草稿配额不足时拒绝保存本次上传，避免把 10 年底层 TTL 当作无限空间。
+    // 已有文件不受影响；本次载荷立即回收，记录标记为 deleted 供 GC 兜底。
+    if (quota.used_bytes > quota.limit_bytes || quota.used_files > quota.limit_files) {
+      const at = Date.now();
+      await options.db
+        .prepare(
+          `UPDATE drive_files
+              SET state = 'deleted', deleted_at = ?, deleted_by = 'quota', retained = 0
+            WHERE file_id = ? AND state = 'draft'`,
+        )
+        .bind(at, payload.fileId)
+        .run();
+      await purgeFilePayloads(options.fileService, payload.fileId);
+      return new Response(
+        JSON.stringify({
+          error: 'QUOTA_EXCEEDED',
+          message: '草稿配额不足，请先清理未绑定文件后重试',
+          quota,
+        }),
+        { status: 507, headers: { 'content-type': 'application/json' } },
+      );
+    }
+    payload.quota = quota;
+  } catch {
+    await purgeFilePayloads(options.fileService, payload.fileId);
+    return new Response(
+      JSON.stringify({ error: 'FILE_UNAVAILABLE', message: '文件登记失败，请重试上传' }),
+      { status: 503, headers: { 'content-type': 'application/json' } },
+    );
+  }
   const headers = new Headers(response.headers);
   headers.delete('content-length');
   return new Response(JSON.stringify(payload), { status: 201, headers });
@@ -215,14 +292,21 @@ export function publicFileHeaders(
  * 删除房间文件对应的 FlyDrive 对象。
  *
  * 墓碑已经在数据库中提交，删除失败只影响磁盘占用，不影响 404 语义；
- * 因此这里逐项 best-effort，绝不把存储异常抛回工具调用。
+ * 因此这里逐项 best-effort，绝不把存储异常抛回工具调用。返回是否所有
+ * 载荷都删除成功，供 GC 决定是否写 `purged_at`；失败留待下一轮重试。
  */
-export async function purgeFilePayloads(fileService: FileService, fileId: string): Promise<void> {
+export async function purgeFilePayloads(
+  fileService: FileService,
+  fileId: string,
+): Promise<boolean> {
+  let complete = true;
   for (const name of ['ready.json', 'pending.json', 'payload'] as const) {
     try {
       await fileService.disk.delete(fileService.key(fileId, name));
     } catch {
       // 过期清理与磁盘回收由 FlyDrive 自身负责；这里不改变业务结果。
+      complete = false;
     }
   }
+  return complete;
 }

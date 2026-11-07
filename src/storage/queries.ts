@@ -1,6 +1,9 @@
 import type {
   ActorRow,
+  ArtifactRow,
   DeliveryRow,
+  DriveFileRow,
+  FileReferenceRow,
   MessageRow,
   RoomFileRow,
   RoomMemberRow,
@@ -68,6 +71,45 @@ export async function getRoomFile(db: D1Like, fileId: string): Promise<RoomFileR
     .prepare('SELECT * FROM room_files WHERE file_id = ?')
     .bind(fileId)
     .first<RoomFileRow>();
+}
+
+/** 按 file_id 读取应用层上传登记；旧库未登记的文件返回 null。 */
+export async function getDriveFile(db: D1Like, fileId: string): Promise<DriveFileRow | null> {
+  return db
+    .prepare('SELECT * FROM drive_files WHERE file_id = ?')
+    .bind(fileId)
+    .first<DriveFileRow>();
+}
+
+/** 按 artifact_id 读取成果版本。 */
+export async function getArtifact(db: D1Like, artifactId: string): Promise<ArtifactRow | null> {
+  return db
+    .prepare('SELECT * FROM artifacts WHERE artifact_id = ?')
+    .bind(artifactId)
+    .first<ArtifactRow>();
+}
+
+/** 按 file_id 读取成果版本；一个文件至多一个成果。 */
+export async function getArtifactByFile(db: D1Like, fileId: string): Promise<ArtifactRow | null> {
+  return db
+    .prepare('SELECT * FROM artifacts WHERE file_id = ?')
+    .bind(fileId)
+    .first<ArtifactRow>();
+}
+
+/** 读取某文件的一条有效保留引用。 */
+export async function getActiveFileReference(
+  db: D1Like,
+  fileId: string,
+  kind: FileReferenceRow['kind'],
+  refId: string,
+): Promise<FileReferenceRow | null> {
+  return db
+    .prepare(
+      "SELECT * FROM file_references WHERE file_id = ? AND kind = ? AND ref_id = ? AND state = 'active'",
+    )
+    .bind(fileId, kind, refId)
+    .first<FileReferenceRow>();
 }
 
 /** 读取当前 actor 在房间内的网页监控配置；无行表示未配置。 */
