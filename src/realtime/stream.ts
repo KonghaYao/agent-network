@@ -519,7 +519,10 @@ function roomStreamItems(
     case 'task_offer_accepted':
     case 'task_offer_declined':
     case 'task_claimed':
-    case 'task_cancelled': {
+    case 'task_cancelled':
+    case 'task_progress_reported':
+    case 'task_blocked':
+    case 'task_resumed': {
       // 任务事件只让 active human 刷新任务视图。Agent 的工作唤醒只来自
       // 明确指派生成的 delivery，房间任务事件不推进 head、不产生未读。
       const change = row.event_type.replace('task_', '');

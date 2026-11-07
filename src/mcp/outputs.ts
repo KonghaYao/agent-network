@@ -972,23 +972,45 @@ export const taskAttachmentViewSchema = z.object({
   label: z.string(),
 });
 
+const taskStatusSchema = z.enum([
+  'unassigned',
+  'offered',
+  'in_progress',
+  'blocked',
+  'submitted',
+  'accepted',
+  'failed',
+  'cancelled',
+  'legacy_completed',
+]);
+
+/** 最新进度/阻塞/恢复审计；`tasks.status` 仍是唯一业务权威。 */
+export const taskProgressViewSchema = z.object({
+  progress_id: z.string(),
+  revision: z.number(),
+  prior_status: taskStatusSchema,
+  prior_status_label: z.string(),
+  status: taskStatusSchema,
+  status_label: z.string(),
+  percent: z.number().nullable(),
+  note: z.string(),
+  blocked_reason: z.string().nullable(),
+  actor_id: z.string(),
+  actor_name: z.string(),
+  created_at: z.string(),
+});
+
 export const taskSchema = z.object({
   task_id: z.string(),
   room_id: z.string(),
   title: z.string(),
   description: z.string(),
   acceptance_criteria: z.string(),
-  status: z.enum([
-    'unassigned',
-    'offered',
-    'in_progress',
-    'blocked',
-    'submitted',
-    'accepted',
-    'failed',
-    'cancelled',
-    'legacy_completed',
-  ]),
+  status: taskStatusSchema,
+  status_label: z.string(),
+  status_hint: z.string(),
+  phase: z.enum(['dispatch', 'execution', 'review', 'closed']),
+  phase_label: z.string(),
   revision: z.number(),
   source_message_id: z.string().nullable(),
   card_message_id: z.string().nullable(),
@@ -1002,6 +1024,8 @@ export const taskSchema = z.object({
   blocked_reason: z.string().nullable(),
   blocked_at: z.string().nullable(),
   last_progress_at: z.string().nullable(),
+  progress: taskProgressViewSchema.nullable(),
+  progress_history: z.array(taskProgressViewSchema).optional(),
   business_authority: z.enum(['native', 'external']),
   external_binding_id: z.string().nullable(),
   created_at: z.string(),
@@ -1016,6 +1040,9 @@ export const taskSchema = z.object({
   can_cancel: z.boolean(),
   can_accept: z.boolean(),
   can_decline: z.boolean(),
+  can_report_progress: z.boolean(),
+  can_block: z.boolean(),
+  can_resume: z.boolean(),
 });
 
 export const taskResultSchema = z.object({

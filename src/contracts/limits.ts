@@ -169,6 +169,12 @@ export const LIMITS = {
   taskOfferTtlMs: 24 * 60 * 60_000,
   /** 任务取消原因 UTF-8 字节上限。 */
   taskCancelReasonBytes: 1024,
+  /** 任务阻塞原因 UTF-8 字节上限；只进入任务详情与审计事件。 */
+  taskBlockReasonBytes: 4 * 1024,
+  /** 任务进度说明 UTF-8 字节上限；普通进度不复制进聊天消息。 */
+  taskProgressNoteBytes: 8 * 1024,
+  /** 任务详情返回的最近进度记录条数；权威历史仍保留在 SQLite。 */
+  taskProgressHistoryMax: 20,
   /** 任务期限允许的最远未来时间（毫秒）。 */
   taskDueMaxAheadMs: 10 * 365 * 24 * 60 * 60_000,
   /** `network_task_summary` 单次 room_ids 过滤上限。 */

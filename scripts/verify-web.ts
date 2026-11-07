@@ -2680,6 +2680,113 @@ async function runTaskAcceptance(
       })).task.status,
       'in_progress',
     );
+
+    // D03 网页入口：当前负责人更新进度、报告阻塞并恢复执行。
+    await page
+      .locator('#task-detail-actions input[aria-label="进度说明（可选）"]')
+      .fill('网页更新进度');
+    await page
+      .locator('#task-detail-actions input[aria-label="进度百分比"]')
+      .fill('55');
+    await page
+      .locator('#task-detail-actions button')
+      .filter({ hasText: '更新进度' })
+      .click();
+    await page.waitForFunction(
+      `(() => {
+        const bar = document.querySelector('#task-detail-body .task-progress-bar');
+        return Boolean(bar && bar.getAttribute('aria-valuenow') === '55');
+      })()`,
+    );
+    check('网页更新进度后显示 55% 进度条', true);
+    const uiProgressTask = await rawTool<{
+      task: {
+        status: string;
+        revision: number;
+        progress: { percent: number | null; note: string } | null;
+        progress_history?: unknown[];
+      };
+    }>(humanToken, 'network_task_get', { task_id: uiAcceptTask.task.task_id });
+    checkEqual('网页更新进度不改变业务状态', uiProgressTask.task.status, 'in_progress');
+    checkEqual('网页更新进度百分比持久化', uiProgressTask.task.progress?.percent, 55);
+    checkEqual('网页更新进度说明持久化', uiProgressTask.task.progress?.note, '网页更新进度');
+    checkEqual('网页更新进度写入历史', uiProgressTask.task.progress_history?.length, 1);
+
+    await page
+      .locator('#task-detail-actions input[aria-label="阻塞原因"]')
+      .fill('网页阻塞原因');
+    await page
+      .locator('#task-detail-actions button')
+      .filter({ hasText: '报告阻塞' })
+      .click();
+    await page.waitForFunction(
+      `document.querySelector('#task-detail-body .task-status')?.textContent === '受阻'`,
+    );
+    checkEqual(
+      '网页报告阻塞后服务端为 blocked',
+      (await rawTool<{ task: { status: string; blocked_reason: string | null } }>(
+        humanToken,
+        'network_task_get',
+        { task_id: uiAcceptTask.task.task_id },
+      )).task.status,
+      'blocked',
+    );
+    checkEqual(
+      '网页阻塞原因持久化',
+      (await rawTool<{ task: { blocked_reason: string | null } }>(
+        humanToken,
+        'network_task_get',
+        { task_id: uiAcceptTask.task.task_id },
+      )).task.blocked_reason,
+      '网页阻塞原因',
+    );
+    check(
+      '网页阻塞详情显示原因',
+      ((await page.locator('#task-detail-body').innerText()) ?? '').includes('网页阻塞原因'),
+    );
+
+    await page
+      .locator('#task-detail-actions input[aria-label="恢复说明（可选）"]')
+      .fill('网页恢复执行');
+    await page
+      .locator('#task-detail-actions button')
+      .filter({ hasText: '恢复执行' })
+      .click();
+    await page.waitForFunction(
+      `document.querySelector('#task-detail-body .task-status')?.textContent === '进行中'`,
+    );
+    checkEqual(
+      '网页恢复后服务端为 in_progress',
+      (await rawTool<{ task: { status: string; blocked_reason: string | null } }>(
+        humanToken,
+        'network_task_get',
+        { task_id: uiAcceptTask.task.task_id },
+      )).task.status,
+      'in_progress',
+    );
+    checkEqual(
+      '网页恢复清空 blocked_reason',
+      (await rawTool<{ task: { blocked_reason: string | null } }>(
+        humanToken,
+        'network_task_get',
+        { task_id: uiAcceptTask.task.task_id },
+      )).task.blocked_reason,
+      null,
+    );
+    checkEqual(
+      '网页进度历史保留三次操作',
+      await page.locator('#task-detail-body .task-progress-history li').count(),
+      3,
+    );
+    check(
+      '网页进度历史保留阻塞原因与百分比',
+      ((await page.locator('#task-detail-body .task-progress-history').innerText()) ?? '').includes(
+        '网页阻塞原因',
+      ) &&
+        ((await page.locator('#task-detail-body .task-progress-history').innerText()) ?? '').includes(
+          '55%',
+        ),
+    );
     await page.locator('#task-detail-close').click();
 
     const uiDeclineTask = await rawTool<{ task: { task_id: string } }>(

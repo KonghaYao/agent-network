@@ -335,6 +335,9 @@ async function main(): Promise<void> {
     'network_task_decline',
     'network_task_claim',
     'network_task_cancel',
+    'network_task_progress',
+    'network_task_block',
+    'network_task_resume',
     'network_room_members_update',
     'network_room_role_set',
     'network_room_owner_transfer',
@@ -424,6 +427,9 @@ async function main(): Promise<void> {
     'network_task_decline',
     'network_task_claim',
     'network_task_cancel',
+    'network_task_progress',
+    'network_task_block',
+    'network_task_resume',
     'network_inbox_list',
     'network_delivery_claim',
     'network_delivery_complete',
@@ -675,9 +681,12 @@ async function main(): Promise<void> {
     'network_task_decline',
     'network_task_claim',
     'network_task_cancel',
+    'network_task_progress',
+    'network_task_block',
+    'network_task_resume',
   ];
   check(
-    '任务 9 个工具全部注册且旧工具已退役',
+    '任务 12 个工具全部注册且旧工具已退役',
     taskToolNames.every((name) => taskTools.has(name)) &&
       taskTools.size === taskToolNames.length &&
       !taskTools.has('network_task_list_get') &&
@@ -715,10 +724,24 @@ async function main(): Promise<void> {
   );
   const taskGetOutput = JSON.stringify(taskTools.get('network_task_get')?.outputSchema ?? {});
   check(
-    'task_get 输出含状态/版本/assignment/来源与任务卡片',
-    ['task_id', 'status', 'revision', 'assignment', 'source_message_id', 'card_message_id'].every(
-      (key) => taskGetOutput.includes(`"${key}"`),
-    ),
+    'task_get 输出含统一状态文案/阶段/进度/版本/assignment/来源与任务卡片',
+    [
+      'task_id',
+      'status',
+      'status_label',
+      'status_hint',
+      'phase',
+      'phase_label',
+      'progress',
+      'progress_history',
+      'revision',
+      'assignment',
+      'source_message_id',
+      'card_message_id',
+      'can_report_progress',
+      'can_block',
+      'can_resume',
+    ].every((key) => taskGetOutput.includes(`"${key}"`)),
     taskTools.get('network_task_get')?.outputSchema,
   );
   const taskListInput = JSON.stringify(taskTools.get('network_task_list')?.inputSchema ?? {});
@@ -806,6 +829,60 @@ async function main(): Promise<void> {
       taskCancelDescription.includes('reason 必填') &&
       taskCancelDescription.includes('关闭仍 pending/claimed 的关联 delivery'),
     taskCancelDescription,
+  );
+  const taskProgressInput = JSON.stringify(
+    taskTools.get('network_task_progress')?.inputSchema ?? {},
+  );
+  check(
+    'task_progress 输入含 note/percent/execution 版本与 expected_revision',
+    ['request_id', 'task_id', 'note', 'percent', 'assignment_id', 'assignment_version', 'expected_revision'].every(
+      (key) => taskProgressInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_progress')?.inputSchema,
+  );
+  const taskProgressDescription = taskTools.get('network_task_progress')?.description ?? '';
+  check(
+    'task_progress 描述声明不造消息/投递/待办且 delivery 完成不等于任务完成',
+    taskProgressDescription.includes('只有当前 owner 且持有当前 active assignment') &&
+      taskProgressDescription.includes('status 仍保持 in_progress') &&
+      taskProgressDescription.includes('不创建聊天消息、delivery 或 inbox 待办') &&
+      taskProgressDescription.includes('不增加未读与 pending_count') &&
+      taskProgressDescription.includes('delivery complete 只结束通知处理，不代表任务完成') &&
+      taskProgressDescription.includes('ASSIGNMENT_STALE') &&
+      taskProgressDescription.includes('VERSION_CONFLICT'),
+    taskProgressDescription,
+  );
+  const taskBlockInput = JSON.stringify(taskTools.get('network_task_block')?.inputSchema ?? {});
+  check(
+    'task_block 输入要求 reason 并支持 execution 版本',
+    ['request_id', 'task_id', 'reason', 'assignment_id', 'assignment_version', 'expected_revision'].every(
+      (key) => taskBlockInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_block')?.inputSchema,
+  );
+  const taskBlockDescription = taskTools.get('network_task_block')?.description ?? '';
+  check(
+    'task_block 描述声明阻塞不是失败或取消且保留执行资格',
+    taskBlockDescription.includes('reason 必填') &&
+      taskBlockDescription.includes('阻塞不是失败或取消') &&
+      taskBlockDescription.includes('不创建消息、delivery 或 inbox 待办'),
+    taskBlockDescription,
+  );
+  const taskResumeInput = JSON.stringify(taskTools.get('network_task_resume')?.inputSchema ?? {});
+  check(
+    'task_resume 输入支持可选 note 与 execution 版本',
+    ['request_id', 'task_id', 'note', 'assignment_id', 'assignment_version', 'expected_revision'].every(
+      (key) => taskResumeInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_resume')?.inputSchema,
+  );
+  const taskResumeDescription = taskTools.get('network_task_resume')?.description ?? '';
+  check(
+    'task_resume 描述声明仅原负责人、清空阻塞字段与非 blocked 拒绝',
+    taskResumeDescription.includes('只有仍持有当前 active assignment 的原负责人') &&
+      taskResumeDescription.includes('清空 blocked_reason/blocked_at') &&
+      taskResumeDescription.includes('非 blocked 状态返回 CONFLICT'),
+    taskResumeDescription,
   );
   check(
     'task_get/list/summary 注册为只读工具',
@@ -1718,7 +1795,9 @@ async function main(): Promise<void> {
     ['## 任务与任务卡片', 'network_task_list', 'network_task_summary',
       'network_task_get', 'network_task_create', 'network_task_offer',
       'network_task_accept', 'network_task_decline',
-      'network_task_claim', 'network_task_cancel', 'task.updated',
+      'network_task_claim', 'network_task_cancel',
+      'network_task_progress', 'network_task_block', 'network_task_resume',
+      'status_label', 'task_progress', 'task.updated',
       '任务卡片', '不写 inbox', '不推进 `head_seq`', '不要轮询',
       'agent_tasks.sh'].every((marker) => skillText.includes(marker)),
     skillText.slice(0, 320),
@@ -2071,6 +2150,8 @@ async function main(): Promise<void> {
     ['agent_tasks.sh', '### 任务与任务卡片', 'network_task_list', 'network_task_create',
       'network_task_offer', 'network_task_accept', 'network_task_decline',
       'network_task_claim', 'network_task_cancel',
+      'network_task_progress', 'network_task_block', 'network_task_resume',
+      'status_label', 'task_progress',
       'task.updated', '不写 inbox', '不会唤醒 Agent',
       'task_summary', '每次上线', 'pending > 0', 'claimed > 0', '只含自己',
       '任务卡片'].every((marker) =>
@@ -2689,13 +2770,15 @@ async function main(): Promise<void> {
   check(
     '任务命令脚本可通过 /skills 下载并包含全部子命令',
     agentTasksType.includes('text/x-shellscript') &&
-      ['list', 'summary', 'get', 'create', 'offer', 'accept', 'decline', 'claim', 'cancel'].every(
+      ['list', 'summary', 'get', 'create', 'offer', 'accept', 'decline', 'claim', 'cancel',
+        'progress', 'block', 'resume'].every(
         (marker) => agentTasksText.includes(`  ${marker}`),
       ) &&
       ['network_task_list', 'network_task_summary', 'network_task_get',
         'network_task_create', 'network_task_offer', 'network_task_accept',
         'network_task_decline', 'network_task_claim',
-        'network_task_cancel'].every((marker) =>
+        'network_task_cancel', 'network_task_progress', 'network_task_block',
+        'network_task_resume'].every((marker) =>
         agentTasksText.includes(marker),
       ),
     { contentType: agentTasksType },

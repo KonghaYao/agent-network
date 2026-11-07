@@ -520,6 +520,27 @@ export interface TaskAttachmentRow {
   created_at: number;
 }
 
+/**
+ * 任务进度/阻塞/恢复审计；`tasks.status` 仍是唯一当前状态。
+ *
+ * `task_revision` 与 `tasks.revision` 同一事务递增，唯一索引保证一个版本
+ * 只有一条记录。普通进度不产生消息、delivery 或 inbox 待办。
+ */
+export interface TaskProgressRow {
+  progress_id: string;
+  task_id: string;
+  task_revision: number;
+  assignment_id: string | null;
+  assignment_version: number | null;
+  actor_id: string;
+  prior_status: TaskRow['status'];
+  status: TaskRow['status'];
+  percent: number | null;
+  note: string;
+  blocked_reason: string | null;
+  created_at: number;
+}
+
 export interface TaskDeliveryRow {
   delivery_id: string;
   task_id: string;

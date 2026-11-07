@@ -12,7 +12,7 @@ import { resolve } from 'node:path';
 import { createD1 } from '../../src/bun/d1';
 import { migrate } from '../../src/bun/migrate';
 import type { Principal } from '../../src/domain/principal';
-import { taskCounts, taskSummary } from '../../src/domain/tasks';
+import { taskCounts, taskGet, taskList, taskSummary } from '../../src/domain/tasks';
 import type { Env } from '../../src/env';
 import { NotificationHub } from '../../src/realtime/hub';
 import { login } from '../../src/realtime/presence';
@@ -107,6 +107,13 @@ function seed(db: Database): void {
        ${AT}, NULL, ${AT + 1}, NULL, ${AT}, ${AT + 1}),
       ('asg_claimed_b_3', 'tsk_claimed_b_3', 1, 'agt_b', 'active', 'usr_owner', NULL,
        ${AT}, NULL, ${AT}, NULL, ${AT}, ${AT});
+
+    INSERT INTO task_progress
+      (progress_id, task_id, task_revision, assignment_id, assignment_version,
+       actor_id, prior_status, status, percent, note, blocked_reason, created_at)
+    VALUES
+      ('prg_claimed_a', 'tsk_claimed_a', 2, 'asg_claimed_a', 1, 'agt_a',
+       'in_progress', 'in_progress', 60, '已同步进度', NULL, ${AT + 2});
   `);
 }
 
@@ -147,6 +154,35 @@ export async function runRoomTaskSummaryUnitChecks(): Promise<void> {
   const principalA = await principalFor(d1, 'agt_a');
   const principalB = await principalFor(d1, 'agt_b');
   const principalHuman = await principalFor(d1, 'usr_owner');
+
+  const claimedView = await taskGet(d1, principalA, { task_id: 'tsk_claimed_a' });
+  checkEqual('D03 任务详情返回统一进行中文案', claimedView.task.status_label, '进行中');
+  checkEqual('D03 任务详情返回执行阶段', claimedView.task.phase_label, '执行');
+  checkEqual('D03 任务详情读取最新进度', claimedView.task.progress?.percent, 60);
+  checkEqual('D03 任务详情进度记录操作者', claimedView.task.progress?.actor_name, 'Agent A');
+  checkEqual('D03 任务详情返回进度历史', claimedView.task.progress_history?.length, 1);
+  checkEqual('D03 负责人详情允许上报', claimedView.task.can_report_progress, true);
+  const roomOneList = await taskList(d1, principalA, { room_id: 'rm_one', limit: 50 });
+  const claimedEntry = roomOneList.tasks.find((task) => task.task_id === 'tsk_claimed_a');
+  checkEqual('D03 任务列表展示最新进度', claimedEntry?.progress?.percent, 60);
+  checkEqual('D03 任务列表使用同一状态文案', claimedEntry?.status_label, '进行中');
+  checkEqual('D03 任务列表不放大进度历史', claimedEntry?.progress_history, undefined);
+
+  const legacyView = await taskGet(d1, principalA, { task_id: 'tsk_done_2' });
+  checkEqual('D03 历史完成保持 legacy_completed', legacyView.task.status, 'legacy_completed');
+  checkEqual('D03 历史完成显示为历史完成', legacyView.task.status_label, '历史完成');
+  checkEqual('D03 历史完成阶段为已结束', legacyView.task.phase_label, '已结束');
+  check(
+    'D03 历史完成提示明确不等于 accepted',
+    legacyView.task.status_hint.includes('不能当作 accepted'),
+    legacyView.task.status_hint,
+  );
+  checkEqual('D03 历史完成不可上报', legacyView.task.can_report_progress, false);
+  checkEqual('D03 历史完成不可取消', legacyView.task.can_cancel, false);
+  checkEqual('D03 历史完成没有伪造进度', legacyView.task.progress, null);
+  const acceptedView = await taskGet(d1, principalA, { task_id: 'tsk_done' });
+  checkEqual('D03 accepted 显示为已验收', acceptedView.task.status_label, '已验收');
+  check('D03 历史完成文案不等于已验收', legacyView.task.status_label !== acceptedView.task.status_label);
 
   const before = snapshot(db);
 

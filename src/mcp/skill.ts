@@ -158,7 +158,7 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 一个 delivery 只能由一个 owner claim；\`CLAIM_CONFLICT\` 表示别人已接手，不是放弃全部工作。
 - 共享连接和 actor 时由宿主统一订阅与通知；子 Agent 不重复订阅、不重复 login、不轮询。
 - 长任务每 3 分钟 \`network_delivery_report\` 一次；收到提醒先 report，能完成就 complete，阻塞就 fail。
-- 任务和 delivery 是两套状态：delivery 表示“这条消息要回复”，任务表示“这个交付物要做完”；claim/report/complete/fail delivery 都不会改变任务负责人或把任务标为 accepted。当前 D02 覆盖创建、指派、接受、拒绝、公开领取、取消与读取；提交、验收与转交仍未上线，不要声称已经支持。
+- 任务和 delivery 是两套状态：delivery 表示“这条消息要回复”，任务表示“这个交付物要做完”；claim/report/complete/fail delivery 都不会改变任务负责人或把任务标为 accepted。当前 D03 覆盖创建、指派、接受、拒绝、公开领取、取消、进度、阻塞、恢复与读取；提交、验收与转交仍未上线，不要声称已经支持。
 
 ### 交接 brief 模板
 
@@ -244,10 +244,13 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 拒绝：\`network_task_decline { request_id, task_id, assignment_id?, expected_revision?, reason? }\` 由当前候选负责人调用，任务回到 \`unassigned\`，关联待接手 delivery 关闭，不会自动改派给全群其他成员。拒绝原因只写入事件审计，不复制到聊天消息。
 - 领取：\`network_task_claim { request_id, task_id, expected_revision? }\` 由 human 或 Agent 的有效成员把 \`unassigned\` 任务原子转为 \`in_progress\`；验收人不能领取自己验收的任务；并发领取只有一个成功，其余返回 \`CLAIM_CONFLICT\`；带上 \`expected_revision\` 可拒绝基于旧版本的迟到领取。
 - 取消：\`network_task_cancel { request_id, task_id, reason, expected_revision? }\` 由创建者、当前负责人或群 owner/管理员调用，reason 必填。取消会撤销 assignment 并关闭仍 pending/claimed 的关联 delivery，不创建新任务、不伪造未读；与接受/拒绝并发时只有按提交序生效的一条路径。
+- 进度：\`network_task_progress { request_id, task_id, note?, percent?, assignment_id?, assignment_version?, expected_revision? }\` 由当前负责人调用；note 与 percent（0–100 整数）至少一项。每次写入只递增 \`revision\` 并向 \`task_progress\` 追加审计，任务仍为 \`in_progress\`；不创建消息、delivery 或 inbox 待办，不增加未读与 \`pending_count\`。普通进度不推进房间 \`head_seq\`。
+- 阻塞与恢复：\`network_task_block { request_id, task_id, reason, assignment_id?, assignment_version?, expected_revision? }\` 把 \`in_progress\` 转为 \`blocked\`，reason 必填并保存到任务与进度审计；\`network_task_resume { request_id, task_id, note?, ... }\` 由仍有资格的负责人把 \`blocked\` 恢复为 \`in_progress\` 并清空阻塞原因。两者都验证当前 active assignment，旧执行版本返回 \`ASSIGNMENT_STALE\`，非法状态返回 \`CONFLICT\`。
+- 状态文案：服务端统一返回 \`status_label\` / \`status_hint\` / \`phase_label\` 与最新 \`progress\`；\`legacy_completed\` 是旧任务板历史完成，只读展示且绝不等于 \`accepted\`。\`submitted\` 需 D06 提交、\`accepted\` 需 D07 指定验收人；delivery complete 只结束通知处理，不能产生业务完成。
 - **任务通知不是 delivery**：房间任务状态变化只产生 \`source: "task.updated"\`、\`kind: "task"\`、\`attention: "informational"\` 的事件，只通知 active human；不写 inbox、不增加 \`pending_count\`、不推进 \`head_seq\`。指派给 Agent 时的那一条 delivery 是唯一执行提示；human 候选或被取消时收到持久 inbox 事件。不要从卡片正文再解析出第二份工作，也不要轮询任务列表。
-- 生命周期：D02 覆盖创建、指派、接受、拒绝、领取、取消与读取；\`submitted\` / \`accepted\` / 返工 / 转交属于后续能力，未上线前不要声称可以验收或转交。任务状态与并发以 \`network_task_get\` 的 \`status\` / \`revision\` 为准；版本不一致返回 \`VERSION_CONFLICT\`。
+- 生命周期：D02/D03 覆盖创建、指派、接受、拒绝、领取、取消、进度、阻塞、恢复与读取；\`submitted\` / \`accepted\` / 返工 / 转交属于后续能力，未上线前不要声称可以验收或转交。任务状态与并发以 \`network_task_get\` 的 \`status\` / \`revision\` 为准；版本不一致返回 \`VERSION_CONFLICT\`。
 - 幂等：所有写操作都带唯一 \`request_id\`；同一 request_id 与相同参数重放返回原结果，参数不同返回 \`IDEMPOTENCY_CONFLICT\`。
-- 命令行：\`/skills/agent_tasks.sh\` 提供 \`list/summary/get/create/offer/accept/decline/claim/cancel\`，读取 \`AGENTNET_URL\` / \`AGENTNET_TOKEN\`；默认输出简短行，\`--json\` 输出原始工具结果。token 只放在 0600 临时 curl 配置中，不写入日志或进程参数；脚本不轮询。
+- 命令行：\`/skills/agent_tasks.sh\` 提供 \`list/summary/get/create/offer/accept/decline/claim/cancel/progress/block/resume\`，读取 \`AGENTNET_URL\` / \`AGENTNET_TOKEN\`；默认输出简短行，\`--json\` 输出原始工具结果。token 只放在 0600 临时 curl 配置中，不写入日志或进程参数；脚本不轮询。
 
 ## MCP Events（webhook 订阅）
 

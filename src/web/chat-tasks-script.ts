@@ -121,10 +121,13 @@ function hideTaskPopover() {
   if (taskToggleElement) taskToggleElement.setAttribute('aria-expanded', 'false');
 }
 
-function createTaskStatusBadge(status) {
+function createTaskStatusBadge(taskOrStatus) {
+  const status = typeof taskOrStatus === 'string' ? taskOrStatus : taskOrStatus.status;
   const badge = document.createElement('span');
   badge.className = 'task-status ' + taskStatusClass(status);
-  badge.textContent = taskStatusLabel(status);
+  badge.textContent = typeof taskOrStatus === 'string'
+    ? taskStatusLabel(status)
+    : (taskOrStatus.status_label || taskStatusLabel(status));
   return badge;
 }
 
@@ -140,7 +143,7 @@ function taskItemElement(task) {
   const title = document.createElement('span');
   title.className = 'task-desc';
   title.textContent = task.title;
-  top.append(title, createTaskStatusBadge(task.status));
+  top.append(title, createTaskStatusBadge(task));
   const meta = document.createElement('div');
   meta.className = 'task-meta';
   const parts = [];
@@ -155,7 +158,15 @@ function taskItemElement(task) {
   parts.push('验收：' + task.reviewer_name);
   if (task.due_at) parts.push('期限：' + taskTimeLabel(task.due_at));
   meta.textContent = parts.join(' · ');
-  item.append(top, meta);
+  const progressText = taskProgressSummary(task);
+  if (progressText) {
+    const progress = document.createElement('div');
+    progress.className = 'task-meta task-progress-summary';
+    progress.textContent = progressText;
+    item.append(top, meta, progress);
+  } else {
+    item.append(top, meta);
+  }
   item.addEventListener('click', function () {
     openTaskDetail(task.task_id).catch(function (error) {
       if (statusElement) statusElement.textContent = '读取任务失败：' + error.message;
@@ -358,8 +369,9 @@ function renderTaskDetail(task) {
   taskDetailCurrent = task;
   if (taskDetailTitleElement) taskDetailTitleElement.textContent = task.title;
   if (taskDetailBodyElement) taskDetailBodyElement.replaceChildren();
-  const statusValue = taskDetailRow('状态', taskStatusLabel(task.status));
+  const statusValue = taskDetailRow('状态', taskStatusText(task));
   if (statusValue) statusValue.className = 'task-status ' + taskStatusClass(task.status);
+  appendTaskProgressDetail(task);
   taskDetailRow('创建者', task.created_by_name);
   taskDetailRow(
     '负责人',
@@ -422,13 +434,20 @@ function renderTaskDetailActions(task) {
     error.textContent = '';
     try {
       const result = await action();
-      renderTaskDetail(result.task);
+      let task = result.task;
+      try {
+        const latest = await callTool('network_task_get', { task_id: task.task_id });
+        if (latest && latest.task) task = latest.task;
+      } catch (refreshError) {
+        // 写操作结果已带权威状态；读取失败时继续用写结果渲染。
+      }
+      renderTaskDetail(task);
       await loadTaskSummary().catch(function () {});
-      if (activeRoomId === result.task.room_id) {
+      if (activeRoomId === task.room_id) {
         loadRoomTasks(activeRoomId, roomEpoch);
       }
       syncTaskCardMarkers(messagesElement);
-      return result.task;
+      return task;
     } catch (caught) {
       const code = caught && caught.code ? String(caught.code) : '';
       let message = failureLabel + '：' + (caught && caught.message ? caught.message : caught);
@@ -583,6 +602,8 @@ function renderTaskDetailActions(task) {
     });
     actions.append(reason, cancel);
   }
+
+  renderTaskProgressActions(task, actions, run, error);
 
   if (!actions.hasChildNodes()) {
     actions.remove();
@@ -805,11 +826,18 @@ function syncTaskCardMarkers(container) {
       node.classList.add('task-card-message');
       const card = document.createElement('div');
       card.className = 'msg-task-card';
-      card.append(createTaskStatusBadge(cardTask.status));
+      card.append(createTaskStatusBadge(cardTask));
       const title = document.createElement('span');
       title.className = 'msg-task-title';
       title.textContent = cardTask.title;
       card.append(title);
+      const progressText = taskProgressSummary(cardTask);
+      if (progressText) {
+        const progress = document.createElement('span');
+        progress.className = 'msg-task-progress';
+        progress.textContent = progressText;
+        card.append(progress);
+      }
       const open = document.createElement('button');
       open.type = 'button';
       open.className = 'msg-task-open';

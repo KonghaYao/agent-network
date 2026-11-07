@@ -1,5 +1,5 @@
 #!/bin/bash
-# WeBots 任务命令：list/summary/get/create/offer/accept/decline/claim/cancel。
+# WeBots 任务命令：list/summary/get/create/offer/accept/decline/claim/cancel/progress/block/resume。
 # 依赖 curl、jq。token 只从环境变量读取，写入 0600 临时 curl 配置，不进入进程参数或日志。
 # 用法：AGENTNET_TOKEN=... bash agent_tasks.sh <command> [options]
 # 安装：curl -fsSL https://net.peri-code.dev/skills/agent_tasks.sh -o agent_tasks.sh
@@ -137,6 +137,18 @@ usage() {
       human 或 Agent 领取 unassigned 任务；并发领取返回 CLAIM_CONFLICT。
   cancel --task TASK_ID --reason TEXT [--expected-revision N]
       创建者、当前负责人或群 owner/管理员取消任务；reason 必填。
+  progress --task TASK_ID [--note TEXT] [--percent 0-100] [options]
+      当前负责人上报进度；note 与 percent 至少一项，任务仍为 in_progress。
+  block --task TASK_ID --reason TEXT [options]
+      当前负责人把 in_progress 任务转为 blocked；reason 必填。
+  resume --task TASK_ID [--note TEXT] [options]
+      当前负责人把 blocked 任务恢复为 in_progress，并清空阻塞原因。
+
+进度类写操作通用选项：
+  --assignment ASSIGNMENT_ID       当前 assignment；建议与 --assignment-version 一起传
+  --assignment-version N           当前执行版本；旧版本返回 ASSIGNMENT_STALE
+  --expected-revision N            任务 revision CAS；变化返回 VERSION_CONFLICT
+  --request-id ID                  幂等 ID
 
 选项：
   --json          输出原始工具结果 JSON；默认输出简短行。
@@ -152,6 +164,8 @@ usage() {
   指派 Agent 只产生一条绑定 task_id/assignment_version 的 delivery；human 候选只写持久个人通知。
   公开任务不创建 delivery、不增加 pending_count，也不唤醒所有 Agent。
   接受/拒绝只由当前候选者操作；delivery claim/complete 只表示通知处理，不等于接受或验收任务。
+  进度/阻塞/恢复只写任务 revision 与 task_progress 审计，不创建消息、delivery 或未读；
+  submitted 需 D06 提交、accepted 需 D07 指定验收人，legacy_completed 只读且不等于 accepted。
   任务通知不写 inbox、不推进 head_seq、不产生未读；不要轮询。
   network_login 返回 task_summary；请在每次唤醒后先 summary（pending 是未领取，claimed 只含本人），再按房间 list。
   token 只写入 0600 临时 curl 配置，不输出、不写入日志或进程参数。
@@ -444,6 +458,105 @@ cmd_cancel() {
   printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\t\(.task.cancelled_at // "-")"'
 }
 
+cmd_progress() {
+  local task="" note="" percent="" assignment="" version="" request_id="" revision=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
+      --note) need_value "$@"; note="${2:-}"; shift 2 ;;
+      --percent) need_value "$@"; percent="${2:-}"; shift 2 ;;
+      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
+      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
+      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
+      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
+      *) die "unknown progress option: $1" ;;
+    esac
+  done
+  [ -n "$task" ] || die "progress requires --task"
+  [ -n "$note" ] || [ -n "$percent" ] || die "progress requires --note or --percent"
+  [ -n "$request_id" ] || request_id=$(new_id)
+  local args result
+  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg note "$note" \
+    --arg percent "$percent" --arg assignment "$assignment" --arg version "$version" --arg revision "$revision" \
+    '{request_id:$request_id, task_id:$task}
+      + (if $note == "" then {} else {note:$note} end)
+      + (if $percent == "" then {} else {percent:($percent|tonumber)} end)
+      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
+      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
+      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
+  result=$(mcp_call network_task_progress "$args") || exit 1
+  result=$(printf '%s' "$result" | mcp_result) || exit 1
+  if [ "$JSON" = "1" ]; then
+    print_json "$result"
+    return
+  fi
+  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\trevision=\(.task.revision)\tpercent=\(.task.progress.percent // "-")"'
+}
+
+cmd_block() {
+  local task="" reason="" assignment="" version="" request_id="" revision=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
+      --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
+      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
+      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
+      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
+      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
+      *) die "unknown block option: $1" ;;
+    esac
+  done
+  [ -n "$task" ] || die "block requires --task"
+  [ -n "$reason" ] || die "block requires --reason"
+  [ -n "$request_id" ] || request_id=$(new_id)
+  local args result
+  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg reason "$reason" \
+    --arg assignment "$assignment" --arg version "$version" --arg revision "$revision" \
+    '{request_id:$request_id, task_id:$task, reason:$reason}
+      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
+      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
+      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
+  result=$(mcp_call network_task_block "$args") || exit 1
+  result=$(printf '%s' "$result" | mcp_result) || exit 1
+  if [ "$JSON" = "1" ]; then
+    print_json "$result"
+    return
+  fi
+  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\trevision=\(.task.revision)\t\(.task.blocked_reason // "-")"'
+}
+
+cmd_resume() {
+  local task="" note="" assignment="" version="" request_id="" revision=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
+      --note) need_value "$@"; note="${2:-}"; shift 2 ;;
+      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
+      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
+      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
+      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
+      *) die "unknown resume option: $1" ;;
+    esac
+  done
+  [ -n "$task" ] || die "resume requires --task"
+  [ -n "$request_id" ] || request_id=$(new_id)
+  local args result
+  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg note "$note" \
+    --arg assignment "$assignment" --arg version "$version" --arg revision "$revision" \
+    '{request_id:$request_id, task_id:$task}
+      + (if $note == "" then {} else {note:$note} end)
+      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
+      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
+      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
+  result=$(mcp_call network_task_resume "$args") || exit 1
+  result=$(printf '%s' "$result" | mcp_result) || exit 1
+  if [ "$JSON" = "1" ]; then
+    print_json "$result"
+    return
+  fi
+  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\trevision=\(.task.revision)\towner=\(.task.owner_name // "-")"'
+}
+
 case "$COMMAND" in
   list) cmd_list "$@" ;;
   summary) cmd_summary "$@" ;;
@@ -454,5 +567,8 @@ case "$COMMAND" in
   decline) cmd_decline "$@" ;;
   claim) cmd_claim "$@" ;;
   cancel) cmd_cancel "$@" ;;
+  progress) cmd_progress "$@" ;;
+  block) cmd_block "$@" ;;
+  resume) cmd_resume "$@" ;;
   *) die "unknown command: $COMMAND (use --help)" ;;
 esac

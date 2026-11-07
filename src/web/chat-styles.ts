@@ -358,6 +358,27 @@ export const APP_STYLE = `
     padding: 0 8px; border: 1px solid var(--wx-line); border-radius: 4px;
     background: var(--wx-bg); color: var(--wx-text); font: inherit; font-size: 12px; }
   .task-cancel-reason { flex: 1 1 140px; }
+  .task-status-hint { color: var(--wx-muted); line-height: 1.6; }
+  .task-block-reason { color: var(--wx-danger); }
+  .task-progress { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .task-progress-bar { height: 6px; border-radius: 3px; overflow: hidden;
+    background: var(--wx-search); }
+  .task-progress-fill { height: 100%; border-radius: 3px;
+    background: var(--wx-green); transition: width 0.2s ease; }
+  .task-progress-meta { font-size: 11px; color: var(--wx-muted);
+    overflow-wrap: anywhere; }
+  .task-progress-note { font-size: 12px; line-height: 1.6;
+    white-space: pre-wrap; overflow-wrap: anywhere; }
+  .task-progress-history { list-style: none; margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 6px; }
+  .task-progress-history li { padding-top: 6px; border-top: 1px solid var(--wx-line); }
+  .task-progress-history li:first-child { padding-top: 0; border-top: 0; }
+  .task-progress-history-head { font-size: 12px; color: var(--wx-text); }
+  .task-progress-percent-input { flex: 0 0 88px; }
+  .task-progress-summary { color: var(--wx-link); }
+  .msg-task-progress { flex: 0 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; color: var(--wx-muted);
+    font-size: 11px; }
   .msg-task-slot { margin-top: 4px; }
   .msg-task-slot[hidden] { display: none; }
   .mine .msg-task-slot { text-align: right; }

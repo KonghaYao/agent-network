@@ -77,6 +77,7 @@ import {
   roomsListSchema,
   syncSchema,
   taskAcceptSchema,
+  taskBlockSchema,
   taskCancelSchema,
   taskClaimSchema,
   taskCreateSchema,
@@ -84,6 +85,8 @@ import {
   taskGetSchema,
   taskListSchema,
   taskOfferSchema,
+  taskProgressSchema,
+  taskResumeSchema,
   taskSummarySchema,
 } from '../contracts/schemas';
 import { agentsGet, archiveAgent, unarchiveAgent } from '../domain/agents';
@@ -176,6 +179,7 @@ import {
 } from '../domain/owner-transfers';
 import {
   taskAccept,
+  taskBlock,
   taskCancel,
   taskClaim,
   taskCreate,
@@ -183,6 +187,8 @@ import {
   taskGet,
   taskList,
   taskOffer,
+  taskReportProgress,
+  taskResume,
   taskSummary,
 } from '../domain/tasks';
 import { sync } from '../domain/sync';
@@ -1007,7 +1013,7 @@ export function registerTools(
   register(
     server,
     'network_task_get',
-    '按 task_id 读取任务详情：短标题、受控长目标、验收条件、状态、revision、负责人/验收人、期限、业务权威来源、assignment 与关联 delivery。只有当前有效成员且任务在历史边界内可见时返回；非成员、边界外与不存在统一返回 NOT_FOUND，不能靠 task_id 探测任务是否存在。',
+    '按 task_id 读取任务详情：短标题、受控长目标、验收条件、权威业务状态与统一中文文案（status_label/status_hint/phase_label）、revision、负责人/验收人、期限、业务权威来源、assignment、关联 delivery、最新 progress 与最近进度历史（progress_history）。`legacy_completed` 是旧任务板历史完成，只读展示，绝不等于 accepted；delivery 状态只表示通知处理，不映射为业务状态。只有当前有效成员且任务在历史边界内可见时返回；非成员、边界外与不存在统一返回 NOT_FOUND，不能靠 task_id 探测任务是否存在。',
     taskGetSchema,
     taskResultSchema,
     async (input) => {
@@ -1086,6 +1092,42 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       return taskCancel(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_progress',
+    '负责人上报普通任务进度：只有当前 owner 且持有当前 active assignment 时可调用；note 与 percent（0–100 整数）至少一项。每次写入递增 task_revision，并在 task_progress 追加一条审计；status 仍保持 in_progress，不会变成 submitted/accepted，也不创建聊天消息、delivery 或 inbox 待办，不增加未读与 pending_count。建议同时传 assignment_id/assignment_version 与 expected_revision；旧执行版本返回 ASSIGNMENT_STALE，版本变化返回 VERSION_CONFLICT。delivery complete 只结束通知处理，不代表任务完成。',
+    taskProgressSchema,
+    taskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskReportProgress(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_block',
+    '报告任务阻塞：只有当前负责人可把 in_progress 任务转为 blocked，reason 必填并保存到任务与进度审计。阻塞不是失败或取消，原负责人仍保留执行资格；恢复用 network_task_resume。写入只递增 task_revision 并追加 task_progress，不创建消息、delivery 或 inbox 待办。建议传 assignment_id/assignment_version 与 expected_revision；旧执行版本返回 ASSIGNMENT_STALE，非法状态返回 CONFLICT 并带权威状态。',
+    taskBlockSchema,
+    taskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskBlock(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_resume',
+    '恢复受阻任务：只有仍持有当前 active assignment 的原负责人可把 blocked 任务转回 in_progress，note 可选，用于记录解除阻塞的说明。恢复会清空 blocked_reason/blocked_at，递增 task_revision 并追加 task_progress；不创建消息、delivery 或 inbox 待办。建议传 assignment_id/assignment_version 与 expected_revision；旧执行版本返回 ASSIGNMENT_STALE，非 blocked 状态返回 CONFLICT。',
+    taskResumeSchema,
+    taskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskResume(db, principal, input);
     },
   );
 

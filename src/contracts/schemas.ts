@@ -672,6 +672,38 @@ export const taskCancelSchema = z.object({
 });
 
 /**
+ * 普通进度上报：note 与 percent 至少一项，领域层还会按 UTF-8 字节复核。
+ * assignment_id/version 可选；传入时服务端必须与当前 active assignment 一致。
+ */
+export const taskProgressSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  note: z.string().max(LIMITS.taskProgressNoteBytes).optional(),
+  percent: z.number().int().min(0).max(100).optional(),
+  assignment_id: id().optional(),
+  assignment_version: z.number().int().min(1).optional(),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+export const taskBlockSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  reason: z.string().trim().min(1).max(LIMITS.taskBlockReasonBytes),
+  assignment_id: id().optional(),
+  assignment_version: z.number().int().min(1).optional(),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+export const taskResumeSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  note: z.string().max(LIMITS.taskProgressNoteBytes).optional(),
+  assignment_id: id().optional(),
+  assignment_version: z.number().int().min(1).optional(),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/**
  * 认证反馈：只接受已注册 actor 主动提交的三段诊断文本。
  *
  * request_id 限制为 ASCII 标识符，避免把凭据或 URL 误当操作 ID；
@@ -791,4 +823,7 @@ export type TaskAcceptInput = z.infer<typeof taskAcceptSchema>;
 export type TaskDeclineInput = z.infer<typeof taskDeclineSchema>;
 export type TaskClaimInput = z.infer<typeof taskClaimSchema>;
 export type TaskCancelInput = z.infer<typeof taskCancelSchema>;
+export type TaskProgressInput = z.infer<typeof taskProgressSchema>;
+export type TaskBlockInput = z.infer<typeof taskBlockSchema>;
+export type TaskResumeInput = z.infer<typeof taskResumeSchema>;
 export type FeedbackCreateInput = z.infer<typeof feedbackCreateSchema>;

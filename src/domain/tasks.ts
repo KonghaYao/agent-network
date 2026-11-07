@@ -17,6 +17,7 @@ import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
 import type {
   TaskAcceptInput,
+  TaskBlockInput,
   TaskCancelInput,
   TaskClaimInput,
   TaskCreateInput,
@@ -24,8 +25,17 @@ import type {
   TaskGetInput,
   TaskListInput,
   TaskOfferInput,
+  TaskProgressInput,
+  TaskResumeInput,
   TaskSummaryInput,
 } from '../contracts/schemas';
+import {
+  TASK_PHASE_LABELS,
+  TASK_STATUS_HINTS,
+  TASK_STATUS_LABELS,
+  taskCanTransition,
+  taskPhaseOf,
+} from '../contracts/task-status';
 import { newId, nowMs, sha256Hex, stableStringify, truncateUtf8, utf8Bytes } from '../storage/db';
 import {
   eventStatement,
@@ -56,6 +66,7 @@ import type {
   TaskAssignmentRow,
   TaskAttachmentRow,
   TaskDeliveryRow,
+  TaskProgressRow,
   TaskRow,
 } from '../storage/rows';
 import {
@@ -65,6 +76,17 @@ import {
 } from '../storage/transactions/runner';
 import { contactBlockGuardStatement, findActiveBlockBetween } from './contact-blocks';
 import { actorId, type Principal } from './principal';
+import {
+  latestProgressRows,
+  normalizeBlockReason,
+  normalizeProgressNote,
+  normalizeProgressPercent,
+  progressActorIds,
+  progressHistoryRows,
+  progressStatement,
+  progressView,
+  type TaskProgressView,
+} from './task-progress';
 import { capabilityGuardStatement, roomCapabilitiesFor } from './room-access';
 import {
   historyBoundary,
@@ -100,6 +122,10 @@ export interface TaskView {
   description: string;
   acceptance_criteria: string;
   status: TaskStatus;
+  status_label: string;
+  status_hint: string;
+  phase: ReturnType<typeof taskPhaseOf>;
+  phase_label: string;
   revision: number;
   source_message_id: string | null;
   card_message_id: string | null;
@@ -113,6 +139,10 @@ export interface TaskView {
   blocked_reason: string | null;
   blocked_at: string | null;
   last_progress_at: string | null;
+  /** 最新一条进度/阻塞/恢复审计；没有上报过时为 null。 */
+  progress: TaskProgressView | null;
+  /** 仅 task_get 返回最近历史，列表与写操作不携带，避免放大输出。 */
+  progress_history?: TaskProgressView[];
   business_authority: 'native' | 'external';
   external_binding_id: string | null;
   created_at: string;
@@ -127,6 +157,9 @@ export interface TaskView {
   can_cancel: boolean;
   can_accept: boolean;
   can_decline: boolean;
+  can_report_progress: boolean;
+  can_block: boolean;
+  can_resume: boolean;
 }
 
 export interface TaskResult {
@@ -411,11 +444,25 @@ async function buildTaskView(
   context: TaskContext,
   task: TaskRow,
   names?: Map<string, string>,
+  options?: {
+    /** 列表已批量读取最新进度，避免逐任务 N+1。 */
+    progress?: Map<string, TaskProgressRow>;
+    /** 详情页返回最近历史；列表默认不返回。 */
+    history?: boolean;
+  },
 ): Promise<TaskView> {
   const card = await getTaskCard(db, task.task_id);
   const assignment = task.current_assignment_id
     ? await getTaskAssignment(db, task.current_assignment_id)
     : null;
+  const historyRows = options?.history
+    ? await progressHistoryRows(db, task.task_id)
+    : [];
+  const latestRow =
+    historyRows[0] ??
+    (options?.progress
+      ? (options.progress.get(task.task_id) ?? null)
+      : ((await latestProgressRows(db, [task.task_id])).get(task.task_id) ?? null));
   const deliveries = await db
     .prepare(
       `SELECT * FROM task_deliveries
@@ -437,7 +484,15 @@ async function buildTaskView(
       task.reviewer_actor_id,
       ...(task.owner_actor_id ? [task.owner_actor_id] : []),
       ...(assignment ? [assignment.owner_actor_id] : []),
+      ...progressActorIds([
+        ...(latestRow ? [latestRow] : []),
+        ...historyRows,
+      ]),
     ]));
+  const progress = latestRow ? progressView(latestRow, nameMap) : null;
+  const progressHistory = options?.history
+    ? historyRows.map((row) => progressView(row, nameMap))
+    : undefined;
   const owner = task.owner_actor_id;
   const isAdmin = isOwnerOrAdmin(context.room, context.member);
   const canCancel =
@@ -458,6 +513,10 @@ async function buildTaskView(
     description: task.description,
     acceptance_criteria: task.acceptance_criteria,
     status: task.status,
+    status_label: TASK_STATUS_LABELS[task.status],
+    status_hint: TASK_STATUS_HINTS[task.status],
+    phase: taskPhaseOf(task.status),
+    phase_label: TASK_PHASE_LABELS[taskPhaseOf(task.status)],
     revision: task.revision,
     source_message_id: task.source_message_id,
     card_message_id: card?.message_id ?? null,
@@ -472,6 +531,8 @@ async function buildTaskView(
     blocked_at: task.blocked_at === null ? null : String(task.blocked_at),
     last_progress_at:
       task.last_progress_at === null ? null : String(task.last_progress_at),
+    progress,
+    ...(progressHistory ? { progress_history: progressHistory } : {}),
     business_authority: task.business_authority,
     external_binding_id: task.external_binding_id,
     created_at: String(task.created_at),
@@ -509,6 +570,12 @@ async function buildTaskView(
     can_cancel: canCancel,
     can_accept: canActOnOffer,
     can_decline: canActOnOffer,
+    can_report_progress:
+      task.status === 'in_progress' && task.owner_actor_id === context.caller,
+    can_block:
+      task.status === 'in_progress' && task.owner_actor_id === context.caller,
+    can_resume:
+      task.status === 'blocked' && task.owner_actor_id === context.caller,
   };
 }
 
@@ -522,9 +589,16 @@ async function resultFor(
   context: TaskContext,
   task: TaskRow,
   names?: Map<string, string>,
+  withProgressHistory = false,
 ): Promise<TaskResult> {
   return {
-    task: await buildTaskView(db, context, task, names),
+    task: await buildTaskView(
+      db,
+      context,
+      task,
+      names,
+      withProgressHistory ? { history: true } : undefined,
+    ),
     authorization: historySnapshot(context.boundary),
   };
 }
@@ -630,6 +704,35 @@ function offerExpiryGuard(
       ),
     )
     .bind(assignmentId, at);
+}
+
+/**
+ * 进度、阻塞与恢复都必须引用当前 active assignment。
+ *
+ * C08 要求每个任务变更同时验证 task/assignment 两层版本；旧负责人即使
+ * 仍能读取任务，也不能用旧 assignment 写入进度。
+ */
+function activeAssignmentGuard(
+  db: D1Database,
+  assignment: TaskAssignmentRow,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      guardSql(
+        'assignmentStale',
+        `NOT EXISTS (
+           SELECT 1 FROM task_assignments
+            WHERE assignment_id = ? AND task_id = ? AND owner_actor_id = ?
+              AND assignment_version = ? AND status = 'active'
+         )`,
+      ),
+    )
+    .bind(
+      assignment.assignment_id,
+      assignment.task_id,
+      assignment.owner_actor_id,
+      assignment.assignment_version,
+    );
 }
 
 function taskRoomEvent(
@@ -1254,6 +1357,7 @@ async function viewFromKnownRow(
   deliveryIds: string[],
   attachments: Array<{ file_id: string; label: string }>,
   names: Map<string, string>,
+  progress: TaskProgressView | null = null,
 ): Promise<TaskView> {
   const isAdmin = isOwnerOrAdmin(context.room, context.member);
   const canCancel =
@@ -1276,6 +1380,10 @@ async function viewFromKnownRow(
     description: task.description,
     acceptance_criteria: task.acceptance_criteria,
     status: task.status,
+    status_label: TASK_STATUS_LABELS[task.status],
+    status_hint: TASK_STATUS_HINTS[task.status],
+    phase: taskPhaseOf(task.status),
+    phase_label: TASK_PHASE_LABELS[taskPhaseOf(task.status)],
     revision: task.revision,
     source_message_id: task.source_message_id,
     card_message_id: cardMessageId,
@@ -1292,6 +1400,7 @@ async function viewFromKnownRow(
     blocked_at: task.blocked_at === null ? null : String(task.blocked_at),
     last_progress_at:
       task.last_progress_at === null ? null : String(task.last_progress_at),
+    progress,
     business_authority: task.business_authority,
     external_binding_id: task.external_binding_id,
     created_at: String(task.created_at),
@@ -1325,6 +1434,12 @@ async function viewFromKnownRow(
     can_cancel: canCancel,
     can_accept: canActOnOffer,
     can_decline: canActOnOffer,
+    can_report_progress:
+      task.status === 'in_progress' && task.owner_actor_id === context.caller,
+    can_block:
+      task.status === 'in_progress' && task.owner_actor_id === context.caller,
+    can_resume:
+      task.status === 'blocked' && task.owner_actor_id === context.caller,
   };
 }
 
@@ -1334,7 +1449,7 @@ export async function taskGet(
   input: TaskGetInput,
 ): Promise<TaskResult> {
   const { task, context } = await requireVisibleTask(db, principal, input.task_id);
-  return resultFor(db, context, task);
+  return resultFor(db, context, task, undefined, true);
 }
 
 export async function taskList(
@@ -1441,6 +1556,11 @@ export async function taskList(
             .bind(...assignmentIds)
             .all<{ owner_actor_id: string }>()
         ).results.map((row) => row.owner_actor_id);
+  const progressRows = await latestProgressRows(
+    db,
+    rows.results.map((task) => task.task_id),
+  );
+  const progressActors = Array.from(progressRows.values()).map((row) => row.actor_id);
   const names = await actorNames(
     db,
     [
@@ -1450,10 +1570,13 @@ export async function taskList(
         ...(task.owner_actor_id ? [task.owner_actor_id] : []),
       ]),
       ...assignmentOwners,
+      ...progressActors,
     ],
   );
   const tasks = await Promise.all(
-    rows.results.map((task) => buildTaskView(db, context, task, names)),
+    rows.results.map((task) =>
+      buildTaskView(db, context, task, names, { progress: progressRows }),
+    ),
   );
   return {
     tasks,
@@ -2382,6 +2505,293 @@ export async function taskCancel(
     await rethrowWithActualState(db, task.task_id, error);
   }
   return result;
+}
+
+/**
+ * 进度、阻塞与恢复共用一条写路径。
+ *
+ * 三者都只改任务 revision 与 `task_progress` 审计，不创建消息、delivery 或
+ * inbox 待办；普通进度不会推进房间 head_seq，也不会增加任何人的
+ * pending_count。所有入口都验证当前 active assignment，旧执行者不能借旧
+ * 版本写进度。
+ */
+type TaskProgressAction = 'report' | 'block' | 'resume';
+
+interface TaskProgressActionInput {
+  request_id: string;
+  task_id: string;
+  expected_revision?: number;
+  assignment_id?: string;
+  assignment_version?: number;
+  note?: string;
+  percent?: number;
+  reason?: string;
+}
+
+async function taskProgressAction(
+  db: D1Database,
+  principal: Principal,
+  input: TaskProgressActionInput,
+  action: TaskProgressAction,
+): Promise<TaskResult> {
+  const { task, context } = await requireVisibleTask(db, principal, input.task_id);
+  const note =
+    action === 'block'
+      ? ''
+      : normalizeProgressNote(
+          input.note,
+          action === 'resume' ? '恢复说明' : '进度说明',
+        );
+  const percent = action === 'report' ? normalizeProgressPercent(input.percent) : null;
+  const reason = action === 'block' ? normalizeBlockReason(input.reason ?? '') : null;
+  if (action === 'report' && note === '' && percent === null) {
+    throw new BusinessError('INVALID_ARGUMENT', '进度说明与进度百分比至少填写一项');
+  }
+  const payloadHash = await sha256Hex(
+    stableStringify({
+      action,
+      task_id: task.task_id,
+      expected_revision: input.expected_revision ?? null,
+      assignment_id: input.assignment_id ?? null,
+      assignment_version: input.assignment_version ?? null,
+      note,
+      percent,
+      reason,
+    }),
+  );
+  const replay = await getOperation(db, context.caller, input.request_id);
+  if (replay) return resolveOperation(replay, payloadHash) as TaskResult;
+
+  if (action === 'report' && task.status !== 'in_progress') {
+    throw new BusinessError('CONFLICT', '只有进行中的任务可以更新进度', {
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+  if (action === 'block' && (task.status !== 'in_progress' || !taskCanTransition(task.status, 'blocked'))) {
+    throw new BusinessError('CONFLICT', '只有进行中的任务可以报告阻塞', {
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+  if (action === 'resume' && (task.status !== 'blocked' || !taskCanTransition(task.status, 'in_progress'))) {
+    throw new BusinessError('CONFLICT', '只有受阻任务可以恢复执行', {
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+  if (task.owner_actor_id !== context.caller) {
+    throw new BusinessError(
+      'PERMISSION_DENIED',
+      action === 'resume'
+        ? '只有当前负责人可以恢复执行'
+        : '只有当前负责人可以更新任务进度',
+      await actualTaskState(db, task.task_id),
+    );
+  }
+  const assignment = task.current_assignment_id
+    ? await getTaskAssignment(db, task.current_assignment_id)
+    : null;
+  if (
+    !assignment ||
+    assignment.status !== 'active' ||
+    assignment.owner_actor_id !== context.caller
+  ) {
+    throw await staleTaskError(
+      db,
+      task.task_id,
+      'ASSIGNMENT_STALE',
+      '当前执行资格已失效，不能写入任务进度',
+    );
+  }
+  if (
+    input.assignment_id !== undefined &&
+    input.assignment_id !== assignment.assignment_id
+  ) {
+    throw await staleTaskError(
+      db,
+      task.task_id,
+      'ASSIGNMENT_STALE',
+      '任务执行版本已变化，请刷新后重试',
+    );
+  }
+  if (
+    input.assignment_version !== undefined &&
+    input.assignment_version !== assignment.assignment_version
+  ) {
+    throw await staleTaskError(
+      db,
+      task.task_id,
+      'ASSIGNMENT_STALE',
+      '任务执行版本已变化，请刷新后重试',
+    );
+  }
+  if (input.expected_revision !== undefined && input.expected_revision !== task.revision) {
+    throw new BusinessError('VERSION_CONFLICT', '任务版本已变化，请刷新后重试', {
+      expected: input.expected_revision,
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+
+  const at = nowMs();
+  const nextStatus: TaskStatus = action === 'block' ? 'blocked' : 'in_progress';
+  const nextRevision = task.revision + 1;
+  const progressId = newId('prg');
+  const updated: TaskRow = {
+    ...task,
+    status: nextStatus,
+    revision: nextRevision,
+    blocked_reason: reason,
+    blocked_at: action === 'block' ? at : null,
+    last_progress_at: at,
+    updated_at: at,
+  };
+  const progressRow: TaskProgressRow = {
+    progress_id: progressId,
+    task_id: task.task_id,
+    task_revision: nextRevision,
+    assignment_id: assignment.assignment_id,
+    assignment_version: assignment.assignment_version,
+    actor_id: context.caller,
+    prior_status: task.status,
+    status: nextStatus,
+    percent,
+    note,
+    blocked_reason: reason,
+    created_at: at,
+  };
+  const names = await actorNames(db, [
+    task.created_by,
+    task.reviewer_actor_id,
+    context.caller,
+  ]);
+  const latestProgress = progressView(progressRow, names);
+  const view = await viewFromKnownRow(
+    db,
+    context,
+    updated,
+    (await getTaskCard(db, task.task_id))?.message_id ?? '',
+    assignment,
+    await taskDeliveryIds(db, task.task_id),
+    await attachmentsFor(db, task.task_id),
+    names,
+    latestProgress,
+  );
+  const result: TaskResult = {
+    task: view,
+    authorization: historySnapshot(context.boundary),
+  };
+  const eventType =
+    action === 'report'
+      ? 'task_progress_reported'
+      : action === 'block'
+        ? 'task_blocked'
+        : 'task_resumed';
+  const eventKey = `task:${action}:${task.task_id}:${nextRevision}`;
+
+  try {
+    await runIdempotent(db, {
+      actorId: context.caller,
+      requestId: input.request_id,
+      payloadHash,
+      result,
+      build: (resultJson) => [
+        operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
+        memberGuard(db, task.room_id, context.caller),
+        taskRevisionGuard(db, task.task_id, task.revision),
+        taskStateGuard(
+          db,
+          task.task_id,
+          'status = ? AND owner_actor_id = ? AND current_assignment_id = ?',
+          task.status,
+          context.caller,
+          assignment.assignment_id,
+        ),
+        activeAssignmentGuard(db, assignment),
+        db
+          .prepare(
+            `UPDATE tasks
+                SET status = ?, revision = revision + 1, last_progress_at = ?,
+                    updated_at = ?, blocked_reason = ?, blocked_at = ?
+              WHERE task_id = ? AND revision = ? AND status = ?
+                AND owner_actor_id = ? AND current_assignment_id = ?`,
+          )
+          .bind(
+            nextStatus,
+            at,
+            at,
+            reason,
+            action === 'block' ? at : null,
+            task.task_id,
+            task.revision,
+            task.status,
+            context.caller,
+            assignment.assignment_id,
+          ),
+        db
+          .prepare(
+            `UPDATE task_assignments
+                SET last_progress_at = ?, updated_at = ?
+              WHERE assignment_id = ? AND status = 'active'
+                AND owner_actor_id = ? AND assignment_version = ?`,
+          )
+          .bind(
+            at,
+            at,
+            assignment.assignment_id,
+            context.caller,
+            assignment.assignment_version,
+          ),
+        progressStatement(db, {
+          progressId,
+          taskId: task.task_id,
+          revision: nextRevision,
+          assignmentId: assignment.assignment_id,
+          assignmentVersion: assignment.assignment_version,
+          actorId: context.caller,
+          priorStatus: task.status,
+          status: nextStatus,
+          percent,
+          note,
+          blockedReason: reason,
+          at,
+        }),
+        ...taskRoomEvent(db, updated, eventType, eventKey, at, {
+          changed_by: context.caller,
+          assignment_id: assignment.assignment_id,
+          assignment_version: assignment.assignment_version,
+          percent,
+          has_note: note.length > 0,
+          note_bytes: utf8Bytes(note),
+          ...(reason === null ? {} : { reason }),
+        }).statements,
+      ],
+    });
+  } catch (error) {
+    await rethrowWithActualState(db, task.task_id, error);
+  }
+  return result;
+}
+
+export async function taskReportProgress(
+  db: D1Database,
+  principal: Principal,
+  input: TaskProgressInput,
+): Promise<TaskResult> {
+  return taskProgressAction(db, principal, input, 'report');
+}
+
+export async function taskBlock(
+  db: D1Database,
+  principal: Principal,
+  input: TaskBlockInput,
+): Promise<TaskResult> {
+  return taskProgressAction(db, principal, input, 'block');
+}
+
+export async function taskResume(
+  db: D1Database,
+  principal: Principal,
+  input: TaskResumeInput,
+): Promise<TaskResult> {
+  return taskProgressAction(db, principal, input, 'resume');
 }
 
 async function attachmentsFor(
