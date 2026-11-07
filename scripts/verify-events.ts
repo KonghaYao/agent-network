@@ -26,6 +26,7 @@ import {
   sleep,
 } from './lib/harness';
 import {
+  acceptGroupInvites,
   befriend,
   registerIdentity,
   sendMessage,
@@ -649,6 +650,8 @@ async function main(): Promise<void> {
         title: 'Events 群聊',
       })
     ).room.room_id;
+    // G01：非管理者好友先收到定向邀请；成为 active 成员后才能被 invoke 投递。
+    await acceptGroupInvites(agentB, groupAB);
 
     // 订阅建立前的旧群聊待办：新订阅不会补发，但 inbox/sync 必须能补读。
     const groupBefore = await sendMessage(agentA, groupAB, 'group-before-subscribe', {
