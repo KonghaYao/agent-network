@@ -481,15 +481,39 @@ function uniqueOthers(self: string, members: string[]): string[] {
   return [...new Set(members)].filter((id) => id !== self);
 }
 
-async function requireFriends(
+/**
+ * Agent 无需好友关系也能直接入群的两个条件：尚未被认领，或由调用者管理。
+ *
+ * unclaimed Agent 没有可确认邀请的管理者，生成 pending 邀请只会永远等待；
+ * 因此与自有 Agent 一样直接 active。已被其他人管理的 Agent 仍须好友关系。
+ */
+async function agentJoinsWithoutRelation(
   db: D1Database,
   owner: string,
-  targets: string[],
+  target: ActorRow,
+): Promise<boolean> {
+  if (target.kind !== 'agent') return false;
+  const management = await getActiveManagement(db, target.actor_id);
+  return management === null || management.manager_id === owner;
+}
+
+/**
+ * 加成员预检：人类仍须 active 好友关系；Agent 额外允许 unclaimed / 自有管理者。
+ *
+ * 拉黑由调用方先裁决，保证 BLOCKED 优先于 FRIEND_REQUIRED。事务内还有等价
+ * 的 guard，这里只负责提交前给出稳定错误。
+ */
+async function requireJoinableTargets(
+  db: D1Database,
+  owner: string,
+  targets: ActorRow[],
 ): Promise<void> {
   for (const target of targets) {
-    if (!(await getActiveRelation(db, owner, target))) {
-      throw new BusinessError('FRIEND_REQUIRED', '只能把好友加入群聊', { actor_id: target });
-    }
+    if (await getActiveRelation(db, owner, target.actor_id)) continue;
+    if (await agentJoinsWithoutRelation(db, owner, target)) continue;
+    throw new BusinessError('FRIEND_REQUIRED', '只能把好友加入群聊', {
+      actor_id: target.actor_id,
+    });
   }
 }
 
@@ -501,10 +525,11 @@ interface CreateTargetEvaluation {
 }
 
 /**
- * 建群候选的提交前判定：拉黑优先，其次好友关系，自有 Agent 直接 active。
+ * 建群候选的提交前判定：拉黑优先，其次 Agent 管理关系，最后好友关系。
  *
- * 失败的候选不会静默剔除：调用方把逐对象结果返回给客户端，整次建群
- * 在提交前终止，避免用户以为所有人都已邀请。
+ * unclaimed Agent 无法确认邀请，与自有 Agent 一样直接 active；其他管理者
+ * 的 Agent 仍需好友关系，好友则走既有 pending 邀请。失败的候选不会静默
+ * 剔除：调用方把逐对象结果返回给客户端，整次建群在提交前终止。
  */
 async function evaluateCreateTargets(
   db: D1Database,
@@ -522,12 +547,7 @@ async function evaluateCreateTargets(
       });
       continue;
     }
-    let managed = false;
-    if (actor.kind === 'agent') {
-      const management = await getActiveManagement(db, actor.actor_id);
-      managed = management?.manager_id === owner;
-    }
-    if (managed) {
+    if (await agentJoinsWithoutRelation(db, owner, actor)) {
       evaluations.push({ actor, status: 'active', code: null, message: null });
       continue;
     }
@@ -763,9 +783,15 @@ export async function roomCreate(
                       SELECT 1 FROM contact_relations
                        WHERE pair_key = ? AND status = 'active'
                     )
-                    OR EXISTS (
-                      SELECT 1 FROM agent_managements
-                       WHERE status = 'active' AND agent_id = ? AND manager_id = ?
+                    OR (
+                      EXISTS (
+                        SELECT 1 FROM actors
+                         WHERE actor_id = ? AND kind = 'agent'
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM agent_managements
+                         WHERE agent_id = ? AND status = 'active' AND manager_id <> ?
+                      )
                     )
                   )`,
             )
@@ -780,6 +806,7 @@ export async function roomCreate(
               member,
               owner,
               sortedPairKey(owner, member),
+              member,
               member,
               owner,
             ),
@@ -1067,7 +1094,7 @@ export async function roomMembersUpdate(
   }
 
   if (!replay.found && add.length > 0) {
-    await ensureActors(db, add);
+    const addTargets = await ensureActors(db, add);
     for (const member of add) {
       if (await isBlockedBetween(db, caller, member)) {
         throw new BusinessError('BLOCKED', '双方存在拉黑关系，不能邀请对方加入群聊', {
@@ -1075,7 +1102,7 @@ export async function roomMembersUpdate(
         });
       }
     }
-    await requireFriends(db, caller, add);
+    await requireJoinableTargets(db, caller, addTargets);
   }
   if (!replay.found) {
     for (const member of remove) {
@@ -1166,15 +1193,29 @@ export async function roomMembersUpdate(
       ...add.map((member) => contactBlockGuardStatement(db, caller, member)),
       ...(add.length > 0 ? [roomInviteRateGuardStatement(db, caller, at)] : []),
       // 好友关系预检查同样有“先读后写”窗口；在提交时按 pair_key 复核。
+      // Agent 例外与预检一致：unclaimed 或由调用者管理的 Agent 可直接加入，
+      // 已被其他人管理的 Agent 仍要求 active 关系。
       ...add.map((member) =>
         db
           .prepare(
             guardSql(
               'friendRequired',
-              "NOT EXISTS (SELECT 1 FROM contact_relations WHERE pair_key = ? AND status = 'active')",
+              `NOT EXISTS (
+                 SELECT 1 FROM contact_relations WHERE pair_key = ? AND status = 'active'
+               )
+               AND NOT (
+                 EXISTS (
+                   SELECT 1 FROM actors
+                    WHERE actor_id = ? AND kind = 'agent'
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM agent_managements
+                    WHERE agent_id = ? AND status = 'active' AND manager_id <> ?
+                 )
+               )`,
             ),
           )
-          .bind(sortedPairKey(caller, member)),
+          .bind(sortedPairKey(caller, member), member, member, caller),
       ),
       ...remove.map((member) =>
         memberRemovalGuardStatement(db, room.room_id, caller, member),

@@ -77,6 +77,7 @@ import {
 import { runEventsAcceptance } from './lib/events-acceptance';
 import { runContactRelationAcceptance } from './lib/contact-relation-acceptance';
 import { runContactBlockAcceptance } from './lib/contact-block-acceptance';
+import { runAgentRoomAddAcceptance } from './lib/agent-room-add-acceptance';
 import { runDevicePairingAcceptance } from './lib/device-pairing-acceptance';
 import { runDeviceSyncAcceptance } from './lib/device-sync-acceptance';
 
@@ -1333,6 +1334,7 @@ async function main(): Promise<void> {
     await runAgentTransferAcceptance();
     await runContactRelationAcceptance();
     await runContactBlockAcceptance();
+    await runAgentRoomAddAcceptance();
     await runDevicePairingAcceptance();
     await runDeviceSyncAcceptance();
     await runAgentArchiveAcceptance();
