@@ -417,6 +417,7 @@ function renderTaskDetail(task) {
     }
   }
   renderTaskDetailActions(task);
+  renderTaskTransferSection(task);
 }
 
 function renderTaskDetailActions(task) {

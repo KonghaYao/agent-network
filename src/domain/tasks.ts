@@ -199,7 +199,7 @@ export interface TaskCounts {
   total: number;
 }
 
-interface TaskContext {
+export interface TaskContext {
   caller: string;
   callerKind: 'human' | 'agent';
   room: RoomRow;
@@ -268,7 +268,7 @@ function normalizeDeclineReason(value: string | undefined): string {
  *
  * 只用于错误 details，不包含成员列表、凭据或正文。
  */
-async function actualTaskState(
+export async function actualTaskState(
   db: D1Database,
   taskId: string,
 ): Promise<Record<string, unknown>> {
@@ -291,7 +291,7 @@ async function actualTaskState(
   };
 }
 
-async function staleTaskError(
+export async function staleTaskError(
   db: D1Database,
   taskId: string,
   code: 'ASSIGNMENT_STALE' | 'CONFLICT' | 'VERSION_CONFLICT',
@@ -309,7 +309,7 @@ const ACTUAL_STATE_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /** 竞态失败时把权威状态并入错误 details；失败方仍应重新 task_get 刷新 UI。 */
-async function rethrowWithActualState(
+export async function rethrowWithActualState(
   db: D1Database,
   taskId: string,
   error: unknown,
@@ -333,7 +333,7 @@ function parseDueAt(value: string | undefined): number | null {
   return at;
 }
 
-async function actorNames(db: D1Database, actorIds: string[]): Promise<Map<string, string>> {
+export async function actorNames(db: D1Database, actorIds: string[]): Promise<Map<string, string>> {
   const unique = Array.from(new Set(actorIds.filter((id) => id.length > 0)));
   if (unique.length === 0) return new Map();
   const placeholders = unique.map(() => '?').join(', ');
@@ -365,7 +365,7 @@ async function requireRoomMember(
  * 非成员、历史边界外与不存在统一返回 `NOT_FOUND`，不能靠 task_id 探测任务
  * 是否存在；只有已知任务且当前成员可见时才继续。
  */
-async function requireVisibleTask(
+export async function requireVisibleTask(
   db: D1Database,
   principal: Principal,
   taskId: string,
@@ -408,7 +408,7 @@ async function memberBoundary(
 }
 
 /** 负责人/验收人必须有任务访问资格：有效成员且当前历史边界内可见。 */
-async function assertTaskParticipant(
+export async function assertTaskParticipant(
   db: D1Database,
   room: RoomRow,
   actor: string,
@@ -430,11 +430,11 @@ async function assertTaskParticipant(
   return found.actor;
 }
 
-function isOwnerOrAdmin(room: RoomRow, member: RoomMemberRow): boolean {
+export function isOwnerOrAdmin(room: RoomRow, member: RoomMemberRow): boolean {
   return room.owner_id === member.actor_id || member.role === 'owner' || member.role === 'admin';
 }
 
-function canDispatch(task: TaskRow, context: TaskContext): boolean {
+export function canDispatch(task: TaskRow, context: TaskContext): boolean {
   if (task.created_by === context.caller) return true;
   return isOwnerOrAdmin(context.room, context.member);
 }
@@ -579,7 +579,7 @@ async function buildTaskView(
   };
 }
 
-async function blockedBetween(db: D1Database, a: string, b: string): Promise<boolean> {
+export async function blockedBetween(db: D1Database, a: string, b: string): Promise<boolean> {
   if (a === b) return false;
   return (await findActiveBlockBetween(db, a, b)) !== null;
 }
@@ -603,7 +603,7 @@ async function resultFor(
   };
 }
 
-function memberGuard(db: D1Database, roomId: string, actor: string): D1PreparedStatement {
+export function memberGuard(db: D1Database, roomId: string, actor: string): D1PreparedStatement {
   return db
     .prepare(
       guardSql(
@@ -629,7 +629,7 @@ function participantGuard(
     .bind(roomId, actor);
 }
 
-function taskStateGuard(
+export function taskStateGuard(
   db: D1Database,
   taskId: string,
   predicate: string,
@@ -646,7 +646,7 @@ function taskStateGuard(
 }
 
 /** 迟到请求使用读取时的 task_revision 做 CAS，不能覆盖新指派。 */
-function taskRevisionGuard(
+export function taskRevisionGuard(
   db: D1Database,
   taskId: string,
   revision: number,
@@ -712,7 +712,7 @@ function offerExpiryGuard(
  * C08 要求每个任务变更同时验证 task/assignment 两层版本；旧负责人即使
  * 仍能读取任务，也不能用旧 assignment 写入进度。
  */
-function activeAssignmentGuard(
+export function activeAssignmentGuard(
   db: D1Database,
   assignment: TaskAssignmentRow,
 ): D1PreparedStatement {
@@ -735,7 +735,7 @@ function activeAssignmentGuard(
     );
 }
 
-function taskRoomEvent(
+export function taskRoomEvent(
   db: D1Database,
   task: Pick<TaskRow, 'task_id' | 'room_id' | 'status' | 'revision'>,
   eventType: string,
@@ -889,7 +889,7 @@ function offerDeliveryStatements(
  * 拒绝由候选人自己发起，因此只写状态事件与 pending_count，不再向本人发
  * `inbox:{actor}` outbox，避免自我唤醒；`reason` 保留在事件元数据中作为审计。
  */
-async function closeOfferDeliveries(
+export async function closeOfferDeliveries(
   db: D1Database,
   assignment: TaskAssignmentRow,
   task: TaskRow,
@@ -957,7 +957,7 @@ async function closeOfferDeliveries(
   return { statements, deliveryIds };
 }
 
-async function taskDeliveryIds(db: D1Database, taskId: string): Promise<string[]> {
+export async function taskDeliveryIds(db: D1Database, taskId: string): Promise<string[]> {
   const rows = await db
     .prepare(
       `SELECT delivery_id FROM task_deliveries
@@ -1450,7 +1450,7 @@ export async function taskCreate(
 }
 
 /** 已知新任务行时构造视图；只为返回结果，不重新查询任务本身。 */
-async function viewFromKnownRow(
+export async function viewFromKnownRow(
   db: D1Database,
   context: TaskContext,
   task: TaskRow,
@@ -2736,6 +2736,22 @@ async function taskProgressAction(
     });
   }
   if (task.owner_actor_id !== context.caller) {
+    // 曾持有执行资格但已被交接/撤权的旧负责人，不能用旧身份写进度：
+    // 返回 ASSIGNMENT_STALE，而不是把“不是当前 owner”混同为从未有资格。
+    const prior = await db
+      .prepare(
+        'SELECT 1 AS n FROM task_assignments WHERE task_id = ? AND owner_actor_id = ? LIMIT 1',
+      )
+      .bind(task.task_id, context.caller)
+      .first<{ n: number }>();
+    if (prior) {
+      throw await staleTaskError(
+        db,
+        task.task_id,
+        'ASSIGNMENT_STALE',
+        '当前执行资格已失效，请使用新的负责人版本',
+      );
+    }
     throw new BusinessError(
       'PERMISSION_DENIED',
       action === 'resume'
@@ -2952,7 +2968,7 @@ export async function taskResume(
   return taskProgressAction(db, principal, input, 'resume');
 }
 
-async function attachmentsFor(
+export async function attachmentsFor(
   db: D1Database,
   taskId: string,
 ): Promise<Array<{ file_id: string; label: string }>> {

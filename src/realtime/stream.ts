@@ -524,7 +524,12 @@ function roomStreamItems(
     case 'task_cancelled':
     case 'task_progress_reported':
     case 'task_blocked':
-    case 'task_resumed': {
+    case 'task_resumed':
+    case 'task_transfer_proposed':
+    case 'task_transfer_accepted':
+    case 'task_transfer_rejected':
+    case 'task_transfer_cancelled':
+    case 'task_transfer_expired': {
       // 任务事件只让 active human 刷新任务视图。Agent 的工作唤醒只来自
       // 明确指派生成的 delivery，房间任务事件不推进 head、不产生未读。
       const change = row.event_type.replace('task_', '');

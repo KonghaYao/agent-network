@@ -88,6 +88,12 @@ import {
   taskProgressSchema,
   taskResumeSchema,
   taskSummarySchema,
+  taskTransferAcceptSchema,
+  taskTransferCancelSchema,
+  taskTransferGetSchema,
+  taskTransferListSchema,
+  taskTransferProposeSchema,
+  taskTransferRejectSchema,
 } from '../contracts/schemas';
 import { agentsGet, archiveAgent, unarchiveAgent } from '../domain/agents';
 import {
@@ -191,6 +197,14 @@ import {
   taskResume,
   taskSummary,
 } from '../domain/tasks';
+import {
+  taskTransferAccept,
+  taskTransferCancel,
+  taskTransferGet,
+  taskTransferList,
+  taskTransferPropose,
+  taskTransferReject,
+} from '../domain/task-transfers';
 import { sync } from '../domain/sync';
 import type { Env } from '../env';
 import { login, presenceOf } from '../realtime/presence';
@@ -253,6 +267,9 @@ import {
   taskListResultSchema,
   taskResultSchema,
   taskSummaryResultSchema,
+  taskTransferListResultSchema,
+  taskTransferResultSchema,
+  taskTransferSchema,
   sendResultSchema,
   messageSendStatusPageSchema,
   syncPageSchema,
@@ -1129,6 +1146,80 @@ export function registerTools(
       requireActor(principal);
       return taskResume(db, principal, input);
     },
+  );
+
+  register(
+    server,
+    'network_task_transfer_propose',
+    '发起任务交接提议：当前负责人、任务创建者或群 owner/管理员可调用。目标必须是有效成员/Agent，不能是当前验收人、自己或当前负责人；调用者、创建者或验收人与目标存在任一方向拉黑时返回 BLOCKED。默认 24 小时有效；同一任务至多一条待处理提议，重复发起返回 CONFLICT。提议本身不转移责任，接受前原负责人继续负责；拒绝、取消或过期不改变原 assignment。任务事件只通知房间内 human，不创建 delivery、不增加 Agent pending_count、不推进房间 head_seq。',
+    taskTransferProposeSchema,
+    taskTransferResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskTransferPropose(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_transfer_accept',
+    '接受任务交接：只有提议目标可调用。接受事务校验 transfer pending/未过期/目标为调用者，锁定当前 active assignment，撤销旧 active assignment 并创建 assignment_version = 旧版本 + 1 的新 assignment，更新 tasks.owner_actor_id/current_assignment_id/revision，关闭旧 assignment 仍 pending/claimed 的任务投递，写 task_transfer_accepted 事件。并发接受只有一次成功；同一目标重复接受同一提议返回同一结果且不递增版本。旧执行者仍可普通聊天，但 progress/block/resume/submit/transfer 会返回 ASSIGNMENT_STALE。',
+    taskTransferAcceptSchema,
+    taskTransferResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskTransferAccept(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_transfer_reject',
+    '拒绝任务交接：只有提议目标可调用，可附可选 reason 供审计。拒绝只关闭提议，不改变原 assignment、任务 revision 或执行版本，也不会自动改派；原负责人继续负责。已接受或已结束的提议返回 CONFLICT，过期返回 REQUEST_EXPIRED。事件只通知房间内 human，不创建 delivery、不增加 pending_count。',
+    taskTransferRejectSchema,
+    taskTransferResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskTransferReject(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_transfer_cancel',
+    '取消任务交接提议：提议者、任务创建者、当前负责人或群 owner/管理员可调用，可附可选 reason。取消只关闭 pending 提议，不改变原 assignment 或任务 revision；已接受/拒绝/取消/过期返回 CONFLICT/REQUEST_EXPIRED。事件只通知房间内 human，不创建 delivery、不增加 pending_count、不推进 head_seq。',
+    taskTransferCancelSchema,
+    taskTransferResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskTransferCancel(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_transfer_get',
+    '读取单条任务交接提议：只对目标、提议者、任务创建者/负责人/验收人或群 owner/管理员可见；其他身份返回 NOT_FOUND，不能靠 transfer_id 探测。返回 effective_status（过期未处理的 pending 显示 expired）、到期时间、上下文准备状态（D05 之前 context_ready=false）与当前可见操作。只读，不改变任何状态。',
+    taskTransferGetSchema,
+    z.object({ transfer: taskTransferSchema }),
+    async (input) => {
+      requireActor(principal);
+      return taskTransferGet(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_transfer_list',
+    '列任务交接提议：传 task_id 读取该任务的历史（要求有任务可见性与参与资格）；不传 task_id 时读取 scope=mine 中与当前身份相关（我是目标或提议者）的 active 房间记录。默认只返回仍待处理且未过期的提议；status 可读 accepted/rejected/cancelled/expired，过期未处理的 pending 按 expired 返回。只读，不创建 delivery、不增加 pending_count、不唤醒 Agent。',
+    taskTransferListSchema,
+    taskTransferListResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskTransferList(db, principal, input);
+    },
+    { readOnlyHint: true },
   );
 
   register(

@@ -1057,6 +1057,47 @@ export const taskListResultSchema = z.object({
   authorization: authorizationSnapshotSchema.nullable(),
 });
 
+/** 交接提议；`effective_status` 会把过期未处理的 pending 显示为 expired。 */
+export const taskTransferSchema = z.object({
+  transfer_id: z.string(),
+  task_id: z.string(),
+  room_id: z.string(),
+  task_title: z.string(),
+  task_status: taskStatusSchema,
+  task_revision: z.number(),
+  from_assignment_id: z.string().nullable(),
+  from_assignment_version: z.number().nullable(),
+  from_owner_actor_id: z.string().nullable(),
+  from_owner_name: z.string().nullable(),
+  to_actor_id: z.string(),
+  to_actor_name: z.string(),
+  requested_by: z.string(),
+  requested_by_name: z.string(),
+  status: z.enum(['pending', 'accepted', 'rejected', 'cancelled', 'expired']),
+  effective_status: z.enum(['pending', 'accepted', 'rejected', 'cancelled', 'expired']),
+  expires_at: z.string(),
+  created_at: z.string(),
+  responded_at: z.string().nullable(),
+  responded_by: z.string().nullable(),
+  context: z.record(z.string(), z.unknown()),
+  context_ready: z.boolean(),
+  note: z.string().nullable(),
+  can_accept: z.boolean(),
+  can_reject: z.boolean(),
+  can_cancel: z.boolean(),
+});
+
+export const taskTransferResultSchema = z.object({
+  transfer: taskTransferSchema,
+  task: taskSchema,
+});
+
+export const taskTransferListResultSchema = z.object({
+  transfers: z.array(taskTransferSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+});
+
 /** 侧栏任务进度；一次返回多个 active 房间，避免 N 次 list。 */
 export const taskSummaryResultSchema = z.object({
   items: z.array(

@@ -376,6 +376,35 @@ export const APP_STYLE = `
   .task-progress-history-head { font-size: 12px; color: var(--wx-text); }
   .task-progress-percent-input { flex: 0 0 88px; }
   .task-progress-summary { color: var(--wx-link); }
+  .task-transfer-panel { display: flex; flex-direction: column; gap: 8px;
+    padding-top: 10px; border-top: 1px solid var(--wx-line); font-size: 12px; }
+  .task-transfer-title { margin: 0; font-size: 12px; font-weight: 600;
+    color: var(--wx-muted); }
+  .task-transfer-list { list-style: none; margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 8px; }
+  .task-transfer-item { display: flex; flex-direction: column; gap: 4px;
+    padding: 8px 10px; border: 1px solid var(--wx-line); border-radius: 6px;
+    background: var(--wx-search); }
+  .task-transfer-head { display: flex; align-items: center; gap: 8px;
+    justify-content: space-between; overflow-wrap: anywhere; }
+  .task-transfer-meta { font-size: 11px; color: var(--wx-muted);
+    overflow-wrap: anywhere; }
+  .task-transfer-note { line-height: 1.6; white-space: pre-wrap;
+    overflow-wrap: anywhere; }
+  .task-transfer-badge { flex: 0 0 auto; padding: 1px 6px; border-radius: 9px;
+    font-size: 11px; background: var(--wx-bg); color: var(--wx-muted); }
+  .task-transfer-badge-pending { color: var(--wx-link); }
+  .task-transfer-badge-accepted { color: var(--wx-green); }
+  .task-transfer-badge-rejected, .task-transfer-badge-expired {
+    color: var(--wx-danger); }
+  .task-transfer-actions { justify-content: flex-start; }
+  .task-transfer-reason { flex: 1 1 120px; }
+  .task-transfer-propose { display: flex; flex-wrap: wrap; gap: 8px;
+    align-items: center; }
+  .task-transfer-note-input { flex: 1 1 160px; }
+  .task-transfer-empty { margin: 0; color: var(--wx-muted); }
+  .task-transfer-error { min-height: 1.2em; margin: 0; color: var(--wx-unread);
+    font-size: 12px; overflow-wrap: anywhere; }
   .msg-task-progress { flex: 0 1 auto; min-width: 0; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; color: var(--wx-muted);
     font-size: 11px; }

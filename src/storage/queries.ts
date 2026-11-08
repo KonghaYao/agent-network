@@ -12,6 +12,7 @@ import type {
   TaskAssignmentRow,
   TaskCardRow,
   TaskRow,
+  TaskTransferRow,
 } from './rows';
 
 export interface D1Like {
@@ -160,6 +161,16 @@ export async function getTaskAssignment(
     .prepare('SELECT * FROM task_assignments WHERE assignment_id = ?')
     .bind(assignmentId)
     .first<TaskAssignmentRow>();
+}
+
+export async function getTaskTransfer(
+  db: D1Like,
+  transferId: string,
+): Promise<TaskTransferRow | null> {
+  return db
+    .prepare('SELECT * FROM task_transfers WHERE transfer_id = ?')
+    .bind(transferId)
+    .first<TaskTransferRow>();
 }
 
 export async function getDelivery(db: D1Like, deliveryId: string): Promise<DeliveryRow | null> {

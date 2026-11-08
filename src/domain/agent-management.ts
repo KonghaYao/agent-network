@@ -30,6 +30,7 @@ import {
   scopesJson,
 } from './agent-access';
 import { actorId, type Principal } from './principal';
+import { revokeTaskEligibilityStatements } from './task-transfers';
 
 /**
  * A01 身份归属与管理授权。
@@ -687,6 +688,15 @@ export async function disableAgent(
   };
   const payloadHash = await sha256Hex(stableStringify(input));
   const eventKey = `agent_disable:${target.actor_id}:${input.request_id}`;
+  // D04：停用 Agent 与撤销任务执行资格同事务。跨房间处理其负责的
+  // in_progress/blocked 任务；外部副作用保持未知，不自动重跑。
+  const taskRevocations = await revokeTaskEligibilityStatements(db, {
+    actorId: target.actor_id,
+    roomId: null,
+    requestId: input.request_id,
+    at,
+    reason: 'agent_disabled',
+  });
 
   await runIdempotent(db, {
     actorId: caller,
@@ -738,6 +748,7 @@ export async function disableAgent(
             WHERE recipient_id = ? AND state IN ('pending', 'claimed')`,
         )
         .bind('agent disabled', at, target.actor_id),
+      ...taskRevocations,
       ...managementEventStatements(db, {
         eventKey,
         agentId: target.actor_id,

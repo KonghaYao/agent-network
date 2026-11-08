@@ -517,6 +517,23 @@ export interface TaskCardRow {
   created_at: number;
 }
 
+/** D04 交接提议；接受前不改变任务/assignment 的权威关系。 */
+export interface TaskTransferRow {
+  transfer_id: string;
+  task_id: string;
+  from_assignment_id: string | null;
+  from_assignment_version: number | null;
+  to_actor_id: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'cancelled' | 'expired';
+  context_json: string;
+  version: number;
+  created_by: string;
+  created_at: number;
+  expires_at: number;
+  responded_at: number | null;
+  responded_by: string | null;
+}
+
 export interface TaskAttachmentRow {
   task_id: string;
   file_id: string;

@@ -57,6 +57,7 @@ import {
   type InvitedMemberView,
 } from './room-invitations';
 import { roomAuditStatement, type RoomAuditSpec } from './room-audit';
+import { revokeTaskEligibilityStatements } from './task-transfers';
 import {
   capabilityGuardStatement,
   loadRoomAccess,
@@ -1055,6 +1056,23 @@ export async function roomMembersUpdate(
   const at = nowMs();
   const eventKey = `members:${room.room_id}:${input.request_id}`;
   const affected = [...new Set([...add, ...remove])];
+  // D04：成员移除与任务执行资格撤销同事务。被移除者负责的 in_progress/
+  // blocked 任务转为 blocked + owner_lost_eligibility，旧 assignment 撤销，
+  // 其 pending 交接取消；外部副作用保持未知，不自动重跑。
+  const taskRevocations: D1PreparedStatement[] = [];
+  for (const member of remove) {
+    const target = existing.get(member);
+    if (!target || target.status !== 'active') continue;
+    taskRevocations.push(
+      ...(await revokeTaskEligibilityStatements(db, {
+        actorId: member,
+        roomId: room.room_id,
+        requestId: input.request_id,
+        at,
+        reason: 'member_removed',
+      })),
+    );
+  }
 
   const audits: RoomAuditSpec[] = [];
   for (const member of add) {
@@ -1200,6 +1218,7 @@ export async function roomMembersUpdate(
       ...remove.map((member) =>
         revokeDirectInvitationStatement(db, room.room_id, member, at),
       ),
+      ...taskRevocations,
       roomMemberSeqStatement(db, room.room_id, eventKey, at),
       ...audits.map((audit) => roomAuditStatement(db, audit, at)),
       ...membershipInboxStatements(db, room.room_id, input.request_id, [...affected, caller], at),
@@ -1701,6 +1720,14 @@ export async function roomLeave(
   const at = nowMs();
   const eventKey = `leave:${room.room_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
+  // D04：退群同样立即撤销该成员在本房间的任务执行资格。
+  const taskRevocations = await revokeTaskEligibilityStatements(db, {
+    actorId: caller,
+    roomId: room.room_id,
+    requestId: input.request_id,
+    at,
+    reason: 'member_left',
+  });
 
   await runIdempotent(db, {
     actorId: caller,
@@ -1762,6 +1789,7 @@ export async function roomLeave(
         )
         .bind(at, room.room_id, caller),
       ...cancelDeliveriesForMemberStatements(db, room.room_id, caller, 'member_left', at),
+      ...taskRevocations,
       // G01：owner 只能在群内没有其他 active 成员时退群；此时群已无人审批，
       // 撤销遗留的 pending 定向邀请，避免空群事后被旧邀请变成无 owner 的非空群。
       // 必须在清空 owner_id 之前按当前 owner 判定，非 owner 退群不受影响。

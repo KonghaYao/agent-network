@@ -340,6 +340,12 @@ async function main(): Promise<void> {
     'network_task_progress',
     'network_task_block',
     'network_task_resume',
+    'network_task_transfer_propose',
+    'network_task_transfer_accept',
+    'network_task_transfer_reject',
+    'network_task_transfer_cancel',
+    'network_task_transfer_get',
+    'network_task_transfer_list',
     'network_room_members_update',
     'network_room_role_set',
     'network_room_owner_transfer',
@@ -432,6 +438,12 @@ async function main(): Promise<void> {
     'network_task_progress',
     'network_task_block',
     'network_task_resume',
+    'network_task_transfer_propose',
+    'network_task_transfer_accept',
+    'network_task_transfer_reject',
+    'network_task_transfer_cancel',
+    'network_task_transfer_get',
+    'network_task_transfer_list',
     'network_inbox_list',
     'network_delivery_claim',
     'network_delivery_complete',
@@ -686,9 +698,15 @@ async function main(): Promise<void> {
     'network_task_progress',
     'network_task_block',
     'network_task_resume',
+    'network_task_transfer_propose',
+    'network_task_transfer_accept',
+    'network_task_transfer_reject',
+    'network_task_transfer_cancel',
+    'network_task_transfer_get',
+    'network_task_transfer_list',
   ];
   check(
-    '任务 12 个工具全部注册且旧工具已退役',
+    '任务 18 个工具全部注册且旧工具已退役',
     taskToolNames.every((name) => taskTools.has(name)) &&
       taskTools.size === taskToolNames.length &&
       !taskTools.has('network_task_list_get') &&
@@ -893,6 +911,99 @@ async function main(): Promise<void> {
       (taskTools.get('network_task_list') as { annotations?: { readOnlyHint?: boolean } } | undefined)
         ?.annotations?.readOnlyHint === true &&
       (taskTools.get('network_task_summary') as { annotations?: { readOnlyHint?: boolean } } | undefined)
+        ?.annotations?.readOnlyHint === true,
+  );
+  const transferProposeInput = JSON.stringify(
+    taskTools.get('network_task_transfer_propose')?.inputSchema ?? {},
+  );
+  check(
+    'task_transfer_propose 输入含目标/说明/执行版本与 expected_revision',
+    ['request_id', 'task_id', 'to_actor_id', 'note', 'assignment_id', 'assignment_version', 'expected_revision'].every(
+      (key) => transferProposeInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_transfer_propose')?.inputSchema,
+  );
+  const transferProposeDescription =
+    taskTools.get('network_task_transfer_propose')?.description ?? '';
+  check(
+    'task_transfer_propose 描述声明权限、24 小时、拉黑与不转移责任',
+    transferProposeDescription.includes('当前负责人、任务创建者或群 owner/管理员可调用') &&
+      transferProposeDescription.includes('24 小时') &&
+      transferProposeDescription.includes('BLOCKED') &&
+      transferProposeDescription.includes('提议本身不转移责任') &&
+      transferProposeDescription.includes('不创建 delivery') &&
+      transferProposeDescription.includes('pending_count'),
+    transferProposeDescription,
+  );
+  const transferAcceptInput = JSON.stringify(
+    taskTools.get('network_task_transfer_accept')?.inputSchema ?? {},
+  );
+  check(
+    'task_transfer_accept 输入含 transfer_id/expected_revision/from_assignment_version',
+    ['request_id', 'transfer_id', 'expected_revision', 'from_assignment_version'].every((key) =>
+      transferAcceptInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_transfer_accept')?.inputSchema,
+  );
+  const transferAcceptDescription =
+    taskTools.get('network_task_transfer_accept')?.description ?? '';
+  check(
+    'task_transfer_accept 描述声明目标专属、版本递增、关闭旧投递与 ASSIGNMENT_STALE',
+    transferAcceptDescription.includes('只有提议目标可调用') &&
+      transferAcceptDescription.includes('assignment_version = 旧版本 + 1') &&
+      transferAcceptDescription.includes('关闭旧 assignment') &&
+      transferAcceptDescription.includes('ASSIGNMENT_STALE'),
+    transferAcceptDescription,
+  );
+  const transferRejectDescription =
+    taskTools.get('network_task_transfer_reject')?.description ?? '';
+  check(
+    'task_transfer_reject 描述声明目标专属、可选 reason 与不改变原 assignment',
+    transferRejectDescription.includes('只有提议目标可调用') &&
+      transferRejectDescription.includes('可选 reason') &&
+      transferRejectDescription.includes('不改变原 assignment') &&
+      transferRejectDescription.includes('CONFLICT'),
+    transferRejectDescription,
+  );
+  const transferCancelDescription =
+    taskTools.get('network_task_transfer_cancel')?.description ?? '';
+  check(
+    'task_transfer_cancel 描述声明参与权限与不改变原 assignment',
+    transferCancelDescription.includes('提议者、任务创建者、当前负责人或群 owner/管理员可调用') &&
+      transferCancelDescription.includes('不改变原 assignment') &&
+      transferCancelDescription.includes('REQUEST_EXPIRED'),
+    transferCancelDescription,
+  );
+  const transferGetOutput = JSON.stringify(taskTools.get('network_task_transfer_get')?.outputSchema ?? {});
+  check(
+    'task_transfer_get 输出含 effective_status/context_ready/操作提示',
+    ['transfer', 'effective_status', 'context_ready', 'can_accept', 'can_reject', 'can_cancel'].every((key) =>
+      transferGetOutput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_transfer_get')?.outputSchema,
+  );
+  const transferListInput = JSON.stringify(
+    taskTools.get('network_task_transfer_list')?.inputSchema ?? {},
+  );
+  check(
+    'task_transfer_list 输入支持 task_id/scope/status/limit',
+    ['task_id', 'scope', 'status', 'limit'].every((key) => transferListInput.includes(`"${key}"`)),
+    taskTools.get('network_task_transfer_list')?.inputSchema,
+  );
+  const transferListDescription =
+    taskTools.get('network_task_transfer_list')?.description ?? '';
+  check(
+    'task_transfer_list 描述声明 scope=mine、过期语义与只读',
+    transferListDescription.includes('scope=mine') &&
+      transferListDescription.includes('expired') &&
+      transferListDescription.includes('不唤醒 Agent'),
+    transferListDescription,
+  );
+  check(
+    'task_transfer_get/list 注册为只读工具',
+    (taskTools.get('network_task_transfer_get') as { annotations?: { readOnlyHint?: boolean } } | undefined)
+      ?.annotations?.readOnlyHint === true &&
+      (taskTools.get('network_task_transfer_list') as { annotations?: { readOnlyHint?: boolean } } | undefined)
         ?.annotations?.readOnlyHint === true,
   );
   const loginTool = listed?.tools?.find((tool) => tool.name === 'network_login');
@@ -1799,6 +1910,9 @@ async function main(): Promise<void> {
       'network_task_accept', 'network_task_decline',
       'network_task_claim', 'network_task_cancel',
       'network_task_progress', 'network_task_block', 'network_task_resume',
+      'network_task_transfer_propose', 'network_task_transfer_accept',
+      'network_task_transfer_reject', 'network_task_transfer_cancel',
+      'network_task_transfer_get', 'network_task_transfer_list',
       'status_label', 'task_progress', 'task.updated',
       '任务卡片', '不写 inbox', '不推进 `head_seq`', '不要轮询',
       'agent_tasks.sh'].every((marker) => skillText.includes(marker)),
@@ -2153,6 +2267,9 @@ async function main(): Promise<void> {
       'network_task_offer', 'network_task_accept', 'network_task_decline',
       'network_task_claim', 'network_task_cancel',
       'network_task_progress', 'network_task_block', 'network_task_resume',
+      'network_task_transfer_propose', 'network_task_transfer_accept',
+      'network_task_transfer_reject', 'network_task_transfer_cancel',
+      'network_task_transfer_get', 'network_task_transfer_list',
       'status_label', 'task_progress',
       'task.updated', '不写 inbox', '不会唤醒 Agent',
       'task_summary', '每次上线', 'pending > 0', 'claimed > 0', '只含自己',

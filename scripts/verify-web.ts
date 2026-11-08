@@ -2789,6 +2789,88 @@ async function runTaskAcceptance(
     );
     await page.locator('#task-detail-close').click();
 
+    // D04 网页入口：目标是接任者时在详情接受交接，服务端原子更换负责人。
+    const uiTransferTask = await rawTool<{ task: { task_id: string } }>(
+      humanToken,
+      'network_task_create',
+      {
+        request_id: requestId('task_create'),
+        room_id: roomId,
+        title: 'UI 交接任务',
+        assignee_actor_id: agent.actor_id,
+        reviewer_actor_id: reviewer.actor_id,
+      },
+    );
+    await rawTool(agentToken, 'network_task_accept', {
+      request_id: requestId('task_accept'),
+      task_id: uiTransferTask.task.task_id,
+    });
+    const uiTransferProposal = await rawTool<{
+      transfer: { transfer_id: string; effective_status: string };
+    }>(agentToken, 'network_task_transfer_propose', {
+      request_id: requestId('task_transfer_propose'),
+      task_id: uiTransferTask.task.task_id,
+      to_actor_id: human.actor_id,
+      note: '网页交接说明',
+    });
+    checkEqual('D04 网页交接提议待接受', uiTransferProposal.transfer.effective_status, 'pending');
+    if (!(await page.locator('#task-popover').isVisible())) {
+      await page.locator('#task-toggle').click();
+      await page.locator('#task-popover').waitFor({ state: 'visible' });
+    }
+    const transferItemSelector = `#task-list .task-item[data-task-id="${uiTransferTask.task.task_id}"]`;
+    await page.waitForFunction(
+      `document.querySelector(${JSON.stringify(transferItemSelector)}) !== null`,
+    );
+    await page.locator(transferItemSelector).click();
+    await page.locator('#task-detail-modal').waitFor({ state: 'visible' });
+    await page.waitForFunction(
+      `document.querySelector('#task-transfer-panel .task-transfer-item') !== null`,
+    );
+    const transferPanelText = (await page.locator('#task-transfer-panel').innerText()) ?? '';
+    check(
+      'D04 网页显示待处理交接与说明',
+      transferPanelText.includes('待接受') && transferPanelText.includes('网页交接说明'),
+      transferPanelText,
+    );
+    const acceptTransferButton = page
+      .locator('#task-transfer-panel button')
+      .filter({ hasText: '接受交接' });
+    checkEqual('D04 网页目标可见接受交接入口', await acceptTransferButton.count(), 1);
+    await acceptTransferButton.click();
+    await page.waitForFunction(
+      `(() => {
+        const rows = Array.from(document.querySelectorAll('#task-detail-body dt'));
+        const owner = rows.find(function (row) { return row.textContent === '负责人'; });
+        return Boolean(owner && owner.nextElementSibling &&
+          owner.nextElementSibling.textContent === '任务 UI 人类');
+      })()`,
+    );
+    check('D04 网页接受交接后详情负责人更新', true);
+    await page.waitForFunction(
+      `document.querySelector('#task-transfer-panel .task-transfer-badge-pending') === null`,
+    );
+    check('D04 网页接受交接后待处理提示消失', true);
+    const acceptedTransfer = await rawTool<{ transfer: { status: string } }>(
+      humanToken,
+      'network_task_transfer_get',
+      { transfer_id: uiTransferProposal.transfer.transfer_id },
+    );
+    checkEqual('D04 网页接受交接后提议为 accepted', acceptedTransfer.transfer.status, 'accepted');
+    const transferredTask = await rawTool<{
+      task: {
+        owner_actor_id: string | null;
+        assignment: { assignment_version: number } | null;
+      };
+    }>(humanToken, 'network_task_get', { task_id: uiTransferTask.task.task_id });
+    checkEqual('D04 网页接受交接后负责人为目标', transferredTask.task.owner_actor_id, human.actor_id);
+    checkEqual(
+      'D04 网页接受交接后 assignment_version 递增',
+      transferredTask.task.assignment?.assignment_version,
+      2,
+    );
+    await page.locator('#task-detail-close').click();
+
     const uiDeclineTask = await rawTool<{ task: { task_id: string } }>(
       humanToken,
       'network_task_create',

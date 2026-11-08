@@ -167,6 +167,11 @@ export const LIMITS = {
   taskListMax: 100,
   /** 指定 offer 的有效期（毫秒）；过期由后续任务处理，不在这里自动改状态。 */
   taskOfferTtlMs: 24 * 60 * 60_000,
+  /** 任务交接提议有效期（毫秒）；过期只关闭提议，不改变原 assignment。 */
+  taskTransferTtlMs: 24 * 60 * 60_000,
+  /** 交接列表默认 / 最大条数。 */
+  taskTransferListDefault: 50,
+  taskTransferListMax: 100,
   /** 任务取消原因 UTF-8 字节上限。 */
   taskCancelReasonBytes: 1024,
   /** 任务阻塞原因 UTF-8 字节上限；只进入任务详情与审计事件。 */

@@ -704,6 +704,59 @@ export const taskResumeSchema = z.object({
 });
 
 /**
+ * 发起任务交接：当前负责人、任务创建者或群 owner/管理员可用。
+ *
+ * 交接只形成待确认提议；目标接受前原负责人责任不变。
+ */
+export const taskTransferProposeSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  to_actor_id: id(),
+  note: z.string().max(LIMITS.taskProgressNoteBytes).optional(),
+  assignment_id: id().optional(),
+  assignment_version: z.number().int().min(1).optional(),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/**
+ * 接受交接：只有提议目标可调用。
+ *
+ * 旧 assignment 的版本也参与 CAS，避免基于旧执行资格的迟到接受。
+ */
+export const taskTransferAcceptSchema = z.object({
+  request_id: requestId,
+  transfer_id: id(),
+  expected_revision: z.number().int().min(1).optional(),
+  from_assignment_version: z.number().int().min(1).optional(),
+});
+
+export const taskTransferRejectSchema = z.object({
+  request_id: requestId,
+  transfer_id: id(),
+  reason: z.string().trim().max(LIMITS.taskCancelReasonBytes).optional(),
+});
+
+export const taskTransferCancelSchema = z.object({
+  request_id: requestId,
+  transfer_id: id(),
+  reason: z.string().trim().max(LIMITS.taskCancelReasonBytes).optional(),
+});
+
+export const taskTransferGetSchema = z.object({
+  transfer_id: id(),
+});
+
+/** 交接列表：按任务或按“与我相关”读取，默认只返回仍待处理的提议。 */
+export const taskTransferListSchema = z.object({
+  task_id: id().optional(),
+  scope: z.enum(['task', 'mine']).optional(),
+  status: z
+    .enum(['pending', 'accepted', 'rejected', 'cancelled', 'expired'])
+    .optional(),
+  limit: z.number().int().min(1).max(LIMITS.taskTransferListMax).optional(),
+});
+
+/**
  * 认证反馈：只接受已注册 actor 主动提交的三段诊断文本。
  *
  * request_id 限制为 ASCII 标识符，避免把凭据或 URL 误当操作 ID；
@@ -826,4 +879,10 @@ export type TaskCancelInput = z.infer<typeof taskCancelSchema>;
 export type TaskProgressInput = z.infer<typeof taskProgressSchema>;
 export type TaskBlockInput = z.infer<typeof taskBlockSchema>;
 export type TaskResumeInput = z.infer<typeof taskResumeSchema>;
+export type TaskTransferProposeInput = z.infer<typeof taskTransferProposeSchema>;
+export type TaskTransferAcceptInput = z.infer<typeof taskTransferAcceptSchema>;
+export type TaskTransferRejectInput = z.infer<typeof taskTransferRejectSchema>;
+export type TaskTransferCancelInput = z.infer<typeof taskTransferCancelSchema>;
+export type TaskTransferGetInput = z.infer<typeof taskTransferGetSchema>;
+export type TaskTransferListInput = z.infer<typeof taskTransferListSchema>;
 export type FeedbackCreateInput = z.infer<typeof feedbackCreateSchema>;

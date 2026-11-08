@@ -51,6 +51,7 @@ import { runRoomMonitorAcceptance } from './lib/room-monitor-acceptance';
 import { runRoomTaskAcceptance } from './lib/room-task-acceptance';
 import { runTaskAssignmentAcceptance } from './lib/task-assignment-acceptance';
 import { runTaskStatusAcceptance } from './lib/task-status-acceptance';
+import { runTaskTransferAcceptance } from './lib/task-transfer-acceptance';
 import { runFeedbackAcceptance } from './lib/feedback-acceptance';
 import { runGroupMentionAcceptance } from './lib/mention-acceptance';
 import { runGroupNoImplicitDeliveryAcceptance } from './lib/no-implicit-delivery-acceptance';
@@ -1328,6 +1329,7 @@ async function main(): Promise<void> {
     await runRoomTaskAcceptance();
     await runTaskAssignmentAcceptance();
     await runTaskStatusAcceptance();
+    await runTaskTransferAcceptance();
     await runFeedbackAcceptance();
     await runGroupMentionAcceptance();
     await runGroupNoImplicitDeliveryAcceptance();
