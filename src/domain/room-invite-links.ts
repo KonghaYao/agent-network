@@ -16,7 +16,12 @@ import {
   runIdempotent,
 } from '../storage/transactions/runner';
 import { contactBlockGuardStatement } from './contact-blocks';
-import { capabilityGuardStatement, requireGroupAccess } from './room-access';
+import {
+  assertRoomWritable,
+  capabilityGuardStatement,
+  requireGroupAccess,
+  roomDissolvedGuardStatement,
+} from './room-access';
 import { roomAuditStatement } from './room-audit';
 import {
   directInvitationStatements,
@@ -144,6 +149,7 @@ export async function roomInviteCreate(
   const viewer = actorId(principal);
   const at = nowMs();
   const access = await requireGroupAccess(db, input.room_id, viewer, 'invite_members');
+  assertRoomWritable(access.room);
   const payloadHash = await sha256Hex(stableStringify(input));
   const replay = await getOperation(db, viewer, input.request_id);
   if (replay) {
@@ -231,6 +237,7 @@ export async function roomInviteCreate(
       build: (resultJson) => [
         operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, at),
         capabilityGuardStatement(db, input.room_id, viewer, 'invite_members'),
+        roomDissolvedGuardStatement(db, input.room_id),
         db
           .prepare(
             guardSql(
@@ -305,6 +312,7 @@ export async function roomInviteCreate(
     build: (resultJson) => [
       operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, at),
       capabilityGuardStatement(db, input.room_id, viewer, 'invite_members'),
+      roomDissolvedGuardStatement(db, input.room_id),
       db
         .prepare(
           guardSql(
@@ -380,7 +388,8 @@ export async function roomInviteRevoke(
     .bind(input.invitation_id)
     .first<RoomInvitationRow>();
   if (!invitation) throw new BusinessError('NOT_FOUND', '邀请不存在');
-  await requireGroupAccess(db, invitation.room_id, caller, 'invite_members');
+  const access = await requireGroupAccess(db, invitation.room_id, caller, 'invite_members');
+  assertRoomWritable(access.room);
   const payloadHash = await sha256Hex(stableStringify(input));
   const replay = await getOperation(db, caller, input.request_id);
   if (replay) return resolveOperation(replay, payloadHash) as RoomInvitationView;
@@ -415,6 +424,7 @@ export async function roomInviteRevoke(
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
       capabilityGuardStatement(db, invitation.room_id, caller, 'invite_members'),
+      roomDissolvedGuardStatement(db, invitation.room_id),
       // 撤销权限独立于建链权限：普通成员可以创建，但只有邀请人或
       // owner/admin 能撤销别人的链接。
       db

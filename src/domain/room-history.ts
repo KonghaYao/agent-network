@@ -20,19 +20,35 @@ export interface HistoryBoundary {
   fromSeq: number;
   /** 文件、任务等按创建时间记录的资源使用的毫秒边界。 */
   fromAt: number;
+  /**
+   * 群解散归档的读取上界；`null` 表示没有上界。
+   *
+   * 解散不会删除事件，但归档成员只能读到解散点为止。所有按序号读取的
+   * 路径必须同时应用该上界，不能只在列表入口截断。
+   */
+  toSeq: number | null;
+  /** 解散时间；旧行没有 `created_seq` 时按它做时间上界。 */
+  toAt: number | null;
   policyRevision: number;
   memberGeneration: number;
 }
 
 export function historyBoundary(
-  room: Pick<RoomRow, 'kind' | 'member_history_policy' | 'policy_revision'>,
+  room: Pick<
+    RoomRow,
+    'kind' | 'member_history_policy' | 'policy_revision' | 'dissolved_at' | 'archive_head_seq'
+  >,
   member: Pick<RoomMemberRow, 'joined_seq' | 'joined_at' | 'member_generation'>,
 ): HistoryBoundary {
   const full = room.kind === 'direct' || room.member_history_policy === 'full';
+  const archived =
+    room.kind === 'group' && room.dissolved_at !== null && room.archive_head_seq !== null;
   return {
     full,
     fromSeq: full ? 0 : member.joined_seq,
     fromAt: full ? 0 : member.joined_at,
+    toSeq: archived ? room.archive_head_seq : null,
+    toAt: archived ? room.dissolved_at : null,
     policyRevision: room.policy_revision,
     memberGeneration: member.member_generation,
   };
@@ -104,11 +120,21 @@ export function createdHistoryFilter(
   alias: string,
   boundary: HistoryBoundary,
 ): { sql: string; binds: number[] } {
-  if (boundary.full) return { sql: '1 = 1', binds: [] };
+  const lower = boundary.full
+    ? '1 = 1'
+    : `((${alias}.created_seq IS NOT NULL AND ${alias}.created_seq >= ?)
+      OR (${alias}.created_seq IS NULL AND ${alias}.created_at >= ?))`;
+  const upper =
+    boundary.toSeq === null
+      ? '1 = 1'
+      : `((${alias}.created_seq IS NOT NULL AND ${alias}.created_seq <= ?)
+        OR (${alias}.created_seq IS NULL AND ${alias}.created_at <= ?))`;
   return {
-    sql: `((${alias}.created_seq IS NOT NULL AND ${alias}.created_seq >= ?)
-      OR (${alias}.created_seq IS NULL AND ${alias}.created_at >= ?))`,
-    binds: [boundary.fromSeq, boundary.fromAt],
+    sql: `(${lower}) AND (${upper})`,
+    binds: [
+      ...(boundary.full ? [] : [boundary.fromSeq, boundary.fromAt]),
+      ...(boundary.toSeq === null ? [] : [boundary.toSeq, boundary.toAt ?? 0]),
+    ],
   };
 }
 
@@ -117,6 +143,7 @@ export function visibleMessage(
   row: Pick<{ created_seq: number }, 'created_seq'>,
   boundary: HistoryBoundary,
 ): boolean {
+  if (boundary.toSeq !== null && row.created_seq > boundary.toSeq) return false;
   return boundary.full || row.created_seq >= boundary.fromSeq;
 }
 
@@ -124,6 +151,13 @@ export function visibleCreated(
   row: { created_seq: number | null; created_at: number },
   boundary: HistoryBoundary,
 ): boolean {
+  if (boundary.toSeq !== null) {
+    if (row.created_seq === null) {
+      if (row.created_at > (boundary.toAt ?? 0)) return false;
+    } else if (row.created_seq > boundary.toSeq) {
+      return false;
+    }
+  }
   if (boundary.full) return true;
   return row.created_seq === null
     ? row.created_at >= boundary.fromAt

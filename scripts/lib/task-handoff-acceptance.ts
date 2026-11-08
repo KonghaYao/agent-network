@@ -683,6 +683,7 @@ export async function runTaskHandoffAcceptance(): Promise<void> {
     await callTool(b1Conn.client, 'network_room_leave', {
       request_id: newRequestId('d05_leave_source'),
       room_id: sourceRoomId,
+      confirm_in_flight: true,
     });
     const afterLoss = (await getPack(u2Conn, task4.task_id)).pack;
     const afterLossItem = itemByRef(afterLoss, upload.fileId);

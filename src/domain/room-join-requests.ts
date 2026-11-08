@@ -23,7 +23,7 @@ import {
   runIdempotent,
 } from '../storage/transactions/runner';
 import { contactBlockGuardStatement, isBlockedBetween } from './contact-blocks';
-import { capabilityGuardStatement, requireGroupAccess } from './room-access';
+import { capabilityGuardStatement, assertRoomWritable, requireGroupAccess, roomDissolvedGuardStatement } from './room-access';
 import { roomAuditStatement } from './room-audit';
 import { actorId, type Principal } from './principal';
 
@@ -291,6 +291,7 @@ export async function requestJoinApproval(
     result,
     build: (resultJson) => [
       operationsStatement(db, applicant, input.requestId, input.payloadHash, resultJson, at),
+      roomDissolvedGuardStatement(db, invitation.room_id),
       contactBlockGuardStatement(db, invitation.inviter_id, applicant),
       ...invitationUsableGuards(db, invitation.invitation_id, at),
       joinMembershipGuardStatement(
@@ -518,6 +519,7 @@ export async function roomJoinRequestRespond(
   if (!room || room.kind !== 'group') {
     throw new BusinessError('INVALID_ARGUMENT', '只有群聊支持入群申请');
   }
+  assertRoomWritable(room);
 
   const action = input.action;
   if (action === 'approve') {
@@ -566,6 +568,7 @@ export async function roomJoinRequestRespond(
 
   const statements: D1PreparedStatement[] = [
     capabilityGuardStatement(db, row.room_id, caller, 'approve_joins'),
+    roomDissolvedGuardStatement(db, row.room_id),
     staleGuard,
     ...revisionGuard,
   ];

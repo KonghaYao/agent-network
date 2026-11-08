@@ -298,12 +298,16 @@ export async function timelineList(
     throw new BusinessError('INVALID_ARGUMENT', 'cursor 方向与请求不一致');
   }
 
-  const max = await currentMaxSeq(db, room);
+  const max = Math.min(
+    await currentMaxSeq(db, room),
+    boundary.toSeq === null ? Number.POSITIVE_INFINITY : boundary.toSeq,
+  );
   const snapshot =
     direction === 'after'
       ? Math.max(max, boundary.fromSeq)
       : Math.max(cursor?.snapshot ?? max, boundary.fromSeq);
-  const rows = await keyPage(db, room, direction, cursor, snapshot, limit, boundary);
+  const cappedSnapshot = boundary.toSeq === null ? snapshot : Math.min(snapshot, boundary.toSeq);
+  const rows = await keyPage(db, room, direction, cursor, cappedSnapshot, limit, boundary);
   const page = rows.slice(0, limit);
   const hasMore = rows.length > limit;
   const items = await materialize(db, room, page);
@@ -313,26 +317,26 @@ export async function timelineList(
   let resumeCursor: string;
   if (direction === 'before') {
     if (hasMore && last) {
-      nextCursor = beforeCursor(scope, last.occurred_at, last.commit_seq, snapshot);
+      nextCursor = beforeCursor(scope, last.occurred_at, last.commit_seq, cappedSnapshot);
     }
-    resumeCursor = afterCursor(scope, snapshot, snapshot);
+    resumeCursor = afterCursor(scope, cappedSnapshot, cappedSnapshot);
   } else {
-    const lastCommit = last?.commit_seq ?? (cursor?.seq ?? snapshot);
-    if (hasMore) nextCursor = afterCursor(scope, lastCommit, snapshot);
-    resumeCursor = afterCursor(scope, lastCommit, Math.max(snapshot, lastCommit));
+    const lastCommit = last?.commit_seq ?? (cursor?.seq ?? cappedSnapshot);
+    if (hasMore) nextCursor = afterCursor(scope, lastCommit, cappedSnapshot);
+    resumeCursor = afterCursor(scope, lastCommit, Math.max(cappedSnapshot, lastCommit));
   }
 
   return {
     items: [],
     next_cursor: null,
     has_more: false,
-    snapshot: String(snapshot),
+    snapshot: String(cappedSnapshot),
     head_seq: String(room.head_seq),
     view: 'timeline',
     timeline_items: items,
     timeline_next_cursor: nextCursor,
     timeline_has_more: hasMore,
-    timeline_snapshot: String(snapshot),
+    timeline_snapshot: String(cappedSnapshot),
     timeline_resume_cursor: resumeCursor,
     authorization: historySnapshot(boundary),
   };

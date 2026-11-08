@@ -351,10 +351,11 @@ export async function cancelPendingTransfersForTask(
 /**
  * 成员失权/停用/移除时撤销任务执行资格。
  *
- * 由成员生命周期事务调用，返回可展开的语句。in_progress/blocked 任务转为
- * blocked + `owner_lost_eligibility`，旧 active assignment 撤销，该 assignment
- * 仍 pending/claimed 的任务投递关闭，pending 交接取消。外部副作用保持未知，
- * 这里不自动重跑任何执行。
+ * 由成员生命周期事务调用，返回可展开的语句。`in_progress/blocked` 任务转为
+ * blocked + `owner_lost_eligibility`；尚未接受的 `offered` 任务回到
+ * `unassigned`，避免把未接手的邀请算成已执行工作。旧 assignment 撤销，
+ * 该 assignment 仍 pending/claimed 的任务投递关闭，pending 交接取消。
+ * 外部副作用保持未知，这里不自动重跑任何执行。
  */
 export async function revokeTaskEligibilityStatements(
   db: D1Database,
@@ -367,26 +368,128 @@ export async function revokeTaskEligibilityStatements(
     reason?: string;
   },
 ): Promise<D1PreparedStatement[]> {
-  const tasks = input.roomId
-    ? await db
-        .prepare(
-          `SELECT * FROM tasks
-            WHERE owner_actor_id = ? AND room_id = ? AND status IN ('in_progress', 'blocked')`,
-        )
-        .bind(input.actorId, input.roomId)
-        .all<TaskRow>()
-    : await db
-        .prepare(
-          `SELECT * FROM tasks
-            WHERE owner_actor_id = ? AND status IN ('in_progress', 'blocked')`,
-        )
-        .bind(input.actorId)
-        .all<TaskRow>();
+  const scope = input.roomId ? ' AND t.room_id = ?' : '';
+  const binds = input.roomId
+    ? [input.roomId, input.actorId, input.actorId]
+    : [input.actorId, input.actorId];
+  const tasks = await db
+    .prepare(
+      `SELECT t.* FROM tasks t
+         LEFT JOIN task_assignments a ON a.assignment_id = t.current_assignment_id
+        WHERE t.status IN ('offered', 'in_progress', 'blocked')${scope}
+          AND (
+            t.owner_actor_id = ?
+            OR (a.owner_actor_id = ? AND a.status IN ('offered', 'active'))
+          )
+        ORDER BY t.task_id ASC`,
+    )
+    .bind(...binds)
+    .all<TaskRow>();
   const statements: D1PreparedStatement[] = [];
   for (const task of tasks.results) {
     const assignment = task.current_assignment_id
       ? await getTaskAssignment(db, task.current_assignment_id)
       : null;
+    const reason = input.reason ?? 'owner_lost_eligibility';
+
+    if (task.status === 'offered') {
+      // offered 还没有被接受，不冒充“执行中”；撤销邀请后回到 unassigned。
+      if (
+        !assignment ||
+        assignment.owner_actor_id !== input.actorId ||
+        assignment.status !== 'offered'
+      ) {
+        continue;
+      }
+      const unassignedTask: TaskRow = {
+        ...task,
+        status: 'unassigned',
+        revision: task.revision + 1,
+        owner_actor_id: null,
+        current_assignment_id: null,
+        blocked_reason: null,
+        blocked_at: null,
+        updated_at: input.at,
+      };
+      statements.push(
+        db
+          .prepare(
+            `UPDATE tasks
+                SET status = 'unassigned', owner_actor_id = NULL, current_assignment_id = NULL,
+                    blocked_reason = NULL, blocked_at = NULL,
+                    revision = revision + 1, updated_at = ?
+              WHERE task_id = ? AND revision = ? AND status = 'offered'
+                AND current_assignment_id = ?`,
+          )
+          .bind(input.at, task.task_id, task.revision, assignment.assignment_id),
+        db
+          .prepare(
+            `UPDATE task_assignments
+                SET status = 'revoked', ended_at = ?, updated_at = ?
+              WHERE assignment_id = ? AND status = 'offered'`,
+          )
+          .bind(input.at, input.at, assignment.assignment_id),
+        ...(await closeTaskDeliveries(
+          db,
+          assignment,
+          task,
+          input.actorId,
+          reason,
+          input.requestId,
+          input.at,
+        )).statements,
+        ...(await cancelPendingTransferStatements(
+          db,
+          task,
+          input.actorId,
+          input.requestId,
+          input.at,
+          'owner_lost_eligibility',
+        )),
+        ...taskRoomEvent(
+          db,
+          unassignedTask,
+          'task_offer_declined',
+          `task:eligibility-lost:${task.task_id}:${input.requestId}`,
+          input.at,
+          {
+            changed_by: input.actorId,
+            reason: 'owner_lost_eligibility',
+            previous_owner_actor_id: input.actorId,
+            assignment_id: assignment.assignment_id,
+            assignment_version: assignment.assignment_version,
+          },
+        ).statements,
+      );
+      continue;
+    }
+
+    if (task.owner_actor_id !== input.actorId) {
+      // 已 blocked 且没有任务负责人、但旧 assignment 仍指向该成员：只撤销
+      // 执行资格与投递，不改写他人负责的任务状态。
+      if (assignment && assignment.owner_actor_id === input.actorId) {
+        statements.push(
+          db
+            .prepare(
+              `UPDATE task_assignments
+                  SET status = 'revoked', ended_at = ?, updated_at = ?
+                WHERE assignment_id = ? AND status IN ('offered', 'active')`,
+            )
+            .bind(input.at, input.at, assignment.assignment_id),
+          ...(await closeTaskDeliveries(
+            db,
+            assignment,
+            task,
+            input.actorId,
+            reason,
+            input.requestId,
+            input.at,
+          )).statements,
+        );
+      }
+      continue;
+    }
+
     const nextRevision = task.revision + 1;
     const blockedTask: TaskRow = {
       ...task,
@@ -415,7 +518,7 @@ export async function revokeTaskEligibilityStatements(
           .prepare(
             `UPDATE task_assignments
                 SET status = 'revoked', ended_at = ?, updated_at = ?
-              WHERE assignment_id = ? AND status = 'active'`,
+              WHERE assignment_id = ? AND status IN ('offered', 'active')`,
           )
           .bind(input.at, input.at, assignment.assignment_id),
         ...(await closeTaskDeliveries(
@@ -423,7 +526,7 @@ export async function revokeTaskEligibilityStatements(
           assignment,
           task,
           input.actorId,
-          input.reason ?? 'owner_lost_eligibility',
+          reason,
           input.requestId,
           input.at,
         )).statements,

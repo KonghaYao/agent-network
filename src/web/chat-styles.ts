@@ -823,6 +823,11 @@ export const APP_STYLE = `
     border: 1px solid var(--wx-line); background: var(--wx-panel); color: var(--wx-text);
     font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
   .room-announcement[hidden] { display: none; }
+  .room-archive-banner { margin: 8px 16px 0; padding: 8px 12px; border-radius: 6px;
+    border: 1px solid #e6c36a; background: #fff8e1; color: #7a5b00;
+    font-size: 12px; line-height: 1.6; }
+  .room-archive-banner[hidden] { display: none; }
+  .composer[hidden] { display: none; }
   .announcement-card { width: min(520px, 100%); box-sizing: border-box; }
   .announcement-input { display: block; box-sizing: border-box; width: 100%;
     min-height: 140px; padding: 8px 10px; border: 1px solid var(--wx-line);

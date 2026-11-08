@@ -153,6 +153,7 @@ async function leaveRoom(
   return callTool<{ room_id: string; left: true }>(connection.client, 'network_room_leave', {
     request_id: newRequestId('g03_leave'),
     room_id: roomId,
+    confirm_in_flight: true,
   });
 }
 

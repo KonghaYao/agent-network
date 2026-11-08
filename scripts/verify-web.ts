@@ -5324,6 +5324,12 @@ async function main(): Promise<void> {
       checkEqual('群聊菜单显示举报', await page.locator('#room-menu-report').isVisible(), true);
       checkEqual('群聊菜单不显示拉黑', await page.locator('#room-menu-block').isHidden(), true);
       checkEqual('群聊菜单不显示删除好友', await page.locator('#room-menu-delete-friend').isHidden(), true);
+      checkEqual('群主群聊菜单显示解散', await page.locator('#room-menu-dissolve').isVisible(), true);
+      checkEqual(
+        '群主解散入口文案',
+        (await page.locator('#room-menu-dissolve').textContent())?.trim(),
+        '解散群聊',
+      );
       const leaveDialog = new Promise<string>((resolve) => {
         page.once('dialog', async (dialog) => {
           const message = dialog.message();
@@ -9405,6 +9411,48 @@ async function main(): Promise<void> {
       checkEqual('网页取消后提议关闭', cancelledState.owner_transfer, null);
       await targetContext.context.close();
       await ownerContext.context.close();
+    }
+
+    // 2b-7. G06 解散归档：横幅、只读输入框与禁用入口。
+    {
+      const archiveGroup = await rawTool<{ room: { room_id: string } }>(
+        data.humanToken,
+        'network_room_create',
+        {
+          request_id: requestId('g06_web_group'),
+          kind: 'group',
+          title: 'G06 归档界面群',
+          members: [data.agentB.actor_id],
+        },
+      );
+      const archiveRoomId = archiveGroup.room.room_id;
+      await rawTool(data.humanToken, 'network_room_dissolve', {
+        request_id: requestId('g06_web_dissolve'),
+        room_id: archiveRoomId,
+        reason: 'G06 网页归档验收',
+      });
+      const archiveContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const archivePage = archiveContext.page;
+      await archivePage.goto(`${server.base}/c/${archiveRoomId}`);
+      await waitRoom(archivePage, archiveRoomId, 'G06 归档界面群');
+      checkEqual(
+        '解散后显示只读归档横幅',
+        await archivePage.locator('#room-archive-banner').isVisible(),
+        true,
+      );
+      check(
+        '归档横幅说明只读且不承诺收回已下载内容',
+        ((await archivePage.locator('#room-archive-banner').textContent()) ?? '').includes('只读归档') &&
+          ((await archivePage.locator('#room-archive-banner').textContent()) ?? '').includes('无法收回'),
+      );
+      checkEqual('解散后隐藏输入框', await archivePage.locator('#composer').isHidden(), true);
+      checkEqual('解散后隐藏新建任务', await archivePage.locator('#task-create').isHidden(), true);
+      await archiveContext.context.close();
     }
 
     // 2c. 单条统一 stream、慢加载、事件刷新、自消息、断线退避与重连补拉。

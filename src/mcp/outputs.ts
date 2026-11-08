@@ -133,6 +133,15 @@ export const roomSchema = z.object({
   announcement_updated_by: z.string().nullable(),
   capabilities: roomCapabilitiesSchema,
   last_message: messagePreviewSchema.nullable(),
+  status: z.enum(['active', 'dissolved']),
+  dissolved_at: z.string().nullable(),
+  dissolved_by: z.string().nullable(),
+  dissolve_reason: z.string().nullable(),
+  /** 解散归档的读取上界；未解散为 null。 */
+  archived_head_seq: z.string().nullable(),
+  read_only: z.boolean(),
+  can_leave: z.boolean(),
+  can_dissolve: z.boolean(),
   created_at: z.string(),
   updated_at: z.string(),
 });
@@ -850,7 +859,54 @@ export const removedResultSchema = z.object({
   removed: z.literal(true),
 });
 
-export const leaveResultSchema = z.object({ room_id: z.string(), left: z.literal(true) });
+export const inFlightTaskSchema = z.object({
+  task_id: z.string(),
+  title: z.string(),
+  status: z.string(),
+  owner_actor_id: z.string().nullable(),
+  owner_name: z.string().nullable(),
+  assignment_id: z.string().nullable(),
+  assignment_status: z.string().nullable(),
+  assignment_version: z.number().nullable(),
+});
+
+export const roomLeavePreviewSchema = z.object({
+  room_id: z.string(),
+  actor_id: z.string(),
+  in_flight_tasks: z.array(inFlightTaskSchema),
+  pending_deliveries: z.number(),
+  claimed_deliveries: z.number(),
+  can_leave: z.boolean(),
+  can_dissolve: z.boolean(),
+  owner_transfer_required: z.boolean(),
+  dissolved: z.boolean(),
+  read_only: z.boolean(),
+});
+
+export const leaveResultSchema = z.object({
+  room_id: z.string(),
+  left: z.literal(true),
+  in_flight_tasks: z.array(inFlightTaskSchema),
+  pending_deliveries: z.number(),
+  claimed_deliveries: z.number(),
+});
+
+export const roomDissolveSummarySchema = z.object({
+  room_id: z.string(),
+  dissolved_at: z.string(),
+  archived_head_seq: z.string(),
+  archive_member_seq: z.string(),
+  cancelled_tasks: z.number(),
+  cancelled_task_ids: z.array(z.string()),
+  cancelled_deliveries: z.number(),
+  revoked_invitations: z.number(),
+  cancelled_join_requests: z.number(),
+  cancelled_transfers: z.number(),
+});
+
+export const roomDissolveResultSchema = roomDetailSchema.extend({
+  dissolve: roomDissolveSummarySchema,
+});
 
 export const roomRoleAuditSchema = z.object({
   audit_id: z.string(),
@@ -874,6 +930,7 @@ export const roomRoleAuditSchema = z.object({
     'join_requested',
     'join_approved',
     'join_rejected',
+    'room_dissolved',
   ]),
   target_actor_id: z.string().nullable(),
   target_name: z.string().nullable(),
@@ -918,6 +975,7 @@ export const roomNoticeSchema = z.object({
     'join_requested',
     'join_approved',
     'join_rejected',
+    'room_dissolved',
   ]),
   target_actor_id: z.string().nullable(),
   changed_by: z.string(),

@@ -26,11 +26,13 @@ import { actorId, type Principal } from './principal';
 import { roomAuditStatement } from './room-audit';
 import {
   capabilityGuardStatement,
+  assertRoomWritable,
   currentOwnerGuardStatement,
   requireExpectedRoleRevision,
   requireGroupAccess,
   requireTargetMember,
   roleRevisionGuardStatement,
+  roomDissolvedGuardStatement,
 } from './room-access';
 
 /**
@@ -80,6 +82,7 @@ const OWNER_TRANSFER_VIEW_SQL = `SELECT t.*, f.name AS from_owner_name, u.name A
    AND target.status = 'active'
  WHERE t.room_id = ? AND t.status = 'pending' AND t.expires_at > ?
    AND r.kind = 'group' AND r.owner_id = t.from_owner_id
+   AND r.dissolved_at IS NULL
  ORDER BY t.created_at DESC, t.transfer_id DESC
  LIMIT 1`;
 
@@ -311,6 +314,7 @@ export async function roomOwnerTransferPropose(
 ): Promise<OwnerTransferResult> {
   const caller = actorId(principal);
   const access = await requireGroupAccess(db, input.room_id, caller, 'transfer_owner');
+  assertRoomWritable(access.room);
   if (input.target_actor_id === caller) {
     throw new BusinessError('INVALID_ARGUMENT', 'owner 不能把群主转让给自己');
   }
@@ -346,6 +350,7 @@ export async function roomOwnerTransferPropose(
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
       capabilityGuardStatement(db, input.room_id, caller, 'transfer_owner'),
+      roomDissolvedGuardStatement(db, input.room_id),
       currentOwnerGuardStatement(db, input.room_id, caller),
       targetStillEligibleGuard(db, input.room_id, target.actor_id, null),
       ...(revisionGuard ? [revisionGuard] : []),
@@ -469,6 +474,7 @@ export async function roomOwnerTransferRespond(
   if (!room || room.kind !== 'group') {
     throw new BusinessError('NOT_FOUND', '转让提议对应的群不存在');
   }
+  assertRoomWritable(room);
   if (room.owner_id !== row.from_owner_id) {
     throw new BusinessError('CONFLICT', '原群主已不再是群 owner，提议已失效');
   }
@@ -509,6 +515,7 @@ export async function roomOwnerTransferRespond(
   const build = (resultJson: string): D1PreparedStatement[] => {
     const statements: D1PreparedStatement[] = [
       operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, atAccept),
+      roomDissolvedGuardStatement(db, row.room_id),
       requestExpiredGuard(db, row.transfer_id, atAccept),
       pendingTransferVersionGuard(
         db,
@@ -682,6 +689,8 @@ export async function roomOwnerTransferCancel(
     throw new BusinessError('NOT_FOUND', '群主转让提议不存在或不属于当前身份');
   }
   await requireGroupAccess(db, row.room_id, caller, 'transfer_owner');
+  const room = await getRoom(db, row.room_id);
+  if (room) assertRoomWritable(room);
   const payloadHash = await sha256Hex(stableStringify(input));
   const replay = await resolveReplay(db, caller, input.request_id, payloadHash);
   if (replay.found) return replay.result as OwnerTransferResult;
@@ -704,6 +713,7 @@ export async function roomOwnerTransferCancel(
     result,
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, atCancel),
+      roomDissolvedGuardStatement(db, row.room_id),
       requestExpiredGuard(db, row.transfer_id, atCancel),
       pendingTransferVersionGuard(
         db,

@@ -62,6 +62,7 @@ import {
   registerSchema,
   roomAnnouncementSetSchema,
   roomCreateSchema,
+  roomDissolveSchema,
   roomGetSchema,
   roomInviteCreateSchema,
   roomInviteGetSchema,
@@ -69,6 +70,7 @@ import {
   roomInviteRevokeSchema,
   roomJoinRequestListSchema,
   roomJoinRequestRespondSchema,
+  roomLeavePreviewSchema as roomLeavePreviewQuerySchema,
   roomLeaveSchema,
   roomMarkReadSchema,
   roomMembersUpdateSchema,
@@ -212,6 +214,7 @@ import {
   roomInviteRevoke,
 } from '../domain/room-invite-links';
 import { roomJoinRequestList, roomJoinRequestRespond } from '../domain/room-join-requests';
+import { roomDissolve, roomLeavePreview } from '../domain/room-lifecycle';
 import {
   roomOwnerTransferCancel,
   roomOwnerTransferPropose,
@@ -310,6 +313,8 @@ import {
   recoveredIdentitySchema,
   recoveryTicketSchema,
   removedResultSchema,
+  roomDissolveResultSchema,
+  roomLeavePreviewSchema as roomLeavePreviewResultSchema,
   roomDetailSchema,
   roomCreateResultSchema,
   roomInvitationPageSchema,
@@ -1681,13 +1686,39 @@ export function registerTools(
 
   register(
     server,
+    'network_room_leave_preview',
+    '只读预览退出群聊的后果：列出你在该群仍承担的在途任务（task_id/title/status/owner）、pending/claimed 投递数、是否需要先转移群主，以及是否可解散。不会撤销任何工作或成员资格；退群前先展示给用户确认。',
+    roomLeavePreviewQuerySchema,
+    roomLeavePreviewResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomLeavePreview(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
     'network_room_leave',
-    '离开群聊；owner 必须先转移 owner。',
+    '离开群聊。owner 必须先通过 network_room_owner_transfer_propose 完成转让，或使用 network_room_dissolve 解散；退出会立即撤销你在该群的发言/文件授权、任务执行资格与 pending/claimed 投递，旧 claim、任务提交和文件下载立即失败。若存在在途任务或投递，先用 network_room_leave_preview 列出并确认，调用时传 confirm_in_flight: true；否则返回 CONFLICT 与 in_flight_tasks，不静默丢失。已下载到本地的副本无法技术回收。',
     roomLeaveSchema,
     leaveResultSchema,
     async (input) => {
       requireActor(principal);
       return roomLeave(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_room_dissolve',
+    '解散群聊（owner only）。同一事务冻结发言、邀请、任务执行、文件写入与未来通话资格；取消所有未结束任务（reason=room_dissolved，不自动标 accepted/completed）、active assignment、pending 交接、pending/claimed 投递、邀请/加入请求与邀请链接，并写入 room_dissolved 审计。解散不删除消息、任务、成果或文件；解散时仍合法的成员保留截至 archived_head_seq 的只读归档，此前已退群/被移除者无归档资格。事件携带 media_revoke: true，供未来 M09 媒体层消费；当前版本尚未实现通话媒体终止。',
+    roomDissolveSchema,
+    roomDissolveResultSchema,
+    async (input) => {
+      requireActor(principal);
+      const summary = await roomDissolve(db, principal, input);
+      return { ...(await roomGet(db, principal, input.room_id)), dissolve: summary };
     },
   );
 

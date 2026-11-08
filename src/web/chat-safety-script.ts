@@ -10,6 +10,7 @@ const safetyReportButton = document.getElementById('room-menu-report');
 const safetyBlockButton = document.getElementById('room-menu-block');
 const safetyDeleteButton = document.getElementById('room-menu-delete-friend');
 const safetyLeaveButton = document.getElementById('room-menu-leave-group');
+const safetyDissolveButton = document.getElementById('room-menu-dissolve');
 const safetyHint = document.getElementById('room-menu-safety-hint');
 const safetyReportModal = document.getElementById('report-modal');
 const safetyReportTarget = document.getElementById('report-target');
@@ -33,6 +34,14 @@ const SAFETY_DELETE_CONFIRM =
   '删除好友不会阻止对方再次申请；如需拒绝私聊与申请，请使用“拉黑”。确定删除好友？';
 const SAFETY_LEAVE_CONFIRM =
   '退出群聊只离开当前群，不影响好友关系；历史消息是否仍可读由群策略决定。确定退出？';
+const SAFETY_DISSOLVE_CONFIRM =
+  '解散群聊后：\\n' +
+  '· 所有成员立即失去新的发言、邀请、任务执行与文件写入权限\\n' +
+  '· 所有未结束任务会被取消，不会自动标为已完成\\n' +
+  '· 邀请链接、入群申请与待处理投递立即失效\\n' +
+  '· 解散时仍在群的成员保留截至解散点的只读归档；此前已退群/被移除者无归档资格\\n' +
+  '· 已下载到本地的文件副本无法收回\\n\\n' +
+  '解散不删除消息、任务或成果。确定解散？';
 
 let safetyBusy = false;
 let safetyReportRoomId = null;
@@ -86,6 +95,9 @@ function prepareRoomMenuSafety(target) {
   safetyBlockButton.hidden = !direct;
   safetyDeleteButton.hidden = !direct;
   safetyLeaveButton.hidden = direct;
+  if (safetyDissolveButton) {
+    safetyDissolveButton.hidden = direct || !target.can_dissolve || target.read_only;
+  }
   if (safetyHint) safetyHint.hidden = false;
   safetyUpdateBlockLabel(false);
   if (!direct) return;
@@ -158,16 +170,37 @@ async function safetyDeleteFriend() {
   }
 }
 
+function safetyInFlightTaskLines(preview) {
+  const tasks = preview && Array.isArray(preview.in_flight_tasks) ? preview.in_flight_tasks : [];
+  if (tasks.length === 0) return '';
+  return '\\n\\n你在该群仍有 ' + tasks.length + ' 个在途任务，退群会立即撤销执行资格：\\n' +
+    tasks.map(function (task) {
+      const owner = task.owner_name || task.owner_actor_id || '未指派';
+      return '· ' + task.task_id + ' · ' + task.status + ' · ' + owner;
+    }).join('\\n');
+}
+
 async function safetyLeaveGroup() {
   const target = roomMenuTarget;
   if (!target || safetyBusy || target.kind !== 'group') return;
-  if (!window.confirm(SAFETY_LEAVE_CONFIRM)) return;
   safetyBusy = true;
   if (safetyLeaveButton) safetyLeaveButton.disabled = true;
   try {
+    const preview = await callTool('network_room_leave_preview', { room_id: target.roomId });
+    const hasWork = Boolean(preview && (
+      (preview.in_flight_tasks && preview.in_flight_tasks.length > 0) ||
+      preview.pending_deliveries > 0 ||
+      preview.claimed_deliveries > 0
+    ));
+    const message = SAFETY_LEAVE_CONFIRM + safetyInFlightTaskLines(preview) +
+      (preview && preview.owner_transfer_required
+        ? '\\n\\n你是群主：请先在成员弹窗转让群主，或使用“解散群聊”。'
+        : '');
+    if (!window.confirm(message)) return;
     await callTool('network_room_leave', {
       request_id: requestId('web_room_leave'),
-      room_id: target.roomId
+      room_id: target.roomId,
+      ...(hasWork ? { confirm_in_flight: true } : {})
     });
     closeRoomMenu();
     window.location.assign('/');
@@ -176,6 +209,32 @@ async function safetyLeaveGroup() {
   } finally {
     safetyBusy = false;
     if (safetyLeaveButton) safetyLeaveButton.disabled = false;
+  }
+}
+
+async function safetyDissolveGroup() {
+  const target = roomMenuTarget;
+  if (!target || safetyBusy || target.kind !== 'group' || !target.can_dissolve) return;
+  if (!window.confirm(SAFETY_DISSOLVE_CONFIRM)) return;
+  safetyBusy = true;
+  if (safetyDissolveButton) safetyDissolveButton.disabled = true;
+  try {
+    const result = await callTool('network_room_dissolve', {
+      request_id: requestId('web_room_dissolve'),
+      room_id: target.roomId
+    });
+    const summary = result && result.dissolve ? result.dissolve : null;
+    showToast(summary
+      ? '已解散，取消 ' + summary.cancelled_tasks + ' 个未结束任务'
+      : '已解散');
+    closeRoomMenu();
+    if (activeRoomId === target.roomId) await refresh(true);
+    else scheduleRoomListRefresh(true);
+  } catch (error) {
+    safetySetStatus('解散失败：' + (error && error.message ? error.message : String(error)), true);
+  } finally {
+    safetyBusy = false;
+    if (safetyDissolveButton) safetyDissolveButton.disabled = false;
   }
 }
 
@@ -266,6 +325,9 @@ if (safetyDeleteButton) safetyDeleteButton.addEventListener('click', function ()
 });
 if (safetyLeaveButton) safetyLeaveButton.addEventListener('click', function () {
   safetyLeaveGroup().catch(function () {});
+});
+if (safetyDissolveButton) safetyDissolveButton.addEventListener('click', function () {
+  safetyDissolveGroup().catch(function () {});
 });
 if (safetyReportButton) safetyReportButton.addEventListener('click', function () {
   openSafetyReport().catch(function () {});

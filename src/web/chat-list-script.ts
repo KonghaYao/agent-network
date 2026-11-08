@@ -257,7 +257,8 @@ function renderRooms() {
   for (const entry of entries) {
     const item = document.createElement('li');
     const link = document.createElement('a');
-    link.className = 'room-item' + (entry.room_id === activeRoomId ? ' active' : '');
+    link.className = 'room-item' + (entry.room_id === activeRoomId ? ' active' : '') +
+      (entry.read_only ? ' room-item-read-only' : '');
     link.href = '/c/' + encodeURIComponent(entry.room_id);
     link.title = entry.name;
     link.dataset.roomId = entry.room_id;
@@ -292,7 +293,9 @@ function renderRooms() {
     top.append(time);
     const preview = document.createElement('div');
     preview.className = 'room-preview';
-    preview.textContent = entry.last_message ? entry.last_message.preview : '还没有消息';
+    preview.textContent = entry.read_only
+      ? '已解散 · 只读归档'
+      : (entry.last_message ? entry.last_message.preview : '还没有消息');
     main.append(top, preview);
     const avatarWrap = document.createElement('span');
     avatarWrap.className = 'avatar-wrap';
@@ -381,6 +384,10 @@ function mergeActiveRoom(summaries) {
     my_last_read_seq: 0,
     last_message: cache ? cache.lastMessage || null : null,
     updated_at: detail.room.updated_at || Date.now(),
+    read_only: Boolean(detail.room.read_only),
+    dissolved_at: detail.room.dissolved_at || null,
+    can_leave: Boolean(detail.room.can_leave),
+    can_dissolve: Boolean(detail.room.can_dissolve),
     peer_kind: summary.peer_kind,
     peer_online: summary.peer_online,
     peer_actor_id: summary.peer_actor_id,
@@ -479,6 +486,10 @@ async function loadRooms(options) {
           my_last_read_seq: entry.my_last_read_seq,
           last_message: entry.last_message,
           updated_at: entry.updated_at,
+          read_only: Boolean(entry.read_only),
+          dissolved_at: entry.dissolved_at || null,
+          can_leave: Boolean(entry.can_leave),
+          can_dissolve: Boolean(entry.can_dissolve),
           peer_kind: cached ? cached.peer_kind : null,
           // 人类成员没有在线概念，保持 null 且不渲染状态点。
           peer_online: cached ? cached.peer_online : null,

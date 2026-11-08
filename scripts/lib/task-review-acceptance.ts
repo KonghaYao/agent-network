@@ -687,6 +687,7 @@ export async function runTaskReviewAcceptance(): Promise<void> {
     await callTool(u3Conn.client, 'network_room_leave', {
       request_id: newRequestId('d07_u3_leave'),
       room_id: roomId,
+      confirm_in_flight: true,
     });
     const t03aAfterLeave = await getTask(u1Conn, t03a.task_id);
     checkEqual('D07-T03 验收人退群后任务保持 submitted', t03aAfterLeave.status, 'submitted');

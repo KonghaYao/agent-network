@@ -44,6 +44,7 @@ import {
   type HistoryBoundary,
   type HistorySnapshot,
 } from './room-history';
+import { assertRoomWritable, roomDissolvedGuardStatement } from './room-access';
 
 /**
  * 聊天绑定文件（room_files）。
@@ -184,6 +185,7 @@ export async function roomFileBind(
     const replayed = resolveOperation(replay, payloadHash) as { file: RoomFileView };
     return { ...replayed, authorization: historySnapshot(boundary) };
   }
+  assertRoomWritable(room);
 
   const file = await source.readFile(input.file_id);
   const at = nowMs();
@@ -261,6 +263,7 @@ export async function roomFileBind(
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
       memberGuard(db, room.room_id, caller),
+      roomDissolvedGuardStatement(db, room.room_id),
       db
         .prepare(
           guardSql(
@@ -488,6 +491,7 @@ export async function roomFileDelete(
   input: RoomFileDeleteInput,
 ): Promise<{ file_id: string; deleted: true }> {
   const { caller, room, boundary } = await requireRoomMember(db, principal, input.room_id);
+  assertRoomWritable(room);
   const row = await getRoomFile(db, input.file_id);
   if (!row || row.room_id !== room.room_id || !visibleCreated(row, boundary)) {
     throw new BusinessError('FILE_UNAVAILABLE', '文件不在该房间或当前不可见', {
@@ -517,6 +521,7 @@ export async function roomFileDelete(
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
       memberGuard(db, room.room_id, caller),
+      roomDissolvedGuardStatement(db, room.room_id),
       db
         .prepare(
           guardSql(

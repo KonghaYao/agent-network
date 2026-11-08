@@ -287,6 +287,24 @@ function applyRoomHeader() {
   renderTaskRow();
 }
 
+function applyRoomLifecycle(roomView) {
+  const readOnly = Boolean(roomView && roomView.read_only);
+  const banner = document.getElementById('room-archive-banner');
+  if (banner) {
+    banner.hidden = !readOnly;
+    banner.textContent = readOnly
+      ? '群聊已解散，当前为只读归档；截至解散点的历史仍可查看。已下载到本地的副本无法收回。'
+      : '';
+  }
+  const composerElement = document.getElementById('composer');
+  if (composerElement) composerElement.hidden = readOnly;
+  const uploadButton = document.getElementById('files-upload');
+  if (uploadButton) uploadButton.disabled = readOnly;
+  const attachButton = document.getElementById('attach-file');
+  if (attachButton) attachButton.disabled = readOnly;
+  document.body.classList.toggle('room-read-only', readOnly);
+}
+
 function applyRoomDetail(detail) {
   room = detail.room;
   members = new Map(detail.members.map(function (member) {
@@ -296,6 +314,7 @@ function applyRoomDetail(detail) {
     return [invited.actor_id, invited];
   }));
   ownerTransfer = detail.owner_transfer || null;
+  applyRoomLifecycle(room);
   applyRoomHeader();
   const summary = directSummaryFromDetail(detail);
   if (detail.room.kind === 'direct') peerDetails.set(detail.room.room_id, summary);
@@ -371,6 +390,7 @@ function handleRoomError(error, roomId, epoch) {
 
 function applyCachedRoom(cache) {
   room = cache.room || null;
+  applyRoomLifecycle(room);
   members = new Map((cache.members || []).map(function (member) {
     return [member.actor_id, member];
   }));

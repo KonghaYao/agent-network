@@ -193,7 +193,10 @@ function openRoomMenu(link, x, y) {
     roomName: roomName,
     kind: kind,
     peer_actor_id: entry ? entry.peer_actor_id : null,
-    peer_kind: entry ? entry.peer_kind : null
+    peer_kind: entry ? entry.peer_kind : null,
+    read_only: entry ? Boolean(entry.read_only) : false,
+    can_leave: entry ? Boolean(entry.can_leave) : false,
+    can_dissolve: entry ? Boolean(entry.can_dissolve) : false
   };
   roomMenuAnchor = link;
   roomMenuBusy = false;

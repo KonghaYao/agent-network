@@ -57,7 +57,7 @@ import {
   runIdempotent,
 } from '../storage/transactions/runner';
 import { actorId, type Principal } from './principal';
-import { capabilityGuardStatement } from './room-access';
+import { assertRoomWritable, capabilityGuardStatement, roomDissolvedGuardStatement } from './room-access';
 import type { MessagePreviewView } from './rooms';
 import {
   decodeHistoryCursor,
@@ -203,6 +203,8 @@ export function messageGuardStatements(
     directMessageGuardStatement(db, core.roomId),
     // 群策略：owner_admin 时普通成员不能发言；管理员和 owner 始终可以。
     capabilityGuardStatement(db, core.roomId, core.senderId, 'send_message'),
+    // 解散后归档只读；预检查之外的提交时复核，避免先读后写窗口。
+    roomDissolvedGuardStatement(db, core.roomId),
   ];
   // @所有人 只发提醒，不批量创建 delivery；权限在事务内与发送同一闸门复核。
   if (core.mentionAll) {
@@ -694,6 +696,7 @@ export async function messageSend(
   if (!member || member.status !== 'active') {
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
   }
+  assertRoomWritable(room);
   const boundary = historyBoundary(room, member);
 
   const bodyBytes = utf8Bytes(input.body);
@@ -1015,11 +1018,14 @@ export async function historyList(
     ? decodeHistoryCursor(input.cursor, scope, room.room_id)
     : null;
   const direction = input.direction ?? 'before';
+  // 解散归档固定读取上界；after 追新也不能越过 archived_head_seq。
+  const readHead =
+    boundary.toSeq === null ? room.head_seq : Math.min(room.head_seq, boundary.toSeq);
   // 快照上界只用于向前翻旧页；after 是追新，必须允许超过首次查询时的 head。
   const snapshot =
     direction === 'after'
-      ? room.head_seq
-      : Math.max(boundary.fromSeq, cursor?.snapshot ?? room.head_seq);
+      ? readHead
+      : Math.max(boundary.fromSeq, cursor?.snapshot ?? readHead);
 
   let rows: MessageRow[];
   if (direction === 'before') {

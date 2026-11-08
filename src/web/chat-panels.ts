@@ -83,6 +83,8 @@ export function sidebarPane(): string {
       role="menuitem" hidden>删除好友</button>
     <button class="room-menu-item danger" id="room-menu-leave-group" type="button"
       role="menuitem" hidden>退出群聊</button>
+    <button class="room-menu-item danger" id="room-menu-dissolve" type="button"
+      role="menuitem" hidden>解散群聊</button>
     <p class="room-menu-status" id="room-menu-safety-hint" hidden>
       删除好友只结束好友关系，历史保留；拉黑还会拒绝新的私聊、申请与邀请，但不会自动移出共同群；
       举报只提交给受控管理流程，不会自动对外发送；退群只离开当前群，不影响好友关系。
@@ -178,6 +180,7 @@ export function chatPane(): string {
     <button type="button" id="rename-cancel">取消</button>
   </form>
   <div id="room-announcement" class="room-announcement" role="note" hidden></div>
+  <div id="room-archive-banner" class="room-archive-banner" role="note" hidden></div>
   <div class="chat-body" id="chat-body" aria-busy="false">
     <div id="chat-loading" class="chat-loading" role="status" hidden>正在加载会话…</div>
     <div id="chat-skeleton" class="chat-skeleton" aria-hidden="true" hidden>

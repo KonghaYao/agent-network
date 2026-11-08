@@ -90,7 +90,11 @@ import {
   progressView,
   type TaskProgressView,
 } from './task-progress';
-import { capabilityGuardStatement, roomCapabilitiesFor } from './room-access';
+import {
+  capabilityGuardStatement,
+  roomCapabilitiesFor,
+  roomDissolvedGuardStatement,
+} from './room-access';
 import { cancelPendingTransfersForTask } from './task-transfers';
 import {
   historyBoundary,
@@ -425,6 +429,9 @@ export async function requireVisibleTask(
   }
   const boundary = historyBoundary(room, member);
   if (!boundary.full && task.created_at < boundary.fromAt) {
+    throw new BusinessError('NOT_FOUND', '任务不存在');
+  }
+  if (boundary.toAt !== null && task.created_at > boundary.toAt) {
     throw new BusinessError('NOT_FOUND', '任务不存在');
   }
   return {
@@ -1300,6 +1307,13 @@ export async function taskCreate(
   input: TaskCreateInput,
 ): Promise<TaskResult> {
   const { caller, room, member, boundary } = await requireRoomMember(db, principal, input.room_id);
+  if (room.dissolved_at !== null) {
+    throw new BusinessError('CONFLICT', '群已解散，当前为只读归档，不能创建任务', {
+      room_id: room.room_id,
+      dissolved_at: String(room.dissolved_at),
+      read_only: true,
+    });
+  }
   const capabilities = roomCapabilitiesFor(room, member);
   if (!capabilities.create_task) {
     throw new BusinessError('PERMISSION_DENIED', '当前身份没有创建任务的权限');
@@ -1510,6 +1524,7 @@ export async function taskCreate(
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
       memberGuard(db, room.room_id, caller),
       capabilityGuardStatement(db, room.room_id, caller, 'create_task'),
+      roomDissolvedGuardStatement(db, room.room_id),
       participantGuard(db, room.room_id, reviewerId),
       ...(assigneeId ? [participantGuard(db, room.room_id, assigneeId)] : []),
       ...(assigneeId ? [contactBlockGuardStatement(db, caller, assigneeId)] : []),
@@ -1867,19 +1882,24 @@ export async function taskList(
   const filters: string[] = [];
   const binds: unknown[] = [room.room_id];
   if (input.status) {
-    filters.push('AND status = ?');
+    filters.push('AND t.status = ?');
     binds.push(input.status);
   }
+  // tasks 没有 created_seq，历史边界按 created_at；解散归档补时间上界。
   if (!boundary.full) {
-    filters.push('AND created_at >= ?');
+    filters.push('AND t.created_at >= ?');
     binds.push(boundary.fromAt);
+  }
+  if (boundary.toAt !== null) {
+    filters.push('AND t.created_at <= ?');
+    binds.push(boundary.toAt);
   }
   binds.push(limit);
   const rows = await db
     .prepare(
-      `SELECT * FROM tasks
-        WHERE room_id = ? ${filters.join(' ')}
-        ORDER BY updated_at DESC, task_id DESC
+      `SELECT t.* FROM tasks t
+        WHERE t.room_id = ? ${filters.join(' ')}
+        ORDER BY t.updated_at DESC, t.task_id DESC
         LIMIT ?`,
     )
     .bind(...binds)
@@ -2977,6 +2997,209 @@ export async function taskCancel(
 }
 
 /**
+ * 群解散时取消所有未结束任务（G06）。
+ *
+ * 这是 `taskCancel` 的批量事务内版本：不经过单个任务的权限检查，但不创建
+ * 第二套状态机。任务统一转 `cancelled`、撤销全部 offered/active/submitted
+ * assignment、关闭 task_offer/task_reminder 的 pending/claimed delivery 并
+ * 取消 pending 交接。`submitted` 成果保留，解散不会把任何任务自动标为
+ * accepted 或 completed。
+ */
+export async function roomDissolveTaskStatements(
+  db: D1Database,
+  input: {
+    roomId: string;
+    actor: string;
+    requestId: string;
+    at: number;
+  },
+): Promise<{
+  statements: D1PreparedStatement[];
+  taskIds: string[];
+  deliveryIds: string[];
+}> {
+  const tasks = await db
+    .prepare(
+      `SELECT * FROM tasks
+        WHERE room_id = ? AND status NOT IN ('accepted', 'cancelled', 'legacy_completed')
+        ORDER BY created_at ASC, task_id ASC`,
+    )
+    .bind(input.roomId)
+    .all<TaskRow>();
+  const statements: D1PreparedStatement[] = [];
+  const taskIds: string[] = [];
+  const deliveryIds = new Set<string>();
+  const reason = 'room_dissolved';
+
+  for (const task of tasks.results) {
+    taskIds.push(task.task_id);
+    const externalStopStatus: TaskExternalStopStatus =
+      task.status === 'in_progress' || task.status === 'blocked'
+        ? 'unknown'
+        : 'not_required';
+    const updated: TaskRow = {
+      ...task,
+      status: 'cancelled',
+      owner_actor_id: null,
+      current_assignment_id: null,
+      revision: task.revision + 1,
+      cancelled_at: input.at,
+      cancelled_by: input.actor,
+      cancel_reason: reason,
+      external_stop_status: externalStopStatus,
+      updated_at: input.at,
+    };
+    statements.push(
+      db
+        .prepare(
+          `UPDATE tasks
+              SET status = 'cancelled', owner_actor_id = NULL, current_assignment_id = NULL,
+                  revision = revision + 1, cancelled_at = ?, cancelled_by = ?,
+                  cancel_reason = ?, external_stop_status = ?, updated_at = ?
+            WHERE task_id = ? AND revision = ?
+              AND status NOT IN ('accepted', 'cancelled', 'legacy_completed')`,
+        )
+        .bind(
+          input.at,
+          input.actor,
+          reason,
+          externalStopStatus,
+          input.at,
+          task.task_id,
+          task.revision,
+        ),
+      db
+        .prepare(
+          `UPDATE task_assignments
+              SET status = 'revoked', ended_at = ?, updated_at = ?
+            WHERE task_id = ? AND status IN ('offered', 'active', 'submitted')`,
+        )
+        .bind(input.at, input.at, task.task_id),
+    );
+
+    const currentAssignment = task.current_assignment_id
+      ? await getTaskAssignment(db, task.current_assignment_id)
+      : null;
+    if (currentAssignment && currentAssignment.owner_actor_id !== input.actor) {
+      statements.push(
+        ...inboxTaskEvent(
+          db,
+          currentAssignment.owner_actor_id,
+          `task:dissolve:${currentAssignment.assignment_id}`,
+          'task_cancelled',
+          updated,
+          currentAssignment,
+          '',
+          input.at,
+          0,
+          {
+            reason,
+            operator: input.actor,
+            external_stop_status: externalStopStatus,
+            host_notify_attempted: true,
+          },
+        ),
+      );
+    }
+
+    const deliveries = await db
+      .prepare(
+        `SELECT * FROM task_deliveries
+          WHERE task_id = ? AND kind IN ('task_offer', 'task_reminder')
+          ORDER BY created_at ASC, delivery_id ASC`,
+      )
+      .bind(task.task_id)
+      .all<TaskDeliveryRow>();
+    for (const row of deliveries.results) {
+      const delivery = await getDelivery(db, row.delivery_id);
+      if (!delivery) continue;
+      deliveryIds.add(delivery.delivery_id);
+      if (delivery.state !== 'pending' && delivery.state !== 'claimed') continue;
+      const inboxKey = `dissolve:${delivery.delivery_id}:${input.requestId}`;
+      statements.push(
+        db
+          .prepare(
+            `UPDATE actors
+                SET pending_count = pending_count - (
+                      SELECT CASE WHEN state = 'pending' THEN 1 ELSE 0 END
+                        FROM deliveries WHERE delivery_id = ?
+                    ),
+                    updated_at = ?
+              WHERE actor_id = ?`,
+          )
+          .bind(delivery.delivery_id, input.at, delivery.recipient_id),
+        db
+          .prepare(
+            `UPDATE deliveries SET state = 'cancelled', error = ?, updated_at = ?
+              WHERE delivery_id = ? AND state IN ('pending', 'claimed')`,
+          )
+          .bind(reason, input.at, delivery.delivery_id),
+        eventStatement(
+          db,
+          {
+            eventKey: inboxKey,
+            scopeKind: 'inbox',
+            scopeId: delivery.recipient_id,
+            eventType: 'delivery_cancelled',
+            refId: delivery.delivery_id,
+            metadata: {
+              reason,
+              actor_id: input.actor,
+              room_id: delivery.room_id,
+              message_id: delivery.message_id,
+              task_id: task.task_id,
+              assignment_id: row.assignment_id,
+              external_stop_status: externalStopStatus,
+              host_notify_attempted: true,
+            },
+          },
+          input.at,
+        ),
+        outboxStatement(db, { topic: inboxTopic(delivery.recipient_id), eventKey: inboxKey }, input.at),
+        inboxHeadStatement(db, delivery.recipient_id, inboxKey, input.at, 0),
+      );
+    }
+
+    const submissions = await db
+      .prepare(
+        `SELECT submission_id FROM task_submissions
+          WHERE task_id = ? ORDER BY version ASC`,
+      )
+      .bind(task.task_id)
+      .all<{ submission_id: string }>();
+
+    statements.push(
+      ...(await cancelPendingTransfersForTask(db, {
+        taskId: task.task_id,
+        actor: input.actor,
+        requestId: input.requestId,
+        at: input.at,
+        reason,
+        invalidatedBy: 'cancel',
+      })),
+      ...taskRoomEvent(
+        db,
+        updated,
+        'task_cancelled',
+        `task:cancelled:${task.task_id}:${updated.revision}`,
+        input.at,
+        {
+          changed_by: input.actor,
+          operator: input.actor,
+          reason,
+          external_stop_status: externalStopStatus,
+          host_notify_attempted: true,
+          preserved_submission_ids: submissions.results.map((row) => row.submission_id),
+          preserved_submission_count: submissions.results.length,
+        },
+      ).statements,
+    );
+  }
+
+  return { statements, taskIds, deliveryIds: [...deliveryIds] };
+}
+
+/**
  * D08 显式重试/重派 failed 任务。
  *
  * failed 不是可恢复的 in_progress：重试必须由派发者给出新的原因与新版本。
@@ -3702,6 +3925,7 @@ export async function taskSummary(
          LEFT JOIN tasks t
            ON t.room_id = m.room_id
           AND (r.kind = 'direct' OR r.member_history_policy = 'full' OR t.created_at >= m.joined_at)
+          AND (r.dissolved_at IS NULL OR t.created_at <= r.dissolved_at)
         WHERE m.actor_id = ? AND m.status = 'active'${placeholders}
         GROUP BY m.room_id
         ORDER BY m.room_id ASC`,
@@ -3741,6 +3965,7 @@ export async function taskCounts(db: D1Database, principal: Principal): Promise<
          LEFT JOIN tasks t
            ON t.room_id = m.room_id
           AND (r.kind = 'direct' OR r.member_history_policy = 'full' OR t.created_at >= m.joined_at)
+          AND (r.dissolved_at IS NULL OR t.created_at <= r.dissolved_at)
         WHERE m.actor_id = ? AND m.status = 'active'`,
     )
     .bind(caller, caller)

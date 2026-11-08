@@ -61,6 +61,7 @@ import { runGroupMentionAcceptance } from './lib/mention-acceptance';
 import { runGroupNoImplicitDeliveryAcceptance } from './lib/no-implicit-delivery-acceptance';
 import { runGroupRoleAcceptance } from './lib/group-role-acceptance';
 import { runOwnerTransferAcceptance } from './lib/owner-transfer-acceptance';
+import { runRoomLifecycleAcceptance } from './lib/room-lifecycle-acceptance';
 import { runGroupInviteAcceptance } from './lib/group-invite-acceptance';
 import { runGroupInviteLinkAcceptance } from './lib/group-invite-link-acceptance';
 import { runGroupHistoryAcceptance } from './lib/group-history-acceptance';
@@ -1347,6 +1348,7 @@ async function main(): Promise<void> {
     await runGroupNoImplicitDeliveryAcceptance();
     await runGroupRoleAcceptance();
     await runOwnerTransferAcceptance();
+    await runRoomLifecycleAcceptance();
     await runGroupInviteAcceptance();
     await runGroupInviteLinkAcceptance();
     await runGroupHistoryAcceptance({ hasDrive });

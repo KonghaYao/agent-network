@@ -28,6 +28,7 @@ import {
 } from './file-ticket';
 import { handoffFileGrantForRoom } from './handoff-file-grant';
 import { actorId, type Principal } from './principal';
+import { assertRoomWritable, roomDissolvedGuardStatement } from './room-access';
 
 /**
  * 私有文件的应用层授权模型。
@@ -460,6 +461,7 @@ export async function publishFile(
       });
     }
     const membership = await requireActiveMember(db, principal, roomFile.room_id);
+    assertRoomWritable(membership.room);
     boundary = membership.boundary;
     // 加入前（或重新加入前的代次）文件不在当前历史边界内，不能接管发布状态。
     if (!visibleCreated(roomFile, boundary)) {
@@ -516,6 +518,7 @@ export async function publishFile(
     result,
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
+      ...(roomFile ? [roomDissolvedGuardStatement(db, roomFile.room_id)] : []),
       roomFile
         ? db
             .prepare(

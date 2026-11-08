@@ -151,29 +151,36 @@ export function roomCapabilitiesFor(
     | 'member_invite_policy'
     | 'member_task_policy'
     | 'member_mention_all_policy'
+    | 'dissolved_at'
   >,
   member: Pick<RoomMemberRow, 'role' | 'status'>,
 ): RoomCapabilities {
   const active = member.status === 'active';
   const group = room.kind === 'group';
+  // 解散后成员保留只读归档资格，但所有写入能力关闭；`view_role_history`
+  // 是读能力，仍按 owner/admin 返回，便于查看解散审计。
+  const writable = !(group && room.dissolved_at !== null);
   const admin = active && isAdmin(member.role);
   const owner = active && member.role === 'owner';
   return {
     send_message:
+      writable &&
       active &&
       (!group || admin || room.member_message_policy === 'members'),
     create_task:
+      writable &&
       active &&
       (!group || admin || room.member_task_policy === 'members'),
     invite_members:
-      active && group && (admin || room.member_invite_policy === 'members'),
-    remove_members: active && group && admin,
-    manage_admins: active && group && owner,
-    manage_announcement: active && group && admin,
-    manage_policy: active && group && owner,
-    transfer_owner: active && group && owner,
-    approve_joins: active && group && admin,
+      writable && active && group && (admin || room.member_invite_policy === 'members'),
+    remove_members: writable && active && group && admin,
+    manage_admins: writable && active && group && owner,
+    manage_announcement: writable && active && group && admin,
+    manage_policy: writable && active && group && owner,
+    transfer_owner: writable && active && group && owner,
+    approve_joins: writable && active && group && admin,
     mention_all:
+      writable &&
       active &&
       (!group || admin || room.member_mention_all_policy === 'members'),
     view_role_history: active && group && admin,
@@ -181,12 +188,15 @@ export function roomCapabilitiesFor(
 }
 
 export function memberActionsFor(
-  room: Pick<RoomRow, 'kind' | 'owner_id'>,
+  room: Pick<RoomRow, 'kind' | 'owner_id' | 'dissolved_at'>,
   caller: Pick<RoomMemberRow, 'actor_id' | 'role' | 'status'>,
   target: Pick<RoomMemberRow, 'actor_id' | 'role' | 'status'>,
 ): MemberActions {
   const group = room.kind === 'group';
-  const active = caller.status === 'active' && target.status === 'active';
+  const active =
+    !(group && room.dissolved_at !== null) &&
+    caller.status === 'active' &&
+    target.status === 'active';
   const owner = active && caller.role === 'owner';
   const admin = active && caller.role === 'admin';
   const other = active && caller.actor_id !== target.actor_id;
@@ -257,6 +267,31 @@ export async function requireGroupAccess(
     throw new BusinessError('INVALID_ARGUMENT', '单聊不支持群管理操作');
   }
   return access;
+}
+
+/** 群解散后只允许读取；所有业务写入都在进入事务前返回 CONFLICT。 */
+export function assertRoomWritable(room: Pick<RoomRow, 'room_id' | 'dissolved_at'>): void {
+  if (room.dissolved_at === null) return;
+  throw new BusinessError('CONFLICT', '群已解散，当前为只读归档，不能继续写入', {
+    room_id: room.room_id,
+    dissolved_at: String(room.dissolved_at),
+    read_only: true,
+  });
+}
+
+/** 事务内复核群未解散；与写路径的预检查共同防止先读后写窗口。 */
+export function roomDissolvedGuardStatement(
+  db: D1Database,
+  roomId: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      guardSql(
+        'roomDissolved',
+        'EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND dissolved_at IS NOT NULL)',
+      ),
+    )
+    .bind(roomId);
 }
 
 export async function requireTargetMember(

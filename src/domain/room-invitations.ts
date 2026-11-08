@@ -25,6 +25,7 @@ import {
   runIdempotent,
 } from '../storage/transactions/runner';
 import { contactBlockGuardStatement } from './contact-blocks';
+import { assertRoomWritable, roomDissolvedGuardStatement } from './room-access';
 import { requestJoinApproval } from './room-join-requests';
 import { actorId, type Principal } from './principal';
 
@@ -578,6 +579,7 @@ export async function roomInvitationAccept(
   );
   requirePending(row, at);
   const { room } = await requireAcceptTarget(db, principal, row, at);
+  assertRoomWritable(room);
   if (room.member_join_policy === 'approval') {
     // G07 的审批策略在邀请接受路径强制执行：确认后先进入申请列表，
     // 不是成员；邀请本身保持 pending，由批准事务消费次数。
@@ -604,6 +606,7 @@ export async function roomInvitationAccept(
     result: { invitation_id: row.invitation_id, room_id: row.room_id, status: 'accepted' },
     build: (resultJson) => [
       operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, at),
+      roomDissolvedGuardStatement(db, row.room_id),
       // 拉黑必须在事务内复核：预检后、提交前对方可能刚拉黑。
       contactBlockGuardStatement(db, row.inviter_id, viewer),
       db

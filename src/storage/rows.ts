@@ -215,6 +215,14 @@ export interface RoomRow {
   announcement_revision: number;
   announcement_updated_at: number | null;
   announcement_updated_by: string | null;
+  /** 群解散时间；NULL 表示仍可写。解散后成员保留只读归档资格。 */
+  dissolved_at: number | null;
+  dissolved_by: string | null;
+  dissolve_reason: string | null;
+  /** 解散时 room scope 的事件高水位；所有归档读取的序号上界。 */
+  archive_head_seq: number | null;
+  /** 解散时的成员版本快照；用于审计与未来媒体层成员代次核对。 */
+  archive_member_seq: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -268,7 +276,8 @@ export type RoomManagementAction =
   | 'invite_revoked'
   | 'join_requested'
   | 'join_approved'
-  | 'join_rejected';
+  | 'join_rejected'
+  | 'room_dissolved';
 
 /** 入群申请：pending 不是成员，批准时才在同一事务写入 active 成员。 */
 export interface RoomJoinRequestRow {

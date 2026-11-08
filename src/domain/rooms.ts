@@ -28,6 +28,7 @@ import {
   outboxStatementIfAbsent,
   roomHeadStatement,
   roomMemberSeqStatement,
+  roomMemberVersionStatement,
   roomTopic,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
@@ -60,6 +61,7 @@ import { roomAuditStatement, type RoomAuditSpec } from './room-audit';
 import { revokeTaskEligibilityStatements } from './task-transfers';
 import {
   capabilityGuardStatement,
+  assertRoomWritable,
   loadRoomAccess,
   memberActionsFor,
   memberRemovalGuardStatement,
@@ -70,11 +72,13 @@ import {
   roleRevisionGuardStatement,
   roleTargetGuardStatement,
   roomCapabilitiesFor,
+  roomDissolvedGuardStatement,
   roomPolicies,
   type MemberActions,
   type RoomCapabilities,
   type RoomPolicies,
 } from './room-access';
+import { inFlightTasksForMember, roomLeavePreview, type InFlightTaskView } from './room-lifecycle';
 import { messagePreviewOf, type MessagePreviewView } from './views';
 import {
   historyBoundary,
@@ -111,6 +115,16 @@ export interface RoomView {
   announcement_updated_by: string | null;
   capabilities: RoomCapabilities;
   last_message: MessagePreviewView | null;
+  /** `dissolved` 表示群已解散；成员保留只读归档资格。 */
+  status: 'active' | 'dissolved';
+  dissolved_at: string | null;
+  dissolved_by: string | null;
+  dissolve_reason: string | null;
+  /** 解散时的 room scope 事件高水位；未解散为 null。 */
+  archived_head_seq: string | null;
+  read_only: boolean;
+  can_leave: boolean;
+  can_dissolve: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -242,6 +256,7 @@ function roomView(
   boundary: HistoryBoundary,
 ): RoomView {
   const lastVisible = lastMessage && visibleMessage(lastMessage, boundary) ? lastMessage : null;
+  const dissolved = room.kind === 'group' && room.dissolved_at !== null;
   return {
     room_id: room.room_id,
     kind: room.kind,
@@ -265,6 +280,15 @@ function roomView(
     announcement_updated_by: room.announcement_updated_by,
     capabilities: roomCapabilitiesFor(room, member),
     last_message: messagePreview(lastVisible),
+    status: dissolved ? 'dissolved' : 'active',
+    dissolved_at: room.dissolved_at === null ? null : String(room.dissolved_at),
+    dissolved_by: room.dissolved_by,
+    dissolve_reason: room.dissolve_reason,
+    archived_head_seq:
+      room.archive_head_seq === null ? null : String(room.archive_head_seq),
+    read_only: dissolved,
+    can_leave: room.kind === 'group' && (dissolved || member.role !== 'owner' || memberCount <= 1),
+    can_dissolve: room.kind === 'group' && !dissolved && member.role === 'owner',
     created_at: String(room.created_at),
     updated_at: String(room.updated_at),
   };
@@ -905,7 +929,7 @@ async function roomDetail(db: D1Database, roomId: string, viewer: string): Promi
   const [view, members, invited, ownerTransfer] = await Promise.all([
     loadRoomView(db, room, member),
     loadMembers(db, room, member),
-    roomCapabilitiesFor(room, member).approve_joins
+    roomCapabilitiesFor(room, member).approve_joins && room.dissolved_at === null
       ? loadInvitedMembers(db, room.room_id, nowMs())
       : Promise.resolve([] as InvitedMemberView[]),
     loadOwnerTransferView(db, room.room_id, viewer, nowMs()),
@@ -989,6 +1013,7 @@ export async function roomMembersUpdate(
   if (room.kind !== 'group') {
     throw new BusinessError('INVALID_ARGUMENT', '单聊不支持成员变更');
   }
+  assertRoomWritable(room);
   // G05：直接切换 owner 已移除。旧字段仍可被客户端传入，但必须明确失败，
   // 不能静默降级成未经目标确认的转让。
   if (input.transfer_owner_to) {
@@ -1115,6 +1140,7 @@ export async function roomMembersUpdate(
     result: { room_id: room.room_id },
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
+      roomDissolvedGuardStatement(db, room.room_id),
       ...(add.length > 0
         ? [capabilityGuardStatement(db, room.room_id, caller, 'invite_members')]
         : []),
@@ -1170,6 +1196,33 @@ export async function roomMembersUpdate(
         at,
       ),
       outboxStatement(db, { topic: roomTopic(room.room_id), eventKey }, at),
+      // G06：每个被移除成员单独写 member_removed，作为成员失权/未来媒体层
+      // 撤权的稳定事件；不创建 delivery、不增加 pending_count、不推进 head。
+      ...remove.flatMap((member) => {
+        if (existing.get(member)?.status !== 'active') return [];
+        const removedKey = `member_removed:${room.room_id}:${input.request_id}:${member}`;
+        return [
+          eventStatement(
+            db,
+            {
+              eventKey: removedKey,
+              scopeKind: 'room',
+              scopeId: room.room_id,
+              eventType: 'member_removed',
+              refId: member,
+              metadata: {
+                room_id: room.room_id,
+                actor_id: member,
+                changed_by: caller,
+                reason: 'member_removed',
+                media_revoke: true,
+              },
+            },
+            at,
+          ),
+          outboxStatement(db, { topic: roomTopic(room.room_id), eventKey: removedKey }, at),
+        ];
+      }),
       ...add.map((member) =>
         db
           .prepare(
@@ -1219,7 +1272,8 @@ export async function roomMembersUpdate(
         revokeDirectInvitationStatement(db, room.room_id, member, at),
       ),
       ...taskRevocations,
-      roomMemberSeqStatement(db, room.room_id, eventKey, at),
+      // 成员变化只推进 member_seq；不发消息时不能制造没有内容的聊天未读。
+      roomMemberVersionStatement(db, room.room_id, eventKey, at),
       ...audits.map((audit) => roomAuditStatement(db, audit, at)),
       ...membershipInboxStatements(db, room.room_id, input.request_id, [...affected, caller], at),
     ],
@@ -1241,6 +1295,7 @@ export async function roomRoleSet(
 ): Promise<RoomDetail> {
   const caller = actorId(principal);
   const access = await requireGroupAccess(db, input.room_id, caller, 'manage_admins');
+  assertRoomWritable(access.room);
   const target = await requireTargetMember(db, input.room_id, input.actor_id);
   const payloadHash = await sha256Hex(stableStringify(input));
   // 授权预检先于重放；当前仍具权限时，同一 request_id 不再被已推进的版本挡住。
@@ -1274,6 +1329,7 @@ export async function roomRoleSet(
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
       capabilityGuardStatement(db, access.room.room_id, caller, 'manage_admins'),
+      roomDissolvedGuardStatement(db, access.room.room_id),
       roleTargetGuardStatement(db, access.room.room_id, caller, target.actor_id),
       ...(revisionGuard ? [revisionGuard] : []),
       eventStatement(
@@ -1416,6 +1472,7 @@ export async function roomPolicySet(
 ): Promise<RoomPolicySetResult> {
   const caller = actorId(principal);
   const access = await requireGroupAccess(db, input.room_id, caller, 'manage_policy');
+  assertRoomWritable(access.room);
   const payloadHash = await sha256Hex(stableStringify(input));
   const replay = await resolveReplay(db, caller, input.request_id, payloadHash);
   if (!replay.found && access.room.policy_revision !== input.expected_policy_revision) {
@@ -1447,6 +1504,7 @@ export async function roomPolicySet(
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
       capabilityGuardStatement(db, access.room.room_id, caller, 'manage_policy'),
+      roomDissolvedGuardStatement(db, access.room.room_id),
       db
         .prepare(
           guardSql(
@@ -1521,6 +1579,7 @@ export async function roomAnnouncementSet(
 ): Promise<RoomDetail> {
   const caller = actorId(principal);
   const access = await requireGroupAccess(db, input.room_id, caller, 'manage_announcement');
+  assertRoomWritable(access.room);
   const bytes = new TextEncoder().encode(input.announcement).byteLength;
   if (bytes > LIMITS.roomAnnouncementBytes) {
     throw new BusinessError('INVALID_ARGUMENT', '群公告超过长度上限', {
@@ -1551,6 +1610,7 @@ export async function roomAnnouncementSet(
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
       capabilityGuardStatement(db, access.room.room_id, caller, 'manage_announcement'),
+      roomDissolvedGuardStatement(db, access.room.room_id),
       db
         .prepare(
           guardSql(
@@ -1689,11 +1749,20 @@ export async function roomRoleHistory(
   };
 }
 
+export interface RoomLeaveResult {
+  room_id: string;
+  left: true;
+  /** 退群前该成员仍承担的在途任务；确认后由同一事务撤销。 */
+  in_flight_tasks: InFlightTaskView[];
+  pending_deliveries: number;
+  claimed_deliveries: number;
+}
+
 export async function roomLeave(
   db: D1Database,
   principal: Principal,
   input: RoomLeaveInput,
-): Promise<{ room_id: string; left: true }> {
+): Promise<RoomLeaveResult> {
   const caller = actorId(principal);
   const room = await getRoom(db, input.room_id);
   if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
@@ -1705,7 +1774,26 @@ export async function roomLeave(
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
   }
   requireExpectedRoleRevision(member, input.expected_role_revision);
-  if (room.owner_id === caller) {
+  const preview = await roomLeavePreview(db, principal, { room_id: room.room_id });
+  if (
+    preview.in_flight_tasks.length > 0 ||
+    preview.pending_deliveries > 0 ||
+    preview.claimed_deliveries > 0
+  ) {
+    if (input.confirm_in_flight !== true) {
+      throw new BusinessError(
+        'CONFLICT',
+        '退群会撤销你在该群的在途任务与投递；请先确认列出的任务',
+        {
+          reason: 'in_flight_work',
+          in_flight_tasks: preview.in_flight_tasks,
+          pending_deliveries: preview.pending_deliveries,
+          claimed_deliveries: preview.claimed_deliveries,
+        },
+      );
+    }
+  }
+  if (room.owner_id === caller && room.dissolved_at === null) {
     const others = await db
       .prepare(
         "SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND status = 'active' AND actor_id <> ?",
@@ -1713,27 +1801,38 @@ export async function roomLeave(
       .bind(room.room_id, caller)
       .first<{ n: number }>();
     if ((others?.n ?? 0) > 0) {
-      throw new BusinessError('CONFLICT', '群 owner 离开前必须转移 owner');
+      throw new BusinessError('CONFLICT', '群 owner 离开前必须转移 owner 或解散群聊');
     }
   }
 
   const at = nowMs();
   const eventKey = `leave:${room.room_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
-  // D04：退群同样立即撤销该成员在本房间的任务执行资格。
-  const taskRevocations = await revokeTaskEligibilityStatements(db, {
-    actorId: caller,
-    roomId: room.room_id,
-    requestId: input.request_id,
-    at,
-    reason: 'member_left',
-  });
+  // D04：退群同样立即撤销该成员在本房间的任务执行资格。已解散群的任务
+  // 已在解散事务中取消，这里再调用是空操作，保持同一撤销入口。
+  const taskRevocations =
+    room.dissolved_at === null
+      ? await revokeTaskEligibilityStatements(db, {
+          actorId: caller,
+          roomId: room.room_id,
+          requestId: input.request_id,
+          at,
+          reason: 'member_left',
+        })
+      : [];
+  const result = {
+    room_id: room.room_id,
+    left: true as const,
+    in_flight_tasks: preview.in_flight_tasks,
+    pending_deliveries: preview.pending_deliveries,
+    claimed_deliveries: preview.claimed_deliveries,
+  } satisfies RoomLeaveResult;
 
   await runIdempotent(db, {
     actorId: caller,
     requestId: input.request_id,
     payloadHash,
-    result: { room_id: room.room_id, left: true as const },
+    result,
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
       // 预检查只负责可读错误；并发 add 可能在本事务提交前加入成员，
@@ -1742,7 +1841,7 @@ export async function roomLeave(
         .prepare(
           guardSql(
             'ownerTransferRequired',
-            `EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND owner_id = ?)
+            `EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND owner_id = ? AND dissolved_at IS NULL)
              AND EXISTS (
                SELECT 1 FROM room_members
                 WHERE room_id = ? AND status = 'active' AND actor_id <> ?
@@ -1766,7 +1865,15 @@ export async function roomLeave(
           scopeId: room.room_id,
           eventType: 'member_left',
           refId: caller,
-          metadata: { changed_by: caller },
+          metadata: {
+            room_id: room.room_id,
+            actor_id: caller,
+            changed_by: caller,
+            member_generation: member.member_generation,
+            reason: 'member_left',
+            // 未来 M09 媒体层据此立即撤销该成员的发布/订阅资格；本任务不实现媒体。
+            media_revoke: true,
+          },
         },
         at,
       ),
@@ -1798,15 +1905,19 @@ export async function roomLeave(
           `UPDATE room_invitations
               SET status = 'revoked', revision = revision + 1, updated_at = ?
             WHERE room_id = ? AND kind = 'direct' AND status = 'pending'
-              AND EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND owner_id = ?)`,
+              AND EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND owner_id = ?)
+              AND EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND dissolved_at IS NULL)`,
         )
-        .bind(at, room.room_id, room.room_id, caller),
+        .bind(at, room.room_id, room.room_id, caller, room.room_id),
       // 无条件按 owner_id=caller 清理：即使 owner 在预检查后被并发转移，
       // 也不会把新 owner 的 rooms.owner_id 置空；非 owner 退群时是空操作。
+      // 已解散群保留 owner_id 作为归档审计事实。
       db
-        .prepare('UPDATE rooms SET owner_id = NULL WHERE room_id = ? AND owner_id = ?')
+        .prepare(
+          'UPDATE rooms SET owner_id = NULL WHERE room_id = ? AND owner_id = ? AND dissolved_at IS NULL',
+        )
         .bind(room.room_id, caller),
-      roomMemberSeqStatement(db, room.room_id, eventKey, at),
+      roomMemberVersionStatement(db, room.room_id, eventKey, at),
       roomAuditStatement(
         db,
         {
@@ -1845,5 +1956,5 @@ export async function roomLeave(
     ],
   });
 
-  return { room_id: room.room_id, left: true };
+  return result;
 }

@@ -307,10 +307,59 @@ function roomStreamItems(
       }
       return result;
     }
+    case 'member_removed': {
+      // G06：成员失权是控制事件，只提示 human 刷新成员/权限；被移除者本人
+      // 也收到一条，作为未来媒体层撤销发布/订阅资格的明确信号。
+      const removed = stringField(metadata, 'actor_id') ?? row.ref_id ?? undefined;
+      const changedBy = stringField(metadata, 'changed_by');
+      for (const member of activeRecipients(members, eventSeq)) {
+        if (member.kind !== 'human') continue;
+        const item = withLocation(
+          baseItem(row, 'room.membership', 'room', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = 'removed';
+        if (removed) item.subject_id = removed;
+        if (changedBy) item.changed_by = changedBy;
+        result.push({ actorId: member.actor_id, item });
+      }
+      if (removed) {
+        const target = members.find((member) => member.actor_id === removed);
+        if (target?.kind === 'human') {
+          const item = withLocation(
+            baseItem(row, 'room.membership', 'room', 'action_required'),
+            row,
+            metadata,
+          );
+          item.change = 'removed';
+          item.subject_id = removed;
+          if (changedBy) item.changed_by = changedBy;
+          result.push({ actorId: removed, item });
+        }
+      }
+      return result;
+    }
+    case 'room_dissolved': {
+      // 解散后房间只剩只读归档；只通知 active human，不创建 delivery。
+      const changedBy = stringField(metadata, 'changed_by');
+      for (const member of activeRecipients(members, eventSeq)) {
+        if (member.kind !== 'human') continue;
+        const item = withLocation(
+          baseItem(row, 'room.lifecycle', 'room', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = 'dissolved';
+        if (changedBy) item.changed_by = changedBy;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
     case 'member_left': {
       const leaver = stringField(metadata, 'changed_by') ?? row.ref_id ?? undefined;
       for (const member of activeRecipients(members, eventSeq)) {
-        if (member.actor_id === leaver) continue;
+        if (member.kind !== 'human' || member.actor_id === leaver) continue;
         const item = withLocation(
           baseItem(row, 'room.membership', 'room', 'informational'),
           row,
@@ -321,15 +370,18 @@ function roomStreamItems(
         result.push({ actorId: member.actor_id, item });
       }
       if (leaver) {
-        const item = withLocation(
-          baseItem(row, 'room.membership', 'room', 'informational'),
-          row,
-          metadata,
-        );
-        item.change = 'left';
-        item.subject_id = leaver;
-        item.changed_by = leaver;
-        result.push({ actorId: leaver, item });
+        const target = members.find((member) => member.actor_id === leaver);
+        if (target?.kind === 'human') {
+          const item = withLocation(
+            baseItem(row, 'room.membership', 'room', 'informational'),
+            row,
+            metadata,
+          );
+          item.change = 'left';
+          item.subject_id = leaver;
+          item.changed_by = leaver;
+          result.push({ actorId: leaver, item });
+        }
       }
       return result;
     }

@@ -34,6 +34,8 @@ interface ScopeInfo {
   id: string;
   head: number;
   min: number;
+  /** 解散归档的事件上界；非归档为 null，不能截断策略/文件等大于消息 head 的事件。 */
+  max: number | null;
 }
 
 async function resolveScope(
@@ -44,7 +46,7 @@ async function resolveScope(
   if (scope === 'inbox') {
     const actor = await getActor(db, viewer);
     if (!actor) throw new BusinessError('NOT_FOUND', 'actor 不存在');
-    return { kind: 'inbox', id: viewer, head: actor.inbox_head_seq, min: actor.inbox_min_seq };
+    return { kind: 'inbox', id: viewer, head: actor.inbox_head_seq, min: actor.inbox_min_seq, max: null };
   }
   if (scope.startsWith('room:')) {
     const roomId = scope.slice('room:'.length);
@@ -56,12 +58,18 @@ async function resolveScope(
       throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
     }
     // 旧游标只定位数据；加入前的事件不属于当前代次，不能通过补读重新获得。
-    const floor = historyBoundary(room, member).fromSeq;
+    // 解散归档同时以 archived_head_seq 为读取上界。
+    const boundary = historyBoundary(room, member);
+    const floor = boundary.fromSeq;
+    // 解散后的归档事件上界就是 room scope 的事件高水位；不能用消息 head_seq
+    // 截断，否则 room_dissolved/文件/任务事件会被漏掉。
+    const head = boundary.toSeq === null ? room.head_seq : boundary.toSeq;
     return {
       kind: 'room',
       id: roomId,
-      head: room.head_seq,
+      head,
       min: Math.max(room.events_min_seq, floor),
+      max: boundary.toSeq,
     };
   }
   throw new BusinessError('INVALID_ARGUMENT', 'scope 只支持 inbox 或 room:<room_id>');
@@ -113,11 +121,11 @@ export async function sync(
   const rows = await db
     .prepare(
       `SELECT * FROM events
-        WHERE scope_kind = ? AND scope_id = ? AND event_seq > ?
+        WHERE scope_kind = ? AND scope_id = ? AND event_seq > ? AND (? IS NULL OR event_seq <= ?)
           AND event_type <> 'agent_presence_changed'
         ORDER BY event_seq ASC LIMIT ?`,
     )
-    .bind(info.kind, info.id, start, limit + 1)
+    .bind(info.kind, info.id, start, info.max, info.max, limit + 1)
     .all<EventRow>();
 
   const page = rows.results.slice(0, limit);

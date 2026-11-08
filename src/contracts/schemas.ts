@@ -479,6 +479,21 @@ export const roomLeaveSchema = z.object({
   request_id: requestId,
   room_id: id(),
   expected_role_revision: z.number().int().positive().optional(),
+  /**
+   * 退群会撤销本人在该群的在途任务与投递。先调用
+   * `network_room_leave_preview` 展示；确认后传 true，避免静默丢失工作。
+   */
+  confirm_in_flight: z.boolean().optional(),
+});
+
+/** 只读预览退群后果：在途任务、待处理投递与 owner 转移要求。 */
+export const roomLeavePreviewSchema = z.object({ room_id: id() });
+
+/** 解散群聊；owner only，reason 只作为审计摘要，不复制消息正文。 */
+export const roomDissolveSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  reason: z.string().trim().max(500).optional(),
 });
 
 export const messageSendSchema = z.object({
@@ -1167,6 +1182,8 @@ export type RoomInviteRevokeInput = z.infer<typeof roomInviteRevokeSchema>;
 export type RoomJoinRequestListInput = z.infer<typeof roomJoinRequestListSchema>;
 export type RoomJoinRequestRespondInput = z.infer<typeof roomJoinRequestRespondSchema>;
 export type RoomLeaveInput = z.infer<typeof roomLeaveSchema>;
+export type RoomLeavePreviewInput = z.infer<typeof roomLeavePreviewSchema>;
+export type RoomDissolveInput = z.infer<typeof roomDissolveSchema>;
 export type MessageSendInput = z.infer<typeof messageSendSchema>;
 export type MessageSendStatusInput = z.infer<typeof messageSendStatusSchema>;
 export type HistoryListInput = z.infer<typeof historyListSchema>;

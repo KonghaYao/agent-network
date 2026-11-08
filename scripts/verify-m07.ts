@@ -395,7 +395,13 @@ async function quotaAndRetentionCases(): Promise<void> {
   checkEqual('[M07-T04] 越过原 TTL 后没有删除字节', world.purged.length, 0);
 
   const boundary = historyBoundary(
-    { kind: 'group' as const, member_history_policy: 'from_join' as const, policy_revision: 1 },
+    {
+      kind: 'group' as const,
+      member_history_policy: 'from_join' as const,
+      policy_revision: 1,
+      dissolved_at: null,
+      archive_head_seq: null,
+    },
     { joined_seq: 0, joined_at: 0, member_generation: 1 },
   );
   const urls = roomFileUrls(SECRET, ORIGIN, fileId, ROOM, MEMBER, boundary);
@@ -508,6 +514,8 @@ async function legacyCase(): Promise<void> {
     full: true,
     fromSeq: 0,
     fromAt: 0,
+    toSeq: null,
+    toAt: null,
     policyRevision: 1,
     memberGeneration: 1,
   });
@@ -676,6 +684,8 @@ async function ttlAndTicketCases(): Promise<void> {
       full: true,
       fromSeq: 0,
       fromAt: 0,
+      toSeq: null,
+      toAt: null,
       policyRevision: (world.db.prepare('SELECT policy_revision FROM rooms WHERE room_id = ?').get(ROOM) as { policy_revision: number }).policy_revision,
       memberGeneration: 1,
     }).preview_url,

@@ -378,7 +378,9 @@ async function main(): Promise<void> {
     'network_room_announcement_set',
     'network_room_role_history',
     'network_room_notice_list',
+    'network_room_leave_preview',
     'network_room_leave',
+    'network_room_dissolve',
     'network_message_send',
     'network_message_send_status',
     'network_history_list',
@@ -456,6 +458,8 @@ async function main(): Promise<void> {
     'network_room_owner_transfer_propose',
     'network_room_owner_transfer_respond',
     'network_room_owner_transfer_cancel',
+    'network_room_leave_preview',
+    'network_room_dissolve',
     'network_task_summary',
     'network_task_list',
     'network_task_get',
@@ -702,6 +706,31 @@ async function main(): Promise<void> {
     'room_get 输出 schema 包含 owner_transfer 待确认提议',
     JSON.stringify(roomGetTool?.outputSchema ?? {}).includes('"owner_transfer"'),
     roomGetTool?.outputSchema,
+  );
+  check(
+    'room_get 输出 schema 包含解散归档与退群能力',
+    ['"status"', '"dissolved_at"', '"archived_head_seq"', '"read_only"', '"can_leave"', '"can_dissolve"'].every(
+      (marker) => JSON.stringify(roomGetTool?.outputSchema ?? {}).includes(marker),
+    ),
+    roomGetTool?.outputSchema,
+  );
+  const leavePreviewTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_room_leave_preview',
+  );
+  check(
+    'room_leave_preview 输出包含在途任务与投递计数',
+    ['"in_flight_tasks"', '"pending_deliveries"', '"claimed_deliveries"', '"owner_transfer_required"'].every(
+      (marker) => JSON.stringify(leavePreviewTool?.outputSchema ?? {}).includes(marker),
+    ),
+    leavePreviewTool?.outputSchema,
+  );
+  const dissolveTool = listed?.tools?.find((tool) => tool.name === 'network_room_dissolve');
+  check(
+    'room_dissolve 输出包含归档边界与取消计数',
+    ['"archived_head_seq"', '"archive_member_seq"', '"cancelled_tasks"', '"cancelled_deliveries"'].every(
+      (marker) => JSON.stringify(dissolveTool?.outputSchema ?? {}).includes(marker),
+    ),
+    dissolveTool?.outputSchema,
   );
   const historyTool = listed?.tools?.find((tool) => tool.name === 'network_history_list');
   const historySchema = JSON.stringify(historyTool?.outputSchema ?? {});
@@ -1598,7 +1627,6 @@ async function main(): Promise<void> {
   );
   for (const [label, tool] of [
     ['network_me', listed?.tools?.find((item) => item.name === 'network_me')],
-    ['network_room_get', roomGetTool],
     ['network_contacts_list', listed?.tools?.find((item) => item.name === 'network_contacts_list')],
     ['network_history_list', historyTool],
   ] as const) {
@@ -1608,6 +1636,15 @@ async function main(): Promise<void> {
       tool?.outputSchema,
     );
   }
+  // room_get 只新增 G06 的 archived_head_seq；Agent 归档字段不得混入房间输出。
+  check(
+    'network_room_get 不增加 Agent archived_at/archived_by',
+    (() => {
+      const schema = JSON.stringify(roomGetTool?.outputSchema ?? {});
+      return !schema.includes('"archived_at"') && !schema.includes('"archived_by"');
+    })(),
+    roomGetTool?.outputSchema,
+  );
 
   const issueTool = listed?.tools?.find((tool) => tool.name === 'network_issue_token');
   check(
