@@ -9,13 +9,13 @@
 | D02 实现 / 报告提交 | `60edc7bf4ca70d0af1af871a7f69f2ccf167dd3a` / `8078570f237bf648f2f1621b87c0aec29b3cea0f` |
 | D03 实现 / 报告提交 | `7e15dcc3d7bf07f96493c94e0367a11496b9c788` + `cd106af71efc7ad8c6dd779cb402f3b5e1a0c7a9` / `c4146a297f822d8e2f63179e7db22b528df01644` |
 | D04 实现 / 报告提交 | `56d9c9f51ba4c805223745b6bb4d7f3dc594cf5f` / `b6d27f4d5b6e19ba129451dd05ade7e532a89957`（`docs(delivery): D04 任务报告`） |
-| D05 实现 / 报告 | 实现完整存在于未提交工作区，随本文件所在提交一并提交；无 `reports/D05.md`，交付语义见本报告第 5 节 |
+| D05 实现 / 报告 | 实现完整存在于集成提交 `3b6afadd9d53125084b1615b0972f792e25321a0`；无 `reports/D05.md`，交付语义见本报告第 5 节 |
 | D06 实现 / 报告提交 | `4eb8de8db803b5b7ad349c189345b6f784d1fd8f` / `b696df53b3779460c2448bb7030f5608d4ea9cd8`（`docs(delivery): D06 任务报告`） |
 | D07 实现 / 报告提交 | `049ce2034d8abec06062f8506d9d260d8c1354b1` / `f8d520b7852802fa649435f593b78fb53926f309`（`docs(delivery): D07 任务报告`） |
 | D08 | **未实现**：无报告、无实现提交、无专项验收；见第 8 节 |
 | 本轮审查起点 HEAD | `f8d520b7852802fa649435f593b78fb53926f309`（`docs(delivery): D07 任务报告`） |
 | 上一轮修复提交（D01–D03） | `590e67312043559ed5911fae47e7a8b5d46d2661`（`docs(integration): 校正 D01-D03 验收计数`）；`9d26922`（`fix(delivery): 修复任务重派、拉黑派发与附件保留`）；`48df0ab`（`fix(delivery): 修复公开任务创建重放幂等`）；`64ca79c`（`fix(delivery): 修复同毫秒自我领取的创建重放`） |
-| 本轮集成修复提交 | 本文件所在提交（两个集成回归修复：A01-T04、D03-T04） |
+| 本轮集成修复提交 | `3b6afadd9d53125084b1615b0972f792e25321a0`（两个集成回归修复：A01-T04、D03-T04） |
 | 运行环境 | Bun 1.4.2，macOS；`DATA_DIR=/tmp/agentnet-d0408-int3/data`、`PORT=8913`、`PUBLIC_ORIGIN=http://127.0.0.1:8913`；票据密钥使用本地临时测试值，未写入报告 |
 | Presence 环境 | 服务端与测试进程一致：`AGENT_PRESENCE_ACTIVITY_TTL_MS=5000`、`AGENT_PRESENCE_GRACE_MS=2000`、`AGENT_PRESENCE_SWEEP_MS=1000` |
 | 结论 | 六套门禁与 D04/D05/D06/D07 专项全部通过；D01–D07 保持 `READY_FOR_REVIEW`。D08 完全未实现，仍是未关闭 P0。D05 的“相关消息原文定位”仍依赖未实现的 M04，只能按 message_id 引用，详见第 5、12 节 |
@@ -24,7 +24,7 @@
 
 本轮在 `f8d520b` 之上审查 D04（任务交接与接任确认）、D05（可授权交接上下文包）、D06（成果提交与不可混淆的版本）、D07（验收退回与重新交付）的合并结果；D08（催办、取消与异常恢复）没有任何实现，无法集成或验收。重点检查四个任务共享的事务、迁移、事件、工具面、技能正文、网页脚本与验收注册：
 
-- 迁移文件共 30 个：`0001`–`0012`、`0017`–`0034`，`0013`–`0016` 历史上从未使用。D06 的 `0032_task_submission_sources.sql`、D07 的 `0033_task_review_acceptance.sql` 已提交；D05 的 `0034_task_handoff_packs.sql` 位于本次提交。三者序号唯一、连续，未修改已发布迁移；`0034` 只新增三张表与 `guard_handoff_conflict`，不改写既有行。
+- 迁移文件共 30 个：`0001`–`0012`、`0017`–`0034`，`0013`–`0016` 历史上从未使用。D06 的 `0032_task_submission_sources.sql`、D07 的 `0033_task_review_acceptance.sql` 已提交；D05 的 `0034_task_handoff_packs.sql` 位于集成提交 `3b6afad`。三者序号唯一、连续，未修改已发布迁移；`0034` 只新增三张表与 `guard_handoff_conflict`，不改写既有行。
 - D04/D05/D06/D07 共用 `src/domain/tasks.ts`、`task-transfers.ts`、`task-handoff-packs.ts`、`task-submissions.ts`、`src/storage/{rows,queries,guards}.ts`、`transactions/runner.ts`、`src/mcp/{tools,outputs,skill}.ts`、`src/contracts/{schemas,limits}.ts`、`src/realtime/stream.ts` 与 `src/web/chat-*.ts`。合并后任务工具 29 个、整体工具面 111 个（Drive 与房间文件开启）/ 102 个（关闭），没有重复注册或丢失前置能力。
 - 任务写入继续满足既有不变量：`runIdempotent` + `db.batch()` 全有或全无；写操作校验当前 active assignment、`assignment_version` 与 task revision；新增闸门只有 D05 `guard_handoff_conflict → CONFLICT` 与 D07 `guard_review_stale → REVIEW_STALE`，`GUARD_TABLES` 与 `runner.ts` 的映射一致。
 - 任务、交接、提交、验收事件都只写 room scope 事件与 `room:<id>` outbox，由 `stream.ts` 映射为 human-only `task.updated` informational；不写 `inbox:{actor}`、不创建 delivery、不增加 `pending_count`、不推进 `rooms.head_seq`、不产生未读。人类任务提议/取消仍沿用 inbox `task_offered` / `task_cancelled`。
@@ -203,7 +203,7 @@ D01–D07 的实现范围已完成并通过本轮门禁，全部保持 `READY_FO
 - **D02/D03**：offer 过期没有清扫器，过期 offer 不会自动回 `unassigned`，需要取消后重建或后续幂等清扫。
 - **D03**：进度历史最多展示 20 条（数据库保留全部审计）；未构造两个浏览器以不同顺序接收同一批 `task.updated` 的 Playwright 回放，客户端应始终以 `task_get` / `task_list` 的权威 revision 收敛。
 - **D04**：交接过期是惰性处理，没有后台扫描器；撤销执行资格只处理站内任务、assignment、delivery 与 pending 交接，不声称能停止外部命令；CLI 未新增 transfer 子命令。
-- **D05**：**M04（P1）未实现**，相关消息只能按 `message_id` 引用，没有原文定位/引用预览 API，因此 D05 的“消息原文交接”范围不完整（`reports/BASELINE.md` BLOCK-05）。D05 没有独立 `reports/D05.md`，本轮以第 5 节作为集成记录；实现位于未提交工作区，需独立验证者在本次提交上复跑。
+- **D05**：**M04（P1）未实现**，相关消息只能按 `message_id` 引用，没有原文定位/引用预览 API，因此 D05 的“消息原文交接”范围不完整（`reports/BASELINE.md` BLOCK-05）。D05 没有独立 `reports/D05.md`，本轮以第 5 节作为集成记录；实现随集成提交 `3b6afad` 提交，需独立验证者在该提交上复跑。
 - **D06**：外链只记录声明，服务端不抓取或验证；提交列表没有游标；未指定验收人的任务无法退回；没有 D06 专用浏览器断言（`test:web` 只覆盖页面不回归）。
 - **D07**：验收人退群/停用不会自动通过或自动改派；`related_task_id` 已在 MCP 支持但未在网页表单暴露；没有外部业务回写通道。
 - **D08**：完全未实现（无报告、无实现提交、无专项验收），仍是未关闭 P0。
@@ -230,9 +230,10 @@ D01–D07 的实现范围已完成并通过本轮门禁，全部保持 `READY_FO
 - D04 实现/报告：`56d9c9f51ba4c805223745b6bb4d7f3dc594cf5f` / `b6d27f4d5b6e19ba129451dd05ade7e532a89957`。
 - D06 实现/报告：`4eb8de8db803b5b7ad349c189345b6f784d1fd8f` / `b696df53b3779460c2448bb7030f5608d4ea9cd8`。
 - D07 实现/报告：`049ce2034d8abec06062f8506d9d260d8c1354b1` / `f8d520b7852802fa649435f593b78fb53926f309`。
-- D05：实现随本文件所在提交提交；无独立实现报告。
+- D05：实现随集成提交 `3b6afadd9d53125084b1615b0972f792e25321a0` 提交；无独立实现报告。
 - D08：无实现、无报告、无提交。
-- 集成修复与报告提交：本文件所在提交（`git log -1 -- reports/INTEGRATION.md`），在 `fix/webots-parity-pack` 上普通 push，无 force。
+- 集成提交：`3b6afadd9d53125084b1615b0972f792e25321a0`（D05 实现、集成回归修复与本报告初版）；本报告后续修订提交见 `git log -1 -- reports/INTEGRATION.md`。
+- 集成报告在 `fix/webots-parity-pack` 上普通 push，无 force；远端分支与本地 HEAD 一致。
 - 测试计数：typecheck 通过、protocol 937、acceptance 2074、web 1950、events 339、drive 52；专项 D04 128、D05 83、D06 133、D07 74（合计 418）；D08 无计数。
 - 未部署、未创建 PR、未触发生产验收、未创建生产测试数据。
 - D01–D07 保持 `READY_FOR_REVIEW`，待独立验证；D08 未实现，仍是未关闭 P0；A05 为 `PASS`。
