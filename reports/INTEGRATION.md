@@ -9,11 +9,12 @@
 | D02 实现 / 报告提交 | `60edc7bf4ca70d0af1af871a7f69f2ccf167dd3a` / `8078570f237bf648f2f1621b87c0aec29b3cea0f` |
 | D03 实现 / 报告提交 | `7e15dcc3d7bf07f96493c94e0367a11496b9c788` + `cd106af71efc7ad8c6dd779cb402f3b5e1a0c7a9` / `c4146a297f822d8e2f63179e7db22b528df01644` |
 | 本轮审查起点 HEAD | `c4146a297f822d8e2f63179e7db22b528df01644`（`docs(delivery): D03 任务报告`） |
-| 本轮修复提交 | `590e67312043559ed5911fae47e7a8b5d46d2661`（`docs(integration): 校正 D01-D03 验收计数`） |
+| 上一轮修复提交 | `590e67312043559ed5911fae47e7a8b5d46d2661`（`docs(integration): 校正 D01-D03 验收计数`） |
+| 本轮修复提交 | `9d26922`（`fix(delivery): 修复任务重派、拉黑派发与附件保留`） |
 | 集成报告提交 | 本文件所在提交（`git log -1 -- reports/INTEGRATION.md`） |
-| 运行环境 | Bun 1.4.2，macOS；`DATA_DIR=/tmp/an-integration-d01d03`、`PORT=8792`、`PUBLIC_ORIGIN=http://127.0.0.1:8792`、`FILE_TICKET_SECRET=integration-local-secret` |
+| 运行环境 | Bun 1.4.2，macOS；`DATA_DIR=/tmp/an-d01d02-fix`、`PORT=8792`、`PUBLIC_ORIGIN=http://127.0.0.1:8792`、`FILE_TICKET_SECRET=integration-local-secret` |
 | Presence 环境 | 服务端与测试进程一致：`AGENT_PRESENCE_ACTIVITY_TTL_MS=5000`、`AGENT_PRESENCE_GRACE_MS=2000`、`AGENT_PRESENCE_SWEEP_MS=1000` |
-| 结论 | 六套门禁与 D01/D02/D03 专项全部通过；未发现服务端、领域或网页集成回归。修正 3 处由本轮新增验收直接导致的文档计数过期。D01/D02/D03 保持 `READY_FOR_REVIEW`，A05-T01 仍 BLOCKED |
+| 结论 | 六套门禁与 D01/D02/D03/A05 专项全部通过；独立验收发现的 D01/D02 缺陷已修复：同候选重派、创建者拉黑闸门、同来源参数冲突与任务附件 GC。A05-T01 任务提议用例补齐，A05 状态更新为 PASS |
 
 ## 0. 审查范围与结论
 
@@ -24,21 +25,21 @@
 - 任务写入继续满足现有不变量：`runIdempotent` + `db.batch()` 全有或全无；复用 `guard_task_state`、`guard_claim_conflict`、`guard_version_conflict`、`guard_assignment_stale`、`guard_request_expired`、`guard_not_member`、`guard_permission_denied` 等既有闸门，本轮没有新增 guard 表；`GUARD_TABLES` 与 `runner.ts` 的错误映射一致。
 - 任务事件只写 room scope 事件与 `room:<id>` outbox，由 `stream.ts` 映射为 `task.updated` informational 且只扇出 active human；不写 inbox、不推进 `rooms.head_seq`、不改变未读。人类接手/取消仍走 inbox `task_offered` / `task_cancelled`；Agent 工作唤醒仍只来自明确指派生成的 delivery。
 - 全量 `test:acceptance` 在短 presence 窗口下跑通并执行到 D03 段，D01/D02/D03 报告里记录的“基线 presence 阻塞”是运行配置问题，不是本轮代码回归。
+- 独立验收发现的 4 项缺陷已在本轮修复：同候选拒绝后重派、管理员代派被创建者拉黑的候选、同来源任务参数静默收敛、任务附件引用回收。对应新增回归见 D01-T02/T05、D02-T02/T05 与 A05-T01。
 
-未发现需要改服务端或领域代码的集成回归。发现并修复 3 处文档计数过期：
+本轮的文档修正：
 
-1. `README.md` 的端到端验收计数仍为 `1380`，当前实测 `1597`。
-2. `docs/code-index.md` 的协议验收仍为 `762` 项 / `90` 个工具，当前实测 `809` 项 / `94` 个工具。
-3. `docs/code-index.md` 的端到端验收仍为 `1380`，当前实测 `1597`。
-
-`docs/code-index.md` 中 `test:drive` 的 `47` 是更早波次遗留的过期计数（当前 `52`），不由 D01-D03 引入，未在本轮扩大修改，留给 Q01 的全量文档对齐。
+1. `README.md` 与 `docs/code-index.md` 的协议/端到端计数更新为 `827` / `1634`。
+2. `docs/code-index.md` 的 `test:drive` 由 `47` 更新为 `52`。
+3. D01/D02/D03/A05 报告的分项计数、修复提交与门禁结果同步更新。
 
 ## 1. D01 消息转任务与任务卡片
 
 - `0017_task_workflow.sql` 只新增表与索引，不改已合入迁移：冻结的 `tasks` / `task_assignments` / `task_transfers` / `task_submissions` / `task_reviews` / `task_deliveries`，加实现补充表 `task_cards`（真实卡片 `message_id`）与 `task_attachments`（受控文件引用）。
 - 旧 `room_tasks` 只读保留并一次性回填：`pending → unassigned`、`claimed → in_progress` 且生成 `asg_legacy_<task_id>` active assignment、`done → legacy_completed`、`failed → failed`；`current_assignment_id` 在同一迁移内回填。新库与旧库升级均通过。
 - `idx_tasks_source_message` 保证一条来源消息至多一个任务；`idx_task_assignments_current` 保证每任务至多一个 offered/active assignment；`idx_task_deliveries_assignment_kind` 保证同一 assignment 同类 delivery 唯一。
-- 创建任务在同一事务内写 `tasks`、可选 assignment/delivery、一张“【任务卡】”真实消息与 `task_cards` 映射。卡片消息显式 `invoke: []`，不解析正文、转发或代码块为新的派活；`source_message_id` 的并发/重放通过 `convergeSourceTask` 收敛。
+- 创建任务在同一事务内写 `tasks`、可选 assignment/delivery、一张“【任务卡】”真实消息与 `task_cards` 映射。卡片消息显式 `invoke: []`，不解析正文、转发或代码块为新的派活；`source_message_id` 的并发/重放通过 `convergeSourceTask` 收敛。收敛比较 `title`、`description`、`acceptance_criteria`、`due_at`、附件集合、创建时负责人与验收人，任一不同返回 `CONFLICT`。
+- 任务附件在同一事务内写 `task_attachments`、`file_references(kind='task')`，并把 `room_files` / `drive_files` 置为 retained；`maintainFiles` 的引用回收同时检查旧 `room_tasks` 与新 `tasks`，任务删除后释放引用并恢复普通 TTL。
 - 指派 Agent 只生成一条绑定 `task_id` / `assignment_version` 的 delivery，`pending_count + 1` 并写 `delivery_created` 唤醒；指派人类只写 `task_offered` 持久 inbox，不创建 delivery；公开任务不建 delivery、不增加 `pending_count`、不通知所有 Agent。
 - 领取使用 `attempt` 之外的 assignment 语义：`unassigned → in_progress` 并生成 v1 active assignment；并发领取恰好一个成功，失败方返回 `CLAIM_CONFLICT` 并带权威 owner。取消撤销 current assignment、关闭 pending delivery 并同步 `pending_count`。读取受 active 成员、成员代次与历史边界约束，非成员/边界外/不存在统一 `NOT_FOUND`（房间列表为 `NOT_MEMBER`）。
 
@@ -47,6 +48,8 @@
 - 新增 `network_task_accept` / `network_task_decline`，工具面从 7 个增至 9 个。只允许当前 `offered` assignment 的候选负责人调用；验收人、非候选人、非成员均被拒绝。
 - 接受原子完成 `tasks.status → in_progress`、`owner_actor_id = caller`、`revision + 1`、assignment `offered → active`，写 `task_offer_accepted` room 事件与 `room:<id>` outbox；同一人两设备并发接受只有一个成功。接受不改变关联 delivery 的 pending/claimed、`attempt` 或 `claim_id`，也不把任务标成 `accepted`。
 - 拒绝原子回到 `unassigned`、清空 owner 与 current assignment、`revision + 1`、assignment `offered → declined`；同一事务取消仍为 pending/claimed 的 offer delivery，按 pending 行数原子递减 `pending_count`，写 `delivery_cancelled` inbox 事件与 head，但不向拒绝者本人写 `inbox:{actor}` outbox。默认不自动改派。
+- 同一候选拒绝后可再次 `network_task_offer`：`task_cards` 指向新卡片，新 assignment 使用递增 `assignment_version`，新 delivery 不再与旧 `(recipient_id, message_id)` 唯一键冲突；旧 assignment 仍返回 `ASSIGNMENT_STALE`。并发派给同一候选只有一个事务成功。
+- `network_task_offer` 在同一事务内检查调用者、任务创建者、验收人与候选之间的任一方向拉黑；管理员代派被创建者拉黑的候选返回 `BLOCKED`，不生成 assignment/delivery/pending。
 - accept / decline / claim / cancel 均支持可选 `expected_revision`；`ASSIGNMENT_STALE`、`CLAIM_CONFLICT`、`VERSION_CONFLICT`、`REQUEST_EXPIRED`、`CONFLICT` 的错误 details 附带权威 `task_id`、`status`、`revision`、owner 与 assignment 快照。公开领取已被人接手的任务优先归类为 `CLAIM_CONFLICT`。
 - `network_task_get` / `network_task_list` 的 `can_accept` / `can_decline` 只对当前未过期候选为真，`can_claim` 只对 `unassigned` 且非验收人的有效成员为真；服务端在每次写入时重新校验资格、版本与有效期。
 - 网页任务详情增加接受/拒绝入口（含可选原因），请求携带 `assignment_id` 与当前 revision；冲突后重新读取 `network_task_get` 并显示真实负责人，不轮询。
@@ -77,20 +80,21 @@
 |---|---|---|
 | `bun install` | 通过 | 安装 1 个包（canvas postinstall），`bun.lock` 无变化 |
 | `bun run typecheck` | 通过 | `tsrs --noEmit`，退出码 0 |
-| `bun run test:protocol` | 通过 | `协议验收通过: 809 项` |
-| `bun run test:acceptance` | 通过 | `端到端验收通过: 1597 项`（服务端与测试进程均使用短 presence 窗口） |
+| `bun run test:protocol` | 通过 | `协议验收通过: 827 项` |
+| `bun run test:acceptance` | 通过 | `端到端验收通过: 1634 项`（服务端与测试进程均使用短 presence 窗口） |
 | `bun run test:web` | 通过 | `浏览器验收通过 1931 项`（脚本自托管临时实例） |
 | `bun run test:events` | 通过 | `MCP Events 验收通过: 339 项` |
 | `bun run test:drive` | 通过 | `drive checks passed: 52` |
-| D01 专项 | 通过 | `D01 focused checks passed: 76` |
-| D02 专项 | 通过 | `D02 focused checks passed: 48` |
+| D01 专项 | 通过 | `D01 focused checks passed: 83` |
+| D02 专项 | 通过 | `D02 focused checks passed: 69` |
 | D03 专项 | 通过 | `D03 focused checks passed: 175` |
+| A05 专项 | 通过 | `A05 focused checks passed: 103` |
 | `git diff --check` | 通过 | 无 whitespace 错误 |
 
 主实例启动方式：
 
 ```bash
-DATA_DIR=/tmp/an-integration-d01d03 \
+DATA_DIR=/tmp/an-d01d02-fix \
 AGENT_PRESENCE_ACTIVITY_TTL_MS=5000 \
 AGENT_PRESENCE_GRACE_MS=2000 \
 AGENT_PRESENCE_SWEEP_MS=1000 \
@@ -107,25 +111,28 @@ AGENTNET_URL=http://127.0.0.1:8792 bun -e "import { checksPassed } from './scrip
 AGENTNET_URL=http://127.0.0.1:8792 bun -e "import { checksPassed } from './scripts/lib/harness'; import { runTaskStatusAcceptance } from './scripts/lib/task-status-acceptance'; await runTaskStatusAcceptance(); console.log('D03 focused checks passed: ' + checksPassed());"
 ```
 
-`test:protocol`、`test:acceptance` 与 `test:drive` 使用本地 `http://127.0.0.1:8792`；`test:web` 与 `test:events` 各自启动临时实例。全量 `test:acceptance` 已包含 D01 76 项、D02 48 项与 D03 175 项任务验收。
+`test:protocol`、`test:acceptance` 与 `test:drive` 使用本地 `http://127.0.0.1:8792`；`test:web` 与 `test:events` 各自启动临时实例。全量 `test:acceptance` 已包含 D01 83 项、D02 69 项、D03 175 项与 A05 103 项任务/拉黑验收。
 
 ## 6. 本轮改动
 
-- `README.md`：当前端到端验收计数 `1380 → 1597`。
-- `docs/code-index.md`：协议验收 `762 → 809`、工具数 `90 → 94`、端到端验收 `1380 → 1597`。
-- `reports/INTEGRATION.md`：本报告。
+- `src/domain/tasks.ts`：同候选重派生成新卡片/assignment/delivery；创建者-候选拉黑闸门；`convergeSourceTask` 比较全部语义参数；任务附件建立引用并 retained。
+- `src/maintenance.ts`：任务引用回收同时扫描新 `tasks`。
+- `scripts/lib/{room-task-acceptance,task-assignment-acceptance,contact-block-acceptance}.ts`：D01-T02 参数冲突、D01-T05 附件、D02-T02 重派/并发、D02-T05 创建者拉黑、A05-T01 任务提议拒绝。
+- `scripts/lib/task-attachment-gc-unit.ts`、`scripts/verify-protocol.ts`：新增 18 项附件保留与 GC 单元检查。
+- `README.md`、`src/mcp/{tools,skill}.ts`、`public/skills/agent-network-skills.md`、`docs/code-index.md`：同步重派、拉黑闸门、附件保留与计数。
+- `reports/{D01,D02,D03,A05,INTEGRATION}.md`：更新修复结论、分项计数与证据。
 
-本轮没有修改服务端、领域、迁移、网页脚本或测试代码。
+本轮没有修改迁移、网页脚本或 presence 语义。
 
 ## 7. 已知限制与未完成 P0
 
 D01/D02/D03 的实现范围均已完成，保持 `READY_FOR_REVIEW`，需独立验证者在集成 SHA 上签收。任务自身记录的限制继续有效：
 
-- **D01**：成果（artifact）入口仍通过 `src/domain/artifacts.ts` 的旧 `room_tasks` 校验，`tsk_` 任务暂不能提交成果；`src/maintenance.ts` 的引用回收只检查 `room_tasks`，未扫描 `tasks` / `task_attachments`，任务附件引用存在被提前回收的风险。两者属于 D07/D08 与 M07 的集成范围。
+- **D01**：成果（artifact）入口仍通过 `src/domain/artifacts.ts` 的旧 `room_tasks` 校验，`tsk_` 任务暂不能提交成果，属于 D07/D08 与 M07 的集成范围。任务附件引用已在同一事务内建立并保留，`maintainFiles` 同时扫描新 `tasks`。
 - **D01/D02**：`network_task_list` 尚未分页（`next_cursor: null`）；`task_transfers` / `task_submissions` / `task_reviews` 已建表但未使用。
 - **D02/D03**：offer 过期没有清扫器，过期 offer 不会自动回 `unassigned`，需要取消后重建或后续幂等清扫。
 - **D03**：`submitted` / `accepted` / `failed` 仍由 D06/D07 及失败/重试任务产生；进度历史最多展示 20 条（数据库保留全部审计）；未构造两个浏览器以不同顺序接收同一批 `task.updated` 的 Playwright 回放，客户端应始终以 `task_get` / `task_list` 的权威 revision 收敛。
-- **文档**：Q01 仍负责 README / CLAUDE / 技能正文与全部文档的全量对齐；本轮只修正 D01-D03 直接影响的计数，`docs/code-index.md` 的 `test:drive` 47 等更早遗留计数不在本轮范围。
+- **文档**：Q01 仍负责 README / CLAUDE / 技能正文与全部文档的全量对齐；本轮已同步 D01/D02 修复、A05-T01 与 `test:drive` 计数。
 
 仍未实现的 P0：
 
@@ -136,15 +143,16 @@ D01/D02/D03 的实现范围均已完成，保持 `READY_FOR_REVIEW`，需独立�
 
 依赖与阻塞：
 
-- **A05-T01 BLOCKED**：A05 报告仍为 `PARTIAL/BLOCKED`，`contact-block-acceptance.ts` 尚无“拒绝定向任务提议”用例，未在任务提议入口完成验收。D01/D02 的 offer 路径已接入 `contact_blocks` 闸门（`src/domain/tasks.ts` 的 `blockedBetween` / `contactBlockGuardStatement`），但需要 A05 负责人补测并重新签收后才能解除阻塞。
+- **A05-T01 已解除阻塞**：A05 报告更新为 `PASS`。`contact-block-acceptance.ts` 新增“拒绝任务提议”用例：创建者拉黑候选后管理员 offer 返回 `BLOCKED`，不生成 assignment/delivery/pending；解除拉黑后正常派发。任务交接仍属后续能力。
 - D04/D05 的转交提议仍由独立对象负责，本波次未创建 transfer，也未复用 `task_progress` 冒充交接；D06/D07 接入提交与验收时必须复用当前 active assignment 与 revision 校验。
 - Q02/Q04/Q05 依赖 D03、Q01 以及各自的设备/并发/故障验收范围，本轮未扩大。
 
 ## 8. 最终状态
 
 - 审查起点：`c4146a297f822d8e2f63179e7db22b528df01644`（`docs(delivery): D03 任务报告`）。
-- 本轮修复提交：`590e67312043559ed5911fae47e7a8b5d46d2661`。
+- 上一轮修复提交：`590e67312043559ed5911fae47e7a8b5d46d2661`。
+- 本轮修复提交：`9d26922`（`fix(delivery): 修复任务重派、拉黑派发与附件保留`）。
 - 集成报告提交：本文件所在提交（`git log -1 -- reports/INTEGRATION.md`），在 `fix/webots-parity-pack` 上普通 push，无 force。
-- 测试计数：typecheck 通过、protocol 809、acceptance 1597、web 1931、events 339、drive 52；专项 D01 76、D02 48、D03 175（合计 299）。
+- 测试计数：typecheck 通过、protocol 827、acceptance 1634、web 1931、events 339、drive 52；专项 D01 83、D02 69、D03 175、A05 103（合计 430）。
 - 未部署、未创建 PR、未触发生产验收。
-- D01/D02/D03 保持 `READY_FOR_REVIEW`，待独立验证；A05-T01 仍 BLOCKED，A05 仍为 `PARTIAL/BLOCKED`。
+- D01/D02/D03 保持 `READY_FOR_REVIEW`，待独立验证；A05 更新为 `PASS`。
