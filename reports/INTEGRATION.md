@@ -21,21 +21,22 @@
 | 上一轮最终集成 / 独立验证 SHA | `76cf3b353ab3bde24eb7c58dad2a696fe6293332` / `fbeb86871f4519523b5509341cc98449608ed70d` |
 | 本轮审查起点 HEAD | `a613c96e2a3204de4bb270fad8c0154e75594129`（`docs(identity): 校正 A06 报告行数`） |
 | 本轮最终集成起点 HEAD | 同上；开工时 `git status --porcelain=v1 -b` 为空，仅 `ahead 7` |
-| 本轮集成修复提交 | 无业务代码修复；仅 `reports/INTEGRATION.md` 更新（本文件所在提交） |
+| 本轮集成修复提交 | 首轮集成仅更新本报告；D1 修复实现 `0cf6a411b353b26385ab66bd55f7eec142a8972f`（`fix(groups): 禁止 owner 无主退群`），修复报告 `933992fe6f628b13899c4b48bf987d525042f75a` |
+| 本轮最终验证 SHA / 状态 | `933992fe6f628b13899c4b48bf987d525042f75a` / **PASS**；Q02、G06、A06 已签收为 `VERIFIED`，D04–D08 保持 `VERIFIED`；详见 `reports/VERIFICATION-Q02-G06-A06.md` |
 | 运行环境 | Bun 1.4.2，macOS；本轮最终集成 `DATA_DIR=/tmp/agentnet-qga-final/data`、`PORT=8973`、`PUBLIC_ORIGIN=http://127.0.0.1:8973`、`AGENTNET_URL=http://127.0.0.1:8973`；未使用远端服务 |
 | Presence 环境 | 服务端与测试进程一致：`AGENT_PRESENCE_ACTIVITY_TTL_MS=5000`、`AGENT_PRESENCE_GRACE_MS=2000`、`AGENT_PRESENCE_SWEEP_MS=1000` |
-| 结论 | 六套门禁与 D04–D08、Q02、G06、A06 专项全部通过；D04–D08 保持在 `76cf3b3` 上的独立验证 `VERIFIED`（见 `reports/VERIFICATION-D04-D08.md`），D01–D03、Q02、G06、A06 保持 `READY_FOR_REVIEW`。Q02/G06/A06 的依赖缺口已如实记录，未标 `VERIFIED`。剩余 P0 为 Q01、Q04、Q05 |
+| 结论 | D04–D08 保持在 `76cf3b3` 上的独立验证 `VERIFIED`；Q02/G06/A06 已在 `933992f` 上独立验证签收为 `VERIFIED`（D1 owner 无主退群修复复验 PASS）。本轮门禁：typecheck、G06 119、G03 104、G01 65、G05 67、protocol 991、acceptance 2615、web 2012、Q02 77/45、A06 139、events 339、drive 52；迁移 34 个、`integrity_check=ok`、`foreign_key_check` 无违规。Q02/G06/A06 的残余限制已如实记录。剩余 P0 为 Q01、Q04、Q05 |
 
 ## 0. 审查范围与结论
 
-本轮在 `a613c96` 上审查 Q02（安全设备配对与离线同步）、G06（退群移除解散与在途工作）、A06（Agent 管理权交接）的合并结果，并复核三者与 D01–D08 共享的事务、迁移、事件、工具面、技能正文、网页脚本与验收注册：
+本轮在 `a613c96` 上审查 Q02（安全设备配对与离线同步）、G06（退群移除解散与在途工作）、A06（Agent 管理权交接）的合并结果，并复核三者与 D01–D08 共享的事务、迁移、事件、工具面、技能正文、网页脚本与验收注册。后续独立验证发现 G06 D1（owner 无主退群），修复提交为 `0cf6a41`，本报告的最终验证与签收 SHA 为 `933992f`；详见 `reports/VERIFICATION-Q02-G06-A06.md`。
 
-- 迁移文件共 33 个：`0001`–`0012`、`0017`–`0037`，`0013`–`0016` 历史上从未使用。Q02 的 `0036_device_pairing_sync.sql` 与 G06 的 `0037_room_lifecycle.sql` 分别是各自实现提交中的新文件；`git diff 76cf3b3..HEAD -- migrations/` 只有这两个新增文件，已发布迁移未被修改，序号唯一。`0036` 扩展 `device_pairings`、增加按 actor/设备 token 摘要的索引与 `guard_device_stale`，并按 `(actor_id, device_id)` 回填缺失的 `devices` 行；`0037` 给 `rooms` 追加解散与归档列、新增 `guard_room_dissolved`，并重建 `room_management_audit` 以接受 `room_dissolved`，保留全部旧行。新库启动按序应用全部 33 个迁移，`PRAGMA integrity_check` = `ok`，`foreign_key_check` 返回 0 行。
-- 共享文件（`src/mcp/{tools,outputs,skill}.ts`、`public/skills/agent-network-skills.md`、`src/domain/tasks.ts`、`src/realtime/hub.ts`、`src/web/chat-*.ts`、`scripts/{acceptance,verify-protocol,verify-web}.ts`）在三个实现提交中顺序叠加，没有互相覆盖：D01–D08 的 32 个任务工具仍在，整体工具面 129 个（Drive 与房间文件开启）/ 120 个（关闭）；Q02 新增 8 个设备工具、G06 新增 2 个房间生命周期工具、A06 新增 5 个交接工具。`skills/list`、`skills/get` 与 SKILL.md 资源读取共用同一正文，协议断言 `sha256` digest 与正文一致。
-- 新增闸门只有 `guard_device_stale → CONFLICT`（Q02）与 `guard_room_dissolved → CONFLICT`（G06），`GUARD_TABLES` 与 `runner.ts` 的错误码/文案映射一致；A06 没有新增迁移或闸门。
+- 迁移文件共 34 个：`0001`–`0012`、`0017`–`0038`，`0013`–`0016` 历史上从未使用。Q02 的 `0036_device_pairing_sync.sql`、G06 的 `0037_room_lifecycle.sql` 与 D1 修复的 `0038_ownerless_room_guard.sql` 分别是各自提交中的新文件；`git diff 5b706aa..HEAD -- migrations/` 只有 `0038` 新增 15 行，已发布迁移未被修改，序号唯一。`0038` 只创建 `guard_owner_missing` 空闸门表，不回填或硬删旧数据。新库启动按序应用全部 34 个迁移，`PRAGMA integrity_check` = `ok`，`foreign_key_check` 返回 0 行。
+- 新增闸门只有 `guard_device_stale → CONFLICT`（Q02）、`guard_room_dissolved → CONFLICT`（G06）与 `guard_owner_missing → CONFLICT`（D1 修复），`GUARD_TABLES` 与 `runner.ts` 的错误码/文案/`details` 映射一致；A06 没有新增迁移或闸门。`guard_owner_missing` 只接受 `x = 0`，插入 `x = 1` 触发 CHECK 失败。
+- 共享文件（`src/mcp/{tools,outputs,skill}.ts`、`public/skills/agent-network-skills.md`、`src/domain/tasks.ts`、`src/realtime/hub.ts`、`src/web/chat-*.ts`、`scripts/{acceptance,verify-protocol,verify-web}.ts`）在三个实现提交与 D1 修复中顺序叠加，没有互相覆盖：D01–D08 的 32 个任务工具仍在，整体工具面 129 个（Drive 与房间文件开启）/ 120 个（关闭）；Q02 新增 8 个设备工具、G06 新增 2 个房间生命周期工具、A06 新增 5 个交接工具。`skills/list`、`skills/get` 与 SKILL.md 资源读取共用同一正文，协议断言 `sha256` digest 与正文一致。
 - 通知边界保持：设备事件只用 `inboxHeadStatement(pendingDelta = 0)`，不创建 delivery、不增加 `pending_count`；房间生命周期事件只写 room scope 与 `room:<id>` outbox，不推进 `rooms.head_seq`；A06 的交接事件写 human-only inbox/outbox，不创建 delivery、不增加 Agent `pending_count`。三者都未修改 D04–D08 的 assignment/task/delivery 语义。
-- 本轮全量门禁：`test:protocol` 978 项（129 个工具）、`test:acceptance` 2586 项、`test:web` 2011 项、`test:events` 339 项、`test:drive` 52 项；专项 Q02 pairing 77、Q02 sync 45、G06 104、A06 139。D04–D08 的专项计数与 `reports/D04.md`–`D08.md` 一致，状态保持 `VERIFIED`。
-- 本轮没有发现需要修改业务代码、迁移或断言才能通过的集成回归；工作区在开工与结束时均为干净，未触碰主 checkout。
+- 本轮全量门禁：`test:protocol` 991 项（129 个工具）、`test:acceptance` 2615 项、`test:web` 2012 项、`test:events` 339 项、`test:drive` 52 项；专项 Q02 pairing 77、Q02 sync 45、G06 119（含 G06-T05）、G03 104、G01 65、G05 67、A06 139。D04–D08 的专项计数与 `reports/D04.md`–`D08.md` 一致，状态保持 `VERIFIED`。
+- 首轮集成未发现需要修改业务代码的集成回归；独立验证随后发现 D1（owner 无主退群），修复提交 `0cf6a41` 收窄退群并在 `933992f` 复验通过。工作区在开工与结束时均为干净，未触碰主 checkout。
 - 上一轮（D04–D08）结论保持：任务写入满足 `runIdempotent` + `db.batch()` 全有或全无，写操作校验 active assignment、`assignment_version` 与 task revision；D05 `guard_handoff_conflict → CONFLICT` 与 D07 `guard_review_stale → REVIEW_STALE` 仍在；任务/交接/提交/验收事件为 human-only `task.updated` informational，D08 `task_reminder` 是唯一新增的 inbox 提醒。上一轮的两个集成回归修复（A01-T04、D03-T04）只更新断言与 `TaskView` 测试类型，未降低服务端语义。
 - 过程偏差：D04–D07 集成开工时工作区已包含完整但未提交的 D05 实现（21 个修改 + 6 个未跟踪文件），与“工作区不干净立即停止”的指令不符。为避免丢弃已有实现，该轮就地审查并集成该工作区，未执行 `reset`/`stash`/`clean`，也未触碰主 checkout；D05 因此没有独立实现提交，本轮已补写 `reports/D05.md` 承担语义与证据，本报告第 5 节只保留集成摘要。
 
@@ -161,12 +162,12 @@
 
 ## 12. 跨功能接缝核对
 
-- **迁移与旧库升级**：新库启动按序应用 33 个迁移文件（`0001`–`0012`、`0017`–`0037`，`0013`–`0016` 从未使用）；`0031` 未修改已发布内容，`0032`/`0033` 已提交，`0034` 随 `3b6afad` 提交，`0035` 随 `40b001f` 提交，`0036` 随 `93263f6`（Q02）、`0037` 随 `22b23bb`（G06）提交并为最后一个。旧库升级断言包含 `0017`、`0029`–`0037`，原业务数据与表结构保留；`git diff 76cf3b3..HEAD -- migrations/` 只有 `0036`、`0037` 两个新增文件。
+- **迁移与旧库升级**：新库启动按序应用 34 个迁移文件（`0001`–`0012`、`0017`–`0038`，`0013`–`0016` 从未使用）；`0031` 未修改已发布内容，`0032`/`0033` 已提交，`0034` 随 `3b6afad` 提交，`0035` 随 `40b001f` 提交，`0036` 随 `93263f6`（Q02）、`0037` 随 `22b23bb`（G06）、`0038` 随 `0cf6a41`（D1）提交并为最后一个。旧库升级断言包含 `0017`、`0029`–`0038`，原业务数据与表结构保留；`git diff 5b706aa..HEAD -- migrations/` 只有 `0038` 一个新增文件。
 - **错误映射**：`guard_task_state → CONFLICT`、`guard_version_conflict → VERSION_CONFLICT`、`guard_assignment_stale → ASSIGNMENT_STALE`、`guard_request_expired → REQUEST_EXPIRED`、`guard_claim_conflict → CLAIM_CONFLICT`、`guard_handoff_conflict → CONFLICT`、`guard_review_stale → REVIEW_STALE`、`guard_device_stale → CONFLICT`、`guard_room_dissolved → CONFLICT`，与各任务错误快照一致；D08 `0035` 没有新增闸门，无同名 guard 冲突。
 - **通知与流**：任务基础事件、`task_transfer_proposed/accepted/rejected/cancelled/expired`、`task_handoff_pack_created/_item_authorized/_item_revoked/_context_requested`、`task_submitted`、`task_returned`、`task_accepted`、`task_retried`、`task_execution_unknown`、`task_execution_resolved`、`task_reviewer_changed` 统一映射为 human-only `task.updated` informational，带 `change`、`task_id`、`assignment_id`、`status`、`revision`、`changed_by`（适用时带 `submission_id` / `submission_version`）；不推进 head、不产生未读、不唤醒 Agent。D08 `task_reminder` 是当前责任者 inbox 提醒，映射为 `source: "task.reminder"`、`kind: "reminder"`、`attention: "action_required"`，不是新 delivery。inbox 侧 `task_offered` 为 `action_required`，`task_cancelled` 为 informational。Q02 的设备事件映射为 `source: 'device'`、`kind: 'device'`、`attention: 'informational'`，`pendingDelta = 0`；G06 `member_left/member_removed/room_dissolved` 只走 room scope 与 `room:<id>` outbox，不推进 `head_seq`；A06 `management_transfer_*`/`management_transferred`/`credential_rotated` 写 human-only inbox/outbox，不创建 delivery、不增加 Agent `pending_count`。
 - **delivery 与任务分离**：delivery 的 claim/report/complete/fail 仍只表示通知处理，不改变任务 owner 或业务状态；D02/D03/D06 专项均断言 delivery complete 后任务仍为真实状态。G06/A06 复用 D04 的失权入口，未新增第二套 owner/assignment 状态机。
 - **工具面**：协议验收断言 32 个任务工具的清单与顺序，整体工具面 129 个（Drive 与房间文件开启）/ 120 个（关闭）；旧 `network_task_add/list_get/complete/fail/update/delete` 已退休。
-- **网页**：`chat-tasks-script.ts` 999 行、`chat-identity-script.ts` 869 行、`chat-room-menu-script.ts` 774 行、`chat-script.ts` 910 行、`chat-task-handoff-script.ts` 452 行、`chat-transfer-script.ts` 404 行、`chat-task-submission-script.ts` 436 行、`pair.ts` 391 行、`chat-task-transfer-script.ts` 347 行、`chat-task-review-script.ts` 249 行、`chat-task-progress-script.ts` 213 行、`chat-task-recovery-script.ts` 124 行、`chat-task-detail-script.ts` 43 行，均低于 1000 行；设备配对、交接、任务面板、交接包、提交/退回、验收、改派、恢复与既有聊天、文件、监控、移动端共用同一脚本作用域，`test:web` 2011 项覆盖（含 Q02 配对页、G06 解散/归档与 A06 交接入口）。
+- **网页**：`chat-tasks-script.ts` 999 行、`chat-identity-script.ts` 869 行、`chat-room-menu-script.ts` 774 行、`chat-script.ts` 910 行、`chat-task-handoff-script.ts` 452 行、`chat-transfer-script.ts` 404 行、`chat-task-submission-script.ts` 436 行、`pair.ts` 391 行、`chat-task-transfer-script.ts` 347 行、`chat-task-review-script.ts` 249 行、`chat-task-progress-script.ts` 213 行、`chat-task-recovery-script.ts` 124 行、`chat-task-detail-script.ts` 43 行，均低于 1000 行；设备配对、交接、任务面板、交接包、提交/退回、验收、改派、恢复与既有聊天、文件、监控、移动端共用同一脚本作用域，`test:web` 2012 项覆盖（含 Q02 配对页、G06 解散/归档与 A06 交接入口）。
 - **文档**：D04/D06/D07/D08 与 Q02/G06/A06 的功能正文、工具清单与技能正文已随各自提交同步，`reports/D05.md` 已补写；`README.md` / `docs/code-index.md` 的协议、工具总数与 D05/D08/Q02/G06/A06 条目仍是 D03 基线，按任务边界留给 Q01 全量对齐；本报告是当前权威计数。
 
 ## 13. 命令与结果
@@ -176,9 +177,9 @@
 | 命令 | 结果 | 说明 |
 |---|---|---|
 | `bun run typecheck` | 通过 | `tsrs --noEmit`，退出码 0，无诊断 |
-| `AGENTNET_URL=http://127.0.0.1:8973 bun run test:protocol` | 通过 | `协议验收通过: 978 项`；`tools/list` 返回 129 个工具，任务工具 32 个；技能正文 digest 与条目一致 |
-| `AGENTNET_URL=http://127.0.0.1:8973 AGENT_PRESENCE_ACTIVITY_TTL_MS=5000 AGENT_PRESENCE_GRACE_MS=2000 AGENT_PRESENCE_SWEEP_MS=1000 bun run test:acceptance` | 通过 | `端到端验收通过: 2586 项`；其中 `D08 专项通过: 147 项（T01 26 / T02 48 / T03 51 / T04 22）` |
-| `bun run test:web` | 通过 | `浏览器验收通过 2011 项`（脚本自托管临时实例） |
+| `AGENTNET_URL=http://127.0.0.1:18994 bun run test:protocol` | 通过 | `协议验收通过: 991 项`；`tools/list` 返回 129 个工具，任务工具 32 个；技能正文 digest 与条目一致 |
+| `AGENTNET_URL=http://127.0.0.1:18994 AGENT_PRESENCE_ACTIVITY_TTL_MS=5000 AGENT_PRESENCE_GRACE_MS=2000 AGENT_PRESENCE_SWEEP_MS=1000 bun run test:acceptance` | 通过 | `端到端验收通过: 2615 项`；其中 `D08 专项通过: 147 项（T01 26 / T02 48 / T03 51 / T04 22）` |
+| `bun run test:web` | 通过 | `浏览器验收通过 2012 项`（脚本自托管临时实例；滚动断言通过） |
 | `bun run test:events` | 通过 | `MCP Events 验收通过: 339 项`（自托管临时实例） |
 | `AGENTNET_URL=http://127.0.0.1:8973 bun run test:drive` | 通过 | `drive checks passed: 52` |
 | Q02 pairing 专项 | 通过 | `Q02 pairing checks passed: 77` |
@@ -186,7 +187,7 @@
 | G06 专项 | 通过 | `G06 checks passed: 104` |
 | A06 专项 | 通过 | `A06 checks passed: 139` |
 | 工具计数 | 通过 | 开启 Drive/房间文件时 129 个；关闭时为 120 个（129 − 9） |
-| 迁移启动与数据库 | 通过 | 新库按序应用 33 个迁移；`PRAGMA integrity_check` = `ok`；`foreign_key_check` 0 行 |
+| 迁移启动与数据库 | 通过 | 新库按序应用 34 个迁移；`PRAGMA integrity_check` = `ok`；`foreign_key_check` 0 行 |
 | `git diff --check 76cf3b3..HEAD` | 1 条非阻塞告警 | `src/domain/device-pairings.ts:930` 文件末尾多余空行（Q02 提交遗留）；不影响门禁，本轮未改源码 |
 
 主实例启动方式：
@@ -257,7 +258,7 @@ D08 在 `40b001f` 中的改动（本轮复核未改其语义）：
 
 ## 15. 已知限制与未完成 P0
 
-D04–D08 的实现范围已完成并通过本轮门禁，且已在 `76cf3b3` 上由独立验证签收为 `VERIFIED`（见 `reports/VERIFICATION-D04-D08.md`）；D01–D03、Q02、G06、A06 保持 `READY_FOR_REVIEW`，未经独立验证不得标 `VERIFIED`。没有任务因本轮复核改语义。各任务记录的限制继续有效：
+D04–D08 的实现范围已完成并通过本轮门禁，且已在 `76cf3b3` 上由独立验证签收为 `VERIFIED`（见 `reports/VERIFICATION-D04-D08.md`）；Q02、G06、A06 已在 `933992f` 上由独立验证签收为 `VERIFIED`（见 `reports/VERIFICATION-Q02-G06-A06.md`），D01–D03 仍为 `READY_FOR_REVIEW`。没有任务因本轮复核改语义。各任务记录的限制继续有效：
 
 - **D01**：成果（artifact）入口仍通过 `src/domain/artifacts.ts` 的旧 `room_tasks` 校验，`tsk_` 任务暂不能提交成果（属于 M07 范围）。任务附件引用已在同一事务内建立并保留，`maintainFiles` 同时扫描新 `tasks`。
 - **D01/D02**：`network_task_list` 尚未分页（`next_cursor: null`）。
@@ -267,17 +268,17 @@ D04–D08 的实现范围已完成并通过本轮门禁，且已在 `76cf3b3` �
 - **D05**：**M04（P1）未实现**，消息引用只保存 `message_id`；读取时最多附带当前仍可见消息的截断 `preview`，没有 M04 的引用摘要、quote anchor、跨页原文定位或撤回占位，也没有版本化原文快照，因此“消息原文交接”范围不完整（`reports/BASELINE.md` BLOCK-05）。`reports/D05.md` 已补写并如实记录 D05 没有独立实现提交、实现首次入库于 `3b6afad`、原实现者无法还原；独立验证已在 `76cf3b3` 上复跑并复核该缺口。仓库没有消息撤回，T03 用授权人失去源范围成员资格表达源撤回。
 - **D06**：外链只记录声明，服务端不抓取或验证；提交列表没有游标；未指定验收人的任务无法退回；没有 D06 专用浏览器断言（`test:web` 只覆盖页面不回归）。
 - **D07**：验收人退群/停用不会自动通过或自动改派；`related_task_id` 已在 MCP 支持但未在网页表单暴露；没有外部业务回写通道。
-- **D08**：没有公开的 `failed` 入口，`network_task_retry` 的 T02 用例在真实迁移/domain 层构造 `failed` 持久行后验证；外部停止只是尽力通知宿主并记录操作者声明的 `external_stop_status`，没有实际杀进程或撤销远端操作的适配器；外部系统查询由调用方完成，`execution_resolve` 只持久化查询或人工证据，不自动访问目标系统；有负责人的 `blocked` 任务也会收到催办，`execution_unknown` 只提示对账、不自动改状态；T04 在验收进程内自托管临时 Bun/`DATA_DIR` 重启，不重启生产实例；D08 网页入口只由协议静态断言与既有网页回归（本轮 `test:web` 2011 项）覆盖，没有新增独立 Playwright 交互脚本。
+- **D08**：没有公开的 `failed` 入口，`network_task_retry` 的 T02 用例在真实迁移/domain 层构造 `failed` 持久行后验证；外部停止只是尽力通知宿主并记录操作者声明的 `external_stop_status`，没有实际杀进程或撤销远端操作的适配器；外部系统查询由调用方完成，`execution_resolve` 只持久化查询或人工证据，不自动访问目标系统；有负责人的 `blocked` 任务也会收到催办，`execution_unknown` 只提示对账、不自动改状态；T04 在验收进程内自托管临时 Bun/`DATA_DIR` 重启，不重启生产实例；D08 网页入口只由协议静态断言与既有网页回归（本轮 `test:web` 2012 项）覆盖，没有新增独立 Playwright 交互脚本。
 - **Q02**：真实相机扫码未自动化，`test:web` 在 `/pair` 直接带入 `#c=`，未调用摄像头或扫码 API，二维码仍由 `src/web/qr.ts` 现场生成，真实手机链路需人工验证。挑战先到先绑：第三台设备若先 `join`，批准界面会显示其设备信息，必须由已登录设备核对确认码后人工拒绝；服务端没有额外设备公钥/近场证明，不会自动信任先到者。旧 `/#t=` 与 `network_recovery_*` 长期 token 未删除、不会自动过期，只保留为明确标注的“旧方式（长期凭据）”，泄露后需由已登录设备撤销对应设备。`network_device_rename` 未实现，设备 label 来自创建/配对时的客户端输入。单设备撤销只关闭本进程内的 stream；多实例部署需要部署层广播或重连收敛，数据库撤销保证新请求立即失败。
 - **G06**：T04 媒体终止是依赖缺口，M09 通话模块未实现，只提供 `media_revoke` 事件钩子，不能声称已验证媒体发布/订阅终止。并发只跑 10 轮 `Promise.allSettled`（本轮实际只观察到 remove_won），另用两种确定性提交顺序补测，未跑 100 次固定种子调度。`POST /mcp-upload` 仍可创建上传者私有草稿；解散后房间绑定/发布/删除被拒绝，网页隐藏上传入口。已下载到本地或被外部系统读取的文件副本无法技术回收；旧文件票据对仍 active 的合法成员继续有效，成员退出/被移除后立即 404。归档读取以 `archived_head_seq` 截断消息/事件/文件/任务，部分只读元数据仍可能可查，但接受/批准等写操作被拒绝。
 - **A06**：交接不自动把新管理者加入原管理者的私聊或 Agent 所在群，也不继承仓库/Issue/API key 等外部平台授权；新管理者要重派群内任务，需先由群 owner/admin 加入房间并获得派发权限。未接受的 `offered` 任务回 `unassigned` 而非 `blocked`，以兼容 D04“未接受 offer 不冒充执行中”；若要求全部未结束任务一律 blocked，需要与 D04 一起调整。交接撤销凭据与 assignment，但不声称旧执行进程已停止；外部副作用仍按 D08 的 unknown/对账处理。并发只跑 6 轮接受 × 旧管理者重发，未跑 100 次固定种子竞争。没有外部发布系统可联调（Q03 依赖），未复制任何外部绑定。审计中的撤销委托/凭据计数是事务前快照；`agent_transfer_*` 审计别名双写；Web 新 token 只写接受方本机注册表，清除站点数据后需重新配置。
 - **过程**：D04–D07 集成开工时工作区已含未提交的 D05 实现，与“工作区不干净立即停止”的指令不符；该轮就地集成，未清理或回退任何已有改动。两个集成回归修复只调整测试断言，未降低服务端语义。D04–D08 集成在 `3710904` 上开工，`git status --porcelain=v1 -b` 为空（仅 `ahead 2`）。Q02/G06/A06 集成在 `a613c96` 上开工，工作区干净、`ahead 7`，结束时仍干净；本轮无集成回归、无业务代码或断言改动。
-- **文档**：Q01 仍负责 README / CLAUDE / 技能正文与全部文档的全量对齐；`README.md` / `docs/code-index.md` 尚未对齐本轮协议 978 项与 129 个工具，D05/D08/Q02/G06/A06 的条目也可能不完整；本报告是当前权威计数，Q02/G06/A06 的技能正文与静态 `/skills/agent-network-skills.md` 已随各自实现同步。
+- **文档**：Q01 仍负责 README / CLAUDE / 技能正文与全部文档的全量对齐；`README.md` / `docs/code-index.md` 尚未对齐本轮协议 991 项与 129 个工具，D05/D08/Q02/G06/A06 的条目也可能不完整；本报告是当前权威计数，Q02/G06/A06 的技能正文与静态 `/skills/agent-network-skills.md` 已随各自实现同步。
 
 仍未实现的 P0：
 
 - **Q 组**：Q01、Q04、Q05。
-- A06、G06、Q02 已实现并纳入本轮集成，状态为 `READY_FOR_REVIEW`，不再计入未实现 P0。
+- A06、G06、Q02 已实现并纳入集成，已在 `933992f` 独立验证签收为 `VERIFIED`，不再计入未实现 P0。
 
 依赖与阻塞：
 
@@ -285,13 +286,15 @@ D04–D08 的实现范围已完成并通过本轮门禁，且已在 `76cf3b3` �
 - **D05 的 M04 缺口未关闭**：M04 只提供 `reply_to` 字段，没有原文定位/引用预览/quote anchor；D05 已如实把消息引用限制为 `message_id` + 当前可见消息的截断预览，不能宣称“相关消息上下文完整”。纳入 M04 或缩小 D05 消息范围需要主控决定。
 - **D08 已实现并纳入集成**：催办、取消与异常恢复有迁移 `0035`、3 个工具、事件与专项 147 项；外部执行停止与目标系统查询仍是调用方责任，不是服务端保证。
 - **A05-T01 已解除阻塞**：A05 报告为 `PASS`；任务拒绝提议、拉黑闸门与解除拉黑后的派发已有验收。
-- **Q02/G06/A06 的缺口属于 P1/部署边界**：真实相机扫码、M09 媒体终止、第三方先 join 的人工拒绝、多实例撤销广播、外部发布联调与更高轮次并发补测均未在本轮完成；这些不改变 `READY_FOR_REVIEW`，但独立验证不得把它们当作已验证能力。
-- **文档计数**：`README.md` / `docs/code-index.md` 尚未对齐本轮权威计数（protocol 978、工具 129），由 Q01 负责全量对齐；本报告是当前权威计数。
+- **Q02/G06/A06 的缺口属于 P1/部署边界**：真实相机扫码、M09 媒体终止、第三方先 join 的人工拒绝、多实例撤销广播、外部发布联调、遗留无主群人工修复与更高轮次并发补测均未在本轮完成；这些已写入 `reports/VERIFICATION-Q02-G06-A06.md` 的残余限制，不改变 `VERIFIED` 签收，但不得把未验证能力当作已验证。
+- **文档计数**：`README.md` / `docs/code-index.md` 尚未对齐本轮权威计数（protocol 991、工具 129），由 Q01 负责全量对齐；本报告是当前权威计数。
 
 ## 16. 最终状态
 
 - 上一轮审查起点：`f8d520b7852802fa649435f593b78fb53926f309`（`docs(delivery): D07 任务报告`）；上一轮最终集成：`76cf3b3`（D08 报告为 `3710904`）。
 - 本轮审查起点 / 最终集成起点：`a613c96e2a3204de4bb270fad8c0154e75594129`（`docs(identity): 校正 A06 报告行数`），开工时工作区干净、`ahead 7`。
+- D1 修复实现/报告：`0cf6a411b353b26385ab66bd55f7eec142a8972f`（`fix(groups): 禁止 owner 无主退群`）/ `933992fe6f628b13899c4b48bf987d525042f75a`（`docs(groups): 记录 G06 owner 无主退群修复与复验`）。
+- 最终独立验证 SHA：`933992fe6f628b13899c4b48bf987d525042f75a`；报告 `reports/VERIFICATION-Q02-G06-A06.md`，结论 PASS。
 - Q02 实现/报告：`93263f607b83ca8ffe99bf32dd4ef4bfc8464fc1` / `328f0a8700229b06d9839f1d699ff9ddb27b8ace`。
 - G06 实现/报告：`22b23bbaeed0d7b57c52ec24dc0c9bdc1c80abc5` / `ea971d0a6de90c4688cc3abf990d97f1e24766c9`。
 - A06 实现/报告：`03240797da343ad832bcd48afaad66e52a7dbbcd` / `0d3d712d0fc167a2b32a736060b50ea183b4967f`（另有 `a613c96` 行数校正）。
@@ -303,9 +306,9 @@ D04–D08 的实现范围已完成并通过本轮门禁，且已在 `76cf3b3` �
 - 历史集成提交：`3b6afadd9d53125084b1615b0972f792e25321a0`（D05 实现、D04–D08 两个集成回归修复与本报告初版）、`76cf3b353ab3bde24eb7c58dad2a696fe6293332`（D04–D08 最终集成报告）。
 - 本轮集成报告提交：本文件所在提交（见 `git log -1 -- reports/INTEGRATION.md`）；无业务代码、迁移或测试断言改动。
 - 工具总数：129 个（Drive 与房间文件开启）/ 120 个（关闭）；任务工具 32 个。
-- 测试计数：typecheck 通过、protocol 978、acceptance 2586、web 2011、events 339、drive 52；本轮专项 Q02 pairing 77、Q02 sync 45、G06 104、A06 139（合计 365）。D04–D08 专项计数沿用独立验证的 565（128/83/133/74/147），本轮未单独重跑。
-- 迁移：33 个文件（`0001`–`0012`、`0017`–`0037`）；新库启动全部应用，`PRAGMA integrity_check` = `ok`，`foreign_key_check` 0 行。
-- 独立验证报告：`reports/VERIFICATION-D04-D08.md`；验证 SHA `76cf3b353ab3bde24eb7c58dad2a696fe6293332`。Q02/G06/A06 尚无独立验证报告。
+- 测试计数：typecheck 通过、protocol 991、acceptance 2615、web 2012、events 339、drive 52；专项 Q02 pairing 77、Q02 sync 45、G06 119（含 G06-T05）、G03 104、G01 65、G05 67、A06 139。D04–D08 专项计数沿用独立验证的 565（128/83/133/74/147），本轮未重复跑五项专项，全量验收已覆盖回归。
+- 迁移：34 个文件（`0001`–`0012`、`0017`–`0038`）；新库启动全部应用，`PRAGMA integrity_check` = `ok`，`foreign_key_check` 0 行；`guard_owner_missing` 只接受 `x = 0`。
+- 独立验证报告：`reports/VERIFICATION-D04-D08.md`（验证 SHA `76cf3b353ab3bde24eb7c58dad2a696fe6293332`）与 `reports/VERIFICATION-Q02-G06-A06.md`（验证 SHA `933992fe6f628b13899c4b48bf987d525042f75a`）。
 - 集成报告在 `fix/webots-parity-pack` 上普通 push，无 force；推送后远端分支与本地 HEAD 一致。
-- 未部署、未创建 PR、未触发生产验收、未创建生产测试数据；测试服务已全部停止，端口 `8973` 已释放。
-- 状态：D01–D03、Q02、G06、A06 为 `READY_FOR_REVIEW`；D04–D08 为 `VERIFIED`；A05 为 `PASS`；剩余未实现 P0 为 Q01、Q04、Q05。
+- 未部署、未创建 PR、未触发生产验收、未创建生产测试数据；D1 复验使用端口 `18994`，测试服务已全部停止，端口已释放。
+- 状态：Q02、G06、A06、D04–D08 为 `VERIFIED`；D01–D03 为 `READY_FOR_REVIEW`；A05 为 `PASS`；剩余未实现 P0 为 Q01、Q04、Q05。
