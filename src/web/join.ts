@@ -175,7 +175,9 @@ function renderInvitation(item) {
   membersElement.textContent = item.member_count + ' 人';
   expiresElement.textContent = new Date(Number(item.expires_at)).toLocaleString();
   actionButton.textContent = actionLabel(item);
-  actionButton.disabled = !item.can_respond;
+  // 已是成员时 next_step=member 且 can_respond=false；入口仍需可用，
+  // 点击后直接进入群聊，而不是留下一个禁用的“进入群聊”。
+  actionButton.disabled = !item.can_respond && item.next_step !== 'member';
   if (item.next_step === 'pending_approval') pendingRequestId = item.join_request_id || null;
 }
 

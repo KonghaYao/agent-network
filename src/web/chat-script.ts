@@ -824,6 +824,11 @@ if (groupModal) {
     if (event.target === groupModal) closeGroupModal();
   });
 }
+document.addEventListener('keydown', function (event) {
+  if (event.key !== 'Escape' || !groupModal || groupModal.hidden) return;
+  event.preventDefault();
+  closeGroupModal();
+});
 if (groupForm) {
   groupForm.addEventListener('submit', async function (event) {
     event.preventDefault();
