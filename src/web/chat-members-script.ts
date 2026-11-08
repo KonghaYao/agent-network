@@ -447,12 +447,10 @@ async function openMembersModal() {
     }
     membersContactsCache = contacts;
     renderMembersContacts(membersCandidates(contacts));
-    setMembersBusy(false);
     const ownerActorId = identity ? identity.actor_id : '';
-    if (agentContactGaps(ownerActorId, contacts).length === 0) return;
-    membersContactNote = '正在同步本机创建的 Agent…';
+    membersContactNote = '正在读取本机与受管 Agent…';
     renderMembersContacts(membersCandidates(contacts), membersContactNote);
-    const synced = await addOwnedAgentContacts(ownerActorId, contacts);
+    const merged = await mergeAgentPickerContacts(ownerActorId, contacts);
     if (
       loadToken !== membersLoadToken ||
       !isActiveRoom(roomId, epoch) ||
@@ -461,9 +459,9 @@ async function openMembersModal() {
     ) {
       return;
     }
-    membersContactsCache = synced.contacts;
-    membersContactNote = agentContactSyncError(synced.failed) || '';
-    renderMembersContacts(membersCandidates(synced.contacts), membersContactNote);
+    membersContactsCache = merged.contacts;
+    membersContactNote = '';
+    renderMembersContacts(membersCandidates(merged.contacts));
     setMembersBusy(false);
   } catch (error) {
     if (loadToken !== membersLoadToken || !isActiveRoom(roomId, epoch)) return;

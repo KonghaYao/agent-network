@@ -411,15 +411,16 @@ async function main(): Promise<void> {
     );
     check('A 的好友列表包含 B', contacts.items.some((item) => item.actor_id === b.actor_id), contacts.items);
 
-    await expectToolError(
-      '非好友不能加入群聊',
-      callTool(humanC.client, 'network_room_create', {
-        request_id: newRequestId('room'),
-        kind: 'group',
-        members: [b.actor_id],
-        title: '越权群',
-      }),
-      'FRIEND_REQUIRED',
+    const unclaimedGroup = await callTool<RoomDetail>(humanC.client, 'network_room_create', {
+      request_id: newRequestId('room'),
+      kind: 'group',
+      members: [b.actor_id],
+      title: '未认领 Agent 群',
+    });
+    checkEqual(
+      '未认领 Agent 无需好友即可加入群聊',
+      unclaimedGroup.members.some((member) => member.actor_id === b.actor_id),
+      true,
     );
 
     const directA = await callTool<RoomDetail>(agentA.client, 'network_room_create', {
@@ -1044,12 +1045,14 @@ async function main(): Promise<void> {
     await subscription.close();
     checkEqual('主动关闭订阅标记为 local', await waitClosed(subscription, 5000), 'local');
     await sleep(1000);
+    // grace 30s + 5s sweep 周期，30s 固定等待在慢环境下必然踩线；放宽到
+    // 45s 只影响观测窗口，不改变任何在线/投递语义。
     await waitUntil('关闭最后一个连接后成员显示离线', async () => {
       const detail = await callTool<RoomDetail>(agentA.client, 'network_room_get', {
         room_id: roomId,
       });
       return detail.members.find((member) => member.actor_id === b.actor_id)?.online === false;
-    }, 30_000);
+    }, 45_000);
     const offlineCollector = notificationCollector(agentB.client);
     const resubscribed = await openSubscription(agentB.client, [STREAM_URI]);
     checkEqual(

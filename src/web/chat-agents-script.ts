@@ -10,8 +10,8 @@
  * 该 Agent 自己的 MCP URL（含长期 token）；不保存 human token、提示词或
  * share_url。注册表只在本浏览器，按当前 human 隔离。
  *
- * 群聊服务端只接受好友，因此选择器打开时还要用当前 human token 把注册表中
- * 缺失的 Agent 补成联系人；联系人添加是单向、幂等、无需对方接受的。
+ * 群聊选择器直接合并本机注册表与 `network_agents_managed_list`，不再用
+ * `network_contact_request` 建立好友关系；Agent 能否直接入群由服务端判定。
  */
 export const CHAT_AGENTS_SCRIPT = `
 const AGENT_REGISTRY_LEGACY_KEY = 'agent-network-agents-v1';
@@ -186,94 +186,66 @@ function agentRegistryReissue(ownerActorId, actorId, mcpUrl, fallback) {
   return agentRegistryWrite(ownerActorId, agentsSortByCreated(items));
 }
 
-/** 当前 human 在本机注册、但不在给定好友列表中的 Agent actor_id。 */
-function agentContactGaps(ownerActorId, contacts) {
-  if (!ownerActorId) return [];
-  const known = new Set();
-  for (const contact of contacts || []) {
-    if (contact && typeof contact.actor_id === 'string') known.add(contact.actor_id);
+/**
+ * 群成员候选额外来源：本机 Agents 注册表与当前 human 可管理的 Agent。
+ *
+ * Agent 入群由服务端按“好友 / 自有管理者 / unclaimed”判定，网页不再调用
+ * network_contact_request 伪造好友关系，也不显示好友申请等待提示。
+ * 本机注册表覆盖历史 unclaimed Agent；managed list 覆盖其他浏览器创建的
+ * 自有 Agent。两者都按 actor_id 去重。
+ */
+async function loadManagedPickerAgents() {
+  const items = [];
+  let cursor = null;
+  for (let page = 0; page < 5; page += 1) {
+    const args = { limit: 100 };
+    if (cursor) args.cursor = cursor;
+    const result = await callTool('network_agents_managed_list', args);
+    for (const item of result.items || []) {
+      if (!item || typeof item.actor_id !== 'string') continue;
+      items.push({
+        actor_id: item.actor_id,
+        kind: 'agent',
+        name: typeof item.name === 'string' ? item.name : item.actor_id,
+        agent_session_id: typeof item.agent_session_id === 'string' ? item.agent_session_id : null
+      });
+    }
+    if (!result.has_more || !result.next_cursor) break;
+    cursor = result.next_cursor;
   }
-  const gaps = [];
-  for (const item of agentRegistryItems(ownerActorId).items) {
-    if (!item.actor_id || item.actor_id === ownerActorId) continue;
-    if (known.has(item.actor_id) || gaps.indexOf(item.actor_id) >= 0) continue;
-    gaps.push(item.actor_id);
-  }
-  return gaps;
+  return items;
 }
 
-/**
- * 用当前 human token 补齐本机创建的 Agent 好友关系。
- *
- * 管理者向自有 Agent 发送 network_contact_request 会按管理员策略自动建立
- * 关系；并发上限 4，避免注册表较大时串行阻塞。单个失败只收集可读信息，
- * 不阻断已有好友展示。返回合并后的联系人列表，调用方据此重绘选择器。
- */
-async function addOwnedAgentContacts(ownerActorId, contacts) {
-  const gaps = agentContactGaps(ownerActorId, contacts);
-  if (gaps.length === 0) {
-    return { contacts: (contacts || []).slice(), added: [], failed: [] };
-  }
-  const added = [];
-  const failed = [];
-  let index = 0;
-  async function worker() {
-    while (index < gaps.length) {
-      const actorId = gaps[index];
-      index += 1;
-      try {
-        const result = await callTool('network_contact_request', {
-          request_id: requestId('agent_contact'),
-          actor_id: actorId
-        });
-        if (!result || result.status !== 'accepted') {
-          failed.push({ actor_id: actorId, message: '好友申请待确认' });
-          continue;
-        }
-        const request = result.request || {};
-        const view = request.to_actor && request.to_actor.actor_id === actorId
-          ? request.to_actor
-          : request.from_actor && request.from_actor.actor_id === actorId
-            ? request.from_actor
-            : null;
-        added.push({
-          actor_id: actorId,
-          kind: 'agent',
-          name: view && view.name ? view.name : actorId,
-          agent_session_id: view && view.agent_session_id ? view.agent_session_id : null,
-          relation: 'active',
-          created_at: String(Date.now())
-        });
-      } catch (error) {
-        failed.push({
-          actor_id: actorId,
-          message: error && error.message ? String(error.message) : String(error)
-        });
-      }
-    }
-  }
-  const workers = [];
-  const width = Math.min(4, gaps.length);
-  for (let slot = 0; slot < width; slot += 1) workers.push(worker());
-  await Promise.all(workers);
+async function mergeAgentPickerContacts(ownerActorId, contacts) {
   const merged = (contacts || []).slice();
   const seen = new Set();
   for (const contact of merged) {
     if (contact && typeof contact.actor_id === 'string') seen.add(contact.actor_id);
   }
-  for (const contact of added) {
-    if (!seen.has(contact.actor_id)) {
-      seen.add(contact.actor_id);
-      merged.push(contact);
-    }
+  function addAgent(item) {
+    if (!item || typeof item.actor_id !== 'string' || !item.actor_id) return;
+    if (item.actor_id === ownerActorId || seen.has(item.actor_id)) return;
+    seen.add(item.actor_id);
+    merged.push({
+      actor_id: item.actor_id,
+      kind: 'agent',
+      name: typeof item.name === 'string' && item.name ? item.name : item.actor_id,
+      agent_session_id: typeof item.agent_session_id === 'string'
+        ? item.agent_session_id
+        : null,
+      relation: 'local',
+      created_at: String(Date.now())
+    });
   }
-  return { contacts: merged, added: added, failed: failed };
-}
-
-/** 好友补齐失败只显示数量与首个错误，不把凭据或请求体写入页面。 */
-function agentContactSyncError(failed) {
-  if (!failed || failed.length === 0) return '';
-  const first = failed[0] && failed[0].message ? '：' + failed[0].message : '';
-  return '有 ' + failed.length + ' 个本机 Agent 添加好友失败' + first + '；可稍后重试';
+  for (const item of agentRegistryItems(ownerActorId).items) addAgent(item);
+  let managed = [];
+  try {
+    managed = await loadManagedPickerAgents();
+  } catch (error) {
+    // managed list 失败不阻塞已加载的好友与本机 Agent；服务端仍会复核资格。
+    managed = [];
+  }
+  for (const item of managed) addAgent(item);
+  return { contacts: merged };
 }
 `;

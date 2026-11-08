@@ -99,6 +99,12 @@ export async function runAgentRoomAddAcceptance(): Promise<void> {
   const unclaimed = await unclaimedAgent('P0 存量未认领 Agent');
   const otherUnclaimed = await unclaimedAgent('P0 群内未认领 Agent');
   const blocked = await unclaimedAgent('P0 被拉黑 Agent');
+  // 生产数据中的 6 个旧 Agent：无 contact_relations、无 active manager。
+  const legacyAgents = await Promise.all(
+    Array.from({ length: 6 }, (_, index) =>
+      unclaimedAgent(`P0 生产旧 Agent ${index + 1}`),
+    ),
+  );
   try {
     const owner = await registerIdentity(ownerConnection, { kind: 'human', name: 'P0 群主' });
     const otherManager = await registerIdentity(otherManagerConnection, {
@@ -126,6 +132,23 @@ export async function runAgentRoomAddAcceptance(): Promise<void> {
     checkEqual('P0 建群：active 成员含自有 Agent', created.members.some((member) => member.actor_id === ownManaged.actor_id), true);
     checkEqual('P0 建群：没有生成 Agent 邀请', created.invited.length, 0);
     checkEqual('P0 建群：成员数为 3', created.room.member_count, 3);
+
+    // 1b. 生产旧数据回放：6 个无关系、无 active manager 的 Agent 全部 active。
+    const legacyGroup = await callTool<GroupDetail>(ownerConnection.client, 'network_room_create', {
+      request_id: newRequestId('p0_legacy_group'),
+      kind: 'group',
+      title: 'P0 生产旧 Agent 群',
+      members: legacyAgents.map((agent) => agent.actor.actor_id),
+    });
+    checkEqual('P0 生产旧数据：6 个 unclaimed Agent 全部 active', legacyGroup.members.length, 7);
+    checkEqual('P0 生产旧数据：没有 pending 邀请', legacyGroup.invited.length, 0);
+    checkEqual(
+      'P0 生产旧数据：每个 Agent 都出现在有效成员中',
+      legacyAgents.every((agent) =>
+        legacyGroup.members.some((member) => member.actor_id === agent.actor.actor_id),
+      ),
+      true,
+    );
 
     // 2. 建群预检：他人管理且非好友的 Agent、非好友人类仍 FRIEND_REQUIRED。
     const foreignCreateError = await expectToolError(
@@ -290,6 +313,7 @@ export async function runAgentRoomAddAcceptance(): Promise<void> {
       unclaimed.connection.close(),
       otherUnclaimed.connection.close(),
       blocked.connection.close(),
+      ...legacyAgents.map((agent) => agent.connection.close()),
     ]);
   }
 }

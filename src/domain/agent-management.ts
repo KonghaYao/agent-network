@@ -422,7 +422,7 @@ export async function agentsManagedList(
     )
     .bind(
       ...(cursor
-        ? [caller, caller, caller, caller, at, caller, cursor.seq, limit + 1]
+        ? [caller, caller, caller, caller, at, caller, caller, cursor.seq, limit + 1]
         : [caller, caller, caller, caller, at, caller, limit + 1]),
     )
     .all<ManagedRow>();

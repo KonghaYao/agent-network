@@ -514,11 +514,14 @@ async function createAgentFriend(token: string, name: string): Promise<Actor> {
   return created;
 }
 
-/** 只写个人收藏；用于确认收藏不会被当作好友或群成员候选。 */
+/** 只写个人收藏；使用未认领 Agent，确认收藏不会被当作候选或群成员。 */
 async function createBookmarkFriend(token: string, name: string): Promise<Actor> {
-  const created = await rawTool<Actor>(token, 'network_agent_create', {
-    request_id: requestId('create_agent'),
+  const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+  const created = await rawTool<Actor>(agentToken, 'network_register', {
+    request_id: requestId('register_agent'),
+    kind: 'agent',
     name,
+    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
   });
   await rawTool(token, 'network_contact_add', {
     request_id: requestId('contact'),
@@ -561,6 +564,25 @@ async function loadAllContacts(token: string): Promise<{ actor_id: string; name:
     cursor = result.next_cursor;
   }
   return contacts;
+}
+
+/** 分页读取当前 human 可管理的 Agent，供候选数断言覆盖合并来源。 */
+async function loadAllManagedAgents(token: string): Promise<{ actor_id: string; name: string }[]> {
+  const agents: { actor_id: string; name: string }[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < 10; page += 1) {
+    const args: Record<string, unknown> = { limit: 100 };
+    if (cursor) args.cursor = cursor;
+    const result = await rawTool<{
+      items: { actor_id: string; name: string }[];
+      has_more: boolean;
+      next_cursor: string | null;
+    }>(token, 'network_agents_managed_list', args);
+    agents.push(...result.items);
+    if (!result.has_more || !result.next_cursor) break;
+    cursor = result.next_cursor;
+  }
+  return agents;
 }
 
 /** 接受指定 token 在该房间的全部待确认邀请；夹具用于把 invited 转成 active。 */
@@ -776,14 +798,13 @@ async function fixture(dataDir: string): Promise<{
     kind: 'direct',
     members: [agentA.actor_id],
   });
+  // Agent A 未认领、Agent B 由 human 管理：两者都直接 active，无需邀请。
   const group = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
     request_id: requestId('room'),
     kind: 'group',
     title: '测试群',
     members: [agentA.actor_id, agentB.actor_id],
   });
-  // 未认领的 Agent A 得到待确认邀请；接受后夹具群才是 3 人 active。
-  await acceptRoomInvites(agentAToken, group.room.room_id);
   const extra = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
     request_id: requestId('room'),
     kind: 'direct',
@@ -6282,14 +6303,10 @@ async function main(): Promise<void> {
         { markReadCount: webAgentCalls.markReadCount },
       );
       check(
-        '新建 Agent 使用 human token 自动添加联系人',
-        webAgentCalls.contactAddCount === 1 &&
-          webAgentCalls.contactAddHumanAuth &&
-          webAgentCalls.contactAddActorIds.length === 1 &&
-          webAgentCalls.contactAddActorIds[0] === webAgentCalls.actorId,
+        '新建 Agent 不再发送好友申请',
+        webAgentCalls.contactAddCount === 0,
         {
           contactAddCount: webAgentCalls.contactAddCount,
-          contactAddHumanAuth: webAgentCalls.contactAddHumanAuth,
         },
       );
 
@@ -6583,13 +6600,13 @@ async function main(): Promise<void> {
       check('会话创建失败仍写入本地 Agents 注册表', failedState.registrySaved);
       checkEqual('注册表不写入 room_id', failedState.registryHasRoomId, false);
       checkEqual('会话创建失败不插入左侧列表', failedState.roomItems, 0);
-      checkEqual('会话创建失败前已添加联系人', failedState.contactAddCount, 1);
+      checkEqual('会话创建失败前不发送好友申请', failedState.contactAddCount, 0);
       await page.unroute('**/mcp');
       await page.locator('#new-agent-close').click();
       await context.close();
     }
 
-    // 2b-1c. 好友申请失败不创建 direct；Agent、凭据与注册表仍应保留。
+    // 2b-1c. 新建 Agent 不再发好友申请：direct 会话直接创建并自动建联。
     {
       const { context, page } = await makeContext(
         browser,
@@ -6599,64 +6616,42 @@ async function main(): Promise<void> {
       );
       await page.goto(`${server.base}/`);
       await page.locator('#room-list .room-item').first().waitFor();
-      await page.route('**/mcp', async (route) => {
-        const request = route.request();
-        if (request.headers()['mcp-name'] !== 'network_contact_request') {
-          await route.continue();
-          return;
-        }
-        const body = request.postDataJSON() as { id?: unknown } | null;
-        await route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: body?.id ?? null,
-            result: {
-              isError: true,
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    code: 'CONFLICT',
-                    message: '模拟联系人添加失败',
-                    retryable: false,
-                  }),
-                },
-              ],
-            },
-          }),
-        });
-      });
-      const contactFailedName = '联系人失败 Agent';
+      const directAgentName = '直聊自动建联 Agent';
       await page.locator('#new-agent').click();
-      await page.fill('#new-agent-name', contactFailedName);
+      await page.fill('#new-agent-name', directAgentName);
       await page.locator('#new-agent-create').click();
       await page.locator('#new-agent-result').waitFor({ state: 'visible' });
-      await page.waitForFunction(
-        `document.getElementById('new-agent-error').textContent.indexOf(
-          'Agent 已创建，但添加好友失败：模拟联系人添加失败'
-        ) >= 0`,
-      );
+      await waitRoomListName(page, directAgentName);
+      const directState = (await page.evaluate(`(() => ({
+        error: (document.getElementById('new-agent-error').textContent || ''),
+        roomItems: Array.from(document.querySelectorAll('#room-list a.room-item .room-name'))
+          .filter(function (label) {
+            return label.textContent === ${JSON.stringify(directAgentName)};
+          }).length,
+        contactRequests: (window.__mcpCalls || []).filter(function (call) {
+          return call.name === 'network_contact_request';
+        }).length
+      }))()`)) as {
+        error: string;
+        roomItems: number;
+        contactRequests: number;
+      };
+      checkEqual('新建 Agent 不发送好友申请', directState.contactRequests, 0);
       check(
-        '好友申请失败仍展示 MCP URL 与分享链接',
-        (await page.inputValue('#new-agent-url')).startsWith('http') &&
-          (await page.inputValue('#new-agent-share')).startsWith('http'),
+        '新建 Agent 不显示好友申请待确认',
+        !directState.error.includes('好友申请待确认') &&
+          !directState.error.includes('添加好友失败'),
+        directState.error,
       );
+      checkEqual('新建 Agent 直接创建 direct 会话', directState.roomItems, 1);
+      const directContacts = await rawTool<{
+        items: { actor_id: string; name: string; relation: string }[];
+      }>(data.humanToken, 'network_contacts_list', { limit: 100 });
       checkEqual(
-        '好友申请失败仍显示已创建',
-        ((await page.locator('#new-agent-create').textContent()) ?? '').trim(),
-        '已创建',
+        '新建 Agent 的 direct 关系为 active',
+        directContacts.items.find((item) => item.name === directAgentName)?.relation,
+        'active',
       );
-      checkEqual(
-        '好友申请失败不创建 direct 会话',
-        await page
-          .locator('#room-list a.room-item')
-          .filter({ hasText: contactFailedName })
-          .count(),
-        0,
-      );
-      await page.unroute('**/mcp');
       await page.locator('#new-agent-close').click();
       await context.close();
     }
@@ -8623,21 +8618,19 @@ async function main(): Promise<void> {
       }
     }
 
-    // 2b-2b. 已创建但非好友的本机 Agent：打开选择器时用 human token 补齐联系人。
-    // 用 network_agent_create 创建（浏览器 human 是管理者），补齐请求按
-    // auto_manager 自动接受；未认领的 network_register 只会停在 pending。
+    // 2b-2b. 建群/加成员候选合并本机注册表与受管 Agent，不再发送好友申请。
+    // 本机注册表用未认领 Agent 模拟旧数据；受管 Agent 只出现在 managed list。
     {
-      const orphan = await rawTool<Actor>(data.humanToken, 'network_agent_create', {
-        request_id: requestId('create_agent'),
+      const orphanToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+      const orphan = await rawTool<Actor>(orphanToken, 'network_register', {
+        request_id: requestId('register_agent'),
+        kind: 'agent',
         name: '存量未加好友 Agent',
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
       });
-      const orphanFailed = await rawTool<Actor>(data.humanToken, 'network_agent_create', {
+      const managedOnly = await rawTool<Actor>(data.humanToken, 'network_agent_create', {
         request_id: requestId('create_agent'),
-        name: '补齐失败 Agent',
-      });
-      const memberOrphan = await rawTool<Actor>(data.humanToken, 'network_agent_create', {
-        request_id: requestId('create_agent'),
-        name: '添加成员补齐 Agent',
+        name: '仅管理列表 Agent',
       });
       const { context, page } = await makeContext(
         browser,
@@ -8657,177 +8650,152 @@ async function main(): Promise<void> {
       });
       await page.evaluate(
         `localStorage.setItem('agent-network-agents-v1', ${JSON.stringify(
-          JSON.stringify({
-            v: 1,
-            items: [registryItem(orphan), registryItem(orphanFailed)],
-          }),
+          JSON.stringify({ v: 1, items: [registryItem(orphan)] }),
         )})`,
       );
-      await page.evaluate(`(() => {
-        window.__consoleText = '';
-        ['log', 'info', 'debug', 'warn'].forEach(function (method) {
-          const original = console[method];
-          console[method] = function () {
-            window.__consoleText += Array.prototype.map.call(arguments, String).join(' ') + '\\n';
-            return original.apply(console, arguments);
+      const pickerState = async (root: string) =>
+        (await page.evaluate(`(() => {
+          const node = document.querySelector(${JSON.stringify(root)});
+          const text = node ? node.textContent : '';
+          return {
+            text: text || '',
+            choices: Array.from(document.querySelectorAll(${JSON.stringify(`${root} .contact-choice`)}))
+              .map(function (choice) { return (choice.textContent || '').trim(); }),
+            contactRequests: (window.__mcpCalls || []).filter(function (call) {
+              return call.name === 'network_contact_request';
+            }).length,
+            managedListCalls: (window.__mcpCalls || []).filter(function (call) {
+              return call.name === 'network_agents_managed_list';
+            }).length
           };
-        });
-      })()`);
-      await page.route('**/mcp', async (route) => {
-        const request = route.request();
-        if (request.headers()['mcp-name'] !== 'network_contact_request') {
-          await route.continue();
-          return;
-        }
-        const body = request.postDataJSON() as {
-          id?: unknown;
-          params?: { arguments?: { actor_id?: string } };
-        } | null;
-        if (body?.params?.arguments?.actor_id !== orphanFailed.actor_id) {
-          await route.continue();
-          return;
-        }
-        await route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: body?.id ?? null,
-            result: {
-              isError: true,
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    code: 'CONFLICT',
-                    message: '模拟补齐失败',
-                    retryable: false,
-                  }),
-                },
-              ],
-            },
-          }),
-        });
+        })()`)) as {
+          text: string;
+          choices: string[];
+          contactRequests: number;
+          managedListCalls: number;
+        };
+
+      await page.locator('#new-group').click();
+      await page
+        .locator('#group-contacts .contact-choice')
+        .filter({ hasText: orphan.name })
+        .waitFor();
+      await page
+        .locator('#group-contacts .contact-choice')
+        .filter({ hasText: managedOnly.name })
+        .waitFor();
+      const groupPicker = await pickerState('#group-contacts');
+      check(
+        '建群候选合并本机注册表与受管 Agent',
+        groupPicker.choices.some((text) => text.includes(orphan.name)) &&
+          groupPicker.choices.some((text) => text.includes(managedOnly.name)),
+        groupPicker.choices,
+      );
+      checkEqual('建群候选读取受管 Agent 列表', groupPicker.managedListCalls > 0, true);
+      checkEqual('建群候选不发送好友申请', groupPicker.contactRequests, 0);
+      check(
+        '建群候选不显示好友申请等待',
+        !groupPicker.text.includes('好友申请待确认') &&
+          !groupPicker.text.includes('添加好友失败'),
+        groupPicker.text,
+      );
+      await page.fill('#group-search', orphan.name);
+      await page
+        .locator('#group-contacts .contact-choice')
+        .filter({ hasText: orphan.name })
+        .locator('input')
+        .check();
+      await page.fill('#group-search', managedOnly.name);
+      await page
+        .locator('#group-contacts .contact-choice')
+        .filter({ hasText: managedOnly.name })
+        .locator('input')
+        .check();
+      await page.fill('#group-title', 'Agent 候选建群');
+      await page.locator('#group-create').click();
+      await page.waitForURL(/\/c\/rm_/);
+      const pickerGroupId = decodeURIComponent(page.url().split('/c/')[1] ?? '');
+      const pickerGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_get', {
+        room_id: pickerGroupId,
       });
-      const contactCallsFor = async (actorId: string) =>
-        (await page.evaluate(`(window.__mcpCalls || []).filter(function (call) {
-          const args = call.body && call.body.params ? call.body.params.arguments : null;
-          return call.name === 'network_contact_request' && args && args.actor_id === ${JSON.stringify(actorId)};
-        }).map(function (call) { return { humanAuth: call.humanAuth === true }; })`)) as {
-          humanAuth: boolean;
-        }[];
+      check(
+        '勾选的本机与受管 Agent 直接入群',
+        pickerGroup.members.some((member) => member.actor_id === orphan.actor_id) &&
+          pickerGroup.members.some((member) => member.actor_id === managedOnly.actor_id),
+        pickerGroup.members,
+      );
 
-      await page.locator('#new-group').click();
-      await page
-        .locator('#group-contacts .contact-choice')
-        .filter({ hasText: orphan.name })
-        .waitFor();
-      await waitForText(page, '#group-contacts', '添加好友失败');
-      const firstOrphanCalls = await contactCallsFor(orphan.actor_id);
-      check(
-        '打开新建群聊选择器补齐非好友 Agent（human token）',
-        firstOrphanCalls.length === 1 && firstOrphanCalls[0]?.humanAuth === true,
-        firstOrphanCalls,
-      );
-      checkEqual(
-        '补齐后的 Agent 出现在新建群聊选择器',
-        await page
-          .locator('#group-contacts .contact-choice')
-          .filter({ hasText: orphan.name })
-          .count(),
-        1,
-      );
-      checkEqual(
-        '补齐失败不阻塞已有好友展示',
-        await page
-          .locator('#group-contacts .contact-choice')
-          .filter({ hasText: data.agentA.name })
-          .count(),
-        1,
-      );
-      checkEqual(
-        '补齐失败的 Agent 不出现在选择器',
-        await page
-          .locator('#group-contacts .contact-choice')
-          .filter({ hasText: orphanFailed.name })
-          .count(),
-        0,
-      );
-      check(
-        '补齐失败显示可读非致命提示',
-        ((await page.locator('#group-contacts').textContent()) ?? '').includes(
-          '可稍后重试',
-        ),
-      );
-      await page.locator('#group-cancel').click();
-
-      await page.locator('#new-group').click();
-      await page
-        .locator('#group-contacts .contact-choice')
-        .filter({ hasText: orphan.name })
-        .waitFor();
-      await waitForText(page, '#group-contacts', '添加好友失败');
-      const secondOrphanCalls = await contactCallsFor(orphan.actor_id);
-      checkEqual(
-        '重复打开选择器不重复添加联系人',
-        secondOrphanCalls.length,
-        firstOrphanCalls.length,
-      );
-      const tokenLeak = (await page.evaluate(`(() => ({
-        html: document.documentElement.outerHTML.indexOf(${JSON.stringify(data.humanToken)}) >= 0,
-        console: (window.__consoleText || '').indexOf(${JSON.stringify(data.humanToken)}) >= 0
-      }))()`)) as { html: boolean; console: boolean };
-      check(
-        '联系人补齐不把 human token 写入页面或 console',
-        !tokenLeak.html && !tokenLeak.console,
-        tokenLeak,
-      );
-      await page.locator('#group-cancel').click();
-      await page.evaluate(
-        `localStorage.setItem('agent-network-agents-v1', ${JSON.stringify(
-          JSON.stringify({
-            v: 1,
-            items: [
-              registryItem(orphan),
-              registryItem(orphanFailed),
-              registryItem(memberOrphan),
-            ],
-          }),
-        )})`,
-      );
       await page.locator('#room-filter-group').click();
-      await page.locator(roomLink(data.group.room.room_id)).click();
-      await waitRoom(page, data.group.room.room_id, '测试群');
+      const addTarget = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('agent_candidate_group'),
+        kind: 'group',
+        title: 'Agent 候选加人群',
+        members: [data.agentB.actor_id],
+      });
+      await page.locator(roomLink(addTarget.room.room_id)).click();
+      await waitRoom(page, addTarget.room.room_id, 'Agent 候选加人群');
       await page.locator('#add-members').click();
       await page
         .locator('#members-contacts .contact-choice')
-        .filter({ hasText: memberOrphan.name })
+        .filter({ hasText: orphan.name })
         .waitFor();
-      await waitForText(page, '#members-contacts', '添加好友失败');
-      const memberOrphanCalls = await contactCallsFor(memberOrphan.actor_id);
+      await page
+        .locator('#members-contacts .contact-choice')
+        .filter({ hasText: managedOnly.name })
+        .waitFor();
+      const memberPicker = await pickerState('#members-contacts');
       check(
-        '打开添加成员选择器补齐非好友 Agent（human token）',
-        memberOrphanCalls.length === 1 && memberOrphanCalls[0]?.humanAuth === true,
-        memberOrphanCalls,
+        '添加成员候选包含本机与受管 Agent',
+        memberPicker.choices.some((text) => text.includes(orphan.name)) &&
+          memberPicker.choices.some((text) => text.includes(managedOnly.name)),
+        memberPicker.choices,
       );
       checkEqual(
-        '补齐后的 Agent 出现在添加成员选择器',
-        await page
-          .locator('#members-contacts .contact-choice')
-          .filter({ hasText: memberOrphan.name })
-          .count(),
-        1,
+        '添加成员候选不发送好友申请',
+        memberPicker.contactRequests,
+        groupPicker.contactRequests,
       );
-      checkEqual(
-        '添加成员补齐失败不阻塞已有好友展示',
-        await page
-          .locator('#members-contacts .contact-choice')
-          .filter({ hasText: orphan.name })
-          .count(),
-        1,
+      check(
+        '添加成员候选不显示好友申请等待',
+        !memberPicker.text.includes('好友申请待确认') &&
+          !memberPicker.text.includes('添加好友失败'),
+        memberPicker.text,
       );
+      await page.fill('#members-search', orphan.name);
+      await page
+        .locator('#members-contacts .contact-choice')
+        .filter({ hasText: orphan.name })
+        .locator('input')
+        .check();
+      await page.fill('#members-search', managedOnly.name);
+      await page
+        .locator('#members-contacts .contact-choice')
+        .filter({ hasText: managedOnly.name })
+        .locator('input')
+        .check();
+      await page.locator('#members-add').click();
+      await page.waitForFunction(
+        `(() => {
+          const node = document.getElementById('members-current');
+          const text = node ? node.textContent || '' : '';
+          return text.indexOf(${JSON.stringify(orphan.name)}) >= 0 &&
+            text.indexOf(${JSON.stringify(managedOnly.name)}) >= 0;
+        })()`,
+      );
+      const updatedGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_get', {
+        room_id: addTarget.room.room_id,
+      });
+      check(
+        '勾选的本机与受管 Agent 添加成功',
+        updatedGroup.members.some((member) => member.actor_id === orphan.actor_id) &&
+          updatedGroup.members.some((member) => member.actor_id === managedOnly.actor_id),
+        updatedGroup.members,
+      );
+      const tokenLeak = (await page.evaluate(`(() => ({
+        html: document.documentElement.outerHTML.indexOf(${JSON.stringify(data.humanToken)}) >= 0
+      }))()`)) as { html: boolean };
+      check('Agent 候选合并不把 human token 写入页面', !tokenLeak.html, tokenLeak);
       await page.locator('#members-cancel').click();
-      await page.unroute('**/mcp');
       await context.close();
     }
 
@@ -8859,36 +8827,34 @@ async function main(): Promise<void> {
       await page.waitForURL(/\/c\/rm_/);
       const groupId = decodeURIComponent(page.url().split('/c/')[1] ?? '');
       await waitRoom(page, groupId, '加人测试群');
-      // G01-T01 页面状态：邀请中不计入人数，也不出现在当前成员列表。
-      await waitForText(page, '#subtitle', '1 人');
+      // unclaimed Agent A 直接 active：群创建后立即计入成员数，不生成邀请。
+      await waitForText(page, '#subtitle', '2 人');
       await page.locator('#add-members').click();
-      await page.locator('#members-invited .member-roster-item').first().waitFor();
+      await page.locator('#members-current .member-roster-item').first().waitFor();
       checkEqual(
-        '邀请中成员隐藏在当前成员之外',
+        'unclaimed Agent 建群后直接进入当前成员',
         await page
           .locator('#members-current .member-roster-item')
           .filter({ hasText: data.agentA.name })
           .count(),
+        1,
+      );
+      checkEqual(
+        'unclaimed Agent 不产生待确认邀请',
+        await page.locator('#members-invited .member-roster-item').count(),
         0,
       );
-      check(
-        '邀请中成员显示等待确认',
-        ((await page.locator('#members-invited').textContent()) ?? '').includes('等待确认'),
-      );
       checkEqual(
-        '邀请中数量为 1',
+        '邀请中数量为 0',
         await page.locator('#members-invited-count').textContent(),
-        '1',
+        '0',
       );
       checkEqual(
-        '邀请中不计入 active 成员数',
+        'unclaimed Agent 计入 active 成员数',
         await page.locator('#members-current-count').textContent(),
-        '1',
+        '2',
       );
       await page.locator('#members-cancel').click();
-      // Agent A 不是创建者管理的 Agent：先收到邀请，接受后才计入成员数。
-      await acceptRoomInvites(data.agentAToken, groupId);
-      await waitForText(page, '#subtitle', '2 人');
       check(
         '创建群后成员数为 2',
         ((await page.locator('#subtitle').textContent()) ?? '').includes('2 人'),
@@ -9007,15 +8973,22 @@ async function main(): Promise<void> {
         await page.locator('#members-more').click();
       }
       const contactsForGroup = await loadAllContacts(data.humanToken);
+      const managedForGroup = await loadAllManagedAgents(data.humanToken);
       const currentGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_get', {
         room_id: groupId,
       });
       const currentGroupMemberIds = new Set(
         currentGroup.members.map((member) => member.actor_id),
       );
-      const expectedCandidateCount = contactsForGroup.filter(
-        (contact) => !currentGroupMemberIds.has(contact.actor_id),
-      ).length;
+      const candidateIds = new Set(
+        [...contactsForGroup, ...managedForGroup]
+          .map((item) => item.actor_id)
+          .filter(
+            (actorId) =>
+              actorId !== data.human.actor_id && !currentGroupMemberIds.has(actorId),
+          ),
+      );
+      const expectedCandidateCount = candidateIds.size;
       checkEqual(
         '好友分页加载并排除现有成员',
         await page.locator('#members-contacts input[type=checkbox]').count(),
@@ -18297,6 +18270,9 @@ async function main(): Promise<void> {
         return max;
       })()`)) as number;
       await sleep(200);
+      const halfScrollTop = (await olderContext.page.evaluate(
+        `document.getElementById('messages').scrollTop`,
+      )) as number;
       const pagerTopAtHalf = (await olderContext.page.evaluate(
         `document.getElementById('history-pager').getBoundingClientRect().top`,
       )) as number;
@@ -18304,13 +18280,25 @@ async function main(): Promise<void> {
         `document.getElementById('messages').scrollTop = Math.floor(${olderScrollMax} * 0.4)`,
       );
       await sleep(200);
+      const fortyScrollTop = (await olderContext.page.evaluate(
+        `document.getElementById('messages').scrollTop`,
+      )) as number;
       const pagerTopAtForty = (await olderContext.page.evaluate(
         `document.getElementById('history-pager').getBoundingClientRect().top`,
       )) as number;
+      const scrollDelta = halfScrollTop - fortyScrollTop;
       check(
         '加载更早随消息一起滚动',
-        Math.abs(pagerTopAtForty - pagerTopAtHalf - olderScrollMax * 0.1) <= 4,
-        { pagerTopAtHalf, pagerTopAtForty, olderScrollMax },
+        scrollDelta > 0 &&
+          Math.abs(pagerTopAtForty - pagerTopAtHalf - scrollDelta) <= 4,
+        {
+          pagerTopAtHalf,
+          pagerTopAtForty,
+          olderScrollMax,
+          halfScrollTop,
+          fortyScrollTop,
+          scrollDelta,
+        },
       );
 
       // 14f-1. 距顶自动加载：单飞、加载态、锚点保持、到底提示与停止请求。

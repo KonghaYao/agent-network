@@ -544,13 +544,11 @@ async function openGroupModal() {
     const contacts = await loadGroupContacts();
     if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
     picker.setExcluded(identity ? [identity.actor_id] : []);
-    showGroupPicker(contacts);
+    picker.setNote('正在读取本机与受管 Agent…');
     const ownerActorId = identity ? identity.actor_id : '';
-    if (agentContactGaps(ownerActorId, contacts).length === 0) return;
-    picker.setNote('正在同步本机创建的 Agent…');
-    const synced = await addOwnedAgentContacts(ownerActorId, contacts);
+    const merged = await mergeAgentPickerContacts(ownerActorId, contacts);
     if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
-    showGroupPicker(synced.contacts, agentContactSyncError(synced.failed));
+    showGroupPicker(merged.contacts);
   } catch (error) {
     if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
     picker.setContacts([]);
