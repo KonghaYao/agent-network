@@ -1,0 +1,159 @@
+{
+  "task": "Q05",
+  "status": "PASS",
+  "seed": 20261108,
+  "roundsPerScenario": 100,
+  "scenarioFilter": null,
+  "roundFilter": null,
+  "checks": 24548,
+  "stats": {
+    "messages": "每轮 100 并发同意图 + 100 并发同 client_message_id + 冲突对",
+    "claim-accept": {
+      "claimRounds": 100,
+      "claimWinners": 100,
+      "offerRounds": 100,
+      "acceptWinners": 100
+    },
+    "task-transfer-race": {
+      "rounds": 100,
+      "submitted": 24,
+      "transferred": 17,
+      "blocked": 34,
+      "cancelled": 25,
+      "submitWon": 24,
+      "transferWon": 17,
+      "cancelWon": 25,
+      "removeWon": 100
+    },
+    "review-race": {
+      "rounds": 100,
+      "accepted": 100,
+      "returned": 0,
+      "duplicateRejected": 2000,
+      "deterministicReturn": 100
+    },
+    "file-binding": {
+      "total": 100,
+      "submitted": 50,
+      "rolledBack": 50,
+      "removed": 100
+    },
+    "contacts": {
+      "rounds": 100,
+      "acceptCommittedBeforeBlock": 100,
+      "blockPreventedAccept": 0,
+      "blockFirstRejected": 100
+    },
+    "devices": {
+      "rounds": 100,
+      "streamClosed": 100,
+      "postRevokeRejected": 10000
+    },
+    "agent-transfer": {
+      "rounds": 100,
+      "reissueSuccesses": 0,
+      "acceptSuccesses": 100,
+      "preReissueRevoked": 50
+    },
+    "owner-transfer": {
+      "rounds": 100,
+      "dissolved": 71,
+      "transferred": 29,
+      "ownerRetained": 0
+    }
+  },
+  "scenarios": [
+    {
+      "name": "messages",
+      "rounds": 100,
+      "passed": 100,
+      "failed": 0,
+      "checks": 2900,
+      "durationMs": 10533,
+      "failures": []
+    },
+    {
+      "name": "claim-accept",
+      "rounds": 100,
+      "passed": 100,
+      "failed": 0,
+      "checks": 3800,
+      "durationMs": 8266,
+      "failures": []
+    },
+    {
+      "name": "task-transfer-race",
+      "rounds": 100,
+      "passed": 100,
+      "failed": 0,
+      "checks": 2484,
+      "durationMs": 1027,
+      "failures": []
+    },
+    {
+      "name": "review-race",
+      "rounds": 100,
+      "passed": 100,
+      "failed": 0,
+      "checks": 2600,
+      "durationMs": 4211,
+      "failures": []
+    },
+    {
+      "name": "file-binding",
+      "rounds": 100,
+      "passed": 100,
+      "failed": 0,
+      "checks": 2300,
+      "durationMs": 2293,
+      "failures": []
+    },
+    {
+      "name": "contacts",
+      "rounds": 100,
+      "passed": 100,
+      "failed": 0,
+      "checks": 2800,
+      "durationMs": 913,
+      "failures": []
+    },
+    {
+      "name": "devices",
+      "rounds": 100,
+      "passed": 100,
+      "failed": 0,
+      "checks": 2200,
+      "durationMs": 4000,
+      "failures": []
+    },
+    {
+      "name": "agent-transfer",
+      "rounds": 100,
+      "passed": 100,
+      "failed": 0,
+      "checks": 3150,
+      "durationMs": 4117,
+      "failures": []
+    },
+    {
+      "name": "owner-transfer",
+      "rounds": 100,
+      "passed": 100,
+      "failed": 0,
+      "checks": 2184,
+      "durationMs": 964,
+      "failures": []
+    },
+    {
+      "name": "faults",
+      "rounds": 6,
+      "passed": 6,
+      "failed": 0,
+      "checks": 119,
+      "durationMs": 1748,
+      "failures": []
+    }
+  ],
+  "durationMs": 38383,
+  "generatedAt": "2026-11-08T08:32:16.370Z"
+}
