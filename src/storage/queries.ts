@@ -166,6 +166,18 @@ export async function getTaskAssignment(
     .first<TaskAssignmentRow>();
 }
 
+/** D08：按任务内稳定 action_id 读取外部动作对账记录。 */
+export async function getTaskExternalAction(
+  db: D1Like,
+  taskId: string,
+  actionId: string,
+): Promise<import('./rows').TaskExternalActionRow | null> {
+  return db
+    .prepare('SELECT * FROM task_external_actions WHERE task_id = ? AND action_id = ?')
+    .bind(taskId, actionId)
+    .first<import('./rows').TaskExternalActionRow>();
+}
+
 export async function getTaskTransfer(
   db: D1Like,
   transferId: string,

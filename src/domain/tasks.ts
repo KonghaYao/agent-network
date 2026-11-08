@@ -27,6 +27,7 @@ import type {
   TaskOfferInput,
   TaskProgressInput,
   TaskResumeInput,
+  TaskRetryInput,
   TaskSummaryInput,
 } from '../contracts/schemas';
 import {
@@ -66,6 +67,7 @@ import type {
   TaskAssignmentRow,
   TaskAttachmentRow,
   TaskDeliveryRow,
+  TaskExternalStopStatus,
   TaskProgressRow,
   TaskRow,
   TaskSubmissionRow,
@@ -89,6 +91,7 @@ import {
   type TaskProgressView,
 } from './task-progress';
 import { capabilityGuardStatement, roomCapabilitiesFor } from './room-access';
+import { cancelPendingTransfersForTask } from './task-transfers';
 import {
   historyBoundary,
   historySnapshot,
@@ -160,6 +163,11 @@ export interface TaskView {
   updated_at: string;
   accepted_at: string | null;
   cancelled_at: string | null;
+  /** D08：取消审计与操作者声明的外部执行停止状态。 */
+  cancel_reason: string | null;
+  cancelled_by: string | null;
+  cancelled_by_name: string | null;
+  external_stop_status: TaskExternalStopStatus | null;
   /** 追加工作的父任务；只表达关系，不重开父任务。 */
   parent_task_id: string | null;
   /** 可选关联任务；只表达关系。 */
@@ -185,6 +193,12 @@ export interface TaskView {
   can_accept_review: boolean;
   /** 创建者、群 owner 或管理员可显式指定/替换验收人。 */
   can_set_reviewer: boolean;
+  /** 派发者可对 failed 任务发起显式重试并生成新版本。 */
+  can_retry: boolean;
+  /** 当前负责人可把 in_progress 任务标记为外部执行结果未知。 */
+  can_report_execution_unknown: boolean;
+  /** 当前负责人可对 execution_unknown 的动作记录对账结论。 */
+  can_resolve_execution: boolean;
 }
 
 export interface TaskResult {
@@ -286,6 +300,10 @@ function normalizeCancelReason(value: string): string {
 
 function normalizeDeclineReason(value: string | undefined): string {
   return normalizeTaskBody(value, '拒绝原因', LIMITS.taskCancelReasonBytes);
+}
+
+function normalizeRetryReason(value: string): string {
+  return normalizeTaskBody(value, '重试原因', LIMITS.taskRetryReasonBytes);
 }
 
 /**
@@ -565,6 +583,7 @@ async function buildTaskView(
       task.created_by,
       task.reviewer_actor_id,
       ...(task.owner_actor_id ? [task.owner_actor_id] : []),
+      ...(task.cancelled_by ? [task.cancelled_by] : []),
       ...(assignment ? [assignment.owner_actor_id] : []),
       ...progressActorIds([
         ...(latestRow ? [latestRow] : []),
@@ -637,6 +656,12 @@ async function buildTaskView(
     updated_at: String(task.updated_at),
     accepted_at: task.accepted_at === null ? null : String(task.accepted_at),
     cancelled_at: task.cancelled_at === null ? null : String(task.cancelled_at),
+    cancel_reason: task.cancel_reason,
+    cancelled_by: task.cancelled_by,
+    cancelled_by_name: task.cancelled_by
+      ? (nameMap.get(task.cancelled_by) ?? null)
+      : null,
+    external_stop_status: task.external_stop_status,
     assignment:
       assignment === null
         ? null
@@ -684,6 +709,13 @@ async function buildTaskView(
     can_return: canReviewPending,
     can_accept_review: canReviewPending,
     can_set_reviewer: canSetReviewer,
+    can_retry: task.status === 'failed' && canDispatch(task, context),
+    can_report_execution_unknown:
+      task.status === 'in_progress' && task.owner_actor_id === context.caller,
+    can_resolve_execution:
+      task.status === 'blocked' &&
+      task.blocked_reason === 'execution_unknown' &&
+      task.owner_actor_id === context.caller,
     parent_task_id: task.parent_task_id,
     related_task_id: task.related_task_id,
   };
@@ -1428,6 +1460,9 @@ export async function taskCreate(
     updated_at: at,
     accepted_at: null,
     cancelled_at: null,
+    cancelled_by: null,
+    cancel_reason: null,
+    external_stop_status: null,
   };
   const assignment: TaskAssignmentRow | null =
     assigneeId && assignmentId
@@ -1697,6 +1732,12 @@ export async function viewFromKnownRow(
     updated_at: String(task.updated_at),
     accepted_at: task.accepted_at === null ? null : String(task.accepted_at),
     cancelled_at: task.cancelled_at === null ? null : String(task.cancelled_at),
+    cancel_reason: task.cancel_reason,
+    cancelled_by: task.cancelled_by,
+    cancelled_by_name: task.cancelled_by
+      ? ((names ?? new Map<string, string>()).get(task.cancelled_by) ?? null)
+      : null,
+    external_stop_status: task.external_stop_status,
     assignment:
       assignment === null
         ? null
@@ -1740,6 +1781,13 @@ export async function viewFromKnownRow(
     can_return: canReviewPending,
     can_accept_review: canReviewPending,
     can_set_reviewer: canSetReviewer,
+    can_retry: task.status === 'failed' && canDispatch(task, context),
+    can_report_execution_unknown:
+      task.status === 'in_progress' && task.owner_actor_id === context.caller,
+    can_resolve_execution:
+      task.status === 'blocked' &&
+      task.blocked_reason === 'execution_unknown' &&
+      task.owner_actor_id === context.caller,
     parent_task_id: task.parent_task_id,
     related_task_id: task.related_task_id,
   };
@@ -2672,10 +2720,18 @@ export async function taskCancel(
 ): Promise<TaskResult> {
   const { task, context } = await requireVisibleTask(db, principal, input.task_id);
   const reason = normalizeCancelReason(input.reason);
+  // 外部执行是否真正停止只能由操作者声明或后续对账确认；服务端不把取消
+  // 当成“已杀进程”。进行中/受阻默认 unknown，其余状态不需要外部停止。
+  const externalStopStatus: TaskExternalStopStatus =
+    input.external_stop_status ??
+    (task.status === 'in_progress' || task.status === 'blocked'
+      ? 'unknown'
+      : 'not_required');
   const payloadHash = await sha256Hex(
     stableStringify({
       task_id: task.task_id,
       reason,
+      external_stop_status: externalStopStatus,
       expected_revision: input.expected_revision ?? null,
     }),
   );
@@ -2705,15 +2761,23 @@ export async function taskCancel(
   const assignment = task.current_assignment_id
     ? await getTaskAssignment(db, task.current_assignment_id)
     : null;
-  const deliveries = assignment
-    ? await db
-        .prepare(
-          `SELECT * FROM task_deliveries
-            WHERE assignment_id = ? AND kind = 'task_offer'`,
-        )
-        .bind(assignment.assignment_id)
-        .all<TaskDeliveryRow>()
-    : { results: [] as TaskDeliveryRow[] };
+  // 取消必须失效该任务所有仍可唤醒执行者的提醒/接手投递，而不只当前
+  // assignment：旧 assignment 的迟到 claim 同样不能继续。
+  const deliveries = await db
+    .prepare(
+      `SELECT * FROM task_deliveries
+        WHERE task_id = ? AND kind IN ('task_offer', 'task_reminder')
+        ORDER BY created_at ASC, delivery_id ASC`,
+    )
+    .bind(task.task_id)
+    .all<TaskDeliveryRow>();
+  const submissions = await db
+    .prepare(
+      `SELECT submission_id FROM task_submissions
+        WHERE task_id = ? ORDER BY version ASC`,
+    )
+    .bind(task.task_id)
+    .all<{ submission_id: string }>();
   const updated: TaskRow = {
     ...task,
     status: 'cancelled',
@@ -2721,6 +2785,9 @@ export async function taskCancel(
     current_assignment_id: null,
     revision: task.revision + 1,
     cancelled_at: at,
+    cancelled_by: context.caller,
+    cancel_reason: reason,
+    external_stop_status: externalStopStatus,
     updated_at: at,
   };
   const card = await getTaskCard(db, task.task_id);
@@ -2728,6 +2795,7 @@ export async function taskCancel(
     task.created_by,
     task.reviewer_actor_id,
     ...(task.owner_actor_id ? [task.owner_actor_id] : []),
+    context.caller,
   ]);
   const keptDeliveryIds = deliveries.results.map((row) => row.delivery_id);
   const view = await viewFromKnownRow(
@@ -2785,6 +2853,10 @@ export async function taskCancel(
             message_id: delivery.message_id,
             sender_id: task.created_by,
             task_id: task.task_id,
+            assignment_id: row.assignment_id,
+            external_stop_status: externalStopStatus,
+            // 尽力通知宿主：事件已持久化，但不代表外部命令已经停止。
+            host_notify_attempted: true,
           },
         },
         at,
@@ -2793,13 +2865,15 @@ export async function taskCancel(
       inboxHeadStatement(db, delivery.recipient_id, inboxKey, at, 0),
     );
   }
-  // human 没有 delivery；offer/接单状态被取消时用持久个人通知说明控制变化，
-  // 不产生新任务、新 delivery 或 pending_count。
+  // 当前责任者（human 或 Agent）都收到持久个人通知；这不是新待办，也不
+  // 增加 pending_count。Agent 的宿主据此停止继续执行，但服务端不声称
+  // 外部进程已被杀死。
   if (
     assignment &&
-    assignment.delivery_id === null &&
     assignment.owner_actor_id !== context.caller &&
-    (assignment.status === 'offered' || assignment.status === 'active')
+    (assignment.status === 'offered' ||
+      assignment.status === 'active' ||
+      assignment.status === 'submitted')
   ) {
     inboxHumanStatements.push(
       ...inboxTaskEvent(
@@ -2812,10 +2886,23 @@ export async function taskCancel(
         card?.message_id ?? '',
         at,
         0,
-        { reason },
+        {
+          reason,
+          operator: context.caller,
+          external_stop_status: externalStopStatus,
+          host_notify_attempted: true,
+        },
       ),
     );
   }
+  const transferStatements = await cancelPendingTransfersForTask(db, {
+    taskId: task.task_id,
+    actor: context.caller,
+    requestId: input.request_id,
+    at,
+    reason,
+    invalidatedBy: 'cancel',
+  });
 
   try {
     await runIdempotent(db, {
@@ -2836,24 +2923,35 @@ export async function taskCancel(
           .prepare(
             `UPDATE tasks
                 SET status = 'cancelled', owner_actor_id = NULL, current_assignment_id = NULL,
-                    revision = revision + 1, cancelled_at = ?, updated_at = ?
+                    revision = revision + 1, cancelled_at = ?, cancelled_by = ?,
+                    cancel_reason = ?, external_stop_status = ?, updated_at = ?
               WHERE task_id = ? AND status NOT IN ('accepted','cancelled','legacy_completed')
                 AND revision = ?`,
           )
-          .bind(at, at, task.task_id, task.revision),
+          .bind(
+            at,
+            context.caller,
+            reason,
+            externalStopStatus,
+            at,
+            task.task_id,
+            task.revision,
+          ),
         ...(assignment
           ? [
               db
                 .prepare(
                   `UPDATE task_assignments
                       SET status = 'revoked', ended_at = ?, updated_at = ?
-                    WHERE assignment_id = ? AND status IN ('offered','active')`,
+                    WHERE assignment_id = ?
+                      AND status IN ('offered','active','submitted')`,
                 )
                 .bind(at, at, assignment.assignment_id),
             ]
           : []),
         ...deliveryStatements,
         ...inboxHumanStatements,
+        ...transferStatements,
         ...taskRoomEvent(
           db,
           updated,
@@ -2862,10 +2960,393 @@ export async function taskCancel(
           at,
           {
             changed_by: context.caller,
+            operator: context.caller,
             reason,
+            external_stop_status: externalStopStatus,
+            host_notify_attempted: true,
+            preserved_submission_ids: submissions.results.map((row) => row.submission_id),
+            preserved_submission_count: submissions.results.length,
           },
         ).statements,
       ],
+    });
+  } catch (error) {
+    await rethrowWithActualState(db, task.task_id, error);
+  }
+  return result;
+}
+
+/**
+ * D08 显式重试/重派 failed 任务。
+ *
+ * failed 不是可恢复的 in_progress：重试必须由派发者给出新的原因与新版本。
+ * 同一事务撤销旧 assignment、关闭旧投递与 pending 交接，递增 task_revision；
+ * 指定 assignee 时生成新的 assignment_version 与 offer，否则回到 unassigned。
+ * 旧负责人不能再写进度、继续派活或提交旧成果。
+ */
+export async function taskRetry(
+  db: D1Database,
+  principal: Principal,
+  input: TaskRetryInput,
+): Promise<TaskResult> {
+  const { task, context } = await requireVisibleTask(db, principal, input.task_id);
+  const reason = normalizeRetryReason(input.reason);
+  const payloadHash = await sha256Hex(
+    stableStringify({
+      task_id: task.task_id,
+      reason,
+      assignee_actor_id: input.assignee_actor_id ?? null,
+      expected_revision: input.expected_revision ?? null,
+    }),
+  );
+  const replay = await getOperation(db, context.caller, input.request_id);
+  if (replay) return resolveOperation(replay, payloadHash) as TaskResult;
+  if (!canDispatch(task, context)) {
+    throw new BusinessError('PERMISSION_DENIED', '只有创建者、群 owner 或管理员可以重试任务');
+  }
+  if (input.expected_revision !== undefined && input.expected_revision !== task.revision) {
+    throw new BusinessError('VERSION_CONFLICT', '任务版本已变化，请刷新后重试', {
+      expected: input.expected_revision,
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+  if (task.status !== 'failed') {
+    throw new BusinessError('CONFLICT', '只有失败任务可以显式重试', {
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+  const assigneeId = input.assignee_actor_id ?? null;
+  if (assigneeId === task.reviewer_actor_id) {
+    throw invalid('候选负责人', '不能是当前验收人；执行者不能验收自己的交付');
+  }
+  const candidate = assigneeId
+    ? await assertTaskParticipant(db, context.room, assigneeId, '候选负责人', task.created_at)
+    : null;
+  if (candidate) {
+    if (await blockedBetween(db, context.caller, candidate.actor_id)) {
+      throw new BusinessError('BLOCKED', '对方已拉黑，不能重新派发任务');
+    }
+    if (
+      task.created_by !== context.caller &&
+      (await blockedBetween(db, task.created_by, candidate.actor_id))
+    ) {
+      throw new BusinessError('BLOCKED', '任务创建者与候选负责人之间存在拉黑关系');
+    }
+    if (
+      task.reviewer_actor_id !== context.caller &&
+      (await blockedBetween(db, task.reviewer_actor_id, candidate.actor_id))
+    ) {
+      throw new BusinessError('BLOCKED', '验收人与候选负责人之间存在拉黑关系');
+    }
+  }
+
+  const at = nowMs();
+  const priorAssignment = task.current_assignment_id
+    ? await getTaskAssignment(db, task.current_assignment_id)
+    : null;
+  const card = await getTaskCard(db, task.task_id);
+  const assignmentId = candidate ? newId('asg') : null;
+  const versionRow = candidate
+    ? await db
+        .prepare(
+          'SELECT COALESCE(MAX(assignment_version), 0) + 1 AS version FROM task_assignments WHERE task_id = ?',
+        )
+        .bind(task.task_id)
+        .first<{ version: number }>()
+    : null;
+  const assignmentVersion = versionRow?.version ?? 1;
+  const canDeliver = candidate !== null && candidate.kind === 'agent';
+  const priorDelivery =
+    canDeliver && card
+      ? await db
+          .prepare(
+            'SELECT 1 AS n FROM deliveries WHERE recipient_id = ? AND message_id = ? LIMIT 1',
+          )
+          .bind(candidate.actor_id, card.message_id)
+          .first<{ n: number }>()
+      : null;
+  const needsNewCard = Boolean(priorDelivery);
+  const offerCardMessageId = needsNewCard ? newId('msg') : (card?.message_id ?? '');
+  const offerCardEventKey = `message:${offerCardMessageId}`;
+  const deliveryId = canDeliver ? newId('dlv') : null;
+  const newAssignment: TaskAssignmentRow | null =
+    candidate && assignmentId
+      ? {
+          assignment_id: assignmentId,
+          task_id: task.task_id,
+          assignment_version: assignmentVersion,
+          owner_actor_id: candidate.actor_id,
+          status: 'offered',
+          offered_by: context.caller,
+          offer_expires_at: at + LIMITS.taskOfferTtlMs,
+          accepted_at: null,
+          ended_at: null,
+          last_progress_at: null,
+          delivery_id: deliveryId,
+          created_at: at,
+          updated_at: at,
+        }
+      : null;
+  const updated: TaskRow = {
+    ...task,
+    status: candidate ? 'offered' : 'unassigned',
+    owner_actor_id: null,
+    current_assignment_id: assignmentId,
+    revision: task.revision + 1,
+    blocked_reason: null,
+    blocked_at: null,
+    last_progress_at: null,
+    updated_at: at,
+  };
+  const cardBody = `【任务卡】${task.title}`;
+  const newCardCore: MessageCore | null =
+    candidate && needsNewCard && assignmentId
+      ? {
+          messageId: offerCardMessageId,
+          roomId: task.room_id,
+          senderId: context.caller,
+          clientMessageId: `taskretry_${assignmentId}`,
+          body: cardBody,
+          preview: truncateUtf8(cardBody, LIMITS.previewBytes),
+          bodyBytes: utf8Bytes(cardBody),
+          replyTo: null,
+          rootId: null,
+          rootKey: offerCardMessageId,
+          hop: 0,
+          invoke: [],
+          mentionAll: false,
+          mentions: [],
+          reminders: [],
+          deliveries: [],
+          eventKey: offerCardEventKey,
+          at,
+        }
+      : null;
+  if (candidate && !card) {
+    throw new BusinessError('CONFLICT', '任务卡片不存在，不能重新派发');
+  }
+
+  const names = await actorNames(db, [
+    context.caller,
+    task.reviewer_actor_id,
+    ...(candidate ? [candidate.actor_id] : []),
+    ...(task.owner_actor_id ? [task.owner_actor_id] : []),
+  ]);
+  const view = await viewFromKnownRow(
+    db,
+    context,
+    updated,
+    offerCardMessageId,
+    newAssignment,
+    deliveryId ? [deliveryId] : [],
+    await attachmentsFor(db, task.task_id),
+    names,
+  );
+  const result: TaskResult = {
+    task: view,
+    authorization: historySnapshot(context.boundary),
+  };
+
+  const deliveryRows = await db
+    .prepare('SELECT * FROM task_deliveries WHERE task_id = ?')
+    .bind(task.task_id)
+    .all<TaskDeliveryRow>();
+  const closeStatements: D1PreparedStatement[] = [];
+  for (const row of deliveryRows.results) {
+    const delivery = await getDelivery(db, row.delivery_id);
+    if (!delivery || (delivery.state !== 'pending' && delivery.state !== 'claimed')) continue;
+    const inboxKey = `retry:${delivery.delivery_id}:${input.request_id}`;
+    closeStatements.push(
+      db
+        .prepare(
+          `UPDATE actors
+              SET pending_count = pending_count - (
+                    SELECT CASE WHEN state = 'pending' THEN 1 ELSE 0 END
+                      FROM deliveries WHERE delivery_id = ?
+                  ),
+                  updated_at = ?
+            WHERE actor_id = ?`,
+        )
+        .bind(delivery.delivery_id, at, delivery.recipient_id),
+      db
+        .prepare(
+          `UPDATE deliveries SET state = 'cancelled', error = ?, updated_at = ?
+            WHERE delivery_id = ? AND state IN ('pending', 'claimed')`,
+        )
+        .bind(reason, at, delivery.delivery_id),
+      eventStatement(
+        db,
+        {
+          eventKey: inboxKey,
+          scopeKind: 'inbox',
+          scopeId: delivery.recipient_id,
+          eventType: 'delivery_cancelled',
+          refId: delivery.delivery_id,
+          metadata: {
+            reason,
+            actor_id: context.caller,
+            room_id: delivery.room_id,
+            message_id: delivery.message_id,
+            sender_id: task.created_by,
+            task_id: task.task_id,
+            assignment_id: row.assignment_id,
+            invalidated_by: 'retry',
+          },
+        },
+        at,
+      ),
+      outboxStatement(db, { topic: inboxTopic(delivery.recipient_id), eventKey: inboxKey }, at),
+      inboxHeadStatement(db, delivery.recipient_id, inboxKey, at, 0),
+    );
+  }
+  const transferStatements = await cancelPendingTransfersForTask(db, {
+    taskId: task.task_id,
+    actor: context.caller,
+    requestId: input.request_id,
+    at,
+    reason,
+    invalidatedBy: 'retry',
+  });
+
+  try {
+    await runIdempotent(db, {
+      actorId: context.caller,
+      requestId: input.request_id,
+      payloadHash,
+      result,
+      build: (resultJson) => [
+        operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
+        memberGuard(db, task.room_id, context.caller),
+        taskRevisionGuard(db, task.task_id, task.revision),
+        taskStateGuard(db, task.task_id, "status = 'failed'"),
+        ...(candidate
+          ? [participantGuard(db, task.room_id, candidate.actor_id)]
+          : []),
+        ...(candidate
+          ? [contactBlockGuardStatement(db, context.caller, candidate.actor_id)]
+          : []),
+        ...(candidate && task.created_by !== context.caller
+          ? [contactBlockGuardStatement(db, task.created_by, candidate.actor_id)]
+          : []),
+        ...(candidate && task.reviewer_actor_id !== context.caller
+          ? [contactBlockGuardStatement(db, task.reviewer_actor_id, candidate.actor_id)]
+          : []),
+        db
+          .prepare(
+            `UPDATE task_assignments
+                SET status = 'revoked', ended_at = ?, updated_at = ?
+              WHERE task_id = ? AND status IN ('offered','active')`,
+          )
+          .bind(at, at, task.task_id),
+        db
+          .prepare(
+            `UPDATE tasks
+                SET status = ?, owner_actor_id = NULL, current_assignment_id = ?,
+                    revision = revision + 1, blocked_reason = NULL, blocked_at = NULL,
+                    last_progress_at = NULL, updated_at = ?
+              WHERE task_id = ? AND status = 'failed' AND revision = ?`,
+          )
+          .bind(
+            candidate ? 'offered' : 'unassigned',
+            assignmentId,
+            at,
+            task.task_id,
+            task.revision,
+          ),
+        ...closeStatements,
+        ...transferStatements,
+        ...(candidate && assignmentId && newAssignment
+          ? [
+              db
+                .prepare(
+                  `INSERT INTO task_assignments
+                     (assignment_id, task_id, assignment_version, owner_actor_id, status,
+                      offered_by, offer_expires_at, accepted_at, ended_at, last_progress_at,
+                      delivery_id, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, 'offered', ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
+                )
+                .bind(
+                  assignmentId,
+                  task.task_id,
+                  assignmentVersion,
+                  candidate.actor_id,
+                  context.caller,
+                  newAssignment.offer_expires_at,
+                  deliveryId,
+                  at,
+                  at,
+                ),
+            ]
+          : []),
+        ...(newCardCore
+          ? [
+              ...messageCoreStatements(db, newCardCore),
+              db
+                .prepare(
+                  `UPDATE task_cards SET message_id = ?, created_at = ?
+                    WHERE task_id = ?`,
+                )
+                .bind(offerCardMessageId, at, task.task_id),
+            ]
+          : []),
+        ...(candidate && assignmentId && newAssignment && deliveryId
+          ? offerDeliveryStatements(db, {
+              deliveryId,
+              recipientId: candidate.actor_id,
+              roomId: task.room_id,
+              cardMessageId: offerCardMessageId,
+              cardEventKey: offerCardEventKey,
+              senderId: task.created_by,
+              task: updated,
+              assignment: newAssignment,
+              at,
+            })
+          : []),
+        ...(candidate && candidate.kind === 'human' && candidate.actor_id !== context.caller
+          ? inboxTaskEvent(
+              db,
+              candidate.actor_id,
+              `task:retry-offer:${assignmentId}`,
+              'task_offered',
+              updated,
+              newAssignment,
+              offerCardMessageId,
+              at,
+              0,
+              { reason, retried: true },
+            )
+          : []),
+        ...taskRoomEvent(
+          db,
+          updated,
+          'task_retried',
+          `task:retried:${task.task_id}:${updated.revision}`,
+          at,
+          {
+            changed_by: context.caller,
+            operator: context.caller,
+            reason,
+            previous_assignment_id: priorAssignment?.assignment_id ?? null,
+            previous_assignment_version: priorAssignment?.assignment_version ?? null,
+            assignment_id: assignmentId,
+            assignment_version: candidate ? assignmentVersion : null,
+            assignee_actor_id: candidate?.actor_id ?? null,
+          },
+        ).statements,
+      ],
+      onUniqueConflict: async (error) => {
+        const text = String(error);
+        if (
+          text.includes('idx_task_assignments_current') ||
+          text.includes('idx_task_deliveries_assignment_kind') ||
+          text.includes('UNIQUE constraint failed: deliveries.recipient_id, deliveries.message_id')
+        ) {
+          throw new BusinessError('CONFLICT', '该任务已被重新派发或该卡片已向该 Agent 派发过', {
+            task_id: task.task_id,
+          });
+        }
+        return undefined;
+      },
     });
   } catch (error) {
     await rethrowWithActualState(db, task.task_id, error);
@@ -2942,6 +3423,15 @@ async function taskProgressAction(
     throw new BusinessError('CONFLICT', '只有受阻任务可以恢复执行', {
       ...(await actualTaskState(db, task.task_id)),
     });
+  }
+  if (action === 'resume' && task.blocked_reason === 'execution_unknown') {
+    // 外部结果未知时不能靠“恢复执行”绕过对账；必须先记录 confirmed/
+    // not_executed/rejected 结论，避免盲目重复副作用。
+    throw new BusinessError(
+      'CONFLICT',
+      '外部执行结果未知，请先使用 network_task_execution_resolve 记录对账结论',
+      { ...(await actualTaskState(db, task.task_id)) },
+    );
   }
   if (task.owner_actor_id !== context.caller) {
     // 曾持有执行资格但已被交接/撤权的旧负责人，不能用旧身份写进度：

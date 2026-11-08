@@ -496,6 +496,38 @@ export interface TaskRow {
   updated_at: number;
   accepted_at: number | null;
   cancelled_at: number | null;
+  /** D08：取消操作者、原因与操作者声明的外部执行停止状态。 */
+  cancelled_by: string | null;
+  cancel_reason: string | null;
+  external_stop_status: TaskExternalStopStatus | null;
+}
+
+export type TaskExternalStopStatus = 'confirmed' | 'unknown' | 'not_required';
+
+export type TaskExternalActionState = 'unknown' | 'confirmed' | 'not_executed' | 'rejected';
+
+/** D08：可能产生外部副作用的动作与对账结论；同一任务内 action_id 唯一。 */
+export interface TaskExternalActionRow {
+  action_id: string;
+  task_id: string;
+  intent: string;
+  state: TaskExternalActionState;
+  evidence: string;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+}
+
+/** D08：任务催办窗口；event_key 与窗口锚点共同保证重启后不重复提醒。 */
+export interface TaskReminderRow {
+  reminder_id: string;
+  task_id: string;
+  assignment_id: string;
+  assignment_version: number;
+  owner_actor_id: string;
+  anchor_at: number;
+  event_key: string;
+  created_at: number;
 }
 
 export interface TaskAssignmentRow {

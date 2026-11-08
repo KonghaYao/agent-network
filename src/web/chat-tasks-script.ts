@@ -338,6 +338,18 @@ function renderTaskDetail(task) {
   if (taskDetailBodyElement) taskDetailBodyElement.replaceChildren();
   const statusValue = taskDetailRow('状态', taskStatusText(task));
   if (statusValue) statusValue.className = 'task-status ' + taskStatusClass(task.status);
+  if (task.status === 'cancelled') {
+    if (task.cancel_reason) taskDetailRow('取消原因', task.cancel_reason);
+    if (task.cancelled_by_name) taskDetailRow('取消操作者', task.cancelled_by_name);
+    const externalLabels = {
+      confirmed: '操作者确认已停止（不是服务端强一致保证）',
+      unknown: '未知或待核对',
+      not_required: '不涉及外部执行'
+    };
+    if (task.external_stop_status) {
+      taskDetailRow('外部执行', externalLabels[task.external_stop_status] || task.external_stop_status);
+    }
+  }
   appendTaskProgressDetail(task);
   appendTaskSubmissionDetail(task);
   taskDetailRow('创建者', task.created_by_name);
@@ -553,6 +565,22 @@ function renderTaskDetailActions(task) {
     reason.maxLength = 300;
     reason.placeholder = '取消原因';
     reason.setAttribute('aria-label', '取消原因');
+    const externalStop = document.createElement('select');
+    externalStop.className = 'task-cancel-reason task-cancel-stop';
+    externalStop.setAttribute('aria-label', '外部执行停止状态');
+    const stopOptions = [
+      { value: 'unknown', label: '外部执行未确认停止' },
+      { value: 'confirmed', label: '操作者确认已停止' },
+      { value: 'not_required', label: '不涉及外部执行' }
+    ];
+    for (const option of stopOptions) {
+      const item = document.createElement('option');
+      item.value = option.value;
+      item.textContent = option.label;
+      externalStop.append(item);
+    }
+    externalStop.value =
+      task.status === 'in_progress' || task.status === 'blocked' ? 'unknown' : 'not_required';
     const cancel = document.createElement('button');
     cancel.type = 'button';
     cancel.className = 'danger';
@@ -567,14 +595,16 @@ function renderTaskDetailActions(task) {
           request_id: requestId('task_cancel'),
           task_id: task.task_id,
           reason: reason.value.trim(),
+          external_stop_status: externalStop.value,
           expected_revision: task.revision
         });
       }, '取消失败');
     });
-    actions.append(reason, cancel);
+    actions.append(reason, externalStop, cancel);
   }
 
   renderTaskProgressActions(task, actions, run, error);
+  renderTaskRecoveryActions(task, actions, run, error);
   renderTaskSubmissionActions(task, actions, run, error);
   renderTaskReviewActions(task, actions, run, error);
 

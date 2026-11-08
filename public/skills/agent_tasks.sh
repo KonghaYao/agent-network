@@ -1,5 +1,6 @@
 #!/bin/bash
-# WeBots 任务命令：list/summary/get/create/offer/accept/decline/claim/cancel/progress/block/resume。
+# WeBots 任务命令：list/summary/get/create/offer/accept/decline/claim/cancel/retry/
+# execution-unknown/execution-resolve/progress/block/resume。
 # 依赖 curl、jq。token 只从环境变量读取，写入 0600 临时 curl 配置，不进入进程参数或日志。
 # 用法：AGENTNET_TOKEN=... bash agent_tasks.sh <command> [options]
 # 安装：curl -fsSL https://net.peri-code.dev/skills/agent_tasks.sh -o agent_tasks.sh
@@ -135,8 +136,15 @@ usage() {
       当前候选负责人拒绝指定 offer；任务回到 unassigned，不自动改派。
   claim --task TASK_ID [--expected-revision N]
       human 或 Agent 领取 unassigned 任务；并发领取返回 CLAIM_CONFLICT。
-  cancel --task TASK_ID --reason TEXT [--expected-revision N]
+  cancel --task TASK_ID --reason TEXT [--external-stop-status STATUS] [--expected-revision N]
       创建者、当前负责人或群 owner/管理员取消任务；reason 必填。
+      STATUS 为 confirmed/unknown/not_required；confirmed 只是操作者声明。
+  retry --task TASK_ID --reason TEXT [--assignee ACTOR_ID] [--expected-revision N]
+      创建者、群 owner 或管理员显式重试 failed 任务；生成新 revision/assignment_version。
+  execution-unknown --task TASK_ID --action ACTION_ID --reason TEXT [options]
+      当前负责人把 in_progress 任务标记为 execution_unknown；不自动重跑外部步骤。
+  execution-resolve --task TASK_ID --action ACTION_ID --outcome confirmed|not_executed|rejected --evidence TEXT [options]
+      记录外部动作对账结论；confirmed/not_executed 恢复执行，rejected 保持 blocked。
   progress --task TASK_ID [--note TEXT] [--percent 0-100] [options]
       当前负责人上报进度；note 与 percent 至少一项，任务仍为 in_progress。
   block --task TASK_ID --reason TEXT [options]
@@ -432,11 +440,12 @@ cmd_claim() {
 }
 
 cmd_cancel() {
-  local task="" reason="" request_id="" revision=""
+  local task="" reason="" request_id="" revision="" stop_status=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --task) need_value "$@"; task="${2:-}"; shift 2 ;;
       --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
+      --external-stop-status) need_value "$@"; stop_status="${2:-}"; shift 2 ;;
       --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
       --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
       *) die "unknown cancel option: $1" ;;
@@ -446,8 +455,10 @@ cmd_cancel() {
   [ -n "$reason" ] || die "cancel requires --reason"
   [ -n "$request_id" ] || request_id=$(new_id)
   local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg reason "$reason" --arg revision "$revision" \
+  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg reason "$reason" \
+    --arg revision "$revision" --arg stop_status "$stop_status" \
     '{request_id:$request_id, task_id:$task, reason:$reason}
+      + (if $stop_status == "" then {} else {external_stop_status:$stop_status} end)
       + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
   result=$(mcp_call network_task_cancel "$args") || exit 1
   result=$(printf '%s' "$result" | mcp_result) || exit 1
@@ -455,7 +466,109 @@ cmd_cancel() {
     print_json "$result"
     return
   fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\t\(.task.cancelled_at // "-")"'
+  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\t\(.task.cancelled_at // "-")\texternal_stop=\(.task.external_stop_status // "-")"'
+}
+
+cmd_retry() {
+  local task="" reason="" assignee="" request_id="" revision=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
+      --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
+      --assignee) need_value "$@"; assignee="${2:-}"; shift 2 ;;
+      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
+      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
+      *) die "unknown retry option: $1" ;;
+    esac
+  done
+  [ -n "$task" ] || die "retry requires --task"
+  [ -n "$reason" ] || die "retry requires --reason"
+  [ -n "$request_id" ] || request_id=$(new_id)
+  local args result
+  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg reason "$reason" \
+    --arg assignee "$assignee" --arg revision "$revision" \
+    '{request_id:$request_id, task_id:$task, reason:$reason}
+      + (if $assignee == "" then {} else {assignee_actor_id:$assignee} end)
+      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
+  result=$(mcp_call network_task_retry "$args") || exit 1
+  result=$(printf '%s' "$result" | mcp_result) || exit 1
+  if [ "$JSON" = "1" ]; then
+    print_json "$result"
+    return
+  fi
+  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\trevision=\(.task.revision)\tassignment_version=\(.task.assignment.assignment_version // "-")"'
+}
+
+cmd_execution_unknown() {
+  local task="" action="" reason="" assignment="" version="" request_id="" revision=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
+      --action) need_value "$@"; action="${2:-}"; shift 2 ;;
+      --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
+      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
+      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
+      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
+      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
+      *) die "unknown execution-unknown option: $1" ;;
+    esac
+  done
+  [ -n "$task" ] || die "execution-unknown requires --task"
+  [ -n "$action" ] || die "execution-unknown requires --action"
+  [ -n "$reason" ] || die "execution-unknown requires --reason"
+  [ -n "$request_id" ] || request_id=$(new_id)
+  local args result
+  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg action "$action" \
+    --arg reason "$reason" --arg assignment "$assignment" --arg version "$version" \
+    --arg revision "$revision" \
+    '{request_id:$request_id, task_id:$task, action_id:$action, reason:$reason}
+      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
+      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
+      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
+  result=$(mcp_call network_task_execution_unknown "$args") || exit 1
+  result=$(printf '%s' "$result" | mcp_result) || exit 1
+  if [ "$JSON" = "1" ]; then
+    print_json "$result"
+    return
+  fi
+  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\taction=\(.action.action_id)\tstate=\(.action.state)"'
+}
+
+cmd_execution_resolve() {
+  local task="" action="" outcome="" evidence="" assignment="" version="" request_id="" revision=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
+      --action) need_value "$@"; action="${2:-}"; shift 2 ;;
+      --outcome) need_value "$@"; outcome="${2:-}"; shift 2 ;;
+      --evidence) need_value "$@"; evidence="${2:-}"; shift 2 ;;
+      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
+      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
+      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
+      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
+      *) die "unknown execution-resolve option: $1" ;;
+    esac
+  done
+  [ -n "$task" ] || die "execution-resolve requires --task"
+  [ -n "$action" ] || die "execution-resolve requires --action"
+  [ -n "$outcome" ] || die "execution-resolve requires --outcome"
+  [ -n "$evidence" ] || die "execution-resolve requires --evidence"
+  [ -n "$request_id" ] || request_id=$(new_id)
+  local args result
+  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg action "$action" \
+    --arg outcome "$outcome" --arg evidence "$evidence" --arg assignment "$assignment" \
+    --arg version "$version" --arg revision "$revision" \
+    '{request_id:$request_id, task_id:$task, action_id:$action, outcome:$outcome, evidence:$evidence}
+      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
+      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
+      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
+  result=$(mcp_call network_task_execution_resolve "$args") || exit 1
+  result=$(printf '%s' "$result" | mcp_result) || exit 1
+  if [ "$JSON" = "1" ]; then
+    print_json "$result"
+    return
+  fi
+  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\taction=\(.action.action_id)\tstate=\(.action.state)"'
 }
 
 cmd_progress() {
@@ -567,6 +680,9 @@ case "$COMMAND" in
   decline) cmd_decline "$@" ;;
   claim) cmd_claim "$@" ;;
   cancel) cmd_cancel "$@" ;;
+  retry) cmd_retry "$@" ;;
+  execution-unknown) cmd_execution_unknown "$@" ;;
+  execution-resolve) cmd_execution_resolve "$@" ;;
   progress) cmd_progress "$@" ;;
   block) cmd_block "$@" ;;
   resume) cmd_resume "$@" ;;

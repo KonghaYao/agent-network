@@ -55,6 +55,7 @@ import { runTaskHandoffAcceptance } from './lib/task-handoff-acceptance';
 import { runTaskTransferAcceptance } from './lib/task-transfer-acceptance';
 import { runTaskSubmissionAcceptance } from './lib/task-submission-acceptance';
 import { runTaskReviewAcceptance } from './lib/task-review-acceptance';
+import { runTaskRecoveryAcceptance } from './lib/task-recovery-acceptance';
 import { runFeedbackAcceptance } from './lib/feedback-acceptance';
 import { runGroupMentionAcceptance } from './lib/mention-acceptance';
 import { runGroupNoImplicitDeliveryAcceptance } from './lib/no-implicit-delivery-acceptance';
@@ -1336,6 +1337,7 @@ async function main(): Promise<void> {
     await runTaskHandoffAcceptance();
     await runTaskSubmissionAcceptance();
     await runTaskReviewAcceptance();
+    await runTaskRecoveryAcceptance();
     await runFeedbackAcceptance();
     await runGroupMentionAcceptance();
     await runGroupNoImplicitDeliveryAcceptance();

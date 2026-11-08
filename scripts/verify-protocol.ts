@@ -337,6 +337,9 @@ async function main(): Promise<void> {
     'network_task_decline',
     'network_task_claim',
     'network_task_cancel',
+    'network_task_retry',
+    'network_task_execution_unknown',
+    'network_task_execution_resolve',
     'network_task_progress',
     'network_task_block',
     'network_task_resume',
@@ -446,6 +449,9 @@ async function main(): Promise<void> {
     'network_task_decline',
     'network_task_claim',
     'network_task_cancel',
+    'network_task_retry',
+    'network_task_execution_unknown',
+    'network_task_execution_resolve',
     'network_task_progress',
     'network_task_block',
     'network_task_resume',
@@ -717,6 +723,9 @@ async function main(): Promise<void> {
     'network_task_decline',
     'network_task_claim',
     'network_task_cancel',
+    'network_task_retry',
+    'network_task_execution_unknown',
+    'network_task_execution_resolve',
     'network_task_progress',
     'network_task_block',
     'network_task_resume',
@@ -739,7 +748,7 @@ async function main(): Promise<void> {
     'network_task_reviewer_set',
   ];
   check(
-    '任务 29 个工具全部注册且旧工具已退役',
+    '任务 32 个工具全部注册且旧工具已退役',
     taskToolNames.every((name) => taskTools.has(name)) &&
       taskTools.size === taskToolNames.length &&
       !taskTools.has('network_task_list_get') &&
@@ -880,11 +889,80 @@ async function main(): Promise<void> {
   );
   const taskCancelDescription = taskTools.get('network_task_cancel')?.description ?? '';
   check(
-    'task_cancel 描述声明权限、必填 reason 与关闭关联 delivery',
+    'task_cancel 描述声明权限、外部停止状态与关闭关联 delivery',
     taskCancelDescription.includes('创建者、当前负责人或群 owner/管理员可用') &&
       taskCancelDescription.includes('reason 必填') &&
-      taskCancelDescription.includes('关闭仍 pending/claimed 的关联 delivery'),
+      taskCancelDescription.includes('task_offer/task_reminder 投递') &&
+      taskCancelDescription.includes('external_stop_status') &&
+      taskCancelDescription.includes('confirmed 只是操作者声明') &&
+      taskCancelDescription.includes('保留成果与验收审计'),
     taskCancelDescription,
+  );
+  const taskCancelInput = JSON.stringify(taskTools.get('network_task_cancel')?.inputSchema ?? {});
+  check(
+    'task_cancel 输入含 external_stop_status/expected_revision',
+    ['request_id', 'task_id', 'reason', 'expected_revision', 'external_stop_status'].every((key) =>
+      taskCancelInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_cancel')?.inputSchema,
+  );
+  const taskRetryInput = JSON.stringify(taskTools.get('network_task_retry')?.inputSchema ?? {});
+  check(
+    'task_retry 输入含新原因/候选负责人/expected_revision',
+    ['request_id', 'task_id', 'reason', 'assignee_actor_id', 'expected_revision'].every((key) =>
+      taskRetryInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_retry')?.inputSchema,
+  );
+  const taskRetryDescription = taskTools.get('network_task_retry')?.description ?? '';
+  check(
+    'task_retry 描述声明仅 failed、新版本与旧资格失效',
+    taskRetryDescription.includes('failed 任务') &&
+      taskRetryDescription.includes('新的 assignment_version') &&
+      taskRetryDescription.includes('旧负责人的进度、成果和继续派活资格失效') &&
+      taskRetryDescription.includes('对账'),
+    taskRetryDescription,
+  );
+  const executionUnknownInput = JSON.stringify(
+    taskTools.get('network_task_execution_unknown')?.inputSchema ?? {},
+  );
+  check(
+    'task_execution_unknown 输入含 action_id/reason/执行版本与 revision',
+    ['request_id', 'task_id', 'action_id', 'reason', 'assignment_id', 'assignment_version', 'expected_revision'].every(
+      (key) => executionUnknownInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_execution_unknown')?.inputSchema,
+  );
+  const executionResolveInput = JSON.stringify(
+    taskTools.get('network_task_execution_resolve')?.inputSchema ?? {},
+  );
+  check(
+    'task_execution_resolve 输入含 outcome/evidence 与 revision',
+    ['request_id', 'task_id', 'action_id', 'outcome', 'evidence', 'expected_revision'].every(
+      (key) => executionResolveInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_execution_resolve')?.inputSchema,
+  );
+  const recoveryOutput = JSON.stringify(
+    taskTools.get('network_task_execution_unknown')?.outputSchema ?? {},
+  );
+  check(
+    'task_execution_unknown 输出含 action 状态与证据字段',
+    ['action_id', 'state', 'evidence', 'task', 'authorization'].every((key) =>
+      recoveryOutput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_execution_unknown')?.outputSchema,
+  );
+  const executionResolveDescription =
+    taskTools.get('network_task_execution_resolve')?.description ?? '';
+  check(
+    'task_execution_resolve 描述声明对账结论与不写正文',
+    executionResolveDescription.includes('confirmed') &&
+      executionResolveDescription.includes('not_executed') &&
+      executionResolveDescription.includes('rejected') &&
+      executionResolveDescription.includes('证据只存 task_external_actions') &&
+      executionResolveDescription.includes('不写消息正文'),
+    executionResolveDescription,
   );
   const taskProgressInput = JSON.stringify(
     taskTools.get('network_task_progress')?.inputSchema ?? {},
@@ -2559,6 +2637,15 @@ async function main(): Promise<void> {
       !homeHtml.includes('taskDetailBodyElement.innerHTML') &&
       !homeHtml.includes('myTasksListElement.innerHTML'),
   );
+  check(
+    '任务 UI 包含 D08 重试、执行未知、对账与外部停止状态',
+    homeHtml.includes('network_task_retry') &&
+      homeHtml.includes('network_task_execution_unknown') &&
+      homeHtml.includes('network_task_execution_resolve') &&
+      homeHtml.includes('task-cancel-stop') &&
+      homeHtml.includes('renderTaskRecoveryActions') &&
+      homeHtml.includes('操作者确认已停止'),
+  );
 
   const skillDoc = await fetch(`${baseUrl()}/skills/agent-network-skills.md`);
   checkEqual('GET /skills/agent-network-skills.md 返回 200', skillDoc.status, 200);
@@ -2634,6 +2721,24 @@ async function main(): Promise<void> {
       '任务卡片'].every((marker) =>
       skillDocText.includes(marker),
     ),
+    skillDocText.slice(0, 300),
+  );
+  check(
+    '静态技能声明 D08 催办、取消与异常恢复',
+    [
+      'network_task_retry',
+      'network_task_execution_unknown',
+      'network_task_execution_resolve',
+      'external_stop_status',
+      'execution_unknown',
+      'confirmed',
+      'not_executed',
+      'rejected',
+      'task_reminder',
+      'task.reminder',
+      '不增加 `pending_count`',
+      '服务重启不恢复旧进程栈',
+    ].every((marker) => skillDocText.includes(marker)),
     skillDocText.slice(0, 300),
   );
   check(

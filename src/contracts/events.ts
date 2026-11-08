@@ -10,6 +10,10 @@ export const DELIVERY_REMINDER_SOURCE = 'delivery.reminder';
 export const MENTION_REMINDER_EVENT = 'mention_reminder';
 /** 提及提醒在统一 stream 中的 source；不产生 delivery 或待办。 */
 export const MENTION_REMINDER_SOURCE = 'mention.reminder';
+/** in_progress 任务长时间没有 progress 更新时写入责任者 inbox 的催办。 */
+export const TASK_REMINDER_EVENT = 'task_reminder';
+/** 任务催办在统一 stream 中的 source；不是新任务、assignment 或 delivery。 */
+export const TASK_REMINDER_SOURCE = 'task.reminder';
 
 /**
  * Callback endpoint 验证失败的错误码。

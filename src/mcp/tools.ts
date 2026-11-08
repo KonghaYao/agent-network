@@ -82,6 +82,8 @@ import {
   taskClaimSchema,
   taskCreateSchema,
   taskDeclineSchema,
+  taskExecutionResolveSchema,
+  taskExecutionUnknownSchema,
   taskGetSchema,
   taskHandoffAuthorizeSchema,
   taskHandoffPackCreateSchema,
@@ -91,6 +93,7 @@ import {
   taskOfferSchema,
   taskProgressSchema,
   taskResumeSchema,
+  taskRetrySchema,
   taskReviewAcceptSchema,
   taskReviewReturnSchema,
   taskReviewerSetSchema,
@@ -206,8 +209,10 @@ import {
   taskOffer,
   taskReportProgress,
   taskResume,
+  taskRetry,
   taskSummary,
 } from '../domain/tasks';
+import { taskExecutionResolve, taskExecutionUnknown } from '../domain/task-recovery';
 import {
   taskReviewAccept,
   taskReviewReturn,
@@ -294,6 +299,7 @@ import {
   taskListResultSchema,
   taskHandoffPackResultSchema,
   taskHandoffRequestResultSchema,
+  taskRecoveryResultSchema,
   taskResultSchema,
   taskSubmissionGetResultSchema,
   taskSubmissionListResultSchema,
@@ -1136,12 +1142,48 @@ export function registerTools(
   register(
     server,
     'network_task_cancel',
-    '取消任务：创建者、当前负责人或群 owner/管理员可用，reason 必填并保存为审计。可传 expected_revision 与读取时的任务版本做 CAS；并发接受、拒绝或取消只有一个按提交序生效，其余返回 CONFLICT/VERSION_CONFLICT。取消会撤销当前 assignment、关闭仍 pending/claimed 的关联 delivery，并向被取消的 human 候选发送控制通知；不创建新任务、不增加 pending_count、不伪造聊天未读。已验收/已取消/历史完成的任务不能再次取消。',
+    '取消任务：创建者、当前负责人或群 owner/管理员可用，reason 必填并保存为审计。可传 expected_revision 与读取时的任务版本做 CAS；并发接受、拒绝或取消只有一个按提交序生效，其余返回 CONFLICT/VERSION_CONFLICT。取消在同一事务内撤销当前 assignment（含 submitted）、关闭该任务所有 pending/claimed 的 task_offer/task_reminder 投递、取消 pending 交接提议，并向当前责任者发送控制通知；不创建新任务、不增加 pending_count、不伪造聊天未读。external_stop_status 记录操作者声明的外部执行停止状态：confirmed / unknown / not_required；省略时进行中或受阻记为 unknown，其余记为 not_required。confirmed 只是操作者声明，服务端不保证外部进程确实停止，也不会自动重跑。取消 submitted 会保留成果与验收审计。已验收/已取消/历史完成的任务不能再次取消。',
     taskCancelSchema,
     taskResultSchema,
     async (input) => {
       requireActor(principal);
       return taskCancel(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_retry',
+    '显式重试/重派 failed 任务：只有创建者、群 owner 或管理员可用，reason 必填。指定 assignee_actor_id 时生成新的 assignment_version 并回到 offered（Agent 候选生成新投递与卡片，human 候选收到个人通知）；省略时回到 unassigned。同一事务撤销旧 assignment、关闭旧 pending/claimed 任务投递、取消 pending 交接并递增 task_revision；旧负责人的进度、成果和继续派活资格失效。外部副作用未知时必须先用 network_task_execution_unknown/resolve 对账，不能用重试盲目重跑。同一 request_id 重放返回同一结果。',
+    taskRetrySchema,
+    taskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskRetry(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_execution_unknown',
+    '把进行中任务标记为 blocked + blocked_reason=execution_unknown，并把 action_id 记为 unknown：只允许当前负责人且持有当前 active assignment。用于发出可能产生外部副作用的操作后响应丢失、断线或心跳超时；服务端不会自动重跑，也不会因租约过期推断失败。action_id 在同一任务内稳定去重，重复上报返回同一 action 状态。任务保持未知，直到 network_task_execution_resolve 记录查询或人工结论。写入不创建 delivery、不增加 pending_count、不推进 head_seq；事件不包含外部结果正文。',
+    taskExecutionUnknownSchema,
+    taskRecoveryResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskExecutionUnknown(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_execution_resolve',
+    '记录外部动作对账结论：先在目标系统查询 action_id 或取得人工结论，再传 outcome=confirmed/not_executed/rejected 与 evidence。confirmed 与 not_executed 恢复任务 in_progress；rejected 保持 blocked 并标记 execution_rejected，需要负责人用 network_task_resume 决定后续。只有当前负责人且持有 active assignment 可调用；action 必须仍是 unknown，已完成结论的 action_id 不能再改。证据只存 task_external_actions，不写消息正文、事件正文或 delivery；重复 request_id 返回同一结果。',
+    taskExecutionResolveSchema,
+    taskRecoveryResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskExecutionResolve(db, principal, input);
     },
   );
 

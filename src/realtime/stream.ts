@@ -4,6 +4,8 @@ import {
   DELIVERY_REMINDER_SOURCE,
   MENTION_REMINDER_EVENT,
   MENTION_REMINDER_SOURCE,
+  TASK_REMINDER_EVENT,
+  TASK_REMINDER_SOURCE,
 } from '../contracts/events';
 import type { Env } from '../env';
 import { utf8Bytes } from '../storage/db';
@@ -48,6 +50,7 @@ export interface StreamItem {
   /** 任务事件的稳定定位：task_id 与当前 assignment 版本。 */
   task_id?: string;
   assignment_id?: string;
+  assignment_version?: number;
   status?: string;
   /** 任务业务修订号；客户端按它丢弃乱序旧事件并补读权威状态。 */
   revision?: number;
@@ -540,6 +543,9 @@ function roomStreamItems(
     case 'task_submitted':
     case 'task_returned':
     case 'task_accepted':
+    case 'task_retried':
+    case 'task_execution_unknown':
+    case 'task_execution_resolved':
     case 'task_reviewer_changed': {
       // 任务事件只让 active human 刷新任务视图。Agent 的工作唤醒只来自
       // 明确指派生成的 delivery，房间任务事件不推进 head、不产生未读。
@@ -753,6 +759,23 @@ function inboxStreamItem(
       if (attempt !== undefined) item.attempt = attempt;
       const progressAt = numberField(metadata, 'progress_at');
       if (progressAt !== undefined) item.progress_at = String(progressAt);
+      return item;
+    }
+    case TASK_REMINDER_EVENT: {
+      // 任务催办只提醒当前责任者更新进度或说明阻塞；不是新任务、assignment
+      // 或 delivery，也不增加 pending_count。客户端收到后重读 task_get。
+      const item = withLocation(
+        baseItem(row, TASK_REMINDER_SOURCE, 'reminder', 'action_required'),
+        row,
+        metadata,
+      );
+      item.task_id = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
+      item.ref_id = item.task_id;
+      item.assignment_id = stringField(metadata, 'assignment_id');
+      const progressAt = numberField(metadata, 'progress_at');
+      if (progressAt !== undefined) item.progress_at = String(progressAt);
+      const assignmentVersion = numberField(metadata, 'assignment_version');
+      if (assignmentVersion !== undefined) item.assignment_version = assignmentVersion;
       return item;
     }
     case MENTION_REMINDER_EVENT: {

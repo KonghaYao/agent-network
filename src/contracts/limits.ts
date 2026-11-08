@@ -239,6 +239,21 @@ export const LIMITS = {
   taskDueMaxAheadMs: 10 * 365 * 24 * 60 * 60_000,
   /** `network_task_summary` 单次 room_ids 过滤上限。 */
   taskLookupMax: 100,
+  /**
+   * 任务进行中超过该时长没有 progress 更新时，向当前责任者写一条
+   * `task_reminder` inbox 事件。复用 delivery 的 3 分钟规则与提醒间隔。
+   */
+  taskReminderMs: 3 * 60_000,
+  /** 单轮任务提醒扫描最多处理的任务数。 */
+  taskReminderBatchMax: 50,
+  /** 外部动作 action_id 的 UTF-8 字节上限；同一任务内稳定去重。 */
+  taskExternalActionIdBytes: 256,
+  /** 记录外部动作未知/对账原因时的 UTF-8 字节上限。 */
+  taskRecoveryReasonBytes: 4 * 1024,
+  /** 外部动作对账证据的 UTF-8 字节上限；只存表，不写事件正文。 */
+  taskRecoveryEvidenceBytes: 8 * 1024,
+  /** 重派/重试原因 UTF-8 字节上限；与取消原因共用安全边界。 */
+  taskRetryReasonBytes: 1024,
   /** 房间文件列表默认 / 最大条数。 */
   roomFilePageDefault: 20,
   roomFilePageMax: 100,

@@ -672,6 +672,54 @@ export const taskCancelSchema = z.object({
   request_id: requestId,
   task_id: id(),
   reason: z.string().trim().min(1).max(LIMITS.taskCancelReasonBytes),
+  /**
+   * 操作者声明的外部执行停止状态；省略时进行中/受阻记为 unknown，其余
+   * 状态记为 not_required。服务端不会把取消本身当成已确认停止。
+   */
+  external_stop_status: z
+    .enum(['confirmed', 'unknown', 'not_required'])
+    .optional(),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/**
+ * D08 显式重试/重派失败任务：新原因、新 revision；指定 assignee 时生成
+ * 新 assignment_version，否则回到 unassigned。
+ */
+export const taskRetrySchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  reason: z.string().trim().min(1).max(LIMITS.taskRetryReasonBytes),
+  assignee_actor_id: id().optional(),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/**
+ * D08 标记外部执行结果未知：任务进入 blocked + execution_unknown，
+ * action_id 在同一任务内稳定去重；不会自动重跑外部步骤。
+ */
+export const taskExecutionUnknownSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  action_id: id(LIMITS.taskExternalActionIdBytes),
+  reason: z.string().trim().min(1).max(LIMITS.taskRecoveryReasonBytes),
+  assignment_id: id().optional(),
+  assignment_version: z.number().int().min(1).optional(),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/**
+ * D08 记录外部动作对账结论：confirmed/not_executed 恢复 in_progress，
+ * rejected 保持 blocked；证据只存 task_external_actions。
+ */
+export const taskExecutionResolveSchema = z.object({
+  request_id: requestId,
+  task_id: id().optional(),
+  action_id: id(LIMITS.taskExternalActionIdBytes),
+  outcome: z.enum(['confirmed', 'not_executed', 'rejected']),
+  evidence: z.string().trim().min(1).max(LIMITS.taskRecoveryEvidenceBytes),
+  assignment_id: id().optional(),
+  assignment_version: z.number().int().min(1).optional(),
   expected_revision: z.number().int().min(1).optional(),
 });
 
@@ -1085,6 +1133,9 @@ export type TaskAcceptInput = z.infer<typeof taskAcceptSchema>;
 export type TaskDeclineInput = z.infer<typeof taskDeclineSchema>;
 export type TaskClaimInput = z.infer<typeof taskClaimSchema>;
 export type TaskCancelInput = z.infer<typeof taskCancelSchema>;
+export type TaskRetryInput = z.infer<typeof taskRetrySchema>;
+export type TaskExecutionUnknownInput = z.infer<typeof taskExecutionUnknownSchema>;
+export type TaskExecutionResolveInput = z.infer<typeof taskExecutionResolveSchema>;
 export type TaskProgressInput = z.infer<typeof taskProgressSchema>;
 export type TaskBlockInput = z.infer<typeof taskBlockSchema>;
 export type TaskResumeInput = z.infer<typeof taskResumeSchema>;

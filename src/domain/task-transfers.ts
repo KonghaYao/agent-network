@@ -297,6 +297,8 @@ export async function cancelPendingTransfersForTask(
     requestId: string;
     at: number;
     reason: string;
+    /** 触发失效率的业务动作；默认保持 D06 提交语义。 */
+    invalidatedBy?: 'submit' | 'cancel' | 'retry';
   },
 ): Promise<D1PreparedStatement[]> {
   const rows = await db
@@ -317,7 +319,11 @@ export async function cancelPendingTransfersForTask(
         .bind(
           input.at,
           input.actor,
-          JSON.stringify({ ...context, response_reason: input.reason, invalidated_by: 'submit' }),
+          JSON.stringify({
+            ...context,
+            response_reason: input.reason,
+            invalidated_by: input.invalidatedBy ?? 'submit',
+          }),
           row.transfer_id,
         ),
     );

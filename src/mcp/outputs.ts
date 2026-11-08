@@ -1042,6 +1042,10 @@ export const taskSchema = z.object({
   updated_at: z.string(),
   accepted_at: z.string().nullable(),
   cancelled_at: z.string().nullable(),
+  cancel_reason: z.string().nullable(),
+  cancelled_by: z.string().nullable(),
+  cancelled_by_name: z.string().nullable(),
+  external_stop_status: z.enum(['confirmed', 'unknown', 'not_required']).nullable(),
   parent_task_id: z.string().nullable(),
   related_task_id: z.string().nullable(),
   assignment: taskAssignmentViewSchema.nullable(),
@@ -1060,10 +1064,32 @@ export const taskSchema = z.object({
   can_return: z.boolean(),
   can_accept_review: z.boolean(),
   can_set_reviewer: z.boolean(),
+  can_retry: z.boolean(),
+  can_report_execution_unknown: z.boolean(),
+  can_resolve_execution: z.boolean(),
 });
 
 export const taskResultSchema = z.object({
   task: taskSchema,
+  authorization: authorizationSnapshotSchema,
+});
+
+/** D08 外部动作审计；evidence 只随工具结果返回，不写事件正文。 */
+export const taskExternalActionSchema = z.object({
+  action_id: z.string(),
+  task_id: z.string(),
+  intent: z.string(),
+  state: z.enum(['unknown', 'confirmed', 'not_executed', 'rejected']),
+  evidence: z.string(),
+  created_by: z.string(),
+  created_by_name: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const taskRecoveryResultSchema = z.object({
+  task: taskSchema,
+  action: taskExternalActionSchema,
   authorization: authorizationSnapshotSchema,
 });
 
