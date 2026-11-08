@@ -46,7 +46,7 @@ export async function runGroupHistoryAcceptance(options: { hasDrive: boolean }):
     // ---- G07-T01：新成员不能绕过历史边界 ----
     const roomId = await createRoom(
       owner.connection,
-      [member.actor.actor_id, agent.actor.actor_id],
+      [member.actor.actor_id],
       'G07 历史边界群',
     );
     const beforeJoin = await sendMessage(owner.connection, roomId, HISTORY_MARKER);
@@ -56,7 +56,13 @@ export async function runGroupHistoryAcceptance(options: { hasDrive: boolean }):
       : null;
 
     await acceptGroupInvites(member.connection, roomId);
-    await acceptGroupInvites(agent.connection, roomId);
+    // unclaimed Agent 可被直接加入，但加入时刻仍必须晚于既有消息/任务，
+    // 才能验证 G07 的成员代次边界。
+    await callTool(owner.connection.client, 'network_room_members_update', {
+      request_id: newRequestId('g07_add_agent'),
+      room_id: roomId,
+      add: [agent.actor.actor_id],
+    });
 
     const memberDetail = await roomDetail(member.connection, roomId);
     checkEqual('G07-T01 新成员代次从 1 开始', memberDetail.room.my_member_generation, 1);

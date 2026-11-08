@@ -44,7 +44,7 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
   try {
     const roomId = await createRoom(
       owner.connection,
-      [member.actor.actor_id, agent.actor.actor_id],
+      [member.actor.actor_id],
       'G07 策略并发群',
     );
     const preJoinMessage = await sendMessage(owner.connection, roomId, 'G07 策略加入前消息');
@@ -53,7 +53,12 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
       ? await bindFile(owner, roomId, 'g07-material.txt', 'G07 材料任务')
       : null;
     await acceptGroupInvites(member.connection, roomId);
-    await acceptGroupInvites(agent.connection, roomId);
+    // unclaimed Agent 直接加入，但必须晚于 preJoin 消息与材料任务。
+    await callTool(owner.connection.client, 'network_room_members_update', {
+      request_id: newRequestId('g07_policy_add_agent'),
+      room_id: roomId,
+      add: [agent.actor.actor_id],
+    });
 
     await expectToolError(
       'G07-T03 默认普通成员不能 @所有人',
