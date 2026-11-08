@@ -1028,6 +1028,8 @@ export const taskSchema = z.object({
   owner_name: z.string().nullable(),
   reviewer_actor_id: z.string(),
   reviewer_name: z.string(),
+  /** 验收人是否仍是 active 成员且未停用；false 时任务保持 submitted，等待显式改派。 */
+  reviewer_available: z.boolean(),
   due_at: z.string().nullable(),
   blocked_reason: z.string().nullable(),
   blocked_at: z.string().nullable(),
@@ -1040,6 +1042,8 @@ export const taskSchema = z.object({
   updated_at: z.string(),
   accepted_at: z.string().nullable(),
   cancelled_at: z.string().nullable(),
+  parent_task_id: z.string().nullable(),
+  related_task_id: z.string().nullable(),
   assignment: taskAssignmentViewSchema.nullable(),
   delivery_ids: z.array(z.string()),
   attachments: z.array(taskAttachmentViewSchema),
@@ -1054,6 +1058,8 @@ export const taskSchema = z.object({
   can_resume: z.boolean(),
   can_submit: z.boolean(),
   can_return: z.boolean(),
+  can_accept_review: z.boolean(),
+  can_set_reviewer: z.boolean(),
 });
 
 export const taskResultSchema = z.object({
@@ -1086,11 +1092,19 @@ export const taskSubmissionLinkViewSchema = z.object({
   availability: z.enum(['unverified', 'declared_reachable']),
 });
 
+export const taskReviewChecklistItemViewSchema = z.object({
+  item: z.string(),
+  passed: z.boolean(),
+  note: z.string(),
+});
+
 export const taskSubmissionReviewViewSchema = z.object({
   reviewer_actor_id: z.string(),
   reviewer_name: z.string(),
   decision: z.enum(['accept', 'return']),
   reason: z.string(),
+  /** accept 的逐项核对快照；return 与旧 review 为空数组。 */
+  checklist: z.array(taskReviewChecklistItemViewSchema),
   created_at: z.string(),
 });
 

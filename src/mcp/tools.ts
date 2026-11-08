@@ -87,6 +87,9 @@ import {
   taskOfferSchema,
   taskProgressSchema,
   taskResumeSchema,
+  taskReviewAcceptSchema,
+  taskReviewReturnSchema,
+  taskReviewerSetSchema,
   taskSubmissionGetSchema,
   taskSubmissionListSchema,
   taskSubmissionReturnSchema,
@@ -202,6 +205,9 @@ import {
   taskSummary,
 } from '../domain/tasks';
 import {
+  taskReviewAccept,
+  taskReviewReturn,
+  taskReviewerSet,
   taskSubmissionGet,
   taskSubmissionList,
   taskSubmissionReturn,
@@ -1030,7 +1036,7 @@ export function registerTools(
   register(
     server,
     'network_task_list',
-    '读取任务列表：传 room_id 读取房间任务；传 scope=mine 读取与我相关（创建、负责、验收或待接手）的任务。active 成员可用，按更新时间倒序，返回短标题、状态、负责人、验收人与卡片/source 消息引用。任务事件不会唤醒 Agent，不要轮询；先看 network_task_summary 或 network_login.task_summary 的 pending/claimed。',
+    '读取任务列表：传 room_id 读取房间任务；传 scope=mine 读取与我相关（创建、负责、验收或待接手）的任务。active 成员可用，按更新时间倒序，返回短标题、状态、负责人、验收人与卡片/source 消息引用，以及 reviewer_available、can_accept_review/can_set_reviewer 等当前操作标记。任务事件不会唤醒 Agent，不要轮询；先看 network_task_summary 或 network_login.task_summary 的 pending/claimed。',
     taskListSchema,
     taskListResultSchema,
     async (input) => {
@@ -1043,7 +1049,7 @@ export function registerTools(
   register(
     server,
     'network_task_get',
-    '按 task_id 读取任务详情：短标题、受控长目标、验收条件、权威业务状态与统一中文文案（status_label/status_hint/phase_label）、revision、负责人/验收人、期限、业务权威来源、assignment、关联 delivery、最新 progress 与最近进度历史（progress_history）。`legacy_completed` 是旧任务板历史完成，只读展示，绝不等于 accepted；delivery 状态只表示通知处理，不映射为业务状态。只有当前有效成员且任务在历史边界内可见时返回；非成员、边界外与不存在统一返回 NOT_FOUND，不能靠 task_id 探测任务是否存在。',
+    '按 task_id 读取任务详情：短标题、受控长目标、验收条件、权威业务状态与统一中文文案（status_label/status_hint/phase_label）、revision、负责人/验收人、期限、业务权威来源、assignment、关联 delivery、最新 progress 与最近进度历史（progress_history）。返回 reviewer_available（验收人是否仍可执行验收）、can_accept_review/can_return（当前身份能否对 pending 成果验收或退回）、can_set_reviewer（创建者/负责人/管理员可改派验收人）与 parent_task_id/related_task_id 关联任务。`legacy_completed` 是旧任务板历史完成，只读展示，绝不等于 accepted；delivery 状态只表示通知处理，不映射为业务状态。只有当前有效成员且任务在历史边界内可见时返回；非成员、边界外与不存在统一返回 NOT_FOUND，不能靠 task_id 探测任务是否存在。',
     taskGetSchema,
     taskResultSchema,
     async (input) => {
@@ -1056,7 +1062,7 @@ export function registerTools(
   register(
     server,
     'network_task_create',
-    '从消息或任务面板创建任务：title 是列表短标题，详细目标与验收条件写入受控 description/acceptance_criteria，不能塞进 120 字短字段。可指定候选负责人、独立验收人、期限与附件引用；默认创建者为验收人，自己执行时必须指定另一名验收人。指定只形成待接手 offer，不等于接单。同一 request_id 幂等；同一 source_message_id 只生成一个任务。Agent 的明确指派只生成一条绑定 task/assignment/version 的 delivery；human 使用持久个人通知；公开任务不创建 delivery、不增加 pending_count、不唤醒所有 Agent。',
+    '从消息或任务面板创建任务：title 是列表短标题，详细目标与验收条件写入受控 description/acceptance_criteria，不能塞进 120 字短字段。可指定候选负责人、独立验收人、期限与附件引用；默认创建者为验收人，自己执行时必须指定另一名验收人。可选 parent_task_id 关联已结束任务（accepted/cancelled/legacy_completed），related_task_id 关联同房间任务，两者都必须同房间且当前可见。指定只形成待接手 offer，不等于接单。同一 request_id 幂等；同一 source_message_id 只生成一个任务。Agent 的明确指派只生成一条绑定 task/assignment/version 的 delivery；human 使用持久个人通知；公开任务不创建 delivery、不增加 pending_count、不唤醒所有 Agent。',
     taskCreateSchema,
     taskResultSchema,
     async (input) => {
@@ -1276,12 +1282,48 @@ export function registerTools(
   register(
     server,
     'network_task_submission_return',
-    'D06 最小退回入口：只有任务当前验收人可以退回 pending 成果版本，reason 必填并写入 task_reviews 审计。事务校验任务仍为 submitted、submission 仍为 pending 且属于该任务；版本已处理返回 CONFLICT，非验收人或负责人自验返回 PERMISSION_DENIED。退回后原版本保存为 returned，任务回到 in_progress 并以新的 assignment_version 重建原负责人的 active assignment；若原负责人已失权则任务转 blocked 等待重派，不会自动通过或改派。任务事件只通知房间内 human，不创建 delivery、不增加 Agent pending_count、不推进 head_seq。完整的验收通过规则由 D07 补齐，本工具不实现 accept，避免两个冲突入口。',
+    '兼容退回入口：只有任务当前验收人可以退回 pending 成果版本，reason 必填并写入 task_reviews 审计。事务校验任务仍为 submitted、submission 仍为 pending 且属于该任务；版本已处理返回 CONFLICT，非验收人或负责人自验返回 PERMISSION_DENIED。可选传 version 绑定被退版本，版本不符返回 REVIEW_STALE。退回后原版本保存为 returned，任务回到 in_progress 并以新的 assignment_version 重建原负责人的 active assignment；若原负责人已失权则任务转 blocked 等待重派，不会自动通过或改派。新调用建议使用 network_task_review_return（必须绑定 version）。任务事件只通知房间内 human，不创建 delivery、不增加 Agent pending_count、不推进 head_seq。',
     taskSubmissionReturnSchema,
     taskSubmissionResultSchema,
     async (input) => {
       requireActor(principal);
       return taskSubmissionReturn(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_review_accept',
+    'D07 验收通过：只有任务当前验收人可以调用，且必须绑定 submission_id/version 并提交逐项核对 checklist（每项 item/passed/可选 note，全部 passed=true 才能通过）。负责人不能验收自己的成果；非验收人返回 PERMISSION_DENIED，旧版本、已被退回或已被其他验收结果占用返回 REVIEW_STALE。事务把该 submission 置为 accepted、写入 task_reviews（含 checklist_json）、任务转 accepted 并记录 accepted_at、revision+1；accepted 是终态，不能再次提交或重开。同一 request_id 重放或对同一版本重复通过返回同一权威快照，不重复写事件或外部回写。任务事件只通知房间内 human，不创建 delivery、不增加 pending_count、不推进 head_seq。',
+    taskReviewAcceptSchema,
+    taskSubmissionResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskReviewAccept(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_review_return',
+    'D07 验收退回：只有任务当前验收人可以调用，必须绑定 submission_id/version 并写可行动 reason。旧版本、已处理版本、验收人已变化返回 REVIEW_STALE；负责人自验返回 PERMISSION_DENIED。退回只把该 submission 置为 returned 并写 task_reviews，不改写历史版本；任务回到 in_progress 并以新的 assignment_version 重建原负责人 active assignment，若原负责人已失权则转 blocked 等待重派。旧提交与旧执行资格不会复活，重新提交会生成新版本。任务事件只通知房间内 human，不创建 delivery、不增加 pending_count、不推进 head_seq。',
+    taskReviewReturnSchema,
+    taskSubmissionResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskReviewReturn(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_reviewer_set',
+    '显式指定或替换任务验收人：创建者、当前负责人或群 owner/管理员可调用，任务必须未结束。新验收人必须是同房间 active、未停用且有任务访问资格的成员，不能是当前负责人，也不能是待验收版本的提交人；target 与当前验收人相同时返回当前快照。验收人退群或失权时任务保持 submitted，必须由有权限者调用本工具显式改派，系统绝不自动通过。成功写 task_reviewer_changed 房间事件并递增 revision；任务事件只通知 human，不创建 delivery、不增加 pending_count、不推进 head_seq。',
+    taskReviewerSetSchema,
+    taskResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskReviewerSet(db, principal, input);
     },
   );
 

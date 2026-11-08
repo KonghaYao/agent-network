@@ -481,6 +481,10 @@ export interface TaskRow {
   initial_assignee_actor_id: string | null;
   /** 1 表示 `initial_assignee_actor_id` 是权威答案；0 表示旧行未知。 */
   initial_assignee_known: 0 | 1;
+  /** 追加工作的父任务；必须同房间且父任务为 accepted/cancelled。 */
+  parent_task_id: string | null;
+  /** 可选关联任务；只表达关系，不授予额外执行权。 */
+  related_task_id: string | null;
   reviewer_actor_id: string;
   due_at: number | null;
   blocked_reason: string | null;
@@ -574,6 +578,8 @@ export interface TaskReviewRow {
   reviewer_actor_id: string;
   decision: 'accept' | 'return';
   reason: string;
+  /** accept 的逐项核对快照；return 与旧行默认为空数组。 */
+  checklist_json: string;
   created_at: number;
 }
 

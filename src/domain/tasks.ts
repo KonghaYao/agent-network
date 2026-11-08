@@ -144,6 +144,8 @@ export interface TaskView {
   owner_name: string | null;
   reviewer_actor_id: string;
   reviewer_name: string;
+  /** 验收人是否仍是 active 成员且未停用；false 时等待有权限者显式改派。 */
+  reviewer_available: boolean;
   due_at: string | null;
   blocked_reason: string | null;
   blocked_at: string | null;
@@ -158,6 +160,10 @@ export interface TaskView {
   updated_at: string;
   accepted_at: string | null;
   cancelled_at: string | null;
+  /** 追加工作的父任务；只表达关系，不重开父任务。 */
+  parent_task_id: string | null;
+  /** 可选关联任务；只表达关系。 */
+  related_task_id: string | null;
   assignment: TaskAssignmentView | null;
   delivery_ids: string[];
   attachments: TaskAttachmentView[];
@@ -175,6 +181,10 @@ export interface TaskView {
   can_submit: boolean;
   /** 验收人可退回当前 pending 成果版本。 */
   can_return: boolean;
+  /** 验收人可通过当前 pending 成果版本并逐项核对验收条件。 */
+  can_accept_review: boolean;
+  /** 创建者、群 owner 或管理员可显式指定/替换验收人。 */
+  can_set_reviewer: boolean;
 }
 
 export interface TaskResult {
@@ -321,6 +331,7 @@ const ACTUAL_STATE_CODES: ReadonlySet<string> = new Set([
   'CONFLICT',
   'VERSION_CONFLICT',
   'REQUEST_EXPIRED',
+  'REVIEW_STALE',
 ]);
 
 /** 竞态失败时把权威状态并入错误 details；失败方仍应重新 task_get 刷新 UI。 */
@@ -454,6 +465,42 @@ export function canDispatch(task: TaskRow, context: TaskContext): boolean {
   return isOwnerOrAdmin(context.room, context.member);
 }
 
+async function reviewerIsAvailable(
+  db: D1Database,
+  roomId: string,
+  reviewerId: string,
+): Promise<boolean> {
+  const member = await getMember(db, roomId, reviewerId);
+  if (!member || member.status !== 'active') return false;
+  const actor = await getActor(db, reviewerId);
+  return actor !== null && actor.disabled_at === null;
+}
+
+/** 列表批量读取验收人可用性，避免每个任务重复查询成员与 actor。 */
+async function reviewerAvailabilityMap(
+  db: D1Database,
+  roomId: string,
+  actorIds: string[],
+): Promise<Map<string, boolean>> {
+  const unique = Array.from(new Set(actorIds));
+  const result = new Map<string, boolean>();
+  if (unique.length === 0) return result;
+  const rows = await db
+    .prepare(
+      `SELECT rm.actor_id, rm.status, a.disabled_at
+         FROM room_members rm
+         LEFT JOIN actors a ON a.actor_id = rm.actor_id
+        WHERE rm.room_id = ? AND rm.actor_id IN (${unique.map(() => '?').join(', ')})`,
+    )
+    .bind(roomId, ...unique)
+    .all<{ actor_id: string; status: string; disabled_at: number | null }>();
+  for (const actorId of unique) result.set(actorId, false);
+  for (const row of rows.results) {
+    result.set(row.actor_id, row.status === 'active' && row.disabled_at === null);
+  }
+  return result;
+}
+
 async function buildTaskView(
   db: D1Database,
   context: TaskContext,
@@ -462,6 +509,8 @@ async function buildTaskView(
   options?: {
     /** 列表已批量读取最新进度，避免逐任务 N+1。 */
     progress?: Map<string, TaskProgressRow>;
+    /** 列表已批量读取验收人可用性。 */
+    reviewerAvailability?: Map<string, boolean>;
     /** 详情页返回最近历史；列表默认不返回。 */
     history?: boolean;
   },
@@ -539,6 +588,21 @@ async function buildTaskView(
     assignment.status === 'offered' &&
     assignment.owner_actor_id === context.caller &&
     (assignment.offer_expires_at === null || assignment.offer_expires_at > nowMs());
+  const reviewerAvailable =
+    options?.reviewerAvailability?.get(task.reviewer_actor_id) ??
+    (await reviewerIsAvailable(db, task.room_id, task.reviewer_actor_id));
+  const canSetReviewer =
+    task.status !== 'accepted' &&
+    task.status !== 'cancelled' &&
+    task.status !== 'legacy_completed' &&
+    (task.created_by === context.caller ||
+      task.owner_actor_id === context.caller ||
+      isAdmin);
+  const canReviewPending =
+    task.status === 'submitted' &&
+    task.reviewer_actor_id === context.caller &&
+    task.owner_actor_id !== context.caller &&
+    currentSubmission?.status === 'pending';
   return {
     task_id: task.task_id,
     room_id: task.room_id,
@@ -559,6 +623,7 @@ async function buildTaskView(
     owner_name: owner ? (nameMap.get(owner) ?? null) : null,
     reviewer_actor_id: task.reviewer_actor_id,
     reviewer_name: nameMap.get(task.reviewer_actor_id) ?? '',
+    reviewer_available: reviewerAvailable,
     due_at: task.due_at === null ? null : String(task.due_at),
     blocked_reason: task.blocked_reason,
     blocked_at: task.blocked_at === null ? null : String(task.blocked_at),
@@ -616,10 +681,11 @@ async function buildTaskView(
       assignment.status === 'active' &&
       assignment.owner_actor_id === context.caller &&
       task.owner_actor_id === context.caller,
-    can_return:
-      task.status === 'submitted' &&
-      task.reviewer_actor_id === context.caller &&
-      currentSubmission?.status === 'pending',
+    can_return: canReviewPending,
+    can_accept_review: canReviewPending,
+    can_set_reviewer: canSetReviewer,
+    parent_task_id: task.parent_task_id,
+    related_task_id: task.related_task_id,
   };
 }
 
@@ -1129,6 +1195,8 @@ async function convergeSourceTask(
     attachments: string[];
     reviewer: string;
     assignee: string | null;
+    parentTaskId: string | null;
+    relatedTaskId: string | null;
   },
 ): Promise<TaskResult> {
   const existingAttachments = (await attachmentsFor(db, existing.task_id))
@@ -1149,6 +1217,8 @@ async function convergeSourceTask(
     existing.acceptance_criteria !== expected.acceptance ||
     existing.due_at !== expected.dueAt ||
     existing.reviewer_actor_id !== expected.reviewer ||
+    existing.parent_task_id !== expected.parentTaskId ||
+    existing.related_task_id !== expected.relatedTaskId ||
     (originalAssignee.known && originalAssignee.assignee !== expected.assignee) ||
     !sameAttachments
   ) {
@@ -1158,6 +1228,38 @@ async function convergeSourceTask(
     });
   }
   return resultFor(db, context, existing);
+}
+
+/**
+ * 校验关联任务：同一房间、当前可见、不能指向自身。父任务还必须是已结束的
+ * 任务，避免把进行中的任务误当追加工作来源。
+ */
+async function assertLinkedTask(
+  db: D1Database,
+  room: RoomRow,
+  boundary: HistoryBoundary,
+  taskId: string,
+  label: string,
+  requireFinished: boolean,
+): Promise<void> {
+  const linked = await getTask(db, taskId);
+  if (
+    !linked ||
+    linked.room_id !== room.room_id ||
+    (!boundary.full && linked.created_at < boundary.fromAt)
+  ) {
+    throw new BusinessError('NOT_FOUND', `${label}不存在或不在当前房间`);
+  }
+  if (
+    requireFinished &&
+    linked.status !== 'accepted' &&
+    linked.status !== 'cancelled'
+  ) {
+    throw new BusinessError('CONFLICT', `只能关联已验收或已取消的任务作为${label}`, {
+      task_id: linked.task_id,
+      status: linked.status,
+    });
+  }
 }
 
 export async function taskCreate(
@@ -1213,6 +1315,17 @@ export async function taskCreate(
       throw new BusinessError('NOT_FOUND', '来源消息不存在或当前不可见');
     }
   }
+  const parentTaskId = input.parent_task_id ?? null;
+  const relatedTaskId = input.related_task_id ?? null;
+  if (parentTaskId !== null) {
+    await assertLinkedTask(db, room, boundary, parentTaskId, '父任务', true);
+  }
+  if (relatedTaskId !== null) {
+    await assertLinkedTask(db, room, boundary, relatedTaskId, '关联任务', false);
+  }
+  if (parentTaskId !== null && parentTaskId === relatedTaskId) {
+    throw invalid('关联任务', '父任务与关联任务不能相同');
+  }
   const dueAt = parseDueAt(input.due_at);
   const attachments = await validateAttachments(db, room, input.attachment_file_ids);
   const payloadHash = await sha256Hex(
@@ -1226,6 +1339,9 @@ export async function taskCreate(
       reviewer_actor_id: reviewerId,
       due_at: dueAt,
       attachment_file_ids: attachments.map((item) => item.file_id),
+      // 仅在新字段非空时加入摘要，保证旧调用方的请求摘要不变。
+      ...(parentTaskId !== null ? { parent_task_id: parentTaskId } : {}),
+      ...(relatedTaskId !== null ? { related_task_id: relatedTaskId } : {}),
     }),
   );
   const replay = await getOperation(db, caller, input.request_id);
@@ -1249,6 +1365,8 @@ export async function taskCreate(
         attachments: attachments.map((item) => item.file_id),
         reviewer: reviewerId,
         assignee: assigneeId,
+        parentTaskId,
+        relatedTaskId,
       });
     }
   }
@@ -1297,6 +1415,8 @@ export async function taskCreate(
     current_assignment_id: assignmentId,
     initial_assignee_actor_id: assigneeId,
     initial_assignee_known: 1,
+    parent_task_id: parentTaskId,
+    related_task_id: relatedTaskId,
     reviewer_actor_id: reviewerId,
     due_at: dueAt,
     blocked_reason: null,
@@ -1367,10 +1487,11 @@ export async function taskCreate(
           `INSERT INTO tasks
              (task_id, room_id, created_by, source_message_id, title, description,
               acceptance_criteria, status, revision, owner_actor_id, current_assignment_id,
-              initial_assignee_actor_id, initial_assignee_known, reviewer_actor_id, due_at,
-              blocked_reason, blocked_at, last_progress_at, business_authority,
-              external_binding_id, created_at, updated_at, accepted_at, cancelled_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, 1, ?, ?, NULL, NULL, NULL,
+              initial_assignee_actor_id, initial_assignee_known, parent_task_id,
+              related_task_id, reviewer_actor_id, due_at, blocked_reason, blocked_at,
+              last_progress_at, business_authority, external_binding_id, created_at,
+              updated_at, accepted_at, cancelled_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, 1, ?, ?, ?, ?, NULL, NULL, NULL,
              'native', NULL, ?, ?, NULL, NULL)`,
         )
         .bind(
@@ -1384,6 +1505,8 @@ export async function taskCreate(
           task.status,
           assignmentId,
           assigneeId,
+          parentTaskId,
+          relatedTaskId,
           reviewerId,
           dueAt,
           at,
@@ -1487,6 +1610,8 @@ export async function taskCreate(
         attachments: attachments.map((item) => item.file_id),
         reviewer: reviewerId,
         assignee: assigneeId,
+        parentTaskId,
+        relatedTaskId,
       });
     },
   });
@@ -1520,6 +1645,23 @@ export async function viewFromKnownRow(
     assignment.status === 'offered' &&
     assignment.owner_actor_id === context.caller &&
     (assignment.offer_expires_at === null || assignment.offer_expires_at > nowMs());
+  const reviewerAvailable = await reviewerIsAvailable(
+    db,
+    task.room_id,
+    task.reviewer_actor_id,
+  );
+  const canSetReviewer =
+    task.status !== 'accepted' &&
+    task.status !== 'cancelled' &&
+    task.status !== 'legacy_completed' &&
+    (task.created_by === context.caller ||
+      task.owner_actor_id === context.caller ||
+      isAdmin);
+  const canReviewPending =
+    task.status === 'submitted' &&
+    task.reviewer_actor_id === context.caller &&
+    task.owner_actor_id !== context.caller &&
+    currentSubmission?.status === 'pending';
   return {
     task_id: task.task_id,
     room_id: task.room_id,
@@ -1542,6 +1684,7 @@ export async function viewFromKnownRow(
       : null,
     reviewer_actor_id: task.reviewer_actor_id,
     reviewer_name: names.get(task.reviewer_actor_id) ?? '',
+    reviewer_available: reviewerAvailable,
     due_at: task.due_at === null ? null : String(task.due_at),
     blocked_reason: task.blocked_reason,
     blocked_at: task.blocked_at === null ? null : String(task.blocked_at),
@@ -1594,10 +1737,11 @@ export async function viewFromKnownRow(
       assignment.status === 'active' &&
       assignment.owner_actor_id === context.caller &&
       task.owner_actor_id === context.caller,
-    can_return:
-      task.status === 'submitted' &&
-      task.reviewer_actor_id === context.caller &&
-      currentSubmission?.status === 'pending',
+    can_return: canReviewPending,
+    can_accept_review: canReviewPending,
+    can_set_reviewer: canSetReviewer,
+    parent_task_id: task.parent_task_id,
+    related_task_id: task.related_task_id,
   };
 }
 
@@ -1731,9 +1875,17 @@ export async function taskList(
       ...progressActors,
     ],
   );
+  const reviewerAvailability = await reviewerAvailabilityMap(
+    db,
+    room.room_id,
+    rows.results.map((task) => task.reviewer_actor_id),
+  );
   const tasks = await Promise.all(
     rows.results.map((task) =>
-      buildTaskView(db, context, task, names, { progress: progressRows }),
+      buildTaskView(db, context, task, names, {
+        progress: progressRows,
+        reviewerAvailability,
+      }),
     ),
   );
   return {

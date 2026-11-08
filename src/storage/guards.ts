@@ -32,6 +32,7 @@ export const GUARD_TABLES = {
   policyRevision: 'guard_policy_revision',
   announcementRevision: 'guard_announcement_revision',
   assignmentStale: 'guard_assignment_stale',
+  reviewStale: 'guard_review_stale',
   quotaExceeded: 'guard_quota_exceeded',
   requestExpired: 'guard_request_expired',
   inviteExhausted: 'guard_invite_exhausted',

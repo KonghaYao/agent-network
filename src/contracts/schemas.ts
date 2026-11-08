@@ -603,6 +603,10 @@ export const taskCreateSchema = z.object({
   source_message_id: id().optional(),
   assignee_actor_id: id().optional(),
   reviewer_actor_id: id().optional(),
+  /** 追加工作时关联已 accepted/cancelled 的同房间父任务。 */
+  parent_task_id: id().optional(),
+  /** 可选同房间关联任务，只表达关系。 */
+  related_task_id: id().optional(),
   due_at: z.iso.datetime({ offset: true }).optional(),
   attachment_file_ids: z.array(id()).max(LIMITS.taskAttachmentsMax).optional(),
 });
@@ -815,7 +819,53 @@ export const taskSubmissionReturnSchema = z.object({
   request_id: requestId,
   task_id: id(),
   submission_id: id(),
+  /** D07 后可选绑定版本；新工具 `network_task_review_return` 要求必填。 */
+  version: z.number().int().min(1).optional(),
   reason: z.string().trim().min(1).max(LIMITS.taskSubmissionReturnReasonBytes * 2),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/**
+ * D07 验收通过：必须绑定具体 submission_id 与 version，并逐项核对
+ * acceptance_criteria。`passed=false` 的记录可以保存核对结果，但事务会拒绝
+ * 把任务转为 accepted；退回应使用 `network_task_review_return`。
+ */
+export const taskReviewChecklistItemSchema = z.object({
+  item: z.string().trim().min(1).max(LIMITS.taskReviewChecklistItemBytes * 2),
+  passed: z.boolean(),
+  note: z.string().trim().max(LIMITS.taskReviewChecklistNoteBytes * 2).optional(),
+});
+
+export const taskReviewAcceptSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  submission_id: id(),
+  version: z.number().int().min(1),
+  checklist: z
+    .array(taskReviewChecklistItemSchema)
+    .min(1)
+    .max(LIMITS.taskReviewChecklistMax),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/** D07 退回：绑定 submission_id 与 version，reason 必填且需可行动。 */
+export const taskReviewReturnSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  submission_id: id(),
+  version: z.number().int().min(1),
+  reason: z.string().trim().min(1).max(LIMITS.taskSubmissionReturnReasonBytes * 2),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/**
+ * 指定/替换任务验收人：创建者、群 owner 或管理员可调用。不能把当前负责人
+ * 设为验收人，也不能把验收人设为 pending 成果的提交人。
+ */
+export const taskReviewerSetSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  reviewer_actor_id: id(),
   expected_revision: z.number().int().min(1).optional(),
 });
 
@@ -952,4 +1002,7 @@ export type TaskSubmitInput = z.infer<typeof taskSubmitSchema>;
 export type TaskSubmissionGetInput = z.infer<typeof taskSubmissionGetSchema>;
 export type TaskSubmissionListInput = z.infer<typeof taskSubmissionListSchema>;
 export type TaskSubmissionReturnInput = z.infer<typeof taskSubmissionReturnSchema>;
+export type TaskReviewAcceptInput = z.infer<typeof taskReviewAcceptSchema>;
+export type TaskReviewReturnInput = z.infer<typeof taskReviewReturnSchema>;
+export type TaskReviewerSetInput = z.infer<typeof taskReviewerSetSchema>;
 export type FeedbackCreateInput = z.infer<typeof feedbackCreateSchema>;

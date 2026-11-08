@@ -125,6 +125,16 @@ async function loadTaskSubmissionHistory(task, target) {
         item.append(review);
       }
       list.append(item);
+      if (submission.review && submission.review.checklist) {
+        for (const entry of submission.review.checklist) {
+          const checklist = document.createElement('div');
+          checklist.className = 'task-submission-history-checklist' +
+            (entry.passed ? '' : ' failed');
+          checklist.textContent = (entry.passed ? '✓ ' : '✗ ') + entry.item +
+            (entry.note ? ' — ' + entry.note : '');
+          item.append(checklist);
+        }
+      }
     }
     target.append(list);
   } catch (error) {
@@ -163,10 +173,11 @@ function renderTaskSubmissionActions(task, actions, run, error) {
         return;
       }
       run(function () {
-        return callTool('network_task_submission_return', {
-          request_id: requestId('task_submission_return'),
+        return callTool('network_task_review_return', {
+          request_id: requestId('task_review_return'),
           task_id: task.task_id,
           submission_id: task.current_submission.submission_id,
+          version: task.current_submission.version,
           reason: reason.value.trim(),
           expected_revision: task.revision
         });

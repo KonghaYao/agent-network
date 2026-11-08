@@ -462,6 +462,22 @@ export const APP_STYLE = `
   .task-submit-link-row input { flex: 1 1 112px; min-width: 0; height: 28px;
     box-sizing: border-box; }
   .task-submit-link-url { flex-basis: 190px; }
+  .task-review-checklist { list-style: none; margin: 6px 0 0; padding: 0;
+    max-height: 220px; overflow-y: auto; border: 1px solid var(--wx-line);
+    border-radius: 6px; }
+  .task-review-item { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    padding: 6px; border-top: 1px solid var(--wx-line); }
+  .task-review-item:first-child { border-top: 0; }
+  .task-review-check { flex: 1 1 auto; min-width: 0; display: flex;
+    align-items: flex-start; gap: 6px; font-size: 12px; }
+  .task-review-item-text { min-width: 0; overflow-wrap: anywhere; }
+  .task-review-note { flex: 0 0 180px; width: 180px; height: 28px;
+    box-sizing: border-box; }
+  .task-reviewer-select { flex: 0 1 160px; min-width: 0; }
+  .task-review-warning { color: var(--wx-unread); font-size: 11px; }
+  .task-submission-history-checklist { margin-top: 2px; font-size: 11px;
+    color: var(--wx-muted); overflow-wrap: anywhere; }
+  .task-submission-history-checklist.failed { color: var(--wx-danger); }
 
   .chat-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
     position: relative; background: var(--wx-bg); }

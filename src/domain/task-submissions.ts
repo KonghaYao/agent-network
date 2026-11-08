@@ -19,6 +19,9 @@
 import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
 import type {
+  TaskReviewAcceptInput,
+  TaskReviewReturnInput,
+  TaskReviewerSetInput,
   TaskSubmissionGetInput,
   TaskSubmissionListInput,
   TaskSubmissionReturnInput,
@@ -34,6 +37,7 @@ import {
   getMember,
   getOperation,
   getRoomFile,
+  getTask,
   getTaskAssignment,
   getTaskCard,
 } from '../storage/queries';
@@ -54,6 +58,8 @@ import {
   activeAssignmentGuard,
   actualTaskState,
   attachmentsFor,
+  assertTaskParticipant,
+  isOwnerOrAdmin,
   memberGuard,
   rethrowWithActualState,
   requireVisibleTask,
@@ -63,6 +69,7 @@ import {
   taskStateGuard,
   viewFromKnownRow,
   type TaskContext,
+  type TaskResult,
   type TaskSubmissionSummaryView,
   type TaskView,
 } from './tasks';
@@ -95,11 +102,19 @@ export interface TaskSubmissionLinkView {
   availability: 'unverified' | 'declared_reachable';
 }
 
+export interface TaskReviewChecklistItemView {
+  item: string;
+  passed: boolean;
+  note: string;
+}
+
 export interface TaskSubmissionReviewView {
   reviewer_actor_id: string;
   reviewer_name: string;
   decision: 'accept' | 'return';
   reason: string;
+  /** accept 的逐项核对快照；return 与旧 review 为空数组。 */
+  checklist: TaskReviewChecklistItemView[];
   created_at: string;
 }
 
@@ -318,6 +333,54 @@ function normalizeReturnReason(value: string): string {
   return textBytes(text, 'reason', LIMITS.taskSubmissionReturnReasonBytes);
 }
 
+/**
+ * 逐项验收核对：item 去空白后必须唯一；note 只作为可选说明。
+ *
+ * 通过要求所有项 passed；有未通过项时应改用退回并写可行动原因，避免保存一个
+ * 自相矛盾的 accepted 结果。
+ */
+function normalizeChecklist(
+  values: TaskReviewAcceptInput['checklist'],
+): TaskReviewChecklistItemView[] {
+  if (values.length > LIMITS.taskReviewChecklistMax) {
+    throw invalid('checklist', `不能超过 ${LIMITS.taskReviewChecklistMax} 项`);
+  }
+  const seen = new Set<string>();
+  const result: TaskReviewChecklistItemView[] = [];
+  for (const raw of values) {
+    const item = raw.item.replace(/\r\n/gu, '\n').trim();
+    if (!item) throw invalid('checklist.item', '不能为空');
+    textBytes(item, 'checklist.item', LIMITS.taskReviewChecklistItemBytes);
+    if (seen.has(item)) throw invalid('checklist.item', '不能重复核对同一项');
+    seen.add(item);
+    const note = (raw.note ?? '').replace(/\r\n/gu, '\n').trim();
+    if (note) textBytes(note, 'checklist.note', LIMITS.taskReviewChecklistNoteBytes);
+    result.push({ item, passed: raw.passed, note });
+  }
+  if (!result.every((item) => item.passed)) {
+    throw new BusinessError(
+      'INVALID_ARGUMENT',
+      '存在未通过的验收项，不能验收通过；请使用退回并说明可行动原因',
+    );
+  }
+  return result;
+}
+
+function parseChecklist(text: string): TaskReviewChecklistItemView[] {
+  return parseArray<unknown>(text)
+    .map((raw) => {
+      if (raw === null || typeof raw !== 'object') return null;
+      const value = raw as Record<string, unknown>;
+      if (typeof value.item !== 'string' || typeof value.passed !== 'boolean') return null;
+      return {
+        item: value.item,
+        passed: value.passed,
+        note: typeof value.note === 'string' ? value.note : '',
+      };
+    })
+    .filter((value): value is TaskReviewChecklistItemView => value !== null);
+}
+
 function parseArray<T>(text: string): T[] {
   try {
     const value = JSON.parse(text) as unknown;
@@ -393,7 +456,9 @@ async function submissionRows(
 }
 
 /** 当前任务卡片/列表使用的轻量摘要；无提交时为 null。 */
-export function submissionSummary(row: TaskSubmissionRow): TaskSubmissionSummaryView {
+export function submissionSummary(
+  row: Pick<TaskSubmissionRow, 'submission_id' | 'version' | 'status' | 'created_at'>,
+): TaskSubmissionSummaryView {
   return {
     submission_id: row.submission_id,
     version: row.version,
@@ -460,6 +525,8 @@ async function reviewFor(
     reviewer_name: names.get(row.reviewer_actor_id) ?? '',
     decision: row.decision,
     reason: row.reason,
+    checklist:
+      row.decision === 'accept' ? parseChecklist(row.checklist_json) : [],
     created_at: String(row.created_at),
   };
 }
@@ -707,6 +774,116 @@ function submissionPendingGuard(
     .bind(submissionId, taskId);
 }
 
+/**
+ * 验收入口的事务闸门：必须仍是同一个 pending 版本、同一验收人，
+ * 且提交人不能是验收人自己。任何一方先写入都会让后到者得到 REVIEW_STALE。
+ */
+function reviewVersionGuard(
+  db: D1Database,
+  submissionId: string,
+  taskId: string,
+  version: number,
+  reviewerId: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      guardSql(
+        'reviewStale',
+        `NOT EXISTS (
+           SELECT 1
+             FROM task_submissions s
+             JOIN tasks t ON t.task_id = s.task_id
+            WHERE s.submission_id = ? AND s.task_id = ? AND s.version = ?
+              AND s.status = 'pending' AND t.status = 'submitted'
+              AND t.reviewer_actor_id = ? AND s.submitted_by != ?
+         )`,
+      ),
+    )
+    .bind(submissionId, taskId, version, reviewerId, reviewerId);
+}
+
+/** 新验收人必须仍是房间内未停用的 active 成员。 */
+function reviewerParticipantGuard(
+  db: D1Database,
+  roomId: string,
+  reviewerId: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      guardSql(
+        'invalidTarget',
+        `NOT EXISTS (
+           SELECT 1
+             FROM room_members rm
+             JOIN actors a ON a.actor_id = rm.actor_id
+            WHERE rm.room_id = ? AND rm.actor_id = ?
+              AND rm.status = 'active' AND a.disabled_at IS NULL
+         )`,
+      ),
+    )
+    .bind(roomId, reviewerId);
+}
+
+/** 验收人不能是当前负责人，也不能是待验收版本的提交人。 */
+function reviewerTargetGuard(
+  db: D1Database,
+  taskId: string,
+  reviewerId: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      guardSql(
+        'invalidTarget',
+        `EXISTS (SELECT 1 FROM tasks WHERE task_id = ? AND owner_actor_id = ?)
+         OR EXISTS (
+           SELECT 1 FROM task_submissions
+            WHERE task_id = ? AND status = 'pending' AND submitted_by = ?
+         )`,
+      ),
+    )
+    .bind(taskId, reviewerId, taskId, reviewerId);
+}
+
+async function latestSubmissionSummary(
+  db: D1Database,
+  taskId: string,
+): Promise<TaskSubmissionSummaryView | null> {
+  const row = await db
+    .prepare(
+      `SELECT submission_id, version, status, created_at
+         FROM task_submissions
+        WHERE task_id = ?
+        ORDER BY version DESC
+        LIMIT 1`,
+    )
+    .bind(taskId)
+    .first<Pick<TaskSubmissionRow, 'submission_id' | 'version' | 'status' | 'created_at'>>();
+  return row ? submissionSummary(row) : null;
+}
+
+/** 已终态时重复验收返回同一权威快照，不重复写事件或外部回写。 */
+async function currentReviewResult(
+  db: D1Database,
+  context: TaskContext,
+  task: TaskRow,
+  submission: TaskSubmissionRow,
+): Promise<TaskSubmissionResult> {
+  const assignment = task.current_assignment_id
+    ? await getTaskAssignment(db, task.current_assignment_id)
+    : null;
+  return {
+    submission: await buildSubmissionView(db, submission, task.room_id, true),
+    task: await taskViewForWrite(
+      db,
+      context,
+      task,
+      assignment,
+      submissionSummary(submission),
+    ),
+    authorization: historySnapshot(context.boundary),
+  };
+}
+
 function isSubmissionUniqueConflict(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   return (
@@ -773,6 +950,15 @@ export async function taskSubmit(
   }
   if (assignment.owner_actor_id !== context.caller || task.owner_actor_id !== context.caller) {
     throw new BusinessError('PERMISSION_DENIED', '只有当前负责人可以提交该任务成果');
+  }
+  // D07：负责人不得自验。创建者默认验收人且自己执行时，必须先显式改派
+  // 验收人；提交时再检查一次，避免历史数据或竞态留下自验路径。
+  if (task.reviewer_actor_id === context.caller) {
+    throw new BusinessError(
+      'PERMISSION_DENIED',
+      '负责人不能验收自己的成果；请先由有权限者指定独立验收人',
+      await actualTaskState(db, task.task_id),
+    );
   }
 
   const latest = await db
@@ -990,10 +1176,14 @@ export async function taskSubmissionList(
   };
 }
 
-export async function taskSubmissionReturn(
+type ReturnMode = 'legacy' | 'review';
+type ReturnInput = TaskSubmissionReturnInput | TaskReviewReturnInput;
+
+async function returnSubmission(
   db: D1Database,
   principal: Principal,
-  input: TaskSubmissionReturnInput,
+  input: ReturnInput,
+  mode: ReturnMode,
 ): Promise<TaskSubmissionResult> {
   const { task, context } = await requireVisibleTask(db, principal, input.task_id);
   const reason = normalizeReturnReason(input.reason);
@@ -1003,6 +1193,8 @@ export async function taskSubmissionReturn(
       submission_id: input.submission_id,
       reason,
       expected_revision: input.expected_revision ?? null,
+      // 旧入口不绑定版本时不改变既有请求摘要。
+      ...(input.version !== undefined ? { version: input.version } : {}),
     }),
   );
   const replay = await getOperation(db, context.caller, input.request_id);
@@ -1017,20 +1209,39 @@ export async function taskSubmissionReturn(
     });
   }
   if (task.status !== 'submitted') {
-    throw new BusinessError('CONFLICT', '只有待验收任务可以退回成果', {
-      status: task.status,
-      ...(await actualTaskState(db, task.task_id)),
-    });
+    throw new BusinessError(
+      mode === 'review' ? 'REVIEW_STALE' : 'CONFLICT',
+      mode === 'review'
+        ? '任务已不在待验收状态或版本已变化，请刷新后重试'
+        : '只有待验收任务可以退回成果',
+      {
+        status: task.status,
+        ...(await actualTaskState(db, task.task_id)),
+      },
+    );
   }
   const submission = await getTaskSubmission(db, input.submission_id);
   if (!submission || submission.task_id !== task.task_id) {
     throw new BusinessError('NOT_FOUND', '成果版本不存在');
   }
-  if (submission.status !== 'pending') {
-    throw new BusinessError('CONFLICT', '该成果版本已处理，不能重复退回', {
-      submission_id: submission.submission_id,
-      status: submission.status,
+  if (input.version !== undefined && submission.version !== input.version) {
+    throw new BusinessError('REVIEW_STALE', '成果版本已变化，请刷新后重试', {
+      expected: input.version,
+      actual: submission.version,
+      ...(await actualTaskState(db, task.task_id)),
     });
+  }
+  if (submission.status !== 'pending') {
+    throw new BusinessError(
+      mode === 'review' ? 'REVIEW_STALE' : 'CONFLICT',
+      mode === 'review'
+        ? '该成果版本已处理或已被其他验收结果占用，请刷新后重试'
+        : '该成果版本已处理，不能重复退回',
+      {
+        submission_id: submission.submission_id,
+        status: submission.status,
+      },
+    );
   }
   if (task.reviewer_actor_id !== context.caller) {
     throw new BusinessError('PERMISSION_DENIED', '只有当前验收人可以退回该成果');
@@ -1107,6 +1318,7 @@ export async function taskSubmissionReturn(
       reviewer_name: reviewerNames.get(context.caller) ?? '',
       decision: 'return',
       reason,
+      checklist: [],
       created_at: String(at),
     },
   };
@@ -1126,6 +1338,19 @@ export async function taskSubmissionReturn(
       build: (resultJson) => [
         operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
         memberGuard(db, task.room_id, context.caller),
+        // D07 新入口先验证 submission/version/reviewer 三者仍与读取时一致，
+        // 让并发通过/退回的失败方得到 REVIEW_STALE 而不是误以为普通冲突。
+        ...(mode === 'review'
+          ? [
+              reviewVersionGuard(
+                db,
+                submission.submission_id,
+                task.task_id,
+                submission.version,
+                context.caller,
+              ),
+            ]
+          : []),
         taskRevisionGuard(db, task.task_id, task.revision),
         taskStateGuard(db, task.task_id, "status = 'submitted'"),
         submissionPendingGuard(db, submission.submission_id, task.task_id),
@@ -1201,6 +1426,349 @@ export async function taskSubmissionReturn(
                   owner_actor_id: nextAssignment.owner_actor_id,
                 }
               : {}),
+          },
+        ).statements,
+      ],
+    });
+  } catch (error) {
+    await rethrowWithActualState(db, task.task_id, error);
+  }
+  return result;
+}
+
+/** D06 兼容入口：不要求绑定 version，重复退回仍返回既有 CONFLICT 语义。 */
+export async function taskSubmissionReturn(
+  db: D1Database,
+  principal: Principal,
+  input: TaskSubmissionReturnInput,
+): Promise<TaskSubmissionResult> {
+  return returnSubmission(db, principal, input, 'legacy');
+}
+
+/** D07 退回：必须绑定 submission_id/version，旧版本返回 REVIEW_STALE。 */
+export async function taskReviewReturn(
+  db: D1Database,
+  principal: Principal,
+  input: TaskReviewReturnInput,
+): Promise<TaskSubmissionResult> {
+  return returnSubmission(db, principal, input, 'review');
+}
+
+export async function taskReviewAccept(
+  db: D1Database,
+  principal: Principal,
+  input: TaskReviewAcceptInput,
+): Promise<TaskSubmissionResult> {
+  const { task, context } = await requireVisibleTask(db, principal, input.task_id);
+  const checklist = normalizeChecklist(input.checklist);
+  const payloadHash = await sha256Hex(
+    stableStringify({
+      task_id: task.task_id,
+      submission_id: input.submission_id,
+      version: input.version,
+      checklist,
+      expected_revision: input.expected_revision ?? null,
+    }),
+  );
+  const replay = await getOperation(db, context.caller, input.request_id);
+  if (replay) {
+    return resolveOperation(replay, payloadHash) as TaskSubmissionResult;
+  }
+
+  const submission = await getTaskSubmission(db, input.submission_id);
+  if (!submission || submission.task_id !== task.task_id) {
+    throw new BusinessError('NOT_FOUND', '成果版本不存在');
+  }
+  // 权限先于终态判断：非验收人即使任务已通过也不能借重复验收读取快照。
+  if (task.reviewer_actor_id !== context.caller) {
+    throw new BusinessError('PERMISSION_DENIED', '只有当前验收人可以通过该成果');
+  }
+  if (submission.submitted_by === context.caller || task.owner_actor_id === context.caller) {
+    throw new BusinessError('PERMISSION_DENIED', '负责人不能通过自己的成果');
+  }
+  if (input.expected_revision !== undefined && input.expected_revision !== task.revision) {
+    throw new BusinessError('VERSION_CONFLICT', '任务版本已变化，请刷新后重试', {
+      expected: input.expected_revision,
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+  if (input.version !== submission.version) {
+    throw new BusinessError('REVIEW_STALE', '成果版本已变化，请刷新后重试', {
+      expected: input.version,
+      actual: submission.version,
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+  // 重复通过：同一 request_id 由幂等层返回原结果；新 request_id 也返回同一
+  // 权威快照，不重复写事件、不产生第二次外部回写。
+  if (task.status === 'accepted' && submission.status === 'accepted') {
+    return currentReviewResult(db, context, task, submission);
+  }
+  if (submission.status !== 'pending' || task.status !== 'submitted') {
+    throw new BusinessError('REVIEW_STALE', '该成果版本已处理或任务已变化，请刷新后重试', {
+      submission_id: submission.submission_id,
+      status: submission.status,
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+
+  const at = nowMs();
+  const assignment = task.current_assignment_id
+    ? await getTaskAssignment(db, task.current_assignment_id)
+    : null;
+  const updatedTask: TaskRow = {
+    ...task,
+    status: 'accepted',
+    accepted_at: at,
+    revision: task.revision + 1,
+    updated_at: at,
+  };
+  const reviewedSummary: TaskSubmissionSummaryView = {
+    submission_id: submission.submission_id,
+    version: submission.version,
+    status: 'accepted',
+    submitted_at: String(submission.created_at),
+  };
+  const reviewerNames = await actorNames(db, [context.caller]);
+  const submissionView: TaskSubmissionView = {
+    ...(await buildSubmissionView(
+      db,
+      { ...submission, status: 'accepted', reviewed_at: at },
+      task.room_id,
+      true,
+    )),
+    review: {
+      reviewer_actor_id: context.caller,
+      reviewer_name: reviewerNames.get(context.caller) ?? '',
+      decision: 'accept',
+      reason: '',
+      checklist,
+      created_at: String(at),
+    },
+  };
+  const taskView = await taskViewForWrite(db, context, updatedTask, assignment, reviewedSummary);
+  const result: TaskSubmissionResult = {
+    submission: submissionView,
+    task: taskView,
+    authorization: historySnapshot(context.boundary),
+  };
+
+  try {
+    await runIdempotent(db, {
+      actorId: context.caller,
+      requestId: input.request_id,
+      payloadHash,
+      result,
+      build: (resultJson) => [
+        operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
+        memberGuard(db, task.room_id, context.caller),
+        reviewVersionGuard(
+          db,
+          submission.submission_id,
+          task.task_id,
+          submission.version,
+          context.caller,
+        ),
+        taskRevisionGuard(db, task.task_id, task.revision),
+        taskStateGuard(db, task.task_id, "status = 'submitted'"),
+        submissionPendingGuard(db, submission.submission_id, task.task_id),
+        db
+          .prepare(
+            `UPDATE task_submissions
+                SET status = 'accepted', reviewed_at = ?
+              WHERE submission_id = ? AND task_id = ? AND status = 'pending'`,
+          )
+          .bind(at, submission.submission_id, task.task_id),
+        db
+          .prepare(
+            `INSERT INTO task_reviews
+               (review_id, submission_id, task_id, reviewer_actor_id, decision, reason,
+                checklist_json, created_at)
+             VALUES (?, ?, ?, ?, 'accept', '', ?, ?)`,
+          )
+          .bind(
+            newId('rev'),
+            submission.submission_id,
+            task.task_id,
+            context.caller,
+            JSON.stringify(checklist),
+            at,
+          ),
+        db
+          .prepare(
+            `UPDATE tasks
+                SET status = 'accepted', accepted_at = ?, revision = revision + 1, updated_at = ?
+              WHERE task_id = ? AND status = 'submitted' AND revision = ?`,
+          )
+          .bind(at, at, task.task_id, task.revision),
+        ...taskRoomEvent(
+          db,
+          updatedTask,
+          'task_accepted',
+          `task:accepted:${task.task_id}:${updatedTask.revision}`,
+          at,
+          {
+            changed_by: context.caller,
+            submission_id: submission.submission_id,
+            version: submission.version,
+            checklist_count: checklist.length,
+            passed_count: checklist.filter((item) => item.passed).length,
+          },
+        ).statements,
+      ],
+    });
+  } catch (error) {
+    // 并发通过：另一请求已把任务与版本置为 accepted 时，返回同一快照。
+    const freshSubmission = await getTaskSubmission(db, submission.submission_id);
+    if (freshSubmission) {
+      const actualTask = await getTask(db, task.task_id);
+      if (actualTask?.status === 'accepted' && freshSubmission.status === 'accepted') {
+        return currentReviewResult(db, context, actualTask, freshSubmission);
+      }
+    }
+    await rethrowWithActualState(db, task.task_id, error);
+  }
+  return result;
+}
+
+/**
+ * 显式指定/替换验收人。
+ *
+ * 终态任务不能再改；验收人失权或退群时任务保持 submitted，由创建者、当前
+ * 负责人或管理员选择新的合格成员接手，绝不自动通过。
+ */
+export async function taskReviewerSet(
+  db: D1Database,
+  principal: Principal,
+  input: TaskReviewerSetInput,
+): Promise<TaskResult> {
+  const { task, context } = await requireVisibleTask(db, principal, input.task_id);
+  const payloadHash = await sha256Hex(
+    stableStringify({
+      task_id: task.task_id,
+      reviewer_actor_id: input.reviewer_actor_id,
+      expected_revision: input.expected_revision ?? null,
+    }),
+  );
+  const replay = await getOperation(db, context.caller, input.request_id);
+  if (replay) return resolveOperation(replay, payloadHash) as TaskResult;
+
+  if (
+    task.status === 'accepted' ||
+    task.status === 'cancelled' ||
+    task.status === 'legacy_completed'
+  ) {
+    throw new BusinessError('CONFLICT', '终态任务不能更换验收人', {
+      status: task.status,
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+  if (input.expected_revision !== undefined && input.expected_revision !== task.revision) {
+    throw new BusinessError('VERSION_CONFLICT', '任务版本已变化，请刷新后重试', {
+      expected: input.expected_revision,
+      ...(await actualTaskState(db, task.task_id)),
+    });
+  }
+  if (
+    task.created_by !== context.caller &&
+    task.owner_actor_id !== context.caller &&
+    !isOwnerOrAdmin(context.room, context.member)
+  ) {
+    throw new BusinessError('PERMISSION_DENIED', '只有创建者、当前负责人或管理员可以更换验收人');
+  }
+  const reviewer = await assertTaskParticipant(
+    db,
+    context.room,
+    input.reviewer_actor_id,
+    '验收人',
+    task.created_at,
+  );
+  if (input.reviewer_actor_id === task.owner_actor_id) {
+    throw invalid('验收人', '不能是当前负责人；执行者不能验收自己的交付');
+  }
+  const latest = await db
+    .prepare(
+      `SELECT submitted_by, status FROM task_submissions
+        WHERE task_id = ?
+        ORDER BY version DESC
+        LIMIT 1`,
+    )
+    .bind(task.task_id)
+    .first<{ submitted_by: string; status: string }>();
+  if (latest?.status === 'pending' && latest.submitted_by === reviewer.actor_id) {
+    throw invalid('验收人', '不能是待验收版本的提交人');
+  }
+  const currentAssignment = task.current_assignment_id
+    ? await getTaskAssignment(db, task.current_assignment_id)
+    : null;
+  const currentSubmission = await latestSubmissionSummary(db, task.task_id);
+  if (input.reviewer_actor_id === task.reviewer_actor_id) {
+    return {
+      task: await taskViewForWrite(
+        db,
+        context,
+        task,
+        currentAssignment,
+        currentSubmission,
+      ),
+      authorization: historySnapshot(context.boundary),
+    };
+  }
+
+  const at = nowMs();
+  const updatedTask: TaskRow = {
+    ...task,
+    reviewer_actor_id: reviewer.actor_id,
+    revision: task.revision + 1,
+    updated_at: at,
+  };
+  const taskView = await taskViewForWrite(
+    db,
+    context,
+    updatedTask,
+    currentAssignment,
+    currentSubmission,
+  );
+  const result: TaskResult = {
+    task: taskView,
+    authorization: historySnapshot(context.boundary),
+  };
+
+  try {
+    await runIdempotent(db, {
+      actorId: context.caller,
+      requestId: input.request_id,
+      payloadHash,
+      result,
+      build: (resultJson) => [
+        operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
+        memberGuard(db, task.room_id, context.caller),
+        taskRevisionGuard(db, task.task_id, task.revision),
+        taskStateGuard(
+          db,
+          task.task_id,
+          "status NOT IN ('accepted', 'cancelled', 'legacy_completed')",
+        ),
+        reviewerParticipantGuard(db, task.room_id, reviewer.actor_id),
+        reviewerTargetGuard(db, task.task_id, reviewer.actor_id),
+        db
+          .prepare(
+            `UPDATE tasks
+                SET reviewer_actor_id = ?, revision = revision + 1, updated_at = ?
+              WHERE task_id = ? AND revision = ?
+                AND status NOT IN ('accepted', 'cancelled', 'legacy_completed')`,
+          )
+          .bind(reviewer.actor_id, at, task.task_id, task.revision),
+        ...taskRoomEvent(
+          db,
+          updatedTask,
+          'task_reviewer_changed',
+          `task:reviewer:${task.task_id}:${updatedTask.revision}`,
+          at,
+          {
+            changed_by: context.caller,
+            reviewer_actor_id: reviewer.actor_id,
+            previous_reviewer_actor_id: task.reviewer_actor_id,
           },
         ).statements,
       ],

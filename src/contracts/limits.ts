@@ -209,6 +209,12 @@ export const LIMITS = {
   taskSubmissionListMax: 100,
   /** 退回原因 UTF-8 字节上限。 */
   taskSubmissionReturnReasonBytes: 4 * 1024,
+  /** 验收通过时逐项核对 acceptance_criteria 的清单条数上限。 */
+  taskReviewChecklistMax: 50,
+  /** 单条验收核对项 UTF-8 字节上限。 */
+  taskReviewChecklistItemBytes: 2 * 1024,
+  /** 单条验收核对备注 UTF-8 字节上限。 */
+  taskReviewChecklistNoteBytes: 2 * 1024,
   /** 任务期限允许的最远未来时间（毫秒）。 */
   taskDueMaxAheadMs: 10 * 365 * 24 * 60 * 60_000,
   /** `network_task_summary` 单次 room_ids 过滤上限。 */

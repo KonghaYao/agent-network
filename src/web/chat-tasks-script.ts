@@ -65,6 +65,7 @@ let taskDetailCurrent = null;
 let taskDetailLoadSeq = 0;
 let myTasksLoadSeq = 0;
 let taskCreateSourceId = null;
+let taskCreateParentId = null;
 let taskCreateRoomId = null;
 let taskSummary = new Map();
 let tasksRefreshTimer = null;
@@ -383,7 +384,7 @@ function renderTaskDetail(task) {
         ? '待接手：' + (task.assignment.owner_name || task.assignment.owner_actor_id)
         : '待指派'
   );
-  taskDetailRow('验收人', task.reviewer_name);
+  appendTaskReviewDetail(task);
   taskDetailRow('期限', task.due_at ? fullTime(task.due_at) : '无');
   taskDetailRow(
     '业务权威来源',
@@ -458,6 +459,7 @@ function renderTaskDetailActions(task) {
         code === 'CLAIM_CONFLICT' ||
         code === 'CONFLICT' ||
         code === 'ASSIGNMENT_STALE' ||
+        code === 'REVIEW_STALE' ||
         code === 'VERSION_CONFLICT' ||
         code === 'REQUEST_EXPIRED'
       ) {
@@ -608,6 +610,7 @@ function renderTaskDetailActions(task) {
 
   renderTaskProgressActions(task, actions, run, error);
   renderTaskSubmissionActions(task, actions, run, error);
+  renderTaskReviewActions(task, actions, run, error);
 
   if (!actions.hasChildNodes()) {
     actions.remove();
@@ -663,18 +666,25 @@ function openTaskCreate(options) {
   if (!activeRoomId || !taskCanCreate() || !taskCreateModal) return;
   const settings = options || {};
   taskCreateSourceId = settings.sourceMessageId || null;
+  taskCreateParentId = settings.parentTaskId || null;
   taskCreateRoomId = activeRoomId;
   if (taskCreateForm) taskCreateForm.reset();
   if (taskFormError) taskFormError.textContent = '';
   populateTaskMemberSelects();
   if (taskSourceHint) {
-    taskSourceHint.hidden = !taskCreateSourceId;
-    taskSourceHint.textContent = taskCreateSourceId
-      ? '从消息创建：任务会关联该消息，引用或转发卡片不会复制任务。'
-      : '';
+    const hints = [];
+    if (taskCreateSourceId) {
+      hints.push('从消息创建：任务会关联该消息，引用或转发卡片不会复制任务。');
+    }
+    if (taskCreateParentId) {
+      hints.push('作为父任务的追加工作创建；父任务保持已验收/已取消，不会被重新打开。');
+    }
+    taskSourceHint.hidden = hints.length === 0;
+    taskSourceHint.textContent = hints.join(' ');
   }
   if (taskTitleInput) {
-    taskTitleInput.value = settings.title || suggestedTaskTitle(taskCreateSourceId);
+    taskTitleInput.value =
+      settings.title || suggestedTaskTitle(taskCreateSourceId) || (taskCreateParentId ? '追加工作' : '');
   }
   taskCreateModal.hidden = false;
   if (taskTitleInput) taskTitleInput.focus();
@@ -682,6 +692,7 @@ function openTaskCreate(options) {
 
 function closeTaskCreate() {
   taskCreateSourceId = null;
+  taskCreateParentId = null;
   taskCreateRoomId = null;
   if (taskCreateModal) taskCreateModal.hidden = true;
   if (taskFormError) taskFormError.textContent = '';
@@ -712,6 +723,7 @@ async function submitTaskCreate() {
     reviewer_actor_id: reviewer || undefined
   };
   if (taskCreateSourceId) args.source_message_id = taskCreateSourceId;
+  if (taskCreateParentId) args.parent_task_id = taskCreateParentId;
   if (taskDescriptionInput && taskDescriptionInput.value.trim()) {
     args.description = taskDescriptionInput.value;
   }

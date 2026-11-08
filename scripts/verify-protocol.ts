@@ -350,6 +350,9 @@ async function main(): Promise<void> {
     'network_task_submission_get',
     'network_task_submission_list',
     'network_task_submission_return',
+    'network_task_review_accept',
+    'network_task_review_return',
+    'network_task_reviewer_set',
     'network_room_members_update',
     'network_room_role_set',
     'network_room_owner_transfer',
@@ -452,6 +455,9 @@ async function main(): Promise<void> {
     'network_task_submission_get',
     'network_task_submission_list',
     'network_task_submission_return',
+    'network_task_review_accept',
+    'network_task_review_return',
+    'network_task_reviewer_set',
     'network_inbox_list',
     'network_delivery_claim',
     'network_delivery_complete',
@@ -716,9 +722,12 @@ async function main(): Promise<void> {
     'network_task_submission_get',
     'network_task_submission_list',
     'network_task_submission_return',
+    'network_task_review_accept',
+    'network_task_review_return',
+    'network_task_reviewer_set',
   ];
   check(
-    '任务 22 个工具全部注册且旧工具已退役',
+    '任务 25 个工具全部注册且旧工具已退役',
     taskToolNames.every((name) => taskTools.has(name)) &&
       taskTools.size === taskToolNames.length &&
       !taskTools.has('network_task_list_get') &&
@@ -1103,12 +1112,86 @@ async function main(): Promise<void> {
   const submissionReturnDescription =
     taskTools.get('network_task_submission_return')?.description ?? '';
   check(
-    'task_submission_return 描述声明最小退回与 D07 边界',
+    'task_submission_return 描述声明兼容退回与 D07 关系',
     submissionReturnDescription.includes('task_reviews') &&
       submissionReturnDescription.includes('新的 assignment_version') &&
-      submissionReturnDescription.includes('本工具不实现 accept') &&
+      submissionReturnDescription.includes('network_task_review_return') &&
+      submissionReturnDescription.includes('REVIEW_STALE') &&
       submissionReturnDescription.includes('不增加 Agent pending_count'),
     submissionReturnDescription,
+  );
+  const reviewAcceptInput = JSON.stringify(
+    taskTools.get('network_task_review_accept')?.inputSchema ?? {},
+  );
+  check(
+    'task_review_accept 输入含 submission_id/version/checklist',
+    ['request_id', 'task_id', 'submission_id', 'version', 'checklist'].every((key) =>
+      reviewAcceptInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_review_accept')?.inputSchema,
+  );
+  const reviewAcceptOutput = JSON.stringify(
+    taskTools.get('network_task_review_accept')?.outputSchema ?? {},
+  );
+  check(
+    'task_review_accept 输出含 checklist 与 accepted task 字段',
+    ['checklist', 'reviewer_available', 'can_accept_review', 'accepted_at'].every((key) =>
+      reviewAcceptOutput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_review_accept')?.outputSchema,
+  );
+  const reviewReturnInput = JSON.stringify(
+    taskTools.get('network_task_review_return')?.inputSchema ?? {},
+  );
+  check(
+    'task_review_return 输入含 submission_id/version/reason',
+    ['request_id', 'task_id', 'submission_id', 'version', 'reason'].every((key) =>
+      reviewReturnInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_review_return')?.inputSchema,
+  );
+  const reviewerSetInput = JSON.stringify(
+    taskTools.get('network_task_reviewer_set')?.inputSchema ?? {},
+  );
+  check(
+    'task_reviewer_set 输入含 reviewer_actor_id',
+    ['request_id', 'task_id', 'reviewer_actor_id', 'expected_revision'].every((key) =>
+      reviewerSetInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_reviewer_set')?.inputSchema,
+  );
+  const taskDetailOutput = JSON.stringify(taskTools.get('network_task_get')?.outputSchema ?? {});
+  check(
+    'task_get 输出含验收人可用性、验收操作与关联任务字段',
+    [
+      'reviewer_available',
+      'can_accept_review',
+      'can_set_reviewer',
+      'parent_task_id',
+      'related_task_id',
+    ].every((key) => taskDetailOutput.includes(`"${key}"`)),
+    taskTools.get('network_task_get')?.outputSchema,
+  );
+  const reviewAcceptReadOnly = (
+    taskTools.get('network_task_review_accept') as
+      | { annotations?: { readOnlyHint?: boolean } }
+      | undefined
+  )?.annotations?.readOnlyHint;
+  const reviewReturnReadOnly = (
+    taskTools.get('network_task_review_return') as
+      | { annotations?: { readOnlyHint?: boolean } }
+      | undefined
+  )?.annotations?.readOnlyHint;
+  const reviewerSetReadOnly = (
+    taskTools.get('network_task_reviewer_set') as
+      | { annotations?: { readOnlyHint?: boolean } }
+      | undefined
+  )?.annotations?.readOnlyHint;
+  check(
+    '验收写工具不标记只读',
+    reviewAcceptReadOnly !== true &&
+      reviewReturnReadOnly !== true &&
+      reviewerSetReadOnly !== true,
   );
   check(
     'task_submission_get/list 注册为只读工具',
@@ -2129,6 +2212,18 @@ async function main(): Promise<void> {
       skillText.includes('丢失 URL'),
     skillText.slice(0, 240),
   );
+  check(
+    '技能正文声明 D07 验收通过、退回与改派工具',
+    skillText.includes('network_task_review_accept') &&
+      skillText.includes('network_task_review_return') &&
+      skillText.includes('network_task_reviewer_set') &&
+      skillText.includes('checklist') &&
+      skillText.includes('REVIEW_STALE') &&
+      skillText.includes('accepted') &&
+      !skillText.includes('完整验收通过（accept）仍由 D07 提供') &&
+      !skillText.includes('未上线前不要声称可以验收'),
+    skillText.slice(0, 300),
+  );
 
   const skillGet = await rawRpc('skills/get', { uri: skill?.uri ?? '' });
   const gotSkill = (skillGet.body.result as { skill?: SkillEntry } | undefined)?.skill;
@@ -2353,6 +2448,17 @@ async function main(): Promise<void> {
   check(
     '静态技能不包含硬编码 Bearer token',
     !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(skillDocText),
+  );
+  check(
+    '静态技能声明 D07 验收、退回与改派规则',
+    skillDocText.includes('network_task_review_accept') &&
+      skillDocText.includes('network_task_review_return') &&
+      skillDocText.includes('network_task_reviewer_set') &&
+      skillDocText.includes('checklist') &&
+      skillDocText.includes('REVIEW_STALE') &&
+      skillDocText.includes('accepted` 是终态') &&
+      !skillDocText.includes('完整验收通过（accept）仍由 D07 提供'),
+    skillDocText.slice(0, 300),
   );
   check(
     '静态技能只覆盖 Agent 类型',

@@ -745,5 +745,28 @@ export function taskDialogs(): string {
       </div>
     </form>
   </div>
+</div>
+<div class="modal" id="task-review-modal" hidden>
+  <div class="modal-card task-modal-card" role="dialog" aria-modal="true"
+    aria-labelledby="task-review-title">
+    <header class="task-modal-head">
+      <h2 id="task-review-title">验收通过</h2>
+      <button class="task-popover-close" id="task-review-close" type="button"
+        aria-label="关闭验收" title="关闭">×</button>
+    </header>
+    <form id="task-review-form">
+      <p class="muted task-source-hint" id="task-review-summary"></p>
+      <fieldset class="task-submit-section">
+        <legend>验收清单</legend>
+        <p class="muted">逐项勾选验收条件；勾选结果随验收记录保存，有未通过项时请使用退回。</p>
+        <ul class="task-review-checklist" id="task-review-checklist"></ul>
+      </fieldset>
+      <p class="form-error" id="task-review-error" role="alert"></p>
+      <div class="row modal-actions">
+        <button id="task-review-cancel" type="button">取消</button>
+        <button class="primary" type="submit">确认验收通过</button>
+      </div>
+    </form>
+  </div>
 </div>`;
 }
