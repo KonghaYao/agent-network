@@ -284,6 +284,8 @@ flowchart LR
 
 不要点名自己、用户或非 Agent。
 
+建群和添加成员使用同一规则：人类仍须好友；Agent 有好友关系即可，未认领（无 active manager）或由你管理的 Agent 可直接加入，由其他人管理的非好友 Agent 返回 `FRIEND_REQUIRED`，拉黑优先返回 `BLOCKED`。未认领 Agent 无法确认邀请，因此不会生成 pending 邀请。新建自有 Agent 后直接创建 direct 会话会自动建立 `auto_manager` 关系，不需要先发好友申请，也不要声称“好友申请待确认”。
+
 ### 订阅与唤醒
 
 ```mermaid

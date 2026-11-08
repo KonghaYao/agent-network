@@ -982,7 +982,7 @@ export function registerTools(
   register(
     server,
     'network_contact_request',
-    '向 actor_id 或 agent_session_id 发起好友申请。申请只进入独立的申请收件箱，不创建 direct 房间、不发送房间消息，陌生人无法借此写入单聊。管理者向自有 Agent 申请时自动建立关系；其他目标按接收策略处理（human 默认本人确认、有管理者的 Agent 默认管理者确认、无管理者 Agent 默认自行确认），不会因为 kind=agent 自动接受。已存在 pending 时返回该申请；已是好友时 already_friends=true。通知只落持久事件，不产生 delivery，也不唤醒 Agent 执行任务。',
+    '向 actor_id 或 agent_session_id 发起好友申请。申请只进入独立的申请收件箱，不创建 direct 房间、不发送房间消息，陌生人无法借此写入单聊。管理者向自有 Agent 申请时自动建立关系；其他目标按接收策略处理（human 默认本人确认、有管理者的 Agent 默认管理者确认、无管理者 Agent 默认自行确认），不会因为 kind=agent 自动接受。已存在 pending 时返回该申请；已是好友时 already_friends=true。建群或加成员不要求先发好友申请：未认领或自有管理者的 Agent 可直接加入。通知只落持久事件，不产生 delivery，也不唤醒 Agent 执行任务。',
     contactRequestSchema,
     contactRequestResultSchema,
     async (input) => {
@@ -1114,7 +1114,7 @@ export function registerTools(
   register(
     server,
     'network_room_create',
-    '创建单聊或群聊。单聊按 actor 对唯一收敛；群聊创建者成为 owner。群聊中创建者管理的 Agent 直接 active，其他好友生成待确认邀请；返回 results 逐对象给出 active/invited/failed。预检不合格会在创建前整体拒绝并列出对象；提交时的竞态失效只影响对应目标，已成功成员不会重复添加。',
+    '创建单聊或群聊。单聊按 actor 对唯一收敛；群聊创建者成为 owner。群聊中创建者管理的 Agent 与未认领（无 active manager）的 Agent 直接 active，其他好友生成待确认邀请；人类和由其他人管理的 Agent 仍须好友关系。返回 results 逐对象给出 active/invited/failed。预检不合格会在创建前整体拒绝并列出对象；提交时的竞态失效只影响对应目标，已成功成员不会重复添加。',
     roomCreateSchema,
     roomCreateResultSchema,
     async (input) => {
@@ -1645,7 +1645,7 @@ export function registerTools(
   register(
     server,
     'network_room_members_update',
-    '群 owner 或管理员添加/移除成员；管理员只能移除普通成员，不能移除 owner 或其他管理员。普通成员是否可邀请由群策略决定。移除会取消该成员在房间内未完成的工作。transfer_owner_to 已移除，传入会返回 INVALID_ARGUMENT；转让请使用 network_room_owner_transfer_propose。遗留无主群不允许添加成员（返回 CONFLICT/reason=owner_missing），移除仍可用。',
+    '群 owner 或管理员添加/移除成员；管理员只能移除普通成员，不能移除 owner 或其他管理员。普通成员是否可邀请由群策略决定。加人规则与建群一致：人类须好友；Agent 有 active 好友关系，或未认领，或当前调用者是它的 active manager 时可直接加入；由其他人管理的非好友 Agent 返回 FRIEND_REQUIRED。拉黑优先返回 BLOCKED。移除会取消该成员在房间内未完成的工作。transfer_owner_to 已移除，传入会返回 INVALID_ARGUMENT；转让请使用 network_room_owner_transfer_propose。遗留无主群不允许添加成员（返回 CONFLICT/reason=owner_missing），移除仍可用。',
     roomMembersUpdateSchema,
     roomDetailSchema,
     async (input) => {
