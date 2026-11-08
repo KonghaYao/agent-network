@@ -28,9 +28,7 @@ import { APP_STYLE } from './chat-styles';
 import { UPLOAD_STYLE } from './chat-upload-styles';
 import {
   DEVICE_HANDOFF_STYLE,
-  HANDOFF_ADOPT_SCRIPT,
   deviceHandoffDialog,
-  legacyTokenDialog,
   logoutDialog,
   meRenameDialog,
 } from './handoff';
@@ -56,8 +54,7 @@ export function renderAppPage(
   const isHome = roomId === null;
   return layout(
     isHome ? 'WeBots' : '聊天 · WeBots',
-    `<script>${HANDOFF_ADOPT_SCRIPT}</script>
-${sidebarPane()}
+    `${sidebarPane()}
 ${emptyPane()}
 ${chatPane()}
 ${paneResizer()}
@@ -75,7 +72,6 @@ ${announcementDialog()}
 ${newAgentDialog()}
 ${transferDialog()}
 ${deviceHandoffDialog()}
-${legacyTokenDialog()}
 ${logoutDialog()}
 ${meRenameDialog()}
 ${toastPane()}

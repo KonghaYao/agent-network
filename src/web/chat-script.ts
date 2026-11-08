@@ -296,10 +296,10 @@ async function callTool(name, args, tokenOverride, signal) {
 /**
  * 首次访问自动生成并绑定 human 身份；已有 token 失效时停止，不自动替换。
  *
- * - 没有 token 且没有待确认的旧长期凭据：本地生成 token 并注册新 human；
+ * - 没有 token：本地生成 token 并注册新 human；
  * - 已有 token 但 network_me 返回 CREDENTIAL_INVALID：抛出带 credentialInvalid
- *   标记的错误，由页面显示“重新配对/旧方式”入口，不创建替代身份；
- * - /#t= 旧长期凭据先进入确认弹窗，确认前不覆盖任何身份；
+ *   标记的错误，由页面显示“重新配对”入口，不创建替代身份；
+ * - 旧长期 token fragment 已下线：页面不读取 fragment，也不切换身份；
  * - “创建新身份并继续”或显式切换时设置 __agentNetworkAllowRegister。
  *
  * single-flight：首屏列表与深链房间并行调用时只注册一次。
@@ -311,11 +311,6 @@ function ensureIdentity() {
     );
   }
   const storedToken = browserToken();
-  if (!storedToken && window.__agentNetworkLegacyToken) {
-    const pending = new Error('检测到旧方式长期凭据；确认前不创建新身份，也不切换');
-    pending.legacyPending = true;
-    return Promise.reject(pending);
-  }
   if (identity) return Promise.resolve(identity);
   if (identityPromise) return identityPromise;
   identityPromise = (async function () {
@@ -339,7 +334,7 @@ function ensureIdentity() {
       if (!error || error.code !== 'CREDENTIAL_INVALID') throw error;
       if (!createdToken && window.__agentNetworkAllowRegister !== true) {
         const invalid = new Error(
-          '当前凭据已失效或已被撤销；本机不会自动创建替代身份。请用另一台已登录设备配对，或明确使用旧方式长期凭据。'
+          '当前凭据已失效或已被撤销；本机不会自动创建替代身份。请用另一台已登录设备生成配对码后打开 /pair。'
         );
         invalid.code = 'CREDENTIAL_INVALID';
         invalid.credentialInvalid = true;

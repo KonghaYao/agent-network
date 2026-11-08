@@ -4,7 +4,7 @@
  * 以脚本字符串导出，由 `src/web/chat.ts` 内联进页面；页面不请求任何外部
  * 二维码 API。实现范围：字节模式、纠错等级 L、版本 1–12、8 种掩码与
  * ISO/IEC 18004 惩罚评分。版本 12-L 的字节容量为 322 字节，覆盖当前
- * `origin + /#t= + token` 的长度。
+ * 配对链接 `origin + /pair#c= + challenge` 的长度。
  *
  * 只暴露 `window.agentNetworkQr`；其余符号封装在 IIFE 内，避免与页面
  * 主脚本的全局函数重名。

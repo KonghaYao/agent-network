@@ -1,9 +1,9 @@
 /**
- * 手机扫码入口：把当前浏览器身份通过 URL fragment 交给手机。
+ * 配对设备弹窗与左下角账号区块。
  *
- * token 只出现在 `#t=` 之后；浏览器不会把 fragment 发给服务端，因此
- * 二维码不经过任何服务端端点，也不引入新工具、密钥或数据库状态。
- * 代价是二维码本身就是长期凭据：任何看到二维码的人都能获得同一身份。
+ * 二维码只包含 `location.origin + '/pair#c=' + challenge`；挑战 5 分钟有效、
+ * 一次性，不包含登录 token。已登录设备仍须核对设备名称、平台与确认码后
+ * 明确批准，新设备才能兑换独立 credential。
  */
 
 import { LIMITS } from '../contracts/limits';
@@ -106,95 +106,47 @@ export function meRenameDialog(): string {
 /**
  * 配对设备弹窗。
  *
- * 二维码只包含 `location.origin + '/pair#c=' + challenge`；挑战 5 分钟有效、
- * 一次性、需已登录设备明确确认。旧长期 token 入口收进折叠的“旧方式”，
- * 明确标注风险，不再作为默认按钮文案。
+ * 打开即自动生成 5 分钟一次性挑战：左栏二维码、12 位短码与链接操作，
+ * 右栏状态与待确认设备。二维码只包含 `location.origin + '/pair#c=' + challenge`，
+ * 不含登录 token；仍须已登录设备核对设备名称、平台与确认码后明确批准。
  */
 export function deviceHandoffDialog(): string {
   return `<div class="modal" id="handoff-modal" hidden>
   <div class="modal-card handoff-card" role="dialog" aria-modal="true" aria-labelledby="handoff-title">
     <h2 id="handoff-title">配对设备</h2>
-    <p class="handoff-hint" id="handoff-hint">用另一台设备扫描二维码，或输入 12 位配对码。二维码只包含 5 分钟一次性挑战，不包含你的登录 token。</p>
-    <div class="handoff-actions handoff-actions-top">
-      <button class="primary" id="pairing-create" type="button">生成配对码</button>
-      <button id="pairing-refresh" type="button">刷新待确认</button>
+    <p class="handoff-hint" id="handoff-hint">用另一台设备扫描或输入 12 位配对码。</p>
+    <div class="handoff-columns">
+      <section class="handoff-col handoff-col-code" aria-label="配对码">
+        <div class="handoff-qr-wrap" id="pairing-qr-wrap" hidden>
+          <canvas id="handoff-qr" role="img" aria-label="一次性设备配对挑战二维码"></canvas>
+          <p class="pairing-code" id="pairing-code"></p>
+          <p class="handoff-expiry" id="pairing-expiry"></p>
+        </div>
+        <div class="handoff-actions handoff-code-actions">
+          <button class="primary" id="pairing-create" type="button">重新生成</button>
+          <button id="handoff-copy" type="button" disabled>复制链接</button>
+        </div>
+        <button class="handoff-retry" id="pairing-retry" type="button" hidden>重试</button>
+      </section>
+      <section class="handoff-col handoff-col-status" aria-label="设备确认">
+        <p class="pairing-status" id="pairing-status" role="status"></p>
+        <section class="pairing-section" aria-labelledby="pairing-list-title">
+          <div class="pairing-section-head">
+            <h3 id="pairing-list-title">待确认的新设备</h3>
+            <button class="pairing-refresh" id="pairing-refresh" type="button">刷新</button>
+          </div>
+          <p class="pairing-empty" id="pairing-list-empty">暂无待确认设备</p>
+          <ul class="pairing-list" id="pairing-list"></ul>
+        </section>
+        <p class="handoff-warning">只在核对设备名称/平台/确认码后批准；请勿截图或分享配对码。</p>
+      </section>
     </div>
-    <div class="handoff-qr-wrap" id="pairing-qr-wrap" hidden>
-      <canvas id="handoff-qr" role="img" aria-label="一次性设备配对挑战二维码"></canvas>
-      <p class="pairing-code" id="pairing-code"></p>
-      <p class="handoff-hint" id="pairing-expiry"></p>
-    </div>
-    <section class="pairing-section" aria-labelledby="pairing-list-title">
-      <h3 id="pairing-list-title">待确认的新设备</h3>
-      <p class="pairing-empty" id="pairing-list-empty">暂无待确认设备</p>
-      <ul class="pairing-list" id="pairing-list"></ul>
-    </section>
-    <p class="pairing-status" id="pairing-status" role="status"></p>
-    <p class="handoff-warning">只在核对设备名称、平台与确认码一致后批准。配对码和确认码都不是登录凭据；任何看到配对码的人仍需要你明确确认。</p>
-    <details class="legacy-token-details" id="legacy-token-details">
-      <summary>旧方式（长期凭据）</summary>
-      <p class="handoff-warning">旧 <code>/#t=</code> 链接把长期 token 放在 URL fragment 中，任何看到链接或截图的人都能获得该身份。仅用于升级旧链接；切换前会再次显示原身份与目标身份并要求确认。</p>
-      <label class="field">旧链接或 token
-        <input id="legacy-token-input" autocomplete="off" spellcheck="false"
-          placeholder="https://…/#t=… 或直接粘贴 token" aria-describedby="legacy-token-hint">
-      </label>
-      <p class="handoff-hint" id="legacy-token-hint">不会自动覆盖当前身份；确认后原身份仍保存在本机身份列表。</p>
-      <button id="legacy-token-use" type="button">检查旧长期凭据</button>
-    </details>
-    <div class="handoff-actions">
-      <button id="handoff-copy" type="button" disabled>复制配对链接</button>
-      <button class="primary" id="handoff-close" type="button">关闭</button>
-    </div>
-  </div>
-</div>`;
-}
-
-/** 旧长期凭据确认弹窗：明确显示原身份、目标身份与风险，确认后才切换。 */
-export function legacyTokenDialog(): string {
-  return `<div class="modal" id="legacy-token-modal" hidden>
-  <div class="modal-card handoff-card legacy-token-card" role="dialog" aria-modal="true"
-    aria-labelledby="legacy-token-title">
-    <h2 id="legacy-token-title">旧方式（长期凭据）</h2>
-    <p class="handoff-warning">这是一个长期身份 token，不是一次性配对挑战。任何看到链接、截图或浏览器历史的人都能以该身份操作。确认前不会切换，也不会覆盖当前身份。</p>
-    <dl class="legacy-token-identities">
-      <dt>当前身份</dt><dd id="legacy-token-original">读取中…</dd>
-      <dt>目标身份</dt><dd id="legacy-token-target">读取中…</dd>
-    </dl>
-    <p class="pairing-status" id="legacy-token-status" role="status"></p>
-    <div class="handoff-actions">
-      <button id="legacy-token-cancel" type="button">取消</button>
-      <button class="danger" id="legacy-token-confirm" type="button" disabled>确认切换</button>
+    <div class="handoff-actions handoff-footer">
+      <button id="handoff-close" type="button">关闭</button>
     </div>
   </div>
 </div>`;
 }
-
-/**
- * 在页面主脚本之前执行：只捕获 `#t=` 中的旧 token 并清掉 hash。
- *
- * 不在这里写入 localStorage，也不自动切换身份；主脚本会显示“旧方式
- * （长期凭据）”确认弹窗，用户确认后才保存 token。
- */
-export const HANDOFF_ADOPT_SCRIPT = `
-(function () {
-  'use strict';
-  var hash = window.location.hash || '';
-  if (hash.indexOf('#t=') !== 0) return;
-  var token;
-  try {
-    token = decodeURIComponent(hash.slice(3));
-  } catch (error) {
-    return;
-  }
-  if (!token || token.length > 512 || token.trim() !== token) return;
-  window.__agentNetworkLegacyToken = token;
-  try {
-    window.history.replaceState(null, '', window.location.pathname + window.location.search);
-  } catch (error) {
-    // 清 hash 失败时 token 仍留在地址栏；主脚本不会自动采纳，用户可取消。
-  }
-})();
-`;
 
 /** 追加到应用页样式表；二维码保持白底，暗色模式下仍可扫描。 */
 export const DEVICE_HANDOFF_STYLE = `
@@ -250,17 +202,40 @@ export const DEVICE_HANDOFF_STYLE = `
   @media (prefers-color-scheme: dark) {
     .logout-warning { background: #3a2a1a; color: #fdba74; }
   }
-  .handoff-card { width: min(380px, 100%); text-align: center; max-height: calc(100dvh - 32px);
-    overflow-y: auto; }
-  .handoff-card h2 { margin-bottom: 6px; }
-  .handoff-actions-top { margin-bottom: 12px; }
-  .handoff-actions-top button { flex: 1 1 auto; height: 38px; }
-  .pairing-section { margin: 12px 0; padding-top: 10px; border-top: 1px solid var(--wx-line, #e5e5e5); }
-  .pairing-section h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; text-align: left; }
-  .pairing-empty { margin: 0 0 6px; font-size: 12px; color: var(--wx-muted, #666); text-align: left; }
+  .handoff-card { width: min(720px, 100%); max-height: calc(100dvh - 32px);
+    overflow-y: auto; text-align: left; }
+  .handoff-card h2 { margin: 0 0 4px; }
+  .handoff-hint { margin: 0 0 14px; font-size: 12px; color: var(--wx-muted, #555);
+    line-height: 1.6; }
+  /* 桌面两栏：左栏二维码/短码，右栏状态与待确认设备；<760px 单栏堆叠。 */
+  .handoff-columns { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+    gap: 18px; align-items: start; }
+  .handoff-col { min-width: 0; }
+  .handoff-col-code { display: flex; flex-direction: column; gap: 10px; }
+  .handoff-qr-wrap { display: grid; place-items: center; gap: 6px; margin: 0; padding: 10px;
+    border: 1px solid var(--wx-line, #e5e5e5); border-radius: 8px; background: #fff; }
+  .handoff-qr-wrap[hidden] { display: none; }
+  #handoff-qr { display: block; width: min(224px, 100%); height: auto; background: #fff;
+    image-rendering: pixelated; }
+  #handoff-qr[hidden] { display: none; }
+  .pairing-code { margin: 2px 0 0; font: 600 19px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 1px; color: var(--wx-text, #1a1a1a); text-align: center;
+    overflow-wrap: anywhere; }
+  .handoff-expiry { margin: 0; font-size: 11px; line-height: 1.5; color: var(--wx-muted, #666);
+    text-align: center; }
+  .handoff-code-actions { display: flex; gap: 8px; }
+  .handoff-code-actions button { flex: 1 1 0; min-width: 0; height: 38px; padding: 0 8px; }
+  .handoff-retry { width: 100%; height: 38px; }
+  .handoff-retry[hidden] { display: none; }
+  .pairing-section { margin: 0; padding-top: 0; border-top: 0; }
+  .pairing-section-head { display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-bottom: 8px; }
+  .pairing-section h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .pairing-refresh { flex: 0 0 auto; height: 28px; padding: 0 10px; font-size: 12px; }
+  .pairing-empty { margin: 0 0 6px; font-size: 12px; color: var(--wx-muted, #666); }
   .pairing-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
   .pairing-item { border: 1px solid var(--wx-line, #e5e5e5); border-radius: 6px;
-    padding: 8px 10px; text-align: left; background: var(--wx-sidebar, #f7f7f7); }
+    padding: 8px 10px; background: var(--wx-sidebar, #f7f7f7); }
   .pairing-item-main { font-size: 13px; overflow-wrap: anywhere; }
   .pairing-item-meta { font-size: 12px; color: var(--wx-muted, #666); margin-top: 2px;
     overflow-wrap: anywhere; }
@@ -270,38 +245,26 @@ export const DEVICE_HANDOFF_STYLE = `
   .pairing-item-actions button { flex: 1 1 auto; height: 32px; padding: 4px 8px; font-size: 12px; }
   .pairing-item-actions button.danger { background: var(--wx-danger, #c0392b);
     border-color: var(--wx-danger, #c0392b); color: #fff; }
-  .pairing-code { margin: 8px 0 2px; font: 600 18px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-    letter-spacing: 1px; color: var(--wx-text, #1a1a1a); }
-  .pairing-status { min-height: 1.6em; margin: 6px 0 10px; font-size: 12px;
-    color: var(--wx-link, #576b95); text-align: left; overflow-wrap: anywhere; }
+  .pairing-status { min-height: 1.6em; margin: 0 0 10px; font-size: 12px;
+    color: var(--wx-link, #576b95); overflow-wrap: anywhere; }
   .pairing-status[data-error] { color: var(--wx-danger, #c0392b); }
   .pairing-status[data-success] { color: #15803d; }
-  .legacy-token-details { text-align: left; }
-  .legacy-token-details .field { display: block; margin: 8px 0; font-size: 12px; }
-  .legacy-token-details input { width: 100%; height: 34px; margin-top: 4px;
-    border: 1px solid var(--wx-line, #e5e5e5); border-radius: 4px; padding: 0 8px;
-    background: var(--wx-input, #fff); color: var(--wx-text, #333); font: 12px/1.4 inherit; }
-  .legacy-token-card { text-align: left; }
-  .legacy-token-identities { margin: 10px 0 4px; }
-  .legacy-token-identities dd { overflow-wrap: anywhere; }
-  .legacy-token-card button.danger { background: var(--wx-danger, #c0392b);
-    border-color: var(--wx-danger, #c0392b); color: #fff; }
   .local-identities { display: grid; gap: 6px; margin-top: 8px; }
   .local-identities-title { margin: 0; font-size: 12px; color: var(--wx-muted, #666); }
   .local-identities .local-identity { width: 100%; }
-  .handoff-qr-wrap { display: grid; place-items: center; margin: 10px 0 12px; padding: 8px;
-    border: 1px solid var(--wx-line, #e5e5e5); border-radius: 6px; background: #fff; }
-  .handoff-qr-wrap[hidden] { display: none; }
-  #handoff-qr { display: block; width: min(248px, 100%); height: auto; background: #fff;
-    image-rendering: pixelated; }
-  #handoff-qr[hidden] { display: none; }
-  .handoff-hint { margin: 0 0 8px; font-size: 12px; color: var(--wx-muted, #555);
-    line-height: 1.6; }
-  .handoff-warning { margin: 0 0 12px; padding: 8px 10px; border-radius: 4px;
-    background: #fff7ed; color: #9a3412; font-size: 12px; line-height: 1.6; text-align: left; }
+  .handoff-warning { margin: 12px 0 0; padding: 8px 10px; border-radius: 4px;
+    background: #fff7ed; color: #9a3412; font-size: 12px; line-height: 1.6;
+    overflow-wrap: anywhere; }
   .handoff-actions { display: flex; gap: 8px; }
-  .handoff-actions button { flex: 1 1 auto; height: 40px; }
+  .handoff-footer { justify-content: flex-end; margin-top: 14px; }
+  .handoff-footer button { flex: 0 0 auto; min-width: 96px; height: 38px; }
   #handoff-copy[disabled] { opacity: 0.5; cursor: not-allowed; }
+  @media (max-width: 759px) {
+    .handoff-card { width: min(420px, 100%); }
+    .handoff-columns { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+    .handoff-col-status { min-width: 0; }
+    .pairing-item-actions button { min-width: 0; }
+  }
   @media (prefers-color-scheme: dark) {
     .handoff-warning { background: #3a2a1a; color: #fdba74; }
   }

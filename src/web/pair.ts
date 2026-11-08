@@ -18,12 +18,12 @@ export function renderPairPage(): string {
   <h1 id="pair-title">配对设备</h1>
   <p class="muted" id="pair-current">正在读取当前身份…</p>
 </div>
-<p class="share-lead">二维码/短码只包含 5 分钟一次性的配对挑战，不包含长期 token。你需要在另一台已登录设备上确认这台新设备。</p>
+<p class="share-lead">扫描二维码或输入 12 位配对码，然后在已登录设备上确认。</p>
 <label class="field">12 位配对码
   <input id="pair-challenge" maxlength="32" autocomplete="off" spellcheck="false"
     placeholder="XXXX-XXXX-XXXX" aria-describedby="pair-hint">
 </label>
-<p class="pair-hint" id="pair-hint">可以扫描二维码自动带入，也可以手动输入。挑战过期、已用、已撤销或尝试超限都会失败。</p>
+<p class="pair-hint" id="pair-hint">挑战 5 分钟内有效，用后即失效。</p>
 <div class="row share-actions">
   <button class="primary" id="pair-start" type="button">开始配对</button>
   <button id="pair-switch" type="button" hidden>切换到此身份并进入</button>
@@ -36,9 +36,7 @@ export function renderPairPage(): string {
 <p id="status" role="status"></p>
 <details>
   <summary>安全说明</summary>
-  <p>新设备在本地生成独立 token，服务端只保存 SHA-256 摘要；已登录设备必须核对设备名称、平台与确认码后批准。</p>
-  <p>配对成功后，这台设备获得与原设备相同的 actor 权限，但使用不同 credential。撤销任一台设备只影响该设备的凭据与实时连接。</p>
-  <p>如果本机已经登录另一个身份，配对不会自动覆盖它；确认后原身份仍保存在本机身份列表，可再次显式切回。</p>
+  <p>新设备使用本地生成的独立 token；已登录设备必须核对设备名称、平台与确认码后批准。原身份会保留在本机身份列表。</p>
 </details>
 <script>
 (function () {

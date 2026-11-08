@@ -2730,29 +2730,32 @@ async function main(): Promise<void> {
       homeHtml.includes("execCommand('copy')"),
   );
   check(
-    '首页包含配对弹窗、一次性挑战与旧方式入口',
+    '首页包含配对弹窗与打开即生成的一次性挑战',
     homeHtml.includes('id="handoff-modal"') &&
       homeHtml.includes('id="handoff-qr"') &&
       homeHtml.includes('id="pairing-create"') &&
       homeHtml.includes('id="pairing-code"') &&
-      homeHtml.includes('id="legacy-token-modal"') &&
-      homeHtml.includes('旧方式（长期凭据）'),
+      homeHtml.includes('重新生成') &&
+      homeHtml.includes('createPairingChallenge()') &&
+      !homeHtml.includes('id="legacy-token-modal"'),
   );
   check(
-    '旧 #t= 只捕获待确认，不自动写入当前身份',
-    homeHtml.includes('__agentNetworkLegacyToken') &&
-      homeHtml.includes('history.replaceState') &&
-      homeHtml.includes('确认切换'),
+    '旧 #t= 不再捕获或采纳',
+    !homeHtml.includes('__agentNetworkLegacyToken') &&
+      !homeHtml.includes('legacy-token') &&
+      !homeHtml.includes('#t=') &&
+      !homeHtml.includes('确认切换'),
+  );
+  check(
+    '配对弹窗只保留简短配对与安全提示',
+    homeHtml.includes('用另一台设备扫描或输入 12 位配对码') &&
+      homeHtml.includes('只在核对设备名称/平台/确认码后批准；请勿截图或分享配对码') &&
+      !homeHtml.includes('旧方式') &&
+      !homeHtml.includes('长期凭据'),
   );
   check(
     '首页脚本首次访问自动注册 human 身份',
     homeHtml.includes("requestId('web_reg')") && homeHtml.includes("kind: 'human'"),
-  );
-  check(
-    '配对/旧方式弹窗标明一次性挑战与长期凭据风险',
-    homeHtml.includes('一次性挑战') &&
-      homeHtml.includes('长期 token') &&
-      homeHtml.includes('不会自动覆盖当前身份'),
   );
   const invalidJoin = await fetch(`${baseUrl()}/j/not-a-valid-key`);
   checkEqual('格式错误的邀请 key 落地页返回 404', invalidJoin.status, 404);

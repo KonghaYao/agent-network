@@ -42,7 +42,6 @@ export async function runIdentityAcceptance(state: Q04State, browser: Browser): 
     await desktop.locator('#room-list .room-item').first().waitFor();
     await desktop.locator('#device-handoff').click();
     await desktop.locator('#handoff-modal').waitFor({ state: 'visible' });
-    await desktop.locator('#pairing-create').click();
     await desktop.waitForFunction(
       `(document.getElementById('pairing-code').textContent || '').replaceAll('-', '').length === 12`,
     );
@@ -149,16 +148,39 @@ export async function runIdentityAcceptance(state: Q04State, browser: Browser): 
       await desktop.locator('#handoff-close').click();
       await desktop.locator('#handoff-modal').waitFor({ state: 'hidden' });
     }
-    await desktop.goto(`${state.base}/?q04legacy=1#t=${encodeURIComponent(state.tokens.u2)}`);
-    await desktop.locator('#legacy-token-modal').waitFor({ state: 'visible' });
-    await desktop.waitForFunction(`document.getElementById('legacy-token-confirm').disabled === false`);
-    check(
-      '切换身份前显示当前身份与目标身份',
-      ((await desktop.locator('#legacy-token-original').textContent()) ?? '').includes(state.actors.u1.name) &&
-        ((await desktop.locator('#legacy-token-target').textContent()) ?? '').includes(state.actors.u2.name),
-    );
-    await desktop.locator('#legacy-token-confirm').click();
+    // 第二身份已存在于本机注册表：退出后可从列表显式切换，不依赖旧 #t=。
+    await desktop.evaluate(`(() => {
+      const record = {
+        v: 1,
+        actor_id: ${JSON.stringify(state.actors.u2.actor_id)},
+        name: ${JSON.stringify(state.actors.u2.name)},
+        kind: 'human',
+        token: ${JSON.stringify(state.tokens.u2)},
+        last_used_at: Date.now()
+      };
+      localStorage.setItem(
+        'agent-network-identity-v1:' + record.actor_id,
+        JSON.stringify(record)
+      );
+    })()`);
+    await desktop.locator('#logout').click();
+    await desktop.locator('#logout-modal').waitFor({ state: 'visible' });
+    await desktop.locator('#logout-confirm').click();
     await desktop.waitForURL(`${state.base}/`);
+    await desktop.locator('#logged-out-start').waitFor({ state: 'visible' });
+    await desktop.waitForFunction(
+      `document.querySelectorAll('#logged-out-identities .local-identity').length >= 1`,
+    );
+    const identitiesText = (await desktop.locator('#logged-out-identities').innerText()) ?? '';
+    check(
+      '退出页保留本机第二身份',
+      identitiesText.includes(state.actors.u2.name),
+      identitiesText,
+    );
+    await desktop
+      .locator('#logged-out-identities .local-identity')
+      .filter({ hasText: state.actors.u2.name })
+      .click();
     await desktop.waitForFunction(
       `document.getElementById('account-name').textContent === ${JSON.stringify(state.actors.u2.name)}`,
     );
@@ -168,6 +190,20 @@ export async function runIdentityAcceptance(state: Q04State, browser: Browser): 
       state.tokens.u2,
     );
 
+    await desktop.evaluate(`(() => {
+      const record = {
+        v: 1,
+        actor_id: ${JSON.stringify(state.actors.u1.actor_id)},
+        name: ${JSON.stringify(state.actors.u1.name)},
+        kind: 'human',
+        token: ${JSON.stringify(state.tokens.u1)},
+        last_used_at: Date.now()
+      };
+      localStorage.setItem(
+        'agent-network-identity-v1:' + record.actor_id,
+        JSON.stringify(record)
+      );
+    })()`);
     await desktop.locator('#logout').click();
     await desktop.locator('#logout-modal').waitFor({ state: 'visible' });
     await desktop.locator('#logout-confirm').click();
@@ -176,8 +212,12 @@ export async function runIdentityAcceptance(state: Q04State, browser: Browser): 
     await desktop.waitForFunction(
       `document.querySelectorAll('#logged-out-identities .local-identity').length > 0`,
     );
-    const identitiesText = (await desktop.locator('#logged-out-identities').innerText()) ?? '';
-    check('退出后显示本机原身份', identitiesText.includes(state.actors.u1.name), identitiesText);
+    const afterLogoutText = (await desktop.locator('#logged-out-identities').innerText()) ?? '';
+    check(
+      '再次退出后显示本机原身份',
+      afterLogoutText.includes(state.actors.u1.name),
+      afterLogoutText,
+    );
     await desktop
       .locator('#logged-out-identities .local-identity')
       .filter({ hasText: state.actors.u1.name })

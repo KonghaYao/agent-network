@@ -1,14 +1,14 @@
 import { LIMITS } from '../contracts/limits';
 
 /**
- * 浏览器身份分区、设备配对与旧长期凭据升级。
+ * 浏览器身份分区与设备配对。
  *
  * 由 `chatClientScript` 拼进主脚本共享作用域，因此可以使用 `callTool`、
  * `identity`、`drafts`、`roomCache` 等既有符号。所有 token 只保存在本地：
  * 当前 token 在 `agent-network-token`，其他已确认身份在按 actor_id 命名的
  * 本地注册表中；从不写入 DOM、URL、console 或服务端日志。
  *
- * 配对流程：已登录设备创建 5 分钟一次性 challenge，二维码只含
+ * 配对流程：已登录设备打开弹窗即创建 5 分钟一次性 challenge，二维码只含
  * `origin + '/pair#c=' + challenge`；新设备在 /pair 用本地 token join，
  * 已登录设备 approve 后新设备才 redeem。这里只负责已登录设备侧 UI。
  */
@@ -25,8 +25,7 @@ const WEB_DEVICE_PAIRING_TTL_MS = ${LIMITS.devicePairingTtlMs};
 
 let pairingCreated = null;
 let pairingRefreshBusy = false;
-let pendingLegacyToken = null;
-let legacyResolveBusy = false;
+let pairingCreateBusy = false;
 let identityInvalid = false;
 
 function identityStorageGet(key) {
@@ -276,21 +275,12 @@ function openHandoffDialog() {
   const button = document.getElementById('device-handoff');
   const modal = document.getElementById('handoff-modal');
   const closeButton = document.getElementById('handoff-close');
-  const createButton = document.getElementById('pairing-create');
   if (!modal) return;
   modal.hidden = false;
   if (button) button.setAttribute('aria-expanded', 'true');
   pairingSetStatus('', '');
-  if (!identityStorageGet(IDENTITY_TOKEN_KEY) || identityInvalid) {
-    resetPairingChallenge();
-    if (createButton) createButton.disabled = true;
-    pairingSetStatus(identityInvalid
-      ? '当前凭据已失效；不会自动创建替代身份。请用另一台已登录设备配对，或使用旧方式长期凭据。'
-      : '当前没有已登录身份；请先在另一台设备登录或从已登录设备生成配对码。', 'error');
-  } else if (createButton) {
-    createButton.disabled = false;
-  }
   refreshPairings();
+  createPairingChallenge();
   if (closeButton) closeButton.focus();
 }
 
@@ -302,10 +292,17 @@ function closeHandoffDialog() {
   if (button) button.setAttribute('aria-expanded', 'false');
 }
 
+function setPairingRetryVisible(visible) {
+  const retry = document.getElementById('pairing-retry');
+  if (retry) retry.hidden = !visible;
+}
+
 function resetPairingChallenge() {
   pairingCreated = null;
   const wrap = document.getElementById('pairing-qr-wrap');
   if (wrap) wrap.hidden = true;
+  const canvas = document.getElementById('handoff-qr');
+  if (canvas) canvas.hidden = true;
   const code = document.getElementById('pairing-code');
   if (code) code.textContent = '';
   const expiry = document.getElementById('pairing-expiry');
@@ -313,26 +310,50 @@ function resetPairingChallenge() {
   const copy = document.getElementById('handoff-copy');
   if (copy) {
     copy.disabled = true;
-    copy.textContent = '复制配对链接';
+    copy.textContent = '复制链接';
+  }
+}
+
+async function cancelPreviousPairing() {
+  if (!pairingCreated || !pairingCreated.pairing_id) return true;
+  try {
+    await callTool('network_device_pairing_cancel', {
+      request_id: requestId('pair_cancel'),
+      pairing_id: pairingCreated.pairing_id,
+      reason: 'regenerated_in_browser'
+    });
+    return true;
+  } catch (error) {
+    // 已兑换的挑战没有可撤销状态；其余错误保留旧挑战并让用户重试。
+    return Boolean(error && error.code === 'PAIRING_INVALID');
   }
 }
 
 async function createPairingChallenge() {
+  if (pairingCreateBusy) return;
   if (!identityStorageGet(IDENTITY_TOKEN_KEY) || identityInvalid) {
     resetPairingChallenge();
+    setPairingRetryVisible(true);
     pairingSetStatus(identityInvalid
-      ? '当前凭据已失效；不会自动创建替代身份。请用另一台已登录设备配对，或使用旧方式长期凭据。'
-      : '当前没有已登录身份；请先在另一台设备登录或从已登录设备生成配对码。', 'error');
+      ? '当前凭据已失效；请用另一台已登录设备配对，成功后在这台设备打开 /pair。'
+      : '当前没有已登录身份；请先在另一台设备登录并生成配对码。', 'error');
     return;
   }
+  pairingCreateBusy = true;
   const button = document.getElementById('pairing-create');
   if (button) button.disabled = true;
-  resetPairingChallenge();
+  setPairingRetryVisible(false);
   pairingSetStatus('正在生成 5 分钟一次性配对挑战…', '');
   try {
     if (!identity) {
       await ensureIdentity();
     }
+    if (!(await cancelPreviousPairing())) {
+      pairingSetStatus('旧配对码撤销失败；请检查网络后重试。', 'error');
+      setPairingRetryVisible(true);
+      return;
+    }
+    resetPairingChallenge();
     const created = await callTool('network_device_pairing_create', {
       request_id: requestId('pair_create'),
       device_label: '当前设备',
@@ -346,28 +367,37 @@ async function createPairingChallenge() {
     const copy = document.getElementById('handoff-copy');
     if (code) code.textContent = pairingChallengeDisplay(created.challenge);
     if (expiry) {
-      expiry.textContent = '有效至 ' + pairingFormatDate(created.expires_at) +
-        '；过期、已用、已撤销或尝试超限都会失败。';
+      expiry.textContent = '有效至 ' + pairingFormatDate(created.expires_at);
     }
     if (wrap) wrap.hidden = false;
     if (canvas) {
+      canvas.hidden = false;
       try {
         window.agentNetworkQr.draw(canvas, created.pair_url);
       } catch (error) {
-        if (wrap) wrap.hidden = true;
+        canvas.hidden = true;
         pairingSetStatus('二维码生成失败：' + (error && error.message ? error.message : String(error)) +
-          '；仍可复制下方配对链接或手动输入短码。', 'error');
+          '；仍可复制配对链接或手动输入短码。', 'error');
       }
     }
     if (copy) copy.disabled = false;
-    pairingSetStatus('二维码只包含 5 分钟一次性挑战，不含 token。请在新设备打开 /pair 后输入短码。', 'success');
+    if (!pairingStatusHasError()) {
+      pairingSetStatus('用另一台设备扫描二维码或输入短码，然后核对设备名称与确认码后批准。', 'success');
+    }
     refreshPairings();
   } catch (error) {
     pairingSetStatus('生成失败：' + (error && error.message ? error.message : String(error)) +
-      '；请刷新页面后重试。', 'error');
+      '；请检查网络后重试。', 'error');
+    setPairingRetryVisible(true);
   } finally {
+    pairingCreateBusy = false;
     if (button) button.disabled = false;
   }
+}
+
+function pairingStatusHasError() {
+  const element = document.getElementById('pairing-status');
+  return Boolean(element && element.getAttribute('data-error'));
 }
 
 function pairingItem(entry) {
@@ -468,138 +498,6 @@ async function decidePairing(pairingId, action) {
   }
 }
 
-function parseLegacyToken(value) {
-  let text = String(value || '').trim();
-  if (!text) return null;
-  const hashIndex = text.indexOf('#t=');
-  if (hashIndex >= 0) {
-    try {
-      text = decodeURIComponent(text.slice(hashIndex + 3));
-    } catch (error) {
-      return null;
-    }
-  } else {
-    try {
-      const url = new URL(text);
-      text = url.searchParams.get('token') || text;
-    } catch (error) {
-      // 不是 URL，按原始 token 处理。
-    }
-  }
-  text = text.trim();
-  if (!text || text.length > 512) return null;
-  return text;
-}
-
-function legacyClose() {
-  const modal = document.getElementById('legacy-token-modal');
-  if (modal) modal.hidden = true;
-  pendingLegacyToken = null;
-  legacyResolveBusy = false;
-  const status = document.getElementById('legacy-token-status');
-  if (status) {
-    status.textContent = '';
-    status.removeAttribute('data-error');
-  }
-}
-
-function legacySetStatus(message, error) {
-  const status = document.getElementById('legacy-token-status');
-  if (!status) return;
-  status.textContent = message || '';
-  if (error) status.setAttribute('data-error', '1');
-  else status.removeAttribute('data-error');
-}
-
-async function describeIdentity(token, fallback) {
-  try {
-    const me = await callTool('network_me', {}, token);
-    return (me.name || '未命名') + '（' + me.actor_id + '）';
-  } catch (error) {
-    if (error && error.code === 'CREDENTIAL_INVALID') return fallback + '：凭据无效或已撤销';
-    return fallback + '：' + (error && error.message ? error.message : String(error));
-  }
-}
-
-async function openLegacyConfirm(token) {
-  const modal = document.getElementById('legacy-token-modal');
-  if (!modal) return;
-  pendingLegacyToken = token;
-  const original = document.getElementById('legacy-token-original');
-  const target = document.getElementById('legacy-token-target');
-  const confirm = document.getElementById('legacy-token-confirm');
-  const cancel = document.getElementById('legacy-token-cancel');
-  if (original) original.textContent = '读取中…';
-  if (target) target.textContent = '读取中…';
-  if (confirm) confirm.disabled = true;
-  if (cancel) cancel.disabled = false;
-  legacySetStatus('正在验证目标长期凭据…', false);
-  modal.hidden = false;
-  const currentToken = identityStorageGet(IDENTITY_TOKEN_KEY);
-  const currentPromise = currentToken
-    ? describeIdentity(currentToken, '当前身份')
-    : Promise.resolve(identity && identity.actor_id
-      ? (identity.name || '未命名') + '（' + identity.actor_id + '）'
-      : '未登录');
-  const targetPromise = describeIdentity(token, '目标身份');
-  const currentText = await currentPromise;
-  const targetText = await targetPromise;
-  if (original) original.textContent = currentText;
-  if (target) target.textContent = targetText;
-  const targetInvalid = targetText.indexOf('凭据无效或已撤销') >= 0;
-  if (targetInvalid) {
-    legacySetStatus('目标凭据无效或已撤销；不会切换，也不会自动创建替代身份。请改用配对流程。', true);
-    return;
-  }
-  if (confirm) confirm.disabled = false;
-  const same = identity && identity.actor_id && targetText.indexOf('（' + identity.actor_id + '）') >= 0;
-  legacySetStatus(same
-    ? '目标与当前是同一身份；确认后仅改用这条长期凭据。'
-    : '确认后切换到目标身份；当前身份仍保留在本机身份列表，可再次显式切回。', false);
-}
-
-async function confirmLegacySwitch() {
-  if (!pendingLegacyToken || legacyResolveBusy) return;
-  legacyResolveBusy = true;
-  const confirm = document.getElementById('legacy-token-confirm');
-  if (confirm) confirm.disabled = true;
-  legacySetStatus('正在确认目标身份…', false);
-  try {
-    const target = await callTool('network_me', {}, pendingLegacyToken);
-    const currentToken = identityStorageGet(IDENTITY_TOKEN_KEY);
-    let current = identity;
-    if (!current && currentToken) {
-      try {
-        current = await callTool('network_me', {}, currentToken);
-      } catch (error) {
-        current = null;
-      }
-    }
-    if (current && currentToken) rememberIdentity(current, currentToken);
-    if (!rememberIdentity(target, pendingLegacyToken)) {
-      throw new Error('浏览器无法保存身份；请允许本地存储后重试');
-    }
-    if (!setCurrentIdentityToken(pendingLegacyToken)) {
-      throw new Error('浏览器无法保存当前身份 token');
-    }
-    clearLoggedOutMarker();
-    window.__agentNetworkLegacyToken = null;
-    pendingLegacyToken = null;
-    try {
-      window.history.replaceState(null, '', window.location.pathname + window.location.search);
-    } catch (error) {
-      // hash 已由早执行脚本清除；这里只做兜底。
-    }
-    window.location.replace('/');
-  } catch (error) {
-    legacySetStatus('切换失败：' + (error && error.message ? error.message : String(error)) +
-      '；当前身份与凭据未改变。', true);
-    if (confirm) confirm.disabled = false;
-  } finally {
-    legacyResolveBusy = false;
-  }
-}
-
 function showCredentialInvalidHome(message) {
   identityInvalid = true;
   if (roomListElement) roomListElement.replaceChildren();
@@ -607,7 +505,7 @@ function showCredentialInvalidHome(message) {
   setListRetry(false);
   const detail = message ||
     '当前凭据已失效或已被撤销。本机不会自动创建替代身份。';
-  setEmptyListMessage(detail + ' 请在另一台已登录设备生成配对码后打开 /pair，或使用明确标注的“旧方式（长期凭据）”入口。');
+  setEmptyListMessage(detail + ' 请在另一台已登录设备生成配对码后打开 /pair。');
   if (accountNameElement) accountNameElement.textContent = '凭据失效';
   if (accountAvatarElement) {
     resetAgentAvatar(accountAvatarElement);
@@ -625,13 +523,11 @@ function showCredentialInvalidHome(message) {
   if (startButton) startButton.hidden = true;
   const pairButton = document.getElementById('credential-invalid-pair');
   if (pairButton) pairButton.hidden = false;
-  const legacyButton = document.getElementById('credential-invalid-legacy');
-  if (legacyButton) legacyButton.hidden = false;
   const emptyTitle = document.getElementById('empty-title');
   if (emptyTitle) emptyTitle.textContent = '凭据已失效';
   const emptyHint = document.getElementById('empty-hint');
   if (emptyHint) {
-    emptyHint.textContent = '本机不会自动创建新身份。请用另一台已登录设备生成配对码，或显式使用旧方式长期凭据。';
+    emptyHint.textContent = '本机不会自动创建新身份。请用另一台已登录设备生成配对码，再打开 /pair。';
   }
   renderLocalIdentities();
   syncLogoutVisibility();
@@ -791,57 +687,26 @@ async function syncCatchUp() {
   const pairingCreate = document.getElementById('pairing-create');
   const pairingRefresh = document.getElementById('pairing-refresh');
   const copyButton = document.getElementById('handoff-copy');
-  const legacyUse = document.getElementById('legacy-token-use');
-  const legacyInput = document.getElementById('legacy-token-input');
-  const legacyConfirm = document.getElementById('legacy-token-confirm');
-  const legacyCancel = document.getElementById('legacy-token-cancel');
-  const legacyModal = document.getElementById('legacy-token-modal');
-  const legacyButton = document.getElementById('credential-invalid-legacy');
+  const pairingRetry = document.getElementById('pairing-retry');
   const pairButton = document.getElementById('credential-invalid-pair');
 
   if (handoffButton) handoffButton.addEventListener('click', openHandoffDialog);
   if (handoffClose) handoffClose.addEventListener('click', closeHandoffDialog);
   if (pairingCreate) pairingCreate.addEventListener('click', createPairingChallenge);
+  if (pairingRetry) pairingRetry.addEventListener('click', createPairingChallenge);
   if (pairingRefresh) pairingRefresh.addEventListener('click', refreshPairings);
   if (copyButton) {
     copyButton.addEventListener('click', function () {
       if (!pairingCreated || !pairingCreated.pair_url) return;
       pairingCopyText(pairingCreated.pair_url, function () {
-        copyButton.textContent = '已复制配对链接';
+        copyButton.textContent = '已复制链接';
         pairingSetStatus('配对链接已复制，5 分钟内有效；链接只含一次性挑战，不含 token。', 'success');
-        setTimeout(function () { copyButton.textContent = '复制配对链接'; }, 1500);
+        setTimeout(function () { copyButton.textContent = '复制链接'; }, 1500);
       }, function (error) {
-        copyButton.textContent = '复制配对链接';
+        copyButton.textContent = '复制链接';
         pairingSetStatus('复制失败：' + (error && error.message ? error.message : String(error)) +
           '；请检查剪贴板权限，或手动输入短码。', 'error');
       });
-    });
-  }
-  if (legacyUse && legacyInput) {
-    legacyUse.addEventListener('click', function () {
-      const token = parseLegacyToken(legacyInput.value);
-      if (!token) {
-        pairingSetStatus('旧链接或 token 格式不正确；请粘贴完整的 /#t= 链接或 token。', 'error');
-        return;
-      }
-      legacyInput.value = '';
-      openLegacyConfirm(token);
-    });
-  }
-  if (legacyConfirm) legacyConfirm.addEventListener('click', confirmLegacySwitch);
-  if (legacyCancel) legacyCancel.addEventListener('click', legacyClose);
-  if (legacyModal) {
-    legacyModal.addEventListener('click', function (event) {
-      if (event.target === legacyModal) legacyClose();
-    });
-  }
-  if (legacyButton) {
-    legacyButton.addEventListener('click', function () {
-      openHandoffDialog();
-      const details = document.getElementById('legacy-token-details');
-      if (details) details.open = true;
-      const input = document.getElementById('legacy-token-input');
-      if (input) input.focus();
     });
   }
   if (pairButton) {
@@ -856,14 +721,10 @@ async function syncCatchUp() {
   }
   document.addEventListener('keydown', function (event) {
     if (event.key !== 'Escape') return;
-    if (legacyModal && !legacyModal.hidden) legacyClose();
-    else if (handoffModal && !handoffModal.hidden) closeHandoffDialog();
+    if (handoffModal && !handoffModal.hidden) closeHandoffDialog();
   });
   window.addEventListener('agentnet:device', function () {
     if (handoffModal && !handoffModal.hidden) refreshPairings();
   });
-  if (window.__agentNetworkLegacyToken) {
-    openLegacyConfirm(window.__agentNetworkLegacyToken);
-  }
 })();
 `;

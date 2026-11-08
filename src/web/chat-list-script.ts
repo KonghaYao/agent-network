@@ -218,8 +218,6 @@ function showLoggedOutHome() {
   }
   const pairButton = document.getElementById('credential-invalid-pair');
   if (pairButton) pairButton.hidden = true;
-  const legacyButton = document.getElementById('credential-invalid-legacy');
-  if (legacyButton) legacyButton.hidden = true;
   renderLocalIdentities();
   const emptyTitle = document.getElementById('empty-title');
   if (emptyTitle) emptyTitle.textContent = '已退出登录';
@@ -515,11 +513,6 @@ async function loadRooms(options) {
           error.message ||
             '当前凭据已失效或已被撤销；本机不会自动创建替代身份。'
         );
-        return;
-      }
-      if (error && error.legacyPending) {
-        setEmptyListMessage('检测到旧方式长期凭据。请在上方确认是否切换；确认前不会创建新身份。');
-        setListRetry(false);
         return;
       }
       const message = '读取会话失败：' + (error && error.message ? error.message : String(error));

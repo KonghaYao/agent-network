@@ -91,8 +91,6 @@ function syncLogoutVisibility() {
     var actorId = identity && identity.actor_id ? identity.actor_id : null;
     if (actorId) forgetIdentity(actorId);
     identityStorageRemove('agent-network-token');
-    // 未确认的旧长期凭据只留在内存中；退出时一并丢弃，避免下次自动弹窗。
-    window.__agentNetworkLegacyToken = null;
     // 内存中的草稿、选择器与房间缓存随页面跳转清空；不回写其他身份。
     if (typeof drafts !== 'undefined' && drafts.clear) drafts.clear();
     if (typeof roomCache !== 'undefined' && roomCache.clear) roomCache.clear();
