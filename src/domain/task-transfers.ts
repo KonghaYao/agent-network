@@ -366,6 +366,13 @@ export async function revokeTaskEligibilityStatements(
     requestId: string;
     at: number;
     reason?: string;
+    /**
+     * blocked 任务的权威原因。默认沿用 D04 的 `owner_lost_eligibility`；
+     * A06 管理权交接传 `management_transferred`，不另写任务状态机。
+     */
+    blockedReason?: string;
+    /** 只读观察回调：用于交接审计记录实际进入 blocked/unassigned 的任务。 */
+    onTask?: (task: TaskRow, outcome: 'blocked' | 'unassigned') => void;
   },
 ): Promise<D1PreparedStatement[]> {
   const scope = input.roomId ? ' AND t.room_id = ?' : '';
@@ -386,6 +393,7 @@ export async function revokeTaskEligibilityStatements(
     .bind(...binds)
     .all<TaskRow>();
   const statements: D1PreparedStatement[] = [];
+  const blockedReason = input.blockedReason ?? 'owner_lost_eligibility';
   for (const task of tasks.results) {
     const assignment = task.current_assignment_id
       ? await getTaskAssignment(db, task.current_assignment_id)
@@ -461,6 +469,7 @@ export async function revokeTaskEligibilityStatements(
           },
         ).statements,
       );
+      input.onTask?.(task, 'unassigned');
       continue;
     }
 
@@ -497,7 +506,7 @@ export async function revokeTaskEligibilityStatements(
       revision: nextRevision,
       owner_actor_id: null,
       current_assignment_id: null,
-      blocked_reason: 'owner_lost_eligibility',
+      blocked_reason: blockedReason,
       blocked_at: input.at,
       updated_at: input.at,
     };
@@ -506,11 +515,11 @@ export async function revokeTaskEligibilityStatements(
         .prepare(
           `UPDATE tasks
               SET status = 'blocked', owner_actor_id = NULL, current_assignment_id = NULL,
-                  blocked_reason = 'owner_lost_eligibility',
+                  blocked_reason = ?,
                   blocked_at = ?, revision = revision + 1, updated_at = ?
             WHERE task_id = ? AND revision = ? AND owner_actor_id = ?`,
         )
-        .bind(input.at, input.at, task.task_id, task.revision, input.actorId),
+        .bind(blockedReason, input.at, input.at, task.task_id, task.revision, input.actorId),
     );
     if (assignment) {
       statements.push(
@@ -549,7 +558,7 @@ export async function revokeTaskEligibilityStatements(
         input.at,
         {
           changed_by: input.actorId,
-          reason: 'owner_lost_eligibility',
+          reason: blockedReason,
           previous_owner_actor_id: input.actorId,
           ...(assignment
             ? {
@@ -560,6 +569,7 @@ export async function revokeTaskEligibilityStatements(
         },
       ).statements,
     );
+    input.onTask?.(task, 'blocked');
   }
   return statements;
 }

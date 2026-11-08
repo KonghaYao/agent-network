@@ -46,6 +46,7 @@ import { runRoomFileAcceptance } from './lib/room-file-acceptance';
 import { runPrivateFileAcceptance } from './lib/m07-acceptance';
 import { runAgentArchiveAcceptance } from './lib/agent-archive-acceptance';
 import { runAgentIdentityAcceptance } from './lib/agent-identity-acceptance';
+import { runAgentTransferAcceptance } from './lib/agent-transfer-acceptance';
 import { runAgentPresenceAcceptance } from './lib/presence-acceptance';
 import { runRoomMonitorAcceptance } from './lib/room-monitor-acceptance';
 import { runRoomTaskAcceptance } from './lib/room-task-acceptance';
@@ -1328,6 +1329,7 @@ async function main(): Promise<void> {
       console.log('  · Drive 未启用，跳过房间文件端到端片段');
     }
     await runAgentIdentityAcceptance();
+    await runAgentTransferAcceptance();
     await runContactRelationAcceptance();
     await runContactBlockAcceptance();
     await runDevicePairingAcceptance();

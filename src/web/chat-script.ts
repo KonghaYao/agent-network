@@ -37,6 +37,7 @@ import { CHAT_TASK_REVIEW_SCRIPT } from './chat-task-review-script';
 import { CHAT_TASK_SUBMISSION_SCRIPT } from './chat-task-submission-script';
 import { CHAT_TASK_TRANSFER_SCRIPT } from './chat-task-transfer-script';
 import { CHAT_TASKS_SCRIPT } from './chat-tasks-script';
+import { CHAT_TRANSFER_SCRIPT } from './chat-transfer-script';
 import { CHAT_UPLOAD_SCRIPT } from './chat-upload-script';
 import { jsonForScript } from './layout';
 import { NEW_AGENT_SCRIPT } from './new-agent-script';
@@ -150,6 +151,7 @@ ${CHAT_LIST_SCRIPT}
 ${CHAT_AVATAR_SCRIPT}
 ${CHAT_ARCHIVE_SCRIPT}
 ${CHAT_ROOM_MENU_SCRIPT}
+${CHAT_TRANSFER_SCRIPT}
 ${CHAT_MEMBER_PICKER_SCRIPT}
 ${CHAT_MEMBERS_SCRIPT}
 ${CHAT_MENTION_SCRIPT}

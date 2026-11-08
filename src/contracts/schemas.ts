@@ -134,6 +134,57 @@ export const agentEnableSchema = z.object({
   expected_permission_version: z.number().int().positive().optional(),
 });
 
+/**
+ * 当前管理者发起管理权交接。
+ *
+ * `to_manager_id` 必须是已注册、未停用/归档的 human；同一 Agent 只允许
+ * 一条 pending 提议。接受前管理权、委托与 Agent 凭据都不改变。
+ */
+export const agentTransferProposeSchema = z.object({
+  request_id: requestId,
+  actor_id: id(),
+  to_manager_id: id(),
+  note: z.string().trim().max(LIMITS.agentTransferNoteBytes).optional(),
+  expires_in_ms: z
+    .number()
+    .int()
+    .min(LIMITS.agentTransferTtlMinMs)
+    .max(LIMITS.agentTransferTtlMs)
+    .optional(),
+});
+
+/** 接任者接受/拒绝；只有 to_manager 本人可调用。 */
+export const agentTransferRespondSchema = z.object({
+  request_id: requestId,
+  transfer_id: id(),
+  decision: z.enum(['accept', 'reject']),
+  note: z.string().trim().max(LIMITS.agentTransferNoteBytes).optional(),
+});
+
+/** 发起人取消尚未接受的提议；不改变管理权或凭据。 */
+export const agentTransferCancelSchema = z.object({
+  request_id: requestId,
+  transfer_id: id(),
+  note: z.string().trim().max(LIMITS.agentTransferNoteBytes).optional(),
+});
+
+export const agentTransferGetSchema = z.object({ transfer_id: id() });
+
+/**
+ * 列出与调用者相关的交接提议。
+ *
+ * `actor_id` 只用于收窄到某个 Agent；调用者必须本来就与这些提议相关，
+ * 不能借此枚举他人的交接。`role=agent` 只匹配 Agent 自己的视角。
+ */
+export const agentTransferListSchema = z.object({
+  actor_id: id().optional(),
+  status: z
+    .enum(['pending', 'accepted', 'rejected', 'cancelled', 'expired'])
+    .optional(),
+  role: z.enum(['from', 'to', 'agent']).optional(),
+  limit: z.number().int().min(1).max(LIMITS.agentTransferListMax).optional(),
+});
+
 /** 按已知 actor_id 批量读取 Agent 摘要；不做全局枚举。 */
 export const agentsGetSchema = z.object({
   actor_ids: z.array(id()).min(1).max(LIMITS.agentLookupMax),
@@ -1139,6 +1190,11 @@ export type AgentDelegateGrantInput = z.infer<typeof agentDelegateGrantSchema>;
 export type AgentDelegateRevokeInput = z.infer<typeof agentDelegateRevokeSchema>;
 export type AgentDisableInput = z.infer<typeof agentDisableSchema>;
 export type AgentEnableInput = z.infer<typeof agentEnableSchema>;
+export type AgentTransferProposeInput = z.infer<typeof agentTransferProposeSchema>;
+export type AgentTransferRespondInput = z.infer<typeof agentTransferRespondSchema>;
+export type AgentTransferCancelInput = z.infer<typeof agentTransferCancelSchema>;
+export type AgentTransferGetInput = z.infer<typeof agentTransferGetSchema>;
+export type AgentTransferListInput = z.infer<typeof agentTransferListSchema>;
 export type AgentsGetInput = z.infer<typeof agentsGetSchema>;
 export type RecoveryRedeemInput = z.infer<typeof recoveryRedeemSchema>;
 export type DevicePairingCreateInput = z.infer<typeof devicePairingCreateSchema>;

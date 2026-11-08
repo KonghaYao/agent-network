@@ -295,6 +295,11 @@ async function main(): Promise<void> {
     'network_agent_delegate_revoke',
     'network_agent_disable',
     'network_agent_enable',
+    'network_agent_transfer_propose',
+    'network_agent_transfer_respond',
+    'network_agent_transfer_cancel',
+    'network_agent_transfer_get',
+    'network_agent_transfer_list',
     'network_agent_rename',
     'network_agent_reissue_token',
     'network_agent_archive',
@@ -433,6 +438,11 @@ async function main(): Promise<void> {
     'network_agent_delegate_revoke',
     'network_agent_disable',
     'network_agent_enable',
+    'network_agent_transfer_propose',
+    'network_agent_transfer_respond',
+    'network_agent_transfer_cancel',
+    'network_agent_transfer_get',
+    'network_agent_transfer_list',
     'network_agent_rename',
     'network_agent_reissue_token',
     'network_agent_archive',
@@ -1533,6 +1543,73 @@ async function main(): Promise<void> {
       reissueOutput.includes('"revoked_count"') &&
       reissueOutput.includes('"issued_at"'),
     reissueTool?.outputSchema,
+  );
+
+  // A06：管理权交接的工具面、双边确认与一次性 token 语义。
+  const proposeTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_agent_transfer_propose',
+  );
+  const proposeDescription = proposeTool?.description ?? '';
+  check(
+    'transfer_propose 描述声明 active manager 与唯一 pending',
+    proposeDescription.includes('active manager') &&
+      proposeDescription.includes('同一 Agent 只允许一条 pending') &&
+      proposeDescription.includes('不创建 Agent delivery') &&
+      proposeDescription.includes('不改变管理权'),
+    proposeTool?.description,
+  );
+  const respondTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_agent_transfer_respond',
+  );
+  const respondDescription = respondTool?.description ?? '';
+  check(
+    'transfer_respond 描述声明 token 只出现一次且重放不复用',
+    respondDescription.includes('新 token 只在首次 accept 响应出现一次') &&
+      respondDescription.includes('token 为 null') &&
+      respondDescription.includes('不会再次轮换') &&
+      respondDescription.includes('management_transferred') &&
+      respondDescription.includes('CREDENTIAL_INVALID'),
+    respondTool?.description,
+  );
+  const respondInput = JSON.stringify(respondTool?.inputSchema ?? {});
+  check(
+    'transfer_respond 输入要求 decision accept/reject',
+    respondInput.includes('"accept"') && respondInput.includes('"reject"'),
+    respondTool?.inputSchema,
+  );
+  const respondOutput = JSON.stringify(respondTool?.outputSchema ?? {});
+  check(
+    'transfer_respond 输出含可空 token 与任务/凭据变更摘要',
+    respondOutput.includes('"token"') &&
+      respondOutput.includes('"mcp_url"') &&
+      respondOutput.includes('"blocked_task_ids"') &&
+      respondOutput.includes('"revoked_credentials"'),
+    respondTool?.outputSchema,
+  );
+  const managementTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_agent_management_get',
+  );
+  const managementOutput = JSON.stringify(managementTool?.outputSchema ?? {});
+  check(
+    'management_get 输出包含群关系、委托、在途投递、pending transfer 与审计摘要',
+    managementOutput.includes('"rooms"') &&
+      managementOutput.includes('"delegations"') &&
+      managementOutput.includes('"in_flight_deliveries"') &&
+      managementOutput.includes('"pending_transfer"') &&
+      managementOutput.includes('"audit_summary"') &&
+      managementOutput.includes('"successor"'),
+    managementTool?.outputSchema,
+  );
+  const transferListTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_agent_transfer_list',
+  );
+  const agentTransferListInput = JSON.stringify(transferListTool?.inputSchema ?? {});
+  check(
+    'transfer_list 输入只含收窄条件',
+    agentTransferListInput.includes('"status"') &&
+      agentTransferListInput.includes('"role"') &&
+      agentTransferListInput.includes('"actor_id"'),
+    transferListTool?.inputSchema,
   );
 
   const archiveTool = listed?.tools?.find((tool) => tool.name === 'network_agent_archive');

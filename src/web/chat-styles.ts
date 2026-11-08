@@ -839,6 +839,18 @@ export const APP_STYLE = `
   .modal-actions { justify-content: flex-end; }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 
+  .transfer-card { width: min(520px, 100%); box-sizing: border-box; max-height: 82vh;
+    overflow: auto; }
+  .transfer-section { margin: 14px 0 0; padding-top: 10px; border-top: 1px solid var(--wx-line); }
+  .transfer-section h3 { margin: 0 0 8px; font-size: 14px; }
+  .transfer-search { width: 100%; box-sizing: border-box; margin-bottom: 6px; }
+  .transfer-list { list-style: none; margin: 6px 0 0; padding: 0; max-height: 180px;
+    overflow: auto; }
+  .transfer-list li { margin: 4px 0; font-size: 13px; line-height: 1.5; word-break: break-word; }
+  .transfer-successor { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+  .transfer-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .transfer-actions button[hidden] { display: none; }
+  .transfer-token { width: 100%; box-sizing: border-box; font-family: monospace; }
   .new-agent-card { width: min(440px, 100%); box-sizing: border-box; }
   .new-agent-card .field input { box-sizing: border-box; }
   .new-agent-warning { margin: 12px 0; padding: 8px 10px; border-radius: 4px;

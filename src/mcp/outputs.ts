@@ -741,12 +741,56 @@ export const agentManagementGetResultSchema = z.object({
   disabled_at: z.string().nullable(),
   disabled_by: z.string().nullable(),
   disabled_reason: z.string().nullable(),
-  my_role: z.enum(['manager', 'delegate', 'agent']),
+  my_role: z.enum(['manager', 'delegate', 'agent', 'successor']),
   management: managementBindingSchema.nullable(),
   delegation: delegationViewSchema.nullable(),
   can_manage: z.boolean(),
   can_delegate: z.boolean(),
+  can_transfer: z.boolean(),
   pending_work: pendingWorkSchema,
+  rooms: z.array(
+    z.object({
+      room_id: z.string(),
+      kind: z.string(),
+      title: z.string().nullable(),
+      role: z.string(),
+      joined_at: z.string(),
+    }),
+  ),
+  delegations: z.array(
+    z.object({
+      delegation_id: z.string(),
+      delegate_actor_id: z.string(),
+      delegate_name: z.string(),
+      scopes: z.array(z.string()),
+      permission_version: z.number(),
+      expires_at: z.string().nullable(),
+      created_at: z.string(),
+    }),
+  ),
+  pending_transfer: z.lazy(() => agentTransferViewSchema).nullable(),
+  in_flight_deliveries: z.object({
+    pending: z.number(),
+    claimed: z.number(),
+    items: z.array(
+      z.object({
+        delivery_id: z.string(),
+        room_id: z.string(),
+        message_id: z.string(),
+        state: z.string(),
+        attempt: z.number(),
+        updated_at: z.string(),
+      }),
+    ),
+  }),
+  audit_summary: z.array(
+    z.object({
+      event_type: z.string(),
+      ref_id: z.string().nullable(),
+      created_at: z.string(),
+      summary: z.record(z.string(), z.unknown()),
+    }),
+  ),
 });
 
 export const agentManagedItemSchema = z.object({
@@ -835,6 +879,86 @@ export const agentEnableResultSchema = z.object({
   actor_id: z.string(),
   disabled: z.literal(false),
   enabled_at: z.string(),
+});
+
+export const agentTransferContextSchema = z.object({
+  note: z.string().nullable(),
+  proposed_by: z.string(),
+  snapshot: z.object({
+    room_count: z.number(),
+    delegation_count: z.number(),
+    open_task_count: z.number(),
+    pending_deliveries: z.number(),
+    claimed_deliveries: z.number(),
+  }),
+  response_note: z.string().nullable(),
+  accepted_snapshot: z
+    .object({
+      permission_version: z.number(),
+      revoked_delegations: z.number(),
+      revoked_credentials: z.number(),
+      blocked_task_ids: z.array(z.string()),
+      unassigned_task_ids: z.array(z.string()),
+      cancelled_pending_deliveries: z.number(),
+      cancelled_claimed_deliveries: z.number(),
+    })
+    .nullable(),
+});
+
+export const agentTransferViewSchema = z.object({
+  transfer_id: z.string(),
+  agent_id: z.string(),
+  agent_name: z.string(),
+  from_manager_id: z.string(),
+  from_manager_name: z.string(),
+  to_manager_id: z.string(),
+  to_manager_name: z.string(),
+  status: z.enum(['pending', 'accepted', 'rejected', 'cancelled', 'expired']),
+  from_permission_version: z.number(),
+  expires_at: z.string(),
+  created_at: z.string(),
+  responded_at: z.string().nullable(),
+  responded_by: z.string().nullable(),
+  context: agentTransferContextSchema,
+  can_accept: z.boolean(),
+  can_reject: z.boolean(),
+  can_cancel: z.boolean(),
+});
+
+export const agentTransferAcceptedResultSchema = z.object({
+  transfer_id: z.string(),
+  agent_id: z.string(),
+  from_manager_id: z.string(),
+  to_manager_id: z.string(),
+  status: z.literal('accepted'),
+  permission_version: z.number(),
+  accepted_at: z.string(),
+  revoked_delegations: z.number(),
+  revoked_credentials: z.number(),
+  blocked_task_ids: z.array(z.string()),
+  unassigned_task_ids: z.array(z.string()),
+  cancelled_pending_deliveries: z.number(),
+  cancelled_claimed_deliveries: z.number(),
+  /** 只在首次 accept 响应出现；重放与拒绝/取消始终为 null。 */
+  token: z.string().nullable(),
+  mcp_url: z.string().nullable(),
+});
+
+export const agentTransferSimpleResultSchema = z.object({
+  transfer_id: z.string(),
+  agent_id: z.string(),
+  status: z.enum(['pending', 'rejected', 'cancelled']),
+  responded_at: z.string().nullable(),
+});
+
+export const agentTransferRespondResultSchema = z.union([
+  agentTransferAcceptedResultSchema,
+  agentTransferSimpleResultSchema,
+]);
+
+export const agentTransferListResultSchema = z.object({
+  items: z.array(agentTransferViewSchema),
+  has_more: z.boolean(),
 });
 
 export const taskCountsSchema = z.object({

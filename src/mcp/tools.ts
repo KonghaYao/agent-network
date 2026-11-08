@@ -14,6 +14,11 @@ import {
   agentEnableSchema,
   agentManagementGetSchema,
   agentReissueTokenSchema,
+  agentTransferCancelSchema,
+  agentTransferGetSchema,
+  agentTransferListSchema,
+  agentTransferProposeSchema,
+  agentTransferRespondSchema,
   agentRenameSchema,
   agentUnarchiveSchema,
   agentsGetSchema,
@@ -134,6 +139,12 @@ import {
   disableAgent,
   enableAgent,
 } from '../domain/agent-management';
+import {
+  agentTransferCancel,
+  agentTransferPropose,
+  agentTransferRespond,
+} from '../domain/agent-transfers';
+import { agentTransferGet, agentTransferList } from '../domain/agent-transfer-reads';
 import { contactAdd, contactRemove, contactsList } from '../domain/contacts';
 import {
   contactBlock,
@@ -275,6 +286,11 @@ import {
   agentDisableResultSchema,
   agentEnableResultSchema,
   agentManagementGetResultSchema,
+  agentTransferAcceptedResultSchema,
+  agentTransferListResultSchema,
+  agentTransferRespondResultSchema,
+  agentTransferSimpleResultSchema,
+  agentTransferViewSchema,
   agentReissueTokenResultSchema,
   agentRenameResultSchema,
   agentUnarchiveResultSchema,
@@ -664,6 +680,74 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       return enableAgent(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_transfer_propose',
+    '当前管理者发起 Agent 管理权交接，指定一个有效 human 作为接任者。接任者必须是已注册、未停用/归档、仍有有效凭据的 human，不能是当前管理者或 Agent 自己；同一 Agent 只允许一条 pending 提议，默认 24 小时有效。提议只写人类 inbox 提示与审计事件，不创建 Agent delivery、不改变管理权、委托或 Agent 凭据。拒绝/取消/过期同样不改变管理权。只有 active manager 可发起，委托人与 Agent 自己返回 PERMISSION_DENIED。',
+    agentTransferProposeSchema,
+    agentTransferViewSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentTransferPropose(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_transfer_respond',
+    '接任者接受或拒绝管理权交接。只有提议中的 to_manager 本人可调用，其他身份返回 NOT_FOUND；过期返回 REQUEST_EXPIRED，状态已变化返回 CONFLICT。接受在同一事务内切换 agent_managements、permission_version + 1、撤销旧管理者全部 active 委托、撤销该 Agent 全部运行凭据并签发一个新 token、把未结束任务置为 blocked（blocked_reason=management_transferred）且撤销 assignment 与 pending/claimed 任务投递，绝不自动 accepted/completed。新 token 只在首次 accept 响应出现一次，服务端只保存 SHA-256，不写入 operations；同一 request_id 重放返回同一非秘密结果（token 为 null），不会再次轮换。旧管理者提交后所有管理工具返回 PERMISSION_DENIED，旧 token 立即 CREDENTIAL_INVALID。',
+    agentTransferRespondSchema,
+    agentTransferRespondResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentTransferRespond(db, principal, input, origin, {
+        onAccepted: ({ agentId, revokedCredentialIds }) => {
+          for (const credentialId of revokedCredentialIds) {
+            env.NOTIFICATION_HUB.revokeCredential(credentialId);
+          }
+          // 旧运行连接的订阅随凭据轮换关闭；Agent 需用新 token 重连并重新 login。
+          env.NOTIFICATION_HUB.closeActorStreams(agentId);
+        },
+      });
+    },
+  );
+
+  register(
+    server,
+    'network_agent_transfer_cancel',
+    '发起人取消尚未接受的 Agent 管理权交接。只有 from_manager 本人可调用，其他身份返回 NOT_FOUND；过期返回 REQUEST_EXPIRED。取消不改变管理权、委托、运行凭据或任务状态。',
+    agentTransferCancelSchema,
+    agentTransferSimpleResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentTransferCancel(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_transfer_get',
+    '读取一条 Agent 管理权交接。只有发起人、接任者、目标 Agent 本人或该 Agent 的有效 manage_agent 受托人可见；其他身份按 NOT_FOUND 处理，避免泄露他人的交接。返回状态、有效期、双方、上下文摘要与当前可执行动作。',
+    agentTransferGetSchema,
+    agentTransferViewSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentTransferGet(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_agent_transfer_list',
+    '列出与当前身份相关的 Agent 管理权交接（发起、接任、目标 Agent 或有效受托）。actor_id/status/role 只用于收窄，不能越权枚举；默认 20 条，最大 100。',
+    agentTransferListSchema,
+    agentTransferListResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return agentTransferList(db, principal, input);
     },
   );
 

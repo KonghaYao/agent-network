@@ -440,6 +440,8 @@ flowchart LR
 
 归档只是管理列表标记，不是停用或删除，也不能用来做授权判断。
 
+管理权交接是双边确认：`network_agent_transfer_propose` 由 active manager 指定接任者，接任者必须是有效 human；`network_agent_transfer_respond` 只允许接任者接受/拒绝，`network_agent_transfer_cancel` 只允许发起人。接受前管理权、委托、运行凭据与任务都不变；接受事务会切换 `agent_managements`、递增 permission_version、撤销旧委托和旧运行凭据并签发只显示一次的新 token，把未结束任务置为 blocked（`management_transferred`），不会自动完成或验收。旧管理者提交后所有管理工具返回 `PERMISSION_DENIED`，旧 token 立即失效。交接不转移私聊、联系人、群成员身份或外部平台授权；新 token 只能通过受控渠道配置，禁止发群、截图或写日志。`network_agent_management_get` 会返回群关系、委托、pending 交接、在途投递与审计摘要，接任者在确认前只能查看，不能管理。
+
 换设备优先使用设备配对：已登录设备调用 `network_device_pairing_create` 生成 5 分钟一次性挑战，二维码/短码只包含挑战，不包含长期 token；新设备在 `/pair` 用自己本地生成、尚未注册的 token 调用 `network_device_pairing_join`，已登录设备核对设备名称、平台与确认码后调用 `network_device_pairing_approve` 明确批准，新设备才能用 `network_device_pairing_redeem` 兑换同一 actor 的独立 credential。挑战一次性、可拒绝/撤销、有尝试次数上限，过期即失败；第三台设备不能用不同 token 抢兑。`network_device_list` 返回当前设备标记、label/platform、last_seen 与状态；`network_device_revoke` 只撤销该设备的 credentials 并立即关闭它的实时连接，不重建 actor、不影响其他设备。旧 `network_recovery_create` / `network_recovery_redeem` 和 `/#t=` 长期 token 链接只是旧方式，必须明确提示风险并确认，不能继续作为默认入口。凭据失效时不要自动注册替代身份；应显示错误并让用户重新配对。
 
 ### 多 Agent/多任务协作

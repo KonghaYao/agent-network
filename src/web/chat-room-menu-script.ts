@@ -23,6 +23,7 @@ const ROOM_MENU_ARCHIVE_LABEL = '归档';
 const ROOM_MENU_ARCHIVING_LABEL = '正在归档…';
 const ROOM_MENU_ARCHIVED_STATUS = '已归档，可在已归档 Agents 中恢复';
 const ROOM_MENU_DISABLE_LABEL = '停用 Agent';
+const ROOM_MENU_TRANSFER_LABEL = '交接管理权';
 const ROOM_MENU_ENABLE_LABEL = '启用 Agent';
 const ROOM_MENU_DISABLING_LABEL = '正在停用…';
 const ROOM_MENU_ENABLING_LABEL = '正在启用…';
@@ -153,6 +154,11 @@ function closeRoomMenu() {
     toggleButton.textContent = ROOM_MENU_DISABLE_LABEL;
     toggleButton.disabled = false;
   }
+  const transferButton = document.getElementById('room-menu-transfer');
+  if (transferButton) {
+    transferButton.textContent = ROOM_MENU_TRANSFER_LABEL;
+    transferButton.disabled = false;
+  }
   roomMenuResetStatus();
 }
 
@@ -222,6 +228,13 @@ function openRoomMenu(link, x, y) {
     toggleButton.hidden = !isAgentDirect;
     toggleButton.textContent = ROOM_MENU_DISABLE_LABEL;
     toggleButton.disabled = false;
+  }
+  const transferButton = document.getElementById('room-menu-transfer');
+  if (transferButton) {
+    // 管理权交接同样只对单聊 Agent 显示；接任者也可从这里接受。
+    transferButton.hidden = !isAgentDirect;
+    transferButton.textContent = ROOM_MENU_TRANSFER_LABEL;
+    transferButton.disabled = false;
   }
   roomMenuResetStatus();
   // 删除/拉黑/举报/退群入口由 chat-safety-script 维护；这里只传当前会话目标。

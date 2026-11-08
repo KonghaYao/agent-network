@@ -691,7 +691,10 @@ async function buildTaskView(
     })),
     current_submission: currentSubmission,
     can_offer:
-      task.status === 'unassigned' &&
+      (task.status === 'unassigned' ||
+        (task.status === 'blocked' &&
+          task.owner_actor_id === null &&
+          task.current_assignment_id === null)) &&
       canDispatch(task, context) &&
       roomCapabilitiesFor(context.room, context.member).create_task,
     can_claim:
@@ -1772,7 +1775,10 @@ export async function viewFromKnownRow(
     attachments,
     current_submission: currentSubmission,
     can_offer:
-      task.status === 'unassigned' &&
+      (task.status === 'unassigned' ||
+        (task.status === 'blocked' &&
+          task.owner_actor_id === null &&
+          task.current_assignment_id === null)) &&
       canDispatch(task, context) &&
       roomCapabilitiesFor(context.room, context.member).create_task,
     can_claim:
@@ -1982,8 +1988,14 @@ export async function taskOffer(
   if (!canDispatch(task, context)) {
     throw new BusinessError('PERMISSION_DENIED', '只有创建者、群 owner 或管理员可以派发任务');
   }
-  if (task.status !== 'unassigned') {
-    throw new BusinessError('CONFLICT', '只有未指派任务可以发起 offer', {
+  // A06/D04：交接后失权的任务进入 blocked 且没有 owner/assignment；
+  // 有权派发者可以显式重派。已有负责人的 blocked 任务不能绕过原负责人。
+  const offerableBlocked =
+    task.status === 'blocked' &&
+    task.owner_actor_id === null &&
+    task.current_assignment_id === null;
+  if (task.status !== 'unassigned' && !offerableBlocked) {
+    throw new BusinessError('CONFLICT', '只有未指派或失权待重派的任务可以发起 offer', {
       task_id: task.task_id,
       status: task.status,
     });
@@ -2066,6 +2078,8 @@ export async function taskOffer(
     ...task,
     status: 'offered',
     current_assignment_id: assignmentId,
+    blocked_reason: null,
+    blocked_at: null,
     revision: nextRevision,
     updated_at: at,
   };
@@ -2120,7 +2134,7 @@ export async function taskOffer(
     build: (resultJson) => [
       operationsStatement(db, context.caller, input.request_id, payloadHash, resultJson, at),
       memberGuard(db, context.room.room_id, context.caller),
-      taskStateGuard(db, task.task_id, 'status = ? AND revision = ?', 'unassigned', task.revision),
+      taskStateGuard(db, task.task_id, 'status = ? AND revision = ?', task.status, task.revision),
       db
         .prepare(
           guardSql(
@@ -2141,10 +2155,10 @@ export async function taskOffer(
         .prepare(
           `UPDATE tasks
               SET status = 'offered', current_assignment_id = ?, revision = revision + 1,
-                  updated_at = ?
-            WHERE task_id = ? AND status = 'unassigned' AND revision = ?`,
+                  blocked_reason = NULL, blocked_at = NULL, updated_at = ?
+            WHERE task_id = ? AND status = ? AND revision = ?`,
         )
-        .bind(assignmentId, at, task.task_id, task.revision),
+        .bind(assignmentId, at, task.task_id, task.status, task.revision),
       db
         .prepare(
           `INSERT INTO task_assignments

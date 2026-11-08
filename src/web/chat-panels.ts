@@ -75,6 +75,8 @@ export function sidebarPane(): string {
       role="menuitem" hidden>停用 Agent</button>
     <button class="room-menu-item danger" id="room-menu-reissue-token" type="button"
       role="menuitem" hidden>注销并重发 token</button>
+    <button class="room-menu-item" id="room-menu-transfer" type="button"
+      role="menuitem" hidden>交接管理权</button>
     <button class="room-menu-item" id="room-menu-report" type="button"
       role="menuitem" hidden>举报</button>
     <button class="room-menu-item" id="room-menu-block" type="button"
@@ -407,6 +409,58 @@ export function announcementDialog(): string {
  * 右键提示词复用。提示词与 human token 不写入注册表。
  * 结果区默认隐藏，注册成功后才显示，避免把失败请求的 URL 当可用凭据。
  */
+/** A06 管理权交接面板；打开时通过公开工具读取，不在 SSR 输出任何凭据。 */
+export function transferDialog(): string {
+  return `<div class="modal" id="transfer-modal" hidden>
+  <div class="modal-card transfer-card" role="dialog" aria-modal="true"
+    aria-labelledby="transfer-title">
+    <h2 id="transfer-title">交接 Agent 管理权</h2>
+    <p id="transfer-loading" class="muted">正在读取管理关系…</p>
+    <p id="transfer-status" class="form-error" role="status" aria-live="polite" hidden></p>
+    <div id="transfer-body" hidden>
+      <p id="transfer-summary" class="muted"></p>
+      <div id="transfer-propose-section" class="transfer-section" hidden>
+        <h3>选择接任者</h3>
+        <input id="transfer-successor-search" class="transfer-search" type="search"
+          placeholder="搜索好友名称" autocomplete="off">
+        <ul id="transfer-successors" class="transfer-list" aria-label="接任者候选"></ul>
+        <p id="transfer-successors-empty" class="muted" hidden>没有可交接的好友</p>
+        <p class="new-agent-warning">接任者必须是有有效凭据的真人；接受前管理权不变。</p>
+        <div class="transfer-actions">
+          <button class="primary" id="transfer-propose" type="button" disabled>发起交接</button>
+        </div>
+      </div>
+      <div id="transfer-pending" class="transfer-section" hidden>
+        <h3>交接状态</h3>
+        <p id="transfer-pending-text"></p>
+        <p id="transfer-pending-note" class="muted"></p>
+        <div class="transfer-actions">
+          <button class="primary" id="transfer-accept" type="button" hidden>接受</button>
+          <button id="transfer-reject" type="button" hidden>拒绝</button>
+          <button class="danger" id="transfer-cancel" type="button" hidden>取消交接</button>
+        </div>
+      </div>
+      <div id="transfer-work" class="transfer-section">
+        <h3>在途工作</h3>
+        <p id="transfer-work-summary"></p>
+        <ul id="transfer-work-tasks" class="transfer-list"></ul>
+        <ul id="transfer-work-deliveries" class="transfer-list"></ul>
+      </div>
+      <div id="transfer-token-panel" class="transfer-section new-agent-result" hidden>
+        <p class="new-agent-warning" id="transfer-token-warning"></p>
+        <label class="field">新 MCP URL
+          <input id="transfer-token" class="transfer-token" readonly>
+        </label>
+        <button class="new-agent-copy" id="transfer-token-copy" type="button">复制 MCP URL</button>
+      </div>
+    </div>
+    <div class="row modal-actions">
+      <button id="transfer-close" type="button">关闭</button>
+    </div>
+  </div>
+</div>`;
+}
+
 export function newAgentDialog(): string {
   return `<div class="modal" id="new-agent-modal" hidden>
   <div class="modal-card new-agent-card" role="dialog" aria-modal="true" aria-labelledby="new-agent-title">

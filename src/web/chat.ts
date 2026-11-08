@@ -16,6 +16,7 @@ import {
   sidebarPane,
   taskDialogs,
   toastPane,
+  transferDialog,
 } from './chat-panels';
 import { chatClientScript } from './chat-script';
 import { DRAWBOARD_FALLBACK_STYLE } from './chat-drawboard-styles';
@@ -72,6 +73,7 @@ ${taskDialogs()}
 ${membersDialog()}
 ${announcementDialog()}
 ${newAgentDialog()}
+${transferDialog()}
 ${deviceHandoffDialog()}
 ${legacyTokenDialog()}
 ${logoutDialog()}

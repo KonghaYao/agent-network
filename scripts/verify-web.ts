@@ -22,6 +22,7 @@ import {
   checkEqual,
   checksPassed,
   connectClient,
+  newToken,
   openSubscription,
   rawRpc,
   sleep,
@@ -5190,7 +5191,8 @@ async function main(): Promise<void> {
       );
 
       // 真实拉黑 → 状态验证 → 解封 → 状态验证，不只 dismiss 确认框。
-      await page.mouse.click(200, 600);
+      // direct Agent 菜单比人类会话多交接/凭据入口，点击右侧聊天区关闭菜单。
+      await page.mouse.click(700, 600);
       await page.locator(roomLink(safetyRoom.room.room_id)).waitFor();
       await page.locator(roomLink(safetyRoom.room.room_id)).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
@@ -8129,6 +8131,230 @@ async function main(): Promise<void> {
             actor_id: actorId,
           });
         }
+      }
+    }
+
+    // 2b-2c. A06 管理权交接：入口、待确认、取消、接受与新 token 一次性展示。
+    {
+      interface ManagedAgent {
+        actor_id: string;
+        token: string;
+        agent_session_id: string | null;
+        name: string;
+      }
+      interface TransferProposalView {
+        transfer_id: string;
+        status: string;
+        from_manager_name: string;
+        to_manager_name: string;
+      }
+      interface TransferAcceptedView {
+        status: string;
+        token: string | null;
+        mcp_url: string | null;
+      }
+      const transferAgent = await rawTool<ManagedAgent>(data.humanToken, 'network_agent_create', {
+        request_id: requestId('create_agent'),
+        name: '网页交接 Agent',
+      });
+      await rawOwnAgentLink(data.humanToken, {
+        agent_session_id: transferAgent.agent_session_id ?? undefined,
+      });
+      const transferRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [transferAgent.actor_id],
+      });
+      const successorToken = newToken();
+      const successor = await rawTool<Actor>(successorToken, 'network_register', {
+        request_id: requestId('register'),
+        kind: 'human',
+        name: '网页接任者',
+      });
+      const friendRequest = await rawTool<{
+        status: string;
+        request: { contact_request_id: string } | null;
+      }>(data.humanToken, 'network_contact_request', {
+        request_id: requestId('contact_request'),
+        actor_id: successor.actor_id,
+      });
+      if (friendRequest.status === 'pending' && friendRequest.request) {
+        await rawTool(successorToken, 'network_contact_request_respond', {
+          request_id: requestId('contact_respond'),
+          contact_request_id: friendRequest.request.contact_request_id,
+          action: 'accept',
+        });
+      }
+
+      const managerView = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const successorView = await makeContext(
+        browser,
+        successorToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const openTransferPanel = async (page: Page) => {
+        await page.locator('#transfer-modal').waitFor({ state: 'visible' });
+        await page.waitForFunction(
+          `document.getElementById('transfer-loading').hidden === true`,
+        );
+        await page.locator('#transfer-body').waitFor({ state: 'visible' });
+      };
+      const selectSuccessor = async (page: Page, actorId: string) => {
+        await page.waitForFunction(
+          `document.querySelector('#transfer-successors input[value="${actorId}"]') !== null`,
+        );
+        await page.evaluate(
+          (value) => {
+            const input = document.querySelector(
+              `#transfer-successors input[value="${value}"]`,
+            ) as HTMLInputElement | null;
+            if (!input) throw new Error('successor radio missing');
+            input.checked = true;
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          },
+          actorId,
+        );
+      };
+      try {
+        await managerView.page.goto(`${server.base}/`);
+        await waitRoomListName(managerView.page, transferAgent.name);
+        await managerView.page.locator(roomLink(transferRoom.room.room_id)).click({
+          button: 'right',
+        });
+        await managerView.page.locator('#room-menu').waitFor({ state: 'visible' });
+        checkEqual(
+          'direct Agent 菜单显示交接入口',
+          await managerView.page.locator('#room-menu-transfer').isVisible(),
+          true,
+        );
+        await managerView.page.locator('#room-menu-transfer').click();
+        await openTransferPanel(managerView.page);
+        checkEqual(
+          '当前管理者看到接任者选择区',
+          await managerView.page.locator('#transfer-propose-section').isVisible(),
+          true,
+        );
+        await selectSuccessor(managerView.page, successor.actor_id);
+        await managerView.page.locator('#transfer-propose').click();
+        await managerView.page.waitForFunction(
+          `(document.getElementById('transfer-status').textContent || '').includes('已发起交接')`,
+        );
+        await managerView.page.waitForFunction(
+          `document.getElementById('transfer-pending').hidden === false`,
+        );
+        checkEqual(
+          '发起后显示待确认与取消入口',
+          await managerView.page.locator('#transfer-cancel').isVisible(),
+          true,
+        );
+        await managerView.page.locator('#transfer-cancel').click();
+        await managerView.page.waitForFunction(
+          `(document.getElementById('transfer-status').textContent || '').includes('已取消交接')`,
+        );
+        await managerView.page.waitForFunction(
+          `document.getElementById('transfer-pending').hidden === true`,
+        );
+        check(
+          '取消交接后管理权不变',
+          (await rawTool<{ my_role: string }>(
+            data.humanToken,
+            'network_agent_management_get',
+            { actor_id: transferAgent.actor_id },
+          )).my_role === 'manager',
+        );
+
+        // 再次发起，切换到接任者浏览器接受；不通过群消息传递 token。
+        await selectSuccessor(managerView.page, successor.actor_id);
+        await managerView.page.locator('#transfer-propose').click();
+        await managerView.page.waitForFunction(
+          `(document.getElementById('transfer-status').textContent || '').includes('已发起交接')`,
+        );
+        const pendingProposal = await rawTool<{ pending_transfer: TransferProposalView | null }>(
+          data.humanToken,
+          'network_agent_management_get',
+          { actor_id: transferAgent.actor_id },
+        );
+        check(
+          '管理视图返回待确认交接',
+          Boolean(pendingProposal.pending_transfer),
+          pendingProposal,
+        );
+
+        await successorView.page.goto(`${server.base}/`);
+        await successorView.page.locator('#room-list').waitFor();
+        await successorView.page.evaluate(
+          (actorId) => (window as unknown as { openTransferDialog: (id: string) => void })
+            .openTransferDialog(actorId),
+          transferAgent.actor_id,
+        );
+        await openTransferPanel(successorView.page);
+        checkEqual(
+          '接任者看到接受/拒绝入口',
+          await successorView.page.locator('#transfer-accept').isVisible(),
+          true,
+        );
+        successorView.page.once('dialog', async (dialog) => {
+          check(
+            '接受确认说明旧管理者立即失权',
+            dialog.message().includes('原管理者立即失权') && dialog.message().includes('旧运行 token 失效'),
+          );
+          await dialog.accept();
+        });
+        await successorView.page.locator('#transfer-accept').click();
+        await successorView.page.waitForFunction(
+          `document.getElementById('transfer-token-panel').hidden === false`,
+        );
+        const newMcpUrl = await successorView.page.locator('#transfer-token').inputValue();
+        check(
+          '接受后一次性展示新 MCP URL',
+          newMcpUrl.includes('/mcp?token='),
+          newMcpUrl,
+        );
+        check(
+          '一次性 token 面板提示勿发群/截图',
+          ((await successorView.page.locator('#transfer-token-warning').textContent()) ?? '')
+            .includes('只显示一次') &&
+            ((await successorView.page.locator('#transfer-token-warning').textContent()) ?? '')
+              .includes('勿发群'),
+        );
+        const newTokenValue = new URL(newMcpUrl).searchParams.get('token') ?? '';
+        const newAgentIdentity = await rawTool<Actor>(newTokenValue, 'network_me', {});
+        checkEqual('接任者拿到的新 token 可读取 Agent', newAgentIdentity.actor_id, transferAgent.actor_id);
+        await successorView.page.locator('#transfer-close').click();
+        checkEqual(
+          '关闭面板后 DOM 清除一次性 token',
+          await successorView.page.locator('#transfer-token').inputValue(),
+          '',
+        );
+        const managerAfterTransfer = await rawTool<{ my_role: string }>(
+          data.humanToken,
+          'network_agent_management_get',
+          { actor_id: transferAgent.actor_id },
+        ).then(() => 'ok').catch((error) => String(error));
+        check(
+          '网页接受后原管理者不再可管理',
+          managerAfterTransfer.includes('PERMISSION_DENIED'),
+          managerAfterTransfer,
+        );
+        const successorAfterTransfer = await rawTool<{ my_role: string }>(
+          successorToken,
+          'network_agent_management_get',
+          { actor_id: transferAgent.actor_id },
+        );
+        checkEqual('网页接受后接任者成为 manager', successorAfterTransfer.my_role, 'manager');
+      } finally {
+        await managerView.context.close();
+        await successorView.context.close();
+        await rawTool(data.humanToken, 'network_contact_remove', {
+          request_id: requestId('contact'),
+          actor_id: successor.actor_id,
+        }).catch(() => {});
       }
     }
 

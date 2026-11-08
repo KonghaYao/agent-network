@@ -65,6 +65,22 @@ export interface AgentDelegationRow {
   updated_at: number;
 }
 
+export interface AgentManagementTransferRow {
+  transfer_id: string;
+  agent_id: string;
+  from_manager_id: string;
+  to_manager_id: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'cancelled' | 'expired';
+  from_permission_version: number;
+  context_json: string;
+  created_by: string;
+  created_at: number;
+  expires_at: number;
+  responded_at: number | null;
+  responded_by: string | null;
+  updated_at: number;
+}
+
 export interface CredentialRow {
   credential_id: string;
   actor_id: string;

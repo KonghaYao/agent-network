@@ -25,11 +25,23 @@ import {
   managementPermissionGuard,
   managementVersionGuard,
   parseScopes,
+  getActiveManagement,
   requireAgentTarget,
   requireManageAgent,
   scopesJson,
 } from './agent-access';
 import { actorId, type Principal } from './principal';
+import {
+  agentActiveDelegations,
+  agentInFlightDeliveries,
+  agentManagementAudit,
+  agentRoomRelations,
+  visiblePendingTransfer,
+} from './agent-transfer-reads';
+import {
+  pendingTransferForSuccessor,
+  type AgentTransferView,
+} from './agent-transfer-store';
 import { revokeTaskEligibilityStatements } from './task-transfers';
 
 /**
@@ -196,7 +208,7 @@ export interface AgentManagementView {
   disabled_at: string | null;
   disabled_by: string | null;
   disabled_reason: string | null;
-  my_role: 'manager' | 'delegate' | 'agent';
+  my_role: 'manager' | 'delegate' | 'agent' | 'successor';
   management: {
     binding_id: string;
     manager_id: string;
@@ -216,7 +228,44 @@ export interface AgentManagementView {
   } | null;
   can_manage: boolean;
   can_delegate: boolean;
+  can_transfer: boolean;
   pending_work: PendingWorkView;
+  /** 以下为 A06 管理范围摘要：只读该 Agent 的工作负载，不读取他人私聊。 */
+  rooms: {
+    room_id: string;
+    kind: string;
+    title: string | null;
+    role: string;
+    joined_at: string;
+  }[];
+  delegations: {
+    delegation_id: string;
+    delegate_actor_id: string;
+    delegate_name: string;
+    scopes: string[];
+    permission_version: number;
+    expires_at: string | null;
+    created_at: string;
+  }[];
+  pending_transfer: AgentTransferView | null;
+  in_flight_deliveries: {
+    pending: number;
+    claimed: number;
+    items: {
+      delivery_id: string;
+      room_id: string;
+      message_id: string;
+      state: string;
+      attempt: number;
+      updated_at: string;
+    }[];
+  };
+  audit_summary: {
+    event_type: string;
+    ref_id: string | null;
+    created_at: string;
+    summary: Record<string, unknown>;
+  }[];
 }
 
 /**
@@ -233,16 +282,32 @@ export async function agentManagementGet(
   origin: string,
 ): Promise<AgentManagementView> {
   const caller = actorId(principal);
+  const at = nowMs();
   const target = await requireAgentTarget(db, targetId);
-  const access = await managementAccess(db, caller, target.actor_id, nowMs());
-  if (!access) {
-    throw new BusinessError('PERMISSION_DENIED', '当前身份无权读取该 Agent 的管理关系', {
-      actor_id: target.actor_id,
-    });
+  const access = await managementAccess(db, caller, target.actor_id, at);
+  let role: AgentManagementView['my_role'];
+  let management = access?.management ?? null;
+  if (access) {
+    role = access.role;
+  } else {
+    // 接任者可读取待确认交接与在途工作，但不能管理；接受后才成为 manager。
+    const successor = await pendingTransferForSuccessor(db, target.actor_id, caller, at);
+    if (!successor) {
+      throw new BusinessError('PERMISSION_DENIED', '当前身份无权读取该 Agent 的管理关系', {
+        actor_id: target.actor_id,
+      });
+    }
+    role = 'successor';
+    management = await getActiveManagement(db, target.actor_id);
   }
-  const manager = access.management
-    ? await getActor(db, access.management.manager_id)
-    : null;
+  const manager = management ? await getActor(db, management.manager_id) : null;
+  const [pendingTransfer, rooms, delegations, inFlight, audit] = await Promise.all([
+    visiblePendingTransfer(db, target.actor_id, caller, at),
+    agentRoomRelations(db, target.actor_id),
+    agentActiveDelegations(db, target.actor_id, at),
+    agentInFlightDeliveries(db, target.actor_id),
+    agentManagementAudit(db, target.actor_id),
+  ]);
   return {
     actor_id: target.actor_id,
     kind: 'agent',
@@ -256,37 +321,42 @@ export async function agentManagementGet(
     disabled_at: target.disabled_at === null ? null : String(target.disabled_at),
     disabled_by: target.disabled_by,
     disabled_reason: target.disabled_reason,
-    my_role: access.role,
-    management: access.management
+    my_role: role,
+    management: management
       ? {
-          binding_id: access.management.binding_id,
-          manager_id: access.management.manager_id,
+          binding_id: management.binding_id,
+          manager_id: management.manager_id,
           manager_name: manager?.name ?? '',
           status: 'active',
-          grant_source: access.management.grant_source,
-          permission_version: access.management.permission_version,
-          created_at: String(access.management.created_at),
+          grant_source: management.grant_source,
+          permission_version: management.permission_version,
+          created_at: String(management.created_at),
           confirmed_at:
-            access.management.confirmed_at === null
-              ? null
-              : String(access.management.confirmed_at),
+            management.confirmed_at === null ? null : String(management.confirmed_at),
         }
       : null,
-    delegation: access.delegation
-      ? {
-          delegation_id: access.delegation.delegation_id,
-          delegate_actor_id: access.delegation.delegate_actor_id,
-          scopes: parseScopes(access.delegation.scopes_json),
-          permission_version: access.delegation.permission_version,
-          expires_at:
-            access.delegation.expires_at === null
-              ? null
-              : String(access.delegation.expires_at),
-        }
-      : null,
-    can_manage: access.canManage,
-    can_delegate: access.role === 'manager',
+    delegation:
+      access?.delegation != null
+        ? {
+            delegation_id: access.delegation.delegation_id,
+            delegate_actor_id: access.delegation.delegate_actor_id,
+            scopes: parseScopes(access.delegation.scopes_json),
+            permission_version: access.delegation.permission_version,
+            expires_at:
+              access.delegation.expires_at === null
+                ? null
+                : String(access.delegation.expires_at),
+          }
+        : null,
+    can_manage: access?.canManage ?? false,
+    can_delegate: role === 'manager',
+    can_transfer: role === 'manager',
     pending_work: await pendingWork(db, target.actor_id),
+    rooms,
+    delegations,
+    pending_transfer: pendingTransfer,
+    in_flight_deliveries: inFlight,
+    audit_summary: audit,
   };
 }
 

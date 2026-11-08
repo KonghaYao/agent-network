@@ -38,6 +38,27 @@ export const LIMITS = {
   agentClaimMaxAttempts: 5,
   /** 管理委托默认有效期（毫秒）。 */
   agentDelegationTtlMs: 30 * 24 * 60 * 60_000,
+  /**
+   * Agent 管理权交接提议默认/最长有效期（毫秒）。
+   *
+   * 接受前原管理者继续负责；超过有效期后提议只关闭，不改管理权、不轮换凭据。
+   */
+  agentTransferTtlMs: 24 * 60 * 60_000,
+  /** 交接提议最短有效期；只用于测试与临时演示。 */
+  agentTransferTtlMinMs: 1_000,
+  /** 交接备注 UTF-8 字节上限；不复制进 Agent delivery。 */
+  agentTransferNoteBytes: 1_024,
+  /** 交接列表默认 / 最大条数。 */
+  agentTransferListDefault: 20,
+  agentTransferListMax: 100,
+  /** 管理视图返回的 active 群关系上限。 */
+  agentManagementRoomsMax: 50,
+  /** 管理视图返回的 active 委托上限。 */
+  agentManagementDelegationsMax: 50,
+  /** 管理视图返回的在途投递明细上限。 */
+  agentManagementDeliveriesMax: 20,
+  /** 管理视图返回的审计摘要条数上限。 */
+  agentManagementAuditMax: 20,
   /** 停用原因 UTF-8 字节上限。 */
   agentDisableReasonBytes: 512,
   /**
