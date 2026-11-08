@@ -19,7 +19,7 @@
 | 本轮集成修复提交 | `3b6afadd9d53125084b1615b0972f792e25321a0`（两个集成回归修复：A01-T04、D03-T04） |
 | 运行环境 | Bun 1.4.2，macOS；本轮最终集成 `DATA_DIR=/tmp/agentnet-d0408-final-int/data`、`PORT=8935`、`PUBLIC_ORIGIN=http://127.0.0.1:8935`；票据密钥使用本地临时测试值，未写入报告 |
 | Presence 环境 | 服务端与测试进程一致：`AGENT_PRESENCE_ACTIVITY_TTL_MS=5000`、`AGENT_PRESENCE_GRACE_MS=2000`、`AGENT_PRESENCE_SWEEP_MS=1000` |
-| 结论 | 六套门禁与 D04/D05/D06/D07/D08 专项全部通过；D01–D08 全部实现并保持 `READY_FOR_REVIEW`，未经独立验证不标 `VERIFIED`。D05 的报告已补写，但消息原文交接仍受未实现的 M04 限制，只能按 `message_id` 引用并附带当前可见消息的截断预览，详见第 5、12 节；D08 已实现，剩余 P0 为 A06、G06、Q01、Q02、Q04、Q05 |
+| 结论 | 六套门禁与 D04/D05/D06/D07/D08 专项全部通过；D04–D08 已由独立验证在 `76cf3b353ab3bde24eb7c58dad2a696fe6293332` 上签收为 `VERIFIED`（见 `reports/VERIFICATION-D04-D08.md`），D01–D03 保持 `READY_FOR_REVIEW`。D05 的报告已补写，但消息原文交接仍受未实现的 M04 限制，只能按 `message_id` 引用并附带当前可见消息的截断预览，详见第 5、12 节；D08 已实现，剩余 P0 为 A06、G06、Q01、Q02、Q04、Q05 |
 
 ## 0. 审查范围与结论
 
@@ -89,7 +89,7 @@
 - 文件读取仍由 `/f` 实时票据与成员资格决定：`handoff-ticket` 同时校验目标房间票据、包项授权、授权人仍 active 且仍可见源范围；撤回或授权来源失权后旧 URL 立即 404，重读包显示 `omitted` 与 `authorization_source_lost`。
 - 接任时若存在包且 `context_ready=false`，换人仍成功，但任务转 `blocked` + `blocked_reason = 'context_incomplete'`；没有包时保持 D04 的 `context_ready=false` 兼容行为。`request_more` 由待接受提议目标或当前负责人追加补充请求，不改变责任、assignment、任务状态或 revision。
 - `task_handoff_pack_created` / `_item_authorized` / `_item_revoked` / `_context_requested` 只写 room scope 与 `room:<id>` outbox，映射为 human-only `task.updated` informational；不创建 delivery、不增加 `pending_count`、不推进 `head_seq`。网页 `chat-task-handoff-script.ts` 在任务详情展示版本、缺项/可授权项、就绪状态与“授权给接任者”入口；`chat-tasks-script.ts` 抽出 `chat-task-detail-script.ts` 后为 969 行。
-- **来源与报告**：D05 没有独立实现提交。基线 `f8d520b` 上，工作区已存在来自中断 D05 会话的完整未提交实现；集成提交 `3b6afad` 首次将其入库，并同时包含 D04–D07 集成与两个回归修复。原实现者、原始开工 SHA 与原始提交信息无法还原，本报告与 `reports/D05.md` 均不伪造。`reports/D05.md` 已补写，状态 `READY_FOR_REVIEW`。
+- **来源与报告**：D05 没有独立实现提交。基线 `f8d520b` 上，工作区已存在来自中断 D05 会话的完整未提交实现；集成提交 `3b6afad` 首次将其入库，并同时包含 D04–D07 集成与两个回归修复。原实现者、原始开工 SHA 与原始提交信息无法还原，本报告与 `reports/D05.md` 均不伪造。`reports/D05.md` 已补写，并已在 `76cf3b3` 上独立验证签收。
 - **依赖缺口（未关闭）**：D05 的“相关消息”只保存 `message_id`；读取时最多附带当前仍可见消息的截断 `preview`，没有 M04 的引用摘要、quote anchor、跨页原文定位或撤回占位 API，也没有版本化原文快照。因此 D05 的版本化包、文件授权与缺项判定可验收，但“消息原文交接”范围不完整，不能按 M04 已就绪签收（`reports/BASELINE.md` 的 BLOCK-05；`scripts/lib/task-handoff-acceptance.ts` 也明确不伪造 quote anchor）。
 - D05 专项 83 项（T01 41 + T02 31 + T03 10 + 环境 1），覆盖版本化、跨群默认不可读/授权后可读/撤回即失效、必需缺失导致 `blocked + context_incomplete`、源范围失权后 `omitted` 与旧 URL 失效。协议验收新增 29 个任务工具、四个交接工具 schema/描述、`handoff_pack_get` 只读与技能正文断言；网页验收包含建包、缺项、授权与 `context_ready=true` 的浏览器路径。真实命令与逐项证据见 `reports/D05.md` 第 2 节。
 
@@ -201,7 +201,7 @@ D08 在 `40b001f` 中的改动（本轮复核未改其语义）：
 - `src/bun/main.ts`、`src/maintenance.ts`：30s 快路径与维护周期接入任务催办。
 - `src/web/chat-task-recovery-script.ts`、`src/web/chat-script.ts`、`src/web/chat-tasks-script.ts`、`src/web/chat-styles.ts`：失败重试、标记执行未知、对账结论与取消外部停止状态入口。
 - `scripts/lib/task-recovery-acceptance.ts`、`scripts/acceptance.ts`、`scripts/verify-protocol.ts`、`scripts/verify-web.ts`、`scripts/lib/feedback-unit.ts`、`scripts/lib/task-create-replay-unit.ts`：D08 专项 147 项、协议/网页断言与 `0035` 旧库升级清单。
-- `reports/D08.md`：D08 实现报告，状态 `READY_FOR_REVIEW`。
+- `reports/D08.md`：D08 实现报告，已在 `76cf3b3` 上独立验证签收。
 
 ### 历史（D01–D03）改动
 
@@ -219,14 +219,14 @@ D08 在 `40b001f` 中的改动（本轮复核未改其语义）：
 
 ## 12. 已知限制与未完成 P0
 
-D01–D08 的实现范围已完成并通过本轮门禁，全部保持 `READY_FOR_REVIEW`，需独立验证者在集成 SHA 上签收；没有任务因本轮复核改语义。各任务记录的限制继续有效：
+D04–D08 的实现范围已完成并通过本轮门禁，且已在 `76cf3b3` 上由独立验证签收为 `VERIFIED`（见 `reports/VERIFICATION-D04-D08.md`）；D01–D03 保持 `READY_FOR_REVIEW`。没有任务因本轮复核改语义。各任务记录的限制继续有效：
 
 - **D01**：成果（artifact）入口仍通过 `src/domain/artifacts.ts` 的旧 `room_tasks` 校验，`tsk_` 任务暂不能提交成果（属于 M07 范围）。任务附件引用已在同一事务内建立并保留，`maintainFiles` 同时扫描新 `tasks`。
 - **D01/D02**：`network_task_list` 尚未分页（`next_cursor: null`）。
 - **D02/D03**：offer 过期没有清扫器，过期 offer 不会自动回 `unassigned`，需要取消后重建或后续幂等清扫。
 - **D03**：进度历史最多展示 20 条（数据库保留全部审计）；未构造两个浏览器以不同顺序接收同一批 `task.updated` 的 Playwright 回放，客户端应始终以 `task_get` / `task_list` 的权威 revision 收敛。
 - **D04**：交接过期是惰性处理，没有后台扫描器；撤销执行资格只处理站内任务、assignment、delivery 与 pending 交接，不声称能停止外部命令；CLI 未新增 transfer 子命令。
-- **D05**：**M04（P1）未实现**，消息引用只保存 `message_id`；读取时最多附带当前仍可见消息的截断 `preview`，没有 M04 的引用摘要、quote anchor、跨页原文定位或撤回占位，也没有版本化原文快照，因此“消息原文交接”范围不完整（`reports/BASELINE.md` BLOCK-05）。`reports/D05.md` 已补写并如实记录 D05 没有独立实现提交、实现首次入库于 `3b6afad`、原实现者无法还原；独立验证需在 `3b6afad` 上复跑。仓库没有消息撤回，T03 用授权人失去源范围成员资格表达源撤回。
+- **D05**：**M04（P1）未实现**，消息引用只保存 `message_id`；读取时最多附带当前仍可见消息的截断 `preview`，没有 M04 的引用摘要、quote anchor、跨页原文定位或撤回占位，也没有版本化原文快照，因此“消息原文交接”范围不完整（`reports/BASELINE.md` BLOCK-05）。`reports/D05.md` 已补写并如实记录 D05 没有独立实现提交、实现首次入库于 `3b6afad`、原实现者无法还原；独立验证已在 `76cf3b3` 上复跑并复核该缺口。仓库没有消息撤回，T03 用授权人失去源范围成员资格表达源撤回。
 - **D06**：外链只记录声明，服务端不抓取或验证；提交列表没有游标；未指定验收人的任务无法退回；没有 D06 专用浏览器断言（`test:web` 只覆盖页面不回归）。
 - **D07**：验收人退群/停用不会自动通过或自动改派；`related_task_id` 已在 MCP 支持但未在网页表单暴露；没有外部业务回写通道。
 - **D08**：没有公开的 `failed` 入口，`network_task_retry` 的 T02 用例在真实迁移/domain 层构造 `failed` 持久行后验证；外部停止只是尽力通知宿主并记录操作者声明的 `external_stop_status`，没有实际杀进程或撤销远端操作的适配器；外部系统查询由调用方完成，`execution_resolve` 只持久化查询或人工证据，不自动访问目标系统；有负责人的 `blocked` 任务也会收到催办，`execution_unknown` 只提示对账、不自动改状态；T04 在验收进程内自托管临时 Bun/`DATA_DIR` 重启，不重启生产实例；D08 网页入口只由协议静态断言与既有 1950 项网页回归覆盖，没有新增独立 Playwright 交互脚本。
@@ -257,6 +257,7 @@ D01–D08 的实现范围已完成并通过本轮门禁，全部保持 `READY_FO
 - D08 实现/报告：`40b001fc571678595e7f1a039837dbbe49cdf41b` / `3710904`。
 - 集成提交：`3b6afadd9d53125084b1615b0972f792e25321a0`（D05 实现、集成回归修复与本报告初版）；本轮最终集成报告提交为本文件所在提交（见 `git log -1 -- reports/INTEGRATION.md`）。
 - 集成报告在 `fix/webots-parity-pack` 上普通 push，无 force；远端分支与本地 HEAD 一致。
-- 测试计数：typecheck 通过、protocol 949、acceptance 2221、web 1950、events 339、drive 52；专项 D04 128、D05 83、D06 133、D07 74、D08 147（合计 565）。
+- 测试计数：typecheck 通过、protocol 949、acceptance 2221、web 1950、events 339、drive 52；专项 D04 128、D05 83、D06 133、D07 74、D08 147（合计 565）。独立验证在 `76cf3b353ab3bde24eb7c58dad2a696fe6293332` 上复跑得到相同计数，并完成迁移完整性、对抗并发与重启补读验证。
+- 独立验证报告：`reports/VERIFICATION-D04-D08.md`；验证 SHA `76cf3b353ab3bde24eb7c58dad2a696fe6293332`。
 - 未部署、未创建 PR、未触发生产验收、未创建生产测试数据。
-- D01–D08 全部保持 `READY_FOR_REVIEW`，待独立验证；A05 为 `PASS`；剩余未实现 P0 为 A06、G06、Q01、Q02、Q04、Q05。
+- D01–D03 保持 `READY_FOR_REVIEW`；D04–D08 已独立验证为 `VERIFIED`；A05 为 `PASS`；剩余未实现 P0 为 A06、G06、Q01、Q02、Q04、Q05。
