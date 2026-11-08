@@ -959,9 +959,9 @@ export async function runTaskStatusAcceptance(): Promise<void> {
     })).task;
     checkEqual('D03-T04 改派后由 B2 负责', t04Accepted.owner_actor_id, b2.actor_id);
     const t04OldOwner = await expectToolError(
-      'D03-T04 旧负责人不能写新执行期进度',
+      'D03-T04 旧负责人写入新执行期返回 ASSIGNMENT_STALE',
       report(b1Conn, t04Handover, { note: '旧负责人进度', percent: 80 }),
-      'PERMISSION_DENIED',
+      'ASSIGNMENT_STALE',
     );
     checkEqual(
       'D03-T04 旧负责人错误携带新负责人',

@@ -546,6 +546,68 @@ export interface TaskAttachmentRow {
 }
 
 /**
+ * D05 交接上下文包版本。
+ *
+ * 每个版本保存创建时的目标、已完成、当前结果、未解决与下一步；引用另存
+ * `task_handoff_pack_items`。本表不保存源消息正文或文件字节，读取时重新
+ * 校验可见性与保留期。
+ */
+export interface TaskHandoffPackRow {
+  pack_id: string;
+  task_id: string;
+  room_id: string;
+  version: number;
+  from_assignment_id: string | null;
+  from_assignment_version: number;
+  from_owner_actor_id: string | null;
+  created_by: string;
+  goal: string;
+  completed_json: string;
+  current_result_json: string;
+  unresolved_json: string;
+  next_steps_json: string;
+  source_room_id: string | null;
+  created_at: number;
+}
+
+export type TaskHandoffItemKind =
+  | 'message'
+  | 'file'
+  | 'branch'
+  | 'commit'
+  | 'test'
+  | 'submission';
+
+/** 交接包引用；`authorized` 只对跨范围私有材料有意义。 */
+export interface TaskHandoffItemRow {
+  item_id: string;
+  pack_id: string;
+  kind: TaskHandoffItemKind;
+  reference: string;
+  label: string;
+  summary: string;
+  source_room_id: string | null;
+  required: 0 | 1;
+  authorized: 0 | 1;
+  authorized_by: string | null;
+  authorized_at: number | null;
+  revoked_by: string | null;
+  revoked_at: number | null;
+  note: string;
+  created_at: number;
+}
+
+/** 接任者的补充上下文请求；不改变任务/assignment。 */
+export interface TaskHandoffContextRequestRow {
+  context_request_id: string;
+  pack_id: string;
+  task_id: string;
+  requested_by: string;
+  note: string;
+  created_at: number;
+}
+
+/**
  * 任务成果提交版本。
  *
  * `summary/materials_json/evidence_json/known_limits/links_json/commit_sha` 是

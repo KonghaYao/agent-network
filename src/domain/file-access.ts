@@ -26,6 +26,7 @@ import {
   issueRoomFileTicket,
   verifyFileTicket,
 } from './file-ticket';
+import { handoffFileGrantForRoom } from './handoff-file-grant';
 import { actorId, type Principal } from './principal';
 
 /**
@@ -272,9 +273,24 @@ export function roomFileUrls(
 export interface FileAccessDecision {
   drive: DriveFileRow | null;
   roomFile: RoomFileRow | null;
-  via: 'public' | 'room-ticket' | 'file-ticket';
-  /** 仅 room-ticket/file-ticket 时有值。 */
+  via: 'public' | 'room-ticket' | 'file-ticket' | 'handoff-ticket';
+  /** 仅 room-ticket/file-ticket/handoff-ticket 时有值。 */
   ticketSubject: string | null;
+}
+
+/** 交接授权读取仍要求目标房间成员有效、代次与策略版本一致。 */
+async function targetRoomTicketValid(
+  db: D1Database,
+  roomId: string,
+  payload: NonNullable<ReturnType<typeof verifyFileTicket>>,
+): Promise<boolean> {
+  const [room, member] = await Promise.all([
+    getRoom(db, roomId),
+    getMember(db, roomId, payload.subject),
+  ]);
+  if (!room || !member || member.status !== 'active') return false;
+  if (member.member_generation !== payload.memberGeneration) return false;
+  return room.policy_revision === payload.policyRevision;
 }
 
 /**
@@ -309,20 +325,26 @@ export async function authorizeFileDownload(
       !payload ||
       payload.scope !== 'room' ||
       payload.fileId !== fileId ||
-      payload.roomId !== roomFile.room_id
+      payload.roomId === null
     ) {
       return null;
     }
-    const [room, member] = await Promise.all([
-      getRoom(db, roomFile.room_id),
-      getMember(db, roomFile.room_id, payload.subject),
-    ]);
-    if (!room || !member || member.status !== 'active') return null;
-    if (member.member_generation !== payload.memberGeneration) return null;
-    if (room.policy_revision !== payload.policyRevision) return null;
-    const boundary = historyBoundary(room, member);
-    if (!visibleCreated(roomFile, boundary)) return null;
-    return { drive, roomFile, via: 'room-ticket', ticketSubject: payload.subject };
+    if (payload.roomId === roomFile.room_id) {
+      const [room, member] = await Promise.all([
+        getRoom(db, roomFile.room_id),
+        getMember(db, roomFile.room_id, payload.subject),
+      ]);
+      if (!room || !member || member.status !== 'active') return null;
+      if (member.member_generation !== payload.memberGeneration) return null;
+      if (room.policy_revision !== payload.policyRevision) return null;
+      const boundary = historyBoundary(room, member);
+      if (!visibleCreated(roomFile, boundary)) return null;
+      return { drive, roomFile, via: 'room-ticket', ticketSubject: payload.subject };
+    }
+    // 跨范围交接：目标房间票据 + 包项显式授权；授权人失权或文件删除后失效。
+    const grant = await handoffFileGrantForRoom(db, fileId, payload.roomId, at);
+    if (!grant || !(await targetRoomTicketValid(db, payload.roomId, payload))) return null;
+    return { drive, roomFile, via: 'handoff-ticket', ticketSubject: payload.subject };
   }
 
   if (drive) {
@@ -331,14 +353,20 @@ export async function authorizeFileDownload(
       return { drive, roomFile: null, via: 'public', ticketSubject: null };
     }
     if (
-      !payload ||
-      payload.scope !== 'file' ||
-      payload.fileId !== fileId ||
-      payload.subject !== drive.owner_scope
+      payload &&
+      payload.scope === 'file' &&
+      payload.fileId === fileId &&
+      payload.subject === drive.owner_scope
     ) {
-      return null;
+      return { drive, roomFile: null, via: 'file-ticket', ticketSubject: payload.subject };
     }
-    return { drive, roomFile: null, via: 'file-ticket', ticketSubject: payload.subject };
+    // 草稿也可被显式授权到目标房间；仍要求目标成员有效且代次/策略一致。
+    if (payload && payload.scope === 'room' && payload.fileId === fileId && payload.roomId) {
+      const grant = await handoffFileGrantForRoom(db, fileId, payload.roomId, at);
+      if (!grant || !(await targetRoomTicketValid(db, payload.roomId, payload))) return null;
+      return { drive, roomFile: null, via: 'handoff-ticket', ticketSubject: payload.subject };
+    }
+    return null;
   }
 
   // 旧库未登记的文件：同样收紧为私有，只有上传身份的文件票据可以读取。

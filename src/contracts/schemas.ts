@@ -869,6 +869,102 @@ export const taskReviewerSetSchema = z.object({
   expected_revision: z.number().int().min(1).optional(),
 });
 
+const taskHandoffItemKind = z.enum(['message', 'file', 'branch', 'commit', 'test', 'submission']);
+
+/**
+ * 交接包引用：只保存显式引用与创建者提供的短标签/摘要。
+ *
+ * `source_room_id` 用于跨范围材料；文件/消息正文不会复制进包。跨范围私有
+ * 材料默认 `authorized=false`，必须由能访问源范围的身份显式授权。
+ */
+export const taskHandoffItemInputSchema = z.object({
+  kind: taskHandoffItemKind,
+  ref: z.string().trim().min(1).max(LIMITS.taskHandoffReferenceBytes * 2),
+  label: z.string().trim().max(LIMITS.taskHandoffItemLabelBytes * 2).optional(),
+  summary: z.string().max(LIMITS.taskHandoffItemSummaryBytes * 2).optional(),
+  source_room_id: id().optional(),
+  required: z.boolean().optional(),
+});
+
+/**
+ * 生成交接包版本：当前 active assignment 的负责人调用。
+ *
+ * 每次调用生成 `version = max + 1`；旧版本原样保留。包只描述工作状态与
+ * 引用，不授予任何额外权限，也不改变任务状态、所有者或 revision。
+ */
+export const taskHandoffPackCreateSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  assignment_id: id(),
+  assignment_version: z.number().int().min(1),
+  expected_revision: z.number().int().min(1).optional(),
+  goal: z.string().max(LIMITS.taskHandoffGoalBytes * 2),
+  completed: z
+    .array(z.string().max(LIMITS.taskHandoffSectionItemBytes * 2))
+    .max(LIMITS.taskHandoffSectionItemsMax)
+    .optional(),
+  current_result: z.object({
+    summary: z.string().max(LIMITS.taskHandoffResultSummaryBytes * 2),
+    submission_id: id().optional(),
+    submission_version: z.number().int().min(1).optional(),
+  }),
+  unresolved: z
+    .array(z.string().max(LIMITS.taskHandoffSectionItemBytes * 2))
+    .max(LIMITS.taskHandoffSectionItemsMax)
+    .optional(),
+  next_steps: z
+    .array(z.string().max(LIMITS.taskHandoffSectionItemBytes * 2))
+    .max(LIMITS.taskHandoffSectionItemsMax)
+    .optional(),
+  items: z.array(taskHandoffItemInputSchema).max(LIMITS.taskHandoffItemsMax).optional(),
+  /** 可选绑定待接受提议；便于读取时对齐目标与 from_assignment。 */
+  transfer_id: id().optional(),
+  /** 源范围（通常是任务房间之外的群）；仅记录，不读取其历史。 */
+  source_room_id: id().optional(),
+});
+
+/** 读取交接包：省略 pack_id/version 时返回最新版本。 */
+export const taskHandoffPackGetSchema = z.object({
+  task_id: id(),
+  pack_id: id().optional(),
+  version: z.number().int().min(1).optional(),
+});
+
+/**
+ * 显式授权/撤回跨范围私有材料。
+ *
+ * grant 必须由仍能访问源范围且能管理该材料的身份执行；revoke 由当前负责人、
+ * 包创建者或任务管理者执行。授权不改变任务状态或 revision。
+ */
+export const taskHandoffAuthorizeSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  pack_id: id(),
+  item_id: id(),
+  action: z.enum(['grant', 'revoke']),
+  note: z.string().max(LIMITS.taskHandoffNoteBytes * 2).optional(),
+  assignment_id: id(),
+  assignment_version: z.number().int().min(1),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/**
+ * 接任者请求补充上下文：不改变原责任、任务状态或 revision。
+ *
+ * 当前负责人用 assignment_id/assignment_version 证明执行资格；待接受提议的
+ * 目标用 transfer_id 证明接任资格，二选一。
+ */
+export const taskHandoffRequestMoreSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  pack_id: id().optional(),
+  transfer_id: id().optional(),
+  note: z.string().max(LIMITS.taskHandoffNoteBytes * 2),
+  assignment_id: id().optional(),
+  assignment_version: z.number().int().min(1).optional(),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
 /**
  * 认证反馈：只接受已注册 actor 主动提交的三段诊断文本。
  *
@@ -1005,4 +1101,9 @@ export type TaskSubmissionReturnInput = z.infer<typeof taskSubmissionReturnSchem
 export type TaskReviewAcceptInput = z.infer<typeof taskReviewAcceptSchema>;
 export type TaskReviewReturnInput = z.infer<typeof taskReviewReturnSchema>;
 export type TaskReviewerSetInput = z.infer<typeof taskReviewerSetSchema>;
+export type TaskHandoffItemInput = z.infer<typeof taskHandoffItemInputSchema>;
+export type TaskHandoffPackCreateInput = z.infer<typeof taskHandoffPackCreateSchema>;
+export type TaskHandoffPackGetInput = z.infer<typeof taskHandoffPackGetSchema>;
+export type TaskHandoffAuthorizeInput = z.infer<typeof taskHandoffAuthorizeSchema>;
+export type TaskHandoffRequestMoreInput = z.infer<typeof taskHandoffRequestMoreSchema>;
 export type FeedbackCreateInput = z.infer<typeof feedbackCreateSchema>;

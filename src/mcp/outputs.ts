@@ -1188,6 +1188,123 @@ export const taskTransferListResultSchema = z.object({
   has_more: z.boolean(),
 });
 
+/** 交接包里的文件引用；URL 只对具备目标房间票据且已授权的读者生成。 */
+export const taskHandoffFileSchema = z.object({
+  file_id: z.string(),
+  name: z.string(),
+  mime_type: z.string(),
+  size: z.number(),
+  sha256: z.string(),
+  available: z.boolean(),
+  public_url: z.string().nullable(),
+  preview_url: z.string().nullable(),
+  download_url: z.string().nullable(),
+});
+
+/** 消息引用只回显预览，不复制完整正文。 */
+export const taskHandoffMessageSchema = z.object({
+  message_id: z.string(),
+  created_at: z.string(),
+  preview: z.string(),
+});
+
+export const taskHandoffSubmissionRefSchema = z.object({
+  submission_id: z.string(),
+  version: z.number(),
+  status: z.enum(['pending', 'accepted', 'returned', 'superseded']),
+});
+
+/** 逐项判定：available 可用、missing 缺失、omitted 未授权/已撤回。 */
+export const taskHandoffItemSchema = z.object({
+  item_id: z.string(),
+  kind: z.enum(['message', 'file', 'branch', 'commit', 'test', 'submission']),
+  ref: z.string(),
+  label: z.string(),
+  summary: z.string().nullable(),
+  source_room_id: z.string().nullable(),
+  source_scope: z.enum(['task_room', 'external']),
+  required: z.boolean(),
+  authorized: z.boolean(),
+  authorized_by: z.string().nullable(),
+  authorized_by_name: z.string().nullable(),
+  authorized_at: z.string().nullable(),
+  revoked_at: z.string().nullable(),
+  note: z.string().nullable(),
+  status: z.enum(['available', 'missing', 'omitted']),
+  reason: z.string().nullable(),
+  verified: z.boolean(),
+  file: taskHandoffFileSchema.nullable(),
+  message: taskHandoffMessageSchema.nullable(),
+  submission: taskHandoffSubmissionRefSchema.nullable(),
+});
+
+export const taskHandoffGapSchema = z.object({
+  item_id: z.string(),
+  kind: z.enum(['message', 'file', 'branch', 'commit', 'test', 'submission']),
+  ref: z.string(),
+  label: z.string(),
+  required: z.boolean(),
+  status: z.enum(['missing', 'omitted']),
+  reason: z.string(),
+});
+
+export const taskHandoffContextRequestSchema = z.object({
+  context_request_id: z.string(),
+  requested_by: z.string(),
+  requested_by_name: z.string(),
+  note: z.string(),
+  created_at: z.string(),
+});
+
+/** 版本化交接包；旧版本原样保留，latest_version 与 version 区分历史与当前。 */
+export const taskHandoffPackSchema = z.object({
+  pack_id: z.string(),
+  task_id: z.string(),
+  room_id: z.string(),
+  version: z.number(),
+  latest_version: z.number(),
+  versions: z.array(z.number()),
+  from_assignment_id: z.string().nullable(),
+  from_assignment_version: z.number(),
+  from_owner_actor_id: z.string().nullable(),
+  from_owner_name: z.string().nullable(),
+  created_by: z.string(),
+  created_by_name: z.string(),
+  goal: z.string(),
+  completed: z.array(z.string()),
+  current_result: z.object({
+    summary: z.string(),
+    submission_id: z.string().nullable(),
+    submission_version: z.number().nullable(),
+    submission_status: z
+      .enum(['pending', 'accepted', 'returned', 'superseded'])
+      .nullable(),
+  }),
+  unresolved: z.array(z.string()),
+  next_steps: z.array(z.string()),
+  source_room_id: z.string().nullable(),
+  created_at: z.string(),
+  items: z.array(taskHandoffItemSchema),
+  missing: z.array(taskHandoffGapSchema),
+  omitted: z.array(taskHandoffGapSchema),
+  required_missing: z.array(z.string()),
+  context_ready: z.boolean(),
+  context_incomplete: z.boolean(),
+  viewer_is_successor: z.boolean(),
+  can_authorize: z.boolean(),
+  can_request_more: z.boolean(),
+  requests: z.array(taskHandoffContextRequestSchema),
+});
+
+export const taskHandoffPackResultSchema = z.object({
+  pack: taskHandoffPackSchema,
+});
+
+export const taskHandoffRequestResultSchema = z.object({
+  pack: taskHandoffPackSchema,
+  request: taskHandoffContextRequestSchema,
+});
+
 /** 侧栏任务进度；一次返回多个 active 房间，避免 N 次 list。 */
 export const taskSummaryResultSchema = z.object({
   items: z.array(

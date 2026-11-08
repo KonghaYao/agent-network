@@ -346,6 +346,10 @@ async function main(): Promise<void> {
     'network_task_transfer_cancel',
     'network_task_transfer_get',
     'network_task_transfer_list',
+    'network_task_handoff_pack_create',
+    'network_task_handoff_pack_get',
+    'network_task_handoff_pack_authorize',
+    'network_task_handoff_pack_request_more',
     'network_task_submit',
     'network_task_submission_get',
     'network_task_submission_list',
@@ -451,6 +455,10 @@ async function main(): Promise<void> {
     'network_task_transfer_cancel',
     'network_task_transfer_get',
     'network_task_transfer_list',
+    'network_task_handoff_pack_create',
+    'network_task_handoff_pack_get',
+    'network_task_handoff_pack_authorize',
+    'network_task_handoff_pack_request_more',
     'network_task_submit',
     'network_task_submission_get',
     'network_task_submission_list',
@@ -718,6 +726,10 @@ async function main(): Promise<void> {
     'network_task_transfer_cancel',
     'network_task_transfer_get',
     'network_task_transfer_list',
+    'network_task_handoff_pack_create',
+    'network_task_handoff_pack_get',
+    'network_task_handoff_pack_authorize',
+    'network_task_handoff_pack_request_more',
     'network_task_submit',
     'network_task_submission_get',
     'network_task_submission_list',
@@ -727,7 +739,7 @@ async function main(): Promise<void> {
     'network_task_reviewer_set',
   ];
   check(
-    '任务 25 个工具全部注册且旧工具已退役',
+    '任务 29 个工具全部注册且旧工具已退役',
     taskToolNames.every((name) => taskTools.has(name)) &&
       taskTools.size === taskToolNames.length &&
       !taskTools.has('network_task_list_get') &&
@@ -1029,6 +1041,114 @@ async function main(): Promise<void> {
       ?.annotations?.readOnlyHint === true &&
       (taskTools.get('network_task_transfer_list') as { annotations?: { readOnlyHint?: boolean } } | undefined)
         ?.annotations?.readOnlyHint === true,
+  );
+  const handoffCreateInput = JSON.stringify(
+    taskTools.get('network_task_handoff_pack_create')?.inputSchema ?? {},
+  );
+  check(
+    'task_handoff_pack_create 输入含执行版本/目标/当前结果/引用与源范围',
+    [
+      'request_id',
+      'task_id',
+      'assignment_id',
+      'assignment_version',
+      'expected_revision',
+      'goal',
+      'completed',
+      'current_result',
+      'unresolved',
+      'next_steps',
+      'items',
+      'transfer_id',
+      'source_room_id',
+    ].every((key) => handoffCreateInput.includes(`"${key}"`)),
+    taskTools.get('network_task_handoff_pack_create')?.inputSchema,
+  );
+  const handoffCreateDescription =
+    taskTools.get('network_task_handoff_pack_create')?.description ?? '';
+  check(
+    'task_handoff_pack_create 描述声明版本递增、显式授权与不改变任务状态',
+    handoffCreateDescription.includes('当前负责人') &&
+      handoffCreateDescription.includes('version=max+1') &&
+      handoffCreateDescription.includes('未授权') &&
+      handoffCreateDescription.includes('不改变任务状态') &&
+      handoffCreateDescription.includes('ASSIGNMENT_STALE'),
+    handoffCreateDescription,
+  );
+  const handoffGetOutput = JSON.stringify(
+    taskTools.get('network_task_handoff_pack_get')?.outputSchema ?? {},
+  );
+  check(
+    'task_handoff_pack_get 输出含版本/缺项/就绪状态与授权入口',
+    [
+      'pack',
+      'versions',
+      'latest_version',
+      'missing',
+      'omitted',
+      'required_missing',
+      'context_ready',
+      'context_incomplete',
+      'can_authorize',
+      'can_request_more',
+      'requests',
+    ].every((key) => handoffGetOutput.includes(`"${key}"`)),
+    taskTools.get('network_task_handoff_pack_get')?.outputSchema,
+  );
+  const handoffGetDescription =
+    taskTools.get('network_task_handoff_pack_get')?.description ?? '';
+  check(
+    'task_handoff_pack_get 描述声明逐项可见性判定与未授权不回显 URL',
+    handoffGetDescription.includes('missing') &&
+      handoffGetDescription.includes('omitted') &&
+      handoffGetDescription.includes('required_missing') &&
+      handoffGetDescription.includes('未授权项不回显文件 URL') &&
+      handoffGetDescription.includes('只读'),
+    handoffGetDescription,
+  );
+  const handoffAuthorizeInput = JSON.stringify(
+    taskTools.get('network_task_handoff_pack_authorize')?.inputSchema ?? {},
+  );
+  check(
+    'task_handoff_pack_authorize 输入含 grant/revoke、引用与执行版本',
+    ['request_id', 'task_id', 'pack_id', 'item_id', 'action', 'grant', 'revoke', 'assignment_id', 'assignment_version'].every(
+      (key) => handoffAuthorizeInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_handoff_pack_authorize')?.inputSchema,
+  );
+  const handoffAuthorizeDescription =
+    taskTools.get('network_task_handoff_pack_authorize')?.description ?? '';
+  check(
+    'task_handoff_pack_authorize 描述声明源范围资格与不复制文件字节',
+    handoffAuthorizeDescription.includes('当前负责人') &&
+      handoffAuthorizeDescription.includes('源范围') &&
+      handoffAuthorizeDescription.includes('不复制文件字节') &&
+      handoffAuthorizeDescription.includes('INVALID_ARGUMENT'),
+    handoffAuthorizeDescription,
+  );
+  const handoffRequestInput = JSON.stringify(
+    taskTools.get('network_task_handoff_pack_request_more')?.inputSchema ?? {},
+  );
+  check(
+    'task_handoff_pack_request_more 输入含 note 与接任/执行资格',
+    ['request_id', 'task_id', 'pack_id', 'transfer_id', 'note', 'assignment_id', 'assignment_version'].every(
+      (key) => handoffRequestInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_handoff_pack_request_more')?.inputSchema,
+  );
+  const handoffRequestDescription =
+    taskTools.get('network_task_handoff_pack_request_more')?.description ?? '';
+  check(
+    'task_handoff_pack_request_more 描述声明不改变原责任与 context_incomplete',
+    handoffRequestDescription.includes('不改变原责任') &&
+      handoffRequestDescription.includes('context_incomplete') &&
+      handoffRequestDescription.includes('不创建 delivery'),
+    handoffRequestDescription,
+  );
+  check(
+    'task_handoff_pack_get 注册为只读工具',
+    (taskTools.get('network_task_handoff_pack_get') as { annotations?: { readOnlyHint?: boolean } } | undefined)
+      ?.annotations?.readOnlyHint === true,
   );
   const taskSubmitInput = JSON.stringify(
     taskTools.get('network_task_submit')?.inputSchema ?? {},
@@ -2109,9 +2229,26 @@ async function main(): Promise<void> {
       'network_task_transfer_propose', 'network_task_transfer_accept',
       'network_task_transfer_reject', 'network_task_transfer_cancel',
       'network_task_transfer_get', 'network_task_transfer_list',
+      'network_task_handoff_pack_create', 'network_task_handoff_pack_get',
+      'network_task_handoff_pack_authorize', 'network_task_handoff_pack_request_more',
       'status_label', 'task_progress', 'task.updated',
       '任务卡片', '不写 inbox', '不推进 `head_seq`', '不要轮询',
       'agent_tasks.sh'].every((marker) => skillText.includes(marker)),
+    skillText.slice(0, 320),
+  );
+  check(
+    '技能正文说明交接包版本、缺项、显式授权与 context_incomplete',
+    [
+      'network_task_handoff_pack_create',
+      'network_task_handoff_pack_get',
+      'network_task_handoff_pack_authorize',
+      'network_task_handoff_pack_request_more',
+      'context_incomplete',
+      'required_missing',
+      '不复制群历史',
+      '不授予更高权限',
+      '显式授权',
+    ].every((marker) => skillText.includes(marker)),
     skillText.slice(0, 320),
   );
   check(
@@ -2489,6 +2626,8 @@ async function main(): Promise<void> {
       'network_task_transfer_propose', 'network_task_transfer_accept',
       'network_task_transfer_reject', 'network_task_transfer_cancel',
       'network_task_transfer_get', 'network_task_transfer_list',
+      'network_task_handoff_pack_create', 'network_task_handoff_pack_get',
+      'network_task_handoff_pack_authorize', 'network_task_handoff_pack_request_more',
       'status_label', 'task_progress',
       'task.updated', '不写 inbox', '不会唤醒 Agent',
       'task_summary', '每次上线', 'pending > 0', 'claimed > 0', '只含自己',

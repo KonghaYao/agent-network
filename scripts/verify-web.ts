@@ -2871,6 +2871,134 @@ async function runTaskAcceptance(
     );
     await page.locator('#task-detail-close').click();
 
+    // D05 网页入口：详情展示包版本、缺项与跨范围授权入口，授权后按服务端视图刷新。
+    const uiSourceRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+      request_id: requestId('room'),
+      kind: 'group',
+      title: 'UI 交接源范围',
+      members: [reviewer.actor_id],
+    });
+    await acceptRoomInvites(reviewerToken, uiSourceRoom.room.room_id);
+    const uiSourceMessage = await rawTool<{ message: { message_id: string } }>(
+      humanToken,
+      'network_message_send',
+      {
+        request_id: requestId('ui_source_message'),
+        client_message_id: crypto.randomUUID(),
+        room_id: uiSourceRoom.room.room_id,
+        body: 'UI 跨范围交接材料',
+      },
+    );
+    const uiHandoffTask = await rawTool<{
+      task: {
+        task_id: string;
+        revision: number;
+        assignment: { assignment_id: string } | null;
+      };
+    }>(humanToken, 'network_task_create', {
+      request_id: requestId('task_create'),
+      room_id: roomId,
+      title: 'UI 交接包任务',
+      assignee_actor_id: human.actor_id,
+      reviewer_actor_id: agent.actor_id,
+    });
+    const uiHandoffAccepted = await rawTool<{
+      task: {
+        task_id: string;
+        revision: number;
+        assignment: { assignment_id: string; assignment_version: number } | null;
+      };
+    }>(humanToken, 'network_task_accept', {
+      request_id: requestId('task_accept'),
+      task_id: uiHandoffTask.task.task_id,
+      ...(uiHandoffTask.task.assignment
+        ? { assignment_id: uiHandoffTask.task.assignment.assignment_id }
+        : {}),
+      expected_revision: uiHandoffTask.task.revision,
+    });
+    if (!uiHandoffAccepted.task.assignment) throw new Error('交接包任务缺少 active assignment');
+    const uiHandoffPack = await rawTool<{
+      pack: { pack_id: string; version: number; context_ready: boolean };
+    }>(humanToken, 'network_task_handoff_pack_create', {
+      request_id: requestId('task_handoff_pack'),
+      task_id: uiHandoffAccepted.task.task_id,
+      assignment_id: uiHandoffAccepted.task.assignment.assignment_id,
+      assignment_version: uiHandoffAccepted.task.assignment.assignment_version,
+      expected_revision: uiHandoffAccepted.task.revision,
+      goal: 'UI 交接包展示验收',
+      completed: ['生成版本化交接包'],
+      current_result: { summary: '等待跨范围材料授权' },
+      next_steps: ['授权源范围消息'],
+      source_room_id: uiSourceRoom.room.room_id,
+      items: [
+        {
+          kind: 'message',
+          ref: uiSourceMessage.message.message_id,
+          label: '跨范围交接材料',
+          source_room_id: uiSourceRoom.room.room_id,
+          required: true,
+        },
+      ],
+    });
+    checkEqual('D05 网页交接包首版为 v1', uiHandoffPack.pack.version, 1);
+    checkEqual('D05 网页交接包初始不完整', uiHandoffPack.pack.context_ready, false);
+    if (!(await page.locator('#task-popover').isVisible())) {
+      await page.locator('#task-toggle').click();
+      await page.locator('#task-popover').waitFor({ state: 'visible' });
+    }
+    const handoffItemSelector = `#task-list .task-item[data-task-id="${uiHandoffAccepted.task.task_id}"]`;
+    await page.waitForFunction(
+      `document.querySelector(${JSON.stringify(handoffItemSelector)}) !== null`,
+    );
+    await page.locator(handoffItemSelector).click();
+    await page.locator('#task-detail-modal').waitFor({ state: 'visible' });
+    await page.waitForFunction(
+      `(() => {
+        const panel = document.getElementById('task-handoff-panel');
+        return Boolean(panel && panel.innerText.includes('交接上下文包') &&
+          panel.innerText.includes('v1') && panel.innerText.includes('未授权'));
+      })()`,
+    );
+    const handoffPanelText = (await page.locator('#task-handoff-panel').innerText()) ?? '';
+    check('D05 网页显示交接包版本与未授权项', handoffPanelText.includes('v1'));
+    check('D05 网页显示上下文不完整', handoffPanelText.includes('上下文不完整'));
+    checkEqual(
+      'D05 网页显示未授权引用',
+      await page.locator('#task-handoff-panel .task-handoff-item-omitted').count(),
+      1,
+    );
+    checkEqual(
+      'D05 网页显示版本切换',
+      await page.locator('#task-handoff-panel .task-handoff-version').count(),
+      1,
+    );
+    const handoffAuthorizeButton = page
+      .locator('#task-handoff-panel button')
+      .filter({ hasText: '授权给接任者' });
+    checkEqual('D05 网页负责人可见授权入口', await handoffAuthorizeButton.count(), 1);
+    await handoffAuthorizeButton.click();
+    await page.waitForFunction(
+      `(() => {
+        const panel = document.getElementById('task-handoff-panel');
+        return Boolean(panel && panel.querySelector('.task-handoff-item-available') &&
+          panel.querySelector('.task-handoff-readiness-ready'));
+      })()`,
+    );
+    check('D05 网页授权后引用可用且上下文完整', true);
+    checkEqual(
+      'D05 网页授权后未授权区块消失',
+      await page.locator('#task-handoff-panel .task-handoff-item-omitted').count(),
+      0,
+    );
+    const servedHandoffPack = await rawTool<{
+      pack: { context_ready: boolean; items: { status: string }[] };
+    }>(humanToken, 'network_task_handoff_pack_get', {
+      task_id: uiHandoffAccepted.task.task_id,
+    });
+    checkEqual('D05 网页授权写入服务端', servedHandoffPack.pack.context_ready, true);
+    checkEqual('D05 授权后服务端引用可用', servedHandoffPack.pack.items[0]?.status, 'available');
+    await page.locator('#task-detail-close').click();
+
     const uiDeclineTask = await rawTool<{ task: { task_id: string } }>(
       humanToken,
       'network_task_create',

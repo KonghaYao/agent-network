@@ -83,6 +83,10 @@ import {
   taskCreateSchema,
   taskDeclineSchema,
   taskGetSchema,
+  taskHandoffAuthorizeSchema,
+  taskHandoffPackCreateSchema,
+  taskHandoffPackGetSchema,
+  taskHandoffRequestMoreSchema,
   taskListSchema,
   taskOfferSchema,
   taskProgressSchema,
@@ -213,6 +217,13 @@ import {
   taskSubmissionReturn,
   taskSubmit,
 } from '../domain/task-submissions';
+import { fileTicketSecret } from '../domain/file-ticket';
+import {
+  taskHandoffAuthorize,
+  taskHandoffPackCreate,
+  taskHandoffPackGet,
+  taskHandoffRequestMore,
+} from '../domain/task-handoff-packs';
 import {
   taskTransferAccept,
   taskTransferCancel,
@@ -281,6 +292,8 @@ import {
   roomPolicySetResultSchema,
   roomRoleHistorySchema as roomRoleHistoryResultSchema,
   taskListResultSchema,
+  taskHandoffPackResultSchema,
+  taskHandoffRequestResultSchema,
   taskResultSchema,
   taskSubmissionGetResultSchema,
   taskSubmissionListResultSchema,
@@ -414,6 +427,7 @@ export function registerTools(
 ): void {
   const db = env.DB;
   const origin = env.PUBLIC_ORIGIN;
+  const ticketSecret = fileTicketSecret(env.FILE_TICKET_SECRET);
 
   register(
     server,
@@ -1239,6 +1253,55 @@ export function registerTools(
       return taskTransferList(db, principal, input);
     },
     { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_handoff_pack_create',
+    '生成一版任务交接上下文包：只有当前负责人、持有当前 active assignment 且任务为 in_progress/blocked 时可调用。包记录目标、已完成、当前结果（可绑定 submission_id 与 version）、未解决、下一步与引用清单；每次生成 version=max+1，旧版本原样保留，不就地覆盖。必须传 assignment_id/assignment_version，建议传 expected_revision；旧执行资格返回 ASSIGNMENT_STALE，版本变化返回 VERSION_CONFLICT。引用只记录 message_id/文件 ID/分支/提交/测试/成果版本，不复制群历史、消息正文或文件字节；source_room_id 指向任务房间之外的源范围时，消息与文件默认未授权，需要源范围有权限的身份调用 authorize 显式授权。包只是工作数据，不授予额外权限，也不改变任务状态、owner、revision 或任何 delivery。写 task_handoff_pack_created 事件，只通知房间内 human，不创建 delivery、不增加 Agent pending_count、不推进 head_seq。同一 request_id 重放返回同一包。',
+    taskHandoffPackCreateSchema,
+    taskHandoffPackResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskHandoffPackCreate(db, principal, input, origin, ticketSecret);
+    },
+  );
+
+  register(
+    server,
+    'network_task_handoff_pack_get',
+    '读取任务交接上下文包：传 pack_id 或 version 读取指定版本，省略时返回最新版本，并返回 versions 列表与 latest_version。对每个引用按当前接任者/读者的可见性、成员资格与保留期逐项判定：available 可用、missing 已删除或不可见、omitted 跨范围未授权或已撤回；missing/omitted 汇总在 missing/omitted，必需项缺失列入 required_missing，context_ready=false 表示交接不完整，空内容不会被当作完整交接。跨范围未授权项不回显文件 URL 或消息预览；授权后重新读取才可见。源文件删除、消息不可见或授权撤回后，重读立即反映变化，旧版本仍保留原文字段。只读，不改变任务状态、delivery、pending_count 或 head_seq。',
+    taskHandoffPackGetSchema,
+    taskHandoffPackResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskHandoffPackGet(db, principal, input, origin, ticketSecret);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_handoff_pack_authorize',
+    '显式授权或撤回交接包中的跨范围私有引用：只有当前负责人、持有当前 active assignment 且任务仍在执行阶段时可调用。grant 仅适用于 source_room_id 在任务房间之外的消息/文件：文件要求调用者仍是源文件上传者或源房间 owner/管理员且能访问源范围，消息要求调用者仍能访问源消息；同一任务房间的材料不需要授权，直接返回 INVALID_ARGUMENT。revoke 关闭授权，但不删除包版本或引用记录。授权不改变任务状态、owner 或 revision；不能读取源群历史，也不复制文件字节，只在已授权且持有目标房间票据时生成可读 URL。写 task_handoff_item_authorized/revoked 事件，只通知房间内 human，不创建 delivery、不增加 pending_count、不推进 head_seq。必须传 assignment_id/assignment_version 与 request_id；重复请求返回同一结果。',
+    taskHandoffAuthorizeSchema,
+    taskHandoffPackResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskHandoffAuthorize(db, principal, input, origin, ticketSecret);
+    },
+  );
+
+  register(
+    server,
+    'network_task_handoff_pack_request_more',
+    '请求补充交接上下文：待接受交接提议的目标用 transfer_id 证明接任资格，当前负责人用 assignment_id/assignment_version 证明执行资格，二选一；note 必填。请求只追加到包的请求列表并写 task_handoff_context_requested 事件，不改变原责任、assignment、任务状态或 revision；必需材料仍缺失时任务保持 blocked + context_incomplete，不能用模型猜测补齐。只通知房间内 human，不创建 delivery、不增加 Agent pending_count、不推进 head_seq。同一 request_id 重放返回同一结果。',
+    taskHandoffRequestMoreSchema,
+    taskHandoffRequestResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskHandoffRequestMore(db, principal, input, origin, ticketSecret);
+    },
   );
 
   register(

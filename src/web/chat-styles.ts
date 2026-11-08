@@ -405,6 +405,54 @@ export const APP_STYLE = `
   .task-transfer-empty { margin: 0; color: var(--wx-muted); }
   .task-transfer-error { min-height: 1.2em; margin: 0; color: var(--wx-unread);
     font-size: 12px; overflow-wrap: anywhere; }
+  .task-handoff-panel { display: flex; flex-direction: column; gap: 8px;
+    padding-top: 10px; border-top: 1px solid var(--wx-line); font-size: 12px; }
+  .task-handoff-title { margin: 0; font-size: 12px; font-weight: 600;
+    color: var(--wx-muted); }
+  .task-handoff-versions { display: flex; flex-wrap: wrap; gap: 6px;
+    align-items: center; }
+  .task-handoff-version-label { color: var(--wx-muted); }
+  .task-handoff-version { padding: 1px 8px; border: 1px solid var(--wx-line);
+    border-radius: 9px; background: var(--wx-bg); color: var(--wx-muted);
+    font-size: 11px; cursor: pointer; }
+  .task-handoff-version-active { color: var(--wx-link);
+    border-color: var(--wx-link); }
+  .task-handoff-pack-meta { font-size: 11px; color: var(--wx-muted);
+    overflow-wrap: anywhere; }
+  .task-handoff-readiness { padding: 4px 8px; border-radius: 6px;
+    background: var(--wx-search); overflow-wrap: anywhere; }
+  .task-handoff-readiness-ready { color: var(--wx-green); }
+  .task-handoff-readiness-incomplete { color: var(--wx-danger); }
+  .task-handoff-block { display: flex; flex-direction: column; gap: 4px; }
+  .task-handoff-block-title { font-weight: 600; color: var(--wx-text); }
+  .task-handoff-block-text { line-height: 1.6; white-space: pre-wrap;
+    overflow-wrap: anywhere; }
+  .task-handoff-list, .task-handoff-items, .task-handoff-requests {
+    list-style: none; margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 4px; }
+  .task-handoff-items { gap: 8px; }
+  .task-handoff-item { display: flex; flex-direction: column; gap: 4px;
+    padding: 8px 10px; border: 1px solid var(--wx-line); border-radius: 6px;
+    background: var(--wx-search); }
+  .task-handoff-item-missing, .task-handoff-item-omitted {
+    border-style: dashed; }
+  .task-handoff-item-head { display: flex; align-items: center; gap: 8px;
+    justify-content: space-between; overflow-wrap: anywhere; }
+  .task-handoff-item-meta, .task-handoff-item-reason {
+    font-size: 11px; color: var(--wx-muted); overflow-wrap: anywhere; }
+  .task-handoff-item-text { line-height: 1.6; overflow-wrap: anywhere; }
+  .task-handoff-badge { flex: 0 0 auto; padding: 1px 6px; border-radius: 9px;
+    font-size: 11px; background: var(--wx-bg); color: var(--wx-muted); }
+  .task-handoff-badge-available { color: var(--wx-green); }
+  .task-handoff-badge-missing { color: var(--wx-danger); }
+  .task-handoff-badge-omitted { color: var(--wx-muted); }
+  .task-handoff-actions { justify-content: flex-start; }
+  .task-handoff-file { color: var(--wx-link); }
+  .task-handoff-request-form { display: flex; flex-wrap: wrap; gap: 8px;
+    align-items: flex-start; }
+  .task-handoff-request-note { flex: 1 1 180px; resize: vertical; }
+  .task-handoff-error { min-height: 1.2em; margin: 0; color: var(--wx-unread);
+    font-size: 12px; overflow-wrap: anywhere; }
   .msg-task-progress { flex: 0 1 auto; min-width: 0; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; color: var(--wx-muted);
     font-size: 11px; }

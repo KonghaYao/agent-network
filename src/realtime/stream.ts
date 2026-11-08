@@ -533,6 +533,10 @@ function roomStreamItems(
     case 'task_transfer_rejected':
     case 'task_transfer_cancelled':
     case 'task_transfer_expired':
+    case 'task_handoff_pack_created':
+    case 'task_handoff_item_authorized':
+    case 'task_handoff_item_revoked':
+    case 'task_handoff_context_requested':
     case 'task_submitted':
     case 'task_returned':
     case 'task_accepted':

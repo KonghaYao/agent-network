@@ -57,6 +57,7 @@ const GUARD_CODES: Record<string, BusinessErrorCode> = {
   fileUnavailable: 'FILE_UNAVAILABLE',
   artifactConflict: 'CONFLICT',
   fileReferenced: 'CONFLICT',
+  handoffConflict: 'CONFLICT',
 };
 
 const GUARD_MESSAGES: Record<string, string> = {
@@ -107,6 +108,7 @@ const GUARD_MESSAGES: Record<string, string> = {
   fileUnavailable: '文件不存在、已删除、已过期或正在被清理',
   artifactConflict: '成果版本已变化或文件已被其他成果占用',
   fileReferenced: '文件仍被有效任务或成果引用，不能删除或释放保留',
+  handoffConflict: '交接包版本已变化，请刷新后重试',
 };
 
 /** 限额类 guard 的稳定 data，供 MCP Events 映射 -32025。 */

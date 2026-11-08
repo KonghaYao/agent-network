@@ -332,41 +332,6 @@ function scheduleRoomTasksRefresh(roomId) {
   }, WEB_REFRESH_DEBOUNCE_MS);
 }
 
-function taskDetailRow(label, value) {
-  if (!taskDetailBodyElement) return null;
-  const dt = document.createElement('dt');
-  dt.textContent = label;
-  const dd = document.createElement('dd');
-  dd.textContent = value;
-  taskDetailBodyElement.append(dt, dd);
-  return dd;
-}
-
-function taskMessageButton(messageId, label) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'link-btn';
-  button.textContent = label;
-  button.addEventListener('click', function () {
-    closeTaskDetail();
-    closeMyTasks();
-    scrollToTaskMessage(messageId);
-  });
-  return button;
-}
-
-function scrollToTaskMessage(messageId) {
-  if (!messagesElement) return;
-  const node = messagesElement.querySelector('[data-message-id="' + messageId + '"]');
-  if (!node) {
-    if (statusElement) statusElement.textContent = '该消息不在已加载的历史中';
-    return;
-  }
-  node.scrollIntoView({ block: 'center' });
-  node.classList.add('task-message-flash');
-  setTimeout(function () { node.classList.remove('task-message-flash'); }, 1200);
-}
-
 function renderTaskDetail(task) {
   taskDetailCurrent = task;
   if (taskDetailTitleElement) taskDetailTitleElement.textContent = task.title;
@@ -421,6 +386,7 @@ function renderTaskDetail(task) {
   }
   renderTaskDetailActions(task);
   renderTaskTransferSection(task);
+  renderTaskHandoffSection(task);
 }
 
 function renderTaskDetailActions(task) {

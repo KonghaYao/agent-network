@@ -68,6 +68,7 @@ import {
   type TaskView,
 } from './tasks';
 import { historySnapshot } from './room-history';
+import { handoffReadinessForTransfer } from './task-handoff-packs';
 
 export type TaskTransferStatus = TaskTransferRow['status'];
 
@@ -94,8 +95,8 @@ export interface TaskTransferView {
   responded_at: string | null;
   responded_by: string | null;
   context: Record<string, unknown>;
-  /** D05 尚未生成完整上下文包；这里只暴露准备状态与说明。 */
-  context_ready: false;
+  /** 最新交接包对该提议目标是否就绪；没有包时为 false（D04 兼容）。 */
+  context_ready: boolean;
   note: string | null;
   can_accept: boolean;
   can_reject: boolean;
@@ -175,6 +176,12 @@ async function transferView(
       ? await getTaskAssignment(db, task.current_assignment_id)
       : null;
   const contextValues = parseContext(row.context_json);
+  const handoff = await handoffReadinessForTransfer(
+    db,
+    task,
+    row.from_assignment_id,
+    row.to_actor_id,
+  );
   const names = await actorNames(db, [
     row.to_actor_id,
     row.created_by,
@@ -206,8 +213,18 @@ async function transferView(
     created_at: String(row.created_at),
     responded_at: row.responded_at === null ? null : String(row.responded_at),
     responded_by: row.responded_by,
-    context: contextValues,
-    context_ready: false,
+    context: {
+      ...contextValues,
+      ...(handoff.has_pack
+        ? {
+            pack_id: handoff.pack_id,
+            pack_version: handoff.pack_version,
+            required_missing: handoff.required_missing,
+            context_ready: handoff.context_ready,
+          }
+        : {}),
+    },
+    context_ready: handoff.context_ready,
     note: noteOf(contextValues),
     can_accept:
       live === 'pending' &&
@@ -964,8 +981,20 @@ export async function taskTransferAccept(
     versionRow?.version ?? 1,
     assignment.assignment_version + 1,
   );
+  // D05：包存在但必需引用未就绪时，接任成功但任务立即受阻，等待补充上下文；
+  // 没有包时保持 D04 行为，不阻断接任。
+  const handoff = await handoffReadinessForTransfer(
+    db,
+    task,
+    initial.from_assignment_id,
+    context.caller,
+  );
+  const contextIncomplete = handoff.has_pack && !handoff.context_ready;
   const updated: TaskRow = {
     ...task,
+    status: contextIncomplete ? 'blocked' : task.status,
+    blocked_reason: contextIncomplete ? 'context_incomplete' : task.blocked_reason,
+    blocked_at: contextIncomplete ? at : task.blocked_at,
     owner_actor_id: context.caller,
     current_assignment_id: assignmentId,
     revision: task.revision + 1,
@@ -1083,6 +1112,7 @@ export async function taskTransferAccept(
           .prepare(
             `UPDATE tasks
                 SET owner_actor_id = ?, current_assignment_id = ?,
+                    status = ?, blocked_reason = ?, blocked_at = ?,
                     revision = revision + 1, last_progress_at = ?, updated_at = ?
               WHERE task_id = ? AND revision = ?
                 AND current_assignment_id = ? AND owner_actor_id = ?
@@ -1091,6 +1121,9 @@ export async function taskTransferAccept(
           .bind(
             context.caller,
             assignmentId,
+            updated.status,
+            updated.blocked_reason,
+            updated.blocked_at,
             at,
             at,
             task.task_id,
@@ -1147,6 +1180,14 @@ export async function taskTransferAccept(
             previous_assignment_version: assignment.assignment_version,
             owner_actor_id: context.caller,
             previous_owner_actor_id: assignment.owner_actor_id,
+            context_incomplete: contextIncomplete,
+            ...(contextIncomplete
+              ? {
+                  handoff_pack_id: handoff.pack_id,
+                  handoff_pack_version: handoff.pack_version,
+                  required_missing: handoff.required_missing,
+                }
+              : {}),
           },
         ).statements,
       ],

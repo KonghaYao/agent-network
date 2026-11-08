@@ -93,6 +93,8 @@ interface TaskView {
   task_id: string;
   status: string;
   title: string;
+  owner_actor_id: string | null;
+  blocked_reason: string | null;
 }
 
 interface TaskListResult {
@@ -572,10 +574,12 @@ export async function runAgentIdentityAcceptance(): Promise<void> {
     checkEqual('停用原因可读', afterDisable.disabled_reason, 'A01 验收停用');
     checkEqual('停用后 pending 投递清零', afterDisable.pending_work.pending_deliveries, 0);
     check('停用后投递标记为 cancelled', afterDisable.pending_work.cancelled_deliveries >= 1, afterDisable.pending_work);
+    // D04 起停用会撤销执行资格：任务转 blocked、清空负责人与 current assignment，
+    // 因此不再出现在“我的未完成任务”列表；权威状态必须仍可读取且不是 accepted。
     check(
-      '停用后任务没有被悄悄标成完成',
-      afterDisable.pending_work.open_tasks.some(
-        (item) => item.task_id === task.task.task_id && item.status === 'claimed',
+      '停用后任务不再显示为本人 claimed',
+      !afterDisable.pending_work.open_tasks.some(
+        (item) => item.task_id === task.task.task_id,
       ),
       afterDisable.pending_work.open_tasks,
     );
@@ -583,7 +587,18 @@ export async function runAgentIdentityAcceptance(): Promise<void> {
       room_id: roomId,
     });
     const taskAfterDisable = taskList.tasks.find((item) => item.task_id === task.task.task_id);
-    checkEqual('任务列表仍显示进行中', taskAfterDisable?.status, 'in_progress');
+    checkEqual('任务列表显示停用后进入 blocked', taskAfterDisable?.status, 'blocked');
+    checkEqual('停用后任务负责人被清空', taskAfterDisable?.owner_actor_id, null);
+    checkEqual(
+      '停用后任务阻塞原因为 owner_lost_eligibility',
+      taskAfterDisable?.blocked_reason,
+      'owner_lost_eligibility',
+    );
+    check(
+      '停用后任务没有被悄悄标成完成',
+      taskAfterDisable !== undefined && taskAfterDisable.status !== 'accepted',
+      taskAfterDisable,
+    );
     checkEqual(
       '任务没有被计为已验收',
       taskList.tasks.filter((item) => item.status === 'accepted').length,
@@ -605,7 +620,8 @@ export async function runAgentIdentityAcceptance(): Promise<void> {
     const enabledTask = await callTool<{ task: TaskView }>(targetConn.client, 'network_task_get', {
       task_id: task.task.task_id,
     });
-    checkEqual('启用后 Agent 可读取自己的未完成任务', enabledTask.task.status, 'in_progress');
+    checkEqual('启用后可读取被撤销执行资格的任务', enabledTask.task.status, 'blocked');
+    checkEqual('启用不会自动恢复负责人', enabledTask.task.owner_actor_id, null);
   } finally {
     for (const connection of extraConns) await connection.close();
     await managerConn.close();

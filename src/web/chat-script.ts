@@ -28,6 +28,8 @@ import { CHAT_SAFETY_SCRIPT } from './chat-safety-script';
 import { CHAT_SCROLL_SCRIPT } from './chat-scroll-script';
 import { CHAT_SESSION_SCRIPT } from './chat-session-script';
 import { CHAT_STREAM_SCRIPT } from './chat-stream-script';
+import { CHAT_TASK_DETAIL_SCRIPT } from './chat-task-detail-script';
+import { CHAT_TASK_HANDOFF_SCRIPT } from './chat-task-handoff-script';
 import { CHAT_TASK_PROGRESS_SCRIPT } from './chat-task-progress-script';
 import { CHAT_TASK_REVIEW_SCRIPT } from './chat-task-review-script';
 import { CHAT_TASK_SUBMISSION_SCRIPT } from './chat-task-submission-script';
@@ -167,7 +169,9 @@ ${CHAT_SESSION_SCRIPT}
 ${CHAT_TASK_PROGRESS_SCRIPT}
 ${CHAT_TASK_SUBMISSION_SCRIPT}
 ${CHAT_TASK_REVIEW_SCRIPT}
+${CHAT_TASK_DETAIL_SCRIPT}
 ${CHAT_TASK_TRANSFER_SCRIPT}
+${CHAT_TASK_HANDOFF_SCRIPT}
 ${CHAT_TASKS_SCRIPT}
 ${CHAT_STREAM_SCRIPT}
 ${CHAT_FILES_SCRIPT}

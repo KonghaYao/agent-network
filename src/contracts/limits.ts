@@ -172,6 +172,26 @@ export const LIMITS = {
   /** 交接列表默认 / 最大条数。 */
   taskTransferListDefault: 50,
   taskTransferListMax: 100,
+  /** 交接包目标 UTF-8 字节上限；换行保留，不允许控制字符。 */
+  taskHandoffGoalBytes: 8 * 1024,
+  /** 已完成/未解决/下一步单条 UTF-8 字节上限。 */
+  taskHandoffSectionItemBytes: 2 * 1024,
+  /** 已完成/未解决/下一步各自条数上限。 */
+  taskHandoffSectionItemsMax: 30,
+  /** 当前结果摘要 UTF-8 字节上限。 */
+  taskHandoffResultSummaryBytes: 8 * 1024,
+  /** 单次交接包引用条数上限。 */
+  taskHandoffItemsMax: 50,
+  /** 引用标签 UTF-8 字节上限。 */
+  taskHandoffItemLabelBytes: 512,
+  /** 引用摘要 UTF-8 字节上限；不保存源消息/文件正文。 */
+  taskHandoffItemSummaryBytes: 2 * 1024,
+  /** 引用标识 UTF-8 字节上限（消息/文件 ID、分支、commit、测试证据）。 */
+  taskHandoffReferenceBytes: 2 * 1024,
+  /** 授权/补充上下文说明 UTF-8 字节上限。 */
+  taskHandoffNoteBytes: 2 * 1024,
+  /** 单次读取返回的上下文请求条数上限。 */
+  taskHandoffRequestListMax: 20,
   /** 任务取消原因 UTF-8 字节上限。 */
   taskCancelReasonBytes: 1024,
   /** 任务阻塞原因 UTF-8 字节上限；只进入任务详情与审计事件。 */

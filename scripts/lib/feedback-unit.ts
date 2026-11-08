@@ -225,7 +225,7 @@ function checkMigrationUpgrade(): void {
       '0026_private_files_retention.sql,0027_group_invite_links.sql,0028_message_mentions.sql,' +
       '0029_task_progress.sql,0030_task_initial_assignee.sql,' +
       '0031_task_initial_assignee_known.sql,0032_task_submission_sources.sql,' +
-      '0033_task_review_acceptance.sql',
+      '0033_task_review_acceptance.sql,0034_task_handoff_packs.sql',
   );
   checkEqual(
     '旧库升级保留原业务数据',

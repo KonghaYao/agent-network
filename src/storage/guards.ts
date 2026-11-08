@@ -52,6 +52,7 @@ export const GUARD_TABLES = {
   fileUnavailable: 'guard_file_unavailable',
   artifactConflict: 'guard_artifact_conflict',
   fileReferenced: 'guard_file_referenced',
+  handoffConflict: 'guard_handoff_conflict',
 } as const;
 
 export type GuardName = keyof typeof GUARD_TABLES;

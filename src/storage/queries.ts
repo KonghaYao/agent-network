@@ -11,6 +11,9 @@ import type {
   RoomTaskRow,
   TaskAssignmentRow,
   TaskCardRow,
+  TaskHandoffContextRequestRow,
+  TaskHandoffItemRow,
+  TaskHandoffPackRow,
   TaskRow,
   TaskTransferRow,
 } from './rows';
@@ -171,6 +174,93 @@ export async function getTaskTransfer(
     .prepare('SELECT * FROM task_transfers WHERE transfer_id = ?')
     .bind(transferId)
     .first<TaskTransferRow>();
+}
+
+/** 按 pack_id 读取交接包版本；任务归属与可见性由调用方校验。 */
+export async function getTaskHandoffPack(
+  db: D1Like,
+  packId: string,
+): Promise<TaskHandoffPackRow | null> {
+  return db
+    .prepare('SELECT * FROM task_handoff_packs WHERE pack_id = ?')
+    .bind(packId)
+    .first<TaskHandoffPackRow>();
+}
+
+/** 读取任务的最新交接包版本；没有包时返回 null。 */
+export async function getLatestTaskHandoffPack(
+  db: D1Like,
+  taskId: string,
+): Promise<TaskHandoffPackRow | null> {
+  return db
+    .prepare(
+      `SELECT * FROM task_handoff_packs
+        WHERE task_id = ?
+        ORDER BY version DESC
+        LIMIT 1`,
+    )
+    .bind(taskId)
+    .first<TaskHandoffPackRow>();
+}
+
+/** 读取指定 assignment 对应的最新交接包，用于交接提议的 context_ready。 */
+export async function getTaskHandoffPackForAssignment(
+  db: D1Like,
+  taskId: string,
+  assignmentId: string | null,
+): Promise<TaskHandoffPackRow | null> {
+  if (assignmentId === null) return getLatestTaskHandoffPack(db, taskId);
+  return db
+    .prepare(
+      `SELECT * FROM task_handoff_packs
+        WHERE task_id = ? AND from_assignment_id = ?
+        ORDER BY version DESC
+        LIMIT 1`,
+    )
+    .bind(taskId, assignmentId)
+    .first<TaskHandoffPackRow>();
+}
+
+export async function listTaskHandoffItems(
+  db: D1Like,
+  packId: string,
+): Promise<TaskHandoffItemRow[]> {
+  const rows = await db
+    .prepare(
+      `SELECT * FROM task_handoff_pack_items
+        WHERE pack_id = ?
+        ORDER BY created_at ASC, item_id ASC`,
+    )
+    .bind(packId)
+    .all<TaskHandoffItemRow>();
+  return rows.results;
+}
+
+export async function getTaskHandoffItem(
+  db: D1Like,
+  itemId: string,
+): Promise<TaskHandoffItemRow | null> {
+  return db
+    .prepare('SELECT * FROM task_handoff_pack_items WHERE item_id = ?')
+    .bind(itemId)
+    .first<TaskHandoffItemRow>();
+}
+
+export async function listTaskHandoffContextRequests(
+  db: D1Like,
+  packId: string,
+  limit: number,
+): Promise<TaskHandoffContextRequestRow[]> {
+  const rows = await db
+    .prepare(
+      `SELECT * FROM task_handoff_context_requests
+        WHERE pack_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?`,
+    )
+    .bind(packId, limit)
+    .all<TaskHandoffContextRequestRow>();
+  return rows.results;
 }
 
 export async function getDelivery(db: D1Like, deliveryId: string): Promise<DeliveryRow | null> {
