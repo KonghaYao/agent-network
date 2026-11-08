@@ -60,6 +60,7 @@ import { runTaskRecoveryAcceptance } from './lib/task-recovery-acceptance';
 import { runFeedbackAcceptance } from './lib/feedback-acceptance';
 import { runGroupMentionAcceptance } from './lib/mention-acceptance';
 import { runGroupNoImplicitDeliveryAcceptance } from './lib/no-implicit-delivery-acceptance';
+import { runAutoMentionAcceptance } from './lib/auto-mention-acceptance';
 import { runGroupRoleAcceptance } from './lib/group-role-acceptance';
 import { runOwnerTransferAcceptance } from './lib/owner-transfer-acceptance';
 import { runRoomLifecycleAcceptance } from './lib/room-lifecycle-acceptance';
@@ -1348,6 +1349,7 @@ async function main(): Promise<void> {
     await runFeedbackAcceptance();
     await runGroupMentionAcceptance();
     await runGroupNoImplicitDeliveryAcceptance();
+    await runAutoMentionAcceptance();
     await runGroupRoleAcceptance();
     await runOwnerTransferAcceptance();
     await runRoomLifecycleAcceptance();

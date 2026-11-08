@@ -15632,7 +15632,7 @@ async function main(): Promise<void> {
       await context.close();
     }
 
-    // 12e. 附件不自动 @：即使群内存在唯一精确维护员，上传也不会追加目标或创建投递。
+    // 12e. 附件自动 @ 精确匹配：只有当前群唯一同名维护员才追加，direct 与跨房都不串。
     {
       const prefixAgentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
       const prefixAgent = await rawTool<Actor>(prefixAgentToken, 'network_register', {
@@ -15665,19 +15665,19 @@ async function main(): Promise<void> {
       const prefixGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
         kind: 'group',
-        title: '附件不自动 @ 前缀群',
+        title: '附件自动 @ 前缀群',
         members: [prefixAgent.actor_id],
       });
       const exactGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
         kind: 'group',
-        title: '附件不自动 @ 精确群',
+        title: '附件自动 @ 精确群',
         members: [maintainer.actor_id, prefixAgent.actor_id],
       });
       const duplicateGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
         kind: 'group',
-        title: '附件不自动 @ 重名群',
+        title: '附件自动 @ 重名群',
         members: [maintainer.actor_id, duplicateMaintainer.actor_id],
       });
       const prefixRoomId = prefixGroup.room.room_id;
@@ -15782,7 +15782,7 @@ async function main(): Promise<void> {
 
       // 只有前缀 WeBots、没有精确维护员：不追加，也不把 WeBots 当目标。
       await page.goto(`${server.base}/c/${prefixRoomId}`);
-      await waitRoom(page, prefixRoomId, '附件不自动 @ 前缀群');
+      await waitRoom(page, prefixRoomId, '附件自动 @ 前缀群');
       await prepareChip('前缀群 附件.txt');
       const prefixUrl = await fileUrlFor(prefixRoomId, '前缀群 附件.txt');
       check('前缀群附件获得公开 URL', Boolean(prefixUrl));
@@ -15807,9 +15807,9 @@ async function main(): Promise<void> {
         prefixPending,
       );
 
-      // 即使群内存在唯一精确维护员，附件也不追加 @、不创建投递。
+      // 唯一精确维护员：追加一次并投递给它，不误投同群的 WeBots。
       await page.goto(`${server.base}/c/${exactRoomId}`);
-      await waitRoom(page, exactRoomId, '附件不自动 @ 精确群');
+      await waitRoom(page, exactRoomId, '附件自动 @ 精确群');
       await prepareChip('精确群 附件.txt');
       const exactUrl = await fileUrlFor(exactRoomId, '精确群 附件.txt');
       check('精确群附件获得公开 URL', Boolean(exactUrl));
@@ -15817,32 +15817,53 @@ async function main(): Promise<void> {
       await sendInRoom(exactRoomId);
       const exactArgs = await sendArgsFor(exactRoomId);
       check(
-        '唯一精确维护员时附件仍不追加 @',
+        '唯一精确维护员时只追加一次自动 @',
         Boolean(exactArgs?.body) &&
           exactArgs!.body!.includes(exactUrl) &&
-          exactArgs!.body!.trim().split('\n').length === 2 &&
-          !exactArgs!.body!.includes('@WeBots 维护员'),
+          exactArgs!.body!.trim().endsWith('@WeBots 维护员') &&
+          (exactArgs!.body!.match(/@WeBots 维护员/g) ?? []).length === 1,
         exactArgs?.body,
       );
       checkEqual('精确群文件消息不传 invoke', exactArgs?.invoke, undefined);
       const exactMessage = await historyItemFor(exactRoomId, '精确群消息');
       check('精确群消息已写入历史', Boolean(exactMessage), exactMessage);
-      const exactPending = await pendingIdsFor(maintainerToken);
-      check(
-        '唯一维护员不会因附件获得投递',
-        !exactPending.includes(exactMessage?.message_id ?? ''),
-        exactPending,
-      );
+      const exactDelivery = await pendingDeliveryOrNull(maintainerToken, exactMessage!.message_id);
+      check('自动 @ 投递给唯一维护员', Boolean(exactDelivery), exactDelivery);
       const prefixAfterExact = await pendingIdsFor(prefixAgentToken);
       check(
-        '同群 WeBots 不会因附件获得投递',
-        !prefixAfterExact.includes(exactMessage?.message_id ?? ''),
+        '同群 WeBots 不会被精确 @ 误投',
+        !prefixAfterExact.includes(exactMessage!.message_id),
         prefixAfterExact,
+      );
+      await completeDelivery(
+        maintainerToken,
+        await claimDelivery(maintainerToken, exactDelivery!.delivery_id),
+      );
+
+      // 正文已有精确 @：附件不再追加第二个，仍只保留一次。
+      await prepareChip('去重 精确群.txt');
+      await page.locator('#body').fill('请处理 @WeBots 维护员，谢谢');
+      await sendInRoom(exactRoomId);
+      const dedupeExactArgs = await sendArgsFor(exactRoomId);
+      check(
+        '正文已有 @WeBots 维护员 时附件不重复追加',
+        Boolean(dedupeExactArgs?.body) &&
+          (dedupeExactArgs!.body!.match(/@WeBots 维护员/g) ?? []).length === 1 &&
+          !dedupeExactArgs!.body!.trim().endsWith('@WeBots 维护员'),
+        dedupeExactArgs?.body,
+      );
+      const dedupeMessage = await historyItemFor(exactRoomId, '请处理');
+      check('去重消息已写入历史', Boolean(dedupeMessage), dedupeMessage);
+      const dedupeDelivery = await pendingDeliveryOrNull(maintainerToken, dedupeMessage!.message_id);
+      check('正文已有 @ 仍按正文投递给维护员', Boolean(dedupeDelivery), dedupeDelivery);
+      await completeDelivery(
+        maintainerToken,
+        await claimDelivery(maintainerToken, dedupeDelivery!.delivery_id),
       );
 
       // 两个同名维护员：无法唯一投递，不追加自动 @。
       await page.goto(`${server.base}/c/${duplicateRoomId}`);
-      await waitRoom(page, duplicateRoomId, '附件不自动 @ 重名群');
+      await waitRoom(page, duplicateRoomId, '附件自动 @ 重名群');
       await prepareChip('重名群 附件.txt');
       await page.locator('#body').fill('重名群消息');
       await sendInRoom(duplicateRoomId);
@@ -15890,13 +15911,13 @@ async function main(): Promise<void> {
 
       // 切房隔离：精确群的附件不进入前缀群，切回后仍只属于精确群。
       await page.goto(`${server.base}/c/${exactRoomId}`);
-      await waitRoom(page, exactRoomId, '附件不自动 @ 精确群');
+      await waitRoom(page, exactRoomId, '附件自动 @ 精确群');
       await prepareChip('跨房精确 A.txt');
       const crossExactUrl = await fileUrlFor(exactRoomId, '跨房精确 A.txt');
       check('跨房精确群附件获得公开 URL', Boolean(crossExactUrl));
       await page.locator('#body').fill('跨房 A 草稿');
       await page.locator(roomLink(prefixRoomId)).click();
-      await waitRoom(page, prefixRoomId, '附件不自动 @ 前缀群');
+      await waitRoom(page, prefixRoomId, '附件自动 @ 前缀群');
       const prefixView = (await page.evaluate(`(() => ({
         chips: document.querySelectorAll('#composer-files .composer-file').length,
         text: document.getElementById('body').value
@@ -15906,9 +15927,9 @@ async function main(): Promise<void> {
       await page.locator('#body').fill('跨房 B 纯文本');
       await sendInRoom(prefixRoomId);
       const crossBPrefixArgs = await sendArgsFor(prefixRoomId);
-      checkEqual('前缀群发送不带上精确群的附件', crossBPrefixArgs?.body, '跨房 B 纯文本');
+      checkEqual('前缀群发送不带上精确群的附件或自动 @', crossBPrefixArgs?.body, '跨房 B 纯文本');
       await page.locator(roomLink(exactRoomId)).click();
-      await waitRoom(page, exactRoomId, '附件不自动 @ 精确群');
+      await waitRoom(page, exactRoomId, '附件自动 @ 精确群');
       await waitUntil(
         async () =>
           (await page.locator('#composer-files .composer-file-name').allTextContents())
@@ -15920,11 +15941,11 @@ async function main(): Promise<void> {
       await sendInRoom(exactRoomId);
       const crossExactArgs = await sendArgsFor(exactRoomId);
       check(
-        '精确群发送只带自己的 URL，不追加 @',
+        '精确群发送只带自己的 URL 与自动 @',
         Boolean(crossExactArgs?.body) &&
           crossExactArgs!.body!.includes(crossExactUrl) &&
           !crossExactArgs!.body!.includes('跨房 B 纯文本') &&
-          !crossExactArgs!.body!.includes('@WeBots 维护员'),
+          crossExactArgs!.body!.trim().endsWith('@WeBots 维护员'),
         crossExactArgs?.body,
       );
 
@@ -15944,14 +15965,14 @@ async function main(): Promise<void> {
       );
       const heldArgs = await sendArgsFor(exactRoomId);
       check(
-        '发送期间快照包含当前群附件且不追加 @',
+        '发送期间快照包含当前群附件与自动 @',
         Boolean(heldArgs?.body) &&
           heldArgs!.body!.includes(sendingUrl) &&
-          !heldArgs!.body!.includes('@WeBots 维护员'),
+          heldArgs!.body!.trim().endsWith('@WeBots 维护员'),
         heldArgs?.body,
       );
       await page.locator(roomLink(prefixRoomId)).click();
-      await waitRoom(page, prefixRoomId, '附件不自动 @ 前缀群');
+      await waitRoom(page, prefixRoomId, '附件自动 @ 前缀群');
       await prepareChip('发送中 B.txt');
       const sendingBUrl = await fileUrlFor(prefixRoomId, '发送中 B.txt');
       check('发送期间另一群附件获得公开 URL', Boolean(sendingBUrl));
@@ -15979,7 +16000,7 @@ async function main(): Promise<void> {
         '发送中 B.txt',
       );
       await page.locator(roomLink(exactRoomId)).click();
-      await waitRoom(page, exactRoomId, '附件不自动 @ 精确群');
+      await waitRoom(page, exactRoomId, '附件自动 @ 精确群');
       await waitUntil(
         async () => (await page.locator('#composer-files .composer-file').count()) === 0,
         '精确群发送后清空自己的 chip',

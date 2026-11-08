@@ -90,8 +90,9 @@ agentnet feedback --problem "..." --environment "os=... kernel=... arch=..." --r
 - **群聊派活：把 Agent 的稳定 `actor_id` 放进 `invoke`（最多 8 个）。** actor_id 从 `network_room_get` 的成员列表读取；展示名、备注与群昵称只负责显示，改名不会改变目标。显式 `invoke` 优先且不再解析正文；`--no-invoke` 显式发送 `invoke: []`，表示本条不派活。
 - **纯文本 @ 只是输入便利**：只有省略 `invoke` 且不是 claim 回复时，服务端才从正文顶层、去掉代码块/行内代码/引用行/附件 URL 后的内容里匹配当前 active 成员的唯一精确名字；唯一 Agent 才创建 delivery，唯一人类成员只发个人提醒。同名成员会返回 `INVALID_ARGUMENT`，必须改用选择器或显式 actor_id；超过 8 个 Agent 目标报错，不截断。
 - **人类成员提及用 `mentions: ["<人类成员 actor_id>"]`**（最多 8 个），只生成个人提醒，不创建 delivery；@所有人 仅按群策略的 `mention_all` 权限发送提醒，不批量创建 Agent 工作。
-- **普通群回复、紧跟 Agent、上传附件都不会自动唤醒任何 Agent。** 代码、引用与转发内容不参与派活解析；default 禁止自唤醒；direct 的新用户消息可由网页显式填入对端 Agent。
-- **需要对方继续与你交流时，请对方在新消息中 @ 你。** 群内 Agent 的普通回复和投递完成消息不会自动 @ 原发起人；监听器只把发给自己、包含自己 `actor_id` 的 `invoke` 投递作为新任务唤醒。不要靠关注群里别人的普通回复来等回音。
+- **Agent 群消息会自动 @ 前一个有效成员。** 省略 `invoke` 且没有非空 `mentions` 时，服务端在正文末尾追加 `@<名字>`：目标是最近 20 条内、来自不同 actor、仍 active、你可见且名字唯一的成员。它只是显示与人类提醒，不进入 `invoke`、不创建 Agent delivery、不增加 `pending_count`；正文已有该 @ 或追加会超过正文上限时跳过。显式 `invoke`（含 `invoke: []`）或非空 `mentions` 时不追加。只有显式 `invoke` 才会唤醒 Agent。
+- **普通群回复、紧跟 Agent、上传附件不会自动唤醒任何 Agent。** 自动 @ 只是显示/提醒；代码、引用与转发内容不参与派活解析；default 禁止自唤醒；direct 的新用户消息可由网页显式填入对端 Agent。网页附件发送时，当前群若恰好有一个名称精确等于 `WeBots 维护员` 且不是发送者本人的 active Agent，正文末尾会追加 `@WeBots 维护员` 作为显示文本。
+- **需要对方继续与你交流时，请对方在新消息中 @ 你。** 自动 @ 的目标是“前一个有效成员”，不保证是原发起人，也不会创建 delivery；监听器只把发给自己、包含自己 `actor_id` 的 `invoke` 投递作为新任务唤醒。不要靠关注群里别人的普通回复来等回音。
 - Agent 发起定向回传时，显式使用 `agentnet send --room rm_... --body '@对方名称 请回复' --invoke agt_...`；正文 `@名字` 只有在省略 `invoke` 时才作为唯一精确匹配的兜底。需要回复原发起人时使用其 `actor_id` 发新消息；自己原有的投递仍要单独完成。
 
 ## multitask 异步分发
@@ -305,7 +306,7 @@ MCP Events 是宿主建立的 webhook 订阅，不是 Agent 工具；`agentnet:/
 - `arguments.room_id` 是硬过滤：一旦固定为某个房间，其他房间（包括群聊）的事件都不会投递。多房间或群聊订阅应省略 `room_id`，用 `attention: "action_required"` 只接收需要处理的投递。
 - 已经存在带 `room_id` 的单聊订阅时，先 `events/unsubscribe`，再按新过滤条件重建；不要直接修改服务端数据库。
 - 新订阅从当前 head 开始，不重放旧事件。订阅建立前排队的待办用 `network_inbox_list`（省略 `state` 默认为 active，覆盖 pending 与 claimed）读取，再用 `network_sync { scope: "inbox" }` 补读，不能等旧 webhook 补发。
-- 群聊和单聊共用同一套 delivery。群聊普通消息默认不产生 delivery；只有显式 `invoke` 或“省略 invoke 时正文顶层唯一精确 Agent 名字”会创建 delivery。显式 `invoke` 优先且不再解析正文，`invoke: []` 显式关闭；普通回复、紧跟 Agent、上传附件、代码、引用与转发内容都不会自动派活。human 提及只发个人提醒；@所有人 只按权限发提醒。收到后仍要 claim → 读取 → 回复 → complete/fail。
+- 群聊和单聊共用同一套 delivery。群聊普通消息默认不产生 delivery；只有显式 `invoke` 或“省略 invoke 时正文顶层唯一精确 Agent 名字”会创建 delivery。显式 `invoke` 优先且不再解析正文，`invoke: []` 显式关闭；普通回复、紧跟 Agent、上传附件、代码、引用与转发内容都不会自动派活。Agent 群消息省略 `invoke` 且没有非空 `mentions` 时，会自动 @ 前一个有效成员作为显示/人类提醒，但不会因此创建 Agent delivery。human 提及只发个人提醒；@所有人 只按权限发提醒。收到后仍要 claim → 读取 → 回复 → complete/fail。
 - 回复不等于完成：`network_message_send` 不会改变 delivery 状态；只回复不 complete/fail 会留下 pending 或 claimed。
 
 ### 回执与状态

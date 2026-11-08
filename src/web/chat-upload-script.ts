@@ -4,13 +4,16 @@
  * 左侧“+”菜单的文件入口、隐藏文件选择器、粘贴图片、画板导出与聊天区拖拽
  * 共用 `enqueueDroppedFiles`（`POST /mcp-upload` → bind），上传成功后只在正文上方
  * 生成 chip，不再把公开 URL 插入 textarea。发送时由 `composerOutgoingBody`
- * 按当前房间拼接正文与文件公开 URL；附件不会自动 @ 维护员或任何 Agent，
- * 需要派活时由用户在选择器中明确选择。
+ * 按当前房间拼接正文与文件公开 URL；附件发送时，只有当前群恰好有一个名称
+ * 精确等于 `WeBots 维护员` 且不是发送者本人的 active Agent 成员才追加自动 @，
+ * direct 与没有该成员的群都不追加。自动 @ 只是正文显示，不写入选择器目标。
  *
  * 删除 chip 是用户显式操作，直接调用 `network_room_file_delete` 并刷新右侧文件栏；
  * 文件名与 URL 只用 textContent 写入 DOM，不输出到 console。
  */
 export const CHAT_UPLOAD_SCRIPT = `
+const COMPOSER_MENTION_NAME = 'WeBots 维护员';
+const COMPOSER_MENTION = '@' + COMPOSER_MENTION_NAME;
 const attachFileButton = document.getElementById('attach-file');
 const attachFileInput = document.getElementById('composer-file-input');
 const composerFilesElement = document.getElementById('composer-files');
@@ -276,10 +279,32 @@ function composerReadyKeys(roomId) {
 }
 
 /**
- * 构建发送正文：用户文本（trim）+ 各文件 public_url（每行一个）。
+ * 附件发送的自动 @：只有当前群恰好有一个 active Agent 名称精确等于
+ * COMPOSER_MENTION_NAME、且不是发送者本人时才返回，否则返回空串。
  *
- * 附件内容只是可下载链接，不参与 @ 解析，也不会自动附加任何 Agent；
- * pending attachments 按 room 读取，切房后不会带上另一房间的文件。
+ * 服务端按“最长成员名前缀”解析 @；群里只有“WeBots”时，正文若追加
+ * “@WeBots 维护员”会被错误匹配到“WeBots”。这里必须用精确名称与 room_id
+ * 双重约束，不能做前缀/包含匹配，也不能写死 actor_id。direct 用 invoke
+ * 唤醒对方，文本 @ 只会误导，因此不追加。
+ */
+function composerAutoMention(roomId) {
+  if (!room || room.kind !== 'group' || room.room_id !== roomId) return '';
+  if (!identity) return '';
+  let target = null;
+  for (const member of members.values()) {
+    if (member.kind !== 'agent' || member.name !== COMPOSER_MENTION_NAME) continue;
+    // 重名 Agent 会让服务端无法唯一解析；发送者本人也不作为目标。
+    if (target) return '';
+    target = member;
+  }
+  if (!target || target.actor_id === identity.actor_id) return '';
+  return COMPOSER_MENTION;
+}
+
+/**
+ * 构建发送正文：用户文本（trim）+ 各文件 public_url（每行一个）
+ * + 当前群存在唯一精确名称维护员时末尾自动 @。用户文本已包含该字符串时不重复。
+ * pending attachments 按 room 读取，切房后不会带上另一房间的文件或自动 @；
  * 没有文本与可发送文件时返回空串，阻止空消息。
  */
 function composerOutgoingBody(roomId, text) {
@@ -293,7 +318,12 @@ function composerOutgoingBody(roomId, text) {
   const parts = [];
   if (trimmed) parts.push(trimmed);
   for (const url of urls) parts.push(url);
-  return parts.join('\\n');
+  let body = parts.join('\\n');
+  const autoMention = urls.length > 0 ? composerAutoMention(roomId) : '';
+  if (autoMention && body.indexOf(autoMention) < 0) {
+    body += (body ? '\\n' : '') + autoMention;
+  }
+  return body;
 }
 
 /** 上传队列忙碌时只做视觉提示，不禁用按钮或输入框；输入仍可继续排队。 */

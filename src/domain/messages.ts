@@ -679,6 +679,114 @@ function assertMentions(mentions: string[] | undefined, sender: string): string[
   return list;
 }
 
+/** 自动 @ 向前扫描的最近消息条数；只为找到一条不同发送者的有效消息。 */
+const AUTO_MENTION_SCAN_MAX = 20;
+
+interface AutoMentionCandidateRow {
+  message_id: string;
+  sender_id: string;
+  created_seq: number;
+  sender_name: string | null;
+  sender_kind: 'human' | 'agent' | null;
+  member_status: 'active' | 'left' | 'removed' | null;
+}
+
+export interface AgentAutoMention {
+  body: string;
+  target: { actorId: string; kind: 'human' | 'agent' };
+}
+
+/** 正文是否已经包含独立的 `@名字`；邮箱或更长的名字不算。 */
+function containsMentionToken(text: string, name: string): boolean {
+  const token = `@${name}`;
+  let from = 0;
+  while (from <= text.length - token.length) {
+    const at = text.indexOf(token, from);
+    if (at < 0) return false;
+    if (mentionStartsAt(text, at) && mentionEndsAt(text, at + token.length)) return true;
+    from = at + 1;
+  }
+  return false;
+}
+
+/**
+ * Agent 群消息的自动 @ 计划。
+ *
+ * 只在发送者显式省略 `invoke`、没有非空 `mentions` 时触发；目标为当前消息
+ * 之前最近一条不同 actor、仍 active 且按发送者历史边界可见的消息发送者。
+ * 名字必须在当前 active 成员中唯一；重名、目标已退出或追加后超过正文上限
+ * 都跳过。自动 @ 只用于显示与人类提醒，绝不进入 invoke。
+ */
+async function agentAutoMentionPlan(
+  db: D1Database,
+  roomKind: 'direct' | 'group',
+  roomId: string,
+  headSeq: number,
+  boundary: HistoryBoundary,
+  senderId: string,
+  senderKind: 'human' | 'agent',
+  input: Pick<MessageSendInput, 'body' | 'invoke' | 'mentions'>,
+  beforeSeq?: number,
+): Promise<AgentAutoMention | null> {
+  if (roomKind !== 'group' || senderKind !== 'agent') return null;
+  if (input.invoke !== undefined) return null;
+  if (input.mentions !== undefined && input.mentions.length > 0) return null;
+  if (input.body.trim().length === 0) return null;
+  // 新消息在 room.head_seq 之后插入；幂等冲突重算时只看原消息之前的历史。
+  const upperExclusive =
+    beforeSeq ??
+    (boundary.toSeq === null ? headSeq + 1 : Math.min(headSeq, boundary.toSeq) + 1);
+  const rows = await db
+    .prepare(
+      `SELECT m.message_id, m.sender_id, m.created_seq,
+              a.name AS sender_name, a.kind AS sender_kind,
+              rm.status AS member_status
+         FROM messages m
+         LEFT JOIN actors a ON a.actor_id = m.sender_id
+         LEFT JOIN room_members rm
+           ON rm.room_id = m.room_id AND rm.actor_id = m.sender_id
+        WHERE m.room_id = ? AND m.created_seq >= ? AND m.created_seq < ?
+        ORDER BY m.created_seq DESC
+        LIMIT ?`,
+    )
+    .bind(roomId, boundary.fromSeq, upperExclusive, AUTO_MENTION_SCAN_MAX)
+    .all<AutoMentionCandidateRow>();
+
+  let candidate: AutoMentionCandidateRow | null = null;
+  for (const row of rows.results) {
+    if (row.sender_id === senderId) continue;
+    if (!row.sender_name || !row.sender_kind) continue;
+    if (row.member_status !== 'active') continue;
+    candidate = row;
+    break;
+  }
+  if (!candidate || !candidate.sender_name || !candidate.sender_kind) return null;
+
+  const unique = await db
+    .prepare(
+      `SELECT COUNT(*) AS n
+         FROM room_members m JOIN actors a ON a.actor_id = m.actor_id
+        WHERE m.room_id = ? AND m.status = 'active' AND a.name = ?`,
+    )
+    .bind(roomId, candidate.sender_name)
+    .first<{ n: number }>();
+  if (!unique || unique.n !== 1) return null;
+
+  const token = `@${candidate.sender_name}`;
+  if (containsMentionToken(input.body, candidate.sender_name)) {
+    return {
+      body: input.body,
+      target: { actorId: candidate.sender_id, kind: candidate.sender_kind },
+    };
+  }
+  const body = `${input.body}\n${token}`;
+  if (utf8Bytes(body) > LIMITS.messageBodyBytes) return null;
+  return {
+    body,
+    target: { actorId: candidate.sender_id, kind: candidate.sender_kind },
+  };
+}
+
 export interface SendResult {
   message: MessageView;
   delivery_ids: string[];
@@ -699,7 +807,26 @@ export async function messageSend(
   assertRoomWritable(room);
   const boundary = historyBoundary(room, member);
 
-  const bodyBytes = utf8Bytes(input.body);
+  const originalBodyBytes = utf8Bytes(input.body);
+  if (originalBodyBytes > LIMITS.messageBodyBytes) {
+    throw new BusinessError('PAYLOAD_TOO_LARGE', '消息正文超过 256 KiB，请拆分为关联消息', {
+      body_bytes: originalBodyBytes,
+    });
+  }
+  // Agent 群消息：省略 invoke 且没有非空 mentions 时，自动 @ 前一个有效成员。
+  // 自动 @ 只追加显示文本与提及记录；resolvedInvoke 仍只来自正文/显式目标。
+  const autoMention = await agentAutoMentionPlan(
+    db,
+    room.kind,
+    room.room_id,
+    room.head_seq,
+    boundary,
+    sender,
+    principal.actor?.kind ?? 'human',
+    input,
+  );
+  const outgoingBody = autoMention?.body ?? input.body;
+  const bodyBytes = utf8Bytes(outgoingBody);
   if (bodyBytes > LIMITS.messageBodyBytes) {
     throw new BusinessError('PAYLOAD_TOO_LARGE', '消息正文超过 256 KiB，请拆分为关联消息', {
       body_bytes: bodyBytes,
@@ -707,6 +834,7 @@ export async function messageSend(
   }
   // 正文解析只在群聊、未显式给 invoke 且不是 claim 回复时参与派活。
   // 显式 invoke 仍识别 `@所有人` 控制符，但不从正文追加 Agent 目标。
+  // 自动 @ 只读取原始正文：追加部分不参与派活，避免改变原派活对象。
   const textResolution =
     room.kind === 'group' && !input.claim
       ? await resolveGroupTextMentions(
@@ -743,6 +871,10 @@ export async function messageSend(
     for (const actor of requestedInvoke) addMention(actor, 'agent', 'explicit');
   }
   for (const actor of explicitMentions) addMention(actor, 'human', 'explicit');
+  // 自动 @ 沿用 text 来源，不新增迁移；Agent 目标不进入 invoke，因此没有 delivery。
+  if (autoMention) {
+    addMention(autoMention.target.actorId, autoMention.target.kind, 'text');
+  }
   const mentions = [...mentionMap.values()];
   const reminders: MentionReminderSeed[] = mentions
     .filter((mention) => mention.kind === 'human' && mention.actorId !== sender)
@@ -765,8 +897,8 @@ export async function messageSend(
     roomId: room.room_id,
     senderId: sender,
     clientMessageId: input.client_message_id,
-    body: input.body,
-    preview: truncateUtf8(input.body, LIMITS.previewBytes),
+    body: outgoingBody,
+    preview: truncateUtf8(outgoingBody, LIMITS.previewBytes),
     bodyBytes,
     replyTo: link.replyTo,
     rootId: link.rootId,
@@ -815,7 +947,20 @@ export async function messageSend(
         .bind(sender, input.client_message_id)
         .first<MessageRow>();
       if (!existing) return undefined;
-      if (existing.room_id !== room.room_id || existing.body !== input.body) {
+      // 重放时按原消息之前的同一段历史重算自动 @，避免把“已追加”误判为新正文。
+      const replayed = await agentAutoMentionPlan(
+        db,
+        room.kind,
+        room.room_id,
+        room.head_seq,
+        boundary,
+        sender,
+        principal.actor?.kind ?? 'human',
+        input,
+        existing.created_seq,
+      );
+      const replayedBody = replayed?.body ?? input.body;
+      if (existing.room_id !== room.room_id || existing.body !== replayedBody) {
         throw new BusinessError('IDEMPOTENCY_CONFLICT', 'client_message_id 已用于不同的消息内容', {
           message_id: existing.message_id,
         });
