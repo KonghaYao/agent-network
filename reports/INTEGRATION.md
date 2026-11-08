@@ -9,34 +9,35 @@
 | D02 实现 / 报告提交 | `60edc7bf4ca70d0af1af871a7f69f2ccf167dd3a` / `8078570f237bf648f2f1621b87c0aec29b3cea0f` |
 | D03 实现 / 报告提交 | `7e15dcc3d7bf07f96493c94e0367a11496b9c788` + `cd106af71efc7ad8c6dd779cb402f3b5e1a0c7a9` / `c4146a297f822d8e2f63179e7db22b528df01644` |
 | D04 实现 / 报告提交 | `56d9c9f51ba4c805223745b6bb4d7f3dc594cf5f` / `b6d27f4d5b6e19ba129451dd05ade7e532a89957`（`docs(delivery): D04 任务报告`） |
-| D05 实现 / 报告 | 实现完整存在于集成提交 `3b6afadd9d53125084b1615b0972f792e25321a0`；无 `reports/D05.md`，交付语义见本报告第 5 节 |
+| D05 实现 / 报告 | 实现首次入库于集成提交 `3b6afadd9d53125084b1615b0972f792e25321a0`（接手 D05 中断会话的未提交工作区，无独立实现提交）；报告 `reports/D05.md`，报告提交 `11d0adb`（`docs(delivery): D05 任务报告`） |
 | D06 实现 / 报告提交 | `4eb8de8db803b5b7ad349c189345b6f784d1fd8f` / `b696df53b3779460c2448bb7030f5608d4ea9cd8`（`docs(delivery): D06 任务报告`） |
 | D07 实现 / 报告提交 | `049ce2034d8abec06062f8506d9d260d8c1354b1` / `f8d520b7852802fa649435f593b78fb53926f309`（`docs(delivery): D07 任务报告`） |
-| D08 | **未实现**：无报告、无实现提交、无专项验收；见第 8 节 |
+| D08 实现 / 报告提交 | `40b001fc571678595e7f1a039837dbbe49cdf41b` / `3710904`（`docs(delivery): D08 任务报告`） |
 | 本轮审查起点 HEAD | `f8d520b7852802fa649435f593b78fb53926f309`（`docs(delivery): D07 任务报告`） |
+| 本轮最终集成起点 HEAD | `3710904`（D08 报告；D08 实现 `40b001f` 已在其父提交） |
 | 上一轮修复提交（D01–D03） | `590e67312043559ed5911fae47e7a8b5d46d2661`（`docs(integration): 校正 D01-D03 验收计数`）；`9d26922`（`fix(delivery): 修复任务重派、拉黑派发与附件保留`）；`48df0ab`（`fix(delivery): 修复公开任务创建重放幂等`）；`64ca79c`（`fix(delivery): 修复同毫秒自我领取的创建重放`） |
 | 本轮集成修复提交 | `3b6afadd9d53125084b1615b0972f792e25321a0`（两个集成回归修复：A01-T04、D03-T04） |
-| 运行环境 | Bun 1.4.2，macOS；`DATA_DIR=/tmp/agentnet-d0408-int3/data`、`PORT=8913`、`PUBLIC_ORIGIN=http://127.0.0.1:8913`；票据密钥使用本地临时测试值，未写入报告 |
+| 运行环境 | Bun 1.4.2，macOS；本轮最终集成 `DATA_DIR=/tmp/agentnet-d0408-final-int/data`、`PORT=8935`、`PUBLIC_ORIGIN=http://127.0.0.1:8935`；票据密钥使用本地临时测试值，未写入报告 |
 | Presence 环境 | 服务端与测试进程一致：`AGENT_PRESENCE_ACTIVITY_TTL_MS=5000`、`AGENT_PRESENCE_GRACE_MS=2000`、`AGENT_PRESENCE_SWEEP_MS=1000` |
-| 结论 | 六套门禁与 D04/D05/D06/D07 专项全部通过；D01–D07 保持 `READY_FOR_REVIEW`。D08 完全未实现，仍是未关闭 P0。D05 的“相关消息原文定位”仍依赖未实现的 M04，只能按 message_id 引用，详见第 5、12 节 |
+| 结论 | 六套门禁与 D04/D05/D06/D07/D08 专项全部通过；D01–D08 全部实现并保持 `READY_FOR_REVIEW`，未经独立验证不标 `VERIFIED`。D05 的报告已补写，但消息原文交接仍受未实现的 M04 限制，只能按 `message_id` 引用并附带当前可见消息的截断预览，详见第 5、12 节；D08 已实现，剩余 P0 为 A06、G06、Q01、Q02、Q04、Q05 |
 
 ## 0. 审查范围与结论
 
-本轮在 `f8d520b` 之上审查 D04（任务交接与接任确认）、D05（可授权交接上下文包）、D06（成果提交与不可混淆的版本）、D07（验收退回与重新交付）的合并结果；D08（催办、取消与异常恢复）没有任何实现，无法集成或验收。重点检查四个任务共享的事务、迁移、事件、工具面、技能正文、网页脚本与验收注册：
+本轮在 `f8d520b` 之上审查 D04（任务交接与接任确认）、D05（可授权交接上下文包）、D06（成果提交与不可混淆的版本）、D07（验收退回与重新交付）的合并结果；随后在 `3710904` 上复核 D08（催办、取消与异常恢复）的实现与报告，并把 D08 纳入最终集成。重点检查五个任务共享的事务、迁移、事件、工具面、技能正文、网页脚本与验收注册：
 
-- 迁移文件共 30 个：`0001`–`0012`、`0017`–`0034`，`0013`–`0016` 历史上从未使用。D06 的 `0032_task_submission_sources.sql`、D07 的 `0033_task_review_acceptance.sql` 已提交；D05 的 `0034_task_handoff_packs.sql` 位于集成提交 `3b6afad`。三者序号唯一、连续，未修改已发布迁移；`0034` 只新增三张表与 `guard_handoff_conflict`，不改写既有行。
-- D04/D05/D06/D07 共用 `src/domain/tasks.ts`、`task-transfers.ts`、`task-handoff-packs.ts`、`task-submissions.ts`、`src/storage/{rows,queries,guards}.ts`、`transactions/runner.ts`、`src/mcp/{tools,outputs,skill}.ts`、`src/contracts/{schemas,limits}.ts`、`src/realtime/stream.ts` 与 `src/web/chat-*.ts`。合并后任务工具 29 个、整体工具面 111 个（Drive 与房间文件开启）/ 102 个（关闭），没有重复注册或丢失前置能力。
+- 迁移文件共 31 个：`0001`–`0012`、`0017`–`0035`，`0013`–`0016` 历史上从未使用。D06 的 `0032_task_submission_sources.sql`、D07 的 `0033_task_review_acceptance.sql` 已提交；D05 的 `0034_task_handoff_packs.sql` 位于集成提交 `3b6afad`；D08 的 `0035_task_recovery.sql` 位于 `40b001f`。序号唯一、连续，未修改已发布迁移；`0034` 只新增三张表与 `guard_handoff_conflict`，`0035` 只追加任务取消审计列与两张审计表，均不改写既有行。
+- D04/D05/D06/D07/D08 共用 `src/domain/tasks.ts`、`task-transfers.ts`、`task-handoff-packs.ts`、`task-submissions.ts`、`task-reminders.ts`、`task-recovery.ts`、`src/storage/{rows,queries,guards}.ts`、`transactions/runner.ts`、`src/mcp/{tools,outputs,skill}.ts`、`src/contracts/{schemas,limits}.ts`、`src/realtime/stream.ts` 与 `src/web/chat-*.ts`。合并后任务工具 32 个、整体工具面 114 个（Drive 与房间文件开启）/ 105 个（关闭），没有重复注册或丢失前置能力。
 - 任务写入继续满足既有不变量：`runIdempotent` + `db.batch()` 全有或全无；写操作校验当前 active assignment、`assignment_version` 与 task revision；新增闸门只有 D05 `guard_handoff_conflict → CONFLICT` 与 D07 `guard_review_stale → REVIEW_STALE`，`GUARD_TABLES` 与 `runner.ts` 的映射一致。
-- 任务、交接、提交、验收事件都只写 room scope 事件与 `room:<id>` outbox，由 `stream.ts` 映射为 human-only `task.updated` informational；不写 `inbox:{actor}`、不创建 delivery、不增加 `pending_count`、不推进 `rooms.head_seq`、不产生未读。人类任务提议/取消仍沿用 inbox `task_offered` / `task_cancelled`。
-- 全量 `test:acceptance` 在短 presence 窗口下通过 2074 项，D04–D07 专项分别 128/83/133/74 项；`test:protocol` 937 项、`test:web` 1950 项、`test:events` 339 项、`test:drive` 52 项。
+- 任务、交接、提交、验收事件都只写 room scope 事件与 `room:<id>` outbox，由 `stream.ts` 映射为 human-only `task.updated` informational；不写 `inbox:{actor}`、不创建 delivery、不增加 `pending_count`、不推进 `rooms.head_seq`、不产生未读。D08 的任务催办是唯一新增的 inbox 提醒：只写当前责任者 `task_reminder` 事件与 `inbox:{actor}` outbox，推进该 actor 的 `inbox_head_seq`，但不创建 delivery、不增加 `pending_count`、不推进房间 head。人类任务提议/取消仍沿用 inbox `task_offered` / `task_cancelled`。
+- 全量 `test:acceptance` 在短 presence 窗口下通过 2221 项，D04–D08 专项分别 128/83/133/74/147 项；`test:protocol` 949 项、`test:web` 1950 项、`test:events` 339 项、`test:drive` 52 项。
 - 集成回归修复 2 项：A01-T04（停用 Agent 会按 D04 撤销执行资格，任务转 `blocked` 并清空负责人，旧断言仍要求 `claimed`）与 D03-T04（旧负责人写入新执行期，D04 起统一返回 `ASSIGNMENT_STALE`，旧断言期望 `PERMISSION_DENIED`）。修复只更新断言与 `TaskView` 测试类型，未降低任何服务端语义。
-- 过程偏差：开工时工作区已包含完整但未提交的 D05 实现（21 个修改 + 6 个未跟踪文件），与“工作区不干净立即停止”的指令不符。为避免丢弃已有实现，本轮就地审查并集成该工作区，未执行 `reset`/`stash`/`clean`，也未触碰主 checkout；D05 因此没有独立实现报告，其语义与证据由本报告第 5 节承担。
+- 过程偏差：D04–D07 集成开工时工作区已包含完整但未提交的 D05 实现（21 个修改 + 6 个未跟踪文件），与“工作区不干净立即停止”的指令不符。为避免丢弃已有实现，该轮就地审查并集成该工作区，未执行 `reset`/`stash`/`clean`，也未触碰主 checkout；D05 因此没有独立实现提交，本轮已补写 `reports/D05.md` 承担语义与证据，本报告第 5 节只保留集成摘要。
 
 本轮对既有集成报告的修正：
 
 1. 修正“同毫秒 self-claim 回归随本文件同提交”的陈旧提交名：实际修复提交是 `64ca79c`，公开任务创建重放幂等修复是 `48df0ab`。
 2. 修正 `0031` 的“纯增量”措辞：该迁移先执行 `UPDATE tasks SET initial_assignee_actor_id = NULL` 全表清空 0030 的推断值，再按创建事件或 pristine offer 的可证明条件回填 `initial_assignee_known = 1` 与负责人，其余旧行保持 `known = 0`；不是只追加列。
-3. D04–D07 的实现 SHA、门禁计数、限制与 D08 缺口写入本报告。`README.md` / `docs/code-index.md` 的协议与工具计数仍是 D03 基线（883 项 / 94 个工具），D05 也尚无文档条目；按任务边界留给 Q01 全量对齐，本报告是当前权威计数。
+3. D04–D08 的实现 SHA、门禁计数、限制与 D05/D08 专项写入本报告。`README.md` / `docs/code-index.md` 的协议与工具计数仍是 D03 基线（883 项 / 94 个工具），D05/D08 也尚无文档条目；按任务边界留给 Q01 全量对齐，本报告是当前权威计数。
 
 ## 1. D01 消息转任务与任务卡片
 
@@ -80,7 +81,7 @@
 - 成员移除、退群与 `disableAgent` 在同一事务调用 `revokeTaskEligibilityStatements`：作用域内 `in_progress`/`blocked` 任务转 `blocked`、`blocked_reason = 'owner_lost_eligibility'`、清空 owner/current assignment、撤销 active assignment、关闭 pending/claimed 任务 delivery 并取消 pending 交接。旧负责人读任务仍可见，但写进度/阻塞/再次交接返回 `ASSIGNMENT_STALE` 并携带真实负责人。
 - 交接事件 `task_transfer_proposed/accepted/rejected/cancelled/expired` 统一投影为 human-only `task.updated` informational；网页 `chat-task-transfer-script.ts` 提供发起、接受、拒绝、撤回入口，只按服务端 `can_*` 显示。D04 专项 128 项（T01 42 + T02 39 + T03 17 + T04 9 + UNIT 19 + 技能 1）。
 
-## 5. D05 可授权交接上下文包（未提交实现，随本报告提交）
+## 5. D05 可授权交接上下文包（实现随集成提交补入）
 
 - 新增 4 个 MCP 工具 `network_task_handoff_pack_create/get/authorize/request_more`；任务工具 25 → 29，整体工具面 111/102。新增 `0034_task_handoff_packs.sql`：`task_handoff_packs`（每次生成新版本）、`task_handoff_pack_items`（只存引用与短标签/摘要）、`task_handoff_context_requests` 与只接受 `x = 0` 的 `guard_handoff_conflict`；不改写既有行。
 - 交接包记录目标、已完成、当前结果（可绑定 `submission_id` + version）、未解决、下一步与引用清单；引用 kind 限于 `message`、`file`、`branch`、`commit`、`test`、`submission`，不复制群历史正文或文件字节。`create` 只允许当前负责人且持有当前 active assignment、任务处于 `in_progress`/`blocked`；`version = max + 1`，旧版本原样保留。
@@ -88,8 +89,9 @@
 - 文件读取仍由 `/f` 实时票据与成员资格决定：`handoff-ticket` 同时校验目标房间票据、包项授权、授权人仍 active 且仍可见源范围；撤回或授权来源失权后旧 URL 立即 404，重读包显示 `omitted` 与 `authorization_source_lost`。
 - 接任时若存在包且 `context_ready=false`，换人仍成功，但任务转 `blocked` + `blocked_reason = 'context_incomplete'`；没有包时保持 D04 的 `context_ready=false` 兼容行为。`request_more` 由待接受提议目标或当前负责人追加补充请求，不改变责任、assignment、任务状态或 revision。
 - `task_handoff_pack_created` / `_item_authorized` / `_item_revoked` / `_context_requested` 只写 room scope 与 `room:<id>` outbox，映射为 human-only `task.updated` informational；不创建 delivery、不增加 `pending_count`、不推进 `head_seq`。网页 `chat-task-handoff-script.ts` 在任务详情展示版本、缺项/可授权项、就绪状态与“授权给接任者”入口；`chat-tasks-script.ts` 抽出 `chat-task-detail-script.ts` 后为 969 行。
-- **依赖缺口（未关闭）**：D05 的“相关消息”只保存 `message_id`，没有原文定位或引用预览，因为前置 M04 未实现（`reports/BASELINE.md` 的 BLOCK-05）。因此 D05 的版本化包、文件授权与缺项判定可验收，但“消息原文交接”范围不完整，不能按 M04 已就绪签收。`reports/D05.md` 不存在，本报告不伪造实现者报告。
-- D05 专项 83 项（T01 41 + T02 31 + T03 10 + 环境 1），覆盖版本化、跨群默认不可读/授权后可读/撤回即失效、必需缺失导致 `blocked + context_incomplete`、源范围失权后 `omitted` 与旧 URL 失效。协议验收新增 29 个任务工具、四个交接工具 schema/描述、`handoff_pack_get` 只读与技能正文断言；网页验收包含建包、缺项、授权与 `context_ready=true` 的浏览器路径。
+- **来源与报告**：D05 没有独立实现提交。基线 `f8d520b` 上，工作区已存在来自中断 D05 会话的完整未提交实现；集成提交 `3b6afad` 首次将其入库，并同时包含 D04–D07 集成与两个回归修复。原实现者、原始开工 SHA 与原始提交信息无法还原，本报告与 `reports/D05.md` 均不伪造。`reports/D05.md` 已补写，状态 `READY_FOR_REVIEW`。
+- **依赖缺口（未关闭）**：D05 的“相关消息”只保存 `message_id`；读取时最多附带当前仍可见消息的截断 `preview`，没有 M04 的引用摘要、quote anchor、跨页原文定位或撤回占位 API，也没有版本化原文快照。因此 D05 的版本化包、文件授权与缺项判定可验收，但“消息原文交接”范围不完整，不能按 M04 已就绪签收（`reports/BASELINE.md` 的 BLOCK-05；`scripts/lib/task-handoff-acceptance.ts` 也明确不伪造 quote anchor）。
+- D05 专项 83 项（T01 41 + T02 31 + T03 10 + 环境 1），覆盖版本化、跨群默认不可读/授权后可读/撤回即失效、必需缺失导致 `blocked + context_incomplete`、源范围失权后 `omitted` 与旧 URL 失效。协议验收新增 29 个任务工具、四个交接工具 schema/描述、`handoff_pack_get` 只读与技能正文断言；网页验收包含建包、缺项、授权与 `context_ready=true` 的浏览器路径。真实命令与逐项证据见 `reports/D05.md` 第 2 节。
 
 ## 6. D06 成果提交与不可混淆的版本
 
@@ -108,65 +110,74 @@
 - `parent_task_id` 只允许同房间已结束任务，`related_task_id` 只允许同房间可见任务；追加工作必须新建任务，不能重开 `accepted`。验收事件 human-only；网页 `chat-task-review-script.ts` 提供逐项清单、退回、改派与父/关联任务入口。
 - D07 专项 74 项（T01 34 + T02 8 + T03 31 + 身份注册 1），覆盖自验拒绝、并发唯一终态、验收人退群/改派、负责人失权与重交后旧版本审核被拒。
 
-## 8. D08 催办/取消/异常恢复（未实现）
+## 8. D08 催办/取消/异常恢复
 
-- `reports/D08.md` 不存在；`git log --all` 没有 D08 实现提交；`scripts/lib` 没有 D08 专项；代码、迁移、工具面与技能正文没有 D08 的催办/取消/异常恢复能力。当前只有 D04 的过期提议惰性处理与 D06/D07 的退回/失权路径，不能替代 D08。
-- D08 不能标记 `READY_FOR_REVIEW` 或 `VERIFIED`，也没有可重跑的门禁计数；它仍是未关闭 P0，需单独立项实现与验收。
+- 实现提交 `40b001fc571678595e7f1a039837dbbe49cdf41b`，基线 `d0c6230483f63e255fca8f5ad3330f7f5aaaed51`；报告 `3710904`（`docs(delivery): D08 任务报告`）。新增迁移 `0035_task_recovery.sql`：`task_reminders`、`task_external_actions` 与 `tasks.cancelled_by` / `cancel_reason` / `external_stop_status`，不改写既有行。
+- 催办：`remindStaleTasks` 扫描 `in_progress` 或仍有负责人的 `blocked` 任务，当前 assignment 必须仍 `active`，且 `COALESCE(tasks.last_progress_at, assignment.last_progress_at, assignment.accepted_at, assignment.created_at)` 超过 `LIMITS.taskReminderMs = 3 * 60_000` 未更新。同一 assignment 仍有 pending/claimed `task_offer` delivery 时跳过，避免与 delivery 提醒重复；`task_reminders` 以 `(task_id, assignment_id, anchor_at)` 和 `event_key` 双重唯一收敛窗口，每轮最多 50 条。提醒只写当前责任者 inbox `task_reminder` 事件与 `inbox:{actor}` outbox，并推进该 actor 的 `inbox_head_seq`；不创建 task/assignment/delivery、不增加 `pending_count`、不写 room scope、不推进 `rooms.head_seq`。扫描接入 `src/maintenance.ts` 兜底周期与 `src/bun/main.ts` 与 delivery reminder 共用的 30s 快路径。
+- 取消加固：`taskCancel` 保持创建者/当前负责人/群 owner 或管理员的权限与 `expected_revision` CAS；同一事务把任务转 `cancelled`、清空 owner/current assignment、撤销当前 assignment（含 `submitted`）、关闭该任务所有 pending/claimed 的 `task_offer` / `task_reminder` delivery、取消 pending 交接、写 `task_cancelled` room 事件与 outbox。`external_stop_status` 只接受 `confirmed` / `unknown` / `not_required`，省略时进行中或受阻记为 `unknown`，其余记为 `not_required`；`confirmed` 只是操作者声明，不是服务端验证结果。取消 `submitted` 保留 `task_submissions` 与 `task_reviews` 审计行，任务不能继续验收。
+- 外部执行未知与对账：`network_task_execution_unknown` 只允许当前负责人、`in_progress` 且持有当前 active assignment，把任务转 `blocked + execution_unknown`，写 `task_progress` 审计，并在 `task_external_actions` 以 `(task_id, action_id)` 稳定去重；重复上报返回同一快照，不递增 revision。`network_task_execution_resolve` 只允许当前负责人、action 仍为 `unknown` 且任务仍为 `blocked + execution_unknown`；`confirmed` / `not_executed` 恢复 `in_progress` 并清空阻塞字段，`rejected` 保持 `blocked` 并标记 `execution_rejected`。证据只存 `task_external_actions.evidence`，事件只记录 `outcome` 与 `evidence_bytes`。`network_task_resume` 拒绝 `blocked_reason = execution_unknown`，不能绕过对账。
+- 重试/重派：`network_task_retry` 只接受 `failed` 任务，由创建者、群 owner 或管理员调用；同一事务撤销旧 `offered` / `active` assignment、关闭所有 pending/claimed 任务投递、取消 pending 交接、递增 `task_revision`。指定 `assignee_actor_id` 时生成 `assignment_version = max + 1` 并回到 `offered`（Agent 候选生成新投递与必要的新卡片，human 候选收到持久个人通知）；省略时回到 `unassigned`。旧负责人的进度、成果与继续派活资格随 assignment 失效。
+- 重启与补读：任务可见性来自持久 `tasks` / `task_assignments` / `events` / `outbox`，服务重启不恢复旧进程栈。`stream.ts` 把 `task_reminder` 映射为 `source: "task.reminder"`、`kind: "reminder"`、`attention: "action_required"`；`task_retried` / `task_execution_unknown` / `task_execution_resolved` 继续映射为 human-only `task.updated` informational。断线重连后可用 `network_task_summary` / `network_task_list` 读取权威任务，`network_sync` inbox 补读 `task_reminder`，room scope 补读任务事件。
+- 工具面从 29 增至 32，整体 114/105；`taskSchema` 增加取消审计字段与 `can_retry` / `can_report_execution_unknown` / `can_resolve_execution`；网页新增 `chat-task-recovery-script.ts`（124 行）提供重试、标记执行未知与对账入口，`chat-tasks-script.ts` 保持 999 行；`src/mcp/skill.ts` 与 `public/skills/agent-network-skills.md` 同源更新。
+- 本轮复核结论：`reports/D08.md` 的行为描述与 `40b001f` 的迁移、domain、工具、事件与网页片段一致，未发现需要修改语义或代码的明显不一致；D08 报告中的集成 SHA 仍写“待集成”，以本报告第 13 节与最终提交为准。D08 专项 147 项（T01 26 + T02 48 + T03 51 + T04 22），详见第 10 节与 `reports/D08.md`。
 
 ## 9. 跨功能接缝核对
 
-- **迁移与旧库升级**：新库启动按序应用 30 个迁移文件（`0001`–`0012`、`0017`–`0034`，`0013`–`0016` 从未使用）；`0031` 未修改已发布内容，`0032`/`0033` 已提交，`0034` 随本报告提交并为最后一个。旧库升级断言包含 `0017`、`0029`、`0030`、`0031`、`0032`、`0033` 与 `0034`，原业务数据与表结构保留。
-- **错误映射**：`guard_task_state → CONFLICT`、`guard_version_conflict → VERSION_CONFLICT`、`guard_assignment_stale → ASSIGNMENT_STALE`、`guard_request_expired → REQUEST_EXPIRED`、`guard_claim_conflict → CLAIM_CONFLICT`、`guard_handoff_conflict → CONFLICT`、`guard_review_stale → REVIEW_STALE`，与各任务错误快照一致；无同名 guard 冲突。
-- **通知与流**：任务基础事件、`task_transfer_proposed/accepted/rejected/cancelled/expired`、`task_handoff_pack_created/_item_authorized/_item_revoked/_context_requested`、`task_submitted`、`task_returned`、`task_accepted`、`task_reviewer_changed` 统一映射为 human-only `task.updated` informational，带 `change`、`task_id`、`assignment_id`、`status`、`revision`、`changed_by`（适用时带 `submission_id` / `submission_version`）；不推进 head、不产生未读、不唤醒 Agent。inbox 侧 `task_offered` 为 `action_required`，`task_cancelled` 为 informational。
+- **迁移与旧库升级**：新库启动按序应用 31 个迁移文件（`0001`–`0012`、`0017`–`0035`，`0013`–`0016` 从未使用）；`0031` 未修改已发布内容，`0032`/`0033` 已提交，`0034` 随 `3b6afad` 提交，`0035` 随 `40b001f` 提交并为最后一个。旧库升级断言包含 `0017`、`0029`、`0030`、`0031`、`0032`、`0033`、`0034` 与 `0035`，原业务数据与表结构保留。
+- **错误映射**：`guard_task_state → CONFLICT`、`guard_version_conflict → VERSION_CONFLICT`、`guard_assignment_stale → ASSIGNMENT_STALE`、`guard_request_expired → REQUEST_EXPIRED`、`guard_claim_conflict → CLAIM_CONFLICT`、`guard_handoff_conflict → CONFLICT`、`guard_review_stale → REVIEW_STALE`，与各任务错误快照一致；D08 `0035` 没有新增闸门，无同名 guard 冲突。
+- **通知与流**：任务基础事件、`task_transfer_proposed/accepted/rejected/cancelled/expired`、`task_handoff_pack_created/_item_authorized/_item_revoked/_context_requested`、`task_submitted`、`task_returned`、`task_accepted`、`task_retried`、`task_execution_unknown`、`task_execution_resolved`、`task_reviewer_changed` 统一映射为 human-only `task.updated` informational，带 `change`、`task_id`、`assignment_id`、`status`、`revision`、`changed_by`（适用时带 `submission_id` / `submission_version`）；不推进 head、不产生未读、不唤醒 Agent。D08 `task_reminder` 是当前责任者 inbox 提醒，映射为 `source: "task.reminder"`、`kind: "reminder"`、`attention: "action_required"`，不是新 delivery。inbox 侧 `task_offered` 为 `action_required`，`task_cancelled` 为 informational。
 - **delivery 与任务分离**：delivery 的 claim/report/complete/fail 仍只表示通知处理，不改变任务 owner 或业务状态；D02/D03/D06 专项均断言 delivery complete 后任务仍为真实状态。
-- **工具面**：协议验收断言 29 个任务工具的清单与顺序，整体工具面 111 个（Drive 与房间文件开启）/ 102 个（关闭）；旧 `network_task_add/list_get/complete/fail/update/delete` 已退休。
-- **网页**：`chat-tasks-script.ts` 969 行、`chat-task-handoff-script.ts` 452 行、`chat-task-submission-script.ts` 436 行、`chat-task-transfer-script.ts` 347 行、`chat-task-review-script.ts` 249 行、`chat-task-progress-script.ts` 213 行、`chat-task-detail-script.ts` 43 行，均低于 1000 行；任务面板、交接包、提交/退回、验收、改派与既有聊天、文件、监控、移动端共用同一脚本作用域，`test:web` 1950 项覆盖（含 D05 建包/缺项/授权浏览器路径）。
-- **文档**：D04/D06/D07 的功能正文与工具清单已随各自提交同步；`README.md` / `docs/code-index.md` 的协议、工具总数与 D05 条目仍是 D03 基线，按任务边界留给 Q01 全量对齐；本报告是当前权威计数。
+- **工具面**：协议验收断言 32 个任务工具的清单与顺序，整体工具面 114 个（Drive 与房间文件开启）/ 105 个（关闭）；旧 `network_task_add/list_get/complete/fail/update/delete` 已退休。
+- **网页**：`chat-tasks-script.ts` 999 行、`chat-task-handoff-script.ts` 452 行、`chat-task-submission-script.ts` 436 行、`chat-task-transfer-script.ts` 347 行、`chat-task-review-script.ts` 249 行、`chat-task-progress-script.ts` 213 行、`chat-task-recovery-script.ts` 124 行、`chat-task-detail-script.ts` 43 行，均低于 1000 行；任务面板、交接包、提交/退回、验收、改派、恢复与既有聊天、文件、监控、移动端共用同一脚本作用域，`test:web` 1950 项覆盖（含 D05 建包/缺项/授权浏览器路径与 D08 入口回归）。
+- **文档**：D04/D06/D07/D08 的功能正文与工具清单已随各自提交同步，`reports/D05.md` 已补写；`README.md` / `docs/code-index.md` 的协议、工具总数与 D05/D08 条目仍是 D03 基线，按任务边界留给 Q01 全量对齐；本报告是当前权威计数。
 
 ## 10. 命令与结果
+
+本轮最终集成实测（`AGENTNET_URL=http://127.0.0.1:8935`）：
 
 | 命令 | 结果 | 说明 |
 |---|---|---|
 | `bun run typecheck` | 通过 | `tsrs --noEmit`，退出码 0，无诊断 |
-| `bun run test:protocol` | 通过 | `协议验收通过: 937 项`（`AGENTNET_URL=http://127.0.0.1:8913`） |
-| `AGENT_PRESENCE_ACTIVITY_TTL_MS=5000 AGENT_PRESENCE_GRACE_MS=2000 AGENT_PRESENCE_SWEEP_MS=1000 bun run test:acceptance` | 通过 | `端到端验收通过: 2074 项`（服务端与测试进程均使用短 presence 窗口） |
+| `AGENTNET_URL=http://127.0.0.1:8935 bun run test:protocol` | 通过 | `协议验收通过: 949 项`；`tools/list` 返回 114 个工具，任务工具 32 个 |
+| `AGENTNET_URL=http://127.0.0.1:8935 AGENT_PRESENCE_ACTIVITY_TTL_MS=5000 AGENT_PRESENCE_GRACE_MS=2000 AGENT_PRESENCE_SWEEP_MS=1000 bun run test:acceptance` | 通过 | `端到端验收通过: 2221 项`；其中 `D08 专项通过: 147 项（T01 26 / T02 48 / T03 51 / T04 22）` |
 | `bun run test:web` | 通过 | `浏览器验收通过 1950 项`（脚本自托管临时实例） |
 | `bun run test:events` | 通过 | `MCP Events 验收通过: 339 项` |
-| `AGENTNET_URL=http://127.0.0.1:8913 bun run test:drive` | 通过 | `drive checks passed: 52` |
+| `AGENTNET_URL=http://127.0.0.1:8935 bun run test:drive` | 通过 | `drive checks passed: 52` |
 | D04 专项 | 通过 | `D04 focused checks passed: 128` |
 | D05 专项 | 通过 | `D05 focused checks passed: 83`（T01 41 + T02 31 + T03 10 + 环境 1） |
 | D06 专项 | 通过 | `D06 focused checks passed: 133` |
 | D07 专项 | 通过 | `D07 focused checks passed: 74` |
-| D08 专项 | 未执行 | 无实现、无验收脚本 |
-| 工具计数 | 通过 | `tools/list` 返回 111 个（Drive 与房间文件开启）；关闭时为 102 个 |
+| D08 专项 | 通过 | `D08 专项通过: 147 项（T01 26 / T02 48 / T03 51 / T04 22）` |
+| 工具计数 | 通过 | 开启 Drive/房间文件时 114 个；关闭时为 105 个（114 − 9） |
 | `git diff --check` | 通过 | 无 whitespace 错误 |
 
 主实例启动方式：
 
 ```bash
-DATA_DIR=/tmp/agentnet-d0408-int3/data \
+DATA_DIR=/tmp/agentnet-d0408-final-int/data \
 AGENT_PRESENCE_ACTIVITY_TTL_MS=5000 \
 AGENT_PRESENCE_GRACE_MS=2000 \
 AGENT_PRESENCE_SWEEP_MS=1000 \
-PUBLIC_ORIGIN=http://127.0.0.1:8913 \
+PUBLIC_ORIGIN=http://127.0.0.1:8935 \
 FILE_TICKET_SECRET=<本地临时测试值> \
-PORT=8913 bun run start
+PORT=8935 bun run start
 ```
 
-D04–D07 专项命令：
+D04–D08 专项命令：
 
 ```bash
-AGENTNET_URL=http://127.0.0.1:8913 bun -e "import { checksPassed } from './scripts/lib/harness'; import { runTaskTransferAcceptance } from './scripts/lib/task-transfer-acceptance'; await runTaskTransferAcceptance(); console.log('D04 focused checks passed: ' + checksPassed());"
-AGENTNET_URL=http://127.0.0.1:8913 bun -e "import { checksPassed } from './scripts/lib/harness'; import { runTaskHandoffAcceptance } from './scripts/lib/task-handoff-acceptance'; await runTaskHandoffAcceptance(); console.log('D05 focused checks passed: ' + checksPassed());"
-AGENTNET_URL=http://127.0.0.1:8913 bun -e "import { checksPassed } from './scripts/lib/harness'; import { runTaskSubmissionAcceptance } from './scripts/lib/task-submission-acceptance'; await runTaskSubmissionAcceptance(); console.log('D06 focused checks passed: ' + checksPassed());"
-AGENTNET_URL=http://127.0.0.1:8913 bun -e "import { checksPassed } from './scripts/lib/harness'; import { runTaskReviewAcceptance } from './scripts/lib/task-review-acceptance'; await runTaskReviewAcceptance(); console.log('D07 focused checks passed: ' + checksPassed());"
+AGENTNET_URL=http://127.0.0.1:8935 bun -e "import { checksPassed } from './scripts/lib/harness'; import { runTaskTransferAcceptance } from './scripts/lib/task-transfer-acceptance'; await runTaskTransferAcceptance(); console.log('D04 focused checks passed: ' + checksPassed());"
+AGENTNET_URL=http://127.0.0.1:8935 bun -e "import { checksPassed } from './scripts/lib/harness'; import { runTaskHandoffAcceptance } from './scripts/lib/task-handoff-acceptance'; await runTaskHandoffAcceptance(); console.log('D05 focused checks passed: ' + checksPassed());"
+AGENTNET_URL=http://127.0.0.1:8935 bun -e "import { checksPassed } from './scripts/lib/harness'; import { runTaskSubmissionAcceptance } from './scripts/lib/task-submission-acceptance'; await runTaskSubmissionAcceptance(); console.log('D06 focused checks passed: ' + checksPassed());"
+AGENTNET_URL=http://127.0.0.1:8935 bun -e "import { checksPassed } from './scripts/lib/harness'; import { runTaskReviewAcceptance } from './scripts/lib/task-review-acceptance'; await runTaskReviewAcceptance(); console.log('D07 focused checks passed: ' + checksPassed());"
+AGENTNET_URL=http://127.0.0.1:8935 bun -e "import { runTaskRecoveryAcceptance } from './scripts/lib/task-recovery-acceptance'; await runTaskRecoveryAcceptance();"
 ```
 
-`test:protocol`、`test:acceptance` 与 `test:drive` 使用本地 `http://127.0.0.1:8913`；`test:web` 与 `test:events` 各自启动临时实例。全量 `test:acceptance` 已包含 D01–D07 与 A05 的注册用例；D01/D02/D03/A05 本轮未单独重跑专项，沿用其报告中的历史计数。
+`test:protocol`、`test:acceptance` 与 `test:drive` 使用本地 `http://127.0.0.1:8935`；`test:web` 与 `test:events` 各自启动临时实例。全量 `test:acceptance` 已包含 D01–D08 与 A05 的注册用例；D01/D02/D03/A05 本轮未单独重跑专项，沿用其报告中的历史计数。
 
-## 11. 本轮改动
+## 11. 集成改动
 
-本轮新增/修改的主体是未提交的 D05 实现与两个集成回归修复；D04/D06/D07 的实现已在各自提交中，本轮未改其业务语义：
+D04/D06/D07 的实现已在各自提交中；D05 的未提交实现与两个集成回归修复在 `3b6afad` 中；D08 在 `40b001f` 中；`3710904` 是 D08 报告。本轮最终集成在 `3710904` 的干净工作区上补写 `reports/D05.md` 并更新本报告，没有改业务代码、迁移或测试断言。D05 在 `3b6afad` 中的改动：
 
 - `migrations/0034_task_handoff_packs.sql`：交接包/引用/补充请求三张表与 `guard_handoff_conflict`；只新增对象，不改写既有行。
 - `src/domain/task-handoff-packs.ts`、`src/domain/handoff-file-grant.ts`：版本化建包、逐项可用性判定、跨范围授权/撤回、补充请求与 `handoff-ticket` 文件授权。
@@ -178,7 +189,19 @@ AGENTNET_URL=http://127.0.0.1:8913 bun -e "import { checksPassed } from './scrip
 - `scripts/lib/task-handoff-acceptance.ts`、`scripts/acceptance.ts`、`scripts/verify-protocol.ts`、`scripts/verify-web.ts`、`scripts/lib/{feedback-unit,task-create-replay-unit}.ts`：D05 专项 83 项、协议/网页断言与 `0034` 旧库升级清单。
 - `scripts/lib/agent-identity-acceptance.ts`：A01-T04 按 D04 的撤销执行资格语义更新为 `blocked` / owner 为 null / `owner_lost_eligibility`，并断言启用后不自动恢复。
 - `scripts/lib/task-status-acceptance.ts`：D03-T04 旧负责人写入新执行期期望改为 `ASSIGNMENT_STALE`，与 D04 专项一致。
-- `reports/INTEGRATION.md`：新增 D04–D08 章节与门禁计数；修正陈旧提交名与 `0031` 全表回填措辞。
+- `reports/INTEGRATION.md`：D04–D08 章节与门禁计数；修正陈旧提交名与 `0031` 全表回填措辞。
+
+D08 在 `40b001f` 中的改动（本轮复核未改其语义）：
+
+- `migrations/0035_task_recovery.sql`：`task_reminders`、`task_external_actions`、任务取消审计列与索引/CHECK；只追加对象与列，不改写既有行。
+- `src/domain/task-reminders.ts`、`src/domain/task-recovery.ts`：3 分钟窗口催办、窗口去重、执行未知/对账与证据持久化。
+- `src/domain/tasks.ts`：`taskCancel` 原子失效当前 assignment、全部 pending/claimed 任务投递与 pending 交接，保留成果/验收审计；`taskRetry` 仅重派 `failed` 任务并生成新版本；`network_task_resume` 拒绝 `execution_unknown`。
+- `src/contracts/{limits,schemas}.ts`、`src/mcp/{tools,outputs,skill}.ts`、`public/skills/agent-network-skills.md`、`public/skills/agent_tasks.sh`：3 个新工具、取消审计字段、`can_*`、技能正文与 CLI 封装。
+- `src/realtime/stream.ts`：`task_reminder` 提醒映射，以及 `task_retried` / `task_execution_unknown` / `task_execution_resolved` 的 human-only informational 投影。
+- `src/bun/main.ts`、`src/maintenance.ts`：30s 快路径与维护周期接入任务催办。
+- `src/web/chat-task-recovery-script.ts`、`src/web/chat-script.ts`、`src/web/chat-tasks-script.ts`、`src/web/chat-styles.ts`：失败重试、标记执行未知、对账结论与取消外部停止状态入口。
+- `scripts/lib/task-recovery-acceptance.ts`、`scripts/acceptance.ts`、`scripts/verify-protocol.ts`、`scripts/verify-web.ts`、`scripts/lib/feedback-unit.ts`、`scripts/lib/task-create-replay-unit.ts`：D08 专项 147 项、协议/网页断言与 `0035` 旧库升级清单。
+- `reports/D08.md`：D08 实现报告，状态 `READY_FOR_REVIEW`。
 
 ### 历史（D01–D03）改动
 
@@ -189,51 +212,51 @@ AGENTNET_URL=http://127.0.0.1:8913 bun -e "import { checksPassed } from './scrip
 - `scripts/lib/{room-task-acceptance,task-assignment-acceptance,contact-block-acceptance}.ts`：D01-T02 参数冲突、accept/reoffer 后重放，D01-T03 公开任务 claim 后重放与单任务/单卡片，D01-T05 附件，D01-T07 创建者同毫秒 self-claim 的 60 轮真实 HTTP 重放，D02-T02 重派/并发，D02-T05 创建者拉黑，A05-T01 任务提议拒绝。
 - `scripts/lib/task-attachment-gc-unit.ts`、`scripts/lib/task-create-replay-unit.ts`、`scripts/verify-protocol.ts`：新增 18 项附件保留 GC 与 56 项创建重放/旧库升级检查（含固定时钟）。
 - `scripts/lib/feedback-unit.ts`：旧库升级断言加入 `0031_task_initial_assignee_known.sql`。
-- `README.md`、`docs/code-index.md`、`src/mcp/{tools,skill}.ts`、`public/skills/agent-network-skills.md`：同步重派、拉黑闸门、附件保留与当时的协议/端到端计数 `883` / `1652`（本轮门禁已增至 `937` / `2074`，文档对齐留给 Q01）。
+- `README.md`、`docs/code-index.md`、`src/mcp/{tools,skill}.ts`、`public/skills/agent-network-skills.md`：同步重派、拉黑闸门、附件保留与当时的协议/端到端计数 `883` / `1652`（D04–D07 集成时为 `937` / `2074`，最终 D04–D08 集成为 `949` / `2221`；文档对齐留给 Q01）。
 - `reports/{D01,D02,D03,A05,INTEGRATION}.md`：更新修复结论、分项计数与证据。
 
-`0031` 不是纯增量迁移：它先全表清空 0030 回填的推断负责人，再按可证明条件重建；`0034` 才是只新增对象的迁移。网页脚本与 presence 语义除 D05 面板外未变。
+`0031` 不是纯增量迁移：它先全表清空 0030 回填的推断负责人，再按可证明条件重建；`0034` 与 `0035` 只新增表/索引/列，不改写既有行。网页脚本与 presence 语义除 D05/D08 面板外未变。
 
 ## 12. 已知限制与未完成 P0
 
-D01–D07 的实现范围已完成并通过本轮门禁，全部保持 `READY_FOR_REVIEW`，需独立验证者在集成 SHA 上签收；D08 未实现，不能签收。各任务记录的限制继续有效：
+D01–D08 的实现范围已完成并通过本轮门禁，全部保持 `READY_FOR_REVIEW`，需独立验证者在集成 SHA 上签收；没有任务因本轮复核改语义。各任务记录的限制继续有效：
 
 - **D01**：成果（artifact）入口仍通过 `src/domain/artifacts.ts` 的旧 `room_tasks` 校验，`tsk_` 任务暂不能提交成果（属于 M07 范围）。任务附件引用已在同一事务内建立并保留，`maintainFiles` 同时扫描新 `tasks`。
 - **D01/D02**：`network_task_list` 尚未分页（`next_cursor: null`）。
 - **D02/D03**：offer 过期没有清扫器，过期 offer 不会自动回 `unassigned`，需要取消后重建或后续幂等清扫。
 - **D03**：进度历史最多展示 20 条（数据库保留全部审计）；未构造两个浏览器以不同顺序接收同一批 `task.updated` 的 Playwright 回放，客户端应始终以 `task_get` / `task_list` 的权威 revision 收敛。
 - **D04**：交接过期是惰性处理，没有后台扫描器；撤销执行资格只处理站内任务、assignment、delivery 与 pending 交接，不声称能停止外部命令；CLI 未新增 transfer 子命令。
-- **D05**：**M04（P1）未实现**，相关消息只能按 `message_id` 引用，没有原文定位/引用预览 API，因此 D05 的“消息原文交接”范围不完整（`reports/BASELINE.md` BLOCK-05）。D05 没有独立 `reports/D05.md`，本轮以第 5 节作为集成记录；实现随集成提交 `3b6afad` 提交，需独立验证者在该提交上复跑。
+- **D05**：**M04（P1）未实现**，消息引用只保存 `message_id`；读取时最多附带当前仍可见消息的截断 `preview`，没有 M04 的引用摘要、quote anchor、跨页原文定位或撤回占位，也没有版本化原文快照，因此“消息原文交接”范围不完整（`reports/BASELINE.md` BLOCK-05）。`reports/D05.md` 已补写并如实记录 D05 没有独立实现提交、实现首次入库于 `3b6afad`、原实现者无法还原；独立验证需在 `3b6afad` 上复跑。仓库没有消息撤回，T03 用授权人失去源范围成员资格表达源撤回。
 - **D06**：外链只记录声明，服务端不抓取或验证；提交列表没有游标；未指定验收人的任务无法退回；没有 D06 专用浏览器断言（`test:web` 只覆盖页面不回归）。
 - **D07**：验收人退群/停用不会自动通过或自动改派；`related_task_id` 已在 MCP 支持但未在网页表单暴露；没有外部业务回写通道。
-- **D08**：完全未实现（无报告、无实现提交、无专项验收），仍是未关闭 P0。
-- **过程**：开工时工作区已含未提交的 D05 实现，与“工作区不干净立即停止”的指令不符；本轮就地集成，未清理或回退任何已有改动。两个集成回归修复只调整测试断言，未降低服务端语义。
-- **文档**：Q01 仍负责 README / CLAUDE / 技能正文与全部文档的全量对齐；`README.md` / `docs/code-index.md` 的协议计数（883）、工具总数（94）与 D05 条目尚未更新，本报告是当前权威计数。
+- **D08**：没有公开的 `failed` 入口，`network_task_retry` 的 T02 用例在真实迁移/domain 层构造 `failed` 持久行后验证；外部停止只是尽力通知宿主并记录操作者声明的 `external_stop_status`，没有实际杀进程或撤销远端操作的适配器；外部系统查询由调用方完成，`execution_resolve` 只持久化查询或人工证据，不自动访问目标系统；有负责人的 `blocked` 任务也会收到催办，`execution_unknown` 只提示对账、不自动改状态；T04 在验收进程内自托管临时 Bun/`DATA_DIR` 重启，不重启生产实例；D08 网页入口只由协议静态断言与既有 1950 项网页回归覆盖，没有新增独立 Playwright 交互脚本。
+- **过程**：D04–D07 集成开工时工作区已含未提交的 D05 实现，与“工作区不干净立即停止”的指令不符；该轮就地集成，未清理或回退任何已有改动。两个集成回归修复只调整测试断言，未降低服务端语义。最终 D04–D08 集成在 `3710904` 上开工，`git status --porcelain=v1 -b` 为空（仅 `ahead 2`），本轮未新增业务代码改动。
+- **文档**：Q01 仍负责 README / CLAUDE / 技能正文与全部文档的全量对齐；`README.md` / `docs/code-index.md` 的协议计数（883）、工具总数（94）与 D05/D08 条目尚未更新，本报告是当前权威计数。D05/D08 的技能正文已随各自实现同步，但 README 与代码索引的协议/工具计数仍是 D03 基线。
 
 仍未实现的 P0：
 
 - **A 组**：A06。
 - **G 组**：G06。
-- **D 组**：D08（D04–D07 已实现，保持 `READY_FOR_REVIEW`）。
 - **Q 组**：Q01、Q02、Q04、Q05。
 
 依赖与阻塞：
 
-- **D05 的 M04 缺口未关闭**：M04 只提供 `reply_to` 字段，没有原文定位/引用预览；D05 已如实把消息引用限制为 `message_id`，不能宣称“相关消息上下文完整”。纳入 M04 或缩小 D05 消息范围需要主控决定。
-- **D08 未启动**：催办、取消与异常恢复没有实现；D04 的惰性过期与 D06/D07 的退回/失权不能替代。
+- **D05 的 M04 缺口未关闭**：M04 只提供 `reply_to` 字段，没有原文定位/引用预览/quote anchor；D05 已如实把消息引用限制为 `message_id` + 当前可见消息的截断预览，不能宣称“相关消息上下文完整”。纳入 M04 或缩小 D05 消息范围需要主控决定。
+- **D08 已实现并纳入集成**：催办、取消与异常恢复有迁移 `0035`、3 个工具、事件与专项 147 项；外部执行停止与目标系统查询仍是调用方责任，不是服务端保证。
 - **A05-T01 已解除阻塞**：A05 报告为 `PASS`；任务拒绝提议、拉黑闸门与解除拉黑后的派发已有验收。
 - Q02/Q04/Q05 依赖 Q01 以及各自的设备/并发/故障验收范围，本轮未扩大。
 
 ## 13. 最终状态
 
-- 审查起点：`f8d520b7852802fa649435f593b78fb53926f309`（`docs(delivery): D07 任务报告`）。
+- 上一轮审查起点：`f8d520b7852802fa649435f593b78fb53926f309`（`docs(delivery): D07 任务报告`）。
+- 本轮最终集成起点：`3710904`（`docs(delivery): D08 任务报告`）；D08 实现 `40b001f` 在其父提交。
 - D04 实现/报告：`56d9c9f51ba4c805223745b6bb4d7f3dc594cf5f` / `b6d27f4d5b6e19ba129451dd05ade7e532a89957`。
+- D05：实现首次入库于集成提交 `3b6afadd9d53125084b1615b0972f792e25321a0`（无独立实现提交）；报告 `reports/D05.md`，提交 `11d0adb`（`docs(delivery): D05 任务报告`）。
 - D06 实现/报告：`4eb8de8db803b5b7ad349c189345b6f784d1fd8f` / `b696df53b3779460c2448bb7030f5608d4ea9cd8`。
 - D07 实现/报告：`049ce2034d8abec06062f8506d9d260d8c1354b1` / `f8d520b7852802fa649435f593b78fb53926f309`。
-- D05：实现随集成提交 `3b6afadd9d53125084b1615b0972f792e25321a0` 提交；无独立实现报告。
-- D08：无实现、无报告、无提交。
-- 集成提交：`3b6afadd9d53125084b1615b0972f792e25321a0`（D05 实现、集成回归修复与本报告初版）；本报告后续修订提交见 `git log -1 -- reports/INTEGRATION.md`。
+- D08 实现/报告：`40b001fc571678595e7f1a039837dbbe49cdf41b` / `3710904`。
+- 集成提交：`3b6afadd9d53125084b1615b0972f792e25321a0`（D05 实现、集成回归修复与本报告初版）；本轮最终集成报告提交为本文件所在提交（见 `git log -1 -- reports/INTEGRATION.md`）。
 - 集成报告在 `fix/webots-parity-pack` 上普通 push，无 force；远端分支与本地 HEAD 一致。
-- 测试计数：typecheck 通过、protocol 937、acceptance 2074、web 1950、events 339、drive 52；专项 D04 128、D05 83、D06 133、D07 74（合计 418）；D08 无计数。
+- 测试计数：typecheck 通过、protocol 949、acceptance 2221、web 1950、events 339、drive 52；专项 D04 128、D05 83、D06 133、D07 74、D08 147（合计 565）。
 - 未部署、未创建 PR、未触发生产验收、未创建生产测试数据。
-- D01–D07 保持 `READY_FOR_REVIEW`，待独立验证；D08 未实现，仍是未关闭 P0；A05 为 `PASS`。
+- D01–D08 全部保持 `READY_FOR_REVIEW`，待独立验证；A05 为 `PASS`；剩余未实现 P0 为 A06、G06、Q01、Q02、Q04、Q05。
