@@ -757,6 +757,69 @@ export const taskTransferListSchema = z.object({
 });
 
 /**
+ * 提交成果：只接受当前 active assignment 的负责人，任务必须处于 in_progress。
+ *
+ * materials 引用已绑定到同一房间的文件；服务端在事务内重新读取字节身份并冻结
+ * sha256/size/mime，不信任客户端传入的校验值。links 只记录目标版本/摘要与
+ * 提交者声明的可用性，服务端不抓取外链；可访问不等于验收通过。
+ */
+const taskSubmissionLink = z.object({
+  url: z.string().trim().min(1).max(LIMITS.taskSubmissionLinkUrlBytes),
+  title: z.string().trim().max(LIMITS.taskSubmissionLinkTitleBytes).optional(),
+  version: z.string().trim().max(LIMITS.taskSubmissionLinkVersionBytes).optional(),
+  digest: z.string().trim().max(LIMITS.taskSubmissionLinkDigestBytes).optional(),
+  availability: z.enum(['unverified', 'declared_reachable']).optional(),
+});
+
+const taskSubmissionMaterial = z.object({
+  file_id: id(),
+  label: z.string().trim().max(LIMITS.taskSubmissionMaterialLabelBytes).optional(),
+});
+
+export const taskSubmitSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  summary: z.string().max(LIMITS.taskSubmissionSummaryBytes * 2),
+  materials: z.array(taskSubmissionMaterial).max(LIMITS.taskSubmissionMaterialsMax).optional(),
+  links: z.array(taskSubmissionLink).max(LIMITS.taskSubmissionLinksMax).optional(),
+  commit_sha: z.string().trim().max(LIMITS.taskSubmissionCommitShaMax).optional(),
+  evidence: z
+    .array(z.string().max(LIMITS.taskSubmissionEvidenceBytes * 2))
+    .max(LIMITS.taskSubmissionEvidenceMax)
+    .optional(),
+  known_limits: z.string().max(LIMITS.taskSubmissionKnownLimitsBytes * 2).optional(),
+  assignment_id: id().optional(),
+  assignment_version: z.number().int().min(1).optional(),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/** 读取指定任务的提交版本；省略 version 时返回最新版本。 */
+export const taskSubmissionGetSchema = z.object({
+  task_id: id(),
+  version: z.number().int().min(1).optional(),
+});
+
+/** 提交历史按版本倒序；只返回当前可见任务的历史。 */
+export const taskSubmissionListSchema = z.object({
+  task_id: id(),
+  limit: z.number().int().min(1).max(LIMITS.taskSubmissionListMax).optional(),
+});
+
+/**
+ * D06 最小退回入口：指定验收人对当前 pending 版本退回。
+ *
+ * D07 会在此语义上补齐完整验收授权与 accept；本工具不实现通过，避免留下
+ * 两个互相冲突的退回入口。
+ */
+export const taskSubmissionReturnSchema = z.object({
+  request_id: requestId,
+  task_id: id(),
+  submission_id: id(),
+  reason: z.string().trim().min(1).max(LIMITS.taskSubmissionReturnReasonBytes * 2),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/**
  * 认证反馈：只接受已注册 actor 主动提交的三段诊断文本。
  *
  * request_id 限制为 ASCII 标识符，避免把凭据或 URL 误当操作 ID；
@@ -885,4 +948,8 @@ export type TaskTransferRejectInput = z.infer<typeof taskTransferRejectSchema>;
 export type TaskTransferCancelInput = z.infer<typeof taskTransferCancelSchema>;
 export type TaskTransferGetInput = z.infer<typeof taskTransferGetSchema>;
 export type TaskTransferListInput = z.infer<typeof taskTransferListSchema>;
+export type TaskSubmitInput = z.infer<typeof taskSubmitSchema>;
+export type TaskSubmissionGetInput = z.infer<typeof taskSubmissionGetSchema>;
+export type TaskSubmissionListInput = z.infer<typeof taskSubmissionListSchema>;
+export type TaskSubmissionReturnInput = z.infer<typeof taskSubmissionReturnSchema>;
 export type FeedbackCreateInput = z.infer<typeof feedbackCreateSchema>;

@@ -1000,6 +1000,14 @@ export const taskProgressViewSchema = z.object({
   created_at: z.string(),
 });
 
+/** 任务卡片/列表使用的最新成果版本摘要。 */
+export const taskSubmissionSummaryViewSchema = z.object({
+  submission_id: z.string(),
+  version: z.number(),
+  status: z.enum(['pending', 'accepted', 'returned', 'superseded']),
+  submitted_at: z.string(),
+});
+
 export const taskSchema = z.object({
   task_id: z.string(),
   room_id: z.string(),
@@ -1035,6 +1043,7 @@ export const taskSchema = z.object({
   assignment: taskAssignmentViewSchema.nullable(),
   delivery_ids: z.array(z.string()),
   attachments: z.array(taskAttachmentViewSchema),
+  current_submission: taskSubmissionSummaryViewSchema.nullable(),
   can_offer: z.boolean(),
   can_claim: z.boolean(),
   can_cancel: z.boolean(),
@@ -1043,6 +1052,8 @@ export const taskSchema = z.object({
   can_report_progress: z.boolean(),
   can_block: z.boolean(),
   can_resume: z.boolean(),
+  can_submit: z.boolean(),
+  can_return: z.boolean(),
 });
 
 export const taskResultSchema = z.object({
@@ -1055,6 +1066,71 @@ export const taskListResultSchema = z.object({
   next_cursor: z.string().nullable(),
   has_more: z.boolean(),
   authorization: authorizationSnapshotSchema.nullable(),
+});
+
+export const taskSubmissionMaterialViewSchema = z.object({
+  file_id: z.string(),
+  label: z.string(),
+  name: z.string(),
+  mime_type: z.string(),
+  size: z.number(),
+  sha256: z.string(),
+  available: z.boolean(),
+});
+
+export const taskSubmissionLinkViewSchema = z.object({
+  url: z.string(),
+  title: z.string().nullable(),
+  version: z.string().nullable(),
+  digest: z.string().nullable(),
+  availability: z.enum(['unverified', 'declared_reachable']),
+});
+
+export const taskSubmissionReviewViewSchema = z.object({
+  reviewer_actor_id: z.string(),
+  reviewer_name: z.string(),
+  decision: z.enum(['accept', 'return']),
+  reason: z.string(),
+  created_at: z.string(),
+});
+
+/** 冻结的提交版本；materials 的 sha256/size/mime 来自提交时的文件元数据。 */
+export const taskSubmissionViewSchema = z.object({
+  submission_id: z.string(),
+  task_id: z.string(),
+  room_id: z.string(),
+  version: z.number(),
+  status: z.enum(['pending', 'accepted', 'returned', 'superseded']),
+  summary: z.string(),
+  materials: z.array(taskSubmissionMaterialViewSchema),
+  links: z.array(taskSubmissionLinkViewSchema),
+  commit_sha: z.string().nullable(),
+  evidence: z.array(z.string()),
+  known_limits: z.string(),
+  assignment_id: z.string(),
+  assignment_version: z.number(),
+  submitted_by: z.string(),
+  submitted_by_name: z.string(),
+  submitted_at: z.string(),
+  reviewed_at: z.string().nullable(),
+  review: taskSubmissionReviewViewSchema.nullable(),
+  is_current: z.boolean(),
+});
+
+export const taskSubmissionResultSchema = z.object({
+  submission: taskSubmissionViewSchema,
+  task: taskSchema,
+  authorization: authorizationSnapshotSchema,
+});
+
+export const taskSubmissionGetResultSchema = z.object({
+  submission: taskSubmissionViewSchema,
+});
+
+export const taskSubmissionListResultSchema = z.object({
+  submissions: z.array(taskSubmissionViewSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
 });
 
 /** 交接提议；`effective_status` 会把过期未处理的 pending 显示为 expired。 */

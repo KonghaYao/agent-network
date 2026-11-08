@@ -700,5 +700,50 @@ export function taskDialogs(): string {
       </div>
     </form>
   </div>
+</div>
+<div class="modal" id="task-submit-modal" hidden>
+  <div class="modal-card task-modal-card" role="dialog" aria-modal="true"
+    aria-labelledby="task-submit-title">
+    <header class="task-modal-head">
+      <h2 id="task-submit-title">提交成果</h2>
+      <button class="task-popover-close" id="task-submit-close" type="button"
+        aria-label="关闭提交成果" title="关闭">×</button>
+    </header>
+    <form id="task-submit-form">
+      <p class="muted task-source-hint">提交后生成不可原地改写的版本；退回后才能重新提交新版本。</p>
+      <label class="field">成果摘要
+        <textarea id="task-submit-summary" rows="4" required
+          placeholder="完成了什么、如何核对；不要粘贴凭据或私密正文"></textarea>
+      </label>
+      <fieldset class="task-submit-section">
+        <legend>材料（同一房间文件）</legend>
+        <p class="muted" id="task-submit-materials-status" role="status">正在读取房间文件…</p>
+        <ul class="task-submit-materials" id="task-submit-materials"></ul>
+      </fieldset>
+      <fieldset class="task-submit-section">
+        <legend>外链</legend>
+        <p class="muted">只记录目标版本/摘要与声明可用性；服务端不抓取外链，可访问不等于验收通过。</p>
+        <div class="task-submit-links" id="task-submit-links"></div>
+        <button class="link-btn" id="task-submit-add-link" type="button">添加外链</button>
+      </fieldset>
+      <label class="field">实现提交 SHA（可选，7–64 位十六进制）
+        <input id="task-submit-commit-sha" maxlength="${LIMITS.taskSubmissionCommitShaMax}"
+          placeholder="非代码任务可留空，但需提供其他可核对成果">
+      </label>
+      <label class="field">验证证据（每行一条）
+        <textarea id="task-submit-evidence" rows="3"
+          placeholder="测试命令、结果计数、截图说明或复核步骤"></textarea>
+      </label>
+      <label class="field">已知限制（可选）
+        <textarea id="task-submit-known-limits" rows="2"
+          placeholder="未覆盖的范围、已知问题或需要验收人注意的事项"></textarea>
+      </label>
+      <p class="form-error" id="task-submit-error" role="alert"></p>
+      <div class="row modal-actions">
+        <button id="task-submit-cancel" type="button">取消</button>
+        <button class="primary" type="submit">提交成果</button>
+      </div>
+    </form>
+  </div>
 </div>`;
 }

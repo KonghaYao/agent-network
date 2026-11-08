@@ -87,6 +87,10 @@ import {
   taskOfferSchema,
   taskProgressSchema,
   taskResumeSchema,
+  taskSubmissionGetSchema,
+  taskSubmissionListSchema,
+  taskSubmissionReturnSchema,
+  taskSubmitSchema,
   taskSummarySchema,
   taskTransferAcceptSchema,
   taskTransferCancelSchema,
@@ -198,6 +202,12 @@ import {
   taskSummary,
 } from '../domain/tasks';
 import {
+  taskSubmissionGet,
+  taskSubmissionList,
+  taskSubmissionReturn,
+  taskSubmit,
+} from '../domain/task-submissions';
+import {
   taskTransferAccept,
   taskTransferCancel,
   taskTransferGet,
@@ -266,6 +276,9 @@ import {
   roomRoleHistorySchema as roomRoleHistoryResultSchema,
   taskListResultSchema,
   taskResultSchema,
+  taskSubmissionGetResultSchema,
+  taskSubmissionListResultSchema,
+  taskSubmissionResultSchema,
   taskSummaryResultSchema,
   taskTransferListResultSchema,
   taskTransferResultSchema,
@@ -1220,6 +1233,56 @@ export function registerTools(
       return taskTransferList(db, principal, input);
     },
     { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_submit',
+    '提交任务成果版本：只有当前负责人、持有当前 active assignment 且任务为 in_progress 时可调用。summary 必填；materials 引用同一房间的有效文件，服务端从文件元数据读取并冻结 sha256/size/mime，同时建立保留引用，客户端传入的校验值不作为权威。links 只记录 url/title/version/digest 与提交者声明的 availability；服务端不抓取外链，可访问不等于验收通过。commit_sha、evidence、known_limits 可选，但材料/外链/证据/commit_sha 至少一项。生成 submission_id 与 version=max+1，成功同事务把任务转为 submitted、递增 revision、结束当前 assignment、关闭该 assignment 仍 pending/claimed 的 task_offer/task_reminder 投递并取消 pending 交接提议。不创建消息或 delivery、不增加 pending_count、不推进 head_seq。建议传 assignment_id/assignment_version 与 expected_revision；旧执行资格返回 ASSIGNMENT_STALE，任务版本变化返回 VERSION_CONFLICT，非负责人返回 PERMISSION_DENIED，文件不可用返回 FILE_UNAVAILABLE。同一 request_id 重放返回同一版本。',
+    taskSubmitSchema,
+    taskSubmissionResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskSubmit(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_task_submission_get',
+    '读取任务的一个成果版本：传 version 读取指定版本，省略时读取最新版本。只有当前有效成员且任务在历史边界内可见时返回；材料返回提交时冻结的 sha256/size/mime 与读取时 available，available=false 表示文件已删除/过期且无法读取，不改变历史快照。review 是版本上的验收结论。只读，不改变任务状态、delivery、pending_count 或 head_seq。',
+    taskSubmissionGetSchema,
+    taskSubmissionGetResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskSubmissionGet(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_submission_list',
+    '按版本倒序列出任务的成果提交历史：只返回当前可见任务的历史，默认 50 条、最多 100 条。历史版本保留原摘要、材料校验值、外链快照、证据与已知限制，不会被新版本覆盖；退回后的 v1 仍可读取。只读，不创建 delivery、不增加 pending_count。',
+    taskSubmissionListSchema,
+    taskSubmissionListResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskSubmissionList(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_submission_return',
+    'D06 最小退回入口：只有任务当前验收人可以退回 pending 成果版本，reason 必填并写入 task_reviews 审计。事务校验任务仍为 submitted、submission 仍为 pending 且属于该任务；版本已处理返回 CONFLICT，非验收人或负责人自验返回 PERMISSION_DENIED。退回后原版本保存为 returned，任务回到 in_progress 并以新的 assignment_version 重建原负责人的 active assignment；若原负责人已失权则任务转 blocked 等待重派，不会自动通过或改派。任务事件只通知房间内 human，不创建 delivery、不增加 Agent pending_count、不推进 head_seq。完整的验收通过规则由 D07 补齐，本工具不实现 accept，避免两个冲突入口。',
+    taskSubmissionReturnSchema,
+    taskSubmissionResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return taskSubmissionReturn(db, principal, input);
+    },
   );
 
   register(

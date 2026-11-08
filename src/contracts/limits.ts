@@ -180,6 +180,35 @@ export const LIMITS = {
   taskProgressNoteBytes: 8 * 1024,
   /** 任务详情返回的最近进度记录条数；权威历史仍保留在 SQLite。 */
   taskProgressHistoryMax: 20,
+  /** 成果摘要 UTF-8 字节上限；提交版本创建后不可原地改写。 */
+  taskSubmissionSummaryBytes: 16 * 1024,
+  /** 单次提交冻结的材料数量上限。 */
+  taskSubmissionMaterialsMax: 20,
+  /** 材料标签 UTF-8 字节上限。 */
+  taskSubmissionMaterialLabelBytes: 1024,
+  /** 单次提交记录的外链数量上限。 */
+  taskSubmissionLinksMax: 20,
+  /** 外链 URL UTF-8 字节上限；只允许 http/https。 */
+  taskSubmissionLinkUrlBytes: 2048,
+  /** 外链标题 UTF-8 字节上限。 */
+  taskSubmissionLinkTitleBytes: 512,
+  /** 外链目标版本/标签 UTF-8 字节上限。 */
+  taskSubmissionLinkVersionBytes: 256,
+  /** 外链校验值描述 UTF-8 字节上限。 */
+  taskSubmissionLinkDigestBytes: 256,
+  /** 验证证据条数上限。 */
+  taskSubmissionEvidenceMax: 20,
+  /** 单条验证证据 UTF-8 字节上限。 */
+  taskSubmissionEvidenceBytes: 4 * 1024,
+  /** 已知限制 UTF-8 字节上限。 */
+  taskSubmissionKnownLimitsBytes: 8 * 1024,
+  /** 实现提交 SHA 字符上限；接受 7–64 位十六进制。 */
+  taskSubmissionCommitShaMax: 64,
+  /** 提交历史默认 / 最大条数。 */
+  taskSubmissionListDefault: 50,
+  taskSubmissionListMax: 100,
+  /** 退回原因 UTF-8 字节上限。 */
+  taskSubmissionReturnReasonBytes: 4 * 1024,
   /** 任务期限允许的最远未来时间（毫秒）。 */
   taskDueMaxAheadMs: 10 * 365 * 24 * 60 * 60_000,
   /** `network_task_summary` 单次 room_ids 过滤上限。 */

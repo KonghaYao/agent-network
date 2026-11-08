@@ -68,6 +68,7 @@ import type {
   TaskDeliveryRow,
   TaskProgressRow,
   TaskRow,
+  TaskSubmissionRow,
 } from '../storage/rows';
 import {
   operationsStatement,
@@ -115,6 +116,14 @@ export interface TaskAttachmentView {
   label: string;
 }
 
+/** 任务卡片/列表指向的最新成果版本；详情与提交历史由 task-submissions 提供。 */
+export interface TaskSubmissionSummaryView {
+  submission_id: string;
+  version: number;
+  status: TaskSubmissionRow['status'];
+  submitted_at: string;
+}
+
 export interface TaskView {
   task_id: string;
   room_id: string;
@@ -152,6 +161,8 @@ export interface TaskView {
   assignment: TaskAssignmentView | null;
   delivery_ids: string[];
   attachments: TaskAttachmentView[];
+  /** 最新提交版本；没有提交过时为 null。卡片与列表据此指向当前版本。 */
+  current_submission: TaskSubmissionSummaryView | null;
   can_offer: boolean;
   can_claim: boolean;
   can_cancel: boolean;
@@ -160,6 +171,10 @@ export interface TaskView {
   can_report_progress: boolean;
   can_block: boolean;
   can_resume: boolean;
+  /** 当前负责人可提交当前 active assignment 的成果。 */
+  can_submit: boolean;
+  /** 验收人可退回当前 pending 成果版本。 */
+  can_return: boolean;
 }
 
 export interface TaskResult {
@@ -477,6 +492,24 @@ async function buildTaskView(
     )
     .bind(task.task_id)
     .all<TaskAttachmentRow>();
+  const latestSubmission = await db
+    .prepare(
+      `SELECT submission_id, version, status, created_at
+         FROM task_submissions
+        WHERE task_id = ?
+        ORDER BY version DESC
+        LIMIT 1`,
+    )
+    .bind(task.task_id)
+    .first<Pick<TaskSubmissionRow, 'submission_id' | 'version' | 'status' | 'created_at'>>();
+  const currentSubmission = latestSubmission
+    ? {
+        submission_id: latestSubmission.submission_id,
+        version: latestSubmission.version,
+        status: latestSubmission.status,
+        submitted_at: String(latestSubmission.created_at),
+      }
+    : null;
   const nameMap =
     names ??
     (await actorNames(db, [
@@ -559,6 +592,7 @@ async function buildTaskView(
       file_id: row.file_id,
       label: row.label,
     })),
+    current_submission: currentSubmission,
     can_offer:
       task.status === 'unassigned' &&
       canDispatch(task, context) &&
@@ -576,6 +610,16 @@ async function buildTaskView(
       task.status === 'in_progress' && task.owner_actor_id === context.caller,
     can_resume:
       task.status === 'blocked' && task.owner_actor_id === context.caller,
+    can_submit:
+      task.status === 'in_progress' &&
+      assignment !== null &&
+      assignment.status === 'active' &&
+      assignment.owner_actor_id === context.caller &&
+      task.owner_actor_id === context.caller,
+    can_return:
+      task.status === 'submitted' &&
+      task.reviewer_actor_id === context.caller &&
+      currentSubmission?.status === 'pending',
   };
 }
 
@@ -1460,6 +1504,7 @@ export async function viewFromKnownRow(
   attachments: Array<{ file_id: string; label: string }>,
   names: Map<string, string>,
   progress: TaskProgressView | null = null,
+  currentSubmission: TaskSubmissionSummaryView | null = null,
 ): Promise<TaskView> {
   const isAdmin = isOwnerOrAdmin(context.room, context.member);
   const canCancel =
@@ -1526,6 +1571,7 @@ export async function viewFromKnownRow(
           },
     delivery_ids: deliveryIds,
     attachments,
+    current_submission: currentSubmission,
     can_offer:
       task.status === 'unassigned' &&
       canDispatch(task, context) &&
@@ -1542,6 +1588,16 @@ export async function viewFromKnownRow(
       task.status === 'in_progress' && task.owner_actor_id === context.caller,
     can_resume:
       task.status === 'blocked' && task.owner_actor_id === context.caller,
+    can_submit:
+      task.status === 'in_progress' &&
+      assignment !== null &&
+      assignment.status === 'active' &&
+      assignment.owner_actor_id === context.caller &&
+      task.owner_actor_id === context.caller,
+    can_return:
+      task.status === 'submitted' &&
+      task.reviewer_actor_id === context.caller &&
+      currentSubmission?.status === 'pending',
   };
 }
 

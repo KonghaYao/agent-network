@@ -144,6 +144,7 @@ function taskItemElement(task) {
   title.className = 'task-desc';
   title.textContent = task.title;
   top.append(title, createTaskStatusBadge(task));
+  appendTaskSubmissionBadge(top, task);
   const meta = document.createElement('div');
   meta.className = 'task-meta';
   const parts = [];
@@ -372,6 +373,7 @@ function renderTaskDetail(task) {
   const statusValue = taskDetailRow('状态', taskStatusText(task));
   if (statusValue) statusValue.className = 'task-status ' + taskStatusClass(task.status);
   appendTaskProgressDetail(task);
+  appendTaskSubmissionDetail(task);
   taskDetailRow('创建者', task.created_by_name);
   taskDetailRow(
     '负责人',
@@ -605,6 +607,7 @@ function renderTaskDetailActions(task) {
   }
 
   renderTaskProgressActions(task, actions, run, error);
+  renderTaskSubmissionActions(task, actions, run, error);
 
   if (!actions.hasChildNodes()) {
     actions.remove();
@@ -828,6 +831,7 @@ function syncTaskCardMarkers(container) {
       const card = document.createElement('div');
       card.className = 'msg-task-card';
       card.append(createTaskStatusBadge(cardTask));
+      appendTaskSubmissionBadge(card, cardTask);
       const title = document.createElement('span');
       title.className = 'msg-task-title';
       title.textContent = cardTask.title;

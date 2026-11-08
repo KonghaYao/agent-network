@@ -29,6 +29,7 @@ import { CHAT_SCROLL_SCRIPT } from './chat-scroll-script';
 import { CHAT_SESSION_SCRIPT } from './chat-session-script';
 import { CHAT_STREAM_SCRIPT } from './chat-stream-script';
 import { CHAT_TASK_PROGRESS_SCRIPT } from './chat-task-progress-script';
+import { CHAT_TASK_SUBMISSION_SCRIPT } from './chat-task-submission-script';
 import { CHAT_TASK_TRANSFER_SCRIPT } from './chat-task-transfer-script';
 import { CHAT_TASKS_SCRIPT } from './chat-tasks-script';
 import { CHAT_UPLOAD_SCRIPT } from './chat-upload-script';
@@ -163,6 +164,7 @@ ${CHAT_ACCOUNT_RENAME_SCRIPT}
 ${CHAT_SCROLL_SCRIPT}
 ${CHAT_SESSION_SCRIPT}
 ${CHAT_TASK_PROGRESS_SCRIPT}
+${CHAT_TASK_SUBMISSION_SCRIPT}
 ${CHAT_TASK_TRANSFER_SCRIPT}
 ${CHAT_TASKS_SCRIPT}
 ${CHAT_STREAM_SCRIPT}

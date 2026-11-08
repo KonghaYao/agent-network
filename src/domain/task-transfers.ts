@@ -483,7 +483,7 @@ async function cancelPendingTransferStatements(
 }
 
 /** 关闭某旧 assignment 仍 pending/claimed 的任务投递；不向 recipient 写 outbox。 */
-async function closeTaskDeliveries(
+export async function closeTaskDeliveries(
   db: D1Database,
   assignment: TaskAssignmentRow,
   task: TaskRow,

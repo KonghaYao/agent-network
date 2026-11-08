@@ -346,6 +346,10 @@ async function main(): Promise<void> {
     'network_task_transfer_cancel',
     'network_task_transfer_get',
     'network_task_transfer_list',
+    'network_task_submit',
+    'network_task_submission_get',
+    'network_task_submission_list',
+    'network_task_submission_return',
     'network_room_members_update',
     'network_room_role_set',
     'network_room_owner_transfer',
@@ -444,6 +448,10 @@ async function main(): Promise<void> {
     'network_task_transfer_cancel',
     'network_task_transfer_get',
     'network_task_transfer_list',
+    'network_task_submit',
+    'network_task_submission_get',
+    'network_task_submission_list',
+    'network_task_submission_return',
     'network_inbox_list',
     'network_delivery_claim',
     'network_delivery_complete',
@@ -704,9 +712,13 @@ async function main(): Promise<void> {
     'network_task_transfer_cancel',
     'network_task_transfer_get',
     'network_task_transfer_list',
+    'network_task_submit',
+    'network_task_submission_get',
+    'network_task_submission_list',
+    'network_task_submission_return',
   ];
   check(
-    '任务 18 个工具全部注册且旧工具已退役',
+    '任务 22 个工具全部注册且旧工具已退役',
     taskToolNames.every((name) => taskTools.has(name)) &&
       taskTools.size === taskToolNames.length &&
       !taskTools.has('network_task_list_get') &&
@@ -761,6 +773,9 @@ async function main(): Promise<void> {
       'can_report_progress',
       'can_block',
       'can_resume',
+      'current_submission',
+      'can_submit',
+      'can_return',
     ].every((key) => taskGetOutput.includes(`"${key}"`)),
     taskTools.get('network_task_get')?.outputSchema,
   );
@@ -1005,6 +1020,104 @@ async function main(): Promise<void> {
       ?.annotations?.readOnlyHint === true &&
       (taskTools.get('network_task_transfer_list') as { annotations?: { readOnlyHint?: boolean } } | undefined)
         ?.annotations?.readOnlyHint === true,
+  );
+  const taskSubmitInput = JSON.stringify(
+    taskTools.get('network_task_submit')?.inputSchema ?? {},
+  );
+  check(
+    'task_submit 输入含摘要/材料/外链/commit/证据/限制与执行版本',
+    [
+      'request_id',
+      'task_id',
+      'summary',
+      'materials',
+      'links',
+      'commit_sha',
+      'evidence',
+      'known_limits',
+      'assignment_id',
+      'assignment_version',
+      'expected_revision',
+    ].every((key) => taskSubmitInput.includes(`"${key}"`)),
+    taskTools.get('network_task_submit')?.inputSchema,
+  );
+  const taskSubmitOutput = JSON.stringify(
+    taskTools.get('network_task_submit')?.outputSchema ?? {},
+  );
+  check(
+    'task_submit 输出含版本快照与更新后的任务',
+    ['submission', 'task', 'authorization'].every((key) =>
+      taskSubmitOutput.includes(`"${key}"`),
+    ) &&
+      ['submission_id', 'version', 'status', 'materials', 'links', 'is_current'].every((key) =>
+        taskSubmitOutput.includes(`"${key}"`),
+      ),
+    taskTools.get('network_task_submit')?.outputSchema,
+  );
+  const taskSubmitDescription = taskTools.get('network_task_submit')?.description ?? '';
+  check(
+    'task_submit 描述声明冻结校验值、同事务与不唤醒 Agent',
+    taskSubmitDescription.includes('ASSIGNMENT_STALE') &&
+      taskSubmitDescription.includes('VERSION_CONFLICT') &&
+      taskSubmitDescription.includes('PERMISSION_DENIED') &&
+      taskSubmitDescription.includes('冻结 sha256') &&
+      taskSubmitDescription.includes('version=max+1') &&
+      taskSubmitDescription.includes('不增加 pending_count') &&
+      taskSubmitDescription.includes('不推进 head_seq'),
+    taskSubmitDescription,
+  );
+  const submissionGetInput = JSON.stringify(
+    taskTools.get('network_task_submission_get')?.inputSchema ?? {},
+  );
+  check(
+    'task_submission_get 输入含 task_id/version',
+    ['task_id', 'version'].every((key) => submissionGetInput.includes(`"${key}"`)),
+    taskTools.get('network_task_submission_get')?.inputSchema,
+  );
+  const submissionListInput = JSON.stringify(
+    taskTools.get('network_task_submission_list')?.inputSchema ?? {},
+  );
+  check(
+    'task_submission_list 输入含 task_id/limit',
+    ['task_id', 'limit'].every((key) => submissionListInput.includes(`"${key}"`)),
+    taskTools.get('network_task_submission_list')?.inputSchema,
+  );
+  const submissionListOutput = JSON.stringify(
+    taskTools.get('network_task_submission_list')?.outputSchema ?? {},
+  );
+  check(
+    'task_submission_list 输出含 submissions/has_more',
+    ['submissions', 'has_more'].every((key) => submissionListOutput.includes(`"${key}"`)),
+    taskTools.get('network_task_submission_list')?.outputSchema,
+  );
+  const submissionReturnInput = JSON.stringify(
+    taskTools.get('network_task_submission_return')?.inputSchema ?? {},
+  );
+  check(
+    'task_submission_return 输入含 submission_id/reason 与 expected_revision',
+    ['request_id', 'task_id', 'submission_id', 'reason', 'expected_revision'].every((key) =>
+      submissionReturnInput.includes(`"${key}"`),
+    ),
+    taskTools.get('network_task_submission_return')?.inputSchema,
+  );
+  const submissionReturnDescription =
+    taskTools.get('network_task_submission_return')?.description ?? '';
+  check(
+    'task_submission_return 描述声明最小退回与 D07 边界',
+    submissionReturnDescription.includes('task_reviews') &&
+      submissionReturnDescription.includes('新的 assignment_version') &&
+      submissionReturnDescription.includes('本工具不实现 accept') &&
+      submissionReturnDescription.includes('不增加 Agent pending_count'),
+    submissionReturnDescription,
+  );
+  check(
+    'task_submission_get/list 注册为只读工具',
+    (taskTools.get('network_task_submission_get') as
+      | { annotations?: { readOnlyHint?: boolean } }
+      | undefined)?.annotations?.readOnlyHint === true &&
+      (taskTools.get('network_task_submission_list') as
+        | { annotations?: { readOnlyHint?: boolean } }
+        | undefined)?.annotations?.readOnlyHint === true,
   );
   const loginTool = listed?.tools?.find((tool) => tool.name === 'network_login');
   const loginOutputSchema = JSON.stringify(loginTool?.outputSchema ?? {});

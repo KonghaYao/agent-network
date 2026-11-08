@@ -51,6 +51,9 @@ export interface StreamItem {
   status?: string;
   /** 任务业务修订号；客户端按它丢弃乱序旧事件并补读权威状态。 */
   revision?: number;
+  /** 成果提交/退回事件定位；版本号是 task_submissions.version。 */
+  submission_id?: string;
+  submission_version?: number;
   /** Agent 上下线通知：仅用于当前房间刷新，不产生未读。 */
   presence_event_id?: string;
   transition?: string;
@@ -529,7 +532,9 @@ function roomStreamItems(
     case 'task_transfer_accepted':
     case 'task_transfer_rejected':
     case 'task_transfer_cancelled':
-    case 'task_transfer_expired': {
+    case 'task_transfer_expired':
+    case 'task_submitted':
+    case 'task_returned': {
       // 任务事件只让 active human 刷新任务视图。Agent 的工作唤醒只来自
       // 明确指派生成的 delivery，房间任务事件不推进 head、不产生未读。
       const change = row.event_type.replace('task_', '');
@@ -538,6 +543,8 @@ function roomStreamItems(
       const assignmentId = stringField(metadata, 'assignment_id');
       const status = stringField(metadata, 'status');
       const revision = numberField(metadata, 'revision');
+      const submissionId = stringField(metadata, 'submission_id');
+      const submissionVersion = numberField(metadata, 'version');
       for (const member of activeRecipients(members, eventSeq)) {
         if (member.kind !== 'human') continue;
         const item = withLocation(
@@ -554,6 +561,8 @@ function roomStreamItems(
         if (status) item.status = status;
         if (revision !== undefined) item.revision = revision;
         if (changedBy) item.changed_by = changedBy;
+        if (submissionId) item.submission_id = submissionId;
+        if (submissionVersion !== undefined) item.submission_version = submissionVersion;
         result.push({ actorId: member.actor_id, item });
       }
       return result;

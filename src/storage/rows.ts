@@ -542,6 +542,42 @@ export interface TaskAttachmentRow {
 }
 
 /**
+ * 任务成果提交版本。
+ *
+ * `summary/materials_json/evidence_json/known_limits/links_json/commit_sha` 是
+ * 该版本冻结的提交内容；创建后只能通过状态流转处理，不能原地改写。材料
+ * 的字节身份仍以 `room_files`/`drive_files` 为准，本表只保存提交时快照。
+ */
+export interface TaskSubmissionRow {
+  submission_id: string;
+  task_id: string;
+  assignment_id: string;
+  assignment_version: number;
+  version: number;
+  summary: string;
+  materials_json: string;
+  evidence_json: string;
+  known_limits: string;
+  links_json: string;
+  commit_sha: string | null;
+  submitted_by: string;
+  status: 'pending' | 'accepted' | 'returned' | 'superseded';
+  created_at: number;
+  reviewed_at: number | null;
+}
+
+/** 验收结论；D06 只写 decision = return，D07 扩展完整验收。 */
+export interface TaskReviewRow {
+  review_id: string;
+  submission_id: string;
+  task_id: string;
+  reviewer_actor_id: string;
+  decision: 'accept' | 'return';
+  reason: string;
+  created_at: number;
+}
+
+/**
  * 任务进度/阻塞/恢复审计；`tasks.status` 仍是唯一当前状态。
  *
  * `task_revision` 与 `tasks.revision` 同一事务递增，唯一索引保证一个版本
