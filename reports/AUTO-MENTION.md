@@ -1,6 +1,6 @@
 # Agent 群消息自动 @ 前一个有效成员
 
-状态：**READY_FOR_REVIEW**
+状态：**VERIFIED**
 
 - 基线：`1501873`（Q05 完成，全部 P0 已实现）
 - 结果代码 SHA：`d7bf63a`（实现与专项）、`c2d0e70`（Web Markdown 用例固定派口语义）

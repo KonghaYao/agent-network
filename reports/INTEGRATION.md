@@ -23,9 +23,11 @@
 | 本轮最终集成起点 HEAD | 同上；开工时 `git status --porcelain=v1 -b` 为空，仅 `ahead 7` |
 | 本轮集成修复提交 | 首轮集成仅更新本报告；D1 修复实现 `0cf6a411b353b26385ab66bd55f7eec142a8972f`（`fix(groups): 禁止 owner 无主退群`），修复报告 `933992fe6f628b13899c4b48bf987d525042f75a` |
 | 本轮最终验证 SHA / 状态 | `933992fe6f628b13899c4b48bf987d525042f75a` / **PASS**；Q02、G06、A06 已签收为 `VERIFIED`，D04–D08 保持 `VERIFIED`；详见 `reports/VERIFICATION-Q02-G06-A06.md` |
+| Q01/Q04/Q05 最终验证 SHA / 状态 | `0030c7974bd04e6f85f16976b86100f344d26531` / **PASS**；Q01、Q04、Q05、AUTO-MENTION 已签收为 `VERIFIED`；详见 `reports/VERIFICATION-Q01-Q04-Q05.md` |
+| Q01/Q04/Q05 最终门禁计数 | typecheck 通过；q01-doc-check 48、q01-upgrade-check 24、Q04 176、Q05 906 轮 / 24,538 断言 / 0 失败、自动 @ 73、protocol 991、acceptance 2688、web 2015、events 339、drive 52；迁移 34、`integrity_check=ok`、`foreign_key_check` 0 行 |
 | 运行环境 | Bun 1.4.2，macOS；本轮最终集成 `DATA_DIR=/tmp/agentnet-qga-final/data`、`PORT=8973`、`PUBLIC_ORIGIN=http://127.0.0.1:8973`、`AGENTNET_URL=http://127.0.0.1:8973`；未使用远端服务 |
 | Presence 环境 | 服务端与测试进程一致：`AGENT_PRESENCE_ACTIVITY_TTL_MS=5000`、`AGENT_PRESENCE_GRACE_MS=2000`、`AGENT_PRESENCE_SWEEP_MS=1000` |
-| 结论 | D04–D08 保持在 `76cf3b3` 上的独立验证 `VERIFIED`；Q02/G06/A06 已在 `933992f` 上独立验证签收为 `VERIFIED`（D1 owner 无主退群修复复验 PASS）。本轮门禁：typecheck、G06 119、G03 104、G01 65、G05 67、protocol 991、acceptance 2615、web 2012、Q02 77/45、A06 139、events 339、drive 52；迁移 34 个、`integrity_check=ok`、`foreign_key_check` 无违规。Q02/G06/A06 的残余限制已如实记录。剩余 P0 为 Q01、Q04、Q05 |
+| 结论 | D04–D08 保持在 `76cf3b3` 上的独立验证 `VERIFIED`；Q02/G06/A06 已在 `933992f` 上独立验证签收为 `VERIFIED`（D1 owner 无主退群修复复验 PASS）。本轮门禁：typecheck、G06 119、G03 104、G01 65、G05 67、protocol 991、acceptance 2615、web 2012、Q02 77/45、A06 139、events 339、drive 52；迁移 34 个、`integrity_check=ok`、`foreign_key_check` 无违规。Q02/G06/A06 的残余限制已如实记录。Q01/Q04/Q05 与自动 @ 已在 `0030c79` 上独立验证签收为 `VERIFIED`；最终门禁 acceptance 2688、web 2015、Q04 176、Q05 906 轮/0 失败、自动 @ 73；剩余 P0 无 |
 
 ## 0. 审查范围与结论
 
@@ -295,6 +297,7 @@ D04–D08 的实现范围已完成并通过本轮门禁，且已在 `76cf3b3` �
 - 本轮审查起点 / 最终集成起点：`a613c96e2a3204de4bb270fad8c0154e75594129`（`docs(identity): 校正 A06 报告行数`），开工时工作区干净、`ahead 7`。
 - D1 修复实现/报告：`0cf6a411b353b26385ab66bd55f7eec142a8972f`（`fix(groups): 禁止 owner 无主退群`）/ `933992fe6f628b13899c4b48bf987d525042f75a`（`docs(groups): 记录 G06 owner 无主退群修复与复验`）。
 - 最终独立验证 SHA：`933992fe6f628b13899c4b48bf987d525042f75a`；报告 `reports/VERIFICATION-Q02-G06-A06.md`，结论 PASS。
+- Q01/Q04/Q05 最终独立验证 SHA：`0030c7974bd04e6f85f16976b86100f344d26531`；报告 `reports/VERIFICATION-Q01-Q04-Q05.md`，结论 PASS。
 - Q02 实现/报告：`93263f607b83ca8ffe99bf32dd4ef4bfc8464fc1` / `328f0a8700229b06d9839f1d699ff9ddb27b8ace`。
 - G06 实现/报告：`22b23bbaeed0d7b57c52ec24dc0c9bdc1c80abc5` / `ea971d0a6de90c4688cc3abf990d97f1e24766c9`。
 - A06 实现/报告：`03240797da343ad832bcd48afaad66e52a7dbbcd` / `0d3d712d0fc167a2b32a736060b50ea183b4967f`（另有 `a613c96` 行数校正）。
@@ -307,8 +310,9 @@ D04–D08 的实现范围已完成并通过本轮门禁，且已在 `76cf3b3` �
 - 本轮集成报告提交：本文件所在提交（见 `git log -1 -- reports/INTEGRATION.md`）；无业务代码、迁移或测试断言改动。
 - 工具总数：129 个（Drive 与房间文件开启）/ 120 个（关闭）；任务工具 32 个。
 - 测试计数：typecheck 通过、protocol 991、acceptance 2615、web 2012、events 339、drive 52；专项 Q02 pairing 77、Q02 sync 45、G06 119（含 G06-T05）、G03 104、G01 65、G05 67、A06 139。D04–D08 专项计数沿用独立验证的 565（128/83/133/74/147），本轮未重复跑五项专项，全量验收已覆盖回归。
+- Q01/Q04/Q05 最终签收计数（`0030c79`）：typecheck 通过、q01-doc-check 48、q01-upgrade-check 24、Q04 176、Q05 906 轮 / 24,538 断言 / 0 失败、自动 @ 73、protocol 991、acceptance 2688、web 2015、events 339、drive 52；迁移 34、`integrity_check=ok`、`foreign_key_check` 0 行。
 - 迁移：34 个文件（`0001`–`0012`、`0017`–`0038`）；新库启动全部应用，`PRAGMA integrity_check` = `ok`，`foreign_key_check` 0 行；`guard_owner_missing` 只接受 `x = 0`。
-- 独立验证报告：`reports/VERIFICATION-D04-D08.md`（验证 SHA `76cf3b353ab3bde24eb7c58dad2a696fe6293332`）与 `reports/VERIFICATION-Q02-G06-A06.md`（验证 SHA `933992fe6f628b13899c4b48bf987d525042f75a`）。
+- 独立验证报告：`reports/VERIFICATION-D04-D08.md`（验证 SHA `76cf3b353ab3bde24eb7c58dad2a696fe6293332`）、`reports/VERIFICATION-Q02-G06-A06.md`（验证 SHA `933992fe6f628b13899c4b48bf987d525042f75a`）与 `reports/VERIFICATION-Q01-Q04-Q05.md`（验证 SHA `0030c7974bd04e6f85f16976b86100f344d26531`）。
 - 集成报告在 `fix/webots-parity-pack` 上普通 push，无 force；推送后远端分支与本地 HEAD 一致。
 - 未部署、未创建 PR、未触发生产验收、未创建生产测试数据；D1 复验使用端口 `18994`，测试服务已全部停止，端口已释放。
-- 状态：Q02、G06、A06、D04–D08 为 `VERIFIED`；D01–D03 为 `READY_FOR_REVIEW`；A05 为 `PASS`；剩余未实现 P0 为 Q01、Q04、Q05。
+- 状态：Q01、Q04、Q05、AUTO-MENTION、Q02、G06、A06、D04–D08 为 `VERIFIED`；D01–D03 为 `READY_FOR_REVIEW`；A05 为 `PASS`；剩余未实现 P0 无。
