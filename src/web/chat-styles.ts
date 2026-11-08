@@ -473,14 +473,15 @@ export const APP_STYLE = `
   .msg-task-convert { padding: 0 4px; border: 0; background: transparent;
     color: var(--wx-muted); font-size: 11px; cursor: pointer; }
   .msg-task-convert:hover { color: var(--wx-link); }
-  /* Agent 消息的任务入口默认收起，悬停或键盘焦点进入时出现；人类消息保持常显。 */
-  .msg[data-sender-kind="agent"] .msg-task-convert { opacity: 0; pointer-events: none; }
-  .msg[data-sender-kind="agent"] .msg-task-convert:focus-visible { opacity: 1; }
-  .msg[data-sender-kind="agent"]:hover .msg-task-convert,
-  .msg[data-sender-kind="agent"]:focus-within .msg-task-convert {
+  /* 人类与 Agent 消息的任务入口一致：默认收起，悬停或键盘焦点进入时出现。 */
+  .msg .msg-task-convert { opacity: 0; pointer-events: none; }
+  .msg .msg-task-convert:focus-visible { opacity: 1; pointer-events: auto; }
+  .msg:hover .msg-task-convert,
+  .msg:focus-within .msg-task-convert {
     opacity: 1; pointer-events: auto; }
   @media (hover: none) {
-    /* 触屏没有可靠的 hover：只保留人类消息入口，避免渲染无法稳定触发的隐藏按钮。 */
+    /* 触屏没有可靠的 hover：保留人类消息入口，Agent 入口维持隐藏。 */
+    .msg[data-sender-kind="human"] .msg-task-convert { opacity: 1; pointer-events: auto; }
     .msg[data-sender-kind="agent"] .msg-task-convert { display: none; }
   }
   .msg.task-message-flash .bubble { outline: 2px solid var(--wx-link);

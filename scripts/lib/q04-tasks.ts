@@ -166,6 +166,8 @@ export async function runTaskAcceptance(state: Q04State, browser: Browser): Prom
       .locator('#messages .msg')
       .filter({ hasText: sourceText })
       .first();
+    // 人类消息的任务入口默认收起，悬停消息后出现；点击仍打开同一来源任务表单。
+    await sourceMessage.hover();
     await sourceMessage.locator('.msg-task-convert').click();
     await creator.locator('#task-create-modal').waitFor({ state: 'visible' });
     check(

@@ -259,7 +259,7 @@ function messageItem(item) {
   const element = document.createElement('li');
   element.className = 'msg' + (mine ? ' mine has-receipt' : '');
   element.dataset.messageId = item.message_id;
-  // 任务入口按发送方类型决定常显或悬停显示；仅影响展示，不改变任务契约。
+  // 任务入口统一在消息悬停或聚焦时显示；触屏保留人类入口，仅影响展示，不改变任务契约。
   element.dataset.senderKind = agent ? 'agent' : 'human';
   // 任务入口由后续任务片段按同一 message_id 补齐；这里只保留定位数据。
   element.dataset.messagePreview = String(item.preview || '');
@@ -296,13 +296,21 @@ function messageItem(item) {
     expand.className = 'expand';
     expand.textContent = '展开全文';
     expand.addEventListener('click', async function () {
+      const roomId = activeRoomId;
+      const epoch = roomEpoch;
+      const stale = function () {
+        return !isActiveRoom(roomId, epoch) || !expand.isConnected || !bubble.isConnected;
+      };
       expand.disabled = true;
       expand.textContent = '正在展开…';
       // 预览阶段 bundle 失败时，展开只强制重试一次，避免每次点击都打 404。
       const retry = bubble.dataset.markdownUnavailable === '1';
       try {
         const fullText = await readMessage(item.message_id);
+        // 读取期间切房或重建：旧响应不得写入新房间的状态栏、气泡或文件卡片。
+        if (stale()) return;
         const rendered = await renderMessageBody(bubble, fullText, item, agent, false, retry);
+        if (stale()) return;
         filesRef.current = mountMessageFiles(fullText, filesRef.current);
         if (filesRef.current && !filesRef.current.isConnected) {
           content.insertBefore(filesRef.current, expand);
@@ -316,6 +324,7 @@ function messageItem(item) {
           expand.textContent = '展开全文';
         }
       } catch (error) {
+        if (stale()) return;
         expand.disabled = false;
         expand.textContent = '展开全文';
         statusElement.textContent = '读取正文失败：' + error.message;

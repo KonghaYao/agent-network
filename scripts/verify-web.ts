@@ -10069,7 +10069,7 @@ async function main(): Promise<void> {
       await context.close();
     }
 
-    // 2b-4b. 转为任务入口：人类常显，Agent 默认收起、hover/键盘出现，触屏仅人类可见。
+    // 2b-4b. 转为任务入口：人类与 Agent 默认收起、hover/键盘出现，触屏仅人类可见。
     {
       const convertGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
@@ -10106,11 +10106,18 @@ async function main(): Promise<void> {
         'agent',
       );
       checkEqual(
-        '人类消息转为任务常显',
+        '人类消息转为任务默认收起',
         await humanMessage.locator('.msg-task-convert').evaluate(
           (element) => getComputedStyle(element).opacity,
         ),
-        '1',
+        '0',
+      );
+      checkEqual(
+        '人类消息转为任务默认不接收指针',
+        await humanMessage.locator('.msg-task-convert').evaluate(
+          (element) => getComputedStyle(element).pointerEvents,
+        ),
+        'none',
       );
       checkEqual(
         'Agent 消息转为任务默认收起',
@@ -10119,6 +10126,24 @@ async function main(): Promise<void> {
         ),
         '0',
       );
+      await humanMessage.hover();
+      await waitUntil(
+        async () =>
+          (await humanMessage.locator('.msg-task-convert').evaluate(
+            (element) => getComputedStyle(element).opacity,
+          )) === '1',
+        '人类消息 hover 显示转为任务',
+        5_000,
+      );
+      check('人类消息 hover 显示转为任务', true);
+      await humanMessage.locator('.msg-task-convert').click();
+      await page.locator('#task-create-modal').waitFor({ state: 'visible' });
+      check(
+        '人类消息转为任务仍打开来源任务表单',
+        ((await page.locator('#task-source-hint').innerText()) ?? '').includes('从消息创建'),
+      );
+      await page.locator('#task-create-cancel').click();
+      await page.locator('#task-create-modal').waitFor({ state: 'hidden' });
       await agentMessage.hover();
       await waitUntil(
         async () =>
@@ -10146,6 +10171,13 @@ async function main(): Promise<void> {
         '移出 hover 后 Agent 任务入口收起',
         5_000,
       );
+      checkEqual(
+        '移出 hover 后人类任务入口收起',
+        await humanMessage.locator('.msg-task-convert').evaluate(
+          (element) => getComputedStyle(element).opacity,
+        ),
+        '0',
+      );
       await agentMessage.locator('.msg-task-convert').focus();
       checkEqual(
         '键盘聚焦 Agent 任务入口时显示',
@@ -10158,6 +10190,14 @@ async function main(): Promise<void> {
       await page.locator('#task-create-modal').waitFor({ state: 'visible' });
       check('键盘可触发 Agent 消息转为任务', true);
       await page.locator('#task-create-cancel').click();
+      await humanMessage.locator('.msg-task-convert').focus();
+      checkEqual(
+        '键盘聚焦人类任务入口时显示',
+        await humanMessage.locator('.msg-task-convert').evaluate(
+          (element) => getComputedStyle(element).opacity,
+        ),
+        '1',
+      );
       await context.close();
 
       const touchContext = await browser.newContext({
@@ -10184,8 +10224,32 @@ async function main(): Promise<void> {
         true,
       );
       checkEqual(
+        '触屏人类消息转为任务常显',
+        await touchHuman.locator('.msg-task-convert').evaluate(
+          (element) => getComputedStyle(element).opacity,
+        ),
+        '1',
+      );
+      checkEqual(
+        '触屏人类消息转为任务可点击',
+        await touchHuman.locator('.msg-task-convert').evaluate(
+          (element) => getComputedStyle(element).pointerEvents,
+        ),
+        'auto',
+      );
+      await touchHuman.locator('.msg-task-convert').click();
+      await touchPage.locator('#task-create-modal').waitFor({ state: 'visible' });
+      check('触屏人类消息可打开来源任务表单', true);
+      await touchPage.locator('#task-create-cancel').click();
+      await touchPage.locator('#task-create-modal').waitFor({ state: 'hidden' });
+      checkEqual(
         '触屏 Agent 消息隐藏转为任务',
         await touchAgent.locator('.msg-task-convert').isHidden(),
+        true,
+      );
+      checkEqual(
+        '390px 消息任务入口不横向溢出',
+        await touchPage.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),
         true,
       );
       await touchContext.close();
@@ -17985,6 +18049,106 @@ async function main(): Promise<void> {
       );
       check('自动展开失败恢复后可手动展开', true);
       await failContext.context.close();
+
+      // 手动展开读取延迟期间切房：旧失败不得写入新房间状态栏与消息区。
+      const switchTarget = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '展开切房目标群',
+        members: [data.agentA.actor_id],
+      });
+      const switchTargetId = switchTarget.room.room_id;
+      await acceptRoomInvites(data.agentAToken, switchTargetId);
+      const switchTargetMarker = '展开切房后的新房间消息';
+      await sendRoomMessage(data.agentAToken, switchTargetId, switchTargetMarker);
+      const staleMarker = '切房前手动展开失败标记';
+      const staleTail = '切房前手动展开的结尾';
+      const staleSend = await rawTool<{ message: { message_id: string } }>(
+        data.humanToken,
+        'network_message_send',
+        {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: mdRoomId,
+          invoke: [],
+          body: [staleMarker, '切房前长正文 '.repeat(200), staleTail].join('\n'),
+        },
+      );
+      const staleMessageId = staleSend.message.message_id;
+      const staleContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      let releaseStaleRead: (() => void) | null = null;
+      let staleReadStarted = false;
+      await staleContext.page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_message_read') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as {
+          id?: unknown;
+          params?: { arguments?: { message_id?: string } };
+        } | null;
+        if (body?.params?.arguments?.message_id !== staleMessageId) {
+          await route.continue();
+          return;
+        }
+        staleReadStarted = true;
+        await new Promise<void>((resolve) => {
+          releaseStaleRead = resolve;
+        });
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({ code: 'INTERNAL', message: '模拟切房后展开失败' }),
+                },
+              ],
+            },
+          }),
+        });
+      });
+      await staleContext.page.goto(`${server.base}/c/${mdRoomId}`);
+      await waitRoom(staleContext.page, mdRoomId, 'AI Markdown 群');
+      const staleMessage = staleContext.page
+        .locator('#messages .msg')
+        .filter({ hasText: staleMarker })
+        .last();
+      await staleMessage.locator('.expand').waitFor();
+      await staleMessage.locator('.expand').click();
+      await waitUntil(
+        () => staleReadStarted && releaseStaleRead !== null,
+        '切房前手动展开请求已发出',
+        5_000,
+      );
+      await staleContext.page.locator(roomLink(switchTargetId)).click();
+      await waitRoom(staleContext.page, switchTargetId, '展开切房目标群');
+      await waitForText(staleContext.page, '#messages', switchTargetMarker);
+      const targetStatusBefore = (await staleContext.page.locator('#status').textContent()) ?? '';
+      const targetMessagesBefore =
+        (await staleContext.page.locator('#messages').textContent()) ?? '';
+      releaseStaleRead!();
+      await sleep(800);
+      const targetStatusAfter = (await staleContext.page.locator('#status').textContent()) ?? '';
+      const targetMessagesAfter =
+        (await staleContext.page.locator('#messages').textContent()) ?? '';
+      checkEqual('切房后旧展开失败不覆盖状态栏', targetStatusAfter, targetStatusBefore);
+      check('切房后旧展开失败不覆盖消息区', targetMessagesAfter === targetMessagesBefore);
+      check('切房后旧展开失败不串入新房间', !targetMessagesAfter.includes(staleMarker));
+      check('切房后新房间仍显示目标消息', targetMessagesAfter.includes(switchTargetMarker));
+      await staleContext.page.unroute('**/mcp');
+      await staleContext.context.close();
 
       // 60 条 AI 消息覆盖「加载更早消息」与 Markdown 升级的高度补偿。
       const scrollGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
