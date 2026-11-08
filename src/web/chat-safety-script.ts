@@ -196,6 +196,15 @@ async function safetyLeaveGroup() {
       (preview && preview.owner_transfer_required
         ? '\\n\\n你是群主：请先在成员弹窗转让群主，或使用“解散群聊”。'
         : '');
+    if (preview && preview.can_leave === false) {
+      safetySetStatus(
+        preview.owner_transfer_required
+          ? '群主不能直接退群：请先转让群主或解散群聊。'
+          : '当前群状态不允许退群。',
+        true
+      );
+      return;
+    }
     if (!window.confirm(message)) return;
     await callTool('network_room_leave', {
       request_id: requestId('web_room_leave'),

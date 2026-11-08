@@ -24,7 +24,6 @@ import {
   newRequestId,
   newToken,
   rawRpc,
-  ToolError,
   type McpConnection,
 } from './harness';
 
@@ -60,9 +59,19 @@ interface GroupRoomView {
     };
     announcement: string;
     announcement_revision: number;
+    status?: 'active' | 'dissolved';
+    read_only?: boolean;
     capabilities: Record<string, boolean>;
   };
   members: GroupMemberView[];
+}
+
+interface GroupLeavePreviewView {
+  can_leave: boolean;
+  can_dissolve: boolean;
+  owner_transfer_required: boolean;
+  dissolved: boolean;
+  read_only: boolean;
 }
 
 interface RoleHistoryView {
@@ -133,19 +142,6 @@ async function roomOf(connection: McpConnection, roomId: string): Promise<GroupR
   return callTool<GroupRoomView>(connection.client, 'network_room_get', { room_id: roomId });
 }
 
-/** 退群后不再是成员时返回 null，便于并发后从任一方读取最终状态。 */
-async function roomOfIfMember(
-  connection: McpConnection,
-  roomId: string,
-): Promise<GroupRoomView | null> {
-  try {
-    return await roomOf(connection, roomId);
-  } catch (error) {
-    if (error instanceof ToolError && error.code === 'NOT_MEMBER') return null;
-    throw error;
-  }
-}
-
 async function leaveRoom(
   connection: McpConnection,
   roomId: string,
@@ -211,7 +207,7 @@ async function runOwnerLeaveConcurrency(): Promise<void> {
       afterRejection.members,
     );
 
-    // 最后一名 owner 退群仍然允许；随后任何一方都不能再向空群加人。
+    // 新契约：owner 即使独自一人也不能直接退群；先解散，再验证归档与旧邀请。
     const solo = await callTool<GroupRoomView>(ownerConn.client, 'network_room_create', {
       request_id: newRequestId('g03_solo_room'),
       kind: 'group',
@@ -219,28 +215,71 @@ async function runOwnerLeaveConcurrency(): Promise<void> {
       title: 'G03 owner 独自退群',
     });
     const soloRoomId = solo.room.room_id;
-    // G01 起建群生成邀请；先接受为 active 成员，再验证 owner 移除后独自退群。
+    // G01 起建群生成邀请；先接受为 active 成员，再验证 owner 移除后独自一人。
     await acceptGroupInvites(memberConn, soloRoomId);
     await callTool(ownerConn.client, 'network_room_members_update', {
       request_id: newRequestId('g03_solo_remove'),
       room_id: soloRoomId,
       remove: [member.actor_id],
     });
-    await leaveRoom(ownerConn, soloRoomId);
+    const soloPreview = await callTool<GroupLeavePreviewView>(
+      ownerConn.client,
+      'network_room_leave_preview',
+      { room_id: soloRoomId },
+    );
+    checkEqual('G03 owner 独自一人时 preview 不允许退群', soloPreview.can_leave, false);
     checkEqual(
-      'G03 owner 是唯一 active 成员时允许退群',
-      await roomOfIfMember(ownerConn, soloRoomId),
-      null,
+      'G03 owner 独自一人时 preview 要求先转移',
+      soloPreview.owner_transfer_required,
+      true,
+    );
+    checkEqual('G03 owner 独自一人时 preview 允许解散', soloPreview.can_dissolve, true);
+    const soloLeaveError = await expectToolError(
+      'G03 owner 是唯一 active 成员时退群仍被拒绝',
+      leaveRoom(ownerConn, soloRoomId),
+      'CONFLICT',
+    );
+    checkEqual(
+      'G03 拒绝原因标明 owner_transfer_required',
+      (soloLeaveError.body.details as Record<string, unknown>)?.reason,
+      'owner_transfer_required',
+    );
+    const afterSoloRejection = await roomOf(ownerConn, soloRoomId);
+    checkEqual('G03 拒绝独自退群后 owner 仍在位', afterSoloRejection.room.owner_id, owner.actor_id);
+    const soloInvite = await callTool<{ invitation: { invitation_id: string } }>(
+      ownerConn.client,
+      'network_room_invite_create',
+      {
+        request_id: newRequestId('g03_solo_invite'),
+        room_id: soloRoomId,
+        target_actor_id: member.actor_id,
+      },
+    );
+    const soloDissolve = await callTool<GroupRoomView>(ownerConn.client, 'network_room_dissolve', {
+      request_id: newRequestId('g03_solo_dissolve'),
+      room_id: soloRoomId,
+      reason: 'G03 owner 独自解散',
+    });
+    checkEqual('G03 owner 独自解散后为只读归档', soloDissolve.room.status, 'dissolved');
+    checkEqual('G03 解散后 read_only', soloDissolve.room.read_only, true);
+    await expectToolError(
+      'G03 解散后旧邀请不能加入',
+      callTool(memberConn.client, 'network_room_invite_respond', {
+        request_id: newRequestId('g03_solo_accept'),
+        invitation_id: soloInvite.invitation.invitation_id,
+        action: 'accept',
+      }),
+      'CONFLICT',
     );
     await expectToolError(
-      'G03 owner 退群后不能向空群加人',
+      'G03 解散后不能向群加人',
       addMembers(ownerConn, soloRoomId, [member.actor_id]),
-      'NOT_MEMBER',
+      'CONFLICT',
     );
 
     let bothSucceeded = 0;
+    let leaveRejected = 0;
     let nonEmptyWithoutOwner = 0;
-    let emptyRooms = 0;
     let nonEmptyWithOwner = 0;
     for (let round = 0; round < 40; round += 1) {
       const room = await callTool<GroupRoomView>(ownerConn.client, 'network_room_create', {
@@ -267,15 +306,10 @@ async function runOwnerLeaveConcurrency(): Promise<void> {
       const addSucceeded = addOutcome.status === 'fulfilled';
       const leaveSucceeded = leaveOutcome.status === 'fulfilled';
       if (addSucceeded && leaveSucceeded) bothSucceeded += 1;
+      if (!leaveSucceeded) leaveRejected += 1;
 
-      const detail =
-        (await roomOfIfMember(ownerConn, raceRoomId)) ??
-        (await roomOfIfMember(memberConn, raceRoomId));
-      if (!detail) {
-        emptyRooms += 1;
-        check(`G03 第 ${round + 1} 轮空群时 add 未成功`, addSucceeded === false);
-        continue;
-      }
+      // owner 永远不能退群，所以始终能从 owner 视角读取房间。
+      const detail = await roomOf(ownerConn, raceRoomId);
       const ownerRow = detail.members.find(
         (item) => item.actor_id === detail.room.owner_id && item.role === 'owner',
       );
@@ -288,9 +322,10 @@ async function runOwnerLeaveConcurrency(): Promise<void> {
       else nonEmptyWithOwner += 1;
     }
     checkEqual('G03 40 轮 owner 退群与加人不能同时成功', bothSucceeded, 0);
+    checkEqual('G03 40 轮 owner 退群全部被拒绝', leaveRejected, 40);
     checkEqual('G03 40 轮没有“有成员但 owner 为空”', nonEmptyWithoutOwner, 0);
     console.log(
-      `    owner 退群并发结果：空群 ${emptyRooms} 轮，保留 owner ${nonEmptyWithOwner} 轮`,
+      `    owner 退群并发结果：保留 owner ${nonEmptyWithOwner} 轮，退群拒绝 ${leaveRejected} 轮`,
     );
   } finally {
     await ownerConn.close();

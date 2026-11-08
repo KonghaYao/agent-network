@@ -49,6 +49,7 @@ const GUARD_CODES: Record<string, BusinessErrorCode> = {
   friendRequired: 'FRIEND_REQUIRED',
   contactRequestStale: 'CONFLICT',
   ownerTransferRequired: 'CONFLICT',
+  ownerMissing: 'CONFLICT',
   rateLimited: 'RATE_LIMITED',
   invitationStale: 'CONFLICT',
   inviteTargetsMissing: 'FRIEND_REQUIRED',
@@ -101,7 +102,8 @@ const GUARD_MESSAGES: Record<string, string> = {
   taskState: '任务状态已变化',
   friendRequired: '需要有效的好友关系',
   contactRequestStale: '好友申请状态已变化，请刷新后重试',
-  ownerTransferRequired: '群 owner 离开前必须转移 owner',
+  ownerTransferRequired: '群 owner 不能直接退群；请先转移 owner 或解散群聊',
+  ownerMissing: '群主缺失，群已冻结，不能邀请或加入成员',
   rateLimited: '操作过于频繁，请稍后再试',
   invitationStale: '邀请状态已变化，请刷新后重试',
   inviteTargetsMissing: '成员资格在提交时已变化，群未创建',
@@ -131,6 +133,14 @@ const GUARD_DETAILS: Record<string, Record<string, unknown>> = {
   roomDissolved: {
     reason: 'room_dissolved',
     read_only: true,
+  },
+  ownerMissing: {
+    reason: 'owner_missing',
+    owner_missing: true,
+  },
+  ownerTransferRequired: {
+    reason: 'owner_transfer_required',
+    owner_transfer_required: true,
   },
 };
 

@@ -36,6 +36,8 @@ let membersPicker = null;
 
 /** 服务端 capabilities 优先；旧快照没有 capabilities 时按 owner 兼容。 */
 function roomCapability(name) {
+  // 遗留无主群不可再邀请成员；服务端仍会返回 CONFLICT/owner_missing。
+  if (name === 'invite_members' && room && room.owner_missing) return false;
   if (room && room.capabilities && typeof room.capabilities === 'object') {
     return Boolean(room.capabilities[name]);
   }

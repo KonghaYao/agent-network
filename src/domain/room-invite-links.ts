@@ -17,8 +17,10 @@ import {
 } from '../storage/transactions/runner';
 import { contactBlockGuardStatement } from './contact-blocks';
 import {
+  assertOwnerPresent,
   assertRoomWritable,
   capabilityGuardStatement,
+  ownerMissingGuardStatement,
   requireGroupAccess,
   roomDissolvedGuardStatement,
 } from './room-access';
@@ -150,6 +152,8 @@ export async function roomInviteCreate(
   const at = nowMs();
   const access = await requireGroupAccess(db, input.room_id, viewer, 'invite_members');
   assertRoomWritable(access.room);
+  // 遗留无主群不再产生新邀请（定向或链接）；事务 guard 在提交时复核。
+  assertOwnerPresent(access.room);
   const payloadHash = await sha256Hex(stableStringify(input));
   const replay = await getOperation(db, viewer, input.request_id);
   if (replay) {
@@ -238,6 +242,7 @@ export async function roomInviteCreate(
         operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, at),
         capabilityGuardStatement(db, input.room_id, viewer, 'invite_members'),
         roomDissolvedGuardStatement(db, input.room_id),
+        ownerMissingGuardStatement(db, input.room_id),
         db
           .prepare(
             guardSql(
@@ -313,6 +318,7 @@ export async function roomInviteCreate(
       operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, at),
       capabilityGuardStatement(db, input.room_id, viewer, 'invite_members'),
       roomDissolvedGuardStatement(db, input.room_id),
+      ownerMissingGuardStatement(db, input.room_id),
       db
         .prepare(
           guardSql(

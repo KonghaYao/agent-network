@@ -23,7 +23,7 @@ import {
   runIdempotent,
 } from '../storage/transactions/runner';
 import { contactBlockGuardStatement, isBlockedBetween } from './contact-blocks';
-import { capabilityGuardStatement, assertRoomWritable, requireGroupAccess, roomDissolvedGuardStatement } from './room-access';
+import { capabilityGuardStatement, assertOwnerPresent, assertRoomWritable, requireGroupAccess, ownerMissingGuardStatement, roomDissolvedGuardStatement } from './room-access';
 import { roomAuditStatement } from './room-audit';
 import { actorId, type Principal } from './principal';
 
@@ -292,6 +292,7 @@ export async function requestJoinApproval(
     build: (resultJson) => [
       operationsStatement(db, applicant, input.requestId, input.payloadHash, resultJson, at),
       roomDissolvedGuardStatement(db, invitation.room_id),
+      ownerMissingGuardStatement(db, invitation.room_id),
       contactBlockGuardStatement(db, invitation.inviter_id, applicant),
       ...invitationUsableGuards(db, invitation.invitation_id, at),
       joinMembershipGuardStatement(
@@ -523,6 +524,8 @@ export async function roomJoinRequestRespond(
 
   const action = input.action;
   if (action === 'approve') {
+    // 遗留无主群不再通过批准入群申请增加成员；拒绝仍允许用于清理。
+    assertOwnerPresent(room);
     const member = await getMember(db, row.room_id, row.applicant_id);
     requireApplicantCanJoin(member, invitation);
     if (await isBlockedBetween(db, invitation.inviter_id, row.applicant_id)) {
@@ -575,6 +578,7 @@ export async function roomJoinRequestRespond(
 
   if (action === 'approve') {
     statements.push(
+      ownerMissingGuardStatement(db, row.room_id),
       ...invitationUsableGuards(db, row.invitation_id, at),
       joinMembershipGuardStatement(
         db,

@@ -27,6 +27,7 @@ import { runRoomTaskSummaryUnitChecks } from './lib/room-task-summary-unit';
 import { runTaskAttachmentGcUnitChecks } from './lib/task-attachment-gc-unit';
 import { runTaskCreateReplayUnitChecks } from './lib/task-create-replay-unit';
 import { runRoomInviteReplayUnitChecks } from './lib/room-invite-replay-unit';
+import { runOwnerlessRoomUnitChecks } from './lib/ownerless-room-unit';
 
 const STREAM_URI = 'agentnet://stream';
 
@@ -719,7 +720,7 @@ async function main(): Promise<void> {
   );
   check(
     'room_get 输出 schema 包含解散归档与退群能力',
-    ['"status"', '"dissolved_at"', '"archived_head_seq"', '"read_only"', '"can_leave"', '"can_dissolve"'].every(
+    ['"status"', '"dissolved_at"', '"archived_head_seq"', '"owner_missing"', '"read_only"', '"can_leave"', '"can_dissolve"'].every(
       (marker) => JSON.stringify(roomGetTool?.outputSchema ?? {}).includes(marker),
     ),
     roomGetTool?.outputSchema,
@@ -4316,6 +4317,7 @@ async function main(): Promise<void> {
   await runStreamProtocolChecks(secondToken, newAgentIdentity?.actor_id);
   await runAgentPresenceUnitChecks();
   await runFeedbackUnitChecks();
+  await runOwnerlessRoomUnitChecks();
   await runFeedbackCliChecks();
   await runDeliveryReminderUnitChecks();
   await runRoomTaskSummaryUnitChecks();

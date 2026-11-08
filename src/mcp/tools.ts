@@ -1138,7 +1138,7 @@ export function registerTools(
   register(
     server,
     'network_room_get',
-    '读取房间摘要与当前有效成员；Agent 成员的 online 表示可用性（保持 SSE 连接，或最近 60 秒内有 MCP 请求），null 表示未知，人类成员恒为 null。',
+    '读取房间摘要与当前有效成员；Agent 成员的 online 表示可用性（保持 SSE 连接，或最近 60 秒内有 MCP 请求），null 表示未知，人类成员恒为 null。遗留无主群（历史数据中 owner_id 为空且未解散）返回 owner_missing=true，不能再邀请或加入成员，但不会自动解散。',
     roomGetSchema,
     roomDetailSchema,
     async (input) => {
@@ -1165,7 +1165,7 @@ export function registerTools(
   register(
     server,
     'network_room_invite_create',
-    '创建群邀请。不指定 target_actor_id 时创建可分享链接/二维码：默认 7 天、20 次成功加入，明文 invite_key 与 /j/<key> 分享 URL 只在本次响应出现一次，服务端只保存 SHA-256 摘要；同一 request_id 重放返回 TOKEN_NOT_REPLAYABLE，不会重放明文。指定 target_actor_id 时创建单人定向邀请（固定 1 次），目标必须是好友。邀请不包含任何 actor 登录凭据。',
+    '创建群邀请。不指定 target_actor_id 时创建可分享链接/二维码：默认 7 天、20 次成功加入，明文 invite_key 与 /j/<key> 分享 URL 只在本次响应出现一次，服务端只保存 SHA-256 摘要；同一 request_id 重放返回 TOKEN_NOT_REPLAYABLE，不会重放明文。指定 target_actor_id 时创建单人定向邀请（固定 1 次），目标必须是好友。邀请不包含任何 actor 登录凭据。遗留无主群（owner_id 为空且未解散）不能创建邀请，返回 CONFLICT（reason=owner_missing）。',
     roomInviteCreateSchema,
     roomInviteCreateResultSchema,
     async (input) => {
@@ -1202,7 +1202,7 @@ export function registerTools(
   register(
     server,
     'network_room_join_request_respond',
-    '批准或拒绝入群申请；只有 owner/admin 可操作。批准时在同一事务重新检查邀请 pending、有效期、次数、拉黑、申请人移除状态与 100 人上限，并消费一次邀请、写入 active 成员；并发批准同一申请只有一个成功。拒绝不消费邀请。重复 request_id 返回首次结果。',
+    '批准或拒绝入群申请；只有 owner/admin 可操作。批准时在同一事务重新检查邀请 pending、有效期、次数、拉黑、申请人移除状态与 100 人上限，并消费一次邀请、写入 active 成员；并发批准同一申请只有一个成功。拒绝不消费邀请。重复 request_id 返回首次结果。遗留无主群不允许批准（返回 CONFLICT/reason=owner_missing），仍可拒绝以清理申请。',
     roomJoinRequestRespondSchema,
     roomJoinRequestRespondResultSchema,
     async (input) => {
@@ -1214,7 +1214,7 @@ export function registerTools(
   register(
     server,
     'network_room_invite_respond',
-    '接受或拒绝自己的群邀请。链接邀请必须同时出示 invite_key；定向邀请忽略该字段。开启审批策略时接受只创建 pending 入群申请（返回 requested），不写成员；否则在同一事务复核 pending、有效期、拉黑、次数与 100 人上限后成为 active 成员。重复 request_id 返回首次结果。',
+    '接受或拒绝自己的群邀请。链接邀请必须同时出示 invite_key；定向邀请忽略该字段。开启审批策略时接受只创建 pending 入群申请（返回 requested），不写成员；否则在同一事务复核 pending、有效期、拉黑、次数与 100 人上限后成为 active 成员。重复 request_id 返回首次结果。遗留无主群不接受邀请加入，返回 CONFLICT（reason=owner_missing）。',
     roomInviteRespondSchema,
     roomInvitationRespondSchema,
     async (input) => {
@@ -1645,7 +1645,7 @@ export function registerTools(
   register(
     server,
     'network_room_members_update',
-    '群 owner 或管理员添加/移除成员；管理员只能移除普通成员，不能移除 owner 或其他管理员。普通成员是否可邀请由群策略决定。移除会取消该成员在房间内未完成的工作。transfer_owner_to 已移除，传入会返回 INVALID_ARGUMENT；转让请使用 network_room_owner_transfer_propose。',
+    '群 owner 或管理员添加/移除成员；管理员只能移除普通成员，不能移除 owner 或其他管理员。普通成员是否可邀请由群策略决定。移除会取消该成员在房间内未完成的工作。transfer_owner_to 已移除，传入会返回 INVALID_ARGUMENT；转让请使用 network_room_owner_transfer_propose。遗留无主群不允许添加成员（返回 CONFLICT/reason=owner_missing），移除仍可用。',
     roomMembersUpdateSchema,
     roomDetailSchema,
     async (input) => {
@@ -1771,7 +1771,7 @@ export function registerTools(
   register(
     server,
     'network_room_leave_preview',
-    '只读预览退出群聊的后果：列出你在该群仍承担的在途任务（task_id/title/status/owner）、pending/claimed 投递数、是否需要先转移群主，以及是否可解散。不会撤销任何工作或成员资格；退群前先展示给用户确认。',
+    '只读预览退出群聊的后果：列出你在该群仍承担的在途任务（task_id/title/status/owner）、pending/claimed 投递数、是否需要先转移群主，以及是否可解散。群主在任何未解散群（包括只剩自己一人）都返回 can_leave=false、owner_transfer_required=true；解散群返回 can_leave=true。不会撤销任何工作或成员资格；退群前先展示给用户确认。',
     roomLeavePreviewQuerySchema,
     roomLeavePreviewResultSchema,
     async (input) => {
@@ -1784,7 +1784,7 @@ export function registerTools(
   register(
     server,
     'network_room_leave',
-    '离开群聊。owner 必须先通过 network_room_owner_transfer_propose 完成转让，或使用 network_room_dissolve 解散；退出会立即撤销你在该群的发言/文件授权、任务执行资格与 pending/claimed 投递，旧 claim、任务提交和文件下载立即失败。若存在在途任务或投递，先用 network_room_leave_preview 列出并确认，调用时传 confirm_in_flight: true；否则返回 CONFLICT 与 in_flight_tasks，不静默丢失。已下载到本地的副本无法技术回收。',
+    '离开群聊。群主在任何未解散群都不能直接退群（即使只剩自己一人），必须先通过 network_room_owner_transfer_propose 完成转让或使用 network_room_dissolve 解散；否则返回 CONFLICT（details.reason=owner_transfer_required）。退出会立即撤销你在该群的发言/文件授权、任务执行资格与 pending/claimed 投递，旧 claim、任务提交和文件下载立即失败。若存在在途任务或投递，先用 network_room_leave_preview 列出并确认，调用时传 confirm_in_flight: true；否则返回 CONFLICT 与 in_flight_tasks，不静默丢失。已下载到本地的副本无法技术回收。',
     roomLeaveSchema,
     leaveResultSchema,
     async (input) => {

@@ -588,14 +588,19 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
       },
     );
 
-    // 群主不能带着其他成员直接退群。
-    await expectToolError(
+    // 群主不能带着其他成员直接退群；即使独自一人也必须先转移或解散。
+    const ownerLeaveError = await expectToolError(
       'G06-T03 群主离群前必须转移或解散',
       callTool(u1Conn.client, 'network_room_leave', {
         request_id: newRequestId('g06_t03_owner_leave'),
         room_id: room3,
       }),
       'CONFLICT',
+    );
+    checkEqual(
+      'G06-T03 群主退群拒绝原因标明 owner_transfer_required',
+      (ownerLeaveError.body.details as Record<string, unknown>)?.reason,
+      'owner_transfer_required',
     );
 
     // 先移除 B1：B1 失去归档资格；B1 的任务被 blocked。
@@ -773,6 +778,97 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
       }),
       'CONFLICT',
     );
+
+    // ---------- G06-T05：owner 独自一人也不得产生无主群 ----------
+    console.log('  G06-T05 owner 独自退群拒绝与解散后旧邀请失效');
+    const g5 = await createGroup(
+      'G06-T05 owner 独自一人',
+      [u2],
+      [{ connection: u2Conn, identity: u2 }],
+    );
+    const room5 = g5.roomId;
+    await removeMember(u1Conn, room5, u2.actor_id);
+    const alonePreview = await callTool<LeavePreview>(u1Conn.client, 'network_room_leave_preview', {
+      room_id: room5,
+    });
+    checkEqual('G06-T05 owner 独自一人 preview 不允许退群', alonePreview.can_leave, false);
+    checkEqual(
+      'G06-T05 owner 独自一人 preview 要求先转移',
+      alonePreview.owner_transfer_required,
+      true,
+    );
+    checkEqual('G06-T05 owner 独自一人 preview 允许解散', alonePreview.can_dissolve, true);
+    const aloneLeave = await expectToolError(
+      'G06-T05 owner 独自一人直接退群返回 CONFLICT',
+      callTool(u1Conn.client, 'network_room_leave', {
+        request_id: newRequestId('g06_t05_owner_leave'),
+        room_id: room5,
+        confirm_in_flight: true,
+      }),
+      'CONFLICT',
+    );
+    checkEqual(
+      'G06-T05 拒绝原因标明 owner_transfer_required',
+      (aloneLeave.body.details as Record<string, unknown>)?.reason,
+      'owner_transfer_required',
+    );
+    const afterAloneLeave = await readRoom(u1Conn, room5);
+    checkEqual('G06-T05 拒绝后 owner 仍在位', afterAloneLeave.room.owner_id, u1.actor_id);
+    checkEqual('G06-T05 拒绝后群仍为 active', afterAloneLeave.room.status, 'active');
+
+    const invite5 = await callTool<{ invitation: { invitation_id: string } }>(
+      u1Conn.client,
+      'network_room_invite_create',
+      {
+        request_id: newRequestId('g06_t05_direct'),
+        room_id: room5,
+        target_actor_id: u3.actor_id,
+      },
+    );
+    const link5 = await callTool<{
+      invitation: { invitation_id: string };
+      invite_key: string;
+    }>(u1Conn.client, 'network_room_invite_create', {
+      request_id: newRequestId('g06_t05_link'),
+      room_id: room5,
+    });
+    const dissolve5 = await callTool<RoomView & { dissolve: DissolveSummary }>(
+      u1Conn.client,
+      'network_room_dissolve',
+      {
+        request_id: newRequestId('g06_t05_dissolve'),
+        room_id: room5,
+        reason: 'G06-T05 owner 独自解散',
+      },
+    );
+    checkEqual('G06-T05 解散后返回只读归档', dissolve5.room.status, 'dissolved');
+    checkEqual('G06-T05 解散后 read_only', dissolve5.room.read_only, true);
+    checkEqual('G06-T05 解散后不能再次解散', dissolve5.room.can_dissolve, false);
+    await expectToolError(
+      'G06-T05 解散后旧定向邀请不能加入',
+      callTool(u3Conn.client, 'network_room_invite_respond', {
+        request_id: newRequestId('g06_t05_direct_accept'),
+        invitation_id: invite5.invitation.invitation_id,
+        action: 'accept',
+      }),
+      'CONFLICT',
+    );
+    await expectToolError(
+      'G06-T05 解散后旧邀请链接不能加入',
+      callTool(u3Conn.client, 'network_room_invite_respond', {
+        request_id: newRequestId('g06_t05_link_accept'),
+        invitation_id: link5.invitation.invitation_id,
+        invite_key: link5.invite_key,
+        action: 'accept',
+      }),
+      'CONFLICT',
+    );
+    const archiveRead = await callTool<HistoryPage>(u1Conn.client, 'network_history_list', {
+      room_id: room5,
+      limit: 10,
+    });
+    checkEqual('G06-T05 解散归档仍可读', archiveRead.head_seq, afterAloneLeave.room.head_seq);
+    checkEqual('G06-T05 解散归档只读', (await readRoom(u1Conn, room5)).room.read_only, true);
 
     // ---------- G06-T04：失权/解散事件钩子与媒体依赖缺口 ----------
     console.log('  G06-T04 失权/解散事件钩子');

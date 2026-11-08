@@ -142,6 +142,52 @@ function isAdmin(role: RoomRole): boolean {
   return role === 'owner' || role === 'admin';
 }
 
+/**
+ * 遗留无主群：`rooms.owner_id IS NULL AND rooms.dissolved_at IS NULL`。
+ *
+ * G06 修复后任何合法路径都不会再产生该状态；它只可能来自修复前的旧数据。
+ * 本函数仅用于防御性读取与写路径闸门，不自动解散、不硬删、不回填 owner。
+ */
+export function isOwnerMissing(
+  room: Pick<RoomRow, 'kind' | 'owner_id' | 'dissolved_at'>,
+): boolean {
+  return room.kind === 'group' && room.owner_id === null && room.dissolved_at === null;
+}
+
+function ownerMissingError(roomId: string): BusinessError {
+  return new BusinessError(
+    'CONFLICT',
+    '群主缺失，群已冻结，不能邀请或加入成员；这是历史遗留数据，请由维护者处理',
+    {
+      room_id: roomId,
+      reason: 'owner_missing',
+      owner_missing: true,
+    },
+  );
+}
+
+/** 写路径预检查；事务提交时仍用 `ownerMissingGuardStatement` 复核。 */
+export function assertOwnerPresent(
+  room: Pick<RoomRow, 'room_id' | 'kind' | 'owner_id' | 'dissolved_at'>,
+): void {
+  if (isOwnerMissing(room)) throw ownerMissingError(room.room_id);
+}
+
+/** 事务内复核房间不是遗留无主群；命中时整批回滚并映射 CONFLICT/owner_missing。 */
+export function ownerMissingGuardStatement(
+  db: D1Database,
+  roomId: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      guardSql(
+        'ownerMissing',
+        'EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND owner_id IS NULL AND dissolved_at IS NULL)',
+      ),
+    )
+    .bind(roomId);
+}
+
 /** 只按房间策略与调用者角色计算能力；不读取联系人、Agent 管理或 localStorage。 */
 export function roomCapabilitiesFor(
   room: Pick<

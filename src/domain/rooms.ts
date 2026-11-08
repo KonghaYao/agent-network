@@ -61,10 +61,13 @@ import { roomAuditStatement, type RoomAuditSpec } from './room-audit';
 import { revokeTaskEligibilityStatements } from './task-transfers';
 import {
   capabilityGuardStatement,
+  assertOwnerPresent,
   assertRoomWritable,
+  isOwnerMissing,
   loadRoomAccess,
   memberActionsFor,
   memberRemovalGuardStatement,
+  ownerMissingGuardStatement,
   requireExpectedRoleRevision,
   requireGroupAccess,
   requireRoomAccess,
@@ -122,6 +125,13 @@ export interface RoomView {
   dissolve_reason: string | null;
   /** 解散时的 room scope 事件高水位；未解散为 null。 */
   archived_head_seq: string | null;
+  /**
+   * 遗留无主群：`owner_id IS NULL AND dissolved_at IS NULL`。
+   *
+   * 修复后的合法路径不会再产生该状态；为旧数据保留可见标记，禁止再邀请
+   * 或加入成员，但不自动解散、不硬删已有群。
+   */
+  owner_missing: boolean;
   read_only: boolean;
   can_leave: boolean;
   can_dissolve: boolean;
@@ -257,6 +267,7 @@ function roomView(
 ): RoomView {
   const lastVisible = lastMessage && visibleMessage(lastMessage, boundary) ? lastMessage : null;
   const dissolved = room.kind === 'group' && room.dissolved_at !== null;
+  const ownerMissing = isOwnerMissing(room);
   return {
     room_id: room.room_id,
     kind: room.kind,
@@ -286,8 +297,10 @@ function roomView(
     dissolve_reason: room.dissolve_reason,
     archived_head_seq:
       room.archive_head_seq === null ? null : String(room.archive_head_seq),
+    owner_missing: ownerMissing,
     read_only: dissolved,
-    can_leave: room.kind === 'group' && (dissolved || member.role !== 'owner' || memberCount <= 1),
+    // 群主在未解散群中不能直接退群，即使只剩自己一人；必须先转移或解散。
+    can_leave: room.kind === 'group' && (dissolved || member.role !== 'owner'),
     can_dissolve: room.kind === 'group' && !dissolved && member.role === 'owner',
     created_at: String(room.created_at),
     updated_at: String(room.updated_at),
@@ -1031,6 +1044,8 @@ export async function roomMembersUpdate(
   if (add.length === 0 && remove.length === 0) {
     return roomDetail(db, room.room_id, caller);
   }
+  // 遗留无主群不再接受任何“加人”路径；事务 guard 仍是最终裁决。
+  if (add.length > 0) assertOwnerPresent(room);
   if (add.length > 0 && !access.capabilities.invite_members) {
     throw new BusinessError('PERMISSION_DENIED', '当前群角色不能邀请成员');
   }
@@ -1142,7 +1157,10 @@ export async function roomMembersUpdate(
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
       roomDissolvedGuardStatement(db, room.room_id),
       ...(add.length > 0
-        ? [capabilityGuardStatement(db, room.room_id, caller, 'invite_members')]
+        ? [
+            ownerMissingGuardStatement(db, room.room_id),
+            capabilityGuardStatement(db, room.room_id, caller, 'invite_members'),
+          ]
         : []),
       // 拉黑先于好友关系裁决；邀请窗口限额只统计显式成员添加。
       ...add.map((member) => contactBlockGuardStatement(db, caller, member)),
@@ -1774,6 +1792,17 @@ export async function roomLeave(
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
   }
   requireExpectedRoleRevision(member, input.expected_role_revision);
+  // 群主在任何未解散群中都不能直接退群，即使只剩自己一人：否则会留下
+  // `owner_id = NULL AND dissolved_at = NULL` 的无主活跃群，旧邀请还能
+  // 让外部用户加入。先完成 G05 转移或调用 network_room_dissolve。
+  if (room.dissolved_at === null && (room.owner_id === caller || member.role === 'owner')) {
+    throw new BusinessError('CONFLICT', '群 owner 不能直接退群；请先转移群 owner 或解散群聊', {
+      room_id: room.room_id,
+      reason: 'owner_transfer_required',
+      owner_transfer_required: true,
+      can_dissolve: member.role === 'owner',
+    });
+  }
   const preview = await roomLeavePreview(db, principal, { room_id: room.room_id });
   if (
     preview.in_flight_tasks.length > 0 ||
@@ -1791,17 +1820,6 @@ export async function roomLeave(
           claimed_deliveries: preview.claimed_deliveries,
         },
       );
-    }
-  }
-  if (room.owner_id === caller && room.dissolved_at === null) {
-    const others = await db
-      .prepare(
-        "SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND status = 'active' AND actor_id <> ?",
-      )
-      .bind(room.room_id, caller)
-      .first<{ n: number }>();
-    if ((others?.n ?? 0) > 0) {
-      throw new BusinessError('CONFLICT', '群 owner 离开前必须转移 owner 或解散群聊');
     }
   }
 
@@ -1835,20 +1853,16 @@ export async function roomLeave(
     result,
     build: (resultJson) => [
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
-      // 预检查只负责可读错误；并发 add 可能在本事务提交前加入成员，
-      // 因此 owner 是否仍是唯一 active 成员必须在提交时重新判定。
+      // 无论群内是否还有其他 active 成员，owner 都不能在未解散群退群；
+      // 预检查只负责可读错误，提交时按 rooms.owner_id 重新裁决并发。
       db
         .prepare(
           guardSql(
             'ownerTransferRequired',
-            `EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND owner_id = ? AND dissolved_at IS NULL)
-             AND EXISTS (
-               SELECT 1 FROM room_members
-                WHERE room_id = ? AND status = 'active' AND actor_id <> ?
-             )`,
+            'EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND owner_id = ? AND dissolved_at IS NULL)',
           ),
         )
-        .bind(room.room_id, caller, room.room_id, caller),
+        .bind(room.room_id, caller),
       db
         .prepare(
           guardSql(
@@ -1897,21 +1911,10 @@ export async function roomLeave(
         .bind(at, room.room_id, caller),
       ...cancelDeliveriesForMemberStatements(db, room.room_id, caller, 'member_left', at),
       ...taskRevocations,
-      // G01：owner 只能在群内没有其他 active 成员时退群；此时群已无人审批，
-      // 撤销遗留的 pending 定向邀请，避免空群事后被旧邀请变成无 owner 的非空群。
-      // 必须在清空 owner_id 之前按当前 owner 判定，非 owner 退群不受影响。
-      db
-        .prepare(
-          `UPDATE room_invitations
-              SET status = 'revoked', revision = revision + 1, updated_at = ?
-            WHERE room_id = ? AND kind = 'direct' AND status = 'pending'
-              AND EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND owner_id = ?)
-              AND EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND dissolved_at IS NULL)`,
-        )
-        .bind(at, room.room_id, room.room_id, caller, room.room_id),
-      // 无条件按 owner_id=caller 清理：即使 owner 在预检查后被并发转移，
-      // 也不会把新 owner 的 rooms.owner_id 置空；非 owner 退群时是空操作。
-      // 已解散群保留 owner_id 作为归档审计事实。
+      // 防御性保留：合法路径已经在 guard 中拒绝 owner 退群，因此本语句
+      // 不应再被触发。若历史/异常数据仍走到这里，至少不会把并发转移后的
+      // 新 owner 置空；非 owner 退群时是空操作。已解散群保留 owner_id
+      // 作为归档审计事实。
       db
         .prepare(
           'UPDATE rooms SET owner_id = NULL WHERE room_id = ? AND owner_id = ? AND dissolved_at IS NULL',

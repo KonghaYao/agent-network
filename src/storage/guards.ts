@@ -44,6 +44,7 @@ export const GUARD_TABLES = {
   friendRequired: 'guard_friend_required',
   contactRequestStale: 'guard_contact_request_stale',
   ownerTransferRequired: 'guard_owner_transfer_required',
+  ownerMissing: 'guard_owner_missing',
   rateLimited: 'guard_rate_limited',
   invitationStale: 'guard_invitation_stale',
   inviteTargetsMissing: 'guard_invite_targets_missing',

@@ -5332,19 +5332,26 @@ async function main(): Promise<void> {
         (await page.locator('#room-menu-dissolve').textContent())?.trim(),
         '解散群聊',
       );
-      const leaveDialog = new Promise<string>((resolve) => {
-        page.once('dialog', async (dialog) => {
-          const message = dialog.message();
-          await dialog.dismiss();
-          resolve(message);
-        });
-      });
+      // G06：群主不能直接退群，即使只有自己一人；入口提示先转让或解散。
       await page.locator('#room-menu-leave-group').click();
-      const leaveCopy = await leaveDialog;
+      await page.waitForFunction(
+        `(document.getElementById('room-menu-status').textContent || '').includes('群主不能直接退群')`,
+      );
+      const ownerLeaveCopy = (await page.locator('#room-menu-status').textContent()) ?? '';
       check(
-        '退群确认说明不影响好友关系',
-        leaveCopy.includes('只离开当前群') && leaveCopy.includes('不影响好友关系'),
-        leaveCopy,
+        '群主退群入口提示先转让或解散',
+        ownerLeaveCopy.includes('群主不能直接退群') && ownerLeaveCopy.includes('解散'),
+        ownerLeaveCopy,
+      );
+      const ownerStillThere = await rawTool<{ room: { owner_id: string | null } }>(
+        data.humanToken,
+        'network_room_get',
+        { room_id: data.group.room.room_id },
+      );
+      checkEqual(
+        '群主退群入口提示后仍在群内',
+        ownerStillThere.room.owner_id,
+        data.human.actor_id,
       );
       await page.keyboard.press('Escape');
       await context.close();

@@ -142,18 +142,16 @@ export async function roomLeavePreview(
   if (!member || member.status !== 'active') {
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
   }
-  const [inFlight, deliveries, others] = await Promise.all([
+  const [inFlight, deliveries] = await Promise.all([
     inFlightTasksForMember(db, room.room_id, caller),
     deliveryCounts(db, room.room_id, caller),
-    db
-      .prepare(
-        "SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND status = 'active' AND actor_id <> ?",
-      )
-      .bind(room.room_id, caller)
-      .first<{ n: number }>(),
   ]);
-  const ownerTransferRequired = member.role === 'owner' && (others?.n ?? 0) > 0;
   const dissolved = room.dissolved_at !== null;
+  // 群主在任何未解散群里都不能直接退群，即使只剩自己一人：否则会留下
+  // `owner_id = NULL AND dissolved_at = NULL` 的无主活跃群。先转移或解散，
+  // 与群内是否还有其他 active 成员无关。
+  const ownerTransferRequired =
+    !dissolved && (member.role === 'owner' || room.owner_id === caller);
   return {
     room_id: room.room_id,
     actor_id: caller,

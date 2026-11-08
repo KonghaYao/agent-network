@@ -75,6 +75,8 @@ interface GroupDetailView {
     my_role: string;
     head_seq: string;
     my_last_read_seq: string;
+    status?: string;
+    read_only?: boolean;
   };
   members: GroupMemberView[];
   invited: InvitedMemberView[];
@@ -524,16 +526,16 @@ export async function runGroupInviteAcceptance(): Promise<void> {
   checkEqual('G01-T02 群成员恰好 100 人', capped.room.member_count, 100);
   checkEqual('G01-T02 失败的邀请仍为 pending', capped.invited.length, 1);
 
-  // ---- 空群撤销遗留邀请：owner 独自退群后，旧邀请不能复活无 owner 的空群 ----
+  // ---- 空群邀请撤销：owner 独自一人也不能退群，必须解散后撤销遗留邀请 ----
   const orphanOwnerConn = await connectClient(newToken());
   const orphanConn = await connectClient(newToken());
   const orphanOwner = await registerIdentity(orphanOwnerConn, {
     kind: 'human',
-    name: 'G01 退群 owner',
+    name: 'G01 解散 owner',
   });
   const orphanTarget = await registerIdentity(orphanConn, {
     kind: 'human',
-    name: 'G01 退群后的待确认成员',
+    name: 'G01 解散后的待确认成员',
   });
   await befriend(orphanOwnerConn, orphanOwner.actor_id, orphanConn, orphanTarget.actor_id);
   const orphanGroup = await callTool<GroupDetailView>(orphanOwnerConn.client, 'network_room_create', {
@@ -544,22 +546,58 @@ export async function runGroupInviteAcceptance(): Promise<void> {
   });
   const orphanRoomId = orphanGroup.room.room_id;
   checkEqual('G01-T02 空群建群时目标为 invited', orphanGroup.invited.length, 1);
-  await callTool(orphanOwnerConn.client, 'network_room_leave', {
-    request_id: newRequestId('g01_orphan_leave'),
-    room_id: orphanRoomId,
-  });
+  await expectToolError(
+    'G01-T02 owner 独自一人时退群被拒绝',
+    callTool(orphanOwnerConn.client, 'network_room_leave', {
+      request_id: newRequestId('g01_orphan_leave'),
+      room_id: orphanRoomId,
+      confirm_in_flight: true,
+    }),
+    'CONFLICT',
+  );
+  const orphanLink = await callTool<{ invitation: { invitation_id: string }; invite_key: string }>(
+    orphanOwnerConn.client,
+    'network_room_invite_create',
+    { request_id: newRequestId('g01_orphan_link'), room_id: orphanRoomId },
+  );
+  const orphanDissolve = await callTool<GroupDetailView & { dissolve: { revoked_invitations: number } }>(
+    orphanOwnerConn.client,
+    'network_room_dissolve',
+    {
+      request_id: newRequestId('g01_orphan_dissolve'),
+      room_id: orphanRoomId,
+      reason: 'G01 空群解散',
+    },
+  );
+  checkEqual('G01-T02 owner 独自解散后为只读归档', orphanDissolve.room.status, 'dissolved');
+  checkEqual('G01-T02 解散后 read_only', orphanDissolve.room.read_only, true);
+  check(
+    'G01-T02 解散撤销遗留邀请与链接',
+    orphanDissolve.dissolve.revoked_invitations >= 2,
+    orphanDissolve.dissolve,
+  );
   const orphanInvites = await callTool<InvitationPageView>(
     orphanConn.client,
     'network_room_invite_get',
     { limit: 20 },
   );
   const orphanInvitation = orphanInvites.items.find((item) => item.room_id === orphanRoomId);
-  checkEqual('G01-T02 owner 退群后遗留邀请被撤销', orphanInvitation?.status, 'revoked');
+  checkEqual('G01-T02 解散后遗留定向邀请被撤销', orphanInvitation?.status, 'revoked');
   await expectToolError(
     'G01-T02 已撤销邀请不能接受',
     callTool(orphanConn.client, 'network_room_invite_respond', {
       request_id: newRequestId('g01_orphan_accept'),
       invitation_id: orphanInvitation?.invitation_id ?? '',
+      action: 'accept',
+    }),
+    'CONFLICT',
+  );
+  await expectToolError(
+    'G01-T02 解散后旧邀请链接不能加入',
+    callTool(orphanConn.client, 'network_room_invite_respond', {
+      request_id: newRequestId('g01_orphan_link_accept'),
+      invitation_id: orphanLink.invitation.invitation_id,
+      invite_key: orphanLink.invite_key,
       action: 'accept',
     }),
     'CONFLICT',

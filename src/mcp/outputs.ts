@@ -139,6 +139,8 @@ export const roomSchema = z.object({
   dissolve_reason: z.string().nullable(),
   /** 解散归档的读取上界；未解散为 null。 */
   archived_head_seq: z.string().nullable(),
+  /** 旧数据遗留的无主群（owner_id 为空且未解散）；不可再邀请或加入。 */
+  owner_missing: z.boolean(),
   read_only: z.boolean(),
   can_leave: z.boolean(),
   can_dissolve: z.boolean(),
