@@ -108,8 +108,8 @@ SQLite 是业务状态唯一权威。hub 只广播小型提示，不保存消息
 - `bun run db:migrate`、`bun run dev`：Bun + 本地 SQLite，默认端口 8792。
 - `bun run typecheck`：`tsrs --noEmit`（Rust 版 tsc，读取 `tsconfig.json`）；`bun run typecheck:tsc` 保留为官方 `tsc --noEmit` 对照/回退。
 - `bun run test:protocol`：协议逐帧验收，默认本地地址；当前 991 项、129 个工具。
-- `bun run test:acceptance`：端到端业务与通知验收；当前 2615 项（短 presence 窗口）。
-- `bun run test:web`：Playwright 浏览器验收；当前 2012 项。
+- `bun run test:acceptance`：端到端业务与通知验收；当前 2688 项（短 presence 窗口）。
+- `bun run test:web`：Playwright 浏览器验收；当前 2015 项。
 - `bun run test:events`：独立 HTTPS receiver 的 MCP Events 验收；当前 339 项。
 - `bun run test:drive`：MCPP Files 上传/下载与 `drive_file_info`；当前 52 项。
 - `bun scripts/q01-upgrade-check.ts`：合成 `0035_task_recovery.sql` 旧库升级到 `0038_ownerless_room_guard.sql`，校验 34 个迁移、`integrity_check=ok`、`foreign_key_check` 与旧数据映射。
