@@ -473,6 +473,16 @@ export const APP_STYLE = `
   .msg-task-convert { padding: 0 4px; border: 0; background: transparent;
     color: var(--wx-muted); font-size: 11px; cursor: pointer; }
   .msg-task-convert:hover { color: var(--wx-link); }
+  /* Agent 消息的任务入口默认收起，悬停或键盘焦点进入时出现；人类消息保持常显。 */
+  .msg[data-sender-kind="agent"] .msg-task-convert { opacity: 0; pointer-events: none; }
+  .msg[data-sender-kind="agent"] .msg-task-convert:focus-visible { opacity: 1; }
+  .msg[data-sender-kind="agent"]:hover .msg-task-convert,
+  .msg[data-sender-kind="agent"]:focus-within .msg-task-convert {
+    opacity: 1; pointer-events: auto; }
+  @media (hover: none) {
+    /* 触屏没有可靠的 hover：只保留人类消息入口，避免渲染无法稳定触发的隐藏按钮。 */
+    .msg[data-sender-kind="agent"] .msg-task-convert { display: none; }
+  }
   .msg.task-message-flash .bubble { outline: 2px solid var(--wx-link);
     outline-offset: 2px; }
   .task-submission-version { flex: 0 0 auto; padding: 1px 6px; border-radius: 8px;
@@ -619,6 +629,7 @@ export const APP_STYLE = `
   .msg.mine .mention { color: #2f6b45; }
   .msg .expand { margin-top: 4px; border: 0; background: none; padding: 0;
     color: var(--wx-link); font-size: 12px; }
+  .msg .expand[hidden] { display: none; }
   /* 回执紧贴消息下方，外观与上下线系统行一致。 */
   .msg.has-receipt { margin-bottom: 6px; }
   .msg-receipt { margin-top: 0; }
@@ -722,6 +733,23 @@ export const APP_STYLE = `
   .member-roster-role { flex: 0 0 auto; margin-left: auto; font-size: 11px;
     color: var(--wx-muted); }
   .member-roster-actions { flex: 0 0 auto; display: flex; gap: 4px; }
+  .member-menu-toggle { width: 24px; height: 24px; padding: 0; border: 1px solid var(--wx-line);
+    border-radius: 4px; background: var(--wx-panel); color: var(--wx-text);
+    font-size: 15px; line-height: 1; cursor: pointer; }
+  .member-menu-toggle:hover:not(:disabled) { background: var(--wx-hover); }
+  .member-menu-toggle:disabled { opacity: 0.5; cursor: default; }
+  /* 行内只保留一个 icon；菜单固定定位并按视口夹取，避免被滚动容器裁切。 */
+  .member-menu { position: fixed; z-index: 36; min-width: 132px; padding: 4px;
+    border: 1px solid var(--wx-line); border-radius: 8px; background: var(--wx-panel);
+    box-shadow: var(--wx-shadow); }
+  .member-menu[hidden] { display: none; }
+  .member-menu-item { display: block; width: 100%; padding: 6px 10px; border: 0;
+    border-radius: 5px; background: transparent; color: var(--wx-text); font-size: 12px;
+    line-height: 1.5; text-align: left; white-space: nowrap; cursor: pointer; }
+  .member-menu-item:hover:not(:disabled), .member-menu-item:focus-visible {
+    background: var(--wx-hover); }
+  .member-menu-item.danger { color: var(--wx-unread); }
+  .member-menu-item:disabled { opacity: 0.5; cursor: default; }
   .member-action { padding: 2px 6px; border: 1px solid var(--wx-line); border-radius: 4px;
     background: var(--wx-panel); color: var(--wx-text); font-size: 11px; line-height: 1.5; }
   .member-action:hover:not(:disabled) { background: var(--wx-hover); }

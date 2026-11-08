@@ -6,7 +6,7 @@
  * 所有写操作优先经真实控件；rawRpc 只用于准备邀请/任务与对账服务端状态。
  */
 
-import type { Browser, Page } from 'playwright';
+import type { Browser, Locator, Page } from 'playwright';
 
 import {
   acceptRoomInvites,
@@ -37,6 +37,32 @@ async function openContactRequests(page: Page): Promise<void> {
 async function closeContactRequests(page: Page): Promise<void> {
   await page.locator('#contact-modal-close').click();
   await page.locator('#contact-modal').waitFor({ state: 'hidden' });
+}
+
+/** 成员行只有一个 icon；读取好友期间禁用，等可用后再展开菜单。 */
+async function openMemberRowMenu(row: Locator): Promise<Locator> {
+  const menu = row.locator('.member-menu');
+  if (await menu.isVisible()) return menu;
+  const toggle = row.locator('.member-menu-toggle:not(:disabled)');
+  await toggle.waitFor();
+  await toggle.click();
+  await menu.waitFor({ state: 'visible' });
+  return menu;
+}
+
+/** 刷新/滚动可能在点击前收起菜单；重开后再点。 */
+async function clickMemberMenuItem(row: Locator, label: string): Promise<void> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const menu = await openMemberRowMenu(row);
+    try {
+      await menu.locator('.member-menu-item').filter({ hasText: label }).click({ timeout: 3_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 async function acceptDialog(page: Page): Promise<string> {
@@ -280,7 +306,7 @@ export async function runGroupSetupAcceptance(
   const u2Row = mainPageInner
     .locator('#members-current .member-roster-item')
     .filter({ hasText: state.actors.u2.name });
-  await u2Row.locator('.member-action').filter({ hasText: '设为管理员' }).click();
+  await clickMemberMenuItem(u2Row, '设为管理员');
   await mainPageInner.waitForFunction(
     `(() => Array.from(document.querySelectorAll('#members-current .member-roster-role'))
       .some((node) => node.textContent === '管理员 · 人' || node.textContent === '管理员 · Agent'))()`,
@@ -302,13 +328,15 @@ export async function runGroupSetupAcceptance(
     await waitRoom(adminContext.page, state.rooms.main, 'Q04 主验收群');
     await adminContext.page.locator('#add-members').click();
     await adminContext.page.locator('#members-current .member-roster-item').first().waitFor();
-    const adminText = (await adminContext.page.locator('#members-current').innerText()) ?? '';
+    const adminMenuTexts = await adminContext.page
+      .locator('#members-current .member-menu-item')
+      .allTextContents();
     check(
       '管理员可移除普通成员但没有任免/转让入口',
-      adminText.includes('移出群聊') &&
-        !adminText.includes('设为管理员') &&
-        !adminText.includes('转让群主'),
-      adminText,
+      adminMenuTexts.includes('移出群聊') &&
+        !adminMenuTexts.includes('设为管理员') &&
+        !adminMenuTexts.includes('转让群主'),
+      adminMenuTexts,
     );
     await adminContext.page.locator('#members-cancel').click();
   } finally {
@@ -320,7 +348,7 @@ export async function runGroupSetupAcceptance(
   const u2RowAgain = mainPageInner
     .locator('#members-current .member-roster-item')
     .filter({ hasText: state.actors.u2.name });
-  await u2RowAgain.locator('.member-action').filter({ hasText: '撤销管理员' }).click();
+  await clickMemberMenuItem(u2RowAgain, '撤销管理员');
   await mainPageInner.waitForFunction(
     `(() => {
       const row = Array.from(document.querySelectorAll('#members-current .member-roster-item'))
@@ -449,7 +477,7 @@ export async function runGroupSetupAcceptance(
         .filter({ hasText: name });
       await row.waitFor();
       const dialog = dialogPromise(ownerContext.page);
-      await row.locator('.member-action').filter({ hasText: '移出群聊' }).click();
+      await clickMemberMenuItem(row, '移出群聊');
       await dialog;
       await ownerContext.page.waitForFunction(
         `!Array.from(document.querySelectorAll('#members-current .member-roster-item'))
@@ -668,7 +696,7 @@ export async function runGroupFinaleAcceptance(state: Q04State, browser: Browser
       .locator('#members-current .member-roster-item')
       .filter({ hasText: state.actors.u2.name });
     const proposePromise = dialogPromise(ownerContext.page);
-    await u2Row.locator('.member-action').filter({ hasText: '转让群主' }).click();
+    await clickMemberMenuItem(u2Row, '转让群主');
     check('转让确认说明对方接受后生效', (await proposePromise).includes('对方接受后才会生效'));
 
     await targetContext.page.goto(`${state.base}/c/${state.rooms.main}`);

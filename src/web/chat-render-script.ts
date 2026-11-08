@@ -8,6 +8,8 @@ export const CHAT_RENDER_SCRIPT = `
 const TIME_GAP = 5 * 60 * 1000;
 // 已展开全文的消息正文；刷新重建 DOM 后仍直接渲染完整正文。
 const expandedMessageBodies = new Map();
+// 同一 message_id 的自动展开只发一次读取；刷新重建的节点共享同一结果。
+const agentAutoExpandReads = new Map();
 
 function senderName(senderId) {
   if (identity && senderId === identity.actor_id) return '我';
@@ -248,6 +250,8 @@ function messageItem(item) {
   const element = document.createElement('li');
   element.className = 'msg' + (mine ? ' mine has-receipt' : '');
   element.dataset.messageId = item.message_id;
+  // 任务入口按发送方类型决定常显或悬停显示；仅影响展示，不改变任务契约。
+  element.dataset.senderKind = agent ? 'agent' : 'human';
   // 任务入口由后续任务片段按同一 message_id 补齐；这里只保留定位数据。
   element.dataset.messagePreview = String(item.preview || '');
   const sender = senderName(item.sender_id);
@@ -275,8 +279,8 @@ function messageItem(item) {
   // 预览也渲染 Markdown；截断可能切断语法，由 Markdown 岛用 remend 闭合。
   renderMessageBody(bubble, bodyText, item, agent, truncated);
   content.append(bubble);
-  let filesElement = mountMessageFiles(bodyText, null);
-  if (filesElement) content.append(filesElement);
+  const filesRef = { current: mountMessageFiles(bodyText, null) };
+  if (filesRef.current) content.append(filesRef.current);
   if (truncated) {
     const expand = document.createElement('button');
     expand.type = 'button';
@@ -290,9 +294,9 @@ function messageItem(item) {
       try {
         const fullText = await readMessage(item.message_id);
         const rendered = await renderMessageBody(bubble, fullText, item, agent, false, retry);
-        filesElement = mountMessageFiles(fullText, filesElement);
-        if (filesElement && !filesElement.isConnected) {
-          content.insertBefore(filesElement, expand);
+        filesRef.current = mountMessageFiles(fullText, filesRef.current);
+        if (filesRef.current && !filesRef.current.isConnected) {
+          content.insertBefore(filesRef.current, expand);
         }
         if (rendered || !agent) {
           expandedMessageBodies.set(item.message_id, fullText);
@@ -309,6 +313,11 @@ function messageItem(item) {
       }
     });
     content.append(expand);
+    if (agent && item.body_bytes <= WEB_AGENT_AUTO_EXPAND_BYTES) {
+      // 阈值内的 Agent 消息直接读全文；按钮先隐藏，失败时再回退显示。
+      expand.hidden = true;
+      autoExpandAgentMessage(item, element, bubble, content, expand, filesRef);
+    }
   }
   const taskSlot = document.createElement('div');
   taskSlot.className = 'msg-task-slot';
@@ -322,6 +331,53 @@ function messageItem(item) {
     return fragment;
   }
   return element;
+}
+
+/**
+ * 同一 message_id 的自动展开共享一次读取。
+ *
+ * 刷新可能在读取途中重建节点：旧节点被丢弃，新节点复用同一 Promise，
+ * 既避免重复请求，也不会因为旧节点断开而让消息永远停在预览。
+ */
+function readMessageShared(messageId) {
+  const existing = agentAutoExpandReads.get(messageId);
+  if (existing) return existing;
+  const pending = readMessage(messageId).finally(function () {
+    if (agentAutoExpandReads.get(messageId) === pending) {
+      agentAutoExpandReads.delete(messageId);
+    }
+  });
+  agentAutoExpandReads.set(messageId, pending);
+  return pending;
+}
+
+/**
+ * 自动展开阈值内的 Agent 消息。
+ *
+ * 只在该节点仍连接时应用结果；房间切换/刷新重建后旧节点丢弃。
+ * 文件卡片沿用现有挂载函数更新，不重复创建。
+ */
+function autoExpandAgentMessage(item, element, bubble, content, expand, filesRef) {
+  readMessageShared(item.message_id).then(async function (fullText) {
+    if (!element.isConnected || !bubble.isConnected) return;
+    const retry = bubble.dataset.markdownUnavailable === '1';
+    const rendered = await renderMessageBody(bubble, fullText, item, true, false, retry);
+    if (!element.isConnected || !bubble.isConnected) return;
+    filesRef.current = mountMessageFiles(fullText, filesRef.current);
+    if (filesRef.current && !filesRef.current.isConnected) {
+      content.insertBefore(filesRef.current, expand);
+    }
+    if (rendered) {
+      expandedMessageBodies.set(item.message_id, fullText);
+      expand.remove();
+    } else {
+      // bundle 失败但正文已完整：保留按钮供稍后重试，不缓存为已展开。
+      expand.hidden = false;
+    }
+  }).catch(function () {
+    if (!element.isConnected) return;
+    expand.hidden = false;
+  });
 }
 
 /** 全量替换消息区；缓存切换与首屏加载共用同一套渲染逻辑。 */

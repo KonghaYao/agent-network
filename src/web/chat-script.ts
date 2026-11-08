@@ -89,6 +89,8 @@ const MESSAGE_FILE_MAX = ${LIMITS.messageFileLinksMax};
 const CLAIM_STALE_MS = ${LIMITS.claimedStaleMs};
 const WEB_REQUEST_TIMEOUT_MS = ${LIMITS.webRequestTimeoutMs};
 const WEB_REFRESH_DEBOUNCE_MS = ${LIMITS.webRefreshDebounceMs};
+// Agent 截断消息在该字节数内自动读取全文；只在浏览器做展示收敛，不改服务端契约。
+const WEB_AGENT_AUTO_EXPAND_BYTES = ${LIMITS.webAgentAutoExpandBytes};
 const roomListElement = document.getElementById('room-list');
 const listStatusElement = document.getElementById('room-list-status');
 const listRetryElement = document.getElementById('room-list-retry');

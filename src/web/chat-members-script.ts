@@ -33,6 +33,7 @@ let membersContactNote = '';
 let membersBusy = false;
 let membersOpener = null;
 let membersPicker = null;
+let openMemberMenu = null;
 
 /** 服务端 capabilities 优先；旧快照没有 capabilities 时按 owner 兼容。 */
 function roomCapability(name) {
@@ -108,7 +109,10 @@ function setMembersBusy(busy, label) {
     membersAddButton.textContent = busy ? (label || '正在添加…') : '添加';
   }
   if (membersForm) membersForm.setAttribute('aria-busy', busy ? 'true' : 'false');
-  for (const button of document.querySelectorAll('.member-action')) {
+  if (busy) closeMemberMenu();
+  for (const button of document.querySelectorAll(
+    '.member-action, .member-menu-toggle, .member-menu-item'
+  )) {
     // 转让确认期间入口固定禁用，不能被 busy=false 误重新启用。
     button.disabled = busy || button.dataset.locked === 'true';
   }
@@ -137,8 +141,138 @@ function memberActionButton(label, danger, handler) {
   return button;
 }
 
+/** 菜单项沿用与文本动作一致的错误出口；点击后先收菜单再执行。 */
+function memberMenuItem(label, danger, handler) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'member-menu-item' + (danger ? ' danger' : '');
+  button.setAttribute('role', 'menuitem');
+  button.textContent = label;
+  button.disabled = membersBusy;
+  button.addEventListener('click', function () {
+    closeMemberMenu();
+    handler().catch(function (error) {
+      setMembersError(error && error.message ? error.message : String(error));
+    });
+  });
+  return button;
+}
+
+function enabledMenuItems(menu) {
+  const items = [];
+  for (const item of menu.querySelectorAll('.member-menu-item')) {
+    if (!item.disabled) items.push(item);
+  }
+  return items;
+}
+
+/** 收菜单只改本地状态；节点已被重建时静默丢弃。 */
+function closeMemberMenu(options) {
+  const current = openMemberMenu;
+  openMemberMenu = null;
+  if (!current) return;
+  current.menu.hidden = true;
+  current.menu.removeAttribute('style');
+  if (current.toggle.isConnected) {
+    current.toggle.setAttribute('aria-expanded', 'false');
+    if (options && options.focus) current.toggle.focus({ preventScroll: true });
+  }
+}
+
+/** 固定定位并按视口夹取；空间不足时翻到行上方，390px 也不横向溢出。 */
+function positionMemberMenu(toggle, menu) {
+  const rect = toggle.getBoundingClientRect();
+  const margin = 8;
+  const gap = 4;
+  const width = menu.offsetWidth;
+  const height = menu.offsetHeight;
+  const viewWidth = document.documentElement.clientWidth || window.innerWidth;
+  const viewHeight = document.documentElement.clientHeight || window.innerHeight;
+  let left = Math.max(margin, Math.min(rect.right - width, viewWidth - width - margin));
+  let top = rect.bottom + gap;
+  if (top + height > viewHeight - margin && rect.top - height - gap >= margin) {
+    top = rect.top - height - gap;
+  }
+  menu.style.left = Math.round(left) + 'px';
+  menu.style.top = Math.round(top) + 'px';
+}
+
+function showMemberMenu(row, toggle, menu) {
+  if (membersBusy) return;
+  closeMemberMenu();
+  menu.hidden = false;
+  toggle.setAttribute('aria-expanded', 'true');
+  // 先定位再聚焦，避免焦点移动把菜单滚出视口。
+  positionMemberMenu(toggle, menu);
+  openMemberMenu = { row: row, toggle: toggle, menu: menu, openedAt: Date.now() };
+  const items = enabledMenuItems(menu);
+  if (items.length > 0) items[0].focus({ preventScroll: true });
+}
+
+function toggleMemberMenu(row, toggle, menu) {
+  if (openMemberMenu && openMemberMenu.menu === menu) {
+    closeMemberMenu({ focus: true });
+    return;
+  }
+  showMemberMenu(row, toggle, menu);
+}
+
+function memberMenuToggle(row, menu) {
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'member-menu-toggle';
+  toggle.setAttribute('aria-haspopup', 'menu');
+  toggle.setAttribute('aria-expanded', 'false');
+  toggle.setAttribute('aria-label', '成员操作');
+  toggle.title = '成员操作';
+  toggle.textContent = '⋯';
+  toggle.disabled = membersBusy;
+  toggle.addEventListener('click', function () {
+    toggleMemberMenu(row, toggle, menu);
+  });
+  toggle.addEventListener('keydown', function (event) {
+    if (event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    if (!openMemberMenu || openMemberMenu.menu !== menu) {
+      showMemberMenu(row, toggle, menu);
+    }
+  });
+  return toggle;
+}
+
+function memberMenuElement() {
+  const menu = document.createElement('div');
+  menu.className = 'member-menu';
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', '成员操作');
+  menu.hidden = true;
+  menu.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMemberMenu({ focus: true });
+      return;
+    }
+    if (event.key === 'Tab') {
+      closeMemberMenu();
+      return;
+    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const items = enabledMenuItems(menu);
+    if (items.length === 0) return;
+    event.preventDefault();
+    const index = items.indexOf(document.activeElement);
+    const next = event.key === 'ArrowDown'
+      ? items[(index + 1) % items.length]
+      : items[(index - 1 + items.length) % items.length];
+    next.focus({ preventScroll: true });
+  });
+  return menu;
+}
+
 function renderCurrentMembers() {
   if (!membersCurrentElement) return;
+  closeMemberMenu();
   membersCurrentElement.replaceChildren();
   for (const member of members.values()) {
     const item = document.createElement('li');
@@ -160,34 +294,37 @@ function renderCurrentMembers() {
     if (actions.can_remove || actions.can_set_admin || actions.can_revoke_admin || actions.can_transfer_owner) {
       const tools = document.createElement('span');
       tools.className = 'member-roster-actions';
+      const menu = memberMenuElement();
       if (actions.can_set_admin) {
-        tools.append(memberActionButton('设为管理员', false, function () {
+        menu.append(memberMenuItem('设为管理员', false, function () {
           return submitMemberRole(member, 'admin');
         }));
       }
       if (actions.can_revoke_admin) {
-        tools.append(memberActionButton('撤销管理员', false, function () {
+        menu.append(memberMenuItem('撤销管理员', false, function () {
           return submitMemberRole(member, 'member');
         }));
       }
       if (actions.can_transfer_owner) {
         // 同一群只允许一条有效提议：确认期间所有转让入口都锁定。
-        const transferButton = memberActionButton(
+        const transferItem = memberMenuItem(
           ownerTransfer ? '转让确认中' : '转让群主',
           false,
           function () { return submitOwnerTransfer(member); }
         );
         if (ownerTransfer) {
-          transferButton.dataset.locked = 'true';
-          transferButton.disabled = true;
+          transferItem.dataset.locked = 'true';
+          transferItem.disabled = true;
         }
-        tools.append(transferButton);
+        menu.append(transferItem);
       }
       if (actions.can_remove) {
-        tools.append(memberActionButton('移出群聊', true, function () {
+        menu.append(memberMenuItem('移出群聊', true, function () {
           return submitMemberRemoval(member);
         }));
       }
+      // 每行只留一个 icon 入口；菜单项仍按服务端 actions 与固定顺序生成。
+      tools.append(memberMenuToggle(item, menu), menu);
       item.append(tools);
     }
     membersCurrentElement.append(item);
@@ -384,6 +521,7 @@ function renderMembersContacts(contacts, note) {
 
 function closeMembersModal() {
   membersLoadToken += 1;
+  closeMemberMenu();
   if (membersModal) membersModal.hidden = true;
   setMembersError('');
   membersContactsCache = [];
@@ -713,8 +851,26 @@ if (membersContactsElement) {
 }
 document.addEventListener('keydown', function (event) {
   if (event.key !== 'Escape' || !membersModal || membersModal.hidden) return;
+  if (openMemberMenu) {
+    event.preventDefault();
+    closeMemberMenu({ focus: true });
+    return;
+  }
   event.preventDefault();
   closeMembersModal();
+});
+// 点击行外、滚动或视口变化都收起菜单；同一时间只保留一个。
+document.addEventListener('click', function (event) {
+  if (!openMemberMenu) return;
+  if (openMemberMenu.row.contains(event.target)) return;
+  closeMemberMenu();
+}, true);
+document.addEventListener('scroll', function () {
+  // 打开瞬间浏览器可能为聚焦/点击滚动一次，避免把这次滚动当成用户滚动。
+  if (openMemberMenu && Date.now() - openMemberMenu.openedAt > 150) closeMemberMenu();
+}, true);
+window.addEventListener('resize', function () {
+  if (openMemberMenu) closeMemberMenu();
 });
 if (membersForm) membersForm.addEventListener('submit', submitMembersForm);
 `;

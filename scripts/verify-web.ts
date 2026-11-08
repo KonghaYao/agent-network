@@ -419,6 +419,33 @@ async function sendRoomMessage(token: string, roomId: string, body: string): Pro
   });
 }
 
+/** 成员操作在读取好友期间禁用；测试先等 icon 可用再展开菜单。 */
+async function openMemberRowMenu(row: Locator): Promise<Locator> {
+  const menu = row.locator('.member-menu');
+  if (await menu.isVisible()) return menu;
+  const toggle = row.locator('.member-menu-toggle');
+  await toggle.waitFor();
+  await waitUntil(async () => !(await toggle.isDisabled()), '成员操作可用', 10_000);
+  await toggle.click();
+  await menu.waitFor({ state: 'visible' });
+  return menu;
+}
+
+/** 刷新/滚动可能在点击前收起菜单；重开后再点，模拟用户重新操作。 */
+async function clickMemberMenuItem(row: Locator, label: string): Promise<void> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const menu = await openMemberRowMenu(row);
+    try {
+      await menu.locator('.member-menu-item').filter({ hasText: label }).click({ timeout: 3_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 /** 发送带 invoke 的消息并返回 message_id，用于投递回执验收。 */
 async function sendInvokeMessage(
   token: string,
@@ -9265,6 +9292,49 @@ async function main(): Promise<void> {
       await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
       checkEqual('390px 添加成员弹窗可见', await page.locator('#members-modal').isVisible(), true);
       checkEqual('390px 只显示聊天区', await page.locator('.sidebar').isHidden(), true);
+      const mobileActionRow = page
+        .locator('#members-current .member-roster-item')
+        .filter({ has: page.locator('.member-menu-toggle') })
+        .first();
+      await openMemberRowMenu(mobileActionRow);
+      const memberMenuMetrics = (await page.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll('#members-current .member-roster-item'))
+          .find(function (item) { return item.querySelector('.member-menu-toggle'); });
+        const menu = row ? row.querySelector('.member-menu') : null;
+        if (!menu) return null;
+        const rect = menu.getBoundingClientRect();
+        return {
+          view: window.innerWidth,
+          viewHeight: window.innerHeight,
+          doc: document.documentElement.scrollWidth,
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom,
+          position: getComputedStyle(menu).position
+        };
+      })()`)) as {
+        view: number;
+        viewHeight: number;
+        doc: number;
+        left: number;
+        right: number;
+        top: number;
+        bottom: number;
+        position: string;
+      } | null;
+      check(
+        '390px 成员操作菜单不横向溢出',
+        Boolean(memberMenuMetrics) &&
+          memberMenuMetrics!.doc <= memberMenuMetrics!.view &&
+          memberMenuMetrics!.left >= -1 &&
+          memberMenuMetrics!.right <= memberMenuMetrics!.view + 1 &&
+          memberMenuMetrics!.top >= -1 &&
+          memberMenuMetrics!.bottom <= memberMenuMetrics!.viewHeight + 1,
+        memberMenuMetrics,
+      );
+      checkEqual('成员操作菜单固定定位', memberMenuMetrics?.position, 'fixed');
+      await page.keyboard.press('Escape');
       const mobileMetrics = (await page.evaluate(`(() => {
         const card = document.querySelector('#members-modal .modal-card');
         const contacts = document.getElementById('members-contacts');
@@ -9510,6 +9580,128 @@ async function main(): Promise<void> {
       await context.close();
     }
 
+    // 2b-4b. 转为任务入口：人类常显，Agent 默认收起、hover/键盘出现，触屏仅人类可见。
+    {
+      const convertGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '任务入口可见性群',
+        members: [data.agentA.actor_id],
+      });
+      const convertRoomId = convertGroup.room.room_id;
+      await acceptRoomInvites(data.agentAToken, convertRoomId);
+      const humanMarker = '人类任务来源消息';
+      const agentMarker = 'Agent 任务来源消息';
+      await sendRoomMessage(data.humanToken, convertRoomId, humanMarker);
+      await sendRoomMessage(data.agentAToken, convertRoomId, agentMarker);
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/c/${convertRoomId}`);
+      await waitRoom(page, convertRoomId, '任务入口可见性群');
+      const humanMessage = page.locator('#messages .msg').filter({ hasText: humanMarker }).last();
+      const agentMessage = page.locator('#messages .msg').filter({ hasText: agentMarker }).last();
+      await humanMessage.locator('.msg-task-convert').waitFor();
+      await agentMessage.locator('.msg-task-convert').waitFor();
+      checkEqual(
+        '消息节点标记人类发送方',
+        await humanMessage.getAttribute('data-sender-kind'),
+        'human',
+      );
+      checkEqual(
+        '消息节点标记 Agent 发送方',
+        await agentMessage.getAttribute('data-sender-kind'),
+        'agent',
+      );
+      checkEqual(
+        '人类消息转为任务常显',
+        await humanMessage.locator('.msg-task-convert').evaluate(
+          (element) => getComputedStyle(element).opacity,
+        ),
+        '1',
+      );
+      checkEqual(
+        'Agent 消息转为任务默认收起',
+        await agentMessage.locator('.msg-task-convert').evaluate(
+          (element) => getComputedStyle(element).opacity,
+        ),
+        '0',
+      );
+      await agentMessage.hover();
+      await waitUntil(
+        async () =>
+          (await agentMessage.locator('.msg-task-convert').evaluate(
+            (element) => getComputedStyle(element).opacity,
+          )) === '1',
+        'Agent 消息 hover 显示转为任务',
+        5_000,
+      );
+      check('Agent 消息 hover 显示转为任务', true);
+      await agentMessage.locator('.msg-task-convert').click();
+      await page.locator('#task-create-modal').waitFor({ state: 'visible' });
+      check(
+        'Agent 消息转为任务仍打开来源任务表单',
+        ((await page.locator('#task-source-hint').innerText()) ?? '').includes('从消息创建'),
+      );
+      await page.locator('#task-create-cancel').click();
+      await page.locator('#task-create-modal').waitFor({ state: 'hidden' });
+      await page.locator('#title').hover();
+      await waitUntil(
+        async () =>
+          (await agentMessage.locator('.msg-task-convert').evaluate(
+            (element) => getComputedStyle(element).opacity,
+          )) === '0',
+        '移出 hover 后 Agent 任务入口收起',
+        5_000,
+      );
+      await agentMessage.locator('.msg-task-convert').focus();
+      checkEqual(
+        '键盘聚焦 Agent 任务入口时显示',
+        await agentMessage.locator('.msg-task-convert').evaluate(
+          (element) => getComputedStyle(element).opacity,
+        ),
+        '1',
+      );
+      await page.keyboard.press('Enter');
+      await page.locator('#task-create-modal').waitFor({ state: 'visible' });
+      check('键盘可触发 Agent 消息转为任务', true);
+      await page.locator('#task-create-cancel').click();
+      await context.close();
+
+      const touchContext = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        hasTouch: true,
+        isMobile: true,
+      });
+      await touchContext.addInitScript({ content: initScript(data.humanToken) });
+      const touchPage = await touchContext.newPage();
+      touchPage.setDefaultTimeout(15_000);
+      touchPage.on('pageerror', (error) => allErrors.push(`pageerror: ${error.message}`));
+      await touchPage.goto(`${server.base}/c/${convertRoomId}`);
+      await waitRoom(touchPage, convertRoomId, '任务入口可见性群');
+      const touchHoverNone = await touchPage.evaluate(
+        `window.matchMedia('(hover: none)').matches`,
+      );
+      check('触屏媒体查询生效', touchHoverNone, touchHoverNone);
+      const touchHuman = touchPage.locator('#messages .msg').filter({ hasText: humanMarker }).last();
+      const touchAgent = touchPage.locator('#messages .msg').filter({ hasText: agentMarker }).last();
+      await touchHuman.locator('.msg-task-convert').waitFor();
+      checkEqual(
+        '触屏人类消息保留转为任务',
+        await touchHuman.locator('.msg-task-convert').isVisible(),
+        true,
+      );
+      checkEqual(
+        '触屏 Agent 消息隐藏转为任务',
+        await touchAgent.locator('.msg-task-convert').isHidden(),
+        true,
+      );
+      await touchContext.close();
+    }
+
     // 2b-5. G03 群角色界面：owner 任免管理员、管理员操作入口与公告读写。
     {
       interface RoleMemberView {
@@ -9553,11 +9745,108 @@ async function main(): Promise<void> {
         .locator('#members-current .member-roster-item')
         .filter({ hasText: data.agentB.name });
       checkEqual(
-        '群主可对成员设管理员',
-        await agentBRow.locator('.member-action').filter({ hasText: '设为管理员' }).count(),
+        '可操作成员行只有一个成员操作 icon',
+        await agentBRow.locator('.member-menu-toggle').count(),
         1,
       );
-      await agentBRow.locator('.member-action').filter({ hasText: '设为管理员' }).click();
+      checkEqual(
+        '成员操作菜单默认隐藏',
+        await agentBRow.locator('.member-menu').isHidden(),
+        true,
+      );
+      checkEqual(
+        '成员操作按钮使用 menu 语义',
+        await agentBRow.locator('.member-menu-toggle').getAttribute('aria-haspopup'),
+        'menu',
+      );
+      checkEqual(
+        '成员操作按钮默认 aria-expanded=false',
+        await agentBRow.locator('.member-menu-toggle').getAttribute('aria-expanded'),
+        'false',
+      );
+      const ownerMenu = await openMemberRowMenu(agentBRow);
+      checkEqual(
+        '展开后 aria-expanded=true',
+        await agentBRow.locator('.member-menu-toggle').getAttribute('aria-expanded'),
+        'true',
+      );
+      checkEqual('成员操作菜单使用 menu role', await ownerMenu.getAttribute('role'), 'menu');
+      checkEqual(
+        '菜单项按权限顺序生成',
+        JSON.stringify(await ownerMenu.locator('.member-menu-item').allTextContents()),
+        JSON.stringify(['设为管理员', '转让群主', '移出群聊']),
+      );
+      checkEqual(
+        '菜单项使用 menuitem role',
+        await ownerMenu.locator('.member-menu-item').first().getAttribute('role'),
+        'menuitem',
+      );
+      // 键盘：Esc 只收菜单，不关闭弹窗；焦点回到 toggle。
+      await ownerContext.page.keyboard.press('Escape');
+      await ownerMenu.waitFor({ state: 'hidden' });
+      checkEqual(
+        'Esc 收起菜单但保留弹窗',
+        await ownerContext.page.locator('#members-modal').isVisible(),
+        true,
+      );
+      checkEqual(
+        'Esc 后焦点回到成员操作按钮',
+        await agentBRow.locator('.member-menu-toggle').evaluate(
+          (element) => document.activeElement === element,
+        ),
+        true,
+      );
+      await agentBRow.locator('.member-menu-toggle').press('Enter');
+      await ownerMenu.waitFor({ state: 'visible' });
+      checkEqual(
+        '键盘打开菜单后焦点进入首项',
+        await ownerMenu.locator('.member-menu-item').first().evaluate(
+          (element) => document.activeElement === element,
+        ),
+        true,
+      );
+      await ownerContext.page.keyboard.press('ArrowDown');
+      checkEqual(
+        '方向键在菜单项间移动',
+        await ownerMenu.locator('.member-menu-item').nth(1).evaluate(
+          (element) => document.activeElement === element,
+        ),
+        true,
+      );
+      // 点击行外关闭菜单。
+      await ownerContext.page.locator('#members-current-title').click();
+      await ownerMenu.waitFor({ state: 'hidden' });
+      checkEqual(
+        '点击外部收起菜单但保留弹窗',
+        await ownerContext.page.locator('#members-modal').isVisible(),
+        true,
+      );
+      // 同一时间只开一个菜单；滚动也收起。
+      const agentARow = ownerContext.page
+        .locator('#members-current .member-roster-item')
+        .filter({ hasText: data.agentA.name });
+      await openMemberRowMenu(agentBRow);
+      await openMemberRowMenu(agentARow);
+      checkEqual(
+        '打开另一行菜单时旧菜单关闭',
+        await agentBRow.locator('.member-menu').isHidden(),
+        true,
+      );
+      await sleep(250);
+      await ownerContext.page.evaluate(
+        `document.getElementById('members-current').dispatchEvent(new Event('scroll'))`,
+      );
+      await agentARow.locator('.member-menu').waitFor({ state: 'hidden' });
+      check('滚动成员列表收起菜单', true);
+      checkEqual(
+        '群主可对成员设管理员',
+        await (await openMemberRowMenu(agentBRow))
+          .locator('.member-menu-item')
+          .filter({ hasText: '设为管理员' })
+          .count(),
+        1,
+      );
+      await clickMemberMenuItem(agentBRow, '设为管理员');
       await ownerContext.page.waitForFunction(
         `(() => Array.from(document.querySelectorAll('#members-current .member-roster-role'))
           .some((node) => node.textContent === '管理员 · Agent'))()`,
@@ -9575,7 +9864,7 @@ async function main(): Promise<void> {
       checkEqual(
         '群主界面出现撤销管理员入口',
         await ownerContext.page
-          .locator('#members-current .member-action')
+          .locator('#members-current .member-menu-item')
           .filter({ hasText: '撤销管理员' })
           .count(),
         1,
@@ -9591,13 +9880,15 @@ async function main(): Promise<void> {
       await waitRoom(adminContext.page, uiRoomId, '权限界面群');
       await adminContext.page.locator('#add-members').click();
       await adminContext.page.locator('#members-current .member-roster-item').first().waitFor();
-      const adminActions = (await adminContext.page.locator('#members-current').textContent()) ?? '';
+      const adminMenuTexts = await adminContext.page
+        .locator('#members-current .member-menu-item')
+        .allTextContents();
       check(
         '管理员可移除普通成员但没有任免/转让入口',
-        adminActions.includes('移出群聊') &&
-          !adminActions.includes('设为管理员') &&
-          !adminActions.includes('转让群主'),
-        adminActions,
+        adminMenuTexts.includes('移出群聊') &&
+          !adminMenuTexts.includes('设为管理员') &&
+          !adminMenuTexts.includes('转让群主'),
+        adminMenuTexts,
       );
       check(
         '管理员不被提示只有群 owner 可添加',
@@ -9620,7 +9911,7 @@ async function main(): Promise<void> {
       await waitForText(adminContext.page, '#room-announcement', 'G03 界面公告');
       check('管理员保存的公告显示在聊天区', true);
 
-      await agentBRow.locator('.member-action').filter({ hasText: '撤销管理员' }).click();
+      await clickMemberMenuItem(agentBRow, '撤销管理员');
       await ownerContext.page.waitForFunction(
         `(() => Array.from(document.querySelectorAll('#members-current .member-roster-role'))
           .some((node) => node.textContent === 'Agent'))()`,
@@ -9727,10 +10018,7 @@ async function main(): Promise<void> {
         proposeDialog = dialog.message();
         await dialog.accept();
       });
-      await rowOf(ownerPage, data.agentB.name)
-        .locator('.member-action')
-        .filter({ hasText: '转让群主' })
-        .click();
+      await clickMemberMenuItem(rowOf(ownerPage, data.agentB.name), '转让群主');
       await waitForText(ownerPage, '#members-transfer', '等待确认');
       check('转让发起确认说明需对方接受后生效', proposeDialog.includes('对方接受后才会生效'));
       check(
@@ -9739,14 +10027,11 @@ async function main(): Promise<void> {
           data.agentB.name,
         ),
       );
-      checkEqual(
-        '发起后转让入口锁定',
-        await rowOf(ownerPage, data.agentB.name)
-          .locator('.member-action')
-          .filter({ hasText: '转让确认中' })
-          .isDisabled(),
-        true,
-      );
+      const lockedTransferItem = (await openMemberRowMenu(rowOf(ownerPage, data.agentB.name)))
+        .locator('.member-menu-item')
+        .filter({ hasText: '转让确认中' });
+      checkEqual('发起后转让入口锁定', await lockedTransferItem.isDisabled(), true);
+      await ownerPage.keyboard.press('Escape');
       const proposedState = await rawTool<TransferRoomView>(
         data.humanToken,
         'network_room_get',
@@ -9806,7 +10091,10 @@ async function main(): Promise<void> {
       check('原 owner 页面同步新群主并关闭提议条', true);
       checkEqual(
         '原 owner 页面不再出现转让入口',
-        await ownerPage.locator('#members-current .member-action').filter({ hasText: '转让群主' }).count(),
+        await ownerPage
+          .locator('#members-current .member-menu-item')
+          .filter({ hasText: '转让群主' })
+          .count(),
         0,
       );
       await ownerPage.waitForFunction(
@@ -9826,10 +10114,7 @@ async function main(): Promise<void> {
       targetPage.once('dialog', async (dialog) => {
         await dialog.accept();
       });
-      await rowOf(targetPage, data.human.name)
-        .locator('.member-action')
-        .filter({ hasText: '转让群主' })
-        .click();
+      await clickMemberMenuItem(rowOf(targetPage, data.human.name), '转让群主');
       await waitForText(targetPage, '#members-transfer', '等待确认');
       await ownerPage
         .locator('#members-transfer .member-action')
@@ -9854,10 +10139,7 @@ async function main(): Promise<void> {
       targetPage.once('dialog', async (dialog) => {
         await dialog.accept();
       });
-      await rowOf(targetPage, data.human.name)
-        .locator('.member-action')
-        .filter({ hasText: '转让群主' })
-        .click();
+      await clickMemberMenuItem(rowOf(targetPage, data.human.name), '转让群主');
       await waitForText(targetPage, '#members-transfer', '等待确认');
       targetPage.once('dialog', async (dialog) => {
         await dialog.accept();
@@ -16391,7 +16673,7 @@ async function main(): Promise<void> {
         '',
         `预览附件：${longCardFile.publicUrl}`,
         '',
-        '填充内容 '.repeat(160),
+        '填充内容 '.repeat(1400),
       ].join('\n');
       await rawTool(data.agentAToken, 'network_message_send', {
         request_id: requestId('msg'),
@@ -16408,7 +16690,7 @@ async function main(): Promise<void> {
         '2. 第二步',
         `长文卡片：${longCardFile.publicUrl}`,
         '**展开后的粗体**',
-        '长文本内容 '.repeat(120),
+        '长文本内容 '.repeat(1200),
         longTail,
       ].join('\n');
       await rawTool(data.agentAToken, 'network_message_send', {
@@ -16426,7 +16708,7 @@ async function main(): Promise<void> {
         // token 独占一行，代码围栏/列表标记才能按块级语法解析。
         const fill = 512 - encoder.encode(head).length - 1 - offset;
         if (fill < 0) throw new Error(`截断用例前缀过长: ${marker}`);
-        return `${head}${'a'.repeat(fill)}\n${token}\n${tail}`;
+        return `${head}${'a'.repeat(fill)}\n${token}\n${tail}\n${'尾部填充 '.repeat(1400)}`;
       };
       const cutCases = [
         { kind: 'bold', marker: '截断粗体用例', token: '**bold**', offset: 4, tail: '粗体尾部' },
@@ -17132,6 +17414,86 @@ async function main(): Promise<void> {
       );
       await darkMobile.context.close();
       await context.close();
+
+      // 自动展开读取失败：回退显示「展开全文」，解除故障后可手动展开。
+      const autoFailMarker = '自动展开失败标记';
+      const autoFailTail = '自动失败后的完整结尾';
+      const autoFailSend = await rawTool<{ message: { message_id: string } }>(
+        data.agentAToken,
+        'network_message_send',
+        {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: mdRoomId,
+          invoke: [],
+          body: [autoFailMarker, '自动失败填充 '.repeat(400), autoFailTail].join('\n'),
+        },
+      );
+      const autoFailId = autoFailSend.message.message_id;
+      const failContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      let autoFailReads = 0;
+      await failContext.page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] !== 'network_message_read') {
+          await route.continue();
+          return;
+        }
+        const body = request.postDataJSON() as {
+          id?: unknown;
+          params?: { arguments?: { message_id?: string } };
+        } | null;
+        if (body?.params?.arguments?.message_id !== autoFailId) {
+          await route.continue();
+          return;
+        }
+        autoFailReads += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({ code: 'INTERNAL', message: '模拟正文读取失败' }),
+                },
+              ],
+            },
+          }),
+        });
+      });
+      await failContext.page.goto(`${server.base}/c/${mdRoomId}`);
+      await waitRoom(failContext.page, mdRoomId, 'AI Markdown 群');
+      const autoFailMessage = failContext.page
+        .locator('#messages .msg')
+        .filter({ hasText: autoFailMarker })
+        .last();
+      await autoFailMessage.locator('.expand').waitFor({ state: 'visible' });
+      check('自动展开读取失败后回退展开按钮', autoFailReads >= 1, autoFailReads);
+      checkEqual(
+        '自动展开失败保留预览正文',
+        ((await autoFailMessage.locator('.bubble').textContent()) ?? '').includes(autoFailTail),
+        false,
+      );
+      await failContext.page.unroute('**/mcp');
+      await autoFailMessage.locator('.expand').click();
+      await autoFailMessage.locator('.expand').waitFor({ state: 'detached' });
+      await waitUntil(
+        async () =>
+          ((await autoFailMessage.locator('.bubble').textContent()) ?? '').includes(autoFailTail),
+        '解除故障后手动展开成功',
+        15_000,
+      );
+      check('自动展开失败恢复后可手动展开', true);
+      await failContext.context.close();
 
       // 60 条 AI 消息覆盖「加载更早消息」与 Markdown 升级的高度补偿。
       const scrollGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
@@ -18150,15 +18512,25 @@ async function main(): Promise<void> {
         );
         await wideContext.page.goto(`${server.base}/c/${wideRoomId}`);
         await waitRoom(wideContext.page, wideRoomId, '长内容滚动群');
-        // 512B 预览只含长 URL；展开全文后才是 40 行表格与 300 行代码块。
+        // 512B 预览只含长 URL；阈值内的 Agent 消息自动读全文并渲染表格/代码块。
         const wideMessage = wideContext.page
           .locator('#messages .msg')
           .filter({ hasText: '长内容回归' })
           .first();
-        await wideMessage.locator('.expand').waitFor();
-        await wideMessage.locator('.expand').click();
         await wideMessage.locator('.msg-markdown .md-table').waitFor();
         await wideMessage.locator('.msg-markdown .md-pre').waitFor();
+        await waitUntil(
+          async () => (await wideMessage.locator('.expand').count()) === 0,
+          `${label} Agent 长消息自动展开后不保留展开按钮`,
+          5_000,
+        );
+        check(`${label} Agent 长消息自动展开`, true);
+        const autoReadCalls = await wideContext.page.evaluate(
+          `(window.__mcpCalls || []).filter(function (call) {
+            return call.name === 'network_message_read';
+          }).length`,
+        );
+        checkEqual(`${label} Agent 长消息只读取一次全文`, Number(autoReadCalls), 1);
         await waitForBottom(wideContext.page, `${label} 长内容进入到底`, 15_000);
         const metrics = (await wideContext.page.evaluate(`(() => {
           const messages = document.getElementById('messages');
@@ -19152,7 +19524,7 @@ async function main(): Promise<void> {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
         room_id: scrollRoomId,
-        body: `${expandMarker}\n\n${'长内容前缀 '.repeat(120)}\n\n**${expandTail}**`,
+        body: `${expandMarker}\n\n${'长内容前缀 '.repeat(1200)}\n\n**${expandTail}**`,
       });
       const expandContext = await makeContext(
         browser,

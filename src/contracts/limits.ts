@@ -95,6 +95,11 @@ export const LIMITS = {
   webAgentRegistryMax: 100,
   /** 成员选择器每次渲染的候选数量；搜索过滤后再分页。 */
   webMemberPickerPageSize: 100,
+  /**
+   * Agent 消息预览被截断但正文不超过该字节数时，页面自动读取全文并直接渲染。
+   * 超过该上限仍显示「展开全文」，避免一次刷新并发读取过多大消息。
+   */
+  webAgentAutoExpandBytes: 16 * 1024,
   /** 单次成员变更上限。 */
   memberChangeMax: 20,
   /** 好友申请附言 UTF-8 字节上限。 */
