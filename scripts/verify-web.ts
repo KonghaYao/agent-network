@@ -16,6 +16,7 @@ import { Database } from 'bun:sqlite';
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright';
 
 import { extractMessageFileLinks } from '../src/contracts/file-links';
+import { LIMITS } from '../src/contracts/limits';
 import {
   callTool,
   check,
@@ -3834,6 +3835,295 @@ async function runLongHistoryAcceptance(
       `滚动到历史顶部后仍只读取视口附近消息（${readsBeforeTop}→${readsAfterTop}/56）`,
       readsAfterTop > readsBeforeTop && readsAfterTop < 56,
       { readsBeforeTop, readsAfterTop },
+    );
+  } finally {
+    await context.close();
+  }
+}
+
+/**
+ * 切房缓存渲染边界：长缓存回到会话时只恢复房间元数据并加载最新页，
+ * 不再预渲染全部已加载历史；短缓存仍保持即时预览。
+ */
+async function runRoomSwitchCacheAcceptance(
+  browser: Browser,
+  base: string,
+  allErrors: string[],
+): Promise<void> {
+  const humanToken = crypto.randomUUID();
+  await rawTool<Actor>(humanToken, 'network_register', {
+    request_id: requestId('web_reg'),
+    kind: 'human',
+    name: '切房缓存验收人类',
+  });
+  const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+  const agent = await rawTool<Actor>(agentToken, 'network_register', {
+    request_id: requestId('reg'),
+    kind: 'agent',
+    name: '切房缓存验收 Agent',
+    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+  });
+  await rawBefriend(humanToken, agentToken, { actor_id: agent.actor_id });
+  const longRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('room'),
+    kind: 'group',
+    title: '长缓存切房群',
+    members: [agent.actor_id],
+  });
+  const longRoomId = longRoom.room.room_id;
+  await acceptRoomInvites(agentToken, longRoomId);
+  for (let index = 1; index <= 150; index += 1) {
+    await rawTool(agentToken, 'network_message_send', {
+      request_id: requestId('msg'),
+      client_message_id: crypto.randomUUID(),
+      room_id: longRoomId,
+      invoke: [],
+      body: `长缓存切换消息 ${String(index).padStart(3, '0')}`,
+    });
+  }
+  const shortRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('room'),
+    kind: 'group',
+    title: '短缓存切房群',
+    members: [agent.actor_id],
+  });
+  const shortRoomId = shortRoom.room.room_id;
+  await acceptRoomInvites(agentToken, shortRoomId);
+  for (let index = 1; index <= 6; index += 1) {
+    await rawTool(agentToken, 'network_message_send', {
+      request_id: requestId('msg'),
+      client_message_id: crypto.randomUUID(),
+      room_id: shortRoomId,
+      invoke: [],
+      body: `短缓存切换消息 ${index}`,
+    });
+  }
+
+  const { context, page } = await makeContext(
+    browser,
+    humanToken,
+    { width: 1280, height: 900 },
+    allErrors,
+  );
+  try {
+    await page.goto(`${base}/c/${longRoomId}`);
+    await waitRoom(page, longRoomId, '长缓存切房群');
+    await waitUntil(
+      async () => (await messageCount(page)) === 50,
+      '长缓存会话首屏 50 条',
+      20_000,
+    );
+    await page.evaluate(`document.getElementById('older').click()`);
+    await waitUntil(
+      async () => (await messageCount(page)) >= 100,
+      '长缓存会话加载到 100 条',
+      15_000,
+    );
+    await page.evaluate(`document.getElementById('older').click()`);
+    await waitUntil(
+      async () => (await messageCount(page)) >= 150,
+      '长缓存会话加载到 150 条',
+      15_000,
+    );
+    await sleep(300);
+    const loadedIds = await timelineMessageIds(page);
+    checkEqual('长缓存场景已加载 150 条', loadedIds.length, 150);
+    checkEqual('长缓存场景消息无重复', new Set(loadedIds).size, loadedIds.length);
+    await page.fill('#body', '长缓存草稿');
+
+    // 先进入短会话建立缓存，再切回长会话验证渲染边界。
+    await page.locator(roomLink(shortRoomId)).click();
+    await waitRoom(page, shortRoomId, '短缓存切房群');
+    await waitUntil(
+      async () => (await messageCount(page)) === 6,
+      '短缓存会话首屏 6 条',
+      15_000,
+    );
+    await sleep(200);
+
+    let releaseLongHistory: (() => void) | null = null;
+    let longHistoryStarted = false;
+    let longHistoryFinished = false;
+    await page.route('**/mcp', async (route) => {
+      const request = route.request();
+      if (request.headers()['mcp-name'] !== 'network_history_list') {
+        await route.continue();
+        return;
+      }
+      const body = request.postDataJSON() as {
+        params?: { arguments?: { room_id?: string; cursor?: string | null } };
+      } | null;
+      const args = body?.params?.arguments;
+      if (args?.room_id !== longRoomId || args.cursor) {
+        await route.continue();
+        return;
+      }
+      longHistoryStarted = true;
+      await new Promise<void>((resolve) => {
+        releaseLongHistory = resolve;
+      });
+      await route.continue();
+      longHistoryFinished = true;
+    });
+
+    await page.locator(roomLink(longRoomId)).click();
+    await waitUntil(
+      async () => longHistoryStarted && releaseLongHistory !== null,
+      '长缓存切回请求进入等待',
+      10_000,
+    );
+    const duringSwitch = {
+      messages: await messageCount(page),
+      loading: await page.locator('#chat-loading').isVisible(),
+      skeleton: await page.locator('#chat-skeleton').isVisible(),
+      title: await page.locator('#title').textContent(),
+      draft: await page.inputValue('#body'),
+      errorHidden: await page.locator('#chat-error').isHidden(),
+    };
+    checkEqual('长缓存切回加载态不预渲染历史', duringSwitch.messages, 0);
+    check(
+      '长缓存切回加载态消息数不超过阈值',
+      duringSwitch.messages <= LIMITS.webRoomCacheRenderMax,
+      duringSwitch,
+    );
+    checkEqual('长缓存切回显示加载条', duringSwitch.loading, true);
+    checkEqual('长缓存切回显示骨架', duringSwitch.skeleton, true);
+    checkEqual('长缓存切回标题来自缓存', duringSwitch.title, '长缓存切房群');
+    checkEqual('长缓存切回保留草稿', duringSwitch.draft, '长缓存草稿');
+    checkEqual('长缓存切回未显示错误', duringSwitch.errorHidden, true);
+
+    releaseLongHistory!();
+    await waitUntil(
+      async () => (await messageCount(page)) === 50,
+      '长缓存切回只渲染最新页 50 条',
+      20_000,
+    );
+    await waitUntil(
+      async () => page.locator('#chat-loading').isHidden(),
+      '长缓存切回加载态收口',
+      10_000,
+    );
+    await waitUntil(async () => longHistoryFinished, '长缓存切回请求完成', 10_000);
+    await page.unroute('**/mcp');
+    await sleep(300);
+    const latestIds = await timelineMessageIds(page);
+    checkEqual('长缓存切回最终只有最新页', latestIds.length, 50);
+    checkEqual('长缓存切回消息无重复', new Set(latestIds).size, latestIds.length);
+    checkEqual('长缓存切回标题正确', await page.locator('#title').textContent(), '长缓存切房群');
+    checkEqual('长缓存切回草稿正确', await page.inputValue('#body'), '长缓存草稿');
+    await waitForBottom(page, '长缓存切回后仍到底');
+    check('长缓存切回后回到底部', (await bottomGap(page)) <= 2, await bottomGap(page));
+
+    // 最新页仍保留更早游标。
+    await page.evaluate(`document.getElementById('older').click()`);
+    await waitUntil(
+      async () => (await messageCount(page)) >= 100,
+      '长缓存切回后仍能加载更早',
+      15_000,
+    );
+    await sleep(200);
+    const olderIds = await timelineMessageIds(page);
+    checkEqual('长缓存切回后加载更早共 100 条', olderIds.length, 100);
+    checkEqual('长缓存切回后加载更早无重复', new Set(olderIds).size, olderIds.length);
+
+    // 短缓存切回仍立即显示缓存内容，不闪加载态/错误。
+    await page.locator(roomLink(shortRoomId)).click();
+    const shortBackImmediate = {
+      messages: await messageCount(page),
+      loading: await page.locator('#chat-loading').isVisible(),
+      skeleton: await page.locator('#chat-skeleton').isVisible(),
+      title: await page.locator('#title').textContent(),
+      errorHidden: await page.locator('#chat-error').isHidden(),
+    };
+    checkEqual('短缓存切回立即显示缓存消息', shortBackImmediate.messages, 6);
+    checkEqual('短缓存切回不显示加载态', shortBackImmediate.loading, false);
+    checkEqual('短缓存切回不显示骨架', shortBackImmediate.skeleton, false);
+    checkEqual('短缓存切回标题正确', shortBackImmediate.title, '短缓存切房群');
+    checkEqual('短缓存切回无错误', shortBackImmediate.errorHidden, true);
+    await waitRoom(page, shortRoomId, '短缓存切房群');
+    await sleep(300);
+    checkEqual('短缓存切回刷新后仍 6 条', await messageCount(page), 6);
+
+    // 长缓存刷新失败必须给出明确错误与重试，而不是空白或旧长缓存。
+    let failedLongRoomGet = false;
+    await page.route('**/mcp', async (route) => {
+      const request = route.request();
+      if (request.headers()['mcp-name'] !== 'network_room_get' || failedLongRoomGet) {
+        await route.continue();
+        return;
+      }
+      const body = request.postDataJSON() as {
+        id?: unknown;
+        params?: { arguments?: { room_id?: string } };
+      } | null;
+      if (body?.params?.arguments?.room_id !== longRoomId) {
+        await route.continue();
+        return;
+      }
+      failedLongRoomGet = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: body?.id ?? null,
+          result: {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ code: 'INTERNAL', message: '模拟长缓存刷新失败' }),
+              },
+            ],
+          },
+        }),
+      });
+    });
+    await page.locator(roomLink(longRoomId)).click();
+    await waitUntil(
+      async () => page.locator('#chat-error').isVisible(),
+      '长缓存刷新失败显示错误',
+      10_000,
+    );
+    check(
+      '长缓存刷新失败错误文案可读',
+      ((await page.locator('#chat-error-text').textContent()) ?? '').includes('加载会话失败'),
+      await page.locator('#chat-error-text').textContent(),
+    );
+    checkEqual('长缓存刷新失败不显示旧缓存消息', await messageCount(page), 0);
+    checkEqual('长缓存刷新失败提供重试', await page.locator('#chat-error-retry').isVisible(), true);
+    await page.unroute('**/mcp');
+    await page.locator('#chat-error-retry').click();
+    await waitUntil(
+      async () => (await messageCount(page)) === 50,
+      '长缓存刷新失败后可重试',
+      20_000,
+    );
+    checkEqual('长缓存重试后恢复最新页', await messageCount(page), 50);
+    checkEqual('长缓存重试后隐藏错误', await page.locator('#chat-error').isHidden(), true);
+
+    // 390px 下长缓存切回后的消息区不横向溢出（此时仍在长会话最新页）。
+    await page.setViewportSize({ width: 390, height: 844 });
+    await sleep(200);
+    const mobileLayout = (await page.evaluate(`(() => {
+      const messages = document.getElementById('messages');
+      return {
+        view: window.innerWidth,
+        doc: document.documentElement.scrollWidth,
+        messagesClient: messages ? messages.clientWidth : 0,
+        messagesScroll: messages ? messages.scrollWidth : 0
+      };
+    })()`)) as {
+      view: number;
+      doc: number;
+      messagesClient: number;
+      messagesScroll: number;
+    };
+    check('390px 长缓存切回不横向溢出', mobileLayout.doc <= mobileLayout.view + 1, mobileLayout);
+    check(
+      '390px 长缓存切回消息区不横向溢出',
+      mobileLayout.messagesScroll <= mobileLayout.messagesClient + 1,
+      mobileLayout,
     );
   } finally {
     await context.close();
@@ -21367,6 +21657,8 @@ async function main(): Promise<void> {
     await runMessageOutboxAcceptance(browser, server.base, allErrors);
 
     await runLongHistoryAcceptance(browser, server.base, allErrors);
+
+    await runRoomSwitchCacheAcceptance(browser, server.base, allErrors);
 
     await runRoomListPaginationAcceptance(
       browser,

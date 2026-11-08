@@ -9,6 +9,7 @@ import { LIMITS } from '../contracts/limits';
  */
 export const CHAT_SESSION_SCRIPT = `
 const OLDER_AUTO_TOP_RATIO = ${LIMITS.webOlderAutoTopRatio};
+const ROOM_CACHE_RENDER_MAX = ${LIMITS.webRoomCacheRenderMax};
 let activeRoomId = initialRoomId;
 let roomEpoch = 0;
 let roomAbort = null;
@@ -390,7 +391,21 @@ function handleRoomError(error, roomId, epoch) {
   setChatError(message);
 }
 
-function applyCachedRoom(cache) {
+/**
+ * 应用缓存房间：元数据、成员、草稿与输入框总是立即恢复；
+ * 消息只在缓存不超过 ROOM_CACHE_RENDER_MAX 时整表预渲染。
+ * 超过阈值时清空消息区并显示加载态，由最新页重新填充，避免切回长会话
+ * 先重绘数百条历史再被 refresh 覆盖。
+ */
+function applyCachedRoom(cache, options) {
+  const settings = options || {};
+  const wantsRender = settings.renderItems !== false;
+  const limit = Number.isFinite(settings.itemsLimit) && settings.itemsLimit > 0
+    ? Math.min(Math.floor(settings.itemsLimit), ROOM_CACHE_RENDER_MAX)
+    : ROOM_CACHE_RENDER_MAX;
+  const cachedItems = cache.items || [];
+  const longCache = cachedItems.length > ROOM_CACHE_RENDER_MAX;
+  const renderItems = wantsRender && !longCache;
   room = cache.room || null;
   applyRoomLifecycle(room);
   members = new Map((cache.members || []).map(function (member) {
@@ -400,16 +415,29 @@ function applyCachedRoom(cache) {
     return [invited.actor_id, invited];
   }));
   ownerTransfer = cache.ownerTransfer || null;
-  currentItems = (cache.items || []).slice();
-  // 到底状态属于房间自身：切走再切回时不能因为重新取最新页而恢复按钮。
-  olderEnded = Boolean(cache.olderEnded);
-  nextOlder = olderEnded ? null : (cache.nextOlder || null);
-  timelineResumeCursor = cache.timelineResumeCursor || null;
+  currentItems = renderItems
+    ? cachedItems.slice(Math.max(0, cachedItems.length - limit))
+    : [];
+  if (currentItems.length < cachedItems.length) {
+    // 只是预览或被丢弃的长缓存：旧游标会跳过最新页，交给刷新重新建立。
+    olderEnded = false;
+    nextOlder = null;
+    timelineResumeCursor = null;
+  } else {
+    // 到底状态属于房间自身：切走再切回时不能因为重新取最新页而恢复按钮。
+    olderEnded = Boolean(cache.olderEnded);
+    nextOlder = olderEnded ? null : (cache.nextOlder || null);
+    timelineResumeCursor = cache.timelineResumeCursor || null;
+  }
   olderLoading = false;
   olderError = '';
   updateOlderAffordance();
   applyRoomHeader();
-  renderMessageList(currentItems);
+  if (renderItems) {
+    renderMessageList(currentItems);
+  } else {
+    setChatLoading(true, { keepContent: false, skeleton: true });
+  }
   // 缓存只用于立即绘制；进入会话一律看最新消息，不再恢复旧 scrollTop。
   scrollController.scrollToBottom();
   if (bodyInput) {
@@ -888,9 +916,11 @@ async function openRoom(roomId, options) {
   updateCopyGroupInfoAffordance();
   if (sendButton) sendButton.disabled = false;
   const cache = roomCache.get(roomId);
+  const longCache = Boolean(cache && (cache.items || []).length > ROOM_CACHE_RENDER_MAX);
   if (cache) {
-    applyCachedRoom(cache);
-    setChatLoading(false);
+    // 长缓存只恢复房间元数据并显示加载态，不预渲染全部已加载历史。
+    applyCachedRoom(cache, longCache ? { renderItems: false } : undefined);
+    if (!longCache) setChatLoading(false);
   } else {
     const keepContent = Boolean(messagesElement && messagesElement.childElementCount > 0);
     setChatLoading(true, {
@@ -926,10 +956,11 @@ async function openRoom(roomId, options) {
     if (isAbortError(error) || !isActiveRoom(roomId, epoch)) return;
     if (error && (error.code === 'NOT_MEMBER' || error.code === 'NOT_FOUND')) {
       handleRoomError(error, roomId, epoch);
-    } else if (cache) {
+    } else if (cache && !longCache) {
       setChatLoading(false);
       statusElement.textContent = '刷新失败：' + (error && error.message ? error.message : error);
     } else {
+      // 长缓存没有可安全回退的预览；显示明确错误与重试，不留空白。
       handleRoomError(error, roomId, epoch);
     }
   }

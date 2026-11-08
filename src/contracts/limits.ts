@@ -418,6 +418,12 @@ export const LIMITS = {
   /** 回到最新后的 mark_read 去抖窗口（毫秒）。 */
   webScrollMarkReadDelayMs: 250,
   /**
+   * 切回房间时允许直接预渲染的缓存消息上限。
+   * 超过该值只应用房间元数据并显示加载态，由最新页重新填充；
+   * 避免把数百条已加载历史整表重绘后再被刷新覆盖。
+   */
+  webRoomCacheRenderMax: 80,
+  /**
    * 消息数超过该值才开启 `content-visibility` 长列表隔离。
    * 短会话保持原生滚动高度估算，避免引入滚动条跳动。
    */
