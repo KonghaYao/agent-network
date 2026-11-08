@@ -608,6 +608,10 @@ export const APP_STYLE = `
     background: rgb(0 0 0 / 4%); color: var(--wx-muted); font-size: 11px;
     text-align: center; overflow-wrap: anywhere; }
   .msg { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 18px; min-width: 0; }
+  /* 长会话才开启布局隔离；短会话保持原生滚动高度估算，避免滚动条跳动。 */
+  .messages--long .msg { content-visibility: auto; contain-intrinsic-size: auto 88px; }
+  .messages--long .msg-time,
+  .messages--long .msg-system { content-visibility: auto; contain-intrinsic-size: auto 32px; }
   .msg.mine { flex-direction: row-reverse; }
   .msg-avatar { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 6px;
     display: grid; place-items: center; overflow: hidden; color: #fff;

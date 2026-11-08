@@ -6,6 +6,11 @@
  */
 export const CHAT_RENDER_SCRIPT = `
 const TIME_GAP = 5 * 60 * 1000;
+// 列表渲染复用同一个 encoder，避免每条消息构造一次。
+const messageTextEncoder = new TextEncoder();
+// 气泡 title 只显示到分钟；按分钟缓存 Intl 结果，长列表不逐条格式化。
+const fullTimeCache = new Map();
+let cachedMentionNames = null;
 // 已展开全文的消息正文；刷新重建 DOM 后仍直接渲染完整正文。
 const expandedMessageBodies = new Map();
 // 同一 message_id 的自动展开只发一次读取；刷新重建的节点共享同一结果。
@@ -43,8 +48,15 @@ function chatTime(value) {
 }
 
 function fullTime(value) {
-  const date = new Date(Number(value));
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+  const ms = Number(value);
+  if (!ms || Number.isNaN(ms)) return '';
+  const minute = Math.floor(ms / 60_000);
+  const cached = fullTimeCache.get(minute);
+  if (cached !== undefined) return cached;
+  const text = new Date(minute * 60_000).toLocaleString();
+  if (fullTimeCache.size >= 512) fullTimeCache.clear();
+  fullTimeCache.set(minute, text);
+  return text;
 }
 
 const DELIVERY_STATES = ['pending', 'claimed', 'completed', 'failed', 'cancelled'];
@@ -135,13 +147,16 @@ function claimStale(item) {
 }
 
 function applyReceipt(receipt, item) {
+  const label = receipt.firstElementChild;
+  if (label) label.textContent = receiptText(item);
+  receipt.classList.toggle('stale', claimStale(item));
+  // 列表构建阶段节点尚未入树：只写文本，不读布局。
+  // 整表替换后的最终高度由 scrollController 的 rAF 钉底/锚点恢复统一校准。
+  if (!receipt.isConnected) return;
   const scroller = messagesElement;
   const scrollerTop = scroller ? scroller.getBoundingClientRect().top : 0;
   const aboveViewport = scroller ? receipt.getBoundingClientRect().bottom < scrollerTop : false;
   const beforeHeight = receipt.getBoundingClientRect().height;
-  const label = receipt.firstElementChild;
-  if (label) label.textContent = receiptText(item);
-  receipt.classList.toggle('stale', claimStale(item));
   // 异步回执文本变化可能加高；上翻阅读时补偿锚点，pinned 时由控制器补钉底。
   const afterHeight = receipt.getBoundingClientRect().height;
   if (!scrollController.isPinned() && aboveViewport && afterHeight !== beforeHeight) {
@@ -164,12 +179,20 @@ function scheduleReceipt(receipt, item) {
 }
 
 function mentionNames() {
+  if (cachedMentionNames) return cachedMentionNames;
   const names = [];
   for (const member of members.values()) {
     if (member.name) names.push(member.name);
   }
   if (identity && identity.name) names.push(identity.name);
-  return names.sort(function (a, b) { return b.length - a.length; });
+  names.sort(function (a, b) { return b.length - a.length; });
+  cachedMentionNames = names;
+  return names;
+}
+
+/** 每次房间渲染/历史批次开始时失效；同一批消息只计算一次成员名。 */
+function invalidateMentionNames() {
+  cachedMentionNames = null;
 }
 
 /** 纯文本写入，只把已知成员名对应的 @ 片段包成高亮，避免 HTML 注入。 */
@@ -259,6 +282,8 @@ function messageItem(item) {
   const element = document.createElement('li');
   element.className = 'msg' + (mine ? ' mine has-receipt' : '');
   element.dataset.messageId = item.message_id;
+  // 任务同步按 message_id 索引节点；loadOlder 后不再全表查询。
+  rememberTaskMarkerNode(item.message_id, element);
   // 任务入口统一在消息悬停或聚焦时显示；触屏保留人类入口，仅影响展示，不改变任务契约。
   element.dataset.senderKind = agent ? 'agent' : 'human';
   // 任务入口由后续任务片段按同一 message_id 补齐；这里只保留定位数据。
@@ -284,9 +309,10 @@ function messageItem(item) {
   const expandedBody = expandedMessageBodies.get(item.message_id);
   const bodyText = expandedBody === undefined ? item.preview : expandedBody;
   const truncated = expandedBody === undefined &&
-    item.body_bytes > new TextEncoder().encode(item.preview).length;
+    item.body_bytes > messageTextEncoder.encode(item.preview).length;
   // 预览也渲染 Markdown；截断可能切断语法，由 Markdown 岛用 remend 闭合。
-  renderMessageBody(bubble, bodyText, item, agent, truncated);
+  // 传入 element：首屏只登记懒升级，消息进入视口附近后才创建 React root。
+  renderMessageBody(bubble, bodyText, item, agent, truncated, false, element);
   content.append(bubble);
   const filesRef = { current: mountMessageFiles(bodyText, null) };
   if (filesRef.current) content.append(filesRef.current);
@@ -483,8 +509,8 @@ async function runAgentAutoExpand(task) {
   try {
     const fullText = await readMessageShared(item.message_id);
     if (!element.isConnected || !bubble.isConnected) return;
-    const retry = bubble.dataset.markdownUnavailable === '1';
-    const rendered = await renderMessageBody(bubble, fullText, item, true, false, retry);
+    // 自动展开是后台便利路径，不消耗用户手动展开的一次 bundle 重试机会。
+    const rendered = await renderMessageBody(bubble, fullText, item, true, false, false);
     if (!element.isConnected || !bubble.isConnected) return;
     filesRef.current = mountMessageFiles(fullText, filesRef.current);
     if (filesRef.current && !filesRef.current.isConnected) {
@@ -503,43 +529,68 @@ async function runAgentAutoExpand(task) {
   }
 }
 
+/** 消息数超过阈值时才开启 content-visibility；短会话保持原生高度估算。 */
+function updateMessagesLengthClass() {
+  if (!messagesElement) return;
+  const count = messagesElement.getElementsByClassName('msg').length;
+  messagesElement.classList.toggle('messages--long', count > WEB_LONG_MESSAGE_THRESHOLD);
+}
+
 /** 全量替换消息区；缓存切换与首屏加载共用同一套渲染逻辑。 */
 function renderMessageList(items) {
   if (!messagesElement) return;
   resetAgentAutoExpand();
   resetMarkdownHandles();
   resetMessageFileCards();
+  resetTaskMarkerIndex();
+  invalidateMentionNames();
   scrollController.beginContentChange();
-  messagesElement.replaceChildren();
-  ensureHistoryPager();
+  // 整表只在 DocumentFragment 中构建一次，最后统一入树；构建期间不读布局。
+  const fragment = document.createDocumentFragment();
+  if (historyPagerElement) fragment.append(historyPagerElement);
   // 服务端消息已出现在时间线时，先清掉对应的本地发送意图。
   outboxPruneAgainstTimeline(items);
-  appendHistory(messagesElement, items);
-  outboxAppendRows(messagesElement, activeRoomId);
-  ensureMessagesEnd();
-  // 任务面板可能晚于消息加载；同一 message_id 的卡片/来源标记在这里补齐。
-  syncTaskCardMarkers(messagesElement);
+  appendHistory(fragment, items);
+  outboxAppendRows(fragment, activeRoomId);
+  const end = ensureMessagesEnd();
+  if (end) fragment.append(end);
+  // 任务标记只同步本批新增节点，避免每次刷新全表 querySelectorAll + find。
+  syncTaskCardMarkers(fragment);
+  messagesElement.replaceChildren(fragment);
+  ensureHistoryPager();
+  updateMessagesLengthClass();
   scrollController.noteContentChanged();
 }
 
 /**
  * 连续消息间隔超过 5 分钟时插入居中时间胶囊；presence 行自带时间。
  *
- * previousTimestamp 供预置历史块使用；返回值是本段最后一条的时间。
+ * previousTimestamp 供预置历史块使用；返回本段首/末节点与最后一条时间，
+ * 供 prepend seam 或后续增量 DOM 复用，不改变消息顺序。
  */
 function appendHistory(container, items, options) {
+  invalidateMentionNames();
   let previous = Number(options && options.previousTimestamp) || 0;
+  const result = { first: null, last: null, lastTimestamp: previous };
+  const appendNode = function (node) {
+    if (!result.first) {
+      result.first = node.nodeType === 11 ? node.firstElementChild : node;
+    }
+    result.last = node.nodeType === 11 ? node.lastElementChild : node;
+    container.append(node);
+  };
   for (const item of items) {
     const created = timelineTimestamp(item);
     if (item.kind === 'presence') {
-      container.append(presenceItem(item));
+      appendNode(presenceItem(item));
     } else {
-      if (!previous || created - previous > TIME_GAP) container.append(timeDivider(created));
-      container.append(messageItem(item));
+      if (!previous || created - previous > TIME_GAP) appendNode(timeDivider(created));
+      appendNode(messageItem(item));
     }
     if (created) previous = created;
   }
-  return previous;
+  result.lastTimestamp = previous;
+  return result;
 }
 
 async function readMessage(messageId) {

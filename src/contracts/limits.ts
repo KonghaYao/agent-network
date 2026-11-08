@@ -417,6 +417,11 @@ export const LIMITS = {
   webOlderAutoTopRatio: 0.1,
   /** 回到最新后的 mark_read 去抖窗口（毫秒）。 */
   webScrollMarkReadDelayMs: 250,
+  /**
+   * 消息数超过该值才开启 `content-visibility` 长列表隔离。
+   * 短会话保持原生滚动高度估算，避免引入滚动条跳动。
+   */
+  webLongMessageListThreshold: 200,
   /** MCP Events 默认订阅寿命（毫秒）。 */
   eventsSubscriptionTtlMs: 24 * 60 * 60_000,
   /** MCP Events 最小授权寿命（毫秒）。 */

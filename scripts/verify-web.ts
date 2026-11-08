@@ -72,7 +72,7 @@ const IGNORED_CONSOLE = ['Failed to load resource', 'net::ERR_'];
 const GROUP_AT_RULE =
   '群聊里必须 @ 你要回复的人/Agent，不要直接回复；人可能不会注意到没有 @ 的消息。';
 
-async function rawTool<T>(token: string, name: string, args: Record<string, unknown>): Promise<T> {
+export async function rawTool<T>(token: string, name: string, args: Record<string, unknown>): Promise<T> {
   const response = await rawRpc('tools/call', { name, arguments: args }, { token });
   const result = response.body.result as
     | {
@@ -168,7 +168,7 @@ function contrastRatio(foreground: string, background: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-async function startServer(): Promise<{
+export async function startServer(): Promise<{
   base: string;
   dataDir: string;
   stop: () => Promise<void>;
@@ -336,7 +336,7 @@ function initScript(token: string, seedOnce = false): string {
 })();`;
 }
 
-async function makeContext(
+export async function makeContext(
   browser: Browser,
   token: string,
   viewport: { width: number; height: number },
@@ -926,6 +926,44 @@ async function bottomGap(page: Page): Promise<number> {
 
 async function waitForBottom(page: Page, label: string, timeout = 8_000): Promise<void> {
   await waitUntil(async () => (await bottomGap(page)) <= 2, label, timeout);
+}
+
+/**
+ * 懒 Markdown：消息进入视口附近才升级。先滚到目标消息，再等待 root；
+ * 随后回到最新，避免影响后续“粘底发送/冻结”断言。
+ */
+async function waitForLazyMarkdown(locator: Locator): Promise<void> {
+  await locator.scrollIntoViewIfNeeded();
+  await locator.locator('.msg-markdown').waitFor();
+  const page = locator.page();
+  await scrollMessagesToBottom(page);
+}
+
+async function scrollMessagesToBottom(page: Page): Promise<void> {
+  await page.evaluate(`(() => {
+    const node = document.getElementById('messages');
+    if (node) node.scrollTop = node.scrollHeight;
+  })()`);
+  await waitUntil(async () => (await bottomGap(page)) <= 2, '消息区回到底部', 3_000);
+}
+
+/** 懒 Markdown 分批升级：等 root 数稳定，避免用升级中途的布局做锚点断言。 */
+async function waitForMarkdownSettled(page: Page, timeout = 10_000): Promise<void> {
+  let last = -1;
+  let stableSince = Date.now();
+  await waitUntil(
+    async () => {
+      const count = await page.locator('#messages .msg-markdown').count();
+      if (count !== last) {
+        last = count;
+        stableSince = Date.now();
+        return false;
+      }
+      return Date.now() - stableSince >= 500;
+    },
+    'Markdown 升级稳定',
+    timeout,
+  );
 }
 
 interface BubbleLayout {
@@ -17455,7 +17493,7 @@ async function main(): Promise<void> {
       await waitRoom(page, mdRoomId, 'AI Markdown 群');
 
       const richMessage = page.locator('#messages .msg').filter({ hasText: richMarker }).last();
-      await richMessage.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(richMessage);
       checkEqual(
         'AI 粗体渲染',
         (await richMessage.locator('.msg-markdown strong').first().textContent())?.trim(),
@@ -17531,7 +17569,7 @@ async function main(): Promise<void> {
       );
 
       const singleMessage = page.locator('#messages .msg').filter({ hasText: singleMarker }).last();
-      await singleMessage.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(singleMessage);
       checkEqual(
         'Markdown 根节点保持 white-space normal',
         await singleMessage.locator('.msg-markdown').evaluate(
@@ -17547,22 +17585,22 @@ async function main(): Promise<void> {
       checkEqual('单换行仍是一个段落', await singleMessage.locator('.msg-markdown p').count(), 1);
 
       const doubleMessage = page.locator('#messages .msg').filter({ hasText: doubleMarker }).last();
-      await doubleMessage.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(doubleMessage);
       checkEqual('双换行生成两个段落', await doubleMessage.locator('.msg-markdown p').count(), 2);
       checkEqual('双换行不生成 br', await doubleMessage.locator('.msg-markdown p br').count(), 0);
 
       const crlfMessage = page.locator('#messages .msg').filter({ hasText: crlfMarker }).last();
-      await crlfMessage.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(crlfMessage);
       checkEqual('CRLF 单换行保留为两处 br', await crlfMessage.locator('.msg-markdown p br').count(), 2);
       checkEqual('CRLF 仍是一个段落', await crlfMessage.locator('.msg-markdown p').count(), 1);
 
       const tripleMessage = page.locator('#messages .msg').filter({ hasText: tripleMarker }).last();
-      await tripleMessage.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(tripleMessage);
       checkEqual('三换行折叠为两个段落', await tripleMessage.locator('.msg-markdown p').count(), 2);
       checkEqual('三换行不生成 br', await tripleMessage.locator('.msg-markdown p br').count(), 0);
 
       const quoteMessage = page.locator('#messages .msg').filter({ hasText: quoteMarker }).last();
-      await quoteMessage.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(quoteMessage);
       checkEqual(
         '引用内单换行只生成一个 br',
         await quoteMessage.locator('.msg-markdown blockquote p br').count(),
@@ -17573,7 +17611,7 @@ async function main(): Promise<void> {
         .locator('#messages .msg')
         .filter({ hasText: mentionMarker })
         .last();
-      await mentionMessage.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(mentionMessage);
       checkEqual(
         '粗体内 @ 仍高亮',
         await mentionMessage.locator('.msg-markdown strong .mention').count(),
@@ -17586,7 +17624,7 @@ async function main(): Promise<void> {
       );
 
       const xssMessage = page.locator('#messages .msg').filter({ hasText: xssMarker }).last();
-      await xssMessage.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(xssMessage);
       checkEqual('XSS 不生成图片', await xssMessage.locator('.bubble img').count(), 0);
       checkEqual('XSS 不生成脚本', await xssMessage.locator('.bubble script').count(), 0);
       checkEqual(
@@ -17746,7 +17784,7 @@ async function main(): Promise<void> {
         .filter({ hasText: previewMarker })
         .last();
       await previewMessage.locator('.expand').waitFor();
-      await previewMessage.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(previewMessage);
       checkEqual(
         '512B preview 单换行生成 br',
         await previewMessage.locator('.msg-markdown p br').count(),
@@ -17792,7 +17830,7 @@ async function main(): Promise<void> {
 
       const longMessage = page.locator('#messages .msg').filter({ hasText: longMarker }).last();
       await longMessage.locator('.expand').waitFor();
-      await longMessage.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(longMessage);
       checkEqual('截断 AI 消息预览也渲染 Markdown', await longMessage.locator('.msg-markdown').count(), 1);
       check(
         '截断预览粗体渲染',
@@ -17854,7 +17892,7 @@ async function main(): Promise<void> {
           .locator('#messages .msg')
           .filter({ hasText: cutCase.marker })
           .last();
-        await cutMessage.locator('.msg-markdown').waitFor();
+        await waitForLazyMarkdown(cutMessage);
         const cutText = (await cutMessage.locator('.bubble').textContent()) ?? '';
         checkEqual(
           `${cutCase.marker} 保留 Markdown 容器`,
@@ -17942,6 +17980,11 @@ async function main(): Promise<void> {
       );
       await mobile.page.goto(`${server.base}/c/${mdRoomId}`);
       await waitRoom(mobile.page, mdRoomId, 'AI Markdown 群');
+      await mobile.page
+        .locator('#messages .msg')
+        .filter({ hasText: richMarker })
+        .last()
+        .scrollIntoViewIfNeeded();
       await mobile.page.locator('.msg-markdown .md-table').first().waitFor();
       const mobileMetrics = (await mobile.page.evaluate(`(() => {
         const messages = document.getElementById('messages');
@@ -18000,7 +18043,7 @@ async function main(): Promise<void> {
         .locator('#messages .msg')
         .filter({ hasText: singleMarker })
         .last();
-      await darkSingle.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(darkSingle);
       const darkMetrics = (await darkMobile.page.evaluate(`(() => {
         const messages = document.getElementById('messages');
         const markdown = document.querySelector('.msg-markdown');
@@ -18244,15 +18287,23 @@ async function main(): Promise<void> {
       await scrollContext.page.goto(`${server.base}/c/${scrollRoomId}`);
       await waitRoom(scrollContext.page, scrollRoomId, 'AI 滚动群');
       await waitUntil(
-        async () => (await scrollContext.page.locator('#messages .msg-markdown').count()) >= 40,
-        '首屏 AI 消息升级 Markdown',
+        async () => (await scrollContext.page.locator('#messages .msg-markdown').count()) >= 1,
+        '首屏 AI 消息按可见区升级 Markdown',
         20_000,
       );
+      const firstScreenMarkdown = await scrollContext.page
+        .locator('#messages .msg-markdown')
+        .count();
+      check(
+        '首屏只挂可见区域 Markdown',
+        firstScreenMarkdown >= 1 && firstScreenMarkdown < 40,
+        { firstScreenMarkdown },
+      );
+      await waitForMarkdownSettled(scrollContext.page);
       await waitForBottom(scrollContext.page, 'Markdown 升级后回到底部', 10_000);
       const markdownGap = await bottomGap(scrollContext.page);
       check('Markdown 升级后保持底部', markdownGap <= 2, markdownGap);
 
-      const markdownBefore = await scrollContext.page.locator('#messages .msg-markdown').count();
       let releaseMarkdownOlder: (() => void) | null = null;
       let markdownOlderStarted = false;
       await scrollContext.page.route('**/mcp', async (route) => {
@@ -18286,10 +18337,8 @@ async function main(): Promise<void> {
         : null;
       releaseMarkdownOlder!();
       await waitUntil(
-        async () =>
-          (await scrollContext.page.locator('#messages .msg-markdown').count()) >
-          markdownBefore + 5,
-        '更早 AI 消息升级 Markdown',
+        async () => (await messageCount(scrollContext.page)) >= 60,
+        '更早消息加载完成',
         20_000,
       );
       await sleep(300);
@@ -18304,6 +18353,19 @@ async function main(): Promise<void> {
         { markdownAnchorId, markdownAnchorTopBefore, markdownAnchorTopAfter },
       );
       await scrollContext.page.unroute('**/mcp');
+      // 上翻到新加载的历史，验证消息进入视口后才升级。
+      const markdownBeforeUpgrade = await scrollContext.page
+        .locator('#messages .msg-markdown')
+        .count();
+      await scrollContext.page.evaluate(`document.getElementById('messages').scrollTop = 0`);
+      await waitUntil(
+        async () =>
+          (await scrollContext.page.locator('#messages .msg-markdown').count()) >
+          markdownBeforeUpgrade,
+        '上翻后新进入视口的消息按需升级 Markdown',
+        20_000,
+      );
+      await waitForMarkdownSettled(scrollContext.page);
       const scrollMetrics = (await scrollContext.page.evaluate(`(() => {
         const node = document.getElementById('messages');
         return { scroll: node.scrollWidth, client: node.clientWidth };
@@ -18334,6 +18396,7 @@ async function main(): Promise<void> {
         .locator('#messages .msg')
         .filter({ hasText: richMarker })
         .last();
+      await fallbackRich.scrollIntoViewIfNeeded();
       await fallbackRich.locator('.msg-file').first().waitFor();
       await fallbackRich.locator('.md-unavailable').first().waitFor();
       checkEqual(
@@ -18378,6 +18441,7 @@ async function main(): Promise<void> {
         .locator('#messages .msg')
         .filter({ hasText: longMarker })
         .last();
+      await fallbackLong.scrollIntoViewIfNeeded();
       await fallbackLong.locator('.expand').waitFor();
       await fallbackLong.locator('.md-unavailable').first().waitFor();
       checkEqual(
@@ -18416,6 +18480,7 @@ async function main(): Promise<void> {
       );
 
       const fallbackBefore = await messageCount(fallback.page);
+      await scrollMessagesToBottom(fallback.page);
       await fallback.page.locator('#body').fill('asset 失败仍可发送');
       await fallback.page.locator('#send').click();
       await fallback.page.waitForFunction(
@@ -18453,6 +18518,7 @@ async function main(): Promise<void> {
         .locator('#messages .msg')
         .filter({ hasText: longMarker })
         .last();
+      await recoverLong.scrollIntoViewIfNeeded();
       await recoverLong.locator('.expand').waitFor();
       await recoverLong.locator('.md-unavailable').first().waitFor();
       checkEqual(
@@ -18496,7 +18562,7 @@ async function main(): Promise<void> {
         .locator('#messages .msg')
         .filter({ hasText: singleMarker })
         .last();
-      await reloadedSingle.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(reloadedSingle);
       checkEqual(
         '重新加载后单换行渲染为 br',
         await reloadedSingle.locator('.msg-markdown p br').count(),
@@ -18591,10 +18657,19 @@ async function main(): Promise<void> {
       })()`)) as { scrollHeight: number; clientHeight: number };
       check('进入会话内容足够长', enterMetrics.scrollHeight > enterMetrics.clientHeight + 400, enterMetrics);
       await waitUntil(
-        async () => (await enterContext.page.locator('#messages .msg-markdown').count()) >= 30,
-        '延迟 Markdown 升级完成',
+        async () => (await enterContext.page.locator('#messages .msg-markdown').count()) >= 1,
+        '延迟 Markdown 按可见区升级',
         20_000,
       );
+      const delayedMarkdown = await enterContext.page
+        .locator('#messages .msg-markdown')
+        .count();
+      check(
+        '延迟加载只挂可见区域 Markdown',
+        delayedMarkdown >= 1 && delayedMarkdown < 40,
+        { delayedMarkdown },
+      );
+      await waitForMarkdownSettled(enterContext.page);
       await waitForBottom(enterContext.page, 'Markdown 升级后回到底部', 10_000);
       const upgradedGap = await bottomGap(enterContext.page);
       await sleep(1_000);
@@ -18880,10 +18955,11 @@ async function main(): Promise<void> {
         { markdownAnchorId, markdownAnchorBefore },
       );
       await waitUntil(
-        async () => (await markdownJitter.page.locator('#messages .msg-markdown').count()) >= 30,
+        async () => (await markdownJitter.page.locator('#messages .msg-markdown').count()) >= 1,
         '上翻后延迟 Markdown 升级',
         20_000,
       );
+      await waitForMarkdownSettled(markdownJitter.page);
       await sleep(800);
       const markdownUpGap = await bottomGap(markdownJitter.page);
       check('上翻后 Markdown 异步升级不回底', markdownUpGap > 120, { markdownUpGap });
@@ -19061,6 +19137,23 @@ async function main(): Promise<void> {
           body: `**长消息 ${index}**\n\n长会话内容 ${index}`,
         });
       }
+      // 最新一条包含代码/表格/@ 高亮，用于验证懒升级后的内容等价。
+      const longRichMarker = '长会话富文本';
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: longRoomId,
+        body: [
+          longRichMarker,
+          `**@${data.agentA.name}**`,
+          '| 列 | 值 |',
+          '| --- | --- |',
+          '| A | 1 |',
+          '```js',
+          'const longRich = 1;',
+          '```',
+        ].join('\n'),
+      });
       const longContext = await makeContext(
         browser,
         data.humanToken,
@@ -19071,6 +19164,35 @@ async function main(): Promise<void> {
       await waitRoom(longContext.page, longRoomId, '长会话滚动群');
       await waitForBottom(longContext.page, '长会话进入到底', 15_000);
       await sleep(500);
+      const initialLongMarkdown = await longContext.page
+        .locator('#messages .msg-markdown')
+        .count();
+      check(
+        '长历史首屏只挂可见区域 Markdown',
+        initialLongMarkdown >= 1 && initialLongMarkdown < 50,
+        { initialLongMarkdown },
+      );
+      const longRich = longContext.page
+        .locator('#messages .msg')
+        .filter({ hasText: longRichMarker })
+        .last();
+      await waitForLazyMarkdown(longRich);
+      check(
+        '长历史首屏 Markdown 代码块等价',
+        ((await longRich.locator('.msg-markdown pre').textContent()) ?? '').includes(
+          'const longRich = 1;',
+        ),
+      );
+      check(
+        '长历史首屏 Markdown 表格等价',
+        (await longRich.locator('.msg-markdown .md-table td').first().textContent())?.trim() ===
+          'A',
+      );
+      checkEqual(
+        '长历史首屏 @ 高亮等价',
+        await longRich.locator('.msg-markdown strong .mention').count(),
+        1,
+      );
       let releaseLongOlder: (() => void) | null = null;
       let longOlderStarted = false;
       await longContext.page.route('**/mcp', async (route) => {
@@ -19126,16 +19248,25 @@ async function main(): Promise<void> {
         );
       }
       await longContext.page.unroute('**/mcp');
+      const loadedLongCount = await messageCount(longContext.page);
       await waitUntil(
-        async () => (await longContext.page.locator('#messages .msg-markdown').count()) >= 160,
-        '三页历史 Markdown 升级',
+        async () => (await longContext.page.locator('#messages .msg-markdown').count()) >= 1,
+        '三页历史按可见区升级 Markdown',
         20_000,
       );
+      await waitForMarkdownSettled(longContext.page);
       await sleep(500);
+      const longMarkdownCount = await longContext.page
+        .locator('#messages .msg-markdown')
+        .count();
+      check(
+        '三页历史只挂可见区域 Markdown',
+        longMarkdownCount >= 1 && longMarkdownCount < loadedLongCount,
+        { longMarkdownCount, loadedLongCount },
+      );
       check('加载 older 后不自动滚底', (await bottomGap(longContext.page)) > 100, {
         gap: await bottomGap(longContext.page),
       });
-      const loadedLongCount = await messageCount(longContext.page);
       check('三页 older 已加载 200 条以上', loadedLongCount >= 200, { loadedLongCount });
       await rawTool(data.agentAToken, 'network_message_send', {
         request_id: requestId('msg'),
@@ -19462,9 +19593,10 @@ async function main(): Promise<void> {
         async () =>
           (await olderContext.page.locator('#messages .msg-markdown').count()) >
           markdownCountBefore,
-        '更早消息 Markdown 升级',
+        '更早消息按可见区升级 Markdown',
         20_000,
       );
+      await waitForMarkdownSettled(olderContext.page);
       await sleep(400);
       const olderAnchorOffsetAfter = olderAnchorId
         ? await messageOffset(olderContext.page, olderAnchorId)
@@ -19639,7 +19771,8 @@ async function main(): Promise<void> {
       const scrollOlderTo = async (fraction: number): Promise<void> => {
         await autoOlder.page.evaluate(`(() => {
           const node = document.getElementById('messages');
-          node.scrollTop = Math.floor(${autoScrollMax} * ${fraction});
+          const max = node.scrollHeight - node.clientHeight;
+          node.scrollTop = Math.floor(max * ${fraction});
           node.dispatchEvent(new Event('scroll'));
         })()`);
       };
@@ -19654,14 +19787,16 @@ async function main(): Promise<void> {
       checkEqual('滚动到距顶 20% 不自动加载', (await olderCursors(autoOlder.page)).length, 0);
       await autoOlder.page.evaluate(`(() => {
         const node = document.getElementById('messages');
-        node.scrollTop = Math.floor(${autoScrollMax} * 0.1) + 8;
+        const max = node.scrollHeight - node.clientHeight;
+        node.scrollTop = Math.floor(max * 0.1) + 8;
         node.dispatchEvent(new Event('scroll'));
       })()`);
       await sleep(250);
       checkEqual('越过距顶 10% 边界不自动加载', (await olderCursors(autoOlder.page)).length, 0);
       await autoOlder.page.evaluate(`(() => {
         const node = document.getElementById('messages');
-        node.scrollTop = Math.floor(${autoScrollMax} * 0.1);
+        const max = node.scrollHeight - node.clientHeight;
+        node.scrollTop = Math.floor(max * 0.1);
         for (let index = 0; index < 5; index += 1) {
           node.dispatchEvent(new Event('scroll'));
         }
@@ -20533,9 +20668,9 @@ async function main(): Promise<void> {
       const longUrlMessage = messageByText(longUrlMarker);
       const codeTableMessage = messageByText(codeTableMarker);
       const longAgentMessage = messageByText(longAgentMarker);
-      await longAgentMessage.locator('.msg-markdown').waitFor();
-      await codeTableMessage.locator('.msg-markdown .md-pre').waitFor();
-      await longUrlMessage.locator('.msg-markdown').waitFor();
+      await waitForLazyMarkdown(longAgentMessage);
+      await waitForLazyMarkdown(codeTableMessage);
+      await waitForLazyMarkdown(longUrlMessage);
 
       const groupShortAgent = await bubbleLayout(shortAgentMessage);
       const groupShortHuman = await bubbleLayout(shortHumanMessage);
@@ -21252,7 +21387,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

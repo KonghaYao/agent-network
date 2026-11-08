@@ -61,6 +61,12 @@ let roomTasks = [];
 let roomTasksRoomId = null;
 let roomTaskLoadSeq = 0;
 let taskCardsByMessage = new Map();
+// source_message_id -> task，避免每条消息在 roomTasks 上做线性 find。
+let sourceTasksByMessage = new Map();
+// 任务数据版本：变化时才重写对应消息的任务槽，未变化的消息直接跳过。
+let taskMarkerVersion = 0;
+// message_id -> 已渲染的 .msg 节点，loadOlder 后无需全表 querySelectorAll。
+let taskMarkerNodes = new Map();
 let taskDetailCurrent = null;
 let taskDetailLoadSeq = 0;
 let myTasksLoadSeq = 0;
@@ -232,8 +238,27 @@ function openTaskPopover(pin) {
 
 function resetTaskCards() {
   taskCardsByMessage = new Map();
+  sourceTasksByMessage = new Map();
+  taskMarkerVersion += 1;
+  taskMarkerNodes = new Map();
   roomTasks = [];
   roomTasksRoomId = null;
+}
+
+/** 整表重建前清空节点索引；消息节点会随新 fragment 重新登记。 */
+function resetTaskMarkerIndex() {
+  taskMarkerNodes = new Map();
+}
+
+/** messageItem 构建节点时登记，任务同步按 message_id 精确命中。 */
+function rememberTaskMarkerNode(messageId, node) {
+  if (!messageId || !node) return;
+  let nodes = taskMarkerNodes.get(messageId);
+  if (!nodes) {
+    nodes = new Set();
+    taskMarkerNodes.set(messageId, nodes);
+  }
+  nodes.add(node);
 }
 
 function resetRoomTasks() {
@@ -296,9 +321,12 @@ async function loadRoomTasks(roomId, epoch) {
     roomTasks = Array.isArray(result.tasks) ? result.tasks : [];
     roomTasksRoomId = roomId;
     taskCardsByMessage = new Map();
+    sourceTasksByMessage = new Map();
     for (const task of roomTasks) {
       if (task.card_message_id) taskCardsByMessage.set(task.card_message_id, task);
+      if (task.source_message_id) sourceTasksByMessage.set(task.source_message_id, task);
     }
+    taskMarkerVersion += 1;
     const counts = taskSummaryCounts(roomTasks);
     const summary = taskSummary.get(roomId);
     taskSummary.set(roomId, {
@@ -821,19 +849,28 @@ function taskConvertButton(messageId, preview) {
 
 function syncTaskCardMarkers(container) {
   if (!container) return;
+  if (container === messagesElement) updateMessagesLengthClass();
   const canCreate = taskCanCreate();
-  const nodes = container.querySelectorAll('.msg[data-message-id]');
+  // 没有任务且当前用户不能创建任务时，消息槽保持隐藏，无需遍历。
+  if (taskCardsByMessage.size === 0 && sourceTasksByMessage.size === 0 && !canCreate) return;
+  const nodes = container === messagesElement
+    ? taskMarkerIndexedNodes()
+    : container.querySelectorAll('.msg[data-message-id]');
+  const suffix = ':' + taskMarkerVersion + ':' + (canCreate ? '1' : '0');
   for (const node of nodes) {
     const messageId = node.getAttribute('data-message-id');
     const slot = node.querySelector('.msg-task-slot');
     if (!messageId || !slot) continue;
+    const cardTask = taskCardsByMessage.get(messageId);
+    const sourceTask = sourceTasksByMessage.get(messageId);
+    const signature =
+      (cardTask ? cardTask.task_id : '') + '|' +
+      (sourceTask ? sourceTask.task_id : '') + suffix;
+    if (node.dataset.taskMarkerSignature === signature) continue;
+    node.dataset.taskMarkerSignature = signature;
     slot.replaceChildren();
     slot.hidden = true;
     node.classList.remove('task-card-message');
-    const cardTask = taskCardsByMessage.get(messageId);
-    const sourceTask = roomTasks.find(function (task) {
-      return task.source_message_id === messageId;
-    });
     if (cardTask) {
       node.classList.add('task-card-message');
       const card = document.createElement('div');
@@ -885,6 +922,18 @@ function syncTaskCardMarkers(container) {
       slot.hidden = false;
     }
   }
+}
+
+/** 只遍历本房间已登记的节点；已随旧 DOM 丢弃的节点跳过。 */
+function taskMarkerIndexedNodes() {
+  if (!messagesElement) return [];
+  const nodes = [];
+  for (const entry of taskMarkerNodes.values()) {
+    for (const node of entry) {
+      if (node.isConnected && messagesElement.contains(node)) nodes.push(node);
+    }
+  }
+  return nodes;
 }
 
 if (taskToggleElement && taskPopoverElement) {

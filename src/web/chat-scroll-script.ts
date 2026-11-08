@@ -155,7 +155,9 @@ const scrollController = (function () {
     const listTop = messagesElement.getBoundingClientRect().top;
     const listBottom = messagesElement.getBoundingClientRect().bottom;
     for (const child of messagesElement.children) {
-      if (child === messagesEndElement || child.id === 'history-pager') continue;
+      // 时间胶囊可能在前插接缝处被删除，不能作为跨 prepend 的稳定锚点。
+      if (child === messagesEndElement || child.id === 'history-pager' ||
+          child.classList.contains('msg-time')) continue;
       const rect = child.getBoundingClientRect();
       if (rect.top >= listBottom || rect.bottom <= listTop) continue;
       return { element: child, offset: rect.top - listTop };
