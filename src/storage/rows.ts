@@ -477,6 +477,8 @@ export interface TaskRow {
   revision: number;
   owner_actor_id: string | null;
   current_assignment_id: string | null;
+  /** 创建参数里的负责人；公开任务为 NULL，后续 claim/offer 不修改。 */
+  initial_assignee_actor_id: string | null;
   reviewer_actor_id: string;
   due_at: number | null;
   blocked_reason: string | null;

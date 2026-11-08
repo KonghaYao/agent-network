@@ -1055,6 +1055,30 @@ function taskAttachmentStatements(
   ]);
 }
 
+/**
+ * 创建时负责人。
+ *
+ * 新任务直接读 `tasks.initial_assignee_actor_id`；0030 之前的旧行该列为
+ * NULL，只有在 assignment 可证明由创建事务产生时才兼容推断，绝不使用后续
+ * claim/offer 产生的最早 assignment。
+ */
+async function createdAssigneeOf(
+  db: D1Database,
+  task: TaskRow,
+): Promise<string | null> {
+  if (task.initial_assignee_actor_id !== null) return task.initial_assignee_actor_id;
+  const legacy = await db
+    .prepare(
+      `SELECT owner_actor_id FROM task_assignments
+        WHERE task_id = ? AND assignment_version = 1
+          AND created_at = ? AND offered_by = ?
+        LIMIT 1`,
+    )
+    .bind(task.task_id, task.created_at, task.created_by)
+    .first<{ owner_actor_id: string }>();
+  return legacy?.owner_actor_id ?? null;
+}
+
 /** 同一来源消息的并发/重复创建收敛到已有任务；任一语义参数不同都返回冲突。 */
 async function convergeSourceTask(
   db: D1Database,
@@ -1077,15 +1101,8 @@ async function convergeSourceTask(
   const sameAttachments =
     existingAttachments.length === expectedAttachments.length &&
     existingAttachments.every((fileId, index) => fileId === expectedAttachments[index]);
-  // 首次创建时的负责人来自最早的 assignment；后续重派不会改变创建语义。
-  const original = await db
-    .prepare(
-      `SELECT owner_actor_id FROM task_assignments
-        WHERE task_id = ? ORDER BY assignment_version ASC LIMIT 1`,
-    )
-    .bind(existing.task_id)
-    .first<{ owner_actor_id: string }>();
-  const originalAssignee = original?.owner_actor_id ?? null;
+  // 只比较创建时的负责人；后续领取、重派、接受不会改变创建语义。
+  const originalAssignee = await createdAssigneeOf(db, existing);
   if (
     existing.room_id !== context.room.room_id ||
     existing.created_by !== context.caller ||
@@ -1240,6 +1257,7 @@ export async function taskCreate(
     revision: 1,
     owner_actor_id: null,
     current_assignment_id: assignmentId,
+    initial_assignee_actor_id: assigneeId,
     reviewer_actor_id: reviewerId,
     due_at: dueAt,
     blocked_reason: null,
@@ -1310,10 +1328,10 @@ export async function taskCreate(
           `INSERT INTO tasks
              (task_id, room_id, created_by, source_message_id, title, description,
               acceptance_criteria, status, revision, owner_actor_id, current_assignment_id,
-              reviewer_actor_id, due_at, blocked_reason, blocked_at, last_progress_at,
-              business_authority, external_binding_id, created_at, updated_at,
+              initial_assignee_actor_id, reviewer_actor_id, due_at, blocked_reason, blocked_at,
+              last_progress_at, business_authority, external_binding_id, created_at, updated_at,
               accepted_at, cancelled_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, ?, NULL, NULL, NULL,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, ?, ?, NULL, NULL, NULL,
              'native', NULL, ?, ?, NULL, NULL)`,
         )
         .bind(
@@ -1326,6 +1344,7 @@ export async function taskCreate(
           acceptance,
           task.status,
           assignmentId,
+          assigneeId,
           reviewerId,
           dueAt,
           at,

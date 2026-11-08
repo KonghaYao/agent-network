@@ -386,6 +386,11 @@ export async function runRoomTaskAcceptance(): Promise<void> {
       'CONFLICT',
     );
     await expectToolError(
+      'D01-T02 同来源不同标题返回 CONFLICT',
+      createTask(u1Conn, { ...t02Base, title: 'T02 另一个标题' }),
+      'CONFLICT',
+    );
+    await expectToolError(
       'D01-T02 同来源不同验收条件返回 CONFLICT',
       createTask(u1Conn, { ...t02Base, acceptance_criteria: '新的验收条件' }),
       'CONFLICT',
@@ -402,11 +407,31 @@ export async function runRoomTaskAcceptance(): Promise<void> {
       'CONFLICT',
     );
     await expectToolError(
+      'D01-T02 同来源不同验收人返回 CONFLICT',
+      createTask(u1Conn, { ...t02Base, reviewer_actor_id: b2.actor_id }),
+      'CONFLICT',
+    );
+    await expectToolError(
       'D01-T02 同来源不同期限返回 CONFLICT',
       createTask(u1Conn, {
         ...t02Base,
         due_at: new Date(Date.now() + 86_400_000).toISOString(),
       }),
+      'CONFLICT',
+    );
+    const t02Attachment = await uploadTestFile(u1Conn.token, {
+      name: 'd01-t02-conflict.txt',
+      mimeType: 'text/plain',
+      body: 'D01 conflict attachment',
+    });
+    await callTool(u1Conn.client, 'network_room_file_bind', {
+      request_id: newRequestId('task_attachment_bind'),
+      room_id: roomId,
+      file_id: t02Attachment.fileId,
+    });
+    await expectToolError(
+      'D01-T02 同来源不同附件返回 CONFLICT',
+      createTask(u1Conn, { ...t02Base, attachment_file_ids: [t02Attachment.fileId] }),
       'CONFLICT',
     );
     checkEqual(
@@ -428,6 +453,65 @@ export async function runRoomTaskAcceptance(): Promise<void> {
       'D01-T02 卡片正文可完整读取',
       t02.card_message_id ? await readWholeMessage(u1Conn, t02.card_message_id) : '',
       '【任务卡】T02 指定 Agent 任务',
+    );
+
+    // 后续 accept 不改变创建语义：相同参数重放仍返回创建时的任务。
+    const t02Accepted = (await callTool<TaskResult>(b1Conn.client, 'network_task_accept', {
+      request_id: newRequestId('task_accept'),
+      task_id: t02.task_id,
+      assignment_id: t02.assignment?.assignment_id,
+    })).task;
+    checkEqual('D01-T02 指定任务接受后为 in_progress', t02Accepted.status, 'in_progress');
+    const t02AcceptReplay = (await createTask(u1Conn, t02Base)).task;
+    checkEqual(
+      'D01-T02 接受后相同参数重放返回同一任务',
+      t02AcceptReplay.task_id,
+      t02.task_id,
+    );
+    checkEqual(
+      'D01-T02 接受后重放返回当前负责人',
+      t02AcceptReplay.owner_actor_id,
+      b1.actor_id,
+    );
+
+    // 后续 reoffer 也不改变创建语义：创建时负责人仍是 B1，而不是当前候选 B2。
+    const reofferMessage = await sendMessage(u1Conn, roomId, 'D01-T02 重派重放来源消息');
+    const reofferBase = {
+      room_id: roomId,
+      title: 'T02 重派后重放',
+      description: 'B1 拒绝后重派给 B2。',
+      source_message_id: reofferMessage.message.message_id,
+      assignee_actor_id: b1.actor_id,
+      reviewer_actor_id: u2.actor_id,
+    };
+    const reofferCreated = (await createTask(u1Conn, reofferBase)).task;
+    const reofferDeclined = (await callTool<TaskResult>(b1Conn.client, 'network_task_decline', {
+      request_id: newRequestId('task_decline'),
+      task_id: reofferCreated.task_id,
+      assignment_id: reofferCreated.assignment?.assignment_id,
+      reason: 'D01 重派重放回归',
+    })).task;
+    const reoffered = (await callTool<TaskResult>(u1Conn.client, 'network_task_offer', {
+      request_id: newRequestId('task_offer'),
+      task_id: reofferCreated.task_id,
+      assignee_actor_id: b2.actor_id,
+      expected_revision: reofferDeclined.revision,
+    })).task;
+    checkEqual(
+      'D01-T02 重派生成第二个 assignment',
+      reoffered.assignment?.assignment_version,
+      2,
+    );
+    const reofferReplay = (await createTask(u1Conn, reofferBase)).task;
+    checkEqual(
+      'D01-T02 重派后相同参数重放返回同一任务',
+      reofferReplay.task_id,
+      reofferCreated.task_id,
+    );
+    checkEqual(
+      'D01-T02 重派后重放不改变当前候选',
+      reofferReplay.assignment?.owner_actor_id,
+      b2.actor_id,
     );
 
     // ---------- D01-T03：公开任务不唤醒 Agent，三个入口同一状态 ----------
@@ -493,6 +577,39 @@ export async function runRoomTaskAcceptance(): Promise<void> {
         (task) => task.task_id === t03.task_id,
       ),
     );
+
+    // 公开任务没有创建时负责人；领取产生的 assignment 不能反推创建参数。
+    const t03ReplayParams = {
+      room_id: roomId,
+      title: 'T03 公开任务',
+      description: '任何成员都可以领取。',
+      source_message_id: t03Message.message.message_id,
+      reviewer_actor_id: u1.actor_id,
+    };
+    const t03Replay = (await createTask(u1Conn, t03ReplayParams)).task;
+    checkEqual(
+      'D01-T03 公开任务领取后相同参数重放返回同一任务',
+      t03Replay.task_id,
+      t03.task_id,
+    );
+    checkEqual('D01-T03 重放返回领取后的状态', t03Replay.status, 'in_progress');
+    checkEqual('D01-T03 重放返回领取后的负责人', t03Replay.owner_actor_id, b1.actor_id);
+    checkEqual(
+      'D01-T03 重放返回领取后的 assignment',
+      t03Replay.assignment?.assignment_id,
+      t03Claim.assignment?.assignment_id,
+    );
+    checkEqual('D01-T03 重放不创建 delivery', t03Replay.delivery_ids.length, 0);
+    const t03RoomTasks = (await listTasks(b1Conn, { room_id: roomId, limit: 100 })).tasks.filter(
+      (task) => task.task_id === t03.task_id,
+    );
+    checkEqual('D01-T03 重放后房间仍只有一个该任务', t03RoomTasks.length, 1);
+    const t03Cards = (await callTool<{ items: { message_id: string; preview: string }[] }>(
+      u1Conn.client,
+      'network_history_list',
+      { room_id: roomId, limit: 100 },
+    )).items.filter((item) => item.preview === '【任务卡】T03 公开任务');
+    checkEqual('D01-T03 重放后仍只有一张任务卡片', t03Cards.length, 1);
 
     // 公开领取必须原子：并发只有一个成功，失败方得到 CLAIM_CONFLICT 并看到真实负责人。
     const raceTask = (await createTask(u1Conn, {
