@@ -989,37 +989,118 @@ async function validateAttachments(
   return attachments;
 }
 
-/** 同一来源消息的并发/重复创建收敛到已有任务；参数不同则明确冲突。 */
+/**
+ * 任务附件引用。
+ *
+ * 附件只保存 file_id，但必须同时建立 `file_references` 并把文件置为
+ * retained，否则房间文件 30 天 TTL 或维护 GC 会在任务仍存在时回收字节。
+ * 引用在任务删除且无其他引用后由 `maintainFiles` 释放并恢复普通 TTL。
+ */
+function taskAttachmentStatements(
+  db: D1Database,
+  input: {
+    taskId: string;
+    roomId: string;
+    caller: string;
+    attachments: Array<{ file_id: string; label: string }>;
+    at: number;
+  },
+): D1PreparedStatement[] {
+  return input.attachments.flatMap((attachment) => [
+    db
+      .prepare(
+        guardSql(
+          'fileUnavailable',
+          `NOT EXISTS (
+             SELECT 1 FROM room_files
+              WHERE file_id = ? AND room_id = ? AND deleted_at IS NULL
+           ) OR EXISTS (
+             SELECT 1 FROM drive_files WHERE file_id = ? AND state = 'deleted'
+           )`,
+        ),
+      )
+      .bind(attachment.file_id, input.roomId, attachment.file_id),
+    db
+      .prepare(
+        `INSERT INTO file_references
+           (reference_id, file_id, kind, ref_id, room_id, actor_id, state, created_at,
+            released_at, released_by)
+         VALUES (?, ?, 'task', ?, ?, ?, 'active', ?, NULL, NULL)
+         ON CONFLICT(kind, ref_id, file_id) DO UPDATE SET
+           state = 'active', released_at = NULL, released_by = NULL`,
+      )
+      .bind(
+        newId('ref'),
+        attachment.file_id,
+        input.taskId,
+        input.roomId,
+        input.caller,
+        input.at,
+      ),
+    db
+      .prepare(
+        `INSERT INTO task_attachments (task_id, file_id, label, created_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .bind(input.taskId, attachment.file_id, attachment.label, input.at),
+    db
+      .prepare('UPDATE room_files SET retained = 1 WHERE file_id = ? AND deleted_at IS NULL')
+      .bind(attachment.file_id),
+    db
+      .prepare(
+        `UPDATE drive_files SET retained = 1, expires_at = NULL
+          WHERE file_id = ? AND state != 'deleted'`,
+      )
+      .bind(attachment.file_id),
+  ]);
+}
+
+/** 同一来源消息的并发/重复创建收敛到已有任务；任一语义参数不同都返回冲突。 */
 async function convergeSourceTask(
   db: D1Database,
   context: TaskContext,
   existing: TaskRow,
   expected: {
     title: string;
+    description: string;
+    acceptance: string;
+    dueAt: number | null;
+    attachments: string[];
     reviewer: string;
     assignee: string | null;
   },
 ): Promise<TaskResult> {
+  const existingAttachments = (await attachmentsFor(db, existing.task_id))
+    .map((attachment) => attachment.file_id)
+    .sort();
+  const expectedAttachments = [...expected.attachments].sort();
+  const sameAttachments =
+    existingAttachments.length === expectedAttachments.length &&
+    existingAttachments.every((fileId, index) => fileId === expectedAttachments[index]);
+  // 首次创建时的负责人来自最早的 assignment；后续重派不会改变创建语义。
+  const original = await db
+    .prepare(
+      `SELECT owner_actor_id FROM task_assignments
+        WHERE task_id = ? ORDER BY assignment_version ASC LIMIT 1`,
+    )
+    .bind(existing.task_id)
+    .first<{ owner_actor_id: string }>();
+  const originalAssignee = original?.owner_actor_id ?? null;
   if (
     existing.room_id !== context.room.room_id ||
     existing.created_by !== context.caller ||
     existing.title !== expected.title ||
-    existing.reviewer_actor_id !== expected.reviewer
+    existing.description !== expected.description ||
+    existing.acceptance_criteria !== expected.acceptance ||
+    existing.due_at !== expected.dueAt ||
+    existing.reviewer_actor_id !== expected.reviewer ||
+    originalAssignee !== expected.assignee ||
+    !sameAttachments
   ) {
-    throw new BusinessError('CONFLICT', '该消息已关联另一个任务', {
+    throw new BusinessError('CONFLICT', '该消息已关联另一个任务，或创建参数与已有任务不一致', {
       task_id: existing.task_id,
       source_message_id: existing.source_message_id,
     });
-  }
-  if (expected.assignee) {
-    const assignment = existing.current_assignment_id
-      ? await getTaskAssignment(db, existing.current_assignment_id)
-      : null;
-    if (!assignment || assignment.owner_actor_id !== expected.assignee) {
-      throw new BusinessError('CONFLICT', '该消息已关联另一个任务或负责人', {
-        task_id: existing.task_id,
-      });
-    }
   }
   return resultFor(db, context, existing);
 }
@@ -1107,6 +1188,10 @@ export async function taskCreate(
     if (existing) {
       return convergeSourceTask(db, context, existing, {
         title,
+        description,
+        acceptance,
+        dueAt,
+        attachments: attachments.map((item) => item.file_id),
         reviewer: reviewerId,
         assignee: assigneeId,
       });
@@ -1288,14 +1373,13 @@ export async function taskCreate(
             at,
           })
         : []),
-      ...attachments.map((attachment) =>
-        db
-          .prepare(
-            `INSERT INTO task_attachments (task_id, file_id, label, created_at)
-             VALUES (?, ?, ?, ?)`,
-          )
-          .bind(taskId, attachment.file_id, attachment.label, at),
-      ),
+      ...taskAttachmentStatements(db, {
+        taskId,
+        roomId: room.room_id,
+        caller,
+        attachments,
+        at,
+      }),
       ...createdEvent.statements,
       ...(assignment
         ? taskRoomEvent(
@@ -1339,6 +1423,10 @@ export async function taskCreate(
       if (!existing) return undefined;
       return convergeSourceTask(db, context, existing, {
         title,
+        description,
+        acceptance,
+        dueAt,
+        attachments: attachments.map((item) => item.file_id),
         reviewer: reviewerId,
         assignee: assigneeId,
       });
@@ -1630,6 +1718,12 @@ export async function taskOffer(
     throw new BusinessError('BLOCKED', '对方已拉黑，不能派发任务');
   }
   if (
+    task.created_by !== context.caller &&
+    (await blockedBetween(db, task.created_by, input.assignee_actor_id))
+  ) {
+    throw new BusinessError('BLOCKED', '任务创建者与候选负责人之间存在拉黑关系');
+  }
+  if (
     task.reviewer_actor_id !== context.caller &&
     (await blockedBetween(db, task.reviewer_actor_id, input.assignee_actor_id))
   ) {
@@ -1638,10 +1732,23 @@ export async function taskOffer(
   const card = await getTaskCard(db, task.task_id);
   if (!card) throw new BusinessError('CONFLICT', '任务卡片不存在，不能派发');
   const canDeliver = candidate.kind === 'agent' && candidate.actor_id !== context.caller;
+  // `deliveries` 以 (recipient_id, message_id) 唯一。同一候选再次被指派时，
+  // 旧卡片上的 cancelled 投递仍占用该唯一键，必须换一张新卡片与新投递。
+  const priorDelivery = canDeliver
+    ? await db
+        .prepare(
+          'SELECT 1 AS n FROM deliveries WHERE recipient_id = ? AND message_id = ? LIMIT 1',
+        )
+        .bind(candidate.actor_id, card.message_id)
+        .first<{ n: number }>()
+    : null;
+  const needsNewCard = Boolean(priorDelivery);
 
   const at = nowMs();
   const assignmentId = newId('asg');
   const deliveryId = canDeliver ? newId('dlv') : null;
+  const offerCardMessageId = needsNewCard ? newId('msg') : card.message_id;
+  const offerCardEventKey = `message:${offerCardMessageId}`;
   const nextRevision = task.revision + 1;
   const versionRow = await db
     .prepare(
@@ -1672,6 +1779,29 @@ export async function taskOffer(
     revision: nextRevision,
     updated_at: at,
   };
+  const cardBody = `【任务卡】${task.title}`;
+  const newCardCore: MessageCore | null = needsNewCard
+    ? {
+        messageId: offerCardMessageId,
+        roomId: task.room_id,
+        senderId: context.caller,
+        clientMessageId: `taskcard_${assignmentId}`,
+        body: cardBody,
+        preview: truncateUtf8(cardBody, LIMITS.previewBytes),
+        bodyBytes: utf8Bytes(cardBody),
+        replyTo: null,
+        rootId: null,
+        rootKey: offerCardMessageId,
+        hop: 0,
+        invoke: [],
+        mentionAll: false,
+        mentions: [],
+        reminders: [],
+        deliveries: [],
+        eventKey: offerCardEventKey,
+        at,
+      }
+    : null;
   const names = await actorNames(db, [
     context.caller,
     task.reviewer_actor_id,
@@ -1681,7 +1811,7 @@ export async function taskOffer(
     db,
     context,
     updated,
-    card.message_id,
+    offerCardMessageId,
     assignment,
     deliveryId ? [deliveryId] : [],
     [],
@@ -1711,6 +1841,9 @@ export async function taskOffer(
         .bind(task.task_id),
       participantGuard(db, context.room.room_id, candidate.actor_id),
       contactBlockGuardStatement(db, context.caller, candidate.actor_id),
+      ...(task.created_by !== context.caller
+        ? [contactBlockGuardStatement(db, task.created_by, candidate.actor_id)]
+        : []),
       ...(task.reviewer_actor_id !== context.caller
         ? [contactBlockGuardStatement(db, task.reviewer_actor_id, candidate.actor_id)]
         : []),
@@ -1741,13 +1874,24 @@ export async function taskOffer(
           at,
           at,
         ),
+      ...(newCardCore
+        ? [
+            ...messageCoreStatements(db, newCardCore),
+            db
+              .prepare(
+                `UPDATE task_cards SET message_id = ?, created_at = ?
+                  WHERE task_id = ?`,
+              )
+              .bind(offerCardMessageId, at, task.task_id),
+          ]
+        : []),
       ...(deliveryId
         ? offerDeliveryStatements(db, {
             deliveryId,
             recipientId: candidate.actor_id,
             roomId: task.room_id,
-            cardMessageId: card.message_id,
-            cardEventKey: `message:${card.message_id}`,
+            cardMessageId: offerCardMessageId,
+            cardEventKey: offerCardEventKey,
             senderId: task.created_by,
             task: updated,
             assignment,
@@ -1775,7 +1919,7 @@ export async function taskOffer(
             'task_offered',
             updated,
             assignment,
-            card.message_id,
+            offerCardMessageId,
             at,
             0,
           )

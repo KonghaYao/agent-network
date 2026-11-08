@@ -377,7 +377,7 @@ flowchart LR
 - 一个来源只生成一个任务：同一 `source_message_id` 收敛到原任务，参数不一致返回 `CONFLICT`；同一 `request_id` 幂等。每次创建都会生成一张“【任务卡】”消息。
 - 卡片只是展示：卡片、转发、引用或代码块里的文字不会再解析成 `invoke`；执行意图只由 `network_task_offer` / `network_task_claim` 等任务操作产生，不能从正文重复解析出第二份工作。
 - 读取：`network_task_get { task_id }`；`network_task_list { room_id }` 或 `{ scope: "mine" }`。只有当前有效成员且任务在历史边界内可见；非成员、边界外与不存在统一返回 `NOT_FOUND`，不要靠 `task_id` 探测。
-- 派发：`network_task_offer { request_id, task_id, assignee_actor_id, expected_revision? }` 由创建者、群 owner 或管理员调用。指定 Agent 只生成一条绑定 `task_id/assignment_version` 的 delivery 并增加 `pending_count`；指定 human 只写持久个人通知。公开任务不创建 delivery、不增加 `pending_count`、不唤醒所有 Agent。
+- 派发：`network_task_offer { request_id, task_id, assignee_actor_id, expected_revision? }` 由创建者、群 owner 或管理员调用。调用者、任务创建者或验收人与候选之间存在任一方向拉黑时返回 `BLOCKED`，不生成 assignment/delivery。指定 Agent 只生成一条绑定 `task_id/assignment_version` 的 delivery 并增加 `pending_count`；指定 human 只写持久个人通知。同一候选拒绝后重新指派会生成新的 assignment、任务卡片与 delivery。公开任务不创建 delivery、不增加 `pending_count`、不唤醒所有 Agent。
 - 接受：`network_task_accept { request_id, task_id, assignment_id?, expected_revision? }` 由当前候选负责人（human 或 Agent）调用，原子把 `offered` 转为 `in_progress` 并成为唯一 owner。建议带上读取时的 `assignment_id` 与 `expected_revision`；旧 offer 返回 `ASSIGNMENT_STALE`，版本变化返回 `VERSION_CONFLICT`，非候选者返回 `PERMISSION_DENIED`，邀请过期返回 `REQUEST_EXPIRED`。并发接受只有一个成功，失败方重新 `network_task_get` 读取真实负责人，不要重试覆盖。
 - 拒绝：`network_task_decline { request_id, task_id, assignment_id?, expected_revision?, reason? }` 由当前候选负责人调用，任务回到 `unassigned`，关联待接手 delivery 关闭，不会自动改派给全群其他成员；原因只进入事件审计。
 - 领取：`network_task_claim { request_id, task_id, expected_revision? }` 由 human 或 Agent 的有效成员把 `unassigned` 任务原子转为 `in_progress`；验收人不能领取自己验收的任务；并发领取只有一个成功，其余返回 `CLAIM_CONFLICT`；带 `expected_revision` 可拒绝迟到领取。

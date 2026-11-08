@@ -14,7 +14,7 @@ interface ExpiredScope {
  * 文件保留与 GC。
  *
  * 权威引用状态在 `file_references` / `artifacts` / `room_files.retained`：
- * 1. 任务已删除时释放对应 task 引用；
+ * 1. 任务已删除时释放对应 task 引用（旧 `room_tasks` 与新 `tasks` 都算可达）；
  * 2. 只有无 active 引用、无 delivered 成果且未被 retained 的过期文件才软删；
  * 3. 软删后保留 `LIMITS.fileGcGraceMs` 再删除载荷，业务元数据永久保留；
  * 4. 删除载荷前再次检查引用，绑定/提交与 GC 由 SQLite 事务串行化，成果不会
@@ -28,7 +28,8 @@ async function maintainFiles(env: Env, now: number): Promise<void> {
       `UPDATE file_references
           SET state = 'released', released_at = ?, released_by = 'maintenance'
         WHERE kind = 'task' AND state = 'active'
-          AND NOT EXISTS (SELECT 1 FROM room_tasks t WHERE t.task_id = file_references.ref_id)`,
+          AND NOT EXISTS (SELECT 1 FROM room_tasks t WHERE t.task_id = file_references.ref_id)
+          AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.task_id = file_references.ref_id)`,
     )
     .bind(now)
     .run();

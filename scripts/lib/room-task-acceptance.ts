@@ -19,6 +19,7 @@ import {
   openSubscription,
   sleep,
   ToolError,
+  uploadTestFile,
   type McpConnection,
 } from './harness';
 import {
@@ -370,6 +371,50 @@ export async function runRoomTaskAcceptance(): Promise<void> {
     );
     checkEqual('D01-T02 重放不重复唤醒 B1', deliveryNotices.length, 1);
 
+    // 同一来源但任一语义参数不同都必须 CONFLICT，不能静默丢弃新参数。
+    const t02Base = {
+      room_id: roomId,
+      title: 'T02 指定 Agent 任务',
+      description: 'B1 执行，U2 验收。',
+      source_message_id: t02Message.message.message_id,
+      assignee_actor_id: b1.actor_id,
+      reviewer_actor_id: u2.actor_id,
+    };
+    await expectToolError(
+      'D01-T02 同来源不同描述返回 CONFLICT',
+      createTask(u1Conn, { ...t02Base, description: '新的目标描述' }),
+      'CONFLICT',
+    );
+    await expectToolError(
+      'D01-T02 同来源不同验收条件返回 CONFLICT',
+      createTask(u1Conn, { ...t02Base, acceptance_criteria: '新的验收条件' }),
+      'CONFLICT',
+    );
+    await expectToolError(
+      'D01-T02 同来源省略负责人返回 CONFLICT',
+      createTask(u1Conn, {
+        room_id: roomId,
+        title: t02Base.title,
+        description: t02Base.description,
+        source_message_id: t02Base.source_message_id,
+        reviewer_actor_id: t02Base.reviewer_actor_id,
+      }),
+      'CONFLICT',
+    );
+    await expectToolError(
+      'D01-T02 同来源不同期限返回 CONFLICT',
+      createTask(u1Conn, {
+        ...t02Base,
+        due_at: new Date(Date.now() + 86_400_000).toISOString(),
+      }),
+      'CONFLICT',
+    );
+    checkEqual(
+      'D01-T02 参数冲突不产生第二个任务或投递',
+      (await getTask(u1Conn, t02.task_id)).delivery_ids.length,
+      1,
+    );
+
     const t02History = await callTool<{ items: { message_id: string; preview: string }[] }>(
       u1Conn.client,
       'network_history_list',
@@ -614,6 +659,26 @@ export async function runRoomTaskAcceptance(): Promise<void> {
     checkEqual('D01 取消任务后状态为 cancelled', cancelled.status, 'cancelled');
     checkEqual('D01 取消撤销 assignment', cancelled.assignment, null);
     checkEqual('D01 取消关闭 pending delivery', await pendingCount(b2Conn), b2PendingBefore);
+
+    // D01-T05：附件引用进入任务视图，文件由任务引用保留。
+    const uploaded = await uploadTestFile(u1Conn.token, {
+      name: 'd01-task-attachment.txt',
+      mimeType: 'text/plain',
+      body: 'D01 task attachment',
+    });
+    await callTool(u1Conn.client, 'network_room_file_bind', {
+      request_id: newRequestId('task_attachment_bind'),
+      room_id: roomId,
+      file_id: uploaded.fileId,
+    });
+    const attachmentTask = (await createTask(u1Conn, {
+      room_id: roomId,
+      title: 'D01 带附件任务',
+      reviewer_actor_id: u1.actor_id,
+      attachment_file_ids: [uploaded.fileId],
+    })).task;
+    checkEqual('D01-T05 任务附件数量为 1', attachmentTask.attachments.length, 1);
+    checkEqual('D01-T05 任务附件保留 file_id', attachmentTask.attachments[0]?.file_id, uploaded.fileId);
 
     const summary = await callTool<TaskSummary>(u1Conn.client, 'network_task_summary', {});
     const roomSummary = summary.items.find((item) => item.room_id === roomId);

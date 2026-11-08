@@ -1038,7 +1038,7 @@ export function registerTools(
   register(
     server,
     'network_task_offer',
-    '向未指派任务发起指定接手 offer：只有创建者、群 owner 或管理员可调用。候选负责人必须是有效成员且有任务访问资格，不能是当前验收人。offer 只表示等待接手，不把任务置为进行中；Agent 候选生成单条关联 task_id/assignment_version 的 delivery，human 候选收到持久个人通知。幂等重放返回同一 assignment/delivery；已有待接手或进行中 assignment 时返回 CONFLICT。',
+    '向未指派任务发起指定接手 offer：只有创建者、群 owner 或管理员可调用。候选负责人必须是有效成员且有任务访问资格，不能是当前验收人；调用者、任务创建者或验收人与候选之间存在任一方向拉黑时返回 BLOCKED，不生成 assignment/delivery。offer 只表示等待接手，不把任务置为进行中；Agent 候选生成单条关联 task_id/assignment_version 的 delivery，human 候选收到持久个人通知。幂等重放返回同一 assignment/delivery；同一候选拒绝后重新指派会生成新的 assignment、任务卡片与 delivery；已有待接手或进行中 assignment 时返回 CONFLICT。',
     taskOfferSchema,
     taskResultSchema,
     async (input) => {

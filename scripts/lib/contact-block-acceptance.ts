@@ -79,6 +79,18 @@ interface ReportView {
   target_actor: { actor_id: string };
 }
 
+interface TaskView {
+  task_id: string;
+  status: string;
+  revision: number;
+  assignment: { assignment_id: string; owner_actor_id: string } | null;
+  delivery_ids: string[];
+}
+
+interface RoomRoleView {
+  members: { actor_id: string; role: string; role_revision: number }[];
+}
+
 interface HistoryPage {
   items: { message_id: string; sender_id: string; preview: string }[];
 }
@@ -197,6 +209,52 @@ async function runBlockedContactBypass(): Promise<void> {
       });
       await acceptGroupInvites(sConn, bGroup.room.room_id);
 
+      // 任务提议拒绝用例：A 为群主，M 为管理员，G 为 Agent 候选。
+      await befriend(aConn, a.actor_id, managerConn, manager.actor_id);
+      const agentFriendRequest = await callTool<ContactRequestResultView>(
+        aConn.client,
+        'network_contact_request',
+        {
+          request_id: newRequestId('a05_g_request'),
+          actor_id: g.actor_id,
+        },
+      );
+      if (agentFriendRequest.status === 'pending' && agentFriendRequest.request) {
+        await callTool<ContactRequestResultView>(
+          managerConn.client,
+          'network_contact_request_respond',
+          {
+            request_id: newRequestId('a05_g_accept'),
+            contact_request_id: agentFriendRequest.request.contact_request_id,
+            action: 'accept',
+          },
+        );
+      }
+      const taskGroup = await callTool<RoomDetail>(aConn.client, 'network_room_create', {
+        request_id: newRequestId('a05_task_group'),
+        kind: 'group',
+        members: [b.actor_id, manager.actor_id, g.actor_id],
+        title: 'A05 任务提议群',
+      });
+      const taskRoomId = taskGroup.room.room_id;
+      await acceptGroupInvites(bConn, taskRoomId);
+      await acceptGroupInvites(managerConn, taskRoomId);
+      await acceptGroupInvites(agentConn, taskRoomId);
+      const taskRoom = await callTool<RoomRoleView>(aConn.client, 'network_room_get', {
+        room_id: taskRoomId,
+      });
+      const managerMember = taskRoom.members.find(
+        (member) => member.actor_id === manager.actor_id,
+      );
+      if (!managerMember) throw new Error('A05 管理者不在任务群成员列表中');
+      await callTool(aConn.client, 'network_room_role_set', {
+        request_id: newRequestId('a05_task_admin'),
+        room_id: taskRoomId,
+        actor_id: manager.actor_id,
+        role: 'admin',
+        expected_role_revision: managerMember.role_revision,
+      });
+
       const blocked = await blockActor(aConn, b.actor_id);
       checkEqual('T01 拉黑结果 active', blocked.block.active, true);
       checkEqual('T01 首次拉黑 already_blocked=false', blocked.already_blocked, false);
@@ -298,6 +356,68 @@ async function runBlockedContactBypass(): Promise<void> {
       } finally {
         await s2Conn.close();
       }
+
+      // 任务提议：创建者拉黑候选后，管理员也不能代派；解除后恢复正常。
+      const task = (
+        await callTool<{ task: TaskView }>(aConn.client, 'network_task_create', {
+          request_id: newRequestId('a05_task'),
+          room_id: taskRoomId,
+          title: 'A05 任务提议拒绝',
+        })
+      ).task;
+      checkEqual('T01 任务提议前任务为 unassigned', task.status, 'unassigned');
+      await blockActor(aConn, g.actor_id);
+      const pendingBeforeTaskOffer = (await inbox(agentConn, 'pending')).pending_count;
+      await expectToolError(
+        'T01 管理员不能把任务提议给被创建者拉黑的 Agent',
+        callTool(managerConn.client, 'network_task_offer', {
+          request_id: newRequestId('a05_task_offer_blocked'),
+          task_id: task.task_id,
+          assignee_actor_id: g.actor_id,
+          expected_revision: task.revision,
+        }),
+        'BLOCKED',
+      );
+      const blockedTask = (
+        await callTool<{ task: TaskView }>(aConn.client, 'network_task_get', {
+          task_id: task.task_id,
+        })
+      ).task;
+      checkEqual('T01 被拒绝的任务提议不生成 assignment', blockedTask.assignment, null);
+      checkEqual('T01 被拒绝的任务提议不生成 delivery', blockedTask.delivery_ids.length, 0);
+      checkEqual(
+        'T01 被拒绝的任务提议不增加候选 pending_count',
+        (await inbox(agentConn, 'pending')).pending_count,
+        pendingBeforeTaskOffer,
+      );
+
+      await unblockActor(aConn, g.actor_id);
+      const offeredTask = (
+        await callTool<{ task: TaskView }>(managerConn.client, 'network_task_offer', {
+          request_id: newRequestId('a05_task_offer_allowed'),
+          task_id: task.task_id,
+          assignee_actor_id: g.actor_id,
+          expected_revision: blockedTask.revision,
+        })
+      ).task;
+      checkEqual('T01 解除拉黑后任务提议可正常派发', offeredTask.assignment?.owner_actor_id, g.actor_id);
+      checkEqual('T01 正常任务提议只生成一条 delivery', offeredTask.delivery_ids.length, 1);
+      checkEqual(
+        'T01 正常任务提议增加候选 pending_count',
+        (await inbox(agentConn, 'pending')).pending_count,
+        pendingBeforeTaskOffer + 1,
+      );
+      await callTool(aConn.client, 'network_task_cancel', {
+        request_id: newRequestId('a05_task_cancel'),
+        task_id: task.task_id,
+        reason: 'A05 清理任务提议',
+        expected_revision: offeredTask.revision,
+      });
+      checkEqual(
+        'T01 取消任务后 pending_count 恢复',
+        (await inbox(agentConn, 'pending')).pending_count,
+        pendingBeforeTaskOffer,
+      );
 
       const bInbox = await inbox(bConn, 'pending');
       checkEqual('T01 拉黑不唤醒被拉黑者', bInbox.items.length, 0);

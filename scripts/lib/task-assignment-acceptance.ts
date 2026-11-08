@@ -51,6 +51,7 @@ interface TaskView {
     | 'cancelled'
     | 'legacy_completed';
   revision: number;
+  card_message_id: string | null;
   owner_actor_id: string | null;
   owner_name: string | null;
   reviewer_actor_id: string;
@@ -72,7 +73,31 @@ interface DeliveryView {
   claim_id: string | null;
 }
 
+interface RoomDetailView {
+  members: { actor_id: string; role: string; role_revision: number }[];
+}
+
+interface BlockResult {
+  block: { block_id: string; active: boolean };
+  already_blocked: boolean;
+}
+
 const CONFLICT_CODES = new Set(['ASSIGNMENT_STALE', 'CLAIM_CONFLICT', 'CONFLICT', 'VERSION_CONFLICT']);
+
+function blockActor(connection: McpConnection, target: string): Promise<BlockResult> {
+  return callTool<BlockResult>(connection.client, 'network_contact_block', {
+    request_id: newRequestId('d02_block'),
+    actor_id: target,
+    reason: 'D02 拉黑派发资格',
+  });
+}
+
+function unblockActor(connection: McpConnection, target: string): Promise<unknown> {
+  return callTool(connection.client, 'network_contact_unblock', {
+    request_id: newRequestId('d02_unblock'),
+    actor_id: target,
+  });
+}
 
 function errorCode(reason: unknown): string {
   return reason instanceof ToolError ? reason.code : String(reason);
@@ -332,6 +357,78 @@ export async function runTaskAssignmentAcceptance(): Promise<void> {
     checkEqual('D02-T02 旧 offer 失败不覆盖新指派', afterOldAccept.assignment?.owner_actor_id, b1.actor_id);
     checkEqual('D02-T02 旧 offer 失败后仍为 offered', afterOldAccept.status, 'offered');
 
+    // 同一 Agent 拒绝后必须能再次指派：新 assignment、卡片与 delivery，不能
+    // 被旧 delivery 的 (recipient_id, message_id) 唯一键挡住。
+    const reassignTask = await createTask(u1Conn, {
+      room_id: roomId,
+      title: 'D02-T02 同候选重派',
+      reviewer_actor_id: u1.actor_id,
+    });
+    const firstAssign = await offer(u1Conn, reassignTask, b2.actor_id);
+    checkEqual('D02-T02 同候选首派 assignment 为 v1', firstAssign.assignment?.assignment_version, 1);
+    checkEqual('D02-T02 同候选首派生成 delivery', firstAssign.delivery_ids.length, 1);
+    const firstDeliveryId = firstAssign.delivery_ids[0];
+    const firstCardId = firstAssign.card_message_id;
+    const firstDeclined = (await decline(b2Conn, firstAssign, 'D02 首次拒绝')).task;
+    const secondAssign = await offer(u1Conn, firstDeclined, b2.actor_id);
+    checkEqual(
+      'D02-T02 同候选拒绝后可重新指派',
+      secondAssign.assignment?.assignment_version,
+      2,
+    );
+    checkEqual(
+      'D02-T02 重派生成新卡片',
+      secondAssign.card_message_id !== firstCardId,
+      true,
+    );
+    checkEqual(
+      'D02-T02 重派生成新 delivery',
+      secondAssign.delivery_ids.length === 1 && secondAssign.delivery_ids[0] !== firstDeliveryId,
+      true,
+    );
+    const reassignedAccepted = (await accept(b2Conn, secondAssign)).task;
+    checkEqual('D02-T02 同候选重派后可接受', reassignedAccepted.status, 'in_progress');
+    checkEqual('D02-T02 重派后 owner 为同一 Agent', reassignedAccepted.owner_actor_id, b2.actor_id);
+    await expectToolError(
+      'D02-T02 已拒绝的旧 assignment 仍不可接受',
+      accept(b2Conn, firstAssign),
+      'ASSIGNMENT_STALE',
+    );
+    await cancel(u1Conn, reassignedAccepted, 'D02-T02 清理同候选重派');
+
+    // 并发派给同一候选只能产生一个有效 assignment、卡片与 delivery。
+    const raceAssignTask = await createTask(u1Conn, {
+      room_id: roomId,
+      title: 'D02-T02 并发同候选派发',
+      reviewer_actor_id: u1.actor_id,
+    });
+    const raceOffers = await Promise.allSettled([
+      offer(u1Conn, raceAssignTask, b2.actor_id),
+      offer(u1Conn, raceAssignTask, b2.actor_id),
+    ]);
+    const raceWinners = raceOffers.filter(
+      (item): item is PromiseFulfilledResult<TaskView> => item.status === 'fulfilled',
+    );
+    const raceLosers = raceOffers.filter(
+      (item): item is PromiseRejectedResult => item.status === 'rejected',
+    );
+    checkEqual('D02-T02 并发同候选派发恰好一个成功', raceWinners.length, 1);
+    checkEqual('D02-T02 并发同候选派发失败方只有一个', raceLosers.length, 1);
+    check(
+      'D02-T02 并发同候选失败方返回冲突',
+      CONFLICT_CODES.has(errorCode(raceLosers[0]?.reason)),
+      errorCode(raceLosers[0]?.reason),
+    );
+    const raceFinal = await getTask(u1Conn, raceAssignTask.task_id);
+    checkEqual('D02-T02 并发后只有一个当前 assignment', raceFinal.assignment?.assignment_version, 1);
+    checkEqual('D02-T02 并发后只有一个有效 delivery', raceFinal.delivery_ids.length, 1);
+    checkEqual(
+      'D02-T02 并发后的卡片属于成功方',
+      raceFinal.card_message_id,
+      raceWinners[0]?.value.card_message_id ?? null,
+    );
+    await cancel(u1Conn, raceFinal, 'D02-T02 清理并发同候选派发');
+
     // ---------- D02-T03：拒绝/取消/接受并发只有一种合法状态 ----------
     const t03 = await createTask(u1Conn, {
       room_id: roomId,
@@ -462,6 +559,66 @@ export async function runTaskAssignmentAcceptance(): Promise<void> {
       (await getTask(u1Conn, reviewerTask.task_id)).status,
       'unassigned',
     );
+
+    // ---------- D02-T05：管理员代派必须同时尊重创建者的拉黑关系 ----------
+    const roomDetail = await callTool<RoomDetailView>(u1Conn.client, 'network_room_get', {
+      room_id: roomId,
+    });
+    const u3Member = roomDetail.members.find((member) => member.actor_id === u3.actor_id);
+    if (!u3Member) throw new Error('U3 不在房间成员列表中');
+    await callTool(u1Conn.client, 'network_room_role_set', {
+      request_id: newRequestId('d02_role'),
+      room_id: roomId,
+      actor_id: u3.actor_id,
+      role: 'admin',
+      expected_role_revision: u3Member.role_revision,
+    });
+
+    const creatorBlockedTask = await createTask(u1Conn, {
+      room_id: roomId,
+      title: 'D02-T05 创建者拉黑候选',
+      reviewer_actor_id: u1.actor_id,
+    });
+    await blockActor(u1Conn, b2.actor_id);
+    const b2PendingBeforeBlockedOffer = (await inbox(b2Conn, 'pending')).pending_count;
+    await expectToolError(
+      'D02-T05 管理员不能把任务派给被创建者拉黑的候选',
+      callTool(u3Conn.client, 'network_task_offer', {
+        request_id: newRequestId('d02_offer_blocked_creator'),
+        task_id: creatorBlockedTask.task_id,
+        assignee_actor_id: b2.actor_id,
+        expected_revision: creatorBlockedTask.revision,
+      }),
+      'BLOCKED',
+    );
+    const blockedOfferTask = await getTask(u1Conn, creatorBlockedTask.task_id);
+    checkEqual('D02-T05 被拒绝的派发不生成 assignment', blockedOfferTask.assignment, null);
+    checkEqual('D02-T05 被拒绝的派发不生成 delivery', blockedOfferTask.delivery_ids.length, 0);
+    checkEqual('D02-T05 被拒绝的派发保持 unassigned', blockedOfferTask.status, 'unassigned');
+    checkEqual(
+      'D02-T05 被拒绝的派发不增加候选 pending_count',
+      (await inbox(b2Conn, 'pending')).pending_count,
+      b2PendingBeforeBlockedOffer,
+    );
+
+    await unblockActor(u1Conn, b2.actor_id);
+    const allowedOffer = await callTool<TaskResult>(u3Conn.client, 'network_task_offer', {
+      request_id: newRequestId('d02_offer_after_unblock'),
+      task_id: creatorBlockedTask.task_id,
+      assignee_actor_id: b2.actor_id,
+      expected_revision: blockedOfferTask.revision,
+    });
+    checkEqual(
+      'D02-T05 解除拉黑后管理员可正常派发',
+      allowedOffer.task.assignment?.owner_actor_id,
+      b2.actor_id,
+    );
+    checkEqual(
+      'D02-T05 正常派发生成一条 delivery',
+      allowedOffer.task.delivery_ids.length,
+      1,
+    );
+    await cancel(u1Conn, allowedOffer.task, 'D02-T05 清理');
 
     console.log('D02 接单拒单验收通过');
   } finally {
