@@ -9144,6 +9144,26 @@ async function main(): Promise<void> {
         name: '存量未加好友 Agent',
         agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
       });
+      const legacyB = await rawTool<Actor>(
+        `ank_${crypto.randomUUID().replaceAll('-', '')}`,
+        'network_register',
+        {
+          request_id: requestId('register_agent'),
+          kind: 'agent',
+          name: '旧全局 Agent B',
+          agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+        },
+      );
+      const ownAgent = await rawTool<Actor>(
+        `ank_${crypto.randomUUID().replaceAll('-', '')}`,
+        'network_register',
+        {
+          request_id: requestId('register_agent'),
+          kind: 'agent',
+          name: '本机新建 Agent',
+          agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+        },
+      );
       const managedOnly = await rawTool<Actor>(data.humanToken, 'network_agent_create', {
         request_id: requestId('create_agent'),
         name: '仅管理列表 Agent',
@@ -9164,10 +9184,38 @@ async function main(): Promise<void> {
         created_at: String(Date.now()),
         mcp_url: '',
       });
+      // per-actor 已有新建 Agent 时，legacy 的 2 个 Agent 仍必须参与合并；
+      // 同一 actor 以 per-actor 名称为准，其他 owner 的条目必须被过滤。
+      const perActorItems = [
+        registryItem(ownAgent),
+        {
+          ...registryItem(orphan),
+          name: '本机优先 Agent',
+          created_at: String(Date.now() + 1_000),
+        },
+      ];
+      const legacyItems = [
+        registryItem(orphan),
+        registryItem(legacyB),
+        {
+          owner_actor_id: 'act_other_owner',
+          actor_id: 'act_foreign_agent',
+          name: '他人 Agent',
+          agent_session_id: null,
+          created_at: String(Date.now()),
+          mcp_url: '',
+        },
+      ];
+      const perActorKey = `agent-network-agents-v1:${data.human.actor_id}`;
       await page.evaluate(
-        `localStorage.setItem('agent-network-agents-v1', ${JSON.stringify(
-          JSON.stringify({ v: 1, items: [registryItem(orphan)] }),
-        )})`,
+        `(() => {
+          localStorage.setItem(${JSON.stringify(perActorKey)}, ${JSON.stringify(
+            JSON.stringify({ v: 1, items: perActorItems }),
+          )});
+          localStorage.setItem('agent-network-agents-v1', ${JSON.stringify(
+            JSON.stringify({ v: 1, items: legacyItems }),
+          )});
+        })()`,
       );
       const pickerState = async (root: string) =>
         (await page.evaluate(`(() => {
@@ -9192,20 +9240,35 @@ async function main(): Promise<void> {
         };
 
       await page.locator('#new-group').click();
-      await page
-        .locator('#group-contacts .contact-choice')
-        .filter({ hasText: orphan.name })
-        .waitFor();
+      for (const name of [ownAgent.name, legacyB.name, '本机优先 Agent']) {
+        await page
+          .locator('#group-contacts .contact-choice')
+          .filter({ hasText: name })
+          .waitFor();
+      }
       await page
         .locator('#group-contacts .contact-choice')
         .filter({ hasText: managedOnly.name })
         .waitFor();
       const groupPicker = await pickerState('#group-contacts');
       check(
-        '建群候选合并本机注册表与受管 Agent',
-        groupPicker.choices.some((text) => text.includes(orphan.name)) &&
+        '建群候选合并 per-actor、legacy 与受管 Agent',
+        groupPicker.choices.some((text) => text.includes(ownAgent.name)) &&
+          groupPicker.choices.some((text) => text.includes(legacyB.name)) &&
+          groupPicker.choices.some((text) => text.includes('本机优先 Agent')) &&
           groupPicker.choices.some((text) => text.includes(managedOnly.name)),
         groupPicker.choices,
+      );
+      check(
+        '建群候选过滤其他 owner 与同 actor 旧名',
+        !groupPicker.choices.some((text) => text.includes('他人 Agent')) &&
+          !groupPicker.choices.some((text) => text.includes(orphan.name)),
+        groupPicker.choices,
+      );
+      checkEqual(
+        '建群候选同一 actor 只出现一次',
+        groupPicker.choices.filter((text) => text.includes('本机优先 Agent')).length,
+        1,
       );
       checkEqual('建群候选读取受管 Agent 列表', groupPicker.managedListCalls > 0, true);
       checkEqual('建群候选不发送好友申请', groupPicker.contactRequests, 0);
@@ -9215,16 +9278,16 @@ async function main(): Promise<void> {
           !groupPicker.text.includes('添加好友失败'),
         groupPicker.text,
       );
-      await page.fill('#group-search', orphan.name);
+      await page.fill('#group-search', ownAgent.name);
       await page
         .locator('#group-contacts .contact-choice')
-        .filter({ hasText: orphan.name })
+        .filter({ hasText: ownAgent.name })
         .locator('input')
         .check();
-      await page.fill('#group-search', managedOnly.name);
+      await page.fill('#group-search', legacyB.name);
       await page
         .locator('#group-contacts .contact-choice')
-        .filter({ hasText: managedOnly.name })
+        .filter({ hasText: legacyB.name })
         .locator('input')
         .check();
       await page.fill('#group-title', 'Agent 候选建群');
@@ -9235,9 +9298,9 @@ async function main(): Promise<void> {
         room_id: pickerGroupId,
       });
       check(
-        '勾选的本机与受管 Agent 直接入群',
-        pickerGroup.members.some((member) => member.actor_id === orphan.actor_id) &&
-          pickerGroup.members.some((member) => member.actor_id === managedOnly.actor_id),
+        '勾选的 per-actor 与 legacy Agent 直接入群',
+        pickerGroup.members.some((member) => member.actor_id === ownAgent.actor_id) &&
+          pickerGroup.members.some((member) => member.actor_id === legacyB.actor_id),
         pickerGroup.members,
       );
 
@@ -9253,7 +9316,7 @@ async function main(): Promise<void> {
       await page.locator('#add-members').click();
       await page
         .locator('#members-contacts .contact-choice')
-        .filter({ hasText: orphan.name })
+        .filter({ hasText: '本机优先 Agent' })
         .waitFor();
       await page
         .locator('#members-contacts .contact-choice')
@@ -9261,9 +9324,14 @@ async function main(): Promise<void> {
         .waitFor();
       const memberPicker = await pickerState('#members-contacts');
       check(
-        '添加成员候选包含本机与受管 Agent',
-        memberPicker.choices.some((text) => text.includes(orphan.name)) &&
+        '添加成员候选包含 legacy 与受管 Agent',
+        memberPicker.choices.some((text) => text.includes('本机优先 Agent')) &&
           memberPicker.choices.some((text) => text.includes(managedOnly.name)),
+        memberPicker.choices,
+      );
+      check(
+        '添加成员候选过滤其他 owner Agent',
+        !memberPicker.choices.some((text) => text.includes('他人 Agent')),
         memberPicker.choices,
       );
       checkEqual(
@@ -9277,10 +9345,10 @@ async function main(): Promise<void> {
           !memberPicker.text.includes('添加好友失败'),
         memberPicker.text,
       );
-      await page.fill('#members-search', orphan.name);
+      await page.fill('#members-search', '本机优先 Agent');
       await page
         .locator('#members-contacts .contact-choice')
-        .filter({ hasText: orphan.name })
+        .filter({ hasText: '本机优先 Agent' })
         .locator('input')
         .check();
       await page.fill('#members-search', managedOnly.name);

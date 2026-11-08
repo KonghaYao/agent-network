@@ -20,27 +20,19 @@ function agentRegistryKey(ownerActorId) {
   return AGENT_REGISTRY_PER_ACTOR_PREFIX + ownerActorId;
 }
 
-/** 读取当前身份的本地注册表；旧全局 key 只作为一次性兼容回退。 */
-function agentRegistryRead(ownerActorId) {
-  if (!ownerActorId) return { items: [], error: '当前浏览器身份不可用' };
-  let raw = null;
-  try {
-    raw = window.localStorage.getItem(agentRegistryKey(ownerActorId));
-    if (!raw) raw = window.localStorage.getItem(AGENT_REGISTRY_LEGACY_KEY);
-  } catch (error) {
-    return { items: [], error: '浏览器无法读取本地 Agent 列表' };
-  }
-  if (!raw) return { items: [], error: '' };
+/** 解析一份本地注册表；格式错误只影响该来源，不影响另一份兼容数据。 */
+function agentRegistryParse(raw, ownerActorId) {
+  const items = [];
+  if (!raw) return { items: items, error: '' };
   let parsed = null;
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    return { items: [], error: '本地 Agent 列表已损坏，已按空列表处理' };
+    return { items: items, error: '本地 Agent 列表已损坏，已按空列表处理' };
   }
   if (!parsed || parsed.v !== 1 || !Array.isArray(parsed.items)) {
-    return { items: [], error: '本地 Agent 列表版本不兼容，已按空列表处理' };
+    return { items: items, error: '本地 Agent 列表版本不兼容，已按空列表处理' };
   }
-  const items = [];
   const seen = new Set();
   for (const item of parsed.items) {
     if (!item || typeof item !== 'object') continue;
@@ -64,6 +56,37 @@ function agentRegistryRead(ownerActorId) {
     });
   }
   return { items: items, error: '' };
+}
+
+/**
+ * 读取当前身份的本地注册表。
+ *
+ * per-actor key 与旧全局 key 同时合并：per-actor 先入，legacy 只补充缺失
+ * actor_id。只保留当前 human 的条目；同一 actor 以 per-actor 条目优先。
+ * 这样新建 Agent 后，旧全局数据里的 Agent 不会在选择器中消失。
+ */
+function agentRegistryRead(ownerActorId) {
+  if (!ownerActorId) return { items: [], error: '当前浏览器身份不可用' };
+  let ownRaw = null;
+  let legacyRaw = null;
+  try {
+    ownRaw = window.localStorage.getItem(agentRegistryKey(ownerActorId));
+    legacyRaw = window.localStorage.getItem(AGENT_REGISTRY_LEGACY_KEY);
+  } catch (error) {
+    return { items: [], error: '浏览器无法读取本地 Agent 列表' };
+  }
+  const own = agentRegistryParse(ownRaw, ownerActorId);
+  const legacy = agentRegistryParse(legacyRaw, ownerActorId);
+  const items = [];
+  const seen = new Set();
+  for (const item of own.items.concat(legacy.items)) {
+    if (seen.has(item.actor_id)) continue;
+    seen.add(item.actor_id);
+    items.push(item);
+  }
+  // 只要有一份可用数据，另一份损坏不应阻塞改名/重发等写回。
+  const error = items.length > 0 ? '' : (own.error || legacy.error);
+  return { items: items, error: error };
 }
 
 function agentRegistryWrite(ownerActorId, items) {
