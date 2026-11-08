@@ -3619,6 +3619,180 @@ async function main(): Promise<void> {
         actor_id: data.human.actor_id,
         message: '界面验收申请',
       });
+      await page.waitForFunction(
+        `(() => {
+          const badge = document.getElementById('contact-requests-badge');
+          return Boolean(badge && !badge.hidden);
+        })()`,
+      );
+      const brandIconMetrics = (await page.evaluate(`(() => {
+        function read(id) {
+          const button = document.getElementById(id);
+          if (!button) return null;
+          const svg = button.querySelector('svg');
+          const badge = button.querySelector('.request-badge');
+          const buttonStyle = getComputedStyle(button);
+          const svgStyle = svg ? getComputedStyle(svg) : null;
+          const badgeStyle = badge ? getComputedStyle(badge) : null;
+          const buttonBox = button.getBoundingClientRect();
+          const svgBox = svg ? svg.getBoundingClientRect() : null;
+          const badgeBox = badge && !badge.hidden ? badge.getBoundingClientRect() : null;
+          const textNodes = Array.from(button.childNodes)
+            .filter(function (node) {
+              return node.nodeType === 3 && (node.textContent || '').trim() !== '';
+            })
+            .map(function (node) { return node.textContent; });
+          return {
+            ariaLabel: button.getAttribute('aria-label'),
+            title: button.getAttribute('title'),
+            hasSvg: Boolean(svg),
+            svgAriaHidden: svg ? svg.getAttribute('aria-hidden') : null,
+            svgWidth: svgBox ? Math.round(svgBox.width * 100) / 100 : 0,
+            svgHeight: svgBox ? Math.round(svgBox.height * 100) / 100 : 0,
+            svgDisplay: svgStyle ? svgStyle.display : '',
+            svgFill: svgStyle ? svgStyle.fill : '',
+            svgStroke: svgStyle ? svgStyle.stroke : '',
+            buttonColor: buttonStyle.color,
+            svgStrokeWidth: svgStyle ? svgStyle.strokeWidth : '',
+            svgLinecap: svgStyle ? svgStyle.strokeLinecap : '',
+            svgLinejoin: svgStyle ? svgStyle.strokeLinejoin : '',
+            buttonWidth: Math.round(buttonBox.width * 100) / 100,
+            buttonHeight: Math.round(buttonBox.height * 100) / 100,
+            textNodes: textNodes,
+            badge: badge ? {
+              visible: !badge.hidden && badgeStyle.display !== 'none',
+              text: badge.textContent,
+              position: badgeStyle.position,
+              pointerEvents: badgeStyle.pointerEvents,
+              top: badgeStyle.top,
+              right: badgeStyle.right,
+              insideButton: Boolean(badgeBox) && badgeBox.right >= buttonBox.left &&
+                badgeBox.left <= buttonBox.right && badgeBox.bottom >= buttonBox.top &&
+                badgeBox.top <= buttonBox.bottom,
+            } : null,
+          };
+        }
+        return { contact: read('contact-requests'), tasks: read('my-tasks') };
+      })()`)) as {
+        contact: {
+          ariaLabel: string | null;
+          title: string | null;
+          hasSvg: boolean;
+          svgAriaHidden: string | null;
+          svgWidth: number;
+          svgHeight: number;
+          svgDisplay: string;
+          svgFill: string;
+          svgStroke: string;
+          buttonColor: string;
+          svgStrokeWidth: string;
+          svgLinecap: string;
+          svgLinejoin: string;
+          buttonWidth: number;
+          buttonHeight: number;
+          textNodes: string[];
+          badge: {
+            visible: boolean;
+            text: string;
+            position: string;
+            pointerEvents: string;
+            top: string;
+            right: string;
+            insideButton: boolean;
+          } | null;
+        } | null;
+        tasks: {
+          ariaLabel: string | null;
+          title: string | null;
+          hasSvg: boolean;
+          svgAriaHidden: string | null;
+          svgWidth: number;
+          svgHeight: number;
+          svgDisplay: string;
+          svgFill: string;
+          svgStroke: string;
+          buttonColor: string;
+          svgStrokeWidth: string;
+          svgLinecap: string;
+          svgLinejoin: string;
+          buttonWidth: number;
+          buttonHeight: number;
+          textNodes: string[];
+        } | null;
+      };
+      const contactIcon = brandIconMetrics.contact;
+      const taskIcon = brandIconMetrics.tasks;
+      checkEqual('侧栏好友申请使用图标', contactIcon?.hasSvg, true);
+      checkEqual('好友申请图标保留 aria-label', contactIcon?.ariaLabel, '好友申请');
+      check(
+        '好友申请图标保留 title',
+        contactIcon?.title?.startsWith('好友申请') === true,
+        contactIcon?.title,
+      );
+      checkEqual('好友申请图标不含文字标签', contactIcon?.textNodes.length, 0);
+      checkEqual('好友申请图标 aria-hidden', contactIcon?.svgAriaHidden, 'true');
+      checkEqual(
+        '好友申请图标为 18×18',
+        `${contactIcon?.svgWidth}x${contactIcon?.svgHeight}`,
+        '18x18',
+      );
+      checkEqual('好友申请图标 display:block', contactIcon?.svgDisplay, 'block');
+      checkEqual('好友申请图标 fill:none', contactIcon?.svgFill, 'none');
+      checkEqual(
+        '好友申请图标 stroke 跟随文字色',
+        contactIcon?.svgStroke,
+        contactIcon?.buttonColor,
+      );
+      checkEqual(
+        '好友申请图标 stroke-width 1.8',
+        Number.parseFloat(contactIcon?.svgStrokeWidth ?? ''),
+        1.8,
+      );
+      checkEqual(
+        '好友申请图标圆角线帽',
+        `${contactIcon?.svgLinecap}/${contactIcon?.svgLinejoin}`,
+        'round/round',
+      );
+      checkEqual(
+        '好友申请按钮 28×28 点击区',
+        `${contactIcon?.buttonWidth}x${contactIcon?.buttonHeight}`,
+        '28x28',
+      );
+      checkEqual('好友申请红点可见', contactIcon?.badge?.visible, true);
+      checkEqual('好友申请红点计数为 1', contactIcon?.badge?.text, '1');
+      checkEqual('好友申请红点绝对定位', contactIcon?.badge?.position, 'absolute');
+      checkEqual('好友申请红点不拦截点击', contactIcon?.badge?.pointerEvents, 'none');
+      check(
+        '好友申请红点位于图标右上角',
+        Number.parseFloat(contactIcon?.badge?.top ?? '') < 0 &&
+          Number.parseFloat(contactIcon?.badge?.right ?? '') < 0,
+        contactIcon?.badge,
+      );
+      checkEqual('好友申请红点仍属于按钮点击区', contactIcon?.badge?.insideButton, true);
+      checkEqual('侧栏我的任务使用图标', taskIcon?.hasSvg, true);
+      checkEqual('我的任务图标保留 aria-label', taskIcon?.ariaLabel, '我的任务');
+      checkEqual('我的任务图标保留 title', taskIcon?.title, '我的任务');
+      checkEqual('我的任务图标不含文字标签', taskIcon?.textNodes.length, 0);
+      checkEqual('我的任务图标 aria-hidden', taskIcon?.svgAriaHidden, 'true');
+      checkEqual('我的任务图标为 18×18', `${taskIcon?.svgWidth}x${taskIcon?.svgHeight}`, '18x18');
+      checkEqual('我的任务图标 display:block', taskIcon?.svgDisplay, 'block');
+      checkEqual('我的任务图标 fill:none', taskIcon?.svgFill, 'none');
+      checkEqual('我的任务图标 stroke 跟随文字色', taskIcon?.svgStroke, taskIcon?.buttonColor);
+      checkEqual(
+        '我的任务图标 stroke-width 1.8',
+        Number.parseFloat(taskIcon?.svgStrokeWidth ?? ''),
+        1.8,
+      );
+      checkEqual(
+        '我的任务图标圆角线帽',
+        `${taskIcon?.svgLinecap}/${taskIcon?.svgLinejoin}`,
+        'round/round',
+      );
+      checkEqual(
+        '我的任务按钮 28×28 点击区',
+        `${taskIcon?.buttonWidth}x${taskIcon?.buttonHeight}`,
+        '28x28',
+      );
       checkEqual(
         '侧栏好友申请入口可见',
         await page.locator('#contact-requests').isVisible(),
@@ -3649,6 +3823,90 @@ async function main(): Promise<void> {
         'active',
       );
       await page.locator('#contact-modal-close').click();
+      await page.locator('#contact-modal').waitFor({ state: 'hidden' });
+
+      // 我的任务图标：点击打开任务面板，关闭后不残留。
+      await page.locator('#my-tasks').click();
+      await page.locator('#my-tasks-modal').waitFor({ state: 'visible' });
+      checkEqual(
+        '点击我的任务图标打开任务面板',
+        await page.locator('#my-tasks-modal').isVisible(),
+        true,
+      );
+      await page.locator('#my-tasks-close').click();
+      await page.locator('#my-tasks-modal').waitFor({ state: 'hidden' });
+      checkEqual(
+        '我的任务面板可关闭',
+        await page.locator('#my-tasks-modal').isHidden(),
+        true,
+      );
+
+      // 390px 列表页：标题行图标保持 18×18 且不横向溢出。
+      const mobileIcons = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 390, height: 844 },
+        allErrors,
+        true,
+        false,
+        { hasTouch: true },
+      );
+      try {
+        await mobileIcons.page.goto(`${server.base}/`);
+        await mobileIcons.page.locator('#room-list .room-item').first().waitFor();
+        const mobileBrandMetrics = (await mobileIcons.page.evaluate(`(() => {
+          function iconBox(id) {
+            const button = document.getElementById(id);
+            const svg = button ? button.querySelector('svg') : null;
+            if (!button || !svg) return null;
+            const buttonBox = button.getBoundingClientRect();
+            const svgBox = svg.getBoundingClientRect();
+            return {
+              id: id,
+              width: Math.round(svgBox.width * 100) / 100,
+              height: Math.round(svgBox.height * 100) / 100,
+              left: buttonBox.left,
+              right: buttonBox.right,
+            };
+          }
+          const row = document.querySelector('.brand-row');
+          const rowBox = row ? row.getBoundingClientRect() : null;
+          return {
+            pageFits: document.documentElement.scrollWidth <= window.innerWidth,
+            view: window.innerWidth,
+            rowLeft: rowBox ? rowBox.left : -1,
+            rowRight: rowBox ? rowBox.right : -1,
+            icons: ['contact-requests', 'my-tasks'].map(iconBox),
+          };
+        })()`)) as {
+          pageFits: boolean;
+          view: number;
+          rowLeft: number;
+          rowRight: number;
+          icons: { id: string; width: number; height: number; left: number; right: number }[];
+        };
+        checkEqual('390px 侧栏图标不横向溢出', mobileBrandMetrics.pageFits, true);
+        check(
+          '390px 品牌行图标在视口内',
+          mobileBrandMetrics.rowLeft >= 0 &&
+            mobileBrandMetrics.rowRight <= mobileBrandMetrics.view + 1,
+          mobileBrandMetrics,
+        );
+        check(
+          '390px 好友申请与任务图标 18×18 且完整可见',
+          mobileBrandMetrics.icons.length === 2 &&
+            mobileBrandMetrics.icons.every(
+              (icon) =>
+                icon.width === 18 &&
+                icon.height === 18 &&
+                icon.left >= 0 &&
+                icon.right <= mobileBrandMetrics.view,
+            ),
+          mobileBrandMetrics.icons,
+        );
+      } finally {
+        await mobileIcons.context.close();
+      }
 
       checkEqual('侧栏分类容器为 tablist', await page.locator('#room-filter').getAttribute('role'), 'tablist');
       checkEqual(

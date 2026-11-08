@@ -74,6 +74,8 @@ export const APP_STYLE = `
     background: transparent; color: var(--wx-text); font-size: 22px; line-height: 1;
     display: grid; place-items: center; }
   .icon-btn:hover { background: var(--wx-hover); }
+  .icon-btn svg { width: 18px; height: 18px; display: block; fill: none;
+    stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .search-box { position: relative; display: block; }
   .search-icon { position: absolute; left: 8px; top: 50%; width: 15px; height: 15px;
     transform: translateY(-50%); fill: none; stroke: var(--wx-muted); stroke-width: 1.8;
@@ -942,10 +944,11 @@ export const APP_STYLE = `
   }
 
   /* 好友申请入口与弹窗；单侧收藏不在群成员候选里，这里只处理双向关系。 */
-  #contact-requests { position: relative; font-size: 12px; }
+  #contact-requests { position: relative; }
   .request-badge { position: absolute; top: -5px; right: -5px; min-width: 16px;
     height: 16px; padding: 0 4px; border-radius: 8px; background: var(--wx-unread);
-    color: #ffffff; font-size: 10px; line-height: 16px; text-align: center; }
+    color: #ffffff; font-size: 10px; line-height: 16px; text-align: center;
+    pointer-events: none; }
   .contact-policy { margin: 10px 0 12px; padding: 10px; border: 1px solid var(--wx-line);
     border-radius: 10px; background: var(--wx-sidebar); }
   .contact-policy .field { margin: 0; }

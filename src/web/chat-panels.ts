@@ -14,8 +14,25 @@ export function sidebarPane(): string {
   <header class="sidebar-head">
     <div class="brand-row">
       <h1>WeBots</h1>
-      <button class="icon-btn" id="contact-requests" type="button" aria-label="好友申请" title="好友申请">友<span class="request-badge" id="contact-requests-badge" hidden>0</span></button>
-      <button class="icon-btn" id="my-tasks" type="button" aria-label="我的任务" title="我的任务">任</button>
+      <button class="icon-btn" id="contact-requests" type="button" aria-label="好友申请" title="好友申请">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="9" cy="8" r="3.2"></circle>
+          <path d="M3.6 19.2c0-3.1 2.4-5.2 5.4-5.2s5.4 2.1 5.4 5.2"></path>
+          <path d="M15.6 5.6a3.2 3.2 0 0 1 0 5.8"></path>
+          <path d="M17.8 14.5c1.6.7 2.6 2.3 2.6 4.7"></path>
+        </svg>
+        <span class="request-badge" id="contact-requests-badge" hidden>0</span>
+      </button>
+      <button class="icon-btn" id="my-tasks" type="button" aria-label="我的任务" title="我的任务">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <rect x="5" y="4.5" width="14" height="16" rx="2.5"></rect>
+          <path d="M9.5 4.5V3.3c0-.4.3-.7.7-.7h3.6c.4 0 .7.3.7.7v1.2"></path>
+          <path d="M8.6 11.2l1.1 1.1 2-2.2"></path>
+          <path d="M14 11.4h2.2"></path>
+          <path d="M8.6 15.6l1.1 1.1 2-2.2"></path>
+          <path d="M14 15.8h2.2"></path>
+        </svg>
+      </button>
       <button class="icon-btn" id="new-group" type="button" aria-label="新建群聊" title="新建群聊">+</button>
     </div>
     <label class="search-box">
