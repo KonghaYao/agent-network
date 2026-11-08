@@ -218,14 +218,23 @@ export async function runUnifiedStreamAcceptance(): Promise<void> {
     await acceptGroupInvites(cConn, groupId);
     await acceptGroupInvites(hConn, groupId);
 
+    // B 是未认领 Agent：建群时直接 active，收到 room.created 而不是邀请。
     await waitForItem(
       bCollector,
       0,
       (item) =>
-        item.source === 'room.membership' &&
-        item.change === 'invited' &&
+        item.source === 'room.created' &&
         item.room_id === groupId,
-      '等待 B 收到群邀请',
+      '等待 B 收到建群通知',
+    );
+    check(
+      '统一流：unclaimed B 不收到 pending 邀请',
+      !streamItems(bCollector, 0).some(
+        (item) =>
+          item.source === 'room.membership' &&
+          item.change === 'invited' &&
+          item.room_id === groupId,
+      ),
     );
     await sleep(500);
     checkEqual('统一流：未 login 的 C 收不到邀请流', streamEvents(cCollector).length, 0);
