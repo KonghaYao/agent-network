@@ -16054,6 +16054,7 @@ async function main(): Promise<void> {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
         room_id: mdRoomId,
+        invoke: [],
         body: richBody,
       });
 
@@ -16062,6 +16063,7 @@ async function main(): Promise<void> {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
         room_id: mdRoomId,
+        invoke: [],
         body: [
           mentionMarker,
           `**你好 @${data.agentA.name}**`,
@@ -16076,6 +16078,7 @@ async function main(): Promise<void> {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
         room_id: mdRoomId,
+        invoke: [],
         body: [
           xssMarker,
           '<img src=x onerror=alert(1)>',
@@ -16107,6 +16110,7 @@ async function main(): Promise<void> {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
         room_id: mdRoomId,
+        invoke: [],
         body: [singleMarker, '第二行紧随其后'].join('\n'),
       });
 
@@ -16115,6 +16119,7 @@ async function main(): Promise<void> {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
         room_id: mdRoomId,
+        invoke: [],
         body: [doubleMarker, '', '第二段独立'].join('\n'),
       });
 
@@ -16123,6 +16128,7 @@ async function main(): Promise<void> {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
         room_id: mdRoomId,
+        invoke: [],
         body: `${crlfMarker}\r\n第二行紧随其后\r\n第三行结尾`,
       });
 
@@ -16131,6 +16137,7 @@ async function main(): Promise<void> {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
         room_id: mdRoomId,
+        invoke: [],
         body: `${tripleMarker}\n\n\n第三段内容`,
       });
 
@@ -16139,6 +16146,7 @@ async function main(): Promise<void> {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
         room_id: mdRoomId,
+        invoke: [],
         body: [quoteMarker, '> 引用第一行', '> 引用第二行'].join('\n'),
       });
 
@@ -16158,6 +16166,7 @@ async function main(): Promise<void> {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
         room_id: mdRoomId,
+        invoke: [],
         body: previewBody,
       });
       const longBody = [
@@ -16175,6 +16184,7 @@ async function main(): Promise<void> {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
         room_id: mdRoomId,
+        invoke: [],
         body: longBody,
       });
 
@@ -16211,6 +16221,7 @@ async function main(): Promise<void> {
           request_id: requestId('msg'),
           client_message_id: crypto.randomUUID(),
           room_id: mdRoomId,
+          invoke: [],
           body: cutInside(cutCase.marker, cutCase.token, cutCase.offset, cutCase.tail),
         });
       }
@@ -16569,6 +16580,7 @@ async function main(): Promise<void> {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
         room_id: mdRoomId,
+        invoke: [],
         body: [
           `${chipReplyMarker}第一行`,
           `${chipReplyMarker}第二行`,
