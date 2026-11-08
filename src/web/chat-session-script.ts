@@ -339,6 +339,7 @@ function setChatLoading(loading, options) {
     chatSkeletonElement.hidden = !loading || !settings.skeleton;
   }
   if (loading && !settings.keepContent && messagesElement) {
+    resetAgentAutoExpand();
     resetMarkdownHandles();
     scrollController.beginContentChange();
     messagesElement.replaceChildren();
@@ -355,6 +356,7 @@ function setChatError(message) {
     subtitleElement.hidden = false;
   }
   if (messagesElement) {
+    resetAgentAutoExpand();
     resetMarkdownHandles();
     scrollController.beginContentChange();
     messagesElement.replaceChildren();

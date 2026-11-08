@@ -73,6 +73,7 @@ export function sidebarPane(): string {
       </li>
     </ol>
     <p id="room-list-status" class="list-hint" role="status">正在读取…</p>
+    <button id="room-list-more" class="list-retry" type="button" hidden>加载更多会话</button>
     <button id="room-list-retry" class="list-retry" type="button" hidden>重试</button>
     <button id="logged-out-start" class="list-retry" type="button" hidden>创建新身份并继续</button>
     <button id="credential-invalid-pair" class="list-retry" type="button" hidden>用另一台设备配对</button>

@@ -7,8 +7,17 @@
 export const CHAT_LIST_SCRIPT = `
 let searchQuery = '';
 let emptyListMessage = '';
+// 会话列表分页：首屏 50 条，滚动到底部继续取 next_cursor。
+let roomsNextCursor = null;
+let roomsHasMore = false;
+let roomsLoadingMore = false;
+let roomsMoreError = '';
+let roomsLoadMoreAttempted = false;
+let roomsMorePromise = null;
+let roomsAutoFrame = 0;
 const ROOM_FILTER_KEY = 'agent-network-room-filter';
 const roomFilterElement = document.getElementById('room-filter');
+const roomListMoreElement = document.getElementById('room-list-more');
 const roomFilterButtons = roomFilterElement
   ? Array.prototype.slice.call(roomFilterElement.querySelectorAll('[data-room-filter]'))
   : [];
@@ -163,6 +172,176 @@ function setListRetry(visible) {
   if (listRetryElement) listRetryElement.hidden = !visible;
 }
 
+/**
+ * 分页按钮同时承担加载中、失败重试与到底提示，避免静默截断。
+ * 首屏不足一页且没有更多时保持隐藏。
+ */
+function updateRoomListMore() {
+  if (!roomListMoreElement) return;
+  if (roomsLoadingMore) {
+    roomListMoreElement.hidden = false;
+    roomListMoreElement.disabled = true;
+    roomListMoreElement.textContent = '正在加载更多…';
+    return;
+  }
+  if (roomsMoreError) {
+    roomListMoreElement.hidden = false;
+    roomListMoreElement.disabled = false;
+    roomListMoreElement.textContent = '加载更多失败，点击重试';
+    return;
+  }
+  if (roomsHasMore) {
+    roomListMoreElement.hidden = false;
+    roomListMoreElement.disabled = false;
+    roomListMoreElement.textContent = '加载更多会话';
+    return;
+  }
+  if (roomsLoadMoreAttempted || roomEntries.length >= 50) {
+    roomListMoreElement.hidden = false;
+    roomListMoreElement.disabled = true;
+    roomListMoreElement.textContent = '已加载全部会话';
+    return;
+  }
+  roomListMoreElement.hidden = true;
+  roomListMoreElement.disabled = false;
+  roomListMoreElement.textContent = '加载更多会话';
+}
+
+function roomSummaryFromList(entry, me) {
+  const cached = entry.kind === 'direct' ? cachedPeerSummary(entry.room_id, me) : null;
+  return {
+    room_id: entry.room_id,
+    kind: entry.kind,
+    name: cached
+      ? cached.name
+      : entry.kind === 'direct'
+        ? '单聊'
+        : entry.title || '群聊',
+    head_seq: entry.head_seq,
+    my_last_read_seq: entry.my_last_read_seq,
+    last_message: entry.last_message,
+    updated_at: entry.updated_at,
+    read_only: Boolean(entry.read_only),
+    dissolved_at: entry.dissolved_at || null,
+    can_leave: Boolean(entry.can_leave),
+    can_dissolve: Boolean(entry.can_dissolve),
+    peer_kind: cached ? cached.peer_kind : null,
+    // 人类成员没有在线概念，保持 null 且不渲染状态点。
+    peer_online: cached ? cached.peer_online : null,
+    peer_actor_id: cached ? cached.peer_actor_id : null,
+    peer_loaded: Boolean(cached) || entry.kind !== 'direct'
+  };
+}
+
+/**
+ * 按 room_id 合并分页结果：刷新只更新命中条目，已加载的旧页原样保留。
+ *
+ * 本地已读位置取较大值，避免较旧的响应把已读房间重新点亮；新房间由
+ * sortRooms 插入正确位置。
+ */
+function mergeRoomSummaries(summaries) {
+  const existingById = new Map();
+  for (const entry of roomEntries) existingById.set(entry.room_id, entry);
+  const incomingIds = new Set();
+  const merged = [];
+  for (const summary of summaries) {
+    if (incomingIds.has(summary.room_id)) continue;
+    incomingIds.add(summary.room_id);
+    const existing = existingById.get(summary.room_id);
+    if (!existing) {
+      merged.push(summary);
+      continue;
+    }
+    const readSeq = Math.max(
+      Number(existing.my_last_read_seq) || 0,
+      Number(summary.my_last_read_seq) || 0
+    );
+    merged.push(Object.assign({}, existing, summary, {
+      name: summary.name === '单聊' && existing.name && existing.name !== '单聊'
+        ? existing.name
+        : summary.name,
+      my_last_read_seq: String(readSeq),
+      peer_kind: summary.peer_kind || existing.peer_kind,
+      peer_online: summary.peer_online === null ? existing.peer_online : summary.peer_online,
+      peer_actor_id: summary.peer_actor_id || existing.peer_actor_id,
+      peer_loaded: Boolean(existing.peer_loaded) || Boolean(summary.peer_loaded)
+    }));
+  }
+  for (const entry of roomEntries) {
+    if (!incomingIds.has(entry.room_id)) merged.push(entry);
+  }
+  return merged;
+}
+
+/**
+ * 加载下一页会话；单飞、去重、保留 active 房间与已加载旧条目。
+ *
+ * 游标不前进时停止请求并显示到底状态，避免无限重试。
+ */
+async function loadMoreRooms() {
+  if (roomsMorePromise || roomsLoadingMore) return roomsMorePromise;
+  if (!roomsHasMore || !roomsNextCursor) {
+    updateRoomListMore();
+    return null;
+  }
+  const cursor = roomsNextCursor;
+  roomsLoadingMore = true;
+  roomsMoreError = '';
+  roomsLoadMoreAttempted = true;
+  updateRoomListMore();
+  roomsMorePromise = (async function () {
+    try {
+      const me = await ensureIdentity();
+      const page = await callTool('network_rooms_list', { limit: 50, cursor: cursor });
+      const summaries = (page.items || []).map(function (entry) {
+        return roomSummaryFromList(entry, me);
+      });
+      roomEntries = sortRooms(mergeRoomSummaries(summaries));
+      const nextCursor = page.has_more && page.next_cursor ? page.next_cursor : null;
+      if (nextCursor === cursor) {
+        roomsNextCursor = null;
+        roomsHasMore = false;
+      } else {
+        roomsNextCursor = nextCursor;
+        roomsHasMore = Boolean(nextCursor);
+      }
+      renderRooms();
+      await fillDirectPeers(me);
+      roomsLoadedAt = Date.now();
+    } catch (error) {
+      if (isAbortError(error)) return;
+      if (error && (error.credentialInvalid || error.code === 'CREDENTIAL_INVALID')) {
+        showCredentialInvalidHome(
+          error.message ||
+            '当前凭据已失效或已被撤销；本机不会自动创建替代身份。'
+        );
+        roomsHasMore = false;
+        roomsNextCursor = null;
+        return;
+      }
+      roomsMoreError = '加载更多会话失败：' + (error && error.message ? error.message : String(error));
+    } finally {
+      roomsLoadingMore = false;
+      roomsMorePromise = null;
+      updateRoomListMore();
+    }
+  })();
+  return roomsMorePromise;
+}
+
+/** 侧栏接近底部时自动取下一页；与按钮共用同一单飞锁。 */
+function scheduleRoomsAutoLoad() {
+  if (roomsAutoFrame) return;
+  const scroller = sidebarListElement || (roomListElement ? roomListElement.parentElement : null);
+  if (!scroller) return;
+  roomsAutoFrame = requestAnimationFrame(function () {
+    roomsAutoFrame = 0;
+    if (!roomsHasMore || roomsLoadingMore || roomsMoreError) return;
+    if (scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 160) return;
+    loadMoreRooms();
+  });
+}
+
 function clearListSkeleton() {
   if (!roomListElement) return;
   for (const item of Array.from(roomListElement.querySelectorAll('.room-skeleton'))) {
@@ -195,6 +374,11 @@ function updateAccount(me) {
  */
 function showLoggedOutHome() {
   if (roomListElement) roomListElement.replaceChildren();
+  roomsNextCursor = null;
+  roomsHasMore = false;
+  roomsMoreError = '';
+  roomsLoadMoreAttempted = false;
+  updateRoomListMore();
   clearListSkeleton();
   setListRetry(false);
   setEmptyListMessage(
@@ -471,37 +655,21 @@ async function loadRooms(options) {
       const page = await callTool('network_rooms_list', { limit: 50 });
       const taskSummaryResult = await summaryPromise;
       const summaries = page.items.map(function (entry) {
-        const cached = entry.kind === 'direct' ? cachedPeerSummary(entry.room_id, me) : null;
-        return {
-          room_id: entry.room_id,
-          kind: entry.kind,
-          name: cached
-            ? cached.name
-            : entry.kind === 'direct'
-              ? '单聊'
-              : entry.title || '群聊',
-          head_seq: entry.head_seq,
-          my_last_read_seq: entry.my_last_read_seq,
-          last_message: entry.last_message,
-          updated_at: entry.updated_at,
-          read_only: Boolean(entry.read_only),
-          dissolved_at: entry.dissolved_at || null,
-          can_leave: Boolean(entry.can_leave),
-          can_dissolve: Boolean(entry.can_dissolve),
-          peer_kind: cached ? cached.peer_kind : null,
-          // 人类成员没有在线概念，保持 null 且不渲染状态点。
-          peer_online: cached ? cached.peer_online : null,
-          peer_actor_id: cached ? cached.peer_actor_id : null,
-          peer_loaded: Boolean(cached) || entry.kind !== 'direct'
-        };
+        return roomSummaryFromList(entry, me);
       });
-      roomEntries = sortRooms(mergeActiveRoom(summaries));
+      // 后台刷新只更新/合并已加载房间，不把用户翻过的旧页丢回 50 条。
+      roomEntries = sortRooms(mergeActiveRoom(mergeRoomSummaries(summaries)));
+      if (!roomsLoadMoreAttempted) {
+        roomsNextCursor = page.has_more && page.next_cursor ? page.next_cursor : null;
+        roomsHasMore = Boolean(roomsNextCursor);
+      }
       if (taskSummaryResult) applyTaskSummary(taskSummaryResult);
       // 首次加载（含深链）按当前房间选分类；后台刷新不覆盖用户手动切换。
       if (!hadEntries) syncRoomFilterForRoom(activeRoomId);
       // 空态文案由当前分类决定；错误与退出登录文案仍由 emptyListMessage 覆盖。
       emptyListMessage = '';
       renderRooms();
+      updateRoomListMore();
       clearListSkeleton();
       setListRetry(false);
       await fillDirectPeers(me);
@@ -523,6 +691,7 @@ async function loadRooms(options) {
         setEmptyListMessage(message);
       }
       setListRetry(true);
+      updateRoomListMore();
     } finally {
       roomsPromise = null;
       clearListSkeleton();
@@ -536,6 +705,22 @@ if (listRetryElement) {
     setListRetry(false);
     loadRooms({ force: true });
   });
+}
+
+if (roomListMoreElement) {
+  roomListMoreElement.addEventListener('click', function () {
+    if (roomsLoadingMore) return;
+    if (roomsMoreError) {
+      roomsMoreError = '';
+      updateRoomListMore();
+    }
+    loadMoreRooms();
+  });
+}
+
+const roomsScroller = sidebarListElement || (roomListElement ? roomListElement.parentElement : null);
+if (roomsScroller) {
+  roomsScroller.addEventListener('scroll', scheduleRoomsAutoLoad, { passive: true });
 }
 
 if (searchInput) {

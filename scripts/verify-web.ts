@@ -3634,6 +3634,372 @@ async function runMessageOutboxAcceptance(
   }
 }
 
+/**
+ * 长历史分片验收：首屏只读取视口附近的 Agent 截断消息，滚动触发增量读取，
+ * 手动展开与「加载更早」游标分页仍然可用。
+ */
+async function runLongHistoryAcceptance(
+  browser: Browser,
+  base: string,
+  allErrors: string[],
+): Promise<void> {
+  const humanToken = crypto.randomUUID();
+  await rawTool<Actor>(humanToken, 'network_register', {
+    request_id: requestId('web_reg'),
+    kind: 'human',
+    name: '长历史验收人类',
+  });
+  const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+  const agent = await rawTool<Actor>(agentToken, 'network_register', {
+    request_id: requestId('reg'),
+    kind: 'agent',
+    name: '长历史验收 Agent',
+    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+  });
+  await rawBefriend(humanToken, agentToken, { actor_id: agent.actor_id });
+  const group = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('room'),
+    kind: 'group',
+    title: '长历史分片验收群',
+    members: [agent.actor_id],
+  });
+  const roomId = group.room.room_id;
+  await acceptRoomInvites(agentToken, roomId);
+
+  // 55 条预览被截断但低于 16KB 的 Agent 消息 + 1 条超过阈值的消息。
+  for (let index = 1; index <= 55; index += 1) {
+    const marker = `长历史消息 ${String(index).padStart(2, '0')} 标记`;
+    await rawTool(agentToken, 'network_message_send', {
+      request_id: requestId('msg'),
+      client_message_id: crypto.randomUUID(),
+      room_id: roomId,
+      invoke: [],
+      body: `${marker}\n\n${'长历史填充内容。'.repeat(120)}`,
+    });
+  }
+  const hugeMarker = '超大消息 16KB 标记';
+  const hugeTail = '超大消息完整结尾';
+  await rawTool(agentToken, 'network_message_send', {
+    request_id: requestId('msg'),
+    client_message_id: crypto.randomUUID(),
+    room_id: roomId,
+    invoke: [],
+    body: `${hugeMarker}\n\n${'超'.repeat(9000)}\n${hugeTail}`,
+  });
+
+  const { context, page } = await makeContext(
+    browser,
+    humanToken,
+    { width: 1280, height: 900 },
+    allErrors,
+  );
+  try {
+    await page.goto(`${base}/c/${roomId}`);
+    await waitRoom(page, roomId, '长历史分片验收群');
+    await waitUntil(
+      async () => (await page.locator('#messages .msg[data-message-id]').count()) === 50,
+      '长历史首屏 50 条消息',
+      20_000,
+    );
+    await waitUntil(
+      async () => (await mcpCallCount(page, 'network_message_read')) >= 1,
+      '首屏视口内自动展开',
+      10_000,
+    );
+    await sleep(800);
+    const initialReads = await mcpCallCount(page, 'network_message_read');
+    check(
+      `长历史首屏只读取视口附近少量消息（${initialReads}/50）`,
+      initialReads >= 1 && initialReads <= 10,
+      initialReads,
+    );
+    check('首屏读取数量明显小于消息总数', initialReads < 50, initialReads);
+    const offscreenButtons = await page.locator('#messages .msg .expand').count();
+    check(
+      '未进入视口的截断消息保留展开按钮',
+      offscreenButtons >= 30,
+      offscreenButtons,
+    );
+
+    // 滚到中部而不是顶部，避免触发“加载更早”的自动入口。
+    await page.locator('#messages .msg[data-message-id]').nth(20).scrollIntoViewIfNeeded();
+    await waitUntil(
+      async () => (await mcpCallCount(page, 'network_message_read')) > initialReads,
+      '滚动到未展开消息触发读取',
+      10_000,
+    );
+    await sleep(400);
+    const scrolledReads = await mcpCallCount(page, 'network_message_read');
+    check(
+      `滚动只为新进入视口的消息补读（${initialReads}→${scrolledReads}）`,
+      scrolledReads > initialReads && scrolledReads <= initialReads + 10,
+      { initialReads, scrolledReads },
+    );
+
+    const hugeMessage = page
+      .locator('#messages .msg[data-message-id]')
+      .filter({ hasText: hugeMarker })
+      .last();
+    await hugeMessage.scrollIntoViewIfNeeded();
+    checkEqual(
+      '超过 16KB 的 Agent 消息保留手动展开按钮',
+      await hugeMessage.locator('.expand').count(),
+      1,
+    );
+    await hugeMessage.locator('.expand').click();
+    await hugeMessage.locator('.expand').waitFor({ state: 'detached' });
+    await waitUntil(
+      async () => ((await hugeMessage.locator('.bubble').textContent()) ?? '').includes(hugeTail),
+      '超过阈值的消息可手动展开全文',
+      15_000,
+    );
+
+    const readsBeforeOlder = await mcpCallCount(page, 'network_message_read');
+    const olderBefore = await olderCursors(page);
+    checkEqual(
+      '手动加载更早前仍停留在首屏分片',
+      await page.locator('#messages .msg[data-message-id]').count(),
+      50,
+    );
+    await page.evaluate(`document.getElementById('older').click()`);
+    await waitUntil(
+      async () => (await page.locator('#messages .msg[data-message-id]').count()) === 56,
+      '加载更早补齐 56 条消息',
+      20_000,
+    );
+    await sleep(400);
+    const olderAfter = await olderCursors(page);
+    checkEqual('加载更早只按一个游标分片', olderAfter.length - olderBefore.length, 1);
+    const readsAfterOlder = await mcpCallCount(page, 'network_message_read');
+    check(
+      '加载更早 prepend 不批量读取新增消息',
+      readsAfterOlder - readsBeforeOlder <= 3,
+      { readsBeforeOlder, readsAfterOlder },
+    );
+    const timelineIds = (await page.evaluate(`(() => {
+      return Array.from(document.querySelectorAll('#messages .msg[data-message-id]'))
+        .map(function (item) { return item.dataset.messageId; });
+    })()`)) as string[];
+    checkEqual('长历史加载更早后无重复消息', new Set(timelineIds).size, timelineIds.length);
+    checkEqual('长历史加载更早后共 56 条', timelineIds.length, 56);
+
+    const readsBeforeTop = await mcpCallCount(page, 'network_message_read');
+    await page.evaluate(`document.getElementById('messages').scrollTop = 0`);
+    await waitUntil(
+      async () => (await mcpCallCount(page, 'network_message_read')) > readsBeforeTop,
+      '滚动到历史顶部触发自动展开',
+      10_000,
+    );
+    await sleep(400);
+    const readsAfterTop = await mcpCallCount(page, 'network_message_read');
+    check(
+      `滚动到历史顶部后仍只读取视口附近消息（${readsBeforeTop}→${readsAfterTop}/56）`,
+      readsAfterTop > readsBeforeTop && readsAfterTop < 56,
+      { readsBeforeTop, readsAfterTop },
+    );
+  } finally {
+    await context.close();
+  }
+}
+
+/** 会话列表分片验收：首屏 50、失败重试、滚动/按钮加载剩余房间且 active 不重置。 */
+async function runRoomListPaginationAcceptance(
+  browser: Browser,
+  base: string,
+  allErrors: string[],
+  agentAToken: string,
+  agentA: Actor,
+): Promise<void> {
+  const humanToken = crypto.randomUUID();
+  await rawTool<Actor>(humanToken, 'network_register', {
+    request_id: requestId('web_reg'),
+    kind: 'human',
+    name: '会话分页验收人类',
+  });
+  await rawBefriend(humanToken, agentAToken, { actor_id: agentA.actor_id });
+  let createdRooms = 0;
+  for (let index = 1; index <= 55; index += 1) {
+    await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+      request_id: requestId('room'),
+      kind: 'group',
+      title: `分页会话 ${String(index).padStart(2, '0')}`,
+      members: [agentA.actor_id],
+    });
+    createdRooms += 1;
+  }
+  checkEqual('会话分页 fixture 创建 55 个房间', createdRooms, 55);
+  const firstPage = await rawTool<{
+    items: { room_id: string; title?: string }[];
+  }>(humanToken, 'network_rooms_list', { limit: 50 });
+  const activeRoomId = firstPage.items[0]!.room_id;
+  const activeTitle = firstPage.items[0]!.title ?? '';
+
+  const { context, page } = await makeContext(
+    browser,
+    humanToken,
+    { width: 1280, height: 900 },
+    allErrors,
+  );
+  try {
+    await page.goto(`${base}/c/${activeRoomId}`);
+    await waitRoom(page, activeRoomId, activeTitle);
+    if ((await page.locator('#room-filter-group').getAttribute('aria-selected')) !== 'true') {
+      await page.locator('#room-filter-group').click();
+    }
+    await waitUntil(
+      async () => (await page.locator('#room-list .room-item').count()) === 50,
+      '会话列表首屏 50 条',
+      20_000,
+    );
+    const firstPageArgs = (await page.evaluate(`(window.__mcpCalls || [])
+      .filter(function (call) { return call.name === 'network_rooms_list'; })
+      .map(function (call) {
+        return call.body && call.body.params ? call.body.params.arguments : null;
+      })`)) as ({ limit?: number; cursor?: string } | null)[];
+    checkEqual('会话列表首屏只请求一页', firstPageArgs.length, 1);
+    checkEqual('会话列表首屏请求 50 条', firstPageArgs[0]?.limit, 50);
+    check('会话列表首屏不带游标', !firstPageArgs[0]?.cursor);
+    checkEqual(
+      '分页前 active 会话正确',
+      await page.locator('#room-list .room-item.active').getAttribute('data-room-id'),
+      activeRoomId,
+    );
+
+    let failNextPage = true;
+    await page.route('**/mcp', async (route) => {
+      const request = route.request();
+      const body = request.postDataJSON() as {
+        params?: { arguments?: { cursor?: string } };
+      } | null;
+      if (
+        failNextPage &&
+        request.headers()['mcp-name'] === 'network_rooms_list' &&
+        body?.params?.arguments?.cursor
+      ) {
+        failNextPage = false;
+        await route.abort();
+        return;
+      }
+      await route.continue();
+    });
+    await page.evaluate(`(() => {
+      const scroller = document.querySelector('.sidebar-list');
+      scroller.scrollTop = scroller.scrollHeight;
+    })()`);
+    await waitUntil(
+      async () =>
+        ((await page.locator('#room-list-more').textContent()) ?? '').includes('加载更多失败'),
+      '会话列表分页失败可读',
+      10_000,
+    );
+    checkEqual(
+      '分页失败后保留已加载的 50 条',
+      await page.locator('#room-list .room-item').count(),
+      50,
+    );
+    checkEqual(
+      '分页失败后 active 会话不重置',
+      await page.locator('#room-list .room-item.active').getAttribute('data-room-id'),
+      activeRoomId,
+    );
+    await page.unroute('**/mcp');
+    await page.evaluate(`document.getElementById('room-list-more').click()`);
+    await waitUntil(
+      async () => (await page.locator('#room-list .room-item').count()) === 55,
+      '重试后加载全部 55 个会话',
+      20_000,
+    );
+    const roomCalls = (await page.evaluate(`(window.__mcpCalls || [])
+      .filter(function (call) { return call.name === 'network_rooms_list'; })
+      .map(function (call) {
+        return call.body && call.body.params ? call.body.params.arguments : null;
+      })`)) as ({ limit?: number; cursor?: string } | null)[];
+    check('会话列表分页发生两次请求', roomCalls.length >= 2, roomCalls.length);
+    check(
+      '会话列表下一页携带游标',
+      typeof roomCalls[1]?.cursor === 'string' && roomCalls[1]!.cursor!.length > 0,
+      roomCalls[1],
+    );
+    checkEqual('会话列表下一页仍请求 50 条', roomCalls[1]?.limit, 50);
+    const roomIds = (await page.evaluate(`(() => {
+      return Array.from(document.querySelectorAll('#room-list .room-item'))
+        .map(function (item) { return item.dataset.roomId; });
+    })()`)) as string[];
+    checkEqual('会话列表分页后无重复', new Set(roomIds).size, roomIds.length);
+    checkEqual('会话列表分页后共 55 个', roomIds.length, 55);
+    checkEqual(
+      '加载更多后 active 会话不变',
+      await page.locator('#room-list .room-item.active').getAttribute('data-room-id'),
+      activeRoomId,
+    );
+    checkEqual(
+      '加载更多后聊天标题不变',
+      (await page.locator('#title').textContent())?.trim(),
+      activeTitle,
+    );
+    checkEqual(
+      '会话列表到底显示可读状态',
+      (await page.locator('#room-list-more').textContent())?.trim(),
+      '已加载全部会话',
+    );
+    checkEqual('会话列表到底按钮禁用', await page.locator('#room-list-more').isDisabled(), true);
+
+    const mobile = await makeContext(
+      browser,
+      humanToken,
+      { width: 390, height: 844 },
+      allErrors,
+    );
+    try {
+      await mobile.page.goto(`${base}/`);
+      await mobile.page.locator('#room-filter-group').click();
+      await waitUntil(
+        async () => (await mobile.page.locator('#room-list .room-item').count()) === 50,
+        '390px 会话列表首屏 50 条',
+        20_000,
+      );
+      const beforeMetrics = (await mobile.page.evaluate(`(() => {
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          list: document.getElementById('room-list').scrollWidth,
+          sidebar: document.querySelector('.sidebar').clientWidth
+        };
+      })()`)) as { view: number; doc: number; list: number; sidebar: number };
+      check(
+        '390px 会话列表首屏不横向溢出',
+        beforeMetrics.doc <= beforeMetrics.view + 1 &&
+          beforeMetrics.list <= beforeMetrics.sidebar + 1,
+        beforeMetrics,
+      );
+      await mobile.page.evaluate(`document.getElementById('room-list-more').click()`);
+      await waitUntil(
+        async () => (await mobile.page.locator('#room-list .room-item').count()) === 55,
+        '390px 会话列表分页后 55 条',
+        20_000,
+      );
+      const afterMetrics = (await mobile.page.evaluate(`(() => {
+        return {
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          list: document.getElementById('room-list').scrollWidth,
+          sidebar: document.querySelector('.sidebar').clientWidth
+        };
+      })()`)) as { view: number; doc: number; list: number; sidebar: number };
+      check(
+        '390px 会话列表分页后不横向溢出',
+        afterMetrics.doc <= afterMetrics.view + 1 &&
+          afterMetrics.list <= afterMetrics.sidebar + 1,
+        afterMetrics,
+      );
+    } finally {
+      await mobile.context.close();
+    }
+  } finally {
+    await context.close();
+  }
+}
+
 async function main(): Promise<void> {
   const server = await startServer();
   process.env.AGENTNET_URL = server.base;
@@ -17599,6 +17965,8 @@ async function main(): Promise<void> {
         .locator('#messages .msg')
         .filter({ hasText: autoFailMarker })
         .last();
+      // 自动展开由视口观察触发；先等请求真正发出，再断言失败回退。
+      await waitUntil(() => autoFailReads >= 1, '自动展开请求已发出', 10_000);
       await autoFailMessage.locator('.expand').waitFor({ state: 'visible' });
       check('自动展开读取失败后回退展开按钮', autoFailReads >= 1, autoFailReads);
       checkEqual(
@@ -20630,6 +20998,16 @@ async function main(): Promise<void> {
     await runTaskAcceptance(browser, server.base, allErrors);
 
     await runMessageOutboxAcceptance(browser, server.base, allErrors);
+
+    await runLongHistoryAcceptance(browser, server.base, allErrors);
+
+    await runRoomListPaginationAcceptance(
+      browser,
+      server.base,
+      allErrors,
+      data.agentAToken,
+      data.agentA,
+    );
 
     await runPresenceRestartAcceptance();
     await runPresenceIdleNotificationCheck();

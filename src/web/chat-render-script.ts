@@ -10,6 +10,15 @@ const TIME_GAP = 5 * 60 * 1000;
 const expandedMessageBodies = new Map();
 // 同一 message_id 的自动展开只发一次读取；刷新重建的节点共享同一结果。
 const agentAutoExpandReads = new Map();
+// 自动展开队列只消费进入视口附近的消息，避免首屏 50 条同时发请求。
+const AGENT_EXPAND_CONCURRENCY = 2;
+const AGENT_EXPAND_ROOT_MARGIN = '200px 0px';
+const AGENT_EXPAND_FALLBACK_MAX = 3;
+let agentExpandObserver = null;
+let agentExpandQueue = [];
+let agentExpandActive = 0;
+let agentExpandFallbackTasks = [];
+let agentExpandFallbackFrame = 0;
 
 function senderName(senderId) {
   if (identity && senderId === identity.actor_id) return '我';
@@ -314,9 +323,8 @@ function messageItem(item) {
     });
     content.append(expand);
     if (agent && item.body_bytes <= WEB_AGENT_AUTO_EXPAND_BYTES) {
-      // 阈值内的 Agent 消息直接读全文；按钮先隐藏，失败时再回退显示。
-      expand.hidden = true;
-      autoExpandAgentMessage(item, element, bubble, content, expand, filesRef);
+      // 候选只登记观察；进入视口附近才入队读取，按钮在此之前保持可点击。
+      registerAgentAutoExpand(item, element, bubble, content, expand, filesRef);
     }
   }
   const taskSlot = document.createElement('div');
@@ -352,13 +360,119 @@ function readMessageShared(messageId) {
 }
 
 /**
- * 自动展开阈值内的 Agent 消息。
+ * 重建消息区前断开观察与待处理队列，避免旧节点/旧房间泄漏。
+ *
+ * 已经在读取中的任务无法取消，但完成时会检查节点是否仍连接；
+ * 新渲染的节点会重新登记到新观察器。
+ */
+function resetAgentAutoExpand() {
+  if (agentExpandObserver) {
+    agentExpandObserver.disconnect();
+    agentExpandObserver = null;
+  }
+  agentExpandQueue = [];
+  agentExpandFallbackTasks = [];
+  if (agentExpandFallbackFrame) {
+    clearTimeout(agentExpandFallbackFrame);
+    agentExpandFallbackFrame = 0;
+  }
+}
+
+/** root 固定为消息滚动容器；只观察进入视口附近的消息。 */
+function agentExpandObserverFor() {
+  if (agentExpandObserver) return agentExpandObserver;
+  if (typeof IntersectionObserver !== 'function' || !messagesElement) return null;
+  const observer = new IntersectionObserver(function (entries) {
+    for (const entry of entries) {
+      if (!entry.isIntersecting || !entry.target.isConnected) continue;
+      const task = entry.target.__agentExpandTask;
+      if (!task) continue;
+      entry.target.__agentExpandTask = null;
+      observer.unobserve(entry.target);
+      enqueueAgentAutoExpand(task);
+    }
+  }, { root: messagesElement, rootMargin: AGENT_EXPAND_ROOT_MARGIN });
+  agentExpandObserver = observer;
+  return observer;
+}
+
+/** IntersectionObserver 不可用：只扫描当前可见/首屏少量候选。 */
+function scheduleAgentExpandFallback() {
+  if (agentExpandFallbackFrame) return;
+  agentExpandFallbackFrame = setTimeout(function () {
+    agentExpandFallbackFrame = 0;
+    if (!messagesElement) return;
+    const viewport = messagesElement.getBoundingClientRect();
+    const remaining = [];
+    let queued = 0;
+    for (const task of agentExpandFallbackTasks) {
+      if (!task.element.isConnected) continue;
+      if (queued >= AGENT_EXPAND_FALLBACK_MAX) {
+        remaining.push(task);
+        continue;
+      }
+      const rect = task.element.getBoundingClientRect();
+      if (rect.bottom >= viewport.top - 200 && rect.top <= viewport.bottom + 200) {
+        queued += 1;
+        enqueueAgentAutoExpand(task);
+      } else {
+        remaining.push(task);
+      }
+    }
+    agentExpandFallbackTasks = remaining;
+  }, 16);
+}
+
+/** 每个候选节点只登记一次；未进入视口时按钮仍可手动展开。 */
+function registerAgentAutoExpand(item, element, bubble, content, expand, filesRef) {
+  if (expandedMessageBodies.has(item.message_id)) {
+    expand.remove();
+    return;
+  }
+  const task = { item, element, bubble, content, expand, filesRef };
+  const observer = agentExpandObserverFor();
+  if (observer) {
+    element.__agentExpandTask = task;
+    observer.observe(element);
+    return;
+  }
+  agentExpandFallbackTasks.push(task);
+  scheduleAgentExpandFallback();
+}
+
+function enqueueAgentAutoExpand(task) {
+  agentExpandQueue.push(task);
+  drainAgentAutoExpandQueue();
+}
+
+function drainAgentAutoExpandQueue() {
+  while (agentExpandActive < AGENT_EXPAND_CONCURRENCY && agentExpandQueue.length > 0) {
+    const task = agentExpandQueue.shift();
+    if (!task.element.isConnected) continue;
+    agentExpandActive += 1;
+    runAgentAutoExpand(task).finally(function () {
+      agentExpandActive -= 1;
+      drainAgentAutoExpandQueue();
+    });
+  }
+}
+
+/**
+ * 自动展开一条已进入视口的 Agent 消息。
  *
  * 只在该节点仍连接时应用结果；房间切换/刷新重建后旧节点丢弃。
  * 文件卡片沿用现有挂载函数更新，不重复创建。
  */
-function autoExpandAgentMessage(item, element, bubble, content, expand, filesRef) {
-  readMessageShared(item.message_id).then(async function (fullText) {
+async function runAgentAutoExpand(task) {
+  const item = task.item;
+  const element = task.element;
+  const bubble = task.bubble;
+  const content = task.content;
+  const expand = task.expand;
+  const filesRef = task.filesRef;
+  expand.hidden = true;
+  try {
+    const fullText = await readMessageShared(item.message_id);
     if (!element.isConnected || !bubble.isConnected) return;
     const retry = bubble.dataset.markdownUnavailable === '1';
     const rendered = await renderMessageBody(bubble, fullText, item, true, false, retry);
@@ -374,15 +488,16 @@ function autoExpandAgentMessage(item, element, bubble, content, expand, filesRef
       // bundle 失败但正文已完整：保留按钮供稍后重试，不缓存为已展开。
       expand.hidden = false;
     }
-  }).catch(function () {
-    if (!element.isConnected) return;
-    expand.hidden = false;
-  });
+  } catch (error) {
+    // 失败恢复按钮；未进入视口的消息本来就保留按钮。
+    if (element.isConnected) expand.hidden = false;
+  }
 }
 
 /** 全量替换消息区；缓存切换与首屏加载共用同一套渲染逻辑。 */
 function renderMessageList(items) {
   if (!messagesElement) return;
+  resetAgentAutoExpand();
   resetMarkdownHandles();
   resetMessageFileCards();
   scrollController.beginContentChange();
