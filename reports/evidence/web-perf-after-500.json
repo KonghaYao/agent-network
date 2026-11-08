@@ -1,0 +1,40 @@
+{
+  "target_messages": 500,
+  "loaded_messages": 500,
+  "page_size": 50,
+  "history_pages": 9,
+  "initial": {
+    "messages": 50,
+    "markdown_roots": 2,
+    "message_dom_nodes": 399,
+    "long_tasks": 0,
+    "long_task_total_ms": 0,
+    "long_task_max_ms": 0
+  },
+  "full": {
+    "messages": 500,
+    "markdown_roots": 67,
+    "message_dom_nodes": 4143,
+    "long_tasks": 0,
+    "long_task_total_ms": 0,
+    "long_task_max_ms": 0
+  },
+  "load_elapsed_ms": 3925,
+  "older_page_ms": {
+    "samples": 8,
+    "median": 18,
+    "max": 32,
+    "all": [
+      18,
+      14,
+      14,
+      17,
+      28,
+      16,
+      32,
+      29
+    ]
+  },
+  "page_errors": [],
+  "assertions": true
+}
