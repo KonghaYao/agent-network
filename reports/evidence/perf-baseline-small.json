@@ -1,0 +1,171 @@
+{
+  "scale": "small",
+  "expect_index": false,
+  "counts": {
+    "mainMessages": 10000,
+    "totalMessages": 10100,
+    "presence": 1000,
+    "deliveries": 10000,
+    "rooms": 21,
+    "actors": 24
+  },
+  "scenarios": [
+    {
+      "name": "messages_page_1",
+      "timed": {
+        "p50_ms": 0.207,
+        "p95_ms": 0.42,
+        "min_ms": 0.178,
+        "max_ms": 0.883,
+        "samples": 21,
+        "payload_bytes": 24896,
+        "sql_statements": 6,
+        "results": 50
+      },
+      "plan": [
+        "SEARCH messages USING INDEX idx_messages_room_seq (room_id=? AND created_seq>? AND created_seq<?)"
+      ]
+    },
+    {
+      "name": "messages_page_10",
+      "timed": {
+        "p50_ms": 0.195,
+        "p95_ms": 0.217,
+        "min_ms": 0.18,
+        "max_ms": 0.246,
+        "samples": 21,
+        "payload_bytes": 24896,
+        "sql_statements": 6,
+        "results": 50
+      },
+      "plan": [
+        "SEARCH messages USING INDEX idx_messages_room_seq (room_id=? AND created_seq>? AND created_seq<?)"
+      ]
+    },
+    {
+      "name": "messages_page_100",
+      "timed": {
+        "p50_ms": 0.317,
+        "p95_ms": 0.424,
+        "min_ms": 0.288,
+        "max_ms": 0.563,
+        "samples": 21,
+        "payload_bytes": 24896,
+        "sql_statements": 6,
+        "results": 50
+      },
+      "plan": [
+        "SEARCH messages USING INDEX idx_messages_room_seq (room_id=? AND created_seq>? AND created_seq<?)"
+      ]
+    },
+    {
+      "name": "timeline_page_1",
+      "timed": {
+        "p50_ms": 3.206,
+        "p95_ms": 3.884,
+        "min_ms": 2.972,
+        "max_ms": 4.604,
+        "samples": 21,
+        "payload_bytes": 26047,
+        "sql_statements": 6,
+        "results": 50
+      },
+      "plan": [
+        "MERGE (UNION ALL)",
+        "LEFT",
+        "SEARCH messages USING INDEX idx_messages_room_seq (room_id=? AND created_seq>? AND created_seq<?)",
+        "USE TEMP B-TREE FOR ORDER BY",
+        "RIGHT",
+        "SEARCH room_presence_events USING INDEX idx_room_presence_seq (room_id=? AND timeline_seq>? AND timeline_seq<?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "name": "timeline_page_10",
+      "timed": {
+        "p50_ms": 3.483,
+        "p95_ms": 3.786,
+        "min_ms": 3.277,
+        "max_ms": 4.651,
+        "samples": 21,
+        "payload_bytes": 26047,
+        "sql_statements": 6,
+        "results": 50
+      },
+      "plan": [
+        "MERGE (UNION ALL)",
+        "LEFT",
+        "SEARCH messages USING INDEX idx_messages_room_seq (room_id=? AND created_seq>? AND created_seq<?)",
+        "USE TEMP B-TREE FOR ORDER BY",
+        "RIGHT",
+        "SEARCH room_presence_events USING INDEX idx_room_presence_seq (room_id=? AND timeline_seq>? AND timeline_seq<?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "name": "timeline_page_100",
+      "timed": {
+        "p50_ms": 3.483,
+        "p95_ms": 3.75,
+        "min_ms": 3.214,
+        "max_ms": 4.168,
+        "samples": 21,
+        "payload_bytes": 26047,
+        "sql_statements": 6,
+        "results": 50
+      },
+      "plan": [
+        "MERGE (UNION ALL)",
+        "LEFT",
+        "SEARCH messages USING INDEX idx_messages_room_seq (room_id=? AND created_seq>? AND created_seq<?)",
+        "USE TEMP B-TREE FOR ORDER BY",
+        "RIGHT",
+        "SEARCH room_presence_events USING INDEX idx_room_presence_seq (room_id=? AND timeline_seq>? AND timeline_seq<?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "name": "rooms_list",
+      "timed": {
+        "p50_ms": 0.115,
+        "p95_ms": 0.159,
+        "min_ms": 0.099,
+        "max_ms": 0.208,
+        "samples": 21,
+        "payload_bytes": 28772,
+        "sql_statements": 1,
+        "results": 21
+      },
+      "plan": [
+        "SEARCH m USING INDEX idx_room_members_actor (actor_id=? AND status=?)",
+        "SEARCH r USING INDEX sqlite_autoindex_rooms_1 (room_id=?)",
+        "SEARCH lm USING INDEX sqlite_autoindex_messages_1 (message_id=?) LEFT-JOIN",
+        "CORRELATED SCALAR SUBQUERY 1",
+        "SEARCH mm USING COVERING INDEX idx_room_members_room_role (room_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    }
+  ],
+  "checks": [
+    "messages 分页使用 idx_messages_room_seq",
+    "messages 分页无全表扫描",
+    "messages 分页无临时排序",
+    "timeline 双源都走索引",
+    "timeline 无 messages 全表扫描",
+    "timeline 无 presence 全表扫描",
+    "rooms_list 走成员索引",
+    "rooms_list 的 last_message 走主键",
+    "messages_page_1 payload 不随正文增长",
+    "messages_page_10 payload 不随正文增长",
+    "messages_page_100 payload 不随正文增长",
+    "timeline_page_1 payload 不随正文增长",
+    "timeline_page_10 payload 不随正文增长",
+    "timeline_page_100 payload 不随正文增长",
+    "场景名唯一"
+  ],
+  "notes": [
+    "timeline 双源 UNION ALL 仍使用 TEMP B-TREE 排序（第 2 波处理）",
+    "基线模式：覆盖索引不存在，不强制断言",
+    "基线检测到 2 条 SELECT *（第 1 波目标）：SELECT * FROM messages WHERE room_id = ? AND created_seq <= ? AND created_seq >= ? ORDER BY created_seq DESC LIMIT ? | SELECT * FROM actors WHERE actor_id IN (?, ?, ?)"
+  ]
+}
