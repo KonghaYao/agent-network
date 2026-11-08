@@ -611,6 +611,51 @@ export async function runRoomTaskAcceptance(): Promise<void> {
     )).items.filter((item) => item.preview === '【任务卡】T03 公开任务');
     checkEqual('D01-T03 重放后仍只有一张任务卡片', t03Cards.length, 1);
 
+    // ---------- D01-T07：创建者立即 self-claim 后真实 HTTP 重放 ----------
+    // 同一毫秒内 claim 产生的 v1 assignment 由创建者发出，不能反推为创建时
+    // 负责人；60 轮真实 HTTP 同时覆盖非同一毫秒的普通路径。
+    const selfClaimRounds = 60;
+    let selfClaimReplayFailures = 0;
+    let selfClaimStateFailures = 0;
+    for (let round = 0; round < selfClaimRounds; round += 1) {
+      const source = await sendMessage(
+        u1Conn,
+        roomId,
+        `D01-T07 创建者自我领取来源 ${round}`,
+      );
+      const params = {
+        room_id: roomId,
+        title: `T07 创建者自我领取 ${round}`,
+        description: '创建者立即领取后用相同参数重放。',
+        source_message_id: source.message.message_id,
+        reviewer_actor_id: u2.actor_id,
+      };
+      const created = (await createTask(u1Conn, params)).task;
+      const claimed = (await callTool<TaskResult>(u1Conn.client, 'network_task_claim', {
+        request_id: newRequestId('task_claim_self'),
+        task_id: created.task_id,
+      })).task;
+      const replay = (await createTask(u1Conn, params)).task;
+      if (replay.task_id !== created.task_id) selfClaimReplayFailures += 1;
+      if (
+        claimed.status !== 'in_progress' ||
+        replay.status !== 'in_progress' ||
+        replay.owner_actor_id !== u1.actor_id
+      ) {
+        selfClaimStateFailures += 1;
+      }
+    }
+    checkEqual(
+      `D01-T07 创建者自我领取后真实 HTTP ${selfClaimRounds} 次重放均返回原任务`,
+      selfClaimReplayFailures,
+      0,
+    );
+    checkEqual(
+      'D01-T07 重放返回领取后的状态与负责人',
+      selfClaimStateFailures,
+      0,
+    );
+
     // 公开领取必须原子：并发只有一个成功，失败方得到 CLAIM_CONFLICT 并看到真实负责人。
     const raceTask = (await createTask(u1Conn, {
       room_id: roomId,

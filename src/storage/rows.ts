@@ -479,6 +479,8 @@ export interface TaskRow {
   current_assignment_id: string | null;
   /** 创建参数里的负责人；公开任务为 NULL，后续 claim/offer 不修改。 */
   initial_assignee_actor_id: string | null;
+  /** 1 表示 `initial_assignee_actor_id` 是权威答案；0 表示旧行未知。 */
+  initial_assignee_known: 0 | 1;
   reviewer_actor_id: string;
   due_at: number | null;
   blocked_reason: string | null;
