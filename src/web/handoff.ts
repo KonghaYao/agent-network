@@ -9,7 +9,7 @@
 import { LIMITS } from '../contracts/limits';
 
 /**
- * 左下角用户区块：头像、名称、新建 Agent、手机扫码与已归档入口。
+ * 左下角用户区块：头像、名称、新建 Agent、配对设备与已归档入口。
  *
  * 已归档入口只是一个图标按钮，打开轻量浮层；不再提供 Agents 管理弹窗。
  * 本地注册表仍由“新建 Agent”写入，并供 direct Agent 会话右键提示词复用。
@@ -33,7 +33,7 @@ export function deviceHandoffAccount(): string {
         <button class="account-scan" id="new-agent" type="button"
           aria-haspopup="dialog" aria-controls="new-agent-modal" aria-expanded="false">新建 Agent</button>
         <button class="account-scan" id="device-handoff" type="button"
-          aria-haspopup="dialog" aria-controls="handoff-modal" aria-expanded="false">手机扫码</button>
+          aria-haspopup="dialog" aria-controls="handoff-modal" aria-expanded="false">配对设备</button>
         <button class="account-icon" id="archived-agents" type="button"
           aria-label="已归档 Agents" title="已归档 Agents"
           aria-haspopup="dialog" aria-controls="archive-popover" aria-expanded="false">
@@ -60,15 +60,15 @@ export function deviceHandoffAccount(): string {
 /**
  * 退出登录确认弹窗。
  *
- * 只清除本机凭据与 Agents 注册表；明确告知 token 仍然有效、其他设备不受影响。
- * 不提供“吊销 token”选项，也不调用服务端。
+ * 只清除当前身份的凭据与本机缓存；其他已保存的本地身份保留，可在退出页
+ * 或账号区显式切换回来。不调用服务端，也不吊销 token。
  */
 export function logoutDialog(): string {
   return `<div class="modal" id="logout-modal" hidden>
   <div class="modal-card logout-card" role="dialog" aria-modal="true" aria-labelledby="logout-title">
     <h2 id="logout-title">退出登录</h2>
-    <p class="logout-warning">本机将清除登录凭据与已保存的 Agent 连接提示词；当前 token 仍然有效，其他设备不受影响。</p>
-    <p class="logout-hint">只在本机退出，不调用服务端，也不会吊销 token。退出后本机显示分享链接引导；需要继续使用时可创建新身份、重新扫码或打开 Agent 分享链接。</p>
+    <p class="logout-warning">本机将清除当前身份的登录凭据、草稿队列与已保存的 Agent 连接提示词；其他已保存身份不受影响。当前 token 仍然有效，其他设备也不受影响。</p>
+    <p class="logout-hint">只在本机退出，不调用服务端，也不会吊销 token。退出后会显示分享链接引导；需要继续使用时可显式切换到本机其他身份、创建新身份或重新配对。</p>
     <div class="row modal-actions logout-actions">
       <button id="logout-cancel" type="button" aria-label="取消退出登录">取消</button>
       <button class="danger" id="logout-confirm" type="button" aria-label="确认退出登录">退出登录</button>
@@ -103,30 +103,77 @@ export function meRenameDialog(): string {
 </div>`;
 }
 
-/** 扫码弹窗；不显示“已扫码”，服务端无感知。 */
+/**
+ * 配对设备弹窗。
+ *
+ * 二维码只包含 `location.origin + '/pair#c=' + challenge`；挑战 5 分钟有效、
+ * 一次性、需已登录设备明确确认。旧长期 token 入口收进折叠的“旧方式”，
+ * 明确标注风险，不再作为默认按钮文案。
+ */
 export function deviceHandoffDialog(): string {
   return `<div class="modal" id="handoff-modal" hidden>
   <div class="modal-card handoff-card" role="dialog" aria-modal="true" aria-labelledby="handoff-title">
-    <h2 id="handoff-title">手机扫码</h2>
-    <p class="handoff-hint" id="handoff-hint">用手机相机扫描二维码，手机将以当前身份进入会话列表。</p>
-    <div class="handoff-qr-wrap">
-      <canvas id="handoff-qr" role="img" aria-label="包含当前登录凭据的二维码"></canvas>
+    <h2 id="handoff-title">配对设备</h2>
+    <p class="handoff-hint" id="handoff-hint">用另一台设备扫描二维码，或输入 12 位配对码。二维码只包含 5 分钟一次性挑战，不包含你的登录 token。</p>
+    <div class="handoff-actions handoff-actions-top">
+      <button class="primary" id="pairing-create" type="button">生成配对码</button>
+      <button id="pairing-refresh" type="button">刷新待确认</button>
     </div>
-    <p class="handoff-warning">二维码包含当前身份的完整登录凭据，请勿截图或分享。任何人看到二维码都能以你的身份操作；凭据泄露后需在服务端撤销该 token。</p>
-    <p class="handoff-hint">二维码在凭据被撤销前一直可用；页面不会显示“已扫码”状态。</p>
+    <div class="handoff-qr-wrap" id="pairing-qr-wrap" hidden>
+      <canvas id="handoff-qr" role="img" aria-label="一次性设备配对挑战二维码"></canvas>
+      <p class="pairing-code" id="pairing-code"></p>
+      <p class="handoff-hint" id="pairing-expiry"></p>
+    </div>
+    <section class="pairing-section" aria-labelledby="pairing-list-title">
+      <h3 id="pairing-list-title">待确认的新设备</h3>
+      <p class="pairing-empty" id="pairing-list-empty">暂无待确认设备</p>
+      <ul class="pairing-list" id="pairing-list"></ul>
+    </section>
+    <p class="pairing-status" id="pairing-status" role="status"></p>
+    <p class="handoff-warning">只在核对设备名称、平台与确认码一致后批准。配对码和确认码都不是登录凭据；任何看到配对码的人仍需要你明确确认。</p>
+    <details class="legacy-token-details" id="legacy-token-details">
+      <summary>旧方式（长期凭据）</summary>
+      <p class="handoff-warning">旧 <code>/#t=</code> 链接把长期 token 放在 URL fragment 中，任何看到链接或截图的人都能获得该身份。仅用于升级旧链接；切换前会再次显示原身份与目标身份并要求确认。</p>
+      <label class="field">旧链接或 token
+        <input id="legacy-token-input" autocomplete="off" spellcheck="false"
+          placeholder="https://…/#t=… 或直接粘贴 token" aria-describedby="legacy-token-hint">
+      </label>
+      <p class="handoff-hint" id="legacy-token-hint">不会自动覆盖当前身份；确认后原身份仍保存在本机身份列表。</p>
+      <button id="legacy-token-use" type="button">检查旧长期凭据</button>
+    </details>
     <div class="handoff-actions">
-      <button id="handoff-copy" type="button" disabled>复制扫码内容</button>
+      <button id="handoff-copy" type="button" disabled>复制配对链接</button>
       <button class="primary" id="handoff-close" type="button">关闭</button>
     </div>
   </div>
 </div>`;
 }
 
+/** 旧长期凭据确认弹窗：明确显示原身份、目标身份与风险，确认后才切换。 */
+export function legacyTokenDialog(): string {
+  return `<div class="modal" id="legacy-token-modal" hidden>
+  <div class="modal-card handoff-card legacy-token-card" role="dialog" aria-modal="true"
+    aria-labelledby="legacy-token-title">
+    <h2 id="legacy-token-title">旧方式（长期凭据）</h2>
+    <p class="handoff-warning">这是一个长期身份 token，不是一次性配对挑战。任何看到链接、截图或浏览器历史的人都能以该身份操作。确认前不会切换，也不会覆盖当前身份。</p>
+    <dl class="legacy-token-identities">
+      <dt>当前身份</dt><dd id="legacy-token-original">读取中…</dd>
+      <dt>目标身份</dt><dd id="legacy-token-target">读取中…</dd>
+    </dl>
+    <p class="pairing-status" id="legacy-token-status" role="status"></p>
+    <div class="handoff-actions">
+      <button id="legacy-token-cancel" type="button">取消</button>
+      <button class="danger" id="legacy-token-confirm" type="button" disabled>确认切换</button>
+    </div>
+  </div>
+</div>`;
+}
+
 /**
- * 在页面主脚本之前执行：采纳 `#t=` 中的 token 并清掉 hash。
+ * 在页面主脚本之前执行：只捕获 `#t=` 中的旧 token 并清掉 hash。
  *
- * 必须先于会话列表加载执行，因此由 `renderAppPage` 放在 `<main>` 开头，
- * 解析到该 `<script>` 时立即运行。
+ * 不在这里写入 localStorage，也不自动切换身份；主脚本会显示“旧方式
+ * （长期凭据）”确认弹窗，用户确认后才保存 token。
  */
 export const HANDOFF_ADOPT_SCRIPT = `
 (function () {
@@ -140,127 +187,12 @@ export const HANDOFF_ADOPT_SCRIPT = `
     return;
   }
   if (!token || token.length > 512 || token.trim() !== token) return;
-  try {
-    window.localStorage.setItem('agent-network-token', token);
-    // 扫码/分享链接即重新登录；清除本机“已退出”引导状态。
-    window.localStorage.removeItem('agent-network-logged-out');
-  } catch (error) {
-    return;
-  }
+  window.__agentNetworkLegacyToken = token;
   try {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
   } catch (error) {
-    // 清 hash 失败不影响身份采纳；下次打开会再次写入同一 token。
+    // 清 hash 失败时 token 仍留在地址栏；主脚本不会自动采纳，用户可取消。
   }
-})();
-`;
-
-/** 弹窗控制：从 localStorage 读 token，现场生成二维码，不请求服务端。 */
-export const HANDOFF_CONTROLLER_SCRIPT = `
-(function () {
-  'use strict';
-  var TOKEN_KEY = 'agent-network-token';
-  var button = document.getElementById('device-handoff');
-  var modal = document.getElementById('handoff-modal');
-  var canvas = document.getElementById('handoff-qr');
-  var closeButton = document.getElementById('handoff-close');
-  var copyButton = document.getElementById('handoff-copy');
-  var hint = document.getElementById('handoff-hint');
-  if (!button || !modal || !canvas || !closeButton || !copyButton || !hint) return;
-  var opener = null;
-  var copyUrl = null;
-  var copyResetTimer = null;
-
-  function resetCopyButton() {
-    if (copyResetTimer) {
-      clearTimeout(copyResetTimer);
-      copyResetTimer = null;
-    }
-    copyButton.textContent = '复制扫码内容';
-  }
-
-  function closeDialog() {
-    modal.hidden = true;
-    button.setAttribute('aria-expanded', 'false');
-    if (opener && opener.focus) opener.focus();
-  }
-
-  function openDialog() {
-    var token = null;
-    try {
-      token = window.localStorage.getItem(TOKEN_KEY);
-    } catch (error) {
-      token = null;
-    }
-    resetCopyButton();
-    if (!token) {
-      copyUrl = null;
-      copyButton.disabled = true;
-      canvas.hidden = true;
-      hint.textContent = '浏览器身份正在初始化，请稍后再试；若持续失败，刷新页面重试。';
-    } else {
-      var url = window.location.origin + '/#t=' + encodeURIComponent(token);
-      copyUrl = url;
-      copyButton.disabled = false;
-      try {
-        window.agentNetworkQr.draw(canvas, url);
-        canvas.hidden = false;
-        hint.textContent = '用手机相机扫描二维码，手机将以当前身份进入会话列表。';
-      } catch (error) {
-        canvas.hidden = true;
-        hint.textContent = '二维码生成失败：' + (error && error.message ? error.message : String(error));
-      }
-    }
-    opener = document.activeElement;
-    modal.hidden = false;
-    button.setAttribute('aria-expanded', 'true');
-    closeButton.focus();
-  }
-
-  function fallbackCopy(text, onSuccess, onFailure) {
-    try {
-      legacyCopyText(text);
-      onSuccess();
-    } catch (error) {
-      onFailure(error);
-    }
-  }
-
-  function copyText(text, onSuccess, onFailure) {
-    if (!navigator.clipboard || !navigator.clipboard.writeText) {
-      fallbackCopy(text, onSuccess, onFailure);
-      return;
-    }
-    try {
-      navigator.clipboard.writeText(text).then(onSuccess, function () {
-        fallbackCopy(text, onSuccess, onFailure);
-      });
-    } catch (error) {
-      fallbackCopy(text, onSuccess, onFailure);
-    }
-  }
-
-  button.addEventListener('click', openDialog);
-  closeButton.addEventListener('click', closeDialog);
-  copyButton.addEventListener('click', function () {
-    if (!copyUrl || copyButton.disabled) return;
-    copyText(copyUrl, function () {
-      // 只反馈复制动作，不把凭据写入页面文本。
-      hint.textContent = '扫码内容已复制到剪贴板；该链接即长期凭据，请勿分享或截图。';
-      copyButton.textContent = '已复制';
-      copyResetTimer = setTimeout(resetCopyButton, 1500);
-    }, function (error) {
-      resetCopyButton();
-      hint.textContent = '复制失败：' + (error && error.message ? error.message : String(error)) +
-        '；请检查浏览器剪贴板权限后重试。';
-    });
-  });
-  modal.addEventListener('click', function (event) {
-    if (event.target === modal) closeDialog();
-  });
-  document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape' && !modal.hidden) closeDialog();
-  });
 })();
 `;
 
@@ -318,10 +250,48 @@ export const DEVICE_HANDOFF_STYLE = `
   @media (prefers-color-scheme: dark) {
     .logout-warning { background: #3a2a1a; color: #fdba74; }
   }
-  .handoff-card { width: min(340px, 100%); text-align: center; }
+  .handoff-card { width: min(380px, 100%); text-align: center; max-height: calc(100dvh - 32px);
+    overflow-y: auto; }
   .handoff-card h2 { margin-bottom: 6px; }
+  .handoff-actions-top { margin-bottom: 12px; }
+  .handoff-actions-top button { flex: 1 1 auto; height: 38px; }
+  .pairing-section { margin: 12px 0; padding-top: 10px; border-top: 1px solid var(--wx-line, #e5e5e5); }
+  .pairing-section h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; text-align: left; }
+  .pairing-empty { margin: 0 0 6px; font-size: 12px; color: var(--wx-muted, #666); text-align: left; }
+  .pairing-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .pairing-item { border: 1px solid var(--wx-line, #e5e5e5); border-radius: 6px;
+    padding: 8px 10px; text-align: left; background: var(--wx-sidebar, #f7f7f7); }
+  .pairing-item-main { font-size: 13px; overflow-wrap: anywhere; }
+  .pairing-item-meta { font-size: 12px; color: var(--wx-muted, #666); margin-top: 2px;
+    overflow-wrap: anywhere; }
+  .pairing-item-code { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--wx-text, #333); }
+  .pairing-item-actions { display: flex; gap: 8px; margin-top: 8px; }
+  .pairing-item-actions button { flex: 1 1 auto; height: 32px; padding: 4px 8px; font-size: 12px; }
+  .pairing-item-actions button.danger { background: var(--wx-danger, #c0392b);
+    border-color: var(--wx-danger, #c0392b); color: #fff; }
+  .pairing-code { margin: 8px 0 2px; font: 600 18px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 1px; color: var(--wx-text, #1a1a1a); }
+  .pairing-status { min-height: 1.6em; margin: 6px 0 10px; font-size: 12px;
+    color: var(--wx-link, #576b95); text-align: left; overflow-wrap: anywhere; }
+  .pairing-status[data-error] { color: var(--wx-danger, #c0392b); }
+  .pairing-status[data-success] { color: #15803d; }
+  .legacy-token-details { text-align: left; }
+  .legacy-token-details .field { display: block; margin: 8px 0; font-size: 12px; }
+  .legacy-token-details input { width: 100%; height: 34px; margin-top: 4px;
+    border: 1px solid var(--wx-line, #e5e5e5); border-radius: 4px; padding: 0 8px;
+    background: var(--wx-input, #fff); color: var(--wx-text, #333); font: 12px/1.4 inherit; }
+  .legacy-token-card { text-align: left; }
+  .legacy-token-identities { margin: 10px 0 4px; }
+  .legacy-token-identities dd { overflow-wrap: anywhere; }
+  .legacy-token-card button.danger { background: var(--wx-danger, #c0392b);
+    border-color: var(--wx-danger, #c0392b); color: #fff; }
+  .local-identities { display: grid; gap: 6px; margin-top: 8px; }
+  .local-identities-title { margin: 0; font-size: 12px; color: var(--wx-muted, #666); }
+  .local-identities .local-identity { width: 100%; }
   .handoff-qr-wrap { display: grid; place-items: center; margin: 10px 0 12px; padding: 8px;
     border: 1px solid var(--wx-line, #e5e5e5); border-radius: 6px; background: #fff; }
+  .handoff-qr-wrap[hidden] { display: none; }
   #handoff-qr { display: block; width: min(248px, 100%); height: auto; background: #fff;
     image-rendering: pixelated; }
   #handoff-qr[hidden] { display: none; }

@@ -2,6 +2,7 @@ import { BusinessError } from '../contracts/errors';
 import { getActor, getCredentialByHash } from '../storage/queries';
 import { hashToken } from '../storage/db';
 import type { Principal } from '../domain/principal';
+import { touchCredentialActivity } from '../domain/devices';
 
 const BEARER = /^Bearer\s+(\S+)$/u;
 
@@ -36,6 +37,7 @@ export async function authenticate(db: D1Database, request: Request): Promise<Pr
       actor_id: actor.actor_id,
     });
   }
+  await touchCredentialActivity(db, credential);
   return { credentialHash, actor, credential };
 }
 

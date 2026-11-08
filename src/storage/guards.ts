@@ -39,6 +39,7 @@ export const GUARD_TABLES = {
   blocked: 'guard_blocked',
   actorDisabled: 'guard_actor_disabled',
   pairingInvalid: 'guard_pairing_invalid',
+  deviceStale: 'guard_device_stale',
   taskState: 'guard_task_state',
   friendRequired: 'guard_friend_required',
   contactRequestStale: 'guard_contact_request_stale',

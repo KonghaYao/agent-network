@@ -147,6 +147,64 @@ export const recoveryRedeemSchema = z.object({
   device_id: id(256),
 });
 
+/**
+ * 已登录设备创建一次性配对挑战。
+ *
+ * 挑战明文只在首次响应出现；`expires_in_ms` 仅供测试缩短，服务端上限仍是
+ * `LIMITS.devicePairingTtlMs`（5 分钟）。
+ */
+export const devicePairingCreateSchema = z.object({
+  request_id: requestId,
+  device_label: z.string().trim().max(LIMITS.devicePairingLabelBytes * 2).optional(),
+  platform: z.string().trim().max(LIMITS.devicePairingPlatformBytes * 2).optional(),
+  expires_in_ms: z
+    .number()
+    .int()
+    .min(LIMITS.devicePairingTtlMinMs)
+    .max(LIMITS.devicePairingTtlMs)
+    .optional(),
+});
+
+/** 新设备用本地 token 证明并绑定到某个挑战；不要求 token 已注册。 */
+export const devicePairingJoinSchema = z.object({
+  request_id: requestId,
+  challenge: z.string().min(8).max(64),
+  device_id: id(256),
+  device_label: z.string().trim().max(LIMITS.devicePairingLabelBytes * 2).optional(),
+  platform: z.string().trim().max(LIMITS.devicePairingPlatformBytes * 2).optional(),
+});
+
+/** 已登录设备读取本 actor 待确认/已批准/最近完成的配对。 */
+export const devicePairingListSchema = z.object({
+  limit: z.number().int().min(1).max(LIMITS.devicePairingListMax).optional(),
+});
+
+export const devicePairingApproveSchema = z.object({
+  request_id: requestId,
+  pairing_id: id(),
+});
+
+/** 拒绝/撤销挑战；`reason` 只做审计，不加入通知正文。 */
+export const devicePairingCancelSchema = z.object({
+  request_id: requestId,
+  pairing_id: id(),
+  reason: z.string().trim().max(512).optional(),
+});
+
+/** 新设备在已登录设备批准后兑换出同 actor 的独立 credential。 */
+export const devicePairingRedeemSchema = z.object({
+  request_id: requestId,
+  challenge: z.string().min(8).max(64),
+  device_id: id(256),
+});
+
+export const deviceListSchema = z.object({});
+
+export const deviceRevokeSchema = z.object({
+  request_id: requestId,
+  device_id: id(256),
+});
+
 export const contactsListSchema = z.object({ cursor, limit: z.number().int().min(1).max(100).optional() });
 
 export const contactAddSchema = z.object({
@@ -1068,6 +1126,14 @@ export type AgentDisableInput = z.infer<typeof agentDisableSchema>;
 export type AgentEnableInput = z.infer<typeof agentEnableSchema>;
 export type AgentsGetInput = z.infer<typeof agentsGetSchema>;
 export type RecoveryRedeemInput = z.infer<typeof recoveryRedeemSchema>;
+export type DevicePairingCreateInput = z.infer<typeof devicePairingCreateSchema>;
+export type DevicePairingJoinInput = z.infer<typeof devicePairingJoinSchema>;
+export type DevicePairingListInput = z.infer<typeof devicePairingListSchema>;
+export type DevicePairingApproveInput = z.infer<typeof devicePairingApproveSchema>;
+export type DevicePairingCancelInput = z.infer<typeof devicePairingCancelSchema>;
+export type DevicePairingRedeemInput = z.infer<typeof devicePairingRedeemSchema>;
+export type DeviceListInput = z.infer<typeof deviceListSchema>;
+export type DeviceRevokeInput = z.infer<typeof deviceRevokeSchema>;
 export type ContactsListInput = z.infer<typeof contactsListSchema>;
 export type ContactAddInput = z.infer<typeof contactAddSchema>;
 export type ContactRemoveInput = z.infer<typeof contactRemoveSchema>;

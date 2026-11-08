@@ -77,6 +77,46 @@ export interface CredentialRow {
   label: string | null;
 }
 
+export type DeviceStatus = 'active' | 'revoked';
+export type DevicePairingStatus = 'pending' | 'approved' | 'redeemed' | 'expired' | 'cancelled';
+
+export interface DeviceRow {
+  actor_id: string;
+  device_id: string;
+  label: string;
+  platform: string;
+  status: DeviceStatus;
+  created_at: number;
+  last_seen_at: number | null;
+  revoked_at: number | null;
+  revoked_by: string | null;
+}
+
+export interface DevicePairingRow {
+  pairing_id: string;
+  challenge_hash: string;
+  status: DevicePairingStatus;
+  actor_id: string | null;
+  created_at: number;
+  expires_at: number;
+  approved_by_actor_id: string | null;
+  approved_by_credential_id: string | null;
+  approved_at: number | null;
+  redeemed_credential_id: string | null;
+  redeemed_at: number | null;
+  attempts: number;
+  max_attempts: number;
+  updated_at: number;
+  created_by_credential_id: string | null;
+  device_id: string | null;
+  device_label: string;
+  platform: string;
+  device_token_hash: string | null;
+  cancelled_at: number | null;
+  cancelled_by: string | null;
+  cancel_reason: string;
+}
+
 export interface ContactRow {
   owner_actor_id: string;
   target_actor_id: string;

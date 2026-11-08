@@ -303,6 +303,14 @@ async function main(): Promise<void> {
     'network_feedback_create',
     'network_recovery_create',
     'network_recovery_redeem',
+    'network_device_pairing_create',
+    'network_device_pairing_join',
+    'network_device_pairing_list',
+    'network_device_pairing_approve',
+    'network_device_pairing_cancel',
+    'network_device_pairing_redeem',
+    'network_device_list',
+    'network_device_revoke',
     'network_contacts_list',
     'network_contact_add',
     'network_contact_remove',
@@ -429,6 +437,14 @@ async function main(): Promise<void> {
     'network_agent_unarchive',
     'network_agents_get',
     'network_feedback_create',
+    'network_device_pairing_create',
+    'network_device_pairing_join',
+    'network_device_pairing_list',
+    'network_device_pairing_approve',
+    'network_device_pairing_cancel',
+    'network_device_pairing_redeem',
+    'network_device_list',
+    'network_device_revoke',
     'network_message_send',
     'network_message_send_status',
     'network_room_monitor_get',
@@ -484,6 +500,43 @@ async function main(): Promise<void> {
   for (const required of requiredCoreTools) {
     check(`工具 ${required} 已注册`, toolNames.includes(required), toolNames);
   }
+  const deviceDescription = (name: string): string =>
+    String(listed?.tools?.find((tool) => tool.name === name)?.description ?? '');
+  check(
+    '设备配对 create 描述声明 5 分钟一次性挑战且不含 token',
+    deviceDescription('network_device_pairing_create').includes('5 分钟') &&
+      deviceDescription('network_device_pairing_create').includes('一次性') &&
+      deviceDescription('network_device_pairing_create').includes('不包含当前 token'),
+    deviceDescription('network_device_pairing_create'),
+  );
+  check(
+    '设备配对 join 描述声明不返回 token 且第三设备不能抢绑',
+    deviceDescription('network_device_pairing_join').includes('不返回 token') &&
+      deviceDescription('network_device_pairing_join').includes('第三台设备'),
+    deviceDescription('network_device_pairing_join'),
+  );
+  check(
+    '设备配对 redeem 描述声明响应不返回 token',
+    deviceDescription('network_device_pairing_redeem').includes('从不返回 token') &&
+      deviceDescription('network_device_pairing_redeem').includes('同一 request_id'),
+    deviceDescription('network_device_pairing_redeem'),
+  );
+  check(
+    '设备撤销描述声明只影响单设备并关闭 stream',
+    deviceDescription('network_device_revoke').includes('撤销该设备的全部有效 credentials') &&
+      deviceDescription('network_device_revoke').includes('stream') &&
+      deviceDescription('network_device_revoke').includes('不影响其他设备'),
+    deviceDescription('network_device_revoke'),
+  );
+  const syncTool = listed?.tools?.find((tool) => tool.name === 'network_sync');
+  const syncOutput = syncTool?.outputSchema as
+    | { properties?: Record<string, unknown> }
+    | undefined;
+  check(
+    'network_sync 输出声明 head_cursor',
+    Boolean(syncOutput?.properties && 'head_cursor' in syncOutput.properties),
+    syncOutput?.properties,
+  );
   if (hasDrive) {
     for (const required of ['drive_file_info', ...roomFileTools]) {
       check(`工具 ${required} 已注册`, toolNames.includes(required), toolNames);
@@ -2550,7 +2603,7 @@ async function main(): Promise<void> {
       homeHtml.includes("requestId('web_agent_create')") &&
       !homeHtml.includes('network_issue_token'),
   );
-  check('首页包含手机扫码入口', homeHtml.includes('id="device-handoff"') && homeHtml.includes('手机扫码'));
+  check('首页包含配对设备入口', homeHtml.includes('id="device-handoff"') && homeHtml.includes('配对设备'));
   check(
     '首页不再包含复制 actor ID 按钮',
     !homeHtml.includes('id="account-copy-id"') && !homeHtml.includes('复制 ID'),
@@ -2562,18 +2615,30 @@ async function main(): Promise<void> {
       homeHtml.includes("execCommand('copy')"),
   );
   check(
-    '首页包含扫码弹窗与二维码画布',
-    homeHtml.includes('id="handoff-modal"') && homeHtml.includes('id="handoff-qr"'),
+    '首页包含配对弹窗、一次性挑战与旧方式入口',
+    homeHtml.includes('id="handoff-modal"') &&
+      homeHtml.includes('id="handoff-qr"') &&
+      homeHtml.includes('id="pairing-create"') &&
+      homeHtml.includes('id="pairing-code"') &&
+      homeHtml.includes('id="legacy-token-modal"') &&
+      homeHtml.includes('旧方式（长期凭据）'),
   );
   check(
-    '扫码页内联 fragment 采纳脚本',
-    homeHtml.includes("#t=") && homeHtml.includes('history.replaceState'),
+    '旧 #t= 只捕获待确认，不自动写入当前身份',
+    homeHtml.includes('__agentNetworkLegacyToken') &&
+      homeHtml.includes('history.replaceState') &&
+      homeHtml.includes('确认切换'),
   );
   check(
     '首页脚本首次访问自动注册 human 身份',
     homeHtml.includes("requestId('web_reg')") && homeHtml.includes("kind: 'human'"),
   );
-  check('扫码弹窗标明凭据泄露风险', homeHtml.includes('请勿截图或分享'));
+  check(
+    '配对/旧方式弹窗标明一次性挑战与长期凭据风险',
+    homeHtml.includes('一次性挑战') &&
+      homeHtml.includes('长期 token') &&
+      homeHtml.includes('不会自动覆盖当前身份'),
+  );
   const invalidJoin = await fetch(`${baseUrl()}/j/not-a-valid-key`);
   checkEqual('格式错误的邀请 key 落地页返回 404', invalidJoin.status, 404);
   const handoffExchange = await fetch(`${baseUrl()}/j/${'a'.repeat(32)}`, { method: 'POST' });

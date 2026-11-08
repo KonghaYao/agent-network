@@ -4870,9 +4870,10 @@ async function main(): Promise<void> {
         };
       })()`)) as { keys: string; registry: string; session: string };
       checkEqual(
-        '保存凭据不增加 localStorage key',
+        '保存凭据只增加按身份分区的本地 key',
         promptStorage.keys,
-        'agent-network-agents-v1,agent-network-token',
+        `agent-network-agents-v1,agent-network-identity-v1:${data.human.actor_id},` +
+          `agent-network-sync-v1:${data.human.actor_id},agent-network-token`,
       );
       check(
         '复制凭据提示词不写 sessionStorage',
@@ -5911,7 +5912,7 @@ async function main(): Promise<void> {
         webAgentRoom.room.head_seq,
       );
       const webAgentCalls = (await page.evaluate(`(() => {
-        const registry = JSON.parse(localStorage.getItem('agent-network-agents-v1') || '{"items":[]}');
+        const registry = JSON.parse(localStorage.getItem(${JSON.stringify(`agent-network-agents-v1:${data.human.actor_id}`)}) || '{"items":[]}');
         const item = (registry.items || []).find(function (entry) {
           return entry.name === ${JSON.stringify(webAgentName)};
         }) || {};
@@ -6051,12 +6052,14 @@ async function main(): Promise<void> {
       checkEqual('重开后提示词清空', await page.inputValue('#new-agent-prompt'), '');
       checkEqual('重开后技能 URL 清空', await page.inputValue('#new-agent-skill-url'), '');
       checkEqual(
-        'localStorage 保存浏览器 token 与含 Agent MCP URL 的注册表',
+        'localStorage 保存浏览器 token 与按身份分区的 Agent 注册表',
         await page.evaluate('Object.keys(localStorage).sort().join(",")'),
-        'agent-network-agents-v1,agent-network-room-filter,agent-network-token',
+        `agent-network-agents-v1:${data.human.actor_id},` +
+          `agent-network-identity-v1:${data.human.actor_id},agent-network-room-filter,` +
+          `agent-network-sync-v1:${data.human.actor_id},agent-network-token`,
       );
       const registryDump = (await page.evaluate(
-        `localStorage.getItem('agent-network-agents-v1') || ''`,
+        `localStorage.getItem('agent-network-agents-v1:${data.human.actor_id}') || ''`,
       )) as string;
       const savedRegistry = JSON.parse(registryDump) as {
         v: number;
@@ -6283,7 +6286,7 @@ async function main(): Promise<void> {
         '已创建',
       );
       const failedState = (await page.evaluate(`(() => {
-        const registry = JSON.parse(localStorage.getItem('agent-network-agents-v1') || '{"items":[]}');
+        const registry = JSON.parse(localStorage.getItem(${JSON.stringify(`agent-network-agents-v1:${data.human.actor_id}`)}) || '{"items":[]}');
         const item = (registry.items || []).find(function (entry) {
           return entry.name === ${JSON.stringify(failedAgentName)};
         });
@@ -6404,9 +6407,9 @@ async function main(): Promise<void> {
         !((await page.locator('#account').textContent()) ?? '').includes('复制 ID'),
       );
       checkEqual(
-        '账号区保留新建 Agent 与手机扫码文字按钮',
+        '账号区保留新建 Agent 与配对设备文字按钮',
         accountActions.map((label) => label.trim()).filter(Boolean).join('|'),
-        '新建 Agent|手机扫码',
+        '新建 Agent|配对设备',
       );
       checkEqual('账号区新增单个已归档图标按钮', await page.locator('#archived-agents').count(), 1);
       checkEqual(
@@ -6477,42 +6480,70 @@ async function main(): Promise<void> {
       })()`);
 
       await page.locator('#device-handoff').click();
-      check('扫码弹窗打开', await page.locator('#handoff-modal').isVisible());
-      checkEqual('扫码弹窗显示复制按钮', await page.locator('#handoff-copy').isVisible(), true);
-      checkEqual('有 token 时复制按钮可用', await page.locator('#handoff-copy').isEnabled(), true);
+      check('配对设备弹窗打开', await page.locator('#handoff-modal').isVisible());
       checkEqual(
-        '扫码弹窗保留复制按钮文案',
-        (await page.locator('#handoff-copy').textContent())?.trim(),
-        '复制扫码内容',
+        '配对弹窗标题为配对设备',
+        (await page.locator('#handoff-title').textContent())?.trim(),
+        '配对设备',
       );
-      const handoffWarning = (await page.locator('#handoff-modal .handoff-warning').textContent()) ?? '';
+      checkEqual('生成配对码按钮可见', await page.locator('#pairing-create').isVisible(), true);
+      checkEqual('未生成前二维码隐藏', await page.locator('#handoff-qr').isHidden(), true);
+      checkEqual(
+        '旧方式入口折叠且标注长期凭据',
+        ((await page.locator('#legacy-token-details summary').textContent()) ?? '').trim(),
+        '旧方式（长期凭据）',
+      );
+      const legacyWarning =
+        (await page.locator('#legacy-token-details .handoff-warning').textContent()) ?? '';
       check(
-        '扫码弹窗保留凭据警告',
-        handoffWarning.includes('请勿截图或分享') && handoffWarning.includes('凭据泄露'),
-        handoffWarning,
+        '旧方式警告明确长期 token 风险',
+        legacyWarning.includes('长期 token') && legacyWarning.includes('任何看到链接'),
+        legacyWarning,
+      );
+      checkEqual(
+        '旧方式不再作为默认按钮文案',
+        (await page.locator('#device-handoff').textContent())?.trim().includes('手机扫码'),
+        false,
+      );
+
+      await page.locator('#pairing-create').click();
+      await page.waitForFunction(
+        `(document.getElementById('pairing-code').textContent || '').replaceAll('-', '').length === 12`,
+      );
+      const pairingCode = (
+        (await page.locator('#pairing-code').textContent()) ?? ''
+      ).replaceAll('-', '');
+      check(
+        '生成 12 位一次性配对短码',
+        /^[0-9A-HJKMNP-TV-Z]{12}$/u.test(pairingCode),
+        pairingCode,
+      );
+      check('生成后二维码可见', await page.locator('#handoff-qr').isVisible());
+      checkEqual('生成后可复制配对链接', await page.locator('#handoff-copy').isEnabled(), true);
+      checkEqual(
+        '配对码不是当前 token',
+        pairingCode !== data.humanToken,
+        true,
+      );
+      const pairingHint = (await page.locator('#pairing-status').textContent()) ?? '';
+      check(
+        '生成成功提示二维码不含 token 且 5 分钟有效',
+        pairingHint.includes('5 分钟') && pairingHint.includes('不含 token'),
+        pairingHint,
       );
 
       await page.locator('#handoff-copy').click();
-      await page.waitForFunction(`document.getElementById('handoff-copy').textContent === '已复制'`);
+      await page.waitForFunction(
+        `document.getElementById('handoff-copy').textContent === '已复制配对链接'`,
+      );
       checkEqual(
-        '复制内容以当前 origin 与 #t= 开头',
-        await page.evaluate(`window.__copiedHandoff.indexOf(location.origin + '/#t=') === 0`),
+        '复制内容只含 /pair#c= 一次性挑战',
+        await page.evaluate(`window.__copiedHandoff === location.origin + '/pair#c=' + ${JSON.stringify(pairingCode)}`),
         true,
       );
       checkEqual(
-        '复制内容与当前浏览器 token 一致',
-        await page.evaluate(`(() => {
-          const copied = window.__copiedHandoff;
-          const prefix = location.origin + '/#t=';
-          if (!copied || copied.indexOf(prefix) !== 0) return false;
-          return decodeURIComponent(copied.slice(prefix.length)) ===
-            localStorage.getItem('agent-network-token');
-        })()`),
-        true,
-      );
-      checkEqual(
-        '复制成功显示凭据警告',
-        ((await page.locator('#handoff-hint').textContent()) ?? '').includes('请勿分享或截图'),
+        '复制内容不含长期 token',
+        await page.evaluate(`window.__copiedHandoff.indexOf(localStorage.getItem('agent-network-token')) === -1`),
         true,
       );
       checkEqual(
@@ -6557,7 +6588,6 @@ async function main(): Promise<void> {
         await page.evaluate(`window.__fallbackCopy === window.__copiedHandoff`),
         true,
       );
-
       await page.evaluate(`(() => {
         Object.defineProperty(navigator, 'clipboard', {
           configurable: true,
@@ -6571,16 +6601,16 @@ async function main(): Promise<void> {
       })()`);
       await page.locator('#handoff-copy').click();
       await page.waitForFunction(
-        `(document.getElementById('handoff-hint').textContent || '').includes('复制失败')`,
+        `(document.getElementById('pairing-status').textContent || '').includes('复制失败')`,
       );
       check(
         '复制失败显示可读错误',
-        ((await page.locator('#handoff-hint').textContent()) ?? '').includes('剪贴板权限'),
+        ((await page.locator('#pairing-status').textContent()) ?? '').includes('剪贴板权限'),
       );
       checkEqual(
         '复制失败后按钮文案恢复',
         (await page.locator('#handoff-copy').textContent())?.trim(),
-        '复制扫码内容',
+        '复制配对链接',
       );
 
       await page.locator('#handoff-close').click();
@@ -6588,8 +6618,7 @@ async function main(): Promise<void> {
       await page.locator('#device-handoff').click();
       checkEqual('无 token 时复制按钮禁用', await page.locator('#handoff-copy').isDisabled(), true);
       checkEqual('无 token 时二维码隐藏', await page.locator('#handoff-qr').isHidden(), true);
-      await page.locator('#handoff-close').click();
-      await context.close();
+      await page.locator('#handoff-close').click();      await context.close();
 
       const mobile = await makeContext(
         browser,
@@ -6612,6 +6641,13 @@ async function main(): Promise<void> {
         });
       })()`);
       await mobile.page.locator('#device-handoff').click();
+      await mobile.page.locator('#pairing-create').click();
+      await mobile.page.waitForFunction(
+        `(document.getElementById('pairing-code').textContent || '').replaceAll('-', '').length === 12`,
+      );
+      const mobileCode = (
+        (await mobile.page.locator('#pairing-code').textContent()) ?? ''
+      ).replaceAll('-', '');
       const handoffMetrics = (await mobile.page.evaluate(`(() => {
         const card = document.querySelector('#handoff-modal .modal-card');
         const account = document.getElementById('account');
@@ -6631,7 +6667,7 @@ async function main(): Promise<void> {
         accountRight: number;
       } | null;
       check(
-        '390px 扫码弹窗不横向溢出',
+        '390px 配对弹窗不横向溢出',
         Boolean(handoffMetrics) &&
           handoffMetrics!.doc <= handoffMetrics!.view &&
           handoffMetrics!.cardLeft >= 0 &&
@@ -6640,13 +6676,381 @@ async function main(): Promise<void> {
       );
       check('390px 复制按钮可见', await mobile.page.locator('#handoff-copy').isVisible());
       await mobile.page.locator('#handoff-copy').click();
-      await mobile.page.waitForFunction(`document.getElementById('handoff-copy').textContent === '已复制'`);
+      await mobile.page.waitForFunction(
+        `document.getElementById('handoff-copy').textContent === '已复制配对链接'`,
+      );
       checkEqual(
-        '390px 复制扫码内容成功',
-        await mobile.page.evaluate(`window.__copiedHandoff.indexOf(location.origin + '/#t=') === 0`),
+        '390px 复制配对链接成功',
+        await mobile.page.evaluate(
+          `window.__copiedHandoff === location.origin + '/pair#c=' + ${JSON.stringify(mobileCode)}`,
+        ),
+        true,
+      );
+      checkEqual(
+        '390px 配对链接不含 token',
+        await mobile.page.evaluate(
+          `window.__copiedHandoff.indexOf(localStorage.getItem('agent-network-token')) === -1`,
+        ),
         true,
       );
       await mobile.context.close();
+    }
+
+    // 2b-2b. /pair 新设备配对、确认/拒绝、旧方式切换与身份分区。
+    {
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.locator('#device-handoff').click();
+      await page.locator('#pairing-create').click();
+      await page.waitForFunction(
+        `(document.getElementById('pairing-code').textContent || '').replaceAll('-', '').length === 12`,
+      );
+      const challenge = (
+        (await page.locator('#pairing-code').textContent()) ?? ''
+      ).replaceAll('-', '');
+
+      const pairContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      const pairPage = await pairContext.newPage();
+      pairPage.on('pageerror', (error) => allErrors.push(`pair: ${String(error)}`));
+      await pairPage.goto(`${server.base}/pair#c=${encodeURIComponent(challenge)}`);
+      await pairPage.waitForFunction(`location.hash === ''`);
+      checkEqual(
+        '配对页从 #c= 带入一次性挑战',
+        await pairPage.inputValue('#pair-challenge'),
+        challenge,
+      );
+      checkEqual(
+        '配对页不把挑战写进 DOM 之外的日志',
+        ((await pairPage.locator('#status').textContent()) ?? '').includes(challenge),
+        false,
+      );
+      await pairPage.locator('#pair-start').click();
+      await pairPage.waitForFunction(
+        `(document.getElementById('pair-target').textContent || '').includes('浏览器验收人类')`,
+      );
+      const pairConfirm = (await pairPage.locator('#pair-confirm').textContent()) ?? '';
+      check('新设备显示确认码', /^[0-9A-F]{4}-[0-9A-F]{4}$/u.test(pairConfirm), pairConfirm);
+      check(
+        '配对页显示当前身份与目标身份',
+        ((await pairPage.locator('#pair-original').textContent()) ?? '').includes('未登录') &&
+          ((await pairPage.locator('#pair-target').textContent()) ?? '').includes('浏览器验收人类'),
+        {
+          original: await pairPage.locator('#pair-original').textContent(),
+          target: await pairPage.locator('#pair-target').textContent(),
+        },
+      );
+
+      await page.locator('#pairing-refresh').click();
+      await page.waitForFunction(
+        `(document.body.innerText || '').includes(${JSON.stringify(pairConfirm)})`,
+      );
+      const pairingItem = page
+        .locator('#pairing-list .pairing-item')
+        .filter({ hasText: pairConfirm });
+      const pairingItemText = (await pairingItem.innerText()) ?? '';
+      check(
+        '已登录设备按确认码核对新设备',
+        pairingItemText.includes(pairConfirm) && pairingItemText.includes('确认码'),
+        pairingItemText,
+      );
+      await pairingItem.locator('button', { hasText: '确认新设备' }).click();
+      await page.waitForFunction(
+        `(document.getElementById('pairing-status').textContent || '').includes('已确认')`,
+      );
+      await pairPage.waitForFunction(
+        `document.getElementById('pair-switch').hidden === false`,
+        undefined,
+        { timeout: 12_000 },
+      );
+      checkEqual('新设备兑换后显示显式切换按钮', await pairPage.locator('#pair-switch').isVisible(), true);
+      await pairPage.locator('#pair-switch').click();
+      await pairPage.waitForURL(`${server.base}/`);
+      await pairPage.waitForFunction(
+        `document.getElementById('account-name').textContent === '浏览器验收人类'`,
+      );
+      const pairedToken = (await pairPage.evaluate(
+        `localStorage.getItem('agent-network-token')`,
+      )) as string;
+      check(
+        '新设备获得独立 token',
+        Boolean(pairedToken) && pairedToken !== data.humanToken,
+        { paired: Boolean(pairedToken), same: pairedToken === data.humanToken },
+      );
+      await page.locator('#pairing-refresh').click();
+      await page.waitForFunction(
+        `!Array.from(document.querySelectorAll('#pairing-list .pairing-item'))
+          .some(function (item) { return item.innerText.includes(${JSON.stringify(pairConfirm)}); })`,
+      );
+      check(
+        '已兑换配对不再出现在待确认列表',
+        (await page
+          .locator('#pairing-list .pairing-item')
+          .filter({ hasText: pairConfirm })
+          .count()) === 0,
+      );
+      await pairContext.close();
+
+      // 拒绝流程：新 offer 不产生 credential。
+      await page.locator('#pairing-create').click();
+      await page.waitForFunction(
+        `(document.getElementById('pairing-code').textContent || '').replaceAll('-', '').length === 12`,
+      );
+      const rejectChallenge = (
+        (await page.locator('#pairing-code').textContent()) ?? ''
+      ).replaceAll('-', '');
+      const rejectedToken = crypto.randomUUID();
+      const rejectedJoin = await rawTool<{ pairing: { pairing_id: string; confirm_code: string } }>(
+        rejectedToken,
+        'network_device_pairing_join',
+        {
+          request_id: requestId('pair_join'),
+          challenge: rejectChallenge,
+          device_id: 'web-pair-rejected',
+          device_label: '网页配对设备',
+          platform: 'web',
+        },
+      );
+      await page.locator('#pairing-refresh').click();
+      const rejectConfirm = rejectedJoin.pairing.confirm_code;
+      await page.waitForFunction(
+        `(document.body.innerText || '').includes(${JSON.stringify(rejectConfirm)})`,
+      );
+      const rejectItem = page
+        .locator('#pairing-list .pairing-item')
+        .filter({ hasText: rejectConfirm });
+      checkEqual('拒绝前待确认列表包含该设备', await rejectItem.count(), 1);
+      await rejectItem.locator('button', { hasText: '拒绝' }).click();
+      await page.waitForFunction(
+        `(document.getElementById('pairing-status').textContent || '').includes('已拒绝')`,
+      );
+      await page.waitForFunction(
+        `!Array.from(document.querySelectorAll('#pairing-list .pairing-item'))
+          .some(function (item) { return item.innerText.includes(${JSON.stringify(rejectConfirm)}); })`,
+      );
+      let rejectError = '';
+      try {
+        await rawTool(rejectedToken, 'network_device_pairing_redeem', {
+          request_id: requestId('pair_redeem'),
+          challenge: rejectChallenge,
+          device_id: 'web-pair-rejected',
+        });
+      } catch (error) {
+        rejectError = String(error);
+      }
+      check(
+        '拒绝后新设备不能兑换',
+        rejectError.includes('PAIRING_INVALID'),
+        rejectError,
+      );
+      checkEqual(
+        '拒绝不会产生新 credential',
+        await page.evaluate(`localStorage.getItem('agent-network-token')`),
+        data.humanToken,
+      );
+      check(
+        '配对弹窗不显示任何 token',
+        !((await page.locator('#handoff-modal').innerText()) ?? '').includes(data.humanToken),
+      );
+      await context.close();
+    }
+
+    // 2b-2b-2. 旧 #t= 长期凭据必须确认；切换保留原身份，退出只清当前身份与草稿分区。
+    {
+      const otherToken = crypto.randomUUID();
+      const other = await rawTool<Actor>(otherToken, 'network_register', {
+        request_id: requestId('legacy_target'),
+        kind: 'human',
+        name: '旧方式目标人类',
+      });
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+        true,
+        true,
+      );
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      const draftKey = `agent-network-draft-v1:${data.human.actor_id}:${data.direct.room.room_id}`;
+      await page.locator('#body').fill('A 身份的未发送草稿');
+      await page.waitForFunction(
+        `localStorage.getItem(${JSON.stringify(draftKey)}) === 'A 身份的未发送草稿'`,
+      );
+
+      await page.goto(`${server.base}/#t=${encodeURIComponent(otherToken)}`);
+      await page.waitForFunction(
+        `document.getElementById('legacy-token-modal') && !document.getElementById('legacy-token-modal').hidden`,
+      );
+      checkEqual('旧 #t= 打开确认弹窗', await page.locator('#legacy-token-modal').isVisible(), true);
+      checkEqual('旧 #t= 立即清除 hash', await page.evaluate('location.hash'), '');
+      checkEqual(
+        '确认前不切换 token',
+        await page.evaluate(`localStorage.getItem('agent-network-token')`),
+        data.humanToken,
+      );
+      const legacyOriginal = (await page.locator('#legacy-token-original').textContent()) ?? '';
+      const legacyTarget = (await page.locator('#legacy-token-target').textContent()) ?? '';
+      check('确认弹窗显示原身份', legacyOriginal.includes('浏览器验收人类'), legacyOriginal);
+      check('确认弹窗显示目标身份', legacyTarget.includes('旧方式目标人类'), legacyTarget);
+      checkEqual(
+        '确认按钮在目标验证后可用',
+        await page.locator('#legacy-token-confirm').isEnabled(),
+        true,
+      );
+      await page.locator('#legacy-token-cancel').click();
+      checkEqual('取消旧方式不切换', await page.evaluate(`localStorage.getItem('agent-network-token')`), data.humanToken);
+
+      await page.goto(`${server.base}/#t=${encodeURIComponent(otherToken)}`);
+      await page.reload();
+      await page.waitForFunction(
+        `document.getElementById('legacy-token-modal') && !document.getElementById('legacy-token-modal').hidden`,
+      );
+      await page.waitForFunction(
+        `document.getElementById('legacy-token-confirm').disabled === false`,
+      );
+      await page.locator('#legacy-token-confirm').click();
+      await page.waitForURL(`${server.base}/`);
+      await page.waitForFunction(
+        `document.getElementById('account-name').textContent === '旧方式目标人类'`,
+      );
+      checkEqual(
+        '确认后切换到目标 token',
+        await page.evaluate(`localStorage.getItem('agent-network-token')`),
+        otherToken,
+      );
+      const identityKeys = await page.evaluate(`(() => {
+        const keys = [];
+        for (let index = 0; index < localStorage.length; index += 1) {
+          const key = localStorage.key(index) || '';
+          if (key.indexOf('agent-network-identity-v1:') === 0) keys.push(key);
+        }
+        return keys.sort().join(',');
+      })()`) as string;
+      check(
+        '切换后原身份与目标身份都保留在本机注册表',
+        identityKeys.includes(data.human.actor_id) && identityKeys.includes(other.actor_id),
+        identityKeys,
+      );
+      check(
+        '切换后原身份草稿仍在，未被目标身份覆盖',
+        (await page.evaluate(`localStorage.getItem(${JSON.stringify(draftKey)})`)) ===
+          'A 身份的未发送草稿',
+      );
+      const otherDraftKeys = (await page.evaluate(`(() => {
+        return Object.keys(localStorage).filter(function (key) {
+          return key.indexOf('agent-network-draft-v1:') === 0;
+        });
+      })()`)) as string[];
+      check(
+        '目标身份没有读到原身份草稿',
+        otherDraftKeys.every((key) => key.indexOf(':' + other.actor_id + ':') < 0),
+        otherDraftKeys,
+      );
+      // 目标身份发送框不会恢复 A 的草稿（direct 房间仍以 A 身份可见，切回验证）。
+      await page.locator('#logout').click();
+      await page.locator('#logout-confirm').click();
+      await page.waitForURL(`${server.base}/`);
+      await page.locator('#logged-out-start').waitFor({ state: 'visible' });
+      checkEqual(
+        '退出只清除当前目标身份 token',
+        await page.evaluate(`localStorage.getItem('agent-network-token')`),
+        null,
+      );
+      checkEqual(
+        '退出后原身份记录仍在',
+        await page.evaluate(
+          `localStorage.getItem('agent-network-identity-v1:${data.human.actor_id}') !== null`,
+        ),
+        true,
+      );
+      checkEqual(
+        '退出后目标身份记录已清除',
+        await page.evaluate(
+          `localStorage.getItem('agent-network-identity-v1:${other.actor_id}')`,
+        ),
+        null,
+      );
+      const localIdentityLabels = (
+        await page.locator('#logged-out-identities .local-identity').allTextContents()
+      ).map((label) => label.trim());
+      check(
+        '退出页列出本机其他身份',
+        localIdentityLabels.some((label) => label.includes('浏览器验收人类')),
+        localIdentityLabels,
+      );
+      await page
+        .locator('#logged-out-identities .local-identity', { hasText: '浏览器验收人类' })
+        .click();
+      await page.waitForFunction(
+        `document.getElementById('account-name').textContent === '浏览器验收人类'`,
+      );
+      checkEqual(
+        '切换回原身份恢复 token',
+        await page.evaluate(`localStorage.getItem('agent-network-token')`),
+        data.humanToken,
+      );
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      checkEqual(
+        '切回原身份恢复其草稿',
+        await page.locator('#body').inputValue(),
+        'A 身份的未发送草稿',
+      );
+      await context.close();
+    }
+
+    // 2b-2b-3. 失效凭据不自动注册替代身份，显示配对与旧方式入口。
+    {
+      const invalidToken = crypto.randomUUID();
+      const { context, page } = await makeContext(
+        browser,
+        invalidToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.waitForFunction(
+        `document.getElementById('credential-invalid-pair') && !document.getElementById('credential-invalid-pair').hidden`,
+      );
+      checkEqual(
+        '失效凭据显示明确状态',
+        (await page.locator('#account-name').textContent())?.trim(),
+        '凭据失效',
+      );
+      checkEqual(
+        '失效凭据提供重新配对入口',
+        await page.locator('#credential-invalid-pair').isVisible(),
+        true,
+      );
+      checkEqual(
+        '失效凭据提供旧方式入口',
+        await page.locator('#credential-invalid-legacy').isVisible(),
+        true,
+      );
+      checkEqual(
+        '失效凭据不会被自动替换',
+        await page.evaluate(`localStorage.getItem('agent-network-token')`),
+        invalidToken,
+      );
+      checkEqual(
+        '失效凭据没有发起 network_register',
+        await page.evaluate(`(window.__mcpCalls || []).some(function (call) {
+          return call.name === 'network_register';
+        })`),
+        false,
+      );
+      check(
+        '失效凭据页面说明不会自动创建替代身份',
+        ((await page.locator('#room-list-status').textContent()) ?? '').includes('不会自动创建替代身份'),
+      );
+      await context.close();
     }
 
     // 2b-2c. 服务信息入口移除；本人姓名可编辑，保存后原地更新显示名。
@@ -6680,7 +7084,7 @@ async function main(): Promise<void> {
         '浏览器验收人类',
       );
       checkEqual('服务信息移除后新建 Agent 仍可见', await page.locator('#new-agent').isVisible(), true);
-      checkEqual('服务信息移除后手机扫码仍可见', await page.locator('#device-handoff').isVisible(), true);
+      checkEqual('服务信息移除后配对设备仍可见', await page.locator('#device-handoff').isVisible(), true);
       checkEqual('服务信息移除后已归档入口仍可见', await page.locator('#archived-agents').isVisible(), true);
       checkEqual('服务信息移除后退出登录仍可见', await page.locator('#logout').isVisible(), true);
 
@@ -6956,9 +7360,9 @@ async function main(): Promise<void> {
         (await page.locator('#logout-modal .logout-warning').textContent()) ?? '';
       check(
         '退出确认说明本机清理与 token 仍有效',
-        logoutWarning.includes('本机将清除登录凭据与已保存的 Agent 连接提示词') &&
+        logoutWarning.includes('当前身份的登录凭据') &&
           logoutWarning.includes('当前 token 仍然有效') &&
-          logoutWarning.includes('其他设备不受影响'),
+          logoutWarning.includes('其他设备也不受影响'),
         logoutWarning,
       );
       check(
@@ -18799,7 +19203,10 @@ async function main(): Promise<void> {
       };
       const readRegistry = async (): Promise<RegistryFile> =>
         JSON.parse(
-          (await page.evaluate(`localStorage.getItem('agent-network-agents-v1')`)) as string,
+          (await page.evaluate(
+            `localStorage.getItem(${JSON.stringify(`agent-network-agents-v1:${data.human.actor_id}`)}) || ` +
+              `localStorage.getItem('agent-network-agents-v1')`,
+          )) as string,
         ) as RegistryFile;
       await seedReissueRegistry(reissueOldUrl);
       await page.evaluate(`(() => {
@@ -19119,7 +19526,10 @@ async function main(): Promise<void> {
         `document.getElementById('room-menu-status').textContent === '已重发并复制新提示词；旧连接需改用新 token。'`,
       );
       const mobileRegistry = JSON.parse(
-        (await mobile.page.evaluate(`localStorage.getItem('agent-network-agents-v1')`)) as string,
+        (await mobile.page.evaluate(
+          `localStorage.getItem(${JSON.stringify(`agent-network-agents-v1:${data.human.actor_id}`)}) || ` +
+            `localStorage.getItem('agent-network-agents-v1')`,
+        )) as string,
       ) as RegistryFile;
       const mobileEntry = mobileRegistry.items.find(
         (item) => item.actor_id === reissueAgent.actor_id,

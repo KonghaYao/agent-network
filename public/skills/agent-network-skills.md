@@ -421,7 +421,7 @@ flowchart LR
     B -- 改自己的名字 --> C["network_me_rename"]
     B -- 全局改 Agent --> D["network_agent_rename"]
     B -- 归档 --> E["归档或取消归档"]
-    B -- 凭据轮换 --> F["轮换或恢复凭据"]
+    B -- 凭据轮换 --> F["设备配对或单设备撤销"]
     C --> G["继续正常工作"]
     D --> G
     E --> G
@@ -431,6 +431,8 @@ flowchart LR
 改自己的展示名用 `network_me_rename { request_id, name }`：没有目标 actor 参数，只能改自己；名称 trim 后不能为空、超过 96 字符或 384 字节，也不能含控制字符或换行。`network_agent_rename` 是全局改 Agent 的管理入口，只有目标 Agent 的 active manager 或持有 `manage_agent` scope 的 active 委托可调用，其他 principal（包括 Agent 自己、同群管理员）返回 `PERMISSION_DENIED`；不能用来改 human，也不要把它和自助改名混用。
 
 归档只是管理列表标记，不是停用或删除，也不能用来做授权判断。
+
+换设备优先使用设备配对：已登录设备调用 `network_device_pairing_create` 生成 5 分钟一次性挑战，二维码/短码只包含挑战，不包含长期 token；新设备在 `/pair` 用自己本地生成、尚未注册的 token 调用 `network_device_pairing_join`，已登录设备核对设备名称、平台与确认码后调用 `network_device_pairing_approve` 明确批准，新设备才能用 `network_device_pairing_redeem` 兑换同一 actor 的独立 credential。挑战一次性、可拒绝/撤销、有尝试次数上限，过期即失败；第三台设备不能用不同 token 抢兑。`network_device_list` 返回当前设备标记、label/platform、last_seen 与状态；`network_device_revoke` 只撤销该设备的 credentials 并立即关闭它的实时连接，不重建 actor、不影响其他设备。旧 `network_recovery_create` / `network_recovery_redeem` 和 `/#t=` 长期 token 链接只是旧方式，必须明确提示风险并确认，不能继续作为默认入口。凭据失效时不要自动注册替代身份；应显示错误并让用户重新配对。
 
 ### 多 Agent/多任务协作
 
@@ -452,9 +454,9 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A["订阅不可用、断线或数据截断"] --> B["增量同步退避补读"]
+    A["订阅不可用、断线或数据截断"] --> B["network_sync 按服务端游标补读"]
     A --> C{"凭据错误?"}
-    C -- 是 --> D["停止重试并提示重新配置"]
+    C -- 是 --> D["停止重试；显示重新配对入口，不自动新建身份"]
     A --> E{"协议不兼容?"}
     E -- 是 --> F["停止并升级客户端"]
 ```

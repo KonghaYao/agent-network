@@ -14,13 +14,19 @@
  * 缺失的 Agent 补成联系人；联系人添加是单向、幂等、无需对方接受的。
  */
 export const CHAT_AGENTS_SCRIPT = `
-const AGENT_REGISTRY_KEY = 'agent-network-agents-v1';
+const AGENT_REGISTRY_LEGACY_KEY = 'agent-network-agents-v1';
 
-/** 读取本地注册表；坏数据或不可用一律回退为空表，并返回可展示的提示。 */
-function agentRegistryRead() {
+function agentRegistryKey(ownerActorId) {
+  return AGENT_REGISTRY_PER_ACTOR_PREFIX + ownerActorId;
+}
+
+/** 读取当前身份的本地注册表；旧全局 key 只作为一次性兼容回退。 */
+function agentRegistryRead(ownerActorId) {
+  if (!ownerActorId) return { items: [], error: '当前浏览器身份不可用' };
   let raw = null;
   try {
-    raw = window.localStorage.getItem(AGENT_REGISTRY_KEY);
+    raw = window.localStorage.getItem(agentRegistryKey(ownerActorId));
+    if (!raw) raw = window.localStorage.getItem(AGENT_REGISTRY_LEGACY_KEY);
   } catch (error) {
     return { items: [], error: '浏览器无法读取本地 Agent 列表' };
   }
@@ -39,6 +45,7 @@ function agentRegistryRead() {
   for (const item of parsed.items) {
     if (!item || typeof item !== 'object') continue;
     if (typeof item.owner_actor_id !== 'string' || !item.owner_actor_id) continue;
+    if (item.owner_actor_id !== ownerActorId) continue;
     if (typeof item.actor_id !== 'string' || !item.actor_id) continue;
     if (typeof item.name !== 'string') continue;
     if (typeof item.agent_session_id !== 'string' && item.agent_session_id !== null) continue;
@@ -59,10 +66,11 @@ function agentRegistryRead() {
   return { items: items, error: '' };
 }
 
-function agentRegistryWrite(items) {
+function agentRegistryWrite(ownerActorId, items) {
+  if (!ownerActorId) return '当前浏览器身份不可用，未能保存本地 Agent 列表';
   try {
     window.localStorage.setItem(
-      AGENT_REGISTRY_KEY,
+      agentRegistryKey(ownerActorId),
       JSON.stringify({ v: 1, items: items.slice(0, AGENT_REGISTRY_MAX) })
     );
     return '';
@@ -82,9 +90,9 @@ function agentsSortByCreated(items) {
   });
 }
 
-/** 只返回当前 human actor 创建的条目，避免 /#t= 换身份后串列表。 */
+/** 只返回当前 human actor 创建的条目，避免换身份后串列表。 */
 function agentRegistryItems(ownerActorId) {
-  const read = agentRegistryRead();
+  const read = agentRegistryRead(ownerActorId);
   const items = read.items.filter(function (item) {
     return item.owner_actor_id === ownerActorId;
   });
@@ -103,9 +111,9 @@ function agentRegistryEntry(ownerActorId, actorId) {
 /** 创建成功后写入；同一 actor_id 去重，超过上限保留最新条目。 */
 function agentRegistryAdd(ownerActorId, entry) {
   if (!ownerActorId) return '当前浏览器身份不可用，未能保存本地 Agent 列表';
-  const read = agentRegistryRead();
+  const read = agentRegistryRead(ownerActorId);
   const items = read.items.filter(function (item) {
-    return item.actor_id !== entry.actor_id;
+    return item.owner_actor_id === ownerActorId && item.actor_id !== entry.actor_id;
   });
   items.unshift({
     owner_actor_id: ownerActorId,
@@ -115,12 +123,14 @@ function agentRegistryAdd(ownerActorId, entry) {
     created_at: entry.created_at,
     mcp_url: typeof entry.mcp_url === 'string' ? entry.mcp_url : ''
   });
-  return agentRegistryWrite(agentsSortByCreated(items));
+  return agentRegistryWrite(ownerActorId, agentsSortByCreated(items));
 }
 
 /** 全局改名成功后同步本地展示名；写入失败只影响后续提示词中的名称。 */
 function agentRegistryRename(actorId, name) {
-  const read = agentRegistryRead();
+  const ownerActorId = identity && identity.actor_id ? identity.actor_id : null;
+  if (!ownerActorId) return;
+  const read = agentRegistryRead(ownerActorId);
   if (read.error) return;
   let changed = false;
   const items = read.items.map(function (item) {
@@ -135,7 +145,7 @@ function agentRegistryRename(actorId, name) {
       mcp_url: item.mcp_url
     };
   });
-  if (changed) agentRegistryWrite(items);
+  if (changed) agentRegistryWrite(ownerActorId, items);
 }
 
 /**
@@ -145,7 +155,8 @@ function agentRegistryRename(actorId, name) {
  * 该 Agent 时按 fallback 补一条，保证新 token 至少能从右键提示词再次复制。
  */
 function agentRegistryReissue(ownerActorId, actorId, mcpUrl, fallback) {
-  const read = agentRegistryRead();
+  if (!ownerActorId) return '当前浏览器身份不可用，未能保存新 MCP URL';
+  const read = agentRegistryRead(ownerActorId);
   if (read.error) return read.error;
   let changed = false;
   const items = read.items.map(function (item) {
@@ -161,7 +172,6 @@ function agentRegistryReissue(ownerActorId, actorId, mcpUrl, fallback) {
     };
   });
   if (!changed) {
-    if (!ownerActorId) return '当前浏览器身份不可用，未能保存新 MCP URL';
     items.unshift({
       owner_actor_id: ownerActorId,
       actor_id: actorId,
@@ -173,7 +183,7 @@ function agentRegistryReissue(ownerActorId, actorId, mcpUrl, fallback) {
       mcp_url: mcpUrl
     });
   }
-  return agentRegistryWrite(agentsSortByCreated(items));
+  return agentRegistryWrite(ownerActorId, agentsSortByCreated(items));
 }
 
 /** 当前 human 在本机注册、但不在给定好友列表中的 Agent actor_id。 */

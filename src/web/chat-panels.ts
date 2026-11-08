@@ -58,6 +58,9 @@ export function sidebarPane(): string {
     <p id="room-list-status" class="list-hint" role="status">正在读取…</p>
     <button id="room-list-retry" class="list-retry" type="button" hidden>重试</button>
     <button id="logged-out-start" class="list-retry" type="button" hidden>创建新身份并继续</button>
+    <button id="credential-invalid-pair" class="list-retry" type="button" hidden>用另一台设备配对</button>
+    <button id="credential-invalid-legacy" class="list-retry" type="button" hidden>使用旧方式长期凭据</button>
+    <div id="logged-out-identities" class="local-identities" hidden></div>
   </div>
   <footer class="sidebar-foot">
     <span id="stream-dot" class="stream-dot" role="status" title="" aria-label="" hidden></span>

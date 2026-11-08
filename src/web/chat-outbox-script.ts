@@ -390,6 +390,7 @@ function outboxFinishCommitted(intent, options) {
     if (isActiveRoom(intent.room_id, roomEpoch) && !matches) return;
   }
   drafts.delete(intent.room_id);
+  draftClear(intent.room_id);
   mentionSelections.delete(intent.room_id);
   if (settings.sentFileKeys) clearComposerFiles(intent.room_id, settings.sentFileKeys);
   if (!isActiveRoom(intent.room_id, settings.epoch)) return;

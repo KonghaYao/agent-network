@@ -27,6 +27,10 @@ interface ActorStreamState {
   kind: ActorStreamKind;
   subscribers: Map<string, (message: string) => void>;
   subscriptionIds: Set<string>;
+  /** 连接 -> subscription id；设备撤销按连接清理时需要同时释放订阅 id。 */
+  subscriptionIdByConnection: Map<string, string>;
+  /** 连接 -> credential_id；用于单设备撤销只关闭该设备的活跃流。 */
+  credentialIds: Map<string, string | null>;
   /** 服务端收口时由传输层注册的 graceful close。 */
   shutdown: Map<string, () => void>;
   online: boolean;
@@ -54,6 +58,8 @@ export interface HubPresenceHooks {
 export class NotificationHub {
   readonly #actorStreams = new Map<string, ActorStreamState>();
   readonly #hooks: HubPresenceHooks;
+  /** 已撤销凭据；阻止撤销与建立连接并发时旧凭据重新注册流。 */
+  readonly #revokedCredentials = new Set<string>();
   #counter = 0;
 
   constructor(_db: Database, hooks: HubPresenceHooks = {}) {
@@ -74,7 +80,13 @@ export class NotificationHub {
     subscriptionId: string,
     send: (message: string) => void,
     onShutdown?: () => void,
+    credentialId?: string | null,
   ): HubSubscription {
+    if (credentialId && this.#revokedCredentials.has(credentialId)) {
+      throw new BusinessError('CREDENTIAL_INVALID', '凭据已撤销，不能建立实时连接', {
+        credential_id: credentialId,
+      });
+    }
     const state = this.#actorStream(actorId, kind);
     if (state.subscriptionIds.has(subscriptionId)) {
       throw new BusinessError('INVALID_ARGUMENT', 'subscription id 已被当前 actor 的其他连接使用', {
@@ -89,6 +101,8 @@ export class NotificationHub {
     const connectionId = `conn_${++this.#counter}`;
     state.subscribers.set(connectionId, send);
     state.subscriptionIds.add(subscriptionId);
+    state.subscriptionIdByConnection.set(connectionId, subscriptionId);
+    state.credentialIds.set(connectionId, credentialId ?? null);
     if (onShutdown) state.shutdown.set(connectionId, onShutdown);
     if (kind === 'agent' && state.online && state.subscribers.size === 1) {
       this.#hooks.onAgentStreamOpened?.(actorId);
@@ -99,6 +113,8 @@ export class NotificationHub {
         if (!current) return;
         current.subscribers.delete(connectionId);
         current.subscriptionIds.delete(subscriptionId);
+        current.subscriptionIdByConnection.delete(connectionId);
+        current.credentialIds.delete(connectionId);
         current.shutdown.delete(connectionId);
         if (current.subscribers.size === 0) {
           const wasOnline = current.online;
@@ -119,6 +135,8 @@ export class NotificationHub {
         kind,
         subscribers: new Map(),
         subscriptionIds: new Set(),
+        subscriptionIdByConnection: new Map(),
+        credentialIds: new Map(),
         shutdown: new Map(),
         online: false,
         since: 0,
@@ -172,6 +190,47 @@ export class NotificationHub {
 
   actorConnectionCount(actorId: string): number {
     return this.#actorStreams.get(actorTopic(actorId))?.subscribers.size ?? 0;
+  }
+
+  /**
+   * 关闭指定 credential 的全部活动 stream 连接。
+   *
+   * 设备撤销必须只影响该设备：同一 actor 的其他 credential 连接继续接收。
+   * 返回触发的连接数。
+   */
+  closeByCredential(credentialId: string): number {
+    let closed = 0;
+    for (const state of this.#actorStreams.values()) {
+      for (const [connectionId, currentCredentialId] of [...state.credentialIds]) {
+        if (currentCredentialId !== credentialId) continue;
+        const close = state.shutdown.get(connectionId);
+        state.subscribers.delete(connectionId);
+        const subscriptionId = state.subscriptionIdByConnection.get(connectionId);
+        if (subscriptionId) state.subscriptionIds.delete(subscriptionId);
+        state.subscriptionIdByConnection.delete(connectionId);
+        state.credentialIds.delete(connectionId);
+        state.shutdown.delete(connectionId);
+        try {
+          close?.();
+          closed += 1;
+        } catch {
+          // 单条连接关闭失败不能阻塞其他连接收口。
+        }
+      }
+      if (state.subscribers.size === 0) state.online = false;
+    }
+    return closed;
+  }
+
+  /**
+   * 标记 credential 已撤销并关闭其活动连接。
+   *
+   * 标记必须发生在数据库撤销之后、下一次订阅尝试之前；这样撤销与建立
+   * 连接并发时，迟到的旧凭据订阅也会被拒绝。
+   */
+  revokeCredential(credentialId: string): number {
+    this.#revokedCredentials.add(credentialId);
+    return this.closeByCredential(credentialId);
   }
 
   /**
@@ -234,5 +293,6 @@ export class NotificationHub {
   /** 测试与运维用：清空全部进程内状态。 */
   reset(): void {
     this.#actorStreams.clear();
+    this.#revokedCredentials.clear();
   }
 }

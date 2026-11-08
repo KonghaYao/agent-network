@@ -257,10 +257,14 @@ function afterStreamConnected(task, isReconnect) {
       return callTool('network_login', {}).catch(function (error) {
         streamDebug('login after ack failed', error && error.message ? error.message : String(error));
       }).then(function () {
-        if (isReconnect && task === streamTask && !streamStopped) scheduleStreamCatchUp();
+        if (task === streamTask && !streamStopped) {
+          if (isReconnect) scheduleStreamCatchUp();
+          syncCatchUp();
+        }
       });
     }
     if (isReconnect) scheduleStreamCatchUp();
+    syncCatchUp();
     return undefined;
   }).catch(function (error) {
     streamDebug('identity after ack failed', error && error.message ? error.message : String(error));
@@ -350,6 +354,10 @@ function handleStreamEventFrame(payload) {
         // 好友申请与关系变化只提示刷新，不是待办，也不产生房间刷新。
         refreshContactBadge();
         if (contactModal && !contactModal.hidden) loadContactRequests();
+        break;
+      case 'device':
+        // 设备安全事件只让已打开的配对弹窗刷新；不产生待办或房间未读。
+        window.dispatchEvent(new CustomEvent('agentnet:device'));
         break;
       case 'mention.reminder':
         // human 个人提醒不是待办，也不产生 delivery；当前房间已在看消息时
@@ -559,6 +567,9 @@ async function runActorStream(task) {
     if (result.failure && result.failure.fatal) {
       streamConnected = false;
       setStreamStatus(streamStopStatus(result.failure));
+      if (result.failure.code === 'CREDENTIAL_INVALID' || result.failure.code === 'UNAUTHORIZED') {
+        showCredentialInvalidHome('实时连接使用的凭据已失效；本机不会自动创建替代身份。');
+      }
       return;
     }
 

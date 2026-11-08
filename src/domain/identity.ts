@@ -156,6 +156,14 @@ export async function register(
         principal.credentialHash,
         at,
       ),
+    db
+      .prepare(
+        `INSERT INTO devices (actor_id, device_id, label, platform, status, created_at, last_seen_at)
+         VALUES (?, ?, '', '', 'active', ?, ?)
+         ON CONFLICT(actor_id, device_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
+         WHERE devices.status = 'active'`,
+      )
+      .bind(actorKey, input.device_id ?? 'default', at, at),
   ];
 
   try {

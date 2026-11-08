@@ -26,6 +26,7 @@ import { STREAM_URI } from './realtime/stream';
 import { getActorBySession } from './storage/queries';
 import { renderChatPage } from './web/chat';
 import { renderInvalidJoinPage, renderJoinPage } from './web/join';
+import { renderPairPage } from './web/pair';
 import { renderHomePage, renderInvalidSharePage, renderSharePage } from './web/share';
 import type { Env } from './env';
 
@@ -475,7 +476,7 @@ async function handleMcp(request: Request, env: Env, mount?: FileMount): Promise
       });
     }
     try {
-      return serveActorStream(request, env, principal.actor, { id: body.id });
+      return serveActorStream(request, env, principal.actor, { id: body.id }, principal.credential?.credential_id ?? null);
     } catch (error) {
       if (isBusinessError(error)) {
         return jsonRpcError(body.id, -32602, error.message, error.toBody());
@@ -745,6 +746,15 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
         'cache-control': 'no-store',
       },
     ),
+  );
+
+  // 新设备配对页：challenge 只在 URL fragment 中，由客户端读取并立即清除；
+  // 服务端不解析 challenge，也不输出任何身份或房间数据。
+  app.get('/pair', (c) =>
+    c.html(renderPairPage(), 200, {
+      'cache-control': 'no-store',
+      'referrer-policy': 'no-referrer',
+    }),
   );
 
   // 群邀请落地页。邀请码只是加入能力，不是身份凭据：这里不解析任何群数据，

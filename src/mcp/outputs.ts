@@ -427,6 +427,7 @@ export const deliverySchema = z.object({
 });
 
 export const eventRefSchema = z.object({
+  event_id: z.string(),
   seq: z.string(),
   scope: z.string(),
   type: z.string(),
@@ -493,6 +494,7 @@ export const syncPageSchema = z.object({
   scope: z.string(),
   items: z.array(eventRefSchema),
   next_cursor: z.string(),
+  head_cursor: z.string(),
   has_more: z.boolean(),
   head_seq: z.string(),
   min_seq: z.string(),
@@ -542,6 +544,89 @@ export const recoveryTicketSchema = z.object({
 });
 
 export const recoveredIdentitySchema = identitySchema.extend({ recovered: z.literal(true) });
+
+/**
+ * 设备配对挑战状态视图。
+ *
+ * 不包含 challenge、token 或 token_hash；`confirm_code` 是从服务端保存的
+ * token 摘要派生的短码，只能用于两端人工核对，不能兑换凭据。
+ */
+export const devicePairingViewSchema = z.object({
+  pairing_id: z.string(),
+  status: z.enum(['pending', 'approved', 'redeemed', 'expired', 'cancelled']),
+  actor_id: z.string(),
+  device_id: z.string().nullable(),
+  device_label: z.string(),
+  platform: z.string(),
+  confirm_code: z.string().nullable(),
+  created_at: z.string(),
+  expires_at: z.string(),
+  approved_at: z.string().nullable(),
+  redeemed_at: z.string().nullable(),
+  cancelled_at: z.string().nullable(),
+  cancel_reason: z.string(),
+  attempts: z.number(),
+  max_attempts: z.number(),
+  created_by_current_device: z.boolean(),
+});
+
+export const devicePairingCreatedSchema = z.object({
+  pairing_id: z.string(),
+  /** 明文挑战只在首次 create 响应出现；重放返回 TOKEN_NOT_REPLAYABLE。 */
+  challenge: z.string(),
+  pair_url: z.string(),
+  expires_at: z.string(),
+  created_at: z.string(),
+});
+
+export const devicePairingJoinResultSchema = z.object({
+  pairing: devicePairingViewSchema,
+  actor: z.object({
+    actor_id: z.string(),
+    name: z.string(),
+    kind: z.enum(['human', 'agent']),
+  }),
+});
+
+export const devicePairingListResultSchema = z.object({
+  items: z.array(devicePairingViewSchema),
+  pending_count: z.number(),
+});
+
+export const devicePairingResultSchema = z.object({
+  pairing: devicePairingViewSchema,
+});
+
+export const devicePairingRedeemResultSchema = identitySchema.extend({
+  paired: z.literal(true),
+  device_id: z.string(),
+  pairing_id: z.string(),
+});
+
+export const deviceViewSchema = z.object({
+  device_id: z.string(),
+  label: z.string(),
+  platform: z.string(),
+  status: z.enum(['active', 'revoked']),
+  created_at: z.string(),
+  last_seen_at: z.string().nullable(),
+  revoked_at: z.string().nullable(),
+  current: z.boolean(),
+  active_credentials: z.number(),
+  total_credentials: z.number(),
+});
+
+export const deviceListResultSchema = z.object({
+  items: z.array(deviceViewSchema),
+  current_device_id: z.string().nullable(),
+});
+
+export const deviceRevokeResultSchema = z.object({
+  device_id: z.string(),
+  revoked_credentials: z.number(),
+  already_revoked: z.boolean(),
+  revoked_at: z.string(),
+});
 
 export const profileResultSchema = identitySchema;
 

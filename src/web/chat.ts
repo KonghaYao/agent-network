@@ -29,6 +29,7 @@ import {
   DEVICE_HANDOFF_STYLE,
   HANDOFF_ADOPT_SCRIPT,
   deviceHandoffDialog,
+  legacyTokenDialog,
   logoutDialog,
   meRenameDialog,
 } from './handoff';
@@ -72,6 +73,7 @@ ${membersDialog()}
 ${announcementDialog()}
 ${newAgentDialog()}
 ${deviceHandoffDialog()}
+${legacyTokenDialog()}
 ${logoutDialog()}
 ${meRenameDialog()}
 ${toastPane()}

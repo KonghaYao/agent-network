@@ -40,6 +40,36 @@ export const LIMITS = {
   agentDelegationTtlMs: 30 * 24 * 60 * 60_000,
   /** 停用原因 UTF-8 字节上限。 */
   agentDisableReasonBytes: 512,
+  /**
+   * 设备配对挑战默认/最长有效期（毫秒）。
+   *
+   * 挑战只是一次性短期证明，不是长期凭据；测试可传更短值验证过期，
+   * 但不能超过 5 分钟。
+   */
+  devicePairingTtlMs: 5 * 60_000,
+  /** 配对挑战最短有效期；只用于测试与临时演示。 */
+  devicePairingTtlMinMs: 1_000,
+  /** 单个挑战允许的错误设备证明尝试次数。 */
+  devicePairingMaxAttempts: 5,
+  /** 同一 actor 同时 pending/approved 的配对挑战上限。 */
+  devicePairingPendingMax: 5,
+  /** 配对设备名称/平台 UTF-8 字节上限。 */
+  devicePairingLabelBytes: 96,
+  devicePairingPlatformBytes: 64,
+  /** 待确认配对列表默认/最大条数。 */
+  devicePairingListDefault: 20,
+  devicePairingListMax: 50,
+  /** 设备列表最大条数；单 actor 的设备数量远小于该上限。 */
+  deviceListMax: 100,
+  /**
+   * 凭据/设备最近活动写入节流（毫秒）。认证路径只在超过该间隔时写一次
+   * `credentials.last_used_at` 与 `devices.last_seen_at`，避免每个请求都写库。
+   */
+  deviceActivityThrottleMs: 1_000,
+  /** 浏览器本地身份注册表上限；只保存 token 与最小资料，用于显式切换。 */
+  webIdentityRegistryMax: 10,
+  /** 浏览器 sync 游标持久化时每个 scope 的最大长度。 */
+  webSyncCursorMax: 2048,
   /** 浏览器本地 Agents 注册表上限；超过后保留最新条目。 */
   webAgentRegistryMax: 100,
   /** 成员选择器每次渲染的候选数量；搜索过滤后再分页。 */

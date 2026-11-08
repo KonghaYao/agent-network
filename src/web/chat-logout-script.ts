@@ -1,18 +1,16 @@
 /**
- * 左下角退出登录：只清除本机凭据与本地 Agent 注册表，不调用服务端。
+ * 左下角退出登录：只清除当前身份的凭据与本机缓存，不调用服务端。
  *
  * 服务端只保存 token 摘要，退出不会吊销 token；其他设备与已经发给 Agent 的
  * 连接提示词仍然有效。`agent-network-logged-out` 是非敏感的本机 UI 状态，
  * 用来在退出后显示分享链接/连接提示词引导，而不是立刻自动注册新身份。
+ * 其他已确认身份保留在按 actor_id 分区的本地注册表中，可在退出页显式切回。
  *
  * 由 `chatClientScript` 拼进主脚本共享作用域；与 `chat-stream-script.ts`
  * 的 `stopActorStream` 配合，在跳转前断开 SSE 并清空重连/补读定时器。
  */
 export const CHAT_LOGOUT_SCRIPT = `
 const LOGGED_OUT_KEY = 'agent-network-logged-out';
-// 凭据与本地会话状态；发送意图另按 agent-network-outbox: 前缀整体清除。
-// agent-network-files-open 与 agent-network-room-filter 是 UI 偏好，退出时保留。
-const LOGOUT_CREDENTIAL_KEYS = ['agent-network-token', 'agent-network-agents-v1'];
 
 function isLoggedOut() {
   try {
@@ -90,23 +88,16 @@ function syncLogoutVisibility() {
     cancelButton.disabled = true;
     // 先断开 SSE 与重连/补读定时器，避免退出瞬间用旧 token 重连。
     if (typeof stopActorStream === 'function') stopActorStream();
-    for (var index = 0; index < LOGOUT_CREDENTIAL_KEYS.length; index += 1) {
-      try {
-        window.localStorage.removeItem(LOGOUT_CREDENTIAL_KEYS[index]);
-      } catch (error) {
-        // 单个 key 删除失败不应阻止退出；继续清理其余 key。
-      }
-    }
-    // 发送意图保存了未确认消息的正文与 client_message_id，退出时必须一并清除。
-    try {
-      for (var intentIndex = window.localStorage.length - 1; intentIndex >= 0; intentIndex -= 1) {
-        var intentKey = window.localStorage.key(intentIndex);
-        if (intentKey && intentKey.indexOf('agent-network-outbox:') === 0) {
-          window.localStorage.removeItem(intentKey);
-        }
-      }
-    } catch (error) {
-      // 本地存储清理失败不应阻止退出。
+    var actorId = identity && identity.actor_id ? identity.actor_id : null;
+    if (actorId) forgetIdentity(actorId);
+    identityStorageRemove('agent-network-token');
+    // 未确认的旧长期凭据只留在内存中；退出时一并丢弃，避免下次自动弹窗。
+    window.__agentNetworkLegacyToken = null;
+    // 内存中的草稿、选择器与房间缓存随页面跳转清空；不回写其他身份。
+    if (typeof drafts !== 'undefined' && drafts.clear) drafts.clear();
+    if (typeof roomCache !== 'undefined' && roomCache.clear) roomCache.clear();
+    if (typeof mentionSelections !== 'undefined' && mentionSelections.clear) {
+      mentionSelections.clear();
     }
     try {
       for (var sessionIndex = window.sessionStorage.length - 1; sessionIndex >= 0; sessionIndex -= 1) {

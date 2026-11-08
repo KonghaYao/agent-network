@@ -38,6 +38,14 @@ import {
   deliveryFailSchema,
   deliveryReportSchema,
   deliveryRetrySchema,
+  deviceListSchema,
+  devicePairingApproveSchema,
+  devicePairingCancelSchema,
+  devicePairingCreateSchema,
+  devicePairingJoinSchema,
+  devicePairingListSchema,
+  devicePairingRedeemSchema,
+  deviceRevokeSchema,
   feedbackCreateSchema,
   historyListSchema,
   inboxListSchema,
@@ -149,6 +157,18 @@ import {
   inboxList,
 } from '../domain/deliveries';
 import { createFeedback } from '../domain/feedback';
+import {
+  approveDevicePairing,
+  cancelDevicePairing,
+  createDevicePairing,
+  joinDevicePairing,
+  listDevicePairings,
+  redeemDevicePairing,
+} from '../domain/device-pairings';
+import {
+  listDevices,
+  revokeDevice,
+} from '../domain/devices';
 import {
   me,
   recoveryCreate,
@@ -269,6 +289,13 @@ import {
   contactSchema,
   contactUnblockResultSchema,
   deliverySchema,
+  deviceListResultSchema,
+  devicePairingCreatedSchema,
+  devicePairingJoinResultSchema,
+  devicePairingListResultSchema,
+  devicePairingRedeemResultSchema,
+  devicePairingResultSchema,
+  deviceRevokeResultSchema,
   feedbackCreateResultSchema,
   historyPageSchema,
   identitySchema,
@@ -715,7 +742,7 @@ export function registerTools(
   register(
     server,
     'network_recovery_create',
-    '创建 3 分钟有效、一次使用的跨设备恢复 ticket。',
+    '旧方式：创建 3 分钟有效、一次使用的跨设备恢复 ticket。新设备优先使用 network_device_pairing_create/join/approve/redeem 的 5 分钟配对挑战；恢复 ticket 只保留给无法使用配对流程的旧客户端，ticket 是长期身份恢复能力，不要截图或分享。',
     recoveryCreateSchema,
     recoveryTicketSchema,
     async (input) => {
@@ -727,10 +754,104 @@ export function registerTools(
   register(
     server,
     'network_recovery_redeem',
-    '用恢复 ticket 把当前新凭据绑定到原 actor。',
+    '旧方式：用恢复 ticket 把当前新凭据绑定到原 actor。新设备应使用一次配对挑战；只有已登录设备明确批准后才会产生独立 credential。恢复 ticket 不能在已注册凭据上兑换，也不会返回 token。',
     recoveryRedeemSchema,
     recoveredIdentitySchema,
     async (input) => recoveryRedeem(db, principal, input, origin),
+  );
+
+  register(
+    server,
+    'network_device_pairing_create',
+    '已登录设备创建一个 5 分钟有效、一次性的设备配对挑战。二维码/短码只包含挑战，不包含当前 token；明文挑战只在首次响应出现一次，服务端只保存 SHA-256，同一 request_id 重放返回 TOKEN_NOT_REPLAYABLE。新设备打开 /pair，用挑战和自己在本地生成、尚未注册的 token 调用 network_device_pairing_join；已登录设备必须用 network_device_pairing_approve 明确确认，随后新设备才能用 network_device_pairing_redeem 兑换同 actor 的独立 credential。挑战可拒绝/撤销，有尝试上限，过期即失败。',
+    devicePairingCreateSchema,
+    devicePairingCreatedSchema,
+    async (input) => {
+      requireActor(principal);
+      return createDevicePairing(db, principal, input, origin);
+    },
+  );
+
+  register(
+    server,
+    'network_device_pairing_join',
+    '新设备用配对挑战和本地生成的未注册 token 发起绑定，不需要已注册身份。服务端把挑战绑定到该 token 的 SHA-256，并返回设备名称、平台与两端核对用的确认码；不返回 token。已绑定其他 token 的挑战不能被第三台设备抢绑；错误尝试计入上限，过期、已用、已撤销或超限都返回 PAIRING_INVALID 并说明下一步。绑定后仍需已登录设备 network_device_pairing_approve 明确确认。',
+    devicePairingJoinSchema,
+    devicePairingJoinResultSchema,
+    async (input) => joinDevicePairing(db, principal, input),
+  );
+
+  register(
+    server,
+    'network_device_pairing_list',
+    '读取当前身份待确认/已批准/已兑换/已过期/已撤销的配对请求。只返回设备名称、平台、确认码、时间与状态，不返回挑战、token 或 token 摘要；created_by_current_device 标记请求是否由当前设备创建。用于已登录设备选择“确认新设备”或“拒绝”。',
+    devicePairingListSchema,
+    devicePairingListResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return listDevicePairings(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_device_pairing_approve',
+    '已登录设备明确确认一条已 join 的配对请求。只有同一 actor 的已注册凭据可调用；批准后新设备才能兑换独立 credential。批准只写设备配对状态与安全事件，不创建 credential，也不复制当前 token。已批准重复调用幂等；过期、已撤销或已兑换返回 PAIRING_INVALID。',
+    devicePairingApproveSchema,
+    devicePairingResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return approveDevicePairing(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_device_pairing_cancel',
+    '拒绝或撤销当前身份的一条待确认/已批准配对请求。只有同一 actor 可调用；已兑换请求不能撤销（应使用 network_device_revoke 撤销新设备）。取消后新设备的 join/redeem 都返回 PAIRING_INVALID，页面必须提示重新生成挑战。',
+    devicePairingCancelSchema,
+    devicePairingResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return cancelDevicePairing(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_device_pairing_redeem',
+    '新设备在已登录设备批准后兑换同 actor 的独立 credential。必须携带 join 时同一个本地 token 与 challenge；服务端只保存 token 的 SHA-256，响应从不返回 token。未批准返回 PAIRING_INVALID(reason=not_approved)，过期/已用/已撤销/尝试超限/第三设备使用不同 token 均失败；同一 request_id 网络重试返回同一身份，不会创建第二个 credential。',
+    devicePairingRedeemSchema,
+    devicePairingRedeemResultSchema,
+    async (input) => redeemDevicePairing(db, principal, input, origin),
+  );
+
+  register(
+    server,
+    'network_device_list',
+    '列出当前 actor 的设备：label、platform、status、created_at、last_seen_at、current、有效/总凭据数。current 按当前 Bearer 的 device_id 标记；last_seen_at 来自认证活动节流写入，不读取消息内容。只返回当前身份的设备，不提供全局枚举。',
+    deviceListSchema,
+    deviceListResultSchema,
+    async () => {
+      requireActor(principal);
+      return listDevices(db, principal);
+    },
+  );
+
+  register(
+    server,
+    'network_device_revoke',
+    '撤销当前身份的一台设备：同一事务标记 devices.status=revoked，撤销该设备的全部有效 credentials，并取消该设备创建的待确认配对挑战；不重建 actor、不影响其他设备。提交后立即关闭该设备已建立的 stream 连接，停用其新的私有读取与工具调用；其他设备的连接继续工作。重复调用幂等返回 already_revoked。撤销当前设备会同时结束本请求之后的访问，页面应先提示。',
+    deviceRevokeSchema,
+    deviceRevokeResultSchema,
+    async (input) => {
+      requireActor(principal);
+      const outcome = await revokeDevice(db, principal, input);
+      for (const credentialId of outcome.revokedCredentialIds) {
+        env.NOTIFICATION_HUB.revokeCredential(credentialId);
+      }
+      return outcome.result;
+    },
   );
 
   register(

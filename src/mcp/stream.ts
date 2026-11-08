@@ -110,6 +110,7 @@ export function serveActorStream(
   env: Env,
   actor: ActorRow,
   body: StreamListenRequest,
+  credentialId: string | null = null,
 ): Response {
   const id = body.id;
   if ((typeof id !== 'string' || id.length === 0) && typeof id !== 'number') {
@@ -245,6 +246,7 @@ export function serveActorStream(
     subscriptionId,
     pushEvent,
     () => close(true),
+    credentialId,
   );
   subscription = subscriptionHandle;
 

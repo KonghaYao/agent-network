@@ -10,6 +10,7 @@ import { CHAT_DRAWBOARD_SCRIPT } from './chat-drawboard-script';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
 import { CHAT_GROUP_COPY_SCRIPT } from './chat-group-copy-script';
+import { CHAT_IDENTITY_SCRIPT } from './chat-identity-script';
 import { CHAT_INVITES_SCRIPT } from './chat-invites-script';
 import { CHAT_LIST_SCRIPT } from './chat-list-script';
 import { CHAT_LOGOUT_SCRIPT } from './chat-logout-script';
@@ -37,7 +38,6 @@ import { CHAT_TASK_SUBMISSION_SCRIPT } from './chat-task-submission-script';
 import { CHAT_TASK_TRANSFER_SCRIPT } from './chat-task-transfer-script';
 import { CHAT_TASKS_SCRIPT } from './chat-tasks-script';
 import { CHAT_UPLOAD_SCRIPT } from './chat-upload-script';
-import { HANDOFF_CONTROLLER_SCRIPT } from './handoff';
 import { jsonForScript } from './layout';
 import { NEW_AGENT_SCRIPT } from './new-agent-script';
 import { QR_ENCODER_SCRIPT } from './qr';
@@ -145,6 +145,7 @@ let groupPicker = null;
 // 发送失败/投递缺失/截断提示必须跨过 SSE 触发的刷新，不能在 300ms 后被清空。
 let stickyStatus = '';
 
+${CHAT_IDENTITY_SCRIPT}
 ${CHAT_LIST_SCRIPT}
 ${CHAT_AVATAR_SCRIPT}
 ${CHAT_ARCHIVE_SCRIPT}
@@ -289,10 +290,15 @@ async function callTool(name, args, tokenOverride, signal) {
 }
 
 /**
- * 首次访问自动生成并绑定 human 身份。
+ * 首次访问自动生成并绑定 human 身份；已有 token 失效时停止，不自动替换。
  *
- * single-flight：首屏列表与深链房间并行调用时只注册一次。token 在注册前
- * 写入 localStorage，重复打开沿用同一身份；凭据被撤销时换新 token 重试一次。
+ * - 没有 token 且没有待确认的旧长期凭据：本地生成 token 并注册新 human；
+ * - 已有 token 但 network_me 返回 CREDENTIAL_INVALID：抛出带 credentialInvalid
+ *   标记的错误，由页面显示“重新配对/旧方式”入口，不创建替代身份；
+ * - /#t= 旧长期凭据先进入确认弹窗，确认前不覆盖任何身份；
+ * - “创建新身份并继续”或显式切换时设置 __agentNetworkAllowRegister。
+ *
+ * single-flight：首屏列表与深链房间并行调用时只注册一次。
  */
 function ensureIdentity() {
   if (isLoggedOut()) {
@@ -300,10 +306,17 @@ function ensureIdentity() {
       new Error('已退出登录。请先在首页创建新身份，或打开 Agent 分享链接。')
     );
   }
+  const storedToken = browserToken();
+  if (!storedToken && window.__agentNetworkLegacyToken) {
+    const pending = new Error('检测到旧方式长期凭据；确认前不创建新身份，也不切换');
+    pending.legacyPending = true;
+    return Promise.reject(pending);
+  }
   if (identity) return Promise.resolve(identity);
   if (identityPromise) return identityPromise;
   identityPromise = (async function () {
-    let token = browserToken();
+    let token = storedToken;
+    let createdToken = false;
     if (!token) {
       token = crypto.randomUUID();
       try {
@@ -311,25 +324,45 @@ function ensureIdentity() {
       } catch (error) {
         throw new Error('浏览器无法保存身份，请允许本地存储后刷新页面');
       }
+      createdToken = true;
     }
     try {
       identity = await callTool('network_me', {});
+      identityInvalid = false;
+      rememberIdentity(identity, token);
       return identity;
     } catch (error) {
       if (!error || error.code !== 'CREDENTIAL_INVALID') throw error;
+      if (!createdToken && window.__agentNetworkAllowRegister !== true) {
+        const invalid = new Error(
+          '当前凭据已失效或已被撤销；本机不会自动创建替代身份。请用另一台已登录设备配对，或明确使用旧方式长期凭据。'
+        );
+        invalid.code = 'CREDENTIAL_INVALID';
+        invalid.credentialInvalid = true;
+        throw invalid;
+      }
     }
     const register = function (value) {
       return callTool('network_register', {
         request_id: requestId('web_reg'),
         kind: 'human',
-        name: '网页访客 ' + value.replaceAll('-', '').slice(0, 4)
+        name: '网页访客 ' + value.replaceAll('-', '').slice(0, 4),
+        device_id: ensureDeviceId()
       });
     };
     try {
       identity = await register(token);
+      identityInvalid = false;
+      rememberIdentity(identity, token);
       return identity;
     } catch (error) {
       if (!error || error.code !== 'CREDENTIAL_INVALID') throw error;
+      if (!createdToken && window.__agentNetworkAllowRegister !== true) {
+        const invalid = new Error('当前凭据无法注册；本机不会静默替换身份。请重新配对');
+        invalid.code = 'CREDENTIAL_INVALID';
+        invalid.credentialInvalid = true;
+        throw invalid;
+      }
     }
     token = crypto.randomUUID();
     try {
@@ -338,6 +371,8 @@ function ensureIdentity() {
       throw new Error('浏览器无法保存身份，请允许本地存储后刷新页面');
     }
     identity = await register(token);
+    identityInvalid = false;
+    rememberIdentity(identity, token);
     return identity;
   })().finally(function () {
     identityPromise = null;
@@ -629,6 +664,7 @@ composer.addEventListener('submit', async function (event) {
         if (decision === 'committed') {
           if (outboxComposerMatches(intent)) {
             drafts.delete(sendRoomId);
+            draftClear(sendRoomId);
             mentionSelections.delete(sendRoomId);
             clearComposerFiles(sendRoomId, sentFileKeys);
             bodyInput.value = '';
@@ -676,7 +712,10 @@ composer.addEventListener('submit', async function (event) {
 });
 
 bodyInput.addEventListener('input', function () {
-  if (activeRoomId) drafts.set(activeRoomId, bodyInput.value);
+  if (activeRoomId) {
+    drafts.set(activeRoomId, bodyInput.value);
+    draftSave(activeRoomId, bodyInput.value);
+  }
   resizeComposer();
   updateMentionPicker();
 });
@@ -820,8 +859,9 @@ if (loggedOutStartButton) {
   loggedOutStartButton.addEventListener('click', async function () {
     if (loggedOutStartButton.disabled) return;
     loggedOutStartButton.disabled = true;
-    // 显式点击后才清除“已退出”状态并自动注册新身份。
+    // 显式点击后才清除“已退出”状态并允许注册新身份。
     clearLoggedOutState();
+    window.__agentNetworkAllowRegister = true;
     identity = null;
     identityPromise = null;
     roomsPromise = null;
@@ -835,6 +875,7 @@ if (loggedOutStartButton) {
       await loadRooms();
       if (identity) startActorStream();
     } finally {
+      window.__agentNetworkAllowRegister = false;
       loggedOutStartButton.disabled = false;
       if (identity) loggedOutStartButton.hidden = true;
       syncLogoutVisibility();
@@ -863,6 +904,5 @@ if (loggedOutStartButton) {
 </script>
 <script>
 ${QR_ENCODER_SCRIPT}
-${HANDOFF_CONTROLLER_SCRIPT}
 </script>`;
 }

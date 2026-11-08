@@ -8,6 +8,7 @@ import { actorId, type Principal } from './principal';
 import { historyBoundary } from './room-history';
 
 export interface EventRef {
+  event_id: string;
   seq: string;
   scope: string;
   type: string;
@@ -20,6 +21,8 @@ export interface SyncPage {
   scope: string;
   items: EventRef[];
   next_cursor: string;
+  /** 当前 head 的游标；客户端首次建立本地游标时不必重放全部历史。 */
+  head_cursor: string;
   has_more: boolean;
   head_seq: string;
   min_seq: string;
@@ -96,6 +99,7 @@ export async function sync(
       scope: input.scope,
       items: [],
       next_cursor: headCursor(input.scope, info.head),
+      head_cursor: headCursor(input.scope, info.head),
       has_more: false,
       head_seq: String(info.head),
       min_seq: String(info.min),
@@ -124,6 +128,7 @@ export async function sync(
   return {
     scope: input.scope,
     items: page.map((row) => ({
+      event_id: String(row.event_seq),
       seq: String(row.event_seq),
       scope: `${row.scope_kind}:${row.scope_id}`,
       type: row.event_type,
@@ -132,6 +137,7 @@ export async function sync(
       created_at: String(row.created_at),
     })),
     next_cursor: headCursor(input.scope, nextSeq),
+    head_cursor: headCursor(input.scope, info.head),
     has_more: hasMore,
     head_seq: String(info.head),
     min_seq: String(info.min),

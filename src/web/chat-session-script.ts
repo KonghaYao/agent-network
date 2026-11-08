@@ -390,7 +390,13 @@ function applyCachedRoom(cache) {
   renderMessageList(currentItems);
   // 缓存只用于立即绘制；进入会话一律看最新消息，不再恢复旧 scrollTop。
   scrollController.scrollToBottom();
-  if (bodyInput) bodyInput.value = drafts.get(activeRoomId) || '';
+  if (bodyInput) {
+    if (!drafts.has(activeRoomId)) {
+      const storedDraft = draftLoad(activeRoomId);
+      if (storedDraft) drafts.set(activeRoomId, storedDraft);
+    }
+    bodyInput.value = drafts.get(activeRoomId) || '';
+  }
   renderComposerFiles(activeRoomId);
   resizeComposer();
 }
@@ -874,7 +880,13 @@ async function openRoom(roomId, options) {
       subtitleElement.textContent = '正在加载…';
       subtitleElement.hidden = false;
     }
-    if (bodyInput) bodyInput.value = drafts.get(roomId) || '';
+    if (bodyInput) {
+      if (!drafts.has(roomId)) {
+        const storedDraft = draftLoad(roomId);
+        if (storedDraft) drafts.set(roomId, storedDraft);
+      }
+      bodyInput.value = drafts.get(roomId) || '';
+    }
     renderComposerFiles(roomId);
     resizeComposer();
   }

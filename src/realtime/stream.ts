@@ -837,6 +837,16 @@ function inboxStreamItem(
       item.ref_id = row.ref_id ?? undefined;
       return item;
     }
+    case 'device_pairing_requested':
+    case 'device_pairing_approved':
+    case 'device_pairing_cancelled':
+    case 'device_paired':
+    case 'device_revoked': {
+      // 设备安全事件只提示刷新配对/设备列表；不产生 delivery、不增加待办。
+      const item = withLocation(baseItem(row, 'device', 'device', 'informational'), row, metadata);
+      item.ref_id = row.ref_id ?? undefined;
+      return item;
+    }
     default:
       return withLocation(baseItem(row, 'unknown', 'raw', 'informational'), row, metadata);
   }
