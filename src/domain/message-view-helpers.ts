@@ -1,5 +1,7 @@
 /** 历史页共用的投递状态聚合；消息与 timeline 使用同一投影。 */
 
+import type { MessageRow } from '../storage/rows';
+
 export interface DeliveryStateRow {
   message_id?: string;
   state: string;
@@ -15,6 +17,29 @@ export interface DeliveryStateSummary {
 }
 
 export type MentionSource = 'explicit' | 'text' | 'all';
+
+/**
+ * 历史与时间线列表所需的消息列；绝不包含 `body`。
+ *
+ * 正文只能通过 `network_message_read` 分块读取，列表页不需要把最大
+ * 256 KiB 的 body 复制进 JS 再丢弃。
+ */
+export type HistoryMessageRow = Pick<
+  MessageRow,
+  | 'message_id'
+  | 'room_id'
+  | 'sender_id'
+  | 'created_seq'
+  | 'preview'
+  | 'body_bytes'
+  | 'created_at'
+  | 'reply_to'
+  | 'root_id'
+  | 'hop'
+>;
+
+export const HISTORY_MESSAGE_COLUMNS =
+  'message_id, room_id, sender_id, created_seq, preview, body_bytes, created_at, reply_to, root_id, hop';
 
 /** 消息提及的稳定投影；source 表示目标来自显式选择、正文还是 @所有人。 */
 export interface MentionView {

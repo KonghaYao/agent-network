@@ -4,7 +4,7 @@ import type {
   AgentsGetInput,
 } from '../contracts/schemas';
 import { nowMs, sha256Hex, stableStringify } from '../storage/db';
-import { getActorsByIds } from '../storage/queries';
+import { getActorManagementByIds, type ActorManagementRow } from '../storage/queries';
 import type { ActorRow } from '../storage/rows';
 import { operationsStatement, resolveReplay, runIdempotent } from '../storage/transactions/runner';
 import {
@@ -59,14 +59,14 @@ export interface AgentsGetResult {
   missing_actor_ids: string[];
 }
 
-function shareUrl(actor: ActorRow, origin: string): string | null {
+function shareUrl(actor: Pick<ActorRow, 'agent_session_id'>, origin: string): string | null {
   return actor.agent_session_id
     ? `${origin}/a/${encodeURIComponent(actor.agent_session_id)}`
     : null;
 }
 
 /** 对外摘要不包含 metadata、凭据、token 或 MCP URL。 */
-export function agentSummaryView(actor: ActorRow, origin: string): AgentSummary {
+export function agentSummaryView(actor: ActorManagementRow, origin: string): AgentSummary {
   return {
     actor_id: actor.actor_id,
     kind: 'agent',
@@ -200,7 +200,7 @@ export async function agentsGet(
     lookup.push(id);
   }
 
-  const rows = await getActorsByIds(db, lookup);
+  const rows = await getActorManagementByIds(db, lookup);
   const byId = new Map(rows.map((row) => [row.actor_id, row]));
   const items: AgentSummary[] = [];
   const missing: string[] = [];

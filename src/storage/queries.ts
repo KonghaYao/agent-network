@@ -34,14 +34,55 @@ export async function getActorBySession(db: D1Like, sessionId: string): Promise<
     .first<ActorRow>();
 }
 
-/** 只按已知 actor_id 批量读取；调用方负责去重与数量上限。 */
-export async function getActorsByIds(db: D1Like, actorIds: string[]): Promise<ActorRow[]> {
+/** 历史/时间线只判定发送者类型；不要在这里读取 metadata 或管理字段。 */
+export interface ActorKindRow {
+  actor_id: string;
+  kind: 'human' | 'agent';
+}
+
+/** 只按已知 actor_id 批量读取展示类型；调用方负责去重与数量上限。 */
+export async function getActorsByIds(
+  db: D1Like,
+  actorIds: string[],
+): Promise<ActorKindRow[]> {
   if (actorIds.length === 0) return [];
   const placeholders = actorIds.map(() => '?').join(', ');
   const result = await db
-    .prepare(`SELECT * FROM actors WHERE actor_id IN (${placeholders})`)
+    .prepare(`SELECT actor_id, kind FROM actors WHERE actor_id IN (${placeholders})`)
     .bind(...actorIds)
-    .all<ActorRow>();
+    .all<ActorKindRow>();
+  return result.results;
+}
+
+/** Agent 管理摘要需要的字段；metadata 与收件箱计数不进入该列表。 */
+export type ActorManagementRow = Pick<
+  ActorRow,
+  | 'actor_id'
+  | 'kind'
+  | 'agent_session_id'
+  | 'name'
+  | 'archived_at'
+  | 'archived_by'
+  | 'disabled_at'
+  | 'disabled_by'
+  | 'disabled_reason'
+>;
+
+/** 只按已知 actor_id 批量读取 Agent 管理摘要。 */
+export async function getActorManagementByIds(
+  db: D1Like,
+  actorIds: string[],
+): Promise<ActorManagementRow[]> {
+  if (actorIds.length === 0) return [];
+  const placeholders = actorIds.map(() => '?').join(', ');
+  const result = await db
+    .prepare(
+      `SELECT actor_id, kind, agent_session_id, name, archived_at, archived_by,
+              disabled_at, disabled_by, disabled_reason
+         FROM actors WHERE actor_id IN (${placeholders})`,
+    )
+    .bind(...actorIds)
+    .all<ActorManagementRow>();
   return result.results;
 }
 

@@ -3,11 +3,13 @@ import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { clampPage, LIMITS } from '../contracts/limits';
 import type { HistoryListInput } from '../contracts/schemas';
 import { getActorsByIds } from '../storage/queries';
-import type { MessageRow, RoomRow } from '../storage/rows';
+import type { RoomRow } from '../storage/rows';
 import {
   deliveryStatesFor,
   mentionsFor,
   nullableString,
+  HISTORY_MESSAGE_COLUMNS,
+  type HistoryMessageRow,
 } from './message-view-helpers';
 import type { HistoryMessageView } from './messages';
 import {
@@ -215,9 +217,12 @@ async function materialize(
       ? []
       : (
           await db
-            .prepare(`SELECT * FROM messages WHERE message_id IN (${placeholders(messageIds.length)})`)
+            .prepare(
+              `SELECT ${HISTORY_MESSAGE_COLUMNS} FROM messages
+                WHERE message_id IN (${placeholders(messageIds.length)})`,
+            )
             .bind(...messageIds)
-            .all<MessageRow>()
+            .all<HistoryMessageRow>()
         ).results;
   const presenceRows =
     presenceIds.length === 0
@@ -225,7 +230,10 @@ async function materialize(
       : (
           await db
             .prepare(
-              `SELECT * FROM room_presence_events WHERE presence_event_id IN (${placeholders(presenceIds.length)})`,
+              `SELECT presence_event_id, room_id, agent_id, transition, occurred_at,
+                      recorded_at, timeline_seq, time_basis
+                 FROM room_presence_events
+                WHERE presence_event_id IN (${placeholders(presenceIds.length)})`,
             )
             .bind(...presenceIds)
             .all<PresenceRow>()

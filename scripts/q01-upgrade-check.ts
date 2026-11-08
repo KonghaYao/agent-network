@@ -3,7 +3,7 @@
  *
  * 用真实 migrations 构造停在 `0035_task_recovery.sql` 的合成库，写入
  * credentials/devices、无主群、D04–D08 与 A06 的关键历史行，再顺序应用
- * `0036`–`0038`。检查重点是“升级不扩大权限”：旧凭据只回填设备行、不新增
+ * `0036`–`0039`。检查重点是“升级不扩大权限”：旧凭据只回填设备行、不新增
  * credentials；无主群不被自动解散或回填 owner；审计表重建保留旧行。
  *
  * 运行：`bun scripts/q01-upgrade-check.ts`
@@ -20,7 +20,12 @@ import { check, checkEqual, checksPassed } from './lib/harness';
 
 const SOURCE_MIGRATIONS = join(import.meta.dir, '../migrations');
 const OLD_LAST = '0035_task_recovery.sql';
-const NEW_MIGRATIONS = ['0036_device_pairing_sync.sql', '0037_room_lifecycle.sql', '0038_ownerless_room_guard.sql'];
+const NEW_MIGRATIONS = [
+  '0036_device_pairing_sync.sql',
+  '0037_room_lifecycle.sql',
+  '0038_ownerless_room_guard.sql',
+  '0039_delivery_message_state_index.sql',
+];
 const AT = 1_700_000_000_000;
 
 const HUMAN = 'usr_q01_owner';
@@ -199,17 +204,17 @@ try {
   checkEqual('升级前没有设备行', before.devices, 0);
 
   const appliedNow = migrate(db, SOURCE_MIGRATIONS);
-  checkEqual('恰好应用 0036/0037/0038', appliedNow.join(','), NEW_MIGRATIONS.join(','));
+  checkEqual('恰好应用 0036–0039', appliedNow.join(','), NEW_MIGRATIONS.join(','));
   const expectedMigrations = [
     ...Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(4, '0')),
-    ...Array.from({ length: 22 }, (_, i) => String(i + 17).padStart(4, '0')),
+    ...Array.from({ length: 23 }, (_, i) => String(i + 17).padStart(4, '0')),
   ];
   const actualMigrations = (
     db.prepare('SELECT name FROM schema_migrations ORDER BY name').all() as Array<{ name: string }>
   ).map((row) => row.name);
-  checkEqual('迁移总数为 34', actualMigrations.length, 34);
+  checkEqual('迁移总数为 35', actualMigrations.length, 35);
   check(
-    '迁移序号为 0001–0012、0017–0038',
+    '迁移序号为 0001–0012、0017–0039',
     actualMigrations.every((name, i) => name.startsWith(`${expectedMigrations[i]}_`)),
     actualMigrations,
   );

@@ -47,7 +47,9 @@ import {
   mentionsFor,
   nullableString,
   summarizeDeliveryStates,
+  HISTORY_MESSAGE_COLUMNS,
   type DeliveryStateRow,
+  type HistoryMessageRow,
   type MentionSource,
   type MentionView,
 } from './message-view-helpers';
@@ -1172,7 +1174,7 @@ export async function historyList(
       ? readHead
       : Math.max(boundary.fromSeq, cursor?.snapshot ?? readHead);
 
-  let rows: MessageRow[];
+  let rows: HistoryMessageRow[];
   if (direction === 'before') {
     const predicate = cursor ? 'AND created_seq < ?' : '';
     const binds: unknown[] = cursor
@@ -1180,23 +1182,23 @@ export async function historyList(
       : [room.room_id, snapshot, boundary.fromSeq, limit + 1];
     const result = await db
       .prepare(
-        `SELECT * FROM messages
+        `SELECT ${HISTORY_MESSAGE_COLUMNS} FROM messages
           WHERE room_id = ? AND created_seq <= ? AND created_seq >= ? ${predicate}
           ORDER BY created_seq DESC LIMIT ?`,
       )
       .bind(...binds)
-      .all<MessageRow>();
+      .all<HistoryMessageRow>();
     rows = result.results;
   } else {
     const start = Math.max(boundary.fromSeq, cursor?.seq ?? snapshot);
     const result = await db
       .prepare(
-        `SELECT * FROM messages
+        `SELECT ${HISTORY_MESSAGE_COLUMNS} FROM messages
           WHERE room_id = ? AND created_seq <= ? AND created_seq > ? AND created_seq >= ?
           ORDER BY created_seq ASC LIMIT ?`,
       )
       .bind(room.room_id, snapshot, start, boundary.fromSeq, limit + 1)
-      .all<MessageRow>();
+      .all<HistoryMessageRow>();
     rows = result.results;
   }
 
