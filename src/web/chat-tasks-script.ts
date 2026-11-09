@@ -13,6 +13,8 @@ const taskListElement = document.getElementById('task-list');
 const taskEmptyElement = document.getElementById('task-popover-empty');
 const taskCloseElement = document.getElementById('task-popover-close');
 const taskCreateButton = document.getElementById('task-create');
+// 用户暂缓任务创建 UI：保留后端任务能力与已有任务查看，隐藏“转为任务/新建任务”入口。
+const TASK_CREATION_UI_ENABLED = false;
 const taskCreateModal = document.getElementById('task-create-modal');
 const taskCreateForm = document.getElementById('task-create-form');
 const taskSourceHint = document.getElementById('task-source-hint');
@@ -211,7 +213,7 @@ function renderTaskRow() {
       : '任务';
   }
   if (taskCreateButton) {
-    taskCreateButton.hidden = !(activeRoomId && taskCanCreate());
+    taskCreateButton.hidden = !(TASK_CREATION_UI_ENABLED && activeRoomId && taskCanCreate());
   }
   if (!visible) hideTaskPopover();
   else if (taskPopoverElement && !taskPopoverElement.hidden) renderTaskList();
@@ -687,7 +689,7 @@ function suggestedTaskTitle(sourceMessageId) {
 }
 
 function openTaskCreate(options) {
-  if (!activeRoomId || !taskCanCreate() || !taskCreateModal) return;
+  if (!TASK_CREATION_UI_ENABLED || !activeRoomId || !taskCanCreate() || !taskCreateModal) return;
   const settings = options || {};
   taskCreateSourceId = settings.sourceMessageId || null;
   taskCreateParentId = settings.parentTaskId || null;
@@ -834,6 +836,7 @@ function scheduleMyTasksRefresh() {
 }
 
 function taskConvertButton(messageId, preview) {
+  if (!TASK_CREATION_UI_ENABLED) return null;
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'msg-task-convert';
@@ -850,7 +853,7 @@ function taskConvertButton(messageId, preview) {
 function syncTaskCardMarkers(container) {
   if (!container) return;
   if (container === messagesElement) updateMessagesLengthClass();
-  const canCreate = taskCanCreate();
+  const canCreate = TASK_CREATION_UI_ENABLED && taskCanCreate();
   // 没有任务且当前用户不能创建任务时，消息槽保持隐藏，无需遍历。
   if (taskCardsByMessage.size === 0 && sourceTasksByMessage.size === 0 && !canCreate) return;
   const nodes = container === messagesElement

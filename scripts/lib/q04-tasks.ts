@@ -103,6 +103,8 @@ async function createTaskViaApi(
     assignee?: string;
     reviewer?: string;
     description?: string;
+    acceptance_criteria?: string;
+    source_message_id?: string;
   },
 ): Promise<TaskView['task']> {
   const result = await rawTool<TaskView>(state.tokens.u1, 'network_task_create', {
@@ -112,6 +114,8 @@ async function createTaskViaApi(
     ...(input.assignee ? { assignee_actor_id: input.assignee } : {}),
     ...(input.reviewer ? { reviewer_actor_id: input.reviewer } : {}),
     ...(input.description ? { description: input.description } : {}),
+    ...(input.acceptance_criteria ? { acceptance_criteria: input.acceptance_criteria } : {}),
+    ...(input.source_message_id ? { source_message_id: input.source_message_id } : {}),
   });
   return result.task;
 }
@@ -166,25 +170,29 @@ export async function runTaskAcceptance(state: Q04State, browser: Browser): Prom
       .locator('#messages .msg')
       .filter({ hasText: sourceText })
       .first();
-    // 人类消息的任务入口默认收起，悬停消息后出现；点击仍打开同一来源任务表单。
     await sourceMessage.hover();
-    await sourceMessage.locator('.msg-task-convert').click();
-    await creator.locator('#task-create-modal').waitFor({ state: 'visible' });
-    check(
-      '从消息建任务显示来源提示',
-      ((await creator.locator('#task-source-hint').innerText()) ?? '').includes('从消息创建'),
+    checkEqual(
+      '消息不再显示转为任务入口',
+      await sourceMessage.locator('.msg-task-convert').count(),
+      0,
     );
-    await creator.fill('#task-title', title);
-    await creator.fill('#task-description', '生成 Q04 验收报告并给出证据');
-    await creator.fill('#task-acceptance', '报告可打开；验收清单逐项通过');
-    await creator.selectOption('#task-reviewer', state.actors.u3.actor_id);
-    await creator.selectOption('#task-assignee', state.actors.u2.actor_id);
-    await creator.locator('#task-create-form button[type="submit"]').click();
-    await creator.locator('#task-create-modal').waitFor({ state: 'hidden' });
-    await creator.locator('#task-detail-modal').waitFor({ state: 'visible' });
+    checkEqual('群头部不再显示新建任务', await creator.locator('#task-create').isVisible(), false);
+    const sourceMessageId = await sourceMessage.getAttribute('data-message-id');
+    const created = await createTaskViaApi(state, {
+      title,
+      assignee: state.actors.u2.actor_id,
+      reviewer: state.actors.u3.actor_id,
+      description: '生成 Q04 验收报告并给出证据',
+      acceptance_criteria: '报告可打开；验收清单逐项通过',
+      source_message_id: sourceMessageId ?? undefined,
+    });
+    await creator.reload();
+    await waitRoom(creator, state.rooms.main, 'Q04 主验收群');
+    await openTask(creator, title);
     let task = await taskByTitle(state, state.rooms.main, title);
-    check('UI 建任务绑定来源消息', Boolean(task.source_message_id), task);
-    checkEqual('UI 建任务进入待接手', task.status, 'offered');
+    check('API 建任务绑定来源消息', Boolean(task.source_message_id), task);
+    checkEqual('API 建任务进入待接手', task.status, 'offered');
+    checkEqual('API 建任务任务 ID 一致', task.task_id, created.task_id);
     await closeTaskDetails(creator);
 
     // U2 接受并更新进度、报告阻塞、恢复。

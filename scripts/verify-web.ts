@@ -10871,7 +10871,7 @@ async function main(): Promise<void> {
       await context.close();
     }
 
-    // 2b-4b. 转为任务入口：人类与 Agent 默认收起、hover/键盘出现，触屏仅人类可见。
+    // 2b-4b. 任务创建 UI 已撤下：消息不显示“转为任务”，群头部不显示“新建任务”。
     {
       const convertGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
@@ -10881,10 +10881,8 @@ async function main(): Promise<void> {
       });
       const convertRoomId = convertGroup.room.room_id;
       await acceptRoomInvites(data.agentAToken, convertRoomId);
-      const humanMarker = '人类任务来源消息';
-      const agentMarker = 'Agent 任务来源消息';
-      await sendRoomMessage(data.humanToken, convertRoomId, humanMarker);
-      await sendRoomMessage(data.agentAToken, convertRoomId, agentMarker);
+      await sendRoomMessage(data.humanToken, convertRoomId, '人类任务来源消息');
+      await sendRoomMessage(data.agentAToken, convertRoomId, 'Agent 任务来源消息');
       const { context, page } = await makeContext(
         browser,
         data.humanToken,
@@ -10893,172 +10891,13 @@ async function main(): Promise<void> {
       );
       await page.goto(`${server.base}/c/${convertRoomId}`);
       await waitRoom(page, convertRoomId, '任务入口可见性群');
-      const humanMessage = page.locator('#messages .msg').filter({ hasText: humanMarker }).last();
-      const agentMessage = page.locator('#messages .msg').filter({ hasText: agentMarker }).last();
-      await humanMessage.locator('.msg-task-convert').waitFor();
-      await agentMessage.locator('.msg-task-convert').waitFor();
+      checkEqual('群头部不显示新建任务', await page.locator('#task-create').isVisible(), false);
       checkEqual(
-        '消息节点标记人类发送方',
-        await humanMessage.getAttribute('data-sender-kind'),
-        'human',
-      );
-      checkEqual(
-        '消息节点标记 Agent 发送方',
-        await agentMessage.getAttribute('data-sender-kind'),
-        'agent',
-      );
-      checkEqual(
-        '人类消息转为任务默认收起',
-        await humanMessage.locator('.msg-task-convert').evaluate(
-          (element) => getComputedStyle(element).opacity,
-        ),
-        '0',
-      );
-      checkEqual(
-        '人类消息转为任务默认不接收指针',
-        await humanMessage.locator('.msg-task-convert').evaluate(
-          (element) => getComputedStyle(element).pointerEvents,
-        ),
-        'none',
-      );
-      checkEqual(
-        'Agent 消息转为任务默认收起',
-        await agentMessage.locator('.msg-task-convert').evaluate(
-          (element) => getComputedStyle(element).opacity,
-        ),
-        '0',
-      );
-      await humanMessage.hover();
-      await waitUntil(
-        async () =>
-          (await humanMessage.locator('.msg-task-convert').evaluate(
-            (element) => getComputedStyle(element).opacity,
-          )) === '1',
-        '人类消息 hover 显示转为任务',
-        5_000,
-      );
-      check('人类消息 hover 显示转为任务', true);
-      await humanMessage.locator('.msg-task-convert').click();
-      await page.locator('#task-create-modal').waitFor({ state: 'visible' });
-      check(
-        '人类消息转为任务仍打开来源任务表单',
-        ((await page.locator('#task-source-hint').innerText()) ?? '').includes('从消息创建'),
-      );
-      await page.locator('#task-create-cancel').click();
-      await page.locator('#task-create-modal').waitFor({ state: 'hidden' });
-      await agentMessage.hover();
-      await waitUntil(
-        async () =>
-          (await agentMessage.locator('.msg-task-convert').evaluate(
-            (element) => getComputedStyle(element).opacity,
-          )) === '1',
-        'Agent 消息 hover 显示转为任务',
-        5_000,
-      );
-      check('Agent 消息 hover 显示转为任务', true);
-      await agentMessage.locator('.msg-task-convert').click();
-      await page.locator('#task-create-modal').waitFor({ state: 'visible' });
-      check(
-        'Agent 消息转为任务仍打开来源任务表单',
-        ((await page.locator('#task-source-hint').innerText()) ?? '').includes('从消息创建'),
-      );
-      await page.locator('#task-create-cancel').click();
-      await page.locator('#task-create-modal').waitFor({ state: 'hidden' });
-      await page.locator('#title').hover();
-      await waitUntil(
-        async () =>
-          (await agentMessage.locator('.msg-task-convert').evaluate(
-            (element) => getComputedStyle(element).opacity,
-          )) === '0',
-        '移出 hover 后 Agent 任务入口收起',
-        5_000,
-      );
-      checkEqual(
-        '移出 hover 后人类任务入口收起',
-        await humanMessage.locator('.msg-task-convert').evaluate(
-          (element) => getComputedStyle(element).opacity,
-        ),
-        '0',
-      );
-      await agentMessage.locator('.msg-task-convert').focus();
-      checkEqual(
-        '键盘聚焦 Agent 任务入口时显示',
-        await agentMessage.locator('.msg-task-convert').evaluate(
-          (element) => getComputedStyle(element).opacity,
-        ),
-        '1',
-      );
-      await page.keyboard.press('Enter');
-      await page.locator('#task-create-modal').waitFor({ state: 'visible' });
-      check('键盘可触发 Agent 消息转为任务', true);
-      await page.locator('#task-create-cancel').click();
-      await humanMessage.locator('.msg-task-convert').focus();
-      checkEqual(
-        '键盘聚焦人类任务入口时显示',
-        await humanMessage.locator('.msg-task-convert').evaluate(
-          (element) => getComputedStyle(element).opacity,
-        ),
-        '1',
+        '消息不显示转为任务入口',
+        await page.locator('#messages .msg-task-convert').count(),
+        0,
       );
       await context.close();
-
-      const touchContext = await browser.newContext({
-        viewport: { width: 390, height: 844 },
-        hasTouch: true,
-        isMobile: true,
-      });
-      await touchContext.addInitScript({ content: initScript(data.humanToken) });
-      const touchPage = await touchContext.newPage();
-      touchPage.setDefaultTimeout(15_000);
-      touchPage.on('pageerror', (error) => allErrors.push(`pageerror: ${error.message}`));
-      await touchPage.goto(`${server.base}/c/${convertRoomId}`);
-      await waitRoom(touchPage, convertRoomId, '任务入口可见性群');
-      const touchHoverNone = await touchPage.evaluate(
-        `window.matchMedia('(hover: none)').matches`,
-      );
-      check('触屏媒体查询生效', touchHoverNone, touchHoverNone);
-      const touchHuman = touchPage.locator('#messages .msg').filter({ hasText: humanMarker }).last();
-      const touchAgent = touchPage.locator('#messages .msg').filter({ hasText: agentMarker }).last();
-      await touchHuman.locator('.msg-task-convert').waitFor();
-      await touchHuman.scrollIntoViewIfNeeded();
-      await waitUntil(async () =>
-        (await touchHuman.locator('.msg-task-convert').evaluate(element =>
-          getComputedStyle(element).opacity)) === '1', '触屏任务按钮样式就绪');
-      checkEqual(
-        '触屏人类消息保留转为任务',
-        await touchHuman.locator('.msg-task-convert').isVisible(),
-        true,
-      );
-      checkEqual(
-        '触屏人类消息转为任务常显',
-        await touchHuman.locator('.msg-task-convert').evaluate(
-          (element) => getComputedStyle(element).opacity,
-        ),
-        '1',
-      );
-      checkEqual(
-        '触屏人类消息转为任务可点击',
-        await touchHuman.locator('.msg-task-convert').evaluate(
-          (element) => getComputedStyle(element).pointerEvents,
-        ),
-        'auto',
-      );
-      await touchHuman.locator('.msg-task-convert').click();
-      await touchPage.locator('#task-create-modal').waitFor({ state: 'visible' });
-      check('触屏人类消息可打开来源任务表单', true);
-      await touchPage.locator('#task-create-cancel').click();
-      await touchPage.locator('#task-create-modal').waitFor({ state: 'hidden' });
-      checkEqual(
-        '触屏 Agent 消息隐藏转为任务',
-        await touchAgent.locator('.msg-task-convert').isHidden(),
-        true,
-      );
-      checkEqual(
-        '390px 消息任务入口不横向溢出',
-        await touchPage.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),
-        true,
-      );
-      await touchContext.close();
     }
 
     // 2b-5. G03 群角色界面：owner 任免管理员、管理员操作入口与公告读写。
