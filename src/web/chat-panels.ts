@@ -23,7 +23,7 @@ export function sidebarPane(): string {
         </svg>
         <span class="request-badge" id="contact-requests-badge" hidden>0</span>
       </button>
-      <button class="icon-btn" id="my-tasks" type="button" aria-label="我的任务" title="我的任务">
+      <button class="icon-btn" id="my-tasks" type="button" aria-label="我的任务" title="我的任务" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <rect x="5" y="4.5" width="14" height="16" rx="2.5"></rect>
           <path d="M9.5 4.5V3.3c0-.4.3-.7.7-.7h3.6c.4 0 .7.3.7.7v1.2"></path>

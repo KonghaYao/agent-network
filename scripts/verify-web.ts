@@ -349,6 +349,7 @@ export async function makeContext(
 ): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ viewport, ...contextOptions });
   await context.addInitScript({ content: initScript(token, seedTokenOnce) });
+  await context.addInitScript({ content: 'window.__TASK_UI_ENABLED = true;' });
   const page = await context.newPage();
   page.setDefaultTimeout(15_000);
   const recordError = (message: string): void => {
@@ -10871,7 +10872,7 @@ async function main(): Promise<void> {
       await context.close();
     }
 
-    // 2b-4b. 任务创建 UI 已撤下：消息不显示“转为任务”，群头部不显示“新建任务”。
+    // 2b-4b. 任务 UI 默认整体隐藏：消息不显示“转为任务”，群头部不显示任务入口。
     {
       const convertGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
         request_id: requestId('room'),
@@ -10883,21 +10884,30 @@ async function main(): Promise<void> {
       await acceptRoomInvites(data.agentAToken, convertRoomId);
       await sendRoomMessage(data.humanToken, convertRoomId, '人类任务来源消息');
       await sendRoomMessage(data.agentAToken, convertRoomId, 'Agent 任务来源消息');
-      const { context, page } = await makeContext(
-        browser,
+      // 默认（生产）上下文不设置 window.__TASK_UI_ENABLED，整个任务 UI 必须隐藏。
+      const hiddenContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      await hiddenContext.addInitScript(
+        (token: string) => localStorage.setItem('agent-network-token', token),
         data.humanToken,
-        { width: 1280, height: 800 },
-        allErrors,
       );
-      await page.goto(`${server.base}/c/${convertRoomId}`);
-      await waitRoom(page, convertRoomId, '任务入口可见性群');
-      checkEqual('群头部不显示新建任务', await page.locator('#task-create').isVisible(), false);
+      const hiddenPage = await hiddenContext.newPage();
+      hiddenPage.setDefaultTimeout(15_000);
+      await hiddenPage.goto(`${server.base}/c/${convertRoomId}`);
+      await waitRoom(hiddenPage, convertRoomId, '任务入口可见性群');
+      checkEqual('默认隐藏新建任务', await hiddenPage.locator('#task-create').isVisible(), false);
       checkEqual(
         '消息不显示转为任务入口',
-        await page.locator('#messages .msg-task-convert').count(),
+        await hiddenPage.locator('#messages .msg-task-convert').count(),
         0,
       );
-      await context.close();
+      checkEqual('默认隐藏任务切换', await hiddenPage.locator('#task-toggle').isVisible(), false);
+      checkEqual('默认隐藏我的任务', await hiddenPage.locator('#my-tasks').isVisible(), false);
+      checkEqual(
+        '默认不渲染任务卡片',
+        await hiddenPage.locator('#messages .msg-task-slot:not([hidden])').count(),
+        0,
+      );
+      await hiddenContext.close();
     }
 
     // 2b-5. G03 群角色界面：owner 任免管理员、管理员操作入口与公告读写。

@@ -133,6 +133,35 @@ async function acceptTaskViaApi(
   });
 }
 
+export async function runTaskUiHiddenAcceptance(state: Q04State, browser: Browser): Promise<void> {
+  console.log('· Q04 任务 UI 已按产品决定整体隐藏');
+  const { context, page } = await makeContext(
+    browser,
+    state.tokens.u1,
+    { width: 1280, height: 900 },
+    [],
+  );
+  try {
+    await page.goto(`${state.base}/c/${state.rooms.main}`);
+    await waitRoom(page, state.rooms.main, 'Q04 主验收群');
+    checkEqual('Q04 任务切换隐藏', await page.locator('#task-toggle').isVisible(), false);
+    checkEqual('Q04 我的任务隐藏', await page.locator('#my-tasks').isVisible(), false);
+    checkEqual('Q04 新建任务隐藏', await page.locator('#task-create').isVisible(), false);
+    checkEqual(
+      'Q04 转为任务隐藏',
+      await page.locator('#messages .msg-task-convert').count(),
+      0,
+    );
+    checkEqual(
+      'Q04 任务卡片隐藏',
+      await page.locator('#messages .msg-task-card:visible, #messages .msg-task-link:visible').count(),
+      0,
+    );
+  } finally {
+    await context.close();
+  }
+}
+
 export async function runTaskAcceptance(state: Q04State, browser: Browser): Promise<void> {
   console.log('· Q04 任务：消息转任务、接受、进度、交接、提交、退回、验收');
   const creatorContext = await makeContext(

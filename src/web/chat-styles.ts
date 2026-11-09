@@ -76,6 +76,7 @@ export const APP_STYLE = `
     background: transparent; color: var(--wx-text); font-size: 22px; line-height: 1;
     display: grid; place-items: center; }
   .icon-btn:hover { background: var(--wx-hover); }
+  .icon-btn[hidden] { display: none; }
   .icon-btn svg { width: 18px; height: 18px; display: block; fill: none;
     stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .search-box { position: relative; display: block; }
