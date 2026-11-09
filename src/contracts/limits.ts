@@ -124,6 +124,15 @@ export const LIMITS = {
    * 同样属于“超长”范围。低于该值的截断消息保持一次展开后不再折叠。
    */
   webLongMessageCollapseBytes: 3 * 1024,
+  /**
+   * 消息正文中连续 base64 文本的最小折叠长度（去除空白后的字符数）。
+   *
+   * 64 位哈希、短 token 不触发；只对足够长、且几乎全部由 base64 字符组成的
+   * 文本做展示折叠，不解码、不识别文件类型。
+   */
+  webBase64CollapseChars: 512,
+  /** 折叠态只渲染的 base64 预览字符数；复制始终使用完整正文。 */
+  webBase64PreviewChars: 384,
   /** 单次成员变更上限。 */
   memberChangeMax: 20,
   /** 好友申请附言 UTF-8 字节上限。 */

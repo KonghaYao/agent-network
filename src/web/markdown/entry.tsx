@@ -15,6 +15,7 @@ import {
   createElement,
   isValidElement,
   useContext,
+  useState,
   type ComponentPropsWithoutRef,
   type ComponentType,
   type ReactElement,
@@ -33,6 +34,8 @@ import {
   type Components,
   type ExtraProps,
 } from 'streamdown';
+
+import { LIMITS } from '../../contracts/limits';
 
 export interface MarkdownOptions {
   /** 已知成员名；按最长优先匹配 `@名字`。 */
@@ -62,6 +65,116 @@ type TableProps = ComponentPropsWithoutRef<'table'> & NodeProps;
 type HeadingTag = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
 
 const MentionContext = createContext<string[]>([]);
+/** 512B 截断预览不折叠 base64，避免复制按钮只拿到半截内容。 */
+const PreviewContext = createContext(false);
+
+const BASE64_TEXT_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+
+/** 空白也计入分母，避免把带空格的英文长文误判成 base64。 */
+function base64CharRatioOk(text: string): boolean {
+  if (!text) return false;
+  let allowed = 0;
+  for (const char of text) {
+    if (BASE64_TEXT_CHARS.includes(char)) allowed += 1;
+  }
+  return allowed / text.length >= 0.95;
+}
+
+function base64CleanLength(text: string): number {
+  return text.replace(/\s+/gu, '').length;
+}
+
+/** 与页面纯文本路径 isBase64BlockText 保持同一判定规则。 */
+function isBase64Block(text: string): boolean {
+  const clean = text.replace(/\s+/gu, '');
+  if (clean.length < LIMITS.webBase64CollapseChars) return false;
+  if (!/[A-Za-z]/u.test(clean) || !/[0-9]/u.test(clean)) return false;
+  return base64CharRatioOk(text);
+}
+
+function base64SizeLabel(text: string): string {
+  const kb = base64CleanLength(text) / 1024;
+  const value = kb >= 10 ? String(Math.round(kb)) : (Math.round(kb * 10) / 10).toFixed(1);
+  return `base64 内容 · 约 ${value} KB`;
+}
+
+/** 摘取纯文本段落；含粗体、链接、行内代码等富文本时返回 null。 */
+function plainParagraphText(children: ReactNode): string | null {
+  let text = '';
+  let plain = true;
+  Children.forEach(children, (child) => {
+    if (!plain) return;
+    if (typeof child === 'string' || typeof child === 'number') {
+      text += String(child);
+      return;
+    }
+    if (isValidElement(child) && child.type === 'br') {
+      text += '\n';
+      return;
+    }
+    plain = false;
+  });
+  return plain ? text : null;
+}
+
+/** 递归摘取代码块文本；语法高亮 span 只贡献文本，不重新解析。 */
+function codeBlockText(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(codeBlockText).join('');
+  if (isValidElement(node)) {
+    if (node.type === 'br') return '\n';
+    return codeBlockText((node.props as { children?: ReactNode }).children);
+  }
+  return '';
+}
+
+/**
+ * base64 折叠块：默认 3 行预览，展开后完整内容在限高容器内滚动。
+ * 只做文本展示与复制，不解码、不生成链接、不做 Markdown 二次解析。
+ */
+function Base64Block({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const cleanLength = base64CleanLength(text);
+  const preview = text.slice(0, LIMITS.webBase64PreviewChars);
+  const handleCopy = async (): Promise<void> => {
+    try {
+      if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+        throw new Error('clipboard unavailable');
+      }
+      await navigator.clipboard.writeText(text);
+      setCopyState('copied');
+    } catch {
+      setCopyState('failed');
+    }
+  };
+  return (
+    <div className={`msg-base64${expanded ? ' is-expanded' : ''}`} data-base64-length={cleanLength}>
+      <div className="msg-base64-head">
+        <span className="msg-base64-title">{base64SizeLabel(text)}</span>
+        <span className="msg-base64-actions">
+          <button
+            type="button"
+            className="msg-base64-toggle"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? '收起' : '查看'}
+          </button>
+          <button type="button" className="msg-base64-copy" onClick={handleCopy}>
+            复制
+          </button>
+          <span className="msg-base64-status" role="status" aria-live="polite">
+            {copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : ''}
+          </span>
+        </span>
+      </div>
+      <div className="msg-base64-body">
+        <pre>{expanded ? text : preview}</pre>
+      </div>
+    </div>
+  );
+}
 
 /** 只允许无凭据的 http/https、mailto、同源路径与页内片段。 */
 function safeHref(value: unknown): string | null {
@@ -164,6 +277,9 @@ function cloneWithChildren(element: ReactElement, children: ReactNode): ReactEle
 }
 
 function MentionedParagraph({ node: _node, children, ...rest }: ParagraphProps) {
+  const preview = useContext(PreviewContext);
+  const plain = preview ? null : plainParagraphText(children);
+  if (plain !== null && isBase64Block(plain)) return <Base64Block text={plain} />;
   return <p {...rest}>{applyMentions(children, useContext(MentionContext))}</p>;
 }
 
@@ -231,6 +347,9 @@ function BlockedImage(_props: ComponentPropsWithoutRef<'img'> & NodeProps) {
 }
 
 function MarkdownPre({ node: _node, className, children, ...rest }: PreProps) {
+  const preview = useContext(PreviewContext);
+  const text = preview ? '' : codeBlockText(children);
+  if (text && isBase64Block(text)) return <Base64Block text={text} />;
   return (
     <pre {...rest} className={className ? `md-pre ${className}` : 'md-pre'}>
       {children}
@@ -322,23 +441,25 @@ function MarkdownBody({ text, options }: { text: string; options: MarkdownOption
   // 可点击的残缺 URL。完整展开路径不做 remend，保持原文。
   const source = options.preview ? closeIncompletePreview(text) : text;
   return (
-    <MentionContext.Provider value={mentions}>
-      <Streamdown
-        mode="static"
-        parseIncompleteMarkdown={false}
-        animated={false}
-        controls={false}
-        lineNumbers={false}
-        linkSafety={{ enabled: false }}
-        tableMaxHeight={0}
-        codeBlockMaxHeight={0}
-        components={components}
-        remarkPlugins={[...remarkPlugins]}
-        rehypePlugins={[...rehypePlugins]}
-      >
-        {source}
-      </Streamdown>
-    </MentionContext.Provider>
+    <PreviewContext.Provider value={Boolean(options.preview)}>
+      <MentionContext.Provider value={mentions}>
+        <Streamdown
+          mode="static"
+          parseIncompleteMarkdown={false}
+          animated={false}
+          controls={false}
+          lineNumbers={false}
+          linkSafety={{ enabled: false }}
+          tableMaxHeight={0}
+          codeBlockMaxHeight={0}
+          components={components}
+          remarkPlugins={[...remarkPlugins]}
+          rehypePlugins={[...rehypePlugins]}
+        >
+          {source}
+        </Streamdown>
+      </MentionContext.Provider>
+    </PreviewContext.Provider>
   );
 }
 

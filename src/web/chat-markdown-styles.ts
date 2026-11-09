@@ -56,6 +56,34 @@ export const MARKDOWN_STYLE = `
     display: block; margin-top: 4px; font-size: 11px; line-height: 1.4;
     color: var(--wx-muted); font-weight: 400; font-style: normal; }
 
+  /* 大段 base64：紧凑区块，默认 3 行预览 + 渐隐；展开后限高滚动。 */
+  .msg-base64 { box-sizing: border-box; max-width: 100%; margin: 8px 0;
+    border: 1px solid var(--wx-line); border-radius: 8px; background: var(--wx-search);
+    overflow: hidden; white-space: normal; }
+  .msg-markdown .msg-base64 { width: 100%; }
+  .msg-base64-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+    border-bottom: 1px solid var(--wx-line); font-size: 12px; line-height: 1.4;
+    color: var(--wx-muted); }
+  .msg-base64-title { flex: 1 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .msg-base64-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+  .msg-base64-actions button { border: 0; background: none; padding: 0; cursor: pointer;
+    color: var(--wx-link); font: inherit; font-size: 12px; line-height: 1.4; }
+  .msg-base64-actions button:hover { text-decoration: underline; }
+  .msg-base64-status { font-size: 11px; color: var(--wx-muted); }
+  .msg-base64-body { position: relative; box-sizing: border-box; padding: 8px 10px;
+    max-height: calc(18px * 3 + 16px); overflow: hidden; }
+  .msg-base64-body pre { margin: 0; padding: 0; background: none; color: var(--wx-text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px; line-height: 18px; white-space: pre-wrap;
+    overflow-wrap: anywhere; word-break: break-word; }
+  .msg-base64-body::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0;
+    height: 24px; pointer-events: none;
+    background: linear-gradient(to bottom, transparent, var(--wx-search)); }
+  .msg-base64.is-expanded .msg-base64-body { max-height: 240px; overflow: auto;
+    overscroll-behavior: contain; }
+  .msg-base64.is-expanded .msg-base64-body::after { display: none; }
+
   @media (prefers-color-scheme: dark) {
     .msg-markdown .md-table tr:nth-child(even) td { background: rgb(255 255 255 / 3%); }
   }

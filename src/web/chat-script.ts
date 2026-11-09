@@ -101,6 +101,9 @@ const WEB_REFRESH_DEBOUNCE_MS = ${LIMITS.webRefreshDebounceMs};
 const WEB_AGENT_AUTO_EXPAND_BYTES = ${LIMITS.webAgentAutoExpandBytes};
 // 超长正文默认折叠为「查看全文 / 收起」；阈值只在 limits.ts 维护。
 const WEB_LONG_MESSAGE_COLLAPSE_BYTES = ${LIMITS.webLongMessageCollapseBytes};
+// 大段 base64 默认折叠为紧凑区块；阈值与预览长度只在 limits.ts 维护。
+const WEB_BASE64_COLLAPSE_CHARS = ${LIMITS.webBase64CollapseChars};
+const WEB_BASE64_PREVIEW_CHARS = ${LIMITS.webBase64PreviewChars};
 // 长会话才开启布局隔离；阈值只在 limits.ts 维护。
 const WEB_LONG_MESSAGE_THRESHOLD = ${LIMITS.webLongMessageListThreshold};
 const roomListElement = document.getElementById('room-list');

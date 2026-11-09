@@ -223,12 +223,154 @@ function invalidateMentionNames() {
   cachedMentionNames = null;
 }
 
+const BASE64_TEXT_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+
+/** base64 字符占比：空白也计入分母，避免把带空格的英文长文误判成 base64。 */
+function base64CharRatioOk(text) {
+  if (!text) return false;
+  let allowed = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (BASE64_TEXT_CHARS.indexOf(text.charAt(index)) >= 0) allowed += 1;
+  }
+  return allowed / text.length >= 0.95;
+}
+
+function base64CleanLength(text) {
+  return text.replace(/\\s+/g, '').length;
+}
+
+/** 与 Markdown 岛 entry.tsx 的 isBase64Block 保持同一判定规则。 */
+function isBase64BlockText(text) {
+  const clean = text.replace(/\\s+/g, '');
+  if (clean.length < WEB_BASE64_COLLAPSE_CHARS) return false;
+  if (!/[A-Za-z]/.test(clean) || !/[0-9]/.test(clean)) return false;
+  return base64CharRatioOk(text);
+}
+
+function isBase64LineCandidate(line) {
+  const trimmed = line.trim();
+  return trimmed.length > 0 && base64CharRatioOk(trimmed);
+}
+
+/**
+ * 把正文切成普通文本与连续 base64 行块。
+ *
+ * 只把整行几乎全为 base64 字符的连续行合并；带前缀的句子不会被卷进折叠块，
+ * 短哈希也不会达到长度阈值。返回空数组表示正文没有可折叠 base64。
+ */
+function splitBase64Segments(text) {
+  const segments = [];
+  if (!text) return segments;
+  const lines = [];
+  let lineStart = 0;
+  while (lineStart <= text.length) {
+    const newline = text.indexOf('\\n', lineStart);
+    const lineEnd = newline < 0 ? text.length : newline;
+    lines.push({ start: lineStart, end: lineEnd, text: text.slice(lineStart, lineEnd) });
+    if (newline < 0) break;
+    lineStart = newline + 1;
+  }
+  let index = 0;
+  let plainStart = 0;
+  while (index < lines.length) {
+    if (!isBase64LineCandidate(lines[index].text)) {
+      index += 1;
+      continue;
+    }
+    let endIndex = index;
+    while (endIndex < lines.length && isBase64LineCandidate(lines[endIndex].text)) {
+      endIndex += 1;
+    }
+    const candidateStart = lines[index].start;
+    const candidateEnd = lines[endIndex - 1].end;
+    const candidate = text.slice(candidateStart, candidateEnd);
+    if (!isBase64BlockText(candidate)) {
+      index += 1;
+      continue;
+    }
+    if (candidateStart > plainStart) {
+      segments.push({ text: text.slice(plainStart, candidateStart), base64: false });
+    }
+    segments.push({ text: candidate, base64: true });
+    plainStart = candidateEnd;
+    index = endIndex;
+  }
+  if (plainStart < text.length) segments.push({ text: text.slice(plainStart), base64: false });
+  return segments;
+}
+
+function base64SizeLabel(text) {
+  const kb = base64CleanLength(text) / 1024;
+  const value = kb >= 10 ? String(Math.round(kb)) : (Math.round(kb * 10) / 10).toFixed(1);
+  return 'base64 内容 · 约 ' + value + ' KB';
+}
+
+/**
+ * 纯文本 base64 折叠块：不解码、不链接化、不做 Markdown 二次解析。
+ * 折叠态只写入预览文本；完整原文保留在闭包里，复制始终使用完整原文。
+ */
+function createBase64Block(text) {
+  const root = document.createElement('div');
+  root.className = 'msg-base64';
+  root.dataset.base64Length = String(base64CleanLength(text));
+  const head = document.createElement('div');
+  head.className = 'msg-base64-head';
+  const title = document.createElement('span');
+  title.className = 'msg-base64-title';
+  title.textContent = base64SizeLabel(text);
+  const actions = document.createElement('span');
+  actions.className = 'msg-base64-actions';
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'msg-base64-toggle';
+  toggle.textContent = '查看';
+  toggle.setAttribute('aria-expanded', 'false');
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'msg-base64-copy';
+  copy.textContent = '复制';
+  const status = document.createElement('span');
+  status.className = 'msg-base64-status';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+  const body = document.createElement('div');
+  body.className = 'msg-base64-body';
+  const pre = document.createElement('pre');
+  let expanded = false;
+  const paint = function () {
+    pre.textContent = expanded ? text : text.slice(0, WEB_BASE64_PREVIEW_CHARS);
+    root.classList.toggle('is-expanded', expanded);
+    toggle.textContent = expanded ? '收起' : '查看';
+    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  };
+  paint();
+  toggle.addEventListener('click', function () {
+    expanded = !expanded;
+    paint();
+  });
+  copy.addEventListener('click', function () {
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+      status.textContent = '复制失败';
+      return;
+    }
+    navigator.clipboard.writeText(text).then(function () {
+      status.textContent = '已复制';
+    }, function () {
+      status.textContent = '复制失败';
+    });
+  });
+  actions.append(toggle, copy, status);
+  head.append(title, actions);
+  body.append(pre);
+  root.append(head, body);
+  return root;
+}
+
 /** 纯文本写入，只把已知成员名对应的 @ 片段包成高亮，避免 HTML 注入。 */
-function renderRichText(element, text) {
-  element.replaceChildren();
+function appendRichText(element, text) {
   const names = mentionNames();
   if (names.length === 0) {
-    element.textContent = text;
+    if (text) element.append(document.createTextNode(text));
     return;
   }
   // last 是“已写入”的位置；scan 可以跳过未知 @，但不能因此丢掉它前面的正文。
@@ -257,6 +399,40 @@ function renderRichText(element, text) {
     scan = last;
   }
   if (last < text.length) element.append(document.createTextNode(text.slice(last)));
+}
+
+/**
+ * 纯文本正文：把连续 base64 行替换为折叠块，其余文本仍走 @ 高亮。
+ * allowBase64=false 用于 512B 截断预览，避免复制按钮只拿到半截 base64。
+ */
+function renderRichText(element, text, allowBase64) {
+  element.replaceChildren();
+  const segments = allowBase64 ? splitBase64Segments(text) : [];
+  if (segments.length === 0) {
+    appendRichText(element, text);
+    return 0;
+  }
+  let folded = 0;
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (segment.base64) {
+      element.append(createBase64Block(segment.text));
+      folded += 1;
+      continue;
+    }
+    let chunk = segment.text;
+    // 折叠块本身是块级元素；去掉紧邻的换行，避免 pre-wrap 再撑出一行空白。
+    if (index > 0 && segments[index - 1].base64) {
+      if (chunk.indexOf('\\r\\n') === 0) chunk = chunk.slice(2);
+      else if (chunk.charAt(0) === '\\n') chunk = chunk.slice(1);
+    }
+    if (index + 1 < segments.length && segments[index + 1].base64) {
+      if (chunk.endsWith('\\r\\n')) chunk = chunk.slice(0, -2);
+      else if (chunk.charAt(chunk.length - 1) === '\\n') chunk = chunk.slice(0, -1);
+    }
+    if (chunk) appendRichText(element, chunk);
+  }
+  return folded;
 }
 
 function timeDivider(value) {

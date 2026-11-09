@@ -18116,6 +18116,42 @@ async function main(): Promise<void> {
         });
       }
 
+      // base64 折叠：约 2.1KB 编码文本、64 位短哈希、人类纯文本段落。
+      const base64Payload = Buffer.from('base64-fold-fixture-'.repeat(80)).toString('base64');
+      const base64Tail = base64Payload.slice(-24);
+      const agentBase64Marker = 'Agent base64 折叠标记';
+      const agentBase64Sent = await rawTool<{ message: { message_id: string } }>(
+        data.agentAToken,
+        'network_message_send',
+        {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: mdRoomId,
+          invoke: [],
+          body: [agentBase64Marker, '```text', base64Payload, '```'].join('\n'),
+        },
+      );
+      const agentBase64MessageId = agentBase64Sent.message.message_id;
+      const humanBase64Sent = await rawTool<{ message: { message_id: string } }>(
+        data.humanToken,
+        'network_message_send',
+        {
+          request_id: requestId('msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: mdRoomId,
+          body: base64Payload,
+        },
+      );
+      const humanBase64MessageId = humanBase64Sent.message.message_id;
+      const shortHashMarker = '64 位哈希不折叠';
+      const shortHash = createHash('sha256').update('base64-fold-short').digest('hex');
+      await rawTool(data.humanToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        body: [shortHashMarker, shortHash].join('\n'),
+      });
+
       const finalMarker = '最终回答标记';
       const invoke = await rawTool<{ delivery_ids: string[] }>(
         data.humanToken,
@@ -18209,6 +18245,18 @@ async function main(): Promise<void> {
       });
       await page.goto(`${server.base}/c/${mdRoomId}`);
       await waitRoom(page, mdRoomId, 'AI Markdown 群');
+      await page.evaluate(`(() => {
+        window.__copiedBase64 = null;
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: function (text) {
+              window.__copiedBase64 = text;
+              return Promise.resolve();
+            }
+          }
+        });
+      })()`);
 
       const richMessage = page.locator('#messages .msg').filter({ hasText: richMarker }).last();
       await waitForLazyMarkdown(richMessage);
@@ -18756,6 +18804,163 @@ async function main(): Promise<void> {
         'Markdown bundle 请求带内容版本',
         /\/assets\/chat-markdown\.js\?v=[0-9a-f]{12}$/.test(markdownRequests[0] ?? ''),
         markdownRequests[0],
+      );
+
+      // base64：Agent 代码块默认折叠、查看/收起、复制完整原文、短哈希不折叠。
+      const agentBase64Message = page.locator(
+        `#messages .msg[data-message-id="${agentBase64MessageId}"]`,
+      );
+      await waitForLazyMarkdown(agentBase64Message);
+      await agentBase64Message.locator('.msg-base64').waitFor();
+      checkEqual(
+        'Agent base64 代码块生成折叠区块',
+        await agentBase64Message.locator('.msg-base64').count(),
+        1,
+      );
+      const agentBase64Title = (
+        (await agentBase64Message.locator('.msg-base64-title').textContent()) ?? ''
+      ).trim();
+      check(
+        'base64 标题显示约多少 KB',
+        /^base64 内容 · 约 [\d.]+ KB$/.test(agentBase64Title),
+        agentBase64Title,
+      );
+      const agentBase64Body = agentBase64Message.locator('.msg-base64-body');
+      const collapsedBase64Text = (await agentBase64Body.textContent()) ?? '';
+      check(
+        'base64 默认不渲染完整正文',
+        !collapsedBase64Text.includes(base64Tail),
+        collapsedBase64Text.length,
+      );
+      checkEqual(
+        'base64 默认收起',
+        await agentBase64Message.locator('.msg-base64-toggle').getAttribute('aria-expanded'),
+        'false',
+      );
+      checkEqual(
+        'base64 查看按钮文案',
+        (await agentBase64Message.locator('.msg-base64-toggle').textContent())?.trim(),
+        '查看',
+      );
+      checkEqual(
+        'base64 不生成链接',
+        await agentBase64Message.locator('.msg-base64 a').count(),
+        0,
+      );
+      checkEqual(
+        'base64 不生成 mention 高亮',
+        await agentBase64Message.locator('.msg-base64 .mention').count(),
+        0,
+      );
+
+      await page.evaluate('window.__copiedBase64 = null');
+      await agentBase64Message.locator('.msg-base64-copy').click();
+      await waitUntil(
+        async () => typeof (await page.evaluate('window.__copiedBase64')) === 'string',
+        'base64 复制写入完整原文',
+        3_000,
+      );
+      const copiedBase64 = (await page.evaluate('window.__copiedBase64')) as string;
+      checkEqual('base64 复制完整原文', copiedBase64.trim(), base64Payload);
+      await waitUntil(
+        async () =>
+          ((await agentBase64Message.locator('.msg-base64-status').textContent()) ?? '').trim() ===
+          '已复制',
+        'base64 复制成功提示',
+        3_000,
+      );
+
+      await agentBase64Message.locator('.msg-base64-toggle').click();
+      await waitUntil(
+        async () =>
+          (await agentBase64Message.locator('.msg-base64-toggle').getAttribute('aria-expanded')) ===
+          'true',
+        'base64 展开',
+        3_000,
+      );
+      checkEqual(
+        'base64 展开后按钮变收起',
+        (await agentBase64Message.locator('.msg-base64-toggle').textContent())?.trim(),
+        '收起',
+      );
+      check(
+        'base64 展开后显示完整正文',
+        ((await agentBase64Body.textContent()) ?? '').includes(base64Payload),
+      );
+      const expandedBase64Layout = (await agentBase64Body.evaluate((element) => ({
+        scrollHeight: element.scrollHeight,
+        clientHeight: element.clientHeight,
+        overflowY: getComputedStyle(element).overflowY,
+      }))) as { scrollHeight: number; clientHeight: number; overflowY: string };
+      check(
+        'base64 展开后限高并可滚动',
+        expandedBase64Layout.scrollHeight > expandedBase64Layout.clientHeight &&
+          (expandedBase64Layout.overflowY === 'auto' || expandedBase64Layout.overflowY === 'scroll'),
+        expandedBase64Layout,
+      );
+
+      await agentBase64Message.locator('.msg-base64-toggle').click();
+      await waitUntil(
+        async () =>
+          (await agentBase64Message.locator('.msg-base64-toggle').getAttribute('aria-expanded')) ===
+          'false',
+        'base64 再次收起',
+        3_000,
+      );
+      check(
+        'base64 收起后恢复预览',
+        !((await agentBase64Body.textContent()) ?? '').includes(base64Tail),
+      );
+
+      const shortHashMessage = page
+        .locator('#messages .msg')
+        .filter({ hasText: shortHashMarker })
+        .last();
+      await shortHashMessage.waitFor();
+      checkEqual(
+        '64 位哈希不生成折叠区块',
+        await shortHashMessage.locator('.msg-base64').count(),
+        0,
+      );
+      check(
+        '64 位哈希仍以文本显示',
+        ((await shortHashMessage.locator('.bubble').textContent()) ?? '').includes(shortHash),
+      );
+
+      // 人类长消息先加载全文，再对纯文本 base64 段落折叠并使用完整原文复制。
+      const humanBase64Message = page.locator(
+        `#messages .msg[data-message-id="${humanBase64MessageId}"]`,
+      );
+      await humanBase64Message.waitFor();
+      checkEqual(
+        '人类 base64 截断预览不提前折叠',
+        await humanBase64Message.locator('.msg-base64').count(),
+        0,
+      );
+      await humanBase64Message.locator('.expand').click();
+      await humanBase64Message.locator('.msg-base64').waitFor();
+      checkEqual(
+        '人类纯文本 base64 段落折叠',
+        await humanBase64Message.locator('.msg-base64').count(),
+        1,
+      );
+      check(
+        '人类 base64 默认只显示预览',
+        !((await humanBase64Message.locator('.msg-base64-body').textContent()) ?? '').includes(
+          base64Tail,
+        ),
+      );
+      await page.evaluate('window.__copiedBase64 = null');
+      await humanBase64Message.locator('.msg-base64-copy').click();
+      await waitUntil(
+        async () => typeof (await page.evaluate('window.__copiedBase64')) === 'string',
+        '人类 base64 复制写入完整原文',
+        3_000,
+      );
+      checkEqual(
+        '人类 base64 复制完整原文',
+        ((await page.evaluate('window.__copiedBase64')) as string).trim(),
+        base64Payload,
       );
 
       const mobile = await makeContext(

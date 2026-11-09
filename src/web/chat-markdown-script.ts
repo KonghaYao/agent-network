@@ -375,7 +375,8 @@ function renderMessageBody(bubble, text, item, allowMarkdown, preview, retry, el
   destroyBubbleMarkdown(bubble);
   bubble.__markdownText = null;
   clearBubbleMarkdownFailure(bubble);
-  renderRichText(bubble, text);
+  // 截断预览不折叠 base64：此时正文只有前 512B，复制会拿到半截内容。
+  renderRichText(bubble, text, !preview);
   if (!markdown) return Promise.resolve(false);
   // 纯文本快速路径：@ 高亮已由 renderRichText 完成，不创建 Streamdown root。
   if (!markdownNeedsRender(text)) return Promise.resolve(true);
