@@ -1,0 +1,77 @@
+{
+  "refresh_samples": [
+    {
+      "duration_ms": 48.9,
+      "retained_nodes": 2000,
+      "total_nodes": 2000
+    },
+    {
+      "duration_ms": 69.9,
+      "retained_nodes": 2000,
+      "total_nodes": 2000
+    },
+    {
+      "duration_ms": 62.1,
+      "retained_nodes": 2000,
+      "total_nodes": 2000
+    },
+    {
+      "duration_ms": 103.8,
+      "retained_nodes": 2000,
+      "total_nodes": 2000
+    },
+    {
+      "duration_ms": 61.9,
+      "retained_nodes": 2000,
+      "total_nodes": 2000
+    }
+  ],
+  "target_messages": 2000,
+  "loaded_messages": 2000,
+  "page_size": 50,
+  "history_pages": 39,
+  "initial": {
+    "messages": 50,
+    "markdown_roots": 2,
+    "message_dom_nodes": 399,
+    "long_tasks": 4,
+    "long_task_total_ms": 319,
+    "long_task_max_ms": 124
+  },
+  "full": {
+    "messages": 2000,
+    "markdown_roots": 136,
+    "message_dom_nodes": 15674,
+    "long_tasks": 8,
+    "long_task_total_ms": 601,
+    "long_task_max_ms": 124
+  },
+  "load_elapsed_ms": 9789,
+  "older_page_ms": {
+    "samples": 18,
+    "median": 140,
+    "max": 314,
+    "all": [
+      94,
+      89,
+      80,
+      133,
+      158,
+      99,
+      94,
+      132,
+      314,
+      134,
+      140,
+      146,
+      137,
+      164,
+      165,
+      192,
+      190,
+      229
+    ]
+  },
+  "page_errors": [],
+  "assertions": true
+}

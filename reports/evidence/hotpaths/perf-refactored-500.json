@@ -1,0 +1,67 @@
+{
+  "refresh_samples": [
+    {
+      "duration_ms": 49.1,
+      "retained_nodes": 500,
+      "total_nodes": 500
+    },
+    {
+      "duration_ms": 50.6,
+      "retained_nodes": 500,
+      "total_nodes": 500
+    },
+    {
+      "duration_ms": 54.5,
+      "retained_nodes": 500,
+      "total_nodes": 500
+    },
+    {
+      "duration_ms": 79.8,
+      "retained_nodes": 500,
+      "total_nodes": 500
+    },
+    {
+      "duration_ms": 32.4,
+      "retained_nodes": 500,
+      "total_nodes": 500
+    }
+  ],
+  "target_messages": 500,
+  "loaded_messages": 500,
+  "page_size": 50,
+  "history_pages": 9,
+  "initial": {
+    "messages": 50,
+    "markdown_roots": 2,
+    "message_dom_nodes": 399,
+    "long_tasks": 2,
+    "long_task_total_ms": 208,
+    "long_task_max_ms": 116
+  },
+  "full": {
+    "messages": 500,
+    "markdown_roots": 66,
+    "message_dom_nodes": 4124,
+    "long_tasks": 2,
+    "long_task_total_ms": 208,
+    "long_task_max_ms": 116
+  },
+  "load_elapsed_ms": 5066,
+  "older_page_ms": {
+    "samples": 8,
+    "median": 99,
+    "max": 137,
+    "all": [
+      88,
+      65,
+      96,
+      137,
+      99,
+      96,
+      115,
+      131
+    ]
+  },
+  "page_errors": [],
+  "assertions": true
+}

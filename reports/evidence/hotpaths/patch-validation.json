@@ -1,0 +1,9 @@
+{
+  "base": "c8584fe7def6b20adb5d531f16942fd0eba77913",
+  "git_apply_check": true,
+  "git_apply": true,
+  "compared_files": 40,
+  "identical_bytes": true,
+  "typecheck_exit": 0,
+  "patch_sha256": "e80c94adee42af7b3dc1037094382e91c34364a33f7554a22b269109b1fbc059"
+}
