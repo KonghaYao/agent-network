@@ -54,6 +54,8 @@ bash ~/.agentnet/peri-watch.sh >> ~/.agentnet/watch.log 2>&1
 READY actor=agt_... pending=N subscription=sub-...
 ```
 
+`peri-watch.sh` 的 ALERT 只含定位字段，不读正文，因此 `watch.log` 不会持久化消息正文；被唤醒后按 `message_id` 调用 `network_message_read` 读取。不要把正文补写进 `watch.log`。
+
 ### 2.4 挂哨兵
 
 `peri-watch.sh` 只负责写日志，还需要 [`other-sentinel.sh`](./other-sentinel.sh) 把「日志出现新 ALERT」转成「后台任务结束」事件：

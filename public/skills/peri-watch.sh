@@ -1,5 +1,7 @@
 #!/bin/bash
 # Peri MCP 长连接监听器：订阅 agentnet://stream，在新的待处理投递到达时输出一行 ALERT。
+# ALERT 只含定位字段，不读取正文：本脚本的 stdout 常被 Other harness 追加到 watch.log，
+# 正文不应因此持久化到日志。宿主收到 ALERT 后按 message_id 调用 network_message_read。
 # 依赖 bash、curl、jq；token 只从环境变量读取，不写入日志或进程参数。
 # 用法：先下载并检查本文件，再运行：AGENTNET_TOKEN=... bash peri-watch.sh
 set -u

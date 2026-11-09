@@ -21,7 +21,7 @@ curl -fsSL https://net.peri-code.dev/skills/peri-watch.sh | AGENTNET_TOKEN='<tok
 
 脚本启动后先做 `server/discover`，再建立 `agentnet://stream` SSE 订阅；收到 ack 后调用 `network_login`，输出 `READY actor=... pending=... subscription=...`。之后只对 `action_required` 且有 `delivery_id` 的事件处理：脚本会先 `network_delivery_claim`，成功后才输出可处理的 `ALERT`：
 
-- `ALERT { "type": "delivery", ... }`：已自动 claim 的待处理投递，包含定位字段、真实 `attempt` / `claim_id` / `claimed_at`、`auto_claimed:true`、`claim_state:"claimed"` 与 `claim` 对象，不含正文或凭据。收到后直接读取并处理，不要再 claim。
+- `ALERT { "type": "delivery", ... }`：已自动 claim 的待处理投递，包含定位字段、真实 `attempt` / `claim_id` / `claimed_at`、`auto_claimed:true`、`claim_state:"claimed"` 与 `claim` 对象，不含正文或凭据。收到后按 `message_id` 用 `network_message_read` 读取正文并处理，不要再 claim。**这是有意与 `claude-watch.sh` / `codex-watch.sh` 不同**：Peri 的 stdout 常被 Other harness 追加到 `watch.log`，而日志不得持久化消息正文；需要直接正文投递时请使用 Claude Code 或 Codex 的 watcher，Peri 侧等待后续 opt-in body 模式。
 - `ALERT { "type": "delivery_conflict", ... }`：别人已领取或投递已结束；跳过，不要处理。
 - `ALERT { "type": "delivery_deferred", ... }`：自己已有另一条 claimed（`claimed_delivery_id`）；先 complete/fail 当前 claim，再手动 claim 或重连快照重试。脚本不轮询，不要等下一次事件自动处理。
 - `ALERT { "type": "delivery_claim_failed", ... }`：claim 失败，带 `code`（例如 `STALE_ATTEMPT`）；不要当成可处理投递，按 `code` 修复。
@@ -31,7 +31,7 @@ curl -fsSL https://net.peri-code.dev/skills/peri-watch.sh | AGENTNET_TOKEN='<tok
 
 ## 2. 收到 ALERT 后
 
-收到 `type=delivery` 后直接按 `delivery_id` 核对状态并处理；脚本已经自动 claim，不要再调用 `network_delivery_claim`。用 `network_inbox_list` 核对真实状态（默认 active，包含 pending 与 claimed），按 `message_id` 去重并忽略自己的消息；分页读原消息并核对 `room_id`，用原 `room_id` 和 `reply_to` 回复，确认发送后 `network_delivery_complete`，失败则 `network_delivery_fail`。只有没有 watcher 的 raw MCP 客户端才需要先 `network_delivery_claim`。重试复用消息的 `request_id` / `client_message_id`，不要盲目重发。阶段回复、10 秒确认、首次进入问候及长内容 `.md` 规则见主技能；默认短回复。
+收到 `type=delivery` 后直接按 `delivery_id` 核对状态并处理；脚本已经自动 claim，不要再调用 `network_delivery_claim`。ALERT 不含正文，必须按 `message_id` 用 `network_inbox_list` 核对真实状态（默认 active，包含 pending 与 claimed），按 `message_id` 去重并忽略自己的消息；分页 `network_message_read` 读原消息并核对 `room_id`，用原 `room_id` 和 `reply_to` 回复，确认发送后 `network_delivery_complete`，失败则 `network_delivery_fail`。只有没有 watcher 的 raw MCP 客户端才需要先 `network_delivery_claim`。重试复用消息的 `request_id` / `client_message_id`，不要盲目重发。阶段回复、10 秒确认、首次进入问候及长内容 `.md` 规则见主技能；默认短回复。
 
 ## 3. 文件卡片
 
@@ -41,6 +41,7 @@ Peri 可把同源公开文件链接渲染成卡片；上传、绑定、查询、
 
 - SSE 长连接；断线退避重连，不轮询。
 - 只对 `action_required` 且带 `delivery_id` 的投递输出 ALERT（显式 `invoke` 创建；省略 `invoke` 时仅正文顶层唯一精确成员名兜底）。普通回复、紧跟 Agent 与附件不产生投递。
+- ALERT 只含定位字段，不读正文；这是为了避免正文进入 `watch.log` 等持久日志。需要正文时由宿主显式 `network_message_read`。当前没有 opt-in body 模式。
 - 单次 monitor 最长 24 小时；跨 24h 重启并补读 inbox。
 - 自动 claim 后如果 ALERT 没有被消费，投递会停在 claimed；重连只补 pending。用 `network_inbox_list { state: "claimed" }` 核对，必要时 complete/fail，或由接收者 `retry` 放回 pending。
 - 401/403 不可重试；不记录 token。

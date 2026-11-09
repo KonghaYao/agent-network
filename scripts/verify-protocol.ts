@@ -3513,6 +3513,8 @@ async function main(): Promise<void> {
   );
   const claudeWriteEventBody =
     claudeScriptText.match(/write_event_file\(\) \{([\s\S]*?)^\}/mu)?.[1] ?? '';
+  const claudeBodyPreviewBody =
+    claudeScriptText.match(/event_body_json\(\) \{([\s\S]*?)^\}/mu)?.[1] ?? '';
   check(
     'Claude Code 监听脚本把完整正文写入 0600 私有事件文件',
     claudeWriteEventBody.includes('network_message_read') &&
@@ -3520,8 +3522,18 @@ async function main(): Promise<void> {
       claudeWriteEventBody.includes('--rawfile body') &&
       claudeWriteEventBody.includes('chmod 600') &&
       claudeEmitFoundBody.includes('event_file') &&
-      !claudeEmitFoundBody.includes('body:$body'),
+      !claudeEmitFoundBody.includes('--rawfile body'),
     { claudeWriteEventBody, claudeEmitFoundBody },
+  );
+  check(
+    'Claude Code 监听脚本只在 stdout 携带受限正文预览',
+    /^BODY_PREVIEW_CHARS=\d+$/mu.test(claudeScriptText) &&
+      claudeBodyPreviewBody.includes('BODY_PREVIEW_CHARS') &&
+      claudeBodyPreviewBody.includes('utf8bytelength') &&
+      claudeBodyPreviewBody.includes('body_truncated') &&
+      claudeEmitFoundBody.includes('body:$body_info.body') &&
+      claudeEmitFoundBody.includes('body_truncated:$body_info.body_truncated'),
+    { claudeBodyPreviewBody, claudeEmitFoundBody },
   );
 
   const dshScript = await fetch(`${baseUrl()}/skills/dsh-watch.sh`);

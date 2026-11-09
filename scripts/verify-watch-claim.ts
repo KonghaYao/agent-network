@@ -2,8 +2,9 @@
  * 本地 watcher 自动 claim 验收。
  *
  * 启动一个内存 MCP mock（不访问生产），驱动 claude-watch.sh 与 peri-watch.sh，
- * 覆盖：成功 claim 后发事件、CLAIM_CONFLICT 分流、自己已 claim 复用、
- * delivery.retried 重新 claim、deferred 后重连快照重新 claim、reminder 不 claim、
+ * 覆盖：成功 claim 后发事件与正文预览、超长正文截断但 event_file 保留全文、
+ * CLAIM_CONFLICT 分流、自己已 claim 复用、delivery.retried 重新 claim、
+ * deferred 后重连快照重新 claim、reminder/deferred 不携带正文、
  * 其他 claim 错误不伪装成 delivery。Codex 的分类与静态顺序由
  * scripts/test_codex_watch.py 在同一 npm script 中覆盖。
  *
@@ -16,6 +17,8 @@ import { resolve } from 'node:path';
 const ROOT = resolve(import.meta.dir, '..');
 const CLAUDE_WATCH = 'public/skills/claude-watch.sh';
 const PERI_WATCH = 'public/skills/peri-watch.sh';
+const LONG_MESSAGE_ID = 'msg_dlv_long';
+const LONG_BODY = `${'投递正文'.repeat(1200)}尾部标记`;
 
 type JsonObject = Record<string, unknown>;
 
@@ -68,10 +71,22 @@ interface RunningWatcher {
   stderr: string[];
 }
 
+function messageBody(messageId: string): string {
+  return messageId === LONG_MESSAGE_ID ? LONG_BODY : `body:${messageId}`;
+}
+
+function watchBodyLimit(script: string): number {
+  const source = readFileSync(resolve(ROOT, script), 'utf8');
+  const match = /^BODY_PREVIEW_CHARS=(\d+)$/m.exec(source);
+  if (!match) throw new Error(`BODY_PREVIEW_CHARS missing in ${script}`);
+  return Number(match[1]);
+}
+
 function delivery(id: string): MockDelivery {
   const roomId = 'rm_test';
   const messageId = `msg_${id}`;
   const now = new Date().toISOString();
+  const body = messageBody(messageId);
   return {
     delivery_id: id,
     recipient_id: 'agt_me',
@@ -91,8 +106,8 @@ function delivery(id: string): MockDelivery {
       message_id: messageId,
       room_id: roomId,
       sender_id: 'agt_user',
-      preview: `body:${messageId}`,
-      body_bytes: 8,
+      preview: body.slice(0, 80),
+      body_bytes: Buffer.byteLength(body, 'utf8'),
       created_seq: '1',
       created_at: now,
     },
@@ -267,10 +282,33 @@ function createMock(): MockServer {
         }
         case 'network_message_read': {
           const messageId = String(args.message_id ?? '');
+          const full = messageBody(messageId);
+          if (messageId === LONG_MESSAGE_ID) {
+            const cursor = String(args.chunk_cursor ?? '');
+            const splitAt = 2400;
+            if (cursor === '') {
+              return toolResult(body.id, {
+                message_id: messageId,
+                room_id: 'rm_test',
+                chunk: full.slice(0, splitAt),
+                chunk_cursor: 'c1',
+                next_cursor: 'c1',
+                eof: false,
+              });
+            }
+            return toolResult(body.id, {
+              message_id: messageId,
+              room_id: 'rm_test',
+              chunk: full.slice(splitAt),
+              chunk_cursor: 'c1',
+              next_cursor: null,
+              eof: true,
+            });
+          }
           return toolResult(body.id, {
             message_id: messageId,
             room_id: 'rm_test',
-            chunk: `body:${messageId}`,
+            chunk: full,
             chunk_cursor: '',
             next_cursor: null,
             eof: true,
@@ -523,6 +561,7 @@ async function runClaudeChecks(): Promise<void> {
     sendItems(mock, [notificationItem('dlv_other', 'delivery.created', 'evt_other')]);
     const conflict = await waitForEvent(watcher.stdout, '', 'delivery_conflict', 'dlv_other');
     expect(conflict.claim_state === 'conflict', 'conflict event must carry claim_state=conflict');
+    expect(!('body' in conflict), 'conflict must not carry a message body');
     expect(
       typeof conflict.hint === 'string' && conflict.hint.includes('跳过'),
       'conflict hint must tell host to skip',
@@ -541,6 +580,13 @@ async function runClaudeChecks(): Promise<void> {
     expect(ok.attempt === 1, `expected attempt 1, got ${String(ok.attempt)}`);
     expect(typeof ok.claim_id === 'string' && ok.claim_id.length > 0, 'claim_id missing');
     expect(typeof ok.claimed_at === 'string' && ok.claimed_at.length > 0, 'claimed_at missing');
+    const okBody = messageBody('msg_dlv_ok');
+    expect(ok.body === okBody, `delivery event body must match message, got ${String(ok.body)}`);
+    expect(
+      ok.body_bytes === Buffer.byteLength(okBody, 'utf8'),
+      `delivery event body_bytes must be ${String(Buffer.byteLength(okBody, 'utf8'))}, got ${String(ok.body_bytes)}`,
+    );
+    expect(ok.body_truncated === false, 'short delivery body must not be marked truncated');
     const eventFile = String(ok.event_file ?? '');
     expect(eventFile.length > 0, 'event_file missing');
     const file = JSON.parse(readFileSync(eventFile, 'utf8')) as JsonObject;
@@ -552,16 +598,18 @@ async function runClaudeChecks(): Promise<void> {
       typeof file.claim === 'object' && file.claim !== null,
       'event_file must contain claim object',
     );
-    expect(typeof file.body === 'string' && file.body.includes('body:'), 'event_file body missing');
+    expect(file.body === okBody, 'event_file body must contain the full message body');
     expect(mock.state.claimCalls.get('dlv_ok') === 1, 'successful delivery must be claimed once');
 
     sendItems(mock, [notificationItem('dlv_ok', 'delivery.reminder', 'evt_reminder')]);
-    await waitForEvent(watcher.stdout, '', 'reminder', 'dlv_ok');
+    const reminder = await waitForEvent(watcher.stdout, '', 'reminder', 'dlv_ok');
+    expect(!('body' in reminder), 'reminder must not carry a message body');
     expect(mock.state.claimCalls.get('dlv_ok') === 1, 'reminder must not claim again');
 
     mock.state.pending.set('dlv_deferred', delivery('dlv_deferred'));
     sendItems(mock, [notificationItem('dlv_deferred', 'delivery.created', 'evt_deferred')]);
     const deferred = await waitForEvent(watcher.stdout, '', 'delivery_deferred', 'dlv_deferred');
+    expect(!('body' in deferred), 'deferred must not carry a message body');
     expect(
       deferred.claimed_delivery_id === 'dlv_ok',
       `deferred must point at current claim, got ${String(deferred.claimed_delivery_id)}`,
@@ -626,6 +674,7 @@ async function runClaudeChecks(): Promise<void> {
     sendItems(mock, [notificationItem('dlv_stale', 'delivery.created', 'evt_stale')]);
     const failed = await waitForEvent(watcher.stdout, '', 'delivery_claim_failed', 'dlv_stale');
     expect(failed.code === 'STALE_ATTEMPT', `unexpected claim failure code ${String(failed.code)}`);
+    expect(!('body' in failed), 'claim failure must not carry a message body');
     expect(
       eventCount(watcher.stdout, '', 'delivery', 'dlv_stale') === 0,
       'claim failure must not emit a processable delivery event',
@@ -663,6 +712,41 @@ async function runClaudeChecks(): Promise<void> {
       'reconnect snapshot must emit exactly one delivery event',
     );
 
+    mock.state.pending.clear();
+    mock.state.claims.clear();
+    mock.state.pending.set('dlv_long', delivery('dlv_long'));
+    sendItems(mock, [notificationItem('dlv_long', 'delivery.created', 'evt_long')]);
+    const longEvent = await waitForEvent(watcher.stdout, '', 'delivery', 'dlv_long');
+    const longBody = messageBody(LONG_MESSAGE_ID);
+    const limit = watchBodyLimit(CLAUDE_WATCH);
+    const expectedPreview = Array.from(longBody).slice(0, limit).join('');
+    expect(
+      Array.from(longBody).length > limit,
+      `long body must exceed BODY_PREVIEW_CHARS=${String(limit)}`,
+    );
+    expect(
+      longEvent.body === expectedPreview,
+      'long delivery body must be truncated to BODY_PREVIEW_CHARS',
+    );
+    expect(longEvent.body_truncated === true, 'long delivery body must set body_truncated=true');
+    expect(
+      longEvent.body_bytes === Buffer.byteLength(longBody, 'utf8'),
+      `long delivery body_bytes must describe the full body, got ${String(longEvent.body_bytes)}`,
+    );
+    expect(
+      Buffer.byteLength(String(longEvent.body), 'utf8') < Number(longEvent.body_bytes),
+      'truncated preview must be shorter in bytes than the full body',
+    );
+    const longFile = JSON.parse(
+      readFileSync(String(longEvent.event_file ?? ''), 'utf8'),
+    ) as JsonObject;
+    expect(longFile.body === longBody, 'event_file must retain the full long body');
+    expect(
+      Buffer.byteLength(String(longFile.body), 'utf8') === Buffer.byteLength(longBody, 'utf8'),
+      'event_file body_bytes must describe the full long body',
+    );
+    expect(mock.state.claimCalls.get('dlv_long') === 1, 'long delivery must be claimed once');
+
     await assertIdleReconnect({
       mock,
       watcher,
@@ -687,6 +771,7 @@ async function runPeriChecks(): Promise<void> {
     sendItems(mock, [notificationItem('dlv_other', 'delivery.created', 'evt_other')]);
     const conflict = await waitForEvent(watcher.stdout, 'ALERT ', 'delivery_conflict', 'dlv_other');
     expect(conflict.claim_state === 'conflict', 'peri conflict event missing claim_state');
+    expect(!('body' in conflict), 'peri conflict must not carry a message body');
     expect(mock.state.claimCalls.get('dlv_other') === 1, 'peri conflict must claim once');
     expect(
       eventCount(watcher.stdout, 'ALERT ', 'delivery', 'dlv_other') === 0,
@@ -706,12 +791,14 @@ async function runPeriChecks(): Promise<void> {
     );
 
     sendItems(mock, [notificationItem('dlv_ok', 'delivery.reminder', 'evt_reminder')]);
-    await waitForEvent(watcher.stdout, 'ALERT ', 'reminder', 'dlv_ok');
+    const periReminder = await waitForEvent(watcher.stdout, 'ALERT ', 'reminder', 'dlv_ok');
+    expect(!('body' in periReminder), 'peri reminder must not carry a message body');
     expect(mock.state.claimCalls.get('dlv_ok') === 1, 'peri reminder must not claim');
 
     mock.state.pending.set('dlv_deferred', delivery('dlv_deferred'));
     sendItems(mock, [notificationItem('dlv_deferred', 'delivery.created', 'evt_deferred')]);
     const deferred = await waitForEvent(watcher.stdout, 'ALERT ', 'delivery_deferred', 'dlv_deferred');
+    expect(!('body' in deferred), 'peri deferred must not carry a message body');
     expect(
       deferred.claimed_delivery_id === 'dlv_ok',
       'peri deferred must point at current claim',

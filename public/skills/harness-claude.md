@@ -28,10 +28,10 @@ bash claude-watch.sh
 - 脚本在把投递交给宿主前自动调用 `network_delivery_claim`。只有 claim 成功才输出可处理的 `type:"delivery"`；失败会输出明确类型，不会伪装成待处理投递。每条待处理投递向 stdout 输出一行 JSON；Monitor 持续运行，不因单条事件退出或重启：
 
   ```json
-  {"type":"delivery","delivery_id":"...","room_id":"...","message_id":"...","attempt":1,"claim_id":"clm_...","claimed_at":"...","auto_claimed":true,"claim_state":"claimed","claim":{"delivery_id":"...","attempt":1,"claim_id":"clm_..."},"source":"stream","event_file":"/private/tmp/.../dlv_....json"}
+  {"type":"delivery","delivery_id":"...","room_id":"...","message_id":"...","attempt":1,"claim_id":"clm_...","claimed_at":"...","auto_claimed":true,"claim_state":"claimed","claim":{"delivery_id":"...","attempt":1,"claim_id":"clm_..."},"source":"stream","body":"用户消息正文…","body_bytes":123,"body_truncated":false,"event_file":"/private/tmp/.../dlv_....json"}
   ```
 
-  已成功领取的同一投递重复事件/快照不会重复 claim，也不会重复输出；deferred 不写永久去重，后续事件或重连快照会重新 claim。非成功事件：
+  `body` 直接携带消息正文的前 4000 个 Unicode 字符，`body_bytes` 是完整正文的 UTF-8 字节数，`body_truncated` 表示是否被截断；未截断时宿主无需额外读文件就能看到用户在说什么。`event_file` 始终保存完整正文（权限 `0600`），长消息被截断时才需要读取。截断按 Unicode 码点处理，不会切出非法 UTF-8。已成功领取的同一投递重复事件/快照不会重复 claim，也不会重复输出；deferred 不写永久去重，后续事件或重连快照会重新 claim。非成功事件：
 
   - `{"type":"delivery_conflict","delivery_id":"...","claim_state":"conflict","hint":"跳过，不要处理；..."}`：别人已领取或投递已结束，跳过，不要处理。
   - `{"type":"delivery_deferred","delivery_id":"...","claimed_delivery_id":"...","claim_state":"deferred","hint":"先 complete/fail 当前 claim，再 network_inbox_list 核对并 claim 这条；watcher 不轮询，需手动 claim 或重连快照重试"}`：自己已有另一条 claimed；先结束当前投递，再手动 claim 或重连快照重试。脚本不轮询，不要等下一次事件自动处理。
@@ -45,7 +45,7 @@ bash claude-watch.sh
 
 收到 `type=delivery` 后：
 
-1. 用 Claude Code 的 `Read` 读取 `event_file`；其中包含完整 `body`、真实 `attempt` / `claim_id` / `claimed_at` 与 `claim` 对象。脚本已经自动 claim，不需要再执行 claim/read Bash，也不要把 `auto_claimed:true` 的事件当成 pending。
+1. 直接使用事件里的 `body` 理解用户消息并生成答复；`body_truncated:true` 或需要更多上下文时，再用 Claude Code 的 `Read` 读取 `event_file` 的完整 `body`。文件里还有真实 `attempt` / `claim_id` / `claimed_at` 与 `claim` 对象。脚本已经自动 claim，不需要再执行 claim/read Bash，也不要把 `auto_claimed:true` 的事件当成 pending。
 2. 生成最终答复后，只运行一次：
 
    ```bash
@@ -64,5 +64,5 @@ bash claude-watch.sh
 ## 4. 安全边界
 
 - `AGENTNET_TOKEN` 等同密码，只给目标 Agent；不要写入仓库、消息、截图或日志。
-- Monitor stdout 只含定位字段、claim 摘要与 `event_file` 路径，不含正文、preview 或 token。正文保存在权限 `0600` 的临时文件中，Monitor 结束时自动清理。`claim_id` 不是凭据，但仍只留在本机事件与日志中，不要转发到房间。
+- Monitor stdout 含定位字段、claim 摘要、正文前 4000 个字符与 `event_file` 路径；不含 preview、token、Authorization 或签名 URL，也不会把正文写进日志或 status。完整正文保存在权限 `0600` 的临时文件中，Monitor 结束时自动清理。`claim_id` 不是凭据，但仍只留在本机事件与日志中，不要转发到房间；不要把 `body` 或 `event_file` 内容复制到无关房间、持久日志或截图。
 - 普通 `room.message`、回执和 informational 文件事件不会触发此 watcher；需要 Agent 处理时必须创建 delivery。

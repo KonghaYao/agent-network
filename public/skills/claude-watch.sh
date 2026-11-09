@@ -1,7 +1,9 @@
 #!/bin/bash
 # Claude Code 会话级监听器：持续等待需要处理的投递，每条投递输出一行紧凑 JSON。
 # 由 Claude Code 的 Monitor 工具承载；脚本自动 claim 后每行 stdout 事件唤醒当前会话，主会话读取/回复/complete。
-# stdout 只输出事件信封，READY、重连与诊断全部写 stderr；正文、preview 和 token 不进入输出。
+# stdout 只输出事件信封，READY、重连与诊断全部写 stderr；token、preview 不进入任何输出。
+# 成功 claim 的 delivery 事件直接携带正文前 BODY_PREVIEW_CHARS 个字符（body/body_bytes/body_truncated），
+# 完整正文在 0600 的 event_file；截断按 Unicode 码点处理，不会产生非法 UTF-8。正文不写入日志或 status。
 # 依赖 bash、curl、jq、mkfifo。
 # 用法：curl -fsSL https://net.peri-code.dev/skills/claude-watch.sh | AGENTNET_TOKEN='<token>' bash
 set -u
@@ -12,6 +14,8 @@ set -o pipefail
 
 PROTOCOL_VERSION="2026-07-28"
 STREAM_URI="agentnet://stream"
+# stdout 的 delivery 事件最多携带的正文码点数；完整正文始终保存在 event_file。
+BODY_PREVIEW_CHARS=4000
 ACK_TIMEOUT_SECONDS=60
 SSE_IDLE_TIMEOUT_SECONDS=15
 SSE_IDLE_SPEED_LIMIT=1
@@ -417,9 +421,22 @@ write_event_file() {
   printf '%s' "$event_file"
 }
 
+# 从 event_file 提取 stdout 需要的正文摘要。jq 字符串切片按 Unicode 码点，
+# 不会截断多字节字符；body_bytes 始终是完整正文的 UTF-8 字节数。
+event_body_json() {
+  local event_file="$1"
+  jq -c --argjson limit "$BODY_PREVIEW_CHARS" '
+    (.body // "") as $body
+    | {
+        body:($body[0:$limit]),
+        body_bytes:($body | utf8bytelength),
+        body_truncated:(($body | length) > $limit)
+      }' "$event_file"
+}
+
 emit_found() {
   local item="$1" attempt="$2" source="$3"
-  local delivery_id claim status ok event_file alert
+  local delivery_id claim status ok event_file body_info alert
   delivery_id=$(printf '%s' "$item" | jq -r '.delivery_id // empty')
   case "$delivery_id" in
     ''|*[!A-Za-z0-9_-]*)
@@ -452,7 +469,14 @@ emit_found() {
   fi
 
   event_file=$(write_event_file "$item" "$claim" "$source")
-  if [ $? -ne 0 ]; then
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    body_info=$(event_body_json "$event_file")
+    status=$?
+    [ -n "$body_info" ] || status=1
+  fi
+  if [ "$status" -ne 0 ]; then
+    [ -z "$event_file" ] || rm -f "$event_file"
     # claim 已占用但不能生成可处理事件：明确告知宿主，避免投递卡在 claimed 且无人知晓。
     alert=$(printf '%s' "$item" | jq -c --arg source "$source" --argjson claim "$claim" '{
       type:"delivery_claim_failed",
@@ -478,6 +502,7 @@ emit_found() {
   alert=$(printf '%s' "$item" | jq -c \
     --arg source "$source" \
     --arg event_file "$event_file" \
+    --argjson body_info "$body_info" \
     --argjson claim "$claim" '{
       type:"delivery",
       delivery_id,
@@ -493,6 +518,9 @@ emit_found() {
       claim_state:"claimed",
       claim:{delivery_id,attempt:$claim.attempt,claim_id:$claim.claim_id},
       source:$source,
+      body:$body_info.body,
+      body_bytes:$body_info.body_bytes,
+      body_truncated:$body_info.body_truncated,
       event_file:$event_file
     }')
   if [ -z "$alert" ]; then

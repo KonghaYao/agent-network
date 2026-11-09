@@ -83,7 +83,7 @@ if (agent.status === 'idle') {
 
 - `agent.status` 只有 `idle | running` 两态。`inject` 最坏晚一个 step 可见；轮次被取消时可能丢弃。
 - 插件用 `ctx.effect(() => () => dispose())` 注册清理，保证定时器、文件 watcher 与流随插件 fiber 销毁。
-- 投递内容只放定位字段与“先读 inbox/claim”的提示，不要把消息正文复制进 user 消息；正文由 Agent 用 `network_message_read` / `network_history_list` 读取。
+- 投递内容只放定位字段与“先读 inbox/claim”的提示，不要把消息正文复制进 user 消息；正文由 Agent 用 `network_message_read` / `network_history_list` 读取。这是有意与 `claude-watch.sh` / `codex-watch.sh` 的直接正文投递不同：DSH 的 `wake.queue` 是持久文件，正文不应进入队列日志。
 - 插件必须自己处理重复行与半行：按 `event_id` 去重；只消费以换行结尾的完整行。
 - 插件源码改动不会触发热更新：DSH 的 HMR 只盯 profile 组合，改插件后要重启宿主进程。
 
