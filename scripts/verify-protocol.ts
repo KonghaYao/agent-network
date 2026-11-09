@@ -283,6 +283,7 @@ async function main(): Promise<void> {
     'network_issue_token',
     'network_register',
     'network_me',
+    'network_client_guide',
     'network_me_rename',
     'network_login',
     'network_profile_update',
@@ -418,7 +419,7 @@ async function main(): Promise<void> {
     'network_artifact_release',
   ];
   const toolNames = listed?.tools?.map((tool) => tool.name) ?? [];
-  // 工具集随 drive 开关变化：核心工具 + drive_file_info + 8 个文件/成果工具。
+  // 工具集随 drive 开关变化：核心工具 + info/upload_prepare + 文件/成果工具。
   const hasDrive = toolNames.includes('drive_file_info');
   const hasRoomFiles = roomFileTools.every((name) => toolNames.includes(name));
   check(
@@ -427,12 +428,13 @@ async function main(): Promise<void> {
     roomFileTools.filter((name) => toolNames.includes(name)),
   );
   const expectedToolCount =
-    coreToolNames.length + (hasDrive ? 1 : 0) + (hasRoomFiles ? roomFileTools.length : 0);
+    coreToolNames.length + (hasDrive ? 2 : 0) + (hasRoomFiles ? roomFileTools.length : 0);
   check(`tools/list 返回 ${expectedToolCount} 个工具`, toolNames.length === expectedToolCount, toolNames.length);
   const requiredCoreTools = [
     'network_issue_token',
     'network_register',
     'network_me',
+    'network_client_guide',
     'network_me_rename',
     'network_login',
     'network_agent_create',
@@ -621,7 +623,7 @@ async function main(): Promise<void> {
     syncOutput?.properties,
   );
   if (hasDrive) {
-    for (const required of ['drive_file_info', ...roomFileTools]) {
+    for (const required of ['drive_file_info', 'network_file_upload_prepare', ...roomFileTools]) {
       check(`工具 ${required} 已注册`, toolNames.includes(required), toolNames);
     }
     const driveTool = listed?.tools?.find((tool) => tool.name === 'drive_file_info');
@@ -660,7 +662,7 @@ async function main(): Promise<void> {
   } else {
     check(
       '关闭 Drive 时不注册 drive_file_info 与房间文件工具',
-      !toolNames.includes('drive_file_info') &&
+      !toolNames.includes('drive_file_info') && !toolNames.includes('network_file_upload_prepare') &&
         roomFileTools.every((name) => !toolNames.includes(name)),
       toolNames,
     );
@@ -4372,7 +4374,7 @@ async function main(): Promise<void> {
     const tools = await connection.client.listTools();
     const sdkToolCount =
       coreToolNames.length +
-      (tools.tools.some((tool) => tool.name === 'drive_file_info') ? 1 : 0) +
+      (tools.tools.some((tool) => tool.name === 'drive_file_info') ? 2 : 0) +
       (tools.tools.some((tool) => tool.name === 'network_room_file_bind') ? roomFileTools.length : 0);
     checkEqual('官方 SDK 可通过 server/discover 建连', tools.tools.length, sdkToolCount);
     await expectToolError('未注册凭据调用 network_me 返回 CREDENTIAL_INVALID', callTool(connection.client, 'network_me'), 'CREDENTIAL_INVALID');

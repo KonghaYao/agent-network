@@ -11,6 +11,7 @@ import {
 } from '../domain/file-access';
 import { historyBoundary } from '../domain/room-history';
 import { getMember, getRoom, getRoomFile } from '../storage/queries';
+import { recordToolContract } from '../mcp/client-contract';
 
 export interface DriveToolBinding {
   fileService: FileService;
@@ -40,7 +41,7 @@ type RegisterToolCall = (
  * Drive 文件工具。
  *
  * 上传本身走 MCPP Files v1 的 `POST /mcp-upload`（原始字节 + MCPP 头）；
- * 这里按 fileId 返回元数据与公开下载 URL，并复用同一请求的 scope 校验，
+ * 这里按 fileId 返回元数据与带短期票据的下载 URL，并复用同一请求的 scope 校验，
  * 避免跨身份读取。参数保留 `x-mcpp-file` 标记，支持文件选择 UI 的客户端
  * 可以据此识别；服务端校验不依赖客户端能力声明，普通 MCP 客户端也能读取
  * 自己的文件。
@@ -49,20 +50,21 @@ export function registerDriveTool(server: McpServer, binding: DriveToolBinding):
   const { fileService, scope, publicOrigin, principal, db, ticketSecret } = binding;
   const register = server.registerTool as unknown as RegisterToolCall;
 
+  const config = {
+    description:
+      '读取当前身份已上传文件的元数据、配额与带短时票据的访问地址（previewUrl / downloadUrl）。fileId 来自 POST /mcp-upload 的响应。上传默认是上传者私有草稿（24 小时）；裸 publicUrl 不携带票据时返回 404。network_room_file_bind 把文件绑定到房间后，读取按成员资格、成员代次与历史边界授权，必须使用返回的带票据地址；network_file_publish 是独立、需有权限的公开发布动作，默认关闭。旧版本未登记文件在首次授权读取时登记为私有，旧裸 URL 同样失效。本地路径或 file:// 对群友不可见；未授权外链不能保证群友可访问。',
+    inputSchema: z.object({
+      fileId: z
+        .string()
+        .regex(new RegExp(FILE_ID_PATTERN))
+        .meta({ 'x-mcpp-file': { maxBytes: fileService.maxFileBytes } }),
+    }),
+    annotations: { readOnlyHint: true },
+  };
   register.call(
     server,
     'drive_file_info',
-    {
-      description:
-        '读取当前身份已上传文件的元数据、配额与带短时票据的访问地址（previewUrl / downloadUrl）。fileId 来自 POST /mcp-upload 的响应。上传默认是上传者私有草稿（24 小时）；裸 publicUrl 不携带票据时返回 404。network_room_file_bind 把文件绑定到房间后，读取按成员资格、成员代次与历史边界授权，必须使用返回的带票据地址；network_file_publish 是独立、需有权限的公开发布动作，默认关闭。旧版本未登记文件在首次授权读取时登记为私有，旧裸 URL 同样失效。本地路径或 file:// 对群友不可见；未授权外链不能保证群友可访问。',
-      inputSchema: z.object({
-        fileId: z
-          .string()
-          .regex(new RegExp(FILE_ID_PATTERN))
-          .meta({ 'x-mcpp-file': { maxBytes: fileService.maxFileBytes } }),
-      }),
-      annotations: { readOnlyHint: true },
-    },
+    config,
     async ({ fileId }) => {
       let currentScope: FileScope;
       try {
@@ -137,4 +139,5 @@ export function registerDriveTool(server: McpServer, binding: DriveToolBinding):
       };
     },
   );
+  recordToolContract(server, 'drive_file_info', config);
 }

@@ -380,6 +380,10 @@ import {
   syncPageSchema,
 } from './outputs';
 import type { Principal } from '../domain/principal';
+import {
+  clientGuide, clientGuideInputSchema, clientGuideOutputSchema,
+  clientServiceInfo, recordToolContract, serviceInfoSchema,
+} from './client-contract';
 
 type ToolReturn = {
   content: { type: 'text'; text: string }[];
@@ -463,6 +467,7 @@ export function register<
       return failure(error, options.safeErrors);
     }
   });
+  recordToolContract(server, name, { description, inputSchema, outputSchema, annotations });
 }
 
 export interface MessageCommittedHookInput {
@@ -544,15 +549,20 @@ export function registerTools(
     async (input) => registerActor(db, principal, input, origin),
   );
 
-  register(server, 'network_me', '读取当前身份、资源入口与限制。', meSchema, identitySchema, async () => {
+  register(server, 'network_me', '读取当前身份与 service（协议/契约版本、工具集摘要和可用能力）。完整宿主流程用 network_client_guide；服务端工具与连接器目录不同步时刷新目录，不要换身份。', meSchema, identitySchema.extend({ service: serviceInfoSchema }), async () => {
     requireActor(principal);
-    return me(db, principal, origin);
-  });
+    return { ...(await me(db, principal, origin)), service: clientServiceInfo(server, !!env.EVENTS) };
+  }, { readOnlyHint: true });
+
+  register(server, 'network_client_guide',
+    '按 one_shot（默认单次操作）、webhook（宿主事件回调）或 persistent（常驻 MCP 客户端）读取完整操作指引与当前工具目录。可传 client_tool_names 比对连接器缺失项；只读，不注册身份、不 login、不订阅、不领取工作。',
+    clientGuideInputSchema, clientGuideOutputSchema,
+    async (input) => clientGuide(server, !!env.EVENTS, input), { readOnlyHint: true });
 
   register(
     server,
     'network_login',
-    'Agent 显式上线，开始接收 inbox 投递通知；未上线时投递只在 D1 排队。重复调用幂等，返回待办数量与只读 task_summary（pending/claimed/done/failed/total）。pending 是未领取、claimed 只含当前身份已领取；done/failed/total 是 active 房间总量，total 含他人 claimed。每次上线、重连或唤醒后先看 task_summary；pending > 0 或 claimed > 0 时按房间 list（claimed 用于恢复自己断线前领取的任务）。任务概览不改变 pending_count、房间 head、未读或在线状态。',
+    '常驻 MCP 客户端在 agentnet://stream 订阅 ack 后显式上线；未上线时投递仍保存在 SQLite。单次收发与宿主 webhook 回调无需以 login 建立监听。重复调用幂等，返回待办数量与只读 task_summary（pending/claimed/done/failed/total）。pending 是未领取、claimed 只含当前身份已领取；done/failed/total 是 active 房间总量，total 含他人 claimed。常驻模式每次上线或重连后先看 task_summary；pending > 0 或 claimed > 0 时按房间 list 恢复任务。任务概览不改变 pending_count、房间 head、未读或在线状态。online: true 只代表调用成功，不能证明订阅可达。',
     loginSchema,
     loginResultSchema,
     async () => login(env, principal),

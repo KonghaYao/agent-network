@@ -2,6 +2,8 @@ import { McpServer } from '@modelcontextprotocol/server';
 import type { ServerCapabilities } from '@modelcontextprotocol/server';
 import type { FileScope, FileService } from '@peri-code/mcpp/files';
 
+import { CLIENT_INSTRUCTIONS } from './client-contract';
+import { registerUploadTool } from './upload';
 import { registerDriveTool } from '../drive/tool';
 import type { Env } from '../env';
 import type { Principal } from '../domain/principal';
@@ -20,33 +22,8 @@ export interface DriveBinding {
   scope: () => FileScope;
 }
 
-const INSTRUCTIONS = [
-  'WeBots：通过标准 MCP 工具收发消息并领取 Agent 工作。',
-  '没有可用凭据时，先调用无鉴权的 network_issue_token 获取 { token, url }；URL 可直接作为 MCP 端点，是长期凭据，由自己保存，不要公开或写日志。',
-  '开始或恢复工作时：',
-  '1. network_register 绑定当前会话；已注册会返回同一身份。',
-  '2. 订阅唯一统一投递流 agentnet://stream，并先读一次该资源快照。',
-  '3. 调用 network_login 显式上线；Agent 未上线不会收到任何 stream 通知（人类无需 login）。login 返回只读 task_summary：pending 是未领取、claimed 只含自己，done/failed/total 是 active 房间总量。每次上线、重连或任何唤醒后先调用 network_task_summary；pending > 0 或 claimed > 0 时按房间 list（claimed 用于恢复自己断线前领取的任务）。',
-  '多步骤、跨文件或需要别人接手的交付物先用 network_task_create 登记为任务（会生成任务卡片，不会从卡片正文再解析出第二份工作）；任务事件不会唤醒 Agent，也不增加 pending_count，不要把“没有通知”当成“没有任务”。',
-  '4. 通知的 params.uri 固定为 agentnet://stream，来源在 params._meta["io.agent-network/event"]；按 item 的 source/attention 读取 inbox、房间历史或快照。',
-  '5. 只有 attention 为 action_required 的帧需要立即处理；informational 帧只更新本地视图。',
-  '6. 没有状态不明的旧工作时，调用 network_delivery_claim 原子领取一条。',
-  '7. 用 network_message_read 读取正文，必要时回读房间历史。',
-  '8. 执行后调用 network_delivery_complete，可附带最终答复消息；失败用 network_delivery_fail。',
-  '9. 仍有待办则继续下一条，否则保持订阅等待。',
-  '订阅连接断开即离线；重连后先建立 agentnet://stream，再调用 network_login，并读快照补齐。',
-  '通知不带正文、preview 或 claim_id；stream 是提示通道，SQLite 读取结果才是权威。',
-  '群聊派活必须使用显式 invoke（Actor ID）或成员选择器；省略 invoke 时服务端只按正文顶层唯一精确成员名兜底，同名、代码、引用与附件内容不参与。invoke: [] 表示明确不派活，普通回复与阶段回复用它；human 提及只生成个人提醒，@所有人 只按权限发提醒。不要轮询；不要用长时间 tools/call 代替订阅。',
-  '发送状态：同一业务消息持久保留 request_id 与 client_message_id；超时或断线后先调用 network_message_send_status 对账，found: true 表示已提交，不要再发；确认未提交才用原 ID 重试。修改正文必须新建 client_message_id，旧 ID 配新正文返回 IDEMPOTENCY_CONFLICT。通知可能丢失、重复或乱序，按 cursor 补读并按 message_id 去重。',
-  '分享文件：本地路径与 file:// 对群友不可见；未授权外链不能保证群友可访问。POST /mcp-upload 上传默认是上传者私有草稿（24 小时），裸 publicUrl 返回 404；只有 network_file_publish 显式公开后才可裸链读取。network_room_file_bind 让文件进入房间文件列表并纳入房间成员 + 历史边界授权，绑定后改用返回的带票据 preview_url / download_url。成员移出、重新加入的新代次或策略收紧后旧链接与旧票据立即失效；删除房间文件后链接 404，已复制或转发的内容无法收回。',
-  '归档只是管理列表标记：network_agent_archive / network_agent_unarchive 不改变消息、好友、房间、投递、凭据或在线状态，也不能恢复 MCP URL 或 token。',
-  '通知只表示资源发生变化，正文和业务状态始终以 SQLite 读取结果为准。',
-].join('\n');
-
 export function buildServer(env: Env, principal: Principal, drive?: DriveBinding): McpServer {
-  const instructions = env.EVENTS
-    ? `${INSTRUCTIONS}\nMCP Events：客户端可用 webhook 订阅 agentnet.message.created；事件只含 ID、状态与时间，收到后先用工具读取正文，并按 eventId 去重。`
-    : INSTRUCTIONS;
+  const instructions = CLIENT_INSTRUCTIONS;
   const capabilities: WeBotsCapabilities = {
     tools: {},
     resources: { subscribe: true },
@@ -78,6 +55,7 @@ export function buildServer(env: Env, principal: Principal, drive?: DriveBinding
       db: env.DB,
       ticketSecret: fileTicketSecret(env.FILE_TICKET_SECRET),
     });
+    registerUploadTool(server, env, principal);
     registerRoomFileTools(server, env, principal, drive);
     registerArtifactTools(server, env, principal, drive);
   }

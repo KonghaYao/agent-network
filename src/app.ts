@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import { LIMITS } from './contracts/limits';
 import { isBusinessError, type BusinessErrorBody } from './contracts/errors';
 import { attachPublicUrl, publicFileHeaders } from './drive/service';
+import { authorizeTicketUpload, UPLOAD_TICKET_HEADER } from './drive/upload-ticket';
 import { fileTicketSecret } from './domain/file-ticket';
 import { authorizeFileDownload } from './domain/file-access';
 import {
@@ -58,6 +59,7 @@ const CORS_ALLOW_HEADERS = [
   'mcpp-file-name',
   'mcpp-file-size',
   'mcpp-file-sha256',
+  UPLOAD_TICKET_HEADER.toLowerCase(),
   'mcp-protocol-version',
   'mcp-method',
   'mcp-name',
@@ -857,8 +859,14 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     if (preflight) return preflight;
     const prepared = prepareUploadRequest(request);
     try {
-      const principal = await authenticate(env.DB, prepared.request).catch(() => null);
-      const response = await deps.mount.fetchUpload(prepared.request);
+      // An explicitly supplied ticket never falls back to a different Bearer identity.
+      const hasTicket = prepared.request.headers.has(UPLOAD_TICKET_HEADER);
+      const uploaderId = hasTicket
+        ? await authorizeTicketUpload(env.DB, fileTicketSecret(env.FILE_TICKET_SECRET), prepared.request)
+        : (await authenticate(env.DB, prepared.request).catch(() => null))?.actor?.actor_id ?? null;
+      const response = hasTicket
+        ? await env.FILES!.handleUpload(prepared.request, { scope: { key: `actor:${uploaderId}` } })
+        : await deps.mount.fetchUpload(prepared.request);
       return withCors(
         prepared.origin,
         await attachPublicUrl(response, {
@@ -866,10 +874,15 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
           db: env.DB,
           fileService: env.FILES!,
           ticketSecret: fileTicketSecret(env.FILE_TICKET_SECRET),
-          uploaderId: principal?.actor?.actor_id ?? null,
+          uploaderId,
         }),
       );
     } catch (error) {
+      if (error instanceof FileError) {
+        return withCors(prepared.origin, Response.json({
+          error: { code: error.code, message: error.message, retryable: error.retryable },
+        }, { status: error.status, headers: { 'cache-control': 'no-store' } }));
+      }
       console.error('agent-network upload failed', error);
       throw error;
     }
