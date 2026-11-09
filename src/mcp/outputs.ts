@@ -584,6 +584,7 @@ export const messageSendStatusItemSchema = z.object({
   delivery_ids: z.array(z.string()),
   body_bytes: z.number().nullable(),
   created_at: z.string().nullable(),
+  recalled: z.boolean().optional(),
 });
 
 export const messageSendStatusPageSchema = z.object({

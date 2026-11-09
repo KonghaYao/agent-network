@@ -42,6 +42,7 @@ async function saveGroupName() {
     context.intent = { title: title, requestId: requestId('group-name') };
   }
   context.busy = true;
+  context.retryPending = false;
   groupNameSave.disabled = true;
   groupProfileStatus.textContent = '正在保存…';
   try {
@@ -54,16 +55,43 @@ async function saveGroupName() {
     snapshotActiveRoom();
     context.title = result.room.title;
     context.intent = null;
+    context.retryPending = false;
     groupProfileStatus.textContent = '群名称已更新';
   } catch (error) {
     if (groupProfileContext !== context) return;
-    groupProfileStatus.textContent = error && error.code === 'VERSION_CONFLICT'
-      ? '群名称已变化，草稿已保留；关闭后重新打开再保存。'
-      : '保存失败：' + (error && error.message ? error.message : error);
+    if (error && error.code === 'VERSION_CONFLICT') {
+      // 读取权威标题，改用新 expected_title 生成新 request_id；不自动覆盖并发修改。
+      context.intent = null;
+      try {
+        const latest = await callTool('network_room_get', { room_id: context.roomId });
+        if (!isActiveRoom(context.roomId, context.epoch) || groupProfileContext !== context) return;
+        const draft = groupNameInput.value;
+        applyRoomDetail(latest);
+        context.title = latest.room.title || '';
+        groupNameInput.value = draft;
+        context.retryPending = true;
+        groupNameStatusConflict(latest.room.title || '');
+      } catch (refreshError) {
+        if (groupProfileContext !== context) return;
+        groupProfileStatus.textContent =
+          '群名称已变化，草稿已保留；暂时无法读取最新群名，请稍后点击“保存群名”重试。';
+      }
+    } else {
+      groupProfileStatus.textContent = '保存失败：' +
+        (error && error.message ? error.message : error);
+    }
   } finally {
     context.busy = false;
     if (groupProfileContext === context) groupNameSave.disabled = false;
+    if (groupProfileContext === context) {
+      groupNameSave.textContent = context.retryPending ? '确认覆盖并重试' : '保存群名';
+    }
   }
+}
+
+function groupNameStatusConflict(currentTitle) {
+  const shown = String(currentTitle || '');
+  groupProfileStatus.textContent = '群名已更新为“' + shown + '”。你的草稿已保留；确认后点击“确认覆盖并重试”。';
 }
 
 function groupLifecycleTarget() {

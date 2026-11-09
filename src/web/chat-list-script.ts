@@ -31,6 +31,20 @@ const roomFilterButtons = roomFilterElement
   ? Array.prototype.slice.call(roomFilterElement.querySelectorAll('[data-room-filter]'))
   : [];
 let roomFilter = readRoomFilter();
+const roomFilterAnnouncements = new Map();
+
+function ensureRoomFilterAnnouncement(kind) {
+  if (!document.body) return null;
+  if (roomFilterAnnouncements.has(kind)) return roomFilterAnnouncements.get(kind);
+  const announcement = document.createElement('span');
+  announcement.id = 'room-filter-unread-status-' + kind;
+  announcement.setAttribute('aria-live', 'polite');
+  announcement.setAttribute('aria-atomic', 'true');
+  announcement.style.cssText = 'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;';
+  document.body.append(announcement);
+  roomFilterAnnouncements.set(kind, announcement);
+  return announcement;
+}
 
 function readRoomFilter() {
   try {
@@ -53,6 +67,31 @@ function updateRoomFilterTabs() {
     const selected = button.dataset.roomFilter === roomFilter;
     button.setAttribute('aria-selected', selected ? 'true' : 'false');
     button.tabIndex = selected ? 0 : -1;
+    const kind = button.dataset.roomFilter;
+    const count = roomEntries.filter(function (entry) {
+      return entry.kind === kind && !isArchivedAgentRoom(entry) && unreadAttention(entry);
+    }).length;
+    const announcement = ensureRoomFilterAnnouncement(kind);
+    if (announcement) {
+      const nextText = count === 0 ? '' : '此分类有 ' + count + ' 个已加载会话未读';
+      if (announcement.textContent !== nextText) announcement.textContent = nextText;
+    }
+    let badge = button.querySelector('.room-filter-unread');
+    if (count > 0) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'room-filter-unread';
+        badge.setAttribute('aria-hidden', 'true');
+        badge.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;min-width:15px;height:15px;margin-left:4px;padding:0 3px;border-radius:8px;background:var(--wx-unread);color:#fff;font-size:10px;line-height:1;box-sizing:border-box;vertical-align:middle;';
+        button.append(badge);
+      }
+      badge.textContent = count > 99 ? '99+' : String(count);
+      badge.title = count + ' 个会话有未读消息';
+      if (announcement) button.setAttribute('aria-describedby', announcement.id);
+    } else {
+      if (badge) badge.remove();
+      button.removeAttribute('aria-describedby');
+    }
   }
 }
 
@@ -160,6 +199,9 @@ function messageTime(entry) {
 
 function sortRooms(entries) {
   return entries.slice().sort(function (a, b) {
+    const aPinned = roomPreference(a.room_id).pinned;
+    const bPinned = roomPreference(b.room_id).pinned;
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
     const byMessage = messageTime(b) - messageTime(a);
     if (byMessage !== 0) return byMessage;
     return Number(b.updated_at) - Number(a.updated_at);
@@ -453,6 +495,16 @@ function createRoomListItem(entry) {
     const name = document.createElement('span');
     name.className = 'room-name';
     name.textContent = entry.name;
+    const preference = roomPreference(entry.room_id);
+    if (preference.pinned || preference.muted) {
+      const preferenceLabel = document.createElement('span');
+      preferenceLabel.className = 'room-preference-label';
+      preferenceLabel.textContent = [preference.pinned ? '置顶' : '', preference.muted ? '免打扰' : '']
+        .filter(Boolean).join(' · ');
+      preferenceLabel.setAttribute('aria-label', preferenceLabel.textContent);
+      preferenceLabel.style.cssText = 'margin-left:4px;font-size:10px;font-weight:400;color:var(--wx-muted);white-space:nowrap;';
+      name.append(preferenceLabel);
+    }
     const time = document.createElement('span');
     time.className = 'room-time';
     time.textContent = relativeTime(entry.last_message ? entry.last_message.created_at : entry.updated_at);
@@ -494,7 +546,9 @@ function createRoomListItem(entry) {
     if (Number(entry.my_last_read_seq) < Number(entry.head_seq)) {
       const dot = document.createElement('span');
       dot.className = 'unread';
-      dot.setAttribute('aria-label', '未读');
+      const attention = unreadAttention(entry);
+      dot.setAttribute('aria-label', attention ? '未读' : '未读，消息免打扰');
+      if (!attention) dot.style.backgroundColor = 'var(--wx-muted)';
       avatarWrap.append(dot);
     }
     link.append(avatarWrap, main);
@@ -504,15 +558,17 @@ function createRoomListItem(entry) {
 
 function renderRooms() {
   if (!roomListElement) return;
+  updateRoomFilterTabs();
   roomListElement.setAttribute('aria-label', roomFilter === 'group' ? '群聊' : '单聊');
   // 归档只影响默认列表与总览搜索；房间与消息仍可按 /c/<room_id> 使用。
   const visibleEntries = roomEntries.filter(function (entry) {
     return !isArchivedAgentRoom(entry) && entry.kind === roomFilter;
   });
   const query = searchQuery.trim().toLowerCase();
-  const entries = query ? visibleEntries.filter(function (entry) {
+  const filteredEntries = query ? visibleEntries.filter(function (entry) {
     return roomMatches(entry, query);
   }) : visibleEntries;
+  const entries = sortRooms(filteredEntries);
   const unarchivedEntries = roomEntries.filter(function (entry) {
     return !isArchivedAgentRoom(entry);
   });
@@ -523,7 +579,7 @@ function renderRooms() {
   for (const entry of entries) {
     retained.add(entry.room_id);
     const progress = taskSummary.get(entry.room_id);
-    const signature = JSON.stringify([entry, progress, relativeTime(entry.last_message ? entry.last_message.created_at : entry.updated_at)]);
+    const signature = JSON.stringify([entry, progress, roomPreference(entry.room_id), relativeTime(entry.last_message ? entry.last_message.created_at : entry.updated_at)]);
     let cached = roomListNodes.get(entry.room_id);
     if (!cached || cached.signature !== signature) {
       const old = cached && cached.item;

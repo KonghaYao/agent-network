@@ -132,12 +132,29 @@ export const FILES_STYLE = `
     .files-backdrop { display: none !important; }
     /* 聊天区与右侧文件栏默认 50/50，可拖动分隔条调整；宽度变量由 React 岛写入。 */
     .chat-pane { flex: 1 1 auto; min-width: 320px; }
-    /* 先减去 300px 会话栏和分隔条，再按比例分配；min/max 保证双栏可用。 */
+    /* 右栏打开时为聊天头留出完整联系人标题与常用操作的空间。比例偏大时
+       允许文件/监控栏收窄，并让聊天头换行；不要把标题压成几字宽。 */
+    body.page-room:has(#files-pane:not([hidden])) .chat-head,
+    body.page-room:has(#monitor-pane:not([hidden])) .chat-head {
+      flex-wrap: wrap; row-gap: 4px; padding-top: 8px; padding-bottom: 8px; }
+    body.page-room:has(#files-pane:not([hidden])) .chat-id,
+    body.page-room:has(#monitor-pane:not([hidden])) .chat-id {
+      flex: 1 1 200px; min-width: 200px; }
+    body.page-room:has(#files-pane:not([hidden])) .title-row,
+    body.page-room:has(#monitor-pane:not([hidden])) .title-row {
+      flex-wrap: wrap; row-gap: 2px; }
+    body.page-room:has(#files-pane:not([hidden])) .title-row h2,
+    body.page-room:has(#monitor-pane:not([hidden])) .title-row h2 {
+      flex: 1 1 120px; min-width: 120px; }
+    /* 先减去 300px 会话栏、分隔条和 320px 聊天工作区，再按比例分配；
+       分隔条仍可拖动，但文件/监控栏不会挤掉标题与聊天操作。 */
     .files-pane { flex: 0 0 calc((100% - 300px - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
       width: calc((100% - 300px - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
       min-width: 280px;
       max-width: calc(100% - 300px - var(--pane-resizer-width) - 320px);
       box-sizing: border-box; }
+    body.page-room:has(#monitor-pane:not([hidden])) .monitor-pane {
+      max-width: calc(100% - 300px - var(--pane-resizer-width) - 320px); }
   }
 
   @media (max-width: 759px) {

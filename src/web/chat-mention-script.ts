@@ -6,9 +6,51 @@
  * `actor_id`，展示名仅用于插入正文、去重与展示。
  */
 export const CHAT_MENTION_SCRIPT = `
+let activeMentionIndex = -1;
+
 function hideMentionPicker() {
   if (mentionPicker) mentionPicker.hidden = true;
+  activeMentionIndex = -1;
+  if (bodyInput) {
+    bodyInput.setAttribute('aria-expanded', 'false');
+    bodyInput.removeAttribute('aria-activedescendant');
+  }
   activeMention = null;
+}
+
+/** Keep focus in the composer while giving keyboard users a real active option. */
+function moveMentionSelection(direction) {
+  if (!mentionPicker || mentionPicker.hidden) return false;
+  const options = Array.from(mentionPicker.querySelectorAll('.mention-item'));
+  if (options.length === 0) return false;
+  activeMentionIndex = activeMentionIndex < 0
+    ? (direction > 0 ? 0 : options.length - 1)
+    : (activeMentionIndex + direction + options.length) % options.length;
+  options.forEach(function (option, index) {
+    const active = index === activeMentionIndex;
+    option.setAttribute('aria-selected', active ? 'true' : 'false');
+    option.classList.toggle('keyboard-active', active);
+    option.style.backgroundColor = active ? 'var(--wx-hover)' : '';
+  });
+  const active = options[activeMentionIndex];
+  if (bodyInput && active) bodyInput.setAttribute('aria-activedescendant', active.id);
+  if (active && typeof active.scrollIntoView === 'function') {
+    active.scrollIntoView({ block: 'nearest' });
+  }
+  return true;
+}
+
+/** Enter selects the active member (or the first match) before it can submit. */
+function chooseMentionSelection() {
+  if (!mentionPicker || mentionPicker.hidden) return false;
+  const options = Array.from(mentionPicker.querySelectorAll('.mention-item'));
+  if (options.length === 0) return false;
+  const index = activeMentionIndex < 0 ? 0 : activeMentionIndex;
+  const option = options[index];
+  const member = option && members.get(option.dataset.actorId);
+  if (!member) return false;
+  insertMention(member);
+  return true;
 }
 
 /** 删除/改写 @ 文本后，旧的同名 actor 选择不能占用下一次选中的目标。 */
@@ -34,6 +76,10 @@ function updateMentionPicker() {
   }
   const query = match[1];
   activeMention = { start: caret - query.length - 1, end: caret };
+  activeMentionIndex = -1;
+  bodyInput.setAttribute('aria-controls', 'mention-picker');
+  bodyInput.setAttribute('aria-expanded', 'true');
+  bodyInput.removeAttribute('aria-activedescendant');
   const lower = query.toLowerCase();
   const candidates = [];
   for (const member of members.values()) {
@@ -53,10 +99,12 @@ function updateMentionPicker() {
       item.type = 'button';
       item.className = 'mention-item';
       item.setAttribute('role', 'option');
+      item.id = 'mention-option-' + String(member.actor_id).replace(/[^a-zA-Z0-9_-]/g, '-');
+      item.dataset.actorId = member.actor_id;
+      item.setAttribute('aria-selected', 'false');
       const selected = mentionSelectionsFor(activeRoomId).some(function (entry) {
         return entry.actor_id === member.actor_id;
       });
-      item.setAttribute('aria-selected', selected ? 'true' : 'false');
       if (selected) item.classList.add('selected');
       const name = document.createElement('span');
       name.textContent = member.name;

@@ -210,7 +210,7 @@ function deliveryAttention(
   return 'informational';
 }
 
-function roomStreamItems(
+export function roomStreamItems(
   row: OutboxStreamRow,
   metadata: Record<string, unknown>,
   members: RoomMemberRow[],
@@ -228,6 +228,14 @@ function roomStreamItems(
           row,
           metadata,
         );
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
+    case 'message_recalled': {
+      for (const member of activeRecipients(members, eventSeq)) {
+        const item = withLocation(baseItem(row, 'room.message', 'message', 'informational'), row, metadata);
+        item.change = 'recalled';
         result.push({ actorId: member.actor_id, item });
       }
       return result;

@@ -329,6 +329,7 @@ function renderContactFriends(items) {
     title.textContent = contactActorLabel(friend);
     main.append(title);
     row.append(main);
+    addDirectChatAction(row, friend);
     contactFriendList.append(row);
   }
 }
@@ -489,6 +490,8 @@ async function openContactModal() {
   contactModal.hidden = false;
   setContactStatus('');
   setContactLinkStatus('');
+  const directStatus = document.getElementById('direct-chat-status');
+  if (directStatus) directStatus.textContent = '';
   renderContactRequests([]);
   if (contactLinkPlaintext) {
     setContactLinkStatus('链接明文只保留在本次页面会话，可继续复制或撤销。', 'success');

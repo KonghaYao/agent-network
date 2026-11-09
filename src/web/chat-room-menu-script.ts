@@ -47,6 +47,8 @@ const ROOM_MENU_AGENT_NAME_MAX = ${LIMITS.actorNameMax};
 // 与 network_room_create 的 title 上限一致；这里只做显示截断，不改服务端校验。
 const ROOM_MENU_ROOM_NAME_MAX = 160;
 
+document.getElementById('room-menu-pin').addEventListener('click', function () { toggleRoomPreference('pinned'); });
+document.getElementById('room-menu-mute').addEventListener('click', function () { toggleRoomPreference('muted'); });
 let roomMenuTarget = null;
 let roomMenuAnchor = null;
 let roomMenuOpenSeq = 0;
@@ -237,6 +239,7 @@ async function openRoomMenu(link, x, y) {
     can_leave: entry ? Boolean(entry.can_leave) : false,
     can_dissolve: entry ? Boolean(entry.can_dissolve) : false
   };
+  syncRoomPreferenceMenu(roomId);
   roomMenuAnchor = link;
   roomMenuBusy = false;
   button.textContent = ROOM_MENU_COPY_LABEL;

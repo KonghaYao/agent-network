@@ -2,8 +2,8 @@
  * 群公告片段：聊天区顶部展示，owner 与管理员可编辑。
  *
  * 授权来自服务端 `room.capabilities.manage_announcement`；普通成员只读。
- * 保存带 `expected_announcement_revision`，并发修改返回 VERSION_CONFLICT，
- * 页面保留弹窗并提示重新打开，不静默覆盖他人公告。
+ * 保存带 `expected_announcement_revision`，并发修改返回 VERSION_CONFLICT；
+ * 页面载入最新 revision、保留草稿并要求用户明确确认覆盖重试。
  * 片段与其它脚本拼进同一个内联 `<script>` 共享作用域。
  */
 export const CHAT_ANNOUNCEMENT_SCRIPT = `
@@ -59,7 +59,7 @@ function openAnnouncementModal() {
   const editable = canManageAnnouncement();
   announcementOpener = document.activeElement;
   announcementContext = { roomId: activeRoomId, epoch: roomEpoch,
-    revision: room.announcement_revision, busy: false };
+    revision: room.announcement_revision, busy: false, retryPending: false };
   announcementModal.hidden = false;
   if (announcementSave) { announcementSave.disabled = false; announcementSave.textContent = '保存'; }
   if (announcementInput) {
@@ -107,10 +107,12 @@ async function submitAnnouncementForm(event) {
   const epoch = roomEpoch;
   if (!roomId) return;
   const revision = context.revision;
+  const retrying = Boolean(context.retryPending);
+  context.retryPending = false;
   context.busy = true;
   if (announcementSave) {
     announcementSave.disabled = true;
-    announcementSave.textContent = '正在保存…';
+    announcementSave.textContent = retrying ? '正在覆盖…' : '正在保存…';
   }
   setAnnouncementError('');
   try {
@@ -122,13 +124,28 @@ async function submitAnnouncementForm(event) {
     });
     if (!isActiveRoom(roomId, epoch) || announcementContext !== context) return;
     applyRoomDetail(result);
+    context.retryPending = false;
     closeAnnouncementModal();
     statusElement.textContent = value ? '群公告已更新' : '群公告已清除';
   } catch (error) {
     if (!isActiveRoom(roomId, epoch) || announcementContext !== context) return;
     const code = error && error.code;
     if (code === 'VERSION_CONFLICT') {
-      setAnnouncementError('公告已被其他人更新，请关闭后重新打开再编辑。');
+      try {
+        const latest = await callTool('network_room_get', { room_id: roomId });
+        if (!isActiveRoom(roomId, epoch) || announcementContext !== context) return;
+        const draft = announcementInput ? announcementInput.value : value;
+        applyRoomDetail(latest);
+        context.revision = latest.room.announcement_revision;
+        if (announcementInput) announcementInput.value = draft;
+        context.retryPending = true;
+        const current = String(latest.room.announcement || '').trim();
+        const preview = current ? ' 当前版本：“' + current + '”。' : ' 当前版本为空。';
+        setAnnouncementError('公告已被其他人更新。' + preview + '你的草稿已保留；检查后点击“确认覆盖并重试”。');
+      } catch (refreshError) {
+        if (!isActiveRoom(roomId, epoch) || announcementContext !== context) return;
+        setAnnouncementError('公告已被其他人更新，草稿已保留；暂时无法读取最新公告，请稍后点击“保存”重试。');
+      }
     } else if (code === 'NOT_OWNER' || code === 'PERMISSION_DENIED') {
       setAnnouncementError('只有群 owner 或管理员可以编辑公告。');
     } else {
@@ -138,7 +155,7 @@ async function submitAnnouncementForm(event) {
     context.busy = false;
     if (announcementSave && announcementContext === context) {
       announcementSave.disabled = false;
-      announcementSave.textContent = '保存';
+      announcementSave.textContent = context.retryPending ? '确认覆盖并重试' : '保存';
     }
   }
 }

@@ -313,10 +313,18 @@ function renderCurrentMembers() {
     role.textContent = memberRoleLabel(member);
     item.append(name, role);
     const actions = member.actions && typeof member.actions === 'object' ? member.actions : {};
-    if (actions.can_remove || actions.can_set_admin || actions.can_revoke_admin || actions.can_transfer_owner) {
+    const canStartDirect = Boolean(
+      identity && member.actor_id !== identity.actor_id && member.kind === 'human'
+    );
+    if (canStartDirect || actions.can_remove || actions.can_set_admin || actions.can_revoke_admin || actions.can_transfer_owner) {
       const tools = document.createElement('span');
       tools.className = 'member-roster-actions';
       const menu = memberMenuElement();
+      if (canStartDirect) {
+        menu.append(memberMenuItem('发起单聊', false, function () {
+          return startDirectConversation(member.actor_id, member.name, membersErrorElement);
+        }));
+      }
       if (actions.can_set_admin) {
         menu.append(memberMenuItem('设为管理员', false, function () {
           return submitMemberRole(member, 'admin');

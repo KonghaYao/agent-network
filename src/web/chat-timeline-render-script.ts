@@ -33,7 +33,7 @@ function timelineBodySignature(item) {
   }
   // Receipts are mutable; the body is not. Expanded bodies and React roots stay mounted.
   return JSON.stringify([
-    item.preview, item.body_bytes, item.created_at, item.sender_id,
+    item.preview, item.body_bytes, item.created_at, item.sender_id, item.reply_to,
     isAgentMessage(item), senderName(item.sender_id), room && room.kind,
     identity && identity.name, timelineMentionVersion
   ]);

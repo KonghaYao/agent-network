@@ -6112,7 +6112,8 @@ async function main(): Promise<void> {
           '本浏览器没有保存该 Agent 的 token/MCP URL',
         ),
       );
-      await page.mouse.click(200, 600);
+      await page.mouse.click(1, 1);
+      await page.locator('#room-menu').waitFor({ state: 'hidden' });
       checkEqual('390px 点击菜单外关闭', await page.locator('#room-menu').isHidden(), true);
       await context.close();
     }
@@ -6303,7 +6304,8 @@ async function main(): Promise<void> {
         (await page.locator('#room-menu-block').textContent())?.trim(),
         '拉黑',
       );
-      await page.mouse.click(200, 600);
+      await page.keyboard.press('Escape');
+      await page.locator('#room-menu').waitFor({ state: 'hidden' });
 
       // 举报弹窗：选择成员、提交后显示受控接收状态，不创建向外发送。
       await page.locator(roomLink(data.direct.room.room_id)).click({ button: 'right' });
@@ -6728,6 +6730,15 @@ async function main(): Promise<void> {
       const savedTop = (await page.evaluate(
         `document.getElementById('messages') ? document.getElementById('messages').scrollTop : 0`,
       )) as number;
+      const readAnchor = () => page.locator('#messages').evaluate((element) => {
+        const viewport = element.getBoundingClientRect();
+        const row = Array.from(element.querySelectorAll('[data-message-id]')).find((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.bottom > viewport.top && rect.top < viewport.bottom;
+        });
+        return { id: row?.getAttribute('data-message-id'), offset: row ? row.getBoundingClientRect().top - viewport.top : null };
+      });
+      const savedAnchor = await readAnchor();
       await page.fill('#body', '未发送的草稿');
       await page.locator('#room-filter-group').click();
       await page.locator(roomLink(data.group.room.room_id)).click();
@@ -6742,12 +6753,8 @@ async function main(): Promise<void> {
         (await messageCount(page)) >= 20,
         await messageCount(page),
       );
-      await waitForBottom(page, '缓存命中进入仍滚到最新');
-      const restoredGap = await bottomGap(page);
-      check('缓存命中进入仍滚到最新消息', restoredGap <= 2, {
-        savedTop,
-        restoredGap,
-      });
+      const restoredAnchor = await readAnchor();
+      check('缓存命中保留历史阅读锚点', Boolean(savedAnchor.id) && savedAnchor.id === restoredAnchor.id && Math.abs(Number(savedAnchor.offset) - Number(restoredAnchor.offset)) <= 3, { savedTop, savedAnchor, restoredAnchor });
 
       await page.locator('#back').dispatchEvent('click');
       await page.waitForURL(`${server.base}/`);

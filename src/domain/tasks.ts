@@ -1378,6 +1378,7 @@ export async function taskCreate(
     ) {
       throw new BusinessError('NOT_FOUND', '来源消息不存在或当前不可见');
     }
+    if (source.body === '') throw new BusinessError('INVALID_ARGUMENT', '不能从已撤回的消息创建任务');
   }
   const parentTaskId = input.parent_task_id ?? null;
   const relatedTaskId = input.related_task_id ?? null;
@@ -1543,6 +1544,9 @@ export async function taskCreate(
       memberGuard(db, room.room_id, caller),
       capabilityGuardStatement(db, room.room_id, caller, 'create_task'),
       roomDissolvedGuardStatement(db, room.room_id),
+      ...(source ? [db.prepare(guardSql('permissionDenied', `NOT EXISTS (
+        SELECT 1 FROM messages WHERE message_id = ? AND body <> ''
+      )`)).bind(source.message_id)] : []),
       participantGuard(db, room.room_id, reviewerId),
       ...(assigneeId ? [participantGuard(db, room.room_id, assigneeId)] : []),
       ...(assigneeId ? [contactBlockGuardStatement(db, caller, assigneeId)] : []),

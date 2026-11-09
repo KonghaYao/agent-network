@@ -63,7 +63,9 @@ async function resolveScope(
     const floor = boundary.fromSeq;
     // 解散后的归档事件上界就是 room scope 的事件高水位；不能用消息 head_seq
     // 截断，否则 room_dissolved/文件/任务事件会被漏掉。
-    const head = boundary.toSeq === null ? room.head_seq : boundary.toSeq;
+    const eventHead = await db.prepare('SELECT COALESCE(MAX(event_seq), ?) AS head FROM events WHERE scope_kind = \'room\' AND scope_id = ?')
+      .bind(room.head_seq, roomId).first<{ head: number }>();
+    const head = boundary.toSeq === null ? Number(eventHead?.head ?? room.head_seq) : boundary.toSeq;
     return {
       kind: 'room',
       id: roomId,

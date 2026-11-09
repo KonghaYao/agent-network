@@ -8,7 +8,7 @@ import { LIMITS } from '../contracts/limits';
  * `chat-session-script.ts` 负责。阈值只来自 `src/contracts/limits.ts`。
  *
  * 关键不变量：
- * - 进入/切换房间一律 pinned；用户上翻由 wheel/touch/按键/滚动方向立即取消；
+ * - 首次进入房间 pinned；切回恢复阅读锚点，用户上翻立即取消跟随；
  * - 上翻后进入短 suppressPin 窗口，异步高度与 scroll 事件都不得自动回底；
  * - 只有“回到最新”按钮或用户明确向下滚回底部才重新 pinned；
  * - 程序化 scrollTop 写入期间产生的 scroll 事件不得改变 pinned；
@@ -75,6 +75,9 @@ const scrollController = (function () {
   let anchorElement = null;
   let anchorOffset = 0;
   let anchorUntil = 0;
+  // 切回会话时锚点来自明确的消息 ID；首轮 Markdown 重建可能累计改变
+  // 数百像素高度。允许跟随这轮布局，任意用户滚动意图立即结束恢复。
+  let explicitRoomAnchor = false;
   let anchorRaf = 0;
   let anchorTimer = 0;
   let anchorSettleTimer = 0;
@@ -165,7 +168,58 @@ const scrollController = (function () {
     return null;
   }
 
+  function firstVisibleMessage() {
+    if (!messagesElement) return null;
+    const listTop = messagesElement.getBoundingClientRect().top;
+    const listBottom = messagesElement.getBoundingClientRect().bottom;
+    for (const child of messagesElement.children) {
+      if (!child.dataset || child.classList.contains('msg-time')) continue;
+      const messageId = child.dataset.messageId || null;
+      const presenceId = child.dataset.presenceId || null;
+      if (!messageId && !presenceId) continue;
+      const rect = child.getBoundingClientRect();
+      if (rect.top >= listBottom || rect.bottom <= listTop) continue;
+      return {
+        messageId: messageId,
+        presenceId: presenceId,
+        offset: rect.top - listTop
+      };
+    }
+    return null;
+  }
+
+  function capturePosition() {
+    if (!messagesElement) return { scrollTop: 0, pinned: true, anchor: null };
+    reconcilePinned();
+    const anchor = firstVisibleMessage();
+    return {
+      scrollTop: messagesElement.scrollTop,
+      pinned: pinned,
+      anchor: anchor
+    };
+  }
+
+  function restoreMessageAnchor(anchor) {
+    if (!messagesElement || !anchor) return;
+    let target = null;
+    for (const child of messagesElement.children) {
+      if (!child.dataset) continue;
+      if ((anchor.messageId && child.dataset.messageId === anchor.messageId) ||
+          (anchor.presenceId && child.dataset.presenceId === anchor.presenceId)) {
+        target = child;
+        break;
+      }
+    }
+    if (!target) return;
+    const listTop = messagesElement.getBoundingClientRect().top;
+    const drift = target.getBoundingClientRect().top - listTop - anchor.offset;
+    if (Math.abs(drift) >= 0.5) {
+      messagesElement.scrollTop += drift;
+    }
+  }
+
   function captureAnchor() {
+    explicitRoomAnchor = false;
     const target = firstVisibleChild();
     if (!target) {
       anchorElement = null;
@@ -250,6 +304,7 @@ const scrollController = (function () {
   }
 
   function clearAnchor() {
+    explicitRoomAnchor = false;
     anchorElement = null;
     anchorUntil = 0;
     if (captureFrame) {
@@ -271,7 +326,7 @@ const scrollController = (function () {
     const delta = current - anchorOffset;
     if (Math.abs(delta) < 0.5) return;
     // 锚点被甩出太远：说明视口已经换位置，旧锚点不能再把用户拉回去。
-    if (Math.abs(delta) > SCROLL_ANCHOR_MAX_SHIFT_PX) {
+    if (!explicitRoomAnchor && Math.abs(delta) > SCROLL_ANCHOR_MAX_SHIFT_PX) {
       anchorElement = null;
       return;
     }
@@ -526,6 +581,7 @@ const scrollController = (function () {
   }
 
   function noteUserScrolling() {
+    explicitRoomAnchor = false;
     userScrollUntil = nowMs() + SCROLL_USER_IDLE_MS;
     cancelAnchorRestore();
   }
@@ -534,11 +590,13 @@ const scrollController = (function () {
     if (!messagesElement) return;
     messagesElement.addEventListener('scroll', handleScroll, { passive: true });
     messagesElement.addEventListener('wheel', function (event) {
-      if (event.deltaY >= 0) return;
+      if (event.deltaY === 0) return;
       noteUserScrolling();
-      unpin();
+      if (event.deltaY < 0) unpin();
     }, { passive: true });
+    messagesElement.addEventListener('pointerdown', noteUserScrolling, { passive: true });
     messagesElement.addEventListener('touchstart', function (event) {
+      noteUserScrolling();
       const touch = event.touches && event.touches[0];
       scrollTouchY = touch ? touch.clientY : null;
     }, { passive: true });
@@ -561,12 +619,13 @@ const scrollController = (function () {
     }, { passive: true });
     document.addEventListener('keydown', function (event) {
       const key = event.key;
-      if (key !== 'PageUp' && key !== 'Home' && key !== 'ArrowUp') return;
+      const up = key === 'PageUp' || key === 'Home' || key === 'ArrowUp';
+      if (!up && key !== 'PageDown' && key !== 'End' && key !== 'ArrowDown' && key !== ' ') return;
       const target = event.target;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ||
           target.isContentEditable)) return;
       noteUserScrolling();
-      unpin();
+      if (up) unpin();
     });
     if (typeof IntersectionObserver === 'function') {
       messagesScrollObserver = new IntersectionObserver(function (entries) {
@@ -620,6 +679,33 @@ const scrollController = (function () {
       clearAnchor();
       pinToBottom();
       noteContentChanged();
+    },
+    /** Restore a cached viewport without turning historical reading into a read action. */
+    capturePosition: capturePosition,
+    restorePosition: function (top, shouldPin, anchor) {
+      if (!messagesElement) return;
+      cancelPendingPins();
+      clearAnchor();
+      forceNextApply = false;
+      suppressPinUntil = nowMs() + SCROLL_SUPPRESS_PIN_MS;
+      const maxTop = Math.max(0, messagesElement.scrollHeight - messagesElement.clientHeight);
+      const requestedTop = Number.isFinite(Number(top)) ? Number(top) : maxTop;
+      messagesElement.scrollTop = Math.max(0, Math.min(requestedTop, maxTop));
+      contentRebuild = false;
+      pinned = Boolean(shouldPin) && distanceFromBottom() <= SCROLL_STICKY_PX;
+      if (pinned) {
+        suppressPinUntil = 0;
+        clearAnchor();
+        hideJumpLatest();
+        pinToBottom();
+      } else {
+        restoreMessageAnchor(anchor);
+        markProgrammatic();
+        lastScrollTop = messagesElement.scrollTop;
+        lastScrollHeight = messagesElement.scrollHeight;
+        captureAnchor();
+        explicitRoomAnchor = Boolean(anchor);
+      }
     },
     pinNextApply: function () {
       pinned = true;

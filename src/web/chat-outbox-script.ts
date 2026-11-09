@@ -112,13 +112,13 @@ function outboxInvokeKey(invoke, mentions, invokeExplicit) {
 }
 
 /** 只有同房间、同正文、同目标且可重试的失败意图才允许复用原 ID。 */
-function outboxFindReusable(roomId, body, invoke, mentions, invokeExplicit) {
+function outboxFindReusable(roomId, body, invoke, mentions, invokeExplicit, replyTo) {
   const items = outboxItems();
   const key = outboxInvokeKey(invoke, mentions, invokeExplicit);
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (item.room_id !== roomId || item.status !== 'failed' || !item.retryable) continue;
-    if (item.body !== body) continue;
+    if (item.body !== body || (item.reply_to || null) !== (replyTo || null)) continue;
     const itemExplicit = item.invoke_explicit === true || item.invoke.length > 0;
     if (outboxInvokeKey(item.invoke, item.mentions || [], itemExplicit) !== key) continue;
     return item;
@@ -126,13 +126,15 @@ function outboxFindReusable(roomId, body, invoke, mentions, invokeExplicit) {
   return null;
 }
 
-function outboxCreate(roomId, body, invoke, mentions, invokeExplicit) {
+function outboxCreate(roomId, body, invoke, mentions, invokeExplicit, replyTo, replyVersion) {
   const at = Date.now();
   const item = {
     client_message_id: crypto.randomUUID(),
     request_id: requestId('web_msg'),
     room_id: roomId,
     body: body,
+    reply_to: replyTo || null,
+    reply_version: replyVersion || null,
     invoke: invoke.slice(),
     mentions: mentions.slice(),
     invoke_explicit: Boolean(invokeExplicit),
@@ -198,7 +200,7 @@ function outboxApplyFound(intent, status) {
       message_id: status.message_id || null
     });
   }
-  if (Number(status.body_bytes) !== outboxByteLength(intent.body)) {
+  if (!status.recalled && Number(status.body_bytes) !== outboxByteLength(intent.body)) {
     return outboxUpdate(intent.client_message_id, {
       status: 'failed',
       retryable: false,
@@ -371,12 +373,15 @@ function outboxPruneAgainstTimeline(items) {
 function outboxComposerMatches(intent) {
   if (!bodyInput || !isActiveRoom(intent.room_id, roomEpoch)) return false;
   const text = bodyInput.value.trim();
-  return composerOutgoingBody(intent.room_id, text) === intent.body;
+  const reply = composerReply(intent.room_id);
+  return composerOutgoingBody(intent.room_id, text) === intent.body &&
+    (reply ? reply.message_id : null) === (intent.reply_to || null);
 }
 
 /** 发送成功仅消费对应附件与未被改写的草稿，按房间和输入快照收尾。 */
 function outboxFinishCommitted(intent, options) {
   const settings = options || {};
+  if (settings.preserveComposer) return;
   const currentRoom = activeRoomId === intent.room_id;
   const savedDraft = drafts.has(intent.room_id)
     ? drafts.get(intent.room_id)
@@ -386,6 +391,7 @@ function outboxFinishCommitted(intent, options) {
       ? String(savedDraft || '') === settings.composerDraft
       : typeof settings.submittedText === 'string' &&
         String(savedDraft || '').trim() === settings.submittedText;
+  finishComposerReply(intent, settings);
   // 已发送的 @ 选择独立消费；发送期间新选的目标属于下一条草稿。
   const consumed = new Set(settings.sentMentionSelections || []);
   const remaining = (mentionSelections.get(intent.room_id) || []).filter(function (entry) {
@@ -428,6 +434,7 @@ async function outboxSubmit(intent, options) {
     room_id: intent.room_id,
     body: intent.body
   };
+  if (intent.reply_to) args.reply_to = intent.reply_to;
   // 旧本地意图没有 invoke_explicit：有目标时按显式发送，空列表保持省略。
   const explicitInvoke = intent.invoke_explicit === true || intent.invoke.length > 0;
   if (explicitInvoke) args.invoke = intent.invoke;

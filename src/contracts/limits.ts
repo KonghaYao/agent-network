@@ -4,6 +4,8 @@ export const LIMITS = {
   httpBodyBytes: 512 * 1024,
   /** 单条消息正文 UTF-8 上限。 */
   messageBodyBytes: 256 * 1024,
+  /** 普通人类消息可撤回时间窗（毫秒）。 */
+  messageRecallWindowMs: 2 * 60_000,
   /** actor 展示名称长度上限（按去空格后的字符数）。 */
   actorNameMax: 96,
   /** actor 展示名称 UTF-8 字节上限；96 个 4 字节字符最多 384 字节。 */
@@ -17,6 +19,18 @@ export const LIMITS = {
   historyPageMax: 100,
   /** 正文分块上限。 */
   bodyChunkBytes: 64 * 1024,
+  /** 消息搜索关键词字符数上限。 */
+  messageSearchQueryMax: 200,
+  /** 消息搜索页默认 / 最大条数。 */
+  messageSearchPageDefault: 25,
+  messageSearchPageMax: 50,
+  /** 消息上下文前后条数上限与默认值。 */
+  messageContextMax: 10,
+  messageContextDefault: 3,
+  /** 搜索结果片段字符数。 */
+  messageSearchSnippetChars: 240,
+  /** 搜索游标字符串长度上限。 */
+  messageSearchCursorMax: 2048,
   /** 普通工具响应上限。 */
   toolResponseBytes: 256 * 1024,
   /** inbox 页默认 / 最大条数。 */

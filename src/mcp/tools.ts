@@ -2,6 +2,9 @@ import type { McpServer, StandardSchemaWithJSON } from '@modelcontextprotocol/se
 import { z } from 'zod';
 
 import { isBusinessError } from '../contracts/errors';
+import { messageSearch, messageContext, messageSearchSchema, messageContextSchema, messageSearchOutputSchema, messageContextOutputSchema } from '../domain/message-search';
+import { messageRecallSchema } from '../contracts/message-recall';
+import { messageRecall } from '../domain/message-recall';
 import {
   agentArchiveSchema,
   agentClaimCancelSchema,
@@ -1924,6 +1927,18 @@ export function registerTools(
 
   register(
     server,
+    'network_message_recall',
+    '撤回自己两分钟内发送的普通消息。含 Agent 投递或被任务引用的消息不能撤回；任务需要单独取消。重复调用安全幂等。',
+    messageRecallSchema,
+    z.object({ message_id: z.string(), recalled: z.literal(true) }),
+    async (input) => {
+      requireActor(principal);
+      return messageRecall(db, principal, input);
+    },
+  );
+
+  register(
+    server,
     'network_message_send_status',
     '按自己持久化的 client_message_id 对账发送结果，用于服务端已提交但响应丢失时判断是否还需要重试。只返回 message_id、room_id、created_seq、delivery_ids 与正文长度等定位信息，不返回正文或 preview；不要求当前仍是房间成员。found: false 才表示尚未提交。',
     messageSendStatusSchema,
@@ -1946,6 +1961,15 @@ export function registerTools(
       return historyList(db, principal, input);
     },
   );
+
+  register(server, 'network_message_search', '在当前有权读取的房间完整持久化消息正文中搜索关键词；分页固定快照，游标绑定查询词与成员代次，结果只返回有限片段。', messageSearchSchema, messageSearchOutputSchema, async (input) => {
+    requireActor(principal);
+    return messageSearch(db, principal, input);
+  }, { readOnlyHint: true });
+  register(server, 'network_message_context', '读取一条消息及其前后有限条上下文预览；长正文使用 network_message_read，服务端会重新检查房间成员与历史边界。', messageContextSchema, messageContextOutputSchema, async (input) => {
+    requireActor(principal);
+    return messageContext(db, principal, input);
+  }, { readOnlyHint: true });
 
   register(
     server,

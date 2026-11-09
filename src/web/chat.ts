@@ -24,6 +24,8 @@ import { FILES_STYLE } from './chat-files-styles';
 import { MONITOR_STYLE } from './chat-monitor-styles';
 import { MARKDOWN_STYLE } from './chat-markdown-styles';
 import { MESSAGE_FILES_STYLE } from './chat-message-files-styles';
+import { MESSAGE_ACTIONS_STYLE } from './chat-message-actions-styles';
+import { MOBILE_UX_STYLE } from './chat-mobile-ux-styles';
 import { APP_STYLE } from './chat-styles';
 import { UPLOAD_STYLE } from './chat-upload-styles';
 import {
@@ -76,7 +78,7 @@ ${logoutDialog()}
 ${meRenameDialog()}
 ${toastPane()}
 ${chatClientScript(roomId, markdownVersion, resizerVersion, drawboardVersion)}`,
-    APP_STYLE + FILES_STYLE + UPLOAD_STYLE + MONITOR_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE + DRAWBOARD_FALLBACK_STYLE,
+    APP_STYLE + FILES_STYLE + UPLOAD_STYLE + MONITOR_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE + DRAWBOARD_FALLBACK_STYLE + MESSAGE_ACTIONS_STYLE + MOBILE_UX_STYLE,
     { wide: true, bodyClass: isHome ? 'page-home' : 'page-room' },
   );
 }

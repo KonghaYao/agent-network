@@ -32,6 +32,8 @@ function applyRouteChrome(route) {
   document.body.classList.toggle('page-room', !home);
   document.title = home ? 'WeBots' : '聊天 · WeBots';
   // 路由切换时关闭瞬时 UI；new-agent 弹窗可能正在展示刚创建的凭据，保持打开。
+  closeMessageActionDialogs();
+  if (typeof closeMessageSearchDialogs === 'function') closeMessageSearchDialogs();
   hideMentionPicker();
   closeRoomMenu();
   closeRenameForm();

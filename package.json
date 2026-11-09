@@ -19,6 +19,7 @@
     "test:dsh-watch": "bun scripts/verify-dsh-watch.ts",
     "test:web": "bun scripts/verify-web.ts",
     "test:hotpaths": "bun scripts/verify-hotpaths.ts",
+    "test:ux": "bun scripts/ux-luna/run.ts",
     "test:web:perf": "bun scripts/verify-web-perf.ts",
     "test:perf": "PERF_EXPECT_INDEX=1 bun scripts/verify-perf.ts",
     "db:migrate": "bun src/bun/migrate.ts"

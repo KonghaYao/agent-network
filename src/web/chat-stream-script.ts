@@ -297,6 +297,12 @@ function handleStreamEventFrame(payload) {
     const roomId = typeof rawItem.room_id === 'string' ? rawItem.room_id : '';
     switch (source) {
       case 'room.message':
+        if (rawItem.change === 'recalled') {
+          applyRecalledMessage(roomId, rawItem.message_id);
+          refreshList = true;
+          if (roomId === activeRoomId) refreshRoom = true;
+          break;
+        }
         // 服务端已排除发送者；保留防御，避免自己的发送刷新造成重复渲染。
         if (selfId && rawItem.sender_id === selfId) break;
         refreshList = true;
@@ -340,7 +346,7 @@ function handleStreamEventFrame(payload) {
       case 'task.updated':
         // 任务事件只刷新任务面板、我的任务与侧栏 badge，不触发消息未读；
         // 任务卡片本身是普通消息，历史仍由 room.message 维护。
-        if (rawItem.change === 'offered') showToast('收到任务接手请求');
+        if (rawItem.change === 'offered' && !roomPreference(roomId).muted) showToast('收到任务接手请求');
         scheduleRoomTasksRefresh(roomId);
         break;
       case 'room.tasks':

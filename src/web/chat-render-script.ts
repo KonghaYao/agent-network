@@ -295,6 +295,11 @@ function receiptItem(item) {
 }
 
 function messageItem(item) {
+  if (Number(item.body_bytes) === 0) {
+    const recalled = systemLineItem('msg-recalled', '此消息已撤回');
+    recalled.dataset.messageId = item.message_id;
+    return recalled;
+  }
   const mine = Boolean(identity && item.sender_id === identity.actor_id);
   const agent = isAgentMessage(item);
   const element = document.createElement('li');
@@ -384,6 +389,7 @@ function messageItem(item) {
   taskSlot.className = 'msg-task-slot';
   taskSlot.hidden = true;
   content.append(taskSlot);
+  appendMessageActions(item, content);
   element.append(avatar, content);
   if (mine) {
     // 回执是消息下方的独立系统行，不放进气泡列，避免看起来像一条卡片。

@@ -87,6 +87,9 @@ export function sidebarPane(): string {
   <div class="room-menu" id="room-menu" role="menu" aria-label="会话操作" hidden>
     <button class="room-menu-item" id="room-menu-copy-prompt" type="button"
       role="menuitem">复制 Agent 连接提示词</button>
+    <button class="room-menu-item" id="room-menu-pin" type="button" role="menuitem">置顶聊天</button>
+    <button class="room-menu-item" id="room-menu-mute" type="button" role="menuitem">消息免打扰</button>
+    <p class="room-preference-hint">置顶和免打扰仅在此浏览器生效；免打扰保留灰色未读标记。</p>
     <button class="room-menu-item" id="room-menu-archive" type="button"
       role="menuitem" hidden>归档</button>
     <button class="room-menu-item danger" id="room-menu-toggle-disabled" type="button"

@@ -481,12 +481,14 @@ async function resolveRootLink(
       // 不区分“不存在”和“在加入前/策略外”，避免按 ID 探测历史内容。
       throw new BusinessError('NOT_FOUND', '消息不存在或当前不可见');
     }
+    if (replied.body === '') throw new BusinessError('INVALID_ARGUMENT', '不能回复已撤回的消息');
     replyTo = replied.message_id;
     if (!parent) parent = replied;
   }
   if (parent && !visibleMessage(parent, boundary)) {
     throw new BusinessError('NOT_FOUND', '消息不存在或当前不可见');
   }
+  if (parent && parent.body === '') throw new BusinessError('INVALID_ARGUMENT', '不能回复已撤回的消息');
 
   if (!parent) {
     return { replyTo, rootId: null, rootKey: '', hop: 0, parent: null };
@@ -962,7 +964,15 @@ export async function messageSend(
         existing.created_seq,
       );
       const replayedBody = replayed?.body ?? input.body;
-      if (existing.room_id !== room.room_id || existing.body !== replayedBody) {
+      let bodyMatches = existing.body === replayedBody;
+      if (!bodyMatches && existing.body === '' && existing.preview === '此消息已撤回') {
+        const recall = await db.prepare("SELECT metadata FROM events WHERE event_type = 'message_recalled' AND ref_id = ? ORDER BY event_seq DESC LIMIT 1")
+          .bind(existing.message_id).first<{ metadata: string }>();
+        let originalHash: string | null = null;
+        try { originalHash = (JSON.parse(recall?.metadata ?? '{}') as { body_sha256?: string }).body_sha256 ?? null; } catch { /* malformed legacy event: reject replay */ }
+        bodyMatches = originalHash !== null && originalHash === await sha256Hex(replayedBody);
+      }
+      if (existing.room_id !== room.room_id || !bodyMatches) {
         throw new BusinessError('IDEMPOTENCY_CONFLICT', 'client_message_id 已用于不同的消息内容', {
           message_id: existing.message_id,
         });
@@ -1013,6 +1023,7 @@ export interface MessageSendStatusItem {
   delivery_ids: string[];
   body_bytes: number | null;
   created_at: string | null;
+  recalled?: boolean;
 }
 
 interface MessageSendStatusRow {
@@ -1022,6 +1033,7 @@ interface MessageSendStatusRow {
   created_seq: number;
   body_bytes: number;
   created_at: number;
+  preview: string;
 }
 
 /**
@@ -1041,7 +1053,7 @@ export async function messageSendStatus(
   const placeholders = ids.map(() => '?').join(',');
   const rows = await db
     .prepare(
-      `SELECT message_id, room_id, client_message_id, created_seq, body_bytes, created_at
+      `SELECT message_id, room_id, client_message_id, created_seq, body_bytes, created_at, preview
          FROM messages WHERE sender_id = ? AND client_message_id IN (${placeholders})`,
     )
     .bind(sender, ...ids)
@@ -1082,6 +1094,7 @@ export async function messageSendStatus(
           delivery_ids: [],
           body_bytes: null,
           created_at: null,
+          recalled: false,
         };
       }
       return {
@@ -1093,6 +1106,7 @@ export async function messageSendStatus(
         delivery_ids: deliveriesByMessage.get(row.message_id) ?? [],
         body_bytes: row.body_bytes,
         created_at: String(row.created_at),
+        recalled: row.body_bytes === 0 && row.preview === '此消息已撤回',
       };
     }),
   };

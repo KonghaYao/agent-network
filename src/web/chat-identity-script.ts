@@ -128,6 +128,7 @@ function forgetIdentity(actorId) {
   identityStorageRemove(identityRecordKey(actorId));
   identityStorageRemove(AGENT_REGISTRY_PER_ACTOR_PREFIX + actorId);
   identityStorageRemove('agent-network-outbox:v1:' + actorId);
+  identityStorageRemove('agent-network-room-preferences-v1:' + actorId);
   identityStorageRemove(SYNC_CURSOR_PREFIX + actorId);
   forgetDrafts(actorId);
   forgetLegacyAgentEntries(actorId);
@@ -176,7 +177,7 @@ function forgetDrafts(actorId) {
     return;
   }
   for (const key of keys) {
-    if (key.indexOf(prefix) === 0) identityStorageRemove(key);
+    if (key.indexOf(prefix) === 0 || key.indexOf('agent-network-reply-v1:' + actorId + ':') === 0) identityStorageRemove(key);
   }
 }
 
@@ -620,36 +621,123 @@ function syncCursorClear(scope) {
   identityStorageSet(store.key, JSON.stringify(store.values));
 }
 
+/** Drop client-side message plaintext when a room sync cursor is no longer authorized. */
+function purgeInvalidRoomCache(roomId) {
+  const cached = roomCache.get(roomId);
+  const messageIds = new Set();
+  for (const item of (cached && Array.isArray(cached.items) ? cached.items : [])) {
+    if (item && item.message_id) messageIds.add(item.message_id);
+  }
+  if (activeRoomId === roomId) {
+    for (const item of (Array.isArray(currentItems) ? currentItems : [])) {
+      if (item && item.message_id) messageIds.add(item.message_id);
+    }
+  }
+  for (const messageId of messageIds) {
+    const expanded = expandedMessageBodies.get(messageId);
+    if (expanded !== undefined) expandedBodyCacheSize = Math.max(0, expandedBodyCacheSize - expanded.length * 2);
+    expandedMessageBodies.delete(messageId);
+    agentAutoExpandReads.delete(messageId);
+  }
+  if (activeRoomId === roomId) {
+    resetAgentAutoExpand();
+  }
+  discardRoomCache(roomId);
+  if (activeRoomId === roomId) {
+    // Hide old plaintext and disable send while the scheduled authoritative refresh checks access.
+    setChatLoading(true);
+  }
+}
+
+/** 首次房间快照锚定游标；之后始终只从保存的游标增量补读。 */
+function syncCursorPrimeRoom(roomId, headSeq) {
+  if (!roomId || syncCursorGet('room:' + roomId)) return;
+  const seq = Number(headSeq);
+  if (!Number.isSafeInteger(seq) || seq < 0) return;
+  const payload = { v: 1, scope: 'sync:room:' + roomId, dir: 'after', seq: seq, snapshot: seq };
+  const cursor = btoa(JSON.stringify(payload)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+  syncCursorSet('room:' + roomId, cursor);
+}
+
 let syncCatchUpRunning = false;
+let syncCatchUpResumeScope = null;
 
 /**
  * 重连补读：读取服务端游标，只补状态与刷新标记，不重放历史工作。
  *
- * 首次建立本地游标时使用服务端 head_cursor，避免把全部历史事件当成
- * “断线期间的新工作”。事件按 event_id/seq 去重；业务状态仍由工具读取。
+ * inbox 首次建立游标时使用服务端 head_cursor；房间游标由首次缓存快照的
+ * room.head_seq 锚定。只处理撤回事件，不重放历史工作。每轮最多读 5 页，
+ * 超出部分在下一次任务调度中继续；业务状态仍由工具读取。
  */
 async function syncCatchUp() {
   if (syncCatchUpRunning || !identity || !identity.actor_id) return;
   syncCatchUpRunning = true;
   let dirty = false;
+  let continueCatchUp = false;
+  let pageBudget = 5;
   const scopes = ['inbox'];
-  if (activeRoomId) scopes.push('room:' + activeRoomId);
+  const roomIds = new Set(Array.from(roomCache.keys()));
+  if (activeRoomId) roomIds.add(activeRoomId);
+  for (const roomId of roomIds) scopes.push('room:' + roomId);
+  let startScopeIndex = syncCatchUpResumeScope ? scopes.indexOf(syncCatchUpResumeScope) : 0;
+  if (startScopeIndex < 0) startScopeIndex = 0;
   try {
-    for (const scope of scopes) {
+    for (let scopeIndex = startScopeIndex; scopeIndex < scopes.length; scopeIndex += 1) {
+      const scope = scopes[scopeIndex];
       let cursor = syncCursorGet(scope);
       if (!cursor) {
-        const prime = await callTool('network_sync', { scope: scope, limit: 1 });
-        if (prime && prime.head_cursor) syncCursorSet(scope, prime.head_cursor);
-        continue;
+        // Inbox cursor is primed to avoid replaying old work. Room cursors are
+        // primed at the snapshot head when their first page is cached.
+        if (scope === 'inbox') {
+          const prime = await callTool('network_sync', { scope: scope, limit: 1 });
+          if (prime && prime.head_cursor) syncCursorSet(scope, prime.head_cursor);
+          continue;
+        }
+        const cached = roomCache.get(scope.slice('room:'.length));
+        if (cached && cached.room && cached.room.head_seq !== undefined) {
+          syncCursorPrimeRoom(scope.slice('room:'.length), cached.room.head_seq);
+          cursor = syncCursorGet(scope);
+        }
+        if (!cursor) {
+          const prime = await callTool('network_sync', { scope: scope, limit: 1 });
+          if (prime && prime.head_cursor) syncCursorSet(scope, prime.head_cursor);
+          continue;
+        }
       }
-      for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
-        const page = await callTool('network_sync', { scope: scope, cursor: cursor, limit: 50 });
+      let scopeHasMore = false;
+      while (pageBudget > 0) {
+        pageBudget -= 1;
+        let page;
+        try {
+          page = await callTool('network_sync', { scope: scope, ...(cursor ? { cursor: cursor } : {}), limit: 50 });
+        } catch (error) {
+          const message = error && error.message ? String(error.message) : String(error);
+          if (scope.indexOf('room:') === 0 && (message.indexOf('NOT_MEMBER:') === 0 || message.indexOf('NOT_FOUND:') === 0 || error.code === 'NOT_MEMBER' || error.code === 'NOT_FOUND')) {
+            const roomId = scope.slice('room:'.length);
+            syncCursorClear(scope);
+            purgeInvalidRoomCache(roomId);
+            dirty = true;
+            break;
+          }
+          throw error;
+        }
         if (page.reset_required) {
-          syncCursorClear(scope);
+          const roomId = scope.slice('room:'.length);
+          purgeInvalidRoomCache(roomId);
+          if (page.head_cursor) {
+            cursor = page.head_cursor;
+            syncCursorSet(scope, cursor);
+          } else syncCursorClear(scope);
           dirty = true;
           break;
         }
         for (const item of page.items || []) {
+          if (scope.indexOf('room:') === 0 && item && item.type === 'message_recalled') {
+            const metadata = item.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+            const recalledRoomId = typeof metadata.room_id === 'string' ? metadata.room_id : scope.slice('room:'.length);
+            const messageId = typeof metadata.message_id === 'string' ? metadata.message_id : item.ref_id;
+            if (messageId) applyRecalledMessage(recalledRoomId, messageId);
+          }
           const eventId = item && item.event_id !== undefined
             ? String(item.event_id)
             : item && item.seq !== undefined ? String(item.seq) : '';
@@ -661,9 +749,21 @@ async function syncCatchUp() {
           cursor = page.next_cursor;
           syncCursorSet(scope, cursor);
         }
-        if (!page.has_more) break;
+        scopeHasMore = Boolean(page.has_more);
+        if (!scopeHasMore) break;
+      }
+      if (scopeHasMore && pageBudget === 0) {
+        syncCatchUpResumeScope = scope;
+        continueCatchUp = true;
+        break;
+      }
+      if (pageBudget === 0 && scopeIndex + 1 < scopes.length) {
+        syncCatchUpResumeScope = scopes[scopeIndex + 1];
+        continueCatchUp = true;
+        break;
       }
     }
+    if (!continueCatchUp) syncCatchUpResumeScope = null;
     if (dirty) {
       scheduleRoomListRefresh(true);
       if (activeRoomId) {
@@ -681,6 +781,7 @@ async function syncCatchUp() {
     streamDebug('sync catch-up failed', error && error.message ? error.message : String(error));
   } finally {
     syncCatchUpRunning = false;
+    if (continueCatchUp) setTimeout(syncCatchUp, 0);
   }
 }
 

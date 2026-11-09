@@ -159,6 +159,9 @@ function cacheRoomState(roomId, patch) {
     timelineResumeCursor: null,
     olderEnded: false,
     scrollTop: 0,
+    pinned: true,
+    anchor: null,
+    syncCursorPrimed: false,
     lastMessage: null
   };
   if (patch) {
@@ -171,6 +174,9 @@ function cacheRoomState(roomId, patch) {
     if ('timelineResumeCursor' in patch) cache.timelineResumeCursor = patch.timelineResumeCursor;
     if ('olderEnded' in patch) cache.olderEnded = Boolean(patch.olderEnded);
     if ('scrollTop' in patch) cache.scrollTop = patch.scrollTop;
+    if ('pinned' in patch) cache.pinned = Boolean(patch.pinned);
+    if ('anchor' in patch) cache.anchor = patch.anchor;
+    if ('syncCursorPrimed' in patch) cache.syncCursorPrimed = Boolean(patch.syncCursorPrimed);
     if ('lastMessage' in patch) cache.lastMessage = patch.lastMessage;
   }
   cache.savedAt = Date.now();
@@ -195,6 +201,7 @@ function discardRoomCache(roomId) {
 
 function snapshotActiveRoom() {
   if (!activeRoomId || !room) return;
+  const viewport = scrollController.capturePosition();
   cacheRoomState(activeRoomId, {
     room: room,
     members: Array.from(members.values()),
@@ -204,7 +211,9 @@ function snapshotActiveRoom() {
     nextOlder: nextOlder,
     timelineResumeCursor: timelineResumeCursor,
     olderEnded: olderEnded,
-    scrollTop: messagesElement ? messagesElement.scrollTop : 0
+    scrollTop: viewport.scrollTop,
+    pinned: viewport.pinned,
+    anchor: viewport.anchor
   });
 }
 
@@ -402,9 +411,9 @@ function handleRoomError(error, roomId, epoch) {
 
 /**
  * 应用缓存房间：元数据、成员、草稿与输入框总是立即恢复；
- * 消息只在缓存不超过 ROOM_CACHE_RENDER_MAX 时整表预渲染。
- * 超过阈值时清空消息区并显示加载态，由最新页重新填充，避免切回长会话
- * 先重绘数百条历史再被 refresh 覆盖。
+ * 普通回访只在缓存不超过 ROOM_CACHE_RENDER_MAX 时整表预渲染；上翻历史
+ * 后回访会保留已加载时间线与可见消息锚点，避免切房把用户带到底部。
+ * 超过阈值的 pinned 缓存继续走轻量加载态，避免普通切回重绘长历史。
  */
 function applyCachedRoom(cache, options) {
   const settings = options || {};
@@ -414,7 +423,8 @@ function applyCachedRoom(cache, options) {
     : ROOM_CACHE_RENDER_MAX;
   const cachedItems = cache.items || [];
   const longCache = cachedItems.length > ROOM_CACHE_RENDER_MAX;
-  const renderItems = wantsRender && !longCache;
+  const restoringHistory = cache.pinned === false;
+  const renderItems = wantsRender && (!longCache || restoringHistory);
   room = cache.room || null;
   applyRoomLifecycle(room);
   members = new Map((cache.members || []).map(function (member) {
@@ -425,7 +435,7 @@ function applyCachedRoom(cache, options) {
   }));
   ownerTransfer = cache.ownerTransfer || null;
   currentItems = renderItems
-    ? cachedItems.slice(Math.max(0, cachedItems.length - limit))
+    ? cachedItems.slice(Math.max(0, cachedItems.length - (restoringHistory ? cachedItems.length : limit)))
     : [];
   if (currentItems.length < cachedItems.length) {
     // 只是预览或被丢弃的长缓存：旧游标会跳过最新页，交给刷新重新建立。
@@ -447,8 +457,11 @@ function applyCachedRoom(cache, options) {
   } else {
     setChatLoading(true, { keepContent: false, skeleton: true });
   }
-  // 缓存只用于立即绘制；进入会话一律看最新消息，不再恢复旧 scrollTop。
-  scrollController.scrollToBottom();
+  if (restoringHistory) {
+    scrollController.restorePosition(cache.scrollTop, false, cache.anchor);
+  } else {
+    scrollController.scrollToBottom();
+  }
   if (bodyInput) {
     if (!drafts.has(activeRoomId)) {
       const storedDraft = draftLoad(activeRoomId);
@@ -456,6 +469,7 @@ function applyCachedRoom(cache, options) {
     }
     bodyInput.value = drafts.get(activeRoomId) || '';
   }
+  if (typeof syncComposerReply === 'function') syncComposerReply();
   renderComposerFiles(activeRoomId);
   resizeComposer();
 }
@@ -655,6 +669,9 @@ async function doRefresh(roomId, epoch, forceScroll) {
   const lastMessage = room && room.last_message
     ? room.last_message
     : (result ? latestRealMessage(result.page) : null);
+  const previousCache = roomCache.get(roomId);
+  const shouldPrimeSyncCursor = Boolean(result && room &&
+    (!previousCache || previousCache.syncCursorPrimed !== true));
   if (!result && lastMessage && !hasLoadedTimelineItem(lastMessage)) {
     // 通知丢失/重连补拉时也能提示有新消息，不伪造条数。
     scrollController.noteNewMessage();
@@ -670,8 +687,14 @@ async function doRefresh(roomId, epoch, forceScroll) {
     timelineResumeCursor: timelineResumeCursor,
     olderEnded: olderEnded,
     scrollTop: messagesElement ? messagesElement.scrollTop : 0,
+    pinned: scrollController.isPinned(),
+    anchor: scrollController.capturePosition().anchor,
+    syncCursorPrimed: shouldPrimeSyncCursor || Boolean(previousCache && previousCache.syncCursorPrimed),
     lastMessage: lastMessage
   });
+  if (shouldPrimeSyncCursor && typeof syncCursorPrimeRoom === 'function') {
+    syncCursorPrimeRoom(roomId, room.head_seq);
+  }
   updateRoomEntry(room, lastMessage, false);
   // 任务列表只在进入房间/强制刷新/任务事件后读取；普通消息刷新不重复请求。
   if (force || roomTasksRoomId !== roomId) loadRoomTasks(roomId, epoch);
@@ -763,6 +786,9 @@ function seedRoomCacheFromDetail(detail) {
     timelineResumeCursor: null,
     olderEnded: false,
     scrollTop: 0,
+    pinned: true,
+    anchor: null,
+    syncCursorPrimed: false,
     lastMessage: entry.last_message || null
   });
   return detail.room.room_id;
@@ -831,10 +857,11 @@ async function openRoom(roomId, options) {
   syncComposerSendState();
   const cache = roomCache.get(roomId);
   const longCache = Boolean(cache && (cache.items || []).length > ROOM_CACHE_RENDER_MAX);
+  const restoreHistory = Boolean(cache && cache.pinned === false && !settings.force);
   if (cache) {
     // 长缓存只恢复房间元数据并显示加载态，不预渲染全部已加载历史。
-    applyCachedRoom(cache, longCache ? { renderItems: false } : undefined);
-    if (!longCache) setChatLoading(false);
+    applyCachedRoom(cache, longCache ? { renderItems: cache.pinned === false } : undefined);
+    if (!longCache || cache.pinned === false) setChatLoading(false);
   } else {
     const keepContent = false;
     setChatLoading(true, {
@@ -853,6 +880,7 @@ async function openRoom(roomId, options) {
       }
       bodyInput.value = drafts.get(roomId) || '';
     }
+    if (typeof syncComposerReply === 'function') syncComposerReply();
     renderComposerFiles(roomId);
     resizeComposer();
   }
@@ -864,8 +892,8 @@ async function openRoom(roomId, options) {
   }
   if (!isActiveRoom(roomId, epoch)) return;
   try {
-    // 缓存只用于立即绘制：进入房间后一律取最新页并回到底部。
-    await refresh(true);
+    // 返回上翻阅读中的缓存时先保留其视口；新消息通过“回到最新”提示呈现。
+    await refresh(restoreHistory ? false : true);
   } catch (error) {
     if (isAbortError(error) || !isActiveRoom(roomId, epoch)) return;
     if (error && (error.code === 'NOT_MEMBER' || error.code === 'NOT_FOUND')) {

@@ -105,6 +105,9 @@ async function loadOlder() {
     if (isActiveRoom(roomId, epoch)) {
       olderLoading = false;
       updateOlderAffordance();
+      // 用户可能在请求途中继续上翻并抵达顶部；此时不会再产生 scroll
+      // 事件。完成本页后重查一次，接续被单飞锁挡住的加载意图。
+      if (!olderError && nextOlder && olderAutoTopReached()) scheduleOlderAutoLoad();
     }
   }
 }

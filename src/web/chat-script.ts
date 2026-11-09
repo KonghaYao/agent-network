@@ -6,6 +6,7 @@ import { CHAT_ANNOUNCEMENT_SCRIPT } from './chat-announcement-script';
 import { CHAT_ARCHIVE_SCRIPT } from './chat-archive-script';
 import { CHAT_AVATAR_SCRIPT } from './chat-avatar-script';
 import { CHAT_CONTACTS_SCRIPT } from './chat-contacts-script';
+import { CHAT_CONTACT_DIRECTORY_SCRIPT } from './chat-contact-directory-script';
 import { CHAT_DRAWBOARD_SCRIPT } from './chat-drawboard-script';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
@@ -27,6 +28,9 @@ import { CHAT_TIMELINE_RENDER_SCRIPT } from './chat-timeline-render-script';
 import { CHAT_RENDER_SCRIPT } from './chat-render-script';
 import { CHAT_RESIZER_SCRIPT } from './chat-resizer-script';
 import { CHAT_ROOM_MENU_SCRIPT } from './chat-room-menu-script';
+import { CHAT_ROOM_PREFERENCES_SCRIPT } from './chat-room-preferences-script';
+import { CHAT_MESSAGE_ACTIONS_SCRIPT } from './chat-message-actions-script';
+import { CHAT_MESSAGE_SEARCH_SCRIPT } from './chat-message-search-script';
 import { CHAT_ROUTER_SCRIPT } from './chat-router-script';
 import { CHAT_SAFETY_SCRIPT } from './chat-safety-script';
 import { CHAT_SCROLL_SCRIPT } from './chat-scroll-script';
@@ -171,6 +175,7 @@ const composerRequests = new Set();
 const composerSendingRooms = new Set();
 
 ${CHAT_IDENTITY_SCRIPT}
+${CHAT_ROOM_PREFERENCES_SCRIPT}
 ${CHAT_LIST_SCRIPT}
 ${CHAT_AVATAR_SCRIPT}
 ${CHAT_ARCHIVE_SCRIPT}
@@ -192,12 +197,15 @@ ${CHAT_OUTBOX_SCRIPT}
 ${NEW_AGENT_SCRIPT}
 ${CHAT_AGENTS_SCRIPT}
 ${CHAT_CONTACTS_SCRIPT}
+${CHAT_CONTACT_DIRECTORY_SCRIPT}
 ${CHAT_SAFETY_SCRIPT}
 ${CHAT_LOGOUT_SCRIPT}
 ${CHAT_ACCOUNT_RENAME_SCRIPT}
 ${CHAT_SCROLL_SCRIPT}
 ${CHAT_SESSION_SCRIPT}
 ${CHAT_HISTORY_SCRIPT}
+${CHAT_MESSAGE_ACTIONS_SCRIPT}
+${CHAT_MESSAGE_SEARCH_SCRIPT}
 ${CHAT_TASK_PROGRESS_SCRIPT}
 ${CHAT_TASK_RECOVERY_SCRIPT}
 ${CHAT_TASK_SUBMISSION_SCRIPT}
@@ -547,6 +555,7 @@ composer.addEventListener('submit', async function (event) {
   const sendRoomId = activeRoomId;
   if (!sendRoomId || composerSendingRooms.has(sendRoomId)) return;
   const sendEpoch = roomEpoch;
+  const reply = composerReply(sendRoomId);
   const composerDraft = bodyInput.value;
   const text = composerDraft.trim();
   const body = composerOutgoingBody(sendRoomId, text);
@@ -598,6 +607,7 @@ composer.addEventListener('submit', async function (event) {
     invokeTargets,
     mentionTargets,
     invokeExplicit,
+    reply && reply.message_id,
   );
   const reused = Boolean(intent);
   const finishOptions = {
@@ -633,6 +643,8 @@ composer.addEventListener('submit', async function (event) {
         invokeTargets,
         mentionTargets,
         invokeExplicit,
+        reply && reply.message_id,
+        reply && reply.version,
       );
     }
     // 自己的消息必须出现在底部；独立标志避免 refresh 合并时丢失强制滚底。
@@ -670,9 +682,25 @@ bodyInput.addEventListener('keydown', function (event) {
     hideMentionPicker();
     return;
   }
+  // Never consume the operating system's IME navigation/confirmation keys.
+  if (event.isComposing || composing || event.keyCode === 229 || Date.now() < ignoreEnterUntil) return;
+  if (!event.shiftKey && mentionPicker && !mentionPicker.hidden) {
+    if (event.key === 'ArrowDown' && moveMentionSelection(1)) {
+      event.preventDefault();
+      return;
+    }
+    if (event.key === 'ArrowUp' && moveMentionSelection(-1)) {
+      event.preventDefault();
+      return;
+    }
+    if (event.key === 'Enter' && chooseMentionSelection()) {
+      event.preventDefault();
+      return;
+    }
+  }
   if (event.key !== 'Enter' || event.shiftKey) return;
   if (!activeRoomId) return;
-  if (event.isComposing || composing || event.keyCode === 229 || Date.now() < ignoreEnterUntil) {
+  if (Date.now() < ignoreEnterUntil) {
     return;
   }
   event.preventDefault();
