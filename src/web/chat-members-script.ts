@@ -572,6 +572,8 @@ function membersCandidates(contacts) {
   const seen = new Set();
   return contacts.filter(function (contact) {
     if (!contact || typeof contact.actor_id !== 'string') return false;
+    // 管理列表可能保留已归档/停用 Agent 用于恢复，但不能再出现在“未加群”候选。
+    if (contact.archived === true || contact.disabled === true) return false;
     if (excluded.has(contact.actor_id) || seen.has(contact.actor_id)) return false;
     seen.add(contact.actor_id);
     return true;

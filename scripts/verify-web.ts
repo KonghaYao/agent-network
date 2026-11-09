@@ -9918,7 +9918,10 @@ async function main(): Promise<void> {
         currentGroup.members.map((member) => member.actor_id),
       );
       const candidateIds = new Set(
-        [...contactsForGroup, ...managedForGroup]
+        [
+          ...contactsForGroup,
+          ...managedForGroup.filter((item) => item.archived !== true && item.disabled !== true),
+        ]
           .map((item) => item.actor_id)
           .filter(
             (actorId) =>
@@ -9931,6 +9934,18 @@ async function main(): Promise<void> {
         await page.locator('#members-contacts input[type=checkbox]').count(),
         expectedCandidateCount,
       );
+      for (const archived of managedForGroup.filter(
+        (item) => item.archived === true || item.disabled === true,
+      )) {
+        checkEqual(
+          '归档或停用 Agent 不出现在添加成员候选',
+          await page
+            .locator('#members-contacts .contact-choice')
+            .filter({ hasText: archived.name })
+            .count(),
+          0,
+        );
+      }
       checkEqual(
         '个人收藏不出现在添加成员候选',
         await page

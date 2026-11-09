@@ -219,6 +219,7 @@ function agentRegistryReissue(ownerActorId, actorId, mcpUrl, fallback) {
  */
 async function loadManagedPickerAgents() {
   const items = [];
+  const hidden = new Set();
   let cursor = null;
   for (let page = 0; page < 5; page += 1) {
     const args = { limit: 100 };
@@ -226,6 +227,11 @@ async function loadManagedPickerAgents() {
     const result = await callTool('network_agents_managed_list', args);
     for (const item of result.items || []) {
       if (!item || typeof item.actor_id !== 'string') continue;
+      // 已归档/停用的 Agent 仍保留在管理列表用于恢复，但不能再作为入群候选。
+      if (item.archived === true || item.disabled === true) {
+        hidden.add(item.actor_id);
+        continue;
+      }
       items.push({
         actor_id: item.actor_id,
         kind: 'agent',
@@ -236,7 +242,7 @@ async function loadManagedPickerAgents() {
     if (!result.has_more || !result.next_cursor) break;
     cursor = result.next_cursor;
   }
-  return items;
+  return { items: items, hidden: hidden };
 }
 
 async function mergeAgentPickerContacts(ownerActorId, contacts) {
@@ -260,15 +266,17 @@ async function mergeAgentPickerContacts(ownerActorId, contacts) {
       created_at: String(Date.now())
     });
   }
-  for (const item of agentRegistryItems(ownerActorId).items) addAgent(item);
-  let managed = [];
+  let managed = { items: [], hidden: new Set() };
   try {
     managed = await loadManagedPickerAgents();
   } catch (error) {
     // managed list 失败不阻塞已加载的好友与本机 Agent；服务端仍会复核资格。
-    managed = [];
+    managed = { items: [], hidden: new Set() };
   }
-  for (const item of managed) addAgent(item);
+  for (const item of agentRegistryItems(ownerActorId).items) {
+    if (!managed.hidden.has(item.actor_id)) addAgent(item);
+  }
+  for (const item of managed.items) addAgent(item);
   return { contacts: merged };
 }
 `;
