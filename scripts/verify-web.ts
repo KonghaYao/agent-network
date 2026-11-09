@@ -7564,6 +7564,21 @@ async function main(): Promise<void> {
         pairingHint.includes('另一台设备') && pairingHint.includes('批准'),
         pairingHint,
       );
+      await page.waitForFunction(
+        `(document.getElementById('pairing-list-empty').textContent || '').includes('等待新设备扫描')`,
+        undefined,
+        { timeout: 5_000 },
+      );
+      checkEqual(
+        '未 join 时不把当前设备的配对挑战列成待确认设备',
+        await page.locator('#pairing-list .pairing-item').count(),
+        0,
+      );
+      checkEqual(
+        '未 join 时不显示确认新设备按钮',
+        await page.locator('#pairing-list button', { hasText: '确认新设备' }).count(),
+        0,
+      );
 
       await page.locator('#pairing-create').click();
       await page.waitForFunction(

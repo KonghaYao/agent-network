@@ -422,7 +422,7 @@ function pairingItem(entry) {
   item.appendChild(code);
   const actions = document.createElement('div');
   actions.className = 'pairing-item-actions';
-  if (entry.status === 'pending') {
+  if (entry.status === 'pending' && entry.confirm_code) {
     const approve = document.createElement('button');
     approve.type = 'button';
     approve.className = 'primary';
@@ -459,12 +459,17 @@ async function refreshPairings() {
   try {
     const page = await callTool('network_device_pairing_list', { limit: 50 });
     const active = (page.items || []).filter(function (entry) {
-      return entry && (entry.status === 'pending' || entry.status === 'approved');
+      if (!entry || (entry.status !== 'pending' && entry.status !== 'approved')) return false;
+      // confirm_code 只在有新设备 join 后产生；空值代表左侧配对码仍在等待扫描，
+      // 不是“待确认的新设备”，不能提前显示确认按钮。
+      return Boolean(entry.confirm_code);
     });
     list.replaceChildren();
     for (const entry of active) list.appendChild(pairingItem(entry));
     empty.hidden = active.length > 0;
-    empty.textContent = active.length === 0 ? '暂无待确认设备' : '';
+    empty.textContent = active.length === 0
+      ? '暂无待确认设备；左侧配对码正在等待新设备扫描。'
+      : '';
   } catch (error) {
     empty.hidden = false;
     empty.textContent = '读取配对请求失败：' +
