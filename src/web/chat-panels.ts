@@ -676,9 +676,10 @@ export function filePreviewDialog(): string {
 }
 
 /**
- * 好友申请弹窗：桌面非对称两栏（约 3:2），窄屏按申请→链接→好友→策略单栏排列。
+ * 好友申请弹窗：桌面两栏，窄屏按申请→链接→策略单栏排列。
  *
- * 左栏放需要动作的待处理申请与好友，右栏放邀请入口与次要接收策略；
+ * 左栏放需要动作的待处理申请，右栏放邀请入口与次要接收策略；
+ * 好友管理由联系人、群成员等其他入口承担，弹窗内不再重复好友列表。
  * 弹窗高度按内容收敛，避免固定高度留下大片空白。
  */
 export function contactRequestsDialog(): string {
@@ -694,13 +695,6 @@ export function contactRequestsDialog(): string {
           </div>
           <ul id="contact-request-list" class="contact-request-list" aria-label="待处理好友申请"></ul>
           <p id="contact-request-status" class="form-error" role="status"></p>
-        </section>
-        <section class="contact-friends-panel" aria-label="我的好友">
-          <div class="contact-section-head">
-            <h3>我的好友</h3>
-            <span id="contact-friend-count" class="contact-count" hidden>0</span>
-          </div>
-          <ul id="contact-friend-list" class="contact-request-list" aria-label="我的好友"></ul>
         </section>
       </div>
       <div class="contact-column contact-column-right">

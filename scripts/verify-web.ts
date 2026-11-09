@@ -4609,14 +4609,12 @@ async function main(): Promise<void> {
         const policy = document.querySelector('#contact-modal .contact-policy');
         const requests = document.querySelector('#contact-modal .contact-requests-panel');
         const link = document.querySelector('#contact-modal .contact-link-panel');
-        const friends = document.querySelector('#contact-modal .contact-friends-panel');
         if (!card || !columns || !left || !right) return null;
         const cardBox = card.getBoundingClientRect();
         const leftBox = left.getBoundingClientRect();
         const rightBox = right.getBoundingClientRect();
         const requestBox = requests ? requests.getBoundingClientRect() : null;
         const linkBox = link ? link.getBoundingClientRect() : null;
-        const friendBox = friends ? friends.getBoundingClientRect() : null;
         const policyBox = policy ? policy.getBoundingClientRect() : null;
         return {
           display: getComputedStyle(columns).display,
@@ -4634,13 +4632,11 @@ async function main(): Promise<void> {
           rightBottom: rightBox.bottom,
           rightWidth: rightBox.width,
           requestTop: requestBox ? requestBox.top : -1,
-          friendTop: friendBox ? friendBox.top : -1,
           linkTop: linkBox ? linkBox.top : -1,
           policyTop: policyBox ? policyBox.top : -1,
           policyInRight: Boolean(policy) && right.contains(policy),
           requestsInLeft: Boolean(requests) && left.contains(requests),
-          linkInRight: Boolean(link) && right.contains(link),
-          friendsInLeft: Boolean(friends) && left.contains(friends)
+          linkInRight: Boolean(link) && right.contains(link)
         };
       })()`)) as {
         display: string;
@@ -4658,15 +4654,23 @@ async function main(): Promise<void> {
         rightBottom: number;
         rightWidth: number;
         requestTop: number;
-        friendTop: number;
         linkTop: number;
         policyTop: number;
         policyInRight: boolean;
         requestsInLeft: boolean;
         linkInRight: boolean;
-        friendsInLeft: boolean;
       } | null;
       checkEqual('1280px 好友弹窗为两栏网格', contactDesktopLayout?.display, 'grid');
+      checkEqual(
+        '好友弹窗不渲染我的好友区块',
+        await page.locator('#contact-modal .contact-friends-panel').count(),
+        0,
+      );
+      checkEqual(
+        '好友弹窗不渲染我的好友列表',
+        await page.locator('#contact-modal #contact-friend-list').count(),
+        0,
+      );
       check(
         '1280px 好友弹窗左栏在右栏左侧',
         Boolean(contactDesktopLayout) &&
@@ -4675,12 +4679,11 @@ async function main(): Promise<void> {
         contactDesktopLayout,
       );
       check(
-        '1280px 待处理申请与我的好友在左栏、好友链接与接收策略在右栏',
+        '1280px 待处理申请在左栏、好友链接与接收策略在右栏',
         Boolean(contactDesktopLayout) &&
           contactDesktopLayout!.policyInRight &&
           contactDesktopLayout!.requestsInLeft &&
-          contactDesktopLayout!.linkInRight &&
-          contactDesktopLayout!.friendsInLeft,
+          contactDesktopLayout!.linkInRight,
         contactDesktopLayout,
       );
       check(
@@ -4690,9 +4693,8 @@ async function main(): Promise<void> {
         contactDesktopLayout,
       );
       check(
-        '1280px 左栏申请在好友上方、右栏链接在策略上方',
+        '1280px 右栏好友链接在接收策略上方',
         Boolean(contactDesktopLayout) &&
-          contactDesktopLayout!.requestTop <= contactDesktopLayout!.friendTop + 1 &&
           contactDesktopLayout!.linkTop <= contactDesktopLayout!.policyTop + 1,
         contactDesktopLayout,
       );
@@ -4724,6 +4726,11 @@ async function main(): Promise<void> {
         '好友弹窗已移除长说明',
         !contactModalText.includes('申请只进入独立收件箱') &&
           contactModalText.includes('一次性链接，24 小时内有效'),
+        contactModalText,
+      );
+      check(
+        '好友弹窗文本不出现我的好友',
+        !contactModalText.includes('我的好友'),
         contactModalText,
       );
       await page.locator('#contact-modal-close').click();
@@ -4820,11 +4827,10 @@ async function main(): Promise<void> {
           const columns = document.querySelector('#contact-modal .contact-columns');
           const requests = document.querySelector('#contact-modal .contact-requests-panel');
           const link = document.querySelector('#contact-modal .contact-link-panel');
-          const friends = document.querySelector('#contact-modal .contact-friends-panel');
           const policy = document.querySelector('#contact-modal .contact-policy');
-          if (!card || !columns || !requests || !link || !friends || !policy) return null;
+          if (!card || !columns || !requests || !link || !policy) return null;
           const cardBox = card.getBoundingClientRect();
-          const boxes = [requests, link, friends, policy].map(function (node) {
+          const boxes = [requests, link, policy].map(function (node) {
             return node.getBoundingClientRect();
           });
           const columnsStyle = getComputedStyle(columns);
@@ -4851,14 +4857,18 @@ async function main(): Promise<void> {
           rights: number[];
         } | null;
         checkEqual('390px 好友弹窗回退单栏', contactMobileLayout?.display, 'flex');
+        checkEqual(
+          '390px 好友弹窗不渲染我的好友区块',
+          await mobileIcons.page.locator('#contact-modal .contact-friends-panel').count(),
+          0,
+        );
         check(
-          '390px 好友弹窗按申请/链接/好友/策略顺序单列堆叠',
+          '390px 好友弹窗按申请/链接/策略顺序单列堆叠',
           Boolean(contactMobileLayout) &&
             contactMobileLayout!.direction === 'column' &&
-            contactMobileLayout!.tops.length === 4 &&
+            contactMobileLayout!.tops.length === 3 &&
             contactMobileLayout!.tops[0]! < contactMobileLayout!.tops[1]! &&
-            contactMobileLayout!.tops[1]! < contactMobileLayout!.tops[2]! &&
-            contactMobileLayout!.tops[2]! < contactMobileLayout!.tops[3]!,
+            contactMobileLayout!.tops[1]! < contactMobileLayout!.tops[2]!,
           contactMobileLayout,
         );
         check(

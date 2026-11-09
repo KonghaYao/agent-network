@@ -116,43 +116,41 @@ try{
   stage='waiting for main room list';
   await page.locator('#room-list a').first().waitFor({state:'visible'});
 
-  // U05a: from the existing-friends directory, create a first direct conversation.
+  // U05a: the friend request dialog no longer duplicates the friend directory.
   await page.locator('#contact-requests').click();
   await page.locator('#contact-modal').waitFor({state:'visible'});
-  const longFriend=page.locator('#contact-friend-list li').filter({hasText:'设计同事小林'}).first();
-  await longFriend.waitFor({state:'visible'});
-  await longFriend.locator('button').filter({hasText:'发起单聊'}).click();
-  await page.waitForURL(/\/c\/rm_/);
-  const firstLongUrl=page.url();
-  await waitContains(page,'#title','设计同事小林');
-  const firstLongCount=await page.locator('#room-list a').filter({hasText:'设计同事小林'}).count();
-  await page.locator('#contact-requests').click();
-  await page.locator('#contact-modal').waitFor({state:'visible'});
-  await page.locator('#contact-friend-list li').filter({hasText:'设计同事小林'}).locator('button').filter({hasText:'发起单聊'}).click();
-  await page.waitForFunction((url:string)=>location.href===url,firstLongUrl);
-  const repeatedLongCount=await page.locator('#room-list a').filter({hasText:'设计同事小林'}).count();
-  record('U05a','从好友目录发起首次单聊',['打开“好友申请”中的“我的好友”','点击长姓名好友的“发起单聊”','再次从好友目录点击同一好友'],
-    '首次进入好友单聊；再次点击复用同一 direct 房间',firstLongCount===1&&repeatedLongCount===1?'首次单聊打开成功；再次点击仍在同一 URL，列表中该 direct 只出现一次。':'首次发起或重复点击后的 direct 复用未通过。',firstLongCount===1&&repeatedLongCount===1?'PASS':'BUG',
-    ['首次 URL 与复点后 URL 一致='+String(firstLongUrl===page.url()),'好友 direct 列表行数 '+firstLongCount+'→'+repeatedLongCount]);
-
-  // A delayed direct-room response must not pull the user back after the modal
-  // closes and another conversation is opened.
-  await page.locator('#contact-requests').click();
-  await page.locator('#contact-modal').waitFor({state:'visible'});
-  const delayedDirect=await delayTool(page,'network_room_create',(args:any)=>args.kind==='direct'&&(args.members||[]).includes(data.wang.actor_id));
-  await page.locator('#contact-friend-list li').filter({hasText:'小王'}).locator('button').filter({hasText:'发起单聊'}).click();
-  await delayedDirect.seen;
+  const friendPanels=await page.locator('#contact-modal .contact-friends-panel, #contact-modal #contact-friend-list').count();
+  const contactModalText=await page.locator('#contact-modal').innerText();
+  const contactRequestsVisible=await page.locator('#contact-request-list').isVisible();
+  const contactLinkVisible=await page.locator('#contact-link-create').isVisible();
+  const contactPolicyVisible=await page.locator('#contact-policy-select').isVisible();
+  const noFriendBlock=friendPanels===0&&!contactModalText.includes('我的好友');
+  record('U05a','好友申请弹窗不再展示我的好友',['打开“好友申请”弹窗'],
+    '弹窗只保留待处理申请、好友链接与接收策略，不出现“我的好友”区块',noFriendBlock&&contactRequestsVisible&&contactLinkVisible&&contactPolicyVisible?'弹窗无“我的好友”区块；待处理申请、好友链接与接收策略入口仍在。':'弹窗仍渲染“我的好友”或缺少其他入口。',noFriendBlock&&contactRequestsVisible&&contactLinkVisible&&contactPolicyVisible?'PASS':'BUG',
+    ['我的好友区块数量='+friendPanels,'弹窗文本含“我的好友”='+contactModalText.includes('我的好友'),'申请/链接/策略入口='+[contactRequestsVisible,contactLinkVisible,contactPolicyVisible].join('/')]);
   await page.locator('#contact-modal-close').click();
+  await page.locator('#contact-modal').waitFor({state:'hidden'});
+
+  // A delayed direct-room response must not pull the user back after the member
+  // dialog closes and another conversation is opened.
+  await openRoom(page,data.rooms.owned.room_id,'group');
+  await openMembers(page);
+  const delayedDirect=await delayTool(page,'network_room_create',(args:any)=>args.kind==='direct'&&(args.members||[]).includes(data.wang.actor_id));
+  const delayWangRow=page.locator('#members-current li.member-roster-item').filter({hasText:'小王'}).first();
+  await delayWangRow.locator('button[aria-label="成员操作"]').click();
+  await page.getByRole('menuitem',{name:'发起单聊',exact:true}).click();
+  await delayedDirect.seen;
+  await page.locator('#members-close').click();
   await openRoom(page,data.rooms.directLi.room_id,'direct');
   delayedDirect.release();
   await delayedDirect.finished;
   await delayedDirect.remove();
   await page.waitForTimeout(100);
   const directSwitchStayed=page.url().endsWith(data.rooms.directLi.room_id);
-  const contactModalClosed=await page.locator('#contact-modal').isHidden();
-  record('U05d','单聊创建响应晚到时的切房',['从好友目录发起小王单聊并暂缓响应','关闭联系人弹层','切换到小李单聊后放行响应'],
-    '完成创建后不强制切回小王单聊；关闭弹层与当前房间保持不变',directSwitchStayed&&contactModalClosed?'响应晚到后仍留在小李单聊，联系人弹层保持关闭。':'响应晚到后强制切房或重开联系人弹层。',directSwitchStayed&&contactModalClosed?'PASS':'BUG',
-    ['当前路由仍为小李 direct='+directSwitchStayed,'联系人弹层关闭='+contactModalClosed]);
+  const membersModalClosed=await page.locator('#members-modal').isHidden();
+  record('U05d','单聊创建响应晚到时的切房',['从群成员入口发起小王单聊并暂缓响应','关闭群设置','切换到小李单聊后放行响应'],
+    '完成创建后不强制切回小王单聊；关闭群设置与当前房间保持不变',directSwitchStayed&&membersModalClosed?'响应晚到后仍留在小李单聊，群设置保持关闭。':'响应晚到后强制切房或重开群设置。',directSwitchStayed&&membersModalClosed?'PASS':'BUG',
+    ['当前路由仍为小李 direct='+directSwitchStayed,'群设置关闭='+membersModalClosed]);
 
   // U05b: the existing group-member entry must reuse the already seeded direct room.
   await page.locator('#contact-modal').waitFor({state:'hidden'});

@@ -18,8 +18,6 @@ const contactLinkCreateButton = document.getElementById('contact-link-create');
 const contactLinkCopyButton = document.getElementById('contact-link-copy');
 const contactLinkStatus = document.getElementById('contact-link-status');
 const contactLinkList = document.getElementById('contact-link-list');
-const contactFriendList = document.getElementById('contact-friend-list');
-const contactFriendCount = document.getElementById('contact-friend-count');
 let contactRequestBusy = false;
 let contactLinkBusy = false;
 // 链接明文只在本次页面会话的内存里；不写 DOM、localStorage、console 或日志。
@@ -334,45 +332,6 @@ async function loadContactLinks() {
   }
 }
 
-function renderContactFriends(items) {
-  if (!contactFriendList) return;
-  contactFriendList.replaceChildren();
-  const friends = (items || []).filter(function (item) {
-    return item && item.relation === 'active';
-  });
-  setContactCount(contactFriendCount, friends.length);
-  if (friends.length === 0) {
-    const empty = document.createElement('li');
-    empty.className = 'contact-request-empty';
-    empty.textContent = '还没有好友。';
-    contactFriendList.append(empty);
-    return;
-  }
-  for (const friend of friends) {
-    const row = document.createElement('li');
-    row.className = 'contact-request-item';
-    const main = document.createElement('div');
-    main.className = 'contact-request-main';
-    const title = document.createElement('p');
-    title.className = 'contact-request-title';
-    title.textContent = contactActorLabel(friend);
-    main.append(title);
-    row.append(main);
-    addDirectChatAction(row, friend);
-    contactFriendList.append(row);
-  }
-}
-
-async function loadContactFriends() {
-  if (!contactFriendList || !identity) return;
-  try {
-    const result = await callTool('network_contacts_list', { limit: 100 });
-    renderContactFriends(result.items || []);
-  } catch (error) {
-    renderContactFriends([]);
-  }
-}
-
 async function createContactLink() {
   if (contactLinkBusy) return;
   contactLinkBusy = true;
@@ -466,7 +425,6 @@ async function redeemContactLinkToken(token) {
     );
     await Promise.allSettled([
       loadRooms(),
-      loadContactFriends(),
       loadContactLinks(),
       refreshContactBadge()
     ]);
@@ -519,8 +477,6 @@ async function openContactModal() {
   contactModal.hidden = false;
   setContactStatus('');
   setContactLinkStatus('');
-  const directStatus = document.getElementById('direct-chat-status');
-  if (directStatus) directStatus.textContent = '';
   renderContactRequests([]);
   if (contactLinkPlaintext) {
     setContactLinkStatus('链接明文只保留在本次页面会话，可继续复制或撤销。', 'success');
@@ -528,8 +484,7 @@ async function openContactModal() {
   await Promise.allSettled([
     loadContactRequests(),
     loadContactPolicy(),
-    loadContactLinks(),
-    loadContactFriends()
+    loadContactLinks()
   ]);
   if (contactModalClose) contactModalClose.focus();
 }

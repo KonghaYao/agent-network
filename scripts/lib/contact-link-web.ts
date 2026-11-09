@@ -170,15 +170,13 @@ export async function runContactLinkWebAcceptance(deps: ContactLinkWebDeps): Pro
       check('兑换后 A 的联系人新增 B', Boolean(created), after.map((item) => item.actor_id));
       bName = created?.name ?? '';
 
-      // A 重新打开弹窗：好友列表与链接状态都要反映兑换结果。
+      // A 重新打开弹窗：链接状态要反映兑换结果，弹窗不再重复好友列表。
       await page.locator('#contact-requests').click();
       await page.locator('#contact-modal').waitFor({ state: 'visible' });
-      if (bName) await waitForText(page, '#contact-friend-list', bName);
-      check(
-        'A 在好友列表看到 B',
-        bName.length > 0 &&
-          ((await page.locator('#contact-friend-list').textContent()) ?? '').includes(bName),
-        bName,
+      checkEqual(
+        '好友申请弹窗不显示我的好友区块',
+        await page.locator('#contact-modal .contact-friends-panel').count(),
+        0,
       );
       await waitForText(page, '#contact-link-list', '已使用');
       const usedLinkText = (await page.locator('#contact-link-list').textContent()) ?? '';

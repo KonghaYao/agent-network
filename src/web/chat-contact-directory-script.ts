@@ -1,19 +1,17 @@
 /**
- * 从好友目录与群成员名单发起单聊。
+ * 从群成员名单发起单聊。
  *
  * 直接调用 network_room_create 的 direct 幂等键，让服务端复用已有好友单聊；
  * 页面按 FRIEND_REQUIRED / BLOCKED 给出可理解的反馈，不在本地猜测关系权限。
  */
 export const CHAT_CONTACT_DIRECTORY_SCRIPT = `
 const directChatPending = new Map();
-let directChatStatusElement = null;
 
 function directChatStatusTarget(target, message, isError) {
-  const element = target && target.isConnected ? target : directChatStatusElement;
-  if (!element) return;
-  element.textContent = message || '';
-  if (isError) element.dataset.error = '1';
-  else delete element.dataset.error;
+  if (!target || !target.isConnected) return;
+  target.textContent = message || '';
+  if (isError) target.dataset.error = '1';
+  else delete target.dataset.error;
 }
 
 function directChatErrorMessage(error) {
@@ -26,7 +24,7 @@ function directChatErrorMessage(error) {
 }
 
 /** room_create 对 direct pair 幂等：重复入口都会得到相同的 room_id。 */
-async function startDirectConversation(actorId, actorName, statusTarget, sourceModal) {
+async function startDirectConversation(actorId, actorName, statusTarget) {
   if (!actorId || !identity) {
     directChatStatusTarget(statusTarget, '请先登录后再发起单聊。', true);
     return;
@@ -54,12 +52,10 @@ async function startDirectConversation(actorId, actorName, statusTarget, sourceM
       if (!identity || identity.actor_id !== ownerId || !detail || !detail.room || !detail.room.room_id) {
         return;
       }
-      // A delayed create must not pull the user back after they close the source
-      // surface or switch rooms while the request is in flight.
-      if (activeRoomId !== sourceRoomId || roomEpoch !== sourceEpoch ||
-          (sourceModal && sourceModal.hidden)) return;
+      // A delayed create must not pull the user back after they switch rooms
+      // while the request is in flight.
+      if (activeRoomId !== sourceRoomId || roomEpoch !== sourceEpoch) return;
       const roomId = seedRoomCacheFromDetail(detail);
-      if (contactModal && !contactModal.hidden) closeContactModal();
       setRoomFilter('direct');
       navigateTo('/c/' + encodeURIComponent(roomId));
     } catch (error) {
@@ -71,29 +67,5 @@ async function startDirectConversation(actorId, actorName, statusTarget, sourceM
   })();
   directChatPending.set(actorId, operation);
   return operation;
-}
-
-function addDirectChatAction(row, actor) {
-  if (!row || !actor || !actor.actor_id || !identity || actor.actor_id === identity.actor_id) return;
-  const actions = document.createElement('div');
-  actions.className = 'contact-request-actions';
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.textContent = '发起单聊';
-  button.setAttribute('aria-label', '与 ' + (actor.name || '好友') + ' 发起单聊');
-  button.addEventListener('click', function () {
-    startDirectConversation(actor.actor_id, actor.name, directChatStatusElement, contactModal);
-  });
-  actions.append(button);
-  row.append(actions);
-}
-
-if (contactFriendList && !directChatStatusElement) {
-  directChatStatusElement = document.createElement('p');
-  directChatStatusElement.id = 'direct-chat-status';
-  directChatStatusElement.className = 'muted';
-  directChatStatusElement.setAttribute('role', 'status');
-  directChatStatusElement.setAttribute('aria-live', 'polite');
-  contactFriendList.parentElement.insertBefore(directChatStatusElement, contactFriendList);
 }
 `;

@@ -851,7 +851,7 @@ ${GROUP_STYLE}
     height: 16px; padding: 0 4px; border-radius: 8px; background: var(--wx-unread);
     color: #ffffff; font-size: 10px; line-height: 16px; text-align: center;
     pointer-events: none; }
-  /* 桌面非对称两栏：左栏放需要动作的申请与好友，右栏放链接与次要策略。 */
+  /* 桌面非对称两栏：左栏放需要动作的申请，右栏放链接与次要策略。 */
   .contact-modal-card { width: min(1120px, 96vw); max-height: min(88dvh, 860px);
     box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; }
   .contact-modal-card h2 { margin-bottom: 12px; }
@@ -865,12 +865,11 @@ ${GROUP_STYLE}
   .contact-count { flex: 0 0 auto; min-width: 18px; padding: 0 6px; border-radius: 9px;
     background: var(--wx-search); color: var(--wx-muted); font-size: 11px;
     line-height: 18px; text-align: center; }
-  .contact-requests-panel, .contact-link-panel, .contact-friends-panel, .contact-policy {
+  .contact-requests-panel, .contact-link-panel, .contact-policy {
     min-width: 0; }
-  .contact-friends-panel, .contact-policy { padding-top: 14px;
+  .contact-policy { padding-top: 14px;
     border-top: 1px solid var(--wx-line); }
   .contact-column .contact-request-list { max-height: min(30vh, 260px); }
-  .contact-friends-panel .contact-request-list { max-height: min(26vh, 220px); }
   .contact-column .contact-link-list { max-height: min(20vh, 180px); }
   .contact-columns + .modal-actions { margin-top: 14px; }
   .contact-request-list { list-style: none; margin: 0; padding: 0;
@@ -923,7 +922,7 @@ ${GROUP_STYLE}
   .contact-policy-status { min-height: 1.2em; margin: 6px 0 0; color: var(--wx-muted);
     font-size: 11px; }
 
-  /* 好友弹窗窄屏回退单栏：申请 → 链接 → 好友 → 策略，并铺满移动端可视区。 */
+  /* 好友弹窗窄屏回退单栏：申请 → 链接 → 策略，并铺满移动端可视区。 */
   @media (max-width: 759px) {
     #contact-modal { padding: 0; place-items: stretch; }
     .contact-modal-card { width: 100%; height: 100dvh; max-height: 100dvh;
@@ -933,9 +932,8 @@ ${GROUP_STYLE}
     .contact-column-right { padding-left: 0; border-left: 0; }
     .contact-requests-panel { order: 1; }
     .contact-link-panel { order: 2; }
-    .contact-friends-panel { order: 3; }
-    .contact-policy { order: 4; }
-    .contact-link-panel, .contact-friends-panel, .contact-policy {
+    .contact-policy { order: 3; }
+    .contact-link-panel, .contact-policy {
       margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--wx-line); }
     .contact-column .contact-request-list { max-height: min(32dvh, 260px); }
     .contact-column .contact-link-list { max-height: min(22dvh, 180px); }
