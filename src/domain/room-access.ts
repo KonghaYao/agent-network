@@ -24,6 +24,7 @@ export type RoomCapability =
   | 'invite_members'
   | 'remove_members'
   | 'manage_admins'
+  | 'edit_profile'
   | 'manage_announcement'
   | 'manage_policy'
   | 'transfer_owner'
@@ -47,6 +48,7 @@ export interface RoomCapabilities {
   invite_members: boolean;
   remove_members: boolean;
   manage_admins: boolean;
+  edit_profile: boolean;
   manage_announcement: boolean;
   manage_policy: boolean;
   transfer_owner: boolean;
@@ -92,6 +94,7 @@ const CAPABILITY_PREDICATES: Record<RoomCapability, string> = {
     "(r.kind = 'group' AND (m.role IN ('owner', 'admin') OR r.member_invite_policy = 'members'))",
   remove_members: "(r.kind = 'group' AND m.role IN ('owner', 'admin'))",
   manage_admins: "(r.kind = 'group' AND m.role = 'owner')",
+  edit_profile: "(r.kind = 'group' AND (m.role IN ('owner', 'admin') OR r.member_profile_policy = 'members'))",
   manage_announcement: "(r.kind = 'group' AND m.role IN ('owner', 'admin'))",
   manage_policy: "(r.kind = 'group' AND m.role = 'owner')",
   transfer_owner: "(r.kind = 'group' AND m.role = 'owner')",
@@ -122,6 +125,7 @@ export function roomPolicies(room: Pick<
   | 'member_message_policy'
   | 'member_invite_policy'
   | 'member_task_policy'
+    | 'member_profile_policy'
   | 'member_history_policy'
   | 'member_join_policy'
   | 'member_profile_policy'
@@ -196,6 +200,7 @@ export function roomCapabilitiesFor(
     | 'member_message_policy'
     | 'member_invite_policy'
     | 'member_task_policy'
+    | 'member_profile_policy'
     | 'member_mention_all_policy'
     | 'dissolved_at'
   >,
@@ -221,6 +226,7 @@ export function roomCapabilitiesFor(
       writable && active && group && (admin || room.member_invite_policy === 'members'),
     remove_members: writable && active && group && admin,
     manage_admins: writable && active && group && owner,
+    edit_profile: writable && active && group && (admin || room.member_profile_policy === 'members'),
     manage_announcement: writable && active && group && admin,
     manage_policy: writable && active && group && owner,
     transfer_owner: writable && active && group && owner,

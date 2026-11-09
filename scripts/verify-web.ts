@@ -350,13 +350,18 @@ export async function makeContext(
   await context.addInitScript({ content: initScript(token, seedTokenOnce) });
   const page = await context.newPage();
   page.setDefaultTimeout(15_000);
-  page.on('pageerror', (error) => allErrors.push(`pageerror: ${error.message}`));
+  const recordError = (message: string): void => {
+    const safe = message.replace(/([?&]token=)[^&\s]+/g, '$1[redacted]');
+    allErrors.push(safe);
+    console.error('Browser error at', page.url().split(/[?#]/)[0], safe);
+  };
+  page.on('pageerror', (error) => recordError(`pageerror: ${error.stack || error.message}`));
   if (watchConsole) {
     page.on('console', (message) => {
       if (message.type() !== 'error') return;
       const text = message.text();
       if (IGNORED_CONSOLE.some((part) => text.includes(part))) return;
-      allErrors.push(`console: ${text}`);
+      recordError(`console: ${text}`);
     });
   }
   return { context, page };
@@ -383,7 +388,7 @@ async function waitRoom(page: Page, roomId: string, expectedTitle: string): Prom
   await page.waitForURL(`**/c/${roomId}`);
   try {
     await page.waitForFunction(
-      `document.getElementById('title') && document.getElementById('title').textContent === ${JSON.stringify(expectedTitle)}`,
+      `document.getElementById('title') && document.getElementById('title').textContent === ${JSON.stringify(expectedTitle)} && document.getElementById('chat-body').getAttribute('aria-busy') === 'false'`,
     );
   } catch (error) {
     console.log('DEBUG waitRoom failed', {
@@ -632,6 +637,11 @@ async function acceptRoomInvites(token: string, roomId: string): Promise<number>
 }
 
 async function waitForText(page: Page, selector: string, text: string, timeout = 10_000): Promise<void> {
+  if (selector === '#messages') {
+    // 本地 outbox 的“发送中”也含正文；只有真实消息行才能证明服务端提交并回读。
+    await page.locator('#messages .msg').filter({ hasText: text }).first().waitFor({ state: 'attached', timeout });
+    return;
+  }
   await page.waitForFunction(
     `(() => {
       const node = document.querySelector(${JSON.stringify(selector)});
@@ -4335,7 +4345,7 @@ async function main(): Promise<void> {
   const allErrors: string[] = [];
   try {
     const data = await fixture(server.dataDir);
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined });
     console.log(`浏览器验收: ${server.base}`);
 
     // 1. 侧栏分类：单聊/群聊切换、搜索范围、未读、排序、归档、持久化与移动端暗色。
@@ -7557,7 +7567,7 @@ async function main(): Promise<void> {
 
       await page.locator('#pairing-create').click();
       await page.waitForFunction(
-        `(document.getElementById('pairing-code').textContent || '').replaceAll('-', '') !== ${JSON.stringify(pairingCode)}`,
+        `(() => { const code = (document.getElementById('pairing-code').textContent || '').replaceAll('-', ''); return code.length === 12 && code !== ${JSON.stringify(pairingCode)}; })()`,
       );
       const firstPairingCode = pairingCode;
       pairingCode = (
@@ -10030,24 +10040,18 @@ async function main(): Promise<void> {
         .locator('#members-contacts .contact-choice')
         .filter({ hasText: data.agentB.name });
       await duplicateCandidate.waitFor();
+      await duplicateCandidate.locator('input').check();
+      const duplicateCalls = await mcpCallCount(page, 'network_room_members_update');
       await rawTool(data.humanToken, 'network_room_members_update', {
         request_id: requestId('members'),
         room_id: groupId,
         add: [data.agentB.actor_id],
       });
       await waitForText(page, '#subtitle', '4 人');
-      await duplicateCandidate.locator('input').check();
-      await page.locator('#members-add').click();
-      await waitForText(page, '#members-error', '已在群里');
-      check(
-        '重复添加显示可读错误',
-        ((await page.locator('#members-error').textContent()) ?? '').includes(data.agentB.name),
-      );
-      checkEqual(
-        '重复添加失败保留选择',
-        await duplicateCandidate.locator('input').isChecked(),
-        true,
-      );
+      checkEqual('外部入群后候选立即消失', await duplicateCandidate.count(), 0);
+      checkEqual('外部入群后清除过期选择', await page.locator('#members-add').isDisabled(), true);
+      checkEqual('候选收敛不再重复发送添加请求',
+        await mcpCallCount(page, 'network_room_members_update'), duplicateCalls);
       await page.locator('#members-cancel').click();
 
       const updateCallsBeforeClose = await mcpCallCount(page, 'network_room_members_update');
@@ -10144,7 +10148,7 @@ async function main(): Promise<void> {
       checkEqual('非 owner 不能提交添加', await page.locator('#members-add').isDisabled(), true);
       check(
         '非 owner 显示明确提示',
-        ((await page.locator('#members-error').textContent()) ?? '').includes('只有群 owner'),
+        ((await page.locator('#members-error').textContent()) ?? '').includes('不允许你邀请成员'),
       );
       checkEqual(
         '非 owner 不显示好友多选',
@@ -10153,7 +10157,7 @@ async function main(): Promise<void> {
       );
       check(
         '非 owner 右栏显示空态说明',
-        ((await page.locator('#members-contacts').textContent()) ?? '').includes('只有群 owner'),
+        ((await page.locator('#members-contacts').textContent()) ?? '').includes('不允许你邀请成员'),
       );
       checkEqual(
         '非 owner 左栏仍显示成员数',
@@ -10614,6 +10618,10 @@ async function main(): Promise<void> {
       const touchHuman = touchPage.locator('#messages .msg').filter({ hasText: humanMarker }).last();
       const touchAgent = touchPage.locator('#messages .msg').filter({ hasText: agentMarker }).last();
       await touchHuman.locator('.msg-task-convert').waitFor();
+      await touchHuman.scrollIntoViewIfNeeded();
+      await waitUntil(async () =>
+        (await touchHuman.locator('.msg-task-convert').evaluate(element =>
+          getComputedStyle(element).opacity)) === '1', '触屏任务按钮样式就绪');
       checkEqual(
         '触屏人类消息保留转为任务',
         await touchHuman.locator('.msg-task-convert').isVisible(),
@@ -11201,9 +11209,10 @@ async function main(): Promise<void> {
       await page.locator('#room-filter-direct').click();
       await page.locator(roomLink(data.extra.room.room_id)).click();
       await sleep(200);
-      check('无缓存切换保留旧内容', (await messageCount(page)) >= 20, await messageCount(page));
+      checkEqual('无缓存切换立即清空旧房间内容', await messageCount(page), 0);
       check('无缓存切换显示细加载条', await page.locator('#chat-loading').isVisible());
-      checkEqual('无缓存切换不显示全屏 skeleton', await page.locator('#chat-skeleton').isVisible(), false);
+      checkEqual('无缓存切换显示 skeleton', await page.locator('#chat-skeleton').isVisible(), true);
+      checkEqual('新房间加载前不能发送', await page.locator('#send').isDisabled(), true);
       await waitRoom(page, data.extra.room.room_id, data.agentB.name);
       await page.waitForFunction(
         `document.getElementById('chat-loading') &&
@@ -15087,6 +15096,8 @@ async function main(): Promise<void> {
         chipNames.includes('拖拽图片.png') && chipNames.includes('拖拽说明.txt'),
         chipNames,
       );
+      // chip 在上传开始时就出现；大小与删除能力必须在 bind 完成后验收。
+      await waitForText(page, '#status', '已加入待发送列表');
       const chipMetas = (await page.locator('#composer-files .composer-file-meta').allTextContents())
         .map((value) => value.trim());
       check(
@@ -16163,7 +16174,10 @@ async function main(): Promise<void> {
       })()`)) as { dark: boolean; background: string; color: string };
       checkEqual('暗色附件按钮跟随主题', darkAttach.dark, true);
       checkEqual('暗色附件按钮使用面板变量', darkAttach.background, 'rgb(43, 43, 43)');
+      // 标题先于 history 就绪；先等当前刷新完成，避免把历史补载误判成上传发送。
+      await mobile.page.waitForFunction(`document.getElementById('chat-body').getAttribute('aria-busy') === 'false'`);
       const mobileMessagesBefore = await messageCount(mobile.page);
+      const mobileSendsBefore = await mcpCallCount(mobile.page, 'network_message_send');
       const mobileUploadBase = mobileUpload.calls.length;
       await mobile.page.setInputFiles('#composer-file-input', [
         { name: '移动 附件.txt', mimeType: 'text/plain', buffer: Buffer.from('mobile attach') },
@@ -16184,6 +16198,7 @@ async function main(): Promise<void> {
       );
       checkEqual('390px 上传只触发一次', mobileUpload.calls.length, mobileUploadBase + 1);
       checkEqual('390px 上传不自动发送', await messageCount(mobile.page), mobileMessagesBefore);
+      checkEqual('390px 上传不调用发送工具', await mcpCallCount(mobile.page, 'network_message_send'), mobileSendsBefore);
       const mobileOverflow = (await mobile.page.evaluate(
         `(() => {
           const chip = document.querySelector('#composer-files .composer-file');
@@ -20902,6 +20917,7 @@ async function main(): Promise<void> {
       const fileCardMarker = '附件气泡';
       const directAgentMarker = '直聊 Agent 长消息';
       const directHumanMarker = '直聊用户长消息';
+      const directShortHumanMarker = '直聊短消息';
       const longUrl = `https://example.com/${'a'.repeat(320)}`;
       const longProse = `长文本内容 ${'段落内容 '.repeat(120)}结尾`;
       const codeTableBody = [
@@ -20929,6 +20945,13 @@ async function main(): Promise<void> {
       await send(data.agentAToken, codeTableBody);
       await send(data.agentAToken, `${longAgentMarker}\n\n${longProse}`);
       await send(data.agentAToken, `${fileCardMarker}\n${bubbleFile.publicUrl}`);
+      // 宽度用例自己创建短消息，不依赖多轮共享夹具后可能已离开首屏的 D 消息 30。
+      await rawTool(data.humanToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: data.direct.room.room_id,
+        body: directShortHumanMarker,
+      });
       await rawTool(data.humanToken, 'network_message_send', {
         request_id: requestId('msg'),
         client_message_id: crypto.randomUUID(),
@@ -21106,7 +21129,7 @@ async function main(): Promise<void> {
         .last();
       const directShortHumanMessage = directPage
         .locator('#messages .msg')
-        .filter({ hasText: 'D 消息 30' })
+        .filter({ hasText: directShortHumanMarker })
         .last();
       await directLongAgentMessage.locator('.msg-markdown').waitFor();
       const directLongAgent = await bubbleLayout(directLongAgentMessage);

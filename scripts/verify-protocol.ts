@@ -381,6 +381,7 @@ async function main(): Promise<void> {
     'network_room_owner_transfer_respond',
     'network_room_owner_transfer_cancel',
     'network_room_policy_set',
+    'network_room_rename',
     'network_room_announcement_set',
     'network_room_role_history',
     'network_room_notice_list',

@@ -87,12 +87,17 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 右侧面板拖拽 React 岛与懒加载桥接 | `src/web/resizer/entry.tsx`、`src/web/chat-resizer-script.ts`、`src/web/chat-styles.ts` |
 | 浏览器 bundle 共用构建器 | `src/web/client-bundle.ts` |
 | 拖拽 bundle 构建与 asset 路由 | `src/web/resizer-bundle.ts`、`src/bun/main.ts`、`src/app.ts` |
-| 应用页内联客户端脚本（通信、刷新、建群、@、扫码弹窗） | `src/web/chat-script.ts` |
+| 应用页内联客户端脚本（通信、发送、@、扫码弹窗与片段组合） | `src/web/chat-script.ts` |
+| 建群、好友分页、表单代次与创建重试 | `src/web/chat-group-create-script.ts` |
+| 群名、成员搜索与生命周期设置 | `src/web/chat-group-profile-script.ts`、`src/web/chat-members-script.ts`、`src/web/chat-group-styles.ts` |
+| 群名权限与原子 compare-and-set | `src/domain/room-profile.ts`、`src/domain/room-access.ts` |
 | 输入框附件按钮、隐藏文件选择器、拖拽/粘贴上传与待发送文件 chips | `src/web/chat-upload-script.ts`、`src/web/chat-upload-styles.ts`、`src/web/chat-panels.ts`、`src/web/chat-files-actions-script.ts` |
 | `+` 附件菜单、画板懒加载桥接、Fabric 画板与白底 PNG 导出 | `src/web/chat-drawboard-script.ts`、`src/web/chat-drawboard-styles.ts`、`src/web/drawboard/entry.ts`、`src/web/drawboard/styles.ts`、`src/web/drawboard-bundle.ts`、`src/web/chat-panels.ts` |
 | 附件按房间隔离、发送期间新附件保留与选择器驱动的提及/派活 | `src/web/chat-upload-script.ts`、`src/web/chat-script.ts`、`src/web/chat-mention-script.ts`、`src/web/chat-outbox-script.ts` |
 | 会话列表、单聊/群聊分类切换、搜索过滤、头像与未读 | `src/web/chat-list-script.ts`、`src/web/chat-panels.ts`、`src/web/chat-styles.ts` |
 | 消息气泡、时间胶囊、@ 高亮与回执 | `src/web/chat-render-script.ts` |
+| 稳定消息节点与 React root 增量更新 | `src/web/chat-timeline-render-script.ts` |
+| 房间 epoch、状态缓存与历史分页锚点 | `src/web/chat-session-script.ts`、`src/web/chat-history-script.ts` |
 | 本地 Agent 注册表（不含归档状态） | `src/web/chat-agents-script.ts` |
 | 新建 Agent（注册、自动建 direct 会话、已读与关闭对账） | `src/web/new-agent-script.ts` |
 | 归档状态、侧栏过滤、已归档浮层与 toast | `src/web/chat-archive-script.ts` |
@@ -197,3 +202,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 - 远程：`AGENTNET_URL=https://net.peri-code.dev bun run test:protocol` / `test:acceptance`；2026-10-21 在旧域名 `networks.peri-code.dev` 上 85/109 项通过，部署版本 `1f02bd89-d372-4f22-9135-18c07acfef23`。生产唯一入口为自定义域名，`workers_dev: false`，旧 `workers.dev` 已关闭且无重定向
 
 验收脚本会创建新身份与房间；远程验收不要指向生产数据。本地 dev 状态在 `DATA_DIR`（默认 `.data`）的 `agent-network.sqlite` 与 `files/`；迁移变更后执行 `bun run db:migrate`。
+
+热点路径验收：`scripts/verify-hotpaths.ts`；隔离协议/业务运行器：`scripts/verify-isolated.ts`；长历史实测：`scripts/verify-web-perf.ts`。本次实现与证据见 [2026-11-09 报告](../reports/2026-11-09-web-hotpaths.md)。
+
+发送可用状态由 `chat-upload-script.ts` 统一计算；发送完成按输入快照消费草稿与附件（`chat-outbox-script.ts`），@ 文本变化清理过期 actor 选择（`chat-mention-script.ts`）。

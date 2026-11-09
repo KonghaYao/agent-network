@@ -205,6 +205,7 @@ function composerFileChip(entry) {
 }
 
 function renderComposerFiles(roomId) {
+  syncComposerSendState();
   if (!composerFilesElement) return;
   const entries = roomId && roomId === activeRoomId
     ? composerFileEntries.get(roomId) || []
@@ -326,13 +327,27 @@ function composerOutgoingBody(roomId, text) {
   return body;
 }
 
-/** 上传队列忙碌时只做视觉提示，不禁用按钮或输入框；输入仍可继续排队。 */
+/** 附件入口与输入保持可用；当前房间有未完成上传时统一禁发。 */
 function updateAttachBusy() {
+  syncComposerSendState();
   if (!attachFileButton) return;
   const busy = filesUploadRunning || filesUploadTasks.length > 0;
   attachFileButton.classList.toggle('busy', busy);
   attachFileButton.setAttribute('aria-busy', busy ? 'true' : 'false');
   attachFileButton.title = busy ? '正在上传文件…' : '添加附件';
+}
+
+/** Send readiness is derived, so refresh/upload/late sends cannot unlock each other. */
+function syncComposerSendState() {
+  if (!sendButton) return;
+  const entries = composerFileEntries.get(activeRoomId) || [];
+  const uploading = entries.some(function (entry) { return entry.status === 'uploading'; }) ||
+    filesUploadTasks.some(function (task) { return task.composer && task.roomId === activeRoomId; });
+  const loading = chatBodyElement && chatBodyElement.getAttribute('aria-busy') === 'true';
+  sendButton.disabled = !activeRoomId || !room || room.room_id !== activeRoomId ||
+    Boolean(room.read_only) || Boolean(loading) || Boolean(chatErrorElement && !chatErrorElement.hidden) ||
+    composerRequests.has(activeRoomId) || uploading;
+  sendButton.title = uploading ? '附件上传完成后可发送' : '';
 }
 
 function composerUploadReady() {

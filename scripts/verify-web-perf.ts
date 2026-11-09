@@ -169,7 +169,7 @@ async function main(): Promise<void> {
   const allErrors: string[] = [];
   try {
     const data = await seed(server.base);
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined });
     const { context, page } = await makeContext(
       browser,
       data.humanToken,
@@ -271,6 +271,17 @@ async function main(): Promise<void> {
           call.body.params.arguments.cursor;
       }).length`,
     );
+    // Measure actual refresh work after long-history paging, not just the first page.
+    const refreshSamples: { duration_ms: number; retained_nodes: number; total_nodes: number }[] = [];
+    for (let sample = 0; sample < 5; sample += 1) {
+      refreshSamples.push(await page.evaluate(`(async () => {
+        const nodes = Array.from(document.querySelectorAll('#messages .msg'));
+        const started = performance.now();
+        await refresh(true);
+        return { duration_ms: Math.round((performance.now()-started)*10)/10,
+          retained_nodes: nodes.filter(node=>node.isConnected).length, total_nodes:nodes.length };
+      })()`));
+    }
     await context.close();
 
     const sortedOlder = olderDurations.slice().sort((a, b) => a - b);
@@ -278,6 +289,7 @@ async function main(): Promise<void> {
       ? sortedOlder[Math.floor(sortedOlder.length / 2)]
       : 0;
     const report = {
+      refresh_samples: refreshSamples,
       target_messages: TARGET_MESSAGES,
       loaded_messages: full.messages,
       page_size: 50,
@@ -300,6 +312,7 @@ async function main(): Promise<void> {
 
     if (ASSERT) {
       const failures: string[] = [];
+      if (full.messages !== TARGET_MESSAGES) failures.push('历史未完整加载');
       if (initial.markdown_roots < 1) failures.push('首屏没有可见 Markdown root');
       if (initial.markdown_roots >= 50) {
         failures.push(`首屏 Markdown root 过多: ${initial.markdown_roots}`);

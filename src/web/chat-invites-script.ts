@@ -149,14 +149,13 @@ function invitePanelError(prefix, error) {
 
 /** 打开成员弹窗时按能力加载；任何失败都只影响本区块，不阻塞成员选择。 */
 async function loadInvitePanel(roomId, epoch) {
+  const formGeneration = membersLoadToken;
   if (!invitesSection || !requestsSection) return;
   const showInvites = canInviteMembers();
   const showRequests = canApproveJoins();
   invitesSection.hidden = !showInvites;
   requestsSection.hidden = !showRequests;
   if (!showInvites && !showRequests) return;
-  inviteBusy = false;
-  if (inviteCreateButton) inviteCreateButton.disabled = false;
   if (showInvites) {
     try {
       const page = await callTool('network_room_invite_get', {
@@ -164,11 +163,11 @@ async function loadInvitePanel(roomId, epoch) {
         status: 'pending',
         limit: 50
       });
-      if (!isActiveRoom(roomId, epoch)) return;
+      if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken || membersModal.hidden) return;
       inviteLinks = Array.isArray(page.items) ? page.items : [];
       renderInviteLinks();
     } catch (error) {
-      if (!isActiveRoom(roomId, epoch)) return;
+      if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken || membersModal.hidden) return;
       inviteLinks = [];
       renderInviteLinks();
       setMembersError(invitePanelError('读取邀请链接失败：', error));
@@ -181,10 +180,10 @@ async function loadInvitePanel(roomId, epoch) {
         status: 'pending',
         limit: 50
       });
-      if (!isActiveRoom(roomId, epoch)) return;
+      if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken || membersModal.hidden) return;
       renderJoinRequests(Array.isArray(page.items) ? page.items : []);
     } catch (error) {
-      if (!isActiveRoom(roomId, epoch)) return;
+      if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken || membersModal.hidden) return;
       renderJoinRequests([]);
       setMembersError(invitePanelError('读取入群申请失败：', error));
     }
@@ -195,6 +194,7 @@ async function submitInviteCreate() {
   if (!room || room.kind !== 'group' || inviteBusy || !canInviteMembers()) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
+  const formGeneration = membersLoadToken;
   if (!roomId) return;
   const days = Number(inviteDaysElement ? inviteDaysElement.value : 7);
   const uses = Number(inviteUsesElement ? inviteUsesElement.value : 20);
@@ -216,16 +216,17 @@ async function submitInviteCreate() {
       max_uses: Math.round(uses),
       expires_in_ms: Math.round(days * 86400000)
     });
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken || membersModal.hidden) return;
     if (result.share_url) showInviteShare(result.share_url);
     await loadInvitePanel(roomId, epoch);
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     statusElement.textContent = '已创建邀请链接，明文只显示这一次';
   } catch (error) {
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken || membersModal.hidden) return;
     setMembersError(invitePanelError('创建邀请链接失败：', error));
   } finally {
-    inviteBusy = false;
-    if (isActiveRoom(roomId, epoch) && inviteCreateButton) inviteCreateButton.disabled = false;
+    if (formGeneration === membersLoadToken) inviteBusy = false;
+    if (isActiveRoom(roomId, epoch) && formGeneration === membersLoadToken && inviteCreateButton) inviteCreateButton.disabled = false;
   }
 }
 
@@ -234,6 +235,7 @@ async function submitInviteRevoke(invitationId, label, revision) {
   if (!window.confirm('撤销' + label + '？撤销后所有设备上的旧链接和二维码立即失效。')) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
+  const formGeneration = membersLoadToken;
   if (!roomId) return;
   inviteBusy = true;
   setMembersError('');
@@ -243,19 +245,20 @@ async function submitInviteRevoke(invitationId, label, revision) {
       invitation_id: invitationId,
       expected_revision: revision
     });
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken || membersModal.hidden) return;
     if (inviteShare && inviteLinks.some(function (item) {
       return item.invitation_id === invitationId;
     })) {
       clearInviteShare();
     }
     await loadInvitePanel(roomId, epoch);
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     statusElement.textContent = '已撤销' + label;
   } catch (error) {
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken || membersModal.hidden) return;
     setMembersError(invitePanelError('撤销失败：', error));
   } finally {
-    inviteBusy = false;
+    if (formGeneration === membersLoadToken) inviteBusy = false;
   }
 }
 
@@ -263,6 +266,7 @@ async function submitJoinRequest(item, action) {
   if (!room || room.kind !== 'group' || inviteBusy || !item) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
+  const formGeneration = membersLoadToken;
   if (!roomId) return;
   if (action === 'reject' && !window.confirm('拒绝「' + item.applicant.name + '」的入群申请？')) return;
   inviteBusy = true;
@@ -274,21 +278,22 @@ async function submitJoinRequest(item, action) {
       action: action,
       expected_revision: item.revision
     });
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken || membersModal.hidden) return;
     await loadInvitePanel(roomId, epoch);
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     statusElement.textContent = action === 'approve'
       ? '已批准 ' + item.applicant.name + ' 入群'
       : '已拒绝 ' + item.applicant.name + ' 的申请';
     refresh(false).catch(function (error) {
-      if (!isActiveRoom(roomId, epoch)) return;
+      if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken || membersModal.hidden) return;
       statusElement.textContent = '申请已处理，但刷新会话失败：' +
         (error && error.message ? error.message : error);
     });
   } catch (error) {
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken || membersModal.hidden) return;
     setMembersError(invitePanelError(action === 'approve' ? '批准失败：' : '拒绝失败：', error));
   } finally {
-    inviteBusy = false;
+    if (formGeneration === membersLoadToken) inviteBusy = false;
   }
 }
 

@@ -1,3 +1,5 @@
+import { LIMITS } from '../contracts/limits';
+
 /**
  * 消息渲染片段：时间胶囊、头像、群聊发送者、@ 高亮与回执。
  *
@@ -13,6 +15,20 @@ const fullTimeCache = new Map();
 let cachedMentionNames = null;
 // 已展开全文的消息正文；刷新重建 DOM 后仍直接渲染完整正文。
 const expandedMessageBodies = new Map();
+let expandedBodyCacheSize = 0;
+function rememberExpandedBody(messageId, text) {
+  const previous = expandedMessageBodies.get(messageId);
+  if (previous !== undefined) expandedBodyCacheSize -= previous.length * 2;
+  expandedMessageBodies.delete(messageId);
+  expandedMessageBodies.set(messageId, text);
+  expandedBodyCacheSize += text.length * 2;
+  while (expandedBodyCacheSize > ${LIMITS.webExpandedBodyCacheBytes} ||
+         expandedMessageBodies.size > ${LIMITS.webExpandedBodyCacheMax}) {
+    const oldest = expandedMessageBodies.keys().next().value;
+    expandedBodyCacheSize -= expandedMessageBodies.get(oldest).length * 2;
+    expandedMessageBodies.delete(oldest);
+  }
+}
 // 同一 message_id 的自动展开只发一次读取；刷新重建的节点共享同一结果。
 const agentAutoExpandReads = new Map();
 // 自动展开队列只消费进入视口附近的消息，避免首屏 50 条同时发请求。
@@ -148,16 +164,17 @@ function claimStale(item) {
 
 function applyReceipt(receipt, item) {
   const label = receipt.firstElementChild;
-  if (label) label.textContent = receiptText(item);
+  const text = receiptText(item);
+  if (label && label.textContent === text && receipt.classList.contains('stale') === claimStale(item)) return;
+  const scroller = messagesElement;
+  const aboveViewport = receipt.isConnected && scroller &&
+    receipt.getBoundingClientRect().bottom < scroller.getBoundingClientRect().top;
+  const beforeHeight = aboveViewport ? receipt.getBoundingClientRect().height : 0;
+  if (label) label.textContent = text;
   receipt.classList.toggle('stale', claimStale(item));
   // 列表构建阶段节点尚未入树：只写文本，不读布局。
   // 整表替换后的最终高度由 scrollController 的 rAF 钉底/锚点恢复统一校准。
   if (!receipt.isConnected) return;
-  const scroller = messagesElement;
-  const scrollerTop = scroller ? scroller.getBoundingClientRect().top : 0;
-  const aboveViewport = scroller ? receipt.getBoundingClientRect().bottom < scrollerTop : false;
-  const beforeHeight = receipt.getBoundingClientRect().height;
-  // 异步回执文本变化可能加高；上翻阅读时补偿锚点，pinned 时由控制器补钉底。
   const afterHeight = receipt.getBoundingClientRect().height;
   if (!scrollController.isPinned() && aboveViewport && afterHeight !== beforeHeight) {
     scrollController.adjustScroll(afterHeight - beforeHeight);
@@ -167,13 +184,14 @@ function applyReceipt(receipt, item) {
 
 /** 未到阈值时用一次性本地定时器补上提示，页面刷新会重新计算。 */
 function scheduleReceipt(receipt, item) {
+  clearTimeout(receipt.__receiptTimer);
   const states = item.delivery_states || {};
   if (!Number(states.claimed || 0)) return;
   const last = Number(item.delivery_updated_at || item.delivery_claimed_at || 0);
   if (!last) return;
   const delay = last + CLAIM_STALE_MS - Date.now();
   if (delay <= 0) return;
-  setTimeout(function () {
+  receipt.__receiptTimer = setTimeout(function () {
     if (receipt.isConnected) applyReceipt(receipt, item);
   }, delay + 50);
 }
@@ -332,7 +350,7 @@ function messageItem(item) {
       // 预览阶段 bundle 失败时，展开只强制重试一次，避免每次点击都打 404。
       const retry = bubble.dataset.markdownUnavailable === '1';
       try {
-        const fullText = await readMessage(item.message_id);
+        const fullText = await readMessageShared(item.message_id);
         // 读取期间切房或重建：旧响应不得写入新房间的状态栏、气泡或文件卡片。
         if (stale()) return;
         const rendered = await renderMessageBody(bubble, fullText, item, agent, false, retry);
@@ -342,7 +360,7 @@ function messageItem(item) {
           content.insertBefore(filesRef.current, expand);
         }
         if (rendered || !agent) {
-          expandedMessageBodies.set(item.message_id, fullText);
+          rememberExpandedBody(item.message_id, fullText);
           expand.remove();
         } else {
           // bundle 重试仍失败：不记展开态，正文已是完整纯文本，保留按钮供稍后再试。
@@ -401,6 +419,7 @@ function readMessageShared(messageId) {
  * 新渲染的节点会重新登记到新观察器。
  */
 function resetAgentAutoExpand() {
+  agentAutoExpandReads.clear();
   if (agentExpandObserver) {
     agentExpandObserver.disconnect();
     agentExpandObserver = null;
@@ -517,7 +536,7 @@ async function runAgentAutoExpand(task) {
       content.insertBefore(filesRef.current, expand);
     }
     if (rendered) {
-      expandedMessageBodies.set(item.message_id, fullText);
+      rememberExpandedBody(item.message_id, fullText);
       expand.remove();
     } else {
       // bundle 失败但正文已完整：保留按钮供稍后重试，不缓存为已展开。
@@ -536,72 +555,16 @@ function updateMessagesLengthClass() {
   messagesElement.classList.toggle('messages--long', count > WEB_LONG_MESSAGE_THRESHOLD);
 }
 
-/** 全量替换消息区；缓存切换与首屏加载共用同一套渲染逻辑。 */
-function renderMessageList(items) {
-  if (!messagesElement) return;
-  resetAgentAutoExpand();
-  resetMarkdownHandles();
-  resetMessageFileCards();
-  resetTaskMarkerIndex();
-  invalidateMentionNames();
-  scrollController.beginContentChange();
-  // 整表只在 DocumentFragment 中构建一次，最后统一入树；构建期间不读布局。
-  const fragment = document.createDocumentFragment();
-  if (historyPagerElement) fragment.append(historyPagerElement);
-  // 服务端消息已出现在时间线时，先清掉对应的本地发送意图。
-  outboxPruneAgainstTimeline(items);
-  appendHistory(fragment, items);
-  outboxAppendRows(fragment, activeRoomId);
-  const end = ensureMessagesEnd();
-  if (end) fragment.append(end);
-  // 任务标记只同步本批新增节点，避免每次刷新全表 querySelectorAll + find。
-  syncTaskCardMarkers(fragment);
-  messagesElement.replaceChildren(fragment);
-  ensureHistoryPager();
-  updateMessagesLengthClass();
-  scrollController.noteContentChanged();
-}
-
-/**
- * 连续消息间隔超过 5 分钟时插入居中时间胶囊；presence 行自带时间。
- *
- * previousTimestamp 供预置历史块使用；返回本段首/末节点与最后一条时间，
- * 供 prepend seam 或后续增量 DOM 复用，不改变消息顺序。
- */
-function appendHistory(container, items, options) {
-  invalidateMentionNames();
-  let previous = Number(options && options.previousTimestamp) || 0;
-  const result = { first: null, last: null, lastTimestamp: previous };
-  const appendNode = function (node) {
-    if (!result.first) {
-      result.first = node.nodeType === 11 ? node.firstElementChild : node;
-    }
-    result.last = node.nodeType === 11 ? node.lastElementChild : node;
-    container.append(node);
-  };
-  for (const item of items) {
-    const created = timelineTimestamp(item);
-    if (item.kind === 'presence') {
-      appendNode(presenceItem(item));
-    } else {
-      if (!previous || created - previous > TIME_GAP) appendNode(timeDivider(created));
-      appendNode(messageItem(item));
-    }
-    if (created) previous = created;
-  }
-  result.lastTimestamp = previous;
-  return result;
-}
-
 async function readMessage(messageId) {
-  let chunk = await callTool('network_message_read', { message_id: messageId });
+  const signal = sessionSignal();
+  let chunk = await callTool('network_message_read', { message_id: messageId }, undefined, signal);
   let text = chunk.chunk;
   let cursor = chunk.next_cursor;
   for (let index = 0; index < MAX_CHUNKS && cursor && !chunk.eof; index += 1) {
     chunk = await callTool('network_message_read', {
       message_id: messageId,
       chunk_cursor: cursor
-    });
+    }, undefined, signal);
     text += chunk.chunk;
     cursor = chunk.next_cursor;
   }

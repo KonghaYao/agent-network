@@ -12,6 +12,7 @@ const membersModal = document.getElementById('members-modal');
 const membersForm = document.getElementById('members-form');
 const membersCloseButton = document.getElementById('members-close');
 const membersCurrentElement = document.getElementById('members-current');
+const membersCurrentSearch = document.getElementById('members-current-search');
 const membersCurrentCountElement = document.getElementById('members-current-count');
 const membersCurrentEmptyElement = document.getElementById('members-current-empty');
 const membersTransferElement = document.getElementById('members-transfer');
@@ -270,6 +271,27 @@ function memberMenuElement() {
   return menu;
 }
 
+function membersViewSignature(memberList, invitedList, transfer, capabilities) {
+  return JSON.stringify([memberList.map(function (member) {
+    return [member.actor_id, member.name, member.kind, member.role, member.role_revision, member.actions];
+  }), invitedList, transfer, capabilities]);
+}
+
+function filterCurrentMembers() {
+  const query = membersCurrentSearch ? membersCurrentSearch.value.trim().toLowerCase() : '';
+  let visible = 0;
+  for (const node of membersCurrentElement.children) {
+    const name = node.querySelector('.member-roster-name');
+    node.hidden = Boolean(query && (!name || !name.textContent.toLowerCase().includes(query)));
+    if (!node.hidden) visible += 1;
+  }
+  if (membersCurrentEmptyElement) {
+    membersCurrentEmptyElement.hidden = visible > 0;
+    membersCurrentEmptyElement.textContent = query ? '没有匹配的群成员' : '群里还没有成员';
+  }
+}
+if (membersCurrentSearch) membersCurrentSearch.addEventListener('input', filterCurrentMembers);
+
 function renderCurrentMembers() {
   if (!membersCurrentElement) return;
   closeMemberMenu();
@@ -333,6 +355,7 @@ function renderCurrentMembers() {
     membersCurrentCountElement.textContent = String(members.size);
   }
   if (membersCurrentEmptyElement) membersCurrentEmptyElement.hidden = members.size > 0;
+  filterCurrentMembers();
   renderInvitedMembers();
   renderOwnerTransferPanel();
 }
@@ -400,7 +423,7 @@ function renderOwnerTransferPanel() {
     membersModalTitleElement.textContent = visible &&
       (transfer.can_accept || transfer.can_reject || transfer.can_cancel)
       ? '成员与群主转让'
-      : '添加成员';
+      : '群组设置';
   }
   if (!visible) return;
   const title = document.createElement('p');
@@ -441,6 +464,7 @@ async function submitOwnerTransferResponse(action) {
   const transfer = ownerTransfer;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
+  const formGeneration = membersLoadToken;
   if (!roomId) return;
   setMembersError('');
   setMembersBusy(true, action === 'accept' ? '正在接受…' : '正在拒绝…');
@@ -451,15 +475,15 @@ async function submitOwnerTransferResponse(action) {
       action,
       expected_version: transfer.version
     });
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     applyRoomDetail(result);
     renderCurrentMembers();
     refreshMembersAfterChange(roomId, epoch, action === 'accept' ? '已接受群主转让' : '已拒绝群主转让');
   } catch (error) {
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     setMembersError(membersActionError(error, action === 'accept' ? '接受转让失败：' : '拒绝转让失败：'));
   } finally {
-    if (isActiveRoom(roomId, epoch)) {
+    if (isActiveRoom(roomId, epoch) && formGeneration === membersLoadToken) {
       setMembersBusy(false);
       renderCurrentMembers();
     }
@@ -472,6 +496,7 @@ async function submitOwnerTransferCancel() {
   if (!window.confirm('取消向「' + transfer.to_actor_name + '」的群主转让提议？')) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
+  const formGeneration = membersLoadToken;
   if (!roomId) return;
   setMembersError('');
   setMembersBusy(true, '正在取消…');
@@ -481,15 +506,15 @@ async function submitOwnerTransferCancel() {
       transfer_id: transfer.transfer_id,
       expected_version: transfer.version
     });
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     applyRoomDetail(result);
     renderCurrentMembers();
     refreshMembersAfterChange(roomId, epoch, '已取消群主转让提议');
   } catch (error) {
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     setMembersError(membersActionError(error, '取消转让失败：'));
   } finally {
-    if (isActiveRoom(roomId, epoch)) {
+    if (isActiveRoom(roomId, epoch) && formGeneration === membersLoadToken) {
       setMembersBusy(false);
       renderCurrentMembers();
     }
@@ -511,7 +536,7 @@ function renderMembersEmpty(message) {
 function renderMembersContacts(contacts, note) {
   if (!membersContactsElement) return;
   if (!canInviteMembers()) {
-    renderMembersEmpty('只有群 owner 或管理员可以添加成员');
+    renderMembersEmpty('当前群设置不允许你邀请成员');
     return;
   }
   const picker = membersPickerController();
@@ -521,6 +546,10 @@ function renderMembersContacts(contacts, note) {
 
 function closeMembersModal() {
   membersLoadToken += 1;
+  closeGroupProfile();
+  clearInviteShare();
+  inviteBusy = false;
+  if (inviteCreateButton) inviteCreateButton.disabled = false;
   closeMemberMenu();
   if (membersModal) membersModal.hidden = true;
   setMembersError('');
@@ -553,12 +582,14 @@ async function openMembersModal() {
   if (!membersModal || !room || room.kind !== 'group') return;
   membersOpener = document.activeElement;
   membersModal.hidden = false;
+  if (membersCurrentSearch) membersCurrentSearch.value = '';
   setMembersError('');
   membersContactsCache = [];
   membersContactNote = '';
   const picker = membersPickerController();
   picker.reset();
   renderCurrentMembers();
+  openGroupProfile();
   setMembersBusy(false);
   if (membersCloseButton) membersCloseButton.focus();
   const roomId = activeRoomId;
@@ -567,8 +598,8 @@ async function openMembersModal() {
   // 邀请链接与入群申请独立加载：失败只影响各自区块，不阻塞成员选择。
   loadInvitePanel(roomId, epoch);
   if (!canInviteMembers()) {
-    renderMembersEmpty('只有群 owner 或管理员可以添加成员');
-    setMembersError('只有群 owner 或管理员可以添加成员。');
+    renderMembersEmpty('当前群设置不允许你邀请成员');
+    setMembersError('当前群设置不允许你邀请成员；仍可查看群资料和成员。');
     return;
   }
   picker.setNote('正在读取好友…');
@@ -655,6 +686,7 @@ async function submitMemberRole(member, role) {
   }
   const roomId = activeRoomId;
   const epoch = roomEpoch;
+  const formGeneration = membersLoadToken;
   if (!roomId) return;
   setMembersError('');
   setMembersBusy(true, '正在保存…');
@@ -666,15 +698,15 @@ async function submitMemberRole(member, role) {
       role,
       expected_role_revision: member.role_revision
     });
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     applyRoomDetail(result);
     renderCurrentMembers();
     refreshMembersAfterChange(roomId, epoch, role === 'admin' ? '已设为管理员' : '已撤销管理员');
   } catch (error) {
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     setMembersError(membersActionError(error, role === 'admin' ? '设置管理员失败：' : '撤销管理员失败：'));
   } finally {
-    if (isActiveRoom(roomId, epoch)) {
+    if (isActiveRoom(roomId, epoch) && formGeneration === membersLoadToken) {
       setMembersBusy(false);
       renderCurrentMembers();
     }
@@ -695,6 +727,7 @@ async function submitOwnerTransfer(member) {
   if (!window.confirm('向「' + member.name + '」发起群主转让？对方接受后才会生效，确认前你仍负责群主事务。')) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
+  const formGeneration = membersLoadToken;
   if (!roomId) return;
   setMembersError('');
   setMembersBusy(true, '正在发起…');
@@ -705,15 +738,15 @@ async function submitOwnerTransfer(member) {
       target_actor_id: member.actor_id,
       expected_role_revision: member.role_revision
     });
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     applyRoomDetail(result);
     renderCurrentMembers();
     refreshMembersAfterChange(roomId, epoch, '已向 ' + member.name + ' 发起群主转让，等待对方确认');
   } catch (error) {
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     setMembersError(membersActionError(error, '发起群主转让失败：'));
   } finally {
-    if (isActiveRoom(roomId, epoch)) {
+    if (isActiveRoom(roomId, epoch) && formGeneration === membersLoadToken) {
       setMembersBusy(false);
       renderCurrentMembers();
     }
@@ -730,6 +763,7 @@ async function submitMemberRemoval(member) {
   if (!window.confirm('将「' + member.name + '」移出群聊？')) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
+  const formGeneration = membersLoadToken;
   if (!roomId) return;
   setMembersError('');
   setMembersBusy(true, '正在移除…');
@@ -740,16 +774,16 @@ async function submitMemberRemoval(member) {
       remove: [member.actor_id],
       expected_role_revision: member.role_revision
     });
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     applyRoomDetail(result);
     renderCurrentMembers();
     renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
     refreshMembersAfterChange(roomId, epoch, '已把 ' + member.name + ' 移出群聊');
   } catch (error) {
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     setMembersError(membersActionError(error, '移除成员失败：'));
   } finally {
-    if (isActiveRoom(roomId, epoch)) {
+    if (isActiveRoom(roomId, epoch) && formGeneration === membersLoadToken) {
       setMembersBusy(false);
       renderCurrentMembers();
     }
@@ -762,6 +796,7 @@ async function submitMembersForm(event) {
   if (!roomId || !room || room.kind !== 'group' || !membersModal || membersModal.hidden) return;
   if (membersBusy) return;
   const epoch = roomEpoch;
+  const formGeneration = membersLoadToken;
   if (!canInviteMembers()) {
     setMembersError('只有群 owner 或管理员可以添加成员。');
     return;
@@ -786,42 +821,49 @@ async function submitMembersForm(event) {
   }
   setMembersError('');
   setMembersBusy(true, '正在添加…');
+  const before = new Set(members.keys());
+  const previousInvites = new Set(invitedMembers.keys());
   try {
     const result = await callTool('network_room_members_update', {
       request_id: requestId('members'),
       room_id: roomId,
       add: selected
     });
-    if (!isActiveRoom(roomId, epoch)) return;
-    const before = new Set(members.keys());
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     const afterMembers = result && Array.isArray(result.members) ? result.members : [];
     const added = afterMembers.filter(function (member) {
       return !before.has(member.actor_id);
     });
-    if (added.length === 0) {
+    const invitations = (result.invited || []).filter(function (entry) {
+      return !previousInvites.has(entry.actor_id);
+    });
+    applyRoomDetail(result);
+    if (added.length === 0 && invitations.length === 0) {
       setMembersError('所选好友已在群里，成员没有变化。');
       renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
       return;
     }
-    applyRoomDetail(result);
     if (membersPicker) membersPicker.clearSelection();
     // 新成员从右侧候选消失、出现在左侧；弹窗保持打开，便于连续添加。
     renderCurrentMembers();
     renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
     setMembersError('');
-    statusElement.textContent = '已添加 ' + added.length + ' 名成员';
+    const message = [added.length ? '已添加 ' + added.length + ' 名成员' : '',
+      invitations.length ? '已邀请 ' + invitations.length + ' 人，等待对方确认' : ''].filter(Boolean).join('；');
+    setMembersError(message);
+    statusElement.textContent = message;
     // 更新响应已立即刷新头部与成员；后台再读一次 room_get 校准侧栏。
     refresh(false).catch(function (error) {
-      if (!isActiveRoom(roomId, epoch)) return;
+      if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
       statusElement.textContent = '成员已添加，但刷新会话失败：' +
         (error && error.message ? error.message : error);
     });
   } catch (error) {
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
     // 失败保留已选候选，用户可直接重试。
     setMembersError(membersUpdateError(error));
   } finally {
-    if (isActiveRoom(roomId, epoch)) setMembersBusy(false);
+    if (isActiveRoom(roomId, epoch) && formGeneration === membersLoadToken) setMembersBusy(false);
   }
 }
 

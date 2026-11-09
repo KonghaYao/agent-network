@@ -31,10 +31,11 @@
 
 | Web | MCP | domain/权限 | 事件/outbox | CLI/技能 | 验收 |
 |---|---|---|---|---|---|
-| `+` 建群、`chat.member-picker.ts` | `network_room_create`、`network_rooms_list`、`network_room_get` | `src/domain/rooms.ts`；群容量 100、成员代次与历史边界 | `room_created`、`room.membership` | `agentnet.sh room-create/rooms/room`；技能“房间” | G01-T01..T04、G07-T01..T04 |
+| `+` 建群、`chat-group-create-script.ts`、`chat-member-picker.ts` | `network_room_create`、`network_rooms_list`、`network_room_get` | `src/domain/rooms.ts`；群容量 100、成员代次与历史边界 | `room_created`、`room.membership` | `agentnet.sh room-create/rooms/room`；技能“房间” | G01-T01..T04、G07-T01..T04 |
 | `src/web/chat-invites-script.ts`、`src/web/chat-members-script.ts` | `network_room_invite_create/get/revoke/respond`、`network_room_join_request_list/respond`、`network_room_members_update`、`network_room_role_set`、`network_room_role_history` | `src/domain/room-invitations.ts`、`room-invite-links.ts`、`room-join-requests.ts`、`room-access.ts`；定向邀请与链接邀请分离，审批原子检查容量与成员资格 | `invite_created/revoked`、`room_invited`、`room_join_requested/approved/rejected`、`room_role_changed`；invite 走 `inbox:{actor}`，成员/角色走 `room:{id}` | `agentnet.sh room-members`；技能“群组交流” | G01/G02-T01..T04、`scripts/lib/group-invite-acceptance.ts`、`group-invite-link-acceptance.ts` |
 | `src/web/chat-room-menu-script.ts`、`src/web/chat-announcement-script.ts` | `network_room_policy_set`、`network_room_announcement_set`、`network_room_notice_list`、`network_room_owner_transfer_propose/respond/cancel`、`network_room_owner_transfer` | `src/domain/owner-transfers.ts`、`room-notices.ts`、`room-history.ts`；唯一 owner、管理员/成员角色，转让需接受 | `room_owner_transfer_*`、`room_policy_changed`、`room_announcement_updated`；只写 room 事件，不产生未读 | 技能“群组交流”；`agentnet.sh room-members --transfer-owner` | G03-T01..T04、G05-T01..T04、G07 |
 | `src/web/chat-members-script.ts`、群菜单“解散群聊” | `network_room_leave_preview`、`network_room_leave`、`network_room_dissolve` | `src/domain/room-lifecycle.ts`、`room-audit.ts`；owner 未解散必须先 G05 转让或解散；退群/移除撤销任务执行资格与投递 | `room_left`、`room_members_changed`、`room_dissolved`；room scope，`media_revoke: true` 仅作未来媒体钩子 | 技能“退群、移除与解散” | G06-T01..T05（119）、`scripts/lib/room-lifecycle-acceptance.ts`、`ownerless-room-unit.ts` |
+| `chat-group-profile-script.ts` 群设置改名 | `network_room_rename` | `room-profile.ts`、`room-access.ts`；edit_profile / member_profile_policy，expected_title CAS，无迁移 | `room_profile_updated` → `room.membership`；不产生消息或未读 | 标准 MCP 调用 | `test:hotpaths`：UI、越权、并发、重放 |
 
 ## 4. 消息、提及与补读
 
@@ -77,7 +78,7 @@
 |---|---|
 | A02 | 管理员对 Agent 的全局管理边界（本波次只有 active manager/委托）。 |
 | A04 | 联系人备注、分组与更完整的隐私策略。 |
-| G04 | 群资料/头像/群公告之外的完整资料与成员备注。 |
+| G04 | 群名编辑已实现；头像、其余完整资料与成员备注未实现。 |
 | M01 | 置顶、草稿云端同步、静音、个人清空、隐藏等消息管理。 |
 | M04 | 引用/转发/撤回等完整消息操作与媒体能力。 |
 | M05 | 图片/语音/视频/名片等全部媒体。 |
@@ -111,10 +112,12 @@
 |---|---|
 | `bun run typecheck` | 0 错误 |
 | `bun run test:protocol` | 991 |
-| `bun run test:acceptance`（短 presence 窗口） | 2615 |
-| `bun run test:web` | 2012 |
+| `bun run test:acceptance`（短 presence 窗口） | 2718 |
+| `bun run test:web` | 2174 |
 | `bun run test:events` | 339 |
 | `bun run test:drive` | 52 |
 | Q02 专项 | pairing 77 / sync 45 |
 | G06 / A06 专项 | 119 / 139 |
 | 迁移 | 34 个（0001–0012、0017–0038） |
+
+聊天/群组热点专项：26 组真实服务浏览器回归覆盖稳定消息节点、切换隔离、公告冲突、群名 CAS、成员候选、创建重试、迟到列表、跨设备退群/移除、归档切换与移动端按钮可达性。详见 [重构报告](../reports/2026-11-09-web-hotpaths.md)。

@@ -95,6 +95,7 @@ const roomCapabilitiesSchema = z.object({
   invite_members: z.boolean(),
   remove_members: z.boolean(),
   manage_admins: z.boolean(),
+  edit_profile: z.boolean(),
   manage_announcement: z.boolean(),
   manage_policy: z.boolean(),
   transfer_owner: z.boolean(),

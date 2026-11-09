@@ -14,6 +14,7 @@ export const CHAT_MARKDOWN_SCRIPT = `
 const markdownHandles = new Map();
 let markdownLoadPromise = null;
 let markdownRetryUsed = false;
+let markdownLoadFailed = false;
 // 懒升级：首屏/加载更早先保留纯文本，消息进入视口附近才创建 React root。
 // 只向下预取 300px：上翻加载历史时，视口上方的旧消息保持纯文本，
 // 避免升级高度把阅读锚点推走；滚动进入视口时再升级。
@@ -72,15 +73,20 @@ function isAgentMessage(item) {
 
 /** 只请求一次；forceRetry 最多重建一次失败的 Promise，避免每次展开都打 404。 */
 function loadMarkdownBundle(forceRetry) {
-  if (forceRetry && !markdownRetryUsed) {
+  if (forceRetry && markdownLoadFailed && !markdownRetryUsed) {
     markdownRetryUsed = true;
     markdownLoadPromise = null;
   }
   if (!markdownLoadPromise) {
-    markdownLoadPromise = import(MARKDOWN_ASSET_URL).then(function (module) {
-      if (!module || typeof module.mountMarkdown !== 'function') return null;
+    // 浏览器会缓存失败的动态 import；重置 Promise 不能重试同一 URL。
+    const url = MARKDOWN_ASSET_URL + (markdownRetryUsed
+      ? (MARKDOWN_ASSET_URL.indexOf('?') >= 0 ? '&' : '?') + 'retry=1' : '');
+    markdownLoadPromise = import(url).then(function (module) {
+      markdownLoadFailed = !module || typeof module.mountMarkdown !== 'function';
+      if (markdownLoadFailed) return null;
       return module;
     }).catch(function () {
+      markdownLoadFailed = true;
       // 只记录资源路径，不输出正文、token 或成员名。
       console.warn('markdown bundle unavailable: ' + MARKDOWN_ASSET_URL);
       return null;
@@ -372,7 +378,7 @@ function renderMessageBody(bubble, text, item, allowMarkdown, preview, retry, el
   renderRichText(bubble, text);
   if (!markdown) return Promise.resolve(false);
   // 纯文本快速路径：@ 高亮已由 renderRichText 完成，不创建 Streamdown root。
-  if (!markdownNeedsRender(text)) return Promise.resolve(false);
+  if (!markdownNeedsRender(text)) return Promise.resolve(true);
   if (element) {
     registerLazyMarkdown(element, bubble, text, Boolean(preview), Boolean(retry));
     return Promise.resolve(false);

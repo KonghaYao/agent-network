@@ -307,6 +307,8 @@ function applyRoomLifecycle(roomView) {
 }
 
 function applyRoomDetail(detail) {
+  const previousMembers = membersViewSignature(Array.from(members.values()),
+    Array.from(invitedMembers.values()), ownerTransfer, room && room.capabilities);
   room = detail.room;
   members = new Map(detail.members.map(function (member) {
     return [member.actor_id, member];
@@ -326,10 +328,18 @@ function applyRoomDetail(detail) {
     entry.peer_online = summary.peer_online;
     entry.peer_actor_id = summary.peer_actor_id;
     entry.head_seq = detail.room.head_seq;
+    entry.read_only = Boolean(detail.room.read_only);
+    entry.can_leave = Boolean(detail.room.can_leave);
+    entry.can_dissolve = Boolean(detail.room.can_dissolve);
     renderRooms();
   }
   // 邀请接受后 active/invited 会互换；弹窗开着时立即按新状态重绘。
-  if (membersModal && !membersModal.hidden) renderCurrentMembers();
+  if (membersModal && !membersModal.hidden && previousMembers !==
+      membersViewSignature(detail.members, detail.invited || [], ownerTransfer, room.capabilities)) {
+    renderCurrentMembers();
+    renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
+    updateGroupProfileCapabilities();
+  }
 }
 
 function setChatLoading(loading, options) {
@@ -340,12 +350,12 @@ function setChatLoading(loading, options) {
     chatSkeletonElement.hidden = !loading || !settings.skeleton;
   }
   if (loading && !settings.keepContent && messagesElement) {
-    resetAgentAutoExpand();
-    resetMarkdownHandles();
+    resetTimelineRender();
     scrollController.beginContentChange();
     messagesElement.replaceChildren();
     ensureHistoryPager();
   }
+  syncComposerSendState();
 }
 
 function setChatError(message) {
@@ -357,19 +367,18 @@ function setChatError(message) {
     subtitleElement.hidden = false;
   }
   if (messagesElement) {
-    resetAgentAutoExpand();
-    resetMarkdownHandles();
+    resetTimelineRender();
     scrollController.beginContentChange();
     messagesElement.replaceChildren();
     ensureHistoryPager();
   }
-  if (sendButton) sendButton.disabled = true;
+  syncComposerSendState();
 }
 
 function clearChatError() {
   if (chatErrorElement) chatErrorElement.hidden = true;
   if (chatErrorTextElement) chatErrorTextElement.textContent = '';
-  if (sendButton && activeRoomId) sendButton.disabled = false;
+  syncComposerSendState();
 }
 
 function handleRoomError(error, roomId, epoch) {
@@ -509,10 +518,7 @@ async function fetchRoomUpdate(roomId, epoch) {
 }
 
 /**
- * 用最新页合并已加载时间线：更早页保留，按 stable key 去重后整体重绘。
- *
- * Phase 1 仍是整表渲染，但不再用最新 50 条覆盖 currentItems；因此上翻
- * 加载过的历史不会因新消息到达而消失。
+ * 最新页与已加载历史按稳定 key 合并；DOM 只追加新消息并更新回执。
  */
 function applyLatestPage(result) {
   const incomingKeys = new Set(result.items.map(timelineItemKey));
@@ -695,7 +701,7 @@ function refresh(forceScroll) {
     .catch(function () {})
     .then(function () {
       // 切换房间会重置链；旧回调不得清除新房间的排队标志。
-      if (refreshRoomId !== chainRoomId) return;
+      if (refreshRoomId !== chainRoomId || !isActiveRoom(roomId, epoch)) return;
       refreshQueued = false;
       if (!isActiveRoom(roomId, epoch)) return;
       const force = refreshForcePending;
@@ -703,108 +709,6 @@ function refresh(forceScroll) {
       return doRefresh(roomId, epoch, force);
     });
   return refreshChain;
-}
-
-function findTimelineElement(item) {
-  if (!messagesElement || !item) return null;
-  for (const child of messagesElement.children) {
-    if (!child.dataset) continue;
-    if (item.kind === 'presence') {
-      if (child.dataset.presenceId === item.presence_event_id) return child;
-    } else if (child.dataset.messageId === item.message_id) {
-      return child;
-    }
-  }
-  return null;
-}
-
-/**
- * 修 prepend 接缝：新插入块的最后一条与旧首条间隔 <=5 分钟时，
- * 删除旧首条前的重复时间胶囊；>5 分钟则保证恰好一个。
- */
-function reconcilePrependSeam(oldFirstItem, olderLastItem) {
-  if (!oldFirstItem || !olderLastItem || oldFirstItem.kind === 'presence') return;
-  const oldFirstElement = findTimelineElement(oldFirstItem);
-  if (!oldFirstElement) return;
-  const previous = oldFirstElement.previousElementSibling;
-  const divider = previous && previous.classList.contains('msg-time') ? previous : null;
-  const gap = timelineTimestamp(oldFirstItem) - timelineTimestamp(olderLastItem);
-  if (gap > TIME_GAP) {
-    if (!divider) messagesElement.insertBefore(timeDivider(timelineTimestamp(oldFirstItem)), oldFirstElement);
-  } else if (divider) {
-    divider.remove();
-  }
-}
-
-async function loadOlder() {
-  const roomId = activeRoomId;
-  // 单飞：按钮禁用只是 UI 保护，重复事件/键盘仍可能再次触发。
-  if (!roomId || !nextOlder || olderLoading) return;
-  const epoch = roomEpoch;
-  const cursor = nextOlder;
-  const humanTimeline = Boolean(identity && identity.kind === 'human');
-  // 只有已离底时才需要取消跟随；手动/自动入口都在消息流顶部，底部不会触发加载。
-  if (!scrollController.isPinned()) scrollController.unpin();
-  const anchorSnapshot = scrollController.capturePrependAnchor();
-  olderLoading = true;
-  olderError = '';
-  updateOlderAffordance();
-  try {
-    const args = {
-      room_id: roomId,
-      direction: 'before',
-      cursor: cursor,
-      limit: 50
-    };
-    if (humanTimeline) args.view = 'timeline';
-    const page = await callTool('network_history_list', args, undefined, sessionSignal());
-    if (!isActiveRoom(roomId, epoch)) return;
-    const oldFirstItem = currentItems[0] || null;
-    const rawItems = humanTimeline ? (page.timeline_items || []) : page.items;
-    const merged = mergeTimelineItems(currentItems, rawItems.slice().reverse());
-    const known = new Set(currentItems.map(timelineItemKey));
-    const olderItems = merged.filter(function (item) {
-      return !known.has(timelineItemKey(item));
-    });
-    if (olderItems.length > 0) {
-      const fragment = document.createDocumentFragment();
-      appendHistory(fragment, olderItems);
-      messagesElement.prepend(fragment);
-      ensureHistoryPager();
-      syncTaskCardMarkers(messagesElement);
-      reconcilePrependSeam(oldFirstItem, olderItems[olderItems.length - 1]);
-      scrollController.restorePrependAnchor(anchorSnapshot);
-    }
-    currentItems = merged;
-    const nextCursor = humanTimeline
-      ? (page.timeline_has_more ? page.timeline_next_cursor : null)
-      : (page.has_more ? page.next_cursor : null);
-    // 游标不前进说明这一页无法再向前推进；停止请求并给出到底提示。
-    if (!nextCursor || nextCursor === cursor) {
-      nextOlder = null;
-      olderEnded = true;
-    } else {
-      nextOlder = nextCursor;
-      olderEnded = false;
-    }
-    olderError = '';
-    scrollController.noteContentChanged();
-    cacheRoomState(roomId, {
-      items: currentItems,
-      nextOlder: nextOlder,
-      olderEnded: olderEnded,
-      scrollTop: messagesElement ? messagesElement.scrollTop : 0
-    });
-  } catch (error) {
-    if (!isAbortError(error) && isActiveRoom(roomId, epoch)) {
-      olderError = '加载更早失败：' + (error && error.message ? error.message : error);
-    }
-  } finally {
-    if (isActiveRoom(roomId, epoch)) {
-      olderLoading = false;
-      updateOlderAffordance();
-    }
-  }
 }
 
 function ensureRoomEntry(detail) {
@@ -824,7 +728,10 @@ function ensureRoomEntry(detail) {
       peer_kind: summary.peer_kind,
       peer_online: summary.peer_online,
       peer_actor_id: summary.peer_actor_id,
-      peer_loaded: true
+      peer_loaded: true,
+      read_only: Boolean(detailRoom.read_only),
+      can_leave: Boolean(detailRoom.can_leave),
+      can_dissolve: Boolean(detailRoom.can_dissolve)
     };
     roomEntries.push(entry);
   } else {
@@ -885,6 +792,9 @@ async function openRoom(roomId, options) {
   const previousId = activeRoomId;
   snapshotActiveRoom();
   activeRoomId = roomId;
+  resetTimelineRender();
+  messagesElement.replaceChildren();
+  applyRoomLifecycle(null);
   syncRoomFilterForRoom(roomId);
   const epoch = ++roomEpoch;
   if (roomAbort) roomAbort.abort();
@@ -903,6 +813,10 @@ async function openRoom(roomId, options) {
   }
   room = null;
   members = new Map();
+  invitedMembers = new Map();
+  ownerTransfer = null;
+  applyRoomAnnouncement();
+  updateMembersAffordance();
   nextOlder = null;
   timelineResumeCursor = null;
   currentItems = [];
@@ -914,7 +828,7 @@ async function openRoom(roomId, options) {
   renderRooms();
   clearChatError();
   updateCopyGroupInfoAffordance();
-  if (sendButton) sendButton.disabled = false;
+  syncComposerSendState();
   const cache = roomCache.get(roomId);
   const longCache = Boolean(cache && (cache.items || []).length > ROOM_CACHE_RENDER_MAX);
   if (cache) {
@@ -922,7 +836,7 @@ async function openRoom(roomId, options) {
     applyCachedRoom(cache, longCache ? { renderItems: false } : undefined);
     if (!longCache) setChatLoading(false);
   } else {
-    const keepContent = Boolean(messagesElement && messagesElement.childElementCount > 0);
+    const keepContent = false;
     setChatLoading(true, {
       keepContent: keepContent,
       skeleton: Boolean(settings.initial) || !keepContent
@@ -971,6 +885,9 @@ function closeRoomView() {
   deactivateFilesRoom();
   deactivateMonitorRoom();
   activeRoomId = null;
+  resetTimelineRender();
+  messagesElement.replaceChildren();
+  applyRoomLifecycle(null);
   roomEpoch += 1;
   if (roomAbort) roomAbort.abort();
   roomAbort = null;
@@ -978,6 +895,10 @@ function closeRoomView() {
   cancelOlderAutoLoad();
   room = null;
   members = new Map();
+  invitedMembers = new Map();
+  ownerTransfer = null;
+  applyRoomAnnouncement();
+  updateMembersAffordance();
   nextOlder = null;
   timelineResumeCursor = null;
   currentItems = [];
@@ -989,7 +910,7 @@ function closeRoomView() {
   setChatLoading(false);
   if (chatErrorElement) chatErrorElement.hidden = true;
   if (chatErrorTextElement) chatErrorTextElement.textContent = '';
-  if (sendButton) sendButton.disabled = false;
+  syncComposerSendState();
   renderComposerFiles(null);
   if (titleElement) titleElement.textContent = '单聊';
   if (subtitleElement) {

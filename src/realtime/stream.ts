@@ -438,11 +438,12 @@ function roomStreamItems(
       return result;
     }
     case 'room_policy_changed':
+    case 'room_profile_updated':
     case 'room_announcement_updated': {
       // 策略与公告变化只影响群管理视图；不推进 head、不产生未读。
       const change = row.event_type === 'room_policy_changed'
         ? 'policy_updated'
-        : 'announcement_updated';
+        : (row.event_type === 'room_profile_updated' ? 'profile_updated' : 'announcement_updated');
       const changedBy = stringField(metadata, 'changed_by');
       for (const member of activeRecipients(members, eventSeq)) {
         const item = withLocation(

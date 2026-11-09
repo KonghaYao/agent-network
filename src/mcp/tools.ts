@@ -65,6 +65,7 @@ import {
   recoveryCreateSchema,
   recoveryRedeemSchema,
   registerSchema,
+  roomRenameSchema,
   roomAnnouncementSetSchema,
   roomCreateSchema,
   roomDissolveSchema,
@@ -211,6 +212,7 @@ import {
   roomsList,
   type RoomDetail,
 } from '../domain/rooms';
+import { roomRename } from '../domain/room-profile';
 import { roomMonitorGet, roomMonitorSet } from '../domain/room-monitors';
 import { roomNoticeList } from '../domain/room-notices';
 import {
@@ -1727,6 +1729,18 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       return roomPolicySet(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_room_rename',
+    '修改群名称，遵循群资料编辑策略。expected_title 必须匹配读取时的名称；不创建聊天消息、未读或投递。',
+    roomRenameSchema,
+    roomDetailSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomRename(db, principal, input);
     },
   );
 

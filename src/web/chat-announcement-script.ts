@@ -18,6 +18,7 @@ const announcementClose = document.getElementById('announcement-close');
 const announcementError = document.getElementById('announcement-error');
 const announcementMeta = document.getElementById('announcement-meta');
 let announcementOpener = null;
+let announcementContext = null;
 
 function canManageAnnouncement() {
   return Boolean(
@@ -57,7 +58,10 @@ function openAnnouncementModal() {
   if (!announcementModal || !room || room.kind !== 'group') return;
   const editable = canManageAnnouncement();
   announcementOpener = document.activeElement;
+  announcementContext = { roomId: activeRoomId, epoch: roomEpoch,
+    revision: room.announcement_revision, busy: false };
   announcementModal.hidden = false;
+  if (announcementSave) { announcementSave.disabled = false; announcementSave.textContent = '保存'; }
   if (announcementInput) {
     announcementInput.value = announcementText();
     announcementInput.readOnly = !editable;
@@ -74,6 +78,7 @@ function openAnnouncementModal() {
 }
 
 function closeAnnouncementModal() {
+  announcementContext = null;
   if (announcementModal) announcementModal.hidden = true;
   setAnnouncementError('');
   const opener = announcementOpener;
@@ -83,6 +88,8 @@ function closeAnnouncementModal() {
 
 async function submitAnnouncementForm(event) {
   event.preventDefault();
+  const context = announcementContext;
+  if (!context || context.busy || !isActiveRoom(context.roomId, context.epoch)) return;
   if (!announcementModal || announcementModal.hidden || !room || room.kind !== 'group') return;
   if (!canManageAnnouncement()) {
     setAnnouncementError('只有群 owner 或管理员可以编辑公告。');
@@ -99,7 +106,8 @@ async function submitAnnouncementForm(event) {
   const roomId = activeRoomId;
   const epoch = roomEpoch;
   if (!roomId) return;
-  const revision = typeof room.announcement_revision === 'number' ? room.announcement_revision : 1;
+  const revision = context.revision;
+  context.busy = true;
   if (announcementSave) {
     announcementSave.disabled = true;
     announcementSave.textContent = '正在保存…';
@@ -112,12 +120,12 @@ async function submitAnnouncementForm(event) {
       announcement: value,
       expected_announcement_revision: revision
     });
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || announcementContext !== context) return;
     applyRoomDetail(result);
     closeAnnouncementModal();
     statusElement.textContent = value ? '群公告已更新' : '群公告已清除';
   } catch (error) {
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || announcementContext !== context) return;
     const code = error && error.code;
     if (code === 'VERSION_CONFLICT') {
       setAnnouncementError('公告已被其他人更新，请关闭后重新打开再编辑。');
@@ -127,7 +135,8 @@ async function submitAnnouncementForm(event) {
       setAnnouncementError('保存公告失败：' + (error && error.message ? error.message : error));
     }
   } finally {
-    if (announcementSave) {
+    context.busy = false;
+    if (announcementSave && announcementContext === context) {
       announcementSave.disabled = false;
       announcementSave.textContent = '保存';
     }

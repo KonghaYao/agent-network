@@ -9,6 +9,8 @@ import { CHAT_CONTACTS_SCRIPT } from './chat-contacts-script';
 import { CHAT_DRAWBOARD_SCRIPT } from './chat-drawboard-script';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
+import { CHAT_GROUP_PROFILE_SCRIPT } from './chat-group-profile-script';
+import { CHAT_GROUP_CREATE_SCRIPT } from './chat-group-create-script';
 import { CHAT_GROUP_COPY_SCRIPT } from './chat-group-copy-script';
 import { CHAT_IDENTITY_SCRIPT } from './chat-identity-script';
 import { CHAT_INVITES_SCRIPT } from './chat-invites-script';
@@ -21,12 +23,14 @@ import { CHAT_MENTION_SCRIPT } from './chat-mention-script';
 import { CHAT_MESSAGE_FILES_SCRIPT } from './chat-message-files-script';
 import { CHAT_MONITOR_SCRIPT } from './chat-monitor-script';
 import { CHAT_OUTBOX_SCRIPT } from './chat-outbox-script';
+import { CHAT_TIMELINE_RENDER_SCRIPT } from './chat-timeline-render-script';
 import { CHAT_RENDER_SCRIPT } from './chat-render-script';
 import { CHAT_RESIZER_SCRIPT } from './chat-resizer-script';
 import { CHAT_ROOM_MENU_SCRIPT } from './chat-room-menu-script';
 import { CHAT_ROUTER_SCRIPT } from './chat-router-script';
 import { CHAT_SAFETY_SCRIPT } from './chat-safety-script';
 import { CHAT_SCROLL_SCRIPT } from './chat-scroll-script';
+import { CHAT_HISTORY_SCRIPT } from './chat-history-script';
 import { CHAT_SESSION_SCRIPT } from './chat-session-script';
 import { CHAT_STREAM_SCRIPT } from './chat-stream-script';
 import { CHAT_TASK_DETAIL_SCRIPT } from './chat-task-detail-script';
@@ -149,6 +153,7 @@ let groupLoadSeq = 0;
 let groupPicker = null;
 // 发送失败/投递缺失/截断提示必须跨过 SSE 触发的刷新，不能在 300ms 后被清空。
 let stickyStatus = '';
+const composerRequests = new Set();
 
 ${CHAT_IDENTITY_SCRIPT}
 ${CHAT_LIST_SCRIPT}
@@ -157,7 +162,9 @@ ${CHAT_ARCHIVE_SCRIPT}
 ${CHAT_ROOM_MENU_SCRIPT}
 ${CHAT_TRANSFER_SCRIPT}
 ${CHAT_MEMBER_PICKER_SCRIPT}
+${CHAT_GROUP_CREATE_SCRIPT}
 ${CHAT_MEMBERS_SCRIPT}
+${CHAT_GROUP_PROFILE_SCRIPT}
 ${CHAT_MENTION_SCRIPT}
 ${CHAT_INVITES_SCRIPT}
 ${CHAT_ANNOUNCEMENT_SCRIPT}
@@ -165,6 +172,7 @@ ${CHAT_GROUP_COPY_SCRIPT}
 ${CHAT_MESSAGE_FILES_SCRIPT}
 ${CHAT_MARKDOWN_SCRIPT}
 ${CHAT_RENDER_SCRIPT}
+${CHAT_TIMELINE_RENDER_SCRIPT}
 ${CHAT_OUTBOX_SCRIPT}
 ${NEW_AGENT_SCRIPT}
 ${CHAT_AGENTS_SCRIPT}
@@ -174,6 +182,7 @@ ${CHAT_LOGOUT_SCRIPT}
 ${CHAT_ACCOUNT_RENAME_SCRIPT}
 ${CHAT_SCROLL_SCRIPT}
 ${CHAT_SESSION_SCRIPT}
+${CHAT_HISTORY_SCRIPT}
 ${CHAT_TASK_PROGRESS_SCRIPT}
 ${CHAT_TASK_RECOVERY_SCRIPT}
 ${CHAT_TASK_SUBMISSION_SCRIPT}
@@ -474,90 +483,6 @@ function applyAgentName(actorId, name) {
   renderRooms();
 }
 
-async function loadGroupContacts() {
-  const contacts = [];
-  const seen = new Set();
-  let cursor = null;
-  for (let page = 0; page < 5; page += 1) {
-    const args = { limit: 100 };
-    if (cursor) args.cursor = cursor;
-    const result = await callTool('network_contacts_list', args);
-    for (const contact of result.items || []) {
-      if (!contact || typeof contact.actor_id !== 'string') continue;
-      // 单侧收藏/历史不是好友：只有双向 active 关系才能用于建群或加成员。
-      if (contact.relation !== 'active') continue;
-      if (seen.has(contact.actor_id)) continue;
-      seen.add(contact.actor_id);
-      contacts.push(contact);
-    }
-    if (!result.has_more || !result.next_cursor) break;
-    cursor = result.next_cursor;
-  }
-  return contacts;
-}
-
-/** 建群与添加成员共用一个选择器；这里只绑定建群弹窗的 DOM。 */
-function groupPickerController() {
-  if (groupPicker) return groupPicker;
-  groupPicker = createMemberPicker({
-    root: groupContactsElement,
-    search: groupSearchElement,
-    more: groupMoreButton,
-    count: groupContactsCountElement,
-    selection: groupSelectionElement,
-    empty: '还没有好友。通过分享链接发送好友申请，对方确认后即可加入群聊。'
-  });
-  return groupPicker;
-}
-
-function showGroupPicker(contacts, note) {
-  const picker = groupPickerController();
-  picker.setContacts(contacts);
-  picker.setNote(note || '');
-}
-
-function closeGroupModal() {
-  groupLoadSeq += 1;
-  if (groupModal) groupModal.hidden = true;
-}
-
-async function openGroupModal() {
-  if (!groupModal || !groupContactsElement) return;
-  groupLoadSeq += 1;
-  const loadSeq = groupLoadSeq;
-  groupModal.hidden = false;
-  if (groupTitleInput) groupTitleInput.value = '';
-  if (groupErrorElement) groupErrorElement.textContent = '';
-  if (groupCreateButton) {
-    groupCreateButton.disabled = false;
-    groupCreateButton.textContent = '创建';
-  }
-  const picker = groupPickerController();
-  const selfId = identity ? identity.actor_id : '';
-  picker.reset();
-  picker.setExcluded(selfId ? [selfId] : []);
-  picker.setNote('正在读取好友…');
-  try {
-    await ensureIdentity();
-    if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
-    const contacts = await loadGroupContacts();
-    if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
-    picker.setExcluded(identity ? [identity.actor_id] : []);
-    picker.setNote('正在读取本机与受管 Agent…');
-    const ownerActorId = identity ? identity.actor_id : '';
-    const merged = await mergeAgentPickerContacts(ownerActorId, contacts);
-    if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
-    showGroupPicker(merged.contacts);
-  } catch (error) {
-    if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
-    picker.setContacts([]);
-    picker.setNote('');
-    if (groupErrorElement) {
-      groupErrorElement.textContent = '读取好友失败：' + (error && error.message ? error.message : error);
-    }
-  }
-}
-
 /** 输入框 1–4 行自适应，超过 4 行后内部滚动。 */
 function resizeComposer() {
   if (!bodyInput) return;
@@ -620,10 +545,12 @@ composer.addEventListener('submit', async function (event) {
   let mentionTargets = [];
   let invokeExplicit = false;
   let selectionError = null;
+  let sentMentionSelections = [];
   if (room && room.kind === 'group') {
     const selection = resolvedMentionSelection(sendRoomId, body);
     selectionError = selection.error;
     if (!selectionError) {
+      sentMentionSelections = selection.items.slice();
       for (const entry of selection.items) {
         if (entry.kind === 'agent') invokeTargets.push(entry.actor_id);
         else mentionTargets.push(entry.actor_id);
@@ -653,58 +580,50 @@ composer.addEventListener('submit', async function (event) {
     invokeExplicit,
   );
   const reused = Boolean(intent);
-  if (intent) {
-    // 响应丢失后先对账；确认已提交就不再发送第二条。
-    sendButton.disabled = true;
-    const decision = await outboxCheckBeforeResend(intent);
-    if (decision !== 'send') {
-      outboxRefreshRows();
-      if (isActiveRoom(sendRoomId, sendEpoch)) {
-        if (decision === 'committed') {
-          if (outboxComposerMatches(intent)) {
-            drafts.delete(sendRoomId);
-            draftClear(sendRoomId);
-            mentionSelections.delete(sendRoomId);
-            clearComposerFiles(sendRoomId, sentFileKeys);
-            bodyInput.value = '';
-            hideMentionPicker();
-            resizeComposer();
-          }
-          stickyStatus = '';
-          statusElement.textContent = '';
-          await refresh(true).catch(function () {});
-        } else if (decision === 'conflict') {
-          statusElement.textContent = '发送失败：' + (intent.error || 'client_message_id 冲突');
-        } else {
-          stickyStatus = '暂时无法对账，请稍后重试';
-          statusElement.textContent = stickyStatus;
-        }
-      }
-      sendButton.disabled = false;
-      return;
-    }
-  } else {
-    intent = outboxCreate(
-      sendRoomId,
-      body,
-      invokeTargets,
-      mentionTargets,
-      invokeExplicit,
-    );
-  }
-  sendButton.disabled = true;
-  // 自己的消息必须出现在底部；独立标志避免 refresh 合并时丢失强制滚底。
-  scrollController.pinNextApply();
+  const finishOptions = {
+    epoch: sendEpoch, submittedText: text, sentFileKeys: sentFileKeys,
+    sentMentionSelections: sentMentionSelections, fromRetry: reused,
+    invokeTargets: invokeTargets.length
+  };
+  composerRequests.add(sendRoomId);
+  syncComposerSendState();
   try {
-    await outboxSubmit(intent, {
-      epoch: sendEpoch,
-      sentFileKeys: sentFileKeys,
-      fromRetry: reused,
-      invokeTargets: invokeTargets.length
-    });
+    if (intent) {
+      // 响应丢失后先对账；确认已提交就不再发送第二条。
+      const decision = await outboxCheckBeforeResend(intent);
+      if (decision !== 'send') {
+        outboxRefreshRows();
+        if (decision === 'committed') outboxFinishCommitted(intent, finishOptions);
+        if (isActiveRoom(sendRoomId, sendEpoch)) {
+          if (decision === 'committed') {
+            stickyStatus = '';
+            statusElement.textContent = '';
+            await refresh(true).catch(function () {});
+          } else if (decision === 'conflict') {
+            statusElement.textContent = '发送失败：' + (intent.error || 'client_message_id 冲突');
+          } else {
+            stickyStatus = '暂时无法对账，请稍后重试';
+            statusElement.textContent = stickyStatus;
+          }
+        }
+        return;
+      }
+    } else {
+      intent = outboxCreate(
+        sendRoomId,
+        body,
+        invokeTargets,
+        mentionTargets,
+        invokeExplicit,
+      );
+    }
+    // 自己的消息必须出现在底部；独立标志避免 refresh 合并时丢失强制滚底。
+    if (isActiveRoom(sendRoomId, sendEpoch)) scrollController.pinNextApply();
+    await outboxSubmit(intent, finishOptions);
   } finally {
+    composerRequests.delete(sendRoomId);
+    syncComposerSendState();
     if (isActiveRoom(sendRoomId, sendEpoch)) {
-      sendButton.disabled = false;
       bodyInput.focus();
     }
   }
@@ -714,6 +633,7 @@ bodyInput.addEventListener('input', function () {
   if (activeRoomId) {
     drafts.set(activeRoomId, bodyInput.value);
     draftSave(activeRoomId, bodyInput.value);
+    pruneMentionSelections(activeRoomId, bodyInput.value);
   }
   resizeComposer();
   updateMentionPicker();
@@ -813,50 +733,6 @@ document.addEventListener('click', function (event) {
   if (mentionPicker.contains(event.target) || event.target === bodyInput) return;
   hideMentionPicker();
 });
-
-if (newGroupButton) newGroupButton.addEventListener('click', openGroupModal);
-if (groupCancelButton) groupCancelButton.addEventListener('click', closeGroupModal);
-if (groupModal) {
-  groupModal.addEventListener('click', function (event) {
-    if (event.target === groupModal) closeGroupModal();
-  });
-}
-document.addEventListener('keydown', function (event) {
-  if (event.key !== 'Escape' || !groupModal || groupModal.hidden) return;
-  event.preventDefault();
-  closeGroupModal();
-});
-if (groupForm) {
-  groupForm.addEventListener('submit', async function (event) {
-    event.preventDefault();
-    const selected = groupPicker ? groupPicker.selectedIds() : [];
-    if (selected.length === 0) {
-      groupErrorElement.textContent = '请至少选择一个成员';
-      return;
-    }
-    const title = groupTitleInput.value.trim();
-    groupCreateButton.disabled = true;
-    groupErrorElement.textContent = '正在创建…';
-    try {
-      const args = {
-        request_id: requestId('group'),
-        kind: 'group',
-        members: selected
-      };
-      if (title) args.title = title;
-      const result = await callTool('network_room_create', args);
-      const newRoomId = seedRoomCacheFromDetail(result);
-      groupErrorElement.textContent = '';
-      closeGroupModal();
-      navigateTo('/c/' + encodeURIComponent(newRoomId));
-    } catch (error) {
-      groupErrorElement.textContent =
-        '创建失败：' + (error && error.message ? error.message : error);
-    } finally {
-      groupCreateButton.disabled = false;
-    }
-  });
-}
 
 const loggedOutStartButton = document.getElementById('logged-out-start');
 if (loggedOutStartButton) {

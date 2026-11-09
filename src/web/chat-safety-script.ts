@@ -180,8 +180,8 @@ function safetyInFlightTaskLines(preview) {
     }).join('\\n');
 }
 
-async function safetyLeaveGroup() {
-  const target = roomMenuTarget;
+async function safetyLeaveGroup(explicitTarget) {
+  const target = explicitTarget || roomMenuTarget;
   if (!target || safetyBusy || target.kind !== 'group') return;
   safetyBusy = true;
   if (safetyLeaveButton) safetyLeaveButton.disabled = true;
@@ -205,6 +205,7 @@ async function safetyLeaveGroup() {
       );
       return;
     }
+    if (explicitTarget ? activeRoomId !== target.roomId : roomMenuTarget !== target) return;
     if (!window.confirm(message)) return;
     await callTool('network_room_leave', {
       request_id: requestId('web_room_leave'),
@@ -212,17 +213,23 @@ async function safetyLeaveGroup() {
       ...(hasWork ? { confirm_in_flight: true } : {})
     });
     closeRoomMenu();
-    window.location.assign('/');
+    forgetRoomEntry(target.roomId);
+    if (activeRoomId === target.roomId) navigateTo('/', { replace: true });
+    renderRooms();
+    scheduleRoomListRefresh(true);
+    showToast('已退出群聊');
   } catch (error) {
-    safetySetStatus('退出失败：' + (error && error.message ? error.message : String(error)), true);
+    const message = '退出失败：' + (error && error.message ? error.message : String(error));
+    if (explicitTarget) showToast(message);
+    else if (roomMenuTarget === target) safetySetStatus(message, true);
   } finally {
     safetyBusy = false;
     if (safetyLeaveButton) safetyLeaveButton.disabled = false;
   }
 }
 
-async function safetyDissolveGroup() {
-  const target = roomMenuTarget;
+async function safetyDissolveGroup(explicitTarget) {
+  const target = explicitTarget || roomMenuTarget;
   if (!target || safetyBusy || target.kind !== 'group' || !target.can_dissolve) return;
   if (!window.confirm(SAFETY_DISSOLVE_CONFIRM)) return;
   safetyBusy = true;
@@ -237,10 +244,15 @@ async function safetyDissolveGroup() {
       ? '已解散，取消 ' + summary.cancelled_tasks + ' 个未结束任务'
       : '已解散');
     closeRoomMenu();
-    if (activeRoomId === target.roomId) await refresh(true);
+    if (activeRoomId === target.roomId) {
+      closeMembersModal();
+      await refresh(true);
+    }
     else scheduleRoomListRefresh(true);
   } catch (error) {
-    safetySetStatus('解散失败：' + (error && error.message ? error.message : String(error)), true);
+    const message = '解散失败：' + (error && error.message ? error.message : String(error));
+    if (explicitTarget) showToast(message);
+    else if (roomMenuTarget === target) safetySetStatus(message, true);
   } finally {
     safetyBusy = false;
     if (safetyDissolveButton) safetyDissolveButton.disabled = false;

@@ -23,7 +23,6 @@ function routePath(view, roomId) {
 }
 
 function snapshotBeforeRouteChange() {
-  snapshotActiveRoom();
   snapshotSidebarScroll();
 }
 
@@ -37,6 +36,9 @@ function applyRouteChrome(route) {
   closeRoomMenu();
   closeRenameForm();
   closeGroupModal();
+  closeAnnouncementModal();
+  closeMembersModal();
+  closeSafetyReport();
   hideComposerDrop();
   syncFilesChrome();
   syncMonitorChrome();

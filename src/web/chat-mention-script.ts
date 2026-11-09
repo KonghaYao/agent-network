@@ -11,6 +11,15 @@ function hideMentionPicker() {
   activeMention = null;
 }
 
+/** 删除/改写 @ 文本后，旧的同名 actor 选择不能占用下一次选中的目标。 */
+function pruneMentionSelections(roomId, text) {
+  const selections = mentionSelections.get(roomId);
+  if (!selections) return;
+  mentionSelections.set(roomId, selections.filter(function (entry) {
+    return text.indexOf('@' + entry.name) >= 0;
+  }));
+}
+
 function updateMentionPicker() {
   if (!mentionPicker || !bodyInput || !room || room.kind !== 'group' || !identity) {
     hideMentionPicker();
@@ -65,19 +74,23 @@ function updateMentionPicker() {
 function insertMention(member) {
   if (!activeMention || !bodyInput || !activeRoomId) return;
   const selections = mentionSelectionsFor(activeRoomId);
-  const existing = selections.find(function (item) { return item.actor_id === member.actor_id; });
-  if (existing) {
-    existing.name = member.name;
-    existing.kind = member.kind;
+  const index = selections.findIndex(function (item) { return item.actor_id === member.actor_id; });
+  const selection = { actor_id: member.actor_id, name: member.name, kind: member.kind };
+  if (index >= 0) {
+    // 新选择拥有新对象，旧发送只能消费其提交时捕获的选择。
+    selections[index] = selection;
   } else {
-    selections.push({ actor_id: member.actor_id, name: member.name, kind: member.kind });
+    selections.push(selection);
   }
   const value = bodyInput.value;
   const insert = '@' + member.name + ' ';
   bodyInput.value = value.slice(0, activeMention.start) + insert + value.slice(activeMention.end);
   const position = activeMention.start + insert.length;
   bodyInput.setSelectionRange(position, position);
-  if (activeRoomId) drafts.set(activeRoomId, bodyInput.value);
+  if (activeRoomId) {
+    drafts.set(activeRoomId, bodyInput.value);
+    draftSave(activeRoomId, bodyInput.value);
+  }
   hideMentionPicker();
   resizeComposer();
   bodyInput.focus();

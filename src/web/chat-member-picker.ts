@@ -66,7 +66,7 @@ function createMemberPicker(options) {
     if (visible.length === 0) {
       const empty = document.createElement('p');
       empty.className = 'members-empty';
-      empty.textContent = note || settings.empty || '没有可选的成员';
+      empty.textContent = query ? '没有匹配的成员' : (note || settings.empty || '没有可选的成员');
       root.append(empty);
     } else {
       for (const contact of visible.slice(0, limit)) {
@@ -121,7 +121,7 @@ function createMemberPicker(options) {
   if (root) {
     root.addEventListener('change', function (event) {
       const target = event.target;
-      if (!target || target.type !== 'checkbox') return;
+      if (!target || target.type !== 'checkbox' || busy) return;
       if (target.checked) selected.add(target.value);
       else selected.delete(target.value);
       updateSummary();
@@ -148,10 +148,13 @@ function createMemberPicker(options) {
       contacts = Array.isArray(next) ? next.filter(function (contact) {
         return Boolean(contact) && typeof contact.actor_id === 'string';
       }) : [];
+      const valid = new Set(contacts.map(function (contact) { return contact.actor_id; }));
+      selected = new Set(Array.from(selected).filter(function (id) { return valid.has(id) && !excluded.has(id); }));
       render();
     },
     setExcluded(ids) {
       excluded = new Set(Array.isArray(ids) ? ids : []);
+      selected = new Set(Array.from(selected).filter(function (id) { return !excluded.has(id); }));
       render();
     },
     setNote(next) {

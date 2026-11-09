@@ -338,10 +338,18 @@ export const roomCreateSchema = z.object({
   request_id: requestId,
   kind: z.enum(['direct', 'group']),
   members: z.array(id()).min(1).max(LIMITS.memberChangeMax),
-  title: z.string().max(160).optional(),
+  title: z.string().max(LIMITS.roomTitleMax).optional(),
 });
 
 export const roomsListSchema = z.object({ cursor, limit: z.number().int().min(1).max(100).optional() });
+
+export const roomRenameSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  title: z.string().trim().min(1).max(LIMITS.roomTitleMax),
+  expected_title: z.string().max(LIMITS.roomTitleMax),
+});
+export type RoomRenameInput = z.infer<typeof roomRenameSchema>;
 
 export const roomGetSchema = z.object({ room_id: id() });
 

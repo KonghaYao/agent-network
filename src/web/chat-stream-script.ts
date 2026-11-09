@@ -320,9 +320,9 @@ function handleStreamEventFrame(payload) {
         break;
       case 'room.membership': {
         refreshList = true;
-        const removedSelf = roomId && rawItem.change === 'removed' &&
+        const removedSelf = roomId && (rawItem.change === 'removed' || rawItem.change === 'left') &&
           selfId && rawItem.subject_id === selfId;
-        if (removedSelf) discardRoomCache(roomId);
+        if (removedSelf) forgetRoomEntry(roomId);
         if (roomId && roomId === activeRoomId) {
           if (removedSelf) leaveRoom = true;
           else refreshRoom = true;

@@ -15,6 +15,15 @@ let roomsMoreError = '';
 let roomsLoadMoreAttempted = false;
 let roomsMorePromise = null;
 let roomsAutoFrame = 0;
+// 每次列表读取只记下其在途期间发生的失权，避免迟到响应复活已退出的群。
+const roomListReads = new Set();
+
+function forgetRoomEntry(roomId) {
+  for (const removed of roomListReads) removed.add(roomId);
+  roomEntries = roomEntries.filter(function (entry) { return entry.room_id !== roomId; });
+  discardRoomCache(roomId);
+  renderRooms();
+}
 const ROOM_FILTER_KEY = 'agent-network-room-filter';
 const roomFilterElement = document.getElementById('room-filter');
 const roomListMoreElement = document.getElementById('room-list-more');
@@ -239,12 +248,13 @@ function roomSummaryFromList(entry, me) {
  * 本地已读位置取较大值，避免较旧的响应把已读房间重新点亮；新房间由
  * sortRooms 插入正确位置。
  */
-function mergeRoomSummaries(summaries) {
+function mergeRoomSummaries(summaries, removed) {
   const existingById = new Map();
   for (const entry of roomEntries) existingById.set(entry.room_id, entry);
   const incomingIds = new Set();
   const merged = [];
   for (const summary of summaries) {
+    if (removed && removed.has(summary.room_id)) continue;
     if (incomingIds.has(summary.room_id)) continue;
     incomingIds.add(summary.room_id);
     const existing = existingById.get(summary.room_id);
@@ -285,6 +295,8 @@ async function loadMoreRooms() {
     return null;
   }
   const cursor = roomsNextCursor;
+  const removed = new Set();
+  roomListReads.add(removed);
   roomsLoadingMore = true;
   roomsMoreError = '';
   roomsLoadMoreAttempted = true;
@@ -296,7 +308,7 @@ async function loadMoreRooms() {
       const summaries = (page.items || []).map(function (entry) {
         return roomSummaryFromList(entry, me);
       });
-      roomEntries = sortRooms(mergeRoomSummaries(summaries));
+      roomEntries = sortRooms(mergeRoomSummaries(summaries, removed));
       const nextCursor = page.has_more && page.next_cursor ? page.next_cursor : null;
       if (nextCursor === cursor) {
         roomsNextCursor = null;
@@ -321,6 +333,7 @@ async function loadMoreRooms() {
       }
       roomsMoreError = '加载更多会话失败：' + (error && error.message ? error.message : String(error));
     } finally {
+      roomListReads.delete(removed);
       roomsLoadingMore = false;
       roomsMorePromise = null;
       updateRoomListMore();
@@ -419,24 +432,8 @@ function roomMatches(entry, query) {
   return String(preview || '').toLowerCase().indexOf(query) >= 0;
 }
 
-function renderRooms() {
-  if (!roomListElement) return;
-  roomListElement.setAttribute('aria-label', roomFilter === 'group' ? '群聊' : '单聊');
-  // 归档只影响默认列表与总览搜索；房间与消息仍可按 /c/<room_id> 使用。
-  const visibleEntries = roomEntries.filter(function (entry) {
-    return !isArchivedAgentRoom(entry) && entry.kind === roomFilter;
-  });
-  const query = searchQuery.trim().toLowerCase();
-  const entries = query ? visibleEntries.filter(function (entry) {
-    return roomMatches(entry, query);
-  }) : visibleEntries;
-  const unarchivedEntries = roomEntries.filter(function (entry) {
-    return !isArchivedAgentRoom(entry);
-  });
-  const scroller = roomListElement.parentElement;
-  const previousScroll = scroller ? scroller.scrollTop : 0;
-  roomListElement.replaceChildren();
-  for (const entry of entries) {
+const roomListNodes = new Map();
+function createRoomListItem(entry) {
     const item = document.createElement('li');
     const link = document.createElement('a');
     link.className = 'room-item' + (entry.room_id === activeRoomId ? ' active' : '') +
@@ -502,7 +499,55 @@ function renderRooms() {
     }
     link.append(avatarWrap, main);
     item.append(link);
-    roomListElement.append(item);
+    return item;
+}
+
+function renderRooms() {
+  if (!roomListElement) return;
+  roomListElement.setAttribute('aria-label', roomFilter === 'group' ? '群聊' : '单聊');
+  // 归档只影响默认列表与总览搜索；房间与消息仍可按 /c/<room_id> 使用。
+  const visibleEntries = roomEntries.filter(function (entry) {
+    return !isArchivedAgentRoom(entry) && entry.kind === roomFilter;
+  });
+  const query = searchQuery.trim().toLowerCase();
+  const entries = query ? visibleEntries.filter(function (entry) {
+    return roomMatches(entry, query);
+  }) : visibleEntries;
+  const unarchivedEntries = roomEntries.filter(function (entry) {
+    return !isArchivedAgentRoom(entry);
+  });
+  const scroller = roomListElement.parentElement;
+  const previousScroll = scroller ? scroller.scrollTop : 0;
+  const retained = new Set();
+  let cursor = roomListElement.firstElementChild;
+  for (const entry of entries) {
+    retained.add(entry.room_id);
+    const progress = taskSummary.get(entry.room_id);
+    const signature = JSON.stringify([entry, progress, relativeTime(entry.last_message ? entry.last_message.created_at : entry.updated_at)]);
+    let cached = roomListNodes.get(entry.room_id);
+    if (!cached || cached.signature !== signature) {
+      const old = cached && cached.item;
+      const focused = old && old.contains(document.activeElement);
+      const item = createRoomListItem(entry);
+      cached = { item: item, signature: signature };
+      roomListNodes.set(entry.room_id, cached);
+      if (old) {
+        if (cursor === old) cursor = item;
+        old.replaceWith(item);
+      }
+      if (focused) item.querySelector('a').focus({ preventScroll: true });
+    }
+    const link = cached.item.firstElementChild;
+    const active = entry.room_id === activeRoomId;
+    link.classList.toggle('active', active);
+    if (active) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+    if (cached.item !== cursor) roomListElement.insertBefore(cached.item, cursor);
+    cursor = cached.item.nextElementSibling;
+  }
+  while (cursor) { const next = cursor.nextElementSibling; cursor.remove(); cursor = next; }
+  for (const [id, cached] of roomListNodes) {
+    if (!retained.has(id)) { cached.item.remove(); roomListNodes.delete(id); }
   }
   if (query && entries.length === 0) {
     setListHint('没有匹配的会话');
@@ -644,6 +689,8 @@ async function fillDirectPeers(me) {
 async function loadRooms(options) {
   if (roomsPromise) return roomsPromise;
   const hadEntries = roomEntries.length > 0;
+  const removed = new Set();
+  roomListReads.add(removed);
   roomsPromise = (async function () {
     try {
       const me = await ensureIdentity();
@@ -658,7 +705,7 @@ async function loadRooms(options) {
         return roomSummaryFromList(entry, me);
       });
       // 后台刷新只更新/合并已加载房间，不把用户翻过的旧页丢回 50 条。
-      roomEntries = sortRooms(mergeActiveRoom(mergeRoomSummaries(summaries)));
+      roomEntries = sortRooms(mergeActiveRoom(mergeRoomSummaries(summaries, removed)));
       if (!roomsLoadMoreAttempted) {
         roomsNextCursor = page.has_more && page.next_cursor ? page.next_cursor : null;
         roomsHasMore = Boolean(roomsNextCursor);
@@ -693,6 +740,7 @@ async function loadRooms(options) {
       setListRetry(true);
       updateRoomListMore();
     } finally {
+      roomListReads.delete(removed);
       roomsPromise = null;
       clearListSkeleton();
     }

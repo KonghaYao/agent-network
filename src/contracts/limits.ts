@@ -165,6 +165,8 @@ export const LIMITS = {
   /** 入群申请列表默认 / 最大条数。 */
   roomJoinRequestsPageDefault: 20,
   roomJoinRequestsPageMax: 100,
+  /** 群名称字符上限，与创建和编辑输入契约一致。 */
+  roomTitleMax: 160,
   /** 群公告 UTF-8 字节上限。 */
   roomAnnouncementBytes: 4 * 1024,
   /** 群角色审计默认 / 最大条数。 */
@@ -423,6 +425,9 @@ export const LIMITS = {
    * 避免把数百条已加载历史整表重绘后再被刷新覆盖。
    */
   webRoomCacheRenderMax: 80,
+  /** Browser full-text cache; mounted messages retain their current bodies. */
+  webExpandedBodyCacheBytes: 4 * 1024 * 1024,
+  webExpandedBodyCacheMax: 256,
   /**
    * 消息数超过该值才开启 `content-visibility` 长列表隔离。
    * 短会话保持原生滚动高度估算，避免引入滚动条跳动。

@@ -371,28 +371,29 @@ function outboxPruneAgainstTimeline(items) {
 function outboxComposerMatches(intent) {
   if (!bodyInput || !isActiveRoom(intent.room_id, roomEpoch)) return false;
   const text = bodyInput.value.trim();
-  if (!text) return false;
   return composerOutgoingBody(intent.room_id, text) === intent.body;
 }
 
-/** 发送成功后的收尾：只有当前房间且输入框仍是该意图内容时才清草稿。 */
+/** 发送成功仅消费对应附件与未被改写的草稿，按房间和输入快照收尾。 */
 function outboxFinishCommitted(intent, options) {
   const settings = options || {};
-  const matches = outboxComposerMatches(intent);
-  if (settings.fromRetry) {
-    if (!matches) return;
-  } else {
-    // 选择器和本次实际发送的附件已被这条消息消费；即使用户在响应返回前
-    // 已经改写了输入，也不能让旧选择影响下一条消息。
-    mentionSelections.delete(intent.room_id);
-    if (settings.sentFileKeys) clearComposerFiles(intent.room_id, settings.sentFileKeys);
-    // 当前房间仍显示该意图时才清空输入；响应迟到或用户已改写时保留新内容。
-    if (isActiveRoom(intent.room_id, roomEpoch) && !matches) return;
-  }
+  const currentRoom = activeRoomId === intent.room_id;
+  const matches = currentRoom ? outboxComposerMatches(intent)
+    : typeof settings.submittedText === 'string' &&
+      String(drafts.get(intent.room_id) || '').trim() === settings.submittedText;
+  // 已发送的 @ 选择独立消费；发送期间新选的目标属于下一条草稿。
+  const consumed = new Set(settings.sentMentionSelections || []);
+  const remaining = (mentionSelections.get(intent.room_id) || []).filter(function (entry) {
+    return !consumed.has(entry);
+  });
+  if (remaining.length) mentionSelections.set(intent.room_id, remaining);
+  else mentionSelections.delete(intent.room_id);
+  // 本次已消费的附件单独清理；新草稿、新附件与再次进入房间的输入框不被旧响应覆盖。
+  if (settings.sentFileKeys) clearComposerFiles(intent.room_id, settings.sentFileKeys);
+  if (!matches || remaining.length || (currentRoom && !isActiveRoom(intent.room_id, settings.epoch))) return;
   drafts.delete(intent.room_id);
   draftClear(intent.room_id);
   mentionSelections.delete(intent.room_id);
-  if (settings.sentFileKeys) clearComposerFiles(intent.room_id, settings.sentFileKeys);
   if (!isActiveRoom(intent.room_id, settings.epoch)) return;
   bodyInput.value = '';
   hideMentionPicker();
@@ -407,7 +408,8 @@ async function outboxSubmit(intent, options) {
   const settings = options || {};
   const epoch = Number(settings.epoch) || roomEpoch;
   outboxInFlight.add(intent.client_message_id);
-  stickyStatus = '';
+  let committedStatus = '';
+  if (isActiveRoom(intent.room_id, epoch)) stickyStatus = '';
   outboxUpdate(intent.client_message_id, {
     status: 'sending',
     retryable: false,
@@ -434,7 +436,7 @@ async function outboxSubmit(intent, options) {
     if (settings.invokeTargets > 0) {
       const deliveryIds = Array.isArray(result.delivery_ids) ? result.delivery_ids : [];
       if (deliveryIds.length !== settings.invokeTargets) {
-        stickyStatus =
+        committedStatus =
           '消息已发送，但 Agent 投递未建立（' + deliveryIds.length + '/' +
           settings.invokeTargets + '），请检查房间成员后重试。';
       }
@@ -449,7 +451,7 @@ async function outboxSubmit(intent, options) {
     if (status) {
       const updated = outboxApplyFound(intent, status);
       if (updated && updated.status === 'committed') {
-        stickyStatus = '';
+        committedStatus = '';
       } else {
         failure = new Error((updated && updated.error) || '发送失败');
       }
@@ -468,7 +470,16 @@ async function outboxSubmit(intent, options) {
   if (!failure) {
     outboxFinishCommitted(intent, settings);
     if (!isActiveRoom(intent.room_id, epoch)) return;
-    await refresh(true);
+    stickyStatus = committedStatus;
+    try {
+      await refresh(true);
+    } catch (error) {
+      // 提交已经成功；切房取消刷新或刷新失败不能重新变成发送失败/未捕获异常。
+      if (isAbortError(error) || !isActiveRoom(intent.room_id, epoch)) return;
+      statusElement.textContent = (committedStatus ? committedStatus + '；' : '消息已发送，') +
+        '刷新会话失败：' + (error && error.message ? error.message : error);
+      return;
+    }
     if (!isActiveRoom(intent.room_id, epoch)) return;
     statusElement.textContent = stickyStatus;
     return;
@@ -485,6 +496,18 @@ async function outboxRetry(clientMessageId) {
   if (!intent || intent.status !== 'failed' || !intent.retryable) return;
   if (outboxInFlight.has(clientMessageId)) return;
   if (!isActiveRoom(intent.room_id, roomEpoch)) return;
+  const epoch = roomEpoch;
+  const matches = outboxComposerMatches(intent);
+  const targetIds = new Set(intent.invoke.concat(intent.mentions || []));
+  const finishOptions = {
+    epoch: epoch,
+    submittedText: matches ? bodyInput.value.trim() : undefined,
+    sentFileKeys: matches ? composerReadyKeys(intent.room_id) : new Set(),
+    sentMentionSelections: matches ? (mentionSelections.get(intent.room_id) || []).filter(function (entry) {
+      return targetIds.has(entry.actor_id);
+    }) : [],
+    fromRetry: true, invokeTargets: intent.invoke.length
+  };
   outboxInFlight.add(clientMessageId);
   outboxUpdate(clientMessageId, { status: 'sending', error: '' });
   outboxRefreshRows();
@@ -500,28 +523,26 @@ async function outboxRetry(clientMessageId) {
       })
     : undefined;
   if (status) {
-    outboxApplyFound(intent, status);
+    const updated = outboxApplyFound(intent, status);
+    if (updated && updated.status === 'committed') outboxFinishCommitted(intent, finishOptions);
     outboxRefreshRows();
-    refresh(false).catch(function () {});
+    if (isActiveRoom(intent.room_id, epoch)) refresh(false).catch(function () {});
     return;
   }
   if (!response.ok) {
     outboxUpdate(clientMessageId, { status: 'failed', error: '暂时无法对账，请稍后重试' });
     outboxRefreshRows();
-    statusElement.textContent = '暂时无法对账，请稍后重试';
+    if (isActiveRoom(intent.room_id, epoch)) statusElement.textContent = '暂时无法对账，请稍后重试';
     return;
   }
-  stickyStatus = '';
-  statusElement.textContent = '';
-  scrollController.pinNextApply();
+  if (isActiveRoom(intent.room_id, epoch)) {
+    stickyStatus = '';
+    statusElement.textContent = '';
+    scrollController.pinNextApply();
+  }
   const fresh = outboxGet(clientMessageId);
   if (!fresh) return;
-  await outboxSubmit(fresh, {
-    epoch: roomEpoch,
-    sentFileKeys: [],
-    fromRetry: true,
-    invokeTargets: fresh.invoke.length
-  });
+  await outboxSubmit(fresh, finishOptions);
 }
 
 /** 复用失败意图重发前先对账；返回 send / committed / conflict / unknown。 */

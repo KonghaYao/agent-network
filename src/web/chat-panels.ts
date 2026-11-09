@@ -152,7 +152,7 @@ export function chatPane(): string {
       <div class="title-row">
         <h2 id="title">单聊</h2>
         <button class="link-btn" id="rename" type="button" hidden>改名</button>
-        <button class="link-btn" id="add-members" type="button" hidden>添加成员</button>
+        <button class="link-btn" id="add-members" type="button" hidden>群设置</button>
         <button class="link-btn" id="room-announcement-edit" type="button" hidden>公告</button>
       </div>
       <p class="muted" id="subtitle">正在加载…</p>
@@ -272,7 +272,7 @@ export function groupDialog(): string {
     <h2 id="group-modal-title">新建群聊</h2>
     <form id="group-form">
       <label class="field">群名（可选）
-        <input id="group-title" maxlength="160" placeholder="留空显示为“群聊”">
+        <input id="group-title" maxlength="${LIMITS.roomTitleMax}" placeholder="留空显示为“群聊”">
       </label>
       <p class="muted picker-label">选择好友成员</p>
       <div class="member-picker-toolbar">
@@ -296,27 +296,37 @@ export function groupDialog(): string {
 }
 
 /**
- * 群聊添加成员弹窗：左右双栏，左侧只读展示当前成员，右侧多选好友候选。
+ * 群组设置：群名、成员操作、邀请与生命周期入口。
  *
- * 只有群 owner 能提交；非 owner 打开时右侧显示明确提示并禁用“添加”。
- * 好友列表在客户端排除自己与当前成员，服务端仍会再次校验所有权与好友关系。
+ * 按服务端 capabilities 展示操作；好友候选排除自己、当前成员与待确认邀请。
  */
 export function membersDialog(): string {
   return `<div class="modal" id="members-modal" hidden>
   <div class="modal-card members-card" role="dialog" aria-modal="true"
     aria-labelledby="members-modal-title">
     <header class="members-head">
-      <h2 id="members-modal-title">添加成员</h2>
+      <h2 id="members-modal-title">群组设置</h2>
       <button class="members-close" id="members-close" type="button"
-        aria-label="关闭添加成员" title="关闭">×</button>
+        aria-label="关闭群组设置" title="关闭">×</button>
     </header>
+    <section class="group-profile" aria-label="群资料">
+      <label for="group-name-input">群名称</label>
+      <div class="row">
+        <input id="group-name-input" maxlength="${LIMITS.roomTitleMax}" autocomplete="off">
+        <button id="group-name-save" type="button">保存群名</button>
+      </div>
+      <p id="group-profile-status" role="status" aria-live="polite"></p>
+    </section>
     <form id="members-form">
+      <div class="members-scroll">
       <div class="members-columns">
         <section class="members-column" aria-labelledby="members-current-title">
           <header class="members-column-head">
             <h3 id="members-current-title">已在群</h3>
             <span id="members-current-count" class="members-count" aria-live="polite">0</span>
           </header>
+          <input id="members-current-search" class="member-picker-search" type="search"
+            placeholder="搜索群成员" aria-label="搜索群成员" autocomplete="off">
           <ul id="members-current" class="member-roster" aria-label="当前群成员"></ul>
           <p id="members-current-empty" class="members-empty" role="status" hidden>群里还没有成员</p>
           <div id="members-transfer" class="members-transfer" aria-live="polite" hidden></div>
@@ -376,10 +386,13 @@ export function membersDialog(): string {
         <ul id="members-requests-list" class="member-roster" aria-label="待审批的入群申请"></ul>
         <p id="members-requests-empty" class="members-empty" hidden>没有待审批的申请</p>
       </section>
+      </div>
       <p id="members-error" class="form-error" role="status" aria-live="polite"></p>
       <div class="row modal-actions members-actions">
         <span id="members-selection" class="members-selection" role="status"
           aria-live="polite">未选择</span>
+        <button id="group-leave" class="danger" type="button" hidden>退出群聊</button>
+        <button id="group-dissolve" class="danger" type="button" hidden>解散群聊</button>
         <button id="members-cancel" type="button">取消</button>
         <button class="primary" id="members-add" type="submit">添加</button>
       </div>
