@@ -331,6 +331,8 @@ function applyRoomDetail(detail) {
     entry.read_only = Boolean(detail.room.read_only);
     entry.can_leave = Boolean(detail.room.can_leave);
     entry.can_dissolve = Boolean(detail.room.can_dissolve);
+    // peer 信息在详情返回后才确定；此时把 active 会话同步到 Agent/好友分类。
+    syncRoomFilterForRoom(detail.room.room_id);
     renderRooms();
   }
   // 邀请接受后 active/invited 会互换；弹窗开着时立即按新状态重绘。

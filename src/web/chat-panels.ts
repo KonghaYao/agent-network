@@ -43,15 +43,17 @@ export function sidebarPane(): string {
       <input id="room-search" type="search" placeholder="搜索" autocomplete="off" aria-label="搜索会话">
     </label>
     <div class="room-filter" id="room-filter" role="tablist" aria-label="会话类型">
-      <button id="room-filter-direct" type="button" role="tab" data-room-filter="direct"
-        aria-selected="true" aria-controls="room-list" tabindex="0">单聊</button>
+      <button id="room-filter-friend" type="button" role="tab" data-room-filter="friend"
+        aria-selected="true" aria-controls="room-list" tabindex="0">好友</button>
+      <button id="room-filter-agent" type="button" role="tab" data-room-filter="agent"
+        aria-selected="false" aria-controls="room-list" tabindex="-1">Agent</button>
       <button id="room-filter-group" type="button" role="tab" data-room-filter="group"
         aria-selected="false" aria-controls="room-list" tabindex="-1">群聊</button>
     </div>
   </header>
   <div class="sidebar-list">
     <p id="contact-link-banner" class="contact-link-banner" role="status" hidden></p>
-    <ol id="room-list" class="room-list" aria-label="单聊">
+    <ol id="room-list" class="room-list" aria-label="好友">
       <li class="room-skeleton" aria-hidden="true">
         <span class="skeleton-avatar"></span>
         <span class="skeleton-lines"><span></span><span></span></span>
@@ -87,14 +89,15 @@ export function sidebarPane(): string {
   <div class="room-menu" id="room-menu" role="menu" aria-label="会话操作" hidden>
     <button class="room-menu-item" id="room-menu-copy-prompt" type="button"
       role="menuitem">复制 Agent 连接提示词</button>
+    <button class="room-menu-item" id="room-menu-transfer" type="button"
+      role="menuitem" hidden>交接管理权</button>
     <button class="room-menu-item" id="room-menu-archive" type="button"
       role="menuitem" hidden>归档</button>
     <button class="room-menu-item danger" id="room-menu-toggle-disabled" type="button"
       role="menuitem" hidden>停用 Agent</button>
     <button class="room-menu-item danger" id="room-menu-reissue-token" type="button"
       role="menuitem" hidden>注销并重发 token</button>
-    <button class="room-menu-item" id="room-menu-transfer" type="button"
-      role="menuitem" hidden>交接管理权</button>
+    <div class="room-menu-sep" id="room-menu-safety-sep" role="separator"></div>
     <button class="room-menu-item" id="room-menu-report" type="button"
       role="menuitem" hidden>举报</button>
     <button class="room-menu-item" id="room-menu-block" type="button"
@@ -106,8 +109,7 @@ export function sidebarPane(): string {
     <button class="room-menu-item danger" id="room-menu-dissolve" type="button"
       role="menuitem" hidden>解散群聊</button>
     <p class="room-menu-status" id="room-menu-safety-hint" hidden>
-      删除好友只结束好友关系，历史保留；拉黑还会拒绝新的私聊、申请与邀请，但不会自动移出共同群；
-      举报只提交给受控管理流程，不会自动对外发送；退群只离开当前群，不影响好友关系。
+      删除好友保留历史；拉黑拒绝新私聊/申请/邀请；退群不影响好友。
     </p>
     <div class="room-menu-stopped" id="room-menu-stopped" hidden>
       <p class="room-menu-stopped-summary" id="room-menu-stopped-summary" role="status"></p>
@@ -670,37 +672,46 @@ export function filePreviewDialog(): string {
 </div>`;
 }
 
-/** 好友申请弹窗：待处理申请、接受/拒绝/撤销与本人接收策略。 */
+/** 好友申请弹窗：桌面左右两栏，窄屏单栏；待处理申请、好友链接与本人接收策略。 */
 export function contactRequestsDialog(): string {
   return `<div class="modal" id="contact-modal" hidden>
-  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="contact-modal-title">
+  <div class="modal-card contact-modal-card" role="dialog" aria-modal="true" aria-labelledby="contact-modal-title">
     <h2 id="contact-modal-title">好友申请</h2>
     <p class="muted">申请只进入独立收件箱，不会直接创建单聊或写入房间消息。</p>
-    <div class="contact-policy">
-      <label class="field">我的接收策略
-        <select id="contact-policy-select">
-          <option value="self_approval">本人确认</option>
-          <option value="auto_accept">自动接受</option>
-        </select>
-      </label>
-      <p id="contact-policy-status" class="muted" role="status"></p>
-    </div>
-    <ul id="contact-request-list" class="contact-request-list" aria-label="待处理好友申请"></ul>
-    <p id="contact-request-status" class="form-error" role="status"></p>
-    <section class="contact-link-panel" aria-label="好友链接">
-      <h3>好友链接</h3>
-      <p class="muted">生成一次性链接，24 小时内有效。对方打开并登录后会直接成为好友，无需审批；链接只能由你撤销。</p>
-      <div class="contact-link-actions">
-        <button id="contact-link-create" type="button">生成好友链接</button>
-        <button id="contact-link-copy" type="button" hidden>复制链接</button>
+    <div class="contact-columns">
+      <div class="contact-column contact-column-left">
+        <section class="contact-policy" aria-label="我的接收策略">
+          <label class="field">我的接收策略
+            <select id="contact-policy-select">
+              <option value="self_approval">本人确认</option>
+              <option value="auto_accept">自动接受</option>
+            </select>
+          </label>
+          <p id="contact-policy-status" class="muted" role="status"></p>
+        </section>
+        <section class="contact-requests-panel" aria-label="待处理好友申请">
+          <h3>待处理申请</h3>
+          <ul id="contact-request-list" class="contact-request-list" aria-label="待处理好友申请"></ul>
+          <p id="contact-request-status" class="form-error" role="status"></p>
+        </section>
       </div>
-      <p id="contact-link-status" class="muted" role="status"></p>
-      <ul id="contact-link-list" class="contact-link-list" aria-label="已生成的好友链接"></ul>
-    </section>
-    <section class="contact-friends-panel" aria-label="我的好友">
-      <h3>我的好友</h3>
-      <ul id="contact-friend-list" class="contact-request-list" aria-label="我的好友"></ul>
-    </section>
+      <div class="contact-column contact-column-right">
+        <section class="contact-link-panel" aria-label="好友链接">
+          <h3>好友链接</h3>
+          <p class="muted">生成一次性链接，24 小时内有效。对方打开并登录后会直接成为好友，无需审批；链接只能由你撤销。</p>
+          <div class="contact-link-actions">
+            <button id="contact-link-create" type="button">生成好友链接</button>
+            <button id="contact-link-copy" type="button" hidden>复制链接</button>
+          </div>
+          <p id="contact-link-status" class="muted" role="status"></p>
+          <ul id="contact-link-list" class="contact-link-list" aria-label="已生成的好友链接"></ul>
+        </section>
+        <section class="contact-friends-panel" aria-label="我的好友">
+          <h3>我的好友</h3>
+          <ul id="contact-friend-list" class="contact-request-list" aria-label="我的好友"></ul>
+        </section>
+      </div>
+    </div>
     <div class="row modal-actions">
       <button id="contact-modal-close" type="button">关闭</button>
     </div>

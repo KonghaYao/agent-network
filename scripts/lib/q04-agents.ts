@@ -54,6 +54,7 @@ export async function runAgentAcceptance(state: Q04State, browser: Browser): Pro
     const page = managerContext.page;
     await page.goto(`${state.base}/`);
     await page.locator('#room-list .room-item').first().waitFor();
+    await page.locator('#room-filter-agent').click();
 
     // 停用 B3：确认框、菜单状态与服务端凭据失效。
     await page.locator(roomLink(state.rooms.directU1B3)).click({ button: 'right' });
@@ -127,7 +128,7 @@ export async function runAgentAcceptance(state: Q04State, browser: Browser): Pro
       task_id: b1Task.task.task_id,
       ...(b1Task.task.assignment ? { assignment_id: b1Task.task.assignment.assignment_id } : {}),
     });
-    await page.locator('#room-filter-direct').click();
+    await page.locator('#room-filter-agent').click();
     await page.locator(roomLink(state.rooms.directU1B1)).click({ button: 'right' });
     await page.locator('#room-menu').waitFor({ state: 'visible' });
     checkEqual('direct Agent 菜单显示管理权交接', await page.locator('#room-menu-transfer').isVisible(), true);
