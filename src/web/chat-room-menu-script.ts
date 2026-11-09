@@ -49,6 +49,7 @@ const ROOM_MENU_ROOM_NAME_MAX = 160;
 
 let roomMenuTarget = null;
 let roomMenuAnchor = null;
+let roomMenuOpenSeq = 0;
 let roomMenuPressTimer = null;
 let roomMenuPressPoint = null;
 let roomMenuSuppressClickUntil = 0;
@@ -123,6 +124,7 @@ function roomMenuResetStatus() {
 }
 
 function closeRoomMenu() {
+  roomMenuOpenSeq += 1;
   const menu = roomMenuNode();
   if (roomMenuPressTimer) {
     clearTimeout(roomMenuPressTimer);
@@ -182,24 +184,55 @@ function positionRoomMenu(menu, x, y) {
   menu.style.top = Math.round(top) + 'px';
 }
 
-function openRoomMenu(link, x, y) {
+async function openRoomMenu(link, x, y) {
+  const roomId = link.getAttribute('data-room-id') || '';
+  if (!roomId) return;
+  const kind = link.getAttribute('data-room-kind');
+  const roomName = link.getAttribute('data-room-name') || '';
+  const openSeq = ++roomMenuOpenSeq;
+  const entry = roomEntries.find(function (item) { return item.room_id === roomId; });
+  let peerKind = entry ? entry.peer_kind : null;
+  let peerActorId = entry ? entry.peer_actor_id : null;
+  // 列表后台补全 peer 前右键时，不能把 token/归档/交接入口误隐藏；
+  // 这里按 room_id 补查一次 direct 对方，超时/失败则只展示通用复制项。
+  if (kind === 'direct' && (!peerKind || !peerActorId)) {
+    try {
+      const me = identity || await ensureIdentity();
+      const detail = await callTool('network_room_get', { room_id: roomId });
+      if (openSeq !== roomMenuOpenSeq) return;
+      const peer = roomMenuPeerFromDetail(detail, me);
+      if (peer) {
+        peerKind = peer.kind;
+        peerActorId = peer.actor_id;
+        if (entry) {
+          entry.peer_kind = peer.kind;
+          entry.peer_actor_id = peer.actor_id;
+          entry.peer_loaded = true;
+        }
+        peerDetails.set(roomId, {
+          name: peer.name || '单聊',
+          peer_kind: peer.kind,
+          peer_online: peer.online,
+          peer_actor_id: peer.actor_id
+        });
+      }
+    } catch (error) {
+      if (openSeq !== roomMenuOpenSeq) return;
+    }
+  }
+  if (openSeq !== roomMenuOpenSeq) return;
   const menu = roomMenuNode();
   const button = document.getElementById('room-menu-copy-prompt');
   const reissueButton = document.getElementById('room-menu-reissue-token');
   const archiveButton = document.getElementById('room-menu-archive');
   const toggleButton = document.getElementById('room-menu-toggle-disabled');
   if (!menu || !button) return;
-  const roomId = link.getAttribute('data-room-id') || '';
-  if (!roomId) return;
-  const kind = link.getAttribute('data-room-kind');
-  const roomName = link.getAttribute('data-room-name') || '';
-  const entry = roomEntries.find(function (item) { return item.room_id === roomId; });
   roomMenuTarget = {
     roomId: roomId,
     roomName: roomName,
     kind: kind,
-    peer_actor_id: entry ? entry.peer_actor_id : null,
-    peer_kind: entry ? entry.peer_kind : null,
+    peer_actor_id: peerActorId,
+    peer_kind: peerKind,
     read_only: entry ? Boolean(entry.read_only) : false,
     can_leave: entry ? Boolean(entry.can_leave) : false,
     can_dissolve: entry ? Boolean(entry.can_dissolve) : false
@@ -209,7 +242,7 @@ function openRoomMenu(link, x, y) {
   button.textContent = ROOM_MENU_COPY_LABEL;
   button.disabled = false;
   const isAgentDirect = Boolean(
-    kind === 'direct' && entry && entry.peer_actor_id && entry.peer_kind === 'agent'
+    kind === 'direct' && peerActorId && peerKind === 'agent'
   );
   if (reissueButton) {
     // 只对单聊 Agent 显示；群聊与人类会话不提供注销入口。
@@ -679,7 +712,7 @@ if (roomListElement) {
     if (!link || !roomListElement.contains(link)) return;
     event.preventDefault();
     clearRoomMenuPress();
-    openRoomMenu(link, event.clientX, event.clientY);
+    openRoomMenu(link, event.clientX, event.clientY).catch(function () {});
   });
 
   // 移动端没有右键：按住 500ms 打开同一菜单；移动超过 8px 视为滚动/拖拽。
@@ -696,7 +729,7 @@ if (roomListElement) {
       roomMenuPressPoint = null;
       // 长按结束后浏览器仍会补发 click，阻止它跳转。
       roomMenuSuppressClickUntil = Date.now() + 600;
-      openRoomMenu(link, x, y);
+      openRoomMenu(link, x, y).catch(function () {});
     }, ROOM_MENU_LONG_PRESS_MS);
   });
   roomListElement.addEventListener('pointermove', function (event) {

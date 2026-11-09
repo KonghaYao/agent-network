@@ -5605,6 +5605,17 @@ async function main(): Promise<void> {
       })()`);
 
       const directLink = page.locator(roomLink(data.direct.room.room_id));
+      // 模拟列表后台补全 peer 之前的右键：token/归档/交接入口仍必须出现。
+      await page.evaluate(`(() => {
+        const entry = roomEntries.find(function (item) {
+          return item.room_id === ${JSON.stringify(data.direct.room.room_id)};
+        });
+        if (entry) {
+          entry.peer_kind = null;
+          entry.peer_actor_id = null;
+          entry.peer_loaded = false;
+        }
+      })()`);
       await directLink.click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
       check('右键会话显示自定义菜单', true);
