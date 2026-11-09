@@ -369,7 +369,7 @@ function setChatError(message) {
 function clearChatError() {
   if (chatErrorElement) chatErrorElement.hidden = true;
   if (chatErrorTextElement) chatErrorTextElement.textContent = '';
-  if (sendButton && activeRoomId) sendButton.disabled = false;
+  if (sendButton && activeRoomId) sendButton.disabled = composerSendingRooms.has(activeRoomId);
 }
 
 function handleRoomError(error, roomId, epoch) {
@@ -914,7 +914,7 @@ async function openRoom(roomId, options) {
   renderRooms();
   clearChatError();
   updateCopyGroupInfoAffordance();
-  if (sendButton) sendButton.disabled = false;
+  if (sendButton) sendButton.disabled = composerSendingRooms.has(roomId);
   const cache = roomCache.get(roomId);
   const longCache = Boolean(cache && (cache.items || []).length > ROOM_CACHE_RENDER_MAX);
   if (cache) {

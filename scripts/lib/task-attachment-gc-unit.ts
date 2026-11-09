@@ -53,6 +53,8 @@ function count(db: Database, sql: string, ...binds: string[]): number {
 export async function runTaskAttachmentGcUnitChecks(): Promise<void> {
   const db = new Database(':memory:');
   migrate(db, MIGRATIONS);
+  // Attachment starts live and visible; age it only after task retention is established.
+  const initialExpiry = Date.now() + DAY;
   db.exec(`
     INSERT INTO actors
       (actor_id, kind, agent_session_id, name, metadata, inbox_head_seq, inbox_min_seq,
@@ -72,15 +74,15 @@ export async function runTaskAttachmentGcUnitChecks(): Promise<void> {
       (room_file_id, room_id, file_id, uploader_id, name, mime_type, size, sha256,
        created_at, expires_at, deleted_at, deleted_by, retained)
     VALUES ('rf_task_gc', '${ROOM}', '${FILE}', '${OWNER}', 'attachment.txt', 'text/plain',
-            16, '${'a'.repeat(64)}', ${AT - 40 * DAY}, ${AT - 30 * DAY}, NULL, NULL, 0);
+            16, '${'a'.repeat(64)}', ${AT}, ${initialExpiry}, NULL, NULL, 0);
 
     INSERT INTO drive_files
       (file_id, owner_scope, uploader_id, name, mime_type, size, sha256, state,
        visibility, room_id, created_at, expires_at, retained, deleted_at, deleted_by,
        purged_at)
     VALUES ('${FILE}', 'actor:${OWNER}', '${OWNER}', 'attachment.txt', 'text/plain', 16,
-            '${'a'.repeat(64)}', 'bound', 'private', '${ROOM}', ${AT - 40 * DAY},
-            ${AT - 30 * DAY}, 0, NULL, NULL, NULL);
+            '${'a'.repeat(64)}', 'bound', 'private', '${ROOM}', ${AT},
+            ${initialExpiry}, 0, NULL, NULL, NULL);
   `);
   const d1 = createD1(db);
   const purged: string[] = [];
@@ -124,8 +126,8 @@ export async function runTaskAttachmentGcUnitChecks(): Promise<void> {
   checkEqual('[D01-GC] retained Drive 文件不再过期', retainedDrive.expires_at, null);
 
   // 模拟原 TTL 已过：任务仍存在，维护任务不得释放引用或回收文件。
-  db.prepare('UPDATE room_files SET expires_at = ? WHERE file_id = ?').run(AT - 30 * DAY, FILE);
-  db.prepare('UPDATE drive_files SET expires_at = ? WHERE file_id = ?').run(AT - 30 * DAY, FILE);
+  db.prepare('UPDATE room_files SET expires_at = ? WHERE file_id = ?').run(AT + DAY, FILE);
+  db.prepare('UPDATE drive_files SET expires_at = ? WHERE file_id = ?').run(AT + DAY, FILE);
   await maintain(env);
   checkEqual(
     '[D01-GC] 任务存在时引用保持 active',

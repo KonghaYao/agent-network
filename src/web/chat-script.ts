@@ -146,6 +146,8 @@ let composing = false;
 let ignoreEnterUntil = 0;
 let pendingRoomRefreshId = null;
 let groupLoadSeq = 0;
+// 独立于按钮状态：刷新或切换房间不得释放仍在途的发送锁。
+const composerSendingRooms = new Set();
 let groupPicker = null;
 // 发送失败/投递缺失/截断提示必须跨过 SSE 触发的刷新，不能在 300ms 后被清空。
 let stickyStatus = '';
@@ -605,108 +607,109 @@ composer.addEventListener('submit', async function (event) {
   // 发送中再次回车不得新建第二条意图；按钮禁用是同一道闸。
   if (sendButton.disabled) return;
   const sendRoomId = activeRoomId;
-  if (!sendRoomId) return;
+  if (!sendRoomId || composerSendingRooms.has(sendRoomId)) return;
   const sendEpoch = roomEpoch;
-  const text = bodyInput.value.trim();
+  const composerDraft = bodyInput.value;
+  const text = composerDraft.trim();
   const body = composerOutgoingBody(sendRoomId, text);
   // 只清空本次真拼进正文的文件；发送请求期间的附件不能丢。
   const sentFileKeys = composerReadyKeys(sendRoomId);
   if (!body) return;
-  stickyStatus = '';
-  statusElement.textContent = '';
-  // 群聊只信选择器保存的 actor_id：Agent 进 invoke，人类进 mentions；
-  // 没有任何选择时不传 invoke，保留服务端对正文唯一精确成员的兜底解析。
-  let invokeTargets = [];
-  let mentionTargets = [];
-  let invokeExplicit = false;
-  let selectionError = null;
-  if (room && room.kind === 'group') {
-    const selection = resolvedMentionSelection(sendRoomId, body);
-    selectionError = selection.error;
-    if (!selectionError) {
-      for (const entry of selection.items) {
-        if (entry.kind === 'agent') invokeTargets.push(entry.actor_id);
-        else mentionTargets.push(entry.actor_id);
-      }
-      // 只要选择器里有仍存在于正文的目标，就显式发送 invoke（可能是 []），
-      // 不让服务端再从正文猜测其他 Agent。
-      invokeExplicit = selection.items.length > 0;
-    }
-  } else {
-    const direct = directInvokeTargets();
-    selectionError = direct.error;
-    invokeTargets = direct.targets;
-    invokeExplicit = invokeTargets.length > 0;
-  }
-  if (selectionError) {
-    stickyStatus = selectionError;
-    statusElement.textContent = stickyStatus;
-    return;
-  }
-  // 同房间、同正文、同目标的失败意图复用原 client_message_id/request_id；
-  // 修改正文会生成新意图，旧 ID 与新内容由服务端返回冲突。
-  let intent = outboxFindReusable(
-    sendRoomId,
-    body,
-    invokeTargets,
-    mentionTargets,
-    invokeExplicit,
-  );
-  const reused = Boolean(intent);
-  if (intent) {
-    // 响应丢失后先对账；确认已提交就不再发送第二条。
-    sendButton.disabled = true;
-    const decision = await outboxCheckBeforeResend(intent);
-    if (decision !== 'send') {
-      outboxRefreshRows();
-      if (isActiveRoom(sendRoomId, sendEpoch)) {
-        if (decision === 'committed') {
-          if (outboxComposerMatches(intent)) {
-            drafts.delete(sendRoomId);
-            draftClear(sendRoomId);
-            mentionSelections.delete(sendRoomId);
-            clearComposerFiles(sendRoomId, sentFileKeys);
-            bodyInput.value = '';
-            hideMentionPicker();
-            resizeComposer();
-          }
-          stickyStatus = '';
-          statusElement.textContent = '';
-          await refresh(true).catch(function () {});
-        } else if (decision === 'conflict') {
-          statusElement.textContent = '发送失败：' + (intent.error || 'client_message_id 冲突');
-        } else {
-          stickyStatus = '暂时无法对账，请稍后重试';
-          statusElement.textContent = stickyStatus;
+  composerSendingRooms.add(sendRoomId);
+  try {
+    stickyStatus = '';
+    statusElement.textContent = '';
+    // 群聊只信选择器保存的 actor_id：Agent 进 invoke，人类进 mentions；
+    // 没有任何选择时不传 invoke，保留服务端对正文唯一精确成员的兜底解析。
+    let invokeTargets = [];
+    let mentionTargets = [];
+    let invokeExplicit = false;
+    let selectionError = null;
+    if (room && room.kind === 'group') {
+      const selection = resolvedMentionSelection(sendRoomId, body);
+      selectionError = selection.error;
+      if (!selectionError) {
+        for (const entry of selection.items) {
+          if (entry.kind === 'agent') invokeTargets.push(entry.actor_id);
+          else mentionTargets.push(entry.actor_id);
         }
+        // 只要选择器里有仍存在于正文的目标，就显式发送 invoke（可能是 []），
+        // 不让服务端再从正文猜测其他 Agent。
+        invokeExplicit = selection.items.length > 0;
       }
-      sendButton.disabled = false;
+    } else {
+      const direct = directInvokeTargets();
+      selectionError = direct.error;
+      invokeTargets = direct.targets;
+      invokeExplicit = invokeTargets.length > 0;
+    }
+    if (selectionError) {
+      stickyStatus = selectionError;
+      statusElement.textContent = stickyStatus;
       return;
     }
-  } else {
-    intent = outboxCreate(
+    // 同房间、同正文、同目标的失败意图复用原 client_message_id/request_id；
+    // 修改正文会生成新意图，旧 ID 与新内容由服务端返回冲突。
+    let intent = outboxFindReusable(
       sendRoomId,
       body,
       invokeTargets,
       mentionTargets,
       invokeExplicit,
     );
-  }
-  sendButton.disabled = true;
-  // 自己的消息必须出现在底部；独立标志避免 refresh 合并时丢失强制滚底。
-  scrollController.pinNextApply();
-  try {
+    const reused = Boolean(intent);
+    if (intent) {
+      // 响应丢失后先对账；确认已提交就不再发送第二条。
+      sendButton.disabled = true;
+      const decision = await outboxCheckBeforeResend(intent);
+      if (decision !== 'send') {
+        outboxRefreshRows();
+        if (isActiveRoom(sendRoomId, sendEpoch)) {
+          if (decision === 'committed') {
+            if (outboxComposerMatches(intent)) {
+              drafts.delete(sendRoomId);
+              draftClear(sendRoomId);
+              mentionSelections.delete(sendRoomId);
+              clearComposerFiles(sendRoomId, sentFileKeys);
+              bodyInput.value = '';
+              hideMentionPicker();
+              resizeComposer();
+            }
+            stickyStatus = '';
+            statusElement.textContent = '';
+            await refresh(true).catch(function () {});
+          } else if (decision === 'conflict') {
+            statusElement.textContent = '发送失败：' + (intent.error || 'client_message_id 冲突');
+          } else {
+            stickyStatus = '暂时无法对账，请稍后重试';
+            statusElement.textContent = stickyStatus;
+          }
+        }
+        return;
+      }
+    } else {
+      intent = outboxCreate(
+        sendRoomId,
+        body,
+        invokeTargets,
+        mentionTargets,
+        invokeExplicit,
+      );
+    }
+    sendButton.disabled = true;
+    // 自己的消息必须出现在底部；独立标志避免 refresh 合并时丢失强制滚底。
+    scrollController.pinNextApply();
     await outboxSubmit(intent, {
       epoch: sendEpoch,
       sentFileKeys: sentFileKeys,
+      composerDraft: composerDraft,
       fromRetry: reused,
       invokeTargets: invokeTargets.length
     });
   } finally {
-    if (isActiveRoom(sendRoomId, sendEpoch)) {
-      sendButton.disabled = false;
-      bodyInput.focus();
-    }
+    composerSendingRooms.delete(sendRoomId);
+    if (activeRoomId === sendRoomId) sendButton.disabled = false;
+    if (isActiveRoom(sendRoomId, sendEpoch)) bodyInput.focus();
   }
 });
 
@@ -829,6 +832,8 @@ document.addEventListener('keydown', function (event) {
 if (groupForm) {
   groupForm.addEventListener('submit', async function (event) {
     event.preventDefault();
+    if (!groupModal || groupModal.hidden || groupCreateButton.disabled) return;
+    const submitSeq = groupLoadSeq;
     const selected = groupPicker ? groupPicker.selectedIds() : [];
     if (selected.length === 0) {
       groupErrorElement.textContent = '请至少选择一个成员';
@@ -846,14 +851,17 @@ if (groupForm) {
       if (title) args.title = title;
       const result = await callTool('network_room_create', args);
       const newRoomId = seedRoomCacheFromDetail(result);
+      // 已提交的群保留在列表中，但旧请求不得打断关闭/重开的弹窗或新路由。
+      if (submitSeq !== groupLoadSeq || groupModal.hidden) return;
       groupErrorElement.textContent = '';
       closeGroupModal();
       navigateTo('/c/' + encodeURIComponent(newRoomId));
     } catch (error) {
+      if (submitSeq !== groupLoadSeq || groupModal.hidden) return;
       groupErrorElement.textContent =
         '创建失败：' + (error && error.message ? error.message : error);
     } finally {
-      groupCreateButton.disabled = false;
+      if (submitSeq === groupLoadSeq) groupCreateButton.disabled = false;
     }
   });
 }

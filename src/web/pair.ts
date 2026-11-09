@@ -60,6 +60,9 @@ export function renderPairPage(): string {
   var redeemRequestId = null;
   var pollTimer = null;
   var busy = false;
+  var pairingGeneration = 0;
+  var pairingChallenge = null;
+  var credentialReady = false;
 
   function setStatus(text, error) {
     statusElement.textContent = text || '';
@@ -220,8 +223,7 @@ export function renderPairPage(): string {
     }
   }
 
-  function localPairToken() {
-    var challenge = normalizeChallenge(challengeInput.value);
+  function localPairToken(challenge) {
     var key = PAIR_TOKEN_PREFIX + challenge;
     var value = sessionGet(key);
     if (value) return value;
@@ -255,6 +257,9 @@ export function renderPairPage(): string {
       setStatus('配对码必须是 12 位（不含 I/L/O/U）；请扫描二维码或让已登录设备重新生成。', true);
       return;
     }
+    var generation = ++pairingGeneration;
+    pairingChallenge = challenge;
+    credentialReady = false;
     busy = true;
     startButton.disabled = true;
     switchButton.hidden = true;
@@ -262,7 +267,7 @@ export function renderPairPage(): string {
     pairing = null;
     stopPolling();
     setStatus('正在向已登录设备发起配对请求…', false);
-    localToken = localPairToken();
+    localToken = localPairToken(challenge);
     try {
       var joined = await callTool('network_device_pairing_join', {
         request_id: requestId('pair_join'),
@@ -271,6 +276,7 @@ export function renderPairPage(): string {
         device_label: deviceLabel(),
         platform: (navigator.platform || 'web').slice(0, 60)
       }, localToken);
+      if (generation !== pairingGeneration) return;
       pairing = joined.pairing;
       targetIdentity = joined.actor;
       confirmElement.textContent = joined.pairing.confirm_code || '—';
@@ -283,6 +289,7 @@ export function renderPairPage(): string {
       redeemRequestId = requestId('pair_redeem');
       scheduleRedeem();
     } catch (error) {
+      if (generation !== pairingGeneration) return;
       var reason = error && error.details ? error.details.reason : '';
       setStatus('配对失败：' + (error && error.message ? error.message : String(error)) +
         ' ' + nextStepFor(reason), true);
@@ -298,20 +305,27 @@ export function renderPairPage(): string {
   }
 
   async function redeem() {
-    if (!pairing || !localToken || !redeemRequestId) return;
+    if (!pairing || !localToken || !redeemRequestId || credentialReady) return;
+    var generation = pairingGeneration;
+    var challenge = pairingChallenge;
+    var token = localToken;
+    var request = redeemRequestId;
     try {
       var redeemed = await callTool('network_device_pairing_redeem', {
-        request_id: redeemRequestId,
-        challenge: normalizeChallenge(challengeInput.value),
+        request_id: request,
+        challenge: challenge,
         device_id: deviceId()
-      }, localToken);
+      }, token);
+      if (generation !== pairingGeneration) return;
       targetIdentity = redeemed;
+      credentialReady = true;
       stopPolling();
       setStatus('已获得独立凭据。确认后切换到此身份并进入；原身份会保留在本机身份列表。', false);
       switchButton.hidden = false;
       startButton.disabled = true;
       return;
     } catch (error) {
+      if (generation !== pairingGeneration) return;
       var reason = error && error.details ? error.details.reason : '';
       if (reason === 'not_approved') {
         setStatus('等待已登录设备确认。请在另一台设备打开“配对设备”并核对确认码。', false);
@@ -327,7 +341,7 @@ export function renderPairPage(): string {
   }
 
   async function switchIdentity() {
-    if (!targetIdentity || !localToken) return;
+    if (!credentialReady || !targetIdentity || !localToken) return;
     var previousToken = currentToken();
     if (!storageSet('agent-network-token', localToken)) {
       setStatus('浏览器无法保存身份；请允许本地存储后重新配对。', true);
@@ -345,7 +359,7 @@ export function renderPairPage(): string {
       return;
     }
     try { window.localStorage.removeItem('agent-network-logged-out'); } catch (error) {}
-    sessionRemove(PAIR_TOKEN_PREFIX + normalizeChallenge(challengeInput.value));
+    sessionRemove(PAIR_TOKEN_PREFIX + pairingChallenge);
     try {
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
     } catch (error) {}

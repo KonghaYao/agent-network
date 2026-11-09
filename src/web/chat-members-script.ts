@@ -762,6 +762,7 @@ async function submitMembersForm(event) {
   if (!roomId || !room || room.kind !== 'group' || !membersModal || membersModal.hidden) return;
   if (membersBusy) return;
   const epoch = roomEpoch;
+  const loadToken = membersLoadToken;
   if (!canInviteMembers()) {
     setMembersError('只有群 owner 或管理员可以添加成员。');
     return;
@@ -798,12 +799,14 @@ async function submitMembersForm(event) {
     const added = afterMembers.filter(function (member) {
       return !before.has(member.actor_id);
     });
+    // 同房间的服务端结果仍需同步，但不得清空重开弹窗的新选择或解除新请求的锁。
+    applyRoomDetail(result);
+    if (loadToken !== membersLoadToken || membersModal.hidden) return;
     if (added.length === 0) {
       setMembersError('所选好友已在群里，成员没有变化。');
       renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
       return;
     }
-    applyRoomDetail(result);
     if (membersPicker) membersPicker.clearSelection();
     // 新成员从右侧候选消失、出现在左侧；弹窗保持打开，便于连续添加。
     renderCurrentMembers();
@@ -817,11 +820,11 @@ async function submitMembersForm(event) {
         (error && error.message ? error.message : error);
     });
   } catch (error) {
-    if (!isActiveRoom(roomId, epoch)) return;
+    if (!isActiveRoom(roomId, epoch) || loadToken !== membersLoadToken || membersModal.hidden) return;
     // 失败保留已选候选，用户可直接重试。
     setMembersError(membersUpdateError(error));
   } finally {
-    if (isActiveRoom(roomId, epoch)) setMembersBusy(false);
+    if (isActiveRoom(roomId, epoch) && loadToken === membersLoadToken) setMembersBusy(false);
   }
 }
 

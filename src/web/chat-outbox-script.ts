@@ -388,6 +388,13 @@ function outboxFinishCommitted(intent, options) {
     if (settings.sentFileKeys) clearComposerFiles(intent.room_id, settings.sentFileKeys);
     // 当前房间仍显示该意图时才清空输入；响应迟到或用户已改写时保留新内容。
     if (isActiveRoom(intent.room_id, roomEpoch) && !matches) return;
+    if (!isActiveRoom(intent.room_id, roomEpoch)) {
+      // 离开房间前可能已写下下一条草稿。只清理提交时的原文，不按房间盲删。
+      const savedDraft = drafts.has(intent.room_id)
+        ? drafts.get(intent.room_id)
+        : draftLoad(intent.room_id);
+      if (typeof settings.composerDraft !== 'string' || savedDraft !== settings.composerDraft) return;
+    }
   }
   drafts.delete(intent.room_id);
   draftClear(intent.room_id);
