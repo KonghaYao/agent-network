@@ -4614,21 +4614,33 @@ async function main(): Promise<void> {
         const cardBox = card.getBoundingClientRect();
         const leftBox = left.getBoundingClientRect();
         const rightBox = right.getBoundingClientRect();
+        const requestBox = requests ? requests.getBoundingClientRect() : null;
+        const linkBox = link ? link.getBoundingClientRect() : null;
+        const friendBox = friends ? friends.getBoundingClientRect() : null;
+        const policyBox = policy ? policy.getBoundingClientRect() : null;
         return {
           display: getComputedStyle(columns).display,
           view: window.innerWidth,
           doc: document.documentElement.scrollWidth,
           cardLeft: cardBox.left,
           cardRight: cardBox.right,
+          cardBottom: cardBox.bottom,
           leftTop: leftBox.top,
           leftRight: leftBox.right,
           leftBottom: leftBox.bottom,
+          leftWidth: leftBox.width,
           rightTop: rightBox.top,
           rightLeft: rightBox.left,
-          policyInLeft: Boolean(policy) && left.contains(policy),
+          rightBottom: rightBox.bottom,
+          rightWidth: rightBox.width,
+          requestTop: requestBox ? requestBox.top : -1,
+          friendTop: friendBox ? friendBox.top : -1,
+          linkTop: linkBox ? linkBox.top : -1,
+          policyTop: policyBox ? policyBox.top : -1,
+          policyInRight: Boolean(policy) && right.contains(policy),
           requestsInLeft: Boolean(requests) && left.contains(requests),
           linkInRight: Boolean(link) && right.contains(link),
-          friendsInRight: Boolean(friends) && right.contains(friends)
+          friendsInLeft: Boolean(friends) && left.contains(friends)
         };
       })()`)) as {
         display: string;
@@ -4636,15 +4648,23 @@ async function main(): Promise<void> {
         doc: number;
         cardLeft: number;
         cardRight: number;
+        cardBottom: number;
         leftTop: number;
         leftRight: number;
         leftBottom: number;
+        leftWidth: number;
         rightTop: number;
         rightLeft: number;
-        policyInLeft: boolean;
+        rightBottom: number;
+        rightWidth: number;
+        requestTop: number;
+        friendTop: number;
+        linkTop: number;
+        policyTop: number;
+        policyInRight: boolean;
         requestsInLeft: boolean;
         linkInRight: boolean;
-        friendsInRight: boolean;
+        friendsInLeft: boolean;
       } | null;
       checkEqual('1280px 好友弹窗为两栏网格', contactDesktopLayout?.display, 'grid');
       check(
@@ -4655,12 +4675,33 @@ async function main(): Promise<void> {
         contactDesktopLayout,
       );
       check(
-        '1280px 接收策略与待处理申请在左栏、好友链接与我的好友在右栏',
+        '1280px 待处理申请与我的好友在左栏、好友链接与接收策略在右栏',
         Boolean(contactDesktopLayout) &&
-          contactDesktopLayout!.policyInLeft &&
+          contactDesktopLayout!.policyInRight &&
           contactDesktopLayout!.requestsInLeft &&
           contactDesktopLayout!.linkInRight &&
-          contactDesktopLayout!.friendsInRight,
+          contactDesktopLayout!.friendsInLeft,
+        contactDesktopLayout,
+      );
+      check(
+        '1280px 好友弹窗左栏更宽（约 3/5）',
+        Boolean(contactDesktopLayout) &&
+          contactDesktopLayout!.leftWidth > contactDesktopLayout!.rightWidth * 1.3,
+        contactDesktopLayout,
+      );
+      check(
+        '1280px 左栏申请在好友上方、右栏链接在策略上方',
+        Boolean(contactDesktopLayout) &&
+          contactDesktopLayout!.requestTop <= contactDesktopLayout!.friendTop + 1 &&
+          contactDesktopLayout!.linkTop <= contactDesktopLayout!.policyTop + 1,
+        contactDesktopLayout,
+      );
+      check(
+        '1280px 好友弹窗按内容收高，底部无大片空白',
+        Boolean(contactDesktopLayout) &&
+          contactDesktopLayout!.cardBottom -
+            Math.max(contactDesktopLayout!.leftBottom, contactDesktopLayout!.rightBottom) <=
+            140,
         contactDesktopLayout,
       );
       check(
@@ -4777,12 +4818,15 @@ async function main(): Promise<void> {
         const contactMobileLayout = (await mobileIcons.page.evaluate(`(() => {
           const card = document.querySelector('#contact-modal .contact-modal-card');
           const columns = document.querySelector('#contact-modal .contact-columns');
-          const left = document.querySelector('#contact-modal .contact-column-left');
-          const right = document.querySelector('#contact-modal .contact-column-right');
-          if (!card || !columns || !left || !right) return null;
+          const requests = document.querySelector('#contact-modal .contact-requests-panel');
+          const link = document.querySelector('#contact-modal .contact-link-panel');
+          const friends = document.querySelector('#contact-modal .contact-friends-panel');
+          const policy = document.querySelector('#contact-modal .contact-policy');
+          if (!card || !columns || !requests || !link || !friends || !policy) return null;
           const cardBox = card.getBoundingClientRect();
-          const leftBox = left.getBoundingClientRect();
-          const rightBox = right.getBoundingClientRect();
+          const boxes = [requests, link, friends, policy].map(function (node) {
+            return node.getBoundingClientRect();
+          });
           const columnsStyle = getComputedStyle(columns);
           return {
             display: columnsStyle.display,
@@ -4791,12 +4835,9 @@ async function main(): Promise<void> {
             doc: document.documentElement.scrollWidth,
             cardLeft: cardBox.left,
             cardRight: cardBox.right,
-            leftLeft: leftBox.left,
-            leftRight: leftBox.right,
-            leftBottom: leftBox.bottom,
-            rightLeft: rightBox.left,
-            rightRight: rightBox.right,
-            rightTop: rightBox.top
+            tops: boxes.map(function (box) { return box.top; }),
+            lefts: boxes.map(function (box) { return box.left; }),
+            rights: boxes.map(function (box) { return box.right; })
           };
         })()`)) as {
           display: string;
@@ -4805,21 +4846,30 @@ async function main(): Promise<void> {
           doc: number;
           cardLeft: number;
           cardRight: number;
-          leftLeft: number;
-          leftRight: number;
-          leftBottom: number;
-          rightLeft: number;
-          rightRight: number;
-          rightTop: number;
+          tops: number[];
+          lefts: number[];
+          rights: number[];
         } | null;
         checkEqual('390px 好友弹窗回退单栏', contactMobileLayout?.display, 'flex');
         check(
-          '390px 好友弹窗右栏堆叠在左栏下方',
+          '390px 好友弹窗按申请/链接/好友/策略顺序单列堆叠',
           Boolean(contactMobileLayout) &&
             contactMobileLayout!.direction === 'column' &&
-            contactMobileLayout!.leftBottom <= contactMobileLayout!.rightTop + 1 &&
-            contactMobileLayout!.leftLeft >= contactMobileLayout!.cardLeft - 1 &&
-            contactMobileLayout!.rightRight <= contactMobileLayout!.cardRight + 1,
+            contactMobileLayout!.tops.length === 4 &&
+            contactMobileLayout!.tops[0]! < contactMobileLayout!.tops[1]! &&
+            contactMobileLayout!.tops[1]! < contactMobileLayout!.tops[2]! &&
+            contactMobileLayout!.tops[2]! < contactMobileLayout!.tops[3]!,
+          contactMobileLayout,
+        );
+        check(
+          '390px 好友弹窗各区块都在卡片宽度内',
+          Boolean(contactMobileLayout) &&
+            contactMobileLayout!.lefts.every(
+              (left) => left >= contactMobileLayout!.cardLeft - 1,
+            ) &&
+            contactMobileLayout!.rights.every(
+              (right) => right <= contactMobileLayout!.cardRight + 1,
+            ),
           contactMobileLayout,
         );
         check(

@@ -851,64 +851,91 @@ ${GROUP_STYLE}
     height: 16px; padding: 0 4px; border-radius: 8px; background: var(--wx-unread);
     color: #ffffff; font-size: 10px; line-height: 16px; text-align: center;
     pointer-events: none; }
-  .contact-policy { margin: 10px 0 12px; padding: 10px; border: 1px solid var(--wx-line);
-    border-radius: 10px; background: var(--wx-sidebar); }
-  .contact-policy .field { margin: 0; }
-  /* 桌面 full 面板：两栏铺满可用宽度，列内容独立滚动。 */
-  .contact-modal-card { width: min(1120px, 96vw); height: min(88dvh, 900px);
-    max-height: 88dvh; box-sizing: border-box; display: flex; flex-direction: column;
-    overflow: hidden; }
-  .contact-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 20px; align-items: start; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-  .contact-column { min-width: 0; }
-  .contact-requests-panel { margin: 14px 0 0; padding-top: 12px;
+  /* 桌面非对称两栏：左栏放需要动作的申请与好友，右栏放链接与次要策略。 */
+  .contact-modal-card { width: min(1120px, 96vw); max-height: min(88dvh, 860px);
+    box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; }
+  .contact-modal-card h2 { margin-bottom: 12px; }
+  .contact-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    gap: 0 24px; align-items: start; flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+  .contact-column { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .contact-column-right { padding-left: 20px; border-left: 1px solid var(--wx-line); }
+  .contact-section-head { display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin: 0 0 8px; }
+  .contact-section-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+  .contact-count { flex: 0 0 auto; min-width: 18px; padding: 0 6px; border-radius: 9px;
+    background: var(--wx-search); color: var(--wx-muted); font-size: 11px;
+    line-height: 18px; text-align: center; }
+  .contact-requests-panel, .contact-link-panel, .contact-friends-panel, .contact-policy {
+    min-width: 0; }
+  .contact-friends-panel, .contact-policy { padding-top: 14px;
     border-top: 1px solid var(--wx-line); }
-  .contact-requests-panel h3 { margin: 0 0 6px; font-size: 14px; }
-  .contact-column > .contact-link-panel:first-child,
-  .contact-column > .contact-requests-panel:first-child {
-    margin-top: 0; padding-top: 0; border-top: 0; }
-  .contact-column .contact-request-list { max-height: min(36vh, 320px); }
-  .contact-column .contact-link-list { max-height: min(24vh, 220px); }
-  .contact-columns + .modal-actions { margin-top: 16px; }
+  .contact-column .contact-request-list { max-height: min(30vh, 260px); }
+  .contact-friends-panel .contact-request-list { max-height: min(26vh, 220px); }
+  .contact-column .contact-link-list { max-height: min(20vh, 180px); }
+  .contact-columns + .modal-actions { margin-top: 14px; }
   .contact-request-list { list-style: none; margin: 0; padding: 0;
-    display: flex; flex-direction: column; gap: 8px; max-height: 45vh; overflow: auto; }
+    display: flex; flex-direction: column; gap: 6px; max-height: 45vh; overflow: auto; }
   .contact-request-item { display: flex; justify-content: space-between; gap: 10px;
-    padding: 10px; border: 1px solid var(--wx-line); border-radius: 10px; }
+    padding: 8px 10px; border: 1px solid var(--wx-line); border-radius: 8px; }
   .contact-request-main { min-width: 0; }
-  .contact-request-title { margin: 0; font-weight: 600; }
-  .contact-request-message { margin: 4px 0 0; color: var(--wx-muted); font-size: 13px;
+  .contact-request-title { margin: 0; font-size: 13px; font-weight: 600;
+    overflow-wrap: anywhere; }
+  .contact-request-message { margin: 3px 0 0; color: var(--wx-muted); font-size: 12px;
     word-break: break-word; }
-  .contact-request-meta { margin: 4px 0 0; font-size: 12px; color: var(--wx-muted); }
-  .contact-request-actions { display: flex; flex: 0 0 auto; gap: 6px; align-items: flex-start; }
-  .contact-request-empty { padding: 12px 0; color: var(--wx-muted); font-size: 13px; }
+  .contact-request-meta { margin: 3px 0 0; font-size: 11px; color: var(--wx-muted); }
+  .contact-request-actions { display: flex; flex: 0 0 auto; gap: 6px; align-items: center; }
+  .contact-request-actions button { padding: 5px 10px; font-size: 12px; }
+  .contact-request-empty { padding: 2px 0; color: var(--wx-muted); font-size: 12px; }
 
   /* 好友邀请链接：明文只在内存中，列表只展示状态；失败状态用错误色。 */
   .contact-link-banner { margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--wx-line);
     border-radius: 8px; background: var(--wx-sidebar); color: var(--wx-text); font-size: 13px;
     word-break: break-word; }
   .contact-link-banner[data-error="1"] { border-color: var(--wx-unread); color: var(--wx-unread); }
-  .contact-link-panel, .contact-friends-panel { margin: 14px 0 0; padding-top: 12px;
-    border-top: 1px solid var(--wx-line); }
-  .contact-link-panel h3, .contact-friends-panel h3 { margin: 0 0 6px; font-size: 14px; }
-  .contact-link-actions { display: flex; gap: 8px; margin: 8px 0; }
-  .contact-link-list { list-style: none; margin: 6px 0 0; padding: 0;
+  .contact-link-hint { margin: 0 0 10px; color: var(--wx-muted); font-size: 12px;
+    line-height: 1.5; }
+  .contact-link-actions { display: flex; gap: 8px; margin: 0 0 8px; }
+  .contact-link-actions button { padding: 6px 12px; font-size: 12px; }
+  .contact-link-status { min-height: 1.2em; margin: 0 0 6px; color: var(--wx-muted);
+    font-size: 12px; overflow-wrap: anywhere; }
+  #contact-link-status[data-error="1"], #contact-link-status[data-success="1"] { font-weight: 600; }
+  .contact-link-list { list-style: none; margin: 0; padding: 0;
     display: flex; flex-direction: column; gap: 6px; max-height: 26vh; overflow: auto; }
   .contact-link-item { display: flex; justify-content: space-between; align-items: center;
-    gap: 8px; padding: 8px 10px; border: 1px solid var(--wx-line); border-radius: 8px;
-    font-size: 13px; }
+    gap: 8px; padding: 7px 9px; border: 1px solid var(--wx-line); border-radius: 6px;
+    font-size: 12px; }
+  .contact-link-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .contact-link-state { flex: 0 0 auto; color: var(--wx-muted); font-size: 11px;
+    font-weight: 600; }
+  .contact-link-state::before { content: ""; display: inline-block; width: 6px; height: 6px;
+    margin-right: 4px; border-radius: 50%; background: currentColor; vertical-align: 1px; }
+  .contact-link-state[data-status="pending"] { color: var(--wx-green); }
   .contact-link-item .contact-link-meta { min-width: 0; color: var(--wx-muted);
-    word-break: break-word; }
-  #contact-link-status[data-error="1"], #contact-link-status[data-success="1"] { font-weight: 600; }
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .contact-link-item button { flex: 0 0 auto; padding: 4px 8px; font-size: 12px; }
 
-  /* 好友弹窗窄屏回退单栏，并铺满移动端可视区。 */
+  /* 接收策略下沉为右栏底部的设置行，不再占据首屏主视觉。 */
+  .contact-policy-field { display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin: 0; font-size: 12px; color: var(--wx-text); }
+  .contact-policy-field select { flex: 0 1 160px; min-width: 0; height: 30px; padding: 0 8px;
+    border: 1px solid var(--wx-line); border-radius: 4px; background: var(--wx-panel);
+    color: var(--wx-text); font: inherit; font-size: 12px; }
+  .contact-policy-status { min-height: 1.2em; margin: 6px 0 0; color: var(--wx-muted);
+    font-size: 11px; }
+
+  /* 好友弹窗窄屏回退单栏：申请 → 链接 → 好友 → 策略，并铺满移动端可视区。 */
   @media (max-width: 759px) {
     #contact-modal { padding: 0; place-items: stretch; }
     .contact-modal-card { width: 100%; height: 100dvh; max-height: 100dvh;
       border-radius: 0; padding: 16px; }
-    .contact-columns { display: flex; flex-direction: column; gap: 0; }
-    .contact-column { width: 100%; }
-    .contact-column + .contact-column { margin-top: 14px; }
-    .contact-column-right > .contact-link-panel:first-child {
+    .contact-columns { display: flex; flex-direction: column; gap: 0; align-items: stretch; }
+    .contact-column { display: contents; }
+    .contact-column-right { padding-left: 0; border-left: 0; }
+    .contact-requests-panel { order: 1; }
+    .contact-link-panel { order: 2; }
+    .contact-friends-panel { order: 3; }
+    .contact-policy { order: 4; }
+    .contact-link-panel, .contact-friends-panel, .contact-policy {
       margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--wx-line); }
     .contact-column .contact-request-list { max-height: min(32dvh, 260px); }
     .contact-column .contact-link-list { max-height: min(22dvh, 180px); }

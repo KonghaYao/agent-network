@@ -675,42 +675,55 @@ export function filePreviewDialog(): string {
 </div>`;
 }
 
-/** 好友申请弹窗：桌面左右两栏，窄屏单栏；待处理申请、好友链接与本人接收策略。 */
+/**
+ * 好友申请弹窗：桌面非对称两栏（约 3:2），窄屏按申请→链接→好友→策略单栏排列。
+ *
+ * 左栏放需要动作的待处理申请与好友，右栏放邀请入口与次要接收策略；
+ * 弹窗高度按内容收敛，避免固定高度留下大片空白。
+ */
 export function contactRequestsDialog(): string {
   return `<div class="modal" id="contact-modal" hidden>
   <div class="modal-card contact-modal-card" role="dialog" aria-modal="true" aria-labelledby="contact-modal-title">
     <h2 id="contact-modal-title">好友申请</h2>
     <div class="contact-columns">
       <div class="contact-column contact-column-left">
+        <section class="contact-requests-panel" aria-label="待处理好友申请">
+          <div class="contact-section-head">
+            <h3>待处理申请</h3>
+            <span id="contact-request-count" class="contact-count" hidden>0</span>
+          </div>
+          <ul id="contact-request-list" class="contact-request-list" aria-label="待处理好友申请"></ul>
+          <p id="contact-request-status" class="form-error" role="status"></p>
+        </section>
+        <section class="contact-friends-panel" aria-label="我的好友">
+          <div class="contact-section-head">
+            <h3>我的好友</h3>
+            <span id="contact-friend-count" class="contact-count" hidden>0</span>
+          </div>
+          <ul id="contact-friend-list" class="contact-request-list" aria-label="我的好友"></ul>
+        </section>
+      </div>
+      <div class="contact-column contact-column-right">
+        <section class="contact-link-panel" aria-label="好友链接">
+          <div class="contact-section-head">
+            <h3>好友链接</h3>
+          </div>
+          <p class="contact-link-hint">一次性链接，24 小时内有效；对方登录后直接成为好友。</p>
+          <div class="contact-link-actions">
+            <button id="contact-link-create" class="primary" type="button">生成好友链接</button>
+            <button id="contact-link-copy" type="button" hidden>复制链接</button>
+          </div>
+          <p id="contact-link-status" class="contact-link-status" role="status"></p>
+          <ul id="contact-link-list" class="contact-link-list" aria-label="已生成的好友链接"></ul>
+        </section>
         <section class="contact-policy" aria-label="我的接收策略">
-          <label class="field">我的接收策略
+          <label class="contact-policy-field" for="contact-policy-select">我的接收策略
             <select id="contact-policy-select">
               <option value="self_approval">本人确认</option>
               <option value="auto_accept">自动接受</option>
             </select>
           </label>
-          <p id="contact-policy-status" class="muted" role="status"></p>
-        </section>
-        <section class="contact-requests-panel" aria-label="待处理好友申请">
-          <h3>待处理申请</h3>
-          <ul id="contact-request-list" class="contact-request-list" aria-label="待处理好友申请"></ul>
-          <p id="contact-request-status" class="form-error" role="status"></p>
-        </section>
-      </div>
-      <div class="contact-column contact-column-right">
-        <section class="contact-link-panel" aria-label="好友链接">
-          <h3>好友链接</h3>
-          <p class="muted">一次性链接，24 小时内有效；对方登录后直接成为好友。</p>
-          <div class="contact-link-actions">
-            <button id="contact-link-create" type="button">生成好友链接</button>
-            <button id="contact-link-copy" type="button" hidden>复制链接</button>
-          </div>
-          <p id="contact-link-status" class="muted" role="status"></p>
-          <ul id="contact-link-list" class="contact-link-list" aria-label="已生成的好友链接"></ul>
-        </section>
-        <section class="contact-friends-panel" aria-label="我的好友">
-          <h3>我的好友</h3>
-          <ul id="contact-friend-list" class="contact-request-list" aria-label="我的好友"></ul>
+          <p id="contact-policy-status" class="contact-policy-status" role="status"></p>
         </section>
       </div>
     </div>

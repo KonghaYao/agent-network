@@ -10,6 +10,7 @@ const contactRequestsBadge = document.getElementById('contact-requests-badge');
 const contactModal = document.getElementById('contact-modal');
 const contactModalClose = document.getElementById('contact-modal-close');
 const contactRequestList = document.getElementById('contact-request-list');
+const contactRequestCount = document.getElementById('contact-request-count');
 const contactRequestStatus = document.getElementById('contact-request-status');
 const contactPolicySelect = document.getElementById('contact-policy-select');
 const contactPolicyStatus = document.getElementById('contact-policy-status');
@@ -18,6 +19,7 @@ const contactLinkCopyButton = document.getElementById('contact-link-copy');
 const contactLinkStatus = document.getElementById('contact-link-status');
 const contactLinkList = document.getElementById('contact-link-list');
 const contactFriendList = document.getElementById('contact-friend-list');
+const contactFriendCount = document.getElementById('contact-friend-count');
 let contactRequestBusy = false;
 let contactLinkBusy = false;
 // 链接明文只在本次页面会话的内存里；不写 DOM、localStorage、console 或日志。
@@ -36,6 +38,12 @@ function setContactStatus(message, isError) {
   else delete contactRequestStatus.dataset.error;
 }
 
+function setContactCount(element, count) {
+  if (!element) return;
+  element.textContent = String(count);
+  element.hidden = count === 0;
+}
+
 function contactButton(label, className, handler) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -51,10 +59,11 @@ function renderContactRequests(items) {
   const pending = (items || []).filter(function (item) {
     return item && item.status === 'pending';
   });
+  setContactCount(contactRequestCount, pending.length);
   if (pending.length === 0) {
     const empty = document.createElement('li');
     empty.className = 'contact-request-empty';
-    empty.textContent = '没有待处理的好友申请。';
+    empty.textContent = '暂无待处理申请。';
     contactRequestList.append(empty);
     return;
   }
@@ -256,13 +265,21 @@ async function previewContactLinkToken(token) {
 
 function contactLinkStatusText(link) {
   if (!link) return '';
-  if (link.status === 'used') {
-    const usedBy = link.used_by && link.used_by.name ? ' · ' + link.used_by.name : '';
-    return '已使用' + usedBy;
-  }
+  if (link.status === 'used') return '已使用';
   if (link.status === 'revoked') return '已撤销';
   if (link.status === 'expired') return '已过期';
-  return '待使用 · 有效至 ' + contactLinkTime(link.expires_at);
+  return '待使用';
+}
+
+function contactLinkDetailText(link) {
+  if (!link) return '';
+  if (link.status === 'used') {
+    return link.used_by && link.used_by.name
+      ? '由 ' + link.used_by.name + ' 使用'
+      : '已被使用';
+  }
+  if (link.status === 'revoked') return '';
+  return '有效至 ' + contactLinkTime(link.expires_at);
 }
 
 function renderContactLinks(items) {
@@ -279,10 +296,21 @@ function renderContactLinks(items) {
   for (const link of links) {
     const row = document.createElement('li');
     row.className = 'contact-link-item';
-    const meta = document.createElement('span');
-    meta.className = 'contact-link-meta';
-    meta.textContent = contactLinkStatusText(link);
-    row.append(meta);
+    const main = document.createElement('div');
+    main.className = 'contact-link-main';
+    const state = document.createElement('span');
+    state.className = 'contact-link-state';
+    state.dataset.status = link.status || 'pending';
+    state.textContent = contactLinkStatusText(link);
+    main.append(state);
+    const detail = contactLinkDetailText(link);
+    if (detail) {
+      const meta = document.createElement('span');
+      meta.className = 'contact-link-meta';
+      meta.textContent = detail;
+      main.append(meta);
+    }
+    row.append(main);
     if (link.can_revoke) {
       row.append(contactButton('撤销', '', function () {
         revokeContactLink(link.link_id);
@@ -312,6 +340,7 @@ function renderContactFriends(items) {
   const friends = (items || []).filter(function (item) {
     return item && item.relation === 'active';
   });
+  setContactCount(contactFriendCount, friends.length);
   if (friends.length === 0) {
     const empty = document.createElement('li');
     empty.className = 'contact-request-empty';
