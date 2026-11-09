@@ -1,0 +1,1008 @@
+diff --git a/scripts/lib/task-attachment-gc-unit.ts b/scripts/lib/task-attachment-gc-unit.ts
+index 6dc501e..fed4bc5 100644
+--- a/scripts/lib/task-attachment-gc-unit.ts
++++ b/scripts/lib/task-attachment-gc-unit.ts
+@@ -53,6 +53,8 @@ function count(db: Database, sql: string, ...binds: string[]): number {
+ export async function runTaskAttachmentGcUnitChecks(): Promise<void> {
+   const db = new Database(':memory:');
+   migrate(db, MIGRATIONS);
++  // Attachment starts live and visible; age it only after task retention is established.
++  const initialExpiry = Date.now() + DAY;
+   db.exec(`
+     INSERT INTO actors
+       (actor_id, kind, agent_session_id, name, metadata, inbox_head_seq, inbox_min_seq,
+@@ -72,15 +74,15 @@ export async function runTaskAttachmentGcUnitChecks(): Promise<void> {
+       (room_file_id, room_id, file_id, uploader_id, name, mime_type, size, sha256,
+        created_at, expires_at, deleted_at, deleted_by, retained)
+     VALUES ('rf_task_gc', '${ROOM}', '${FILE}', '${OWNER}', 'attachment.txt', 'text/plain',
+-            16, '${'a'.repeat(64)}', ${AT - 40 * DAY}, ${AT - 30 * DAY}, NULL, NULL, 0);
++            16, '${'a'.repeat(64)}', ${AT}, ${initialExpiry}, NULL, NULL, 0);
+ 
+     INSERT INTO drive_files
+       (file_id, owner_scope, uploader_id, name, mime_type, size, sha256, state,
+        visibility, room_id, created_at, expires_at, retained, deleted_at, deleted_by,
+        purged_at)
+     VALUES ('${FILE}', 'actor:${OWNER}', '${OWNER}', 'attachment.txt', 'text/plain', 16,
+-            '${'a'.repeat(64)}', 'bound', 'private', '${ROOM}', ${AT - 40 * DAY},
+-            ${AT - 30 * DAY}, 0, NULL, NULL, NULL);
++            '${'a'.repeat(64)}', 'bound', 'private', '${ROOM}', ${AT},
++            ${initialExpiry}, 0, NULL, NULL, NULL);
+   `);
+   const d1 = createD1(db);
+   const purged: string[] = [];
+@@ -124,8 +126,8 @@ export async function runTaskAttachmentGcUnitChecks(): Promise<void> {
+   checkEqual('[D01-GC] retained Drive 文件不再过期', retainedDrive.expires_at, null);
+ 
+   // 模拟原 TTL 已过：任务仍存在，维护任务不得释放引用或回收文件。
+-  db.prepare('UPDATE room_files SET expires_at = ? WHERE file_id = ?').run(AT - 30 * DAY, FILE);
+-  db.prepare('UPDATE drive_files SET expires_at = ? WHERE file_id = ?').run(AT - 30 * DAY, FILE);
++  db.prepare('UPDATE room_files SET expires_at = ? WHERE file_id = ?').run(AT + DAY, FILE);
++  db.prepare('UPDATE drive_files SET expires_at = ? WHERE file_id = ?').run(AT + DAY, FILE);
+   await maintain(env);
+   checkEqual(
+     '[D01-GC] 任务存在时引用保持 active',
+diff --git a/scripts/verify-delivery-authorization.ts b/scripts/verify-delivery-authorization.ts
+new file mode 100644
+index 0000000..c6cbd34
+--- /dev/null
++++ b/scripts/verify-delivery-authorization.ts
+@@ -0,0 +1,74 @@
++/** Regression: retries must not resurrect work revoked by room/contact changes. */
++import assert from 'node:assert/strict';
++import { Database } from 'bun:sqlite';
++import { join } from 'node:path';
++import { createD1 } from '../src/bun/d1';
++import { migrate } from '../src/bun/migrate';
++import { BusinessError } from '../src/contracts/errors';
++import { LIMITS } from '../src/contracts/limits';
++import { deliveryClaim, deliveryRetry } from '../src/domain/deliveries';
++import { getActor } from '../src/storage/queries';
++
++let checks = 0;
++async function scenario(name: string, setup: string, code: string | null, claim = false, retryAs = 'sender') {
++  const sqlite = new Database(':memory:');
++  migrate(sqlite, join(import.meta.dir, '../migrations'));
++  const db = createD1(sqlite);
++  sqlite.exec(`
++    INSERT INTO actors (actor_id,kind,name,created_at,updated_at) VALUES
++      ('sender','human','Sender',1,1), ('agent','agent','Agent',1,1);
++    INSERT INTO rooms (room_id,kind,owner_id,created_at,updated_at)
++      VALUES ('room','group','sender',1,1);
++    INSERT INTO room_members (room_id,actor_id,role,status,joined_seq,joined_at)
++      VALUES ('room','sender','owner','active',0,1), ('room','agent','member','active',0,1);
++    INSERT INTO messages (message_id,room_id,sender_id,client_message_id,created_seq,body,body_bytes,preview,created_at)
++      VALUES ('message','room','sender','client',1,'work',4,'work',1);
++    INSERT INTO deliveries (delivery_id,recipient_id,message_id,room_id,state,created_seq,created_at,updated_at)
++      VALUES ('delivery','agent','message','room','cancelled',1,1,1);
++    ${claim ? "UPDATE deliveries SET state = 'pending'; UPDATE actors SET pending_count = 1 WHERE actor_id = 'agent';" : ''}
++    ${setup}
++  `);
++  const before = JSON.stringify(sqlite.query('SELECT * FROM deliveries').all());
++  const beforeActors = JSON.stringify(sqlite.query('SELECT * FROM actors').all());
++  const principal = { actor: await getActor(db, claim ? 'agent' : retryAs), credential: null, credentialHash: 'test' };
++  const invoke = () => claim
++    ? deliveryClaim(db, principal, { request_id: crypto.randomUUID(), delivery_id: 'delivery' })
++    : deliveryRetry(db, principal, { request_id: crypto.randomUUID(), delivery_id: 'delivery', expected_attempt: 0 });
++  if (code) {
++    await assert.rejects(invoke, (e: unknown) => e instanceof BusinessError && e.code === code, name);
++    assert.equal(JSON.stringify(sqlite.query('SELECT * FROM deliveries').all()), before, `${name}: delivery rollback`);
++    assert.equal(JSON.stringify(sqlite.query('SELECT * FROM actors').all()), beforeActors, `${name}: inbox rollback`);
++    for (const table of ['events','outbox','operations']) {
++      assert.equal((sqlite.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as {n:number}).n, 0, `${name}: ${table} rollback`);
++    }
++    checks += 6;
++  } else {
++    const result = await invoke();
++    assert.equal(result.state, claim ? 'claimed' : 'pending', name);
++    assert.equal((await getActor(db, 'agent'))!.pending_count, claim ? 0 : 1);
++    checks += 2;
++  }
++  sqlite.close();
++}
++
++await scenario('ordinary retry remains supported', '', null);
++await scenario('ordinary claim remains supported', '', null, true);
++await scenario('recipient retries its own claimed work without manager binding', "UPDATE deliveries SET state = 'claimed', claim_id = 'old-claim';", null, false, 'agent');
++await scenario('rejoined recipient with full history can retry', "UPDATE room_members SET joined_seq = 2 WHERE actor_id = 'agent'; UPDATE rooms SET member_history_policy = 'full';", null, false, 'agent');
++for (const claim of [false, true]) {
++  await scenario('dissolved archive', "UPDATE rooms SET dissolved_at = 2, archive_head_seq = 1;", 'CONFLICT', claim);
++  await scenario('removed recipient', "UPDATE room_members SET status = 'removed' WHERE actor_id = 'agent';", 'NOT_MEMBER', claim);
++  await scenario('rejoined recipient cannot reclaim hidden history', "UPDATE room_members SET joined_seq = 2, member_generation = 2 WHERE actor_id = 'agent';", 'NOT_MEMBER', claim);
++  await scenario('disabled recipient', "UPDATE actors SET disabled_at = 2 WHERE actor_id = 'agent';", 'ACTOR_DISABLED', claim);
++  const block = "INSERT INTO contact_blocks (block_id,blocker_actor_id,blocked_actor_id,reason,mute_mentions,created_at) VALUES ('block','agent','sender','',1,2);";
++  await scenario('muted group delivery', block, 'BLOCKED', claim);
++  await scenario('direct block even with mentions unmuted', block + "UPDATE rooms SET kind = 'direct'; UPDATE contact_blocks SET mute_mentions = 0;", 'BLOCKED', claim);
++}
++await scenario('removed sender cannot restart work', "UPDATE room_members SET status = 'removed' WHERE actor_id = 'sender';", 'NOT_MEMBER');
++let queue = '';
++for (let i = 0; i < LIMITS.pendingPerActor; i++) {
++  queue += `INSERT INTO deliveries (delivery_id,recipient_id,message_id,room_id,state,created_seq,created_at,updated_at) VALUES ('q${i}','agent','m${i}','room','pending',${i+2},1,1);`;
++}
++queue += `UPDATE actors SET pending_count = ${LIMITS.pendingPerActor} WHERE actor_id = 'agent';`;
++await scenario('retry respects queue capacity', queue, 'QUEUE_FULL');
++console.log(`Delivery authorization regressions: ${checks} assertions passed`);
+diff --git a/scripts/verify-task-attachment-access.ts b/scripts/verify-task-attachment-access.ts
+new file mode 100644
+index 0000000..3b13c1c
+--- /dev/null
++++ b/scripts/verify-task-attachment-access.ts
+@@ -0,0 +1,68 @@
++/** Task creation cannot retain an expired or history-invisible attachment. */
++import assert from 'node:assert/strict';
++import { Database } from 'bun:sqlite';
++import { join } from 'node:path';
++import { createD1 } from '../src/bun/d1';
++import { migrate } from '../src/bun/migrate';
++import { BusinessError } from '../src/contracts/errors';
++import { taskCreate } from '../src/domain/tasks';
++import { getActor } from '../src/storage/queries';
++
++let assertions = 0;
++async function scenario(name: string, setup: string, allowed = false, beforeBatch = '') {
++  const sqlite = new Database(':memory:');
++  migrate(sqlite, join(import.meta.dir, '../migrations'));
++  const db = createD1(sqlite);
++  sqlite.exec(`
++    INSERT INTO actors (actor_id,kind,name,created_at,updated_at) VALUES ('user','human','User',1,1);
++    INSERT INTO rooms (room_id,kind,owner_id,created_at,updated_at) VALUES ('room','group','user',1,1);
++    INSERT INTO room_members (room_id,actor_id,role,status,joined_seq,joined_at)
++      VALUES ('room','user','owner','active',10,10);
++    INSERT INTO room_files (room_file_id,room_id,file_id,uploader_id,name,mime_type,size,sha256,created_at,expires_at,created_seq)
++      VALUES ('rf','room','file','user','secret.txt','text/plain',1,'${'a'.repeat(64)}',20,${Date.now()+100000},20);
++    ${setup}
++  `);
++  let before = JSON.stringify(sqlite.query('SELECT * FROM room_files').all());
++  if (beforeBatch) {
++    const batch = db.batch.bind(db);
++    db.batch = async <T = unknown>(statements: D1PreparedStatement[]) => {
++      sqlite.exec(beforeBatch);
++      before = JSON.stringify(sqlite.query('SELECT * FROM room_files').all());
++      return batch<T>(statements);
++    };
++  }
++  const principal = { actor: await getActor(db, 'user'), credential: null, credentialHash: 'test' };
++  const invoke = () => taskCreate(db, principal, {
++    request_id: crypto.randomUUID(), room_id: 'room', title: 'Attachment check', attachment_file_ids: ['file'],
++  });
++  if (allowed) {
++    await invoke();
++    assert.equal((sqlite.query('SELECT retained FROM room_files').get() as {retained:number}).retained, 1);
++    assertions++;
++  } else {
++    await assert.rejects(invoke, (e: unknown) => e instanceof BusinessError && e.code === 'FILE_UNAVAILABLE', name);
++    assert.equal(JSON.stringify(sqlite.query('SELECT * FROM room_files').all()), before, name);
++    for (const table of ['tasks','task_attachments','file_references','operations','events','outbox']) {
++      assert.equal((sqlite.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as {n:number}).n, 0, `${name}: ${table}`);
++    }
++    assertions += 8;
++  }
++  sqlite.close();
++}
++await scenario('visible live attachment', '', true);
++await scenario('hidden by sequence boundary', 'UPDATE room_files SET created_seq = 9;');
++await scenario('legacy hidden by timestamp boundary', 'UPDATE room_files SET created_seq = NULL, created_at = 9;');
++await scenario('expired room file', 'UPDATE room_files SET expires_at = 21;');
++await scenario('retained file remains usable after old expiry', 'UPDATE room_files SET expires_at = 21, retained = 1;', true);
++await scenario('full history permits historical file', "UPDATE room_files SET created_seq = 9; UPDATE rooms SET member_history_policy = 'full';", true);
++const drive = `INSERT INTO drive_files (file_id,owner_scope,uploader_id,name,mime_type,size,sha256,state,visibility,room_id,created_at,expires_at,retained)
++ VALUES ('file','actor:user','user','secret.txt','text/plain',1,'${'a'.repeat(64)}','bound','private','room',1,2,0);`;
++await scenario('expired drive file cannot be revived', drive);
++await scenario('deleted drive file cannot be revived', drive + "UPDATE drive_files SET state = 'deleted';");
++await scenario('expiry changes after preflight', '', false, 'UPDATE room_files SET expires_at = 21;');
++await scenario('history policy changes after preflight',
++  "UPDATE rooms SET member_history_policy = 'full'; UPDATE room_files SET created_seq = 9;",
++  false, "UPDATE rooms SET member_history_policy = 'from_join';");
++await scenario('drive deletion after preflight', drive + `UPDATE drive_files SET expires_at = ${Date.now()+100000};`,
++  false, "UPDATE drive_files SET state = 'deleted';");
++console.log(`Task attachment access regressions: ${assertions} assertions passed`);
+diff --git a/scripts/verify-web-modal-races.mjs b/scripts/verify-web-modal-races.mjs
+new file mode 100644
+index 0000000..d1a4e5a
+--- /dev/null
++++ b/scripts/verify-web-modal-races.mjs
+@@ -0,0 +1,92 @@
++/** Isolated async regressions for the shipped inline handlers. Run: node scripts/verify-web-modal-races.mjs */
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++import vm from 'node:vm';
++
++const chat = readFileSync(new URL('../src/web/chat-script.ts', import.meta.url), 'utf8');
++const members = readFileSync(new URL('../src/web/chat-members-script.ts', import.meta.url), 'utf8');
++const groupHandler = chat.slice(chat.indexOf('if (groupForm) {'), chat.indexOf('\nconst loggedOutStartButton'));
++const memberHandler = members.slice(members.indexOf('async function submitMembersForm(event)'), members.indexOf('\nif (membersButton)'));
++const event = { preventDefault() {} };
++function deferred() {
++  let resolve, reject;
++  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
++  return { promise, resolve, reject };
++}
++function groupHarness() {
++  const pending = deferred();
++  const calls = [], seeded = [], navigated = [];
++  const context = vm.createContext({
++    groupForm: { addEventListener(_name, fn) { context.submit = fn; } },
++    groupModal: { hidden: false }, groupLoadSeq: 1,
++    groupCreateButton: { disabled: false }, groupErrorElement: { textContent: '' },
++    groupTitleInput: { value: 'New group' }, groupPicker: { selectedIds: () => ['friend'] },
++    requestId: () => 'request',
++    callTool: (...args) => { calls.push(args); return pending.promise; },
++    seedRoomCacheFromDetail: result => { seeded.push(result); return result.room.room_id; },
++    navigateTo: path => navigated.push(path),
++    closeGroupModal: () => { context.groupLoadSeq++; context.groupModal.hidden = true; },
++  });
++  vm.runInContext(groupHandler, context);
++  return { context, pending, calls, seeded, navigated };
++}
++{
++  const h = groupHarness();
++  const first = h.context.submit(event);
++  const duplicate = h.context.submit(event);
++  assert.equal(h.calls.length, 1, 'double submit must not create a second group');
++  h.pending.resolve({ room: { room_id: 'created' } });
++  await Promise.all([first, duplicate]);
++  assert.deepEqual(h.navigated, ['/c/created'], 'normal success opens created room');
++}
++for (const reopen of [false, true]) {
++  for (const fail of [false, true]) {
++    const h = groupHarness();
++    const first = h.context.submit(event);
++    h.context.closeGroupModal();
++    if (reopen) {
++      h.context.groupLoadSeq++;
++      h.context.groupModal.hidden = false;
++    }
++    h.context.groupErrorElement.textContent = 'new state';
++    h.context.groupCreateButton.disabled = true;
++    if (fail) h.pending.reject(new Error('old failure'));
++    else h.pending.resolve({ room: { room_id: 'created' } });
++    await first;
++    assert.equal(h.seeded.length, fail ? 0 : 1, 'successful background creation remains discoverable');
++    assert.equal(h.navigated.length, 0, 'dismissed create must not interrupt navigation');
++    assert.equal(h.context.groupModal.hidden, !reopen, 'old result must not close reopened modal');
++    assert.equal(h.context.groupErrorElement.textContent, 'new state');
++    assert.equal(h.context.groupCreateButton.disabled, true, 'old result must not release new submission lock');
++  }
++}
++for (const fail of [false, true]) {
++  const pending = deferred();
++  let applied = 0, cleared = 0;
++  const context = vm.createContext({
++    activeRoomId: 'room', roomEpoch: 1, room: { kind: 'group' },
++    membersModal: { hidden: false }, membersBusy: false, membersLoadToken: 1,
++    members: new Map(), MEMBER_CHANGE_MAX: 100,
++    canInviteMembers: () => true, selectedMemberIds: () => ['friend'],
++    setMembersError: value => { context.error = value; },
++    setMembersBusy: value => { context.membersBusy = value; },
++    requestId: () => 'request', callTool: () => pending.promise,
++    isActiveRoom: () => true,
++    applyRoomDetail: () => { applied++; },
++    membersPicker: { clearSelection: () => { cleared++; } },
++    membersUpdateError: error => error.message,
++  });
++  vm.runInContext(memberHandler, context);
++  const first = context.submitMembersForm(event);
++  context.membersLoadToken += 2; // close and reopen the same room's members dialog
++  context.error = 'new state';
++  context.membersBusy = true; // reopened dialog is loading candidates
++  if (fail) pending.reject(new Error('old failure'));
++  else pending.resolve({ members: [{ actor_id: 'friend' }] });
++  await first;
++  assert.equal(applied, fail ? 0 : 1, 'committed membership still updates room state');
++  assert.equal(cleared, 0, 'old response must not clear newly selected candidates');
++  assert.equal(context.error, 'new state');
++  assert.equal(context.membersBusy, true, 'old completion must not release new loading lock');
++}
++console.log('PASS: group single-flight, normal completion, close/reopen success/failure, member-dialog generation isolation');
+diff --git a/scripts/verify-web-pairing-races.mjs b/scripts/verify-web-pairing-races.mjs
+new file mode 100644
+index 0000000..a43615e
+--- /dev/null
++++ b/scripts/verify-web-pairing-races.mjs
+@@ -0,0 +1,64 @@
++/** Pairing credential isolation regressions. Run: node scripts/verify-web-pairing-races.mjs */
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++import vm from 'node:vm';
++const source = readFileSync(new URL('../src/web/pair.ts', import.meta.url), 'utf8');
++const handlers = source.slice(source.indexOf('  function localPairToken('), source.indexOf("  startButton.addEventListener('click'"));
++function deferred() {
++  let resolve, reject;
++  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
++  return { promise, resolve, reject };
++}
++function harness() {
++  const requests = [], remembered = [], removed = [], stored = [];
++  let uuid = 0;
++  const context = vm.createContext({
++    PAIR_TOKEN_PREFIX: 'pair:', localToken: null, pairing: null, targetIdentity: null,
++    currentIdentity: null, redeemRequestId: null, pollTimer: null, busy: false,
++    pairingGeneration: 0, pairingChallenge: null, credentialReady: false,
++    challengeInput: { value: 'AAAAAAAAAAAA' }, startButton: {}, switchButton: { hidden: true },
++    confirmElement: {}, targetElement: {}, currentElement: {},
++    normalizeChallenge: text => text, sessionGet: () => null, sessionSet: () => {},
++    sessionRemove: key => removed.push(key), crypto: { randomUUID: () => 'token-' + ++uuid },
++    requestId: () => 'request-' + ++uuid, deviceId: () => 'device', deviceLabel: () => 'Browser',
++    navigator: { platform: 'test' }, setTimeout: () => 1, clearTimeout: () => {},
++    setStatus: text => { context.status = text; },
++    callTool: (name, args, token) => {
++      const pending = deferred(); requests.push({ name, args, token, ...pending }); return pending.promise;
++    },
++    currentToken: () => null, storageSet: (key, value) => { stored.push([key, value]); return true; },
++    rememberIdentity: (identity, token) => { remembered.push([identity.actor_id, token]); return true; },
++    window: { localStorage: { removeItem() {} }, history: { replaceState() {} },
++      location: { pathname: '/pair', search: '', replace() {} } },
++  });
++  vm.runInContext(handlers, context);
++  return { context, requests, remembered, removed, stored };
++}
++const join = actor => ({ pairing: { confirm_code: '123' }, actor: { actor_id: actor, name: actor } });
++for (const staleFailure of [false, true]) {
++  const h = harness(), c = h.context;
++  const firstJoin = c.startPairing(); h.requests[0].resolve(join('actor-A')); await firstJoin;
++  const oldRedeem = c.redeem();
++  assert.equal(h.requests[1].args.challenge, 'AAAAAAAAAAAA');
++  c.challengeInput.value = 'BBBBBBBBBBBB';
++  const nextJoin = c.startPairing(); h.requests[2].resolve(join('actor-B')); await nextJoin;
++  const currentStatus = c.status;
++  if (staleFailure) h.requests[1].reject({ details: { reason: 'not_approved' } });
++  else h.requests[1].resolve({ actor_id: 'actor-A' });
++  await oldRedeem;
++  assert.equal(c.targetIdentity.actor_id, 'actor-B', 'old redemption must not replace new identity');
++  assert.equal(c.switchButton.hidden, true, 'old redemption must not offer mismatched credential');
++  assert.equal(c.status, currentStatus, 'old failures must not replace current pairing status');
++  await c.switchIdentity();
++  assert.equal(h.stored.length, 0, 'joined but unredeemed credentials cannot activate');
++  // Editing the field must not change the in-progress attempt or cleanup key.
++  c.challengeInput.value = 'CCCCCCCCCCCC';
++  const currentRedeem = c.redeem();
++  assert.equal(h.requests[3].args.challenge, 'BBBBBBBBBBBB');
++  assert.equal(h.requests[3].token, h.requests[2].token);
++  h.requests[3].resolve({ actor_id: 'actor-B' }); await currentRedeem;
++  await c.switchIdentity();
++  assert.deepEqual(h.remembered, [['actor-B', h.requests[2].token]]);
++  assert.deepEqual(h.removed, ['pair:BBBBBBBBBBBB']);
++}
++console.log('PASS: stale pairing success/failure isolation, immutable challenge/token, redeem-only activation and cleanup');
+diff --git a/scripts/verify-web-send-races.mjs b/scripts/verify-web-send-races.mjs
+new file mode 100644
+index 0000000..9d59de4
+--- /dev/null
++++ b/scripts/verify-web-send-races.mjs
+@@ -0,0 +1,64 @@
++/** Run: node scripts/verify-web-send-races.mjs. Exercises production inline handlers without a server. */
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++import vm from 'node:vm';
++const source = name => readFileSync(new URL('../src/web/' + name, import.meta.url), 'utf8');
++const chat = source('chat-script.ts');
++const handler = chat.slice(chat.indexOf("composer.addEventListener('submit'"), chat.indexOf("\nbodyInput.addEventListener('input'"));
++const session = source('chat-session-script.ts');
++const clearError = session.slice(session.indexOf('function clearChatError()'), session.indexOf('\nfunction handleRoomError'));
++function deferred() {
++  let resolve, reject;
++  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
++  return { promise, resolve, reject };
++}
++const requests = [];
++const c = vm.createContext({
++  composer: { addEventListener: (_name, fn) => { c.submit = fn; } },
++  composerSendingRooms: new Set(), sendButton: { disabled: false }, activeRoomId: 'A', roomEpoch: 1,
++  bodyInput: { value: 'sent text', focus() {} }, composerOutgoingBody: (_id, text) => text,
++  composerReadyKeys: () => [], stickyStatus: '', statusElement: {}, room: { kind: 'direct' },
++  directInvokeTargets: () => ({ targets: [] }), outboxFindReusable: () => null,
++  outboxCreate: room_id => ({ room_id }), scrollController: { pinNextApply() {} },
++  outboxSubmit: (intent, options) => { const pending = deferred(); requests.push({ intent, options, ...pending }); return pending.promise; },
++  isActiveRoom: (id, epoch) => c.activeRoomId === id && c.roomEpoch === epoch,
++  chatErrorElement: null, chatErrorTextElement: null,
++});
++vm.runInContext(handler + '\n' + clearError, c);
++const event = { preventDefault() {} };
++const first = c.submit(event);
++c.clearChatError();
++assert.equal(c.sendButton.disabled, true, 'refresh must preserve pending send lock');
++c.sendButton.disabled = false; // another UI path must not bypass the independent lock
++await c.submit(event);
++assert.equal(requests.length, 1, 'repeated enter cannot duplicate in-flight intent');
++c.activeRoomId = 'B'; c.roomEpoch = 2; c.sendButton.disabled = false;
++const second = c.submit(event);
++assert.equal(requests.length, 2, 'a different room can send independently');
++requests[0].resolve(); await first;
++assert.equal(c.sendButton.disabled, true, 'old room completion must not release new room send');
++assert.equal(c.composerSendingRooms.has('A'), false);
++requests[1].reject(new Error('failed'));
++await assert.rejects(second, /failed/);
++assert.equal(c.sendButton.disabled, false);
++assert.equal(c.composerSendingRooms.size, 0, 'failures release independent locks');
++assert.equal(requests[0].options.composerDraft, 'sent text');
++
++const outbox = source('chat-outbox-script.ts');
++const finish = outbox.slice(outbox.indexOf('function outboxComposerMatches('), outbox.indexOf('\n/**\n * 提交一个持久意图'));
++for (const storedInMemory of [false, true]) {
++  for (const edited of [false, true]) {
++    const saved = edited ? 'new unsent draft' : 'sent text';
++    let removed = 0;
++    const d = vm.createContext({
++      bodyInput: { value: 'B draft' }, roomEpoch: 2, isActiveRoom: id => id === 'B',
++      drafts: new Map(storedInMemory ? [['A', saved]] : []), draftLoad: () => saved,
++      mentionSelections: new Map(), draftClear: () => { removed++; }, clearComposerFiles() {},
++    });
++    vm.runInContext(finish, d);
++    d.outboxFinishCommitted({ room_id: 'A', body: 'sent text' }, { epoch: 1, composerDraft: 'sent text' });
++    assert.equal(removed, edited ? 0 : 1, 'only the submitted draft may be removed after navigation');
++    if (storedInMemory && edited) assert.equal(d.drafts.get('A'), saved);
++  }
++}
++console.log('PASS: refresh/re-entry send isolation, cross-room success/failure, draft snapshot and persistent draft preservation');
+diff --git a/src/domain/deliveries.ts b/src/domain/deliveries.ts
+index 2d40d57..a2d1430 100644
+--- a/src/domain/deliveries.ts
++++ b/src/domain/deliveries.ts
+@@ -36,6 +36,8 @@ import {
+ } from './messages';
+ import { actorId, type Principal } from './principal';
+ import type { MessagePreviewView } from './rooms';
++import { directBlockGuardStatement } from './contact-blocks';
++import { roomDissolvedGuardStatement } from './room-access';
+ import { messagePreviewOf } from './views';
+ 
+ export interface DeliveryView {
+@@ -289,6 +291,28 @@ async function deliverySenderId(
+   return (await getMessage(db, delivery.message_id))?.sender_id;
+ }
+ 
++/** Requeueing and claiming must not restore work revoked by room or contact changes. */
++function deliveryExecutionGuards(db: D1Database, delivery: DeliveryRow): D1PreparedStatement[] {
++  return [
++    roomDissolvedGuardStatement(db, delivery.room_id),
++    directBlockGuardStatement(db, delivery.room_id),
++    db.prepare(guardSql('notMember', `NOT EXISTS (
++      SELECT 1 FROM room_members rm JOIN rooms r ON r.room_id = rm.room_id
++      JOIN messages m ON m.message_id = ?
++      WHERE rm.room_id = ? AND rm.actor_id = ? AND rm.status = 'active'
++        AND (r.kind = 'direct' OR r.member_history_policy = 'full' OR m.created_seq >= rm.joined_seq)
++    )`)).bind(delivery.message_id, delivery.room_id, delivery.recipient_id),
++    db.prepare(guardSql('actorDisabled',
++      'EXISTS (SELECT 1 FROM actors WHERE actor_id = ? AND disabled_at IS NOT NULL)',
++    )).bind(delivery.recipient_id),
++    db.prepare(guardSql('blocked', `EXISTS (
++      SELECT 1 FROM contact_blocks b JOIN messages m ON m.sender_id = b.blocked_actor_id
++      WHERE m.message_id = ? AND b.blocker_actor_id = ?
++        AND b.released_at IS NULL AND b.mute_mentions = 1
++    )`)).bind(delivery.message_id, delivery.recipient_id),
++  ];
++}
++
+ export async function deliveryClaim(
+   db: D1Database,
+   principal: Principal,
+@@ -311,6 +335,7 @@ export async function deliveryClaim(
+       result: { delivery_id: delivery.delivery_id },
+       build: (resultJson) => [
+         operationsStatement(db, actor, input.request_id, payloadHash, resultJson, at),
++        ...deliveryExecutionGuards(db, delivery),
+         db
+           .prepare(
+             guardSql(
+@@ -714,6 +739,18 @@ export async function deliveryRetry(
+     result: { delivery_id: delivery.delivery_id },
+     build: (resultJson) => [
+       operationsStatement(db, actor, input.request_id, payloadHash, resultJson, at),
++      ...deliveryExecutionGuards(db, delivery),
++      db.prepare(guardSql('notMember', `NOT EXISTS (
++        SELECT 1 FROM room_members WHERE room_id = ? AND actor_id = ? AND status = 'active'
++      )`)).bind(delivery.room_id, actor),
++      db.prepare(guardSql('notOwner', `NOT EXISTS (
++        SELECT 1 FROM deliveries d JOIN messages m ON m.message_id = d.message_id
++        JOIN rooms r ON r.room_id = d.room_id
++        WHERE d.delivery_id = ? AND (d.recipient_id = ? OR m.sender_id = ? OR r.owner_id = ?)
++      )`)).bind(delivery.delivery_id, actor, actor, actor),
++      db.prepare(guardSql('queueFull',
++        "(SELECT COUNT(*) FROM deliveries WHERE recipient_id = ? AND state = 'pending') + 1 > ?",
++      )).bind(delivery.recipient_id, LIMITS.pendingPerActor),
+       db
+         .prepare(
+           guardSql(
+diff --git a/src/domain/tasks.ts b/src/domain/tasks.ts
+index f493304..1a7f0ad 100644
+--- a/src/domain/tasks.ts
++++ b/src/domain/tasks.ts
+@@ -47,6 +47,7 @@ import {
+ } from '../storage/events';
+ import { guardSql } from '../storage/guards';
+ import {
++  getDriveFile,
+   getActor,
+   getDelivery,
+   getMember,
+@@ -100,10 +101,12 @@ import {
+   historyBoundary,
+   historySnapshot,
+   visibleMessage,
++  visibleCreated,
+   type HistoryBoundary,
+   type HistorySnapshot,
+ } from './room-history';
+ import { messageCoreStatements, type MessageCore } from './messages';
++import { driveFileUsable, roomFileUsable } from './file-access';
+ 
+ export type TaskStatus = TaskRow['status'];
+ export type TaskAssignmentStatus = TaskAssignmentRow['status'];
+@@ -1124,14 +1127,18 @@ async function validateAttachments(
+   db: D1Database,
+   room: RoomRow,
+   fileIds: string[] | undefined,
+-): Promise<Array<{ file_id: string; label: string }>> {  const unique = Array.from(new Set(fileIds ?? []));
++  boundary: HistoryBoundary,
++): Promise<Array<{ file_id: string; label: string }>> {
++  const unique = Array.from(new Set(fileIds ?? []));
+   if (unique.length > LIMITS.taskAttachmentsMax) {
+     throw invalid('附件', `一次最多引用 ${LIMITS.taskAttachmentsMax} 个文件`);
+   }
+   const attachments: Array<{ file_id: string; label: string }> = [];
+   for (const fileId of unique) {
+     const file = await getRoomFile(db, fileId);
+-    if (!file || file.room_id !== room.room_id || file.deleted_at !== null) {
++    const drive = await getDriveFile(db, fileId);
++    if (!file || file.room_id !== room.room_id || !roomFileUsable(file) ||
++        !visibleCreated(file, boundary) || (drive && !driveFileUsable(drive))) {
+       throw new BusinessError('FILE_UNAVAILABLE', '附件不存在、已删除或不属于该房间', {
+         file_id: fileId,
+       });
+@@ -1164,14 +1171,22 @@ function taskAttachmentStatements(
+         guardSql(
+           'fileUnavailable',
+           `NOT EXISTS (
+-             SELECT 1 FROM room_files
+-              WHERE file_id = ? AND room_id = ? AND deleted_at IS NULL
++             SELECT 1 FROM room_files rf
++             JOIN rooms r ON r.room_id = rf.room_id
++             JOIN room_members rm ON rm.room_id = r.room_id AND rm.actor_id = ?
++              WHERE rf.file_id = ? AND rf.room_id = ? AND rf.deleted_at IS NULL
++                AND rm.status = 'active'
++                AND (rf.retained = 1 OR rf.expires_at > ?)
++                AND (r.kind = 'direct' OR r.member_history_policy = 'full'
++                  OR (rf.created_seq IS NOT NULL AND rf.created_seq >= rm.joined_seq)
++                  OR (rf.created_seq IS NULL AND rf.created_at >= rm.joined_at))
+            ) OR EXISTS (
+-             SELECT 1 FROM drive_files WHERE file_id = ? AND state = 'deleted'
++             SELECT 1 FROM drive_files WHERE file_id = ? AND
++               (state = 'deleted' OR (retained = 0 AND expires_at IS NOT NULL AND expires_at <= ?))
+            )`,
+         ),
+       )
+-      .bind(attachment.file_id, input.roomId, attachment.file_id),
++      .bind(input.caller, attachment.file_id, input.roomId, input.at, attachment.file_id, input.at),
+     db
+       .prepare(
+         `INSERT INTO file_references
+@@ -1376,7 +1391,7 @@ export async function taskCreate(
+     throw invalid('关联任务', '父任务与关联任务不能相同');
+   }
+   const dueAt = parseDueAt(input.due_at);
+-  const attachments = await validateAttachments(db, room, input.attachment_file_ids);
++  const attachments = await validateAttachments(db, room, input.attachment_file_ids, boundary);
+   const payloadHash = await sha256Hex(
+     stableStringify({
+       room_id: room.room_id,
+diff --git a/src/web/chat-members-script.ts b/src/web/chat-members-script.ts
+index 33a21e5..1d77d5e 100644
+--- a/src/web/chat-members-script.ts
++++ b/src/web/chat-members-script.ts
+@@ -762,6 +762,7 @@ async function submitMembersForm(event) {
+   if (!roomId || !room || room.kind !== 'group' || !membersModal || membersModal.hidden) return;
+   if (membersBusy) return;
+   const epoch = roomEpoch;
++  const loadToken = membersLoadToken;
+   if (!canInviteMembers()) {
+     setMembersError('只有群 owner 或管理员可以添加成员。');
+     return;
+@@ -798,12 +799,14 @@ async function submitMembersForm(event) {
+     const added = afterMembers.filter(function (member) {
+       return !before.has(member.actor_id);
+     });
++    // 同房间的服务端结果仍需同步，但不得清空重开弹窗的新选择或解除新请求的锁。
++    applyRoomDetail(result);
++    if (loadToken !== membersLoadToken || membersModal.hidden) return;
+     if (added.length === 0) {
+       setMembersError('所选好友已在群里，成员没有变化。');
+       renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
+       return;
+     }
+-    applyRoomDetail(result);
+     if (membersPicker) membersPicker.clearSelection();
+     // 新成员从右侧候选消失、出现在左侧；弹窗保持打开，便于连续添加。
+     renderCurrentMembers();
+@@ -817,11 +820,11 @@ async function submitMembersForm(event) {
+         (error && error.message ? error.message : error);
+     });
+   } catch (error) {
+-    if (!isActiveRoom(roomId, epoch)) return;
++    if (!isActiveRoom(roomId, epoch) || loadToken !== membersLoadToken || membersModal.hidden) return;
+     // 失败保留已选候选，用户可直接重试。
+     setMembersError(membersUpdateError(error));
+   } finally {
+-    if (isActiveRoom(roomId, epoch)) setMembersBusy(false);
++    if (isActiveRoom(roomId, epoch) && loadToken === membersLoadToken) setMembersBusy(false);
+   }
+ }
+ 
+diff --git a/src/web/chat-outbox-script.ts b/src/web/chat-outbox-script.ts
+index 2a4dbcd..edcfae5 100644
+--- a/src/web/chat-outbox-script.ts
++++ b/src/web/chat-outbox-script.ts
+@@ -388,6 +388,13 @@ function outboxFinishCommitted(intent, options) {
+     if (settings.sentFileKeys) clearComposerFiles(intent.room_id, settings.sentFileKeys);
+     // 当前房间仍显示该意图时才清空输入；响应迟到或用户已改写时保留新内容。
+     if (isActiveRoom(intent.room_id, roomEpoch) && !matches) return;
++    if (!isActiveRoom(intent.room_id, roomEpoch)) {
++      // 离开房间前可能已写下下一条草稿。只清理提交时的原文，不按房间盲删。
++      const savedDraft = drafts.has(intent.room_id)
++        ? drafts.get(intent.room_id)
++        : draftLoad(intent.room_id);
++      if (typeof settings.composerDraft !== 'string' || savedDraft !== settings.composerDraft) return;
++    }
+   }
+   drafts.delete(intent.room_id);
+   draftClear(intent.room_id);
+diff --git a/src/web/chat-script.ts b/src/web/chat-script.ts
+index 4122f17..2ffda2a 100644
+--- a/src/web/chat-script.ts
++++ b/src/web/chat-script.ts
+@@ -144,6 +144,8 @@ let composing = false;
+ let ignoreEnterUntil = 0;
+ let pendingRoomRefreshId = null;
+ let groupLoadSeq = 0;
++// 独立于按钮状态：刷新或切换房间不得释放仍在途的发送锁。
++const composerSendingRooms = new Set();
+ let groupPicker = null;
+ // 发送失败/投递缺失/截断提示必须跨过 SSE 触发的刷新，不能在 300ms 后被清空。
+ let stickyStatus = '';
+@@ -603,108 +605,109 @@ composer.addEventListener('submit', async function (event) {
+   // 发送中再次回车不得新建第二条意图；按钮禁用是同一道闸。
+   if (sendButton.disabled) return;
+   const sendRoomId = activeRoomId;
+-  if (!sendRoomId) return;
++  if (!sendRoomId || composerSendingRooms.has(sendRoomId)) return;
+   const sendEpoch = roomEpoch;
+-  const text = bodyInput.value.trim();
++  const composerDraft = bodyInput.value;
++  const text = composerDraft.trim();
+   const body = composerOutgoingBody(sendRoomId, text);
+   // 只清空本次真拼进正文的文件；发送请求期间的附件不能丢。
+   const sentFileKeys = composerReadyKeys(sendRoomId);
+   if (!body) return;
+-  stickyStatus = '';
+-  statusElement.textContent = '';
+-  // 群聊只信选择器保存的 actor_id：Agent 进 invoke，人类进 mentions；
+-  // 没有任何选择时不传 invoke，保留服务端对正文唯一精确成员的兜底解析。
+-  let invokeTargets = [];
+-  let mentionTargets = [];
+-  let invokeExplicit = false;
+-  let selectionError = null;
+-  if (room && room.kind === 'group') {
+-    const selection = resolvedMentionSelection(sendRoomId, body);
+-    selectionError = selection.error;
+-    if (!selectionError) {
+-      for (const entry of selection.items) {
+-        if (entry.kind === 'agent') invokeTargets.push(entry.actor_id);
+-        else mentionTargets.push(entry.actor_id);
+-      }
+-      // 只要选择器里有仍存在于正文的目标，就显式发送 invoke（可能是 []），
+-      // 不让服务端再从正文猜测其他 Agent。
+-      invokeExplicit = selection.items.length > 0;
+-    }
+-  } else {
+-    const direct = directInvokeTargets();
+-    selectionError = direct.error;
+-    invokeTargets = direct.targets;
+-    invokeExplicit = invokeTargets.length > 0;
+-  }
+-  if (selectionError) {
+-    stickyStatus = selectionError;
+-    statusElement.textContent = stickyStatus;
+-    return;
+-  }
+-  // 同房间、同正文、同目标的失败意图复用原 client_message_id/request_id；
+-  // 修改正文会生成新意图，旧 ID 与新内容由服务端返回冲突。
+-  let intent = outboxFindReusable(
+-    sendRoomId,
+-    body,
+-    invokeTargets,
+-    mentionTargets,
+-    invokeExplicit,
+-  );
+-  const reused = Boolean(intent);
+-  if (intent) {
+-    // 响应丢失后先对账；确认已提交就不再发送第二条。
+-    sendButton.disabled = true;
+-    const decision = await outboxCheckBeforeResend(intent);
+-    if (decision !== 'send') {
+-      outboxRefreshRows();
+-      if (isActiveRoom(sendRoomId, sendEpoch)) {
+-        if (decision === 'committed') {
+-          if (outboxComposerMatches(intent)) {
+-            drafts.delete(sendRoomId);
+-            draftClear(sendRoomId);
+-            mentionSelections.delete(sendRoomId);
+-            clearComposerFiles(sendRoomId, sentFileKeys);
+-            bodyInput.value = '';
+-            hideMentionPicker();
+-            resizeComposer();
+-          }
+-          stickyStatus = '';
+-          statusElement.textContent = '';
+-          await refresh(true).catch(function () {});
+-        } else if (decision === 'conflict') {
+-          statusElement.textContent = '发送失败：' + (intent.error || 'client_message_id 冲突');
+-        } else {
+-          stickyStatus = '暂时无法对账，请稍后重试';
+-          statusElement.textContent = stickyStatus;
++  composerSendingRooms.add(sendRoomId);
++  try {
++    stickyStatus = '';
++    statusElement.textContent = '';
++    // 群聊只信选择器保存的 actor_id：Agent 进 invoke，人类进 mentions；
++    // 没有任何选择时不传 invoke，保留服务端对正文唯一精确成员的兜底解析。
++    let invokeTargets = [];
++    let mentionTargets = [];
++    let invokeExplicit = false;
++    let selectionError = null;
++    if (room && room.kind === 'group') {
++      const selection = resolvedMentionSelection(sendRoomId, body);
++      selectionError = selection.error;
++      if (!selectionError) {
++        for (const entry of selection.items) {
++          if (entry.kind === 'agent') invokeTargets.push(entry.actor_id);
++          else mentionTargets.push(entry.actor_id);
+         }
++        // 只要选择器里有仍存在于正文的目标，就显式发送 invoke（可能是 []），
++        // 不让服务端再从正文猜测其他 Agent。
++        invokeExplicit = selection.items.length > 0;
+       }
+-      sendButton.disabled = false;
++    } else {
++      const direct = directInvokeTargets();
++      selectionError = direct.error;
++      invokeTargets = direct.targets;
++      invokeExplicit = invokeTargets.length > 0;
++    }
++    if (selectionError) {
++      stickyStatus = selectionError;
++      statusElement.textContent = stickyStatus;
+       return;
+     }
+-  } else {
+-    intent = outboxCreate(
++    // 同房间、同正文、同目标的失败意图复用原 client_message_id/request_id；
++    // 修改正文会生成新意图，旧 ID 与新内容由服务端返回冲突。
++    let intent = outboxFindReusable(
+       sendRoomId,
+       body,
+       invokeTargets,
+       mentionTargets,
+       invokeExplicit,
+     );
+-  }
+-  sendButton.disabled = true;
+-  // 自己的消息必须出现在底部；独立标志避免 refresh 合并时丢失强制滚底。
+-  scrollController.pinNextApply();
+-  try {
++    const reused = Boolean(intent);
++    if (intent) {
++      // 响应丢失后先对账；确认已提交就不再发送第二条。
++      sendButton.disabled = true;
++      const decision = await outboxCheckBeforeResend(intent);
++      if (decision !== 'send') {
++        outboxRefreshRows();
++        if (isActiveRoom(sendRoomId, sendEpoch)) {
++          if (decision === 'committed') {
++            if (outboxComposerMatches(intent)) {
++              drafts.delete(sendRoomId);
++              draftClear(sendRoomId);
++              mentionSelections.delete(sendRoomId);
++              clearComposerFiles(sendRoomId, sentFileKeys);
++              bodyInput.value = '';
++              hideMentionPicker();
++              resizeComposer();
++            }
++            stickyStatus = '';
++            statusElement.textContent = '';
++            await refresh(true).catch(function () {});
++          } else if (decision === 'conflict') {
++            statusElement.textContent = '发送失败：' + (intent.error || 'client_message_id 冲突');
++          } else {
++            stickyStatus = '暂时无法对账，请稍后重试';
++            statusElement.textContent = stickyStatus;
++          }
++        }
++        return;
++      }
++    } else {
++      intent = outboxCreate(
++        sendRoomId,
++        body,
++        invokeTargets,
++        mentionTargets,
++        invokeExplicit,
++      );
++    }
++    sendButton.disabled = true;
++    // 自己的消息必须出现在底部；独立标志避免 refresh 合并时丢失强制滚底。
++    scrollController.pinNextApply();
+     await outboxSubmit(intent, {
+       epoch: sendEpoch,
+       sentFileKeys: sentFileKeys,
++      composerDraft: composerDraft,
+       fromRetry: reused,
+       invokeTargets: invokeTargets.length
+     });
+   } finally {
+-    if (isActiveRoom(sendRoomId, sendEpoch)) {
+-      sendButton.disabled = false;
+-      bodyInput.focus();
+-    }
++    composerSendingRooms.delete(sendRoomId);
++    if (activeRoomId === sendRoomId) sendButton.disabled = false;
++    if (isActiveRoom(sendRoomId, sendEpoch)) bodyInput.focus();
+   }
+ });
+ 
+@@ -827,6 +830,8 @@ document.addEventListener('keydown', function (event) {
+ if (groupForm) {
+   groupForm.addEventListener('submit', async function (event) {
+     event.preventDefault();
++    if (!groupModal || groupModal.hidden || groupCreateButton.disabled) return;
++    const submitSeq = groupLoadSeq;
+     const selected = groupPicker ? groupPicker.selectedIds() : [];
+     if (selected.length === 0) {
+       groupErrorElement.textContent = '请至少选择一个成员';
+@@ -844,14 +849,17 @@ if (groupForm) {
+       if (title) args.title = title;
+       const result = await callTool('network_room_create', args);
+       const newRoomId = seedRoomCacheFromDetail(result);
++      // 已提交的群保留在列表中，但旧请求不得打断关闭/重开的弹窗或新路由。
++      if (submitSeq !== groupLoadSeq || groupModal.hidden) return;
+       groupErrorElement.textContent = '';
+       closeGroupModal();
+       navigateTo('/c/' + encodeURIComponent(newRoomId));
+     } catch (error) {
++      if (submitSeq !== groupLoadSeq || groupModal.hidden) return;
+       groupErrorElement.textContent =
+         '创建失败：' + (error && error.message ? error.message : error);
+     } finally {
+-      groupCreateButton.disabled = false;
++      if (submitSeq === groupLoadSeq) groupCreateButton.disabled = false;
+     }
+   });
+ }
+diff --git a/src/web/chat-session-script.ts b/src/web/chat-session-script.ts
+index df5140c..976b369 100644
+--- a/src/web/chat-session-script.ts
++++ b/src/web/chat-session-script.ts
+@@ -368,7 +368,7 @@ function setChatError(message) {
+ function clearChatError() {
+   if (chatErrorElement) chatErrorElement.hidden = true;
+   if (chatErrorTextElement) chatErrorTextElement.textContent = '';
+-  if (sendButton && activeRoomId) sendButton.disabled = false;
++  if (sendButton && activeRoomId) sendButton.disabled = composerSendingRooms.has(activeRoomId);
+ }
+ 
+ function handleRoomError(error, roomId, epoch) {
+@@ -886,7 +886,7 @@ async function openRoom(roomId, options) {
+   renderRooms();
+   clearChatError();
+   updateCopyGroupInfoAffordance();
+-  if (sendButton) sendButton.disabled = false;
++  if (sendButton) sendButton.disabled = composerSendingRooms.has(roomId);
+   const cache = roomCache.get(roomId);
+   if (cache) {
+     applyCachedRoom(cache);
+diff --git a/src/web/pair.ts b/src/web/pair.ts
+index c88369f..064c4f8 100644
+--- a/src/web/pair.ts
++++ b/src/web/pair.ts
+@@ -60,6 +60,9 @@ export function renderPairPage(): string {
+   var redeemRequestId = null;
+   var pollTimer = null;
+   var busy = false;
++  var pairingGeneration = 0;
++  var pairingChallenge = null;
++  var credentialReady = false;
+ 
+   function setStatus(text, error) {
+     statusElement.textContent = text || '';
+@@ -220,8 +223,7 @@ export function renderPairPage(): string {
+     }
+   }
+ 
+-  function localPairToken() {
+-    var challenge = normalizeChallenge(challengeInput.value);
++  function localPairToken(challenge) {
+     var key = PAIR_TOKEN_PREFIX + challenge;
+     var value = sessionGet(key);
+     if (value) return value;
+@@ -255,6 +257,9 @@ export function renderPairPage(): string {
+       setStatus('配对码必须是 12 位（不含 I/L/O/U）；请扫描二维码或让已登录设备重新生成。', true);
+       return;
+     }
++    var generation = ++pairingGeneration;
++    pairingChallenge = challenge;
++    credentialReady = false;
+     busy = true;
+     startButton.disabled = true;
+     switchButton.hidden = true;
+@@ -262,7 +267,7 @@ export function renderPairPage(): string {
+     pairing = null;
+     stopPolling();
+     setStatus('正在向已登录设备发起配对请求…', false);
+-    localToken = localPairToken();
++    localToken = localPairToken(challenge);
+     try {
+       var joined = await callTool('network_device_pairing_join', {
+         request_id: requestId('pair_join'),
+@@ -271,6 +276,7 @@ export function renderPairPage(): string {
+         device_label: deviceLabel(),
+         platform: (navigator.platform || 'web').slice(0, 60)
+       }, localToken);
++      if (generation !== pairingGeneration) return;
+       pairing = joined.pairing;
+       targetIdentity = joined.actor;
+       confirmElement.textContent = joined.pairing.confirm_code || '—';
+@@ -283,6 +289,7 @@ export function renderPairPage(): string {
+       redeemRequestId = requestId('pair_redeem');
+       scheduleRedeem();
+     } catch (error) {
++      if (generation !== pairingGeneration) return;
+       var reason = error && error.details ? error.details.reason : '';
+       setStatus('配对失败：' + (error && error.message ? error.message : String(error)) +
+         ' ' + nextStepFor(reason), true);
+@@ -298,20 +305,27 @@ export function renderPairPage(): string {
+   }
+ 
+   async function redeem() {
+-    if (!pairing || !localToken || !redeemRequestId) return;
++    if (!pairing || !localToken || !redeemRequestId || credentialReady) return;
++    var generation = pairingGeneration;
++    var challenge = pairingChallenge;
++    var token = localToken;
++    var request = redeemRequestId;
+     try {
+       var redeemed = await callTool('network_device_pairing_redeem', {
+-        request_id: redeemRequestId,
+-        challenge: normalizeChallenge(challengeInput.value),
++        request_id: request,
++        challenge: challenge,
+         device_id: deviceId()
+-      }, localToken);
++      }, token);
++      if (generation !== pairingGeneration) return;
+       targetIdentity = redeemed;
++      credentialReady = true;
+       stopPolling();
+       setStatus('已获得独立凭据。确认后切换到此身份并进入；原身份会保留在本机身份列表。', false);
+       switchButton.hidden = false;
+       startButton.disabled = true;
+       return;
+     } catch (error) {
++      if (generation !== pairingGeneration) return;
+       var reason = error && error.details ? error.details.reason : '';
+       if (reason === 'not_approved') {
+         setStatus('等待已登录设备确认。请在另一台设备打开“配对设备”并核对确认码。', false);
+@@ -327,7 +341,7 @@ export function renderPairPage(): string {
+   }
+ 
+   async function switchIdentity() {
+-    if (!targetIdentity || !localToken) return;
++    if (!credentialReady || !targetIdentity || !localToken) return;
+     var previousToken = currentToken();
+     if (!storageSet('agent-network-token', localToken)) {
+       setStatus('浏览器无法保存身份；请允许本地存储后重新配对。', true);
+@@ -345,7 +359,7 @@ export function renderPairPage(): string {
+       return;
+     }
+     try { window.localStorage.removeItem('agent-network-logged-out'); } catch (error) {}
+-    sessionRemove(PAIR_TOKEN_PREFIX + normalizeChallenge(challengeInput.value));
++    sessionRemove(PAIR_TOKEN_PREFIX + pairingChallenge);
+     try {
+       window.history.replaceState(null, '', window.location.pathname + window.location.search);
+     } catch (error) {}
