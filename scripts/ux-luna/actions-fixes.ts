@@ -31,11 +31,14 @@ try {
   await page.locator('#send').click();
   const sent = page.locator('#messages .msg').filter({ has: page.locator('.bubble', { hasText: '引用不会丢草稿' }) });
   await sent.waitFor();
+  const quoteText = (await sent.locator('.reply-reference').innerText()).trim();
+  check(quoteText.includes('明天下午三点见') && !quoteText.includes('查看上下文'),
+    '引用块直接显示原消息摘要');
   const history = await rawTool<any>(d.me.token, 'network_history_list', { room_id: d.rooms.directWang.room_id });
   const reply = history.items.find((item: any) => item.preview === '引用不会丢草稿');
   check(reply?.reply_to === originalId, '发送引用保留真实reply_to');
   check(await page.locator('#composer-reply').isHidden() && await page.locator('#body').inputValue() === '', '成功发送清除本次文本和引用');
-  await sent.getByRole('button', { name: '引用消息 · 查看上下文' }).click();
+  await sent.locator('.reply-reference').click();
   await page.getByRole('dialog', { name: '查看上下文' }).getByText('明天下午三点见，记得带上资料。', { exact: true }).waitFor();
   await page.getByRole('button', { name: '关闭上下文' }).click();
   check(true, '点击引用可查看原消息上下文');

@@ -2,6 +2,7 @@
 export const CHAT_MESSAGE_ACTIONS_SCRIPT = `
 const REPLY_PREFIX = 'agent-network-reply-v1:';
 const replyDrafts = new Map();
+const quotePreviewCache = new Map();
 let messageForwardDialog = null;
 function replyKey(roomId) { return identity ? REPLY_PREFIX + identity.actor_id + ':' + roomId : null; }
 function composerReply(roomId) {
@@ -61,10 +62,34 @@ function messageActionButton(label, action) {
   button.className = 'room-menu-item'; button.setAttribute('role', 'menuitem');
   button.addEventListener('click', function () { closeMessageMenu(); action(); }); return button;
 }
+function quotePreviewText(item) {
+  return senderName(item.sender_id) + '：' + String(item.preview || '消息').slice(0, 120);
+}
+async function resolveQuotePreview(roomId, messageId, quote) {
+  const key = roomId + ':' + messageId;
+  const cached = quotePreviewCache.get(key);
+  if (cached) { quote.textContent = cached; return; }
+  try {
+    const result = await callTool('network_message_context', {
+      room_id: roomId, message_id: messageId, before: 0, after: 0,
+    });
+    const target = (result && Array.isArray(result.items))
+      ? result.items.find(function (value) { return value.message_id === messageId; }) || result.items[0]
+      : null;
+    const text = target ? quotePreviewText(target) : '引用消息不可见';
+    quotePreviewCache.set(key, text);
+    if (quote.isConnected && activeRoomId === roomId) quote.textContent = text;
+  } catch (error) {
+    if (quote.isConnected && activeRoomId === roomId) quote.textContent = '引用消息不可见';
+  }
+}
 function appendMessageActions(item, content) {
   if (item.reply_to) {
     const quote = document.createElement('button'); quote.type = 'button'; quote.className = 'reply-reference';
-    quote.textContent = '引用消息 · 查看上下文'; quote.dataset.replyTo = item.reply_to;
+    quote.dataset.replyTo = item.reply_to;
+    const target = currentItems.find(function (value) { return value.message_id === item.reply_to; });
+    if (target) quote.textContent = quotePreviewText(target);
+    else { quote.textContent = '引用消息 · 查看上下文'; resolveQuotePreview(activeRoomId, item.reply_to, quote); }
     content.prepend(quote);
   }
   if (Number(item.body_bytes) === 0) return;
