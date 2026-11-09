@@ -14,6 +14,7 @@ import { remindStaleTasks } from '../domain/task-reminders';
 import { NotificationHub } from '../realtime/hub';
 import { scheduleOutboxDrain } from '../realtime/outbox';
 import { AgentPresenceTimeline } from '../realtime/presence-timeline';
+import { buildChatIconsBundle } from '../web/chat-icons-bundle';
 import { buildDrawboardBundle } from '../web/drawboard-bundle';
 import { buildMarkdownBundle } from '../web/markdown-bundle';
 import { buildResizerBundle } from '../web/resizer-bundle';
@@ -176,10 +177,11 @@ if (process.env.DRIVE_DISABLED !== '1') {
   );
 }
 
-const [markdownBundle, resizerBundle, drawboardBundle] = await Promise.all([
+const [markdownBundle, resizerBundle, drawboardBundle, iconBundle] = await Promise.all([
   buildMarkdownBundle(),
   buildResizerBundle(),
   buildDrawboardBundle(),
+  buildChatIconsBundle(),
 ]);
 if (markdownBundle) {
   console.log(
@@ -196,6 +198,11 @@ if (drawboardBundle) {
     `drawboard asset ready: ${(drawboardBundle.code.length / 1024).toFixed(0)} KiB (v${drawboardBundle.version})`,
   );
 }
+if (iconBundle) {
+  console.log(
+    `icon motion asset ready: ${(iconBundle.code.length / 1024).toFixed(0)} KiB (v${iconBundle.version})`,
+  );
+}
 
 const app = createApp(env, {
   mount,
@@ -205,6 +212,8 @@ const app = createApp(env, {
   resizerAssetVersion: resizerBundle?.version ?? null,
   drawboardAsset: drawboardBundle?.code ?? null,
   drawboardAssetVersion: drawboardBundle?.version ?? null,
+  iconAsset: iconBundle?.code ?? null,
+  iconAssetVersion: iconBundle?.version ?? null,
 });
 
 const server = Bun.serve({

@@ -63,6 +63,7 @@ export function chatClientScript(
   markdownVersion: string | null = null,
   resizerVersion: string | null = null,
   drawboardVersion: string | null = null,
+  iconVersion: string | null = null,
 ): string {
   const roomJson = roomId === null ? 'null' : jsonForScript(roomId);
   const markdownAssetUrl = markdownVersion
@@ -74,6 +75,10 @@ export function chatClientScript(
   const drawboardAssetUrl = drawboardVersion
     ? `/assets/chat-drawboard.js?v=${encodeURIComponent(drawboardVersion)}`
     : '/assets/chat-drawboard.js';
+  // 图标动效是渐进增强：脚本缺失或失败时，服务端已生成的静态 SVG 仍可用。
+  const iconAssetUrl = iconVersion
+    ? `/assets/chat-icons.js?v=${encodeURIComponent(iconVersion)}`
+    : '/assets/chat-icons.js';
   return `<script>
 const initialRoomId = ${roomJson};
 const MARKDOWN_ASSET_URL = ${jsonForScript(markdownAssetUrl)};
@@ -883,5 +888,6 @@ if (loggedOutStartButton) {
 </script>
 <script>
 ${QR_ENCODER_SCRIPT}
-</script>`;
+</script>
+<script type="module" src="${iconAssetUrl}"></script>`;
 }

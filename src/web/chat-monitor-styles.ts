@@ -36,6 +36,8 @@ export const MONITOR_STYLE = `
     stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .monitor-icon.primary { background: var(--wx-green); color: #fff; }
   .monitor-icon.primary:hover { background: var(--wx-green-strong); color: #fff; }
+  /* 主按钮上的 Kubai 图标以白色为底色；内部勾选改用绿色，避免白底白勾。 */
+  .monitor-icon.primary .kubai-icon { --ki-e: var(--wx-green-strong); --ki-w: var(--wx-green); }
   .monitor-icon:disabled { opacity: .45; cursor: default; }
   .monitor-icon[aria-disabled="true"] { background: transparent; color: var(--wx-muted);
     opacity: .45; cursor: default; }

@@ -1,5 +1,6 @@
 import { LIMITS } from '../contracts/limits';
 import { deviceHandoffAccount } from './handoff';
+import { kubaiIcon } from './icons';
 
 /**
  * 微信式应用页的静态标记。
@@ -15,31 +16,16 @@ export function sidebarPane(): string {
     <div class="brand-row">
       <h1>WeBots</h1>
       <button class="icon-btn" id="contact-requests" type="button" aria-label="好友申请" title="好友申请">
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <circle cx="9" cy="8" r="3.2"></circle>
-          <path d="M3.6 19.2c0-3.1 2.4-5.2 5.4-5.2s5.4 2.1 5.4 5.2"></path>
-          <path d="M15.6 5.6a3.2 3.2 0 0 1 0 5.8"></path>
-          <path d="M17.8 14.5c1.6.7 2.6 2.3 2.6 4.7"></path>
-        </svg>
+        ${kubaiIcon('contact-requests', { size: 18 })}
         <span class="request-badge" id="contact-requests-badge" hidden>0</span>
       </button>
       <button class="icon-btn" id="my-tasks" type="button" aria-label="我的任务" title="我的任务" hidden>
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <rect x="5" y="4.5" width="14" height="16" rx="2.5"></rect>
-          <path d="M9.5 4.5V3.3c0-.4.3-.7.7-.7h3.6c.4 0 .7.3.7.7v1.2"></path>
-          <path d="M8.6 11.2l1.1 1.1 2-2.2"></path>
-          <path d="M14 11.4h2.2"></path>
-          <path d="M8.6 15.6l1.1 1.1 2-2.2"></path>
-          <path d="M14 15.8h2.2"></path>
-        </svg>
+        ${kubaiIcon('my-tasks', { size: 18 })}
       </button>
       <button class="icon-btn" id="new-group" type="button" aria-label="新建群聊" title="新建群聊">+</button>
     </div>
     <label class="search-box">
-      <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <circle cx="11" cy="11" r="6.5"></circle>
-        <path d="M16 16l4 4"></path>
-      </svg>
+      ${kubaiIcon('search', { size: 15, className: 'search-icon' })}
       <input id="room-search" type="search" placeholder="搜索" autocomplete="off" aria-label="搜索会话">
     </label>
     <div class="room-filter" id="room-filter" role="tablist" aria-label="会话类型">
@@ -150,9 +136,7 @@ export function chatPane(): string {
   return `<section class="chat-pane" aria-label="聊天区">
   <header class="chat-head">
     <a class="back" id="back" href="/" aria-label="返回会话列表">
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <path d="M15 5l-7 7 7 7"></path>
-      </svg>
+      ${kubaiIcon('back', { size: 22 })}
     </a>
     <div class="chat-id">
       <div class="title-row">
@@ -165,10 +149,7 @@ export function chatPane(): string {
     </div>
     <button class="copy-group-info" id="copy-group-info" type="button" hidden
       aria-label="复制群信息" title="复制群信息">
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <rect x="8" y="8" width="11" height="11" rx="2"></rect>
-        <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
-      </svg>
+      ${kubaiIcon('copy-group-info', { size: 17 })}
     </button>
     <button class="task-toggle" id="task-toggle" type="button" hidden
       aria-haspopup="dialog" aria-controls="task-popover" aria-expanded="false"
@@ -180,10 +161,7 @@ export function chatPane(): string {
     <button class="monitor-toggle" id="monitor-toggle" type="button"
       aria-controls="monitor-pane" aria-expanded="false"
       aria-label="打开网页监控" title="网页监控">
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <rect x="3" y="4" width="18" height="16" rx="2"></rect>
-        <path d="M3 9h18M7 6.5h.01M10 6.5h.01"></path>
-      </svg>
+      ${kubaiIcon('monitor-toggle', { size: 16 })}
       <span>网页</span>
     </button>
     <button class="files-toggle" id="files-toggle" type="button"
@@ -611,25 +589,25 @@ export function monitorPane(): string {
     <div class="monitor-actions">
       <button class="monitor-icon primary" id="monitor-save" type="submit"
         aria-label="保存网页地址" title="保存网页地址（Enter）">
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12.5l4.2 4.2L19 7"></path></svg>
+        ${kubaiIcon('monitor-save', { size: 16 })}
       </button>
       <button class="monitor-icon" id="monitor-clear" type="button"
         aria-label="清除网页地址" title="清除网页地址">
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M9 7V5h6v2M6.5 7l.9 12h9.2l.9-12M10 11v4M14 11v4"></path></svg>
+        ${kubaiIcon('monitor-clear', { size: 16 })}
       </button>
       <a class="monitor-icon monitor-external" id="monitor-external" href="#"
         target="_blank" rel="noopener" aria-disabled="true"
         title="仅打开可信网页；目标站点可能拒绝嵌入（X-Frame-Options/CSP），HTTPS 可能阻止 HTTP 目标；iframe 未加 sandbox，同源页面可读取本页登录凭据。"
         aria-label="新标签页打开网页；仅限可信地址，iframe 未加 sandbox，同源页面可读取本页登录凭据">
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 16L16 8M9.5 8H16v6.5"></path></svg>
+        ${kubaiIcon('monitor-external', { size: 16 })}
       </a>
       <button class="monitor-icon" id="monitor-refresh" type="button"
         aria-label="刷新网页" title="刷新网页（重新读取地址）">
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12a7 7 0 1 1-2.05-4.95"></path><path d="M19 5v4h-4"></path></svg>
+        ${kubaiIcon('monitor-refresh', { size: 16 })}
       </button>
       <button class="monitor-icon monitor-close" id="monitor-close" type="button"
         aria-label="关闭网页监控" title="关闭网页监控">
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 7l10 10M17 7L7 17"></path></svg>
+        ${kubaiIcon('monitor-close', { size: 16 })}
       </button>
     </div>
   </form>
