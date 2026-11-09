@@ -322,7 +322,7 @@ async function main(): Promise<void> {
     })()`);
     const anchorBefore = await captureAnchor();
     console.log('before-cache-switch', JSON.stringify({ full, anchorBefore }));
-    await page.getByRole('tab', { name: '单聊', exact: true }).click();
+    await page.getByRole('tab', { name: 'Agent', exact: true }).click();
     await page.locator('#room-list a[href="/c/' + data.alternateRoomId + '"]').click();
     await page.waitForFunction(() => document.querySelector('#chat-body')?.getAttribute('aria-busy') === 'false');
     await page.getByRole('tab', { name: '群聊', exact: true }).click();

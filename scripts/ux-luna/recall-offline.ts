@@ -48,7 +48,7 @@ try {
   check(await targetRow.count() === 1, '旧消息已实际进入浏览器历史缓存');
   const beforeText = await targetRow.innerText();
   check(beforeText.includes(oldBody), '缓存中的旧消息正文在撤回前可见');
-  await pageA.getByRole('tab', { name: '单聊', exact: true }).click();
+  await pageA.getByRole('tab', { name: '好友', exact: true }).click();
   await pageA.locator('#room-list a[href="/c/' + d.rooms.directWang.room_id + '"]').click();
   await pageA.waitForFunction(() => document.querySelector('#chat-body')?.getAttribute('aria-busy') === 'false');
 
@@ -112,7 +112,7 @@ try {
 
   const privateBody = '被移出房间后必须清理的展开正文：' + '本地缓存秘密内容。'.repeat(80);
   await rawTool(d.wang.token, 'network_message_send', { request_id: id(), client_message_id: id(), room_id: d.rooms.history.room_id, body: privateBody, invoke: [] });
-  await pageB.getByRole('tab', { name: '单聊', exact: true }).click();
+  await pageB.getByRole('tab', { name: '好友', exact: true }).click();
   await pageB.locator('#room-list a[href="/c/' + d.rooms.directWang.room_id + '"]').click();
   await pageB.getByRole('tab', { name: '群聊', exact: true }).click();
   await pageB.locator('#room-list a[href="/c/' + d.rooms.history.room_id + '"]').click();

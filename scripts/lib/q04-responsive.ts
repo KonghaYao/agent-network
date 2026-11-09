@@ -285,13 +285,13 @@ export async function runResponsiveAcceptance(state: Q04State, browser: Browser)
     await failContext.context.close();
   }
 
-  // P1 缺口：不得伪造通话/媒体/搜索/收藏/置顶/转发/撤回入口。
+  // P1 缺口：不得伪造通话/媒体/收藏入口（置顶/免打扰、引用、搜索、转发、撤回已实现）。
   const p1 = await openRoomAt(browser, state, { width: 1280, height: 900 }, 'light');
   try {
     const labels = (await p1.page.evaluate(`(() => Array.from(document.querySelectorAll('button, a'))
       .map((node) => (node.textContent || '').trim())
       .filter(Boolean))()`)) as string[];
-    for (const forbidden of ['通话', '语音通话', '视频通话', '收藏', '置顶', '转发', '撤回']) {
+    for (const forbidden of ['通话', '语音通话', '视频通话', '收藏']) {
       check(
         `P1 缺口未伪造入口：${forbidden}`,
         !labels.some((label) => label.includes(forbidden)),

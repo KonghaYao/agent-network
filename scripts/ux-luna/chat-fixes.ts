@@ -12,7 +12,7 @@ if(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)browserOptions.executablePath
 const browser=await chromium.launch(browserOptions);
 const context=await browser.newContext({viewport:{width:1280,height:900}});await context.addInitScript(token=>localStorage.setItem('agent-network-token',token),d.me.token);const page=await context.newPage();page.setDefaultTimeout(7000);
 const id=()=>crypto.randomUUID();const results:any[]=[];const pageErrors:string[]=[];page.on('pageerror',(e)=>pageErrors.push(e.message));page.on('console',(m)=>{if(m.type()==='error')console.log('CONSOLE',m.text())});
-async function open(page:Page,tab:'单聊'|'群聊',roomId:string){await page.getByRole('tab',{name:tab,exact:true}).click();await page.locator('#room-list a[href="/c/'+roomId+'"]').click();await page.locator('#chat-body').waitFor();await page.waitForFunction(()=>document.querySelector('#chat-body')?.getAttribute('aria-busy')==='false');}
+async function open(page:Page,tab:'好友'|'Agent'|'群聊',roomId:string){await page.getByRole('tab',{name:tab,exact:true}).click();await page.locator('#room-list a[href="/c/'+roomId+'"]').click();await page.locator('#chat-body').waitFor();await page.waitForFunction(()=>document.querySelector('#chat-body')?.getAttribute('aria-busy')==='false');}
 async function position(){return page.locator('#messages').evaluate((el:any)=>{const rect=el.getBoundingClientRect();const row=[...el.querySelectorAll('[data-message-id]')].find((node:any)=>{const r=node.getBoundingClientRect();return r.bottom>rect.top&&r.top<rect.bottom});return {top:el.scrollTop,scrollHeight:el.scrollHeight,clientHeight:el.clientHeight,first:row?.getAttribute('data-message-id'),offset:row?row.getBoundingClientRect().top-rect.top:null,text:(row?.textContent||'').slice(0,100)};});}
 async function menu(roomId:string){await page.locator('#room-list a[href="/c/'+roomId+'"]').click({button:'right'});await page.locator('#room-menu').waitFor({state:'visible'});}
 try {
@@ -35,7 +35,7 @@ try {
 
  // U02: restore the visible history item/offset, then keep it stable for an inbound message and older-page load.
  await page.locator('#body').fill('');await page.locator('#messages').hover();await page.mouse.wheel(0,-900);await page.waitForTimeout(350);const before=await position();const domBefore=await page.locator('#messages .msg[data-message-id]').count();
- const reopenStarted=Date.now();await open(page,'单聊',d.rooms.directWang.room_id);await open(page,'群聊',d.rooms.history.room_id);await page.waitForTimeout(450);const reopenMs=Date.now()-reopenStarted;const after=await position();const domAfter=await page.locator('#messages .msg[data-message-id]').count();
+ const reopenStarted=Date.now();await open(page,'好友',d.rooms.directWang.room_id);await open(page,'群聊',d.rooms.history.room_id);await page.waitForTimeout(450);const reopenMs=Date.now()-reopenStarted;const after=await position();const domAfter=await page.locator('#messages .msg[data-message-id]').count();
  const restored=before.first===after.first&&Math.abs(Number(before.offset)-Number(after.offset))<3;
  let historyLoaded=false;let historyBefore:any=null;let afterAutoOlder:any=null;let historyLoadAttempts=0;
  let messageCount=await page.locator('#messages .msg[data-message-id]').count();
@@ -52,7 +52,7 @@ try {
  results.push({id:'U02',status:loadedCount>80&&domAfter===domBefore&&restored&&olderLoadedWithoutJump&&noJumpBottom&&jumpVisible?'PASS':'FAIL',loadedHistoryDomBeforeSwitch:domBefore,loadedHistoryDomAfterReturn:domAfter,reopenMs,olderClicks,cacheOverRenderMax:loadedCount>80,beforeSwitch:before,afterReturn:after,restored,historyLoaded,historyLoadAttempts,historyBefore,afterAutoOlder,olderLoadedWithoutJump,afterOlderLoad:beforeInbound,afterInboundMessage:afterInbound,jumpLatestVisible:jumpVisible,noForcedBottom:noJumpBottom});
 
  // U03: while a direct chat remains selected, an unread group message must be discoverable cross-tab.
- await open(page,'单聊',d.rooms.directWang.room_id);const directTabUnread=await page.locator('#room-filter-direct .room-filter-unread').innerText().catch(()=>null);
+ await open(page,'好友',d.rooms.directWang.room_id);const directTabUnread=await page.locator('#room-filter-friend .room-filter-unread').innerText().catch(()=>null);
  await rawTool(d.wang.token,'network_message_send',{request_id:id(),client_message_id:id(),room_id:d.rooms.joined.room_id,body:'跨分类未读提示修复验证',invoke:[]});await page.waitForTimeout(800);
  const groupBadge=await page.locator('#room-filter-group .room-filter-unread').innerText().catch(()=>null);
  const groupDescription=await page.locator('#room-filter-group').getAttribute('aria-describedby');

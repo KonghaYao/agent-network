@@ -39,7 +39,7 @@ async function waitContains(target:any,selector:string,value:string){
   await target.waitForFunction(({selector,value}:any)=>Boolean(document.querySelector(selector)?.textContent?.includes(value)),{selector,value},{timeout:8000});
 }
 async function openRoom(target:any,roomId:string,kind:'direct'|'group'){
-  const filter=target.locator(kind==='group'?'#room-filter-group':'#room-filter-direct');
+  const filter=target.locator(kind==='group'?'#room-filter-group':'#room-filter-friend');
   await filter.click();
   const link=target.locator('#room-list a[href="/c/'+roomId+'"]');
   await link.waitFor({state:'visible'});
@@ -287,7 +287,7 @@ try{
   await page.keyboard.press('Escape');
   await page.locator('#members-modal').waitFor({state:'hidden'});
   const statusAfterClose=await page.locator('#group-profile-status').innerText();
-  await page.locator('#room-filter-direct').click();
+  await page.locator('#room-filter-friend').click();
   await page.locator('#room-list a[href="/c/'+data.rooms.directLi.room_id+'"]').click();
   await page.waitForFunction((id:string)=>location.pathname==='/c/'+encodeURIComponent(id),data.rooms.directLi.room_id);
   delayed.release();
@@ -311,7 +311,7 @@ try{
   await delayedAnnouncement.seen;
   await page.keyboard.press('Escape');
   await page.locator('#announcement-modal').waitFor({state:'hidden'});
-  await page.locator('#room-filter-direct').click();
+  await page.locator('#room-filter-friend').click();
   await page.locator('#room-list a[href="/c/'+data.rooms.directLi.room_id+'"]').click();
   await page.waitForFunction((id:string)=>location.pathname==='/c/'+encodeURIComponent(id),data.rooms.directLi.room_id);
   delayedAnnouncement.release();

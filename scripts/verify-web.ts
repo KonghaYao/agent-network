@@ -6481,7 +6481,7 @@ async function main(): Promise<void> {
       checkEqual(
         '会话菜单按管理动作到安全动作排序',
         menuOrder.join(','),
-        'room-menu-copy-prompt,room-menu-transfer,room-menu-archive,' +
+        'room-menu-copy-prompt,room-menu-pin,room-menu-mute,room-menu-transfer,room-menu-archive,' +
           'room-menu-toggle-disabled,room-menu-reissue-token,room-menu-report,' +
           'room-menu-block,room-menu-delete-friend,room-menu-leave-group,room-menu-dissolve',
       );
