@@ -48,9 +48,12 @@ function ensureRoomFilterAnnouncement(kind) {
 
 function readRoomFilter() {
   try {
-    return localStorage.getItem(ROOM_FILTER_KEY) === 'group' ? 'group' : 'direct';
+    const stored = localStorage.getItem(ROOM_FILTER_KEY);
+    // 旧版只有 direct/group；direct 与缺失值统一迁移到好友分类。
+    if (stored === 'agent' || stored === 'group') return stored;
+    return 'friend';
   } catch (error) {
-    return 'direct';
+    return 'friend';
   }
 }
 
@@ -96,7 +99,7 @@ function updateRoomFilterTabs() {
 }
 
 function setRoomFilter(value, options) {
-  if (value !== 'direct' && value !== 'group') return;
+  if (value !== 'friend' && value !== 'agent' && value !== 'group') return;
   const settings = options || {};
   if (value !== roomFilter) {
     roomFilter = value;
@@ -106,19 +109,37 @@ function setRoomFilter(value, options) {
   if (settings.render !== false) renderRooms();
 }
 
-/** 进入房间时切到对应分类，避免当前会话被另一分类隐藏。 */
+/**
+ * 进入房间时切到对应分类，避免当前会话被另一分类隐藏。
+ * 条目或 peer 信息未就绪时只使用已知 kind，不因未知信息误切。
+ */
 function syncRoomFilterForRoom(roomId) {
   if (!roomId) return;
   const entry = roomEntries.find(function (item) { return item.room_id === roomId; });
-  if (!entry || (entry.kind !== 'direct' && entry.kind !== 'group')) return;
-  if (entry.kind !== roomFilter) setRoomFilter(entry.kind, { render: false });
+  if (!entry) return;
+  let target = null;
+  if (entry.kind === 'group') target = 'group';
+  else if (entry.kind === 'direct') {
+    target = entry.peer_kind === 'agent' ? 'agent' : 'friend';
+  }
+  if (target && target !== roomFilter) setRoomFilter(target, { render: false });
+}
+
+/** direct 分类：Agent 与好友互斥；active 房间始终保留，避免 peer 后补全时消失。 */
+function roomMatchesFilter(entry) {
+  if (isArchivedAgentRoom(entry)) return false;
+  if (roomFilter === 'group') return entry.kind === 'group';
+  if (entry.kind !== 'direct') return false;
+  if (entry.room_id === activeRoomId) return true;
+  const isAgent = entry.peer_kind === 'agent';
+  return roomFilter === 'agent' ? isAgent : !isAgent;
 }
 
 function roomFilterEmptyMessage() {
   if (emptyListMessage) return emptyListMessage;
-  return roomFilter === 'group'
-    ? '还没有群聊。点击右上角 + 新建群聊。'
-    : '还没有单聊。打开 Agent 分享链接即可开始。';
+  if (roomFilter === 'group') return '还没有群聊。点击右上角 + 新建群聊。';
+  if (roomFilter === 'agent') return '还没有 Agent 会话。打开 Agent 分享链接即可开始。';
+  return '还没有好友会话。通过好友申请或好友链接添加后即可开始。';
 }
 
 const AVATAR_COLORS = ['#5b8def', '#e8a33d', '#6aa84f', '#d96459', '#8e7cc3', '#3d9a9a'];
@@ -559,11 +580,10 @@ function createRoomListItem(entry) {
 function renderRooms() {
   if (!roomListElement) return;
   updateRoomFilterTabs();
-  roomListElement.setAttribute('aria-label', roomFilter === 'group' ? '群聊' : '单聊');
+  const filterLabel = roomFilter === 'group' ? '群聊' : roomFilter === 'agent' ? 'Agent' : '好友';
+  roomListElement.setAttribute('aria-label', filterLabel);
   // 归档只影响默认列表与总览搜索；房间与消息仍可按 /c/<room_id> 使用。
-  const visibleEntries = roomEntries.filter(function (entry) {
-    return !isArchivedAgentRoom(entry) && entry.kind === roomFilter;
-  });
+  const visibleEntries = roomEntries.filter(roomMatchesFilter);
   const query = searchQuery.trim().toLowerCase();
   const filteredEntries = query ? visibleEntries.filter(function (entry) {
     return roomMatches(entry, query);

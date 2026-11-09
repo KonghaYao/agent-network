@@ -1801,9 +1801,17 @@ async function runAvatarAcceptance(
     if (url.startsWith('http') && !url.startsWith(base)) externalRequests.push(url);
   });
   await page.goto(`${base}/`);
+  await page.locator('#room-filter-agent').click();
   await waitRoomListName(page, 'Codex 测试');
   await waitRoomListName(page, 'Tibo Reset');
   await waitRoomListName(page, 'poteto');
+  await page.waitForFunction(
+    `(() => {
+      const img = document.querySelector(${JSON.stringify(`${roomLink(codexRoom.room.room_id)} .avatar-img`)});
+      return Boolean(img && img.complete && img.naturalWidth > 0);
+    })()`,
+  );
+  await page.locator('#room-filter-friend').click();
   await waitRoomListName(page, 'KonghaYao');
   const ownAccount = (await page.evaluate(
     `(() => {
@@ -1833,12 +1841,6 @@ async function runAvatarAcceptance(
       ownAccount!.text === Array.from(ownAccount!.name ?? '')[0] &&
       ownAccount!.background !== '',
     ownAccount,
-  );
-  await page.waitForFunction(
-    `(() => {
-      const img = document.querySelector(${JSON.stringify(`${roomLink(codexRoom.room.room_id)} .avatar-img`)});
-      return Boolean(img && img.complete && img.naturalWidth > 0);
-    })()`,
   );
 
   const mapping = (await page.evaluate(
@@ -1911,8 +1913,9 @@ async function runAvatarAcceptance(
     kindMapping,
   );
 
-  await page.locator('#room-filter-direct').click();
-  const directSidebar = (await page.evaluate(
+  await page.locator('#room-filter-agent').click();
+  await page.locator(roomLink(codexRoom.room.room_id)).waitFor();
+  const agentSidebar = (await page.evaluate(
     `(() => {
       function read(roomId) {
         const link = document.querySelector('#room-list a.room-item[href="/c/' + roomId + '"]');
@@ -1941,6 +1944,23 @@ async function runAvatarAcceptance(
     poteto: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
     kong: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
   };
+  await page.locator('#room-filter-friend').click();
+  await page.locator(roomLink(kongRoom.room.room_id)).waitFor();
+  const friendSidebar = (await page.evaluate(
+    `(() => {
+      const link = document.querySelector(${JSON.stringify(roomLink(kongRoom.room.room_id))});
+      if (!link) return null;
+      const avatar = link.querySelector('.avatar');
+      const image = avatar ? avatar.querySelector('img.avatar-img') : null;
+      return {
+        src: image ? image.getAttribute('src') : null,
+        text: avatar ? avatar.textContent : null,
+        icon: avatar ? avatar.classList.contains('avatar-icon') : false,
+        cells: link.querySelectorAll('.avatar-cell').length
+      };
+    })()`,
+  )) as { src: string | null; text: string | null; icon: boolean; cells: number } | null;
+  const directSidebar = { ...agentSidebar, kong: friendSidebar };
   await page.locator('#room-filter-group').click();
   const groupSidebar = (await page.evaluate(
     `(() => {
@@ -2156,7 +2176,7 @@ async function runAvatarAcceptance(
     actor_id: poteto.actor.actor_id,
   });
   await page.goto(`${base}/`);
-  await page.locator('#room-filter-direct').click();
+  await page.locator('#room-filter-agent').click();
   await waitRoomListName(page, '琶洲-dsh-dsh');
   await page.locator('#archived-agents').click();
   await page.waitForFunction(
@@ -2365,6 +2385,7 @@ async function runAvatarAcceptance(
   const darkPage = await darkContext.newPage();
   darkPage.setDefaultTimeout(15_000);
   await darkPage.goto(`${base}/`);
+  await darkPage.locator('#room-filter-agent').click();
   await waitRoomListName(darkPage, 'Codex 测试');
   await darkPage.waitForFunction(
     `(() => {
@@ -2473,6 +2494,7 @@ async function runAvatarAcceptance(
     await route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' });
   });
   await failPage.goto(`${base}/`);
+  await failPage.locator('#room-filter-agent').click();
   await waitRoomListName(failPage, 'Codex 测试');
   await failPage.waitForFunction(
     `(() => {
@@ -4351,7 +4373,7 @@ async function main(): Promise<void> {
     browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined });
     console.log(`浏览器验收: ${server.base}`);
 
-    // 1. 侧栏分类：单聊/群聊切换、搜索范围、未读、排序、归档、持久化与移动端暗色。
+    // 1. 侧栏分类：好友/Agent/群聊切换、搜索范围、未读、排序、归档、持久化与移动端暗色。
     {
       const { context, page } = await makeContext(
         browser,
@@ -4360,11 +4382,12 @@ async function main(): Promise<void> {
         allErrors,
       );
       await page.goto(`${server.base}/`);
+      await page.locator('#room-filter-agent').click();
       await page.locator('#room-list .room-item').first().waitFor();
 
       // 好友申请入口：独立收件箱、弹窗接受，不在申请时创建房间。
       const uiRequesterToken = crypto.randomUUID();
-      await rawTool<Actor>(uiRequesterToken, 'network_register', {
+      const uiRequester = await rawTool<Actor>(uiRequesterToken, 'network_register', {
         request_id: requestId('web_reg'),
         kind: 'human',
         name: '好友申请界面用户',
@@ -4572,13 +4595,88 @@ async function main(): Promise<void> {
         'network_contacts_list',
         { limit: 100 },
       );
-      checkEqual(
+      check(
         '网页接受后申请方看到 active 关系',
         uiRequesterRelation.items.find((item) => item.actor_id === data.human.actor_id)?.relation,
         'active',
       );
+      const contactDesktopLayout = (await page.evaluate(`(() => {
+        const card = document.querySelector('#contact-modal .contact-modal-card');
+        const columns = document.querySelector('#contact-modal .contact-columns');
+        const left = document.querySelector('#contact-modal .contact-column-left');
+        const right = document.querySelector('#contact-modal .contact-column-right');
+        const policy = document.querySelector('#contact-modal .contact-policy');
+        const requests = document.querySelector('#contact-modal .contact-requests-panel');
+        const link = document.querySelector('#contact-modal .contact-link-panel');
+        const friends = document.querySelector('#contact-modal .contact-friends-panel');
+        if (!card || !columns || !left || !right) return null;
+        const cardBox = card.getBoundingClientRect();
+        const leftBox = left.getBoundingClientRect();
+        const rightBox = right.getBoundingClientRect();
+        return {
+          display: getComputedStyle(columns).display,
+          view: window.innerWidth,
+          doc: document.documentElement.scrollWidth,
+          cardLeft: cardBox.left,
+          cardRight: cardBox.right,
+          leftTop: leftBox.top,
+          leftRight: leftBox.right,
+          leftBottom: leftBox.bottom,
+          rightTop: rightBox.top,
+          rightLeft: rightBox.left,
+          policyInLeft: Boolean(policy) && left.contains(policy),
+          requestsInLeft: Boolean(requests) && left.contains(requests),
+          linkInRight: Boolean(link) && right.contains(link),
+          friendsInRight: Boolean(friends) && right.contains(friends)
+        };
+      })()`)) as {
+        display: string;
+        view: number;
+        doc: number;
+        cardLeft: number;
+        cardRight: number;
+        leftTop: number;
+        leftRight: number;
+        leftBottom: number;
+        rightTop: number;
+        rightLeft: number;
+        policyInLeft: boolean;
+        requestsInLeft: boolean;
+        linkInRight: boolean;
+        friendsInRight: boolean;
+      } | null;
+      checkEqual('1280px 好友弹窗为两栏网格', contactDesktopLayout?.display, 'grid');
+      check(
+        '1280px 好友弹窗左栏在右栏左侧',
+        Boolean(contactDesktopLayout) &&
+          contactDesktopLayout!.leftRight <= contactDesktopLayout!.rightLeft + 1 &&
+          contactDesktopLayout!.leftTop <= contactDesktopLayout!.rightTop + 1,
+        contactDesktopLayout,
+      );
+      check(
+        '1280px 接收策略与待处理申请在左栏、好友链接与我的好友在右栏',
+        Boolean(contactDesktopLayout) &&
+          contactDesktopLayout!.policyInLeft &&
+          contactDesktopLayout!.requestsInLeft &&
+          contactDesktopLayout!.linkInRight &&
+          contactDesktopLayout!.friendsInRight,
+        contactDesktopLayout,
+      );
+      check(
+        '1280px 好友弹窗不横向溢出',
+        Boolean(contactDesktopLayout) &&
+          contactDesktopLayout!.doc <= contactDesktopLayout!.view &&
+          contactDesktopLayout!.cardLeft >= 0 &&
+          contactDesktopLayout!.cardRight <= contactDesktopLayout!.view + 1,
+        contactDesktopLayout,
+      );
       await page.locator('#contact-modal-close').click();
       await page.locator('#contact-modal').waitFor({ state: 'hidden' });
+      const uiHumanRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [uiRequester.actor_id],
+      });
 
       // 我的任务图标：点击打开任务面板，关闭后不残留。
       await page.locator('#my-tasks').click();
@@ -4659,29 +4757,187 @@ async function main(): Promise<void> {
             ),
           mobileBrandMetrics.icons,
         );
+        await mobileIcons.page.locator('#contact-requests').click();
+        await mobileIcons.page.locator('#contact-modal').waitFor({ state: 'visible' });
+        const contactMobileLayout = (await mobileIcons.page.evaluate(`(() => {
+          const card = document.querySelector('#contact-modal .contact-modal-card');
+          const columns = document.querySelector('#contact-modal .contact-columns');
+          const left = document.querySelector('#contact-modal .contact-column-left');
+          const right = document.querySelector('#contact-modal .contact-column-right');
+          if (!card || !columns || !left || !right) return null;
+          const cardBox = card.getBoundingClientRect();
+          const leftBox = left.getBoundingClientRect();
+          const rightBox = right.getBoundingClientRect();
+          const columnsStyle = getComputedStyle(columns);
+          return {
+            display: columnsStyle.display,
+            direction: columnsStyle.flexDirection,
+            view: window.innerWidth,
+            doc: document.documentElement.scrollWidth,
+            cardLeft: cardBox.left,
+            cardRight: cardBox.right,
+            leftLeft: leftBox.left,
+            leftRight: leftBox.right,
+            leftBottom: leftBox.bottom,
+            rightLeft: rightBox.left,
+            rightRight: rightBox.right,
+            rightTop: rightBox.top
+          };
+        })()`)) as {
+          display: string;
+          direction: string;
+          view: number;
+          doc: number;
+          cardLeft: number;
+          cardRight: number;
+          leftLeft: number;
+          leftRight: number;
+          leftBottom: number;
+          rightLeft: number;
+          rightRight: number;
+          rightTop: number;
+        } | null;
+        checkEqual('390px 好友弹窗回退单栏', contactMobileLayout?.display, 'flex');
+        check(
+          '390px 好友弹窗右栏堆叠在左栏下方',
+          Boolean(contactMobileLayout) &&
+            contactMobileLayout!.direction === 'column' &&
+            contactMobileLayout!.leftBottom <= contactMobileLayout!.rightTop + 1 &&
+            contactMobileLayout!.leftLeft >= contactMobileLayout!.cardLeft - 1 &&
+            contactMobileLayout!.rightRight <= contactMobileLayout!.cardRight + 1,
+          contactMobileLayout,
+        );
+        check(
+          '390px 好友弹窗不横向溢出',
+          Boolean(contactMobileLayout) &&
+            contactMobileLayout!.doc <= contactMobileLayout!.view &&
+            contactMobileLayout!.cardLeft >= 0 &&
+            contactMobileLayout!.cardRight <= contactMobileLayout!.view + 1,
+          contactMobileLayout,
+        );
+        await mobileIcons.page.locator('#contact-modal-close').click();
+        await mobileIcons.page.locator('#contact-modal').waitFor({ state: 'hidden' });
       } finally {
         await mobileIcons.context.close();
       }
 
+      await page.evaluate(`localStorage.removeItem('agent-network-room-filter')`);
+      await page.reload();
+      await page.locator(roomLink(uiHumanRoom.room.room_id)).waitFor();
       checkEqual('侧栏分类容器为 tablist', await page.locator('#room-filter').getAttribute('role'), 'tablist');
       checkEqual(
-        '侧栏默认单聊分类',
-        await page.locator('#room-filter-direct').getAttribute('aria-selected'),
+        '侧栏默认好友分类',
+        await page.locator('#room-filter-friend').getAttribute('aria-selected'),
         'true',
       );
-      const directKinds = (await page.evaluate(
+      checkEqual(
+        '侧栏分类依次为好友/Agent/群聊',
+        ((await page.evaluate(
+          `Array.from(document.querySelectorAll('#room-filter [data-room-filter]')).map(function (node) { return node.dataset.roomFilter; })`,
+        )) as string[]).join(','),
+        'friend,agent,group',
+      );
+      checkEqual(
+        '好友分类 aria-label 同步',
+        await page.locator('#room-list').getAttribute('aria-label'),
+        '好友',
+      );
+      await waitUntil(
+        async () =>
+          (await page.locator(roomLink(data.direct.room.room_id)).count()) === 0 &&
+          (await page.locator(roomLink(data.extra.room.room_id)).count()) === 0,
+        '好友分类等待 Agent peer 补全后归位',
+      );
+      const friendKinds = (await page.evaluate(
         `Array.from(document.querySelectorAll('#room-list .room-item')).map(function (node) { return node.dataset.roomKind; })`,
       )) as string[];
       check(
-        '单聊分类只渲染 direct 会话',
-        directKinds.length === 2 && directKinds.every((kind) => kind === 'direct'),
-        directKinds,
+        '好友分类只渲染 direct 会话',
+        friendKinds.length === 1 && friendKinds.every((kind) => kind === 'direct'),
+        friendKinds,
       );
       checkEqual(
-        '单聊分类隐藏群聊',
+        '好友分栏显示人类单聊',
+        await page.locator(roomLink(uiHumanRoom.room.room_id)).count(),
+        1,
+      );
+      checkEqual(
+        '好友分栏隐藏 Agent 单聊',
+        await page.locator(roomLink(data.direct.room.room_id)).count(),
+        0,
+      );
+      checkEqual(
+        '好友分栏隐藏群聊',
         await page.locator(roomLink(data.group.room.room_id)).count(),
         0,
       );
+      await page.evaluate(`localStorage.setItem('agent-network-room-filter', 'direct')`);
+      await page.reload();
+      await page.locator(roomLink(uiHumanRoom.room.room_id)).waitFor();
+      checkEqual(
+        '旧 direct 分类迁移为好友',
+        await page.locator('#room-filter-friend').getAttribute('aria-selected'),
+        'true',
+      );
+
+      await page.locator('#room-filter-agent').click();
+      checkEqual(
+        '切换后 Agent aria-selected',
+        await page.locator('#room-filter-agent').getAttribute('aria-selected'),
+        'true',
+      );
+      checkEqual(
+        '切换后好友 aria-selected 取消',
+        await page.locator('#room-filter-friend').getAttribute('aria-selected'),
+        'false',
+      );
+      checkEqual(
+        'Agent 分类 aria-label 同步',
+        await page.locator('#room-list').getAttribute('aria-label'),
+        'Agent',
+      );
+      await page.waitForFunction(
+        `document.querySelectorAll('#room-list .room-item').length === 2`,
+      );
+      checkEqual(
+        'Agent 分类显示 Agent 单聊',
+        await page.locator(roomLink(data.direct.room.room_id)).count(),
+        1,
+      );
+      checkEqual(
+        'Agent 分类隐藏人类单聊',
+        await page.locator(roomLink(uiHumanRoom.room.room_id)).count(),
+        0,
+      );
+      const agentKinds = (await page.evaluate(
+        `Array.from(document.querySelectorAll('#room-list .room-item')).map(function (node) { return node.dataset.roomKind; })`,
+      )) as string[];
+      check('Agent 分类只渲染 direct 会话', agentKinds.every((kind) => kind === 'direct'), agentKinds);
+      checkEqual(
+        'Agent 分类写入本地存储',
+        await page.evaluate(`localStorage.getItem('agent-network-room-filter')`),
+        'agent',
+      );
+
+      // 从好友分类深链进入 Agent 会话时自动切到 Agent；active 房间不因分类切换消失。
+      await page.locator('#room-filter-friend').click();
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      await page.waitForFunction(
+        `document.getElementById('room-filter-agent').getAttribute('aria-selected') === 'true'`,
+      );
+      checkEqual(
+        '进入 Agent 会话自动切到 Agent 分类',
+        await page.locator('#room-filter-agent').getAttribute('aria-selected'),
+        'true',
+      );
+      await page.locator('#room-filter-friend').click();
+      checkEqual(
+        'active Agent 在好友分类保持可见',
+        await page.locator(roomLink(data.direct.room.room_id)).count(),
+        1,
+      );
+      await page.locator('#room-filter-agent').click();
 
       await page.locator('#room-filter-group').click();
       checkEqual(
@@ -4690,9 +4946,14 @@ async function main(): Promise<void> {
         'true',
       );
       checkEqual(
-        '切换后单聊 aria-selected 取消',
-        await page.locator('#room-filter-direct').getAttribute('aria-selected'),
+        '切换后 Agent aria-selected 取消',
+        await page.locator('#room-filter-agent').getAttribute('aria-selected'),
         'false',
+      );
+      checkEqual(
+        '群聊分类 aria-label 同步',
+        await page.locator('#room-list').getAttribute('aria-label'),
+        '群聊',
       );
       await page.waitForFunction(
         `document.querySelectorAll('#room-list .room-item').length === 1`,
@@ -4706,6 +4967,11 @@ async function main(): Promise<void> {
         `Array.from(document.querySelectorAll('#room-list .room-item')).map(function (node) { return node.dataset.roomKind; })`,
       )) as string[];
       check('群聊分类只渲染 group 会话', groupKinds.every((kind) => kind === 'group'), groupKinds);
+      checkEqual(
+        '群聊分类写入本地存储',
+        await page.evaluate(`localStorage.getItem('agent-network-room-filter')`),
+        'group',
+      );
 
       await page.fill('#room-search', '测试群');
       await page.waitForFunction(
@@ -4716,7 +4982,7 @@ async function main(): Promise<void> {
         await page.locator(roomLink(data.group.room.room_id)).count(),
         1,
       );
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-friend').click();
       await page.waitForFunction(
         `document.querySelectorAll('#room-list .room-item').length === 0`,
       );
@@ -4727,8 +4993,18 @@ async function main(): Promise<void> {
       );
       await page.fill('#room-search', '');
       await waitUntil(
-        async () => (await page.locator('#room-list .room-item').count()) === 2,
-        '清空搜索恢复单聊分类',
+        async () => (await page.locator(roomLink(uiHumanRoom.room.room_id)).count()) === 1,
+        '清空搜索恢复好友分类',
+      );
+      await page.goto(`${server.base}/c/${data.group.room.room_id}`);
+      await waitRoom(page, data.group.room.room_id, '测试群');
+      await page.waitForFunction(
+        `document.getElementById('room-filter-group').getAttribute('aria-selected') === 'true'`,
+      );
+      checkEqual(
+        '进入群聊自动切到群聊分类',
+        await page.locator('#room-filter-group').getAttribute('aria-selected'),
+        'true',
       );
 
       // 未读与排序：用独立临时 Agent 制造未读，避免刷新 Agent A/B 的在线状态。
@@ -4760,23 +5036,24 @@ async function main(): Promise<void> {
       });
       await page.goto(`${server.base}/`);
       await page.locator('#room-list .room-item').first().waitFor();
+      await page.locator('#room-filter-agent').click();
       await waitUntil(
         async () => (await page.locator(`${roomLink(segmentRoom.room.room_id)} .unread`).count()) === 1,
-        '单聊分类保留未读红点',
+        'Agent 分类保留未读红点',
       );
       checkEqual(
-        '单聊分类保留未读红点',
+        'Agent 分类保留未读红点',
         await page.locator(`${roomLink(segmentRoom.room.room_id)} .unread`).count(),
         1,
       );
       checkEqual(
-        '单聊分类按最后消息排序',
+        'Agent 分类按最后消息排序',
         await page.locator('#room-list .room-item').first().getAttribute('href'),
         `/c/${encodeURIComponent(data.extra.room.room_id)}`,
       );
       await page.locator('#room-filter-group').click();
       checkEqual(
-        '群聊分类不混入单聊未读',
+        '群聊分类不混入 Agent 单聊未读',
         await page.locator(roomLink(segmentRoom.room.room_id)).count(),
         0,
       );
@@ -4788,18 +5065,18 @@ async function main(): Promise<void> {
       });
       await page.reload();
       await page.locator('#room-list .room-item').first().waitFor();
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-agent').click();
       await waitUntil(
         async () => (await page.locator(roomLink(data.extra.room.room_id)).count()) === 0,
-        '归档后单聊分类隐藏已归档 Agent',
+        '归档后 Agent 分类隐藏已归档 Agent',
       );
       checkEqual(
-        '归档后单聊分类隐藏已归档 Agent',
+        '归档后 Agent 分类隐藏已归档 Agent',
         await page.locator(roomLink(data.extra.room.room_id)).count(),
         0,
       );
       checkEqual(
-        '归档不影响未归档单聊',
+        '归档不影响未归档 Agent 单聊',
         await page.locator(roomLink(segmentRoom.room.room_id)).count(),
         1,
       );
@@ -4850,7 +5127,14 @@ async function main(): Promise<void> {
         allErrors,
       );
       await empty.page.goto(`${server.base}/`);
-      await waitForText(empty.page, '#room-list-status', '还没有单聊');
+      await waitForText(empty.page, '#room-list-status', '还没有好友会话');
+      await empty.page.locator('#room-filter-agent').click();
+      await waitForText(empty.page, '#room-list-status', '还没有 Agent 会话');
+      checkEqual(
+        '空 Agent 分类提示分享链接入口',
+        await empty.page.locator('#room-list-status').textContent(),
+        '还没有 Agent 会话。打开 Agent 分享链接即可开始。',
+      );
       await empty.page.locator('#room-filter-group').click();
       await waitForText(empty.page, '#room-list-status', '还没有群聊');
       checkEqual(
@@ -4858,8 +5142,13 @@ async function main(): Promise<void> {
         await empty.page.locator('#room-list-status').textContent(),
         '还没有群聊。点击右上角 + 新建群聊。',
       );
-      await empty.page.locator('#room-filter-direct').click();
-      await waitForText(empty.page, '#room-list-status', '还没有单聊');
+      await empty.page.locator('#room-filter-friend').click();
+      await waitForText(empty.page, '#room-list-status', '还没有好友会话');
+      checkEqual(
+        '空好友分类提示添加好友',
+        await empty.page.locator('#room-list-status').textContent(),
+        '还没有好友会话。通过好友申请或好友链接添加后即可开始。',
+      );
       check('空分类按 segment 显示空态', true);
       await empty.context.close();
       await context.close();
@@ -4878,17 +5167,19 @@ async function main(): Promise<void> {
       await mobile.page.locator('#room-filter-group').click();
       const filterMetrics = (await mobile.page.evaluate(`(() => {
         const filter = document.getElementById('room-filter');
-        const direct = document.getElementById('room-filter-direct');
+        const friend = document.getElementById('room-filter-friend');
+        const agent = document.getElementById('room-filter-agent');
         const group = document.getElementById('room-filter-group');
         const rect = filter ? filter.getBoundingClientRect() : null;
         const selected = getComputedStyle(group);
-        const other = getComputedStyle(direct);
+        const other = getComputedStyle(friend);
         return {
           view: window.innerWidth,
           doc: document.documentElement.scrollWidth,
           left: rect ? rect.left : 0,
           right: rect ? rect.right : 0,
-          directWidth: direct ? direct.getBoundingClientRect().width : 0,
+          friendWidth: friend ? friend.getBoundingClientRect().width : 0,
+          agentWidth: agent ? agent.getBoundingClientRect().width : 0,
           groupWidth: group ? group.getBoundingClientRect().width : 0,
           selectedBg: selected.backgroundColor,
           selectedColor: selected.color,
@@ -4900,7 +5191,8 @@ async function main(): Promise<void> {
         doc: number;
         left: number;
         right: number;
-        directWidth: number;
+        friendWidth: number;
+        agentWidth: number;
         groupWidth: number;
         selectedBg: string;
         selectedColor: string;
@@ -4916,8 +5208,12 @@ async function main(): Promise<void> {
         filterMetrics,
       );
       check(
-        '390px 分类两个 tab 等宽可见',
-        filterMetrics.directWidth > 0 && filterMetrics.groupWidth > 0,
+        '390px 分类三个 tab 等宽可见',
+        filterMetrics.friendWidth > 0 &&
+          filterMetrics.agentWidth > 0 &&
+          filterMetrics.groupWidth > 0 &&
+          Math.abs(filterMetrics.friendWidth - filterMetrics.agentWidth) < 1 &&
+          Math.abs(filterMetrics.agentWidth - filterMetrics.groupWidth) < 1,
         filterMetrics,
       );
       check(
@@ -4954,6 +5250,8 @@ async function main(): Promise<void> {
         await page.locator(`${roomLink(data.direct.room.room_id)} .presence-dot`).count(),
         0,
       );
+      // peer 未知时暂归好友；补全为 Agent 后应移动到 Agent 分类。
+      await page.locator('#room-filter-agent').click();
       await page.waitForFunction(
         `(() => {
           const link = document.querySelector(${JSON.stringify(roomLink(data.direct.room.room_id))});
@@ -4969,6 +5267,12 @@ async function main(): Promise<void> {
       checkEqual(
         '列表不渲染在线或未知状态点',
         await page.locator('#room-list .presence-dot:not(.offline)').count(),
+        0,
+      );
+      await page.locator('#room-filter-friend').click();
+      checkEqual(
+        '补全后的 Agent 会话不再出现在好友分类',
+        await page.locator(roomLink(data.direct.room.room_id)).count(),
         0,
       );
       await context.close();
@@ -4998,24 +5302,27 @@ async function main(): Promise<void> {
         allErrors,
       );
       await page.goto(`${server.base}/`);
-      await waitRoomListName(page, data.agentA.name);
-      await waitRoomListName(page, data.agentB.name);
       await waitRoomListName(page, humanPeer.name);
-      checkEqual(
-        '在线 direct Agent 不显示状态点',
-        await page.locator(`${roomLink(data.extra.room.room_id)} .presence-dot`).count(),
-        0,
-      );
       checkEqual(
         '人类直聊不显示状态点',
         await page.locator(`${roomLink(humanDirect.room.room_id)} .presence-dot`).count(),
         0,
       );
+      await page.locator('#room-filter-agent').click();
+      await waitRoomListName(page, data.agentA.name);
+      await waitRoomListName(page, data.agentB.name);
+      checkEqual(
+        '在线 direct Agent 不显示状态点',
+        await page.locator(`${roomLink(data.extra.room.room_id)} .presence-dot`).count(),
+        0,
+      );
+      await page.locator('#room-filter-group').click();
       checkEqual(
         '群聊不显示状态点',
         await page.locator(`${roomLink(data.group.room.room_id)} .presence-dot`).count(),
         0,
       );
+      await page.locator('#room-filter-agent').click();
       checkEqual(
         '侧栏不存在绿色状态点',
         await page.locator('#room-list .presence-dot.online').count(),
@@ -5035,9 +5342,9 @@ async function main(): Promise<void> {
         await sleep(100);
       }
       await page.reload();
+      await page.locator('#room-filter-agent').click();
       await waitRoomListName(page, data.agentA.name);
       await waitRoomListName(page, data.agentB.name);
-      await waitRoomListName(page, humanPeer.name);
       checkEqual(
         'Agent 下线后刷新显示一个灰色离线点',
         await page.locator(`${roomLink(data.extra.room.room_id)} .presence-dot.offline`).count(),
@@ -5585,6 +5892,7 @@ async function main(): Promise<void> {
       );
       await page.goto(`${server.base}/`);
       await page.locator('#room-list .room-item').first().waitFor();
+      await page.locator('#room-filter-agent').click();
       await page.waitForFunction(
         `(() => {
           const link = document.querySelector(${JSON.stringify(roomLink(data.direct.room.room_id))});
@@ -5898,7 +6206,8 @@ async function main(): Promise<void> {
         '保存凭据只增加按身份分区的本地 key',
         promptStorage.keys,
         `agent-network-agents-v1,agent-network-identity-v1:${data.human.actor_id},` +
-          `agent-network-sync-v1:${data.human.actor_id},agent-network-token`,
+          `agent-network-room-filter,agent-network-sync-v1:${data.human.actor_id},` +
+          `agent-network-token`,
       );
       check(
         '复制凭据提示词不写 sessionStorage',
@@ -5999,7 +6308,7 @@ async function main(): Promise<void> {
       await page.locator('#empty-state').click();
       checkEqual('点击菜单外关闭菜单', await page.locator('#room-menu').isHidden(), true);
 
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-agent').click();
       await directLink.click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
       await page.keyboard.press('Escape');
@@ -6141,6 +6450,7 @@ async function main(): Promise<void> {
       );
       await page.goto(`${server.base}/`);
       await page.locator('#room-list .room-item').first().waitFor();
+      await page.locator('#room-filter-agent').click();
       await page.waitForFunction(
         `(() => {
           const link = document.querySelector(${JSON.stringify(roomLink(data.direct.room.room_id))});
@@ -6165,18 +6475,28 @@ async function main(): Promise<void> {
       );
       checkEqual('单聊菜单显示举报', await page.locator('#room-menu-report').isVisible(), true);
       checkEqual('单聊菜单不显示退群', await page.locator('#room-menu-leave-group').isHidden(), true);
-      const directHint = ((await page.locator('#room-menu-safety-hint').innerText()) ?? '').replace(
-        /\s+/g,
-        '',
+      const menuOrder = (await page.evaluate(
+        `Array.from(document.querySelectorAll('#room-menu > .room-menu-item')).map(function (node) { return node.id; })`,
+      )) as string[];
+      checkEqual(
+        '会话菜单按管理动作到安全动作排序',
+        menuOrder.join(','),
+        'room-menu-copy-prompt,room-menu-transfer,room-menu-archive,' +
+          'room-menu-toggle-disabled,room-menu-reissue-token,room-menu-report,' +
+          'room-menu-block,room-menu-delete-friend,room-menu-leave-group,room-menu-dissolve',
       );
-      check(
-        '安全提示区分删除、拉黑、举报与退群',
-        directHint.includes('删除好友只结束好友关系') &&
-          directHint.includes('拉黑还会拒绝新的私聊') &&
-          directHint.includes('举报只提交给受控管理流程') &&
-          directHint.includes('退群只离开当前群'),
+      checkEqual(
+        '管理动作与安全动作之间有分隔线',
+        await page.locator('#room-menu-safety-sep').isVisible(),
+        true,
+      );
+      const directHint = ((await page.locator('#room-menu-safety-hint').innerText()) ?? '').trim();
+      checkEqual(
+        '菜单安全提示压缩为一行短提示',
         directHint,
+        '删除好友保留历史；拉黑拒绝新私聊/申请/邀请；退群不影响好友。',
       );
+      check('菜单安全提示不再使用长段落', Array.from(directHint).length <= 40, directHint);
 
       // 拉黑与删除都必须二次确认，且文案明确“解封不恢复好友”。
       const blockDialog = new Promise<string>((resolve) => {
@@ -6218,6 +6538,7 @@ async function main(): Promise<void> {
       // 真实拉黑 → 状态验证 → 解封 → 状态验证，不只 dismiss 确认框。
       // direct Agent 菜单比人类会话多交接/凭据入口，点击右侧聊天区关闭菜单。
       await page.mouse.click(700, 600);
+      await page.locator('#room-filter-friend').click();
       await page.locator(roomLink(safetyRoom.room.room_id)).waitFor();
       await page.locator(roomLink(safetyRoom.room.room_id)).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
@@ -6308,6 +6629,7 @@ async function main(): Promise<void> {
       await page.locator('#room-menu').waitFor({ state: 'hidden' });
 
       // 举报弹窗：选择成员、提交后显示受控接收状态，不创建向外发送。
+      await page.locator('#room-filter-agent').click();
       await page.locator(roomLink(data.direct.room.room_id)).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
       await page.locator('#room-menu-report').click();
@@ -6422,6 +6744,7 @@ async function main(): Promise<void> {
       await page.locator('#room-list .room-item').first().waitFor();
       const directSelector = roomLink(injectionDirect.room.room_id);
       const groupSelector = roomLink(injectionGroup.room.room_id);
+      await page.locator('#room-filter-agent').click();
       await page.waitForFunction(
         `(() => {
           const link = document.querySelector(${JSON.stringify(directSelector)});
@@ -6583,7 +6906,7 @@ async function main(): Promise<void> {
       checkEqual('无凭据提示词行数固定', groupFallbackLines.length, 14);
 
       await page.locator('#empty-state').click();
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-agent').click();
       await page.evaluate(
         `document.querySelector(${JSON.stringify(directSelector)}).setAttribute('data-room-name', ${JSON.stringify('\u0001\u0085')})`,
       );
@@ -6638,6 +6961,7 @@ async function main(): Promise<void> {
 
       await page.evaluate(`window.__roomListRef = document.getElementById('room-list')`);
       const loadsBefore = (await page.evaluate('window.__loadCount')) as number;
+      await page.locator('#room-filter-agent').click();
       await page.locator(roomLink(data.direct.room.room_id)).click();
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       await page.waitForFunction('document.querySelectorAll("#messages .msg").length >= 3');
@@ -6716,7 +7040,7 @@ async function main(): Promise<void> {
         clearedGroupKinds,
       );
 
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-agent').click();
       await page.locator(roomLink(data.direct.room.room_id)).click();
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       await page.waitForFunction('document.querySelectorAll("#messages .msg").length >= 20');
@@ -6743,7 +7067,7 @@ async function main(): Promise<void> {
       await page.locator('#room-filter-group').click();
       await page.locator(roomLink(data.group.room.room_id)).click();
       await waitRoom(page, data.group.room.room_id, '测试群');
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-agent').click();
       await page.locator(roomLink(data.direct.room.room_id)).click();
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       await sleep(600);
@@ -7122,7 +7446,7 @@ async function main(): Promise<void> {
       );
       await page.locator('#new-agent-close').click();
       await page.reload();
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-agent').click();
       await waitRoomListName(page, webAgentName);
       checkEqual('刷新后新建 Agent 会话仍存在', await webAgentRoomItem.count(), 1);
       checkEqual('刷新后仍是同一会话', await webAgentRoomItem.getAttribute('href'), webAgentRoomHref);
@@ -8725,14 +9049,15 @@ async function main(): Promise<void> {
       await page.locator('#room-list .room-item').first().waitFor();
       await page.waitForFunction(
         `(() => {
-          const link = document.querySelector(${JSON.stringify(archiveLink)});
-          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(archiveAgent.name)}));
-        })()`,
-      );
-      await page.waitForFunction(
-        `(() => {
           const link = document.querySelector(${JSON.stringify(humanLink)});
           return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(humanPeer.name)}));
+        })()`,
+      );
+      await page.locator('#room-filter-agent').click();
+      await page.waitForFunction(
+        `(() => {
+          const link = document.querySelector(${JSON.stringify(archiveLink)});
+          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(archiveAgent.name)}));
         })()`,
       );
 
@@ -8745,7 +9070,7 @@ async function main(): Promise<void> {
         true,
       );
       await page.keyboard.press('Escape');
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-friend').click();
       await page.locator(humanLink).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
       checkEqual(
@@ -8754,6 +9079,7 @@ async function main(): Promise<void> {
         true,
       );
       await page.keyboard.press('Escape');
+      await page.locator('#room-filter-agent').click();
       await page.locator(archiveLink).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
       checkEqual(
@@ -8989,13 +9315,21 @@ async function main(): Promise<void> {
       await mobile.page.waitForFunction(
         `document.querySelectorAll(${JSON.stringify(archiveLink)}).length === 0`,
       );
+      let mobileArchiveLookupDelayed = false;
       await mobile.page.route('**/mcp', async (route) => {
         if (route.request().headers()['mcp-name'] !== 'network_agents_get') {
           await route.continue();
           return;
         }
+        // 列表加载与打开浮层可能并发读取；只延迟首个请求以稳定观察加载态。
+        if (mobileArchiveLookupDelayed) {
+          await route.continue();
+          return;
+        }
+        mobileArchiveLookupDelayed = true;
         await sleep(350);
-        await route.continue();
+        // 列表加载与浮层刷新可能同时触发读取；已被继续的请求忽略即可。
+        await route.continue().catch(function () {});
       });
       await mobile.page.locator('#archived-agents').click();
       await mobile.page.waitForFunction(
@@ -9042,6 +9376,7 @@ async function main(): Promise<void> {
       await mobile.page.waitForFunction(
         `document.querySelectorAll('#archive-popover-list .archive-item').length === 0`,
       );
+      await mobile.page.locator('#room-filter-agent').click();
       await mobile.page.waitForFunction(
         `document.querySelector(${JSON.stringify(archiveLink)}) !== null`,
       );
@@ -9115,6 +9450,7 @@ async function main(): Promise<void> {
         allErrors,
       );
       const openAgentMenu = async (agentName: string, roomId: string) => {
+        await page.locator('#room-filter-agent').click();
         await waitRoomListName(page, agentName);
         await page.locator(roomLink(roomId)).click({ button: 'right' });
         await page.locator('#room-menu').waitFor({ state: 'visible' });
@@ -9373,6 +9709,7 @@ async function main(): Promise<void> {
       };
       try {
         await managerView.page.goto(`${server.base}/`);
+        await managerView.page.locator('#room-filter-agent').click();
         await waitRoomListName(managerView.page, transferAgent.name);
         await managerView.page.locator(roomLink(transferRoom.room.room_id)).click({
           button: 'right',
@@ -9819,7 +10156,7 @@ async function main(): Promise<void> {
       );
       check('群聊头部显示添加成员入口', await page.locator('#add-members').isVisible());
 
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-agent').click();
       await page.locator(roomLink(data.direct.room.room_id)).click();
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       checkEqual('单聊不显示添加成员入口', await page.locator('#add-members').isHidden(), true);
@@ -11228,6 +11565,7 @@ async function main(): Promise<void> {
       };
       checkEqual('stream 只订阅 agentnet://stream', JSON.stringify(firstStream.subscriptions), '["agentnet://stream"]');
 
+      await page.locator('#room-filter-agent').click();
       await page.locator(roomLink(data.direct.room.room_id)).click();
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       await page.waitForFunction('document.querySelectorAll("#messages .msg").length >= 20');
@@ -11257,7 +11595,7 @@ async function main(): Promise<void> {
           data.extra.room.room_id,
         )}, ms: 900 }`,
       );
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-agent').click();
       await page.locator(roomLink(data.extra.room.room_id)).click();
       await sleep(200);
       checkEqual('无缓存切换立即清空旧房间内容', await messageCount(page), 0);
@@ -12227,6 +12565,7 @@ async function main(): Promise<void> {
         (await page.locator('.sidebar').isVisible()) &&
           !(await page.locator('#composer').isVisible()),
       );
+      await page.locator('#room-filter-agent').click();
       await page.locator(roomLink(data.direct.room.room_id)).click();
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       check(
@@ -12874,7 +13213,7 @@ async function main(): Promise<void> {
         Math.abs(afterSwitch.ratio - afterReload.ratio) <= 0.02,
         { afterReload, afterSwitch },
       );
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-agent').click();
       await page.locator(roomLink(directId)).click();
       await waitRoom(page, directId, data.agentA.name);
       await page.locator('#pane-resizer-handle').waitFor({ state: 'visible' });
@@ -17091,7 +17430,7 @@ async function main(): Promise<void> {
         '清理群 B 的待发送 chip',
       );
 
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-agent').click();
       await page.locator(roomLink(data.direct.room.room_id)).click();
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       const directView = (await page.evaluate(`(() => ({
@@ -21302,17 +21641,19 @@ async function main(): Promise<void> {
         allErrors,
       );
       await page.goto(`${server.base}/`);
+      await page.locator(humanPeerLink).waitFor();
+      await page.waitForFunction(
+        `(() => {
+          const link = document.querySelector(${JSON.stringify(humanPeerLink)});
+          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(humanPeer.name)}));
+        })()`,
+      );
+      await page.locator('#room-filter-agent').click();
       await page.locator(reissueLink).waitFor();
       await page.waitForFunction(
         `(() => {
           const link = document.querySelector(${JSON.stringify(reissueLink)});
           return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(reissueAgent.name)}));
-        })()`,
-      );
-      await page.waitForFunction(
-        `(() => {
-          const link = document.querySelector(${JSON.stringify(humanPeerLink)});
-          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(humanPeer.name)}));
         })()`,
       );
       // 会话列表较长时 Playwright 会先滚动目标；等滚动事件落定后再开菜单，
@@ -21515,7 +21856,7 @@ async function main(): Promise<void> {
         await page.locator('#room-menu-reissue-token').isHidden(),
       );
       await page.keyboard.press('Escape');
-      await page.locator('#room-filter-direct').click();
+      await page.locator('#room-filter-friend').click();
       await openMenu(humanPeerLink);
       check(
         '人类 direct 会话不显示重发 token 入口',
@@ -21528,8 +21869,7 @@ async function main(): Promise<void> {
         if (request.headers()['mcp-name'] !== 'network_agent_reissue_token') {
           await route.continue();
           return;
-        }
-        const body = request.postDataJSON() as { id?: unknown } | null;
+        }        const body = request.postDataJSON() as { id?: unknown } | null;
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -21552,6 +21892,7 @@ async function main(): Promise<void> {
           }),
         });
       });
+      await page.locator('#room-filter-agent').click();
       await openMenu(reissueLink);
       page.once('dialog', async (dialog) => {
         await dialog.accept();
@@ -21577,6 +21918,7 @@ async function main(): Promise<void> {
         allErrors,
       );
       await mobile.page.goto(`${server.base}/`);
+      await mobile.page.locator('#room-filter-agent').click();
       await mobile.page.locator(reissueLink).waitFor();
       await mobile.page.waitForFunction(
         `(() => {

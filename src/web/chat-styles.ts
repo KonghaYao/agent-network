@@ -90,9 +90,9 @@ export const APP_STYLE = `
 
   .room-filter { display: flex; gap: 2px; margin-top: 8px; padding: 2px;
     background: var(--wx-search); border-radius: 6px; }
-  .room-filter button { flex: 1 1 0; min-width: 0; height: 26px; padding: 0 8px;
+  .room-filter button { flex: 1 1 0; min-width: 0; height: 26px; padding: 0 6px;
     border: 0; border-radius: 4px; background: transparent; color: var(--wx-muted);
-    font-size: 12px; }
+    font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .room-filter button:hover { background: var(--wx-hover); color: var(--wx-text); }
   .room-filter button[aria-selected="true"] { background: var(--wx-panel);
     color: var(--wx-text); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 8%); }
@@ -116,12 +116,15 @@ export const APP_STYLE = `
   .room-preview { margin-top: 3px; font-size: 12px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 会话右键/长按菜单：固定定位，靠近指针并限制在视口内。 */
-  /* 固定宽度：安全提示是长段落，shrink-to-fit 会把菜单撑满整屏并挡住聊天区。 */
+  /* 固定宽度：短提示与操作项保持紧凑，避免菜单撑满整屏挡住聊天区。 */
   .room-menu { position: fixed; z-index: 26; width: 260px;
     max-width: calc(100vw - 16px); box-sizing: border-box; padding: 6px;
     border-radius: 8px; background: var(--wx-panel); border: 1px solid var(--wx-line);
     box-shadow: var(--wx-shadow); }
   .room-menu[hidden] { display: none; }
+  /* 管理动作与安全动作之间用分隔线分组；危险项保持在末尾。 */
+  .room-menu-sep { height: 1px; margin: 4px 6px; background: var(--wx-line); }
+  .room-menu-sep[hidden] { display: none; }
   .room-menu-item { display: block; width: 100%; box-sizing: border-box;
     padding: 9px 10px; border: 0; border-radius: 4px; background: transparent;
     color: var(--wx-text); font: inherit; font-size: 13px; text-align: left;
@@ -840,6 +843,20 @@ ${GROUP_STYLE}
   .contact-policy { margin: 10px 0 12px; padding: 10px; border: 1px solid var(--wx-line);
     border-radius: 10px; background: var(--wx-sidebar); }
   .contact-policy .field { margin: 0; }
+  /* 桌面左右两栏：左栏接收策略/待处理申请，右栏好友链接/我的好友。 */
+  .contact-modal-card { width: min(880px, 100%); box-sizing: border-box; }
+  .contact-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 20px; align-items: start; }
+  .contact-column { min-width: 0; }
+  .contact-requests-panel { margin: 14px 0 0; padding-top: 12px;
+    border-top: 1px solid var(--wx-line); }
+  .contact-requests-panel h3 { margin: 0 0 6px; font-size: 14px; }
+  .contact-column > .contact-link-panel:first-child,
+  .contact-column > .contact-requests-panel:first-child {
+    margin-top: 0; padding-top: 0; border-top: 0; }
+  .contact-column .contact-request-list { max-height: min(36vh, 320px); }
+  .contact-column .contact-link-list { max-height: min(24vh, 220px); }
+  .contact-columns + .modal-actions { margin-top: 16px; }
   .contact-request-list { list-style: none; margin: 0; padding: 0;
     display: flex; flex-direction: column; gap: 8px; max-height: 45vh; overflow: auto; }
   .contact-request-item { display: flex; justify-content: space-between; gap: 10px;
@@ -869,6 +886,18 @@ ${GROUP_STYLE}
   .contact-link-item .contact-link-meta { min-width: 0; color: var(--wx-muted);
     word-break: break-word; }
   #contact-link-status[data-error="1"], #contact-link-status[data-success="1"] { font-weight: 600; }
+
+  /* 好友弹窗窄屏回退单栏；两栏内容按原顺序纵向堆叠。 */
+  @media (max-width: 759px) {
+    .contact-modal-card { width: min(420px, 100%); }
+    .contact-columns { display: flex; flex-direction: column; gap: 0; }
+    .contact-column { width: 100%; }
+    .contact-column + .contact-column { margin-top: 14px; }
+    .contact-column-right > .contact-link-panel:first-child {
+      margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--wx-line); }
+    .contact-column .contact-request-list { max-height: min(32dvh, 260px); }
+    .contact-column .contact-link-list { max-height: min(22dvh, 180px); }
+  }
 
   @media (prefers-reduced-motion: reduce) {
     .skeleton-avatar, .skeleton-lines span, .skeleton-bubble { animation: none; }
