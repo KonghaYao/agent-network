@@ -374,7 +374,8 @@ function outboxComposerMatches(intent) {
   if (!bodyInput || !isActiveRoom(intent.room_id, roomEpoch)) return false;
   const text = bodyInput.value.trim();
   const reply = composerReply(intent.room_id);
-  return composerOutgoingBody(intent.room_id, text) === intent.body &&
+  // 自动 @ 依赖已加载时间线；忽略刚提交的那条，刷新先到时仍能识别未编辑草稿。
+  return composerOutgoingBody(intent.room_id, text, intent.message_id || null) === intent.body &&
     (reply ? reply.message_id : null) === (intent.reply_to || null);
 }
 
