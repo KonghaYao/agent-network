@@ -2,6 +2,23 @@ import { chromium } from 'playwright';
 import { createFixture } from './fixture';
 import { rawTool } from '../verify-web';
 
+async function uploadTextFile(token: string, base: string, name: string, body: string) {
+  const bytes = new TextEncoder().encode(body);
+  const response = await fetch(base + '/mcp-upload', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer ' + token,
+      'MCPP-Files-Version': '1',
+      'content-type': 'text/plain',
+      'MCPP-File-Name': encodeURIComponent(name),
+      'MCPP-File-Size': String(bytes.length),
+    },
+    body: bytes,
+  });
+  if (response.status !== 201) throw new Error('上传失败: HTTP ' + response.status);
+  return (await response.json()) as { publicUrl: string };
+}
+
 const fixture = await createFixture(['chat']);
 const d = fixture.scenarios.chat;
 const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, args: ['--no-sandbox'] });
@@ -34,6 +51,18 @@ try {
   const quoteText = (await sent.locator('.reply-reference').innerText()).trim();
   check(quoteText.includes('明天下午三点见') && !quoteText.includes('查看上下文'),
     '引用块直接显示原消息摘要');
+  const quoteOrder = await sent.evaluate((node) => {
+    const content = node.querySelector('.msg-content');
+    if (!content) return null;
+    const bubble = content.querySelector('.bubble');
+    const quote = content.querySelector('.reply-reference');
+    const children = Array.from(content.children);
+    return {
+      bubble: bubble ? children.indexOf(bubble) : -1,
+      quote: quote ? children.indexOf(quote) : -1,
+    };
+  });
+  check(quoteOrder !== null && quoteOrder.quote === quoteOrder.bubble + 1, '引用块紧接正文下方');
   const history = await rawTool<any>(d.me.token, 'network_history_list', { room_id: d.rooms.directWang.room_id });
   const reply = history.items.find((item: any) => item.preview === '引用不会丢草稿');
   check(reply?.reply_to === originalId, '发送引用保留真实reply_to');
@@ -42,6 +71,28 @@ try {
   await page.getByRole('dialog', { name: '查看上下文' }).getByText('明天下午三点见，记得带上资料。', { exact: true }).waitFor();
   await page.getByRole('button', { name: '关闭上下文' }).click();
   check(true, '点击引用可查看原消息上下文');
+  const attachment = await uploadTextFile(d.me.token, fixture.base, '引用附件.txt', 'quote attachment');
+  await original.getByRole('button', { name: '消息操作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '引用', exact: true }).click();
+  await page.locator('#body').fill('引用带附件\n' + attachment.publicUrl);
+  await page.locator('#send').click();
+  const sentWithFile = page.locator('#messages .msg').filter({ has: page.locator('.bubble', { hasText: '引用带附件' }) });
+  await sentWithFile.locator('.msg-files').waitFor();
+  const fileOrder = await sentWithFile.evaluate((node) => {
+    const content = node.querySelector('.msg-content');
+    if (!content) return null;
+    const bubble = content.querySelector('.bubble');
+    const files = content.querySelector('.msg-files');
+    const quote = content.querySelector('.reply-reference');
+    const children = Array.from(content.children);
+    return {
+      bubble: bubble ? children.indexOf(bubble) : -1,
+      files: files ? children.indexOf(files) : -1,
+      quote: quote ? children.indexOf(quote) : -1,
+    };
+  });
+  check(fileOrder !== null && fileOrder.files > fileOrder.bubble && fileOrder.quote > fileOrder.files,
+    '引用块位于附件之后');
   await sent.getByRole('button', { name: '消息操作', exact: true }).click();
   await page.getByRole('menuitem', { name: '转发', exact: true }).click();
   const modal = page.getByRole('dialog', { name: '转发消息' });

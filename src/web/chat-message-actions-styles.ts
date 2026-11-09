@@ -12,7 +12,7 @@ export const MESSAGE_ACTIONS_STYLE = `
     color: var(--wx-muted); cursor: pointer; font: inherit; font-size: 12px; padding: 5px 8px; }
   .message-actions button:hover, .message-actions button:focus-visible { background: var(--wx-hover); }
   .reply-reference { display: block; text-align: left; border-left: 3px solid var(--wx-line);
-    margin: 0 0 6px; overflow-wrap: anywhere; }
+    margin: 6px 0 0; overflow-wrap: anywhere; }
   .composer-reply { display: flex; align-items: center; gap: 8px; padding: 6px 12px;
     background: var(--wx-hover); border-radius: 6px; font-size: 12px; }
   .composer-reply[hidden] { display: none; }

@@ -83,6 +83,11 @@ async function resolveQuotePreview(roomId, messageId, quote) {
     if (quote.isConnected && activeRoomId === roomId) quote.textContent = '引用消息不可见';
   }
 }
+/** 引用块跟随正文底部区域：有附件时排在附件之后，否则紧接正文。 */
+function placeReplyReference(quote, content) {
+  const anchor = content.querySelector('.msg-files') || content.querySelector('.bubble');
+  if (anchor) anchor.after(quote); else content.append(quote);
+}
 function appendMessageActions(item, content) {
   if (item.reply_to) {
     const quote = document.createElement('button'); quote.type = 'button'; quote.className = 'reply-reference';
@@ -90,7 +95,7 @@ function appendMessageActions(item, content) {
     const target = currentItems.find(function (value) { return value.message_id === item.reply_to; });
     if (target) quote.textContent = quotePreviewText(target);
     else { quote.textContent = '引用消息 · 查看上下文'; resolveQuotePreview(activeRoomId, item.reply_to, quote); }
-    content.prepend(quote);
+    placeReplyReference(quote, content);
   }
   if (Number(item.body_bytes) === 0) return;
   const trigger = document.createElement('button'); trigger.type = 'button'; trigger.className = 'message-actions-trigger';
