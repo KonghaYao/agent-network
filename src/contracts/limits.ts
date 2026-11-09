@@ -111,9 +111,19 @@ export const LIMITS = {
   webMemberPickerPageSize: 100,
   /**
    * Agent 消息预览被截断但正文不超过该字节数时，页面自动读取全文并直接渲染。
-   * 超过该上限仍显示「展开全文」，避免一次刷新并发读取过多大消息。
+   * 超过该上限仍显示「查看全文」，避免一次刷新并发读取过多大消息。
+   *
+   * 超过 `webLongMessageCollapseBytes` 的消息不再自动展开，由用户显式展开/收起。
    */
   webAgentAutoExpandBytes: 16 * 1024,
+  /**
+   * 超长消息默认折叠为预览的正文阈值（UTF-8 字节）。
+   *
+   * 首屏只有 `body_bytes` 与 512B 预览，直接用字节数判断，避免为了折叠额外读取全文。
+   * 3 KiB 约等于 1000 个中文字符（3 字节/字），远超一屏；ASCII 长文会略早触发，
+   * 同样属于“超长”范围。低于该值的截断消息保持一次展开后不再折叠。
+   */
+  webLongMessageCollapseBytes: 3 * 1024,
   /** 单次成员变更上限。 */
   memberChangeMax: 20,
   /** 好友申请附言 UTF-8 字节上限。 */

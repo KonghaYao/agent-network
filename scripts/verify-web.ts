@@ -18421,6 +18421,19 @@ async function main(): Promise<void> {
         '截断预览不显示字面粗体标记',
         !((await longMessage.locator('.bubble').textContent()) ?? '').includes('**下载**'),
       );
+      checkEqual(
+        '超长消息默认折叠',
+        await longMessage
+          .locator('.bubble')
+          .evaluate((element) => element.classList.contains('is-collapsed')),
+        true,
+      );
+      checkEqual(
+        '超长消息提供查看全文',
+        (await longMessage.locator('.expand').textContent())?.trim(),
+        '查看全文',
+      );
+      checkEqual('超长消息初始隐藏收起按钮', await longMessage.locator('.collapse').isHidden(), true);
       const requestsBeforeExpand = markdownRequests.length;
       await longMessage.locator('.expand').click();
       await longMessage.locator('.expand').waitFor({ state: 'detached' });
@@ -18431,6 +18444,8 @@ async function main(): Promise<void> {
         15_000,
       );
       checkEqual('展开后不再有展开按钮', await longMessage.locator('.expand').count(), 0);
+      checkEqual('展开后提供收起', (await longMessage.locator('.collapse').textContent())?.trim(), '收起');
+      checkEqual('展开后收起按钮可见', await longMessage.locator('.collapse').isVisible(), true);
       checkEqual('展开后 Markdown 容器仍只有一个', await longMessage.locator('.msg-markdown').count(), 1);
       checkEqual('展开后文件卡片仍为一张', await longMessage.locator('.msg-file').count(), 1);
       checkEqual(
@@ -18444,6 +18459,59 @@ async function main(): Promise<void> {
       );
       checkEqual('预览与展开共用一次 bundle 请求', markdownRequests.length, 1);
       checkEqual('预览阶段已请求 bundle', requestsBeforeExpand, 1);
+
+      // 收起后再次查看；展开状态按 message_id 跨重渲染保留。
+      await longMessage.locator('.collapse').click();
+      await waitUntil(
+        () =>
+          longMessage
+            .locator('.bubble')
+            .evaluate((element) => element.classList.contains('is-collapsed')),
+        '收起后重新折叠',
+        5_000,
+      );
+      checkEqual(
+        '收起后恢复查看全文',
+        (await longMessage.locator('.expand').textContent())?.trim(),
+        '查看全文',
+      );
+      checkEqual('收起后隐藏收起按钮', await longMessage.locator('.collapse').isHidden(), true);
+      await longMessage.locator('.expand').click();
+      await waitUntil(
+        () => longMessage.locator('.collapse').isVisible(),
+        '再次查看全文',
+        5_000,
+      );
+      const rerenderMarker = '折叠状态重渲染标记';
+      // 上翻时新消息只进会话列表、不插入消息区；先回到底部再触发合并刷新。
+      await scrollMessagesToBottom(page);
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: mdRoomId,
+        invoke: [],
+        body: rerenderMarker,
+      });
+      await waitForText(page, '#messages', rerenderMarker);
+      const rerenderedLong = page.locator('#messages .msg').filter({ hasText: longMarker }).last();
+      checkEqual('重渲染后展开按钮不回来', await rerenderedLong.locator('.expand').count(), 0);
+      checkEqual(
+        '重渲染后仍显示收起',
+        (await rerenderedLong.locator('.collapse').textContent())?.trim(),
+        '收起',
+      );
+      check(
+        '重渲染后完整正文仍在',
+        ((await rerenderedLong.locator('.bubble').textContent()) ?? '').includes(longTail),
+      );
+
+      const shortMessage = page.locator('#messages .msg').filter({ hasText: singleMarker }).last();
+      checkEqual('短消息没有查看全文按钮', await shortMessage.locator('.expand').count(), 0);
+      checkEqual(
+        '短消息没有折叠样式',
+        await shortMessage.locator('.bubble.is-collapsed').count(),
+        0,
+      );
 
       for (const cutCase of cutCases) {
         const cutMessage = page
@@ -18648,7 +18716,7 @@ async function main(): Promise<void> {
           client_message_id: crypto.randomUUID(),
           room_id: mdRoomId,
           invoke: [],
-          body: [autoFailMarker, '自动失败填充 '.repeat(400), autoFailTail].join('\n'),
+          body: [autoFailMarker, '自动失败填充 '.repeat(120), autoFailTail].join('\n'),
         },
       );
       const autoFailId = autoFailSend.message.message_id;
@@ -19024,7 +19092,7 @@ async function main(): Promise<void> {
       checkEqual(
         'asset 404 展开失败恢复按钮文案',
         (await fallbackExpand.textContent())?.trim(),
-        '展开全文',
+        '查看全文',
       );
       checkEqual('asset 404 展开失败恢复按钮可用', await fallbackExpand.isDisabled(), false);
       checkEqual('asset 404 首次加载加一次重试', fallbackBundleRequests, 2);
@@ -19924,19 +19992,27 @@ async function main(): Promise<void> {
         );
         await wideContext.page.goto(`${server.base}/c/${wideRoomId}`);
         await waitRoom(wideContext.page, wideRoomId, '长内容滚动群');
-        // 512B 预览只含长 URL；阈值内的 Agent 消息自动读全文并渲染表格/代码块。
+        // 512B 预览只含长 URL；超长 Agent 消息需手动「查看全文」后才渲染表格/代码块。
         const wideMessage = wideContext.page
           .locator('#messages .msg')
           .filter({ hasText: '长内容回归' })
           .first();
+        await wideMessage.locator('.expand').waitFor();
+        await wideMessage.locator('.expand').click();
+        await wideMessage.locator('.expand').waitFor({ state: 'detached' });
         await wideMessage.locator('.msg-markdown .md-table').waitFor();
         await wideMessage.locator('.msg-markdown .md-pre').waitFor();
-        await waitUntil(
-          async () => (await wideMessage.locator('.expand').count()) === 0,
-          `${label} Agent 长消息自动展开后不保留展开按钮`,
-          5_000,
+        checkEqual(
+          `${label} 查看全文后不保留展开按钮`,
+          await wideMessage.locator('.expand').count(),
+          0,
         );
-        check(`${label} Agent 长消息自动展开`, true);
+        checkEqual(
+          `${label} 查看全文后提供收起`,
+          await wideMessage.locator('.collapse').isVisible(),
+          true,
+        );
+        check(`${label} Agent 长消息手动展开`, true);
         const autoReadCalls = await wideContext.page.evaluate(
           `(window.__mcpCalls || []).filter(function (call) {
             return call.name === 'network_message_read';

@@ -169,6 +169,7 @@ function applyRecalledMessage(roomId, messageId) {
   const previous = expandedMessageBodies.get(messageId);
   if (previous !== undefined) expandedBodyCacheSize -= previous.length * 2;
   expandedMessageBodies.delete(messageId);
+  longMessageExpanded.delete(messageId);
   agentAutoExpandReads.delete(messageId);
   function redact(items) {
     return (items || []).map(function (item) { return item.message_id === messageId

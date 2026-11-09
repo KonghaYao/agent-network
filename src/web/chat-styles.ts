@@ -638,9 +638,19 @@ export const APP_STYLE = `
   .msg.mine .bubble::before { right: -6px; border-left: 6px solid var(--wx-mine); }
   .mention { color: var(--wx-link); }
   .msg.mine .mention { color: #2f6b45; }
-  .msg .expand { margin-top: 4px; border: 0; background: none; padding: 0;
+  .msg .expand, .msg .collapse { margin-top: 4px; border: 0; background: none; padding: 0;
     color: var(--wx-link); font-size: 12px; }
-  .msg .expand[hidden] { display: none; }
+  .msg .expand[hidden], .msg .collapse[hidden] { display: none; }
+  /* 超长消息默认折叠约 8 行并渐隐；按钮在气泡外，短消息不产生任何折叠节点。 */
+  .bubble.is-collapsed { max-height: 12em; overflow: hidden; }
+  /* overflow 会裁掉气泡尖角；折叠态直接隐藏，避免半截三角形。 */
+  .bubble.is-collapsed::before { display: none; }
+  .bubble.is-collapsed::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0;
+    height: 2.5em; pointer-events: none;
+    background: linear-gradient(to bottom, transparent, var(--wx-bubble)); }
+  .msg.mine .bubble.is-collapsed::after {
+    background: linear-gradient(to bottom, transparent, var(--wx-mine));
+  }
   /* 回执紧贴消息下方，外观与上下线系统行一致。 */
   .msg.has-receipt { margin-bottom: 6px; }
   .msg-receipt { margin-top: 0; }

@@ -16,6 +16,16 @@ let cachedMentionNames = null;
 // 已展开全文的消息正文；刷新重建 DOM 后仍直接渲染完整正文。
 const expandedMessageBodies = new Map();
 let expandedBodyCacheSize = 0;
+// 用户显式展开的超长消息；与全文缓存分离，收起后重新渲染仍保持收起。
+const longMessageExpanded = new Set();
+function rememberLongExpanded(messageId, expanded) {
+  longMessageExpanded.delete(messageId);
+  if (!expanded) return;
+  longMessageExpanded.add(messageId);
+  while (longMessageExpanded.size > ${LIMITS.webExpandedBodyCacheMax}) {
+    longMessageExpanded.delete(longMessageExpanded.values().next().value);
+  }
+}
 function rememberExpandedBody(messageId, text) {
   const previous = expandedMessageBodies.get(messageId);
   if (previous !== undefined) expandedBodyCacheSize -= previous.length * 2;
@@ -329,58 +339,104 @@ function messageItem(item) {
   bubble.className = 'bubble';
   bubble.title = fullTime(item.created_at);
   // 已展开过的消息优先使用完整正文；刷新/重建不能让它退回预览。
-  const expandedBody = expandedMessageBodies.get(item.message_id);
-  const bodyText = expandedBody === undefined ? item.preview : expandedBody;
-  const truncated = expandedBody === undefined &&
+  const cachedBody = expandedMessageBodies.get(item.message_id);
+  const longBody = item.body_bytes >= WEB_LONG_MESSAGE_COLLAPSE_BYTES;
+  // 全文缓存被 LRU 淘汰后，展开标记同时失效，避免出现“已展开但只有预览”。
+  if (longBody && cachedBody === undefined) longMessageExpanded.delete(item.message_id);
+  // 超长消息的展开是用户显式状态；收起后保留全文缓存，再次查看不再读服务端。
+  const longExpanded = longBody && cachedBody !== undefined &&
+    longMessageExpanded.has(item.message_id);
+  const showFull = longBody ? longExpanded : cachedBody !== undefined;
+  const bodyText = showFull && cachedBody !== undefined ? cachedBody : item.preview;
+  // 折叠只看预览是否被截断；全文已缓存时收起后仍保留「查看全文」。
+  const truncated = !showFull &&
     item.body_bytes > messageTextEncoder.encode(item.preview).length;
+  const collapsed = longBody && !longExpanded;
+  if (collapsed) bubble.classList.add('is-collapsed');
   // 预览也渲染 Markdown；截断可能切断语法，由 Markdown 岛用 remend 闭合。
   // 传入 element：首屏只登记懒升级，消息进入视口附近后才创建 React root。
   renderMessageBody(bubble, bodyText, item, agent, truncated, false, element);
   content.append(bubble);
-  const filesRef = { current: mountMessageFiles(bodyText, null) };
+  // 折叠只限制正文可视高度；附件按已缓存的完整正文挂载，收起后卡片不丢。
+  const filesText = cachedBody === undefined ? bodyText : cachedBody;
+  const filesRef = { current: mountMessageFiles(filesText, null) };
   if (filesRef.current) content.append(filesRef.current);
-  if (truncated) {
-    const expand = document.createElement('button');
-    expand.type = 'button';
-    expand.className = 'expand';
-    expand.textContent = '展开全文';
-    expand.addEventListener('click', async function () {
-      const roomId = activeRoomId;
-      const epoch = roomEpoch;
-      const stale = function () {
-        return !isActiveRoom(roomId, epoch) || !expand.isConnected || !bubble.isConnected;
-      };
-      expand.disabled = true;
-      expand.textContent = '正在展开…';
-      // 预览阶段 bundle 失败时，展开只强制重试一次，避免每次点击都打 404。
-      const retry = bubble.dataset.markdownUnavailable === '1';
-      try {
-        const fullText = await readMessageShared(item.message_id);
-        // 读取期间切房或重建：旧响应不得写入新房间的状态栏、气泡或文件卡片。
-        if (stale()) return;
-        const rendered = await renderMessageBody(bubble, fullText, item, agent, false, retry);
-        if (stale()) return;
-        filesRef.current = mountMessageFiles(fullText, filesRef.current);
-        if (filesRef.current && !filesRef.current.isConnected) {
-          content.insertBefore(filesRef.current, content.querySelector('.reply-reference') || expand);
-        }
-        if (rendered || !agent) {
-          rememberExpandedBody(item.message_id, fullText);
-          expand.remove();
-        } else {
-          // bundle 重试仍失败：不记展开态，正文已是完整纯文本，保留按钮供稍后再试。
-          expand.disabled = false;
-          expand.textContent = '展开全文';
-        }
-      } catch (error) {
-        if (stale()) return;
+  if (truncated || longExpanded) {
+    let expand = null;
+    let collapse = null;
+    if (longBody) {
+      collapse = document.createElement('button');
+      collapse.type = 'button';
+      collapse.className = 'collapse';
+      collapse.textContent = '收起';
+      collapse.setAttribute('aria-expanded', 'true');
+      collapse.hidden = !longExpanded;
+      collapse.addEventListener('click', function () {
+        rememberLongExpanded(item.message_id, false);
+        bubble.classList.add('is-collapsed');
+        collapse.hidden = true;
+        if (!expand.isConnected) content.insertBefore(expand, collapse);
         expand.disabled = false;
-        expand.textContent = '展开全文';
-        statusElement.textContent = '读取正文失败：' + error.message;
-      }
-    });
-    content.append(expand);
-    if (agent && item.body_bytes <= WEB_AGENT_AUTO_EXPAND_BYTES) {
+        expand.textContent = '查看全文';
+        scrollController.noteContentChanged();
+      });
+    }
+    if (truncated || longBody) {
+      expand = document.createElement('button');
+      expand.type = 'button';
+      expand.className = 'expand';
+      expand.textContent = '查看全文';
+      expand.setAttribute('aria-expanded', 'false');
+      expand.addEventListener('click', async function () {
+        const roomId = activeRoomId;
+        const epoch = roomEpoch;
+        const stale = function () {
+          return !isActiveRoom(roomId, epoch) || !expand.isConnected || !bubble.isConnected;
+        };
+        expand.disabled = true;
+        expand.textContent = '正在展开…';
+        // 预览阶段 bundle 失败时，展开只强制重试一次，避免每次点击都打 404。
+        const retry = bubble.dataset.markdownUnavailable === '1';
+        try {
+          const cachedFull = expandedMessageBodies.get(item.message_id);
+          const fullText = cachedFull === undefined
+            ? await readMessageShared(item.message_id)
+            : cachedFull;
+          // 读取期间切房或重建：旧响应不得写入新房间的状态栏、气泡或文件卡片。
+          if (stale()) return;
+          const rendered = await renderMessageBody(bubble, fullText, item, agent, false, retry);
+          if (stale()) return;
+          filesRef.current = mountMessageFiles(fullText, filesRef.current);
+          if (filesRef.current && !filesRef.current.isConnected) {
+            content.insertBefore(filesRef.current, content.querySelector('.reply-reference') || expand);
+          }
+          if (rendered || !agent) {
+            rememberExpandedBody(item.message_id, fullText);
+            bubble.classList.remove('is-collapsed');
+            expand.remove();
+            if (collapse) {
+              rememberLongExpanded(item.message_id, true);
+              collapse.hidden = false;
+            }
+          } else {
+            // bundle 重试仍失败：不记展开态，正文已是完整纯文本，保留按钮供稍后再试。
+            // 超长消息此时先解除折叠，让完整纯文本可见；重新渲染会回到折叠预览。
+            if (collapse) bubble.classList.remove('is-collapsed');
+            expand.disabled = false;
+            expand.textContent = '查看全文';
+          }
+        } catch (error) {
+          if (stale()) return;
+          expand.disabled = false;
+          expand.textContent = '查看全文';
+          statusElement.textContent = '读取正文失败：' + error.message;
+        }
+      });
+      // 展开后重新收起时才把按钮插回；初次展开由下方折叠按钮接管。
+      if (truncated) content.append(expand);
+    }
+    if (longBody) content.append(collapse);
+    if (expand && agent && !longBody && item.body_bytes <= WEB_AGENT_AUTO_EXPAND_BYTES) {
       // 候选只登记观察；进入视口附近才入队读取，按钮在此之前保持可点击。
       registerAgentAutoExpand(item, element, bubble, content, expand, filesRef);
     }

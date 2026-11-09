@@ -637,6 +637,7 @@ function purgeInvalidRoomCache(roomId) {
     const expanded = expandedMessageBodies.get(messageId);
     if (expanded !== undefined) expandedBodyCacheSize = Math.max(0, expandedBodyCacheSize - expanded.length * 2);
     expandedMessageBodies.delete(messageId);
+    longMessageExpanded.delete(messageId);
     agentAutoExpandReads.delete(messageId);
   }
   if (activeRoomId === roomId) {
