@@ -17896,6 +17896,121 @@ async function main(): Promise<void> {
         '精确群发送后清空自己的 chip',
       );
       checkEqual('精确群发送后清空自己的 chip', await page.locator('#composer-files .composer-file').count(), 0);
+
+      // 纯文本自动 @ 最新一条消息的发送者：只对人类群聊生效；最新消息是自己时不追加。
+      const replierToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+      const replier = await rawTool<Actor>(replierToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'agent',
+        name: '上一位回复 Agent',
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      await rawBefriend(data.humanToken, replierToken, { actor_id: replier.actor_id });
+      const replierGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '上一位自动 @ 群',
+        members: [replier.actor_id],
+      });
+      const replierRoomId = replierGroup.room.room_id;
+      await acceptRoomInvites(replierToken, replierRoomId);
+      await sendRoomMessage(replierToken, replierRoomId, '上一楼 Agent 消息');
+      await page.goto(`${server.base}/c/${replierRoomId}`);
+      await waitRoom(page, replierRoomId, '上一位自动 @ 群');
+      await waitForText(page, '#messages', '上一楼 Agent 消息', 12_000);
+      await page.locator('#body').fill('接着处理');
+      await sendInRoom(replierRoomId);
+      const previousArgs = await sendArgsFor(replierRoomId);
+      checkEqual(
+        '群聊纯文本自动 @ 最新一条消息的 Agent',
+        previousArgs?.body,
+        '接着处理\n@上一位回复 Agent',
+      );
+      checkEqual('纯文本自动 @ 不传 invoke', previousArgs?.invoke, undefined);
+      const previousMessage = await historyItemFor(replierRoomId, '接着处理');
+      check('纯文本自动 @ 消息已写入历史', Boolean(previousMessage), previousMessage);
+      const previousDelivery = await pendingDeliveryOrNull(replierToken, previousMessage!.message_id);
+      check('纯文本自动 @ 产生 Agent 投递', Boolean(previousDelivery), previousDelivery);
+      await completeDelivery(replierToken, await claimDelivery(replierToken, previousDelivery!.delivery_id));
+
+      // 最新一条是自己：没有上一位外部成员，不追加。
+      await waitForText(page, '#messages', '接着处理', 12_000);
+      await page.locator('#body').fill('自己再补一句');
+      await sendInRoom(replierRoomId);
+      const selfReplyArgs = await sendArgsFor(replierRoomId);
+      checkEqual('最新消息由自己发送时不追加自动 @', selfReplyArgs?.body, '自己再补一句');
+      const selfReplyMessage = await historyItemFor(replierRoomId, '自己再补一句');
+      check('自己接话消息已写入历史', Boolean(selfReplyMessage), selfReplyMessage);
+      check(
+        '自己接话不产生 Agent 投递',
+        (await pendingDeliveryOrNull(replierToken, selfReplyMessage!.message_id)) === null,
+      );
+
+      // 正文已有任意成员的独立 @：不重复追加。
+      const explicitMarker = '显式提及不重复';
+      const explicitBody = `请 @上一位回复 Agent 处理${explicitMarker}`;
+      await page.locator('#body').fill(explicitBody);
+      await sendInRoom(replierRoomId);
+      const explicitReplyArgs = await sendArgsFor(replierRoomId);
+      check(
+        '正文已有 @ 时不重复追加自动 @',
+        explicitReplyArgs?.body === explicitBody &&
+          (explicitReplyArgs.body.match(/@上一位回复 Agent/gu) ?? []).length === 1,
+        explicitReplyArgs?.body,
+      );
+      const explicitReplyMessage = await historyItemFor(replierRoomId, explicitMarker);
+      const explicitReplyDelivery = await pendingDeliveryOrNull(
+        replierToken,
+        explicitReplyMessage!.message_id,
+      );
+      check('正文已有 @ 仍按正文投递', Boolean(explicitReplyDelivery), explicitReplyDelivery);
+      await completeDelivery(
+        replierToken,
+        await claimDelivery(replierToken, explicitReplyDelivery!.delivery_id),
+      );
+
+      // 超长正文：追加会超过上限，跳过追加但仍发送原文。
+      await sendRoomMessage(replierToken, replierRoomId, '长文前的上一条');
+      await waitForText(page, '#messages', '长文前的上一条', 12_000);
+      const longBody = 'a'.repeat(LIMITS.messageBodyBytes);
+      await page.locator('#body').fill(longBody);
+      await sendInRoom(replierRoomId);
+      const longArgs = await sendArgsFor(replierRoomId);
+      check(
+        '超长正文跳过自动 @ 但仍发送',
+        longArgs?.body === longBody && !longArgs.body.includes('@上一位回复 Agent'),
+        typeof longArgs?.body === 'string' ? longArgs.body.length : longArgs?.body,
+      );
+
+      // 重名成员：服务端无法唯一解析，客户端跳过自动 @。
+      await sendRoomMessage(duplicateMaintainerToken, duplicateRoomId, '重名 Agent 上一条');
+      await page.goto(`${server.base}/c/${duplicateRoomId}`);
+      await waitRoom(page, duplicateRoomId, '附件自动 @ 重名群');
+      await waitForText(page, '#messages', '重名 Agent 上一条', 12_000);
+      await page.locator('#body').fill('重名接一句');
+      await sendInRoom(duplicateRoomId);
+      const duplicateReplyArgs = await sendArgsFor(duplicateRoomId);
+      checkEqual('重名成员时不追加自动 @', duplicateReplyArgs?.body, '重名接一句');
+      const duplicateReplyMessage = await historyItemFor(duplicateRoomId, '重名接一句');
+      check(
+        '重名成员时不产生自动 @ 投递',
+        (await pendingDeliveryOrNull(maintainerToken, duplicateReplyMessage!.message_id)) === null,
+      );
+
+      // direct 不追加文本 @，仍用 invoke 唤醒对方 Agent。
+      await sendRoomMessage(data.agentAToken, data.direct.room.room_id, '单聊上一条 Agent 消息');
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
+      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      await waitForText(page, '#messages', '单聊上一条 Agent 消息', 12_000);
+      await page.locator('#body').fill('单聊纯文本接一句');
+      await sendInRoom(data.direct.room.room_id);
+      const directTextArgs = await sendArgsFor(data.direct.room.room_id);
+      checkEqual('direct 纯文本不追加自动 @', directTextArgs?.body, '单聊纯文本接一句');
+      checkEqual(
+        'direct 纯文本仍显式 invoke 对方 Agent',
+        JSON.stringify(directTextArgs?.invoke),
+        JSON.stringify([data.agentA.actor_id]),
+      );
       await context.close();
     }
 
@@ -18473,10 +18588,11 @@ async function main(): Promise<void> {
         chipLines,
       );
       check(
-        '文件 chips 的 URL 独占一行且不追加自动 @',
-        chipLines.length === 3 &&
+        '文件 chips 的 URL 独占一行，自动 @ 单独成行',
+        chipLines.length === 4 &&
           chipLines[2]!.includes('/f/') &&
-          !chipLines.some((line) => line === '@WeBots 维护员'),
+          chipLines[3] === `@${data.agentA.name}` &&
+          !chipLines.includes('@WeBots 维护员'),
         chipLines,
       );
       const chipHumanMessage = page

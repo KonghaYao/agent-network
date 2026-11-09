@@ -4,16 +4,24 @@
  * 左侧“+”菜单的文件入口、隐藏文件选择器、粘贴图片、画板导出与聊天区拖拽
  * 共用 `enqueueDroppedFiles`（`POST /mcp-upload` → bind），上传成功后只在正文上方
  * 生成 chip，不再把公开 URL 插入 textarea。发送时由 `composerOutgoingBody`
- * 按当前房间拼接正文与文件公开 URL；附件发送时，只有当前群恰好有一个名称
- * 精确等于 `WeBots 维护员` 且不是发送者本人的 active Agent 成员才追加自动 @，
- * direct 与没有该成员的群都不追加。自动 @ 只是正文显示，不写入选择器目标。
+ * 拼接正文与文件公开 URL；人类在群聊里没有显式 @/选择时，自动 @ 已加载
+ * 时间线上最新一条消息的发送者。附件发送找不到上一位有效成员时，退回
+ * “当前群唯一精确维护员”的兜底；direct、空目标与重名成员都不追加。
+ * 自动 @ 只是正文显示，不写入选择器目标。
  *
  * 删除 chip 是用户显式操作，直接调用 `network_room_file_delete` 并刷新右侧文件栏；
  * 文件名与 URL 只用 textContent 写入 DOM，不输出到 console。
  */
+import { LIMITS } from '../contracts/limits';
+
 export const CHAT_UPLOAD_SCRIPT = `
 const COMPOSER_MENTION_NAME = 'WeBots 维护员';
 const COMPOSER_MENTION = '@' + COMPOSER_MENTION_NAME;
+const COMPOSER_BODY_MAX_BYTES = ${LIMITS.messageBodyBytes};
+const composerBodyEncoder = new TextEncoder();
+// 与服务端 resolveGroupTextMentions 保持一致的独立 token 边界。
+const COMPOSER_MENTION_PREV_BLOCKED = /[\\p{L}\\p{N}_.%+\\-]/u;
+const COMPOSER_MENTION_WORD = /[\\p{L}\\p{N}_]/u;
 const attachFileButton = document.getElementById('attach-file');
 const attachFileInput = document.getElementById('composer-file-input');
 const composerFilesElement = document.getElementById('composer-files');
@@ -279,8 +287,69 @@ function composerReadyKeys(roomId) {
   return keys;
 }
 
+/** 独立 @名字 token：与服务端正文解析同一边界，只用于前端去重。 */
+function composerMentionTokenAt(body, at, name) {
+  const start = at + 1;
+  if (!body.startsWith(name, start)) return false;
+  if (at > 0 && COMPOSER_MENTION_PREV_BLOCKED.test(body.charAt(at - 1))) return false;
+  const after = body.charAt(start + name.length);
+  if (after && COMPOSER_MENTION_WORD.test(after)) return false;
+  return true;
+}
+
+function composerBodyHasMention(body, name) {
+  if (!name || body.indexOf('@') < 0) return false;
+  const token = '@' + name;
+  let from = 0;
+  while (from <= body.length - token.length) {
+    const at = body.indexOf(token, from);
+    if (at < 0) return false;
+    if (composerMentionTokenAt(body, at, name)) return true;
+    from = at + 1;
+  }
+  return false;
+}
+
+/** 正文或选择器已经显式提到任何 active 成员时，不再追加自动 @。 */
+function composerHasExplicitMention(roomId, body) {
+  if ((mentionSelections.get(roomId) || []).length > 0) return true;
+  if (body.indexOf('@') < 0) return false;
+  for (const member of members.values()) {
+    if (composerBodyHasMention(body, member.name)) return true;
+  }
+  return false;
+}
+
 /**
- * 附件发送的自动 @：只有当前群恰好有一个 active Agent 名称精确等于
+ * 人类群聊自动 @ 上一位成员：只看已加载时间线的最新一条消息。
+ *
+ * presence 不是消息，继续向前找；最新消息由自己发送则没有目标。
+ * 候选发送者必须是当前 active 成员，且名字在 active 成员中唯一。
+ * ignoreMessageId 用于发送收尾重算：忽略刚刚提交的那条消息，避免
+ * 刷新把输入框误判成“已被编辑”而无法清空。
+ */
+function composerPreviousMemberMention(roomId, ignoreMessageId) {
+  if (!room || room.kind !== 'group' || room.room_id !== roomId) return '';
+  if (!identity || identity.kind !== 'human') return '';
+  for (let index = currentItems.length - 1; index >= 0; index -= 1) {
+    const item = currentItems[index];
+    if (!item || item.kind === 'presence') continue;
+    if (ignoreMessageId && item.message_id === ignoreMessageId) continue;
+    if (!item.sender_id || item.sender_id === identity.actor_id) return '';
+    const member = members.get(item.sender_id);
+    if (!member || !member.name) return '';
+    let named = 0;
+    for (const other of members.values()) {
+      if (other.name === member.name) named += 1;
+    }
+    if (named !== 1) return '';
+    return '@' + member.name;
+  }
+  return '';
+}
+
+/**
+ * 附件发送的兜底自动 @：只有当前群恰好有一个 active Agent 名称精确等于
  * COMPOSER_MENTION_NAME、且不是发送者本人时才返回，否则返回空串。
  *
  * 服务端按“最长成员名前缀”解析 @；群里只有“WeBots”时，正文若追加
@@ -302,29 +371,39 @@ function composerAutoMention(roomId) {
   return COMPOSER_MENTION;
 }
 
-/**
- * 构建发送正文：用户文本（trim）+ 各文件 public_url（每行一个）
- * + 当前群存在唯一精确名称维护员时末尾自动 @。用户文本已包含该字符串时不重复。
- * pending attachments 按 room 读取，切房后不会带上另一房间的文件或自动 @；
- * 没有文本与可发送文件时返回空串，阻止空消息。
- */
-function composerOutgoingBody(roomId, text) {
+/** 用户文本（trim）+ 各文件 public_url（每行一个），不含自动 @。 */
+function composerBodyParts(roomId, text) {
   const trimmed = String(text || '').trim();
   const urls = [];
   const entries = composerFileEntries.get(roomId) || [];
   for (const entry of entries) {
     if (entry.status === 'ready' && entry.public_url) urls.push(entry.public_url);
   }
-  if (!trimmed && urls.length === 0) return '';
   const parts = [];
   if (trimmed) parts.push(trimmed);
   for (const url of urls) parts.push(url);
-  let body = parts.join('\\n');
-  const autoMention = urls.length > 0 ? composerAutoMention(roomId) : '';
-  if (autoMention && body.indexOf(autoMention) < 0) {
-    body += (body ? '\\n' : '') + autoMention;
-  }
-  return body;
+  return { body: parts.join('\\n'), urls: urls };
+}
+
+/**
+ * 构建发送正文：用户文本（trim）+ 各文件 public_url（每行一个）
+ * + 自动 @。人类群聊优先 @ 最新一条消息的发送者；没有上一位有效成员时，
+ * 附件发送退回唯一精确维护员兜底。正文或选择器已有任何成员 @ 时不再追加；
+ * 追加后超过正文上限则跳过追加、原文照发。
+ * pending attachments 按 room 读取，切房后不会带上另一房间的文件或自动 @；
+ * 没有文本与可发送文件时返回空串，阻止空消息。
+ */
+function composerOutgoingBody(roomId, text, ignoreMessageId) {
+  const parts = composerBodyParts(roomId, text);
+  const body = parts.body;
+  if (!body) return '';
+  if (composerHasExplicitMention(roomId, body)) return body;
+  let autoMention = composerPreviousMemberMention(roomId, ignoreMessageId);
+  if (!autoMention && parts.urls.length > 0) autoMention = composerAutoMention(roomId);
+  if (!autoMention || composerBodyHasMention(body, autoMention.slice(1))) return body;
+  const candidate = body + '\\n' + autoMention;
+  if (composerBodyEncoder.encode(candidate).length > COMPOSER_BODY_MAX_BYTES) return body;
+  return candidate;
 }
 
 /** 附件入口与输入保持可用；当前房间有未完成上传时统一禁发。 */
