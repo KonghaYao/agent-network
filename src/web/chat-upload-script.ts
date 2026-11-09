@@ -346,7 +346,7 @@ function syncComposerSendState() {
   const loading = chatBodyElement && chatBodyElement.getAttribute('aria-busy') === 'true';
   sendButton.disabled = !activeRoomId || !room || room.room_id !== activeRoomId ||
     Boolean(room.read_only) || Boolean(loading) || Boolean(chatErrorElement && !chatErrorElement.hidden) ||
-    composerRequests.has(activeRoomId) || uploading;
+    composerRequests.has(activeRoomId) || composerSendingRooms.has(activeRoomId) || uploading;
   sendButton.title = uploading ? '附件上传完成后可发送' : '';
 }
 

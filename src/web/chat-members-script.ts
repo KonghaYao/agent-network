@@ -829,7 +829,7 @@ async function submitMembersForm(event) {
       room_id: roomId,
       add: selected
     });
-    if (!isActiveRoom(roomId, epoch) || formGeneration !== membersLoadToken) return;
+    if (!isActiveRoom(roomId, epoch)) return;
     const afterMembers = result && Array.isArray(result.members) ? result.members : [];
     const added = afterMembers.filter(function (member) {
       return !before.has(member.actor_id);
@@ -838,6 +838,7 @@ async function submitMembersForm(event) {
       return !previousInvites.has(entry.actor_id);
     });
     applyRoomDetail(result);
+    if (formGeneration !== membersLoadToken || !membersModal || membersModal.hidden) return;
     if (added.length === 0 && invitations.length === 0) {
       setMembersError('所选好友已在群里，成员没有变化。');
       renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);

@@ -36,6 +36,8 @@ import {
 } from './messages';
 import { actorId, type Principal } from './principal';
 import type { MessagePreviewView } from './rooms';
+import { directBlockGuardStatement } from './contact-blocks';
+import { roomDissolvedGuardStatement } from './room-access';
 import { messagePreviewOf } from './views';
 
 export interface DeliveryView {
@@ -289,6 +291,28 @@ async function deliverySenderId(
   return (await getMessage(db, delivery.message_id))?.sender_id;
 }
 
+/** Requeueing and claiming must not restore work revoked by room or contact changes. */
+function deliveryExecutionGuards(db: D1Database, delivery: DeliveryRow): D1PreparedStatement[] {
+  return [
+    roomDissolvedGuardStatement(db, delivery.room_id),
+    directBlockGuardStatement(db, delivery.room_id),
+    db.prepare(guardSql('notMember', `NOT EXISTS (
+      SELECT 1 FROM room_members rm JOIN rooms r ON r.room_id = rm.room_id
+      JOIN messages m ON m.message_id = ?
+      WHERE rm.room_id = ? AND rm.actor_id = ? AND rm.status = 'active'
+        AND (r.kind = 'direct' OR r.member_history_policy = 'full' OR m.created_seq >= rm.joined_seq)
+    )`)).bind(delivery.message_id, delivery.room_id, delivery.recipient_id),
+    db.prepare(guardSql('actorDisabled',
+      'EXISTS (SELECT 1 FROM actors WHERE actor_id = ? AND disabled_at IS NOT NULL)',
+    )).bind(delivery.recipient_id),
+    db.prepare(guardSql('blocked', `EXISTS (
+      SELECT 1 FROM contact_blocks b JOIN messages m ON m.sender_id = b.blocked_actor_id
+      WHERE m.message_id = ? AND b.blocker_actor_id = ?
+        AND b.released_at IS NULL AND b.mute_mentions = 1
+    )`)).bind(delivery.message_id, delivery.recipient_id),
+  ];
+}
+
 export async function deliveryClaim(
   db: D1Database,
   principal: Principal,
@@ -311,6 +335,7 @@ export async function deliveryClaim(
       result: { delivery_id: delivery.delivery_id },
       build: (resultJson) => [
         operationsStatement(db, actor, input.request_id, payloadHash, resultJson, at),
+        ...deliveryExecutionGuards(db, delivery),
         db
           .prepare(
             guardSql(
@@ -714,6 +739,18 @@ export async function deliveryRetry(
     result: { delivery_id: delivery.delivery_id },
     build: (resultJson) => [
       operationsStatement(db, actor, input.request_id, payloadHash, resultJson, at),
+      ...deliveryExecutionGuards(db, delivery),
+      db.prepare(guardSql('notMember', `NOT EXISTS (
+        SELECT 1 FROM room_members WHERE room_id = ? AND actor_id = ? AND status = 'active'
+      )`)).bind(delivery.room_id, actor),
+      db.prepare(guardSql('notOwner', `NOT EXISTS (
+        SELECT 1 FROM deliveries d JOIN messages m ON m.message_id = d.message_id
+        JOIN rooms r ON r.room_id = d.room_id
+        WHERE d.delivery_id = ? AND (d.recipient_id = ? OR m.sender_id = ? OR r.owner_id = ?)
+      )`)).bind(delivery.delivery_id, actor, actor, actor),
+      db.prepare(guardSql('queueFull',
+        "(SELECT COUNT(*) FROM deliveries WHERE recipient_id = ? AND state = 'pending') + 1 > ?",
+      )).bind(delivery.recipient_id, LIMITS.pendingPerActor),
       db
         .prepare(
           guardSql(

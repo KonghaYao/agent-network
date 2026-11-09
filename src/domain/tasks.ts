@@ -47,6 +47,7 @@ import {
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
 import {
+  getDriveFile,
   getActor,
   getDelivery,
   getMember,
@@ -100,10 +101,12 @@ import {
   historyBoundary,
   historySnapshot,
   visibleMessage,
+  visibleCreated,
   type HistoryBoundary,
   type HistorySnapshot,
 } from './room-history';
 import { messageCoreStatements, type MessageCore } from './messages';
+import { driveFileUsable, roomFileUsable } from './file-access';
 
 export type TaskStatus = TaskRow['status'];
 export type TaskAssignmentStatus = TaskAssignmentRow['status'];
@@ -1124,14 +1127,18 @@ async function validateAttachments(
   db: D1Database,
   room: RoomRow,
   fileIds: string[] | undefined,
-): Promise<Array<{ file_id: string; label: string }>> {  const unique = Array.from(new Set(fileIds ?? []));
+  boundary: HistoryBoundary,
+): Promise<Array<{ file_id: string; label: string }>> {
+  const unique = Array.from(new Set(fileIds ?? []));
   if (unique.length > LIMITS.taskAttachmentsMax) {
     throw invalid('附件', `一次最多引用 ${LIMITS.taskAttachmentsMax} 个文件`);
   }
   const attachments: Array<{ file_id: string; label: string }> = [];
   for (const fileId of unique) {
     const file = await getRoomFile(db, fileId);
-    if (!file || file.room_id !== room.room_id || file.deleted_at !== null) {
+    const drive = await getDriveFile(db, fileId);
+    if (!file || file.room_id !== room.room_id || !roomFileUsable(file) ||
+        !visibleCreated(file, boundary) || (drive && !driveFileUsable(drive))) {
       throw new BusinessError('FILE_UNAVAILABLE', '附件不存在、已删除或不属于该房间', {
         file_id: fileId,
       });
@@ -1164,14 +1171,22 @@ function taskAttachmentStatements(
         guardSql(
           'fileUnavailable',
           `NOT EXISTS (
-             SELECT 1 FROM room_files
-              WHERE file_id = ? AND room_id = ? AND deleted_at IS NULL
+             SELECT 1 FROM room_files rf
+             JOIN rooms r ON r.room_id = rf.room_id
+             JOIN room_members rm ON rm.room_id = r.room_id AND rm.actor_id = ?
+              WHERE rf.file_id = ? AND rf.room_id = ? AND rf.deleted_at IS NULL
+                AND rm.status = 'active'
+                AND (rf.retained = 1 OR rf.expires_at > ?)
+                AND (r.kind = 'direct' OR r.member_history_policy = 'full'
+                  OR (rf.created_seq IS NOT NULL AND rf.created_seq >= rm.joined_seq)
+                  OR (rf.created_seq IS NULL AND rf.created_at >= rm.joined_at))
            ) OR EXISTS (
-             SELECT 1 FROM drive_files WHERE file_id = ? AND state = 'deleted'
+             SELECT 1 FROM drive_files WHERE file_id = ? AND
+               (state = 'deleted' OR (retained = 0 AND expires_at IS NOT NULL AND expires_at <= ?))
            )`,
         ),
       )
-      .bind(attachment.file_id, input.roomId, attachment.file_id),
+      .bind(input.caller, attachment.file_id, input.roomId, input.at, attachment.file_id, input.at),
     db
       .prepare(
         `INSERT INTO file_references
@@ -1376,7 +1391,7 @@ export async function taskCreate(
     throw invalid('关联任务', '父任务与关联任务不能相同');
   }
   const dueAt = parseDueAt(input.due_at);
-  const attachments = await validateAttachments(db, room, input.attachment_file_ids);
+  const attachments = await validateAttachments(db, room, input.attachment_file_ids, boundary);
   const payloadHash = await sha256Hex(
     stableStringify({
       room_id: room.room_id,

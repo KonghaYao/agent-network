@@ -154,6 +154,8 @@ let groupPicker = null;
 // 发送失败/投递缺失/截断提示必须跨过 SSE 触发的刷新，不能在 300ms 后被清空。
 let stickyStatus = '';
 const composerRequests = new Set();
+// 独立于按钮状态：刷新或切换房间不得释放仍在途的发送锁。
+const composerSendingRooms = new Set();
 
 ${CHAT_IDENTITY_SCRIPT}
 ${CHAT_LIST_SCRIPT}
@@ -530,13 +532,18 @@ composer.addEventListener('submit', async function (event) {
   // 发送中再次回车不得新建第二条意图；按钮禁用是同一道闸。
   if (sendButton.disabled) return;
   const sendRoomId = activeRoomId;
-  if (!sendRoomId) return;
+  if (!sendRoomId || composerSendingRooms.has(sendRoomId)) return;
   const sendEpoch = roomEpoch;
-  const text = bodyInput.value.trim();
+  const composerDraft = bodyInput.value;
+  const text = composerDraft.trim();
   const body = composerOutgoingBody(sendRoomId, text);
   // 只清空本次真拼进正文的文件；发送请求期间的附件不能丢。
   const sentFileKeys = composerReadyKeys(sendRoomId);
   if (!body) return;
+  composerSendingRooms.add(sendRoomId);
+  composerRequests.add(sendRoomId);
+  syncComposerSendState();
+  try {
   stickyStatus = '';
   statusElement.textContent = '';
   // 群聊只信选择器保存的 actor_id：Agent 进 invoke，人类进 mentions；
@@ -581,13 +588,11 @@ composer.addEventListener('submit', async function (event) {
   );
   const reused = Boolean(intent);
   const finishOptions = {
-    epoch: sendEpoch, submittedText: text, sentFileKeys: sentFileKeys,
+    epoch: sendEpoch, submittedText: text, composerDraft: composerDraft,
+    sentFileKeys: sentFileKeys,
     sentMentionSelections: sentMentionSelections, fromRetry: reused,
     invokeTargets: invokeTargets.length
   };
-  composerRequests.add(sendRoomId);
-  syncComposerSendState();
-  try {
     if (intent) {
       // 响应丢失后先对账；确认已提交就不再发送第二条。
       const decision = await outboxCheckBeforeResend(intent);
@@ -621,6 +626,7 @@ composer.addEventListener('submit', async function (event) {
     if (isActiveRoom(sendRoomId, sendEpoch)) scrollController.pinNextApply();
     await outboxSubmit(intent, finishOptions);
   } finally {
+    composerSendingRooms.delete(sendRoomId);
     composerRequests.delete(sendRoomId);
     syncComposerSendState();
     if (isActiveRoom(sendRoomId, sendEpoch)) {

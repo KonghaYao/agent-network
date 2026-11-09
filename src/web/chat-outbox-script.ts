@@ -378,9 +378,14 @@ function outboxComposerMatches(intent) {
 function outboxFinishCommitted(intent, options) {
   const settings = options || {};
   const currentRoom = activeRoomId === intent.room_id;
+  const savedDraft = drafts.has(intent.room_id)
+    ? drafts.get(intent.room_id)
+    : draftLoad(intent.room_id);
   const matches = currentRoom ? outboxComposerMatches(intent)
-    : typeof settings.submittedText === 'string' &&
-      String(drafts.get(intent.room_id) || '').trim() === settings.submittedText;
+    : typeof settings.composerDraft === 'string'
+      ? String(savedDraft || '') === settings.composerDraft
+      : typeof settings.submittedText === 'string' &&
+        String(savedDraft || '').trim() === settings.submittedText;
   // 已发送的 @ 选择独立消费；发送期间新选的目标属于下一条草稿。
   const consumed = new Set(settings.sentMentionSelections || []);
   const remaining = (mentionSelections.get(intent.room_id) || []).filter(function (entry) {
