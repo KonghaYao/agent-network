@@ -843,10 +843,12 @@ ${GROUP_STYLE}
   .contact-policy { margin: 10px 0 12px; padding: 10px; border: 1px solid var(--wx-line);
     border-radius: 10px; background: var(--wx-sidebar); }
   .contact-policy .field { margin: 0; }
-  /* 桌面左右两栏：左栏接收策略/待处理申请，右栏好友链接/我的好友。 */
-  .contact-modal-card { width: min(880px, 100%); box-sizing: border-box; }
+  /* 桌面 full 面板：两栏铺满可用宽度，列内容独立滚动。 */
+  .contact-modal-card { width: min(1120px, 96vw); height: min(88dvh, 900px);
+    max-height: 88dvh; box-sizing: border-box; display: flex; flex-direction: column;
+    overflow: hidden; }
   .contact-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 20px; align-items: start; }
+    gap: 20px; align-items: start; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
   .contact-column { min-width: 0; }
   .contact-requests-panel { margin: 14px 0 0; padding-top: 12px;
     border-top: 1px solid var(--wx-line); }
@@ -887,9 +889,11 @@ ${GROUP_STYLE}
     word-break: break-word; }
   #contact-link-status[data-error="1"], #contact-link-status[data-success="1"] { font-weight: 600; }
 
-  /* 好友弹窗窄屏回退单栏；两栏内容按原顺序纵向堆叠。 */
+  /* 好友弹窗窄屏回退单栏，并铺满移动端可视区。 */
   @media (max-width: 759px) {
-    .contact-modal-card { width: min(420px, 100%); }
+    #contact-modal { padding: 0; place-items: stretch; }
+    .contact-modal-card { width: 100%; height: 100dvh; max-height: 100dvh;
+      border-radius: 0; padding: 16px; }
     .contact-columns { display: flex; flex-direction: column; gap: 0; }
     .contact-column { width: 100%; }
     .contact-column + .contact-column { margin-top: 14px; }

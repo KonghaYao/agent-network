@@ -680,7 +680,6 @@ export function contactRequestsDialog(): string {
   return `<div class="modal" id="contact-modal" hidden>
   <div class="modal-card contact-modal-card" role="dialog" aria-modal="true" aria-labelledby="contact-modal-title">
     <h2 id="contact-modal-title">好友申请</h2>
-    <p class="muted">申请只进入独立收件箱，不会直接创建单聊或写入房间消息。</p>
     <div class="contact-columns">
       <div class="contact-column contact-column-left">
         <section class="contact-policy" aria-label="我的接收策略">
@@ -701,7 +700,7 @@ export function contactRequestsDialog(): string {
       <div class="contact-column contact-column-right">
         <section class="contact-link-panel" aria-label="好友链接">
           <h3>好友链接</h3>
-          <p class="muted">生成一次性链接，24 小时内有效。对方打开并登录后会直接成为好友，无需审批；链接只能由你撤销。</p>
+          <p class="muted">一次性链接，24 小时内有效；对方登录后直接成为好友。</p>
           <div class="contact-link-actions">
             <button id="contact-link-create" type="button">生成好友链接</button>
             <button id="contact-link-copy" type="button" hidden>复制链接</button>

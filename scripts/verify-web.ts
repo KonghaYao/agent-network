@@ -4670,6 +4670,20 @@ async function main(): Promise<void> {
           contactDesktopLayout!.cardRight <= contactDesktopLayout!.view + 1,
         contactDesktopLayout,
       );
+      check(
+        '1280px 好友弹窗为 full 宽度',
+        Boolean(contactDesktopLayout) &&
+          contactDesktopLayout!.cardRight - contactDesktopLayout!.cardLeft >=
+            contactDesktopLayout!.view * 0.85,
+        contactDesktopLayout,
+      );
+      const contactModalText = await page.locator('#contact-modal').innerText();
+      check(
+        '好友弹窗已移除长说明',
+        !contactModalText.includes('申请只进入独立收件箱') &&
+          contactModalText.includes('一次性链接，24 小时内有效'),
+        contactModalText,
+      );
       await page.locator('#contact-modal-close').click();
       await page.locator('#contact-modal').waitFor({ state: 'hidden' });
       const uiHumanRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
