@@ -35,6 +35,11 @@ import {
   contactRequestRespondSchema,
   contactRequestSchema,
   contactRequestsListSchema,
+  contactLinkCreateSchema,
+  contactLinkListSchema,
+  contactLinkPreviewSchema,
+  contactLinkRedeemSchema,
+  contactLinkRevokeSchema,
   contactUnblockSchema,
   contactsListSchema,
   deliveryCancelSchema,
@@ -155,6 +160,13 @@ import {
   contactUnblock,
 } from '../domain/contact-blocks';
 import { contactPolicyGet, contactPolicySet } from '../domain/contact-policies';
+import {
+  contactLinkCreate,
+  contactLinkList,
+  contactLinkPreview,
+  contactLinkRedeem,
+  contactLinkRevoke,
+} from '../domain/contact-invite-links';
 import {
   contactRequest,
   contactRequestCancel,
@@ -302,6 +314,11 @@ import {
   contactBlockPageSchema,
   contactBlockResultSchema,
   contactPageSchema,
+  contactLinkCreateResultSchema,
+  contactLinkListResultSchema,
+  contactLinkPreviewResultSchema,
+  contactLinkRedeemResultSchema,
+  contactLinkRevokeResultSchema,
   contactPolicySchema,
   contactReportPageSchema,
   contactReportResultSchema,
@@ -1026,6 +1043,63 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       return contactRequestCancel(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_link_create',
+    '生成一次性好友邀请链接，返回 { link, share_url }。链接 24 小时内有效、只能使用一次、只能由创建者撤销；share_url 形如 `${PUBLIC_ORIGIN}/#friend=<token>`，token 明文只在首次响应出现一次，服务端只保存 SHA-256 摘要，同一 request_id 重放返回 TOKEN_NOT_REPLAYABLE。每个身份最多同时保留 LIMITS.contactLinkPendingMax 条 pending 链接，超出返回 QUOTA_EXCEEDED。对方打开链接并登录后直接建立双向好友关系，不需要好友申请或审批。',
+    contactLinkCreateSchema,
+    contactLinkCreateResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactLinkCreate(db, principal, input, origin);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_link_preview',
+    '预览好友邀请链接是否可用，无需已注册身份。只返回 valid、status、邀请人展示信息与 expires_at；无效、过期、已使用或已撤销返回 valid=false 与 reason，不创建身份、不消耗链接、不返回 token 摘要。网页在自动注册前先调用该工具，确保错误链接不会产生替代身份。',
+    contactLinkPreviewSchema,
+    contactLinkPreviewResultSchema,
+    async (input) => contactLinkPreview(db, input),
+  );
+
+  register(
+    server,
+    'network_contact_link_redeem',
+    '兑换好友邀请链接：直接建立双方 active `contact_relations`（source=invite_link）与个人收藏，不创建 pending 好友申请、不要求审批。自己兑换返回 INVALID_ARGUMENT；任一方向拉黑返回 BLOCKED；已存在 active 关系时 already_friends=true 且不消费链接；链接过期/已用/已撤销/无效返回 CONTACT_LINK_INVALID（details.reason 区分 expired/used/revoked/invalid）。成功后 links 置为 used，事件只写持久 inbox/outbox 提示，不产生 delivery、不增加 pending_count、不推进房间 head_seq。同一 request_id 重放返回首次结果。',
+    contactLinkRedeemSchema,
+    contactLinkRedeemResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactLinkRedeem(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_link_list',
+    '读取自己生成的好友邀请链接状态，按创建时间倒序；只返回 link_id、status、expires_at、used_by 展示信息与 can_revoke，从不返回 token、token_hash 或 share_url。pending 且已过期的链接在读取时标记为 expired；used_by 只展示兑换者，不代表可读其消息或房间。',
+    contactLinkListSchema,
+    contactLinkListResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactLinkList(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_link_revoke',
+    '撤销自己生成且未使用的好友邀请链接。只有 owner 可撤销，其他身份返回 PERMISSION_DENIED；已使用链接返回 CONFLICT；重复撤销幂等返回 already_revoked=true。撤销后立即无法兑换，但已建立的 contact_relations 不受影响。',
+    contactLinkRevokeSchema,
+    contactLinkRevokeResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactLinkRevoke(db, principal, input);
     },
   );
 

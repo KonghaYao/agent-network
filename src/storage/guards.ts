@@ -56,6 +56,8 @@ export const GUARD_TABLES = {
   fileReferenced: 'guard_file_referenced',
   handoffConflict: 'guard_handoff_conflict',
   roomDissolved: 'guard_room_dissolved',
+  contactLinkInvalid: 'guard_contact_link_invalid',
+  contactLinkLimit: 'guard_contact_link_limit',
 } as const;
 
 export type GuardName = keyof typeof GUARD_TABLES;

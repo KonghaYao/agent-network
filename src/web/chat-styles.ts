@@ -852,6 +852,24 @@ ${GROUP_STYLE}
   .contact-request-actions { display: flex; flex: 0 0 auto; gap: 6px; align-items: flex-start; }
   .contact-request-empty { padding: 12px 0; color: var(--wx-muted); font-size: 13px; }
 
+  /* 好友邀请链接：明文只在内存中，列表只展示状态；失败状态用错误色。 */
+  .contact-link-banner { margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--wx-line);
+    border-radius: 8px; background: var(--wx-sidebar); color: var(--wx-text); font-size: 13px;
+    word-break: break-word; }
+  .contact-link-banner[data-error="1"] { border-color: var(--wx-unread); color: var(--wx-unread); }
+  .contact-link-panel, .contact-friends-panel { margin: 14px 0 0; padding-top: 12px;
+    border-top: 1px solid var(--wx-line); }
+  .contact-link-panel h3, .contact-friends-panel h3 { margin: 0 0 6px; font-size: 14px; }
+  .contact-link-actions { display: flex; gap: 8px; margin: 8px 0; }
+  .contact-link-list { list-style: none; margin: 6px 0 0; padding: 0;
+    display: flex; flex-direction: column; gap: 6px; max-height: 26vh; overflow: auto; }
+  .contact-link-item { display: flex; justify-content: space-between; align-items: center;
+    gap: 8px; padding: 8px 10px; border: 1px solid var(--wx-line); border-radius: 8px;
+    font-size: 13px; }
+  .contact-link-item .contact-link-meta { min-width: 0; color: var(--wx-muted);
+    word-break: break-word; }
+  #contact-link-status[data-error="1"], #contact-link-status[data-success="1"] { font-weight: 600; }
+
   @media (prefers-reduced-motion: reduce) {
     .skeleton-avatar, .skeleton-lines span, .skeleton-bubble { animation: none; }
     .chat-loading::after { animation: none; width: 100%; }

@@ -25,6 +25,7 @@ const NEW_MIGRATIONS = [
   '0037_room_lifecycle.sql',
   '0038_ownerless_room_guard.sql',
   '0039_delivery_message_state_index.sql',
+  '0040_contact_invite_links.sql',
 ];
 const AT = 1_700_000_000_000;
 
@@ -204,17 +205,17 @@ try {
   checkEqual('升级前没有设备行', before.devices, 0);
 
   const appliedNow = migrate(db, SOURCE_MIGRATIONS);
-  checkEqual('恰好应用 0036–0039', appliedNow.join(','), NEW_MIGRATIONS.join(','));
+  checkEqual('恰好应用 0036–0040', appliedNow.join(','), NEW_MIGRATIONS.join(','));
   const expectedMigrations = [
     ...Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(4, '0')),
-    ...Array.from({ length: 23 }, (_, i) => String(i + 17).padStart(4, '0')),
+    ...Array.from({ length: 24 }, (_, i) => String(i + 17).padStart(4, '0')),
   ];
   const actualMigrations = (
     db.prepare('SELECT name FROM schema_migrations ORDER BY name').all() as Array<{ name: string }>
   ).map((row) => row.name);
-  checkEqual('迁移总数为 35', actualMigrations.length, 35);
+  checkEqual('迁移总数为 36', actualMigrations.length, 36);
   check(
-    '迁移序号为 0001–0012、0017–0039',
+    '迁移序号为 0001–0012、0017–0040',
     actualMigrations.every((name, i) => name.startsWith(`${expectedMigrations[i]}_`)),
     actualMigrations,
   );

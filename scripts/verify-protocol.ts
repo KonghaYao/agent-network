@@ -324,6 +324,11 @@ async function main(): Promise<void> {
     'network_contact_requests_list',
     'network_contact_request_respond',
     'network_contact_request_cancel',
+    'network_contact_link_create',
+    'network_contact_link_preview',
+    'network_contact_link_redeem',
+    'network_contact_link_list',
+    'network_contact_link_revoke',
     'network_contact_policy_get',
     'network_contact_policy_set',
     'network_contact_block',
@@ -543,6 +548,68 @@ async function main(): Promise<void> {
       deviceDescription('network_device_revoke').includes('stream') &&
       deviceDescription('network_device_revoke').includes('不影响其他设备'),
     deviceDescription('network_device_revoke'),
+  );
+  const contactLinkCreateTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_contact_link_create',
+  );
+  const contactLinkCreateInput = contactLinkCreateTool?.inputSchema as
+    | { properties?: Record<string, unknown> }
+    | undefined;
+  const contactLinkCreateOutput = contactLinkCreateTool?.outputSchema as
+    | { properties?: Record<string, unknown> }
+    | undefined;
+  check(
+    '好友链接 create 描述声明一次性、24 小时、摘要与不可重放',
+    deviceDescription('network_contact_link_create').includes('一次性') &&
+      deviceDescription('network_contact_link_create').includes('24 小时') &&
+      deviceDescription('network_contact_link_create').includes('SHA-256') &&
+      deviceDescription('network_contact_link_create').includes('TOKEN_NOT_REPLAYABLE') &&
+      deviceDescription('network_contact_link_create').includes('QUOTA_EXCEEDED'),
+    deviceDescription('network_contact_link_create'),
+  );
+  check(
+    '好友链接 create 输入只接受 request_id/expires_in_ms，输出含 link/share_url',
+    Object.keys(contactLinkCreateInput?.properties ?? {}).sort().join(',') ===
+      'expires_in_ms,request_id' &&
+      Object.keys(contactLinkCreateOutput?.properties ?? {}).sort().join(',') ===
+        'link,share_url' &&
+      !JSON.stringify(contactLinkCreateOutput ?? {}).includes('token_hash'),
+    contactLinkCreateOutput,
+  );
+  const contactLinkPreviewTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_contact_link_preview',
+  );
+  const contactLinkPreviewInput = contactLinkPreviewTool?.inputSchema as
+    | { properties?: Record<string, unknown> }
+    | undefined;
+  const contactLinkPreviewOutput = contactLinkPreviewTool?.outputSchema as
+    | { properties?: Record<string, unknown> }
+    | undefined;
+  check(
+    '好友链接 preview 无需身份且只返回可用状态',
+    deviceDescription('network_contact_link_preview').includes('无需已注册身份') &&
+      deviceDescription('network_contact_link_preview').includes('不创建身份') &&
+      Object.keys(contactLinkPreviewInput?.properties ?? {}).sort().join(',') === 'token' &&
+      Object.keys(contactLinkPreviewOutput?.properties ?? {}).sort().join(',') ===
+        'expires_at,owner,reason,status,valid' &&
+      !JSON.stringify(contactLinkPreviewOutput ?? {}).includes('token_hash'),
+    contactLinkPreviewTool,
+  );
+  check(
+    '好友链接 redeem 描述声明直接建联与明确错误',
+    deviceDescription('network_contact_link_redeem').includes('invite_link') &&
+      deviceDescription('network_contact_link_redeem').includes('不创建 pending') &&
+      deviceDescription('network_contact_link_redeem').includes('BLOCKED') &&
+      deviceDescription('network_contact_link_redeem').includes('already_friends') &&
+      deviceDescription('network_contact_link_redeem').includes('CONTACT_LINK_INVALID'),
+    deviceDescription('network_contact_link_redeem'),
+  );
+  check(
+    '好友链接 revoke/list 描述声明 owner-only 与不返回明文',
+    deviceDescription('network_contact_link_revoke').includes('只有 owner') &&
+      deviceDescription('network_contact_link_list').includes('从不返回 token') &&
+      deviceDescription('network_contact_link_list').includes('token_hash'),
+    deviceDescription('network_contact_link_revoke'),
   );
   const syncTool = listed?.tools?.find((tool) => tool.name === 'network_sync');
   const syncOutput = syncTool?.outputSchema as
@@ -3005,6 +3072,32 @@ async function main(): Promise<void> {
     '静态/主 skill multitask 异步分发 digest 一致',
     sectionDigest(staticMultitaskSection),
     sectionDigest(mainMultitaskSection),
+  );
+  const contactLinkSection = (text: string): string => {
+    const heading = '### 好友邀请链接';
+    const start = text.indexOf(heading);
+    if (start < 0) return '';
+    const rest = text.slice(start + heading.length);
+    const next = rest.search(/\n#{2,3} /u);
+    return (next < 0 ? rest : rest.slice(0, next)).trim();
+  };
+  const mainContactLinkSection = contactLinkSection(skillText);
+  const staticContactLinkSection = contactLinkSection(skillDocText);
+  check(
+    '静态/主 skill 好友邀请链接语义完整',
+    mainContactLinkSection.includes('24 小时') &&
+      mainContactLinkSection.includes('TOKEN_NOT_REPLAYABLE') &&
+      mainContactLinkSection.includes('CONTACT_LINK_INVALID') &&
+      mainContactLinkSection.includes('invite_link') &&
+      mainContactLinkSection.includes('already_friends') &&
+      mainContactLinkSection.includes('错误链接不得创建替代身份') &&
+      staticContactLinkSection.includes('24 小时'),
+    mainContactLinkSection.slice(0, 240),
+  );
+  checkEqual(
+    '静态/主 skill 好友邀请链接 digest 一致',
+    sectionDigest(staticContactLinkSection),
+    sectionDigest(mainContactLinkSection),
   );
   const fileShareRules = (text: string): string[] => {
     const markers = [

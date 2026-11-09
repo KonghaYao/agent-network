@@ -50,6 +50,7 @@ export function sidebarPane(): string {
     </div>
   </header>
   <div class="sidebar-list">
+    <p id="contact-link-banner" class="contact-link-banner" role="status" hidden></p>
     <ol id="room-list" class="room-list" aria-label="单聊">
       <li class="room-skeleton" aria-hidden="true">
         <span class="skeleton-avatar"></span>
@@ -686,6 +687,20 @@ export function contactRequestsDialog(): string {
     </div>
     <ul id="contact-request-list" class="contact-request-list" aria-label="待处理好友申请"></ul>
     <p id="contact-request-status" class="form-error" role="status"></p>
+    <section class="contact-link-panel" aria-label="好友链接">
+      <h3>好友链接</h3>
+      <p class="muted">生成一次性链接，24 小时内有效。对方打开并登录后会直接成为好友，无需审批；链接只能由你撤销。</p>
+      <div class="contact-link-actions">
+        <button id="contact-link-create" type="button">生成好友链接</button>
+        <button id="contact-link-copy" type="button" hidden>复制链接</button>
+      </div>
+      <p id="contact-link-status" class="muted" role="status"></p>
+      <ul id="contact-link-list" class="contact-link-list" aria-label="已生成的好友链接"></ul>
+    </section>
+    <section class="contact-friends-panel" aria-label="我的好友">
+      <h3>我的好友</h3>
+      <ul id="contact-friend-list" class="contact-request-list" aria-label="我的好友"></ul>
+    </section>
     <div class="row modal-actions">
       <button id="contact-modal-close" type="button">关闭</button>
     </div>

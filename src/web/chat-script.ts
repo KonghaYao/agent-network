@@ -148,6 +148,19 @@ let activeMention = null;
 const mentionSelections = new Map();
 let composing = false;
 let ignoreEnterUntil = 0;
+
+// 好友链接 fragment：立即从地址栏清除，只在内存中保留 token 供预览/兑换。
+const FRIEND_LINK_HASH = /^#friend=([A-Za-z0-9_-]{8,128})$/;
+let pendingFriendToken = (function () {
+  const match = FRIEND_LINK_HASH.exec(window.location.hash || '');
+  if (!match) return null;
+  try {
+    history.replaceState(history.state, '', window.location.pathname + window.location.search);
+  } catch (error) {
+    // 地址栏清理失败时仍保留内存 token；不写入 DOM 或日志。
+  }
+  return match[1];
+})();
 let pendingRoomRefreshId = null;
 let groupLoadSeq = 0;
 let groupPicker = null;
@@ -760,6 +773,11 @@ if (loggedOutStartButton) {
     try {
       await loadRooms();
       if (identity) startActorStream();
+      if (pendingFriendToken && identity) {
+        const friendToken = pendingFriendToken;
+        pendingFriendToken = null;
+        await redeemContactLinkToken(friendToken);
+      }
     } finally {
       window.__agentNetworkAllowRegister = false;
       loggedOutStartButton.disabled = false;
@@ -770,6 +788,10 @@ if (loggedOutStartButton) {
 }
 
 (async function init() {
+  // 好友链接是首页入口：清除 fragment 后忽略深链，避免把 token 带进房间请求。
+  if (pendingFriendToken && location.pathname !== '/') {
+    history.replaceState(null, '', '/');
+  }
   // 退出后通过 location.replace('/') 回到本页；不自动注册新身份，也不建 SSE。
   if (isLoggedOut()) {
     if (location.pathname !== '/') {
@@ -778,12 +800,50 @@ if (loggedOutStartButton) {
     }
     bootstrapRoute(null);
     showLoggedOutHome();
+    if (pendingFriendToken) await prepareContactLinkOnLoggedOut(pendingFriendToken);
+    return;
+  }
+  let friendLinkBlockedMessage = null;
+  // 未注册身份先预览：无效链接不产生替代身份；有效才落本地 token 并允许注册。
+  if (pendingFriendToken && !browserToken()) {
+    let preview = null;
+    try {
+      preview = await previewContactLinkToken(pendingFriendToken);
+    } catch (error) {
+      preview = null;
+    }
+    if (!preview || !preview.valid) {
+      friendLinkBlockedMessage = preview
+        ? contactLinkReasonMessage(preview.reason)
+        : '暂时无法校验好友链接，请稍后重试。';
+      pendingFriendToken = null;
+    } else {
+      const candidate = crypto.randomUUID();
+      try {
+        localStorage.setItem(TOKEN_KEY, candidate);
+      } catch (error) {
+        showContactLinkBanner('浏览器无法保存身份，请允许本地存储后刷新页面。', true);
+        return;
+      }
+      window.__agentNetworkAllowRegister = true;
+    }
+  }
+  if (friendLinkBlockedMessage) {
+    bootstrapRoute(null);
+    showContactLinkBlockedHome(friendLinkBlockedMessage);
     return;
   }
   bootstrapRoute(initialRoomId);
   // 首页也启动；每页只有这一条 agentnet://stream，切换房间不重建。
   startActorStream();
   await Promise.allSettled([loadRooms(), refreshContactBadge()]);
+  window.__agentNetworkAllowRegister = false;
+  if (pendingFriendToken) {
+    const friendToken = pendingFriendToken;
+    pendingFriendToken = null;
+    if (identity) await redeemContactLinkToken(friendToken);
+    else showContactLinkBanner('好友链接未兑换：登录未完成，请重新打开链接。', true);
+  }
   // 刷新/换设备后先对账本地意图，再决定是否提供重试。
   outboxScheduleReconcile(0);
 })();

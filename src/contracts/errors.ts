@@ -32,6 +32,7 @@ export type BusinessErrorCode =
   | 'BLOCKED'
   | 'ACTOR_DISABLED'
   | 'PAIRING_INVALID'
+  | 'CONTACT_LINK_INVALID'
   | 'CONFLICT';
 
 export interface BusinessErrorBody {

@@ -324,7 +324,7 @@ export const contactRelationSchema = z.object({
   pair_key: z.string(),
   actor_ids: z.array(z.string()),
   status: z.enum(['active', 'ended']),
-  source: z.enum(['request', 'auto_manager']),
+  source: z.enum(['request', 'auto_manager', 'invite_link']),
   created_at: z.string(),
   updated_at: z.string(),
   ended_at: z.string().nullable(),
@@ -418,6 +418,51 @@ export const contactReportPageSchema = z.object({
   items: z.array(contactReportSchema),
   next_cursor: z.string().nullable(),
   has_more: z.boolean(),
+});
+
+/**
+ * 好友邀请链接视图：从不包含 token 或 token_hash。
+ * `can_revoke` 只对仍 pending 且属于当前 actor 的链接为 true。
+ */
+export const contactLinkSchema = z.object({
+  link_id: z.string(),
+  status: z.enum(['pending', 'used', 'revoked', 'expired']),
+  created_at: z.string(),
+  expires_at: z.string(),
+  used_by: contactActorSchema.nullable(),
+  used_at: z.string().nullable(),
+  revoked_at: z.string().nullable(),
+  can_revoke: z.boolean(),
+});
+
+/** 明文分享 URL 只在首次 create 响应出现；重放返回 TOKEN_NOT_REPLAYABLE。 */
+export const contactLinkCreateResultSchema = z.object({
+  link: contactLinkSchema,
+  share_url: z.string(),
+});
+
+export const contactLinkPreviewResultSchema = z.object({
+  valid: z.boolean(),
+  status: z.enum(['pending', 'used', 'revoked', 'expired', 'invalid']),
+  owner: contactActorSchema.nullable(),
+  expires_at: z.string().nullable(),
+  reason: z.enum(['invalid', 'expired', 'used', 'revoked']).nullable(),
+});
+
+export const contactLinkRedeemResultSchema = z.object({
+  link_id: z.string(),
+  owner: contactActorSchema,
+  relation: contactRelationSchema,
+  already_friends: z.boolean(),
+});
+
+export const contactLinkRevokeResultSchema = z.object({
+  link: contactLinkSchema,
+  already_revoked: z.boolean(),
+});
+
+export const contactLinkListResultSchema = z.object({
+  items: z.array(contactLinkSchema),
 });
 
 export const deliverySchema = z.object({

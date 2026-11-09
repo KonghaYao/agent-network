@@ -22,6 +22,7 @@ import { contactBlockGuardStatement } from './contact-blocks';
  * `contacts` 是单侧个人收藏/历史，不是同意；双向关系只认
  * `contact_relations`。申请、拒绝、过期与撤销只写持久事件，不产生
  * delivery，也不向 Agent 的 actor stream 写 outbox，避免唤醒 Agent 执行任务。
+ * 好友邀请链接兑换同样复用这里的双向关系写入，但它是直接建联、没有申请。
  */
 
 export type ContactRequestStatus =
@@ -59,7 +60,7 @@ export interface ContactRelationView {
   pair_key: string;
   actor_ids: string[];
   status: 'active' | 'ended';
-  source: 'request' | 'auto_manager';
+  source: 'request' | 'auto_manager' | 'invite_link';
   created_at: string;
   updated_at: string;
   ended_at: string | null;
@@ -270,12 +271,12 @@ export function contactPairInsert(
     .bind(owner, target, at);
 }
 
-/** 接受申请或管理者自动建联时复用；upsert 不会重复写 contacts。 */
+/** 接受申请、管理者自动建联或好友链接兑换时复用；upsert 不会重复写 contacts。 */
 export function activateRelationStatements(
   db: D1Database,
   actorAId: string,
   actorBId: string,
-  source: 'request' | 'auto_manager',
+  source: 'request' | 'auto_manager' | 'invite_link',
   requestId: string | null,
   at: number,
 ): D1PreparedStatement[] {

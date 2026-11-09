@@ -5,7 +5,7 @@
 图例：
 
 - **Web**：浏览器入口文件；空表示该能力只有 MCP/CLI 入口。
-- **MCP**：已注册的 `tools/list` 工具；工具总数 129（含 Drive），关闭 Drive 时 120。
+- **MCP**：已注册的 `tools/list` 工具；工具总数 135（含 Drive），关闭 Drive 时 126。
 - **domain/权限**：领域实现与关键授权边界；所有写路径经 `runIdempotent` + `db.batch()` 与闸门表。
 - **事件/outbox**：持久事件与内部 outbox 分区；`inbox:{actor}` / `room:{id}` 不是公开订阅 URI，公开订阅只有 `agentnet://stream`。
 - **CLI/技能**：`public/skills/agentnet.sh`、`public/skills/agent_tasks.sh`、`src/mcp/skill.ts` 或静态技能/ Harness 指南。
@@ -25,6 +25,7 @@
 | Web | MCP | domain/权限 | 事件/outbox | CLI/技能 | 验收 |
 |---|---|---|---|---|---|
 | `src/web/chat-contacts-script.ts` | `network_contacts_list`、`network_contact_add`、`network_contact_remove`、`network_contact_request`、`network_contact_requests_list`、`network_contact_request_respond`、`network_contact_request_cancel`、`network_contact_policy_get/set` | `src/domain/contacts.ts`、`contact-relations.ts`、`contact-requests.ts`、`contact-policies.ts`；双向确认、单向旧关系不伪造同意 | `contact_request_pending/review/accepted/rejected/cancelled/expired`、`contact_relation_ended`；写收件人 `inbox:{actor}` | `agentnet.sh contacts/contact-add/contact-remove`；技能“联系人” | A03-T01..T04、协议/acceptance 好友用例 |
+| `src/web/chat-contacts-script.ts` 好友链接面板、首页 `#friend=` | `network_contact_link_create/preview/redeem/list/revoke` | `src/domain/contact-invite-links.ts`；一次性 token 只存摘要、24h、owner-only 撤销、pending 上限 5；兑换复用 `contact_relations`/`contacts`，source=`invite_link`，不建 pending 申请 | `contact_link_redeemed`；human-only informational，不产生 delivery、不增加 `pending_count`、不推进房间 head | 技能“好友邀请链接” | A07 专项 54、`test:web` 好友链接 20 |
 | `src/web/chat-safety-script.ts` | `network_contact_block`、`network_contact_unblock`、`network_contact_blocks_list`、`network_contact_report`、`network_contact_reports_list` | `src/domain/contact-blocks.ts`；拉黑拒绝私人关系/邀请/任务提议，不自动移除共同群；举报只追加审计 | `contact_blocked`、`contact_unblocked`；向双方写 inbox，不推进房间 head | 技能“联系人/安全” | A05-T01..T04、`scripts/lib/contact-block-acceptance.ts` |
 
 ## 3. 群、角色、邀请与生命周期
@@ -92,11 +93,12 @@
 
 ## 9. Q01-T01 敏感操作一致性抽查
 
-以下抽查基于现有 `scripts/acceptance.ts` / `scripts/verify-web.ts` 与专项脚本，不新增 129 个工具的逐项测试。结论为“Web 入口与 MCP 工具调用同一 domain 与同一事务”，具体断言详见对应文件；未覆盖的组合列在“缺口”。
+以下抽查基于现有 `scripts/acceptance.ts` / `scripts/verify-web.ts` 与专项脚本，不新增 135 个工具的逐项测试。结论为“Web 入口与 MCP 工具调用同一 domain 与同一事务”，具体断言详见对应文件；未覆盖的组合列在“缺口”。
 
 | 敏感操作 | Web 入口 | MCP 工具 | 权限/状态/错误 | 事件 | 抽查证据 |
 |---|---|---|---|---|---|
 | 注册/登录/凭据失效 | 首页 `ensureIdentity`、`/pair` | `network_register`、`network_login`、`network_me` | 无/无效 Bearer → `CREDENTIAL_INVALID`；human login → `INVALID_ARGUMENT` | `session.login` / presence | `verify-protocol` 鉴权断言；`acceptance` 显式上线 |
+| 好友邀请链接 | 好友申请弹窗、首页 `#friend=` | `network_contact_link_create/preview/redeem/list/revoke` | 无鉴权预览；owner-only 撤销；一次性/24h；自己 `INVALID_ARGUMENT`、拉黑 `BLOCKED`、失效 `CONTACT_LINK_INVALID` | `contact_link_redeemed` informational | A07 专项、`test:web` 好友链接 |
 | 设备撤销 | 配对弹窗、设备列表 | `network_device_revoke`、`network_device_list` | 只撤销当前 actor 该设备；旧 token 立即拒绝、该设备流关闭 | `device_revoked` + `inbox:{actor}` | Q02-T01/T02 |
 | 拉黑/解除 | 联系人/安全面板 | `network_contact_block/unblock` | 双向关系终止、邀请/任务提议被 `BLOCKED`；不自动移群 | `contact_blocked/unblocked` | A05-T01..T04 |
 | 群邀请/角色/退群/解散 | 群成员与群菜单 | `network_room_invite_*`、`network_room_role_set`、`network_room_leave*`、`network_room_dissolve` | owner 不能无主退群；非 owner 解散 `PERMISSION_DENIED`；在途工作需确认 | `room_invited`、`room_role_changed`、`room_left`、`room_dissolved` | G01/G03/G06-T01..T05 |
@@ -111,13 +113,15 @@
 | 命令 | 当前计数 |
 |---|---|
 | `bun run typecheck` | 0 错误 |
-| `bun run test:protocol` | 991 |
-| `bun run test:acceptance`（短 presence 窗口） | 2718 |
-| `bun run test:web` | 2174 |
+| `bun run test:protocol` | 998 |
+| `bun run test:acceptance`（短 presence 窗口） | 2772 |
+| `bun run test:web` | 2198 |
 | `bun run test:events` | 339 |
 | `bun run test:drive` | 52 |
 | Q02 专项 | pairing 77 / sync 45 |
 | G06 / A06 专项 | 119 / 139 |
-| 迁移 | 34 个（0001–0012、0017–0038） |
+| A07 好友邀请链接专项 | 54 |
+| Q04 浏览器验收 | 176 |
+| 迁移 | 36 个（0001–0012、0017–0040） |
 
 聊天/群组热点专项：26 组真实服务浏览器回归覆盖稳定消息节点、切换隔离、公告冲突、群名 CAS、成员候选、创建重试、迟到列表、跨设备退群/移除、归档切换与移动端按钮可达性。详见 [重构报告](../reports/2026-11-09-web-hotpaths.md)。

@@ -61,6 +61,8 @@ const GUARD_CODES: Record<string, BusinessErrorCode> = {
   fileReferenced: 'CONFLICT',
   handoffConflict: 'CONFLICT',
   roomDissolved: 'CONFLICT',
+  contactLinkInvalid: 'CONTACT_LINK_INVALID',
+  contactLinkLimit: 'QUOTA_EXCEEDED',
 };
 
 const GUARD_MESSAGES: Record<string, string> = {
@@ -115,6 +117,8 @@ const GUARD_MESSAGES: Record<string, string> = {
   fileReferenced: '文件仍被有效任务或成果引用，不能删除或释放保留',
   handoffConflict: '交接包版本已变化，请刷新后重试',
   roomDissolved: '群已解散，当前为只读归档，不能继续写入',
+  contactLinkInvalid: '好友链接无效、已过期、已被使用或已被撤销',
+  contactLinkLimit: '待使用的好友链接数量达到上限',
 };
 
 /** 限额类 guard 的稳定 data，供 MCP Events 映射 -32025。 */
@@ -141,6 +145,10 @@ const GUARD_DETAILS: Record<string, Record<string, unknown>> = {
   ownerTransferRequired: {
     reason: 'owner_transfer_required',
     owner_transfer_required: true,
+  },
+  contactLinkLimit: {
+    reason: 'contact_link_pending_limit',
+    max: LIMITS.contactLinkPendingMax,
   },
 };
 

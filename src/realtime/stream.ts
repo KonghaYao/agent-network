@@ -881,6 +881,7 @@ function inboxStreamItem(
     case 'contact_request_rejected':
     case 'contact_request_cancelled':
     case 'contact_request_expired':
+    case 'contact_link_redeemed':
     case 'contact_blocked':
     case 'contact_unblocked':
     case 'contact_relation_ended': {

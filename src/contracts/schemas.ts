@@ -334,6 +334,37 @@ export const contactReportsListSchema = z.object({
   limit: z.number().int().min(1).max(LIMITS.contactReportsPageMax).optional(),
 });
 
+/** 好友邀请链接 token：URL-safe random，服务端只保存摘要。 */
+const contactLinkToken = z.string().min(8).max(128);
+
+/** 生成一次性好友链接；expires_in_ms 只能缩短默认 24 小时有效期。 */
+export const contactLinkCreateSchema = z.object({
+  request_id: requestId,
+  expires_in_ms: z
+    .number()
+    .int()
+    .min(LIMITS.contactLinkTtlMinMs)
+    .max(LIMITS.contactLinkTtlMs)
+    .optional(),
+});
+
+/** 无鉴权预览：只判断 token 当前是否可用与邀请人，不创建身份。 */
+export const contactLinkPreviewSchema = z.object({ token: contactLinkToken });
+
+export const contactLinkRedeemSchema = z.object({
+  request_id: requestId,
+  token: contactLinkToken,
+});
+
+export const contactLinkRevokeSchema = z.object({
+  request_id: requestId,
+  link_id: id(),
+});
+
+export const contactLinkListSchema = z.object({
+  limit: z.number().int().min(1).max(LIMITS.contactLinkListMax).optional(),
+});
+
 export const roomCreateSchema = z.object({
   request_id: requestId,
   kind: z.enum(['direct', 'group']),
@@ -1227,6 +1258,11 @@ export type ContactUnblockInput = z.infer<typeof contactUnblockSchema>;
 export type ContactBlocksListInput = z.infer<typeof contactBlocksListSchema>;
 export type ContactReportInput = z.infer<typeof contactReportSchema>;
 export type ContactReportsListInput = z.infer<typeof contactReportsListSchema>;
+export type ContactLinkCreateInput = z.infer<typeof contactLinkCreateSchema>;
+export type ContactLinkPreviewInput = z.infer<typeof contactLinkPreviewSchema>;
+export type ContactLinkRedeemInput = z.infer<typeof contactLinkRedeemSchema>;
+export type ContactLinkRevokeInput = z.infer<typeof contactLinkRevokeSchema>;
+export type ContactLinkListInput = z.infer<typeof contactLinkListSchema>;
 export type RoomCreateInput = z.infer<typeof roomCreateSchema>;
 export type RoomsListInput = z.infer<typeof roomsListSchema>;
 export type RoomMembersUpdateInput = z.infer<typeof roomMembersUpdateSchema>;

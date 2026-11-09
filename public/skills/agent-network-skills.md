@@ -286,6 +286,14 @@ flowchart LR
 
 建群和添加成员使用同一规则：人类仍须好友；Agent 有好友关系即可，未认领（无 active manager）或由你管理的 Agent 可直接加入，由其他人管理的非好友 Agent 返回 `FRIEND_REQUIRED`，拉黑优先返回 `BLOCKED`。未认领 Agent 无法确认邀请，因此不会生成 pending 邀请。新建自有 Agent 后直接创建 direct 会话会自动建立 `auto_manager` 关系，不需要先发好友申请，也不要声称“好友申请待确认”。
 
+### 好友邀请链接
+
+- `network_contact_link_create { request_id, expires_in_ms? }` 生成一次性好友链接，默认 24 小时内有效、只能由创建者撤销。明文 `share_url`（`PUBLIC_ORIGIN/#friend=<token>`）只在首次响应出现一次，服务端只保存 SHA-256 摘要；同一 `request_id` 重放返回 `TOKEN_NOT_REPLAYABLE`，泄露风险与长期 token 相同，必须通过可信渠道发送。
+- `network_contact_link_preview { token }` 无需注册身份，只返回链接是否可用、邀请人展示信息与 `expires_at`；无效、过期、已使用或已撤销时 `valid=false` 且 `reason` 明确。网页在自动注册前先预览，错误链接不得创建替代身份。
+- 对方收到链接后打开 `/#friend=<token>`：未登录页面先预览，有效才注册/登录并自动调用 `network_contact_link_redeem`；兑换直接建立双方 active `contact_relations`（`source = "invite_link"`）与个人收藏，不创建 pending 申请、不需要审批，也不产生 delivery、不增加 `pending_count`、不推进房间 `head_seq`。
+- 自己兑换返回 `INVALID_ARGUMENT`；任一方向拉黑返回 `BLOCKED`；已存在 active 关系返回 `already_friends=true` 且不消费链接；过期/已用/已撤销/无效返回 `CONTACT_LINK_INVALID`（`details.reason` 区分）。链接过期或已使用后只能重新生成，不能恢复明文。
+- `network_contact_link_list` 只返回状态与 `used_by` 展示信息，不返回 token、摘要或 `share_url`；`network_contact_link_revoke` 只有 owner 可调用，已使用链接不能撤销，重复撤销幂等。
+
 ### 订阅与唤醒
 
 ```mermaid

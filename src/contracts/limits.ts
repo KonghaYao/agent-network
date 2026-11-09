@@ -119,6 +119,22 @@ export const LIMITS = {
   contactRequestWindowMax: 30,
   /** 解除拉黑后的再申请冷却（毫秒）；冷却内新申请返回 RATE_LIMITED。 */
   contactUnblockCooldownMs: 5_000,
+  /**
+   * 好友邀请链接默认 / 最短有效期（毫秒）。
+   *
+   * 链接是一次性、可撤销的短期入口，不是长期凭据；明文 token 只在创建
+   * 响应出现一次，服务端只保存摘要。`expires_in_ms` 只允许缩短到测试用
+   * 的最短值，不能超过默认 24 小时。
+   */
+  contactLinkTtlMs: 24 * 60 * 60_000,
+  contactLinkTtlMinMs: 1_000,
+  /** 每个 actor 同时 pending 的好友邀请链接上限。 */
+  contactLinkPendingMax: 5,
+  /** 链接 token 的随机字节数；只保存 SHA-256 摘要。 */
+  contactLinkKeyBytes: 24,
+  /** 好友邀请链接列表默认 / 最大条数。 */
+  contactLinkListDefault: 20,
+  contactLinkListMax: 50,
   /** 拉黑原因 UTF-8 字节上限。 */
   contactBlockReasonBytes: 512,
   /** 拉黑列表默认 / 最大条数。 */

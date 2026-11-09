@@ -31,6 +31,7 @@ import {
 import { messageFileLinkFixtures } from './lib/room-file-archive';
 import { runPresenceRestartAcceptance } from './lib/presence-restart';
 import { runPresenceIdleNotificationCheck } from './lib/presence-idle';
+import { runContactLinkWebAcceptance } from './lib/contact-link-web';
 
 interface Actor {
   actor_id: string;
@@ -600,14 +601,16 @@ async function loadAllContacts(token: string): Promise<{ actor_id: string; name:
 }
 
 /** 分页读取当前 human 可管理的 Agent，供候选数断言覆盖合并来源。 */
-async function loadAllManagedAgents(token: string): Promise<{ actor_id: string; name: string }[]> {
-  const agents: { actor_id: string; name: string }[] = [];
+async function loadAllManagedAgents(token: string): Promise<
+  { actor_id: string; name: string; archived?: boolean; disabled?: boolean }[]
+> {
+  const agents: { actor_id: string; name: string; archived?: boolean; disabled?: boolean }[] = [];
   let cursor: string | null = null;
   for (let page = 0; page < 10; page += 1) {
     const args: Record<string, unknown> = { limit: 100 };
     if (cursor) args.cursor = cursor;
     const result = await rawTool<{
-      items: { actor_id: string; name: string }[];
+      items: { actor_id: string; name: string; archived?: boolean; disabled?: boolean }[];
       has_more: boolean;
       next_cursor: string | null;
     }>(token, 'network_agents_managed_list', args);
@@ -21723,6 +21726,14 @@ async function main(): Promise<void> {
 
     await runPresenceRestartAcceptance();
     await runPresenceIdleNotificationCheck();
+
+    await runContactLinkWebAcceptance({
+      browser,
+      base: server.base,
+      ownerToken: data.humanToken,
+      allErrors,
+      rawTool,
+    });
 
     checkEqual('无未捕获页面错误', allErrors.length, 0);
     console.log(`\n浏览器验收通过 ${checksPassed()} 项`);

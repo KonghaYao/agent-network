@@ -145,12 +145,27 @@ export interface ContactRelationRow {
   actor_a: string;
   actor_b: string;
   status: 'active' | 'ended';
-  source: 'request' | 'auto_manager';
+  source: 'request' | 'auto_manager' | 'invite_link';
   request_id: string | null;
   created_at: number;
   updated_at: number;
   ended_at: number | null;
   ended_by: string | null;
+}
+
+/** 好友邀请链接；只保存 token 摘要，明文不落库、不在重放中出现。 */
+export interface ContactInviteLinkRow {
+  link_id: string;
+  owner_actor_id: string;
+  token_hash: string;
+  status: 'pending' | 'used' | 'revoked' | 'expired';
+  expires_at: number;
+  used_by: string | null;
+  used_at: number | null;
+  created_at: number;
+  updated_at: number;
+  revoked_at: number | null;
+  revoked_by: string | null;
 }
 
 export interface ContactRequestRow {
