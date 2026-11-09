@@ -14417,6 +14417,13 @@ async function main(): Promise<void> {
         cardRoomId,
         `@${data.agentA.name} 请看卡片 ${image.publicUrl}`,
       );
+      const bodyLinkMarker = '正文文件链接';
+      const bodyLinkId = `f_${'K'.repeat(22)}`;
+      await sendRoomMessage(
+        data.agentAToken,
+        cardRoomId,
+        `${bodyLinkMarker} [失效文件](/f/${bodyLinkId})`,
+      );
       const longNameMarker = '长文件名请检查';
       await sendRoomMessage(
         data.humanToken,
@@ -14619,7 +14626,7 @@ async function main(): Promise<void> {
         '下载链接带票据并强制 attachment',
         zipDownloadUrl.searchParams.get('download') === '1' &&
           (zipDownloadUrl.searchParams.get('t')?.length ?? 0) > 0,
-        zipDownloadUrl.search,
+        zipDownloadUrl.searchParams.get('download'),
       );
       checkEqual('下载链接 rel', await zipDownload.getAttribute('rel'), 'noopener noreferrer');
       checkEqual(
@@ -14627,6 +14634,54 @@ async function main(): Promise<void> {
         await zipDownload.getAttribute('referrerpolicy'),
         'no-referrer',
       );
+
+      // 没有缓存票据时点击下载：先显示准备中，换取票据后再用签名地址触发下载。
+      await page.evaluate(`messageFileTickets.delete(${JSON.stringify(zip.fileId)})`);
+      checkEqual(
+        '清除票据后没有可直接使用的下载地址',
+        await page.evaluate(`messageFileDownloadUrl(${JSON.stringify(zip.fileId)})`),
+        null,
+      );
+      const ticketCallsBefore = await mcpCallCount(page, 'network_room_file_get');
+      const zipDownloadEvent = page.waitForEvent('download', { timeout: 15_000 }).catch(() => null);
+      await page.evaluate(`window.__delayMcp = { name: 'network_room_file_get', ms: 400 }`);
+      await zipDownload.click();
+      await waitUntil(
+        async () =>
+          ((await zipCard.locator('.msg-file-note').textContent()) ?? '').includes('正在准备下载'),
+        '下载前显示准备提示',
+        5_000,
+      );
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_room_file_get')) > ticketCallsBefore,
+        '点击下载换取票据',
+        15_000,
+      );
+      await page.evaluate('window.__delayMcp = null');
+      await waitUntil(
+        async () =>
+          (await page.evaluate(
+            `Boolean(messageFileDownloadUrl(${JSON.stringify(zip.fileId)}))`,
+          )) === true,
+        '点击下载后缓存新票据',
+        15_000,
+      );
+      checkEqual(
+        '点击下载后 href 使用带票据地址',
+        await page.evaluate(`(function () {
+          const link = document.querySelector(
+            '.msg-file[data-file-id="${zip.fileId}"] a.msg-file-download'
+          );
+          if (!link || !link.href) return false;
+          try {
+            return new URL(link.href).searchParams.has('t');
+          } catch (error) {
+            return false;
+          }
+        })()`),
+        true,
+      );
+      check('点击下载触发浏览器下载', Boolean(await zipDownloadEvent));
 
       const imageThumb = imageCard.locator('.msg-file-thumb');
       await imageThumb.waitFor();
@@ -14856,7 +14911,30 @@ async function main(): Promise<void> {
       );
       checkEqual('HEAD 失败不显示大小', await failureCard.locator('.msg-file-size').textContent(), '');
       checkEqual('HEAD 失败不提供预览', await failureCard.locator('.msg-file-preview').count(), 0);
+      checkEqual(
+        'HEAD 失败显示文件不可用',
+        await failureCard.locator('.msg-file-note').textContent(),
+        '文件不可用',
+      );
+      checkEqual('HEAD 失败提供重试入口', await failureCard.locator('.msg-file-retry').count(), 1);
+      checkEqual(
+        'HEAD 失败下载按钮标记不可用',
+        await failureCard.locator('a.msg-file-download').getAttribute('data-unavailable'),
+        '1',
+      );
       check('HEAD 失败仍可下载', ((await failureCard.locator('a.msg-file-download').getAttribute('href')) ?? '').includes(`/f/${failureId}`));
+      await page.evaluate(`(() => {
+        const toast = document.getElementById('toast');
+        if (toast) { toast.hidden = true; toast.textContent = ''; }
+      })()`);
+      await failureCard.locator('a.msg-file-download').click();
+      await page.locator('#toast').waitFor({ state: 'visible' });
+      check(
+        '失败卡片点击下载显示可见提示',
+        ((await page.locator('#toast').textContent()) ?? '').includes('文件下载失败'),
+        await page.locator('#toast').textContent(),
+      );
+      checkEqual('失败卡片点击下载不整页跳转', new URL(page.url()).pathname, `/c/${cardRoomId}`);
       checkEqual('HEAD 失败确实发起 HEAD', headCount(headObserver, failureId), 1);
 
       const bareFailureMessage = page.locator('#messages .msg').filter({ hasText: bareFailureId });
@@ -14986,6 +15064,28 @@ async function main(): Promise<void> {
         headObserver.maxActive >= 2 && headObserver.maxActive <= 4,
         headObserver.maxActive,
       );
+
+      // 正文同源文件链接：有卡片时交给卡片处理，失败给出提示且不整页跳转/新开页。
+      const bodyLinkMessage = page.locator('#messages .msg').filter({ hasText: bodyLinkMarker });
+      await bodyLinkMessage.scrollIntoViewIfNeeded();
+      await bodyLinkMessage.locator('.msg-file.unavailable').waitFor();
+      const bodyLinkAnchor = bodyLinkMessage.locator(`.bubble a[href="/f/${bodyLinkId}"]`).first();
+      await bodyLinkAnchor.waitFor();
+      let bodyLinkPopups = 0;
+      page.on('popup', () => { bodyLinkPopups += 1; });
+      await page.evaluate(`(() => {
+        const toast = document.getElementById('toast');
+        if (toast) { toast.hidden = true; toast.textContent = ''; }
+      })()`);
+      await bodyLinkAnchor.click();
+      await page.locator('#toast').waitFor({ state: 'visible' });
+      check(
+        '正文文件链接失败给出可见提示',
+        ((await page.locator('#toast').textContent()) ?? '').includes('文件下载失败'),
+        await page.locator('#toast').textContent(),
+      );
+      checkEqual('正文文件链接不整页跳转', new URL(page.url()).pathname, `/c/${cardRoomId}`);
+      checkEqual('正文文件链接不新开页面', bodyLinkPopups, 0);
 
       const longMessage = page.locator('#messages .msg').filter({ hasText: '长文本' }).first();
       await longMessage.scrollIntoViewIfNeeded();

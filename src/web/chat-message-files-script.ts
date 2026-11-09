@@ -17,6 +17,9 @@ const MESSAGE_FILE_FAILURE_TTL_MS = 60 * 1000;
 // 服务端票据 1 小时有效；客户端提前丢弃，避免长时间停留后反复使用失效地址。
 const MESSAGE_FILE_TICKET_MAX_AGE_MS = 55 * 60 * 1000;
 const MESSAGE_FILE_CONCURRENCY = 4;
+const MESSAGE_FILE_DOWNLOAD_BUSY = '正在准备下载…';
+const MESSAGE_FILE_DOWNLOAD_FAILED = '文件下载失败：文件不可用或链接已失效，请重试';
+const MESSAGE_FILE_UNAVAILABLE = '文件不可用';
 const MESSAGE_FILE_ESCAPED = /\\\\r\\\\n|\\\\n|\\\\r|\\\\t/g;
 const MESSAGE_FILE_ABSOLUTE = /^([A-Za-z][A-Za-z0-9+.-]*):\\/\\/([^/?#]+)$/;
 const MESSAGE_FILE_TOKEN_AFTER = /^[A-Za-z0-9_-]$/;
@@ -44,6 +47,7 @@ const MESSAGE_FILE_ACTIVE = new Set([
 const messageFileCache = new Map();
 const messageFileInflight = new Map();
 const messageFileTickets = new Map();
+const messageFilePendingDownloads = new Set();
 const messageFileQueue = [];
 let messageFileActive = 0;
 let messageFileObserver;
@@ -62,8 +66,19 @@ function messageFileHref(fileId) {
   return fileSafeUrl('/f/' + fileId);
 }
 
-function messageFileDownloadHref(fileId) {
+/** 裸地址只用于文件身份展示与重试；点击下载前必须换取带票据地址。 */
+function messageFileRawDownloadHref(fileId) {
   return fileSafeUrl('/f/' + fileId + '?download=1');
+}
+
+function messageFileTicketEntry(fileId) {
+  const ticket = messageFileTickets.get(fileId);
+  if (!ticket) return null;
+  if (Date.now() - ticket.at > MESSAGE_FILE_TICKET_MAX_AGE_MS) {
+    messageFileTickets.delete(fileId);
+    return null;
+  }
+  return ticket;
 }
 
 /**
@@ -75,18 +90,18 @@ function messageFileDownloadHref(fileId) {
  * 客户端安全年龄后丢弃，下次渲染会向服务端重新换取。
  */
 function messageFileTicketUrl(fileId) {
-  const ticket = messageFileTickets.get(fileId);
-  if (!ticket) return messageFileHref(fileId);
-  if (Date.now() - ticket.at > MESSAGE_FILE_TICKET_MAX_AGE_MS) {
-    messageFileTickets.delete(fileId);
-    return messageFileHref(fileId);
-  }
+  const ticket = messageFileTicketEntry(fileId);
+  if (!ticket || !ticket.url || ticket.url.indexOf('?') < 0) return messageFileHref(fileId);
   return ticket.url;
 }
 
-function messageFileRememberTicket(fileId, url) {
-  if (!url || url.indexOf('?') < 0) return;
-  messageFileTickets.set(fileId, { url: url, at: Date.now() });
+function messageFileRememberTicket(fileId, url, downloadUrl) {
+  const preview = fileSafeUrl(url);
+  const download = fileSafeUrl(downloadUrl);
+  const signed = (preview && preview.indexOf('?') >= 0) ||
+    (download && download.indexOf('?') >= 0);
+  if (!signed) return;
+  messageFileTickets.set(fileId, { url: preview, download: download, at: Date.now() });
 }
 
 function messageFileResolveTicket(fileId) {
@@ -98,19 +113,28 @@ function messageFileResolveTicket(fileId) {
     function (result) {
       const file = result && result.file ? result.file : null;
       const url = file ? file.preview_url || file.public_url : null;
-      if (url) messageFileRememberTicket(fileId, url);
+      if (url) messageFileRememberTicket(fileId, url, file.download_url);
       return url || null;
     }
   ).catch(function () { return null; });
 }
 
+/** 带票据地址才能读取私有文件；没有票据时返回 null，由点击流程换取。 */
 function messageFileDownloadUrl(fileId) {
-  const ticketUrl = messageFileTickets.get(fileId);
-  const usable = ticketUrl && Date.now() - ticketUrl.at <= MESSAGE_FILE_TICKET_MAX_AGE_MS
-    ? ticketUrl.url
-    : null;
-  if (!usable) return messageFileDownloadHref(fileId);
-  return fileSafeUrl(usable + (usable.indexOf('?') < 0 ? '?' : '&') + 'download=1');
+  const ticket = messageFileTicketEntry(fileId);
+  if (!ticket) return null;
+  if (ticket.download && ticket.download.indexOf('?') >= 0) {
+    return messageFileForceDownload(ticket.download);
+  }
+  if (!ticket.url || ticket.url.indexOf('?') < 0) return null;
+  return messageFileForceDownload(ticket.url);
+}
+
+function messageFileForceDownload(url) {
+  const safe = fileSafeUrl(url);
+  if (!safe) return null;
+  if (safe.indexOf('download=1') >= 0) return safe;
+  return fileSafeUrl(safe + (safe.indexOf('?') < 0 ? '?' : '&') + 'download=1');
 }
 
 /** 仅用于提取副本：字面量转义换行归一化，不回写消息。 */
@@ -340,11 +364,18 @@ function messageFileFetchMeta(fileId, href) {
       clearTimeout(timer);
     });
   }
-  return attempt(href).catch(function (error) {
+  return attempt(href).then(function (meta) {
+    // 裸地址 HEAD 成功说明文件本身公开，下载失败时代码可回退到裸地址。
+    meta.public = true;
+    return meta;
+  }).catch(function (error) {
     // 绑定到房间的文件裸 URL 不可读；用当前房间换取成员代次票据后重试。
     return messageFileResolveTicket(fileId).then(function (ticketUrl) {
       if (!ticketUrl || ticketUrl === href) throw error;
-      return attempt(ticketUrl).catch(function (ticketError) {
+      return attempt(ticketUrl).then(function (meta) {
+        meta.public = false;
+        return meta;
+      }).catch(function (ticketError) {
         // 票据可能在服务端已失效（进程重启、移出、重新加入）；丢弃缓存，
         // 让下次渲染重新换取绑定当前成员代次的地址。
         messageFileTickets.delete(fileId);
@@ -475,7 +506,7 @@ function messageFileActionButton(label, className) {
 }
 
 function messageFileDownloadLink(fileId, name) {
-  const href = messageFileDownloadUrl(fileId);
+  const href = messageFileDownloadUrl(fileId) || messageFileRawDownloadHref(fileId);
   if (!href) return null;
   const link = document.createElement('a');
   link.className = 'msg-file-action msg-file-download';
@@ -484,7 +515,115 @@ function messageFileDownloadLink(fileId, name) {
   link.referrerPolicy = 'no-referrer';
   link.setAttribute('download', name || '文件');
   link.textContent = '下载';
+  // 始终拦截默认跳转：裸地址对私有文件必然 404，点击时再换取票据。
+  link.addEventListener('click', function (event) {
+    event.preventDefault();
+    messageFileRequestDownload(link.closest('.msg-file'));
+  });
   return link;
+}
+
+function messageFileNote(card) {
+  let note = card.querySelector('.msg-file-note');
+  if (note) return note;
+  note = document.createElement('span');
+  note.className = 'msg-file-note';
+  note.hidden = true;
+  const main = card.querySelector('.msg-file-main');
+  if (main) main.append(note);
+  else card.append(note);
+  return note;
+}
+
+function setMessageFileNote(card, text) {
+  if (!card) return;
+  const note = messageFileNote(card);
+  note.textContent = text || '';
+  note.hidden = !text;
+}
+
+function messageFileCardName(card) {
+  const nameNode = card ? card.querySelector('.msg-file-name') : null;
+  return (nameNode && nameNode.textContent) || (card && card.__messageFileFallback) || '文件';
+}
+
+/** 程序化点击临时下载锚点：签名地址只存在于内存与本次 DOM，不写日志。 */
+function messageFileTriggerDownload(url, name) {
+  if (!url) return;
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name || '文件';
+  link.rel = 'noopener noreferrer';
+  link.referrerPolicy = 'no-referrer';
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
+/**
+ * 卡片下载：有票据直接下载；没有票据先向服务端换取，失败给出可见提示。
+ * 下载进行中重复点击不会重复发起票据请求。
+ */
+function messageFileRequestDownload(card) {
+  if (!card || !card.isConnected) return;
+  const fileId = card.getAttribute('data-file-id');
+  if (!fileId) return;
+  if (card.classList.contains('unavailable')) {
+    showToast(MESSAGE_FILE_DOWNLOAD_FAILED);
+    return;
+  }
+  if (card.dataset.downloadPending === '1') return;
+  const cached = messageFileDownloadUrl(fileId);
+  if (cached) {
+    messageFileTriggerDownload(cached, messageFileCardName(card));
+    return;
+  }
+  card.dataset.downloadPending = '1';
+  const link = card.querySelector('.msg-file-download');
+  if (link) link.setAttribute('aria-busy', 'true');
+  setMessageFileNote(card, MESSAGE_FILE_DOWNLOAD_BUSY);
+  messageFileResolveTicket(fileId).then(function (resolved) {
+    const download = messageFileDownloadUrl(fileId) || messageFileForceDownload(resolved);
+    if (!download) throw new Error('file ticket unavailable');
+    if (link && link.isConnected) link.href = download;
+    setMessageFileNote(card, '');
+    messageFileTriggerDownload(download, messageFileCardName(card));
+  }).catch(function () {
+    if (card.__messageFilePublic) {
+      // HEAD 已确认裸地址可读（公开发布文件），票据换取失败不阻断下载。
+      setMessageFileNote(card, '');
+      messageFileTriggerDownload(messageFileRawDownloadHref(fileId), messageFileCardName(card));
+      return;
+    }
+    setMessageFileNote(card, MESSAGE_FILE_DOWNLOAD_FAILED);
+    showToast(MESSAGE_FILE_DOWNLOAD_FAILED);
+  }).finally(function () {
+    card.removeAttribute('data-download-pending');
+    if (link && link.isConnected) link.removeAttribute('aria-busy');
+  });
+}
+
+/** 正文无对应卡片时的下载：同样先换票据，失败只提示、不跳转整页。 */
+function messageFileRequestDownloadForFile(fileId, name) {
+  if (!fileId || messageFilePendingDownloads.has(fileId)) return;
+  const cached = messageFileDownloadUrl(fileId);
+  if (cached) {
+    messageFileTriggerDownload(cached, name || '文件');
+    return;
+  }
+  messageFilePendingDownloads.add(fileId);
+  showToast(MESSAGE_FILE_DOWNLOAD_BUSY);
+  messageFileResolveTicket(fileId).then(function (resolved) {
+    const download = messageFileDownloadUrl(fileId) || messageFileForceDownload(resolved);
+    if (!download) throw new Error('file ticket unavailable');
+    messageFileTriggerDownload(download, name || '文件');
+    showToast('已开始下载');
+  }).catch(function () {
+    showToast(MESSAGE_FILE_DOWNLOAD_FAILED);
+  }).finally(function () {
+    messageFilePendingDownloads.delete(fileId);
+  });
 }
 
 function messageFileCard(entry) {
@@ -579,6 +718,8 @@ function messageFileThumbnail(card, meta) {
 
 function applyMessageFileMeta(card, meta) {
   card.removeAttribute('data-loading');
+  card.removeAttribute('data-download-pending');
+  card.classList.remove('unavailable');
   const fileId = card.getAttribute('data-file-id');
   const name = meta.name || card.__messageFileFallback || '文件';
   const badge = card.querySelector('.msg-file-kind');
@@ -594,9 +735,15 @@ function applyMessageFileMeta(card, meta) {
       ? ''
       : formatFileSize(meta.size);
   }
+  setMessageFileNote(card, '');
+  const retry = card.querySelector('.msg-file-retry');
+  if (retry) retry.remove();
   card.__messageFileMeta = meta;
+  card.__messageFilePublic = Boolean(meta.public);
   const download = card.querySelector('.msg-file-download');
   if (download) {
+    download.removeAttribute('aria-busy');
+    delete download.dataset.unavailable;
     download.setAttribute('download', name);
     const downloadHref = messageFileDownloadUrl(fileId);
     if (downloadHref) download.href = downloadHref;
@@ -608,7 +755,9 @@ function applyMessageFileMeta(card, meta) {
 
 function applyMessageFileFailure(card) {
   card.removeAttribute('data-loading');
+  card.removeAttribute('data-download-pending');
   card.classList.add('unavailable');
+  const fileId = card.getAttribute('data-file-id');
   const thumb = card.querySelector('.msg-file-thumb');
   if (thumb) thumb.remove();
   card.classList.remove('has-image');
@@ -620,7 +769,46 @@ function applyMessageFileFailure(card) {
   }
   const sizeNode = card.querySelector('.msg-file-size');
   if (sizeNode) sizeNode.textContent = '';
+  const preview = card.querySelector('.msg-file-preview');
+  if (preview) preview.remove();
+  setMessageFileNote(card, MESSAGE_FILE_UNAVAILABLE);
+  const download = card.querySelector('.msg-file-download');
+  if (download) {
+    if (fileId) download.href = messageFileRawDownloadHref(fileId) || download.href;
+    download.removeAttribute('aria-busy');
+    download.dataset.unavailable = '1';
+  }
+  const actions = card.querySelector('.msg-file-actions');
+  if (actions) {
+    let retry = actions.querySelector('.msg-file-retry');
+    if (!retry) {
+      retry = messageFileActionButton('重试', 'msg-file-retry');
+      retry.addEventListener('click', function () {
+        messageFileRetryCard(card);
+      });
+      actions.append(retry);
+    }
+    retry.disabled = false;
+  }
   scrollController.noteContentChanged();
+}
+
+/** 重试重新解析元数据与票据；失败缓存先清除，避免命中 60 秒失败结果。 */
+function messageFileRetryCard(card) {
+  const fileId = card.getAttribute('data-file-id');
+  if (!fileId) return;
+  messageFileCache.delete(fileId);
+  messageFileTickets.delete(fileId);
+  delete card.dataset.thumbFailed;
+  card.classList.remove('unavailable');
+  card.setAttribute('data-loading', '1');
+  card.removeAttribute('data-download-pending');
+  const retry = card.querySelector('.msg-file-retry');
+  if (retry) retry.disabled = true;
+  const download = card.querySelector('.msg-file-download');
+  if (download) delete download.dataset.unavailable;
+  setMessageFileNote(card, '');
+  loadMessageFileCard(card, true);
 }
 
 function openMessageFilePreview(card, trigger) {
@@ -644,6 +832,55 @@ function openMessageFilePreview(card, trigger) {
     public_url: href
   }, trigger);
 }
+
+function messageFileCardFor(message, fileId) {
+  if (!message || !fileId) return null;
+  const cards = message.querySelectorAll('.msg-file[data-file-id]');
+  for (const card of cards) {
+    if (card.getAttribute('data-file-id') === fileId) return card;
+  }
+  return null;
+}
+
+/** 正文同源 \`/f/<id>\` 链接：只取文件身份，忽略可能已过期或缺失的票据。 */
+function messageFileBodyLink(target) {
+  if (!target || !messagesElement || !messagesElement.contains(target)) return null;
+  // 只处理气泡正文；卡片、任务附件和文件面板有自己的下载入口。
+  const bubble = target.closest('.bubble');
+  if (!bubble) return null;
+  const anchor = target.closest('a[href]');
+  if (!anchor || !bubble.contains(anchor)) return null;
+  let url;
+  try {
+    url = new URL(anchor.getAttribute('href'), location.origin);
+  } catch (error) {
+    return null;
+  }
+  if (url.origin !== location.origin || url.username || url.password) return null;
+  const match = url.pathname.match(MESSAGE_FILE_EXACT);
+  return match ? match[1] : null;
+}
+
+/**
+ * 正文文件链接不直接打开裸地址：有卡片时交给卡片（含票据换取与失败提示），
+ * 没有卡片时复用同一套解析流程，避免浏览器跳到必 404 的页面。
+ */
+document.addEventListener('click', function (event) {
+  if (event.defaultPrevented || event.button !== 0) return;
+  const target = event.target instanceof Element ? event.target : null;
+  const fileId = messageFileBodyLink(target);
+  if (!fileId) return;
+  event.preventDefault();
+  const message = target.closest('.msg');
+  const card = messageFileCardFor(message, fileId);
+  if (card) {
+    messageFileRequestDownload(card);
+    return;
+  }
+  const anchor = target.closest('a[href]');
+  const name = messageFileCleanName(anchor && anchor.textContent);
+  messageFileRequestDownloadForFile(fileId, name || '文件');
+});
 
 /**
  * 扫描文本并渲染/更新 .msg-files。
