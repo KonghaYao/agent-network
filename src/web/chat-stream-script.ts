@@ -222,8 +222,8 @@ function scheduleStreamCatchUp() {
     // 断线期间可能有已提交但未收到响应的发送，重连后先对账。
     outboxScheduleReconcile(0);
     if (activeRoomId) {
-      // 断线期间可能错过任务事件；让房间刷新重新读取任务列表。
-      invalidateRoomTasks();
+      // 断线期间可能错过 Task 标记事件；丢弃摘要缓存后由房间刷新重新校验。
+      invalidateTaskSummaries();
       scheduleRoomRefresh(activeRoomId);
       scheduleFilesRefresh(activeRoomId);
     }
@@ -344,14 +344,12 @@ function handleStreamEventFrame(payload) {
         if (roomId && roomId === activeRoomId) refreshRoom = true;
         break;
       case 'task.updated':
-        // 任务事件只刷新任务面板、我的任务与侧栏 badge，不触发消息未读；
-        // 任务卡片本身是普通消息，历史仍由 room.message 维护。
+        // 消息式 Task 标记只更新对应消息的摘要行；旧任务面板已在 Web UI 移除。
         if (rawItem.change === 'offered' && !roomPreference(roomId).muted) showToast('收到任务接手请求');
-        scheduleRoomTasksRefresh(roomId);
+        applyMessageTaskChange(rawItem);
         break;
       case 'room.tasks':
-        // 历史房间任务事件只刷新任务行与侧栏 badge，不触发消息历史刷新或未读。
-        scheduleRoomTasksRefresh(roomId);
+        // 旧房间任务事件不再驱动新页面；保留分支避免 stream 默认日志噪声。
         break;
       case 'profile.updated':
         refreshList = true;

@@ -294,7 +294,6 @@ function applyRoomHeader() {
   updateMembersAffordance();
   applyRoomAnnouncement();
   updateCopyGroupInfoAffordance();
-  renderTaskRow();
 }
 
 function applyRoomLifecycle(roomView) {
@@ -698,8 +697,6 @@ async function doRefresh(roomId, epoch, forceScroll) {
     syncCursorPrimeRoom(roomId, room.head_seq);
   }
   updateRoomEntry(room, lastMessage, false);
-  // 任务列表只在进入房间/强制刷新/任务事件后读取；普通消息刷新不重复请求。
-  if (force || roomTasksRoomId !== roomId) loadRoomTasks(roomId, epoch);
   // 只有仍跟随底部且实际 gap <= 80 时控制器才会真正调用 mark_read。
   if (result) scrollController.scheduleMarkRead(roomId, epoch, room.head_seq);
 }
@@ -852,7 +849,7 @@ async function openRoom(roomId, options) {
   olderEnded = false;
   olderError = '';
   updateOlderAffordance();
-  resetRoomTasks();
+  resetTaskTraceRoom();
   renderRooms();
   clearChatError();
   updateCopyGroupInfoAffordance();
@@ -936,7 +933,7 @@ function closeRoomView() {
   olderEnded = false;
   olderError = '';
   updateOlderAffordance();
-  resetRoomTasks();
+  resetTaskTraceRoom();
   setChatLoading(false);
   if (chatErrorElement) chatErrorElement.hidden = true;
   if (chatErrorTextElement) chatErrorTextElement.textContent = '';

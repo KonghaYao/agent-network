@@ -37,14 +37,7 @@ import { CHAT_SCROLL_SCRIPT } from './chat-scroll-script';
 import { CHAT_HISTORY_SCRIPT } from './chat-history-script';
 import { CHAT_SESSION_SCRIPT } from './chat-session-script';
 import { CHAT_STREAM_SCRIPT } from './chat-stream-script';
-import { CHAT_TASK_DETAIL_SCRIPT } from './chat-task-detail-script';
-import { CHAT_TASK_HANDOFF_SCRIPT } from './chat-task-handoff-script';
-import { CHAT_TASK_PROGRESS_SCRIPT } from './chat-task-progress-script';
-import { CHAT_TASK_RECOVERY_SCRIPT } from './chat-task-recovery-script';
-import { CHAT_TASK_REVIEW_SCRIPT } from './chat-task-review-script';
-import { CHAT_TASK_SUBMISSION_SCRIPT } from './chat-task-submission-script';
-import { CHAT_TASK_TRANSFER_SCRIPT } from './chat-task-transfer-script';
-import { CHAT_TASKS_SCRIPT } from './chat-tasks-script';
+import { CHAT_TASK_TRACE_SCRIPT } from './chat-task-trace-script';
 import { CHAT_TRANSFER_SCRIPT } from './chat-transfer-script';
 import { CHAT_UPLOAD_SCRIPT } from './chat-upload-script';
 import { jsonForScript } from './layout';
@@ -215,15 +208,8 @@ ${CHAT_SCROLL_SCRIPT}
 ${CHAT_SESSION_SCRIPT}
 ${CHAT_HISTORY_SCRIPT}
 ${CHAT_MESSAGE_ACTIONS_SCRIPT}
+${CHAT_TASK_TRACE_SCRIPT}
 ${CHAT_MESSAGE_SEARCH_SCRIPT}
-${CHAT_TASK_PROGRESS_SCRIPT}
-${CHAT_TASK_RECOVERY_SCRIPT}
-${CHAT_TASK_SUBMISSION_SCRIPT}
-${CHAT_TASK_REVIEW_SCRIPT}
-${CHAT_TASK_DETAIL_SCRIPT}
-${CHAT_TASK_TRANSFER_SCRIPT}
-${CHAT_TASK_HANDOFF_SCRIPT}
-${CHAT_TASKS_SCRIPT}
 ${CHAT_STREAM_SCRIPT}
 ${CHAT_FILES_SCRIPT}
 ${CHAT_FILES_ACTIONS_SCRIPT}

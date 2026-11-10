@@ -768,7 +768,7 @@ async function syncCatchUp() {
     if (dirty) {
       scheduleRoomListRefresh(true);
       if (activeRoomId) {
-        invalidateRoomTasks();
+        invalidateTaskSummaries();
         scheduleRoomRefresh(activeRoomId);
         scheduleFilesRefresh(activeRoomId);
       }

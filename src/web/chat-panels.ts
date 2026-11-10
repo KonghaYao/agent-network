@@ -19,9 +19,6 @@ export function sidebarPane(): string {
         ${kubaiIcon('contact-requests', { size: 18 })}
         <span class="request-badge" id="contact-requests-badge" hidden>0</span>
       </button>
-      <button class="icon-btn" id="my-tasks" type="button" aria-label="我的任务" title="我的任务" hidden>
-        ${kubaiIcon('my-tasks', { size: 18 })}
-      </button>
       <button class="icon-btn" id="new-group" type="button" aria-label="新建群聊" title="新建群聊">+</button>
     </div>
     <label class="search-box">
@@ -151,13 +148,6 @@ export function chatPane(): string {
       aria-label="复制群信息" title="复制群信息">
       ${kubaiIcon('copy-group-info', { size: 17 })}
     </button>
-    <button class="task-toggle" id="task-toggle" type="button" hidden
-      aria-haspopup="dialog" aria-controls="task-popover" aria-expanded="false"
-      title="查看房间任务">
-      <span id="task-toggle-label">任务 0/0</span>
-    </button>
-    <button class="link-btn" id="task-create" type="button" hidden
-      title="从消息或任务面板创建任务">新建任务</button>
     <button class="monitor-toggle" id="monitor-toggle" type="button"
       aria-controls="monitor-pane" aria-expanded="false"
       aria-label="打开网页监控" title="网页监控">
@@ -166,15 +156,6 @@ export function chatPane(): string {
     </button>
     <button class="files-toggle" id="files-toggle" type="button"
       aria-controls="files-pane" aria-expanded="false">文件</button>
-    <div class="task-popover" id="task-popover" role="dialog" aria-label="房间任务" hidden>
-      <header class="task-popover-head">
-        <h3>房间任务</h3>
-        <button class="task-popover-close" id="task-popover-close" type="button"
-          aria-label="关闭任务列表" title="关闭">×</button>
-      </header>
-      <ul class="task-list" id="task-list" aria-label="房间任务列表"></ul>
-      <p class="task-popover-empty" id="task-popover-empty" role="status" hidden>暂无任务</p>
-    </div>
   </header>
   <form id="rename-form" class="rename-form" hidden>
     <input id="rename-input" maxlength="${LIMITS.actorNameMax}" aria-label="Agent 新名称"

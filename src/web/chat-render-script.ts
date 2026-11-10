@@ -511,6 +511,11 @@ function messageItem(item) {
     senderLabel.textContent = sender;
     content.append(senderLabel);
   }
+  // 起点摘要行位于气泡上方，只占一个紧凑槽；非起点保持 hidden。
+  const taskSlot = document.createElement('div');
+  taskSlot.className = 'msg-task-bar-slot';
+  taskSlot.hidden = true;
+  content.append(taskSlot);
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   bubble.title = fullTime(item.created_at);
@@ -617,10 +622,6 @@ function messageItem(item) {
       registerAgentAutoExpand(item, element, bubble, content, expand, filesRef);
     }
   }
-  const taskSlot = document.createElement('div');
-  taskSlot.className = 'msg-task-slot';
-  taskSlot.hidden = true;
-  content.append(taskSlot);
   appendMessageActions(item, content);
   element.append(avatar, content);
   if (mine) {
