@@ -355,6 +355,7 @@ async function main(): Promise<void> {
     check('未知 harness 退出非 0', badHarness.code !== 0);
     check('未知 harness 给出可读错误', badHarness.stderr.includes('未知 harness'));
 
+    // 构建产物不入库：先构建，再验收产物与可重复构建。
     const build = await runProcess([process.execPath, 'scripts/build-client.ts'], {
       timeoutMs: 60_000,
     });

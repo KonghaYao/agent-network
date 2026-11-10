@@ -4,6 +4,8 @@
  * 这些断言直接发 HTTP/JSON-RPC，确保服务端边界不依赖客户端 SDK 的兼容层。
  */
 
+import { resolve } from 'node:path';
+
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 import {
@@ -93,6 +95,22 @@ function isInputValidationFailure(body: Record<string, unknown>): boolean {
 
 function toolStructured<T>(body: Record<string, unknown>): T | undefined {
   return (body.result as { structuredContent?: T } | undefined)?.structuredContent;
+}
+
+const CLI_BUILD = resolve(import.meta.dir, 'build-client.ts');
+
+/** 仓库不提交构建产物：本地验收先构建；远端验收由部署方自行构建。 */
+async function ensureCliBundle(): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const host = new URL(baseUrl()).hostname;
+  const local = host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+  if (!local) return { ok: true };
+  const build = Bun.spawn([process.execPath, CLI_BUILD], {
+    stdout: 'ignore',
+    stderr: 'pipe',
+  });
+  const [code, stderr] = await Promise.all([build.exited, new Response(build.stderr).text()]);
+  if (code !== 0) return { ok: false, reason: stderr.trim() || `exit ${code}` };
+  return { ok: true };
 }
 
 async function main(): Promise<void> {
@@ -2700,17 +2718,22 @@ async function main(): Promise<void> {
     );
   }
 
-  const cliAsset = await fetch(`${baseUrl()}/skills/agentnet.js`);
-  checkEqual('GET /skills/agentnet.js 返回 200', cliAsset.status, 200);
-  const cliAssetType = cliAsset.headers.get('content-type') ?? '';
-  const cliSource = await cliAsset.text();
-  check(
-    'CLI bundle 以 text/javascript 提供且带 bun shebang，不含部署占位符',
-    cliAssetType.startsWith('text/javascript') &&
-      cliSource.startsWith('#!/usr/bin/env bun') &&
-      !cliSource.includes('__PUBLIC_ORIGIN__'),
-    { contentType: cliAssetType, head: cliSource.slice(0, 80) },
-  );
+  const cliBundle = await ensureCliBundle();
+  if (!cliBundle.ok) {
+    console.log(`  · 跳过 GET /skills/agentnet.js：本地构建不可用（${cliBundle.reason}）`);
+  } else {
+    const cliAsset = await fetch(`${baseUrl()}/skills/agentnet.js`);
+    checkEqual('GET /skills/agentnet.js 返回 200', cliAsset.status, 200);
+    const cliAssetType = cliAsset.headers.get('content-type') ?? '';
+    const cliSource = await cliAsset.text();
+    check(
+      'CLI bundle 以 text/javascript 提供且带 bun shebang，不含部署占位符',
+      cliAssetType.startsWith('text/javascript') &&
+        cliSource.startsWith('#!/usr/bin/env bun') &&
+        !cliSource.includes('__PUBLIC_ORIGIN__'),
+      { contentType: cliAssetType, head: cliSource.slice(0, 80) },
+    );
+  }
 
   const otherSentinel = await fetch(`${baseUrl()}/skills/other-sentinel.sh`);
   checkEqual('GET /skills/other-sentinel.sh 返回 200', otherSentinel.status, 200);

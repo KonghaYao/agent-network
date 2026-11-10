@@ -6,3 +6,6 @@ dist/
 .env
 .env.*
 !.env.example
+
+# 构建产物：由 `bun run build:client` 生成，不入库。
+/public/skills/agentnet.js
