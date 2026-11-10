@@ -228,7 +228,8 @@ function checkMigrationUpgrade(): void {
       '0033_task_review_acceptance.sql,0034_task_handoff_packs.sql,' +
       '0035_task_recovery.sql,0036_device_pairing_sync.sql,0037_room_lifecycle.sql,' +
       '0038_ownerless_room_guard.sql,0039_delivery_message_state_index.sql,' +
-      '0040_contact_invite_links.sql,0041_message_task_trace.sql',
+      '0040_contact_invite_links.sql,0041_message_task_trace.sql,' +
+      '0042_drop_legacy_tasks.sql',
   );
   checkEqual(
     '旧库升级保留原业务数据',
@@ -238,10 +239,33 @@ function checkMigrationUpgrade(): void {
     before,
   );
   checkEqual('旧库升级后 feedback 表可用', count(old, 'feedback'), 0);
-  checkEqual('旧库升级后 room_tasks 表可用', count(old, 'room_tasks'), 0);
-  checkEqual('旧库升级后 tasks 表可用', count(old, 'tasks'), 0);
-  checkEqual('旧库升级后 task_assignments 表可用', count(old, 'task_assignments'), 0);
-  checkEqual('旧库升级后 task_cards 表可用', count(old, 'task_cards'), 0);
+  const schema = (table: string): number =>
+    (
+      old
+        .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get(table) as { n: number }
+    ).n;
+  for (const table of [
+    'room_tasks',
+    'tasks',
+    'task_assignments',
+    'task_cards',
+    'task_handoff_packs',
+  ]) {
+    checkEqual(`旧库升级后 ${table} 已删除`, schema(table), 0);
+  }
+  const artifactColumns = old.prepare('PRAGMA table_info(artifacts)').all() as {
+    name: string;
+  }[];
+  check(
+    '旧库升级后 artifacts.task_id 已删除',
+    !artifactColumns.some((column) => column.name === 'task_id'),
+  );
+  const roomColumns = old.prepare('PRAGMA table_info(rooms)').all() as { name: string }[];
+  check(
+    '旧库升级后 rooms.member_task_policy 已删除',
+    !roomColumns.some((column) => column.name === 'member_task_policy'),
+  );
   const deliveryColumns = old.prepare('PRAGMA table_info(deliveries)').all() as {
     name: string;
   }[];

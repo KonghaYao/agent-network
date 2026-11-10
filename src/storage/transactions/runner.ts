@@ -192,14 +192,12 @@ export function isRoomFileConflict(error: unknown): boolean {
   return errorText(error).includes('UNIQUE constraint failed: room_files.file_id');
 }
 
-/** 同一 file_id/任务版本只能有一个成果；命中后按幂等请求或 CONFLICT 收敛。 */
+/** 同一 file_id 只能有一个成果；命中后按幂等请求或 CONFLICT 收敛。 */
 export function isArtifactConflict(error: unknown): boolean {
   const text = errorText(error);
   return (
     text.includes('UNIQUE constraint failed: artifacts.file_id') ||
-    text.includes('UNIQUE constraint failed: artifacts.room_id, artifacts.task_id, artifacts.version') ||
-    text.includes('idx_artifacts_file') ||
-    text.includes('idx_artifacts_task_version')
+    text.includes('idx_artifacts_file')
   );
 }
 

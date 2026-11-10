@@ -2,9 +2,10 @@
  * Q01-T03：旧基线数据库升级检查。
  *
  * 用真实 migrations 构造停在 `0035_task_recovery.sql` 的合成库，写入
- * credentials/devices、无主群、D04–D08 与 A06 的关键历史行，再顺序应用
- * `0036`–`0039`。检查重点是“升级不扩大权限”：旧凭据只回填设备行、不新增
- * credentials；无主群不被自动解散或回填 owner；审计表重建保留旧行。
+ * credentials/devices、无主群与 A06 的关键历史行，再顺序应用
+ * `0036`–`0042`。检查重点是“升级不扩大权限”：旧凭据只回填设备行、不新增
+ * credentials；无主群不被自动解散或回填 owner；审计表重建保留旧行；
+ * 0042 删除旧任务表/列后普通业务行仍可读。
  *
  * 运行：`bun scripts/q01-upgrade-check.ts`
  * 该脚本使用临时目录，不访问服务端、不读取或写入 `.data`。
@@ -27,6 +28,7 @@ const NEW_MIGRATIONS = [
   '0039_delivery_message_state_index.sql',
   '0040_contact_invite_links.sql',
   '0041_message_task_trace.sql',
+  '0042_drop_legacy_tasks.sql',
 ];
 const AT = 1_700_000_000_000;
 
@@ -35,12 +37,6 @@ const PEER = 'usr_q01_peer';
 const AGENT = 'agt_q01_agent';
 const ROOM = 'rm_q01_group';
 const OWNERLESS = 'rm_q01_ownerless';
-const TASK = 'tsk_q01_legacy';
-const ASSIGNMENT = 'tas_q01_legacy';
-const TRANSFER = 'ttr_q01_legacy';
-const SUBMISSION = 'tsb_q01_legacy';
-const REVIEW = 'trv_q01_legacy';
-const PACK = 'thp_q01_legacy';
 const DEVICE_ACTIVE = 'dev_q01_active';
 const DEVICE_REVOKED = 'dev_q01_revoked';
 
@@ -91,61 +87,6 @@ function seedOldDatabase(db: Database): void {
     VALUES
       ('rma_q01_legacy', '${ROOM}', 'member_added', '${PEER}', NULL, 'member',
        NULL, 'active', NULL, 1, '${HUMAN}', 'req_q01_legacy', '{}', ${AT});
-
-    INSERT INTO tasks
-      (task_id, room_id, created_by, source_message_id, title, description, acceptance_criteria,
-       status, revision, owner_actor_id, current_assignment_id, reviewer_actor_id, due_at,
-       blocked_reason, blocked_at, last_progress_at, business_authority, external_binding_id,
-       created_at, updated_at, accepted_at, cancelled_at, cancelled_by, cancel_reason,
-       external_stop_status, parent_task_id, related_task_id)
-    VALUES
-      ('${TASK}', '${ROOM}', '${HUMAN}', NULL, 'Q01 旧任务', '', '可读取',
-       'in_progress', 3, '${AGENT}', '${ASSIGNMENT}', '${PEER}', NULL,
-       NULL, NULL, ${AT}, 'native', NULL, ${AT}, ${AT}, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
-
-    INSERT INTO task_assignments
-      (assignment_id, task_id, assignment_version, owner_actor_id, status, offered_by,
-       offer_expires_at, accepted_at, ended_at, last_progress_at, delivery_id, created_at, updated_at)
-    VALUES
-      ('${ASSIGNMENT}', '${TASK}', 2, '${AGENT}', 'active', '${HUMAN}', NULL, ${AT}, NULL, ${AT}, NULL, ${AT}, ${AT});
-
-    INSERT INTO task_transfers
-      (transfer_id, task_id, from_assignment_id, from_assignment_version, to_actor_id, status,
-       context_json, version, created_by, created_at, expires_at, responded_at, responded_by)
-    VALUES
-      ('${TRANSFER}', '${TASK}', '${ASSIGNMENT}', 2, '${PEER}', 'pending', '{}', 1, '${HUMAN}',
-       ${AT}, ${AT + 86_400_000}, NULL, NULL);
-
-    INSERT INTO task_submissions
-      (submission_id, task_id, assignment_id, assignment_version, version, summary, materials_json,
-       evidence_json, known_limits, submitted_by, status, created_at, reviewed_at)
-    VALUES
-      ('${SUBMISSION}', '${TASK}', '${ASSIGNMENT}', 2, 1, '旧提交', '[]', '[]', '', '${AGENT}',
-       'pending', ${AT}, NULL);
-
-    INSERT INTO task_reviews
-      (review_id, submission_id, task_id, reviewer_actor_id, decision, reason, created_at, checklist_json)
-    VALUES
-      ('${REVIEW}', '${SUBMISSION}', '${TASK}', '${PEER}', 'return', '旧退回', ${AT}, '[]');
-
-    INSERT INTO task_handoff_packs
-      (pack_id, task_id, room_id, version, from_assignment_id, from_assignment_version,
-       from_owner_actor_id, created_by, goal, completed_json, current_result_json, unresolved_json,
-       next_steps_json, source_room_id, created_at)
-    VALUES
-      ('${PACK}', '${TASK}', '${ROOM}', 1, '${ASSIGNMENT}', 2, '${AGENT}', '${AGENT}',
-       '旧交接包', '[]', '{"summary":"进行中"}', '[]', '[]', NULL, ${AT});
-
-    INSERT INTO task_reminders
-      (reminder_id, task_id, assignment_id, assignment_version, owner_actor_id, anchor_at, event_key, created_at)
-    VALUES
-      ('trm_q01_legacy', '${TASK}', '${ASSIGNMENT}', 2, '${AGENT}', ${AT},
-       'task_reminder:${TASK}:2:${AT}', ${AT});
-
-    INSERT INTO task_external_actions
-      (action_id, task_id, intent, state, evidence, created_by, created_at, updated_at)
-    VALUES
-      ('act_q01_legacy', '${TASK}', '发布旧版本', 'unknown', '等待对账', '${AGENT}', ${AT}, ${AT});
 
     INSERT INTO agent_management_transfers
       (transfer_id, agent_id, from_manager_id, to_manager_id, status, from_permission_version,
@@ -206,17 +147,17 @@ try {
   checkEqual('升级前没有设备行', before.devices, 0);
 
   const appliedNow = migrate(db, SOURCE_MIGRATIONS);
-  checkEqual('恰好应用 0036–0041', appliedNow.join(','), NEW_MIGRATIONS.join(','));
+  checkEqual('恰好应用 0036–0042', appliedNow.join(','), NEW_MIGRATIONS.join(','));
   const expectedMigrations = [
     ...Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(4, '0')),
-    ...Array.from({ length: 25 }, (_, i) => String(i + 17).padStart(4, '0')),
+    ...Array.from({ length: 26 }, (_, i) => String(i + 17).padStart(4, '0')),
   ];
   const actualMigrations = (
     db.prepare('SELECT name FROM schema_migrations ORDER BY name').all() as Array<{ name: string }>
   ).map((row) => row.name);
-  checkEqual('迁移总数为 37', actualMigrations.length, 37);
+  checkEqual('迁移总数为 38', actualMigrations.length, 38);
   check(
-    '迁移序号为 0001–0012、0017–0041',
+    '迁移序号为 0001–0012、0017–0042',
     actualMigrations.every((name, i) => name.startsWith(`${expectedMigrations[i]}_`)),
     actualMigrations,
   );
@@ -282,32 +223,46 @@ try {
     })(),
   );
 
-  checkEqual(
-    '任务历史可读',
-    scalar<string>(db, `SELECT status || ':' || revision FROM tasks WHERE task_id = '${TASK}'`),
-    'in_progress:3',
-  );
-  checkEqual(
-    'assignment/transfer/submission/review 可读',
-    scalar<number>(
-      db,
-      `SELECT (SELECT COUNT(*) FROM task_assignments WHERE assignment_id = '${ASSIGNMENT}')
-            + (SELECT COUNT(*) FROM task_transfers WHERE transfer_id = '${TRANSFER}')
-            + (SELECT COUNT(*) FROM task_submissions WHERE submission_id = '${SUBMISSION}')
-            + (SELECT COUNT(*) FROM task_reviews WHERE review_id = '${REVIEW}')`,
+  for (const table of [
+    'room_tasks',
+    'tasks',
+    'task_assignments',
+    'task_transfers',
+    'task_submissions',
+    'task_reviews',
+    'task_deliveries',
+    'task_cards',
+    'task_attachments',
+    'task_progress',
+    'task_reminders',
+    'task_external_actions',
+    'task_handoff_packs',
+    'task_handoff_pack_items',
+    'task_handoff_context_requests',
+  ]) {
+    checkEqual(
+      `0042 删除旧任务表 ${table}`,
+      scalar<number>(
+        db,
+        `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '${table}'`,
+      ),
+      0,
+    );
+  }
+  check(
+    '0042 删除 artifacts.task_id',
+    !(db.prepare('PRAGMA table_info(artifacts)').all() as Array<{ name: string }>).some(
+      (column) => column.name === 'task_id',
     ),
-    4,
   );
-  checkEqual(
-    '交接包/催办/外部动作可读',
-    scalar<number>(
-      db,
-      `SELECT (SELECT COUNT(*) FROM task_handoff_packs WHERE pack_id = '${PACK}')
-            + (SELECT COUNT(*) FROM task_reminders WHERE reminder_id = 'trm_q01_legacy')
-            + (SELECT COUNT(*) FROM task_external_actions WHERE action_id = 'act_q01_legacy')`,
+  check(
+    '0042 删除 rooms.member_task_policy',
+    !(db.prepare('PRAGMA table_info(rooms)').all() as Array<{ name: string }>).some(
+      (column) => column.name === 'member_task_policy',
     ),
-    3,
   );
+  checkEqual('升级后普通 rooms 行数保持', scalar<number>(db, 'SELECT COUNT(*) FROM rooms'), 2);
+  checkEqual('升级后普通 actors 行数保持', scalar<number>(db, 'SELECT COUNT(*) FROM actors'), before.actors);
   checkEqual(
     'A06 管理权交接历史可读',
     scalar<string>(

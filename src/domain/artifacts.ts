@@ -235,7 +235,6 @@ export async function artifactSubmit(
   const artifact: ArtifactRow = {
     artifact_id: artifactId,
     room_id: room.room_id,
-    task_id: null,
     version,
     file_id: input.file_id,
     created_by: caller,
@@ -367,14 +366,13 @@ export async function artifactSubmit(
       db
         .prepare(
           `INSERT INTO artifacts
-             (artifact_id, room_id, task_id, version, file_id, created_by, summary,
+             (artifact_id, room_id, version, file_id, created_by, summary,
               status, created_at, created_seq, released_at, released_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'delivered', ?, NULL, NULL, NULL)`,
+           VALUES (?, ?, ?, ?, ?, ?, 'delivered', ?, NULL, NULL, NULL)`,
         )
         .bind(
           artifact.artifact_id,
           artifact.room_id,
-          artifact.task_id,
           artifact.version,
           artifact.file_id,
           artifact.created_by,

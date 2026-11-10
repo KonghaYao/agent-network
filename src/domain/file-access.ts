@@ -36,7 +36,7 @@ import { assertRoomWritable, roomDissolvedGuardStatement } from './room-access';
  * - 绑定房间后，读取必须同时满足成员资格、成员代次与历史边界；裸 `/f` 链接
  *   不构成群授权。
  * - 公开发布是独立字段，只有上传者或群 owner 可切换；默认关闭。
- * - 有效任务/成果通过 `file_references` 把文件标记为 retained，禁止 TTL 清理。
+ * - 有效成果通过 `file_references` 把文件标记为 retained，禁止 TTL 清理。
  */
 
 export interface FileQuota {

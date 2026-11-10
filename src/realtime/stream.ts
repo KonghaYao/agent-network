@@ -47,16 +47,6 @@ export interface StreamItem {
   /** 房间文件事件的 file_id 与 room_file_id。 */
   file_id?: string;
   ref_id?: string;
-  /** 任务事件的稳定定位：task_id 与当前 assignment 版本。 */
-  task_id?: string;
-  assignment_id?: string;
-  assignment_version?: number;
-  status?: string;
-  /** 任务业务修订号；客户端按它丢弃乱序旧事件并补读权威状态。 */
-  revision?: number;
-  /** 成果提交/退回事件定位；版本号是 task_submissions.version。 */
-  submission_id?: string;
-  submission_version?: number;
   /** Agent 上下线通知：仅用于当前房间刷新，不产生未读。 */
   presence_event_id?: string;
   transition?: string;
@@ -603,40 +593,6 @@ export function roomStreamItems(
       }
       return result;
     }
-    case 'task_created':
-    case 'task_offered':
-    case 'task_offer_accepted':
-    case 'task_offer_declined':
-    case 'task_claimed':
-    case 'task_cancelled':
-    case 'task_progress_reported':
-    case 'task_blocked':
-    case 'task_resumed':
-    case 'task_transfer_proposed':
-    case 'task_transfer_accepted':
-    case 'task_transfer_rejected':
-    case 'task_transfer_cancelled':
-    case 'task_transfer_expired':
-    case 'task_handoff_pack_created':
-    case 'task_handoff_item_authorized':
-    case 'task_handoff_item_revoked':
-    case 'task_handoff_context_requested':
-    case 'task_submitted':
-    case 'task_returned':
-    case 'task_accepted':
-    case 'task_retried':
-    case 'task_execution_unknown':
-    case 'task_execution_resolved':
-    case 'task_reviewer_changed':
-    case 'room_task_added':
-    case 'room_task_claimed':
-    case 'room_task_completed':
-    case 'room_task_failed':
-    case 'room_task_updated':
-    case 'room_task_deleted': {
-      // 旧任务模型已删除；历史 outbox 中的旧事件不再扇出，避免唤醒或污染新客户端。
-      return [];
-    }
     case 'agent_presence_changed': {
       // 只通知 active human；Agent 成员不可见，也不写 inbox/未读。
       const agentId = stringField(metadata, 'agent_id');
@@ -795,9 +751,6 @@ function inboxStreamItem(
       if (progressAt !== undefined) item.progress_at = String(progressAt);
       return item;
     }
-    case 'task_reminder':
-      // 旧任务催办已删除；历史 outbox 不再唤醒 Agent。
-      return null;
     case MENTION_REMINDER_EVENT: {
       // 个人提醒不是待办：只提示人类查看消息，不增加 pending_count、
       // 不创建 delivery，也不该被 Agent 当成新的执行工作。
@@ -809,10 +762,6 @@ function inboxStreamItem(
       item.mention_all = metadata.mention_all === true;
       return item;
     }
-    case 'task_offered':
-    case 'task_cancelled':
-      // 旧任务个人通知已删除；历史 outbox 不再唤醒。
-      return null;
     case 'room_read':
       return withLocation(baseItem(row, 'room.read', 'read', 'informational'), row, metadata);
     case 'profile_updated':

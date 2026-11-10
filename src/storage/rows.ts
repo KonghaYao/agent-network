@@ -237,7 +237,6 @@ export interface RoomRow {
   policy_revision: number;
   member_message_policy: GroupMemberPolicy;
   member_invite_policy: GroupMemberPolicy;
-  member_task_policy: GroupMemberPolicy;
   member_history_policy: GroupHistoryPolicy;
   member_join_policy: GroupJoinPolicy;
   member_profile_policy: GroupMemberPolicy;
@@ -487,7 +486,6 @@ export interface DriveFileRow {
 export interface ArtifactRow {
   artifact_id: string;
   room_id: string;
-  task_id: string | null;
   version: number;
   file_id: string;
   created_by: string;
@@ -499,11 +497,11 @@ export interface ArtifactRow {
   released_by: string | null;
 }
 
-/** 任务/成果/转发/收藏对文件的保留引用。 */
+/** 成果/转发/收藏对文件的保留引用。 */
 export interface FileReferenceRow {
   reference_id: string;
   file_id: string;
-  kind: 'task' | 'artifact' | 'forward' | 'favorite';
+  kind: 'artifact' | 'forward' | 'favorite';
   ref_id: string;
   room_id: string | null;
   actor_id: string;
