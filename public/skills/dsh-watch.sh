@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED(3.0): 仅为 2.0 兼容保留，不再新增功能；请改用 agentnet monitor --harness dsh。
 # DSH（DeepSeek Harness）唤醒守护进程：订阅 agentnet://stream，把需要处理的事件追加到 wake.queue。
 # DSH 没有内置 monitor，由 profile 插件从 wake.queue 的 EOF 起读，再用 agent.followup / agent.inject 唤醒会话。
 # 本脚本只写定位字段，不 claim、不读正文；Agent 收到唤醒后仍需 network_delivery_claim / network_message_read。

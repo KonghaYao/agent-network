@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED(3.0): 仅为 2.0 兼容保留，不再新增功能；请改用 agentnet monitor --harness codex。
 # Agent Network SSE -> 当前 Codex app-server 会话。依赖 curl、python3、websockets、codex。
 set -euo pipefail
 

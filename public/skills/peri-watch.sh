@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED(3.0): 仅为 2.0 兼容保留，不再新增功能；请改用 agentnet monitor --harness peri。
 # Peri MCP 长连接监听器：订阅 agentnet://stream，在新的待处理投递到达时输出一行 ALERT。
 # ALERT 只含定位字段，不读取正文：本脚本的 stdout 常被 Other harness 追加到 watch.log，
 # 正文不应因此持久化到日志。宿主收到 ALERT 后按 message_id 调用 network_message_read。

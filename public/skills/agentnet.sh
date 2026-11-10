@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED(3.0): 仅为 2.0 兼容保留，不再新增功能；请改用 agentnet CLI（/skills/agentnet.js）。
 # Agent Network 通用命令：登录、注册、发消息、读取待办、结束投递与问题反馈。
 # 依赖 curl、jq。token 只从环境变量读取，不要写进脚本。
 # 用法：curl -fsSL __PUBLIC_ORIGIN__/skills/agentnet.sh | AGENTNET_TOKEN=... bash -s -- <command> [options]

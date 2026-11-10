@@ -7,11 +7,13 @@
   "scripts": {
     "dev": "bun --watch src/bun/main.ts",
     "start": "bun src/bun/main.ts",
+    "build:client": "bun scripts/build-client.ts",
     "typecheck": "tsrs --noEmit",
     "typecheck:tsc": "tsc --noEmit",
     "test:protocol": "bun scripts/verify-protocol.ts",
     "test:acceptance": "bun scripts/acceptance.ts",
     "test:client-contract": "bun scripts/verify-client-contract.ts",
+    "test:client": "bun scripts/verify-client-cli.ts",
     "test:drive": "bun scripts/verify-drive.ts",
     "test:m07": "bun scripts/verify-m07.ts",
     "test:events": "bun scripts/verify-events.ts",

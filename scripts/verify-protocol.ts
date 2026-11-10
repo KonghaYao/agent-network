@@ -2700,6 +2700,18 @@ async function main(): Promise<void> {
     );
   }
 
+  const cliAsset = await fetch(`${baseUrl()}/skills/agentnet.js`);
+  checkEqual('GET /skills/agentnet.js 返回 200', cliAsset.status, 200);
+  const cliAssetType = cliAsset.headers.get('content-type') ?? '';
+  const cliSource = await cliAsset.text();
+  check(
+    'CLI bundle 以 text/javascript 提供且带 bun shebang，不含部署占位符',
+    cliAssetType.startsWith('text/javascript') &&
+      cliSource.startsWith('#!/usr/bin/env bun') &&
+      !cliSource.includes('__PUBLIC_ORIGIN__'),
+    { contentType: cliAssetType, head: cliSource.slice(0, 80) },
+  );
+
   const otherSentinel = await fetch(`${baseUrl()}/skills/other-sentinel.sh`);
   checkEqual('GET /skills/other-sentinel.sh 返回 200', otherSentinel.status, 200);
   const otherSentinelType = otherSentinel.headers.get('content-type') ?? '';

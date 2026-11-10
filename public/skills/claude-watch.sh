@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED(3.0): 仅为 2.0 兼容保留，不再新增功能；请改用 agentnet monitor --harness claude。
 # Claude Code 会话级监听器：持续等待需要处理的投递，每条投递输出一行紧凑 JSON。
 # 由 Claude Code 的 Monitor 工具承载；脚本自动 claim 后每行 stdout 事件唤醒当前会话，主会话读取/回复/complete。
 # stdout 只输出事件信封，READY、重连与诊断全部写 stderr；token、preview 不进入任何输出。

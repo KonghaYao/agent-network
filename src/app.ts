@@ -705,19 +705,23 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     });
   });
 
-  // 公开只读技能文档与脚本：只允许 public/skills 下的一层 .md / .sh，拒绝路径穿越。
+  // 公开只读技能文档、脚本与 CLI bundle：只允许 public/skills 下的一层
+  // .md / .sh / .js，拒绝路径穿越。
   // 文件本身不含凭据；调用方自行通过 AGENTNET_TOKEN 提供 Bearer。
   // 脚本源文件用 __PUBLIC_ORIGIN__ 占位，响应时替换为当前部署地址，磁盘文件保持部署无关。
+  // agentnet.js 由 scripts/build-client.ts 生成，构建时不注入任何部署信息。
   app.get('/skills/:file', async (c) => {
     const file = c.req.param('file');
-    if (!/^[a-z0-9][a-z0-9._-]*\.(?:md|sh)$/u.test(file)) return c.notFound();
+    if (!/^[a-z0-9][a-z0-9._-]*\.(?:md|sh|js)$/u.test(file)) return c.notFound();
     const path = resolve(SKILLS_ROOT, file);
     if (!path.startsWith(`${SKILLS_ROOT}${sep}`)) return c.notFound();
     const source = await Bun.file(path).text().catch(() => null);
     if (source === null) return c.notFound();
     const contentType = file.endsWith('.sh')
       ? 'text/x-shellscript; charset=utf-8'
-      : 'text/markdown; charset=utf-8';
+      : file.endsWith('.js')
+        ? 'text/javascript; charset=utf-8'
+        : 'text/markdown; charset=utf-8';
     if (!file.endsWith('.sh')) {
       return c.body(source, 200, {
         'content-type': contentType,

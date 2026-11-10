@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED(3.0): 仅为 2.0 兼容保留，不再新增功能；请改用 agentnet CLI 的 task 子命令。
 # WeBots 消息式 Task 命令：mark/unmark/summaries/trace/search。
 # Task 没有独立任务实体、负责人或状态机；一条被标记消息的 message_id 就是 task_root_id。
 # 依赖 curl、jq。token 只从环境变量读取，写入 0600 临时 curl 配置，不进入进程参数或日志。
