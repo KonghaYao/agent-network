@@ -522,6 +522,10 @@ export interface AppDeps {
   drawboardAsset?: string | null;
   /** 画板 bundle 内容哈希；只在首次打开画板时请求带版本 URL。 */
   drawboardAssetVersion?: string | null;
+  /** 启动时构建的图标悬停动效 bundle；null 表示构建失败、只保留静态 SVG。 */
+  iconAsset?: string | null;
+  /** 图标动效 bundle 内容哈希；与其他浏览器岛共用同样的版本化 URL 策略。 */
+  iconAssetVersion?: string | null;
 }
 
 interface ByteRange {
@@ -673,6 +677,20 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     });
   });
 
+  // 图标悬停动效：页面先拿到服务端静态 SVG，这个 bundle 只做渐进增强。
+  // 构建失败时 404，图标保持静态，页面其他脚本不受影响。
+  app.get('/assets/chat-icons.js', (c) => {
+    if (!deps.iconAsset) {
+      return c.text('Not Found', 404, { 'cache-control': 'no-store' });
+    }
+    return c.body(deps.iconAsset, 200, {
+      'content-type': 'text/javascript; charset=utf-8',
+      'cache-control': 'public, max-age=300',
+      'x-content-type-options': 'nosniff',
+      ...(deps.iconAssetVersion ? { etag: `"${deps.iconAssetVersion}"` } : {}),
+    });
+  });
+
   // 公开只读技能文档与脚本：只允许 public/skills 下的一层 .md / .sh，拒绝路径穿越。
   // 文件本身不含凭据；调用方自行通过 AGENTNET_TOKEN 提供 Bearer。
   app.get('/skills/:file', async (c) => {
@@ -723,6 +741,7 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
         deps.markdownAssetVersion ?? null,
         deps.resizerAssetVersion ?? null,
         deps.drawboardAssetVersion ?? null,
+        deps.iconAssetVersion ?? null,
       ),
       200,
       { 'cache-control': 'no-store' },
@@ -742,6 +761,7 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
         deps.markdownAssetVersion ?? null,
         deps.resizerAssetVersion ?? null,
         deps.drawboardAssetVersion ?? null,
+        deps.iconAssetVersion ?? null,
       ),
       200,
       {

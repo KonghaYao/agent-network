@@ -81,8 +81,8 @@ export const APP_STYLE = `
     stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .search-box { position: relative; display: block; }
   .search-icon { position: absolute; left: 8px; top: 50%; width: 15px; height: 15px;
-    transform: translateY(-50%); fill: none; stroke: var(--wx-muted); stroke-width: 1.8;
-    pointer-events: none; }
+    transform: translateY(-50%); fill: none; stroke: var(--wx-muted); color: var(--wx-muted);
+    stroke-width: 1.8; pointer-events: none; }
   #room-search { width: 100%; height: 30px; padding: 0 10px 0 28px; border: 0;
     border-radius: 4px; background: var(--wx-search); color: var(--wx-text);
     font: inherit; font-size: 13px; }

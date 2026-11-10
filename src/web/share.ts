@@ -182,6 +182,7 @@ export function renderHomePage(
   markdownVersion: string | null = null,
   resizerVersion: string | null = null,
   drawboardVersion: string | null = null,
+  iconVersion: string | null = null,
 ): string {
-  return renderAppPage(null, markdownVersion, resizerVersion, drawboardVersion);
+  return renderAppPage(null, markdownVersion, resizerVersion, drawboardVersion, iconVersion);
 }

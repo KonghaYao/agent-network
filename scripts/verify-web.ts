@@ -18341,6 +18341,29 @@ async function main(): Promise<void> {
         checkEqual('Markdown asset 版本为内容哈希前 12 位', bundleVersion, contentHash);
       }
 
+      check(
+        '首页使用 Kubai 图标',
+        homeHtml.includes('data-kubai-icon="contact-requests"') &&
+          homeHtml.includes('kubai-icon kubai-icon-users'),
+        homeHtml.match(/<svg[^>]*kubai-icon[^>]*>/)?.[0]?.slice(0, 160),
+      );
+      const iconVersionMatch = homeHtml.match(/\/assets\/chat-icons\.js\?v=([0-9a-f]{12})/);
+      const iconVersion = iconVersionMatch?.[1] ?? '';
+      check('首页图标动效 bundle URL 带内容版本', Boolean(iconVersion), iconVersionMatch?.[0]);
+      if (iconVersion) {
+        const iconResponse = await fetch(`${server.base}/assets/chat-icons.js?v=${iconVersion}`);
+        checkEqual('图标动效 bundle 返回 200', iconResponse.status, 200);
+        checkEqual(
+          '图标动效 bundle ETag 与版本一致',
+          iconResponse.headers.get('etag'),
+          `"${iconVersion}"`,
+        );
+        const iconBody = await iconResponse.text();
+        const iconHash = createHash('sha256').update(iconBody).digest('hex').slice(0, 12);
+        checkEqual('图标动效 bundle 版本为内容哈希前 12 位', iconVersion, iconHash);
+        check('图标动效 bundle 按需绑定 data-kubai-icon', iconBody.includes('data-kubai-icon'));
+      }
+
       const { context, page } = await makeContext(
         browser,
         data.humanToken,

@@ -7,6 +7,7 @@
  */
 
 import { LIMITS } from '../contracts/limits';
+import { kubaiIcon } from './icons';
 
 /**
  * 左下角用户区块：头像、名称、新建 Agent、配对设备与已归档入口。
@@ -23,10 +24,7 @@ export function deviceHandoffAccount(): string {
         <button class="account-edit" id="account-rename" type="button"
           aria-label="编辑姓名" title="编辑姓名"
           aria-haspopup="dialog" aria-controls="me-rename-modal" aria-expanded="false" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M4 20h4l10-10-4-4L4 16z"></path>
-            <path d="M13.5 6.5l4 4"></path>
-          </svg>
+          ${kubaiIcon('account-edit', { size: 14 })}
         </button>
       </div>
       <div class="account-actions">
@@ -37,20 +35,12 @@ export function deviceHandoffAccount(): string {
         <button class="account-icon" id="archived-agents" type="button"
           aria-label="已归档 Agents" title="已归档 Agents"
           aria-haspopup="dialog" aria-controls="archive-popover" aria-expanded="false">
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M4 7h16v3H4z"></path>
-            <path d="M6 10v9h12v-9"></path>
-            <path d="M10 13h4"></path>
-          </svg>
+          ${kubaiIcon('archived-agents', { size: 16 })}
         </button>
         <button class="account-icon" id="logout" type="button"
           aria-label="退出登录" title="退出登录"
           aria-haspopup="dialog" aria-controls="logout-modal" aria-expanded="false" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M14 4h5v16h-5"></path>
-            <path d="M10 8l4 4-4 4"></path>
-            <path d="M14 12H4"></path>
-          </svg>
+          ${kubaiIcon('logout', { size: 16 })}
         </button>
       </div>
     </div>
