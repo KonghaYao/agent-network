@@ -59,7 +59,7 @@ export const agentReissueTokenSchema = z.object({
   expected_permission_version: z.number().int().positive().optional(),
 });
 
-/** 软归档 Agent；只影响管理列表，不参与授权。 */
+/** 软归档 Agent；从默认列举与候选中隐藏，不参与授权。 */
 export const agentArchiveSchema = z.object({
   request_id: requestId,
   actor_id: id(),
@@ -91,6 +91,8 @@ export const agentManagementGetSchema = z.object({ actor_id: id() });
 export const agentsManagedListSchema = z.object({
   cursor,
   limit: z.number().int().min(1).max(LIMITS.managedAgentsPageMax).optional(),
+  /** 默认隐藏已归档 Agent；只有管理/恢复等确需归档状态的调用方显式打开。 */
+  include_archived: z.boolean().optional(),
 });
 
 /** Agent 用自身凭据发起一次性认领；返回的 claim code 只在首次响应出现。 */

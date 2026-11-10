@@ -221,10 +221,20 @@ export async function runAgentAcceptance(state: Q04State, browser: Browser): Pro
       'network_agents_managed_list',
       { limit: 100 },
     );
-    const b3State = managed.items.find((item) => item.actor_id === state.actors.b3.actor_id);
     check(
-      '归档 Agent 在管理列表可见且带状态',
-      Boolean(b3State),
+      '默认管理列表隐藏归档 Agent',
+      !managed.items.some((item) => item.actor_id === state.actors.b3.actor_id),
+      managed.items,
+    );
+    const managedWithArchived = await rawTool<{
+      items: { actor_id: string; status?: string; archived?: boolean }[];
+    }>(state.tokens.u1, 'network_agents_managed_list', { limit: 100, include_archived: true });
+    const b3State = managedWithArchived.items.find(
+      (item) => item.actor_id === state.actors.b3.actor_id,
+    );
+    check(
+      'include_archived 管理列表可见归档 Agent 且带状态',
+      b3State?.archived === true,
       b3State,
     );
     await sleep(50);

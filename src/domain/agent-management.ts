@@ -402,6 +402,9 @@ export async function agentsManagedList(
   const where = cursor
     ? 'AND (CASE WHEN m.manager_id = ? THEN m.created_at ELSE d.created_at END) < ?'
     : '';
+  // 管理列表默认也是候选来源，必须隐藏已归档 Agent；恢复等场景显式
+  // include_archived。过滤放在 LIMIT 之前，分页不会把隐藏项算进空页。
+  const archivedFilter = input.include_archived ? '' : 'AND a.archived_at IS NULL';
   const rows = await db
     .prepare(
       `SELECT a.*,
@@ -416,6 +419,7 @@ export async function agentsManagedList(
           AND d.status = 'active' AND (d.expires_at IS NULL OR d.expires_at > ?)
           AND d.scopes_json LIKE '%"${MANAGE_AGENT_SCOPE}"%'
         WHERE a.kind = 'agent' AND (m.manager_id = ? OR d.delegation_id IS NOT NULL)
+        ${archivedFilter}
         ${where}
         ORDER BY since DESC, a.actor_id ASC
         LIMIT ?`,

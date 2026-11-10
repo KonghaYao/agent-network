@@ -1,8 +1,9 @@
 /**
  * Agent 软归档端到端验收。
  *
- * 固定在跨层语义上：归档只改变 `network_agents_get` 的归档状态，
- * 不影响认证、好友、房间、消息、投递、统一流、在线状态与 login。
+ * 固定在跨层语义上：归档从管理列表、好友列表、群成员/邀请与候选列举中
+ * 隐藏 Agent，但保留 `network_agents_get` 详情、direct 会话对端与历史；
+ * 不影响认证、消息、投递、统一流、在线状态与 login。
  * 工具契约细节（输入上限、输出 schema）由 `scripts/verify-protocol.ts` 覆盖。
  */
 
@@ -57,6 +58,11 @@ interface ArchiveView {
   archived: boolean;
   archived_at: string | null;
   archived_by: string | null;
+}
+
+interface AgentsManagedView {
+  items: { actor_id: string; archived: boolean; disabled: boolean }[];
+  has_more: boolean;
 }
 
 interface StreamItemView {
@@ -149,6 +155,18 @@ export async function runAgentArchiveAcceptance(): Promise<void> {
     const beforeArchive = await callTool<RoomDetail>(peerConn.client, 'network_room_get', {
       room_id: roomId,
     });
+    const archiveGroup = await callTool<RoomDetail>(ownerConn.client, 'network_room_create', {
+      request_id: newRequestId('group'),
+      kind: 'group',
+      title: '归档成员过滤群',
+      members: [agent.actor_id, peer.actor_id],
+    });
+    const archiveGroupId = archiveGroup.room.room_id;
+    check(
+      '归档前群成员包含 Agent',
+      archiveGroup.members.some((member) => member.actor_id === agent.actor_id),
+      archiveGroup.members,
+    );
     await sleep(300);
     collector.reset();
 
@@ -248,9 +266,33 @@ export async function runAgentArchiveAcceptance(): Promise<void> {
       {},
     );
     check(
-      '归档后好友列表仍包含该 Agent',
-      contacts.items.some((item) => item.actor_id === agent.actor_id),
+      '归档后好友列表隐藏该 Agent',
+      !contacts.items.some((item) => item.actor_id === agent.actor_id),
       contacts.items,
+    );
+
+    const managedDefault = await callTool<AgentsManagedView>(
+      ownerConn.client,
+      'network_agents_managed_list',
+      { limit: 100 },
+    );
+    check(
+      '管理列表默认隐藏归档 Agent',
+      !managedDefault.items.some((item) => item.actor_id === agent.actor_id),
+      managedDefault.items,
+    );
+    const managedWithArchived = await callTool<AgentsManagedView>(
+      ownerConn.client,
+      'network_agents_managed_list',
+      { limit: 100, include_archived: true },
+    );
+    const archivedManaged = managedWithArchived.items.find(
+      (item) => item.actor_id === agent.actor_id,
+    );
+    check(
+      'include_archived 管理列表保留归档 Agent 与状态',
+      archivedManaged?.archived === true && archivedManaged.disabled === false,
+      managedWithArchived.items,
     );
 
     const roomWhileArchived = await callTool<RoomDetail>(peerConn.client, 'network_room_get', {
@@ -260,8 +302,22 @@ export async function runAgentArchiveAcceptance(): Promise<void> {
     const archivedMember = roomWhileArchived.members.find(
       (member) => member.actor_id === agent.actor_id,
     );
-    check('归档后仍是房间成员', Boolean(archivedMember), roomWhileArchived.members);
-    checkEqual('归档不影响在线状态', archivedMember?.online, true);
+    check('direct 会话保留归档 Agent 对端', Boolean(archivedMember), roomWhileArchived.members);
+    checkEqual('归档不影响 direct 对端在线状态', archivedMember?.online, true);
+
+    const groupWhileArchived = await callTool<RoomDetail>(ownerConn.client, 'network_room_get', {
+      room_id: archiveGroupId,
+    });
+    check(
+      '归档 Agent 不出现在群成员列表',
+      !groupWhileArchived.members.some((member) => member.actor_id === agent.actor_id),
+      groupWhileArchived.members,
+    );
+    check(
+      '未归档成员仍出现在群成员列表',
+      groupWhileArchived.members.some((member) => member.actor_id === peer.actor_id),
+      groupWhileArchived.members,
+    );
 
     const loginWhileArchived = await callTool<LoginResult>(agentConn.client, 'network_login');
     checkEqual('归档后仍可 login', loginWhileArchived.online, true);
@@ -327,6 +383,36 @@ export async function runAgentArchiveAcceptance(): Promise<void> {
       actor_ids: [agent.actor_id],
     });
     checkEqual('agents_get 反映取消归档', afterUnarchive.items[0]?.archived, false);
+    const contactsAfter = await callTool<{ items: { actor_id: string }[] }>(
+      ownerConn.client,
+      'network_contacts_list',
+      {},
+    );
+    check(
+      '取消归档后好友列表重新包含该 Agent',
+      contactsAfter.items.some((item) => item.actor_id === agent.actor_id),
+      contactsAfter.items,
+    );
+    const managedAfter = await callTool<AgentsManagedView>(
+      ownerConn.client,
+      'network_agents_managed_list',
+      { limit: 100 },
+    );
+    check(
+      '取消归档后默认管理列表重新包含该 Agent',
+      managedAfter.items.some(
+        (item) => item.actor_id === agent.actor_id && item.archived === false,
+      ),
+      managedAfter.items,
+    );
+    const groupAfter = await callTool<RoomDetail>(ownerConn.client, 'network_room_get', {
+      room_id: archiveGroupId,
+    });
+    check(
+      '取消归档后群成员列表重新包含该 Agent',
+      groupAfter.members.some((member) => member.actor_id === agent.actor_id),
+      groupAfter.members,
+    );
     const unarchiveReplay = await callTool<ArchiveView>(
       ownerConn.client,
       'network_agent_unarchive',

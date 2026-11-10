@@ -7,7 +7,7 @@ import type {
   ContactsListInput,
 } from '../contracts/schemas';
 import { nowMs, sha256Hex, stableStringify } from '../storage/db';
-import { getActor, getActorBySession } from '../storage/queries';
+import { getActor, getActorBySession, visibleActorSql } from '../storage/queries';
 import type { ActorRow, ContactRow } from '../storage/rows';
 import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
 import { endRelationStatements, getActiveRelation } from './contact-relations';
@@ -78,7 +78,7 @@ export async function contactsList(
                 ELSE c.target_actor_id || '|' || c.owner_actor_id
               END
           AND r.status = 'active'
-        WHERE ${where}
+        WHERE ${where} AND ${visibleActorSql('a')}
         ORDER BY c.created_at DESC, c.target_actor_id ASC
         LIMIT ?`,
     )

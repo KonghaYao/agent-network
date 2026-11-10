@@ -602,14 +602,14 @@ async function loadAllContacts(token: string): Promise<{ actor_id: string; name:
   return contacts;
 }
 
-/** 分页读取当前 human 可管理的 Agent，供候选数断言覆盖合并来源。 */
+/** 分页读取当前 human 可管理的 Agent，供候选数断言覆盖合并来源（含归档用于断言隐藏）。 */
 async function loadAllManagedAgents(token: string): Promise<
   { actor_id: string; name: string; archived?: boolean; disabled?: boolean }[]
 > {
   const agents: { actor_id: string; name: string; archived?: boolean; disabled?: boolean }[] = [];
   let cursor: string | null = null;
   for (let page = 0; page < 10; page += 1) {
-    const args: Record<string, unknown> = { limit: 100 };
+    const args: Record<string, unknown> = { limit: 100, include_archived: true };
     if (cursor) args.cursor = cursor;
     const result = await rawTool<{
       items: { actor_id: string; name: string; archived?: boolean; disabled?: boolean }[];
@@ -9462,6 +9462,207 @@ async function main(): Promise<void> {
         request_id: requestId('contact'),
         actor_id: archiveAgent.actor_id,
       });
+    }
+
+    // 2b-2a-2. 已归档 Agent 从联系人、群成员、@ 建议、任务负责人、群主转让与
+    // 建群/加人候选中隐藏；已归档入口仍可恢复，未归档成员不受影响。
+    {
+      const archivedAgent = await createAgentFriend(data.humanToken, '列举过滤归档 Agent');
+      const activeAgent = await createAgentFriend(data.humanToken, '列举过滤保留 Agent');
+      const candidateAgent = await createAgentFriend(data.humanToken, '列举过滤候选 Agent');
+      await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [archivedAgent.actor_id],
+      });
+      const filterGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '列举过滤群',
+        members: [archivedAgent.actor_id, activeAgent.actor_id],
+      });
+      const filterGroupId = filterGroup.room.room_id;
+      await rawTool(data.humanToken, 'network_agent_archive', {
+        request_id: requestId('archive'),
+        actor_id: archivedAgent.actor_id,
+      });
+
+      const groupDetail = await rawTool<RoomDetail>(data.humanToken, 'network_room_get', {
+        room_id: filterGroupId,
+      });
+      check(
+        'room_get 群成员隐藏归档 Agent',
+        !groupDetail.members.some((member) => member.actor_id === archivedAgent.actor_id) &&
+          groupDetail.members.some((member) => member.actor_id === activeAgent.actor_id),
+        groupDetail.members,
+      );
+      const contacts = await rawTool<{ items: { actor_id: string }[] }>(
+        data.humanToken,
+        'network_contacts_list',
+        { limit: 100 },
+      );
+      check(
+        'contacts_list 隐藏归档 Agent 但保留未归档好友',
+        !contacts.items.some((item) => item.actor_id === archivedAgent.actor_id) &&
+          contacts.items.some((item) => item.actor_id === activeAgent.actor_id),
+        contacts.items,
+      );
+      const managedDefault = await rawTool<{ items: { actor_id: string }[] }>(
+        data.humanToken,
+        'network_agents_managed_list',
+        { limit: 100 },
+      );
+      check(
+        'agents_managed_list 默认隐藏归档 Agent',
+        !managedDefault.items.some((item) => item.actor_id === archivedAgent.actor_id) &&
+          managedDefault.items.some((item) => item.actor_id === activeAgent.actor_id),
+        managedDefault.items,
+      );
+      const managedWithArchived = await rawTool<{
+        items: { actor_id: string; archived?: boolean }[];
+      }>(data.humanToken, 'network_agents_managed_list', {
+        limit: 100,
+        include_archived: true,
+      });
+      check(
+        'include_archived 仍返回归档 Agent 状态',
+        managedWithArchived.items.some(
+          (item) => item.actor_id === archivedAgent.actor_id && item.archived === true,
+        ),
+        managedWithArchived.items,
+      );
+
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      // 旧本地注册表同时写入归档 Agent；候选合并必须用服务端归档状态把它过滤掉。
+      const registryItem = (entry: Actor) => ({
+        owner_actor_id: data.human.actor_id,
+        actor_id: entry.actor_id,
+        name: entry.name,
+        agent_session_id: entry.agent_session_id ?? null,
+        created_at: String(Date.now()),
+        mcp_url: '',
+      });
+      await page.evaluate(
+        `(() => {
+          const key = 'agent-network-agents-v1:${data.human.actor_id}';
+          localStorage.setItem(key, ${JSON.stringify(
+            JSON.stringify({ v: 1, items: [registryItem(archivedAgent), registryItem(candidateAgent)] }),
+          )});
+        })()`,
+      );
+      await page.goto(`${server.base}/c/${filterGroupId}`);
+      await waitRoom(page, filterGroupId, '列举过滤群');
+      await waitForText(page, '#subtitle', '2 人');
+      checkEqual(
+        '群聊头部人数不包含归档 Agent',
+        await page.locator('#subtitle').textContent(),
+        '群聊 · 2 人',
+      );
+
+      await page.locator('#add-members').click();
+      await page.locator('#members-current .member-roster-item').first().waitFor();
+      const rosterText = (await page.locator('#members-current').textContent()) ?? '';
+      check(
+        '成员面板隐藏归档 Agent 且保留未归档成员',
+        !rosterText.includes(archivedAgent.name) && rosterText.includes(activeAgent.name),
+        rosterText,
+      );
+      await page.fill('#members-search', archivedAgent.name);
+      checkEqual(
+        '加人候选不显示归档 Agent',
+        await page.locator('#members-contacts .contact-choice').count(),
+        0,
+      );
+      await page.fill('#members-search', activeAgent.name);
+      checkEqual(
+        '加人候选排除已在群内的未归档成员',
+        await page.locator('#members-contacts .contact-choice').count(),
+        0,
+      );
+      await page.fill('#members-search', candidateAgent.name);
+      await page
+        .locator('#members-contacts .contact-choice')
+        .filter({ hasText: candidateAgent.name })
+        .waitFor();
+      checkEqual(
+        '加人候选保留未归档成员',
+        await page.locator('#members-contacts .contact-choice').count(),
+        1,
+      );
+      await page.locator('#members-cancel').click();
+
+      await page.locator('#body').fill('@');
+      await page.locator('#mention-picker').waitFor({ state: 'visible' });
+      const mentionText = (await page.locator('#mention-picker').textContent()) ?? '';
+      check(
+        '@ 建议隐藏归档 Agent 且保留未归档成员',
+        !mentionText.includes(archivedAgent.name) && mentionText.includes(activeAgent.name),
+        mentionText,
+      );
+      await page.locator('#body').fill('');
+
+      await page.locator('#task-create').click();
+      await page.locator('#task-create-modal').waitFor({ state: 'visible' });
+      const assigneeOptions = await page.locator('#task-assignee option').allTextContents();
+      check(
+        '任务负责人候选隐藏归档 Agent',
+        !assigneeOptions.some((text) => text.includes(archivedAgent.name)) &&
+          assigneeOptions.some((text) => text.includes(activeAgent.name)),
+        assigneeOptions,
+      );
+      await page.locator('#task-create-cancel').click();
+
+      await page.locator('#add-members').click();
+      await page.locator('#members-current .member-roster-item').first().waitFor();
+      checkEqual(
+        '群主转让入口不显示归档成员',
+        await page
+          .locator('#members-current .member-roster-item')
+          .filter({ hasText: archivedAgent.name })
+          .count(),
+        0,
+      );
+      await page.locator('#members-cancel').click();
+
+      await page.locator('#new-group').click();
+      await page.locator('#group-contacts input[type=checkbox]').first().waitFor();
+      await page.fill('#group-search', archivedAgent.name);
+      checkEqual(
+        '建群候选过滤旧注册表中的归档 Agent',
+        await page.locator('#group-contacts .contact-choice').count(),
+        0,
+      );
+      await page.fill('#group-search', activeAgent.name);
+      await page
+        .locator('#group-contacts .contact-choice')
+        .filter({ hasText: activeAgent.name })
+        .waitFor();
+      checkEqual(
+        '建群候选保留未归档成员',
+        await page.locator('#group-contacts .contact-choice').count(),
+        1,
+      );
+      await page.locator('#group-cancel').click();
+
+      await page.locator('#archived-agents').click();
+      await page.waitForFunction(
+        `document.querySelector('#archive-popover-list .archive-item[data-actor-id="${archivedAgent.actor_id}"]') !== null`,
+      );
+      check(
+        '已归档 Agents 入口仍显示归档 Agent',
+        ((await page.locator('#archive-popover-list').textContent()) ?? '').includes(
+          archivedAgent.name,
+        ),
+      );
+      await page.locator('#archive-popover-close').click();
+      await context.close();
     }
 
     // 2b-2b. 停用 Agent：确认后展示待处理投递与未完成任务，错误可见。

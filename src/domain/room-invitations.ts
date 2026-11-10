@@ -17,7 +17,7 @@ import {
   roomTopic,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getActor, getMember, getOperation, getRoom } from '../storage/queries';
+import { getActor, getMember, getOperation, getRoom, visibleActorSql } from '../storage/queries';
 import type { ActorRow, RoomInvitationRow, RoomRow } from '../storage/rows';
 import {
   operationsStatement,
@@ -128,7 +128,7 @@ export async function loadInvitedMembers(
          FROM room_invitations i
          JOIN actors a ON a.actor_id = i.target_actor_id
         WHERE i.room_id = ? AND i.kind = 'direct' AND i.status = 'pending'
-          AND i.expires_at > ?
+          AND i.expires_at > ? AND ${visibleActorSql('a')}
         ORDER BY i.created_at ASC, i.invitation_id ASC`,
     )
     .bind(roomId, at)

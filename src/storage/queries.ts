@@ -40,6 +40,17 @@ export interface ActorKindRow {
   kind: 'human' | 'agent';
 }
 
+/**
+ * 列举 actor 时隐藏已归档 Agent 的 SQL 条件。
+ *
+ * `alias` 必须是代码内固定的列别名，不能来自用户输入。人类不受归档影响；
+ * 未归档 Agent 与停用 Agent 仍可见。只用于成员/联系人之类的列举查询，
+ * 详情读取（`network_agents_get`）与 direct 会话对端解析不得套用。
+ */
+export function visibleActorSql(alias: string): string {
+  return `(${alias}.kind <> 'agent' OR ${alias}.archived_at IS NULL)`;
+}
+
 /** 只按已知 actor_id 批量读取展示类型；调用方负责去重与数量上限。 */
 export async function getActorsByIds(
   db: D1Like,

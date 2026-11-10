@@ -1692,8 +1692,9 @@ async function main(): Promise<void> {
   const archiveTool = listed?.tools?.find((tool) => tool.name === 'network_agent_archive');
   const archiveDescription = archiveTool?.description ?? '';
   check(
-    'archive 描述声明只影响管理列表且不改变业务',
-    archiveDescription.includes('只影响 Agent 管理列表') &&
+    'archive 描述声明从默认列举隐藏且不改变业务',
+    archiveDescription.includes('管理列表') &&
+      archiveDescription.includes('好友列表') &&
       archiveDescription.includes('不改变消息') &&
       archiveDescription.includes('active manager') &&
       archiveDescription.includes('PERMISSION_DENIED'),
@@ -1726,6 +1727,15 @@ async function main(): Promise<void> {
       !agentsGetOutput.includes('"metadata"') &&
       !agentsGetOutput.includes('token'),
     agentsGetTool?.outputSchema,
+  );
+  const managedListTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_agents_managed_list',
+  );
+  check(
+    'agents_managed_list 默认隐藏归档并提供 include_archived 开关',
+    (managedListTool?.description ?? '').includes('默认排除已归档 Agent') &&
+      JSON.stringify(managedListTool?.inputSchema ?? {}).includes('"include_archived"'),
+    managedListTool,
   );
 
   const feedbackTool = listed?.tools?.find((tool) => tool.name === 'network_feedback_create');

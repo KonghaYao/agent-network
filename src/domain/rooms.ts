@@ -32,7 +32,14 @@ import {
   roomTopic,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getActor, getMember, getMessage, getRoom, isActiveMember } from '../storage/queries';
+import {
+  getActor,
+  getMember,
+  getMessage,
+  getRoom,
+  isActiveMember,
+  visibleActorSql,
+} from '../storage/queries';
 import type {
   ActorRow,
   MessageRow,
@@ -332,12 +339,15 @@ async function loadMembers(
   room: RoomRow,
   viewer: RoomMemberRow,
 ): Promise<MemberView[]> {
+  // direct 的唯一对端是会话身份与网页归档入口，必须保留；group 的成员面板
+  // 属于列举面，隐藏已归档 Agent。人类成员不受影响。
+  const archivedFilter = room.kind === 'group' ? `AND ${visibleActorSql('a')}` : '';
   const rows = await db
     .prepare(
       `SELECT m.*, a.kind, a.name, a.agent_session_id
          FROM room_members m
          JOIN actors a ON a.actor_id = m.actor_id
-        WHERE m.room_id = ? AND m.status = 'active'
+        WHERE m.room_id = ? AND m.status = 'active' ${archivedFilter}
         ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
                  m.joined_at ASC, m.actor_id ASC`,
     )

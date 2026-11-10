@@ -216,13 +216,17 @@ function agentRegistryReissue(ownerActorId, actorId, mcpUrl, fallback) {
  * network_contact_request 伪造好友关系，也不显示好友申请等待提示。
  * 本机注册表覆盖历史 unclaimed Agent；managed list 覆盖其他浏览器创建的
  * 自有 Agent。两者都按 actor_id 去重。
+ *
+ * 管理列表默认已在服务端隐藏归档 Agent；这里显式 include_archived 只为拿到
+ * 隐藏 actor_id，用来过滤仍留在旧 localStorage 注册表里的归档条目，归档项
+ * 本身不会进入候选。
  */
 async function loadManagedPickerAgents() {
   const items = [];
   const hidden = new Set();
   let cursor = null;
   for (let page = 0; page < 5; page += 1) {
-    const args = { limit: 100 };
+    const args = { limit: 100, include_archived: true };
     if (cursor) args.cursor = cursor;
     const result = await callTool('network_agents_managed_list', args);
     for (const item of result.items || []) {

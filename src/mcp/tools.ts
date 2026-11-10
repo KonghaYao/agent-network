@@ -619,7 +619,7 @@ export function registerTools(
   register(
     server,
     'network_agents_managed_list',
-    '按最近绑定时间倒序分页列出当前 human 作为 manager 或 delegate 管理的 Agent。只包含调用者确有权管理的目标；cursor/limit 分页（默认 50，最大 100）。',
+    '按最近绑定时间倒序分页列出当前 human 作为 manager 或 delegate 管理的 Agent。默认排除已归档 Agent；需要读取归档状态时显式传 include_archived: true。只包含调用者确有权管理的目标；cursor/limit 分页（默认 50，最大 100）。',
     agentsManagedListSchema,
     agentsManagedListResultSchema,
     async (input) => {
@@ -813,7 +813,7 @@ export function registerTools(
   register(
     server,
     'network_agent_archive',
-    '软归档一个 Agent。归档只影响 Agent 管理列表，不改变消息、好友、房间、投递、凭据、在线状态或登录；归档可逆，不能恢复 MCP URL 或 token。只有该 Agent 的 active manager 或持有 manage_agent 委托的 human 可调用；其他身份返回 PERMISSION_DENIED，人类目标返回 INVALID_ARGUMENT。',
+    '软归档一个 Agent。归档会让该 Agent 从管理列表、好友列表、群成员/邀请与网页成员候选的默认列举中隐藏；已归档详情仍可用 network_agents_get 读取。不改变消息、房间、投递、凭据、在线状态或登录；归档可逆，不能恢复 MCP URL 或 token。只有该 Agent 的 active manager 或持有 manage_agent 委托的 human 可调用；其他身份返回 PERMISSION_DENIED，人类目标返回 INVALID_ARGUMENT。',
     agentArchiveSchema,
     agentArchiveResultSchema,
     async (input) => {
@@ -825,7 +825,7 @@ export function registerTools(
   register(
     server,
     'network_agent_unarchive',
-    '取消 Agent 的软归档。只影响 Agent 管理列表的过滤，不改变消息、好友、房间、投递、凭据或在线状态。只有该 Agent 的 active manager 或持有 manage_agent 委托的 human 可调用；其他身份返回 PERMISSION_DENIED。',
+    '取消 Agent 的软归档，使其重新出现在管理列表、好友列表、群成员与候选列举中。不改变消息、好友关系、房间、投递、凭据或在线状态。只有该 Agent 的 active manager 或持有 manage_agent 委托的 human 可调用；其他身份返回 PERMISSION_DENIED。',
     agentUnarchiveSchema,
     agentUnarchiveResultSchema,
     async (input) => {

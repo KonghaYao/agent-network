@@ -16,10 +16,11 @@ import {
 import { actorId, type Principal } from './principal';
 
 /**
- * Agent 软归档是纯管理列表标记：只影响 `network_agents_get` 返回的归档状态
- * 与网页侧栏的默认会话过滤；网页只提供已归档列表的恢复入口，不提供 Agents
- * 管理/归档界面。不得用 `archived_at` 拒绝消息、登录、投递或凭据，
- * 也不写 events/outbox、不改变 `pending_count`、`rooms.head_seq` 或在线状态。
+ * Agent 软归档是列举面可见性标记：管理列表、好友列表、群成员/待确认邀请
+ * 与网页成员候选默认隐藏；`network_agents_get` 详情、direct 会话对端与
+ * 历史消息保留。网页只提供已归档列表的恢复入口，不提供 Agents 管理/归档界面。
+ * 不得用 `archived_at` 拒绝消息、登录、投递或凭据，也不写 events/outbox、
+ * 不改变 `pending_count`、`rooms.head_seq` 或在线状态。
  *
  * 归档/取消归档属于 `agent.management.write`：只有 active manager 或持有
  * `manage_agent` 委托的 human 可调用，事务内重放权限与权限版本 guard。
