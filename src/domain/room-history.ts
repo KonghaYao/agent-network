@@ -56,14 +56,21 @@ export function historyBoundary(
 
 /** 历史/搜索/时间线游标包含成员代次；重新加入后旧代次游标不能继续用。 */
 export function historyCursorScope(
-  kind: 'history' | 'timeline' | 'search' | 'files' | 'artifacts',
+  kind: 'history' | 'timeline' | 'search' | 'files' | 'artifacts' | 'task',
   roomId: string,
   generation: number,
 ): string {
   return `room:${roomId}:${kind}:g${generation}`;
 }
 
-const HISTORY_CURSOR_KINDS = ['history', 'timeline', 'search', 'files', 'artifacts'] as const;
+const HISTORY_CURSOR_KINDS = [
+  'history',
+  'timeline',
+  'search',
+  'files',
+  'artifacts',
+  'task',
+] as const;
 
 /**
  * 解码带成员代次的游标。

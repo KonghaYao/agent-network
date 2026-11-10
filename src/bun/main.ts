@@ -10,7 +10,6 @@ import { loadEncryptionKey } from '../events/security';
 import { initEventsFileLog } from '../events/log-file';
 import type { FileMount } from '@peri-code/mcpp/files';
 import { remindStaleDeliveries } from '../domain/delivery-reminders';
-import { remindStaleTasks } from '../domain/task-reminders';
 import { NotificationHub } from '../realtime/hub';
 import { scheduleOutboxDrain } from '../realtime/outbox';
 import { AgentPresenceTimeline } from '../realtime/presence-timeline';
@@ -261,17 +260,6 @@ const reminderSweep = setInterval(() => {
     })
     .finally(() => {
       reminderSweepRunning = false;
-    });
-  // 任务催办与投递提醒同一扫描节奏；两者在各自窗口内持久化去重。
-  void remindStaleTasks(env.DB)
-    .then(async (result) => {
-      if (result.failed > 0) {
-        console.error('agent-network task reminder sweep had failures', result.failed);
-      }
-      if (result.reminded > 0) await scheduleOutboxDrain(env);
-    })
-    .catch(() => {
-      console.error('agent-network task reminder sweep failed');
     });
 }, LIMITS.deliveryReminderScanMs);
 

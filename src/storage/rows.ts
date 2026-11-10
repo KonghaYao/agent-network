@@ -237,7 +237,6 @@ export interface RoomRow {
   policy_revision: number;
   member_message_policy: GroupMemberPolicy;
   member_invite_policy: GroupMemberPolicy;
-  member_task_policy: GroupMemberPolicy;
   member_history_policy: GroupHistoryPolicy;
   member_join_policy: GroupJoinPolicy;
   member_profile_policy: GroupMemberPolicy;
@@ -372,6 +371,11 @@ export interface MessageRow {
   root_id: string | null;
   hop: number;
   root_invocations_used: number;
+  /** 消息式 Task 归属；起点自指 message_id，普通消息为 NULL。 */
+  task_root_id: string | null;
+  /** 起点标记审计；处理消息与普通消息为 NULL。 */
+  task_marked_by: string | null;
+  task_marked_at: number | null;
   created_at: number;
 }
 
@@ -482,7 +486,6 @@ export interface DriveFileRow {
 export interface ArtifactRow {
   artifact_id: string;
   room_id: string;
-  task_id: string | null;
   version: number;
   file_id: string;
   created_by: string;
@@ -494,11 +497,11 @@ export interface ArtifactRow {
   released_by: string | null;
 }
 
-/** 任务/成果/转发/收藏对文件的保留引用。 */
+/** 成果/转发/收藏对文件的保留引用。 */
 export interface FileReferenceRow {
   reference_id: string;
   file_id: string;
-  kind: 'task' | 'artifact' | 'forward' | 'favorite';
+  kind: 'artifact' | 'forward' | 'favorite';
   ref_id: string;
   room_id: string | null;
   actor_id: string;
@@ -515,277 +518,6 @@ export interface ActorRoomMonitorRow {
   url: string;
   created_at: number;
   updated_at: number;
-}
-
-/** 房间任务；状态机 pending -> claimed -> done|failed。 */
-export interface RoomTaskRow {
-  task_id: string;
-  room_id: string;
-  list_id: string;
-  description: string;
-  status: 'pending' | 'claimed' | 'done' | 'failed';
-  assignee_actor_id: string | null;
-  result: string | null;
-  created_by: string;
-  created_at: number;
-  /** 创建事件序号；旧行 NULL 时回退 created_at。 */
-  created_seq: number | null;
-  updated_at: number;
-  completed_at: number | null;
-  sort_order: number;
-}
-
-/** D01 任务；旧 `room_tasks` 迁移后只读保留。 */
-export interface TaskRow {
-  task_id: string;
-  room_id: string;
-  created_by: string;
-  source_message_id: string | null;
-  title: string;
-  description: string;
-  acceptance_criteria: string;
-  status:
-    | 'unassigned'
-    | 'offered'
-    | 'in_progress'
-    | 'blocked'
-    | 'submitted'
-    | 'accepted'
-    | 'failed'
-    | 'cancelled'
-    | 'legacy_completed';
-  revision: number;
-  owner_actor_id: string | null;
-  current_assignment_id: string | null;
-  /** 创建参数里的负责人；公开任务为 NULL，后续 claim/offer 不修改。 */
-  initial_assignee_actor_id: string | null;
-  /** 1 表示 `initial_assignee_actor_id` 是权威答案；0 表示旧行未知。 */
-  initial_assignee_known: 0 | 1;
-  /** 追加工作的父任务；必须同房间且父任务为 accepted/cancelled。 */
-  parent_task_id: string | null;
-  /** 可选关联任务；只表达关系，不授予额外执行权。 */
-  related_task_id: string | null;
-  reviewer_actor_id: string;
-  due_at: number | null;
-  blocked_reason: string | null;
-  blocked_at: number | null;
-  last_progress_at: number | null;
-  business_authority: 'native' | 'external';
-  external_binding_id: string | null;
-  created_at: number;
-  updated_at: number;
-  accepted_at: number | null;
-  cancelled_at: number | null;
-  /** D08：取消操作者、原因与操作者声明的外部执行停止状态。 */
-  cancelled_by: string | null;
-  cancel_reason: string | null;
-  external_stop_status: TaskExternalStopStatus | null;
-}
-
-export type TaskExternalStopStatus = 'confirmed' | 'unknown' | 'not_required';
-
-export type TaskExternalActionState = 'unknown' | 'confirmed' | 'not_executed' | 'rejected';
-
-/** D08：可能产生外部副作用的动作与对账结论；同一任务内 action_id 唯一。 */
-export interface TaskExternalActionRow {
-  action_id: string;
-  task_id: string;
-  intent: string;
-  state: TaskExternalActionState;
-  evidence: string;
-  created_by: string;
-  created_at: number;
-  updated_at: number;
-}
-
-/** D08：任务催办窗口；event_key 与窗口锚点共同保证重启后不重复提醒。 */
-export interface TaskReminderRow {
-  reminder_id: string;
-  task_id: string;
-  assignment_id: string;
-  assignment_version: number;
-  owner_actor_id: string;
-  anchor_at: number;
-  event_key: string;
-  created_at: number;
-}
-
-export interface TaskAssignmentRow {
-  assignment_id: string;
-  task_id: string;
-  assignment_version: number;
-  owner_actor_id: string;
-  status: 'offered' | 'active' | 'submitted' | 'declined' | 'revoked' | 'expired';
-  offered_by: string;
-  offer_expires_at: number | null;
-  accepted_at: number | null;
-  ended_at: number | null;
-  last_progress_at: number | null;
-  delivery_id: string | null;
-  created_at: number;
-  updated_at: number;
-}
-
-export interface TaskCardRow {
-  task_id: string;
-  message_id: string;
-  room_id: string;
-  created_at: number;
-}
-
-/** D04 交接提议；接受前不改变任务/assignment 的权威关系。 */
-export interface TaskTransferRow {
-  transfer_id: string;
-  task_id: string;
-  from_assignment_id: string | null;
-  from_assignment_version: number | null;
-  to_actor_id: string;
-  status: 'pending' | 'accepted' | 'rejected' | 'cancelled' | 'expired';
-  context_json: string;
-  version: number;
-  created_by: string;
-  created_at: number;
-  expires_at: number;
-  responded_at: number | null;
-  responded_by: string | null;
-}
-
-export interface TaskAttachmentRow {
-  task_id: string;
-  file_id: string;
-  label: string;
-  created_at: number;
-}
-
-/**
- * D05 交接上下文包版本。
- *
- * 每个版本保存创建时的目标、已完成、当前结果、未解决与下一步；引用另存
- * `task_handoff_pack_items`。本表不保存源消息正文或文件字节，读取时重新
- * 校验可见性与保留期。
- */
-export interface TaskHandoffPackRow {
-  pack_id: string;
-  task_id: string;
-  room_id: string;
-  version: number;
-  from_assignment_id: string | null;
-  from_assignment_version: number;
-  from_owner_actor_id: string | null;
-  created_by: string;
-  goal: string;
-  completed_json: string;
-  current_result_json: string;
-  unresolved_json: string;
-  next_steps_json: string;
-  source_room_id: string | null;
-  created_at: number;
-}
-
-export type TaskHandoffItemKind =
-  | 'message'
-  | 'file'
-  | 'branch'
-  | 'commit'
-  | 'test'
-  | 'submission';
-
-/** 交接包引用；`authorized` 只对跨范围私有材料有意义。 */
-export interface TaskHandoffItemRow {
-  item_id: string;
-  pack_id: string;
-  kind: TaskHandoffItemKind;
-  reference: string;
-  label: string;
-  summary: string;
-  source_room_id: string | null;
-  required: 0 | 1;
-  authorized: 0 | 1;
-  authorized_by: string | null;
-  authorized_at: number | null;
-  revoked_by: string | null;
-  revoked_at: number | null;
-  note: string;
-  created_at: number;
-}
-
-/** 接任者的补充上下文请求；不改变任务/assignment。 */
-export interface TaskHandoffContextRequestRow {
-  context_request_id: string;
-  pack_id: string;
-  task_id: string;
-  requested_by: string;
-  note: string;
-  created_at: number;
-}
-
-/**
- * 任务成果提交版本。
- *
- * `summary/materials_json/evidence_json/known_limits/links_json/commit_sha` 是
- * 该版本冻结的提交内容；创建后只能通过状态流转处理，不能原地改写。材料
- * 的字节身份仍以 `room_files`/`drive_files` 为准，本表只保存提交时快照。
- */
-export interface TaskSubmissionRow {
-  submission_id: string;
-  task_id: string;
-  assignment_id: string;
-  assignment_version: number;
-  version: number;
-  summary: string;
-  materials_json: string;
-  evidence_json: string;
-  known_limits: string;
-  links_json: string;
-  commit_sha: string | null;
-  submitted_by: string;
-  status: 'pending' | 'accepted' | 'returned' | 'superseded';
-  created_at: number;
-  reviewed_at: number | null;
-}
-
-/** 验收结论；D06 只写 decision = return，D07 扩展完整验收。 */
-export interface TaskReviewRow {
-  review_id: string;
-  submission_id: string;
-  task_id: string;
-  reviewer_actor_id: string;
-  decision: 'accept' | 'return';
-  reason: string;
-  /** accept 的逐项核对快照；return 与旧行默认为空数组。 */
-  checklist_json: string;
-  created_at: number;
-}
-
-/**
- * 任务进度/阻塞/恢复审计；`tasks.status` 仍是唯一当前状态。
- *
- * `task_revision` 与 `tasks.revision` 同一事务递增，唯一索引保证一个版本
- * 只有一条记录。普通进度不产生消息、delivery 或 inbox 待办。
- */
-export interface TaskProgressRow {
-  progress_id: string;
-  task_id: string;
-  task_revision: number;
-  assignment_id: string | null;
-  assignment_version: number | null;
-  actor_id: string;
-  prior_status: TaskRow['status'];
-  status: TaskRow['status'];
-  percent: number | null;
-  note: string;
-  blocked_reason: string | null;
-  created_at: number;
-}
-
-export interface TaskDeliveryRow {
-  delivery_id: string;
-  task_id: string;
-  assignment_id: string;
-  assignment_version: number;
-  task_revision: number;
-  kind: 'task_offer' | 'task_reminder';
-  created_at: number;
 }
 
 /** MCP Events webhook 订阅；secret 以 AES-GCM 密文落库。 */

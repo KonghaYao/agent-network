@@ -65,7 +65,6 @@ import {
   type InvitedMemberView,
 } from './room-invitations';
 import { roomAuditStatement, type RoomAuditSpec } from './room-audit';
-import { revokeTaskEligibilityStatements } from './task-transfers';
 import {
   capabilityGuardStatement,
   assertOwnerPresent,
@@ -88,7 +87,7 @@ import {
   type RoomCapabilities,
   type RoomPolicies,
 } from './room-access';
-import { inFlightTasksForMember, roomLeavePreview, type InFlightTaskView } from './room-lifecycle';
+import { roomLeavePreview } from './room-lifecycle';
 import { messagePreviewOf, type MessagePreviewView } from './views';
 import {
   historyBoundary,
@@ -244,11 +243,9 @@ export interface RoomPolicyImpact {
   history_policy: RoomRow['member_history_policy'];
   /** 历史改为 from_join 后会失去部分历史的 active 普通成员数。 */
   affected_members: number;
-  /** 至少对一名 active 成员变为不可见的任务数。 */
-  hidden_tasks: number;
   /** 至少对一名 active 成员变为不可见的文件数。 */
   hidden_files: number;
-  /** 现有任务材料是否失权；true 时任务完成会按不可见失败。 */
+  /** 现有文件材料是否失权。 */
   material_loss: boolean;
   message: string;
 }
@@ -446,6 +443,9 @@ export async function roomsList(
             preview: row.lm_preview ?? '',
             reply_to: null,
             root_id: null,
+            task_root_id: null,
+            task_marked_by: null,
+            task_marked_at: null,
             hop: 0,
             root_invocations_used: 0,
             created_at: row.lm_created_at ?? 0,
@@ -1133,23 +1133,6 @@ export async function roomMembersUpdate(
   const at = nowMs();
   const eventKey = `members:${room.room_id}:${input.request_id}`;
   const affected = [...new Set([...add, ...remove])];
-  // D04：成员移除与任务执行资格撤销同事务。被移除者负责的 in_progress/
-  // blocked 任务转为 blocked + owner_lost_eligibility，旧 assignment 撤销，
-  // 其 pending 交接取消；外部副作用保持未知，不自动重跑。
-  const taskRevocations: D1PreparedStatement[] = [];
-  for (const member of remove) {
-    const target = existing.get(member);
-    if (!target || target.status !== 'active') continue;
-    taskRevocations.push(
-      ...(await revokeTaskEligibilityStatements(db, {
-        actorId: member,
-        roomId: room.room_id,
-        requestId: input.request_id,
-        at,
-        reason: 'member_removed',
-      })),
-    );
-  }
 
   const audits: RoomAuditSpec[] = [];
   for (const member of add) {
@@ -1340,7 +1323,6 @@ export async function roomMembersUpdate(
       ...remove.map((member) =>
         revokeDirectInvitationStatement(db, room.room_id, member, at),
       ),
-      ...taskRevocations,
       // 成员变化只推进 member_seq；不发消息时不能制造没有内容的聊天未读。
       roomMemberVersionStatement(db, room.room_id, eventKey, at),
       ...audits.map((audit) => roomAuditStatement(db, audit, at)),
@@ -1466,7 +1448,6 @@ async function policyImpactFor(
 ): Promise<RoomPolicyImpact> {
   const historyChanged = previous.member_history !== next.member_history;
   let affectedMembers = 0;
-  let hiddenTasks = 0;
   let hiddenFiles = 0;
 
   if (historyChanged && next.member_history === 'from_join') {
@@ -1478,21 +1459,6 @@ async function policyImpactFor(
       .bind(roomId)
       .first<{ n: number }>();
     affectedMembers = memberRow?.n ?? 0;
-    // D01 起任务权威表是 `tasks`；旧 `room_tasks` 已回填且只读。
-    // 新表没有 created_seq，按与任务读取一致的 created_at 边界统计。
-    const taskRow = await db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM tasks t
-          WHERE t.room_id = ?
-            AND EXISTS (
-              SELECT 1 FROM room_members m
-               WHERE m.room_id = t.room_id AND m.status = 'active' AND m.joined_seq > 0
-                 AND t.created_at < m.joined_at
-            )`,
-      )
-      .bind(roomId)
-      .first<{ n: number }>();
-    hiddenTasks = taskRow?.n ?? 0;
     const fileRow = await db
       .prepare(
         `SELECT COUNT(*) AS n FROM room_files rf
@@ -1509,15 +1475,15 @@ async function policyImpactFor(
     hiddenFiles = fileRow?.n ?? 0;
   }
 
-  const materialLoss = hiddenTasks > 0 || hiddenFiles > 0;
+  const materialLoss = hiddenFiles > 0;
   let message: string;
   if (historyChanged && next.member_history === 'full') {
-    message = '已开启全历史：成员可读取加入前消息、文件与任务；已复制内容无法回收。';
+    message = '已开启全历史：成员可读取加入前消息与文件；已复制内容无法回收。';
   } else if (historyChanged) {
     message =
       '已收紧为本次加入后历史：加入前内容立即不可见；已复制内容无法回收。' +
       (materialLoss
-        ? `有 ${hiddenTasks} 个任务、${hiddenFiles} 个文件失去访问，任务完成会被拒绝，需先重新派发或补充材料。`
+        ? `有 ${hiddenFiles} 个文件失去访问。`
         : '');
   } else {
     message = '策略已更新；只影响后续操作，不追溯已复制内容。';
@@ -1526,7 +1492,6 @@ async function policyImpactFor(
   return {
     history_policy: next.member_history,
     affected_members: affectedMembers,
-    hidden_tasks: hiddenTasks,
     hidden_files: hiddenFiles,
     material_loss: materialLoss,
     message,
@@ -1555,7 +1520,6 @@ export async function roomPolicySet(
   const next: RoomPolicies = {
     member_message: input.member_message_policy ?? previous.member_message,
     member_invite: input.member_invite_policy ?? previous.member_invite,
-    member_task: input.member_task_policy ?? previous.member_task,
     member_history: input.member_history_policy ?? previous.member_history,
     member_join: input.member_join_policy ?? previous.member_join,
     member_profile: input.member_profile_policy ?? previous.member_profile,
@@ -1603,7 +1567,7 @@ export async function roomPolicySet(
       db
         .prepare(
           `UPDATE rooms
-              SET member_message_policy = ?, member_invite_policy = ?, member_task_policy = ?,
+              SET member_message_policy = ?, member_invite_policy = ?,
                   member_history_policy = ?, member_join_policy = ?, member_profile_policy = ?,
                   member_mention_all_policy = ?, policy_revision = policy_revision + 1,
                   updated_at = ?
@@ -1612,7 +1576,6 @@ export async function roomPolicySet(
         .bind(
           next.member_message,
           next.member_invite,
-          next.member_task,
           next.member_history,
           next.member_join,
           next.member_profile,
@@ -1821,8 +1784,6 @@ export async function roomRoleHistory(
 export interface RoomLeaveResult {
   room_id: string;
   left: true;
-  /** 退群前该成员仍承担的在途任务；确认后由同一事务撤销。 */
-  in_flight_tasks: InFlightTaskView[];
   pending_deliveries: number;
   claimed_deliveries: number;
 }
@@ -1855,18 +1816,13 @@ export async function roomLeave(
     });
   }
   const preview = await roomLeavePreview(db, principal, { room_id: room.room_id });
-  if (
-    preview.in_flight_tasks.length > 0 ||
-    preview.pending_deliveries > 0 ||
-    preview.claimed_deliveries > 0
-  ) {
+  if (preview.pending_deliveries > 0 || preview.claimed_deliveries > 0) {
     if (input.confirm_in_flight !== true) {
       throw new BusinessError(
         'CONFLICT',
-        '退群会撤销你在该群的在途任务与投递；请先确认列出的任务',
+        '退群会撤销你在该群的待处理投递；请先确认',
         {
           reason: 'in_flight_work',
-          in_flight_tasks: preview.in_flight_tasks,
           pending_deliveries: preview.pending_deliveries,
           claimed_deliveries: preview.claimed_deliveries,
         },
@@ -1877,22 +1833,9 @@ export async function roomLeave(
   const at = nowMs();
   const eventKey = `leave:${room.room_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
-  // D04：退群同样立即撤销该成员在本房间的任务执行资格。已解散群的任务
-  // 已在解散事务中取消，这里再调用是空操作，保持同一撤销入口。
-  const taskRevocations =
-    room.dissolved_at === null
-      ? await revokeTaskEligibilityStatements(db, {
-          actorId: caller,
-          roomId: room.room_id,
-          requestId: input.request_id,
-          at,
-          reason: 'member_left',
-        })
-      : [];
   const result = {
     room_id: room.room_id,
     left: true as const,
-    in_flight_tasks: preview.in_flight_tasks,
     pending_deliveries: preview.pending_deliveries,
     claimed_deliveries: preview.claimed_deliveries,
   } satisfies RoomLeaveResult;
@@ -1961,7 +1904,6 @@ export async function roomLeave(
         )
         .bind(at, room.room_id, caller),
       ...cancelDeliveriesForMemberStatements(db, room.room_id, caller, 'member_left', at),
-      ...taskRevocations,
       // 防御性保留：合法路径已经在 guard 中拒绝 owner 退群，因此本语句
       // 不应再被触发。若历史/异常数据仍走到这里，至少不会把并发转移后的
       // 新 owner 置空；非 owner 退群时是空操作。已解散群保留 owner_id

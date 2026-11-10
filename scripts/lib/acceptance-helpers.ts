@@ -52,6 +52,8 @@ export interface MessageView {
   body_bytes: number;
   reply_to: string | null;
   root_id: string | null;
+  /** 消息式 Task 归属；普通消息为 null。 */
+  task_root_id?: string | null;
   hop: number;
   delivery_states: Record<string, number>;
   mentions: MentionView[];
@@ -99,13 +101,6 @@ export interface LoginResult {
   logged_in_at: string;
   pending_count: number;
   inbox_head_seq: string;
-  task_summary: {
-    pending: number;
-    claimed: number;
-    done: number;
-    failed: number;
-    total: number;
-  };
 }
 
 export async function registerIdentity(
@@ -263,6 +258,8 @@ export async function sendMessage(  connection: McpConnection,
     clientMessageId?: string;
     requestId?: string;
     claim?: { delivery_id: string; attempt: number; claim_id: string };
+    replyTo?: string;
+    taskRootId?: string;
   } = {},
 ): Promise<SendResult> {
   return callTool<SendResult>(connection.client, 'network_message_send', {
@@ -273,6 +270,8 @@ export async function sendMessage(  connection: McpConnection,
     ...(options.invoke ? { invoke: options.invoke } : {}),
     ...(options.mentions ? { mentions: options.mentions } : {}),
     ...(options.claim ? { claim: options.claim } : {}),
+    ...(options.replyTo ? { reply_to: options.replyTo } : {}),
+    ...(options.taskRootId ? { task_root_id: options.taskRootId } : {}),
   });
 }
 

@@ -6,7 +6,7 @@
  *
  * 复现：
  *   bun scripts/verify-q05.ts
- *   Q05_SEED=20261108 bun scripts/verify-q05.ts --scenario=claim-accept --round=37
+ *   Q05_SEED=20261108 bun scripts/verify-q05.ts --scenario=file-binding --round=37
  *   Q05_ROUNDS=10 bun scripts/verify-q05.ts --scenario=messages
  *
  * 断言只读权威 SQLite、实际权限与可观察事件；不以 HTTP 200 数量推断正确。
@@ -30,13 +30,6 @@ import {
 } from './lib/q05-harness';
 import { setupQ05Fixture, type Q05Fixture } from './lib/q05-fixture';
 import { q05MessagesRound } from './lib/q05-messages';
-import { q05ClaimRound, q05OfferAcceptRound, q05ClaimStats } from './lib/q05-claims';
-import {
-  q05ReviewRaceRound,
-  q05TaskTransferRaceRound,
-  q05TaskRaceStats,
-  q05ReviewStats,
-} from './lib/q05-task-race';
 import {
   q05FileBindingRound,
   printQ05FileStats,
@@ -52,14 +45,6 @@ import { q05FaultBodies } from './lib/q05-faults';
 function scenarioStats(): Record<string, unknown> {
   return {
     messages: '每轮 100 并发同意图 + 100 并发同 client_message_id + 冲突对',
-    'claim-accept': {
-      claimRounds: q05ClaimStats.claimRounds,
-      claimWinners: q05ClaimStats.claimWinners,
-      offerRounds: q05ClaimStats.offerRounds,
-      acceptWinners: q05ClaimStats.acceptWinners,
-    },
-    'task-transfer-race': q05TaskRaceStats,
-    'review-race': q05ReviewStats,
     'file-binding': q05FileStatsSnapshot(),
     contacts: q05ContactStats,
     devices: q05DeviceStats,
@@ -198,38 +183,6 @@ async function main(): Promise<void> {
         ),
       },
       {
-        name: 'claim-accept',
-        body: async (round, random) => {
-          await q05ClaimRound(
-            server,
-            db,
-            fixture.u1,
-            [fixture.u2, fixture.u3, fixture.b1, fixture.b2, fixture.b3],
-            fixture.mainRoomId,
-          )(round, random);
-          await q05OfferAcceptRound(
-            server,
-            db,
-            fixture.u1,
-            fixture.b2,
-            fixture.mainRoomId,
-          )(round, random);
-        },
-      },
-      {
-        name: 'task-transfer-race',
-        body: q05TaskTransferRaceRound(
-          server,
-          db,
-          [fixture.u1, fixture.u2, fixture.u3, fixture.u4],
-          fixture.agentsByOwner,
-        ),
-      },
-      {
-        name: 'review-race',
-        body: q05ReviewRaceRound(server, db, fixture.u1, fixture.b1, fixture.mainRoomId),
-      },
-      {
         name: 'file-binding',
         body: q05FileBindingRound(
           server,
@@ -320,7 +273,7 @@ async function main(): Promise<void> {
   writeSummary(options, results, startedAt);
   const stats = scenarioStats();
   console.log(
-    `冲突结果分布：task-transfer=${JSON.stringify(stats['task-transfer-race'])} review=${JSON.stringify(stats['review-race'])}`,
+    `冲突结果分布：file-binding=${JSON.stringify(stats['file-binding'])}`,
   );
   console.log(
     `             contacts=${JSON.stringify(stats.contacts)} devices=${JSON.stringify(stats.devices)}`,

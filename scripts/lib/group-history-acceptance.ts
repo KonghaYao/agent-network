@@ -15,8 +15,6 @@ import { callTool, check, checkEqual, expectToolError, newRequestId } from './ha
 import {
   HISTORY_MARKER,
   POST_MARKER,
-  TASK_MARKER,
-  addTask,
   assertAuthorization,
   bindFile,
   checkHistoryInsideBoundary,
@@ -29,7 +27,6 @@ import {
   makeFriends,
   roomDetail,
   sendMessage,
-  taskPage,
   timeline,
   type FileResultView,
   type RoomListView,
@@ -50,7 +47,6 @@ export async function runGroupHistoryAcceptance(options: { hasDrive: boolean }):
       'G07 历史边界群',
     );
     const beforeJoin = await sendMessage(owner.connection, roomId, HISTORY_MARKER);
-    const beforeTaskId = await addTask(owner.connection, roomId, TASK_MARKER);
     const beforeFile = options.hasDrive
       ? await bindFile(owner, roomId, 'g07-before-join.txt', HISTORY_MARKER)
       : null;
@@ -127,27 +123,6 @@ export async function runGroupHistoryAcceptance(options: { hasDrive: boolean }):
       'G07-T01 sync 不补发加入前消息事件',
       !memberSync.items.some((item) => item.ref_id === beforeJoin.message.message_id),
       memberSync.items,
-    );
-
-    const agentDetail = await roomDetail(agent.connection, roomId);
-    const memberTasks = await taskPage(agent.connection, roomId);
-    check(
-      'G07-T01 任务列表不包含加入前任务',
-      !memberTasks.tasks.some((task) => task.task_id === beforeTaskId),
-      memberTasks.tasks,
-    );
-    assertAuthorization(
-      'G07-T01 任务列表授权与 Agent 自身快照一致',
-      memberTasks.authorization,
-      detailAuthorization(agentDetail),
-    );
-    await expectToolError(
-      'G07-T01 领取加入前任务返回 NOT_FOUND',
-      callTool(agent.connection.client, 'network_task_claim', {
-        request_id: newRequestId('g07_claim'),
-        task_id: beforeTaskId,
-      }),
-      'NOT_FOUND',
     );
 
     if (options.hasDrive && beforeFile) {
@@ -313,12 +288,6 @@ export async function runGroupHistoryAcceptance(options: { hasDrive: boolean }):
         message_id: postJoin1.message.message_id,
       }),
       'NOT_FOUND',
-    );
-    const rejoinedTasks = await taskPage(member.connection, roomId);
-    check(
-      'G07-T02 新代次任务列表不含上一代次任务',
-      !rejoinedTasks.tasks.some((task) => task.task_id === beforeTaskId),
-      rejoinedTasks.tasks,
     );
     if (options.hasDrive && firstFile && secondFile) {
       const rejoinedFiles = await listFiles(member.connection, roomId);

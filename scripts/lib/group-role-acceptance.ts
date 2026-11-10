@@ -55,7 +55,6 @@ interface GroupRoomView {
     policies: {
       member_message: 'members' | 'owner_admin';
       member_invite: 'members' | 'owner_admin';
-      member_task: 'members' | 'owner_admin';
     };
     announcement: string;
     announcement_revision: number;
@@ -372,9 +371,9 @@ export async function runGroupRoleAcceptance(): Promise<void> {
     });
     checkEqual('G03 群主唯一且创建者为 owner', created.room.my_role, 'owner');
     checkEqual(
-      'G03 默认策略：成员可发言/建任务，邀请仅 owner 或管理员',
-      `${created.room.policies.member_message}/${created.room.policies.member_task}/${created.room.policies.member_invite}`,
-      'members/members/owner_admin',
+      'G03 默认策略：成员可发言，邀请仅 owner 或管理员',
+      `${created.room.policies.member_message}/${created.room.policies.member_invite}`,
+      'members/owner_admin',
     );
     const plainMemberView = await callTool<GroupRoomView>(
       memberConn.client,

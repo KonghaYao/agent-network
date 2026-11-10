@@ -13,7 +13,6 @@ import type { Env } from '../../src/env';
 
 import {
   createGroup,
-  drainDelivery,
   ensureRoomMember,
   newRequestId,
   q05Check,
@@ -26,19 +25,6 @@ import {
   type RoundBody,
 } from './q05-harness';
 import { uploadTestFile } from './harness';
-
-interface TaskResult {
-  task: {
-    task_id: string;
-    status: string;
-    revision: number;
-    assignment: {
-      assignment_id: string;
-      assignment_version: number;
-      owner_actor_id: string;
-    } | null;
-  };
-}
 
 interface FileView {
   file: {
@@ -137,39 +123,17 @@ export function q05FileBindingRound(
     const before = await statusOf(bound.file.preview_url);
     q05Equal(`第 ${round} 轮上传者绑定票据可读`, before, 200);
 
-    const offered = await q05Tool<TaskResult>(server, owner.token, 'network_task_create', {
-      request_id: newRequestId(`file_task_${round}`),
-      room_id: roomId,
-      title: `Q05 文件成果 ${round}`,
-      assignee_actor_id: executor.actor_id,
-    });
-    const accepted = await q05Tool<TaskResult>(server, executor.token, 'network_task_accept', {
-      request_id: newRequestId(`file_accept_${round}`),
-      task_id: offered.task.task_id,
-      assignment_id: offered.task.assignment!.assignment_id,
-      expected_revision: offered.task.revision,
-    });
-    const offerDelivery = db.row<{ delivery_id: string }>(
-      "SELECT delivery_id FROM task_deliveries WHERE task_id = ? AND kind = 'task_offer'",
-      offered.task.task_id,
-    );
-    if (offerDelivery) await drainDelivery(server, executor, offerDelivery.delivery_id);
-
     // 奇数轮让 GC 先看到过期文件参与竞争；偶数轮先让真实提交冻结文件，
     // 再过期并跑同一份生产维护任务，验证成果字节不会被清理。
     const expireBefore = round % 2 === 1;
     if (expireBefore) expireFile(db, uploaded.fileId);
 
     const [submitOutcome, removeOutcome, maintenanceOutcome] = await Promise.all([
-      q05ToolOutcome(server, executor.token, 'network_task_submit', {
+      q05ToolOutcome(server, executor.token, 'network_artifact_submit', {
         request_id: newRequestId(`file_submit_${round}`),
-        task_id: offered.task.task_id,
+        room_id: roomId,
+        file_id: uploaded.fileId,
         summary: `Q05 文件成果 v1 ${round}`,
-        commit_sha: `abcdef${round.toString(16).padStart(2, '0')}`,
-        materials: [{ file_id: uploaded.fileId, label: `成果 ${round}` }],
-        expected_revision: accepted.task.revision,
-        assignment_id: accepted.task.assignment!.assignment_id,
-        assignment_version: accepted.task.assignment!.assignment_version,
       }),
       q05ToolOutcome(server, owner.token, 'network_room_members_update', {
         request_id: newRequestId(`file_remove_${round}`),
@@ -193,13 +157,9 @@ export function q05FileBindingRound(
     else q05FileStats.rolledBack += 1;
     if (removeOutcome.ok) q05FileStats.removed += 1;
 
-    const taskRow = db.row<{ status: string; owner_actor_id: string | null }>(
-      'SELECT status, owner_actor_id FROM tasks WHERE task_id = ?',
-      offered.task.task_id,
-    )!;
-    const submissions = db.rows<{ submission_id: string; status: string }>(
-      'SELECT submission_id, status FROM task_submissions WHERE task_id = ?',
-      offered.task.task_id,
+    const artifacts = db.rows<{ artifact_id: string; status: string }>(
+      'SELECT artifact_id, status FROM artifacts WHERE file_id = ?',
+      uploaded.fileId,
     );
     const activeRefs = db.rows<{ reference_id: string; state: string }>(
       "SELECT * FROM file_references WHERE file_id = ? AND state = 'active'",
@@ -221,8 +181,8 @@ export function q05FileBindingRound(
     );
 
     if (submitOutcome.ok) {
-      q05Equal(`第 ${round} 轮提交成功后 task submitted`, taskRow.status, 'submitted');
-      q05Equal(`第 ${round} 轮提交版本唯一`, submissions.length, 1);
+      q05Equal(`第 ${round} 轮提交成功后成果唯一`, artifacts.length, 1);
+      q05Equal(`第 ${round} 轮成果为 delivered`, artifacts[0]?.status, 'delivered');
       q05Check(`第 ${round} 轮成果引用 active`, activeRefs.length >= 1);
       q05Equal(`第 ${round} 轮成果文件 retained`, roomFile.retained, 1);
       q05Check(`第 ${round} 轮成果未被 GC 删除`, drive.state !== 'deleted' && drive.purged_at === null);
@@ -234,12 +194,7 @@ export function q05FileBindingRound(
       q05Equal(`第 ${round} 轮合法成员仍可读取成果字节`, witnessRead.status, 200);
       q05Equal(`第 ${round} 轮成果字节完整`, await witnessRead.text(), bytes);
     } else {
-      q05Equal(`第 ${round} 轮提交失败不留下 pending 成果`, submissions.length, 0);
-      q05Check(
-        `第 ${round} 轮提交失败任务未伪验收`,
-        ['blocked', 'cancelled', 'in_progress', 'unassigned'].includes(taskRow.status),
-        taskRow.status,
-      );
+      q05Equal(`第 ${round} 轮提交失败不留下成果`, artifacts.length, 0);
       q05Equal(`第 ${round} 轮提交失败无 active 成果引用`, activeRefs.length, 0);
     }
 

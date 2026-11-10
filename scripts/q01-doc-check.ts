@@ -3,9 +3,9 @@
  *
  * 运行前需要本地服务（默认 `AGENTNET_URL=http://127.0.0.1:8792`）。
  * 检查：
- * - `tools/list` 为 129 个唯一工具；
+ * - `tools/list` 为 113 个唯一工具；
  * - README/CLAUDE/功能矩阵/代码索引/技能/CLI/Harness 只引用已注册工具；
- * - `agent_tasks.sh` 覆盖任务转交、提交、验收、交接包、取消、未知/对账与重试；
+ * - `agent_tasks.sh` 覆盖消息式 Task 的 mark/unmark/summaries/trace/search；
  * - Harness 指南不再把长期 token 二维码或隐式 @ 当作默认路径；
  * - `src/mcp/skill.ts` 的 SKILL.md 正文与 `skills/list` digest / `resources/read` 一致，
  *   以及与静态技能的共享 section digest 一致。
@@ -35,26 +35,15 @@ const DOC_FILES = [
 ];
 
 const REQUIRED_CLI = [
-  'transfer-list)',
-  'transfer-propose)',
-  'transfer-accept)',
-  'transfer-reject)',
-  'transfer-cancel)',
-  'submit)',
-  'submissions)',
-  'submission-get)',
-  'review-accept)',
-  'review-return)',
-  'reviewer-set)',
-  'handoff-create)',
-  'handoff-get)',
-  'handoff-authorize)',
-  'handoff-request-more)',
-  'cancel)',
-  'execution-unknown)',
-  'execution-resolve)',
-  'retry)',
+  'mark)',
+  'unmark)',
+  'summaries)',
+  'trace)',
+  'search)',
 ];
+
+const RETIRED_TASK_TOOL_PATTERN =
+  /network_task_(?:summary(?!ies)|list|get|create|offer|accept|decline|claim|cancel|retry|progress|block|resume|transfer|handoff|submit|submission|review|reviewer|execution)[a-z_]*/u;
 
 function read(path: string): string {
   return readFileSync(join(ROOT, path), 'utf8');
@@ -92,8 +81,8 @@ checkEqual('tools/list HTTP 状态', toolsResponse.status, 200);
 const tools =
   (toolsResponse.body.result as { tools?: Array<{ name?: string }> } | undefined)?.tools ?? [];
 const toolSet = new Set(tools.map((tool) => tool.name).filter((name): name is string => !!name));
-checkEqual('tools/list 工具数为 129', toolSet.size, 129);
-checkEqual('tools/list 无重复名称', tools.length, 129);
+checkEqual('tools/list 工具数为 113', toolSet.size, 113);
+checkEqual('tools/list 无重复名称', tools.length, 113);
 
 const unknown: string[] = [];
 for (const file of DOC_FILES) {
@@ -109,8 +98,8 @@ const cli = read('public/skills/agent_tasks.sh');
 for (const command of REQUIRED_CLI) {
   check(`agent_tasks.sh 覆盖 ${command}`, cli.includes(`  ${command} cmd_`));
 }
-check('agent_tasks.sh 不声明未注册的 task_remind 命令', !cli.includes('cmd_task_remind') && !cli.includes('network_task_remind'));
-check('agent_tasks.sh 说明催办由服务端自动发送', cli.includes('没有 remind 子命令'));
+check('agent_tasks.sh 不引用旧任务工具', !RETIRED_TASK_TOOL_PATTERN.test(cli));
+check('agent_tasks.sh 不声明旧任务状态命令', !cli.includes('--task ') && !cli.includes('task_id'));
 
 const harness = DOC_FILES.filter((file) => file.startsWith('public/skills/harness-'));
 for (const file of harness) {
@@ -121,7 +110,7 @@ for (const file of harness) {
 const skillText = read('public/skills/agent-network-skills.md');
 check('静态技能包含显式 invoke 规则', skillText.includes('显式 `invoke`') || skillText.includes('显式 invoke'));
 check('静态技能包含设备配对', skillText.includes('network_device_pairing_create'));
-check('静态技能包含任务交接包', skillText.includes('network_task_handoff_pack_create'));
+check('静态技能包含消息式 Task 摘要与 Trace', skillText.includes('network_task_summaries') && skillText.includes('network_task_trace'));
 
 const skillsResponse = await rawRpc('skills/list');
 checkEqual('skills/list HTTP 状态', skillsResponse.status, 200);

@@ -57,7 +57,7 @@ export function registerArtifactTools(
   register(
     server,
     'network_artifact_submit',
-    '提交交付成果：把当前身份自己的文件绑定到房间，作为任务或独立成果版本持续保留，不再随 30 天附件 TTL 清理，直到有权限者显式释放。task_id 可选；任务成果要求调用者是任务创建者、当前执行者或群 owner。提交前检查房间文件数量/字节配额，超限整批失败，不产生半成品成果或房间文件。返回成果版本、文件票据地址与当前配额。',
+    '提交交付成果：把当前身份自己的文件绑定到房间，作为独立成果版本持续保留，不再随 30 天附件 TTL 清理，直到有权限者显式释放。提交前检查房间文件数量/字节配额，超限整批失败，不产生半成品成果或房间文件。返回成果版本、文件票据地址与当前配额。',
     artifactSubmitSchema,
     artifactResultSchema,
     async (input) => {
@@ -69,7 +69,7 @@ export function registerArtifactTools(
   register(
     server,
     'network_artifact_list',
-    '分页读取当前成员可见的成果版本，按提交时间倒序；可按 task_id 过滤。新成员默认只能看到加入后提交的成果；历史边界外的成果不返回。返回附带文件票据地址与房间保留配额。',
+    '分页读取当前成员可见的成果版本，按提交时间倒序。新成员默认只能看到加入后提交的成果；历史边界外的成果不返回。返回附带文件票据地址与房间保留配额。',
     artifactListSchema,
     artifactPageSchema,
     async (input) => {
@@ -82,7 +82,7 @@ export function registerArtifactTools(
   register(
     server,
     'network_artifact_release',
-    '显式释放成果版本。只有成果提交者、文件上传者或群 owner 可以释放；若文件仍被有效任务或其他成果引用，继续保留并返回 retained: true；否则恢复普通 30 天附件 TTL。释放是幂等的，重复调用返回同一结果。',
+    '显式释放成果版本。只有成果提交者、文件上传者或群 owner 可以释放；若文件仍被其他有效成果引用，继续保留并返回 retained: true；否则恢复普通 30 天附件 TTL。释放是幂等的，重复调用返回同一结果。',
     artifactReleaseSchema,
     artifactReleasedSchema,
     async (input) => {

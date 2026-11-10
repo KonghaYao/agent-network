@@ -530,18 +530,6 @@ function createRoomListItem(entry) {
     time.className = 'room-time';
     time.textContent = relativeTime(entry.last_message ? entry.last_message.created_at : entry.updated_at);
     top.append(name);
-    const taskProgress = taskSummary.get(entry.room_id);
-    if (taskProgress && taskProgress.total > 0) {
-      const taskBadge = document.createElement('span');
-      taskBadge.className = 'room-task-badge';
-      taskBadge.textContent = taskProgress.done + '/' + taskProgress.total;
-      taskBadge.title = '任务完成 ' + taskProgress.done + '/' + taskProgress.total;
-      taskBadge.setAttribute(
-        'aria-label',
-        '任务已完成 ' + taskProgress.done + ' 个，共 ' + taskProgress.total + ' 个'
-      );
-      top.append(taskBadge);
-    }
     top.append(time);
     const preview = document.createElement('div');
     preview.className = 'room-preview';
@@ -598,8 +586,7 @@ function renderRooms() {
   let cursor = roomListElement.firstElementChild;
   for (const entry of entries) {
     retained.add(entry.room_id);
-    const progress = taskSummary.get(entry.room_id);
-    const signature = JSON.stringify([entry, progress, roomPreference(entry.room_id), relativeTime(entry.last_message ? entry.last_message.created_at : entry.updated_at)]);
+    const signature = JSON.stringify([entry, roomPreference(entry.room_id), relativeTime(entry.last_message ? entry.last_message.created_at : entry.updated_at)]);
     let cached = roomListNodes.get(entry.room_id);
     if (!cached || cached.signature !== signature) {
       const old = cached && cached.item;
@@ -771,12 +758,7 @@ async function loadRooms(options) {
     try {
       const me = await ensureIdentity();
       updateAccount(me);
-      // 侧栏任务 badge 一次汇总，避免对每个房间调用 list；失败不影响会话列表。
-      const summaryPromise = callTool('network_task_summary', {}).catch(function () {
-        return null;
-      });
       const page = await callTool('network_rooms_list', { limit: 50 });
-      const taskSummaryResult = await summaryPromise;
       const summaries = page.items.map(function (entry) {
         return roomSummaryFromList(entry, me);
       });
@@ -786,7 +768,6 @@ async function loadRooms(options) {
         roomsNextCursor = page.has_more && page.next_cursor ? page.next_cursor : null;
         roomsHasMore = Boolean(roomsNextCursor);
       }
-      if (taskSummaryResult) applyTaskSummary(taskSummaryResult);
       // 首次加载（含深链）按当前房间选分类；后台刷新不覆盖用户手动切换。
       if (!hadEntries) syncRoomFilterForRoom(activeRoomId);
       // 空态文案由当前分类决定；错误与退出登录文案仍由 emptyListMessage 覆盖。

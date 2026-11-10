@@ -11,13 +11,11 @@ import { createD1 } from '../../src/bun/d1';
 import type { Env } from '../../src/env';
 import { maintain } from '../../src/maintenance';
 import { remindStaleDeliveries } from '../../src/domain/delivery-reminders';
-import { remindStaleTasks } from '../../src/domain/task-reminders';
 import { rawRpc } from './harness';
 
 import {
   createGroup,
   createManagedAgent,
-  drainDelivery,
   newRequestId,
   newToken,
   openQ05Stream,
@@ -50,23 +48,6 @@ interface SyncPage {
   reset_required: boolean;
 }
 
-interface TaskView {
-  task_id: string;
-  status: string;
-  revision: number;
-  owner_actor_id: string | null;
-  assignment: {
-    assignment_id: string;
-    assignment_version: number;
-    status: string;
-  } | null;
-  delivery_ids: string[];
-}
-
-interface TaskResult {
-  task: TaskView;
-}
-
 async function runMaintenance(server: Q05Server): Promise<void> {
   const raw = new Database(server.dbPath);
   raw.exec('PRAGMA busy_timeout = 5000');
@@ -83,7 +64,6 @@ async function runReminders(server: Q05Server): Promise<void> {
   try {
     const d1 = createD1(raw);
     await remindStaleDeliveries(d1);
-    await remindStaleTasks(d1);
   } finally {
     raw.close();
   }
@@ -194,26 +174,6 @@ export function q05FaultBodies(
           invoke: [],
         });
         q05Check('事务回滚：新请求可继续写入', Boolean(retry.message.message_id));
-
-        const missingAttachmentTask = await q05ToolOutcome(
-          server,
-          fixture.u1.token,
-          'network_task_create',
-          {
-            request_id: newRequestId('rollback_task'),
-            room_id: fixture.mainRoomId,
-            title: 'Q05 不应半提交的任务',
-            attachment_file_ids: ['f_q05_missing_attachment'],
-          },
-        );
-        q05Equal('事务回滚：无效附件任务被拒', missingAttachmentTask.ok, false);
-        q05Equal(
-          '事务回滚：任务未半提交',
-          db.scalar(
-            "SELECT COUNT(*) AS n FROM tasks WHERE title = 'Q05 不应半提交的任务'",
-          ),
-          0,
-        );
       },
     },
     {
@@ -272,43 +232,6 @@ export function q05FaultBodies(
             1,
           );
 
-          const taskRequestId = newRequestId('drop_task');
-          const taskTitle = `Q05 响应丢失任务 ${crypto.randomUUID()}`;
-          let taskDropped = false;
-          try {
-            await rawRpc('tools/call', {
-              name: 'network_task_create',
-              arguments: {
-                request_id: taskRequestId,
-                room_id: fixture.mainRoomId,
-                title: taskTitle,
-              },
-            }, {
-              token: fixture.u1.token,
-              url: new URL(`${proxy.base}/mcp`),
-              headers: { 'x-q05-drop': '1' },
-            });
-          } catch {
-            taskDropped = true;
-          }
-          q05Check('响应丢失：任务请求确实断开', taskDropped);
-          const taskRow = db.row<{ task_id: string }>(
-            'SELECT task_id FROM tasks WHERE title = ?',
-            taskTitle,
-          )!;
-          q05Check('响应丢失：任务已提交', Boolean(taskRow?.task_id));
-          const taskRetry = await q05Tool<TaskResult>(
-            server,
-            fixture.u1.token,
-            'network_task_create',
-            { request_id: taskRequestId, room_id: fixture.mainRoomId, title: taskTitle },
-          );
-          q05Equal('响应丢失：任务重试返回同一 task_id', taskRetry.task.task_id, taskRow.task_id);
-          q05Equal(
-            '响应丢失：任务卡唯一',
-            db.scalar('SELECT COUNT(*) AS n FROM task_cards WHERE task_id = ?', taskRow.task_id),
-            1,
-          );
         } finally {
           await proxy.stop();
         }
@@ -443,31 +366,6 @@ export function q05FaultBodies(
           [fixture.b1, reminderAgent],
           `Q05 重启恢复 ${crypto.randomUUID().slice(0, 8)}`,
         );
-        const offered = await q05Tool<TaskResult>(server, fixture.u1.token, 'network_task_create', {
-          request_id: newRequestId('restart_task'),
-          room_id: roomId,
-          title: 'Q05 重启任务',
-          assignee_actor_id: fixture.b1.actor_id,
-        });
-        const accepted = await q05Tool<TaskResult>(server, fixture.b1.token, 'network_task_accept', {
-          request_id: newRequestId('restart_task_accept'),
-          task_id: offered.task.task_id,
-          assignment_id: offered.task.assignment!.assignment_id,
-          expected_revision: offered.task.revision,
-        });
-        // 先结束 offer 投递，避免 task_reminder 按设计让位给 delivery_reminder。
-        const offerDelivery = db.row<{ delivery_id: string }>(
-          "SELECT delivery_id FROM task_deliveries WHERE task_id = ? AND kind = 'task_offer'",
-          offered.task.task_id,
-        );
-        if (offerDelivery) await drainDelivery(server, fixture.b1, offerDelivery.delivery_id);
-        await q05Tool(server, fixture.b1.token, 'network_task_progress', {
-          request_id: newRequestId('restart_progress'),
-          task_id: offered.task.task_id,
-          percent: 40,
-          note: 'Q05 重启前进度',
-          expected_revision: accepted.task.revision,
-        });
         const marker = await sendMessage(server, fixture.u1, roomId, 'Q05 重启前消息', {
           requestId: newRequestId('restart_msg'),
           clientMessageId: `cm_restart_${crypto.randomUUID()}`,
@@ -490,40 +388,15 @@ export function q05FaultBodies(
           old,
           delivery.delivery_id,
         );
-        db.exec(
-          'UPDATE tasks SET last_progress_at = ? WHERE task_id = ?',
-          old,
-          offered.task.task_id,
-        );
-        db.exec(
-          'UPDATE task_assignments SET last_progress_at = ? WHERE assignment_id = ?',
-          old,
-          accepted.task.assignment!.assignment_id,
-        );
         await runReminders(server);
         await runMaintenance(server);
-        const remindersBefore = db.scalar(
-          'SELECT COUNT(*) AS n FROM task_reminders WHERE task_id = ?',
-          offered.task.task_id,
-        );
         const deliveryRemindersBefore = db.scalar(
           "SELECT COUNT(*) AS n FROM events WHERE event_type = 'delivery_reminder' AND ref_id = ?",
           delivery.delivery_id,
         );
-        q05Check('重启前任务提醒已持久化', remindersBefore >= 1, remindersBefore);
         q05Check('重启前投递提醒已持久化', deliveryRemindersBefore >= 1, deliveryRemindersBefore);
 
         await server.restart();
-        const afterRestart = await q05Tool<TaskResult>(server, fixture.b1.token, 'network_task_get', {
-          task_id: offered.task.task_id,
-        });
-        q05Equal('重启后任务状态保持 in_progress', afterRestart.task.status, 'in_progress');
-        q05Equal('重启后任务 owner 保持', afterRestart.task.owner_actor_id, fixture.b1.actor_id);
-        q05Equal(
-          '重启后任务提醒未丢失',
-          db.scalar('SELECT COUNT(*) AS n FROM task_reminders WHERE task_id = ?', offered.task.task_id),
-          remindersBefore,
-        );
         q05Equal(
           '重启后投递提醒未丢失',
           db.scalar(
@@ -533,11 +406,6 @@ export function q05FaultBodies(
           deliveryRemindersBefore,
         );
         await runReminders(server);
-        q05Equal(
-          '重启后重复扫描不重复任务提醒',
-          db.scalar('SELECT COUNT(*) AS n FROM task_reminders WHERE task_id = ?', offered.task.task_id),
-          remindersBefore,
-        );
         q05Equal(
           '重启后重复扫描不重复投递提醒',
           db.scalar(
@@ -565,105 +433,6 @@ export function q05FaultBodies(
         const claimedAfter = inbox.items.find((item) => item.delivery_id === claimed.delivery_id);
         q05Check('重启后 claimed 投递仍可读', Boolean(claimedAfter), claimedAfter?.state);
         q05Equal('重启后 claimed 状态保持', claimedAfter?.state, 'claimed');
-      },
-    },
-    {
-      name: 'execution-unknown',
-      body: async () => {
-        const roomId = await createGroup(
-          server,
-          fixture.u1,
-          [fixture.b1],
-          `Q05 未知结果 ${crypto.randomUUID().slice(0, 8)}`,
-        );
-        const offered = await q05Tool<TaskResult>(server, fixture.u1.token, 'network_task_create', {
-          request_id: newRequestId('unknown_task'),
-          room_id: roomId,
-          title: 'Q05 外部结果未知',
-          assignee_actor_id: fixture.b1.actor_id,
-        });
-        const accepted = await q05Tool<TaskResult>(server, fixture.b1.token, 'network_task_accept', {
-          request_id: newRequestId('unknown_accept'),
-          task_id: offered.task.task_id,
-          assignment_id: offered.task.assignment!.assignment_id,
-          expected_revision: offered.task.revision,
-        });
-        const actionId = `act_q05_${crypto.randomUUID().replaceAll('-', '')}`;
-        const unknown = await q05Tool<{
-          task: { status: string; blocked_reason: string | null };
-          action: { action_id: string; state: string };
-        }>(server, fixture.b1.token, 'network_task_execution_unknown', {
-          request_id: newRequestId('unknown_action'),
-          task_id: offered.task.task_id,
-          action_id: actionId,
-          reason: 'Q05 外部调用响应丢失',
-          assignment_id: accepted.task.assignment!.assignment_id,
-          assignment_version: accepted.task.assignment!.assignment_version,
-          expected_revision: accepted.task.revision,
-        });
-        q05Equal('未知结果：任务 blocked', unknown.task.status, 'blocked');
-        q05Equal('未知结果：原因 execution_unknown', unknown.task.blocked_reason, 'execution_unknown');
-        q05Equal('未知结果：action 保持 unknown', unknown.action.state, 'unknown');
-        const deliveryCountBefore = db.scalar(
-          'SELECT COUNT(*) AS n FROM task_deliveries WHERE task_id = ?',
-          offered.task.task_id,
-        );
-        const duplicate = await q05Tool<{ action: { action_id: string; state: string } }>(
-          server,
-          fixture.b1.token,
-          'network_task_execution_unknown',
-          {
-            request_id: newRequestId('unknown_action_dup'),
-            task_id: offered.task.task_id,
-            action_id: actionId,
-            reason: 'Q05 重复上报',
-          },
-        ).catch((error: unknown) => error);
-        q05Check(
-          '未知结果：重复上报收敛为同一 action 或稳定冲突',
-          duplicate instanceof Error ||
-            (duplicate as { action?: { state?: string } }).action?.state === 'unknown',
-        );
-        await server.restart();
-        const afterRestart = await q05Tool<TaskResult>(server, fixture.b1.token, 'network_task_get', {
-          task_id: offered.task.task_id,
-        });
-        q05Equal('未知结果：重启后仍 blocked', afterRestart.task.status, 'blocked');
-        const actionAfter = db.row<{ state: string }>(
-          'SELECT state FROM task_external_actions WHERE action_id = ?',
-          actionId,
-        );
-        q05Equal('未知结果：重启后仍 unknown', actionAfter?.state, 'unknown');
-        q05Equal(
-          '未知结果：不自动创建新投递',
-          db.scalar('SELECT COUNT(*) AS n FROM task_deliveries WHERE task_id = ?', offered.task.task_id),
-          deliveryCountBefore,
-        );
-        const resolved = await q05Tool<{
-          task: { status: string };
-          action: { state: string };
-        }>(server, fixture.b1.token, 'network_task_execution_resolve', {
-          request_id: newRequestId('unknown_resolve'),
-          action_id: actionId,
-          outcome: 'confirmed',
-          evidence: 'Q05 已向外部系统查询 action_id，确认成功',
-          assignment_id: accepted.task.assignment!.assignment_id,
-          assignment_version: accepted.task.assignment!.assignment_version,
-        });
-        q05Equal('未知结果：对账 confirmed 后恢复 in_progress', resolved.task.status, 'in_progress');
-        q05Equal('未知结果：action 标记 confirmed', resolved.action.state, 'confirmed');
-        q05Equal(
-          '未知结果：对账不重复副作用',
-          db.scalar('SELECT COUNT(*) AS n FROM task_deliveries WHERE task_id = ?', offered.task.task_id),
-          deliveryCountBefore,
-        );
-        const secondResolve = await q05ToolOutcome(server, fixture.b1.token, 'network_task_execution_resolve', {
-          request_id: newRequestId('unknown_resolve_2'),
-          action_id: actionId,
-          outcome: 'rejected',
-          evidence: 'Q05 已结论不可再次更改',
-        });
-        q05Equal('未知结果：action 结论不可改写', secondResolve.ok, false);
       },
     },
     {

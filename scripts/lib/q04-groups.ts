@@ -1,9 +1,9 @@
 /**
  * Q04 联系人与群组正向验收：好友申请/拒绝/接受、拉黑/解除、建群多选、
- * 角色任免、owner 退群限制、在途任务退群预览、邀请链接审批、移除成员、
+ * 角色任免、owner 退群限制、待处理投递退群预览、邀请链接审批、移除成员、
  * owner 转让、解散归档与无主群拒绝加入。
  *
- * 所有写操作优先经真实控件；rawRpc 只用于准备邀请/任务与对账服务端状态。
+ * 所有写操作优先经真实控件；rawRpc 只用于准备邀请/消息与对账服务端状态。
  */
 
 import type { Browser, Locator, Page } from 'playwright';
@@ -267,7 +267,7 @@ async function createMainGroupViaUi(
   return { context, page, roomId };
 }
 
-/** 建群、角色、owner 退群限制与在途任务退群。 */
+/** 建群、角色、owner 退群限制与待处理投递退群预览。 */
 export async function runGroupSetupAcceptance(
   state: Q04State,
   browser: Browser,
@@ -363,34 +363,25 @@ export async function runGroupSetupAcceptance(
   checkEqual('UI 撤销管理员写入服务端', u2RoleAfter, 'member');
   await mainPageInner.locator('#members-cancel').click();
 
-  // 独立群：在途任务退群预览与确认。
+  // 独立群：待处理投递退群预览与确认。
   const leaveGroup = await rawTool<RoomView>(state.tokens.u1, 'network_room_create', {
     request_id: newRequestId('q04_leave_group'),
     kind: 'group',
     title: 'Q04 退群预览群',
-    members: [state.actors.u2.actor_id],
+    members: [state.actors.u2.actor_id, state.actors.b1.actor_id],
   });
   state.rooms.leave = leaveGroup.room.room_id;
   await acceptRoomInvites(state.tokens.u2, state.rooms.leave);
-  const leaveTask = await rawTool<{ task: { task_id: string; assignment: { assignment_id: string } | null } }>(
-    state.tokens.u1,
-    'network_task_create',
-    {
-      request_id: newRequestId('q04_leave_task'),
-      room_id: state.rooms.leave,
-      title: '退群中的在途任务',
-      assignee_actor_id: state.actors.u2.actor_id,
-      reviewer_actor_id: state.actors.u1.actor_id,
-    },
-  );
-  await rawTool(state.tokens.u2, 'network_task_accept', {
-    request_id: newRequestId('q04_leave_task_accept'),
-    task_id: leaveTask.task.task_id,
-    ...(leaveTask.task.assignment ? { assignment_id: leaveTask.task.assignment.assignment_id } : {}),
+  await rawTool(state.tokens.u1, 'network_message_send', {
+    request_id: newRequestId('q04_leave_message'),
+    client_message_id: crypto.randomUUID(),
+    room_id: state.rooms.leave,
+    body: '退群前待处理投递',
+    invoke: [state.actors.b1.actor_id],
   });
   const leaverContext = await makeContext(
     browser,
-    state.tokens.u2,
+    state.tokens.b1,
     { width: 1280, height: 900 },
     state.errors,
   );
@@ -403,22 +394,15 @@ export async function runGroupSetupAcceptance(
     await leaverContext.page.locator('#room-menu-leave-group').click();
     const copy = await leaveDialog;
     check(
-      '退群确认列出在途任务并说明撤销执行资格',
-      copy.includes('在途任务') && copy.includes('撤销执行资格'),
+      '退群确认列出待处理投递并说明撤销',
+      copy.includes('待处理投递') && copy.includes('撤销'),
       copy,
     );
     await leaverContext.page.waitForURL(`${state.base}/`);
-    const leftDetail = await rawToolError(state.tokens.u2, 'network_room_get', {
+    const leftDetail = await rawToolError(state.tokens.b1, 'network_room_get', {
       room_id: state.rooms.leave,
     });
     check('退群后成员读取房间被拒绝', ['NOT_FOUND', 'NOT_MEMBER'].includes(leftDetail.code), leftDetail);
-    const taskAfterLeave = await rawTool<{ task: { status: string; owner_actor_id: string | null } }>(
-      state.tokens.u1,
-      'network_task_get',
-      { task_id: leaveTask.task.task_id },
-    );
-    checkEqual('退群后任务 blocked', taskAfterLeave.task.status, 'blocked');
-    checkEqual('退群后任务不再有负责人', taskAfterLeave.task.owner_actor_id, null);
   } finally {
     await leaverContext.context.close();
   }
@@ -757,7 +741,7 @@ export async function runGroupFinaleAcceptance(state: Q04State, browser: Browser
     await waitRoom(ownerContext.page, state.rooms.main, 'Q04 主验收群');
     checkEqual('解散后合法成员看到只读归档横幅', await ownerContext.page.locator('#room-archive-banner').isVisible(), true);
     checkEqual('解散后隐藏输入区', await ownerContext.page.locator('#composer').isHidden(), true);
-    checkEqual('解散后隐藏新建任务', await ownerContext.page.locator('#task-create').isHidden(), true);
+    checkEqual('解散后不显示 Task Trace 抽屉', await ownerContext.page.locator('#task-trace-drawer').isHidden(), true);
     await noHorizontalOverflow(ownerContext.page, '归档桌面页');
     await screenshot(ownerContext.page, 'q04-dissolved-archive-light-1280');
   } finally {

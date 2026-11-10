@@ -36,12 +36,11 @@ const SAFETY_LEAVE_CONFIRM =
   '退出群聊只离开当前群，不影响好友关系；历史消息是否仍可读由群策略决定。确定退出？';
 const SAFETY_DISSOLVE_CONFIRM =
   '解散群聊后：\\n' +
-  '· 所有成员立即失去新的发言、邀请、任务执行与文件写入权限\\n' +
-  '· 所有未结束任务会被取消，不会自动标为已完成\\n' +
-  '· 邀请链接、入群申请与待处理投递立即失效\\n' +
+  '· 所有成员立即失去新的发言、邀请与文件写入权限\\n' +
+  '· 待处理投递与邀请链接、入群申请立即失效\\n' +
   '· 解散时仍在群的成员保留截至解散点的只读归档；此前已退群/被移除者无归档资格\\n' +
   '· 已下载到本地的文件副本无法收回\\n\\n' +
-  '解散不删除消息、任务或成果。确定解散？';
+  '解散不删除消息、文件或成果。确定解散？';
 
 let safetyBusy = false;
 let safetyReportRoomId = null;
@@ -170,16 +169,6 @@ async function safetyDeleteFriend() {
   }
 }
 
-function safetyInFlightTaskLines(preview) {
-  const tasks = preview && Array.isArray(preview.in_flight_tasks) ? preview.in_flight_tasks : [];
-  if (tasks.length === 0) return '';
-  return '\\n\\n你在该群仍有 ' + tasks.length + ' 个在途任务，退群会立即撤销执行资格：\\n' +
-    tasks.map(function (task) {
-      const owner = task.owner_name || task.owner_actor_id || '未指派';
-      return '· ' + task.task_id + ' · ' + task.status + ' · ' + owner;
-    }).join('\\n');
-}
-
 async function safetyLeaveGroup(explicitTarget) {
   const target = explicitTarget || roomMenuTarget;
   if (!target || safetyBusy || target.kind !== 'group') return;
@@ -188,11 +177,14 @@ async function safetyLeaveGroup(explicitTarget) {
   try {
     const preview = await callTool('network_room_leave_preview', { room_id: target.roomId });
     const hasWork = Boolean(preview && (
-      (preview.in_flight_tasks && preview.in_flight_tasks.length > 0) ||
       preview.pending_deliveries > 0 ||
       preview.claimed_deliveries > 0
     ));
-    const message = SAFETY_LEAVE_CONFIRM + safetyInFlightTaskLines(preview) +
+    const workNote = hasWork
+      ? '\\n\\n你在该群仍有 ' + preview.pending_deliveries + ' 条待处理投递（已领取 ' +
+        preview.claimed_deliveries + ' 条），退群会立即撤销这些投递。'
+      : '';
+    const message = SAFETY_LEAVE_CONFIRM + workNote +
       (preview && preview.owner_transfer_required
         ? '\\n\\n你是群主：请先在成员弹窗转让群主，或使用“解散群聊”。'
         : '');
@@ -241,7 +233,7 @@ async function safetyDissolveGroup(explicitTarget) {
     });
     const summary = result && result.dissolve ? result.dissolve : null;
     showToast(summary
-      ? '已解散，取消 ' + summary.cancelled_tasks + ' 个未结束任务'
+      ? '已解散，取消 ' + summary.cancelled_deliveries + ' 条待处理投递'
       : '已解散');
     closeRoomMenu();
     if (activeRoomId === target.roomId) {

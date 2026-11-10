@@ -52,7 +52,6 @@ interface TransferView {
   context: {
     note: string | null;
     snapshot: {
-      open_task_count: number;
       pending_deliveries: number;
       claimed_deliveries: number;
       room_count: number;
@@ -70,8 +69,6 @@ interface TransferAcceptedView {
   permission_version: number;
   revoked_delegations: number;
   revoked_credentials: number;
-  blocked_task_ids: string[];
-  unassigned_task_ids: string[];
   token: string | null;
   mcp_url: string | null;
 }
@@ -95,33 +92,11 @@ interface ManagementView {
   pending_work: {
     pending_deliveries: number;
     claimed_deliveries: number;
-    open_task_count: number;
   };
   rooms: { room_id: string; kind: string; role: string }[];
   delegations: { delegation_id: string; delegate_actor_id: string }[];
   in_flight_deliveries: { pending: number; claimed: number; items: { delivery_id: string }[] };
   audit_summary: { event_type: string; summary: Record<string, unknown> }[];
-}
-
-interface TaskAssignmentView {
-  assignment_id: string;
-  assignment_version: number;
-  owner_actor_id: string;
-  status: string;
-}
-
-interface TaskView {
-  task_id: string;
-  room_id: string;
-  status: string;
-  revision: number;
-  owner_actor_id: string | null;
-  blocked_reason: string | null;
-  assignment: TaskAssignmentView | null;
-}
-
-interface TaskResult {
-  task: TaskView;
 }
 
 interface SyncItem {
@@ -224,55 +199,6 @@ async function createGroup(
     kind: 'group',
     title,
     members,
-  });
-}
-
-async function createAssignedTask(
-  creator: McpConnection,
-  roomId: string,
-  assignee: string,
-  reviewer: string,
-  title: string,
-): Promise<TaskView> {
-  const created = await callTool<TaskResult>(creator.client, 'network_task_create', {
-    request_id: newRequestId('a06_task'),
-    room_id: roomId,
-    title,
-    assignee_actor_id: assignee,
-    reviewer_actor_id: reviewer,
-  });
-  return created.task;
-}
-
-async function acceptTask(agent: McpConnection, task: TaskView): Promise<TaskView> {
-  return (
-    await callTool<TaskResult>(agent.client, 'network_task_accept', {
-      request_id: newRequestId('a06_task_accept'),
-      task_id: task.task_id,
-      ...(task.assignment ? { assignment_id: task.assignment.assignment_id } : {}),
-      expected_revision: task.revision,
-    })
-  ).task;
-}
-
-async function getTask(connection: McpConnection, taskId: string): Promise<TaskView> {
-  return (await callTool<TaskResult>(connection.client, 'network_task_get', { task_id: taskId }))
-    .task;
-}
-
-function submitWithAssignment(
-  connection: McpConnection,
-  task: TaskView,
-  assignment: { assignment_id: string; assignment_version: number },
-): Promise<unknown> {
-  return callTool(connection.client, 'network_task_submit', {
-    request_id: newRequestId('a06_submit'),
-    task_id: task.task_id,
-    summary: '旧执行版本尝试提交',
-    evidence: ['a06:stale-assignment'],
-    assignment_id: assignment.assignment_id,
-    assignment_version: assignment.assignment_version,
-    expected_revision: task.revision,
   });
 }
 
@@ -655,91 +581,6 @@ export async function runAgentTransferAcceptance(): Promise<void> {
     }
     console.log(`  A06-T02 提交顺序统计：accept 先 ${acceptWins}，reissue 先 ${reissueWins}`);
     check('T02 至少覆盖两种提交顺序之一', acceptWins + reissueWins === 6, acceptWins + reissueWins);
-
-    // ------------------------------------------------------------------ T03
-    console.log('  A06-T03 进行中任务不自动结单，旧 assignment 不能提交');
-    const taskAgent = await createAgent(managerConn, 'A06 任务 Agent B2');
-    const taskAgentConn = await connectClient(taskAgent.token);
-    extraConns.push(taskAgentConn);
-    // 群主必须先与成员建立好友关系；Agent 的好友申请由其管理者处理。
-    await befriend(successorConn, successor.actor_id, managerConn, manager.actor_id);
-    await befriend(successorConn, successor.actor_id, managerConn, taskAgent.actor_id);
-    const taskRoom = await createGroup(successorConn, 'A06 任务群', [
-      manager.actor_id,
-      taskAgent.actor_id,
-    ]);
-    await acceptGroupInvites(managerConn, taskRoom.room.room_id);
-    await acceptGroupInvites(taskAgentConn, taskRoom.room.room_id);
-    const task = await createAssignedTask(
-      managerConn,
-      taskRoom.room.room_id,
-      taskAgent.actor_id,
-      manager.actor_id,
-      'A06 交接前进行中任务',
-    );
-    const acceptedTask = await acceptTask(taskAgentConn, task);
-    checkEqual('任务交接前进入进行中', acceptedTask.status, 'in_progress');
-    check('任务有 active assignment', Boolean(acceptedTask.assignment), acceptedTask);
-    const oldAssignment = acceptedTask.assignment!;
-    const taskProposal = await propose(managerConn, taskAgent.actor_id, successor.actor_id, {
-      note: 'T03 带进行中任务交接',
-    });
-    const taskAccepted = (await respond(
-      successorConn,
-      taskProposal.transfer_id,
-      'accept',
-    )) as TransferAcceptedView;
-    check(
-      '交接接受结果列出被阻塞任务',
-      taskAccepted.blocked_task_ids.includes(task.task_id),
-      taskAccepted.blocked_task_ids,
-    );
-    checkEqual('交接撤销旧运行凭据', taskAccepted.revoked_credentials >= 1, true);
-    const blockedTask = await getTask(successorConn, task.task_id);
-    checkEqual('交接后任务为 blocked', blockedTask.status, 'blocked');
-    checkEqual(
-      '交接后任务阻塞原因为 management_transferred',
-      blockedTask.blocked_reason,
-      'management_transferred',
-    );
-    checkEqual('交接后任务没有负责人', blockedTask.owner_actor_id, null);
-    check(
-      '交接后旧 assignment 已撤销',
-      !blockedTask.assignment || blockedTask.assignment.status !== 'active',
-      blockedTask.assignment,
-    );
-    await expectRawError(
-      '旧运行 token 失效',
-      rawRpc('tools/call', { name: 'network_me', arguments: {} }, { token: taskAgent.token }),
-      'CREDENTIAL_INVALID',
-    );
-    const newTaskAgentConn = await connectClient(taskAccepted.token ?? '');
-    extraConns.push(newTaskAgentConn);
-    const staleSubmit = await submitWithAssignment(newTaskAgentConn, blockedTask, oldAssignment)
-      .then(() => 'ok')
-      .catch((error) => errorCode(error));
-    check(
-      '旧 assignment 不能提交成果',
-      ['ASSIGNMENT_STALE', 'PERMISSION_DENIED', 'CONFLICT', 'VERSION_CONFLICT'].includes(
-        staleSubmit,
-      ),
-      staleSubmit,
-    );
-    const stillBlocked = await getTask(successorConn, task.task_id);
-    checkEqual('旧提交失败后任务仍为 blocked', stillBlocked.status, 'blocked');
-    checkEqual('任务没有自动 accepted', stillBlocked.status === 'accepted', false);
-    // 新管理者是群 owner，可显式重派 blocked 任务；不会被交接自动完成。
-    const reoffered = await callTool<TaskResult>(successorConn.client, 'network_task_offer', {
-      request_id: newRequestId('a06_reoffer'),
-      task_id: task.task_id,
-      assignee_actor_id: taskAgent.actor_id,
-    });
-    checkEqual('新管理者可以显式重派 blocked 任务', reoffered.task.status, 'offered');
-    checkEqual(
-      '重派后 assignment 指向原 Agent',
-      reoffered.task.assignment?.owner_actor_id,
-      taskAgent.actor_id,
-    );
 
     // ------------------------------------------------------------------ T04
     console.log('  A06-T04 新管理者不继承私聊、联系人或外部发布权限');

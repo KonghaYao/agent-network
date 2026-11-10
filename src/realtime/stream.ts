@@ -4,8 +4,8 @@ import {
   DELIVERY_REMINDER_SOURCE,
   MENTION_REMINDER_EVENT,
   MENTION_REMINDER_SOURCE,
-  TASK_REMINDER_EVENT,
-  TASK_REMINDER_SOURCE,
+  MESSAGE_TASK_MARKED_EVENT,
+  MESSAGE_TASK_UNMARKED_EVENT,
 } from '../contracts/events';
 import type { Env } from '../env';
 import { utf8Bytes } from '../storage/db';
@@ -47,16 +47,6 @@ export interface StreamItem {
   /** 房间文件事件的 file_id 与 room_file_id。 */
   file_id?: string;
   ref_id?: string;
-  /** 任务事件的稳定定位：task_id 与当前 assignment 版本。 */
-  task_id?: string;
-  assignment_id?: string;
-  assignment_version?: number;
-  status?: string;
-  /** 任务业务修订号；客户端按它丢弃乱序旧事件并补读权威状态。 */
-  revision?: number;
-  /** 成果提交/退回事件定位；版本号是 task_submissions.version。 */
-  submission_id?: string;
-  submission_version?: number;
   /** Agent 上下线通知：仅用于当前房间刷新，不产生未读。 */
   presence_event_id?: string;
   transition?: string;
@@ -236,6 +226,26 @@ export function roomStreamItems(
       for (const member of activeRecipients(members, eventSeq)) {
         const item = withLocation(baseItem(row, 'room.message', 'message', 'informational'), row, metadata);
         item.change = 'recalled';
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
+    case MESSAGE_TASK_MARKED_EVENT:
+    case MESSAGE_TASK_UNMARKED_EVENT: {
+      // 消息式 Task 只通知 active human 刷新摘要行；不写 inbox、不产生 delivery。
+      const change = row.event_type === MESSAGE_TASK_MARKED_EVENT ? 'marked' : 'unmarked';
+      const changedBy = stringField(metadata, 'changed_by');
+      const taskRootId = stringField(metadata, 'task_root_id') ?? row.ref_id ?? undefined;
+      for (const member of activeRecipients(members, eventSeq)) {
+        if (member.kind !== 'human') continue;
+        const item = withLocation(
+          baseItem(row, 'task.updated', 'task', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = change;
+        if (taskRootId) item.ref_id = taskRootId;
+        if (changedBy) item.changed_by = changedBy;
         result.push({ actorId: member.actor_id, item });
       }
       return result;
@@ -583,87 +593,6 @@ export function roomStreamItems(
       }
       return result;
     }
-    case 'task_created':
-    case 'task_offered':
-    case 'task_offer_accepted':
-    case 'task_offer_declined':
-    case 'task_claimed':
-    case 'task_cancelled':
-    case 'task_progress_reported':
-    case 'task_blocked':
-    case 'task_resumed':
-    case 'task_transfer_proposed':
-    case 'task_transfer_accepted':
-    case 'task_transfer_rejected':
-    case 'task_transfer_cancelled':
-    case 'task_transfer_expired':
-    case 'task_handoff_pack_created':
-    case 'task_handoff_item_authorized':
-    case 'task_handoff_item_revoked':
-    case 'task_handoff_context_requested':
-    case 'task_submitted':
-    case 'task_returned':
-    case 'task_accepted':
-    case 'task_retried':
-    case 'task_execution_unknown':
-    case 'task_execution_resolved':
-    case 'task_reviewer_changed': {
-      // 任务事件只让 active human 刷新任务视图。Agent 的工作唤醒只来自
-      // 明确指派生成的 delivery，房间任务事件不推进 head、不产生未读。
-      const change = row.event_type.replace('task_', '');
-      const changedBy = stringField(metadata, 'changed_by');
-      const taskId = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
-      const assignmentId = stringField(metadata, 'assignment_id');
-      const status = stringField(metadata, 'status');
-      const revision = numberField(metadata, 'revision');
-      const submissionId = stringField(metadata, 'submission_id');
-      const submissionVersion = numberField(metadata, 'version');
-      for (const member of activeRecipients(members, eventSeq)) {
-        if (member.kind !== 'human') continue;
-        const item = withLocation(
-          baseItem(row, 'task.updated', 'task', 'informational'),
-          row,
-          metadata,
-        );
-        item.change = change;
-        if (taskId) {
-          item.task_id = taskId;
-          item.ref_id = taskId;
-        }
-        if (assignmentId) item.assignment_id = assignmentId;
-        if (status) item.status = status;
-        if (revision !== undefined) item.revision = revision;
-        if (changedBy) item.changed_by = changedBy;
-        if (submissionId) item.submission_id = submissionId;
-        if (submissionVersion !== undefined) item.submission_version = submissionVersion;
-        result.push({ actorId: member.actor_id, item });
-      }
-      return result;
-    }
-    case 'room_task_added':
-    case 'room_task_claimed':
-    case 'room_task_completed':
-    case 'room_task_failed':
-    case 'room_task_updated':
-    case 'room_task_deleted': {
-      // 任务只通知 active human 刷新视图；Agent 不收到任务提示，也不会被唤醒。
-      const change = row.event_type.replace('room_task_', '');
-      const changedBy = stringField(metadata, 'changed_by');
-      const taskId = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
-      for (const member of activeRecipients(members, eventSeq)) {
-        if (member.kind !== 'human') continue;
-        const item = withLocation(
-          baseItem(row, 'room.tasks', 'tasks', 'informational'),
-          row,
-          metadata,
-        );
-        item.change = change;
-        if (taskId) item.ref_id = taskId;
-        if (changedBy) item.changed_by = changedBy;
-        result.push({ actorId: member.actor_id, item });
-      }
-      return result;
-    }
     case 'agent_presence_changed': {
       // 只通知 active human；Agent 成员不可见，也不写 inbox/未读。
       const agentId = stringField(metadata, 'agent_id');
@@ -822,23 +751,6 @@ function inboxStreamItem(
       if (progressAt !== undefined) item.progress_at = String(progressAt);
       return item;
     }
-    case TASK_REMINDER_EVENT: {
-      // 任务催办只提醒当前责任者更新进度或说明阻塞；不是新任务、assignment
-      // 或 delivery，也不增加 pending_count。客户端收到后重读 task_get。
-      const item = withLocation(
-        baseItem(row, TASK_REMINDER_SOURCE, 'reminder', 'action_required'),
-        row,
-        metadata,
-      );
-      item.task_id = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
-      item.ref_id = item.task_id;
-      item.assignment_id = stringField(metadata, 'assignment_id');
-      const progressAt = numberField(metadata, 'progress_at');
-      if (progressAt !== undefined) item.progress_at = String(progressAt);
-      const assignmentVersion = numberField(metadata, 'assignment_version');
-      if (assignmentVersion !== undefined) item.assignment_version = assignmentVersion;
-      return item;
-    }
     case MENTION_REMINDER_EVENT: {
       // 个人提醒不是待办：只提示人类查看消息，不增加 pending_count、
       // 不创建 delivery，也不该被 Agent 当成新的执行工作。
@@ -848,31 +760,6 @@ function inboxStreamItem(
         metadata,
       );
       item.mention_all = metadata.mention_all === true;
-      return item;
-    }
-    case 'task_offered':
-    case 'task_cancelled': {
-      // 人类接手请求/撤回是持久个人通知，不是 delivery；Agent 的指派
-      // 唤醒由 delivery_created 独立承担。
-      const offered = row.event_type === 'task_offered';
-      const item = withLocation(
-        baseItem(
-          row,
-          'task.updated',
-          'task',
-          offered ? 'action_required' : 'informational',
-        ),
-        row,
-        metadata,
-      );
-      item.task_id = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
-      item.ref_id = item.task_id;
-      item.change = offered ? 'offered' : 'cancelled';
-      const assignmentId = stringField(metadata, 'assignment_id');
-      const status = stringField(metadata, 'status');
-      if (assignmentId) item.assignment_id = assignmentId;
-      if (status) item.status = status;
-      item.changed_by = stringField(metadata, 'changed_by');
       return item;
     }
     case 'room_read':

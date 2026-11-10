@@ -417,15 +417,6 @@ export interface ScenarioOptions {
 export function auditQ05Invariants(db: Q05Db, context: string, round: number): void {
   const prefix = `${context} 第 ${round} 轮全局`;
   q05Equal(
-    `${prefix} 单 active assignment`,
-    db.scalar(
-      `SELECT COUNT(*) AS n FROM (
-         SELECT task_id FROM task_assignments
-          WHERE status IN ('offered','active') GROUP BY task_id HAVING COUNT(*) > 1)`,
-    ),
-    0,
-  );
-  q05Equal(
     `${prefix} 单群主`,
     db.scalar(
       `SELECT COUNT(*) AS n FROM rooms r
@@ -433,15 +424,6 @@ export function auditQ05Invariants(db: Q05Db, context: string, round: number): v
           AND (r.owner_id IS NULL OR (
             SELECT COUNT(*) FROM room_members m
              WHERE m.room_id = r.room_id AND m.status = 'active' AND m.role = 'owner') <> 1)`,
-    ),
-    0,
-  );
-  q05Equal(
-    `${prefix} 单 pending submission`,
-    db.scalar(
-      `SELECT COUNT(*) AS n FROM (
-         SELECT task_id FROM task_submissions
-          WHERE status = 'pending' GROUP BY task_id HAVING COUNT(*) > 1)`,
     ),
     0,
   );
@@ -476,40 +458,12 @@ export function auditQ05Invariants(db: Q05Db, context: string, round: number): v
     0,
   );
   q05Equal(
-    `${prefix} 任务卡唯一`,
-    db.scalar(
-      `SELECT COUNT(*) AS n FROM (
-         SELECT task_id FROM task_cards GROUP BY task_id HAVING COUNT(*) > 1)`,
-    ),
-    0,
-  );
-  q05Equal(
     `${prefix} Agent 单有效运行凭据`,
     db.scalar(
       `SELECT COUNT(*) AS n FROM (
          SELECT c.actor_id FROM credentials c JOIN actors a ON a.actor_id = c.actor_id
           WHERE a.kind = 'agent' AND c.revoked_at IS NULL
           GROUP BY c.actor_id HAVING COUNT(*) > 1)`,
-    ),
-    0,
-  );
-  q05Equal(
-    `${prefix} 无双交付行`,
-    db.scalar(
-      `SELECT COUNT(*) AS n FROM (
-         SELECT assignment_id, delivery_id FROM task_deliveries
-          GROUP BY assignment_id, delivery_id HAVING COUNT(*) > 1)`,
-    ),
-    0,
-  );
-  q05Equal(
-    `${prefix} accepted 任务有独立验收记录`,
-    db.scalar(
-      `SELECT COUNT(*) AS n FROM tasks t
-         JOIN task_submissions s ON s.task_id = t.task_id AND s.status = 'accepted'
-        WHERE t.status = 'accepted'
-          AND NOT EXISTS (SELECT 1 FROM task_reviews r
-                           WHERE r.submission_id = s.submission_id AND r.decision = 'accept')`,
     ),
     0,
   );
@@ -771,26 +725,6 @@ export async function ensureRoomMember(
     room_id: roomId,
     add: [actor.actor_id],
   });
-}
-
-/** 清理任务关联的未完成投递，避免固定 Agent 在 100 轮后触发队列上限。 */
-export async function drainTaskDeliveries(
-  server: Q05Server,
-  db: Q05Db,
-  taskId: string,
-  candidates: Q05Actor[],
-): Promise<void> {
-  const rows = db.rows<{ delivery_id: string; recipient_id: string; state: string }>(
-    `SELECT d.delivery_id, d.recipient_id, d.state
-       FROM task_deliveries td JOIN deliveries d ON d.delivery_id = td.delivery_id
-      WHERE td.task_id = ? AND d.state IN ('pending','claimed')`,
-    taskId,
-  );
-  for (const row of rows) {
-    const recipient = candidates.find((actor) => actor.actor_id === row.recipient_id);
-    if (!recipient) continue;
-    await drainDelivery(server, recipient, row.delivery_id);
-  }
 }
 
 /** 场景清理：按数据库当前 owner 解散临时群，避免累计触达活跃房间上限。 */

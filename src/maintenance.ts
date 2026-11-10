@@ -1,6 +1,5 @@
 import { LIMITS } from './contracts/limits';
 import { expireContactRequests } from './domain/contact-relations';
-import { remindStaleTasks } from './domain/task-reminders';
 import { purgeFilePayloads } from './drive/service';
 import { nowMs } from './storage/db';
 import type { Env } from './env';
@@ -15,25 +14,13 @@ interface ExpiredScope {
  * 文件保留与 GC。
  *
  * 权威引用状态在 `file_references` / `artifacts` / `room_files.retained`：
- * 1. 任务已删除时释放对应 task 引用（旧 `room_tasks` 与新 `tasks` 都算可达）；
- * 2. 只有无 active 引用、无 delivered 成果且未被 retained 的过期文件才软删；
- * 3. 软删后保留 `LIMITS.fileGcGraceMs` 再删除载荷，业务元数据永久保留；
- * 4. 删除载荷前再次检查引用，绑定/提交与 GC 由 SQLite 事务串行化，成果不会
+ * 1. 只有无 active 引用、无 delivered 成果且未被 retained 的过期文件才软删；
+ * 2. 软删后保留 `LIMITS.fileGcGraceMs` 再删除载荷，业务元数据永久保留；
+ * 3. 删除载荷前再次检查引用，绑定/提交与 GC 由 SQLite 事务串行化，成果不会
  *    指向已清理字节。
  */
 async function maintainFiles(env: Env, now: number): Promise<void> {
   const db = env.DB;
-
-  await db
-    .prepare(
-      `UPDATE file_references
-          SET state = 'released', released_at = ?, released_by = 'maintenance'
-        WHERE kind = 'task' AND state = 'active'
-          AND NOT EXISTS (SELECT 1 FROM room_tasks t WHERE t.task_id = file_references.ref_id)
-          AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.task_id = file_references.ref_id)`,
-    )
-    .bind(now)
-    .run();
 
   // 引用全部释放后恢复普通 30 天 TTL；仍在保留中的文件保持 retained=1。
   await db
@@ -205,10 +192,6 @@ export async function maintain(env: Env): Promise<void> {
 
   // 房间文件墓碑与载荷由 maintainFiles 按引用状态统一回收。
   await maintainFiles(env, now);
-
-  // 任务催办与投递提醒共用 3 分钟规则；维护周期只是兜底，30s 快路径在
-  // `src/bun/main.ts`。提醒失败不影响清理与后续轮次。
-  await remindStaleTasks(db, now);
 
   // MCP Events：先停用过期订阅，再在宽限期后删除（级联清投递）。
   await db

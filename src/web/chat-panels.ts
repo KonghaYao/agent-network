@@ -19,9 +19,6 @@ export function sidebarPane(): string {
         ${kubaiIcon('contact-requests', { size: 18 })}
         <span class="request-badge" id="contact-requests-badge" hidden>0</span>
       </button>
-      <button class="icon-btn" id="my-tasks" type="button" aria-label="我的任务" title="我的任务" hidden>
-        ${kubaiIcon('my-tasks', { size: 18 })}
-      </button>
       <button class="icon-btn" id="new-group" type="button" aria-label="新建群聊" title="新建群聊">+</button>
     </div>
     <label class="search-box">
@@ -102,11 +99,7 @@ export function sidebarPane(): string {
     </p>
     <div class="room-menu-stopped" id="room-menu-stopped" hidden>
       <p class="room-menu-stopped-summary" id="room-menu-stopped-summary" role="status"></p>
-      <details class="room-menu-stopped-details" id="room-menu-stopped-details">
-        <summary id="room-menu-stopped-toggle">未完成任务</summary>
-        <ul class="room-menu-stopped-tasks" id="room-menu-stopped-tasks"></ul>
-      </details>
-      <p class="room-menu-stopped-empty" id="room-menu-stopped-empty" hidden>没有未完成任务</p>
+      <p class="room-menu-stopped-empty" id="room-menu-stopped-empty" hidden>没有待处理投递</p>
     </div>
     <p class="room-menu-status" id="room-menu-status" role="status" aria-live="polite" hidden></p>
   </div>
@@ -151,13 +144,6 @@ export function chatPane(): string {
       aria-label="复制群信息" title="复制群信息">
       ${kubaiIcon('copy-group-info', { size: 17 })}
     </button>
-    <button class="task-toggle" id="task-toggle" type="button" hidden
-      aria-haspopup="dialog" aria-controls="task-popover" aria-expanded="false"
-      title="查看房间任务">
-      <span id="task-toggle-label">任务 0/0</span>
-    </button>
-    <button class="link-btn" id="task-create" type="button" hidden
-      title="从消息或任务面板创建任务">新建任务</button>
     <button class="monitor-toggle" id="monitor-toggle" type="button"
       aria-controls="monitor-pane" aria-expanded="false"
       aria-label="打开网页监控" title="网页监控">
@@ -166,15 +152,6 @@ export function chatPane(): string {
     </button>
     <button class="files-toggle" id="files-toggle" type="button"
       aria-controls="files-pane" aria-expanded="false">文件</button>
-    <div class="task-popover" id="task-popover" role="dialog" aria-label="房间任务" hidden>
-      <header class="task-popover-head">
-        <h3>房间任务</h3>
-        <button class="task-popover-close" id="task-popover-close" type="button"
-          aria-label="关闭任务列表" title="关闭">×</button>
-      </header>
-      <ul class="task-list" id="task-list" aria-label="房间任务列表"></ul>
-      <p class="task-popover-empty" id="task-popover-empty" role="status" hidden>暂无任务</p>
-    </div>
   </header>
   <form id="rename-form" class="rename-form" hidden>
     <input id="rename-input" maxlength="${LIMITS.actorNameMax}" aria-label="Agent 新名称"
@@ -457,7 +434,6 @@ export function transferDialog(): string {
       <div id="transfer-work" class="transfer-section">
         <h3>在途工作</h3>
         <p id="transfer-work-summary"></p>
-        <ul id="transfer-work-tasks" class="transfer-list"></ul>
         <ul id="transfer-work-deliveries" class="transfer-list"></ul>
       </div>
       <div id="transfer-token-panel" class="transfer-section new-agent-result" hidden>
@@ -731,145 +707,6 @@ export function reportDialog(): string {
       <button id="report-cancel" type="button">取消</button>
       <button id="report-submit" class="primary" type="button">提交举报</button>
     </div>
-  </div>
-</div>`;
-}
-
-/**
- * 任务弹窗：我的任务、任务详情与新建任务。
- *
- * 文本全部由客户端以 textContent 写入；详情里的长目标保留换行，
- * 卡片/来源消息按钮只滚动到同一条消息，不复制任务或生成新授权。
- */
-export function taskDialogs(): string {
-  return `<div class="modal" id="my-tasks-modal" hidden>
-  <div class="modal-card task-modal-card" role="dialog" aria-modal="true"
-    aria-labelledby="my-tasks-title">
-    <header class="task-modal-head">
-      <h2 id="my-tasks-title">我的任务</h2>
-      <button class="task-popover-close" id="my-tasks-close" type="button"
-        aria-label="关闭我的任务" title="关闭">×</button>
-    </header>
-    <ul class="task-list task-list-wide" id="my-tasks-list" aria-label="我的任务列表"></ul>
-    <p class="task-popover-empty" id="my-tasks-empty" role="status" hidden>暂无任务</p>
-  </div>
-</div>
-<div class="modal" id="task-detail-modal" hidden>
-  <div class="modal-card task-modal-card" role="dialog" aria-modal="true"
-    aria-labelledby="task-detail-title">
-    <header class="task-modal-head">
-      <h2 id="task-detail-title">任务详情</h2>
-      <button class="task-popover-close" id="task-detail-close" type="button"
-        aria-label="关闭任务详情" title="关闭">×</button>
-    </header>
-    <dl class="task-detail-grid" id="task-detail-body"></dl>
-    <div class="task-detail-actions" id="task-detail-actions"></div>
-  </div>
-</div>
-<div class="modal" id="task-create-modal" hidden>
-  <div class="modal-card task-modal-card" role="dialog" aria-modal="true"
-    aria-labelledby="task-create-title">
-    <header class="task-modal-head">
-      <h2 id="task-create-title">新建任务</h2>
-    </header>
-    <form id="task-create-form">
-      <p class="muted task-source-hint" id="task-source-hint" hidden></p>
-      <label class="field">短标题
-        <input id="task-title" maxlength="${LIMITS.taskTitleMax}" required
-          placeholder="列表展示用短标题">
-      </label>
-      <label class="field">详细目标
-        <textarea id="task-description" rows="4"
-          placeholder="交接背景、目标与约束；完整正文不会塞进短标题"></textarea>
-      </label>
-      <label class="field">验收条件
-        <textarea id="task-acceptance" rows="3" placeholder="怎样算完成"></textarea>
-      </label>
-      <div class="task-form-row">
-        <label class="field">负责人
-          <select id="task-assignee"></select>
-        </label>
-        <label class="field">验收人
-          <select id="task-reviewer"></select>
-        </label>
-      </div>
-      <label class="field">期限（可选）
-        <input id="task-due" type="datetime-local">
-      </label>
-      <p class="form-error" id="task-form-error" role="alert"></p>
-      <div class="row modal-actions">
-        <button id="task-create-cancel" type="button">取消</button>
-        <button class="primary" type="submit">创建任务</button>
-      </div>
-    </form>
-  </div>
-</div>
-<div class="modal" id="task-submit-modal" hidden>
-  <div class="modal-card task-modal-card" role="dialog" aria-modal="true"
-    aria-labelledby="task-submit-title">
-    <header class="task-modal-head">
-      <h2 id="task-submit-title">提交成果</h2>
-      <button class="task-popover-close" id="task-submit-close" type="button"
-        aria-label="关闭提交成果" title="关闭">×</button>
-    </header>
-    <form id="task-submit-form">
-      <p class="muted task-source-hint">提交后生成不可原地改写的版本；退回后才能重新提交新版本。</p>
-      <label class="field">成果摘要
-        <textarea id="task-submit-summary" rows="4" required
-          placeholder="完成了什么、如何核对；不要粘贴凭据或私密正文"></textarea>
-      </label>
-      <fieldset class="task-submit-section">
-        <legend>材料（同一房间文件）</legend>
-        <p class="muted" id="task-submit-materials-status" role="status">正在读取房间文件…</p>
-        <ul class="task-submit-materials" id="task-submit-materials"></ul>
-      </fieldset>
-      <fieldset class="task-submit-section">
-        <legend>外链</legend>
-        <p class="muted">只记录目标版本/摘要与声明可用性；服务端不抓取外链，可访问不等于验收通过。</p>
-        <div class="task-submit-links" id="task-submit-links"></div>
-        <button class="link-btn" id="task-submit-add-link" type="button">添加外链</button>
-      </fieldset>
-      <label class="field">实现提交 SHA（可选，7–64 位十六进制）
-        <input id="task-submit-commit-sha" maxlength="${LIMITS.taskSubmissionCommitShaMax}"
-          placeholder="非代码任务可留空，但需提供其他可核对成果">
-      </label>
-      <label class="field">验证证据（每行一条）
-        <textarea id="task-submit-evidence" rows="3"
-          placeholder="测试命令、结果计数、截图说明或复核步骤"></textarea>
-      </label>
-      <label class="field">已知限制（可选）
-        <textarea id="task-submit-known-limits" rows="2"
-          placeholder="未覆盖的范围、已知问题或需要验收人注意的事项"></textarea>
-      </label>
-      <p class="form-error" id="task-submit-error" role="alert"></p>
-      <div class="row modal-actions">
-        <button id="task-submit-cancel" type="button">取消</button>
-        <button class="primary" type="submit">提交成果</button>
-      </div>
-    </form>
-  </div>
-</div>
-<div class="modal" id="task-review-modal" hidden>
-  <div class="modal-card task-modal-card" role="dialog" aria-modal="true"
-    aria-labelledby="task-review-title">
-    <header class="task-modal-head">
-      <h2 id="task-review-title">验收通过</h2>
-      <button class="task-popover-close" id="task-review-close" type="button"
-        aria-label="关闭验收" title="关闭">×</button>
-    </header>
-    <form id="task-review-form">
-      <p class="muted task-source-hint" id="task-review-summary"></p>
-      <fieldset class="task-submit-section">
-        <legend>验收清单</legend>
-        <p class="muted">逐项勾选验收条件；勾选结果随验收记录保存，有未通过项时请使用退回。</p>
-        <ul class="task-review-checklist" id="task-review-checklist"></ul>
-      </fieldset>
-      <p class="form-error" id="task-review-error" role="alert"></p>
-      <div class="row modal-actions">
-        <button id="task-review-cancel" type="button">取消</button>
-        <button class="primary" type="submit">确认验收通过</button>
-      </div>
-    </form>
   </div>
 </div>`;
 }

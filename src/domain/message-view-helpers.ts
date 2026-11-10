@@ -35,11 +35,12 @@ export type HistoryMessageRow = Pick<
   | 'created_at'
   | 'reply_to'
   | 'root_id'
+  | 'task_root_id'
   | 'hop'
 >;
 
 export const HISTORY_MESSAGE_COLUMNS =
-  'message_id, room_id, sender_id, created_seq, preview, body_bytes, created_at, reply_to, root_id, hop';
+  'message_id, room_id, sender_id, created_seq, preview, body_bytes, created_at, reply_to, root_id, task_root_id, hop';
 
 /** 消息提及的稳定投影；source 表示目标来自显式选择、正文还是 @所有人。 */
 export interface MentionView {

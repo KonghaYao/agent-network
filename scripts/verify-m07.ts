@@ -55,7 +55,6 @@ const MEMBER = 'agt_m07_member';
 const OTHER = 'agt_m07_other';
 const STRANGER = 'agt_m07_stranger';
 const ROOM = 'rm_m07_group';
-const TASK = 'tsk_m07_task';
 
 interface MemoryFile {
   fileId: string;
@@ -123,10 +122,6 @@ function openWorld(): World {
     VALUES ('${ROOM}', '${OWNER}', 'owner', 'active', 0, 0, ${at}, ${at}, 1),
            ('${ROOM}', '${MEMBER}', 'member', 'active', 0, 0, ${at}, ${at}, 1),
            ('${ROOM}', '${OTHER}', 'member', 'active', 0, 0, ${at}, ${at}, 1);
-    INSERT INTO room_tasks (task_id, room_id, list_id, description, status, created_by,
-                            created_at, updated_at, completed_at, sort_order, created_seq)
-    VALUES ('${TASK}', '${ROOM}', 'default', 'M07 保留任务', 'pending', '${OWNER}',
-            ${at}, ${at}, NULL, 1, 1);
   `);
   const d1 = createD1(db);
   const purged: string[] = [];
@@ -241,10 +236,6 @@ async function retentionCases(): Promise<void> {
     checkEqual('[M07-T03] 失败后无 artifact 行', count(world.db, 'artifacts'), before.artifacts);
     checkEqual('[M07-T03] 失败后无引用行', count(world.db, 'file_references'), before.refs);
     checkEqual('[M07-T03] 失败后无房间文件行', count(world.db, 'room_files'), before.roomFiles);
-    const task = world.db
-      .prepare('SELECT status FROM room_tasks WHERE task_id = ?')
-      .get(TASK) as { status: string };
-    checkEqual('[M07-T03] 任务状态未被改写', task.status, 'pending');
   }
 
   // 过期无人引用：先软删保留元数据，宽限期后才清理载荷；清理后提交明确失败。
@@ -351,7 +342,7 @@ async function retentionCases(): Promise<void> {
   }
 }
 
-/** T04：有效任务/已交付成果越过原 TTL 仍可读；超配额无半成品。 */
+/** T04：已交付成果越过原 TTL 仍可读；超配额无半成品。 */
 async function quotaAndRetentionCases(): Promise<void> {
   const world = openWorld();
   const principal = principalFor(world.db, OWNER);
@@ -364,7 +355,6 @@ async function quotaAndRetentionCases(): Promise<void> {
       request_id: newRequestId('art'),
       room_id: ROOM,
       file_id: fileId,
-      task_id: TASK,
       summary: 'M07 成果',
     },
     world.source,
@@ -374,7 +364,7 @@ async function quotaAndRetentionCases(): Promise<void> {
   checkEqual('[M07-T04] 成果提交绑定文件', submitted.file.file_id, fileId);
   checkEqual('[M07-T04] 成果文件进入保留', submitted.file.retained, true);
   const artifactId = submitted.artifact.artifact_id;
-  checkEqual('[M07-T04] 任务引用已建立', count(world.db, 'file_references'), 2);
+  checkEqual('[M07-T04] 成果引用已建立', count(world.db, 'file_references'), 1);
 
   // 模拟原 30 天 TTL 已过：保留中的文件仍不应被清理。
   const past = Date.now() - 40 * 24 * 60 * 60_000;
@@ -421,14 +411,13 @@ async function quotaAndRetentionCases(): Promise<void> {
     request_id: newRequestId('release'),
     artifact_id: artifactId,
   });
-  checkEqual('[M07-T04] 释放成果但任务仍引用时继续保留', released.retained, true);
-  await world.d1.prepare('DELETE FROM room_tasks WHERE task_id = ?').bind(TASK).run();
+  checkEqual('[M07-T04] 释放成果后不再保留', released.retained, false);
   await maintain(world.env);
-  const afterTaskGone = stateOf(world.db, fileId);
-  checkEqual('[M07-T04] 任务删除后恢复普通 TTL', afterTaskGone.retained, 0);
+  const afterRelease = stateOf(world.db, fileId);
+  checkEqual('[M07-T04] 释放成果后恢复普通 TTL', afterRelease.retained, 0);
   check(
-    '[M07-T04] 任务删除后重新设置未来过期时间',
-    (afterTaskGone.expires_at ?? 0) > Date.now(),
+    '[M07-T04] 释放后重新设置未来过期时间',
+    (afterRelease.expires_at ?? 0) > Date.now(),
   );
   const replay = await artifactRelease(world.d1, principal, {
     request_id: newRequestId('release'),
@@ -472,7 +461,6 @@ async function quotaAndRetentionCases(): Promise<void> {
       events: count(quotaWorld.db, 'events'),
       outbox: count(quotaWorld.db, 'outbox'),
       operations: count(quotaWorld.db, 'operations'),
-      tasks: count(quotaWorld.db, 'room_tasks'),
     };
     await expectBusinessError(
       '[M07-T04] 超配额提交返回 ROOM_FILE_LIMIT',
@@ -484,7 +472,6 @@ async function quotaAndRetentionCases(): Promise<void> {
             request_id: newRequestId('art'),
             room_id: ROOM,
             file_id: fileId,
-            task_id: TASK,
           },
           quotaWorld.source,
           ORIGIN,
@@ -498,11 +485,6 @@ async function quotaAndRetentionCases(): Promise<void> {
     checkEqual('[M07-T04] 超配额无事件', count(quotaWorld.db, 'events'), before.events);
     checkEqual('[M07-T04] 超配额无 outbox', count(quotaWorld.db, 'outbox'), before.outbox);
     checkEqual('[M07-T04] 超配额无幂等记录', count(quotaWorld.db, 'operations'), before.operations);
-    checkEqual('[M07-T04] 超配额无半成品任务', count(quotaWorld.db, 'room_tasks'), before.tasks);
-    const task = quotaWorld.db
-      .prepare('SELECT status FROM room_tasks WHERE task_id = ?')
-      .get(TASK) as { status: string };
-    checkEqual('[M07-T04] 任务仍未完成', task.status, 'pending');
   }
 }
 

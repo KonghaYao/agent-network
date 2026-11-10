@@ -13,7 +13,6 @@ import { checksPassed } from './lib/harness';
 import { setupQ04Fixture } from './lib/q04-fixture';
 import { runContactAcceptance, runGroupFinaleAcceptance, runGroupSetupAcceptance } from './lib/q04-groups';
 import { runChatAcceptance } from './lib/q04-chat';
-import { runTaskUiHiddenAcceptance } from './lib/q04-tasks';
 import { runAgentAcceptance } from './lib/q04-agents';
 import { runResponsiveAcceptance } from './lib/q04-responsive';
 import { runIdentityAcceptance } from './lib/q04-identity';
@@ -39,7 +38,6 @@ async function main(): Promise<void> {
       await runContactAcceptance(state, browser);
       await runGroupSetupAcceptance(state, browser);
       await runChatAcceptance(state, browser);
-      await runTaskUiHiddenAcceptance(state, browser);
       await runAgentAcceptance(state, browser);
       await runResponsiveAcceptance(state, browser);
       await runGroupFinaleAcceptance(state, browser);

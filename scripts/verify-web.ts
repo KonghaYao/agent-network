@@ -33,6 +33,7 @@ import { messageFileLinkFixtures } from './lib/room-file-archive';
 import { runPresenceRestartAcceptance } from './lib/presence-restart';
 import { runPresenceIdleNotificationCheck } from './lib/presence-idle';
 import { runContactLinkWebAcceptance } from './lib/contact-link-web';
+import { runMessageTaskWebAcceptance } from './lib/message-task-web';
 
 interface Actor {
   actor_id: string;
@@ -350,7 +351,6 @@ export async function makeContext(
 ): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ viewport, ...contextOptions });
   await context.addInitScript({ content: initScript(token, seedTokenOnce) });
-  await context.addInitScript({ content: 'window.__TASK_UI_ENABLED = true;' });
   const page = await context.newPage();
   page.setDefaultTimeout(15_000);
   const recordError = (message: string): void => {
@@ -2524,817 +2524,6 @@ async function runAvatarAcceptance(
   await failContext.close();
 }
 
-async function runTaskAcceptance(
-  browser: Browser,
-  base: string,
-  allErrors: string[],
-): Promise<void> {
-  console.log('· 房间任务 UI');
-  const humanToken = crypto.randomUUID();
-  const human = await rawTool<Actor>(humanToken, 'network_register', {
-    request_id: requestId('task_human'),
-    kind: 'human',
-    name: '任务 UI 人类',
-  });
-  const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
-  const agent = await rawTool<Actor>(agentToken, 'network_register', {
-    request_id: requestId('task_agent'),
-    kind: 'agent',
-    name: '任务 UI Agent',
-    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
-  });
-  const reviewerToken = crypto.randomUUID();
-  const reviewer = await rawTool<Actor>(reviewerToken, 'network_register', {
-    request_id: requestId('task_reviewer'),
-    kind: 'human',
-    name: '任务 UI 验收人',
-  });
-  await rawBefriend(humanToken, agentToken, { actor_id: agent.actor_id });
-  await rawBefriend(humanToken, reviewerToken, { actor_id: reviewer.actor_id });
-  const room = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
-    request_id: requestId('room'),
-    kind: 'group',
-    title: '任务 UI 验收群',
-    members: [agent.actor_id, reviewer.actor_id],
-  });
-  const roomId = room.room.room_id;
-  await acceptRoomInvites(agentToken, roomId);
-  await acceptRoomInvites(reviewerToken, roomId);
-  await rawTool(humanToken, 'network_room_mark_read', {
-    room_id: roomId,
-    through_seq: room.room.head_seq,
-  });
-
-  const reportTask = await rawTool<{ task: { task_id: string } }>(
-    humanToken,
-    'network_task_create',
-    {
-      request_id: requestId('task_create'),
-      room_id: roomId,
-      title: '准备验收报告',
-      description: '输出 PDF 并附上测试结论',
-      acceptance_criteria: '报告可打开且包含结论',
-    },
-  );
-  await rawTool(agentToken, 'network_task_claim', {
-    request_id: requestId('task_claim'),
-    task_id: reportTask.task.task_id,
-  });
-  const injectionTask = await rawTool<{ task: { task_id: string } }>(
-    humanToken,
-    'network_task_create',
-    {
-      request_id: requestId('task_create'),
-      room_id: roomId,
-      title: '<b>注入测试</b>',
-      description: '标题按纯文本渲染',
-    },
-  );
-  const offeredTask = await rawTool<{ task: { task_id: string } }>(
-    humanToken,
-    'network_task_create',
-    {
-      request_id: requestId('task_create'),
-      room_id: roomId,
-      title: '等待 Agent 接手',
-      assignee_actor_id: agent.actor_id,
-    },
-  );
-
-  const { context, page } = await makeContext(
-    browser,
-    humanToken,
-    { width: 1280, height: 800 },
-    allErrors,
-  );
-  try {
-    await page.goto(`${base}/c/${roomId}`);
-    await waitRoom(page, roomId, '任务 UI 验收群');
-    await page.waitForFunction(
-      `document.getElementById('task-toggle') && !document.getElementById('task-toggle').hidden &&
-        document.getElementById('task-toggle-label').textContent === '任务 0/3'`,
-    );
-    check('聊天头部显示任务 done/total', true);
-    const badge = page.locator(`${roomLink(roomId)} .room-task-badge`);
-    await page.waitForFunction(
-      `(() => {
-        const item = document.querySelector(${JSON.stringify(roomLink(roomId))});
-        const badge = item ? item.querySelector('.room-task-badge') : null;
-        return Boolean(badge && badge.textContent === '0/3');
-      })()`,
-    );
-    checkEqual('侧栏房间项显示任务 badge', await badge.textContent(), '0/3');
-
-    await page.locator('#task-toggle').hover();
-    await page.locator('#task-popover').waitFor({ state: 'visible' });
-    checkEqual(
-      'hover 打开任务浮层并列出全部任务',
-      await page.locator('#task-list .task-item').count(),
-      3,
-    );
-    const reportItem = page.locator(
-      `#task-list .task-item[data-task-id="${reportTask.task.task_id}"]`,
-    );
-    const reportText = (await reportItem.innerText()) ?? '';
-    check(
-      '浮层显示状态、负责人与验收人',
-      reportText.includes('进行中') &&
-        reportText.includes('负责人：任务 UI Agent') &&
-        reportText.includes('验收：任务 UI 人类'),
-      reportText,
-    );
-    const offeredItem = page.locator(
-      `#task-list .task-item[data-task-id="${offeredTask.task.task_id}"]`,
-    );
-    const offeredText = (await offeredItem.innerText()) ?? '';
-    check(
-      '指定 Agent 但未接手的任务显示待接手',
-      offeredText.includes('待接手') && offeredText.includes('待接手：任务 UI Agent'),
-      offeredText,
-    );
-    const injectionItem = page.locator(
-      `#task-list .task-item[data-task-id="${injectionTask.task.task_id}"]`,
-    );
-    checkEqual(
-      '任务标题按纯文本渲染',
-      await injectionItem.locator('.task-desc').textContent(),
-      '<b>注入测试</b>',
-    );
-    checkEqual('任务标题不注入 HTML', await injectionItem.locator('b').count(), 0);
-    check(
-      '任务浮层不输出 token',
-      !((await page.locator('#task-popover').innerText()) ?? '').includes(humanToken),
-    );
-
-    await page.mouse.move(2, 2);
-    await page.locator('#task-popover').waitFor({ state: 'hidden' });
-    check('鼠标移出后浮层关闭', true);
-    await page.locator('#task-toggle').focus();
-    await page.locator('#task-popover').waitFor({ state: 'visible' });
-    check('focus 打开任务浮层', true);
-    await page.keyboard.press('Escape');
-    await page.locator('#task-popover').waitFor({ state: 'hidden' });
-    check('Esc 关闭任务浮层', true);
-
-    await page.locator('#task-toggle').click();
-    await page.locator('#task-popover').waitFor({ state: 'visible' });
-    check('点击固定打开任务浮层', true);
-    await page.locator('#task-popover-close').click();
-    await page.locator('#task-popover').waitFor({ state: 'hidden' });
-    check('关闭按钮关闭任务浮层且不因聚焦重新打开', true);
-    await page.locator('#task-toggle').click();
-    await page.locator('#task-popover').waitFor({ state: 'visible' });
-    await page.mouse.click(4, 4);
-    await page.locator('#task-popover').waitFor({ state: 'hidden' });
-    check('点击外部关闭任务浮层', true);
-
-    const listCallsBefore = (await page.evaluate(
-      `(window.__mcpCalls || []).filter(function (call) {
-        return call.name === 'network_task_list';
-      }).length`,
-    )) as number;
-    await sleep(800);
-    const listCallsAfter = (await page.evaluate(
-      `(window.__mcpCalls || []).filter(function (call) {
-        return call.name === 'network_task_list';
-      }).length`,
-    )) as number;
-    checkEqual('任务 UI 不轮询 list', listCallsAfter, listCallsBefore);
-
-    // 任务事件驱动刷新头部、侧栏 badge 与浮层；状态变化不新建卡片、不产生未读。
-    const eventTask = await rawTool<{ task: { task_id: string } }>(
-      humanToken,
-      'network_task_create',
-      {
-        request_id: requestId('task_create'),
-        room_id: roomId,
-        title: '事件任务',
-      },
-    );
-    await page.waitForFunction(
-      `document.getElementById('task-toggle-label').textContent === '任务 0/4'`,
-    );
-    checkEqual('任务创建事件刷新头部进度', await page.locator('#task-toggle-label').textContent(), '任务 0/4');
-    checkEqual('任务创建事件刷新侧栏 badge', await badge.textContent(), '0/4');
-    const headAfterCreate = (await rawTool<RoomDetail>(humanToken, 'network_room_get', {
-      room_id: roomId,
-    })).room.head_seq;
-    await page.locator('#task-toggle').hover();
-    await page.locator('#task-popover').waitFor({ state: 'visible' });
-    const eventItemSelector = `#task-list .task-item[data-task-id="${eventTask.task.task_id}"]`;
-    checkEqual(
-      '新任务在浮层显示为待领取',
-      await page.locator(eventItemSelector).locator('.task-status').textContent(),
-      '待领取',
-    );
-    await rawTool(agentToken, 'network_task_claim', {
-      request_id: requestId('task_claim'),
-      task_id: eventTask.task.task_id,
-    });
-    await page.waitForFunction(
-      `(() => {
-        const item = document.querySelector(${JSON.stringify(eventItemSelector)});
-        const status = item ? item.querySelector('.task-status') : null;
-        return Boolean(status && status.textContent === '进行中');
-      })()`,
-    );
-    check('领取事件刷新浮层状态', true);
-    await rawTool(humanToken, 'network_task_cancel', {
-      request_id: requestId('task_cancel'),
-      task_id: eventTask.task.task_id,
-      reason: '事件验收结束',
-    });
-    await page.waitForFunction(
-      `(() => {
-        const item = document.querySelector(${JSON.stringify(eventItemSelector)});
-        const status = item ? item.querySelector('.task-status') : null;
-        return Boolean(status && status.textContent === '已取消');
-      })()`,
-    );
-    check('取消事件刷新浮层状态', true);
-    checkEqual(
-      '任务状态变化不改变 done/total',
-      await page.locator('#task-toggle-label').textContent(),
-      '任务 0/4',
-    );
-    checkEqual(
-      '任务变更不产生未读红点',
-      await page.locator(`${roomLink(roomId)} .unread`).count(),
-      0,
-    );
-    const headAfter = (await rawTool<RoomDetail>(humanToken, 'network_room_get', {
-      room_id: roomId,
-    })).room.head_seq;
-    checkEqual('任务状态变化不推进 head_seq', headAfter, headAfterCreate);
-
-    // D02 网页入口：候选者可从详情接受/拒绝 offer，并带 revision CAS。
-    const uiAcceptTask = await rawTool<{ task: { task_id: string } }>(
-      humanToken,
-      'network_task_create',
-      {
-        request_id: requestId('task_create'),
-        room_id: roomId,
-        title: 'UI 接受任务',
-        assignee_actor_id: human.actor_id,
-        reviewer_actor_id: agent.actor_id,
-      },
-    );
-    if (!(await page.locator('#task-popover').isVisible())) {
-      await page.locator('#task-toggle').click();
-      await page.locator('#task-popover').waitFor({ state: 'visible' });
-    }
-    await page.waitForFunction(
-      `document.querySelector('#task-list .task-item[data-task-id="${uiAcceptTask.task.task_id}"]') !== null`,
-    );
-    await page
-      .locator(`#task-list .task-item[data-task-id="${uiAcceptTask.task.task_id}"]`)
-      .click();
-    await page.locator('#task-detail-modal').waitFor({ state: 'visible' });
-    const acceptButton = page
-      .locator('#task-detail-actions button')
-      .filter({ hasText: '接受任务' });
-    if ((await acceptButton.count()) === 0) throw new Error('任务详情缺少接受按钮');
-    await acceptButton.click();
-    await page.waitForFunction(
-      `document.getElementById('task-detail-body').innerText.includes('进行中')`,
-    );
-    checkEqual(
-      '网页接受 offer 后服务端为 in_progress',
-      (await rawTool<{ task: { status: string } }>(humanToken, 'network_task_get', {
-        task_id: uiAcceptTask.task.task_id,
-      })).task.status,
-      'in_progress',
-    );
-
-    // D03 网页入口：当前负责人更新进度、报告阻塞并恢复执行。
-    await page
-      .locator('#task-detail-actions input[aria-label="进度说明（可选）"]')
-      .fill('网页更新进度');
-    await page
-      .locator('#task-detail-actions input[aria-label="进度百分比"]')
-      .fill('55');
-    await page
-      .locator('#task-detail-actions button')
-      .filter({ hasText: '更新进度' })
-      .click();
-    await page.waitForFunction(
-      `(() => {
-        const bar = document.querySelector('#task-detail-body .task-progress-bar');
-        return Boolean(bar && bar.getAttribute('aria-valuenow') === '55');
-      })()`,
-    );
-    check('网页更新进度后显示 55% 进度条', true);
-    const uiProgressTask = await rawTool<{
-      task: {
-        status: string;
-        revision: number;
-        progress: { percent: number | null; note: string } | null;
-        progress_history?: unknown[];
-      };
-    }>(humanToken, 'network_task_get', { task_id: uiAcceptTask.task.task_id });
-    checkEqual('网页更新进度不改变业务状态', uiProgressTask.task.status, 'in_progress');
-    checkEqual('网页更新进度百分比持久化', uiProgressTask.task.progress?.percent, 55);
-    checkEqual('网页更新进度说明持久化', uiProgressTask.task.progress?.note, '网页更新进度');
-    checkEqual('网页更新进度写入历史', uiProgressTask.task.progress_history?.length, 1);
-
-    await page
-      .locator('#task-detail-actions input[aria-label="阻塞原因"]')
-      .fill('网页阻塞原因');
-    await page
-      .locator('#task-detail-actions button')
-      .filter({ hasText: '报告阻塞' })
-      .click();
-    await page.waitForFunction(
-      `document.querySelector('#task-detail-body .task-status')?.textContent === '受阻'`,
-    );
-    checkEqual(
-      '网页报告阻塞后服务端为 blocked',
-      (await rawTool<{ task: { status: string; blocked_reason: string | null } }>(
-        humanToken,
-        'network_task_get',
-        { task_id: uiAcceptTask.task.task_id },
-      )).task.status,
-      'blocked',
-    );
-    checkEqual(
-      '网页阻塞原因持久化',
-      (await rawTool<{ task: { blocked_reason: string | null } }>(
-        humanToken,
-        'network_task_get',
-        { task_id: uiAcceptTask.task.task_id },
-      )).task.blocked_reason,
-      '网页阻塞原因',
-    );
-    check(
-      '网页阻塞详情显示原因',
-      ((await page.locator('#task-detail-body').innerText()) ?? '').includes('网页阻塞原因'),
-    );
-
-    await page
-      .locator('#task-detail-actions input[aria-label="恢复说明（可选）"]')
-      .fill('网页恢复执行');
-    await page
-      .locator('#task-detail-actions button')
-      .filter({ hasText: '恢复执行' })
-      .click();
-    await page.waitForFunction(
-      `document.querySelector('#task-detail-body .task-status')?.textContent === '进行中'`,
-    );
-    checkEqual(
-      '网页恢复后服务端为 in_progress',
-      (await rawTool<{ task: { status: string; blocked_reason: string | null } }>(
-        humanToken,
-        'network_task_get',
-        { task_id: uiAcceptTask.task.task_id },
-      )).task.status,
-      'in_progress',
-    );
-    checkEqual(
-      '网页恢复清空 blocked_reason',
-      (await rawTool<{ task: { blocked_reason: string | null } }>(
-        humanToken,
-        'network_task_get',
-        { task_id: uiAcceptTask.task.task_id },
-      )).task.blocked_reason,
-      null,
-    );
-    checkEqual(
-      '网页进度历史保留三次操作',
-      await page.locator('#task-detail-body .task-progress-history li').count(),
-      3,
-    );
-    check(
-      '网页进度历史保留阻塞原因与百分比',
-      ((await page.locator('#task-detail-body .task-progress-history').innerText()) ?? '').includes(
-        '网页阻塞原因',
-      ) &&
-        ((await page.locator('#task-detail-body .task-progress-history').innerText()) ?? '').includes(
-          '55%',
-        ),
-    );
-    await page.locator('#task-detail-close').click();
-
-    // D04 网页入口：目标是接任者时在详情接受交接，服务端原子更换负责人。
-    const uiTransferTask = await rawTool<{ task: { task_id: string } }>(
-      humanToken,
-      'network_task_create',
-      {
-        request_id: requestId('task_create'),
-        room_id: roomId,
-        title: 'UI 交接任务',
-        assignee_actor_id: agent.actor_id,
-        reviewer_actor_id: reviewer.actor_id,
-      },
-    );
-    await rawTool(agentToken, 'network_task_accept', {
-      request_id: requestId('task_accept'),
-      task_id: uiTransferTask.task.task_id,
-    });
-    const uiTransferProposal = await rawTool<{
-      transfer: { transfer_id: string; effective_status: string };
-    }>(agentToken, 'network_task_transfer_propose', {
-      request_id: requestId('task_transfer_propose'),
-      task_id: uiTransferTask.task.task_id,
-      to_actor_id: human.actor_id,
-      note: '网页交接说明',
-    });
-    checkEqual('D04 网页交接提议待接受', uiTransferProposal.transfer.effective_status, 'pending');
-    if (!(await page.locator('#task-popover').isVisible())) {
-      await page.locator('#task-toggle').click();
-      await page.locator('#task-popover').waitFor({ state: 'visible' });
-    }
-    const transferItemSelector = `#task-list .task-item[data-task-id="${uiTransferTask.task.task_id}"]`;
-    await page.waitForFunction(
-      `document.querySelector(${JSON.stringify(transferItemSelector)}) !== null`,
-    );
-    await page.locator(transferItemSelector).click();
-    await page.locator('#task-detail-modal').waitFor({ state: 'visible' });
-    await page.waitForFunction(
-      `document.querySelector('#task-transfer-panel .task-transfer-item') !== null`,
-    );
-    const transferPanelText = (await page.locator('#task-transfer-panel').innerText()) ?? '';
-    check(
-      'D04 网页显示待处理交接与说明',
-      transferPanelText.includes('待接受') && transferPanelText.includes('网页交接说明'),
-      transferPanelText,
-    );
-    const acceptTransferButton = page
-      .locator('#task-transfer-panel button')
-      .filter({ hasText: '接受交接' });
-    checkEqual('D04 网页目标可见接受交接入口', await acceptTransferButton.count(), 1);
-    await acceptTransferButton.click();
-    await page.waitForFunction(
-      `(() => {
-        const rows = Array.from(document.querySelectorAll('#task-detail-body dt'));
-        const owner = rows.find(function (row) { return row.textContent === '负责人'; });
-        return Boolean(owner && owner.nextElementSibling &&
-          owner.nextElementSibling.textContent === '任务 UI 人类');
-      })()`,
-    );
-    check('D04 网页接受交接后详情负责人更新', true);
-    await page.waitForFunction(
-      `document.querySelector('#task-transfer-panel .task-transfer-badge-pending') === null`,
-    );
-    check('D04 网页接受交接后待处理提示消失', true);
-    const acceptedTransfer = await rawTool<{ transfer: { status: string } }>(
-      humanToken,
-      'network_task_transfer_get',
-      { transfer_id: uiTransferProposal.transfer.transfer_id },
-    );
-    checkEqual('D04 网页接受交接后提议为 accepted', acceptedTransfer.transfer.status, 'accepted');
-    const transferredTask = await rawTool<{
-      task: {
-        owner_actor_id: string | null;
-        assignment: { assignment_version: number } | null;
-      };
-    }>(humanToken, 'network_task_get', { task_id: uiTransferTask.task.task_id });
-    checkEqual('D04 网页接受交接后负责人为目标', transferredTask.task.owner_actor_id, human.actor_id);
-    checkEqual(
-      'D04 网页接受交接后 assignment_version 递增',
-      transferredTask.task.assignment?.assignment_version,
-      2,
-    );
-    await page.locator('#task-detail-close').click();
-
-    // D05 网页入口：详情展示包版本、缺项与跨范围授权入口，授权后按服务端视图刷新。
-    const uiSourceRoom = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
-      request_id: requestId('room'),
-      kind: 'group',
-      title: 'UI 交接源范围',
-      members: [reviewer.actor_id],
-    });
-    await acceptRoomInvites(reviewerToken, uiSourceRoom.room.room_id);
-    const uiSourceMessage = await rawTool<{ message: { message_id: string } }>(
-      humanToken,
-      'network_message_send',
-      {
-        request_id: requestId('ui_source_message'),
-        client_message_id: crypto.randomUUID(),
-        room_id: uiSourceRoom.room.room_id,
-        body: 'UI 跨范围交接材料',
-      },
-    );
-    const uiHandoffTask = await rawTool<{
-      task: {
-        task_id: string;
-        revision: number;
-        assignment: { assignment_id: string } | null;
-      };
-    }>(humanToken, 'network_task_create', {
-      request_id: requestId('task_create'),
-      room_id: roomId,
-      title: 'UI 交接包任务',
-      assignee_actor_id: human.actor_id,
-      reviewer_actor_id: agent.actor_id,
-    });
-    const uiHandoffAccepted = await rawTool<{
-      task: {
-        task_id: string;
-        revision: number;
-        assignment: { assignment_id: string; assignment_version: number } | null;
-      };
-    }>(humanToken, 'network_task_accept', {
-      request_id: requestId('task_accept'),
-      task_id: uiHandoffTask.task.task_id,
-      ...(uiHandoffTask.task.assignment
-        ? { assignment_id: uiHandoffTask.task.assignment.assignment_id }
-        : {}),
-      expected_revision: uiHandoffTask.task.revision,
-    });
-    if (!uiHandoffAccepted.task.assignment) throw new Error('交接包任务缺少 active assignment');
-    const uiHandoffPack = await rawTool<{
-      pack: { pack_id: string; version: number; context_ready: boolean };
-    }>(humanToken, 'network_task_handoff_pack_create', {
-      request_id: requestId('task_handoff_pack'),
-      task_id: uiHandoffAccepted.task.task_id,
-      assignment_id: uiHandoffAccepted.task.assignment.assignment_id,
-      assignment_version: uiHandoffAccepted.task.assignment.assignment_version,
-      expected_revision: uiHandoffAccepted.task.revision,
-      goal: 'UI 交接包展示验收',
-      completed: ['生成版本化交接包'],
-      current_result: { summary: '等待跨范围材料授权' },
-      next_steps: ['授权源范围消息'],
-      source_room_id: uiSourceRoom.room.room_id,
-      items: [
-        {
-          kind: 'message',
-          ref: uiSourceMessage.message.message_id,
-          label: '跨范围交接材料',
-          source_room_id: uiSourceRoom.room.room_id,
-          required: true,
-        },
-      ],
-    });
-    checkEqual('D05 网页交接包首版为 v1', uiHandoffPack.pack.version, 1);
-    checkEqual('D05 网页交接包初始不完整', uiHandoffPack.pack.context_ready, false);
-    if (!(await page.locator('#task-popover').isVisible())) {
-      await page.locator('#task-toggle').click();
-      await page.locator('#task-popover').waitFor({ state: 'visible' });
-    }
-    const handoffItemSelector = `#task-list .task-item[data-task-id="${uiHandoffAccepted.task.task_id}"]`;
-    await page.waitForFunction(
-      `document.querySelector(${JSON.stringify(handoffItemSelector)}) !== null`,
-    );
-    await page.locator(handoffItemSelector).click();
-    await page.locator('#task-detail-modal').waitFor({ state: 'visible' });
-    await page.waitForFunction(
-      `(() => {
-        const panel = document.getElementById('task-handoff-panel');
-        return Boolean(panel && panel.innerText.includes('交接上下文包') &&
-          panel.innerText.includes('v1') && panel.innerText.includes('未授权'));
-      })()`,
-    );
-    const handoffPanelText = (await page.locator('#task-handoff-panel').innerText()) ?? '';
-    check('D05 网页显示交接包版本与未授权项', handoffPanelText.includes('v1'));
-    check('D05 网页显示上下文不完整', handoffPanelText.includes('上下文不完整'));
-    checkEqual(
-      'D05 网页显示未授权引用',
-      await page.locator('#task-handoff-panel .task-handoff-item-omitted').count(),
-      1,
-    );
-    checkEqual(
-      'D05 网页显示版本切换',
-      await page.locator('#task-handoff-panel .task-handoff-version').count(),
-      1,
-    );
-    const handoffAuthorizeButton = page
-      .locator('#task-handoff-panel button')
-      .filter({ hasText: '授权给接任者' });
-    checkEqual('D05 网页负责人可见授权入口', await handoffAuthorizeButton.count(), 1);
-    await handoffAuthorizeButton.click();
-    await page.waitForFunction(
-      `(() => {
-        const panel = document.getElementById('task-handoff-panel');
-        return Boolean(panel && panel.querySelector('.task-handoff-item-available') &&
-          panel.querySelector('.task-handoff-readiness-ready'));
-      })()`,
-    );
-    check('D05 网页授权后引用可用且上下文完整', true);
-    checkEqual(
-      'D05 网页授权后未授权区块消失',
-      await page.locator('#task-handoff-panel .task-handoff-item-omitted').count(),
-      0,
-    );
-    const servedHandoffPack = await rawTool<{
-      pack: { context_ready: boolean; items: { status: string }[] };
-    }>(humanToken, 'network_task_handoff_pack_get', {
-      task_id: uiHandoffAccepted.task.task_id,
-    });
-    checkEqual('D05 网页授权写入服务端', servedHandoffPack.pack.context_ready, true);
-    checkEqual('D05 授权后服务端引用可用', servedHandoffPack.pack.items[0]?.status, 'available');
-    await page.locator('#task-detail-close').click();
-
-    const uiDeclineTask = await rawTool<{ task: { task_id: string } }>(
-      humanToken,
-      'network_task_create',
-      {
-        request_id: requestId('task_create'),
-        room_id: roomId,
-        title: 'UI 拒绝任务',
-        assignee_actor_id: human.actor_id,
-        reviewer_actor_id: agent.actor_id,
-      },
-    );
-    if (!(await page.locator('#task-popover').isVisible())) {
-      await page.locator('#task-toggle').click();
-      await page.locator('#task-popover').waitFor({ state: 'visible' });
-    }
-    await page.waitForFunction(
-      `document.querySelector('#task-list .task-item[data-task-id="${uiDeclineTask.task.task_id}"]') !== null`,
-    );
-    await page
-      .locator(`#task-list .task-item[data-task-id="${uiDeclineTask.task.task_id}"]`)
-      .click();
-    await page.locator('#task-detail-modal').waitFor({ state: 'visible' });
-    const declineReason = page.locator('#task-detail-actions input[aria-label="拒绝原因"]');
-    await declineReason.fill('UI 拒绝原因');
-    const declineButton = page
-      .locator('#task-detail-actions button')
-      .filter({ hasText: '拒绝任务' });
-    if ((await declineButton.count()) === 0) throw new Error('任务详情缺少拒绝按钮');
-    await declineButton.click();
-    await page.waitForFunction(
-      `document.getElementById('task-detail-body').innerText.includes('待领取')`,
-    );
-    checkEqual(
-      '网页拒绝 offer 后服务端为 unassigned',
-      (await rawTool<{ task: { status: string } }>(humanToken, 'network_task_get', {
-        task_id: uiDeclineTask.task.task_id,
-      })).task.status,
-      'unassigned',
-    );
-    await page.locator('#task-detail-close').click();
-
-    // D02-T01 网页冲突：过期的“领取”操作失败后必须显示真实负责人。
-    const uiRaceTask = await rawTool<{ task: { task_id: string } }>(
-      humanToken,
-      'network_task_create',
-      {
-        request_id: requestId('task_create'),
-        room_id: roomId,
-        title: 'UI 领取冲突',
-        reviewer_actor_id: reviewer.actor_id,
-      },
-    );
-    if (!(await page.locator('#task-popover').isVisible())) {
-      await page.locator('#task-toggle').click();
-      await page.locator('#task-popover').waitFor({ state: 'visible' });
-    }
-    await page.waitForFunction(
-      `document.querySelector('#task-list .task-item[data-task-id="${uiRaceTask.task.task_id}"]') !== null`,
-    );
-    await page
-      .locator(`#task-list .task-item[data-task-id="${uiRaceTask.task.task_id}"]`)
-      .click();
-    await page.locator('#task-detail-modal').waitFor({ state: 'visible' });
-    const raceClaim = page
-      .locator('#task-detail-actions button')
-      .filter({ hasText: '领取任务' });
-    if ((await raceClaim.count()) === 0) throw new Error('任务详情缺少领取按钮');
-    // 延迟网页自己的领取请求，让 Agent 先完成领取；网页随后带着旧 revision
-    // 提交，必须收到冲突、刷新详情并显示真实负责人。
-    await page.evaluate(`(() => {
-      const original = window.fetch;
-      window.__restoreTaskFetch = () => { window.fetch = original; };
-      window.fetch = function (input, init) {
-        const body = init && typeof init.body === 'string' ? init.body : '';
-        if (body.includes('"network_task_claim"')) {
-          return new Promise((resolve) => setTimeout(resolve, 1500)).then(() =>
-            original.call(this, input, init)
-          );
-        }
-        return original.call(this, input, init);
-      };
-    })()`);
-    try {
-      await raceClaim.click();
-      await rawTool(agentToken, 'network_task_claim', {
-        request_id: requestId('task_claim'),
-        task_id: uiRaceTask.task.task_id,
-      });
-      await page.waitForFunction(
-        `(() => {
-          const body = document.getElementById('task-detail-body');
-          const error = document.querySelector('#task-detail-actions .form-error');
-          return Boolean(
-            body &&
-            body.innerText.includes('进行中') &&
-            error &&
-            error.innerText.includes('任务 UI Agent')
-          );
-        })()`,
-      );
-    } finally {
-      await page.evaluate(`window.__restoreTaskFetch && window.__restoreTaskFetch()`);
-    }
-    check(
-      '网页领取冲突后显示真实负责人',
-      (await page.locator('#task-detail-actions .form-error').innerText()).includes(
-        '任务 UI Agent',
-      ),
-    );
-    const raceActual = await rawTool<{ task: { status: string; owner_actor_id: string } }>(
-      humanToken,
-      'network_task_get',
-      { task_id: uiRaceTask.task.task_id },
-    );
-    checkEqual('网页领取冲突不覆盖服务端负责人', raceActual.task.owner_actor_id, agent.actor_id);
-    checkEqual('网页领取冲突后服务端为 in_progress', raceActual.task.status, 'in_progress');
-    await page.locator('#task-detail-close').click();
-
-    const mobile = await makeContext(
-      browser,
-      humanToken,
-      { width: 390, height: 844 },
-      allErrors,
-      true,
-      false,
-      { hasTouch: true },
-    );
-    try {
-      await mobile.page.goto(`${base}/c/${roomId}`);
-      await waitRoom(mobile.page, roomId, '任务 UI 验收群');
-      await mobile.page.waitForFunction(
-        `document.getElementById('task-toggle') && !document.getElementById('task-toggle').hidden`,
-      );
-      await mobile.page.locator('#task-toggle').tap();
-      await mobile.page.locator('#task-popover').waitFor({ state: 'visible' });
-      const metrics = (await mobile.page.evaluate(
-        `(() => {
-          const box = document.getElementById('task-popover').getBoundingClientRect();
-          return {
-            left: box.left,
-            right: box.right,
-            width: box.width,
-            view: window.innerWidth,
-            doc: document.documentElement.scrollWidth,
-            sidebar: getComputedStyle(document.querySelector('.sidebar')).display
-          };
-        })()`,
-      )) as {
-        left: number;
-        right: number;
-        width: number;
-        view: number;
-        doc: number;
-        sidebar: string;
-      };
-      check(
-        '390px 任务浮层不横向溢出',
-        metrics.left >= 0 && metrics.right <= metrics.view + 1 && metrics.doc <= metrics.view,
-        metrics,
-      );
-      checkEqual('390px 聊天页仍为单栏', metrics.sidebar, 'none');
-      await mobile.page.keyboard.press('Escape');
-      await mobile.page.locator('#task-popover').waitFor({ state: 'hidden' });
-      check('390px 任务浮层可关闭', true);
-    } finally {
-      await mobile.context.close();
-    }
-
-    const dark = await makeContext(
-      browser,
-      humanToken,
-      { width: 1280, height: 800 },
-      allErrors,
-      true,
-      false,
-      { colorScheme: 'dark' },
-    );
-    try {
-      await dark.page.goto(`${base}/c/${roomId}`);
-      await waitRoom(dark.page, roomId, '任务 UI 验收群');
-      await dark.page.waitForFunction(
-        `document.getElementById('task-toggle') && !document.getElementById('task-toggle').hidden`,
-      );
-      await dark.page.locator('#task-toggle').hover();
-      await dark.page.locator('#task-popover').waitFor({ state: 'visible' });
-      const colors = (await dark.page.evaluate(
-        `(() => {
-          const style = getComputedStyle(document.getElementById('task-popover'));
-          const text = getComputedStyle(document.querySelector('#task-list .task-desc'));
-          return { background: style.backgroundColor, color: text.color };
-        })()`,
-      )) as { background: string; color: string };
-      check(
-        '暗色任务浮层使用暗色面板且文字可读',
-        contrastRatio(colors.color, colors.background) >= 4.5 &&
-          relativeLuminance(colors.background) < 0.2,
-        colors,
-      );
-    } finally {
-      await dark.context.close();
-    }
-  } finally {
-    await context.close();
-  }
-}
-
-/**
- * M02 网页发送状态：跨房隔离、响应丢失先对账、失败重试复用原 ID、刷新恢复。
- *
- * 故障注入只针对 `network_message_send`；对账与历史读取走真实服务端。
- */
 async function runMessageOutboxAcceptance(
   browser: Browser,
   base: string,
@@ -4452,7 +3641,7 @@ async function main(): Promise<void> {
             } : null,
           };
         }
-        return { contact: read('contact-requests'), tasks: read('my-tasks') };
+        return { contact: read('contact-requests') };
       })()`)) as {
         contact: {
           ariaLabel: string | null;
@@ -4481,27 +3670,8 @@ async function main(): Promise<void> {
             insideButton: boolean;
           } | null;
         } | null;
-        tasks: {
-          ariaLabel: string | null;
-          title: string | null;
-          hasSvg: boolean;
-          svgAriaHidden: string | null;
-          svgWidth: number;
-          svgHeight: number;
-          svgDisplay: string;
-          svgFill: string;
-          svgStroke: string;
-          buttonColor: string;
-          svgStrokeWidth: string;
-          svgLinecap: string;
-          svgLinejoin: string;
-          buttonWidth: number;
-          buttonHeight: number;
-          textNodes: string[];
-        } | null;
       };
       const contactIcon = brandIconMetrics.contact;
-      const taskIcon = brandIconMetrics.tasks;
       checkEqual('侧栏好友申请使用图标', contactIcon?.hasSvg, true);
       checkEqual('好友申请图标保留 aria-label', contactIcon?.ariaLabel, '好友申请');
       check(
@@ -4545,30 +3715,6 @@ async function main(): Promise<void> {
         contactIcon?.badge,
       );
       checkEqual('好友申请红点仍属于按钮点击区', contactIcon?.badge?.insideButton, true);
-      checkEqual('侧栏我的任务使用图标', taskIcon?.hasSvg, true);
-      checkEqual('我的任务图标保留 aria-label', taskIcon?.ariaLabel, '我的任务');
-      checkEqual('我的任务图标保留 title', taskIcon?.title, '我的任务');
-      checkEqual('我的任务图标不含文字标签', taskIcon?.textNodes.length, 0);
-      checkEqual('我的任务图标 aria-hidden', taskIcon?.svgAriaHidden, 'true');
-      checkEqual('我的任务图标为 18×18', `${taskIcon?.svgWidth}x${taskIcon?.svgHeight}`, '18x18');
-      checkEqual('我的任务图标 display:block', taskIcon?.svgDisplay, 'block');
-      checkEqual('我的任务图标 fill:none', taskIcon?.svgFill, 'none');
-      checkEqual('我的任务图标 stroke 使用信息蓝', taskIcon?.svgStroke, 'rgb(59, 130, 246)');
-      checkEqual(
-        '我的任务图标 stroke-width 1.8',
-        Number.parseFloat(taskIcon?.svgStrokeWidth ?? ''),
-        1.8,
-      );
-      checkEqual(
-        '我的任务图标圆角线帽',
-        `${taskIcon?.svgLinecap}/${taskIcon?.svgLinejoin}`,
-        'round/round',
-      );
-      checkEqual(
-        '我的任务按钮 28×28 点击区',
-        `${taskIcon?.buttonWidth}x${taskIcon?.buttonHeight}`,
-        '28x28',
-      );
       checkEqual(
         '侧栏好友申请入口可见',
         await page.locator('#contact-requests').isVisible(),
@@ -4738,22 +3884,6 @@ async function main(): Promise<void> {
         members: [uiRequester.actor_id],
       });
 
-      // 我的任务图标：点击打开任务面板，关闭后不残留。
-      await page.locator('#my-tasks').click();
-      await page.locator('#my-tasks-modal').waitFor({ state: 'visible' });
-      checkEqual(
-        '点击我的任务图标打开任务面板',
-        await page.locator('#my-tasks-modal').isVisible(),
-        true,
-      );
-      await page.locator('#my-tasks-close').click();
-      await page.locator('#my-tasks-modal').waitFor({ state: 'hidden' });
-      checkEqual(
-        '我的任务面板可关闭',
-        await page.locator('#my-tasks-modal').isHidden(),
-        true,
-      );
-
       // 390px 列表页：标题行图标保持 18×18 且不横向溢出。
       const mobileIcons = await makeContext(
         browser,
@@ -4789,7 +3919,7 @@ async function main(): Promise<void> {
             view: window.innerWidth,
             rowLeft: rowBox ? rowBox.left : -1,
             rowRight: rowBox ? rowBox.right : -1,
-            icons: ['contact-requests', 'my-tasks'].map(iconBox),
+            icons: ['contact-requests'].map(iconBox),
           };
         })()`)) as {
           pageFits: boolean;
@@ -4806,8 +3936,8 @@ async function main(): Promise<void> {
           mobileBrandMetrics,
         );
         check(
-          '390px 好友申请与任务图标 18×18 且完整可见',
-          mobileBrandMetrics.icons.length === 2 &&
+          '390px 好友申请图标 18×18 且完整可见',
+          mobileBrandMetrics.icons.length === 1 &&
             mobileBrandMetrics.icons.every(
               (icon) =>
                 icon.width === 18 &&
@@ -9464,7 +8594,7 @@ async function main(): Promise<void> {
       });
     }
 
-    // 2b-2a-2. 已归档 Agent 从联系人、群成员、@ 建议、任务负责人、群主转让与
+    // 2b-2a-2. 已归档 Agent 从联系人、群成员、@ 建议、群主转让与
     // 建群/加人候选中隐藏；已归档入口仍可恢复，未归档成员不受影响。
     {
       const archivedAgent = await createAgentFriend(data.humanToken, '列举过滤归档 Agent');
@@ -9608,17 +8738,6 @@ async function main(): Promise<void> {
       );
       await page.locator('#body').fill('');
 
-      await page.locator('#task-create').click();
-      await page.locator('#task-create-modal').waitFor({ state: 'visible' });
-      const assigneeOptions = await page.locator('#task-assignee option').allTextContents();
-      check(
-        '任务负责人候选隐藏归档 Agent',
-        !assigneeOptions.some((text) => text.includes(archivedAgent.name)) &&
-          assigneeOptions.some((text) => text.includes(activeAgent.name)),
-        assigneeOptions,
-      );
-      await page.locator('#task-create-cancel').click();
-
       await page.locator('#add-members').click();
       await page.locator('#members-current .member-roster-item').first().waitFor();
       checkEqual(
@@ -9666,6 +8785,7 @@ async function main(): Promise<void> {
     }
 
     // 2b-2b. 停用 Agent：确认后展示待处理投递与未完成任务，错误可见。
+    // 2b-2b. 停用 Agent：确认后展示待处理投递，错误可见。
     {
       interface ManagedAgent {
         actor_id: string;
@@ -9695,19 +8815,6 @@ async function main(): Promise<void> {
         '停用前待领取投递',
         [pendingAgent.actor_id],
       );
-      const openTask = await rawTool<{ task: { task_id: string } }>(
-        data.humanToken,
-        'network_task_create',
-        {
-          request_id: requestId('task_create'),
-          room_id: pendingRoom.room.room_id,
-          title: '停用前未完成任务',
-        },
-      );
-      await rawTool(pendingAgent.token, 'network_task_claim', {
-        request_id: requestId('task_claim'),
-        task_id: openTask.task.task_id,
-      });
 
       const idleAgent = await createManagedAgent('停用空态 Agent');
       const idleRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
@@ -9768,7 +8875,7 @@ async function main(): Promise<void> {
           });
         });
         page.once('dialog', async (dialog) => {
-          check('停用确认说明任务不会被标记完成', dialog.message().includes('待处理任务不会标记完成'));
+          check('停用确认说明待处理投递会被取消', dialog.message().includes('待处理投递会被取消'));
           await dialog.accept();
         });
         await page.locator('#room-menu-toggle-disabled').click();
@@ -9792,12 +8899,12 @@ async function main(): Promise<void> {
         checkEqual(
           '无待处理工作时显示空态摘要',
           ((await page.locator('#room-menu-stopped-summary').textContent()) ?? '').trim(),
-          '待处理投递 0 条（已领取 0 条），未完成任务 0 个',
+          '待处理投递 0 条（已领取 0 条）',
         );
         checkEqual(
           '无待处理工作时显示空态文案',
           ((await page.locator('#room-menu-stopped-empty').textContent()) ?? '').trim(),
-          '没有待处理投递或未完成任务',
+          '没有待处理投递',
         );
         checkEqual(
           '停用成功后菜单保持打开',
@@ -9868,18 +8975,11 @@ async function main(): Promise<void> {
         checkEqual(
           '停用后展示待处理投递数量',
           ((await page.locator('#room-menu-stopped-summary').textContent()) ?? '').trim(),
-          '待处理投递 1 条（已领取 0 条），未完成任务 1 个',
-        );
-        check(
-          '停用后展示未完成任务描述',
-          ((await page.locator('#room-menu-stopped-tasks').textContent()) ?? '').includes(
-            '停用前未完成任务',
-          ),
-          await page.locator('#room-menu-stopped-tasks').textContent(),
+          '待处理投递 1 条（已领取 0 条）',
         );
         checkEqual(
-          '停用后任务列表可见',
-          await page.locator('#room-menu-stopped-details').isVisible(),
+          '停用后空态列表不显示',
+          await page.locator('#room-menu-stopped-empty').isHidden(),
           true,
         );
       } finally {
@@ -11130,44 +10230,6 @@ async function main(): Promise<void> {
       await context.close();
     }
 
-    // 2b-4b. 任务 UI 默认整体隐藏：消息不显示“转为任务”，群头部不显示任务入口。
-    {
-      const convertGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
-        request_id: requestId('room'),
-        kind: 'group',
-        title: '任务入口可见性群',
-        members: [data.agentA.actor_id],
-      });
-      const convertRoomId = convertGroup.room.room_id;
-      await acceptRoomInvites(data.agentAToken, convertRoomId);
-      await sendRoomMessage(data.humanToken, convertRoomId, '人类任务来源消息');
-      await sendRoomMessage(data.agentAToken, convertRoomId, 'Agent 任务来源消息');
-      // 默认（生产）上下文不设置 window.__TASK_UI_ENABLED，整个任务 UI 必须隐藏。
-      const hiddenContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-      await hiddenContext.addInitScript(
-        (token: string) => localStorage.setItem('agent-network-token', token),
-        data.humanToken,
-      );
-      const hiddenPage = await hiddenContext.newPage();
-      hiddenPage.setDefaultTimeout(15_000);
-      await hiddenPage.goto(`${server.base}/c/${convertRoomId}`);
-      await waitRoom(hiddenPage, convertRoomId, '任务入口可见性群');
-      checkEqual('默认隐藏新建任务', await hiddenPage.locator('#task-create').isVisible(), false);
-      checkEqual(
-        '消息不显示转为任务入口',
-        await hiddenPage.locator('#messages .msg-task-convert').count(),
-        0,
-      );
-      checkEqual('默认隐藏任务切换', await hiddenPage.locator('#task-toggle').isVisible(), false);
-      checkEqual('默认隐藏我的任务', await hiddenPage.locator('#my-tasks').isVisible(), false);
-      checkEqual(
-        '默认不渲染任务卡片',
-        await hiddenPage.locator('#messages .msg-task-slot:not([hidden])').count(),
-        0,
-      );
-      await hiddenContext.close();
-    }
-
     // 2b-5. G03 群角色界面：owner 任免管理员、管理员操作入口与公告读写。
     {
       interface RoleMemberView {
@@ -11663,7 +10725,11 @@ async function main(): Promise<void> {
           ((await archivePage.locator('#room-archive-banner').textContent()) ?? '').includes('无法收回'),
       );
       checkEqual('解散后隐藏输入框', await archivePage.locator('#composer').isHidden(), true);
-      checkEqual('解散后隐藏新建任务', await archivePage.locator('#task-create').isHidden(), true);
+      checkEqual(
+        '解散后不显示旧任务入口',
+        await archivePage.locator('#task-create, #task-toggle, #my-tasks').count(),
+        0,
+      );
       await archiveContext.context.close();
     }
 
@@ -18549,7 +17615,6 @@ async function main(): Promise<void> {
         homeHtml.match(new RegExp(`<svg[^>]*data-kubai-icon="${name}"[^>]*>`))?.[0] ?? '';
       const coloredIcons = [
         ['contact-requests', '成功绿', '#0e9f4f'],
-        ['my-tasks', '信息蓝', '#3b82f6'],
         ['monitor-save', '成功绿', '#0e9f4f'],
         ['monitor-clear', '危险红', '#e5484d'],
         ['archived-agents', '琥珀色', '#c47a00'],
@@ -22737,7 +21802,12 @@ async function main(): Promise<void> {
 
     await runAvatarAcceptance(browser, server.base, data.humanToken);
 
-    await runTaskAcceptance(browser, server.base, allErrors);
+    await runMessageTaskWebAcceptance({
+      browser,
+      base: server.base,
+      allErrors,
+      rawTool,
+    });
 
     await runMessageOutboxAcceptance(browser, server.base, allErrors);
 

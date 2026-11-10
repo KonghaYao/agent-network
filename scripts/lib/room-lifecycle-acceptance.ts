@@ -51,52 +51,8 @@ interface RoomView {
   owner_transfer: { transfer_id: string; status: string } | null;
 }
 
-interface TaskAssignmentView {
-  assignment_id: string;
-  assignment_version: number;
-  owner_actor_id: string;
-  status: string;
-}
-
-interface TaskView {
-  task_id: string;
-  room_id: string;
-  status: string;
-  revision: number;
-  owner_actor_id: string | null;
-  owner_name: string | null;
-  assignment: TaskAssignmentView | null;
-  delivery_ids: string[];
-}
-
-interface TaskResult {
-  task: TaskView;
-}
-
-interface TransferView {
-  transfer_id: string;
-  status: string;
-}
-
-interface TransferProposal {
-  transfer: TransferView;
-  task: TaskView;
-}
-
-interface InFlightTaskView {
-  task_id: string;
-  title: string;
-  status: string;
-  owner_actor_id: string | null;
-  owner_name: string | null;
-  assignment_id: string | null;
-  assignment_status: string | null;
-  assignment_version: number | null;
-}
-
 interface LeavePreview {
   room_id: string;
-  in_flight_tasks: InFlightTaskView[];
   pending_deliveries: number;
   claimed_deliveries: number;
   can_leave: boolean;
@@ -111,8 +67,6 @@ interface DissolveSummary {
   dissolved_at: string;
   archived_head_seq: string;
   archive_member_seq: string;
-  cancelled_tasks: number;
-  cancelled_task_ids: string[];
   cancelled_deliveries: number;
   revoked_invitations: number;
   cancelled_join_requests: number;
@@ -146,36 +100,23 @@ async function readRoom(connection: McpConnection, roomId: string): Promise<Room
   return callTool<RoomView>(connection.client, 'network_room_get', { room_id: roomId });
 }
 
-async function createTask(
-  connection: McpConnection,
-  roomId: string,
-  assignee: string,
-  reviewer: string,
-  title: string,
-): Promise<TaskView> {
-  const result = await callTool<TaskResult>(connection.client, 'network_task_create', {
-    request_id: newRequestId('g06_task'),
-    room_id: roomId,
-    title,
-    assignee_actor_id: assignee,
-    reviewer_actor_id: reviewer,
-  });
-  return result.task;
+interface EventRef {
+  seq: string;
+  type: string;
+  ref_id: string | null;
+  metadata: Record<string, unknown>;
 }
 
-async function acceptTask(connection: McpConnection, task: TaskView): Promise<TaskView> {
-  const result = await callTool<TaskResult>(connection.client, 'network_task_accept', {
-    request_id: newRequestId('g06_accept'),
-    task_id: task.task_id,
-    ...(task.assignment ? { assignment_id: task.assignment.assignment_id } : {}),
-    expected_revision: task.revision,
-  });
-  return result.task;
+interface SyncPage {
+  items: EventRef[];
+  head_seq: string;
+  min_seq: string;
 }
 
-async function getTask(connection: McpConnection, taskId: string): Promise<TaskView> {
-  return (await callTool<TaskResult>(connection.client, 'network_task_get', { task_id: taskId }))
-    .task;
+interface HistoryPage {
+  items: { message_id: string; preview: string; created_seq: string }[];
+  snapshot: string;
+  head_seq: string;
 }
 
 async function removeMember(
@@ -305,7 +246,13 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
       200,
     );
 
-    const t1 = await createTask(u1Conn, room1, b1.actor_id, u1.actor_id, 'G06-T01 被移除任务');
+    await callTool(u1Conn.client, 'network_message_send', {
+      request_id: newRequestId('g06_invoke'),
+      client_message_id: `cm_${crypto.randomUUID()}`,
+      room_id: room1,
+      body: 'G06-T01 移除前投递',
+      invoke: [b1.actor_id],
+    });
     await callTool(b1Conn.client, 'network_login', {});
     const b1Inbox = await callTool<InboxPage>(b1Conn.client, 'network_inbox_list', {
       state: 'pending',
@@ -313,7 +260,7 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
     const offerDelivery = b1Inbox.items.find(
       (item) => item.room_id === room1 && item.state === 'pending',
     );
-    check('G06-T01 B1 收到任务 offer 投递', Boolean(offerDelivery));
+    check('G06-T01 B1 收到普通投递', Boolean(offerDelivery));
     const claimed = offerDelivery
       ? await callTool<{
           delivery_id: string;
@@ -326,15 +273,8 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
         })
       : null;
     checkEqual('G06-T01 B1 成功 claim 投递', claimed?.state, 'claimed');
-    const acceptedT1 = await acceptTask(b1Conn, t1);
-    checkEqual('G06-T01 B1 接受任务', acceptedT1.status, 'in_progress');
 
     await removeMember(u1Conn, room1, b1.actor_id);
-    const t1After = await getTask(u1Conn, t1.task_id);
-    checkEqual('G06-T01 移除后任务进入 blocked', t1After.status, 'blocked');
-    checkEqual('G06-T01 移除后任务没有负责人', t1After.owner_actor_id, null);
-    checkEqual('G06-T01 移除后不再有 active assignment', t1After.assignment, null);
-
     await expectToolError(
       'G06-T01 旧 claim 不能继续上报',
       callTool(b1Conn.client, 'network_delivery_report', {
@@ -345,16 +285,6 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
         status: '迟到上报',
       }),
       'STALE_ATTEMPT',
-    );
-    await expectToolError(
-      'G06-T01 被移除者不能提交旧任务',
-      callTool(b1Conn.client, 'network_task_submit', {
-        request_id: newRequestId('g06_submit'),
-        task_id: t1.task_id,
-        summary: '迟到提交',
-        evidence: ['late'],
-      }),
-      'NOT_FOUND',
     );
     checkEqual(
       'G06-T01 旧文件票据在移除后立即 404',
@@ -377,23 +307,24 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
     const b1Me = await callTool<Identity>(b1Conn.client, 'network_me', {});
     checkEqual('G06-T01 被移除者身份不受影响', b1Me.actor_id, b1.actor_id);
 
-    // B2 退群：预览列出在途任务；未确认时拒绝，确认后撤销。
-    const t2 = await createTask(u1Conn, room1, b2.actor_id, u1.actor_id, 'G06-T01 退群任务');
-    const acceptedT2 = await acceptTask(b2Conn, t2);
+    // B2 退群：有待处理投递时预览并要求确认，确认后撤销投递。
+    await callTool(u1Conn.client, 'network_message_send', {
+      request_id: newRequestId('g06_leave_invoke'),
+      client_message_id: `cm_${crypto.randomUUID()}`,
+      room_id: room1,
+      body: 'G06-T01 退群前投递',
+      invoke: [b2.actor_id],
+    });
     const preview = await callTool<LeavePreview>(b2Conn.client, 'network_room_leave_preview', {
       room_id: room1,
     });
     check(
-      'G06-T01 退群预览列出在途任务与状态/负责人',
-      preview.in_flight_tasks.some(
-        (task) =>
-          task.task_id === acceptedT2.task_id &&
-          task.status === 'in_progress' &&
-          task.owner_actor_id === b2.actor_id,
-      ),
+      'G06-T01 退群预览列出待处理投递',
+      preview.pending_deliveries >= 1,
+      preview,
     );
     const leaveError = await expectToolError(
-      'G06-T01 未确认在途任务时退群被拒绝',
+      'G06-T01 未确认待处理投递时退群被拒绝',
       callTool(b2Conn.client, 'network_room_leave', {
         request_id: newRequestId('g06_leave_unconfirmed'),
         room_id: room1,
@@ -403,125 +334,15 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
     checkEqual('G06-T01 拒绝原因标明在途工作', (leaveError.body.details as Record<string, unknown>)?.reason, 'in_flight_work');
     const leaveResult = await callTool<{
       left: true;
-      in_flight_tasks: InFlightTaskView[];
+      pending_deliveries: number;
+      claimed_deliveries: number;
     }>(b2Conn.client, 'network_room_leave', {
       request_id: newRequestId('g06_leave'),
       room_id: room1,
       confirm_in_flight: true,
     });
-    check(
-      'G06-T01 确认退群返回被撤销的在途任务',
-      leaveResult.in_flight_tasks.some((task) => task.task_id === acceptedT2.task_id),
-    );
-    const t2After = await getTask(u1Conn, acceptedT2.task_id);
-    checkEqual('G06-T01 退群后任务进入 blocked', t2After.status, 'blocked');
+    checkEqual('G06-T01 确认退群返回被撤销的投递数', leaveResult.left, true);
     await expectToolError('G06-T01 退群后不能读取房间', readRoom(b2Conn, room1), 'NOT_MEMBER');
-
-    // ---------- G06-T02：移除 × D04 接任并发 ----------
-    console.log('  G06-T02 移除与接任并发');
-    const g2 = await createGroup(
-      'G06-T02 并发验收群',
-      [b1, b2],
-      [
-        { connection: b1Conn, identity: b1 },
-        { connection: b2Conn, identity: b2 },
-      ],
-    );
-    const room2 = g2.roomId;
-
-    const proposeTransfer = async (task: TaskView): Promise<TransferProposal> =>
-      callTool<TransferProposal>(u1Conn.client, 'network_task_transfer_propose', {
-        request_id: newRequestId('g06_propose'),
-        task_id: task.task_id,
-        to_actor_id: b2.actor_id,
-        expected_revision: task.revision,
-      });
-
-    const raceOutcomes: string[] = [];
-    for (let index = 0; index < 10; index += 1) {
-      const task = await createTask(u1Conn, room2, b1.actor_id, u1.actor_id, `G06-T02 并发 ${index}`);
-      const accepted = await acceptTask(b1Conn, task);
-      const proposal = await proposeTransfer(accepted);
-      const [removeResult, acceptResult] = await Promise.allSettled([
-        callTool(u1Conn.client, 'network_room_members_update', {
-          request_id: newRequestId('g06_t02_remove'),
-          room_id: room2,
-          remove: [b1.actor_id],
-        }),
-        callTool(b2Conn.client, 'network_task_transfer_accept', {
-          request_id: newRequestId('g06_t02_accept'),
-          transfer_id: proposal.transfer.transfer_id,
-        }),
-      ]);
-      const current = await getTask(u1Conn, accepted.task_id);
-      if (current.owner_actor_id === b2.actor_id) {
-        check(
-          `G06-T02 #${index} 接任先提交时保留唯一新负责人`,
-          current.status === 'in_progress' || current.status === 'blocked',
-          current,
-        );
-        checkEqual(`G06-T02 #${index} 新 assignment 属于 B2`, current.assignment?.owner_actor_id, b2.actor_id);
-        raceOutcomes.push('transfer_won');
-      } else {
-        check(
-          `G06-T02 #${index} 移除先提交时任务明确 blocked`,
-          current.status === 'blocked' && current.owner_actor_id === null && current.assignment === null,
-          current,
-        );
-        if (acceptResult.status === 'rejected') {
-          check(
-            `G06-T02 #${index} 迟到接受失败`,
-            isRejection(acceptResult.reason, ['CONFLICT', 'ASSIGNMENT_STALE', 'VERSION_CONFLICT', 'NOT_MEMBER']),
-            acceptResult.reason,
-          );
-        }
-        raceOutcomes.push('remove_won');
-      }
-      check(
-        `G06-T02 #${index} 绝不保留两个有效执行版本`,
-        current.owner_actor_id !== b1.actor_id,
-        current,
-      );
-      check(`G06-T02 #${index} 移除事务成功`, removeResult.status === 'fulfilled', removeResult);
-      await addMember(u1Conn, room2, b1.actor_id);
-    }
-    check(
-      'G06-T02 并发每一轮都只留下唯一负责人或 blocked',
-      raceOutcomes.length === 10,
-      raceOutcomes,
-    );
-    console.log(`  · G06-T02 实际提交顺序: transfer_won=${raceOutcomes.filter((item) => item === 'transfer_won').length}, remove_won=${raceOutcomes.filter((item) => item === 'remove_won').length}`);
-
-    // 确定性：移除先提交后，旧提议不能接受。
-    const lateTask = await createTask(u1Conn, room2, b1.actor_id, u1.actor_id, 'G06-T02 迟到接受');
-    const lateAccepted = await acceptTask(b1Conn, lateTask);
-    const lateTransfer = await proposeTransfer(lateAccepted);
-    await removeMember(u1Conn, room2, b1.actor_id);
-    await expectToolError(
-      'G06-T02 移除后旧接任提议不能接受',
-      callTool(b2Conn.client, 'network_task_transfer_accept', {
-        request_id: newRequestId('g06_t02_late'),
-        transfer_id: lateTransfer.transfer.transfer_id,
-      }),
-      'CONFLICT',
-    );
-    const lateAfter = await getTask(u1Conn, lateAccepted.task_id);
-    checkEqual('G06-T02 迟到接受后仍明确 blocked', lateAfter.status, 'blocked');
-    await addMember(u1Conn, room2, b1.actor_id);
-
-    // 确定性：接任先提交后，移除旧负责人不改变新指派。
-    const keptTask = await createTask(u1Conn, room2, b1.actor_id, u1.actor_id, 'G06-T02 接任保留');
-    const keptAccepted = await acceptTask(b1Conn, keptTask);
-    const keptTransfer = await proposeTransfer(keptAccepted);
-    await callTool(b2Conn.client, 'network_task_transfer_accept', {
-      request_id: newRequestId('g06_t02_keep_accept'),
-      transfer_id: keptTransfer.transfer.transfer_id,
-    });
-    await removeMember(u1Conn, room2, b1.actor_id);
-    const keptAfter = await getTask(u1Conn, keptAccepted.task_id);
-    checkEqual('G06-T02 先接任则保留 B2 负责人', keptAfter.owner_actor_id, b2.actor_id);
-    checkEqual('G06-T02 先接任则 assignment 属于 B2', keptAfter.assignment?.owner_actor_id, b2.actor_id);
-    check('G06-T02 先接任则任务仍在执行阶段', ['in_progress', 'blocked'].includes(keptAfter.status));
 
     // ---------- G06-T03：解散、归档与写入冻结 ----------
     console.log('  G06-T03 解散与只读归档');
@@ -563,11 +384,13 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
     const b1ArchiveUrl = b1FilesBefore.items.find((item) => item.file_id === archiveFile.fileId)
       ?.download_url;
 
-    const t3a = await createTask(u1Conn, room3, b1.actor_id, u1.actor_id, 'G06-T03 执行中任务');
-    const t3aAccepted = await acceptTask(b1Conn, t3a);
-    const t3b = await createTask(u1Conn, room3, b2.actor_id, u1.actor_id, 'G06-T03 待执行任务');
-    const t3c = await createTask(u1Conn, room3, u1.actor_id, u2.actor_id, 'G06-T03 未指派任务');
-    void t3c;
+    await callTool(u1Conn.client, 'network_message_send', {
+      request_id: newRequestId('g06_t03_invoke'),
+      client_message_id: `cm_${crypto.randomUUID()}`,
+      room_id: room3,
+      body: 'G06-T03 解散前投递',
+      invoke: [b1.actor_id, b2.actor_id],
+    });
     await callTool(u1Conn.client, 'network_room_invite_create', {
       request_id: newRequestId('g06_t03_link'),
       room_id: room3,
@@ -603,10 +426,8 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
       'owner_transfer_required',
     );
 
-    // 先移除 B1：B1 失去归档资格；B1 的任务被 blocked。
+    // 先移除 B1：B1 失去归档资格。
     await removeMember(u1Conn, room3, b1.actor_id);
-    const t3aAfterRemove = await getTask(u1Conn, t3aAccepted.task_id);
-    checkEqual('G06-T03 移除 B1 后任务 blocked', t3aAfterRemove.status, 'blocked');
 
     const headBeforeDissolve = (await readRoom(u1Conn, room3)).room.head_seq;
 
@@ -619,9 +440,13 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
         reason: 'G06 验收解散',
       },
     );
-    check('G06-T03 解散取消至少一个未结束任务', dissolve.dissolve.cancelled_tasks >= 1, dissolve.dissolve);
     check('G06-T03 解散撤销邀请链接', dissolve.dissolve.revoked_invitations >= 1, dissolve.dissolve);
     check('G06-T03 解散撤销 pending 交接', dissolve.dissolve.cancelled_transfers >= 1, dissolve.dissolve);
+    check(
+      'G06-T03 解散输出不再包含旧任务计数字段',
+      !('cancelled_tasks' in dissolve.dissolve) && !('cancelled_task_ids' in dissolve.dissolve),
+      dissolve.dissolve,
+    );
     checkEqual('G06-T03 解散返回房间状态', dissolve.room.status, 'dissolved');
     checkEqual('G06-T03 解散后 read_only', dissolve.room.read_only, true);
     checkEqual('G06-T03 解散后不能再次解散', dissolve.room.can_dissolve, false);
@@ -638,15 +463,6 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
         client_message_id: `cm_${crypto.randomUUID()}`,
         room_id: room3,
         body: '解散后写入',
-      }),
-      'CONFLICT',
-    );
-    await expectToolError(
-      'G06-T03 解散后不能创建任务',
-      callTool(u2Conn.client, 'network_task_create', {
-        request_id: newRequestId('g06_t03_task'),
-        room_id: room3,
-        title: '解散后任务',
       }),
       'CONFLICT',
     );
@@ -751,16 +567,7 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
       200,
     );
 
-    // 所有未结束任务都已取消，保留成果审计。
-    const taskList = await callTool<{ tasks: TaskView[] }>(u1Conn.client, 'network_task_list', {
-      room_id: room3,
-      limit: 100,
-    });
-    check(
-      'G06-T03 解散后所有任务均为 cancelled',
-      taskList.tasks.every((task) => task.status === 'cancelled'),
-      taskList.tasks.map((task) => [task.task_id, task.status]),
-    );
+    // 保留成果与审计。
     const audit = await callTool<{ items: { action: string }[] }>(
       u1Conn.client,
       'network_room_role_history',
@@ -884,7 +691,7 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
     checkEqual('G06-T04 member_removed 携带媒体撤权钩子', removedEvent?.metadata.media_revoke, true);
     check('G06-T04 存在 room_dissolved 事件', Boolean(dissolvedEvent));
     checkEqual('G06-T04 room_dissolved 携带媒体撤权钩子', dissolvedEvent?.metadata.media_revoke, true);
-    check('G06-T04 解散事件包含取消任务摘要', Array.isArray(dissolvedEvent?.metadata.cancelled_task_ids));
+    check('G06-T04 解散事件不再包含旧任务摘要', !('cancelled_task_ids' in (dissolvedEvent?.metadata ?? {})));
     console.log(
       '  · G06-T04 媒体终止未验证：M09 通话模块尚未实现；本任务只提供上述事件钩子，不能声称已终止媒体发布/订阅。',
     );

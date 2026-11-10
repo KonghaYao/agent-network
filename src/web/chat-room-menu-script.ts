@@ -31,7 +31,7 @@ const ROOM_MENU_DISABLED_STATUS = '已停用：该 Agent 不能再执行或接�
 const ROOM_MENU_ENABLED_STATUS = '已启用：该 Agent 可以重新执行与接收投递';
 const ROOM_MENU_DISABLE_CONFIRM =
   '停用后该 Agent 的旧凭据会被拒绝，领取/上报/完成/失败与新投递全部停止；' +
-  '待处理任务不会标记完成。确定继续？';
+  '待处理投递会被取消，不会自动结束任何外部工作。确定继续？';
 const ROOM_MENU_PERMISSION_DENIED = '只有该 Agent 的管理者或受托人可以执行此操作。';
 const ROOM_MENU_REISSUE_CONFIRM =
   '这会注销该 Agent 的旧 token，现有 MCP/SSE/事件连接会失效；新 token 只显示一次。';
@@ -66,15 +66,8 @@ function roomMenuResetStopped() {
   if (panel) panel.hidden = true;
   const summary = document.getElementById('room-menu-stopped-summary');
   if (summary) summary.textContent = '';
-  const list = document.getElementById('room-menu-stopped-tasks');
-  if (list) list.textContent = '';
   const empty = document.getElementById('room-menu-stopped-empty');
   if (empty) empty.hidden = true;
-  const details = document.getElementById('room-menu-stopped-details');
-  if (details) {
-    details.hidden = false;
-    details.open = false;
-  }
 }
 
 function renderRoomMenuStopped(stopped) {
@@ -82,36 +75,15 @@ function renderRoomMenuStopped(stopped) {
   if (!panel || !stopped) return;
   const pending = Math.max(0, Number(stopped.pending_deliveries) || 0);
   const claimed = Math.max(0, Number(stopped.claimed_deliveries) || 0);
-  const tasks = Array.isArray(stopped.open_tasks) ? stopped.open_tasks : [];
   const summary = document.getElementById('room-menu-stopped-summary');
   if (summary) {
     summary.textContent =
-      '待处理投递 ' + pending + ' 条（已领取 ' + claimed + ' 条），未完成任务 ' +
-      tasks.length + ' 个';
-  }
-  const list = document.getElementById('room-menu-stopped-tasks');
-  if (list) {
-    list.textContent = '';
-    for (const task of tasks) {
-      const item = document.createElement('li');
-      const description = task && task.description ? String(task.description) : '未命名任务';
-      const status = task && task.status === 'claimed' ? '已领取' : '待领取';
-      item.textContent = status + '：' + description;
-      list.appendChild(item);
-    }
-  }
-  const details = document.getElementById('room-menu-stopped-details');
-  if (details) {
-    details.hidden = tasks.length === 0;
-    details.open = false;
+      '待处理投递 ' + pending + ' 条（已领取 ' + claimed + ' 条）';
   }
   const empty = document.getElementById('room-menu-stopped-empty');
   if (empty) {
-    empty.textContent =
-      pending === 0 && claimed === 0 && tasks.length === 0
-        ? '没有待处理投递或未完成任务'
-        : '没有未完成任务';
-    empty.hidden = tasks.length > 0;
+    empty.textContent = pending === 0 && claimed === 0 ? '没有待处理投递' : '';
+    empty.hidden = pending > 0 || claimed > 0;
   }
   panel.hidden = false;
 }

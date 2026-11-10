@@ -280,6 +280,7 @@ async function materialize(
       created_at: String(row.created_at),
       reply_to: row.reply_to,
       root_id: row.root_id,
+      task_root_id: row.task_root_id,
       hop: row.hop,
       delivery_states: summary?.states ?? {},
       mentions: mentions.get(row.message_id) ?? [],

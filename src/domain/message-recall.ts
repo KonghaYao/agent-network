@@ -32,9 +32,7 @@ export async function messageRecall(db: D1Database, principal: Principal, input:
     const age = nowMs() - message.created_at;
     if (age > LIMITS.messageRecallWindowMs) throw new BusinessError('CONFLICT', '消息已超过撤回时间');
     const delivery = await db.prepare('SELECT 1 AS yes FROM deliveries WHERE message_id = ? LIMIT 1').bind(message.message_id).first();
-    if (delivery) throw new BusinessError('CONFLICT', '包含执行投递的消息不能撤回；请单独取消任务');
-    const task = await db.prepare('SELECT 1 AS yes FROM tasks t LEFT JOIN task_cards c ON c.task_id = t.task_id WHERE t.source_message_id = ? OR c.message_id = ? LIMIT 1').bind(message.message_id, message.message_id).first();
-    if (task) throw new BusinessError('CONFLICT', '任务引用的消息不能撤回；请单独取消任务');
+    if (delivery) throw new BusinessError('CONFLICT', '包含执行投递的消息不能撤回；请单独取消投递');
   }
   const eventKey = `message_recalled:${message.message_id}`;
   const bodyHash = await sha256Hex(message.body);
@@ -51,8 +49,7 @@ export async function messageRecall(db: D1Database, principal: Principal, input:
         WHERE m.message_id = ? AND m.sender_id = ?
           AND (r.kind = 'direct' OR r.member_history_policy = 'full' OR m.created_seq >= rm.joined_seq)
           AND ( (m.body = '' AND m.preview = '${TOMBSTONE}') OR (m.body <> '' AND m.created_at >= ?
-          AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.message_id = m.message_id)
-          AND NOT EXISTS (SELECT 1 FROM tasks t LEFT JOIN task_cards c ON c.task_id = t.task_id WHERE t.source_message_id = m.message_id OR c.message_id = m.message_id)) )
+          AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.message_id = m.message_id)) )
       )`)).bind(actor, message.message_id, actor, at - LIMITS.messageRecallWindowMs),
       db.prepare("UPDATE messages SET body = '', body_bytes = 0, preview = ? WHERE message_id = ? AND body <> ''").bind(TOMBSTONE, message.message_id),
       db.prepare(`INSERT INTO events (scope_kind, scope_id, event_type, ref_id, metadata, event_key, created_at)

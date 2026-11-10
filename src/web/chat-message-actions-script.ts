@@ -118,6 +118,14 @@ function openMessageMenu(node, x, y) {
     } catch (error) { if (isActiveRoom(sourceRoom, sourceEpoch)) showToast(error.message || '复制失败'); }
   }));
   if (room && !room.read_only) menu.append(messageActionButton('引用', function () { quoteMessage(item); }));
+  // 消息式 Task：直接调用工具，不弹创建表单；已是起点时提供取消入口。
+  if (roomCanUseTaskAction()) {
+    const markTask = item.task_root_id !== item.message_id;
+    menu.append(messageActionButton(
+      taskActionLabel(item),
+      function () { updateMessageTask(item, markTask); }
+    ));
+  }
   menu.append(messageActionButton('转发', function () { openMessageForward(item); }));
   if (identity && identity.kind === 'human' && item.sender_id === identity.actor_id && room && !room.read_only) {
     menu.append(messageActionButton('撤回', async function () {

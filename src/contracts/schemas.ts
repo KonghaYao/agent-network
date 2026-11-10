@@ -436,14 +436,13 @@ export const roomOwnerTransferCancelSchema = z.object({
   expected_version: z.number().int().positive(),
 });
 
-/** 群主设置普通成员发言/邀请/任务/历史/审批/@所有人策略。 */
+/** 群主设置普通成员发言/邀请/历史/审批/@所有人策略。 */
 export const roomPolicySetSchema = z
   .object({
     request_id: requestId,
     room_id: id(),
     member_message_policy: groupPolicy.optional(),
     member_invite_policy: groupPolicy.optional(),
-    member_task_policy: groupPolicy.optional(),
     /** `from_join`（默认）只可见当前加入后；`full` 由群主显式开启。 */
     member_history_policy: groupHistoryPolicy.optional(),
     /** `approval` 由 G02 的邀请接受路径强制执行；G07 持久化并返回。 */
@@ -458,7 +457,6 @@ export const roomPolicySetSchema = z
     (value) =>
       value.member_message_policy !== undefined ||
       value.member_invite_policy !== undefined ||
-      value.member_task_policy !== undefined ||
       value.member_history_policy !== undefined ||
       value.member_join_policy !== undefined ||
       value.member_profile_policy !== undefined ||
@@ -598,6 +596,8 @@ export const messageSendSchema = z.object({
   /** 显式提及的人类成员；数量上限在领域层校验，超过时返回 INVALID_ARGUMENT。 */
   mentions: z.array(id()).optional(),
   reply_to: id().optional(),
+  /** 显式归属的消息式 Task 起点；省略时按父消息继承。 */
+  task_root_id: id().optional(),
   claim: z
     .object({ delivery_id: id(), attempt: z.number().int().nonnegative(), claim_id: id() })
     .optional(),
@@ -614,6 +614,43 @@ export const messageSendStatusSchema = z.object({
     .array(id(128))
     .min(1)
     .max(LIMITS.messageSendStatusMax),
+});
+
+/** 消息式 Task：把任意可见消息标记为聚合起点。 */
+export const messageTaskMarkSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  message_id: id(),
+});
+
+/** 消息式 Task：取消起点标记，只撤销聚合入口，不删除消息。 */
+export const messageTaskUnmarkSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  message_id: id(),
+});
+
+/** 批量摘要；未标记或当前不可见的根由服务端省略。 */
+export const messageTaskSummariesSchema = z.object({
+  room_id: id(),
+  root_message_ids: z.array(id()).min(1).max(LIMITS.taskSummaryRootsMax),
+});
+
+/** Trace 分页；cursor 优先于 focus_message_id，二者可同时传。 */
+export const messageTaskTraceSchema = z.object({
+  room_id: id(),
+  root_message_id: id(),
+  cursor,
+  focus_message_id: id().optional(),
+  limit: z.number().int().min(1).max(LIMITS.taskTracePageMax).optional(),
+});
+
+/** 按起点聚合的 Task 搜索；普通 network_message_search 契约不变。 */
+export const messageTaskSearchSchema = z.object({
+  room_id: id(),
+  query: z.string().trim().min(1).max(LIMITS.messageSearchQueryMax),
+  limit: z.number().int().min(1).max(LIMITS.taskSearchPageMax).optional(),
+  cursor: z.string().min(1).max(LIMITS.messageSearchCursorMax).optional(),
 });
 
 export const historyListSchema = z.object({
@@ -724,14 +761,12 @@ export const artifactSubmitSchema = z.object({
   request_id: requestId,
   room_id: id(),
   file_id: fileId,
-  task_id: id().optional(),
   version: z.number().int().min(1).max(LIMITS.artifactVersionMax).optional(),
   summary: z.string().trim().max(LIMITS.artifactSummaryBytes).optional(),
 });
 
 export const artifactListSchema = z.object({
   room_id: id(),
-  task_id: id().optional(),
   cursor,
   limit: z.number().int().min(1).max(LIMITS.artifactPageMax).optional(),
 });
@@ -748,434 +783,6 @@ export const roomMonitorSetSchema = z.object({
   request_id: requestId,
   room_id: id(),
   url: z.string().trim().max(LIMITS.roomMonitorUrlMax).nullable(),
-});
-
-/**
- * 任务工作流：短标题与受控长正文分离。
- *
- * Zod 的 max 按 UTF-16 码元/字符计，标题最多放宽到 2 倍字符上限；最终按
- * Unicode 码点、UTF-8 字节与控制字符在领域层校验。
- */
-const taskTitle = z.string().trim().min(1).max(LIMITS.taskTitleMax * 2);
-const taskBodyText = z.string().max(LIMITS.taskDescriptionBytes);
-
-export const taskCreateSchema = z.object({
-  request_id: requestId,
-  room_id: id(),
-  title: taskTitle,
-  description: taskBodyText.optional(),
-  acceptance_criteria: taskBodyText.optional(),
-  source_message_id: id().optional(),
-  assignee_actor_id: id().optional(),
-  reviewer_actor_id: id().optional(),
-  /** 追加工作时关联已 accepted/cancelled 的同房间父任务。 */
-  parent_task_id: id().optional(),
-  /** 可选同房间关联任务，只表达关系。 */
-  related_task_id: id().optional(),
-  due_at: z.iso.datetime({ offset: true }).optional(),
-  attachment_file_ids: z.array(id()).max(LIMITS.taskAttachmentsMax).optional(),
-});
-
-export const taskGetSchema = z.object({ task_id: id() });
-
-export const taskListSchema = z.object({
-  room_id: id().optional(),
-  scope: z.enum(['room', 'mine']).optional(),
-  status: z
-    .enum([
-      'unassigned',
-      'offered',
-      'in_progress',
-      'blocked',
-      'submitted',
-      'accepted',
-      'failed',
-      'cancelled',
-      'legacy_completed',
-    ])
-    .optional(),
-  limit: z.number().int().min(1).max(LIMITS.taskListMax).optional(),
-});
-
-export const taskSummarySchema = z.object({
-  room_ids: z.array(id()).min(1).max(LIMITS.taskLookupMax).optional(),
-});
-
-export const taskOfferSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  assignee_actor_id: id(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-/**
- * 接手指定 offer：`assignment_id` 缺失时使用任务当前 assignment；
- * `expected_revision` 用于迟到接受不覆盖新指派，服务端在事务内再校验一次。
- */
-export const taskAcceptSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  assignment_id: id().optional(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-export const taskDeclineSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  assignment_id: id().optional(),
-  expected_revision: z.number().int().min(1).optional(),
-  reason: z.string().trim().max(LIMITS.taskCancelReasonBytes).optional(),
-});
-
-export const taskClaimSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-export const taskCancelSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  reason: z.string().trim().min(1).max(LIMITS.taskCancelReasonBytes),
-  /**
-   * 操作者声明的外部执行停止状态；省略时进行中/受阻记为 unknown，其余
-   * 状态记为 not_required。服务端不会把取消本身当成已确认停止。
-   */
-  external_stop_status: z
-    .enum(['confirmed', 'unknown', 'not_required'])
-    .optional(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-/**
- * D08 显式重试/重派失败任务：新原因、新 revision；指定 assignee 时生成
- * 新 assignment_version，否则回到 unassigned。
- */
-export const taskRetrySchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  reason: z.string().trim().min(1).max(LIMITS.taskRetryReasonBytes),
-  assignee_actor_id: id().optional(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-/**
- * D08 标记外部执行结果未知：任务进入 blocked + execution_unknown，
- * action_id 在同一任务内稳定去重；不会自动重跑外部步骤。
- */
-export const taskExecutionUnknownSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  action_id: id(LIMITS.taskExternalActionIdBytes),
-  reason: z.string().trim().min(1).max(LIMITS.taskRecoveryReasonBytes),
-  assignment_id: id().optional(),
-  assignment_version: z.number().int().min(1).optional(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-/**
- * D08 记录外部动作对账结论：confirmed/not_executed 恢复 in_progress，
- * rejected 保持 blocked；证据只存 task_external_actions。
- */
-export const taskExecutionResolveSchema = z.object({
-  request_id: requestId,
-  task_id: id().optional(),
-  action_id: id(LIMITS.taskExternalActionIdBytes),
-  outcome: z.enum(['confirmed', 'not_executed', 'rejected']),
-  evidence: z.string().trim().min(1).max(LIMITS.taskRecoveryEvidenceBytes),
-  assignment_id: id().optional(),
-  assignment_version: z.number().int().min(1).optional(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-/**
- * 普通进度上报：note 与 percent 至少一项，领域层还会按 UTF-8 字节复核。
- * assignment_id/version 可选；传入时服务端必须与当前 active assignment 一致。
- */
-export const taskProgressSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  note: z.string().max(LIMITS.taskProgressNoteBytes).optional(),
-  percent: z.number().int().min(0).max(100).optional(),
-  assignment_id: id().optional(),
-  assignment_version: z.number().int().min(1).optional(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-export const taskBlockSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  reason: z.string().trim().min(1).max(LIMITS.taskBlockReasonBytes),
-  assignment_id: id().optional(),
-  assignment_version: z.number().int().min(1).optional(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-export const taskResumeSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  note: z.string().max(LIMITS.taskProgressNoteBytes).optional(),
-  assignment_id: id().optional(),
-  assignment_version: z.number().int().min(1).optional(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-/**
- * 发起任务交接：当前负责人、任务创建者或群 owner/管理员可用。
- *
- * 交接只形成待确认提议；目标接受前原负责人责任不变。
- */
-export const taskTransferProposeSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  to_actor_id: id(),
-  note: z.string().max(LIMITS.taskProgressNoteBytes).optional(),
-  assignment_id: id().optional(),
-  assignment_version: z.number().int().min(1).optional(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-/**
- * 接受交接：只有提议目标可调用。
- *
- * 旧 assignment 的版本也参与 CAS，避免基于旧执行资格的迟到接受。
- */
-export const taskTransferAcceptSchema = z.object({
-  request_id: requestId,
-  transfer_id: id(),
-  expected_revision: z.number().int().min(1).optional(),
-  from_assignment_version: z.number().int().min(1).optional(),
-});
-
-export const taskTransferRejectSchema = z.object({
-  request_id: requestId,
-  transfer_id: id(),
-  reason: z.string().trim().max(LIMITS.taskCancelReasonBytes).optional(),
-});
-
-export const taskTransferCancelSchema = z.object({
-  request_id: requestId,
-  transfer_id: id(),
-  reason: z.string().trim().max(LIMITS.taskCancelReasonBytes).optional(),
-});
-
-export const taskTransferGetSchema = z.object({
-  transfer_id: id(),
-});
-
-/** 交接列表：按任务或按“与我相关”读取，默认只返回仍待处理的提议。 */
-export const taskTransferListSchema = z.object({
-  task_id: id().optional(),
-  scope: z.enum(['task', 'mine']).optional(),
-  status: z
-    .enum(['pending', 'accepted', 'rejected', 'cancelled', 'expired'])
-    .optional(),
-  limit: z.number().int().min(1).max(LIMITS.taskTransferListMax).optional(),
-});
-
-/**
- * 提交成果：只接受当前 active assignment 的负责人，任务必须处于 in_progress。
- *
- * materials 引用已绑定到同一房间的文件；服务端在事务内重新读取字节身份并冻结
- * sha256/size/mime，不信任客户端传入的校验值。links 只记录目标版本/摘要与
- * 提交者声明的可用性，服务端不抓取外链；可访问不等于验收通过。
- */
-const taskSubmissionLink = z.object({
-  url: z.string().trim().min(1).max(LIMITS.taskSubmissionLinkUrlBytes),
-  title: z.string().trim().max(LIMITS.taskSubmissionLinkTitleBytes).optional(),
-  version: z.string().trim().max(LIMITS.taskSubmissionLinkVersionBytes).optional(),
-  digest: z.string().trim().max(LIMITS.taskSubmissionLinkDigestBytes).optional(),
-  availability: z.enum(['unverified', 'declared_reachable']).optional(),
-});
-
-const taskSubmissionMaterial = z.object({
-  file_id: id(),
-  label: z.string().trim().max(LIMITS.taskSubmissionMaterialLabelBytes).optional(),
-});
-
-export const taskSubmitSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  summary: z.string().max(LIMITS.taskSubmissionSummaryBytes * 2),
-  materials: z.array(taskSubmissionMaterial).max(LIMITS.taskSubmissionMaterialsMax).optional(),
-  links: z.array(taskSubmissionLink).max(LIMITS.taskSubmissionLinksMax).optional(),
-  commit_sha: z.string().trim().max(LIMITS.taskSubmissionCommitShaMax).optional(),
-  evidence: z
-    .array(z.string().max(LIMITS.taskSubmissionEvidenceBytes * 2))
-    .max(LIMITS.taskSubmissionEvidenceMax)
-    .optional(),
-  known_limits: z.string().max(LIMITS.taskSubmissionKnownLimitsBytes * 2).optional(),
-  assignment_id: id().optional(),
-  assignment_version: z.number().int().min(1).optional(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-/** 读取指定任务的提交版本；省略 version 时返回最新版本。 */
-export const taskSubmissionGetSchema = z.object({
-  task_id: id(),
-  version: z.number().int().min(1).optional(),
-});
-
-/** 提交历史按版本倒序；只返回当前可见任务的历史。 */
-export const taskSubmissionListSchema = z.object({
-  task_id: id(),
-  limit: z.number().int().min(1).max(LIMITS.taskSubmissionListMax).optional(),
-});
-
-/**
- * D06 最小退回入口：指定验收人对当前 pending 版本退回。
- *
- * D07 会在此语义上补齐完整验收授权与 accept；本工具不实现通过，避免留下
- * 两个互相冲突的退回入口。
- */
-export const taskSubmissionReturnSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  submission_id: id(),
-  /** D07 后可选绑定版本；新工具 `network_task_review_return` 要求必填。 */
-  version: z.number().int().min(1).optional(),
-  reason: z.string().trim().min(1).max(LIMITS.taskSubmissionReturnReasonBytes * 2),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-/**
- * D07 验收通过：必须绑定具体 submission_id 与 version，并逐项核对
- * acceptance_criteria。`passed=false` 的记录可以保存核对结果，但事务会拒绝
- * 把任务转为 accepted；退回应使用 `network_task_review_return`。
- */
-export const taskReviewChecklistItemSchema = z.object({
-  item: z.string().trim().min(1).max(LIMITS.taskReviewChecklistItemBytes * 2),
-  passed: z.boolean(),
-  note: z.string().trim().max(LIMITS.taskReviewChecklistNoteBytes * 2).optional(),
-});
-
-export const taskReviewAcceptSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  submission_id: id(),
-  version: z.number().int().min(1),
-  checklist: z
-    .array(taskReviewChecklistItemSchema)
-    .min(1)
-    .max(LIMITS.taskReviewChecklistMax),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-/** D07 退回：绑定 submission_id 与 version，reason 必填且需可行动。 */
-export const taskReviewReturnSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  submission_id: id(),
-  version: z.number().int().min(1),
-  reason: z.string().trim().min(1).max(LIMITS.taskSubmissionReturnReasonBytes * 2),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-/**
- * 指定/替换任务验收人：创建者、群 owner 或管理员可调用。不能把当前负责人
- * 设为验收人，也不能把验收人设为 pending 成果的提交人。
- */
-export const taskReviewerSetSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  reviewer_actor_id: id(),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-const taskHandoffItemKind = z.enum(['message', 'file', 'branch', 'commit', 'test', 'submission']);
-
-/**
- * 交接包引用：只保存显式引用与创建者提供的短标签/摘要。
- *
- * `source_room_id` 用于跨范围材料；文件/消息正文不会复制进包。跨范围私有
- * 材料默认 `authorized=false`，必须由能访问源范围的身份显式授权。
- */
-export const taskHandoffItemInputSchema = z.object({
-  kind: taskHandoffItemKind,
-  ref: z.string().trim().min(1).max(LIMITS.taskHandoffReferenceBytes * 2),
-  label: z.string().trim().max(LIMITS.taskHandoffItemLabelBytes * 2).optional(),
-  summary: z.string().max(LIMITS.taskHandoffItemSummaryBytes * 2).optional(),
-  source_room_id: id().optional(),
-  required: z.boolean().optional(),
-});
-
-/**
- * 生成交接包版本：当前 active assignment 的负责人调用。
- *
- * 每次调用生成 `version = max + 1`；旧版本原样保留。包只描述工作状态与
- * 引用，不授予任何额外权限，也不改变任务状态、所有者或 revision。
- */
-export const taskHandoffPackCreateSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  assignment_id: id(),
-  assignment_version: z.number().int().min(1),
-  expected_revision: z.number().int().min(1).optional(),
-  goal: z.string().max(LIMITS.taskHandoffGoalBytes * 2),
-  completed: z
-    .array(z.string().max(LIMITS.taskHandoffSectionItemBytes * 2))
-    .max(LIMITS.taskHandoffSectionItemsMax)
-    .optional(),
-  current_result: z.object({
-    summary: z.string().max(LIMITS.taskHandoffResultSummaryBytes * 2),
-    submission_id: id().optional(),
-    submission_version: z.number().int().min(1).optional(),
-  }),
-  unresolved: z
-    .array(z.string().max(LIMITS.taskHandoffSectionItemBytes * 2))
-    .max(LIMITS.taskHandoffSectionItemsMax)
-    .optional(),
-  next_steps: z
-    .array(z.string().max(LIMITS.taskHandoffSectionItemBytes * 2))
-    .max(LIMITS.taskHandoffSectionItemsMax)
-    .optional(),
-  items: z.array(taskHandoffItemInputSchema).max(LIMITS.taskHandoffItemsMax).optional(),
-  /** 可选绑定待接受提议；便于读取时对齐目标与 from_assignment。 */
-  transfer_id: id().optional(),
-  /** 源范围（通常是任务房间之外的群）；仅记录，不读取其历史。 */
-  source_room_id: id().optional(),
-});
-
-/** 读取交接包：省略 pack_id/version 时返回最新版本。 */
-export const taskHandoffPackGetSchema = z.object({
-  task_id: id(),
-  pack_id: id().optional(),
-  version: z.number().int().min(1).optional(),
-});
-
-/**
- * 显式授权/撤回跨范围私有材料。
- *
- * grant 必须由仍能访问源范围且能管理该材料的身份执行；revoke 由当前负责人、
- * 包创建者或任务管理者执行。授权不改变任务状态或 revision。
- */
-export const taskHandoffAuthorizeSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  pack_id: id(),
-  item_id: id(),
-  action: z.enum(['grant', 'revoke']),
-  note: z.string().max(LIMITS.taskHandoffNoteBytes * 2).optional(),
-  assignment_id: id(),
-  assignment_version: z.number().int().min(1),
-  expected_revision: z.number().int().min(1).optional(),
-});
-
-/**
- * 接任者请求补充上下文：不改变原责任、任务状态或 revision。
- *
- * 当前负责人用 assignment_id/assignment_version 证明执行资格；待接受提议的
- * 目标用 transfer_id 证明接任资格，二选一。
- */
-export const taskHandoffRequestMoreSchema = z.object({
-  request_id: requestId,
-  task_id: id(),
-  pack_id: id().optional(),
-  transfer_id: id().optional(),
-  note: z.string().max(LIMITS.taskHandoffNoteBytes * 2),
-  assignment_id: id().optional(),
-  assignment_version: z.number().int().min(1).optional(),
-  expected_revision: z.number().int().min(1).optional(),
 });
 
 /**
@@ -1309,37 +916,4 @@ export type ArtifactListInput = z.infer<typeof artifactListSchema>;
 export type ArtifactReleaseInput = z.infer<typeof artifactReleaseSchema>;
 export type RoomMonitorGetInput = z.infer<typeof roomMonitorGetSchema>;
 export type RoomMonitorSetInput = z.infer<typeof roomMonitorSetSchema>;
-export type TaskCreateInput = z.infer<typeof taskCreateSchema>;
-export type TaskGetInput = z.infer<typeof taskGetSchema>;
-export type TaskListInput = z.infer<typeof taskListSchema>;
-export type TaskSummaryInput = z.infer<typeof taskSummarySchema>;
-export type TaskOfferInput = z.infer<typeof taskOfferSchema>;
-export type TaskAcceptInput = z.infer<typeof taskAcceptSchema>;
-export type TaskDeclineInput = z.infer<typeof taskDeclineSchema>;
-export type TaskClaimInput = z.infer<typeof taskClaimSchema>;
-export type TaskCancelInput = z.infer<typeof taskCancelSchema>;
-export type TaskRetryInput = z.infer<typeof taskRetrySchema>;
-export type TaskExecutionUnknownInput = z.infer<typeof taskExecutionUnknownSchema>;
-export type TaskExecutionResolveInput = z.infer<typeof taskExecutionResolveSchema>;
-export type TaskProgressInput = z.infer<typeof taskProgressSchema>;
-export type TaskBlockInput = z.infer<typeof taskBlockSchema>;
-export type TaskResumeInput = z.infer<typeof taskResumeSchema>;
-export type TaskTransferProposeInput = z.infer<typeof taskTransferProposeSchema>;
-export type TaskTransferAcceptInput = z.infer<typeof taskTransferAcceptSchema>;
-export type TaskTransferRejectInput = z.infer<typeof taskTransferRejectSchema>;
-export type TaskTransferCancelInput = z.infer<typeof taskTransferCancelSchema>;
-export type TaskTransferGetInput = z.infer<typeof taskTransferGetSchema>;
-export type TaskTransferListInput = z.infer<typeof taskTransferListSchema>;
-export type TaskSubmitInput = z.infer<typeof taskSubmitSchema>;
-export type TaskSubmissionGetInput = z.infer<typeof taskSubmissionGetSchema>;
-export type TaskSubmissionListInput = z.infer<typeof taskSubmissionListSchema>;
-export type TaskSubmissionReturnInput = z.infer<typeof taskSubmissionReturnSchema>;
-export type TaskReviewAcceptInput = z.infer<typeof taskReviewAcceptSchema>;
-export type TaskReviewReturnInput = z.infer<typeof taskReviewReturnSchema>;
-export type TaskReviewerSetInput = z.infer<typeof taskReviewerSetSchema>;
-export type TaskHandoffItemInput = z.infer<typeof taskHandoffItemInputSchema>;
-export type TaskHandoffPackCreateInput = z.infer<typeof taskHandoffPackCreateSchema>;
-export type TaskHandoffPackGetInput = z.infer<typeof taskHandoffPackGetSchema>;
-export type TaskHandoffAuthorizeInput = z.infer<typeof taskHandoffAuthorizeSchema>;
-export type TaskHandoffRequestMoreInput = z.infer<typeof taskHandoffRequestMoreSchema>;
 export type FeedbackCreateInput = z.infer<typeof feedbackCreateSchema>;

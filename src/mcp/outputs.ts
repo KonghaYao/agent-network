@@ -39,6 +39,8 @@ export const messageSchema = messagePreviewSchema.extend({
   room_id: z.string(),
   reply_to: z.string().nullable(),
   root_id: z.string().nullable(),
+  /** 消息式 Task 归属；null 表示普通消息，起点自身等于 message_id。 */
+  task_root_id: z.string().nullable(),
   hop: z.number(),
   delivery_states: z.record(z.string(), z.number()),
   /** 该消息的提及集合；human 只产生个人提醒，agent 才可能有 delivery。 */
@@ -91,7 +93,6 @@ export const authorizationSnapshotSchema = z.object({
 
 const roomCapabilitiesSchema = z.object({
   send_message: z.boolean(),
-  create_task: z.boolean(),
   invite_members: z.boolean(),
   remove_members: z.boolean(),
   manage_admins: z.boolean(),
@@ -122,7 +123,6 @@ export const roomSchema = z.object({
   policies: z.object({
     member_message: groupPolicySchema,
     member_invite: groupPolicySchema,
-    member_task: groupPolicySchema,
     member_history: groupHistoryPolicySchema,
     member_join: groupJoinPolicySchema,
     member_profile: groupPolicySchema,
@@ -203,7 +203,6 @@ export const roomCreateResultSchema = roomDetailSchema.extend({
 export const roomPolicyImpactSchema = z.object({
   history_policy: groupHistoryPolicySchema,
   affected_members: z.number(),
-  hidden_tasks: z.number(),
   hidden_files: z.number(),
   material_loss: z.boolean(),
   message: z.string(),
@@ -539,6 +538,99 @@ export const historyPageSchema = z.object({
   timeline_resume_cursor: z.string().optional(),
 });
 
+/** 消息式 Task 的参与者：只统计集合内 Agent 作者，按首次参与顺序去重。 */
+export const taskSummaryParticipantSchema = z.object({
+  actor_id: z.string(),
+  name: z.string(),
+  kind: z.literal('agent'),
+  first_seq: z.string(),
+});
+
+/** 摘要只含预览、参与者与计数；正文仍走 network_message_read。 */
+export const taskSummaryViewSchema = z.object({
+  root_message_id: z.string(),
+  room_id: z.string(),
+  preview: z.string(),
+  root_sender_id: z.string(),
+  root_sender_name: z.string().nullable(),
+  root_sender_kind: z.enum(['human', 'agent']).nullable(),
+  root_created_at: z.string(),
+  root_created_seq: z.string(),
+  participants: z.array(taskSummaryParticipantSchema),
+  participant_count: z.number(),
+  message_count: z.number(),
+  can_unmark: z.boolean(),
+});
+
+export const taskSummariesResultSchema = z.object({
+  items: z.array(taskSummaryViewSchema),
+});
+
+export const taskMarkResultSchema = z.object({
+  room_id: z.string(),
+  message_id: z.string(),
+  task_root_id: z.string(),
+  marked: z.literal(true),
+});
+
+export const taskUnmarkResultSchema = z.object({
+  room_id: z.string(),
+  message_id: z.string(),
+  task_root_id: z.null(),
+  marked: z.literal(false),
+});
+
+export const taskTraceItemSchema = z.object({
+  message_id: z.string(),
+  sender_id: z.string(),
+  sender_name: z.string().nullable(),
+  sender_kind: z.enum(['human', 'agent']).nullable(),
+  created_seq: z.string(),
+  created_at: z.string(),
+  preview: z.string(),
+  body_bytes: z.number(),
+  recalled: z.boolean(),
+  role: z.enum(['root', 'member', 'reference']),
+  reply_to: z.string().nullable(),
+  referenced_by: z.string().nullable(),
+  has_unavailable_reference: z.boolean(),
+});
+
+export const taskTraceResultSchema = z.object({
+  root_message_id: z.string(),
+  items: z.array(taskTraceItemSchema),
+  next_cursor: z.string().nullable(),
+  prev_cursor: z.string().nullable(),
+  has_more_before: z.boolean(),
+  has_more_after: z.boolean(),
+  message_count: z.number(),
+  focus_message_id: z.string().nullable(),
+  authorization: authorizationSnapshotSchema,
+});
+
+export const taskSearchMatchSchema = z.object({
+  message_id: z.string(),
+  snippet: z.string(),
+  created_seq: z.string(),
+});
+
+/** 一个起点只出现一次；matches 只保留最近命中，完整数量用 hit_count。 */
+export const taskSearchItemSchema = z.object({
+  task: taskSummaryViewSchema,
+  hit_count: z.number(),
+  matches: z.array(taskSearchMatchSchema),
+});
+
+export const taskSearchResultSchema = z.object({
+  items: z.array(taskSearchItemSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+  snapshot: z.string(),
+  authorization: authorizationSnapshotSchema,
+  /** 扫描达到上限时结果不完整；此时不再返回 next_cursor。 */
+  truncated: z.boolean(),
+});
+
 export const inboxPageSchema = z.object({
   items: z.array(deliverySchema),
   next_cursor: z.string().nullable(),
@@ -761,20 +853,10 @@ export const delegationViewSchema = z.object({
   expires_at: z.string().nullable(),
 });
 
-export const openTaskSchema = z.object({
-  task_id: z.string(),
-  room_id: z.string(),
-  description: z.string(),
-  status: z.enum(['pending', 'claimed']),
-  updated_at: z.string(),
-});
-
 export const pendingWorkSchema = z.object({
   pending_deliveries: z.number(),
   claimed_deliveries: z.number(),
   cancelled_deliveries: z.number(),
-  open_tasks: z.array(openTaskSchema),
-  open_task_count: z.number(),
 });
 
 export const agentManagementGetResultSchema = z.object({
@@ -936,7 +1018,6 @@ export const agentTransferContextSchema = z.object({
   snapshot: z.object({
     room_count: z.number(),
     delegation_count: z.number(),
-    open_task_count: z.number(),
     pending_deliveries: z.number(),
     claimed_deliveries: z.number(),
   }),
@@ -946,8 +1027,6 @@ export const agentTransferContextSchema = z.object({
       permission_version: z.number(),
       revoked_delegations: z.number(),
       revoked_credentials: z.number(),
-      blocked_task_ids: z.array(z.string()),
-      unassigned_task_ids: z.array(z.string()),
       cancelled_pending_deliveries: z.number(),
       cancelled_claimed_deliveries: z.number(),
     })
@@ -984,8 +1063,6 @@ export const agentTransferAcceptedResultSchema = z.object({
   accepted_at: z.string(),
   revoked_delegations: z.number(),
   revoked_credentials: z.number(),
-  blocked_task_ids: z.array(z.string()),
-  unassigned_task_ids: z.array(z.string()),
   cancelled_pending_deliveries: z.number(),
   cancelled_claimed_deliveries: z.number(),
   /** 只在首次 accept 响应出现；重放与拒绝/取消始终为 null。 */
@@ -1010,21 +1087,12 @@ export const agentTransferListResultSchema = z.object({
   has_more: z.boolean(),
 });
 
-export const taskCountsSchema = z.object({
-  pending: z.number(),
-  claimed: z.number(),
-  done: z.number(),
-  failed: z.number(),
-  total: z.number(),
-});
-
 export const loginResultSchema = z.object({
   actor_id: z.string(),
   online: z.literal(true),
   logged_in_at: z.string(),
   pending_count: z.number(),
   inbox_head_seq: z.string(),
-  task_summary: taskCountsSchema,
 });
 
 export const removedResultSchema = z.object({
@@ -1032,21 +1100,9 @@ export const removedResultSchema = z.object({
   removed: z.literal(true),
 });
 
-export const inFlightTaskSchema = z.object({
-  task_id: z.string(),
-  title: z.string(),
-  status: z.string(),
-  owner_actor_id: z.string().nullable(),
-  owner_name: z.string().nullable(),
-  assignment_id: z.string().nullable(),
-  assignment_status: z.string().nullable(),
-  assignment_version: z.number().nullable(),
-});
-
 export const roomLeavePreviewSchema = z.object({
   room_id: z.string(),
   actor_id: z.string(),
-  in_flight_tasks: z.array(inFlightTaskSchema),
   pending_deliveries: z.number(),
   claimed_deliveries: z.number(),
   can_leave: z.boolean(),
@@ -1059,7 +1115,6 @@ export const roomLeavePreviewSchema = z.object({
 export const leaveResultSchema = z.object({
   room_id: z.string(),
   left: z.literal(true),
-  in_flight_tasks: z.array(inFlightTaskSchema),
   pending_deliveries: z.number(),
   claimed_deliveries: z.number(),
 });
@@ -1069,8 +1124,6 @@ export const roomDissolveSummarySchema = z.object({
   dissolved_at: z.string(),
   archived_head_seq: z.string(),
   archive_member_seq: z.string(),
-  cancelled_tasks: z.number(),
-  cancelled_task_ids: z.array(z.string()),
   cancelled_deliveries: z.number(),
   revoked_invitations: z.number(),
   cancelled_join_requests: z.number(),
@@ -1230,7 +1283,6 @@ export const filePublishResultSchema = z.object({
 export const artifactSchema = z.object({
   artifact_id: z.string(),
   room_id: z.string(),
-  task_id: z.string().nullable(),
   version: z.number(),
   file_id: z.string(),
   summary: z.string(),
@@ -1272,389 +1324,6 @@ export const roomMonitorResultSchema = z.object({
   monitor: roomMonitorSchema.nullable(),
 });
 
-/** D01 任务视图；短标题与受控长正文分离，不包含成员列表或凭据。 */
-export const taskAssignmentViewSchema = z.object({
-  assignment_id: z.string(),
-  assignment_version: z.number(),
-  owner_actor_id: z.string(),
-  owner_name: z.string().nullable(),
-  status: z.enum(['offered', 'active', 'submitted', 'declined', 'revoked', 'expired']),
-  offer_expires_at: z.string().nullable(),
-  delivery_id: z.string().nullable(),
-});
-
-export const taskAttachmentViewSchema = z.object({
-  file_id: z.string(),
-  label: z.string(),
-});
-
-const taskStatusSchema = z.enum([
-  'unassigned',
-  'offered',
-  'in_progress',
-  'blocked',
-  'submitted',
-  'accepted',
-  'failed',
-  'cancelled',
-  'legacy_completed',
-]);
-
-/** 最新进度/阻塞/恢复审计；`tasks.status` 仍是唯一业务权威。 */
-export const taskProgressViewSchema = z.object({
-  progress_id: z.string(),
-  revision: z.number(),
-  prior_status: taskStatusSchema,
-  prior_status_label: z.string(),
-  status: taskStatusSchema,
-  status_label: z.string(),
-  percent: z.number().nullable(),
-  note: z.string(),
-  blocked_reason: z.string().nullable(),
-  actor_id: z.string(),
-  actor_name: z.string(),
-  created_at: z.string(),
-});
-
-/** 任务卡片/列表使用的最新成果版本摘要。 */
-export const taskSubmissionSummaryViewSchema = z.object({
-  submission_id: z.string(),
-  version: z.number(),
-  status: z.enum(['pending', 'accepted', 'returned', 'superseded']),
-  submitted_at: z.string(),
-});
-
-export const taskSchema = z.object({
-  task_id: z.string(),
-  room_id: z.string(),
-  title: z.string(),
-  description: z.string(),
-  acceptance_criteria: z.string(),
-  status: taskStatusSchema,
-  status_label: z.string(),
-  status_hint: z.string(),
-  phase: z.enum(['dispatch', 'execution', 'review', 'closed']),
-  phase_label: z.string(),
-  revision: z.number(),
-  source_message_id: z.string().nullable(),
-  card_message_id: z.string().nullable(),
-  created_by: z.string(),
-  created_by_name: z.string(),
-  owner_actor_id: z.string().nullable(),
-  owner_name: z.string().nullable(),
-  reviewer_actor_id: z.string(),
-  reviewer_name: z.string(),
-  /** 验收人是否仍是 active 成员且未停用；false 时任务保持 submitted，等待显式改派。 */
-  reviewer_available: z.boolean(),
-  due_at: z.string().nullable(),
-  blocked_reason: z.string().nullable(),
-  blocked_at: z.string().nullable(),
-  last_progress_at: z.string().nullable(),
-  progress: taskProgressViewSchema.nullable(),
-  progress_history: z.array(taskProgressViewSchema).optional(),
-  business_authority: z.enum(['native', 'external']),
-  external_binding_id: z.string().nullable(),
-  created_at: z.string(),
-  updated_at: z.string(),
-  accepted_at: z.string().nullable(),
-  cancelled_at: z.string().nullable(),
-  cancel_reason: z.string().nullable(),
-  cancelled_by: z.string().nullable(),
-  cancelled_by_name: z.string().nullable(),
-  external_stop_status: z.enum(['confirmed', 'unknown', 'not_required']).nullable(),
-  parent_task_id: z.string().nullable(),
-  related_task_id: z.string().nullable(),
-  assignment: taskAssignmentViewSchema.nullable(),
-  delivery_ids: z.array(z.string()),
-  attachments: z.array(taskAttachmentViewSchema),
-  current_submission: taskSubmissionSummaryViewSchema.nullable(),
-  can_offer: z.boolean(),
-  can_claim: z.boolean(),
-  can_cancel: z.boolean(),
-  can_accept: z.boolean(),
-  can_decline: z.boolean(),
-  can_report_progress: z.boolean(),
-  can_block: z.boolean(),
-  can_resume: z.boolean(),
-  can_submit: z.boolean(),
-  can_return: z.boolean(),
-  can_accept_review: z.boolean(),
-  can_set_reviewer: z.boolean(),
-  can_retry: z.boolean(),
-  can_report_execution_unknown: z.boolean(),
-  can_resolve_execution: z.boolean(),
-});
-
-export const taskResultSchema = z.object({
-  task: taskSchema,
-  authorization: authorizationSnapshotSchema,
-});
-
-/** D08 外部动作审计；evidence 只随工具结果返回，不写事件正文。 */
-export const taskExternalActionSchema = z.object({
-  action_id: z.string(),
-  task_id: z.string(),
-  intent: z.string(),
-  state: z.enum(['unknown', 'confirmed', 'not_executed', 'rejected']),
-  evidence: z.string(),
-  created_by: z.string(),
-  created_by_name: z.string(),
-  created_at: z.string(),
-  updated_at: z.string(),
-});
-
-export const taskRecoveryResultSchema = z.object({
-  task: taskSchema,
-  action: taskExternalActionSchema,
-  authorization: authorizationSnapshotSchema,
-});
-
-export const taskListResultSchema = z.object({
-  tasks: z.array(taskSchema),
-  next_cursor: z.string().nullable(),
-  has_more: z.boolean(),
-  authorization: authorizationSnapshotSchema.nullable(),
-});
-
-export const taskSubmissionMaterialViewSchema = z.object({
-  file_id: z.string(),
-  label: z.string(),
-  name: z.string(),
-  mime_type: z.string(),
-  size: z.number(),
-  sha256: z.string(),
-  available: z.boolean(),
-});
-
-export const taskSubmissionLinkViewSchema = z.object({
-  url: z.string(),
-  title: z.string().nullable(),
-  version: z.string().nullable(),
-  digest: z.string().nullable(),
-  availability: z.enum(['unverified', 'declared_reachable']),
-});
-
-export const taskReviewChecklistItemViewSchema = z.object({
-  item: z.string(),
-  passed: z.boolean(),
-  note: z.string(),
-});
-
-export const taskSubmissionReviewViewSchema = z.object({
-  reviewer_actor_id: z.string(),
-  reviewer_name: z.string(),
-  decision: z.enum(['accept', 'return']),
-  reason: z.string(),
-  /** accept 的逐项核对快照；return 与旧 review 为空数组。 */
-  checklist: z.array(taskReviewChecklistItemViewSchema),
-  created_at: z.string(),
-});
-
-/** 冻结的提交版本；materials 的 sha256/size/mime 来自提交时的文件元数据。 */
-export const taskSubmissionViewSchema = z.object({
-  submission_id: z.string(),
-  task_id: z.string(),
-  room_id: z.string(),
-  version: z.number(),
-  status: z.enum(['pending', 'accepted', 'returned', 'superseded']),
-  summary: z.string(),
-  materials: z.array(taskSubmissionMaterialViewSchema),
-  links: z.array(taskSubmissionLinkViewSchema),
-  commit_sha: z.string().nullable(),
-  evidence: z.array(z.string()),
-  known_limits: z.string(),
-  assignment_id: z.string(),
-  assignment_version: z.number(),
-  submitted_by: z.string(),
-  submitted_by_name: z.string(),
-  submitted_at: z.string(),
-  reviewed_at: z.string().nullable(),
-  review: taskSubmissionReviewViewSchema.nullable(),
-  is_current: z.boolean(),
-});
-
-export const taskSubmissionResultSchema = z.object({
-  submission: taskSubmissionViewSchema,
-  task: taskSchema,
-  authorization: authorizationSnapshotSchema,
-});
-
-export const taskSubmissionGetResultSchema = z.object({
-  submission: taskSubmissionViewSchema,
-});
-
-export const taskSubmissionListResultSchema = z.object({
-  submissions: z.array(taskSubmissionViewSchema),
-  next_cursor: z.string().nullable(),
-  has_more: z.boolean(),
-});
-
-/** 交接提议；`effective_status` 会把过期未处理的 pending 显示为 expired。 */
-export const taskTransferSchema = z.object({
-  transfer_id: z.string(),
-  task_id: z.string(),
-  room_id: z.string(),
-  task_title: z.string(),
-  task_status: taskStatusSchema,
-  task_revision: z.number(),
-  from_assignment_id: z.string().nullable(),
-  from_assignment_version: z.number().nullable(),
-  from_owner_actor_id: z.string().nullable(),
-  from_owner_name: z.string().nullable(),
-  to_actor_id: z.string(),
-  to_actor_name: z.string(),
-  requested_by: z.string(),
-  requested_by_name: z.string(),
-  status: z.enum(['pending', 'accepted', 'rejected', 'cancelled', 'expired']),
-  effective_status: z.enum(['pending', 'accepted', 'rejected', 'cancelled', 'expired']),
-  expires_at: z.string(),
-  created_at: z.string(),
-  responded_at: z.string().nullable(),
-  responded_by: z.string().nullable(),
-  context: z.record(z.string(), z.unknown()),
-  context_ready: z.boolean(),
-  note: z.string().nullable(),
-  can_accept: z.boolean(),
-  can_reject: z.boolean(),
-  can_cancel: z.boolean(),
-});
-
-export const taskTransferResultSchema = z.object({
-  transfer: taskTransferSchema,
-  task: taskSchema,
-});
-
-export const taskTransferListResultSchema = z.object({
-  transfers: z.array(taskTransferSchema),
-  next_cursor: z.string().nullable(),
-  has_more: z.boolean(),
-});
-
-/** 交接包里的文件引用；URL 只对具备目标房间票据且已授权的读者生成。 */
-export const taskHandoffFileSchema = z.object({
-  file_id: z.string(),
-  name: z.string(),
-  mime_type: z.string(),
-  size: z.number(),
-  sha256: z.string(),
-  available: z.boolean(),
-  public_url: z.string().nullable(),
-  preview_url: z.string().nullable(),
-  download_url: z.string().nullable(),
-});
-
-/** 消息引用只回显预览，不复制完整正文。 */
-export const taskHandoffMessageSchema = z.object({
-  message_id: z.string(),
-  created_at: z.string(),
-  preview: z.string(),
-});
-
-export const taskHandoffSubmissionRefSchema = z.object({
-  submission_id: z.string(),
-  version: z.number(),
-  status: z.enum(['pending', 'accepted', 'returned', 'superseded']),
-});
-
-/** 逐项判定：available 可用、missing 缺失、omitted 未授权/已撤回。 */
-export const taskHandoffItemSchema = z.object({
-  item_id: z.string(),
-  kind: z.enum(['message', 'file', 'branch', 'commit', 'test', 'submission']),
-  ref: z.string(),
-  label: z.string(),
-  summary: z.string().nullable(),
-  source_room_id: z.string().nullable(),
-  source_scope: z.enum(['task_room', 'external']),
-  required: z.boolean(),
-  authorized: z.boolean(),
-  authorized_by: z.string().nullable(),
-  authorized_by_name: z.string().nullable(),
-  authorized_at: z.string().nullable(),
-  revoked_at: z.string().nullable(),
-  note: z.string().nullable(),
-  status: z.enum(['available', 'missing', 'omitted']),
-  reason: z.string().nullable(),
-  verified: z.boolean(),
-  file: taskHandoffFileSchema.nullable(),
-  message: taskHandoffMessageSchema.nullable(),
-  submission: taskHandoffSubmissionRefSchema.nullable(),
-});
-
-export const taskHandoffGapSchema = z.object({
-  item_id: z.string(),
-  kind: z.enum(['message', 'file', 'branch', 'commit', 'test', 'submission']),
-  ref: z.string(),
-  label: z.string(),
-  required: z.boolean(),
-  status: z.enum(['missing', 'omitted']),
-  reason: z.string(),
-});
-
-export const taskHandoffContextRequestSchema = z.object({
-  context_request_id: z.string(),
-  requested_by: z.string(),
-  requested_by_name: z.string(),
-  note: z.string(),
-  created_at: z.string(),
-});
-
-/** 版本化交接包；旧版本原样保留，latest_version 与 version 区分历史与当前。 */
-export const taskHandoffPackSchema = z.object({
-  pack_id: z.string(),
-  task_id: z.string(),
-  room_id: z.string(),
-  version: z.number(),
-  latest_version: z.number(),
-  versions: z.array(z.number()),
-  from_assignment_id: z.string().nullable(),
-  from_assignment_version: z.number(),
-  from_owner_actor_id: z.string().nullable(),
-  from_owner_name: z.string().nullable(),
-  created_by: z.string(),
-  created_by_name: z.string(),
-  goal: z.string(),
-  completed: z.array(z.string()),
-  current_result: z.object({
-    summary: z.string(),
-    submission_id: z.string().nullable(),
-    submission_version: z.number().nullable(),
-    submission_status: z
-      .enum(['pending', 'accepted', 'returned', 'superseded'])
-      .nullable(),
-  }),
-  unresolved: z.array(z.string()),
-  next_steps: z.array(z.string()),
-  source_room_id: z.string().nullable(),
-  created_at: z.string(),
-  items: z.array(taskHandoffItemSchema),
-  missing: z.array(taskHandoffGapSchema),
-  omitted: z.array(taskHandoffGapSchema),
-  required_missing: z.array(z.string()),
-  context_ready: z.boolean(),
-  context_incomplete: z.boolean(),
-  viewer_is_successor: z.boolean(),
-  can_authorize: z.boolean(),
-  can_request_more: z.boolean(),
-  requests: z.array(taskHandoffContextRequestSchema),
-});
-
-export const taskHandoffPackResultSchema = z.object({
-  pack: taskHandoffPackSchema,
-});
-
-export const taskHandoffRequestResultSchema = z.object({
-  pack: taskHandoffPackSchema,
-  request: taskHandoffContextRequestSchema,
-});
-
-/** 侧栏任务进度；一次返回多个 active 房间，避免 N 次 list。 */
-export const taskSummaryResultSchema = z.object({
-  items: z.array(
-    taskCountsSchema.extend({
-      room_id: z.string(),
-    }),
-  ),
-});
 
 /** 反馈提交结果：不回显 environment/harness/problem。 */
 export const feedbackCreateResultSchema = z.object({

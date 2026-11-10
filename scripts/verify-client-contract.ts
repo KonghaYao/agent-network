@@ -53,7 +53,7 @@ async function main() {
     checkEqual('catalog hash matches live schemas and descriptions', guide.service.toolset_sha256, toolsetDigest(listed.tools));
     checkEqual('network_me exposes the same contract digest', me.service.toolset_sha256, guide.service.toolset_sha256);
     checkEqual('manifest count is actual registered tool count', me.service.tool_count, listed.tools.length);
-    check('missing task/send/upload tools diagnosed', ['network_task_create', 'network_message_send_status', 'network_file_upload_prepare'].every((name) => guide.missing_tools.includes(name)));
+    check('missing task/send/upload tools diagnosed', ['network_task_mark', 'network_message_send_status', 'network_file_upload_prepare'].every((name) => guide.missing_tools.includes(name)));
     check('present tool is not reported missing', !guide.missing_tools.includes('network_me'));
     check('bootstrap fits observed 512-character connector prefix', CLIENT_INSTRUCTIONS.length <= 512);
     for (const mode of ['one_shot', 'webhook', 'persistent']) {

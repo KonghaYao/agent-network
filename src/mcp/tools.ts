@@ -3,6 +3,14 @@ import { z } from 'zod';
 
 import { isBusinessError } from '../contracts/errors';
 import { messageSearch, messageContext, messageSearchSchema, messageContextSchema, messageSearchOutputSchema, messageContextOutputSchema } from '../domain/message-search';
+import {
+  messageTaskMark,
+  messageTaskSummaries,
+  messageTaskTrace,
+  messageTaskUnmark,
+} from '../domain/message-tasks';
+import { messageTaskSearch } from '../domain/message-task-search';
+import { fileTicketSecret } from '../domain/file-ticket';
 import { messageRecallSchema } from '../contracts/message-recall';
 import { messageRecall } from '../domain/message-recall';
 import {
@@ -69,6 +77,11 @@ import {
   messageReadSchema,
   messageSendSchema,
   messageSendStatusSchema,
+  messageTaskMarkSchema,
+  messageTaskSearchSchema,
+  messageTaskSummariesSchema,
+  messageTaskTraceSchema,
+  messageTaskUnmarkSchema,
   profileUpdateSchema,
   recoveryCreateSchema,
   recoveryRedeemSchema,
@@ -100,38 +113,6 @@ import {
   roomRoleSetSchema,
   roomsListSchema,
   syncSchema,
-  taskAcceptSchema,
-  taskBlockSchema,
-  taskCancelSchema,
-  taskClaimSchema,
-  taskCreateSchema,
-  taskDeclineSchema,
-  taskExecutionResolveSchema,
-  taskExecutionUnknownSchema,
-  taskGetSchema,
-  taskHandoffAuthorizeSchema,
-  taskHandoffPackCreateSchema,
-  taskHandoffPackGetSchema,
-  taskHandoffRequestMoreSchema,
-  taskListSchema,
-  taskOfferSchema,
-  taskProgressSchema,
-  taskResumeSchema,
-  taskRetrySchema,
-  taskReviewAcceptSchema,
-  taskReviewReturnSchema,
-  taskReviewerSetSchema,
-  taskSubmissionGetSchema,
-  taskSubmissionListSchema,
-  taskSubmissionReturnSchema,
-  taskSubmitSchema,
-  taskSummarySchema,
-  taskTransferAcceptSchema,
-  taskTransferCancelSchema,
-  taskTransferGetSchema,
-  taskTransferListSchema,
-  taskTransferProposeSchema,
-  taskTransferRejectSchema,
 } from '../contracts/schemas';
 import { agentsGet, archiveAgent, unarchiveAgent } from '../domain/agents';
 import {
@@ -248,46 +229,6 @@ import {
   roomOwnerTransferPropose,
   roomOwnerTransferRespond,
 } from '../domain/owner-transfers';
-import {
-  taskAccept,
-  taskBlock,
-  taskCancel,
-  taskClaim,
-  taskCreate,
-  taskDecline,
-  taskGet,
-  taskList,
-  taskOffer,
-  taskReportProgress,
-  taskResume,
-  taskRetry,
-  taskSummary,
-} from '../domain/tasks';
-import { taskExecutionResolve, taskExecutionUnknown } from '../domain/task-recovery';
-import {
-  taskReviewAccept,
-  taskReviewReturn,
-  taskReviewerSet,
-  taskSubmissionGet,
-  taskSubmissionList,
-  taskSubmissionReturn,
-  taskSubmit,
-} from '../domain/task-submissions';
-import { fileTicketSecret } from '../domain/file-ticket';
-import {
-  taskHandoffAuthorize,
-  taskHandoffPackCreate,
-  taskHandoffPackGet,
-  taskHandoffRequestMore,
-} from '../domain/task-handoff-packs';
-import {
-  taskTransferAccept,
-  taskTransferCancel,
-  taskTransferGet,
-  taskTransferList,
-  taskTransferPropose,
-  taskTransferReject,
-} from '../domain/task-transfers';
 import { sync } from '../domain/sync';
 import type { Env } from '../env';
 import { login, presenceOf } from '../realtime/presence';
@@ -366,21 +307,14 @@ import {
   roomNoticePageSchema,
   roomPolicySetResultSchema,
   roomRoleHistorySchema as roomRoleHistoryResultSchema,
-  taskListResultSchema,
-  taskHandoffPackResultSchema,
-  taskHandoffRequestResultSchema,
-  taskRecoveryResultSchema,
-  taskResultSchema,
-  taskSubmissionGetResultSchema,
-  taskSubmissionListResultSchema,
-  taskSubmissionResultSchema,
-  taskSummaryResultSchema,
-  taskTransferListResultSchema,
-  taskTransferResultSchema,
-  taskTransferSchema,
   sendResultSchema,
   messageSendStatusPageSchema,
   syncPageSchema,
+  taskMarkResultSchema,
+  taskSearchResultSchema,
+  taskSummariesResultSchema,
+  taskTraceResultSchema,
+  taskUnmarkResultSchema,
 } from './outputs';
 import type { Principal } from '../domain/principal';
 import {
@@ -565,7 +499,7 @@ export function registerTools(
   register(
     server,
     'network_login',
-    '常驻 MCP 客户端在 agentnet://stream 订阅 ack 后显式上线；未上线时投递仍保存在 SQLite。单次收发与宿主 webhook 回调无需以 login 建立监听。重复调用幂等，返回待办数量与只读 task_summary（pending/claimed/done/failed/total）。pending 是未领取、claimed 只含当前身份已领取；done/failed/total 是 active 房间总量，total 含他人 claimed。常驻模式每次上线或重连后先看 task_summary；pending > 0 或 claimed > 0 时按房间 list 恢复任务。任务概览不改变 pending_count、房间 head、未读或在线状态。online: true 只代表调用成功，不能证明订阅可达。',
+    '常驻 MCP 客户端在 agentnet://stream 订阅 ack 后显式上线；未上线时投递仍保存在 SQLite。单次收发与宿主 webhook 回调无需以 login 建立监听。重复调用幂等，返回待办数量与 inbox 头。pending_count 是未领取的普通投递数，不代表任务总数；会话与任务摘要由 network_inbox_list、network_rooms_list 与 network_task_summaries 读取。login 不改变 pending_count、房间 head、未读或在线状态。online: true 只代表调用成功，不能证明订阅可达。',
     loginSchema,
     loginResultSchema,
     async () => login(env, principal),
@@ -691,7 +625,7 @@ export function registerTools(
   register(
     server,
     'network_agent_disable',
-    '停用一个 Agent：拒绝该 Agent 的新写入、新投递、领取、上报、完成与失败；同一事务撤销 active 委托、取消 pending/claimed 投递并递增 permission_version。待处理任务保持未完成并随 stopped 返回。只有 active manager 或持有 manage_agent 委托的 human 可调用；归档状态不影响本操作。',
+    '停用一个 Agent：拒绝该 Agent 的新写入、新投递、领取、上报、完成与失败；同一事务撤销 active 委托、取消 pending/claimed 投递并递增 permission_version。只有 active manager 或持有 manage_agent 委托的 human 可调用；归档状态不影响本操作。',
     agentDisableSchema,
     agentDisableResultSchema,
     async (input) => {
@@ -730,7 +664,7 @@ export function registerTools(
   register(
     server,
     'network_agent_transfer_respond',
-    '接任者接受或拒绝管理权交接。只有提议中的 to_manager 本人可调用，其他身份返回 NOT_FOUND；过期返回 REQUEST_EXPIRED，状态已变化返回 CONFLICT。接受在同一事务内切换 agent_managements、permission_version + 1、撤销旧管理者全部 active 委托、撤销该 Agent 全部运行凭据并签发一个新 token、把未结束任务置为 blocked（blocked_reason=management_transferred）且撤销 assignment 与 pending/claimed 任务投递，绝不自动 accepted/completed。新 token 只在首次 accept 响应出现一次，服务端只保存 SHA-256，不写入 operations；同一 request_id 重放返回同一非秘密结果（token 为 null），不会再次轮换。旧管理者提交后所有管理工具返回 PERMISSION_DENIED，旧 token 立即 CREDENTIAL_INVALID。',
+    '接任者接受或拒绝管理权交接。只有提议中的 to_manager 本人可调用，其他身份返回 NOT_FOUND；过期返回 REQUEST_EXPIRED，状态已变化返回 CONFLICT。接受在同一事务内切换 agent_managements、permission_version + 1、撤销旧管理者全部 active 委托、撤销该 Agent 全部运行凭据并签发一个新 token。新 token 只在首次 accept 响应出现一次，服务端只保存 SHA-256，不写入 operations；同一 request_id 重放返回同一非秘密结果（token 为 null），不会再次轮换。旧管理者提交后所有管理工具返回 PERMISSION_DENIED，旧 token 立即 CREDENTIAL_INVALID。',
     agentTransferRespondSchema,
     agentTransferRespondResultSchema,
     async (input) => {
@@ -750,7 +684,7 @@ export function registerTools(
   register(
     server,
     'network_agent_transfer_cancel',
-    '发起人取消尚未接受的 Agent 管理权交接。只有 from_manager 本人可调用，其他身份返回 NOT_FOUND；过期返回 REQUEST_EXPIRED。取消不改变管理权、委托、运行凭据或任务状态。',
+    '发起人取消尚未接受的 Agent 管理权交接。只有 from_manager 本人可调用，其他身份返回 NOT_FOUND；过期返回 REQUEST_EXPIRED。取消不改变管理权、委托、运行凭据或其他业务状态。',
     agentTransferCancelSchema,
     agentTransferSimpleResultSchema,
     async (input) => {
@@ -1339,402 +1273,11 @@ export function registerTools(
     },
   );
 
-  register(
-    server,
-    'network_task_summary',
-    'Agent 的任务发现入口：一次读当前身份所有 active 房间的任务进度（可传 room_ids 过滤，仅返回本人仍有效的房间），每房间返回 pending/claimed/done/failed/total。pending 是公开未领取；claimed 只统计当前身份负责的进行中任务（不含他人）；done 含已验收与历史完成。每次 network_login、重连或任何唤醒后先调用；pending > 0 或 claimed > 0 时再按房间 network_task_list。也供侧栏 badge 使用。只读，不轮询，不改变 pending_count、房间 head 或未读。',
-    taskSummarySchema,
-    taskSummaryResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskSummary(db, principal, input);
-    },
-    { readOnlyHint: true },
-  );
-
-  register(
-    server,
-    'network_task_list',
-    '读取任务列表：传 room_id 读取房间任务；传 scope=mine 读取与我相关（创建、负责、验收或待接手）的任务。active 成员可用，按更新时间倒序，返回短标题、状态、负责人、验收人与卡片/source 消息引用，以及 reviewer_available、can_accept_review/can_set_reviewer 等当前操作标记。任务事件不会唤醒 Agent，不要轮询；先看 network_task_summary 或 network_login.task_summary 的 pending/claimed。',
-    taskListSchema,
-    taskListResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskList(db, principal, input);
-    },
-    { readOnlyHint: true },
-  );
-
-  register(
-    server,
-    'network_task_get',
-    '按 task_id 读取任务详情：短标题、受控长目标、验收条件、权威业务状态与统一中文文案（status_label/status_hint/phase_label）、revision、负责人/验收人、期限、业务权威来源、assignment、关联 delivery、最新 progress 与最近进度历史（progress_history）。返回 reviewer_available（验收人是否仍可执行验收）、can_accept_review/can_return（当前身份能否对 pending 成果验收或退回）、can_set_reviewer（创建者/负责人/管理员可改派验收人）与 parent_task_id/related_task_id 关联任务。`legacy_completed` 是旧任务板历史完成，只读展示，绝不等于 accepted；delivery 状态只表示通知处理，不映射为业务状态。只有当前有效成员且任务在历史边界内可见时返回；非成员、边界外与不存在统一返回 NOT_FOUND，不能靠 task_id 探测任务是否存在。',
-    taskGetSchema,
-    taskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskGet(db, principal, input);
-    },
-    { readOnlyHint: true },
-  );
-
-  register(
-    server,
-    'network_task_create',
-    '从消息或任务面板创建任务：title 是列表短标题，详细目标与验收条件写入受控 description/acceptance_criteria，不能塞进 120 字短字段。可指定候选负责人、独立验收人、期限与附件引用；默认创建者为验收人，自己执行时必须指定另一名验收人。可选 parent_task_id 关联已结束任务（accepted/cancelled/legacy_completed），related_task_id 关联同房间任务，两者都必须同房间且当前可见。指定只形成待接手 offer，不等于接单。同一 request_id 幂等；同一 source_message_id 只生成一个任务。Agent 的明确指派只生成一条绑定 task/assignment/version 的 delivery；human 使用持久个人通知；公开任务不创建 delivery、不增加 pending_count、不唤醒所有 Agent。',
-    taskCreateSchema,
-    taskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskCreate(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_offer',
-    '向未指派任务发起指定接手 offer：只有创建者、群 owner 或管理员可调用。候选负责人必须是有效成员且有任务访问资格，不能是当前验收人；调用者、任务创建者或验收人与候选之间存在任一方向拉黑时返回 BLOCKED，不生成 assignment/delivery。offer 只表示等待接手，不把任务置为进行中；Agent 候选生成单条关联 task_id/assignment_version 的 delivery，human 候选收到持久个人通知。幂等重放返回同一 assignment/delivery；同一候选拒绝后重新指派会生成新的 assignment、任务卡片与 delivery；已有待接手或进行中 assignment 时返回 CONFLICT。',
-    taskOfferSchema,
-    taskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskOffer(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_accept',
-    '接受指定接手 offer：只有当前 assignment 的候选负责人（human 或 Agent）可调用，原子把任务从 offered 转为 in_progress 并成为唯一 owner。建议同时传 assignment_id 与 expected_revision；版本已变化返回 VERSION_CONFLICT，旧 offer 或已被接受的 offer 返回 ASSIGNMENT_STALE，邀请过期返回 REQUEST_EXPIRED，非当前候选者返回 PERMISSION_DENIED。验收人不能接受自己的任务。接受只表示业务责任接手，不完成关联 delivery，更不把任务标为 accepted；通知处理与任务验收是不同事实。',
-    taskAcceptSchema,
-    taskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskAccept(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_decline',
-    '拒绝指定接手 offer：只有当前 assignment 的候选负责人（human 或 Agent）可调用，可附可选 reason 供审计。拒绝原子撤销当前 assignment、把任务退回 unassigned 并使该 offer 的投递失效，不会自动把任务转给全群其他成员，也不会产生新 assignment。建议同时传 assignment_id 与 expected_revision；旧 offer、已接受或已取消的任务返回 ASSIGNMENT_STALE/CONFLICT。',
-    taskDeclineSchema,
-    taskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskDecline(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_claim',
-    '公开领取一个 unassigned 任务：human 或 Agent 的有效成员都可调用，原子转为 in_progress 并生成 current assignment。验收人不能领取自己验收的任务；并发领取只有一个成功，其余返回 CLAIM_CONFLICT 并携带权威 owner 状态。可传 expected_revision 阻止基于旧版本的迟到领取；领取不创建 delivery、不改变 pending_count；先看 task_summary 的 pending/claimed，再按房间 list 后 claim。',
-    taskClaimSchema,
-    taskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskClaim(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_cancel',
-    '取消任务：创建者、当前负责人或群 owner/管理员可用，reason 必填并保存为审计。可传 expected_revision 与读取时的任务版本做 CAS；并发接受、拒绝或取消只有一个按提交序生效，其余返回 CONFLICT/VERSION_CONFLICT。取消在同一事务内撤销当前 assignment（含 submitted）、关闭该任务所有 pending/claimed 的 task_offer/task_reminder 投递、取消 pending 交接提议，并向当前责任者发送控制通知；不创建新任务、不增加 pending_count、不伪造聊天未读。external_stop_status 记录操作者声明的外部执行停止状态：confirmed / unknown / not_required；省略时进行中或受阻记为 unknown，其余记为 not_required。confirmed 只是操作者声明，服务端不保证外部进程确实停止，也不会自动重跑。取消 submitted 会保留成果与验收审计。已验收/已取消/历史完成的任务不能再次取消。',
-    taskCancelSchema,
-    taskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskCancel(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_retry',
-    '显式重试/重派 failed 任务：只有创建者、群 owner 或管理员可用，reason 必填。指定 assignee_actor_id 时生成新的 assignment_version 并回到 offered（Agent 候选生成新投递与卡片，human 候选收到个人通知）；省略时回到 unassigned。同一事务撤销旧 assignment、关闭旧 pending/claimed 任务投递、取消 pending 交接并递增 task_revision；旧负责人的进度、成果和继续派活资格失效。外部副作用未知时必须先用 network_task_execution_unknown/resolve 对账，不能用重试盲目重跑。同一 request_id 重放返回同一结果。',
-    taskRetrySchema,
-    taskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskRetry(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_execution_unknown',
-    '把进行中任务标记为 blocked + blocked_reason=execution_unknown，并把 action_id 记为 unknown：只允许当前负责人且持有当前 active assignment。用于发出可能产生外部副作用的操作后响应丢失、断线或心跳超时；服务端不会自动重跑，也不会因租约过期推断失败。action_id 在同一任务内稳定去重，重复上报返回同一 action 状态。任务保持未知，直到 network_task_execution_resolve 记录查询或人工结论。写入不创建 delivery、不增加 pending_count、不推进 head_seq；事件不包含外部结果正文。',
-    taskExecutionUnknownSchema,
-    taskRecoveryResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskExecutionUnknown(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_execution_resolve',
-    '记录外部动作对账结论：先在目标系统查询 action_id 或取得人工结论，再传 outcome=confirmed/not_executed/rejected 与 evidence。confirmed 与 not_executed 恢复任务 in_progress；rejected 保持 blocked 并标记 execution_rejected，需要负责人用 network_task_resume 决定后续。只有当前负责人且持有 active assignment 可调用；action 必须仍是 unknown，已完成结论的 action_id 不能再改。证据只存 task_external_actions，不写消息正文、事件正文或 delivery；重复 request_id 返回同一结果。',
-    taskExecutionResolveSchema,
-    taskRecoveryResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskExecutionResolve(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_progress',
-    '负责人上报普通任务进度：只有当前 owner 且持有当前 active assignment 时可调用；note 与 percent（0–100 整数）至少一项。每次写入递增 task_revision，并在 task_progress 追加一条审计；status 仍保持 in_progress，不会变成 submitted/accepted，也不创建聊天消息、delivery 或 inbox 待办，不增加未读与 pending_count。建议同时传 assignment_id/assignment_version 与 expected_revision；旧执行版本返回 ASSIGNMENT_STALE，版本变化返回 VERSION_CONFLICT。delivery complete 只结束通知处理，不代表任务完成。',
-    taskProgressSchema,
-    taskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskReportProgress(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_block',
-    '报告任务阻塞：只有当前负责人可把 in_progress 任务转为 blocked，reason 必填并保存到任务与进度审计。阻塞不是失败或取消，原负责人仍保留执行资格；恢复用 network_task_resume。写入只递增 task_revision 并追加 task_progress，不创建消息、delivery 或 inbox 待办。建议传 assignment_id/assignment_version 与 expected_revision；旧执行版本返回 ASSIGNMENT_STALE，非法状态返回 CONFLICT 并带权威状态。',
-    taskBlockSchema,
-    taskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskBlock(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_resume',
-    '恢复受阻任务：只有仍持有当前 active assignment 的原负责人可把 blocked 任务转回 in_progress，note 可选，用于记录解除阻塞的说明。恢复会清空 blocked_reason/blocked_at，递增 task_revision 并追加 task_progress；不创建消息、delivery 或 inbox 待办。建议传 assignment_id/assignment_version 与 expected_revision；旧执行版本返回 ASSIGNMENT_STALE，非 blocked 状态返回 CONFLICT。',
-    taskResumeSchema,
-    taskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskResume(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_transfer_propose',
-    '发起任务交接提议：当前负责人、任务创建者或群 owner/管理员可调用。目标必须是有效成员/Agent，不能是当前验收人、自己或当前负责人；调用者、创建者或验收人与目标存在任一方向拉黑时返回 BLOCKED。默认 24 小时有效；同一任务至多一条待处理提议，重复发起返回 CONFLICT。提议本身不转移责任，接受前原负责人继续负责；拒绝、取消或过期不改变原 assignment。任务事件只通知房间内 human，不创建 delivery、不增加 Agent pending_count、不推进房间 head_seq。',
-    taskTransferProposeSchema,
-    taskTransferResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskTransferPropose(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_transfer_accept',
-    '接受任务交接：只有提议目标可调用。接受事务校验 transfer pending/未过期/目标为调用者，锁定当前 active assignment，撤销旧 active assignment 并创建 assignment_version = 旧版本 + 1 的新 assignment，更新 tasks.owner_actor_id/current_assignment_id/revision，关闭旧 assignment 仍 pending/claimed 的任务投递，写 task_transfer_accepted 事件。并发接受只有一次成功；同一目标重复接受同一提议返回同一结果且不递增版本。旧执行者仍可普通聊天，但 progress/block/resume/submit/transfer 会返回 ASSIGNMENT_STALE。',
-    taskTransferAcceptSchema,
-    taskTransferResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskTransferAccept(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_transfer_reject',
-    '拒绝任务交接：只有提议目标可调用，可附可选 reason 供审计。拒绝只关闭提议，不改变原 assignment、任务 revision 或执行版本，也不会自动改派；原负责人继续负责。已接受或已结束的提议返回 CONFLICT，过期返回 REQUEST_EXPIRED。事件只通知房间内 human，不创建 delivery、不增加 pending_count。',
-    taskTransferRejectSchema,
-    taskTransferResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskTransferReject(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_transfer_cancel',
-    '取消任务交接提议：提议者、任务创建者、当前负责人或群 owner/管理员可调用，可附可选 reason。取消只关闭 pending 提议，不改变原 assignment 或任务 revision；已接受/拒绝/取消/过期返回 CONFLICT/REQUEST_EXPIRED。事件只通知房间内 human，不创建 delivery、不增加 pending_count、不推进 head_seq。',
-    taskTransferCancelSchema,
-    taskTransferResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskTransferCancel(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_transfer_get',
-    '读取单条任务交接提议：只对目标、提议者、任务创建者/负责人/验收人或群 owner/管理员可见；其他身份返回 NOT_FOUND，不能靠 transfer_id 探测。返回 effective_status（过期未处理的 pending 显示 expired）、到期时间、上下文准备状态（D05 之前 context_ready=false）与当前可见操作。只读，不改变任何状态。',
-    taskTransferGetSchema,
-    z.object({ transfer: taskTransferSchema }),
-    async (input) => {
-      requireActor(principal);
-      return taskTransferGet(db, principal, input);
-    },
-    { readOnlyHint: true },
-  );
-
-  register(
-    server,
-    'network_task_transfer_list',
-    '列任务交接提议：传 task_id 读取该任务的历史（要求有任务可见性与参与资格）；不传 task_id 时读取 scope=mine 中与当前身份相关（我是目标或提议者）的 active 房间记录。默认只返回仍待处理且未过期的提议；status 可读 accepted/rejected/cancelled/expired，过期未处理的 pending 按 expired 返回。只读，不创建 delivery、不增加 pending_count、不唤醒 Agent。',
-    taskTransferListSchema,
-    taskTransferListResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskTransferList(db, principal, input);
-    },
-    { readOnlyHint: true },
-  );
-
-  register(
-    server,
-    'network_task_handoff_pack_create',
-    '生成一版任务交接上下文包：只有当前负责人、持有当前 active assignment 且任务为 in_progress/blocked 时可调用。包记录目标、已完成、当前结果（可绑定 submission_id 与 version）、未解决、下一步与引用清单；每次生成 version=max+1，旧版本原样保留，不就地覆盖。必须传 assignment_id/assignment_version，建议传 expected_revision；旧执行资格返回 ASSIGNMENT_STALE，版本变化返回 VERSION_CONFLICT。引用只记录 message_id/文件 ID/分支/提交/测试/成果版本，不复制群历史、消息正文或文件字节；source_room_id 指向任务房间之外的源范围时，消息与文件默认未授权，需要源范围有权限的身份调用 authorize 显式授权。包只是工作数据，不授予额外权限，也不改变任务状态、owner、revision 或任何 delivery。写 task_handoff_pack_created 事件，只通知房间内 human，不创建 delivery、不增加 Agent pending_count、不推进 head_seq。同一 request_id 重放返回同一包。',
-    taskHandoffPackCreateSchema,
-    taskHandoffPackResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskHandoffPackCreate(db, principal, input, origin, ticketSecret);
-    },
-  );
-
-  register(
-    server,
-    'network_task_handoff_pack_get',
-    '读取任务交接上下文包：传 pack_id 或 version 读取指定版本，省略时返回最新版本，并返回 versions 列表与 latest_version。对每个引用按当前接任者/读者的可见性、成员资格与保留期逐项判定：available 可用、missing 已删除或不可见、omitted 跨范围未授权或已撤回；missing/omitted 汇总在 missing/omitted，必需项缺失列入 required_missing，context_ready=false 表示交接不完整，空内容不会被当作完整交接。跨范围未授权项不回显文件 URL 或消息预览；授权后重新读取才可见。源文件删除、消息不可见或授权撤回后，重读立即反映变化，旧版本仍保留原文字段。只读，不改变任务状态、delivery、pending_count 或 head_seq。',
-    taskHandoffPackGetSchema,
-    taskHandoffPackResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskHandoffPackGet(db, principal, input, origin, ticketSecret);
-    },
-    { readOnlyHint: true },
-  );
-
-  register(
-    server,
-    'network_task_handoff_pack_authorize',
-    '显式授权或撤回交接包中的跨范围私有引用：只有当前负责人、持有当前 active assignment 且任务仍在执行阶段时可调用。grant 仅适用于 source_room_id 在任务房间之外的消息/文件：文件要求调用者仍是源文件上传者或源房间 owner/管理员且能访问源范围，消息要求调用者仍能访问源消息；同一任务房间的材料不需要授权，直接返回 INVALID_ARGUMENT。revoke 关闭授权，但不删除包版本或引用记录。授权不改变任务状态、owner 或 revision；不能读取源群历史，也不复制文件字节，只在已授权且持有目标房间票据时生成可读 URL。写 task_handoff_item_authorized/revoked 事件，只通知房间内 human，不创建 delivery、不增加 pending_count、不推进 head_seq。必须传 assignment_id/assignment_version 与 request_id；重复请求返回同一结果。',
-    taskHandoffAuthorizeSchema,
-    taskHandoffPackResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskHandoffAuthorize(db, principal, input, origin, ticketSecret);
-    },
-  );
-
-  register(
-    server,
-    'network_task_handoff_pack_request_more',
-    '请求补充交接上下文：待接受交接提议的目标用 transfer_id 证明接任资格，当前负责人用 assignment_id/assignment_version 证明执行资格，二选一；note 必填。请求只追加到包的请求列表并写 task_handoff_context_requested 事件，不改变原责任、assignment、任务状态或 revision；必需材料仍缺失时任务保持 blocked + context_incomplete，不能用模型猜测补齐。只通知房间内 human，不创建 delivery、不增加 Agent pending_count、不推进 head_seq。同一 request_id 重放返回同一结果。',
-    taskHandoffRequestMoreSchema,
-    taskHandoffRequestResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskHandoffRequestMore(db, principal, input, origin, ticketSecret);
-    },
-  );
-
-  register(
-    server,
-    'network_task_submit',
-    '提交任务成果版本：只有当前负责人、持有当前 active assignment 且任务为 in_progress 时可调用。summary 必填；materials 引用同一房间的有效文件，服务端从文件元数据读取并冻结 sha256/size/mime，同时建立保留引用，客户端传入的校验值不作为权威。links 只记录 url/title/version/digest 与提交者声明的 availability；服务端不抓取外链，可访问不等于验收通过。commit_sha、evidence、known_limits 可选，但材料/外链/证据/commit_sha 至少一项。生成 submission_id 与 version=max+1，成功同事务把任务转为 submitted、递增 revision、结束当前 assignment、关闭该 assignment 仍 pending/claimed 的 task_offer/task_reminder 投递并取消 pending 交接提议。不创建消息或 delivery、不增加 pending_count、不推进 head_seq。建议传 assignment_id/assignment_version 与 expected_revision；旧执行资格返回 ASSIGNMENT_STALE，任务版本变化返回 VERSION_CONFLICT，非负责人返回 PERMISSION_DENIED，文件不可用返回 FILE_UNAVAILABLE。同一 request_id 重放返回同一版本。',
-    taskSubmitSchema,
-    taskSubmissionResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskSubmit(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_submission_get',
-    '读取任务的一个成果版本：传 version 读取指定版本，省略时读取最新版本。只有当前有效成员且任务在历史边界内可见时返回；材料返回提交时冻结的 sha256/size/mime 与读取时 available，available=false 表示文件已删除/过期且无法读取，不改变历史快照。review 是版本上的验收结论。只读，不改变任务状态、delivery、pending_count 或 head_seq。',
-    taskSubmissionGetSchema,
-    taskSubmissionGetResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskSubmissionGet(db, principal, input);
-    },
-    { readOnlyHint: true },
-  );
-
-  register(
-    server,
-    'network_task_submission_list',
-    '按版本倒序列出任务的成果提交历史：只返回当前可见任务的历史，默认 50 条、最多 100 条。历史版本保留原摘要、材料校验值、外链快照、证据与已知限制，不会被新版本覆盖；退回后的 v1 仍可读取。只读，不创建 delivery、不增加 pending_count。',
-    taskSubmissionListSchema,
-    taskSubmissionListResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskSubmissionList(db, principal, input);
-    },
-    { readOnlyHint: true },
-  );
-
-  register(
-    server,
-    'network_task_submission_return',
-    '兼容退回入口：只有任务当前验收人可以退回 pending 成果版本，reason 必填并写入 task_reviews 审计。事务校验任务仍为 submitted、submission 仍为 pending 且属于该任务；版本已处理返回 CONFLICT，非验收人或负责人自验返回 PERMISSION_DENIED。可选传 version 绑定被退版本，版本不符返回 REVIEW_STALE。退回后原版本保存为 returned，任务回到 in_progress 并以新的 assignment_version 重建原负责人的 active assignment；若原负责人已失权则任务转 blocked 等待重派，不会自动通过或改派。新调用建议使用 network_task_review_return（必须绑定 version）。任务事件只通知房间内 human，不创建 delivery、不增加 Agent pending_count、不推进 head_seq。',
-    taskSubmissionReturnSchema,
-    taskSubmissionResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskSubmissionReturn(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_review_accept',
-    'D07 验收通过：只有任务当前验收人可以调用，且必须绑定 submission_id/version 并提交逐项核对 checklist（每项 item/passed/可选 note，全部 passed=true 才能通过）。负责人不能验收自己的成果；非验收人返回 PERMISSION_DENIED，旧版本、已被退回或已被其他验收结果占用返回 REVIEW_STALE。事务把该 submission 置为 accepted、写入 task_reviews（含 checklist_json）、任务转 accepted 并记录 accepted_at、revision+1；accepted 是终态，不能再次提交或重开。同一 request_id 重放或对同一版本重复通过返回同一权威快照，不重复写事件或外部回写。任务事件只通知房间内 human，不创建 delivery、不增加 pending_count、不推进 head_seq。',
-    taskReviewAcceptSchema,
-    taskSubmissionResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskReviewAccept(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_review_return',
-    'D07 验收退回：只有任务当前验收人可以调用，必须绑定 submission_id/version 并写可行动 reason。旧版本、已处理版本、验收人已变化返回 REVIEW_STALE；负责人自验返回 PERMISSION_DENIED。退回只把该 submission 置为 returned 并写 task_reviews，不改写历史版本；任务回到 in_progress 并以新的 assignment_version 重建原负责人 active assignment，若原负责人已失权则转 blocked 等待重派。旧提交与旧执行资格不会复活，重新提交会生成新版本。任务事件只通知房间内 human，不创建 delivery、不增加 pending_count、不推进 head_seq。',
-    taskReviewReturnSchema,
-    taskSubmissionResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskReviewReturn(db, principal, input);
-    },
-  );
-
-  register(
-    server,
-    'network_task_reviewer_set',
-    '显式指定或替换任务验收人：创建者、当前负责人或群 owner/管理员可调用，任务必须未结束。新验收人必须是同房间 active、未停用且有任务访问资格的成员，不能是当前负责人，也不能是待验收版本的提交人；target 与当前验收人相同时返回当前快照。验收人退群或失权时任务保持 submitted，必须由有权限者调用本工具显式改派，系统绝不自动通过。成功写 task_reviewer_changed 房间事件并递增 revision；任务事件只通知 human，不创建 delivery、不增加 pending_count、不推进 head_seq。',
-    taskReviewerSetSchema,
-    taskResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return taskReviewerSet(db, principal, input);
-    },
-  );
 
   register(
     server,
     'network_room_members_update',
-    '群 owner 或管理员添加/移除成员；管理员只能移除普通成员，不能移除 owner 或其他管理员。普通成员是否可邀请由群策略决定。加人规则与建群一致：人类须好友；Agent 有 active 好友关系，或未认领，或当前调用者是它的 active manager 时可直接加入；由其他人管理的非好友 Agent 返回 FRIEND_REQUIRED。拉黑优先返回 BLOCKED。移除会取消该成员在房间内未完成的工作。transfer_owner_to 已移除，传入会返回 INVALID_ARGUMENT；转让请使用 network_room_owner_transfer_propose。遗留无主群不允许添加成员（返回 CONFLICT/reason=owner_missing），移除仍可用。',
+    '群 owner 或管理员添加/移除成员；管理员只能移除普通成员，不能移除 owner 或其他管理员。普通成员是否可邀请由群策略决定。加人规则与建群一致：人类须好友；Agent 有 active 好友关系，或未认领，或当前调用者是它的 active manager 时可直接加入；由其他人管理的非好友 Agent 返回 FRIEND_REQUIRED。拉黑优先返回 BLOCKED。移除会取消该成员在房间内的 pending/claimed 投递。transfer_owner_to 已移除，传入会返回 INVALID_ARGUMENT；转让请使用 network_room_owner_transfer_propose。遗留无主群不允许添加成员（返回 CONFLICT/reason=owner_missing），移除仍可用。',
     roomMembersUpdateSchema,
     roomDetailSchema,
     async (input) => {
@@ -1810,7 +1353,7 @@ export function registerTools(
   register(
     server,
     'network_room_policy_set',
-    '群主设置普通成员策略：发言、邀请、任务、历史、入群审批、资料编辑与 @所有人。值为 members（普通成员可用）或 owner_admin（仅 owner/管理员）；历史为 from_join（默认，仅当前加入后）或 full（全历史）。管理员始终可发言、邀请和创建任务；@所有人默认仅 owner/admin。expected_policy_revision 必须匹配当前版本。返回 policy_impact：开启/收紧历史会说明受影响成员和材料失权，收紧后加入前消息、文件与任务立即不可见，任务完成会被拒绝；已复制内容无法回收。',
+    '群主设置普通成员策略：发言、邀请、历史、入群审批、资料编辑与 @所有人。值为 members（普通成员可用）或 owner_admin（仅 owner/管理员）；历史为 from_join（默认，仅当前加入后）或 full（全历史）。管理员始终可发言与邀请；@所有人默认仅 owner/admin。expected_policy_revision 必须匹配当前版本。返回 policy_impact：开启/收紧历史会说明受影响成员和材料失权，收紧后加入前消息与文件立即不可见；已复制内容无法回收。',
     roomPolicySetSchema,
     roomPolicySetResultSchema,
     async (input) => {
@@ -1872,7 +1415,7 @@ export function registerTools(
   register(
     server,
     'network_room_leave_preview',
-    '只读预览退出群聊的后果：列出你在该群仍承担的在途任务（task_id/title/status/owner）、pending/claimed 投递数、是否需要先转移群主，以及是否可解散。群主在任何未解散群（包括只剩自己一人）都返回 can_leave=false、owner_transfer_required=true；解散群返回 can_leave=true。不会撤销任何工作或成员资格；退群前先展示给用户确认。',
+    '只读预览退出群聊的后果：列出你在该群的 pending/claimed 投递数、是否需要先转移群主，以及是否可解散。群主在任何未解散群（包括只剩自己一人）都返回 can_leave=false、owner_transfer_required=true；解散群返回 can_leave=true。不会撤销任何工作或成员资格；退群前先展示给用户确认。',
     roomLeavePreviewQuerySchema,
     roomLeavePreviewResultSchema,
     async (input) => {
@@ -1885,7 +1428,7 @@ export function registerTools(
   register(
     server,
     'network_room_leave',
-    '离开群聊。群主在任何未解散群都不能直接退群（即使只剩自己一人），必须先通过 network_room_owner_transfer_propose 完成转让或使用 network_room_dissolve 解散；否则返回 CONFLICT（details.reason=owner_transfer_required）。退出会立即撤销你在该群的发言/文件授权、任务执行资格与 pending/claimed 投递，旧 claim、任务提交和文件下载立即失败。若存在在途任务或投递，先用 network_room_leave_preview 列出并确认，调用时传 confirm_in_flight: true；否则返回 CONFLICT 与 in_flight_tasks，不静默丢失。已下载到本地的副本无法技术回收。',
+    '离开群聊。群主在任何未解散群都不能直接退群（即使只剩自己一人），必须先通过 network_room_owner_transfer_propose 完成转让或使用 network_room_dissolve 解散；否则返回 CONFLICT（details.reason=owner_transfer_required）。退出会立即撤销你在该群的发言/文件授权与 pending/claimed 投递，旧 claim 与文件下载立即失败。若存在待处理投递，先用 network_room_leave_preview 查看并确认，调用时传 confirm_in_flight: true；否则返回 CONFLICT 与 pending/claimed 计数，不静默丢失。已下载到本地的副本无法技术回收。',
     roomLeaveSchema,
     leaveResultSchema,
     async (input) => {
@@ -1897,7 +1440,7 @@ export function registerTools(
   register(
     server,
     'network_room_dissolve',
-    '解散群聊（owner only）。同一事务冻结发言、邀请、任务执行、文件写入与未来通话资格；取消所有未结束任务（reason=room_dissolved，不自动标 accepted/completed）、active assignment、pending 交接、pending/claimed 投递、邀请/加入请求与邀请链接，并写入 room_dissolved 审计。解散不删除消息、任务、成果或文件；解散时仍合法的成员保留截至 archived_head_seq 的只读归档，此前已退群/被移除者无归档资格。事件携带 media_revoke: true，供未来 M09 媒体层消费；当前版本尚未实现通话媒体终止。',
+    '解散群聊（owner only）。同一事务冻结发言、邀请、文件写入与未来通话资格；取消 pending/claimed 投递、邀请/加入请求与邀请链接，并写入 room_dissolved 审计。解散不删除消息、成果或文件；解散时仍合法的成员保留截至 archived_head_seq 的只读归档，此前已退群/被移除者无归档资格。事件携带 media_revoke: true，供未来 M09 媒体层消费；当前版本尚未实现通话媒体终止。',
     roomDissolveSchema,
     roomDissolveResultSchema,
     async (input) => {
@@ -1910,7 +1453,7 @@ export function registerTools(
   register(
     server,
     'network_message_send',
-    '向房间发送消息。显式 invoke 是 Agent 执行目标：每个 actor_id 必须是当前 active Agent 成员，最多 8 个，invoke: [] 表示本条明确不派活；显式传入 invoke 后不再解析正文。mentions 是显式提及的人类成员（最多 8 个），只生成个人提醒，不创建 delivery。群聊省略 invoke 时，服务端只从正文顶层、去掉代码/引用/附件 URL 后的内容里按当前 active 成员名做唯一精确匹配：唯一 Agent 才创建 delivery，唯一人类只发提醒；同名成员返回 INVALID_ARGUMENT，必须改用选择器或显式 actor_id。Agent 在群聊省略 invoke 且没有非空 mentions 时，服务端会在正文末尾自动 @ 前一个仍然有效的不同成员作为显示与提醒；自动 @ 不会创建 Agent delivery、不增加 pending_count，只有显式 invoke 才唤醒 Agent，显式 invoke（含 invoke: []）或 mentions 时不追加。普通群回复、紧跟 Agent、上传附件都不会自动唤醒上一位 Agent 或维护员；自动 @ 只是显示与提醒，@所有人 仅按 mention_all 权限发送提醒，不批量创建 Agent 工作。direct 的新用户消息可由网页显式填入对端 Agent；带 claim 的回复与 final_body 不解析正文。claim 参数只把回复挂到当前领取，不改变投递状态；回复不等于完成。正文可发送 POST /mcp-upload 上传响应中的 publicUrl；上传默认是上传者私有草稿，裸 publicUrl 返回 404，只有 network_file_publish 显式公开后才可裸链读取。同源 /f/<fileId> 在发送后会 best-effort 绑定到当前房间并进入房间文件列表，绑定后改用 network_room_file_bind / network_room_file_get / network_room_file_list 返回的带票据 preview_url / download_url，不要依赖自动绑定代替显式绑定。本地路径、file:// 或未授权外链不能保证群友可访问。正文中的同源 /f/<fileId> 会 best-effort 自动绑定，但不要依赖它代替显式绑定；已复制或转发的内容无法收回。',
+    '向房间发送消息。显式 invoke 是 Agent 执行目标：每个 actor_id 必须是当前 active Agent 成员，最多 8 个，invoke: [] 表示本条明确不派活；显式传入 invoke 后不再解析正文。mentions 是显式提及的人类成员（最多 8 个），只生成个人提醒，不创建 delivery。群聊省略 invoke 时，服务端只从正文顶层、去掉代码/引用/附件 URL 后的内容里按当前 active 成员名做唯一精确匹配：唯一 Agent 才创建 delivery，唯一人类只发提醒；同名成员返回 INVALID_ARGUMENT，必须改用选择器或显式 actor_id。Agent 在群聊省略 invoke 且没有非空 mentions 时，服务端会在正文末尾自动 @ 前一个仍然有效的不同成员作为显示与提醒；自动 @ 不会创建 Agent delivery、不增加 pending_count，只有显式 invoke 才唤醒 Agent，显式 invoke（含 invoke: []）或 mentions 时不追加。普通群回复、紧跟 Agent、上传附件都不会自动唤醒上一位 Agent 或维护员；自动 @ 只是显示与提醒，@所有人 仅按 mention_all 权限发送提醒，不批量创建 Agent 工作。direct 的新用户消息可由网页显式填入对端 Agent；带 claim 的回复与 final_body 不解析正文。可选 task_root_id 显式把消息归入仍在标记中的消息式 Task 起点，省略时按父消息继承；输出消息带 task_root_id。claim 参数只把回复挂到当前领取，不改变投递状态；回复不等于完成。正文可发送 POST /mcp-upload 上传响应中的 publicUrl；上传默认是上传者私有草稿，裸 publicUrl 返回 404，只有 network_file_publish 显式公开后才可裸链读取。同源 /f/<fileId> 在发送后会 best-effort 绑定到当前房间并进入房间文件列表，绑定后改用 network_room_file_bind / network_room_file_get / network_room_file_list 返回的带票据 preview_url / download_url，不要依赖自动绑定代替显式绑定。本地路径、file:// 或未授权外链不能保证群友可访问。正文中的同源 /f/<fileId> 会 best-effort 自动绑定，但不要依赖它代替显式绑定；已复制或转发的内容无法收回。',
     messageSendSchema,
     sendResultSchema,
     async (input) => {
@@ -1928,7 +1471,7 @@ export function registerTools(
   register(
     server,
     'network_message_recall',
-    '撤回自己两分钟内发送的普通消息。含 Agent 投递或被任务引用的消息不能撤回；任务需要单独取消。重复调用安全幂等。',
+    '撤回自己两分钟内发送的普通消息。含 Agent 投递的消息不能撤回；请单独取消投递。消息式 Task 标记不阻止撤回，撤回后保留 tombstone 与标记。重复调用安全幂等。',
     messageRecallSchema,
     z.object({ message_id: z.string(), recalled: z.literal(true) }),
     async (input) => {
@@ -1966,6 +1509,71 @@ export function registerTools(
     requireActor(principal);
     return messageSearch(db, principal, input);
   }, { readOnlyHint: true });
+
+  register(
+    server,
+    'network_task_mark',
+    '把房间内任意当前可见、未撤回的消息标记为消息式 Task 起点；人类消息和 Agent 消息规则相同，可标记他人发送的消息。起点 ID 就是 message_id，不创建独立任务实体或表单。已是本起点时按幂等成功返回；消息已归属另一个仍标记中的 Task 时返回 CONFLICT。只写房间事件提示，不写 inbox、不增加 pending_count、不推进 head_seq、不唤醒 Agent。所有写操作带唯一 request_id。',
+    messageTaskMarkSchema,
+    taskMarkResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return messageTaskMark(db, principal, input);
+    },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  );
+
+  register(
+    server,
+    'network_task_unmark',
+    '取消消息式 Task 起点的聚合入口：只清空起点标记，原消息、处理消息与引用关系全部保留，重新标记后集合恢复。任何可发言成员都可以取消，不要求是原标记者。重复取消按幂等成功返回；只写房间事件提示，不写 inbox、不增加 pending_count、不推进 head_seq。',
+    messageTaskUnmarkSchema,
+    taskUnmarkResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return messageTaskUnmark(db, principal, input);
+    },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  );
+
+  register(
+    server,
+    'network_task_summaries',
+    '批量读取消息式 Task 摘要：一次最多 20 个起点，返回短预览、起点发送者、参与 Agent 头像组去重顺序、可见消息计数与 can_unmark。未标记、已撤回或当前不可见的根直接省略，不泄露正文或数量。只读：不写 events/outbox/operations，不推进已读、pending_count 或 head_seq。',
+    messageTaskSummariesSchema,
+    taskSummariesResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return messageTaskSummaries(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_trace',
+    '按原消息顺序分页展开消息式 Task 集合：返回起点、处理消息与一层引用来源，按 message_id 去重，引用项标为 reference；next_cursor / prev_cursor 双向翻页，has_more_before / has_more_after 表示两侧是否还有内容。传 focus_message_id 可从搜索命中处开始定位；正文用 network_message_read 读取。只读：不写 events/outbox/operations，不推进已读、pending_count 或 head_seq。',
+    messageTaskTraceSchema,
+    taskTraceResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return messageTaskTrace(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_search',
+    '按起点聚合搜索消息式 Task：命中起点、处理消息或被引用的来源时只返回一个 Task 摘要，matches 最多 3 条命中并可直接作为 trace 的 focus_message_id；同一来源被多个 Task 引用时各自返回，不合并集合。普通 network_message_search 契约保持不变。只读：不写 events/outbox/operations，不推进已读、pending_count 或 head_seq；扫描达到上限时返回 truncated 并停止分页。',
+    messageTaskSearchSchema,
+    taskSearchResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return messageTaskSearch(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
   register(server, 'network_message_context', '读取一条消息及其前后有限条上下文预览；长正文使用 network_message_read，服务端会重新检查房间成员与历史边界。', messageContextSchema, messageContextOutputSchema, async (input) => {
     requireActor(principal);
     return messageContext(db, principal, input);

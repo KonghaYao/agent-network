@@ -31,6 +31,20 @@ export const LIMITS = {
   messageSearchSnippetChars: 240,
   /** 搜索游标字符串长度上限。 */
   messageSearchCursorMax: 2048,
+  /** 消息式 Task 单次摘要批量上限；未标记或不可见的根直接省略。 */
+  taskSummaryRootsMax: 20,
+  /** 摘要参与者头像组上限；`participant_count` 仍返回完整去重计数。 */
+  taskParticipantsMax: 200,
+  /** Trace 页默认 / 最大条数；长集合分页读取，不一次全量返回。 */
+  taskTracePageDefault: 50,
+  taskTracePageMax: 100,
+  /** Task 搜索页默认 / 最大条数；按起点聚合后分页。 */
+  taskSearchPageDefault: 20,
+  taskSearchPageMax: 50,
+  /** 每个 Task 摘要返回的命中消息上限；完整数量用 hit_count。 */
+  taskSearchMatchesMax: 3,
+  /** 单次 Task 搜索扫描的命中消息上限；超过时标记 truncated，不静默全表扫描。 */
+  taskSearchScanMax: 2_000,
   /** 普通工具响应上限。 */
   toolResponseBytes: 256 * 1024,
   /** inbox 页默认 / 最大条数。 */
@@ -257,110 +271,16 @@ export const LIMITS = {
   fileTicketTtlMs: 60 * 60_000,
   /** 网页监控面板 URL 的 UTF-8 字节上限；只允许 http/https。 */
   roomMonitorUrlMax: 2048,
-  /** 旧房间任务板的短描述/结果字符上限；新任务只用于列表短标题。 */
-  roomTaskTextMax: 120,
-  /** 旧房间任务板的每房间数量上限；保留给只读旧表。 */
-  roomTasksPerRoom: 200,
-  /** 新任务短标题字符上限（按 Unicode 码点）；详细目标写入 description。 */
+  /** 消息式 Task 起点短标题字符上限（按 Unicode 码点）。 */
   taskTitleMax: 120,
-  /** 任务详细目标 UTF-8 字节上限；受控 Markdown/结构化正文。 */
-  taskDescriptionBytes: 64 * 1024,
-  /** 任务验收条件 UTF-8 字节上限。 */
-  taskAcceptanceBytes: 16 * 1024,
-  /** 单个任务引用的附件数量上限；只保存 file_id 与标签。 */
-  taskAttachmentsMax: 20,
-  /** 任务列表默认 / 最大条数。 */
-  taskListDefault: 50,
-  taskListMax: 100,
-  /** 指定 offer 的有效期（毫秒）；过期由后续任务处理，不在这里自动改状态。 */
-  taskOfferTtlMs: 24 * 60 * 60_000,
-  /** 任务交接提议有效期（毫秒）；过期只关闭提议，不改变原 assignment。 */
-  taskTransferTtlMs: 24 * 60 * 60_000,
-  /** 交接列表默认 / 最大条数。 */
-  taskTransferListDefault: 50,
-  taskTransferListMax: 100,
-  /** 交接包目标 UTF-8 字节上限；换行保留，不允许控制字符。 */
-  taskHandoffGoalBytes: 8 * 1024,
-  /** 已完成/未解决/下一步单条 UTF-8 字节上限。 */
-  taskHandoffSectionItemBytes: 2 * 1024,
-  /** 已完成/未解决/下一步各自条数上限。 */
-  taskHandoffSectionItemsMax: 30,
-  /** 当前结果摘要 UTF-8 字节上限。 */
-  taskHandoffResultSummaryBytes: 8 * 1024,
-  /** 单次交接包引用条数上限。 */
-  taskHandoffItemsMax: 50,
-  /** 引用标签 UTF-8 字节上限。 */
-  taskHandoffItemLabelBytes: 512,
-  /** 引用摘要 UTF-8 字节上限；不保存源消息/文件正文。 */
-  taskHandoffItemSummaryBytes: 2 * 1024,
-  /** 引用标识 UTF-8 字节上限（消息/文件 ID、分支、commit、测试证据）。 */
-  taskHandoffReferenceBytes: 2 * 1024,
-  /** 授权/补充上下文说明 UTF-8 字节上限。 */
-  taskHandoffNoteBytes: 2 * 1024,
-  /** 单次读取返回的上下文请求条数上限。 */
-  taskHandoffRequestListMax: 20,
-  /** 任务取消原因 UTF-8 字节上限。 */
-  taskCancelReasonBytes: 1024,
-  /** 任务阻塞原因 UTF-8 字节上限；只进入任务详情与审计事件。 */
-  taskBlockReasonBytes: 4 * 1024,
-  /** 任务进度说明 UTF-8 字节上限；普通进度不复制进聊天消息。 */
-  taskProgressNoteBytes: 8 * 1024,
-  /** 任务详情返回的最近进度记录条数；权威历史仍保留在 SQLite。 */
-  taskProgressHistoryMax: 20,
-  /** 成果摘要 UTF-8 字节上限；提交版本创建后不可原地改写。 */
-  taskSubmissionSummaryBytes: 16 * 1024,
-  /** 单次提交冻结的材料数量上限。 */
+  /** 单次提交冻结的材料数量上限（旧成果接口兼容）。 */
   taskSubmissionMaterialsMax: 20,
-  /** 材料标签 UTF-8 字节上限。 */
-  taskSubmissionMaterialLabelBytes: 1024,
-  /** 单次提交记录的外链数量上限。 */
+  /** 单次提交记录的外链数量上限（旧成果接口兼容）。 */
   taskSubmissionLinksMax: 20,
-  /** 外链 URL UTF-8 字节上限；只允许 http/https。 */
-  taskSubmissionLinkUrlBytes: 2048,
-  /** 外链标题 UTF-8 字节上限。 */
-  taskSubmissionLinkTitleBytes: 512,
-  /** 外链目标版本/标签 UTF-8 字节上限。 */
-  taskSubmissionLinkVersionBytes: 256,
-  /** 外链校验值描述 UTF-8 字节上限。 */
-  taskSubmissionLinkDigestBytes: 256,
-  /** 验证证据条数上限。 */
-  taskSubmissionEvidenceMax: 20,
-  /** 单条验证证据 UTF-8 字节上限。 */
-  taskSubmissionEvidenceBytes: 4 * 1024,
-  /** 已知限制 UTF-8 字节上限。 */
-  taskSubmissionKnownLimitsBytes: 8 * 1024,
-  /** 实现提交 SHA 字符上限；接受 7–64 位十六进制。 */
+  /** 实现提交 SHA 字符上限；接受 7–64 位十六进制（旧成果接口兼容）。 */
   taskSubmissionCommitShaMax: 64,
-  /** 提交历史默认 / 最大条数。 */
-  taskSubmissionListDefault: 50,
-  taskSubmissionListMax: 100,
-  /** 退回原因 UTF-8 字节上限。 */
-  taskSubmissionReturnReasonBytes: 4 * 1024,
-  /** 验收通过时逐项核对 acceptance_criteria 的清单条数上限。 */
-  taskReviewChecklistMax: 50,
-  /** 单条验收核对项 UTF-8 字节上限。 */
+  /** 单条验收核对项 UTF-8 字节上限（旧成果接口兼容）。 */
   taskReviewChecklistItemBytes: 2 * 1024,
-  /** 单条验收核对备注 UTF-8 字节上限。 */
-  taskReviewChecklistNoteBytes: 2 * 1024,
-  /** 任务期限允许的最远未来时间（毫秒）。 */
-  taskDueMaxAheadMs: 10 * 365 * 24 * 60 * 60_000,
-  /** `network_task_summary` 单次 room_ids 过滤上限。 */
-  taskLookupMax: 100,
-  /**
-   * 任务进行中超过该时长没有 progress 更新时，向当前责任者写一条
-   * `task_reminder` inbox 事件。复用 delivery 的 3 分钟规则与提醒间隔。
-   */
-  taskReminderMs: 3 * 60_000,
-  /** 单轮任务提醒扫描最多处理的任务数。 */
-  taskReminderBatchMax: 50,
-  /** 外部动作 action_id 的 UTF-8 字节上限；同一任务内稳定去重。 */
-  taskExternalActionIdBytes: 256,
-  /** 记录外部动作未知/对账原因时的 UTF-8 字节上限。 */
-  taskRecoveryReasonBytes: 4 * 1024,
-  /** 外部动作对账证据的 UTF-8 字节上限；只存表，不写事件正文。 */
-  taskRecoveryEvidenceBytes: 8 * 1024,
-  /** 重派/重试原因 UTF-8 字节上限；与取消原因共用安全边界。 */
-  taskRetryReasonBytes: 1024,
   /** 房间文件列表默认 / 最大条数。 */
   roomFilePageDefault: 20,
   roomFilePageMax: 100,

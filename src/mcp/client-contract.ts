@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { stableStringify } from '../storage/db';
 
-export const CLIENT_CONTRACT_VERSION = '2026-11-09.1';
+export const CLIENT_CONTRACT_VERSION = '2026-11-09.2';
 export const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 /** Keep the complete bootstrap below connector instruction truncation limits. */
@@ -143,7 +143,7 @@ export function clientGuide(
     );
   }
   steps.push(
-    '需要任务卡片或跨人交接时 network_task_create；任务卡片与 delivery 分开，仅创建无指派卡片不等于唤醒。network_task_summary/list 用于恢复自己的任务；不要把 pending_count 当作任务总数。',
+    '任务以消息起点标记：network_task_mark/unmark 管理标记，network_task_summaries 读摘要，network_task_trace 读处理链，network_task_search 按起点聚合搜索。标记不创建 delivery、不唤醒 Agent，也不增加 pending_count。',
     toolNames.includes('network_file_upload_prepare')
       ? '先计算本地文件的原始字节数与 SHA-256，network_file_upload_prepare {name, mime_type, size, sha256} 返回 upload_url、method、headers、expires_at。仅向返回的同源地址发送原始字节（不是 multipart/JSON/base64），原样使用 headers，无需长期 Bearer。校验响应 size/sha256 后以同一身份 network_room_file_bind，再分享带票据 download_url 及 room_id/file_id；票据过期由收件人 network_room_file_get {room_id, file_id} 换取新地址。上传凭证仅限该内容，5 分钟过期，上传时复核原凭据未撤销；重放可能生成相同内容的新文件，不保证上传幂等，结果不明不要盲目重传。'
       : '本服务未启用文件存储，不能上传或绑定文件。',
