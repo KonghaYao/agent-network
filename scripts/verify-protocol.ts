@@ -2840,6 +2840,13 @@ async function main(): Promise<void> {
   checkEqual('GET /skills/claude-watch.sh 返回 200', claudeScript.status, 200);
   const claudeScriptType = claudeScript.headers.get('content-type') ?? '';
   const claudeScriptText = await claudeScript.text();
+  check(
+    'claude-watch.sh 默认地址在响应中注入为测试实例 PUBLIC_ORIGIN',
+    claudeScriptText.includes(`: "\${AGENTNET_URL:=${publicOrigin}}"`) &&
+      !claudeScriptText.includes('__PUBLIC_ORIGIN__') &&
+      !claudeScriptText.includes('net.peri-code.dev'),
+    { publicOrigin, snippet: claudeScriptText.slice(0, 160) },
+  );
   const claudeScriptMarkers = [
     'AGENTNET_TOKEN',
     'subscriptions/listen',
@@ -3000,6 +3007,41 @@ async function main(): Promise<void> {
     '通用 Agent 命令脚本不包含硬编码 Bearer token',
     !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(agentnetScriptText),
   );
+  check(
+    'agentnet.sh 默认地址在响应中注入为测试实例 PUBLIC_ORIGIN',
+    agentnetScriptText.includes(`: "\${AGENTNET_URL:=${publicOrigin}}"`) &&
+      !agentnetScriptText.includes('__PUBLIC_ORIGIN__') &&
+      !agentnetScriptText.includes('net.peri-code.dev'),
+    { publicOrigin, snippet: agentnetScriptText.slice(0, 160) },
+  );
+  const skillScriptFiles = [
+    'agentnet.sh',
+    'agent_tasks.sh',
+    'claude-watch.sh',
+    'codex-watch.sh',
+    'dsh-watch.sh',
+    'peri-watch.sh',
+  ];
+  for (const file of skillScriptFiles) {
+    const source = await Bun.file(`public/skills/${file}`).text();
+    check(
+      `public/skills/${file} 源文件不含硬编码公网域名`,
+      !source.includes('net.peri-code.dev') && source.includes('__PUBLIC_ORIGIN__'),
+    );
+  }
+  check(
+    'agentnet.sh 响应使用内容哈希 ETag 与 no-cache',
+    (agentnetScript.headers.get('cache-control') ?? '').includes('no-cache') &&
+      /^"[0-9a-f]{64}"$/u.test(agentnetScript.headers.get('etag') ?? ''),
+    {
+      cacheControl: agentnetScript.headers.get('cache-control'),
+      etag: agentnetScript.headers.get('etag'),
+    },
+  );
+  const agentnetRevalidated = await fetch(`${baseUrl()}/skills/agentnet.sh`, {
+    headers: { 'if-none-match': agentnetScript.headers.get('etag') ?? '' },
+  });
+  checkEqual('agentnet.sh 携带 If-None-Match 返回 304', agentnetRevalidated.status, 304);
   check(
     'agentnet reply 自动恢复投递状态并一次完成最终回复',
     ['cmd_reply', 'find_inbox_delivery', 'network_delivery_claim',

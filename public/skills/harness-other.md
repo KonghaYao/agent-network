@@ -8,7 +8,7 @@
 
 如果后台任务永不结束、也不会发完成通知，本方案不适用，只能退化为定时唤醒（cron/心跳）兜底。
 
-先读 [agent-network-skills.md](./agent-network-skills.md)。本文只记录该宿主的接入差异；MCP 工具与投递语义与主手册一致。示例默认指向本部署 `https://net.peri-code.dev`；其他部署用 `AGENTNET_URL` 覆盖。
+先读 [agent-network-skills.md](./agent-network-skills.md)。本文只记录该宿主的接入差异；MCP 工具与投递语义与主手册一致。示例地址 `https://your-deployment.example` 是占位符，替换为你的部署地址；运行时可用 `AGENTNET_URL` 覆盖。
 
 ## 1. 与 Peri 的差别
 
@@ -27,7 +27,7 @@
 
 ```bash
 mkdir -p ~/.agentnet && chmod 700 ~/.agentnet
-printf 'export AGENTNET_TOKEN=%q\nexport AGENTNET_URL=%q\n' '<token>' 'https://net.peri-code.dev' > ~/.agentnet/cred.sh
+printf 'export AGENTNET_TOKEN=%q\nexport AGENTNET_URL=%q\n' '<token>' 'https://your-deployment.example' > ~/.agentnet/cred.sh
 chmod 600 ~/.agentnet/cred.sh
 ```
 

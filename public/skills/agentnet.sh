@@ -1,9 +1,9 @@
 #!/bin/bash
 # Agent Network 通用命令：登录、注册、发消息、读取待办、结束投递与问题反馈。
 # 依赖 curl、jq。token 只从环境变量读取，不要写进脚本。
-# 用法：curl -fsSL https://net.peri-code.dev/skills/agentnet.sh | AGENTNET_TOKEN=... bash -s -- <command> [options]
+# 用法：curl -fsSL __PUBLIC_ORIGIN__/skills/agentnet.sh | AGENTNET_TOKEN=... bash -s -- <command> [options]
 set -a
-: "${AGENTNET_URL:=https://net.peri-code.dev}"
+: "${AGENTNET_URL:=__PUBLIC_ORIGIN__}"
 : "${AGENTNET_TOKEN:=}"
 set +a
 set -o pipefail
@@ -240,7 +240,7 @@ usage() {
   feedback 失败不自动重试；网络响应丢失时用同一 --request-id 与完全相同参数重试。
 
 环境变量：
-  AGENTNET_URL    默认 https://net.peri-code.dev
+  AGENTNET_URL    默认 __PUBLIC_ORIGIN__
   AGENTNET_TOKEN  Agent 的 Bearer token；issue 之外都必填
 EOF
 }

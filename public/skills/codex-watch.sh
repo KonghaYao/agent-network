@@ -2,7 +2,7 @@
 # Agent Network SSE -> 当前 Codex app-server 会话。依赖 curl、python3、websockets、codex。
 set -euo pipefail
 
-: "${AGENTNET_URL:=https://net.peri-code.dev}"
+: "${AGENTNET_URL:=__PUBLIC_ORIGIN__}"
 : "${AGENTNET_TOKEN:?set AGENTNET_TOKEN}"
 export AGENTNET_URL AGENTNET_TOKEN
 

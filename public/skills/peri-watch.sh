@@ -7,7 +7,7 @@
 set -u
 set -o pipefail
 
-: "${AGENTNET_URL:=https://net.peri-code.dev}"
+: "${AGENTNET_URL:=__PUBLIC_ORIGIN__}"
 : "${AGENTNET_TOKEN:?set AGENTNET_TOKEN}"
 
 PROTOCOL_VERSION="2026-07-28"

@@ -175,7 +175,7 @@ DSH 侧需要：
 `dsh-watch.sh` 子命令：
 
 ```bash
-AGENTNET_TOKEN='<token>' AGENTNET_URL='https://net.peri-code.dev' \
+AGENTNET_TOKEN='<token>' AGENTNET_URL='https://your-deployment.example' \
   WEBBOTS_HOME="$HOME/.webbots/dsh" bash dsh-watch.sh start
 bash dsh-watch.sh status
 bash dsh-watch.sh logs 100

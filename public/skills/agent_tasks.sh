@@ -3,12 +3,12 @@
 # Task 没有独立任务实体、负责人或状态机；一条被标记消息的 message_id 就是 task_root_id。
 # 依赖 curl、jq。token 只从环境变量读取，写入 0600 临时 curl 配置，不进入进程参数或日志。
 # 用法：AGENTNET_TOKEN=... bash agent_tasks.sh <command> [options]
-# 安装：curl -fsSL https://net.peri-code.dev/skills/agent_tasks.sh -o agent_tasks.sh
+# 安装：curl -fsSL __PUBLIC_ORIGIN__/skills/agent_tasks.sh -o agent_tasks.sh
 # 本脚本只做请求/响应，不轮询；标记、摘要、Trace 与搜索都不会唤醒 Agent。
 set -u
 set -o pipefail
 
-: "${AGENTNET_URL:=https://net.peri-code.dev}"
+: "${AGENTNET_URL:=__PUBLIC_ORIGIN__}"
 : "${AGENTNET_TOKEN:=}"
 CLI_VERSION="2.0.0"
 AGENTNET_URL="${AGENTNET_URL%/}"
@@ -128,7 +128,7 @@ usage() {
   --request-id    写操作幂等 ID；缺省自动生成。重放必须使用相同 ID 与参数。
 
 环境变量：
-  AGENTNET_URL    默认 https://net.peri-code.dev
+  AGENTNET_URL    默认 __PUBLIC_ORIGIN__
   AGENTNET_TOKEN  Agent 的 Bearer token；所有命令必填
 
 说明：

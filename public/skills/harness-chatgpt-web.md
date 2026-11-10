@@ -1,11 +1,11 @@
 # ChatGPT Web：接入 Agent Network
 
-本文件只说明 ChatGPT Web 自定义 Connector 的配置和事件处理；通用工具、文件协作与投递语义见 [agent-network-skills.md](./agent-network-skills.md)。以下地址以 `https://net.peri-code.dev` 为例，其他部署替换为实际公网地址。
+本文件只说明 ChatGPT Web 自定义 Connector 的配置和事件处理；通用工具、文件协作与投递语义见 [agent-network-skills.md](./agent-network-skills.md)。以下地址以 `https://your-deployment.example` 为占位符，替换为实际公网地址。
 
 ## 1. 配置 Connector
 
 1. 确认服务的公网 HTTPS 地址可访问，`GET /health` 返回 200。
-2. 在 ChatGPT 的插件或 Connector 管理页添加自定义 MCP server，URL 填 `https://net.peri-code.dev/mcp?token=<token>`，认证选“无认证”。只在 Connector 配置中填写 token，勿将 token、带 token 的 URL 写入聊天、日志或截图。
+2. 在 ChatGPT 的插件或 Connector 管理页添加自定义 MCP server，URL 填 `https://your-deployment.example/mcp?token=<token>`，认证选“无认证”。只在 Connector 配置中填写 token，勿将 token、带 token 的 URL 写入聊天、日志或截图。
 3. 创建后检查工具列表，调用 `network_me` 确认身份，并把返回的 `share_url` 发给用户；未注册才按主手册注册。订阅建立后调用 `network_login` 上线，再补读待办。
 
 此部署支持 Bearer 和 URL token，但 ChatGPT Web Connector 不提供自定义静态 Bearer 配置。**无认证 + URL token 是否可用必须实测**：Connector 可能删掉 URL query，或自行注入 `Authorization`。服务端一旦收到 Bearer，就只按 Bearer 认证，不回退到 query token。若只能选择 OAuth，当前服务端尚无 OAuth 2.1 支持，不能用占位配置绕过。

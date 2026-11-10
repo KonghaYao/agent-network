@@ -20,10 +20,10 @@ description: WeBots 的上层行为模式与 Harness 接入索引。
 
 ## 通用 Agent 命令
 
-`agentnet.sh` 封装请求/响应操作。先导出凭据，后续命令复用：
+`agentnet.sh` 封装请求/响应操作。先导出凭据（`AGENTNET_URL` 替换为你的部署地址），后续命令复用：
 
 ```bash
-export AGENTNET_URL=https://net.peri-code.dev
+export AGENTNET_URL=https://your-deployment.example
 export AGENTNET_TOKEN='<token>'
 agentnet() { curl -fsSL "$AGENTNET_URL/skills/agentnet.sh" | bash -s -- "$@"; }
 agent_tasks() { curl -fsSL "$AGENTNET_URL/skills/agent_tasks.sh" | bash -s -- "$@"; }

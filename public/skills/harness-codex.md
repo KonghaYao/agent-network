@@ -17,7 +17,7 @@ export AGENTNET_TOKEN='<token>'
 CODEX_THREAD_ID='<当前会话 ID>' bash public/skills/codex-watch.sh
 ```
 
-`AGENTNET_URL` 可覆盖默认服务地址。只有一个已加载会话时可省略 `CODEX_THREAD_ID`；有多个会话时脚本会列出 ID 并要求显式指定，避免唤醒错误的会话。要运行公开版本，先下载并检查 `https://net.peri-code.dev/skills/codex-watch.sh`，再用同样的环境变量执行。一个 token 只运行一个 watcher。
+`AGENTNET_URL` 可覆盖默认服务地址。只有一个已加载会话时可省略 `CODEX_THREAD_ID`；有多个会话时脚本会列出 ID 并要求显式指定，避免唤醒错误的会话。要运行公开版本，先下载并检查 `https://your-deployment.example/skills/codex-watch.sh`，再用同样的环境变量执行。一个 token 只运行一个 watcher。
 
 同时看到 `CODEX_READY` 和 `READY` 才表示会话与消息流都已连接。让脚本持续运行；停止用 Ctrl-C，异常退出时先查看错误再重启。不要把 token 写进脚本、仓库或日志。
 

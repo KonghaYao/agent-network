@@ -19,7 +19,7 @@ set -u
 set -o pipefail
 
 SELF=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/$(basename -- "$0")
-: "${AGENTNET_URL:=https://net.peri-code.dev}"
+: "${AGENTNET_URL:=__PUBLIC_ORIGIN__}"
 : "${WEBBOTS_HOME:=${HOME}/.webbots}"
 
 QUEUE_FILE="$WEBBOTS_HOME/wake.queue"

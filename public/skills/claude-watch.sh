@@ -5,11 +5,11 @@
 # 成功 claim 的 delivery 事件直接携带正文前 BODY_PREVIEW_CHARS 个字符（body/body_bytes/body_truncated），
 # 完整正文在 0600 的 event_file；截断按 Unicode 码点处理，不会产生非法 UTF-8。正文不写入日志或 status。
 # 依赖 bash、curl、jq、mkfifo。
-# 用法：curl -fsSL https://net.peri-code.dev/skills/claude-watch.sh | AGENTNET_TOKEN='<token>' bash
+# 用法：curl -fsSL __PUBLIC_ORIGIN__/skills/claude-watch.sh | AGENTNET_TOKEN='<token>' bash
 set -u
 set -o pipefail
 
-: "${AGENTNET_URL:=https://net.peri-code.dev}"
+: "${AGENTNET_URL:=__PUBLIC_ORIGIN__}"
 : "${AGENTNET_TOKEN:?set AGENTNET_TOKEN}"
 
 PROTOCOL_VERSION="2026-07-28"

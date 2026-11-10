@@ -11,14 +11,14 @@
 先下载并检查脚本：
 
 ```bash
-curl -fsSLO https://net.peri-code.dev/skills/claude-watch.sh
+curl -fsSLO https://your-deployment.example/skills/claude-watch.sh
 bash -n claude-watch.sh
 ```
 
 然后用 Claude Code 的原生 **Monitor 工具**承载以下命令，不要使用普通后台 Bash：
 
 ```bash
-AGENTNET_URL='https://net.peri-code.dev' \
+AGENTNET_URL='https://your-deployment.example' \
 AGENTNET_TOKEN='<token>' \
 bash claude-watch.sh
 ```

@@ -48,6 +48,7 @@ const MODERN_VERSION = '2026-07-28';
 const FILE_ID = new RegExp(FILE_ID_PATTERN);
 const INVITE_KEY = /^[A-Za-z0-9_-]{16,64}$/u;
 const SKILLS_ROOT = resolve(import.meta.dir, '../public/skills');
+const SKILL_ORIGIN_PLACEHOLDER = '__PUBLIC_ORIGIN__';
 const AGENT_ICONS_ROOT = resolve(import.meta.dir, '../public/agent-icons');
 
 const MCP_CORS_METHODS = 'POST, GET, DELETE';
@@ -620,6 +621,19 @@ function matchesEtag(header: string | undefined, etag: string): boolean {
     .some((value) => value === '*' || value === etag);
 }
 
+/** 技能脚本的默认地址占位符替换为当前部署地址；非法或缺失时返回 null。 */
+function deploymentOrigin(env: Env): string | null {
+  const raw = env.PUBLIC_ORIGIN?.trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  } catch {
+    return null;
+  }
+  return raw.replace(/\/+$/u, '');
+}
+
 async function openPayload(fileService: FileService, payloadKey: string): Promise<Readable> {
   return fileService.disk.getStream(payloadKey);
 }
@@ -693,21 +707,43 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
 
   // 公开只读技能文档与脚本：只允许 public/skills 下的一层 .md / .sh，拒绝路径穿越。
   // 文件本身不含凭据；调用方自行通过 AGENTNET_TOKEN 提供 Bearer。
+  // 脚本源文件用 __PUBLIC_ORIGIN__ 占位，响应时替换为当前部署地址，磁盘文件保持部署无关。
   app.get('/skills/:file', async (c) => {
     const file = c.req.param('file');
     if (!/^[a-z0-9][a-z0-9._-]*\.(?:md|sh)$/u.test(file)) return c.notFound();
     const path = resolve(SKILLS_ROOT, file);
     if (!path.startsWith(`${SKILLS_ROOT}${sep}`)) return c.notFound();
-    const body = await Bun.file(path).text().catch(() => null);
-    if (body === null) return c.notFound();
+    const source = await Bun.file(path).text().catch(() => null);
+    if (source === null) return c.notFound();
     const contentType = file.endsWith('.sh')
       ? 'text/x-shellscript; charset=utf-8'
       : 'text/markdown; charset=utf-8';
-    return c.body(body, 200, {
+    if (!file.endsWith('.sh')) {
+      return c.body(source, 200, {
+        'content-type': contentType,
+        'cache-control': 'public, max-age=60',
+        'access-control-allow-origin': '*',
+      });
+    }
+    const origin = deploymentOrigin(env);
+    if (origin === null) {
+      return c.text(
+        'PUBLIC_ORIGIN is not configured or invalid; shell scripts require an absolute deployment origin.',
+        503,
+        { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+      );
+    }
+    const rendered = source.replaceAll(SKILL_ORIGIN_PLACEHOLDER, origin);
+    // 内容哈希包含注入后的 origin：不同部署不会共用同一个 ETag。
+    const etag = `"${new Bun.CryptoHasher('sha256').update(rendered).digest('hex')}"`;
+    const headers = {
       'content-type': contentType,
-      'cache-control': 'public, max-age=60',
+      'cache-control': 'no-cache',
+      etag,
       'access-control-allow-origin': '*',
-    });
+    };
+    if (matchesEtag(c.req.header('if-none-match'), etag)) return c.body(null, 304, headers);
+    return c.body(rendered, 200, headers);
   });
 
   // 本地品牌头像与授权说明：只允许 agent-icons 目录下的白名单文件，拒绝路径穿越。
