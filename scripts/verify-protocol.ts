@@ -1943,42 +1943,42 @@ async function main(): Promise<void> {
     skillText.slice(0, 200),
   );
   check(
-    '技能正文包含任务与任务卡片完整工具与不唤醒语义',
-    ['## 任务与任务卡片', 'network_task_list', 'network_task_summary',
-      'status_label', 'task_progress', 'task.updated',
-      '任务卡片', '不写 inbox', '不推进 `head_seq`', '不要轮询',
-      'agent_tasks.sh'].every((marker) => skillText.includes(marker)),
+    '技能正文包含消息式 Task 的标记、摘要、Trace 与搜索语义',
+    ['## 消息式 Task 与 Trace', 'network_task_mark', 'network_task_summaries',
+      'network_task_trace', 'network_task_search', 'task_root_id',
+      '不写 inbox', '不推进 `head_seq`', '不会唤醒 Agent', 'agent_tasks.sh'].every(
+      (marker) => skillText.includes(marker),
+    ),
     skillText.slice(0, 320),
   );
   check(
-    '技能正文说明交接包版本、缺项、显式授权与 context_incomplete',
+    '技能正文说明 Task 集合组成与一层引用来源',
     [
-      'context_incomplete',
-      'required_missing',
-      '不复制群历史',
-      '不授予更高权限',
-      '显式授权',
+      '集合由',
+      '一层来源',
+      '不移动原归属',
+      '不合并两个 Task',
+      '参与者',
     ].every((marker) => skillText.includes(marker)),
     skillText.slice(0, 320),
   );
   check(
-    '技能正文把任务概览作为上线/唤醒后的第一动作',
-    skillText.includes('task_summary') &&
-      skillText.includes('每次上线') &&
-      skillText.includes('pending > 0') &&
-      skillText.includes('claimed > 0') &&
-      skillText.includes('network_task_summary') &&
+    '技能正文说明 login 不返回任务摘要且 Task 不唤醒 Agent',
+    skillText.includes('login 只负责上线与待办计数') &&
+      skillText.includes('不返回任务摘要') &&
+      skillText.includes('network_task_search') &&
+      skillText.includes('network_task_summaries') &&
       skillText.includes('多步骤') &&
-      skillText.includes('network_task_create'),
+      skillText.includes('network_task_mark'),
     skillText.slice(0, 320),
   );
   check(
-    '技能正文声明 claimed 只含本人且 summary 返回每房间五字段',
-    skillText.includes('claimed') &&
-      skillText.includes('只含自己') &&
-      skillText.includes('pending') &&
-      skillText.includes('failed') &&
-      skillText.includes('total'),
+    '技能正文声明 Task 摘要与 Trace 的只读字段',
+    skillText.includes('root_message_ids') &&
+      skillText.includes('focus_message_id') &&
+      skillText.includes('truncated') &&
+      skillText.includes('reference') &&
+      skillText.includes('CONFLICT'),
     skillText.slice(0, 320),
   );
   check(
@@ -1991,11 +1991,11 @@ async function main(): Promise<void> {
     skillText.slice(0, 320),
   );
   check(
-    '技能正文声明任务短标题 120 字与受控长正文',
-    skillText.includes('最多 120 字') &&
-      skillText.includes('description') &&
-      skillText.includes('acceptance_criteria') &&
-      skillText.includes('.md'),
+    '技能正文声明 Task 没有独立实体、负责人或状态机',
+    skillText.includes('没有独立任务实体') &&
+      skillText.includes('负责人') &&
+      skillText.includes('业务状态') &&
+      skillText.includes('子任务'),
     skillText.slice(0, 260),
   );
   check(
@@ -2060,15 +2060,11 @@ async function main(): Promise<void> {
     skillText.slice(0, 240),
   );
   check(
-    '技能正文声明 D07 验收通过、退回与改派工具',
-    skillText.includes('network_task_review_accept') &&
-      skillText.includes('network_task_review_return') &&
-      skillText.includes('network_task_reviewer_set') &&
-      skillText.includes('checklist') &&
-      skillText.includes('REVIEW_STALE') &&
-      skillText.includes('accepted') &&
-      !skillText.includes('完整验收通过（accept）仍由 D07 提供') &&
-      !skillText.includes('未上线前不要声称可以验收'),
+    '技能正文声明 Task 搜索按起点聚合且不合并集合',
+    skillText.includes('按起点聚合') &&
+      skillText.includes('不合并集合') &&
+      skillText.includes('普通 `network_message_search` 契约不变') &&
+      skillText.includes('truncated'),
     skillText.slice(0, 300),
   );
 
@@ -2312,14 +2308,12 @@ async function main(): Promise<void> {
     !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(skillDocText),
   );
   check(
-    '静态技能声明 D07 验收、退回与改派规则',
-    skillDocText.includes('network_task_review_accept') &&
-      skillDocText.includes('network_task_review_return') &&
-      skillDocText.includes('network_task_reviewer_set') &&
-      skillDocText.includes('checklist') &&
-      skillDocText.includes('REVIEW_STALE') &&
-      skillDocText.includes('accepted` 是终态') &&
-      !skillDocText.includes('完整验收通过（accept）仍由 D07 提供'),
+    '静态技能声明消息式 Task 的摘要、Trace 与搜索规则',
+    skillDocText.includes('network_task_summaries') &&
+      skillDocText.includes('network_task_trace') &&
+      skillDocText.includes('network_task_search') &&
+      skillDocText.includes('task_root_id') &&
+      skillDocText.includes('不唤醒 Agent'),
     skillDocText.slice(0, 300),
   );
   check(
@@ -2343,28 +2337,24 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 300),
   );
   check(
-    '静态技能包含任务命令与不唤醒规范',
-    ['agent_tasks.sh', '### 任务与任务卡片', 'network_task_list', 'network_task_create',
-      'status_label', 'task_progress',
-      'task.updated', '不写 inbox', '不会唤醒 Agent',
-      'task_summary', '每次上线', 'pending > 0', 'claimed > 0', '只含自己',
-      '任务卡片'].every((marker) =>
+    '静态技能包含 Task 命令与不唤醒规范',
+    ['agent_tasks.sh', '### 消息式 Task 与 Trace', 'network_task_mark',
+      'network_task_summaries', 'network_task_trace', 'network_task_search',
+      '不写 inbox', '不唤醒 Agent', 'task_root_id'].every((marker) =>
       skillDocText.includes(marker),
     ),
     skillDocText.slice(0, 300),
   );
   check(
-    '静态技能声明 D08 催办、取消与异常恢复',
+    '静态技能声明 Task 事件只刷新摘要且不生成待办',
     [
-      'external_stop_status',
-      'execution_unknown',
-      'confirmed',
-      'not_executed',
-      'rejected',
-      'task_reminder',
-      'task.reminder',
-      '不增加 `pending_count`',
-      '服务重启不恢复旧进程栈',
+      'task.updated',
+      'message_task_marked',
+      'message_task_unmarked',
+      'informational',
+      '不写 inbox',
+      'pending_count',
+      '不唤醒 Agent',
     ].every((marker) => skillDocText.includes(marker)),
     skillDocText.slice(0, 300),
   );
@@ -3015,14 +3005,13 @@ async function main(): Promise<void> {
   const agentTasksType = agentTasksScript.headers.get('content-type') ?? '';
   const agentTasksText = await agentTasksScript.text();
   check(
-    '任务命令脚本可通过 /skills 下载并包含全部子命令',
+    'Task 命令脚本可通过 /skills 下载并包含 5 个子命令',
     agentTasksType.includes('text/x-shellscript') &&
-      ['list', 'summary', 'get', 'create', 'offer', 'accept', 'decline', 'claim', 'cancel',
-        'progress', 'block', 'resume'].every(
-        (marker) => agentTasksText.includes(`  ${marker}`),
+      ['mark', 'unmark', 'summaries', 'trace', 'search'].every(
+        (marker) => agentTasksText.includes(`  ${marker})`),
       ) &&
-      ['network_task_list', 'network_task_summary', 'network_task_get',
-        'network_task_resume'].every((marker) =>
+      ['network_task_mark', 'network_task_unmark', 'network_task_summaries',
+        'network_task_trace', 'network_task_search'].every((marker) =>
         agentTasksText.includes(marker),
       ),
     { contentType: agentTasksType },
@@ -3038,12 +3027,12 @@ async function main(): Promise<void> {
     agentTasksText.slice(0, 320),
   );
   check(
-    '任务命令脚本 summary 帮助与实际输出字段一致',
-    agentTasksText.includes('claimed 只含本人') &&
-      agentTasksText.includes('pending 是未领取') &&
-      ['pending', 'claimed', 'done', 'failed', 'total'].every((field) =>
-        agentTasksText.includes(`"${field}=\\(.${field})"`),
-      ),
+    'Task 命令脚本说明只读、不轮询与幂等 request_id',
+    agentTasksText.includes('不创建 delivery') &&
+      agentTasksText.includes('不增加 pending_count') &&
+      agentTasksText.includes('不唤醒 Agent') &&
+      agentTasksText.includes('--request-id') &&
+      agentTasksText.includes('message_id 就是 task_root_id'),
     agentTasksText.slice(0, 320),
   );
   check(

@@ -170,8 +170,7 @@ function transferRenderPending(view) {
   if (note) {
     const snapshot = pending.context && pending.context.snapshot ? pending.context.snapshot : {};
     note.textContent =
-      '在途快照：群 ' + (snapshot.room_count || 0) + ' 个、未完成任务 ' +
-      (snapshot.open_task_count || 0) + ' 个、待处理投递 ' +
+      '在途快照：群 ' + (snapshot.room_count || 0) + ' 个、待处理投递 ' +
       (snapshot.pending_deliveries || 0) + ' 条。接受前管理权不变。';
   }
   const accept = transferNode('transfer-accept');
@@ -187,18 +186,7 @@ function transferRenderWork(view) {
   if (summary) {
     summary.textContent =
       '待处理投递 ' + view.in_flight_deliveries.pending + ' 条（已领取 ' +
-      view.in_flight_deliveries.claimed + ' 条），未完成任务 ' +
-      view.pending_work.open_task_count + ' 个';
-  }
-  const taskList = transferNode('transfer-work-tasks');
-  if (taskList) {
-    taskList.textContent = '';
-    for (const task of view.pending_work.open_tasks || []) {
-      const item = document.createElement('li');
-      item.textContent =
-        (task.status === 'claimed' ? '已领取' : '待领取') + '：' + task.description;
-      taskList.appendChild(item);
-    }
+      view.in_flight_deliveries.claimed + ' 条）';
   }
   const deliveryList = transferNode('transfer-work-deliveries');
   if (deliveryList) {

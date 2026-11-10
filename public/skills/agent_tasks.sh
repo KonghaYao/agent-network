@@ -1,18 +1,16 @@
 #!/bin/bash
-# WeBots 任务命令：list/summary/get/create/offer/accept/decline/claim/cancel/retry/
-# progress/block/resume/transfer-*/submit/submissions/submission-get/review-*/
-# reviewer-set/handoff-* 与 execution-unknown/execution-resolve。
-# 服务端自动发送 task_reminder，没有 remind 子命令。
+# WeBots 消息式 Task 命令：mark/unmark/summaries/trace/search。
+# Task 没有独立任务实体、负责人或状态机；一条被标记消息的 message_id 就是 task_root_id。
 # 依赖 curl、jq。token 只从环境变量读取，写入 0600 临时 curl 配置，不进入进程参数或日志。
 # 用法：AGENTNET_TOKEN=... bash agent_tasks.sh <command> [options]
 # 安装：curl -fsSL https://net.peri-code.dev/skills/agent_tasks.sh -o agent_tasks.sh
-# 本脚本只做请求/响应，不轮询；任务事件不会唤醒 Agent。network_login 返回 task_summary；每次唤醒后先 summary（pending 是未领取，claimed 只含本人），再按房间 list。
+# 本脚本只做请求/响应，不轮询；标记、摘要、Trace 与搜索都不会唤醒 Agent。
 set -u
 set -o pipefail
 
 : "${AGENTNET_URL:=https://net.peri-code.dev}"
 : "${AGENTNET_TOKEN:=}"
-CLI_VERSION="1.0.0"
+CLI_VERSION="2.0.0"
 AGENTNET_URL="${AGENTNET_URL%/}"
 
 die() {
@@ -112,88 +110,18 @@ usage() {
 用法：agent_tasks.sh [--json] <command> [options]
 
 命令：
-  list --room ROOM_ID
-      读取房间任务列表，输出 task_id/status/owner/title。
-  list --mine [--limit N]
-      读取与我相关（创建、负责、验收、待接手）的任务。
-  summary [--rooms ROOM_ID1,ROOM_ID2]
-      读取当前身份 active 房间的任务进度；每行输出 room_id、pending、claimed、done、failed、total；
-      claimed 只含本人领取，pending 是未领取，done/failed/total 是房间总量；--rooms 只过滤，不暴露非成员房间。
-  get --task TASK_ID
-      读取任务详情：状态、revision、负责人、验收人、来源消息与任务卡片。
-  create --room ROOM_ID --title TEXT [options]
-      创建任务并生成任务卡片。选项：
-      --description TEXT        详细目标
-      --acceptance TEXT         验收条件
-      --source-message MSG_ID   从消息创建；同一来源只生成一个任务
-      --assignee ACTOR_ID       指定候选负责人（只形成 offered，不等于接单）
-      --reviewer ACTOR_ID       验收人；自己执行时必须指定他人
-      --due ISO8601             期限
-      --attachment FILE_ID      附件引用，可重复
-  offer --task TASK_ID --assignee ACTOR_ID [--expected-revision N]
-      创建者、群 owner 或管理员向未指派任务发起接手 offer。
-  accept --task TASK_ID [--assignment ASSIGNMENT_ID] [--expected-revision N]
-      当前候选负责人接受指定 offer；并发接受只有一个成功。
-  decline --task TASK_ID [--assignment ASSIGNMENT_ID] [--expected-revision N] [--reason TEXT]
-      当前候选负责人拒绝指定 offer；任务回到 unassigned，不自动改派。
-  claim --task TASK_ID [--expected-revision N]
-      human 或 Agent 领取 unassigned 任务；并发领取返回 CLAIM_CONFLICT。
-  cancel --task TASK_ID --reason TEXT [--external-stop-status STATUS] [--expected-revision N]
-      创建者、当前负责人或群 owner/管理员取消任务；reason 必填。
-      STATUS 为 confirmed/unknown/not_required；confirmed 只是操作者声明。
-  retry --task TASK_ID --reason TEXT [--assignee ACTOR_ID] [--expected-revision N]
-      创建者、群 owner 或管理员显式重试 failed 任务；生成新 revision/assignment_version。
-  execution-unknown --task TASK_ID --action ACTION_ID --reason TEXT [options]
-      当前负责人把 in_progress 任务标记为 execution_unknown；不自动重跑外部步骤。
-  execution-resolve --task TASK_ID --action ACTION_ID --outcome confirmed|not_executed|rejected --evidence TEXT [options]
-      记录外部动作对账结论；confirmed/not_executed 恢复执行，rejected 保持 blocked。
-  progress --task TASK_ID [--note TEXT] [--percent 0-100] [options]
-      当前负责人上报进度；note 与 percent 至少一项，任务仍为 in_progress。
-  block --task TASK_ID --reason TEXT [options]
-      当前负责人把 in_progress 任务转为 blocked；reason 必填。
-  resume --task TASK_ID [--note TEXT] [options]
-      当前负责人把 blocked 任务恢复为 in_progress，并清空阻塞原因。
-  transfer-list [--task TASK_ID] [--status STATUS] [--limit N]
-      读取任务交接提议；省略 --task 时读取与我相关的提议。
-  transfer-propose --task TASK_ID --to ACTOR_ID [--note TEXT] [options]
-      当前负责人、创建者或群 owner/管理员发起交接；默认 24 小时有效。
-  transfer-accept --transfer TRANSFER_ID [--from-assignment-version N] [--expected-revision N]
-      只有提议目标可接受；接受前原负责人继续负责。
-  transfer-reject --transfer TRANSFER_ID [--reason TEXT]
-      只有提议目标可拒绝；不改变原 assignment。
-  transfer-cancel --transfer TRANSFER_ID [--reason TEXT]
-      提议者、创建者、当前负责人或群 owner/管理员撤回 pending 提议。
-  submit --task TASK_ID --summary TEXT [--material FILE_ID[:LABEL]]... [--link URL]...
-         [--commit SHA] [--evidence TEXT]... [--known-limits TEXT] [options]
-      当前负责人提交成果；material 必须是同房间已绑定文件。
-  submissions --task TASK_ID [--limit N]
-      按版本倒序读取提交历史。
-  submission-get --task TASK_ID [--version N]
-      读取指定或最新提交版本。
-  review-accept --task TASK_ID --submission SUBMISSION_ID --version N --check "ITEM|true|NOTE"...
-      当前验收人逐项核对并通过；至少一项 checklist。
-  review-return --task TASK_ID --submission SUBMISSION_ID --version N --reason TEXT
-      当前验收人退回指定成果版本。
-  reviewer-set --task TASK_ID --reviewer ACTOR_ID [--expected-revision N]
-      创建者、当前负责人或群 owner/管理员改派验收人。
-  handoff-create --task TASK_ID --assignment ASSIGNMENT_ID --assignment-version N --goal TEXT
-         [--current-result TEXT] [--completed TEXT]... [--unresolved TEXT]...
-         [--next-step TEXT]... [--item "kind|ref|label"]... [--source-room ROOM_ID] [options]
-      当前负责人生成版本化交接包；引用只保存 ID/摘要，不复制正文或字节。
-  handoff-get --task TASK_ID [--pack PACK_ID] [--version N]
-      读取指定或最新交接包与就绪状态。
-  handoff-authorize --task TASK_ID --pack PACK_ID --item ITEM_ID --action grant|revoke
-         --assignment ASSIGNMENT_ID --assignment-version N [--note TEXT]
-      跨范围材料授权/撤回；grant 需仍能访问源范围。
-  handoff-request-more --task TASK_ID [--pack PACK_ID] --note TEXT
-         [--transfer TRANSFER_ID | --assignment ASSIGNMENT_ID --assignment-version N]
-      接任者请求补充上下文；不改变原责任或任务状态。
-
-进度类写操作通用选项：
-  --assignment ASSIGNMENT_ID       当前 assignment；建议与 --assignment-version 一起传
-  --assignment-version N           当前执行版本；旧版本返回 ASSIGNMENT_STALE
-  --expected-revision N            任务 revision CAS；变化返回 VERSION_CONFLICT
-  --request-id ID                  幂等 ID
+  mark --room ROOM_ID --message MESSAGE_ID [--request-id ID]
+      把房间内任意当前可见、未撤回的消息标记为消息式 Task 起点。
+      起点可以来自人类或 Agent；重复标记幂等，已属于另一个 Task 返回 CONFLICT。
+  unmark --room ROOM_ID --message MESSAGE_ID [--request-id ID]
+      取消起点标记；只撤销聚合入口，原消息、处理消息与引用关系全部保留。
+  summaries --room ROOM_ID --roots MESSAGE_ID[,MESSAGE_ID...]
+      批量读取摘要行（最多 20 个起点）；未标记或不可见起点直接省略。
+      输出 root_message_id、message_count、participant_count、起点发送者与短预览。
+  trace --room ROOM_ID --root MESSAGE_ID [--cursor CURSOR] [--focus MESSAGE_ID] [--limit N]
+      按原消息顺序读取处理链；引用来源标为 reference，正文需另用 network_message_read。
+  search --room ROOM_ID --query TEXT [--limit N] [--cursor CURSOR]
+      按起点聚合搜索；命中起点、处理消息或被引用来源时只返回一个 Task 摘要。
 
 选项：
   --json          输出原始工具结果 JSON；默认输出简短行。
@@ -204,16 +132,10 @@ usage() {
   AGENTNET_TOKEN  Agent 的 Bearer token；所有命令必填
 
 说明：
-  title 最多 120 字；长目标写 description，验收写 acceptance_criteria。
-  任务创建会生成“【任务卡】”消息；卡片正文只是展示，不会再次解析成 invoke 或新工作。
-  指派 Agent 只产生一条绑定 task_id/assignment_version 的 delivery；human 候选只写持久个人通知。
-  公开任务不创建 delivery、不增加 pending_count，也不唤醒所有 Agent。
-  接受/拒绝只由当前候选者操作；delivery claim/complete 只表示通知处理，不等于接受或验收任务。
-  进度/阻塞/恢复只写任务 revision 与 task_progress 审计，不创建消息、delivery 或未读；
-  submitted 需 D06 提交、accepted 需 D07 指定验收人，legacy_completed 只读且不等于 accepted。
-  任务通知不写 inbox、不推进 head_seq、不产生未读；不要轮询。
-  服务端在任务 3 分钟无进度时自动写 task_reminder inbox 提醒；没有 remind 子命令，也不应自行轮询催办。
-  network_login 返回 task_summary；请在每次唤醒后先 summary（pending 是未领取，claimed 只含本人），再按房间 list。
+  Task 没有独立任务实体、负责人、业务状态或子任务；message_id 就是 task_root_id。
+  标记、摘要、Trace 与搜索都是只读发现或房间事件，不创建 delivery、不增加 pending_count、
+  不推进 head_seq、不唤醒 Agent，也不需要 claim/complete。
+  unmark 不删除消息；重新 mark 后集合恢复。
   token 只写入 0600 临时 curl 配置，不输出、不写入日志或进程参数。
 EOF
 }
@@ -246,949 +168,147 @@ print_json() {
   printf '%s\n' "$1" | jq .
 }
 
-cmd_list() {
-  local room="" mine=0 limit=""
+parse_room_message() {
+  ROOM=""
+  MESSAGE=""
+  REQUEST_ID=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --room) need_value "$@"; ROOM="${2:-}"; shift 2 ;;
+      --message) need_value "$@"; MESSAGE="${2:-}"; shift 2 ;;
+      --request-id) need_value "$@"; REQUEST_ID="${2:-}"; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  [ -n "$ROOM" ] || die "command requires --room"
+  [ -n "$MESSAGE" ] || die "command requires --message"
+  [ -n "$REQUEST_ID" ] || REQUEST_ID=$(new_id)
+}
+
+cmd_mark() {
+  parse_room_message "$@"
+  local result
+  result=$(mcp_call network_task_mark "$(jq -nc \
+    --arg request_id "$REQUEST_ID" --arg room "$ROOM" --arg message "$MESSAGE" \
+    '{request_id:$request_id, room_id:$room, message_id:$message}')") || exit 1
+  result=$(printf '%s' "$result" | mcp_result) || exit 1
+  if [ "$JSON" = "1" ]; then
+    print_json "$result"
+    return
+  fi
+  printf '%s' "$result" | jq -r '"marked\t\(.message_id)\ttask_root_id=\(.task_root_id)"'
+}
+
+cmd_unmark() {
+  parse_room_message "$@"
+  local result
+  result=$(mcp_call network_task_unmark "$(jq -nc \
+    --arg request_id "$REQUEST_ID" --arg room "$ROOM" --arg message "$MESSAGE" \
+    '{request_id:$request_id, room_id:$room, message_id:$message}')") || exit 1
+  result=$(printf '%s' "$result" | mcp_result) || exit 1
+  if [ "$JSON" = "1" ]; then
+    print_json "$result"
+    return
+  fi
+  printf '%s' "$result" | jq -r '"unmarked\t\(.message_id)"'
+}
+
+cmd_summaries() {
+  local room="" roots=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --room) need_value "$@"; room="${2:-}"; shift 2 ;;
-      --mine) mine=1; shift ;;
-      --limit) need_value "$@"; limit="${2:-}"; shift 2 ;;
-      *) die "unknown list option: $1" ;;
+      --roots) need_value "$@"; roots="${2:-}"; shift 2 ;;
+      *) die "unknown summaries option: $1" ;;
     esac
   done
-  [ -n "$room" ] || [ "$mine" = "1" ] || die "list requires --room or --mine"
+  [ -n "$room" ] || die "summaries requires --room"
+  [ -n "$roots" ] || die "summaries requires --roots"
   local args result
-  if [ "$mine" = "1" ]; then
-    args=$(jq -nc --arg limit "$limit" \
-      '{scope:"mine"} + (if $limit == "" then {} else {limit:($limit|tonumber)} end)')
-  else
-    args=$(jq -nc --arg room "$room" --arg limit "$limit" \
-      '{room_id:$room} + (if $limit == "" then {} else {limit:($limit|tonumber)} end)')
-  fi
-  result=$(mcp_call network_task_list "$args") || exit 1
+  args=$(printf '%s' "$roots" | jq -Rc --arg room "$room" '
+    {room_id:$room, root_message_ids:(split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)))}')
+  result=$(mcp_call network_task_summaries "$args") || exit 1
   result=$(printf '%s' "$result" | mcp_result) || exit 1
   if [ "$JSON" = "1" ]; then
     print_json "$result"
     return
   fi
   printf '%s' "$result" | jq -r '
-    .tasks[]? | [.task_id, .status, (.owner_name // "未领取"), .title] | @tsv'
+    .items[]? | [.root_message_id, "messages=\(.message_count)", "participants=\(.participant_count)",
+      (.root_sender_name // .root_sender_id), .preview] | @tsv'
 }
 
-cmd_summary() {
-  local rooms=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --rooms) need_value "$@"; rooms="${2:-}"; shift 2 ;;
-      *) die "unknown summary option: $1" ;;
-    esac
-  done
-  local args='{}'
-  if [ -n "$rooms" ]; then
-    args=$(printf '%s' "$rooms" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | {room_ids: .}')
-  fi
-  local result
-  result=$(mcp_call network_task_summary "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '.items[]? | [.room_id, "pending=\(.pending)", "claimed=\(.claimed)", "done=\(.done)", "failed=\(.failed)", "total=\(.total)"] | @tsv'
-}
-
-cmd_get() {
-  local task=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      *) die "unknown get option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "get requires --task"
-  local result
-  result=$(mcp_call network_task_get "$(jq -nc --arg task "$task" '{task_id:$task}')") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '.task |
-    "\(.task_id)\t\(.status)\trevision=\(.revision)\towner=\(.owner_name // "未领取")\treviewer=\(.reviewer_name)\n" +
-    "title: \(.title)\n" +
-    (if .description != "" then "description: \(.description)\n" else "" end) +
-    (if .acceptance_criteria != "" then "acceptance: \(.acceptance_criteria)\n" else "" end) +
-    (if .source_message_id then "source: \(.source_message_id)\n" else "" end) +
-    (if .card_message_id then "card: \(.card_message_id)\n" else "" end) +
-    (if .assignment then "assignment: \(.assignment.assignment_id) v\(.assignment.assignment_version) \(.assignment.status)\n" else "" end)'
-}
-
-cmd_create() {
-  local room="" title="" description="" acceptance="" source="" assignee="" reviewer="" due=""
-  local request_id="" attachments=()
+cmd_trace() {
+  local room="" root="" cursor="" focus="" limit=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --room) need_value "$@"; room="${2:-}"; shift 2 ;;
-      --title) need_value "$@"; title="${2:-}"; shift 2 ;;
-      --description) need_value "$@"; description="${2:-}"; shift 2 ;;
-      --acceptance) need_value "$@"; acceptance="${2:-}"; shift 2 ;;
-      --source-message) need_value "$@"; source="${2:-}"; shift 2 ;;
-      --assignee) need_value "$@"; assignee="${2:-}"; shift 2 ;;
-      --reviewer) need_value "$@"; reviewer="${2:-}"; shift 2 ;;
-      --due) need_value "$@"; due="${2:-}"; shift 2 ;;
-      --attachment) need_value "$@"; attachments+=("${2:-}"); shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown create option: $1" ;;
-    esac
-  done
-  [ -n "$room" ] || die "create requires --room"
-  [ -n "$title" ] || die "create requires --title"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc \
-    --arg request_id "$request_id" --arg room "$room" --arg title "$title" \
-    --arg description "$description" --arg acceptance "$acceptance" \
-    --arg source "$source" --arg assignee "$assignee" --arg reviewer "$reviewer" \
-    --arg due "$due" \
-    '{request_id:$request_id, room_id:$room, title:$title}
-      + (if $description == "" then {} else {description:$description} end)
-      + (if $acceptance == "" then {} else {acceptance_criteria:$acceptance} end)
-      + (if $source == "" then {} else {source_message_id:$source} end)
-      + (if $assignee == "" then {} else {assignee_actor_id:$assignee} end)
-      + (if $reviewer == "" then {} else {reviewer_actor_id:$reviewer} end)
-      + (if $due == "" then {} else {due_at:$due} end)')
-  if [ ${#attachments[@]} -gt 0 ]; then
-    args=$(printf '%s' "$args" | jq --argjson files "$(printf '%s\n' "${attachments[@]}" | jq -R . | jq -sc .)" '. + {attachment_file_ids:$files}')
-  fi
-  result=$(mcp_call network_task_create "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\tcard=\(.task.card_message_id // "-")\t\(.task.title)"'
-}
-
-cmd_offer() {
-  local task="" assignee="" request_id="" revision=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --assignee) need_value "$@"; assignee="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown offer option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "offer requires --task"
-  [ -n "$assignee" ] || die "offer requires --assignee"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg assignee "$assignee" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, assignee_actor_id:$assignee}
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_offer "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\tassignment=\(.task.assignment.assignment_id // "-")\t\(.task.assignment.status // "-")"'
-}
-
-cmd_accept() {
-  local task="" assignment="" request_id="" revision=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown accept option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "accept requires --task"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg assignment "$assignment" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task}
-      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_accept "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\towner=\(.task.owner_name // "-")\t\(.task.title)"'
-}
-
-cmd_decline() {
-  local task="" assignment="" request_id="" revision="" reason=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown decline option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "decline requires --task"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg assignment "$assignment" --arg revision "$revision" --arg reason "$reason" \
-    '{request_id:$request_id, task_id:$task}
-      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)
-      + (if $reason == "" then {} else {reason:$reason} end)')
-  result=$(mcp_call network_task_decline "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\towner=\(.task.owner_name // "-")"'
-}
-
-cmd_claim() {
-  local task="" request_id="" revision=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown claim option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "claim requires --task"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task}
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_claim "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\towner=\(.task.owner_name // "-")"'
-}
-
-cmd_cancel() {
-  local task="" reason="" request_id="" revision="" stop_status=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
-      --external-stop-status) need_value "$@"; stop_status="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown cancel option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "cancel requires --task"
-  [ -n "$reason" ] || die "cancel requires --reason"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg reason "$reason" \
-    --arg revision "$revision" --arg stop_status "$stop_status" \
-    '{request_id:$request_id, task_id:$task, reason:$reason}
-      + (if $stop_status == "" then {} else {external_stop_status:$stop_status} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_cancel "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\t\(.task.cancelled_at // "-")\texternal_stop=\(.task.external_stop_status // "-")"'
-}
-
-cmd_retry() {
-  local task="" reason="" assignee="" request_id="" revision=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
-      --assignee) need_value "$@"; assignee="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown retry option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "retry requires --task"
-  [ -n "$reason" ] || die "retry requires --reason"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg reason "$reason" \
-    --arg assignee "$assignee" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, reason:$reason}
-      + (if $assignee == "" then {} else {assignee_actor_id:$assignee} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_retry "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\trevision=\(.task.revision)\tassignment_version=\(.task.assignment.assignment_version // "-")"'
-}
-
-cmd_execution_unknown() {
-  local task="" action="" reason="" assignment="" version="" request_id="" revision=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --action) need_value "$@"; action="${2:-}"; shift 2 ;;
-      --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
-      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
-      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown execution-unknown option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "execution-unknown requires --task"
-  [ -n "$action" ] || die "execution-unknown requires --action"
-  [ -n "$reason" ] || die "execution-unknown requires --reason"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg action "$action" \
-    --arg reason "$reason" --arg assignment "$assignment" --arg version "$version" \
-    --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, action_id:$action, reason:$reason}
-      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
-      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_execution_unknown "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\taction=\(.action.action_id)\tstate=\(.action.state)"'
-}
-
-cmd_execution_resolve() {
-  local task="" action="" outcome="" evidence="" assignment="" version="" request_id="" revision=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --action) need_value "$@"; action="${2:-}"; shift 2 ;;
-      --outcome) need_value "$@"; outcome="${2:-}"; shift 2 ;;
-      --evidence) need_value "$@"; evidence="${2:-}"; shift 2 ;;
-      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
-      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown execution-resolve option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "execution-resolve requires --task"
-  [ -n "$action" ] || die "execution-resolve requires --action"
-  [ -n "$outcome" ] || die "execution-resolve requires --outcome"
-  [ -n "$evidence" ] || die "execution-resolve requires --evidence"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg action "$action" \
-    --arg outcome "$outcome" --arg evidence "$evidence" --arg assignment "$assignment" \
-    --arg version "$version" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, action_id:$action, outcome:$outcome, evidence:$evidence}
-      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
-      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_execution_resolve "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\taction=\(.action.action_id)\tstate=\(.action.state)"'
-}
-
-cmd_progress() {
-  local task="" note="" percent="" assignment="" version="" request_id="" revision=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --note) need_value "$@"; note="${2:-}"; shift 2 ;;
-      --percent) need_value "$@"; percent="${2:-}"; shift 2 ;;
-      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
-      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown progress option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "progress requires --task"
-  [ -n "$note" ] || [ -n "$percent" ] || die "progress requires --note or --percent"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg note "$note" \
-    --arg percent "$percent" --arg assignment "$assignment" --arg version "$version" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task}
-      + (if $note == "" then {} else {note:$note} end)
-      + (if $percent == "" then {} else {percent:($percent|tonumber)} end)
-      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
-      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_progress "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\trevision=\(.task.revision)\tpercent=\(.task.progress.percent // "-")"'
-}
-
-cmd_block() {
-  local task="" reason="" assignment="" version="" request_id="" revision=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
-      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
-      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown block option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "block requires --task"
-  [ -n "$reason" ] || die "block requires --reason"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg reason "$reason" \
-    --arg assignment "$assignment" --arg version "$version" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, reason:$reason}
-      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
-      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_block "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\trevision=\(.task.revision)\t\(.task.blocked_reason // "-")"'
-}
-
-cmd_resume() {
-  local task="" note="" assignment="" version="" request_id="" revision=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --note) need_value "$@"; note="${2:-}"; shift 2 ;;
-      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
-      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown resume option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "resume requires --task"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg note "$note" \
-    --arg assignment "$assignment" --arg version "$version" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task}
-      + (if $note == "" then {} else {note:$note} end)
-      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
-      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_resume "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then
-    print_json "$result"
-    return
-  fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\trevision=\(.task.revision)\towner=\(.task.owner_name // "-")"'
-}
-
-print_transfer() {
-  jq -r '"\(.transfer.transfer_id)\t\(.transfer.effective_status)\ttask=\(.transfer.task_id)\tto=\(.transfer.to_actor_name)\texpires=\(.transfer.expires_at)"'
-}
-
-cmd_transfer_list() {
-  local task="" status="" limit="" request_id=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --status) need_value "$@"; status="${2:-}"; shift 2 ;;
+      --root) need_value "$@"; root="${2:-}"; shift 2 ;;
+      --cursor) need_value "$@"; cursor="${2:-}"; shift 2 ;;
+      --focus) need_value "$@"; focus="${2:-}"; shift 2 ;;
       --limit) need_value "$@"; limit="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown transfer-list option: $1" ;;
+      *) die "unknown trace option: $1" ;;
     esac
   done
+  [ -n "$room" ] || die "trace requires --room"
+  [ -n "$root" ] || die "trace requires --root"
   local args result
-  args=$(jq -nc --arg task "$task" --arg status "$status" --arg limit "$limit" \
-    '{} + (if $task == "" then {scope:"mine"} else {task_id:$task} end)
-        + (if $status == "" then {} else {status:$status} end)
-        + (if $limit == "" then {} else {limit:($limit|tonumber)} end)')
-  result=$(mcp_call network_task_transfer_list "$args") || exit 1
+  args=$(jq -nc --arg room "$room" --arg root "$root" --arg cursor "$cursor" \
+    --arg focus "$focus" --arg limit "$limit" '
+    {room_id:$room, root_message_id:$root}
+    + (if $cursor == "" then {} else {cursor:$cursor} end)
+    + (if $focus == "" then {} else {focus_message_id:$focus} end)
+    + (if $limit == "" then {} else {limit:($limit|tonumber)} end)')
+  result=$(mcp_call network_task_trace "$args") || exit 1
   result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | jq -r '.transfers[] | "\(.transfer_id)\t\(.effective_status)\ttask=\(.task_id)\tto=\(.to_actor_name)\texpires=\(.expires_at)"'
+  if [ "$JSON" = "1" ]; then
+    print_json "$result"
+    return
+  fi
+  printf '%s' "$result" | jq -r '
+    .items[]? | [.role, .message_id, (.sender_name // .sender_id),
+      (if .recalled then "recalled" else "\(.body_bytes)B" end), .preview] | @tsv'
+  printf '%s' "$result" | jq -r '
+    "next_cursor=\(.next_cursor // "-")\tprev_cursor=\(.prev_cursor // "-")\t" +
+    "before=\(.has_more_before)\tafter=\(.has_more_after)\tmessages=\(.message_count)"'
 }
 
-cmd_transfer_propose() {
-  local task="" to="" note="" assignment="" version="" request_id="" revision=""
+cmd_search() {
+  local room="" query="" limit="" cursor=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --to) need_value "$@"; to="${2:-}"; shift 2 ;;
-      --note) need_value "$@"; note="${2:-}"; shift 2 ;;
-      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
-      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown transfer-propose option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "transfer-propose requires --task"
-  [ -n "$to" ] || die "transfer-propose requires --to"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg to "$to" \
-    --arg note "$note" --arg assignment "$assignment" --arg version "$version" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, to_actor_id:$to}
-      + (if $note == "" then {} else {note:$note} end)
-      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
-      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_transfer_propose "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | print_transfer
-}
-
-cmd_transfer_accept() {
-  local transfer="" version="" revision="" request_id=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --transfer) need_value "$@"; transfer="${2:-}"; shift 2 ;;
-      --from-assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown transfer-accept option: $1" ;;
-    esac
-  done
-  [ -n "$transfer" ] || die "transfer-accept requires --transfer"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg transfer "$transfer" \
-    --arg version "$version" --arg revision "$revision" \
-    '{request_id:$request_id, transfer_id:$transfer}
-      + (if $version == "" then {} else {from_assignment_version:($version|tonumber)} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_transfer_accept "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | print_transfer
-}
-
-cmd_transfer_reject() {
-  local transfer="" reason="" request_id=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --transfer) need_value "$@"; transfer="${2:-}"; shift 2 ;;
-      --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown transfer-reject option: $1" ;;
-    esac
-  done
-  [ -n "$transfer" ] || die "transfer-reject requires --transfer"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg transfer "$transfer" --arg reason "$reason" \
-    '{request_id:$request_id, transfer_id:$transfer}
-      + (if $reason == "" then {} else {reason:$reason} end)')
-  result=$(mcp_call network_task_transfer_reject "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | print_transfer
-}
-
-cmd_transfer_cancel() {
-  local transfer="" reason="" request_id=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --transfer) need_value "$@"; transfer="${2:-}"; shift 2 ;;
-      --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown transfer-cancel option: $1" ;;
-    esac
-  done
-  [ -n "$transfer" ] || die "transfer-cancel requires --transfer"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg transfer "$transfer" --arg reason "$reason" \
-    '{request_id:$request_id, transfer_id:$transfer}
-      + (if $reason == "" then {} else {reason:$reason} end)')
-  result=$(mcp_call network_task_transfer_cancel "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | print_transfer
-}
-
-cmd_submit() {
-  local task="" summary="" commit="" known_limits="" assignment="" version="" revision="" request_id=""
-  local materials='[]' links='[]' evidence='[]'
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --summary) need_value "$@"; summary="${2:-}"; shift 2 ;;
-      --material)
-        need_value "$@"
-        local material="${2:-}" file_id label
-        file_id="${material%%:*}"
-        label=""
-        [ "$file_id" != "$material" ] && label="${material#*:}"
-        materials=$(jq -c --arg f "$file_id" --arg l "$label" '. + [{file_id:$f} + (if $l == "" then {} else {label:$l} end)]' <<<"$materials")
-        shift 2 ;;
-      --link) need_value "$@"; links=$(jq -c --arg u "${2:-}" '. + [{url:$u}]' <<<"$links"); shift 2 ;;
-      --commit) need_value "$@"; commit="${2:-}"; shift 2 ;;
-      --evidence) need_value "$@"; evidence=$(jq -c --arg e "${2:-}" '. + [$e]' <<<"$evidence"); shift 2 ;;
-      --known-limits) need_value "$@"; known_limits="${2:-}"; shift 2 ;;
-      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
-      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown submit option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "submit requires --task"
-  [ -n "$summary" ] || die "submit requires --summary"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg summary "$summary" \
-    --argjson materials "$materials" --argjson links "$links" --argjson evidence "$evidence" \
-    --arg commit "$commit" --arg known_limits "$known_limits" --arg assignment "$assignment" \
-    --arg version "$version" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, summary:$summary}
-      + (if ($materials|length) == 0 then {} else {materials:$materials} end)
-      + (if ($links|length) == 0 then {} else {links:$links} end)
-      + (if ($evidence|length) == 0 then {} else {evidence:$evidence} end)
-      + (if $commit == "" then {} else {commit_sha:$commit} end)
-      + (if $known_limits == "" then {} else {known_limits:$known_limits} end)
-      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
-      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_submit "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | jq -r '"\(.submission.submission_id)\tv\(.submission.version)\t\(.submission.status)\ttask=\(.submission.task_id)"'
-}
-
-cmd_submissions() {
-  local task="" limit=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
+      --room) need_value "$@"; room="${2:-}"; shift 2 ;;
+      --query) need_value "$@"; query="${2:-}"; shift 2 ;;
       --limit) need_value "$@"; limit="${2:-}"; shift 2 ;;
-      *) die "unknown submissions option: $1" ;;
+      --cursor) need_value "$@"; cursor="${2:-}"; shift 2 ;;
+      *) die "unknown search option: $1" ;;
     esac
   done
-  [ -n "$task" ] || die "submissions requires --task"
+  [ -n "$room" ] || die "search requires --room"
+  [ -n "$query" ] || die "search requires --query"
   local args result
-  args=$(jq -nc --arg task "$task" --arg limit "$limit" \
-    '{task_id:$task} + (if $limit == "" then {} else {limit:($limit|tonumber)} end)')
-  result=$(mcp_call network_task_submission_list "$args") || exit 1
+  args=$(jq -nc --arg room "$room" --arg query "$query" --arg limit "$limit" --arg cursor "$cursor" '
+    {room_id:$room, query:$query}
+    + (if $limit == "" then {} else {limit:($limit|tonumber)} end)
+    + (if $cursor == "" then {} else {cursor:$cursor} end)')
+  result=$(mcp_call network_task_search "$args") || exit 1
   result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | jq -r '.submissions[] | "\(.submission_id)\tv\(.version)\t\(.status)\t\(.summary)"'
-}
-
-cmd_submission_get() {
-  local task="" version=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      *) die "unknown submission-get option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "submission-get requires --task"
-  local args result
-  args=$(jq -nc --arg task "$task" --arg version "$version" \
-    '{task_id:$task} + (if $version == "" then {} else {version:($version|tonumber)} end)')
-  result=$(mcp_call network_task_submission_get "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | jq -r '"\(.submission.submission_id)\tv\(.submission.version)\t\(.submission.status)\t\(.submission.summary)"'
-}
-
-cmd_review_accept() {
-  local task="" submission="" version="" revision="" request_id=""
-  local checklist='[]'
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --submission) need_value "$@"; submission="${2:-}"; shift 2 ;;
-      --version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --check)
-        need_value "$@"
-        local spec="${2:-}" item passed note
-        item="${spec%%|*}"; spec="${spec#*|}"
-        passed="${spec%%|*}"; note=""
-        [ "$passed" != "$spec" ] && note="${spec#*|}"
-        checklist=$(jq -c --arg i "$item" --arg p "$passed" --arg n "$note" \
-          '. + [{item:$i, passed:($p == "true")} + (if $n == "" then {} else {note:$n} end)]' <<<"$checklist")
-        shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown review-accept option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "review-accept requires --task"
-  [ -n "$submission" ] || die "review-accept requires --submission"
-  [ -n "$version" ] || die "review-accept requires --version"
-  [ "$(printf '%s' "$checklist" | jq 'length')" -gt 0 ] || die "review-accept requires at least one --check"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg submission "$submission" \
-    --arg version "$version" --argjson checklist "$checklist" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, submission_id:$submission, version:($version|tonumber), checklist:$checklist}
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_review_accept "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | jq -r '"\(.submission.submission_id)\tv\(.submission.version)\t\(.submission.status)"'
-}
-
-cmd_review_return() {
-  local task="" submission="" version="" reason="" revision="" request_id=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --submission) need_value "$@"; submission="${2:-}"; shift 2 ;;
-      --version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --reason) need_value "$@"; reason="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown review-return option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "review-return requires --task"
-  [ -n "$submission" ] || die "review-return requires --submission"
-  [ -n "$version" ] || die "review-return requires --version"
-  [ -n "$reason" ] || die "review-return requires --reason"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg submission "$submission" \
-    --arg version "$version" --arg reason "$reason" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, submission_id:$submission, version:($version|tonumber), reason:$reason}
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_review_return "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | jq -r '"\(.submission.submission_id)\tv\(.submission.version)\t\(.submission.status)"'
-}
-
-cmd_reviewer_set() {
-  local task="" reviewer="" revision="" request_id=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --reviewer) need_value "$@"; reviewer="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown reviewer-set option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "reviewer-set requires --task"
-  [ -n "$reviewer" ] || die "reviewer-set requires --reviewer"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg reviewer "$reviewer" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, reviewer_actor_id:$reviewer}
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_reviewer_set "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | jq -r '"\(.task.task_id)\t\(.task.status)\trevision=\(.task.revision)\treviewer=\(.task.reviewer.name // .task.reviewer_actor_id // "-")"'
-}
-
-cmd_handoff_create() {
-  local task="" assignment="" version="" goal="" current_result="" source_room="" transfer="" request_id="" revision=""
-  local completed='[]' unresolved='[]' next_steps='[]' items='[]'
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
-      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --goal) need_value "$@"; goal="${2:-}"; shift 2 ;;
-      --current-result) need_value "$@"; current_result="${2:-}"; shift 2 ;;
-      --completed) need_value "$@"; completed=$(jq -c --arg v "${2:-}" '. + [$v]' <<<"$completed"); shift 2 ;;
-      --unresolved) need_value "$@"; unresolved=$(jq -c --arg v "${2:-}" '. + [$v]' <<<"$unresolved"); shift 2 ;;
-      --next-step) need_value "$@"; next_steps=$(jq -c --arg v "${2:-}" '. + [$v]' <<<"$next_steps"); shift 2 ;;
-      --item)
-        need_value "$@"
-        local spec="${2:-}" kind ref label
-        kind="${spec%%|*}"; spec="${spec#*|}"
-        ref="${spec%%|*}"; label=""
-        [ "$ref" != "$spec" ] && label="${spec#*|}"
-        items=$(jq -c --arg k "$kind" --arg r "$ref" --arg l "$label" \
-          '. + [{kind:$k, ref:$r} + (if $l == "" then {} else {label:$l} end)]' <<<"$items")
-        shift 2 ;;
-      --source-room) need_value "$@"; source_room="${2:-}"; shift 2 ;;
-      --transfer) need_value "$@"; transfer="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown handoff-create option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "handoff-create requires --task"
-  [ -n "$assignment" ] || die "handoff-create requires --assignment"
-  [ -n "$version" ] || die "handoff-create requires --assignment-version"
-  [ -n "$goal" ] || die "handoff-create requires --goal"
-  [ -n "$current_result" ] || current_result="进行中"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg assignment "$assignment" \
-    --arg version "$version" --arg goal "$goal" --arg current_result "$current_result" \
-    --argjson completed "$completed" --argjson unresolved "$unresolved" --argjson next_steps "$next_steps" \
-    --argjson items "$items" --arg source_room "$source_room" --arg transfer "$transfer" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, assignment_id:$assignment,
-      assignment_version:($version|tonumber), goal:$goal,
-      current_result:{summary:$current_result}}
-      + (if ($completed|length) == 0 then {} else {completed:$completed} end)
-      + (if ($unresolved|length) == 0 then {} else {unresolved:$unresolved} end)
-      + (if ($next_steps|length) == 0 then {} else {next_steps:$next_steps} end)
-      + (if ($items|length) == 0 then {} else {items:$items} end)
-      + (if $source_room == "" then {} else {source_room_id:$source_room} end)
-      + (if $transfer == "" then {} else {transfer_id:$transfer} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_handoff_pack_create "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | jq -r '"\(.pack.pack_id)\tv\(.pack.version)\tcontext_ready=\(.pack.context_ready)"'
-}
-
-cmd_handoff_get() {
-  local task="" pack="" version=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --pack) need_value "$@"; pack="${2:-}"; shift 2 ;;
-      --version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      *) die "unknown handoff-get option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "handoff-get requires --task"
-  local args result
-  args=$(jq -nc --arg task "$task" --arg pack "$pack" --arg version "$version" \
-    '{task_id:$task}
-      + (if $pack == "" then {} else {pack_id:$pack} end)
-      + (if $version == "" then {} else {version:($version|tonumber)} end)')
-  result=$(mcp_call network_task_handoff_pack_get "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | jq -r '"\(.pack.pack_id)\tv\(.pack.version)\tcontext_ready=\(.pack.context_ready)\trequired_missing=\(.pack.required_missing|length)"'
-}
-
-cmd_handoff_authorize() {
-  local task="" pack="" item="" action="" note="" assignment="" version="" revision="" request_id=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --pack) need_value "$@"; pack="${2:-}"; shift 2 ;;
-      --item) need_value "$@"; item="${2:-}"; shift 2 ;;
-      --action) need_value "$@"; action="${2:-}"; shift 2 ;;
-      --note) need_value "$@"; note="${2:-}"; shift 2 ;;
-      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
-      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown handoff-authorize option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "handoff-authorize requires --task"
-  [ -n "$pack" ] || die "handoff-authorize requires --pack"
-  [ -n "$item" ] || die "handoff-authorize requires --item"
-  [ "$action" = "grant" ] || [ "$action" = "revoke" ] || die "handoff-authorize requires --action grant|revoke"
-  [ -n "$assignment" ] || die "handoff-authorize requires --assignment"
-  [ -n "$version" ] || die "handoff-authorize requires --assignment-version"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg pack "$pack" --arg item "$item" \
-    --arg action "$action" --arg note "$note" --arg assignment "$assignment" --arg version "$version" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, pack_id:$pack, item_id:$item, action:$action,
-      assignment_id:$assignment, assignment_version:($version|tonumber)}
-      + (if $note == "" then {} else {note:$note} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_handoff_pack_authorize "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | jq -r '"\(.pack.pack_id)\tv\(.pack.version)\tcontext_ready=\(.pack.context_ready)"'
-}
-
-cmd_handoff_request_more() {
-  local task="" pack="" note="" transfer="" assignment="" version="" revision="" request_id=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --task) need_value "$@"; task="${2:-}"; shift 2 ;;
-      --pack) need_value "$@"; pack="${2:-}"; shift 2 ;;
-      --note) need_value "$@"; note="${2:-}"; shift 2 ;;
-      --transfer) need_value "$@"; transfer="${2:-}"; shift 2 ;;
-      --assignment) need_value "$@"; assignment="${2:-}"; shift 2 ;;
-      --assignment-version) need_value "$@"; version="${2:-}"; shift 2 ;;
-      --expected-revision) need_value "$@"; revision="${2:-}"; shift 2 ;;
-      --request-id) need_value "$@"; request_id="${2:-}"; shift 2 ;;
-      *) die "unknown handoff-request-more option: $1" ;;
-    esac
-  done
-  [ -n "$task" ] || die "handoff-request-more requires --task"
-  [ -n "$note" ] || die "handoff-request-more requires --note"
-  [ -n "$request_id" ] || request_id=$(new_id)
-  local args result
-  args=$(jq -nc --arg request_id "$request_id" --arg task "$task" --arg pack "$pack" --arg note "$note" \
-    --arg transfer "$transfer" --arg assignment "$assignment" --arg version "$version" --arg revision "$revision" \
-    '{request_id:$request_id, task_id:$task, note:$note}
-      + (if $pack == "" then {} else {pack_id:$pack} end)
-      + (if $transfer == "" then {} else {transfer_id:$transfer} end)
-      + (if $assignment == "" then {} else {assignment_id:$assignment} end)
-      + (if $version == "" then {} else {assignment_version:($version|tonumber)} end)
-      + (if $revision == "" then {} else {expected_revision:($revision|tonumber)} end)')
-  result=$(mcp_call network_task_handoff_pack_request_more "$args") || exit 1
-  result=$(printf '%s' "$result" | mcp_result) || exit 1
-  if [ "$JSON" = "1" ]; then print_json "$result"; return; fi
-  printf '%s' "$result" | jq -r '"\(.pack.pack_id)\tv\(.pack.version)\trequest=\(.request.request_id // .request.note // "ok")"'
+  if [ "$JSON" = "1" ]; then
+    print_json "$result"
+    return
+  fi
+  printf '%s' "$result" | jq -r '
+    .items[]? | [.task.root_message_id, "hits=\(.hit_count)",
+      (.task.root_sender_name // .task.root_sender_id), .task.preview] | @tsv'
+  printf '%s' "$result" | jq -r '
+    "next_cursor=\(.next_cursor // "-")\thas_more=\(.has_more)\ttruncated=\(.truncated)"'
 }
 
 case "$COMMAND" in
-  list) cmd_list "$@" ;;
-  summary) cmd_summary "$@" ;;
-  get) cmd_get "$@" ;;
-  create) cmd_create "$@" ;;
-  offer) cmd_offer "$@" ;;
-  accept) cmd_accept "$@" ;;
-  decline) cmd_decline "$@" ;;
-  claim) cmd_claim "$@" ;;
-  cancel) cmd_cancel "$@" ;;
-  retry) cmd_retry "$@" ;;
-  execution-unknown) cmd_execution_unknown "$@" ;;
-  execution-resolve) cmd_execution_resolve "$@" ;;
-  progress) cmd_progress "$@" ;;
-  block) cmd_block "$@" ;;
-  resume) cmd_resume "$@" ;;
-  transfer-list) cmd_transfer_list "$@" ;;
-  transfer-propose) cmd_transfer_propose "$@" ;;
-  transfer-accept) cmd_transfer_accept "$@" ;;
-  transfer-reject) cmd_transfer_reject "$@" ;;
-  transfer-cancel) cmd_transfer_cancel "$@" ;;
-  submit) cmd_submit "$@" ;;
-  submissions) cmd_submissions "$@" ;;
-  submission-get) cmd_submission_get "$@" ;;
-  review-accept) cmd_review_accept "$@" ;;
-  review-return) cmd_review_return "$@" ;;
-  reviewer-set) cmd_reviewer_set "$@" ;;
-  handoff-create) cmd_handoff_create "$@" ;;
-  handoff-get) cmd_handoff_get "$@" ;;
-  handoff-authorize) cmd_handoff_authorize "$@" ;;
-  handoff-request-more) cmd_handoff_request_more "$@" ;;
-  *) die "unknown command: $COMMAND (use --help)" ;;
+  mark) cmd_mark "$@" ;;
+  unmark) cmd_unmark "$@" ;;
+  summaries) cmd_summaries "$@" ;;
+  trace) cmd_trace "$@" ;;
+  search) cmd_search "$@" ;;
+  *) die "unknown command: $COMMAND (run help)" ;;
 esac

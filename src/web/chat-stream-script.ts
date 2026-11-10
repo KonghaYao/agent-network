@@ -344,12 +344,8 @@ function handleStreamEventFrame(payload) {
         if (roomId && roomId === activeRoomId) refreshRoom = true;
         break;
       case 'task.updated':
-        // 消息式 Task 标记只更新对应消息的摘要行；旧任务面板已在 Web UI 移除。
-        if (rawItem.change === 'offered' && !roomPreference(roomId).muted) showToast('收到任务接手请求');
+        // 消息式 Task 标记只更新对应消息的摘要行；不产生待办或唤醒。
         applyMessageTaskChange(rawItem);
-        break;
-      case 'room.tasks':
-        // 旧房间任务事件不再驱动新页面；保留分支避免 stream 默认日志噪声。
         break;
       case 'profile.updated':
         refreshList = true;

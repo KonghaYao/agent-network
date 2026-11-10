@@ -55,7 +55,6 @@ const MEMBER = 'agt_m07_member';
 const OTHER = 'agt_m07_other';
 const STRANGER = 'agt_m07_stranger';
 const ROOM = 'rm_m07_group';
-const TASK = 'tsk_m07_task';
 
 interface MemoryFile {
   fileId: string;
@@ -123,10 +122,6 @@ function openWorld(): World {
     VALUES ('${ROOM}', '${OWNER}', 'owner', 'active', 0, 0, ${at}, ${at}, 1),
            ('${ROOM}', '${MEMBER}', 'member', 'active', 0, 0, ${at}, ${at}, 1),
            ('${ROOM}', '${OTHER}', 'member', 'active', 0, 0, ${at}, ${at}, 1);
-    INSERT INTO room_tasks (task_id, room_id, list_id, description, status, created_by,
-                            created_at, updated_at, completed_at, sort_order, created_seq)
-    VALUES ('${TASK}', '${ROOM}', 'default', 'M07 保留任务', 'pending', '${OWNER}',
-            ${at}, ${at}, NULL, 1, 1);
   `);
   const d1 = createD1(db);
   const purged: string[] = [];
@@ -241,10 +236,6 @@ async function retentionCases(): Promise<void> {
     checkEqual('[M07-T03] 失败后无 artifact 行', count(world.db, 'artifacts'), before.artifacts);
     checkEqual('[M07-T03] 失败后无引用行', count(world.db, 'file_references'), before.refs);
     checkEqual('[M07-T03] 失败后无房间文件行', count(world.db, 'room_files'), before.roomFiles);
-    const task = world.db
-      .prepare('SELECT status FROM room_tasks WHERE task_id = ?')
-      .get(TASK) as { status: string };
-    checkEqual('[M07-T03] 任务状态未被改写', task.status, 'pending');
   }
 
   // 过期无人引用：先软删保留元数据，宽限期后才清理载荷；清理后提交明确失败。
@@ -351,7 +342,7 @@ async function retentionCases(): Promise<void> {
   }
 }
 
-/** T04：有效任务/已交付成果越过原 TTL 仍可读；超配额无半成品。 */
+/** T04：已交付成果越过原 TTL 仍可读；超配额无半成品。 */
 async function quotaAndRetentionCases(): Promise<void> {
   const world = openWorld();
   const principal = principalFor(world.db, OWNER);

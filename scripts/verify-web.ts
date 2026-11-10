@@ -8594,7 +8594,7 @@ async function main(): Promise<void> {
       });
     }
 
-    // 2b-2b. 停用 Agent：确认后展示待处理投递与未完成任务，错误可见。
+    // 2b-2b. 停用 Agent：确认后展示待处理投递，错误可见。
     {
       interface ManagedAgent {
         actor_id: string;
@@ -8624,19 +8624,6 @@ async function main(): Promise<void> {
         '停用前待领取投递',
         [pendingAgent.actor_id],
       );
-      const openTask = await rawTool<{ task: { task_id: string } }>(
-        data.humanToken,
-        'network_task_create',
-        {
-          request_id: requestId('task_create'),
-          room_id: pendingRoom.room.room_id,
-          title: '停用前未完成任务',
-        },
-      );
-      await rawTool(pendingAgent.token, 'network_task_claim', {
-        request_id: requestId('task_claim'),
-        task_id: openTask.task.task_id,
-      });
 
       const idleAgent = await createManagedAgent('停用空态 Agent');
       const idleRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
@@ -8697,7 +8684,7 @@ async function main(): Promise<void> {
           });
         });
         page.once('dialog', async (dialog) => {
-          check('停用确认说明任务不会被标记完成', dialog.message().includes('待处理任务不会标记完成'));
+          check('停用确认说明待处理投递会被取消', dialog.message().includes('待处理投递会被取消'));
           await dialog.accept();
         });
         await page.locator('#room-menu-toggle-disabled').click();
@@ -8721,12 +8708,12 @@ async function main(): Promise<void> {
         checkEqual(
           '无待处理工作时显示空态摘要',
           ((await page.locator('#room-menu-stopped-summary').textContent()) ?? '').trim(),
-          '待处理投递 0 条（已领取 0 条），未完成任务 0 个',
+          '待处理投递 0 条（已领取 0 条）',
         );
         checkEqual(
           '无待处理工作时显示空态文案',
           ((await page.locator('#room-menu-stopped-empty').textContent()) ?? '').trim(),
-          '没有待处理投递或未完成任务',
+          '没有待处理投递',
         );
         checkEqual(
           '停用成功后菜单保持打开',
@@ -8797,18 +8784,11 @@ async function main(): Promise<void> {
         checkEqual(
           '停用后展示待处理投递数量',
           ((await page.locator('#room-menu-stopped-summary').textContent()) ?? '').trim(),
-          '待处理投递 1 条（已领取 0 条），未完成任务 1 个',
-        );
-        check(
-          '停用后展示未完成任务描述',
-          ((await page.locator('#room-menu-stopped-tasks').textContent()) ?? '').includes(
-            '停用前未完成任务',
-          ),
-          await page.locator('#room-menu-stopped-tasks').textContent(),
+          '待处理投递 1 条（已领取 0 条）',
         );
         checkEqual(
-          '停用后任务列表可见',
-          await page.locator('#room-menu-stopped-details').isVisible(),
+          '停用后空态列表不显示',
+          await page.locator('#room-menu-stopped-empty').isHidden(),
           true,
         );
       } finally {
@@ -10555,7 +10535,7 @@ async function main(): Promise<void> {
       );
       checkEqual('解散后隐藏输入框', await archivePage.locator('#composer').isHidden(), true);
       checkEqual(
-        '解散后旧任务入口不存在',
+        '解散后不显示旧任务入口',
         await archivePage.locator('#task-create, #task-toggle, #my-tasks').count(),
         0,
       );

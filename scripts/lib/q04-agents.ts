@@ -64,8 +64,8 @@ export async function runAgentAcceptance(state: Q04State, browser: Browser): Pro
     await page.locator('#room-menu-toggle-disabled').click();
     const disableCopy = await disablePromise;
     check(
-      '停用确认说明任务不会被标记完成',
-      disableCopy.includes('待处理任务不会标记完成') || disableCopy.includes('未完成任务'),
+      '停用确认说明待处理投递会被取消',
+      disableCopy.includes('待处理投递会被取消'),
       disableCopy,
     );
     await waitText(page, '#toast', '已停用');
@@ -111,23 +111,7 @@ export async function runAgentAcceptance(state: Q04State, browser: Browser): Pro
     check('归档后出现在已归档 Agents 浮层', true);
     await page.locator('#archive-popover-close').click();
 
-    // B1 任务在途时交接管理权给 U3。
-    const b1Task = await rawTool<{ task: { task_id: string; assignment: { assignment_id: string } | null } }>(
-      state.tokens.u1,
-      'network_task_create',
-      {
-        request_id: newRequestId('q04_b1_task'),
-        room_id: state.rooms.main,
-        title: 'Q04 Agent 在途任务',
-        assignee_actor_id: state.actors.b1.actor_id,
-        reviewer_actor_id: state.actors.u3.actor_id,
-      },
-    );
-    await rawTool(state.tokens.b1, 'network_task_accept', {
-      request_id: newRequestId('q04_b1_task_accept'),
-      task_id: b1Task.task.task_id,
-      ...(b1Task.task.assignment ? { assignment_id: b1Task.task.assignment.assignment_id } : {}),
-    });
+    // 交接 B1 管理权给 U3。
     await page.locator('#room-filter-agent').click();
     await page.locator(roomLink(state.rooms.directU1B1)).click({ button: 'right' });
     await page.locator('#room-menu').waitFor({ state: 'visible' });
@@ -204,12 +188,6 @@ export async function runAgentAcceptance(state: Q04State, browser: Browser): Pro
         { actor_id: state.actors.b1.actor_id },
       );
       checkEqual('接任者成为 manager', newManager.my_role, 'manager');
-      const blockedTask = await rawTool<{
-        task: { status: string; blocked_reason: string | null; owner_actor_id: string | null };
-      }>(state.tokens.u1, 'network_task_get', { task_id: b1Task.task.task_id });
-      checkEqual('交接后在途任务 blocked', blockedTask.task.status, 'blocked');
-      checkEqual('交接后任务解除负责人', blockedTask.task.owner_actor_id, null);
-      checkEqual('交接阻塞原因 management_transferred', blockedTask.task.blocked_reason, 'management_transferred');
     } finally {
       await successorContext.context.close();
     }
