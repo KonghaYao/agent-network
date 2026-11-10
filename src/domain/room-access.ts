@@ -313,6 +313,7 @@ export async function requireGroupAccess(
 export function assertRoomWritable(room: Pick<RoomRow, 'room_id' | 'dissolved_at'>): void {
   if (room.dissolved_at === null) return;
   throw new BusinessError('CONFLICT', '群已解散，当前为只读归档，不能继续写入', {
+    reason: 'room_dissolved',
     room_id: room.room_id,
     dissolved_at: String(room.dissolved_at),
     read_only: true,

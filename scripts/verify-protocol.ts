@@ -1876,6 +1876,15 @@ async function main(): Promise<void> {
     skillText.slice(0, 200),
   );
   check(
+    '技能正文声明 stream 快照包含解散归档状态',
+    ['agentnet://stream', 'status', 'dissolved_at', 'read_only', 'archived_head_seq'].every(
+      (marker) => skillText.includes(marker),
+    ) &&
+      skillText.includes('details.reason = "room_dissolved"') &&
+      skillText.includes('不是 `STALE_ATTEMPT`'),
+    skillText.slice(0, 260),
+  );
+  check(
     '技能正文要求阶段性回复进度',
     skillText.includes('阶段性节点回复进度') && skillText.includes('阶段性回复不改变 delivery 状态'),
     skillText.slice(0, 200),

@@ -10687,7 +10687,7 @@ async function main(): Promise<void> {
       await ownerContext.context.close();
     }
 
-    // 2b-7. G06 解散归档：横幅、只读输入框与禁用入口。
+    // 2b-7. G06 解散归档：横幅、只读输入框、文件/复制/公告/成员/退群入口。
     {
       const archiveGroup = await rawTool<{ room: { room_id: string } }>(
         data.humanToken,
@@ -10700,6 +10700,15 @@ async function main(): Promise<void> {
         },
       );
       const archiveRoomId = archiveGroup.room.room_id;
+      await rawTool(data.humanToken, 'network_room_announcement_set', {
+        request_id: requestId('g06_web_announcement'),
+        room_id: archiveRoomId,
+        announcement: 'G06 归档公告',
+        expected_announcement_revision: 1,
+      });
+      await seedRoomFiles(data.humanToken, server.base, archiveRoomId, [
+        { name: 'g06-web-archive.txt', mimeType: 'text/plain', body: 'g06 web archive file' },
+      ]);
       await rawTool(data.humanToken, 'network_room_dissolve', {
         request_id: requestId('g06_web_dissolve'),
         room_id: archiveRoomId,
@@ -10730,7 +10739,263 @@ async function main(): Promise<void> {
         await archivePage.locator('#task-create, #task-toggle, #my-tasks').count(),
         0,
       );
+
+      // P2-1：领域层与页面都不再暴露删除。
+      const archiveFiles = await rawTool<{
+        items: { file_id: string; can_delete: boolean }[];
+      }>(data.humanToken, 'network_room_file_list', { room_id: archiveRoomId });
+      check(
+        '解散后文件列表 can_delete=false',
+        archiveFiles.items.length > 0 && archiveFiles.items.every((item) => !item.can_delete),
+        archiveFiles.items,
+      );
+      if (await archivePage.locator('#files-pane').isHidden()) {
+        await archivePage.locator('#files-toggle').click();
+      }
+      await archivePage.locator('#files-pane').waitFor({ state: 'visible' });
+      await waitForText(archivePage, '#files-list', 'g06-web-archive.txt');
+      checkEqual(
+        '解散归档文件不渲染删除入口',
+        await archivePage.locator('#files-list button.file-action').filter({ hasText: '删除' }).count(),
+        0,
+      );
+
+      // P2-2：只读归档的上传入口隐藏/禁用，尝试操作只给提示，不产生上传。
+      checkEqual(
+        '解散归档隐藏文件拖拽上传区',
+        await archivePage.locator('#files-drop').isHidden(),
+        true,
+      );
+      checkEqual(
+        '解散归档禁用文件上传按钮',
+        await archivePage.locator('#files-upload').isDisabled(),
+        true,
+      );
+      await archivePage.evaluate(`document.getElementById('files-drop').click()`);
+      await archivePage.waitForFunction(
+        `(document.getElementById('files-status').textContent || '').includes('不能上传文件')`,
+      );
+
+      // P2-3：只复制只读标识，不生成发送指令。
+      await archivePage.evaluate(`(() => {
+        window.__copiedGroupPrompt = null;
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: function (text) {
+              window.__copiedGroupPrompt = text;
+              return Promise.resolve();
+            }
+          }
+        });
+      })()`);
+      await archivePage.locator('#copy-group-info').click();
+      await archivePage.waitForFunction(
+        `(document.getElementById('toast').textContent || '').includes('只读群标识')`,
+      );
+      const archivedGroupPrompt =
+        (await archivePage.evaluate('window.__copiedGroupPrompt')) as string | null;
+      check(
+        '解散群复制内容只含只读标识',
+        Boolean(archivedGroupPrompt) &&
+          archivedGroupPrompt!.includes(`room_id：${archiveRoomId}`) &&
+          archivedGroupPrompt!.includes('只读归档') &&
+          !archivedGroupPrompt!.includes('network_message_send') &&
+          !archivedGroupPrompt!.includes('invoke'),
+        archivedGroupPrompt,
+      );
+
+      // P3-1：公告与成员弹窗用解散解释只读，而不是角色/群设置。
+      await archivePage.locator('#room-announcement-edit').waitFor({ state: 'visible' });
+      await archivePage.locator('#room-announcement-edit').click();
+      await archivePage.waitForFunction(
+        `(document.getElementById('announcement-meta').textContent || '').includes('群已解散')`,
+      );
+      checkEqual(
+        '解散群公告弹窗说明只读原因',
+        (await archivePage.locator('#announcement-meta').textContent())?.trim(),
+        '群已解散，公告只读',
+      );
+      await archivePage.keyboard.press('Escape');
+      await archivePage.locator('#add-members').click();
+      await archivePage.waitForFunction(
+        `(document.getElementById('members-error').textContent || '').includes('群已解散')`,
+      );
+      const archiveMembersError = (await archivePage.locator('#members-error').textContent()) ?? '';
+      check(
+        '解散群成员弹窗说明只读且不能邀请/移除',
+        archiveMembersError.includes('成员列表只读') &&
+          archiveMembersError.includes('不能邀请或移除成员'),
+        archiveMembersError,
+      );
+      await archivePage.keyboard.press('Escape');
+
+      // P2-4：退出确认补充失去只读归档访问。
+      await archivePage.evaluate(`(() => {
+        window.__leaveConfirm = '';
+        window.confirm = function (message) {
+          window.__leaveConfirm = String(message || '');
+          return false;
+        };
+      })()`);
+      await archivePage.locator(roomLink(archiveRoomId)).click({ button: 'right' });
+      await archivePage.locator('#room-menu').waitFor({ state: 'visible' });
+      await archivePage.locator('#room-menu-leave-group').click();
+      await archivePage.waitForFunction(
+        `(window.__leaveConfirm || '').includes('失去该群的只读归档访问')`,
+      );
+      const leaveConfirmText = (await archivePage.evaluate('window.__leaveConfirm')) as string;
+      check(
+        '解散群退群确认说明失去归档且不能重新加入',
+        leaveConfirmText.includes('失去该群的只读归档访问') &&
+          leaveConfirmText.includes('不能重新加入'),
+        leaveConfirmText,
+      );
+      const archiveAfterCancel = await rawTool<{ room: { status: string } }>(
+        data.humanToken,
+        'network_room_get',
+        { room_id: archiveRoomId },
+      );
+      checkEqual('取消退群后仍保留归档访问', archiveAfterCancel.room.status, 'dissolved');
       await archiveContext.context.close();
+    }
+
+    // 2b-8. G06 第二设备实时收到解散：不 reload 即只读，且保留草稿。
+    {
+      const liveMemberToken = newToken();
+      const liveMember = await rawTool<Actor>(liveMemberToken, 'network_register', {
+        request_id: requestId('g06_live_member'),
+        kind: 'human',
+        name: 'G06 第二设备成员',
+      });
+      await rawBefriend(data.humanToken, liveMemberToken, { actor_id: liveMember.actor_id });
+      const liveGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('g06_live_group'),
+        kind: 'group',
+        title: 'G06 实时归档群',
+        members: [data.agentB.actor_id, liveMember.actor_id],
+      });
+      const liveRoomId = liveGroup.room.room_id;
+      await acceptRoomInvites(data.agentBToken, liveRoomId);
+      await acceptRoomInvites(liveMemberToken, liveRoomId);
+
+      const ownerContext = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const memberContext = await makeContext(
+        browser,
+        liveMemberToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      const ownerPage = ownerContext.page;
+      const memberPage = memberContext.page;
+      await ownerPage.goto(`${server.base}/c/${liveRoomId}`);
+      await waitRoom(ownerPage, liveRoomId, 'G06 实时归档群');
+      await memberPage.goto(`${server.base}/c/${liveRoomId}`);
+      await waitRoom(memberPage, liveRoomId, 'G06 实时归档群');
+      await memberPage.waitForFunction(`${streamCallsExpression()}.length >= 1`);
+      // ack 后会触发 syncCatchUp；等到它就绪再解散，避免在订阅建立前发送事件。
+      await memberPage.waitForFunction(
+        `(window.__mcpCalls || []).some(function (call) { return call.name === 'network_sync'; })`,
+        undefined,
+        { timeout: 10_000 },
+      );
+      await memberPage.evaluate(`window.__dissolveNoReload = 'alive'`);
+      await memberPage.locator('#body').fill('解散前草稿');
+      if (await memberPage.locator('#files-pane').isHidden()) {
+        await memberPage.locator('#files-toggle').click();
+      }
+      await memberPage.locator('#files-pane').waitFor({ state: 'visible' });
+      const filesBefore = await mcpCallCount(memberPage, 'network_room_file_list');
+      let liveUploads = 0;
+      await memberPage.route('**/mcp-upload', async (route) => {
+        liveUploads += 1;
+        await route.continue();
+      });
+
+      await rawTool(data.humanToken, 'network_room_dissolve', {
+        request_id: requestId('g06_live_dissolve'),
+        room_id: liveRoomId,
+        reason: 'G06 第二设备实时验收',
+      });
+
+      await memberPage.waitForFunction(
+        `(() => {
+          const banner = document.getElementById('room-archive-banner');
+          return Boolean(banner && !banner.hidden);
+        })()`,
+        undefined,
+        { timeout: 10_000 },
+      );
+      await memberPage.waitForFunction(`document.getElementById('composer').hidden === true`);
+      checkEqual(
+        '第二设备无需 reload 即变只读',
+        await memberPage.evaluate('window.__dissolveNoReload'),
+        'alive',
+      );
+      checkEqual(
+        '解散事件不整页跳转',
+        new URL(memberPage.url()).pathname,
+        `/c/${liveRoomId}`,
+      );
+      checkEqual(
+        '解散事件不清空未发送草稿',
+        await memberPage.locator('#body').inputValue(),
+        '解散前草稿',
+      );
+      checkEqual('第二设备解散后隐藏输入框', await memberPage.locator('#composer').isHidden(), true);
+      checkEqual(
+        '第二设备解散后隐藏文件拖拽上传区',
+        await memberPage.locator('#files-drop').isHidden(),
+        true,
+      );
+      checkEqual(
+        '第二设备解散后禁用文件上传按钮',
+        await memberPage.locator('#files-upload').isDisabled(),
+        true,
+      );
+      await memberPage.waitForFunction(
+        `(() => {
+          const item = document.querySelector(${JSON.stringify(roomLink(liveRoomId))});
+          const preview = item && item.querySelector('.room-preview');
+          return Boolean(preview && preview.textContent.includes('已解散'));
+        })()`,
+        undefined,
+        { timeout: 10_000 },
+      );
+      await memberPage.waitForFunction(
+        `(window.__mcpCalls || []).filter(function (call) {
+          return call.name === 'network_room_file_list';
+        }).length > ${filesBefore}`,
+        undefined,
+        { timeout: 10_000 },
+      );
+
+      await memberPage.evaluate(`(() => {
+        const transfer = new DataTransfer();
+        transfer.items.add(new File(['archive'], 'archive-drop.txt', { type: 'text/plain' }));
+        document.getElementById('chat-body').dispatchEvent(new DragEvent('drop', {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: transfer
+        }));
+      })()`);
+      await memberPage.waitForFunction(
+        `(document.getElementById('toast').textContent || '').includes('不能上传文件')`,
+      );
+      await sleep(300);
+      checkEqual('只读房间拖拽不发起上传', liveUploads, 0);
+      await memberPage.evaluate(`document.getElementById('files-drop').click()`);
+      await memberPage.waitForFunction(
+        `(document.getElementById('files-status').textContent || '').includes('不能上传文件')`,
+      );
+
+      await memberContext.context.close();
+      await ownerContext.context.close();
     }
 
     // 2c. 单条统一 stream、慢加载、事件刷新、自消息、断线退避与重连补拉。

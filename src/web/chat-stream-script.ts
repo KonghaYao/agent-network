@@ -324,6 +324,15 @@ function handleStreamEventFrame(payload) {
       case 'room.read':
         refreshList = true;
         break;
+      case 'room.lifecycle':
+        // 解散后房间变为只读归档：刷新详情以应用 read_only 并禁用写入入口，
+        // 同时刷新列表和已打开的文件面板；不整页跳转，不清空输入草稿。
+        refreshList = true;
+        if (roomId && roomId === activeRoomId) {
+          refreshRoom = true;
+          scheduleFilesRefresh(roomId);
+        }
+        break;
       case 'room.membership': {
         refreshList = true;
         const removedSelf = roomId && (rawItem.change === 'removed' || rawItem.change === 'left') &&

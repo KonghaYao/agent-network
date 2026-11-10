@@ -544,7 +544,9 @@ function renderMembersEmpty(message) {
 function renderMembersContacts(contacts, note) {
   if (!membersContactsElement) return;
   if (!canInviteMembers()) {
-    renderMembersEmpty('当前群设置不允许你邀请成员');
+    renderMembersEmpty(room && room.read_only
+      ? '群已解散，成员列表只读'
+      : '当前群设置不允许你邀请成员');
     return;
   }
   const picker = membersPickerController();
@@ -608,8 +610,12 @@ async function openMembersModal() {
   // 邀请链接与入群申请独立加载：失败只影响各自区块，不阻塞成员选择。
   loadInvitePanel(roomId, epoch);
   if (!canInviteMembers()) {
-    renderMembersEmpty('当前群设置不允许你邀请成员');
-    setMembersError('当前群设置不允许你邀请成员；仍可查看群资料和成员。');
+    renderMembersEmpty(room && room.read_only
+      ? '群已解散，成员列表只读'
+      : '当前群设置不允许你邀请成员');
+    setMembersError(room && room.read_only
+      ? '群已解散，成员列表只读，不能邀请或移除成员。'
+      : '当前群设置不允许你邀请成员；仍可查看群资料和成员。');
     return;
   }
   picker.setNote('正在读取好友…');

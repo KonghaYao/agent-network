@@ -4,6 +4,13 @@
  * 与 `CHAT_FILES_SCRIPT` 拼进同一个内联 `<script>`，共享作用域。
  */
 export const CHAT_FILES_ACTIONS_SCRIPT = `
+const READ_ONLY_UPLOAD_MESSAGE = '群已解散，当前为只读归档，不能上传文件。';
+
+/** 解散归档只读：上传入口在 domain 层也会被拒绝，前端先拦住避免孤儿草稿。 */
+function uploadReadOnly() {
+  return Boolean(room && room.read_only);
+}
+
 function requestDeleteFile(button, item) {
   const roomId = item.room_id || filesActiveRoomId;
   if (!roomId || !item.file_id) return;
@@ -431,6 +438,10 @@ function enqueueSelectedFiles(fileList) {
     setFilesStatus('请先打开一个会话再上传文件。', { error: true });
     return;
   }
+  if (uploadReadOnly()) {
+    setFilesStatus(READ_ONLY_UPLOAD_MESSAGE, { error: true });
+    return;
+  }
   const files = Array.prototype.slice.call(fileList || []).filter(function (file) {
     return file && typeof file.name === 'string' && file.name.length > 0;
   });
@@ -728,6 +739,10 @@ function setDropStatusFor(roomId, text, options) {
 
 function enqueueDroppedFiles(fileList) {
   if (!activeRoomId) return;
+  if (uploadReadOnly()) {
+    showToast(READ_ONLY_UPLOAD_MESSAGE);
+    return;
+  }
   const files = Array.prototype.slice.call(fileList || []).filter(function (file) {
     return file && typeof file.name === 'string' && file.name.length > 0;
   });
@@ -742,12 +757,14 @@ if (chatBodyElement) {
   chatBodyElement.addEventListener('dragenter', function (event) {
     if (!composerDropEnabled() || !dragHasFiles(event)) return;
     event.preventDefault();
+    if (uploadReadOnly()) return;
     composerDropDepth += 1;
     setComposerDropVisible(true);
   });
   chatBodyElement.addEventListener('dragover', function (event) {
     if (!composerDropEnabled() || !dragHasFiles(event)) return;
     event.preventDefault();
+    if (uploadReadOnly()) return;
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
     if (composerDropDepth === 0) composerDropDepth = 1;
     setComposerDropVisible(true);
@@ -768,6 +785,10 @@ if (chatBodyElement) {
     }
     event.preventDefault();
     hideComposerDrop();
+    if (uploadReadOnly()) {
+      showToast(READ_ONLY_UPLOAD_MESSAGE);
+      return;
+    }
     enqueueDroppedFiles(dropped);
   });
 }
@@ -790,20 +811,30 @@ if (filesInputElement) {
 }
 if (filesDropElement) {
   filesDropElement.addEventListener('click', function () {
+    if (uploadReadOnly()) {
+      setFilesStatus(READ_ONLY_UPLOAD_MESSAGE, { error: true });
+      return;
+    }
     if (filesInputElement) filesInputElement.click();
   });
   filesDropElement.addEventListener('keydown', function (event) {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
+    if (uploadReadOnly()) {
+      setFilesStatus(READ_ONLY_UPLOAD_MESSAGE, { error: true });
+      return;
+    }
     if (filesInputElement) filesInputElement.click();
   });
   filesDropElement.addEventListener('dragenter', function (event) {
     event.preventDefault();
+    if (uploadReadOnly()) return;
     filesDragDepth += 1;
     filesDropElement.classList.add('dragover');
   });
   filesDropElement.addEventListener('dragover', function (event) {
     event.preventDefault();
+    if (uploadReadOnly()) return;
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
   });
   filesDropElement.addEventListener('dragleave', function (event) {
@@ -815,6 +846,10 @@ if (filesDropElement) {
     event.preventDefault();
     filesDragDepth = 0;
     filesDropElement.classList.remove('dragover');
+    if (uploadReadOnly()) {
+      setFilesStatus(READ_ONLY_UPLOAD_MESSAGE, { error: true });
+      return;
+    }
     if (event.dataTransfer) enqueueSelectedFiles(event.dataTransfer.files);
   });
 }

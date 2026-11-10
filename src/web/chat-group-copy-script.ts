@@ -51,6 +51,14 @@ function groupCopyMemberLines() {
 function groupCopyPrompt() {
   const safeTitle = groupCopySafeName(room.title, '群聊', GROUP_COPY_TITLE_MAX);
   const roomId = room.room_id;
+  if (room.read_only) {
+    return [
+      '该群已解散，当前为只读归档，不能再发送消息。',
+      '',
+      '群名：' + safeTitle,
+      'room_id：' + roomId
+    ].join('\\n');
+  }
   const lines = groupCopyMemberLines();
   const example = lines.agents.length > 0 ? lines.agents[0].name : 'Agent名';
   const agentList = lines.agents.length > 0
@@ -117,7 +125,9 @@ async function copyGroupInfo() {
   updateCopyGroupInfoAffordance();
   try {
     await groupCopyWriteClipboard(prompt);
-    showToast('已复制群信息，可直接粘贴给 Agent');
+    showToast(room.read_only
+      ? '已复制只读群标识；群已解散，不能发送消息'
+      : '已复制群信息，可直接粘贴给 Agent');
   } catch (error) {
     showToast('复制失败：' + (error && error.message ? error.message : String(error)));
   } finally {

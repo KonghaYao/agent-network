@@ -1428,7 +1428,7 @@ export function registerTools(
   register(
     server,
     'network_room_leave',
-    '离开群聊。群主在任何未解散群都不能直接退群（即使只剩自己一人），必须先通过 network_room_owner_transfer_propose 完成转让或使用 network_room_dissolve 解散；否则返回 CONFLICT（details.reason=owner_transfer_required）。退出会立即撤销你在该群的发言/文件授权与 pending/claimed 投递，旧 claim 与文件下载立即失败。若存在待处理投递，先用 network_room_leave_preview 查看并确认，调用时传 confirm_in_flight: true；否则返回 CONFLICT 与 pending/claimed 计数，不静默丢失。已下载到本地的副本无法技术回收。',
+    '离开群聊。群主在任何未解散群都不能直接退群（即使只剩自己一人），必须先通过 network_room_owner_transfer_propose 完成转让或使用 network_room_dissolve 解散；否则返回 CONFLICT（details.reason=owner_transfer_required）。退出会立即撤销你在该群的发言/文件授权与 pending/claimed 投递，旧 claim 与文件下载立即失败。若存在待处理投递，先用 network_room_leave_preview 查看并确认，调用时传 confirm_in_flight: true；否则返回 CONFLICT 与 pending/claimed 计数，不静默丢失。退出已解散群会失去该群只读归档访问，且不能重新加入。已下载到本地的副本无法技术回收。',
     roomLeaveSchema,
     leaveResultSchema,
     async (input) => {

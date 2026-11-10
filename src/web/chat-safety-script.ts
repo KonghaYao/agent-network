@@ -184,7 +184,10 @@ async function safetyLeaveGroup(explicitTarget) {
       ? '\\n\\n你在该群仍有 ' + preview.pending_deliveries + ' 条待处理投递（已领取 ' +
         preview.claimed_deliveries + ' 条），退群会立即撤销这些投递。'
       : '';
-    const message = SAFETY_LEAVE_CONFIRM + workNote +
+    const archiveNote = preview && preview.read_only
+      ? '\\n\\n该群已解散：退出后将失去该群的只读归档访问，且不能重新加入。'
+      : '';
+    const message = SAFETY_LEAVE_CONFIRM + workNote + archiveNote +
       (preview && preview.owner_transfer_required
         ? '\\n\\n你是群主：请先在成员弹窗转让群主，或使用“解散群聊”。'
         : '');

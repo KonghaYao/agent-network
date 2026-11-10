@@ -311,6 +311,11 @@ function applyRoomLifecycle(roomView) {
   if (uploadButton) uploadButton.disabled = readOnly;
   const attachButton = document.getElementById('attach-file');
   if (attachButton) attachButton.disabled = readOnly;
+  const filesDrop = document.getElementById('files-drop');
+  if (filesDrop) {
+    filesDrop.hidden = readOnly;
+    filesDrop.setAttribute('aria-disabled', readOnly ? 'true' : 'false');
+  }
   document.body.classList.toggle('room-read-only', readOnly);
 }
 

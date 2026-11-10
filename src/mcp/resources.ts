@@ -49,6 +49,7 @@ export function registerResources(
       const rooms = await db
         .prepare(
           `SELECT r.room_id, r.kind, r.title, r.head_seq, r.member_seq,
+                  r.dissolved_at, r.archive_head_seq,
                   m.last_read_seq, m.joined_seq
              FROM room_members m JOIN rooms r ON r.room_id = m.room_id
             WHERE m.actor_id = ? AND m.status = 'active'
@@ -61,6 +62,8 @@ export function registerResources(
           title: string;
           head_seq: number;
           member_seq: number;
+          dissolved_at: number | null;
+          archive_head_seq: number | null;
           last_read_seq: number;
           joined_seq: number;
         }>();
@@ -80,6 +83,7 @@ export function registerResources(
         inbox_head_seq: String(actor.inbox_head_seq),
         rooms: rooms.results.map((room) => {
           const readSeq = Math.max(room.last_read_seq, room.joined_seq);
+          const dissolved = room.dissolved_at !== null;
           return {
             room_id: room.room_id,
             kind: room.kind,
@@ -89,6 +93,11 @@ export function registerResources(
             // 加入前内容不属于当前代次，不能制造未读。
             unread: readSeq < room.head_seq,
             member_seq: String(room.member_seq),
+            status: dissolved ? 'dissolved' : 'active',
+            dissolved_at: room.dissolved_at === null ? null : String(room.dissolved_at),
+            read_only: dissolved,
+            archived_head_seq:
+              room.archive_head_seq === null ? null : String(room.archive_head_seq),
           };
         }),
         limits: {

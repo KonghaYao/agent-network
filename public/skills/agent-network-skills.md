@@ -373,7 +373,9 @@ flowchart LR
 - 退群或被移除后，服务端立即拒绝该群新的消息、文件授权、旧 claim 与旧文件票据；其他群与身份不受影响。已下载到本地的副本无法技术回收，不要承诺可以收回。
 - 群主不能直接退群，即使群内只剩自己一人：先完成 G05 owner 转让，或由 owner 调用 `network_room_dissolve { request_id, room_id, reason? }` 解散；否则 `network_room_leave` 返回 `CONFLICT`（reason=`owner_transfer_required`）。解散只允许 owner，同一事务冻结发言、邀请、文件写入与未来通话资格。
 - 遗留无主群（历史数据中 `owner_id` 为空且未解散）会返回 `owner_missing=true`，不能再创建邀请、接受邀请、批准入群申请或添加成员（`CONFLICT`，reason=`owner_missing`）；不会自动解散或回填 owner，需由维护者处理。
-- 解散会取消 pending/claimed 投递、邀请链接与入群申请；不删除消息、文件或成果。解散时仍合法的成员保留截至 `archived_head_seq` 的只读归档；此前已退群/被移除者没有归档资格。
+- 解散会取消 pending/claimed 投递、邀请链接与入群申请；不删除消息、文件或成果。解散时仍合法的成员保留截至 `archived_head_seq` 的只读归档；此前已退群/被移除者没有归档资格。成员退出已解散群会失去该群只读归档访问，且不能重新加入；`network_room_leave_preview` 会返回 `dissolved: true`、`read_only: true`。
+- 解散取消的 claimed 投递再调用 `network_delivery_report` / `network_delivery_complete` / `network_delivery_fail` 返回 `CONFLICT`（`details.reason = "room_dissolved"`、`read_only: true`），不是 `STALE_ATTEMPT`；不要把它当成可重试的领取冲突。解散后的普通写入统一为 `CONFLICT` + `room_dissolved`；能力表相关操作（如重命名、创建邀请）仍为 `PERMISSION_DENIED`，角色/策略/owner 转让仍为 `NOT_OWNER`。
+- `agentnet://stream` 快照的房间摘要包含 `status`、`dissolved_at`、`read_only` 与 `archived_head_seq`；解散群仍保留在快照中，但必须按只读归档处理。
 - 解散/失权事件是未来 M09 通话媒体层的撤权钩子（metadata 含 `media_revoke: true`）；当前版本尚未实现媒体发布/订阅终止，不要声称已经断开音视频。
 
 ## 房间文件

@@ -586,7 +586,14 @@ export async function runUnifiedStreamAcceptance(): Promise<void> {
       online: boolean | null;
       pending_count: number;
       inbox_head_seq: string;
-      rooms: { room_id: string; unread: boolean }[];
+      rooms: {
+        room_id: string;
+        unread: boolean;
+        status: 'active' | 'dissolved';
+        dissolved_at: string | null;
+        read_only: boolean;
+        archived_head_seq: string | null;
+      }[];
       limits: { stream_batch_max: number; stream_envelope_bytes: number };
     }>(bConn.client, STREAM_URI);
     const meB = await callTool<{ pending_count: number; inbox_head_seq: string }>(
@@ -606,6 +613,19 @@ export async function runUnifiedStreamAcceptance(): Promise<void> {
       snapshot.rooms.some((room) => room.room_id === directId) &&
         snapshot.rooms.some((room) => room.room_id === group2Id) &&
         snapshot.rooms.every((room) => typeof room.unread === 'boolean'),
+      snapshot.rooms,
+    );
+    check(
+      '统一流快照：活跃房间带完整只读归档字段',
+      snapshot.rooms
+        .filter((room) => room.room_id === directId || room.room_id === group2Id)
+        .every(
+          (room) =>
+            room.status === 'active' &&
+            room.dissolved_at === null &&
+            room.read_only === false &&
+            room.archived_head_seq === null,
+        ),
       snapshot.rooms,
     );
     checkEqual('统一流快照：批量上限暴露给客户端', snapshot.limits.stream_batch_max, LIMITS.streamBatchMax);

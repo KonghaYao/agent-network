@@ -152,7 +152,7 @@ MCP Events 的 ChatGPT 插件配置同样受认证方式阻塞：服务端 URL t
 
 | URI | 内容 |
 | --- | --- |
-| `agentnet://stream` | 当前身份、在线状态、`pending_count`、`inbox_head_seq`、active 房间 head 摘要；统一流的 per-actor 资源，新客户端唯一需要读/订阅的 URI |
+| `agentnet://stream` | 当前身份、在线状态、`pending_count`、`inbox_head_seq`、房间 head 摘要与归档状态（`status`、`dissolved_at`、`read_only`、`archived_head_seq`）；统一流的 per-actor 资源，新客户端唯一需要读/订阅的 URI |
 
 - **旧 URI 已删除**：`agentnet://me`、`agentnet://actors/{actor_id}/inbox`、`agentnet://rooms/{room_id}/head` 不再注册、不可读取、不可订阅；请求返回 `INVALID_ARGUMENT`，不做 alias、降级或静默裁剪。客户端只使用 `agentnet://stream`。
 - `agentnet://stream` 快照不返回历史事件；正文与回执仍从 inbox、history、room 工具读取。

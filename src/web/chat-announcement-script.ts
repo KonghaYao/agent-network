@@ -69,9 +69,11 @@ function openAnnouncementModal() {
   if (announcementSave) announcementSave.hidden = !editable;
   setAnnouncementError('');
   if (announcementMeta) {
-    announcementMeta.textContent = editable
-      ? '最多 ' + ROOM_ANNOUNCEMENT_BYTES + ' 字节，保存后同步给所有成员'
-      : '只有群 owner 或管理员可以编辑公告';
+    announcementMeta.textContent = room.read_only
+      ? '群已解散，公告只读'
+      : editable
+        ? '最多 ' + ROOM_ANNOUNCEMENT_BYTES + ' 字节，保存后同步给所有成员'
+        : '只有群 owner 或管理员可以编辑公告';
   }
   if (editable && announcementInput) announcementInput.focus();
   else if (announcementClose) announcementClose.focus();

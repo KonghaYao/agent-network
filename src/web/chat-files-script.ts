@@ -492,7 +492,7 @@ function renderFileItem(item) {
     link.textContent = '下载';
     actions.append(link);
   }
-  if (item.can_delete === true) {
+  if (item.can_delete === true && !(room && room.read_only)) {
     const button = fileActionButton('删除', 'danger', function () {
       requestDeleteFile(button, item);
     });

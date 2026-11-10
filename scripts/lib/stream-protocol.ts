@@ -77,6 +77,20 @@ export async function runStreamProtocolChecks(
       Array.isArray(snapshot.rooms) && typeof snapshot.limits === 'object',
       snapshot,
     );
+    const snapshotRooms = Array.isArray(snapshot.rooms)
+      ? (snapshot.rooms as Record<string, unknown>[])
+      : [];
+    check(
+      'stream 快照房间包含只读归档字段',
+      snapshotRooms.every(
+        (room) =>
+          (room.status === 'active' || room.status === 'dissolved') &&
+          typeof room.read_only === 'boolean' &&
+          'archived_head_seq' in room &&
+          'dissolved_at' in room,
+      ),
+      snapshotRooms,
+    );
 
     const raw = await openRawListen(token, `listen:proto-${crypto.randomUUID()}`, [
       STREAM_URI,

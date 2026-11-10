@@ -99,6 +99,7 @@ export interface ViewContext {
 }
 
 function canDelete(row: RoomFileRow, context: ViewContext): boolean {
+  if (context.room.dissolved_at !== null) return false;
   if (!visibleCreated(row, context.boundary)) return false;
   if (row.uploader_id === context.viewerId) return true;
   return context.room.kind === 'group' && context.room.owner_id === context.viewerId;

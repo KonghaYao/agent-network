@@ -421,6 +421,7 @@ export async function deliveryReport(
     result: { delivery_id: delivery.delivery_id, attempt: input.attempt },
     build: (resultJson) => [
       operationsStatement(db, actor, input.request_id, payloadHash, resultJson, at),
+      roomDissolvedGuardStatement(db, delivery.room_id),
       claimedGuard(db, input.delivery_id, input.attempt, input.claim_id),
       db
         .prepare(
@@ -505,6 +506,7 @@ export async function deliveryComplete(
     result,
     build: (resultJson) => [
       operationsStatement(db, actor, input.request_id, payloadHash, resultJson, at),
+      roomDissolvedGuardStatement(db, delivery.room_id),
       claimedGuard(db, delivery.delivery_id, input.attempt, input.claim_id),
       ...(plan ? [...messageGuardStatements(db, plan), ...messageCoreStatements(db, plan)] : []),
       db
@@ -572,6 +574,7 @@ export async function deliveryFail(
     result: { delivery_id: delivery.delivery_id },
     build: (resultJson) => [
       operationsStatement(db, actor, input.request_id, payloadHash, resultJson, at),
+      roomDissolvedGuardStatement(db, delivery.room_id),
       claimedGuard(db, delivery.delivery_id, input.attempt, input.claim_id),
       db
         .prepare(

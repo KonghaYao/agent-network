@@ -18,6 +18,7 @@ import {
   expectToolError,
   newRequestId,
   newToken,
+  readResourceJson,
   ToolError,
   uploadTestFile,
   type McpConnection,
@@ -93,7 +94,12 @@ interface HistoryPage {
 }
 
 interface FileListView {
-  items: { file_id: string; download_url: string; public_url: string }[];
+  items: {
+    file_id: string;
+    download_url: string;
+    public_url: string;
+    can_delete: boolean;
+  }[];
 }
 
 async function readRoom(connection: McpConnection, roomId: string): Promise<RoomView> {
@@ -391,6 +397,25 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
       body: 'G06-T03 解散前投递',
       invoke: [b1.actor_id, b2.actor_id],
     });
+    const b2InboxBefore = await callTool<InboxPage>(b2Conn.client, 'network_inbox_list', {
+      state: 'pending',
+    });
+    const b2Delivery = b2InboxBefore.items.find(
+      (item) => item.room_id === room3 && item.state === 'pending',
+    );
+    check('G06-T03 解散前 B2 收到投递', Boolean(b2Delivery));
+    const b2Claimed = b2Delivery
+      ? await callTool<{
+          delivery_id: string;
+          attempt: number;
+          claim_id: string | null;
+          state: string;
+        }>(b2Conn.client, 'network_delivery_claim', {
+          request_id: newRequestId('g06_t03_claim'),
+          delivery_id: b2Delivery.delivery_id,
+        })
+      : null;
+    checkEqual('G06-T03 解散前 B2 成功 claim', b2Claimed?.state, 'claimed');
     await callTool(u1Conn.client, 'network_room_invite_create', {
       request_id: newRequestId('g06_t03_link'),
       room_id: room3,
@@ -456,6 +481,51 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
     checkEqual('G06-T03 归档能力全部关闭', u2Room.room.capabilities.send_message, false);
     checkEqual('G06-T03 归档 read_only', u2Room.room.read_only, true);
     checkEqual('G06-T03 归档成员可退出', u2Room.room.can_leave, true);
+    const b2Snapshot = await readResourceJson<{
+      rooms: {
+        room_id: string;
+        status: 'active' | 'dissolved';
+        dissolved_at: string | null;
+        read_only: boolean;
+        archived_head_seq: string | null;
+      }[];
+    }>(b2Conn.client, 'agentnet://stream');
+    const b2SnapshotRoom = b2Snapshot.rooms.find((item) => item.room_id === room3);
+    checkEqual('G06-T03 stream 快照保留解散群', b2SnapshotRoom?.status, 'dissolved');
+    checkEqual('G06-T03 stream 快照标记只读', b2SnapshotRoom?.read_only, true);
+    checkEqual(
+      'G06-T03 stream 快照返回归档边界',
+      b2SnapshotRoom?.archived_head_seq,
+      u2Room.room.archived_head_seq,
+    );
+    check(
+      'G06-T03 stream 快照返回 dissolved_at',
+      typeof b2SnapshotRoom?.dissolved_at === 'string' &&
+        b2SnapshotRoom.dissolved_at === u2Room.room.dissolved_at,
+      b2SnapshotRoom,
+    );
+    for (const marker of ['report', 'complete', 'fail'] as const) {
+      const dissolveError = await expectToolError(
+        `G06-T03 解散取消的 claimed 投递 ${marker} 返回 room_dissolved`,
+        callTool(b2Conn.client, `network_delivery_${marker}`, {
+          request_id: newRequestId(`g06_t03_delivery_${marker}`),
+          delivery_id: b2Claimed?.delivery_id,
+          attempt: b2Claimed?.attempt,
+          claim_id: b2Claimed?.claim_id,
+          ...(marker === 'report'
+            ? { status: '解散后上报' }
+            : marker === 'fail'
+              ? { error: '解散后失败' }
+              : {}),
+        }),
+        'CONFLICT',
+      );
+      checkEqual(
+        `G06-T03 解散取消的 ${marker} 原因标明 room_dissolved`,
+        (dissolveError.body.details as Record<string, unknown>)?.reason,
+        'room_dissolved',
+      );
+    }
     await expectToolError(
       'G06-T03 解散后不能发送消息',
       callTool(u2Conn.client, 'network_message_send', {
@@ -560,6 +630,13 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
     });
     const u2ArchiveUrl = u2FilesAfter.items.find((item) => item.file_id === archiveFile.fileId)
       ?.download_url;
+    check(
+      'G06-T03 解散归档文件不提供删除能力',
+      u2FilesAfter.items
+        .filter((item) => item.file_id === archiveFile.fileId)
+        .every((item) => item.can_delete === false),
+      u2FilesAfter.items,
+    );
     check('G06-T03 合法成员可重新获取归档文件票据', Boolean(u2ArchiveUrl));
     checkEqual(
       'G06-T03 合法成员归档文件仍可下载',
