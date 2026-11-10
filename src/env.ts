@@ -27,8 +27,9 @@ export interface Env {
   ENVIRONMENT: string;
   PUBLIC_ORIGIN: string;
   /**
-   * 房间文件下载票据密钥。缺省时使用进程级随机密钥；多进程部署必须配置
-   * 同一值，否则一个进程签发的票据无法在另一个进程验证。
+   * 房间文件下载票据密钥。启动时已由 `resolveFileTicketSecret` 解析：
+   * 优先取部署方配置，缺省为 `DATA_DIR/file-ticket.key` 的持久化密钥。
+   * 多实例部署必须显式配置同一值，或共享同一 `DATA_DIR`。
    */
   FILE_TICKET_SECRET?: string;
   /** 启用 MCPP Files 时存在；关闭后 drive 工具与上传路由不注册。 */

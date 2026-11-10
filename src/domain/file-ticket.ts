@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import { BusinessError } from '../contracts/errors';
 
@@ -15,10 +15,10 @@ import { BusinessError } from '../contracts/errors';
  * - `scope: 'file'`：票据发给上传身份（MCPP ownerScope），用于私有草稿、
  *   旧公开文件收紧后的授权客户端访问，以及正式成果绑定前的预览。
  *
- * 票据不携带长期 Bearer；密钥优先取部署方提供的 `FILE_TICKET_SECRET`，缺省
- * 使用进程级随机密钥。进程重启后旧票据全部失效，与短时票据语义一致。
+ * 票据不携带长期 Bearer；密钥由启动流程解析（部署方提供的
+ * `FILE_TICKET_SECRET`，缺省为 `DATA_DIR/file-ticket.key` 中的持久化密钥），
+ * 因此进程重启不会让已签发且未过期的票据集体失效。
  */
-const DEFAULT_SECRET = randomBytes(32).toString('hex');
 const MAX_TICKET_LENGTH = 4096;
 
 export type FileTicketScope = 'room' | 'file';
@@ -53,9 +53,14 @@ interface EncodedTicket extends FileTicketPayload {
   v: 2;
 }
 
+/**
+ * 读取启动时已解析的密钥。缺失说明装配错误，直接失败而不是退回进程级
+ * 随机值，避免悄悄让旧票据再次失效。
+ */
 export function fileTicketSecret(configured?: string): string {
   const value = configured?.trim();
-  return value && value.length > 0 ? value : DEFAULT_SECRET;
+  if (!value) throw new Error('file ticket secret is not configured');
+  return value;
 }
 
 function signingInput(payload: FileTicketPayload): string {

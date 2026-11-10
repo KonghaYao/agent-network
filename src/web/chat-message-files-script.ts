@@ -9,6 +9,10 @@
  * 退回队列），并发上限 4；相同 fileId 共用 in-flight Promise，命中缓存
  * 的卡片即时显示。服务端返回的 MIME 在本地重新做安全分类，不依赖
  * `filePreviewKind` 对 `text/*` 的宽松回退。
+ *
+ * 房间票据缓存 55 分钟；若缓存的票据 HEAD 返回 404（服务端重启导致旧密钥
+ * 失效等），丢弃缓存并自动重新换取票据重试一次。自动重签按文件每次渲染
+ * 至多一次，重试仍失败才显示“文件不可用”；手动“重试”可再次触发。
  */
 export const CHAT_MESSAGE_FILES_SCRIPT = `
 const MESSAGE_FILE_CACHE_MAX = 256;
@@ -347,7 +351,11 @@ function messageFileFetchMeta(fileId, href) {
       referrerPolicy: 'no-referrer',
       signal: controller.signal
     }).then(function (response) {
-      if (!response.ok) throw new Error('HTTP ' + response.status);
+      if (!response.ok) {
+        const httpError = new Error('HTTP ' + response.status);
+        httpError.status = response.status;
+        throw httpError;
+      }
       const mime = messageFileMime(response.headers.get('content-type'));
       const length = response.headers.get('content-length');
       const size = length === null ? null : Number(length);
@@ -370,16 +378,30 @@ function messageFileFetchMeta(fileId, href) {
     return meta;
   }).catch(function (error) {
     // 绑定到房间的文件裸 URL 不可读；用当前房间换取成员代次票据后重试。
+    // 记录解析前是否已有缓存票据：只有“缓存票据失效”才自动重签。
+    const cachedTicket = messageFileTicketEntry(fileId);
     return messageFileResolveTicket(fileId).then(function (ticketUrl) {
       if (!ticketUrl || ticketUrl === href) throw error;
       return attempt(ticketUrl).then(function (meta) {
         meta.public = false;
         return meta;
       }).catch(function (ticketError) {
-        // 票据可能在服务端已失效（进程重启、移出、重新加入）；丢弃缓存，
-        // 让下次渲染重新换取绑定当前成员代次的地址。
+        // 票据可能在服务端已失效（进程重启、密钥轮换、移出、重新加入）；
+        // 丢弃缓存，让后续渲染重新换取绑定当前成员代次的地址。
         messageFileTickets.delete(fileId);
-        throw ticketError;
+        // 仅缓存票据的 404 触发一次自动重签：新签票据仍失败则进入不可用，
+        // 由失败缓存与手动“重试”控制后续请求，避免请求风暴。
+        if (!cachedTicket || ticketError.status !== 404) throw ticketError;
+        return messageFileResolveTicket(fileId).then(function (freshUrl) {
+          if (!freshUrl || freshUrl === ticketUrl) throw ticketError;
+          return attempt(freshUrl).then(function (meta) {
+            meta.public = false;
+            return meta;
+          }).catch(function (retryError) {
+            messageFileTickets.delete(fileId);
+            throw retryError;
+          });
+        });
       });
     });
   });

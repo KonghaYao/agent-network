@@ -18,6 +18,7 @@ import { buildDrawboardBundle } from '../web/drawboard-bundle';
 import { buildMarkdownBundle } from '../web/markdown-bundle';
 import { buildResizerBundle } from '../web/resizer-bundle';
 import { createD1 } from './d1';
+import { resolveFileTicketSecret } from './file-ticket-secret';
 import { migrate } from './migrate';
 
 function positiveInt(value: string | undefined, fallback: number): number {
@@ -88,6 +89,16 @@ const hostname = process.env.HOST ?? '0.0.0.0';
 const dataDir = resolve(process.env.DATA_DIR ?? '.data');
 const databasePath = resolve(process.env.DATABASE_PATH ?? `${dataDir}/agent-network.sqlite`);
 const publicOrigin = process.env.PUBLIC_ORIGIN ?? `http://localhost:${port}`;
+// 票据密钥只在这里解析一次：配置值优先，否则读取/创建 DATA_DIR 下的持久化
+// 密钥，保证重启后旧票据仍可验证。目录不可写时启动直接失败，不静默降级。
+const configuredTicketSecret = process.env.FILE_TICKET_SECRET?.trim();
+const fileTicketSecretValue = resolveFileTicketSecret({
+  configured: configuredTicketSecret,
+  dataDir,
+});
+if (!configuredTicketSecret) {
+  console.log('file ticket secret: using persisted DATA_DIR/file-ticket.key (mode 0600)');
+}
 
 mkdirSync(dirname(databasePath), { recursive: true });
 const db = new Database(databasePath, { create: true });
@@ -139,7 +150,7 @@ const env: Env = {
   PRESENCE: presence,
   ENVIRONMENT: environment,
   PUBLIC_ORIGIN: publicOrigin,
-  ...(process.env.FILE_TICKET_SECRET ? { FILE_TICKET_SECRET: process.env.FILE_TICKET_SECRET } : {}),
+  FILE_TICKET_SECRET: fileTicketSecretValue,
   ...(eventsConfig ? { EVENTS: eventsConfig } : {}),
 };
 envRef = env;

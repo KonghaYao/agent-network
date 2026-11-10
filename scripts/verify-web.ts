@@ -33,6 +33,7 @@ import { messageFileLinkFixtures } from './lib/room-file-archive';
 import { runPresenceRestartAcceptance } from './lib/presence-restart';
 import { runPresenceIdleNotificationCheck } from './lib/presence-idle';
 import { runContactLinkWebAcceptance } from './lib/contact-link-web';
+import { runFileTicketSecretChecks } from './lib/file-ticket-secret-check';
 import { runMessageTaskWebAcceptance } from './lib/message-task-web';
 
 interface Actor {
@@ -3555,6 +3556,7 @@ async function runRoomListPaginationAcceptance(
 }
 
 async function main(): Promise<void> {
+  await runFileTicketSecretChecks();
   const server = await startServer();
   process.env.AGENTNET_URL = server.base;
   let browser: Browser | null = null;
@@ -13990,6 +13992,7 @@ async function main(): Promise<void> {
         { name: '去重文件.txt', mimeType: 'text/plain', body: 'dedupe' },
         { name: '第二文件.txt', mimeType: 'text/plain', body: 'second' },
         { name: '相对路径.txt', mimeType: 'text/plain', body: 'relative' },
+        { name: '票据重签.txt', mimeType: 'text/plain', body: 'ticket refresh' },
         { name: xssFileName, mimeType: 'text/plain', body: 'xss' },
         { name: longFileName, mimeType: 'text/plain', body: 'long' },
       ]);
@@ -14016,6 +14019,7 @@ async function main(): Promise<void> {
       const dedupeOne = cardFile('去重文件.txt');
       const dedupeTwo = cardFile('第二文件.txt');
       const relativeFile = cardFile('相对路径.txt');
+      const ticketRefresh = cardFile('票据重签.txt');
       const xssFile = cardFile(xssFileName);
       const longFile = cardFile(longFileName);
 
@@ -14088,6 +14092,12 @@ async function main(): Promise<void> {
       );
       const bareFailureId = `f_${'B'.repeat(22)}`;
       await sendRoomMessage(data.humanToken, cardRoomId, `/f/${bareFailureId}`);
+      const ticketRefreshMarker = '缓存票据自动重签';
+      await sendRoomMessage(
+        data.humanToken,
+        cardRoomId,
+        [ticketRefreshMarker, '票据文件', `/f/${ticketRefresh.fileId}`].join('\n'),
+      );
       const newlineId = `f_${'D'.repeat(22)}`;
       const newlineMarker = '换行文件名安全';
       await sendRoomMessage(
@@ -14664,6 +14674,129 @@ async function main(): Promise<void> {
         '无前一行时回退为“文件”',
         await bareFailureMessage.locator('.msg-file-name').textContent(),
         '文件',
+      );
+
+      // 服务端重启会让缓存的旧票据 404：卡片应丢弃缓存、自动重签并重试一次。
+      const ticketRefreshMessage = page
+        .locator('#messages .msg')
+        .filter({ hasText: ticketRefreshMarker });
+      await ticketRefreshMessage.scrollIntoViewIfNeeded();
+      const ticketCard = ticketRefreshMessage.locator('.msg-file');
+      await waitUntil(
+        async () => ((await ticketCard.locator('.msg-file-size').textContent()) ?? '').length > 0,
+        '票据卡片首次加载完成',
+        15_000,
+      );
+
+      let staleTicketHeads = 0;
+      let freshTicketHeads = 0;
+      let rejectFreshTickets = false;
+      await page.route(`**/f/${ticketRefresh.fileId}**`, async (route) => {
+        if (route.request().method() !== 'HEAD') {
+          await route.fallback();
+          return;
+        }
+        const ticket = new URL(route.request().url()).searchParams.get('t');
+        if (ticket === 'stale-ticket') {
+          staleTicketHeads += 1;
+          await route.fulfill({ status: 404, body: 'expired' });
+          return;
+        }
+        if (ticket) {
+          freshTicketHeads += 1;
+          if (rejectFreshTickets) {
+            await route.fulfill({ status: 404, body: 'expired' });
+            return;
+          }
+        }
+        await route.fallback();
+      });
+
+      const seedStaleTicket = async (): Promise<void> => {
+        const seeded = (await page.evaluate(`(() => {
+          const fileId = ${JSON.stringify(ticketRefresh.fileId)};
+          const staleUrl = '/f/' + fileId + '?t=stale-ticket';
+          const card = document.querySelector(
+            '.msg-file[data-file-id="' + fileId + '"]'
+          );
+          if (!card) return false;
+          messageFileTickets.set(fileId, {
+            url: staleUrl,
+            download: staleUrl + '&download=1',
+            at: Date.now()
+          });
+          messageFileCache.delete(fileId);
+          loadMessageFileCard(card, true);
+          return true;
+        })()`)) as boolean;
+        check('票据重签 fixture 卡片存在', seeded);
+      };
+
+      const refreshCallsBefore = await mcpCallCount(page, 'network_room_file_get');
+      await seedStaleTicket();
+      await waitUntil(
+        async () => staleTicketHeads === 1 && freshTicketHeads === 1,
+        '缓存票据 404 后重签并重试 HEAD',
+        15_000,
+      );
+      await waitUntil(async () => {
+        const unavailable = await ticketCard.evaluate((node) =>
+          node.classList.contains('unavailable'),
+        );
+        const note = (await ticketCard.locator('.msg-file-note').textContent()) ?? '';
+        return !unavailable && note === '';
+      }, '重签后卡片恢复可用', 15_000);
+      checkEqual(
+        '缓存票据 404 只自动重签一次',
+        (await mcpCallCount(page, 'network_room_file_get')) - refreshCallsBefore,
+        1,
+      );
+
+      rejectFreshTickets = true;
+      const retryCallsBefore = await mcpCallCount(page, 'network_room_file_get');
+      await seedStaleTicket();
+      await waitUntil(
+        async () =>
+          (await ticketCard.evaluate((node) => node.classList.contains('unavailable'))) === true,
+        '重签后仍 404 进入不可用',
+        15_000,
+      );
+      checkEqual(
+        '重签仍失败只换取一次新票据',
+        (await mcpCallCount(page, 'network_room_file_get')) - retryCallsBefore,
+        1,
+      );
+      checkEqual(
+        '重签仍失败才显示文件不可用',
+        await ticketCard.locator('.msg-file-note').textContent(),
+        '文件不可用',
+      );
+      const failureCalls = await mcpCallCount(page, 'network_room_file_get');
+      await sleep(800);
+      checkEqual(
+        '失败后不自动重复重签',
+        await mcpCallCount(page, 'network_room_file_get'),
+        failureCalls,
+      );
+
+      rejectFreshTickets = false;
+      const manualCallsBefore = await mcpCallCount(page, 'network_room_file_get');
+      await ticketCard.locator('.msg-file-retry').click();
+      await waitUntil(
+        async () => (await mcpCallCount(page, 'network_room_file_get')) > manualCallsBefore,
+        '手动重试换取票据',
+        15_000,
+      );
+      await waitUntil(async () => {
+        const unavailable = await ticketCard.evaluate((node) =>
+          node.classList.contains('unavailable'),
+        );
+        const note = (await ticketCard.locator('.msg-file-note').textContent()) ?? '';
+        return !unavailable && note === '';
+      }, '手动重试后卡片恢复可用', 15_000);
+      check(
+        '手动重试可再次换取票据',
+        (await mcpCallCount(page, 'network_room_file_get')) > manualCallsBefore,
       );
 
       const multiMessage = page.locator('#messages .msg').filter({ hasText: multiMarker });
