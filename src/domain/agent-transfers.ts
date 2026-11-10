@@ -9,7 +9,6 @@ import { hashToken, newId, nowMs, randomToken, sha256Hex, stableStringify } from
 import { eventStatement } from '../storage/events';
 import { guardSql } from '../storage/guards';
 import { getActor } from '../storage/queries';
-import type { TaskRow } from '../storage/rows';
 import {
   operationsStatement,
   resolveReplay,
@@ -35,7 +34,6 @@ import {
   type TransferContextStored,
 } from './agent-transfer-store';
 import { actorId, type Principal } from './principal';
-import { revokeTaskEligibilityStatements } from './task-transfers';
 
 /**
  * A06 Agent 管理权交接的写路径。
@@ -341,36 +339,6 @@ export async function agentTransferRespond(
     .all<{ credential_id: string }>();
   const revokedCredentialIds = pendingCredentialIds.results.map((item) => item.credential_id);
   const before = await workloadSnapshot(db, agent.actor_id, at);
-  // 只统计会被 D04 统一入口关闭的任务投递；普通聊天投递不因管理权交接取消。
-  const taskDeliveryStates = await db
-    .prepare(
-      `SELECT d.state, COUNT(*) AS n
-         FROM deliveries d
-        WHERE d.recipient_id = ? AND d.state IN ('pending', 'claimed')
-          AND EXISTS (SELECT 1 FROM task_deliveries td WHERE td.delivery_id = d.delivery_id)
-        GROUP BY d.state`,
-    )
-    .bind(agent.actor_id)
-    .all<{ state: string; n: number }>();
-  const taskPendingDeliveries =
-    taskDeliveryStates.results.find((row) => row.state === 'pending')?.n ?? 0;
-  const taskClaimedDeliveries =
-    taskDeliveryStates.results.find((row) => row.state === 'claimed')?.n ?? 0;
-
-  const blockedTaskIds: string[] = [];
-  const unassignedTaskIds: string[] = [];
-  const taskRevocations = await revokeTaskEligibilityStatements(db, {
-    actorId: agent.actor_id,
-    roomId: null,
-    requestId: input.request_id,
-    at,
-    reason: 'management_transferred',
-    blockedReason: 'management_transferred',
-    onTask: (task: TaskRow, outcome) => {
-      if (outcome === 'blocked') blockedTaskIds.push(task.task_id);
-      else unassignedTaskIds.push(task.task_id);
-    },
-  });
 
   const token = randomToken(32);
   const tokenHash = await hashToken(token);
@@ -386,10 +354,8 @@ export async function agentTransferRespond(
     accepted_at: String(at),
     revoked_delegations: before.delegation_count,
     revoked_credentials: revokedCredentialIds.length,
-    blocked_task_ids: blockedTaskIds,
-    unassigned_task_ids: unassignedTaskIds,
-    cancelled_pending_deliveries: taskPendingDeliveries,
-    cancelled_claimed_deliveries: taskClaimedDeliveries,
+    cancelled_pending_deliveries: 0,
+    cancelled_claimed_deliveries: 0,
     token: null,
     mcp_url: null,
   };
@@ -401,8 +367,6 @@ export async function agentTransferRespond(
       permission_version: nextPermissionVersion,
       revoked_delegations: stored.revoked_delegations,
       revoked_credentials: stored.revoked_credentials,
-      blocked_task_ids: blockedTaskIds,
-      unassigned_task_ids: unassignedTaskIds,
       cancelled_pending_deliveries: stored.cancelled_pending_deliveries,
       cancelled_claimed_deliveries: stored.cancelled_claimed_deliveries,
     },
@@ -500,7 +464,6 @@ export async function agentTransferRespond(
             WHERE transfer_id = ? AND status = 'pending' AND to_manager_id = ?`,
         )
         .bind(at, caller, JSON.stringify(acceptedContext), at, row.transfer_id, caller),
-      ...taskRevocations,
       ...lifecycleStatements(db, {
         agentId: agent.actor_id,
         transferId: row.transfer_id,
@@ -514,8 +477,6 @@ export async function agentTransferRespond(
           permission_version: nextPermissionVersion,
           revoked_delegations: stored.revoked_delegations,
           revoked_credentials: stored.revoked_credentials,
-          blocked_task_ids: blockedTaskIds,
-          unassigned_task_ids: unassignedTaskIds,
           cancelled_pending_deliveries: stored.cancelled_pending_deliveries,
           cancelled_claimed_deliveries: stored.cancelled_claimed_deliveries,
         },
@@ -537,7 +498,6 @@ export async function agentTransferRespond(
             permission_version: nextPermissionVersion,
             changed_by: caller,
             changed_scope: 'agent_management',
-            blocked_task_ids: blockedTaskIds,
           },
         },
         at,

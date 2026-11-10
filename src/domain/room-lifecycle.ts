@@ -9,7 +9,6 @@ import {
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
 import { getMember, getRoom } from '../storage/queries';
-import type { TaskRow } from '../storage/rows';
 import {
   operationsStatement,
   resolveReplay,
@@ -21,34 +20,21 @@ import {
   roomDissolvedGuardStatement,
 } from './room-access';
 import { roomAuditStatement } from './room-audit';
-import { roomDissolveTaskStatements } from './tasks';
 
 /**
- * G06 群生命周期：退群预览、成员在途工作与群解散。
+ * G06 群生命周期：退群预览与群解散。
  *
- * - 解散是单一事务：冻结房间、取消未结束任务与投递、撤销邀请/申请/交接、
+ * - 解散是单一事务：冻结房间、取消未完成投递、撤销邀请/申请/交接、
  *   固定归档边界并写审计；不删除任何业务行。
- * - 退群预览只读，供网页在确认前列出该成员的在途任务；实际退群仍由
- *   `roomLeave` 在同一事务内撤销任务资格与投递。
+ * - 退群预览只读，供网页在确认前列出该成员的待处理投递；实际退群仍由
+ *   `roomLeave` 在同一事务内撤销投递。
  * - 解散不调用媒体层；`room_dissolved` 事件携带 `media_revoke: true`，作为
  *   未来 M09 通话模块的明确撤权钩子，不能据此声称已终止媒体。
  */
 
-export interface InFlightTaskView {
-  task_id: string;
-  title: string;
-  status: TaskRow['status'];
-  owner_actor_id: string | null;
-  owner_name: string | null;
-  assignment_id: string | null;
-  assignment_status: string | null;
-  assignment_version: number | null;
-}
-
 export interface RoomLeavePreview {
   room_id: string;
   actor_id: string;
-  in_flight_tasks: InFlightTaskView[];
   pending_deliveries: number;
   claimed_deliveries: number;
   can_leave: boolean;
@@ -63,51 +49,10 @@ export interface RoomDissolveSummary {
   dissolved_at: string;
   archived_head_seq: string;
   archive_member_seq: string;
-  cancelled_tasks: number;
-  cancelled_task_ids: string[];
   cancelled_deliveries: number;
   revoked_invitations: number;
   cancelled_join_requests: number;
   cancelled_transfers: number;
-}
-
-interface InFlightTaskRow extends InFlightTaskView {
-  assignment_owner_actor_id: string | null;
-}
-
-/** 该成员当前仍承担的执行工作；offered 也算在途，不能被静默丢失。 */
-export async function inFlightTasksForMember(
-  db: D1Database,
-  roomId: string,
-  actorId: string,
-): Promise<InFlightTaskView[]> {
-  const rows = await db
-    .prepare(
-      `SELECT t.task_id, t.title, t.status, t.owner_actor_id, t.revision,
-              COALESCE(owner.name, assignee.name) AS owner_name,
-              a.assignment_id, a.status AS assignment_status,
-              a.assignment_version, a.owner_actor_id AS assignment_owner_actor_id
-         FROM tasks t
-         LEFT JOIN task_assignments a ON a.assignment_id = t.current_assignment_id
-         LEFT JOIN actors owner ON owner.actor_id = t.owner_actor_id
-         LEFT JOIN actors assignee ON assignee.actor_id = a.owner_actor_id
-        WHERE t.room_id = ?
-          AND t.status NOT IN ('accepted', 'cancelled', 'legacy_completed')
-          AND (t.owner_actor_id = ? OR a.owner_actor_id = ?)
-        ORDER BY t.created_at ASC, t.task_id ASC`,
-    )
-    .bind(roomId, actorId, actorId)
-    .all<InFlightTaskRow>();
-  return rows.results.map((row) => ({
-    task_id: row.task_id,
-    title: row.title,
-    status: row.status,
-    owner_actor_id: row.owner_actor_id ?? row.assignment_owner_actor_id,
-    owner_name: row.owner_name,
-    assignment_id: row.assignment_id,
-    assignment_status: row.assignment_status,
-    assignment_version: row.assignment_version,
-  }));
 }
 
 async function deliveryCounts(
@@ -142,10 +87,7 @@ export async function roomLeavePreview(
   if (!member || member.status !== 'active') {
     throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
   }
-  const [inFlight, deliveries] = await Promise.all([
-    inFlightTasksForMember(db, room.room_id, caller),
-    deliveryCounts(db, room.room_id, caller),
-  ]);
+  const deliveries = await deliveryCounts(db, room.room_id, caller);
   const dissolved = room.dissolved_at !== null;
   // 群主在任何未解散群里都不能直接退群，即使只剩自己一人：否则会留下
   // `owner_id = NULL AND dissolved_at = NULL` 的无主活跃群。先转移或解散，
@@ -155,7 +97,6 @@ export async function roomLeavePreview(
   return {
     room_id: room.room_id,
     actor_id: caller,
-    in_flight_tasks: inFlight,
     pending_deliveries: deliveries.pending,
     claimed_deliveries: deliveries.claimed,
     can_leave: !ownerTransferRequired,
@@ -240,12 +181,6 @@ export async function roomDissolve(
 
   const at = nowMs();
   const eventKey = `room_dissolved:${room.room_id}:${input.request_id}`;
-  const tasks = await roomDissolveTaskStatements(db, {
-    roomId: room.room_id,
-    actor: caller,
-    requestId: input.request_id,
-    at,
-  });
   const counts = await db
     .prepare(
       `SELECT
@@ -277,8 +212,6 @@ export async function roomDissolve(
       dissolved_at: String(at),
       archived_head_seq: '0',
       archive_member_seq: '0',
-      cancelled_tasks: tasks.taskIds.length,
-      cancelled_task_ids: tasks.taskIds,
       cancelled_deliveries: counts?.deliveries ?? 0,
       revoked_invitations: counts?.invitations ?? 0,
       cancelled_join_requests: counts?.join_requests ?? 0,
@@ -288,7 +221,6 @@ export async function roomDissolve(
       operationsStatement(db, caller, input.request_id, payloadHash, resultJson, at),
       capabilityGuardStatement(db, room.room_id, caller, 'manage_policy'),
       roomDissolvedGuardStatement(db, room.room_id),
-      ...tasks.statements,
       ...cancelRoomDeliveriesStatements(db, room.room_id, at),
       db
         .prepare(
@@ -327,9 +259,7 @@ export async function roomDissolve(
             reason,
             // 给未来 M09 媒体层的明确撤权信号；本任务不实现媒体终止。
             media_revoke: true,
-            cancelled_tasks: tasks.taskIds.length,
-            cancelled_task_ids: tasks.taskIds,
-            cancelled_deliveries: tasks.deliveryIds.length,
+            cancelled_deliveries: counts?.deliveries ?? 0,
           },
         },
         at,
@@ -357,8 +287,7 @@ export async function roomDissolve(
           requestId: auditRequestId,
           detail: {
             reason,
-            cancelled_tasks: tasks.taskIds.length,
-            cancelled_deliveries: tasks.deliveryIds.length,
+            cancelled_deliveries: counts?.deliveries ?? 0,
           },
         },
         at,
@@ -373,8 +302,6 @@ export async function roomDissolve(
     dissolved_at: String(at),
     archived_head_seq: saved.archived_head_seq,
     archive_member_seq: saved.archive_member_seq,
-    cancelled_tasks: tasks.taskIds.length,
-    cancelled_task_ids: tasks.taskIds,
     cancelled_deliveries: counts?.deliveries ?? 0,
     revoked_invitations: counts?.invitations ?? 0,
     cancelled_join_requests: counts?.join_requests ?? 0,

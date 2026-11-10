@@ -2,14 +2,13 @@
  * G07 群策略、并发授权快照与管理记录验收（T03）。
  *
  * 覆盖：默认 @所有人 仅群主/管理员、策略版本冲突、历史收紧后的材料失权、
- * 任务误验收拦截、普通成员摘要与 owner/admin 详细审计的分离，以及策略
- * 修改与房间/历史/文件/任务读取并发时的单响应授权一致性。
+ * 普通成员摘要与 owner/admin 详细审计的分离，以及策略修改与房间/历史/文件
+ * 读取并发时的单响应授权一致性。
  */
 
 import { acceptGroupInvites } from './acceptance-helpers';
 import { callTool, check, checkEqual, expectToolError, newRequestId } from './harness';
 import {
-  addTask,
   assertAuthorization,
   bindFile,
   checkHistoryInsideBoundary,
@@ -23,7 +22,6 @@ import {
   roomDetail,
   sendMessage,
   setPolicy,
-  taskPage,
   type FilePageView,
   type FileResultView,
   type GroupDetailView,
@@ -31,8 +29,6 @@ import {
   type NoticePageView,
   type PolicySetView,
   type RoleHistoryView,
-  type TaskPageView,
-  type TaskView,
 } from './group-history-helpers';
 
 export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): Promise<void> {
@@ -48,12 +44,11 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
       'G07 策略并发群',
     );
     const preJoinMessage = await sendMessage(owner.connection, roomId, 'G07 策略加入前消息');
-    const materialTaskId = await addTask(owner.connection, roomId, 'G07 材料任务');
     let materialFile: FileResultView | null = options.hasDrive
       ? await bindFile(owner, roomId, 'g07-material.txt', 'G07 材料任务')
       : null;
     await acceptGroupInvites(member.connection, roomId);
-    // unclaimed Agent 直接加入，但必须晚于 preJoin 消息与材料任务。
+    // unclaimed Agent 直接加入，但必须晚于 preJoin 消息与材料文件。
     await callTool(owner.connection.client, 'network_room_members_update', {
       request_id: newRequestId('g07_policy_add_agent'),
       room_id: roomId,
@@ -117,12 +112,6 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
       ),
       fullMemberHistory.items,
     );
-    const fullAgentTasks = await taskPage(agent.connection, roomId);
-    check(
-      'G07-T03 全历史下 Agent 可见加入前任务',
-      fullAgentTasks.tasks.some((task) => task.task_id === materialTaskId),
-      fullAgentTasks.tasks,
-    );
     if (options.hasDrive && materialFile) {
       const fullFile = await callTool<FileResultView>(
         member.connection.client,
@@ -177,14 +166,7 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
       'PERMISSION_DENIED',
     );
 
-    // 全历史下 Agent 领取加入前任务，随后收紧历史，完成必须被拒绝。
-    const claimed = await callTool<{ task: TaskView }>(
-      agent.connection.client,
-      'network_task_claim',
-      { request_id: newRequestId('g07_claim_material'), task_id: materialTaskId },
-    );
-    checkEqual('G07-T03 Agent 在全历史下领取任务', claimed.task.status, 'in_progress');
-
+    // 先在全历史下确认 Agent 可读加入前消息，随后收紧历史，验证边界立即生效。
     policyDetail = await roomDetail(owner.connection, roomId);
     const narrowed = await setPolicy(
       owner.connection,
@@ -197,11 +179,10 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
       narrowed.room.policies.member_history,
       'from_join',
     );
-    checkEqual('G07-T03 收紧报告材料失权', narrowed.policy_impact?.material_loss, true);
-    check(
-      'G07-T03 收紧报告隐藏任务',
-      (narrowed.policy_impact?.hidden_tasks ?? 0) >= 1,
-      narrowed.policy_impact,
+    checkEqual(
+      'G07-T03 收紧报告材料失权',
+      narrowed.policy_impact?.material_loss,
+      options.hasDrive,
     );
     if (options.hasDrive) {
       check(
@@ -237,19 +218,6 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
         message_id: preJoinMessage.message.message_id,
       }),
       'NOT_FOUND',
-    );
-    await expectToolError(
-      'G07-T03 材料失权后按 ID 读取任务返回 NOT_FOUND',
-      callTool(agent.connection.client, 'network_task_get', {
-        task_id: materialTaskId,
-      }),
-      'NOT_FOUND',
-    );
-    const narrowedTasks = await taskPage(agent.connection, roomId);
-    check(
-      'G07-T03 材料失权后任务列表不可见',
-      !narrowedTasks.tasks.some((task) => task.task_id === materialTaskId),
-      narrowedTasks.tasks,
     );
     checkHistoryInsideBoundary('G07-T03 收紧后历史', narrowedHistory);
     if (options.hasDrive && materialFile) {
@@ -324,7 +292,7 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
     const auditText = JSON.stringify(ownerAudit);
     check(
       'G07-T03 管理审计不包含消息正文',
-      !auditText.includes('G07 策略加入前消息') && !auditText.includes('G07 材料任务'),
+      !auditText.includes('G07 策略加入前消息'),
       auditText.slice(0, 400),
     );
 
@@ -335,7 +303,6 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
       | { kind: 'history'; page: HistoryPageView }
       | { kind: 'room'; detail: GroupDetailView }
       | { kind: 'files'; page: FilePageView }
-      | { kind: 'tasks'; page: TaskPageView }
     >[] = [];
     for (let index = 0; index < 6; index += 1) {
       reads.push(
@@ -345,9 +312,6 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
     for (let index = 0; index < 3; index += 1) {
       reads.push(
         roomDetail(member.connection, roomId).then((detail) => ({ kind: 'room', detail })),
-      );
-      reads.push(
-        taskPage(agent.connection, roomId).then((page) => ({ kind: 'tasks', page })),
       );
       if (options.hasDrive) {
         reads.push(
@@ -375,7 +339,7 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
       }
       const result = outcome.value;
       const auth =
-        result.kind === 'history' || result.kind === 'files' || result.kind === 'tasks'
+        result.kind === 'history' || result.kind === 'files'
           ? result.page.authorization
           : detailAuthorization(result.detail);
       check(
@@ -415,12 +379,6 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
           result.page.items.some((item) => item.file_id === materialFile!.file.file_id),
           full,
         );
-      } else if (result.kind === 'tasks') {
-        checkEqual(
-          'G07-T03 并发任务入口与全历史一致',
-          result.page.tasks.some((task) => task.task_id === materialTaskId),
-          full,
-        );
       }
     }
 
@@ -428,13 +386,6 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
     const finalAuth = detailAuthorization(afterConcurrent);
     const finalHistory = await history(member.connection, roomId);
     assertAuthorization('G07-T03 最终历史与 room_get 一致', finalHistory.authorization, finalAuth);
-    const finalAgentDetail = await roomDetail(agent.connection, roomId);
-    const finalTasks = await taskPage(agent.connection, roomId);
-    assertAuthorization(
-      'G07-T03 最终任务与 Agent 自身快照一致',
-      finalTasks.authorization,
-      detailAuthorization(finalAgentDetail),
-    );
     if (options.hasDrive) {
       const finalFiles = await listFiles(member.connection, roomId);
       assertAuthorization('G07-T03 最终文件与 room_get 一致', finalFiles.authorization, finalAuth);

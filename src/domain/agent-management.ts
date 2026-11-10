@@ -42,7 +42,6 @@ import {
   pendingTransferForSuccessor,
   type AgentTransferView,
 } from './agent-transfer-store';
-import { revokeTaskEligibilityStatements } from './task-transfers';
 
 /**
  * A01 身份归属与管理授权。
@@ -57,20 +56,10 @@ import { revokeTaskEligibilityStatements } from './task-transfers';
 
 const CONTROL_CHARS = /[\u0000-\u001F\u007F\u2028\u2029]/u;
 
-export interface OpenTaskView {
-  task_id: string;
-  room_id: string;
-  description: string;
-  status: 'pending' | 'claimed';
-  updated_at: string;
-}
-
 export interface PendingWorkView {
   pending_deliveries: number;
   claimed_deliveries: number;
   cancelled_deliveries: number;
-  open_tasks: OpenTaskView[];
-  open_task_count: number;
 }
 
 export async function pendingWork(db: D1Database, agentId: string): Promise<PendingWorkView> {
@@ -82,42 +71,10 @@ export async function pendingWork(db: D1Database, agentId: string): Promise<Pend
     .all<{ state: string; n: number }>();
   const count = (state: string): number =>
     states.results.find((row) => row.state === state)?.n ?? 0;
-  const tasks = await db
-    .prepare(
-      `SELECT t.task_id,
-              t.room_id,
-              t.title AS description,
-              CASE WHEN t.owner_actor_id IS NULL THEN 'pending' ELSE 'claimed' END AS status,
-              t.updated_at
-         FROM tasks t
-        WHERE (t.owner_actor_id = ? AND t.status IN ('in_progress', 'blocked', 'submitted'))
-           OR (t.owner_actor_id IS NULL AND t.status = 'offered' AND EXISTS (
-                 SELECT 1 FROM task_assignments a
-                  WHERE a.task_id = t.task_id
-                    AND a.owner_actor_id = ?
-                    AND a.status = 'offered'))
-        ORDER BY t.updated_at DESC, t.task_id ASC`,
-    )
-    .bind(agentId, agentId)
-    .all<{
-      task_id: string;
-      room_id: string;
-      description: string;
-      status: 'pending' | 'claimed';
-      updated_at: number;
-    }>();
   return {
     pending_deliveries: count('pending'),
     claimed_deliveries: count('claimed'),
     cancelled_deliveries: count('cancelled'),
-    open_tasks: tasks.results.map((row) => ({
-      task_id: row.task_id,
-      room_id: row.room_id,
-      description: row.description,
-      status: row.status,
-      updated_at: String(row.updated_at),
-    })),
-    open_task_count: tasks.results.length,
   };
 }
 
@@ -736,7 +693,7 @@ function normalizeDisableReason(raw: string | undefined): string | null {
 
 /**
  * 停用 Agent：阻止新投递与新执行，撤销 active 委托，取消 pending/claimed
- * delivery，但保留 room_tasks 状态供管理者查看。归档与停用正交。
+ * delivery。归档与停用正交。
  */
 export async function disableAgent(
   db: D1Database,
@@ -758,15 +715,6 @@ export async function disableAgent(
   };
   const payloadHash = await sha256Hex(stableStringify(input));
   const eventKey = `agent_disable:${target.actor_id}:${input.request_id}`;
-  // D04：停用 Agent 与撤销任务执行资格同事务。跨房间处理其负责的
-  // in_progress/blocked 任务；外部副作用保持未知，不自动重跑。
-  const taskRevocations = await revokeTaskEligibilityStatements(db, {
-    actorId: target.actor_id,
-    roomId: null,
-    requestId: input.request_id,
-    at,
-    reason: 'agent_disabled',
-  });
 
   await runIdempotent(db, {
     actorId: caller,
@@ -818,7 +766,6 @@ export async function disableAgent(
             WHERE recipient_id = ? AND state IN ('pending', 'claimed')`,
         )
         .bind('agent disabled', at, target.actor_id),
-      ...taskRevocations,
       ...managementEventStatements(db, {
         eventKey,
         agentId: target.actor_id,
@@ -829,7 +776,6 @@ export async function disableAgent(
           reason,
           stopped_pending_deliveries: stopped.pending_deliveries,
           stopped_claimed_deliveries: stopped.claimed_deliveries,
-          open_task_count: stopped.open_task_count,
         },
         at,
         notifyAgent: false,

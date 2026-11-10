@@ -1,6 +1,5 @@
 import { LIMITS } from './contracts/limits';
 import { expireContactRequests } from './domain/contact-relations';
-import { remindStaleTasks } from './domain/task-reminders';
 import { purgeFilePayloads } from './drive/service';
 import { nowMs } from './storage/db';
 import type { Env } from './env';
@@ -205,10 +204,6 @@ export async function maintain(env: Env): Promise<void> {
 
   // 房间文件墓碑与载荷由 maintainFiles 按引用状态统一回收。
   await maintainFiles(env, now);
-
-  // 任务催办与投递提醒共用 3 分钟规则；维护周期只是兜底，30s 快路径在
-  // `src/bun/main.ts`。提醒失败不影响清理与后续轮次。
-  await remindStaleTasks(db, now);
 
   // MCP Events：先停用过期订阅，再在宽限期后删除（级联清投递）。
   await db

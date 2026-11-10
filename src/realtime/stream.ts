@@ -6,8 +6,6 @@ import {
   MENTION_REMINDER_SOURCE,
   MESSAGE_TASK_MARKED_EVENT,
   MESSAGE_TASK_UNMARKED_EVENT,
-  TASK_REMINDER_EVENT,
-  TASK_REMINDER_SOURCE,
 } from '../contracts/events';
 import type { Env } from '../env';
 import { utf8Bytes } from '../storage/db';
@@ -629,62 +627,15 @@ export function roomStreamItems(
     case 'task_retried':
     case 'task_execution_unknown':
     case 'task_execution_resolved':
-    case 'task_reviewer_changed': {
-      // 任务事件只让 active human 刷新任务视图。Agent 的工作唤醒只来自
-      // 明确指派生成的 delivery，房间任务事件不推进 head、不产生未读。
-      const change = row.event_type.replace('task_', '');
-      const changedBy = stringField(metadata, 'changed_by');
-      const taskId = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
-      const assignmentId = stringField(metadata, 'assignment_id');
-      const status = stringField(metadata, 'status');
-      const revision = numberField(metadata, 'revision');
-      const submissionId = stringField(metadata, 'submission_id');
-      const submissionVersion = numberField(metadata, 'version');
-      for (const member of activeRecipients(members, eventSeq)) {
-        if (member.kind !== 'human') continue;
-        const item = withLocation(
-          baseItem(row, 'task.updated', 'task', 'informational'),
-          row,
-          metadata,
-        );
-        item.change = change;
-        if (taskId) {
-          item.task_id = taskId;
-          item.ref_id = taskId;
-        }
-        if (assignmentId) item.assignment_id = assignmentId;
-        if (status) item.status = status;
-        if (revision !== undefined) item.revision = revision;
-        if (changedBy) item.changed_by = changedBy;
-        if (submissionId) item.submission_id = submissionId;
-        if (submissionVersion !== undefined) item.submission_version = submissionVersion;
-        result.push({ actorId: member.actor_id, item });
-      }
-      return result;
-    }
+    case 'task_reviewer_changed':
     case 'room_task_added':
     case 'room_task_claimed':
     case 'room_task_completed':
     case 'room_task_failed':
     case 'room_task_updated':
     case 'room_task_deleted': {
-      // 任务只通知 active human 刷新视图；Agent 不收到任务提示，也不会被唤醒。
-      const change = row.event_type.replace('room_task_', '');
-      const changedBy = stringField(metadata, 'changed_by');
-      const taskId = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
-      for (const member of activeRecipients(members, eventSeq)) {
-        if (member.kind !== 'human') continue;
-        const item = withLocation(
-          baseItem(row, 'room.tasks', 'tasks', 'informational'),
-          row,
-          metadata,
-        );
-        item.change = change;
-        if (taskId) item.ref_id = taskId;
-        if (changedBy) item.changed_by = changedBy;
-        result.push({ actorId: member.actor_id, item });
-      }
-      return result;
+      // 旧任务模型已删除；历史 outbox 中的旧事件不再扇出，避免唤醒或污染新客户端。
+      return [];
     }
     case 'agent_presence_changed': {
       // 只通知 active human；Agent 成员不可见，也不写 inbox/未读。
@@ -844,23 +795,9 @@ function inboxStreamItem(
       if (progressAt !== undefined) item.progress_at = String(progressAt);
       return item;
     }
-    case TASK_REMINDER_EVENT: {
-      // 任务催办只提醒当前责任者更新进度或说明阻塞；不是新任务、assignment
-      // 或 delivery，也不增加 pending_count。客户端收到后重读 task_get。
-      const item = withLocation(
-        baseItem(row, TASK_REMINDER_SOURCE, 'reminder', 'action_required'),
-        row,
-        metadata,
-      );
-      item.task_id = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
-      item.ref_id = item.task_id;
-      item.assignment_id = stringField(metadata, 'assignment_id');
-      const progressAt = numberField(metadata, 'progress_at');
-      if (progressAt !== undefined) item.progress_at = String(progressAt);
-      const assignmentVersion = numberField(metadata, 'assignment_version');
-      if (assignmentVersion !== undefined) item.assignment_version = assignmentVersion;
-      return item;
-    }
+    case 'task_reminder':
+      // 旧任务催办已删除；历史 outbox 不再唤醒 Agent。
+      return null;
     case MENTION_REMINDER_EVENT: {
       // 个人提醒不是待办：只提示人类查看消息，不增加 pending_count、
       // 不创建 delivery，也不该被 Agent 当成新的执行工作。
@@ -873,30 +810,9 @@ function inboxStreamItem(
       return item;
     }
     case 'task_offered':
-    case 'task_cancelled': {
-      // 人类接手请求/撤回是持久个人通知，不是 delivery；Agent 的指派
-      // 唤醒由 delivery_created 独立承担。
-      const offered = row.event_type === 'task_offered';
-      const item = withLocation(
-        baseItem(
-          row,
-          'task.updated',
-          'task',
-          offered ? 'action_required' : 'informational',
-        ),
-        row,
-        metadata,
-      );
-      item.task_id = stringField(metadata, 'task_id') ?? row.ref_id ?? undefined;
-      item.ref_id = item.task_id;
-      item.change = offered ? 'offered' : 'cancelled';
-      const assignmentId = stringField(metadata, 'assignment_id');
-      const status = stringField(metadata, 'status');
-      if (assignmentId) item.assignment_id = assignmentId;
-      if (status) item.status = status;
-      item.changed_by = stringField(metadata, 'changed_by');
-      return item;
-    }
+    case 'task_cancelled':
+      // 旧任务个人通知已删除；历史 outbox 不再唤醒。
+      return null;
     case 'room_read':
       return withLocation(baseItem(row, 'room.read', 'read', 'informational'), row, metadata);
     case 'profile_updated':

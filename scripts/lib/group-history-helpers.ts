@@ -18,7 +18,6 @@ import {
 } from './harness';
 
 export const HISTORY_MARKER = 'G07 加入前消息';
-export const TASK_MARKER = 'G07 加入前任务';
 export const FILE_MARKER = 'g07-before-join.txt';
 export const POST_MARKER = 'G07 加入后可读消息';
 
@@ -31,7 +30,6 @@ export interface AuthorizationSnapshot {
 export interface PolicyView {
   member_message: 'members' | 'owner_admin';
   member_invite: 'members' | 'owner_admin';
-  member_task: 'members' | 'owner_admin';
   member_history: 'from_join' | 'full';
   member_join: 'open' | 'approval';
   member_profile: 'members' | 'owner_admin';
@@ -67,7 +65,6 @@ export interface GroupDetailView {
 export interface PolicyImpactView {
   history_policy: 'from_join' | 'full';
   affected_members: number;
-  hidden_tasks: number;
   hidden_files: number;
   material_loss: boolean;
   message: string;
@@ -81,7 +78,6 @@ export interface PolicySetView extends GroupDetailView {
 export type PolicyPatch = Partial<{
   member_message_policy: PolicyView['member_message'];
   member_invite_policy: PolicyView['member_invite'];
-  member_task_policy: PolicyView['member_task'];
   member_history_policy: PolicyView['member_history'];
   member_join_policy: PolicyView['member_join'];
   member_profile_policy: PolicyView['member_profile'];
@@ -126,19 +122,6 @@ export interface FileResultView {
 
 export interface FilePageView {
   items: FileView[];
-  next_cursor: string | null;
-  has_more: boolean;
-  authorization: AuthorizationSnapshot;
-}
-
-export interface TaskView {
-  task_id: string;
-  title: string;
-  status: string;
-}
-
-export interface TaskPageView {
-  tasks: TaskView[];
   next_cursor: string | null;
   has_more: boolean;
   authorization: AuthorizationSnapshot;
@@ -303,30 +286,6 @@ export async function listFiles(
     room_id: roomId,
     limit,
   });
-}
-
-export async function addTask(
-  connection: McpConnection,
-  roomId: string,
-  description: string,
-): Promise<string> {
-  const created = await callTool<{ task: { task_id: string } }>(
-    connection.client,
-    'network_task_create',
-    {
-      request_id: newRequestId('g07_task'),
-      room_id: roomId,
-      title: description,
-    },
-  );
-  return created.task.task_id;
-}
-
-export async function taskPage(
-  connection: McpConnection,
-  roomId: string,
-): Promise<TaskPageView> {
-  return callTool<TaskPageView>(connection.client, 'network_task_list', { room_id: roomId });
 }
 
 export function assertAuthorization(

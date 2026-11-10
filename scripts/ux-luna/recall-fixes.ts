@@ -96,8 +96,9 @@ try {
   const agentRoom = await call(alice.token, 'network_room_create', { request_id: id(), kind: 'direct', members: [agentId] });
   const agentRoomId = agentRoom.room.room_id;
   const taskSource = await call(alice.token, 'network_message_send', { request_id: id(), client_message_id: id(), room_id: roomId, body: '来源任务消息', invoke: [] });
-  await call(alice.token, 'network_task_create', { request_id: id(), room_id: roomId, title: '撤回引用测试', source_message_id: taskSource.message.message_id });
-  await fails(call(alice.token, 'network_message_recall', { request_id: id(), message_id: taskSource.message.message_id }), 'CONFLICT', '任务引用消息拒绝撤回');
+  await call(alice.token, 'network_task_mark', { request_id: id(), room_id: roomId, message_id: taskSource.message.message_id });
+  const recalledMarked = await call(alice.token, 'network_message_recall', { request_id: id(), message_id: taskSource.message.message_id });
+  ok(recalledMarked.recalled, '已标记消息可以撤回');
   const delivered = await call(alice.token, 'network_message_send', { request_id: id(), client_message_id: id(), room_id: agentRoomId, body: '投递消息', invoke: [agentId] });
   await fails(call(alice.token, 'network_message_recall', { request_id: id(), message_id: delivered.message.message_id }), 'CONFLICT', '含 delivery 消息拒绝撤回');
   const agentMessage = await call(agentToken, 'network_message_send', { request_id: id(), client_message_id: id(), room_id: agentRoomId, body: 'Agent 普通消息', invoke: [] });

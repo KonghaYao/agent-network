@@ -57,8 +57,6 @@ interface ManagementView {
     pending_deliveries: number;
     claimed_deliveries: number;
     cancelled_deliveries: number;
-    open_tasks: { task_id: string; status: 'pending' | 'claimed' }[];
-    open_task_count: number;
   };
 }
 
@@ -77,8 +75,6 @@ interface DisableView {
     pending_deliveries: number;
     claimed_deliveries: number;
     cancelled_deliveries: number;
-    open_tasks: { task_id: string; status: 'pending' | 'claimed' }[];
-    open_task_count: number;
   };
 }
 
@@ -87,20 +83,6 @@ interface ReissueView {
   token: string;
   mcp_url: string;
   revoked_count: number;
-}
-
-interface TaskView {
-  task_id: string;
-  status: string;
-  title: string;
-  owner_actor_id: string | null;
-  blocked_reason: string | null;
-}
-
-interface TaskListResult {
-  tasks: TaskView[];
-  next_cursor: string | null;
-  has_more: boolean;
 }
 
 interface AgentSummaryView {
@@ -514,15 +496,6 @@ export async function runAgentIdentityAcceptance(): Promise<void> {
     const archivedMe = await callTool<Identity>(targetConn.client, 'network_me');
     checkEqual('归档不阻止 Agent 工具调用', archivedMe.actor_id, target.actor_id);
 
-    const task = await callTool<{ task: TaskView }>(managerConn.client, 'network_task_create', {
-      request_id: newRequestId('a01_t04_task'),
-      room_id: roomId,
-      title: '停用后必须保持未完成的任务',
-    });
-    await callTool(targetConn.client, 'network_task_claim', {
-      request_id: newRequestId('a01_t04_claim'),
-      task_id: task.task.task_id,
-    });
     await sendMessage(managerConn, roomId, '停用前投递', { invoke: [target.actor_id] });
     const beforeDisable = await callTool<ManagementView>(
       managerConn.client,
@@ -530,13 +503,6 @@ export async function runAgentIdentityAcceptance(): Promise<void> {
       { actor_id: target.actor_id },
     );
     check('停用前存在待处理投递', beforeDisable.pending_work.pending_deliveries >= 1, beforeDisable.pending_work);
-    check(
-      '停用前任务处于 claimed',
-      beforeDisable.pending_work.open_tasks.some(
-        (item) => item.task_id === task.task.task_id && item.status === 'claimed',
-      ),
-      beforeDisable.pending_work.open_tasks,
-    );
     const targetSubscription = await openSubscription(targetConn.client, [STREAM_URI]);
     await waitUntil('被停用 Agent 的 stream 已建立', () =>
       Boolean(targetSubscription.honoredFilter.resourceSubscriptions?.length),
@@ -550,11 +516,6 @@ export async function runAgentIdentityAcceptance(): Promise<void> {
     checkEqual('停用返回 disabled', disabled.disabled, true);
     checkEqual('停用后旧凭据 stream 被服务端关闭', await waitClosed(targetSubscription), 'graceful');
     check('停用报告取消的在途投递', disabled.stopped.pending_deliveries >= 1, disabled.stopped);
-    check(
-      '停用报告未完成的任务',
-      disabled.stopped.open_tasks.some((item) => item.task_id === task.task.task_id),
-      disabled.stopped.open_tasks,
-    );
     await expectRawError(
       '停用后旧凭据工具调用返回 ACTOR_DISABLED',
       rawRpc('tools/call', { name: 'network_me', arguments: {} }, { token: target.token }) as Promise<RawErrorCode>,
@@ -574,36 +535,6 @@ export async function runAgentIdentityAcceptance(): Promise<void> {
     checkEqual('停用原因可读', afterDisable.disabled_reason, 'A01 验收停用');
     checkEqual('停用后 pending 投递清零', afterDisable.pending_work.pending_deliveries, 0);
     check('停用后投递标记为 cancelled', afterDisable.pending_work.cancelled_deliveries >= 1, afterDisable.pending_work);
-    // D04 起停用会撤销执行资格：任务转 blocked、清空负责人与 current assignment，
-    // 因此不再出现在“我的未完成任务”列表；权威状态必须仍可读取且不是 accepted。
-    check(
-      '停用后任务不再显示为本人 claimed',
-      !afterDisable.pending_work.open_tasks.some(
-        (item) => item.task_id === task.task.task_id,
-      ),
-      afterDisable.pending_work.open_tasks,
-    );
-    const taskList = await callTool<TaskListResult>(managerConn.client, 'network_task_list', {
-      room_id: roomId,
-    });
-    const taskAfterDisable = taskList.tasks.find((item) => item.task_id === task.task.task_id);
-    checkEqual('任务列表显示停用后进入 blocked', taskAfterDisable?.status, 'blocked');
-    checkEqual('停用后任务负责人被清空', taskAfterDisable?.owner_actor_id, null);
-    checkEqual(
-      '停用后任务阻塞原因为 owner_lost_eligibility',
-      taskAfterDisable?.blocked_reason,
-      'owner_lost_eligibility',
-    );
-    check(
-      '停用后任务没有被悄悄标成完成',
-      taskAfterDisable !== undefined && taskAfterDisable.status !== 'accepted',
-      taskAfterDisable,
-    );
-    checkEqual(
-      '任务没有被计为已验收',
-      taskList.tasks.filter((item) => item.status === 'accepted').length,
-      0,
-    );
 
     const summaries = await callTool<AgentsGetView>(managerConn.client, 'network_agents_get', {
       actor_ids: [target.actor_id],
@@ -617,11 +548,6 @@ export async function runAgentIdentityAcceptance(): Promise<void> {
     });
     const enabledMe = await callTool<Identity>(targetConn.client, 'network_me');
     checkEqual('启用后旧凭据恢复可用', enabledMe.actor_id, target.actor_id);
-    const enabledTask = await callTool<{ task: TaskView }>(targetConn.client, 'network_task_get', {
-      task_id: task.task.task_id,
-    });
-    checkEqual('启用后可读取被撤销执行资格的任务', enabledTask.task.status, 'blocked');
-    checkEqual('启用不会自动恢复负责人', enabledTask.task.owner_actor_id, null);
   } finally {
     for (const connection of extraConns) await connection.close();
     await managerConn.close();

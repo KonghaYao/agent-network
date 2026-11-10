@@ -320,7 +320,6 @@ export async function agentManagementAudit(
     'permission_version',
     'revoked_delegations',
     'revoked_credentials',
-    'blocked_task_ids',
     'cancelled_pending_deliveries',
     'cancelled_claimed_deliveries',
     'expires_at',

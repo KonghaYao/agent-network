@@ -14,7 +14,6 @@ import {
   getDriveFile,
   getOperation,
   getRoomFile,
-  getRoomTask,
 } from '../storage/queries';
 import type { ArtifactRow, RoomFileRow } from '../storage/rows';
 import {
@@ -50,16 +49,15 @@ import {
  * 成果版本与文件保留。
  *
  * - 提交成果把上传者自己的文件绑定到房间，并把 `room_files.retained` 置 1；
- *   同时写入 artifact 引用与 task 引用，供 GC 判断可达性。
+ *   同时写入 artifact 引用，供 GC 判断可达性。
  * - 配额在事务内先检查：超限整批回滚，不产生半成品 artifact 或 room_files。
- * - 释放只撤销成果引用；若仍有有效任务引用，文件继续保留。
+ * - 释放只撤销成果引用；若仍有其他有效引用，文件继续保留。
  * - 成果列表按成员历史边界过滤，旧成员不能读取加入前的成果。
  */
 
 export interface ArtifactView {
   artifact_id: string;
   room_id: string;
-  task_id: string | null;
   version: number;
   file_id: string;
   summary: string;
@@ -86,7 +84,6 @@ function artifactView(row: ArtifactRow): ArtifactView {
   return {
     artifact_id: row.artifact_id,
     room_id: row.room_id,
-    task_id: row.task_id,
     version: row.version,
     file_id: row.file_id,
     summary: row.summary,
@@ -200,45 +197,12 @@ export async function artifactSubmit(
     });
   }
 
-  let taskId: string | null = null;
-  let version = 1;
-  if (input.task_id) {
-    const task = await getRoomTask(db, input.task_id);
-    if (
-      !task ||
-      task.room_id !== room.room_id ||
-      !visibleCreated(task, boundary)
-    ) {
-      throw new BusinessError('NOT_FOUND', '任务不在该房间或当前不可见', {
-        task_id: input.task_id,
-      });
-    }
-    const allowed =
-      task.created_by === caller ||
-      task.assignee_actor_id === caller ||
-      (room.kind === 'group' && room.owner_id === caller);
-    if (!allowed) {
-      throw new BusinessError('NOT_OWNER', '只有任务创建者、当前执行者或群 owner 可以提交成果');
-    }
-    taskId = task.task_id;
-    const max = await db
-      .prepare(
-        'SELECT COALESCE(MAX(version), 0) AS version FROM artifacts WHERE room_id = ? AND task_id = ?',
-      )
-      .bind(room.room_id, taskId)
-      .first<{ version: number }>();
-    version = (max?.version ?? 0) + 1;
-    if (input.version !== undefined && input.version !== version) {
-      throw new BusinessError('VERSION_CONFLICT', '成果版本已变化，请刷新后重试', {
-        expected: version,
-        actual: input.version,
-      });
-    }
-  } else if (input.version !== undefined && input.version !== 1) {
-    throw new BusinessError('VERSION_CONFLICT', '无任务成果的版本只能为 1', {
+  if (input.version !== undefined && input.version !== 1) {
+    throw new BusinessError('VERSION_CONFLICT', '成果版本只能为 1', {
       actual: input.version,
     });
   }
+  const version = 1;
 
   const existing = await getRoomFile(db, input.file_id);
   if (existing && existing.room_id !== room.room_id) {
@@ -271,7 +235,7 @@ export async function artifactSubmit(
   const artifact: ArtifactRow = {
     artifact_id: artifactId,
     room_id: room.room_id,
-    task_id: taskId,
+    task_id: null,
     version,
     file_id: input.file_id,
     created_by: caller,
@@ -315,7 +279,6 @@ export async function artifactSubmit(
   };
 
   const eventKey = `artifact:submitted:${artifactId}`;
-  const taskRefId = taskId ?? '';
   const stored = await runIdempotent(db, {
     actorId: caller,
     requestId: input.request_id,
@@ -379,16 +342,6 @@ export async function artifactSubmit(
           ),
         )
         .bind(input.file_id),
-      taskId
-        ? db
-            .prepare(
-              guardSql(
-                'artifactConflict',
-                'EXISTS (SELECT 1 FROM artifacts WHERE room_id = ? AND task_id = ? AND version = ?)',
-              ),
-            )
-            .bind(room.room_id, taskId, version)
-        : db.prepare('SELECT 1'),
       // 用 upsert 消除“读后在事务前被 GC 删除”的竞态：无论 room_files 行是否
       // 仍存在，成果事务要么写入保留行，要么在 guard 处整批失败。
       db
@@ -445,25 +398,6 @@ export async function artifactSubmit(
           caller,
           at,
         ),
-      taskId
-        ? db
-            .prepare(
-              `INSERT INTO file_references
-                 (reference_id, file_id, kind, ref_id, room_id, actor_id, state, created_at,
-                  released_at, released_by)
-               VALUES (?, ?, 'task', ?, ?, ?, 'active', ?, NULL, NULL)
-               ON CONFLICT(kind, ref_id, file_id) DO UPDATE SET
-                 state = 'active', released_at = NULL, released_by = NULL`,
-            )
-            .bind(
-              `ref_${crypto.randomUUID().replace(/-/g, '')}`,
-              input.file_id,
-              taskRefId,
-              room.room_id,
-              caller,
-              at,
-            )
-        : db.prepare('SELECT 1'),
       db
         .prepare(
           `UPDATE drive_files
@@ -481,7 +415,6 @@ export async function artifactSubmit(
           refId: artifactId,
           metadata: {
             artifact_id: artifactId,
-            task_id: taskId,
             file_id: input.file_id,
             version,
             summary: artifact.summary,
@@ -537,18 +470,16 @@ export async function artifactList(
     ? 'AND (a.created_at < ? OR (a.created_at = ? AND a.artifact_id < ?))'
     : '';
   const history = createdHistoryFilter('a', boundary);
-  const taskFilter = input.task_id ? 'AND a.task_id = ?' : '';
   const binds: unknown[] = [
     room.room_id,
     ...history.binds,
-    ...(input.task_id ? [input.task_id] : []),
     ...(cursor ? [cursor.seq, cursor.seq, cursor.key ?? ''] : []),
   ];
 
   const rows = await db
     .prepare(
       `SELECT a.* FROM artifacts a
-        WHERE a.room_id = ? AND (${history.sql}) ${taskFilter} ${keyset}
+        WHERE a.room_id = ? AND (${history.sql}) ${keyset}
         ORDER BY a.created_at DESC, a.artifact_id DESC
         LIMIT ?`,
     )
@@ -709,7 +640,6 @@ export async function artifactRelease(
           metadata: {
             artifact_id: artifact.artifact_id,
             file_id: artifact.file_id,
-            task_id: artifact.task_id,
             version: artifact.version,
           },
         },

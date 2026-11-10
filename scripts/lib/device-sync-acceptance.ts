@@ -75,22 +75,6 @@ interface RoomDetail {
   };
 }
 
-interface TaskView {
-  task_id: string;
-  status: string;
-  revision: number;
-  owner_actor_id: string | null;
-  reviewer_actor_id: string;
-}
-
-interface TaskResult {
-  task: TaskView;
-}
-
-interface TaskList {
-  tasks: TaskView[];
-}
-
 interface ContactRequestPage {
   items: {
     contact_request_id: string;
@@ -229,22 +213,13 @@ export async function runDeviceSyncAcceptance(): Promise<void> {
     await onlineStream.close();
     await sleep(300);
 
-    // 断线期间：两条提及、一个任务 offer、一个联系人申请、群策略与公告、被移出另一个群。
+    // 断线期间：两条提及、一个联系人申请、群策略与公告、被移出另一个群。
     const sentOne = await sendMessage(vConn, r1, 'Q02 离线消息一', {
       mentions: [u.actor_id],
     });
     const sentTwo = await sendMessage(vConn, r1, 'Q02 离线消息二', {
       mentions: [u.actor_id],
     });
-    const task = await callTool<TaskResult>(vConn.client, 'network_task_create', {
-      request_id: newRequestId('task'),
-      room_id: r1,
-      title: 'Q02 离线任务',
-      description: '断线后补读任务',
-      assignee_actor_id: u.actor_id,
-      reviewer_actor_id: v.actor_id,
-    });
-    checkEqual('T03 离线期间任务进入 offered', task.task.status, 'offered');
     await callTool(wConn.client, 'network_contact_request', {
       request_id: newRequestId('creq'),
       actor_id: u.actor_id,
@@ -255,7 +230,7 @@ export async function runDeviceSyncAcceptance(): Promise<void> {
     await callTool(vConn.client, 'network_room_policy_set', {
       request_id: newRequestId('policy'),
       room_id: r1,
-      member_task_policy: 'owner_admin',
+      member_mention_all_policy: 'members',
       expected_policy_revision: detail.room.policy_revision,
     });
     await callTool(vConn.client, 'network_room_announcement_set', {
@@ -367,35 +342,9 @@ export async function runDeviceSyncAcceptance(): Promise<void> {
     );
     checkEqual('T03 被移除原因可读', typeof removedRoomSync.body.message, 'string');
 
-    // 未读与任务恢复：只补状态，不自动接受/执行任务。
+    // 未读恢复：只补状态，不自动执行。
     const afterList = await roomList(uConn);
     check('T03 重连后 R1 有未读', unreadOf(afterList, r1), afterList.items);
-    const mine = await callTool<TaskList>(uConn.client, 'network_task_list', {
-      scope: 'mine',
-      limit: 100,
-    });
-    const recoveredTask = mine.tasks.find((item) => item.task_id === task.task.task_id);
-    checkEqual('T03 任务仍保持 offered', recoveredTask?.status, 'offered');
-    const taskBeforeAccept = await callTool<TaskResult>(uConn.client, 'network_task_get', {
-      task_id: task.task.task_id,
-    });
-    checkEqual('T03 补读没有自动执行任务', taskBeforeAccept.task.status, 'offered');
-    const accepted = await callTool<TaskResult>(uConn.client, 'network_task_accept', {
-      request_id: newRequestId('accept'),
-      task_id: task.task.task_id,
-      expected_revision: task.task.revision,
-    });
-    checkEqual('T03 显式接受后任务 in_progress', accepted.task.status, 'in_progress');
-    checkEqual('T03 接受者成为唯一负责人', accepted.task.owner_actor_id, u.actor_id);
-    const secondAccept = await expectToolError(
-      'T03 重复接受被拒绝',
-      callTool(uConn.client, 'network_task_accept', {
-        request_id: newRequestId('accept'),
-        task_id: task.task.task_id,
-      }),
-      'ASSIGNMENT_STALE',
-    );
-    check('T03 重复接受错误可读', typeof secondAccept.body.message, 'string');
 
     const contacts = await callTool<ContactRequestPage>(uConn.client, 'network_contact_requests_list', {
       direction: 'incoming',

@@ -658,16 +658,7 @@ export async function runMessageTaskAcceptance(): Promise<void> {
       syncBase.types,
     );
     const syncRoot = await send(hConn, `S15 sync 新标记 ${RUN}`);
-    const legacySource = await send(hConn, `S15 旧任务来源 ${RUN}`);
     await mark(a1Conn, roomId, syncRoot.message.message_id);
-    await callTool(hConn.client, 'network_task_create', {
-      request_id: newRequestId('mt_legacy_task'),
-      room_id: roomId,
-      title: `S15 legacy ${RUN}`,
-      description: 'legacy task event should not enter sync',
-      reviewer_actor_id: h.actor_id,
-      source_message_id: legacySource.message.message_id,
-    });
     const afterEvents = await syncAll(hConn, roomId, syncBase.cursor);
     check(
       'sync 保留新 message_task_marked',

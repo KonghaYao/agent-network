@@ -31,7 +31,6 @@ export interface AgentTransferContextView {
   snapshot: {
     room_count: number;
     delegation_count: number;
-    open_task_count: number;
     pending_deliveries: number;
     claimed_deliveries: number;
   };
@@ -40,8 +39,6 @@ export interface AgentTransferContextView {
     permission_version: number;
     revoked_delegations: number;
     revoked_credentials: number;
-    blocked_task_ids: string[];
-    unassigned_task_ids: string[];
     cancelled_pending_deliveries: number;
     cancelled_claimed_deliveries: number;
   } | null;
@@ -77,8 +74,6 @@ export interface AgentTransferAcceptedResult {
   accepted_at: string;
   revoked_delegations: number;
   revoked_credentials: number;
-  blocked_task_ids: string[];
-  unassigned_task_ids: string[];
   cancelled_pending_deliveries: number;
   cancelled_claimed_deliveries: number;
   /** 首次响应为明文 token；重放时为 null。 */
@@ -139,7 +134,6 @@ export function contextView(raw: string): AgentTransferContextView {
     snapshot: {
       room_count: Number(snapshot.room_count ?? 0),
       delegation_count: Number(snapshot.delegation_count ?? 0),
-      open_task_count: Number(snapshot.open_task_count ?? 0),
       pending_deliveries: Number(snapshot.pending_deliveries ?? 0),
       claimed_deliveries: Number(snapshot.claimed_deliveries ?? 0),
     },
@@ -191,25 +185,21 @@ export async function workloadSnapshot(
          (SELECT COUNT(*) FROM agent_delegations
            WHERE agent_id = ? AND status = 'active'
              AND (expires_at IS NULL OR expires_at > ?)) AS delegation_count,
-         (SELECT COUNT(*) FROM tasks
-           WHERE owner_actor_id = ? AND status IN ('in_progress', 'blocked', 'submitted')) AS open_task_count,
          (SELECT COUNT(*) FROM deliveries
            WHERE recipient_id = ? AND state = 'pending') AS pending_deliveries,
          (SELECT COUNT(*) FROM deliveries
            WHERE recipient_id = ? AND state = 'claimed') AS claimed_deliveries`,
     )
-    .bind(agentId, agentId, at, agentId, agentId, agentId)
+    .bind(agentId, agentId, at, agentId, agentId)
     .first<{
       room_count: number;
       delegation_count: number;
-      open_task_count: number;
       pending_deliveries: number;
       claimed_deliveries: number;
     }>();
   return {
     room_count: counts?.room_count ?? 0,
     delegation_count: counts?.delegation_count ?? 0,
-    open_task_count: counts?.open_task_count ?? 0,
     pending_deliveries: counts?.pending_deliveries ?? 0,
     claimed_deliveries: counts?.claimed_deliveries ?? 0,
   };

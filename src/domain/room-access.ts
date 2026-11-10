@@ -20,7 +20,6 @@ import type {
  */
 export type RoomCapability =
   | 'send_message'
-  | 'create_task'
   | 'invite_members'
   | 'remove_members'
   | 'manage_admins'
@@ -35,7 +34,6 @@ export type RoomCapability =
 export interface RoomPolicies {
   member_message: GroupMemberPolicy;
   member_invite: GroupMemberPolicy;
-  member_task: GroupMemberPolicy;
   member_history: GroupHistoryPolicy;
   member_join: GroupJoinPolicy;
   member_profile: GroupMemberPolicy;
@@ -44,7 +42,6 @@ export interface RoomPolicies {
 
 export interface RoomCapabilities {
   send_message: boolean;
-  create_task: boolean;
   invite_members: boolean;
   remove_members: boolean;
   manage_admins: boolean;
@@ -88,8 +85,6 @@ const OWNER_ONLY: ReadonlySet<RoomCapability> = new Set([
 const CAPABILITY_PREDICATES: Record<RoomCapability, string> = {
   send_message:
     "(r.kind = 'direct' OR m.role IN ('owner', 'admin') OR r.member_message_policy = 'members')",
-  create_task:
-    "(r.kind = 'direct' OR m.role IN ('owner', 'admin') OR r.member_task_policy = 'members')",
   invite_members:
     "(r.kind = 'group' AND (m.role IN ('owner', 'admin') OR r.member_invite_policy = 'members'))",
   remove_members: "(r.kind = 'group' AND m.role IN ('owner', 'admin'))",
@@ -124,7 +119,6 @@ export function roomPolicies(room: Pick<
   RoomRow,
   | 'member_message_policy'
   | 'member_invite_policy'
-  | 'member_task_policy'
     | 'member_profile_policy'
   | 'member_history_policy'
   | 'member_join_policy'
@@ -134,7 +128,6 @@ export function roomPolicies(room: Pick<
   return {
     member_message: room.member_message_policy,
     member_invite: room.member_invite_policy,
-    member_task: room.member_task_policy,
     member_history: room.member_history_policy,
     member_join: room.member_join_policy,
     member_profile: room.member_profile_policy,
@@ -199,7 +192,6 @@ export function roomCapabilitiesFor(
     | 'kind'
     | 'member_message_policy'
     | 'member_invite_policy'
-    | 'member_task_policy'
     | 'member_profile_policy'
     | 'member_mention_all_policy'
     | 'dissolved_at'
@@ -218,10 +210,6 @@ export function roomCapabilitiesFor(
       writable &&
       active &&
       (!group || admin || room.member_message_policy === 'members'),
-    create_task:
-      writable &&
-      active &&
-      (!group || admin || room.member_task_policy === 'members'),
     invite_members:
       writable && active && group && (admin || room.member_invite_policy === 'members'),
     remove_members: writable && active && group && admin,

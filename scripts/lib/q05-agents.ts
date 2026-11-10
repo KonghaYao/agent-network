@@ -3,7 +3,7 @@
  *
  * 100 轮，每轮创建独立 Agent 与在途任务；接任者接受交接的同时旧管理者
  * 并发重发 100 次 token。最终只能有一个管理者、一个有效运行凭据，旧 token
- * 全部失效，任务进入 blocked/management_transferred，不重复轮换。
+ * 全部失效，不重复轮换。
  */
 
 import {
@@ -38,14 +38,6 @@ interface TransferAcceptResult {
   status: string;
   token: string | null;
   agent_id: string;
-}
-
-interface TaskResult {
-  task: {
-    task_id: string;
-    revision: number;
-    assignment: { assignment_id: string; assignment_version: number } | null;
-  };
 }
 
 export const q05AgentTransferStats = {
@@ -83,20 +75,7 @@ export function q05AgentTransferRound(
       `Q05 交接任务群 ${round}`,
     );
     try {
-      const offered = await q05Tool<TaskResult>(server, oldManager.token, 'network_task_create', {
-      request_id: newRequestId(`agent_task_${round}`),
-      room_id: roomId,
-      title: `Q05 交接在途任务 ${round}`,
-      assignee_actor_id: agent.actor_id,
-    });
-    const accepted = await q05Tool<TaskResult>(server, agent.token, 'network_task_accept', {
-      request_id: newRequestId(`agent_task_accept_${round}`),
-      task_id: offered.task.task_id,
-      assignment_id: offered.task.assignment!.assignment_id,
-      expected_revision: offered.task.revision,
-    });
-
-    const proposed = await q05Tool<{ transfer_id: string }>(
+      const proposed = await q05Tool<{ transfer_id: string }>(
       server,
       oldManager.token,
       'network_agent_transfer_propose',
@@ -214,27 +193,6 @@ export function q05AgentTransferRound(
       q05AgentTransferStats.preReissueRevoked += 1;
     }
 
-    const taskRow = db.row<{
-      status: string;
-      owner_actor_id: string | null;
-      blocked_reason: string | null;
-      revision: number;
-    }>('SELECT * FROM tasks WHERE task_id = ?', offered.task.task_id)!;
-    q05Equal(`第 ${round} 轮在途任务 blocked`, taskRow.status, 'blocked');
-    q05Equal(`第 ${round} 轮任务 owner 清空`, taskRow.owner_actor_id, null);
-    q05Equal(
-      `第 ${round} 轮任务阻塞原因 management_transferred`,
-      taskRow.blocked_reason,
-      'management_transferred',
-    );
-    q05Equal(
-      `第 ${round} 轮旧 assignment 撤销`,
-      db.scalar(
-        "SELECT COUNT(*) AS n FROM task_assignments WHERE task_id = ? AND status IN ('offered','active')",
-        offered.task.task_id,
-      ),
-      0,
-    );
     q05Equal(
       `第 ${round} 轮交接只接受一次`,
       db.scalar(
@@ -242,10 +200,6 @@ export function q05AgentTransferRound(
         proposed.transfer_id,
       ),
       1,
-    );
-    q05Check(
-      `第 ${round} 轮任务未被静默删除`,
-      db.scalar('SELECT COUNT(*) AS n FROM tasks WHERE task_id = ?', offered.task.task_id) === 1,
     );
 
     const afterTransfer = await burst(10, () =>
@@ -264,7 +218,6 @@ export function q05AgentTransferRound(
       ),
       true,
     );
-    void accepted;
     } finally {
       // 每轮独立群；每个管理者约 25 个群，低于活跃房间上限。
     }

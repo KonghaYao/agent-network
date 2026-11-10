@@ -14,10 +14,6 @@ export const MENTION_REMINDER_SOURCE = 'mention.reminder';
 export const MESSAGE_TASK_MARKED_EVENT = 'message_task_marked';
 /** 消息式 Task 起点取消标记；只撤销聚合入口，保留消息与引用。 */
 export const MESSAGE_TASK_UNMARKED_EVENT = 'message_task_unmarked';
-/** in_progress 任务长时间没有 progress 更新时写入责任者 inbox 的催办。 */
-export const TASK_REMINDER_EVENT = 'task_reminder';
-/** 任务催办在统一 stream 中的 source；不是新任务、assignment 或 delivery。 */
-export const TASK_REMINDER_SOURCE = 'task.reminder';
 
 /**
  * Callback endpoint 验证失败的错误码。

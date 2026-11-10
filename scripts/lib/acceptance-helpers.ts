@@ -101,13 +101,6 @@ export interface LoginResult {
   logged_in_at: string;
   pending_count: number;
   inbox_head_seq: string;
-  task_summary: {
-    pending: number;
-    claimed: number;
-    done: number;
-    failed: number;
-    total: number;
-  };
 }
 
 export async function registerIdentity(
