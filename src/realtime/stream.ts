@@ -41,6 +41,12 @@ export interface StreamItem {
   attempt?: number;
   /** 提醒事件对应的最近一次 progress 更新时间。 */
   progress_at?: string;
+  /** 投递提醒携带的消息短摘要与可直接展示的文案；不含完整正文。 */
+  preview?: string;
+  text?: string;
+  sender_name?: string | null;
+  /** 投递提醒的未完成时长（毫秒）。 */
+  age_ms?: number;
   change?: string;
   subject_id?: string;
   changed_by?: string;
@@ -749,6 +755,15 @@ function inboxStreamItem(
       if (attempt !== undefined) item.attempt = attempt;
       const progressAt = numberField(metadata, 'progress_at');
       if (progressAt !== undefined) item.progress_at = String(progressAt);
+      const preview = stringField(metadata, 'preview');
+      if (preview !== undefined) item.preview = preview;
+      const text = stringField(metadata, 'text');
+      if (text !== undefined) item.text = text;
+      if (typeof metadata.sender_name === 'string' || metadata.sender_name === null) {
+        item.sender_name = metadata.sender_name;
+      }
+      const ageMs = numberField(metadata, 'age_ms');
+      if (ageMs !== undefined) item.age_ms = ageMs;
       return item;
     }
     case MENTION_REMINDER_EVENT: {

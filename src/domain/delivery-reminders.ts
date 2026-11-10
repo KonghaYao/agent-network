@@ -1,6 +1,6 @@
 import { DELIVERY_REMINDER_EVENT } from '../contracts/events';
 import { LIMITS } from '../contracts/limits';
-import { newId, nowMs } from '../storage/db';
+import { newId, nowMs, truncateUtf8 } from '../storage/db';
 import { inboxHeadStatementIfEvent, inboxTopic } from '../storage/events';
 import { isEventKeyConflict } from '../storage/transactions/runner';
 
@@ -13,6 +13,9 @@ export interface DeliveryReminderCandidate {
   claim_id: string;
   progress_at: number;
   last_reminded_at: number | null;
+  message_preview: string | null;
+  sender_id: string | null;
+  sender_name: string | null;
 }
 
 export interface DeliveryReminderScanResult {
@@ -32,11 +35,33 @@ function eventKeyOf(candidate: DeliveryReminderCandidate): string {
   return `delivery_reminder:${candidate.delivery_id}:${candidate.attempt}:${candidate.claim_id}:${anchor}`;
 }
 
+const DISPLAY_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu;
+const DISPLAY_JSON_UNSAFE = /["\\]/gu;
+
+/**
+ * 提醒只携带可直接展示的短摘要：折叠控制字符/换行，替换会放大 JSON 的
+ * 引号与反斜杠，再按 UTF-8 字节截断。完整正文永远不进入提醒。
+ */
+function displayText(raw: string | null, maxBytes: number): string {
+  if (!raw) return '';
+  const cleaned = raw
+    .replace(DISPLAY_CONTROL, ' ')
+    .replace(DISPLAY_JSON_UNSAFE, "'")
+    .replace(/\s+/gu, ' ')
+    .trim();
+  return truncateUtf8(cleaned, maxBytes).trim();
+}
+
+/** 无摘要时的退化文案；与带摘要文案一样可直接展示。 */
+const REMINDER_TEXT_FALLBACK = '投递尚未完成，请汇报进度';
+
 /**
  * 扫描 claimed 且 progress_at 超过阈值没有更新的投递，向 recipient 写提醒。
  *
  * - 提醒不是新待办：不创建 delivery、不改变 pending_count、不推进房间 head、
  *   不写 room scope 事件，只写 inbox 事件与 `inbox:{actor}` outbox。
+ * - 事件同时携带消息短摘要、发送者展示名、未完成时长与可直接展示的文案；
+ *   摘要按字节截断，永远不会包含完整正文。
  * - `last_reminded_at` 持久化去重，进程重启后同一窗口不会重复提醒。
  * - UPDATE + INSERT event + INSERT outbox + inbox head 使用同一个 db.batch，
  *   任一步失败全部回滚。事件与 outbox 都以本次扫描的 `last_reminded_at = now`
@@ -51,14 +76,19 @@ export async function remindStaleDeliveries(
   const threshold = now - LIMITS.deliveryReminderMs;
   const candidates = await db
     .prepare(
-      `SELECT delivery_id, recipient_id, message_id, room_id, attempt, claim_id,
-              progress_at, last_reminded_at
-         FROM deliveries
-        WHERE state = 'claimed'
-          AND progress_at IS NOT NULL
-          AND progress_at <= ?
-          AND (last_reminded_at IS NULL OR last_reminded_at <= ?)
-        ORDER BY progress_at ASC, delivery_id ASC
+      `SELECT d.delivery_id, d.recipient_id, d.message_id, d.room_id, d.attempt, d.claim_id,
+              d.progress_at, d.last_reminded_at,
+              m.preview AS message_preview,
+              m.sender_id AS sender_id,
+              a.name AS sender_name
+         FROM deliveries d
+         LEFT JOIN messages m ON m.message_id = d.message_id
+         LEFT JOIN actors a ON a.actor_id = m.sender_id
+        WHERE d.state = 'claimed'
+          AND d.progress_at IS NOT NULL
+          AND d.progress_at <= ?
+          AND (d.last_reminded_at IS NULL OR d.last_reminded_at <= ?)
+        ORDER BY d.progress_at ASC, d.delivery_id ASC
         LIMIT ?`,
     )
     .bind(threshold, threshold, LIMITS.deliveryReminderBatchMax)
@@ -73,6 +103,14 @@ export async function remindStaleDeliveries(
 
   for (const candidate of candidates.results) {
     const eventKey = eventKeyOf(candidate);
+    const preview = displayText(
+      candidate.message_preview,
+      LIMITS.deliveryReminderPreviewBytes,
+    );
+    const senderName = displayText(
+      candidate.sender_name,
+      LIMITS.deliveryReminderSenderNameBytes,
+    );
     const metadata = JSON.stringify({
       delivery_id: candidate.delivery_id,
       attempt: candidate.attempt,
@@ -80,6 +118,11 @@ export async function remindStaleDeliveries(
       room_id: candidate.room_id,
       message_id: candidate.message_id,
       progress_at: candidate.progress_at,
+      preview,
+      sender_id: candidate.sender_id,
+      sender_name: senderName === '' ? null : senderName,
+      age_ms: now - candidate.progress_at,
+      text: preview ? `「${preview}」尚未完成，请汇报进度` : REMINDER_TEXT_FALLBACK,
     });
 
     try {

@@ -38,6 +38,7 @@ interface SyncItem {
   seq: string;
   type: string;
   ref_id: string;
+  metadata: Record<string, unknown>;
 }
 
 interface SyncPage {
@@ -388,7 +389,29 @@ export function q05FaultBodies(
           old,
           delivery.delivery_id,
         );
+        const roomBefore = db.row<{ head_seq: number; updated_at: number }>(
+          'SELECT head_seq, updated_at FROM rooms WHERE room_id = ?',
+          roomId,
+        )!;
+        const pendingBefore = db.scalar(
+          'SELECT pending_count AS n FROM actors WHERE actor_id = ?',
+          reminderAgent.actor_id,
+        );
         await runReminders(server);
+        const roomAfter = db.row<{ head_seq: number; updated_at: number }>(
+          'SELECT head_seq, updated_at FROM rooms WHERE room_id = ?',
+          roomId,
+        )!;
+        q05Equal('提醒不推进房间 head_seq', roomAfter.head_seq, roomBefore.head_seq);
+        q05Equal('提醒不更新房间 updated_at', roomAfter.updated_at, roomBefore.updated_at);
+        q05Equal(
+          '提醒不改变 pending_count',
+          db.scalar(
+            'SELECT pending_count AS n FROM actors WHERE actor_id = ?',
+            reminderAgent.actor_id,
+          ),
+          pendingBefore,
+        );
         await runMaintenance(server);
         const deliveryRemindersBefore = db.scalar(
           "SELECT COUNT(*) AS n FROM events WHERE event_type = 'delivery_reminder' AND ref_id = ?",
@@ -413,6 +436,26 @@ export function q05FaultBodies(
             delivery.delivery_id,
           ),
           deliveryRemindersBefore,
+        );
+        const reminderSync = await syncAll(server, reminderAgent.token, 'inbox');
+        const reminderItem = reminderSync.items.find(
+          (item) =>
+            item.type === 'delivery_reminder' && item.ref_id === delivery.delivery_id,
+        );
+        q05Check('重启后 sync 可读取提醒', Boolean(reminderItem), reminderItem);
+        q05Equal('提醒 metadata 带消息摘要', reminderItem?.metadata.preview, 'Q05 重启前消息');
+        q05Equal(
+          '提醒 metadata 带未完成文案',
+          reminderItem?.metadata.text,
+          '「Q05 重启前消息」尚未完成，请汇报进度',
+        );
+        q05Equal('提醒 metadata 带发送者 ID', reminderItem?.metadata.sender_id, fixture.u1.actor_id);
+        q05Equal('提醒 metadata 带发送者名称', reminderItem?.metadata.sender_name, fixture.u1.name);
+        q05Check(
+          '提醒 metadata 带未完成时长',
+          typeof reminderItem?.metadata.age_ms === 'number' &&
+            reminderItem.metadata.age_ms >= 4 * 60_000,
+          reminderItem?.metadata.age_ms,
         );
         const history = await q05Tool<{ items: { message_id: string }[] }>(
           server,

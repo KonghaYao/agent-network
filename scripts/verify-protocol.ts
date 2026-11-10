@@ -2513,13 +2513,24 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 240),
   );
   check(
-    '静态技能说明 3 分钟无进度提醒且不产生新待办',
+    '静态技能说明 3 分钟无进度提醒、摘要文案且不产生新待办',
     skillDocText.includes('delivery_reminder') &&
       skillDocText.includes('3 分钟') &&
       skillDocText.includes('network_delivery_report') &&
+      skillDocText.includes('`preview`') &&
+      skillDocText.includes('`text`') &&
       skillDocText.includes('pending_count') &&
       skillDocText.includes('head_seq'),
     skillDocText.slice(0, 240),
+  );
+  check(
+    '主技能说明提醒携带摘要、文案与未完成时长',
+    skillText.includes('delivery.reminder') &&
+      skillText.includes('preview') &&
+      skillText.includes('text') &&
+      skillText.includes('age_ms') &&
+      skillText.includes('不含完整正文'),
+    skillText.slice(0, 240),
   );
   check(
     '静态技能包含 MCP Events 硬过滤与群聊补读规范',

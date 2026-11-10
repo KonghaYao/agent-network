@@ -323,6 +323,16 @@ export const LIMITS = {
   deliveryReminderScanMs: 30_000,
   /** 单轮提醒扫描最多处理的投递数。 */
   deliveryReminderBatchMax: 50,
+  /**
+   * 提醒携带的消息摘要 UTF-8 上限。
+   *
+   * `text` 会再引用一次摘要，因此按字节而不是字符限制；与
+   * `deliveryReminderSenderNameBytes` 一起保证单条提醒 stream item 连同
+   * 信封不超过 `hintBytes`，不会被帧截断丢弃。完整正文始终不进入提醒。
+   */
+  deliveryReminderPreviewBytes: 120,
+  /** 提醒携带的发送者展示名 UTF-8 上限；`sender_id` 始终保留完整身份。 */
+  deliveryReminderSenderNameBytes: 96,
   /** 恢复 ticket 有效期（毫秒）。 */
   recoveryTicketMs: 3 * 60_000,
   /** 幂等窗口（毫秒）。 */

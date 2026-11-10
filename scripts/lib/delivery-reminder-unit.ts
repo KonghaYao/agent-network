@@ -31,6 +31,7 @@ import { sync } from '../../src/domain/sync';
 import type { OutboxStreamRow } from '../../src/realtime/stream';
 import { fanoutStreamItems } from '../../src/realtime/stream';
 import type { ActorRow, DeliveryRow } from '../../src/storage/rows';
+import { utf8Bytes } from '../../src/storage/db';
 import { check, checkEqual } from './harness';
 
 const MIGRATIONS = join(import.meta.dir, '../../migrations');
@@ -164,6 +165,13 @@ function reminderEvents(db: Database): number {
   );
 }
 
+function reminderMetadata(db: Database, deliveryId: string): Record<string, unknown> {
+  const row = db
+    .prepare('SELECT metadata FROM events WHERE event_type = ? AND ref_id = ?')
+    .get(DELIVERY_REMINDER_EVENT, deliveryId) as { metadata: string } | null;
+  return row ? (JSON.parse(row.metadata) as Record<string, unknown>) : {};
+}
+
 function reminderOutbox(db: Database): number {
   return countWhere(
     db,
@@ -179,13 +187,15 @@ interface Invariants {
   inboxHeadOne: number;
   inboxHeadTwo: number;
   roomHead: number;
+  roomUpdatedAt: number;
   roomEvents: number;
   roomOutbox: number;
 }
 
 function invariants(db: Database): Invariants {
-  const room = db.prepare('SELECT head_seq FROM rooms WHERE room_id = ?').get(ROOM) as {
+  const room = db.prepare('SELECT head_seq, updated_at FROM rooms WHERE room_id = ?').get(ROOM) as {
     head_seq: number;
+    updated_at: number;
   };
   return {
     pendingOne: actorRow(db, AGENT_ONE).pending_count,
@@ -193,6 +203,7 @@ function invariants(db: Database): Invariants {
     inboxHeadOne: actorRow(db, AGENT_ONE).inbox_head_seq,
     inboxHeadTwo: actorRow(db, AGENT_TWO).inbox_head_seq,
     roomHead: room.head_seq,
+    roomUpdatedAt: room.updated_at,
     roomEvents: countWhere(
       db,
       "SELECT COUNT(*) AS n FROM events WHERE scope_kind = 'room' AND scope_id = ?",
@@ -204,6 +215,7 @@ function invariants(db: Database): Invariants {
 
 function checkNoRoomSideEffects(before: Invariants, after: Invariants): void {
   checkEqual('提醒不推进房间 head', after.roomHead, before.roomHead);
+  checkEqual('提醒不更新房间 updated_at', after.roomUpdatedAt, before.roomUpdatedAt);
   checkEqual('提醒不写 room scope 事件', after.roomEvents, before.roomEvents);
   checkEqual('提醒不写 room:{id} outbox', after.roomOutbox, before.roomOutbox);
   checkEqual('提醒不改变第二个 Agent 的 pending_count', after.pendingTwo, before.pendingTwo);
@@ -256,9 +268,20 @@ async function checkBoundary(): Promise<void> {
     metadata.progress_at,
     BASE - LIMITS.deliveryReminderMs,
   );
+  checkEqual('提醒事件包含消息摘要', metadata.preview, '提醒测试一');
+  checkEqual(
+    '提醒事件包含可直接展示的文案',
+    metadata.text,
+    '「提醒测试一」尚未完成，请汇报进度',
+  );
+  checkEqual('提醒事件包含发送者 ID', metadata.sender_id, SENDER);
+  checkEqual('提醒事件包含发送者名称', metadata.sender_name, 'Reminder User');
+  checkEqual('提醒事件包含未完成时长', metadata.age_ms, LIMITS.deliveryReminderMs);
   check(
-    '提醒事件不含正文或 preview',
-    !('body' in metadata) && !('preview' in metadata),
+    '提醒事件不含完整正文',
+    !('body' in metadata) &&
+      !('body_bytes' in metadata) &&
+      utf8Bytes(String(metadata.preview)) <= LIMITS.deliveryReminderPreviewBytes,
     Object.keys(metadata),
   );
 
@@ -278,6 +301,81 @@ async function checkBoundary(): Promise<void> {
   const after = invariants(db);
   checkEqual('提醒不改变 pending_count', after.pendingOne, before.pendingOne);
   check( '提醒推进 recipient inbox_head_seq', after.inboxHeadOne > before.inboxHeadOne, after);
+  checkNoRoomSideEffects(before, after);
+  db.close();
+}
+
+async function checkPreviewContent(): Promise<void> {
+  const db = openMemoryDb();
+  const d1 = createD1(db);
+  const unsafePreview = `第一行\n第二行 "引号" \\ 反斜杠 ${'长'.repeat(200)}`;
+  db.prepare('UPDATE actors SET name = ? WHERE actor_id = ?').run('名'.repeat(96), SENDER);
+  db.prepare('UPDATE messages SET preview = ? WHERE message_id = ?').run(unsafePreview, MESSAGE_ONE);
+  db.prepare('UPDATE messages SET preview = ? WHERE message_id = ?').run('', MESSAGE_TWO);
+  insertDelivery(db, 'dlv_long_preview', AGENT_ONE, MESSAGE_ONE, {
+    progressAt: BASE - LIMITS.deliveryReminderMs,
+  });
+  insertDelivery(db, 'dlv_empty_preview', AGENT_TWO, MESSAGE_TWO, {
+    progressAt: BASE - LIMITS.deliveryReminderMs,
+  });
+  const before = invariants(db);
+
+  checkEqual('空摘要与超长摘要都提醒', (await remindStaleDeliveries(d1, BASE)).reminded, 2);
+
+  const empty = reminderMetadata(db, 'dlv_empty_preview');
+  checkEqual('空摘要的 preview 为空字符串', empty.preview, '');
+  checkEqual('空摘要退化为固定文案', empty.text, '投递尚未完成，请汇报进度');
+  checkEqual('空摘要仍带发送者名称', empty.sender_name, '名'.repeat(32));
+  checkEqual('空摘要仍带未完成时长', empty.age_ms, LIMITS.deliveryReminderMs);
+
+  const long = reminderMetadata(db, 'dlv_long_preview');
+  const preview = String(long.preview ?? '');
+  check(
+    '超长摘要按 UTF-8 字节截断',
+    utf8Bytes(preview) <= LIMITS.deliveryReminderPreviewBytes,
+    { bytes: utf8Bytes(preview), preview },
+  );
+  check('超长摘要不输出完整内容', preview.length < unsafePreview.length, preview.length);
+  check('摘要折叠换行并去除 JSON 敏感字符', !/[\n\r"\\]/u.test(preview), preview);
+  checkEqual('截断后的文案引用摘要', long.text, `「${preview}」尚未完成，请汇报进度`);
+  check(
+    '超长发送者名称按字节截断',
+    typeof long.sender_name === 'string' &&
+      utf8Bytes(long.sender_name) <= LIMITS.deliveryReminderSenderNameBytes,
+    long.sender_name,
+  );
+
+  const rows = db
+    .prepare(
+      `SELECT o.outbox_id, o.topic, o.event_seq, o.attempts, o.created_at,
+              e.scope_kind, e.scope_id, e.event_type, e.ref_id, e.metadata
+         FROM outbox o JOIN events e ON e.event_seq = o.event_seq
+        WHERE e.event_type = ?`,
+    )
+    .all(DELIVERY_REMINDER_EVENT) as OutboxStreamRow[];
+  const published: { actorId: string; payload: string }[] = [];
+  await fanoutStreamItems(d1, {
+    DB: d1,
+    NOTIFICATION_HUB: {
+      publishActor(actorId: string, payload: string) {
+        published.push({ actorId, payload });
+      },
+    },
+    ENVIRONMENT: 'test',
+    PUBLIC_ORIGIN: 'http://test.invalid',
+  } as unknown as Env, rows);
+  checkEqual('空/超长摘要提醒各扇出一帧', published.length, 2);
+  for (const { payload } of published) {
+    const frame = JSON.parse(payload) as { items?: Record<string, unknown>[] };
+    check('摘要截断后的提醒帧未超过 hintBytes', utf8Bytes(payload) <= LIMITS.hintBytes, {
+      bytes: utf8Bytes(payload),
+    });
+    checkEqual('摘要截断后的提醒帧未被丢弃', frame.items?.length, 1);
+  }
+
+  const after = invariants(db);
+  checkEqual('空/超长摘要提醒不改变 pending_count', after.pendingOne, before.pendingOne);
+  checkEqual('空/超长摘要提醒不改变第二个 pending_count', after.pendingTwo, before.pendingTwo);
   checkNoRoomSideEffects(before, after);
   db.close();
 }
@@ -566,6 +664,15 @@ async function checkSyncAndStreamMapping(): Promise<void> {
   check('network_sync 可读取提醒事件', reminder !== undefined);
   checkEqual('sync 提醒 ref_id', reminder?.ref_id, deliveryId);
   checkEqual('sync 提醒 metadata claim_id', reminder?.metadata.claim_id, `clm_${deliveryId}`);
+  checkEqual('sync 提醒 metadata preview', reminder?.metadata.preview, '提醒测试一');
+  checkEqual(
+    'sync 提醒 metadata text',
+    reminder?.metadata.text,
+    '「提醒测试一」尚未完成，请汇报进度',
+  );
+  checkEqual('sync 提醒 metadata sender_id', reminder?.metadata.sender_id, SENDER);
+  checkEqual('sync 提醒 metadata sender_name', reminder?.metadata.sender_name, 'Reminder User');
+  checkEqual('sync 提醒 metadata age_ms', reminder?.metadata.age_ms, LIMITS.deliveryReminderMs);
 
   const rows = db
     .prepare(
@@ -600,17 +707,26 @@ async function checkSyncAndStreamMapping(): Promise<void> {
   checkEqual('提醒 item delivery_id', item.delivery_id, deliveryId);
   checkEqual('提醒 item attempt', item.attempt, 1);
   checkEqual('提醒 item progress_at', item.progress_at, String(BASE - LIMITS.deliveryReminderMs));
+  checkEqual('提醒 item preview', item.preview, '提醒测试一');
+  checkEqual('提醒 item text', item.text, '「提醒测试一」尚未完成，请汇报进度');
+  checkEqual('提醒 item sender_id', item.sender_id, SENDER);
+  checkEqual('提醒 item sender_name', item.sender_name, 'Reminder User');
+  checkEqual('提醒 item age_ms', item.age_ms, LIMITS.deliveryReminderMs);
   check('提醒 stream 不含 claim_id', !('claim_id' in item), Object.keys(item));
   check(
-    '提醒 stream 不含正文或 preview',
-    !('body' in item) && !('preview' in item),
+    '提醒 stream 不含完整正文',
+    !('body' in item) && !('body_bytes' in item),
     Object.keys(item),
   );
+  const payload = published[0]?.payload ?? '{}';
+  check('提醒帧未超过 hintBytes', utf8Bytes(payload) <= LIMITS.hintBytes, utf8Bytes(payload));
+  checkEqual('提醒帧未被截断丢弃', frame.items?.length, 1);
   db.close();
 }
 
 export async function runDeliveryReminderUnitChecks(): Promise<void> {
   await checkBoundary();
+  await checkPreviewContent();
   await checkRepeatAndRestart();
   await checkReportReset();
   await checkTerminalStates();
