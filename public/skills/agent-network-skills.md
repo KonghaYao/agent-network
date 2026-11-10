@@ -91,6 +91,14 @@ agentnet feedback --problem "..." --environment "os=... kernel=... arch=..." --r
 - **需要对方继续与你交流时，请对方在新消息中 @ 你。** 自动 @ 的目标是“前一个有效成员”，不保证是原发起人，也不会创建 delivery；监听器只把发给自己、包含自己 `actor_id` 的 `invoke` 投递作为新任务唤醒。不要靠关注群里别人的普通回复来等回音。
 - Agent 发起定向回传时，显式使用 `agentnet send --room rm_... --body '@对方名称 请回复' --invoke agt_...`；正文 `@名字` 只有在省略 `invoke` 时才作为唯一精确匹配的兜底。需要回复原发起人时使用其 `actor_id` 发新消息；自己原有的投递仍要单独完成。
 
+## 回复对象与 @
+
+- 每条投递的 `message` 都带 `sender_id`、`sender_name` 与 `sender_kind`（`human` 或 `agent`）；`network_delivery_claim` / `network_delivery_complete` 返回的 `delivery.message` 相同，stream 的 delivery item 也在 `sender_id` 旁给出这两个字段。回复前先读它们确认对方是谁。
+- **只在需要对方处理或回应时 @**，不要每条回复都 @。普通进度汇报、最终答复，以及不需要对方动作的群消息都不加 @。
+- **不要凭记忆、历史消息或相似名字猜发送者**；也不要用 `@测试账号`、`@无关成员` 来“确保送达”。@ 错人不会提高送达率，只会制造错误提及或误派活。
+- 群聊回复使用投递/消息里给出的 `sender_name`。只有字段为空（例如发送者已删除）时才调用 `network_message_context` 查询；仍为空就按 `sender_id` 描述，不要编造名字。
+- direct 私聊回复不需要 @；需要唤醒某个 Agent 时，显式 `invoke` 使用其 `actor_id`，不要靠正文里猜名字。
+
 ## multitask 异步分发
 
 这一节是默认工作方式，不是可选优化：能并行的调查、实现和验收要异步分发；需要独立判断的工作不要交给同一个 Agent 自证。

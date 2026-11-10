@@ -20,7 +20,7 @@ import {
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
 import { getActor, getDelivery, getMessage, getRoom } from '../storage/queries';
-import type { DeliveryRow, MessageRow } from '../storage/rows';
+import type { DeliveryRow } from '../storage/rows';
 import {
   isOneClaimedConflict,
   mapBatchError,
@@ -38,7 +38,14 @@ import { actorId, type Principal } from './principal';
 import type { MessagePreviewView } from './rooms';
 import { directBlockGuardStatement } from './contact-blocks';
 import { roomDissolvedGuardStatement } from './room-access';
-import { messagePreviewOf } from './views';
+
+/** 投递消息在摘要之外附带发送者展示身份，避免 Agent 凭记忆猜 @ 对象。 */
+export interface DeliveryMessageView extends MessagePreviewView {
+  /** 发送者展示名；actor 不存在或名称为空时为 null。 */
+  sender_name: string | null;
+  /** 发送者类型；actor 不存在时为 null。 */
+  sender_kind: 'human' | 'agent' | null;
+}
 
 export interface DeliveryView {
   delivery_id: string;
@@ -55,7 +62,7 @@ export interface DeliveryView {
   created_seq: string;
   created_at: string;
   updated_at: string;
-  message: MessagePreviewView | null;
+  message: DeliveryMessageView | null;
 }
 
 export interface InboxPage {
@@ -69,11 +76,53 @@ export interface InboxPage {
 const encoder = new TextEncoder();
 void encoder;
 
-function previewOf(row: MessageRow | null): MessagePreviewView | null {
-  return messagePreviewOf(row);
+interface DeliveryMessageRow {
+  message_id: string;
+  sender_id: string;
+  created_seq: number;
+  preview: string;
+  body_bytes: number;
+  created_at: number;
+  sender_name: string | null;
+  sender_kind: 'human' | 'agent' | null;
 }
 
-function view(row: DeliveryRow, message: MessageRow | null): DeliveryView {
+function senderNameOf(value: string | null): string | null {
+  return value === null || value === '' ? null : value;
+}
+
+function deliveryMessageView(row: DeliveryMessageRow | null): DeliveryMessageView | null {
+  if (!row) return null;
+  return {
+    message_id: row.message_id,
+    sender_id: row.sender_id,
+    sender_name: senderNameOf(row.sender_name),
+    sender_kind: row.sender_kind,
+    created_seq: String(row.created_seq),
+    preview: row.preview,
+    body_bytes: row.body_bytes,
+    created_at: String(row.created_at),
+  };
+}
+
+async function getDeliveryMessageView(
+  db: D1Database,
+  messageId: string,
+): Promise<DeliveryMessageView | null> {
+  const row = await db
+    .prepare(
+      `SELECT m.message_id, m.sender_id, m.created_seq, m.preview, m.body_bytes, m.created_at,
+              a.name AS sender_name, a.kind AS sender_kind
+         FROM messages m
+         LEFT JOIN actors a ON a.actor_id = m.sender_id
+        WHERE m.message_id = ?`,
+    )
+    .bind(messageId)
+    .first<DeliveryMessageRow>();
+  return deliveryMessageView(row);
+}
+
+function view(row: DeliveryRow, message: DeliveryMessageView | null): DeliveryView {
   return {
     delivery_id: row.delivery_id,
     recipient_id: row.recipient_id,
@@ -89,18 +138,20 @@ function view(row: DeliveryRow, message: MessageRow | null): DeliveryView {
     created_seq: String(row.created_seq),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
-    message: previewOf(message),
+    message,
   };
 }
 
 async function deliveryView(db: D1Database, row: DeliveryRow): Promise<DeliveryView> {
-  return view(row, await getMessage(db, row.message_id));
+  return view(row, await getDeliveryMessageView(db, row.message_id));
 }
 
 interface InboxRow extends DeliveryRow {
   m_preview: string;
   m_body_bytes: number;
   m_sender_id: string;
+  m_sender_name: string | null;
+  m_sender_kind: 'human' | 'agent' | null;
   m_created_at: number;
 }
 
@@ -124,9 +175,11 @@ export async function inboxList(
   const rows = await db
     .prepare(
       `SELECT d.*, m.preview AS m_preview, m.body_bytes AS m_body_bytes,
-              m.sender_id AS m_sender_id, m.created_at AS m_created_at
+              m.sender_id AS m_sender_id, m.created_at AS m_created_at,
+              a.name AS m_sender_name, a.kind AS m_sender_kind
          FROM deliveries d
          JOIN messages m ON m.message_id = d.message_id
+         LEFT JOIN actors a ON a.actor_id = m.sender_id
         WHERE d.recipient_id = ? ${stateFilter}
           ${cursor ? 'AND d.created_seq > ?' : ''}
         ORDER BY d.created_seq ASC
@@ -150,21 +203,13 @@ export async function inboxList(
     items: page.map((row) =>
       view(row, {
         message_id: row.message_id,
-        room_id: row.room_id,
         sender_id: row.m_sender_id,
-        client_message_id: '',
-        created_seq: row.created_seq,
-        body: '',
-        body_bytes: row.m_body_bytes,
+        sender_name: senderNameOf(row.m_sender_name),
+        sender_kind: row.m_sender_kind,
+        created_seq: String(row.created_seq),
         preview: row.m_preview,
-        reply_to: null,
-        root_id: null,
-        task_root_id: null,
-        task_marked_by: null,
-        task_marked_at: null,
-        hop: 0,
-        root_invocations_used: 0,
-        created_at: row.m_created_at,
+        body_bytes: row.m_body_bytes,
+        created_at: String(row.m_created_at),
       }),
     ),
     next_cursor:
@@ -286,12 +331,35 @@ function claimedGuard(
     .bind(deliveryId, attempt, claimId);
 }
 
-/** 原始消息发送者；只用于 stream 回执的 attention/定位，不进入工具输出。 */
-async function deliverySenderId(
+interface DeliverySender {
+  id: string | null;
+  name: string | null;
+  kind: 'human' | 'agent' | null;
+}
+
+/**
+ * 原始消息发送者；用于 stream 回执的 attention、定位与展示名。
+ * 消息或 actor 不存在时返回 null 字段，不让回执写入失败。
+ */
+async function deliverySender(
   db: D1Database,
   delivery: DeliveryRow,
-): Promise<string | undefined> {
-  return (await getMessage(db, delivery.message_id))?.sender_id;
+): Promise<DeliverySender> {
+  const row = await db
+    .prepare(
+      `SELECT m.sender_id, a.name, a.kind
+         FROM messages m
+         LEFT JOIN actors a ON a.actor_id = m.sender_id
+        WHERE m.message_id = ?`,
+    )
+    .bind(delivery.message_id)
+    .first<{ sender_id: string; name: string | null; kind: 'human' | 'agent' | null }>();
+  if (!row) return { id: null, name: null, kind: null };
+  return {
+    id: row.sender_id,
+    name: senderNameOf(row.name),
+    kind: row.kind ?? null,
+  };
 }
 
 /** Requeueing and claiming must not restore work revoked by room or contact changes. */
@@ -328,7 +396,7 @@ export async function deliveryClaim(
   const claimId = crypto.randomUUID();
   const eventKey = `claim:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
-  const senderId = await deliverySenderId(db, delivery);
+  const sender = await deliverySender(db, delivery);
 
   try {
     await runIdempotent(db, {
@@ -385,7 +453,9 @@ export async function deliveryClaim(
             state: 'claimed',
             actor_id: actor,
             recipient_id: delivery.recipient_id,
-            sender_id: senderId,
+            sender_id: sender.id,
+            sender_name: sender.name,
+            sender_kind: sender.kind,
           },
         ),
       ],
@@ -412,7 +482,7 @@ export async function deliveryReport(
   const at = nowMs();
   const eventKey = `progress:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
-  const senderId = await deliverySenderId(db, delivery);
+  const sender = await deliverySender(db, delivery);
 
   await runIdempotent(db, {
     actorId: actor,
@@ -453,7 +523,9 @@ export async function deliveryReport(
           attempt: input.attempt,
           actor_id: actor,
           recipient_id: delivery.recipient_id,
-          sender_id: senderId,
+          sender_id: sender.id,
+          sender_name: sender.name,
+          sender_kind: sender.kind,
         },
       ),
     ],
@@ -493,7 +565,7 @@ export async function deliveryComplete(
 
   const eventKey = `complete:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
-  const senderId = await deliverySenderId(db, delivery);
+  const sender = await deliverySender(db, delivery);
   const result = {
     delivery_id: delivery.delivery_id,
     message_id: plan?.messageId ?? null,
@@ -539,7 +611,9 @@ export async function deliveryComplete(
           attempt: input.attempt,
           actor_id: actor,
           recipient_id: delivery.recipient_id,
-          sender_id: senderId,
+          sender_id: sender.id,
+          sender_name: sender.name,
+          sender_kind: sender.kind,
         },
       ),
     ],
@@ -565,7 +639,7 @@ export async function deliveryFail(
   const at = nowMs();
   const eventKey = `fail:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
-  const senderId = await deliverySenderId(db, delivery);
+  const sender = await deliverySender(db, delivery);
 
   await runIdempotent(db, {
     actorId: actor,
@@ -605,7 +679,9 @@ export async function deliveryFail(
           attempt: input.attempt,
           actor_id: actor,
           recipient_id: delivery.recipient_id,
-          sender_id: senderId,
+          sender_id: sender.id,
+          sender_name: sender.name,
+          sender_kind: sender.kind,
         },
       ),
     ],
@@ -647,7 +723,7 @@ export async function deliveryCancel(
   const at = nowMs();
   const eventKey = `cancel:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
-  const senderId = await deliverySenderId(db, delivery);
+  const sender = await deliverySender(db, delivery);
 
   await runIdempotent(db, {
     actorId: actor,
@@ -695,7 +771,9 @@ export async function deliveryCancel(
           actor_id: actor,
           room_id: delivery.room_id,
           message_id: delivery.message_id,
-          sender_id: senderId,
+          sender_id: sender.id,
+          sender_name: sender.name,
+          sender_kind: sender.kind,
         },
         true,
       ),
@@ -710,7 +788,9 @@ export async function deliveryCancel(
           state: 'cancelled',
           actor_id: actor,
           recipient_id: delivery.recipient_id,
-          sender_id: senderId,
+          sender_id: sender.id,
+          sender_name: sender.name,
+          sender_kind: sender.kind,
         },
       ),
     ],
@@ -736,7 +816,7 @@ export async function deliveryRetry(
   const at = nowMs();
   const eventKey = `retry:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
-  const senderId = await deliverySenderId(db, delivery);
+  const sender = await deliverySender(db, delivery);
 
   await runIdempotent(db, {
     actorId: actor,
@@ -786,7 +866,9 @@ export async function deliveryRetry(
           actor_id: actor,
           room_id: delivery.room_id,
           message_id: delivery.message_id,
-          sender_id: senderId,
+          sender_id: sender.id,
+          sender_name: sender.name,
+          sender_kind: sender.kind,
         },
         true,
       ),
@@ -802,7 +884,9 @@ export async function deliveryRetry(
           attempt: input.expected_attempt,
           actor_id: actor,
           recipient_id: delivery.recipient_id,
-          sender_id: senderId,
+          sender_id: sender.id,
+          sender_name: sender.name,
+          sender_kind: sender.kind,
         },
       ),
     ],

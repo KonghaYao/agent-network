@@ -37,6 +37,10 @@ export interface StreamItem {
   message_id?: string;
   delivery_id?: string;
   sender_id?: string;
+  /** 发送者展示名；actor 不存在或名称为空时为 null。 */
+  sender_name?: string | null;
+  /** 发送者类型；actor 不存在时为 null。 */
+  sender_kind?: 'human' | 'agent' | null;
   state?: string;
   attempt?: number;
   /** 提醒事件对应的最近一次 progress 更新时间。 */
@@ -44,7 +48,6 @@ export interface StreamItem {
   /** 投递提醒携带的消息短摘要与可直接展示的文案；不含完整正文。 */
   preview?: string;
   text?: string;
-  sender_name?: string | null;
   /** 投递提醒的未完成时长（毫秒）。 */
   age_ms?: number;
   change?: string;
@@ -154,6 +157,12 @@ function withLocation(
   if (roomId) item.room_id = roomId;
   if (messageId) item.message_id = messageId;
   if (senderId) item.sender_id = senderId;
+  const senderName = metadata.sender_name;
+  if (typeof senderName === 'string' || senderName === null) item.sender_name = senderName;
+  const senderKind = metadata.sender_kind;
+  if (senderKind === 'human' || senderKind === 'agent' || senderKind === null) {
+    item.sender_kind = senderKind;
+  }
   return item;
 }
 
@@ -759,9 +768,6 @@ function inboxStreamItem(
       if (preview !== undefined) item.preview = preview;
       const text = stringField(metadata, 'text');
       if (text !== undefined) item.text = text;
-      if (typeof metadata.sender_name === 'string' || metadata.sender_name === null) {
-        item.sender_name = metadata.sender_name;
-      }
       const ageMs = numberField(metadata, 'age_ms');
       if (ageMs !== undefined) item.age_ms = ageMs;
       return item;

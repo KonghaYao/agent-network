@@ -23,6 +23,7 @@ import { runAgentPresenceUnitChecks } from './lib/presence-unit';
 import { runFeedbackUnitChecks } from './lib/feedback-unit';
 import { runFeedbackCliChecks } from './lib/feedback-cli';
 import { runDeliveryReminderUnitChecks } from './lib/delivery-reminder-unit';
+import { runDeliverySenderUnitChecks } from './lib/delivery-sender-unit';
 import { runRoomInviteReplayUnitChecks } from './lib/room-invite-replay-unit';
 import { runOwnerlessRoomUnitChecks } from './lib/ownerless-room-unit';
 
@@ -2435,6 +2436,29 @@ async function main(): Promise<void> {
     sectionDigest(staticMarkdownSection),
     sectionDigest(mainMarkdownSection),
   );
+  const replyTargetSection = (text: string): string => {
+    const heading = '## 回复对象与 @';
+    const start = text.indexOf(heading);
+    if (start < 0) return '';
+    const rest = text.slice(start + heading.length);
+    const next = rest.search(/\n## /u);
+    return (next < 0 ? rest : rest.slice(0, next)).trim();
+  };
+  const mainReplyTargetSection = replyTargetSection(skillText);
+  const staticReplyTargetSection = replyTargetSection(skillDocText);
+  check(
+    '静态/主 skill 回复对象与 @ 语义完整',
+    ['sender_name', 'sender_kind', '只在需要对方处理或回应时 @', '不要每条回复都 @',
+      '不要凭记忆', 'network_message_context', '测试账号'].every((marker) =>
+      mainReplyTargetSection.includes(marker) && staticReplyTargetSection.includes(marker),
+    ),
+    mainReplyTargetSection.slice(0, 400),
+  );
+  checkEqual(
+    '静态/主 skill 回复对象与 @ digest 一致',
+    sectionDigest(staticReplyTargetSection),
+    sectionDigest(mainReplyTargetSection),
+  );
   const multitaskSection = (text: string): string => {
     const heading = '## multitask 异步分发';
     const start = text.indexOf(heading);
@@ -4041,6 +4065,7 @@ async function main(): Promise<void> {
   await runOwnerlessRoomUnitChecks();
   await runFeedbackCliChecks();
   await runDeliveryReminderUnitChecks();
+  await runDeliverySenderUnitChecks();
   await runRoomInviteReplayUnitChecks();
 
   console.log(`协议验收通过: ${checksPassed()} 项`);

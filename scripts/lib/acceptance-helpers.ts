@@ -17,6 +17,17 @@ export interface Identity {
   resources: string[];
 }
 
+export interface DeliveryMessageView {
+  message_id: string;
+  sender_id: string;
+  sender_name: string | null;
+  sender_kind: 'human' | 'agent' | null;
+  created_seq: string;
+  preview: string;
+  body_bytes: number;
+  created_at: string;
+}
+
 export interface Delivery {
   delivery_id: string;
   recipient_id: string;
@@ -28,6 +39,7 @@ export interface Delivery {
   claimed_at: string | null;
   updated_at: string;
   result_message_id: string | null;
+  message: DeliveryMessageView | null;
 }
 
 export interface InboxPage {

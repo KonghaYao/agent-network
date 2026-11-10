@@ -131,6 +131,9 @@ export interface MessageCore {
   messageId: string;
   roomId: string;
   senderId: string;
+  /** 发送者展示身份；只进入 delivery_created 的 stream metadata，省略为 null。 */
+  senderName?: string | null;
+  senderKind?: 'human' | 'agent' | null;
   clientMessageId: string;
   body: string;
   preview: string;
@@ -433,6 +436,8 @@ export function messageCoreStatements(
             message_id: core.messageId,
             room_id: core.roomId,
             sender_id: core.senderId,
+            sender_name: core.senderName ?? null,
+            sender_kind: core.senderKind ?? null,
           },
         },
         core.at,
@@ -957,6 +962,8 @@ export async function messageSend(
     messageId,
     roomId: room.room_id,
     senderId: sender,
+    senderName: principal.actor?.name ?? null,
+    senderKind: principal.actor?.kind ?? null,
     clientMessageId: input.client_message_id,
     body: outgoingBody,
     preview: truncateUtf8(outgoingBody, LIMITS.previewBytes),

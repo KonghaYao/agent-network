@@ -28,6 +28,12 @@ export const messagePreviewSchema = z.object({
   created_at: z.string(),
 });
 
+/** 投递消息额外带发送者展示身份；actor 不存在或名称为空时为 null。 */
+export const deliveryMessageSchema = messagePreviewSchema.extend({
+  sender_name: z.string().nullable(),
+  sender_kind: z.enum(['human', 'agent']).nullable(),
+});
+
 export const mentionSchema = z.object({
   actor_id: z.string(),
   kind: z.enum(['human', 'agent']),
@@ -479,7 +485,7 @@ export const deliverySchema = z.object({
   created_seq: z.string(),
   created_at: z.string(),
   updated_at: z.string(),
-  message: messagePreviewSchema.nullable(),
+  message: deliveryMessageSchema.nullable(),
 });
 
 export const eventRefSchema = z.object({

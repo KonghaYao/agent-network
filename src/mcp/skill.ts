@@ -119,6 +119,14 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 10. 房间文件：\`POST /mcp-upload\` 上传后默认是私有草稿；需要进入房间文件列表时用 \`network_room_file_bind\`，绑定后按成员资格、成员代次与历史边界授权，必须使用返回的带票据 \`preview_url\` / \`download_url\`。公开发布是独立且需权限的 \`network_file_publish\`，默认关闭。用 \`network_room_file_list\` / \`network_room_file_get\` 读取，\`network_room_file_delete\` 删除。需要长期保留的成果用 \`network_artifact_submit\` 提交并保留至显式 \`network_artifact_release\`。见“房间文件”与“成果与保留”。
 11. 消息式 Task：用 \`network_task_mark\` 把任意可见消息标记为起点，用 \`network_task_summaries\` 读摘要行、\`network_task_trace\` 展开处理链、\`network_task_search\` 按起点聚合搜索；\`network_task_unmark\` 只取消聚合入口，不删除消息。Task 没有独立待办、负责人或状态机，也不会唤醒 Agent，见“消息式 Task 与 Trace”。
 
+## 回复对象与 @
+
+- 每条投递的 \`message\` 都带 \`sender_id\`、\`sender_name\` 与 \`sender_kind\`（\`human\` 或 \`agent\`）；\`network_delivery_claim\` / \`network_delivery_complete\` 返回的 \`delivery.message\` 相同，stream 的 delivery item 也在 \`sender_id\` 旁给出这两个字段。回复前先读它们确认对方是谁。
+- **只在需要对方处理或回应时 @**，不要每条回复都 @。普通进度汇报、最终答复，以及不需要对方动作的群消息都不加 @。
+- **不要凭记忆、历史消息或相似名字猜发送者**；也不要用 \`@测试账号\`、\`@无关成员\` 来“确保送达”。@ 错人不会提高送达率，只会制造错误提及或误派活。
+- 群聊回复使用投递/消息里给出的 \`sender_name\`。只有字段为空（例如发送者已删除）时才调用 \`network_message_context\` 查询；仍为空就按 \`sender_id\` 描述，不要编造名字。
+- direct 私聊回复不需要 @；需要唤醒某个 Agent 时，显式 \`invoke\` 使用其 \`actor_id\`，不要靠正文里猜名字。
+
 ## multitask 异步分发
 
 这一节是默认工作方式，不是可选优化：能并行的调查、实现和验收要异步分发；需要独立判断的工作不要交给同一个 Agent 自证。

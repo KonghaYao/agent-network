@@ -86,6 +86,8 @@ interface StreamItemView {
   message_id?: string;
   delivery_id?: string;
   sender_id?: string;
+  sender_name?: string | null;
+  sender_kind?: 'human' | 'agent' | null;
   state?: string;
   change?: string;
 }
@@ -590,6 +592,12 @@ async function main(): Promise<void> {
       createdEvent.params,
     );
     checkEqual('invoke 创建一条 delivery', invoke.delivery_ids.length, 1);
+    const createdItem = streamItemsOf(createdEvent).find(
+      (item) =>
+        item.source === 'delivery.created' && item.delivery_id === invoke.delivery_ids[0],
+    );
+    checkEqual('delivery.created 携带发送者显示名', createdItem?.sender_name, renamed.name);
+    checkEqual('delivery.created 携带发送者类型', createdItem?.sender_kind, 'agent');
 
     const senderCollector = notificationCollector(agentA.client);
     const senderSubscription = await openSubscription(agentA.client, [STREAM_URI]);
@@ -614,7 +622,10 @@ async function main(): Promise<void> {
     const deliveryId = invoke.delivery_ids[0] as string;
 
     const pendingInbox = await inbox(agentB, 'pending');
-    check('pending 列表包含新 delivery', pendingInbox.items.some((item) => item.delivery_id === deliveryId), pendingInbox.items);
+    const pendingDelivery = pendingInbox.items.find((item) => item.delivery_id === deliveryId);
+    check('pending 列表包含新 delivery', Boolean(pendingDelivery), pendingInbox.items);
+    checkEqual('待办投递携带发送者显示名', pendingDelivery?.message?.sender_name, renamed.name);
+    checkEqual('待办投递携带发送者类型', pendingDelivery?.message?.sender_kind, 'agent');
     check('pending_count 与列表一致', pendingInbox.pending_count >= 1, pendingInbox.pending_count);
 
     const claimRequest = newRequestId('claim');
@@ -627,6 +638,8 @@ async function main(): Promise<void> {
     checkEqual('claim 后状态为 claimed', claimed.state, 'claimed');
     checkEqual('claim 后 attempt 为 1', claimed.attempt, 1);
     check('claim 返回 claim_id', Boolean(claimed.claim_id), claimed.claim_id);
+    checkEqual('claim 输出投递携带发送者显示名', claimed.message?.sender_name, renamed.name);
+    checkEqual('claim 输出投递携带发送者类型', claimed.message?.sender_kind, 'agent');
     const replayClaim = await callTool<Delivery>(agentB.client, 'network_delivery_claim', {
       request_id: claimRequest,
       delivery_id: deliveryId,
@@ -649,7 +662,7 @@ async function main(): Promise<void> {
       typeof claimedRow?.delivery_updated_at === 'string' && Number(claimedRow.delivery_updated_at) > 0,
       claimedRow,
     );
-    await senderCollector.waitFor(
+    const claimEvent = await senderCollector.waitFor(
       (event) =>
         hasStreamItem(
           event,
@@ -661,6 +674,14 @@ async function main(): Promise<void> {
       '等待 claim 回执统一 stream 通知',
     );
     check('claim 回执通过统一 stream 推送', senderCollector.events.length > 0);
+    const claimItem = streamItemsOf(claimEvent).find(
+      (item) =>
+        item.source === 'delivery.updated' &&
+        item.delivery_id === deliveryId &&
+        item.state === 'claimed',
+    );
+    checkEqual('delivery.updated 携带发送者显示名', claimItem?.sender_name, renamed.name);
+    checkEqual('delivery.updated 携带发送者类型', claimItem?.sender_kind, 'agent');
     await sleep(1000);
     check(
       'claim 不再向 recipient 自己发回执',
@@ -727,6 +748,12 @@ async function main(): Promise<void> {
     );
     checkEqual('complete 后 delivery 状态为 completed', completed.delivery.state, 'completed');
     check('complete 返回最终消息', Boolean(completed.message?.message_id), completed.message);
+    checkEqual(
+      'complete 输出投递携带发送者显示名',
+      completed.delivery.message?.sender_name,
+      renamed.name,
+    );
+    checkEqual('complete 输出投递携带发送者类型', completed.delivery.message?.sender_kind, 'agent');
 
     const completedHistory = await callTool<HistoryPage>(agentA.client, 'network_history_list', {
       room_id: roomId,

@@ -16,6 +16,7 @@ export interface DeliveryReminderCandidate {
   message_preview: string | null;
   sender_id: string | null;
   sender_name: string | null;
+  sender_kind: 'human' | 'agent' | null;
 }
 
 export interface DeliveryReminderScanResult {
@@ -80,7 +81,8 @@ export async function remindStaleDeliveries(
               d.progress_at, d.last_reminded_at,
               m.preview AS message_preview,
               m.sender_id AS sender_id,
-              a.name AS sender_name
+              a.name AS sender_name,
+              a.kind AS sender_kind
          FROM deliveries d
          LEFT JOIN messages m ON m.message_id = d.message_id
          LEFT JOIN actors a ON a.actor_id = m.sender_id
@@ -121,6 +123,7 @@ export async function remindStaleDeliveries(
       preview,
       sender_id: candidate.sender_id,
       sender_name: senderName === '' ? null : senderName,
+      sender_kind: candidate.sender_kind,
       age_ms: now - candidate.progress_at,
       text: preview ? `「${preview}」尚未完成，请汇报进度` : REMINDER_TEXT_FALLBACK,
     });
