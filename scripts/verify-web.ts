@@ -17707,6 +17707,104 @@ async function main(): Promise<void> {
         (await pendingDeliveryOrNull(maintainerToken, duplicateReplyMessage!.message_id)) === null,
       );
 
+      // 正文优先：明确写到的成员不能被“上一条发送者”覆盖。
+      const chatgptToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+      const chatgpt = await rawTool<Actor>(chatgptToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'agent',
+        name: 'ChatGPT 网页版',
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      await rawBefriend(data.humanToken, chatgptToken, { actor_id: chatgpt.actor_id });
+      const textGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'group',
+        title: '正文命中自动 @ 群',
+        members: [maintainer.actor_id, chatgpt.actor_id],
+      });
+      const textRoomId = textGroup.room.room_id;
+      for (const token of [maintainerToken, chatgptToken]) await acceptRoomInvites(token, textRoomId);
+      await sendRoomMessage(maintainerToken, textRoomId, '维护员上一条');
+      await page.goto(`${server.base}/c/${textRoomId}`);
+      await waitRoom(page, textRoomId, '正文命中自动 @ 群');
+      await waitForText(page, '#messages', '维护员上一条', 12_000);
+
+      // 上一条是 WeBots 维护员，但正文明确写给 ChatGPT 网页版：不能 @ 错人。
+      const onboardingBody = '这是给 ChatGPT 网页版 的网页版接入说明，请按步骤完成 onboarding。';
+      await page.locator('#body').fill(onboardingBody);
+      await sendInRoom(textRoomId);
+      const onboardingArgs = await sendArgsFor(textRoomId);
+      checkEqual(
+        '正文命中的成员优先于上一条发送者',
+        onboardingArgs?.body,
+        `${onboardingBody}\n@ChatGPT 网页版`,
+      );
+      check(
+        '正文命中时不再追加 WeBots 维护员',
+        !onboardingArgs?.body?.includes('@WeBots 维护员'),
+        onboardingArgs?.body,
+      );
+      const onboardingMessage = await historyItemFor(textRoomId, '网页版接入说明');
+      check('正文命中消息已写入历史', Boolean(onboardingMessage), onboardingMessage);
+      const chatgptDelivery = await pendingDeliveryOrNull(chatgptToken, onboardingMessage!.message_id);
+      check('正文命中投递给 ChatGPT 网页版', Boolean(chatgptDelivery), chatgptDelivery);
+      check(
+        '正文命中不投递给上一条发送者',
+        (await pendingDeliveryOrNull(maintainerToken, onboardingMessage!.message_id)) === null,
+      );
+      await completeDelivery(chatgptToken, await claimDelivery(chatgptToken, chatgptDelivery!.delivery_id));
+
+      // 正文同时出现两个 active 成员：不猜，即使上一条发送者可用也不回退。
+      await sendRoomMessage(maintainerToken, textRoomId, '维护员再上一条');
+      await waitForText(page, '#messages', '维护员再上一条', 12_000);
+      const ambiguousBody = 'ChatGPT 网页版 和 WeBots 维护员 都看一下';
+      await page.locator('#body').fill(ambiguousBody);
+      await sendInRoom(textRoomId);
+      const ambiguousArgs = await sendArgsFor(textRoomId);
+      checkEqual('正文命中多个成员时不自动 @', ambiguousArgs?.body, ambiguousBody);
+      const ambiguousMessage = await historyItemFor(textRoomId, '都看一下');
+      check('多个成员命中消息已写入历史', Boolean(ambiguousMessage), ambiguousMessage);
+      check(
+        '多个成员命中不产生自动 @ 投递',
+        (await pendingDeliveryOrNull(chatgptToken, ambiguousMessage!.message_id)) === null &&
+          (await pendingDeliveryOrNull(maintainerToken, ambiguousMessage!.message_id)) === null,
+      );
+
+      // 正文没有成员名：仍回退到上一条发送者。
+      await sendRoomMessage(maintainerToken, textRoomId, '维护员最后一条');
+      await waitForText(page, '#messages', '维护员最后一条', 12_000);
+      await page.locator('#body').fill('真的吗');
+      await sendInRoom(textRoomId);
+      const fallbackArgs = await sendArgsFor(textRoomId);
+      checkEqual('正文没有命中时回退上一条发送者', fallbackArgs?.body, '真的吗\n@WeBots 维护员');
+      const fallbackMessage = await historyItemFor(textRoomId, '真的吗');
+      const fallbackDelivery = await pendingDeliveryOrNull(maintainerToken, fallbackMessage!.message_id);
+      check('回退上一条发送者仍产生投递', Boolean(fallbackDelivery), fallbackDelivery);
+      await completeDelivery(
+        maintainerToken,
+        await claimDelivery(maintainerToken, fallbackDelivery!.delivery_id),
+      );
+
+      // 正文只命中自己：跳过自己，继续按无命中回退上一条发送者。
+      await page.goto(`${server.base}/c/${replierRoomId}`);
+      await waitRoom(page, replierRoomId, '上一位自动 @ 群');
+      await sendRoomMessage(replierToken, replierRoomId, '自己名字前的上一条');
+      await waitForText(page, '#messages', '自己名字前的上一条', 12_000);
+      const selfNameBody = `${data.human.name} 说的是真的吗`;
+      await page.locator('#body').fill(selfNameBody);
+      await sendInRoom(replierRoomId);
+      const selfNameArgs = await sendArgsFor(replierRoomId);
+      checkEqual(
+        '正文命中自己时回退上一条发送者',
+        selfNameArgs?.body,
+        `${selfNameBody}\n@上一位回复 Agent`,
+      );
+      check(
+        '正文命中自己时不 @ 自己',
+        !selfNameArgs?.body?.includes(`@${data.human.name}`),
+        selfNameArgs?.body,
+      );
+
       // direct 不追加文本 @，仍用 invoke 唤醒对方 Agent。
       await sendRoomMessage(data.agentAToken, data.direct.room.room_id, '单聊上一条 Agent 消息');
       await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
