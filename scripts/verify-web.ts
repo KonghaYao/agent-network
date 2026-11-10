@@ -10230,6 +10230,187 @@ async function main(): Promise<void> {
       await context.close();
     }
 
+    // 2b-4c. 建群与添加成员候选行布局：头像、姓名、备注、类型不重叠，三档宽度均无横向溢出。
+    {
+      interface PickerRowMetrics {
+        view: number;
+        doc: number;
+        rowHeight: number;
+        rowScrollWidth: number;
+        rowClientWidth: number;
+        avatarWidth: number;
+        avatarHeight: number;
+        avatarRight: number;
+        nameLeft: number;
+        nameRight: number;
+        nameBottom: number;
+        nameVisible: boolean;
+        noteTop: number;
+        noteBottom: number;
+        noteWidth: number;
+        noteHeight: number;
+        noteVisible: boolean;
+        kindLeft: number;
+        kindVisible: boolean;
+        checkWidth: number;
+        checkHeight: number;
+        checkVisible: boolean;
+        pageFits: boolean;
+        rowFits: boolean;
+      }
+
+      const longName = `建群布局超长名称${'甲乙丙丁戊己庚辛壬癸'.repeat(6)}`;
+      await createAgentFriend(data.humanToken, longName);
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+
+      const choiceMetrics = async (root: string): Promise<PickerRowMetrics | null> =>
+        (await page.evaluate(`(() => {
+          const row = document.querySelector(${JSON.stringify(`${root} .contact-choice`)});
+          if (!row) return null;
+          const avatar = row.querySelector('.contact-avatar');
+          const name = row.querySelector('.contact-name');
+          const note = row.querySelector('.contact-note');
+          const kind = row.querySelector('.contact-kind');
+          const check = row.querySelector('input[type=checkbox]');
+          if (!avatar || !name || !note || !check) return null;
+          const box = function (node) { return node.getBoundingClientRect(); };
+          const shown = function (node) {
+            const style = getComputedStyle(node);
+            return style.display !== 'none' && style.visibility !== 'hidden';
+          };
+          const rowBox = box(row);
+          const avatarBox = box(avatar);
+          const nameBox = box(name);
+          const noteBox = box(note);
+          const kindBox = kind ? box(kind) : null;
+          const checkBox = box(check);
+          return {
+            view: window.innerWidth,
+            doc: document.documentElement.scrollWidth,
+            rowHeight: rowBox.height,
+            rowScrollWidth: row.scrollWidth,
+            rowClientWidth: row.clientWidth,
+            avatarWidth: avatarBox.width,
+            avatarHeight: avatarBox.height,
+            avatarRight: avatarBox.right,
+            nameLeft: nameBox.left,
+            nameRight: nameBox.right,
+            nameBottom: nameBox.bottom,
+            nameVisible: shown(name) && nameBox.width > 0 && nameBox.height > 0,
+            noteTop: noteBox.top,
+            noteBottom: noteBox.bottom,
+            noteWidth: noteBox.width,
+            noteHeight: noteBox.height,
+            noteVisible: shown(note) && noteBox.width > 0 && noteBox.height > 0,
+            kindLeft: kindBox ? kindBox.left : 0,
+            kindVisible: Boolean(kind && kindBox && shown(kind) && kindBox.width > 0),
+            checkWidth: checkBox.width,
+            checkHeight: checkBox.height,
+            checkVisible: shown(check) && checkBox.width > 0 && checkBox.height > 0,
+            pageFits: document.documentElement.scrollWidth <= window.innerWidth + 1,
+            rowFits: row.scrollWidth <= row.clientWidth + 1
+          };
+        })()`)) as PickerRowMetrics | null;
+
+      const assertPickerLayout = async (
+        label: string,
+        root: string,
+        width: number,
+      ): Promise<void> => {
+        await page.setViewportSize({ width, height: 900 });
+        await page.evaluate(`new Promise(function (resolve) {
+          requestAnimationFrame(function () {
+            requestAnimationFrame(function () { resolve(true); });
+          });
+        })`);
+        const metrics = await choiceMetrics(root);
+        console.log(`    ${label} ${width}px 布局`, metrics);
+        check(
+          `${label} ${width}px 候选头像不压住姓名`,
+          Boolean(
+            metrics &&
+              metrics.avatarWidth <= 24 &&
+              metrics.avatarHeight <= 24 &&
+              metrics.avatarWidth >= 20 &&
+              metrics.avatarRight <= metrics.nameLeft + 0.5,
+          ),
+          metrics,
+        );
+        check(
+          `${label} ${width}px 候选姓名与备注可见且不重叠`,
+          Boolean(
+            metrics &&
+              metrics.nameVisible &&
+              metrics.noteVisible &&
+              metrics.noteWidth > 0 &&
+              metrics.noteHeight > 0 &&
+              metrics.nameBottom <= metrics.noteTop + 0.5,
+          ),
+          metrics,
+        );
+        check(
+          `${label} ${width}px 候选行高与复选框可触控`,
+          Boolean(
+            metrics &&
+              metrics.rowHeight >= 44 &&
+              metrics.checkVisible &&
+              metrics.checkWidth >= 16 &&
+              metrics.checkHeight >= 16,
+          ),
+          metrics,
+        );
+        check(
+          `${label} ${width}px 候选行无横向溢出`,
+          Boolean(metrics && metrics.pageFits && metrics.rowFits),
+          metrics,
+        );
+        check(
+          `${label} ${width}px 类型列不覆盖姓名`,
+          Boolean(metrics && (!metrics.kindVisible || metrics.kindLeft >= metrics.nameRight - 0.5)),
+          metrics,
+        );
+      };
+
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      await page.locator('#new-group').click();
+      await page.locator('#group-contacts input[type=checkbox]').first().waitFor();
+      await page.fill('#group-search', '建群布局超长名称');
+      await page
+        .locator('#group-contacts .contact-choice')
+        .filter({ hasText: '建群布局超长名称' })
+        .waitFor();
+      checkEqual(
+        '长名称好友在建群候选中唯一',
+        await page.locator('#group-contacts .contact-choice').count(),
+        1,
+      );
+      for (const width of [390, 768, 1280]) {
+        await assertPickerLayout('建群候选', '#group-contacts', width);
+      }
+      await page.locator('#group-cancel').click();
+
+      await page.goto(`${server.base}/c/${data.group.room.room_id}`);
+      await page.locator('#add-members').waitFor();
+      await page.locator('#add-members').click();
+      await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
+      await page.fill('#members-search', '建群布局超长名称');
+      await page
+        .locator('#members-contacts .contact-choice')
+        .filter({ hasText: '建群布局超长名称' })
+        .waitFor();
+      for (const width of [390, 768, 1280]) {
+        await assertPickerLayout('添加成员候选', '#members-contacts', width);
+      }
+      await page.locator('#members-cancel').click();
+      await context.close();
+    }
+
     // 2b-5. G03 群角色界面：owner 任免管理员、管理员操作入口与公告读写。
     {
       interface RoleMemberView {
