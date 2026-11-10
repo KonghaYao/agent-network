@@ -17,6 +17,7 @@ import { chromium, type Browser, type BrowserContext, type Locator, type Page } 
 
 import { extractMessageFileLinks } from '../src/contracts/file-links';
 import { LIMITS } from '../src/contracts/limits';
+import { kubaiIcon } from '../src/web/icons';
 import {
   callTool,
   check,
@@ -4517,11 +4518,7 @@ async function main(): Promise<void> {
       );
       checkEqual('好友申请图标 display:block', contactIcon?.svgDisplay, 'block');
       checkEqual('好友申请图标 fill:none', contactIcon?.svgFill, 'none');
-      checkEqual(
-        '好友申请图标 stroke 跟随文字色',
-        contactIcon?.svgStroke,
-        contactIcon?.buttonColor,
-      );
+      checkEqual('好友申请图标 stroke 使用成功绿', contactIcon?.svgStroke, 'rgb(14, 159, 79)');
       checkEqual(
         '好友申请图标 stroke-width 1.8',
         Number.parseFloat(contactIcon?.svgStrokeWidth ?? ''),
@@ -4556,7 +4553,7 @@ async function main(): Promise<void> {
       checkEqual('我的任务图标为 18×18', `${taskIcon?.svgWidth}x${taskIcon?.svgHeight}`, '18x18');
       checkEqual('我的任务图标 display:block', taskIcon?.svgDisplay, 'block');
       checkEqual('我的任务图标 fill:none', taskIcon?.svgFill, 'none');
-      checkEqual('我的任务图标 stroke 跟随文字色', taskIcon?.svgStroke, taskIcon?.buttonColor);
+      checkEqual('我的任务图标 stroke 使用信息蓝', taskIcon?.svgStroke, 'rgb(59, 130, 246)');
       checkEqual(
         '我的任务图标 stroke-width 1.8',
         Number.parseFloat(taskIcon?.svgStrokeWidth ?? ''),
@@ -18346,6 +18343,34 @@ async function main(): Promise<void> {
         homeHtml.includes('data-kubai-icon="contact-requests"') &&
           homeHtml.includes('kubai-icon kubai-icon-users'),
         homeHtml.match(/<svg[^>]*kubai-icon[^>]*>/)?.[0]?.slice(0, 160),
+      );
+      const iconTag = (name: string) =>
+        homeHtml.match(new RegExp(`<svg[^>]*data-kubai-icon="${name}"[^>]*>`))?.[0] ?? '';
+      const coloredIcons = [
+        ['contact-requests', '成功绿', '#0e9f4f'],
+        ['my-tasks', '信息蓝', '#3b82f6'],
+        ['monitor-save', '成功绿', '#0e9f4f'],
+        ['monitor-clear', '危险红', '#e5484d'],
+        ['archived-agents', '琥珀色', '#c47a00'],
+        ['logout', '危险红', '#e5484d'],
+      ] as const;
+      for (const [name, tone, color] of coloredIcons) {
+        const tag = iconTag(name);
+        check(`首页图标 ${name} 使用${tone}`, tag.includes(`color:${color}`), tag.slice(0, 160));
+      }
+      const neutralIconTag = iconTag('search');
+      check(
+        '首页中性图标保持 currentColor',
+        neutralIconTag.length > 0 && !neutralIconTag.includes('style="color:'),
+        neutralIconTag.slice(0, 160),
+      );
+      check(
+        'kubaiIcon 支持颜色覆盖',
+        kubaiIcon('search', { color: '#123456' }).includes('color:#123456'),
+      );
+      check(
+        'kubaiIcon 颜色覆盖为 null 时回到 currentColor',
+        !kubaiIcon('logout', { color: null }).includes('style="color:'),
       );
       const iconVersionMatch = homeHtml.match(/\/assets\/chat-icons\.js\?v=([0-9a-f]{12})/);
       const iconVersion = iconVersionMatch?.[1] ?? '';
