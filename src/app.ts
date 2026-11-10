@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 
+import { CLI_BUNDLE_FILENAME } from './bun/cli-bundle';
 import { LIMITS } from './contracts/limits';
 import { isBusinessError, type BusinessErrorBody } from './contracts/errors';
 import { attachPublicUrl, publicFileHeaders } from './drive/service';
@@ -527,6 +528,10 @@ export interface AppDeps {
   iconAsset?: string | null;
   /** 图标动效 bundle 内容哈希；与其他浏览器岛共用同样的版本化 URL 策略。 */
   iconAssetVersion?: string | null;
+  /** 启动时构建的 agentnet CLI bundle；null 表示构建失败、/skills/agentnet.js 返回 404。 */
+  clientAsset?: string | null;
+  /** CLI bundle 内容哈希；作为 ETag，客户端重复请求可命中 304。 */
+  clientAssetVersion?: string | null;
 }
 
 interface ByteRange {
@@ -709,10 +714,26 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
   // .md / .sh / .js，拒绝路径穿越。
   // 文件本身不含凭据；调用方自行通过 AGENTNET_TOKEN 提供 Bearer。
   // 脚本源文件用 __PUBLIC_ORIGIN__ 占位，响应时替换为当前部署地址，磁盘文件保持部署无关。
-  // agentnet.js 由 scripts/build-client.ts 生成，构建时不注入任何部署信息。
+  // agentnet.js 只在启动期内存构建；不回退磁盘文件，构建失败时返回 404。
   app.get('/skills/:file', async (c) => {
     const file = c.req.param('file');
     if (!/^[a-z0-9][a-z0-9._-]*\.(?:md|sh|js)$/u.test(file)) return c.notFound();
+
+    if (file === CLI_BUNDLE_FILENAME) {
+      if (!deps.clientAsset) return c.notFound();
+      const etag = deps.clientAssetVersion ? `"${deps.clientAssetVersion}"` : null;
+      const headers = {
+        'content-type': 'text/javascript; charset=utf-8',
+        'cache-control': 'no-cache',
+        'access-control-allow-origin': '*',
+        ...(etag ? { etag } : {}),
+      };
+      if (etag && matchesEtag(c.req.header('if-none-match'), etag)) {
+        return c.body(null, 304, headers);
+      }
+      return c.body(deps.clientAsset, 200, headers);
+    }
+
     const path = resolve(SKILLS_ROOT, file);
     if (!path.startsWith(`${SKILLS_ROOT}${sep}`)) return c.notFound();
     const source = await Bun.file(path).text().catch(() => null);

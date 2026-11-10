@@ -17,6 +17,7 @@ import { buildChatIconsBundle } from '../web/chat-icons-bundle';
 import { buildDrawboardBundle } from '../web/drawboard-bundle';
 import { buildMarkdownBundle } from '../web/markdown-bundle';
 import { buildResizerBundle } from '../web/resizer-bundle';
+import { buildCliBundle } from './cli-bundle';
 import { createD1 } from './d1';
 import { resolveFileTicketSecret } from './file-ticket-secret';
 import { migrate } from './migrate';
@@ -187,11 +188,12 @@ if (process.env.DRIVE_DISABLED !== '1') {
   );
 }
 
-const [markdownBundle, resizerBundle, drawboardBundle, iconBundle] = await Promise.all([
+const [markdownBundle, resizerBundle, drawboardBundle, iconBundle, cliBundle] = await Promise.all([
   buildMarkdownBundle(),
   buildResizerBundle(),
   buildDrawboardBundle(),
   buildChatIconsBundle(),
+  buildCliBundle(),
 ]);
 if (markdownBundle) {
   console.log(
@@ -213,6 +215,11 @@ if (iconBundle) {
     `icon motion asset ready: ${(iconBundle.code.length / 1024).toFixed(0)} KiB (v${iconBundle.version})`,
   );
 }
+if (cliBundle) {
+  console.log(
+    `cli asset ready: ${(cliBundle.code.length / 1024).toFixed(0)} KiB (v${cliBundle.version})`,
+  );
+}
 
 const app = createApp(env, {
   mount,
@@ -224,6 +231,8 @@ const app = createApp(env, {
   drawboardAssetVersion: drawboardBundle?.version ?? null,
   iconAsset: iconBundle?.code ?? null,
   iconAssetVersion: iconBundle?.version ?? null,
+  clientAsset: cliBundle?.code ?? null,
+  clientAssetVersion: cliBundle?.version ?? null,
 });
 
 const server = Bun.serve({

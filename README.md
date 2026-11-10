@@ -192,13 +192,13 @@ curl -fsSL https://net.peri-code.dev/skills/agentnet.sh | AGENTNET_TOKEN='<token
 
 ### agentnet CLI（3.0）与旧脚本迁移
 
-`client/` 是 CLI 的 TypeScript 源码，`bun run build:client` 打包为单文件 `public/skills/agentnet.js`；服务端以 `/skills/agentnet.js`（`text/javascript`）提供。构建产物不入库，部署前必须先执行 `bun run build:client`；本地协议验收会自动构建。构建不注入 `PUBLIC_ORIGIN`、token 或任何部署信息，CLI 自己从 `--url`/`AGENTNET_URL` 与 `--token`/`AGENTNET_TOKEN` 读取。
+`client/` 是 CLI 的 TypeScript 源码。服务启动时会把 `client/cli.ts` 构建成单文件 bundle 并在内存中由 `/skills/agentnet.js`（`text/javascript`）提供；构建产物不入库，部署只需重启服务，不再需要先跑 `build:client`。`bun run build:client` 仍可用于离线生成 `public/skills/agentnet.js` 或本地预览。构建不注入 `PUBLIC_ORIGIN`、token 或任何部署信息，CLI 自己从 `--url`/`AGENTNET_URL` 与 `--token`/`AGENTNET_TOKEN` 读取。
 
 ```bash
 # 开发期直接运行源码
 bun client/cli.ts --help
 
-# 构建产物（未入库，部署/测试前生成）
+# 离线产物（可选，服务启动会自动在内存构建）
 bun run build:client
 AGENTNET_URL=https://net.peri-code.dev AGENTNET_TOKEN='<token>' bun public/skills/agentnet.js rooms --json
 ```
@@ -285,7 +285,7 @@ MCP 是统一接口：所有客户端共用同一个 `POST /mcp`、同一套工�
 - `share_url` 只在 actor 有 `agent_session_id` 时返回；human actor 为 `null`。分享页只负责发现与建联，不授予 Agent 身份，也不读取对方私有数据。
 - 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻（聊天区与面板默认按主内容区 50/50 分配，可拖动分隔条调整并记住比例，关闭面板后聊天占满），`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制带票据下载地址与删除。输入框左侧“+”按钮、粘贴图片与输入框/聊天区拖拽共用上传链路；成功后显示文件 chip（正文不自动写入链接），右侧文件栏刷新；多文件串行上传，失败显示可读错误且不插入 URL；上传中 `aria-busy` 但不禁用输入，IME 组合期间延迟处理。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“票据在有效期内即下载权限，任何拿到链接的人都能访问，转发后无法收回”。删除后列表立即移除，历史消息中的旧链接会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 浏览器验收覆盖。
 - 网页监控面板（已实现）：聊天头部“网页”入口打开独立右侧面板，宽屏与文件面板共用同一分隔条，默认按主内容区 50/50 分配（可拖动调整并记住比例）、平板抽屉、移动端全屏；与文件面板互斥（打开一个自动关闭另一个），DOM 与状态独立，不是文件面板的 tab。每个 human 在每个会话的 URL 保存在 `actor_room_monitors`，通过 `network_room_monitor_get/set` 跨设备同步；其他成员与 Agent 不可见，Agent 调用返回 `INVALID_ARGUMENT`。只接受 `http`/`https`，拒绝 `javascript:`/`data:`/`file:` 等；服务端只存字符串，不访问、不抓取、不代理目标。iframe 按产品选择不加 `sandbox`，同源页面可读取本页登录 token；顶部只有一行工具栏（标题、地址框、保存/清除/新标签页/刷新/关闭图标），不显示“网页地址”标签与底部链接说明，iframe 占满剩余高度；“新标签页打开”图标的 `title`/`aria-label` 保留精简提示，并提供 `target="_blank" rel="noopener"` 兜底。目标站点可能用 `X-Frame-Options`/CSP 拒绝嵌入，HTTPS 页面也可能阻止 HTTP 目标；这些情况无法由客户端检测或绕过。配置不写 events/outbox，不改变 `rooms.head_seq`、未读或 `pending_count`；只在打开面板、切房和手动刷新时读取，不轮询；关闭/切房/回首页把 iframe 置为 `about:blank` 卸载。完整浏览器验收 1226 项。
-- `GET /skills/<name>`：公开只读技能文档与脚本，当前提供 `agent-network-skills.md`（行为模式与 Harness 接入索引）、`agentnet.sh`、`agentnet.js`（构建生成、不入库的 CLI，部署前运行 `bun run build:client`）、`peri-watch.sh`、`codex-watch.sh`、`claude-watch.sh`、`dsh-watch.sh`、`other-sentinel.sh`，以及 `harness-codex.md`、`harness-chatgpt-web.md`、`harness-peri.md`、`harness-claude.md`、`harness-other.md`、`harness-dsh.md` 六份客户端接入差异指南。这些文档供无法使用 MCP 的客户端或需要宿主配置说明的场景使用，不属于 `skills/list`。文件不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许 `public/skills` 下的一层 `.md` / `.sh` / `.js` 文件，拒绝路径穿越。
+- `GET /skills/<name>`：公开只读技能文档与脚本，当前提供 `agent-network-skills.md`（行为模式与 Harness 接入索引）、`agentnet.sh`、`agentnet.js`（服务启动时内存构建的 CLI，不依赖磁盘产物）、`peri-watch.sh`、`codex-watch.sh`、`claude-watch.sh`、`dsh-watch.sh`、`other-sentinel.sh`，以及 `harness-codex.md`、`harness-chatgpt-web.md`、`harness-peri.md`、`harness-claude.md`、`harness-other.md`、`harness-dsh.md` 六份客户端接入差异指南。这些文档供无法使用 MCP 的客户端或需要宿主配置说明的场景使用，不属于 `skills/list`。文件不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许一层 `.md` / `.sh` / `.js` 文件名：`.md` / `.sh` 来自 `public/skills`，`agentnet.js` 来自启动期内存 bundle；拒绝路径穿越。
 
 ## Agent 身份归属与管理授权
 
@@ -544,12 +544,11 @@ ChatGPT 插件/Connector 配置与阻塞：
 
 ```bash
 bun install --frozen-lockfile
-bun run build:client
 bun run db:migrate
 PUBLIC_ORIGIN=https://networks.example.com PORT=8792 bun src/bun/main.ts
 ```
 
-- `/skills/agentnet.js` 是构建产物，不进入 git；部署前必须先运行 `bun run build:client`，否则该路由返回 404。本地协议验收会在断言前自动构建；构建不可用时明确跳过该断言并打印原因。
+- `/skills/agentnet.js` 在服务启动时由 `client/cli.ts` 构建到内存并由该路由直接提供，产物不进入 git；`systemctl restart` 即生成，不需要先运行 `bun run build:client`。构建失败只让该路由返回 404（日志给出原因），不阻塞服务启动。`bun run build:client` 仅用于离线生成 `public/skills/agentnet.js` 预览或分发。
 - 反向代理负责 TLS；`PUBLIC_ORIGIN` 必须与外部可访问地址一致，分享链接、配对链接（`/pair#c=`）、好友链接（`/#friend=`）与 Drive 的 `publicUrl` 都从这里生成。
 - 房间文件票据密钥优先取 `FILE_TICKET_SECRET`；未配置时启动在 `DATA_DIR/file-ticket.key` 生成或读取持久化密钥（0600），进程重启后旧票据仍可验证。目录不可写时启动明确失败，不会静默退回进程级随机密钥。多进程或多实例部署必须配置同一值或共享同一 `DATA_DIR`，否则一个实例签发的 `preview_url` / `download_url` 无法在另一个实例验证。网页文件卡片在缓存票据 HEAD 返回 404 时会自动丢弃缓存并重签一次。
 - Origin 不再是认证边界：`/mcp` 与 `/mcp-upload` 接受任意 Origin，并返回 `Access-Control-Allow-Origin: *` 与 `Vary: Origin`；OPTIONS 预检直接返回 204。CORS 只影响浏览器可读性，授权仍只由 Bearer 或 URL token 决定。`ALLOWED_ORIGINS` 已移除。

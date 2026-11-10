@@ -58,6 +58,6 @@ export async function buildClientBundle(
 }
 
 /** 内容哈希前 12 位；URL 与 ETag 共用，部署后 HTML 自然引用新资源。 */
-function bundleVersion(text: string): string {
+export function bundleVersion(text: string): string {
   return new Bun.CryptoHasher('sha256').update(text).digest('hex').slice(0, 12);
 }
