@@ -355,6 +355,11 @@ async function main(): Promise<void> {
     'network_task_offer',
     'network_task_accept',
     'network_task_decline',
+    'network_task_mark',
+    'network_task_unmark',
+    'network_task_summaries',
+    'network_task_trace',
+    'network_task_search',
     'network_task_claim',
     'network_task_cancel',
     'network_task_retry',
@@ -492,6 +497,11 @@ async function main(): Promise<void> {
     'network_task_offer',
     'network_task_accept',
     'network_task_decline',
+    'network_task_mark',
+    'network_task_unmark',
+    'network_task_summaries',
+    'network_task_trace',
+    'network_task_search',
     'network_task_claim',
     'network_task_cancel',
     'network_task_retry',
@@ -831,6 +841,107 @@ async function main(): Promise<void> {
     historySchema.includes('"sender_kind"'),
     historyTool?.outputSchema,
   );
+  check(
+    'history 输出 schema 包含消息式 Task 归属',
+    historySchema.includes('"task_root_id"'),
+    historyTool?.outputSchema,
+  );
+
+  interface TaskToolView {
+    name: string;
+    description?: string;
+    inputSchema?: unknown;
+    outputSchema?: unknown;
+    annotations?: {
+      readOnlyHint?: boolean;
+      destructiveHint?: boolean;
+      idempotentHint?: boolean;
+    };
+  }
+  const taskMarkTool = listed?.tools?.find((tool) => tool.name === 'network_task_mark') as
+    | TaskToolView
+    | undefined;
+  const taskUnmarkTool = listed?.tools?.find((tool) => tool.name === 'network_task_unmark') as
+    | TaskToolView
+    | undefined;
+  const taskSummariesTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_task_summaries',
+  ) as TaskToolView | undefined;
+  const taskTraceTool = listed?.tools?.find((tool) => tool.name === 'network_task_trace') as
+    | TaskToolView
+    | undefined;
+  const taskSearchTool = listed?.tools?.find((tool) => tool.name === 'network_task_search') as
+    | TaskToolView
+    | undefined;
+  const taskMarkInput = JSON.stringify(taskMarkTool?.inputSchema ?? {});
+  const taskMarkOutput = JSON.stringify(taskMarkTool?.outputSchema ?? {});
+  const taskUnmarkOutput = JSON.stringify(taskUnmarkTool?.outputSchema ?? {});
+  const taskSummariesInput = JSON.stringify(taskSummariesTool?.inputSchema ?? {});
+  const taskTraceInput = JSON.stringify(taskTraceTool?.inputSchema ?? {});
+  const taskTraceOutput = JSON.stringify(taskTraceTool?.outputSchema ?? {});
+  const taskSearchInput = JSON.stringify(taskSearchTool?.inputSchema ?? {});
+  const taskSearchOutput = JSON.stringify(taskSearchTool?.outputSchema ?? {});
+
+  check(
+    'task_mark 可写、幂等且输入输出契约完整',
+    taskMarkTool?.annotations?.readOnlyHint === false &&
+      taskMarkTool?.annotations?.idempotentHint === true &&
+      ['request_id', 'room_id', 'message_id'].every((key) =>
+        taskMarkInput.includes(`"${key}"`),
+      ) &&
+      ['task_root_id', 'marked'].every((key) => taskMarkOutput.includes(`"${key}"`)) &&
+      (taskMarkTool?.description ?? '').includes('任意') &&
+      (taskMarkTool?.description ?? '').includes('幂等') &&
+      (taskMarkTool?.description ?? '').includes('不写 inbox'),
+    taskMarkTool,
+  );
+  check(
+    'task_unmark 可写、幂等且保留消息',
+    taskUnmarkTool?.annotations?.readOnlyHint === false &&
+      taskUnmarkTool?.annotations?.idempotentHint === true &&
+      taskUnmarkOutput.includes('"task_root_id"') &&
+      taskUnmarkOutput.includes('"marked"') &&
+      (taskUnmarkTool?.description ?? '').includes('消息') &&
+      (taskUnmarkTool?.description ?? '').includes('幂等'),
+    taskUnmarkTool,
+  );
+  check(
+    'task_summaries 只读且最多 20 个根',
+    taskSummariesTool?.annotations?.readOnlyHint === true &&
+      taskSummariesInput.includes('"room_id"') &&
+      taskSummariesInput.includes('"root_message_ids"') &&
+      taskSummariesInput.includes('"maxItems":20') &&
+      JSON.stringify(taskSummariesTool?.outputSchema ?? {}).includes('"participant_count"'),
+    taskSummariesTool,
+  );
+  check(
+    'task_trace 只读且包含双向游标与 focus 契约',
+    taskTraceTool?.annotations?.readOnlyHint === true &&
+      ['root_message_id', 'cursor', 'focus_message_id', 'limit'].every((key) =>
+        taskTraceInput.includes(`"${key}"`),
+      ) &&
+      [
+        'next_cursor',
+        'prev_cursor',
+        'has_more_before',
+        'has_more_after',
+        'message_count',
+        'focus_message_id',
+        'authorization',
+      ].every((key) => taskTraceOutput.includes(`"${key}"`)),
+    taskTraceTool,
+  );
+  check(
+    'task_search 只读且按起点聚合、返回 truncated',
+    taskSearchTool?.annotations?.readOnlyHint === true &&
+      taskSearchInput.includes('"query"') &&
+      ['hit_count', 'matches', 'truncated', 'snapshot'].every((key) =>
+        taskSearchOutput.includes(`"${key}"`),
+      ) &&
+      (taskSearchTool?.description ?? '').includes('按起点聚合') &&
+      (taskSearchTool?.description ?? '').includes('普通 network_message_search 契约保持不变'),
+    taskSearchTool,
+  );
 
   const monitorGetTool = listed?.tools?.find(
     (tool) => tool.name === 'network_room_monitor_get',
@@ -890,6 +1001,11 @@ async function main(): Promise<void> {
     'network_task_offer',
     'network_task_accept',
     'network_task_decline',
+    'network_task_mark',
+    'network_task_unmark',
+    'network_task_summaries',
+    'network_task_trace',
+    'network_task_search',
     'network_task_claim',
     'network_task_cancel',
     'network_task_retry',
@@ -3998,6 +4114,184 @@ async function main(): Promise<void> {
         item.sender_kind === undefined,
     ),
     historyResult?.items?.map((item) => item.sender_kind),
+  );
+
+  // 消息式 Task：标记幂等、读工具不写事件、取消标记保留消息。
+  const taskTargetSent = await rawToolCall<{ message: { message_id: string } }>(
+    browserToken,
+    'network_message_send',
+    {
+      request_id: `task_mark_target_${crypto.randomUUID().replaceAll('-', '')}`,
+      client_message_id: crypto.randomUUID(),
+      room_id: historyRoomId,
+      body: 'TASKTRACE 协议标记幂等',
+      invoke: [],
+    },
+  );
+  const taskTargetId = taskTargetSent.data?.message.message_id ?? '';
+  check('task mark fixture 写入成功', taskTargetId.length > 0, taskTargetSent);
+  const markRequestId = `task_mark_${crypto.randomUUID().replaceAll('-', '')}`;
+  const roomStateBeforeTask = await rawToolCall<{
+    room: { head_seq: string; my_last_read_seq: string };
+  }>(browserToken, 'network_room_get', { room_id: historyRoomId });
+  const markOnce = await rawToolCall<{
+    room_id: string;
+    message_id: string;
+    task_root_id: string;
+    marked: boolean;
+  }>(shareToken, 'network_task_mark', {
+    request_id: markRequestId,
+    room_id: historyRoomId,
+    message_id: taskTargetId,
+  });
+  const markReplay = await rawToolCall<typeof markOnce.data>(shareToken, 'network_task_mark', {
+    request_id: markRequestId,
+    room_id: historyRoomId,
+    message_id: taskTargetId,
+  });
+  check(
+    'task_mark 允许 Agent 标记人类消息且重放返回同一结果',
+    markOnce.data?.marked === true &&
+      markOnce.data?.task_root_id === taskTargetId &&
+      JSON.stringify(markOnce.data) === JSON.stringify(markReplay.data),
+    { markOnce: markOnce.data, markReplay: markReplay.data },
+  );
+  const summariesArgs = {
+    room_id: historyRoomId,
+    root_message_ids: [taskTargetId],
+  };
+  const summariesOnce = await rawToolCall<{
+    items: { root_message_id: string; message_count: number }[];
+  }>(browserToken, 'network_task_summaries', summariesArgs);
+  const summariesTwice = await rawToolCall<typeof summariesOnce.data>(
+    browserToken,
+    'network_task_summaries',
+    summariesArgs,
+  );
+  check(
+    'task_summaries 返回已标记起点且重复读取结果一致',
+    summariesOnce.data?.items.length === 1 &&
+      summariesOnce.data?.items[0]?.root_message_id === taskTargetId &&
+      JSON.stringify(summariesOnce.data) === JSON.stringify(summariesTwice.data),
+    summariesOnce.data,
+  );
+  const traceArgs = { room_id: historyRoomId, root_message_id: taskTargetId, limit: 10 };
+  const traceOnce = await rawToolCall<{
+    items: { message_id: string; role: string }[];
+    focus_message_id: string | null;
+  }>(browserToken, 'network_task_trace', traceArgs);
+  const traceTwice = await rawToolCall<typeof traceOnce.data>(
+    browserToken,
+    'network_task_trace',
+    traceArgs,
+  );
+  check(
+    'task_trace 返回起点且重复读取结果一致',
+    traceOnce.data?.items.length === 1 &&
+      traceOnce.data?.items[0]?.message_id === taskTargetId &&
+      traceOnce.data?.items[0]?.role === 'root' &&
+      JSON.stringify(traceOnce.data) === JSON.stringify(traceTwice.data),
+    traceOnce.data,
+  );
+  const searchArgs = { room_id: historyRoomId, query: 'TASKTRACE', limit: 10 };
+  const searchOnce = await rawToolCall<{
+    items: { task: { root_message_id: string }; hit_count: number }[];
+    truncated: boolean;
+  }>(browserToken, 'network_task_search', searchArgs);
+  const searchTwice = await rawToolCall<typeof searchOnce.data>(
+    browserToken,
+    'network_task_search',
+    searchArgs,
+  );
+  check(
+    'task_search 按起点聚合且重复读取结果一致',
+    searchOnce.data?.items.length === 1 &&
+      searchOnce.data?.items[0]?.task.root_message_id === taskTargetId &&
+      searchOnce.data?.items[0]?.hit_count === 1 &&
+      searchOnce.data?.truncated === false &&
+      JSON.stringify(searchOnce.data) === JSON.stringify(searchTwice.data),
+    searchOnce.data,
+  );
+  const syncAfterMark = await rawToolCall<{ items: { type: string }[] }>(
+    browserToken,
+    'network_sync',
+    { scope: `room:${historyRoomId}`, limit: 200 },
+  );
+  const markedEventCount = (syncAfterMark.data?.items ?? []).filter(
+    (item) => item.type === 'message_task_marked',
+  ).length;
+  check(
+    'sync 保留新 message_task_marked 事件',
+    markedEventCount === 1,
+    syncAfterMark.data?.items?.map((item) => item.type),
+  );
+  const syncAfterReads = await rawToolCall<{ items: { type: string }[] }>(
+    browserToken,
+    'network_sync',
+    { scope: `room:${historyRoomId}`, limit: 200 },
+  );
+  check(
+    '读工具不写 events/outbox',
+    JSON.stringify(syncAfterMark.data?.items) === JSON.stringify(syncAfterReads.data?.items),
+    {
+      before: syncAfterMark.data?.items?.length,
+      after: syncAfterReads.data?.items?.length,
+    },
+  );
+  const roomStateAfterTask = await rawToolCall<{
+    room: { head_seq: string; my_last_read_seq: string };
+  }>(browserToken, 'network_room_get', { room_id: historyRoomId });
+  check(
+    '标记与读工具不推进 head_seq 或已读位置',
+    roomStateBeforeTask.data?.room.head_seq === roomStateAfterTask.data?.room.head_seq &&
+      roomStateBeforeTask.data?.room.my_last_read_seq ===
+        roomStateAfterTask.data?.room.my_last_read_seq,
+    { before: roomStateBeforeTask.data?.room, after: roomStateAfterTask.data?.room },
+  );
+  const unmarkRequestId = `task_unmark_${crypto.randomUUID().replaceAll('-', '')}`;
+  const unmarkOnce = await rawToolCall<{ marked: boolean; task_root_id: null }>(
+    browserToken,
+    'network_task_unmark',
+    { request_id: unmarkRequestId, room_id: historyRoomId, message_id: taskTargetId },
+  );
+  const unmarkReplay = await rawToolCall<typeof unmarkOnce.data>(
+    browserToken,
+    'network_task_unmark',
+    { request_id: unmarkRequestId, room_id: historyRoomId, message_id: taskTargetId },
+  );
+  const summariesAfterUnmark = await rawToolCall<typeof summariesOnce.data>(
+    browserToken,
+    'network_task_summaries',
+    summariesArgs,
+  );
+  check(
+    'task_unmark 幂等并只撤销聚合入口',
+    unmarkOnce.data?.marked === false &&
+      unmarkOnce.data?.task_root_id === null &&
+      JSON.stringify(unmarkOnce.data) === JSON.stringify(unmarkReplay.data) &&
+      summariesAfterUnmark.data?.items.length === 0,
+    { unmark: unmarkOnce.data, summaries: summariesAfterUnmark.data },
+  );
+  const secondTargetSent = await rawToolCall<{ message: { message_id: string } }>(
+    browserToken,
+    'network_message_send',
+    {
+      request_id: `task_mark_target_two_${crypto.randomUUID().replaceAll('-', '')}`,
+      client_message_id: crypto.randomUUID(),
+      room_id: historyRoomId,
+      body: 'TASKTRACE 第二个标记目标',
+      invoke: [],
+    },
+  );
+  const markConflict = await rawToolCall(shareToken, 'network_task_mark', {
+    request_id: markRequestId,
+    room_id: historyRoomId,
+    message_id: secondTargetSent.data?.message.message_id,
+  });
+  checkEqual(
+    '同 request_id 改目标返回 IDEMPOTENCY_CONFLICT',
+    markConflict.code,
+    'IDEMPOTENCY_CONFLICT',
   );
 
   // 网页监控：human + room 私有配置、URL 校验、幂等与不改变房间状态。

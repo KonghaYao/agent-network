@@ -38,6 +38,13 @@ export const LIMITS = {
   /** Trace 页默认 / 最大条数；长集合分页读取，不一次全量返回。 */
   taskTracePageDefault: 50,
   taskTracePageMax: 100,
+  /** Task 搜索页默认 / 最大条数；按起点聚合后分页。 */
+  taskSearchPageDefault: 20,
+  taskSearchPageMax: 50,
+  /** 每个 Task 摘要返回的命中消息上限；完整数量用 hit_count。 */
+  taskSearchMatchesMax: 3,
+  /** 单次 Task 搜索扫描的命中消息上限；超过时标记 truncated，不静默全表扫描。 */
+  taskSearchScanMax: 2_000,
   /** 普通工具响应上限。 */
   toolResponseBytes: 256 * 1024,
   /** inbox 页默认 / 最大条数。 */

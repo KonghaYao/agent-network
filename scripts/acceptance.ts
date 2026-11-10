@@ -69,6 +69,7 @@ import { runGroupInviteLinkAcceptance } from './lib/group-invite-link-acceptance
 import { runGroupHistoryAcceptance } from './lib/group-history-acceptance';
 import { runGroupPolicyAcceptance } from './lib/group-policy-acceptance';
 import { runMessageReliabilityAcceptance } from './lib/m02-acceptance';
+import { runMessageTaskAcceptance } from './lib/message-task-acceptance';
 import {
   ensureTestCertificate,
   removeTestData,
@@ -1365,6 +1366,7 @@ async function main(): Promise<void> {
     await runGroupHistoryAcceptance({ hasDrive });
     await runGroupPolicyAcceptance({ hasDrive });
     await runMessageReliabilityAcceptance();
+    await runMessageTaskAcceptance();
 
     console.log(`端到端验收通过: ${checksPassed()} 项`);
   } finally {

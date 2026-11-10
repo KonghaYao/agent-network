@@ -3,6 +3,13 @@ import { z } from 'zod';
 
 import { isBusinessError } from '../contracts/errors';
 import { messageSearch, messageContext, messageSearchSchema, messageContextSchema, messageSearchOutputSchema, messageContextOutputSchema } from '../domain/message-search';
+import {
+  messageTaskMark,
+  messageTaskSummaries,
+  messageTaskTrace,
+  messageTaskUnmark,
+} from '../domain/message-tasks';
+import { messageTaskSearch } from '../domain/message-task-search';
 import { messageRecallSchema } from '../contracts/message-recall';
 import { messageRecall } from '../domain/message-recall';
 import {
@@ -69,6 +76,11 @@ import {
   messageReadSchema,
   messageSendSchema,
   messageSendStatusSchema,
+  messageTaskMarkSchema,
+  messageTaskSearchSchema,
+  messageTaskSummariesSchema,
+  messageTaskTraceSchema,
+  messageTaskUnmarkSchema,
   profileUpdateSchema,
   recoveryCreateSchema,
   recoveryRedeemSchema,
@@ -381,6 +393,11 @@ import {
   sendResultSchema,
   messageSendStatusPageSchema,
   syncPageSchema,
+  taskMarkResultSchema,
+  taskSearchResultSchema,
+  taskSummariesResultSchema,
+  taskTraceResultSchema,
+  taskUnmarkResultSchema,
 } from './outputs';
 import type { Principal } from '../domain/principal';
 import {
@@ -1910,7 +1927,7 @@ export function registerTools(
   register(
     server,
     'network_message_send',
-    '向房间发送消息。显式 invoke 是 Agent 执行目标：每个 actor_id 必须是当前 active Agent 成员，最多 8 个，invoke: [] 表示本条明确不派活；显式传入 invoke 后不再解析正文。mentions 是显式提及的人类成员（最多 8 个），只生成个人提醒，不创建 delivery。群聊省略 invoke 时，服务端只从正文顶层、去掉代码/引用/附件 URL 后的内容里按当前 active 成员名做唯一精确匹配：唯一 Agent 才创建 delivery，唯一人类只发提醒；同名成员返回 INVALID_ARGUMENT，必须改用选择器或显式 actor_id。Agent 在群聊省略 invoke 且没有非空 mentions 时，服务端会在正文末尾自动 @ 前一个仍然有效的不同成员作为显示与提醒；自动 @ 不会创建 Agent delivery、不增加 pending_count，只有显式 invoke 才唤醒 Agent，显式 invoke（含 invoke: []）或 mentions 时不追加。普通群回复、紧跟 Agent、上传附件都不会自动唤醒上一位 Agent 或维护员；自动 @ 只是显示与提醒，@所有人 仅按 mention_all 权限发送提醒，不批量创建 Agent 工作。direct 的新用户消息可由网页显式填入对端 Agent；带 claim 的回复与 final_body 不解析正文。claim 参数只把回复挂到当前领取，不改变投递状态；回复不等于完成。正文可发送 POST /mcp-upload 上传响应中的 publicUrl；上传默认是上传者私有草稿，裸 publicUrl 返回 404，只有 network_file_publish 显式公开后才可裸链读取。同源 /f/<fileId> 在发送后会 best-effort 绑定到当前房间并进入房间文件列表，绑定后改用 network_room_file_bind / network_room_file_get / network_room_file_list 返回的带票据 preview_url / download_url，不要依赖自动绑定代替显式绑定。本地路径、file:// 或未授权外链不能保证群友可访问。正文中的同源 /f/<fileId> 会 best-effort 自动绑定，但不要依赖它代替显式绑定；已复制或转发的内容无法收回。',
+    '向房间发送消息。显式 invoke 是 Agent 执行目标：每个 actor_id 必须是当前 active Agent 成员，最多 8 个，invoke: [] 表示本条明确不派活；显式传入 invoke 后不再解析正文。mentions 是显式提及的人类成员（最多 8 个），只生成个人提醒，不创建 delivery。群聊省略 invoke 时，服务端只从正文顶层、去掉代码/引用/附件 URL 后的内容里按当前 active 成员名做唯一精确匹配：唯一 Agent 才创建 delivery，唯一人类只发提醒；同名成员返回 INVALID_ARGUMENT，必须改用选择器或显式 actor_id。Agent 在群聊省略 invoke 且没有非空 mentions 时，服务端会在正文末尾自动 @ 前一个仍然有效的不同成员作为显示与提醒；自动 @ 不会创建 Agent delivery、不增加 pending_count，只有显式 invoke 才唤醒 Agent，显式 invoke（含 invoke: []）或 mentions 时不追加。普通群回复、紧跟 Agent、上传附件都不会自动唤醒上一位 Agent 或维护员；自动 @ 只是显示与提醒，@所有人 仅按 mention_all 权限发送提醒，不批量创建 Agent 工作。direct 的新用户消息可由网页显式填入对端 Agent；带 claim 的回复与 final_body 不解析正文。可选 task_root_id 显式把消息归入仍在标记中的消息式 Task 起点，省略时按父消息继承；输出消息带 task_root_id。claim 参数只把回复挂到当前领取，不改变投递状态；回复不等于完成。正文可发送 POST /mcp-upload 上传响应中的 publicUrl；上传默认是上传者私有草稿，裸 publicUrl 返回 404，只有 network_file_publish 显式公开后才可裸链读取。同源 /f/<fileId> 在发送后会 best-effort 绑定到当前房间并进入房间文件列表，绑定后改用 network_room_file_bind / network_room_file_get / network_room_file_list 返回的带票据 preview_url / download_url，不要依赖自动绑定代替显式绑定。本地路径、file:// 或未授权外链不能保证群友可访问。正文中的同源 /f/<fileId> 会 best-effort 自动绑定，但不要依赖它代替显式绑定；已复制或转发的内容无法收回。',
     messageSendSchema,
     sendResultSchema,
     async (input) => {
@@ -1966,6 +1983,71 @@ export function registerTools(
     requireActor(principal);
     return messageSearch(db, principal, input);
   }, { readOnlyHint: true });
+
+  register(
+    server,
+    'network_task_mark',
+    '把房间内任意当前可见、未撤回的消息标记为消息式 Task 起点；人类消息和 Agent 消息规则相同，可标记他人发送的消息。起点 ID 就是 message_id，不创建独立任务实体或表单。已是本起点时按幂等成功返回；消息已归属另一个仍标记中的 Task 时返回 CONFLICT。只写房间事件提示，不写 inbox、不增加 pending_count、不推进 head_seq、不唤醒 Agent。所有写操作带唯一 request_id。',
+    messageTaskMarkSchema,
+    taskMarkResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return messageTaskMark(db, principal, input);
+    },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  );
+
+  register(
+    server,
+    'network_task_unmark',
+    '取消消息式 Task 起点的聚合入口：只清空起点标记，原消息、处理消息与引用关系全部保留，重新标记后集合恢复。任何可发言成员都可以取消，不要求是原标记者。重复取消按幂等成功返回；只写房间事件提示，不写 inbox、不增加 pending_count、不推进 head_seq。',
+    messageTaskUnmarkSchema,
+    taskUnmarkResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return messageTaskUnmark(db, principal, input);
+    },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  );
+
+  register(
+    server,
+    'network_task_summaries',
+    '批量读取消息式 Task 摘要：一次最多 20 个起点，返回短预览、起点发送者、参与 Agent 头像组去重顺序、可见消息计数与 can_unmark。未标记、已撤回或当前不可见的根直接省略，不泄露正文或数量。只读：不写 events/outbox/operations，不推进已读、pending_count 或 head_seq。',
+    messageTaskSummariesSchema,
+    taskSummariesResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return messageTaskSummaries(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_trace',
+    '按原消息顺序分页展开消息式 Task 集合：返回起点、处理消息与一层引用来源，按 message_id 去重，引用项标为 reference；next_cursor / prev_cursor 双向翻页，has_more_before / has_more_after 表示两侧是否还有内容。传 focus_message_id 可从搜索命中处开始定位；正文用 network_message_read 读取。只读：不写 events/outbox/operations，不推进已读、pending_count 或 head_seq。',
+    messageTaskTraceSchema,
+    taskTraceResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return messageTaskTrace(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
+
+  register(
+    server,
+    'network_task_search',
+    '按起点聚合搜索消息式 Task：命中起点、处理消息或被引用的来源时只返回一个 Task 摘要，matches 最多 3 条命中并可直接作为 trace 的 focus_message_id；同一来源被多个 Task 引用时各自返回，不合并集合。普通 network_message_search 契约保持不变。只读：不写 events/outbox/operations，不推进已读、pending_count 或 head_seq；扫描达到上限时返回 truncated 并停止分页。',
+    messageTaskSearchSchema,
+    taskSearchResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return messageTaskSearch(db, principal, input);
+    },
+    { readOnlyHint: true },
+  );
   register(server, 'network_message_context', '读取一条消息及其前后有限条上下文预览；长正文使用 network_message_read，服务端会重新检查房间成员与历史边界。', messageContextSchema, messageContextOutputSchema, async (input) => {
     requireActor(principal);
     return messageContext(db, principal, input);

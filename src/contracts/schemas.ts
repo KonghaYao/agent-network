@@ -616,6 +616,43 @@ export const messageSendStatusSchema = z.object({
     .max(LIMITS.messageSendStatusMax),
 });
 
+/** 消息式 Task：把任意可见消息标记为聚合起点。 */
+export const messageTaskMarkSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  message_id: id(),
+});
+
+/** 消息式 Task：取消起点标记，只撤销聚合入口，不删除消息。 */
+export const messageTaskUnmarkSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  message_id: id(),
+});
+
+/** 批量摘要；未标记或当前不可见的根由服务端省略。 */
+export const messageTaskSummariesSchema = z.object({
+  room_id: id(),
+  root_message_ids: z.array(id()).min(1).max(LIMITS.taskSummaryRootsMax),
+});
+
+/** Trace 分页；cursor 优先于 focus_message_id，二者可同时传。 */
+export const messageTaskTraceSchema = z.object({
+  room_id: id(),
+  root_message_id: id(),
+  cursor,
+  focus_message_id: id().optional(),
+  limit: z.number().int().min(1).max(LIMITS.taskTracePageMax).optional(),
+});
+
+/** 按起点聚合的 Task 搜索；普通 network_message_search 契约不变。 */
+export const messageTaskSearchSchema = z.object({
+  room_id: id(),
+  query: z.string().trim().min(1).max(LIMITS.messageSearchQueryMax),
+  limit: z.number().int().min(1).max(LIMITS.taskSearchPageMax).optional(),
+  cursor: z.string().min(1).max(LIMITS.messageSearchCursorMax).optional(),
+});
+
 export const historyListSchema = z.object({
   room_id: id(),
   direction: z.enum(['before', 'after']).optional(),

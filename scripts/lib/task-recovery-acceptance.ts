@@ -1549,11 +1549,10 @@ async function runT04(): Promise<void> {
     const reminderItem = inboxSync.items.find(
       (item) => item.type === 'task_reminder' && item.ref_id === taskId,
     );
-    check('D08-T04 inbox 补读包含 task_reminder', reminderItem !== undefined, inboxSync.items);
-    checkEqual(
-      'D08-T04 补读 reminder 携带 assignment 版本',
-      reminderItem?.metadata.assignment_version,
-      assignment.assignment_version,
+    check(
+      'D08-T04 sync 不再补读旧 task_reminder',
+      reminderItem === undefined,
+      inboxSync.items,
     );
 
     const roomSync = await callTool<SyncPageView>(humanAgain.client, 'network_sync', {
@@ -1561,13 +1560,15 @@ async function runT04(): Promise<void> {
       limit: 100,
     });
     check(
-      'D08-T04 room 补读包含 task_created',
-      roomSync.items.some((item) => item.type === 'task_created' && item.ref_id === taskId),
+      'D08-T04 sync 不再补读旧 task_created',
+      !roomSync.items.some((item) => item.type === 'task_created' && item.ref_id === taskId),
       roomSync.items,
     );
     check(
-      'D08-T04 room 补读包含 task_offer_accepted',
-      roomSync.items.some((item) => item.type === 'task_offer_accepted' && item.ref_id === taskId),
+      'D08-T04 sync 不再补读旧 task_offer_accepted',
+      !roomSync.items.some(
+        (item) => item.type === 'task_offer_accepted' && item.ref_id === taskId,
+      ),
       roomSync.items,
     );
 

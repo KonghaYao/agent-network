@@ -76,6 +76,8 @@ export interface MessageView extends MessagePreviewView {
   room_id: string;
   reply_to: string | null;
   root_id: string | null;
+  /** 消息式 Task 归属；普通消息为 null，起点为自身 message_id。 */
+  task_root_id: string | null;
   hop: number;
   delivery_states: Record<string, number>;
   /** 该消息的提及集合；human 只产生个人提醒，agent 才可能有 delivery。 */
@@ -177,6 +179,7 @@ export async function messageView(
     created_at: String(row.created_at),
     reply_to: row.reply_to,
     root_id: row.root_id,
+    task_root_id: row.task_root_id,
     hop: row.hop,
     delivery_states: summary.states,
     mentions: mentions.get(row.message_id) ?? [],
@@ -1315,6 +1318,7 @@ export async function historyList(
       created_at: String(row.created_at),
       reply_to: row.reply_to,
       root_id: row.root_id,
+      task_root_id: row.task_root_id,
       hop: row.hop,
       delivery_states: summary?.states ?? {},
       mentions: mentions.get(row.message_id) ?? [],

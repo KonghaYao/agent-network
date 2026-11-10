@@ -39,6 +39,8 @@ export const messageSchema = messagePreviewSchema.extend({
   room_id: z.string(),
   reply_to: z.string().nullable(),
   root_id: z.string().nullable(),
+  /** 消息式 Task 归属；null 表示普通消息，起点自身等于 message_id。 */
+  task_root_id: z.string().nullable(),
   hop: z.number(),
   delivery_states: z.record(z.string(), z.number()),
   /** 该消息的提及集合；human 只产生个人提醒，agent 才可能有 delivery。 */
@@ -537,6 +539,99 @@ export const historyPageSchema = z.object({
   timeline_has_more: z.boolean().optional(),
   timeline_snapshot: z.string().optional(),
   timeline_resume_cursor: z.string().optional(),
+});
+
+/** 消息式 Task 的参与者：只统计集合内 Agent 作者，按首次参与顺序去重。 */
+export const taskSummaryParticipantSchema = z.object({
+  actor_id: z.string(),
+  name: z.string(),
+  kind: z.literal('agent'),
+  first_seq: z.string(),
+});
+
+/** 摘要只含预览、参与者与计数；正文仍走 network_message_read。 */
+export const taskSummaryViewSchema = z.object({
+  root_message_id: z.string(),
+  room_id: z.string(),
+  preview: z.string(),
+  root_sender_id: z.string(),
+  root_sender_name: z.string().nullable(),
+  root_sender_kind: z.enum(['human', 'agent']).nullable(),
+  root_created_at: z.string(),
+  root_created_seq: z.string(),
+  participants: z.array(taskSummaryParticipantSchema),
+  participant_count: z.number(),
+  message_count: z.number(),
+  can_unmark: z.boolean(),
+});
+
+export const taskSummariesResultSchema = z.object({
+  items: z.array(taskSummaryViewSchema),
+});
+
+export const taskMarkResultSchema = z.object({
+  room_id: z.string(),
+  message_id: z.string(),
+  task_root_id: z.string(),
+  marked: z.literal(true),
+});
+
+export const taskUnmarkResultSchema = z.object({
+  room_id: z.string(),
+  message_id: z.string(),
+  task_root_id: z.null(),
+  marked: z.literal(false),
+});
+
+export const taskTraceItemSchema = z.object({
+  message_id: z.string(),
+  sender_id: z.string(),
+  sender_name: z.string().nullable(),
+  sender_kind: z.enum(['human', 'agent']).nullable(),
+  created_seq: z.string(),
+  created_at: z.string(),
+  preview: z.string(),
+  body_bytes: z.number(),
+  recalled: z.boolean(),
+  role: z.enum(['root', 'member', 'reference']),
+  reply_to: z.string().nullable(),
+  referenced_by: z.string().nullable(),
+  has_unavailable_reference: z.boolean(),
+});
+
+export const taskTraceResultSchema = z.object({
+  root_message_id: z.string(),
+  items: z.array(taskTraceItemSchema),
+  next_cursor: z.string().nullable(),
+  prev_cursor: z.string().nullable(),
+  has_more_before: z.boolean(),
+  has_more_after: z.boolean(),
+  message_count: z.number(),
+  focus_message_id: z.string().nullable(),
+  authorization: authorizationSnapshotSchema,
+});
+
+export const taskSearchMatchSchema = z.object({
+  message_id: z.string(),
+  snippet: z.string(),
+  created_seq: z.string(),
+});
+
+/** 一个起点只出现一次；matches 只保留最近命中，完整数量用 hit_count。 */
+export const taskSearchItemSchema = z.object({
+  task: taskSummaryViewSchema,
+  hit_count: z.number(),
+  matches: z.array(taskSearchMatchSchema),
+});
+
+export const taskSearchResultSchema = z.object({
+  items: z.array(taskSearchItemSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+  snapshot: z.string(),
+  authorization: authorizationSnapshotSchema,
+  /** 扫描达到上限时结果不完整；此时不再返回 next_cursor。 */
+  truncated: z.boolean(),
 });
 
 export const inboxPageSchema = z.object({

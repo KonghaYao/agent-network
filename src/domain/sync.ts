@@ -120,11 +120,15 @@ export async function sync(
   const start = cursor?.seq ?? info.min;
   // 上下线时间线是独立历史，不属于普通 sync 契约；在 LIMIT 前过滤，
   // 避免 presence 事件占用分页额度或让客户端误以为房间有新消息。
+  // 旧任务模型的 task_* / room_task_* 事件不再进入 sync；新消息式 Task 的
+  // message_task_* 前缀不同，不会被误伤。
   const rows = await db
     .prepare(
       `SELECT * FROM events
         WHERE scope_kind = ? AND scope_id = ? AND event_seq > ? AND (? IS NULL OR event_seq <= ?)
           AND event_type <> 'agent_presence_changed'
+          AND event_type NOT LIKE 'task_%'
+          AND event_type NOT LIKE 'room_task_%'
         ORDER BY event_seq ASC LIMIT ?`,
     )
     .bind(info.kind, info.id, start, info.max, info.max, limit + 1)

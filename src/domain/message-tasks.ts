@@ -99,6 +99,8 @@ export interface TaskTraceInput {
   room_id: string;
   root_message_id: string;
   cursor?: string;
+  /** 从搜索命中进入时定位的消息；无 cursor 时以它为首页起点。 */
+  focus_message_id?: string;
   limit?: number;
 }
 
@@ -124,8 +126,12 @@ export interface TaskTraceResult {
   root_message_id: string;
   items: TaskTraceItem[];
   next_cursor: string | null;
-  has_more: boolean;
+  prev_cursor: string | null;
+  has_more_before: boolean;
+  has_more_after: boolean;
   message_count: number;
+  /** 请求的焦点消息确实属于当前集合时返回原 ID；否则为 null。 */
+  focus_message_id: string | null;
   authorization: HistorySnapshot;
 }
 
@@ -182,8 +188,8 @@ function placeholders(count: number): string {
   return Array.from({ length: count }, () => '?').join(',');
 }
 
-/** 标记 / 摘要 / Trace 共用的活跃成员与历史边界。 */
-async function readableRoom(
+/** 标记 / 摘要 / Trace / 搜索共用的活跃成员与历史边界。 */
+export async function readableRoom(
   db: D1Database,
   principal: Principal,
   roomId: string,
@@ -604,11 +610,7 @@ export async function messageTaskTrace(
     throw new BusinessError('CURSOR_EXPIRED', 'Trace 快照早于 Task 起点，请重新读取');
   }
   const limit = clampPage(input.limit, LIMITS.taskTracePageDefault, LIMITS.taskTracePageMax);
-  const after = cursor?.seq ?? boundary.fromSeq - 1;
-
-  const rows = await db
-    .prepare(
-      `WITH member AS (
+  const memberSql = `member AS (
          SELECT m.message_id, m.sender_id, m.created_seq, m.created_at, m.preview,
                 m.body_bytes, m.reply_to,
                 CASE WHEN m.message_id = ? THEN 'root' ELSE 'member' END AS role
@@ -616,7 +618,8 @@ export async function messageTaskTrace(
           WHERE m.room_id = ?
             AND m.created_seq >= ? AND m.created_seq <= ?
             AND (m.task_root_id = ? OR (m.task_root_id IS NULL AND m.root_id = ?))
-       ), ref AS (
+       )`;
+  const refSql = `ref AS (
          SELECT s.message_id, s.sender_id, s.created_seq, s.created_at, s.preview,
                 s.body_bytes, s.reply_to, 'reference' AS role,
                 (SELECT m2.message_id FROM member m2
@@ -628,70 +631,90 @@ export async function messageTaskTrace(
             AND s.created_seq >= ? AND s.created_seq <= ?
             AND s.message_id NOT IN (SELECT message_id FROM member)
           GROUP BY s.message_id
-       )
+       )`;
+  const collectionSql = `collection AS (
+         SELECT message_id, sender_id, created_seq, created_at, preview, body_bytes, reply_to,
+                role, NULL AS referenced_by
+           FROM member
+         UNION ALL
+         SELECT message_id, sender_id, created_seq, created_at, preview, body_bytes, reply_to,
+                role, referenced_by
+           FROM ref
+       )`;
+  // 绑定顺序固定为 member -> ref；后续查询只在末尾追加自己的参数。
+  const cteBinds = [
+    rootRow.message_id,
+    room.room_id,
+    boundary.fromSeq,
+    snapshot,
+    rootRow.message_id,
+    rootRow.message_id,
+    room.room_id,
+    boundary.fromSeq,
+    snapshot,
+  ] as const;
+
+  let focusSeq: number | null = null;
+  if (input.focus_message_id) {
+    const focus = await db
+      .prepare(
+        `WITH ${memberSql}, ${refSql}, ${collectionSql}
+         SELECT created_seq FROM collection WHERE message_id = ? LIMIT 1`,
+      )
+      .bind(...cteBinds, input.focus_message_id)
+      .first<{ created_seq: number }>();
+    if (!focus) {
+      throw new BusinessError('NOT_FOUND', '焦点消息不在该 Task 中或当前不可见');
+    }
+    focusSeq = focus.created_seq;
+  }
+
+  // cursor 优先；没有 cursor 时从焦点开始（焦点位于首页第一条），否则从头开始。
+  const direction = cursor?.dir ?? 'after';
+  const anchor = cursor ? cursor.seq : focusSeq !== null ? focusSeq - 1 : boundary.fromSeq - 1;
+
+  const rows = await db
+    .prepare(
+      `WITH ${memberSql}, ${refSql}, ${collectionSql}
        SELECT u.message_id, u.sender_id, u.created_seq, u.created_at, u.preview, u.body_bytes,
               u.reply_to, u.role, u.referenced_by, a.name AS sender_name, a.kind AS sender_kind
-         FROM (
-           SELECT message_id, sender_id, created_seq, created_at, preview, body_bytes, reply_to,
-                  role, NULL AS referenced_by
-             FROM member
-           UNION ALL
-           SELECT message_id, sender_id, created_seq, created_at, preview, body_bytes, reply_to,
-                  role, referenced_by
-             FROM ref
-         ) u
+         FROM collection u
          LEFT JOIN actors a ON a.actor_id = u.sender_id
-        WHERE u.created_seq > ?
-        ORDER BY u.created_seq ASC
+        WHERE u.created_seq ${direction === 'after' ? '>' : '<'} ?
+        ORDER BY u.created_seq ${direction === 'after' ? 'ASC' : 'DESC'}
         LIMIT ?`,
     )
-    .bind(
-      rootRow.message_id,
-      room.room_id,
-      boundary.fromSeq,
-      snapshot,
-      rootRow.message_id,
-      rootRow.message_id,
-      room.room_id,
-      boundary.fromSeq,
-      snapshot,
-      after,
-      limit + 1,
-    )
+    .bind(...cteBinds, anchor, limit + 1)
     .all<TraceQueryRow>();
 
-  const page = rows.results.slice(0, limit);
-  const hasMore = rows.results.length > limit;
+  // before 页按 DESC 取最近一页，再恢复升序返回；多取的一条用于判断更早页。
+  const ordered = direction === 'after' ? rows.results : [...rows.results].reverse();
+  const page = ordered.slice(0, limit);
+  const first = page[0];
+  const last = page.at(-1);
+
+  let hasMoreBefore = false;
+  let hasMoreAfter = false;
+  if (first && last) {
+    const flags = await db
+      .prepare(
+        `WITH ${memberSql}, ${refSql}, ${collectionSql}
+         SELECT
+           EXISTS (SELECT 1 FROM collection WHERE created_seq < ?) AS before_exists,
+           EXISTS (SELECT 1 FROM collection WHERE created_seq > ?) AS after_exists`,
+      )
+      .bind(...cteBinds, first.created_seq, last.created_seq)
+      .first<{ before_exists: number; after_exists: number }>();
+    hasMoreBefore = flags?.before_exists === 1;
+    hasMoreAfter = flags?.after_exists === 1;
+  }
 
   const total = await db
     .prepare(
-      `WITH member AS (
-         SELECT m.message_id, m.reply_to, m.body_bytes
-           FROM messages m
-          WHERE m.room_id = ?
-            AND m.created_seq >= ? AND m.created_seq <= ?
-            AND (m.task_root_id = ? OR (m.task_root_id IS NULL AND m.root_id = ?))
-       ), ref AS (
-         SELECT s.message_id
-           FROM member
-           JOIN messages s ON s.message_id = member.reply_to AND s.room_id = ?
-          WHERE member.body_bytes > 0
-            AND s.created_seq >= ? AND s.created_seq <= ?
-            AND s.message_id NOT IN (SELECT message_id FROM member)
-          GROUP BY s.message_id
-       )
-       SELECT (SELECT COUNT(*) FROM member) + (SELECT COUNT(*) FROM ref) AS n`,
+      `WITH ${memberSql}, ${refSql}, ${collectionSql}
+       SELECT COUNT(*) AS n FROM collection`,
     )
-    .bind(
-      room.room_id,
-      boundary.fromSeq,
-      snapshot,
-      rootRow.message_id,
-      rootRow.message_id,
-      room.room_id,
-      boundary.fromSeq,
-      snapshot,
-    )
+    .bind(...cteBinds)
     .first<{ n: number }>();
 
   const replyIds = [
@@ -756,9 +779,8 @@ export async function messageTaskTrace(
     };
   });
 
-  const last = page.at(-1);
   const nextCursor =
-    hasMore && last
+    hasMoreAfter && last
       ? encodeCursor({
           v: 1,
           scope,
@@ -767,13 +789,26 @@ export async function messageTaskTrace(
           snapshot,
         })
       : null;
+  const prevCursor =
+    hasMoreBefore && first
+      ? encodeCursor({
+          v: 1,
+          scope,
+          dir: 'before',
+          seq: first.created_seq,
+          snapshot,
+        })
+      : null;
 
   return {
     root_message_id: rootRow.message_id,
     items,
     next_cursor: nextCursor,
-    has_more: hasMore,
+    prev_cursor: prevCursor,
+    has_more_before: hasMoreBefore,
+    has_more_after: hasMoreAfter,
     message_count: total?.n ?? 0,
+    focus_message_id: input.focus_message_id ?? null,
     authorization: historySnapshot(boundary),
   };
 }

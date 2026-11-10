@@ -282,8 +282,8 @@ export async function runDeviceSyncAcceptance(): Promise<void> {
       inboxCatchUp.items,
     );
     check(
-      'T03 inbox 补读到任务 offer 投递',
-      inboxTypes.has('task_offered') || inboxTypes.has('delivery_created'),
+      'T03 inbox 不再补读旧任务事件',
+      ![...inboxTypes].some((type) => type.startsWith('task_')),
       [...inboxTypes],
     );
     check(

@@ -278,15 +278,15 @@ export async function runRoomTaskAcceptance(): Promise<void> {
       checkEqual('D01-T01 U2 通知不是 delivery', u2Notice.kind, 'task');
       checkEqual('D01-T01 U2 通知携带卡片消息', u2Notice.message_id, t01.card_message_id);
     }
-    // stream 帧有字节预算，可能丢弃次级提示；持久 inbox 事件必须仍在。
+    // 阶段 2 起 sync 过滤旧任务事件；旧任务通知仍可从任务工具读取，但不再补读事件。
     const u2Sync = await callTool<{
       items: { type: string; ref_id: string | null; metadata: Record<string, unknown> }[];
     }>(u2Conn.client, 'network_sync', { scope: 'inbox', limit: 100 });
-    const offerEvent = u2Sync.items.find(
-      (item) => item.type === 'task_offered' && item.ref_id === t01.task_id,
+    check(
+      'D01-T01 sync 不再返回旧 task_offered',
+      !u2Sync.items.some((item) => item.type === 'task_offered'),
+      u2Sync.items,
     );
-    check('D01-T01 U2 持久 inbox 接手事件存在', Boolean(offerEvent), u2Sync.items);
-    checkEqual('D01-T01 接手事件携带 assignment', offerEvent?.metadata.assignment_id, t01.assignment?.assignment_id);
     checkEqual(
       'D01-T01 human 接手通知不增加 pending_count',
       (await callTool<IdentityView>(u2Conn.client, 'network_me', {})).pending_count,
