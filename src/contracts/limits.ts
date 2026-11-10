@@ -31,6 +31,13 @@ export const LIMITS = {
   messageSearchSnippetChars: 240,
   /** 搜索游标字符串长度上限。 */
   messageSearchCursorMax: 2048,
+  /** 消息式 Task 单次摘要批量上限；未标记或不可见的根直接省略。 */
+  taskSummaryRootsMax: 20,
+  /** 摘要参与者头像组上限；`participant_count` 仍返回完整去重计数。 */
+  taskParticipantsMax: 200,
+  /** Trace 页默认 / 最大条数；长集合分页读取，不一次全量返回。 */
+  taskTracePageDefault: 50,
+  taskTracePageMax: 100,
   /** 普通工具响应上限。 */
   toolResponseBytes: 256 * 1024,
   /** inbox 页默认 / 最大条数。 */

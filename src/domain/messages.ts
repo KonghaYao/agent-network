@@ -135,6 +135,8 @@ export interface MessageCore {
   bodyBytes: number;
   replyTo: string | null;
   rootId: string | null;
+  /** 消息式 Task 归属；省略时按普通消息写入 NULL。 */
+  taskRootId?: string | null;
   /** 用于 root 预算统计的根消息 ID。 */
   rootKey: string;
   hop: number;
@@ -319,7 +321,11 @@ export function messageCoreStatements(
         scopeId: core.roomId,
         eventType: 'message_created',
         refId: core.messageId,
-        metadata: { sender_id: core.senderId, deliveries: core.deliveries.length },
+        metadata: {
+          sender_id: core.senderId,
+          deliveries: core.deliveries.length,
+          task_root_id: core.taskRootId ?? null,
+        },
       },
       core.at,
     ),
@@ -327,8 +333,8 @@ export function messageCoreStatements(
       .prepare(
         `INSERT INTO messages
            (message_id, room_id, sender_id, client_message_id, created_seq, body, body_bytes, preview,
-            reply_to, root_id, hop, root_invocations_used, created_at)
-         VALUES (?, ?, ?, ?, (SELECT event_seq FROM events WHERE event_key = ?), ?, ?, ?, ?, ?, ?,
+            reply_to, root_id, task_root_id, hop, root_invocations_used, created_at)
+         VALUES (?, ?, ?, ?, (SELECT event_seq FROM events WHERE event_key = ?), ?, ?, ?, ?, ?, ?, ?,
            COALESCE((SELECT COUNT(*)
                        FROM deliveries d JOIN messages m ON m.message_id = d.message_id
                       WHERE COALESCE(m.root_id, m.message_id) = ?), 0) + ?,
@@ -345,6 +351,7 @@ export function messageCoreStatements(
         core.preview,
         core.replyTo,
         core.rootId,
+        core.taskRootId ?? null,
         core.hop,
         core.rootKey,
         core.invoke.length,
@@ -438,9 +445,42 @@ export function messageCoreStatements(
 interface RootLink {
   replyTo: string | null;
   rootId: string | null;
+  taskRootId: string | null;
   rootKey: string;
   hop: number;
   parent: MessageRow | null;
+}
+
+/** 读取当前可见、仍在标记中的任务起点；不可见与未标记按同一结果处理。 */
+async function visibleMarkedTaskRoot(
+  db: D1Database,
+  roomId: string,
+  rootId: string,
+  boundary: HistoryBoundary,
+): Promise<MessageRow | null> {
+  const root = await getMessage(db, rootId);
+  if (
+    !root ||
+    root.room_id !== roomId ||
+    root.task_root_id !== root.message_id ||
+    !visibleMessage(root, boundary)
+  ) {
+    return null;
+  }
+  return root;
+}
+
+/** 父消息归属的继承：显式归属优先，其次沿用父消息的 Task，最后由线程根回退。 */
+async function inheritedTaskRoot(
+  db: D1Database,
+  roomId: string,
+  parent: MessageRow,
+  boundary: HistoryBoundary,
+): Promise<string | null> {
+  if (parent.task_root_id) return parent.task_root_id;
+  if (!parent.root_id) return null;
+  const root = await visibleMarkedTaskRoot(db, roomId, parent.root_id, boundary);
+  return root?.message_id ?? null;
 }
 
 async function resolveRootLink(
@@ -490,12 +530,26 @@ async function resolveRootLink(
   }
   if (parent && parent.body === '') throw new BusinessError('INVALID_ARGUMENT', '不能回复已撤回的消息');
 
+  let taskRootId: string | null = null;
+  if (input.task_root_id !== undefined) {
+    // 显式归属必须指向同房间、当前可见、未撤回且仍在标记中的起点；
+    // 不区分“未标记”和“不存在”，避免按 ID 探测历史。
+    const root = await visibleMarkedTaskRoot(db, roomId, input.task_root_id, boundary);
+    if (!root || root.body_bytes === 0) {
+      throw new BusinessError('NOT_FOUND', '任务起点不存在、未标记或当前不可见');
+    }
+    taskRootId = root.message_id;
+  } else if (parent) {
+    taskRootId = await inheritedTaskRoot(db, roomId, parent, boundary);
+  }
+
   if (!parent) {
-    return { replyTo, rootId: null, rootKey: '', hop: 0, parent: null };
+    return { replyTo, rootId: null, taskRootId, rootKey: '', hop: 0, parent: null };
   }
   return {
     replyTo,
     rootId: parent.root_id ?? parent.message_id,
+    taskRootId,
     rootKey: parent.root_id ?? parent.message_id,
     hop: parent.hop + 1,
     parent,
@@ -906,6 +960,7 @@ export async function messageSend(
     bodyBytes,
     replyTo: link.replyTo,
     rootId: link.rootId,
+    taskRootId: link.taskRootId,
     rootKey: link.rootKey || messageId,
     hop: link.hop,
     invoke,
@@ -974,6 +1029,12 @@ export async function messageSend(
       }
       if (existing.room_id !== room.room_id || !bodyMatches) {
         throw new BusinessError('IDEMPOTENCY_CONFLICT', 'client_message_id 已用于不同的消息内容', {
+          message_id: existing.message_id,
+        });
+      }
+      // 重放不得静默改变 Task 归属；继承结果允许与显式值相同。
+      if (input.task_root_id !== undefined && existing.task_root_id !== input.task_root_id) {
+        throw new BusinessError('IDEMPOTENCY_CONFLICT', 'client_message_id 已用于不同的 Task 归属', {
           message_id: existing.message_id,
         });
       }
@@ -1122,6 +1183,14 @@ export async function finalMessagePlan(
 ): Promise<MessageCore> {
   const parent = await getMessage(db, delivery.message_id);
   if (!parent) throw new BusinessError('NOT_FOUND', '任务消息不存在');
+  // 完成回执也是该线程的回复：沿用父消息归属，或在顶层起点已标记时继承。
+  let taskRootId = parent.task_root_id;
+  if (!taskRootId && parent.root_id) {
+    const root = await getMessage(db, parent.root_id);
+    if (root && root.room_id === parent.room_id && root.task_root_id === root.message_id) {
+      taskRootId = root.message_id;
+    }
+  }
   const bodyBytes = utf8Bytes(body);
   if (bodyBytes > LIMITS.messageBodyBytes) {
     throw new BusinessError('PAYLOAD_TOO_LARGE', '消息正文超过 256 KiB，请拆分为关联消息');
@@ -1137,6 +1206,7 @@ export async function finalMessagePlan(
     bodyBytes,
     replyTo: parent.message_id,
     rootId: parent.root_id ?? parent.message_id,
+    taskRootId,
     rootKey: parent.root_id ?? parent.message_id,
     hop: parent.hop + 1,
     invoke: [],

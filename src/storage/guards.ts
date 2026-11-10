@@ -58,6 +58,8 @@ export const GUARD_TABLES = {
   roomDissolved: 'guard_room_dissolved',
   contactLinkInvalid: 'guard_contact_link_invalid',
   contactLinkLimit: 'guard_contact_link_limit',
+  taskMarkUnavailable: 'guard_task_mark_unavailable',
+  taskMarkConflict: 'guard_task_mark_conflict',
 } as const;
 
 export type GuardName = keyof typeof GUARD_TABLES;

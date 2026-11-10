@@ -607,13 +607,14 @@ export async function runTaskCreateReplayUnitChecks(): Promise<void> {
   const legacy = legacyDb();
   const applied = migrate(legacy, MIGRATIONS);
   checkEqual(
-    '[D01-REPLAY] 旧库按序应用 0030–0040',
+    '[D01-REPLAY] 旧库按序应用 0030–0041',
     applied.join(','),
     '0030_task_initial_assignee.sql,0031_task_initial_assignee_known.sql,' +
       '0032_task_submission_sources.sql,0033_task_review_acceptance.sql,' +
       '0034_task_handoff_packs.sql,0035_task_recovery.sql,0036_device_pairing_sync.sql,' +
       '0037_room_lifecycle.sql,0038_ownerless_room_guard.sql,' +
-      '0039_delivery_message_state_index.sql,0040_contact_invite_links.sql',
+      '0039_delivery_message_state_index.sql,0040_contact_invite_links.sql,' +
+      '0041_message_task_trace.sql',
   );
   const legacyInitial = (taskId: string) =>
     legacy

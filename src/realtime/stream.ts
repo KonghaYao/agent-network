@@ -4,6 +4,8 @@ import {
   DELIVERY_REMINDER_SOURCE,
   MENTION_REMINDER_EVENT,
   MENTION_REMINDER_SOURCE,
+  MESSAGE_TASK_MARKED_EVENT,
+  MESSAGE_TASK_UNMARKED_EVENT,
   TASK_REMINDER_EVENT,
   TASK_REMINDER_SOURCE,
 } from '../contracts/events';
@@ -236,6 +238,26 @@ export function roomStreamItems(
       for (const member of activeRecipients(members, eventSeq)) {
         const item = withLocation(baseItem(row, 'room.message', 'message', 'informational'), row, metadata);
         item.change = 'recalled';
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
+    case MESSAGE_TASK_MARKED_EVENT:
+    case MESSAGE_TASK_UNMARKED_EVENT: {
+      // 消息式 Task 只通知 active human 刷新摘要行；不写 inbox、不产生 delivery。
+      const change = row.event_type === MESSAGE_TASK_MARKED_EVENT ? 'marked' : 'unmarked';
+      const changedBy = stringField(metadata, 'changed_by');
+      const taskRootId = stringField(metadata, 'task_root_id') ?? row.ref_id ?? undefined;
+      for (const member of activeRecipients(members, eventSeq)) {
+        if (member.kind !== 'human') continue;
+        const item = withLocation(
+          baseItem(row, 'task.updated', 'task', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = change;
+        if (taskRootId) item.ref_id = taskRootId;
+        if (changedBy) item.changed_by = changedBy;
         result.push({ actorId: member.actor_id, item });
       }
       return result;

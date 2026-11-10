@@ -63,6 +63,8 @@ const GUARD_CODES: Record<string, BusinessErrorCode> = {
   roomDissolved: 'CONFLICT',
   contactLinkInvalid: 'CONTACT_LINK_INVALID',
   contactLinkLimit: 'QUOTA_EXCEEDED',
+  taskMarkUnavailable: 'NOT_FOUND',
+  taskMarkConflict: 'CONFLICT',
 };
 
 const GUARD_MESSAGES: Record<string, string> = {
@@ -119,6 +121,8 @@ const GUARD_MESSAGES: Record<string, string> = {
   roomDissolved: '群已解散，当前为只读归档，不能继续写入',
   contactLinkInvalid: '好友链接无效、已过期、已被使用或已被撤销',
   contactLinkLimit: '待使用的好友链接数量达到上限',
+  taskMarkUnavailable: '消息不存在、当前不可见或已撤回',
+  taskMarkConflict: '消息已属于另一个 Task；请另选起点或先取消原标记',
 };
 
 /** 限额类 guard 的稳定 data，供 MCP Events 映射 -32025。 */

@@ -596,6 +596,8 @@ export const messageSendSchema = z.object({
   /** 显式提及的人类成员；数量上限在领域层校验，超过时返回 INVALID_ARGUMENT。 */
   mentions: z.array(id()).optional(),
   reply_to: id().optional(),
+  /** 显式归属的消息式 Task 起点；省略时按父消息继承。 */
+  task_root_id: id().optional(),
   claim: z
     .object({ delivery_id: id(), attempt: z.number().int().nonnegative(), claim_id: id() })
     .optional(),

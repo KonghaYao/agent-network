@@ -372,6 +372,11 @@ export interface MessageRow {
   root_id: string | null;
   hop: number;
   root_invocations_used: number;
+  /** 消息式 Task 归属；起点自指 message_id，普通消息为 NULL。 */
+  task_root_id: string | null;
+  /** 起点标记审计；处理消息与普通消息为 NULL。 */
+  task_marked_by: string | null;
+  task_marked_at: number | null;
   created_at: number;
 }
 
