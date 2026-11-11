@@ -321,7 +321,7 @@ function buildProgram(): Command {
       .command('up')
       .description('login 后立即启动宿主监听（login + monitor 快捷入口）')
       .option('--harness <name>', 'claude|codex|peri|dsh|other')
-      .option('--check', '只校验 harness 与凭据，不登录、不常驻')
+      .option('--check', '只校验 harness 与参数，不登录、不常驻')
       .option('--dry-run', '--check 的别名')
       .option('--state-dir <dir>', 'claude/peri 状态目录；默认使用临时目录')
       .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')

@@ -1087,6 +1087,14 @@ async function main(): Promise<void> {
       upBadHarness.stderr,
     );
 
+    const upNoHarness = await runCli(mock.baseUrl, ['up']);
+    check('up 缺少 harness 退出非 0', upNoHarness.code !== 0);
+    check(
+      'up 缺少 harness 给出可读错误',
+      upNoHarness.stderr.includes('缺少 --harness'),
+      upNoHarness.stderr,
+    );
+
     const upNoToken = await runCli(mock.baseUrl, ['up', '--harness', 'peri'], {
       AGENTNET_TOKEN: undefined,
     });
