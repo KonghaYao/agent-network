@@ -10,7 +10,7 @@ import { nowMs, sha256Hex, stableStringify } from '../storage/db';
 import { getActor, getActorBySession, visibleActorSql } from '../storage/queries';
 import type { ActorRow, ContactRow } from '../storage/rows';
 import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
-import { endRelationStatements, getActiveRelation } from './contact-relations';
+import { endRelationStatements, getActiveRelation, relationEndedByBlockSql } from './contact-relations';
 import { actorId, type Principal } from './principal';
 
 export interface ContactView {
@@ -79,6 +79,23 @@ export async function contactsList(
               END
           AND r.status = 'active'
         WHERE ${where} AND ${visibleActorSql('a')}
+          -- 删除好友后关系为 ended 且没有拉黑来源：双方都不再把过期收藏
+          -- 当作联系人展示。拉黑保留 relation=none 行，便于解除拉黑与审计。
+          AND NOT EXISTS (
+            SELECT 1
+              FROM contact_relations ended
+             WHERE ended.pair_key = CASE
+                     WHEN c.owner_actor_id < c.target_actor_id
+                       THEN c.owner_actor_id || '|' || c.target_actor_id
+                     ELSE c.target_actor_id || '|' || c.owner_actor_id
+                   END
+               AND ended.status = 'ended'
+               AND NOT ${relationEndedByBlockSql(
+                 'c.owner_actor_id',
+                 'c.target_actor_id',
+                 'ended.ended_at',
+               )}
+          )
         ORDER BY c.created_at DESC, c.target_actor_id ASC
         LIMIT ?`,
     )

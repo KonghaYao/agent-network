@@ -49,7 +49,7 @@ import type {
 } from '../storage/rows';
 import { operationsStatement, resolveReplay, runIdempotent } from '../storage/transactions/runner';
 import { getActiveManagement, manageableAgentIds } from './agent-access';
-import { directRelationStatements, getActiveRelation } from './contact-relations';
+import { directRelationStatements, getActiveRelation, relationEndedByBlockSql } from './contact-relations';
 import {
   contactBlockGuardStatement,
   isBlockedBetween,
@@ -467,9 +467,9 @@ export async function roomsList(
     : '';
   const binds: unknown[] = cursor ? [id, cursor.seq, cursor.seq, cursor.key ?? ''] : [id];
 
-  // 删除好友会同时结束双向关系并删除操作者的个人收藏；对操作者隐藏该
-  // direct 会话。保留另一方与历史入口，`room_get`/`history_list` 不受影响。
-  // 拉黑也结束关系但保留收藏，仍可打开会话解除拉黑；无关系记录的旧房间
+  // 删除好友会同时结束双向关系；无论哪一方发起，双方默认列表都不再展示
+  // 该 direct 会话（历史仍可用 `room_get`/`history_list` 显式读取）。拉黑
+  // 也结束关系但保留收藏，双方仍可打开会话解除拉黑；无关系记录的旧房间
   // 不满足 EXISTS，继续按原行为展示。
   const rows = await db
     .prepare(
@@ -500,18 +500,21 @@ export async function roomsList(
                 FROM contact_relations cr
                WHERE cr.pair_key = r.direct_pair_key
                  AND cr.status = 'ended'
-            )
-            AND NOT EXISTS (
-              SELECT 1
-                FROM contacts c
-               WHERE c.owner_actor_id = m.actor_id
-                 AND c.target_actor_id = (
-                   SELECT peer.actor_id
-                     FROM room_members peer
-                    WHERE peer.room_id = r.room_id
-                      AND peer.status = 'active'
-                      AND peer.actor_id <> m.actor_id
-                    LIMIT 1
+                 AND NOT ${relationEndedByBlockSql(
+                   'm.actor_id',
+                   '(CASE WHEN cr.actor_a = m.actor_id THEN cr.actor_b ELSE cr.actor_a END)',
+                   'cr.ended_at',
+                 )}
+                 AND (
+                   COALESCE(cr.ended_by, '') <> m.actor_id
+                   OR NOT EXISTS (
+                     SELECT 1
+                       FROM contacts c
+                      WHERE c.owner_actor_id = m.actor_id
+                        AND c.target_actor_id = CASE
+                              WHEN cr.actor_a = m.actor_id THEN cr.actor_b ELSE cr.actor_a
+                            END
+                   )
                  )
             )
           )

@@ -1191,7 +1191,7 @@ export function registerTools(
   register(
     server,
     'network_rooms_list',
-    '分页读取自己参与的活跃房间摘要、head 与已读位置。已解散群默认不返回；仍可用 network_room_get 读取只读归档。每条 direct 记录返回 peer 对端摘要（actor_id、name、kind、online 批量快照），群聊 peer 为 null；旧客户端可忽略该字段。direct 记录还返回 peer_can_manage，只表示当前调用者能否管理对端 Agent，不暴露 manager_id；群聊不返回该字段。direct 会话仍返回 peer_archived 供网页默认列表隐藏已归档 Agent。删除好友后，操作者的该 direct 会话默认不返回；另一方、房间、消息与详情读取不受影响，历史仍可用 network_room_get 与 network_history_list 显式读取。',
+    '分页读取自己参与的活跃房间摘要、head 与已读位置。已解散群默认不返回；仍可用 network_room_get 读取只读归档。每条 direct 记录返回 peer 对端摘要（actor_id、name、kind、online 批量快照），群聊 peer 为 null；旧客户端可忽略该字段。direct 记录还返回 peer_can_manage，只表示当前调用者能否管理对端 Agent，不暴露 manager_id；群聊不返回该字段。direct 会话仍返回 peer_archived 供网页默认列表隐藏已归档 Agent。删除好友后，双方的该 direct 会话都默认不返回；房间、消息与详情读取不受影响，历史仍可用 network_room_get 与 network_history_list 显式读取。拉黑保留会话入口，便于解除拉黑。',
     roomsListSchema,
     roomPageSchema,
     async (input) => {

@@ -124,6 +124,34 @@ export async function getRelationByPair(
 }
 
 /**
+ * 关系结束是否来自拉黑（含解除拉黑后仍保留的历史记录）。
+ *
+ * `owner`、`peer`、`endedAt` 必须是代码内固定的列表达式，不能来自用户输入。
+ * 拉黑与删除好友都会把关系写成 `ended`：拉黑后联系人仍以 `relation=none`
+ * 可见并保留会话入口，删除好友则应从双方默认列表隐藏。解除拉黑时间不早于
+ * 关系结束时间即可认定是拉黑来源；之后重新建联再删除时，新的 `ended_at`
+ * 会晚于旧拉黑记录，仍按删除处理。
+ */
+export function relationEndedByBlockSql(
+  owner: string,
+  peer: string,
+  endedAt: string,
+): string {
+  return `EXISTS (
+    SELECT 1
+      FROM contact_blocks block_history
+     WHERE (block_history.released_at IS NULL OR block_history.released_at >= ${endedAt})
+       AND (
+         (block_history.blocker_actor_id = ${owner}
+          AND block_history.blocked_actor_id = ${peer})
+         OR
+         (block_history.blocker_actor_id = ${peer}
+          AND block_history.blocked_actor_id = ${owner})
+       )
+  )`;
+}
+
+/**
  * 双方任意一人删除好友都会结束共享关系；个人收藏行由调用方处理。
  *
  * `notifyTarget` 默认为 true（删除好友需要让对方刷新关系）；

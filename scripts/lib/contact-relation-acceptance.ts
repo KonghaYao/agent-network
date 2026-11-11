@@ -496,7 +496,7 @@ async function runLegacyBookmarks(): Promise<void> {
     });
     checkEqual('T04 删除好友返回 removed', removed.removed, true);
     checkEqual('T04 删除后发起方不再有收藏', await relationOf(h1Conn, h2.actor_id), null);
-    checkEqual('T04 对方仍保留个人收藏但关系为 none', await relationOf(h2Conn, h1.actor_id), 'none');
+    checkEqual('T04 对方联系人列表也不再返回已删除好友', await relationOf(h2Conn, h1.actor_id), null);
 
     const roomsAfterRemove = await callTool<{ items: { room_id: string }[] }>(
       h1Conn.client,
@@ -507,6 +507,16 @@ async function runLegacyBookmarks(): Promise<void> {
       'T04 删除后发起方 rooms_list 默认排除旧单聊',
       !roomsAfterRemove.items.some((item) => item.room_id === roomId),
       roomsAfterRemove.items,
+    );
+    const peerRoomsAfterRemove = await callTool<{ items: { room_id: string }[] }>(
+      h2Conn.client,
+      'network_rooms_list',
+      { limit: 100 },
+    );
+    check(
+      'T04 删除后对方 rooms_list 也默认排除旧单聊',
+      !peerRoomsAfterRemove.items.some((item) => item.room_id === roomId),
+      peerRoomsAfterRemove.items,
     );
 
     const historyOne = await callTool<{ items: { preview: string }[] }>(
@@ -555,6 +565,21 @@ async function runLegacyBookmarks(): Promise<void> {
       'T04 重新成为好友后旧单聊回到默认列表',
       roomsAfterResume.items.some((item) => item.room_id === roomId),
       roomsAfterResume.items,
+    );
+    const peerRoomsAfterResume = await callTool<{ items: { room_id: string }[] }>(
+      h2Conn.client,
+      'network_rooms_list',
+      { limit: 100 },
+    );
+    check(
+      'T04 重新成为好友后对方列表也恢复旧单聊',
+      peerRoomsAfterResume.items.some((item) => item.room_id === roomId),
+      peerRoomsAfterResume.items,
+    );
+    checkEqual(
+      'T04 重新成为好友后对方联系人恢复 active',
+      await relationOf(h2Conn, h1.actor_id),
+      'active',
     );
   } finally {
     await h1Conn.close();
@@ -663,11 +688,72 @@ async function runIdempotencyEdges(): Promise<void> {
   }
 }
 
+/** T04b：删除好友隐藏 direct 会话，但不影响与好友关系无关的管理列表。 */
+async function runUnfriendKeepsManagement(): Promise<void> {
+  console.log('  · A03-T04b 删除好友与 Agent 管理列表');
+  const managerConn = await connectClient(newToken());
+  let agentConn: McpConnection | null = null;
+  try {
+    const manager = await registerIdentity(managerConn, {
+      kind: 'human',
+      name: 'A03 管理者',
+    });
+    const created = await callTool<{
+      actor_id: string;
+      agent_session_id: string;
+      token: string;
+    }>(managerConn.client, 'network_agent_create', {
+      request_id: newRequestId('agent_create'),
+      name: 'A03 被管理 Agent',
+    });
+    agentConn = await connectClient(created.token);
+    const room = await directRoom(managerConn, created.actor_id);
+
+    await callTool(agentConn.client, 'network_contact_remove', {
+      request_id: newRequestId('agent_unfriend'),
+      actor_id: manager.actor_id,
+    });
+    checkEqual(
+      'T04b 管理者联系人列表不再返回已删除 Agent',
+      await relationOf(managerConn, created.actor_id),
+      null,
+    );
+    const roomsAfterRemove = await callTool<{ items: { room_id: string }[] }>(
+      managerConn.client,
+      'network_rooms_list',
+      { limit: 100 },
+    );
+    check(
+      'T04b 管理者 rooms_list 默认排除旧单聊',
+      !roomsAfterRemove.items.some((item) => item.room_id === room.room.room_id),
+      roomsAfterRemove.items,
+    );
+    const managed = await callTool<{ items: { actor_id: string }[] }>(
+      managerConn.client,
+      'network_agents_managed_list',
+      { limit: 100 },
+    );
+    check(
+      'T04b 删除好友不影响管理列表',
+      managed.items.some((item) => item.actor_id === created.actor_id),
+      managed.items,
+    );
+    const explicit = await callTool<RoomDetail>(managerConn.client, 'network_room_get', {
+      room_id: room.room.room_id,
+    });
+    checkEqual('T04b 显式历史入口仍可读取旧单聊', explicit.room.room_id, room.room.room_id);
+  } finally {
+    if (agentConn) await agentConn.close();
+    await managerConn.close();
+  }
+}
+
 export async function runContactRelationAcceptance(): Promise<void> {
   console.log('· 好友申请与双向联系人关系');
   await runBilateralConsent();
   await runConcurrencyAndExpiry();
   await runAgentPolicies();
   await runLegacyBookmarks();
+  await runUnfriendKeepsManagement();
   await runIdempotencyEdges();
 }

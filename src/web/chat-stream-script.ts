@@ -360,8 +360,10 @@ function handleStreamEventFrame(payload) {
         refreshList = true;
         break;
       case 'contact':
-        // 好友申请与关系变化只提示刷新，不是待办，也不产生房间刷新。
+        // 好友申请与关系变化只提示刷新，不是待办。关系结束会改变 direct
+        // 会话的默认可见性，需要重新读取列表；当前房间不刷新，历史仍可读。
         refreshContactBadge();
+        refreshList = true;
         if (contactModal && !contactModal.hidden) loadContactRequests();
         break;
       case 'device':
