@@ -16,7 +16,7 @@ import { runCodexMonitor } from '../monitor/codex';
 import { socketOverride } from '../monitor/codex-transport';
 import { runDshMonitor } from '../monitor/dsh';
 import { installDshMonitor } from '../monitor/dsh-install';
-import { runOtherHarness } from '../monitor/other';
+import { numeric, runOtherHarness } from '../monitor/other';
 import { runPeriMonitor } from '../monitor/peri';
 
 const TS_HARNESSES = new Set(['claude', 'other', 'peri', 'dsh', 'codex']);
@@ -44,6 +44,7 @@ function checkTsHarness(
   options: MonitorOptions,
   scriptArgs: readonly string[],
 ): number {
+  line('CHECK scope=entry connected=false');
   if (harness === 'claude') {
     line(`harness=claude engine=ts args=${scriptArgs.join(' ') || '-'}`);
     return 0;
@@ -73,6 +74,14 @@ function checkTsHarness(
     options.log ?? process.env.LOG ?? join(homedir(), '.agentnet', 'watch.log');
   const maxWait = options.maxWait ?? process.env.MAX_WAIT ?? '360';
   const poll = options.poll ?? process.env.POLL ?? '3';
+  if (numeric(maxWait, 360) === null) {
+    line('ERROR type=configuration message=invalid_max_wait');
+    return 1;
+  }
+  if (numeric(poll, 3) === null) {
+    line('ERROR type=configuration message=invalid_poll');
+    return 1;
+  }
   line(`harness=other engine=ts log=${logPath} max_wait=${maxWait} poll=${poll}`);
   return 0;
 }

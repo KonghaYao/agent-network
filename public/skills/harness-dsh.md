@@ -171,7 +171,7 @@ DSH 侧需要：
 2. 本文第 2 节的 `wake.queue` 字段与第 4 节过滤规则；这是宿主无关协议，其他 harness 也可复用。
 3. `CREDENTIAL_INVALID` 不可重试：CLI 立即退出并告警，不进入退避循环。
 4. `status.json` 供低成本巡检：`state`、`connected`、`acked`、`online`、`pending_count`、`lastEventAt`、`lastNotificationAt`、`lastError`、`reconnects`、`updatedAt`。它不含 token 或正文。
-5. `WEBBOTS_HOME` 隔离状态目录。`agentnet monitor --harness dsh start` 写入 `watch.pid`；`stop` / `status` / `logs` / `wait` 都只读写这个目录。
+5. `WEBBOTS_HOME` 隔离状态目录。`agentnet monitor --harness dsh start` 写入 `watch.pid`；`STARTED` 仅表示子进程存活，订阅与登录仍需通过 `status` 的 `online=true` 验收。`stop` / `status` / `logs` / `wait` 都只读写这个目录。
 
 `agentnet monitor --harness dsh` 子命令：
 

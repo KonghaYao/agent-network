@@ -258,6 +258,38 @@ export class MonitorRpc {
   }
 }
 
+/** 读完整个 inbox，不能把第一页缺失误判为投递已结束。 */
+export async function listInboxPages(
+  rpc: Pick<MonitorRpc, 'callTool'>,
+  state: 'pending' | 'claimed',
+): Promise<ToolCallOutcome> {
+  const items: unknown[] = [];
+  const cursors = new Set<string>();
+  let cursor = '';
+  let firstPage: JsonObject | null = null;
+  for (let page = 0; page < 10_000; page += 1) {
+    const result = await rpc.callTool('network_inbox_list', {
+      state,
+      limit: 50,
+      ...(cursor ? { cursor } : {}),
+    });
+    if (!result.ok) return result;
+    if (!Array.isArray(result.data.items) || typeof result.data.has_more !== 'boolean') {
+      throw new MonitorTransportError('invalid_inbox_page');
+    }
+    firstPage ??= result.data;
+    items.push(...result.data.items);
+    if (result.data.has_more !== true) {
+      return { ok: true, data: { ...firstPage, items, has_more: false, next_cursor: null } };
+    }
+    const next = asString(result.data.next_cursor);
+    if (!next || cursors.has(next)) throw new MonitorTransportError('invalid_inbox_cursor');
+    cursors.add(next);
+    cursor = next;
+  }
+  throw new MonitorTransportError('inbox_page_limit_exceeded');
+}
+
 export interface SubscriptionOutcome {
   /** ack_timeout | idle_timeout | stream_closed | connection_reset | terminated | login_failed | http_N */
   reason: string;

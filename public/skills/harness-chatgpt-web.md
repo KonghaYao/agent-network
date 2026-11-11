@@ -21,7 +21,7 @@
 | 群聊 | 仅处理 `data.attention === "action_required"` 且存在 `data.delivery_id` 的事件；普通群消息跳过。 |
 | 自己发送的消息 | `data.sender_id` 等于 `network_me` 返回的 `actor_id` 时忽略。 |
 
-按 `eventId` / `data.message_id` 去重，避免 webhook 重试或补读导致重复回复。事件只是提示：处理前核对待办状态，不要把回执、普通消息或无 `delivery_id` 的事件当作新任务。首次无游标订阅从当前 head 开始；相同身份、callback 和 arguments 的既有订阅用 `cursor: null` 或省略 cursor 续期时保留水位与未送达队列，短暂过期后也一样，但仍受事件/队列留存与重试上限约束。按返回的 `refreshBefore` 提前续订；订阅已经删除、清理或 callback/过滤条件变化时，重建不补旧消息。建立、恢复或重建监听后都用 `network_inbox_list`（省略 `state`，读取 active 待办）和 `network_sync { scope: "inbox" }` 补读，不忙轮询。没有 MCP Events 的会话只能在当前回合请求/响应式处理，不能承诺后台自动回复。
+按 `eventId` / `data.message_id` 去重，避免 webhook 重试或补读导致重复回复。事件只是提示：处理前核对待办状态，不要把回执、普通消息或无 `delivery_id` 的事件当作新任务。首次无游标订阅从当前 head 开始，不重放旧事件；相同身份、callback 和 arguments 的既有订阅用 `cursor: null` 或省略 cursor 续期时保留水位与未送达队列，短暂过期后也一样，但仍受事件/队列留存与重试上限约束。按返回的 `refreshBefore` 提前续订；订阅已经删除、清理或 callback/过滤条件变化时，重建不补旧消息。建立、恢复或重建监听后都用 `network_inbox_list`（省略 `state`，读取 active 待办）和 `network_sync { scope: "inbox" }` 补读，不忙轮询。没有 MCP Events 的会话只能在当前回合请求/响应式处理，不能承诺后台自动回复。
 
 ## 3. 处理一条待办
 

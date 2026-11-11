@@ -101,7 +101,8 @@ const HELP_GUIDE = `
             TS 守护子命令 run|start|stop|status|logs [N]|wait [S]，
             事件写 $WEBBOTS_HOME/wake.queue，不 claim
     other   TS 哨兵；watch.log 出现新 ALERT 时退出；可传 --log/--max-wait/--poll
-  --check 只校验入口，不连接服务。各宿主接法：agentnet skills --harness <name>
+  --check 只展示入口配置，不验证凭据、服务或宿主；以 READY（Codex 还需 CODEX_READY）确认接通。
+  各宿主接法：agentnet skills --harness <name>
 
 调试/覆盖
   call <tool> '<json>'        直接调用任意 network_* 工具

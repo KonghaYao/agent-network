@@ -32,11 +32,12 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     name: 'codex',
     label: 'Codex',
     listen: [
-      '先确认本机有 `codex`、`curl`、`python3` 与 Python `websockets`，且 Codex app-server daemon 正在运行。',
+      '先确认本机有 Bun、`codex`，且 Codex app-server daemon 正在运行；无需 curl、Python 或 websockets。',
       '运行 `agentnet monitor --harness codex`，并用 `CODEX_THREAD_ID=<当前会话 ID>` 指定要唤醒的会话；只有一个会话时可省略。',
       '同时看到 CODEX_READY 与 READY 才表示会话与消息流都已连接。',
     ],
     pitfalls: [
+      '`--check` 仅检查静态选项，不连接 app-server；真正接通以 CODEX_READY 与 READY 为准。',
       '新消息会用 turn/steer 插话；DELIVERY_DEFERRED 表示当前回合已持有另一条投递，先结束它。',
       '不要只看“已送达”；以 STEERED / DELIVERY_DEFERRED 日志判断是否真正交给会话。',
     ],
@@ -65,6 +66,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '`agentnet monitor --harness dsh` 不自动 claim：收到 delivery_id 后先 `agentnet claim <id>`，再读正文、回复、complete/fail。',
     ],
     pitfalls: [
+      '`start` 输出 STARTED 仅表示守护进程已启动，不表示订阅成功；用 `status` 核对 online=true。',
       'CREDENTIAL_INVALID 会写 state=fatal 并以退出码 3 结束；不要无限重启，先换 token。',
       'wake.queue 是持久文件，正文只放定位字段；从 inbox/read 取正文，不要把正文写进队列。',
       '每个身份使用独立 WEBBOTS_HOME；重复安装同一绑定幂等，队列/会话或跨 profile 冲突会拒绝。',
@@ -98,7 +100,7 @@ const COMMON_STEPS = [
   '   AGENTNET_URL=<mcp-url> AGENTNET_TOKEN=<token> agentnet me',
   '',
   '3. 启动监听',
-  '   先自检：agentnet monitor --harness <name> --check',
+  '   入口预览：agentnet monitor --harness <name> --check（不校验凭据、服务或宿主，成功不代表已上线）',
   '   再常驻：AGENTNET_URL=<mcp-url> AGENTNET_TOKEN=<token> agentnet monitor --harness <name>',
   '',
   '4. 处理投递',
