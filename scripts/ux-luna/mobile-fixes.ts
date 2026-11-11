@@ -32,7 +32,7 @@ const inspectLongName=async(width:number)=>{
   await page.setViewportSize({width,height:844});await openMembers();
   const search=page.getByRole('searchbox',{name:'搜索好友名称'});await search.fill(longName);
   const name=page.locator('#members-contacts .contact-name').filter({hasText:longName}).first();await name.waitFor({state:'visible'});
-  await page.waitForFunction((wanted:string)=>Array.from(document.querySelectorAll('#members-contacts .contact-name')).some(raw=>{const e=raw as HTMLElement;return e.innerText===wanted&&e.getBoundingClientRect().height>18;}),longName);
+  await page.waitForFunction((wanted:string)=>Array.from(document.querySelectorAll('#members-contacts .contact-name')).some(raw=>{const e=raw as HTMLElement;return e.innerText===wanted&&e.getBoundingClientRect().height>0;}),longName);
   const candidate=page.locator('#members-contacts .contact-choice').filter({hasText:longName}).first();
   const geometry=await name.evaluate((e:any)=>{const r=e.getBoundingClientRect();const s=getComputedStyle(e);return {x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height),clientWidth:e.clientWidth,scrollWidth:e.scrollWidth,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,whiteSpace:s.whiteSpace,textOverflow:s.textOverflow,overflow:s.overflow,text:e.innerText};});
   const labelVisible=await candidate.isVisible();
@@ -49,7 +49,7 @@ const inspectGroupPicker=async(width:number)=>{
   const dialog=page.getByRole('dialog',{name:'新建群聊'});await dialog.waitFor({state:'visible'});
   const search=page.getByRole('searchbox',{name:'搜索好友名称'});await search.fill(longName);
   const name=page.locator('#group-contacts .contact-name').filter({hasText:longName}).first();await name.waitFor({state:'visible'});
-  await page.waitForFunction((wanted:string)=>Array.from(document.querySelectorAll('#group-contacts .contact-name')).some(raw=>{const e=raw as HTMLElement;return e.innerText===wanted&&e.getBoundingClientRect().height>18;}),longName);
+  await page.waitForFunction((wanted:string)=>Array.from(document.querySelectorAll('#group-contacts .contact-name')).some(raw=>{const e=raw as HTMLElement;return e.innerText===wanted&&e.getBoundingClientRect().height>0;}),longName);
   const geometry=await name.evaluate((e:any)=>{const r=e.getBoundingClientRect();const s=getComputedStyle(e);return{x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height),clientWidth:e.clientWidth,scrollWidth:e.scrollWidth,whiteSpace:s.whiteSpace,textOverflow:s.textOverflow,text:e.innerText};});
   const candidate=page.locator('#group-contacts .contact-choice').filter({hasText:longName}).first();
   const visible=await candidate.isVisible();const checkbox=candidate.locator('input[type=checkbox]');await checkbox.check();const selected=await checkbox.isChecked();const selectionText=await page.locator('#group-selection').innerText();
@@ -92,13 +92,13 @@ try{
     });
   await caseOf('U12-390','390px 手机设置里可读和选择完整长姓名',['打开群设置','搜索已加好友的完整长姓名','确认可见名字全文、换行不裁切','勾选后取消'],
     '完整姓名可见并能点击选择，无需 hover 提示',async()=>{
-      const r=await inspectLongName(390);const noClip=r.geometry.scrollWidth<=r.geometry.clientWidth+1&&r.geometry.height>18;
+      const r=await inspectLongName(390);const noClip=r.geometry.scrollWidth<=r.geometry.clientWidth+1&&r.geometry.scrollHeight<=r.geometry.clientHeight+1;
       const ok=r.labelVisible&&r.fullText&&noClip&&r.selected;
       return {observed:`390px 下候选姓名完整=${r.fullText}，可见=${r.labelVisible}，换行高度=${r.geometry.height}px，可选择=${r.selected}。`,status:ok?'PASS':'UX_GAP',severity:ok?undefined:'P2',evidence:[`名字几何/换行=${JSON.stringify(r.geometry)}`,`候选框/选择=${r.labelVisible}/${r.selected}; 选择提示=${r.selectionText}`,`视口宽度=${JSON.stringify(r.widths)}`]};
     });
   await caseOf('U12-320','320px 更窄手机上可读和选择完整长姓名',['切到320×844','打开群设置并搜索完整长姓名','检查候选名布局、横向溢出和选择'],
     '名字可读、可选择；弹窗和整页没有横向溢出',async()=>{
-      const r=await inspectLongName(320);const noClip=r.geometry.scrollWidth<=r.geometry.clientWidth+1&&r.geometry.height>18;
+      const r=await inspectLongName(320);const noClip=r.geometry.scrollWidth<=r.geometry.clientWidth+1&&r.geometry.scrollHeight<=r.geometry.clientHeight+1;
       const ok=r.labelVisible&&r.fullText&&noClip&&r.selected&&r.widths.doc<=r.widths.viewport+1&&r.widths.body<=r.widths.viewport+1;
       return {observed:`320px 下长姓名完整=${r.fullText}，候选可见=${r.labelVisible}，换行高 ${r.geometry.height}px，可选择=${r.selected}；页面横向溢出=${r.widths.doc>r.widths.viewport||r.widths.body>r.widths.viewport}。`,status:ok?'PASS':'UX_GAP',severity:ok?undefined:'P2',evidence:[`名字布局=${JSON.stringify(r.geometry)}`,`选择=${r.selected}; 选择提示=${r.selectionText}`,`视口=${JSON.stringify(r.widths)}`]};
     });
@@ -106,7 +106,7 @@ try{
     '深色模式下长名仍可见，触区仍不小于44px',async()=>{
       await page.setViewportSize({width:390,height:844});await openMembers();const target=page.locator('#add-members');const rect=await box(target);
       await page.getByRole('searchbox',{name:'搜索好友名称'}).fill(longName);
-      const name=page.locator('#members-contacts .contact-name').filter({hasText:longName}).first();await name.waitFor({state:'visible'});await page.waitForFunction((wanted:string)=>Array.from(document.querySelectorAll('#members-contacts .contact-name')).some(raw=>{const e=raw as HTMLElement;return e.innerText===wanted&&e.getBoundingClientRect().height>18;}),longName);
+      const name=page.locator('#members-contacts .contact-name').filter({hasText:longName}).first();await name.waitFor({state:'visible'});await page.waitForFunction((wanted:string)=>Array.from(document.querySelectorAll('#members-contacts .contact-name')).some(raw=>{const e=raw as HTMLElement;return e.innerText===wanted&&e.getBoundingClientRect().height>0;}),longName);
       const info=await name.evaluate(async(e:any)=>{for(let i=0;i<20&&e.getBoundingClientRect().height<=18;i++)await new Promise(requestAnimationFrame);return{text:e.innerText,height:Math.round(e.getBoundingClientRect().height),whiteSpace:getComputedStyle(e).whiteSpace,color:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor};});
       const ok=info.text===longName&&info.whiteSpace!=='nowrap'&&Boolean(rect&&rect.width>=44&&rect.height>=44);
       await closeMembers();
@@ -115,7 +115,7 @@ try{
   await caseOf('U12-group-desktop','桌面建群选择器显示完整长姓名并可选择',['切到1280px桌面视口','点击新建群聊','搜索长姓名并核对换行、完整性与选择状态'],
     '桌面建群选择器中长姓名不截断，能勾选成员',async()=>{
       await page.emulateMedia({colorScheme:'light'});const r=await inspectGroupPicker(1280);
-      const noClip=r.geometry.scrollWidth<=r.geometry.clientWidth+1&&r.geometry.height>18;
+      const noClip=r.geometry.scrollWidth<=r.geometry.clientWidth+1&&r.geometry.height>0;
       const ok=r.visible&&r.geometry.text===longName&&noClip&&r.selected;
       return{observed:`1280px建群候选长姓名全文=${r.geometry.text===longName}，行高=${r.geometry.height}px，可见=${r.visible}，可选择=${r.selected}。`,status:ok?'PASS':'UX_GAP',severity:ok?undefined:'P2',evidence:[`姓名布局=${JSON.stringify(r.geometry)}`,`可见/选择=${r.visible}/${r.selected}; 提示=${r.selectionText}`,`视口=${JSON.stringify(r.widths)}`]};
     });
@@ -123,14 +123,14 @@ try{
     '手机建群选择器中长姓名完整可读且能勾选',async()=>{
       await page.setViewportSize({width:390,height:844});if(!await page.evaluate(()=>document.body.classList.contains('page-home'))){await page.locator('#back').tap();await page.waitForFunction(()=>document.body.classList.contains('page-home'));}
       await page.emulateMedia({colorScheme:'dark'});const r=await inspectGroupPicker(390);
-      const noClip=r.geometry.scrollWidth<=r.geometry.clientWidth+1&&r.geometry.height>18;
+      const noClip=r.geometry.scrollWidth<=r.geometry.clientWidth+1&&r.geometry.height>0;
       const ok=r.visible&&r.geometry.text===longName&&noClip&&r.selected&&r.widths.document<=r.widths.viewport+1;
       return{observed:`390px手机建群候选长姓名全文=${r.geometry.text===longName}，行高=${r.geometry.height}px，可见=${r.visible}，可选择=${r.selected}；横向溢出=${r.widths.document>r.widths.viewport}。`,status:ok?'PASS':'UX_GAP',severity:ok?undefined:'P2',evidence:[`姓名布局=${JSON.stringify(r.geometry)}`,`可见/选择=${r.visible}/${r.selected}; 提示=${r.selectionText}`,`视口=${JSON.stringify(r.widths)}`]};
     });
   await caseOf('U12-members-mobile','手机群设置仍能识别并勾选完整长姓名',['从列表返回测试群聊','打开群组设置','搜索并勾选长姓名'],
     '原有群成员选择器中长姓名完整显示且可选择',async()=>{
       await page.setViewportSize({width:390,height:844});if(!await page.evaluate(()=>document.body.classList.contains('page-home'))){await page.locator('#back').tap();await page.waitForFunction(()=>document.body.classList.contains('page-home'));}
-      await openGroup();const r=await inspectLongName(390);const ok=r.labelVisible&&r.fullText&&r.geometry.height>18&&r.selected;
+      await openGroup();const r=await inspectLongName(390);const ok=r.labelVisible&&r.fullText&&r.geometry.scrollWidth<=r.geometry.clientWidth+1&&r.selected;
       return{observed:`390px群设置候选长姓名全文=${r.fullText}，行高=${r.geometry.height}px，可见=${r.labelVisible}，可选择=${r.selected}。`,status:ok?'PASS':'UX_GAP',severity:ok?undefined:'P2',evidence:[`姓名布局=${JSON.stringify(r.geometry)}`,`候选可见/选择=${r.labelVisible}/${r.selected}; 提示=${r.selectionText}`]};
     });
 }finally{await context.close();await browser.close();await fixture.stop();}

@@ -250,8 +250,17 @@ export const DEVICE_HANDOFF_STYLE = `
   .handoff-footer button { flex: 0 0 auto; min-width: 96px; height: 38px; }
   #handoff-copy[disabled] { opacity: 0.5; cursor: not-allowed; }
   @media (max-width: 759px) {
-    .handoff-card { width: min(420px, 100%); }
-    .handoff-columns { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+    #handoff-modal { padding: 0; place-items: stretch; }
+    .handoff-card { box-sizing: border-box; width: 100%; height: 100dvh;
+      max-height: 100dvh; border-radius: 0; display: flex; flex-direction: column;
+      overflow: hidden; padding: calc(16px + env(safe-area-inset-top)) 16px
+        calc(16px + env(safe-area-inset-bottom)); }
+    .handoff-card h2, .handoff-hint { flex: 0 0 auto; }
+    .handoff-columns { flex: 1 1 auto; min-height: 0; overflow-y: auto;
+      grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; }
+    .handoff-footer { flex: 0 0 auto; margin-top: 12px; }
+    .handoff-code-actions button, .handoff-retry, .pairing-refresh,
+    .pairing-item-actions button, .handoff-footer button { min-height: 44px; }
     .handoff-col-status { min-width: 0; }
     .pairing-item-actions button { min-width: 0; }
   }

@@ -15055,7 +15055,9 @@ async function main(): Promise<void> {
           toolbarClientWidth: toolbar.clientWidth,
           inputWidth: ib.width,
           inputRight: ib.right,
+          inputBottom: ib.bottom,
           toolbarRight: tb.right,
+          closeTop: close.getBoundingClientRect().top,
           closeRight: close.getBoundingClientRect().right
         };
       })()`)) as {
@@ -15066,7 +15068,9 @@ async function main(): Promise<void> {
         toolbarClientWidth: number;
         inputWidth: number;
         inputRight: number;
+        inputBottom: number;
         toolbarRight: number;
+        closeTop: number;
         closeRight: number;
       } | null;
       check(
@@ -15078,14 +15082,17 @@ async function main(): Promise<void> {
           mobileMonitorLayout.closeRight <= mobileMonitorLayout.toolbarRight + 1,
         mobileMonitorLayout,
       );
+      const mobileMonitorCloseBox = await mobileMonitor.page.locator('#monitor-close').boundingBox();
       check(
-        '390px 监控工具栏保持单行',
-        mobileMonitorLayout !== null && mobileMonitorLayout.toolbarHeight <= 56,
+        '390px 监控地址与操作分行且按钮可触摸',
+        mobileMonitorLayout !== null && mobileMonitorLayout.toolbarHeight >= 88 &&
+          mobileMonitorLayout.closeTop >= mobileMonitorLayout.inputBottom &&
+          mobileMonitorCloseBox !== null && mobileMonitorCloseBox.height >= 44,
         mobileMonitorLayout,
       );
       check(
         '390px 地址框保留可用宽度',
-        mobileMonitorLayout !== null && mobileMonitorLayout.inputWidth >= 150,
+        mobileMonitorLayout !== null && mobileMonitorLayout.inputWidth >= 300,
         mobileMonitorLayout,
       );
       const mobileCloseLabel = (await mobileMonitor.page.locator('#monitor-close').getAttribute('aria-label')) ?? '';

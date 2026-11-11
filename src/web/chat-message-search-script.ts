@@ -154,6 +154,6 @@ function openMessageSearch() { const dialog = ensureMessageSearchDialog(); dialo
 const messageSearchButton = document.createElement('button');
 messageSearchButton.type = 'button'; messageSearchButton.className = 'link-btn'; messageSearchButton.textContent = '搜索'; messageSearchButton.setAttribute('aria-label', '搜索聊天记录'); messageSearchButton.title = '搜索聊天记录'; messageSearchButton.style.cssText = 'min-width:44px;min-height:44px';
 messageSearchButton.addEventListener('click', openMessageSearch);
-const chatIdentityHeader = document.querySelector('.chat-head .chat-id');
-if (chatIdentityHeader && chatIdentityHeader.parentNode) chatIdentityHeader.parentNode.insertBefore(messageSearchButton, chatIdentityHeader.nextSibling);
+const chatTitleRow = document.querySelector('.chat-head .title-row');
+if (chatTitleRow) chatTitleRow.append(messageSearchButton);
 `;

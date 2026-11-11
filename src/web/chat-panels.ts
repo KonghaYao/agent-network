@@ -143,24 +143,26 @@ export function chatPane(): string {
     <div class="chat-id">
       <div class="title-row">
         <h2 id="title">单聊</h2>
-        <button class="link-btn" id="rename" type="button" hidden>改名</button>
-        <button class="link-btn" id="add-members" type="button" hidden>群设置</button>
-        <button class="link-btn" id="room-announcement-edit" type="button" hidden>公告</button>
       </div>
       <p class="muted" id="subtitle">正在加载…</p>
     </div>
-    <button class="copy-group-info" id="copy-group-info" type="button" hidden
-      aria-label="复制群信息" title="复制群信息">
-      ${kubaiIcon('copy-group-info', { size: 17 })}
-    </button>
-    <button class="monitor-toggle" id="monitor-toggle" type="button"
-      aria-controls="monitor-pane" aria-expanded="false"
-      aria-label="打开网页监控" title="网页监控">
-      ${kubaiIcon('monitor-toggle', { size: 16 })}
-      <span>网页</span>
-    </button>
-    <button class="files-toggle" id="files-toggle" type="button"
-      aria-controls="files-pane" aria-expanded="false">文件</button>
+    <div class="chat-head-actions">
+      <button class="link-btn" id="rename" type="button" hidden>改名</button>
+      <button class="link-btn" id="add-members" type="button" hidden>群设置</button>
+      <button class="link-btn" id="room-announcement-edit" type="button" hidden>公告</button>
+      <button class="copy-group-info" id="copy-group-info" type="button" hidden
+        aria-label="复制群信息" title="复制群信息">
+        ${kubaiIcon('copy-group-info', { size: 17 })}
+      </button>
+      <button class="monitor-toggle" id="monitor-toggle" type="button"
+        aria-controls="monitor-pane" aria-expanded="false"
+        aria-label="打开网页监控" title="网页监控">
+        ${kubaiIcon('monitor-toggle', { size: 16 })}
+        <span>网页</span>
+      </button>
+      <button class="files-toggle" id="files-toggle" type="button"
+        aria-controls="files-pane" aria-expanded="false">文件</button>
+    </div>
   </header>
   <form id="rename-form" class="rename-form" hidden>
     <input id="rename-input" maxlength="${LIMITS.actorNameMax}" aria-label="Agent 新名称"

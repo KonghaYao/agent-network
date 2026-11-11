@@ -279,8 +279,9 @@ export const APP_STYLE = `
   .back:hover { background: var(--wx-hover); }
   .back svg { width: 22px; height: 22px; fill: none; stroke: var(--wx-text); stroke-width: 2; }
   .chat-id { flex: 1 1 auto; min-width: 0; }
+  .chat-head-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; }
   .title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
-  .title-row h2 { margin: 0; font-size: 16px; font-weight: 600; overflow: hidden;
+  .title-row h2 { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 16px; font-weight: 600; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
   .chat-id .muted { margin: 1px 0 0; font-size: 11px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

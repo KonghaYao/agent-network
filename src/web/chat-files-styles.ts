@@ -169,8 +169,13 @@ export const FILES_STYLE = `
     .files-head { min-height: 56px; }
     .files-drop { padding: 16px 10px; }
     .file-preview { padding: 0; }
-    .file-preview-card { width: 100%; max-height: 100dvh; min-height: 100dvh;
-      border-radius: 0; }
+    .file-preview-card { box-sizing: border-box; width: 100%; height: 100dvh;
+      max-height: 100dvh; min-height: 100dvh; border-radius: 0;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom); }
+    .file-preview-head { min-height: 56px; padding: 6px 10px; }
+    #file-preview-close { min-width: 44px; min-height: 44px; }
+    .file-preview-foot a { min-height: 44px; display: inline-flex; align-items: center; }
     .file-preview-body { padding: 0; }
     .file-preview-body iframe { height: 76dvh; }
   }
