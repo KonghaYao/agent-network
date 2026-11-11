@@ -15,7 +15,7 @@ import { runClaudeMonitor } from '../monitor/claude';
 import { runCodexMonitor } from '../monitor/codex';
 import { socketOverride } from '../monitor/codex-transport';
 import { runDshMonitor } from '../monitor/dsh';
-import { installDshMonitor } from '../monitor/dsh-install';
+import { ensureDshMonitorPlugin } from '../monitor/dsh-install';
 import { numeric, runOtherHarness } from '../monitor/other';
 import { runPeriMonitor } from '../monitor/peri';
 
@@ -50,8 +50,6 @@ export interface MonitorOptions {
   log?: string;
   maxWait?: string;
   poll?: string;
-  profile?: string;
-  session?: string;
 }
 
 function checkTsHarness(
@@ -108,16 +106,8 @@ export async function monitor(
 ): Promise<number> {
   const harness = assertHarness(options.harness);
   const extra = [...scriptArgs];
-  if (harness === 'dsh' && extra[0] === 'install') {
-    if (extra.length !== 1) throw new CliError('dsh install 不接受额外位置参数；使用 --profile / --session。');
-    await installDshMonitor({ profile: options.profile, session: options.session,
-      check: options.check === true || options.dryRun === true });
-    return 0;
-  }
-  if (options.profile !== undefined || options.session !== undefined) {
-    throw new CliError('--profile / --session 仅用于 monitor --harness dsh install。');
-  }
-  // dsh 需要在位置参数里收子命令（start/stop/status/logs/wait）。
+  const dshCommand = harness === 'dsh' ? (extra[0] ?? 'run') : null;
+  // dsh 需要在位置参数里收子命令（run/start/stop/status/logs/wait）。
   if (harness !== 'dsh' && extra.length > 0) {
     throw new CliError(
       `monitor --harness ${harness} 不接受位置参数：${extra.join(' ')}（使用 --log/--max-wait/--poll 等选项）`,
@@ -127,7 +117,20 @@ export async function monitor(
   if (checkOnly) return checkTsHarness(harness, options, extra);
   if (harness === 'claude') return runClaudeMonitor(context, { stateDir: options.stateDir });
   if (harness === 'peri') return runPeriMonitor(context, { stateDir: options.stateDir });
-  if (harness === 'dsh') return runDshMonitor(context, extra);
+  if (harness === 'dsh') {
+    if (
+      (dshCommand === 'run' || dshCommand === 'start') &&
+      context.token !== null &&
+      context.baseUrl !== null
+    ) {
+      const detected = await ensureDshMonitorPlugin();
+      process.stderr.write(
+        `DSH_PLUGIN status=${detected.installed ? 'installed' : 'present'} ` +
+          `dsh_version=${detected.dshVersion}\n`,
+      );
+    }
+    return runDshMonitor(context, extra);
+  }
   if (harness === 'codex') return runCodexMonitor(context);
   return runOtherHarness({ log: options.log, maxWait: options.maxWait, poll: options.poll });
 }

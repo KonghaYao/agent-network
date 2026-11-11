@@ -5,6 +5,8 @@
  * 任何凭据。这里只保留最短可操作步骤，详细差异仍指向公开的 harness-*.md。
  */
 
+import { DSH_SUPPORTED_RANGE } from './monitor/dsh-install';
+
 export interface HarnessGuide {
   name: string;
   label: string;
@@ -59,14 +61,15 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     name: 'dsh',
     label: 'DSH（DeepSeek Harness）',
     listen: [
-      '初始化先执行 `agentnet monitor --harness dsh install`：读取 DSH_PROFILE / DSH_SESSION_ID，通过 DSH 官方命令安装随 CLI 分发的固定插件，无需自行编写。',
-      '在 DSH 外安装时显式传 `--profile <name> --session <当前会话 ID>`；首次安装/升级后重启该 profile 并恢复同一会话。',
-      'DSH 没有内置 monitor；用 `agentnet monitor --harness dsh` 启动守护，把定位事件写入 `$WEBBOTS_HOME/wake.queue`。',
+      '`agentnet monitor --harness dsh` 的 run/start 会自动读取 DSH_PROFILE / DSH_SESSION_ID（或已有绑定），检测 dsh 版本、固定插件与会话绑定；缺失或版本不匹配时通过 DSH 官方命令自动安装/升级。',
+      'run/start 从当前 DSH_PROFILE / DSH_SESSION_ID 绑定会话；首次自动添加插件后按输出重启该 profile 并恢复同一会话。',
+      'DSH 没有内置 monitor；TS 守护把定位事件写入 `$WEBBOTS_HOME/wake.queue`。',
       '插件只唤醒绑定的会话；忙时保留队列，空闲后通过 agent.followup 提交。`agentnet monitor --harness dsh status` 的 consumer.state=attached 才说明消费者已连接。',
       '`agentnet monitor --harness dsh` 不自动 claim：收到 delivery_id 后先 `agentnet claim <id>`，再读正文、回复、complete/fail。',
     ],
     pitfalls: [
       '`start` 输出 STARTED 仅表示守护进程已启动，不表示订阅成功；用 `status` 核对 online=true。',
+      `自动检测只接受 DSH ${DSH_SUPPORTED_RANGE}；版本缺失、无法解析或不兼容时停止，不绕过 DSH 的兼容性检查。`,
       'CREDENTIAL_INVALID 会写 state=fatal 并以退出码 3 结束；不要无限重启，先换 token。',
       'wake.queue 是持久文件，正文只放定位字段；从 inbox/read 取正文，不要把正文写进队列。',
       '每个身份使用独立 WEBBOTS_HOME；重复安装同一绑定幂等，队列/会话或跨 profile 冲突会拒绝。',
@@ -133,10 +136,10 @@ export function renderHarnessGuide(name: string): string {
     '不传 --harness 可查看支持的宿主列表；以下 agentnet 指 /skills/agentnet.js。',
     '',
     ...(name === 'dsh' ? [
-      'DSH 初始化（首次接入必做）',
-      '   agentnet monitor --harness dsh install',
-      '   自动读取 DSH_PROFILE / DSH_SESSION_ID；没有这些环境变量时传 --profile <name> --session <id>。',
-      '   首次安装/升级后重启对应 profile 并恢复同一会话，再执行下面的监听步骤。不要自行写插件。',
+      'DSH 自动自检（run/start）',
+      '   agentnet monitor --harness dsh start',
+      '   自动读取 DSH_PROFILE / DSH_SESSION_ID，检测 DSH 版本与固定插件；缺失时自动添加，无额外 install 命令。',
+      '   首次自动添加后按输出重启对应 profile 并恢复同一会话。',
       '',
     ] : []),
     ...COMMON_STEPS,

@@ -1,4 +1,4 @@
-/** Isolated CLI install + the exact shipped consumer, without model calls or real credentials. */
+/** Isolated DSH auto-install + the exact shipped consumer, without model calls or real credentials. */
 import { appendFile, chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,12 +13,14 @@ const dshHome = join(directory, 'dsh home');
 const queueHome = join(directory, 'queue home');
 const bin = join(directory, 'bin');
 const calls = join(directory, 'calls.jsonl');
+const pluginState = join(directory, 'plugin-state');
 const bundle = join(directory, 'agentnet.js');
 const token = `test-secret-${crypto.randomUUID()}`;
 const sessionId = 'session-owner';
 const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, DSH_HOME: dshHome,
   DSH_PROFILE: 'web', DSH_SESSION_ID: sessionId, WEBBOTS_HOME: queueHome,
-  AGENTNET_TOKEN: token, AGENTNET_URL: `https://example.invalid/mcp?token=${token}`, DSH_TEST_CALLS: calls };
+  AGENTNET_TOKEN: token, AGENTNET_URL: `https://example.invalid/mcp?token=${token}`,
+  DSH_TEST_CALLS: calls, DSH_TEST_PLUGIN_STATE: pluginState, DSH_TEST_VERSION: '0.2.2-rc.1' };
 
 async function cli(args: string[], extra: Record<string, string | undefined> = {}) {
   const child = Bun.spawn([process.execPath, bundle, 'monitor', '--harness', 'dsh', ...args], {
@@ -29,6 +31,18 @@ async function cli(args: string[], extra: Record<string, string | undefined> = {
   ]);
   return { code, stdout, stderr };
 }
+type DshCall = { args: string[]; tokenPresent: boolean; urlPresent: boolean };
+async function dshCalls(): Promise<DshCall[]> {
+  try {
+    return (await readFile(calls, 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as DshCall);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+const addCalls = (items: DshCall[]): DshCall[] =>
+  items.filter((item) => item.args[0] === 'plugin' && item.args.includes('add'));
+
 const event = (id: string) => ({ source: 'delivery.created', attention: 'action_required',
   room_id: 'rm_test', message_id: `msg_${id}`, delivery_id: `dlv_${id}`,
   sender_id: 'sender_test', seq: id, event_id: id, at: new Date().toISOString() });
@@ -46,66 +60,112 @@ let dispose: (() => Promise<void>) | undefined;
 try {
   await mkdir(bin);
   await writeFile(join(bin, 'dsh'), `#!/usr/bin/env node
-import { appendFileSync } from 'node:fs';
-appendFileSync(process.env.DSH_TEST_CALLS, JSON.stringify({ args: process.argv.slice(2), tokenPresent: Boolean(process.env.AGENTNET_TOKEN), urlPresent: Boolean(process.env.AGENTNET_URL) }) + '\\n');
-process.exit(process.env.DSH_TEST_INSTALL_FAIL === '1' ? 17 : 0);
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+appendFileSync(process.env.DSH_TEST_CALLS, JSON.stringify({ args, tokenPresent: Boolean(process.env.AGENTNET_TOKEN), urlPresent: Boolean(process.env.AGENTNET_URL) }) + '\\n');
+if (args[0] === '--version') {
+  process.stdout.write((process.env.DSH_TEST_VERSION || '0.2.2-rc.1') + '\\n');
+  process.exit(0);
+}
+if (args.includes('list')) {
+  const dependencies = existsSync(process.env.DSH_TEST_PLUGIN_STATE)
+    ? { '@peri-code/dsh-webots-monitor': { version: 'link:test-package' } }
+    : {};
+  process.stdout.write(JSON.stringify([{ name: 'dsh-profile-test', dependencies }]) + '\\n');
+  process.exit(0);
+}
+if (args.includes('add')) {
+  if (process.env.DSH_TEST_INSTALL_FAIL === '1') process.exit(17);
+  writeFileSync(process.env.DSH_TEST_PLUGIN_STATE, 'installed\\n');
+  process.exit(0);
+}
+process.exit(2);
 `);
   await chmod(join(bin, 'dsh'), 0o755);
   const built = await Bun.build(cliBuildConfig());
   check('包含插件源码的单文件 CLI 构建成功', built.success, built.logs);
   await writeFile(bundle, await built.outputs.find((item) => item.kind === 'entry-point')!.text());
-  const dryRun = await cli(['install', '--check']);
-  checkEqual('安装预检退出 0', dryRun.code, 0);
-  check('预检不写文件也不调用 DSH', !existsSync(dshHome) && !existsSync(calls));
-  const missing = await cli(['install'], { DSH_PROFILE: undefined, DSH_SESSION_ID: undefined });
-  check('缺少目标会话/profile 时拒绝猜测', missing.code !== 0 && !existsSync(dshHome));
-  const unsafeProfile = await cli(['install', '--profile', '../other']);
-  check('拒绝 profile 路径穿越', unsafeProfile.code !== 0 && !existsSync(dshHome));
-  const installed = await cli(['install']);
-  checkEqual('初始化自动安装成功', installed.code, 0);
-  const result = JSON.parse(installed.stdout) as { package_dir: string; restart_required: boolean; source_sha256: string };
-  check('安装成功明确提示首次重启', result.restart_required);
-  const record = JSON.parse((await readFile(calls, 'utf8')).trim()) as { args: string[]; tokenPresent: boolean; urlPresent: boolean };
+  const checkOnly = await cli(['--check']);
+  checkEqual('静态预检退出 0', checkOnly.code, 0);
+  check('静态预检不检测或安装插件', !existsSync(dshHome) && !existsSync(calls));
+  const removedInstallCommand = await cli(['install']);
+  check('不再暴露单独 install 子命令', removedInstallCommand.code !== 0 && !existsSync(calls));
+  const missing = await cli(['start'], { DSH_PROFILE: undefined, DSH_SESSION_ID: undefined });
+  check('启动缺少当前 profile/session 时拒绝猜测', missing.code !== 0 && !existsSync(dshHome));
+  const unsupported = await cli(['start'], { DSH_TEST_VERSION: '0.1.5-rc.2' });
+  check('启动自动检测并拒绝不兼容 DSH 版本', unsupported.code !== 0 && !existsSync(dshHome));
+
+  const started = await cli(['start']);
+  check('首次启动 monitor 路径执行插件自检', started.stderr.includes('DSH_PLUGIN status=installed'), started);
+  check('插件缺失时自动添加', started.stderr.includes('DSH_PLUGIN status=installed'));
+  check('启动时自动检测输出 DSH 版本', started.stderr.includes('dsh_version=0.2.2-rc.1'));
+  let records = await dshCalls();
+  let installs = addCalls(records);
+  checkEqual('缺失插件只调用一次官方 DSH add', installs.length, 1);
+  const record = installs[0]!;
   checkEqual('调用官方 DSH profile 安装命令', record.args.slice(0, 4).join(' '), 'plugin --profile web add');
-  checkEqual('含空格目录作为一个参数传递', record.args[4], `file:${result.package_dir}`);
-  check('子进程不接收 WeBots token', !record.tokenPresent);
-  check('子进程不接收带凭据的 WeBots URL', !record.urlPresent);
+  const packageArgument = record.args[4] ?? '';
+  check('含空格目录作为一个参数传递', packageArgument.startsWith('file:'));
+  const packageDir = packageArgument.slice('file:'.length);
+  check('所有 DSH 探测/安装子进程都不接收 WeBots token', records.every((item) => !item.tokenPresent));
+  check('所有 DSH 探测/安装子进程都不接收带凭据 URL', records.every((item) => !item.urlPresent));
+
   const bindingsFile = join(dshHome, 'profiles/web/webots-monitor.json');
   const bindingBefore = await readFile(bindingsFile, 'utf8');
-  const manifest = JSON.parse(await readFile(join(result.package_dir, 'package.json'), 'utf8'));
+  const manifest = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf8'));
   check('包声明可安装 bundle 和兼容性', manifest.dsh.bundle.patch === './cordis.patch.yml' && Boolean(manifest.engines.dsh));
   check('插件没有安装脚本', manifest.scripts === undefined);
-  const source = await readFile(join(result.package_dir, 'index.mjs'), 'utf8');
+  const source = await readFile(join(packageDir, 'index.mjs'), 'utf8');
   checkEqual('安装固定源码而非模型生成代码', source, await readFile(join(root, 'client/monitor/dsh-plugin.mjs.txt'), 'utf8'));
-  check('产物及绑定不包含凭据', !(source + bindingBefore + JSON.stringify(manifest) + installed.stdout).includes(token));
-  const repeated = await cli(['install']);
-  checkEqual('重复安装成功', repeated.code, 0);
-  checkEqual('重复安装保持内容摘要', JSON.parse(repeated.stdout).source_sha256, result.source_sha256);
-  checkEqual('重复安装不新增绑定', await readFile(bindingsFile, 'utf8'), bindingBefore);
-  const conflict = await cli(['install', '--session', 'another-session']);
+  check('产物及绑定不包含凭据', !(source + bindingBefore + JSON.stringify(manifest) + started.stdout + started.stderr).includes(token));
+
+  const repeated = await cli(['start']);
+  check('插件已存在时启动路径报告 present', repeated.stderr.includes('DSH_PLUGIN status=present'), repeated);
+  checkEqual('已存在时不重复安装', addCalls(await dshCalls()).length, 1);
+  checkEqual('已存在时不新增绑定', await readFile(bindingsFile, 'utf8'), bindingBefore);
+
+  await rm(pluginState, { force: true });
+  const repaired = await cli(['start']);
+  check('插件记录缺失时启动路径自动补装', repaired.stderr.includes('DSH_PLUGIN status=installed'), repaired);
+  checkEqual('缺失后只增加一次安装', addCalls(await dshCalls()).length, 2);
+
+  const conflict = await cli(['start'], { DSH_SESSION_ID: 'another-session' });
   check('拒绝把同一队列交给另一会话', conflict.code !== 0);
-  const crossProfile = await cli(['install', '--profile', 'other-profile']);
+  const crossProfile = await cli(['start'], { DSH_PROFILE: 'other-profile' });
   check('拒绝跨 profile 复用同一队列', crossProfile.code !== 0);
   checkEqual('冲突不覆盖绑定', await readFile(bindingsFile, 'utf8'), bindingBefore);
+
   const failedHome = join(directory, 'failed queue');
-  const failed = await cli(['install', '--session', 'failed-session'], {
-    WEBBOTS_HOME: failedHome, DSH_TEST_INSTALL_FAIL: '1',
+  const failedDshHome = join(directory, 'failed dsh');
+  const failedState = join(directory, 'failed plugin-state');
+  const failed = await cli(['start'], {
+    WEBBOTS_HOME: failedHome,
+    DSH_HOME: failedDshHome,
+    DSH_PROFILE: 'failed',
+    DSH_SESSION_ID: 'failed-session',
+    DSH_TEST_PLUGIN_STATE: failedState,
+    DSH_TEST_INSTALL_FAIL: '1',
   });
-  check('DSH 安装失败返回非零', failed.code !== 0);
-  checkEqual('失败不提交绑定', await readFile(bindingsFile, 'utf8'), bindingBefore);
+  check('DSH 自动安装失败返回非零', failed.code !== 0);
+  check('失败不提交绑定', !existsSync(join(failedDshHome, 'profiles/failed/webots-monitor.json')));
   check('失败不占用队列', !existsSync(join(failedHome, 'consumer-owner.json')));
+
+  records = await dshCalls();
+  installs = addCalls(records);
+  check('版本检测发生在每次 monitor 启动前', records.filter((item) => item.args[0] === '--version').length >= 3);
+  check('自动安装只在插件缺失时发生', installs.length >= 3);
 
   // CI uses a shape-compatible message constructor. The same checks can use the
   // actual DSH package by setting DSH_TEST_NODE_MODULES to its isolated install.
   if (process.env.DSH_TEST_NODE_MODULES) {
-    await symlink(resolve(process.env.DSH_TEST_NODE_MODULES), join(result.package_dir, 'node_modules'), 'dir');
+    await symlink(resolve(process.env.DSH_TEST_NODE_MODULES), join(packageDir, 'node_modules'), 'dir');
   } else {
-    const mock = join(result.package_dir, 'node_modules/@deepseek-ai/dsh-llm');
+    const mock = join(packageDir, 'node_modules/@deepseek-ai/dsh-llm');
     await mkdir(mock, { recursive: true });
     await writeFile(join(mock, 'package.json'), JSON.stringify({ type: 'module', main: 'index.js' }));
     await writeFile(join(mock, 'index.js'), 'export const createUserMessage = value => ({ id: crypto.randomUUID(), role: "user", ...value });\n');
   }
-  const plugin = await import(pathToFileURL(join(result.package_dir, 'index.mjs')).href);
+  const plugin = await import(pathToFileURL(join(packageDir, 'index.mjs')).href);
   const queue = join(queueHome, 'wake.queue');
   await writeFile(queue, JSON.stringify(event('history')) + '\n');
   const agents = new Map<string, typeof target | typeof unrelated>([[sessionId, target], ['unrelated', unrelated]]);

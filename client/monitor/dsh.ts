@@ -73,10 +73,9 @@ function writeStderr(text: string): void {
 }
 
 function usage(): void {
-  writeStderr(`usage: agentnet monitor --harness dsh [install|run|start|stop|status|logs|wait] [args]
+  writeStderr(`usage: agentnet monitor --harness dsh [run|start|stop|status|logs|wait] [args]
 
-  install        安装固定 DSH 插件；--profile / --session 默认读取 DSH 环境
-  run            前台运行 SSE 守护（默认）
+  run            前台运行 SSE 守护（默认；启动前自动检查 DSH 版本与插件）
   start          后台运行；PID 写入 $WEBBOTS_HOME/watch.pid
   stop           停止后台守护
   status         输出一行 JSON；运行中退出 0，未运行退出 3

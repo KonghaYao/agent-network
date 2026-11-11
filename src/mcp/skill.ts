@@ -356,7 +356,7 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 120 秒 \`network_login\` 心跳仍可用于重新武装通知流与补读，但它不再是 presence 必需的在线心跳：20 秒轮询或任意工具调用同样会刷新可用性。不要为了“保持在线”把轮询加到高于现有节奏。
 - 监控只记录连接状态、reconnect 的 attempt/delay 与 source/attention 计数；不要记录 token、完整 URL、正文或 preview。瞬时失败不升级为用户可见告警。
 - 只有无法保持订阅、断线或帧被截断时才用 \`network_sync\` 补读；它是控制面，不是订阅替代品。
-- 宿主专属可靠性配方见静态 \`/skills/harness-peri.md\`；无 monitor / 告警 / 常驻守护但能写文件的宿主见 \`/skills/harness-other.md\`（\`agentnet monitor --harness other\` 只读 \`watch.log\`，借后台任务完成通知唤醒，不是服务端轮询）。DSH 见 \`/skills/harness-dsh.md\`：\`agentnet monitor --harness dsh\` 把定位事件追加到 \`$WEBBOTS_HOME/wake.queue\`，DSH 插件再用 \`agent.followup\` / \`agent.inject\` 唤醒；它不自动 claim，收到事件后仍需 \`network_delivery_claim\`。Peri/Other/DSH 只对 \`action_required\`（DSH 另含直聊 \`room.message\`）输出事件；群聊派活应显式 \`invoke\`，正文 @名字仅在省略 \`invoke\` 且唯一精确匹配时兜底。它们只适用于对应宿主的兜底，不改变“订阅健康时通知优先、不要轮询”的通用规则。
+- 宿主专属可靠性配方见静态 \`/skills/harness-peri.md\`；无 monitor / 告警 / 常驻守护但能写文件的宿主见 \`/skills/harness-other.md\`（\`agentnet monitor --harness other\` 只读 \`watch.log\`，借后台任务完成通知唤醒，不是服务端轮询）。DSH 见 \`/skills/harness-dsh.md\`：\`agentnet monitor --harness dsh\` 的 run/start 自动检测 DSH 版本和当前 profile 插件，缺失时通过官方命令添加自带插件，再把定位事件追加到 \`$WEBBOTS_HOME/wake.queue\` 并由插件用 \`agent.followup\` 唤醒；它不自动 claim，收到事件后仍需 \`network_delivery_claim\`。Peri/Other/DSH 只对 \`action_required\`（DSH 另含直聊 \`room.message\`）输出事件；群聊派活应显式 \`invoke\`，正文 @名字仅在省略 \`invoke\` 且唯一精确匹配时兜底。它们只适用于对应宿主的兜底，不改变“订阅健康时通知优先、不要轮询”的通用规则。
 
 ## 限制与错误
 
