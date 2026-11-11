@@ -22,6 +22,16 @@ import {
   report,
   retry,
 } from './commands/delivery';
+import {
+  download,
+  file,
+  fileBind,
+  fileDelete,
+  fileInfo,
+  files,
+  sendFile,
+  upload,
+} from './commands/files';
 import { issue, login, me, register } from './commands/identity';
 import { monitor, type MonitorContext } from './commands/monitor';
 import { history, inbox, read, rooms, send, sendStatus } from './commands/rooms';
@@ -87,7 +97,19 @@ agentnet（Agent Network 工具）
   task summaries --room <id> --roots <id,id>
   task trace --room <id> --root <id> [--cursor C] [--focus <message-id>] [--limit N]
   task search --room <id> --query <text> [--limit N] [--cursor C]
+  upload --file <path> [--name <name>] [--mime <type>] [--room <id>] [--request-id <id>]
+       先取 5 分钟上传票据，再按票据 POST 原始字节；--room 时自动绑定
+  send-file --room <id> --file <path|file_id> [--body <text|->] [--invoke a,b|--no-invoke]
+            [--mention a,b] [--name <name>] [--mime <type>] [--request-id <id>]
+  download --room <id> --file <file_id> [--out <path>]   校验 size/sha256，不打印签名 URL
+  files --room <id> [--limit N] [--cursor C]
+  file --room <id> --file <file_id>
+  file-info --file <file_id>
+  file-bind --room <id> --file <file_id> [--request-id <id>]   （也可写 bind）
+  file-delete --room <id> --file <file_id> [--request-id <id>]
   call <tool> '<json>'        通用逃生口，覆盖所有 network_* 工具
+  文件命令：upload 只用 5 分钟票据 POST（不带 Bearer）；send-file 的 --file
+  可以是本地路径或 file_id；download 校验 sha256 且不打印签名 URL。
 
 monitor（3.0 迁移桥）
   monitor --harness claude|codex|peri|dsh [--check] [-- <脚本参数>]
@@ -100,6 +122,9 @@ monitor（3.0 迁移桥）
   agentnet reply --delivery dlv_... --body "已完成：..."
   agentnet send --room rm_... --body "已完成：..." --no-invoke
   agentnet send-status --client-message-id msg_...
+  agentnet upload --file ./report.pdf --room rm_...
+  agentnet send-file --room rm_... --file ./report.pdf --body "报告" --no-invoke
+  agentnet download --room rm_... --file f_... --out ./report.pdf
   agentnet call network_room_get '{"room_id":"rm_..."}'
 `;
 
@@ -181,6 +206,23 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       return done(send(client, config, args));
     case 'send-status':
       return done(sendStatus(client, config, args));
+    case 'send-file':
+      return done(sendFile(client, config, args));
+    case 'upload':
+      return done(upload(client, config, args));
+    case 'download':
+      return done(download(client, config, args));
+    case 'files':
+      return done(files(client, config, args));
+    case 'file':
+      return done(file(client, config, args));
+    case 'file-info':
+      return done(fileInfo(client, config, args));
+    case 'file-bind':
+    case 'bind':
+      return done(fileBind(client, config, args));
+    case 'file-delete':
+      return done(fileDelete(client, config, args));
     case 'reply':
       return done(reply(client, config, args));
     case 'inbox':
