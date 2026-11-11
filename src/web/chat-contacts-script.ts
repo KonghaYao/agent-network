@@ -20,6 +20,7 @@ const contactLinkStatus = document.getElementById('contact-link-status');
 const contactLinkList = document.getElementById('contact-link-list');
 let contactRequestBusy = false;
 let contactLinkBusy = false;
+let contactBadgePromise = null;
 // 链接明文只在本次页面会话的内存里；不写 DOM、localStorage、console 或日志。
 let contactLinkPlaintext = null;
 let contactLinkLinkId = null;
@@ -113,23 +114,42 @@ function renderContactRequests(items) {
   }
 }
 
-async function refreshContactBadge() {
-  if (!identity || !contactRequestsButton) return;
-  try {
-    const result = await callTool('network_contact_requests_list', {
-      direction: 'incoming',
-      status: 'pending',
-      limit: 50
-    });
-    const count = (result.items || []).length;
-    if (contactRequestsBadge) {
-      contactRequestsBadge.textContent = String(count);
-      contactRequestsBadge.hidden = count === 0;
+/**
+ * 好友申请角标依赖身份，但不再因调用时机过早而永久错过。
+ *
+ * 未就绪时等待同一个 ensureIdentity（single-flight）；身份成功后才发
+ * 请求。并发调用共享一次请求，失败静默隐藏角标，不阻塞聊天。
+ */
+function refreshContactBadge() {
+  if (!contactRequestsButton) return Promise.resolve();
+  if (contactBadgePromise) return contactBadgePromise;
+  contactBadgePromise = (async function () {
+    if (isLoggedOut()) return;
+    try {
+      if (!identity) await ensureIdentity();
+    } catch (error) {
+      return;
     }
-    contactRequestsButton.title = count > 0 ? '好友申请（' + count + '）' : '好友申请';
-  } catch (error) {
-    if (contactRequestsBadge) contactRequestsBadge.hidden = true;
-  }
+    if (!identity || isLoggedOut()) return;
+    try {
+      const result = await callTool('network_contact_requests_list', {
+        direction: 'incoming',
+        status: 'pending',
+        limit: 50
+      });
+      const count = (result.items || []).length;
+      if (contactRequestsBadge) {
+        contactRequestsBadge.textContent = String(count);
+        contactRequestsBadge.hidden = count === 0;
+      }
+      contactRequestsButton.title = count > 0 ? '好友申请（' + count + '）' : '好友申请';
+    } catch (error) {
+      if (contactRequestsBadge) contactRequestsBadge.hidden = true;
+    }
+  })().finally(function () {
+    contactBadgePromise = null;
+  });
+  return contactBadgePromise;
 }
 
 async function loadContactRequests() {

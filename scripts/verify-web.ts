@@ -3557,6 +3557,276 @@ async function runRoomListPaginationAcceptance(
   }
 }
 
+/**
+ * 新服务端冷启动：50 个 direct 会话只发 1 次 rooms_list、0 次 room_get。
+ *
+ * 同时验证列表摘要直接提供名称/类型/在线/归档，旧服务端路径由主流程的
+ * 兼容用例覆盖。
+ */
+async function runRoomListPeerSummaryAcceptance(
+  browser: Browser,
+  base: string,
+  allErrors: string[],
+): Promise<void> {
+  const humanToken = crypto.randomUUID();
+  const human = await rawTool<Actor>(humanToken, 'network_register', {
+    request_id: requestId('web_peer_human'),
+    kind: 'human',
+    name: '50 单聊冷启动用户',
+  });
+  const agentNames: string[] = [];
+  const roomIds: string[] = [];
+  let firstAgentId = '';
+  for (let index = 0; index < 50; index += 1) {
+    const name = `冷启动 Agent ${String(index + 1).padStart(2, '0')}`;
+    const agent = await rawTool<Actor>(humanToken, 'network_agent_create', {
+      request_id: requestId('web_peer_agent'),
+      name,
+    });
+    const room = await rawTool<{ room: { room_id: string } }>(
+      humanToken,
+      'network_room_create',
+      {
+        request_id: requestId('web_peer_room'),
+        kind: 'direct',
+        members: [agent.actor_id],
+      },
+    );
+    agentNames.push(name);
+    roomIds.push(room.room.room_id);
+    if (index === 0) firstAgentId = agent.actor_id;
+  }
+  const rawPage = await rawTool<{
+    items: {
+      room_id: string;
+      kind: string;
+      peer?: { actor_id: string; name: string; kind: string; online: boolean | null } | null;
+      peer_archived?: boolean;
+    }[];
+  }>(humanToken, 'network_rooms_list', { limit: 100 });
+  checkEqual('50 单聊直接返回 50 条摘要', rawPage.items.length, 50);
+  check(
+    '每条 direct 摘要含对端名称/类型/在线',
+    rawPage.items.every(
+      (item) =>
+        item.kind === 'direct' &&
+        item.peer &&
+        item.peer.kind === 'agent' &&
+        typeof item.peer.name === 'string' &&
+        item.peer.name.length > 0 &&
+        typeof item.peer.online === 'boolean' &&
+        item.peer_archived === false,
+    ),
+    rawPage.items.slice(0, 2),
+  );
+  checkEqual(
+    '50 条摘要名称与创建的 Agent 一致',
+    new Set(rawPage.items.map((item) => item.peer?.name)).size,
+    50,
+  );
+  check(
+    '摘要包含全部创建的 room_id',
+    roomIds.every((roomId) => rawPage.items.some((item) => item.room_id === roomId)),
+  );
+
+  const { context, page } = await makeContext(
+    browser,
+    humanToken,
+    { width: 1280, height: 800 },
+    allErrors,
+  );
+  try {
+    // 在文档启动前选中 Agent 分类，避免用额外刷新污染冷启动请求计数。
+    await context.addInitScript(
+      `try { localStorage.setItem('agent-network-room-filter', 'agent'); } catch (error) {}`,
+    );
+    await page.goto(`${base}/`);
+    await waitUntil(
+      async () => (await page.locator('#room-list .room-item').count()) === 50,
+      '50 个 direct 首屏一次渲染',
+      20_000,
+    );
+    const roomListCalls = (await page.evaluate(`(window.__mcpCalls || [])
+      .filter(function (call) { return call.name === 'network_rooms_list'; })
+      .map(function (call) {
+        return call.body && call.body.params ? call.body.params.arguments : null;
+      })`)) as ({ limit?: number; cursor?: string } | null)[];
+    checkEqual('50 个 direct 冷启动只请求一次 rooms_list', roomListCalls.length, 1);
+    check('冷启动 rooms_list 不带游标', !roomListCalls[0]?.cursor);
+    checkEqual('50 个 direct 冷启动不逐房间 room_get', await mcpCallCount(page, 'network_room_get'), 0);
+    check(
+      '列表直接显示对端名称而非单聊占位',
+      (await page.locator('#room-list .room-name').allTextContents()).every(
+        (name) => name !== '单聊' && name.includes('冷启动 Agent'),
+      ),
+      (await page.locator('#room-list .room-name').allTextContents()).slice(0, 3),
+    );
+    checkEqual(
+      '列表条目类型为 direct',
+      (await page.evaluate(
+        `Array.from(document.querySelectorAll('#room-list .room-item')).every(function (item) {
+          return item.dataset.roomKind === 'direct';
+        })`,
+      )) as boolean,
+      true,
+    );
+
+    await rawTool(humanToken, 'network_agent_archive', {
+      request_id: requestId('web_peer_archive'),
+      actor_id: firstAgentId,
+    });
+    const archivedPage = await rawTool<{
+      items: { room_id: string; peer_archived?: boolean }[];
+    }>(humanToken, 'network_rooms_list', { limit: 100 });
+    checkEqual(
+      'rooms_list peer_archived 反映归档状态',
+      archivedPage.items.find((item) => item.room_id === roomIds[0])?.peer_archived,
+      true,
+    );
+    checkEqual('归档不影响其余摘要条数', archivedPage.items.length, 50);
+  } finally {
+    await context.close();
+  }
+}
+
+/** 身份就绪后好友角标必须真实发一次请求，而不是等待提前返回的 Promise。 */
+async function runIdentityReadyBadgeAcceptance(
+  browser: Browser,
+  base: string,
+  allErrors: string[],
+): Promise<void> {
+  const targetToken = crypto.randomUUID();
+  const target = await rawTool<Actor>(targetToken, 'network_register', {
+    request_id: requestId('web_badge_target'),
+    kind: 'human',
+    name: '角标验收用户',
+  });
+  const requesterToken = crypto.randomUUID();
+  const requester = await rawTool<Actor>(requesterToken, 'network_register', {
+    request_id: requestId('web_badge_requester'),
+    kind: 'human',
+    name: '角标验收申请人',
+  });
+  await rawTool(requesterToken, 'network_contact_request', {
+    request_id: requestId('web_badge_request'),
+    actor_id: target.actor_id,
+  });
+  const { context, page } = await makeContext(
+    browser,
+    targetToken,
+    { width: 1280, height: 800 },
+    allErrors,
+  );
+  try {
+    await page.goto(`${base}/`);
+    await page.waitForFunction(
+      `(() => {
+        const badge = document.getElementById('contact-requests-badge');
+        return Boolean(badge && !badge.hidden && badge.textContent === '1');
+      })()`,
+    );
+    const calls = (await page.evaluate(`(window.__mcpCalls || []).map(function (call) {
+      return call.name || call.method;
+    })`)) as string[];
+    const meIndex = calls.indexOf('network_me');
+    const badgeIndex = calls.indexOf('network_contact_requests_list');
+    check('身份确认后发出好友角标请求', badgeIndex >= 0, calls);
+    check('好友角标请求发生在身份确认之后', meIndex >= 0 && meIndex < badgeIndex, calls);
+    checkEqual(
+      '初始化只发一次好友角标请求',
+      calls.filter((name) => name === 'network_contact_requests_list').length,
+      1,
+    );
+    check('身份就绪同时启动会话列表', calls.includes('network_rooms_list'), calls);
+  } finally {
+    await context.close();
+  }
+}
+
+/** 普通 RPC 的截止时间覆盖响应头之后的正文读取。 */
+async function runRpcBodyDeadlineAcceptance(
+  browser: Browser,
+  base: string,
+  allErrors: string[],
+): Promise<void> {
+  const token = crypto.randomUUID();
+  await rawTool<Actor>(token, 'network_register', {
+    request_id: requestId('web_rpc_timeout'),
+    kind: 'human',
+    name: 'RPC 正文超时用户',
+  });
+  const { context, page } = await makeContext(
+    browser,
+    token,
+    { width: 1280, height: 800 },
+    allErrors,
+  );
+  try {
+    await page.goto(`${base}/`);
+    await page.waitForFunction(`document.getElementById('account-name').textContent === 'RPC 正文超时用户'`);
+    await page.evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.__stalledBodySignal = null;
+      window.fetch = function (input, init) {
+        const body = init && init.body ? JSON.parse(init.body) : null;
+        if (body && body.params && body.params.name === 'network_me') {
+          window.__stalledBodySignal = init && init.signal;
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: function () {
+              return new Promise(function (resolve, reject) {
+                if (init.signal) {
+                  init.signal.addEventListener('abort', function () {
+                    const error = new Error('aborted');
+                    error.name = 'AbortError';
+                    reject(error);
+                  }, { once: true });
+                }
+              });
+            }
+          });
+        }
+        return originalFetch(input, init);
+      };
+    })()`);
+    const startedAt = Date.now();
+    const outcome = (await page.evaluate(`(async function () {
+      try {
+        await window.callTool('network_me', {});
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          name: error && error.name,
+          code: error && error.code,
+          message: error && error.message,
+          aborted: Boolean(window.__stalledBodySignal && window.__stalledBodySignal.aborted)
+        };
+      }
+    })()`)) as {
+      ok: boolean;
+      name?: string;
+      code?: string;
+      message?: string;
+      aborted?: boolean;
+    };
+    const elapsed = Date.now() - startedAt;
+    check('正文停住时普通 RPC 不会成功返回', outcome.ok === false, outcome);
+    checkEqual('正文停住返回可识别超时错误', outcome.name, 'TimeoutError');
+    checkEqual('超时错误码可识别', outcome.code, 'TIMEOUT');
+    check('超时提示可读', (outcome.message ?? '').includes('请求超时'), outcome.message);
+    check('总截止时间到达后中止底层请求', outcome.aborted === true, outcome);
+    check(
+      '正文停住不会无限等待',
+      elapsed >= 14_500 && elapsed < 20_000,
+      elapsed,
+    );
+  } finally {
+    await context.close();
+  }
+}
+
 async function main(): Promise<void> {
   await runFileTicketSecretChecks();
   const server = await startServer();
@@ -4431,7 +4701,8 @@ async function main(): Promise<void> {
       await mobile.context.close();
     }
 
-    // 1. 两阶段列表：摘要先出现，direct 名称/在线状态后台补全。
+    // 1. 旧服务端兼容：去掉 rooms_list 的 peer 字段后仍先渲染摘要，
+    //    direct 名称/在线状态由独立后台补全，不阻塞列表 Promise。
     {
       const { context, page } = await makeContext(
         browser,
@@ -4440,7 +4711,25 @@ async function main(): Promise<void> {
         allErrors,
       );
       await page.route('**/mcp', async (route) => {
-        if (route.request().headers()['mcp-name'] === 'network_room_get') await sleep(900);
+        const request = route.request();
+        const name = request.headers()['mcp-name'];
+        if (name === 'network_room_get') {
+          await sleep(900);
+          await route.continue();
+          return;
+        }
+        if (name === 'network_rooms_list') {
+          const response = await route.fetch();
+          const payload = (await response.json()) as {
+            result?: { structuredContent?: { items?: { peer?: unknown }[] } };
+          };
+          const items = payload.result?.structuredContent?.items;
+          if (Array.isArray(items)) {
+            for (const item of items) delete item.peer;
+          }
+          await route.fulfill({ response, json: payload });
+          return;
+        }
         await route.continue();
       });
       const started = Date.now();
@@ -22951,6 +23240,10 @@ async function main(): Promise<void> {
       data.agentAToken,
       data.agentA,
     );
+
+    await runRoomListPeerSummaryAcceptance(browser, server.base, allErrors);
+    await runIdentityReadyBadgeAcceptance(browser, server.base, allErrors);
+    await runRpcBodyDeadlineAcceptance(browser, server.base, allErrors);
 
     await runPresenceRestartAcceptance();
     await runPresenceIdleNotificationCheck();

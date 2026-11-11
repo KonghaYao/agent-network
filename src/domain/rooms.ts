@@ -150,6 +150,21 @@ export interface RoomView {
    * `room_get` 读取能力，供网页已归档入口恢复。群聊不设置该字段。
    */
   peer_archived?: boolean;
+  /**
+   * direct 会话的对端展示摘要；仅 `rooms_list` 返回。
+   *
+   * 群聊显式为 `null`，表示服务端已确认没有可提供的对端；域层不访问
+   * 通知 hub，`online` 先为 `null`，由 MCP 输出层批量补充。字段缺失
+   * 只可能来自旧服务端，客户端不能把缺失当成 `null` 反复补请求。
+   */
+  peer?: RoomPeerView | null;
+}
+
+export interface RoomPeerView {
+  actor_id: string;
+  name: string;
+  kind: 'human' | 'agent';
+  online: boolean | null;
 }
 
 export interface MemberView {
@@ -393,6 +408,44 @@ interface RoomListRow extends RoomRow {
   peer_archived: number;
 }
 
+/**
+ * 只为当前页 direct 房间批量读取对端，避免在服务端逐房间调用 roomGet。
+ *
+ * 主查询已按成员资格、游标和 limit+1 选出当前页；这里再发一条 IN 查询，
+ * 不改变分页顺序。归档的 Agent 仍返回摘要，`peer_archived` 单独表达归档。
+ */
+async function listRoomPeers(
+  db: D1Database,
+  viewerId: string,
+  roomIds: string[],
+): Promise<Map<string, RoomPeerView>> {
+  if (roomIds.length === 0) return new Map();
+  const placeholders = roomIds.map(() => '?').join(',');
+  const rows = await db
+    .prepare(
+      `SELECT rm.room_id, a.actor_id, a.name, a.kind
+         FROM room_members rm
+         JOIN actors a ON a.actor_id = rm.actor_id
+        WHERE rm.room_id IN (${placeholders})
+          AND rm.status = 'active'
+          AND rm.actor_id <> ?
+        ORDER BY rm.room_id, a.actor_id`,
+    )
+    .bind(...roomIds, viewerId)
+    .all<{ room_id: string; actor_id: string; name: string; kind: 'human' | 'agent' }>();
+  const peers = new Map<string, RoomPeerView>();
+  for (const row of rows.results) {
+    if (peers.has(row.room_id)) continue;
+    peers.set(row.room_id, {
+      actor_id: row.actor_id,
+      name: row.name,
+      kind: row.kind,
+      online: null,
+    });
+  }
+  return peers;
+}
+
 export async function roomsList(
   db: D1Database,
   principal: Principal,
@@ -465,6 +518,11 @@ export async function roomsList(
   const page = rows.results.slice(0, limit);
   const hasMore = rows.results.length > limit;
   const last = page.at(-1);
+  // 只对当前页的 direct 房间取对端；群聊显式返回 peer: null。
+  const directRoomIds = page
+    .filter((row) => row.kind === 'direct')
+    .map((row) => row.room_id);
+  const peers = await listRoomPeers(db, id, directRoomIds);
   const items = page.map((row) => {
     const member = {
       role: row.my_role,
@@ -475,7 +533,7 @@ export async function roomsList(
       joined_at: row.my_joined_at,
       member_generation: row.my_member_generation,
     };
-    return roomView(
+    const view = roomView(
       row,
       member,
       row.member_count,
@@ -502,6 +560,8 @@ export async function roomsList(
       historyBoundary(row, member),
       Boolean(row.peer_archived),
     );
+    view.peer = row.kind === 'direct' ? peers.get(row.room_id) ?? null : null;
+    return view;
   });
 
   return {
