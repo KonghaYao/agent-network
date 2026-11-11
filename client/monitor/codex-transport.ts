@@ -1,11 +1,11 @@
 /**
- * Codex app-server 传输与单 token 锁。
+ * Codex app-server 传输与本机 watcher 锁。
  *
  * 与旧 shell 桥接的 Python 内嵌实现对齐：
  * - `codex app-server daemon version` 返回 Unix socket 路径；
  * - JSON-RPC over WebSocket，请求按自增 id 匹配，通知进入事件队列；
  * - 30 秒调用超时，断线时所有 pending 失败并投递 `disconnected`；
- * - 同 token 只允许一个 watcher。
+ * - 同 token 只允许一个 watcher，同一 socket/thread 只允许一个 Agent。
  *
  * 测试通过 AGENTNET_CODEX_SOCKET 直接注入 socket，不执行真实二进制。
  */
@@ -21,7 +21,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { asRecord, asString } from '../output';
 import type { JsonObject } from './rpc';
@@ -61,6 +61,13 @@ export class LockHeldError extends Error {
   }
 }
 
+export class ThreadLockHeldError extends Error {
+  constructor() {
+    super('CODEX_THREAD_ID already bound to another Agent watcher');
+    this.name = 'ThreadLockHeldError';
+  }
+}
+
 export interface WatcherLock {
   release: () => void;
 }
@@ -78,11 +85,11 @@ function processAlive(pid: number): boolean {
  * 单 token 锁：旧脚本用 flock；Node 没有跨平台 flock，这里改用
  * `O_EXCL` + PID 存活检查，崩溃残留会被下一次启动回收。
  */
-export function acquireWatcherLock(token: string): WatcherLock {
+function acquirePidLock(key: string, heldError: () => Error): WatcherLock {
   const directory = join(homedir(), '.codex', 'agentnet-watch');
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
-  const path = join(directory, `${createHash('sha256').update(token).digest('hex')}.lock`);
+  const path = join(directory, `${key}.lock`);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -109,8 +116,8 @@ export function acquireWatcherLock(token: string): WatcherLock {
       } catch {
         owner = 0;
       }
-      if (Number.isInteger(owner) && owner > 0 && owner !== process.pid && processAlive(owner)) {
-        throw new LockHeldError();
+      if (Number.isInteger(owner) && owner > 0 && processAlive(owner)) {
+        throw heldError();
       }
       try {
         unlinkSync(path);
@@ -119,7 +126,20 @@ export function acquireWatcherLock(token: string): WatcherLock {
       }
     }
   }
-  throw new LockHeldError();
+  throw heldError();
+}
+
+export function acquireWatcherLock(token: string): WatcherLock {
+  return acquirePidLock(createHash('sha256').update(token).digest('hex'), () => new LockHeldError());
+}
+
+export function acquireThreadLock(socketPath: string, threadId: string): WatcherLock {
+  const key = createHash('sha256')
+    .update(resolve(socketPath))
+    .update('\0')
+    .update(threadId)
+    .digest('hex');
+  return acquirePidLock(`thread-${key}`, () => new ThreadLockHeldError());
 }
 
 /** `codex app-server daemon version` 返回 { socketPath }；测试可完全绕过。 */

@@ -710,6 +710,58 @@ async function runHandshakeChecks(): Promise<void> {
   }
 }
 
+async function runThreadOwnershipChecks(): Promise<void> {
+  const fixture = await createFixture('thread-ownership', {
+    threads: ['thr_a', 'thr_b'],
+    env: { CODEX_THREAD_ID: 'thr_a' },
+  });
+  const startAgent = (threadId: string): RunningWatcher =>
+    startProcess([process.execPath, CLI, 'monitor', '--harness', 'codex'], {
+      HOME: fixture.home,
+      AGENTNET_URL: fixture.mcp.base,
+      AGENTNET_TOKEN: `ank_${crypto.randomUUID().replaceAll('-', '')}`,
+      AGENTNET_CODEX_SOCKET: fixture.codex.socketPath,
+      CODEX_THREAD_ID: threadId,
+    });
+  let otherThread: RunningWatcher | null = null;
+  let sameThread: RunningWatcher | null = null;
+  try {
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('CODEX_READY'),
+      'FIRST CODEX_READY',
+    );
+    sameThread = startAgent('thr_a');
+    checkEqual('不同 token 不得共用同一 Codex 会话', await waitForExit(sameThread), 1);
+    check(
+      '冲突提示会话已绑定',
+      sameThread.stdout.some((line) => line.includes('CODEX_THREAD_ID already bound')),
+    );
+    checkEqual(
+      '冲突发生于 thread/resume 前',
+      fixture.codex.requests.filter((request) => request.method === 'thread/resume').length,
+      1,
+    );
+
+    otherThread = startAgent('thr_b');
+    await waitForLine(
+      otherThread.stdout,
+      (line) => line.startsWith('CODEX_READY thread=thr_b'),
+      'SECOND CODEX_READY',
+    );
+    check(
+      '不同 token 可以绑定不同 Codex 会话',
+      fixture.codex.requests.some(
+        (request) => request.method === 'thread/resume' && request.params.threadId === 'thr_b',
+      ),
+    );
+  } finally {
+    await sameThread?.kill().catch(() => undefined);
+    await otherThread?.kill().catch(() => undefined);
+    await fixture.stop();
+  }
+}
+
 async function runTurnChecks(): Promise<void> {
   const fixture = await createFixture('turn');
   try {
@@ -1193,6 +1245,8 @@ async function runCheckAndConfigChecks(): Promise<void> {
 async function main(): Promise<void> {
   console.log('TS codex monitor: handshake');
   await runHandshakeChecks();
+  console.log('TS codex monitor: thread ownership');
+  await runThreadOwnershipChecks();
   console.log('TS codex monitor: idle turn/complete');
   await runTurnChecks();
   console.log('TS codex monitor: active steer');

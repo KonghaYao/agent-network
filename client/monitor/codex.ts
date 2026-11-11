@@ -24,6 +24,7 @@ import {
   CodexCallError,
   CodexConnection,
   WatchStop,
+  acquireThreadLock,
   acquireWatcherLock,
   claimPayload,
   newRequestId,
@@ -126,6 +127,7 @@ class CodexWatcher {
   private readonly steered = new Map<string, JsonObject>();
 
   private connection: CodexConnection | null = null;
+  private threadLock: WatcherLock | null = null;
   private threadId = '';
   private actorId = '';
   private activeTurn: ActiveTurn | null = null;
@@ -156,7 +158,7 @@ class CodexWatcher {
     try {
       const socketPath = resolveSocketPath();
       this.connection = await CodexConnection.open(socketPath, this.events, this.signal);
-      await this.handshake();
+      await this.handshake(socketPath);
       await this.ensureIdentity();
       stream = this.streamLoop();
       return await this.mainLoop();
@@ -169,6 +171,7 @@ class CodexWatcher {
       await this.cancelAck();
       this.externalSignal.removeEventListener('abort', this.onExternalAbort);
       this.connection?.close();
+      this.threadLock?.release();
     }
   }
 
@@ -187,7 +190,7 @@ class CodexWatcher {
     return fail(`ERROR codex_watch=${message}`);
   }
 
-  private async handshake(): Promise<void> {
+  private async handshake(socketPath: string): Promise<void> {
     const connection = this.requireConnection();
     await connection.call('initialize', {
       clientInfo: { name: CLIENT_NAME, version: CLIENT_VERSION },
@@ -207,6 +210,7 @@ class CodexWatcher {
       threadId = loaded[0] ?? '';
     }
     if (!loaded.includes(threadId)) throw new WatchStop('CODEX_THREAD_ID is not a loaded thread');
+    this.threadLock = acquireThreadLock(socketPath, threadId);
     await connection.call('thread/resume', { threadId });
     this.threadId = threadId;
     this.log(`CODEX_READY thread=${threadId}`);

@@ -17,7 +17,9 @@ export AGENTNET_TOKEN='<token>'
 CODEX_THREAD_ID='<当前会话 ID>' bun agentnet.js monitor --harness codex
 ```
 
-`AGENTNET_URL` 可覆盖默认服务地址。监听入口是 `agentnet monitor --harness codex`；只有一个已加载会话时可省略 `CODEX_THREAD_ID`；有多个会话时会列出 ID 并要求显式指定，避免唤醒错误的会话。一个 token 只运行一个 watcher。先自检可用 `bun agentnet.js monitor --harness codex --check`。
+`AGENTNET_URL` 可覆盖默认服务地址。监听入口是 `agentnet monitor --harness codex`；只有一个已加载会话时可省略 `CODEX_THREAD_ID`；有多个会话时会列出 ID 并要求显式指定，避免唤醒错误的会话。先自检可用 `bun agentnet.js monitor --harness codex --check`。
+
+同机多个 Agent 须分别使用独立 token 和不同的已加载 Codex 会话（`CODEX_THREAD_ID`）：一个 token 只运行一个 watcher，同一会话也只允许绑定一个 watcher。CLI 启动时会用本机锁检查冲突，冲突即退出；退出会释放锁，异常崩溃后可回收。此锁只覆盖同一用户主目录，不提供跨机器互斥。
 
 同时看到 `CODEX_READY` 和 `READY` 才表示会话与消息流都已连接。让 CLI 持续运行；停止用 Ctrl-C，异常退出时先查看错误再重启。不要把 token 写进脚本、仓库或日志。
 
