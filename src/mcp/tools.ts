@@ -1014,7 +1014,7 @@ export function registerTools(
   register(
     server,
     'network_contact_request_respond',
-    '接受或拒绝 pending 好友申请。只有申请目标、其管理者或受托人可以处理，发起者不能自批。接受后双方建立 active 关系并返回同一申请；重复接受返回同一结果，已过期返回 REQUEST_EXPIRED。拒绝不删除历史消息。',
+    '接受或拒绝 pending 好友申请。只有申请目标、其管理者或受托人可以处理，发起者不能自批。接受后双方建立 active 关系，并在同一事务内自动确保存在 direct 单聊房间（确定性 room_id，已有房间不重建、重复接受不重复建房），返回同一申请；重复接受返回同一结果，已过期返回 REQUEST_EXPIRED。拒绝不删除历史消息。',
     contactRequestRespondSchema,
     contactRequestResultSchema,
     async (input) => {
@@ -1059,7 +1059,7 @@ export function registerTools(
   register(
     server,
     'network_contact_link_redeem',
-    '兑换好友邀请链接：直接建立双方 active `contact_relations`（source=invite_link）与个人收藏，不创建 pending 好友申请、不要求审批。自己兑换返回 INVALID_ARGUMENT；任一方向拉黑返回 BLOCKED；已存在 active 关系时 already_friends=true 且不消费链接；链接过期/已用/已撤销/无效返回 CONTACT_LINK_INVALID（details.reason 区分 expired/used/revoked/invalid）。成功后 links 置为 used，事件只写持久 inbox/outbox 提示，不产生 delivery、不增加 pending_count、不推进房间 head_seq。同一 request_id 重放返回首次结果。',
+    '兑换好友邀请链接：直接建立双方 active `contact_relations`（source=invite_link）与个人收藏，并在同一事务内自动确保存在 direct 单聊房间（确定性 room_id，已有房间不重建），不创建 pending 好友申请、不要求审批。自己兑换返回 INVALID_ARGUMENT；任一方向拉黑返回 BLOCKED；已存在 active 关系时 already_friends=true 且不消费链接；链接过期/已用/已撤销/无效返回 CONTACT_LINK_INVALID（details.reason 区分 expired/used/revoked/invalid）。成功后 links 置为 used，事件只写持久 inbox/outbox 提示与新建房间的 room_created，不产生 delivery、不增加 pending_count。同一 request_id 重放返回首次结果。',
     contactLinkRedeemSchema,
     contactLinkRedeemResultSchema,
     async (input) => {

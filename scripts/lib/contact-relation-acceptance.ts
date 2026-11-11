@@ -6,6 +6,8 @@
  * `contacts` 只是个人历史，旧单聊历史保留但新消息需要关系。
  */
 
+import { createHash } from 'node:crypto';
+
 import {
   callTool,
   check,
@@ -64,6 +66,10 @@ interface ContactRow {
 
 interface ContactPage {
   items: ContactRow[];
+}
+
+interface RoomListPage {
+  items: { room_id: string; kind: string }[];
 }
 
 interface PolicyView {
@@ -148,6 +154,17 @@ async function directRoom(connection: McpConnection, target: string): Promise<Ro
   });
 }
 
+/** 独立复算文档约定的确定性 direct 房间 id，避免用实现结果自证。 */
+function expectedDirectRoomId(a: string, b: string): string {
+  const pairKey = a < b ? `${a}|${b}` : `${b}|${a}`;
+  return `rm_${createHash('sha256').update(`direct:${pairKey}`).digest('hex').slice(0, 32)}`;
+}
+
+async function roomIds(connection: McpConnection): Promise<string[]> {
+  const page = await callTool<RoomListPage>(connection.client, 'network_rooms_list', { limit: 100 });
+  return page.items.map((item) => item.room_id);
+}
+
 async function relationOf(connection: McpConnection, target: string): Promise<string | null> {
   const page = await contacts(connection);
   return page.items.find((item) => item.actor_id === target)?.relation ?? null;
@@ -190,10 +207,31 @@ async function runBilateralConsent(): Promise<void> {
     checkEqual('T01 发起方看到 active 关系', await relationOf(u1Conn, u2.actor_id), 'active');
     checkEqual('T01 目标看到 active 关系', await relationOf(u2Conn, u1.actor_id), 'active');
 
+    const autoRoomId = expectedDirectRoomId(u1.actor_id, u2.actor_id);
+    check(
+      'T01 接受申请后自动创建 direct 房间',
+      (await roomIds(u1Conn)).includes(autoRoomId),
+      autoRoomId,
+    );
+    check(
+      'T01 对方 rooms_list 同步可见自动创建的单聊',
+      (await roomIds(u2Conn)).includes(autoRoomId),
+      autoRoomId,
+    );
+
     const room = await directRoom(u1Conn, u2.actor_id);
     checkEqual('T01 接受后可创建 direct', room.room.kind, 'direct');
+    checkEqual('T01 已有自动房间时显式建房复用同一 room_id', room.room.room_id, autoRoomId);
     const sent = await sendMessage(u1Conn, room.room.room_id, '好友消息');
     check('T01 接受后可发送消息', sent.message.message_id.startsWith('msg_'), sent.message);
+
+    const duplicateAccept = await respondContact(u2Conn, requestId, 'accept');
+    checkEqual('T01 重复接受仍返回 accepted', duplicateAccept.status, 'accepted');
+    checkEqual(
+      'T01 重复接受不重复建房',
+      (await roomIds(u1Conn)).filter((id) => id === autoRoomId).length,
+      1,
+    );
 
     const rejectedRequest = await requestContact(u3Conn, u1.actor_id, { message: '陌生人申请' });
     const rejected = await respondContact(u1Conn, rejectedRequest.request?.contact_request_id ?? '', 'reject');
@@ -265,6 +303,12 @@ async function runConcurrencyAndExpiry(): Promise<void> {
     checkEqual('T02 并发接受都收敛为 accepted #1', acceptA.status, 'accepted');
     checkEqual('T02 并发接受都收敛为 accepted #2', acceptB.status, 'accepted');
     checkEqual('T02 并发接受只产生一个 active 关系', await relationOf(u1Conn, u2.actor_id), 'active');
+    const concurrentRoomId = expectedDirectRoomId(u1.actor_id, u2.actor_id);
+    checkEqual(
+      'T02 并发接受只创建一个 direct 房间',
+      (await roomIds(u1Conn)).filter((id) => id === concurrentRoomId).length,
+      1,
+    );
 
     const requester = responder === u1Conn ? u2Conn : u1Conn;
     const requesterMe = await callTool<{ inbox_head_seq: string }>(requester.client, 'network_me', {});
@@ -374,8 +418,15 @@ async function runAgentPolicies(): Promise<void> {
     checkEqual('T03 管理者向自有 Agent 申请自动接受', own.status, 'accepted');
     checkEqual('T03 自动接受标记 auto_accepted', own.auto_accepted, true);
     checkEqual('T03 关系来源 auto_manager', own.relation?.source, 'auto_manager');
+    const ownRoomId = expectedDirectRoomId(h1.actor_id, created.actor_id);
+    check(
+      'T03 自有 Agent 自动建联同时创建 direct 房间',
+      (await roomIds(h1Conn)).includes(ownRoomId),
+      ownRoomId,
+    );
     const ownRoom = await directRoom(h1Conn, created.actor_id);
     checkEqual('T03 自有 Agent 可立即建立 direct', ownRoom.room.kind, 'direct');
+    checkEqual('T03 自动建联已有房间时复用同一 room_id', ownRoom.room.room_id, ownRoomId);
 
     const policy = await callTool<PolicyView>(h1Conn.client, 'network_contact_policy_get', {
       actor_id: created.actor_id,
@@ -418,8 +469,15 @@ async function runAgentPolicies(): Promise<void> {
     checkEqual('T03 管理者批准后关系 active', approved.relation?.status, 'active');
     checkEqual('T03 管理者批准的关系来源为 request', approved.relation?.source, 'request');
     checkEqual('T03 管理者批准后申请方看到 active', await relationOf(h3Conn, created.actor_id), 'active');
+    const approvedRoomId = expectedDirectRoomId(h3.actor_id, created.actor_id);
+    check(
+      'T03 管理者批准后自动创建 direct 房间',
+      (await roomIds(h3Conn)).includes(approvedRoomId),
+      approvedRoomId,
+    );
     const approvedRoom = await directRoom(h3Conn, created.actor_id);
     checkEqual('T03 管理者批准后可建立 direct', approvedRoom.room.kind, 'direct');
+    checkEqual('T03 管理者批准后复用自动房间', approvedRoom.room.room_id, approvedRoomId);
 
     await cancelContact(h2Conn, external.request?.contact_request_id ?? '');
     const configured = await callTool<PolicyView>(h1Conn.client, 'network_contact_policy_set', {

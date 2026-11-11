@@ -25,6 +25,7 @@ import { runDeliveryReminderUnitChecks } from './lib/delivery-reminder-unit';
 import { runDeliverySenderUnitChecks } from './lib/delivery-sender-unit';
 import { runRoomInviteReplayUnitChecks } from './lib/room-invite-replay-unit';
 import { runOwnerlessRoomUnitChecks } from './lib/ownerless-room-unit';
+import { runRoomQuotaUnitChecks } from './lib/room-quota-unit';
 
 const STREAM_URI = 'agentnet://stream';
 
@@ -4045,6 +4046,7 @@ async function main(): Promise<void> {
   await runAgentPresenceUnitChecks();
   await runFeedbackUnitChecks();
   await runOwnerlessRoomUnitChecks();
+  await runRoomQuotaUnitChecks();
   await runDeliveryReminderUnitChecks();
   await runDeliverySenderUnitChecks();
   await runRoomInviteReplayUnitChecks();

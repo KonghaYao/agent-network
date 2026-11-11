@@ -35,8 +35,9 @@ import { actorId, type Principal } from './principal';
  * 与设备配对、群邀请链接一致：token 明文只在首次创建响应出现一次，服务端
  * 只保存带域分隔前缀的 SHA-256 摘要，`operations.result_json` 只保存非秘密
  * 的状态快照。兑换不创建 `contact_requests`，不要求审批，直接复用
- * `contact_relations` / `contacts` 的事务；不产生 delivery、不增加
- * `pending_count`、不推进房间 `head_seq`。
+ * `contact_relations` / `contacts` 的事务；关系写入与 direct 房间创建同事务，
+ * 不产生 delivery、不增加 `pending_count`。已有房间不会被重建；只有首次
+ * 创建的房间会写入 `room_created` 并推进该房间的 `head_seq`。
  */
 
 export type ContactLinkStatus = 'pending' | 'used' | 'revoked' | 'expired';
@@ -363,6 +364,14 @@ export async function contactLinkRedeem(
     },
     already_friends: false,
   };
+  const relationStatements = await activateRelationStatements(
+    db,
+    owner,
+    ownerActor.actor_id,
+    'invite_link',
+    row.link_id,
+    at,
+  );
   try {
     await runIdempotent(db, {
       actorId: owner,
@@ -391,14 +400,7 @@ export async function contactLinkRedeem(
               WHERE link_id = ? AND status = 'pending' AND expires_at > ?`,
           )
           .bind(owner, at, at, row.link_id, at),
-        ...activateRelationStatements(
-          db,
-          owner,
-          ownerActor.actor_id,
-          'invite_link',
-          row.link_id,
-          at,
-        ),
+        ...relationStatements,
         ...notificationStatements(
           db,
           ownerActor,
