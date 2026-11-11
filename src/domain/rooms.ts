@@ -20,12 +20,10 @@ import {
 } from '../storage/db';
 import {
   eventStatement,
-  eventStatementIfAbsent,
+  inboxChangeStatements,
   inboxHeadStatement,
-  inboxHeadStatementIfEvent,
   inboxTopic,
   outboxStatement,
-  outboxStatementIfAbsent,
   roomHeadStatement,
   roomMemberSeqStatement,
   roomMemberVersionStatement,
@@ -56,6 +54,7 @@ import {
   roomInviteRateGuardStatement,
 } from './contact-blocks';
 import { actorId, type Principal } from './principal';
+import { directRoomIdFor, directRoomStatements } from './direct-room';
 import { loadOwnerTransferView, type OwnerTransferView } from './owner-transfers';
 import {
   directInvitationStatements,
@@ -749,45 +748,6 @@ async function deriveCreateResults(
   );
 }
 
-/** 房间创建时所有参与者的 inbox 事件（含分享入口）。 */
-function inboxChangeStatements(
-  db: D1Database,
-  actorIds: string[],
-  eventKeyFor: (actor: string) => string,
-  eventType: string,
-  at: number,
-  refId: string,
-  onlyIfMember = false,
-): D1PreparedStatement[] {
-  const statements: D1PreparedStatement[] = [];
-  for (const actor of actorIds) {
-    const eventKey = eventKeyFor(actor);
-    statements.push(
-      onlyIfMember
-        ? db
-            .prepare(
-              `INSERT INTO events
-                 (scope_kind, scope_id, event_type, ref_id, metadata, event_key, created_at)
-               SELECT 'inbox', ?, ?, ?, ?, ?, ?
-                WHERE EXISTS (
-                  SELECT 1 FROM room_members
-                   WHERE room_id = ? AND actor_id = ? AND status = 'active'
-                )
-               ON CONFLICT(event_key) DO NOTHING`,
-            )
-            .bind(actor, eventType, refId, JSON.stringify({}), eventKey, at, refId, actor)
-        : eventStatementIfAbsent(
-            db,
-            { eventKey, scopeKind: 'inbox', scopeId: actor, eventType, refId },
-            at,
-          ),
-      outboxStatementIfAbsent(db, { topic: inboxTopic(actor), eventKey }, at),
-      inboxHeadStatementIfEvent(db, actor, eventKey, at, 0),
-    );
-  }
-  return statements;
-}
-
 export async function roomCreate(
   db: D1Database,
   principal: Principal,
@@ -1026,10 +986,7 @@ async function createDirect(
   if (await isBlockedBetween(db, owner, target)) {
     throw new BusinessError('BLOCKED', '双方存在拉黑关系，不能创建单聊');
   }
-  const pairKey = sortedPairKey(owner, target);
-  const roomId = `rm_${(await sha256Hex(`direct:${pairKey}`)).slice(0, 32)}`;
-  const roomRef = `room_created:${roomId}`;
-  const participants = [owner, target];
+  const roomId = await directRoomIdFor(owner, target);
   const payloadHash = await sha256Hex(
     stableStringify({ kind: 'direct', members: [target], request_id: requestId }),
   );
@@ -1050,47 +1007,7 @@ async function createDirect(
         )
         .bind(owner, LIMITS.activeRoomsPerActor),
       ...directRelationStatements(db, owner, targetActor, at),
-      db
-        .prepare(
-          `INSERT INTO rooms
-             (room_id, kind, owner_id, title, direct_pair_key, head_seq, events_min_seq, member_seq, last_message_id, created_at, updated_at)
-           VALUES (?, 'direct', NULL, '', ?, 0, 0, 0, NULL, ?, ?)
-           ON CONFLICT(room_id) DO NOTHING`,
-        )
-        .bind(roomId, pairKey, at, at),
-      eventStatementIfAbsent(
-        db,
-        {
-          eventKey: roomRef,
-          scopeKind: 'room',
-          scopeId: roomId,
-          eventType: 'room_created',
-          refId: roomId,
-          metadata: { pair: participants },
-        },
-        at,
-      ),
-      outboxStatementIfAbsent(db, { topic: roomTopic(roomId), eventKey: roomRef }, at),
-      roomHeadStatement(db, roomId, roomRef, at),
-      ...participants.map((participant) =>
-        db
-          .prepare(
-            `INSERT INTO room_members
-               (room_id, actor_id, role, status, joined_seq, last_read_seq, joined_at, role_revision, updated_at)
-             VALUES (?, ?, 'member', 'active', (SELECT event_seq FROM events WHERE event_key = ?), 0, ?, 1, ?)
-             ON CONFLICT(room_id, actor_id) DO UPDATE SET
-               status = 'active', role = 'member', updated_at = excluded.updated_at`,
-          )
-          .bind(roomId, participant, roomRef, at, at),
-      ),
-      ...inboxChangeStatements(
-        db,
-        participants,
-        (actor) => `room_created:${roomId}:${actor}`,
-        'room_created',
-        at,
-        roomId,
-      ),
+      ...directRoomStatements(db, owner, target, roomId, at),
     ],
   });
 

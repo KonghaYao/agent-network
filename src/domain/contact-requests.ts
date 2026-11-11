@@ -294,6 +294,14 @@ export async function contactRequest(
       already_friends: false,
       auto_accepted: true,
     };
+    const relationStatements = await activateRelationStatements(
+      db,
+      owner,
+      target.actor_id,
+      autoManager ? 'auto_manager' : 'request',
+      contactRequestId,
+      at,
+    );
     try {
       await runIdempotent(db, {
         actorId: owner,
@@ -326,14 +334,7 @@ export async function contactRequest(
               at,
               autoManager ? owner : null,
             ),
-          ...activateRelationStatements(
-            db,
-            owner,
-            target.actor_id,
-            autoManager ? 'auto_manager' : 'request',
-            contactRequestId,
-            at,
-          ),
+          ...relationStatements,
           ...notificationStatements(
             db,
             caller,
@@ -677,6 +678,16 @@ export async function contactRequestRespond(
   const eventKey = accept
     ? `contact_request_accepted:${row.contact_request_id}`
     : `contact_request_rejected:${row.contact_request_id}`;
+  const relationStatements = accept
+    ? await activateRelationStatements(
+        db,
+        row.from_actor_id,
+        row.to_actor_id,
+        'request',
+        row.contact_request_id,
+        at,
+      )
+    : [];
 
   await runIdempotent(db, {
     actorId: viewer,
@@ -714,16 +725,7 @@ export async function contactRequestRespond(
           ),
       ];
       if (accept) {
-        statements.push(
-          ...activateRelationStatements(
-            db,
-            row.from_actor_id,
-            row.to_actor_id,
-            'request',
-            row.contact_request_id,
-            at,
-          ),
-        );
+        statements.push(...relationStatements);
       }
       statements.push(
         ...notificationStatements(

@@ -15,6 +15,7 @@ import type { ActorRow, ContactRelationRow, ContactRequestRow } from '../storage
 import { mapBatchError } from '../storage/transactions/runner';
 import { getActiveManagement } from './agent-access';
 import { contactBlockGuardStatement } from './contact-blocks';
+import { directRoomIdFor, directRoomStatements } from './direct-room';
 
 /**
  * 双向联系人关系与好友申请共享的底层能力。
@@ -299,17 +300,25 @@ export function contactPairInsert(
     .bind(owner, target, at);
 }
 
-/** 接受申请、管理者自动建联或好友链接兑换时复用；upsert 不会重复写 contacts。 */
-export function activateRelationStatements(
+/**
+ * 接受申请、管理者自动建联或好友链接兑换时复用；upsert 不会重复写 contacts。
+ *
+ * 关系激活与 direct 房间创建必须同事务：房间 id 由 pair_key 确定性生成，
+ * 重复接受、幂等重放或并发激活都只会命中已有的 `rooms`/事件行。这里不套用
+ * 显式建房的活跃房间上限，避免好友关系因房间配额而无法建立；显式
+ * `network_room_create` 仍保留原有限制。
+ */
+export async function activateRelationStatements(
   db: D1Database,
   actorAId: string,
   actorBId: string,
   source: 'request' | 'auto_manager' | 'invite_link',
   requestId: string | null,
   at: number,
-): D1PreparedStatement[] {
+): Promise<D1PreparedStatement[]> {
   const pairKey = sortedPairKey(actorAId, actorBId);
   const [actorA, actorB] = [actorAId, actorBId].sort();
+  const roomId = await directRoomIdFor(actorAId, actorBId);
   return [
     db
       .prepare(
@@ -327,6 +336,7 @@ export function activateRelationStatements(
       .bind(pairKey, actorA, actorB, source, requestId, at, at),
     contactPairInsert(db, actorAId, actorBId, at),
     contactPairInsert(db, actorBId, actorAId, at),
+    ...directRoomStatements(db, actorAId, actorBId, roomId, at),
   ];
 }
 

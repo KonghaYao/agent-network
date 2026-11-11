@@ -7,6 +7,8 @@
  * 兑换事件为 human-only informational 且不产生 delivery/pending。
  */
 
+import { createHash } from 'node:crypto';
+
 import { LIMITS } from '../../src/contracts/limits';
 import {
   baseUrl,
@@ -77,6 +79,10 @@ interface ContactRow {
   relation: 'active' | 'none';
 }
 
+interface RoomListPage {
+  items: { room_id: string; kind: string }[];
+}
+
 interface StreamItemView {
   source?: string;
   kind?: string;
@@ -139,6 +145,17 @@ async function contactRelation(connection: McpConnection, target: string): Promi
     limit: 100,
   });
   return page.items.find((item) => item.actor_id === target)?.relation ?? null;
+}
+
+/** 独立复算文档约定的确定性 direct 房间 id，避免用实现结果自证。 */
+function expectedDirectRoomId(a: string, b: string): string {
+  const pairKey = a < b ? `${a}|${b}` : `${b}|${a}`;
+  return `rm_${createHash('sha256').update(`direct:${pairKey}`).digest('hex').slice(0, 32)}`;
+}
+
+async function roomIds(connection: McpConnection): Promise<string[]> {
+  const page = await callTool<RoomListPage>(connection.client, 'network_rooms_list', { limit: 100 });
+  return page.items.map((item) => item.room_id);
 }
 
 export async function runContactLinkAcceptance(): Promise<void> {
@@ -218,6 +235,17 @@ export async function runContactLinkAcceptance(): Promise<void> {
     checkEqual('A07 兑换返回邀请人', redeemed.owner.actor_id, a.actor_id);
     checkEqual('A07 兑换方看到 active 关系', await contactRelation(bConn, a.actor_id), 'active');
     checkEqual('A07 邀请方看到 active 关系', await contactRelation(aConn, b.actor_id), 'active');
+    const autoRoomId = expectedDirectRoomId(a.actor_id, b.actor_id);
+    check(
+      'A07 链接兑换后邀请方自动获得 direct 房间',
+      (await roomIds(aConn)).includes(autoRoomId),
+      autoRoomId,
+    );
+    check(
+      'A07 链接兑换后兑换方 rooms_list 可见同一单聊',
+      (await roomIds(bConn)).includes(autoRoomId),
+      autoRoomId,
+    );
     checkEqual(
       'A07 兑换不创建 pending 好友申请',
       (
@@ -238,9 +266,10 @@ export async function runContactLinkAcceptance(): Promise<void> {
       'A07 兑换事件',
     );
     check(
-      'A07 兑换只发 contact informational 事件',
+      'A07 兑换只发 contact/room informational 事件',
       streamItemsOf(streamEvent).every(
-        (item) => item.kind === 'contact' && item.attention === 'informational',
+        (item) =>
+          (item.kind === 'contact' || item.kind === 'room') && item.attention === 'informational',
       ),
       streamItemsOf(streamEvent),
     );
@@ -257,6 +286,21 @@ export async function runContactLinkAcceptance(): Promise<void> {
     const replayResult = await redeemLink(bConn, token, redeemRequestId);
     checkEqual('A07 同一 request_id 兑换重放返回首次结果', replayResult.already_friends, false);
     checkEqual('A07 重放结果关系仍为 active', replayResult.relation.status, 'active');
+    checkEqual(
+      'A07 重放不重复建房',
+      (await roomIds(bConn)).filter((id) => id === autoRoomId).length,
+      1,
+    );
+    const existingRoom = await callTool<{ room: { room_id: string } }>(
+      bConn.client,
+      'network_room_create',
+      {
+        request_id: newRequestId('room'),
+        kind: 'direct',
+        members: [a.actor_id],
+      },
+    );
+    checkEqual('A07 已有自动房间时显式建房复用同一 room_id', existingRoom.room.room_id, autoRoomId);
     const usedError = await expectToolError(
       'A07 已使用链接再次兑换返回 CONTACT_LINK_INVALID',
       redeemLink(bConn, token),

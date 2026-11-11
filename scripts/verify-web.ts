@@ -10103,12 +10103,13 @@ async function main(): Promise<void> {
         { width: 1280, height: 800 },
         allErrors,
       );
-      await createFillerFriends(data.humanToken, 100);
+      const fillerFriends = await createFillerFriends(data.humanToken, 100);
       const bookmarkOnly = await createBookmarkFriend(data.humanToken, '仅收藏 Agent');
       const agentC = await createAgentFriend(data.humanToken, '加人候选 C');
       await page.goto(`${server.base}/`);
-      await page.locator('#room-list .room-item').first().waitFor();
-
+      // 100 个 Agent 好友现在会各自生成 direct 房间，可能占满首屏 50 条，
+      // 默认“好友”分类因此没有可渲染条目；这里只等待页面就绪。
+      await waitStreamConnected(page);
       await page.locator('#new-group').click();
       await page.locator('#group-contacts input[type=checkbox]').first().waitFor();
       // 好友超过一页时用搜索定位；选择保存在控制器里，不受过滤影响。
@@ -10157,8 +10158,7 @@ async function main(): Promise<void> {
       );
       check('群聊头部显示添加成员入口', await page.locator('#add-members').isVisible());
 
-      await page.locator('#room-filter-agent').click();
-      await page.locator(roomLink(data.direct.room.room_id)).click();
+      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
       await waitRoom(page, data.direct.room.room_id, data.agentA.name);
       checkEqual('单聊不显示添加成员入口', await page.locator('#add-members').isHidden(), true);
       await page.locator('#room-filter-group').click();
@@ -10519,6 +10519,14 @@ async function main(): Promise<void> {
       await page.unroute('**/mcp');
       await page.locator('#members-cancel').click();
       await context.close();
+      // 100 个 filler 好友现在各自带一个自动 direct 房间；关系结束后房间按
+      // 既有规则从 rooms_list 隐藏，避免占满后续用例的首屏 50 条。
+      for (const friend of fillerFriends) {
+        await rawTool(data.humanToken, 'network_contact_remove', {
+          request_id: requestId('contact_remove'),
+          actor_id: friend.actor_id,
+        });
+      }
     }
 
     // 2b-3. 非 owner 打开添加成员：只读展示成员并明确提示，不发送写入。

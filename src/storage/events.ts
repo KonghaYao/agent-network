@@ -213,3 +213,42 @@ export function inboxHeadStatementIfEvent(
     )
     .bind(eventKey, pendingDelta, at, actorId, eventKey);
 }
+
+/** 房间创建时所有参与者的 inbox 事件（含分享入口），重复执行不产生新提示。 */
+export function inboxChangeStatements(
+  db: D1Database,
+  actorIds: string[],
+  eventKeyFor: (actor: string) => string,
+  eventType: string,
+  at: number,
+  refId: string,
+  onlyIfMember = false,
+): D1PreparedStatement[] {
+  const statements: D1PreparedStatement[] = [];
+  for (const actor of actorIds) {
+    const eventKey = eventKeyFor(actor);
+    statements.push(
+      onlyIfMember
+        ? db
+            .prepare(
+              `INSERT INTO events
+                 (scope_kind, scope_id, event_type, ref_id, metadata, event_key, created_at)
+               SELECT 'inbox', ?, ?, ?, ?, ?, ?
+                WHERE EXISTS (
+                  SELECT 1 FROM room_members
+                   WHERE room_id = ? AND actor_id = ? AND status = 'active'
+                )
+               ON CONFLICT(event_key) DO NOTHING`,
+            )
+            .bind(actor, eventType, refId, JSON.stringify({}), eventKey, at, refId, actor)
+        : eventStatementIfAbsent(
+            db,
+            { eventKey, scopeKind: 'inbox', scopeId: actor, eventType, refId },
+            at,
+          ),
+      outboxStatementIfAbsent(db, { topic: inboxTopic(actor), eventKey }, at),
+      inboxHeadStatementIfEvent(db, actor, eventKey, at, 0),
+    );
+  }
+  return statements;
+}

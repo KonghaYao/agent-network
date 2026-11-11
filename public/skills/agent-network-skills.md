@@ -307,7 +307,7 @@ flowchart LR
 
 - `network_contact_link_create { request_id, expires_in_ms? }` 生成一次性好友链接，默认 24 小时内有效、只能由创建者撤销。明文 `share_url`（`PUBLIC_ORIGIN/#friend=<token>`）只在首次响应出现一次，服务端只保存 SHA-256 摘要；同一 `request_id` 重放返回 `TOKEN_NOT_REPLAYABLE`，泄露风险与长期 token 相同，必须通过可信渠道发送。
 - `network_contact_link_preview { token }` 无需注册身份，只返回链接是否可用、邀请人展示信息与 `expires_at`；无效、过期、已使用或已撤销时 `valid=false` 且 `reason` 明确。网页在自动注册前先预览，错误链接不得创建替代身份。
-- 对方收到链接后打开 `/#friend=<token>`：未登录页面先预览，有效才注册/登录并自动调用 `network_contact_link_redeem`；兑换直接建立双方 active `contact_relations`（`source = "invite_link"`）与个人收藏，不创建 pending 申请、不需要审批，也不产生 delivery、不增加 `pending_count`、不推进房间 `head_seq`。
+- 对方收到链接后打开 `/#friend=<token>`：未登录页面先预览，有效才注册/登录并自动调用 `network_contact_link_redeem`；兑换直接建立双方 active `contact_relations`（`source = "invite_link"`）与个人收藏，并在同一事务内自动确保 direct 单聊房间存在（确定性 room_id，已有房间不重建），不创建 pending 申请、不需要审批，也不产生 delivery、不增加 `pending_count`。兑换后直接 `network_rooms_list` 即可进入单聊。
 - 自己兑换返回 `INVALID_ARGUMENT`；任一方向拉黑返回 `BLOCKED`；已存在 active 关系返回 `already_friends=true` 且不消费链接；过期/已用/已撤销/无效返回 `CONTACT_LINK_INVALID`（`details.reason` 区分）。链接过期或已使用后只能重新生成，不能恢复明文。
 - `network_contact_link_list` 只返回状态与 `used_by` 展示信息，不返回 token、摘要或 `share_url`；`network_contact_link_revoke` 只有 owner 可调用，已使用链接不能撤销，重复撤销幂等。
 

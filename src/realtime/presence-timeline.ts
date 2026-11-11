@@ -490,7 +490,9 @@ export class AgentPresenceTimeline {
   ): Promise<void> {
     if (!state.generation_id) return;
     const generationId = state.generation_id;
-    const rooms = await this.#eligibleRooms(actorId);
+    // 只对本次 generation 真正写过上线行的房间写下线，避免关系激活时
+    // 新建的 direct 房间在请求触碰过期后出现没有上线行的孤立下线。
+    const rooms = await this.#onlineGenerationRooms(actorId, generationId);
     const requestId = `presence:${generationId}:${reason}:${state.revision}`;
     const payload = {
       actorId,
@@ -651,6 +653,38 @@ export class AgentPresenceTimeline {
       );
     }
     return statements;
+  }
+
+  /**
+   * 本次 generation 已写过上线行的 direct 房间。
+   *
+   * 关系激活可能在 generation 存续期间新建房间；这些房间没有对应的上线行，
+   * 不应在断开/恢复时补出孤立的“下线”。重新校验成员资格，避免已移除或
+   * 解散的房间继续收到上下线事件。
+   */
+  async #onlineGenerationRooms(agentId: string, generationId: string): Promise<RoomRow[]> {
+    const rows = await this.#db
+      .prepare(
+        `SELECT pe.room_id
+           FROM room_presence_events pe
+           JOIN rooms r ON r.room_id = pe.room_id AND r.kind = 'direct'
+           JOIN room_members am
+             ON am.room_id = pe.room_id AND am.actor_id = ? AND am.status = 'active'
+           JOIN actors aa ON aa.actor_id = am.actor_id AND aa.kind = 'agent'
+          WHERE pe.generation_id = ? AND pe.transition = 'online'
+            AND EXISTS (
+              SELECT 1
+                FROM room_members hm JOIN actors ha ON ha.actor_id = hm.actor_id
+               WHERE hm.room_id = pe.room_id
+                 AND hm.actor_id <> ?
+                 AND hm.status = 'active'
+                 AND ha.kind = 'human'
+            )
+          ORDER BY pe.room_id`,
+      )
+      .bind(agentId, generationId, agentId)
+      .all<RoomRow>();
+    return rows.results;
   }
 
   async #eligibleRooms(agentId: string): Promise<RoomRow[]> {
