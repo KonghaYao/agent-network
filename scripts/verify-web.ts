@@ -6896,16 +6896,41 @@ async function main(): Promise<void> {
 
       await page.locator('#new-agent').click();
       checkEqual('创建前提示词块隐藏', await page.locator('#new-agent-result').isHidden(), true);
+      const newAgentModalText = (await page.locator('#new-agent-modal').textContent()) ?? '';
+      check(
+        '新建 Agent 面板不再包含分享链接与技能 URL',
+        (await page.locator('#new-agent-share').count()) === 0 &&
+          (await page.locator('#new-agent-skill-url').count()) === 0 &&
+          !newAgentModalText.includes('分享链接') &&
+          !newAgentModalText.includes('技能 URL') &&
+          !newAgentModalText.includes('复制分享链接'),
+        newAgentModalText,
+      );
+      check(
+        '新建 Agent 面板保留 MCP URL 与提示词入口',
+        (await page.locator('#new-agent-url').count()) === 1 &&
+          (await page.locator('#new-agent-copy').count()) === 1 &&
+          (await page.locator('#new-agent-prompt').count()) === 1 &&
+          (await page.locator('#new-agent-prompt-copy').count()) === 1,
+      );
+      check(
+        '新建 Agent 面板精简描述文本',
+        !newAgentModalText.includes('Agents 注册表') &&
+          !newAgentModalText.includes('localStorage 可被同源脚本读取') &&
+          !newAgentModalText.includes('供会话右键提示词使用'),
+        newAgentModalText,
+      );
+      checkEqual(
+        '新建 Agent 面板只保留一条说明',
+        await page.locator('#new-agent-modal .new-agent-warning').count(),
+        1,
+      );
       await page.fill('#new-agent-name', '网页新建 Agent');
       await page.locator('#new-agent-create').click();
       await page.locator('#new-agent-result').waitFor({ state: 'visible' });
       const newAgentMcpUrl = await page.inputValue('#new-agent-url');
-      const newAgentShareUrl = await page.inputValue('#new-agent-share');
-      const newAgentSkillUrl = await page.inputValue('#new-agent-skill-url');
       const newAgentPrompt = await page.inputValue('#new-agent-prompt');
       check('新建 Agent 返回 MCP URL', newAgentMcpUrl.startsWith('http'));
-      check('新建 Agent 返回分享链接', newAgentShareUrl.startsWith('http'));
-      checkEqual('技能 URL 使用当前 origin', newAgentSkillUrl, `${server.base}/skills/agent-network-skills.md`);
       const newAgentUrlToken = new URL(newAgentMcpUrl).searchParams.get('token') ?? '';
       check(
         '新建 Agent 提示词使用短版 CLI 自学入口',
@@ -6950,38 +6975,45 @@ async function main(): Promise<void> {
         '新建 Agent 提示词包含凭据使用警告',
         newAgentPrompt.includes('凭据只给目标 Agent，勿发群、日志或截图'),
       );
-      const promptWarning =
-        (await page.locator('.new-agent-prompt .new-agent-warning').textContent()) ?? '';
-      const createWarning =
-        (await page.locator('#new-agent-modal .new-agent-warning').first().textContent()) ?? '';
+      const newAgentWarning =
+        (await page.locator('#new-agent-modal .new-agent-warning').textContent()) ?? '';
       check(
-        '新建 Agent 提示本地保存与安全边界',
-        createWarning.includes('MCP URL 含长期 token') &&
-          createWarning.includes('localStorage 可被同源脚本读取') &&
-          createWarning.includes('不要截图、发群或写入日志') &&
-          promptWarning.includes('提示词包含 MCP URL 凭据') &&
-          promptWarning.includes('不要发群、截图或写日志'),
-        { createWarning, promptWarning },
+        '新建 Agent 提示凭据只在本机使用',
+        newAgentWarning.includes('MCP URL 与提示词含长期 token') &&
+          newAgentWarning.includes('只在本机使用') &&
+          newAgentWarning.includes('不要截图、发群或写入日志'),
+        newAgentWarning,
       );
 
       await page.evaluate(`(() => {
-        window.__copiedPrompt = null;
+        window.__copiedNewAgent = null;
         Object.defineProperty(navigator, 'clipboard', {
           configurable: true,
           value: {
             writeText: function (text) {
-              window.__copiedPrompt = text;
+              window.__copiedNewAgent = text;
               return Promise.resolve();
             }
           }
         });
       })()`);
+      await page.locator('#new-agent-copy').click();
+      await page.waitForFunction(
+        `document.getElementById('new-agent-copy').textContent === '已复制'`,
+      );
+      check('复制 MCP URL 按钮反馈已复制', true);
+      checkEqual(
+        '复制的是完整 MCP URL',
+        await page.evaluate('window.__copiedNewAgent'),
+        newAgentMcpUrl,
+      );
+      await page.evaluate('window.__copiedNewAgent = null');
       await page.locator('#new-agent-prompt-copy').click();
       await page.waitForFunction(
         `document.getElementById('new-agent-prompt-copy').textContent === '已复制'`,
       );
       check('复制提示词按钮反馈已复制', true);
-      const copiedNewAgentPrompt = (await page.evaluate('window.__copiedPrompt')) as string | null;
+      const copiedNewAgentPrompt = (await page.evaluate('window.__copiedNewAgent')) as string | null;
       check(
         '复制的是包含短版 CLI 接入指引的整段提示词',
         Boolean(copiedNewAgentPrompt) &&
@@ -7159,22 +7191,16 @@ async function main(): Promise<void> {
       const closedState = (await page.evaluate(`(() => ({
         resultHidden: document.getElementById('new-agent-result').hidden,
         url: document.getElementById('new-agent-url').value,
-        share: document.getElementById('new-agent-share').value,
-        skill: document.getElementById('new-agent-skill-url').value,
         prompt: document.getElementById('new-agent-prompt').value
       }))()`)) as {
         resultHidden: boolean;
         url: string;
-        share: string;
-        skill: string;
         prompt: string;
       };
       check(
-        '关闭后清空 URL、分享链接与提示词',
+        '关闭后清空 URL 与提示词',
         closedState.resultHidden &&
           closedState.url === '' &&
-          closedState.share === '' &&
-          closedState.skill === '' &&
           closedState.prompt === '',
       );
 
@@ -7182,7 +7208,6 @@ async function main(): Promise<void> {
       checkEqual('关闭后重开不显示旧 URL', await page.locator('#new-agent-result').isHidden(), true);
       checkEqual('重开后 URL 输入清空', await page.inputValue('#new-agent-url'), '');
       checkEqual('重开后提示词清空', await page.inputValue('#new-agent-prompt'), '');
-      checkEqual('重开后技能 URL 清空', await page.inputValue('#new-agent-skill-url'), '');
       checkEqual(
         'localStorage 保存浏览器 token 与按身份分区的 Agent 注册表',
         await page.evaluate('Object.keys(localStorage).sort().join(",")'),
@@ -7208,7 +7233,8 @@ async function main(): Promise<void> {
         registryDump.length > 0 &&
           !registryDump.includes(data.humanToken) &&
           !registryDump.includes(newAgentPrompt) &&
-          !registryDump.includes(newAgentShareUrl),
+          !registryDump.includes('share_url') &&
+          !registryDump.includes('/a/'),
       );
       await page.locator('#new-agent-close').click();
       await page.reload();
@@ -7275,6 +7301,20 @@ async function main(): Promise<void> {
       await page.goto(`${server.base}/`);
       await page.locator('#room-list .room-item').first().waitFor();
       await page.locator('#new-agent').click();
+      await page.emulateMedia({ colorScheme: 'dark' });
+      const darkWarningColors = (await page.evaluate(`(() => {
+        const warning = document.querySelector('#new-agent-modal .new-agent-warning');
+        if (!warning) return null;
+        const style = getComputedStyle(warning);
+        return { background: style.backgroundColor, color: style.color };
+      })()`)) as { background: string; color: string } | null;
+      check(
+        '390px 暗色下新建 Agent 提示对比度可读',
+        Boolean(darkWarningColors) &&
+          contrastRatio(darkWarningColors!.color, darkWarningColors!.background) >= 4.5,
+        darkWarningColors,
+      );
+      await page.emulateMedia({ colorScheme: 'light' });
       await page.fill('#new-agent-name', '移动端 Agent');
       await page.locator('#new-agent-create').click();
       await page.locator('#new-agent-result').waitFor({ state: 'visible' });
@@ -7324,15 +7364,11 @@ async function main(): Promise<void> {
         modalHidden: document.getElementById('new-agent-modal').hidden,
         resultHidden: document.getElementById('new-agent-result').hidden,
         url: document.getElementById('new-agent-url').value,
-        share: document.getElementById('new-agent-share').value,
-        skill: document.getElementById('new-agent-skill-url').value,
         prompt: document.getElementById('new-agent-prompt').value
       }))()`)) as {
         modalHidden: boolean;
         resultHidden: boolean;
         url: string;
-        share: string;
-        skill: string;
         prompt: string;
       };
       check(
@@ -7340,8 +7376,6 @@ async function main(): Promise<void> {
         escapedState.modalHidden &&
           escapedState.resultHidden &&
           escapedState.url === '' &&
-          escapedState.share === '' &&
-          escapedState.skill === '' &&
           escapedState.prompt === '',
       );
       const mobileAgentName = '移动端 Agent';
@@ -7409,13 +7443,11 @@ async function main(): Promise<void> {
         ) >= 0`,
       );
       const failedMcpUrl = await page.inputValue('#new-agent-url');
-      const failedShareUrl = await page.inputValue('#new-agent-share');
       const failedPrompt = await page.inputValue('#new-agent-prompt');
       const failedToken = new URL(failedMcpUrl).searchParams.get('token') ?? '';
       check(
-        '会话创建失败仍展示 MCP URL、分享链接与提示词',
+        '会话创建失败仍展示 MCP URL 与提示词',
         failedMcpUrl.startsWith('http') &&
-          failedShareUrl.startsWith('http') &&
           failedToken.length > 0 &&
           failedPrompt.includes(`AGENTNET_TOKEN="${failedToken}"`),
       );

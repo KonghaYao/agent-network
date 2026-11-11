@@ -19,13 +19,9 @@ const newAgentCloseButton = document.getElementById('new-agent-close');
 const newAgentErrorElement = document.getElementById('new-agent-error');
 const newAgentResultElement = document.getElementById('new-agent-result');
 const newAgentUrlInput = document.getElementById('new-agent-url');
-const newAgentShareInput = document.getElementById('new-agent-share');
-const newAgentSkillUrlInput = document.getElementById('new-agent-skill-url');
 const newAgentPromptInput = document.getElementById('new-agent-prompt');
 const newAgentCopyButton = document.getElementById('new-agent-copy');
-const newAgentShareCopyButton = document.getElementById('new-agent-share-copy');
 const newAgentPromptCopyButton = document.getElementById('new-agent-prompt-copy');
-const NEW_AGENT_SKILL_PATH = '/skills/agent-network-skills.md';
 
 let newAgentToken = '';
 let newAgentUrl = '';
@@ -34,10 +30,6 @@ let newAgentCreated = false;
 let newAgentRequestSeq = 0;
 let newAgentOpener = null;
 const newAgentCopyTimers = new Map();
-
-function newAgentSkillUrl() {
-  return location.origin + NEW_AGENT_SKILL_PATH;
-}
 
 /** 新版 CLI 接入提示词：CLI 五步 + 最小连接信息，细节交给 --help 与 skills --harness。 */
 function newAgentBuildPrompt(token, actorId) {
@@ -75,8 +67,6 @@ function newAgentReset() {
   newAgentBusy = false;
   newAgentCreated = false;
   if (newAgentUrlInput) newAgentUrlInput.value = '';
-  if (newAgentShareInput) newAgentShareInput.value = '';
-  if (newAgentSkillUrlInput) newAgentSkillUrlInput.value = '';
   if (newAgentPromptInput) newAgentPromptInput.value = '';
   if (newAgentResultElement) newAgentResultElement.hidden = true;
   if (newAgentNameInput) newAgentNameInput.disabled = false;
@@ -86,7 +76,6 @@ function newAgentReset() {
   }
   if (newAgentCloseButton) newAgentCloseButton.disabled = false;
   newAgentResetCopyButton(newAgentCopyButton);
-  newAgentResetCopyButton(newAgentShareCopyButton);
   newAgentResetCopyButton(newAgentPromptCopyButton);
   newAgentSetError('');
 }
@@ -206,19 +195,12 @@ async function newAgentCreate(event) {
       ? created.agent_session_id
       : '';
     const registered = {
-      actor_id: created.actor_id,
-      share_url: created.share_url
+      actor_id: created.actor_id
     };
     newAgentCreated = true;
     newAgentBusy = false;
     if (newAgentNameInput) newAgentNameInput.disabled = true;
     if (newAgentUrlInput) newAgentUrlInput.value = newAgentUrl;
-    if (newAgentShareInput) {
-      newAgentShareInput.value =
-        typeof registered.share_url === 'string' ? registered.share_url : '';
-    }
-    const skillUrl = newAgentSkillUrl();
-    if (newAgentSkillUrlInput) newAgentSkillUrlInput.value = skillUrl;
     if (newAgentPromptInput) {
       newAgentPromptInput.value = newAgentBuildPrompt(newAgentToken, registered.actor_id);
     }
@@ -282,9 +264,7 @@ async function newAgentCreate(event) {
       newAgentCreateButton.disabled = true;
       newAgentCreateButton.textContent = '已创建';
     }
-    if (!newAgentShareInput || !newAgentShareInput.value) {
-      newAgentSetError('Agent 已创建，但服务端未返回分享链接');
-    } else if (roomError || registryError) {
+    if (roomError || registryError) {
       const warnings = [];
       if (roomError) warnings.push('会话添加失败：' + roomError);
       if (registryError) warnings.push(registryError);
@@ -301,8 +281,6 @@ async function newAgentCreate(event) {
     newAgentToken = '';
     newAgentUrl = '';
     if (newAgentUrlInput) newAgentUrlInput.value = '';
-    if (newAgentShareInput) newAgentShareInput.value = '';
-    if (newAgentSkillUrlInput) newAgentSkillUrlInput.value = '';
     if (newAgentPromptInput) newAgentPromptInput.value = '';
     if (newAgentResultElement) newAgentResultElement.hidden = true;
     if (newAgentCreateButton) {
@@ -327,11 +305,6 @@ document.addEventListener('keydown', function (event) {
 if (newAgentCopyButton) {
   newAgentCopyButton.addEventListener('click', function () {
     newAgentCopy(newAgentCopyButton, newAgentUrlInput, ' MCP URL ');
-  });
-}
-if (newAgentShareCopyButton) {
-  newAgentShareCopyButton.addEventListener('click', function () {
-    newAgentCopy(newAgentShareCopyButton, newAgentShareInput, '分享链接');
   });
 }
 if (newAgentPromptCopyButton) {

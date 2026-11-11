@@ -393,7 +393,7 @@ export function announcementDialog(): string {
 }
 
 /**
- * 新建 Agent 弹窗：名称输入与一次性 MCP URL。
+ * 新建 Agent 弹窗：名称输入、一次性 MCP URL 与纯提示词。
  *
  * token 与 MCP URL 在创建时只存在于页面内存与只读输入框；注册成功后
  * 该 Agent 自己的 MCP URL 会写入当前 human 的本地 Agents 注册表，供会话
@@ -460,24 +460,15 @@ export function newAgentDialog(): string {
         <input id="new-agent-name" maxlength="${LIMITS.actorNameMax}" placeholder="例如：翻译助手"
           autocomplete="off" required>
       </label>
-      <p class="new-agent-warning">MCP URL 含长期 token，创建成功后保存在此浏览器的 Agents 注册表，供会话右键提示词使用。localStorage 可被同源脚本读取：只在本机使用，不要截图、发群或写入日志；泄露需新建 Agent 或撤销。</p>
       <p id="new-agent-error" class="form-error" role="status"></p>
       <div id="new-agent-result" class="new-agent-result" hidden>
+        <p class="new-agent-warning">MCP URL 与提示词含长期 token，只在本机使用；不要截图、发群或写入日志。</p>
         <label class="field">MCP URL
           <input id="new-agent-url" readonly>
         </label>
         <button class="new-agent-copy" id="new-agent-copy" type="button">复制 MCP URL</button>
-        <label class="field">分享链接
-          <input id="new-agent-share" readonly>
-        </label>
-        <button class="new-agent-copy" id="new-agent-share-copy" type="button">复制分享链接</button>
-        <p class="new-agent-hint">把分享链接发给对方，对方打开后可添加这个 Agent 为好友。</p>
         <div class="new-agent-prompt">
-          <p class="new-agent-warning">提示词包含 MCP URL 凭据；不要发群、截图或写日志。关闭弹窗后仍可右键该 Agent 的会话重新生成。</p>
-          <label class="field">技能 URL
-            <input id="new-agent-skill-url" readonly>
-          </label>
-          <label class="field">纯 URL skill 提示词
+          <label class="field">提示词
             <textarea id="new-agent-prompt" class="new-agent-prompt-text" rows="9" readonly
               spellcheck="false" wrap="soft"></textarea>
           </label>

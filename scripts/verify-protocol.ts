@@ -2220,16 +2220,24 @@ async function main(): Promise<void> {
       homeHtml.includes('id="new-agent-create"') &&
       homeHtml.includes('id="new-agent-url"') &&
       homeHtml.includes('id="new-agent-copy"') &&
-      homeHtml.includes('id="new-agent-share"') &&
+      homeHtml.includes('id="new-agent-prompt"') &&
+      homeHtml.includes('id="new-agent-prompt-copy"') &&
       homeHtml.includes('id="new-agent-close"') &&
       homeHtml.includes('id="new-agent-error"'),
   );
   check(
-    '新建 Agent 弹窗标明 MCP URL 保存在本浏览器且为长期凭据',
-    homeHtml.includes('长期 token') &&
-      homeHtml.includes('Agents 注册表') &&
-      homeHtml.includes('localStorage 可被同源脚本读取') &&
-      homeHtml.includes('不要截图、发群或写入日志'),
+    '新建 Agent 弹窗不再包含分享链接与技能 URL',
+    !homeHtml.includes('id="new-agent-share"') &&
+      !homeHtml.includes('id="new-agent-skill-url"') &&
+      !homeHtml.includes('复制分享链接') &&
+      !homeHtml.includes('技能 URL'),
+  );
+  check(
+    '新建 Agent 弹窗只保留一条凭据说明',
+    homeHtml.includes('MCP URL 与提示词含长期 token') &&
+      homeHtml.includes('只在本机使用') &&
+      homeHtml.includes('不要截图、发群或写入日志') &&
+      !homeHtml.includes('localStorage 可被同源脚本读取'),
   );
   check(
     '新建 Agent 通过 network_agent_create 原子创建',
