@@ -111,6 +111,7 @@ export async function runContactLinkWebAcceptance(deps: ContactLinkWebDeps): Pro
     })()`);
     await page.locator('#contact-requests').click();
     await page.locator('#contact-modal').waitFor({ state: 'visible' });
+    await page.locator('#contact-tab-more').click();
     await page.locator('#contact-link-create').click();
     await waitForText(page, '#contact-link-status', '链接已生成');
     checkEqual(
@@ -173,6 +174,7 @@ export async function runContactLinkWebAcceptance(deps: ContactLinkWebDeps): Pro
       // A 重新打开弹窗：链接状态要反映兑换结果，弹窗不再重复好友列表。
       await page.locator('#contact-requests').click();
       await page.locator('#contact-modal').waitFor({ state: 'visible' });
+      await page.locator('#contact-tab-more').click();
       checkEqual(
         '好友申请弹窗不显示我的好友区块',
         await page.locator('#contact-modal .contact-friends-panel').count(),

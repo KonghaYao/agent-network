@@ -120,14 +120,16 @@ try{
   await page.locator('#contact-requests').click();
   await page.locator('#contact-modal').waitFor({state:'visible'});
   const friendPanels=await page.locator('#contact-modal .contact-friends-panel, #contact-modal #contact-friend-list').count();
-  const contactModalText=await page.locator('#contact-modal').innerText();
+  const contactModalText=await page.locator('#contact-modal').textContent();
+  await page.locator('#contact-tab-requests').click();
   const contactRequestsVisible=await page.locator('#contact-request-list').isVisible();
+  await page.locator('#contact-tab-more').click();
   const contactLinkVisible=await page.locator('#contact-link-create').isVisible();
   const contactPolicyVisible=await page.locator('#contact-policy-select').isVisible();
-  const noFriendBlock=friendPanels===0&&!contactModalText.includes('我的好友');
+  const noFriendBlock=friendPanels===0&&!(contactModalText??'').includes('我的好友');
   record('U05a','好友申请弹窗不再展示我的好友',['打开“好友申请”弹窗'],
     '弹窗只保留待处理申请、好友链接与接收策略，不出现“我的好友”区块',noFriendBlock&&contactRequestsVisible&&contactLinkVisible&&contactPolicyVisible?'弹窗无“我的好友”区块；待处理申请、好友链接与接收策略入口仍在。':'弹窗仍渲染“我的好友”或缺少其他入口。',noFriendBlock&&contactRequestsVisible&&contactLinkVisible&&contactPolicyVisible?'PASS':'BUG',
-    ['我的好友区块数量='+friendPanels,'弹窗文本含“我的好友”='+contactModalText.includes('我的好友'),'申请/链接/策略入口='+[contactRequestsVisible,contactLinkVisible,contactPolicyVisible].join('/')]);
+    ['我的好友区块数量='+friendPanels,'弹窗文本含“我的好友”='+(contactModalText??'').includes('我的好友'),'申请/链接/策略入口='+[contactRequestsVisible,contactLinkVisible,contactPolicyVisible].join('/')]);
   await page.locator('#contact-modal-close').click();
   await page.locator('#contact-modal').waitFor({state:'hidden'});
 

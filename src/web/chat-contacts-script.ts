@@ -11,6 +11,15 @@ const contactRequestsButton = document.getElementById('contact-requests');
 const contactRequestsBadge = document.getElementById('contact-requests-badge');
 const contactModal = document.getElementById('contact-modal');
 const contactModalClose = document.getElementById('contact-modal-close');
+const contactSegments = document.getElementById('contact-segments');
+const contactTabs = contactSegments
+  ? Array.prototype.slice.call(contactSegments.querySelectorAll('[data-contact-tab]'))
+  : [];
+const contactPanels = {
+  search: document.getElementById('contact-panel-search'),
+  requests: document.getElementById('contact-panel-requests'),
+  more: document.getElementById('contact-panel-more')
+};
 const contactRequestList = document.getElementById('contact-request-list');
 const contactRequestCount = document.getElementById('contact-request-count');
 const contactRequestMore = document.getElementById('contact-request-more');
@@ -64,6 +73,23 @@ function setContactCount(element, count) {
   if (!element) return;
   element.textContent = String(count);
   element.hidden = count === 0;
+}
+
+/**
+ * 分段切换只改变可见性，不移除 DOM：搜索输入、结果与申请列表在切换后
+ * 原样保留，返回分段时不需要重新请求。
+ */
+function setContactTab(name) {
+  if (name !== 'search' && name !== 'requests' && name !== 'more') return;
+  for (const tab of contactTabs) {
+    const active = tab.dataset.contactTab === name;
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    tab.tabIndex = active ? 0 : -1;
+  }
+  Object.keys(contactPanels).forEach(function (key) {
+    const panel = contactPanels[key];
+    if (panel) panel.hidden = key !== name;
+  });
 }
 
 function contactButton(label, className, handler) {
@@ -129,13 +155,22 @@ function renderContactSearchResults(items) {
     row.className = 'contact-search-item';
     const main = document.createElement('div');
     main.className = 'contact-search-main';
+    const heading = document.createElement('div');
+    heading.className = 'contact-search-heading';
     const name = document.createElement('strong');
     name.className = 'contact-search-name';
     name.textContent = item.actor.name || '未命名用户';
+    heading.append(name);
+    if (item.actor.kind === 'agent') {
+      const kind = document.createElement('span');
+      kind.className = 'contact-search-kind';
+      kind.textContent = 'Agent';
+      heading.append(kind);
+    }
     const id = document.createElement('code');
     id.className = 'contact-search-id';
     id.textContent = item.actor.actor_id || '';
-    main.append(name, id);
+    main.append(heading, id);
     row.append(main);
 
     const stateText = contactSearchStateText(item);
@@ -725,6 +760,7 @@ async function prepareContactLinkOnLoggedOut(token) {
 
 async function openContactModal() {
   if (!contactModal) return;
+  setContactTab('search');
   contactSearchGeneration += 1;
   const openGeneration = contactSearchGeneration;
   if (contactSearchAbort) contactSearchAbort.abort();
@@ -753,7 +789,9 @@ async function openContactModal() {
     loadContactLinks()
   ]);
   if (openGeneration !== contactSearchGeneration || contactModal.hidden) return;
-  if (contactSearchInput) contactSearchInput.focus();
+  if (contactSearchInput && contactPanels.search && !contactPanels.search.hidden) {
+    contactSearchInput.focus();
+  }
 }
 
 function closeContactModal() {
@@ -777,6 +815,31 @@ if (contactRequestMore) {
 }
 if (contactModalClose) {
   contactModalClose.addEventListener('click', closeContactModal);
+}
+if (contactSegments) {
+  contactSegments.addEventListener('click', function (event) {
+    const tab = event.target && event.target.closest
+      ? event.target.closest('[data-contact-tab]')
+      : null;
+    if (!tab) return;
+    setContactTab(tab.dataset.contactTab);
+  });
+  contactSegments.addEventListener('keydown', function (event) {
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].indexOf(event.key) < 0) return;
+    event.preventDefault();
+    const index = contactTabs.findIndex(function (tab) {
+      return tab.getAttribute('aria-selected') === 'true';
+    });
+    let next = index;
+    if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = contactTabs.length - 1;
+    else if (event.key === 'ArrowLeft') next = (index - 1 + contactTabs.length) % contactTabs.length;
+    else next = (index + 1) % contactTabs.length;
+    const target = contactTabs[next];
+    if (!target) return;
+    setContactTab(target.dataset.contactTab);
+    target.focus();
+  });
 }
 if (contactModal) {
   contactModal.addEventListener('click', function (event) {
