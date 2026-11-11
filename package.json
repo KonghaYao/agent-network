@@ -18,6 +18,7 @@
     "test:m07": "bun scripts/verify-m07.ts",
     "test:events": "bun scripts/verify-events.ts",
     "test:ts-monitor": "bun scripts/verify-ts-monitor.ts",
+    "test:dsh-plugin": "bun scripts/verify-dsh-plugin.ts",
     "test:ts-codex-monitor": "bun scripts/verify-ts-codex-monitor.ts",
     "test:web": "bun scripts/verify-web.ts",
     "test:web:contacts": "bun scripts/verify-contact-search-web.ts",

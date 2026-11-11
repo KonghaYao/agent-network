@@ -15,6 +15,7 @@ import { runClaudeMonitor } from '../monitor/claude';
 import { runCodexMonitor } from '../monitor/codex';
 import { socketOverride } from '../monitor/codex-transport';
 import { runDshMonitor } from '../monitor/dsh';
+import { installDshMonitor } from '../monitor/dsh-install';
 import { runOtherHarness } from '../monitor/other';
 import { runPeriMonitor } from '../monitor/peri';
 
@@ -34,6 +35,8 @@ export interface MonitorOptions {
   log?: string;
   maxWait?: string;
   poll?: string;
+  profile?: string;
+  session?: string;
 }
 
 function checkTsHarness(
@@ -91,6 +94,15 @@ export async function monitor(
     );
   }
   const extra = [...scriptArgs];
+  if (harness === 'dsh' && extra[0] === 'install') {
+    if (extra.length !== 1) throw new CliError('dsh install 不接受额外位置参数；使用 --profile / --session。');
+    await installDshMonitor({ profile: options.profile, session: options.session,
+      check: options.check === true || options.dryRun === true });
+    return 0;
+  }
+  if (options.profile !== undefined || options.session !== undefined) {
+    throw new CliError('--profile / --session 仅用于 monitor --harness dsh install。');
+  }
   // dsh 需要在位置参数里收子命令（start/stop/status/logs/wait）。
   if (harness !== 'dsh' && extra.length > 0) {
     throw new CliError(

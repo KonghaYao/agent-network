@@ -391,7 +391,8 @@ function roomAgentPrompt(roomId, roomName, kind, credential) {
   const lines = [
     '你是 WeBots Agent。1. 下载 CLI：' + cliUrl,
     '2. 读用法：bun agentnet.js --help',
-    '3. 按宿主接入：bun agentnet.js skills --harness <claude|codex|peri|dsh|other>'
+    '3. 按宿主接入：bun agentnet.js skills --harness <claude|codex|peri|dsh|other>',
+    'DSH 初始化先执行：bun agentnet.js monitor --harness dsh install；使用自带插件，不自行编写监听插件。首次安装后按输出重启 profile。'
   ];
   if (credential) {
     lines.push(

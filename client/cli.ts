@@ -96,7 +96,9 @@ const HELP_GUIDE = `
     claude  TS 引擎；stdout JSON 事件，stderr READY；可传 --state-dir <dir>
     codex   TS 桥接；app-server 自动 claim/turn/steer，用 CODEX_THREAD_ID 指定会话
     peri    TS 引擎；stdout 'ALERT <json>'，不读正文；可传 --state-dir <dir>
-    dsh     TS 守护；子命令 run|start|stop|status|logs [N]|wait [S]，
+    dsh     先 monitor --harness dsh install（自动读取 DSH_PROFILE / DSH_SESSION_ID）；
+            或显式传 --profile <name> --session <id>，安装固定插件，无需手写消费者。
+            TS 守护子命令 run|start|stop|status|logs [N]|wait [S]，
             事件写 $WEBBOTS_HOME/wake.queue，不 claim
     other   TS 哨兵；watch.log 出现新 ALERT 时退出；可传 --log/--max-wait/--poll
   --check 只校验入口，不连接服务。各宿主接法：agentnet skills --harness <name>
@@ -794,7 +796,9 @@ function buildProgram(): Command {
       .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')
       .option('--max-wait <seconds>', 'other 单次最长等待秒数；默认 360')
       .option('--poll <seconds>', 'other 轮询间隔秒数；默认 3')
-      .argument('[script-args...]', 'dsh 子命令（run/start/stop/status/logs/wait）'),
+      .option('--profile <name>', 'dsh install 目标 profile；默认 DSH_PROFILE')
+      .option('--session <id>', 'dsh install 绑定的会话；默认 DSH_SESSION_ID')
+      .argument('[script-args...]', 'dsh 子命令（install/run/start/stop/status/logs/wait）'),
   );
   monitorCommand
     .addHelpText(
@@ -818,6 +822,8 @@ function buildProgram(): Command {
             log: options.log ?? globals.log,
             maxWait: options.maxWait ?? globals.maxWait,
             poll: options.poll ?? globals.poll,
+            profile: options.profile ?? globals.profile,
+            session: options.session ?? globals.session,
           },
           scriptArgs,
         );
