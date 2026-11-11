@@ -39,63 +39,6 @@ function timelineBodySignature(item) {
   ]);
 }
 
-/** 同一自然日才允许合并；跨天的上下线保留原始行。 */
-function samePresenceDay(left, right) {
-  const a = new Date(Number(left.occurred_at));
-  const b = new Date(Number(right.occurred_at));
-  return a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate();
-}
-
-/** 合并组的第一条可能是下线；它意味着此前已经在线，用同一时间展示初始上线。 */
-function initialOnlinePresence(item) {
-  if (item.transition === 'online') return item;
-  return Object.assign({}, item, { transition: 'online', time_basis: 'observed' });
-}
-
-/**
- * 相邻上下线合并：同一 actor、同一自然日，且中间没有消息或其他 actor 打断时，
- * 只保留初始上线与最终状态。全部在线的重复记录收敛为第一条；没有在线的组只保留
- * 最终下线，避免凭空补出上线。只影响渲染，原始事件、未读与在线查询保持不变。
- */
-function collapsePresenceRuns(items) {
-  const result = [];
-  let index = 0;
-  while (index < items.length) {
-    const item = items[index];
-    if (!item || item.kind !== 'presence') {
-      result.push(item);
-      index += 1;
-      continue;
-    }
-    let end = index + 1;
-    while (end < items.length) {
-      const next = items[end];
-      if (!next || next.kind !== 'presence' || next.agent_id !== item.agent_id ||
-          !samePresenceDay(item, next)) break;
-      end += 1;
-    }
-    if (end - index === 1) {
-      result.push(item);
-      index = end;
-      continue;
-    }
-    const run = items.slice(index, end);
-    const last = run[run.length - 1];
-    if (!run.some(function (entry) { return entry.transition === 'online'; })) {
-      result.push(last);
-    } else {
-      result.push(initialOnlinePresence(run[0]));
-      if (run.some(function (entry) { return entry.transition === 'offline'; })) {
-        result.push(last);
-      }
-    }
-    index = end;
-  }
-  return result;
-}
-
 function createTimelineNode(item) {
   const fragment = document.createDocumentFragment();
   fragment.append(item.kind === 'presence' ? presenceItem(item) : messageItem(item));
@@ -144,7 +87,6 @@ function timelineDivider(entry, item, previous) {
 
 function renderMessageList(items) {
   if (!messagesElement) return;
-  items = collapsePresenceRuns(items);
   if (timelineRenderRoom !== activeRoomId) resetTimelineRender();
   prepareTimelineMentions();
   scrollController.beginContentChange();
@@ -197,4 +139,22 @@ function renderMessageList(items) {
   scrollController.noteContentChanged();
 }
 
+/** Older pages register in the same index, so the next refresh reuses them too. */
+function appendHistory(container, items, options) {
+  prepareTimelineMentions();
+  let previous = Number(options && options.previousTimestamp) || 0;
+  const result = { first: null, last: null, lastTimestamp: previous };
+  for (const item of items) {
+    const entry = createTimelineNode(item);
+    timelineDivider(entry, item, previous);
+    if (entry.divider) container.append(entry.divider);
+    container.append(entry.node);
+    if (entry.receipt) container.append(entry.receipt);
+    if (!result.first) result.first = entry.divider || entry.node;
+    result.last = entry.receipt || entry.node;
+    previous = timelineTimestamp(item) || previous;
+  }
+  result.lastTimestamp = previous;
+  return result;
+}
 `;
