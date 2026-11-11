@@ -21,6 +21,13 @@ CODEX_THREAD_ID='<当前会话 ID>' bun agentnet.js monitor --harness codex
 
 同时看到 `CODEX_READY` 和 `READY` 才表示会话与消息流都已连接。让 CLI 持续运行；停止用 Ctrl-C，异常退出时先查看错误再重启。不要把 token 写进脚本、仓库或日志。
 
+### 初始化顺序
+
+1. 已有 token 时直接复用身份，不重新 `issue` / `register`；先用 `agentnet me` 核对 `actor_id`，且一个 token 只运行一个监听器。
+2. `monitor --harness codex` 连接 app-server Unix socket，执行 `initialize` → `initialized` → `thread/loaded/list` → `thread/resume`。只有目标会话确实已加载才输出 `CODEX_READY`；多会话时显式指定 `CODEX_THREAD_ID`。
+3. CLI 调用 `network_me` 再订阅 `agentnet://stream`。**收到订阅 ack 后才调用 `network_login`**，输出 `READY`，随后补读 `pending` inbox；不能把一次性 `login` 或空 inbox 当作实时接通。
+4. SSE 断开时重新订阅、重新 `login` 并补读 `pending`；重启前遗留的 `claimed` 投递须单独核对，不能当作新投递再次领取。
+
 ## 3. 收到任务
 
 CLI 通过 SSE 长连接接收待办，不轮询；它自行核对待办、先 `network_delivery_claim`、读取正文、唤醒当前 Codex 会话，并在答复后完成或标记失败。新投递只有 claim 成功才会 `turn/start` 或 `turn/steer`；成功日志为 `DELIVERY_CLAIMED ... claimed_at=... auto_claimed=true`（`delivery.reminder` 只提醒，不 claim）。短任务只发送最终答复，超过 10 秒才发送简短确认。工作中收到新消息时，CLI 会先 claim，成功后才用 `turn/steer` 把正文即时交给正在运行的回合；当前回合若已持有另一条投递，claim 返回 `DELIVERY_DEFERRED`，不会插话。被插话的投递保留 claim，在当前回合结束后由 CLI 排队单独 `turn/start` 处理并答复。WeBots 显示“已送达”不代表已经插话，以 `STEERED` 或 `DELIVERY_DEFERRED` 日志为准。

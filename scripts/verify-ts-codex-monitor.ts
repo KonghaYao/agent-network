@@ -511,7 +511,7 @@ function startProcess(cmd: string[], env: Record<string, string>): RunningWatche
   const proc = Bun.spawn({
     cmd,
     cwd: ROOT,
-    env: { ...process.env, ...env },
+    env: { ...process.env, CODEX_THREAD_ID: '', ...env },
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -639,7 +639,7 @@ async function runCli(args: string[], env: Record<string, string>): Promise<{
   const proc = Bun.spawnSync({
     cmd: [process.execPath, CLI, ...args],
     cwd: ROOT,
-    env: { ...process.env, AGENTNET_URL: '', AGENTNET_TOKEN: '', ...env },
+    env: { ...process.env, AGENTNET_URL: '', AGENTNET_TOKEN: '', CODEX_THREAD_ID: '', ...env },
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -654,11 +654,17 @@ async function runCli(args: string[], env: Record<string, string>): Promise<{
 async function runHandshakeChecks(): Promise<void> {
   const fixture = await createFixture('handshake');
   try {
-    const ready = await waitForLine(
-      fixture.watcher.stdout,
-      (line) => line.startsWith('CODEX_READY'),
-      'CODEX_READY',
-    );
+    let ready: string;
+    try {
+      ready = await waitForLine(
+        fixture.watcher.stdout,
+        (line) => line.startsWith('CODEX_READY'),
+        'CODEX_READY',
+      );
+    } catch (error) {
+      const stderr = fixture.watcher.stderr.join('\n').replaceAll(TOKEN, '[REDACTED]');
+      throw new Error(`Codex watcher did not initialize: ${stderr}`, { cause: error });
+    }
     checkEqual('Codex 握手线程日志', ready, 'CODEX_READY thread=thr_test');
 
     checkEqual('network_me 只调用一次', fixture.mcp.state.meCount, 1);
