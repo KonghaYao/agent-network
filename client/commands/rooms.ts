@@ -1,15 +1,6 @@
 /** 房间、历史、发送与收件箱。 */
 
-import type { CliArgs } from '../args';
-import {
-  assertKnownFlags,
-  booleanFlag,
-  commaList,
-  flagValue,
-  newId,
-  optionalIntegerFlag,
-  requireFlag,
-} from '../args';
+import { commaList, newId, optionalInteger, required } from '../options';
 import type { McpClient, ResolvedConfig } from '../mcp';
 import { CliError } from '../mcp';
 import {
@@ -40,24 +31,27 @@ function roomLabel(room: RoomPreview): string {
   return room.kind === 'direct' ? '(私聊)' : '(未命名群聊)';
 }
 
-function roomIdFrom(args: CliArgs, command: string): string {
-  const fromFlag = flagValue(args, 'room');
-  const fromPositional = args.positionals[1];
-  const value = fromFlag ?? fromPositional;
+function roomIdFrom(value: string | undefined, command: string): string {
   if (!value) {
-    throw new CliError(`缺少房间 id：使用 ${command} --room <id>（可用 rooms 查看）`);
+    throw new CliError(
+      `缺少房间 id：使用 ${command} --room <id>（可用 rooms 查看；运行 agentnet ${command} --help 查看示例）`,
+    );
   }
   return value;
+}
+
+export interface RoomsOptions {
+  limit?: string;
+  cursor?: string;
 }
 
 export async function rooms(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: RoomsOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['cursor', 'limit']);
-  const limit = optionalIntegerFlag(args, 'limit', { min: 1 });
-  const cursor = flagValue(args, 'cursor');
+  const limit = optionalInteger(options.limit, 'limit', { min: 1, command: 'rooms' });
+  const cursor = options.cursor;
   const result = await client.callTool('network_rooms_list', {
     ...(limit === undefined ? {} : { limit }),
     ...(cursor === undefined ? {} : { cursor }),
@@ -84,20 +78,28 @@ export async function rooms(
   });
 }
 
+export interface HistoryOptions {
+  room?: string;
+  cursor?: string;
+  limit?: string;
+  direction?: string;
+  timeline?: boolean;
+}
+
 export async function history(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: HistoryOptions,
+  positionalRoom?: string,
 ): Promise<void> {
-  assertKnownFlags(args, ['room', 'cursor', 'limit', 'direction', 'timeline']);
-  const roomId = roomIdFrom(args, 'history');
-  const limit = optionalIntegerFlag(args, 'limit', { min: 1 });
-  const cursor = flagValue(args, 'cursor');
-  const direction = flagValue(args, 'direction');
+  const roomId = roomIdFrom(options.room ?? positionalRoom, 'history');
+  const limit = optionalInteger(options.limit, 'limit', { min: 1, command: 'history' });
+  const cursor = options.cursor;
+  const direction = options.direction;
   if (direction !== undefined && direction !== 'before' && direction !== 'after') {
-    throw new CliError('--direction 只支持 before 或 after');
+    throw new CliError('--direction 只支持 before 或 after（运行 agentnet history --help 查看示例）');
   }
-  const timeline = booleanFlag(args, 'timeline');
+  const timeline = options.timeline === true;
   const result = await client.callTool('network_history_list', {
     room_id: roomId,
     ...(limit === undefined ? {} : { limit }),
@@ -138,16 +140,21 @@ export async function history(
   });
 }
 
-export async function bodyFromArgs(args: CliArgs): Promise<string> {
-  let body = requireFlag(args, 'body', '消息正文；传 - 从 stdin 读取');
-  if (body === '-') body = await Bun.stdin.text();
-  if (body.length === 0) throw new CliError('消息正文不能为空');
-  return body;
+export async function bodyFromOptions(
+  body: string | undefined,
+  command = 'send',
+): Promise<string> {
+  let text = required(body, 'body', {
+    suggestion: '消息正文；传 - 从 stdin 读取',
+    command,
+  });
+  if (text === '-') text = await Bun.stdin.text();
+  if (text.length === 0) throw new CliError('消息正文不能为空');
+  return text;
 }
 
 /** `--claim delivery:attempt:claim_id`，与旧脚本和 network_message_send 契约一致。 */
-function claimFromArgs(args: CliArgs): Record<string, unknown> | undefined {
-  const raw = flagValue(args, 'claim');
+function claimFromOptions(raw: string | undefined): Record<string, unknown> | undefined {
   if (raw === undefined) return undefined;
   const [deliveryId, attemptRaw, claimId, ...rest] = raw.split(':');
   if (
@@ -166,39 +173,41 @@ function claimFromArgs(args: CliArgs): Record<string, unknown> | undefined {
   };
 }
 
+export interface SendOptions {
+  room?: string;
+  body?: string;
+  invoke?: string;
+  noInvoke?: boolean;
+  mentions?: string;
+  mention?: string;
+  replyTo?: string;
+  taskRoot?: string;
+  claim?: string;
+  requestId?: string;
+  clientMessageId?: string;
+}
+
 export async function send(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: SendOptions,
+  positionalRoom?: string,
 ): Promise<void> {
-  assertKnownFlags(args, [
-    'room',
-    'body',
-    'invoke',
-    'no-invoke',
-    'mentions',
-    'mention',
-    'reply-to',
-    'task-root',
-    'claim',
-    'request-id',
-    'client-message-id',
-  ]);
-  const roomId = roomIdFrom(args, 'send');
-  const body = await bodyFromArgs(args);
-  const explicitInvoke = commaList(flagValue(args, 'invoke'));
-  const noInvoke = booleanFlag(args, 'no-invoke');
+  const roomId = roomIdFrom(options.room ?? positionalRoom, 'send');
+  const body = await bodyFromOptions(options.body);
+  const explicitInvoke = commaList(options.invoke);
+  const noInvoke = options.noInvoke === true;
   if (noInvoke && explicitInvoke !== undefined) {
-    throw new CliError('--invoke 与 --no-invoke 不能同时使用');
+    throw new CliError('--invoke 与 --no-invoke 不能同时使用（运行 agentnet send --help 查看示例）');
   }
   const invoke = noInvoke ? [] : explicitInvoke;
-  const mentionRaw = flagValue(args, 'mentions') ?? flagValue(args, 'mention');
+  const mentionRaw = options.mentions ?? options.mention;
   const mentions = commaList(mentionRaw);
-  const claim = claimFromArgs(args);
-  const requestId = flagValue(args, 'request-id') ?? newId('req');
-  const clientMessageId = flagValue(args, 'client-message-id') ?? newId('msg');
-  const replyTo = flagValue(args, 'reply-to');
-  const taskRoot = flagValue(args, 'task-root');
+  const claim = claimFromOptions(options.claim);
+  const requestId = options.requestId ?? newId('req');
+  const clientMessageId = options.clientMessageId ?? newId('msg');
+  const replyTo = options.replyTo;
+  const taskRoot = options.taskRoot;
   const result = await client.callTool('network_message_send', {
     request_id: requestId,
     client_message_id: clientMessageId,
@@ -233,21 +242,28 @@ export async function send(
   });
 }
 
+export interface InboxOptions {
+  state?: string;
+  cursor?: string;
+  limit?: string;
+}
+
 export async function inbox(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: InboxOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['state', 'cursor', 'limit']);
-  const state = flagValue(args, 'state');
+  const state = options.state;
   if (
     state !== undefined &&
     !['pending', 'claimed', 'completed', 'failed', 'cancelled', 'all'].includes(state)
   ) {
-    throw new CliError('--state 只支持 pending|claimed|completed|failed|cancelled|all');
+    throw new CliError(
+      '--state 只支持 pending|claimed|completed|failed|cancelled|all（运行 agentnet inbox --help 查看示例）',
+    );
   }
-  const limit = optionalIntegerFlag(args, 'limit', { min: 1 });
-  const cursor = flagValue(args, 'cursor');
+  const limit = optionalInteger(options.limit, 'limit', { min: 1, command: 'inbox' });
+  const cursor = options.cursor;
   const result = await client.callTool('network_inbox_list', {
     ...(state === undefined ? {} : { state }),
     ...(limit === undefined ? {} : { limit }),
@@ -282,15 +298,25 @@ export async function inbox(
   });
 }
 
+export interface ReadOptions {
+  message?: string;
+  messageId?: string;
+  cursor?: string;
+  chunkCursor?: string;
+}
+
 export async function read(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: ReadOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['message', 'message-id', 'cursor', 'chunk-cursor']);
-  const messageId = flagValue(args, 'message') ?? flagValue(args, 'message-id');
-  if (!messageId) throw new CliError('用法：agentnet read --message <message-id> [--cursor <chunk-cursor>]');
-  const cursor = flagValue(args, 'cursor') ?? flagValue(args, 'chunk-cursor');
+  const messageId = options.message ?? options.messageId;
+  if (!messageId) {
+    throw new CliError(
+      '用法：agentnet read --message <message-id> [--cursor <chunk-cursor>]（运行 agentnet read --help 查看示例）',
+    );
+  }
+  const cursor = options.cursor ?? options.chunkCursor;
   const result = await client.callTool('network_message_read', {
     message_id: messageId,
     ...(cursor === undefined ? {} : { chunk_cursor: cursor }),
@@ -314,21 +340,25 @@ export async function read(
 }
 
 /** 按 client_message_id 对账发送结果；用于响应丢失后判断是否还要重发。 */
+export interface SendStatusOptions {
+  clientMessageId?: string;
+  clientMessageIds?: string;
+}
+
 export async function sendStatus(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: SendStatusOptions,
+  positionalIds: readonly string[] = [],
 ): Promise<void> {
-  assertKnownFlags(args, ['client-message-id', 'client-message-ids']);
   const raw =
-    flagValue(args, 'client-message-id') ??
-    flagValue(args, 'client-message-ids') ??
-    args.positionals[2] ??
-    args.positionals[1];
+    options.clientMessageId ??
+    options.clientMessageIds ??
+    positionalIds.filter((value) => value.length > 0).join(',');
   const ids = [...new Set(commaList(raw) ?? [])];
   if (ids.length === 0) {
     throw new CliError(
-      '用法：agentnet send-status --client-message-id <id>[,<id>]（或 send status <id>）',
+      '用法：agentnet send-status --client-message-id <id>[,<id>]（或 send status <id>；运行 agentnet send-status --help 查看示例）',
     );
   }
   const result = await client.callTool('network_message_send_status', {

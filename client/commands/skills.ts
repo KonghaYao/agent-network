@@ -1,9 +1,8 @@
-/** `skills list` / `skills get`：使用 MCP SEP-2640 技能面，不是静态 /skills/*.md。 */
+/** `skills list` / `skills get` 使用 MCP SEP-2640 技能面；`skills --harness` 是本地接入指南。 */
 
-import type { CliArgs } from '../args';
-import { assertKnownFlags, flagValue } from '../args';
 import type { McpClient, ResolvedConfig } from '../mcp';
 import { CliError } from '../mcp';
+import { HARNESS_GUIDES, harnessListText, renderHarnessGuide } from '../harness-guides';
 import { asArray, asRecord, asString, emit, line } from '../output';
 
 interface SkillEntry {
@@ -27,13 +26,16 @@ function skillEntryOf(value: unknown): SkillEntry {
   };
 }
 
+export interface SkillsListOptions {
+  cursor?: string;
+}
+
 export async function skillsList(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: SkillsListOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['cursor']);
-  const cursor = flagValue(args, 'cursor');
+  const cursor = options.cursor;
   const result = await client.rpc('skills/list', cursor ? { cursor } : {});
   emit(config, result, (value) => {
     const skills = asArray(value.skills).map(skillEntryOf);
@@ -74,11 +76,11 @@ function resolveSkill(skills: SkillEntry[], query: string): SkillEntry {
 export async function skillsGet(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  query: string | undefined,
 ): Promise<void> {
-  assertKnownFlags(args, []);
-  const query = args.positionals[2];
-  if (!query) throw new CliError('用法：agentnet skills get <name|id>');
+  if (!query) {
+    throw new CliError('用法：agentnet skills get <name|id>（运行 agentnet skills get --help 查看示例）');
+  }
   const list = await client.rpc('skills/list', {});
   const skill = resolveSkill(asArray(list.skills).map(skillEntryOf), query);
   const got = await client.rpc('skills/get', { uri: skill.uri });
@@ -97,4 +99,47 @@ export async function skillsGet(
     line('---');
     line(result.text);
   });
+}
+
+/**
+ * `skills --harness <name>`：纯本地文本，不要求 URL/token，也不访问 MCP。
+ * 这是给 Agent 抄的接入清单，不替代 `skills list/get` 的 MCP 技能发现。
+ */
+export function skillsHarness(harness: string | undefined, json: boolean): void {
+  if (!harness) {
+    if (json) {
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            harnesses: Object.keys(HARNESS_GUIDES),
+            text: harnessListText(),
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return;
+    }
+    process.stdout.write(harnessListText());
+    return;
+  }
+  if (!(harness in HARNESS_GUIDES)) {
+    throw new CliError(
+      `未知 harness：${harness}（支持：${Object.keys(HARNESS_GUIDES).join('|')}；运行 agentnet skills --help 查看示例）`,
+    );
+  }
+  if (json) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          harness,
+          text: renderHarnessGuide(harness),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return;
+  }
+  process.stdout.write(renderHarnessGuide(harness));
 }

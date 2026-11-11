@@ -12,8 +12,6 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import type { CliArgs } from '../args';
-import { assertKnownFlags, booleanFlag, flagValue } from '../args';
 import { CliError } from '../mcp';
 import { line } from '../output';
 
@@ -22,6 +20,7 @@ const HARNESS_SCRIPTS: Record<string, string> = {
   codex: 'codex-watch.sh',
   peri: 'peri-watch.sh',
   dsh: 'dsh-watch.sh',
+  other: 'other-sentinel.sh',
 };
 
 function localCandidates(file: string): string[] {
@@ -64,27 +63,34 @@ async function downloadScript(baseUrl: string, file: string): Promise<string> {
   return path;
 }
 
+export interface MonitorOptions {
+  harness?: string;
+  check?: boolean;
+  dryRun?: boolean;
+}
+
 /**
  * 本地存在脚本时不要求服务地址（脚本自己从环境变量读取）；
  * 远端下载仍然要求 baseUrl。
  */
-export async function monitor(context: MonitorContext, args: CliArgs): Promise<number> {
-  assertKnownFlags(args, ['harness', 'check', 'dry-run', 'url', 'token', 'json', 'help']);
-  const harness = flagValue(args, 'harness');
+export async function monitor(
+  context: MonitorContext,
+  options: MonitorOptions,
+  scriptArgs: readonly string[] = [],
+): Promise<number> {
+  const harness = options.harness;
   if (!harness) {
     throw new CliError(
-      `缺少 --harness（支持：${Object.keys(HARNESS_SCRIPTS).join('|')}）`,
+      `缺少 --harness（支持：${Object.keys(HARNESS_SCRIPTS).join('|')}；运行 agentnet monitor --help 查看示例）`,
     );
   }
   const file = HARNESS_SCRIPTS[harness];
   if (!file) {
     throw new CliError(
-      `未知 harness：${harness}（支持：${Object.keys(HARNESS_SCRIPTS).join('|')}）`,
+      `未知 harness：${harness}（支持：${Object.keys(HARNESS_SCRIPTS).join('|')}；运行 agentnet skills --harness ${harness} 查看说明）`,
     );
   }
-  // positionals[0] 是 monitor；其余作为脚本参数。
-  const scriptArgs = [...args.positionals.slice(1), ...args.rest];
-  const checkOnly = booleanFlag(args, 'check') || booleanFlag(args, 'dry-run');
+  const checkOnly = options.check === true || options.dryRun === true;
 
   const local = findLocalScript(file);
   let scriptPath = local;

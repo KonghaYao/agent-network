@@ -1,28 +1,28 @@
 /** 消息式 Task：mark/unmark/summaries/trace/search。 */
 
-import type { CliArgs } from '../args';
-import {
-  assertKnownFlags,
-  commaList,
-  flagValue,
-  newId,
-  optionalIntegerFlag,
-  requireFlag,
-} from '../args';
+import { commaList, newId, optionalInteger, required } from '../options';
 import type { McpClient, ResolvedConfig } from '../mcp';
 import { CliError } from '../mcp';
 import { asArray, asNumber, asRecord, asString, emit, field, line, shorten } from '../output';
 
+export interface TaskMarkOptions {
+  room?: string;
+  message?: string;
+  requestId?: string;
+}
+
 export async function taskMark(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: TaskMarkOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['room', 'message', 'request-id']);
   const result = await client.callTool('network_task_mark', {
-    request_id: flagValue(args, 'request-id') ?? newId('req'),
-    room_id: requireFlag(args, 'room'),
-    message_id: requireFlag(args, 'message', '要标记的消息 id'),
+    request_id: options.requestId ?? newId('req'),
+    room_id: required(options.room, 'room', { command: 'task mark' }),
+    message_id: required(options.message, 'message', {
+      suggestion: '要标记的消息 id',
+      command: 'task mark',
+    }),
   });
   emit(config, result, (value) => {
     line(
@@ -37,13 +37,15 @@ export async function taskMark(
 export async function taskUnmark(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: TaskMarkOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['room', 'message', 'request-id']);
   const result = await client.callTool('network_task_unmark', {
-    request_id: flagValue(args, 'request-id') ?? newId('req'),
-    room_id: requireFlag(args, 'room'),
-    message_id: requireFlag(args, 'message', '要取消标记的消息 id'),
+    request_id: options.requestId ?? newId('req'),
+    room_id: required(options.room, 'room', { command: 'task unmark' }),
+    message_id: required(options.message, 'message', {
+      suggestion: '要取消标记的消息 id',
+      command: 'task unmark',
+    }),
   });
   emit(config, result, (value) => {
     line(
@@ -55,18 +57,25 @@ export async function taskUnmark(
   });
 }
 
+export interface TaskSummariesOptions {
+  room?: string;
+  roots?: string;
+  root?: string;
+}
+
 export async function taskSummaries(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: TaskSummariesOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['room', 'roots', 'root']);
-  const roots = commaList(flagValue(args, 'roots') ?? flagValue(args, 'root')) ?? [];
+  const roots = commaList(options.roots ?? options.root) ?? [];
   if (roots.length === 0) {
-    throw new CliError('缺少 --roots（逗号分隔的 task_root_id，最多 20 个）');
+    throw new CliError(
+      '缺少 --roots（逗号分隔的 task_root_id，最多 20 个；运行 agentnet task summaries --help 查看示例）',
+    );
   }
   const result = await client.callTool('network_task_summaries', {
-    room_id: requireFlag(args, 'room'),
+    room_id: required(options.room, 'room', { command: 'task summaries' }),
     root_message_ids: roots,
   });
   emit(config, result, (value) => {
@@ -88,21 +97,29 @@ export async function taskSummaries(
   });
 }
 
+export interface TaskTraceOptions {
+  room?: string;
+  root?: string;
+  cursor?: string;
+  focus?: string;
+  limit?: string;
+}
+
 export async function taskTrace(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: TaskTraceOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['room', 'root', 'cursor', 'focus', 'limit']);
-  const limit = optionalIntegerFlag(args, 'limit', { min: 1 });
-  const cursor = flagValue(args, 'cursor');
-  const focus = flagValue(args, 'focus');
+  const limit = optionalInteger(options.limit, 'limit', { min: 1, command: 'task trace' });
   const result = await client.callTool('network_task_trace', {
-    room_id: requireFlag(args, 'room'),
-    root_message_id: requireFlag(args, 'root', 'Task 起点 message id'),
+    room_id: required(options.room, 'room', { command: 'task trace' }),
+    root_message_id: required(options.root, 'root', {
+      suggestion: 'Task 起点 message id',
+      command: 'task trace',
+    }),
     ...(limit === undefined ? {} : { limit }),
-    ...(cursor === undefined ? {} : { cursor }),
-    ...(focus === undefined ? {} : { focus_message_id: focus }),
+    ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+    ...(options.focus === undefined ? {} : { focus_message_id: options.focus }),
   });
   emit(config, result, (value) => {
     const items = asArray(value.items);
@@ -128,19 +145,24 @@ export async function taskTrace(
   });
 }
 
+export interface TaskSearchOptions {
+  room?: string;
+  query?: string;
+  cursor?: string;
+  limit?: string;
+}
+
 export async function taskSearch(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: TaskSearchOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['room', 'query', 'cursor', 'limit']);
-  const limit = optionalIntegerFlag(args, 'limit', { min: 1 });
-  const cursor = flagValue(args, 'cursor');
+  const limit = optionalInteger(options.limit, 'limit', { min: 1, command: 'task search' });
   const result = await client.callTool('network_task_search', {
-    room_id: requireFlag(args, 'room'),
-    query: requireFlag(args, 'query'),
+    room_id: required(options.room, 'room', { command: 'task search' }),
+    query: required(options.query, 'query', { command: 'task search' }),
     ...(limit === undefined ? {} : { limit }),
-    ...(cursor === undefined ? {} : { cursor }),
+    ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
   });
   emit(config, result, (value) => {
     const items = asArray(value.items);

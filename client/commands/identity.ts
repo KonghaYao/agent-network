@@ -1,7 +1,6 @@
 /** 首次上线（issue/register/login）与 `me`。login 只建立推送门控，不改变投递状态。 */
 
-import type { CliArgs } from '../args';
-import { assertKnownFlags, flagValue, newId, requireFlag } from '../args';
+import { newId, required } from '../options';
 import { CliError, McpClient, type ResolvedConfig } from '../mcp';
 import { asNumber, asString, emit, field, line } from '../output';
 
@@ -12,9 +11,7 @@ import { asNumber, asString, emit, field, line } from '../output';
 export async function issue(
   _client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
 ): Promise<void> {
-  assertKnownFlags(args, []);
   const anonymous = new McpClient({ ...config, token: null });
   const result = await anonymous.callTool('network_issue_token');
   emit(config, result, (value) => {
@@ -28,25 +25,37 @@ export async function issue(
   });
 }
 
+export interface RegisterOptions {
+  name?: string;
+  session?: string;
+  agentSessionId?: string;
+  kind?: string;
+  requestId?: string;
+}
+
 export async function register(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: RegisterOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['name', 'session', 'agent-session-id', 'kind', 'request-id']);
-  const kind = flagValue(args, 'kind') ?? 'agent';
+  const kind = options.kind ?? 'agent';
   if (kind !== 'human' && kind !== 'agent') {
-    throw new CliError('--kind 只支持 agent 或 human');
+    throw new CliError('--kind 只支持 agent 或 human（运行 agentnet register --help 查看示例）');
   }
-  const session = flagValue(args, 'session') ?? flagValue(args, 'agent-session-id');
+  const session = options.session ?? options.agentSessionId;
   if (kind === 'agent' && !session) {
-    throw new CliError('注册 Agent 需要 --session <agent-session-id>');
+    throw new CliError(
+      '注册 Agent 需要 --session <agent-session-id>（运行 agentnet register --help 查看示例）',
+    );
   }
-  const requestId = flagValue(args, 'request-id') ?? newId('req');
+  const requestId = options.requestId ?? newId('req');
   const result = await client.callTool('network_register', {
     request_id: requestId,
     kind,
-    name: requireFlag(args, 'name'),
+    name: required(options.name, 'name', {
+      suggestion: 'Agent 显示名',
+      command: 'register',
+    }),
     ...(session === undefined ? {} : { agent_session_id: session }),
   });
   emit(config, { ...result, request_id: requestId } as Record<string, unknown>, (value) => {
@@ -71,9 +80,7 @@ export async function register(
 export async function login(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
 ): Promise<void> {
-  assertKnownFlags(args, []);
   const result = await client.callTool('network_login');
   emit(config, result, (value) => {
     line(
@@ -88,9 +95,7 @@ export async function login(
 export async function me(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
 ): Promise<void> {
-  assertKnownFlags(args, []);
   const result = await client.callTool('network_me');
   emit(config, result, (value) => {
     line(`${asString(value.name, '(未命名)')} (${asString(value.actor_id, '-')})`);

@@ -39,37 +39,28 @@ function newAgentSkillUrl() {
   return location.origin + NEW_AGENT_SKILL_PATH;
 }
 
-/** 新版 CLI 接入提示词：下载 agentnet.js，用一次性 token 登录；并声明群聊 @ 规则。 */
-function newAgentBuildPrompt(skillUrl, mcpUrl, token, name, actorId) {
+/** 新版 CLI 接入提示词：下载 agentnet.js，先用 --help 与 skills --harness 自学，再上线。 */
+function newAgentBuildPrompt(mcpUrl, token, name, actorId) {
   const serverUrl = location.origin;
   const cliUrl = serverUrl + '/skills/agentnet.js';
   return [
-    '你是 WeBots Agent。请用新版 agentnet CLI 接入，不要使用旧的 sh 脚本。',
+    '你是 WeBots Agent。按下面最短路径接入，不要另写连接逻辑。',
     '',
-    '1. 下载最新 CLI：',
-    '   curl -fsSL ' + cliUrl + ' -o agentnet.js',
-    '2. 用创建时签发的新 token 上线并确认身份：',
-    '   AGENTNET_URL="' + serverUrl + '" AGENTNET_TOKEN="' + token + '" bun agentnet.js login',
-    '   bun agentnet.js me',
-    '3. 只有新建身份时才走首次上线：',
-    '   bun agentnet.js --url "' + serverUrl + '" issue',
-    '   AGENTNET_TOKEN="<新 token>" bun agentnet.js --url "' + serverUrl +
-      '" register --name "<身份名称>" --session "<agent_session_id>"',
-    '   AGENTNET_TOKEN="<新 token>" bun agentnet.js --url "' + serverUrl + '" login',
-    '',
-    '技能文档：' + skillUrl,
-    '连接信息：',
-    '身份名称：' + name,
-    'actor_id：' + actorId,
-    'MCP URL：' + mcpUrl,
-    'AGENTNET_MCP_URL="' + mcpUrl + '"',
-    'AGENTNET_TOKEN="' + token + '"',
+    '1. 下载 CLI：' + cliUrl + '（保存为 agentnet.js；以下 agentnet 指 bun agentnet.js）',
+    '2. 读用法：agentnet --help',
+    '3. 按当前宿主接入：agentnet skills --harness <claude|codex|peri|dsh|other>',
+    '4. 连接信息：',
+    '   身份名称：' + name,
+    '   actor_id：' + actorId,
+    '   MCP URL：' + mcpUrl,
+    '   AGENTNET_URL="' + serverUrl + '"',
+    '   AGENTNET_MCP_URL="' + mcpUrl + '"',
+    '   AGENTNET_TOKEN="' + token + '"',
+    '   房间：<进入会话后由用户提供>',
     '',
     '群聊 @ 规则：只在需要提醒或派活时 @ 对方；@ 名称必须使用投递里的 sender_name，' +
       '不要凭记忆写；普通回复不要乱 @。',
-    '',
-    '按技能文档确认身份、把 share_url 发给用户，并在已有订阅下异步监听和处理消息。' +
-      '不要重复发明步骤。',
+    '身份确认后把 share_url 发给用户，按宿主指南监听并处理消息。',
     '凭据只给目标 Agent，勿发群、日志或截图。'
   ].join('\\n');
 }
@@ -241,7 +232,6 @@ async function newAgentCreate(event) {
     if (newAgentSkillUrlInput) newAgentSkillUrlInput.value = skillUrl;
     if (newAgentPromptInput) {
       newAgentPromptInput.value = newAgentBuildPrompt(
-        skillUrl,
         newAgentUrl,
         newAgentToken,
         name,

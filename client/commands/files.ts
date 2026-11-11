@@ -10,16 +10,7 @@
 import { stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
-import type { CliArgs } from '../args';
-import {
-  assertKnownFlags,
-  booleanFlag,
-  commaList,
-  flagValue,
-  newId,
-  optionalIntegerFlag,
-  requireFlag,
-} from '../args';
+import { commaList, newId, optionalInteger, required } from '../options';
 import type { McpClient, ResolvedConfig } from '../mcp';
 import { CliError } from '../mcp';
 import {
@@ -55,7 +46,7 @@ interface FileOutcome {
   retained: boolean | null;
 }
 
-interface UploadOptions {
+interface UploadFileOptions {
   path: string;
   name?: string | undefined;
   mime?: string | undefined;
@@ -63,18 +54,24 @@ interface UploadOptions {
   requestId?: string | undefined;
 }
 
-function roomFrom(args: CliArgs, command: string): string {
-  const value = flagValue(args, 'room');
-  if (!value) {
-    throw new CliError(`缺少房间 id：使用 ${command} --room <id>（可用 rooms 查看）`);
+function roomFrom(room: string | undefined, command: string): string {
+  if (!room) {
+    throw new CliError(
+      `缺少房间 id：使用 ${command} --room <id>（可用 rooms 查看；运行 agentnet ${command} --help 查看示例）`,
+    );
   }
-  return value;
+  return room;
 }
 
-function fileIdFrom(args: CliArgs, command: string): string {
-  const value = flagValue(args, 'file') ?? flagValue(args, 'file-id');
+function fileIdFrom(
+  options: { file?: string; fileId?: string },
+  command: string,
+): string {
+  const value = options.file ?? options.fileId;
   if (!value) {
-    throw new CliError(`缺少文件 id：使用 ${command} --file <file_id>（可用 files --room <id> 查看）`);
+    throw new CliError(
+      `缺少文件 id：使用 ${command} --file <file_id>（可用 files --room <id> 查看；运行 agentnet ${command} --help 查看示例）`,
+    );
   }
   return value;
 }
@@ -197,7 +194,7 @@ function prepareFailure(error: unknown): never {
  */
 async function uploadFile(
   client: McpClient,
-  options: UploadOptions,
+  options: UploadFileOptions,
 ): Promise<FileOutcome> {
   const path = resolve(options.path);
   const info = await stat(path).catch(() => null);
@@ -366,19 +363,29 @@ function printUpload(value: FileOutcome): void {
   line(`expires_at=${value.expires_at ?? '-'}`);
 }
 
+export interface UploadOptions {
+  file?: string;
+  name?: string;
+  mime?: string;
+  room?: string;
+  requestId?: string;
+}
+
 export async function upload(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: UploadOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['file', 'name', 'mime', 'room', 'request-id']);
-  const filePath = requireFlag(args, 'file', '本地文件路径');
+  const filePath = required(options.file, 'file', {
+    suggestion: '本地文件路径',
+    command: 'upload',
+  });
   const outcome = await uploadFile(client, {
     path: filePath,
-    name: flagValue(args, 'name'),
-    mime: flagValue(args, 'mime'),
-    room: flagValue(args, 'room'),
-    requestId: flagValue(args, 'request-id'),
+    name: options.name,
+    mime: options.mime,
+    room: options.room,
+    requestId: options.requestId,
   });
   emit(config, outcome, printUpload);
 }
@@ -434,28 +441,32 @@ async function roomFileMetadata(
   };
 }
 
+export interface SendFileOptions {
+  room?: string;
+  file?: string;
+  body?: string;
+  name?: string;
+  mime?: string;
+  invoke?: string;
+  noInvoke?: boolean;
+  mention?: string;
+  mentions?: string;
+  requestId?: string;
+  clientMessageId?: string;
+}
+
 export async function sendFile(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: SendFileOptions,
 ): Promise<void> {
-  assertKnownFlags(args, [
-    'room',
-    'file',
-    'body',
-    'name',
-    'mime',
-    'invoke',
-    'no-invoke',
-    'mention',
-    'mentions',
-    'request-id',
-    'client-message-id',
-  ]);
-  const roomId = roomFrom(args, 'send-file');
-  const input = requireFlag(args, 'file', '本地文件路径或已上传的 file_id');
-  const nameFlag = flagValue(args, 'name');
-  const mimeFlag = flagValue(args, 'mime');
+  const roomId = roomFrom(options.room, 'send-file');
+  const input = required(options.file, 'file', {
+    suggestion: '本地文件路径或已上传的 file_id',
+    command: 'send-file',
+  });
+  const nameFlag = options.name;
+  const mimeFlag = options.mime;
   const resolved = await resolveInput(input);
 
   let outcome: FileOutcome;
@@ -498,21 +509,21 @@ export async function sendFile(
     );
   }
 
-  let text = flagValue(args, 'body');
+  let text = options.body;
   if (text === '-') text = await Bun.stdin.text();
   text = (text ?? '').trimEnd();
   const link = `[${outcome.name}](${linkUrl})`;
   const body = text.length > 0 ? `${text}\n\n${link}` : link;
 
-  const explicitInvoke = commaList(flagValue(args, 'invoke'));
-  const noInvoke = booleanFlag(args, 'no-invoke');
+  const explicitInvoke = commaList(options.invoke);
+  const noInvoke = options.noInvoke === true;
   if (noInvoke && explicitInvoke !== undefined) {
-    throw new CliError('--invoke 与 --no-invoke 不能同时使用');
+    throw new CliError('--invoke 与 --no-invoke 不能同时使用（运行 agentnet send-file --help 查看示例）');
   }
   const invoke = noInvoke ? [] : explicitInvoke;
-  const mentions = commaList(flagValue(args, 'mention') ?? flagValue(args, 'mentions'));
-  const requestId = flagValue(args, 'request-id') ?? newId('req');
-  const clientMessageId = flagValue(args, 'client-message-id') ?? newId('msg');
+  const mentions = commaList(options.mention ?? options.mentions);
+  const requestId = options.requestId ?? newId('req');
+  const clientMessageId = options.clientMessageId ?? newId('msg');
 
   let sent: Record<string, unknown>;
   try {
@@ -616,14 +627,20 @@ async function outputPath(out: string | undefined, name: string): Promise<string
   return resolve(out);
 }
 
+export interface DownloadOptions {
+  room?: string;
+  file?: string;
+  fileId?: string;
+  out?: string;
+}
+
 export async function download(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: DownloadOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['room', 'file', 'file-id', 'out']);
-  const roomId = roomFrom(args, 'download');
-  const fileId = fileIdFrom(args, 'download');
+  const roomId = roomFrom(options.room, 'download');
+  const fileId = fileIdFrom(options, 'download');
   const file = await roomFileMetadata(client, roomId, fileId);
   const url = file.download_url ?? file.preview_url;
   if (!url) {
@@ -632,7 +649,7 @@ export async function download(
       { code: 'FILE_URL_MISSING', details: { file_id: fileId, room_id: roomId } },
     );
   }
-  const target = await outputPath(flagValue(args, 'out'), file.name);
+  const target = await outputPath(options.out, file.name);
 
   let response: Response;
   try {
@@ -702,15 +719,20 @@ export async function download(
   });
 }
 
+export interface FilesOptions {
+  room?: string;
+  limit?: string;
+  cursor?: string;
+}
+
 export async function files(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: FilesOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['room', 'limit', 'cursor']);
-  const roomId = roomFrom(args, 'files');
-  const limit = optionalIntegerFlag(args, 'limit', { min: 1 });
-  const cursor = flagValue(args, 'cursor');
+  const roomId = roomFrom(options.room, 'files');
+  const limit = optionalInteger(options.limit, 'limit', { min: 1, command: 'files' });
+  const cursor = options.cursor;
   const result = await client.callTool('network_room_file_list', {
     room_id: roomId,
     ...(limit === undefined ? {} : { limit }),
@@ -772,14 +794,19 @@ function printRoomFile(file: Record<string, unknown>): void {
   );
 }
 
+export interface RoomFileOptions {
+  room?: string;
+  file?: string;
+  fileId?: string;
+}
+
 export async function file(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: RoomFileOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['room', 'file', 'file-id']);
-  const roomId = roomFrom(args, 'file');
-  const fileId = fileIdFrom(args, 'file');
+  const roomId = roomFrom(options.room, 'file');
+  const fileId = fileIdFrom(options, 'file');
   const result = await client.callTool('network_room_file_get', {
     room_id: roomId,
     file_id: fileId,
@@ -790,10 +817,9 @@ export async function file(
 export async function fileInfo(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: Pick<RoomFileOptions, 'file' | 'fileId'>,
 ): Promise<void> {
-  assertKnownFlags(args, ['file', 'file-id']);
-  const fileId = fileIdFrom(args, 'file-info');
+  const fileId = fileIdFrom(options, 'file-info');
   const result = await client.callTool('drive_file_info', { fileId });
   emit(config, result, (value) => {
     line(
@@ -821,15 +847,18 @@ export async function fileInfo(
   });
 }
 
+export interface FileBindOptions extends RoomFileOptions {
+  requestId?: string;
+}
+
 export async function fileBind(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: FileBindOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['room', 'file', 'file-id', 'request-id']);
-  const roomId = roomFrom(args, 'file-bind');
-  const fileId = fileIdFrom(args, 'file-bind');
-  const requestId = flagValue(args, 'request-id') ?? newId('req');
+  const roomId = roomFrom(options.room, 'file-bind');
+  const fileId = fileIdFrom(options, 'file-bind');
+  const requestId = options.requestId ?? newId('req');
   const result = await client.callTool('network_room_file_bind', {
     request_id: requestId,
     room_id: roomId,
@@ -852,12 +881,11 @@ export async function fileBind(
 export async function fileDelete(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  options: FileBindOptions,
 ): Promise<void> {
-  assertKnownFlags(args, ['room', 'file', 'file-id', 'request-id']);
-  const roomId = roomFrom(args, 'file-delete');
-  const fileId = fileIdFrom(args, 'file-delete');
-  const requestId = flagValue(args, 'request-id') ?? newId('req');
+  const roomId = roomFrom(options.room, 'file-delete');
+  const fileId = fileIdFrom(options, 'file-delete');
+  const requestId = options.requestId ?? newId('req');
   const result = await client.callTool('network_room_file_delete', {
     request_id: requestId,
     room_id: roomId,
