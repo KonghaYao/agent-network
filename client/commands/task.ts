@@ -109,7 +109,12 @@ export async function taskTrace(
     line(
       `TASK TRACE items=${items.length}${value.has_more_before ? ' more-before' : ''}${
         value.has_more_after ? ' more-after' : ''
-      }`,
+      } next_cursor=${asString(value.next_cursor, '-')} prev_cursor=${asString(
+        value.prev_cursor,
+        '-',
+      )} has_more_before=${String(value.has_more_before === true)} has_more_after=${String(
+        value.has_more_after === true,
+      )}`,
     );
     for (const raw of items) {
       const item = asRecord(raw);
@@ -139,7 +144,12 @@ export async function taskSearch(
   });
   emit(config, result, (value) => {
     const items = asArray(value.items);
-    line(`TASK SEARCH items=${items.length}${value.truncated ? ' truncated' : ''}`);
+    line(
+      `TASK SEARCH items=${items.length}${value.truncated ? ' truncated' : ''} next_cursor=${asString(
+        value.next_cursor,
+        '-',
+      )} has_more=${String(value.has_more === true)}`,
+    );
     for (const raw of items) {
       const item = asRecord(raw);
       const task = asRecord(item.task);

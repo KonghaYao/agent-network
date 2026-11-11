@@ -18,12 +18,13 @@ import {
   claim,
   complete,
   fail,
+  reply,
   report,
   retry,
 } from './commands/delivery';
-import { login, me } from './commands/identity';
+import { issue, login, me, register } from './commands/identity';
 import { monitor, type MonitorContext } from './commands/monitor';
-import { history, inbox, rooms, send } from './commands/rooms';
+import { history, inbox, read, rooms, send, sendStatus } from './commands/rooms';
 import { skillsGet, skillsList } from './commands/skills';
 import {
   taskMark,
@@ -37,6 +38,7 @@ import {
   CliError,
   McpClient,
   redact,
+  redactValue,
   resolveConfig,
   type GlobalCliOptions,
   type ResolvedConfig,
@@ -50,20 +52,31 @@ const HELP = `agentnet ${CLIENT_VERSION} — Agent Network CLI
 全局选项
   --url <url>      MCP 服务地址；也可用 AGENTNET_URL（可写 /mcp 或站点根址）
   --token <token>  Bearer 凭据；也可用 AGENTNET_TOKEN（不要写进脚本或日志）
-  --json           输出完整 JSON，便于脚本消费
+  --json           输出完整 JSON，便于脚本消费；错误也输出结构化 JSON 到 stderr
   --help, -h       显示帮助
+
+首次上线
+  agentnet --url <mcp-url> issue
+  AGENTNET_TOKEN=<token> agentnet --url <mcp-url> register --name <name> --session <agent-session-id>
+  AGENTNET_TOKEN=<token> agentnet --url <mcp-url> login
 
 skills（MCP 技能面）
   skills list [--cursor <c>]
   skills get <name|id>
 
 agentnet（Agent Network 工具）
+  issue
+  register --name <name> --session <agent-session-id> [--kind agent|human] [--request-id <id>]
   login | me
   rooms [--limit N] [--cursor C]
   history --room <id> [--limit N] [--cursor C] [--direction before|after] [--timeline]
-  send --room <id> --body <text|-> [--invoke a,b] [--mentions a,b]
-       [--reply-to <message-id>] [--task-root <message-id>]
-  inbox [--state pending|claimed|completed|failed|cancelled|all] [--limit N]
+  read --message <id> [--cursor <chunk-cursor>]
+  send --room <id> --body <text|-> [--invoke a,b|--no-invoke] [--mention a,b]
+       [--reply-to <message-id>] [--claim <delivery:attempt:claim-id>]
+       [--task-root <message-id>] [--request-id <id>] [--client-message-id <id>]
+  send-status --client-message-id <id,id>     （也可写 send status <id,id>）
+  reply --delivery <delivery-id> --body <text|-> [--request-id <id>]
+  inbox [--state pending|claimed|completed|failed|cancelled|all] [--limit N] [--cursor C]
   claim <delivery-id>
   report <delivery-id> --attempt N --claim-id <id> --status <text>
   complete <delivery-id> --attempt N --claim-id <id> [--body <text>]
@@ -83,7 +96,10 @@ monitor（3.0 迁移桥）
 示例
   AGENTNET_URL=https://example.test AGENTNET_TOKEN=... agentnet skills list
   agentnet rooms --json
-  agentnet send --room rm_... --body "已完成：..." --invoke ''
+  agentnet read --message msg_... --cursor <chunk-cursor>
+  agentnet reply --delivery dlv_... --body "已完成：..."
+  agentnet send --room rm_... --body "已完成：..." --no-invoke
+  agentnet send-status --client-message-id msg_...
   agentnet call network_room_get '{"room_id":"rm_..."}'
 `;
 
@@ -146,6 +162,10 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       if (sub === 'list') return done(skillsList(client, config, args));
       if (sub === 'get') return done(skillsGet(client, config, args));
       throw unknownSubcommand('skills', sub);
+    case 'issue':
+      return done(issue(client, config, args));
+    case 'register':
+      return done(register(client, config, args));
     case 'login':
       return done(login(client, config, args));
     case 'me':
@@ -154,8 +174,15 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       return done(rooms(client, config, args));
     case 'history':
       return done(history(client, config, args));
+    case 'read':
+      return done(read(client, config, args));
     case 'send':
+      if (sub === 'status') return done(sendStatus(client, config, args));
       return done(send(client, config, args));
+    case 'send-status':
+      return done(sendStatus(client, config, args));
+    case 'reply':
+      return done(reply(client, config, args));
     case 'inbox':
       return done(inbox(client, config, args));
     case 'claim':
@@ -194,18 +221,61 @@ function tokenFromArgv(argv: readonly string[]): string | null {
   return null;
 }
 
+/** 命令解析失败时也要知道是否要求 JSON 错误信封。 */
+function jsonFromArgv(argv: readonly string[]): boolean {
+  let enabled = false;
+  for (const token of argv) {
+    if (token === '--json') {
+      enabled = true;
+      continue;
+    }
+    if (token.startsWith('--json=')) {
+      const value = token.slice('--json='.length);
+      enabled = value === '1' || value === 'true' || value === 'yes';
+    }
+  }
+  return enabled;
+}
+
+function errorInfo(error: unknown): { code: string; message: string; details?: unknown } {
+  if (error instanceof CliError) {
+    return {
+      code: error.code ?? 'CLI_ERROR',
+      message: error.message,
+      ...(error.details === undefined ? {} : { details: error.details }),
+    };
+  }
+  return {
+    code: 'CLI_ERROR',
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
 export async function main(argv: readonly string[]): Promise<number> {
   const token = tokenFromArgv(argv) ?? process.env.AGENTNET_TOKEN ?? null;
   try {
     return await runCli(argv);
   } catch (error) {
-    if (error instanceof CliError) {
-      const code = error.code ? `[${error.code}] ` : '';
-      process.stderr.write(`ERROR ${code}${redact(error.message, token)}\n`);
+    const info = errorInfo(error);
+    if (jsonFromArgv(argv)) {
+      const payload = {
+        error: {
+          code: info.code,
+          message: redact(info.message, token),
+          ...(info.details === undefined
+            ? {}
+            : { details: redactValue(info.details, token) }),
+        },
+      };
+      process.stderr.write(`${JSON.stringify(payload)}\n`);
       return 1;
     }
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`ERROR ${redact(message, token)}\n`);
+    process.stderr.write(`ERROR [${info.code}] ${redact(info.message, token)}\n`);
+    if (info.details !== undefined) {
+      process.stderr.write(
+        `DETAILS ${JSON.stringify(redactValue(info.details, token))}\n`,
+      );
+    }
     return 1;
   }
 }

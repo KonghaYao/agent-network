@@ -20,6 +20,7 @@ const BOOLEAN_FLAGS = new Set([
   'timeline',
   'check',
   'dry-run',
+  'no-invoke',
 ]);
 
 export function parseArgs(argv: readonly string[]): CliArgs {

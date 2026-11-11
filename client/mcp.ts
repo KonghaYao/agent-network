@@ -11,7 +11,7 @@
 
 export const PROTOCOL_VERSION = '2026-07-28';
 export const CLIENT_NAME = 'agentnet-cli';
-export const CLIENT_VERSION = '2.0.0';
+export const CLIENT_VERSION = '3.0.0';
 
 export interface GlobalCliOptions {
   url?: string | undefined;
@@ -47,6 +47,20 @@ export function redact(text: string, token: string | null | undefined): string {
   return output
     .replace(/(authorization:\s*bearer\s+)\S+/giu, '$1[REDACTED]')
     .replace(/([?&]token=)[^&\s]+/giu, '$1[REDACTED]');
+}
+
+/** 结构化错误同样要脱敏；递归处理 details 里的字符串与键值。 */
+export function redactValue(value: unknown, token: string | null | undefined): unknown {
+  if (typeof value === 'string') return redact(value, token);
+  if (Array.isArray(value)) return value.map((item) => redactValue(item, token));
+  if (value !== null && typeof value === 'object') {
+    const output: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      output[key] = redactValue(item, token);
+    }
+    return output;
+  }
+  return value;
 }
 
 function normalizeEndpoint(raw: string): { endpoint: string; urlToken: string | null } {
@@ -140,25 +154,51 @@ function parseRpcPayload(text: string, contentType: string): Record<string, unkn
 
 function toolErrorDetail(result: ToolResult): { message: string; code?: string; details?: unknown } {
   const text = (result.content ?? []).find((item) => item.type === 'text')?.text;
+  let parsed: Record<string, unknown> = {};
   if (text) {
     try {
-      const parsed = JSON.parse(text) as {
-        message?: unknown;
-        code?: unknown;
-        details?: unknown;
-      };
-      if (typeof parsed.message === 'string') {
-        return {
-          message: parsed.message,
-          ...(typeof parsed.code === 'string' ? { code: parsed.code } : {}),
-          ...(parsed.details !== undefined ? { details: parsed.details } : {}),
-        };
+      const value: unknown = JSON.parse(text);
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        parsed = value as Record<string, unknown>;
+      } else {
+        return { message: text };
       }
     } catch {
       return { message: text };
     }
+  } else {
+    // Drive 等文件工具把错误放在 structuredContent.error；content 可能为空。
+    const structured = result.structuredContent;
+    const error =
+      structured !== null && typeof structured === 'object'
+        ? (structured as Record<string, unknown>).error
+        : undefined;
+    if (error !== null && typeof error === 'object' && !Array.isArray(error)) {
+      parsed = error as Record<string, unknown>;
+    }
   }
-  return { message: '工具调用失败' };
+  const code = typeof parsed.code === 'string' ? parsed.code : undefined;
+  const message =
+    typeof parsed.message === 'string' && parsed.message.length > 0
+      ? parsed.message
+      : (code ?? '工具调用失败');
+  // 保留 details；没有 details 时把同一错误对象里的 parameter/retryable
+  // 等附加字段带出去，避免 Drive 错误只剩一句 code。
+  const extras: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (key !== 'message' && key !== 'code' && key !== 'details') extras[key] = value;
+  }
+  const details =
+    parsed.details !== undefined
+      ? parsed.details
+      : Object.keys(extras).length > 0
+        ? extras
+        : undefined;
+  return {
+    message,
+    ...(code === undefined ? {} : { code }),
+    ...(details === undefined ? {} : { details }),
+  };
 }
 
 export class McpClient {

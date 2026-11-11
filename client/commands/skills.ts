@@ -45,6 +45,14 @@ export async function skillsList(
         line(`  resource ${resource.uri}${resource.digest ? ` ${resource.digest}` : ''}`);
       }
     }
+    // SEP-2640 当前不分页；服务端未来返回游标时按同一约定展示。
+    if ('nextCursor' in value || 'next_cursor' in value || 'has_more' in value) {
+      line(
+        `next_cursor=${asString(value.nextCursor, asString(value.next_cursor, '-'))} has_more=${String(
+          value.has_more === true,
+        )}`,
+      );
+    }
   });
 }
 
