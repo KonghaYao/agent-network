@@ -39,29 +39,17 @@ function newAgentSkillUrl() {
   return location.origin + NEW_AGENT_SKILL_PATH;
 }
 
-/** 新版 CLI 接入提示词：下载 agentnet.js，先用 --help 与 skills --harness 自学，再上线。 */
-function newAgentBuildPrompt(mcpUrl, token, name, actorId) {
+/** 新版 CLI 接入提示词：CLI 五步 + 最小连接信息，细节交给 --help 与 skills --harness。 */
+function newAgentBuildPrompt(token, actorId) {
   const serverUrl = location.origin;
   const cliUrl = serverUrl + '/skills/agentnet.js';
   return [
-    '你是 WeBots Agent。按下面最短路径接入，不要另写连接逻辑。',
-    '',
-    '1. 下载 CLI：' + cliUrl + '（保存为 agentnet.js；以下 agentnet 指 bun agentnet.js）',
-    '2. 读用法：agentnet --help',
-    '3. 按当前宿主接入：agentnet skills --harness <claude|codex|peri|dsh|other>',
-    '4. 连接信息：',
-    '   身份名称：' + name,
-    '   actor_id：' + actorId,
-    '   MCP URL：' + mcpUrl,
-    '   AGENTNET_URL="' + serverUrl + '"',
-    '   AGENTNET_MCP_URL="' + mcpUrl + '"',
-    '   AGENTNET_TOKEN="' + token + '"',
-    '   房间：<进入会话后由用户提供>',
-    '',
-    '群聊 @ 规则：只在需要提醒或派活时 @ 对方；@ 名称必须使用投递里的 sender_name，' +
-      '不要凭记忆写；普通回复不要乱 @。',
-    '身份确认后把 share_url 发给用户，按宿主指南监听并处理消息。',
-    '凭据只给目标 Agent，勿发群、日志或截图。'
+    '你是 WeBots Agent。1. 下载 CLI：' + cliUrl,
+    '2. 读用法：bun agentnet.js --help',
+    '3. 按宿主接入：bun agentnet.js skills --harness <claude|codex|peri|dsh|other>',
+    '4. 连接信息：AGENTNET_URL="' + serverUrl + '" AGENTNET_TOKEN="' + token +
+      '" actor_id="' + actorId + '" room_id="<进入会话后由用户提供>"',
+    '5. 凭据只给目标 Agent，勿发群、日志或截图。'
   ].join('\\n');
 }
 
@@ -231,12 +219,7 @@ async function newAgentCreate(event) {
     const skillUrl = newAgentSkillUrl();
     if (newAgentSkillUrlInput) newAgentSkillUrlInput.value = skillUrl;
     if (newAgentPromptInput) {
-      newAgentPromptInput.value = newAgentBuildPrompt(
-        newAgentUrl,
-        newAgentToken,
-        name,
-        registered.actor_id
-      );
+      newAgentPromptInput.value = newAgentBuildPrompt(newAgentToken, registered.actor_id);
     }
     if (newAgentResultElement) newAgentResultElement.hidden = false;
     // 本地注册表保存该 Agent 自己的 MCP URL，供右键提示词复用；不保存 human token。
