@@ -103,42 +103,52 @@ export async function drainOutbox(env: Env, limit = LIMITS.outboxBatchMax): Prom
     streamItems: 0,
     streamDropped: 0,
   };
+  let fanoutFailed = false;
   try {
     streamStats = await fanoutStreamItems(db, env, claimed);
   } catch (error) {
-    // stream 是提示通道；构造/发布失败不能阻塞 outbox 完成，客户端仍可
-    // 通过快照与 network_sync 补齐。
     console.error('agent-network stream fan-out failed', error);
+    fanoutFailed = true;
   }
 
   let published = 0;
   let failed = 0;
-  for (const batch of chunks(claimed, 50)) {
-    try {
-      const placeholders = batch.map(() => '?').join(',');
-      await db
-        .prepare(
-          `UPDATE outbox
-              SET status = 'completed', completed_at = ?, attempts = attempts + 1,
-                  lease_token = NULL, lease_until = NULL
-            WHERE outbox_id IN (${placeholders}) AND lease_token = ?`,
-        )
-        .bind(now, ...batch.map((row) => row.outbox_id), leaseToken)
-        .run();
-      published += batch.length;
-    } catch (error) {
-      console.error('agent-network outbox completion failed', error);
-      failed += batch.length;
-      for (const row of batch) {
+  const requeue = async (row: OutboxDueRow) => {
+    await db
+      .prepare(
+        `UPDATE outbox
+            SET status = 'pending', attempts = attempts + 1, next_attempt_at = ?,
+                lease_token = NULL, lease_until = NULL
+          WHERE outbox_id = ? AND lease_token = ?`,
+      )
+      .bind(now + backoffMs(row.attempts), row.outbox_id, leaseToken)
+      .run();
+  };
+  if (fanoutFailed) {
+    for (const row of claimed) {
+      await requeue(row);
+      failed += 1;
+    }
+  } else {
+    for (const batch of chunks(claimed, 50)) {
+      try {
+        const placeholders = batch.map(() => '?').join(',');
         await db
           .prepare(
             `UPDATE outbox
-                SET status = 'pending', attempts = attempts + 1, next_attempt_at = ?,
+                SET status = 'completed', completed_at = ?, attempts = attempts + 1,
                     lease_token = NULL, lease_until = NULL
-              WHERE outbox_id = ? AND lease_token = ?`,
+              WHERE outbox_id IN (${placeholders}) AND lease_token = ?`,
           )
-          .bind(now + backoffMs(row.attempts), row.outbox_id, leaseToken)
+          .bind(now, ...batch.map((row) => row.outbox_id), leaseToken)
           .run();
+        published += batch.length;
+      } catch (error) {
+        console.error('agent-network outbox completion failed', error);
+        failed += batch.length;
+        for (const row of batch) {
+          await requeue(row);
+        }
       }
     }
   }

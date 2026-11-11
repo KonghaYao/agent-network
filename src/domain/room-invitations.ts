@@ -591,6 +591,7 @@ export async function roomInvitationAccept(
       at,
       requestId: input.request_id,
       payloadHash,
+      expectedPolicyRevision: room.policy_revision,
     });
     return {
       invitation_id: row.invitation_id,
@@ -610,6 +611,14 @@ export async function roomInvitationAccept(
       operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, at),
       roomDissolvedGuardStatement(db, row.room_id),
       ownerMissingGuardStatement(db, row.room_id),
+      db
+        .prepare(
+          guardSql(
+            'policyRevision',
+            "NOT EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND policy_revision = ? AND member_join_policy = 'open')",
+          ),
+        )
+        .bind(row.room_id, room.policy_revision),
       // 拉黑必须在事务内复核：预检后、提交前对方可能刚拉黑。
       contactBlockGuardStatement(db, row.inviter_id, viewer),
       db

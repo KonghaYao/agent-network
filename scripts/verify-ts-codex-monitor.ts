@@ -5,7 +5,7 @@
  * - app-server 握手（initialize/initialized/thread/loaded/list/thread/resume）；
  * - 空闲投递 claim -> turn/start -> complete；
  * - 回合中投递 claim -> turn/steer；steer 失败保留 claim 并在回合结束后补处理；
- * - 单 claim 约束下的 DELIVERY_DEFERRED、10 秒慢确认、延后重试；
+ * - 单 claim 约束下工作期间的新投递排队、插话、10 秒慢确认与完成后自动处理；
  * - SSE 断线/空闲重连、重连快照与继续投递；
  * - app-server 断开退出、锁与状态清理、--check 与配置错误。
  *
@@ -965,18 +965,31 @@ async function runDeferredChecks(): Promise<void> {
 
     fixture.mcp.state.pending.set('dlv_deferred', makeDelivery('dlv_deferred'));
     fixture.mcp.sendItems([notificationItem('dlv_deferred')]);
-    const deferred = await waitForLine(
+    const queued = await waitForLine(
       fixture.watcher.stdout,
-      (line) => line.startsWith('DELIVERY_DEFERRED delivery=dlv_deferred'),
-      'DEFERRED',
+      (line) => line.startsWith('QUEUED_STEERED delivery=dlv_deferred'),
+      'QUEUED_STEERED',
     );
-    checkEqual(
-      'deferred 指向当前 claim',
-      deferred.includes('claimed_delivery=dlv_first'),
-      true,
+    check('新任务提示当前回合', queued.includes('turn=turn_1'), queued);
+    check('新任务正文可见', fixture.codex.steerTexts[0]?.includes('body:msg_dlv_deferred'));
+    checkEqual('工作中不抢占第二个 claim', fixture.mcp.state.claimCalls.get('dlv_deferred'), undefined);
+    checkEqual('工作中维持第二条 pending', fixture.mcp.state.pending.has('dlv_deferred'), true);
+
+    fixture.mcp.sendItems([notificationItem('dlv_deferred', 'delivery.created', 'evt_duplicate')]);
+    await Bun.sleep(100);
+    checkEqual('重复事件不会重复插话', fixture.codex.steerTexts.length, 1);
+
+    fixture.codex.state.failNextSteer = true;
+    fixture.mcp.state.pending.set('dlv_third', makeDelivery('dlv_third'));
+    fixture.mcp.sendItems([notificationItem('dlv_third')]);
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('QUEUED_DEFERRED delivery=dlv_third'),
+      'THIRD QUEUED_DEFERRED',
     );
-    checkEqual('deferred 不插话', fixture.codex.steerTexts.length, 0);
-    checkEqual('deferred 不启动新回合', countLines(fixture.watcher.stdout, 'TURN_STARTED'), 1);
+    checkEqual('插话失败也保留第三条 pending', fixture.mcp.state.pending.has('dlv_third'), true);
+    checkEqual('第三条不抢占 claim', fixture.mcp.state.claimCalls.get('dlv_third'), undefined);
+    checkEqual('第二条未提前启动', countLines(fixture.watcher.stdout, 'TURN_STARTED'), 1);
 
     const ack = await waitForLine(
       fixture.watcher.stdout,
@@ -1004,14 +1017,12 @@ async function runDeferredChecks(): Promise<void> {
       (line) => line.startsWith('DELIVERY_COMPLETED delivery=dlv_first'),
       'FIRST COMPLETED',
     );
-    checkEqual('暂时延后的投递未处理', fixture.mcp.state.pending.has('dlv_deferred'), true);
-
-    fixture.mcp.sendItems([notificationItem('dlv_deferred', 'delivery.created', 'evt_deferred_replay')]);
     await waitForLine(
       fixture.watcher.stdout,
       (line) => line.startsWith('TURN_STARTED delivery=dlv_deferred'),
       'DEFERRED TURN_STARTED',
     );
+    checkEqual('无需重发事件，自动领取第二条', fixture.mcp.state.claimCalls.get('dlv_deferred'), 1);
     fixture.codex.completeTurn('延后任务完成');
     await waitForLine(
       fixture.watcher.stdout,
@@ -1019,6 +1030,19 @@ async function runDeferredChecks(): Promise<void> {
       'DEFERRED COMPLETED',
     );
     checkEqual('延后任务最终答复', fixture.mcp.completed[1]?.final_body, '延后任务完成');
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('TURN_STARTED delivery=dlv_third'),
+      'THIRD TURN_STARTED',
+    );
+    checkEqual('插话失败后无需重发也会领取', fixture.mcp.state.claimCalls.get('dlv_third'), 1);
+    fixture.codex.completeTurn('第三条完成');
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('DELIVERY_COMPLETED delivery=dlv_third'),
+      'THIRD COMPLETED',
+    );
+    checkEqual('第三条最终答复', fixture.mcp.completed[2]?.final_body, '第三条完成');
     checkEqual('没有失败投递', fixture.mcp.failed.length, 0);
     checkEqual('全程无 ERROR', countLines(fixture.watcher.stdout, 'ERROR'), 0);
   } finally {

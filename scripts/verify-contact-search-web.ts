@@ -1,5 +1,7 @@
 /** Focused browser acceptance for username search → ID confirmation → request → accept. */
 import assert from 'node:assert/strict';
+import { Database } from 'bun:sqlite';
+import { join } from 'node:path';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 
 import { makeContext, rawTool, startServer } from './verify-web';
@@ -214,6 +216,56 @@ try {
   assert.equal(mobileLayout.lefts.every((left) => left >= 0), true);
   assert.equal(mobileLayout.rights.every((right) => right <= mobileLayout.width + 1), true);
   pass('390px 按搜索/申请/链接/策略单列排列且不溢出');
+
+  const database = new Database(join(server.dataDir, 'agent-network.sqlite'));
+  try {
+    const createdAt = Date.now();
+    database.transaction(() => {
+      for (let index = 0; index < 51; index += 1) {
+        const actorId = `usr_contact_bulk_${index}`;
+        const pair = [actorId, targetA.actor_id].sort().join('|');
+        database.prepare(
+          `INSERT INTO actors (actor_id, kind, agent_session_id, name, metadata,
+                               inbox_head_seq, inbox_min_seq, pending_count, created_at, updated_at)
+           VALUES (?, 'human', NULL, ?, '{}', 0, 0, 0, ?, ?)`,
+        ).run(actorId, `批量申请 ${index}`, createdAt, createdAt);
+        database.prepare(
+          `INSERT INTO contact_requests
+             (contact_request_id, pair_key, from_actor_id, to_actor_id, message, status,
+              auto_accepted, created_at, updated_at, expires_at)
+           VALUES (?, ?, ?, ?, '', 'pending', 0, ?, ?, ?)`,
+        ).run(`creq_bulk_${index}`, pair, actorId, targetA.actor_id,
+          createdAt + index, createdAt + index, createdAt + 60_000);
+      }
+    })();
+
+    await receiverView.page.reload();
+    await waitIdentity(receiverView.page, targetA.actor_id);
+    await receiverView.page.waitForFunction(
+      `document.getElementById('contact-requests-badge')?.textContent === '50+'`,
+    );
+    await receiverView.page.locator('#contact-requests').click();
+    await receiverView.page.locator('#contact-request-more').waitFor({ state: 'visible' });
+    assert.equal(await receiverView.page.locator('#contact-request-list .contact-request-item').count(), 50);
+    await receiverView.page.locator('#contact-request-more').click();
+    await receiverView.page.waitForFunction(
+      `document.querySelectorAll('#contact-request-list .contact-request-item').length === 51`,
+    );
+    assert.equal(await receiverView.page.locator('#contact-request-more').isVisible(), false);
+    await receiverView.page.locator('#contact-request-list .contact-request-item')
+      .filter({ hasText: '批量申请 0' }).getByRole('button', { name: '接受' }).click();
+    await receiverView.page.waitForFunction(
+      `document.getElementById('contact-request-status')?.textContent?.includes('已接受好友申请')`,
+    );
+    assert.equal(
+      (database.prepare("SELECT status FROM contact_requests WHERE contact_request_id = 'creq_bulk_0'")
+        .get() as { status: string }).status,
+      'accepted',
+    );
+    pass('超过 50 条申请可翻页处理，角标显示 50+');
+  } finally {
+    database.close();
+  }
 
   assert.deepEqual(browserErrors, []);
   pass('专项流程没有未捕获页面错误');

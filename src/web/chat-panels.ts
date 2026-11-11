@@ -674,6 +674,7 @@ export function contactRequestsDialog(): string {
             <span id="contact-request-count" class="contact-count" hidden>0</span>
           </div>
           <ul id="contact-request-list" class="contact-request-list" aria-label="待处理好友申请"></ul>
+          <button id="contact-request-more" type="button" hidden>加载更多申请</button>
           <p id="contact-request-status" class="form-error" role="status"></p>
         </section>
       </div>

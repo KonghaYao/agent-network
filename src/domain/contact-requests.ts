@@ -26,7 +26,6 @@ import {
 import {
   actorView,
   activateRelationStatements,
-  expireContactRequests,
   expireForPair,
   expireRequestRow,
   getActiveRelation,
@@ -473,8 +472,6 @@ export async function contactRequestsList(
 ): Promise<ContactRequestPage> {
   const viewer = actorId(principal);
   const at = nowMs();
-  await expireContactRequests(db, at);
-
   const direction = input.direction ?? 'all';
   const limit = clampPage(
     input.limit,
@@ -507,8 +504,16 @@ export async function contactRequestsList(
     binds.push(viewer, viewer, viewer);
   }
   if (input.status) {
-    where.push('r.status = ?');
-    binds.push(input.status);
+    if (input.status === 'pending') {
+      where.push("r.status = 'pending' AND r.expires_at > ?");
+      binds.push(at);
+    } else if (input.status === 'expired') {
+      where.push("(r.status = 'expired' OR (r.status = 'pending' AND r.expires_at <= ?))");
+      binds.push(at);
+    } else {
+      where.push('r.status = ?');
+      binds.push(input.status);
+    }
   }
   if (cursor) {
     where.push('(r.created_at < ? OR (r.created_at = ? AND r.contact_request_id > ?))');
@@ -535,8 +540,9 @@ export async function contactRequestsList(
   const last = page.at(-1);
   const items: ContactRequestView[] = [];
   for (const row of page) {
-    const view = joinedRequestView(row, viewer);
-    if (row.status === 'pending') {
+    const effectiveStatus = row.status === 'pending' && row.expires_at <= at ? 'expired' : row.status;
+    const view = joinedRequestView({ ...row, status: effectiveStatus }, viewer);
+    if (effectiveStatus === 'pending') {
       const target = await getActor(db, row.to_actor_id);
       if (target) view.can_respond = await canRespond(db, viewer, row, target, at);
     }

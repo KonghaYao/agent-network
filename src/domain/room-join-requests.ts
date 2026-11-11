@@ -223,6 +223,7 @@ export async function requestJoinApproval(
     at: number;
     requestId: string;
     payloadHash: string;
+    expectedPolicyRevision: number;
   },
 ): Promise<JoinRequestCreationResult> {
   const applicant = actorId(input.principal);
@@ -293,6 +294,14 @@ export async function requestJoinApproval(
       operationsStatement(db, applicant, input.requestId, input.payloadHash, resultJson, at),
       roomDissolvedGuardStatement(db, invitation.room_id),
       ownerMissingGuardStatement(db, invitation.room_id),
+      db
+        .prepare(
+          guardSql(
+            'policyRevision',
+            "NOT EXISTS (SELECT 1 FROM rooms WHERE room_id = ? AND policy_revision = ? AND member_join_policy = 'approval')",
+          ),
+        )
+        .bind(invitation.room_id, input.expectedPolicyRevision),
       contactBlockGuardStatement(db, invitation.inviter_id, applicant),
       ...invitationUsableGuards(db, invitation.invitation_id, at),
       joinMembershipGuardStatement(
