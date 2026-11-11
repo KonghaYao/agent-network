@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 const output = process.env.UX_OUTPUT || await mkdtemp(join(tmpdir(), 'webots-ux-results-'));
 const suites = [
   'client-syntax', 'recall-fixes', 'chat-fixes', 'group-fixes',
-  'search-fixes', 'actions-fixes', 'recall-offline', 'mobile-fixes', 'responsive-layout',
+  'search-fixes', 'actions-fixes', 'recall-offline', 'mobile-fixes', 'responsive-layout', 'desktop-layout',
 ];
 for (const suite of suites) {
   console.log(`\nRunning UX suite: ${suite}`);

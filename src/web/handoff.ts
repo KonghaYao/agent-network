@@ -192,14 +192,15 @@ export const DEVICE_HANDOFF_STYLE = `
   @media (prefers-color-scheme: dark) {
     .logout-warning { background: #3a2a1a; color: #fdba74; }
   }
-  .handoff-card { width: min(720px, 100%); max-height: calc(100dvh - 32px);
-    overflow-y: auto; text-align: left; }
+  .handoff-card { box-sizing: border-box; width: min(720px, 100%);
+    max-height: calc(100dvh - 32px); display: flex; flex-direction: column;
+    overflow: hidden; text-align: left; }
   .handoff-card h2 { margin: 0 0 4px; }
   .handoff-hint { margin: 0 0 14px; font-size: 12px; color: var(--wx-muted, #555);
     line-height: 1.6; }
   /* 桌面两栏：左栏二维码/短码，右栏状态与待确认设备；<760px 单栏堆叠。 */
   .handoff-columns { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
-    gap: 18px; align-items: start; }
+    gap: 18px; align-items: start; min-height: 0; overflow-y: auto; }
   .handoff-col { min-width: 0; }
   .handoff-col-code { display: flex; flex-direction: column; gap: 10px; }
   .handoff-qr-wrap { display: grid; place-items: center; gap: 6px; margin: 0; padding: 10px;
@@ -246,7 +247,7 @@ export const DEVICE_HANDOFF_STYLE = `
     background: #fff7ed; color: #9a3412; font-size: 12px; line-height: 1.6;
     overflow-wrap: anywhere; }
   .handoff-actions { display: flex; gap: 8px; }
-  .handoff-footer { justify-content: flex-end; margin-top: 14px; }
+  .handoff-footer { flex: 0 0 auto; justify-content: flex-end; margin-top: 14px; }
   .handoff-footer button { flex: 0 0 auto; min-width: 96px; height: 38px; }
   #handoff-copy[disabled] { opacity: 0.5; cursor: not-allowed; }
   @media (max-width: 759px) {

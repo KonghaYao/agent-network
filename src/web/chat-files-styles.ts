@@ -139,7 +139,7 @@ export const FILES_STYLE = `
       flex-wrap: wrap; row-gap: 4px; padding-top: 8px; padding-bottom: 8px; }
     body.page-room:has(#files-pane:not([hidden])) .chat-id,
     body.page-room:has(#monitor-pane:not([hidden])) .chat-id {
-      flex: 1 1 200px; min-width: 200px; }
+      flex: 1 1 220px; min-width: 220px; }
     body.page-room:has(#files-pane:not([hidden])) .title-row,
     body.page-room:has(#monitor-pane:not([hidden])) .title-row {
       flex-wrap: wrap; row-gap: 2px; }
