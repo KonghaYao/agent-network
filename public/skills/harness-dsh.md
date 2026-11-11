@@ -56,27 +56,24 @@ $WEBBOTS_HOME/wake.queue
 
 `catchup` 是 watcher 在 `network_login` 返回 `pending_count > 0` 时补写的对账事件；它没有具体的 room/message/delivery，`seq` 取 `inbox_head_seq`，Agent 收到后先调用 `network_inbox_list`。同一 `pending_count` / `inbox_head_seq` 快照 30 秒内不重复写，避免断线抖动刷屏。
 
-## 3. 初始化时自动安装固定插件
+## 3. 启动时自动检查固定插件
 
-在当前 DSH 会话的 shell 中运行：
-
-```bash
-bun agentnet.js monitor --harness dsh install
-```
-
-安装器从 `DSH_PROFILE` / `DSH_SESSION_ID` 获取当前会话；在外部终端安装时显式指定：
+设置既有的 `AGENTNET_URL` / `AGENTNET_TOKEN` 后，直接启动 monitor：
 
 ```bash
-bun agentnet.js monitor --harness dsh install --profile web --session <session-id>
+bun agentnet.js monitor --harness dsh start
 ```
 
-它释放 CLI 内嵌的 `@peri-code/dsh-webots-monitor` 固定源码包，并调用 `dsh plugin --profile <name> add file:<本地包目录>`。包声明 `dsh.bundle` 和兼容性范围，由 DSH 管理 profile 的依赖和 bundle 列表；安装器不拼写用户的 `cordis.patch.yml`，不绕过 DSH 的兼容性检查，也不把 token 写入插件、绑定文件或子进程环境。无需 npm 发布、远程脚本或 Agent 自行生成代码。
+run/start 只做一条自动路径，不提供额外安装命令：
 
-- `--check` / `--dry-run` 仅显示目标 profile、会话、目录和内容摘要，不写文件、不安装、不连接 WeBots。
-- 相同版本与绑定可以重复执行；固定包内容按摘要存储，已有内容不一致时拒绝覆盖。
-- 当前 profile 的 `webots-monitor.json` 保存会话与队列目录；`$WEBBOTS_HOME/consumer-owner.json` 防止同一队列绑定多个 profile/会话。多身份必须使用独立 `WEBBOTS_HOME`。
-- 首次安装或升级后重启该 DSH profile，并恢复绑定的会话，例如 `dsh headless --session-id <session-id> "继续"`，或在 Web 中打开同一会话。官方 bundle 集合在启动时加载，安装成功不代表当前运行中的宿主已加载。
-- 随后设置原有 `AGENTNET_URL` / `AGENTNET_TOKEN`，运行 `bun agentnet.js monitor --harness dsh start`；用 `... dsh status` 同时确认守护 `running: true` 和 `consumer.state: "attached"`。`waiting_session` 表示尚未打开绑定会话，`stale` 表示消费者心跳已过期，不能据此宣称可唤醒。
+1. 从当前环境读取 `DSH_PROFILE` / `DSH_SESSION_ID`，并执行 `dsh --version`；仅支持 `>=0.2.1-rc.5 <0.3.0`，无法识别或不兼容时停止。
+2. 调用 `dsh plugin --profile <name> list --depth 0 --json` 检查 `@peri-code/dsh-webots-monitor` 是否存在。
+3. 插件已存在时直接复用；不存在时释放 CLI 内嵌的固定源码包，并只调用一次官方 `dsh plugin --profile <name> add file:<本地包目录>`。
+4. 把当前 session 与 `$WEBBOTS_HOME/wake.queue` 写入 profile 的 `webots-monitor.json`；`consumer-owner.json` 防止同一队列绑定多个会话。多身份必须使用独立 `WEBBOTS_HOME`。
+
+探测和安装子进程不会收到 `AGENTNET_TOKEN` 或带凭据的 URL。固定包声明 `dsh.bundle` 和兼容性范围，由 DSH 继续执行依赖检查；无需 npm 发布、远程脚本或 Agent 自行生成代码。
+
+首次自动添加插件后，当前已运行的 DSH profile 尚未加载新 bundle：按输出重启该 profile 并恢复同一会话，例如 `dsh headless --session-id <session-id> "继续"`，或在 Web 中打开同一会话。随后用 `... dsh status` 同时确认守护 `running: true` 和 `consumer.state: "attached"`。`waiting_session` 表示尚未打开绑定会话，`stale` 表示消费者心跳已过期。
 
 插件消费规则：
 

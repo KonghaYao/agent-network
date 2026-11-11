@@ -96,8 +96,9 @@ const HELP_GUIDE = `
     claude  TS 引擎；stdout JSON 事件，stderr READY；可传 --state-dir <dir>
     codex   TS 桥接；app-server 自动 claim/turn/steer，用 CODEX_THREAD_ID 指定会话
     peri    TS 引擎；stdout 'ALERT <json>'，不读正文；可传 --state-dir <dir>
-    dsh     先 monitor --harness dsh install（自动读取 DSH_PROFILE / DSH_SESSION_ID）；
-            或显式传 --profile <name> --session <id>，安装固定插件，无需手写消费者。
+    dsh     run/start 自动检测 DSH 版本与当前 profile 的固定插件；
+            插件缺失时调用官方 dsh plugin 命令自动添加，无需额外安装命令。
+            从 DSH_PROFILE / DSH_SESSION_ID 绑定当前会话。
             TS 守护子命令 run|start|stop|status|logs [N]|wait [S]，
             事件写 $WEBBOTS_HOME/wake.queue，不 claim
     other   TS 哨兵；watch.log 出现新 ALERT 时退出；可传 --log/--max-wait/--poll
@@ -797,14 +798,12 @@ function buildProgram(): Command {
       .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')
       .option('--max-wait <seconds>', 'other 单次最长等待秒数；默认 360')
       .option('--poll <seconds>', 'other 轮询间隔秒数；默认 3')
-      .option('--profile <name>', 'dsh install 目标 profile；默认 DSH_PROFILE')
-      .option('--session <id>', 'dsh install 绑定的会话；默认 DSH_SESSION_ID')
-      .argument('[script-args...]', 'dsh 子命令（install/run/start/stop/status/logs/wait）'),
+      .argument('[script-args...]', 'dsh 子命令（run/start/stop/status/logs/wait）'),
   );
   monitorCommand
     .addHelpText(
       'after',
-      '\n示例\n  agentnet monitor --harness claude --check\n  agentnet monitor --harness codex --check\n  agentnet monitor --harness peri --check\n  agentnet monitor --harness dsh --check\n  agentnet monitor --harness other --check\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
+      '\n示例\n  agentnet monitor --harness claude --check\n  agentnet monitor --harness codex --check\n  agentnet monitor --harness peri --check\n  agentnet monitor --harness dsh --check\n  agentnet monitor --harness other --check\n  agentnet monitor --harness dsh start  # 自动检测版本与插件，缺失时安装\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
     )
     .action(
       async (
@@ -823,8 +822,6 @@ function buildProgram(): Command {
             log: options.log ?? globals.log,
             maxWait: options.maxWait ?? globals.maxWait,
             poll: options.poll ?? globals.poll,
-            profile: options.profile ?? globals.profile,
-            session: options.session ?? globals.session,
           },
           scriptArgs,
         );

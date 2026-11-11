@@ -783,6 +783,14 @@ async function main(): Promise<void> {
         help.stdout.includes('agentnet skills --harness <name>'),
       help.stdout,
     );
+    check(
+      '--help DSH 只说明启动时自动检测，不暴露 install 命令',
+      help.stdout.includes('run/start 自动检测 DSH 版本') &&
+        !help.stdout.includes('monitor --harness dsh install') &&
+        !help.stdout.includes('--profile <name>') &&
+        !help.stdout.includes('--session <id>'),
+      help.stdout,
+    );
 
     for (const command of ['send', 'inbox', 'reply', 'task', 'monitor', 'skills']) {
       const subHelp = await runCli(mock.baseUrl, [command, '--help']);
@@ -808,6 +816,15 @@ async function main(): Promise<void> {
           guide.stdout.includes('CREDENTIAL_INVALID'),
         guide.stdout,
       );
+      if (harness === 'dsh') {
+        check(
+          'DSH 指南只要求直接启动并自动检测插件',
+          guide.stdout.includes('自动检测') &&
+            guide.stdout.includes('缺失时自动添加') &&
+            !guide.stdout.includes('dsh install'),
+          guide.stdout,
+        );
+      }
       check(
         `skills --harness ${harness} 不输出 token`,
         !guide.stdout.includes(TOKEN) && !guide.stderr.includes(TOKEN),
