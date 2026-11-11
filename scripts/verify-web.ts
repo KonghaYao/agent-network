@@ -729,6 +729,21 @@ interface PresenceTimelineItem {
 }
 
 /**
+ * 模拟关系表建立前创建的旧 direct 房间：保留 contacts，但删掉关系行。
+ * 仅用于本地验收实例；生产库不得执行。
+ */
+function removeLegacyContactRelation(dataDir: string, actorA: string, actorB: string): void {
+  const pairKey = [actorA, actorB].sort().join('|');
+  const db = new Database(`${dataDir}/agent-network.sqlite`, { readwrite: true });
+  try {
+    db.exec('PRAGMA busy_timeout = 5000;');
+    db.prepare('DELETE FROM contact_relations WHERE pair_key = ?').run(pairKey);
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * 等请求触碰产生的在线状态自然过期。
  *
  * A03 的建联 fixture 会先用 Agent token 接受好友申请；请求触碰把 Agent 记为
@@ -6421,6 +6436,112 @@ async function main(): Promise<void> {
         request_id: requestId('contact'),
         actor_id: kept.actor_id,
       });
+    }
+
+    // 1c5. 关系表建立前的旧 direct 房间没有 contact_relations 行：删除 Agent
+    // 好友只删掉自己的 contacts 行，刷新不能把已删除的 Agent 会话带回来。
+    {
+      const legacyToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+      const legacy = await rawTool<Actor>(legacyToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'agent',
+        name: '旧数据删除验收 Agent',
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      await rawBefriend(data.humanToken, legacyToken, { actor_id: legacy.actor_id });
+      const legacyRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('room'),
+        kind: 'direct',
+        members: [legacy.actor_id],
+      });
+      await sendRoomMessage(legacyToken, legacyRoom.room.room_id, '旧数据删除前的消息');
+      // 模拟历史数据：房间与收藏都在，但关系行缺失。
+      removeLegacyContactRelation(server.dataDir, data.human.actor_id, legacy.actor_id);
+
+      const roomsBefore = await rawTool<{ items: { room_id: string }[] }>(
+        data.humanToken,
+        'network_rooms_list',
+        { limit: 100 },
+      );
+      check(
+        '旧 direct 房间在删除好友前仍可见',
+        roomsBefore.items.some((item) => item.room_id === legacyRoom.room.room_id),
+        roomsBefore.items,
+      );
+
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-filter-agent').click();
+      await page.locator(roomLink(legacyRoom.room.room_id)).waitFor();
+      await page.locator(roomLink(legacyRoom.room.room_id)).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      const legacyDeleteAccepted = new Promise<void>((resolve) => {
+        page.once('dialog', async (dialog) => {
+          await dialog.accept();
+          resolve();
+        });
+      });
+      await page.locator('#room-menu-delete-friend').click();
+      await legacyDeleteAccepted;
+      await page.waitForFunction(
+        `document.querySelector(${JSON.stringify(roomLink(legacyRoom.room.room_id))}) === null`,
+      );
+      checkEqual(
+        '旧 direct 房间删除好友后立即移除',
+        await page.locator(roomLink(legacyRoom.room.room_id)).count(),
+        0,
+      );
+      // 后台刷新重新读取服务端列表，旧房间不能复活。
+      await page.waitForTimeout(700);
+      checkEqual(
+        '旧 direct 房间删除好友后后台刷新不复活',
+        await page.locator(roomLink(legacyRoom.room.room_id)).count(),
+        0,
+      );
+      const roomsAfter = await rawTool<{ items: { room_id: string }[] }>(
+        data.humanToken,
+        'network_rooms_list',
+        { limit: 100 },
+      );
+      check(
+        'rooms_list 不再返回缺少关系行的已删除 Agent 单聊',
+        !roomsAfter.items.some((item) => item.room_id === legacyRoom.room.room_id),
+        roomsAfter.items,
+      );
+      await page.reload();
+      await page.locator('#room-filter-agent').click();
+      await page.locator('#room-list .room-item').first().waitFor();
+      checkEqual(
+        '旧 direct 房间整页刷新后仍不出现',
+        await page.locator(roomLink(legacyRoom.room.room_id)).count(),
+        0,
+      );
+      const legacyContacts = await rawTool<{ items: { actor_id: string }[] }>(
+        data.humanToken,
+        'network_contacts_list',
+        { limit: 100 },
+      );
+      check(
+        '删除 Agent 好友后联系人列表不再返回该 Agent',
+        !legacyContacts.items.some((item) => item.actor_id === legacy.actor_id),
+        legacyContacts.items,
+      );
+      await page.goto(`${server.base}/c/${legacyRoom.room.room_id}`);
+      await page.locator('#composer').waitFor();
+      await page.waitForFunction(
+        `document.getElementById('messages').textContent.includes('旧数据删除前的消息')`,
+      );
+      checkEqual(
+        '旧 direct 房间删除好友后历史仍可显式读取',
+        await page.locator('#composer').isVisible(),
+        true,
+      );
+      await context.close();
     }
 
     // 1d. 右键提示词净化：Agent/群名中的换行、制表、控制字符与超长不能改变指令结构。

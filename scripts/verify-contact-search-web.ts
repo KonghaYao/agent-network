@@ -185,7 +185,16 @@ try {
   }
   async function waitForSearchEmpty(): Promise<void> {
     await senderView.page.waitForFunction(
-      `document.querySelectorAll('#contact-search-results .contact-search-empty').length === 1`,
+      `document.getElementById('contact-search-status')?.textContent === '没有找到匹配的用户。'`,
+    );
+  }
+  async function countSearchEmptyText(): Promise<number> {
+    return senderView.page.evaluate(
+      `(function () {
+        const panel = document.getElementById('contact-panel-search');
+        const text = panel ? panel.textContent || '' : '';
+        return text.split('没有找到匹配的用户。').length - 1;
+      })()`,
     );
   }
 
@@ -195,6 +204,7 @@ try {
     await senderView.page.locator('#contact-search-results .contact-search-item').count(),
     1,
   );
+  assert.equal(await countSearchEmptyText(), 0);
   pass('能搜到已设置用户名的用户');
 
   // 全角空格/字母、缺少空格、连续空格与大小写都应命中同一人类。
@@ -229,7 +239,8 @@ try {
     await senderView.page.locator('#contact-search-status').textContent(),
     '没有找到匹配的用户。',
   );
-  pass('搜索不到时展示空态');
+  assert.equal(await countSearchEmptyText(), 1);
+  pass('搜索不到时展示空态且只出现一次');
 
   await runSearch(managedAgentName);
   await waitForSearchId(managedAgent.actor_id);
