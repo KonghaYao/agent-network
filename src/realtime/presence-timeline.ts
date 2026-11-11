@@ -671,7 +671,7 @@ export class AgentPresenceTimeline {
            JOIN room_members am
              ON am.room_id = pe.room_id AND am.actor_id = ? AND am.status = 'active'
            JOIN actors aa ON aa.actor_id = am.actor_id AND aa.kind = 'agent'
-          WHERE pe.generation_id = ? AND pe.transition = 'online'
+          WHERE pe.agent_id = ? AND pe.generation_id = ? AND pe.transition = 'online'
             AND EXISTS (
               SELECT 1
                 FROM room_members hm JOIN actors ha ON ha.actor_id = hm.actor_id
@@ -682,7 +682,7 @@ export class AgentPresenceTimeline {
             )
           ORDER BY pe.room_id`,
       )
-      .bind(agentId, generationId, agentId)
+      .bind(agentId, agentId, generationId, agentId)
       .all<RoomRow>();
     return rows.results;
   }
