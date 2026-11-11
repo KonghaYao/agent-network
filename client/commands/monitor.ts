@@ -1,8 +1,8 @@
 /**
  * `monitor --harness <name>`：宿主监听入口。
  *
- * claude / other / peri 已迁到 `client/monitor/` 的 TypeScript 引擎；codex / dsh
- * 仍执行 public/skills/*-watch.sh（后续迁移），命令形状保持不变。
+ * claude / other / peri / dsh 已迁到 `client/monitor/` 的 TypeScript 实现；
+ * codex 仍执行 public/skills/codex-watch.sh（后续迁移），命令形状保持不变。
  * 这里不内嵌 shell 文本，也不为旧脚本生成新的包装。
  */
 
@@ -16,16 +16,16 @@ import { assertKnownFlags, booleanFlag, flagValue } from '../args';
 import { CliError } from '../mcp';
 import { line } from '../output';
 import { runClaudeMonitor } from '../monitor/claude';
+import { runDshMonitor } from '../monitor/dsh';
 import { runOtherHarness } from '../monitor/other';
 import { runPeriMonitor } from '../monitor/peri';
 
 /** 仍由旧脚本承载的 harness；迁移完成后逐个删除。 */
 const LEGACY_SCRIPTS: Record<string, string> = {
   codex: 'codex-watch.sh',
-  dsh: 'dsh-watch.sh',
 };
 
-const TS_HARNESSES = new Set(['claude', 'other', 'peri']);
+const TS_HARNESSES = new Set(['claude', 'other', 'peri', 'dsh']);
 const SUPPORTED = [...TS_HARNESSES, ...Object.keys(LEGACY_SCRIPTS)];
 
 function localCandidates(file: string): string[] {
@@ -76,6 +76,15 @@ function checkTsHarness(harness: string, args: CliArgs): number {
   }
   if (harness === 'peri') {
     line('harness=peri engine=ts auto_claim=1 read_body=0 output=alert stream=agentnet://stream');
+    return 0;
+  }
+  if (harness === 'dsh') {
+    const scriptArgs = [...args.positionals.slice(1), ...args.rest];
+    line(
+      `harness=dsh engine=ts auto_claim=0 read_body=0 output=wake.queue stream=agentnet://stream args=${
+        scriptArgs.join(' ') || '-'
+      }`,
+    );
     return 0;
   }
   const logPath =
@@ -171,7 +180,8 @@ export async function monitor(context: MonitorContext, args: CliArgs): Promise<n
 
   if (TS_HARNESSES.has(harness)) {
     const extra = [...args.positionals.slice(1), ...args.rest];
-    if (extra.length > 0) {
+    // dsh 需要在位置参数里收子命令（start/stop/status/logs/wait）。
+    if (harness !== 'dsh' && extra.length > 0) {
       throw new CliError(
         `monitor --harness ${harness} 不接受位置参数：${extra.join(' ')}（使用 --log/--max-wait/--poll 等选项）`,
       );
@@ -179,6 +189,7 @@ export async function monitor(context: MonitorContext, args: CliArgs): Promise<n
     if (checkOnly) return checkTsHarness(harness, args);
     if (harness === 'claude') return runClaudeMonitor(context, args);
     if (harness === 'peri') return runPeriMonitor(context, args);
+    if (harness === 'dsh') return runDshMonitor(context, args);
     return runOtherHarness(args);
   }
   return legacyMonitor(harness, context, args);

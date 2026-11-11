@@ -8,13 +8,25 @@
  * - 事件字段与 claude-watch.sh 兼容（delivery/message/attempt/body 等）；
  * - `agentnet monitor --harness peri` 的 `ALERT <json>` 信封、自动 claim、
  *   不读正文、reminder/deferred/conflict/claim_failed、重连快照、空闲重连与退出清理；
+ * - `agentnet monitor --harness dsh` 的 wake.queue 九字段、过滤、catchup、
+ *   不 claim/不读正文、start/stop/status/logs/wait、重连/空闲与 fatal 退出码；
  * - `--harness other` 的 ALERT 唤醒、idle 与日志缺失语义。
  *
  * 运行：bun scripts/verify-ts-monitor.ts
  */
 
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  truncateSync,
+  writeFileSync,
+} from 'node:fs';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -55,6 +67,11 @@ interface MockState {
   controller: ReadableStreamDefaultController<Uint8Array> | null;
   keepaliveTimer: ReturnType<typeof setInterval> | null;
   encoder: TextEncoder;
+  roomKinds: Map<string, string>;
+  roomGetCalls: Map<string, number>;
+  /** dsh 测试用：覆盖 network_login 的 pending/head 快照。 */
+  loginPending: number | null;
+  loginHeadSeq: string | null;
 }
 
 interface MockServer {
@@ -131,7 +148,14 @@ function toolError(id: unknown, code: string, message: string): Response {
   });
 }
 
-function createMock(): MockServer {
+interface MockOptions {
+  /** 所有请求返回 401，用于 dsh 的不可重试凭据路径。 */
+  credentialInvalid?: boolean;
+  /** network_me 返回的身份类型；默认 agent。 */
+  meKind?: string;
+}
+
+function createMock(options: MockOptions = {}): MockServer {
   const state: MockState = {
     pending: new Map(),
     claims: new Map(),
@@ -141,6 +165,10 @@ function createMock(): MockServer {
     controller: null,
     keepaliveTimer: null,
     encoder: new TextEncoder(),
+    roomKinds: new Map(),
+    roomGetCalls: new Map(),
+    loginPending: null,
+    loginHeadSeq: null,
   };
 
   const stopKeepalives = (): void => {
@@ -175,6 +203,9 @@ function createMock(): MockServer {
         method?: string;
         params?: { name?: string; arguments?: JsonObject };
       };
+      if (options.credentialInvalid) {
+        return new Response('unauthorized', { status: 401 });
+      }
       if (body.method === 'server/discover') {
         return rpc(body.id, { supportedVersions: ['2026-07-28'] });
       }
@@ -217,13 +248,20 @@ function createMock(): MockServer {
       const args = (body.params?.arguments ?? {}) as JsonObject;
       switch (name) {
         case 'network_me':
-          return toolResult(body.id, { actor_id: 'agt_me', kind: 'agent' });
+          return toolResult(body.id, { actor_id: 'agt_me', kind: options.meKind ?? 'agent' });
         case 'network_login':
           return toolResult(body.id, {
             online: true,
-            pending_count: state.pending.size,
-            inbox_head_seq: '1',
+            pending_count: state.loginPending ?? state.pending.size,
+            inbox_head_seq: state.loginHeadSeq ?? '1',
           });
+        case 'network_room_get': {
+          const roomId = String(args.room_id ?? '');
+          state.roomGetCalls.set(roomId, (state.roomGetCalls.get(roomId) ?? 0) + 1);
+          const kind = state.roomKinds.get(roomId);
+          if (!kind) return toolError(body.id, 'INVALID_ARGUMENT', 'room not found');
+          return toolResult(body.id, { room: { room_id: roomId, kind } });
+        }
         case 'network_inbox_list': {
           const wanted = String(args.state ?? 'active');
           const items = wanted === 'claimed' ? [...state.claims.values()] : [...state.pending.values()];
@@ -347,7 +385,11 @@ function notificationItem(deliveryId: string, source = 'delivery.created', event
   };
 }
 
-function sendItems(mock: MockServer, items: JsonObject[]): void {
+function sendItems(
+  mock: MockServer,
+  items: JsonObject[],
+  options: { more?: boolean; dropped?: number } = {},
+): void {
   if (!mock.state.controller) throw new Error('subscription stream is not connected');
   const payload = {
     jsonrpc: '2.0',
@@ -361,8 +403,8 @@ function sendItems(mock: MockServer, items: JsonObject[]): void {
           seq: 1,
           attention: 'action_required',
           items,
-          more: false,
-          dropped: 0,
+          more: options.more ?? false,
+          dropped: options.dropped ?? 0,
         },
       },
     },
@@ -1019,6 +1061,653 @@ async function runCleanupCheck(): Promise<void> {
   }
 }
 
+interface DshFixture {
+  dir: string;
+  home: string;
+  temp: string;
+}
+
+async function createDshFixture(label: string): Promise<DshFixture> {
+  const dir = await mkdtemp(join(tmpdir(), `ts-monitor-${label}-`));
+  const temp = join(dir, 'tmp');
+  await mkdir(temp, { recursive: true });
+  return { dir, home: join(dir, 'home'), temp };
+}
+
+function dshCommand(...args: string[]): string[] {
+  return [process.execPath, CLI, 'monitor', '--harness', 'dsh', ...args];
+}
+
+function dshEnv(
+  mock: MockServer,
+  fixture: DshFixture,
+  extra: Record<string, string> = {},
+): Record<string, string> {
+  return {
+    AGENTNET_URL: mock.base,
+    AGENTNET_TOKEN: TOKEN,
+    WEBBOTS_HOME: fixture.home,
+    TMPDIR: fixture.temp,
+    ...extra,
+  };
+}
+
+function startDshWatcher(
+  mock: MockServer,
+  fixture: DshFixture,
+  extraEnv: Record<string, string> = {},
+): RunningWatcher {
+  return startProcess(dshCommand('run'), dshEnv(mock, fixture, extraEnv));
+}
+
+function runDshCli(args: string[], env: Record<string, string>): ReturnType<typeof Bun.spawnSync> {
+  return Bun.spawnSync({
+    cmd: dshCommand(...args),
+    cwd: ROOT,
+    env: { ...process.env, ...env },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+}
+
+function dshQueue(home: string): JsonObject[] {
+  const file = join(home, 'wake.queue');
+  if (!existsSync(file)) return [];
+  const events: JsonObject[] = [];
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    const event = parseEvent(line);
+    if (event) events.push(event);
+  }
+  return events;
+}
+
+function dshStatus(home: string): JsonObject {
+  const file = join(home, 'status.json');
+  if (!existsSync(file)) return {};
+  const event = parseEvent(readFileSync(file, 'utf8'));
+  return event ?? {};
+}
+
+async function waitForDsh(
+  predicate: () => boolean,
+  label: string,
+  timeoutMs = 15_000,
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) return;
+    await Bun.sleep(50);
+  }
+  throw new Error(`timeout waiting for ${label}`);
+}
+
+async function waitForDshQueue(
+  home: string,
+  predicate: (event: JsonObject) => boolean,
+  label: string,
+  timeoutMs = 15_000,
+): Promise<void> {
+  await waitForDsh(() => dshQueue(home).some(predicate), label, timeoutMs);
+}
+
+async function waitForDshStatus(
+  home: string,
+  predicate: (status: JsonObject) => boolean,
+  label: string,
+  timeoutMs = 15_000,
+): Promise<void> {
+  await waitForDsh(() => predicate(dshStatus(home)), label, timeoutMs);
+}
+
+async function waitForMatchingCount(
+  lines: string[],
+  predicate: (line: string) => boolean,
+  minimum: number,
+  label: string,
+  timeoutMs = 15_000,
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (lines.filter(predicate).length >= minimum) return;
+    await Bun.sleep(50);
+  }
+  throw new Error(`timeout waiting for ${label}; lines=${JSON.stringify(lines)}`);
+}
+
+/** dsh：wake.queue 过滤、catchup、状态、重连/空闲与退出清理。 */
+async function runDshChecks(): Promise<void> {
+  const fixture = await createDshFixture('dsh');
+  const mock = createMock();
+  mock.state.loginPending = 2;
+  mock.state.loginHeadSeq = '900';
+  mock.state.roomKinds.set('rm_direct', 'direct');
+  mock.state.roomKinds.set('rm_group', 'group');
+  const watcher = startDshWatcher(mock, fixture);
+  try {
+    await waitForDshStatus(
+      fixture.home,
+      (status) => status.state === 'running' && status.acked === true && status.online === true,
+      'dsh login',
+    );
+    await waitForDshQueue(fixture.home, (event) => event.source === 'catchup', 'dsh catchup');
+    const first = dshQueue(fixture.home);
+    check('dsh catchup 排在第一条', first[0]?.source === 'catchup', first[0]);
+    checkEqual('dsh catchup 的 seq 使用 inbox_head_seq', first[0]?.seq, '900');
+    checkEqual('dsh catchup 的 event_id 保留原因', first[0]?.event_id, 'catchup:login:2:900');
+
+    // 同一 pending/head 快照的 truncated 帧不重复写 catchup。
+    sendItems(mock, [], { more: true });
+    await Bun.sleep(300);
+    checkEqual(
+      'dsh 同一快照的 frame_truncated 不重复写 catchup',
+      dshQueue(fixture.home).filter((event) => event.source === 'catchup').length,
+      1,
+    );
+
+    const items: JsonObject[] = [
+      {
+        source: 'delivery.created',
+        attention: 'action_required',
+        room_id: 'rm_direct',
+        message_id: 'msg_1',
+        delivery_id: 'dlv_1',
+        sender_id: 'agt_user',
+        seq: '101',
+        event_id: '101',
+      },
+      {
+        source: 'room.message',
+        room_id: 'rm_direct',
+        message_id: 'msg_2',
+        sender_id: 'agt_user',
+        seq: '102',
+        event_id: '102',
+      },
+      {
+        source: 'room.message',
+        room_id: 'rm_group',
+        message_id: 'msg_3',
+        sender_id: 'agt_user',
+        seq: '103',
+        event_id: '103',
+      },
+      {
+        source: 'room.message',
+        room_id: 'rm_direct',
+        message_id: 'msg_4',
+        sender_id: 'agt_me',
+        seq: '104',
+        event_id: '104',
+      },
+      {
+        source: 'delivery.updated',
+        attention: 'action_required',
+        room_id: 'rm_direct',
+        delivery_id: 'dlv_2',
+        sender_id: 'agt_me',
+        seq: '105',
+        event_id: '105',
+      },
+      {
+        source: 'session.login',
+        attention: 'action_required',
+        seq: '106',
+        event_id: '106',
+      },
+      {
+        source: 'delivery.reminder',
+        attention: 'action_required',
+        room_id: 'rm_direct',
+        message_id: 'msg_5',
+        delivery_id: 'dlv_3',
+        sender_id: 'agt_user',
+        seq: '107',
+        event_id: '107',
+      },
+      {
+        source: 'room.membership',
+        attention: 'action_required',
+        room_id: 'rm_group',
+        seq: '108',
+        event_id: '108',
+      },
+      {
+        source: 'delivery.retried',
+        attention: 'action_required',
+        room_id: 'rm_direct',
+        message_id: 'msg_6',
+        delivery_id: 'dlv_4',
+        sender_id: 'agt_user',
+        seq: '109',
+        event_id: '109',
+      },
+      {
+        source: 'room.message',
+        room_id: 'rm_unknown',
+        message_id: 'msg_7',
+        sender_id: 'agt_user',
+        seq: '110',
+        event_id: '110',
+      },
+    ];
+    for (const item of items) {
+      sendItems(mock, [item]);
+      await Bun.sleep(60);
+    }
+    await waitForDshQueue(fixture.home, (event) => event.event_id === '109', 'dsh last event');
+
+    const queued = dshQueue(fixture.home);
+    const expectedKeys = [
+      'attention',
+      'at',
+      'delivery_id',
+      'event_id',
+      'message_id',
+      'room_id',
+      'sender_id',
+      'seq',
+      'source',
+    ].sort();
+    check(
+      'dsh wake.queue 每条事件固定九个字段',
+      queued.every(
+        (event) => JSON.stringify(Object.keys(event).sort()) === JSON.stringify(expectedKeys),
+      ),
+      queued,
+    );
+    check(
+      'dsh wake.queue 时间字段为 UTC ISO 8601',
+      queued.every(
+        (event) =>
+          typeof event.at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u.test(event.at),
+      ),
+      queued.map((event) => event.at),
+    );
+
+    const ids = new Set(queued.map((event) => event.event_id));
+    const deliveryIds = new Set(queued.map((event) => event.delivery_id));
+    check('dsh 投递事件入队', deliveryIds.has('dlv_1'), queued);
+    check('dsh 直聊普通消息入队', ids.has('102'), queued);
+    check('dsh 自己的消息不入队', !ids.has('104'), queued);
+    check('dsh 群聊普通消息不入队', !ids.has('103'), queued);
+    check('dsh 未知房间普通消息不入队', !ids.has('110'), queued);
+    check('dsh delivery.updated 不入队', !ids.has('105'), queued);
+    check('dsh session.login 不入队', !ids.has('106'), queued);
+    check('dsh delivery.reminder 入队', deliveryIds.has('dlv_3'), queued);
+    check('dsh 被移出房间入队', ids.has('108'), queued);
+    check('dsh delivery.retried 入队', deliveryIds.has('dlv_4'), queued);
+    checkEqual('dsh 直聊只查询一次房间类型', mock.state.roomGetCalls.get('rm_direct'), 1);
+    checkEqual('dsh 群聊只查询一次房间类型', mock.state.roomGetCalls.get('rm_group'), 1);
+    checkEqual('dsh 未知房间查询一次', mock.state.roomGetCalls.get('rm_unknown'), 1);
+    checkEqual('dsh 不 claim', mock.state.claimCalls.size, 0);
+    checkEqual('dsh 不读正文', mock.state.readCalls, 0);
+
+    const delivery = queued.find((event) => event.event_id === '101');
+    check(
+      'dsh 投递事件只写定位字段',
+      delivery?.source === 'delivery.created' &&
+        delivery.attention === 'action_required' &&
+        delivery.room_id === 'rm_direct' &&
+        delivery.message_id === 'msg_1' &&
+        delivery.delivery_id === 'dlv_1' &&
+        delivery.sender_id === 'agt_user' &&
+        delivery.seq === '101',
+      delivery,
+    );
+
+    const status = dshStatus(fixture.home);
+    checkEqual('dsh status state=running', status.state, 'running');
+    checkEqual('dsh status acked', status.acked, true);
+    checkEqual('dsh status online', status.online, true);
+    checkEqual('dsh status connected', status.connected, true);
+    checkEqual('dsh status pending_count', status.pending_count, 2);
+    checkEqual('dsh status reconnects', status.reconnects, 0);
+    check('dsh status lastEventAt', typeof status.lastEventAt === 'string');
+    check('dsh status lastNotificationAt', typeof status.lastNotificationAt === 'string');
+    checkEqual('dsh status lastError', status.lastError, null);
+    checkEqual(
+      'dsh status.json 权限 0600',
+      statSync(join(fixture.home, 'status.json')).mode & 0o777,
+      0o600,
+    );
+    checkEqual(
+      'dsh wake.queue 权限 0600',
+      statSync(join(fixture.home, 'wake.queue')).mode & 0o777,
+      0o600,
+    );
+    check(
+      'dsh stderr 含 READY 与 DROP',
+      watcher.stderr.some((line) => line.includes('READY')) &&
+        watcher.stderr.some((line) => line.includes('DROP type=group_message')),
+      watcher.stderr,
+    );
+    check('dsh run 不向 stdout 写事件', watcher.stdout.join('').trim() === '', watcher.stdout);
+
+    const surface = [
+      readFileSync(join(fixture.home, 'wake.queue'), 'utf8'),
+      readFileSync(join(fixture.home, 'watch.log'), 'utf8'),
+      readFileSync(join(fixture.home, 'status.json'), 'utf8'),
+    ].join('\n');
+    check('dsh token 不进入 queue/log/status', !surface.includes(TOKEN));
+
+    const live = runDshCli(['status'], { WEBBOTS_HOME: fixture.home });
+    checkEqual('dsh status 运行中退出码', live.exitCode, 0);
+    const liveOut = JSON.parse(new TextDecoder().decode(live.stdout)) as JsonObject;
+    check('dsh status running=true', liveOut.running === true);
+    checkEqual('dsh status 输出 home', liveOut.home, fixture.home);
+
+    // 断线重连：reason=stream_closed，重连快照不重复 catchup。
+    const readyBefore = watcher.stderr.filter((line) => line.includes('READY')).length;
+    const previous = mock.state.controller;
+    mock.closeStream();
+    await waitForReconnect(mock, previous, 'dsh');
+    await waitForMatchingCount(
+      watcher.stderr,
+      (line) => line.includes('READY'),
+      readyBefore + 1,
+      'dsh READY after reconnect',
+    );
+    check(
+      'dsh 普通断线记录 RECONNECTING reason=stream_closed',
+      watcher.stderr.some(
+        (line) => line.includes('RECONNECTING') && line.includes('reason=stream_closed'),
+      ),
+    );
+    await Bun.sleep(300);
+    checkEqual(
+      'dsh 重连后同一快照不重复 catchup',
+      dshQueue(fixture.home).filter((event) => event.source === 'catchup').length,
+      1,
+    );
+    checkEqual('dsh 重连计数', dshStatus(fixture.home).reconnects, 1);
+
+    // 空闲检测：15 秒没有任何字节后重连。
+    const idleReady = watcher.stderr.filter((line) => line.includes('READY')).length;
+    const idlePrevious = mock.state.controller;
+    expect(idlePrevious !== null, 'dsh idle probe stream must be connected');
+    mock.pauseKeepalives();
+    await waitForLine(
+      watcher.stderr,
+      (line) => line.includes('RECONNECTING') && line.includes('reason=idle_timeout'),
+      'dsh idle RECONNECTING',
+      45_000,
+    );
+    await waitForReconnect(mock, idlePrevious, 'dsh idle', 30_000);
+    await waitForMatchingCount(
+      watcher.stderr,
+      (line) => line.includes('READY'),
+      idleReady + 1,
+      'dsh READY after idle reconnect',
+    );
+
+    const code = await watcher.kill('SIGTERM');
+    checkEqual('dsh SIGTERM 退出码', code, 0);
+    checkEqual('dsh SIGTERM 后 state=stopped', dshStatus(fixture.home).state, 'stopped');
+    check('dsh SIGTERM 后移除 watch.pid', !existsSync(join(fixture.home, 'watch.pid')));
+    check('dsh WEBBOTS_HOME 保留', existsSync(join(fixture.home, 'wake.queue')));
+    check(
+      'dsh 退出后清理临时 workdir',
+      readdirSync(fixture.temp).every((name) => !name.startsWith('dsh-watch.')),
+      readdirSync(fixture.temp),
+    );
+  } finally {
+    await watcher.kill();
+    mock.stop();
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+}
+
+/** dsh：pending=0 时不写 catchup。 */
+async function runDshZeroPendingCheck(): Promise<void> {
+  const fixture = await createDshFixture('dsh-zero');
+  const mock = createMock();
+  mock.state.roomKinds.set('rm_direct', 'direct');
+  const watcher = startDshWatcher(mock, fixture);
+  try {
+    await waitForDshStatus(
+      fixture.home,
+      (status) => status.acked === true && status.online === true && status.pending_count === 0,
+      'dsh zero pending login',
+    );
+    sendItems(mock, [
+      {
+        source: 'delivery.created',
+        attention: 'action_required',
+        room_id: 'rm_direct',
+        message_id: 'msg_zero',
+        delivery_id: 'dlv_zero',
+        sender_id: 'agt_user',
+        seq: '201',
+        event_id: '201',
+      },
+    ]);
+    await waitForDshQueue(
+      fixture.home,
+      (event) => event.delivery_id === 'dlv_zero',
+      'dsh zero pending event',
+    );
+    check(
+      'dsh pending=0 不写 catchup',
+      dshQueue(fixture.home).every((event) => event.source !== 'catchup'),
+      dshQueue(fixture.home),
+    );
+  } finally {
+    await watcher.kill();
+    mock.stop();
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+}
+
+/** dsh：CREDENTIAL_INVALID 立即退出 3，写 fatal 状态且不写事件。 */
+async function runDshCredentialCheck(): Promise<void> {
+  const fixture = await createDshFixture('dsh-cred');
+  const mock = createMock({ credentialInvalid: true });
+  const watcher = startDshWatcher(mock, fixture);
+  try {
+    const code = await Promise.race([
+      watcher.exited,
+      Bun.sleep(8_000).then(() => null),
+    ]);
+    if (code === null) {
+      await watcher.kill('SIGKILL');
+      throw new Error('dsh CREDENTIAL_INVALID did not exit within 8s');
+    }
+    checkEqual('dsh CREDENTIAL_INVALID 退出码', code, 3);
+    check(
+      'dsh CREDENTIAL_INVALID 输出不可重试告警',
+      watcher.stderr.some(
+        (line) =>
+          line.includes('ALERT') &&
+          line.includes('CREDENTIAL_INVALID') &&
+          line.includes('retryable=false'),
+      ),
+      watcher.stderr,
+    );
+    const status = dshStatus(fixture.home);
+    checkEqual('dsh CREDENTIAL_INVALID 写入 state=fatal', status.state, 'fatal');
+    checkEqual('dsh CREDENTIAL_INVALID 写入 lastError', status.lastError, 'CREDENTIAL_INVALID');
+    checkEqual('dsh CREDENTIAL_INVALID 不写事件', dshQueue(fixture.home).length, 0);
+    check('dsh CREDENTIAL_INVALID 移除 watch.pid', !existsSync(join(fixture.home, 'watch.pid')));
+    check(
+      'dsh CREDENTIAL_INVALID 不泄漏 token',
+      ![watcher.stderr.join('\n'), watcher.stdout.join('\n'), JSON.stringify(status)].join('\n').includes(TOKEN),
+    );
+  } finally {
+    await watcher.kill();
+    mock.stop();
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+}
+
+/** dsh：人类 token 在 network_me 阶段退出 4。 */
+async function runDshNotAgentCheck(): Promise<void> {
+  const fixture = await createDshFixture('dsh-not-agent');
+  const mock = createMock({ meKind: 'human' });
+  const watcher = startDshWatcher(mock, fixture);
+  try {
+    const code = await Promise.race([
+      watcher.exited,
+      Bun.sleep(8_000).then(() => null),
+    ]);
+    if (code === null) {
+      await watcher.kill('SIGKILL');
+      throw new Error('dsh NOT_AGENT did not exit within 8s');
+    }
+    checkEqual('dsh NOT_AGENT 退出码', code, 4);
+    check(
+      'dsh NOT_AGENT 输出不可重试告警',
+      watcher.stderr.some((line) => line.includes('ALERT') && line.includes('NOT_AGENT')),
+      watcher.stderr,
+    );
+    const status = dshStatus(fixture.home);
+    checkEqual('dsh NOT_AGENT 写入 state=fatal', status.state, 'fatal');
+    checkEqual('dsh NOT_AGENT 写入 lastError', status.lastError, 'NOT_AGENT');
+    checkEqual('dsh NOT_AGENT 不写事件', dshQueue(fixture.home).length, 0);
+  } finally {
+    await watcher.kill();
+    mock.stop();
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+}
+
+/** dsh：start/status/logs/wait/stop 生命周期与缺 token。 */
+async function runDshLifecycleChecks(): Promise<void> {
+  const fixture = await createDshFixture('dsh-lifecycle');
+  const mock = createMock();
+  try {
+    const missing = Bun.spawnSync({
+      cmd: dshCommand('run'),
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        AGENTNET_URL: mock.base,
+        AGENTNET_TOKEN: '',
+        WEBBOTS_HOME: fixture.home,
+        TMPDIR: fixture.temp,
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    checkEqual('dsh 缺少 token 退出码', missing.exitCode, 2);
+    check(
+      'dsh 缺少 token 输出 AGENTNET_TOKEN_required',
+      new TextDecoder().decode(missing.stderr).includes('AGENTNET_TOKEN_required'),
+    );
+
+    const start = runDshCli(['start'], dshEnv(mock, fixture));
+    const startOut = new TextDecoder().decode(start.stdout);
+    checkEqual('dsh start 退出码', start.exitCode, 0);
+    check('dsh start 输出 STARTED', /^STARTED pid=\d+ home=/u.test(startOut.trim()), startOut);
+    await waitForDshStatus(
+      fixture.home,
+      (status) => status.state === 'running' && status.acked === true,
+      'dsh start ack',
+    );
+    check('dsh start 写 watch.pid', existsSync(join(fixture.home, 'watch.pid')));
+
+    const live = runDshCli(['status'], { WEBBOTS_HOME: fixture.home });
+    checkEqual('dsh start 后 status 退出码', live.exitCode, 0);
+    const liveOut = JSON.parse(new TextDecoder().decode(live.stdout)) as JsonObject;
+    check('dsh start 后 status running=true', liveOut.running === true);
+    checkEqual('dsh start 后 status state=running', liveOut.state, 'running');
+    checkEqual('dsh start 后 status acked', liveOut.acked, true);
+
+    const logs = startProcess(dshCommand('logs', '20'), {
+      WEBBOTS_HOME: fixture.home,
+      TMPDIR: fixture.temp,
+    });
+    try {
+      await waitForLine(logs.stdout, (line) => line.includes('READY'), 'dsh logs READY');
+      appendFileSync(join(fixture.home, 'watch.log'), 'MARKER dsh-logs\n');
+      await waitForLine(
+        logs.stdout,
+        (line) => line.includes('MARKER dsh-logs'),
+        'dsh logs follow',
+      );
+    } finally {
+      await logs.kill();
+    }
+
+    // EOF：wait 首次调用从当前行数开始，不重放已有事件。
+    appendFileSync(join(fixture.home, 'wake.queue'), '{"probe":"eof"}\n');
+    const waitOne = startProcess(dshCommand('wait', '5'), {
+      WEBBOTS_HOME: fixture.home,
+      TMPDIR: fixture.temp,
+    });
+    await waitForDsh(() => existsSync(join(fixture.home, 'wake.cursor')), 'dsh wait cursor', 2_000);
+    await Bun.sleep(300);
+    appendFileSync(join(fixture.home, 'wake.queue'), '{"probe":"new"}\n');
+    checkEqual('dsh wait 退出码', await waitOne.exited, 0);
+    check(
+      'dsh wait 从 EOF 起读并输出新行',
+      waitOne.stdout.join('\n').includes('"probe":"new"'),
+      waitOne.stdout,
+    );
+    check('dsh wait 不重放已有事件', !waitOne.stdout.join('\n').includes('"probe":"eof"'));
+
+    // truncate：游标大于当前行数时回退 0。
+    truncateSync(join(fixture.home, 'wake.queue'), 0);
+    const waitTwo = startProcess(dshCommand('wait', '5'), {
+      WEBBOTS_HOME: fixture.home,
+      TMPDIR: fixture.temp,
+    });
+    await Bun.sleep(300);
+    appendFileSync(join(fixture.home, 'wake.queue'), '{"probe":"truncate"}\n');
+    checkEqual('dsh wait truncate 退出码', await waitTwo.exited, 0);
+    check(
+      'dsh wake.queue 被 truncate 后游标回退 0',
+      waitTwo.stdout.join('\n').includes('"probe":"truncate"'),
+      waitTwo.stdout,
+    );
+
+    const waitTimeout = runDshCli(['wait', '1'], { WEBBOTS_HOME: fixture.home });
+    checkEqual('dsh wait 超时退出码', waitTimeout.exitCode, 124);
+    check(
+      'dsh wait 非法参数退出码',
+      runDshCli(['wait', 'abc'], { WEBBOTS_HOME: fixture.home }).exitCode === 2,
+    );
+
+    const stop = runDshCli(['stop'], { WEBBOTS_HOME: fixture.home });
+    checkEqual('dsh stop 退出码', stop.exitCode, 0);
+    check(
+      'dsh stop 输出 STOPPED',
+      new TextDecoder().decode(stop.stdout).includes('STOPPED'),
+      new TextDecoder().decode(stop.stdout),
+    );
+    await waitForDsh(
+      () => !existsSync(join(fixture.home, 'watch.pid')),
+      'dsh pid removal',
+      5_000,
+    );
+    await waitForDsh(() => dshStatus(fixture.home).state === 'stopped', 'dsh stopped status', 5_000);
+
+    const stopped = runDshCli(['status'], { WEBBOTS_HOME: fixture.home });
+    checkEqual('dsh status 未运行时退出码 3', stopped.exitCode, 3);
+    check(
+      'dsh status 输出 running=false',
+      (JSON.parse(new TextDecoder().decode(stopped.stdout)) as JsonObject).running === false,
+    );
+
+    // 状态文件声称 running 但进程已退出：status 报 stale 并回落 stopped。
+    const staleHome = join(fixture.dir, 'stale-home');
+    mkdirSync(staleHome, { recursive: true });
+    writeFileSync(join(staleHome, 'status.json'), JSON.stringify({ state: 'running' }));
+    const stale = runDshCli(['status'], { WEBBOTS_HOME: staleHome });
+    checkEqual('dsh stale status 退出码 3', stale.exitCode, 3);
+    const staleOut = JSON.parse(new TextDecoder().decode(stale.stdout)) as JsonObject;
+    checkEqual('dsh stale status stale=true', staleOut.stale, true);
+    checkEqual('dsh stale status state=stopped', staleOut.state, 'stopped');
+  } finally {
+    const pidFile = join(fixture.home, 'watch.pid');
+    if (existsSync(pidFile)) {
+      runDshCli(['stop'], { WEBBOTS_HOME: fixture.home });
+    }
+    mock.stop();
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+}
+
 function runOtherCheck(args: string[], logPath: string, expectedExit: number, label: string): {
   code: number;
   lines: string[];
@@ -1107,6 +1796,21 @@ async function runOtherChecks(): Promise<void> {
   check('peri --check 不执行旧脚本', !periCheckOutput.includes('peri-watch.sh'));
   check('peri --check 输出不含 token', !periCheckOutput.includes(TOKEN));
 
+  const dshCheck = Bun.spawnSync({
+    cmd: [process.execPath, CLI, 'monitor', '--harness', 'dsh', '--check', 'wait', '5'],
+    cwd: ROOT,
+    env: { ...process.env, AGENTNET_TOKEN: TOKEN },
+    stdout: 'pipe',
+  });
+  checkEqual('dsh --check 退出码', dshCheck.exitCode, 0);
+  const dshCheckOutput = new TextDecoder().decode(dshCheck.stdout);
+  check('dsh --check 标记 TS 引擎', dshCheckOutput.includes('engine=ts'));
+  check('dsh --check 声明不 claim', dshCheckOutput.includes('auto_claim=0'));
+  check('dsh --check 声明不读正文', dshCheckOutput.includes('read_body=0'));
+  check('dsh --check 透传子命令参数', dshCheckOutput.includes('args=wait 5'));
+  check('dsh --check 不执行旧脚本', !dshCheckOutput.includes('dsh-watch.sh'));
+  check('dsh --check 输出不含 token', !dshCheckOutput.includes(TOKEN));
+
   await rm(workdir, { recursive: true, force: true });
 }
 
@@ -1119,6 +1823,14 @@ async function main(): Promise<void> {
   await runPeriChecks();
   console.log('TS monitor: peri signal cleanup');
   await runPeriCleanupCheck();
+  console.log('TS monitor: dsh harness');
+  await runDshChecks();
+  console.log('TS monitor: dsh pending/fatal');
+  await runDshZeroPendingCheck();
+  await runDshCredentialCheck();
+  await runDshNotAgentCheck();
+  console.log('TS monitor: dsh lifecycle');
+  await runDshLifecycleChecks();
   console.log('TS monitor: other harness');
   await runOtherChecks();
   console.log(`\n${checksPassed()} checks passed`);

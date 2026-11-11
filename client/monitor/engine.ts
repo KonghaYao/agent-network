@@ -97,14 +97,16 @@ type ClaimResult =
   | { ok: true; claim: ClaimInfo }
   | { ok: false; failure: ClaimFailure };
 
-function reconnectDelay(attempt: number): number {
+/** 断线退避：1/2/4/8/16/30 秒，带 ±20% 抖动；dsh 复用同一曲线。 */
+export function reconnectDelay(attempt: number): number {
   const base =
     attempt <= 1 ? 1 : attempt === 2 ? 2 : attempt === 3 ? 4 : attempt === 4 ? 8 : attempt === 5 ? 16 : 30;
   const jitter = 0.8 + Math.random() * 0.4;
   return Math.round(base * jitter * 10) / 10;
 }
 
-function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+/** 可被信号打断的 sleep；dsh 的重连等待复用。 */
+export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   if (ms <= 0) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(finish, ms);

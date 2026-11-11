@@ -114,9 +114,11 @@ agentnet（Agent Network 工具）
 monitor（宿主监听）
   monitor --harness claude [--state-dir <dir>]       TS 引擎；stdout JSON 事件，stderr READY
   monitor --harness peri [--state-dir <dir>]         TS 引擎；stdout 'ALERT <json>'，不读正文
+  monitor --harness dsh [run|start|stop|status|logs [N]|wait [S]]
+                                                    TS 守护；事件写 $WEBBOTS_HOME/wake.queue，不 claim
   monitor --harness other [--log <path>] [--max-wait N] [--poll N]
                                                     TS 哨兵；watch.log 出现新 ALERT 时退出
-  monitor --harness codex|dsh [-- <脚本参数>]        旧脚本回退（后续迁移）
+  monitor --harness codex [-- <脚本参数>]            旧脚本回退（后续迁移）
   monitor --harness <name> --check                  只校验入口，不连接服务
 
 示例
