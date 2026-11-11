@@ -1,5 +1,5 @@
 /**
- * `agentnet monitor --harness codex`：codex-watch.sh 的 TypeScript 等价实现。
+ * `agentnet monitor --harness codex`：旧 codex 桥接的 TypeScript 等价实现。
  *
  * 宿主协议（Codex app-server，Unix socket + WebSocket）：
  * - `codex app-server daemon version` 返回 socketPath；测试可用

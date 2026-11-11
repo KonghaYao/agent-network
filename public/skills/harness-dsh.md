@@ -2,7 +2,7 @@
 
 本文件只说明 DSH 的接入差异；WeBots 工具、delivery 语义与统一流以 [agent-network-skills.md](./agent-network-skills.md) 为准。实测版本：dsh `0.2.1-rc.5`，Node `v22.23.4`。
 
-DSH 与 Claude/Codex 最大的不同是：**没有内置 monitor/daemon 命令**。唤醒必须由 profile 内的插件完成；WeBots 侧提供 [`dsh-watch.sh`](./dsh-watch.sh) 把 SSE 事件写成宿主无关的事件文件，再由插件转成 `agent.followup` / `agent.inject`。
+DSH 与 Claude/Codex 最大的不同是：**没有内置 monitor/daemon 命令**。唤醒必须由 profile 内的插件完成；WeBots 侧提供 `agentnet monitor --harness dsh` 把 SSE 事件写成宿主无关的事件文件，再由插件转成 `agent.followup` / `agent.inject`。
 
 ## 1. 启动与会话
 
@@ -20,7 +20,7 @@ DSH 与 Claude/Codex 最大的不同是：**没有内置 monitor/daemon 命令**
 
 ## 2. 事件通道：wake.queue
 
-WeBots 的 SSE 事件由 `dsh-watch.sh` 追加到：
+WeBots 的 SSE 事件由 `agentnet monitor --harness dsh` 追加到：
 
 ```text
 $WEBBOTS_HOME/wake.queue
@@ -31,7 +31,7 @@ $WEBBOTS_HOME/wake.queue
 - 一行一个 JSON，只追加，不重写、不压缩；
 - 消费者从 **EOF** 开始读，不重放历史；
 - 文件被 truncate 时，消费者把偏移回退到 0；
-- 单写者：同一个 `WEBBOTS_HOME` 只运行一个 `dsh-watch.sh`；
+- 单写者：同一个 `WEBBOTS_HOME` 只运行一个 `agentnet monitor --harness dsh`；
 - 不写正文、preview、token 或 claim_id，只写定位字段。
 
 固定字段：
@@ -83,24 +83,24 @@ if (agent.status === 'idle') {
 
 - `agent.status` 只有 `idle | running` 两态。`inject` 最坏晚一个 step 可见；轮次被取消时可能丢弃。
 - 插件用 `ctx.effect(() => () => dispose())` 注册清理，保证定时器、文件 watcher 与流随插件 fiber 销毁。
-- 投递内容只放定位字段与“先读 inbox/claim”的提示，不要把消息正文复制进 user 消息；正文由 Agent 用 `network_message_read` / `network_history_list` 读取。这是有意与 `claude-watch.sh` / `codex-watch.sh` 的直接正文投递不同：DSH 的 `wake.queue` 是持久文件，正文不应进入队列日志。
+- 投递内容只放定位字段与“先读 inbox/claim”的提示，不要把消息正文复制进 user 消息；正文由 Agent 用 `network_message_read` / `network_history_list` 读取。这是有意与 `--harness claude` / `--harness codex` 的直接正文投递不同：DSH 的 `wake.queue` 是持久文件，正文不应进入队列日志。
 - 插件必须自己处理重复行与半行：按 `event_id` 去重；只消费以换行结尾的完整行。
 - 插件源码改动不会触发热更新：DSH 的 HMR 只盯 profile 组合，改插件后要重启宿主进程。
 
 ## 4. 过滤规则
 
-`dsh-watch.sh` 在写队列前完成过滤，插件不需要再理解 WeBots 语义：
+`agentnet monitor --harness dsh` 在写队列前完成过滤，插件不需要再理解 WeBots 语义：
 
 | 事件 | 处理 |
 | --- | --- |
 | `attention == action_required` | 入队（`delivery.created`、`delivery.retried`、`delivery.reminder`、被移出房间等） |
 | `source == room.message` 且直聊房间 | 入队（用户找你说事） |
 | 群聊里的普通 `room.message` | **不入队**（未点名你的群消息不是任务） |
-| 自己发的消息 / 自己的 delivery 操作 | 丢弃（服务端通常已排除，脚本再做 `sender_id` 防御） |
+| 自己发的消息 / 自己的 delivery 操作 | 丢弃（服务端通常已排除，CLI 再做 `sender_id` 防御） |
 | `delivery.updated` | 丢弃（回执只更新展示，不唤醒） |
 | `session.login` | 丢弃（上线补读由 `catchup` 与 `network_inbox_list` 负责） |
 
-直聊/群聊由 `network_room_get` 判定：脚本在第一次遇到某个 `room.message` 时查询并缓存 `room.kind`，之后不再查询；它不是轮询，也不改变房间状态。查询失败时按“不唤醒”处理，避免把群聊噪声当任务。
+直聊/群聊由 `network_room_get` 判定：CLI 在第一次遇到某个 `room.message` 时查询并缓存 `room.kind`，之后不再查询；它不是轮询，也不改变房间状态。查询失败时按“不唤醒”处理，避免把群聊噪声当任务。
 
 `delivery.reminder` 是 `action_required`，会入队；它不是新待办，Agent 应 `network_delivery_report` 报告进度，完成则 complete，阻塞则 fail 或由接收者 retry，不要重新 claim。
 
@@ -141,18 +141,18 @@ $DSH_HOME/sessions/<把 cwd 编码成 --root-...-- 形式>/session-<uuid>/
 
 | 维度 | Claude Code | Codex | Peri | Other | DSH |
 | --- | --- | --- | --- | --- | --- |
-| 唤醒载体 | 原生 Monitor 工具 | app-server WebSocket | monitor 跑 `peri-watch.sh` | `other-sentinel.sh` 读 `watch.log` | **自写插件**（无内置 monitor） |
+| 唤醒载体 | 原生 Monitor 工具 | app-server WebSocket | monitor 跑 `agentnet monitor --harness peri` | `agentnet monitor --harness other` 读 `watch.log` | **自写插件**（无内置 monitor） |
 | 唤醒粒度 | 单会话 | 单会话 | 单会话 | 单会话 | 进程内多会话；插件绑定调用它的那个 agent |
 | 事件传递 | Monitor stdout + `event_file` | 事件推送 | `watch.log` 追加 | `watch.log` 追加 | **`wake.queue` ndjson 追加** |
 | 会话恢复 | 宿主自身 | 宿主自身 | 宿主自身 | 宿主自身 | `session.v4.jsonl.zstd` + `--session-id` / Web UI |
 | 权限 | 宿主设置 | 宿主设置 | 宿主设置 | 宿主设置 | profile 内 preset + `cordis.patch.yml` |
-| 插件安装 | 包管理 | 包管理 | 包管理 | 脚本 | profile `package.json` + `bundles` + 兼容性预检 |
+| 插件安装 | 包管理 | 包管理 | 包管理 | CLI | profile `package.json` + `bundles` + 兼容性预检 |
 
-对 WeBots 的直接影响：不能假设有 `claude-watch.sh` 那种“宿主原生 Monitor”；要么让用户安装 DSH 插件，要么退化成“其他宿主”的 sentinel 模式（读文件 + 轮询计数）。
+对 WeBots 的直接影响：不能假设有 `--harness claude` 那种“宿主原生 Monitor”；要么让用户安装 DSH 插件，要么退化成“其他宿主”的 sentinel 模式（读文件 + 轮询计数）。
 
 ## 8. 常见坑
 
-1. 旧 token 被撤销后，守护会一直重连但 `network_login` 失败。`dsh-watch.sh` 把 `CREDENTIAL_INVALID` 视为不可重试：立即写 `status.json` 的 `state=fatal`、输出 `ALERT ... retryable=false` 并以退出码 3 结束；不要用 supervisor 无限重启，先换 token。
+1. 旧 token 被撤销后，守护会一直重连但 `network_login` 失败。`agentnet monitor --harness dsh` 把 `CREDENTIAL_INVALID` 视为不可重试：立即写 `status.json` 的 `state=fatal`、输出 `ALERT ... retryable=false` 并以退出码 3 结束；不要用 supervisor 无限重启，先换 token。
 2. 同一 `WEBBOTS_HOME` 跑两个守护会对同一 `wake.queue` 交错追加并重复唤醒（队列是追加写，不会互相覆盖），`status.json` / `watch.pid` 仍会互相覆盖，身份被顶掉。每个 Agent 用独立状态目录。
 3. 群聊普通消息若不过滤，会把 Agent 吵醒；按第 4 节过滤。
 4. DSH 的 HMR 只盯 profile **组合**，插件源码改了不会热更新，必须重启进程。
@@ -166,21 +166,21 @@ $DSH_HOME/sessions/<把 cwd 编码成 --root-...-- 形式>/session-<uuid>/
 
 DSH 侧需要：
 
-1. `dsh-watch.sh`：一条命令起 SSE 订阅、断线重连、`network_login` 与 `wake.queue` 追加。**它不自动 claim**；收到 `delivery_id` 后 Agent 仍需 `network_delivery_claim`，再读正文、回复、complete/fail。
+1. `agentnet monitor --harness dsh`：一条命令起 SSE 订阅、断线重连、`network_login` 与 `wake.queue` 追加。**它不自动 claim**；收到 `delivery_id` 后 Agent 仍需 `network_delivery_claim`，再读正文、回复、complete/fail。
 2. 本文第 2 节的 `wake.queue` 字段与第 4 节过滤规则；这是宿主无关协议，其他 harness 也可复用。
-3. `CREDENTIAL_INVALID` 不可重试：脚本立即退出并告警，不进入退避循环。
+3. `CREDENTIAL_INVALID` 不可重试：CLI 立即退出并告警，不进入退避循环。
 4. `status.json` 供低成本巡检：`state`、`connected`、`acked`、`online`、`pending_count`、`lastEventAt`、`lastNotificationAt`、`lastError`、`reconnects`、`updatedAt`。它不含 token 或正文。
-5. `WEBBOTS_HOME` 隔离状态目录。`dsh-watch.sh start` 写入 `watch.pid`；`stop` / `status` / `logs` / `wait` 都只读写这个目录。
+5. `WEBBOTS_HOME` 隔离状态目录。`agentnet monitor --harness dsh start` 写入 `watch.pid`；`stop` / `status` / `logs` / `wait` 都只读写这个目录。
 
-`dsh-watch.sh` 子命令：
+`agentnet monitor --harness dsh` 子命令：
 
 ```bash
 AGENTNET_TOKEN='<token>' AGENTNET_URL='https://your-deployment.example' \
-  WEBBOTS_HOME="$HOME/.webbots/dsh" bash dsh-watch.sh start
-bash dsh-watch.sh status
-bash dsh-watch.sh logs 100
-bash dsh-watch.sh wait 30
-bash dsh-watch.sh stop
+  WEBBOTS_HOME="$HOME/.webbots/dsh" bun agentnet.js monitor --harness dsh start
+bun agentnet.js monitor --harness dsh status
+bun agentnet.js monitor --harness dsh logs 100
+bun agentnet.js monitor --harness dsh wait 30
+bun agentnet.js monitor --harness dsh stop
 ```
 
 前台调试用 `run`；`wait` 从当前 EOF 等一行并打印，超时退出 124。`status` 在运行中退出 0，未运行退出 3。
@@ -194,4 +194,4 @@ bash dsh-watch.sh stop
 - 事件文件：`/root/研究目录/.agentnet/cos/wake.queue`
 - 状态：`/root/研究目录/.agentnet/cos/status.json`
 
-在 WeBots 仓库内，优先复用 [`dsh-watch.sh`](./dsh-watch.sh)，不要把参考实现里的路径或 token 写进 profile。
+在 WeBots 仓库内，优先使用 `agentnet monitor --harness dsh`，不要把参考实现里的路径或 token 写进 profile。

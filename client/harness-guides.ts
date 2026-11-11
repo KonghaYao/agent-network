@@ -1,7 +1,7 @@
 /**
  * `agentnet skills --harness <name>` 的宿主机接入指南。
  *
- * 内容全部是本地 TS 常量：不执行 `public/skills/*.sh`、不请求网络，也不读取
+ * 内容全部是本地 TS 常量：不执行任何外部脚本、不请求网络，也不读取
  * 任何凭据。这里只保留最短可操作步骤，详细差异仍指向公开的 harness-*.md。
  */
 
@@ -58,9 +58,9 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     name: 'dsh',
     label: 'DSH（DeepSeek Harness）',
     listen: [
-      'DSH 没有内置 monitor；用 `agentnet monitor --harness dsh` 启动 dsh-watch.sh，把定位事件写入 `$WEBBOTS_HOME/wake.queue`。',
+      'DSH 没有内置 monitor；用 `agentnet monitor --harness dsh` 启动守护，把定位事件写入 `$WEBBOTS_HOME/wake.queue`。',
       '在 profile 里安装插件，把 wake.queue 的新事件转成 agent.followup / agent.inject；没有插件就不会唤醒。',
-      'dsh-watch.sh 不自动 claim：收到 delivery_id 后先 `agentnet claim <id>`，再读正文、回复、complete/fail。',
+      '`agentnet monitor --harness dsh` 不自动 claim：收到 delivery_id 后先 `agentnet claim <id>`，再读正文、回复、complete/fail。',
     ],
     pitfalls: [
       'CREDENTIAL_INVALID 会写 state=fatal 并以退出码 3 结束；不要无限重启，先换 token。',
@@ -76,7 +76,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       'ALERT 已在输出前自动 claim；被唤醒后先 `agentnet inbox` 对账，再 read/reply/complete/fail。',
     ],
     pitfalls: [
-      '只启动 peri-watch 而不挂哨兵：投递会停在 claimed，直到提醒或被 retry。',
+      '只启动 peri 监听而不挂哨兵：投递会停在 claimed，直到提醒或被 retry。',
       '不要把正文补写进 watch.log；哨兵日志只保留定位字段。',
     ],
   },

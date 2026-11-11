@@ -6,8 +6,6 @@
  * 成员移除、pending_count 与统一 stream 通知。
  */
 
-import { resolve } from 'node:path';
-
 import {
   baseUrl,
   callTool,
@@ -550,78 +548,6 @@ export async function runGroupMentionAcceptance(): Promise<void> {
         ].sort((a, b) => a.actor_id.localeCompare(b.actor_id)),
       ),
     );
-
-    // M03-T04：CLI 与 MCP 对同样输入产生相同的提醒与派活结果。
-    const cliScript = resolve(import.meta.dir, '../../public/skills/agentnet.sh');
-    const cliEnv = { ...process.env, AGENTNET_URL: baseUrl(), AGENTNET_TOKEN: humanToken };
-    const cliRun = Bun.spawnSync(
-      [
-        'bash',
-        cliScript,
-        'send',
-        '--room',
-        groupId,
-        '--body',
-        '结构化派活与提醒',
-        '--invoke',
-        caseBot.identity.actor_id,
-        '--mention',
-        peerIdentity.actor_id,
-        '--request-id',
-        newRequestId('mention_cli'),
-        '--client-message-id',
-        `cm_${crypto.randomUUID()}`,
-      ],
-      { env: cliEnv, stdout: 'pipe', stderr: 'pipe' },
-    );
-    checkEqual('CLI send 退出码为 0', cliRun.exitCode, 0);
-    const cliResult = JSON.parse(cliRun.stdout.toString()) as {
-      message: {
-        message_id: string;
-        mentions: { actor_id: string; kind: string; source: string }[];
-      };
-      delivery_ids: string[];
-    };
-    checkEqual('CLI 显式 invoke 只创建一个 delivery', cliResult.delivery_ids.length, 1);
-    checkEqual(
-      'CLI 与 MCP 的提及记录一致',
-      JSON.stringify(
-        [...cliResult.message.mentions].sort((a, b) => a.actor_id.localeCompare(b.actor_id)),
-      ),
-      JSON.stringify(
-        [...mixedTargets.message.mentions].sort((a, b) => a.actor_id.localeCompare(b.actor_id)),
-      ),
-    );
-    const cliInbox = await inboxOf(caseBot.token);
-    check('CLI 派活进入指定 Agent 待办', hasMessage(cliInbox, cliResult.message.message_id), cliInbox.items);
-    const cliReminder = reminderOf(await inboxEvents(peerToken), cliResult.message.message_id);
-    checkEqual('CLI 人类提及产生个人提醒', cliReminder?.type, 'mention_reminder');
-    checkEqual('CLI 人类提醒来源为 explicit', cliReminder?.metadata.source, 'explicit');
-
-    const cliOptOutRun = Bun.spawnSync(
-      [
-        'bash',
-        cliScript,
-        'send',
-        '--room',
-        groupId,
-        '--body',
-        '@CaseBot CLI 显式不派活',
-        '--no-invoke',
-        '--request-id',
-        newRequestId('mention_cli_opt_out'),
-        '--client-message-id',
-        `cm_${crypto.randomUUID()}`,
-      ],
-      { env: cliEnv, stdout: 'pipe', stderr: 'pipe' },
-    );
-    checkEqual('CLI --no-invoke 退出码为 0', cliOptOutRun.exitCode, 0);
-    const cliOptOut = JSON.parse(cliOptOutRun.stdout.toString()) as {
-      message: { mentions: unknown[] };
-      delivery_ids: string[];
-    };
-    checkEqual('CLI --no-invoke 显式关闭派活', cliOptOut.delivery_ids.length, 0);
-    checkEqual('CLI --no-invoke 不产生提及', cliOptOut.message.mentions.length, 0);
 
     const headBeforeInvalidMention = await roomHead(humanToken, groupId);
     await expectToolError(

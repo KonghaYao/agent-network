@@ -1,7 +1,7 @@
 /**
  * Codex app-server 传输与单 token 锁。
  *
- * 与 `codex-watch.sh` 的 Python 内嵌实现对齐：
+ * 与旧 shell 桥接的 Python 内嵌实现对齐：
  * - `codex app-server daemon version` 返回 Unix socket 路径；
  * - JSON-RPC over WebSocket，请求按自增 id 匹配，通知进入事件队列；
  * - 30 秒调用超时，断线时所有 pending 失败并投递 `disconnected`；

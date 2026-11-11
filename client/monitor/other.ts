@@ -1,5 +1,5 @@
 /**
- * `agentnet monitor --harness other`：other-sentinel.sh 的 TypeScript 等价实现。
+ * `agentnet monitor --harness other`：旧哨兵的 TypeScript 等价实现。
  *
  * 无 monitor 的宿主用后台任务承载哨兵：它只读 watch.log，发现新的 `^ALERT`
  * 行就让进程结束，借宿主的「任务完成」通知唤醒会话。它不访问服务端、

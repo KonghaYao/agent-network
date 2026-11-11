@@ -21,7 +21,6 @@ import {
 import { runStreamProtocolChecks } from './lib/stream-protocol';
 import { runAgentPresenceUnitChecks } from './lib/presence-unit';
 import { runFeedbackUnitChecks } from './lib/feedback-unit';
-import { runFeedbackCliChecks } from './lib/feedback-cli';
 import { runDeliveryReminderUnitChecks } from './lib/delivery-reminder-unit';
 import { runDeliverySenderUnitChecks } from './lib/delivery-sender-unit';
 import { runRoomInviteReplayUnitChecks } from './lib/room-invite-replay-unit';
@@ -1982,7 +1981,7 @@ async function main(): Promise<void> {
     '技能正文包含消息式 Task 的标记、摘要、Trace 与搜索语义',
     ['## 消息式 Task 与 Trace', 'network_task_mark', 'network_task_summaries',
       'network_task_trace', 'network_task_search', 'task_root_id',
-      '不写 inbox', '不推进 `head_seq`', '不会唤醒 Agent', 'agent_tasks.sh'].every(
+      '不写 inbox', '不推进 `head_seq`', '不会唤醒 Agent', 'agentnet task'].every(
       (marker) => skillText.includes(marker),
     ),
     skillText.slice(0, 320),
@@ -2358,8 +2357,9 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 200),
   );
   check(
-    '静态技能包含命令与监听脚本',
-    ['agentnet.sh', 'peri-watch.sh', 'codex-watch.sh', 'claude-watch.sh', 'dsh-watch.sh'].every((name) =>
+    '静态技能包含 CLI 与监听入口',
+    ['agentnet.js', 'agentnet monitor --harness peri', 'agentnet monitor --harness codex',
+      'agentnet monitor --harness claude', 'agentnet monitor --harness dsh'].every((name) =>
       skillDocText.includes(name),
     ),
     skillDocText.slice(0, 240),
@@ -2374,7 +2374,7 @@ async function main(): Promise<void> {
   );
   check(
     '静态技能包含 Task 命令与不唤醒规范',
-    ['agent_tasks.sh', '### 消息式 Task 与 Trace', 'network_task_mark',
+    ['agentnet task', '### 消息式 Task 与 Trace', 'network_task_mark',
       'network_task_summaries', 'network_task_trace', 'network_task_search',
       '不写 inbox', '不唤醒 Agent', 'task_root_id'].every((marker) =>
       skillDocText.includes(marker),
@@ -2597,7 +2597,7 @@ async function main(): Promise<void> {
   );
   check(
     '静态技能包含 Other 哨兵与无 monitor 接入标记',
-    ['Other', '无 monitor', 'other-sentinel.sh', 'watch.log', 'MAX_WAIT', '360', '哨兵'].every(
+    ['Other', '无 monitor', 'agentnet monitor --harness other', 'watch.log', '--max-wait', '360', '哨兵'].every(
       (marker) => skillDocText.includes(marker),
     ),
     skillDocText.slice(0, 400),
@@ -2612,7 +2612,7 @@ async function main(): Promise<void> {
   const harnessDocs = [
     {
       file: 'harness-codex.md',
-      markers: ['codex-watch.sh', 'AGENTNET_TOKEN', 'CODEX_THREAD_ID', 'turn/steer'],
+      markers: ['agentnet monitor --harness codex', 'AGENTNET_TOKEN', 'CODEX_THREAD_ID', 'turn/steer'],
     },
     {
       file: 'harness-chatgpt-web.md',
@@ -2622,7 +2622,7 @@ async function main(): Promise<void> {
       file: 'harness-peri.md',
       markers: [
         'monitor',
-        'peri-watch.sh',
+        'agentnet monitor --harness peri',
         'AGENTNET_TOKEN',
         'network_inbox_list',
         'ALERT',
@@ -2633,12 +2633,11 @@ async function main(): Promise<void> {
     {
       file: 'harness-claude.md',
       markers: [
-        'claude-watch.sh',
-        'Monitor',
-        'AGENTNET_TOKEN',
+        'agentnet monitor --harness claude',
+        'Monitor',        'AGENTNET_TOKEN',
         'share_url',
         'event_file',
-        'agentnet.sh reply',
+        'agentnet reply',
         'network_delivery_complete',
         'network_delivery_fail',
         '10 秒',
@@ -2651,20 +2650,20 @@ async function main(): Promise<void> {
       markers: [
         '无 monitor',
         '哨兵',
-        'other-sentinel.sh',
-        'peri-watch.sh',
+        'agentnet monitor --harness other',
+        'agentnet monitor --harness peri',
         'watch.log',
         'READY',
         'ALERT',
-        'MAX_WAIT',
+        '--max-wait',
         '360',
         'network_inbox_list',
         'network_delivery_claim',
         'network_delivery_complete',
         '重新挂',
         'cron',
-        'curl: (28)',
-        '401/403',
+        '网络超时',
+        'CREDENTIAL_INVALID',
       ],
     },
     {
@@ -2686,7 +2685,7 @@ async function main(): Promise<void> {
         'peerDependencies',
         'catchup',
         'CREDENTIAL_INVALID',
-        'dsh-watch.sh',
+        'agentnet monitor --harness dsh',
       ],
     },
   ] as const;
@@ -2736,31 +2735,6 @@ async function main(): Promise<void> {
     headers: { 'if-none-match': cliEtag },
   });
   checkEqual('CLI bundle 命中 ETag 返回 304', cliCached.status, 304);
-
-  const otherSentinel = await fetch(`${baseUrl()}/skills/other-sentinel.sh`);
-  checkEqual('GET /skills/other-sentinel.sh 返回 200', otherSentinel.status, 200);
-  const otherSentinelType = otherSentinel.headers.get('content-type') ?? '';
-  const otherSentinelText = await otherSentinel.text();
-  check(
-    'Other 哨兵脚本只读本地日志并支持 MAX_WAIT/POLL',
-    otherSentinelType.includes('text/x-shellscript') &&
-      ['LOG', 'MAX_WAIT', 'POLL', 'ALERT', 'WAKE'].every((marker) =>
-        otherSentinelText.includes(marker),
-      ) &&
-      !otherSentinelText.includes('AGENTNET_TOKEN') &&
-      !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(otherSentinelText),
-    { contentType: otherSentinelType },
-  );
-  const otherSentinelSyntax = Bun.spawnSync({
-    cmd: ['bash', '-n', 'public/skills/other-sentinel.sh'],
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  check(
-    'Other 哨兵脚本通过 bash -n',
-    otherSentinelSyntax.exitCode === 0,
-    otherSentinelSyntax.stderr.toString(),
-  );
 
   const chatgptGuide = await fetch(`${baseUrl()}/skills/harness-chatgpt-web.md`);
   checkEqual('GET /skills/harness-chatgpt-web.md 返回 200（群聊订阅）', chatgptGuide.status, 200);
@@ -2838,13 +2812,13 @@ async function main(): Promise<void> {
     '24 小时',
     '24h',
     'monitor',
-    'peri-watch.sh',
+    'agentnet monitor --harness peri',
     'network_inbox_list',
     'ALERT',
     'READY',
   ];
   check(
-    'Peri 指南标注单次 monitor 最长 24h 并说明脚本重启与 ALERT',
+    'Peri 指南标注单次 monitor 最长 24h 并说明 CLI 重启与 ALERT',
     periGuideType.includes('text/markdown') &&
       periMonitorMarkers.every((marker) => periGuideText.includes(marker)) &&
       !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(periGuideText) &&
@@ -2855,343 +2829,56 @@ async function main(): Promise<void> {
     },
   );
 
-  const periScript = await fetch(`${baseUrl()}/skills/peri-watch.sh`);
-  checkEqual('GET /skills/peri-watch.sh 返回 200', periScript.status, 200);
-  const periScriptType = periScript.headers.get('content-type') ?? '';
-  const periScriptText = await periScript.text();
-  check(
-    'Peri monitor 脚本只监听投递并包含 ALERT',
-    periScriptType.includes('text/x-shellscript') &&
-      ['ALERT', 'AGENTNET_TOKEN', 'network_inbox_list', 'delivery_id', 'ERROR type=inbox', 'agentnet://stream', 'subscriptions/listen', 'sender_id', '--connect-timeout', 'network_delivery_claim', 'auto_claimed', 'delivery_conflict', 'delivery_deferred', 'delivery_claim_failed'].every((marker) =>
-        periScriptText.includes(marker),
-      ),
-    { contentType: periScriptType },
-  );
-  check(
-    'Peri monitor 脚本不轮询房间，也不要求 ROOM_ID',
-    !periScriptText.includes('ROOM_ID') &&
-      !periScriptText.includes('network_rooms_list') &&
-      !periScriptText.includes('network_room_get'),
-  );
-  check(
-    'Peri monitor 脚本识别 3 分钟提醒并输出 reminder ALERT',
-    periScriptText.includes('delivery.reminder') &&
-      periScriptText.includes('type:"reminder"') &&
-      periScriptText.includes('network_delivery_report'),
-  );
-  check(
-    'Peri monitor 脚本不包含硬编码 Bearer token',
-    !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(periScriptText),
-  );
-
-  const codexScript = await fetch(`${baseUrl()}/skills/codex-watch.sh`);
-  checkEqual('GET /skills/codex-watch.sh 返回 200', codexScript.status, 200);
-  const codexScriptText = await codexScript.text();
-  check(
-    'Codex 脚本独立保持 SSE 与 Unix WebSocket 并处理投递',
-    (codexScript.headers.get('content-type') ?? '').includes('text/x-shellscript') &&
-      ['subscriptions/listen', 'agentnet://stream', 'network_login', 'network_delivery_claim',
-       'network_message_read', 'network_delivery_complete', 'network_delivery_fail',
-       'websockets.unix_connect', 'turn/start', 'turn/steer', 'expectedTurnId',
-       'turn/completed', 'CODEX_THREAD_ID', 'DELIVERY_CLAIMED', 'DELIVERY_DEFERRED',
-       'DELIVERY_CONFLICT', 'DELIVERY_CLAIM_FAILED', 'auto_claimed=true'].every(
-        (marker) => codexScriptText.includes(marker),
-      ) &&
-      !codexScriptText.includes('peri-watch.sh') &&
-      !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(codexScriptText),
-  );
-  check(
-    'Codex 脚本识别提醒并交给当前会话',
-    codexScriptText.includes('delivery.reminder') &&
-      codexScriptText.includes('wake_reminder') &&
-      codexScriptText.includes('REMINDER_STEERED') &&
-      codexScriptText.includes('network_delivery_report'),
-  );
-
-  const claudeScript = await fetch(`${baseUrl()}/skills/claude-watch.sh`);
-  checkEqual('GET /skills/claude-watch.sh 返回 200', claudeScript.status, 200);
-  const claudeScriptType = claudeScript.headers.get('content-type') ?? '';
-  const claudeScriptText = await claudeScript.text();
-  check(
-    'claude-watch.sh 默认地址在响应中注入为测试实例 PUBLIC_ORIGIN',
-    claudeScriptText.includes(`: "\${AGENTNET_URL:=${publicOrigin}}"`) &&
-      !claudeScriptText.includes('__PUBLIC_ORIGIN__') &&
-      !claudeScriptText.includes('net.peri-code.dev'),
-    { publicOrigin, snippet: claudeScriptText.slice(0, 160) },
-  );
-  const claudeScriptMarkers = [
-    'AGENTNET_TOKEN',
-    'subscriptions/listen',
-    'agentnet://stream',
-    'notifications/subscriptions/acknowledged',
-    'network_login',
-    'network_inbox_list',
-    'network_delivery_claim',
-    'network_message_read',
-    'event_file',
-    'auto_claimed',
-    'delivery_conflict',
-    'delivery_deferred',
-    'delivery_claim_failed',
-    'action_required',
-    'delivery_id',
-    'READY',
-    'reconnect_delay',
-    '--connect-timeout',
-  ];
-  check(
-    'Claude Code 监听脚本订阅统一流并在 ack 后登录补读',
-    claudeScriptType.includes('text/x-shellscript') &&
-      claudeScriptMarkers.every((marker) => claudeScriptText.includes(marker)),
-    {
-      contentType: claudeScriptType,
-      missing: claudeScriptMarkers.filter((marker) => !claudeScriptText.includes(marker)),
-    },
-  );
-  check(
-    'Claude Code 监听脚本不包含硬编码 Bearer token',
-    !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(claudeScriptText),
-  );
-  check(
-    'Claude Code 监听脚本识别 3 分钟提醒并输出 reminder',
-    claudeScriptText.includes('delivery.reminder') &&
-      claudeScriptText.includes('type:"reminder"') &&
-      claudeScriptText.includes('network_delivery_report'),
-  );
-  const claudeEmitFoundBody =
-    claudeScriptText.match(/emit_found\(\) \{([\s\S]*?)^\}/mu)?.[1] ?? '';
-  check(
-    'Claude Code 监听脚本输出事件后保持同一条持续监听',
-    claudeEmitFoundBody.includes("printf '%s\\n'") &&
-      !/\bexit\b/u.test(claudeEmitFoundBody) &&
-      claudeScriptText.includes('while :; do'),
-    claudeEmitFoundBody,
-  );
-  const claudeWriteEventBody =
-    claudeScriptText.match(/write_event_file\(\) \{([\s\S]*?)^\}/mu)?.[1] ?? '';
-  const claudeBodyPreviewBody =
-    claudeScriptText.match(/event_body_json\(\) \{([\s\S]*?)^\}/mu)?.[1] ?? '';
-  check(
-    'Claude Code 监听脚本把完整正文写入 0600 私有事件文件',
-    claudeWriteEventBody.includes('network_message_read') &&
-      claudeWriteEventBody.includes('next_cursor') &&
-      claudeWriteEventBody.includes('--rawfile body') &&
-      claudeWriteEventBody.includes('chmod 600') &&
-      claudeEmitFoundBody.includes('event_file') &&
-      !claudeEmitFoundBody.includes('--rawfile body'),
-    { claudeWriteEventBody, claudeEmitFoundBody },
-  );
-  check(
-    'Claude Code 监听脚本只在 stdout 携带受限正文预览',
-    /^BODY_PREVIEW_CHARS=\d+$/mu.test(claudeScriptText) &&
-      claudeBodyPreviewBody.includes('BODY_PREVIEW_CHARS') &&
-      claudeBodyPreviewBody.includes('utf8bytelength') &&
-      claudeBodyPreviewBody.includes('body_truncated') &&
-      claudeEmitFoundBody.includes('body:$body_info.body') &&
-      claudeEmitFoundBody.includes('body_truncated:$body_info.body_truncated'),
-    { claudeBodyPreviewBody, claudeEmitFoundBody },
-  );
-
-  const dshScript = await fetch(`${baseUrl()}/skills/dsh-watch.sh`);
-  checkEqual('GET /skills/dsh-watch.sh 返回 200', dshScript.status, 200);
-  const dshScriptType = dshScript.headers.get('content-type') ?? '';
-  const dshScriptText = await dshScript.text();
-  const dshScriptMarkers = [
-    'WEBBOTS_HOME',
-    'AGENTNET_TOKEN',
-    'AGENTNET_URL',
-    'wake.queue',
-    'status.json',
-    'start',
-    'stop',
-    'status',
-    'logs',
-    'wait',
-    'run',
-    'subscriptions/listen',
-    'agentnet://stream',
-    'network_login',
-    'network_room_get',
-    'action_required',
-    'room.message',
-    'delivery.updated',
-    'session.login',
-    'catchup',
-    'CREDENTIAL_INVALID',
-    'reconnect_delay',
-    '--connect-timeout',
-    'EOF',
-    'truncate',
-  ];
-  check(
-    'DSH watcher 订阅统一流、写 wake.queue 并支持守护子命令',
-    dshScriptType.includes('text/x-shellscript') &&
-      dshScriptMarkers.every((marker) => dshScriptText.includes(marker)),
-    {
-      contentType: dshScriptType,
-      missing: dshScriptMarkers.filter((marker) => !dshScriptText.includes(marker)),
-    },
-  );
-  check(
-    'DSH watcher 不包含硬编码 Bearer token 或完整 token URL',
-    !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(dshScriptText) &&
-      !/[?&]token=[0-9a-f]{8}-[0-9a-f]{4}/iu.test(dshScriptText),
-  );
-  const dshSyntax = Bun.spawnSync({
-    cmd: ['bash', '-n', 'public/skills/dsh-watch.sh'],
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  check(
-    'DSH watcher 通过 bash -n',
-    dshSyntax.exitCode === 0,
-    dshSyntax.stderr.toString(),
-  );
-
   const dshGuide = await fetch(`${baseUrl()}/skills/harness-dsh.md`);
   checkEqual('GET /skills/harness-dsh.md 返回 200（DSH 指南）', dshGuide.status, 200);
   const dshGuideText = await dshGuide.text();
   check(
     'DSH 指南说明无内置 monitor、事件过滤与不可重试凭据错误',
     ['没有内置 monitor', 'wake.queue', 'action_required', 'room.message', 'delivery.updated',
-      'session.login', 'catchup', 'CREDENTIAL_INVALID', '不可重试', 'dsh-watch.sh'].every(
+      'session.login', 'catchup', 'CREDENTIAL_INVALID', '不可重试', 'agentnet monitor --harness dsh'].every(
       (marker) => dshGuideText.includes(marker),
     ),
     { missing: ['没有内置 monitor', 'wake.queue', 'action_required', 'room.message', 'delivery.updated',
-      'session.login', 'catchup', 'CREDENTIAL_INVALID', '不可重试', 'dsh-watch.sh'].filter(
+      'session.login', 'catchup', 'CREDENTIAL_INVALID', '不可重试', 'agentnet monitor --harness dsh'].filter(
       (marker) => !dshGuideText.includes(marker),
     ) },
   );
 
-  const agentnetScript = await fetch(`${baseUrl()}/skills/agentnet.sh`);
-  checkEqual('GET /skills/agentnet.sh 返回 200', agentnetScript.status, 200);
-  const agentnetScriptType = agentnetScript.headers.get('content-type') ?? '';
-  const agentnetScriptText = await agentnetScript.text();
-  check(
-    '通用 Agent 命令脚本可通过 /skills 下载并包含核心子命令',
-    agentnetScriptType.includes('text/x-shellscript') &&
-      ['login', 'send', 'reply', 'send-file', 'inbox', 'upload', 'contact-add', 'room-create', 'mark-read', 'sync', 'network_message_send', 'network_delivery_claim', 'network_delivery_complete', 'network_contact_add', 'network_room_create', 'network_room_mark_read', 'network_sync', 'network_delivery_report', 'network_room_file_bind', 'mcp-upload', 'MCPP-Files-Version', '--connect-timeout'].every(
-        (marker) => agentnetScriptText.includes(marker),
-      ),
-    { contentType: agentnetScriptType },
-  );
-  check(
-    '通用 Agent 命令脚本不包含硬编码 Bearer token',
-    !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(agentnetScriptText),
-  );
-  check(
-    'agentnet.sh 默认地址在响应中注入为测试实例 PUBLIC_ORIGIN',
-    agentnetScriptText.includes(`: "\${AGENTNET_URL:=${publicOrigin}}"`) &&
-      !agentnetScriptText.includes('__PUBLIC_ORIGIN__') &&
-      !agentnetScriptText.includes('net.peri-code.dev'),
-    { publicOrigin, snippet: agentnetScriptText.slice(0, 160) },
-  );
-  const skillScriptFiles = [
+  // 旧 shell 包装已删除：一个发布周期内返回 410，而不是静默 404。
+  const retiredSkillFiles = [
     'agentnet.sh',
     'agent_tasks.sh',
     'claude-watch.sh',
     'codex-watch.sh',
-    'dsh-watch.sh',
     'peri-watch.sh',
+    'dsh-watch.sh',
+    'other-sentinel.sh',
   ];
-  for (const file of skillScriptFiles) {
-    const source = await Bun.file(`public/skills/${file}`).text();
+  for (const file of retiredSkillFiles) {
+    const response = await fetch(`${baseUrl()}/skills/${file}`);
+    checkEqual(`GET /skills/${file} 返回 410`, response.status, 410);
+    const text = await response.text();
     check(
-      `public/skills/${file} 源文件不含硬编码公网域名`,
-      !source.includes('net.peri-code.dev') && source.includes('__PUBLIC_ORIGIN__'),
+      `${file} 的 410 指向 agentnet.js 迁移`,
+      (response.headers.get('content-type') ?? '').includes('text/plain') &&
+        text.includes('/skills/agentnet.js') &&
+        (response.headers.get('cache-control') ?? '').includes('no-store'),
     );
   }
-  check(
-    'agentnet.sh 响应使用内容哈希 ETag 与 no-cache',
-    (agentnetScript.headers.get('cache-control') ?? '').includes('no-cache') &&
-      /^"[0-9a-f]{64}"$/u.test(agentnetScript.headers.get('etag') ?? ''),
-    {
-      cacheControl: agentnetScript.headers.get('cache-control'),
-      etag: agentnetScript.headers.get('etag'),
-    },
-  );
-  const agentnetRevalidated = await fetch(`${baseUrl()}/skills/agentnet.sh`, {
-    headers: { 'if-none-match': agentnetScript.headers.get('etag') ?? '' },
-  });
-  checkEqual('agentnet.sh 携带 If-None-Match 返回 304', agentnetRevalidated.status, 304);
-  check(
-    'agentnet reply 自动恢复投递状态并一次完成最终回复',
-    ['cmd_reply', 'find_inbox_delivery', 'network_delivery_claim',
-     'network_delivery_complete', 'final_body'].every((marker) =>
-      agentnetScriptText.includes(marker),
-    ),
-  );
-  check(
-    'agentnet send/send-file 支持显式 invoke、opt-out 与 human mentions',
-    agentnetScriptText.includes('--no-invoke') &&
-      agentnetScriptText.includes('--mention') &&
-      agentnetScriptText.includes("--no-invoke) invoke='[]'; shift 1") &&
-      agentnetScriptText.includes('--no-invoke) invoke=""; no_invoke=1; shift 1') &&
-      agentnetScriptText.includes('if $mentions == null then {} else {mentions:$mentions} end') &&
-      agentnetScriptText.includes('send_args+=(--mention "$mentions")') &&
-      agentnetScriptText.includes('显式 invoke 是 Agent 执行目标'),
-    agentnetScriptText.slice(0, 300),
-  );
-
-  const agentTasksScript = await fetch(`${baseUrl()}/skills/agent_tasks.sh`);
-  checkEqual('GET /skills/agent_tasks.sh 返回 200', agentTasksScript.status, 200);
-  const agentTasksType = agentTasksScript.headers.get('content-type') ?? '';
-  const agentTasksText = await agentTasksScript.text();
-  check(
-    'Task 命令脚本可通过 /skills 下载并包含 5 个子命令',
-    agentTasksType.includes('text/x-shellscript') &&
-      ['mark', 'unmark', 'summaries', 'trace', 'search'].every(
-        (marker) => agentTasksText.includes(`  ${marker})`),
-      ) &&
-      ['network_task_mark', 'network_task_unmark', 'network_task_summaries',
-        'network_task_trace', 'network_task_search'].every((marker) =>
-        agentTasksText.includes(marker),
-      ),
-    { contentType: agentTasksType },
-  );
-  check(
-    '任务命令脚本使用 Bearer、--json 与 0600 curl 配置且不轮询',
-    agentTasksText.includes('Authorization: Bearer') &&
-      agentTasksText.includes('--json') &&
-      agentTasksText.includes('chmod 600') &&
-      agentTasksText.includes('umask 077') &&
-      agentTasksText.includes('不轮询') &&
-      !/\bwhile true\b/u.test(agentTasksText),
-    agentTasksText.slice(0, 320),
-  );
-  check(
-    'Task 命令脚本说明只读、不轮询与幂等 request_id',
-    agentTasksText.includes('不创建 delivery') &&
-      agentTasksText.includes('不增加 pending_count') &&
-      agentTasksText.includes('不唤醒 Agent') &&
-      agentTasksText.includes('--request-id') &&
-      agentTasksText.includes('message_id 就是 task_root_id'),
-    agentTasksText.slice(0, 320),
-  );
-  check(
-    '任务命令脚本不包含硬编码 Bearer token',
-    !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(agentTasksText),
-  );
-  const agentTasksSyntax = Bun.spawnSync({
-    cmd: ['bash', '-n', 'public/skills/agent_tasks.sh'],
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  check(
-    'agent_tasks.sh 通过 bash -n',
-    agentTasksSyntax.exitCode === 0,
-    agentTasksSyntax.stderr.toString(),
-  );
+  const unknownSkill = await fetch(`${baseUrl()}/skills/unknown.js`);
+  checkEqual('未知 .js 技能路径返回 404', unknownSkill.status, 404);
+  const traversalSkill = await fetch(`${baseUrl()}/skills/..%2Fpackage.json`);
+  checkEqual('技能路径穿越返回 404', traversalSkill.status, 404);
 
   const claudeGuide = await fetch(`${baseUrl()}/skills/harness-claude.md`);
   const claudeGuideText = await claudeGuide.text();
   const claudeGuideMarkers = [
-    'claude-watch.sh',
+    'agentnet monitor --harness claude',
     'Monitor 工具',
     'AGENTNET_TOKEN',
     'share_url',
     'event_file',
-    'agentnet.sh reply',
+    'agentnet reply',
     'network_delivery_complete.final_body',
     'network_delivery_fail',
     '10 秒',
@@ -3221,14 +2908,13 @@ async function main(): Promise<void> {
   checkEqual('GET /skills/harness-codex.md 返回 200（桥接指南）', codexBridge.status, 200);
   const codexBridgeText = await codexBridge.text();
   const codexBridgeMarkers = [
-    'codex-watch.sh',
+    'agentnet monitor --harness codex',
     'CODEX_THREAD_ID',
     'CODEX_READY',
     'READY',
     'AGENTNET_TOKEN',
     'share_url',
     'codex app-server daemon version',
-    'websockets',
     'SSE 长连接',
     'turn/steer',
     '10 秒',
@@ -4100,7 +3786,6 @@ async function main(): Promise<void> {
   await runAgentPresenceUnitChecks();
   await runFeedbackUnitChecks();
   await runOwnerlessRoomUnitChecks();
-  await runFeedbackCliChecks();
   await runDeliveryReminderUnitChecks();
   await runDeliverySenderUnitChecks();
   await runRoomInviteReplayUnitChecks();

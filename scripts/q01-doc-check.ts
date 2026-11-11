@@ -5,7 +5,7 @@
  * 检查：
  * - `tools/list` 为 113 个唯一工具；
  * - README/CLAUDE/功能矩阵/代码索引/技能/CLI/Harness 只引用已注册工具；
- * - `agent_tasks.sh` 覆盖消息式 Task 的 mark/unmark/summaries/trace/search；
+ * - `public/skills` 不再包含 `.sh`，文档不再出现旧 shell 脚本名；
  * - Harness 指南不再把长期 token 二维码或隐式 @ 当作默认路径；
  * - `src/mcp/skill.ts` 的 SKILL.md 正文与 `skills/list` digest / `resources/read` 一致，
  *   以及与静态技能的共享 section digest 一致。
@@ -26,21 +26,17 @@ const DOC_FILES = [
   'docs/code-index.md',
   'docs/feature-matrix.md',
   'src/mcp/skill.ts',
+  'client/cli.ts',
+  'client/harness-guides.ts',
   'public/skills/agent-network-skills.md',
-  'public/skills/agentnet.sh',
-  'public/skills/agent_tasks.sh',
   ...readdirSync(join(ROOT, 'public/skills'))
     .filter((name) => name.startsWith('harness-') && name.endsWith('.md'))
     .map((name) => `public/skills/${name}`),
 ];
 
-const REQUIRED_CLI = [
-  'mark)',
-  'unmark)',
-  'summaries)',
-  'trace)',
-  'search)',
-];
+/** 旧 shell 包装已删除；一个发布周期内只保留 410 路由。 */
+const OLD_SCRIPT_PATTERN =
+  /(?:agentnet|agent_tasks|claude-watch|codex-watch|peri-watch|dsh-watch|other-sentinel)\.sh/u;
 
 const RETIRED_TASK_TOOL_PATTERN =
   /network_task_(?:summary(?!ies)|list|get|create|offer|accept|decline|claim|cancel|retry|progress|block|resume|transfer|handoff|submit|submission|review|reviewer|execution)[a-z_]*/u;
@@ -94,12 +90,31 @@ for (const file of DOC_FILES) {
 if (unknown.length > 0) console.error(unknown.join('\n'));
 checkEqual('文档/技能/CLI 没有引用未注册工具', unknown.length, 0);
 
-const cli = read('public/skills/agent_tasks.sh');
-for (const command of REQUIRED_CLI) {
-  check(`agent_tasks.sh 覆盖 ${command}`, cli.includes(`  ${command} cmd_`));
+const skillFiles = readdirSync(join(ROOT, 'public/skills'));
+const shellFiles = skillFiles.filter((name) => name.endsWith('.sh'));
+checkEqual('public/skills 不含 .sh', shellFiles.length, 0);
+
+const legacyScriptRefs: string[] = [];
+for (const file of DOC_FILES) {
+  const match = read(file).match(OLD_SCRIPT_PATTERN);
+  if (match) legacyScriptRefs.push(`${file}: ${match[0]}`);
 }
-check('agent_tasks.sh 不引用旧任务工具', !RETIRED_TASK_TOOL_PATTERN.test(cli));
-check('agent_tasks.sh 不声明旧任务状态命令', !cli.includes('--task ') && !cli.includes('task_id'));
+if (legacyScriptRefs.length > 0) console.error(legacyScriptRefs.join('\n'));
+checkEqual('文档/技能/CLI 不再出现旧 shell 脚本名', legacyScriptRefs.length, 0);
+
+const cli = read('client/cli.ts');
+check(
+  'CLI 暴露 task 五个子命令',
+  ['mark', 'unmark', 'summaries', 'trace', 'search'].every((command) =>
+    cli.includes(`.command('${command}')`),
+  ),
+);
+check(
+  'CLI 暴露 monitor --harness',
+  cli.includes(".command('monitor')") && cli.includes("'--harness <name>'"),
+);
+check('CLI 不引用旧任务工具', !RETIRED_TASK_TOOL_PATTERN.test(cli));
+check('CLI 不声明旧任务状态命令', !cli.includes('--task ') && !cli.includes('task_id'));
 
 const harness = DOC_FILES.filter((file) => file.startsWith('public/skills/harness-'));
 for (const file of harness) {

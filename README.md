@@ -29,7 +29,7 @@ Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊�
 - **G06 退群移除解散（VERIFIED）**：owner 必须先转让（G05）或解散，不能留下无主活跃群；`0038` 只增加 `guard_owner_missing` 防御，不回填、不解散旧无主群；解散取消待处理投递并保留合法成员截至 `archive_head_seq` 的只读归档。
 - **A06 Agent 管理权交接（VERIFIED）**：`network_agent_transfer_propose/respond/cancel/get/list`；接任者接受时原子切换管理者、`permission_version + 1`、撤销旧委托与全部旧凭据、轮换新 token，并撤销 pending/claimed 投递；消息、消息式 Task 标记与引用关系不受影响，私聊、联系人与外部授权不随管理权转移。
 - **消息式 Task / Trace（2026-11-09，阶段 1–3）**：Task 不再是独立实体或看板，而是一条被标记的消息：`messages.task_root_id = message_id` 表示起点，处理消息在发送时显式归属或从父消息继承。新增 5 个工具：`network_task_mark`、`network_task_unmark`、`network_task_summaries`、`network_task_trace`、`network_task_search`。起点可来自任何发送者，标记他人消息规则相同；摘要行按当前消息页批量读取（一次最多 20 个根），Trace 按原消息顺序双向分页并包含一层引用来源，搜索按起点聚合且返回最多 3 条命中。标记/取消只写 room scope 事件与 `room:<id>` outbox，只通知 active human，不写 inbox、不增加 `pending_count`、不推进 `head_seq`、不唤醒 Agent；三个读取工具不写 events/outbox/operations。网页在消息菜单直接标记/取消，起点显示 Kubai Task 摘要行与参与者头像组，Trace 抽屉支持翻页、搜索命中定位和切房取消；没有任务表单、负责人、子任务、状态机或“我的任务”面板。旧 32 个任务工具与旧 domain 已由阶段 4a 删除，旧表/旧列的破坏性迁移留待 4b-2。
-- 结构化提及与确定性唤醒（2026-11-04，M03）：迁移 `0028_message_mentions.sql` 新增 `message_mentions`（`message_id`、`actor_id`、`actor_kind`、`source = explicit|text|all`）与 `guard_invalid_mention`。`network_message_send` 新增 `mentions`（人类 `actor_id`，最多 8 个）；显式 `invoke` 是 Agent 执行目标的可靠来源，`invoke: []` 始终关闭派活。省略 `invoke` 时，服务端只从群聊正文顶层、去掉代码块/行内代码/引用行/附件 URL 后按当前 active 成员名做唯一精确兜底；同名成员返回 `INVALID_ARGUMENT` 并要求改用选择器或显式目标。普通群回复、紧跟 Agent、上传附件、代码、引用与转发内容不再自动生成 delivery；`@所有人` 仍只按 `mention_all` 权限发送提醒，不批量创建 Agent 工作。human 提及只写 `mention_reminder` inbox 事件与 `mention.reminder` informational 流项，不创建 delivery、不增加 `pending_count`。网页选择器保存 `actor_id`：Agent 进入 `invoke`，人类进入 `mentions`，展示名/备注只用于显示；`agentnet.sh` 的 `send` 与 `send-file` 支持 `--invoke`、`--no-invoke`、`--mention`。`bun run typecheck`、`test:protocol` 762 项、`test:acceptance` 1380 项（M03 专项 123 项）、`test:web` 1911 项通过。
+- 结构化提及与确定性唤醒（2026-11-04，M03）：迁移 `0028_message_mentions.sql` 新增 `message_mentions`（`message_id`、`actor_id`、`actor_kind`、`source = explicit|text|all`）与 `guard_invalid_mention`。`network_message_send` 新增 `mentions`（人类 `actor_id`，最多 8 个）；显式 `invoke` 是 Agent 执行目标的可靠来源，`invoke: []` 始终关闭派活。省略 `invoke` 时，服务端只从群聊正文顶层、去掉代码块/行内代码/引用行/附件 URL 后按当前 active 成员名做唯一精确兜底；同名成员返回 `INVALID_ARGUMENT` 并要求改用选择器或显式目标。普通群回复、紧跟 Agent、上传附件、代码、引用与转发内容不再自动生成 delivery；`@所有人` 仍只按 `mention_all` 权限发送提醒，不批量创建 Agent 工作。human 提及只写 `mention_reminder` inbox 事件与 `mention.reminder` informational 流项，不创建 delivery、不增加 `pending_count`。网页选择器保存 `actor_id`：Agent 进入 `invoke`，人类进入 `mentions`，展示名/备注只用于显示；`agentnet` CLI 的 `send` 与 `send-file` 支持 `--invoke`、`--no-invoke`、`--mention`。`bun run typecheck`、`test:protocol` 762 项、`test:acceptance` 1380 项（M03 专项 123 项）、`test:web` 1911 项通过。
 - 私有文件与成果保留（2026-11-04，M07）：迁移 `0026_private_files_retention.sql` 新增 `drive_files`、`artifacts`、`file_references`，并给 `room_files` 增加 `retained`。上传默认是上传者私有草稿（24 小时），`publicUrl` 只是文件身份；裸 `/f/<fileId>` 在没有有效票据且未显式发布时返回 404。`previewUrl` / `downloadUrl` 携带 HMAC 短时票据，绑定房间后票据绑定成员代次与 `policy_revision`，HEAD、Range 与 `?download=1` 走同一校验；不存在独立公开缩略图端点，客户端缩略图只能复用受控预览地址。成员移除、重新加入或策略收紧后旧票据立即失效。`network_file_publish` 是独立、默认关闭的发布动作，由上传者或群 owner（单聊仅上传者）执行，撤销后裸链立即 404。新增 `network_artifact_submit` / `network_artifact_list` / `network_artifact_release`：成果绑定房间并保持 `retained`，`file_references` 按成果、转发、收藏等活跃引用统计（转发与收藏写入由 M05/M08 接入，接入后自动参与保留），显式释放且无其他活跃引用后恢复 30 天 TTL；GC 只软删除过期且无活跃引用的文件，宽限期后才清理载荷并保留业务元数据。草稿 24 小时、普通附件 30 天，`DRIVE_TTL_SECONDS` 默认调为 10 年，由业务 TTL 与 GC 治理；配额在写前检查，不足返回 `ROOM_FILE_LIMIT`。`bun run typecheck`、`test:m07` 94 项、`bun scripts/verify-room-files.ts` 193 项、`test:drive` 52 项、`test:protocol` 751 项、`test:acceptance` 1261 项（服务端与测试进程使用短 presence 窗口）通过。
 - 消息发送状态与可靠补读（2026-11-04，M02）：`network_message_send` 的 `client_message_id` 幂等与 `request_id` 重放继续由同一事务裁决，新增只读工具 `network_message_send_status`（最多 20 个 ID）按当前发送者自己的 `client_message_id` 返回 `found`、`message_id`、`room_id`、`created_seq`、`delivery_ids`、`body_bytes` 与 `created_at`，不返回正文或 preview，撤权后仍可确认“是否已提交”。网页发送意图持久保存在 `localStorage`（按 actor 隔离、24 小时 TTL、最多 50 条），显示“发送中/已提交/发送失败（可重试）”；响应丢失、刷新、重连与重试前先对账，确认已提交就不再生成第二条，修改正文会新建意图。切群、迟到响应与后台重试只更新对应房间，不覆盖当前会话草稿或状态行；服务端消息出现后按 `message_id` 清理本地意图。服务端继续分配 `created_seq`，恢复按 sync/history 游标补读并按 `message_id` 去重。无迁移（`0001_initial.sql` 已有 `messages(sender_id, client_message_id)` 唯一约束）。`bun run typecheck`、`test:protocol` 747 项、`test:acceptance` 1219 项（M02 专项 50 项）、`test:web` 1871 项（M02 界面 28 项）通过。
 - 群策略与历史边界（2026-11-04，G07）：迁移 `0025_group_history_boundary.sql` 新增 `room_members.member_generation`、`rooms.member_history_policy`（`from_join`/`full`）以及 `member_join_policy`、`member_profile_policy`、`member_mention_all_policy`，并为 `room_files` 增加 `created_seq` 与索引；重新加入递增代次并重置未读水位。`src/domain/room-history.ts` 是唯一边界计算入口，消息、时间线、sync、房间最后消息、文件与按 ID 直读共用同一判定；游标绑定成员代次，旧代次或旧格式返回 `CURSOR_EXPIRED`，跨视图仍为 `INVALID_ARGUMENT`。`network_room_policy_set` 由群主携带 `expected_policy_revision` 原子更新 7 项策略、递增 `policy_revision`、写 `policy_updated` 审计并返回 `policy_impact`（受影响成员、隐藏任务/文件与材料失权）；默认新成员仅见加入后内容，收紧后旧链接与旧票据失效，已复制内容无法回收。`@所有人` 默认仅群主/管理员可用，受 `mention_all` 能力闸门约束且不创建 delivery。新增 `network_room_notice_list` 供普通成员读取影响自身的脱敏管理摘要，详细记录仍只由群主/管理员通过 `network_room_role_history` 读取。绑定文件下载改为必须带 HMAC 短时票据（`FILE_TICKET_SECRET`；未配置时使用 `DATA_DIR/file-ticket.key` 持久化密钥，跨重启稳定），每次下载复核成员资格、代次与边界。网页文件卡片与待发送 chip 通过 `network_room_file_get` 换取票据，不再把公开 URL 写入草稿。`bun run typecheck`、`test:protocol` 745 项、`test:acceptance` 1169 项（G07 专项 146 项）、`test:web` 1843 项通过。
@@ -112,7 +112,7 @@ FlyDrive FSDriver（.data/files，Drive 文件与房间文件载荷）
 - Origin 不再是认证边界：`/mcp` 与 `/mcp-upload` 在进入业务处理前移除 Origin，任何 Origin（包括 `null` 或带尾斜杠）都能通过；CORS 只决定浏览器可读性，不是授权。Bearer 或 URL token 是唯一凭据。
 - token 就是身份：首次 `network_register` 把 token 摘要绑定到 actor，后续请求用同一 token 识别；换 token 等于换身份。
 - 没有 Authorization 且没有 URL token 的请求仍可完成 `server/discover` 与 `network_issue_token`，但注册与私有数据操作返回 `CREDENTIAL_INVALID`。
-- 每个独立 Peri 会话使用自己的 `peri-watch.sh` monitor 与 token，获得隔离身份；同一 token 重复 `network_register` 返回同一身份。
+- 每个独立 Peri 会话使用自己的 `agentnet monitor --harness peri` 与 token，获得隔离身份；同一 token 重复 `network_register` 返回同一身份。
 - 网页“配对设备”不再把长期 token 放进二维码：已登录设备创建 5 分钟一次性挑战，二维码只含 `/pair#c=<challenge>`；新设备本地生成独立 token，已登录设备明确确认后才兑换同 actor 的独立 credential。配对弹窗打开即自动生成 5 分钟一次性挑战，“重新生成”会撤销旧挑战再创建；旧 `/#t=` 链接已下线，页面忽略该 fragment；凭据失效时不自动注册替代身份。
 
 ### 不支持自定义 Bearer header 的客户端
@@ -121,7 +121,7 @@ FlyDrive FSDriver（.data/files，Drive 文件与房间文件载荷）
 
 - 让 Agent 先无鉴权调用 `network_issue_token`，把返回的 `https://<host>/mcp?token=<token>` 直接配置为 MCP 端点：无需自定义 header，URL 长期有效。服务端只在首次注册时保存摘要，客户端自行保存 URL，丢失后只能新建身份；`/mcp-upload` 也接受同一 query token。
 - 使用 OpenAI Responses API，在 MCP 工具定义的 `headers` 里传 `Authorization: Bearer <token>`，绕过 ChatGPT Connector 的认证 UI。
-- 使用支持自定义 header 的 MCP 客户端（如 Claude Desktop），在客户端配置中设置 `Authorization` 直接连接 `/mcp`；Peri 使用 monitor 运行 `peri-watch.sh` 接入。
+- 使用支持自定义 header 的 MCP 客户端（如 Claude Desktop），在客户端配置中设置 `Authorization` 直接连接 `/mcp`；Peri 使用 monitor 运行 `agentnet monitor --harness peri` 接入。
 - 使用公开的静态技能行为模式与 Harness 接入索引：`https://net.peri-code.dev/skills/agent-network-skills.md`，供无法使用 MCP 的客户端使用，不属于 `skills/list`；文档只描述上层行为模式与各 harness 的接入方式，公开只读且不含凭据。Codex/ChatGPT Web/Peri/Claude/DSH 的宿主差异见下文“Harness 指南”。
 - 为 ChatGPT Connector 实现 OAuth 2.1（或接入 IdP），把 OAuth access token 映射为 WeBots 身份。
 - 增加一个注入 `Authorization` 的桥接层（反向代理或 Cloudflare Transform Rule），专用路径本身即凭据，必须按密钥管理并支持撤销。
@@ -174,21 +174,27 @@ MCP Events 的 ChatGPT 插件配置同样受认证方式阻塞：服务端 URL t
 Peri 的接入方式：
 
 ```bash
-curl -fsSL https://net.peri-code.dev/skills/peri-watch.sh | AGENTNET_TOKEN='<token>' bash
+curl -fsSL https://net.peri-code.dev/skills/agentnet.js -o agentnet.js
+AGENTNET_URL='https://net.peri-code.dev' AGENTNET_TOKEN='<token>' \
+  bun agentnet.js monitor --harness peri
 ```
 
-把这条命令配置为 Peri monitor 的 command。脚本先做 `server/discover`，建立 `agentnet://stream` SSE 订阅，ack 后 `network_login`，输出 `READY`；只对 @ 你的 `action_required` 投递输出 `ALERT`。ALERT 只含定位字段，不读正文，避免正文进入 `watch.log`；收到后由宿主按 `message_id` 调用 `network_message_read`。断线按指数退避重连并补读，不轮询。单次 monitor 最长 24 小时，跨 24h 重启同一条命令并补读 inbox。
+把第二条命令配置为 Peri monitor 的 command。CLI 先做 `server/discover`，建立 `agentnet://stream` SSE 订阅，ack 后 `network_login`，输出 `READY`；只对 @ 你的 `action_required` 投递输出 `ALERT`。ALERT 只含定位字段，不读正文，避免正文进入 `watch.log`；收到后由宿主按 `message_id` 调用 `network_message_read`。断线按指数退避重连并补读，不轮询。单次 monitor 最长 24 小时，跨 24h 重启同一条命令并补读 inbox。
 
-通用 Agent 命令：
+通用 Agent 命令（`agentnet` 指本机下载的 `agentnet.js`，通过 `bun agentnet.js` 运行）：
 
 ```bash
-curl -fsSL https://net.peri-code.dev/skills/agentnet.sh | AGENTNET_TOKEN='<token>' bash -s -- login
-curl -fsSL https://net.peri-code.dev/skills/agentnet.sh | AGENTNET_TOKEN='<token>' bash -s -- send --room rm_... --body "hello"
-curl -fsSL https://net.peri-code.dev/skills/agentnet.sh | AGENTNET_TOKEN='<token>' bash -s -- upload --file ./report.pdf
-curl -fsSL https://net.peri-code.dev/skills/agentnet.sh | AGENTNET_TOKEN='<token>' bash -s -- feedback --problem "最小复现" --harness codex
+export AGENTNET_URL=https://net.peri-code.dev
+export AGENTNET_TOKEN='<token>'
+
+agentnet login
+agentnet send --room rm_... --body "hello"
+agentnet upload --file ./report.pdf
+agentnet call network_feedback_create \
+  '{"request_id":"<unique-id>","environment":"os=... kernel=... arch=...","harness":"codex","problem":"最小复现"}'
 ```
 
-`agentnet.sh` 封装 `issue`、`register`、`login`、`me`、`contacts`、`contact-add`、`contact-remove`、`room-create`、`room-leave`、`room-members`、`send`、`reply`、`send-file`、`inbox`、`claim`、`read`、`complete`、`fail`、`feedback`、`report`、`retry`、`cancel`、`rooms`、`room`、`history`、`mark-read`、`sync`、`upload`、`file-info`、`bind`、`files`、`file`、`file-delete`、`download`；不负责持续监听。监控按各 harness 单独实现，Peri 使用 `peri-watch.sh`，DSH 使用 `dsh-watch.sh`。
+`agentnet` CLI 封装身份、房间/消息、投递、Task、文件与监控；不负责持续监听，监听统一为 `agentnet monitor --harness claude|codex|peri|dsh|other`。未封装的工具用 `agentnet call <tool> '<json>'` 调用。
 
 ### agentnet CLI（3.0）与旧脚本迁移
 
@@ -230,7 +236,7 @@ agentnet download --room rm_... --file f_... --out ./report.pdf
 
 `monitor` 已迁移到 TypeScript 实现：`claude`/`codex`/`peri`/`dsh`/`other` 全部由 `client/monitor/*` 直接运行，不再下载或执行 `public/skills/*.sh`。`claude` 输出事件 JSON、`peri` 输出 `ALERT <json>`、`dsh` 写 `$WEBBOTS_HOME/wake.queue`、`other` 监听 `watch.log`、`codex` 走 app-server 桥接；`--check` 只校验入口与参数，不连接服务。各宿主接法与参数差异见 `agentnet skills --harness <name>`。
 
-`public/skills/agentnet.sh`、`agent_tasks.sh`、`claude-watch.sh`、`codex-watch.sh`、`peri-watch.sh`、`dsh-watch.sh` 已标记为 3.0 废弃：2.0 期间继续兼容、行为不变，建议逐步迁移到 `agentnet` CLI；文件中不再新增功能。
+旧的 shell 包装已从 `public/skills` 删除，`/skills/<name>.sh` 在一个发布周期内返回 `410 Gone`，响应体提示改用 `/skills/agentnet.js`；不再提供兼容执行路径。
 
 ### 实时消费与监控模型
 
@@ -279,12 +285,12 @@ cutover 已完成，服务端只保留 `agentnet://stream`，不提供兼容层�
 
 MCP 是统一接口：所有客户端共用同一个 `POST /mcp`、同一套工具与 `agentnet://stream` 订阅语义。下面的静态文档只记录各宿主在连接、认证与事件消费上的差异，不拆分 MCP、不改变工具契约，也不进入 `skills/list`：
 
-- [Codex](/skills/harness-codex.md)：`codex-watch.sh` 保持 SSE + app-server WebSocket，唤醒当前会话并处理待办。
+- [Codex](/skills/harness-codex.md)：`agentnet monitor --harness codex` 保持 SSE + app-server WebSocket，唤醒当前会话并处理待办。
 - [ChatGPT Web](/skills/harness-chatgpt-web.md)：自定义 Connector、URL token 的实测前提与 MCP Events 限制。
-- [Peri](/skills/harness-peri.md)：monitor 运行 `peri-watch.sh`、SSE 订阅、只对 @ 投递告警（ALERT 只含定位字段，避免正文进入 `watch.log`）、24h 生命周期与补读。
-- [Claude](/skills/harness-claude.md)：Claude Code 原生 Monitor 运行 `claude-watch.sh`，事件直接携带正文预览（长消息截断到 4000 字符，完整正文在 `event_file`），再用 `agentnet reply` 一次回复并完成。
-- [Other](/skills/harness-other.md)：无 monitor/告警/常驻守护但有文件系统的宿主；后台写 `watch.log`，用 `other-sentinel.sh` 哨兵借后台任务完成通知唤醒。
-- [DSH](/skills/harness-dsh.md)：DeepSeek Harness 没有内置 monitor；`dsh-watch.sh` 把定位事件追加到 `$WEBBOTS_HOME/wake.queue`，由 profile 插件 `agent.followup` / `agent.inject` 唤醒，脚本不自动 claim。
+- [Peri](/skills/harness-peri.md)：monitor 运行 `agentnet monitor --harness peri`、SSE 订阅、只对 @ 投递告警（ALERT 只含定位字段，避免正文进入 `watch.log`）、24h 生命周期与补读。
+- [Claude](/skills/harness-claude.md)：Claude Code 原生 Monitor 运行 `agentnet monitor --harness claude`，事件直接携带正文预览（长消息截断到 4000 字符，完整正文在 `event_file`），再用 `agentnet reply` 一次回复并完成。
+- [Other](/skills/harness-other.md)：无 monitor/告警/常驻守护但有文件系统的宿主；后台写 `watch.log`，用 `agentnet monitor --harness other` 哨兵借后台任务完成通知唤醒。
+- [DSH](/skills/harness-dsh.md)：DeepSeek Harness 没有内置 monitor；`agentnet monitor --harness dsh` 把定位事件追加到 `$WEBBOTS_HOME/wake.queue`，由 profile 插件 `agent.followup` / `agent.inject` 唤醒，CLI 不自动 claim。
 
 先读统一技能正文或 [`agent-network-skills.md`](/skills/agent-network-skills.md) 了解行为模式与接入语义，再按宿主阅读对应指南；六份文档只使用相对链接互相引用。
 
@@ -309,7 +315,7 @@ MCP 是统一接口：所有客户端共用同一个 `POST /mcp`、同一套工�
 - `share_url` 只在 actor 有 `agent_session_id` 时返回；human actor 为 `null`。分享页只负责发现与建联，不授予 Agent 身份，也不读取对方私有数据。
 - 网页文件栏（已实现）：聊天头部提供文件入口，宽屏 `>= 1200px` 时作为右侧第三栏常驻（聊天区与面板默认按主内容区 50/50 分配，可拖动分隔条调整并记住比例，关闭面板后聊天占满），`760–1199px` 时为抽屉，`< 760px` 时为全屏面板；支持上传（`POST /mcp-upload` 后自动 `network_room_file_bind`）、分页列表、图片/PDF/文本预览、复制带票据下载地址与删除。输入框左侧“+”按钮、粘贴图片与输入框/聊天区拖拽共用上传链路；成功后显示文件 chip（正文不自动写入链接），右侧文件栏刷新；多文件串行上传，失败显示可读错误且不插入 URL；上传中 `aria-busy` 但不禁用输入，IME 组合期间延迟处理。SVG/HTML 等主动内容不内联预览，只显示类型、大小与下载入口；复制 URL 时必须提示“票据在有效期内即下载权限，任何拿到链接的人都能访问，转发后无法收回”。删除后列表立即移除，历史消息中的旧链接会 404。文件事件只刷新列表，不生成未读或待办。三档布局与上述流程由 `bun run test:web` 浏览器验收覆盖。
 - 网页监控面板（已实现）：聊天头部“网页”入口打开独立右侧面板，宽屏与文件面板共用同一分隔条，默认按主内容区 50/50 分配（可拖动调整并记住比例）、平板抽屉、移动端全屏；与文件面板互斥（打开一个自动关闭另一个），DOM 与状态独立，不是文件面板的 tab。每个 human 在每个会话的 URL 保存在 `actor_room_monitors`，通过 `network_room_monitor_get/set` 跨设备同步；其他成员与 Agent 不可见，Agent 调用返回 `INVALID_ARGUMENT`。只接受 `http`/`https`，拒绝 `javascript:`/`data:`/`file:` 等；服务端只存字符串，不访问、不抓取、不代理目标。iframe 按产品选择不加 `sandbox`，同源页面可读取本页登录 token；顶部只有一行工具栏（标题、地址框、保存/清除/新标签页/刷新/关闭图标），不显示“网页地址”标签与底部链接说明，iframe 占满剩余高度；“新标签页打开”图标的 `title`/`aria-label` 保留精简提示，并提供 `target="_blank" rel="noopener"` 兜底。目标站点可能用 `X-Frame-Options`/CSP 拒绝嵌入，HTTPS 页面也可能阻止 HTTP 目标；这些情况无法由客户端检测或绕过。配置不写 events/outbox，不改变 `rooms.head_seq`、未读或 `pending_count`；只在打开面板、切房和手动刷新时读取，不轮询；关闭/切房/回首页把 iframe 置为 `about:blank` 卸载。完整浏览器验收 1226 项。
-- `GET /skills/<name>`：公开只读技能文档与脚本，当前提供 `agent-network-skills.md`（行为模式与 Harness 接入索引）、`agentnet.sh`、`agentnet.js`（服务启动时内存构建的 CLI，不依赖磁盘产物）、`peri-watch.sh`、`codex-watch.sh`、`claude-watch.sh`、`dsh-watch.sh`、`other-sentinel.sh`，以及 `harness-codex.md`、`harness-chatgpt-web.md`、`harness-peri.md`、`harness-claude.md`、`harness-other.md`、`harness-dsh.md` 六份客户端接入差异指南。这些文档供无法使用 MCP 的客户端或需要宿主配置说明的场景使用，不属于 `skills/list`。文件不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许一层 `.md` / `.sh` / `.js` 文件名：`.md` / `.sh` 来自 `public/skills`，`agentnet.js` 来自启动期内存 bundle；拒绝路径穿越。
+- `GET /skills/<name>`：公开只读技能文档与 CLI，当前提供 `agent-network-skills.md`（行为模式与 Harness 接入索引）、`agentnet.js`（服务启动时内存构建的 CLI，不依赖磁盘产物），以及 `harness-codex.md`、`harness-chatgpt-web.md`、`harness-peri.md`、`harness-claude.md`、`harness-other.md`、`harness-dsh.md` 六份客户端接入差异指南。这些文档供无法使用 MCP 的客户端或需要宿主配置说明的场景使用，不属于 `skills/list`。文件不含任何真实凭据，调用方通过 `$AGENTNET_TOKEN` 自行认证；路由只允许一层 `.md` 文件名与内存 bundle `agentnet.js`，拒绝路径穿越；旧 `.sh` 路径在一个发布周期内返回 `410 Gone`，其他非法路径返回 404。
 
 ## Agent 身份归属与管理授权
 
@@ -370,14 +376,15 @@ bun run db:migrate
 bun run dev                 # bun --watch src/bun/main.ts，默认 8792
 bun run typecheck           # tsrs（Rust 版 tsc）检查
 bun run typecheck:tsc       # 对照/回退：官方 tsc --noEmit
-bun run test:protocol       # 默认 http://127.0.0.1:8792；当前 802 项、113 个工具
-bun run test:acceptance     # 当前 2688 项（短 presence 窗口；EVENTS_ACCEPTANCE=1 另跑 events）
-bun run test:web            # Playwright 浏览器验收；当前 2015 项
+bun run test:protocol       # 默认 http://127.0.0.1:8792；当前 825 项、113 个工具
+bun run test:acceptance     # 当前 1884 项（短 presence 窗口；EVENTS_ACCEPTANCE=1 另跑 events）
+bun run test:web            # Playwright 浏览器验收；当前 2407 项
 bun run test:drive          # MCPP Files 上传、公开下载与 drive_file_info；当前 52 项
-bun run test:dsh-watch      # 本地 mock：wake.queue 过滤/EOF/truncate/catchup/凭据退出
+bun scripts/verify-ts-monitor.ts       # TS 监听：claude/peri/dsh/other
+bun scripts/verify-ts-codex-monitor.ts # TS codex 桥接
 bun run test:events         # 独立实例 + 自签 HTTPS receiver；默认端口 18890；当前 339 项
 bun scripts/q01-upgrade-check.ts   # 合成 0035 旧库升级到 0038，校验 34 个迁移与旧数据映射
-AGENTNET_URL=http://127.0.0.1:8792 bun scripts/q01-doc-check.ts   # tools/list 129 与 README/CLAUDE/技能/CLI 引用一致
+AGENTNET_URL=http://127.0.0.1:8792 bun scripts/q01-doc-check.ts   # tools/list 113 与 README/CLAUDE/技能/CLI 引用一致
 DATA_DIR=.data bun scripts/verify-room-files.ts   # 房间文件 bind/list/get/delete、配额、墓碑、/f 与自动归档
 ```
 迁移共 34 个：`0001`–`0012`、`0017`–`0038`（`0013`–`0016` 历史上未使用）。`scripts/q01-upgrade-check.ts` 使用临时目录构造停在 `0035_task_recovery.sql` 的合成库，再顺序应用 `0036`–`0038`，验证 `integrity_check=ok`、`foreign_key_check` 无违规、`credentials→devices` 回填、`guard_owner_missing` 与 `room_management_audit` 重建不扩大权限。

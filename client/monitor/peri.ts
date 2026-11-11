@@ -1,7 +1,7 @@
 /**
- * `agentnet monitor --harness peri`：peri-watch.sh 的 TypeScript 等价实现。
+ * `agentnet monitor --harness peri`：旧 peri 监听的 TypeScript 等价实现。
  *
- * 对外契约（与 public/skills/peri-watch.sh 一致）：
+ * 对外契约（与旧 shell 监听一致）：
  * - stdout 每行是 `ALERT <json>` 或 READY/RECONNECTING/DEGRADED/ERROR 诊断；
  * - 只有 claim 成功才输出可处理的 delivery，冲突输出 conflict/deferred/failed；
  * - 刻意不读正文、不写 event_file：Peri 常把 stdout 追加到 watch.log，

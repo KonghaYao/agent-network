@@ -1,7 +1,7 @@
 /**
  * `agentnet monitor --harness claude`：Claude Code Monitor 的 TS 监听入口。
  *
- * 对外契约与 public/skills/claude-watch.sh 一致：
+ * 对外契约与旧 shell 监听一致：
  * - stdout 每行一个事件 JSON；
  * - stderr 输出 READY、RECONNECTING、DEGRADED 与 ERROR；
  * - 自动 claim 成功后携带正文预览与 event_file；

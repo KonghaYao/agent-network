@@ -1,7 +1,7 @@
 /**
  * dsh 监听器的本地状态：WEBBOTS_HOME 路径、status.json、PID、wake.queue 游标。
  *
- * 这些格式与 public/skills/dsh-watch.sh 完全一致；只做纯 I/O，不访问网络、
+ * 这些格式与旧 shell 监听完全一致；只做纯 I/O，不访问网络、
  * 不接触 token。status 写入使用临时文件 + rename，避免巡检读到半截 JSON。
  */
 

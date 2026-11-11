@@ -1,7 +1,7 @@
 /**
- * `agentnet monitor --harness dsh`：dsh-watch.sh 的 TypeScript 等价实现。
+ * `agentnet monitor --harness dsh`：旧 dsh 守护的 TypeScript 等价实现。
  *
- * 对外契约（与 public/skills/dsh-watch.sh 一致）：
+ * 对外契约（与旧 shell 守护一致）：
  * - `run` 前台运行，stdout 不写事件；start 把 run 重定向到 watch.log 后台运行；
  * - `start/stop/status/logs/wait` 只读写 WEBBOTS_HOME（默认 ~/.webbots）；
  * - 事件只写 wake.queue 的九个定位字段，不读正文、不 claim、不写 token；

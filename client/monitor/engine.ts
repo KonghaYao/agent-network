@@ -1,7 +1,7 @@
 /**
  * 共享监控引擎：连接、订阅、自动 claim、正文读取与事件输出。
  *
- * 这是 claude-watch.sh 监听循环的 TypeScript 等价实现；peri 通过事件格式钩子
+ * 这是旧 shell 监听循环的 TypeScript 等价实现；peri 通过事件格式钩子
  * 复用同一套连接、claim、seen 与退避逻辑，只替换 stdout 信封、诊断流和正文读取。
  *
  * 关键不变量：
@@ -64,14 +64,14 @@ export interface MonitorEventFormat {
     claim: ClaimInfo,
     source: string,
   ) => JsonObject;
-  /** 覆盖 claim 失败通知；默认与 claude-watch.sh 一致。 */
+  /** 覆盖 claim 失败通知；默认与旧 shell 监听一致。 */
   claimNotice?: (
     item: JsonObject,
     fields: DeliveryFields,
     failure: ClaimFailure,
     source: string,
   ) => JsonObject;
-  /** 覆盖 reminder；默认与 claude-watch.sh 一致。 */
+  /** 覆盖 reminder；默认与旧 shell 监听一致。 */
   reminder?: (item: JsonObject) => JsonObject;
 }
 

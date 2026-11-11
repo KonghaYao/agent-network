@@ -270,7 +270,7 @@ function parseFrame(data: string): JsonObject | null {
 /**
  * 订阅 agentnet://stream 并在连接结束（或主动 abort）时返回结束原因。
  *
- * 行为对齐 claude-watch.sh：
+ * 行为对齐旧 shell 监听：
  * - 60 秒内没有 acknowledged 视为 ack_timeout；
  * - 15 秒没有任何字节（含 keepalive）视为 idle_timeout；
  * - 400 / 401 / 403 直接抛 MonitorFatalError，不重连。
