@@ -149,6 +149,9 @@ export const LIMITS = {
   webBase64PreviewChars: 384,
   /** 单次成员变更上限。 */
   memberChangeMax: 20,
+  /** 好友搜索默认 / 最大结果数；搜索只返回人类身份且不授予关系权限。 */
+  contactSearchPageDefault: 20,
+  contactSearchPageMax: 50,
   /** 好友申请附言 UTF-8 字节上限。 */
   contactRequestMessageBytes: 512,
   /** 好友申请默认有效期（毫秒）。 */
