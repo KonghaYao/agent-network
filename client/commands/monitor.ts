@@ -1,28 +1,32 @@
 /**
- * `monitor --harness <name>`：3.0 迁移桥。
+ * `monitor --harness <name>`：宿主监听入口。
  *
- * 本里程碑不重写 4.6k 行宿主监听脚本，只负责解析 harness、定位对应
- * `public/skills/*-watch.sh`（本地仓库或从当前服务下载），并把参数与
- * AGENTNET_URL / AGENTNET_TOKEN 透传过去。后续阶段会把监听循环迁成 TS，
- * 此命令的 CLI 形状保持不变。
+ * claude / other 已迁到 `client/monitor/` 的 TypeScript 引擎；peri / codex / dsh
+ * 仍执行 public/skills/*-watch.sh（Phase 2 迁移），命令形状保持不变。
+ * 这里不内嵌 shell 文本，也不为旧脚本生成新的包装。
  */
 
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import type { CliArgs } from '../args';
 import { assertKnownFlags, booleanFlag, flagValue } from '../args';
 import { CliError } from '../mcp';
 import { line } from '../output';
+import { runClaudeMonitor } from '../monitor/claude';
+import { runOtherHarness } from '../monitor/other';
 
-const HARNESS_SCRIPTS: Record<string, string> = {
-  claude: 'claude-watch.sh',
+/** 仍由旧脚本承载的 harness；迁移完成后逐个删除。 */
+const LEGACY_SCRIPTS: Record<string, string> = {
   codex: 'codex-watch.sh',
   peri: 'peri-watch.sh',
   dsh: 'dsh-watch.sh',
 };
+
+const TS_HARNESSES = new Set(['claude', 'other']);
+const SUPPORTED = ['claude', 'other', ...Object.keys(LEGACY_SCRIPTS)];
 
 function localCandidates(file: string): string[] {
   const fromEnv = process.env.AGENTNET_SKILLS_DIR;
@@ -64,24 +68,27 @@ async function downloadScript(baseUrl: string, file: string): Promise<string> {
   return path;
 }
 
-/**
- * 本地存在脚本时不要求服务地址（脚本自己从环境变量读取）；
- * 远端下载仍然要求 baseUrl。
- */
-export async function monitor(context: MonitorContext, args: CliArgs): Promise<number> {
-  assertKnownFlags(args, ['harness', 'check', 'dry-run', 'url', 'token', 'json', 'help']);
-  const harness = flagValue(args, 'harness');
-  if (!harness) {
-    throw new CliError(
-      `缺少 --harness（支持：${Object.keys(HARNESS_SCRIPTS).join('|')}）`,
-    );
+function checkTsHarness(harness: string, args: CliArgs): number {
+  if (harness === 'claude') {
+    const scriptArgs = args.positionals.slice(1);
+    line(`harness=claude engine=ts args=${scriptArgs.join(' ') || '-'}`);
+    return 0;
   }
-  const file = HARNESS_SCRIPTS[harness];
-  if (!file) {
-    throw new CliError(
-      `未知 harness：${harness}（支持：${Object.keys(HARNESS_SCRIPTS).join('|')}）`,
-    );
-  }
+  const logPath =
+    flagValue(args, 'log') ?? process.env.LOG ?? join(homedir(), '.agentnet', 'watch.log');
+  const maxWait = flagValue(args, 'max-wait') ?? process.env.MAX_WAIT ?? '360';
+  const poll = flagValue(args, 'poll') ?? process.env.POLL ?? '3';
+  line(`harness=other engine=ts log=${logPath} max_wait=${maxWait} poll=${poll}`);
+  return 0;
+}
+
+async function legacyMonitor(
+  harness: string,
+  context: MonitorContext,
+  args: CliArgs,
+): Promise<number> {
+  const file = LEGACY_SCRIPTS[harness];
+  if (!file) throw new CliError(`未知 harness：${harness}`);
   // positionals[0] 是 monitor；其余作为脚本参数。
   const scriptArgs = [...args.positionals.slice(1), ...args.rest];
   const checkOnly = booleanFlag(args, 'check') || booleanFlag(args, 'dry-run');
@@ -133,4 +140,41 @@ export async function monitor(context: MonitorContext, args: CliArgs): Promise<n
     await rm(scriptPath, { force: true }).catch(() => undefined);
   }
   return exitCode;
+}
+
+export async function monitor(context: MonitorContext, args: CliArgs): Promise<number> {
+  assertKnownFlags(args, [
+    'harness',
+    'check',
+    'dry-run',
+    'url',
+    'token',
+    'json',
+    'help',
+    'log',
+    'max-wait',
+    'poll',
+    'state-dir',
+  ]);
+  const harness = flagValue(args, 'harness');
+  if (!harness) {
+    throw new CliError(`缺少 --harness（支持：${SUPPORTED.join('|')}）`);
+  }
+  if (!TS_HARNESSES.has(harness) && !LEGACY_SCRIPTS[harness]) {
+    throw new CliError(`未知 harness：${harness}（支持：${SUPPORTED.join('|')}）`);
+  }
+  const checkOnly = booleanFlag(args, 'check') || booleanFlag(args, 'dry-run');
+
+  if (TS_HARNESSES.has(harness)) {
+    const extra = [...args.positionals.slice(1), ...args.rest];
+    if (extra.length > 0) {
+      throw new CliError(
+        `monitor --harness ${harness} 不接受位置参数：${extra.join(' ')}（使用 --log/--max-wait/--poll 等选项）`,
+      );
+    }
+    if (checkOnly) return checkTsHarness(harness, args);
+    if (harness === 'claude') return runClaudeMonitor(context, args);
+    return runOtherHarness(args);
+  }
+  return legacyMonitor(harness, context, args);
 }
