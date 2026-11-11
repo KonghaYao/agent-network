@@ -515,12 +515,10 @@ ${GROUP_STYLE}
   .new-agent-result { margin: 4px 0 12px; padding: 10px; border-radius: 6px;
     background: var(--wx-bg); border: 1px solid var(--wx-line); }
   .new-agent-result[hidden] { display: none; }
-  #new-agent-url, #new-agent-share, #new-agent-skill-url {
+  #new-agent-url {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .new-agent-copy { margin: 6px 0 12px; }
-  .new-agent-hint { margin: 0; font-size: 12px; color: var(--wx-muted); line-height: 1.6; }
-  .new-agent-prompt { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--wx-line); }
-  .new-agent-prompt .new-agent-warning { margin: 0 0 10px; }
+  .new-agent-prompt { margin-top: 2px; padding-top: 12px; border-top: 1px solid var(--wx-line); }
   .new-agent-prompt-text { display: block; box-sizing: border-box; width: 100%;
     min-height: 168px; max-height: 320px; margin-top: 6px; padding: 8px 10px;
     border: 1px solid var(--wx-line); border-radius: 4px; background: var(--wx-bg);
