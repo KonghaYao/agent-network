@@ -9,6 +9,8 @@ export const CHAT_TRANSFER_SCRIPT = `
 const TRANSFER_MODAL_ID = 'transfer-modal';
 const TRANSFER_TOKEN_WARNING =
   '新 token 只显示一次；只通过受控渠道配置，勿发群、截图或写日志。旧 token 已立即失效。';
+const TRANSFER_PERMISSION_DENIED =
+  '只有该 Agent 的管理者、受托人或待确认接任者可以查看交接。';
 
 let transferAgentId = '';
 let transferView = null;
@@ -26,6 +28,12 @@ function transferStatus(text, isError) {
   node.textContent = text || '';
   node.hidden = !text;
   node.classList.toggle('error', Boolean(isError));
+}
+
+/** 权限错误只显示可执行的下一步，不把服务端内部文案直接抛给用户。 */
+function transferFailureText(error) {
+  if (error && error.code === 'PERMISSION_DENIED') return TRANSFER_PERMISSION_DENIED;
+  return error && error.message ? error.message : String(error);
 }
 
 function transferReset() {
@@ -215,7 +223,7 @@ async function transferPropose() {
     await transferLoad();
     transferStatus('已发起交接，等待 ' + transfer.to_manager_name + ' 确认。', false);
   } catch (error) {
-    transferStatus('发起交接失败：' + error.message, true);
+    transferStatus('发起交接失败：' + transferFailureText(error), true);
   } finally {
     transferBusy = false;
     transferUpdateProposeButton();
@@ -249,7 +257,8 @@ async function transferRespond(decision) {
       transferStatus('已拒绝交接，管理权保持不变。', false);
     }
   } catch (error) {
-    transferStatus((decision === 'accept' ? '接受' : '拒绝') + '交接失败：' + error.message, true);
+    transferStatus((decision === 'accept' ? '接受' : '拒绝') + '交接失败：' +
+      transferFailureText(error), true);
   } finally {
     transferBusy = false;
     if (accept) accept.disabled = false;
@@ -300,7 +309,7 @@ async function transferCancel() {
     await transferLoad();
     transferStatus('已取消交接，管理权保持不变。', false);
   } catch (error) {
-    transferStatus('取消交接失败：' + error.message, true);
+    transferStatus('取消交接失败：' + transferFailureText(error), true);
   } finally {
     transferBusy = false;
     if (button) button.disabled = false;
@@ -331,7 +340,7 @@ function openTransferDialog(agentId) {
   const search = transferNode('transfer-successor-search');
   if (search) search.value = '';
   transferLoad().catch(function (error) {
-    transferStatus('读取管理关系失败：' + error.message, true);
+    transferStatus('读取管理关系失败：' + transferFailureText(error), true);
     const loading = transferNode('transfer-loading');
     if (loading) loading.hidden = true;
   });

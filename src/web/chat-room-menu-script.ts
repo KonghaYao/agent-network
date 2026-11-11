@@ -33,6 +33,9 @@ const ROOM_MENU_DISABLE_CONFIRM =
   '停用后该 Agent 的旧凭据会被拒绝，领取/上报/完成/失败与新投递全部停止；' +
   '待处理投递会被取消，不会自动结束任何外部工作。确定继续？';
 const ROOM_MENU_PERMISSION_DENIED = '只有该 Agent 的管理者或受托人可以执行此操作。';
+const ROOM_MENU_REISSUE_PERMISSION_DENIED =
+  '只有该 Agent 的管理者或受托人可以重置。请让当前管理者操作，或让 Agent 发起认领后由你确认；' +
+  '若管理权已交接，请让新管理者重置。';
 const ROOM_MENU_REISSUE_CONFIRM =
   '这会注销该 Agent 的旧 token，并立即复制包含新 token 的接入提示词；' +
   '现有 MCP/SSE/事件连接会失效，新 token 只显示一次。';
@@ -208,6 +211,7 @@ async function openRoomMenu(link, x, y) {
     kind: kind,
     peer_actor_id: peerActorId,
     peer_kind: peerKind,
+    management: null,
     read_only: entry ? Boolean(entry.read_only) : false,
     can_leave: entry ? Boolean(entry.can_leave) : false,
     can_dissolve: entry ? Boolean(entry.can_dissolve) : false
@@ -220,35 +224,58 @@ async function openRoomMenu(link, x, y) {
   const isAgentDirect = Boolean(
     kind === 'direct' && peerActorId && peerKind === 'agent'
   );
+  // 菜单可见性必须按服务端管理视图判断；PERMISSION_DENIED（非管理者）与网络
+  // 失败都按“无管理权”处理，只保留复制提示词回退，绝不把隐藏按钮当授权。
+  let management = null;
+  if (isAgentDirect) {
+    try {
+      management = await callTool('network_agent_management_get', {
+        actor_id: peerActorId
+      });
+    } catch (error) {
+      management = null;
+    }
+    if (openSeq !== roomMenuOpenSeq) return;
+    roomMenuTarget.management = management;
+  }
+  const canManage = Boolean(management && management.can_manage);
+  const pendingTransfer = management ? management.pending_transfer : null;
+  const canTransfer = Boolean(
+    management && (management.can_transfer ||
+      (pendingTransfer && (pendingTransfer.can_accept || pendingTransfer.can_cancel)))
+  );
   if (button) {
-    // direct Agent 的连接与凭据操作合并成一个「重置链接并复制」入口；
-    // 群聊/人类会话仍保留只复制提示词、不重置凭据的入口。
-    button.hidden = isAgentDirect;
+    // 管理者使用合并后的「重置链接并复制」；非管理者与读取失败时保留
+    // 只复制提示词的回退入口，群聊/人类会话也继续显示该入口。
+    button.hidden = isAgentDirect && canManage;
     button.textContent = ROOM_MENU_COPY_LABEL;
     button.disabled = false;
   }
   if (reissueButton) {
-    // 只对单聊 Agent 显示；群聊与人类会话不提供重置入口。
-    reissueButton.hidden = !isAgentDirect;
+    // 只对当前身份可管理的单聊 Agent 显示；群聊与人类会话不提供重置入口。
+    reissueButton.hidden = !(isAgentDirect && canManage);
     reissueButton.textContent = ROOM_MENU_REISSUE_LABEL;
     reissueButton.disabled = false;
   }
   if (archiveButton) {
-    // 归档同样只对单聊 Agent 显示；群聊与人类会话不提供。
-    archiveButton.hidden = !isAgentDirect;
+    // 归档同样需要管理权；非管理者不应看到必然失败的危险入口。
+    archiveButton.hidden = !(isAgentDirect && canManage);
     archiveButton.textContent = ROOM_MENU_ARCHIVE_LABEL;
     archiveButton.disabled = false;
   }
   if (toggleButton) {
-    // 停用/启用只对单聊 Agent 显示；具体是停用还是启用由服务端管理状态决定。
-    toggleButton.hidden = !isAgentDirect;
-    toggleButton.textContent = ROOM_MENU_DISABLE_LABEL;
+    // 停用/启用只对可管理的单聊 Agent 显示；具体是停用还是启用由管理视图决定。
+    toggleButton.hidden = !(isAgentDirect && canManage);
+    toggleButton.textContent = management && management.disabled
+      ? ROOM_MENU_ENABLE_LABEL
+      : ROOM_MENU_DISABLE_LABEL;
     toggleButton.disabled = false;
   }
   const transferButton = document.getElementById('room-menu-transfer');
   if (transferButton) {
-    // 管理权交接同样只对单聊 Agent 显示；接任者也可从这里接受。
-    transferButton.hidden = !isAgentDirect;
+    // 管理者可发起/取消交接；待确认接任者 can_manage=false，但也必须能进入
+    // 面板接受或拒绝，因此交接入口单独按 can_transfer / pending_transfer 判断。
+    transferButton.hidden = !(isAgentDirect && canTransfer);
     transferButton.textContent = ROOM_MENU_TRANSFER_LABEL;
     transferButton.disabled = false;
   }
@@ -549,7 +576,10 @@ async function reissueRoomAgentToken() {
     if (button) button.textContent = ROOM_MENU_REISSUED_LABEL;
   } catch (error) {
     if (roomMenuTarget !== target) return;
-    const detail = error && error.message ? error.message : String(error);
+    const code = error && error.code ? error.code : '';
+    const detail = code === 'PERMISSION_DENIED'
+      ? ROOM_MENU_REISSUE_PERMISSION_DENIED
+      : (error && error.message ? error.message : String(error));
     if (status) {
       status.textContent = tokenIssued
         ? '新 token 已签发，但复制提示词失败：' + detail +

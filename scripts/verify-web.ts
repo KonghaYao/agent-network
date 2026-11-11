@@ -5101,8 +5101,8 @@ async function main(): Promise<void> {
       await page.locator('#room-filter-agent').click();
       await page.waitForFunction(
         `(() => {
-          const link = document.querySelector(${JSON.stringify(roomLink(data.direct.room.room_id))});
-          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(data.agentA.name)}));
+          const link = document.querySelector(${JSON.stringify(roomLink(data.extra.room.room_id))});
+          return Boolean(link && link.textContent && link.textContent.includes(${JSON.stringify(data.agentB.name)}));
         })()`,
       );
       await page.evaluate(`(() => {
@@ -5118,11 +5118,11 @@ async function main(): Promise<void> {
         });
       })()`);
 
-      const directLink = page.locator(roomLink(data.direct.room.room_id));
+      const directLink = page.locator(roomLink(data.extra.room.room_id));
       // 模拟列表后台补全 peer 之前的右键：token/归档/交接入口仍必须出现。
       await page.evaluate(`(() => {
         const entry = roomEntries.find(function (item) {
-          return item.room_id === ${JSON.stringify(data.direct.room.room_id)};
+          return item.room_id === ${JSON.stringify(data.extra.room.room_id)};
         });
         if (entry) {
           entry.peer_kind = null;
@@ -7822,8 +7822,8 @@ async function main(): Promise<void> {
       );
       const logoutConsole: string[] = [];
       page.on('console', (message) => logoutConsole.push(message.text()));
-      await page.goto(`${server.base}/c/${data.direct.room.room_id}`);
-      await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+      await page.goto(`${server.base}/c/${data.extra.room.room_id}`);
+      await waitRoom(page, data.extra.room.room_id, data.agentB.name);
       await page.locator('#logout').waitFor({ state: 'visible' });
 
       const fakeAgentUrl = `${server.base}/mcp?token=ank_logout_fixture_${crypto.randomUUID()}`;
@@ -7834,9 +7834,9 @@ async function main(): Promise<void> {
           items: [
             {
               owner_actor_id: data.human.actor_id,
-              actor_id: data.agentA.actor_id,
-              name: data.agentA.name,
-              agent_session_id: data.agentA.agent_session_id,
+              actor_id: data.agentB.actor_id,
+              name: data.agentB.name,
+              agent_session_id: data.agentB.agent_session_id,
               created_at: String(Date.now()),
               mcp_url: fakeAgentUrl,
             },
@@ -7857,7 +7857,7 @@ async function main(): Promise<void> {
       })()`);
 
       // 退出前右键入口保持可用：重置链接入口可打开二次确认。
-      const directLink = roomLink(data.direct.room.room_id);
+      const directLink = roomLink(data.extra.room.room_id);
       await page.locator(directLink).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
       checkEqual(
@@ -8919,6 +8919,29 @@ async function main(): Promise<void> {
           action: 'accept',
         });
       }
+      // 接任者有自己的 direct 会话，才能从右键菜单进入交接；can_manage=false
+      // 但 pending_transfer.can_accept/can_cancel 必须让交接入口可见。
+      // 已管理 Agent 的好友申请由当前管理者批准，Agent token 不能自批。
+      const successorFriendRequest = await rawTool<RawContactRequestView>(
+        successorToken,
+        'network_contact_request',
+        {
+          request_id: requestId('successor_contact_request'),
+          actor_id: transferAgent.actor_id,
+        },
+      );
+      if (successorFriendRequest.status === 'pending' && successorFriendRequest.request) {
+        await rawTool(data.humanToken, 'network_contact_request_respond', {
+          request_id: requestId('successor_contact_respond'),
+          contact_request_id: successorFriendRequest.request.contact_request_id,
+          action: 'accept',
+        });
+      }
+      const successorRoom = await rawTool<RoomDetail>(successorToken, 'network_room_create', {
+        request_id: requestId('successor_room'),
+        kind: 'direct',
+        members: [transferAgent.actor_id],
+      });
 
       const managerView = await makeContext(
         browser,
@@ -9022,12 +9045,43 @@ async function main(): Promise<void> {
         );
 
         await successorView.page.goto(`${server.base}/`);
-        await successorView.page.locator('#room-list').waitFor();
-        await successorView.page.evaluate(
-          (actorId) => (window as unknown as { openTransferDialog: (id: string) => void })
-            .openTransferDialog(actorId),
-          transferAgent.actor_id,
+        await successorView.page.locator('#room-filter-agent').click();
+        await waitRoomListName(successorView.page, transferAgent.name);
+        await successorView.page.evaluate((selector) => {
+          const link = document.querySelector(selector);
+          if (link) link.scrollIntoView({ block: 'nearest' });
+        }, roomLink(successorRoom.room.room_id));
+        await sleep(200);
+        await successorView.page.locator(roomLink(successorRoom.room.room_id)).click({
+          button: 'right',
+        });
+        await successorView.page.locator('#room-menu').waitFor({ state: 'visible' });
+        checkEqual(
+          '接任者菜单不显示重置入口',
+          await successorView.page.locator('#room-menu-reissue-token').isHidden(),
+          true,
         );
+        checkEqual(
+          '接任者菜单不显示归档入口',
+          await successorView.page.locator('#room-menu-archive').isHidden(),
+          true,
+        );
+        checkEqual(
+          '接任者菜单不显示停用入口',
+          await successorView.page.locator('#room-menu-toggle-disabled').isHidden(),
+          true,
+        );
+        checkEqual(
+          '接任者菜单显示复制提示词回退',
+          await successorView.page.locator('#room-menu-copy-prompt').isVisible(),
+          true,
+        );
+        checkEqual(
+          '接任者 can_manage=false 仍显示交接入口',
+          await successorView.page.locator('#room-menu-transfer').isVisible(),
+          true,
+        );
+        await successorView.page.locator('#room-menu-transfer').click();
         await openTransferPanel(successorView.page);
         checkEqual(
           '接任者看到接受/拒绝入口',
@@ -22602,6 +22656,139 @@ async function main(): Promise<void> {
         reissueAgent.actor_id,
       );
       await mobile.context.close();
+    }
+
+    // 2g. 非管理者 direct Agent：菜单不显示管理动作，保留复制提示词回退；
+    // 即使强制调用重发，也只返回友好权限提示且不改动 Agent 凭据。
+    {
+      const unmanagedToken = newToken();
+      const unmanagedAgent = await rawTool<Actor>(unmanagedToken, 'network_register', {
+        request_id: requestId('unmanaged_register'),
+        kind: 'agent',
+        name: '非管理者菜单 Agent',
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      await rawBefriend(data.humanToken, unmanagedToken, {
+        actor_id: unmanagedAgent.actor_id,
+      });
+      const unmanagedRoom = await rawTool<RoomDetail>(
+        data.humanToken,
+        'network_room_create',
+        {
+          request_id: requestId('unmanaged_room'),
+          kind: 'direct',
+          members: [unmanagedAgent.actor_id],
+        },
+      );
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      try {
+        await page.goto(`${server.base}/`);
+        await page.locator('#room-filter-agent').click();
+        await waitRoomListName(page, unmanagedAgent.name);
+        await page.evaluate(`(() => {
+          window.__copiedRoomPrompt = null;
+          Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            value: {
+              writeText: function (text) {
+                window.__copiedRoomPrompt = text;
+                return Promise.resolve();
+              }
+            }
+          });
+        })()`);
+        const managementCallsBefore = await mcpCallCount(
+          page,
+          'network_agent_management_get',
+        );
+        await page.evaluate((selector) => {
+          const link = document.querySelector(selector);
+          if (link) link.scrollIntoView({ block: 'nearest' });
+        }, roomLink(unmanagedRoom.room.room_id));
+        await sleep(200);
+        await page.locator(roomLink(unmanagedRoom.room.room_id)).click({ button: 'right' });
+        await page.locator('#room-menu').waitFor({ state: 'visible' });
+        checkEqual(
+          '打开非管理者菜单读取一次管理视图',
+          (await mcpCallCount(page, 'network_agent_management_get')) - managementCallsBefore,
+          1,
+        );
+        checkEqual(
+          '非管理者菜单不显示重置链接',
+          await page.locator('#room-menu-reissue-token').isHidden(),
+          true,
+        );
+        checkEqual(
+          '非管理者菜单不显示归档',
+          await page.locator('#room-menu-archive').isHidden(),
+          true,
+        );
+        checkEqual(
+          '非管理者菜单不显示停用',
+          await page.locator('#room-menu-toggle-disabled').isHidden(),
+          true,
+        );
+        checkEqual(
+          '非管理者菜单不显示交接',
+          await page.locator('#room-menu-transfer').isHidden(),
+          true,
+        );
+        checkEqual(
+          '非管理者菜单显示复制提示词回退',
+          await page.locator('#room-menu-copy-prompt').isVisible(),
+          true,
+        );
+        await page.locator('#room-menu-copy-prompt').click();
+        await page.waitForFunction(
+          `document.getElementById('room-menu-status').textContent === '已复制（未包含凭据）'`,
+        );
+        const fallbackPrompt = (await page.evaluate(
+          'window.__copiedRoomPrompt',
+        )) as string | null;
+        check(
+          '非管理者复制提示词并说明缺少凭据',
+          Boolean(fallbackPrompt) &&
+            fallbackPrompt!.includes(unmanagedRoom.room.room_id) &&
+            fallbackPrompt!.includes('本浏览器没有保存该 Agent 的 token/MCP URL'),
+          fallbackPrompt,
+        );
+
+        let forcedConfirm = '';
+        page.once('dialog', async (dialog) => {
+          forcedConfirm = dialog.message();
+          await dialog.accept();
+        });
+        await page.evaluate(`window.reissueRoomAgentToken()`);
+        await page.waitForFunction(
+          `(document.getElementById('room-menu-status').textContent || '')` +
+            `.includes('只有该 Agent 的管理者或受托人可以重置')`,
+        );
+        const denialText =
+          (await page.locator('#room-menu-status').textContent()) ?? '';
+        check(
+          '非管理者强制重发显示认领/交接提示',
+          denialText.includes('认领') && denialText.includes('交接'),
+          denialText,
+        );
+        check(
+          '非管理者强制重发仍先展示二次确认',
+          forcedConfirm.includes('现有 MCP/SSE/事件连接会失效'),
+          forcedConfirm,
+        );
+        const stillUnmanaged = await rawTool<Actor>(unmanagedToken, 'network_me', {});
+        checkEqual(
+          '非管理者强制重发不改变 Agent 凭据',
+          stillUnmanaged.actor_id,
+          unmanagedAgent.actor_id,
+        );
+      } finally {
+        await context.close();
+      }
     }
 
     await runAvatarAcceptance(browser, server.base, data.humanToken);
