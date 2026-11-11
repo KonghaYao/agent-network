@@ -6336,6 +6336,51 @@ async function main(): Promise<void> {
         room_id: deletedRoom.room.room_id,
       });
       checkEqual('删除好友不删除房间数据', stillRoom.room.room_id, deletedRoom.room.room_id);
+
+      // 1c4. Agent 侧删除好友：另一方列表实时移除，刷新不复现，联系人同步清理。
+      await page.goto(`${server.base}/`);
+      await page.locator(roomLink(keptRoom.room.room_id)).waitFor();
+      await page.locator('#room-filter-agent').click();
+      await waitStreamConnected(page);
+      await rawTool(keptToken, 'network_contact_remove', {
+        request_id: requestId('contact_remove_peer'),
+        actor_id: data.human.actor_id,
+      });
+      await page.waitForFunction(
+        `document.querySelector(${JSON.stringify(roomLink(keptRoom.room.room_id))}) === null`,
+      );
+      checkEqual(
+        'Agent 删除好友后对方列表实时移除',
+        await page.locator(roomLink(keptRoom.room.room_id)).count(),
+        0,
+      );
+      await page.reload();
+      await page.locator('#room-list .room-item').first().waitFor();
+      checkEqual(
+        '刷新后已删除 Agent 仍不在列表',
+        await page.locator(roomLink(keptRoom.room.room_id)).count(),
+        0,
+      );
+      const keptContacts = await rawTool<{ items: { actor_id: string }[] }>(
+        data.humanToken,
+        'network_contacts_list',
+        { limit: 100 },
+      );
+      check(
+        'Agent 删除好友后对方联系人列表不再返回该 Agent',
+        !keptContacts.items.some((item) => item.actor_id === kept.actor_id),
+        keptContacts.items,
+      );
+      await page.goto(`${server.base}/c/${keptRoom.room.room_id}`);
+      await page.locator('#composer').waitFor();
+      await page.waitForFunction(
+        `document.getElementById('messages').textContent.includes('保留会话的未读消息')`,
+      );
+      checkEqual(
+        'Agent 删除好友后历史仍可显式读取',
+        await page.locator('#composer').isVisible(),
+        true,
+      );
       await context.close();
 
       await rawTool(data.humanToken, 'network_contact_remove', {
