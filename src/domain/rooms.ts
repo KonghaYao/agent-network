@@ -1028,10 +1028,13 @@ async function createDirect(
         .prepare(
           guardSql(
             'roomLimit',
-            '(SELECT COUNT(*) FROM room_members WHERE actor_id = ? AND status = \'active\') >= ?',
+            `(SELECT COUNT(*) FROM room_members WHERE actor_id = ? AND status = 'active') >= ?
+             AND NOT EXISTS (SELECT 1 FROM rooms WHERE room_id = ?)`,
           ),
         )
-        .bind(owner, LIMITS.activeRoomsPerActor),
+        .bind(owner, LIMITS.activeRoomsPerActor, roomId),
+      // 好友激活可能已自动建出这个 direct 房间；打开已有会话不能被配额拦住，
+      // 配额只约束真正新增的房间。
       ...directRelationStatements(db, owner, targetActor, at),
       ...directRoomStatements(db, owner, target, roomId, at),
     ],
