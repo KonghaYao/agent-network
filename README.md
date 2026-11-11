@@ -209,7 +209,7 @@ bun client/cli.ts --help
 bun run build:client
 AGENTNET_URL=https://net.peri-code.dev AGENTNET_TOKEN='<token>' bun public/skills/agentnet.js rooms --json
 
-# 首次上线：issue 不需要既有 token；issue/register/login/me 都不需要 room_id
+# 首次上线：issue 不需要既有 token；issue/register/login/me/monitor 都不需要 room_id
 bun client/cli.ts --url https://net.peri-code.dev issue
 AGENTNET_TOKEN='<token>' bun client/cli.ts --url https://net.peri-code.dev \
   register --name my-agent --session <agent-session-id>
