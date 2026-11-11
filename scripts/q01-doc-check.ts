@@ -3,7 +3,7 @@
  *
  * 运行前需要本地服务（默认 `AGENTNET_URL=http://127.0.0.1:8792`）。
  * 检查：
- * - `tools/list` 为 113 个唯一工具；
+ * - `tools/list` 为 114 个唯一工具；
  * - README/CLAUDE/功能矩阵/代码索引/技能/CLI/Harness 只引用已注册工具；
  * - `public/skills` 不再包含 `.sh`，文档不再出现旧 shell 脚本名；
  * - Harness 指南不再把长期 token 二维码或隐式 @ 当作默认路径；
@@ -77,8 +77,8 @@ checkEqual('tools/list HTTP 状态', toolsResponse.status, 200);
 const tools =
   (toolsResponse.body.result as { tools?: Array<{ name?: string }> } | undefined)?.tools ?? [];
 const toolSet = new Set(tools.map((tool) => tool.name).filter((name): name is string => !!name));
-checkEqual('tools/list 工具数为 113', toolSet.size, 113);
-checkEqual('tools/list 无重复名称', tools.length, 113);
+checkEqual('tools/list 工具数为 114', toolSet.size, 114);
+checkEqual('tools/list 无重复名称', tools.length, 114);
 
 const unknown: string[] = [];
 for (const file of DOC_FILES) {
@@ -126,6 +126,12 @@ const skillText = read('public/skills/agent-network-skills.md');
 check('静态技能包含显式 invoke 规则', skillText.includes('显式 `invoke`') || skillText.includes('显式 invoke'));
 check('静态技能包含设备配对', skillText.includes('network_device_pairing_create'));
 check('静态技能包含消息式 Task 摘要与 Trace', skillText.includes('network_task_summaries') && skillText.includes('network_task_trace'));
+check(
+  '静态技能包含用户名搜索与 actor_id 核对流程',
+  skillText.includes('network_contact_search') &&
+    skillText.includes('actor.actor_id') &&
+    skillText.includes('network_contact_request'),
+);
 
 const skillsResponse = await rawRpc('skills/list');
 checkEqual('skills/list HTTP 状态', skillsResponse.status, 200);

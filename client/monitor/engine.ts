@@ -29,6 +29,7 @@ import {
 import {
   MonitorFatalError,
   MonitorRpc,
+  listInboxPages,
   subscribe,
   type JsonObject,
   type SubscriptionOutcome,
@@ -146,7 +147,7 @@ export async function claimDelivery(
 
   let claimedPage: JsonObject | null = null;
   try {
-    const page = await rpc.callTool('network_inbox_list', { state: 'claimed', limit: 50 });
+    const page = await listInboxPages(rpc, 'claimed');
     if (page.ok) claimedPage = page.data;
   } catch (error) {
     if (error instanceof MonitorFatalError) throw error;
@@ -437,7 +438,7 @@ export class MonitorEngine {
   private async pendingDeliveryMap(): Promise<Map<string, number> | null> {
     let outcome;
     try {
-      outcome = await this.rpc.callTool('network_inbox_list', { state: 'pending', limit: 50 });
+      outcome = await listInboxPages(this.rpc, 'pending');
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
       this.diagnostics('ERROR type=inbox message=pending_lookup_failed');
@@ -461,7 +462,7 @@ export class MonitorEngine {
   private async emitPendingSnapshot(): Promise<void> {
     let outcome;
     try {
-      outcome = await this.rpc.callTool('network_inbox_list', { state: 'pending', limit: 50 });
+      outcome = await listInboxPages(this.rpc, 'pending');
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
       this.diagnostics('ERROR type=inbox message=snapshot_failed');

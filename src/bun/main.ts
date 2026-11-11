@@ -8,6 +8,7 @@ import { createDrive } from '../drive/service';
 import type { Env, EventsConfig } from '../env';
 import { loadEncryptionKey } from '../events/security';
 import { initEventsFileLog } from '../events/log-file';
+import { scheduleEventsTick, stopEventsRuntime } from '../events/runtime';
 import type { FileMount } from '@peri-code/mcpp/files';
 import { remindStaleDeliveries } from '../domain/delivery-reminders';
 import { NotificationHub } from '../realtime/hub';
@@ -248,6 +249,8 @@ const server = Bun.serve({
 console.log(`agent-network listening on http://${hostname}:${server.port}`);
 console.log(`mcp endpoint: ${publicOrigin}/mcp`);
 if (mount) console.log(`upload endpoint: ${publicOrigin}${mount.uploadPath}`);
+// 重启后立即接回持久队列；无需等待新的工具请求或一分钟维护周期。
+scheduleEventsTick(env);
 
 const schedule = setInterval(() => {
   void runScheduled(env);
@@ -295,6 +298,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     // closeAllStreams 会触发 pending 写入；尽量在退出前落库。
     await env.PRESENCE?.flush();
     server.stop();
+    await stopEventsRuntime(env);
     await closeDrive?.();
     db.close();
     process.exit(0);

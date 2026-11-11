@@ -193,10 +193,12 @@ function createMcpMock(options: { meKind?: string } = {}): McpMock {
         case 'network_inbox_list': {
           const wanted = String(args.state ?? 'active');
           const items = wanted === 'claimed' ? [...state.claims.values()] : [...state.pending.values()];
+          const offset = Number(args.cursor ?? 0);
+          const limit = Number(args.limit ?? 50);
           return toolResult(body.id, {
-            items,
-            next_cursor: null,
-            has_more: false,
+            items: items.slice(offset, offset + limit),
+            next_cursor: offset + limit < items.length ? String(offset + limit) : null,
+            has_more: offset + limit < items.length,
             pending_count: state.pending.size,
             claimed_delivery_id: state.claims.keys().next().value ?? null,
           });
@@ -511,7 +513,7 @@ function startProcess(cmd: string[], env: Record<string, string>): RunningWatche
   const proc = Bun.spawn({
     cmd,
     cwd: ROOT,
-    env: { ...process.env, ...env },
+    env: { ...process.env, CODEX_THREAD_ID: '', ...env },
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -636,10 +638,12 @@ async function runCli(args: string[], env: Record<string, string>): Promise<{
   stdout: string;
   stderr: string;
 }> {
+  const inheritedEnv = { ...process.env };
+  delete inheritedEnv.CODEX_THREAD_ID;
   const proc = Bun.spawnSync({
     cmd: [process.execPath, CLI, ...args],
     cwd: ROOT,
-    env: { ...process.env, AGENTNET_URL: '', AGENTNET_TOKEN: '', ...env },
+    env: { ...inheritedEnv, AGENTNET_URL: '', AGENTNET_TOKEN: '', ...env },
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -654,11 +658,17 @@ async function runCli(args: string[], env: Record<string, string>): Promise<{
 async function runHandshakeChecks(): Promise<void> {
   const fixture = await createFixture('handshake');
   try {
-    const ready = await waitForLine(
-      fixture.watcher.stdout,
-      (line) => line.startsWith('CODEX_READY'),
-      'CODEX_READY',
-    );
+    let ready: string;
+    try {
+      ready = await waitForLine(
+        fixture.watcher.stdout,
+        (line) => line.startsWith('CODEX_READY'),
+        'CODEX_READY',
+      );
+    } catch (error) {
+      const stderr = fixture.watcher.stderr.join('\n').replaceAll(TOKEN, '[REDACTED]');
+      throw new Error(`Codex watcher did not initialize: ${stderr}`, { cause: error });
+    }
     checkEqual('Codex 握手线程日志', ready, 'CODEX_READY thread=thr_test');
 
     checkEqual('network_me 只调用一次', fixture.mcp.state.meCount, 1);
@@ -698,6 +708,58 @@ async function runHandshakeChecks(): Promise<void> {
         !fixture.watcher.stderr.join('\n').includes(TOKEN),
     );
   } finally {
+    await fixture.stop();
+  }
+}
+
+async function runThreadOwnershipChecks(): Promise<void> {
+  const fixture = await createFixture('thread-ownership', {
+    threads: ['thr_a', 'thr_b'],
+    env: { CODEX_THREAD_ID: 'thr_a' },
+  });
+  const startAgent = (threadId: string): RunningWatcher =>
+    startProcess([process.execPath, CLI, 'monitor', '--harness', 'codex'], {
+      HOME: fixture.home,
+      AGENTNET_URL: fixture.mcp.base,
+      AGENTNET_TOKEN: `ank_${crypto.randomUUID().replaceAll('-', '')}`,
+      AGENTNET_CODEX_SOCKET: fixture.codex.socketPath,
+      CODEX_THREAD_ID: threadId,
+    });
+  let otherThread: RunningWatcher | null = null;
+  let sameThread: RunningWatcher | null = null;
+  try {
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('CODEX_READY'),
+      'FIRST CODEX_READY',
+    );
+    sameThread = startAgent('thr_a');
+    checkEqual('不同 token 不得共用同一 Codex 会话', await waitForExit(sameThread), 1);
+    check(
+      '冲突提示会话已绑定',
+      sameThread.stdout.some((line) => line.includes('CODEX_THREAD_ID already bound')),
+    );
+    checkEqual(
+      '冲突发生于 thread/resume 前',
+      fixture.codex.requests.filter((request) => request.method === 'thread/resume').length,
+      1,
+    );
+
+    otherThread = startAgent('thr_b');
+    await waitForLine(
+      otherThread.stdout,
+      (line) => line.startsWith('CODEX_READY thread=thr_b'),
+      'SECOND CODEX_READY',
+    );
+    check(
+      '不同 token 可以绑定不同 Codex 会话',
+      fixture.codex.requests.some(
+        (request) => request.method === 'thread/resume' && request.params.threadId === 'thr_b',
+      ),
+    );
+  } finally {
+    await sameThread?.kill().catch(() => undefined);
+    await otherThread?.kill().catch(() => undefined);
     await fixture.stop();
   }
 }
@@ -753,6 +815,34 @@ async function runTurnChecks(): Promise<void> {
     checkEqual('complete 后无 claimed', fixture.mcp.state.claims.size, 0);
     checkEqual('没有失败投递', fixture.mcp.failed.length, 0);
     checkEqual('全程无 ERROR', countLines(fixture.watcher.stdout, 'ERROR'), 0);
+  } finally {
+    await fixture.stop();
+  }
+}
+
+async function runPagedChecks(): Promise<void> {
+  const fixture = await createFixture('paged');
+  try {
+    await waitForLine(fixture.watcher.stdout, (line) => line.startsWith('READY actor='), 'READY');
+    for (let index = 0; index < 50; index += 1) {
+      const own = makeDelivery(`dlv_own_${index}`);
+      own.message.sender_id = 'agt_me';
+      fixture.mcp.state.pending.set(own.delivery_id, own);
+    }
+    fixture.mcp.state.pending.set('dlv_second_page', makeDelivery('dlv_second_page'));
+    fixture.mcp.sendItems([notificationItem('dlv_second_page')]);
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('TURN_STARTED delivery=dlv_second_page'),
+      'SECOND PAGE TURN_STARTED',
+    );
+    checkEqual('Codex 第 51 条 pending 已领取', fixture.mcp.state.claimCalls.get('dlv_second_page'), 1);
+    fixture.codex.completeTurn('已处理');
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('DELIVERY_COMPLETED delivery=dlv_second_page'),
+      'SECOND PAGE COMPLETED',
+    );
   } finally {
     await fixture.stop();
   }
@@ -1185,8 +1275,11 @@ async function runCheckAndConfigChecks(): Promise<void> {
 async function main(): Promise<void> {
   console.log('TS codex monitor: handshake');
   await runHandshakeChecks();
+  console.log('TS codex monitor: thread ownership');
+  await runThreadOwnershipChecks();
   console.log('TS codex monitor: idle turn/complete');
   await runTurnChecks();
+  await runPagedChecks();
   console.log('TS codex monitor: active steer');
   await runSteerChecks();
   console.log('TS codex monitor: deferred + slow ack');

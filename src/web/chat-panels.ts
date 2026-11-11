@@ -15,7 +15,7 @@ export function sidebarPane(): string {
   <header class="sidebar-head">
     <div class="brand-row">
       <h1>WeBots</h1>
-      <button class="icon-btn" id="contact-requests" type="button" aria-label="好友申请" title="好友申请">
+      <button class="icon-btn" id="contact-requests" type="button" aria-label="添加好友" title="添加好友">
         ${kubaiIcon('contact-requests', { size: 18 })}
         <span class="request-badge" id="contact-requests-badge" hidden>0</span>
       </button>
@@ -630,18 +630,44 @@ export function filePreviewDialog(): string {
 }
 
 /**
- * 好友申请弹窗：桌面两栏，窄屏按申请→链接→策略单栏排列。
+ * 添加好友弹窗：桌面两栏，窄屏按搜索→申请→链接→策略单栏排列。
  *
- * 左栏放需要动作的待处理申请，右栏放邀请入口与次要接收策略；
- * 好友管理由联系人、群成员等其他入口承担，弹窗内不再重复好友列表。
- * 弹窗高度按内容收敛，避免固定高度留下大片空白。
+ * 左栏以用户名搜索和 ID 核对为主路径，并保留需要动作的待处理申请；
+ * 右栏保留一次性链接与次要接收策略。好友管理由联系人、群成员等其他
+ * 入口承担，弹窗内不重复好友列表。
  */
 export function contactRequestsDialog(): string {
   return `<div class="modal" id="contact-modal" hidden>
   <div class="modal-card contact-modal-card" role="dialog" aria-modal="true" aria-labelledby="contact-modal-title">
-    <h2 id="contact-modal-title">好友申请</h2>
+    <h2 id="contact-modal-title">添加好友</h2>
     <div class="contact-columns">
       <div class="contact-column contact-column-left">
+        <section class="contact-search-panel" aria-label="搜索添加好友">
+          <div class="contact-section-head">
+            <h3>搜索添加好友</h3>
+          </div>
+          <p class="contact-search-hint">输入完整或部分用户名；遇到同名用户时，请核对完整 ID 后再发送邀请。</p>
+          <form id="contact-search-form" class="contact-search-form">
+            <label for="contact-search-input">用户名</label>
+            <div class="contact-search-controls">
+              <input id="contact-search-input" type="search" maxlength="${LIMITS.actorNameMax}" autocomplete="off" placeholder="输入用户名" />
+              <button id="contact-search-submit" class="primary" type="submit">搜索</button>
+            </div>
+          </form>
+          <p id="contact-search-status" class="contact-search-status" role="status"></p>
+          <ul id="contact-search-results" class="contact-search-results" aria-label="用户名搜索结果"></ul>
+          <div id="contact-search-confirm" class="contact-search-confirm" hidden>
+            <p class="contact-search-confirm-hint">请核对目标 ID，确认无误后发送好友邀请。</p>
+            <strong id="contact-search-confirm-name"></strong>
+            <code id="contact-search-confirm-id"></code>
+            <label for="contact-search-message">申请附言（可选）</label>
+            <textarea id="contact-search-message" rows="2" maxlength="${LIMITS.contactRequestMessageBytes}" placeholder="介绍一下自己"></textarea>
+            <div class="contact-search-confirm-actions">
+              <button id="contact-search-cancel" type="button">取消</button>
+              <button id="contact-search-send" class="primary" type="button">发送邀请</button>
+            </div>
+          </div>
+        </section>
         <section class="contact-requests-panel" aria-label="待处理好友申请">
           <div class="contact-section-head">
             <h3>待处理申请</h3>

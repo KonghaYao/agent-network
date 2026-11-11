@@ -24,6 +24,7 @@ import {
   CodexCallError,
   CodexConnection,
   WatchStop,
+  acquireThreadLock,
   acquireWatcherLock,
   claimPayload,
   newRequestId,
@@ -34,6 +35,7 @@ import {
 import {
   MonitorFatalError,
   MonitorRpc,
+  listInboxPages,
   subscribe,
   type JsonObject,
   type SubscriptionControl,
@@ -126,6 +128,7 @@ class CodexWatcher {
   private readonly steered = new Map<string, JsonObject>();
 
   private connection: CodexConnection | null = null;
+  private threadLock: WatcherLock | null = null;
   private threadId = '';
   private actorId = '';
   private activeTurn: ActiveTurn | null = null;
@@ -156,7 +159,7 @@ class CodexWatcher {
     try {
       const socketPath = resolveSocketPath();
       this.connection = await CodexConnection.open(socketPath, this.events, this.signal);
-      await this.handshake();
+      await this.handshake(socketPath);
       await this.ensureIdentity();
       stream = this.streamLoop();
       return await this.mainLoop();
@@ -169,6 +172,7 @@ class CodexWatcher {
       await this.cancelAck();
       this.externalSignal.removeEventListener('abort', this.onExternalAbort);
       this.connection?.close();
+      this.threadLock?.release();
     }
   }
 
@@ -187,7 +191,7 @@ class CodexWatcher {
     return fail(`ERROR codex_watch=${message}`);
   }
 
-  private async handshake(): Promise<void> {
+  private async handshake(socketPath: string): Promise<void> {
     const connection = this.requireConnection();
     await connection.call('initialize', {
       clientInfo: { name: CLIENT_NAME, version: CLIENT_VERSION },
@@ -207,6 +211,7 @@ class CodexWatcher {
       threadId = loaded[0] ?? '';
     }
     if (!loaded.includes(threadId)) throw new WatchStop('CODEX_THREAD_ID is not a loaded thread');
+    this.threadLock = acquireThreadLock(socketPath, threadId);
     await connection.call('thread/resume', { threadId });
     this.threadId = threadId;
     this.log(`CODEX_READY thread=${threadId}`);
@@ -359,7 +364,7 @@ class CodexWatcher {
   private async snapshot(): Promise<void> {
     let outcome;
     try {
-      outcome = await this.rpc.callTool('network_inbox_list', { state: 'pending', limit: 50 });
+      outcome = await listInboxPages(this.rpc, 'pending');
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
       this.log('ERROR type=inbox message=snapshot_failed');
@@ -517,7 +522,7 @@ class CodexWatcher {
 
       let pending;
       try {
-        pending = await this.rpc.callTool('network_inbox_list', { state: 'pending', limit: 50 });
+        pending = await listInboxPages(this.rpc, 'pending');
       } catch (error) {
         if (error instanceof MonitorFatalError) throw error;
         throw new WatchStop('inbox_unavailable; restart watcher to reconcile');
@@ -531,7 +536,7 @@ class CodexWatcher {
         // 已插话的投递在 claim 后不再出现在 pending；当前回合结束后从自己的 claimed 列表接手。
         let claimed;
         try {
-          claimed = await this.rpc.callTool('network_inbox_list', { state: 'claimed', limit: 50 });
+          claimed = await listInboxPages(this.rpc, 'claimed');
         } catch (error) {
           if (error instanceof MonitorFatalError) throw error;
           throw new WatchStop('claimed_inbox_unavailable; restart watcher to reconcile');

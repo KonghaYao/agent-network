@@ -31,6 +31,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { check, checkEqual, checksPassed } from './lib/harness';
+import { listInboxPages, type MonitorRpc } from '../client/monitor/rpc';
 import { BODY_PREVIEW_CHARS } from '../client/monitor/events';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -295,10 +296,12 @@ function createMock(options: MockOptions = {}): MockServer {
         case 'network_inbox_list': {
           const wanted = String(args.state ?? 'active');
           const items = wanted === 'claimed' ? [...state.claims.values()] : [...state.pending.values()];
+          const offset = Number(args.cursor ?? 0);
+          const limit = Number(args.limit ?? 50);
           return toolResult(body.id, {
-            items,
-            next_cursor: null,
-            has_more: false,
+            items: items.slice(offset, offset + limit),
+            next_cursor: offset + limit < items.length ? String(offset + limit) : null,
+            has_more: offset + limit < items.length,
             pending_count: state.pending.size,
             claimed_delivery_id: state.claims.keys().next().value ?? null,
           });
@@ -629,6 +632,18 @@ async function runClaudeChecks(): Promise<void> {
     const ready = await waitForLine(watcher.stderr, (line) => line.includes('READY'), 'claude READY');
     check('READY 写 stderr 并带 actor/subscription', /READY actor=agt_me pending=\d+ subscription=sub-/.test(ready));
     check('stderr 不含 token', !watcher.stderr.join('\n').includes(TOKEN));
+
+    for (let index = 0; index < 50; index += 1) {
+      const own = delivery(`dlv_own_${index}`);
+      own.message.sender_id = 'agt_me';
+      mock.state.pending.set(own.delivery_id, own);
+    }
+    mock.state.pending.set('dlv_second_page', delivery('dlv_second_page'));
+    sendItems(mock, [notificationItem('dlv_second_page', 'delivery.created', 'evt_second_page')]);
+    await waitForEvent(watcher.stdout, 'delivery', 'dlv_second_page');
+    checkEqual('通知匹配第二页 pending 后自动领取', mock.state.claimCalls.get('dlv_second_page'), 1);
+    mock.state.pending.clear();
+    mock.state.claims.clear();
 
     // 冲突：别人已领取，不能伪装成可处理投递。
     mock.state.pending.set('dlv_other', delivery('dlv_other'));
@@ -1810,6 +1825,14 @@ async function runOtherChecks(): Promise<void> {
   checkEqual('other --check 退出码', otherCheck.exitCode, 0);
   const otherCheckOutput = new TextDecoder().decode(otherCheck.stdout);
   check('other --check 标记 TS 引擎', otherCheckOutput.includes('engine=ts'));
+  check('other --check 明示尚未连接', otherCheckOutput.includes('connected=false'));
+  const badOtherCheck = Bun.spawnSync({
+    cmd: [process.execPath, CLI, 'monitor', '--harness', 'other', '--check', '--poll', '-1'],
+    env: { ...process.env, AGENTNET_TOKEN: TOKEN },
+    stdout: 'pipe',
+  });
+  checkEqual('other --check 拒绝非法 poll', badOtherCheck.exitCode, 1);
+  check('other --check 错误与启动一致', new TextDecoder().decode(badOtherCheck.stdout).includes('invalid_poll'));
   check('--check 输出不含 token', !otherCheckOutput.includes(TOKEN));
 
   const periCheck = Bun.spawnSync({
@@ -1845,6 +1868,46 @@ async function runOtherChecks(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const requests: JsonObject[] = [];
+  const paginatedRpc = {
+    callTool: async (_name: string, args: JsonObject) => {
+      requests.push(args);
+      const offset = args.cursor === 'page-2' ? 50 : 0;
+      return {
+        ok: true as const,
+        data: {
+          items: Array.from({ length: offset === 0 ? 50 : 1 }, (_, index) => ({
+            delivery_id: `dlv_${offset + index}`,
+          })),
+          has_more: offset === 0,
+          next_cursor: offset === 0 ? 'page-2' : null,
+        },
+      };
+    },
+  } as Pick<MonitorRpc, 'callTool'>;
+  const paginated = await listInboxPages(paginatedRpc, 'pending');
+  check('inbox 补读覆盖第 51 条', paginated.ok && (paginated.data.items as JsonObject[])[50]?.delivery_id === 'dlv_50');
+  checkEqual('inbox 第二页携带游标', requests[1]?.cursor, 'page-2');
+  const brokenRpc = {
+    callTool: async () => ({ ok: true as const, data: { items: [], has_more: true, next_cursor: null } }),
+  } as Pick<MonitorRpc, 'callTool'>;
+  let rejectedIncomplete = false;
+  try {
+    await listInboxPages(brokenRpc, 'pending');
+  } catch {
+    rejectedIncomplete = true;
+  }
+  check('inbox 缺失下一页游标不得把首页当完整结果', rejectedIncomplete);
+  const malformedRpc = {
+    callTool: async () => ({ ok: true as const, data: { items: [] } }),
+  } as Pick<MonitorRpc, 'callTool'>;
+  let rejectedMalformed = false;
+  try {
+    await listInboxPages(malformedRpc, 'pending');
+  } catch {
+    rejectedMalformed = true;
+  }
+  check('inbox 无分页标记不得误判为完整结果', rejectedMalformed);
   console.log('TS monitor: claude harness');
   await runClaudeChecks();
   console.log('TS monitor: signal cleanup');

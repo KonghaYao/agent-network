@@ -316,6 +316,7 @@ async function main(): Promise<void> {
     'network_device_list',
     'network_device_revoke',
     'network_contacts_list',
+    'network_contact_search',
     'network_contact_add',
     'network_contact_remove',
     'network_contact_request',
@@ -439,6 +440,7 @@ async function main(): Promise<void> {
     'network_device_pairing_redeem',
     'network_device_list',
     'network_device_revoke',
+    'network_contact_search',
     'network_message_send',
     'network_message_search',
     'network_message_context',
@@ -499,6 +501,27 @@ async function main(): Promise<void> {
       deviceDescription('network_device_revoke').includes('stream') &&
       deviceDescription('network_device_revoke').includes('不影响其他设备'),
     deviceDescription('network_device_revoke'),
+  );
+  const contactSearchTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_contact_search',
+  );
+  const contactSearchInput = contactSearchTool?.inputSchema as
+    | { properties?: Record<string, unknown>; required?: string[] }
+    | undefined;
+  const contactSearchOutput = contactSearchTool?.outputSchema as
+    | { properties?: Record<string, unknown> }
+    | undefined;
+  check(
+    '好友搜索契约按用户名返回 actor_id 且不直接建联',
+    deviceDescription('network_contact_search').includes('人类身份') &&
+      deviceDescription('network_contact_search').includes('actor_id') &&
+      deviceDescription('network_contact_search').includes('network_contact_request') &&
+      deviceDescription('network_contact_search').includes('不创建') &&
+      Object.keys(contactSearchInput?.properties ?? {}).sort().join(',') === 'limit,query' &&
+      contactSearchInput?.required?.includes('query') === true &&
+      Object.keys(contactSearchOutput?.properties ?? {}).sort().join(',') === 'items,truncated' &&
+      !JSON.stringify(contactSearchOutput ?? {}).includes('metadata'),
+    contactSearchTool,
   );
   const contactLinkCreateTool = listed?.tools?.find(
     (tool) => tool.name === 'network_contact_link_create',
@@ -3064,6 +3087,125 @@ async function main(): Promise<void> {
     'network_agent_rename 仍拒绝 human 目标',
     humanTarget.code,
     'INVALID_ARGUMENT',
+  );
+
+  // 好友搜索：同名人类以完整 actor_id 区分，确认后仍走申请 → 对方接受。
+  const sameName = '同名好友搜索验收';
+  const searchTargetAToken = newToken();
+  const searchTargetBToken = newToken();
+  const searchTargetA = await rawToolCall<{ actor_id: string }>(
+    searchTargetAToken,
+    'network_register',
+    {
+      request_id: `contact_search_a_${crypto.randomUUID().replaceAll('-', '')}`,
+      kind: 'human',
+      name: sameName,
+    },
+  );
+  const searchTargetB = await rawToolCall<{ actor_id: string }>(
+    searchTargetBToken,
+    'network_register',
+    {
+      request_id: `contact_search_b_${crypto.randomUUID().replaceAll('-', '')}`,
+      kind: 'human',
+      name: sameName,
+    },
+  );
+  type ContactSearchPage = {
+    items: {
+      actor: { actor_id: string; kind: string; name: string; metadata?: unknown };
+      relation: 'active' | 'none';
+      pending_request: { contact_request_id: string; direction: 'incoming' | 'outgoing' } | null;
+    }[];
+    truncated: boolean;
+  };
+  const sameNameSearch = await rawToolCall<ContactSearchPage>(
+    browserToken,
+    'network_contact_search',
+    { query: '好友搜索', limit: 10 },
+  );
+  const sameNameItems = (sameNameSearch.data?.items ?? []).filter(
+    (item) => item.actor.name === sameName,
+  );
+  checkEqual('好友搜索返回两个同名人类', sameNameItems.length, 2);
+  check(
+    '好友搜索用不同 actor_id 区分同名结果',
+    new Set(sameNameItems.map((item) => item.actor.actor_id)).size === 2,
+    sameNameItems,
+  );
+  check(
+    '好友搜索只返回人类且不泄露 metadata/自身',
+    (sameNameSearch.data?.items ?? []).every(
+      (item) =>
+        item.actor.kind === 'human' &&
+        item.actor.actor_id !== browserIdentity?.actor_id &&
+        !Object.prototype.hasOwnProperty.call(item.actor, 'metadata'),
+    ),
+    sameNameSearch.data,
+  );
+  const selectedTargetId = searchTargetA.data?.actor_id ?? '';
+  const searchedRequest = await rawToolCall<{
+    status: string;
+    request: { contact_request_id: string; to_actor: { actor_id: string } } | null;
+  }>(browserToken, 'network_contact_request', {
+    request_id: `contact_search_request_${crypto.randomUUID().replaceAll('-', '')}`,
+    actor_id: selectedTargetId,
+    message: '通过搜索并核对 ID 发起',
+  });
+  checkEqual('核对 actor_id 后好友申请进入 pending', searchedRequest.data?.status, 'pending');
+  checkEqual(
+    '搜索式好友申请只发给确认的 ID',
+    searchedRequest.data?.request?.to_actor.actor_id,
+    selectedTargetId,
+  );
+  const pendingSearch = await rawToolCall<ContactSearchPage>(
+    browserToken,
+    'network_contact_search',
+    { query: sameName },
+  );
+  const pendingTarget = pendingSearch.data?.items.find(
+    (item) => item.actor.actor_id === selectedTargetId,
+  );
+  checkEqual('搜索结果标记已发送的申请', pendingTarget?.pending_request?.direction, 'outgoing');
+  const acceptedSearchRequest = await rawToolCall<{ status: string }>(
+    searchTargetAToken,
+    'network_contact_request_respond',
+    {
+      request_id: `contact_search_accept_${crypto.randomUUID().replaceAll('-', '')}`,
+      contact_request_id: searchedRequest.data?.request?.contact_request_id,
+      action: 'accept',
+    },
+  );
+  checkEqual('搜索目标接受后完成添加', acceptedSearchRequest.data?.status, 'accepted');
+  const acceptedSearch = await rawToolCall<ContactSearchPage>(
+    browserToken,
+    'network_contact_search',
+    { query: sameName },
+  );
+  const acceptedTarget = acceptedSearch.data?.items.find(
+    (item) => item.actor.actor_id === selectedTargetId,
+  );
+  const untouchedTarget = acceptedSearch.data?.items.find(
+    (item) => item.actor.actor_id === searchTargetB.data?.actor_id,
+  );
+  checkEqual('接受后搜索结果显示 active 好友关系', acceptedTarget?.relation, 'active');
+  checkEqual('接受后搜索结果不再显示 pending', acceptedTarget?.pending_request, null);
+  checkEqual('同名但未选中的 ID 不会被添加', untouchedTarget?.relation, 'none');
+  await rawToolCall(browserToken, 'network_contact_block', {
+    request_id: `contact_search_block_${crypto.randomUUID().replaceAll('-', '')}`,
+    actor_id: searchTargetB.data?.actor_id,
+  });
+  const blockedSearch = await rawToolCall<ContactSearchPage>(
+    browserToken,
+    'network_contact_search',
+    { query: sameName },
+  );
+  check(
+    '好友搜索隐藏任一方向 active 拉黑对象',
+    !(blockedSearch.data?.items ?? []).some(
+      (item) => item.actor.actor_id === searchTargetB.data?.actor_id,
+    ),
+    blockedSearch.data,
   );
 
   const browserContact = await rawRpc(

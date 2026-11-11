@@ -1,3 +1,5 @@
+import { LIMITS } from '../contracts/limits';
+
 /**
  * 好友申请、接收策略与申请徽标。
  *
@@ -12,6 +14,17 @@ const contactModalClose = document.getElementById('contact-modal-close');
 const contactRequestList = document.getElementById('contact-request-list');
 const contactRequestCount = document.getElementById('contact-request-count');
 const contactRequestStatus = document.getElementById('contact-request-status');
+const contactSearchForm = document.getElementById('contact-search-form');
+const contactSearchInput = document.getElementById('contact-search-input');
+const contactSearchSubmit = document.getElementById('contact-search-submit');
+const contactSearchStatus = document.getElementById('contact-search-status');
+const contactSearchResults = document.getElementById('contact-search-results');
+const contactSearchConfirm = document.getElementById('contact-search-confirm');
+const contactSearchConfirmName = document.getElementById('contact-search-confirm-name');
+const contactSearchConfirmId = document.getElementById('contact-search-confirm-id');
+const contactSearchMessage = document.getElementById('contact-search-message');
+const contactSearchCancel = document.getElementById('contact-search-cancel');
+const contactSearchSend = document.getElementById('contact-search-send');
 const contactPolicySelect = document.getElementById('contact-policy-select');
 const contactPolicyStatus = document.getElementById('contact-policy-status');
 const contactLinkCreateButton = document.getElementById('contact-link-create');
@@ -19,6 +32,11 @@ const contactLinkCopyButton = document.getElementById('contact-link-copy');
 const contactLinkStatus = document.getElementById('contact-link-status');
 const contactLinkList = document.getElementById('contact-link-list');
 let contactRequestBusy = false;
+let contactSearchBusy = false;
+let contactSearchAbort = null;
+let contactSearchGeneration = 0;
+let contactSearchSelection = null;
+let contactSearchLastQuery = '';
 let contactLinkBusy = false;
 let contactBadgePromise = null;
 // 链接明文只在本次页面会话的内存里；不写 DOM、localStorage、console 或日志。
@@ -50,6 +68,189 @@ function contactButton(label, className, handler) {
   if (className) button.className = className;
   button.addEventListener('click', handler);
   return button;
+}
+
+function setContactSearchStatus(message, kind) {
+  if (!contactSearchStatus) return;
+  contactSearchStatus.textContent = message || '';
+  if (kind === 'error') contactSearchStatus.dataset.error = '1';
+  else delete contactSearchStatus.dataset.error;
+  if (kind === 'success') contactSearchStatus.dataset.success = '1';
+  else delete contactSearchStatus.dataset.success;
+}
+
+function resetContactSearchSelection() {
+  contactSearchSelection = null;
+  if (contactSearchConfirm) contactSearchConfirm.hidden = true;
+  if (contactSearchConfirmName) contactSearchConfirmName.textContent = '';
+  if (contactSearchConfirmId) contactSearchConfirmId.textContent = '';
+  if (contactSearchMessage) contactSearchMessage.value = '';
+}
+
+function selectContactSearchItem(item) {
+  if (!item || !item.actor || !item.actor.actor_id) return;
+  contactSearchSelection = {
+    actor_id: item.actor.actor_id,
+    name: item.actor.name || '未命名用户'
+  };
+  if (contactSearchConfirmName) contactSearchConfirmName.textContent = contactSearchSelection.name;
+  if (contactSearchConfirmId) contactSearchConfirmId.textContent = contactSearchSelection.actor_id;
+  if (contactSearchConfirm) contactSearchConfirm.hidden = false;
+  if (contactSearchMessage) contactSearchMessage.focus();
+}
+
+function contactSearchStateText(item) {
+  if (item && item.relation === 'active') return '已是好友';
+  if (item && item.pending_request) {
+    return item.pending_request.direction === 'incoming' ? '待你接受' : '邀请已发送';
+  }
+  return '';
+}
+
+function renderContactSearchResults(items) {
+  if (!contactSearchResults) return;
+  contactSearchResults.replaceChildren();
+  const matches = Array.isArray(items) ? items : [];
+  if (matches.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'contact-search-empty';
+    empty.textContent = '没有找到匹配的用户。';
+    contactSearchResults.append(empty);
+    return;
+  }
+  for (const item of matches) {
+    if (!item || !item.actor) continue;
+    const row = document.createElement('li');
+    row.className = 'contact-search-item';
+    const main = document.createElement('div');
+    main.className = 'contact-search-main';
+    const name = document.createElement('strong');
+    name.className = 'contact-search-name';
+    name.textContent = item.actor.name || '未命名用户';
+    const id = document.createElement('code');
+    id.className = 'contact-search-id';
+    id.textContent = item.actor.actor_id || '';
+    main.append(name, id);
+    row.append(main);
+
+    const stateText = contactSearchStateText(item);
+    if (stateText) {
+      const state = document.createElement('span');
+      state.className = 'contact-search-state';
+      state.textContent = stateText;
+      row.append(state);
+    } else {
+      row.append(contactButton('核对 ID', '', function () {
+        selectContactSearchItem(item);
+      }));
+    }
+    contactSearchResults.append(row);
+  }
+}
+
+async function performContactSearch() {
+  if (contactSearchBusy || !contactSearchInput || !identity) return;
+  const query = contactSearchInput.value.trim();
+  if (!query) {
+    renderContactSearchResults([]);
+    setContactSearchStatus('请输入用户名。', 'error');
+    resetContactSearchSelection();
+    return;
+  }
+  contactSearchBusy = true;
+  contactSearchLastQuery = query;
+  const generation = contactSearchGeneration;
+  const abort = new AbortController();
+  contactSearchAbort = abort;
+  if (contactSearchSubmit) contactSearchSubmit.disabled = true;
+  setContactSearchStatus('正在搜索…');
+  resetContactSearchSelection();
+  try {
+    const result = await callTool(
+      'network_contact_search',
+      { query: query, limit: ${LIMITS.contactSearchPageDefault} },
+      undefined,
+      abort.signal
+    );
+    if (
+      generation !== contactSearchGeneration ||
+      !contactModal ||
+      contactModal.hidden ||
+      contactSearchInput.value.trim() !== query
+    ) return;
+    renderContactSearchResults(result && result.items ? result.items : []);
+    if (result && result.truncated) {
+      setContactSearchStatus('结果较多，仅显示前 ${LIMITS.contactSearchPageDefault} 条；请补充用户名继续缩小范围。');
+    } else {
+      const count = result && Array.isArray(result.items) ? result.items.length : 0;
+      setContactSearchStatus(count > 0 ? '找到 ' + count + ' 位用户，请核对 ID。' : '没有找到匹配的用户。');
+    }
+  } catch (error) {
+    if (
+      generation !== contactSearchGeneration ||
+      !contactModal ||
+      contactModal.hidden ||
+      contactSearchInput.value.trim() !== query
+    ) return;
+    renderContactSearchResults([]);
+    setContactSearchStatus(
+      '搜索失败：' + (error && error.message ? error.message : String(error)),
+      'error'
+    );
+  } finally {
+    if (contactSearchAbort === abort) {
+      contactSearchAbort = null;
+      contactSearchBusy = false;
+      if (contactSearchSubmit && generation === contactSearchGeneration) {
+        contactSearchSubmit.disabled = false;
+      }
+    }
+  }
+}
+
+async function sendContactSearchRequest() {
+  if (contactRequestBusy || !contactSearchSelection || !identity) return;
+  const selected = contactSearchSelection;
+  const generation = contactSearchGeneration;
+  const message = contactSearchMessage ? contactSearchMessage.value.trim() : '';
+  contactRequestBusy = true;
+  if (contactSearchSend) contactSearchSend.disabled = true;
+  setContactSearchStatus('正在发送好友邀请…');
+  try {
+    const result = await callTool('network_contact_request', {
+      request_id: requestId('web_contact_search_request'),
+      actor_id: selected.actor_id,
+      ...(message ? { message: message } : {})
+    });
+    if (generation !== contactSearchGeneration || !contactModal || contactModal.hidden) {
+      if (result && (result.already_friends || result.status === 'accepted')) {
+        scheduleRoomListRefresh(true);
+      }
+      return;
+    }
+    await Promise.allSettled([loadContactRequests(), refreshContactBadge()]);
+    if (generation !== contactSearchGeneration || contactModal.hidden) return;
+    if (contactSearchInput && contactSearchInput.value.trim() === contactSearchLastQuery) {
+      await performContactSearch();
+    }
+    if (result && (result.already_friends || result.status === 'accepted')) {
+      setContactSearchStatus('已完成添加：' + selected.name + '。', 'success');
+      scheduleRoomListRefresh(true);
+    } else {
+      setContactSearchStatus('好友邀请已发送，等待对方同意。', 'success');
+    }
+  } catch (error) {
+    if (generation !== contactSearchGeneration || !contactModal || contactModal.hidden) return;
+    setContactSearchStatus(
+      '发送失败：' + (error && error.message ? error.message : String(error)),
+      'error'
+    );
+  } finally {
+    contactRequestBusy = false;
+    if (contactSearchSend && contactModal && !contactModal.hidden) {
+      contactSearchSend.disabled = false;
+    }
+  }
 }
 
 function renderContactRequests(items) {
@@ -142,7 +343,9 @@ function refreshContactBadge() {
         contactRequestsBadge.textContent = String(count);
         contactRequestsBadge.hidden = count === 0;
       }
-      contactRequestsButton.title = count > 0 ? '好友申请（' + count + '）' : '好友申请';
+      contactRequestsButton.title = count > 0
+        ? '添加好友（' + count + ' 条待处理申请）'
+        : '添加好友';
     } catch (error) {
       if (contactRequestsBadge) contactRequestsBadge.hidden = true;
     }
@@ -197,6 +400,7 @@ async function respondContactRequest(contactRequestId, action) {
     setContactStatus(action === 'accept' ? '已接受好友申请。' : '已拒绝好友申请。');
     await loadContactRequests();
     await refreshContactBadge();
+    if (contactSearchInput && contactSearchInput.value.trim()) await performContactSearch();
     scheduleRoomListRefresh(true);
   } catch (error) {
     setContactStatus('处理失败：' + (error && error.message ? error.message : String(error)), true);
@@ -217,6 +421,7 @@ async function cancelContactRequest(contactRequestId) {
     setContactStatus('已撤销好友申请。');
     await loadContactRequests();
     await refreshContactBadge();
+    if (contactSearchInput && contactSearchInput.value.trim()) await performContactSearch();
   } catch (error) {
     setContactStatus('撤销失败：' + (error && error.message ? error.message : String(error)), true);
   } finally {
@@ -494,6 +699,18 @@ async function prepareContactLinkOnLoggedOut(token) {
 
 async function openContactModal() {
   if (!contactModal) return;
+  contactSearchGeneration += 1;
+  const openGeneration = contactSearchGeneration;
+  if (contactSearchAbort) contactSearchAbort.abort();
+  contactSearchAbort = null;
+  contactSearchBusy = false;
+  contactSearchLastQuery = '';
+  if (contactSearchInput) contactSearchInput.value = '';
+  if (contactSearchSubmit) contactSearchSubmit.disabled = false;
+  if (contactSearchSend) contactSearchSend.disabled = contactRequestBusy;
+  if (contactSearchResults) contactSearchResults.replaceChildren();
+  resetContactSearchSelection();
+  setContactSearchStatus('');
   contactModal.hidden = false;
   setContactStatus('');
   setContactLinkStatus('');
@@ -506,12 +723,18 @@ async function openContactModal() {
     loadContactPolicy(),
     loadContactLinks()
   ]);
-  if (contactModalClose) contactModalClose.focus();
+  if (openGeneration !== contactSearchGeneration || contactModal.hidden) return;
+  if (contactSearchInput) contactSearchInput.focus();
 }
 
 function closeContactModal() {
   if (!contactModal) return;
+  contactSearchGeneration += 1;
+  if (contactSearchAbort) contactSearchAbort.abort();
+  contactSearchAbort = null;
+  contactSearchBusy = false;
   contactModal.hidden = true;
+  resetContactSearchSelection();
   if (contactRequestsButton) contactRequestsButton.focus();
 }
 
@@ -525,6 +748,33 @@ if (contactModal) {
   contactModal.addEventListener('click', function (event) {
     if (event.target === contactModal) closeContactModal();
   });
+}
+if (contactSearchForm) {
+  contactSearchForm.addEventListener('submit', function (event) {
+    event.preventDefault();
+    performContactSearch();
+  });
+}
+if (contactSearchInput) {
+  contactSearchInput.addEventListener('input', function () {
+    if (contactSearchInput.value.trim() === contactSearchLastQuery) return;
+    if (contactSearchAbort) contactSearchAbort.abort();
+    contactSearchAbort = null;
+    contactSearchBusy = false;
+    if (contactSearchSubmit) contactSearchSubmit.disabled = false;
+    if (contactSearchResults) contactSearchResults.replaceChildren();
+    resetContactSearchSelection();
+    setContactSearchStatus('');
+  });
+}
+if (contactSearchCancel) {
+  contactSearchCancel.addEventListener('click', function () {
+    resetContactSearchSelection();
+    if (contactSearchInput) contactSearchInput.focus();
+  });
+}
+if (contactSearchSend) {
+  contactSearchSend.addEventListener('click', sendContactSearchRequest);
 }
 if (contactPolicySelect) {
   contactPolicySelect.addEventListener('change', saveContactPolicy);

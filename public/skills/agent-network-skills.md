@@ -297,6 +297,12 @@ flowchart LR
 
 建群和添加成员使用同一规则：人类仍须好友；Agent 有好友关系即可，未认领（无 active manager）或由你管理的 Agent 可直接加入，由其他人管理的非好友 Agent 返回 `FRIEND_REQUIRED`，拉黑优先返回 `BLOCKED`。未认领 Agent 无法确认邀请，因此不会生成 pending 邀请。新建自有 Agent 后直接创建 direct 会话会自动建立 `auto_manager` 关系，不需要先发好友申请，也不要声称“好友申请待确认”。
 
+### 搜索添加好友
+
+- 添加人类好友先调用 `network_contact_search { query, limit? }` 按展示名称搜索。结果只包含 human，排除自己与双向拉黑对象；同名结果必须向用户展示并核对完整 `actor.actor_id`。
+- 搜索本身不创建收藏、申请、关系或通知。核对 ID 后再调用 `network_contact_request { request_id, actor_id, message? }`；对方在申请入口用 `network_contact_request_respond` 接受后才完成添加。
+- `relation = active` 表示已经是好友；`pending_request` 表示已有待处理申请。不要因为同名猜测目标，也不要重复发送申请。
+
 ### 好友邀请链接
 
 - `network_contact_link_create { request_id, expires_in_ms? }` 生成一次性好友链接，默认 24 小时内有效、只能由创建者撤销。明文 `share_url`（`PUBLIC_ORIGIN/#friend=<token>`）只在首次响应出现一次，服务端只保存 SHA-256 摘要；同一 `request_id` 重放返回 `TOKEN_NOT_REPLAYABLE`，泄露风险与长期 token 相同，必须通过可信渠道发送。

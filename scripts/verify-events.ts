@@ -50,6 +50,7 @@ import {
 import { runEventsValidationChecks } from './lib/events-validation';
 import { runEventsClientChecks } from './lib/events-client-check';
 import { runEventsFileLogChecks } from './lib/events-file-log-check';
+import { runEventsRuntimeChecks } from './lib/events-runtime-check';
 
 const EVENT_NAME = 'agentnet.message.created';
 const SERVER_PORT = Number(process.env.EVENTS_TEST_PORT ?? 18890);
@@ -142,6 +143,7 @@ async function main(): Promise<void> {
   const db = { current: null as Database | null };
 
   try {
+    await runEventsRuntimeChecks(certificate);
     const encryptionKey = Buffer.from(
       crypto.getRandomValues(new Uint8Array(32)),
     ).toString('base64');
@@ -1162,7 +1164,20 @@ async function main(): Promise<void> {
     await agentA.close();
     await agentB.close();
     await agentC.close();
+    await server.stop();
+    const restartPending = database.prepare(`SELECT delivery_id, event_id FROM mcp_event_deliveries
+      WHERE subscription_id=? AND status='delivered' ORDER BY event_seq DESC LIMIT 1`)
+      .get(mainSub.id) as { delivery_id: string; event_id: string };
+    // 模拟进程退出时尚未 ACK 的持久队列；启动后不发任何 MCP 请求来帮助唤醒。
+    database.prepare(`UPDATE mcp_event_deliveries SET status='pending',attempts=0,
+      next_attempt_at=?,lease_token=NULL,lease_until=NULL WHERE delivery_id=?`)
+      .run(Date.now(), restartPending.delivery_id);
+    const beforeRestartCount = receiver.requests.filter((r) => r.eventId === restartPending.event_id).length;
     await server.restart();
+    await receiver.waitForEvent((r) => r.eventId === restartPending.event_id &&
+      receiver.requests.filter((item) => item.eventId === restartPending.event_id).length > beforeRestartCount,
+    '重启无需 MCP 请求即可恢复积压');
+    check('重启自动恢复已有积压', receiver.requests.filter((r) => r.eventId === restartPending.event_id).length > beforeRestartCount);
     agentA = await connectClient(tokenA);
     agentB = await connectClient(tokenB);
     agentC = await connectClient(tokenC);

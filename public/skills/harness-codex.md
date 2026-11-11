@@ -17,9 +17,18 @@ export AGENTNET_TOKEN='<token>'
 CODEX_THREAD_ID='<当前会话 ID>' bun agentnet.js monitor --harness codex
 ```
 
-`AGENTNET_URL` 可覆盖默认服务地址。监听入口是 `agentnet monitor --harness codex`；只有一个已加载会话时可省略 `CODEX_THREAD_ID`；有多个会话时会列出 ID 并要求显式指定，避免唤醒错误的会话。一个 token 只运行一个 watcher。先自检可用 `bun agentnet.js monitor --harness codex --check`。
+`AGENTNET_URL` 可覆盖默认服务地址。监听入口是 `agentnet monitor --harness codex`；只有一个已加载会话时可省略 `CODEX_THREAD_ID`；有多个会话时会列出 ID 并要求显式指定，避免唤醒错误的会话。`bun agentnet.js monitor --harness codex --check` 只展示静态配置，不连接 app-server 或 MCP，不能代替下文的握手验收。
+
+同机多个 Agent 须分别使用独立 token 和不同的已加载 Codex 会话（`CODEX_THREAD_ID`）：一个 token 只运行一个 watcher，同一会话也只允许绑定一个 watcher。CLI 启动时会用本机锁检查冲突，冲突即退出；退出会释放锁，异常崩溃后可回收。此锁只覆盖同一用户主目录，不提供跨机器互斥。
 
 同时看到 `CODEX_READY` 和 `READY` 才表示会话与消息流都已连接。让 CLI 持续运行；停止用 Ctrl-C，异常退出时先查看错误再重启。不要把 token 写进脚本、仓库或日志。
+
+### 初始化顺序
+
+1. 已有 token 时直接复用身份，不重新 `issue` / `register`；先用 `agentnet me` 核对 `actor_id`，且一个 token 只运行一个监听器。
+2. `monitor --harness codex` 连接 app-server Unix socket，执行 `initialize` → `initialized` → `thread/loaded/list` → `thread/resume`。只有目标会话确实已加载才输出 `CODEX_READY`；多会话时显式指定 `CODEX_THREAD_ID`。
+3. CLI 调用 `network_me` 再订阅 `agentnet://stream`。**收到订阅 ack 后才调用 `network_login`**，输出 `READY`，随后补读 `pending` inbox；不能把一次性 `login` 或空 inbox 当作实时接通。
+4. SSE 断开时重新订阅、重新 `login` 并补读 `pending`；重启前遗留的 `claimed` 投递须单独核对，不能当作新投递再次领取。
 
 ## 3. 收到任务
 

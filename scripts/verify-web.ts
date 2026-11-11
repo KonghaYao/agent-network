@@ -3952,10 +3952,10 @@ async function main(): Promise<void> {
       };
       const contactIcon = brandIconMetrics.contact;
       checkEqual('侧栏好友申请使用图标', contactIcon?.hasSvg, true);
-      checkEqual('好友申请图标保留 aria-label', contactIcon?.ariaLabel, '好友申请');
+      checkEqual('添加好友图标保留 aria-label', contactIcon?.ariaLabel, '添加好友');
       check(
-        '好友申请图标保留 title',
-        contactIcon?.title?.startsWith('好友申请') === true,
+        '添加好友图标保留 title',
+        contactIcon?.title?.startsWith('添加好友') === true,
         contactIcon?.title,
       );
       checkEqual('好友申请图标不含文字标签', contactIcon?.textNodes.length, 0);
@@ -4023,18 +4023,21 @@ async function main(): Promise<void> {
         uiRequesterRelation.items.find((item) => item.actor_id === data.human.actor_id)?.relation,
         'active',
       );
+
       const contactDesktopLayout = (await page.evaluate(`(() => {
         const card = document.querySelector('#contact-modal .contact-modal-card');
         const columns = document.querySelector('#contact-modal .contact-columns');
         const left = document.querySelector('#contact-modal .contact-column-left');
         const right = document.querySelector('#contact-modal .contact-column-right');
         const policy = document.querySelector('#contact-modal .contact-policy');
+        const search = document.querySelector('#contact-modal .contact-search-panel');
         const requests = document.querySelector('#contact-modal .contact-requests-panel');
         const link = document.querySelector('#contact-modal .contact-link-panel');
         if (!card || !columns || !left || !right) return null;
         const cardBox = card.getBoundingClientRect();
         const leftBox = left.getBoundingClientRect();
         const rightBox = right.getBoundingClientRect();
+        const searchBox = search ? search.getBoundingClientRect() : null;
         const requestBox = requests ? requests.getBoundingClientRect() : null;
         const linkBox = link ? link.getBoundingClientRect() : null;
         const policyBox = policy ? policy.getBoundingClientRect() : null;
@@ -4053,10 +4056,12 @@ async function main(): Promise<void> {
           rightLeft: rightBox.left,
           rightBottom: rightBox.bottom,
           rightWidth: rightBox.width,
+          searchTop: searchBox ? searchBox.top : -1,
           requestTop: requestBox ? requestBox.top : -1,
           linkTop: linkBox ? linkBox.top : -1,
           policyTop: policyBox ? policyBox.top : -1,
           policyInRight: Boolean(policy) && right.contains(policy),
+          searchInLeft: Boolean(search) && left.contains(search),
           requestsInLeft: Boolean(requests) && left.contains(requests),
           linkInRight: Boolean(link) && right.contains(link)
         };
@@ -4075,10 +4080,12 @@ async function main(): Promise<void> {
         rightLeft: number;
         rightBottom: number;
         rightWidth: number;
+        searchTop: number;
         requestTop: number;
         linkTop: number;
         policyTop: number;
         policyInRight: boolean;
+        searchInLeft: boolean;
         requestsInLeft: boolean;
         linkInRight: boolean;
       } | null;
@@ -4101,10 +4108,12 @@ async function main(): Promise<void> {
         contactDesktopLayout,
       );
       check(
-        '1280px 待处理申请在左栏、好友链接与接收策略在右栏',
+        '1280px 用户名搜索与待处理申请在左栏、好友链接与接收策略在右栏',
         Boolean(contactDesktopLayout) &&
           contactDesktopLayout!.policyInRight &&
+          contactDesktopLayout!.searchInLeft &&
           contactDesktopLayout!.requestsInLeft &&
+          contactDesktopLayout!.searchTop <= contactDesktopLayout!.requestTop + 1 &&
           contactDesktopLayout!.linkInRight,
         contactDesktopLayout,
       );
@@ -4145,8 +4154,10 @@ async function main(): Promise<void> {
       );
       const contactModalText = await page.locator('#contact-modal').innerText();
       check(
-        '好友弹窗已移除长说明',
+        '好友弹窗以用户名搜索和 ID 核对为主路径',
         !contactModalText.includes('申请只进入独立收件箱') &&
+          contactModalText.includes('输入完整或部分用户名') &&
+          contactModalText.includes('核对完整 ID') &&
           contactModalText.includes('一次性链接，24 小时内有效'),
         contactModalText,
       );
@@ -4231,12 +4242,13 @@ async function main(): Promise<void> {
         const contactMobileLayout = (await mobileIcons.page.evaluate(`(() => {
           const card = document.querySelector('#contact-modal .contact-modal-card');
           const columns = document.querySelector('#contact-modal .contact-columns');
+          const search = document.querySelector('#contact-modal .contact-search-panel');
           const requests = document.querySelector('#contact-modal .contact-requests-panel');
           const link = document.querySelector('#contact-modal .contact-link-panel');
           const policy = document.querySelector('#contact-modal .contact-policy');
-          if (!card || !columns || !requests || !link || !policy) return null;
+          if (!card || !columns || !search || !requests || !link || !policy) return null;
           const cardBox = card.getBoundingClientRect();
-          const boxes = [requests, link, policy].map(function (node) {
+          const boxes = [search, requests, link, policy].map(function (node) {
             return node.getBoundingClientRect();
           });
           const columnsStyle = getComputedStyle(columns);
@@ -4269,12 +4281,13 @@ async function main(): Promise<void> {
           0,
         );
         check(
-          '390px 好友弹窗按申请/链接/策略顺序单列堆叠',
+          '390px 好友弹窗按搜索/申请/链接/策略顺序单列堆叠',
           Boolean(contactMobileLayout) &&
             contactMobileLayout!.direction === 'column' &&
-            contactMobileLayout!.tops.length === 3 &&
+            contactMobileLayout!.tops.length === 4 &&
             contactMobileLayout!.tops[0]! < contactMobileLayout!.tops[1]! &&
-            contactMobileLayout!.tops[1]! < contactMobileLayout!.tops[2]!,
+            contactMobileLayout!.tops[1]! < contactMobileLayout!.tops[2]! &&
+            contactMobileLayout!.tops[2]! < contactMobileLayout!.tops[3]!,
           contactMobileLayout,
         );
         check(
