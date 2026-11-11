@@ -507,7 +507,7 @@ function streamThrownFailure(error) {
 async function openActorStream(task) {
   let response;
   try {
-    response = await api(
+    response = await streamApi(
       'subscriptions/listen',
       { notifications: { resourceSubscriptions: [STREAM_URI] } },
       undefined,

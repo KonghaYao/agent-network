@@ -207,6 +207,7 @@ import {
   roomRoleSet,
   roomsList,
   type RoomDetail,
+  type RoomPage,
 } from '../domain/rooms';
 import { roomRename } from '../domain/room-profile';
 import { roomMonitorGet, roomMonitorSet } from '../domain/room-monitors';
@@ -231,7 +232,7 @@ import {
 } from '../domain/owner-transfers';
 import { sync } from '../domain/sync';
 import type { Env } from '../env';
-import { login, presenceOf } from '../realtime/presence';
+import { login, presenceOf, presenceOfMany } from '../realtime/presence';
 import { requireActor } from './auth';
 import {
   agentArchiveResultSchema,
@@ -474,6 +475,32 @@ export function registerTools(
       members,
       invited: detail.invited,
       owner_transfer: detail.owner_transfer,
+    };
+  }
+
+  /**
+   * 为 rooms_list 当前页的 direct Agent 对端批量补充在线快照。
+   *
+   * 域层只返回 peer 的稳定资料，online 保持 null；这里用一次批量
+   * presence 查询覆盖整页，避免把浏览器的逐房间补全转移成逐 Agent
+   * 的数据库查询。人类对端保持 null。
+   */
+  async function withRoomListPresence(page: RoomPage): Promise<RoomPage> {
+    const agentIds = page.items.flatMap((item) =>
+      item.peer && item.peer.kind === 'agent' ? [item.peer.actor_id] : [],
+    );
+    if (agentIds.length === 0) return page;
+    const presences = await presenceOfMany(env, agentIds);
+    return {
+      ...page,
+      items: page.items.map((item) => {
+        if (!item.peer || item.peer.kind !== 'agent') return item;
+        const presence = presences.get(item.peer.actor_id);
+        return {
+          ...item,
+          peer: { ...item.peer, online: presence ? presence.online : null },
+        };
+      }),
     };
   }
 
@@ -1149,12 +1176,12 @@ export function registerTools(
   register(
     server,
     'network_rooms_list',
-    '分页读取自己参与的活跃房间摘要、head 与已读位置。已解散群默认不返回；仍可用 network_room_get 读取只读归档。direct 会话额外返回 peer_archived 供网页默认列表隐藏已归档 Agent，不影响房间、消息或详情读取。',
+    '分页读取自己参与的活跃房间摘要、head 与已读位置。已解散群默认不返回；仍可用 network_room_get 读取只读归档。每条 direct 记录返回 peer 对端摘要（actor_id、name、kind、online 批量快照），群聊 peer 为 null；旧客户端可忽略该字段。direct 会话仍返回 peer_archived 供网页默认列表隐藏已归档 Agent，不影响房间、消息或详情读取。',
     roomsListSchema,
     roomPageSchema,
     async (input) => {
       requireActor(principal);
-      return roomsList(db, principal, input);
+      return withRoomListPresence(await roomsList(db, principal, input));
     },
   );
 

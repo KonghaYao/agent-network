@@ -66,16 +66,52 @@ export async function login(env: Env, principal: Principal): Promise<LoginView> 
  * `false`（明确离线）区分开，不能把未知误报成离线。
  */
 export async function presenceOf(env: Env, actorId: string): Promise<ActorPresence | null> {
-  try {
-    const hub = env.NOTIFICATION_HUB.actorPresence(actorId);
-    if (hub.online || env.NOTIFICATION_HUB.actorConnectionCount(actorId) > 0) {
-      return { online: true, since: hub.since };
+  const result = await presenceOfMany(env, [actorId]);
+  return result.get(actorId) ?? null;
+}
+
+/**
+ * 批量在线快照：hub 连接优先，其余 Agent 用固定次数 SQL 读取持久化 phase。
+ *
+ * 与 `presenceOf` 使用同一语义：`online` / `pending_offline` 视为在线，
+ * 人类调用方不应传入；查询失败返回 `null` 表示未知，不能误报离线。
+ */
+export async function presenceOfMany(
+  env: Env,
+  actorIds: string[],
+): Promise<Map<string, ActorPresence | null>> {
+  const unique = Array.from(new Set(actorIds));
+  const result = new Map<string, ActorPresence | null>();
+  const pending: string[] = [];
+  for (const actorId of unique) {
+    try {
+      const hub = env.NOTIFICATION_HUB.actorPresence(actorId);
+      if (hub.online || env.NOTIFICATION_HUB.actorConnectionCount(actorId) > 0) {
+        result.set(actorId, { online: true, since: hub.since });
+        continue;
+      }
+    } catch {
+      result.set(actorId, null);
+      continue;
     }
-    if (!env.PRESENCE) return hub;
-    const phase = await env.PRESENCE.phaseOf(actorId);
-    const online = phase === 'online' || phase === 'pending_offline';
-    return { online, since: null };
-  } catch {
-    return null;
+    pending.push(actorId);
   }
+  if (pending.length === 0) return result;
+  if (!env.PRESENCE) {
+    for (const actorId of pending) result.set(actorId, { online: false, since: null });
+    return result;
+  }
+  try {
+    const phases = await env.PRESENCE.phasesOf(pending);
+    for (const actorId of pending) {
+      const phase = phases.get(actorId) ?? null;
+      result.set(actorId, {
+        online: phase === 'online' || phase === 'pending_offline',
+        since: null,
+      });
+    }
+  } catch {
+    for (const actorId of pending) result.set(actorId, null);
+  }
+  return result;
 }

@@ -509,6 +509,19 @@ export const roomPageSchema = z.object({
     roomSchema.extend({
       /** 仅 rooms_list 返回：direct 对端 Agent 已归档；列表默认隐藏但保留详情。 */
       peer_archived: z.boolean().optional(),
+      /**
+       * direct 对端展示摘要；群聊显式为 null。字段缺失只可能来自旧服务端。
+       * online 为 Agent 批量在线快照，人类与查询失败为 null。
+       */
+      peer: z
+        .object({
+          actor_id: z.string(),
+          name: z.string(),
+          kind: z.enum(['human', 'agent']),
+          online: z.boolean().nullable(),
+        })
+        .nullable()
+        .optional(),
     }),
   ),
   next_cursor: z.string().nullable(),

@@ -228,10 +228,11 @@ function requestId(prefix) {
 }
 
 /**
- * 普通 RPC 带 15s 超时；订阅流只受调用方 AbortController 控制。
- * 超时与主动取消分别抛可识别的错误，调用方据此结束 loading 或静默返回。
+ * 普通 RPC 与 SSE 共用请求构造；凭据只在请求头中使用，不进入日志。
+ * 普通 RPC 的截止时间与调用方取消覆盖 fetch、正文读取和结果处理整个
+ * 生命周期；SSE 只受调用方 signal 控制，不套用 15s 截止时间。
  */
-async function api(method, params, toolName, tokenOverride, signal) {
+function rpcRequestParts(method, params, toolName, tokenOverride) {
   const token = tokenOverride === undefined ? browserToken() : tokenOverride;
   if (!token) throw new Error('浏览器身份尚未初始化，请刷新页面后重试');
   const headers = {
@@ -242,68 +243,104 @@ async function api(method, params, toolName, tokenOverride, signal) {
     authorization: 'Bearer ' + token
   };
   if (toolName) headers['mcp-name'] = toolName;
-  const isListen = method === 'subscriptions/listen';
-  // 订阅流直接使用调用方的 signal：中止它即可关闭底层 SSE，避免多一层
-  // controller 让已中止的旧流继续占用同源连接池。
-  const directSignal = isListen ? signal : undefined;
-  const controller = directSignal ? null : new AbortController();
-  const requestSignal = directSignal || controller.signal;
+  return {
+    headers: headers,
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: crypto.randomUUID(),
+      method: method,
+      params: Object.assign({}, params, {
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientInfo': { name: 'agent-network-web', version: '0.1.0' },
+          'io.modelcontextprotocol/clientCapabilities': {}
+        }
+      })
+    })
+  };
+}
+
+function requestTimeoutError() {
+  const error = new Error('请求超时，请重试');
+  error.name = 'TimeoutError';
+  error.code = 'TIMEOUT';
+  return error;
+}
+
+function requestAbortError() {
+  const error = new Error('请求已取消');
+  error.name = 'AbortError';
+  error.code = 'ABORTED';
+  return error;
+}
+
+function invalidResponseError() {
+  const error = new Error('服务响应格式错误，请重试');
+  error.name = 'InvalidResponseError';
+  error.code = 'INVALID_RESPONSE';
+  return error;
+}
+
+/** SSE 长连接执行器：直接使用调用方 signal，保留长连接生命周期。 */
+async function streamApi(method, params, toolName, tokenOverride, signal) {
+  const request = rpcRequestParts(method, params, toolName, tokenOverride);
+  return fetch('/mcp', {
+    method: 'POST',
+    headers: request.headers,
+    signal: signal,
+    body: request.body
+  });
+}
+
+/**
+ * 普通 JSON RPC：同一个 controller 与截止时间覆盖响应头、正文和结果处理。
+ * 超时、调用方取消、JSON 格式错误分别抛可识别错误，调用方据此结束 loading。
+ */
+async function rpc(method, params, toolName, tokenOverride, signal) {
+  const request = rpcRequestParts(method, params, toolName, tokenOverride);
+  const controller = new AbortController();
   let timedOut = false;
   let timer = null;
-  const onCallerAbort = function () { if (controller) controller.abort(); };
-  if (controller && signal) {
+  const onCallerAbort = function () { controller.abort(); };
+  if (signal) {
     if (signal.aborted) controller.abort();
     else signal.addEventListener('abort', onCallerAbort);
   }
-  if (!isListen) {
-    timer = setTimeout(function () {
-      timedOut = true;
-      controller.abort();
-    }, WEB_REQUEST_TIMEOUT_MS);
-  }
+  timer = setTimeout(function () {
+    timedOut = true;
+    controller.abort();
+  }, WEB_REQUEST_TIMEOUT_MS);
   try {
-    return await fetch('/mcp', {
+    const response = await fetch('/mcp', {
       method: 'POST',
-      headers: headers,
-      signal: requestSignal,
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: crypto.randomUUID(),
-        method: method,
-        params: Object.assign({}, params, {
-          _meta: {
-            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-            'io.modelcontextprotocol/clientInfo': { name: 'agent-network-web', version: '0.1.0' },
-            'io.modelcontextprotocol/clientCapabilities': {}
-          }
-        })
-      })
+      headers: request.headers,
+      signal: controller.signal,
+      body: request.body
     });
-  } catch (error) {
-    if (timedOut) throw new Error('请求超时，请重试');
-    if (signal && signal.aborted) {
-      const aborted = new Error('请求已取消');
-      aborted.name = 'AbortError';
-      throw aborted;
+    let payload;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      if (timedOut) throw requestTimeoutError();
+      if (signal && signal.aborted) throw requestAbortError();
+      throw invalidResponseError();
     }
+    if (!payload || typeof payload !== 'object') throw invalidResponseError();
+    if (payload.error) {
+      const failure = new Error(payload.error.message || '请求失败');
+      const code = payload.error.data && payload.error.data.code;
+      if (typeof code === 'string') failure.code = code;
+      throw failure;
+    }
+    return payload.result;
+  } catch (error) {
+    if (timedOut) throw requestTimeoutError();
+    if (signal && signal.aborted) throw requestAbortError();
     throw error;
   } finally {
     if (timer) clearTimeout(timer);
-    if (controller && signal) signal.removeEventListener('abort', onCallerAbort);
+    if (signal) signal.removeEventListener('abort', onCallerAbort);
   }
-}
-
-async function rpc(method, params, toolName, tokenOverride, signal) {
-  const response = await api(method, params, toolName, tokenOverride, signal);
-  const payload = await response.json().catch(function () { return null; });
-  if (!payload) throw new Error('服务无响应');
-  if (payload.error) {
-    const failure = new Error(payload.error.message || '请求失败');
-    const code = payload.error.data && payload.error.data.code;
-    if (typeof code === 'string') failure.code = code;
-    throw failure;
-  }
-  return payload.result;
 }
 
 async function callTool(name, args, tokenOverride, signal) {
@@ -407,6 +444,47 @@ function ensureIdentity() {
     identityPromise = null;
   });
   return identityPromise;
+}
+
+/**
+ * 身份就绪后的统一启动入口：普通刷新、深链与退出后创建身份共用。
+ *
+ * SSE 在列表之前启动（内部等待同一个 single-flight 身份）；身份成功后
+ * 分别启动列表、当前房间（由路由/\`openRoom\` 自己等待身份）、好友角标
+ * 与 outbox 对账，各任务独立失败，不把全局 allSettled 当成聊天可用条件。
+ */
+let chatSessionPromise = null;
+function startChatSession() {
+  if (chatSessionPromise) return chatSessionPromise;
+  startActorStream();
+  chatSessionPromise = (async function () {
+    let me = null;
+    try {
+      me = await ensureIdentity();
+    } catch (error) {
+      if (error && (error.credentialInvalid || error.code === 'CREDENTIAL_INVALID')) {
+        showCredentialInvalidHome(
+          error.message ||
+            '当前凭据已失效或已被撤销；本机不会自动创建替代身份。'
+        );
+      } else {
+        const message = '读取身份失败：' + (error && error.message ? error.message : String(error));
+        if (roomEntries.length > 0) setListHint(message);
+        else setEmptyListMessage(message);
+        setListRetry(true);
+      }
+      return null;
+    }
+    updateAccount(me);
+    // 以下任务互不等待；失败由各自收口，聊天区不依赖列表或角标。
+    loadRooms().catch(function () {});
+    refreshContactBadge();
+    outboxScheduleReconcile(0);
+    return me;
+  })().finally(function () {
+    chatSessionPromise = null;
+  });
+  return chatSessionPromise;
 }
 
 /**
@@ -795,8 +873,7 @@ if (loggedOutStartButton) {
     const emptyHint = document.getElementById('empty-hint');
     if (emptyHint) emptyHint.textContent = '从左侧选择单聊或群聊，也可以新建群聊。';
     try {
-      await loadRooms();
-      if (identity) startActorStream();
+      await startChatSession();
       if (pendingFriendToken && identity) {
         const friendToken = pendingFriendToken;
         pendingFriendToken = null;
@@ -858,9 +935,7 @@ if (loggedOutStartButton) {
     return;
   }
   bootstrapRoute(initialRoomId);
-  // 首页也启动；每页只有这一条 agentnet://stream，切换房间不重建。
-  startActorStream();
-  await Promise.allSettled([loadRooms(), refreshContactBadge()]);
+  await startChatSession();
   window.__agentNetworkAllowRegister = false;
   if (pendingFriendToken) {
     const friendToken = pendingFriendToken;
@@ -868,8 +943,6 @@ if (loggedOutStartButton) {
     if (identity) await redeemContactLinkToken(friendToken);
     else showContactLinkBanner('好友链接未兑换：登录未完成，请重新打开链接。', true);
   }
-  // 刷新/换设备后先对账本地意图，再决定是否提供重试。
-  outboxScheduleReconcile(0);
 })();
 </script>
 <script>

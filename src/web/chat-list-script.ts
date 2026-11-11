@@ -17,6 +17,12 @@ let roomsMorePromise = null;
 let roomsAutoFrame = 0;
 // 每次列表读取只记下其在途期间发生的失权，避免迟到响应复活已退出的群。
 const roomListReads = new Set();
+// 列表代次与账号代次用于丢弃旧服务端兼容补全的迟到响应。
+let roomListGeneration = 0;
+let accountActorId = null;
+let accountActorEpoch = 0;
+let peerBackfillPromise = null;
+let peerBackfillQueued = false;
 
 function forgetRoomEntry(roomId) {
   for (const removed of roomListReads) removed.add(roomId);
@@ -107,6 +113,7 @@ function setRoomFilter(value, options) {
     updateRoomFilterTabs();
   }
   if (settings.render !== false) renderRooms();
+  schedulePeerBackfill();
 }
 
 /**
@@ -289,16 +296,46 @@ function updateRoomListMore() {
   roomListMoreElement.textContent = '加载更多会话';
 }
 
+/**
+ * 列表摘要统一成侧栏条目。
+ *
+ * 新服务端的 \`peer\` 是首选：名称、分类、在线一次到位，并优先于本地旧缓存。
+ * \`peer === null\` 表示服务端已确认无可提供摘要（群聊或异常 direct），不再
+ * 发起兼容补全；字段缺失才视为旧服务端，交给独立后台任务补全。
+ */
 function roomSummaryFromList(entry, me) {
-  const cached = entry.kind === 'direct' ? cachedPeerSummary(entry.room_id, me) : null;
+  const peer = entry.kind === 'direct' && entry.peer && typeof entry.peer === 'object' &&
+    typeof entry.peer.actor_id === 'string'
+    ? entry.peer
+    : null;
+  const cached = entry.kind === 'direct' && !peer ? cachedPeerSummary(entry.room_id, me) : null;
+  const resolved = peer || cached;
+  const resolvedName = resolved && resolved.name
+    ? resolved.name
+    : entry.kind === 'direct'
+      ? '单聊'
+      : entry.title || '群聊';
+  const peerKind = entry.kind === 'direct' && resolved
+    ? (resolved.kind || resolved.peer_kind || null)
+    : null;
+  const peerOnline = entry.kind === 'direct' && resolved
+    ? (peerKind === 'agent' ? resolved.online !== undefined ? resolved.online : resolved.peer_online : null)
+    : null;
+  const peerActorId = entry.kind === 'direct' && resolved
+    ? (resolved.actor_id || resolved.peer_actor_id || null)
+    : null;
+  if (peer && peerActorId) {
+    peerDetails.set(entry.room_id, {
+      name: resolvedName,
+      peer_kind: peerKind,
+      peer_online: peerOnline,
+      peer_actor_id: peerActorId
+    });
+  }
   return {
     room_id: entry.room_id,
     kind: entry.kind,
-    name: cached
-      ? cached.name
-      : entry.kind === 'direct'
-        ? '单聊'
-        : entry.title || '群聊',
+    name: resolvedName,
     head_seq: entry.head_seq,
     my_last_read_seq: entry.my_last_read_seq,
     last_message: entry.last_message,
@@ -309,11 +346,13 @@ function roomSummaryFromList(entry, me) {
     peer_archived: entry.peer_archived === true,
     can_leave: Boolean(entry.can_leave),
     can_dissolve: Boolean(entry.can_dissolve),
-    peer_kind: cached ? cached.peer_kind : null,
+    peer_kind: peerKind,
     // 人类成员没有在线概念，保持 null 且不渲染状态点。
-    peer_online: cached ? cached.peer_online : null,
-    peer_actor_id: cached ? cached.peer_actor_id : null,
-    peer_loaded: Boolean(cached) || entry.kind !== 'direct'
+    peer_online: peerOnline,
+    peer_actor_id: peerActorId,
+    peer_loaded: entry.kind !== 'direct' || Boolean(resolved),
+    // 显式 null 或已解析成功都无需兼容补全；只有字段缺失才补。
+    peer_unknown: entry.kind === 'direct' && entry.peer === null && !resolved
   };
 }
 
@@ -348,10 +387,16 @@ function mergeRoomSummaries(summaries, removed, options) {
         ? existing.name
         : summary.name,
       my_last_read_seq: String(readSeq),
-      peer_kind: summary.peer_kind || existing.peer_kind,
-      peer_online: summary.peer_online === null ? existing.peer_online : summary.peer_online,
-      peer_actor_id: summary.peer_actor_id || existing.peer_actor_id,
-      peer_loaded: Boolean(existing.peer_loaded) || Boolean(summary.peer_loaded)
+      // 带完整 peer 的摘要优先于旧缓存；旧服务端摘要继续沿用已补全结果。
+      peer_kind: summary.peer_loaded ? summary.peer_kind : (summary.peer_kind || existing.peer_kind),
+      peer_online: summary.peer_loaded
+        ? summary.peer_online
+        : (summary.peer_online === null ? existing.peer_online : summary.peer_online),
+      peer_actor_id: summary.peer_loaded
+        ? summary.peer_actor_id
+        : (summary.peer_actor_id || existing.peer_actor_id),
+      peer_loaded: Boolean(existing.peer_loaded) || Boolean(summary.peer_loaded),
+      peer_unknown: Boolean(summary.peer_unknown)
     }));
   }
   for (const entry of roomEntries) {
@@ -399,6 +444,7 @@ async function loadMoreRooms() {
       });
       roomEntries = sortRooms(mergeRoomSummaries(summaries, removed));
       pruneDissolvedRoomEntries();
+      roomListGeneration += 1;
       const nextCursor = page.has_more && page.next_cursor ? page.next_cursor : null;
       if (nextCursor === cursor) {
         roomsNextCursor = null;
@@ -408,7 +454,9 @@ async function loadMoreRooms() {
         roomsHasMore = Boolean(nextCursor);
       }
       renderRooms();
-      await fillDirectPeers(me);
+      // 摘要已经可用，兼容补全与归档对账独立启动，不进入分页 Promise。
+      schedulePeerBackfill();
+      refreshArchivedAgentState(false);
       roomsLoadedAt = Date.now();
     } catch (error) {
       if (isAbortError(error)) return;
@@ -453,6 +501,10 @@ function clearListSkeleton() {
 }
 
 function updateAccount(me) {
+  if (me && me.actor_id && me.actor_id !== accountActorId) {
+    accountActorId = me.actor_id;
+    accountActorEpoch += 1;
+  }
   if (accountNameElement) accountNameElement.textContent = me.name || '未命名';
   if (accountAvatarElement) {
     accountAvatarElement.textContent = firstChar(me.name);
@@ -718,19 +770,32 @@ function mergeActiveRoom(summaries) {
 }
 
 /**
- * 第二阶段：后台补全 direct 对方名称与在线状态。
+ * 旧服务端兼容补全：只有列表摘要缺少 peer 字段时才逐房间读取详情。
  *
- * 并发上限 4；每个失败只保留占位名称，不影响已经渲染的列表。
- * 已有缓存（peerDetails / roomCache）的 direct 房间不再请求。
+ * 独立调度、并发上限 2、可被新列表或失权取消；只处理当前分类/搜索下
+ * 可见的条目与 active 房间。它不进入 \`roomsPromise\`，首屏与分页不会等待
+ * 这条链。迟到响应按账号代次、列表代次和失权集合丢弃。
  */
-async function fillDirectPeers(me) {
-  const queue = roomEntries.filter(function (entry) {
-    return entry.kind === 'direct' && !entry.peer_loaded;
-  });
-  if (queue.length === 0) {
-    await refreshArchivedAgentState(false);
-    return;
+function schedulePeerBackfill() {
+  if (!identity || !identity.actor_id) return null;
+  if (peerBackfillPromise) {
+    peerBackfillQueued = true;
+    return peerBackfillPromise;
   }
+  const actorId = identity.actor_id;
+  const actorEpoch = accountActorEpoch;
+  const listGeneration = roomListGeneration;
+  const removed = new Set();
+  const queue = roomEntries.filter(function (entry) {
+    if (entry.kind !== 'direct' || entry.peer_loaded || entry.peer_unknown) return false;
+    // active 房间始终优先；其余只补当前可见分类与搜索命中的条目。
+    if (entry.room_id === activeRoomId) return true;
+    if (!roomMatchesFilter(entry)) return false;
+    const query = searchQuery.trim().toLowerCase();
+    return !query || roomMatches(entry, query);
+  });
+  if (queue.length === 0) return null;
+  roomListReads.add(removed);
   let index = 0;
   let renderScheduled = false;
   function scheduleRoomsRender() {
@@ -743,13 +808,30 @@ async function fillDirectPeers(me) {
     if (window.requestAnimationFrame) requestAnimationFrame(run);
     else setTimeout(run, 16);
   }
+  function stale() {
+    if (!identity || identity.actor_id !== actorId) return true;
+    if (accountActorEpoch !== actorEpoch || roomListGeneration !== listGeneration) return true;
+    return false;
+  }
   async function worker() {
     while (index < queue.length) {
+      if (stale()) return;
       const entry = queue[index];
       index += 1;
       try {
         const detail = await callTool('network_room_get', { room_id: entry.room_id });
+        if (removed.has(entry.room_id) || stale()) continue;
         const summary = directSummaryFromDetail(detail);
+        if (!summary.peer_actor_id) {
+          const current = roomEntries.find(function (item) {
+            return item.room_id === entry.room_id;
+          });
+          if (current) {
+            current.peer_loaded = true;
+            current.peer_unknown = true;
+          }
+          continue;
+        }
         peerDetails.set(entry.room_id, summary);
         const current = roomEntries.find(function (item) {
           return item.room_id === entry.room_id;
@@ -760,18 +842,31 @@ async function fillDirectPeers(me) {
           current.peer_online = summary.peer_online;
           current.peer_actor_id = summary.peer_actor_id;
           current.peer_loaded = true;
+          current.peer_unknown = false;
         }
         scheduleRoomsRender();
       } catch (error) {
-        // 房间不可读时保留占位名称，列表仍可展示。
+        // 房间不可读时保留占位名称；同一列表代次内不反复重试。
       }
     }
   }
   const workers = [];
-  const limit = Math.min(4, queue.length);
+  const limit = Math.min(2, queue.length);
   for (let slot = 0; slot < limit; slot += 1) workers.push(worker());
-  await Promise.all(workers);
-  await refreshArchivedAgentState(false);
+  peerBackfillPromise = Promise.all(workers)
+    .then(function () {
+      if (!stale()) refreshArchivedAgentState(false);
+    })
+    .catch(function () {})
+    .finally(function () {
+      roomListReads.delete(removed);
+      peerBackfillPromise = null;
+      if (peerBackfillQueued) {
+        peerBackfillQueued = false;
+        schedulePeerBackfill();
+      }
+    });
+  return peerBackfillPromise;
 }
 
 /**
@@ -800,6 +895,7 @@ async function loadRooms(options) {
         mergeActiveRoom(mergeRoomSummaries(summaries, removed, { dropMissing: dropMissing })),
       );
       pruneDissolvedRoomEntries();
+      roomListGeneration += 1;
       if (!roomsLoadMoreAttempted) {
         roomsNextCursor = page.has_more && page.next_cursor ? page.next_cursor : null;
         roomsHasMore = Boolean(roomsNextCursor);
@@ -812,7 +908,10 @@ async function loadRooms(options) {
       updateRoomListMore();
       clearListSkeleton();
       setListRetry(false);
-      await fillDirectPeers(me);
+      // 列表 Promise 到此结束：名称/分类/在线已由 peer 摘要可用，
+      // 兼容补全与归档对账各自独立失败，不阻塞首屏。
+      schedulePeerBackfill();
+      refreshArchivedAgentState(false);
       roomsLoadedAt = Date.now();
     } catch (error) {
       if (isAbortError(error)) return;
@@ -868,12 +967,14 @@ if (searchInput) {
   searchInput.addEventListener('input', function () {
     searchQuery = searchInput.value;
     renderRooms();
+    schedulePeerBackfill();
   });
   searchInput.addEventListener('keydown', function (event) {
     if (event.key !== 'Escape' || !searchInput.value) return;
     searchInput.value = '';
     searchQuery = '';
     renderRooms();
+    schedulePeerBackfill();
   });
 }
 

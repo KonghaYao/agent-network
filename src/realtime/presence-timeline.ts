@@ -215,6 +215,33 @@ export class AgentPresenceTimeline {
     return state?.phase ?? null;
   }
 
+  /**
+   * 批量读取在线快照，供 rooms_list 一次补充整页对端。
+   *
+   * 按固定大小分块，避免把会话数量转成逐 Agent 的数据库查询；缺失
+   * 行不写入 Map，调用方按“无记录”处理。
+   */
+  async phasesOf(
+    actorIds: string[],
+  ): Promise<Map<string, 'offline' | 'online' | 'pending_offline'>> {
+    const unique = Array.from(new Set(actorIds));
+    const result = new Map<string, 'offline' | 'online' | 'pending_offline'>();
+    for (let offset = 0; offset < unique.length; offset += LIMITS.agentPresenceSweepBatch) {
+      const chunk = unique.slice(offset, offset + LIMITS.agentPresenceSweepBatch);
+      if (chunk.length === 0) continue;
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = await this.#db
+        .prepare(
+          `SELECT actor_id, phase FROM agent_presence_state
+            WHERE actor_id IN (${placeholders})`,
+        )
+        .bind(...chunk)
+        .all<{ actor_id: string; phase: 'offline' | 'online' | 'pending_offline' }>();
+      for (const row of rows.results) result.set(row.actor_id, row.phase);
+    }
+    return result;
+  }
+
   /** 正常 shutdown 前等待已排队的 disconnect 写入落库。 */
   async flush(): Promise<void> {
     for (let round = 0; round < 8 && this.#queues.size > 0; round += 1) {

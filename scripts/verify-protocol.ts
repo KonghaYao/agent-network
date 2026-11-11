@@ -745,6 +745,22 @@ async function main(): Promise<void> {
     ),
     roomGetTool?.outputSchema,
   );
+  const roomsListTool = listed?.tools?.find((tool) => tool.name === 'network_rooms_list');
+  check(
+    'rooms_list 输出 schema 包含 direct peer 摘要',
+    ['"peer"', '"actor_id"', '"kind"', '"online"', '"peer_archived"'].every((marker) =>
+      JSON.stringify(roomsListTool?.outputSchema ?? {}).includes(marker),
+    ),
+    roomsListTool?.outputSchema,
+  );
+  check(
+    'rooms_list 描述声明 peer 与批量在线快照',
+    typeof roomsListTool?.description === 'string' &&
+      roomsListTool.description.includes('peer') &&
+      roomsListTool.description.includes('对端') &&
+      roomsListTool.description.includes('online'),
+    roomsListTool?.description,
+  );
   const leavePreviewTool = listed?.tools?.find(
     (tool) => tool.name === 'network_room_leave_preview',
   );
