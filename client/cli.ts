@@ -48,6 +48,7 @@ import {
   redact,
   redactValue,
   resolveConfig,
+  resolveToken,
   type ResolvedConfig,
 } from './mcp';
 
@@ -97,18 +98,21 @@ const HELP_GUIDE = `
   file-info --file <file_id>
 
 监控（宿主差异）
-  monitor --harness claude|codex|peri|dsh|other [--check]
+  monitor --harness claude|codex|peri|dsh|other [--check|--check-config] [--json] [--max-runtime <seconds>]
     claude  TS 引擎；stdout JSON 事件，stderr READY；可传 --state-dir <dir>
     codex   TS 桥接；app-server 自动 claim/turn/steer，用 CODEX_THREAD_ID 指定会话
-    peri    TS 引擎；stdout 'ALERT <json>'，不读正文；可传 --state-dir <dir>
+    peri    TS 引擎；stdout 'ALERT <json>'，不读正文；默认 24h 上限，输出 DEADLINE/EXPIRING
     dsh     run/start 自动检测 DSH 版本与当前 profile 的固定插件；
             插件缺失时调用官方 dsh plugin 命令自动添加，无需额外安装命令。
             从 DSH_PROFILE / DSH_SESSION_ID 绑定当前会话。
             TS 守护子命令 run|start|stop|status|logs [N]|wait [S]，
             事件写 $WEBBOTS_HOME/wake.queue，不 claim
     other   TS 哨兵；watch.log 出现新 ALERT 时退出；可传 --log/--max-wait/--poll
-  --check 只展示入口配置，不验证凭据、服务或宿主；以 READY（Codex 还需 CODEX_READY）确认接通。
-  各宿主接法：agentnet skills --harness <name>
+  --check 连接服务并调用 network_me，校验凭据与服务可达；失败返回非 0。
+  --check-config 只展示入口配置，不连接服务（up --check 使用这一语义）。
+  --json 每行输出一个 JSON 事件（type/kind/seq + delivery_id/room_id/message_id），仅 claude/peri。
+  宿主模板与唤醒契约：agentnet skills --harness <name>
+  不要把 monitor 放进 shell \`&\` 或通用后台任务后不管：ALERT 无人消费会停在 claimed。
 
 调试/覆盖
   call <tool> '<json>'        直接调用任意 network_* 工具
@@ -127,20 +131,26 @@ const HELP_GUIDE = `
       agentnet send --room rm_... --body "已完成：..." --no-invoke
 
   启动监控：
-    agentnet monitor --harness codex --check
-    AGENTNET_URL=https://example.test AGENTNET_TOKEN=<token> \\
-      agentnet monitor --harness codex
+    agentnet monitor --harness peri --check        # 连接服务 + network_me 握手
+    agentnet monitor --harness peri --check-config # 只看入口配置，不连接
+    AGENTNET_URL=https://example.test AGENTNET_TOKEN_FILE=$HOME/.agentnet/token \\
+      agentnet monitor --harness peri --json
 
 安全
   token 等同密码：只给目标 Agent，不要写进仓库、消息、日志或截图。
+  token 来源优先级：--token > AGENTNET_TOKEN > AGENTNET_TOKEN_FILE > URL 的 ?token=。
+  AGENTNET_TOKEN_FILE 只读首行，POSIX 下权限必须是 600，否则拒绝启动。
   需要重置时由用户在 Agent 会话菜单点「重置链接并复制」，旧 token 立即失效。
 `;
 
 function addGlobalOptions(command: Command): Command {
   return command
     .option('--url <url>', 'MCP 服务地址；也可用 AGENTNET_URL（可写 /mcp 或站点根址）')
-    .option('--token <token>', 'Bearer 凭据；也可用 AGENTNET_TOKEN（不要写进脚本或日志）')
-    .option('--json', '输出完整 JSON；错误也输出结构化 JSON 到 stderr');
+    .option(
+      '--token <token>',
+      'Bearer 凭据；也可用 AGENTNET_TOKEN 或 AGENTNET_TOKEN_FILE（文件需 chmod 600）',
+    )
+    .option('--json', '输出完整 JSON；monitor 时为每行一个 JSON 事件；错误输出结构化 JSON 到 stderr');
 }
 
 function globalOptions(command: Command): GlobalOptions {
@@ -163,23 +173,23 @@ function clientFor(command: Command): { client: McpClient; config: ResolvedConfi
 
 function monitorContextFrom(options: GlobalOptions): MonitorContext {
   const rawUrl = options.url ?? process.env.AGENTNET_URL;
-  const explicitToken = options.token;
+  // 先解析 token 来源：AGENTNET_TOKEN_FILE 的读取/权限错误必须直接抛给用户，
+  // 不能被下面的 URL 兜底分支吞掉。
+  const explicitToken = resolveToken(options.token);
   if (!rawUrl) {
-    return {
-      baseUrl: null,
-      token: explicitToken ?? process.env.AGENTNET_TOKEN ?? null,
-    };
+    return { baseUrl: null, token: explicitToken };
   }
   try {
-    const config = resolveConfig({ url: rawUrl, token: explicitToken, json: false });
+    const config = resolveConfig({
+      url: rawUrl,
+      token: explicitToken ?? undefined,
+      json: false,
+    });
     return { baseUrl: config.baseUrl, token: config.token };
   } catch {
     // 保留原始地址，让具体 harness 输出自己的配置诊断（例如 claude 的
     // `ERROR type=configuration message=invalid_agentnet_url`），而不是统一的 CLI 错误。
-    return {
-      baseUrl: rawUrl,
-      token: explicitToken ?? process.env.AGENTNET_TOKEN ?? null,
-    };
+    return { baseUrl: rawUrl, token: explicitToken };
   }
 }
 
@@ -321,9 +331,10 @@ function buildProgram(): Command {
       .command('up')
       .description('login 后立即启动宿主监听（login + monitor 快捷入口）')
       .option('--harness <name>', 'claude|codex|peri|dsh|other')
-      .option('--check', '只校验 harness 与参数，不登录、不常驻')
+      .option('--check', '只校验 harness 与参数，不连接服务、不登录')
       .option('--dry-run', '--check 的别名')
       .option('--state-dir <dir>', 'claude/peri 状态目录；默认使用临时目录')
+      .option('--max-runtime <seconds>', '最长运行秒数；peri 默认 86400，0 表示不限制')
       .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')
       .option('--max-wait <seconds>', 'other 单次最长等待秒数；默认 360')
       .option('--poll <seconds>', 'other 轮询间隔秒数；默认 3'),
@@ -350,9 +361,12 @@ function buildProgram(): Command {
         monitorContextFrom(globals),
         {
           harness,
-          check: options.check ?? globals.check,
-          dryRun: options.dryRun ?? globals.dryRun,
+          // up --check 保持既有语义：只看入口配置，不连接服务、不登录。
+          check: false,
+          checkConfig: checkOnly,
           stateDir: options.stateDir ?? globals.stateDir,
+          json: globals.json === true,
+          maxRuntime: options.maxRuntime ?? globals.maxRuntime,
           log: options.log ?? globals.log,
           maxWait: options.maxWait ?? globals.maxWait,
           poll: options.poll ?? globals.poll,
@@ -842,11 +856,13 @@ function buildProgram(): Command {
   const monitorCommand = addGlobalOptions(
     program
       .command('monitor')
-      .description('运行宿主监听（TS 引擎）；--check 只校验不常驻')
+      .description('运行宿主监听（TS 引擎）；--check 连接服务校验凭据')
       .option('--harness <name>', 'claude|codex|peri|dsh|other')
-      .option('--check', '只校验入口，不常驻')
+      .option('--check', '连接服务并调用 network_me，校验凭据与服务可达')
+      .option('--check-config', '只展示入口配置，不连接服务')
       .option('--dry-run', '--check 的别名')
       .option('--state-dir <dir>', 'claude/peri 状态目录；默认使用临时目录')
+      .option('--max-runtime <seconds>', '最长运行秒数；peri 默认 86400，0 表示不限制')
       .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')
       .option('--max-wait <seconds>', 'other 单次最长等待秒数；默认 360')
       .option('--poll <seconds>', 'other 轮询间隔秒数；默认 3')
@@ -855,7 +871,7 @@ function buildProgram(): Command {
   monitorCommand
     .addHelpText(
       'after',
-      '\n示例\n  agentnet monitor --harness claude --check\n  agentnet monitor --harness codex --check\n  agentnet monitor --harness peri --check\n  agentnet monitor --harness dsh --check\n  agentnet monitor --harness other --check\n  agentnet monitor --harness dsh start  # 自动检测版本与插件，缺失时安装\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
+      '\n示例\n  agentnet monitor --harness peri --check        # 真实握手，失败非 0\n  agentnet monitor --harness codex --check-config # 只看入口配置\n  agentnet monitor --harness peri --json         # 每行一个 JSON 事件\n  agentnet monitor --harness peri --max-runtime 3600\n  agentnet monitor --harness dsh start  # 自动检测版本与插件，缺失时安装\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
     )
     .action(
       async (
@@ -869,8 +885,11 @@ function buildProgram(): Command {
           {
             harness: options.harness ?? globals.harness,
             check: options.check ?? globals.check,
+            checkConfig: options.checkConfig ?? globals.checkConfig,
             dryRun: options.dryRun ?? globals.dryRun,
             stateDir: options.stateDir ?? globals.stateDir,
+            json: globals.json === true,
+            maxRuntime: options.maxRuntime ?? globals.maxRuntime,
             log: options.log ?? globals.log,
             maxWait: options.maxWait ?? globals.maxWait,
             poll: options.poll ?? globals.poll,
@@ -963,7 +982,15 @@ function errorInfo(error: unknown): { code: string; message: string; details?: u
 }
 
 export async function main(argv: readonly string[]): Promise<number> {
-  const token = tokenFromArgv(argv) ?? process.env.AGENTNET_TOKEN ?? null;
+  let token = tokenFromArgv(argv) ?? process.env.AGENTNET_TOKEN ?? null;
+  if (token === null) {
+    // 仅用于错误脱敏：token 文件的权限/存在性错误不能阻止 --help 或 issue。
+    try {
+      token = resolveToken();
+    } catch {
+      token = null;
+    }
+  }
   const program = buildProgram();
   commandExitCode = 0;
   try {

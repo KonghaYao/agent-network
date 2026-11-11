@@ -30,7 +30,7 @@ function fail(line: string): number {
 
 export async function runClaudeMonitor(
   context: MonitorContext,
-  options: { stateDir?: string } = {},
+  options: { stateDir?: string; json?: boolean; maxRuntimeMs?: number } = {},
 ): Promise<number> {
   const token = context.token;
   if (!token) return fail('ERROR type=credential message=missing_token');
@@ -71,6 +71,9 @@ export async function runClaudeMonitor(
       state,
       signal: controller.signal,
       bodyPreviewChars: BODY_PREVIEW_CHARS,
+      json: options.json === true,
+      maxRuntimeMs: options.maxRuntimeMs ?? 0,
+      onDeadline: stop,
     });
     return await engine.run();
   } finally {

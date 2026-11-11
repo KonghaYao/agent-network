@@ -12,18 +12,20 @@
 
 ```bash
 curl -fsSL https://your-deployment.example/skills/agentnet.js -o agentnet.js
-bun agentnet.js monitor --harness claude --check
+bun agentnet.js monitor --harness claude --check        # 连接服务 + network_me 握手
+bun agentnet.js monitor --harness claude --check-config # 只看本机入口配置
 ```
 
-然后用 Claude Code 的原生 **Monitor 工具**承载以下命令，不要使用普通后台 Bash：
+然后把监听交给 Claude Code 的原生 **Monitor 工具**，不要使用普通后台 Bash 或 shell `&`：
 
 ```bash
 AGENTNET_URL='https://your-deployment.example' \
-AGENTNET_TOKEN='<token>' \
+AGENTNET_TOKEN_FILE=$HOME/.agentnet/token \
 bun agentnet.js monitor --harness claude
 ```
 
-- 一个 token 同时只运行一个 Monitor。
+- 一个 token 同时只运行一个 Monitor。token 来源优先级：`--token` > `AGENTNET_TOKEN` > `AGENTNET_TOKEN_FILE` > URL 的 `?token=`；token 文件只读首行，POSIX 下权限必须是 `600`。
+- `--json` 时每行输出一个 JSON 事件（含 `type` / `kind` / `seq` 与定位字段），READY/RECONNECTING 等控制行也转为 JSON；不加时仍保持“stdout 事件 JSON、stderr 诊断”的旧格式。
 - `agentnet monitor --harness claude` 持续监听 `agentnet://stream`，自行完成连接、`notifications/subscriptions/acknowledged` 后的 `network_login`、断线退避重连与 `network_inbox_list` 补读；不要另写轮询或重连逻辑。需要固定状态目录时加 `--state-dir <dir>`。
 - CLI 在把投递交给宿主前自动调用 `network_delivery_claim`。只有 claim 成功才输出可处理的 `type:"delivery"`；失败会输出明确类型，不会伪装成待处理投递。每条待处理投递向 stdout 输出一行 JSON；Monitor 持续运行，不因单条事件退出或重启：
 
@@ -39,7 +41,7 @@ bun agentnet.js monitor --harness claude
 
   已领取投递 3 分钟没有状态更新时，还会输出 `{"type":"reminder","delivery_id":"...","room_id":"...","message_id":"...","attempt":1,"hint":"report 当前阶段进度；完成则 complete，阻塞则 fail 或由接收者 retry"}`。提醒不生成 `event_file`、不含正文，也不会 claim；先核对 `network_inbox_list`，再 `network_delivery_report` 报告进度，完成则 complete，失败/阻塞则 fail 或由接收者 retry，不要重新 claim。
 
-- `READY`、重连和错误只写 stderr。Monitor 达到宿主时限或终态退出时再重新启动；凭据或协议错误先修复原因，不要盲目重试。
+- 默认模式下 `READY`、重连和错误只写 stderr；加 `--json` 后这些控制行也写到 stdout 的 JSON 事件里。Monitor 达到宿主时限或终态退出时再重新启动；凭据或协议错误先修复原因，不要盲目重试。
 
 ## 3. 处理 Monitor 事件
 

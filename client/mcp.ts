@@ -9,6 +9,8 @@
  * 可读、可脚本判断，同时绝不把 token 写进日志或错误输出。
  */
 
+import { readFileSync, statSync } from 'node:fs';
+
 export const PROTOCOL_VERSION = '2026-07-28';
 export const CLIENT_NAME = 'agentnet-cli';
 export const CLIENT_VERSION = '3.0.0';
@@ -63,6 +65,58 @@ export function redactValue(value: unknown, token: string | null | undefined): u
   return value;
 }
 
+/**
+ * 读取 AGENTNET_TOKEN_FILE。
+ *
+ * - 只取首行并去掉首尾空白；空文件视为配置错误。
+ * - POSIX 下要求权限恰好为 600，避免凭据被同机其他用户读取；Windows 不做这项检查。
+ * - 错误信息只包含路径与权限，不回显文件内容。
+ */
+function readTokenFile(path: string): string {
+  let stats;
+  try {
+    stats = statSync(path);
+  } catch {
+    throw new CliError(`无法读取 AGENTNET_TOKEN_FILE：${path}（检查路径与权限）`);
+  }
+  if (!stats.isFile()) {
+    throw new CliError(`AGENTNET_TOKEN_FILE 不是普通文件：${path}`);
+  }
+  if (process.platform !== 'win32') {
+    const mode = stats.mode & 0o777;
+    if (mode !== 0o600) {
+      throw new CliError(
+        `AGENTNET_TOKEN_FILE 权限必须是 600（当前 ${mode.toString(8).padStart(3, '0')}）：` +
+          `运行 chmod 600 ${path} 后重试`,
+      );
+    }
+  }
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    throw new CliError(`无法读取 AGENTNET_TOKEN_FILE：${path}（检查路径与权限）`);
+  }
+  const first = (text.split(/\r?\n/u)[0] ?? '').trim();
+  if (first.length === 0) {
+    throw new CliError(`AGENTNET_TOKEN_FILE 为空：${path}`);
+  }
+  return first;
+}
+
+/**
+ * token 优先级：`--token` > `AGENTNET_TOKEN` > `AGENTNET_TOKEN_FILE` > URL 的
+ * `?token=`。高优先级来源存在时不会读取低优先级来源，也不会打印 token。
+ */
+export function resolveToken(explicit?: string): string | null {
+  if (explicit !== undefined && explicit !== '') return explicit;
+  const envToken = process.env.AGENTNET_TOKEN;
+  if (envToken !== undefined && envToken !== '') return envToken;
+  const tokenFile = process.env.AGENTNET_TOKEN_FILE;
+  if (tokenFile !== undefined && tokenFile !== '') return readTokenFile(tokenFile);
+  return null;
+}
+
 function normalizeEndpoint(raw: string): { endpoint: string; urlToken: string | null } {
   let parsed: URL;
   try {
@@ -87,7 +141,7 @@ export function resolveConfig(options: GlobalCliOptions): ResolvedConfig {
     throw new CliError('缺少服务地址：使用 --url 或设置 AGENTNET_URL');
   }
   const { endpoint, urlToken } = normalizeEndpoint(raw);
-  const token = options.token ?? process.env.AGENTNET_TOKEN ?? urlToken;
+  const token = resolveToken(options.token) ?? urlToken;
   const parsed = new URL(endpoint);
   const basePath = parsed.pathname.replace(/\/mcp$/u, '').replace(/\/+$/u, '');
   return {

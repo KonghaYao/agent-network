@@ -42,6 +42,11 @@ const IDLE_TIMEOUT_MS = 15_000;
 const CLAIMED_RESET_MS = 30_000;
 const SAFE_ID = /^[A-Za-z0-9_-]+$/u;
 
+/** Peri 宿主 monitor 的单次上限；到期后 CLI 主动结束，避免静默失效。 */
+export const PERI_MAX_RUNTIME_MS = 24 * 60 * 60 * 1000;
+/** 距离 deadline 剩余多少毫秒时输出一次 EXPIRING。 */
+export const EXPIRING_THRESHOLD_MS = 10 * 60 * 1000;
+
 class MonitorStop extends Error {
   constructor(
     readonly logLine: string,
@@ -90,6 +95,14 @@ export interface MonitorEngineOptions {
   /** claim 成功后是否读正文并写 event_file；peri 刻意保持不读。 */
   readBody?: boolean;
   format?: MonitorEventFormat;
+  /** 每行一个 JSON 事件；READY 等诊断也转为 JSON，stdout 不再出现自由文本。 */
+  json?: boolean;
+  /** 最长运行毫秒数；0/缺省表示不限制。 */
+  maxRuntimeMs?: number;
+  /** 临近到期阈值；缺省 EXPIRING_THRESHOLD_MS。 */
+  expiringThresholdMs?: number;
+  /** 到达 deadline 时通知宿主进程停止（通常传 AbortController.abort）。 */
+  onDeadline?: () => void;
 }
 
 type EmitResult = 'emitted' | 'deferred' | 'error';
@@ -187,6 +200,9 @@ export async function claimDelivery(
 
 /** 断线退避：1/2/4/8/16/30 秒，带 ±20% 抖动；dsh 复用同一曲线。 */
 export function reconnectDelay(attempt: number): number {
+  // 验收脚本用固定毫秒覆盖退避，避免等待 31 秒才能进入 DEGRADED；生产不设置。
+  const override = Number(process.env.AGENTNET_MONITOR_RECONNECT_BASE_MS);
+  if (Number.isFinite(override) && override > 0) return override / 1000;
   const base =
     attempt <= 1 ? 1 : attempt === 2 ? 2 : attempt === 3 ? 4 : attempt === 4 ? 8 : attempt === 5 ? 16 : 30;
   const jitter = 0.8 + Math.random() * 0.4;
@@ -214,6 +230,19 @@ function newSubscriptionId(generation: number): string {
   )}`;
 }
 
+/**
+ * `--json` 事件行的粗分类，供宿主用稳定正则过滤：
+ * delivery=可处理投递，reminder=进度提醒，notice=不可处理的 claim 回执，
+ * control=连接/期限事件，error=需要人工修复的错误。
+ */
+export function eventKind(type: string): string {
+  if (type === 'delivery') return 'delivery';
+  if (type === 'reminder') return 'reminder';
+  if (type.startsWith('delivery_')) return 'notice';
+  if (type === 'error') return 'error';
+  return 'control';
+}
+
 export class MonitorEngine {
   private readonly rpc: MonitorRpc;
   private readonly state: MonitorState;
@@ -226,6 +255,10 @@ export class MonitorEngine {
   private readonly prefix: string;
   private readonly readBody: boolean;
   private readonly format: MonitorEventFormat;
+  private readonly json: boolean;
+  private readonly maxRuntimeMs: number;
+  private readonly expiringThresholdMs: number;
+  private readonly onDeadline: (() => void) | undefined;
 
   private meId = '';
   private readyEmitted = false;
@@ -234,6 +267,9 @@ export class MonitorEngine {
   private failStartedAt = 0;
   private degraded = false;
   private generation = 0;
+  private deadlineAt = 0;
+  private expiringEmitted = false;
+  private deadlineTimers: ReturnType<typeof setTimeout>[] = [];
 
   constructor(options: MonitorEngineOptions) {
     this.rpc = options.rpc;
@@ -247,9 +283,14 @@ export class MonitorEngine {
     this.prefix = options.prefix ?? '';
     this.readBody = options.readBody !== false;
     this.format = options.format ?? {};
+    this.json = options.json === true;
+    this.maxRuntimeMs = options.maxRuntimeMs ?? 0;
+    this.expiringThresholdMs = options.expiringThresholdMs ?? EXPIRING_THRESHOLD_MS;
+    this.onDeadline = options.onDeadline;
   }
 
   async run(): Promise<number> {
+    this.startDeadline();
     try {
       await this.ensureIdentity();
       while (!this.signal.aborted) {
@@ -281,14 +322,25 @@ export class MonitorEngine {
         this.reconnectAttempt += 1;
         if (this.failStartedAt === 0) this.failStartedAt = now;
         const delay = reconnectDelay(this.reconnectAttempt);
-        this.diagnostics(
+        this.control(
+          'reconnecting',
+          {
+            reason: outcome.reason,
+            status: outcome.status,
+            attempt: this.reconnectAttempt,
+            delay,
+          },
           `RECONNECTING reason=${outcome.reason} status=${outcome.status} attempt=${this.reconnectAttempt} delay=${delay}`,
         );
         if (
           !this.degraded &&
           (this.reconnectAttempt >= 5 || now - this.failStartedAt >= 60_000)
         ) {
-          this.diagnostics(`DEGRADED attempts=${this.reconnectAttempt} last_reason=${outcome.reason}`);
+          this.control(
+            'degraded',
+            { attempts: this.reconnectAttempt, last_reason: outcome.reason },
+            `DEGRADED attempts=${this.reconnectAttempt} last_reason=${outcome.reason}`,
+          );
           this.degraded = true;
         }
         await abortableSleep(delay * 1000, this.signal);
@@ -296,23 +348,114 @@ export class MonitorEngine {
       return 0;
     } catch (error) {
       return this.reportStop(error);
+    } finally {
+      this.clearDeadlineTimers();
     }
+  }
+
+  /** 启动时输出绝对 deadline，并在阈值与到期时各触发一次。 */
+  private startDeadline(): void {
+    if (this.maxRuntimeMs <= 0) return;
+    const now = Date.now();
+    this.deadlineAt = now + this.maxRuntimeMs;
+    const at = new Date(this.deadlineAt).toISOString();
+    this.control(
+      'deadline',
+      { at, deadline: at, remaining_ms: this.maxRuntimeMs },
+      `DEADLINE at=${at} remaining_ms=${this.maxRuntimeMs}`,
+    );
+
+    const untilExpiring = this.deadlineAt - this.expiringThresholdMs - now;
+    if (untilExpiring <= 0) {
+      this.emitExpiring();
+    } else {
+      this.deadlineTimers.push(setTimeout(() => this.emitExpiring(), untilExpiring));
+    }
+    this.deadlineTimers.push(
+      setTimeout(() => {
+        const deadline = new Date(this.deadlineAt).toISOString();
+        this.control(
+          'expired',
+          { deadline, remaining_ms: 0 },
+          `EXPIRED deadline=${deadline} action=restart_monitor`,
+        );
+        this.onDeadline?.();
+      }, this.maxRuntimeMs),
+    );
+    for (const timer of this.deadlineTimers) {
+      (timer as { unref?: () => void }).unref?.();
+    }
+  }
+
+  private emitExpiring(): void {
+    if (this.expiringEmitted) return;
+    this.expiringEmitted = true;
+    const remaining = Math.max(0, this.deadlineAt - Date.now());
+    const deadline = new Date(this.deadlineAt).toISOString();
+    this.control(
+      'expiring',
+      { deadline, remaining_ms: remaining },
+      `EXPIRING remaining_ms=${remaining} deadline=${deadline}`,
+    );
+  }
+
+  private clearDeadlineTimers(): void {
+    for (const timer of this.deadlineTimers) clearTimeout(timer);
+    this.deadlineTimers = [];
+  }
+
+  /**
+   * 诊断/控制行：文本模式写既有 stderr/stdout 文本，JSON 模式写单个 JSON
+   * 对象。JSON 行始终包含 type/kind/seq 与定位字段，缺失时显式 null。
+   */
+  private control(type: string, fields: JsonObject, textLine: string): void {
+    if (!this.json) {
+      this.diagnostics(textLine);
+      return;
+    }
+    this.stdout(
+      JSON.stringify({
+        type,
+        kind: eventKind(type),
+        seq: null,
+        delivery_id: null,
+        room_id: null,
+        message_id: null,
+        ...fields,
+      }),
+    );
   }
 
   private reportStop(error: unknown): number {
     if (error instanceof MonitorStop) {
-      this.diagnostics(error.logLine);
+      this.control(
+        'error',
+        { code: 'monitor_stopped', exit_code: error.exitCode, message: error.logLine },
+        error.logLine,
+      );
       return error.exitCode;
     }
     if (error instanceof MonitorFatalError) {
       if (error.kind === 'credential') {
-        this.diagnostics('ERROR type=credential message=credential_invalid');
+        this.control(
+          'error',
+          { code: 'credential_invalid', error_type: 'credential' },
+          'ERROR type=credential message=credential_invalid',
+        );
       } else {
-        this.diagnostics(`ERROR type=protocol message=${error.message || 'request_rejected'}`);
+        this.control(
+          'error',
+          { code: 'request_rejected', error_type: 'protocol', message: error.message || 'request_rejected' },
+          `ERROR type=protocol message=${error.message || 'request_rejected'}`,
+        );
       }
       return 1;
     }
-    this.diagnostics('ERROR type=internal message=monitor_failed');
+    this.control(
+      'error',
+      { code: 'monitor_failed', error_type: 'internal' },
+      'ERROR type=internal message=monitor_failed',
+    );
     return 1;
   }
 
@@ -348,27 +491,54 @@ export class MonitorEngine {
     abort: (reason: string) => void,
     subscriptionId: string,
   ): Promise<void> {
+    const wasDegraded = this.degraded;
     let login;
     try {
       login = await this.rpc.callTool('network_login', {});
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
-      this.diagnostics('ERROR type=login message=network_login_failed');
+      this.control(
+        'error',
+        { code: 'network_login_failed', error_type: 'login' },
+        'ERROR type=login message=network_login_failed',
+      );
       abort('login_failed');
       return;
     }
     if (!login.ok) {
-      this.diagnostics('ERROR type=login message=network_login_failed');
+      this.control(
+        'error',
+        { code: 'network_login_failed', error_type: 'login' },
+        'ERROR type=login message=network_login_failed',
+      );
       abort('login_failed');
       return;
     }
 
     const pending = asNumber(login.data.pending_count, 0);
     if (!this.readyEmitted) {
-      this.diagnostics(`READY actor=${this.meId} pending=${pending} subscription=${subscriptionId}`);
+      this.control(
+        'ready',
+        { actor: this.meId, pending, subscription: subscriptionId, reconnect: false },
+        `READY actor=${this.meId} pending=${pending} subscription=${subscriptionId}`,
+      );
       this.readyEmitted = true;
+    } else if (wasDegraded) {
+      this.control(
+        'recovered',
+        { actor: this.meId, pending, subscription: subscriptionId },
+        `RECOVERED actor=${this.meId} pending=${pending} subscription=${subscriptionId}`,
+      );
     } else {
-      this.diagnostics(
+      this.control(
+        'ready',
+        {
+          actor: this.meId,
+          pending,
+          subscription: subscriptionId,
+          reconnect: true,
+          reason: this.lastDisconnectReason,
+        },
         `READY actor=${this.meId} pending=${pending} subscription=${subscriptionId} reconnect=1 reason=${this.lastDisconnectReason}`,
       );
     }
@@ -441,11 +611,19 @@ export class MonitorEngine {
       outcome = await listInboxPages(this.rpc, 'pending');
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
-      this.diagnostics('ERROR type=inbox message=pending_lookup_failed');
+      this.control(
+        'error',
+        { code: 'pending_lookup_failed', error_type: 'inbox' },
+        'ERROR type=inbox message=pending_lookup_failed',
+      );
       return null;
     }
     if (!outcome.ok) {
-      this.diagnostics('ERROR type=inbox message=pending_lookup_failed');
+      this.control(
+        'error',
+        { code: 'pending_lookup_failed', error_type: 'inbox' },
+        'ERROR type=inbox message=pending_lookup_failed',
+      );
       return null;
     }
     const map = new Map<string, number>();
@@ -465,11 +643,19 @@ export class MonitorEngine {
       outcome = await listInboxPages(this.rpc, 'pending');
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
-      this.diagnostics('ERROR type=inbox message=snapshot_failed');
+      this.control(
+        'error',
+        { code: 'snapshot_failed', error_type: 'inbox' },
+        'ERROR type=inbox message=snapshot_failed',
+      );
       return;
     }
     if (!outcome.ok) {
-      this.diagnostics('ERROR type=inbox message=snapshot_failed');
+      this.control(
+        'error',
+        { code: 'snapshot_failed', error_type: 'inbox' },
+        'ERROR type=inbox message=snapshot_failed',
+      );
       return;
     }
 
@@ -488,11 +674,19 @@ export class MonitorEngine {
   private async emitFound(item: JsonObject, source: string): Promise<EmitResult> {
     const fields = deliveryFields(item);
     if (this.readBody && !SAFE_ID.test(fields.deliveryId)) {
-      this.diagnostics('ERROR type=format message=invalid_delivery_reference');
+      this.control(
+        'error',
+        { code: 'invalid_delivery_reference', error_type: 'format' },
+        'ERROR type=format message=invalid_delivery_reference',
+      );
       return 'error';
     }
     if (this.readBody && !SAFE_ID.test(fields.messageId)) {
-      this.diagnostics('ERROR type=format message=invalid_message_reference');
+      this.control(
+        'error',
+        { code: 'invalid_message_reference', error_type: 'format' },
+        'ERROR type=format message=invalid_message_reference',
+      );
       return 'error';
     }
 
@@ -509,7 +703,11 @@ export class MonitorEngine {
     if (!this.readBody) {
       const delivery = this.format.deliveryWithoutBody;
       if (!delivery) {
-        this.diagnostics('ERROR type=internal message=monitor_failed');
+        this.control(
+          'error',
+          { code: 'monitor_failed', error_type: 'internal' },
+          'ERROR type=internal message=monitor_failed',
+        );
         return 'error';
       }
       this.emitEvent(delivery(item, fields, claim.claim, source));
@@ -529,7 +727,11 @@ export class MonitorEngine {
         eventFilePayload(fields, claim.claim, source, read.body),
       );
     } catch {
-      this.diagnostics(`ERROR type=message message=event_write_failed delivery_id=${fields.deliveryId}`);
+      this.control(
+        'error',
+        { code: 'event_write_failed', error_type: 'message', delivery_id: fields.deliveryId },
+        `ERROR type=message message=event_write_failed delivery_id=${fields.deliveryId}`,
+      );
       this.emitEvent(readFailedEvent(fields, claim.claim, source));
       return 'emitted';
     }
@@ -546,8 +748,26 @@ export class MonitorEngine {
     return 'emitted';
   }
 
-  /** 事件行只走 stdout；peri 的前缀 `ALERT ` 在此统一追加。 */
+  /**
+   * 事件行只走 stdout；peri 的前缀 `ALERT ` 在此统一追加。
+   * `--json` 时输出去掉前缀的单个 JSON 对象，并补齐宿主可稳定过滤的字段。
+   */
   private emitEvent(event: JsonObject): void {
+    if (this.json) {
+      const type = asString(event.type);
+      this.stdout(
+        JSON.stringify({
+          ...event,
+          type,
+          kind: eventKind(type),
+          seq: event.seq ?? null,
+          delivery_id: event.delivery_id ?? null,
+          room_id: event.room_id ?? null,
+          message_id: event.message_id ?? null,
+        }),
+      );
+      return;
+    }
     this.stdout(`${this.prefix}${JSON.stringify(event)}`);
   }
 
@@ -566,17 +786,29 @@ export class MonitorEngine {
         outcome = await this.rpc.callTool('network_message_read', args);
       } catch (error) {
         if (error instanceof MonitorFatalError) throw error;
-        this.diagnostics(`ERROR type=message message=read_failed delivery_id=${deliveryId}`);
+        this.control(
+          'error',
+          { code: 'read_failed', error_type: 'message', delivery_id: deliveryId },
+          `ERROR type=message message=read_failed delivery_id=${deliveryId}`,
+        );
         return { ok: false };
       }
       if (!outcome.ok) {
-        this.diagnostics(`ERROR type=message message=read_failed delivery_id=${deliveryId}`);
+        this.control(
+          'error',
+          { code: 'read_failed', error_type: 'message', delivery_id: deliveryId },
+          `ERROR type=message message=read_failed delivery_id=${deliveryId}`,
+        );
         return { ok: false };
       }
 
       const chunk = outcome.data.chunk;
       if (chunk !== undefined && chunk !== null && typeof chunk !== 'string') {
-        this.diagnostics(`ERROR type=message message=chunk_decode_failed delivery_id=${deliveryId}`);
+        this.control(
+          'error',
+          { code: 'chunk_decode_failed', error_type: 'message', delivery_id: deliveryId },
+          `ERROR type=message message=chunk_decode_failed delivery_id=${deliveryId}`,
+        );
         return { ok: false };
       }
       chunks.push(typeof chunk === 'string' ? chunk : '');
@@ -585,12 +817,20 @@ export class MonitorEngine {
       }
       const next = asString(outcome.data.next_cursor);
       if (next.length === 0 || next === cursor) {
-        this.diagnostics(`ERROR type=message message=invalid_chunk_cursor delivery_id=${deliveryId}`);
+        this.control(
+          'error',
+          { code: 'invalid_chunk_cursor', error_type: 'message', delivery_id: deliveryId },
+          `ERROR type=message message=invalid_chunk_cursor delivery_id=${deliveryId}`,
+        );
         return { ok: false };
       }
       cursor = next;
     }
-    this.diagnostics(`ERROR type=message message=invalid_chunk_cursor delivery_id=${deliveryId}`);
+    this.control(
+      'error',
+      { code: 'invalid_chunk_cursor', error_type: 'message', delivery_id: deliveryId },
+      `ERROR type=message message=invalid_chunk_cursor delivery_id=${deliveryId}`,
+    );
     return { ok: false };
   }
 }

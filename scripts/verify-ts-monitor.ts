@@ -74,6 +74,8 @@ interface MockState {
   /** dsh 测试用：覆盖 network_login 的 pending/head 快照。 */
   loginPending: number | null;
   loginHeadSeq: string | null;
+  /** 接下来 N 次 subscriptions/listen 返回 500，用于触发 DEGRADED/RECOVERED。 */
+  listenFailures: number;
 }
 
 interface MockServer {
@@ -166,6 +168,8 @@ interface MockOptions {
   credentialInvalid?: boolean;
   /** network_me 返回的身份类型；默认 agent。 */
   meKind?: string;
+  /** 启动时先失败 N 次 subscriptions/listen。 */
+  listenFailures?: number;
 }
 
 function createMock(options: MockOptions = {}): MockServer {
@@ -182,6 +186,7 @@ function createMock(options: MockOptions = {}): MockServer {
     roomGetCalls: new Map(),
     loginPending: null,
     loginHeadSeq: null,
+    listenFailures: options.listenFailures ?? 0,
   };
 
   const stopKeepalives = (): void => {
@@ -242,6 +247,10 @@ function createMock(options: MockOptions = {}): MockServer {
         return rpc(body.id, { supportedVersions: ['2026-07-28'] });
       }
       if (body.method === 'subscriptions/listen') {
+        if (state.listenFailures > 0) {
+          state.listenFailures -= 1;
+          return new Response('subscription unavailable', { status: 500 });
+        }
         let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
@@ -500,8 +509,12 @@ function startWatcher(base: string, extraEnv: Record<string, string> = {}): Runn
   });
 }
 
-function startPeriWatcher(base: string, extraEnv: Record<string, string> = {}): RunningWatcher {
-  return startProcess([process.execPath, CLI, 'monitor', '--harness', 'peri'], {
+function startPeriWatcher(
+  base: string,
+  extraEnv: Record<string, string> = {},
+  extraArgs: string[] = [],
+): RunningWatcher {
+  return startProcess([process.execPath, CLI, 'monitor', '--harness', 'peri', ...extraArgs], {
     AGENTNET_URL: base,
     AGENTNET_TOKEN: TOKEN,
     ...extraEnv,
@@ -849,6 +862,13 @@ async function runPeriChecks(): Promise<void> {
     );
     check('peri READY 不写 stderr', !watcher.stderr.join('\n').includes('READY'));
     check('peri stderr 不含 token', !watcher.stderr.join('\n').includes(TOKEN));
+    check(
+      'peri 启动输出 deadline 与剩余毫秒',
+      watcher.stdout.some((line) =>
+        /^DEADLINE at=\d{4}-\d{2}-\d{2}T[^ ]+ remaining_ms=86400000$/.test(line),
+      ),
+      watcher.stdout.slice(0, 3),
+    );
 
     // 冲突：别人已领取，输出不可处理的 claim 通知，不带正文。
     mock.state.pending.set('dlv_other', delivery('dlv_other'));
@@ -1050,7 +1070,8 @@ async function runPeriChecks(): Promise<void> {
       'peri stdout 每行是 ALERT 或诊断',
       watcher.stdout.every(
         (line) =>
-          line.startsWith('ALERT ') || /^(READY|RECONNECTING|DEGRADED|ERROR) /.test(line),
+          line.startsWith('ALERT ') ||
+          /^(READY|RECOVERED|RECONNECTING|DEGRADED|DEADLINE|EXPIRING|EXPIRED|ERROR) /.test(line),
       ),
       watcher.stdout,
     );
@@ -1068,6 +1089,156 @@ async function runPeriChecks(): Promise<void> {
   } finally {
     await watcher.kill();
     mock.stop();
+  }
+}
+
+async function runPeriRecoveryCheck(): Promise<void> {
+  const mock = createMock();
+  const watcher = startPeriWatcher(mock.base, { AGENTNET_MONITOR_RECONNECT_BASE_MS: '1' });
+  try {
+    await waitForLine(watcher.stdout, (line) => line.startsWith('READY '), 'recovery READY');
+    mock.state.listenFailures = 5;
+    mock.closeStream();
+    const degraded = await waitForLine(
+      watcher.stdout,
+      (line) => line.startsWith('DEGRADED '),
+      'recovery DEGRADED',
+      15_000,
+    );
+    check('peri DEGRADED 带 attempts 与原因', /^DEGRADED attempts=\d+ last_reason=/.test(degraded), degraded);
+
+    const recovered = await waitForLine(
+      watcher.stdout,
+      (line) => line.startsWith('RECOVERED '),
+      'recovery RECOVERED',
+      15_000,
+    );
+    check(
+      'peri RECOVERED 带 actor/pending/subscription',
+      /^RECOVERED actor=agt_me pending=\d+ subscription=sub-/.test(recovered),
+      recovered,
+    );
+    check(
+      'peri RECOVERED 后不再重复输出 READY reconnect',
+      watcher.stdout.filter((line) => line.startsWith('RECOVERED ')).length === 1,
+      watcher.stdout,
+    );
+  } finally {
+    await watcher.kill();
+    mock.stop();
+  }
+}
+
+async function runPeriJsonChecks(): Promise<void> {
+  const mock = createMock();
+  const watcher = startPeriWatcher(mock.base, {}, ['--json']);
+  try {
+    const readyLine = await waitForLine(
+      watcher.stdout,
+      (line) => parseEvent(line)?.type === 'ready',
+      'peri json READY',
+    );
+    const ready = parseEvent(readyLine);
+    expect(ready !== null, 'peri json READY 必须是 JSON');
+    checkEqual('peri --json ready kind', ready.kind, 'control');
+    checkEqual('peri --json ready seq', ready.seq, null);
+
+    const deadlineLine = await waitForLine(
+      watcher.stdout,
+      (line) => parseEvent(line)?.type === 'deadline',
+      'peri json DEADLINE',
+    );
+    const deadline = parseEvent(deadlineLine);
+    expect(deadline !== null, 'peri json DEADLINE 必须是 JSON');
+    checkEqual('peri --json deadline kind', deadline.kind, 'control');
+    checkEqual('peri --json deadline remaining_ms', deadline.remaining_ms, 86_400_000);
+    checkEqual('peri --json deadline seq', deadline.seq, null);
+    check(
+      'peri --json 不输出 ALERT 前缀',
+      watcher.stdout.every((line) => !line.startsWith('ALERT ')),
+      watcher.stdout,
+    );
+    check(
+      'peri --json 每行都是 JSON',
+      watcher.stdout.every((line) => parseEvent(line) !== null),
+      watcher.stdout,
+    );
+
+    mock.state.pending.set('dlv_json', delivery('dlv_json'));
+    sendItems(mock, [notificationItem('dlv_json', 'delivery.created', 'evt_json')]);
+    const event = await waitForEvent(watcher.stdout, 'delivery', 'dlv_json');
+    checkEqual('peri --json delivery kind', event.kind, 'delivery');
+    checkEqual('peri --json delivery seq', event.seq, '1');
+    checkEqual('peri --json delivery room_id', event.room_id, 'rm_test');
+    checkEqual('peri --json delivery message_id', event.message_id, 'msg_dlv_json');
+    checkEqual('peri --json delivery delivery_id', event.delivery_id, 'dlv_json');
+    check(
+      'peri --json 可用 type 正则唤醒',
+      watcher.stdout.some((line) => line.includes('"type":"delivery"')),
+      watcher.stdout,
+    );
+    check('peri --json 不含 token', !watcher.stdout.join('\n').includes(TOKEN));
+  } finally {
+    await watcher.kill();
+    mock.stop();
+  }
+}
+
+async function runPeriDeadlineChecks(): Promise<void> {
+  const mock = createMock();
+  const watcher = startPeriWatcher(mock.base, {}, ['--max-runtime', '2']);
+  try {
+    await waitForLine(watcher.stdout, (line) => line.startsWith('READY '), 'deadline READY');
+    const expiring = await waitForLine(
+      watcher.stdout,
+      (line) => line.startsWith('EXPIRING '),
+      'deadline EXPIRING',
+    );
+    check(
+      'peri 文本 EXPIRING 带 remaining_ms/deadline',
+      /^EXPIRING remaining_ms=\d+ deadline=\d{4}-\d{2}-\d{2}T/.test(expiring),
+      expiring,
+    );
+    const expired = await waitForLine(
+      watcher.stdout,
+      (line) => line.startsWith('EXPIRED '),
+      'deadline EXPIRED',
+    );
+    check('peri EXPIRED 提示重启', expired.includes('action=restart_monitor'), expired);
+    const code = await Promise.race([watcher.exited, Bun.sleep(5000).then(() => 999)]);
+    checkEqual('peri 到达 deadline 退出 0', code, 0);
+    checkEqual(
+      'peri 文本 EXPIRING 只输出一次',
+      watcher.stdout.filter((line) => line.startsWith('EXPIRING ')).length,
+      1,
+    );
+  } finally {
+    await watcher.kill();
+    mock.stop();
+  }
+
+  const jsonMock = createMock();
+  const jsonWatcher = startPeriWatcher(jsonMock.base, {}, ['--json', '--max-runtime', '2']);
+  try {
+    const expiring = await waitForEvent(jsonWatcher.stdout, 'expiring');
+    checkEqual('peri --json expiring kind', expiring.kind, 'control');
+    checkEqual('peri --json expiring seq', expiring.seq, null);
+    check(
+      'peri --json expiring remaining_ms 是数字',
+      typeof expiring.remaining_ms === 'number',
+      expiring,
+    );
+    await Bun.sleep(300);
+    checkEqual(
+      'peri --json EXPIRING 只输出一次',
+      jsonWatcher.stdout.filter((line) => parseEvent(line)?.type === 'expiring').length,
+      1,
+    );
+    const code = await Promise.race([jsonWatcher.exited, Bun.sleep(5000).then(() => 999)]);
+    checkEqual('peri --json 到达 deadline 退出 0', code, 0);
+  } finally {
+    await jsonWatcher.kill();
+    jsonMock.stop();
   }
 }
 
@@ -1834,63 +2005,63 @@ async function runOtherChecks(): Promise<void> {
   check('只输出新增 ALERT（2）', alertWatcher.stdout[2]?.includes('dlv_new2') ?? false);
   check('不重复输出旧 ALERT', !alertWatcher.stdout.join('\n').includes('dlv_old'));
 
-  // --check 不连接服务、不输出 token。
+  // --check-config 不连接服务、不输出 token。
   const claudeCheck = Bun.spawnSync({
-    cmd: [process.execPath, CLI, 'monitor', '--harness', 'claude', '--check'],
+    cmd: [process.execPath, CLI, 'monitor', '--harness', 'claude', '--check-config'],
     cwd: ROOT,
     env: { ...process.env, AGENTNET_TOKEN: TOKEN },
     stdout: 'pipe',
   });
-  checkEqual('claude --check 退出码', claudeCheck.exitCode, 0);
-  check('claude --check 标记 TS 引擎', new TextDecoder().decode(claudeCheck.stdout).includes('engine=ts'));
+  checkEqual('claude --check-config 退出码', claudeCheck.exitCode, 0);
+  check('claude --check-config 标记 TS 引擎', new TextDecoder().decode(claudeCheck.stdout).includes('engine=ts'));
 
   const otherCheck = Bun.spawnSync({
-    cmd: [process.execPath, CLI, 'monitor', '--harness', 'other', '--check', '--log', alertPath],
+    cmd: [process.execPath, CLI, 'monitor', '--harness', 'other', '--check-config', '--log', alertPath],
     cwd: ROOT,
     env: { ...process.env, AGENTNET_TOKEN: TOKEN },
     stdout: 'pipe',
   });
-  checkEqual('other --check 退出码', otherCheck.exitCode, 0);
+  checkEqual('other --check-config 退出码', otherCheck.exitCode, 0);
   const otherCheckOutput = new TextDecoder().decode(otherCheck.stdout);
-  check('other --check 标记 TS 引擎', otherCheckOutput.includes('engine=ts'));
-  check('other --check 明示尚未连接', otherCheckOutput.includes('connected=false'));
+  check('other --check-config 标记 TS 引擎', otherCheckOutput.includes('engine=ts'));
+  check('other --check-config 明示尚未连接', otherCheckOutput.includes('connected=false'));
   const badOtherCheck = Bun.spawnSync({
-    cmd: [process.execPath, CLI, 'monitor', '--harness', 'other', '--check', '--poll', '-1'],
+    cmd: [process.execPath, CLI, 'monitor', '--harness', 'other', '--check-config', '--poll', '-1'],
     env: { ...process.env, AGENTNET_TOKEN: TOKEN },
     stdout: 'pipe',
   });
-  checkEqual('other --check 拒绝非法 poll', badOtherCheck.exitCode, 1);
-  check('other --check 错误与启动一致', new TextDecoder().decode(badOtherCheck.stdout).includes('invalid_poll'));
-  check('--check 输出不含 token', !otherCheckOutput.includes(TOKEN));
+  checkEqual('other --check-config 拒绝非法 poll', badOtherCheck.exitCode, 1);
+  check('other --check-config 错误与启动一致', new TextDecoder().decode(badOtherCheck.stdout).includes('invalid_poll'));
+  check('--check-config 输出不含 token', !otherCheckOutput.includes(TOKEN));
 
   const periCheck = Bun.spawnSync({
-    cmd: [process.execPath, CLI, 'monitor', '--harness', 'peri', '--check'],
+    cmd: [process.execPath, CLI, 'monitor', '--harness', 'peri', '--check-config'],
     cwd: ROOT,
     env: { ...process.env, AGENTNET_TOKEN: TOKEN },
     stdout: 'pipe',
   });
-  checkEqual('peri --check 退出码', periCheck.exitCode, 0);
+  checkEqual('peri --check-config 退出码', periCheck.exitCode, 0);
   const periCheckOutput = new TextDecoder().decode(periCheck.stdout);
-  check('peri --check 标记 TS 引擎', periCheckOutput.includes('engine=ts'));
-  check('peri --check 声明自动 claim', periCheckOutput.includes('auto_claim=1'));
-  check('peri --check 声明不读正文', periCheckOutput.includes('read_body=0'));
-  check('peri --check 不执行旧脚本', !periCheckOutput.includes('peri-watch.sh'));
-  check('peri --check 输出不含 token', !periCheckOutput.includes(TOKEN));
+  check('peri --check-config 标记 TS 引擎', periCheckOutput.includes('engine=ts'));
+  check('peri --check-config 声明自动 claim', periCheckOutput.includes('auto_claim=1'));
+  check('peri --check-config 声明不读正文', periCheckOutput.includes('read_body=0'));
+  check('peri --check-config 不执行旧脚本', !periCheckOutput.includes('peri-watch.sh'));
+  check('peri --check-config 输出不含 token', !periCheckOutput.includes(TOKEN));
 
   const dshCheck = Bun.spawnSync({
-    cmd: [process.execPath, CLI, 'monitor', '--harness', 'dsh', '--check', 'wait', '5'],
+    cmd: [process.execPath, CLI, 'monitor', '--harness', 'dsh', '--check-config', 'wait', '5'],
     cwd: ROOT,
     env: { ...process.env, AGENTNET_TOKEN: TOKEN },
     stdout: 'pipe',
   });
-  checkEqual('dsh --check 退出码', dshCheck.exitCode, 0);
+  checkEqual('dsh --check-config 退出码', dshCheck.exitCode, 0);
   const dshCheckOutput = new TextDecoder().decode(dshCheck.stdout);
-  check('dsh --check 标记 TS 引擎', dshCheckOutput.includes('engine=ts'));
-  check('dsh --check 声明不 claim', dshCheckOutput.includes('auto_claim=0'));
-  check('dsh --check 声明不读正文', dshCheckOutput.includes('read_body=0'));
-  check('dsh --check 透传子命令参数', dshCheckOutput.includes('args=wait 5'));
-  check('dsh --check 不执行旧脚本', !dshCheckOutput.includes('dsh-watch.sh'));
-  check('dsh --check 输出不含 token', !dshCheckOutput.includes(TOKEN));
+  check('dsh --check-config 标记 TS 引擎', dshCheckOutput.includes('engine=ts'));
+  check('dsh --check-config 声明不 claim', dshCheckOutput.includes('auto_claim=0'));
+  check('dsh --check-config 声明不读正文', dshCheckOutput.includes('read_body=0'));
+  check('dsh --check-config 透传子命令参数', dshCheckOutput.includes('args=wait 5'));
+  check('dsh --check-config 不执行旧脚本', !dshCheckOutput.includes('dsh-watch.sh'));
+  check('dsh --check-config 输出不含 token', !dshCheckOutput.includes(TOKEN));
 
   await rm(workdir, { recursive: true, force: true });
 }
@@ -1942,6 +2113,12 @@ async function main(): Promise<void> {
   await runCleanupCheck();
   console.log('TS monitor: peri harness');
   await runPeriChecks();
+  console.log('TS monitor: peri DEGRADED/RECOVERED');
+  await runPeriRecoveryCheck();
+  console.log('TS monitor: peri --json contract');
+  await runPeriJsonChecks();
+  console.log('TS monitor: peri deadline/EXPIRING');
+  await runPeriDeadlineChecks();
   console.log('TS monitor: peri signal cleanup');
   await runPeriCleanupCheck();
   console.log('TS monitor: dsh harness');

@@ -1200,22 +1200,25 @@ async function runDisconnectChecks(): Promise<void> {
 }
 
 async function runCheckAndConfigChecks(): Promise<void> {
-  const checked = await runCli(['monitor', '--harness', 'codex', '--check'], {
+  const checked = await runCli(['monitor', '--harness', 'codex', '--check-config'], {
     AGENTNET_CODEX_SOCKET: '/tmp/mock-codex.sock',
     CODEX_THREAD_ID: 'thr_check',
   });
-  checkEqual('codex --check 退出 0', checked.code, 0);
-  check('codex --check 标记 TS 引擎', checked.stdout.includes('harness=codex engine=ts'));
-  check('codex --check 声明自动 claim', checked.stdout.includes('auto_claim=1'));
-  check('codex --check 声明 app-server 传输', checked.stdout.includes('transport=app-server-ws'));
-  check('codex --check 显示 socket 注入', checked.stdout.includes('socket=/tmp/mock-codex.sock'));
-  check('codex --check 显示线程参数', checked.stdout.includes('thread=thr_check'));
-  check('codex --check 不执行旧脚本', !checked.stdout.includes('codex-watch.sh'));
-  check('codex --check 不含 token', !checked.stdout.includes(TOKEN));
+  checkEqual('codex --check-config 退出 0', checked.code, 0);
+  check('codex --check-config 标记 TS 引擎', checked.stdout.includes('harness=codex engine=ts'));
+  check('codex --check-config 声明自动 claim', checked.stdout.includes('auto_claim=1'));
+  check('codex --check-config 声明 app-server 传输', checked.stdout.includes('transport=app-server-ws'));
+  check('codex --check-config 显示 socket 注入', checked.stdout.includes('socket=/tmp/mock-codex.sock'));
+  check('codex --check-config 显示线程参数', checked.stdout.includes('thread=thr_check'));
+  check('codex --check-config 不执行旧脚本', !checked.stdout.includes('codex-watch.sh'));
+  check('codex --check-config 不含 token', !checked.stdout.includes(TOKEN));
 
-  const autoThread = await runCli(['monitor', '--harness', 'codex', '--check'], {});
-  check('codex --check 无注入时显示 daemon 命令', autoThread.stdout.includes('codex app-server daemon version'));
-  check('codex --check 线程默认 auto', autoThread.stdout.includes('thread=auto'));
+  const autoThread = await runCli(['monitor', '--harness', 'codex', '--check-config'], {});
+  check(
+    'codex --check-config 无注入时显示 daemon 命令',
+    autoThread.stdout.includes('codex app-server daemon version'),
+  );
+  check('codex --check-config 线程默认 auto', autoThread.stdout.includes('thread=auto'));
 
   const withArgs = await runCli(
     ['monitor', '--harness', 'codex', '--check', '--', '--interval', '5'],
