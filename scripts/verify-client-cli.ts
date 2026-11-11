@@ -758,6 +758,100 @@ async function main(): Promise<void> {
     for (const marker of ['skills', 'agentnet', 'monitor', 'login', 'call']) {
       check(`--help 列出 ${marker}`, help.stdout.includes(marker));
     }
+    for (const section of [
+      '首次初始化（没有 token）',
+      '接入已有身份',
+      '常用操作',
+      '监控（宿主差异）',
+      '调试/覆盖',
+      '可复制示例',
+      'token 等同密码',
+    ]) {
+      check(`--help 包含「${section}」`, help.stdout.includes(section), help.stdout);
+    }
+    check(
+      '--help 首次初始化含 issue/register/login/me',
+      help.stdout.includes('agentnet --url <mcp-url> issue') &&
+        help.stdout.includes('register --name') &&
+        help.stdout.includes('me\n'),
+      help.stdout,
+    );
+    check(
+      '--help 监控示例含五种 harness 与 --check',
+      help.stdout.includes('monitor --harness claude|codex|peri|dsh|other') &&
+        help.stdout.includes('--check') &&
+        help.stdout.includes('agentnet skills --harness <name>'),
+      help.stdout,
+    );
+
+    for (const command of ['send', 'inbox', 'reply', 'task', 'monitor', 'skills']) {
+      const subHelp = await runCli(mock.baseUrl, [command, '--help']);
+      checkEqual(`${command} --help 退出 0`, subHelp.code, 0);
+      check(`${command} --help 含示例`, subHelp.stdout.includes('示例'), subHelp.stdout);
+    }
+
+    const skillsHarnessList = await runCli(mock.baseUrl, ['skills']);
+    checkEqual('skills 无 --harness 退出 0', skillsHarnessList.code, 0);
+    for (const harness of ['claude', 'codex', 'peri', 'dsh', 'other']) {
+      check(`skills 列表包含 ${harness}`, skillsHarnessList.stdout.includes(harness));
+    }
+    const callsBeforeGuides = mock.calls.length;
+    for (const harness of ['claude', 'codex', 'peri', 'dsh', 'other']) {
+      const guide = await runCli(mock.baseUrl, ['skills', '--harness', harness]);
+      checkEqual(`skills --harness ${harness} 退出 0`, guide.code, 0);
+      check(
+        `skills --harness ${harness} 输出本宿主指南`,
+        guide.stdout.includes(`HARNESS ${harness}`) &&
+          guide.stdout.includes(`monitor --harness ${harness}`) &&
+          guide.stdout.includes('reply --delivery') &&
+          guide.stdout.includes('群聊 @ 规则') &&
+          guide.stdout.includes('CREDENTIAL_INVALID'),
+        guide.stdout,
+      );
+      check(
+        `skills --harness ${harness} 不输出 token`,
+        !guide.stdout.includes(TOKEN) && !guide.stderr.includes(TOKEN),
+      );
+    }
+    checkEqual(
+      'skills --harness 是纯本地指南，不调用 MCP',
+      mock.calls.length,
+      callsBeforeGuides,
+    );
+    const skillsHarnessJson = await runCli(mock.baseUrl, [
+      'skills',
+      '--harness',
+      'codex',
+      '--json',
+    ]);
+    checkEqual('skills --harness --json 退出 0', skillsHarnessJson.code, 0);
+    check(
+      'skills --harness --json 带 harness 与简短指南',
+      (() => {
+        const payload = JSON.parse(skillsHarnessJson.stdout) as {
+          harness?: string;
+          text?: string;
+        };
+        return payload.harness === 'codex' && (payload.text ?? '').includes('HARNESS codex');
+      })(),
+      skillsHarnessJson.stdout,
+    );
+    const badSkillsHarness = await runCli(mock.baseUrl, ['skills', '--harness', 'nope']);
+    check('未知 skills harness 退出非 0', badSkillsHarness.code !== 0);
+    check(
+      '未知 skills harness 给出可读错误',
+      badSkillsHarness.stderr.includes('未知 harness') &&
+        badSkillsHarness.stderr.includes('claude|codex|peri|dsh|other'),
+      badSkillsHarness.stderr,
+    );
+
+    const missingSendBody = await runCli(mock.baseUrl, ['send', '--room', 'rm_mock']);
+    check('缺少 --body 退出非 0', missingSendBody.code !== 0);
+    check(
+      '缺少 --body 指向 send 示例',
+      missingSendBody.stderr.includes('agentnet send --help'),
+      missingSendBody.stderr,
+    );
 
     const list = await runCli(mock.baseUrl, ['skills', 'list', '--json']);
     checkEqual('skills list 退出 0', list.code, 0);
@@ -819,6 +913,23 @@ async function main(): Promise<void> {
       Array.isArray(emptyInvokeCall?.arguments?.invoke) &&
         (emptyInvokeCall?.arguments?.invoke as unknown[]).length === 0,
       emptyInvokeCall?.arguments,
+    );
+
+    const conflictingInvoke = await runCli(mock.baseUrl, [
+      'send',
+      '--room',
+      'rm_mock',
+      '--body',
+      'conflict',
+      '--invoke',
+      'actor_worker',
+      '--no-invoke',
+    ]);
+    check('--invoke 与 --no-invoke 同时出现退出非 0', conflictingInvoke.code !== 0);
+    check(
+      '--invoke 与 --no-invoke 冲突给出可读错误',
+      conflictingInvoke.stderr.includes('--invoke 与 --no-invoke 不能同时使用'),
+      conflictingInvoke.stderr,
     );
 
     const inbox = await runCli(mock.baseUrl, ['inbox', '--json']);

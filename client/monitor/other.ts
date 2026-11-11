@@ -10,7 +10,11 @@ import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { flagValue, type CliArgs } from '../args';
+export interface OtherHarnessOptions {
+  log?: string;
+  maxWait?: string;
+  poll?: string;
+}
 
 export interface OtherSentinelOptions {
   logPath: string;
@@ -110,14 +114,14 @@ function fail(line: string): number {
   return 1;
 }
 
-export async function runOtherHarness(args: CliArgs): Promise<number> {
+export async function runOtherHarness(options: OtherHarnessOptions = {}): Promise<number> {
   const logPath =
-    flagValue(args, 'log') ??
+    options.log ??
     process.env.LOG ??
     join(homedir(), '.agentnet', 'watch.log');
-  const maxWait = numeric(flagValue(args, 'max-wait') ?? process.env.MAX_WAIT, 360);
+  const maxWait = numeric(options.maxWait ?? process.env.MAX_WAIT, 360);
   if (maxWait === null) return fail('ERROR type=configuration message=invalid_max_wait');
-  const poll = numeric(flagValue(args, 'poll') ?? process.env.POLL, 3);
+  const poll = numeric(options.poll ?? process.env.POLL, 3);
   if (poll === null) return fail('ERROR type=configuration message=invalid_poll');
 
   const controller = new AbortController();

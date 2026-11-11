@@ -16,7 +16,6 @@
 import { closeSync, openSync } from 'node:fs';
 import { open, rm, stat, writeFile } from 'node:fs/promises';
 
-import type { CliArgs } from '../args';
 import { CliError, resolveConfig } from '../mcp';
 import { asArray, asRecord } from '../output';
 import { abortableSleep, reconnectDelay } from './engine';
@@ -837,9 +836,9 @@ async function runWait(argument: string | undefined, signal: AbortSignal): Promi
 
 export async function runDshMonitor(
   context: MonitorContext,
-  args: CliArgs,
+  scriptArgs: readonly string[],
 ): Promise<number> {
-  const raw = [...args.positionals.slice(1), ...args.rest];
+  const raw = [...scriptArgs];
   const command = raw[0] ?? 'run';
   const argument = raw[1];
 

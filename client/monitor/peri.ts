@@ -9,7 +9,6 @@
  * - 订阅、seen、退避、心跳与状态目录复用共享引擎，不执行旧脚本。
  */
 
-import { flagValue, type CliArgs } from '../args';
 import { CliError, resolveConfig } from '../mcp';
 import { asRecord } from '../output';
 import { MonitorEngine, type MonitorEventFormat } from './engine';
@@ -157,7 +156,7 @@ function fail(line: string): number {
 
 export async function runPeriMonitor(
   context: MonitorContext,
-  args: CliArgs,
+  options: { stateDir?: string } = {},
 ): Promise<number> {
   const token = context.token;
   if (!token) return fail('ERROR type=credential message=missing_token');
@@ -176,7 +175,7 @@ export async function runPeriMonitor(
     throw error;
   }
 
-  const stateDirectory = flagValue(args, 'state-dir') ?? process.env.AGENTNET_MONITOR_STATE_DIR;
+  const stateDirectory = options.stateDir ?? process.env.AGENTNET_MONITOR_STATE_DIR;
   const keep = process.env.AGENTNET_MONITOR_KEEP === '1';
   let state: MonitorState;
   try {

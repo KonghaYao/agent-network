@@ -8,7 +8,6 @@
  * - SIGINT/SIGTERM/SIGHUP 清理状态目录后以 0 退出。
  */
 
-import { flagValue, type CliArgs } from '../args';
 import { CliError, resolveConfig } from '../mcp';
 import { MonitorEngine } from './engine';
 import { BODY_PREVIEW_CHARS } from './events';
@@ -31,7 +30,7 @@ function fail(line: string): number {
 
 export async function runClaudeMonitor(
   context: MonitorContext,
-  args: CliArgs,
+  options: { stateDir?: string } = {},
 ): Promise<number> {
   const token = context.token;
   if (!token) return fail('ERROR type=credential message=missing_token');
@@ -50,7 +49,7 @@ export async function runClaudeMonitor(
     throw error;
   }
 
-  const stateDirectory = flagValue(args, 'state-dir') ?? process.env.AGENTNET_MONITOR_STATE_DIR;
+  const stateDirectory = options.stateDir ?? process.env.AGENTNET_MONITOR_STATE_DIR;
   const keep = process.env.AGENTNET_MONITOR_KEEP === '1';
   let state: MonitorState;
   try {

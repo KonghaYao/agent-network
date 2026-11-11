@@ -15,7 +15,6 @@
  * 不执行任何 `.sh`，也不依赖 Python。
  */
 
-import type { CliArgs } from '../args';
 import { CliError, resolveConfig } from '../mcp';
 import { asArray, asNumber, asRecord, asString } from '../output';
 import { abortableSleep, claimDelivery } from './engine';
@@ -816,10 +815,7 @@ function lastLine(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function runCodexMonitor(
-  context: MonitorContext,
-  _args: CliArgs,
-): Promise<number> {
+export async function runCodexMonitor(context: MonitorContext): Promise<number> {
   const token = context.token;
   if (!token) return fail('ERROR type=credential message=missing_token');
   if (/[\r\n]/u.test(token)) return fail('ERROR type=credential message=invalid_token_format');

@@ -1,7 +1,5 @@
 /** 通用逃生口：`call <tool> '<json>'` 覆盖所有 network_* 工具。 */
 
-import type { CliArgs } from '../args';
-import { assertKnownFlags } from '../args';
 import type { McpClient, ResolvedConfig } from '../mcp';
 import { CliError } from '../mcp';
 import { emit, line } from '../output';
@@ -26,15 +24,16 @@ async function readArguments(raw: string | undefined): Promise<Record<string, un
 export async function call(
   client: McpClient,
   config: ResolvedConfig,
-  args: CliArgs,
+  tool: string | undefined,
+  rawArguments: string | undefined,
 ): Promise<void> {
-  assertKnownFlags(args, []);
-  const tool = args.positionals[1];
-  if (!tool) throw new CliError(`用法：agentnet call <tool> '<json>'`);
-  if (!/^[a-z0-9_]+$/u.test(tool)) {
-    throw new CliError(`工具名不合法：${tool}`);
+  if (!tool) {
+    throw new CliError(`用法：agentnet call <tool> '<json>'（运行 agentnet call --help 查看示例）`);
   }
-  const input = await readArguments(args.positionals[2]);
+  if (!/^[a-z0-9_]+$/u.test(tool)) {
+    throw new CliError(`工具名不合法：${tool}（运行 agentnet call --help 查看示例）`);
+  }
+  const input = await readArguments(rawArguments);
   const result = await client.callTool(tool, input);
   // 通用调用不假设输出结构，人类模式同样输出完整 JSON。
   emit(config, result, (value) => {

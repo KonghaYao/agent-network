@@ -1,17 +1,14 @@
 /**
  * Agent Network CLI 入口。
  *
- * 统一入口：技能发现（skills）、Agent Network 工具（agentnet 命令组）
- * 与宿主监控（monitor）。构建产物由 `bun run build:client`
- * 打包到 `public/skills/agentnet.js`，同一份源码也可直接 `bun client/cli.ts` 运行。
+ * argv 解析、全局选项、子命令、帮助与参数错误全部由 commander 负责；
+ * 业务命令在 `client/commands/*`，错误统一映射成 `ERROR [CODE] ...` 与
+ * `--json` 错误信封，退出码保持非 0。构建产物由 `bun run build:client`
+ * 打包到 `public/skills/agentnet.js`，同一份源码也可直接 `bun client/cli.ts`。
  */
 
-import {
-  booleanFlag,
-  flagValue,
-  parseArgs,
-  type CliArgs,
-} from './args';
+import { Command, CommanderError } from 'commander';
+
 import { call } from './commands/call';
 import {
   cancel,
@@ -33,9 +30,9 @@ import {
   upload,
 } from './commands/files';
 import { issue, login, me, register } from './commands/identity';
-import { monitor, type MonitorContext } from './commands/monitor';
+import { monitor, type MonitorContext, type MonitorOptions } from './commands/monitor';
 import { history, inbox, read, rooms, send, sendStatus } from './commands/rooms';
-import { skillsGet, skillsList } from './commands/skills';
+import { skillsGet, skillsHarness, skillsList } from './commands/skills';
 import {
   taskMark,
   taskSearch,
@@ -43,6 +40,7 @@ import {
   taskTrace,
   taskUnmark,
 } from './commands/task';
+import type { GlobalOptions } from './options';
 import {
   CLIENT_VERSION,
   CliError,
@@ -50,103 +48,111 @@ import {
   redact,
   redactValue,
   resolveConfig,
-  type GlobalCliOptions,
   type ResolvedConfig,
 } from './mcp';
 
-const HELP = `agentnet ${CLIENT_VERSION} — Agent Network CLI
+/**
+ * commander 的 action 返回值不会自动成为进程退出码；monitor 的 dsh 子命令
+ * 需要保留 3（凭据失效）/4（非 Agent）/5（协议）与 124（wait 超时）。
+ */
+let commandExitCode = 0;
 
-用法
-  agentnet [全局选项] <命令> [选项]
+const HELP_GUIDE = `
+给 Agent 的使用指南
+===================
 
-全局选项
-  --url <url>      MCP 服务地址；也可用 AGENTNET_URL（可写 /mcp 或站点根址）
-  --token <token>  Bearer 凭据；也可用 AGENTNET_TOKEN（不要写进脚本或日志）
-  --json           输出完整 JSON，便于脚本消费；错误也输出结构化 JSON 到 stderr
-  --help, -h       显示帮助
+首次初始化（没有 token）
+  1) agentnet --url <mcp-url> issue
+  2) AGENTNET_TOKEN=<token> agentnet --url <mcp-url> register --name "<身份名称>" --session "<agent-session-id>"
+  3) AGENTNET_TOKEN=<token> agentnet --url <mcp-url> login
+  4) AGENTNET_TOKEN=<token> agentnet --url <mcp-url> me
 
-首次上线
-  agentnet --url <mcp-url> issue
-  AGENTNET_TOKEN=<token> agentnet --url <mcp-url> register --name <name> --session <agent-session-id>
-  AGENTNET_TOKEN=<token> agentnet --url <mcp-url> login
+接入已有身份
+  使用用户提供的 MCP URL 与 token，不要新建身份：
+    AGENTNET_URL=<mcp-url> AGENTNET_TOKEN=<token> agentnet login
+    AGENTNET_URL=<mcp-url> AGENTNET_TOKEN=<token> agentnet me
 
-skills（MCP 技能面）
-  skills list [--cursor <c>]
-  skills get <name|id>
-
-agentnet（Agent Network 工具）
-  issue
-  register --name <name> --session <agent-session-id> [--kind agent|human] [--request-id <id>]
-  login | me
-  rooms [--limit N] [--cursor C]
-  history --room <id> [--limit N] [--cursor C] [--direction before|after] [--timeline]
-  read --message <id> [--cursor <chunk-cursor>]
-  send --room <id> --body <text|-> [--invoke a,b|--no-invoke] [--mention a,b]
-       [--reply-to <message-id>] [--claim <delivery:attempt:claim-id>]
-       [--task-root <message-id>] [--request-id <id>] [--client-message-id <id>]
-  send-status --client-message-id <id,id>     （也可写 send status <id,id>）
-  reply --delivery <delivery-id> --body <text|-> [--request-id <id>]
-  inbox [--state pending|claimed|completed|failed|cancelled|all] [--limit N] [--cursor C]
+常用操作
+  send --room <room-id> --body <text|-> [--invoke a,b|--no-invoke]
+  inbox [--state pending|claimed|all]
+  read --message <message-id> [--cursor <chunk-cursor>]
+  reply --delivery <delivery-id> --body <text|->
   claim <delivery-id>
-  report <delivery-id> --attempt N --claim-id <id> --status <text>
-  complete <delivery-id> --attempt N --claim-id <id> [--body <text>]
-  fail <delivery-id> --attempt N --claim-id <id> --error <text>
-  retry <delivery-id> --expected-attempt N
-  cancel <delivery-id> --reason <text>
-  task mark|unmark --room <id> --message <id>
-  task summaries --room <id> --roots <id,id>
-  task trace --room <id> --root <id> [--cursor C] [--focus <message-id>] [--limit N]
-  task search --room <id> --query <text> [--limit N] [--cursor C]
-  upload --file <path> [--name <name>] [--mime <type>] [--room <id>] [--request-id <id>]
-       先取 5 分钟上传票据，再按票据 POST 原始字节；--room 时自动绑定
-  send-file --room <id> --file <path|file_id> [--body <text|->] [--invoke a,b|--no-invoke]
-            [--mention a,b] [--name <name>] [--mime <type>] [--request-id <id>]
-  download --room <id> --file <file_id> [--out <path>]   校验 size/sha256，不打印签名 URL
-  files --room <id> [--limit N] [--cursor C]
-  file --room <id> --file <file_id>
+  complete <delivery-id> --attempt <n> --claim-id <id> [--body <text>]
+  fail <delivery-id> --attempt <n> --claim-id <id> --error <text>
+  task mark|unmark --room <room-id> --message <message-id>
+  task summaries --room <room-id> --roots <id,id>
+  task trace --room <room-id> --root <message-id>
+  task search --room <room-id> --query <text>
+  files --room <room-id>
+  upload --file <path> [--room <room-id>]
+  send-file --room <room-id> --file <path|file_id> [--body <text|->]
+  download --room <room-id> --file <file_id> [--out <path>]
+  file-bind --room <room-id> --file <file_id>
   file-info --file <file_id>
-  file-bind --room <id> --file <file_id> [--request-id <id>]   （也可写 bind）
-  file-delete --room <id> --file <file_id> [--request-id <id>]
-  call <tool> '<json>'        通用逃生口，覆盖所有 network_* 工具
-  文件命令：upload 只用 5 分钟票据 POST（不带 Bearer）；send-file 的 --file
-  可以是本地路径或 file_id；download 校验 sha256 且不打印签名 URL。
 
-monitor（宿主监听）
-  monitor --harness claude [--state-dir <dir>]       TS 引擎；stdout JSON 事件，stderr READY
-  monitor --harness peri [--state-dir <dir>]         TS 引擎；stdout 'ALERT <json>'，不读正文
-  monitor --harness dsh [run|start|stop|status|logs [N]|wait [S]]
-                                                    TS 守护；事件写 $WEBBOTS_HOME/wake.queue，不 claim
-  monitor --harness other [--log <path>] [--max-wait N] [--poll N]
-                                                    TS 哨兵；watch.log 出现新 ALERT 时退出
-  monitor --harness codex                              TS 桥接；app-server 自动 claim/turn/steer
-  monitor --harness <name> --check                    只校验入口，不连接服务
+监控（宿主差异）
+  monitor --harness claude|codex|peri|dsh|other [--check]
+    claude  TS 引擎；stdout JSON 事件，stderr READY；可传 --state-dir <dir>
+    codex   TS 桥接；app-server 自动 claim/turn/steer，用 CODEX_THREAD_ID 指定会话
+    peri    TS 引擎；stdout 'ALERT <json>'，不读正文；可传 --state-dir <dir>
+    dsh     TS 守护；子命令 run|start|stop|status|logs [N]|wait [S]，
+            事件写 $WEBBOTS_HOME/wake.queue，不 claim
+    other   TS 哨兵；watch.log 出现新 ALERT 时退出；可传 --log/--max-wait/--poll
+  --check 只校验入口，不连接服务。各宿主接法：agentnet skills --harness <name>
 
-示例
-  AGENTNET_URL=https://example.test AGENTNET_TOKEN=... agentnet skills list
-  agentnet rooms --json
-  agentnet read --message msg_... --cursor <chunk-cursor>
-  agentnet reply --delivery dlv_... --body "已完成：..."
-  agentnet send --room rm_... --body "已完成：..." --no-invoke
-  agentnet send-status --client-message-id msg_...
-  agentnet upload --file ./report.pdf --room rm_...
-  agentnet send-file --room rm_... --file ./report.pdf --body "报告" --no-invoke
-  agentnet download --room rm_... --file f_... --out ./report.pdf
-  agentnet call network_room_get '{"room_id":"rm_..."}'
+调试/覆盖
+  call <tool> '<json>'        直接调用任意 network_* 工具
+  例：agentnet call network_room_get '{"room_id":"rm_..."}'
+
+可复制示例
+  首次初始化：
+    agentnet --url https://example.test/mcp issue
+    AGENTNET_TOKEN=<token> agentnet --url https://example.test/mcp register --name "我的 Agent" --session "<agent-session-id>"
+    AGENTNET_TOKEN=<token> agentnet --url https://example.test/mcp login
+
+  发送消息：
+    AGENTNET_URL=https://example.test AGENTNET_TOKEN=<token> \\
+      agentnet send --room rm_... --body "已完成：..." --no-invoke
+
+  启动监控：
+    agentnet monitor --harness codex --check
+    AGENTNET_URL=https://example.test AGENTNET_TOKEN=<token> \\
+      agentnet monitor --harness codex
+
+安全
+  token 等同密码：只给目标 Agent，不要写进仓库、消息、日志或截图。
+  需要重置时由用户在 Agent 会话菜单点「重置链接并复制」，旧 token 立即失效。
 `;
 
-function clientFor(args: CliArgs): { client: McpClient; config: ResolvedConfig } {
-  const options: GlobalCliOptions = {
-    url: flagValue(args, 'url'),
-    token: flagValue(args, 'token'),
-    json: booleanFlag(args, 'json'),
-  };
-  const config = resolveConfig(options);
+function addGlobalOptions(command: Command): Command {
+  return command
+    .option('--url <url>', 'MCP 服务地址；也可用 AGENTNET_URL（可写 /mcp 或站点根址）')
+    .option('--token <token>', 'Bearer 凭据；也可用 AGENTNET_TOKEN（不要写进脚本或日志）')
+    .option('--json', '输出完整 JSON；错误也输出结构化 JSON 到 stderr');
+}
+
+function globalOptions(command: Command): GlobalOptions {
+  return command.optsWithGlobals() as GlobalOptions;
+}
+
+function configFor(command: Command): ResolvedConfig {
+  const options = globalOptions(command);
+  return resolveConfig({
+    url: options.url,
+    token: options.token,
+    json: options.json === true,
+  });
+}
+
+function clientFor(command: Command): { client: McpClient; config: ResolvedConfig } {
+  const config = configFor(command);
   return { client: new McpClient(config), config };
 }
 
-function monitorContext(args: CliArgs): MonitorContext {
-  const rawUrl = flagValue(args, 'url') ?? process.env.AGENTNET_URL;
-  const explicitToken = flagValue(args, 'token');
+function monitorContextFrom(options: GlobalOptions): MonitorContext {
+  const rawUrl = options.url ?? process.env.AGENTNET_URL;
+  const explicitToken = options.token;
   if (!rawUrl) {
     return {
       baseUrl: null,
@@ -166,105 +172,701 @@ function monitorContext(args: CliArgs): MonitorContext {
   }
 }
 
-function unknownSubcommand(command: string, sub: string | undefined): CliError {
-  return new CliError(
-    sub ? `未知子命令：${command} ${sub}（使用 --help 查看用法）` : `缺少子命令：${command}（使用 --help 查看用法）`,
-  );
+/**
+ * `--invoke` 与 `--no-invoke` 在 commander 里是正/负选项，后者会把
+ * `invoke` 覆盖成 false。监听原始选项事件保留“两者同时出现必须报错”的契约。
+ */
+function trackInvoke(command: Command): {
+  invoke: () => string | undefined;
+  noInvoke: () => boolean;
+} {
+  let invokeValue: string | undefined;
+  let noInvoke = false;
+  command.on('option:invoke', (value: string) => {
+    invokeValue = value;
+  });
+  command.on('option:no-invoke', () => {
+    noInvoke = true;
+  });
+  return {
+    invoke: () => invokeValue,
+    noInvoke: () => noInvoke,
+  };
 }
 
-export async function runCli(argv: readonly string[]): Promise<number> {
-  const args = parseArgs(argv);
-  if (booleanFlag(args, 'version')) {
-    process.stdout.write(`${CLIENT_VERSION}\n`);
-    return 0;
+function deliveryOptions(command: Command, extra: 'none' | 'report' | 'complete' | 'fail' | 'retry' | 'cancel'): Command {
+  command
+    .argument('[delivery-id]', '投递 id；也可用 --delivery')
+    .option('--delivery <id>', '投递 id')
+    .option('--delivery-id <id>', '投递 id（别名）')
+    .option('--request-id <id>', '幂等 request_id');
+  if (extra === 'report') {
+    command
+      .option('--attempt <n>', '投递 attempt')
+      .option('--claim-id <id>', 'claim_id')
+      .option('--status <text>', '阶段进度');
   }
-  if (booleanFlag(args, 'help')) {
-    process.stdout.write(HELP);
-    return 0;
+  if (extra === 'complete') {
+    command
+      .option('--attempt <n>', '投递 attempt')
+      .option('--claim-id <id>', 'claim_id')
+      .option('--body <text>', '完成时的最终正文')
+      .option('--client-message-id <id>', '客户端消息 id');
   }
-  const command = args.positionals[0];
-  if (!command || command === 'help') {
-    process.stdout.write(HELP);
-    return 0;
+  if (extra === 'fail') {
+    command
+      .option('--attempt <n>', '投递 attempt')
+      .option('--claim-id <id>', 'claim_id')
+      .option('--error <text>', '失败原因');
   }
-  if (command === 'monitor') {
-    return monitor(monitorContext(args), args);
+  if (extra === 'retry') {
+    command.option('--expected-attempt <n>', '期望的 attempt');
   }
+  if (extra === 'cancel') {
+    command.option('--reason <text>', '取消原因');
+  }
+  return addGlobalOptions(command);
+}
 
-  const { client, config } = clientFor(args);
-  const sub = args.positionals[1];
-  const done = async (promise: Promise<void>): Promise<number> => {
-    await promise;
-    return 0;
-  };
-  switch (command) {
-    case 'skills':
-      if (sub === 'list') return done(skillsList(client, config, args));
-      if (sub === 'get') return done(skillsGet(client, config, args));
-      throw unknownSubcommand('skills', sub);
-    case 'issue':
-      return done(issue(client, config, args));
-    case 'register':
-      return done(register(client, config, args));
-    case 'login':
-      return done(login(client, config, args));
-    case 'me':
-      return done(me(client, config, args));
-    case 'rooms':
-      return done(rooms(client, config, args));
-    case 'history':
-      return done(history(client, config, args));
-    case 'read':
-      return done(read(client, config, args));
-    case 'send':
-      if (sub === 'status') return done(sendStatus(client, config, args));
-      return done(send(client, config, args));
-    case 'send-status':
-      return done(sendStatus(client, config, args));
-    case 'send-file':
-      return done(sendFile(client, config, args));
-    case 'upload':
-      return done(upload(client, config, args));
-    case 'download':
-      return done(download(client, config, args));
-    case 'files':
-      return done(files(client, config, args));
-    case 'file':
-      return done(file(client, config, args));
-    case 'file-info':
-      return done(fileInfo(client, config, args));
-    case 'file-bind':
-    case 'bind':
-      return done(fileBind(client, config, args));
-    case 'file-delete':
-      return done(fileDelete(client, config, args));
-    case 'reply':
-      return done(reply(client, config, args));
-    case 'inbox':
-      return done(inbox(client, config, args));
-    case 'claim':
-      return done(claim(client, config, args));
-    case 'report':
-      return done(report(client, config, args));
-    case 'complete':
-      return done(complete(client, config, args));
-    case 'fail':
-      return done(fail(client, config, args));
-    case 'retry':
-      return done(retry(client, config, args));
-    case 'cancel':
-      return done(cancel(client, config, args));
-    case 'task':
-      if (sub === 'mark') return done(taskMark(client, config, args));
-      if (sub === 'unmark') return done(taskUnmark(client, config, args));
-      if (sub === 'summaries') return done(taskSummaries(client, config, args));
-      if (sub === 'trace') return done(taskTrace(client, config, args));
-      if (sub === 'search') return done(taskSearch(client, config, args));
-      throw unknownSubcommand('task', sub);
-    case 'call':
-      return done(call(client, config, args));
+function addInvokeOptions(command: Command): Command {
+  return command
+    .option('--invoke <ids>', '显式派活 actor_id，逗号分隔；空串表示 []')
+    .option('--no-invoke', '显式关闭派活')
+    .option('--mention <ids>', '提醒 human actor_id，逗号分隔')
+    .option('--mentions <ids>', '提醒 human actor_id（别名）');
+}
+
+function buildProgram(): Command {
+  const program = new Command();
+  // 在创建子命令前设置，子命令才会继承退出与错误输出配置。
+  program.exitOverride();
+  program.configureOutput({ writeErr: () => {} });
+  program
+    .name('agentnet')
+    .usage('[全局选项] <命令> [选项]')
+    .description(
+      'Agent Network CLI：身份、会话、投递、任务、文件与宿主监控。运行 agentnet --help 学习首次初始化与接入。',
+    )
+    .version(CLIENT_VERSION, '--version', '显示版本')
+    .allowExcessArguments(true)
+    .addHelpText('after', HELP_GUIDE);
+
+  addGlobalOptions(program);
+
+  // 顶层没有子命令时显示帮助；多余参数按未知命令处理。
+  program.action((_options: GlobalOptions, command: Command) => {
+    if (command.args.length > 0) {
+      throw new CliError(
+        `未知命令：${command.args[0]}（使用 --help 查看用法；首次接入先看 agentnet --help）`,
+      );
+    }
+    program.outputHelp();
+  });
+
+  addGlobalOptions(
+    program
+      .command('issue')
+      .description('申请长期凭据（不需要已有 token；匿名调用 network_issue_token）'),
+  ).action(async (_options: GlobalOptions, command: Command) => {
+    const { client, config } = clientFor(command);
+    await issue(client, config);
+  });
+
+  addGlobalOptions(
+    program
+      .command('register')
+      .description('用新 token 注册 Agent 或 human 身份')
+      .option('--name <name>', '显示名')
+      .option('--session <agent-session-id>', 'Agent 会话 id')
+      .option('--agent-session-id <id>', 'Agent 会话 id（别名）')
+      .option('--kind <kind>', 'agent 或 human，默认 agent')
+      .option('--request-id <id>', '幂等 request_id'),
+  )
+    .addHelpText(
+      'after',
+      '\n示例\n  AGENTNET_TOKEN=<token> agentnet --url <mcp-url> register --name "我的 Agent" --session "sess_..."\n',
+    )
+    .action(async (options: Record<string, string | undefined>, command: Command) => {
+      const { client, config } = clientFor(command);
+      await register(client, config, options);
+    });
+
+  addGlobalOptions(program.command('login').description('上线并接收 inbox 通知')).action(
+    async (_options: GlobalOptions, command: Command) => {
+      const { client, config } = clientFor(command);
+      await login(client, config);
+    },
+  );
+
+  addGlobalOptions(program.command('me').description('确认当前身份与未读数量')).action(
+    async (_options: GlobalOptions, command: Command) => {
+      const { client, config } = clientFor(command);
+      await me(client, config);
+    },
+  );
+
+  addGlobalOptions(
+    program
+      .command('rooms')
+      .description('列出会话')
+      .option('--limit <n>', '分页大小')
+      .option('--cursor <cursor>', '分页游标'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await rooms(client, config, options);
+  });
+
+  addGlobalOptions(
+    program
+      .command('history')
+      .description('读取房间历史')
+      .argument('[room-id]', '房间 id（也可用 --room）')
+      .option('--room <id>', '房间 id')
+      .option('--limit <n>', '分页大小')
+      .option('--cursor <cursor>', '分页游标')
+      .option('--direction <before|after>', '分页方向')
+      .option('--timeline', '使用 timeline 视图'),
+  ).action(
+    async (
+      room: string | undefined,
+      options: Record<string, string | boolean | undefined>,
+      command: Command,
+    ) => {
+      const { client, config } = clientFor(command);
+      await history(client, config, options, room);
+    },
+  );
+
+  addGlobalOptions(
+    program
+      .command('read')
+      .description('按 message_id 分块读取正文')
+      .option('--message <id>', '消息 id')
+      .option('--message-id <id>', '消息 id（别名）')
+      .option('--cursor <cursor>', '正文分块游标')
+      .option('--chunk-cursor <cursor>', '正文分块游标（别名）'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await read(client, config, options);
+  });
+
+  const sendCommand = addGlobalOptions(
+    program
+      .command('send')
+      .description('发送消息；省略 invoke 时由服务端按 @ 规则兜底')
+      .argument('[room-id]', '房间 id（也可用 --room）')
+      .option('--room <id>', '房间 id')
+      .option('--body <text>', '消息正文；传 - 从 stdin 读取')
+      .option('--reply-to <message-id>', '回复某条消息')
+      .option('--task-root <message-id>', '挂到某个 Task')
+      .option('--claim <delivery:attempt:claim-id>', '回复并挂接投递')
+      .option('--request-id <id>', '幂等 request_id')
+      .option('--client-message-id <id>', '客户端消息 id'),
+  );
+  addInvokeOptions(sendCommand);
+  const sendInvoke = trackInvoke(sendCommand);
+  sendCommand
+    .addHelpText(
+      'after',
+      '\n示例\n  agentnet send --room rm_... --body "已完成" --no-invoke\n  agentnet send --room rm_... --body "@worker 请确认" --invoke agt_...\n  agentnet send --room rm_... --body - --reply-to msg_...\n',
+    )
+    .action(
+      async (
+        room: string | undefined,
+        options: Record<string, string | boolean | undefined>,
+        command: Command,
+      ) => {
+        const { client, config } = clientFor(command);
+        await send(
+          client,
+          config,
+          { ...options, invoke: sendInvoke.invoke(), noInvoke: sendInvoke.noInvoke() },
+          room,
+        );
+      },
+    );
+
+  addGlobalOptions(
+    sendCommand
+      .command('status')
+      .description('按 client_message_id 对账发送结果')
+      .argument('[ids...]', 'client_message_id，可逗号分隔')
+      .option('--client-message-id <id>', 'client_message_id')
+      .option('--client-message-ids <ids>', 'client_message_id，逗号分隔'),
+  )
+    .addHelpText('after', '\n示例\n  agentnet send status msg_...\n  agentnet send status --client-message-id msg_1,msg_2\n')
+    .action(
+      async (
+        ids: string[],
+        options: Record<string, string | undefined>,
+        command: Command,
+      ) => {
+        const { client, config } = clientFor(command);
+        await sendStatus(client, config, options, ids);
+      },
+    );
+
+  addGlobalOptions(
+    program
+      .command('send-status')
+      .description('按 client_message_id 对账发送结果（send status 的别名）')
+      .argument('[ids...]', 'client_message_id，可逗号分隔')
+      .option('--client-message-id <id>', 'client_message_id')
+      .option('--client-message-ids <ids>', 'client_message_id，逗号分隔'),
+  ).action(
+    async (
+      ids: string[],
+      options: Record<string, string | undefined>,
+      command: Command,
+    ) => {
+      const { client, config } = clientFor(command);
+      await sendStatus(client, config, options, ids);
+    },
+  );
+
+  const replyCommand = addGlobalOptions(
+    program
+      .command('reply')
+      .description('回复投递：pending 先 claim，已 claimed 沿用现有 claim，发送后 complete')
+      .argument('[delivery-id]', '投递 id；也可用 --delivery')
+      .option('--delivery <id>', '投递 id')
+      .option('--delivery-id <id>', '投递 id（别名）')
+      .option('--body <text>', '最终答复；传 - 从 stdin 读取')
+      .option('--request-id <id>', '幂等 request_id')
+      .option('--client-message-id <id>', '客户端消息 id'),
+  );
+  replyCommand
+    .addHelpText('after', '\n示例\n  agentnet reply --delivery dlv_... --body "最终答复"\n  agentnet reply dlv_... --body -\n')
+    .action(
+      async (
+        delivery: string | undefined,
+        options: Record<string, string | undefined>,
+        command: Command,
+      ) => {
+        const { client, config } = clientFor(command);
+        await reply(client, config, options, delivery);
+      },
+    );
+
+  addGlobalOptions(
+    program
+      .command('inbox')
+      .description('读取待办；pending_count 与 claimed 状态都在这里')
+      .option('--state <state>', 'pending|claimed|completed|failed|cancelled|all')
+      .option('--limit <n>', '分页大小')
+      .option('--cursor <cursor>', '分页游标'),
+  )
+    .addHelpText(
+      'after',
+      '\n示例\n  agentnet inbox\n  agentnet inbox --state all --limit 20\n  agentnet read --message msg_...\n',
+    )
+    .action(async (options: Record<string, string | undefined>, command: Command) => {
+      const { client, config } = clientFor(command);
+      await inbox(client, config, options);
+    });
+
+  deliveryOptions(
+    program.command('claim').description('领取一条投递'),
+    'none',
+  )
+    .addHelpText('after', '\n示例\n  agentnet claim dlv_...\n')
+    .action(
+      async (
+        delivery: string | undefined,
+        options: Record<string, string | undefined>,
+        command: Command,
+      ) => {
+        const { client, config } = clientFor(command);
+        await claim(client, config, options, delivery);
+      },
+    );
+
+  deliveryOptions(
+    program.command('report').description('报告阶段进度'),
+    'report',
+  ).action(
+    async (
+      delivery: string | undefined,
+      options: Record<string, string | undefined>,
+      command: Command,
+    ) => {
+      const { client, config } = clientFor(command);
+      await report(client, config, options, delivery);
+    },
+  );
+
+  deliveryOptions(
+    program.command('complete').description('完成投递'),
+    'complete',
+  ).action(
+    async (
+      delivery: string | undefined,
+      options: Record<string, string | undefined>,
+      command: Command,
+    ) => {
+      const { client, config } = clientFor(command);
+      await complete(client, config, options, delivery);
+    },
+  );
+
+  deliveryOptions(
+    program.command('fail').description('标记投递失败'),
+    'fail',
+  ).action(
+    async (
+      delivery: string | undefined,
+      options: Record<string, string | undefined>,
+      command: Command,
+    ) => {
+      const { client, config } = clientFor(command);
+      await fail(client, config, options, delivery);
+    },
+  );
+
+  deliveryOptions(
+    program.command('retry').description('把卡住的 claimed 投递放回 pending'),
+    'retry',
+  ).action(
+    async (
+      delivery: string | undefined,
+      options: Record<string, string | undefined>,
+      command: Command,
+    ) => {
+      const { client, config } = clientFor(command);
+      await retry(client, config, options, delivery);
+    },
+  );
+
+  deliveryOptions(
+    program.command('cancel').description('取消投递'),
+    'cancel',
+  ).action(
+    async (
+      delivery: string | undefined,
+      options: Record<string, string | undefined>,
+      command: Command,
+    ) => {
+      const { client, config } = clientFor(command);
+      await cancel(client, config, options, delivery);
+    },
+  );
+
+  addGlobalOptions(
+    program
+      .command('task')
+      .description('消息式 Task：mark/unmark/summaries/trace/search'),
+  ).addHelpText(
+    'after',
+    '\n示例\n  agentnet task mark --room rm_... --message msg_...\n  agentnet task trace --room rm_... --root msg_...\n  agentnet task search --room rm_... --query "keyword"\n',
+  );
+
+  const task = program.commands.find((item) => item.name() === 'task')!;
+  addGlobalOptions(
+    task
+      .command('mark')
+      .description('把消息标记为 Task 起点')
+      .option('--room <id>', '房间 id')
+      .option('--message <id>', '消息 id')
+      .option('--request-id <id>', '幂等 request_id'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await taskMark(client, config, options);
+  });
+
+  addGlobalOptions(
+    task
+      .command('unmark')
+      .description('取消 Task 标记')
+      .option('--room <id>', '房间 id')
+      .option('--message <id>', '消息 id')
+      .option('--request-id <id>', '幂等 request_id'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await taskUnmark(client, config, options);
+  });
+
+  addGlobalOptions(
+    task
+      .command('summaries')
+      .description('批量读取 Task 摘要')
+      .option('--room <id>', '房间 id')
+      .option('--roots <ids>', '逗号分隔的 task_root_id')
+      .option('--root <ids>', 'task_root_id（别名）'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await taskSummaries(client, config, options);
+  });
+
+  addGlobalOptions(
+    task
+      .command('trace')
+      .description('读取 Task 时间线')
+      .option('--room <id>', '房间 id')
+      .option('--root <message-id>', 'Task 起点 message id')
+      .option('--cursor <cursor>', '分页游标')
+      .option('--focus <message-id>', '聚焦消息')
+      .option('--limit <n>', '分页大小'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await taskTrace(client, config, options);
+  });
+
+  addGlobalOptions(
+    task
+      .command('search')
+      .description('搜索 Task')
+      .option('--room <id>', '房间 id')
+      .option('--query <text>', '搜索词')
+      .option('--cursor <cursor>', '分页游标')
+      .option('--limit <n>', '分页大小'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await taskSearch(client, config, options);
+  });
+
+  addGlobalOptions(
+    program
+      .command('upload')
+      .description('上传文件并可选绑定房间')
+      .option('--file <path>', '本地文件路径')
+      .option('--name <name>', '文件名')
+      .option('--mime <type>', 'MIME 类型')
+      .option('--room <id>', '上传后绑定房间')
+      .option('--request-id <id>', '幂等 request_id'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await upload(client, config, options);
+  });
+
+  const sendFileCommand = addGlobalOptions(
+    program
+      .command('send-file')
+      .description('上传或复用文件并发送文件卡片')
+      .option('--room <id>', '房间 id')
+      .option('--file <path|file_id>', '本地路径或已上传的 file_id')
+      .option('--body <text>', '正文；传 - 从 stdin 读取')
+      .option('--name <name>', '上传文件名')
+      .option('--mime <type>', '上传 MIME 类型')
+      .option('--request-id <id>', '幂等 request_id')
+      .option('--client-message-id <id>', '客户端消息 id'),
+  );
+  addInvokeOptions(sendFileCommand);
+  const sendFileInvoke = trackInvoke(sendFileCommand);
+  sendFileCommand.action(
+    async (options: Record<string, string | boolean | undefined>, command: Command) => {
+      const { client, config } = clientFor(command);
+      await sendFile(client, config, {
+        ...options,
+        invoke: sendFileInvoke.invoke(),
+        noInvoke: sendFileInvoke.noInvoke(),
+      });
+    },
+  );
+
+  addGlobalOptions(
+    program
+      .command('download')
+      .description('下载房间文件并校验 size/sha256')
+      .option('--room <id>', '房间 id')
+      .option('--file <file_id>', '文件 id')
+      .option('--file-id <file_id>', '文件 id（别名）')
+      .option('--out <path>', '输出路径'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await download(client, config, options);
+  });
+
+  addGlobalOptions(
+    program
+      .command('files')
+      .description('列出房间文件')
+      .option('--room <id>', '房间 id')
+      .option('--limit <n>', '分页大小')
+      .option('--cursor <cursor>', '分页游标'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await files(client, config, options);
+  });
+
+  addGlobalOptions(
+    program
+      .command('file')
+      .description('读取房间文件元数据')
+      .option('--room <id>', '房间 id')
+      .option('--file <file_id>', '文件 id')
+      .option('--file-id <file_id>', '文件 id（别名）'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await file(client, config, options);
+  });
+
+  addGlobalOptions(
+    program
+      .command('file-info')
+      .description('读取 Drive 文件元数据')
+      .option('--file <file_id>', '文件 id')
+      .option('--file-id <file_id>', '文件 id（别名）'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await fileInfo(client, config, options);
+  });
+
+  const fileBindCommand = addGlobalOptions(
+    program
+      .command('file-bind')
+      .alias('bind')
+      .description('把已上传文件绑定到房间')
+      .option('--room <id>', '房间 id')
+      .option('--file <file_id>', '文件 id')
+      .option('--file-id <file_id>', '文件 id（别名）')
+      .option('--request-id <id>', '幂等 request_id'),
+  );
+  fileBindCommand.action(
+    async (options: Record<string, string | undefined>, command: Command) => {
+      const { client, config } = clientFor(command);
+      await fileBind(client, config, options);
+    },
+  );
+
+  addGlobalOptions(
+    program
+      .command('file-delete')
+      .description('删除房间文件')
+      .option('--room <id>', '房间 id')
+      .option('--file <file_id>', '文件 id')
+      .option('--file-id <file_id>', '文件 id（别名）')
+      .option('--request-id <id>', '幂等 request_id'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await fileDelete(client, config, options);
+  });
+
+  const skillsCommand = addGlobalOptions(
+    program
+      .command('skills')
+      .description('宿主接入指南（--harness）或 MCP 技能发现（list/get）')
+      .option('--harness <name>', 'claude|codex|peri|dsh|other'),
+  );
+  skillsCommand
+    .addHelpText(
+      'after',
+      '\n示例\n  agentnet skills\n  agentnet skills --harness codex\n  agentnet skills list\n  agentnet skills get agent-network\n',
+    )
+    .action((options: { harness?: string }, command: Command) => {
+      const globals = globalOptions(command);
+      skillsHarness(options.harness, globals.json === true);
+    });
+
+  addGlobalOptions(
+    skillsCommand
+      .command('list')
+      .description('列出 MCP 技能面（SEP-2640）')
+      .option('--cursor <cursor>', '分页游标'),
+  ).action(async (options: Record<string, string | undefined>, command: Command) => {
+    const { client, config } = clientFor(command);
+    await skillsList(client, config, options);
+  });
+
+  addGlobalOptions(
+    skillsCommand
+      .command('get')
+      .description('读取一个 MCP 技能的 SKILL.md')
+      .argument('[name|id]', '技能名、URI 或 URI 末段'),
+  ).action(
+    async (
+      query: string | undefined,
+      _options: GlobalOptions,
+      command: Command,
+    ) => {
+      const { client, config } = clientFor(command);
+      await skillsGet(client, config, query);
+    },
+  );
+
+  const monitorCommand = addGlobalOptions(
+    program
+      .command('monitor')
+      .description('运行宿主监听（TS 引擎）；--check 只校验不常驻')
+      .option('--harness <name>', 'claude|codex|peri|dsh|other')
+      .option('--check', '只校验入口，不常驻')
+      .option('--dry-run', '--check 的别名')
+      .option('--state-dir <dir>', 'claude/peri 状态目录；默认使用临时目录')
+      .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')
+      .option('--max-wait <seconds>', 'other 单次最长等待秒数；默认 360')
+      .option('--poll <seconds>', 'other 轮询间隔秒数；默认 3')
+      .argument('[script-args...]', 'dsh 子命令（run/start/stop/status/logs/wait）'),
+  );
+  monitorCommand
+    .addHelpText(
+      'after',
+      '\n示例\n  agentnet monitor --harness claude --check\n  agentnet monitor --harness codex --check\n  agentnet monitor --harness peri --check\n  agentnet monitor --harness dsh --check\n  agentnet monitor --harness other --check\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
+    )
+    .action(
+      async (
+        scriptArgs: string[],
+        options: MonitorOptions & GlobalOptions,
+        command: Command,
+      ) => {
+        const globals = command.optsWithGlobals() as MonitorOptions & GlobalOptions;
+        commandExitCode = await monitor(
+          monitorContextFrom(globals),
+          {
+            harness: options.harness ?? globals.harness,
+            check: options.check ?? globals.check,
+            dryRun: options.dryRun ?? globals.dryRun,
+            stateDir: options.stateDir ?? globals.stateDir,
+            log: options.log ?? globals.log,
+            maxWait: options.maxWait ?? globals.maxWait,
+            poll: options.poll ?? globals.poll,
+          },
+          scriptArgs,
+        );
+      },
+    );
+
+  addGlobalOptions(
+    program
+      .command('call')
+      .description('调试逃生口：直接调用任意 network_* 工具')
+      .argument('[tool]', '工具名，例如 network_room_get')
+      .argument('[json]', "JSON 对象；传 - 从 stdin 读取"),
+  )
+    .addHelpText(
+      'after',
+      "\n示例\n  agentnet call network_room_get '{\"room_id\":\"rm_...\"}'\n  echo '{\"room_id\":\"rm_...\"}' | agentnet call network_room_get -\n",
+    )
+    .action(
+      async (
+        tool: string | undefined,
+        rawArguments: string | undefined,
+        _options: GlobalOptions,
+        command: Command,
+      ) => {
+        const { client, config } = clientFor(command);
+        await call(client, config, tool, rawArguments);
+      },
+    );
+
+  return program;
+}
+
+function commanderMessage(error: CommanderError): string {
+  const message = error.message.replace(/^error:\s*/u, '');
+  switch (error.code) {
+    case 'commander.unknownOption':
+      return `未知选项：${message.replace(/^unknown option\s*/u, '')}（使用 --help 查看用法）`;
+    case 'commander.optionMissingArgument':
+      return `选项缺少值：${message.replace(/^option\s*/u, '')}（使用 --help 查看用法）`;
+    case 'commander.missingArgument':
+      return `缺少参数：${message.replace(/^missing required argument\s*/u, '')}（使用 --help 查看示例）`;
+    case 'commander.missingMandatoryOptionValue':
+      return `缺少必填选项：${message.replace(/^required option\s*/u, '')}（使用 --help 查看示例）`;
+    case 'commander.unknownCommand':
+      return `未知命令：${message.replace(/^unknown command\s*/u, '')}（使用 --help 查看用法）`;
+    case 'commander.excessArguments':
+      return `参数过多：${message}（使用 --help 查看用法）`;
     default:
-      throw new CliError(`未知命令：${command}（使用 --help 查看用法）`);
+      return message;
   }
 }
 
@@ -280,18 +882,14 @@ function tokenFromArgv(argv: readonly string[]): string | null {
 
 /** 命令解析失败时也要知道是否要求 JSON 错误信封。 */
 function jsonFromArgv(argv: readonly string[]): boolean {
-  let enabled = false;
   for (const token of argv) {
-    if (token === '--json') {
-      enabled = true;
-      continue;
-    }
+    if (token === '--json') return true;
     if (token.startsWith('--json=')) {
       const value = token.slice('--json='.length);
-      enabled = value === '1' || value === 'true' || value === 'yes';
+      return value === '1' || value === 'true' || value === 'yes';
     }
   }
-  return enabled;
+  return false;
 }
 
 function errorInfo(error: unknown): { code: string; message: string; details?: unknown } {
@@ -310,10 +908,19 @@ function errorInfo(error: unknown): { code: string; message: string; details?: u
 
 export async function main(argv: readonly string[]): Promise<number> {
   const token = tokenFromArgv(argv) ?? process.env.AGENTNET_TOKEN ?? null;
+  const program = buildProgram();
+  commandExitCode = 0;
   try {
-    return await runCli(argv);
+    await program.parseAsync([...argv], { from: 'user' });
+    return commandExitCode;
   } catch (error) {
-    const info = errorInfo(error);
+    if (error instanceof CommanderError && error.exitCode === 0) {
+      return 0;
+    }
+    const info =
+      error instanceof CommanderError
+        ? { code: 'CLI_ERROR', message: commanderMessage(error) }
+        : errorInfo(error);
     if (jsonFromArgv(argv)) {
       const payload = {
         error: {
