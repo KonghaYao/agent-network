@@ -19,6 +19,7 @@
     "test:events": "bun scripts/verify-events.ts",
     "test:watch-claim": "bun scripts/verify-watch-claim.ts && python3 scripts/test_codex_watch.py",
     "test:ts-monitor": "bun scripts/verify-ts-monitor.ts",
+    "test:ts-codex-monitor": "bun scripts/verify-ts-codex-monitor.ts",
     "test:dsh-watch": "bun scripts/verify-dsh-watch.ts",
     "test:web": "bun scripts/verify-web.ts",
     "test:hotpaths": "bun scripts/verify-hotpaths.ts",

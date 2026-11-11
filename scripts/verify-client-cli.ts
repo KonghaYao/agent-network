@@ -861,14 +861,22 @@ async function main(): Promise<void> {
     check('monitor peri 拒绝旧脚本参数', monitorArgs.code !== 0);
     check('monitor peri 提示位置参数', monitorArgs.stderr.includes('不接受位置参数'));
 
-    const legacyMonitorArgs = await runCli(
+    const codexMonitor = await runCli(mock.baseUrl, ['monitor', '--harness', 'codex', '--check'], {
+      AGENTNET_URL: undefined,
+      AGENTNET_CODEX_SOCKET: '/tmp/agentnet-codex-check.sock',
+    });
+    checkEqual('monitor codex --check 退出 0', codexMonitor.code, 0);
+    check('monitor codex 标记 TS 引擎', codexMonitor.stdout.includes('engine=ts'));
+    check('monitor codex 声明 app-server 传输', codexMonitor.stdout.includes('transport=app-server-ws'));
+    check('monitor codex 不再定位旧脚本', !codexMonitor.stdout.includes('codex-watch.sh'));
+
+    const codexMonitorArgs = await runCli(
       mock.baseUrl,
       ['monitor', '--harness', 'codex', '--check', '--', '--interval', '5'],
       { AGENTNET_URL: undefined },
     );
-    checkEqual('monitor 旧脚本透传参数退出 0', legacyMonitorArgs.code, 0);
-    check('monitor 旧脚本定位 codex-watch.sh', legacyMonitorArgs.stdout.includes('codex-watch.sh'));
-    check('monitor 旧脚本透传 -- 后的参数', legacyMonitorArgs.stdout.includes('--interval 5'));
+    check('monitor codex 拒绝旧脚本参数', codexMonitorArgs.code !== 0);
+    check('monitor codex 提示位置参数', codexMonitorArgs.stderr.includes('不接受位置参数'));
 
     const badHarness = await runCli(mock.baseUrl, ['monitor', '--harness', 'unknown', '--check'], {
       AGENTNET_URL: undefined,

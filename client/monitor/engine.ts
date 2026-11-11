@@ -93,9 +93,96 @@ export interface MonitorEngineOptions {
 
 type EmitResult = 'emitted' | 'deferred' | 'error';
 
-type ClaimResult =
+export type ClaimResult =
   | { ok: true; claim: ClaimInfo }
   | { ok: false; failure: ClaimFailure };
+
+/**
+ * 自动 claim；CLAIM_CONFLICT 只读一次 claimed inbox 区分“自己已领取”
+ * 与“别人领取/当前已有其他 claim”，不轮询。
+ *
+ * codex 桥接复用同一份分类，保证 deferred/conflict/failed 的日志与
+ * 处理分支与 claude 引擎一致。
+ */
+export async function claimDelivery(
+  rpc: MonitorRpc,
+  deliveryId: string,
+): Promise<ClaimResult | null> {
+  let outcome;
+  try {
+    outcome = await rpc.callTool('network_delivery_claim', {
+      request_id: `watch-claim-${Math.floor(Date.now() / 1000)}-${process.pid}-${Math.floor(
+        Math.random() * 1_000_000,
+      )}`,
+      delivery_id: deliveryId,
+    });
+  } catch (error) {
+    if (error instanceof MonitorFatalError) throw error;
+    return null;
+  }
+
+  if (outcome.ok) {
+    return {
+      ok: true,
+      claim: {
+        deliveryId: asString(outcome.data.delivery_id, deliveryId) || deliveryId,
+        attempt: asNumber(outcome.data.attempt, 0),
+        claimId: asString(outcome.data.claim_id),
+        claimedAt: asString(outcome.data.claimed_at),
+      },
+    };
+  }
+  if (outcome.code !== 'CLAIM_CONFLICT') {
+    return {
+      ok: false,
+      failure: {
+        deliveryId,
+        code: outcome.code === '' ? 'UNKNOWN' : outcome.code,
+        message: outcome.message,
+        kind: 'failed',
+      },
+    };
+  }
+
+  let claimedPage: JsonObject | null = null;
+  try {
+    const page = await rpc.callTool('network_inbox_list', { state: 'claimed', limit: 50 });
+    if (page.ok) claimedPage = page.data;
+  } catch (error) {
+    if (error instanceof MonitorFatalError) throw error;
+    // 读取 claimed inbox 失败时按错误消息分类，与脚本一致。
+  }
+
+  if (claimedPage !== null) {
+    const own = asArray(claimedPage.items)
+      .map(asRecord)
+      .find((item) => asString(item.delivery_id) === deliveryId);
+    if (own) {
+      return {
+        ok: true,
+        claim: {
+          deliveryId,
+          attempt: asNumber(own.attempt, 0),
+          claimId: asString(own.claim_id),
+          claimedAt: asString(own.claimed_at),
+        },
+      };
+    }
+  }
+
+  const deferred = outcome.message.includes('当前已有领取中的工作');
+  const held = claimedPage === null ? '' : asString(claimedPage.claimed_delivery_id);
+  return {
+    ok: false,
+    failure: {
+      deliveryId,
+      code: 'CLAIM_CONFLICT',
+      message: outcome.message,
+      kind: deferred ? 'deferred' : 'conflict',
+      ...(deferred && held.length > 0 ? { claimedDeliveryId: held } : {}),
+    },
+  };
+}
 
 /** 断线退避：1/2/4/8/16/30 秒，带 ±20% 抖动；dsh 复用同一曲线。 */
 export function reconnectDelay(attempt: number): number {
@@ -408,7 +495,7 @@ export class MonitorEngine {
       return 'error';
     }
 
-    const claim = await this.claimDelivery(fields.deliveryId);
+    const claim = await claimDelivery(this.rpc, fields.deliveryId);
     if (claim === null) return 'error';
     if (!claim.ok) {
       const failure = this.format.claimNotice
@@ -461,87 +548,6 @@ export class MonitorEngine {
   /** 事件行只走 stdout；peri 的前缀 `ALERT ` 在此统一追加。 */
   private emitEvent(event: JsonObject): void {
     this.stdout(`${this.prefix}${JSON.stringify(event)}`);
-  }
-
-  /**
-   * 自动 claim；CLAIM_CONFLICT 只读一次 claimed inbox 区分“自己已领取”
-   * 与“别人领取/当前已有其他 claim”，不轮询。
-   */
-  private async claimDelivery(deliveryId: string): Promise<ClaimResult | null> {
-    let outcome;
-    try {
-      outcome = await this.rpc.callTool('network_delivery_claim', {
-        request_id: `watch-claim-${Math.floor(Date.now() / 1000)}-${process.pid}-${Math.floor(
-          Math.random() * 1_000_000,
-        )}`,
-        delivery_id: deliveryId,
-      });
-    } catch (error) {
-      if (error instanceof MonitorFatalError) throw error;
-      return null;
-    }
-
-    if (outcome.ok) {
-      return {
-        ok: true,
-        claim: {
-          deliveryId: asString(outcome.data.delivery_id, deliveryId) || deliveryId,
-          attempt: asNumber(outcome.data.attempt, 0),
-          claimId: asString(outcome.data.claim_id),
-          claimedAt: asString(outcome.data.claimed_at),
-        },
-      };
-    }
-    if (outcome.code !== 'CLAIM_CONFLICT') {
-      return {
-        ok: false,
-        failure: {
-          deliveryId,
-          code: outcome.code === '' ? 'UNKNOWN' : outcome.code,
-          message: outcome.message,
-          kind: 'failed',
-        },
-      };
-    }
-
-    let claimedPage: JsonObject | null = null;
-    try {
-      const page = await this.rpc.callTool('network_inbox_list', { state: 'claimed', limit: 50 });
-      if (page.ok) claimedPage = page.data;
-    } catch (error) {
-      if (error instanceof MonitorFatalError) throw error;
-      // 读取 claimed inbox 失败时按错误消息分类，与脚本一致。
-    }
-
-    if (claimedPage !== null) {
-      const own = asArray(claimedPage.items)
-        .map(asRecord)
-        .find((item) => asString(item.delivery_id) === deliveryId);
-      if (own) {
-        return {
-          ok: true,
-          claim: {
-            deliveryId,
-            attempt: asNumber(own.attempt, 0),
-            claimId: asString(own.claim_id),
-            claimedAt: asString(own.claimed_at),
-          },
-        };
-      }
-    }
-
-    const deferred = outcome.message.includes('当前已有领取中的工作');
-    const held = claimedPage === null ? '' : asString(claimedPage.claimed_delivery_id);
-    return {
-      ok: false,
-      failure: {
-        deliveryId,
-        code: 'CLAIM_CONFLICT',
-        message: outcome.message,
-        kind: deferred ? 'deferred' : 'conflict',
-        ...(deferred && held.length > 0 ? { claimedDeliveryId: held } : {}),
-      },
-    };
   }
 
   private async readMessage(

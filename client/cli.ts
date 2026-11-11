@@ -2,7 +2,7 @@
  * Agent Network CLI 入口。
  *
  * 统一入口：技能发现（skills）、Agent Network 工具（agentnet 命令组）
- * 与宿主监控（monitor 迁移桥）。构建产物由 `bun run build:client`
+ * 与宿主监控（monitor）。构建产物由 `bun run build:client`
  * 打包到 `public/skills/agentnet.js`，同一份源码也可直接 `bun client/cli.ts` 运行。
  */
 
@@ -118,8 +118,8 @@ monitor（宿主监听）
                                                     TS 守护；事件写 $WEBBOTS_HOME/wake.queue，不 claim
   monitor --harness other [--log <path>] [--max-wait N] [--poll N]
                                                     TS 哨兵；watch.log 出现新 ALERT 时退出
-  monitor --harness codex [-- <脚本参数>]            旧脚本回退（后续迁移）
-  monitor --harness <name> --check                  只校验入口，不连接服务
+  monitor --harness codex                              TS 桥接；app-server 自动 claim/turn/steer
+  monitor --harness <name> --check                    只校验入口，不连接服务
 
 示例
   AGENTNET_URL=https://example.test AGENTNET_TOKEN=... agentnet skills list
