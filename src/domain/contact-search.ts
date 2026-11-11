@@ -67,6 +67,9 @@ export async function contactSearch(
   input: ContactSearchInput,
 ): Promise<ContactSearchResult> {
   const viewer = actorId(principal);
+  // 名称侧没有 NFKC，全角名称只能与同形的原始查询词匹配；保留 trim 后的
+  // 原文作为 OR 回退，避免归一化把「名称与查询都全角」的旧命中弄丢。
+  const raw = input.query.trim();
   const query = normalizeQuery(input.query);
   if (!query) {
     throw new BusinessError('INVALID_ARGUMENT', '请输入用户名');
@@ -147,6 +150,7 @@ export async function contactSearch(
           AND (
             instr(lower(a.name), lower(?)) > 0
             OR instr(lower(${COMPACT_NAME_SQL}), lower(?)) > 0
+            OR instr(lower(a.name), lower(?)) > 0
           )
           AND NOT EXISTS (
             SELECT 1
@@ -159,6 +163,7 @@ export async function contactSearch(
                )
           )
         ORDER BY CASE
+                   WHEN lower(a.name) = lower(?) THEN 0
                    WHEN lower(a.name) = lower(?) THEN 0
                    WHEN lower(${COMPACT_NAME_SQL}) = lower(?) THEN 1
                    ELSE 2
@@ -183,9 +188,11 @@ export async function contactSearch(
       viewer,
       query,
       compact,
+      raw,
       viewer,
       viewer,
       query,
+      raw,
       compact,
       limit + 1,
     )

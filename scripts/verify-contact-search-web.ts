@@ -85,6 +85,15 @@ try {
     name: normalizedName,
   });
 
+  // 全角名称：名称侧不做 NFKC，同形全角查询词必须保持修复前的命中行为。
+  const fullWidthToken = crypto.randomUUID();
+  const fullWidthName = '全角同形搜索 ＡＢＣ１２３';
+  const fullWidthTarget = await rawTool<Actor>(fullWidthToken, 'network_register', {
+    request_id: id('fullwidth'),
+    kind: 'human',
+    name: fullWidthName,
+  });
+
   // Agent 可见性：独立 Agent 未认领、未共享房间时不可搜；加入同一群后可见。
   const independentAgentToken = crypto.randomUUID();
   const independentAgentName = '共享房间可见 Agent';
@@ -198,6 +207,21 @@ try {
   await runSearch('ab12');
   await waitForSearchId(normalizedTarget.actor_id);
   pass('搜索折叠全角/半角、空白与 ASCII 大小写');
+
+  // 名称存储为全角时，同形全角查询词必须仍能命中（名称侧没有 NFKC）。
+  await runSearch(fullWidthName);
+  await waitForSearchId(fullWidthTarget.actor_id);
+  assert.equal(
+    await senderView.page.locator('#contact-search-results .contact-search-item').count(),
+    1,
+  );
+  await runSearch('ＡＢＣ１２３');
+  await waitForSearchId(fullWidthTarget.actor_id);
+  assert.equal(
+    await senderView.page.locator('#contact-search-results .contact-search-item').count(),
+    1,
+  );
+  pass('全角名称可用同形全角查询词搜到且无重复结果');
 
   await runSearch('不存在的人-xyz');
   await waitForSearchEmpty();
