@@ -58,8 +58,6 @@ import {
 import { actorId, type Principal } from './principal';
 import { loadOwnerTransferView, type OwnerTransferView } from './owner-transfers';
 import {
-  directInvitationStatements,
-  invitationInboxStatements,
   loadInvitedMembers,
   revokeDirectInvitationStatement,
   type InvitedMemberView,
@@ -212,6 +210,7 @@ export interface RoomDetail {
 }
 
 export type RoomCreateMemberStatus = 'active' | 'invited' | 'failed';
+
 
 export interface RoomCreateMemberResult {
   actor_id: string;
@@ -638,7 +637,7 @@ async function requireJoinableTargets(
 
 interface CreateTargetEvaluation {
   actor: ActorRow;
-  status: 'active' | 'invited' | 'failed';
+  status: 'active' | 'failed';
   code: BusinessErrorCode | null;
   message: string | null;
 }
@@ -646,9 +645,9 @@ interface CreateTargetEvaluation {
 /**
  * 建群候选的提交前判定：拉黑优先，其次 Agent 管理关系，最后好友关系。
  *
- * unclaimed Agent 无法确认邀请，与自有 Agent 一样直接 active；其他管理者
- * 的 Agent 仍需好友关系，好友则走既有 pending 邀请。失败的候选不会静默
- * 剔除：调用方把逐对象结果返回给客户端，整次建群在提交前终止。
+ * 人拉人直接入群，不再生成待确认邀请：所有合格候选都在同一事务内成为
+ * active 成员。失败的候选不会静默剔除：调用方把逐对象结果返回给客户端，
+ * 整次建群在提交前终止。
  */
 async function evaluateCreateTargets(
   db: D1Database,
@@ -671,7 +670,7 @@ async function evaluateCreateTargets(
       continue;
     }
     if (await getActiveRelation(db, owner, actor.actor_id)) {
-      evaluations.push({ actor, status: 'invited', code: null, message: null });
+      evaluations.push({ actor, status: 'active', code: null, message: null });
       continue;
     }
     evaluations.push({
@@ -695,7 +694,7 @@ function evaluationResult(evaluation: CreateTargetEvaluation): RoomCreateMemberR
   };
 }
 
-/** 提交后按真实成员/邀请状态生成逐对象结果，竞态失败给出可读原因。 */
+/** 提交后按真实成员状态生成逐对象结果，竞态失败给出可读原因。 */
 async function deriveCreateResults(
   db: D1Database,
   owner: string,
@@ -703,14 +702,10 @@ async function deriveCreateResults(
   detail: RoomDetail,
 ): Promise<RoomCreateMemberResult[]> {
   const active = new Set(detail.members.map((member) => member.actor_id));
-  const invited = new Set(detail.invited.map((invitation) => invitation.actor_id));
   return Promise.all(
     evaluations.map(async (evaluation) => {
       if (active.has(evaluation.actor.actor_id)) {
         return { ...evaluationResult(evaluation), status: 'active', code: null, message: null };
-      }
-      if (invited.has(evaluation.actor.actor_id)) {
-        return { ...evaluationResult(evaluation), status: 'invited', code: null, message: null };
       }
       if (await isBlockedBetween(db, owner, evaluation.actor.actor_id)) {
         return {
@@ -805,14 +800,9 @@ export async function roomCreate(
     );
   }
 
-  // 建群者与自有 Agent 直接 active；其他成员生成 pending 邀请，
-  // 邀请不是成员，不进入 room_members，也不计入 100 人上限。
-  const activeOthers = evaluations
-    .filter((evaluation) => evaluation.status === 'active')
-    .map((evaluation) => evaluation.actor.actor_id);
-  const inviteTargets = evaluations
-    .filter((evaluation) => evaluation.status === 'invited')
-    .map((evaluation) => evaluation.actor.actor_id);
+  // 人拉人直接入群：所有通过预检的候选都在建群事务内成为 active 成员，
+  // 不再生成待确认邀请，也不占用 100 人容量之外的邀请名额。
+  const activeOthers = evaluations.map((evaluation) => evaluation.actor.actor_id);
 
   if (activeOthers.length + 1 > LIMITS.groupMembersMax) {
     throw new BusinessError('ROOM_FULL', '群成员数量超过上限', {
@@ -826,13 +816,6 @@ export async function roomCreate(
   const payloadHash = await sha256Hex(stableStringify(input));
   const roomRef = `room_created:${roomId}`;
   const participants = [owner, ...activeOthers];
-  const { invitations, statements: invitationStatements } = directInvitationStatements(db, {
-    roomId,
-    inviterId: owner,
-    targets: inviteTargets,
-    at,
-    expiresAt: at + LIMITS.roomInviteTtlMs,
-  });
 
   let outcome: unknown;
   try {
@@ -869,7 +852,7 @@ export async function roomCreate(
             metadata: {
               owner_id: owner,
               members: activeOthers,
-              invited: inviteTargets,
+              invited: [],
             },
           },
           at,
@@ -883,7 +866,8 @@ export async function roomCreate(
              VALUES (?, ?, 'owner', 'active', (SELECT event_seq FROM events WHERE event_key = ?), 0, ?, 1, ?)`,
           )
           .bind(roomId, owner, roomRef, at, at),
-        // 自有 Agent 直接 active；插入时复核拉黑/管理关系，竞态失败只影响该目标。
+        // 自有 Agent 与其他合格候选都直接 active；插入时复核拉黑/管理关系，
+        // 竞态失败只影响该目标。
         ...activeOthers.map((member) =>
           db
             .prepare(
@@ -930,7 +914,6 @@ export async function roomCreate(
               owner,
             ),
         ),
-        ...invitationStatements,
         // 预检合格的候选在提交时全部失效时整批回滚，不能留下只有 owner 的群。
         db
           .prepare(
@@ -938,15 +921,10 @@ export async function roomCreate(
               'inviteTargetsMissing',
               `NOT EXISTS (
                  SELECT 1 FROM room_members WHERE room_id = ? AND actor_id <> ?
-               )
-               AND NOT EXISTS (
-                 SELECT 1 FROM room_invitations
-                  WHERE room_id = ? AND kind = 'direct' AND status = 'pending'
                )`,
             ),
           )
-          .bind(roomId, owner, roomId),
-        ...invitationInboxStatements(db, invitations, at),
+          .bind(roomId, owner),
         ...inboxChangeStatements(
           db,
           participants,

@@ -245,15 +245,14 @@ async function runOwnerLeaveConcurrency(): Promise<void> {
     );
     const afterSoloRejection = await roomOf(ownerConn, soloRoomId);
     checkEqual('G03 拒绝独自退群后 owner 仍在位', afterSoloRejection.room.owner_id, owner.actor_id);
-    const soloInvite = await callTool<{ invitation: { invitation_id: string } }>(
-      ownerConn.client,
-      'network_room_invite_create',
-      {
-        request_id: newRequestId('g03_solo_invite'),
-        room_id: soloRoomId,
-        target_actor_id: member.actor_id,
-      },
-    );
+    // 人拉人已改为直接入群，这里用链接验证解散后旧邀请入口失效。
+    const soloInvite = await callTool<{
+      invitation: { invitation_id: string } | null;
+      invite_key: string | null;
+    }>(ownerConn.client, 'network_room_invite_create', {
+      request_id: newRequestId('g03_solo_invite'),
+      room_id: soloRoomId,
+    });
     const soloDissolve = await callTool<GroupRoomView>(ownerConn.client, 'network_room_dissolve', {
       request_id: newRequestId('g03_solo_dissolve'),
       room_id: soloRoomId,
@@ -265,7 +264,8 @@ async function runOwnerLeaveConcurrency(): Promise<void> {
       'G03 解散后旧邀请不能加入',
       callTool(memberConn.client, 'network_room_invite_respond', {
         request_id: newRequestId('g03_solo_accept'),
-        invitation_id: soloInvite.invitation.invitation_id,
+        invitation_id: soloInvite.invitation?.invitation_id ?? '',
+        invite_key: soloInvite.invite_key ?? undefined,
         action: 'accept',
       }),
       'CONFLICT',

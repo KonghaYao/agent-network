@@ -259,7 +259,7 @@ export function groupDialog(): string {
 /**
  * 群组设置：群名、成员操作、邀请与生命周期入口。
  *
- * 按服务端 capabilities 展示操作；好友候选排除自己、当前成员与待确认邀请。
+ * 按服务端 capabilities 展示操作；好友候选排除自己与当前成员。
  */
 export function membersDialog(): string {
   return `<div class="modal" id="members-modal" hidden>
@@ -291,12 +291,6 @@ export function membersDialog(): string {
           <ul id="members-current" class="member-roster" aria-label="当前群成员"></ul>
           <p id="members-current-empty" class="members-empty" role="status" hidden>群里还没有成员</p>
           <div id="members-transfer" class="members-transfer" aria-live="polite" hidden></div>
-          <div id="members-invited-wrap" class="members-invited" hidden>
-            <p class="members-invited-title">邀请中
-              <span id="members-invited-count" class="members-count" aria-live="polite">0</span>
-            </p>
-            <ul id="members-invited" class="member-roster" aria-label="等待确认的邀请"></ul>
-          </div>
         </section>
         <section class="members-column" aria-labelledby="members-candidates-title">
           <header class="members-column-head">

@@ -416,7 +416,10 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
         })
       : null;
     checkEqual('G06-T03 解散前 B2 成功 claim', b2Claimed?.state, 'claimed');
-    await callTool(u1Conn.client, 'network_room_invite_create', {
+    const link3 = await callTool<{
+      invitation: { invitation_id: string } | null;
+      invite_key: string | null;
+    }>(u1Conn.client, 'network_room_invite_create', {
       request_id: newRequestId('g06_t03_link'),
       room_id: room3,
     });
@@ -426,15 +429,6 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
       target_actor_id: u2.actor_id,
     });
     checkEqual('G06-T03 解散前存在 pending 群主转让', ownerTransfer.owner_transfer?.status, 'pending');
-    const directInvite = await callTool<{ invitation: { invitation_id: string } }>(
-      u1Conn.client,
-      'network_room_invite_create',
-      {
-        request_id: newRequestId('g06_t03_direct'),
-        room_id: room3,
-        target_actor_id: u3.actor_id,
-      },
-    );
 
     // 群主不能带着其他成员直接退群；即使独自一人也必须先转移或解散。
     const ownerLeaveError = await expectToolError(
@@ -674,12 +668,13 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
     );
     check('G06-T03 保留 room_dissolved 审计', audit.items.some((item) => item.action === 'room_dissolved'));
 
-    // 解散后旧定向邀请不能加入。
+    // 解散后旧链接邀请不能加入。
     await expectToolError(
       'G06-T03 解散后旧邀请不能加入',
       callTool(u3Conn.client, 'network_room_invite_respond', {
         request_id: newRequestId('g06_t03_join'),
-        invitation_id: directInvite.invitation.invitation_id,
+        invitation_id: link3.invitation?.invitation_id ?? '',
+        invite_key: link3.invite_key ?? undefined,
         action: 'accept',
       }),
       'CONFLICT',
@@ -722,18 +717,9 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
     checkEqual('G06-T05 拒绝后 owner 仍在位', afterAloneLeave.room.owner_id, u1.actor_id);
     checkEqual('G06-T05 拒绝后群仍为 active', afterAloneLeave.room.status, 'active');
 
-    const invite5 = await callTool<{ invitation: { invitation_id: string } }>(
-      u1Conn.client,
-      'network_room_invite_create',
-      {
-        request_id: newRequestId('g06_t05_direct'),
-        room_id: room5,
-        target_actor_id: u3.actor_id,
-      },
-    );
     const link5 = await callTool<{
-      invitation: { invitation_id: string };
-      invite_key: string;
+      invitation: { invitation_id: string } | null;
+      invite_key: string | null;
     }>(u1Conn.client, 'network_room_invite_create', {
       request_id: newRequestId('g06_t05_link'),
       room_id: room5,
@@ -751,20 +737,11 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
     checkEqual('G06-T05 解散后 read_only', dissolve5.room.read_only, true);
     checkEqual('G06-T05 解散后不能再次解散', dissolve5.room.can_dissolve, false);
     await expectToolError(
-      'G06-T05 解散后旧定向邀请不能加入',
-      callTool(u3Conn.client, 'network_room_invite_respond', {
-        request_id: newRequestId('g06_t05_direct_accept'),
-        invitation_id: invite5.invitation.invitation_id,
-        action: 'accept',
-      }),
-      'CONFLICT',
-    );
-    await expectToolError(
       'G06-T05 解散后旧邀请链接不能加入',
       callTool(u3Conn.client, 'network_room_invite_respond', {
         request_id: newRequestId('g06_t05_link_accept'),
-        invitation_id: link5.invitation.invitation_id,
-        invite_key: link5.invite_key,
+        invitation_id: link5.invitation?.invitation_id ?? '',
+        invite_key: link5.invite_key ?? undefined,
         action: 'accept',
       }),
       'CONFLICT',

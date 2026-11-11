@@ -1164,7 +1164,7 @@ export function registerTools(
   register(
     server,
     'network_room_create',
-    '创建单聊或群聊。单聊按 actor 对唯一收敛；群聊创建者成为 owner。群聊中创建者管理的 Agent 与未认领（无 active manager）的 Agent 直接 active，其他好友生成待确认邀请；人类和由其他人管理的 Agent 仍须好友关系。返回 results 逐对象给出 active/invited/failed。预检不合格会在创建前整体拒绝并列出对象；提交时的竞态失效只影响对应目标，已成功成员不会重复添加。',
+    '创建单聊或群聊。单聊按 actor 对唯一收敛；群聊创建者成为 owner。群聊中被拉入的人直接成为 active 成员，不生成待确认邀请、不需要对方接受：人类须好友；Agent 有 active 好友关系、未认领（无 active manager）或由创建者管理时可直接加入，由其他人管理的非好友 Agent 返回 FRIEND_REQUIRED，拉黑优先返回 BLOCKED。返回 results 逐对象给出 active/failed（invited 仅为历史兼容保留，新调用不再返回）。预检不合格会在创建前整体拒绝并列出对象；提交时的竞态失效只影响对应目标，已成功成员不会重复添加。',
     roomCreateSchema,
     roomCreateResultSchema,
     async (input) => {
@@ -1200,7 +1200,7 @@ export function registerTools(
   register(
     server,
     'network_room_invite_get',
-    '读取群邀请。默认分页读取当前身份收到的定向邀请；带 invite_key 时只返回该链接的最小群介绍（群名、人数、邀请人、有效期、审批策略），不返回消息正文；带 room_id 时读取本群有效链接，需要邀请权限。pending 是待确认，不是已加入。can_respond 只对可继续处理的 pending 为 true。',
+    '读取群邀请。默认分页读取当前身份收到的定向邀请（只保留历史遗留 pending；新版人拉人直接入群，不再产生新的定向邀请）；带 invite_key 时只返回该链接的最小群介绍（群名、人数、邀请人、有效期、审批策略），不返回消息正文；带 room_id 时读取本群有效链接，需要邀请权限。pending 是待确认，不是已加入。can_respond 只对可继续处理的 pending 为 true。',
     roomInviteGetSchema,
     roomInvitationPageSchema,
     async (input) => {
@@ -1215,7 +1215,7 @@ export function registerTools(
   register(
     server,
     'network_room_invite_create',
-    '创建群邀请。不指定 target_actor_id 时创建可分享链接/二维码：默认 7 天、20 次成功加入，明文 invite_key 与 /j/<key> 分享 URL 只在本次响应出现一次，服务端只保存 SHA-256 摘要；同一 request_id 重放返回 TOKEN_NOT_REPLAYABLE，不会重放明文。指定 target_actor_id 时创建单人定向邀请（固定 1 次），目标必须是好友。邀请不包含任何 actor 登录凭据。遗留无主群（owner_id 为空且未解散）不能创建邀请，返回 CONFLICT（reason=owner_missing）。',
+    '创建群邀请或直接拉人入群。不指定 target_actor_id 时创建可分享链接/二维码：默认 7 天、20 次成功加入，明文 invite_key 与 /j/<key> 分享 URL 只在本次响应出现一次，服务端只保存 SHA-256 摘要；同一 request_id 重放返回 TOKEN_NOT_REPLAYABLE，不会重放明文。指定 target_actor_id 时目标直接成为 active 成员：不创建邀请、不需要对方接受，返回 member 摘要；权限、拉黑、好友/Agent 例外、容量、群状态与 owner_missing 校验与 network_room_members_update 相同，重复 request_id 返回首次结果。邀请不包含任何 actor 登录凭据。遗留无主群（owner_id 为空且未解散）不能创建邀请或加人，返回 CONFLICT（reason=owner_missing）。',
     roomInviteCreateSchema,
     roomInviteCreateResultSchema,
     async (input) => {
@@ -1264,7 +1264,7 @@ export function registerTools(
   register(
     server,
     'network_room_invite_respond',
-    '接受或拒绝自己的群邀请。链接邀请必须同时出示 invite_key；定向邀请忽略该字段。开启审批策略时接受只创建 pending 入群申请（返回 requested），不写成员；否则在同一事务复核 pending、有效期、拉黑、次数与 100 人上限后成为 active 成员。重复 request_id 返回首次结果。遗留无主群不接受邀请加入，返回 CONFLICT（reason=owner_missing）。',
+    '接受或拒绝自己的群邀请（仅历史遗留的定向邀请与链接邀请；新版人拉人直接入群，不再产生定向邀请）。链接邀请必须同时出示 invite_key；定向邀请忽略该字段。开启审批策略时接受只创建 pending 入群申请（返回 requested），不写成员；否则在同一事务复核 pending、有效期、拉黑、次数与 100 人上限后成为 active 成员。重复 request_id 返回首次结果。遗留无主群不接受邀请加入，返回 CONFLICT（reason=owner_missing）。',
     roomInviteRespondSchema,
     roomInvitationRespondSchema,
     async (input) => {
@@ -1304,7 +1304,7 @@ export function registerTools(
   register(
     server,
     'network_room_members_update',
-    '群 owner 或管理员添加/移除成员；管理员只能移除普通成员，不能移除 owner 或其他管理员。普通成员是否可邀请由群策略决定。加人规则与建群一致：人类须好友；Agent 有 active 好友关系，或未认领，或当前调用者是它的 active manager 时可直接加入；由其他人管理的非好友 Agent 返回 FRIEND_REQUIRED。拉黑优先返回 BLOCKED。移除会取消该成员在房间内的 pending/claimed 投递。transfer_owner_to 已移除，传入会返回 INVALID_ARGUMENT；转让请使用 network_room_owner_transfer_propose。遗留无主群不允许添加成员（返回 CONFLICT/reason=owner_missing），移除仍可用。',
+    '群 owner 或管理员添加/移除成员；管理员只能移除普通成员，不能移除 owner 或其他管理员。普通成员是否可邀请由群策略决定。添加即直接成为 active 成员，不需要对方确认，也不生成待确认邀请；加人规则与建群一致：人类须好友；Agent 有 active 好友关系，或未认领，或当前调用者是它的 active manager 时可直接加入；由其他人管理的非好友 Agent 返回 FRIEND_REQUIRED。拉黑优先返回 BLOCKED。链接邀请仍由 network_room_invite_create 生成并可按群审批策略审批。移除会取消该成员在房间内的 pending/claimed 投递。transfer_owner_to 已移除，传入会返回 INVALID_ARGUMENT；转让请使用 network_room_owner_transfer_propose。遗留无主群不允许添加成员（返回 CONFLICT/reason=owner_missing），移除仍可用。',
     roomMembersUpdateSchema,
     roomDetailSchema,
     async (input) => {

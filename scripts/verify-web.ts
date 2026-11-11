@@ -9877,9 +9877,9 @@ async function main(): Promise<void> {
         0,
       );
       checkEqual(
-        '邀请中数量为 0',
-        await page.locator('#members-invited-count').textContent(),
-        '0',
+        '成员面板不再渲染待确认邀请区块',
+        await page.locator('#members-invited-wrap').count(),
+        0,
       );
       checkEqual(
         'unclaimed Agent 计入 active 成员数',
@@ -10587,8 +10587,8 @@ async function main(): Promise<void> {
       );
       checkEqual(
         '390px 建群成功后没有待确认邀请',
-        await page.locator('#members-invited-wrap').isHidden(),
-        true,
+        await page.locator('#members-invited-wrap').count(),
+        0,
       );
       await page.locator('#members-cancel').click();
       await context.close();

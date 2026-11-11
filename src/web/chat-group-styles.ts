@@ -117,12 +117,6 @@ export const GROUP_STYLE = `
   .members-transfer-meta { margin: 0; font-size: 11px; color: var(--wx-muted); }
   .members-transfer-actions { display: flex; flex-wrap: wrap; gap: 6px;
     margin-top: 6px; }
-  .members-invited { flex: 0 0 auto; border-top: 1px solid var(--wx-line);
-    padding: 4px; }
-  .members-invited-title { display: flex; align-items: center; gap: 6px;
-    margin: 4px 6px; font-size: 12px; color: var(--wx-muted); }
-  .member-invited-item { opacity: 0.85; }
-  .member-invited-item:hover { background: transparent; }
   /* 邀请链接与入群申请：明文链接只保存在内存，列表只显示状态与次数。 */
   .members-invites, .members-requests { margin-top: 10px; border: 1px solid var(--wx-line);
     border-radius: 8px; overflow: hidden; background: var(--wx-bg); }

@@ -10,7 +10,6 @@
  * sync 与任务上下文覆盖现有入口，不把不存在的工具写成已验证。
  */
 
-import { acceptGroupInvites } from './acceptance-helpers';
 import { callTool, check, checkEqual, expectToolError, newRequestId } from './harness';
 import {
   HISTORY_MARKER,
@@ -37,13 +36,16 @@ export async function runGroupHistoryAcceptance(options: { hasDrive: boolean }):
   const owner = await createActor('G07 群主', 'human');
   const member = await createActor('G07 成员', 'human');
   const agent = await createActor('G07 Agent', 'agent');
+  const seed = await createActor('G07 种子', 'agent');
   await makeFriends(owner, member);
   await makeFriends(owner, agent);
   try {
     // ---- G07-T01：新成员不能绕过历史边界 ----
+    // 人拉人直接入群后，成员在加入前已是 active；用种子 Agent 建群，
+    // 发送加入前消息后再直接添加 member 与 agent，才能验证 from_join。
     const roomId = await createRoom(
       owner.connection,
-      [member.actor.actor_id],
+      [seed.actor.actor_id],
       'G07 历史边界群',
     );
     const beforeJoin = await sendMessage(owner.connection, roomId, HISTORY_MARKER);
@@ -51,13 +53,10 @@ export async function runGroupHistoryAcceptance(options: { hasDrive: boolean }):
       ? await bindFile(owner, roomId, 'g07-before-join.txt', HISTORY_MARKER)
       : null;
 
-    await acceptGroupInvites(member.connection, roomId);
-    // unclaimed Agent 可被直接加入，但加入时刻仍必须晚于既有消息/任务，
-    // 才能验证 G07 的成员代次边界。
     await callTool(owner.connection.client, 'network_room_members_update', {
-      request_id: newRequestId('g07_add_agent'),
+      request_id: newRequestId('g07_add_members'),
       room_id: roomId,
-      add: [agent.actor.actor_id],
+      add: [member.actor.actor_id, agent.actor.actor_id],
     });
 
     const memberDetail = await roomDetail(member.connection, roomId);
@@ -339,6 +338,7 @@ export async function runGroupHistoryAcceptance(options: { hasDrive: boolean }):
       owner.connection.close(),
       member.connection.close(),
       agent.connection.close(),
+      seed.connection.close(),
     ]);
   }
 }

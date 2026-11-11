@@ -102,6 +102,7 @@ export async function runRoomInviteReplayUnitChecks(): Promise<void> {
     const input = { request_id: requestId, room_id: ROOM, max_uses: 5 };
 
     const created = await roomInviteCreate(d1, principal, input, ORIGIN);
+    if (!created.invitation) throw new CheckFailure('G02', '链接邀请缺少 invitation');
     check(
       'G02 首次创建返回明文 invite_key',
       typeof created.invite_key === 'string' && created.invite_key.length > 0,
