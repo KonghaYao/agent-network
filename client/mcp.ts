@@ -120,7 +120,7 @@ interface ToolResult {
   structuredContent?: Record<string, unknown>;
 }
 
-function parseRpcPayload(text: string, contentType: string): Record<string, unknown> | null {
+export function parseRpcPayload(text: string, contentType: string): Record<string, unknown> | null {
   const trimmed = text.trim();
   if (trimmed.length === 0) return null;
   try {

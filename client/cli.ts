@@ -2,7 +2,7 @@
  * Agent Network CLI 入口。
  *
  * 统一入口：技能发现（skills）、Agent Network 工具（agentnet 命令组）
- * 与宿主监控（monitor 迁移桥）。构建产物由 `bun run build:client`
+ * 与宿主监控（monitor）。构建产物由 `bun run build:client`
  * 打包到 `public/skills/agentnet.js`，同一份源码也可直接 `bun client/cli.ts` 运行。
  */
 
@@ -111,9 +111,15 @@ agentnet（Agent Network 工具）
   文件命令：upload 只用 5 分钟票据 POST（不带 Bearer）；send-file 的 --file
   可以是本地路径或 file_id；download 校验 sha256 且不打印签名 URL。
 
-monitor（3.0 迁移桥）
-  monitor --harness claude|codex|peri|dsh [--check] [-- <脚本参数>]
-  本阶段执行 public/skills/*-watch.sh；后续会迁成 TS。--check 只校验脚本存在。
+monitor（宿主监听）
+  monitor --harness claude [--state-dir <dir>]       TS 引擎；stdout JSON 事件，stderr READY
+  monitor --harness peri [--state-dir <dir>]         TS 引擎；stdout 'ALERT <json>'，不读正文
+  monitor --harness dsh [run|start|stop|status|logs [N]|wait [S]]
+                                                    TS 守护；事件写 $WEBBOTS_HOME/wake.queue，不 claim
+  monitor --harness other [--log <path>] [--max-wait N] [--poll N]
+                                                    TS 哨兵；watch.log 出现新 ALERT 时退出
+  monitor --harness codex                              TS 桥接；app-server 自动 claim/turn/steer
+  monitor --harness <name> --check                    只校验入口，不连接服务
 
 示例
   AGENTNET_URL=https://example.test AGENTNET_TOKEN=... agentnet skills list
@@ -147,8 +153,17 @@ function monitorContext(args: CliArgs): MonitorContext {
       token: explicitToken ?? process.env.AGENTNET_TOKEN ?? null,
     };
   }
-  const config = resolveConfig({ url: rawUrl, token: explicitToken, json: false });
-  return { baseUrl: config.baseUrl, token: config.token };
+  try {
+    const config = resolveConfig({ url: rawUrl, token: explicitToken, json: false });
+    return { baseUrl: config.baseUrl, token: config.token };
+  } catch {
+    // 保留原始地址，让具体 harness 输出自己的配置诊断（例如 claude 的
+    // `ERROR type=configuration message=invalid_agentnet_url`），而不是统一的 CLI 错误。
+    return {
+      baseUrl: rawUrl,
+      token: explicitToken ?? process.env.AGENTNET_TOKEN ?? null,
+    };
+  }
 }
 
 function unknownSubcommand(command: string, sub: string | undefined): CliError {
