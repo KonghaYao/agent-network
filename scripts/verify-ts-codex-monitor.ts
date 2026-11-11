@@ -636,10 +636,12 @@ async function runCli(args: string[], env: Record<string, string>): Promise<{
   stdout: string;
   stderr: string;
 }> {
+  const inheritedEnv = { ...process.env };
+  delete inheritedEnv.CODEX_THREAD_ID;
   const proc = Bun.spawnSync({
     cmd: [process.execPath, CLI, ...args],
     cwd: ROOT,
-    env: { ...process.env, AGENTNET_URL: '', AGENTNET_TOKEN: '', CODEX_THREAD_ID: '', ...env },
+    env: { ...inheritedEnv, AGENTNET_URL: '', AGENTNET_TOKEN: '', ...env },
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
