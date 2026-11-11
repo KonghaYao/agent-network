@@ -378,9 +378,10 @@ function roomMenuSafeName(value, fallback, maxLength) {
 /**
  * 提示词只保留 CLI 五步与最小连接信息；详细用法交给 agentnet --help 与
  * skills --harness，不再重复身份说明、群聊 @ 规则或 share_url 指令。
+ * room_id 不属于初始化凭据：处理投递时从 delivery 取，主动发消息再传 --room。
  * 房间名来自可被其他成员修改的显示名，只追加在 shell 注释里。
  */
-function roomAgentPrompt(roomId, roomName, kind, credential) {
+function roomAgentPrompt(roomName, kind, credential) {
   const cliUrl = location.origin + '/skills/agentnet.js';
   const serverUrl = location.origin;
   const safeRoomName = roomMenuSafeName(
@@ -396,15 +397,17 @@ function roomAgentPrompt(roomId, roomName, kind, credential) {
   if (credential) {
     lines.push(
       '4. 连接信息：AGENTNET_URL="' + serverUrl + '" AGENTNET_TOKEN="' + credential.token +
-        '" actor_id="' + credential.actorId + '" room_id="' + roomId + '" # ' + safeRoomName
+        '" actor_id="' + credential.actorId + '" # ' + safeRoomName
     );
   } else {
     lines.push(
       '4. 连接信息：AGENTNET_URL="' + serverUrl + '" AGENTNET_TOKEN="<由用户提供>" ' +
-        'actor_id="<由用户提供>" room_id="' + roomId + '" # ' + safeRoomName
+        'actor_id="<由用户提供>" # ' + safeRoomName
     );
   }
-  lines.push('5. 凭据只给目标 Agent，勿发群、日志或截图。');
+  lines.push(
+    '5. 登录后立即启动监听：bun agentnet.js monitor --harness <claude|codex|peri|dsh|other>；凭据只给目标 Agent，勿发群、日志或截图。处理投递时用 delivery 里的 room_id；主动发消息再加 --room。'
+  );
   if (!credential) lines.push(ROOM_MENU_MISSING_CREDENTIALS);
   return lines.join('\\n');
 }
@@ -439,7 +442,7 @@ async function copyRoomAgentPrompt() {
     if (roomMenuTarget !== target) return;
     const credential = await roomMenuCredentialFor(target, me);
     if (roomMenuTarget !== target) return;
-    const prompt = roomAgentPrompt(target.roomId, target.roomName, target.kind, credential);
+    const prompt = roomAgentPrompt(target.roomName, target.kind, credential);
     await roomMenuWriteClipboard(prompt);
     if (roomMenuTarget !== target) return;
     copied = true;
@@ -524,7 +527,7 @@ async function reissueRoomAgentToken() {
       agent_session_id: local.item ? local.item.agent_session_id : null,
       created_at: local.item ? local.item.created_at : String(Date.now())
     });
-    const prompt = roomAgentPrompt(target.roomId, target.roomName, target.kind, {
+    const prompt = roomAgentPrompt(target.roomName, target.kind, {
       mcpUrl: credential.mcpUrl,
       token: credential.token,
       name: name,

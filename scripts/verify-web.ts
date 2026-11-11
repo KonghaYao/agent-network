@@ -79,6 +79,7 @@ const PROMPT_SHORT_CLI = [
   '/skills/agentnet.js',
   'bun agentnet.js --help',
   'bun agentnet.js skills --harness',
+  'bun agentnet.js monitor --harness',
 ];
 const REMOVED_PROMPT_TEXT = ['群聊 @ 规则', 'share_url', 'AGENTNET_MCP_URL', '身份名称：'];
 const DEPRECATED_PROMPT_STEPS = ['curl -fsSL', 'bun agentnet.js login', ' register --name', ' issue'];
@@ -5576,13 +5577,14 @@ async function main(): Promise<void> {
         'window.__copiedRoomPrompt',
       )) as string | null;
       check(
-        '群聊提示词选择房间内有凭据的 Agent',
+        '群聊提示词选择房间内有凭据的 Agent 且不含 room_id',
         Boolean(groupCredentialPrompt) &&
-          groupCredentialPrompt!.includes(`room_id="${data.group.room.room_id}"`) &&
+          !groupCredentialPrompt!.includes('room_id=') &&
           groupCredentialPrompt!.includes(`actor_id="${data.agentB.actor_id}"`) &&
           groupCredentialPrompt!.includes(`AGENTNET_URL="${server.base}"`) &&
           groupCredentialPrompt!.includes(`AGENTNET_TOKEN="${savedGroupToken}"`) &&
           groupCredentialPrompt!.includes(`${server.base}/skills/agentnet.js`) &&
+          groupCredentialPrompt!.includes('登录后立即启动监听') &&
           groupCredentialPrompt!.split('\n').length === 5 &&
           PROMPT_SHORT_CLI.every((line) => groupCredentialPrompt!.includes(line)) &&
           REMOVED_PROMPT_TEXT.every((text) => !groupCredentialPrompt!.includes(text)) &&
@@ -5603,7 +5605,7 @@ async function main(): Promise<void> {
       check(
         '群聊无本地凭据时回退通用提示词',
         Boolean(groupFallbackPrompt) &&
-          groupFallbackPrompt!.includes(`room_id="${data.group.room.room_id}"`) &&
+          !groupFallbackPrompt!.includes('room_id=') &&
           groupFallbackPrompt!.includes('本浏览器没有保存该 Agent 的 token/MCP URL') &&
           groupFallbackPrompt!.includes('AGENTNET_TOKEN="<由用户提供>"') &&
           groupFallbackPrompt!.includes('actor_id="<由用户提供>"') &&
@@ -5740,9 +5742,12 @@ async function main(): Promise<void> {
         '390px 长按菜单可复制当前房间提示词',
         Boolean(
           ((await page.evaluate('window.__copiedRoomPrompt')) as string | null)?.includes(
-            data.group.room.room_id,
+            'AGENTNET_TOKEN="<由用户提供>"',
           ),
-        ),
+        ) &&
+          !((await page.evaluate('window.__copiedRoomPrompt')) as string | null)?.includes(
+            'room_id=',
+          ),
       );
       check(
         '390px 未保存凭据时提示词说明缺少 MCP URL/token',
@@ -6319,12 +6324,12 @@ async function main(): Promise<void> {
       const directUrl = directEntry?.mcp_url ?? '';
       const directToken = new URL(directUrl).searchParams.get('token') ?? '';
       check(
-        'direct 提示词包含重置后的 token、actor_id 与房间',
+        'direct 提示词包含重置后的 token、actor_id 且不含 room_id',
         directToken.length > 0 &&
           directPrompt.includes(`AGENTNET_TOKEN="${directToken}"`) &&
           directPrompt.includes(`AGENTNET_URL="${server.base}"`) &&
           directPrompt.includes(`actor_id="${maliciousAgent.actor_id}"`) &&
-          directPrompt.includes(`room_id="${injectionDirect.room.room_id}"`) &&
+          !directPrompt.includes('room_id=') &&
           directPrompt.split('\n').length === 5 &&
           !directPrompt.includes(savedToken),
         directPrompt,
@@ -6332,6 +6337,7 @@ async function main(): Promise<void> {
       check(
         'direct 提示词使用短版 CLI 指引且不含废弃脚本',
         directPrompt.includes(`${server.base}/skills/agentnet.js`) &&
+          directPrompt.includes('登录后立即启动监听') &&
           PROMPT_SHORT_CLI.every((line) => directPrompt.includes(line)) &&
           REMOVED_PROMPT_TEXT.every((text) => !directPrompt.includes(text)) &&
           DEPRECATED_PROMPT_SCRIPTS.every((name) => !directPrompt.includes(name)) &&
@@ -6349,7 +6355,7 @@ async function main(): Promise<void> {
         0,
       );
       const directRoomLine =
-        directLines.find((line) => line.includes(`room_id="${injectionDirect.room.room_id}"`)) ?? '';
+        directLines.find((line) => line.includes('AGENTNET_TOKEN="')) ?? '';
       check(
         'direct 房间名净化后仍在连接行',
         directRoomLine.endsWith(`# 注入 ${injectionLine}`) &&
@@ -6376,12 +6382,10 @@ async function main(): Promise<void> {
           groupConnectionLine.endsWith(`# 注入群 ${injectionLine}`),
         groupConnectionLine,
       );
-      const groupRoomLine =
-        groupLines.find((line) => line.includes(`room_id="${injectionGroup.room.room_id}"`)) ?? '';
       check(
         'group 群名净化后仍在连接行',
-        groupRoomLine.endsWith(`# 注入群 ${injectionLine}`),
-        groupRoomLine,
+        groupConnectionLine.endsWith(`# 注入群 ${injectionLine}`),
+        groupConnectionLine,
       );
       checkEqual(
         '恶意群名不能新增注入指令行',
@@ -6395,11 +6399,11 @@ async function main(): Promise<void> {
       );
       const truncatedGroupPrompt = await copyGroupPrompt(groupSelector, credentialStatus);
       const truncatedGroupLines = truncatedGroupPrompt.split('\n');
-      const groupRoomPrefix = `room_id="${injectionGroup.room.room_id}" # `;
       const truncatedGroupLine =
-        truncatedGroupLines.find((line) => line.includes(groupRoomPrefix)) ?? '';
+        truncatedGroupLines.find((line) => line.includes('AGENTNET_TOKEN="')) ?? '';
+      const groupRoomPrefix = ' # ';
       const truncatedGroupName = truncatedGroupLine.slice(
-        truncatedGroupLine.indexOf(groupRoomPrefix) + groupRoomPrefix.length,
+        truncatedGroupLine.lastIndexOf(groupRoomPrefix) + groupRoomPrefix.length,
       );
       check(
         '超长群名截断到 160 且仍在连接行内',
@@ -6418,9 +6422,7 @@ async function main(): Promise<void> {
       const groupFallbackPrompt = await copyGroupPrompt(groupSelector, missingStatus);
       const groupFallbackLines = groupFallbackPrompt.split('\n');
       const fallbackRoomLine =
-        groupFallbackLines.find((line) =>
-          line.includes(`room_id="${injectionGroup.room.room_id}"`),
-        ) ?? '';
+        groupFallbackLines.find((line) => line.includes('AGENTNET_TOKEN="')) ?? '';
       check(
         '空群名回退为“群聊”',
         fallbackRoomLine.endsWith('# 群聊'),
@@ -6662,15 +6664,17 @@ async function main(): Promise<void> {
       check(
         '新建 Agent 提示词使用短版 CLI 自学入口',
         newAgentPrompt.includes(`${server.base}/skills/agentnet.js`) &&
+          newAgentPrompt.includes('登录后立即启动监听') &&
           PROMPT_SHORT_CLI.every((line) => newAgentPrompt.includes(line)),
         newAgentPrompt,
       );
       check(
-        '提示词包含实际 token 与房间占位',
+        '提示词包含实际 token 且不含 room_id',
         newAgentUrlToken.length > 0 &&
           newAgentPrompt.includes(`AGENTNET_TOKEN="${newAgentUrlToken}"`) &&
           newAgentPrompt.includes(`AGENTNET_URL="${server.base}"`) &&
-          newAgentPrompt.includes('room_id="<进入会话后由用户提供>"') &&
+          !newAgentPrompt.includes('room_id=') &&
+          newAgentPrompt.includes('处理投递时用 delivery 里的 room_id') &&
           !newAgentPrompt.includes(data.humanToken),
         newAgentPrompt,
       );
@@ -7033,12 +7037,12 @@ async function main(): Promise<void> {
       const mobileMcpUrl = await page.inputValue('#new-agent-url');
       const mobileToken = new URL(mobileMcpUrl).searchParams.get('token') ?? '';
       check(
-        '390px 提示词包含 CLI 入口、token 与房间占位',
+        '390px 提示词包含 CLI 入口、token 且不含 room_id',
         mobilePrompt.includes('/skills/agentnet.js') &&
           PROMPT_SHORT_CLI.every((line) => mobilePrompt.includes(line)) &&
           mobileToken.length > 0 &&
           mobilePrompt.includes(`AGENTNET_TOKEN="${mobileToken}"`) &&
-          mobilePrompt.includes('room_id="'),
+          !mobilePrompt.includes('room_id='),
       );
       const mobileMetrics = (await page.evaluate(`(() => {
         const card = document.querySelector('#new-agent-modal .modal-card');
@@ -22797,7 +22801,7 @@ async function main(): Promise<void> {
         Boolean(reissuePrompt) &&
           reissuePrompt!.includes(`AGENTNET_TOKEN="${reissuedToken}"`) &&
           reissuePrompt!.includes(`actor_id="${reissueAgent.actor_id}"`) &&
-          reissuePrompt!.includes(`room_id="${reissueRoom.room.room_id}"`) &&
+          !reissuePrompt!.includes('room_id=') &&
           reissuePrompt!.split('\n').length === 5 &&
           !reissuePrompt!.includes(reissueOldToken),
       );
@@ -22811,9 +22815,9 @@ async function main(): Promise<void> {
         reissuePrompt,
       );
       check(
-        '重置提示词包含房间、actor_id、CLI URL 与安全提示',
+        '重置提示词包含 actor_id、CLI URL、安全提示且不含 room_id',
         Boolean(reissuePrompt) &&
-          reissuePrompt!.includes(`room_id="${reissueRoom.room.room_id}"`) &&
+          !reissuePrompt!.includes('room_id=') &&
           reissuePrompt!.includes(`actor_id="${reissueAgent.actor_id}"`) &&
           reissuePrompt!.includes(`${server.base}/skills/agentnet.js`) &&
           reissuePrompt!.includes('凭据只给目标 Agent，勿发群、日志或截图') &&
@@ -23067,7 +23071,7 @@ async function main(): Promise<void> {
           mobileToken !== reissuedToken &&
           Boolean(mobilePrompt) &&
           mobilePrompt!.includes(`AGENTNET_TOKEN="${mobileToken}"`) &&
-          mobilePrompt!.includes(`room_id="${reissueRoom.room.room_id}"`) &&
+          !mobilePrompt!.includes('room_id=') &&
           mobilePrompt!.includes(`${server.base}/skills/agentnet.js`) &&
           DEPRECATED_PROMPT_SCRIPTS.every((name) => !mobilePrompt!.includes(name)),
       );
@@ -23186,7 +23190,7 @@ async function main(): Promise<void> {
         check(
           '非管理者复制提示词并说明缺少凭据',
           Boolean(fallbackPrompt) &&
-            fallbackPrompt!.includes(unmanagedRoom.room.room_id) &&
+            !fallbackPrompt!.includes('room_id=') &&
             fallbackPrompt!.includes('本浏览器没有保存该 Agent 的 token/MCP URL'),
           fallbackPrompt,
         );

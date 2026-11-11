@@ -21,6 +21,21 @@ import { runPeriMonitor } from '../monitor/peri';
 const TS_HARNESSES = new Set(['claude', 'other', 'peri', 'dsh', 'codex']);
 const SUPPORTED = [...TS_HARNESSES];
 
+/** login 之后立即启动监听；up 需要先校验 harness，避免登录后才发现参数错误。 */
+export function assertHarness(harness: string | undefined): string {
+  if (!harness) {
+    throw new CliError(
+      `缺少 --harness（支持：${SUPPORTED.join('|')}；运行 agentnet monitor --help 查看示例）`,
+    );
+  }
+  if (!TS_HARNESSES.has(harness)) {
+    throw new CliError(
+      `未知 harness：${harness}（支持：${SUPPORTED.join('|')}；运行 agentnet skills --harness ${harness} 查看说明）`,
+    );
+  }
+  return harness;
+}
+
 export interface MonitorContext {
   baseUrl: string | null;
   token: string | null;
@@ -79,17 +94,7 @@ export async function monitor(
   options: MonitorOptions,
   scriptArgs: readonly string[] = [],
 ): Promise<number> {
-  const harness = options.harness;
-  if (!harness) {
-    throw new CliError(
-      `缺少 --harness（支持：${SUPPORTED.join('|')}；运行 agentnet monitor --help 查看示例）`,
-    );
-  }
-  if (!TS_HARNESSES.has(harness)) {
-    throw new CliError(
-      `未知 harness：${harness}（支持：${SUPPORTED.join('|')}；运行 agentnet skills --harness ${harness} 查看说明）`,
-    );
-  }
+  const harness = assertHarness(options.harness);
   const extra = [...scriptArgs];
   // dsh 需要在位置参数里收子命令（start/stop/status/logs/wait）。
   if (harness !== 'dsh' && extra.length > 0) {

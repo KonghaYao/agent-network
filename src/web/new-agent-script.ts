@@ -48,8 +48,8 @@ function newAgentBuildPrompt(token, actorId) {
     '2. 读用法：bun agentnet.js --help',
     '3. 按宿主接入：bun agentnet.js skills --harness <claude|codex|peri|dsh|other>',
     '4. 连接信息：AGENTNET_URL="' + serverUrl + '" AGENTNET_TOKEN="' + token +
-      '" actor_id="' + actorId + '" room_id="<进入会话后由用户提供>"',
-    '5. 凭据只给目标 Agent，勿发群、日志或截图。'
+      '" actor_id="' + actorId + '"',
+    '5. 登录后立即启动监听：bun agentnet.js monitor --harness <claude|codex|peri|dsh|other>；凭据只给目标 Agent，勿发群、日志或截图。处理投递时用 delivery 里的 room_id；主动发消息再加 --room。'
   ].join('\\n');
 }
 
