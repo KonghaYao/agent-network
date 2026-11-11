@@ -10,11 +10,11 @@
  */
 
 import { CliError, resolveConfig } from '../mcp';
-import { asRecord } from '../output';
 import { MonitorEngine, type MonitorEventFormat } from './engine';
 import {
   REMINDER_HINT,
   claimNoticeEvent,
+  deliveryFields,
   type ClaimFailure,
   type ClaimInfo,
   type DeliveryFields,
@@ -31,11 +31,6 @@ const ALERT_PREFIX = 'ALERT ';
 /** 与旧脚本的 clientInfo 一致。 */
 const CLIENT_NAME = 'peri-watch';
 const CLIENT_VERSION = '2.0.0';
-
-/** jq `//`：null/undefined/false 才回退。 */
-function or<T>(value: T | null | undefined | false, fallback: T): T {
-  return value === null || value === undefined || value === false ? fallback : value;
-}
 
 /** jq 对象字面量缺省值语义：缺键或 undefined 输出 null。 */
 function raw(value: unknown): unknown {
@@ -74,11 +69,11 @@ function streamDelivery(item: JsonObject, fields: DeliveryFields, claim: ClaimIn
     type: 'delivery',
     source: streamSource(item),
     event_id: raw(item.event_id),
-    delivery_id: raw(item.delivery_id),
-    room_id: raw(item.room_id),
-    message_id: raw(item.message_id),
-    sender_id: raw(item.sender_id),
-    seq: raw(item.seq),
+    delivery_id: text(fields.deliveryId),
+    room_id: text(fields.roomId),
+    message_id: text(fields.messageId),
+    sender_id: text(fields.senderId),
+    seq: text(fields.seq),
     created_at: raw(item.created_at),
     attempt: claim.attempt,
     claim_id: claim.claimId,
@@ -91,15 +86,14 @@ function streamDelivery(item: JsonObject, fields: DeliveryFields, claim: ClaimIn
 
 /** 重连快照 delivery：取 inbox 条目的 created_seq 与 message.sender_id。 */
 function snapshotDelivery(item: JsonObject, fields: DeliveryFields, claim: ClaimInfo): JsonObject {
-  const message = asRecord(item.message);
   return {
     type: 'delivery',
     source: 'inbox.snapshot',
-    delivery_id: raw(item.delivery_id),
-    room_id: raw(item.room_id),
-    message_id: raw(item.message_id),
-    sender_id: text(or(message.sender_id, '')),
-    seq: text(or(item.seq, or(item.created_seq, ''))),
+    delivery_id: text(fields.deliveryId),
+    room_id: text(fields.roomId),
+    message_id: text(fields.messageId),
+    sender_id: text(fields.senderId),
+    seq: text(fields.seq),
     created_seq: raw(item.created_seq),
     attempt: claim.attempt,
     claim_id: claim.claimId,
@@ -121,18 +115,19 @@ function periDelivery(
     : streamDelivery(item, fields, claim);
 }
 
-/** reminder 不 claim、不带正文；字段保持 jq 的 null 语义。 */
+/** reminder 不 claim、不带正文；attempt/progress_at 保持 jq 的 null 语义。 */
 function periReminder(item: JsonObject): JsonObject {
+  const fields = deliveryFields(item);
   return {
     type: 'reminder',
     source: 'stream',
-    delivery_id: raw(item.delivery_id),
-    room_id: raw(item.room_id),
-    message_id: raw(item.message_id),
+    delivery_id: text(fields.deliveryId),
+    room_id: text(fields.roomId),
+    message_id: text(fields.messageId),
     attempt: raw(item.attempt),
     progress_at: raw(item.progress_at),
     event_id: raw(item.event_id),
-    seq: raw(item.seq),
+    seq: text(fields.seq),
     created_at: raw(item.created_at),
     hint: REMINDER_HINT,
   };
@@ -149,20 +144,36 @@ function writeStdout(line: string): void {
   process.stdout.write(`${line}\n`);
 }
 
-function fail(line: string): number {
+function fail(line: string, json = false): number {
+  if (json) {
+    writeStdout(
+      JSON.stringify({
+        type: 'error',
+        kind: 'error',
+        seq: null,
+        delivery_id: null,
+        room_id: null,
+        message_id: null,
+        message: line.startsWith('ERROR ') ? line.slice(6) : line,
+      }),
+    );
+    return 1;
+  }
   writeStdout(line);
   return 1;
 }
 
 export async function runPeriMonitor(
   context: MonitorContext,
-  options: { stateDir?: string } = {},
+  options: { stateDir?: string; json?: boolean; maxRuntimeMs?: number } = {},
 ): Promise<number> {
   const token = context.token;
-  if (!token) return fail('ERROR type=credential message=missing_token');
-  if (/[\r\n]/u.test(token)) return fail('ERROR type=credential message=invalid_token_format');
+  if (!token) return fail('ERROR type=credential message=missing_token', options.json === true);
+  if (/[\r\n]/u.test(token)) {
+    return fail('ERROR type=credential message=invalid_token_format', options.json === true);
+  }
   if (context.baseUrl === null) {
-    return fail('ERROR type=configuration message=missing_agentnet_url');
+    return fail('ERROR type=configuration message=missing_agentnet_url', options.json === true);
   }
 
   let endpoint: string;
@@ -170,7 +181,7 @@ export async function runPeriMonitor(
     endpoint = resolveConfig({ url: context.baseUrl, token, json: false }).endpoint;
   } catch (error) {
     if (error instanceof CliError) {
-      return fail('ERROR type=configuration message=invalid_agentnet_url');
+      return fail('ERROR type=configuration message=invalid_agentnet_url', options.json === true);
     }
     throw error;
   }
@@ -185,7 +196,7 @@ export async function runPeriMonitor(
       tempPrefix: 'peri-watch.',
     });
   } catch {
-    return fail('ERROR type=environment message=workdir_failed');
+    return fail('ERROR type=environment message=workdir_failed', options.json === true);
   }
 
   const controller = new AbortController();
@@ -210,6 +221,9 @@ export async function runPeriMonitor(
       prefix: ALERT_PREFIX,
       readBody: false,
       format: PERI_EVENT_FORMAT,
+      json: options.json === true,
+      maxRuntimeMs: options.maxRuntimeMs ?? 0,
+      onDeadline: stop,
     });
     return await engine.run();
   } finally {

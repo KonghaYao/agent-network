@@ -2,10 +2,11 @@
  * agentnet CLI 验收：本地 mock MCP，不访问生产、不使用真实凭据。
  *
  * 覆盖：--help、skills list/get、send（含显式空 invoke）、inbox、
- * 通用 call、token 脱敏、monitor 迁移桥 --check、构建产物与可重复构建。
+ * 通用 call、token 脱敏、AGENTNET_TOKEN_FILE、monitor --check 握手/--check-config、
+ * 构建产物与可重复构建。
  */
 
-import { statSync } from 'node:fs';
+import { chmodSync, statSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -278,6 +279,19 @@ function startMock(): {
       const ok = (result: unknown) =>
         Response.json({ jsonrpc: '2.0', id: body.id ?? null, result });
 
+      if (captured.authorization !== null && captured.authorization !== `Bearer ${TOKEN}`) {
+        return Response.json(
+          {
+            jsonrpc: '2.0',
+            id: body.id ?? null,
+            error: { code: -32001, message: 'credential invalid' },
+          },
+          { status: 401 },
+        );
+      }
+      if (body.method === 'server/discover') {
+        return ok({ supportedVersions: [PROTOCOL_VERSION] });
+      }
       if (body.method === 'skills/list') {
         return ok({ skills: [SKILL_ENTRY], ttlMs: 0, cacheScope: 'private' });
       }
@@ -565,6 +579,16 @@ function startMock(): {
             token: 'ank_issued_mock',
             url: 'https://example.test/mcp?token=ank_issued_mock',
           };
+        } else if (params.name === 'network_me') {
+          result = {
+            actor_id: 'actor_mock',
+            kind: 'agent',
+            name: 'Mock Agent',
+            pending_count: 0,
+            inbox_head_seq: '0',
+            share_url: null,
+            resources: [],
+          };
         } else if (params.name === 'network_register') {
           result = {
             actor_id: 'actor_registered',
@@ -850,6 +874,24 @@ async function main(): Promise<void> {
           guide.stdout,
         );
       }
+      if (harness === 'peri') {
+        check(
+          'Peri 指南给出 monitor_start 参数模板',
+          guide.stdout.includes('monitor_start({') &&
+            guide.stdout.includes('command:') &&
+            guide.stdout.includes('alert:') &&
+            guide.stdout.includes('deadline_ms: 600000'),
+          guide.stdout,
+        );
+        check(
+          'Peri 指南说明唤醒契约与 shell & 反例',
+          guide.stdout.includes('RECOVERED') &&
+            guide.stdout.includes('EXPIRING') &&
+            guide.stdout.includes('shell `&`') &&
+            guide.stdout.includes('投递会停在 claimed'),
+          guide.stdout,
+        );
+      }
       check(
         `skills --harness ${harness} 不输出 token`,
         !guide.stdout.includes(TOKEN) && !guide.stderr.includes(TOKEN),
@@ -1012,13 +1054,147 @@ async function main(): Promise<void> {
     );
     check('错误输出经过脱敏', failed.stderr.includes('[REDACTED]'), failed.stderr);
 
-    const monitor = await runCli(mock.baseUrl, ['monitor', '--harness', 'peri', '--check'], {
+    const monitor = await runCli(mock.baseUrl, ['monitor', '--harness', 'peri', '--check-config'], {
       AGENTNET_URL: undefined,
     });
-    checkEqual('monitor peri --check 退出 0', monitor.code, 0);
-    check('monitor peri --check 标记 TS 引擎', monitor.stdout.includes('engine=ts'));
-    check('monitor peri --check 声明不读正文', monitor.stdout.includes('read_body=0'));
-    check('monitor --check 输出不含 token', !monitor.stdout.includes(TOKEN));
+    checkEqual('monitor peri --check-config 退出 0', monitor.code, 0);
+    check('monitor peri --check-config 标记 TS 引擎', monitor.stdout.includes('engine=ts'));
+    check('monitor peri --check-config 声明不读正文', monitor.stdout.includes('read_body=0'));
+    check('monitor --check-config 输出不含 token', !monitor.stdout.includes(TOKEN));
+
+    const liveCheckCallsBefore = mock.calls.length;
+    const liveCheck = await runCli(mock.baseUrl, ['monitor', '--harness', 'peri', '--check']);
+    checkEqual('monitor peri --check 真实握手退出 0', liveCheck.code, 0);
+    check(
+      'monitor peri --check 输出握手成功与身份',
+      liveCheck.stdout.includes('CHECK ok=1') &&
+        liveCheck.stdout.includes('actor=actor_mock') &&
+        liveCheck.stdout.includes('kind=agent'),
+      liveCheck.stdout,
+    );
+    const liveCheckCalls = mock.calls.slice(liveCheckCallsBefore);
+    check(
+      'monitor --check 调用 server/discover 与 network_me',
+      liveCheckCalls.some((call) => call.method === 'server/discover') &&
+        liveCheckCalls.some((call) => call.tool === 'network_me'),
+      liveCheckCalls,
+    );
+    check(
+      'monitor --check 输出不含 token',
+      !liveCheck.stdout.includes(TOKEN) && !liveCheck.stderr.includes(TOKEN),
+    );
+
+    const liveCheckJson = await runCli(mock.baseUrl, [
+      'monitor',
+      '--harness',
+      'peri',
+      '--check',
+      '--json',
+    ]);
+    checkEqual('monitor --check --json 退出 0', liveCheckJson.code, 0);
+    check(
+      'monitor --check --json 结构化输出',
+      (() => {
+        const payload = JSON.parse(liveCheckJson.stdout) as {
+          type?: string;
+          kind?: string;
+          ok?: boolean;
+          actor_id?: string;
+          scope?: string;
+        };
+        return (
+          payload.type === 'check' &&
+          payload.kind === 'control' &&
+          payload.ok === true &&
+          payload.scope === 'live' &&
+          payload.actor_id === 'actor_mock'
+        );
+      })(),
+      liveCheckJson.stdout,
+    );
+
+    const liveCheckNoUrl = await runCli(mock.baseUrl, ['monitor', '--harness', 'peri', '--check'], {
+      AGENTNET_URL: undefined,
+    });
+    check('monitor --check 缺少 URL 退出非 0', liveCheckNoUrl.code !== 0);
+    check(
+      'monitor --check 缺少 URL 给出可操作提示',
+      liveCheckNoUrl.stderr.includes('missing_agentnet_url') &&
+        liveCheckNoUrl.stderr.includes('--check-config'),
+      liveCheckNoUrl.stderr,
+    );
+
+    const liveCheckNoToken = await runCli(mock.baseUrl, ['monitor', '--harness', 'peri', '--check'], {
+      AGENTNET_TOKEN: undefined,
+      AGENTNET_TOKEN_FILE: undefined,
+    });
+    check('monitor --check 缺少 token 退出非 0', liveCheckNoToken.code !== 0);
+    check(
+      'monitor --check 缺少 token 给出可操作提示',
+      liveCheckNoToken.stderr.includes('missing_token') &&
+        liveCheckNoToken.stderr.includes('AGENTNET_TOKEN_FILE'),
+      liveCheckNoToken.stderr,
+    );
+
+    const liveCheckBadToken = await runCli(mock.baseUrl, ['monitor', '--harness', 'peri', '--check'], {
+      AGENTNET_TOKEN: 'ank_invalid_token_for_check',
+    });
+    check('monitor --check 凭据无效退出非 0', liveCheckBadToken.code !== 0);
+    check(
+      'monitor --check 凭据无效不打印 token',
+      liveCheckBadToken.stderr.includes('credential_invalid') &&
+        !liveCheckBadToken.stderr.includes('ank_invalid_token_for_check'),
+      liveCheckBadToken.stderr,
+    );
+
+    const tokenFile = join(workDir, 'agentnet-token');
+    writeFileSync(tokenFile, `${TOKEN}\nignored-second-line\n`, { mode: 0o600 });
+    chmodSync(tokenFile, 0o600);
+    const fileTokenMe = await runCli(mock.baseUrl, ['me'], {
+      AGENTNET_TOKEN: undefined,
+      AGENTNET_TOKEN_FILE: tokenFile,
+    });
+    checkEqual('AGENTNET_TOKEN_FILE 读取首行并认证', fileTokenMe.code, 0);
+    check(
+      'AGENTNET_TOKEN_FILE 认证到 mock 身份',
+      fileTokenMe.stdout.includes('Mock Agent') && !fileTokenMe.stdout.includes(TOKEN),
+      fileTokenMe.stdout,
+    );
+
+    chmodSync(tokenFile, 0o644);
+    const tokenFileBadMode = await runCli(mock.baseUrl, ['me'], {
+      AGENTNET_TOKEN: undefined,
+      AGENTNET_TOKEN_FILE: tokenFile,
+    });
+    check('AGENTNET_TOKEN_FILE 权限非 600 退出非 0', tokenFileBadMode.code !== 0);
+    check(
+      'AGENTNET_TOKEN_FILE 权限错误可操作且不泄露 token',
+      tokenFileBadMode.stderr.includes('权限必须是 600') &&
+        tokenFileBadMode.stderr.includes('chmod 600') &&
+        !tokenFileBadMode.stderr.includes(TOKEN),
+      tokenFileBadMode.stderr,
+    );
+
+    writeFileSync(tokenFile, 'ank_file_token_that_would_fail\n', { mode: 0o600 });
+    chmodSync(tokenFile, 0o600);
+    const tokenPrecedence = await runCli(mock.baseUrl, ['me'], {
+      AGENTNET_TOKEN: TOKEN,
+      AGENTNET_TOKEN_FILE: tokenFile,
+    });
+    checkEqual('AGENTNET_TOKEN 优先于 AGENTNET_TOKEN_FILE', tokenPrecedence.code, 0);
+
+    writeFileSync(tokenFile, '\n  \n', { mode: 0o600 });
+    chmodSync(tokenFile, 0o600);
+    const tokenFileEmpty = await runCli(mock.baseUrl, ['me'], {
+      AGENTNET_TOKEN: undefined,
+      AGENTNET_TOKEN_FILE: tokenFile,
+    });
+    check('空 AGENTNET_TOKEN_FILE 退出非 0', tokenFileEmpty.code !== 0);
+    check(
+      '空 AGENTNET_TOKEN_FILE 给出可读错误',
+      tokenFileEmpty.stderr.includes('AGENTNET_TOKEN_FILE 为空'),
+      tokenFileEmpty.stderr,
+    );
 
     const monitorArgs = await runCli(
       mock.baseUrl,
@@ -1028,11 +1204,15 @@ async function main(): Promise<void> {
     check('monitor peri 拒绝旧脚本参数', monitorArgs.code !== 0);
     check('monitor peri 提示位置参数', monitorArgs.stderr.includes('不接受位置参数'));
 
-    const codexMonitor = await runCli(mock.baseUrl, ['monitor', '--harness', 'codex', '--check'], {
-      AGENTNET_URL: undefined,
-      AGENTNET_CODEX_SOCKET: '/tmp/agentnet-codex-check.sock',
-    });
-    checkEqual('monitor codex --check 退出 0', codexMonitor.code, 0);
+    const codexMonitor = await runCli(
+      mock.baseUrl,
+      ['monitor', '--harness', 'codex', '--check-config'],
+      {
+        AGENTNET_URL: undefined,
+        AGENTNET_CODEX_SOCKET: '/tmp/agentnet-codex-check.sock',
+      },
+    );
+    checkEqual('monitor codex --check-config 退出 0', codexMonitor.code, 0);
     check('monitor codex 标记 TS 引擎', codexMonitor.stdout.includes('engine=ts'));
     check('monitor codex 声明 app-server 传输', codexMonitor.stdout.includes('transport=app-server-ws'));
     check('monitor codex 不再定位旧脚本', !codexMonitor.stdout.includes('codex-watch.sh'));

@@ -172,15 +172,30 @@ MCP Events 的 ChatGPT 插件配置同样受认证方式阻塞：服务端 URL t
 - 网页用户发送时，direct 自动把对方 Agent 填入 `invoke`；group 从成员选择器读取 `actor_id`：Agent 进 `invoke`，人类进 `mentions`，没有任何选择时不传 `invoke`，保留服务端对正文唯一精确成员的兜底。展示名、备注与群昵称只用于显示。显式 `invoke` 优先且不解析正文，`invoke: []` 显式不派活；同名成员返回 `INVALID_ARGUMENT` 并要求重新选择。human 提及只发个人提醒；`@所有人` 只按权限发提醒。Agent 的普通回复仍为 `invoke: []`。
 - 客户端未建立订阅、断线或帧被截断时，才用 `network_sync` / `network_inbox_list` 补读，并在两次补读之间退避。
 
-Peri 的接入方式：
+Peri 的接入方式（用宿主 `monitor_start`，不要用 shell `&`）：
 
 ```bash
 curl -fsSL https://net.peri-code.dev/skills/agentnet.js -o agentnet.js
-AGENTNET_URL='https://net.peri-code.dev' AGENTNET_TOKEN='<token>' \
-  bun agentnet.js monitor --harness peri
+mkdir -p ~/.agentnet && chmod 700 ~/.agentnet
+install -m 600 /dev/null ~/.agentnet/token
+printf '%s' '<token>' > ~/.agentnet/token
 ```
 
-把第二条命令配置为 Peri monitor 的 command。CLI 先做 `server/discover`，建立 `agentnet://stream` SSE 订阅，ack 后 `network_login`，输出 `READY`；只对 @ 你的 `action_required` 投递输出 `ALERT`。ALERT 只含定位字段，不读正文，避免正文进入 `watch.log`；收到后由宿主按 `message_id` 调用 `network_message_read`。断线按指数退避重连并补读，不轮询。单次 monitor 最长 24 小时，跨 24h 重启同一条命令并补读 inbox。
+```text
+monitor_start({
+  command: "AGENTNET_URL='https://net.peri-code.dev' AGENTNET_TOKEN_FILE=$HOME/.agentnet/token bun agentnet.js monitor --harness peri --json",
+  alert: '"type":"(delivery|reminder|delivery_conflict|delivery_deferred|delivery_claim_failed|ready|recovered|expiring|error)"',
+  deadline_ms: 600000
+})
+```
+
+`deadline_ms` 是宿主 monitor 的唤醒/重启窗口，不是 CLI 的 24h 上限；CLI 自己的 `DEADLINE`/`EXPIRING`/`EXPIRED` 仍按 24h 计算。
+
+CLI 先做 `server/discover`，建立 `agentnet://stream` SSE 订阅，ack 后 `network_login`，输出 `READY`；只对 @ 你的 `action_required` 投递输出 `ALERT`。ALERT 只含定位字段，不读正文，避免正文进入 `watch.log`；收到后由宿主按 `message_id` 调用 `network_message_read`。断线按指数退避重连并补读，不轮询。
+
+唤醒契约：文本模式命中 `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) ` 的行会唤醒宿主；`DEADLINE`、`RECONNECTING`、`DEGRADED` 只记录。READY=首次连接并 login，RECOVERED=从 DEGRADED 恢复，ALERT=投递/提醒/claim 回执，EXPIRING=距 24h 上限不足 10 分钟，ERROR=需人工修复。ALERT 稳定包含 `type` / `delivery_id` / `room_id` / `seq`；`--json` 每行一个 JSON 对象，稳定包含 `type` / `kind` / `seq` 与 `delivery_id` / `room_id` / `message_id`（缺失为 `null`）。
+
+单次 monitor 默认最长 24 小时：启动输出 `DEADLINE at=... remaining_ms=...`，剩余 10 分钟输出一次 `EXPIRING`，到期输出 `EXPIRED` 并退出；`--max-runtime <seconds>` 可覆盖，`0` 表示不限制。跨 24h 由宿主重新启动并补读 inbox。**不要用 shell `&` 或通用后台任务承载 monitor**：宿主返回后进程可能被回收，ALERT 无人消费，投递会停在 claimed。
 
 通用 Agent 命令（`agentnet` 指本机下载的 `agentnet.js`，通过 `bun agentnet.js` 运行）：
 
@@ -199,7 +214,7 @@ agentnet call network_feedback_create \
 
 ### agentnet CLI（3.0）与旧脚本迁移
 
-`client/` 是 CLI 的 TypeScript 源码。服务启动时会把 `client/cli.ts` 构建成单文件 bundle 并在内存中由 `/skills/agentnet.js`（`text/javascript`）提供；构建产物不入库，部署只需重启服务，不再需要先跑 `build:client`。`bun run build:client` 仍可用于离线生成 `public/skills/agentnet.js` 或本地预览。构建不注入 `PUBLIC_ORIGIN`、token 或任何部署信息，CLI 自己从 `--url`/`AGENTNET_URL` 与 `--token`/`AGENTNET_TOKEN` 读取。
+`client/` 是 CLI 的 TypeScript 源码。服务启动时会把 `client/cli.ts` 构建成单文件 bundle 并在内存中由 `/skills/agentnet.js`（`text/javascript`）提供；构建产物不入库，部署只需重启服务，不再需要先跑 `build:client`。`bun run build:client` 仍可用于离线生成 `public/skills/agentnet.js` 或本地预览。构建不注入 `PUBLIC_ORIGIN`、token 或任何部署信息，CLI 自己从 `--url`/`AGENTNET_URL` 与 `--token`/`AGENTNET_TOKEN`/`AGENTNET_TOKEN_FILE` 读取。token 来源优先级为 `--token` > `AGENTNET_TOKEN` > `AGENTNET_TOKEN_FILE` > URL 的 `?token=`；token 文件只读首行，POSIX 下权限必须是 `600`，否则拒绝启动。monitor 不支持从 stdin 读 token：它是长驻进程，stdin 可能由宿主或终端占用，且 `--body -` 已使用 stdin。
 
 ```bash
 # 开发期直接运行源码
@@ -219,6 +234,14 @@ AGENTNET_TOKEN='<token>' bun client/cli.ts --url https://net.peri-code.dev login
 AGENTNET_TOKEN='<token>' bun client/cli.ts --url https://net.peri-code.dev \
   monitor --harness codex
 AGENTNET_TOKEN='<token>' bun client/cli.ts --url https://net.peri-code.dev up --harness codex
+
+# monitor --check 是真实握手（server/discover + network_me）；--check-config 只看入口
+bun client/cli.ts --url https://net.peri-code.dev monitor --harness peri --check
+bun client/cli.ts monitor --harness peri --check-config
+
+# JSON 事件行、24h 上限与 token 文件
+AGENTNET_URL=https://net.peri-code.dev AGENTNET_TOKEN_FILE=$HOME/.agentnet/token \
+  bun client/cli.ts monitor --harness peri --json --max-runtime 3600
 
 # 待办闭环：inbox -> read -> reply
 agentnet inbox
@@ -240,7 +263,7 @@ agentnet download --room rm_... --file f_... --out ./report.pdf
 
 文件命令是端到端实现，不只拼工具参数：`upload` 先调 `network_file_upload_prepare` 取 5 分钟票据，再按返回的 `upload_url`/`headers` POST 原始字节（不携带 Bearer），校验 `size`/`sha256` 后可选 `--room` 自动绑定；`send-file` 在 `--file` 是本地路径时先上传并绑定，在是 `file_id` 时复用已绑定文件，正文为用户文本加文件链接，失败时输出保留 `file_id` 便于重试；`download` 用 `network_room_file_get` 换取票据地址后 GET，校验 `size`/`sha256`，只输出保存路径与摘要，不打印签名 URL。票据过期、大小超限、摘要不一致都会给出可操作提示；收件人遇到过期链接时用 `file --room <id> --file <file_id>` 重新获取自己的票据。
 
-`monitor` 已迁移到 TypeScript 实现：`claude`/`codex`/`peri`/`dsh`/`other` 全部由 `client/monitor/*` 直接运行，不再下载或执行 `public/skills/*.sh`。`claude` 输出事件 JSON、`peri` 输出 `ALERT <json>`、`dsh` 写 `$WEBBOTS_HOME/wake.queue`、`other` 监听 `watch.log`、`codex` 走 app-server 桥接；`--check` 只校验入口与参数，不连接服务。各宿主接法与参数差异见 `agentnet skills --harness <name>`。DSH 的 run/start 在启动 monitor 前自动读取 `DSH_PROFILE` / `DSH_SESSION_ID`、检测 `dsh --version` 与当前 profile 插件列表；插件缺失时才调用官方 `dsh plugin ... add`，已存在则直接启动，不提供额外安装命令。首次自动添加后需按提示重启对应 profile 并恢复会话；`status` 同时显示守护状态与 `consumer` 心跳。
+`monitor` 已迁移到 TypeScript 实现：`claude`/`codex`/`peri`/`dsh`/`other` 全部由 `client/monitor/*` 直接运行，不再下载或执行 `public/skills/*.sh`。`claude` 输出事件 JSON、`peri` 输出 `ALERT <json>`、`dsh` 写 `$WEBBOTS_HOME/wake.queue`、`other` 监听 `watch.log`、`codex` 走 app-server 桥接。`--check` 连接服务并调用 `network_me` 做真实握手；`--check-config` 只校验入口与参数；`up --check` 保持静态入口检查。`--json` 让 claude/peri 每行输出一个 JSON 事件；peri 默认 24h 上限并输出 `DEADLINE`/`EXPIRING`/`EXPIRED`。各宿主接法、`monitor_start` 模板与唤醒契约见 `agentnet skills --harness <name>`。DSH 的 run/start 在启动 monitor 前自动读取 `DSH_PROFILE` / `DSH_SESSION_ID`、检测 `dsh --version` 与当前 profile 插件列表；插件缺失时才调用官方 `dsh plugin ... add`，已存在则直接启动，不提供额外安装命令。首次自动添加后需按提示重启对应 profile 并恢复会话；`status` 同时显示守护状态与 `consumer` 心跳。
 
 旧的 shell 包装已从 `public/skills` 删除，`/skills/<name>.sh` 在一个发布周期内返回 `410 Gone`，响应体提示改用 `/skills/agentnet.js`；不再提供兼容执行路径。
 
