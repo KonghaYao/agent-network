@@ -5598,7 +5598,7 @@ async function main(): Promise<void> {
           groupCredentialPrompt!.includes(`AGENTNET_TOKEN="${savedGroupToken}"`) &&
           groupCredentialPrompt!.includes(`${server.base}/skills/agentnet.js`) &&
           groupCredentialPrompt!.includes('登录后立即启动监听') &&
-          groupCredentialPrompt!.split('\n').length === 5 &&
+          groupCredentialPrompt!.split('\n').length === 6 &&
           PROMPT_SHORT_CLI.every((line) => groupCredentialPrompt!.includes(line)) &&
           REMOVED_PROMPT_TEXT.every((text) => !groupCredentialPrompt!.includes(text)) &&
           DEPRECATED_PROMPT_SCRIPTS.every((name) => !groupCredentialPrompt!.includes(name)) &&
@@ -5622,7 +5622,7 @@ async function main(): Promise<void> {
           groupFallbackPrompt!.includes('本浏览器没有保存该 Agent 的 token/MCP URL') &&
           groupFallbackPrompt!.includes('AGENTNET_TOKEN="<由用户提供>"') &&
           groupFallbackPrompt!.includes('actor_id="<由用户提供>"') &&
-          groupFallbackPrompt!.split('\n').length === 6 &&
+          groupFallbackPrompt!.split('\n').length === 7 &&
           PROMPT_SHORT_CLI.every((line) => groupFallbackPrompt!.includes(line)) &&
           REMOVED_PROMPT_TEXT.every((text) => !groupFallbackPrompt!.includes(text)) &&
           DEPRECATED_PROMPT_SCRIPTS.every((name) => !groupFallbackPrompt!.includes(name)),
@@ -6343,7 +6343,7 @@ async function main(): Promise<void> {
           directPrompt.includes(`AGENTNET_URL="${server.base}"`) &&
           directPrompt.includes(`actor_id="${maliciousAgent.actor_id}"`) &&
           !directPrompt.includes('room_id=') &&
-          directPrompt.split('\n').length === 5 &&
+          directPrompt.split('\n').length === 6 &&
           !directPrompt.includes(savedToken),
         directPrompt,
       );
@@ -6703,7 +6703,7 @@ async function main(): Promise<void> {
       );
       check(
         '新建 Agent 提示词只保留 CLI 与最小连接信息',
-        newAgentPrompt.split('\n').length === 5 &&
+        newAgentPrompt.split('\n').length === 6 &&
           newAgentPrompt.includes('actor_id="') &&
           REMOVED_PROMPT_TEXT.every((text) => !newAgentPrompt.includes(text)) &&
           !newAgentPrompt.includes('按宿主指南') &&
@@ -22815,7 +22815,7 @@ async function main(): Promise<void> {
           reissuePrompt!.includes(`AGENTNET_TOKEN="${reissuedToken}"`) &&
           reissuePrompt!.includes(`actor_id="${reissueAgent.actor_id}"`) &&
           !reissuePrompt!.includes('room_id=') &&
-          reissuePrompt!.split('\n').length === 5 &&
+          reissuePrompt!.split('\n').length === 6 &&
           !reissuePrompt!.includes(reissueOldToken),
       );
       check(
