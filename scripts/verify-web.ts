@@ -5565,30 +5565,38 @@ async function main(): Promise<void> {
         await page.locator('#room-menu-copy-prompt').isHidden(),
         true,
       );
-      // danger 项红底红字回归：计算样式必须是白字 + danger 红底，且对比度达标。
+      // danger 项为红字透明底：危险项不得恢复实心红底，普通项保持原样。
       const dangerMenuStyle = (await page.evaluate(`(() => {
-        const node = document.getElementById('room-menu-reissue-token');
-        const style = getComputedStyle(node);
+        const danger = document.getElementById('room-menu-reissue-token');
+        const normal = document.getElementById('room-menu-pin');
+        const style = getComputedStyle(danger);
+        const normalStyle = getComputedStyle(normal);
         return {
-          visible: !node.hidden,
+          visible: !danger.hidden,
           color: style.color,
           background: style.backgroundColor,
-          opacity: style.opacity
+          panel: getComputedStyle(document.getElementById('room-menu')).backgroundColor,
+          normalColor: normalStyle.color,
+          normalBackground: normalStyle.backgroundColor
         };
       })()`)) as {
         visible: boolean;
         color: string;
         background: string;
-        opacity: string;
+        panel: string;
+        normalColor: string;
+        normalBackground: string;
       };
       checkEqual('Agent 单聊右键显示重置链接并复制', dangerMenuStyle.visible, true);
-      checkEqual('危险菜单项文字为白色', dangerMenuStyle.color, 'rgb(255, 255, 255)');
-      checkEqual('危险菜单项背景为 danger 红', dangerMenuStyle.background, 'rgb(192, 57, 43)');
+      checkEqual('危险菜单项文字为 danger 红', dangerMenuStyle.color, 'rgb(192, 57, 43)');
+      checkEqual('危险菜单项背景透明', dangerMenuStyle.background, 'rgba(0, 0, 0, 0)');
       check(
-        '危险菜单项文字与背景对比度不低于 4.5:1',
-        contrastRatio(dangerMenuStyle.color, dangerMenuStyle.background) >= 4.5,
-        { ...dangerMenuStyle, contrast: contrastRatio(dangerMenuStyle.color, dangerMenuStyle.background) },
+        '危险菜单项红字与面板对比度不低于 4.5:1',
+        contrastRatio(dangerMenuStyle.color, dangerMenuStyle.panel) >= 4.5,
+        { ...dangerMenuStyle, contrast: contrastRatio(dangerMenuStyle.color, dangerMenuStyle.panel) },
       );
+      checkEqual('普通菜单项文字颜色不受影响', dangerMenuStyle.normalColor, 'rgb(26, 26, 26)');
+      checkEqual('普通菜单项背景保持透明', dangerMenuStyle.normalBackground, 'rgba(0, 0, 0, 0)');
       const disabledDangerStyle = (await page.evaluate(`(() => {
         const node = document.getElementById('room-menu-reissue-token');
         node.disabled = true;
@@ -5596,19 +5604,19 @@ async function main(): Promise<void> {
         const result = {
           color: style.color,
           background: style.backgroundColor,
+          cursor: style.cursor,
           opacity: style.opacity
         };
         node.disabled = false;
         return result;
-      })()`)) as { color: string; background: string; opacity: string };
+      })()`)) as { color: string; background: string; cursor: string; opacity: string };
       check(
-        '危险菜单项 disabled 状态仍可读',
-        disabledDangerStyle.opacity === '1' &&
-          contrastRatio(disabledDangerStyle.color, disabledDangerStyle.background) >= 4.5,
-        {
-          ...disabledDangerStyle,
-          contrast: contrastRatio(disabledDangerStyle.color, disabledDangerStyle.background),
-        },
+        '危险菜单项 disabled 与可用态可区分',
+        disabledDangerStyle.color !== dangerMenuStyle.color &&
+          disabledDangerStyle.background === 'rgba(0, 0, 0, 0)' &&
+          disabledDangerStyle.cursor === 'not-allowed' &&
+          disabledDangerStyle.opacity === '1',
+        disabledDangerStyle,
       );
       await page.locator('#room-menu-reissue-token').hover();
       const hoverDangerStyle = (await page.evaluate(`(() => {
@@ -5616,26 +5624,57 @@ async function main(): Promise<void> {
         return { color: style.color, background: style.backgroundColor };
       })()`)) as { color: string; background: string };
       check(
-        '危险菜单项 hover 为更深红色且对比度足够',
-        hoverDangerStyle.background === 'rgb(169, 50, 38)' &&
-          contrastRatio(hoverDangerStyle.color, hoverDangerStyle.background) >= 4.5,
-        {
-          ...hoverDangerStyle,
-          contrast: contrastRatio(hoverDangerStyle.color, hoverDangerStyle.background),
-        },
+        '危险菜单项 hover 文字保持红色且只叠加淡红底',
+        hoverDangerStyle.color === 'rgb(192, 57, 43)' &&
+          hoverDangerStyle.background === 'rgba(192, 57, 43, 0.08)',
+        hoverDangerStyle,
       );
       await page.mouse.move(0, 0);
+      // 指针交互后先按 Tab 激活键盘模态，程序化 focus 才会命中 :focus-visible。
+      await page.keyboard.press('Tab');
+      const focusDangerStyle = (await page.evaluate(`(() => {
+        const node = document.getElementById('room-menu-reissue-token');
+        node.focus();
+        const style = getComputedStyle(node);
+        return {
+          focusVisible: node.matches(':focus-visible'),
+          outlineStyle: style.outlineStyle,
+          outlineWidth: style.outlineWidth,
+          outlineColor: style.outlineColor
+        };
+      })()`)) as {
+        focusVisible: boolean;
+        outlineStyle: string;
+        outlineWidth: string;
+        outlineColor: string;
+      };
+      check(
+        '危险菜单项 keyboard focus-visible 有红色焦点环',
+        focusDangerStyle.focusVisible &&
+          focusDangerStyle.outlineStyle === 'solid' &&
+          Number.parseFloat(focusDangerStyle.outlineWidth) >= 2 &&
+          focusDangerStyle.outlineColor === 'rgb(192, 57, 43)',
+        focusDangerStyle,
+      );
+      await page.evaluate(`document.getElementById('room-menu-reissue-token').blur()`);
       await page.emulateMedia({ colorScheme: 'dark' });
       const darkDangerStyle = (await page.evaluate(`(() => {
-        const style = getComputedStyle(document.getElementById('room-menu-reissue-token'));
-        return { color: style.color, background: style.backgroundColor };
-      })()`)) as { color: string; background: string };
+        const node = document.getElementById('room-menu-reissue-token');
+        const style = getComputedStyle(node);
+        return {
+          color: style.color,
+          background: style.backgroundColor,
+          panel: getComputedStyle(document.getElementById('room-menu')).backgroundColor
+        };
+      })()`)) as { color: string; background: string; panel: string };
+      checkEqual('暗色模式危险菜单项背景透明', darkDangerStyle.background, 'rgba(0, 0, 0, 0)');
+      checkEqual('暗色模式危险菜单项文字为浅红', darkDangerStyle.color, 'rgb(255, 138, 128)');
       check(
-        '暗色模式危险菜单项对比度足够',
-        contrastRatio(darkDangerStyle.color, darkDangerStyle.background) >= 4.5,
+        '暗色模式危险菜单项红字对比度足够',
+        contrastRatio(darkDangerStyle.color, darkDangerStyle.panel) >= 4.5,
         {
           ...darkDangerStyle,
-          contrast: contrastRatio(darkDangerStyle.color, darkDangerStyle.background),
+          contrast: contrastRatio(darkDangerStyle.color, darkDangerStyle.panel),
         },
       );
       await page.emulateMedia({ colorScheme: 'light' });
