@@ -2,9 +2,13 @@
  * 会话列表右键菜单：复制让 Agent 接入当前房间的提示词。
  *
  * 事件委托挂在 `#room-list` 上，`renderRooms` 重建列表后无需重新绑定。
- * 桌面右键与移动端长按 500ms 打开同一菜单。direct Agent 会话与群聊会从
- * 本地 Agents 注册表查找当前 human 保存的 Agent MCP URL，把 URL 与 token
- * 写进提示词；菜单本身不展示凭据，凭据只进入剪贴板。
+ * 桌面右键与移动端长按 500ms 打开同一菜单。菜单先用列表已返回的
+ * `peer_can_manage` 或按 actor 缓存的管理视图同步渲染，再在后台刷新完整
+ * 管理视图，网络请求永远不阻塞菜单出现。
+ *
+ * direct Agent 会话与群聊会从本地 Agents 注册表查找当前 human 保存的
+ * Agent MCP URL，把 URL 与 token 写进提示词；菜单本身不展示凭据，凭据只
+ * 进入剪贴板。
  */
 import { LIMITS } from '../contracts/limits';
 
@@ -162,6 +166,202 @@ function positionRoomMenu(menu, x, y) {
   menu.style.top = Math.round(top) + 'px';
 }
 
+// 管理视图缓存只影响按钮可见性：TTL 内不重复请求，失败也不阻塞菜单。
+const ROOM_MENU_MANAGEMENT_TTL_MS = 30000;
+const ROOM_MENU_MANAGEMENT_UNKNOWN = { unknown: true };
+const roomMenuManagementCache = new Map();
+const roomMenuManagementInflight = new Map();
+
+/** 读取未过期的管理视图缓存；没有或已过期返回 null。 */
+function roomMenuManagementRecord(actorId) {
+  if (!actorId) return null;
+  const record = roomMenuManagementCache.get(actorId);
+  if (!record) return null;
+  if (Date.now() - record.at > ROOM_MENU_MANAGEMENT_TTL_MS) {
+    roomMenuManagementCache.delete(actorId);
+    return null;
+  }
+  return record;
+}
+
+function roomMenuRememberManagement(actorId, view, failed) {
+  if (!actorId) return;
+  roomMenuManagementCache.set(actorId, { view: view, failed: failed, at: Date.now() });
+}
+
+/** 不带 actorId 时清空全部缓存（验收用），否则只清除指定 actor。 */
+function roomMenuForgetManagement(actorId) {
+  if (actorId) {
+    roomMenuManagementCache.delete(actorId);
+    return;
+  }
+  roomMenuManagementCache.clear();
+}
+
+/**
+ * 按 actor 复用管理视图：TTL 内返回缓存，并发打开共用同一个请求。
+ *
+ * PERMISSION_DENIED 是明确的无权限结果，可以更新按钮；其他失败返回未知
+ * 哨兵，调用方保留已渲染菜单，不把网络错误写进菜单。
+ */
+function roomMenuRequestManagement(actorId) {
+  const record = roomMenuManagementRecord(actorId);
+  if (record) {
+    return Promise.resolve(record.failed ? ROOM_MENU_MANAGEMENT_UNKNOWN : record.view);
+  }
+  const inflight = roomMenuManagementInflight.get(actorId);
+  if (inflight) return inflight;
+  const pending = callTool('network_agent_management_get', { actor_id: actorId })
+    .then(function (view) {
+      const value = view || null;
+      roomMenuRememberManagement(actorId, value, false);
+      return value;
+    }, function (error) {
+      if (error && error.code === 'PERMISSION_DENIED') {
+        roomMenuRememberManagement(actorId, null, false);
+        return null;
+      }
+      roomMenuRememberManagement(actorId, null, true);
+      return ROOM_MENU_MANAGEMENT_UNKNOWN;
+    })
+    .then(function (value) {
+      roomMenuManagementInflight.delete(actorId);
+      return value;
+    });
+  roomMenuManagementInflight.set(actorId, pending);
+  return pending;
+}
+
+/**
+ * 立即渲染用的管理视图：优先列表/详情返回的 peer_can_manage，再合并
+ * 按 actor 缓存的管理视图（保留 disabled 与交接细节）。都没有时返回 null。
+ */
+function roomMenuInitialManagement(entry, peerActorId) {
+  if (!peerActorId) return null;
+  const record = roomMenuManagementRecord(peerActorId);
+  const view = record && !record.failed ? record.view : null;
+  if (entry && typeof entry.peer_can_manage === 'boolean') {
+    return Object.assign({}, view || {}, { can_manage: entry.peer_can_manage });
+  }
+  return view;
+}
+
+/** 只更新按钮可见性；不写状态文本、不关闭菜单、不记录错误。 */
+function applyRoomMenuManagement(target, management) {
+  if (!target || roomMenuTarget !== target) return;
+  if (management === ROOM_MENU_MANAGEMENT_UNKNOWN) return;
+  target.management = management;
+  const isAgentDirect = Boolean(
+    target.kind === 'direct' && target.peer_actor_id && target.peer_kind === 'agent'
+  );
+  // peer_can_manage 是列表/详情刚返回的权限快照，优先于较旧的缓存。
+  let canManage = Boolean(management && management.can_manage);
+  if (target.peer_can_manage === true) canManage = true;
+  else if (target.peer_can_manage === false) canManage = false;
+  canManage = Boolean(isAgentDirect && canManage);
+  const pendingTransfer = management ? management.pending_transfer : null;
+  const canTransfer = Boolean(
+    isAgentDirect && management && (management.can_transfer ||
+      (pendingTransfer && (pendingTransfer.can_accept || pendingTransfer.can_cancel)))
+  );
+  const copyButton = document.getElementById('room-menu-copy-prompt');
+  if (copyButton) {
+    // 管理者使用合并后的「重置链接并复制」；非管理者与读取失败时保留
+    // 只复制提示词的回退入口，群聊/人类会话也继续显示该入口。
+    copyButton.hidden = isAgentDirect && canManage;
+  }
+  const reissueButton = document.getElementById('room-menu-reissue-token');
+  if (reissueButton) {
+    // 只对当前身份可管理的单聊 Agent 显示；群聊与人类会话不提供重置入口。
+    reissueButton.hidden = !(isAgentDirect && canManage);
+  }
+  const archiveButton = document.getElementById('room-menu-archive');
+  if (archiveButton) {
+    // 归档同样需要管理权；非管理者不应看到必然失败的危险入口。
+    archiveButton.hidden = !(isAgentDirect && canManage);
+  }
+  const toggleButton = document.getElementById('room-menu-toggle-disabled');
+  if (toggleButton) {
+    // 停用/启用只对可管理的单聊 Agent 显示；具体是停用还是启用由管理视图决定。
+    toggleButton.hidden = !(isAgentDirect && canManage);
+    toggleButton.textContent = management && management.disabled
+      ? ROOM_MENU_ENABLE_LABEL
+      : ROOM_MENU_DISABLE_LABEL;
+  }
+  const transferButton = document.getElementById('room-menu-transfer');
+  if (transferButton) {
+    // 管理者可发起/取消交接；待确认接任者 can_manage=false，但也必须能进入
+    // 面板接受或拒绝，因此交接入口单独按 can_transfer / pending_transfer 判断。
+    transferButton.hidden = !(isAgentDirect && canTransfer);
+  }
+}
+
+/** 后台补全 direct 对端；菜单已经显示，不等待任何网络结果。 */
+function roomMenuApplyResolvedPeer(target, openSeq, peer) {
+  if (roomMenuTarget !== target || openSeq !== roomMenuOpenSeq) return false;
+  if (!peer) {
+    applyRoomMenuManagement(target, null);
+    return false;
+  }
+  target.peer_actor_id = peer.actor_id;
+  target.peer_kind = peer.kind;
+  const entry = roomEntries.find(function (item) { return item.room_id === target.roomId; });
+  if (entry) {
+    entry.peer_kind = peer.kind;
+    entry.peer_actor_id = peer.actor_id;
+    entry.peer_loaded = true;
+  }
+  peerDetails.set(target.roomId, {
+    name: peer.name || target.roomName || '单聊',
+    peer_kind: peer.kind,
+    peer_online: peer.online,
+    peer_actor_id: peer.actor_id
+  });
+  return true;
+}
+
+/**
+ * 异步刷新管理权限：只更新按钮可见性，迟到结果按打开代次丢弃。
+ *
+ * 列表尚未补全 peer 时先读一次 room_get，再用其中的 peer_can_manage 立即
+ * 更新；随后仍读取完整管理视图补 disabled/交接细节。
+ */
+function refreshRoomMenuPermissions(target, openSeq) {
+  if (target.kind !== 'direct') return;
+  const applyManagement = function (management) {
+    if (roomMenuTarget !== target || openSeq !== roomMenuOpenSeq) return;
+    applyRoomMenuManagement(target, management);
+  };
+  if (target.peer_actor_id && target.peer_kind) {
+    if (target.peer_kind !== 'agent') {
+      applyRoomMenuManagement(target, null);
+      return;
+    }
+    roomMenuRequestManagement(target.peer_actor_id).then(applyManagement);
+    return;
+  }
+  Promise.resolve(identity || ensureIdentity()).then(function (me) {
+    if (!me || roomMenuTarget !== target || openSeq !== roomMenuOpenSeq) return null;
+    return callTool('network_room_get', { room_id: target.roomId }).then(function (detail) {
+      if (roomMenuTarget !== target || openSeq !== roomMenuOpenSeq) return null;
+      const peer = roomMenuPeerFromDetail(detail, me);
+      if (!roomMenuApplyResolvedPeer(target, openSeq, peer)) return null;
+      if (peer.kind !== 'agent') return null;
+      if (detail && detail.room && typeof detail.room.peer_can_manage === 'boolean') {
+        target.peer_can_manage = detail.room.peer_can_manage;
+        const current = roomEntries.find(function (item) {
+          return item.room_id === target.roomId;
+        });
+        if (current) current.peer_can_manage = detail.room.peer_can_manage;
+      }
+      applyRoomMenuManagement(target, roomMenuInitialManagement(null, peer.actor_id));
+      return roomMenuRequestManagement(peer.actor_id).then(applyManagement);
+    });
+  }).catch(function () {
+    // 后台补全失败保持已渲染菜单；复制入口点击时仍会按需读取。
+  });
+}
+
 async function openRoomMenu(link, x, y) {
   const roomId = link.getAttribute('data-room-id') || '';
   if (!roomId) return;
@@ -169,41 +369,16 @@ async function openRoomMenu(link, x, y) {
   const roomName = link.getAttribute('data-room-name') || '';
   const openSeq = ++roomMenuOpenSeq;
   const entry = roomEntries.find(function (item) { return item.room_id === roomId; });
-  let peerKind = entry ? entry.peer_kind : null;
-  let peerActorId = entry ? entry.peer_actor_id : null;
-  // 列表后台补全 peer 前右键时，不能把 token/归档/交接入口误隐藏；
-  // 这里按 room_id 补查一次 direct 对方，超时/失败则只展示通用复制项。
-  if (kind === 'direct' && (!peerKind || !peerActorId)) {
-    try {
-      const me = identity || await ensureIdentity();
-      const detail = await callTool('network_room_get', { room_id: roomId });
-      if (openSeq !== roomMenuOpenSeq) return;
-      const peer = roomMenuPeerFromDetail(detail, me);
-      if (peer) {
-        peerKind = peer.kind;
-        peerActorId = peer.actor_id;
-        if (entry) {
-          entry.peer_kind = peer.kind;
-          entry.peer_actor_id = peer.actor_id;
-          entry.peer_loaded = true;
-        }
-        peerDetails.set(roomId, {
-          name: peer.name || '单聊',
-          peer_kind: peer.kind,
-          peer_online: peer.online,
-          peer_actor_id: peer.actor_id
-        });
-      }
-    } catch (error) {
-      if (openSeq !== roomMenuOpenSeq) return;
-    }
-  }
-  if (openSeq !== roomMenuOpenSeq) return;
+  const peerKind = entry ? entry.peer_kind : null;
+  const peerActorId = entry ? entry.peer_actor_id : null;
+  const isAgentDirect = Boolean(
+    kind === 'direct' && peerActorId && peerKind === 'agent'
+  );
+  const peerCanManage = entry && typeof entry.peer_can_manage === 'boolean'
+    ? entry.peer_can_manage
+    : null;
   const menu = roomMenuNode();
   const button = document.getElementById('room-menu-copy-prompt');
-  const reissueButton = document.getElementById('room-menu-reissue-token');
-  const archiveButton = document.getElementById('room-menu-archive');
-  const toggleButton = document.getElementById('room-menu-toggle-disabled');
   if (!menu || !button) return;
   roomMenuTarget = {
     roomId: roomId,
@@ -211,6 +386,7 @@ async function openRoomMenu(link, x, y) {
     kind: kind,
     peer_actor_id: peerActorId,
     peer_kind: peerKind,
+    peer_can_manage: peerCanManage,
     management: null,
     read_only: entry ? Boolean(entry.read_only) : false,
     can_leave: entry ? Boolean(entry.can_leave) : false,
@@ -221,64 +397,32 @@ async function openRoomMenu(link, x, y) {
   roomMenuBusy = false;
   button.textContent = ROOM_MENU_COPY_LABEL;
   button.disabled = false;
-  const isAgentDirect = Boolean(
-    kind === 'direct' && peerActorId && peerKind === 'agent'
-  );
-  // 菜单可见性必须按服务端管理视图判断；PERMISSION_DENIED（非管理者）与网络
-  // 失败都按“无管理权”处理，只保留复制提示词回退，绝不把隐藏按钮当授权。
-  let management = null;
-  if (isAgentDirect) {
-    try {
-      management = await callTool('network_agent_management_get', {
-        actor_id: peerActorId
-      });
-    } catch (error) {
-      management = null;
-    }
-    if (openSeq !== roomMenuOpenSeq) return;
-    roomMenuTarget.management = management;
-  }
-  const canManage = Boolean(management && management.can_manage);
-  const pendingTransfer = management ? management.pending_transfer : null;
-  const canTransfer = Boolean(
-    management && (management.can_transfer ||
-      (pendingTransfer && (pendingTransfer.can_accept || pendingTransfer.can_cancel)))
-  );
-  if (button) {
-    // 管理者使用合并后的「重置链接并复制」；非管理者与读取失败时保留
-    // 只复制提示词的回退入口，群聊/人类会话也继续显示该入口。
-    button.hidden = isAgentDirect && canManage;
-    button.textContent = ROOM_MENU_COPY_LABEL;
-    button.disabled = false;
-  }
+  const reissueButton = document.getElementById('room-menu-reissue-token');
   if (reissueButton) {
-    // 只对当前身份可管理的单聊 Agent 显示；群聊与人类会话不提供重置入口。
-    reissueButton.hidden = !(isAgentDirect && canManage);
     reissueButton.textContent = ROOM_MENU_REISSUE_LABEL;
     reissueButton.disabled = false;
   }
+  const archiveButton = document.getElementById('room-menu-archive');
   if (archiveButton) {
-    // 归档同样需要管理权；非管理者不应看到必然失败的危险入口。
-    archiveButton.hidden = !(isAgentDirect && canManage);
     archiveButton.textContent = ROOM_MENU_ARCHIVE_LABEL;
     archiveButton.disabled = false;
   }
+  const toggleButton = document.getElementById('room-menu-toggle-disabled');
   if (toggleButton) {
-    // 停用/启用只对可管理的单聊 Agent 显示；具体是停用还是启用由管理视图决定。
-    toggleButton.hidden = !(isAgentDirect && canManage);
-    toggleButton.textContent = management && management.disabled
-      ? ROOM_MENU_ENABLE_LABEL
-      : ROOM_MENU_DISABLE_LABEL;
+    toggleButton.textContent = ROOM_MENU_DISABLE_LABEL;
     toggleButton.disabled = false;
   }
   const transferButton = document.getElementById('room-menu-transfer');
   if (transferButton) {
-    // 管理者可发起/取消交接；待确认接任者 can_manage=false，但也必须能进入
-    // 面板接受或拒绝，因此交接入口单独按 can_transfer / pending_transfer 判断。
-    transferButton.hidden = !(isAgentDirect && canTransfer);
     transferButton.textContent = ROOM_MENU_TRANSFER_LABEL;
     transferButton.disabled = false;
   }
+  // 同步渲染：优先列表的 peer_can_manage，其次 actor 管理视图缓存；
+  // 都没有时先按“只复制提示词”显示，后台再刷新按钮。
+  applyRoomMenuManagement(
+    roomMenuTarget,
+    isAgentDirect ? roomMenuInitialManagement(entry, peerActorId) : null
+  );
   roomMenuResetStatus();
   // 删除/拉黑/举报/退群入口由 chat-safety-script 维护；这里只传当前会话目标。
   if (typeof prepareRoomMenuSafety === 'function') prepareRoomMenuSafety(roomMenuTarget);
@@ -288,6 +432,7 @@ async function openRoomMenu(link, x, y) {
   } catch (error) {
     button.focus();
   }
+  refreshRoomMenuPermissions(roomMenuTarget, openSeq);
 }
 
 /** 从本地保存的 MCP URL 提取 URL 与 query token；格式异常时返回 null。 */
@@ -674,6 +819,8 @@ async function toggleRoomAgentDisabled() {
       });
     }
     if (!result || result.actor_id !== peer.actor_id) throw new Error('停用/启用结果不完整');
+    // 菜单缓存里的 disabled 已过期；下次打开重新读取，避免按钮文案滞后。
+    roomMenuForgetManagement(peer.actor_id);
     if (!disabled && result.stopped) {
       // 停用结果携带停用前的待处理工作；保留菜单让管理者看到数量与任务，
       // 不把信息塞进会自动消失的 toast。

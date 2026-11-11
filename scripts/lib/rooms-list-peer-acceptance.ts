@@ -22,6 +22,7 @@ interface RoomListItem {
   updated_at: string;
   peer?: PeerView | null;
   peer_archived?: boolean;
+  peer_can_manage?: boolean;
 }
 
 interface RoomListPage {
@@ -31,6 +32,7 @@ interface RoomListPage {
 }
 
 interface RoomDetailView {
+  room: { peer_can_manage?: boolean };
   members: {
     actor_id: string;
     kind: 'human' | 'agent';
@@ -53,6 +55,18 @@ export async function runRoomsListPeerAcceptance(): Promise<void> {
     await makeFriends(owner, agentB);
     await makeFriends(owner, humanPeer);
 
+    // agentB 由 owner 认领：同一页面里才能同时验证“可管理”和“不可管理”。
+    const claim = await callTool<{ claim_id: string; code: string }>(
+      agentB.connection.client,
+      'network_agent_claim_start',
+      { request_id: newRequestId('rooms_peer_claim_start') },
+    );
+    await callTool(owner.connection.client, 'network_agent_claim_confirm', {
+      request_id: newRequestId('rooms_peer_claim_confirm'),
+      claim_id: claim.claim_id,
+      code: claim.code,
+    });
+
     const directAgent = await callTool<{ room: { room_id: string } }>(
       owner.connection.client,
       'network_room_create',
@@ -69,6 +83,15 @@ export async function runRoomsListPeerAcceptance(): Promise<void> {
         request_id: newRequestId('rooms_peer_direct_human'),
         kind: 'direct',
         members: [humanPeer.actor.actor_id],
+      },
+    );
+    const directManaged = await callTool<{ room: { room_id: string } }>(
+      owner.connection.client,
+      'network_room_create',
+      {
+        request_id: newRequestId('rooms_peer_direct_managed'),
+        kind: 'direct',
+        members: [agentB.actor.actor_id],
       },
     );
     const group = await callTool<{ room: { room_id: string } }>(
@@ -96,9 +119,11 @@ export async function runRoomsListPeerAcceptance(): Promise<void> {
     });
     const directAgentItem = roomOf(page, directAgent.room.room_id);
     const directHumanItem = roomOf(page, directHuman.room.room_id);
+    const directManagedItem = roomOf(page, directManaged.room.room_id);
     const groupItem = roomOf(page, group.room.room_id);
     check('rooms_list 返回 direct Agent 会话', Boolean(directAgentItem), directAgentItem);
     check('rooms_list 返回 direct 人类会话', Boolean(directHumanItem), directHumanItem);
+    check('rooms_list 返回 direct 可管理 Agent 会话', Boolean(directManagedItem), directManagedItem);
     check('rooms_list 返回群聊', Boolean(groupItem), groupItem);
 
     const agentPeer = directAgentItem?.peer;
@@ -119,6 +144,26 @@ export async function runRoomsListPeerAcceptance(): Promise<void> {
       typeof agentPeer?.online === 'boolean',
       agentPeer,
     );
+    checkEqual(
+      'direct 自有 Agent peer_can_manage 为 true',
+      directManagedItem?.peer_can_manage,
+      true,
+    );
+    checkEqual(
+      'direct 未认领 Agent peer_can_manage 为 false',
+      directAgentItem?.peer_can_manage,
+      false,
+    );
+    checkEqual(
+      'direct 人类 peer_can_manage 为 false',
+      directHumanItem?.peer_can_manage,
+      false,
+    );
+    check(
+      '群聊不返回 peer_can_manage',
+      Boolean(groupItem) && !Object.prototype.hasOwnProperty.call(groupItem, 'peer_can_manage'),
+      groupItem,
+    );
 
     const detail = await callTool<RoomDetailView>(owner.connection.client, 'network_room_get', {
       room_id: directAgent.room.room_id,
@@ -128,6 +173,31 @@ export async function runRoomsListPeerAcceptance(): Promise<void> {
       'rooms_list peer.online 与 room_get 成员在线语义一致',
       agentPeer?.online,
       detailMember?.online,
+    );
+    checkEqual(
+      'room_get direct 未认领 Agent peer_can_manage 为 false',
+      detail.room.peer_can_manage,
+      false,
+    );
+    const managedDetail = await callTool<RoomDetailView>(
+      owner.connection.client,
+      'network_room_get',
+      { room_id: directManaged.room.room_id },
+    );
+    checkEqual(
+      'room_get direct 自有 Agent peer_can_manage 为 true',
+      managedDetail.room.peer_can_manage,
+      true,
+    );
+    const groupDetail = await callTool<RoomDetailView>(
+      owner.connection.client,
+      'network_room_get',
+      { room_id: group.room.room_id },
+    );
+    check(
+      'room_get 群聊不返回 peer_can_manage',
+      !Object.prototype.hasOwnProperty.call(groupDetail.room, 'peer_can_manage'),
+      groupDetail.room,
     );
 
     // 分页：limit+1 只用于判断 has_more，游标分页不重复且保持倒序。

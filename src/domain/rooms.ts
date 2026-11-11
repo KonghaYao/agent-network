@@ -48,7 +48,7 @@ import type {
   RoomRow,
 } from '../storage/rows';
 import { operationsStatement, resolveReplay, runIdempotent } from '../storage/transactions/runner';
-import { getActiveManagement } from './agent-access';
+import { getActiveManagement, manageableAgentIds } from './agent-access';
 import { directRelationStatements, getActiveRelation } from './contact-relations';
 import {
   contactBlockGuardStatement,
@@ -150,6 +150,13 @@ export interface RoomView {
    * `room_get` 读取能力，供网页已归档入口恢复。群聊不设置该字段。
    */
   peer_archived?: boolean;
+  /**
+   * direct 会话对端 Agent 的查看者权限；仅 direct 房间返回。
+   *
+   * 只表示当前调用者能否管理该对端 Agent，不暴露 manager_id；群聊不设置，
+   * direct 人类对端恒为 false。客户端可据此即时渲染管理动作，无需额外请求。
+   */
+  peer_can_manage?: boolean;
   /**
    * direct 会话的对端展示摘要；仅 `rooms_list` 返回。
    *
@@ -523,6 +530,10 @@ export async function roomsList(
     .filter((row) => row.kind === 'direct')
     .map((row) => row.room_id);
   const peers = await listRoomPeers(db, id, directRoomIds);
+  const peerAgentIds = [...peers.values()]
+    .filter((peer) => peer.kind === 'agent')
+    .map((peer) => peer.actor_id);
+  const manageablePeers = await manageableAgentIds(db, id, peerAgentIds, nowMs());
   const items = page.map((row) => {
     const member = {
       role: row.my_role,
@@ -561,6 +572,11 @@ export async function roomsList(
       Boolean(row.peer_archived),
     );
     view.peer = row.kind === 'direct' ? peers.get(row.room_id) ?? null : null;
+    if (row.kind === 'direct') {
+      view.peer_can_manage = Boolean(
+        view.peer && view.peer.kind === 'agent' && manageablePeers.has(view.peer.actor_id),
+      );
+    }
     return view;
   });
 
@@ -1101,7 +1117,17 @@ export async function roomGet(
   principal: Principal,
   roomId: string,
 ): Promise<RoomDetail> {
-  return roomDetail(db, roomId, actorId(principal));
+  const viewer = actorId(principal);
+  const detail = await roomDetail(db, roomId, viewer);
+  if (detail.room.kind === 'direct') {
+    const peer = detail.members.find((member) => member.actor_id !== viewer);
+    const manageable =
+      peer && peer.kind === 'agent'
+        ? await manageableAgentIds(db, viewer, [peer.actor_id], nowMs())
+        : null;
+    detail.room.peer_can_manage = Boolean(manageable && peer && manageable.has(peer.actor_id));
+  }
+  return detail;
 }
 
 function cancelDeliveriesForMemberStatements(

@@ -125,6 +125,50 @@ export async function managementAccess(
   return null;
 }
 
+/**
+ * 批量判断调用者能否管理给定 Agent，供房间列表标记对端权限。
+ *
+ * 与 `managementAccess` 使用同一张管理/委托表：active manager，或未过期的
+ * `manage_agent` 委托。只返回调用者自己可管理的 actor_id 集合，不读取或
+ * 暴露 manager_id，也不改变任何授权判定。
+ */
+export async function manageableAgentIds(
+  db: D1Like,
+  callerActorId: string,
+  agentIds: string[],
+  at: number,
+): Promise<Set<string>> {
+  const ids = [...new Set(agentIds)].filter((id) => id !== callerActorId);
+  if (ids.length === 0) return new Set();
+  const placeholders = ids.map(() => '?').join(',');
+  const [managements, delegations] = await Promise.all([
+    db
+      .prepare(
+        `SELECT agent_id, manager_id FROM agent_managements
+          WHERE status = 'active' AND agent_id IN (${placeholders})`,
+      )
+      .bind(...ids)
+      .all<{ agent_id: string; manager_id: string }>(),
+    db
+      .prepare(
+        `SELECT agent_id, scopes_json FROM agent_delegations
+          WHERE delegate_actor_id = ? AND status = 'active'
+            AND (expires_at IS NULL OR expires_at > ?)
+            AND agent_id IN (${placeholders})`,
+      )
+      .bind(callerActorId, at, ...ids)
+      .all<{ agent_id: string; scopes_json: string }>(),
+  ]);
+  const manageable = new Set<string>();
+  for (const row of managements.results) {
+    if (row.manager_id === callerActorId) manageable.add(row.agent_id);
+  }
+  for (const row of delegations.results) {
+    if (hasScope(row.scopes_json, MANAGE_AGENT_SCOPE)) manageable.add(row.agent_id);
+  }
+  return manageable;
+}
+
 export interface ManageRequirement {
   target: ActorRow;
   management: AgentManagementRow;

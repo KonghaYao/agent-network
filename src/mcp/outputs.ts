@@ -151,6 +151,11 @@ export const roomSchema = z.object({
   read_only: z.boolean(),
   can_leave: z.boolean(),
   can_dissolve: z.boolean(),
+  /**
+   * direct 房间对端 Agent 的查看者管理权限；群聊不返回。
+   * 只表达调用者自己的权限，不暴露 manager_id。
+   */
+  peer_can_manage: z.boolean().optional(),
   created_at: z.string(),
   updated_at: z.string(),
 });

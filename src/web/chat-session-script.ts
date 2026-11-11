@@ -255,7 +255,8 @@ function directSummaryFromDetail(detail) {
       name: detailRoom.title || '群聊',
       peer_kind: null,
       peer_online: null,
-      peer_actor_id: null
+      peer_actor_id: null,
+      peer_can_manage: null
     };
   }
   const others = detail.members.filter(function (member) {
@@ -265,7 +266,10 @@ function directSummaryFromDetail(detail) {
     name: others.map(function (member) { return member.name; }).join('、') || '单聊',
     peer_kind: others.length === 1 ? others[0].kind : null,
     peer_online: others.length === 1 && others[0].kind === 'agent' ? others[0].online : null,
-    peer_actor_id: others.length === 1 ? others[0].actor_id : null
+    peer_actor_id: others.length === 1 ? others[0].actor_id : null,
+    peer_can_manage: typeof detailRoom.peer_can_manage === 'boolean'
+      ? detailRoom.peer_can_manage
+      : null
   };
 }
 
@@ -340,6 +344,9 @@ function applyRoomDetail(detail) {
     entry.peer_kind = summary.peer_kind;
     entry.peer_online = summary.peer_online;
     entry.peer_actor_id = summary.peer_actor_id;
+    if (typeof summary.peer_can_manage === 'boolean') {
+      entry.peer_can_manage = summary.peer_can_manage;
+    }
     entry.head_seq = detail.room.head_seq;
     // 深链时列表可能先补了一个 direct 占位条目，详情到达后必须纠正类型，
     // 否则解散群会一直落在好友分类并隐藏“退出群聊”。
@@ -760,6 +767,7 @@ function ensureRoomEntry(detail) {
       peer_kind: summary.peer_kind,
       peer_online: summary.peer_online,
       peer_actor_id: summary.peer_actor_id,
+      peer_can_manage: summary.peer_can_manage,
       peer_loaded: true,
       status: detailRoom.status || 'active',
       dissolved_at: detailRoom.dissolved_at || null,
@@ -773,6 +781,9 @@ function ensureRoomEntry(detail) {
     entry.peer_kind = summary.peer_kind;
     entry.peer_online = summary.peer_online;
     entry.peer_actor_id = summary.peer_actor_id;
+    if (typeof summary.peer_can_manage === 'boolean') {
+      entry.peer_can_manage = summary.peer_can_manage;
+    }
     entry.peer_loaded = true;
     entry.kind = detailRoom.kind;
     entry.head_seq = detailRoom.head_seq;

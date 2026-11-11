@@ -350,6 +350,7 @@ function roomSummaryFromList(entry, me) {
     // 人类成员没有在线概念，保持 null 且不渲染状态点。
     peer_online: peerOnline,
     peer_actor_id: peerActorId,
+    peer_can_manage: entry.kind === 'direct' && typeof entry.peer_can_manage === 'boolean' ? entry.peer_can_manage : null,
     peer_loaded: entry.kind !== 'direct' || Boolean(resolved),
     // 显式 null 或已解析成功都无需兼容补全；只有字段缺失才补。
     peer_unknown: entry.kind === 'direct' && entry.peer === null && !resolved
@@ -764,6 +765,7 @@ function mergeActiveRoom(summaries) {
     peer_kind: summary.peer_kind,
     peer_online: summary.peer_online,
     peer_actor_id: summary.peer_actor_id,
+    peer_can_manage: summary.peer_can_manage,
     peer_loaded: true
   });
   return summaries;

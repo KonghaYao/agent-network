@@ -5425,7 +5425,120 @@ async function main(): Promise<void> {
         });
       })()`);
 
-      const directLink = page.locator(roomLink(data.extra.room.room_id));
+      const directSelector = roomLink(data.extra.room.room_id);
+      // 右键不能等待管理请求：mock 500ms 延迟后菜单仍须立即出现。
+      // 先清掉列表权限与缓存，确保首帧只能走复制提示词回退。
+      await page.evaluate(`(() => {
+        const entry = roomEntries.find(function (item) {
+          return item.room_id === ${JSON.stringify(data.extra.room.room_id)};
+        });
+        if (entry) {
+          entry.peer_kind = 'agent';
+          entry.peer_actor_id = ${JSON.stringify(data.agentB.actor_id)};
+          entry.peer_loaded = true;
+          entry.peer_can_manage = null;
+        }
+        roomMenuForgetManagement();
+        window.__originalCallTool = callTool;
+        callTool = function (name, args, token, signal) {
+          if (name !== 'network_agent_management_get') {
+            return window.__originalCallTool(name, args, token, signal);
+          }
+          return new Promise(function (resolve, reject) {
+            setTimeout(function () {
+              window.__originalCallTool(name, args, token, signal).then(resolve, reject);
+            }, 500);
+          });
+        };
+      })()`);
+      const managementCallsBefore = await mcpCallCount(page, 'network_agent_management_get');
+      const menuLatency = (await page.evaluate(`(async () => {
+        const link = document.querySelector(${JSON.stringify(directSelector)});
+        const start = performance.now();
+        link.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 240,
+          clientY: 320
+        }));
+        while (document.getElementById('room-menu').hidden && performance.now() - start < 500) {
+          await new Promise(function (resolve) { setTimeout(resolve, 5); });
+        }
+        return performance.now() - start;
+      })()`)) as number;
+      check('右键菜单不等待管理请求立即显示', menuLatency < 250, menuLatency);
+      checkEqual(
+        '管理请求返回前显示复制提示词回退',
+        await page.locator('#room-menu-copy-prompt').isVisible(),
+        true,
+      );
+      checkEqual(
+        '管理请求返回前不显示重置入口',
+        await page.locator('#room-menu-reissue-token').isHidden(),
+        true,
+      );
+      await page.locator('#room-menu-reissue-token').waitFor({ state: 'visible' });
+      checkEqual(
+        '管理请求返回后只发出一次管理视图请求',
+        (await mcpCallCount(page, 'network_agent_management_get')) - managementCallsBefore,
+        1,
+      );
+      await page.keyboard.press('Escape');
+      await page.locator('#room-menu').waitFor({ state: 'hidden' });
+      await page.locator(directSelector).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      await sleep(300);
+      checkEqual(
+        '短时间内重复打开复用管理视图缓存',
+        (await mcpCallCount(page, 'network_agent_management_get')) - managementCallsBefore,
+        1,
+      );
+      await page.keyboard.press('Escape');
+      await page.locator('#room-menu').waitFor({ state: 'hidden' });
+
+      // 管理请求失败不能改变已渲染菜单，也不能把内部错误写进状态区。
+      await page.evaluate(`(() => {
+        roomMenuForgetManagement();
+        const entry = roomEntries.find(function (item) {
+          return item.room_id === ${JSON.stringify(data.extra.room.room_id)};
+        });
+        if (entry) entry.peer_can_manage = null;
+        callTool = function (name, args, token, signal) {
+          if (name === 'network_agent_management_get') {
+            return Promise.reject(Object.assign(new Error('mock management failure'), {
+              code: 'NETWORK_ERROR'
+            }));
+          }
+          return window.__originalCallTool(name, args, token, signal);
+        };
+      })()`);
+      await page.locator(directSelector).click({ button: 'right' });
+      await page.locator('#room-menu').waitFor({ state: 'visible' });
+      await sleep(150);
+      checkEqual(
+        '管理请求失败时仍保留复制提示词',
+        await page.locator('#room-menu-copy-prompt').isVisible(),
+        true,
+      );
+      checkEqual(
+        '管理请求失败不显示重置入口',
+        await page.locator('#room-menu-reissue-token').isHidden(),
+        true,
+      );
+      checkEqual(
+        '管理请求失败不显示内部错误',
+        await page.locator('#room-menu-status').isHidden(),
+        true,
+      );
+      await page.evaluate(`(() => {
+        callTool = window.__originalCallTool;
+        delete window.__originalCallTool;
+        roomMenuForgetManagement();
+      })()`);
+      await page.keyboard.press('Escape');
+      await page.locator('#room-menu').waitFor({ state: 'hidden' });
+
+      const directLink = page.locator(directSelector);
       // 模拟列表后台补全 peer 之前的右键：token/归档/交接入口仍必须出现。
       await page.evaluate(`(() => {
         const entry = roomEntries.find(function (item) {
@@ -5440,6 +5553,8 @@ async function main(): Promise<void> {
       await directLink.click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
       check('右键会话显示自定义菜单', true);
+      // peer 缺失时菜单先按复制项显示，后台 room_get + 管理视图返回后更新。
+      await page.locator('#room-menu-reissue-token').waitFor({ state: 'visible' });
       checkEqual(
         'direct Agent 菜单项为重置链接并复制',
         (await page.locator('#room-menu-reissue-token').textContent())?.trim(),
@@ -8312,6 +8427,8 @@ async function main(): Promise<void> {
       const directLink = roomLink(data.extra.room.room_id);
       await page.locator(directLink).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
+      // 管理动作由后台管理视图补全，等入口出现后再断言。
+      await page.locator('#room-menu-reissue-token').waitFor({ state: 'visible' });
       checkEqual(
         '退出前右键不显示旧复制提示词入口',
         await page.locator('#room-menu-copy-prompt').isHidden(),
@@ -8611,6 +8728,8 @@ async function main(): Promise<void> {
       await page.locator('#room-filter-agent').click();
       await page.locator(archiveLink).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
+      // 归档入口由后台管理视图补全。
+      await page.locator('#room-menu-archive').waitFor({ state: 'visible' });
       checkEqual(
         '单聊 Agent 右键显示归档入口',
         await page.locator('#room-menu-archive').isVisible(),
@@ -9161,6 +9280,8 @@ async function main(): Promise<void> {
         await waitRoomListName(page, agentName);
         await page.locator(roomLink(roomId)).click({ button: 'right' });
         await page.locator('#room-menu').waitFor({ state: 'visible' });
+        // 停用入口由后台管理视图补全；不要用菜单可见瞬间的隐藏状态断言。
+        await page.locator('#room-menu-toggle-disabled').waitFor({ state: 'visible' });
         checkEqual(
           `${agentName} 菜单显示停用入口`,
           await page.locator('#room-menu-toggle-disabled').isVisible(),
@@ -9438,6 +9559,10 @@ async function main(): Promise<void> {
           button: 'right',
         });
         await managerView.page.locator('#room-menu').waitFor({ state: 'visible' });
+        // 菜单先显示，管理视图返回后才出现交接入口。
+        await managerView.page
+          .locator('#room-menu-transfer')
+          .waitFor({ state: 'visible' });
         checkEqual(
           'direct Agent 菜单显示交接入口',
           await managerView.page.locator('#room-menu-transfer').isVisible(),
@@ -9508,6 +9633,10 @@ async function main(): Promise<void> {
           button: 'right',
         });
         await successorView.page.locator('#room-menu').waitFor({ state: 'visible' });
+        // 接任者权限由后台管理视图补全；等交接入口出现后再断言其余按钮。
+        await successorView.page
+          .locator('#room-menu-transfer')
+          .waitFor({ state: 'visible' });
         checkEqual(
           '接任者菜单不显示重置入口',
           await successorView.page.locator('#room-menu-reissue-token').isHidden(),
@@ -22743,6 +22872,7 @@ async function main(): Promise<void> {
       })()`);
 
       await openMenu(reissueLink);
+      await page.locator('#room-menu-reissue-token').waitFor({ state: 'visible' });
       check(
         'direct Agent 会话右键显示重置链接并复制入口',
         await page.locator('#room-menu-reissue-token').isVisible(),
@@ -23022,6 +23152,7 @@ async function main(): Promise<void> {
         }));
       })()`);
       await sleep(650);
+      await mobile.page.locator('#room-menu-reissue-token').waitFor({ state: 'visible' });
       checkEqual(
         '390px 长按 direct Agent 打开含重发入口的菜单',
         await mobile.page.locator('#room-menu-reissue-token').isVisible(),
