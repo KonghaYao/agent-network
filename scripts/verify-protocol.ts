@@ -2947,12 +2947,11 @@ async function main(): Promise<void> {
     codexBridgeMarkers.every((marker) => codexBridgeText.includes(marker)),
     { missing: codexBridgeMarkers.filter((marker) => !codexBridgeText.includes(marker)) },
   );
+  const codexTaskMarkers = ['QUEUED_STEERED', 'turn/steer', '排队', '人工核对', '不轮询'];
   check(
     'Codex 指南说明工作中插话、任务排队与异常时人工核对',
-    codexBridgeText.includes('排队') &&
-      codexBridgeText.includes('即时交给') &&
-      codexBridgeText.includes('人工核对') &&
-      codexBridgeText.includes('不轮询'),
+    codexTaskMarkers.every((marker) => codexBridgeText.includes(marker)),
+    { missing: codexTaskMarkers.filter((marker) => !codexBridgeText.includes(marker)) },
   );
   check(
     'Codex 桥接指南不包含真实 token 或完整含 token URL',
