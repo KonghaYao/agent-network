@@ -148,6 +148,17 @@ function toolError(id: unknown, code: string, message: string): Response {
   });
 }
 
+/**
+ * 复刻服务端 modern-only 入口校验：方法头、协议版本、_meta 与 MCP-Name
+ * 任一不一致都返回 400。监听器若漏发 MCP-Name 会在这里直接失败。
+ */
+function protocolReject(id: unknown, message: string): Response {
+  return Response.json(
+    { jsonrpc: '2.0', id, error: { code: -32020, message } },
+    { status: 400 },
+  );
+}
+
 interface MockOptions {
   /** 所有请求返回 401，用于 dsh 的不可重试凭据路径。 */
   credentialInvalid?: boolean;
@@ -201,10 +212,29 @@ function createMock(options: MockOptions = {}): MockServer {
       const body = (await request.json()) as {
         id?: string | number;
         method?: string;
-        params?: { name?: string; arguments?: JsonObject };
+        params?: { name?: string; arguments?: JsonObject; _meta?: JsonObject };
       };
       if (options.credentialInvalid) {
         return new Response('unauthorized', { status: 401 });
+      }
+      const method = body.method ?? '';
+      const meta = body.params?._meta;
+      if (request.headers.get('mcp-method') !== method) {
+        return protocolReject(body.id, 'Mcp-Method header does not match body method');
+      }
+      if (request.headers.get('mcp-protocol-version') !== '2026-07-28') {
+        return protocolReject(body.id, 'MCP-Protocol-Version header missing');
+      }
+      if (
+        meta === undefined ||
+        meta['io.modelcontextprotocol/protocolVersion'] !== '2026-07-28' ||
+        typeof meta['io.modelcontextprotocol/clientInfo'] !== 'object' ||
+        !('io.modelcontextprotocol/clientCapabilities' in meta)
+      ) {
+        return protocolReject(body.id, 'params._meta is missing protocol envelope keys');
+      }
+      if (method === 'tools/call' && request.headers.get('mcp-name') !== body.params?.name) {
+        return protocolReject(body.id, 'MCP-Name header does not match params.name');
       }
       if (body.method === 'server/discover') {
         return rpc(body.id, { supportedVersions: ['2026-07-28'] });

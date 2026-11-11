@@ -107,6 +107,27 @@ export class MonitorRpc {
     };
   }
 
+  /** JSON-RPC error 的 code/message；数字 code 同样保留。 */
+  private describeRpcError(error: JsonObject): string {
+    const rawCode = error.code;
+    const code = typeof rawCode === 'number' || typeof rawCode === 'string' ? String(rawCode) : '';
+    const message = redact(asString(error.message), this.token).replace(/\s+/gu, ' ').trim();
+    return [
+      code.length > 0 ? `code=${code}` : '',
+      message.length > 0 ? `message=${message.slice(0, 300)}` : '',
+    ]
+      .filter((item) => item.length > 0)
+      .join(' ');
+  }
+
+  /** 400 时保留服务端的 JSON-RPC code/message，避免只剩泛化错误。 */
+  private describeRejection(status: number, text: string): string {
+    const detail = this.describeRpcError(asRecord(parseRpcPayload(text, 'application/json')?.error));
+    return detail.length > 0
+      ? `request_rejected status=${status} ${detail}`
+      : `request_rejected status=${status}`;
+  }
+
   /** POST JSON-RPC；传输层失败抛错，RPC 业务错误保留在返回 payload。 */
   private async post(method: string, params: JsonObject, name?: string): Promise<JsonObject> {
     const controller = new AbortController();
@@ -123,12 +144,15 @@ export class MonitorRpc {
       method,
       params: { ...params, _meta: this.meta() },
     };
+    const headers = this.authHeaders(method, 'application/json, text/event-stream');
+    // modern-only 服务端要求带 params.name 的方法在请求头重复 MCP-Name。
+    if (name) headers['mcp-name'] = name;
     try {
       let response: Response;
       try {
         response = await fetch(this.endpoint, {
           method: 'POST',
-          headers: this.authHeaders(method, 'application/json, text/event-stream'),
+          headers,
           body: JSON.stringify(body),
           signal: controller.signal,
         });
@@ -138,7 +162,7 @@ export class MonitorRpc {
       }
       const text = await response.text().catch(() => '');
       if (response.status === 400) {
-        throw new MonitorFatalError('protocol', 'request_rejected');
+        throw new MonitorFatalError('protocol', this.describeRejection(response.status, text));
       }
       if (response.status === 401 || response.status === 403) {
         throw new MonitorFatalError('credential', 'credential_invalid');
@@ -165,12 +189,16 @@ export class MonitorRpc {
     } catch (error) {
       if (error instanceof MonitorFatalError && error.kind === 'credential') throw error;
       if (error instanceof MonitorFatalError) {
-        throw new MonitorFatalError('protocol', 'discover_failed');
+        throw new MonitorFatalError('protocol', `discover_failed ${error.message}`);
       }
       throw error;
     }
     if (payload.error !== undefined) {
-      throw new MonitorFatalError('protocol', 'discover_failed');
+      const detail = this.describeRpcError(asRecord(payload.error));
+      throw new MonitorFatalError(
+        'protocol',
+        detail.length > 0 ? `discover_failed ${detail}` : 'discover_failed',
+      );
     }
     const supported = asArray(asRecord(payload.result).supportedVersions);
     if (!supported.includes(PROTOCOL_VERSION)) {
