@@ -479,6 +479,17 @@ async function runLegacyBookmarks(): Promise<void> {
     const roomId = room.room.room_id;
     await sendMessage(h1Conn, roomId, '历史消息保留');
 
+    const roomsBeforeRemove = await callTool<{ items: { room_id: string }[] }>(
+      h1Conn.client,
+      'network_rooms_list',
+      { limit: 100 },
+    );
+    check(
+      'T04 删除前 rooms_list 包含旧单聊',
+      roomsBeforeRemove.items.some((item) => item.room_id === roomId),
+      roomsBeforeRemove.items,
+    );
+
     const removed = await callTool<{ removed: true }>(h1Conn.client, 'network_contact_remove', {
       request_id: newRequestId('contact_remove'),
       actor_id: h2.actor_id,
@@ -486,6 +497,17 @@ async function runLegacyBookmarks(): Promise<void> {
     checkEqual('T04 删除好友返回 removed', removed.removed, true);
     checkEqual('T04 删除后发起方不再有收藏', await relationOf(h1Conn, h2.actor_id), null);
     checkEqual('T04 对方仍保留个人收藏但关系为 none', await relationOf(h2Conn, h1.actor_id), 'none');
+
+    const roomsAfterRemove = await callTool<{ items: { room_id: string }[] }>(
+      h1Conn.client,
+      'network_rooms_list',
+      { limit: 100 },
+    );
+    check(
+      'T04 删除后发起方 rooms_list 默认排除旧单聊',
+      !roomsAfterRemove.items.some((item) => item.room_id === roomId),
+      roomsAfterRemove.items,
+    );
 
     const historyOne = await callTool<{ items: { preview: string }[] }>(
       h1Conn.client,
@@ -515,11 +537,25 @@ async function runLegacyBookmarks(): Promise<void> {
     );
     const stillRoom = await callTool<RoomDetail>(h2Conn.client, 'network_room_get', { room_id: roomId });
     checkEqual('T04 旧房间成员仍然保留', stillRoom.members.length, 2);
+    const stillRoomOne = await callTool<RoomDetail>(h1Conn.client, 'network_room_get', {
+      room_id: roomId,
+    });
+    checkEqual('T04 删除后发起方仍可显式读取旧房间', stillRoomOne.room.room_id, roomId);
 
     const again = await requestContact(h2Conn, h1.actor_id);
     await respondContact(h1Conn, again.request?.contact_request_id ?? '', 'accept');
     const resumed = await sendMessage(h2Conn, roomId, '重新成为好友');
     check('T04 重新接受后可继续发送', resumed.message.message_id.startsWith('msg_'), resumed.message);
+    const roomsAfterResume = await callTool<{ items: { room_id: string }[] }>(
+      h1Conn.client,
+      'network_rooms_list',
+      { limit: 100 },
+    );
+    check(
+      'T04 重新成为好友后旧单聊回到默认列表',
+      roomsAfterResume.items.some((item) => item.room_id === roomId),
+      roomsAfterResume.items,
+    );
   } finally {
     await h1Conn.close();
     await h2Conn.close();

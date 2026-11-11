@@ -158,9 +158,13 @@ async function safetyDeleteFriend() {
       request_id: requestId('web_contact_remove'),
       actor_id: peer.actor_id
     });
-    showToast('已删除好友；历史保留，重新建联需要申请');
-    scheduleRoomListRefresh(true);
     closeRoomMenu();
+    // 立即移除本地会话与摘要缓存；服务端默认列表也已过滤，后台刷新不会带回。
+    forgetRoomEntry(target.roomId);
+    if (activeRoomId === target.roomId) navigateTo('/', { replace: true });
+    renderRooms();
+    scheduleRoomListRefresh(true);
+    showToast('已删除好友；历史保留，重新建联需要申请');
   } catch (error) {
     safetySetStatus('删除失败：' + (error && error.message ? error.message : String(error)), true);
   } finally {

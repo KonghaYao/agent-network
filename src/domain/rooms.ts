@@ -407,6 +407,10 @@ export async function roomsList(
     : '';
   const binds: unknown[] = cursor ? [id, cursor.seq, cursor.seq, cursor.key ?? ''] : [id];
 
+  // 删除好友会同时结束双向关系并删除操作者的个人收藏；对操作者隐藏该
+  // direct 会话。保留另一方与历史入口，`room_get`/`history_list` 不受影响。
+  // 拉黑也结束关系但保留收藏，仍可打开会话解除拉黑；无关系记录的旧房间
+  // 不满足 EXISTS，继续按原行为展示。
   const rows = await db
     .prepare(
       `SELECT r.*, m.role AS my_role, m.role_revision AS my_role_revision,
@@ -428,7 +432,30 @@ export async function roomsList(
          FROM room_members m
          JOIN rooms r ON r.room_id = m.room_id
          LEFT JOIN messages lm ON lm.message_id = r.last_message_id
-        WHERE m.actor_id = ? AND m.status = 'active' AND r.dissolved_at IS NULL ${keyset}
+        WHERE m.actor_id = ? AND m.status = 'active' AND r.dissolved_at IS NULL
+          AND NOT (
+            r.kind = 'direct'
+            AND EXISTS (
+              SELECT 1
+                FROM contact_relations cr
+               WHERE cr.pair_key = r.direct_pair_key
+                 AND cr.status = 'ended'
+            )
+            AND NOT EXISTS (
+              SELECT 1
+                FROM contacts c
+               WHERE c.owner_actor_id = m.actor_id
+                 AND c.target_actor_id = (
+                   SELECT peer.actor_id
+                     FROM room_members peer
+                    WHERE peer.room_id = r.room_id
+                      AND peer.status = 'active'
+                      AND peer.actor_id <> m.actor_id
+                    LIMIT 1
+                 )
+            )
+          )
+          ${keyset}
         ORDER BY r.updated_at DESC, r.room_id DESC
         LIMIT ?`,
     )
