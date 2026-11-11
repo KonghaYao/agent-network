@@ -469,8 +469,12 @@ export async function roomsList(
 
   // 删除好友会同时结束双向关系；无论哪一方发起，双方默认列表都不再展示
   // 该 direct 会话（历史仍可用 `room_get`/`history_list` 显式读取）。拉黑
-  // 也结束关系但保留收藏，双方仍可打开会话解除拉黑；无关系记录的旧房间
-  // 不满足 EXISTS，继续按原行为展示。
+  // 也结束关系但保留收藏，双方仍可打开会话解除拉黑。
+  //
+  // 关系表建立前创建的旧 direct 房间可能没有 contact_relations 行，删除好友
+  // 只会删掉自己的 contacts 行。此时不能依赖 ended 关系隐藏，否则刷新会把
+  // 已删除好友的会话带回列表；改为以调用者自己的收藏作为最后闸门，收藏也
+  // 不存在时视为已解除好友并隐藏。
   const rows = await db
     .prepare(
       `SELECT r.*, m.role AS my_role, m.role_revision AS my_role_revision,
@@ -495,27 +499,49 @@ export async function roomsList(
         WHERE m.actor_id = ? AND m.status = 'active' AND r.dissolved_at IS NULL
           AND NOT (
             r.kind = 'direct'
-            AND EXISTS (
-              SELECT 1
-                FROM contact_relations cr
-               WHERE cr.pair_key = r.direct_pair_key
-                 AND cr.status = 'ended'
-                 AND NOT ${relationEndedByBlockSql(
-                   'm.actor_id',
-                   '(CASE WHEN cr.actor_a = m.actor_id THEN cr.actor_b ELSE cr.actor_a END)',
-                   'cr.ended_at',
-                 )}
-                 AND (
-                   COALESCE(cr.ended_by, '') <> m.actor_id
-                   OR NOT EXISTS (
-                     SELECT 1
-                       FROM contacts c
-                      WHERE c.owner_actor_id = m.actor_id
-                        AND c.target_actor_id = CASE
-                              WHEN cr.actor_a = m.actor_id THEN cr.actor_b ELSE cr.actor_a
-                            END
+            AND (
+              EXISTS (
+                SELECT 1
+                  FROM contact_relations cr
+                 WHERE cr.pair_key = r.direct_pair_key
+                   AND cr.status = 'ended'
+                   AND NOT ${relationEndedByBlockSql(
+                     'm.actor_id',
+                     '(CASE WHEN cr.actor_a = m.actor_id THEN cr.actor_b ELSE cr.actor_a END)',
+                     'cr.ended_at',
+                   )}
+                   AND (
+                     COALESCE(cr.ended_by, '') <> m.actor_id
+                     OR NOT EXISTS (
+                       SELECT 1
+                         FROM contacts c
+                        WHERE c.owner_actor_id = m.actor_id
+                          AND c.target_actor_id = CASE
+                                WHEN cr.actor_a = m.actor_id THEN cr.actor_b ELSE cr.actor_a
+                              END
+                     )
                    )
-                 )
+              )
+              OR (
+                NOT EXISTS (
+                  SELECT 1
+                    FROM contact_relations any_relation
+                   WHERE any_relation.pair_key = r.direct_pair_key
+                )
+                AND NOT EXISTS (
+                  SELECT 1
+                    FROM contacts legacy_contact
+                   WHERE legacy_contact.owner_actor_id = m.actor_id
+                     AND legacy_contact.target_actor_id = (
+                       SELECT peer.actor_id
+                         FROM room_members peer
+                        WHERE peer.room_id = r.room_id
+                          AND peer.status = 'active'
+                          AND peer.actor_id <> m.actor_id
+                        LIMIT 1
+                     )
+                )
+              )
             )
           )
           ${keyset}
