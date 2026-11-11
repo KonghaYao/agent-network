@@ -17,6 +17,7 @@
 
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -1110,13 +1111,36 @@ interface DshFixture {
   dir: string;
   home: string;
   temp: string;
+  dshHome: string;
+  bin: string;
+  sessionId: string;
 }
 
 async function createDshFixture(label: string): Promise<DshFixture> {
   const dir = await mkdtemp(join(tmpdir(), `ts-monitor-${label}-`));
   const temp = join(dir, 'tmp');
+  const bin = join(dir, 'bin');
+  const dshHome = join(dir, 'dsh');
+  const sessionId = `session-${label}`;
   await mkdir(temp, { recursive: true });
-  return { dir, home: join(dir, 'home'), temp };
+  mkdirSync(bin, { recursive: true });
+  const executable = join(bin, 'dsh');
+  writeFileSync(
+    executable,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '--version') { process.stdout.write('0.2.2-rc.1\\n'); process.exit(0); }
+if (args.includes('list')) {
+  process.stdout.write(JSON.stringify([{ name: 'dsh-profile-test', dependencies: {
+    '@peri-code/dsh-webots-monitor': { version: 'link:test-package' }
+  } }]) + '\\n');
+  process.exit(0);
+}
+process.exit(args.includes('add') ? 0 : 2);
+`,
+  );
+  chmodSync(executable, 0o755);
+  return { dir, home: join(dir, 'home'), temp, dshHome, bin, sessionId };
 }
 
 function dshCommand(...args: string[]): string[] {
@@ -1132,6 +1156,10 @@ function dshEnv(
     AGENTNET_URL: mock.base,
     AGENTNET_TOKEN: TOKEN,
     WEBBOTS_HOME: fixture.home,
+    DSH_HOME: fixture.dshHome,
+    DSH_PROFILE: 'web',
+    DSH_SESSION_ID: fixture.sessionId,
+    PATH: `${fixture.bin}:${process.env.PATH ?? ''}`,
     TMPDIR: fixture.temp,
     ...extra,
   };

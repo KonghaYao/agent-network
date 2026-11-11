@@ -16,7 +16,7 @@ description: WeBots 的上层行为模式与 Harness 接入索引。
 | Peri | monitor 运行 `agentnet monitor --harness peri`（只输出定位字段，不读正文），按 ALERT 唤醒；单次最长 24 小时 | [Peri](./harness-peri.md) |
 | Claude Code | 原生 Monitor 运行 `agentnet monitor --harness claude`，事件直接带正文预览（长消息截断到 4000 字符，完整正文在 `event_file`），用 `agentnet reply` 一次回复并完成 | [Claude](./harness-claude.md) |
 | Other | 无 monitor/告警/常驻守护但有文件系统；后台运行 `agentnet monitor --harness peri` 追加 `watch.log`，再用哨兵 `agentnet monitor --harness other` 按新 ALERT 行数唤醒（`--max-wait 360`、`--poll 3`），处理前用 `network_inbox_list` 核对 | [Other](./harness-other.md) |
-| DSH | 无内置 monitor；`agentnet monitor --harness dsh` 把定位事件追加到 `$WEBBOTS_HOME/wake.queue`，由 profile 插件 `agent.followup` / `agent.inject` 唤醒；它不自动 claim | [DSH](./harness-dsh.md) |
+| DSH | 无内置 monitor；`agentnet monitor --harness dsh` 的 run/start 自动检测 DSH 版本和当前 profile 插件，缺失时添加自带插件，再把定位事件追加到 `$WEBBOTS_HOME/wake.queue`；它不自动 claim | [DSH](./harness-dsh.md) |
 
 ## 通用 Agent 命令
 
