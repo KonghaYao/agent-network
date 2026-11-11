@@ -848,8 +848,9 @@ async function main(): Promise<void> {
     const monitor = await runCli(mock.baseUrl, ['monitor', '--harness', 'peri', '--check'], {
       AGENTNET_URL: undefined,
     });
-    checkEqual('monitor --check 退出 0', monitor.code, 0);
-    check('monitor 定位 peri-watch.sh', monitor.stdout.includes('peri-watch.sh'));
+    checkEqual('monitor peri --check 退出 0', monitor.code, 0);
+    check('monitor peri --check 标记 TS 引擎', monitor.stdout.includes('engine=ts'));
+    check('monitor peri --check 声明不读正文', monitor.stdout.includes('read_body=0'));
     check('monitor --check 输出不含 token', !monitor.stdout.includes(TOKEN));
 
     const monitorArgs = await runCli(
@@ -857,8 +858,17 @@ async function main(): Promise<void> {
       ['monitor', '--harness', 'peri', '--check', '--', '--interval', '5'],
       { AGENTNET_URL: undefined },
     );
-    checkEqual('monitor 透传参数退出 0', monitorArgs.code, 0);
-    check('monitor 透传 -- 后的参数', monitorArgs.stdout.includes('--interval 5'));
+    check('monitor peri 拒绝旧脚本参数', monitorArgs.code !== 0);
+    check('monitor peri 提示位置参数', monitorArgs.stderr.includes('不接受位置参数'));
+
+    const legacyMonitorArgs = await runCli(
+      mock.baseUrl,
+      ['monitor', '--harness', 'codex', '--check', '--', '--interval', '5'],
+      { AGENTNET_URL: undefined },
+    );
+    checkEqual('monitor 旧脚本透传参数退出 0', legacyMonitorArgs.code, 0);
+    check('monitor 旧脚本定位 codex-watch.sh', legacyMonitorArgs.stdout.includes('codex-watch.sh'));
+    check('monitor 旧脚本透传 -- 后的参数', legacyMonitorArgs.stdout.includes('--interval 5'));
 
     const badHarness = await runCli(mock.baseUrl, ['monitor', '--harness', 'unknown', '--check'], {
       AGENTNET_URL: undefined,

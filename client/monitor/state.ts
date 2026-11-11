@@ -14,6 +14,8 @@ import type { JsonObject } from './rpc';
 export interface MonitorStateOptions {
   directory?: string | undefined;
   keep?: boolean | undefined;
+  /** 临时目录前缀；每个 harness 保留旧脚本的目录名，便于排查。 */
+  tempPrefix?: string | undefined;
 }
 
 function randomTag(): string {
@@ -35,7 +37,7 @@ export class MonitorState {
       ? await mkdir(options.directory, { recursive: true, mode: 0o700 }).then(
           () => options.directory as string,
         )
-      : await mkdtemp(join(tmpdir(), 'claude-watch.'));
+      : await mkdtemp(join(tmpdir(), options.tempPrefix ?? 'claude-watch.'));
 
     await chmod(directory, 0o700);
     const eventDir = join(directory, 'events');

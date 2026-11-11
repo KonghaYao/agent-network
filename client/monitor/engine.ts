@@ -1,12 +1,13 @@
 /**
  * 共享监控引擎：连接、订阅、自动 claim、正文读取与事件输出。
  *
- * 这是 claude-watch.sh 监听循环的 TypeScript 等价实现；Phase 2 的
- * peri/codex/dsh 只需要换 stdout 信封或入口参数，不需要复制连接与 claim 逻辑。
+ * 这是 claude-watch.sh 监听循环的 TypeScript 等价实现；peri 通过事件格式钩子
+ * 复用同一套连接、claim、seen 与退避逻辑，只替换 stdout 信封、诊断流和正文读取。
  *
  * 关键不变量：
- * - stdout 只写事件 JSON，一行一个；READY/诊断只写 stderr；
- * - 每个投递先 claim，成功后才读正文并输出可处理的 delivery 事件；
+ * - stdout 只写事件行（peri 为 `ALERT <json>`）；READY/诊断默认写 stderr；
+ * - 每个投递先 claim，成功后才输出可处理的 delivery 事件；
+ * - claude 在 claim 后读正文并写 event_file；peri 刻意不读正文，事件不含正文；
  * - 同一时刻只保留一个 claim（由服务端约束），deferred 不写永久 seen；
  * - 正文只进 event_file 与 stdout 的预览，不写日志。
  */
@@ -50,15 +51,44 @@ class MonitorStop extends Error {
   }
 }
 
+/**
+ * 宿主差异只影响事件信封，不影响连接、claim、seen 与退避：
+ * - claude 走默认实现（claim 后读正文、stdout 裸 JSON、诊断写 stderr）；
+ * - peri 提供无正文 delivery 与独立 claim/reminder 信封，诊断写 stdout、行首加 `ALERT `。
+ */
+export interface MonitorEventFormat {
+  /** readBody=false 时 claim 成功后的事件；缺省视为引擎配置错误。 */
+  deliveryWithoutBody?: (
+    item: JsonObject,
+    fields: DeliveryFields,
+    claim: ClaimInfo,
+    source: string,
+  ) => JsonObject;
+  /** 覆盖 claim 失败通知；默认与 claude-watch.sh 一致。 */
+  claimNotice?: (
+    item: JsonObject,
+    fields: DeliveryFields,
+    failure: ClaimFailure,
+    source: string,
+  ) => JsonObject;
+  /** 覆盖 reminder；默认与 claude-watch.sh 一致。 */
+  reminder?: (item: JsonObject) => JsonObject;
+}
+
 export interface MonitorEngineOptions {
   rpc: MonitorRpc;
   state: MonitorState;
   signal: AbortSignal;
   stdout?: (line: string) => void;
-  stderr?: (line: string) => void;
+  diagnostics?: (line: string) => void;
   bodyPreviewChars?: number;
   ackTimeoutMs?: number;
   idleTimeoutMs?: number;
+  /** stdout 事件行前缀；peri 使用 `ALERT `。 */
+  prefix?: string;
+  /** claim 成功后是否读正文并写 event_file；peri 刻意保持不读。 */
+  readBody?: boolean;
+  format?: MonitorEventFormat;
 }
 
 type EmitResult = 'emitted' | 'deferred' | 'error';
@@ -99,10 +129,13 @@ export class MonitorEngine {
   private readonly state: MonitorState;
   private readonly signal: AbortSignal;
   private readonly stdout: (line: string) => void;
-  private readonly stderr: (line: string) => void;
+  private readonly diagnostics: (line: string) => void;
   private readonly bodyPreviewChars: number;
   private readonly ackTimeoutMs: number;
   private readonly idleTimeoutMs: number;
+  private readonly prefix: string;
+  private readonly readBody: boolean;
+  private readonly format: MonitorEventFormat;
 
   private meId = '';
   private readyEmitted = false;
@@ -117,10 +150,13 @@ export class MonitorEngine {
     this.state = options.state;
     this.signal = options.signal;
     this.stdout = options.stdout ?? ((line) => process.stdout.write(`${line}\n`));
-    this.stderr = options.stderr ?? ((line) => process.stderr.write(`${line}\n`));
+    this.diagnostics = options.diagnostics ?? ((line) => process.stderr.write(`${line}\n`));
     this.bodyPreviewChars = options.bodyPreviewChars ?? BODY_PREVIEW_CHARS;
     this.ackTimeoutMs = options.ackTimeoutMs ?? ACK_TIMEOUT_MS;
     this.idleTimeoutMs = options.idleTimeoutMs ?? IDLE_TIMEOUT_MS;
+    this.prefix = options.prefix ?? '';
+    this.readBody = options.readBody !== false;
+    this.format = options.format ?? {};
   }
 
   async run(): Promise<number> {
@@ -155,14 +191,14 @@ export class MonitorEngine {
         this.reconnectAttempt += 1;
         if (this.failStartedAt === 0) this.failStartedAt = now;
         const delay = reconnectDelay(this.reconnectAttempt);
-        this.stderr(
+        this.diagnostics(
           `RECONNECTING reason=${outcome.reason} status=${outcome.status} attempt=${this.reconnectAttempt} delay=${delay}`,
         );
         if (
           !this.degraded &&
           (this.reconnectAttempt >= 5 || now - this.failStartedAt >= 60_000)
         ) {
-          this.stderr(`DEGRADED attempts=${this.reconnectAttempt} last_reason=${outcome.reason}`);
+          this.diagnostics(`DEGRADED attempts=${this.reconnectAttempt} last_reason=${outcome.reason}`);
           this.degraded = true;
         }
         await abortableSleep(delay * 1000, this.signal);
@@ -175,18 +211,18 @@ export class MonitorEngine {
 
   private reportStop(error: unknown): number {
     if (error instanceof MonitorStop) {
-      this.stderr(error.logLine);
+      this.diagnostics(error.logLine);
       return error.exitCode;
     }
     if (error instanceof MonitorFatalError) {
       if (error.kind === 'credential') {
-        this.stderr('ERROR type=credential message=credential_invalid');
+        this.diagnostics('ERROR type=credential message=credential_invalid');
       } else {
-        this.stderr(`ERROR type=protocol message=${error.message || 'request_rejected'}`);
+        this.diagnostics(`ERROR type=protocol message=${error.message || 'request_rejected'}`);
       }
       return 1;
     }
-    this.stderr('ERROR type=internal message=monitor_failed');
+    this.diagnostics('ERROR type=internal message=monitor_failed');
     return 1;
   }
 
@@ -227,22 +263,22 @@ export class MonitorEngine {
       login = await this.rpc.callTool('network_login', {});
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
-      this.stderr('ERROR type=login message=network_login_failed');
+      this.diagnostics('ERROR type=login message=network_login_failed');
       abort('login_failed');
       return;
     }
     if (!login.ok) {
-      this.stderr('ERROR type=login message=network_login_failed');
+      this.diagnostics('ERROR type=login message=network_login_failed');
       abort('login_failed');
       return;
     }
 
     const pending = asNumber(login.data.pending_count, 0);
     if (!this.readyEmitted) {
-      this.stderr(`READY actor=${this.meId} pending=${pending} subscription=${subscriptionId}`);
+      this.diagnostics(`READY actor=${this.meId} pending=${pending} subscription=${subscriptionId}`);
       this.readyEmitted = true;
     } else {
-      this.stderr(
+      this.diagnostics(
         `READY actor=${this.meId} pending=${pending} subscription=${subscriptionId} reconnect=1 reason=${this.lastDisconnectReason}`,
       );
     }
@@ -276,7 +312,8 @@ export class MonitorEngine {
       if (source === 'delivery.reminder') {
         const key = `reminder:${id}:${eventId.length > 0 ? eventId : fallback}`;
         if (this.state.hasSeen(key)) continue;
-        this.stdout(JSON.stringify(reminderEvent(item)));
+        const event = this.format.reminder ? this.format.reminder(item) : reminderEvent(item);
+        this.emitEvent(event);
         await this.state.markSeen(key);
         continue;
       }
@@ -314,11 +351,11 @@ export class MonitorEngine {
       outcome = await this.rpc.callTool('network_inbox_list', { state: 'pending', limit: 50 });
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
-      this.stderr('ERROR type=inbox message=pending_lookup_failed');
+      this.diagnostics('ERROR type=inbox message=pending_lookup_failed');
       return null;
     }
     if (!outcome.ok) {
-      this.stderr('ERROR type=inbox message=pending_lookup_failed');
+      this.diagnostics('ERROR type=inbox message=pending_lookup_failed');
       return null;
     }
     const map = new Map<string, number>();
@@ -338,11 +375,11 @@ export class MonitorEngine {
       outcome = await this.rpc.callTool('network_inbox_list', { state: 'pending', limit: 50 });
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
-      this.stderr('ERROR type=inbox message=snapshot_failed');
+      this.diagnostics('ERROR type=inbox message=snapshot_failed');
       return;
     }
     if (!outcome.ok) {
-      this.stderr('ERROR type=inbox message=snapshot_failed');
+      this.diagnostics('ERROR type=inbox message=snapshot_failed');
       return;
     }
 
@@ -360,25 +397,38 @@ export class MonitorEngine {
 
   private async emitFound(item: JsonObject, source: string): Promise<EmitResult> {
     const fields = deliveryFields(item);
-    if (!SAFE_ID.test(fields.deliveryId)) {
-      this.stderr('ERROR type=format message=invalid_delivery_reference');
+    if (this.readBody && !SAFE_ID.test(fields.deliveryId)) {
+      this.diagnostics('ERROR type=format message=invalid_delivery_reference');
       return 'error';
     }
-    if (!SAFE_ID.test(fields.messageId)) {
-      this.stderr('ERROR type=format message=invalid_message_reference');
+    if (this.readBody && !SAFE_ID.test(fields.messageId)) {
+      this.diagnostics('ERROR type=format message=invalid_message_reference');
       return 'error';
     }
 
     const claim = await this.claimDelivery(fields.deliveryId);
     if (claim === null) return 'error';
     if (!claim.ok) {
-      this.stdout(JSON.stringify(claimNoticeEvent(fields, claim.failure, source)));
+      const failure = this.format.claimNotice
+        ? this.format.claimNotice(item, fields, claim.failure, source)
+        : claimNoticeEvent(fields, claim.failure, source);
+      this.emitEvent(failure);
       return claim.failure.kind === 'deferred' ? 'deferred' : 'emitted';
+    }
+
+    if (!this.readBody) {
+      const delivery = this.format.deliveryWithoutBody;
+      if (!delivery) {
+        this.diagnostics('ERROR type=internal message=monitor_failed');
+        return 'error';
+      }
+      this.emitEvent(delivery(item, fields, claim.claim, source));
+      return 'emitted';
     }
 
     const read = await this.readMessage(fields.messageId, fields.deliveryId);
     if (!read.ok) {
-      this.stdout(JSON.stringify(readFailedEvent(fields, claim.claim, source)));
+      this.emitEvent(readFailedEvent(fields, claim.claim, source));
       return 'emitted';
     }
 
@@ -389,23 +439,26 @@ export class MonitorEngine {
         eventFilePayload(fields, claim.claim, source, read.body),
       );
     } catch {
-      this.stderr(`ERROR type=message message=event_write_failed delivery_id=${fields.deliveryId}`);
-      this.stdout(JSON.stringify(readFailedEvent(fields, claim.claim, source)));
+      this.diagnostics(`ERROR type=message message=event_write_failed delivery_id=${fields.deliveryId}`);
+      this.emitEvent(readFailedEvent(fields, claim.claim, source));
       return 'emitted';
     }
 
-    this.stdout(
-      JSON.stringify(
-        deliveryEvent(
-          fields,
-          claim.claim,
-          source,
-          previewBody(read.body, this.bodyPreviewChars),
-          eventFile,
-        ),
+    this.emitEvent(
+      deliveryEvent(
+        fields,
+        claim.claim,
+        source,
+        previewBody(read.body, this.bodyPreviewChars),
+        eventFile,
       ),
     );
     return 'emitted';
+  }
+
+  /** 事件行只走 stdout；peri 的前缀 `ALERT ` 在此统一追加。 */
+  private emitEvent(event: JsonObject): void {
+    this.stdout(`${this.prefix}${JSON.stringify(event)}`);
   }
 
   /**
@@ -504,17 +557,17 @@ export class MonitorEngine {
         outcome = await this.rpc.callTool('network_message_read', args);
       } catch (error) {
         if (error instanceof MonitorFatalError) throw error;
-        this.stderr(`ERROR type=message message=read_failed delivery_id=${deliveryId}`);
+        this.diagnostics(`ERROR type=message message=read_failed delivery_id=${deliveryId}`);
         return { ok: false };
       }
       if (!outcome.ok) {
-        this.stderr(`ERROR type=message message=read_failed delivery_id=${deliveryId}`);
+        this.diagnostics(`ERROR type=message message=read_failed delivery_id=${deliveryId}`);
         return { ok: false };
       }
 
       const chunk = outcome.data.chunk;
       if (chunk !== undefined && chunk !== null && typeof chunk !== 'string') {
-        this.stderr(`ERROR type=message message=chunk_decode_failed delivery_id=${deliveryId}`);
+        this.diagnostics(`ERROR type=message message=chunk_decode_failed delivery_id=${deliveryId}`);
         return { ok: false };
       }
       chunks.push(typeof chunk === 'string' ? chunk : '');
@@ -523,12 +576,12 @@ export class MonitorEngine {
       }
       const next = asString(outcome.data.next_cursor);
       if (next.length === 0 || next === cursor) {
-        this.stderr(`ERROR type=message message=invalid_chunk_cursor delivery_id=${deliveryId}`);
+        this.diagnostics(`ERROR type=message message=invalid_chunk_cursor delivery_id=${deliveryId}`);
         return { ok: false };
       }
       cursor = next;
     }
-    this.stderr(`ERROR type=message message=invalid_chunk_cursor delivery_id=${deliveryId}`);
+    this.diagnostics(`ERROR type=message message=invalid_chunk_cursor delivery_id=${deliveryId}`);
     return { ok: false };
   }
 }
