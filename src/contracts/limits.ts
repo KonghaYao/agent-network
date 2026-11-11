@@ -434,6 +434,10 @@ export const LIMITS = {
   eventsDeliveryBatchMax: 50,
   /** 出站 webhook 并发。 */
   eventsWebhookConcurrency: 4,
+  /** Events 调度异常重试；避免异常导致唤醒丢失或零延迟忙循环。 */
+  eventsRuntimeErrorRetryMs: 5_000,
+  /** 平台 setTimeout 最大延迟；更远的持久到期时间分段唤醒。 */
+  eventsRuntimeMaxTimerMs: 2_147_483_647,
   /** challenge 验证超时（毫秒）。 */
   eventsVerificationTimeoutMs: 5_000,
   /** 单个 callback 地址的尝试超时（毫秒）；总预算仍由调用方 timeoutMs 控制。 */

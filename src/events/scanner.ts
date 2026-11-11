@@ -131,7 +131,7 @@ async function scanSubscription(
   env: Env,
   subscription: EventSubscriptionRow,
   now: number,
-): Promise<void> {
+): Promise<boolean> {
   let argumentsValue: { room_id?: string; attention?: 'action_required' | 'informational' };
   try {
     argumentsValue = MESSAGE_CREATED_ARGUMENTS.parse(
@@ -139,7 +139,7 @@ async function scanSubscription(
     );
   } catch {
     await suspendSubscription(env, subscription.subscription_id, 'invalid_arguments', now);
-    return;
+    return false;
   }
 
   if (
@@ -147,7 +147,7 @@ async function scanSubscription(
     !(await isActiveMember(env, subscription.actor_id, argumentsValue.room_id))
   ) {
     await suspendSubscription(env, subscription.subscription_id, 'membership_revoked', now);
-    return;
+    return false;
   }
 
   await env.DB
@@ -171,7 +171,7 @@ async function scanSubscription(
         .bind(scanned, now, subscription.subscription_id)
         .run();
     }
-    return;
+    return false;
   }
 
   const rows = await env.DB
@@ -207,7 +207,7 @@ async function scanSubscription(
       )
       .bind(head, now, subscription.subscription_id)
       .run();
-    return;
+    return false;
   }
 
   const matches = await deliveryMatches(
@@ -334,29 +334,47 @@ async function scanSubscription(
     // 扫描只看房间成员与 events 表，不依赖 SSE/login/presence。
     presence_required: false,
   });
+  // 过滤掉的一整页也要接着扫描；队列满时交由 dispatcher 的队首唤醒。
+  return lastProcessed > scanned && lastProcessed < head && available > 0;
 }
 
-/** 扫描所有活跃订阅，把匹配事件写入投递 outbox。 */
-export async function scanEventSubscriptions(env: Env): Promise<void> {
-  if (!env.EVENTS) return;
+export interface ScanResult {
+  nextSubscriptionId: string | null;
+  moreToScan: boolean;
+  failed: boolean;
+}
+
+/** 按稳定 ID 分批扫描活跃订阅；整轮完成后再回头处理各订阅的下一页。 */
+export async function scanEventSubscriptions(env: Env, afterId = ''): Promise<ScanResult> {
+  if (!env.EVENTS) return { nextSubscriptionId: null, moreToScan: false, failed: false };
+  let moreToScan = false;
+  let failed = false;
   const now = nowMs();
   const subscriptions = await env.DB
     .prepare(
       `SELECT * FROM mcp_event_subscriptions
-        WHERE active = 1 AND refresh_before > ?
-        ORDER BY last_scan_at ASC, subscription_id ASC
+        WHERE active = 1 AND refresh_before > ? AND subscription_id > ?
+        ORDER BY subscription_id ASC
         LIMIT ?`,
     )
-    .bind(now, LIMITS.eventsScanSubscriptionsPerTick)
+    .bind(now, afterId, LIMITS.eventsScanSubscriptionsPerTick + 1)
     .all<EventSubscriptionRow>();
-  for (const subscription of subscriptions.results) {
+  const batch = subscriptions.results.slice(0, LIMITS.eventsScanSubscriptionsPerTick);
+  for (const subscription of batch) {
     try {
-      await scanSubscription(env, subscription, now);
+      moreToScan = (await scanSubscription(env, subscription, now)) || moreToScan;
     } catch (error) {
+      failed = true;
       logEventsWarn('scan.failed', {
         subscription_id: subscription.subscription_id,
         error: error instanceof Error ? error.name : 'unknown',
       });
     }
   }
+  return {
+    nextSubscriptionId: subscriptions.results.length > batch.length
+      ? batch[batch.length - 1]!.subscription_id : null,
+    moreToScan,
+    failed,
+  };
 }

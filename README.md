@@ -498,6 +498,8 @@ MCP Events 让 ChatGPT Work chat 等客户端通过 HTTPS webhook 订阅服务�
 - 事件 payload 只含标识与状态：`event_id`、`event_seq`、`room_id`、`room_kind`、`message_id`、`sender_id`、`created_seq`、`created_at`、`delivery_id`、`delivery_state`、`attention`；不含正文、preview、URL、token 或指令。正文必须用 `network_message_read` / `network_history_list` 读取。
 - 发送者自己的消息不会产生事件；有待办投递的消息为 `action_required`，其余为 `informational`。事件可能重试，客户端必须按 `eventId` / cursor 去重，不能轮询。
 - 投递只看订阅 `active`、凭据未撤销、房间成员资格与 TTL；不要求 SSE 连接、`network_login` 或 presence。Agent 离线时 webhook 仍照常投递。
+- 同一订阅使用 `cursor: null` 或省略 cursor 刷新时保留扫描水位与未送达队列，包括短暂过期或 maintenance 已停用的记录；不因续期把积压当成新订阅丢弃。仍须在 `refreshBefore` 前续期，且受现有留存/重试上限约束；记录已被清理、unsubscribe 或 callback/arguments 改变后重新创建的订阅，从当前 head 开始，旧待办需 inbox 补读。显式 cursor 的过期重放保留原有语义。
+- Bun 启动即恢复 Events 队列。每轮有界扫描/投递后，剩余工作通过下一轮定时器继续；重试与遗留租约按各订阅队首到期时间唤醒，同订阅保持顺序，新工作可提前未来定时器。每分钟任务作为兜底，不再承担每条消息的推进；关闭时停止唤醒并等待当前批次后关闭数据库。
 
 安全与投递：
 

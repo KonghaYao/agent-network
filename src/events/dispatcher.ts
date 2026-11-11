@@ -384,11 +384,11 @@ export async function drainEventDeliveries(env: Env): Promise<DeliveryRunResult>
   if (!env.EVENTS) return result;
   const now = nowMs();
   const leaseToken = crypto.randomUUID();
-  const leaseUntil = now + LIMITS.eventsWebhookTimeoutMs + 60_000;
+  const leaseUntil = now + env.EVENTS.deliveryTimeoutMs + 60_000;
 
   await env.DB
     .prepare(
-      "UPDATE mcp_event_deliveries SET status = 'pending', lease_token = NULL, lease_until = NULL WHERE status = 'processing' AND lease_until IS NOT NULL AND lease_until < ?",
+      "UPDATE mcp_event_deliveries SET status = 'pending', lease_token = NULL, lease_until = NULL WHERE status = 'processing' AND lease_until IS NOT NULL AND lease_until <= ?",
     )
     .bind(now)
     .run();
@@ -436,4 +436,24 @@ export async function drainEventDeliveries(env: Env): Promise<DeliveryRunResult>
     else if (outcome === 'abandoned') result.abandoned += 1;
   });
   return result;
+}
+
+/** 只看各订阅队首，避免后面的 pending 绕过退避/租约而导致零延迟忙转。 */
+export async function nextEventDeliveryAt(env: Env): Promise<number | null> {
+  if (!env.EVENTS) return null;
+  const row = await env.DB.prepare(
+    `SELECT MIN(CASE WHEN d.status = 'processing' THEN d.lease_until
+                     ELSE d.next_attempt_at END) AS at
+       FROM mcp_event_deliveries d
+       JOIN mcp_event_subscriptions s ON s.subscription_id = d.subscription_id
+      WHERE d.status IN ('pending', 'processing')
+        AND s.active = 1 AND s.refresh_before > ?
+        AND NOT EXISTS (
+          SELECT 1 FROM mcp_event_deliveries older
+           WHERE older.subscription_id = d.subscription_id
+             AND older.event_seq < d.event_seq
+             AND older.status IN ('pending', 'processing')
+        )`,
+  ).bind(nowMs()).first<{ at: number | null }>();
+  return row?.at ?? null;
 }

@@ -596,8 +596,11 @@ export async function subscribeEvents(
   let resetDeliveries = false;
   const activeRefresh = existing !== null && existing.active === 1 && existing.refresh_before > now;
   const pausedRefresh = existing !== null && existing.active === 0 && existing.refresh_before > now;
+  // ChatGPT 可以用 null/省略 cursor 续期；已有持久订阅的积压不能因此
+  // 被当成新订阅清空。仅显式 cursor 的过期重放保持原来的重置语义。
+  const retainedRefresh = existing !== null && requestedCursor === null;
 
-  if (activeRefresh || pausedRefresh) {
+  if (activeRefresh || pausedRefresh || retainedRefresh) {
     scannedSeq = existing.scanned_seq;
     if (scannedSeq < floor) {
       scannedSeq = floor;

@@ -11,7 +11,7 @@ export const MCP_PROTOCOL_VERSION = '2026-07-28';
 export const CLIENT_INSTRUCTIONS = [
   'WeBots：先 network_me 确认当前身份与 service；完整流程用 network_client_guide 按需读取。',
   '单次收发完成即结束；仅用户要求持续工作时由宿主订阅。webhook 回调与常驻 MCP 流使用不同流程。',
-  '普通回复显式 invoke: []；派活使用已核实的 Agent actor_id。发送超时先 network_message_send_status 对账，保留原 request_id/client_message_id。',
+  '普通回复显式 invoke: []；派活或需对方继续处理的结果显式 invoke 已核实的 Agent actor_id，显示 @ 不等于唤醒。发送超时先 network_message_send_status 对账，保留原 request_id/client_message_id。',
   '有 delivery 时先核对并 claim，完成用 complete/fail；回复不等于完成。',
   '启用文件存储时，上传用 network_file_upload_prepare 获取当前身份短期凭证；绑定房间后分享带票据下载地址。不得寻找、转发长期 token 或换身份绕行。',
   '功能已启用而宿主缺少工具时刷新连接器工具目录；不能把服务端支持当作宿主已暴露。',
@@ -124,7 +124,7 @@ export function clientGuide(
   const available = new Set(input.client_tool_names);
   const steps = [
     '复用连接器当前身份，先 network_me；仅未注册凭据需要 network_register。不要新建或切换身份绕过缺失能力。',
-    '核实房间与接收者。普通回复 invoke: []；派活显式 invoke: [actor_id]。持久保留 request_id/client_message_id；发送结果不明先 network_message_send_status，对账未提交才用原 ID 重试。修改正文使用新 client_message_id。',
+    '核实房间与接收者。普通回复 invoke: []；派活或需要对方继续处理的结果（包括 claim 回复）显式 invoke: [actor_id]，核对返回的 delivery_ids；正文或自动补上的 @ 不等于唤醒。持久保留 request_id/client_message_id；发送结果不明先 network_message_send_status，对账未提交才用原 ID 重试。修改正文使用新 client_message_id。',
   ];
   if (mode === 'one_shot') {
     steps.push('执行用户授权的单次读取或发送后结束。无需 login 或建立长期订阅，也不要领取无关待办。');
@@ -134,6 +134,7 @@ export function clientGuide(
         ? '由宿主管理 webhook 订阅；只有用户要求持续工作时才创建。处理当前回调不需要另建 agentnet://stream 或以 login 证明回调可用。'
         : '本服务未启用 MCP Events；不要声称可创建 webhook。请由部署者启用或选择支持的宿主模式。',
       '事件只含定位信息。按 eventId/message_id 去重，读取正文与 network_inbox_list 核对目标 delivery；informational 不自动执行。只处理已获授权、发给当前身份的工作。',
+      '按 refreshBefore 提前续期。同一订阅用 null/省略 cursor 刷新会保留水位与未送达队列；删除、清理后或 callback/过滤条件变化属于重建。建立或恢复监听时用 network_inbox_list（省略 state）和 network_sync { scope: "inbox" } 补齐 active 待办；不能仅靠新订阅补旧消息。',
       '取得有效 claim 后执行；宿主已经领取时核对 claim，不重复领取。结束用 network_delivery_complete 或 network_delivery_fail；普通回复与 report 都不代表完成。完成当前回调后结束本次执行，保留已有订阅。',
     );
   } else {
