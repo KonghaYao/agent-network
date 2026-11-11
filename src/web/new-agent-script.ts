@@ -39,20 +39,39 @@ function newAgentSkillUrl() {
   return location.origin + NEW_AGENT_SKILL_PATH;
 }
 
-/** 纯 URL skill 提示词：先更新脚本、再重新加载 skill，最后连接；并声明群聊 @ 规则。 */
-function newAgentBuildPrompt(skillUrl, mcpUrl, token, name) {
-  return '你是 WeBots Agent。接入前必须按顺序完成，避免旧脚本或旧技能接入：\\n' +
-    '1. 先更新脚本：把 agentnet.sh / watcher 脚本更新到最新版本。\\n' +
-    '2. 再重新加载 skill（skills/get、SKILL.md 或宿主对应的重载方式），确认使用最新版本。\\n' +
-    '3. 最后再连接并使用。\\n' +
-    '群聊里必须 @ 你要回复的人/Agent，不要直接回复；人可能不会注意到没有 @ 的消息。\\n\\n' +
-    skillUrl +
-    '\\n\\n连接信息：\\n' +
-    'AGENTNET_MCP_URL="' + mcpUrl + '"\\n' +
-    'AGENTNET_TOKEN="' + token + '"\\n' +
-    '你的 Agent 身份：' + name +
-    '\\n\\n按技能文档确认身份、把 share_url 发给用户、进入异步监听并处理消息。' +
-    '不要重复发明步骤。凭据只给目标 Agent，勿发群、日志或截图。';
+/** 新版 CLI 接入提示词：下载 agentnet.js，用一次性 token 登录；并声明群聊 @ 规则。 */
+function newAgentBuildPrompt(skillUrl, mcpUrl, token, name, actorId) {
+  const serverUrl = location.origin;
+  const cliUrl = serverUrl + '/skills/agentnet.js';
+  return [
+    '你是 WeBots Agent。请用新版 agentnet CLI 接入，不要使用旧的 sh 脚本。',
+    '',
+    '1. 下载最新 CLI：',
+    '   curl -fsSL ' + cliUrl + ' -o agentnet.js',
+    '2. 用创建时签发的新 token 上线并确认身份：',
+    '   AGENTNET_URL="' + serverUrl + '" AGENTNET_TOKEN="' + token + '" bun agentnet.js login',
+    '   bun agentnet.js me',
+    '3. 只有新建身份时才走首次上线：',
+    '   bun agentnet.js --url "' + serverUrl + '" issue',
+    '   AGENTNET_TOKEN="<新 token>" bun agentnet.js --url "' + serverUrl +
+      '" register --name "<身份名称>" --session "<agent_session_id>"',
+    '   AGENTNET_TOKEN="<新 token>" bun agentnet.js --url "' + serverUrl + '" login',
+    '',
+    '技能文档：' + skillUrl,
+    '连接信息：',
+    '身份名称：' + name,
+    'actor_id：' + actorId,
+    'MCP URL：' + mcpUrl,
+    'AGENTNET_MCP_URL="' + mcpUrl + '"',
+    'AGENTNET_TOKEN="' + token + '"',
+    '',
+    '群聊 @ 规则：只在需要提醒或派活时 @ 对方；@ 名称必须使用投递里的 sender_name，' +
+      '不要凭记忆写；普通回复不要乱 @。',
+    '',
+    '按技能文档确认身份、把 share_url 发给用户，并在已有订阅下异步监听和处理消息。' +
+      '不要重复发明步骤。',
+    '凭据只给目标 Agent，勿发群、日志或截图。'
+  ].join('\\n');
 }
 
 function newAgentSetError(message) {
@@ -221,7 +240,13 @@ async function newAgentCreate(event) {
     const skillUrl = newAgentSkillUrl();
     if (newAgentSkillUrlInput) newAgentSkillUrlInput.value = skillUrl;
     if (newAgentPromptInput) {
-      newAgentPromptInput.value = newAgentBuildPrompt(skillUrl, newAgentUrl, newAgentToken, name);
+      newAgentPromptInput.value = newAgentBuildPrompt(
+        skillUrl,
+        newAgentUrl,
+        newAgentToken,
+        name,
+        registered.actor_id
+      );
     }
     if (newAgentResultElement) newAgentResultElement.hidden = false;
     // 本地注册表保存该 Agent 自己的 MCP URL，供右键提示词复用；不保存 human token。

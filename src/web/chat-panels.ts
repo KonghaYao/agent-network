@@ -82,7 +82,7 @@ export function sidebarPane(): string {
     <button class="room-menu-item danger" id="room-menu-toggle-disabled" type="button"
       role="menuitem" hidden>停用 Agent</button>
     <button class="room-menu-item danger" id="room-menu-reissue-token" type="button"
-      role="menuitem" hidden>注销并重发 token</button>
+      role="menuitem" hidden>重置链接并复制</button>
     <div class="room-menu-sep" id="room-menu-safety-sep" role="separator"></div>
     <button class="room-menu-item" id="room-menu-report" type="button"
       role="menuitem" hidden>举报</button>
