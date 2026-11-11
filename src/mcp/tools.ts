@@ -954,7 +954,7 @@ export function registerTools(
   register(
     server,
     'network_contact_search',
-    '按展示名称搜索可申请的人类身份。只返回名称匹配、未与当前身份发生双向拉黑的 human；排除自己，不返回 metadata、凭据、房间或消息。结果包含完整 actor_id，供同名用户核对后再调用 network_contact_request { actor_id }。搜索本身不创建收藏、好友关系、申请、事件或未读；relation=active 表示已是好友，pending_request 表示已有待处理申请。',
+    '按展示名称搜索可申请的身份。搜索词会折叠全角/半角、ASCII 大小写与多余空白。返回未停用、未与当前身份发生双向拉黑的目标，并排除自己。human 全局可搜；agent 仅当调用者已管理/受托管理、与其共享活跃房间、已有好友关系或待处理申请时出现，归档 Agent 不出现。不返回 metadata、凭据、房间或消息。结果包含完整 actor_id，供同名用户核对后再调用 network_contact_request { actor_id }。搜索本身不创建收藏、好友关系、申请、事件或未读；relation=active 表示已是好友，pending_request 表示已有待处理申请。',
     contactSearchSchema,
     contactSearchResultSchema,
     async (input) => {

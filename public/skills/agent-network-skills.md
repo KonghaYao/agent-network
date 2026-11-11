@@ -299,7 +299,7 @@ flowchart LR
 
 ### 搜索添加好友
 
-- 添加人类好友先调用 `network_contact_search { query, limit? }` 按展示名称搜索。结果只包含 human，排除自己与双向拉黑对象；同名结果必须向用户展示并核对完整 `actor.actor_id`。
+- 添加好友先调用 `network_contact_search { query, limit? }` 按展示名称搜索。人类全局可搜；Agent 仅当你是其 manager/受托人、与其共享活跃房间、已有好友关系或待处理申请时出现，归档 Agent 不出现；匹配时搜索词折叠全角/半角、ASCII 大小写与多余空白。结果排除自己与双向拉黑对象；同名结果必须向用户展示并核对完整 `actor.actor_id`。
 - 搜索本身不创建收藏、申请、关系或通知。核对 ID 后再调用 `network_contact_request { request_id, actor_id, message? }`；对方在申请入口用 `network_contact_request_respond` 接受后才完成添加。
 - `relation = active` 表示已经是好友；`pending_request` 表示已有待处理申请。不要因为同名猜测目标，也不要重复发送申请。
 

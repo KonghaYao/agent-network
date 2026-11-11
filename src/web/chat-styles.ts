@@ -591,14 +591,24 @@ ${GROUP_STYLE}
     height: 16px; padding: 0 4px; border-radius: 8px; background: var(--wx-unread);
     color: #ffffff; font-size: 10px; line-height: 16px; text-align: center;
     pointer-events: none; }
-  /* 桌面非对称两栏：左栏放需要动作的申请，右栏放链接与次要策略。 */
-  .contact-modal-card { width: min(1120px, 96vw); max-height: min(88dvh, 860px);
+  /* 顶部分段控件：同一时间只展示一个面板，切换保留各面板的 DOM 状态。 */
+  .contact-modal-card { width: min(760px, 96vw); max-height: min(88dvh, 860px);
     box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; }
   .contact-modal-card h2 { margin-bottom: 12px; }
-  .contact-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-    gap: 0 24px; align-items: start; flex: 0 1 auto; min-height: 0; overflow-y: auto; }
-  .contact-column { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-  .contact-column-right { padding-left: 20px; border-left: 1px solid var(--wx-line); }
+  .contact-segments { display: flex; gap: 2px; margin: 0 0 14px; padding: 2px;
+    border-radius: 8px; background: var(--wx-search); flex: 0 0 auto; }
+  .contact-segments button { flex: 1 1 0; min-width: 0; height: 32px; padding: 0 8px;
+    border: 0; border-radius: 6px; background: transparent; color: var(--wx-muted);
+    font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .contact-segments button:hover { background: var(--wx-hover); color: var(--wx-text); }
+  .contact-segments button[aria-selected="true"] { background: var(--wx-panel);
+    color: var(--wx-text); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 8%); }
+  .contact-tab-count { display: inline-block; margin-left: 5px; vertical-align: 1px; }
+  .contact-tab-count[hidden] { display: none; }
+  .contact-panels { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .contact-panel { min-width: 0; }
+  .contact-panel[hidden] { display: none; }
+  .contact-more-panel { display: flex; flex-direction: column; gap: 14px; }
   .contact-section-head { display: flex; align-items: center; justify-content: space-between;
     gap: 8px; margin: 0 0 8px; }
   .contact-section-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
@@ -626,12 +636,17 @@ ${GROUP_STYLE}
   .contact-search-status[data-error="1"] { color: var(--wx-unread); font-weight: 600; }
   .contact-search-status[data-success="1"] { color: var(--wx-green); font-weight: 600; }
   .contact-search-results { list-style: none; margin: 0; padding: 0; display: flex;
-    flex-direction: column; gap: 6px; max-height: min(25vh, 220px); overflow: auto; }
+    flex-direction: column; gap: 6px; max-height: min(32vh, 280px); overflow: auto; }
   .contact-search-empty { padding: 2px 0; color: var(--wx-muted); font-size: 12px; }
   .contact-search-item { display: flex; align-items: center; justify-content: space-between;
     gap: 10px; padding: 8px 10px; border: 1px solid var(--wx-line); border-radius: 8px; }
   .contact-search-main { display: grid; gap: 3px; min-width: 0; }
+  .contact-search-heading { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    min-width: 0; }
   .contact-search-name { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+  .contact-search-kind { flex: 0 0 auto; padding: 1px 6px; border-radius: 999px;
+    background: var(--wx-search); color: var(--wx-muted); font-size: 10px;
+    font-weight: 600; }
   .contact-search-id { min-width: 0; padding: 0; background: transparent; color: var(--wx-muted);
     font-size: 10px; white-space: normal; overflow-wrap: anywhere; word-break: break-all; }
   .contact-search-item > button { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
@@ -651,11 +666,9 @@ ${GROUP_STYLE}
   .contact-search-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
   .contact-search-confirm-actions button { padding: 5px 10px; font-size: 12px; }
 
-  .contact-column .contact-request-list { max-height: min(24vh, 220px); }
-  .contact-column .contact-link-list { max-height: min(20vh, 180px); }
-  .contact-columns + .modal-actions { margin-top: 14px; }
+  .contact-panels + .modal-actions { margin-top: 14px; flex: 0 0 auto; }
   .contact-request-list { list-style: none; margin: 0; padding: 0;
-    display: flex; flex-direction: column; gap: 6px; max-height: 45vh; overflow: auto; }
+    display: flex; flex-direction: column; gap: 6px; max-height: min(42vh, 360px); overflow: auto; }
   .contact-request-item { display: flex; justify-content: space-between; gap: 10px;
     padding: 8px 10px; border: 1px solid var(--wx-line); border-radius: 8px; }
   .contact-request-main { min-width: 0; }
@@ -704,23 +717,17 @@ ${GROUP_STYLE}
   .contact-policy-status { min-height: 1.2em; margin: 6px 0 0; color: var(--wx-muted);
     font-size: 11px; }
 
-  /* 好友弹窗窄屏回退单栏：搜索 → 申请 → 链接 → 策略。 */
+  /* 好友弹窗窄屏：分段保留在顶部，内容区单独滚动。 */
   @media (max-width: 759px) {
     #contact-modal { padding: 0; place-items: stretch; }
     .contact-modal-card { width: 100%; height: 100dvh; max-height: 100dvh;
       border-radius: 0; padding: 16px; }
-    .contact-columns { display: flex; flex-direction: column; gap: 0; align-items: stretch; }
-    .contact-column { display: contents; }
-    .contact-column-right { padding-left: 0; border-left: 0; }
-    .contact-search-panel { order: 1; }
-    .contact-requests-panel { order: 2; }
-    .contact-link-panel { order: 3; }
-    .contact-policy { order: 4; }
-    .contact-requests-panel, .contact-link-panel, .contact-policy {
-      margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--wx-line); }
-    .contact-search-results { max-height: min(24dvh, 220px); }
-    .contact-column .contact-request-list { max-height: min(26dvh, 220px); }
-    .contact-column .contact-link-list { max-height: min(20dvh, 160px); }
+    .contact-segments { margin-bottom: 12px; }
+    .contact-segments button { height: 30px; padding: 0 6px; font-size: 12px; }
+    .contact-panels { min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .contact-search-results, .contact-request-list, .contact-link-list {
+      max-height: none; overflow: visible; }
+    .contact-request-more { margin-top: 10px; }
   }
 
   @media (prefers-reduced-motion: reduce) {

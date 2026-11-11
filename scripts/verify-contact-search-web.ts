@@ -26,6 +26,16 @@ interface ContactPage {
   items: { actor_id: string; relation: 'active' | 'none' }[];
 }
 
+interface AgentCreateResult {
+  actor_id: string;
+  name: string;
+  token: string;
+}
+
+interface RoomCreateResult {
+  room: { room_id: string };
+}
+
 const id = (prefix: string): string => `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`;
 let passed = 0;
 function pass(label: string): void {
@@ -66,6 +76,32 @@ try {
     name: sameName,
   });
 
+  // 搜索归一化：名称包含空格与拉丁字母，用于验证全角/半角与空白折叠。
+  const normalizedToken = crypto.randomUUID();
+  const normalizedName = '搜索 归一化 AB12';
+  const normalizedTarget = await rawTool<Actor>(normalizedToken, 'network_register', {
+    request_id: id('normalized'),
+    kind: 'human',
+    name: normalizedName,
+  });
+
+  // Agent 可见性：独立 Agent 未认领、未共享房间时不可搜；加入同一群后可见。
+  const independentAgentToken = crypto.randomUUID();
+  const independentAgentName = '共享房间可见 Agent';
+  const independentAgent = await rawTool<Actor>(independentAgentToken, 'network_register', {
+    request_id: id('independent_agent'),
+    kind: 'agent',
+    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+    name: independentAgentName,
+  });
+
+  // 由发送者管理的 Agent 无需共享房间即可被搜索；归档后必须消失。
+  const managedAgentName = '管理可见 Agent';
+  const managedAgent = await rawTool<AgentCreateResult>(senderToken, 'network_agent_create', {
+    request_id: id('managed_agent'),
+    name: managedAgentName,
+  });
+
   browser = await chromium.launch({
     headless: true,
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
@@ -85,11 +121,152 @@ try {
   assert.equal(await senderView.page.locator('#contact-modal-title').textContent(), '添加好友');
   pass('添加好友入口以用户名搜索为主路径');
 
+  assert.equal(await senderView.page.locator('#contact-segments').getAttribute('role'), 'tablist');
+  assert.equal(await senderView.page.locator('#contact-tab-search').getAttribute('aria-selected'), 'true');
+  assert.equal(await senderView.page.locator('#contact-tab-requests').getAttribute('aria-selected'), 'false');
+  assert.equal(await senderView.page.locator('#contact-tab-more').getAttribute('aria-selected'), 'false');
+  assert.equal(await senderView.page.locator('#contact-panel-search').isVisible(), true);
+  assert.equal(await senderView.page.locator('#contact-panel-requests').isVisible(), false);
+  assert.equal(await senderView.page.locator('#contact-panel-more').isVisible(), false);
+  assert.equal(await senderView.page.locator('#contact-modal .contact-columns').count(), 0);
+  pass('添加好友默认展示搜索分段，申请与链接分段隐藏');
+
+  await senderView.page.locator('#contact-tab-requests').click();
+  assert.equal(await senderView.page.locator('#contact-tab-requests').getAttribute('aria-selected'), 'true');
+  assert.equal(await senderView.page.locator('#contact-panel-requests').isVisible(), true);
+  assert.equal(await senderView.page.locator('#contact-panel-search').isVisible(), false);
+  await senderView.page.locator('#contact-tab-search').click();
+  assert.equal(await senderView.page.locator('#contact-panel-search').isVisible(), true);
+  pass('点击分段只显示对应内容');
+
+  await senderView.page.locator('#contact-tab-search').focus();
+  await senderView.page.keyboard.press('ArrowRight');
+  assert.equal(await senderView.page.locator('#contact-tab-requests').getAttribute('aria-selected'), 'true');
+  assert.equal(
+    await senderView.page.evaluate(`document.activeElement && document.activeElement.id`),
+    'contact-tab-requests',
+  );
+  await senderView.page.keyboard.press('End');
+  assert.equal(await senderView.page.locator('#contact-tab-more').getAttribute('aria-selected'), 'true');
+  await senderView.page.keyboard.press('ArrowLeft');
+  assert.equal(await senderView.page.locator('#contact-tab-requests').getAttribute('aria-selected'), 'true');
+  await senderView.page.keyboard.press('Home');
+  assert.equal(await senderView.page.locator('#contact-tab-search').getAttribute('aria-selected'), 'true');
+  assert.deepEqual(
+    await senderView.page.evaluate(`Array.from(document.querySelectorAll('#contact-segments [data-contact-tab]')).map(function (tab) { return tab.tabIndex; })`),
+    [0, -1, -1],
+  );
+  await senderView.page.locator('#contact-tab-requests').focus();
+  await senderView.page.keyboard.press('Enter');
+  assert.equal(await senderView.page.locator('#contact-tab-requests').getAttribute('aria-selected'), 'true');
+  await senderView.page.locator('#contact-tab-search').click();
+  pass('分段支持方向键/Home/End/Enter 与 roving tabindex');
+
+  async function runSearch(query: string): Promise<void> {
+    await senderView.page.locator('#contact-search-input').fill(query);
+    await senderView.page.locator('#contact-search-submit').click();
+  }
+  async function waitForSearchId(actorId: string): Promise<void> {
+    await senderView.page.waitForFunction(
+      `(function () {
+        return Array.from(document.querySelectorAll('#contact-search-results .contact-search-item'))
+          .some(function (row) { return row.textContent.includes(${JSON.stringify(actorId)}); });
+      })()`,
+    );
+  }
+  async function waitForSearchEmpty(): Promise<void> {
+    await senderView.page.waitForFunction(
+      `document.querySelectorAll('#contact-search-results .contact-search-empty').length === 1`,
+    );
+  }
+
+  await runSearch(normalizedName);
+  await waitForSearchId(normalizedTarget.actor_id);
+  assert.equal(
+    await senderView.page.locator('#contact-search-results .contact-search-item').count(),
+    1,
+  );
+  pass('能搜到已设置用户名的用户');
+
+  // 全角空格/字母、缺少空格、连续空格与大小写都应命中同一人类。
+  await runSearch('搜索　归一化　ＡＢ１２');
+  await waitForSearchId(normalizedTarget.actor_id);
+  await runSearch('搜索归一化AB12');
+  await waitForSearchId(normalizedTarget.actor_id);
+  await runSearch('搜索  归一化   AB12');
+  await waitForSearchId(normalizedTarget.actor_id);
+  await runSearch('ab12');
+  await waitForSearchId(normalizedTarget.actor_id);
+  pass('搜索折叠全角/半角、空白与 ASCII 大小写');
+
+  await runSearch('不存在的人-xyz');
+  await waitForSearchEmpty();
+  assert.equal(
+    await senderView.page.locator('#contact-search-status').textContent(),
+    '没有找到匹配的用户。',
+  );
+  pass('搜索不到时展示空态');
+
+  await runSearch(managedAgentName);
+  await waitForSearchId(managedAgent.actor_id);
+  assert.equal(
+    await senderView.page.locator('#contact-search-results .contact-search-kind').textContent(),
+    'Agent',
+  );
+  pass('调用者管理的 Agent 可被搜索并标注类型');
+
+  await runSearch(independentAgentName);
+  await waitForSearchEmpty();
+  const directSearch = await rawTool<{ items: { actor: Actor }[] }>(
+    targetBToken,
+    'network_contact_search',
+    { query: independentAgentName, limit: 20 },
+  );
+  assert.equal(directSearch.items.length, 0);
+  pass('未共享房间且非管理的 Agent 不会被全局枚举');
+
+  const sharedRoom = await rawTool<RoomCreateResult>(senderToken, 'network_room_create', {
+    request_id: id('shared_agent_room'),
+    kind: 'group',
+    title: '搜索可见性群',
+    members: [independentAgent.actor_id],
+  });
+  assert.ok(sharedRoom.room.room_id);
+  await runSearch(independentAgentName);
+  await waitForSearchId(independentAgent.actor_id);
+  pass('共享活跃房间的 Agent 可按名称搜到');
+
+  await rawTool(senderToken, 'network_agent_archive', {
+    request_id: id('archive_agent'),
+    actor_id: managedAgent.actor_id,
+  });
+  await runSearch(managedAgentName);
+  await waitForSearchEmpty();
+  await rawTool(senderToken, 'network_agent_unarchive', {
+    request_id: id('unarchive_agent'),
+    actor_id: managedAgent.actor_id,
+  });
+  await runSearch(managedAgentName);
+  await waitForSearchId(managedAgent.actor_id);
+  pass('归档 Agent 不出现在搜索结果，取消归档后恢复');
+
   await senderView.page.locator('#contact-search-input').fill('好友搜索专项');
   await senderView.page.locator('#contact-search-submit').click();
   await senderView.page.waitForFunction(
     `(function () { return document.querySelectorAll('#contact-search-results .contact-search-item').length === 2; })()`,
   );
+  await senderView.page.locator('#contact-tab-requests').click();
+  assert.equal(await senderView.page.locator('#contact-panel-search').isVisible(), false);
+  await senderView.page.locator('#contact-tab-search').click();
+  assert.equal(
+    await senderView.page.locator('#contact-search-input').inputValue(),
+    '好友搜索专项',
+  );
+  assert.equal(
+    await senderView.page.locator('#contact-search-results .contact-search-item').count(),
+    2,
+  );
+  pass('切换分段保留搜索输入与结果');
   const rows = senderView.page.locator('#contact-search-results .contact-search-item');
   assert.equal(await rows.count(), 2);
   const resultIds = await rows.locator('.contact-search-id').allTextContents();
@@ -143,6 +320,7 @@ try {
   );
   await receiverView.page.locator('#contact-requests').click();
   await receiverView.page.locator('#contact-modal').waitFor({ state: 'visible' });
+  await receiverView.page.locator('#contact-tab-requests').click();
   const incomingRow = receiverView.page
     .locator('#contact-request-list .contact-request-item')
     .filter({ hasText: '搜索专项邀请' });
@@ -194,28 +372,54 @@ try {
   await mobileView.page.locator('#contact-requests').click();
   await mobileView.page.locator('#contact-modal').waitFor({ state: 'visible' });
   const mobileLayout = await mobileView.page.evaluate(() => {
-    const selectors = [
-      '.contact-search-panel',
-      '.contact-requests-panel',
-      '.contact-link-panel',
-      '.contact-policy',
-    ];
-    const boxes = selectors.map((selector) =>
-      document.querySelector(selector)?.getBoundingClientRect(),
+    const segments = document.getElementById('contact-segments');
+    const tabs = Array.from(document.querySelectorAll('#contact-segments [data-contact-tab]'));
+    const panels = ['contact-panel-search', 'contact-panel-requests', 'contact-panel-more'].map(
+      (id) => document.getElementById(id),
     );
+    const segmentBox = segments?.getBoundingClientRect();
+    const tabBoxes = tabs.map((tab) => tab.getBoundingClientRect());
     return {
       fits: document.documentElement.scrollWidth <= window.innerWidth,
-      tops: boxes.map((box) => box?.top ?? -1),
-      lefts: boxes.map((box) => box?.left ?? -1),
-      rights: boxes.map((box) => box?.right ?? Number.POSITIVE_INFINITY),
+      tablistRole: segments?.getAttribute('role'),
+      tabCount: tabs.length,
+      visiblePanels: panels.filter((panel) => panel && !panel.hidden).length,
+      segmentLeft: segmentBox?.left ?? -1,
+      segmentRight: segmentBox?.right ?? Number.POSITIVE_INFINITY,
+      labels: tabs.map((tab) => tab.firstChild?.textContent?.trim() ?? ''),
+      tabsFit: tabBoxes.every(
+        (box) => box.left >= -0.5 && box.right <= window.innerWidth + 0.5,
+      ),
+      tabsOverflow: tabs.some((tab) => tab.scrollWidth > tab.clientWidth + 1),
       width: window.innerWidth,
     };
   });
   assert.equal(mobileLayout.fits, true);
-  assert.equal(mobileLayout.tops.every((top, index, all) => index === 0 || top > all[index - 1]!), true);
-  assert.equal(mobileLayout.lefts.every((left) => left >= 0), true);
-  assert.equal(mobileLayout.rights.every((right) => right <= mobileLayout.width + 1), true);
-  pass('390px 按搜索/申请/链接/策略单列排列且不溢出');
+  assert.equal(mobileLayout.tablistRole, 'tablist');
+  assert.equal(mobileLayout.tabCount, 3);
+  assert.equal(mobileLayout.visiblePanels, 1);
+  assert.equal(mobileLayout.segmentLeft >= 0, true);
+  assert.equal(mobileLayout.segmentRight <= mobileLayout.width + 1, true);
+  assert.equal(mobileLayout.tabsFit, true);
+  assert.equal(mobileLayout.tabsOverflow, false);
+  assert.deepEqual(mobileLayout.labels, ['搜索添加', '好友申请', '链接与设置']);
+
+  await mobileView.page.locator('#contact-tab-requests').click();
+  assert.equal(await mobileView.page.locator('#contact-panel-requests').isVisible(), true);
+  assert.equal(await mobileView.page.locator('#contact-panel-search').isVisible(), false);
+  await mobileView.page.locator('#contact-tab-more').click();
+  assert.equal(await mobileView.page.locator('.contact-link-panel').isVisible(), true);
+  assert.equal(await mobileView.page.locator('.contact-policy').isVisible(), true);
+  await mobileView.page.locator('#contact-tab-search').click();
+  await mobileView.page.locator('#contact-search-input').fill('移动端保留');
+  await mobileView.page.locator('#contact-tab-more').click();
+  await mobileView.page.locator('#contact-tab-search').click();
+  assert.equal(await mobileView.page.locator('#contact-search-input').inputValue(), '移动端保留');
+  assert.equal(
+    await mobileView.page.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),
+    true,
+  );
+  pass('390px 顶部分段切换保留状态且不横向溢出');
 
   const database = new Database(join(server.dataDir, 'agent-network.sqlite'));
   try {
@@ -245,6 +449,7 @@ try {
       `document.getElementById('contact-requests-badge')?.textContent === '50+'`,
     );
     await receiverView.page.locator('#contact-requests').click();
+    await receiverView.page.locator('#contact-tab-requests').click();
     await receiverView.page.locator('#contact-request-more').waitFor({ state: 'visible' });
     assert.equal(await receiverView.page.locator('#contact-request-list .contact-request-item').count(), 50);
     await receiverView.page.locator('#contact-request-more').click();

@@ -260,7 +260,7 @@ export const deviceRevokeSchema = z.object({
 
 export const contactsListSchema = z.object({ cursor, limit: z.number().int().min(1).max(100).optional() });
 
-/** 按展示名称搜索可申请的人类身份；actor_id 用于同名结果的显式核对。 */
+/** 按展示名称搜索可申请的身份；actor_id 用于同名结果的显式核对。 */
 export const contactSearchSchema = z.object({
   query: z.string().trim().min(1).max(LIMITS.actorNameMax),
   limit: z.number().int().min(1).max(LIMITS.contactSearchPageMax).optional(),

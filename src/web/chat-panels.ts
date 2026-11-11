@@ -640,45 +640,48 @@ export function contactRequestsDialog(): string {
   return `<div class="modal" id="contact-modal" hidden>
   <div class="modal-card contact-modal-card" role="dialog" aria-modal="true" aria-labelledby="contact-modal-title">
     <h2 id="contact-modal-title">添加好友</h2>
-    <div class="contact-columns">
-      <div class="contact-column contact-column-left">
-        <section class="contact-search-panel" aria-label="搜索添加好友">
-          <div class="contact-section-head">
-            <h3>搜索添加好友</h3>
+    <div class="contact-segments" id="contact-segments" role="tablist" aria-label="添加好友分类">
+      <button id="contact-tab-search" type="button" role="tab" data-contact-tab="search"
+        aria-selected="true" aria-controls="contact-panel-search" tabindex="0">搜索添加</button>
+      <button id="contact-tab-requests" type="button" role="tab" data-contact-tab="requests"
+        aria-selected="false" aria-controls="contact-panel-requests" tabindex="-1">好友申请<span
+          id="contact-request-count" class="contact-count contact-tab-count" hidden>0</span></button>
+      <button id="contact-tab-more" type="button" role="tab" data-contact-tab="more"
+        aria-selected="false" aria-controls="contact-panel-more" tabindex="-1">链接与设置</button>
+    </div>
+    <div class="contact-panels">
+      <section id="contact-panel-search" class="contact-panel contact-search-panel"
+        role="tabpanel" aria-labelledby="contact-tab-search" tabindex="0">
+        <p class="contact-search-hint">输入完整或部分用户名；可搜索人类，以及已在你群聊、管理列表或好友中的 Agent。遇到同名用户时，请核对完整 ID 后再发送邀请。</p>
+        <form id="contact-search-form" class="contact-search-form">
+          <label for="contact-search-input">用户名</label>
+          <div class="contact-search-controls">
+            <input id="contact-search-input" type="search" maxlength="${LIMITS.actorNameMax}" autocomplete="off" placeholder="输入用户名" />
+            <button id="contact-search-submit" class="primary" type="submit">搜索</button>
           </div>
-          <p class="contact-search-hint">输入完整或部分用户名；遇到同名用户时，请核对完整 ID 后再发送邀请。</p>
-          <form id="contact-search-form" class="contact-search-form">
-            <label for="contact-search-input">用户名</label>
-            <div class="contact-search-controls">
-              <input id="contact-search-input" type="search" maxlength="${LIMITS.actorNameMax}" autocomplete="off" placeholder="输入用户名" />
-              <button id="contact-search-submit" class="primary" type="submit">搜索</button>
-            </div>
-          </form>
-          <p id="contact-search-status" class="contact-search-status" role="status"></p>
-          <ul id="contact-search-results" class="contact-search-results" aria-label="用户名搜索结果"></ul>
-          <div id="contact-search-confirm" class="contact-search-confirm" hidden>
-            <p class="contact-search-confirm-hint">请核对目标 ID，确认无误后发送好友邀请。</p>
-            <strong id="contact-search-confirm-name"></strong>
-            <code id="contact-search-confirm-id"></code>
-            <label for="contact-search-message">申请附言（可选）</label>
-            <textarea id="contact-search-message" rows="2" maxlength="${LIMITS.contactRequestMessageBytes}" placeholder="介绍一下自己"></textarea>
-            <div class="contact-search-confirm-actions">
-              <button id="contact-search-cancel" type="button">取消</button>
-              <button id="contact-search-send" class="primary" type="button">发送邀请</button>
-            </div>
+        </form>
+        <p id="contact-search-status" class="contact-search-status" role="status"></p>
+        <ul id="contact-search-results" class="contact-search-results" aria-label="用户名搜索结果"></ul>
+        <div id="contact-search-confirm" class="contact-search-confirm" hidden>
+          <p class="contact-search-confirm-hint">请核对目标 ID，确认无误后发送好友邀请。</p>
+          <strong id="contact-search-confirm-name"></strong>
+          <code id="contact-search-confirm-id"></code>
+          <label for="contact-search-message">申请附言（可选）</label>
+          <textarea id="contact-search-message" rows="2" maxlength="${LIMITS.contactRequestMessageBytes}" placeholder="介绍一下自己"></textarea>
+          <div class="contact-search-confirm-actions">
+            <button id="contact-search-cancel" type="button">取消</button>
+            <button id="contact-search-send" class="primary" type="button">发送邀请</button>
           </div>
-        </section>
-        <section class="contact-requests-panel" aria-label="待处理好友申请">
-          <div class="contact-section-head">
-            <h3>待处理申请</h3>
-            <span id="contact-request-count" class="contact-count" hidden>0</span>
-          </div>
-          <ul id="contact-request-list" class="contact-request-list" aria-label="待处理好友申请"></ul>
-          <button id="contact-request-more" type="button" hidden>加载更多申请</button>
-          <p id="contact-request-status" class="form-error" role="status"></p>
-        </section>
-      </div>
-      <div class="contact-column contact-column-right">
+        </div>
+      </section>
+      <section id="contact-panel-requests" class="contact-panel contact-requests-panel"
+        role="tabpanel" aria-labelledby="contact-tab-requests" tabindex="0" hidden>
+        <ul id="contact-request-list" class="contact-request-list" aria-label="待处理好友申请"></ul>
+        <button id="contact-request-more" type="button" hidden>加载更多申请</button>
+        <p id="contact-request-status" class="form-error" role="status"></p>
+      </section>
+      <section id="contact-panel-more" class="contact-panel contact-more-panel"
+        role="tabpanel" aria-labelledby="contact-tab-more" tabindex="0" hidden>
         <section class="contact-link-panel" aria-label="好友链接">
           <div class="contact-section-head">
             <h3>好友链接</h3>
@@ -700,7 +703,7 @@ export function contactRequestsDialog(): string {
           </label>
           <p id="contact-policy-status" class="contact-policy-status" role="status"></p>
         </section>
-      </div>
+      </section>
     </div>
     <div class="row modal-actions">
       <button id="contact-modal-close" type="button">关闭</button>

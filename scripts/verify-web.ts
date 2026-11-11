@@ -4006,6 +4006,37 @@ async function main(): Promise<void> {
       );
       await page.locator('#contact-requests').click();
       await page.locator('#contact-modal').waitFor({ state: 'visible' });
+      checkEqual(
+        '好友弹窗默认搜索分段',
+        await page.locator('#contact-tab-search').getAttribute('aria-selected'),
+        'true',
+      );
+      checkEqual(
+        '好友弹窗搜索分段可见',
+        await page.locator('#contact-panel-search').isVisible(),
+        true,
+      );
+      checkEqual(
+        '好友弹窗申请分段默认隐藏',
+        await page.locator('#contact-panel-requests').isVisible(),
+        false,
+      );
+      checkEqual(
+        '好友弹窗不渲染两栏容器',
+        await page.locator('#contact-modal .contact-columns').count(),
+        0,
+      );
+      checkEqual(
+        '好友弹窗分段容器为 tablist',
+        await page.locator('#contact-segments').getAttribute('role'),
+        'tablist',
+      );
+      checkEqual(
+        '好友弹窗分段数量为 3',
+        await page.locator('#contact-segments [role="tab"]').count(),
+        3,
+      );
+      await page.locator('#contact-tab-requests').click();
       await waitForText(page, '#contact-request-list', '界面验收申请');
       check(
         '好友申请弹窗显示申请附言',
@@ -4024,72 +4055,96 @@ async function main(): Promise<void> {
         'active',
       );
 
+      await page.locator('#contact-tab-more').click();
       const contactDesktopLayout = (await page.evaluate(`(() => {
         const card = document.querySelector('#contact-modal .contact-modal-card');
-        const columns = document.querySelector('#contact-modal .contact-columns');
-        const left = document.querySelector('#contact-modal .contact-column-left');
-        const right = document.querySelector('#contact-modal .contact-column-right');
-        const policy = document.querySelector('#contact-modal .contact-policy');
-        const search = document.querySelector('#contact-modal .contact-search-panel');
-        const requests = document.querySelector('#contact-modal .contact-requests-panel');
-        const link = document.querySelector('#contact-modal .contact-link-panel');
-        if (!card || !columns || !left || !right) return null;
+        const segments = document.getElementById('contact-segments');
+        const tabs = Array.from(document.querySelectorAll('#contact-segments [role="tab"]'));
+        const panels = ['contact-panel-search', 'contact-panel-requests', 'contact-panel-more']
+          .map(function (id) { return document.getElementById(id); });
+        const visiblePanels = panels.filter(function (panel) { return panel && !panel.hidden; });
+        if (!card || !segments || tabs.length !== 3 || visiblePanels.length !== 1) return null;
         const cardBox = card.getBoundingClientRect();
-        const leftBox = left.getBoundingClientRect();
-        const rightBox = right.getBoundingClientRect();
-        const searchBox = search ? search.getBoundingClientRect() : null;
-        const requestBox = requests ? requests.getBoundingClientRect() : null;
-        const linkBox = link ? link.getBoundingClientRect() : null;
-        const policyBox = policy ? policy.getBoundingClientRect() : null;
+        const segmentBox = segments.getBoundingClientRect();
+        const panelBox = visiblePanels[0].getBoundingClientRect();
+        const tabBoxes = tabs.map(function (tab) { return tab.getBoundingClientRect(); });
         return {
-          display: getComputedStyle(columns).display,
           view: window.innerWidth,
           doc: document.documentElement.scrollWidth,
           cardLeft: cardBox.left,
           cardRight: cardBox.right,
-          cardBottom: cardBox.bottom,
-          leftTop: leftBox.top,
-          leftRight: leftBox.right,
-          leftBottom: leftBox.bottom,
-          leftWidth: leftBox.width,
-          rightTop: rightBox.top,
-          rightLeft: rightBox.left,
-          rightBottom: rightBox.bottom,
-          rightWidth: rightBox.width,
-          searchTop: searchBox ? searchBox.top : -1,
-          requestTop: requestBox ? requestBox.top : -1,
-          linkTop: linkBox ? linkBox.top : -1,
-          policyTop: policyBox ? policyBox.top : -1,
-          policyInRight: Boolean(policy) && right.contains(policy),
-          searchInLeft: Boolean(search) && left.contains(search),
-          requestsInLeft: Boolean(requests) && left.contains(requests),
-          linkInRight: Boolean(link) && right.contains(link)
+          cardWidth: cardBox.width,
+          segmentLeft: segmentBox.left,
+          segmentRight: segmentBox.right,
+          segmentTop: segmentBox.top,
+          segmentBottom: segmentBox.bottom,
+          panelTop: panelBox.top,
+          panelId: visiblePanels[0].id,
+          visibleCount: visiblePanels.length,
+          labels: tabs.map(function (tab) {
+            return tab.firstChild && tab.firstChild.textContent
+              ? tab.firstChild.textContent.trim()
+              : '';
+          }),
+          tabsFit: tabBoxes.every(function (box) {
+            return box.left >= segmentBox.left - 1 && box.right <= segmentBox.right + 1;
+          }),
+          tabsOverflow: tabs.some(function (tab) { return tab.scrollWidth > tab.clientWidth + 1; })
         };
       })()`)) as {
-        display: string;
         view: number;
         doc: number;
         cardLeft: number;
         cardRight: number;
-        cardBottom: number;
-        leftTop: number;
-        leftRight: number;
-        leftBottom: number;
-        leftWidth: number;
-        rightTop: number;
-        rightLeft: number;
-        rightBottom: number;
-        rightWidth: number;
-        searchTop: number;
-        requestTop: number;
-        linkTop: number;
-        policyTop: number;
-        policyInRight: boolean;
-        searchInLeft: boolean;
-        requestsInLeft: boolean;
-        linkInRight: boolean;
+        cardWidth: number;
+        segmentLeft: number;
+        segmentRight: number;
+        segmentTop: number;
+        segmentBottom: number;
+        panelTop: number;
+        panelId: string;
+        visibleCount: number;
+        labels: string[];
+        tabsFit: boolean;
+        tabsOverflow: boolean;
       } | null;
-      checkEqual('1280px 好友弹窗为两栏网格', contactDesktopLayout?.display, 'grid');
+      checkEqual('1280px 好友弹窗切换后只显示一个面板', contactDesktopLayout?.visibleCount, 1);
+      checkEqual('1280px 链接与设置分段显示对应面板', contactDesktopLayout?.panelId, 'contact-panel-more');
+      checkEqual(
+        '好友弹窗分段依次为搜索添加/好友申请/链接与设置',
+        contactDesktopLayout?.labels.join(','),
+        '搜索添加,好友申请,链接与设置',
+      );
+      check(
+        '1280px 分段位于面板上方且不横向溢出',
+        Boolean(contactDesktopLayout) &&
+          contactDesktopLayout!.segmentBottom <= contactDesktopLayout!.panelTop + 1 &&
+          contactDesktopLayout!.segmentLeft >= contactDesktopLayout!.cardLeft - 1 &&
+          contactDesktopLayout!.segmentRight <= contactDesktopLayout!.cardRight + 1 &&
+          contactDesktopLayout!.tabsFit &&
+          !contactDesktopLayout!.tabsOverflow,
+        contactDesktopLayout,
+      );
+      check(
+        '1280px 好友弹窗宽度适中且不横向溢出',
+        Boolean(contactDesktopLayout) &&
+          contactDesktopLayout!.cardWidth <= 780 &&
+          contactDesktopLayout!.doc <= contactDesktopLayout!.view &&
+          contactDesktopLayout!.cardLeft >= 0 &&
+          contactDesktopLayout!.cardRight <= contactDesktopLayout!.view + 1,
+        contactDesktopLayout,
+      );
+      await page.locator('#contact-tab-search').click();
+      checkEqual(
+        '切回搜索分段只显示搜索面板',
+        await page.locator('#contact-panel-search').isVisible(),
+        true,
+      );
+      checkEqual(
+        '切回搜索分段后链接面板隐藏',
+        await page.locator('#contact-panel-more').isVisible(),
+        false,
+      );
       checkEqual(
         '好友弹窗不渲染我的好友区块',
         await page.locator('#contact-modal .contact-friends-panel').count(),
@@ -4100,59 +4155,7 @@ async function main(): Promise<void> {
         await page.locator('#contact-modal #contact-friend-list').count(),
         0,
       );
-      check(
-        '1280px 好友弹窗左栏在右栏左侧',
-        Boolean(contactDesktopLayout) &&
-          contactDesktopLayout!.leftRight <= contactDesktopLayout!.rightLeft + 1 &&
-          contactDesktopLayout!.leftTop <= contactDesktopLayout!.rightTop + 1,
-        contactDesktopLayout,
-      );
-      check(
-        '1280px 用户名搜索与待处理申请在左栏、好友链接与接收策略在右栏',
-        Boolean(contactDesktopLayout) &&
-          contactDesktopLayout!.policyInRight &&
-          contactDesktopLayout!.searchInLeft &&
-          contactDesktopLayout!.requestsInLeft &&
-          contactDesktopLayout!.searchTop <= contactDesktopLayout!.requestTop + 1 &&
-          contactDesktopLayout!.linkInRight,
-        contactDesktopLayout,
-      );
-      check(
-        '1280px 好友弹窗左栏更宽（约 3/5）',
-        Boolean(contactDesktopLayout) &&
-          contactDesktopLayout!.leftWidth > contactDesktopLayout!.rightWidth * 1.3,
-        contactDesktopLayout,
-      );
-      check(
-        '1280px 右栏好友链接在接收策略上方',
-        Boolean(contactDesktopLayout) &&
-          contactDesktopLayout!.linkTop <= contactDesktopLayout!.policyTop + 1,
-        contactDesktopLayout,
-      );
-      check(
-        '1280px 好友弹窗按内容收高，底部无大片空白',
-        Boolean(contactDesktopLayout) &&
-          contactDesktopLayout!.cardBottom -
-            Math.max(contactDesktopLayout!.leftBottom, contactDesktopLayout!.rightBottom) <=
-            140,
-        contactDesktopLayout,
-      );
-      check(
-        '1280px 好友弹窗不横向溢出',
-        Boolean(contactDesktopLayout) &&
-          contactDesktopLayout!.doc <= contactDesktopLayout!.view &&
-          contactDesktopLayout!.cardLeft >= 0 &&
-          contactDesktopLayout!.cardRight <= contactDesktopLayout!.view + 1,
-        contactDesktopLayout,
-      );
-      check(
-        '1280px 好友弹窗为 full 宽度',
-        Boolean(contactDesktopLayout) &&
-          contactDesktopLayout!.cardRight - contactDesktopLayout!.cardLeft >=
-            contactDesktopLayout!.view * 0.85,
-        contactDesktopLayout,
-      );
-      const contactModalText = await page.locator('#contact-modal').innerText();
+      const contactModalText = (await page.locator('#contact-modal').textContent()) ?? '';
       check(
         '好友弹窗以用户名搜索和 ID 核对为主路径',
         !contactModalText.includes('申请只进入独立收件箱') &&
@@ -4241,74 +4244,105 @@ async function main(): Promise<void> {
         await mobileIcons.page.locator('#contact-modal').waitFor({ state: 'visible' });
         const contactMobileLayout = (await mobileIcons.page.evaluate(`(() => {
           const card = document.querySelector('#contact-modal .contact-modal-card');
-          const columns = document.querySelector('#contact-modal .contact-columns');
-          const search = document.querySelector('#contact-modal .contact-search-panel');
-          const requests = document.querySelector('#contact-modal .contact-requests-panel');
-          const link = document.querySelector('#contact-modal .contact-link-panel');
-          const policy = document.querySelector('#contact-modal .contact-policy');
-          if (!card || !columns || !search || !requests || !link || !policy) return null;
+          const segments = document.getElementById('contact-segments');
+          const tabs = Array.from(document.querySelectorAll('#contact-segments [role="tab"]'));
+          const panels = ['contact-panel-search', 'contact-panel-requests', 'contact-panel-more']
+            .map(function (id) { return document.getElementById(id); });
+          const visible = panels.filter(function (panel) { return panel && !panel.hidden; });
+          if (!card || !segments || tabs.length !== 3 || visible.length !== 1) return null;
           const cardBox = card.getBoundingClientRect();
-          const boxes = [search, requests, link, policy].map(function (node) {
-            return node.getBoundingClientRect();
-          });
-          const columnsStyle = getComputedStyle(columns);
+          const segmentBox = segments.getBoundingClientRect();
+          const panelBox = visible[0].getBoundingClientRect();
+          const tabBoxes = tabs.map(function (tab) { return tab.getBoundingClientRect(); });
           return {
-            display: columnsStyle.display,
-            direction: columnsStyle.flexDirection,
             view: window.innerWidth,
             doc: document.documentElement.scrollWidth,
             cardLeft: cardBox.left,
             cardRight: cardBox.right,
-            tops: boxes.map(function (box) { return box.top; }),
-            lefts: boxes.map(function (box) { return box.left; }),
-            rights: boxes.map(function (box) { return box.right; })
+            segmentLeft: segmentBox.left,
+            segmentRight: segmentBox.right,
+            segmentBottom: segmentBox.bottom,
+            panelTop: panelBox.top,
+            visibleId: visible[0].id,
+            labels: tabs.map(function (tab) {
+            return tab.firstChild && tab.firstChild.textContent
+              ? tab.firstChild.textContent.trim()
+              : '';
+          }),
+            tabsFit: tabBoxes.every(function (box) {
+              return box.left >= segmentBox.left - 1 && box.right <= segmentBox.right + 1;
+            }),
+            tabsOverflow: tabs.some(function (tab) { return tab.scrollWidth > tab.clientWidth + 1; })
           };
         })()`)) as {
-          display: string;
-          direction: string;
           view: number;
           doc: number;
           cardLeft: number;
           cardRight: number;
-          tops: number[];
-          lefts: number[];
-          rights: number[];
+          segmentLeft: number;
+          segmentRight: number;
+          segmentBottom: number;
+          panelTop: number;
+          visibleId: string;
+          labels: string[];
+          tabsFit: boolean;
+          tabsOverflow: boolean;
         } | null;
-        checkEqual('390px 好友弹窗回退单栏', contactMobileLayout?.display, 'flex');
         checkEqual(
-          '390px 好友弹窗不渲染我的好友区块',
-          await mobileIcons.page.locator('#contact-modal .contact-friends-panel').count(),
+          '390px 好友弹窗不渲染两栏容器',
+          await mobileIcons.page.locator('#contact-modal .contact-columns').count(),
           0,
         );
-        check(
-          '390px 好友弹窗按搜索/申请/链接/策略顺序单列堆叠',
-          Boolean(contactMobileLayout) &&
-            contactMobileLayout!.direction === 'column' &&
-            contactMobileLayout!.tops.length === 4 &&
-            contactMobileLayout!.tops[0]! < contactMobileLayout!.tops[1]! &&
-            contactMobileLayout!.tops[1]! < contactMobileLayout!.tops[2]! &&
-            contactMobileLayout!.tops[2]! < contactMobileLayout!.tops[3]!,
-          contactMobileLayout,
+        checkEqual(
+          '390px 好友弹窗默认搜索分段',
+          contactMobileLayout?.visibleId,
+          'contact-panel-search',
+        );
+        checkEqual(
+          '390px 好友弹窗分段依次为搜索添加/好友申请/链接与设置',
+          contactMobileLayout?.labels.join(','),
+          '搜索添加,好友申请,链接与设置',
         );
         check(
-          '390px 好友弹窗各区块都在卡片宽度内',
+          '390px 分段在内容上方且完整位于视口内',
           Boolean(contactMobileLayout) &&
-            contactMobileLayout!.lefts.every(
-              (left) => left >= contactMobileLayout!.cardLeft - 1,
-            ) &&
-            contactMobileLayout!.rights.every(
-              (right) => right <= contactMobileLayout!.cardRight + 1,
-            ),
+            contactMobileLayout!.segmentBottom <= contactMobileLayout!.panelTop + 1 &&
+            contactMobileLayout!.segmentLeft >= contactMobileLayout!.cardLeft - 1 &&
+            contactMobileLayout!.segmentRight <= contactMobileLayout!.cardRight + 1 &&
+            contactMobileLayout!.tabsFit &&
+            !contactMobileLayout!.tabsOverflow,
           contactMobileLayout,
         );
+        await mobileIcons.page.locator('#contact-tab-requests').click();
+        checkEqual(
+          '390px 切换到好友申请分段',
+          await mobileIcons.page.locator('#contact-panel-requests').isVisible(),
+          true,
+        );
+        await mobileIcons.page.locator('#contact-tab-more').click();
+        checkEqual(
+          '390px 切换到链接与设置分段',
+          await mobileIcons.page.locator('.contact-policy').isVisible(),
+          true,
+        );
+        checkEqual(
+          '390px 好友弹窗切换后只显示一个面板',
+          await mobileIcons.page.evaluate(
+            `Array.from(document.querySelectorAll('#contact-modal [role="tabpanel"]')).filter(function (panel) { return !panel.hidden; }).length`,
+          ),
+          1,
+        );
         check(
-          '390px 好友弹窗不横向溢出',
+          '390px 好友弹窗各分段都不横向溢出',
           Boolean(contactMobileLayout) &&
-            contactMobileLayout!.doc <= contactMobileLayout!.view &&
+            (await mobileIcons.page.evaluate(
+              `document.documentElement.scrollWidth <= window.innerWidth`,
+            )) === true &&
             contactMobileLayout!.cardLeft >= 0 &&
             contactMobileLayout!.cardRight <= contactMobileLayout!.view + 1,
           contactMobileLayout,
         );
+        await mobileIcons.page.locator('#contact-tab-search').click();
         await mobileIcons.page.locator('#contact-modal-close').click();
         await mobileIcons.page.locator('#contact-modal').waitFor({ state: 'hidden' });
       } finally {

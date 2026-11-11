@@ -513,7 +513,8 @@ async function main(): Promise<void> {
     | undefined;
   check(
     '好友搜索契约按用户名返回 actor_id 且不直接建联',
-    deviceDescription('network_contact_search').includes('人类身份') &&
+    deviceDescription('network_contact_search').includes('human') &&
+      deviceDescription('network_contact_search').includes('agent') &&
       deviceDescription('network_contact_search').includes('actor_id') &&
       deviceDescription('network_contact_search').includes('network_contact_request') &&
       deviceDescription('network_contact_search').includes('不创建') &&
@@ -3134,15 +3135,132 @@ async function main(): Promise<void> {
     sameNameItems,
   );
   check(
-    '好友搜索只返回人类且不泄露 metadata/自身',
+    '好友搜索不泄露 metadata/自身',
     (sameNameSearch.data?.items ?? []).every(
       (item) =>
-        item.actor.kind === 'human' &&
         item.actor.actor_id !== browserIdentity?.actor_id &&
         !Object.prototype.hasOwnProperty.call(item.actor, 'metadata'),
     ),
     sameNameSearch.data,
   );
+
+  // 搜索归一化：全角/半角、空白与 ASCII 大小写都命中同一身份。
+  const normalizedSearchToken = newToken();
+  const normalizedSearchName = '协议 归一化 AB12';
+  const normalizedSearchTarget = await rawToolCall<{ actor_id: string }>(
+    normalizedSearchToken,
+    'network_register',
+    {
+      request_id: `contact_search_normalized_${crypto.randomUUID().replaceAll('-', '')}`,
+      kind: 'human',
+      name: normalizedSearchName,
+    },
+  );
+  for (const query of [
+    normalizedSearchName,
+    '协议归一化AB12',
+    '协议　归一化　ＡＢ１２',
+    '协议  归一化   AB12',
+    'ab12',
+  ]) {
+    const normalizedResult = await rawToolCall<ContactSearchPage>(
+      browserToken,
+      'network_contact_search',
+      { query, limit: 20 },
+    );
+    check(
+      `好友搜索归一化命中：${query}`,
+      (normalizedResult.data?.items ?? []).some(
+        (item) => item.actor.actor_id === normalizedSearchTarget.data?.actor_id,
+      ),
+      normalizedResult.data,
+    );
+  }
+  const emptySearch = await rawToolCall<ContactSearchPage>(
+    browserToken,
+    'network_contact_search',
+    { query: '协议不存在-xyz' },
+  );
+  checkEqual('好友搜索无结果返回空列表', emptySearch.data?.items.length, 0);
+  for (let index = 0; index < 3; index += 1) {
+    await rawToolCall(newToken(), 'network_register', {
+      request_id: `contact_search_truncated_${index}_${crypto.randomUUID().replaceAll('-', '')}`,
+      kind: 'human',
+      name: `协议截断搜索 ${index}`,
+    });
+  }
+  const truncatedSearch = await rawToolCall<ContactSearchPage>(
+    browserToken,
+    'network_contact_search',
+    { query: '协议截断搜索', limit: 2 },
+  );
+  checkEqual('好友搜索按 limit 截断结果', truncatedSearch.data?.items.length, 2);
+  checkEqual('好友搜索返回 truncated 标记', truncatedSearch.data?.truncated, true);
+
+  // Agent 可见性：未共享房间且非管理对象不可枚举；共享房间后可见。
+  const searchAgentToken = newToken();
+  const searchAgentName = '协议搜索 Agent';
+  const searchAgent = await rawToolCall<{ actor_id: string }>(
+    searchAgentToken,
+    'network_register',
+    {
+      request_id: `contact_search_agent_${crypto.randomUUID().replaceAll('-', '')}`,
+      kind: 'agent',
+      agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      name: searchAgentName,
+    },
+  );
+  const hiddenAgentSearch = await rawToolCall<ContactSearchPage>(
+    browserToken,
+    'network_contact_search',
+    { query: searchAgentName },
+  );
+  checkEqual('未共享房间的 Agent 不出现在搜索', hiddenAgentSearch.data?.items.length, 0);
+  await rawToolCall(browserToken, 'network_room_create', {
+    request_id: `contact_search_agent_room_${crypto.randomUUID().replaceAll('-', '')}`,
+    kind: 'group',
+    title: '搜索可见性验收群',
+    members: [searchAgent.data?.actor_id],
+  });
+  const visibleAgentSearch = await rawToolCall<ContactSearchPage>(
+    browserToken,
+    'network_contact_search',
+    { query: searchAgentName },
+  );
+  checkEqual('共享活跃房间的 Agent 可被搜索', visibleAgentSearch.data?.items.length, 1);
+  checkEqual(
+    'Agent 搜索结果保留 kind',
+    visibleAgentSearch.data?.items[0]?.actor.kind,
+    'agent',
+  );
+
+  // 自己管理的 Agent 可搜，归档后从结果消失。
+  const managedSearchAgentName = '协议管理 Agent';
+  const managedSearchAgent = await rawToolCall<{ actor_id: string }>(
+    browserToken,
+    'network_agent_create',
+    {
+      request_id: `contact_search_managed_${crypto.randomUUID().replaceAll('-', '')}`,
+      name: managedSearchAgentName,
+    },
+  );
+  const managedAgentSearch = await rawToolCall<ContactSearchPage>(
+    browserToken,
+    'network_contact_search',
+    { query: managedSearchAgentName },
+  );
+  checkEqual('调用者管理的 Agent 可被搜索', managedAgentSearch.data?.items.length, 1);
+  await rawToolCall(browserToken, 'network_agent_archive', {
+    request_id: `contact_search_archive_${crypto.randomUUID().replaceAll('-', '')}`,
+    actor_id: managedSearchAgent.data?.actor_id,
+  });
+  const archivedAgentSearch = await rawToolCall<ContactSearchPage>(
+    browserToken,
+    'network_contact_search',
+    { query: managedSearchAgentName },
+  );
+  checkEqual('归档 Agent 不出现在搜索', archivedAgentSearch.data?.items.length, 0);
+
   const selectedTargetId = searchTargetA.data?.actor_id ?? '';
   const searchedRequest = await rawToolCall<{
     status: string;

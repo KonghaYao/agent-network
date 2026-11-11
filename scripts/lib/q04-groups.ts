@@ -32,6 +32,7 @@ import type { Q04State } from './q04-fixture';
 async function openContactRequests(page: Page): Promise<void> {
   await page.locator('#contact-requests').click();
   await page.locator('#contact-modal').waitFor({ state: 'visible' });
+  await page.locator('#contact-tab-requests').click();
 }
 
 async function closeContactRequests(page: Page): Promise<void> {
