@@ -20,6 +20,7 @@
     "test:ts-monitor": "bun scripts/verify-ts-monitor.ts",
     "test:ts-codex-monitor": "bun scripts/verify-ts-codex-monitor.ts",
     "test:web": "bun scripts/verify-web.ts",
+    "test:web:contacts": "bun scripts/verify-contact-search-web.ts",
     "test:hotpaths": "bun scripts/verify-hotpaths.ts",
     "test:ux": "bun scripts/ux-luna/run.ts",
     "test:web:perf": "bun scripts/verify-web-perf.ts",

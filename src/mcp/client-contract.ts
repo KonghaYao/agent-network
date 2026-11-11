@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { stableStringify } from '../storage/db';
 
-export const CLIENT_CONTRACT_VERSION = '2026-11-09.2';
+export const CLIENT_CONTRACT_VERSION = '2026-11-11.1';
 export const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 /** Keep the complete bootstrap below connector instruction truncation limits. */

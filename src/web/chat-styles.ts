@@ -605,11 +605,53 @@ ${GROUP_STYLE}
   .contact-count { flex: 0 0 auto; min-width: 18px; padding: 0 6px; border-radius: 9px;
     background: var(--wx-search); color: var(--wx-muted); font-size: 11px;
     line-height: 18px; text-align: center; }
-  .contact-requests-panel, .contact-link-panel, .contact-policy {
+  .contact-search-panel, .contact-requests-panel, .contact-link-panel, .contact-policy {
     min-width: 0; }
   .contact-policy { padding-top: 14px;
     border-top: 1px solid var(--wx-line); }
-  .contact-column .contact-request-list { max-height: min(30vh, 260px); }
+
+  /* 用户名搜索是添加好友的主路径；完整 actor_id 始终可见以区分同名用户。 */
+  .contact-search-hint { margin: 0 0 10px; color: var(--wx-muted); font-size: 12px;
+    line-height: 1.5; }
+  .contact-search-form { display: grid; gap: 5px; margin: 0; }
+  .contact-search-form > label, .contact-search-confirm > label { color: var(--wx-muted);
+    font-size: 11px; }
+  .contact-search-controls { display: flex; gap: 8px; min-width: 0; }
+  .contact-search-controls input { flex: 1 1 auto; min-width: 0; height: 34px;
+    padding: 0 10px; border: 1px solid var(--wx-line); border-radius: 6px;
+    background: var(--wx-panel); color: var(--wx-text); font: inherit; }
+  .contact-search-controls button { flex: 0 0 auto; padding: 6px 14px; }
+  .contact-search-status { min-height: 1.2em; margin: 7px 0 5px; color: var(--wx-muted);
+    font-size: 12px; overflow-wrap: anywhere; }
+  .contact-search-status[data-error="1"] { color: var(--wx-unread); font-weight: 600; }
+  .contact-search-status[data-success="1"] { color: var(--wx-green); font-weight: 600; }
+  .contact-search-results { list-style: none; margin: 0; padding: 0; display: flex;
+    flex-direction: column; gap: 6px; max-height: min(25vh, 220px); overflow: auto; }
+  .contact-search-empty { padding: 2px 0; color: var(--wx-muted); font-size: 12px; }
+  .contact-search-item { display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; padding: 8px 10px; border: 1px solid var(--wx-line); border-radius: 8px; }
+  .contact-search-main { display: grid; gap: 3px; min-width: 0; }
+  .contact-search-name { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+  .contact-search-id { min-width: 0; padding: 0; background: transparent; color: var(--wx-muted);
+    font-size: 10px; white-space: normal; overflow-wrap: anywhere; word-break: break-all; }
+  .contact-search-item > button { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
+  .contact-search-state { flex: 0 0 auto; color: var(--wx-muted); font-size: 11px;
+    font-weight: 600; }
+  .contact-search-confirm { display: grid; gap: 7px; margin-top: 10px; padding: 10px;
+    border: 1px solid var(--wx-green); border-radius: 8px; background: var(--wx-sidebar); }
+  .contact-search-confirm[hidden] { display: none; }
+  .contact-search-confirm-hint { margin: 0; color: var(--wx-muted); font-size: 12px; }
+  .contact-search-confirm strong { font-size: 13px; overflow-wrap: anywhere; }
+  .contact-search-confirm code { padding: 6px 8px; border-radius: 5px; background: var(--wx-search);
+    color: var(--wx-text); font-size: 11px; white-space: normal; overflow-wrap: anywhere;
+    word-break: break-all; }
+  .contact-search-confirm textarea { box-sizing: border-box; width: 100%; min-width: 0;
+    resize: vertical; padding: 7px 9px; border: 1px solid var(--wx-line); border-radius: 6px;
+    background: var(--wx-panel); color: var(--wx-text); font: inherit; font-size: 12px; }
+  .contact-search-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .contact-search-confirm-actions button { padding: 5px 10px; font-size: 12px; }
+
+  .contact-column .contact-request-list { max-height: min(24vh, 220px); }
   .contact-column .contact-link-list { max-height: min(20vh, 180px); }
   .contact-columns + .modal-actions { margin-top: 14px; }
   .contact-request-list { list-style: none; margin: 0; padding: 0;
@@ -662,7 +704,7 @@ ${GROUP_STYLE}
   .contact-policy-status { min-height: 1.2em; margin: 6px 0 0; color: var(--wx-muted);
     font-size: 11px; }
 
-  /* 好友弹窗窄屏回退单栏：申请 → 链接 → 策略，并铺满移动端可视区。 */
+  /* 好友弹窗窄屏回退单栏：搜索 → 申请 → 链接 → 策略。 */
   @media (max-width: 759px) {
     #contact-modal { padding: 0; place-items: stretch; }
     .contact-modal-card { width: 100%; height: 100dvh; max-height: 100dvh;
@@ -670,13 +712,15 @@ ${GROUP_STYLE}
     .contact-columns { display: flex; flex-direction: column; gap: 0; align-items: stretch; }
     .contact-column { display: contents; }
     .contact-column-right { padding-left: 0; border-left: 0; }
-    .contact-requests-panel { order: 1; }
-    .contact-link-panel { order: 2; }
-    .contact-policy { order: 3; }
-    .contact-link-panel, .contact-policy {
+    .contact-search-panel { order: 1; }
+    .contact-requests-panel { order: 2; }
+    .contact-link-panel { order: 3; }
+    .contact-policy { order: 4; }
+    .contact-requests-panel, .contact-link-panel, .contact-policy {
       margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--wx-line); }
-    .contact-column .contact-request-list { max-height: min(32dvh, 260px); }
-    .contact-column .contact-link-list { max-height: min(22dvh, 180px); }
+    .contact-search-results { max-height: min(24dvh, 220px); }
+    .contact-column .contact-request-list { max-height: min(26dvh, 220px); }
+    .contact-column .contact-link-list { max-height: min(20dvh, 160px); }
   }
 
   @media (prefers-reduced-motion: reduce) {

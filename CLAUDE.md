@@ -23,6 +23,7 @@ SQLite 是业务状态唯一权威。hub 只广播小型提示，不保存消息
 - 所有幂等写入经 `runIdempotent`：`operations` 取得所有权，业务写入与条件闸门在同一 `db.batch()` 中全有或全无。禁止 `INSERT OR IGNORE` 后无条件继续写。
 - 闸门表只接受 `x = 0`；迁移 `0002_named_guards.sql` 的命名约束是错误分类依据，新增闸门必须同时更新 `GUARD_TABLES`、迁移和错误映射。
 - `pending_count` 只随 inbox 事件在 `inboxHeadStatement` 中变更；同一事务不得再手写增减。
+- 人类网页添加好友以用户名搜索为主路径：认证工具 `network_contact_search { query, limit? }` 只读 `actors`，只返回 human，排除当前身份、停用身份与任一方向 active 拉黑；按完整/部分展示名匹配，最多 `LIMITS.contactSearchPageMax` 条，返回完整 `actor_id`、active 关系与未过期 pending 申请方向，不返回 metadata、凭据、房间或消息，也不写 events/outbox/operations。网页同名结果必须展示完整 ID，点击“核对 ID”后在确认区再次显示名称与 ID，才可用该 `actor_id` 调 `network_contact_request`；对方仍需 `network_contact_request_respond` 接受后才完成添加。已有好友或已有 incoming/outgoing 申请不得重复发送。好友链接继续作为次要入口。详细浏览器闭环放在 `bun run test:web:contacts` 短专项，不重复塞进全量 `test:web`。
 - 好友邀请链接（迁移 `0040_contact_invite_links.sql`）是独立的一次性入口，不是第二套关系状态机：`contact_invite_links` 只保存 `token_hash`（带域分隔前缀的 SHA-256）、状态、有效期与 used/revoked 审计；兑换复用 `activateRelationStatements(..., 'invite_link', link_id, ...)` 写 `contact_relations` 与双方 `contacts`，不创建 `contact_requests`。明文 `share_url`（`PUBLIC_ORIGIN/#friend=<token>`）只在首次 `network_contact_link_create` 响应出现一次，不写 `operations.result_json`，重放必须返回 `TOKEN_NOT_REPLAYABLE`；列表、预览与结果不得返回 token/摘要。`network_contact_link_preview` 无鉴权，只判断可用性与邀请人展示信息；网页在自动注册前必须先预览，错误/过期/已用/已撤销链接不得创建替代身份。兑换与撤销在同一 `db.batch()` 内用 `guard_contact_link_invalid` 裁决，创建用 `guard_contact_link_limit` 限制每身份 pending 上限；自己 `INVALID_ARGUMENT`、任一方向拉黑 `BLOCKED`、已有 active 关系返回 `already_friends=true` 且不消费链接，其余失效统一 `CONTACT_LINK_INVALID`（`details.reason`）。成功事件只写持久 inbox/outbox 提示，不产生 delivery、不增加 `pending_count`、不推进房间 `head_seq`；token 不得出现在 DOM、console 或日志，复制失败回退 textarea 后立即移除。
 - 待办以 `attempt` + `claim_id` 校验；每个 Agent 至多一条 claimed（部分唯一索引）。并发 claim、旧 attempt、幂等重放分别映射为 `CLAIM_CONFLICT`、`STALE_ATTEMPT`、同一结果。
 - 普通消息不唤醒 inbox；统一流里普通房间消息是 `room.message` 的 `informational` item，只有投递、取消、重试、被移除与 `session.login` 等才可能带 `action_required`。`pending_count` 仍只由 inbox 事件维护；claim/report/complete/fail 仍写 inbox 事件，但不推回 recipient 自己。drain 把每条事件映射为带 source/attention 的 stream item，按 `actor:{id}` 扇出。网页用户发送时：`src/web/chat-script.ts` 对 direct 自动把对方 `kind = 'agent'` 成员填入 `invoke`；对 group，选择器保存的 Agent 进入 `invoke`、人类进入 `mentions`，选择器目标存在时显式发送 `invoke`（可能是 `[]`），不让服务端再从正文猜测其他 Agent。省略 `invoke` 时服务端只从群聊正文顶层（去掉代码块/行内代码/引用行/附件 URL）按 active 成员名做唯一精确兜底；同名成员返回 `INVALID_ARGUMENT`，正文目标超过 `LIMITS.invokeMax` 同样拒绝，不截断。Agent 群消息省略 `invoke` 且没有非空 `mentions` 时，服务端自动在正文末尾 @ 前一个仍然有效、名字唯一的不同成员；自动 @ 只写 text 提及与人类提醒，不创建 Agent delivery、不增加 `pending_count`、不额外推进 head，显式 `invoke`（含 `[]`）或 `mentions` 时不追加。人工附件发送在唯一精确 `WeBots 维护员` 的群里恢复自动 @（`src/web/chat-upload-script.ts`），只作为显示文本，不写选择器目标。普通群回复、紧跟 Agent 与上传附件不额外创建 delivery；human 提及与 `@所有人` 只写 `mention_reminder` 提醒，不创建 delivery、不增加 `pending_count`。页面显示可读错误并保留输入，不静默截断。Agent 工具调用与普通回复仍是 `invoke: []`。
@@ -109,11 +110,12 @@ SQLite 是业务状态唯一权威。hub 只广播小型提示，不保存消息
 
 - `bun run db:migrate`、`bun run dev`：Bun + 本地 SQLite，默认端口 8792。
 - `bun run typecheck`：`tsrs --noEmit`（Rust 版 tsc，读取 `tsconfig.json`）；`bun run typecheck:tsc` 保留为官方 `tsc --noEmit` 对照/回退。
-- `bun run test:protocol`：协议逐帧验收，默认本地地址；当前 802 项、113 个工具。
-- `bun run test:acceptance`：端到端业务与通知验收；当前 2718 项（短 presence 窗口）。
+- `bun run test:protocol`：协议逐帧验收，默认本地地址；当前 838 项、114 个工具。
+- `bun run test:acceptance`：端到端业务与通知验收；当前 1884 项（短 presence 窗口）。
 - `bun scripts/verify-isolated.ts protocol` / `acceptance`：用临时目录、随机端口自托管验收；启动器与测试统一短 presence 窗口，退出清理数据。
 - `bun run test:hotpaths`：26 组聊天/切房/群 CRUD 竞态专项；`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 可指定已有 Chromium。
-- `bun run test:web`：Playwright 浏览器验收；当前 2174 项。
+- `bun run test:web`：Playwright 浏览器全量验收；当前 2407 项。
+- `bun run test:web:contacts`：用户名搜索、同名 ID 核对、邀请/接受与 390px 布局短专项；当前 8 项，日常迭代优先运行该命令，不重复跑全量 `test:web`。
 - `bun run test:events`：独立 HTTPS receiver 的 MCP Events 验收；当前 339 项。
 - `bun run test:drive`：MCPP Files 上传/下载与 `drive_file_info`；当前 52 项。
 - `bun scripts/q01-upgrade-check.ts`：合成 `0035_task_recovery.sql` 旧库升级到 `0038_ownerless_room_guard.sql`，校验 34 个迁移、`integrity_check=ok`、`foreign_key_check` 与旧数据映射。

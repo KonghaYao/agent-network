@@ -153,6 +153,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 统一流 SSE（ack、`_meta` 来源、keepalive、abort） | `src/mcp/stream.ts` |
 | Bearer 鉴权与 actor 绑定 | `src/mcp/auth.ts` |
 | 身份、好友、房间、消息、待办、sync | `src/domain/` |
+| 用户名好友搜索与同名 ID 消歧 | `src/domain/contact-search.ts`、`src/contracts/schemas.ts`、`src/mcp/outputs.ts`、`src/web/chat-contacts-script.ts`；专项 `scripts/verify-contact-search-web.ts` |
 | 幂等事务与闸门失败分类 | `src/storage/transactions/runner.ts`、`src/storage/guards.ts` |
 | events/outbox 语句与 topic 命名 | `src/storage/events.ts` |
 | outbox 认领、合并、退避 | `src/realtime/outbox.ts` |
@@ -172,11 +173,12 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 ## 验证
 
 - `bun run typecheck`
-- `bun run test:protocol`：默认 `http://127.0.0.1:8792`，825 项（events 启用时另行覆盖；含 113 个工具、房间文件工具与 Drive 开关联动、消息式 Task 标记/摘要/Trace/搜索、Q02 设备配对/撤销、G06 房间生命周期与 A06 管理权交接、网页监控 human-only/成员校验/URL 校验/幂等/isolation、Agent 归档描述、token 重发描述与输入/输出 schema、`agents_get` 输入/输出 schema、唯一 `agentnet://stream` 资源、旧 URI 读取/订阅返回 `INVALID_ARGUMENT`、主/静态技能正文与 digest 一致、Harness 静态断言、CLI 覆盖与未知选项不回显）、claim/message_send 描述（含群聊 @ 解析、mentions 与无隐式投递）、上传后 `publicUrl` 可直接分享且 bind 只用于房间文件列表、成员移出不影响已分享 URL、删除或过期才 404 的描述断言、room_get 的 online 与 history 的 claimed 时间/`sender_kind` schema、`network_login` 注册与未注册调用返回 `CREDENTIAL_INVALID`、六份 Harness 指南的 200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界/Other 哨兵/DSH wake.queue 断言、ChatGPT 指南的群聊 @ 解析/`room_id` 硬过滤/`attention: action_required`/补读/claim+complete 断言、主/静态技能“Markdown 写法”与文件分享规则 section digest 一致、静态技能与 CLI `--no-invoke` 断言、微信风首页空状态、会话搜索框、扫码入口、弹窗、fragment 采纳脚本与 `/j` 端点不存在、presence 活动 TTL/pending/节流/回填单元检查，以及提醒扫描的 179999/180000ms 边界、重复/report/complete/fail/retry、并发、重启与 sync/stream 映射）
+- `bun run test:protocol`：默认 `http://127.0.0.1:8792`，838 项（events 启用时另行覆盖；含 114 个工具、用户名好友搜索与同名 ID 消歧、房间文件工具与 Drive 开关联动、消息式 Task 标记/摘要/Trace/搜索、Q02 设备配对/撤销、G06 房间生命周期与 A06 管理权交接、网页监控 human-only/成员校验/URL 校验/幂等/isolation、Agent 归档描述、token 重发描述与输入/输出 schema、`agents_get` 输入/输出 schema、唯一 `agentnet://stream` 资源、旧 URI 读取/订阅返回 `INVALID_ARGUMENT`、主/静态技能正文与 digest 一致、Harness 静态断言、CLI 覆盖与未知选项不回显）、claim/message_send 描述（含群聊 @ 解析、mentions 与无隐式投递）、上传后 `publicUrl` 可直接分享且 bind 只用于房间文件列表、成员移出不影响已分享 URL、删除或过期才 404 的描述断言、room_get 的 online 与 history 的 claimed 时间/`sender_kind` schema、`network_login` 注册与未注册调用返回 `CREDENTIAL_INVALID`、六份 Harness 指南的 200/Markdown/关键标记/相对链接/无凭据/Claude 监听边界/Other 哨兵/DSH wake.queue 断言、ChatGPT 指南的群聊 @ 解析/`room_id` 硬过滤/`attention: action_required`/补读/claim+complete 断言、主/静态技能“Markdown 写法”与文件分享规则 section digest 一致、静态技能与 CLI `--no-invoke` 断言、微信风首页空状态、会话搜索框、扫码入口、弹窗、fragment 采纳脚本与 `/j` 端点不存在、presence 活动 TTL/pending/节流/回填单元检查，以及提醒扫描的 179999/180000ms 边界、重复/report/complete/fail/retry、并发、重启与 sync/stream 映射）
 - `bun run test:acceptance`：1884 项（短 presence 窗口；`EVENTS_ACCEPTANCE=1`；未启用时跳过 events 闭环；含显式上线、未上线订阅收不到提示、离线排队与上线补读、断线后重新上线、无 SSE 轮询保持在线与停止后按最后活动 + TTL 下线、离线后首个请求先上线再回复、room_get 在线/离线/未知、非 Agent 身份 login 返回 `INVALID_ARGUMENT`、全局改名、Agent token 注销重发与重放拒绝、Agent 归档/取消归档/重复归档幂等与 `agents_get` 去重/顺序/missing、归档后消息/好友/房间/投递/stream/presence/login 不变、群 @ 服务端解析（省略 invoke、多 @/重复、opt-out、显式优先、非 Agent/自己/非成员、大小写/空格/中文/emoji、同名/超限、direct/claim/final_body 不解析、幂等、成员移除与 stream/pending）、群聊无隐式投递（紧跟 Agent、普通回复、代码/引用/附件 URL 与上传附件都不派活；显式 `invoke: []` 关闭；human `mentions` 只发提醒）、群聊 delivery 的 pending → claimed → completed 回执、claim/report/complete/fail 不自唤醒、claimed 时间字段与 recipient retry 自恢复、claim/complete 回执与统一 stream 通知、旧 URI 拒绝、网页监控 URL 的跨设备持久化/成员隔离/清除同步、网页 human 单聊/群聊 invoke 回归）
 - `bun run test:web`：2407 项（Playwright + 本机 Chrome；微信风双栏、搜索、未读、回执、群聊 2×2 头像/@ 高亮、改名、建群、设备配对与身份切换、任务面板/详情/进度/转交/提交/验收/交接包/恢复、文件与监控面板、画板、Markdown、暗色与移动端 390px）
+- `bun run test:web:contacts`：8 项短专项；覆盖用户名搜索、同名完整 `actor_id` 消歧、发送前 ID 确认、只向选中身份发申请、对方网页接受、active 关系与 390px 单列布局；日常迭代无需重复全量 `test:web`。
 - `bun scripts/q01-upgrade-check.ts`：24 项本地检查（合成 0035 旧库升级到 0038、34 个迁移、integrity/foreign_key、旧数据映射）
-- `AGENTNET_URL=http://127.0.0.1:8792 bun scripts/q01-doc-check.ts`：33 项（tools/list 113、文档工具名、技能 digest、CLI 覆盖、无旧 shell 脚本、Harness 默认路径）
+- `AGENTNET_URL=http://127.0.0.1:8792 bun scripts/q01-doc-check.ts`：34 项（tools/list 114、文档工具名、技能 digest、CLI 覆盖、无旧 shell 脚本、Harness 默认路径、用户名搜索与 actor_id 核对流程）
 - `bun run test:drive`：52 项（MCPP Files 上传、公开下载、`drive_file_info` 与 Drive 生命周期）
 - `bun run test:ts-monitor`：TS 监听（claude/peri/dsh/other），覆盖事件字段、`wake.queue` 固定字段与过滤、`catchup`、EOF/truncate、`start`/`stop`/`status` 生命周期、`CREDENTIAL_INVALID` 立即退出与 token 不落盘；不访问生产
 - `bun run test:ts-codex-monitor`：TS codex 桥接，覆盖 app-server WebSocket、claim/turn/steer、deferred 与提醒分支；不访问生产
