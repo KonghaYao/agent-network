@@ -9,8 +9,9 @@
  * - `item/completed` 的 agentMessage(final_answer) 记录最终答复，
  *   `turn/completed` 后用该答复 complete，否则 fail。
  *
- * 投递语义与旧脚本一致：SSE 订阅 `agentnet://stream`，收到待办先 claim；
- * deferred/conflict/claim_failed 只记录不处理；10 秒未结束的回合发送一次慢确认；
+ * 投递语义：SSE 订阅 `agentnet://stream`，空闲时先 claim；工作中已有 claim
+ * 时提示新消息并保留 pending，当前回合结束后依次领取处理；
+ * deferred/conflict/claim_failed 分类记录；10 秒未结束的回合发送一次慢确认；
  * `delivery.reminder` 只提醒、不 claim。日志沿用旧脚本的行格式（stdout），
  * 不执行任何 `.sh`，也不依赖 Python。
  */
@@ -70,6 +71,15 @@ function steerPrompt(body: string): string {
   return (
     'Agent Network 有一条新的用户消息在你工作期间到达。桥接器已自动领取该投递，' +
     '本条只供你调整当前工作；当前回合结束后会单独处理并答复，不要在此重复结束投递。\n\n' +
+    `新消息：\n${body}`
+  );
+}
+
+function queuedPrompt(body: string): string {
+  return (
+    'Agent Network 有一条新的用户消息在你工作期间到达。当前投递仍在待领取队列，' +
+    '本条只供你了解新消息；请先完成当前任务，桥接器随后会单独领取并处理它。' +
+    '不要在当前任务的最终答复中代为结束新投递。\n\n' +
     `新消息：\n${body}`
   );
 }
@@ -507,7 +517,7 @@ class CodexWatcher {
   }
 
   /**
-   * 与旧脚本一致的单线程处理：同一时刻只处理一个 candidate。
+   * 单线程处理：同一时刻只处理一个 candidate。
    * 状态既非 idle/active、或当前回合尚未 inProgress 时直接返回，
    * 由下一条宿主事件或 turn/completed 的延迟 retry 再次触发。
    */
@@ -563,6 +573,34 @@ class CodexWatcher {
       if (status === 'active') {
         const current = await this.currentTurn();
         if (asString(current.status) !== 'inProgress') return;
+        if (this.activeTurn) {
+          // 服务端一次只允许一个 claim。先将新消息提示给工作中的回合，
+          // 保留 pending 和 outstanding，待当前回合完成后再领取并开启独立回合。
+          let body: string;
+          try {
+            body = await this.readMessage(asString(match.message_id));
+          } catch (error) {
+            if (error instanceof MonitorFatalError) throw error;
+            this.log(`ERROR queued_read_failed delivery=${deliveryId}`);
+            return;
+          }
+          this.notified.set(deliveryId, asNumber(match.attempt, 0));
+          try {
+            await this.requireConnection().call('turn/steer', {
+              threadId: this.threadId,
+              expectedTurnId: asString(current.id),
+              input: [{ type: 'text', text: queuedPrompt(body) }],
+            });
+            this.log(`QUEUED_STEERED delivery=${deliveryId} turn=${asString(current.id)}`);
+          } catch (error) {
+            if (error instanceof MonitorFatalError) throw error;
+            this.log(`QUEUED_DEFERRED delivery=${deliveryId} hint=process_after_current_turn`);
+            if (error instanceof CodexCallError && (await this.threadStatus()) === 'idle') {
+              this.events.push({ kind: 'retry' });
+            }
+          }
+          continue;
+        }
         const outcome = await this.claimFor(deliveryId, match);
         if (outcome === 'stop') return;
         if (outcome === 'next') continue;

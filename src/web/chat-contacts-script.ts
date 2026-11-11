@@ -13,6 +13,7 @@ const contactModal = document.getElementById('contact-modal');
 const contactModalClose = document.getElementById('contact-modal-close');
 const contactRequestList = document.getElementById('contact-request-list');
 const contactRequestCount = document.getElementById('contact-request-count');
+const contactRequestMore = document.getElementById('contact-request-more');
 const contactRequestStatus = document.getElementById('contact-request-status');
 const contactSearchForm = document.getElementById('contact-search-form');
 const contactSearchInput = document.getElementById('contact-search-input');
@@ -32,6 +33,10 @@ const contactLinkCopyButton = document.getElementById('contact-link-copy');
 const contactLinkStatus = document.getElementById('contact-link-status');
 const contactLinkList = document.getElementById('contact-link-list');
 let contactRequestBusy = false;
+let contactRequestItems = [];
+let contactRequestCursor = null;
+let contactRequestLoading = false;
+let contactRequestGeneration = 0;
 let contactSearchBusy = false;
 let contactSearchAbort = null;
 let contactSearchGeneration = 0;
@@ -253,13 +258,15 @@ async function sendContactSearchRequest() {
   }
 }
 
-function renderContactRequests(items) {
+function renderContactRequests(items, hasMore) {
   if (!contactRequestList) return;
   contactRequestList.replaceChildren();
   const pending = (items || []).filter(function (item) {
     return item && item.status === 'pending';
   });
   setContactCount(contactRequestCount, pending.length);
+  if (hasMore && contactRequestCount) contactRequestCount.textContent = pending.length + '+';
+  if (contactRequestMore) contactRequestMore.hidden = !hasMore;
   if (pending.length === 0) {
     const empty = document.createElement('li');
     empty.className = 'contact-request-empty';
@@ -340,11 +347,11 @@ function refreshContactBadge() {
       });
       const count = (result.items || []).length;
       if (contactRequestsBadge) {
-        contactRequestsBadge.textContent = String(count);
+        contactRequestsBadge.textContent = String(count) + (result.has_more ? '+' : '');
         contactRequestsBadge.hidden = count === 0;
       }
       contactRequestsButton.title = count > 0
-        ? '添加好友（' + count + ' 条待处理申请）'
+        ? '添加好友（' + count + (result.has_more ? ' 条以上' : ' 条') + '待处理申请）'
         : '添加好友';
     } catch (error) {
       if (contactRequestsBadge) contactRequestsBadge.hidden = true;
@@ -355,18 +362,37 @@ function refreshContactBadge() {
   return contactBadgePromise;
 }
 
-async function loadContactRequests() {
+async function loadContactRequests(more) {
   if (!contactRequestList) return;
+  if (more && (!contactRequestCursor || contactRequestLoading)) return;
+  const generation = ++contactRequestGeneration;
+  const cursor = more ? contactRequestCursor : null;
+  contactRequestLoading = true;
+  if (contactRequestMore) contactRequestMore.disabled = true;
   try {
     const result = await callTool('network_contact_requests_list', {
       direction: 'all',
       status: 'pending',
-      limit: 50
+      limit: 50,
+      ...(cursor ? { cursor: cursor } : {})
     });
-    renderContactRequests(result.items || []);
+    if (generation !== contactRequestGeneration) return;
+    contactRequestItems = more ? contactRequestItems.concat(result.items || []) : result.items || [];
+    contactRequestCursor = result.next_cursor || null;
+    renderContactRequests(contactRequestItems, Boolean(contactRequestCursor));
   } catch (error) {
-    renderContactRequests([]);
+    if (generation !== contactRequestGeneration) return;
+    if (!more) {
+      contactRequestItems = [];
+      contactRequestCursor = null;
+      renderContactRequests([]);
+    }
     setContactStatus('读取好友申请失败：' + (error && error.message ? error.message : String(error)), true);
+  } finally {
+    if (generation === contactRequestGeneration) {
+      contactRequestLoading = false;
+      if (contactRequestMore) contactRequestMore.disabled = false;
+    }
   }
 }
 
@@ -714,6 +740,9 @@ async function openContactModal() {
   contactModal.hidden = false;
   setContactStatus('');
   setContactLinkStatus('');
+  contactRequestGeneration += 1;
+  contactRequestItems = [];
+  contactRequestCursor = null;
   renderContactRequests([]);
   if (contactLinkPlaintext) {
     setContactLinkStatus('链接明文只保留在本次页面会话，可继续复制或撤销。', 'success');
@@ -730,6 +759,8 @@ async function openContactModal() {
 function closeContactModal() {
   if (!contactModal) return;
   contactSearchGeneration += 1;
+  contactRequestGeneration += 1;
+  contactRequestLoading = false;
   if (contactSearchAbort) contactSearchAbort.abort();
   contactSearchAbort = null;
   contactSearchBusy = false;
@@ -740,6 +771,9 @@ function closeContactModal() {
 
 if (contactRequestsButton) {
   contactRequestsButton.addEventListener('click', openContactModal);
+}
+if (contactRequestMore) {
+  contactRequestMore.addEventListener('click', function () { loadContactRequests(true); });
 }
 if (contactModalClose) {
   contactModalClose.addEventListener('click', closeContactModal);

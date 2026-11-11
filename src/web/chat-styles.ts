@@ -24,6 +24,10 @@ export const APP_STYLE = `
     --wx-unread: #fa5151;
     --wx-danger: #c0392b;
     --wx-danger-strong: #a93226;
+    /* 危险菜单项用红字透明底；暗色只换文字色与淡红底，避免低对比。 */
+    --wx-danger-text: #c0392b;
+    --wx-danger-tint: rgb(192 57 43 / 8%);
+    --wx-danger-tint-strong: rgb(192 57 43 / 12%);
     --wx-link: #576b95;
     --wx-search: #e6e6e6;
     --wx-shadow: 0 12px 32px rgb(0 0 0 / 14%);
@@ -46,6 +50,9 @@ export const APP_STYLE = `
       --wx-active: #404040;
       --wx-bubble: #2c2c2c;
       --wx-search: #3a3a3a;
+      --wx-danger-text: #ff8a80;
+      --wx-danger-tint: rgb(255 138 128 / 8%);
+      --wx-danger-tint-strong: rgb(255 138 128 / 12%);
       --wx-shadow: 0 12px 32px rgb(0 0 0 / 45%);
     }
   }
@@ -128,13 +135,16 @@ export const APP_STYLE = `
     color: var(--wx-text); font: inherit; font-size: 13px; text-align: left;
     white-space: nowrap; }
   .room-menu-item:hover, .room-menu-item:focus-visible { background: var(--wx-hover); }
-  /* 危险动作：红底白字；hover 更深，focus 用文字色轮廓，disabled 浅红底深红字。 */
-  .room-menu-item.danger { background: var(--wx-danger); color: #fff; }
+  /* 危险动作：红字透明底；hover/active 只叠加淡红底，不恢复实心红。
+     focus 用危险色焦点环；disabled 转为灰色并保留禁止光标。 */
+  .room-menu-item.danger { background: transparent; color: var(--wx-danger-text); }
   .room-menu-item.danger:hover, .room-menu-item.danger:focus-visible {
-    background: var(--wx-danger-strong); }
-  .room-menu-item.danger:focus-visible { outline: 2px solid var(--wx-text); outline-offset: 2px; }
-  .room-menu-item.danger:disabled { opacity: 1; background: #f6d5d5; color: #7f1d1d;
-    cursor: not-allowed; }
+    background: var(--wx-danger-tint); }
+  .room-menu-item.danger:active { background: var(--wx-danger-tint-strong); }
+  .room-menu-item.danger:focus-visible {
+    outline: 2px solid var(--wx-danger-text); outline-offset: 2px; }
+  .room-menu-item.danger:disabled { opacity: 1; background: transparent;
+    color: var(--wx-muted); cursor: not-allowed; }
   .room-menu-item[hidden] { display: none; }
   .room-menu-status { margin: 4px 0 0; padding: 0 10px 2px; font-size: 12px;
     color: var(--wx-green); }

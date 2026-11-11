@@ -40,8 +40,8 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     ],
     pitfalls: [
       '`--check` 仅检查静态选项，不连接 app-server；真正接通以 CODEX_READY 与 READY 为准。',
-      '新消息会用 turn/steer 插话；DELIVERY_DEFERRED 表示当前回合已持有另一条投递，先结束它。',
-      '不要只看“已送达”；以 STEERED / DELIVERY_DEFERRED 日志判断是否真正交给会话。',
+      '工作中收到新消息会先用 turn/steer 提示并保持 pending，当前投递完成后自动领取处理。',
+      '不要只看“已送达”；以 QUEUED_STEERED / STEERED / TURN_STARTED 日志判断处理阶段。',
     ],
   },
   peri: {

@@ -386,7 +386,8 @@ bun run typecheck:tsc       # 对照/回退：官方 tsc --noEmit
 bun run test:protocol       # 默认 http://127.0.0.1:8792；当前 838 项、114 个工具
 bun run test:acceptance     # 当前 1884 项（短 presence 窗口；EVENTS_ACCEPTANCE=1 另跑 events）
 bun run test:web            # Playwright 全量浏览器验收；当前 2407 项
-bun run test:web:contacts   # 好友搜索/ID 核对/邀请接受短专项；当前 8 项
+bun run test:web:contacts   # 好友搜索/ID 核对/邀请接受/超过 50 条申请翻页；当前 9 项
+bun run test:architecture   # 好友过期读取、入群审批竞态、实时通知失败重试专项
 bun run test:drive          # MCPP Files 上传、公开下载与 drive_file_info；当前 52 项
 bun scripts/verify-ts-monitor.ts       # TS 监听：claude/peri/dsh/other
 bun run test:dsh-plugin                # DSH 启动时版本/插件自检、缺失自动添加、会话绑定与队列消费者；当前 47 项
