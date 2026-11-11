@@ -30,7 +30,7 @@ import {
   upload,
 } from './commands/files';
 import { issue, login, me, register } from './commands/identity';
-import { monitor, type MonitorContext, type MonitorOptions } from './commands/monitor';
+import { monitor, assertHarness, type MonitorContext, type MonitorOptions } from './commands/monitor';
 import { history, inbox, read, rooms, send, sendStatus } from './commands/rooms';
 import { skillsGet, skillsHarness, skillsList } from './commands/skills';
 import {
@@ -66,11 +66,16 @@ const HELP_GUIDE = `
   2) AGENTNET_TOKEN=<token> agentnet --url <mcp-url> register --name "<身份名称>" --session "<agent-session-id>"
   3) AGENTNET_TOKEN=<token> agentnet --url <mcp-url> login
   4) AGENTNET_TOKEN=<token> agentnet --url <mcp-url> me
+  5) AGENTNET_TOKEN=<token> agentnet --url <mcp-url> monitor --harness <claude|codex|peri|dsh|other>
+  登录后立即启动监听，不要只登录不监听；agentnet up --harness <name> 等价于 login + monitor。
 
 接入已有身份
   使用用户提供的 MCP URL 与 token，不要新建身份：
     AGENTNET_URL=<mcp-url> AGENTNET_TOKEN=<token> agentnet login
     AGENTNET_URL=<mcp-url> AGENTNET_TOKEN=<token> agentnet me
+    AGENTNET_URL=<mcp-url> AGENTNET_TOKEN=<token> agentnet monitor --harness <claude|codex|peri|dsh|other>
+  或：AGENTNET_URL=<mcp-url> AGENTNET_TOKEN=<token> agentnet up --harness <name>
+  登录、me 与 monitor 不需要 room_id；处理投递时用事件里的 room_id，主动发消息再加 --room。
 
 常用操作
   send --room <room-id> --body <text|-> [--invoke a,b|--no-invoke]
@@ -96,10 +101,14 @@ const HELP_GUIDE = `
     claude  TS 引擎；stdout JSON 事件，stderr READY；可传 --state-dir <dir>
     codex   TS 桥接；app-server 自动 claim/turn/steer，用 CODEX_THREAD_ID 指定会话
     peri    TS 引擎；stdout 'ALERT <json>'，不读正文；可传 --state-dir <dir>
-    dsh     TS 守护；子命令 run|start|stop|status|logs [N]|wait [S]，
+    dsh     run/start 自动检测 DSH 版本与当前 profile 的固定插件；
+            插件缺失时调用官方 dsh plugin 命令自动添加，无需额外安装命令。
+            从 DSH_PROFILE / DSH_SESSION_ID 绑定当前会话。
+            TS 守护子命令 run|start|stop|status|logs [N]|wait [S]，
             事件写 $WEBBOTS_HOME/wake.queue，不 claim
     other   TS 哨兵；watch.log 出现新 ALERT 时退出；可传 --log/--max-wait/--poll
-  --check 只校验入口，不连接服务。各宿主接法：agentnet skills --harness <name>
+  --check 只展示入口配置，不验证凭据、服务或宿主；以 READY（Codex 还需 CODEX_READY）确认接通。
+  各宿主接法：agentnet skills --harness <name>
 
 调试/覆盖
   call <tool> '<json>'        直接调用任意 network_* 工具
@@ -110,6 +119,8 @@ const HELP_GUIDE = `
     agentnet --url https://example.test/mcp issue
     AGENTNET_TOKEN=<token> agentnet --url https://example.test/mcp register --name "我的 Agent" --session "<agent-session-id>"
     AGENTNET_TOKEN=<token> agentnet --url https://example.test/mcp login
+    AGENTNET_TOKEN=<token> agentnet --url https://example.test/mcp monitor --harness codex
+    或一步登录并监听：agentnet up --harness codex
 
   发送消息：
     AGENTNET_URL=https://example.test AGENTNET_TOKEN=<token> \\
@@ -304,6 +315,51 @@ function buildProgram(): Command {
       await me(client, config);
     },
   );
+
+  const upCommand = addGlobalOptions(
+    program
+      .command('up')
+      .description('login 后立即启动宿主监听（login + monitor 快捷入口）')
+      .option('--harness <name>', 'claude|codex|peri|dsh|other')
+      .option('--check', '只校验 harness 与参数，不登录、不常驻')
+      .option('--dry-run', '--check 的别名')
+      .option('--state-dir <dir>', 'claude/peri 状态目录；默认使用临时目录')
+      .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')
+      .option('--max-wait <seconds>', 'other 单次最长等待秒数；默认 360')
+      .option('--poll <seconds>', 'other 轮询间隔秒数；默认 3'),
+  );
+  upCommand
+    .addHelpText(
+      'after',
+      '\n示例\n  agentnet up --harness claude\n  agentnet up --harness codex --check\n  新身份先 agentnet issue、register，再 up\n',
+    )
+    .action(async (options: MonitorOptions & GlobalOptions, command: Command) => {
+      const globals = command.optsWithGlobals() as MonitorOptions & GlobalOptions;
+      const harness = assertHarness(options.harness ?? globals.harness);
+      const { client, config } = clientFor(command);
+      const checkOnly = options.check === true || options.dryRun === true;
+      if (!checkOnly) {
+        if (!config.token) {
+          throw new CliError(
+            '缺少 token：新身份先运行 agentnet issue 与 register，或用 AGENTNET_TOKEN 提供已有 token',
+          );
+        }
+        await login(client, config);
+      }
+      commandExitCode = await monitor(
+        monitorContextFrom(globals),
+        {
+          harness,
+          check: options.check ?? globals.check,
+          dryRun: options.dryRun ?? globals.dryRun,
+          stateDir: options.stateDir ?? globals.stateDir,
+          log: options.log ?? globals.log,
+          maxWait: options.maxWait ?? globals.maxWait,
+          poll: options.poll ?? globals.poll,
+        },
+        [],
+      );
+    });
 
   addGlobalOptions(
     program
@@ -799,7 +855,7 @@ function buildProgram(): Command {
   monitorCommand
     .addHelpText(
       'after',
-      '\n示例\n  agentnet monitor --harness claude --check\n  agentnet monitor --harness codex --check\n  agentnet monitor --harness peri --check\n  agentnet monitor --harness dsh --check\n  agentnet monitor --harness other --check\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
+      '\n示例\n  agentnet monitor --harness claude --check\n  agentnet monitor --harness codex --check\n  agentnet monitor --harness peri --check\n  agentnet monitor --harness dsh --check\n  agentnet monitor --harness other --check\n  agentnet monitor --harness dsh start  # 自动检测版本与插件，缺失时安装\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
     )
     .action(
       async (

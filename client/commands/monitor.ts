@@ -15,11 +15,27 @@ import { runClaudeMonitor } from '../monitor/claude';
 import { runCodexMonitor } from '../monitor/codex';
 import { socketOverride } from '../monitor/codex-transport';
 import { runDshMonitor } from '../monitor/dsh';
-import { runOtherHarness } from '../monitor/other';
+import { ensureDshMonitorPlugin } from '../monitor/dsh-install';
+import { numeric, runOtherHarness } from '../monitor/other';
 import { runPeriMonitor } from '../monitor/peri';
 
 const TS_HARNESSES = new Set(['claude', 'other', 'peri', 'dsh', 'codex']);
 const SUPPORTED = [...TS_HARNESSES];
+
+/** login 之后立即启动监听；up 需要先校验 harness，避免登录后才发现参数错误。 */
+export function assertHarness(harness: string | undefined): string {
+  if (!harness) {
+    throw new CliError(
+      `缺少 --harness（支持：${SUPPORTED.join('|')}；运行 agentnet monitor --help 查看示例）`,
+    );
+  }
+  if (!TS_HARNESSES.has(harness)) {
+    throw new CliError(
+      `未知 harness：${harness}（支持：${SUPPORTED.join('|')}；运行 agentnet skills --harness ${harness} 查看说明）`,
+    );
+  }
+  return harness;
+}
 
 export interface MonitorContext {
   baseUrl: string | null;
@@ -41,6 +57,7 @@ function checkTsHarness(
   options: MonitorOptions,
   scriptArgs: readonly string[],
 ): number {
+  line('CHECK scope=entry connected=false');
   if (harness === 'claude') {
     line(`harness=claude engine=ts args=${scriptArgs.join(' ') || '-'}`);
     return 0;
@@ -70,6 +87,14 @@ function checkTsHarness(
     options.log ?? process.env.LOG ?? join(homedir(), '.agentnet', 'watch.log');
   const maxWait = options.maxWait ?? process.env.MAX_WAIT ?? '360';
   const poll = options.poll ?? process.env.POLL ?? '3';
+  if (numeric(maxWait, 360) === null) {
+    line('ERROR type=configuration message=invalid_max_wait');
+    return 1;
+  }
+  if (numeric(poll, 3) === null) {
+    line('ERROR type=configuration message=invalid_poll');
+    return 1;
+  }
   line(`harness=other engine=ts log=${logPath} max_wait=${maxWait} poll=${poll}`);
   return 0;
 }
@@ -79,19 +104,10 @@ export async function monitor(
   options: MonitorOptions,
   scriptArgs: readonly string[] = [],
 ): Promise<number> {
-  const harness = options.harness;
-  if (!harness) {
-    throw new CliError(
-      `缺少 --harness（支持：${SUPPORTED.join('|')}；运行 agentnet monitor --help 查看示例）`,
-    );
-  }
-  if (!TS_HARNESSES.has(harness)) {
-    throw new CliError(
-      `未知 harness：${harness}（支持：${SUPPORTED.join('|')}；运行 agentnet skills --harness ${harness} 查看说明）`,
-    );
-  }
+  const harness = assertHarness(options.harness);
   const extra = [...scriptArgs];
-  // dsh 需要在位置参数里收子命令（start/stop/status/logs/wait）。
+  const dshCommand = harness === 'dsh' ? (extra[0] ?? 'run') : null;
+  // dsh 需要在位置参数里收子命令（run/start/stop/status/logs/wait）。
   if (harness !== 'dsh' && extra.length > 0) {
     throw new CliError(
       `monitor --harness ${harness} 不接受位置参数：${extra.join(' ')}（使用 --log/--max-wait/--poll 等选项）`,
@@ -101,7 +117,20 @@ export async function monitor(
   if (checkOnly) return checkTsHarness(harness, options, extra);
   if (harness === 'claude') return runClaudeMonitor(context, { stateDir: options.stateDir });
   if (harness === 'peri') return runPeriMonitor(context, { stateDir: options.stateDir });
-  if (harness === 'dsh') return runDshMonitor(context, extra);
+  if (harness === 'dsh') {
+    if (
+      (dshCommand === 'run' || dshCommand === 'start') &&
+      context.token !== null &&
+      context.baseUrl !== null
+    ) {
+      const detected = await ensureDshMonitorPlugin();
+      process.stderr.write(
+        `DSH_PLUGIN status=${detected.installed ? 'installed' : 'present'} ` +
+          `dsh_version=${detected.dshVersion}\n`,
+      );
+    }
+    return runDshMonitor(context, extra);
+  }
   if (harness === 'codex') return runCodexMonitor(context);
   return runOtherHarness({ log: options.log, maxWait: options.maxWait, poll: options.poll });
 }

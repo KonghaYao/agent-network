@@ -46,6 +46,7 @@ import {
   contactRequestRespondSchema,
   contactRequestSchema,
   contactRequestsListSchema,
+  contactSearchSchema,
   contactLinkCreateSchema,
   contactLinkListSchema,
   contactLinkPreviewSchema,
@@ -136,6 +137,7 @@ import {
 } from '../domain/agent-transfers';
 import { agentTransferGet, agentTransferList } from '../domain/agent-transfer-reads';
 import { contactAdd, contactRemove, contactsList } from '../domain/contacts';
+import { contactSearch } from '../domain/contact-search';
 import {
   contactBlock,
   contactBlocksList,
@@ -269,6 +271,7 @@ import {
   contactReportResultSchema,
   contactRequestPageSchema,
   contactRequestResultSchema,
+  contactSearchResultSchema,
   contactSchema,
   contactUnblockResultSchema,
   deliverySchema,
@@ -945,6 +948,18 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       return contactsList(db, principal, input);
+    },
+  );
+
+  register(
+    server,
+    'network_contact_search',
+    '按展示名称搜索可申请的人类身份。只返回名称匹配、未与当前身份发生双向拉黑的 human；排除自己，不返回 metadata、凭据、房间或消息。结果包含完整 actor_id，供同名用户核对后再调用 network_contact_request { actor_id }。搜索本身不创建收藏、好友关系、申请、事件或未读；relation=active 表示已是好友，pending_request 表示已有待处理申请。',
+    contactSearchSchema,
+    contactSearchResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return contactSearch(db, principal, input);
     },
   );
 

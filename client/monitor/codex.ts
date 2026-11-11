@@ -35,6 +35,7 @@ import {
 import {
   MonitorFatalError,
   MonitorRpc,
+  listInboxPages,
   subscribe,
   type JsonObject,
   type SubscriptionControl,
@@ -363,7 +364,7 @@ class CodexWatcher {
   private async snapshot(): Promise<void> {
     let outcome;
     try {
-      outcome = await this.rpc.callTool('network_inbox_list', { state: 'pending', limit: 50 });
+      outcome = await listInboxPages(this.rpc, 'pending');
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
       this.log('ERROR type=inbox message=snapshot_failed');
@@ -521,7 +522,7 @@ class CodexWatcher {
 
       let pending;
       try {
-        pending = await this.rpc.callTool('network_inbox_list', { state: 'pending', limit: 50 });
+        pending = await listInboxPages(this.rpc, 'pending');
       } catch (error) {
         if (error instanceof MonitorFatalError) throw error;
         throw new WatchStop('inbox_unavailable; restart watcher to reconcile');
@@ -535,7 +536,7 @@ class CodexWatcher {
         // 已插话的投递在 claim 后不再出现在 pending；当前回合结束后从自己的 claimed 列表接手。
         let claimed;
         try {
-          claimed = await this.rpc.callTool('network_inbox_list', { state: 'claimed', limit: 50 });
+          claimed = await listInboxPages(this.rpc, 'claimed');
         } catch (error) {
           if (error instanceof MonitorFatalError) throw error;
           throw new WatchStop('claimed_inbox_unavailable; restart watcher to reconcile');

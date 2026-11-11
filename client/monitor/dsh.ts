@@ -15,6 +15,7 @@
 
 import { closeSync, openSync } from 'node:fs';
 import { open, rm, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { CliError, resolveConfig } from '../mcp';
 import { asArray, asRecord } from '../output';
@@ -74,7 +75,7 @@ function writeStderr(text: string): void {
 function usage(): void {
   writeStderr(`usage: agentnet monitor --harness dsh [run|start|stop|status|logs|wait] [args]
 
-  run            前台运行 SSE 守护（默认）
+  run            前台运行 SSE 守护（默认；启动前自动检查 DSH 版本与插件）
   start          后台运行；PID 写入 $WEBBOTS_HOME/watch.pid
   stop           停止后台守护
   status         输出一行 JSON；运行中退出 0，未运行退出 3
@@ -714,6 +715,16 @@ async function showStatus(): Promise<number> {
   const pid = await readPid(paths);
   const running = pid !== null;
   const stored = await readStatusFile(paths);
+  let consumer: JsonObject = { state: 'not_attached' };
+  try {
+    const value = asRecord(JSON.parse(await readText(join(paths.home, 'consumer.json'))));
+    const age = Date.now() - Date.parse(typeof value.updated_at === 'string' ? value.updated_at : '');
+    if (typeof value.session_id === 'string' && ['attached', 'waiting_session'].includes(String(value.state))) {
+      const matchingSession = !process.env.DSH_SESSION_ID || process.env.DSH_SESSION_ID === value.session_id;
+      consumer = { state: !matchingSession ? 'session_mismatch' : age >= 0 && age < 15_000 ? value.state : 'stale',
+        session_id: value.session_id, updated_at: value.updated_at };
+    }
+  } catch { /* Missing or invalid consumer status must not imply attachment. */ }
 
   let state = 'stopped';
   let stale = false;
@@ -744,6 +755,7 @@ async function showStatus(): Promise<number> {
     reconnects: stored.reconnects ?? 0,
     startedAt: stored.startedAt ?? null,
     updatedAt: stored.updatedAt ?? null,
+    consumer,
   };
   process.stdout.write(`${JSON.stringify(output)}\n`);
   return running ? 0 : 3;

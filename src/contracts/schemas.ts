@@ -260,6 +260,12 @@ export const deviceRevokeSchema = z.object({
 
 export const contactsListSchema = z.object({ cursor, limit: z.number().int().min(1).max(100).optional() });
 
+/** 按展示名称搜索可申请的人类身份；actor_id 用于同名结果的显式核对。 */
+export const contactSearchSchema = z.object({
+  query: z.string().trim().min(1).max(LIMITS.actorNameMax),
+  limit: z.number().int().min(1).max(LIMITS.contactSearchPageMax).optional(),
+});
+
 export const contactAddSchema = z.object({
   request_id: requestId,
   actor_id: id().optional(),
@@ -854,6 +860,7 @@ export type DevicePairingRedeemInput = z.infer<typeof devicePairingRedeemSchema>
 export type DeviceListInput = z.infer<typeof deviceListSchema>;
 export type DeviceRevokeInput = z.infer<typeof deviceRevokeSchema>;
 export type ContactsListInput = z.infer<typeof contactsListSchema>;
+export type ContactSearchInput = z.infer<typeof contactSearchSchema>;
 export type ContactAddInput = z.infer<typeof contactAddSchema>;
 export type ContactRemoveInput = z.infer<typeof contactRemoveSchema>;
 export type ContactRequestInput = z.infer<typeof contactRequestSchema>;

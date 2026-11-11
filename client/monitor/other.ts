@@ -98,7 +98,7 @@ export async function runOtherSentinel(options: OtherSentinelOptions): Promise<n
   return 0;
 }
 
-function numeric(value: string | undefined, fallback: number): number | null {
+export function numeric(value: string | undefined, fallback: number): number | null {
   if (value === undefined || value === '') return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return null;

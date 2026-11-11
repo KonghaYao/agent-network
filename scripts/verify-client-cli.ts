@@ -776,6 +776,31 @@ async function main(): Promise<void> {
         help.stdout.includes('me\n'),
       help.stdout,
     );
+    const initSection = help.stdout.slice(
+      help.stdout.indexOf('首次初始化（没有 token）'),
+      help.stdout.indexOf('接入已有身份'),
+    );
+    check(
+      '--help 首次初始化示例不含 --room',
+      initSection.length > 0 &&
+        !initSection.includes('--room') &&
+        initSection.includes('monitor --harness <claude|codex|peri|dsh|other>') &&
+        initSection.includes('登录后立即启动监听'),
+      initSection,
+    );
+    check(
+      '--help 说明登录、me 与 monitor 不需要 room_id',
+      help.stdout.includes('登录、me 与 monitor 不需要 room_id') &&
+        help.stdout.includes('处理投递时用事件里的 room_id') &&
+        help.stdout.includes('主动发消息再加 --room'),
+      help.stdout,
+    );
+    check(
+      '--help 提供 up 登录并监听入口',
+      help.stdout.includes('agentnet up --harness <name>') &&
+        help.stdout.includes('agentnet up --harness codex'),
+      help.stdout,
+    );
     check(
       '--help 监控示例含五种 harness 与 --check',
       help.stdout.includes('monitor --harness claude|codex|peri|dsh|other') &&
@@ -783,8 +808,16 @@ async function main(): Promise<void> {
         help.stdout.includes('agentnet skills --harness <name>'),
       help.stdout,
     );
+    check(
+      '--help DSH 只说明启动时自动检测，不暴露 install 命令',
+      help.stdout.includes('run/start 自动检测 DSH 版本') &&
+        !help.stdout.includes('monitor --harness dsh install') &&
+        !help.stdout.includes('--profile <name>') &&
+        !help.stdout.includes('--session <id>'),
+      help.stdout,
+    );
 
-    for (const command of ['send', 'inbox', 'reply', 'task', 'monitor', 'skills']) {
+    for (const command of ['send', 'inbox', 'reply', 'task', 'monitor', 'up', 'skills']) {
       const subHelp = await runCli(mock.baseUrl, [command, '--help']);
       checkEqual(`${command} --help 退出 0`, subHelp.code, 0);
       check(`${command} --help 含示例`, subHelp.stdout.includes('示例'), subHelp.stdout);
@@ -808,9 +841,32 @@ async function main(): Promise<void> {
           guide.stdout.includes('CREDENTIAL_INVALID'),
         guide.stdout,
       );
+      if (harness === 'dsh') {
+        check(
+          'DSH 指南只要求直接启动并自动检测插件',
+          guide.stdout.includes('自动检测') &&
+            guide.stdout.includes('缺失时自动添加') &&
+            !guide.stdout.includes('dsh install'),
+          guide.stdout,
+        );
+      }
       check(
         `skills --harness ${harness} 不输出 token`,
         !guide.stdout.includes(TOKEN) && !guide.stderr.includes(TOKEN),
+      );
+      const loginAndMonitor = guide.stdout.slice(
+        guide.stdout.indexOf('2. 上线并确认身份'),
+        guide.stdout.indexOf('4. 处理投递'),
+      );
+      check(
+        `skills --harness ${harness} 登录后立即启动监听且不需要 room`,
+        loginAndMonitor.length > 0 &&
+          !loginAndMonitor.includes('--room') &&
+          loginAndMonitor.includes('登录后立即启动监听') &&
+          loginAndMonitor.includes('agentnet up --harness <name>') &&
+          guide.stdout.includes('登录、me 与 monitor 只需要 URL 与 token，不需要 room_id。') &&
+          guide.stdout.includes('room_id 来自投递事件'),
+        guide.stdout,
       );
     }
     checkEqual(
@@ -994,6 +1050,84 @@ async function main(): Promise<void> {
     });
     check('未知 harness 退出非 0', badHarness.code !== 0);
     check('未知 harness 给出可读错误', badHarness.stderr.includes('未知 harness'));
+
+    const login = await runCli(mock.baseUrl, ['login']);
+    checkEqual('login 不传 room 退出 0', login.code, 0);
+    check('login 输出上线结果', login.stdout.includes('已上线'), login.stdout);
+    const loginCall = mock.calls.filter((call) => call.tool === 'network_login').at(-1);
+    check(
+      'login 不发送 room_id',
+      Boolean(loginCall) && !('room_id' in (loginCall?.arguments ?? {})),
+      loginCall?.arguments,
+    );
+
+    const me = await runCli(mock.baseUrl, ['me']);
+    checkEqual('me 不传 room 退出 0', me.code, 0);
+    const meCall = mock.calls.filter((call) => call.tool === 'network_me').at(-1);
+    check(
+      'me 不发送 room_id',
+      Boolean(meCall) && !('room_id' in (meCall?.arguments ?? {})),
+      meCall?.arguments,
+    );
+
+    const loginCallsBeforeUp = mock.calls.filter((call) => call.tool === 'network_login').length;
+    const upCheck = await runCli(mock.baseUrl, ['up', '--harness', 'peri', '--check']);
+    checkEqual('up --check 退出 0', upCheck.code, 0);
+    check('up --check 校验 harness', upCheck.stdout.includes('engine=ts'), upCheck.stdout);
+    checkEqual(
+      'up --check 不登录',
+      mock.calls.filter((call) => call.tool === 'network_login').length,
+      loginCallsBeforeUp,
+    );
+    const upBadHarness = await runCli(mock.baseUrl, ['up', '--harness', 'unknown']);
+    check('up 未知 harness 退出非 0', upBadHarness.code !== 0);
+    check(
+      'up 未知 harness 给出可读错误',
+      upBadHarness.stderr.includes('未知 harness'),
+      upBadHarness.stderr,
+    );
+
+    const upNoHarness = await runCli(mock.baseUrl, ['up']);
+    check('up 缺少 harness 退出非 0', upNoHarness.code !== 0);
+    check(
+      'up 缺少 harness 给出可读错误',
+      upNoHarness.stderr.includes('缺少 --harness'),
+      upNoHarness.stderr,
+    );
+
+    const upNoToken = await runCli(mock.baseUrl, ['up', '--harness', 'peri'], {
+      AGENTNET_TOKEN: undefined,
+    });
+    check('up 缺少 token 退出非 0', upNoToken.code !== 0);
+    check(
+      'up 缺少 token 提示先 issue/register',
+      upNoToken.stderr.includes('缺少 token') &&
+        upNoToken.stderr.includes('issue') &&
+        upNoToken.stderr.includes('register'),
+      upNoToken.stderr,
+    );
+
+    const upLog = join(workDir, 'up-watch.log');
+    await Bun.write(upLog, '');
+    const upListen = await runCli(mock.baseUrl, [
+      'up',
+      '--harness',
+      'other',
+      '--log',
+      upLog,
+      '--max-wait',
+      '1',
+      '--poll',
+      '1',
+    ]);
+    checkEqual('up 登录后启动监听退出 0', upListen.code, 0);
+    check('up 先登录再监听', upListen.stdout.includes('已上线'), upListen.stdout);
+    checkEqual(
+      'up 实际调用 login',
+      mock.calls.filter((call) => call.tool === 'network_login').length,
+      loginCallsBeforeUp + 1,
+    );
+    check('up 启动监听后输出哨兵结果', upListen.stdout.includes('WAKE'), upListen.stdout);
 
     // ---- 输出契约：分页、timeline、嵌套 delivery ----
     const roomsHuman = await runCli(mock.baseUrl, ['rooms']);

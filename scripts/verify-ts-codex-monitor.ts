@@ -193,10 +193,12 @@ function createMcpMock(options: { meKind?: string } = {}): McpMock {
         case 'network_inbox_list': {
           const wanted = String(args.state ?? 'active');
           const items = wanted === 'claimed' ? [...state.claims.values()] : [...state.pending.values()];
+          const offset = Number(args.cursor ?? 0);
+          const limit = Number(args.limit ?? 50);
           return toolResult(body.id, {
-            items,
-            next_cursor: null,
-            has_more: false,
+            items: items.slice(offset, offset + limit),
+            next_cursor: offset + limit < items.length ? String(offset + limit) : null,
+            has_more: offset + limit < items.length,
             pending_count: state.pending.size,
             claimed_delivery_id: state.claims.keys().next().value ?? null,
           });
@@ -818,6 +820,34 @@ async function runTurnChecks(): Promise<void> {
   }
 }
 
+async function runPagedChecks(): Promise<void> {
+  const fixture = await createFixture('paged');
+  try {
+    await waitForLine(fixture.watcher.stdout, (line) => line.startsWith('READY actor='), 'READY');
+    for (let index = 0; index < 50; index += 1) {
+      const own = makeDelivery(`dlv_own_${index}`);
+      own.message.sender_id = 'agt_me';
+      fixture.mcp.state.pending.set(own.delivery_id, own);
+    }
+    fixture.mcp.state.pending.set('dlv_second_page', makeDelivery('dlv_second_page'));
+    fixture.mcp.sendItems([notificationItem('dlv_second_page')]);
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('TURN_STARTED delivery=dlv_second_page'),
+      'SECOND PAGE TURN_STARTED',
+    );
+    checkEqual('Codex 第 51 条 pending 已领取', fixture.mcp.state.claimCalls.get('dlv_second_page'), 1);
+    fixture.codex.completeTurn('已处理');
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('DELIVERY_COMPLETED delivery=dlv_second_page'),
+      'SECOND PAGE COMPLETED',
+    );
+  } finally {
+    await fixture.stop();
+  }
+}
+
 async function runSteerChecks(): Promise<void> {
   const fixture = await createFixture('steer', {
     status: 'active',
@@ -1249,6 +1279,7 @@ async function main(): Promise<void> {
   await runThreadOwnershipChecks();
   console.log('TS codex monitor: idle turn/complete');
   await runTurnChecks();
+  await runPagedChecks();
   console.log('TS codex monitor: active steer');
   await runSteerChecks();
   console.log('TS codex monitor: deferred + slow ack');

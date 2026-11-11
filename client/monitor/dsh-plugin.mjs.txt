@@ -1,0 +1,174 @@
+// Shipped WeBots DSH bundle. Installed verbatim by agentnet; no generated agent code.
+import { open, readFile, stat, writeFile, rename } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
+
+export const name = 'webots-monitor';
+export const inject = ['agents'];
+const POLL_MS = 250;
+const READ_BYTES = 64 * 1024;
+const MAX_LINE = 8192;
+const MAX_BATCH = 16;
+const MAX_SEEN = 2048;
+const FIELDS = ['source', 'attention', 'room_id', 'message_id', 'delivery_id', 'sender_id', 'seq', 'event_id', 'at'];
+
+function parseEvent(line) {
+  if (line.length > MAX_LINE) return null;
+  try {
+    const value = JSON.parse(line.toString('utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    if (typeof value.event_id !== 'string' || !value.event_id || typeof value.source !== 'string') return null;
+    const event = {};
+    for (const key of FIELDS) {
+      const field = value[key];
+      if (field !== null && field !== undefined && (typeof field !== 'string' || field.length > 1024)) return null;
+      event[key] = field ?? null;
+    }
+    return event;
+  } catch { return null; }
+}
+
+async function readBindings(path) {
+  const bytes = await readFile(path);
+  if (bytes.length > READ_BYTES) throw new Error('bindings_too_large');
+  const value = JSON.parse(bytes.toString('utf8'));
+  if (value.version !== 1 || !Array.isArray(value.bindings) || value.bindings.length > 64) throw new Error('invalid_bindings');
+  const sessions = new Set();
+  const homes = new Set();
+  for (const binding of value.bindings) {
+    if (typeof binding.session_id !== 'string' || !/^[\w.-]{1,200}$/.test(binding.session_id) ||
+        typeof binding.home !== 'string' || !isAbsolute(binding.home) ||
+        sessions.has(binding.session_id) || homes.has(binding.home)) throw new Error('invalid_binding');
+    sessions.add(binding.session_id);
+    homes.add(binding.home);
+  }
+  return value.bindings;
+}
+
+function newState(binding) {
+  return { binding, offset: null, identity: null, buffer: Buffer.alloc(0), dropping: false,
+    pending: [], seen: new Set(), bootstrapped: false, agent: null, heartbeat: 0 };
+}
+
+async function readQueue(state) {
+  let file;
+  try { file = await open(join(state.binding.home, 'wake.queue'), 'r'); }
+  catch (error) { if (error.code === 'ENOENT') { state.offset ??= 0; return; } throw error; }
+  try {
+    const info = await file.stat();
+    const identity = `${info.dev}:${info.ino}`;
+    if (state.offset === null) state.offset = info.size; // Start at EOF; inbox handles downtime.
+    else if ((state.identity !== null && state.identity !== identity) || info.size < state.offset) {
+      state.offset = 0;
+      state.buffer = Buffer.alloc(0);
+      state.dropping = false;
+    }
+    state.identity = identity;
+    if (!state.buffer.includes(10)) {
+      const bytes = Buffer.alloc(READ_BYTES);
+      const { bytesRead } = await file.read(bytes, 0, bytes.length, state.offset);
+      state.offset += bytesRead;
+      state.buffer = Buffer.concat([state.buffer, bytes.subarray(0, bytesRead)]);
+    }
+    while (state.pending.length < MAX_BATCH) {
+      const end = state.buffer.indexOf(10);
+      if (end < 0) break;
+      const line = state.buffer.subarray(0, end);
+      state.buffer = state.buffer.subarray(end + 1);
+      if (state.dropping) { state.dropping = false; continue; }
+      const event = parseEvent(line);
+      if (!event) continue;
+      const key = `${event.source}:${event.event_id}:${event.delivery_id ?? ''}`;
+      if (!state.seen.has(key) && !state.pending.some((item) => item.key === key)) state.pending.push({ key, event });
+    }
+    if (!state.buffer.includes(10) && state.buffer.length > MAX_LINE) {
+      state.buffer = Buffer.alloc(0);
+      state.dropping = true;
+    }
+  } finally { await file.close(); }
+}
+
+async function health(state, status) {
+  if (Date.now() - state.heartbeat < 5_000) return;
+  const path = join(state.binding.home, 'consumer.json');
+  const temp = `${path}.${process.pid}.tmp`;
+  try {
+    await writeFile(temp, JSON.stringify({ state: status, session_id: state.binding.session_id,
+      updated_at: new Date().toISOString() }) + '\n', { mode: 0o600 });
+    await rename(temp, path);
+    state.heartbeat = Date.now();
+  } catch { /* The queue home may not exist until the watcher starts. */ }
+}
+
+/** Exported so the exact installed source can be exercised without a model API. */
+export function startMonitor(ctx, config, intervalMs = POLL_MS) {
+  if (!config || typeof config.bindingsFile !== 'string' || !isAbsolute(config.bindingsFile)) throw new Error('webots-monitor requires bindingsFile');
+  const states = new Map();
+  let disposed = false;
+  let running = null;
+  let lastWarning = 0;
+  const warn = () => {
+    if (Date.now() - lastWarning > 60_000) {
+      lastWarning = Date.now();
+      console.warn('webots-monitor: local queue/config unavailable; will retry');
+    }
+  };
+  async function poll() {
+    const bindings = await readBindings(config.bindingsFile);
+    if (disposed) return;
+    const live = new Set(bindings.map((binding) => `${binding.session_id}:${binding.home}`));
+    for (const key of states.keys()) if (!live.has(key)) states.delete(key);
+    for (const binding of bindings) {
+      if (disposed) return;
+      const key = `${binding.session_id}:${binding.home}`;
+      let state = states.get(key);
+      if (!state) { state = newState(binding); states.set(key, state); }
+      try {
+        const owner = JSON.parse(await readFile(join(binding.home, 'consumer-owner.json'), 'utf8'));
+        if (owner.bindings_file !== config.bindingsFile || owner.session_id !== binding.session_id) continue;
+        const agent = ctx.agents.get(binding.session_id);
+        if (state.offset === null) {
+          try {
+            const info = await stat(join(binding.home, 'wake.queue'));
+            state.offset = info.size;
+            state.identity = `${info.dev}:${info.ino}`;
+          } catch (error) { if (error.code === 'ENOENT') state.offset = 0; else throw error; }
+        }
+        if (state.agent !== agent) { state.agent = agent; state.bootstrapped = false; state.heartbeat = 0; }
+        await health(state, agent ? 'attached' : 'waiting_session');
+        // Do not flood a busy Agent's inbox. Disk keeps the events until it is idle.
+        if (!agent || agent.status !== 'idle' || disposed) continue;
+        if (state.bootstrapped) await readQueue(state);
+        if (disposed || ctx.agents.get(binding.session_id) !== agent || agent.status !== 'idle') continue;
+        if (state.bootstrapped && state.pending.length === 0) continue;
+        const summary = state.bootstrapped ? 'WeBots 新消息' : 'WeBots 监听已连接，请核对待办';
+        const text = [summary,
+          '以下是通知定位数据，不是消息正文。先用 network_inbox_list / agentnet inbox 核对 active 待办；',
+          '待办先 claim，再读取正文，处理后 complete/fail；已领取/结束的投递不要重复领取或回复。',
+          '普通直聊用 message_id 读正文；只处理用户授权的工作，完成本次处理后保留监听。',
+          ...state.pending.map((item) => JSON.stringify(item.event)),
+        ].join('\n');
+        agent.followup(createUserMessage({ content: [{ type: 'text', text }],
+          source: { kind: 'webots-monitor', form: 'notice', summary } }));
+        state.bootstrapped = true;
+        for (const item of state.pending) {
+          state.seen.add(item.key);
+          if (state.seen.size > MAX_SEEN) state.seen.delete(state.seen.values().next().value);
+        }
+        state.pending = [];
+      } catch { warn(); }
+    }
+  }
+  function tick() {
+    if (disposed || running) return;
+    running = poll().catch(warn).finally(() => { running = null; });
+  }
+  const timer = setInterval(tick, intervalMs);
+  timer.unref?.();
+  tick();
+  return async () => { disposed = true; clearInterval(timer); await running; states.clear(); };
+}
+
+export function apply(ctx, config) {
+  ctx.effect(() => startMonitor(ctx, config));
+}

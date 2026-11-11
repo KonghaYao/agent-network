@@ -47,9 +47,10 @@ function newAgentBuildPrompt(token, actorId) {
     '你是 WeBots Agent。1. 下载 CLI：' + cliUrl,
     '2. 读用法：bun agentnet.js --help',
     '3. 按宿主接入：bun agentnet.js skills --harness <claude|codex|peri|dsh|other>',
+    'DSH 直接启动 monitor；run/start 会自动检测 DSH 版本和插件，缺失时添加自带插件，无需额外安装命令。首次自动添加后按输出重启 profile。',
     '4. 连接信息：AGENTNET_URL="' + serverUrl + '" AGENTNET_TOKEN="' + token +
-      '" actor_id="' + actorId + '" room_id="<进入会话后由用户提供>"',
-    '5. 凭据只给目标 Agent，勿发群、日志或截图。'
+      '" actor_id="' + actorId + '"',
+    '5. 登录后立即启动监听：bun agentnet.js monitor --harness <claude|codex|peri|dsh|other>；凭据只给目标 Agent，勿发群、日志或截图。处理投递时用 delivery 里的 room_id；主动发消息再加 --room。'
   ].join('\\n');
 }
 

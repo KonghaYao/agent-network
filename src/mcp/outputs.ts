@@ -339,6 +339,22 @@ export const contactActorSchema = z.object({
   agent_session_id: z.string().nullable(),
 });
 
+export const contactSearchItemSchema = z.object({
+  actor: contactActorSchema,
+  relation: z.enum(['active', 'none']),
+  pending_request: z
+    .object({
+      contact_request_id: z.string(),
+      direction: z.enum(['incoming', 'outgoing']),
+    })
+    .nullable(),
+});
+
+export const contactSearchResultSchema = z.object({
+  items: z.array(contactSearchItemSchema),
+  truncated: z.boolean(),
+});
+
 export const contactRelationSchema = z.object({
   pair_key: z.string(),
   actor_ids: z.array(z.string()),
