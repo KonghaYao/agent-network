@@ -10916,6 +10916,233 @@ async function main(): Promise<void> {
       await archiveContext.context.close();
     }
 
+    // 2b-7b. 会话列表默认过滤：解散群与已归档 Agent 不进首屏，显式 URL 仍可读。
+    {
+      const listToken = newToken();
+      await rawTool<Actor>(listToken, 'network_register', {
+        request_id: requestId('list_filter_register'),
+        kind: 'human',
+        name: '列表过滤人类',
+      });
+      const archivedAgent = await createAgentFriend(listToken, '列表过滤归档 Agent');
+      const archivedDirect = await rawTool<RoomDetail>(listToken, 'network_room_create', {
+        request_id: requestId('list_filter_archived_room'),
+        kind: 'direct',
+        members: [archivedAgent.actor_id],
+      });
+      const archivedRoomId = archivedDirect.room.room_id;
+      await rawTool(listToken, 'network_agent_archive', {
+        request_id: requestId('list_filter_archive'),
+        actor_id: archivedAgent.actor_id,
+      });
+      // 另一个未归档 Agent 保证 Agent 分类首屏至少有一条正常会话。
+      const visibleAgent = await createAgentFriend(listToken, '列表过滤可见 Agent');
+      await rawTool<RoomDetail>(listToken, 'network_room_create', {
+        request_id: requestId('list_filter_visible_room'),
+        kind: 'direct',
+        members: [visibleAgent.actor_id],
+      });
+
+      const senderToken = newToken();
+      const sender = await rawTool<Actor>(senderToken, 'network_register', {
+        request_id: requestId('list_filter_sender'),
+        kind: 'agent',
+        name: '列表过滤发送 Agent',
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      });
+      const dissolvedGroup = await rawTool<RoomDetail>(listToken, 'network_room_create', {
+        request_id: requestId('list_filter_dissolved_group'),
+        kind: 'group',
+        title: '列表过滤解散群',
+        members: [sender.actor_id],
+      });
+      const dissolvedId = dissolvedGroup.room.room_id;
+      await rawTool(listToken, 'network_room_dissolve', {
+        request_id: requestId('list_filter_dissolve'),
+        room_id: dissolvedId,
+        reason: '列表过滤验收',
+      });
+
+      const activeGroup = await rawTool<RoomDetail>(listToken, 'network_room_create', {
+        request_id: requestId('list_filter_active_group'),
+        kind: 'group',
+        title: '列表过滤活跃群',
+        members: [sender.actor_id],
+      });
+      const activeGroupId = activeGroup.room.room_id;
+      await rawTool(senderToken, 'network_message_send', {
+        request_id: requestId('list_filter_unread'),
+        client_message_id: crypto.randomUUID(),
+        room_id: activeGroupId,
+        body: '列表过滤未读消息',
+      });
+
+      const { context, page } = await makeContext(
+        browser,
+        listToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await page.addInitScript(() => {
+        localStorage.setItem('agent-network-room-filter', 'agent');
+      });
+      await page.route('**/mcp', async (route) => {
+        if (route.request().headers()['mcp-name'] === 'network_agents_get') {
+          await sleep(1500);
+        }
+        await route.continue();
+      });
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      // 首屏摘要同步渲染时就必须已经隐藏，不能等 direct 详情/归档查询返回。
+      checkEqual(
+        '首屏不闪现已归档 Agent 会话',
+        await page.locator(roomLink(archivedRoomId)).count(),
+        0,
+      );
+      checkEqual('首屏不闪现解散群', await page.locator(roomLink(dissolvedId)).count(), 0);
+      const firstPaintRoomIds = (await page.evaluate(
+        `roomEntries.map(function (entry) { return entry.room_id; })`,
+      )) as string[];
+      check(
+        '服务端列表不返回解散群',
+        !firstPaintRoomIds.includes(dissolvedId),
+        firstPaintRoomIds,
+      );
+      const firstPaintArchivedEntry = (await page.evaluate(
+        `(function () {
+          const entry = roomEntries.find(function (item) {
+            return item.room_id === ${JSON.stringify(archivedRoomId)};
+          });
+          return entry ? { peer_archived: entry.peer_archived, lookups: archivedAgentIds.size } : null;
+        })()`,
+      )) as { peer_archived?: boolean; lookups: number } | null;
+      checkEqual(
+        '列表摘要携带 peer_archived 供首屏过滤',
+        firstPaintArchivedEntry && firstPaintArchivedEntry.peer_archived,
+        true,
+      );
+      checkEqual(
+        '首屏隐藏不依赖已完成的归档查询',
+        firstPaintArchivedEntry && firstPaintArchivedEntry.lookups,
+        0,
+      );
+      await page.waitForFunction(
+        `(window.__mcpCalls || []).some(function (call) { return call.name === 'network_agents_get'; })`,
+        undefined,
+        { timeout: 10_000 },
+      );
+      checkEqual(
+        '归档查询返回后仍隐藏已归档会话',
+        await page.locator(roomLink(archivedRoomId)).count(),
+        0,
+      );
+
+      // 已归档浮层仍从列表发现 direct Agent，恢复入口不受默认过滤影响。
+      await page.locator('#archived-agents').click();
+      await page.waitForFunction(
+        `Array.from(document.querySelectorAll('#archive-popover-list .archive-name')).some(function (node) {
+          return node.textContent === ${JSON.stringify(archivedAgent.name)};
+        })`,
+        undefined,
+        { timeout: 15_000 },
+      );
+      check('已归档浮层保留列表发现能力', true);
+      await page.keyboard.press('Escape');
+
+      // 活跃群与未读、排序不受过滤影响；群分类不混入解散群。
+      await page.locator('#room-filter-group').click();
+      await page.waitForFunction(
+        `(function () {
+          const link = document.querySelector(${JSON.stringify(roomLink(activeGroupId))});
+          return Boolean(link && link.querySelector('.unread'));
+        })()`,
+      );
+      checkEqual(
+        '活跃群未读标记保留',
+        await page.locator(`${roomLink(activeGroupId)} .unread`).count(),
+        1,
+      );
+      checkEqual('群聊分类不包含解散群', await page.locator(roomLink(dissolvedId)).count(), 0);
+      const orderedGroupLinks = (await page.evaluate(
+        `Array.from(document.querySelectorAll('#room-list a.room-item')).map(function (node) {
+          return node.getAttribute('href');
+        })`,
+      )) as string[];
+      checkEqual('活跃群按最后消息排在群聊首位', orderedGroupLinks[0], `/c/${activeGroupId}`);
+
+      // 模拟本地旧缓存：注入归档/解散条目后重绘不得闪现。
+      await page.waitForFunction(`roomsPromise === null`);
+      await page.evaluate(`(() => {
+        const now = Date.now();
+        roomEntries.push({
+          room_id: 'ghost-dissolved-room',
+          kind: 'group',
+          name: '残留解散群',
+          head_seq: 1,
+          my_last_read_seq: 0,
+          last_message: null,
+          updated_at: now + 2000,
+          dissolved_at: new Date(now).toISOString(),
+          status: 'dissolved',
+          read_only: true
+        });
+        roomEntries.push({
+          room_id: 'ghost-archived-room',
+          kind: 'direct',
+          name: '残留归档 Agent',
+          head_seq: 1,
+          my_last_read_seq: 0,
+          last_message: null,
+          updated_at: now + 3000,
+          peer_kind: 'agent',
+          peer_actor_id: 'ghost-archived-actor',
+          peer_loaded: true,
+          peer_archived: true
+        });
+        renderRooms();
+      })()`);
+      checkEqual(
+        '旧缓存解散群不渲染',
+        await page.locator(roomLink('ghost-dissolved-room')).count(),
+        0,
+      );
+      await page.locator('#room-filter-agent').click();
+      checkEqual(
+        '旧缓存归档会话不渲染',
+        await page.locator(roomLink('ghost-archived-room')).count(),
+        0,
+      );
+      await page.evaluate(`loadRooms()`);
+      await page.waitForFunction(
+        `!roomEntries.some(function (entry) { return entry.room_id === 'ghost-dissolved-room'; })`,
+      );
+      checkEqual(
+        '服务端刷新移除本地残留解散群',
+        await page.locator(roomLink('ghost-dissolved-room')).count(),
+        0,
+      );
+
+      // 显式 URL 访问解散群仍可打开只读归档；回首页后不在默认列表。
+      await page.unroute('**/mcp');
+      await page.goto(`${server.base}/c/${dissolvedId}`);
+      await waitRoom(page, dissolvedId, '列表过滤解散群');
+      checkEqual(
+        '显式访问解散群显示只读横幅',
+        await page.locator('#room-archive-banner').isVisible(),
+        true,
+      );
+      checkEqual('显式访问解散群隐藏输入框', await page.locator('#composer').isHidden(), true);
+      await page.goto(`${server.base}/`);
+      await page.locator('#room-list .room-item').first().waitFor();
+      checkEqual(
+        '回到首页后解散群不在默认列表',
+        await page.locator(roomLink(dissolvedId)).count(),
+        0,
+      );
+      await context.close();
+    }
+
     // 2b-8. G06 第二设备实时收到解散：不 reload 即只读，且保留草稿。
     {
       const liveMemberToken = newToken();

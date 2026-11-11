@@ -1149,7 +1149,7 @@ export function registerTools(
   register(
     server,
     'network_rooms_list',
-    '分页读取自己参与的活跃房间摘要、head 与已读位置。',
+    '分页读取自己参与的活跃房间摘要、head 与已读位置。已解散群默认不返回；仍可用 network_room_get 读取只读归档。direct 会话额外返回 peer_archived 供网页默认列表隐藏已归档 Agent，不影响房间、消息或详情读取。',
     roomsListSchema,
     roomPageSchema,
     async (input) => {

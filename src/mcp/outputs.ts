@@ -505,7 +505,12 @@ export const contactPageSchema = z.object({
 });
 
 export const roomPageSchema = z.object({
-  items: z.array(roomSchema),
+  items: z.array(
+    roomSchema.extend({
+      /** 仅 rooms_list 返回：direct 对端 Agent 已归档；列表默认隐藏但保留详情。 */
+      peer_archived: z.boolean().optional(),
+    }),
+  ),
   next_cursor: z.string().nullable(),
   has_more: z.boolean(),
 });

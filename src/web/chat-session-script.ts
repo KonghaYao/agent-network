@@ -341,6 +341,11 @@ function applyRoomDetail(detail) {
     entry.peer_online = summary.peer_online;
     entry.peer_actor_id = summary.peer_actor_id;
     entry.head_seq = detail.room.head_seq;
+    // 深链时列表可能先补了一个 direct 占位条目，详情到达后必须纠正类型，
+    // 否则解散群会一直落在好友分类并隐藏“退出群聊”。
+    entry.kind = detail.room.kind;
+    entry.status = detail.room.status || entry.status;
+    entry.dissolved_at = detail.room.dissolved_at || entry.dissolved_at || null;
     entry.read_only = Boolean(detail.room.read_only);
     entry.can_leave = Boolean(detail.room.can_leave);
     entry.can_dissolve = Boolean(detail.room.can_dissolve);
@@ -756,6 +761,8 @@ function ensureRoomEntry(detail) {
       peer_online: summary.peer_online,
       peer_actor_id: summary.peer_actor_id,
       peer_loaded: true,
+      status: detailRoom.status || 'active',
+      dissolved_at: detailRoom.dissolved_at || null,
       read_only: Boolean(detailRoom.read_only),
       can_leave: Boolean(detailRoom.can_leave),
       can_dissolve: Boolean(detailRoom.can_dissolve)

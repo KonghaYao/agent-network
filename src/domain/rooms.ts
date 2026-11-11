@@ -143,6 +143,13 @@ export interface RoomView {
   can_dissolve: boolean;
   created_at: string;
   updated_at: string;
+  /**
+   * direct 会话的对端 Agent 是否已归档；仅 `rooms_list` 返回。
+   *
+   * 列表默认不展示已归档 Agent 的会话，但保留 direct 房间、消息与
+   * `room_get` 读取能力，供网页已归档入口恢复。群聊不设置该字段。
+   */
+  peer_archived?: boolean;
 }
 
 export interface MemberView {
@@ -268,11 +275,12 @@ function roomView(
   memberCount: number,
   lastMessage: MessageRow | null,
   boundary: HistoryBoundary,
+  peerArchived?: boolean,
 ): RoomView {
   const lastVisible = lastMessage && visibleMessage(lastMessage, boundary) ? lastMessage : null;
   const dissolved = room.kind === 'group' && room.dissolved_at !== null;
   const ownerMissing = isOwnerMissing(room);
-  return {
+  const view: RoomView = {
     room_id: room.room_id,
     kind: room.kind,
     owner_id: room.owner_id,
@@ -309,6 +317,8 @@ function roomView(
     created_at: String(room.created_at),
     updated_at: String(room.updated_at),
   };
+  if (peerArchived !== undefined) view.peer_archived = peerArchived;
+  return view;
 }
 
 async function memberCount(db: D1Database, roomId: string): Promise<number> {
@@ -380,6 +390,7 @@ interface RoomListRow extends RoomRow {
   lm_body_bytes: number | null;
   lm_created_seq: number | null;
   lm_created_at: number | null;
+  peer_archived: number;
 }
 
 export async function roomsList(
@@ -403,11 +414,21 @@ export async function roomsList(
               m.joined_at AS my_joined_at, m.member_generation AS my_member_generation,
               (SELECT COUNT(*) FROM room_members mm WHERE mm.room_id = r.room_id AND mm.status = 'active') AS member_count,
               lm.message_id AS lm_message_id, lm.sender_id AS lm_sender_id, lm.preview AS lm_preview,
-              lm.body_bytes AS lm_body_bytes, lm.created_seq AS lm_created_seq, lm.created_at AS lm_created_at
+              lm.body_bytes AS lm_body_bytes, lm.created_seq AS lm_created_seq, lm.created_at AS lm_created_at,
+              (r.kind = 'direct' AND EXISTS (
+                SELECT 1
+                  FROM room_members pm
+                  JOIN actors pa ON pa.actor_id = pm.actor_id
+                 WHERE pm.room_id = r.room_id
+                   AND pm.status = 'active'
+                   AND pm.actor_id <> m.actor_id
+                   AND pa.kind = 'agent'
+                   AND pa.archived_at IS NOT NULL
+              )) AS peer_archived
          FROM room_members m
          JOIN rooms r ON r.room_id = m.room_id
          LEFT JOIN messages lm ON lm.message_id = r.last_message_id
-        WHERE m.actor_id = ? AND m.status = 'active' ${keyset}
+        WHERE m.actor_id = ? AND m.status = 'active' AND r.dissolved_at IS NULL ${keyset}
         ORDER BY r.updated_at DESC, r.room_id DESC
         LIMIT ?`,
     )
@@ -452,6 +473,7 @@ export async function roomsList(
           }
         : null,
       historyBoundary(row, member),
+      Boolean(row.peer_archived),
     );
   });
 

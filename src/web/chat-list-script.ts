@@ -72,7 +72,7 @@ function updateRoomFilterTabs() {
     button.tabIndex = selected ? 0 : -1;
     const kind = button.dataset.roomFilter;
     const count = roomEntries.filter(function (entry) {
-      return entry.kind === kind && !isArchivedAgentRoom(entry) && unreadAttention(entry);
+      return entry.kind === kind && !isDissolvedRoom(entry) && !isArchivedAgentRoom(entry) && unreadAttention(entry);
     }).length;
     const announcement = ensureRoomFilterAnnouncement(kind);
     if (announcement) {
@@ -125,9 +125,19 @@ function syncRoomFilterForRoom(roomId) {
   if (target && target !== roomFilter) setRoomFilter(target, { render: false });
 }
 
+/** 解散群进入只读归档，不属于默认会话列表；仅显式打开时保留当前入口。 */
+function isDissolvedRoom(entry) {
+  return Boolean(
+    entry &&
+    (entry.dissolved_at || entry.status === 'dissolved' || entry.read_only === true)
+  );
+}
+
 /** direct 分类：Agent 与好友互斥；active 房间始终保留，避免 peer 后补全时消失。 */
 function roomMatchesFilter(entry) {
   if (isArchivedAgentRoom(entry)) return false;
+  // 显式打开解散群时保留侧栏入口（便于退群/查看归档）；其他旧条目一律隐藏。
+  if (isDissolvedRoom(entry) && entry.room_id !== activeRoomId) return false;
   if (roomFilter === 'group') return entry.kind === 'group';
   if (entry.kind !== 'direct') return false;
   if (entry.room_id === activeRoomId) return true;
@@ -295,6 +305,8 @@ function roomSummaryFromList(entry, me) {
     updated_at: entry.updated_at,
     read_only: Boolean(entry.read_only),
     dissolved_at: entry.dissolved_at || null,
+    status: entry.status || null,
+    peer_archived: entry.peer_archived === true,
     can_leave: Boolean(entry.can_leave),
     can_dissolve: Boolean(entry.can_dissolve),
     peer_kind: cached ? cached.peer_kind : null,
@@ -311,13 +323,15 @@ function roomSummaryFromList(entry, me) {
  * 本地已读位置取较大值，避免较旧的响应把已读房间重新点亮；新房间由
  * sortRooms 插入正确位置。
  */
-function mergeRoomSummaries(summaries, removed) {
+function mergeRoomSummaries(summaries, removed, options) {
+  const settings = options || {};
   const existingById = new Map();
   for (const entry of roomEntries) existingById.set(entry.room_id, entry);
   const incomingIds = new Set();
   const merged = [];
   for (const summary of summaries) {
     if (removed && removed.has(summary.room_id)) continue;
+    if (isDissolvedRoom(summary) && summary.room_id !== activeRoomId) continue;
     if (incomingIds.has(summary.room_id)) continue;
     incomingIds.add(summary.room_id);
     const existing = existingById.get(summary.room_id);
@@ -341,9 +355,21 @@ function mergeRoomSummaries(summaries, removed) {
     }));
   }
   for (const entry of roomEntries) {
-    if (!incomingIds.has(entry.room_id)) merged.push(entry);
+    if (incomingIds.has(entry.room_id)) continue;
+    // 服务端已确认没有更多房间时，未命中的旧条目是已退出/已删除的残留；
+    // 有下一页时保留，避免后台刷新把用户翻过的旧页丢回 50 条。
+    if (settings.dropMissing === true) continue;
+    merged.push(entry);
   }
   return merged;
+}
+
+/** 已解散群不属于默认列表；只保留显式打开的当前会话，返回首页后自然消失。 */
+function pruneDissolvedRoomEntries() {
+  const kept = roomEntries.filter(function (entry) {
+    return !isDissolvedRoom(entry) || entry.room_id === activeRoomId;
+  });
+  if (kept.length !== roomEntries.length) roomEntries = kept;
 }
 
 /**
@@ -372,6 +398,7 @@ async function loadMoreRooms() {
         return roomSummaryFromList(entry, me);
       });
       roomEntries = sortRooms(mergeRoomSummaries(summaries, removed));
+      pruneDissolvedRoomEntries();
       const nextCursor = page.has_more && page.next_cursor ? page.next_cursor : null;
       if (nextCursor === cursor) {
         roomsNextCursor = null;
@@ -578,7 +605,7 @@ function renderRooms() {
   }) : visibleEntries;
   const entries = sortRooms(filteredEntries);
   const unarchivedEntries = roomEntries.filter(function (entry) {
-    return !isArchivedAgentRoom(entry);
+    return !isArchivedAgentRoom(entry) && !isDissolvedRoom(entry);
   });
   const scroller = roomListElement.parentElement;
   const previousScroll = scroller ? scroller.scrollTop : 0;
@@ -634,6 +661,9 @@ function updateRoomEntry(roomValue, lastItem, readSucceeded) {
     entry.updated_at = roomValue.updated_at;
     if (lastItem) entry.last_message = lastItem;
   }
+  if (roomValue.status) entry.status = roomValue.status;
+  if (roomValue.dissolved_at) entry.dissolved_at = roomValue.dissolved_at;
+  entry.read_only = Boolean(roomValue.read_only);
   const readThrough = readSucceeded ? roomValue.head_seq : roomValue.my_last_read_seq;
   if (Number(readThrough) > Number(entry.my_last_read_seq)) {
     entry.my_last_read_seq = readThrough;
@@ -676,6 +706,7 @@ function mergeActiveRoom(summaries) {
     updated_at: detail.room.updated_at || Date.now(),
     read_only: Boolean(detail.room.read_only),
     dissolved_at: detail.room.dissolved_at || null,
+    status: detail.room.status || (detail.room.read_only ? 'dissolved' : 'active'),
     can_leave: Boolean(detail.room.can_leave),
     can_dissolve: Boolean(detail.room.can_dissolve),
     peer_kind: summary.peer_kind,
@@ -762,8 +793,13 @@ async function loadRooms(options) {
       const summaries = page.items.map(function (entry) {
         return roomSummaryFromList(entry, me);
       });
-      // 后台刷新只更新/合并已加载房间，不把用户翻过的旧页丢回 50 条。
-      roomEntries = sortRooms(mergeActiveRoom(mergeRoomSummaries(summaries, removed)));
+      // 后台刷新只更新/合并已加载房间；服务端明确没有下一页时，删除已不在
+      // 列表中的残留（退群/解散/被移除），有下一页时保留用户翻过的旧页。
+      const dropMissing = !(page.has_more && page.next_cursor);
+      roomEntries = sortRooms(
+        mergeActiveRoom(mergeRoomSummaries(summaries, removed, { dropMissing: dropMissing })),
+      );
+      pruneDissolvedRoomEntries();
       if (!roomsLoadMoreAttempted) {
         roomsNextCursor = page.has_more && page.next_cursor ? page.next_cursor : null;
         roomsHasMore = Boolean(roomsNextCursor);

@@ -28,11 +28,18 @@ function archiveErrorText(error) {
   return error && error.message ? error.message : String(error);
 }
 
-/** direct Agent 会话的对方已归档时隐藏；群聊与人类会话不受影响。 */
+/**
+ * direct Agent 会话的对方已归档时隐藏；群聊与人类会话不受影响。
+ *
+ * 列表摘要携带 peer_archived，首屏即可隐藏，不必等 direct 详情和
+ * network_agents_get 返回；详情补全后以服务端归档集合为准，避免恢复
+ * 或他端取消归档后仍被旧摘要挡住。
+ */
 function isArchivedAgentRoom(entry) {
+  if (!entry || entry.kind !== 'direct') return false;
+  // 列表摘要先于 direct 详情到达；此时用服务端 peer_archived 直接隐藏。
+  if (entry.peer_archived === true) return true;
   return Boolean(
-    entry &&
-    entry.kind === 'direct' &&
     entry.peer_kind === 'agent' &&
     entry.peer_actor_id &&
     archivedAgentIds.has(entry.peer_actor_id)
@@ -219,6 +226,12 @@ async function refreshArchivedAgentState(force) {
     }
     archivedAgentIds = archived;
     archivedAgentSummaries = summaries;
+    // 详情补全后以归档查询结果修正列表摘要，恢复后不会继续被旧标记隐藏。
+    for (const entry of roomEntries) {
+      if (entry.kind === 'direct' && entry.peer_kind === 'agent' && entry.peer_actor_id) {
+        entry.peer_archived = archived.has(entry.peer_actor_id);
+      }
+    }
     archivedLookupKey = key;
     archivedLookupAt = Date.now();
     archivedLookupError = '';
@@ -239,7 +252,9 @@ function markAgentArchived(actorId, result) {
   if (!actorId) return;
   let name = 'Agent';
   for (const entry of roomEntries) {
-    if (entry.peer_actor_id === actorId && entry.name) {
+    if (entry.peer_actor_id !== actorId) continue;
+    entry.peer_archived = true;
+    if (entry.name) {
       name = entry.name;
       break;
     }
@@ -300,6 +315,11 @@ async function restoreArchivedAgent(actorId) {
     archivedAgentSummaries.delete(actorId);
     archivedLookupKey = '';
     archivedLookupAt = Date.now();
+    for (const entry of roomEntries) {
+      if (entry.kind === 'direct' && entry.peer_actor_id === actorId) {
+        entry.peer_archived = false;
+      }
+    }
     archivedActionError = '';
     renderRooms();
     showToast('已恢复「' + name + '」');

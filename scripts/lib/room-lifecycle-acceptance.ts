@@ -456,6 +456,14 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
 
     const headBeforeDissolve = (await readRoom(u1Conn, room3)).room.head_seq;
 
+    const beforeDissolveRooms = await callTool<{
+      items: { room_id: string; status: string }[];
+    }>(u1Conn.client, 'network_rooms_list', { limit: 100 });
+    check(
+      'G06-T03 解散前 rooms_list 包含群',
+      beforeDissolveRooms.items.some((item) => item.room_id === room3),
+    );
+
     const dissolve = await callTool<RoomView & { dissolve: DissolveSummary }>(
       u1Conn.client,
       'network_room_dissolve',
@@ -481,6 +489,20 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
     checkEqual('G06-T03 归档能力全部关闭', u2Room.room.capabilities.send_message, false);
     checkEqual('G06-T03 归档 read_only', u2Room.room.read_only, true);
     checkEqual('G06-T03 归档成员可退出', u2Room.room.can_leave, true);
+    const ownerRoomsAfterDissolve = await callTool<{
+      items: { room_id: string }[];
+    }>(u1Conn.client, 'network_rooms_list', { limit: 100 });
+    check(
+      'G06-T03 owner 的 rooms_list 默认排除解散群',
+      !ownerRoomsAfterDissolve.items.some((item) => item.room_id === room3),
+    );
+    const memberRoomsAfterDissolve = await callTool<{
+      items: { room_id: string }[];
+    }>(u2Conn.client, 'network_rooms_list', { limit: 100 });
+    check(
+      'G06-T03 成员的 rooms_list 默认排除解散群',
+      !memberRoomsAfterDissolve.items.some((item) => item.room_id === room3),
+    );
     const b2Snapshot = await readResourceJson<{
       rooms: {
         room_id: string;
