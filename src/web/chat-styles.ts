@@ -647,7 +647,6 @@ ${GROUP_STYLE}
   .contact-search-status[data-success="1"] { color: var(--wx-green); font-weight: 600; }
   .contact-search-results { list-style: none; margin: 0; padding: 0; display: flex;
     flex-direction: column; gap: 6px; max-height: min(32vh, 280px); overflow: auto; }
-  .contact-search-empty { padding: 2px 0; color: var(--wx-muted); font-size: 12px; }
   .contact-search-item { display: flex; align-items: center; justify-content: space-between;
     gap: 10px; padding: 8px 10px; border: 1px solid var(--wx-line); border-radius: 8px; }
   .contact-search-main { display: grid; gap: 3px; min-width: 0; }

@@ -142,13 +142,6 @@ function renderContactSearchResults(items) {
   if (!contactSearchResults) return;
   contactSearchResults.replaceChildren();
   const matches = Array.isArray(items) ? items : [];
-  if (matches.length === 0) {
-    const empty = document.createElement('li');
-    empty.className = 'contact-search-empty';
-    empty.textContent = '没有找到匹配的用户。';
-    contactSearchResults.append(empty);
-    return;
-  }
   for (const item of matches) {
     if (!item || !item.actor) continue;
     const row = document.createElement('li');
