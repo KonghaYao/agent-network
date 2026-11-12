@@ -20,9 +20,12 @@ const ROOM_MENU_COPYING_LABEL = '正在准备…';
 const ROOM_MENU_COPIED_LABEL = '已复制';
 const ROOM_MENU_COPIED_WITH_CREDENTIALS = '已复制（含凭据，勿转发）';
 const ROOM_MENU_COPIED_WITHOUT_CREDENTIALS = '已复制（未包含凭据）';
-const ROOM_MENU_REISSUE_LABEL = '重置链接并复制';
+const ROOM_MENU_REISSUE_LABEL = '重置链接';
 const ROOM_MENU_REISSUING_LABEL = '正在重置…';
 const ROOM_MENU_REISSUED_LABEL = '已重置';
+const ROOM_MENU_REISSUE_COPY_LABEL = '复制提示词';
+const ROOM_MENU_REISSUE_COPYING_LABEL = '正在复制…';
+const ROOM_MENU_REISSUE_COPIED_LABEL = '已复制';
 const ROOM_MENU_ARCHIVE_LABEL = '归档';
 const ROOM_MENU_ARCHIVING_LABEL = '正在归档…';
 const ROOM_MENU_ARCHIVED_STATUS = '已归档，可在已归档 Agents 中恢复';
@@ -41,9 +44,15 @@ const ROOM_MENU_REISSUE_PERMISSION_DENIED =
   '只有该 Agent 的管理者或受托人可以重置。请让当前管理者操作，或让 Agent 发起认领后由你确认；' +
   '若管理权已交接，请让新管理者重置。';
 const ROOM_MENU_REISSUE_CONFIRM =
-  '这会注销该 Agent 的旧 token，并立即复制包含新 token 的接入提示词；' +
-  '现有 MCP/SSE/事件连接会失效，新 token 只显示一次。';
-const ROOM_MENU_REISSUED_STATUS = '已重置并复制新提示词；旧连接需改用新 token。';
+  '这会注销该 Agent 的旧 token 并生成新 token；旧 token 立即失效，' +
+  '现有 MCP/SSE/事件连接会失效。重置后不会自动复制，请在新提示词出现后点击「复制提示词」。';
+const ROOM_MENU_REISSUED_STATUS =
+  '已重置：新 token 已生成，旧 token 已失效。请点击「复制提示词」。';
+const ROOM_MENU_REISSUE_PROMPT_HINT =
+  '新 token 已生成，旧 token 已失效。只复制下面的提示词，不会再次更换 token。';
+const ROOM_MENU_REISSUE_COPY_OK =
+  '已复制新提示词；凭据只给目标 Agent，勿发群、日志或截图。';
+const ROOM_MENU_REISSUE_PROMPT_MISSING = '没有可复制的提示词；请先点「重置链接」。';
 const ROOM_MENU_REISSUE_CANCELLED = '已取消重置链接。';
 const ROOM_MENU_MISSING_CREDENTIALS =
   '本浏览器没有保存该 Agent 的 token/MCP URL；请让用户提供，或让用户新建 Agent 并把提示词给你。';
@@ -59,11 +68,15 @@ document.getElementById('room-menu-pin').addEventListener('click', function () {
 document.getElementById('room-menu-mute').addEventListener('click', function () { toggleRoomPreference('muted'); });
 let roomMenuTarget = null;
 let roomMenuAnchor = null;
+let roomMenuPoint = null;
 let roomMenuOpenSeq = 0;
 let roomMenuPressTimer = null;
 let roomMenuPressPoint = null;
 let roomMenuSuppressClickUntil = 0;
 let roomMenuBusy = false;
+// 最近一次成功重置的新提示词只保存在页面内存与本浏览器注册表；关闭菜单时
+// 清空 textarea，重新打开同一会话仍可再次复制，不需要再次轮换 token。
+let roomMenuReissued = null;
 
 function roomMenuNode() {
   return document.getElementById('room-menu');
@@ -105,6 +118,138 @@ function roomMenuResetStatus() {
   roomMenuResetStopped();
 }
 
+function roomMenuSetReissueStatus(message, isError) {
+  const status = document.getElementById('room-menu-status');
+  if (!status) return;
+  status.textContent = message;
+  status.hidden = false;
+  status.classList.toggle('error', Boolean(isError));
+  status.classList.toggle('ok', !isError);
+}
+
+function roomMenuResetReissuePrompt() {
+  const panel = document.getElementById('room-menu-reissue');
+  if (panel) panel.hidden = true;
+  const input = document.getElementById('room-menu-reissue-text');
+  if (input) input.value = '';
+  const hint = document.getElementById('room-menu-reissue-hint');
+  if (hint) hint.textContent = ROOM_MENU_REISSUE_PROMPT_HINT;
+  const button = document.getElementById('room-menu-reissue-copy-prompt');
+  if (button) {
+    button.disabled = false;
+    button.textContent = ROOM_MENU_REISSUE_COPY_LABEL;
+  }
+}
+
+function roomMenuShowReissuePrompt(prompt, hint) {
+  const panel = document.getElementById('room-menu-reissue');
+  const input = document.getElementById('room-menu-reissue-text');
+  if (!panel || !input) return;
+  input.value = prompt;
+  panel.hidden = false;
+  const hintNode = document.getElementById('room-menu-reissue-hint');
+  if (hintNode) hintNode.textContent = hint || ROOM_MENU_REISSUE_PROMPT_HINT;
+  const button = document.getElementById('room-menu-reissue-copy-prompt');
+  if (button) {
+    button.disabled = false;
+    button.textContent = ROOM_MENU_REISSUE_COPY_LABEL;
+  }
+}
+
+/** 打开菜单时按房间恢复上次重置的提示词；其他房间不显示。 */
+function roomMenuRestoreReissuePrompt(roomId) {
+  if (roomMenuReissued && roomMenuReissued.roomId === roomId) {
+    roomMenuShowReissuePrompt(roomMenuReissued.prompt);
+    roomMenuSetReissueStatus(ROOM_MENU_REISSUED_STATUS, false);
+    return;
+  }
+  roomMenuResetReissuePrompt();
+}
+
+/** 复制失败时选中可见的提示词，让用户可以直接 Ctrl/Cmd+C。 */
+function roomMenuSelectReissuePrompt() {
+  const input = document.getElementById('room-menu-reissue-text');
+  if (!input || !input.value) return false;
+  try {
+    input.focus();
+    input.select();
+    input.setSelectionRange(0, input.value.length);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function roomMenuReissueCopySucceeded(button) {
+  if (button) {
+    button.disabled = false;
+    button.textContent = ROOM_MENU_REISSUE_COPIED_LABEL;
+  }
+  roomMenuSetReissueStatus(ROOM_MENU_REISSUE_COPY_OK, false);
+}
+
+function roomMenuReissueCopyFailed(button, error) {
+  const detail = error && error.message ? error.message : '浏览器拒绝了复制操作';
+  const selected = roomMenuSelectReissuePrompt();
+  if (button) {
+    button.disabled = false;
+    button.textContent = ROOM_MENU_REISSUE_COPY_LABEL;
+  }
+  roomMenuSetReissueStatus(
+    '复制失败：' + detail +
+      (selected
+        ? '；已自动选中提示词，请按 Ctrl+C（Windows/Linux）或 Command+C（macOS）手动复制。'
+        : '；请点击提示词文本框后全选复制。') +
+      'token 不会再次更换。',
+    true
+  );
+}
+
+/**
+ * 复制重置后的提示词。
+ *
+ * 首选临时 textarea + execCommand 的同步路径，确保仍在点击手势内；失败后才
+ * 尝试 modern clipboard（同样在当前手势内发起）。两者都失败时选中文本并
+ * 提示手动复制，不再轮换 token。
+ */
+function roomMenuCopyReissuedPrompt() {
+  const prompt = roomMenuReissued && roomMenuTarget &&
+    roomMenuReissued.roomId === roomMenuTarget.roomId
+    ? roomMenuReissued.prompt
+    : '';
+  const button = document.getElementById('room-menu-reissue-copy-prompt');
+  if (!prompt) {
+    roomMenuSetReissueStatus(ROOM_MENU_REISSUE_PROMPT_MISSING, true);
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = ROOM_MENU_REISSUE_COPYING_LABEL;
+  }
+  let copyError = null;
+  try {
+    legacyCopyText(prompt);
+    roomMenuReissueCopySucceeded(button);
+    return;
+  } catch (error) {
+    copyError = error;
+  }
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    try {
+      const pending = navigator.clipboard.writeText(prompt);
+      pending.then(function () {
+        roomMenuReissueCopySucceeded(button);
+      }, function (error) {
+        roomMenuReissueCopyFailed(button, error || copyError);
+      });
+      return;
+    } catch (error) {
+      copyError = error;
+    }
+  }
+  roomMenuReissueCopyFailed(button, copyError);
+}
+
 function closeRoomMenu() {
   roomMenuOpenSeq += 1;
   const menu = roomMenuNode();
@@ -117,6 +262,7 @@ function closeRoomMenu() {
   menu.hidden = true;
   roomMenuTarget = null;
   roomMenuAnchor = null;
+  roomMenuPoint = null;
   roomMenuBusy = false;
   const button = document.getElementById('room-menu-copy-prompt');
   if (button) {
@@ -143,6 +289,7 @@ function closeRoomMenu() {
     transferButton.textContent = ROOM_MENU_TRANSFER_LABEL;
     transferButton.disabled = false;
   }
+  roomMenuResetReissuePrompt();
   roomMenuResetStatus();
 }
 
@@ -266,8 +413,8 @@ function applyRoomMenuManagement(target, management) {
   );
   const copyButton = document.getElementById('room-menu-copy-prompt');
   if (copyButton) {
-    // 管理者使用合并后的「重置链接并复制」；非管理者与读取失败时保留
-    // 只复制提示词的回退入口，群聊/人类会话也继续显示该入口。
+    // 管理者使用「重置链接」并配合菜单内的独立复制按钮；非管理者与读取失败时
+    // 保留只复制提示词的回退入口，群聊/人类会话也继续显示该入口。
     copyButton.hidden = isAgentDirect && canManage;
   }
   const reissueButton = document.getElementById('room-menu-reissue-token');
@@ -380,6 +527,7 @@ async function openRoomMenu(link, x, y) {
   const menu = roomMenuNode();
   const button = document.getElementById('room-menu-copy-prompt');
   if (!menu || !button) return;
+  roomMenuPoint = { x: x, y: y };
   roomMenuTarget = {
     roomId: roomId,
     roomName: roomName,
@@ -424,6 +572,7 @@ async function openRoomMenu(link, x, y) {
     isAgentDirect ? roomMenuInitialManagement(entry, peerActorId) : null
   );
   roomMenuResetStatus();
+  roomMenuRestoreReissuePrompt(roomId);
   // 删除/拉黑/举报/退群入口由 chat-safety-script 维护；这里只传当前会话目标。
   if (typeof prepareRoomMenuSafety === 'function') prepareRoomMenuSafety(roomMenuTarget);
   positionRoomMenu(menu, x, y);
@@ -621,8 +770,9 @@ async function copyRoomAgentPrompt() {
 /**
  * 重置当前 direct Agent 的链接：注销旧 token 并签发新 token。
  *
- * token 只在本次响应返回，不进入菜单、页面文本或 console；成功后先写入本地
- * Agents 注册表，再立即复制包含新 token 与 agentnet CLI 接入步骤的提示词。
+ * token 只在本响应、页面内存与本浏览器注册表中；成功后把新提示词放进菜单
+ * 的只读文本框，由用户独立点击「复制提示词」。重置本身不碰剪贴板，避免
+ * 网络等待耗尽用户手势后复制失败，也避免失败提示引导用户再次轮换 token。
  */
 async function reissueRoomAgentToken() {
   const target = roomMenuTarget;
@@ -667,7 +817,7 @@ async function reissueRoomAgentToken() {
       'Agent',
       ROOM_MENU_AGENT_NAME_MAX
     );
-    // 先持久化新 URL，再复制；即使复制失败也能从注册表重新生成提示词。
+    // 先持久化新 URL，再展示提示词；复制由用户单独触发，重置只调用一次工具。
     const registryError = agentRegistryReissue(me.actor_id, peer.actor_id, credential.mcpUrl, {
       name: name,
       agent_session_id: local.item ? local.item.agent_session_id : null,
@@ -679,8 +829,11 @@ async function reissueRoomAgentToken() {
       name: name,
       actorId: result.actor_id
     });
-    await roomMenuWriteClipboard(prompt);
+    roomMenuReissued = { roomId: target.roomId, prompt: prompt };
     if (roomMenuTarget !== target) return;
+    roomMenuShowReissuePrompt(prompt);
+    const menu = roomMenuNode();
+    if (menu && roomMenuPoint) positionRoomMenu(menu, roomMenuPoint.x, roomMenuPoint.y);
     if (status) {
       status.textContent = registryError
         ? ROOM_MENU_REISSUED_STATUS + '本地 Agent 列表保存失败：' + registryError
@@ -698,12 +851,17 @@ async function reissueRoomAgentToken() {
       : (error && error.message ? error.message : String(error));
     if (status) {
       status.textContent = tokenIssued
-        ? '新 token 已签发，但复制提示词失败：' + detail +
-          '；请重新点击「重置链接并复制」获取新提示词。'
+        ? '新 token 已签发，但提示词生成失败：' + detail +
+          '；旧 token 已失效。请关闭菜单后重新打开该会话；如仍无提示词，请联系管理员。'
         : '重置失败：' + detail;
       status.hidden = false;
       status.classList.remove('ok');
       status.classList.add('error');
+    }
+    if (tokenIssued) {
+      // 旧提示词里的 token 已失效，必须移除，避免用户继续复制过期凭据。
+      roomMenuReissued = null;
+      roomMenuResetReissuePrompt();
     }
     if (button) button.textContent = tokenIssued ? ROOM_MENU_REISSUED_LABEL : ROOM_MENU_REISSUE_LABEL;
   } finally {
@@ -922,6 +1080,13 @@ if (roomMenuReissueButton) {
     reissueRoomAgentToken().catch(function () {});
   });
 }
+const roomMenuReissueCopyButton = document.getElementById('room-menu-reissue-copy-prompt');
+if (roomMenuReissueCopyButton) {
+  roomMenuReissueCopyButton.addEventListener('click', function () {
+    // 同步进入 execCommand 路径，保留用户手势；不会调用重置工具。
+    roomMenuCopyReissuedPrompt();
+  });
+}
 const roomMenuArchiveButton = document.getElementById('room-menu-archive');
 if (roomMenuArchiveButton) {
   roomMenuArchiveButton.addEventListener('click', function () {
@@ -959,7 +1124,10 @@ document.addEventListener('keydown', function (event) {
 });
 
 // 滚动（含侧栏内部滚动）与窗口尺寸变化都会让菜单失去定位参照，直接关闭。
-document.addEventListener('scroll', function () {
+// 菜单内部 textarea 的滚动与选择不应关闭菜单，否则用户无法手动全选复制。
+document.addEventListener('scroll', function (event) {
+  const menu = roomMenuNode();
+  if (menu && !menu.hidden && event.target instanceof Node && menu.contains(event.target)) return;
   clearRoomMenuPress();
   closeRoomMenu();
 }, true);

@@ -123,10 +123,24 @@ export const APP_STYLE = `
   /* 会话右键/长按菜单：固定定位，靠近指针并限制在视口内。 */
   /* 固定宽度：短提示与操作项保持紧凑，避免菜单撑满整屏挡住聊天区。 */
   .room-menu { position: fixed; z-index: 26; width: 260px;
-    max-width: calc(100vw - 16px); box-sizing: border-box; padding: 6px;
+    max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto;
+    box-sizing: border-box; padding: 6px;
     border-radius: 8px; background: var(--wx-panel); border: 1px solid var(--wx-line);
     box-shadow: var(--wx-shadow); }
   .room-menu[hidden] { display: none; }
+  /* 重置后的新提示词：只读文本区 + 独立复制按钮；复制失败可直接手动全选。 */
+  .room-menu-reissue { margin: 4px 6px 2px; padding-top: 6px;
+    border-top: 1px solid var(--wx-line); }
+  .room-menu-reissue[hidden] { display: none; }
+  .room-menu-reissue-hint { margin: 0 0 6px; font-size: 12px; line-height: 1.45;
+    color: var(--wx-muted); }
+  .room-menu-reissue-text { display: block; width: 100%; box-sizing: border-box;
+    min-height: 96px; max-height: 180px; resize: vertical; padding: 6px;
+    border: 1px solid var(--wx-line); border-radius: 4px;
+    background: var(--wx-bg); color: var(--wx-text);
+    font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow-wrap: anywhere; }
+  .room-menu-reissue-copy { margin-top: 4px; }
   /* 管理动作与安全动作之间用分隔线分组；危险项保持在末尾。 */
   .room-menu-sep { height: 1px; margin: 4px 6px; background: var(--wx-line); }
   .room-menu-sep[hidden] { display: none; }

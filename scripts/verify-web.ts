@@ -5605,9 +5605,9 @@ async function main(): Promise<void> {
       // peer 缺失时菜单先按复制项显示，后台 room_get + 管理视图返回后更新。
       await page.locator('#room-menu-reissue-token').waitFor({ state: 'visible' });
       checkEqual(
-        'direct Agent 菜单项为重置链接并复制',
+        'direct Agent 菜单项为重置链接',
         (await page.locator('#room-menu-reissue-token').textContent())?.trim(),
-        '重置链接并复制',
+        '重置链接',
       );
       checkEqual(
         'direct Agent 菜单不再显示旧的复制提示词入口',
@@ -5636,7 +5636,7 @@ async function main(): Promise<void> {
         normalColor: string;
         normalBackground: string;
       };
-      checkEqual('Agent 单聊右键显示重置链接并复制', dangerMenuStyle.visible, true);
+      checkEqual('Agent 单聊右键显示重置链接', dangerMenuStyle.visible, true);
       checkEqual('危险菜单项文字为 danger 红', dangerMenuStyle.color, 'rgb(192, 57, 43)');
       checkEqual('危险菜单项背景透明', dangerMenuStyle.background, 'rgba(0, 0, 0, 0)');
       check(
@@ -5755,8 +5755,8 @@ async function main(): Promise<void> {
 
       const directMenuText = (await page.locator('#room-menu').innerText()) ?? '';
       check(
-        'direct Agent 菜单只显示重置链接并复制',
-        directMenuText.includes('重置链接并复制') &&
+        'direct Agent 菜单只显示重置链接',
+        directMenuText.includes('重置链接') &&
           !directMenuText.includes('注销并重发 token') &&
           !directMenuText.includes('复制 Agent 连接提示词'),
         directMenuText,
@@ -5863,7 +5863,7 @@ async function main(): Promise<void> {
       checkEqual(
         '关闭后菜单项恢复默认文案',
         (await page.locator('#room-menu-reissue-token').textContent())?.trim(),
-        '重置链接并复制',
+        '重置链接',
       );
 
       await directLink.click({ button: 'right' });
@@ -6667,10 +6667,10 @@ async function main(): Promise<void> {
         });
         await page.locator('#room-menu-reissue-token').click();
         await page.waitForFunction(
-          `document.getElementById('room-menu-status').textContent === '已重置并复制新提示词；旧连接需改用新 token。'`,
+          `document.getElementById('room-menu-status').textContent === '已重置：新 token 已生成，旧 token 已失效。请点击「复制提示词」。'`,
         );
-        const prompt = (await page.evaluate('window.__copiedRoomPrompt')) as string | null;
-        if (!prompt) throw new Error('未复制提示词');
+        const prompt = (await page.locator('#room-menu-reissue-text').inputValue()) as string;
+        if (!prompt) throw new Error('未生成提示词');
         return prompt;
       };
       const credentialStatus = '已复制（含凭据，勿转发）';
@@ -8706,9 +8706,9 @@ async function main(): Promise<void> {
         true,
       );
       checkEqual(
-        '退出前右键显示重置链接并复制',
+        '退出前右键显示重置链接',
         (await page.locator('#room-menu-reissue-token').textContent())?.trim(),
-        '重置链接并复制',
+        '重置链接',
       );
       await page.keyboard.press('Escape');
       const registryBeforeReissue = await page.evaluate(
@@ -23002,7 +23002,7 @@ async function main(): Promise<void> {
       await directContext.context.close();
     }
 
-    // 2f. Agent token 注销重发：二次确认、取消、成功自动复制、失败、入口限制、移动端与 DB 不落原文。
+    // 2f. Agent token 注销重发：二次确认、取消、成功展示与独立复制、复制失败降级、入口限制、移动端与 DB 不落原文。
     {
       interface RegistryItem {
         owner_actor_id: string;
@@ -23131,10 +23131,31 @@ async function main(): Promise<void> {
       await seedReissueRegistry(reissueOldUrl);
       await page.evaluate(`(() => {
         window.__copiedRoomPrompt = null;
+        window.__execCommandCalls = 0;
+        window.__clipboardAttempts = 0;
+        window.__copyMode = 'exec-ok';
+        document.execCommand = function (command) {
+          if (command !== 'copy') return false;
+          window.__execCommandCalls += 1;
+          if (window.__copyMode !== 'exec-ok') return false;
+          const active = document.activeElement;
+          const areas = document.querySelectorAll('textarea');
+          const source = active && typeof active.value === 'string'
+            ? active
+            : areas[areas.length - 1];
+          if (source && typeof source.value === 'string') {
+            window.__copiedRoomPrompt = source.value;
+          }
+          return true;
+        };
         Object.defineProperty(navigator, 'clipboard', {
           configurable: true,
           value: {
             writeText: function (text) {
+              window.__clipboardAttempts += 1;
+              if (window.__copyMode === 'clipboard-fail') {
+                return Promise.reject(new Error('模拟复制失败'));
+              }
               window.__copiedRoomPrompt = text;
               return Promise.resolve();
             }
@@ -23153,7 +23174,7 @@ async function main(): Promise<void> {
       await openMenu(reissueLink);
       await page.locator('#room-menu-reissue-token').waitFor({ state: 'visible' });
       check(
-        'direct Agent 会话右键显示重置链接并复制入口',
+        'direct Agent 会话右键显示重置链接入口',
         await page.locator('#room-menu-reissue-token').isVisible(),
       );
       checkEqual(
@@ -23162,9 +23183,9 @@ async function main(): Promise<void> {
         true,
       );
       checkEqual(
-        'direct Agent 菜单只保留重置链接并复制连接动作',
+        'direct Agent 菜单只保留重置链接动作',
         (await page.locator('#room-menu-reissue-token').textContent())?.trim(),
-        '重置链接并复制',
+        '重置链接',
       );
       check(
         '重置入口不展示旧 token',
@@ -23182,10 +23203,10 @@ async function main(): Promise<void> {
         `document.getElementById('room-menu-status').textContent === '已取消重置链接。'`,
       );
       check(
-        '重置二次确认说明旧连接失效且 token 只显示一次',
-        cancelMessage.includes('现有 MCP/SSE/事件连接会失效') &&
-          cancelMessage.includes('立即复制包含新 token 的接入提示词') &&
-          cancelMessage.includes('只显示一次'),
+        '重置二次确认说明旧 token 失效且不会自动复制',
+        cancelMessage.includes('旧 token 立即失效') &&
+          cancelMessage.includes('现有 MCP/SSE/事件连接会失效') &&
+          cancelMessage.includes('不会自动复制'),
         cancelMessage,
       );
       checkEqual(
@@ -23201,9 +23222,26 @@ async function main(): Promise<void> {
       });
       await page.locator('#room-menu-reissue-token').click();
       await page.waitForFunction(
-        `document.getElementById('room-menu-status').textContent === '已重置并复制新提示词；旧连接需改用新 token。'`,
+        `document.getElementById('room-menu-status').textContent === '已重置：新 token 已生成，旧 token 已失效。请点击「复制提示词」。'`,
       );
-      const reissuePrompt = (await page.evaluate('window.__copiedRoomPrompt')) as string | null;
+      checkEqual(
+        '点击重置只调用一次重发工具',
+        (await mcpCallCount(page, 'network_agent_reissue_token')) - reissueCallsBefore,
+        1,
+      );
+      const reissuePrompt = (await page.locator('#room-menu-reissue-text').inputValue()) as string;
+      checkEqual(
+        '重置不再自动复制，等待用户独立点击复制',
+        await page.evaluate('window.__copiedRoomPrompt'),
+        null,
+      );
+      check(
+        '重置后在只读文本框展示新提示词',
+        (await page.locator('#room-menu-reissue').isVisible()) &&
+          reissuePrompt.includes('AGENTNET_TOKEN="') &&
+          reissuePrompt.split('\n').length === 6,
+        reissuePrompt,
+      );
       const registryAfterReissue = await readRegistry();
       const reissueEntry = registryAfterReissue.items.find(
         (item) => item.actor_id === reissueAgent.actor_id,
@@ -23219,37 +23257,157 @@ async function main(): Promise<void> {
         { url: reissuedUrl.replace(/token=[^&]+/u, 'token=<redacted>') },
       );
       check(
-        '重置后自动复制含新凭据的提示词',
+        '重置后展示含新凭据的提示词',
         Boolean(reissuePrompt) &&
-          reissuePrompt!.includes(`AGENTNET_TOKEN="${reissuedToken}"`) &&
-          reissuePrompt!.includes(`actor_id="${reissueAgent.actor_id}"`) &&
-          !reissuePrompt!.includes('room_id=') &&
-          reissuePrompt!.split('\n').length === 6 &&
-          !reissuePrompt!.includes(reissueOldToken),
+          reissuePrompt.includes(`AGENTNET_TOKEN="${reissuedToken}"`) &&
+          reissuePrompt.includes(`actor_id="${reissueAgent.actor_id}"`) &&
+          !reissuePrompt.includes('room_id=') &&
+          reissuePrompt.split('\n').length === 6 &&
+          !reissuePrompt.includes(reissueOldToken),
       );
       check(
         '重置提示词使用短版 CLI 指引且不再出现废弃 shell 脚本',
         Boolean(reissuePrompt) &&
-          reissuePrompt!.includes(`${server.base}/skills/agentnet.js`) &&
-          PROMPT_SHORT_CLI.every((line) => reissuePrompt!.includes(line)) &&
-          DEPRECATED_PROMPT_STEPS.every((step) => !reissuePrompt!.includes(step)) &&
-          DEPRECATED_PROMPT_SCRIPTS.every((name) => !reissuePrompt!.includes(name)),
+          reissuePrompt.includes(`${server.base}/skills/agentnet.js`) &&
+          PROMPT_SHORT_CLI.every((line) => reissuePrompt.includes(line)) &&
+          DEPRECATED_PROMPT_STEPS.every((step) => !reissuePrompt.includes(step)) &&
+          DEPRECATED_PROMPT_SCRIPTS.every((name) => !reissuePrompt.includes(name)),
         reissuePrompt,
       );
       check(
         '重置提示词包含 actor_id、CLI URL、安全提示且不含 room_id',
         Boolean(reissuePrompt) &&
-          !reissuePrompt!.includes('room_id=') &&
-          reissuePrompt!.includes(`actor_id="${reissueAgent.actor_id}"`) &&
-          reissuePrompt!.includes(`${server.base}/skills/agentnet.js`) &&
-          reissuePrompt!.includes('凭据只给目标 Agent，勿发群、日志或截图') &&
-          REMOVED_PROMPT_TEXT.every((text) => !reissuePrompt!.includes(text)),
+          !reissuePrompt.includes('room_id=') &&
+          reissuePrompt.includes(`actor_id="${reissueAgent.actor_id}"`) &&
+          reissuePrompt.includes(`${server.base}/skills/agentnet.js`) &&
+          reissuePrompt.includes('凭据只给目标 Agent，勿发群、日志或截图') &&
+          REMOVED_PROMPT_TEXT.every((text) => !reissuePrompt.includes(text)),
         reissuePrompt,
       );
       check(
-        '重发后菜单与页面文本不展示新 token',
-        !((await page.locator('#room-menu').innerText()) ?? '').includes(reissuedToken) &&
-          !((await page.locator('body').innerText()) ?? '').includes(reissuedToken),
+        '新 token 只在重置后的提示词文本框展示，菜单其余文本不展示',
+        !((await page.locator('#room-menu').textContent()) ?? '').includes(reissuedToken) &&
+          !((await page.locator('body').textContent()) ?? '').includes(reissuedToken),
+      );
+      // 独立复制按钮：优先原始 execCommand 路径，成功且不调用重置工具。
+      const reissueCallsBeforeCopy = await mcpCallCount(page, 'network_agent_reissue_token');
+      await page.locator('#room-menu-reissue-copy-prompt').click();
+      await page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已复制新提示词；凭据只给目标 Agent，勿发群、日志或截图。'`,
+      );
+      checkEqual(
+        '独立复制按钮通过 execCommand 复制重置后的提示词',
+        await page.evaluate('window.__copiedRoomPrompt'),
+        reissuePrompt,
+      );
+      checkEqual(
+        'execCommand 成功路径只尝试一次',
+        await page.evaluate('window.__execCommandCalls'),
+        1,
+      );
+      checkEqual(
+        '点击复制不调用重置工具',
+        await mcpCallCount(page, 'network_agent_reissue_token'),
+        reissueCallsBeforeCopy,
+      );
+
+      // execCommand 失败时在同一手势内降级到 modern clipboard；仍不重置。
+      await page.evaluate(`(() => {
+        window.__copiedRoomPrompt = null;
+        window.__copyMode = 'clipboard-ok';
+      })()`);
+      await page.locator('#room-menu-reissue-copy-prompt').click();
+      await page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已复制新提示词；凭据只给目标 Agent，勿发群、日志或截图。'`,
+      );
+      checkEqual(
+        'execCommand 失败后降级 clipboard 仍复制同一提示词',
+        await page.evaluate('window.__copiedRoomPrompt'),
+        reissuePrompt,
+      );
+
+      // 两条路径都失败：自动选中提示词，提示手动复制，token 不再轮换。
+      await page.evaluate(`(() => {
+        window.__copiedRoomPrompt = null;
+        window.__copyMode = 'clipboard-fail';
+      })()`);
+      await page.locator('#room-menu-reissue-copy-prompt').click();
+      await page.waitForFunction(
+        `(document.getElementById('room-menu-status').textContent || '').includes('手动复制')`,
+      );
+      const copyFailure = (await page.evaluate(`(() => {
+        const input = document.getElementById('room-menu-reissue-text');
+        return {
+          status: document.getElementById('room-menu-status').textContent || '',
+          panelVisible: !document.getElementById('room-menu-reissue').hidden,
+          selectionStart: input ? input.selectionStart : -1,
+          selectionEnd: input ? input.selectionEnd : -1,
+          length: input ? input.value.length : -1,
+          value: input ? input.value : '',
+          execCalls: window.__execCommandCalls,
+          clipboardAttempts: window.__clipboardAttempts
+        };
+      })()`)) as {
+        status: string;
+        panelVisible: boolean;
+        selectionStart: number;
+        selectionEnd: number;
+        length: number;
+        value: string;
+        execCalls: number;
+        clipboardAttempts: number;
+      };
+      check(
+        '复制失败仍展示新提示词并提示手动 Ctrl/Cmd+C',
+        copyFailure.panelVisible &&
+          copyFailure.status.includes('复制失败') &&
+          copyFailure.status.includes('手动复制') &&
+          copyFailure.status.includes('token 不会再次更换') &&
+          copyFailure.value === reissuePrompt,
+        copyFailure.status,
+      );
+      check(
+        '复制失败自动全选提示词',
+        copyFailure.selectionStart === 0 && copyFailure.selectionEnd === copyFailure.length,
+        copyFailure,
+      );
+      check(
+        '复制失败分别尝试 execCommand 与 clipboard 后停止',
+        copyFailure.execCalls >= 2 && copyFailure.clipboardAttempts >= 2,
+        copyFailure,
+      );
+      checkEqual(
+        '复制失败不再次轮换 token',
+        await mcpCallCount(page, 'network_agent_reissue_token'),
+        reissueCallsBeforeCopy,
+      );
+      const registryAfterCopyFailure = await readRegistry();
+      checkEqual(
+        '复制失败不改变本地注册表 token',
+        registryAfterCopyFailure.items.find((item) => item.actor_id === reissueAgent.actor_id)
+          ?.mcp_url,
+        reissuedUrl,
+      );
+
+      // 重复点击复制仍然只复制，不触发重置；恢复 execCommand 成功路径。
+      await page.evaluate(`(() => {
+        window.__copyMode = 'exec-ok';
+        window.__copiedRoomPrompt = null;
+      })()`);
+      await page.locator('#room-menu-reissue-copy-prompt').click();
+      await page.locator('#room-menu-reissue-copy-prompt').click();
+      await page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已复制新提示词；凭据只给目标 Agent，勿发群、日志或截图。'`,
+      );
+      checkEqual(
+        '重复点击复制仍复制同一提示词',
+        await page.evaluate('window.__copiedRoomPrompt'),
+        reissuePrompt,
+      );
+      checkEqual(
+        '重复点击复制不触发重置',
+        await mcpCallCount(page, 'network_agent_reissue_token'),
+        reissueCallsBeforeCopy,
       );
       const reissueConsoleText = (await page.evaluate('window.__consoleText')) as string;
       check(
@@ -23359,7 +23517,7 @@ async function main(): Promise<void> {
       );
       await context.close();
 
-      // 390px：长按同一 direct Agent，二次确认后仍能重发并自动复制。
+      // 390px：长按同一 direct Agent，二次确认后展示新提示词并可独立复制。
       const mobile = await makeContext(
         browser,
         data.humanToken,
@@ -23393,6 +23551,22 @@ async function main(): Promise<void> {
       );
       await mobile.page.evaluate(`(() => {
         window.__copiedRoomPrompt = null;
+        window.__execCommandCalls = 0;
+        window.__copyMode = 'exec-ok';
+        document.execCommand = function (command) {
+          if (command !== 'copy') return false;
+          window.__execCommandCalls += 1;
+          if (window.__copyMode !== 'exec-ok') return false;
+          const active = document.activeElement;
+          const areas = document.querySelectorAll('textarea');
+          const source = active && typeof active.value === 'string'
+            ? active
+            : areas[areas.length - 1];
+          if (source && typeof source.value === 'string') {
+            window.__copiedRoomPrompt = source.value;
+          }
+          return true;
+        };
         Object.defineProperty(navigator, 'clipboard', {
           configurable: true,
           value: {
@@ -23469,7 +23643,7 @@ async function main(): Promise<void> {
       });
       await mobile.page.locator('#room-menu-reissue-token').click();
       await mobile.page.waitForFunction(
-        `document.getElementById('room-menu-status').textContent === '已重置并复制新提示词；旧连接需改用新 token。'`,
+        `document.getElementById('room-menu-status').textContent === '已重置：新 token 已生成，旧 token 已失效。请点击「复制提示词」。'`,
       );
       const mobileRegistry = JSON.parse(
         (await mobile.page.evaluate(
@@ -23482,25 +23656,53 @@ async function main(): Promise<void> {
       );
       const mobileUrl = mobileEntry?.mcp_url ?? '';
       const mobileToken = new URL(mobileUrl).searchParams.get('token') ?? '';
-      const mobilePrompt = (await mobile.page.evaluate('window.__copiedRoomPrompt')) as string | null;
+      const mobilePrompt = (await mobile.page
+        .locator('#room-menu-reissue-text')
+        .inputValue()) as string;
       check(
         '390px 重置有二次确认',
-        mobileConfirmMessage.includes('新 token 只显示一次'),
+        mobileConfirmMessage.includes('旧 token 立即失效') &&
+          mobileConfirmMessage.includes('不会自动复制'),
         mobileConfirmMessage,
       );
+      checkEqual(
+        '390px 重置不自动复制',
+        await mobile.page.evaluate('window.__copiedRoomPrompt'),
+        null,
+      );
       check(
-        '390px 重置更新注册表并自动复制新提示词',
+        '390px 重置更新注册表并在文本框展示新提示词',
         mobileToken.length > 20 &&
           mobileToken !== reissuedToken &&
           Boolean(mobilePrompt) &&
-          mobilePrompt!.includes(`AGENTNET_TOKEN="${mobileToken}"`) &&
-          !mobilePrompt!.includes('room_id=') &&
-          mobilePrompt!.includes(`${server.base}/skills/agentnet.js`) &&
-          DEPRECATED_PROMPT_SCRIPTS.every((name) => !mobilePrompt!.includes(name)),
+          (await mobile.page.locator('#room-menu-reissue').isVisible()) &&
+          mobilePrompt.includes(`AGENTNET_TOKEN="${mobileToken}"`) &&
+          !mobilePrompt.includes('room_id=') &&
+          mobilePrompt.includes(`${server.base}/skills/agentnet.js`) &&
+          DEPRECATED_PROMPT_SCRIPTS.every((name) => !mobilePrompt.includes(name)),
+      );
+      const mobileReissueCalls = await mcpCallCount(
+        mobile.page,
+        'network_agent_reissue_token',
+      );
+      await mobile.page.locator('#room-menu-reissue-copy-prompt').click();
+      await mobile.page.waitForFunction(
+        `document.getElementById('room-menu-status').textContent === '已复制新提示词；凭据只给目标 Agent，勿发群、日志或截图。'`,
+      );
+      checkEqual(
+        '390px 独立复制按钮复制新提示词',
+        await mobile.page.evaluate('window.__copiedRoomPrompt'),
+        mobilePrompt,
+      );
+      checkEqual(
+        '390px 点击复制不触发重置',
+        await mcpCallCount(mobile.page, 'network_agent_reissue_token'),
+        mobileReissueCalls,
       );
       check(
-        '390px 重置后菜单不展示新 token',
-        !((await mobile.page.locator('#room-menu').innerText()) ?? '').includes(mobileToken),
+        '390px 重置后菜单文本不展示新 token，文本框可见',
+        !((await mobile.page.locator('#room-menu').textContent()) ?? '').includes(mobileToken) &&
+          mobilePrompt.includes(mobileToken),
       );
       const mobileConsoleText = (await mobile.page.evaluate('window.__consoleText')) as string;
       check(

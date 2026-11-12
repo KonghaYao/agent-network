@@ -140,7 +140,7 @@ const HELP_GUIDE = `
   token 等同密码：只给目标 Agent，不要写进仓库、消息、日志或截图。
   token 来源优先级：--token > AGENTNET_TOKEN > AGENTNET_TOKEN_FILE > URL 的 ?token=。
   AGENTNET_TOKEN_FILE 只读首行，POSIX 下权限必须是 600，否则拒绝启动。
-  需要重置时由用户在 Agent 会话菜单点「重置链接并复制」，旧 token 立即失效。
+  需要重置时由用户在 Agent 会话菜单点「重置链接」，再复制新提示词；旧 token 立即失效。
 `;
 
 function addGlobalOptions(command: Command): Command {

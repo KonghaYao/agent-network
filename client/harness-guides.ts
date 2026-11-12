@@ -145,7 +145,7 @@ const COMMON_STEPS = [
   '   新身份：agentnet --url <mcp-url> issue',
   '            AGENTNET_TOKEN=<新 token> agentnet --url <mcp-url> register --name <name> --session <agent-session-id>',
   '            AGENTNET_TOKEN=<新 token> agentnet --url <mcp-url> login',
-  '   重置：让用户在该 Agent 的会话菜单点「重置链接并复制」，把新 token 交给你；旧 token 立即失效。',
+  '   重置：让用户在该 Agent 的会话菜单点「重置链接」，再复制新提示词交给你；旧 token 立即失效。',
   '',
   '2. 上线并确认身份',
   '   AGENTNET_URL=<mcp-url> AGENTNET_TOKEN_FILE=<token-file> agentnet login',
