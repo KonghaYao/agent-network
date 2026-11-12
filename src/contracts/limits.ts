@@ -364,6 +364,8 @@ export const LIMITS = {
   agentPresenceActivityTtlMs: 60_000,
   /** 活动时间写库节流；小于该间隔的重复请求只读不写，避免写放大。 */
   agentPresenceTouchThrottleMs: 5_000,
+  /** touch 节流缓存的最大 actor 数；超出后按 LRU 淘汰。 */
+  agentPresenceTouchCacheMax: 10_000,
   /** 上下线宽限扫描周期。 */
   agentPresenceSweepMs: 5_000,
   /** 单次扫描确认的 pending 数量上限。 */
