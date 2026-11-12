@@ -6,6 +6,7 @@ import { sha256Hex } from '../storage/db';
 import { decodeHistoryCursor, historyBoundary, historyCursorScope } from './room-history';
 import { actorId, type Principal } from './principal';
 import { getMember, getRoom } from '../storage/queries';
+import { messageSearchFtsPhrase } from './message-search-fts';
 
 export const messageSearchSchema = z.object({
   room_id: z.string().min(1).max(128),
@@ -41,8 +42,18 @@ async function authorized(db: D1Database, principal: Principal, roomId: string) 
   return { room, boundary: historyBoundary(room, member) };
 }
 
+export interface MessageSearchOptions {
+  /** FTS 索引缺失或回滚时关闭；默认开启，1–2 字始终走 instr。 */
+  ftsEnabled?: boolean;
+}
+
 /** Full-text substring search over persisted message bodies; authorization is recomputed on every page. */
-export async function messageSearch(db: D1Database, principal: Principal, input: SearchInput) {
+export async function messageSearch(
+  db: D1Database,
+  principal: Principal,
+  input: SearchInput,
+  options: MessageSearchOptions = {},
+) {
   const { room, boundary } = await authorized(db, principal, input.room_id);
   const queryHash = await sha256Hex(input.query.toLowerCase());
   const scope = `${historyCursorScope('search', room.room_id, boundary.memberGeneration)}:p${boundary.policyRevision}:q${queryHash}`;
@@ -52,11 +63,24 @@ export async function messageSearch(db: D1Database, principal: Principal, input:
   const snapshot = cursor ? Math.min(cursor.snapshot, readHead) : readHead;
   const start = cursor?.seq ?? snapshot + 1;
   const lowerSql = boundary.full ? '1=1' : 'm.created_seq>=?';
-  const binds: unknown[] = [input.query, room.room_id, snapshot, input.query, ...(boundary.full ? [] : [boundary.fromSeq]), start, limit + 1];
+  const ftsPhrase = messageSearchFtsPhrase(input.query, options.ftsEnabled ?? true);
+  const matchSql = ftsPhrase === null
+    ? 'instr(lower(m.body), lower(?))>0'
+    : "m.rowid IN (SELECT rowid FROM message_search_fts WHERE message_search_fts MATCH ?) AND instr(lower(m.body), lower(?))>0";
+  const binds: unknown[] = [
+    input.query,
+    room.room_id,
+    snapshot,
+    ...(ftsPhrase === null ? [] : [ftsPhrase]),
+    input.query,
+    ...(boundary.full ? [] : [boundary.fromSeq]),
+    start,
+    limit + 1,
+  ];
   const columns = `m.message_id, m.room_id, m.sender_id, a.name AS sender_name, a.kind AS sender_kind,
     substr(m.body, max(1, instr(lower(m.body), lower(?))-100), ${LIMITS.messageSearchSnippetChars}) AS snippet, m.body_bytes, m.preview, m.created_at, m.created_seq, m.reply_to`;
   const rows = await db.prepare(`SELECT ${columns} FROM messages m JOIN actors a ON a.actor_id=m.sender_id
-    WHERE m.room_id=? AND m.body_bytes>0 AND m.created_seq<=? AND instr(lower(m.body), lower(?))>0 AND ${lowerSql} AND m.created_seq<?
+    WHERE m.room_id=? AND m.body_bytes>0 AND m.created_seq<=? AND ${matchSql} AND ${lowerSql} AND m.created_seq<?
     ORDER BY m.created_seq DESC LIMIT ?`).bind(...binds).all<SearchRow>();
   const items = rows.results.slice(0, limit);
   const hasMore = rows.results.length > limit;

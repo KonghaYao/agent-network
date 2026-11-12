@@ -27,6 +27,7 @@ import { runDeliverySenderUnitChecks } from './lib/delivery-sender-unit';
 import { runRoomInviteReplayUnitChecks } from './lib/room-invite-replay-unit';
 import { runOwnerlessRoomUnitChecks } from './lib/ownerless-room-unit';
 import { runRoomQuotaUnitChecks } from './lib/room-quota-unit';
+import { runMessageSearchFtsUnitChecks } from './lib/message-search-fts-unit';
 
 const STREAM_URI = 'agentnet://stream';
 
@@ -4113,6 +4114,7 @@ async function main(): Promise<void> {
   await runDeliveryReminderUnitChecks();
   await runDeliverySenderUnitChecks();
   await runRoomInviteReplayUnitChecks();
+  await runMessageSearchFtsUnitChecks();
 
   console.log(`协议验收通过: ${checksPassed()} 项`);
 }

@@ -32,6 +32,11 @@ export interface Env {
   ENVIRONMENT: string;
   PUBLIC_ORIGIN: string;
   /**
+   * 消息搜索是否启用 FTS5 trigram；默认 true。`MESSAGE_SEARCH_FTS=0` 可回滚到
+   * 全表 `instr(lower())`，1–2 字始终走该路径。
+   */
+  MESSAGE_SEARCH_FTS?: boolean;
+  /**
    * 房间文件下载票据密钥。启动时已由 `resolveFileTicketSecret` 解析：
    * 优先取部署方配置，缺省为 `DATA_DIR/file-ticket.key` 的持久化密钥。
    * 多实例部署必须显式配置同一值，或共享同一 `DATA_DIR`。

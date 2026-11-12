@@ -168,6 +168,7 @@ const env: Env = {
   PRESENCE: presence,
   ENVIRONMENT: environment,
   PUBLIC_ORIGIN: publicOrigin,
+  MESSAGE_SEARCH_FTS: process.env.MESSAGE_SEARCH_FTS !== '0',
   FILE_TICKET_SECRET: fileTicketSecretValue,
   ...(eventsConfig ? { EVENTS: eventsConfig } : {}),
 };
