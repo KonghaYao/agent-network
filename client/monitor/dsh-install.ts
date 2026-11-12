@@ -1,11 +1,12 @@
 /** Ensure the shipped DSH consumer exists before the DSH monitor starts. */
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
 import { CliError } from '../mcp';
+import { writeAtomicFile } from './atomic';
 import { dshPaths } from './dsh-state';
 import pluginSource from './dsh-plugin.mjs.txt' with { type: 'text' };
 
@@ -379,14 +380,8 @@ async function planBinding(value: Target): Promise<BindingPlan> {
 
 async function commitBinding(value: Target, plan: BindingPlan): Promise<void> {
   await mkdir(value.home, { recursive: true, mode: 0o700 });
-  const temporary = `${value.bindingsFile}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(plan.ownerPath, plan.owner, { mode: 0o600 });
-    await writeFile(temporary, `${JSON.stringify(plan.bindings, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, value.bindingsFile);
-  } finally {
-    await rm(temporary, { force: true });
-  }
+  await writeAtomicFile(plan.ownerPath, plan.owner);
+  await writeAtomicFile(value.bindingsFile, `${JSON.stringify(plan.bindings, null, 2)}\n`);
 }
 
 export async function ensureDshMonitorPlugin(): Promise<DshPluginEnsureResult> {

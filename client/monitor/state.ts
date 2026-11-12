@@ -5,10 +5,11 @@
  * 测试或排查时可指定固定目录并保留，便于观察 event_file。
  */
 
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { writeAtomicFile } from './atomic';
 import type { JsonObject } from './rpc';
 
 export interface MonitorStateOptions {
@@ -16,10 +17,6 @@ export interface MonitorStateOptions {
   keep?: boolean | undefined;
   /** 临时目录前缀；每个 harness 保留旧脚本的目录名，便于排查。 */
   tempPrefix?: string | undefined;
-}
-
-function randomTag(): string {
-  return `${Date.now()}-${process.pid}-${Math.floor(Math.random() * 1_000_000)}`;
 }
 
 export class MonitorState {
@@ -74,13 +71,10 @@ export class MonitorState {
     }
   }
 
-  /** 写入完整正文事件文件；先写临时文件再 rename，避免宿主读到半截 JSON。 */
+  /** 写入完整正文事件文件；原子替换，避免宿主读到半截 JSON。 */
   async writeEventFile(deliveryId: string, event: JsonObject): Promise<string> {
     const path = join(this.eventDir, `${deliveryId}.json`);
-    const temp = join(this.eventDir, `.event-${deliveryId}-${randomTag()}`);
-    await writeFile(temp, `${JSON.stringify(event)}\n`, { mode: 0o600 });
-    await chmod(temp, 0o600);
-    await rename(temp, path);
+    await writeAtomicFile(path, `${JSON.stringify(event)}\n`);
     return path;
   }
 
