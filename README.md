@@ -593,7 +593,7 @@ AGENTNET_URL=http://127.0.0.1:18892 EVENTS_ACCEPTANCE=1 bun run test:acceptance
 4. 用事件里的 `delivery_id` 调 `network_delivery_claim` / `network_delivery_complete`，确认 webhook 触发的待办可以闭环。
 5. 用 500/410/413 receiver 验证重试与停止行为；重启服务后确认订阅仍在并在 `refreshBefore` 前刷新。
 
-### Memory 运行时（MF03/MF04/MF05/MF11）
+### Memory 运行时（MF03/MF04/MF05/MF06/MF07/MF11）
 
 Memory 账本随迁移 `0045_memory_ledger.sql` 建立；MF11 的补读快照、请求幂等与证据追加由 `0046_memory_experience_catchup.sql` 补齐。默认副本可先不启动作业领取，聊天与投递不受影响。
 
@@ -618,8 +618,10 @@ MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.t
 - **分群经历**：按 space + ownership_epoch + agent + origin room + member_generation 独立；只有合格 ExposureReceipt 产生 experienced 条目。`raw_full/raw_fragment` 才推进原文覆盖，`preview/summary/memory_context` 不推进；`authored`、`curated` 各自独立，不伪造 input_exposure。
 - **最终清单**：`SubmittedInputManifest` 由服务端按 selection 与实际 payload 重建，items 只读；同一 invocation 只能绑定一个 manifest，换清单/hash 返回 `IDEMPOTENCY_CONFLICT`。prepared selection 不产生经历。
 - **补读**：`planCatchup` 固定本轮 H、成员代次与策略版本；`prepareCatchupSelections` 只生成 `not_consumed` selection。未读集合不会写 events、pending_count 或经历，计划过期/退群重加后不可继续消费。
-- **证据协议**：`host-protocol.ts` 冻结 HostBridge 消息：宿主提交 `MemoryHostFinalManifestReport`（invocation、target、实际 payload、逐项 selection/representation/hash）与 `MemoryHostExposureReport`（manifest/payload hash、request_id，不含 evidence/trusted）；证据等级由服务端按 HostBinding 等级派生，客户端自报 `trusted/verified/evidence` 返回 `INVALID_ARGUMENT`。受控网关另报 `MemoryGatewayObservationReport` 追加独立 proof，不新建 receipt、不重复经历。MF07 尚未实现，仓库内只有服务端协议与受控 stub 路径。
-- **限制（未完成）**：Hindsight 真实部署鉴权与写入尚未验收；未注册 MCP 工具与 UI（MF06/MF08），未实现宿主 SDK/网关（MF07）；跨房披露必须由服务端传入已核实 grant，客户端不能自报。当前任务模型是消息式 Task（迁移 0042 已删除旧任务实体），因此只登记 `task_offer` 角色来源，不实现旧 `task_submission/task_review/task_handoff` 路径。未绑定到房间的 Drive 草稿不是共享来源，绑定到房间时才登记 `file:<file_id>`；来源正文只在策略允许时保存，业务权威仍在原消息/文件系统。
+- **证据协议**：`host-protocol.ts` 冻结 HostBridge 消息：宿主提交 `MemoryHostFinalManifestReport`（invocation、target、实际 payload、逐项 selection/representation/hash）与 `MemoryHostExposureReport`（manifest/payload hash、request_id，不含 evidence/trusted）；证据等级由服务端按 HostBinding 等级派生，客户端自报 `trusted/verified/evidence` 返回 `INVALID_ARGUMENT`。受控网关另报 `MemoryGatewayObservationReport` 追加独立 proof，不新建 receipt、不重复经历。
+- **HostBridge（MF07）**：`src/memory/host-bridge.ts` 实现 bind → prepare input → SubmittedInputManifest → ExposureReceipt → retain 资格。`prepare` 只返回准确 selection 正文并固定 `retain_eligible: false`；manifest 与 receipt 校验 hash/受众/claim/ownership，合格 receipt 才原子写经历与 retain 意图。状态区分 `prepared`、`host_queued`（宿主本进程声明，不是证据）、`host_reported_submitted`、`gateway_observed_submitted`；关闭/过期绑定返回 `skipped_no_boundary`，迟到报告返回 `rejected`。受控网关观测只允许部署方配置的 `controlled_gateway` 绑定；显式 `session_incarnation` 重新 bind 会递增 generation 并关闭旧绑定，旧 run 不能再准备或提交。
+- **MCP 工具（MF06）**：`src/mcp/memory.ts` 注册 `network_memory_status/recall/context_list/context_get/list/get/put/correct/forget/operation_get/host_bind/host_close/input_prepare/input_status/admit/catchup_prepare/catchup_get/experience_list/experience_get`。输入 strict，拒绝客户端自报 space/provider/bank/verified/trusted/through_seq；`network_me.service.memory` 宣告 `memory_enabled`、契约版本、支持/不支持的宿主等级与能力，工具始终注册，Memory 关闭时内容工具返回 `MEMORY_DISABLED`。
+- **限制（未完成）**：Hindsight 真实部署鉴权与写入尚未验收；未提供外部宿主 SDK、真实网关或 UI（MF08/MF10）；`auto_injection` 需要 claim 后的 bound Context，当前仅声明 unsupported，预热不直接注入。跨房披露必须由服务端传入已核实 grant，客户端不能自报。当前任务模型是消息式 Task（迁移 0042 已删除旧任务实体），因此只登记 `task_offer` 角色来源，不实现旧 `task_submission/task_review/task_handoff` 路径；`network_memory_*` 的 task 目标明确返回 `MEMORY_UNSUPPORTED`。未绑定到房间的 Drive 草稿不是共享来源，绑定到房间时才登记 `file:<file_id>`；来源正文只在策略允许时保存，业务权威仍在原消息/文件系统。
 
 | 变量 | 说明 |
 | --- | --- |
@@ -634,6 +636,7 @@ MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.t
 | `HINDSIGHT_LIST_PAGE_SIZE` | 可选；documents/memories 列表页大小，默认取 `LIMITS.memoryAdapterListPageSize`，上限 100。 |
 | `MEMORY_INSTANCE_ID` | 可选；固定部署 namespace。首次初始化后不得随意更换，配置与既有 `memory_instances` 不一致会 fail closed。 |
 | `MEMORY_CAPTURE=0` | 可选；停止新增 retain/来源写入，但撤回/遗忘屏障仍保留并继续执行。 |
+| `MEMORY_HOST_TRUST` | 可选；服务端签发 HostBinding 等级：`tool_only`（默认）、`adapted_host`、`controlled_gateway`。客户端声明的 capabilities 只能缩小能力，不能提升等级。 |
 
 本地验证：
 
@@ -643,6 +646,7 @@ bun run test:memory-ledger
 bun run test:memory-experience
 bun run test:memory-intake
 bun run test:memory-hindsight
+bun run test:memory-host
 ```
 
 MF03 提供持久意图与租约；MF04 提供可配置的 Hindsight HTTP 适配器与受控假服务验收。默认仍使用 stub，stub 明确返回 unsupported，不伪报“已记住”。

@@ -6,6 +6,7 @@ import { createApp, runScheduled } from '../app';
 import { LIMITS } from '../contracts/limits';
 import { createDrive } from '../drive/service';
 import { MemoryRuntime } from '../memory/runtime';
+import { memoryHostPolicyFromEnv } from '../memory/host-bridge';
 import {
   HindsightMemoryAdapter,
   loadHindsightConfigFromEnv,
@@ -163,6 +164,9 @@ const env: Env = {
   ...(eventsConfig ? { EVENTS: eventsConfig } : {}),
 };
 envRef = env;
+
+// MF07：宿主信任等级只来自部署配置，缺省 tool-only；普通 Agent 不能自报。
+env.MEMORY_HOST = memoryHostPolicyFromEnv(process.env.MEMORY_HOST_TRUST);
 
 // MF03/MF04：Memory 运行时默认关闭；MEMORY_ENABLED=1 才启动作业领取与恢复。
 // MEMORY_ADAPTER=hindsight 时配置缺失会构造 fail-closed 适配器：不请求后端、

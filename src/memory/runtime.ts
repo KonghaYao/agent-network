@@ -39,11 +39,14 @@ import type {
   EnsureSpaceRequest,
   JobStatusResult,
   MemoryAdapter,
+  MemoryAdapterCapabilities,
   MemoryAdapterJobRef,
   MemoryAdapterRemoveTarget,
+  MemoryAdapterSearchPlan,
   RemoveRequest,
   RetainRequest,
   SearchRequest,
+  SearchResult,
 } from './adapters/types';
 
 export interface MemoryRuntimeOptions {
@@ -226,6 +229,26 @@ export class MemoryRuntime {
   onBusinessCommitted(): void {
     if (!this.#started || this.#stopped) return;
     void this.tick().catch((error) => this.report(error));
+  }
+
+  /**
+   * 能力目录；只供服务层判断支持范围，不向 MCP/UI 转发 provider 路由。
+   */
+  capabilities(): MemoryAdapterCapabilities {
+    return this.#options.adapter.capabilities();
+  }
+
+  /**
+   * 显式召回直接查询引擎。
+   *
+   * 该路径不写经历、不产生 retain、不代替后台来源作业；调用方必须已用
+   * 当前身份解析 space。适配器错误由调用方映射为 unavailable/unsupported。
+   */
+  async searchNow(
+    space: SearchRequest['space'],
+    plan: MemoryAdapterSearchPlan,
+  ): Promise<SearchResult> {
+    return this.#options.adapter.search({ space, plan });
   }
 
   private async updateJobResult(jobId: string, result: unknown): Promise<void> {
@@ -712,7 +735,9 @@ export class MemoryRuntime {
           WHERE recall_id = ?`,
       )
       .bind(
-        result.status === 'ready' || result.status === 'empty' ? result.status : result.status === 'pending' ? 'pending' : 'unavailable',
+        result.status === 'ready' || result.status === 'empty' || result.status === 'pending' || result.status === 'unsupported'
+          ? result.status
+          : 'unavailable',
         JSON.stringify(result),
         this.now(),
         job.recall_id,

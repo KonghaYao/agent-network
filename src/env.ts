@@ -1,6 +1,7 @@
 import type { FileService } from '@peri-code/mcpp/files';
 
 import type { MemoryRuntime } from './memory/runtime';
+import type { MemoryHostPolicy } from './memory/host-bridge';
 import type { NotificationHub } from './realtime/hub';
 import type { AgentPresenceTimeline } from './realtime/presence-timeline';
 
@@ -42,4 +43,9 @@ export interface Env {
    * 缺失表示不启动作业领取，但已提交的 Memory 账本与遗忘屏障仍保留。
    */
   MEMORY?: MemoryRuntime;
+  /**
+   * MF07 宿主信任策略；只由部署配置/受控网关构造，不能来自客户端输入。
+   * 缺省 tool_only：只能显式查询与读取已准备结果。
+   */
+  MEMORY_HOST?: MemoryHostPolicy;
 }

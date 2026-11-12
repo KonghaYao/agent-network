@@ -1389,3 +1389,28 @@ export const feedbackCreateResultSchema = z.object({
   feedback_id: z.string(),
   created_at: z.string(),
 });
+
+/**
+ * MF06 Memory 工具输出在 memory/tool-schemas.ts 维护；这里统一再导出，
+ * 保持 MCP 工具只从 outputs.ts / client-contract.ts 取对外契约。
+ */
+export {
+  memoryAdmitOutputSchema,
+  memoryCatchupGetOutputSchema,
+  memoryCatchupPrepareOutputSchema,
+  memoryContextGetOutputSchema,
+  memoryContextListOutputSchema,
+  memoryExperienceGetOutputSchema,
+  memoryExperienceListOutputSchema,
+  memoryForgetOutputSchema,
+  memoryGetOutputSchema,
+  memoryHostBindOutputSchema,
+  memoryHostCloseOutputSchema,
+  memoryInputPrepareOutputSchema,
+  memoryInputStatusOutputSchema,
+  memoryListOutputSchema,
+  memoryOperationOutputSchema,
+  memoryPutOutputSchema,
+  memoryRecallOutputSchema,
+  memoryStatusOutputSchema,
+} from '../memory/tool-schemas';

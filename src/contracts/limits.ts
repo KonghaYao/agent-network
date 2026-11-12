@@ -493,6 +493,10 @@ export const LIMITS = {
   /** prepared selection / catchup 计划的短期 TTL（毫秒）。 */
   memoryPreparedTtlMs: 10 * 60_000,
   memoryCatchupTtlMs: 24 * 60 * 60_000,
+  /** lookup/bound Context 的默认 TTL；到期后重验不通过，不回写正文。 */
+  memoryContextTtlMs: 60 * 60_000,
+  /** HostBinding 默认租约；宿主不续租即视为运行边界已结束。 */
+  memoryHostLeaseMs: 24 * 60 * 60_000,
   /** 已完成 Memory 作业的审计留存（毫秒）；来源/tombstone 不受此期限影响。 */
   memoryJobRetentionMs: 30 * 24 * 60 * 60_000,
   /** Hindsight 单次 HTTP 请求默认超时；调用方 deadline_at 可缩短。 */

@@ -13,6 +13,7 @@ import { registerResources } from './resources';
 import { createMessageFileArchiver, registerRoomFileTools } from './room-files';
 import { registerArtifactTools } from './artifacts';
 import { registerSkill } from './skill';
+import { registerMemoryTools } from './memory';
 import { registerTools, type ToolHooks } from './tools';
 
 type WeBotsCapabilities = ServerCapabilities & { events?: Record<string, unknown> };
@@ -44,6 +45,9 @@ export function buildServer(env: Env, principal: Principal, drive?: DriveBinding
       ? { afterMessageCommitted: createMessageFileArchiver(env, principal, drive) }
       : {};
   registerTools(server, env, principal, hooks);
+  // Memory 工具始终注册；MEMORY_ENABLED=0 时工具返回 MEMORY_DISABLED，
+  // 能力目录同时声明 memory.enabled=false，避免隐藏工具被误认为可调用。
+  registerMemoryTools(server, env, principal);
   registerResources(server, env, principal);
   registerSkill(server);
   if (env.EVENTS) registerEvents(server, env, principal);
