@@ -19298,7 +19298,7 @@ async function main(): Promise<void> {
       });
 
       const longMarker = '长文标题';
-      const longLink = 'https://net.peri-code.dev/f/f_preview_download';
+      const longLink = 'https://webots.hpxing.com.cn/f/f_preview_download';
       const longTail = '展开后的完整结尾标记';
       const previewMarker = '预览单换行标记';
       const previewBody = [
