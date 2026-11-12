@@ -75,6 +75,7 @@ import { runAgentRoomAddAcceptance } from './lib/agent-room-add-acceptance';
 import { runDevicePairingAcceptance } from './lib/device-pairing-acceptance';
 import { runDeviceSyncAcceptance } from './lib/device-sync-acceptance';
 import { runRoomsListPeerAcceptance } from './lib/rooms-list-peer-acceptance';
+import { runMessageSearchAcceptance } from './lib/message-search-acceptance';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META = 'io.agent-network/event';
@@ -1374,6 +1375,7 @@ async function main(): Promise<void> {
     await runOwnerTransferAcceptance();
     await runRoomLifecycleAcceptance();
     await runRoomsListPeerAcceptance();
+    await runMessageSearchAcceptance();
     await runGroupInviteAcceptance();
     await runGroupInviteLinkAcceptance();
     await runGroupHistoryAcceptance({ hasDrive });

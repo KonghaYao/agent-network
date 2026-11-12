@@ -3,17 +3,18 @@
  *
  * 用真实 migrations 构造停在 `0035_task_recovery.sql` 的合成库，写入
  * credentials/devices、无主群与 A06 的关键历史行，再顺序应用
- * `0036`–`0046`。检查重点是“升级不扩大权限”：旧凭据只回填设备行、不新增
+ * `0036`–`0047`。检查重点是“升级不扩大权限”：旧凭据只回填设备行、不新增
  * credentials；无主群不被自动解散或回填 owner；审计表重建保留旧行；
  * 0042 删除旧任务表/列后普通业务行仍可读；0043 只把存量群回填为 full；
- * 0044 只把未删除文件回填为 public；0045/0046 只新增 Memory 表与索引。
+ * 0044 只把未删除文件回填为 public；0045/0046 只新增 Memory 表与索引；
+ * 0047 回填消息 FTS 索引且重复执行不重复写入。
  *
  * 运行：`bun scripts/q01-upgrade-check.ts`
  * 该脚本使用临时目录，不访问服务端、不读取或写入 `.data`。
  */
 
 import { Database } from 'bun:sqlite';
-import { copyFileSync, mkdtempSync, readdirSync, rmSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -34,6 +35,7 @@ const NEW_MIGRATIONS = [
   '0044_files_public_backfill.sql',
   '0045_memory_ledger.sql',
   '0046_memory_experience_catchup.sql',
+  '0047_message_search_fts.sql',
 ];
 const AT = 1_700_000_000_000;
 
@@ -84,6 +86,13 @@ function seedOldDatabase(db: Database): void {
       ('${ROOM}', '${HUMAN}', 'owner', 'active', 0, 0, ${AT}, 1, ${AT}),
       ('${ROOM}', '${PEER}', 'member', 'active', 1, 0, ${AT}, 1, ${AT}),
       ('${OWNERLESS}', '${PEER}', 'admin', 'active', 0, 0, ${AT}, 1, ${AT});
+
+    INSERT INTO messages
+      (message_id, room_id, sender_id, client_message_id, created_seq, body, body_bytes,
+       preview, reply_to, root_id, hop, root_invocations_used, created_at)
+    VALUES
+      ('msg_q01_legacy', '${ROOM}', '${HUMAN}', 'cli_q01_legacy', 1,
+       'Q01 旧消息 可搜索关键词', 32, 'Q01 旧消息', NULL, NULL, 0, 0, ${AT});
 
     INSERT INTO room_management_audit
       (audit_id, room_id, action, target_actor_id, previous_role, new_role,
@@ -152,17 +161,17 @@ try {
   checkEqual('升级前没有设备行', before.devices, 0);
 
   const appliedNow = migrate(db, SOURCE_MIGRATIONS);
-  checkEqual('恰好应用 0036–0046', appliedNow.join(','), NEW_MIGRATIONS.join(','));
+  checkEqual('恰好应用 0036–0047', appliedNow.join(','), NEW_MIGRATIONS.join(','));
   const expectedMigrations = [
     ...Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(4, '0')),
-    ...Array.from({ length: 30 }, (_, i) => String(i + 17).padStart(4, '0')),
+    ...Array.from({ length: 31 }, (_, i) => String(i + 17).padStart(4, '0')),
   ];
   const actualMigrations = (
     db.prepare('SELECT name FROM schema_migrations ORDER BY name').all() as Array<{ name: string }>
   ).map((row) => row.name);
-  checkEqual('迁移总数为 42', actualMigrations.length, 42);
+  checkEqual('迁移总数为 43', actualMigrations.length, 43);
   check(
-    '迁移序号为 0001–0012、0017–0046',
+    '迁移序号为 0001–0012、0017–0047',
     actualMigrations.every((name, i) => name.startsWith(`${expectedMigrations[i]}_`)),
     actualMigrations,
   );
@@ -302,6 +311,53 @@ try {
     scalar<string>(db, "SELECT status || ':' || device_label FROM device_pairings WHERE pairing_id = 'dpq_q01_legacy'"),
     'pending:',
   );
+
+  checkEqual(
+    '0047 建立消息 FTS 表',
+    scalar<number>(
+      db,
+      "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'message_search_fts'",
+    ),
+    1,
+  );
+  checkEqual(
+    '0047 建立三个同步触发器',
+    scalar<number>(
+      db,
+      "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('message_search_fts_ai', 'message_search_fts_ad', 'message_search_fts_au')",
+    ),
+    3,
+  );
+  checkEqual('0047 回填存量消息', scalar<number>(db, 'SELECT COUNT(*) FROM message_search_fts'), 1);
+  checkEqual(
+    '0047 回填消息可搜索',
+    scalar<number>(
+      db,
+      "SELECT COUNT(*) FROM message_search_fts WHERE message_search_fts MATCH '\"可搜索\"'",
+    ),
+    1,
+  );
+  db.exec(readFileSync(join(SOURCE_MIGRATIONS, '0047_message_search_fts.sql'), 'utf8'));
+  checkEqual('0047 重复执行不重复回填', scalar<number>(db, 'SELECT COUNT(*) FROM message_search_fts'), 1);
+  db.exec("UPDATE messages SET body = 'Q01 旧消息 已更新索引' WHERE message_id = 'msg_q01_legacy'");
+  checkEqual(
+    '0047 update 移除旧词',
+    scalar<number>(
+      db,
+      "SELECT COUNT(*) FROM message_search_fts WHERE message_search_fts MATCH '\"可搜索\"'",
+    ),
+    0,
+  );
+  checkEqual(
+    '0047 update 写入新词',
+    scalar<number>(
+      db,
+      "SELECT COUNT(*) FROM message_search_fts WHERE message_search_fts MATCH '\"已更新\"'",
+    ),
+    1,
+  );
+  db.exec("DELETE FROM messages WHERE message_id = 'msg_q01_legacy'");
+  checkEqual('0047 delete 移除索引', scalar<number>(db, 'SELECT COUNT(*) FROM message_search_fts'), 0);
 
   console.log(`Q01 升级检查通过: ${checksPassed()} 项`);
 } finally {

@@ -1563,7 +1563,9 @@ export function registerTools(
 
   register(server, 'network_message_search', '在当前有权读取的房间完整持久化消息正文中搜索关键词；分页固定快照，游标绑定查询词与成员代次，结果只返回有限片段。', messageSearchSchema, messageSearchOutputSchema, async (input) => {
     requireActor(principal);
-    return messageSearch(db, principal, input);
+    return messageSearch(db, principal, input, {
+      ftsEnabled: env.MESSAGE_SEARCH_FTS !== false,
+    });
   }, { readOnlyHint: true });
 
   register(
@@ -1626,7 +1628,9 @@ export function registerTools(
     taskSearchResultSchema,
     async (input) => {
       requireActor(principal);
-      return messageTaskSearch(db, principal, input);
+      return messageTaskSearch(db, principal, input, {
+        ftsEnabled: env.MESSAGE_SEARCH_FTS !== false,
+      });
     },
     { readOnlyHint: true },
   );

@@ -12,6 +12,7 @@ import { clampPage, LIMITS } from '../contracts/limits';
 import { sha256Hex } from '../storage/db';
 import type { Principal } from './principal';
 import { messageTaskSummaries, readableRoom, type TaskSummary } from './message-tasks';
+import { messageSearchFtsPhrase } from './message-search-fts';
 import {
   decodeHistoryCursor,
   historyCursorScope,
@@ -65,10 +66,16 @@ function placeholders(count: number): string {
   return Array.from({ length: count }, () => '?').join(',');
 }
 
+export interface TaskSearchOptions {
+  /** FTS 索引缺失或回滚时关闭；默认开启，1–2 字始终走 instr。 */
+  ftsEnabled?: boolean;
+}
+
 export async function messageTaskSearch(
   db: D1Database,
   principal: Principal,
   input: TaskSearchInput,
+  options: TaskSearchOptions = {},
 ): Promise<TaskSearchResult> {
   const { room, boundary } = await readableRoom(db, principal, input.room_id);
   const queryHash = await sha256Hex(input.query.toLowerCase());
@@ -79,13 +86,18 @@ export async function messageTaskSearch(
     boundary.toSeq === null ? room.head_seq : Math.min(room.head_seq, boundary.toSeq);
   const snapshot = cursor ? Math.min(cursor.snapshot, readHead) : readHead;
 
+  const ftsPhrase = messageSearchFtsPhrase(input.query, options.ftsEnabled ?? true);
+  const matchedMatch =
+    ftsPhrase === null
+      ? 'instr(lower(m.body), lower(?)) > 0'
+      : "m.rowid IN (SELECT rowid FROM message_search_fts WHERE message_search_fts MATCH ?) AND instr(lower(m.body), lower(?)) > 0";
   const matchedSql = `matched AS (
       SELECT m.message_id AS hit_id, m.created_seq AS hit_seq,
              substr(m.body, max(1, instr(lower(m.body), lower(?)) - 100), ?) AS snippet
         FROM messages m
        WHERE m.room_id = ? AND m.body_bytes > 0
          AND m.created_seq <= ? AND m.created_seq >= ?
-         AND instr(lower(m.body), lower(?)) > 0
+         AND ${matchedMatch}
        ORDER BY m.created_seq DESC
        LIMIT ?
     )`;
@@ -115,6 +127,7 @@ export async function messageTaskSearch(
     room.room_id,
     snapshot,
     boundary.fromSeq,
+    ...(ftsPhrase === null ? [] : [ftsPhrase]),
     input.query,
     LIMITS.taskSearchScanMax + 1,
     room.room_id,
@@ -123,7 +136,7 @@ export async function messageTaskSearch(
     room.room_id,
     boundary.fromSeq,
     snapshot,
-  ] as const;
+  ];
 
   const matchedCount = await db
     .prepare(`WITH ${matchedSql} SELECT COUNT(*) AS n FROM matched`)
@@ -133,6 +146,7 @@ export async function messageTaskSearch(
       room.room_id,
       snapshot,
       boundary.fromSeq,
+      ...(ftsPhrase === null ? [] : [ftsPhrase]),
       input.query,
       LIMITS.taskSearchScanMax + 1,
     )
