@@ -43,7 +43,7 @@ try {
     await inspect(`${width}×${height} new group`, ['#group-modal .modal-card', '#group-cancel', '#group-create'], '#group-contacts');
     await page.locator('#group-cancel').click();
     await page.locator('#contact-requests').click();
-    await inspect(`${width}×${height} contacts`, ['#contact-modal .modal-card', '#contact-modal-close'], '.contact-columns');
+    await inspect(`${width}×${height} contacts`, ['#contact-modal .modal-card', '#contact-modal-close'], '.contact-panels');
     await page.locator('#contact-modal-close').click();
     await page.locator('#device-handoff').click();
     await page.locator('#pairing-qr-wrap').waitFor({ state: 'visible' });
