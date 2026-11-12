@@ -34,7 +34,10 @@ function syncComposerReply() {
     const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '×';
     cancel.setAttribute('aria-label', '取消引用');
     cancel.addEventListener('click', function () { if (activeRoomId) setComposerReply(activeRoomId, null); });
-    bar.append(label, cancel); composer.prepend(bar);
+    bar.append(label, cancel);
+    // composer 是横向 flex 行；引用条必须放进纵向的 composer-main，才能位于输入框上方。
+    const composerMain = document.querySelector('.composer-main');
+    if (composerMain) composerMain.prepend(bar); else composer.prepend(bar);
   }
   const reply = activeRoomId ? composerReply(activeRoomId) : null;
   bar.hidden = !reply;
@@ -83,10 +86,10 @@ async function resolveQuotePreview(roomId, messageId, quote) {
     if (quote.isConnected && activeRoomId === roomId) quote.textContent = '引用消息不可见';
   }
 }
-/** 引用块跟随正文底部区域：有附件时排在附件之后，否则紧接正文。 */
+/** 引用块位于正文上方：紧贴 .bubble 之前，附件与操作按钮仍在正文下方。 */
 function placeReplyReference(quote, content) {
-  const anchor = content.querySelector('.msg-files') || content.querySelector('.bubble');
-  if (anchor) anchor.after(quote); else content.append(quote);
+  const bubble = content.querySelector('.bubble');
+  if (bubble) content.insertBefore(quote, bubble); else content.prepend(quote);
 }
 function appendMessageActions(item, content) {
   if (item.reply_to) {

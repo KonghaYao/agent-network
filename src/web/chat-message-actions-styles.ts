@@ -11,12 +11,18 @@ export const MESSAGE_ACTIONS_STYLE = `
   .message-actions button, .reply-reference { border: 0; background: transparent;
     color: var(--wx-muted); cursor: pointer; font: inherit; font-size: 12px; padding: 5px 8px; }
   .message-actions button:hover, .message-actions button:focus-visible { background: var(--wx-hover); }
-  .reply-reference { display: block; text-align: left; border-left: 3px solid var(--wx-line);
-    margin: 6px 0 0; overflow-wrap: anywhere; }
+  .reply-reference { box-sizing: border-box; display: -webkit-box; max-width: 100%;
+    margin: 0 0 6px; padding: 4px 8px; text-align: left; overflow: hidden;
+    text-overflow: ellipsis; overflow-wrap: anywhere; -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2; border-left: 3px solid var(--wx-line); border-radius: 4px;
+    background: var(--wx-hover); color: var(--wx-muted); }
+  .reply-reference:hover, .reply-reference:focus-visible {
+    background: var(--wx-active); color: var(--wx-text); }
   .composer-reply { display: flex; align-items: center; gap: 8px; padding: 6px 12px;
-    background: var(--wx-hover); border-radius: 6px; font-size: 12px; }
+    box-sizing: border-box; width: 100%; background: var(--wx-hover); border-radius: 6px; font-size: 12px; }
   .composer-reply[hidden] { display: none; }
-  .composer-reply span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .composer-reply span { flex: 1; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
   .composer-reply button { min-width: 44px; min-height: 36px; border: 0;
     background: transparent; color: inherit; cursor: pointer; }
   .forward-modal { width: min(480px, calc(100vw - 32px)); max-height: 80dvh;
