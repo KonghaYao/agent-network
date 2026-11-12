@@ -230,7 +230,7 @@ function checkMigrationUpgrade(): void {
       '0038_ownerless_room_guard.sql,0039_delivery_message_state_index.sql,' +
       '0040_contact_invite_links.sql,0041_message_task_trace.sql,' +
       '0042_drop_legacy_tasks.sql,0043_group_history_full_backfill.sql,' +
-      '0044_files_public_backfill.sql',
+      '0044_files_public_backfill.sql,0045_memory_ledger.sql',
   );
   checkEqual(
     '旧库升级保留原业务数据',

@@ -131,6 +131,61 @@ async function maintainFiles(env: Env, now: number): Promise<void> {
 }
 
 /**
+ * Memory 短期对象清理。
+ *
+ * 只清理未消费的 prepared selection、过期 catchup 计划与已完成作业的审计
+ * 副本；`memory_sources`、`memory_receipts`、`memory_experiences`、
+ * `memory_retain_intents` 与 `memory_tombstones` 不随通用 TTL 删除。
+ */
+async function maintainMemory(db: D1Database, now: number): Promise<void> {
+  await db
+    .prepare(
+      `DELETE FROM memory_selections
+        WHERE state = 'available' AND expires_at IS NOT NULL AND expires_at < ?`,
+    )
+    .bind(now)
+    .run();
+
+  await db
+    .prepare(
+      `UPDATE memory_catchup_plans
+          SET status = 'expired', updated_at = ?
+        WHERE status IN ('ready', 'partial', 'missing_required')
+          AND expires_at IS NOT NULL AND expires_at < ?`,
+    )
+    .bind(now, now)
+    .run();
+
+  // 租约到期的 host binding 只能重新绑定，不能继续签发新 Context。
+  await db
+    .prepare(
+      `UPDATE memory_host_bindings
+          SET state = 'expired', updated_at = ?
+        WHERE state = 'active' AND lease_until IS NOT NULL AND lease_until < ?`,
+    )
+    .bind(now, now)
+    .run();
+
+  await db
+    .prepare(
+      `DELETE FROM memory_jobs
+        WHERE rowid IN (
+          SELECT j.rowid FROM memory_jobs j
+           WHERE j.status IN ('completed', 'cancelled')
+             AND j.updated_at < ?
+             AND NOT EXISTS (
+               SELECT 1 FROM memory_retain_intents ri
+                WHERE ri.job_id = j.job_id
+                  AND ri.status IN ('pending', 'leased', 'unknown')
+             )
+           LIMIT 100
+        )`,
+    )
+    .bind(now - LIMITS.memoryJobRetentionMs)
+    .run();
+}
+
+/**
  * 分批清理 event / operations / outbox / recovery ticket。
  *
  * 删除 event 前先把对应 scope 的有效游标下界推进到本批最大 event_seq，
@@ -140,11 +195,26 @@ export async function maintain(env: Env): Promise<void> {
   const db = env.DB;
   const now = nowMs();
 
+  // Memory informational actor 事件只删除自身，不能推进 inbox_min_seq：
+  // actor 游标是业务收件箱的下界，不是所有 actor scope 事件的统一游标。
+  await db
+    .prepare(
+      `DELETE FROM events
+        WHERE rowid IN (
+          SELECT rowid FROM events
+           WHERE scope_kind = 'actor' AND event_type LIKE 'memory.%' AND created_at < ?
+           LIMIT 200
+        )`,
+    )
+    .bind(now - LIMITS.eventsRetentionMs)
+    .run();
+
   const scopes = await db
     .prepare(
       `SELECT scope_kind, scope_id, MAX(event_seq) AS max_seq
          FROM events
         WHERE created_at < ?
+          AND NOT (scope_kind = 'actor' AND event_type LIKE 'memory.%')
         GROUP BY scope_kind, scope_id
         LIMIT 20`,
     )
@@ -158,8 +228,11 @@ export async function maintain(env: Env): Promise<void> {
         .bind(scope.max_seq, scope.scope_id)
         .run();
     } else {
+      // 夹到 inbox_head_seq，避免 min > head 让尚未过期的业务游标被误判重置。
       await db
-        .prepare('UPDATE actors SET inbox_min_seq = MAX(inbox_min_seq, ?) WHERE actor_id = ?')
+        .prepare(
+          'UPDATE actors SET inbox_min_seq = MAX(inbox_min_seq, MIN(?, inbox_head_seq)) WHERE actor_id = ?',
+        )
         .bind(scope.max_seq, scope.scope_id)
         .run();
     }
@@ -192,6 +265,9 @@ export async function maintain(env: Env): Promise<void> {
 
   // 房间文件墓碑与载荷由 maintainFiles 按引用状态统一回收。
   await maintainFiles(env, now);
+
+  // Memory 短期准备包可清理；来源、回执、经历、tombstone 与未知作业不在此列。
+  await maintainMemory(env.DB, now);
 
   // MCP Events：先停用过期订阅，再在宽限期后删除（级联清投递）。
   await db

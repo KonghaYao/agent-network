@@ -5,6 +5,8 @@ import { dirname, resolve } from 'node:path';
 import { createApp, runScheduled } from '../app';
 import { LIMITS } from '../contracts/limits';
 import { createDrive } from '../drive/service';
+import { MemoryRuntime } from '../memory/runtime';
+import { StubMemoryAdapter } from '../memory/adapters/stub';
 import type { Env, EventsConfig } from '../env';
 import { loadEncryptionKey } from '../events/security';
 import { initEventsFileLog } from '../events/log-file';
@@ -157,6 +159,26 @@ const env: Env = {
 };
 envRef = env;
 
+// MF03：Memory 运行时默认关闭；MEMORY_ENABLED=1 才启动作业领取与恢复。
+// 适配器尚未接真实 Hindsight（MF04），stub 只记录可恢复意图，绝不伪报已记住。
+let memoryRuntime: MemoryRuntime | undefined;
+if (process.env.MEMORY_ENABLED === '1') {
+  const candidate = new MemoryRuntime(d1, {
+    adapter: new StubMemoryAdapter(),
+    instanceId: process.env.MEMORY_INSTANCE_ID?.trim() || null,
+    capture: process.env.MEMORY_CAPTURE !== '0',
+  });
+  try {
+    await candidate.start();
+    memoryRuntime = candidate;
+    env.MEMORY = candidate;
+    console.log(`memory runtime enabled (instance ${candidate.instanceId ?? 'unknown'})`);
+  } catch (error) {
+    // Memory 本地启动失败不阻塞聊天；持久账本仍由数据库保留，下一轮部署可恢复。
+    console.error('agent-network memory runtime failed to start', error);
+  }
+}
+
 // 启动扫描：崩溃遗留的 online 转为 pending/inferred；已到期的 pending 立即确认。
 await presence.recover();
 
@@ -286,11 +308,26 @@ const reminderSweep = setInterval(() => {
     });
 }, LIMITS.deliveryReminderScanMs);
 
+// Memory 作业租约与 outbox/maintenance 解耦；tick 内部保证单进程不重入。
+const memorySweep = memoryRuntime
+  ? setInterval(() => {
+      void (async () => {
+        const tick = await memoryRuntime!.tick();
+        if (tick.unknown > 0) await memoryRuntime!.reconcile();
+      })().catch(() => {
+        // 不记录来源正文、token 或 provider 路由。
+        console.error('agent-network memory sweep failed');
+      });
+    }, LIMITS.memoryTickIntervalMs)
+  : undefined;
+
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {
     clearInterval(schedule);
     clearInterval(presenceSweep);
     clearInterval(reminderSweep);
+    if (memorySweep) clearInterval(memorySweep);
+    await memoryRuntime?.stop();
     // 先给活动 SSE 发 graceful close，再停止接收新请求。
     if (env.NOTIFICATION_HUB.closeAllStreams() > 0) {
       await new Promise((resolve) => setTimeout(resolve, 50));

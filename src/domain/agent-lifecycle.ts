@@ -21,6 +21,11 @@ import type { AgentClaimRow } from '../storage/rows';
 import { operationsStatement, resolveReplay, runIdempotent } from '../storage/transactions/runner';
 import { getActiveManagement } from './agent-access';
 import { managementEventStatements } from './agent-management';
+import {
+  memoryInitialSpaceStatements,
+  memoryOwnershipTransferStatements,
+} from '../memory/statements';
+import type { MemorySpaceRow } from '../memory/rows';
 import { normalizeActorName } from './identity';
 import { actorId, type Principal } from './principal';
 
@@ -144,6 +149,16 @@ export async function createAgent(
            VALUES (?, ?, ?, 'active', 'created', '[]', 1, ?, ?, ?, ?, NULL, NULL, NULL, ?)`,
         )
         .bind(bindingId, agentId, caller.actor_id, caller.actor_id, caller.actor_id, at, at, at),
+      ...memoryInitialSpaceStatements(db, {
+        spaceId: newId('msp'),
+        transitionId: newId('mtr'),
+        instanceId: newId('mni'),
+        agentId,
+        ownerActorId: caller.actor_id,
+        ownershipKind: 'managed',
+        managementBindingId: bindingId,
+        now: at,
+      }),
       ...managementEventStatements(db, {
         eventKey,
         agentId,
@@ -381,6 +396,10 @@ export async function agentClaimConfirm(
     });
   }
   const bindingId = newId('amb');
+  const previousSpace = await db
+    .prepare('SELECT * FROM memory_spaces WHERE agent_actor_id = ? AND active = 1')
+    .bind(claim.agent_id)
+    .first<MemorySpaceRow>();
   const eventKey = `agent_claim_confirm:${claim.claim_id}`;
   const result: AgentClaimConfirmResult = {
     claim_id: claim.claim_id,
@@ -440,6 +459,18 @@ export async function agentClaimConfirm(
           at,
           at,
         ),
+      ...memoryOwnershipTransferStatements(db, {
+        previous: previousSpace,
+        nextSpaceId: newId('msp'),
+        transitionId: newId('mtr'),
+        instanceId: newId('mni'),
+        agentId: claim.agent_id,
+        ownerActorId: caller.actor_id,
+        ownershipKind: 'managed',
+        managementBindingId: bindingId,
+        kind: 'initial_claim',
+        now: at,
+      }),
       ...managementEventStatements(db, {
         eventKey,
         agentId: claim.agent_id,

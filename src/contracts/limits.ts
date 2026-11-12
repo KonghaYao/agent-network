@@ -479,6 +479,22 @@ export const LIMITS = {
   feedbackEnvironmentBytes: 4 * 1024,
   /** feedback problem 原始 UTF-8 字节上限。 */
   feedbackProblemBytes: 16 * 1024,
+  /** Memory 后端作业租约（毫秒）；过期只表示可对账，不等于远端失败。 */
+  memoryJobLeaseMs: 60_000,
+  /** 单轮 Memory 作业领取上限。 */
+  memoryJobBatchLimit: 20,
+  /** Memory 可重试作业最大尝试次数；耗尽后保持 failed 显式状态。 */
+  memoryJobMaxAttempts: 8,
+  /** Memory 作业重试退避基数 / 上限（毫秒）。 */
+  memoryJobBackoffBaseMs: 1_000,
+  memoryJobBackoffMaxMs: 5 * 60_000,
+  /** 运行时 tick 周期（毫秒）；由 Bun 入口定时调用。 */
+  memoryTickIntervalMs: 5_000,
+  /** prepared selection / catchup 计划的短期 TTL（毫秒）。 */
+  memoryPreparedTtlMs: 10 * 60_000,
+  memoryCatchupTtlMs: 24 * 60 * 60_000,
+  /** 已完成 Memory 作业的审计留存（毫秒）；来源/tombstone 不受此期限影响。 */
+  memoryJobRetentionMs: 30 * 24 * 60 * 60_000,
 } as const;
 
 export function clampPage(value: number | undefined, fallback: number, max: number): number {

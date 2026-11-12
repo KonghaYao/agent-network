@@ -1,5 +1,6 @@
 import type { FileService } from '@peri-code/mcpp/files';
 
+import type { MemoryRuntime } from './memory/runtime';
 import type { NotificationHub } from './realtime/hub';
 import type { AgentPresenceTimeline } from './realtime/presence-timeline';
 
@@ -36,4 +37,9 @@ export interface Env {
   FILES?: FileService;
   /** 启用 MCP Events 时存在；缺失时不声明 events 能力、不注册方法。 */
   EVENTS?: EventsConfig;
+  /**
+   * MF03 Memory 运行时；MEMORY_ENABLED=1 时由 Bun 入口构造。
+   * 缺失表示不启动作业领取，但已提交的 Memory 账本与遗忘屏障仍保留。
+   */
+  MEMORY?: MemoryRuntime;
 }

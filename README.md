@@ -593,6 +593,25 @@ AGENTNET_URL=http://127.0.0.1:18892 EVENTS_ACCEPTANCE=1 bun run test:acceptance
 4. 用事件里的 `delivery_id` 调 `network_delivery_claim` / `network_delivery_complete`，确认 webhook 触发的待办可以闭环。
 5. 用 500/410/413 receiver 验证重试与停止行为；重启服务后确认订阅仍在并在 `refreshBefore` 前刷新。
 
+### Memory 运行时（MF03）
+
+Memory 账本随迁移 `0045_memory_ledger.sql` 建立；默认副本可先不启动作业领取，聊天与投递不受影响。
+
+| 变量 | 说明 |
+| --- | --- |
+| `MEMORY_ENABLED=1` | 启动作业领取、启动恢复与租约扫描；不设置时不接管任何 Memory 作业。 |
+| `MEMORY_INSTANCE_ID` | 可选；固定部署 namespace。首次初始化后不得随意更换，配置与既有 `memory_instances` 不一致会 fail closed。 |
+| `MEMORY_CAPTURE=0` | 可选；停止新增 retain/来源写入，但撤回/遗忘屏障仍保留并继续执行。 |
+
+本地验证：
+
+```bash
+bun run test:memory-access
+bun run test:memory-ledger
+```
+
+MF03 只提供持久意图与租约；真实 Hindsight 适配器在 MF04，未启用前 stub 明确返回 unsupported，不伪报“已记住”。
+
 常见配置错误：
 
 - **把 `arguments.room_id` 当成偏好**：它是硬过滤。ChatGPT 若在创建订阅时固定某个单聊房间，群聊和其他房间的事件会被服务端按契约过滤，不会投递；这不是丢事件或服务端 bug。

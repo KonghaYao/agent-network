@@ -28,7 +28,10 @@
     "test:ux": "bun scripts/ux-luna/run.ts",
     "test:web:perf": "bun scripts/verify-web-perf.ts",
     "test:perf": "PERF_EXPECT_INDEX=1 bun scripts/verify-perf.ts",
-    "db:migrate": "bun src/bun/migrate.ts"
+    "db:migrate": "bun src/bun/migrate.ts",
+    "test:memory-access": "bun scripts/verify-memory-access.ts",
+    "test:memory-ledger": "bun scripts/verify-memory-ledger.ts && bun scripts/verify-memory-recovery.ts",
+    "test:memory-recovery": "bun scripts/verify-memory-recovery.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.3.1",
