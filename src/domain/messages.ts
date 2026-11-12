@@ -60,6 +60,7 @@ import {
 } from '../storage/transactions/runner';
 import { actorId, type Principal } from './principal';
 import { assertRoomWritable, capabilityGuardStatement, roomDissolvedGuardStatement } from './room-access';
+import { memoryMessageChangeStatements, type MemoryIntakeOptions } from '../memory/intake';
 import type { MessagePreviewView } from './rooms';
 import {
   decodeHistoryCursor,
@@ -862,6 +863,7 @@ export async function messageSend(
   db: D1Database,
   principal: Principal,
   input: MessageSendInput,
+  memory?: MemoryIntakeOptions | null,
 ): Promise<SendResult> {
   const sender = actorId(principal);
   const room = await getRoom(db, input.room_id);
@@ -983,6 +985,31 @@ export async function messageSend(
   };
 
   const payloadHash = await sha256Hex(stableStringify(input));
+  // Memory 启用时，共享来源与真实 delivery 的预热资格与消息同批提交；
+  // 未启用时不生成任何额外语句，也不做摘要计算。
+  const memoryStatements = memory?.capture
+    ? memoryMessageChangeStatements(db, memory, {
+        messageId,
+        eventKey,
+        senderId: sender,
+        body: outgoingBody,
+        bodyBytes,
+        digest: outgoingBody.length > 0 ? await sha256Hex(outgoingBody) : null,
+        createdAt: at,
+        roomId: room.room_id,
+        origin: {
+          roomId: room.room_id,
+          memberGeneration: member.member_generation,
+          policyRevision: boundary.policyRevision,
+          joinedSeq: member.joined_seq,
+          joinedAt: member.joined_at,
+          archiveHeadSeq: room.archive_head_seq,
+        },
+        deliveries,
+        taskRootId: core.taskRootId ?? null,
+        now: at,
+      })
+    : [];
 
   await runIdempotent(db, {
     actorId: sender,
@@ -993,6 +1020,7 @@ export async function messageSend(
       operationsStatement(db, sender, input.request_id, payloadHash, resultJson, at),
       ...messageGuardStatements(db, core),
       ...messageCoreStatements(db, core),
+      ...memoryStatements,
       db
         .prepare(
           `UPDATE operations

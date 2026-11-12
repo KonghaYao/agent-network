@@ -41,6 +41,12 @@ import {
   type HistoryBoundary,
   type HistorySnapshot,
 } from './room-history';
+import {
+  memoryTaskOfferChangeStatements,
+  memoryTaskOfferRetractionStatements,
+  nextTaskOfferRevision,
+  type MemoryIntakeOptions,
+} from '../memory/intake';
 
 export interface TaskMarkInput {
   request_id: string;
@@ -205,6 +211,64 @@ export async function readableRoom(
 }
 
 /**
+ * 任务起点同批 Memory 来源。
+ *
+ * 只登记消息与 task_offer 角色来源，并为真实 pending/claimed delivery 生成
+ * 预热资格；不根据正文 @ 字符串或空任务卡猜测对象。作者成员已退出时退回
+ * 当前标记者的成员快照，仍以消息原始 created_seq 作为来源序号。
+ */
+async function taskOfferIntakeStatements(
+  db: D1Database,
+  memory: MemoryIntakeOptions,
+  input: {
+    room: RoomRow;
+    member: RoomMemberRow;
+    message: MessageRow;
+    at: number;
+  },
+): Promise<D1PreparedStatement[]> {
+  if (!memory.capture) return [];
+  const senderMember =
+    (await getMember(db, input.room.room_id, input.message.sender_id)) ?? input.member;
+  const deliveries = await db
+    .prepare(
+      `SELECT delivery_id, recipient_id
+         FROM deliveries
+        WHERE message_id = ? AND state IN ('pending', 'claimed')
+        ORDER BY delivery_id`,
+    )
+    .bind(input.message.message_id)
+    .all<{ delivery_id: string; recipient_id: string }>();
+  const taskRevision = await nextTaskOfferRevision(db, memory, input.message.message_id);
+  return memoryTaskOfferChangeStatements(db, memory, {
+    messageId: input.message.message_id,
+    createdSeq: input.message.created_seq,
+    eventKey: `message:${input.message.message_id}`,
+    senderId: input.message.sender_id,
+    body: input.message.body,
+    bodyBytes: input.message.body_bytes,
+    digest:
+      input.message.body.length > 0 ? await sha256Hex(input.message.body) : null,
+    createdAt: input.message.created_at,
+    roomId: input.room.room_id,
+    origin: {
+      roomId: input.room.room_id,
+      memberGeneration: senderMember.member_generation,
+      policyRevision: input.room.policy_revision,
+      joinedSeq: senderMember.joined_seq,
+      joinedAt: senderMember.joined_at,
+      archiveHeadSeq: input.room.archive_head_seq,
+    },
+    deliveries: deliveries.results.map((delivery) => ({
+      deliveryId: delivery.delivery_id,
+      recipientId: delivery.recipient_id,
+    })),
+    now: input.at,
+    taskRevision,
+  });
+}
+
+/**
  * 标记任意可见消息为 Task 起点。
  *
  * 权限沿用 `send_message`：能发言的 active 成员才能新增聚合入口。目标已存在
@@ -215,6 +279,7 @@ export async function messageTaskMark(
   db: D1Database,
   principal: Principal,
   input: TaskMarkInput,
+  memory?: MemoryIntakeOptions | null,
 ): Promise<TaskMarkResult> {
   const actor = actorId(principal);
   const access = await requireRoomAccess(db, input.room_id, actor, 'send_message');
@@ -246,6 +311,14 @@ export async function messageTaskMark(
   }
 
   const at = nowMs();
+  const memoryStatements = memory?.capture
+    ? await taskOfferIntakeStatements(db, memory, {
+        room: access.room,
+        member: access.member,
+        message: target,
+        at,
+      })
+    : [];
   const payloadHash = await sha256Hex(stableStringify(input));
   const result: TaskMarkResult = {
     room_id: input.room_id,
@@ -262,6 +335,7 @@ export async function messageTaskMark(
     build: (resultJson) => {
       const statements = [
         operationsStatement(db, actor, input.request_id, payloadHash, resultJson, at),
+        ...memoryStatements,
       ];
       if (alreadyMarked) return statements;
       const eventKey = `message_task_marked:${target.message_id}:${input.request_id}`;
@@ -349,6 +423,7 @@ export async function messageTaskUnmark(
   db: D1Database,
   principal: Principal,
   input: TaskUnmarkInput,
+  memory?: MemoryIntakeOptions | null,
 ): Promise<TaskUnmarkResult> {
   const actor = actorId(principal);
   const access = await requireRoomAccess(db, input.room_id, actor, 'send_message');
@@ -365,6 +440,13 @@ export async function messageTaskUnmark(
 
   const wasMarked = target.task_root_id === target.message_id;
   const at = nowMs();
+  const memoryStatements =
+    memory && wasMarked
+      ? memoryTaskOfferRetractionStatements(db, memory, {
+          messageId: target.message_id,
+          now: at,
+        })
+      : [];
   const payloadHash = await sha256Hex(stableStringify(input));
   const result: TaskUnmarkResult = {
     room_id: input.room_id,
@@ -417,6 +499,9 @@ export async function messageTaskUnmark(
           { topic: roomTopic(access.room.room_id), eventKey },
           at,
         ),
+        // 取消标记让旧 task_offer 角色来源不可读；不写永久 tombstone，
+        // 之后重新标记会生成新的 task revision。
+        ...memoryStatements,
       );
       return statements;
     },

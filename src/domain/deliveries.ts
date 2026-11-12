@@ -19,7 +19,7 @@ import {
   roomTopic,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getActor, getDelivery, getMessage, getRoom } from '../storage/queries';
+import { getActor, getDelivery, getMember, getMessage, getRoom } from '../storage/queries';
 import type { DeliveryRow } from '../storage/rows';
 import {
   isOneClaimedConflict,
@@ -38,6 +38,7 @@ import { actorId, type Principal } from './principal';
 import type { MessagePreviewView } from './rooms';
 import { directBlockGuardStatement } from './contact-blocks';
 import { roomDissolvedGuardStatement } from './room-access';
+import { memoryMessageChangeStatements, type MemoryIntakeOptions } from '../memory/intake';
 
 /** 投递消息在摘要之外附带发送者展示身份，避免 Agent 凭记忆猜 @ 对象。 */
 export interface DeliveryMessageView extends MessagePreviewView {
@@ -547,6 +548,7 @@ export async function deliveryComplete(
   db: D1Database,
   principal: Principal,
   input: DeliveryCompleteInput,
+  memory?: MemoryIntakeOptions | null,
 ): Promise<CompleteResult> {
   const actor = actorId(principal);
   const delivery = await requireOwnedDelivery(db, principal, input.delivery_id);
@@ -570,6 +572,38 @@ export async function deliveryComplete(
     delivery_id: delivery.delivery_id,
     message_id: plan?.messageId ?? null,
   };
+  // final_body 是真实的最终消息，与 message_send 共用同一来源 key 约定；
+  // 这里没有新的 delivery，因此只登记来源，不产生额外预热。
+  let finalMemoryStatements: D1PreparedStatement[] = [];
+  if (memory?.capture && plan) {
+    const [room, member] = await Promise.all([
+      getRoom(db, delivery.room_id),
+      getMember(db, delivery.room_id, actor),
+    ]);
+    if (room && member && member.status === 'active') {
+      finalMemoryStatements = memoryMessageChangeStatements(db, memory, {
+        messageId: plan.messageId,
+        eventKey: plan.eventKey,
+        senderId: actor,
+        body: plan.body,
+        bodyBytes: plan.bodyBytes,
+        digest: plan.body.length > 0 ? await sha256Hex(plan.body) : null,
+        createdAt: at,
+        roomId: room.room_id,
+        origin: {
+          roomId: room.room_id,
+          memberGeneration: member.member_generation,
+          policyRevision: room.policy_revision,
+          joinedSeq: member.joined_seq,
+          joinedAt: member.joined_at,
+          archiveHeadSeq: room.archive_head_seq,
+        },
+        deliveries: [],
+        taskRootId: plan.taskRootId ?? null,
+        now: at,
+      });
+    }
+  }
 
   await runIdempotent(db, {
     actorId: actor,
@@ -581,6 +615,7 @@ export async function deliveryComplete(
       roomDissolvedGuardStatement(db, delivery.room_id),
       claimedGuard(db, delivery.delivery_id, input.attempt, input.claim_id),
       ...(plan ? [...messageGuardStatements(db, plan), ...messageCoreStatements(db, plan)] : []),
+      ...finalMemoryStatements,
       db
         .prepare(
           `UPDATE deliveries

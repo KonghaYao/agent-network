@@ -2,6 +2,7 @@ import type { McpServer, StandardSchemaWithJSON } from '@modelcontextprotocol/se
 import { z } from 'zod';
 
 import { isBusinessError } from '../contracts/errors';
+import { memoryIntakeFromEnv } from '../memory/intake';
 import { messageSearch, messageContext, messageSearchSchema, messageContextSchema, messageSearchOutputSchema, messageContextOutputSchema } from '../domain/message-search';
 import {
   messageTaskMark,
@@ -447,6 +448,8 @@ export function registerTools(
   const db = env.DB;
   const origin = env.PUBLIC_ORIGIN;
   const ticketSecret = fileTicketSecret(env.FILE_TICKET_SECRET);
+  // MEMORY_ENABLED=1 且运行时已启动时才追加来源/预热语句；否则保持原事务。
+  const memory = memoryIntakeFromEnv(env);
 
   register(
     server,
@@ -1500,7 +1503,7 @@ export function registerTools(
     sendResultSchema,
     async (input) => {
       requireActor(principal);
-      const result = await messageSend(db, principal, input);
+      const result = await messageSend(db, principal, input, memory);
       await runMessageCommittedHook(hooks, {
         messageId: result.message.message_id,
         roomId: result.message.room_id,
@@ -1518,7 +1521,7 @@ export function registerTools(
     z.object({ message_id: z.string(), recalled: z.literal(true) }),
     async (input) => {
       requireActor(principal);
-      return messageRecall(db, principal, input);
+      return messageRecall(db, principal, input, memory);
     },
   );
 
@@ -1560,7 +1563,7 @@ export function registerTools(
     taskMarkResultSchema,
     async (input) => {
       requireActor(principal);
-      return messageTaskMark(db, principal, input);
+      return messageTaskMark(db, principal, input, memory);
     },
     { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   );
@@ -1573,7 +1576,7 @@ export function registerTools(
     taskUnmarkResultSchema,
     async (input) => {
       requireActor(principal);
-      return messageTaskUnmark(db, principal, input);
+      return messageTaskUnmark(db, principal, input, memory);
     },
     { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   );
@@ -1701,7 +1704,7 @@ export function registerTools(
     completeResultSchema,
     async (input) => {
       requireActor(principal);
-      const result = await deliveryComplete(db, principal, input);
+      const result = await deliveryComplete(db, principal, input, memory);
       if (input.final_body && result.message) {
         await runMessageCommittedHook(hooks, {
           messageId: result.message.message_id,

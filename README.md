@@ -593,9 +593,17 @@ AGENTNET_URL=http://127.0.0.1:18892 EVENTS_ACCEPTANCE=1 bun run test:acceptance
 4. 用事件里的 `delivery_id` 调 `network_delivery_claim` / `network_delivery_complete`，确认 webhook 触发的待办可以闭环。
 5. 用 500/410/413 receiver 验证重试与停止行为；重启服务后确认订阅仍在并在 `refreshBefore` 前刷新。
 
-### Memory 运行时（MF03/MF11）
+### Memory 运行时（MF03/MF05/MF11）
 
 Memory 账本随迁移 `0045_memory_ledger.sql` 建立；MF11 的补读快照、请求幂等与证据追加由 `0046_memory_experience_catchup.sql` 补齐。默认副本可先不启动作业领取，聊天与投递不受影响。
+
+MF05 在现有业务事务内追加纯 SQL 来源/预热意图（`src/memory/intake.ts`）：
+
+- **来源 key**：消息 `message:<message_id>`、消息式任务角色 `task_offer:<message_id>`、房间文件 `file:<file_id>`。来源记录 digest、作者、origin room 与写入时的成员代次/策略版本/加入边界/归档上界；消息事件序号在同一 batch 内补齐，不按 `messages.updated_at` 猜版本。
+- **同批提交**：`network_message_send`、带 `final_body` 的 `network_delivery_complete`、`network_task_mark/unmark`、`network_room_file_bind/delete` 的 Memory 语句与业务写入共用 `db.batch()`；Memory SQL 失败时业务一起回滚。
+- **预热**：只为真实 `deliveries` 写 `warmup_only=1` 的 RecallRequest，消息与任务分别使用 `auto:message:<id>` / `auto:task_offer:<id>`；不按正文 @ 字符串或空任务卡猜对象。预热不产生经历或 retain 资格，个人经历仍只由合格 ExposureReceipt 接纳。
+- **撤回/删除**：消息撤回同时使 `message:*` 与 `task_offer:*` 不可读并写永久 tombstone；文件删除写 `file_deleted` tombstone。`MEMORY_CAPTURE=0` 时停止新增来源/预热，但撤回与删除屏障照常执行。
+- **开关**：只有 `MEMORY_ENABLED=1` 且运行时已启动时才追加上述语句；未启用时不新增查询或语句，聊天事务保持原样。
 
 MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.ts`、`catchup.ts` 与 `host-protocol.ts`：
 
@@ -603,7 +611,7 @@ MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.t
 - **最终清单**：`SubmittedInputManifest` 由服务端按 selection 与实际 payload 重建，items 只读；同一 invocation 只能绑定一个 manifest，换清单/hash 返回 `IDEMPOTENCY_CONFLICT`。prepared selection 不产生经历。
 - **补读**：`planCatchup` 固定本轮 H、成员代次与策略版本；`prepareCatchupSelections` 只生成 `not_consumed` selection。未读集合不会写 events、pending_count 或经历，计划过期/退群重加后不可继续消费。
 - **证据协议**：`host-protocol.ts` 冻结 HostBridge 消息：宿主提交 `MemoryHostFinalManifestReport`（invocation、target、实际 payload、逐项 selection/representation/hash）与 `MemoryHostExposureReport`（manifest/payload hash、request_id，不含 evidence/trusted）；证据等级由服务端按 HostBinding 等级派生，客户端自报 `trusted/verified/evidence` 返回 `INVALID_ARGUMENT`。受控网关另报 `MemoryGatewayObservationReport` 追加独立 proof，不新建 receipt、不重复经历。MF07 尚未实现，仓库内只有服务端协议与受控 stub 路径。
-- **限制（未完成）**：未接 Hindsight 真实 API，未注册 MCP 工具与 UI（MF06/MF08），未实现宿主 SDK/网关（MF07）；跨房披露必须由服务端传入已核实 grant，客户端不能自报。补读来源沿用 `message:<message_id>` 作为共享 source key，MF05 接入时必须复用同一约定，否则 frontier 不会把该消息视为已登记来源。
+- **限制（未完成）**：未接 Hindsight 真实 API，未注册 MCP 工具与 UI（MF06/MF08），未实现宿主 SDK/网关（MF07）；跨房披露必须由服务端传入已核实 grant，客户端不能自报。当前任务模型是消息式 Task（迁移 0042 已删除旧任务实体），因此只登记 `task_offer` 角色来源，不实现旧 `task_submission/task_review/task_handoff` 路径。未绑定到房间的 Drive 草稿不是共享来源，绑定到房间时才登记 `file:<file_id>`；来源正文只在策略允许时保存，业务权威仍在原消息/文件系统。
 
 | 变量 | 说明 |
 | --- | --- |
@@ -617,6 +625,7 @@ MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.t
 bun run test:memory-access
 bun run test:memory-ledger
 bun run test:memory-experience
+bun run test:memory-intake
 ```
 
 MF03 只提供持久意图与租约；真实 Hindsight 适配器在 MF04，未启用前 stub 明确返回 unsupported，不伪报“已记住”。

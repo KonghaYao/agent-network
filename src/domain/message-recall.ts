@@ -9,12 +9,13 @@ import { operationsStatement, runIdempotent } from '../storage/transactions/runn
 import { actorId, type Principal } from './principal';
 import { historyBoundary, visibleMessage } from './room-history';
 import { assertRoomWritable, capabilityGuardStatement, roomDissolvedGuardStatement } from './room-access';
+import { memoryMessageRetractionStatements, type MemoryIntakeOptions } from '../memory/intake';
 
 const TOMBSTONE = '此消息已撤回';
 export interface MessageRecallResult { message_id: string; recalled: true }
 
 /** 普通 human 自己的消息限时撤回；只清空正文，不改变其历史定位。 */
-export async function messageRecall(db: D1Database, principal: Principal, input: MessageRecallInput): Promise<MessageRecallResult> {
+export async function messageRecall(db: D1Database, principal: Principal, input: MessageRecallInput, memory?: MemoryIntakeOptions | null): Promise<MessageRecallResult> {
   const actor = actorId(principal);
   const message = await getMessage(db, input.message_id);
   if (!message) throw new BusinessError('NOT_FOUND', '消息不存在');
@@ -57,6 +58,14 @@ export async function messageRecall(db: D1Database, principal: Principal, input:
           AND NOT EXISTS (SELECT 1 FROM events WHERE event_key = ?)`)
         .bind(room.room_id, message.message_id, JSON.stringify({ room_id: room.room_id, message_id: message.message_id, sender_id: actor, body_sha256: bodyHash }), eventKey, at, message.message_id, TOMBSTONE, eventKey),
       outboxStatementIfAbsent(db, { topic: roomTopic(room.room_id), eventKey }, at),
+      // 撤回是明确的来源排除证据：与正文清空、事件和 outbox 同批提交。
+      // MEMORY_CAPTURE 关闭时仍保留该屏障，避免已登记来源继续被读取。
+      ...(memory
+        ? memoryMessageRetractionStatements(db, memory, {
+            messageId: message.message_id,
+            now: at,
+          })
+        : []),
     ],
   });
   return { message_id: message.message_id, recalled: true };
