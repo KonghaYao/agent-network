@@ -253,6 +253,7 @@ function scheduleRoomListRefresh(urgent) {
 function afterStreamConnected(task, isReconnect) {
   ensureIdentity().then(function (me) {
     if (task !== streamTask || streamStopped) return undefined;
+    if (isReconnect) memoryHandleReconnect();
     if (me && me.kind === 'agent') {
       return callTool('network_login', {}).catch(function (error) {
         streamDebug('login after ack failed', error && error.message ? error.message : String(error));

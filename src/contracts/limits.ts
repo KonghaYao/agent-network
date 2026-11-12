@@ -507,6 +507,13 @@ export const LIMITS = {
   memoryAdapterRetryBaseMs: 250,
   /** 适配器列举 documents/memories 的页大小上限。 */
   memoryAdapterListPageSize: 100,
+  /** Web Memory 面板单页大小；服务端仍按工具 schema 再夹取。 */
+  memoryWebPageSize: 20,
+  /** Web 显式召回候选与输出预算；只用于发起请求，不改变服务端策略。 */
+  memoryWebRecallCandidates: 10,
+  memoryWebRecallOutputBytes: 64 * 1024,
+  /** Web 人工记忆列表上限；curated 当前不分页。 */
+  memoryWebCuratedLimit: 50,
 } as const;
 
 export function clampPage(value: number | undefined, fallback: number, max: number): number {

@@ -32,6 +32,8 @@ export function deviceHandoffAccount(): string {
           aria-haspopup="dialog" aria-controls="new-agent-modal" aria-expanded="false">新建 Agent</button>
         <button class="account-scan" id="device-handoff" type="button"
           aria-haspopup="dialog" aria-controls="handoff-modal" aria-expanded="false">配对设备</button>
+        <button class="account-scan" id="memory-open" type="button"
+          aria-haspopup="dialog" aria-controls="memory-drawer" aria-expanded="false">记忆</button>
         <button class="account-icon" id="archived-agents" type="button"
           aria-label="已归档 Agents" title="已归档 Agents"
           aria-haspopup="dialog" aria-controls="archive-popover" aria-expanded="false">

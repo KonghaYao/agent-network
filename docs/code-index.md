@@ -112,6 +112,8 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 消息式 Task 工具与输入/输出 schema | `src/mcp/tools.ts`、`src/contracts/schemas.ts`、`src/mcp/outputs.ts` |
 | 消息式 Task 网页摘要行、Trace 抽屉与样式 | `src/web/chat-task-trace-script.ts`、`src/web/chat-task-trace-panels.ts`、`src/web/chat-task-trace-styles.ts` |
 | 消息式 Task 浏览器/端到端验收 | `scripts/lib/message-task-web.ts`、`scripts/lib/message-task-acceptance.ts`、`scripts/verify-message-tasks.ts` |
+| Memory 网页状态、召回、上下文、经历、宿主与治理 | `src/web/chat-memory-panels.ts`、`src/web/chat-memory-state-script.ts`、`src/web/chat-memory-script.ts`、`src/web/chat-memory-governance-script.ts`、`src/web/chat-memory-styles.ts` |
+| Memory 网页验收（禁用降级、真实经历/Context、遗忘确认、移动端/暗色） | `scripts/lib/memory-web.ts`、`scripts/verify-web.ts` |
 | `messages.task_root_id` 标记列与索引 | `migrations/0041_message_task_trace.sql` |
 | G06/A06 专项验收 | `scripts/lib/room-lifecycle-acceptance.ts`、`scripts/lib/agent-transfer-acceptance.ts` |
 | Q01 文档/工具一致性与迁移升级检查 | `scripts/q01-doc-check.ts`、`scripts/q01-upgrade-check.ts`、`docs/feature-matrix.md`、`reports/Q01.md` |
