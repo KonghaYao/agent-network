@@ -7,7 +7,7 @@
  * 可操作的中文提示，错误信息里不放签名 URL。
  */
 
-import { stat } from 'node:fs/promises';
+import { rename, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
 import { commaList, newId, optionalInteger, required } from '../options';
@@ -665,27 +665,40 @@ export async function download(
   }
   if (!response.ok) throw downloadStatusError(response.status, response.statusText);
 
+  // 先写同目录临时文件，校验通过后再 rename；失败绝不覆盖已有目标文件。
+  const temporary = `${target}.part-${crypto.randomUUID()}`;
   try {
-    await Bun.write(target, response);
+    await Bun.write(temporary, response);
   } catch (error) {
-    await Bun.file(target)
+    await Bun.file(temporary)
       .unlink()
       .catch(() => {});
     const reason = error instanceof Error ? error.message : String(error);
     throw new CliError(`无法写入 ${target}：${reason}`, { code: 'DOWNLOAD_WRITE_FAILED' });
   }
 
-  const actualSize = (await stat(target)).size;
-  const actualSha = await sha256File(target);
+  let actualSize: number;
+  let actualSha: string;
+  try {
+    actualSize = (await stat(temporary)).size;
+    actualSha = await sha256File(temporary);
+  } catch (error) {
+    await Bun.file(temporary)
+      .unlink()
+      .catch(() => {});
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new CliError(`无法校验下载文件：${reason}`, { code: 'DOWNLOAD_WRITE_FAILED' });
+  }
+
   if (
     (file.size > 0 && actualSize !== file.size) ||
     (file.sha256.length > 0 && actualSha !== file.sha256)
   ) {
-    await Bun.file(target)
+    await Bun.file(temporary)
       .unlink()
       .catch(() => {});
     throw new CliError(
-      `下载内容校验失败（size/sha256 与房间文件元数据不一致）；已删除临时文件 ${target}，请重试`,
+      `下载内容校验失败（size/sha256 与房间文件元数据不一致）；已删除临时文件 ${temporary}，原目标文件未改动，请重试`,
       {
         code: 'DOWNLOAD_VERIFY_FAILED',
         details: {
@@ -697,6 +710,16 @@ export async function download(
         },
       },
     );
+  }
+
+  try {
+    await rename(temporary, target);
+  } catch (error) {
+    await Bun.file(temporary)
+      .unlink()
+      .catch(() => {});
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new CliError(`无法写入 ${target}：${reason}`, { code: 'DOWNLOAD_WRITE_FAILED' });
   }
 
   const output = {
