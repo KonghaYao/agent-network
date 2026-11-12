@@ -181,11 +181,23 @@ function parseVersion(text: string): {
   };
 }
 
-function supportedVersion(version: NonNullable<ReturnType<typeof parseVersion>>): boolean {
-  if (version.major !== 0 || version.minor !== 2 || version.patch < 1) return false;
-  if (version.patch > 1 || version.prerelease === null) return true;
+/**
+ * 受支持的 DSH 版本。
+ *
+ * 基础区间交给 `Bun.semver`；Bun 对 `<0.3.0` 的预发布一律返回 false，
+ * 因此 rc 版本再用同一条区间校验核心版本，只允许 `rc.N`：
+ * `0.2.1-rc.5` 起、`0.2.2-rc.*` 放行，`0.2.2-beta` 拒绝。
+ */
+export function isSupportedDshVersion(raw: string): boolean {
+  const version = parseVersion(raw);
+  if (!version) return false;
+  if (Bun.semver.satisfies(version.raw, DSH_SUPPORTED_RANGE)) return true;
+  if (version.prerelease === null) return false;
   const rc = /^rc\.(\d+)$/u.exec(version.prerelease);
-  return rc !== null && Number(rc[1]) >= 5;
+  if (!rc) return false;
+  const core = `${version.major}.${version.minor}.${version.patch}`;
+  if (!Bun.semver.satisfies(core, DSH_SUPPORTED_RANGE)) return false;
+  return version.patch > 1 || (version.patch === 1 && Number(rc[1]) >= 5);
 }
 
 async function detectDshVersion(): Promise<string> {
@@ -195,7 +207,7 @@ async function detectDshVersion(): Promise<string> {
   }
   const version = parseVersion(`${result.stdout}\n${result.stderr}`);
   if (!version) throw new CliError('无法识别 DSH 版本输出；请升级到受支持版本。');
-  if (!supportedVersion(version)) {
+  if (!isSupportedDshVersion(version.raw)) {
     throw new CliError(
       `DSH ${version.raw} 不受支持；需要 ${DSH_SUPPORTED_RANGE}，请先升级或切换版本。`,
     );
