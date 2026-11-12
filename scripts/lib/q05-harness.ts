@@ -6,13 +6,15 @@
  * actor_id、request_id 与错误码，不输出凭据、消息正文或连接串。
  */
 
-import { rm } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import { Database } from 'bun:sqlite';
 
 import { parseSseJsonText } from '../../src/contracts/sse';
 import { rawRpc, sleep, waitUntil } from './harness';
+import { reservePort, startTestServer, type TestServer } from './test-server';
 
 export { sleep, waitUntil };
 
@@ -20,7 +22,6 @@ export const DEFAULT_SEED = 20261108;
 export const DEFAULT_ROUNDS = 100;
 export const Q05_STREAM_URI = 'agentnet://stream';
 
-const WORKTREE_ROOT = resolve(import.meta.dir, '../..');
 const FILE_TICKET_SECRET = `q05_${crypto.randomUUID().replaceAll('-', '')}`;
 
 export function seedFromEnv(): number {
@@ -91,33 +92,33 @@ export class Q05Server {
   readonly dbPath: string;
   port: number;
   base: string;
-  private proc: Bun.Subprocess | null = null;
-  private stderrTail = '';
+  private server: TestServer | null = null;
 
-  private constructor(dataDir: string, port: number) {
+  private constructor(dataDir: string) {
     this.dataDir = dataDir;
     this.dbPath = resolve(dataDir, 'agent-network.sqlite');
-    this.port = port;
-    this.base = `http://127.0.0.1:${port}`;
+    this.port = 0;
+    this.base = '';
   }
 
   static async start(options: Q05ServerOptions = {}): Promise<Q05Server> {
-    const dataDir = options.dataDir ?? `/tmp/agentnet-q05-${process.pid}-${Date.now()}`;
-    const server = new Q05Server(dataDir, options.port ?? 19600 + Math.floor(Math.random() * 700));
-    await server.spawn();
+    const dataDir =
+      options.dataDir ?? (await mkdtemp(join(tmpdir(), `agentnet-q05-${process.pid}-`)));
+    const server = new Q05Server(dataDir);
+    await server.spawn(options.port);
     process.env.AGENTNET_URL = server.base;
     return server;
   }
 
-  private async spawn(): Promise<void> {
-    const proc = Bun.spawn(['bun', resolve(WORKTREE_ROOT, 'src/bun/main.ts')], {
-      cwd: WORKTREE_ROOT,
+  private async spawn(preferredPort?: number): Promise<void> {
+    const port = preferredPort ?? reservePort();
+    const base = `http://127.0.0.1:${port}`;
+    const server = await startTestServer({
+      port,
+      dataDir: this.dataDir,
+      tag: 'q05',
       env: {
-        ...process.env,
-        PORT: String(this.port),
-        HOST: '127.0.0.1',
-        DATA_DIR: this.dataDir,
-        PUBLIC_ORIGIN: this.base,
+        PUBLIC_ORIGIN: base,
         ENVIRONMENT: 'test',
         NODE_ENV: 'test',
         // 短 presence 窗口只影响在线提示，不改变消息、任务与授权语义。
@@ -128,64 +129,32 @@ export class Q05Server {
         // 重启后旧下载票据仍可验证；测试进程内固定，不写入仓库。
         FILE_TICKET_SECRET,
       },
-      stdout: 'ignore',
-      stderr: 'pipe',
     });
-    this.proc = proc;
-    this.stderrTail = '';
-    void this.captureStderr(proc);
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-      if (Date.now() > deadline) {
-        proc.kill();
-        throw new Error(
-          `Q05 自托管实例未在 20s 内就绪 (PORT=${this.port}, DATA_DIR=${this.dataDir})`,
-        );
-      }
-      try {
-        const response = await fetch(`${this.base}/health`);
-        if (response.ok) return;
-      } catch {
-        // 尚未监听
-      }
-      await sleep(100);
-    }
-  }
-
-  private async captureStderr(proc: Bun.Subprocess): Promise<void> {
-    const reader = proc.stderr;
-    if (!reader || typeof reader === 'number') return;
-    const decoder = new TextDecoder();
-    try {
-      for await (const chunk of reader as AsyncIterable<Uint8Array>) {
-        this.stderrTail = (this.stderrTail + decoder.decode(chunk, { stream: true })).slice(-8000);
-      }
-    } catch {
-      // 进程退出/管道关闭
-    }
+    this.server = server;
+    this.port = server.port;
+    this.base = server.base;
   }
 
   stderrSummary(): string {
     // 服务端日志本身不含 token/正文；这里再截断一次，只用于失败诊断。
-    return this.stderrTail.split('\n').slice(-12).join('\n');
+    return this.server?.tail() ?? '';
   }
 
   async stop(): Promise<void> {
-    const proc = this.proc;
-    this.proc = null;
-    if (!proc) return;
-    proc.kill();
-    await proc.exited.catch(() => undefined);
+    const server = this.server;
+    this.server = null;
+    if (!server) return;
+    await server.stop();
   }
 
-  /** 用新进程读同一 DATA_DIR；先尝试原端口，失败则换唯一端口。 */
+  /** 用新进程读同一 DATA_DIR；优先复用原端口，让已签发的上传 URL 仍可用。 */
   async restart(): Promise<void> {
     await this.stop();
+    const previousPort = this.port;
     try {
-      await this.spawn();
+      await this.spawn(previousPort);
     } catch {
-      this.port = 19600 + Math.floor(Math.random() * 700);
-      this.base = `http://127.0.0.1:${this.port}`;
+      await Bun.sleep(200);
       await this.spawn();
     }
     process.env.AGENTNET_URL = this.base;

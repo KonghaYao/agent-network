@@ -82,7 +82,7 @@ const OWNER_ONLY: ReadonlySet<RoomCapability> = new Set([
  * JS 能力表与事务 guard 共用这些谓词，保证预检和提交时判定一致。
  * 别名固定为 `r`（rooms）和 `m`（调用者 room_members）。
  */
-const CAPABILITY_PREDICATES: Record<RoomCapability, string> = {
+export const CAPABILITY_PREDICATES: Record<RoomCapability, string> = {
   send_message:
     "(r.kind = 'direct' OR m.role IN ('owner', 'admin') OR r.member_message_policy = 'members')",
   invite_members:

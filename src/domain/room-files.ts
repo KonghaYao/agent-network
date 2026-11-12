@@ -13,9 +13,7 @@ import { eventStatement, outboxStatement, roomTopic } from '../storage/events';
 import { guardSql } from '../storage/guards';
 import {
   getDriveFile,
-  getMember,
   getOperation,
-  getRoom,
   getRoomFile,
 } from '../storage/queries';
 import type { RoomFileRow, RoomMemberRow, RoomRow } from '../storage/rows';
@@ -44,7 +42,7 @@ import {
   type HistoryBoundary,
   type HistorySnapshot,
 } from './room-history';
-import { assertRoomWritable, roomDissolvedGuardStatement } from './room-access';
+import { assertRoomWritable, loadRoomAccess, roomDissolvedGuardStatement } from './room-access';
 import {
   memoryFileChangeStatements,
   memoryFileRetractionStatements,
@@ -154,12 +152,7 @@ async function requireRoomMember(
   roomId: string,
 ): Promise<{ caller: string; room: RoomRow; member: RoomMemberRow; boundary: HistoryBoundary }> {
   const caller = actorId(principal);
-  const room = await getRoom(db, roomId);
-  if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
-  const member = await getMember(db, room.room_id, caller);
-  if (!member || member.status !== 'active') {
-    throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
-  }
+  const { room, member } = await loadRoomAccess(db, roomId, caller);
   return { caller, room, member, boundary: historyBoundary(room, member) };
 }
 

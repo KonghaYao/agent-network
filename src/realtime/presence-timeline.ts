@@ -1,3 +1,4 @@
+import { TTLCache } from '@isaacs/ttlcache';
 import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
 import {
@@ -86,6 +87,11 @@ export class AgentPresenceTimeline {
   readonly #hasConnection: ((actorId: string) => boolean) | undefined;
   readonly #onPresenceCommitted: (() => void) | undefined;
   readonly #queues = new Map<string, Promise<void>>();
+  /**
+   * touch 节流缓存：命中且未超过 throttle 时跳过 `#getState` 读库。
+   * 任何状态转换都必须失效对应 actor，避免“缓存说在线、DB 已离线”。
+   */
+  readonly #touchCache: TTLCache<string, number>;
 
   constructor(db: D1Database, options: AgentPresenceTimelineOptions = {}) {
     this.#db = db;
@@ -98,6 +104,15 @@ export class AgentPresenceTimeline {
     this.#onError =
       options.onError ??
       ((error) => console.error('agent-network presence transition failed', errorText(error)));
+    this.#touchCache = new TTLCache<string, number>({
+      ttl: this.#touchThrottleMs,
+      max: LIMITS.agentPresenceTouchCacheMax,
+    });
+  }
+
+  /** 状态转换后失效节流缓存；下一次 touch 必须重新读状态。 */
+  #invalidateTouch(actorId: string): void {
+    this.#touchCache.delete(actorId);
   }
 
   /** login 工具在 hub 标记在线后等待本次写入；失败不改变 login 结果。 */
@@ -266,10 +281,15 @@ export class AgentPresenceTimeline {
    * last_seen_at。节流写只是普通时间戳更新，不参与幂等业务写入。
    */
   async #recordActivity(actorId: string, at: number): Promise<void> {
+    const cached = this.#touchCache.get(actorId);
+    if (cached !== undefined && at >= cached && at - cached < this.#touchThrottleMs) return;
     const state = await this.#getState(actorId);
     if (state?.phase === 'online') {
       const last = state.last_seen_at;
-      if (last !== null && at >= last && at - last < this.#touchThrottleMs) return;
+      if (last !== null && at >= last && at - last < this.#touchThrottleMs) {
+        this.#touchCache.set(actorId, last);
+        return;
+      }
       await this.#db
         .prepare(
           `UPDATE agent_presence_state
@@ -278,12 +298,15 @@ export class AgentPresenceTimeline {
         )
         .bind(at, at, actorId)
         .run();
+      this.#touchCache.set(actorId, at);
       return;
     }
+    this.#invalidateTouch(actorId);
     await this.#startOnline(actorId, at, false);
   }
 
   async #startOnline(actorId: string, at: number, requireConnection: boolean): Promise<void> {
+    this.#invalidateTouch(actorId);
     // login/连接事件与最后连接关闭可能交错：写入前以 hub 当前连接为准。
     // 请求触碰本身就是可用性证据，不做该复查。
     if (requireConnection && this.#hasConnection && !this.#hasConnection(actorId)) return;
@@ -385,6 +408,7 @@ export class AgentPresenceTimeline {
   }
 
   async #resume(actorId: string, state: PresenceStateRow, at: number): Promise<void> {
+    this.#invalidateTouch(actorId);
     const generationId = state.generation_id as string;
     const requestId = `presence:${generationId}:resume:${state.revision}`;
     const payload = { actorId, generationId, revision: state.revision, phase: 'online' };
@@ -420,6 +444,7 @@ export class AgentPresenceTimeline {
   }
 
   async #observeDisconnect(actorId: string, at: number): Promise<void> {
+    this.#invalidateTouch(actorId);
     // 队列里可能已经排着新连接；仍有连接就不进入 pending。
     if (this.#hasConnection?.(actorId)) return;
     const state = await this.#getState(actorId);
@@ -439,6 +464,7 @@ export class AgentPresenceTimeline {
   }
 
   async #markRecoveredPending(actorId: string): Promise<void> {
+    this.#invalidateTouch(actorId);
     const state = await this.#getState(actorId);
     if (!state || state.phase !== 'online' || !state.generation_id) return;
     const at = this.#now();
@@ -455,6 +481,7 @@ export class AgentPresenceTimeline {
   }
 
   async #markStalePending(actorId: string, at: number): Promise<void> {
+    this.#invalidateTouch(actorId);
     // 排队期间可能已有新连接；仍以 hub 当前状态为准。
     if (this.#hasConnection?.(actorId)) return;
     const state = await this.#getState(actorId);
@@ -546,6 +573,7 @@ export class AgentPresenceTimeline {
   }
 
   async #confirmOffline(actorId: string, state: PresenceStateRow, at: number): Promise<void> {
+    this.#invalidateTouch(actorId);
     if (!state.generation_id) return;
     const generationId = state.generation_id;
     const occurredAt = state.disconnect_observed_at ?? at;

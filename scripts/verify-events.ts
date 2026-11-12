@@ -47,13 +47,17 @@ import {
   type TestReceiver,
   type TestServer,
 } from './lib/events-harness';
+import { reservePort } from './lib/test-server';
 import { runEventsValidationChecks } from './lib/events-validation';
 import { runEventsClientChecks } from './lib/events-client-check';
 import { runEventsFileLogChecks } from './lib/events-file-log-check';
 import { runEventsRuntimeChecks } from './lib/events-runtime-check';
 
 const EVENT_NAME = 'agentnet.message.created';
-const SERVER_PORT = Number(process.env.EVENTS_TEST_PORT ?? 18890);
+// 未显式指定时预留空闲端口；避免多次运行或并行套件争用固定 18890。
+const SERVER_PORT = process.env.EVENTS_TEST_PORT
+  ? Number(process.env.EVENTS_TEST_PORT)
+  : reservePort();
 const DATA_DIR =
   process.env.EVENTS_TEST_DATA_DIR ??
   join(tmpdir(), `an-events-${crypto.randomUUID().replaceAll('-', '')}`);

@@ -27,7 +27,7 @@ import {
   verifyFileTicket,
 } from './file-ticket';
 import { actorId, type Principal } from './principal';
-import { assertRoomWritable, roomDissolvedGuardStatement } from './room-access';
+import { assertRoomWritable, loadRoomAccess, roomDissolvedGuardStatement } from './room-access';
 
 /**
  * 文件可见性的应用层授权模型。
@@ -384,12 +384,7 @@ export async function requireActiveMember(
   roomId: string,
 ): Promise<ActiveMembership> {
   const caller = actorId(principal);
-  const room = await getRoom(db, roomId);
-  if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
-  const member = await getMember(db, room.room_id, caller);
-  if (!member || member.status !== 'active') {
-    throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
-  }
+  const { room, member } = await loadRoomAccess(db, roomId, caller);
   return { caller, room, member, boundary: historyBoundary(room, member) };
 }
 

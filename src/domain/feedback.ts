@@ -1,4 +1,5 @@
 import { BusinessError } from '../contracts/errors';
+import { hasControlChars } from '../contracts/text';
 import { LIMITS } from '../contracts/limits';
 import type { FeedbackCreateInput } from '../contracts/schemas';
 import { newId, nowMs, sha256Hex, stableStringify, utf8Bytes } from '../storage/db';
@@ -15,11 +16,6 @@ export interface FeedbackCreateResult {
 }
 
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
-/** harness 是单行标识符，不允许任何 C0/C1 控制字符。 */
-const HARNESS_CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
-/** 诊断正文允许制表、换行与回车，其余 C0/C1 一律拒绝。 */
-const TEXT_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
-
 const URL_PLACEHOLDER = '[REDACTED_URL]';
 const SECRET_PLACEHOLDER = '[REDACTED]';
 
@@ -61,7 +57,7 @@ function requireText(
   value: unknown,
   field: 'environment' | 'harness' | 'problem',
   maxBytes: number,
-  forbiddenControl: RegExp,
+  allowNewlines: boolean,
 ): string {
   if (typeof value !== 'string') {
     throw new BusinessError('INVALID_ARGUMENT', `${field} 必须是字符串`, { field });
@@ -72,7 +68,7 @@ function requireText(
       max_bytes: maxBytes,
     });
   }
-  if (forbiddenControl.test(value)) {
+  if (hasControlChars(value, { allowNewlines })) {
     throw new BusinessError('INVALID_ARGUMENT', `${field} 包含不允许的控制字符`, { field });
   }
   const trimmed = value.trim();
@@ -94,14 +90,14 @@ export async function createFeedback(
     input.environment,
     'environment',
     LIMITS.feedbackEnvironmentBytes,
-    TEXT_CONTROL,
+    true,
   );
-  const harness = requireText(input.harness, 'harness', LIMITS.feedbackHarnessBytes, HARNESS_CONTROL);
+  const harness = requireText(input.harness, 'harness', LIMITS.feedbackHarnessBytes, false);
   const problem = requireText(
     input.problem,
     'problem',
     LIMITS.feedbackProblemBytes,
-    TEXT_CONTROL,
+    true,
   );
 
   // 幂等 hash 使用原始输入（含未脱敏值），tool 域分隔避免跨工具 request_id 误重放。

@@ -28,6 +28,7 @@ import type { MemorySourceRow } from '../../src/memory/rows';
 import type { MemorySpaceRef } from '../../src/memory/contracts';
 import { rawRepresentation, summaryRepresentation } from './memory-unit';
 import { check, checkEqual, newToken, rawRpc, sleep } from './harness';
+import { reservePort, startTestServer } from './test-server';
 
 const INSTANCE_ID = 'mni_mf08_web';
 
@@ -86,16 +87,13 @@ function requestId(prefix: string): string {
 }
 
 async function startMemoryServer(): Promise<MemoryServer> {
-  const port = 19700 + Math.floor(Math.random() * 500);
+  const port = reservePort();
   const base = `http://127.0.0.1:${port}`;
-  const dataDir = `/tmp/agentnet-memory-web-${process.pid}-${Date.now()}`;
-  const proc = Bun.spawn([Bun.which('bun') ?? 'bun', resolve(import.meta.dir, '../../src/bun/main.ts')], {
-    cwd: resolve(import.meta.dir, '../..'),
+  const server = await startTestServer({
+    port,
+    tag: 'memory-web',
     env: {
-      ...process.env,
-      PORT: String(port),
-      DATA_DIR: dataDir,
-      DATABASE_PATH: `${dataDir}/agent-network.sqlite`,
+      DATABASE_PATH: undefined,
       PUBLIC_ORIGIN: base,
       ENVIRONMENT: 'test',
       MEMORY_ENABLED: '1',
@@ -103,36 +101,11 @@ async function startMemoryServer(): Promise<MemoryServer> {
       MEMORY_INSTANCE_ID: INSTANCE_ID,
       MEMORY_HOST_TRUST: 'adapted_host',
     },
-    stdout: 'ignore',
-    stderr: 'inherit',
   });
-  try {
-    let ready = false;
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      try {
-        const response = await fetch(`${base}/health`);
-        if (response.ok) {
-          ready = true;
-          break;
-        }
-      } catch {
-        // 服务尚未监听
-      }
-      await sleep(100);
-    }
-    if (!ready) throw new Error('Memory 验收实例未在 10s 内就绪');
-  } catch (error) {
-    proc.kill();
-    throw error;
-  }
   return {
-    base,
-    dataDir,
-    async stop() {
-      proc.kill();
-      await proc.exited.catch(() => undefined);
-      await rm(dataDir, { recursive: true, force: true });
-    },
+    base: server.base,
+    dataDir: server.dataDir,
+    stop: () => server.dispose(),
   };
 }
 

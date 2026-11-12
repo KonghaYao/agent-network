@@ -4,11 +4,11 @@ import { LIMITS } from '../contracts/limits';
 import { nowMs, sha256Hex, stableStringify } from '../storage/db';
 import { outboxStatementIfAbsent, roomTopic } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getMember, getMessage, getRoom } from '../storage/queries';
+import { getMessage } from '../storage/queries';
 import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
 import { actorId, type Principal } from './principal';
 import { historyBoundary, visibleMessage } from './room-history';
-import { assertRoomWritable, capabilityGuardStatement, roomDissolvedGuardStatement } from './room-access';
+import { assertRoomWritable, capabilityGuardStatement, loadRoomAccess, roomDissolvedGuardStatement } from './room-access';
 import { memoryMessageRetractionStatements, type MemoryIntakeOptions } from '../memory/intake';
 
 const TOMBSTONE = '此消息已撤回';
@@ -19,10 +19,7 @@ export async function messageRecall(db: D1Database, principal: Principal, input:
   const actor = actorId(principal);
   const message = await getMessage(db, input.message_id);
   if (!message) throw new BusinessError('NOT_FOUND', '消息不存在');
-  const room = await getRoom(db, message.room_id);
-  if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
-  const member = await getMember(db, room.room_id, actor);
-  if (!member || member.status !== 'active') throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
+  const { room, member } = await loadRoomAccess(db, message.room_id, actor);
   if (!visibleMessage(message, historyBoundary(room, member))) throw new BusinessError('NOT_FOUND', '消息不存在或当前不可见');
   assertRoomWritable(room);
   if (principal.actor?.kind !== 'human' || message.sender_id !== actor) throw new BusinessError('PERMISSION_DENIED', '只能撤回自己发送的消息');

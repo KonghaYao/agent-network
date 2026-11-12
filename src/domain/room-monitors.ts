@@ -5,9 +5,7 @@ import { nowMs, sha256Hex, stableStringify, utf8Bytes } from '../storage/db';
 import { guardSql } from '../storage/guards';
 import {
   getActorRoomMonitor,
-  getMember,
   getOperation,
-  getRoom,
 } from '../storage/queries';
 import {
   operationsStatement,
@@ -15,6 +13,7 @@ import {
   runIdempotent,
 } from '../storage/transactions/runner';
 import { actorId, type Principal } from './principal';
+import { loadRoomAccess } from './room-access';
 
 /**
  * 网页监控面板地址：按 human actor + room 私有保存。
@@ -47,12 +46,7 @@ async function requireRoomMember(
   roomId: string,
 ): Promise<string> {
   const caller = actorId(principal);
-  const room = await getRoom(db, roomId);
-  if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
-  const member = await getMember(db, room.room_id, caller);
-  if (!member || member.status !== 'active') {
-    throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
-  }
+  await loadRoomAccess(db, roomId, caller);
   return caller;
 }
 

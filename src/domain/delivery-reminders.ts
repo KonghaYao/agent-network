@@ -1,5 +1,6 @@
 import { DELIVERY_REMINDER_EVENT } from '../contracts/events';
 import { LIMITS } from '../contracts/limits';
+import { replaceControlChars } from '../contracts/text';
 import { newId, nowMs, truncateUtf8 } from '../storage/db';
 import { inboxHeadStatementIfEvent, inboxTopic } from '../storage/events';
 import { isEventKeyConflict } from '../storage/transactions/runner';
@@ -36,7 +37,6 @@ function eventKeyOf(candidate: DeliveryReminderCandidate): string {
   return `delivery_reminder:${candidate.delivery_id}:${candidate.attempt}:${candidate.claim_id}:${anchor}`;
 }
 
-const DISPLAY_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu;
 const DISPLAY_JSON_UNSAFE = /["\\]/gu;
 
 /**
@@ -45,8 +45,7 @@ const DISPLAY_JSON_UNSAFE = /["\\]/gu;
  */
 function displayText(raw: string | null, maxBytes: number): string {
   if (!raw) return '';
-  const cleaned = raw
-    .replace(DISPLAY_CONTROL, ' ')
+  const cleaned = replaceControlChars(raw, ' ')
     .replace(DISPLAY_JSON_UNSAFE, "'")
     .replace(/\s+/gu, ' ')
     .trim();

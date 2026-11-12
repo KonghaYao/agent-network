@@ -20,6 +20,8 @@ import {
 } from '../storage/transactions/runner';
 import { identityView, type IdentityView } from './identity';
 import { actorId, type Principal } from './principal';
+import { hasControlChars } from '../contracts/text';
+import { hashSecret } from './secrets';
 
 /**
  * 设备配对挑战。
@@ -34,9 +36,6 @@ import { actorId, type Principal } from './principal';
 
 const PAIRING_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const PAIRING_LENGTH = 12;
-const PAIRING_HASH_PREFIX = 'agent-network:pairing:';
-const PAIRING_CONFIRM_PREFIX = 'agent-network:pairing-confirm:';
-const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
 
 
 export interface DevicePairingView {
@@ -94,7 +93,7 @@ function normalizeDeviceText(raw: string | undefined, maxBytes: number, field: s
   if (utf8Bytes(value) > maxBytes) {
     throw new BusinessError('INVALID_ARGUMENT', `${field} 超过 ${maxBytes} 字节`);
   }
-  if (CONTROL_CHARS.test(value)) {
+  if (hasControlChars(value)) {
     throw new BusinessError('INVALID_ARGUMENT', `${field} 不能包含控制字符或换行`);
   }
   return value;
@@ -128,7 +127,7 @@ function randomChallenge(): string {
 }
 
 async function challengeHash(challenge: string): Promise<string> {
-  return sha256Hex(`${PAIRING_HASH_PREFIX}${challenge}`);
+  return hashSecret('pairing', challenge);
 }
 
 /**
@@ -141,7 +140,7 @@ export async function pairingConfirmCode(
   pairingId: string,
   deviceTokenHash: string,
 ): Promise<string> {
-  const digest = await sha256Hex(`${PAIRING_CONFIRM_PREFIX}${pairingId}:${deviceTokenHash}`);
+  const digest = await hashSecret('pairing-confirm', `${pairingId}:${deviceTokenHash}`);
   const code = digest.slice(0, 8).toUpperCase();
   return `${code.slice(0, 4)}-${code.slice(4)}`;
 }

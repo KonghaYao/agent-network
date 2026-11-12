@@ -1,3 +1,4 @@
+import { agentShareUrl } from '../contracts/share-links';
 import type {
   AgentArchiveInput,
   AgentUnarchiveInput,
@@ -60,12 +61,6 @@ export interface AgentsGetResult {
   missing_actor_ids: string[];
 }
 
-function shareUrl(actor: Pick<ActorRow, 'agent_session_id'>, origin: string): string | null {
-  return actor.agent_session_id
-    ? `${origin}/a/${encodeURIComponent(actor.agent_session_id)}`
-    : null;
-}
-
 /** 对外摘要不包含 metadata、凭据、token 或 MCP URL。 */
 export function agentSummaryView(actor: ActorManagementRow, origin: string): AgentSummary {
   return {
@@ -73,7 +68,7 @@ export function agentSummaryView(actor: ActorManagementRow, origin: string): Age
     kind: 'agent',
     name: actor.name,
     agent_session_id: actor.agent_session_id,
-    share_url: shareUrl(actor, origin),
+    share_url: agentShareUrl(actor, origin),
     archived: actor.archived_at !== null,
     archived_at: actor.archived_at === null ? null : String(actor.archived_at),
     archived_by: actor.archived_by,

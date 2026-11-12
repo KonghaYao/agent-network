@@ -27,6 +27,7 @@ import { contactBlockGuardStatement } from './contact-blocks';
 import { assertRoomWritable, assertOwnerPresent, ownerMissingGuardStatement, roomDissolvedGuardStatement } from './room-access';
 import { requestJoinApproval } from './room-join-requests';
 import { actorId, type Principal } from './principal';
+import { hashSecret } from './secrets';
 
 /**
  * 群邀请兼容层。
@@ -332,7 +333,7 @@ export async function roomInvitationList(
 
 /** 邀请链接 key 的域分隔摘要；数据库只保存该值，原文只在创建响应出现一次。 */
 export function hashRoomInviteKey(key: string): Promise<string> {
-  return sha256Hex(`agent-network:room-invite:${key}`);
+  return hashSecret('room-invite', key);
 }
 
 async function requireInvitationForRespondent(

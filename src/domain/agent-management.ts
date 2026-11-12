@@ -1,4 +1,6 @@
 import { BusinessError } from '../contracts/errors';
+import { agentShareUrl } from '../contracts/share-links';
+import { hasControlChars } from '../contracts/text';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { LIMITS } from '../contracts/limits';
 import type {
@@ -30,6 +32,7 @@ import {
   requireManageAgent,
   scopesJson,
 } from './agent-access';
+import { cancelOpenDeliveriesStatement } from './delivery-sql';
 import { actorId, type Principal } from './principal';
 import {
   agentActiveDelegations,
@@ -54,8 +57,6 @@ import {
  * - 所有写操作在同一 `db.batch()` 内重放权限 guard 与权限版本 guard。
  */
 
-const CONTROL_CHARS = /[\u0000-\u001F\u007F\u2028\u2029]/u;
-
 export interface PendingWorkView {
   pending_deliveries: number;
   claimed_deliveries: number;
@@ -76,12 +77,6 @@ export async function pendingWork(db: D1Database, agentId: string): Promise<Pend
     claimed_deliveries: count('claimed'),
     cancelled_deliveries: count('cancelled'),
   };
-}
-
-function shareUrl(actor: ActorRow, origin: string): string | null {
-  return actor.agent_session_id
-    ? `${origin}/a/${encodeURIComponent(actor.agent_session_id)}`
-    : null;
 }
 
 export function managementEventStatements(
@@ -270,7 +265,7 @@ export async function agentManagementGet(
     kind: 'agent',
     name: target.name,
     agent_session_id: target.agent_session_id,
-    share_url: shareUrl(target, origin),
+    share_url: agentShareUrl(target, origin),
     archived: target.archived_at !== null,
     archived_at: target.archived_at === null ? null : String(target.archived_at),
     archived_by: target.archived_by,
@@ -374,7 +369,7 @@ export async function agentsManagedList(
          LEFT JOIN agent_delegations d
            ON d.agent_id = a.actor_id AND d.delegate_actor_id = ?
           AND d.status = 'active' AND (d.expires_at IS NULL OR d.expires_at > ?)
-          AND d.scopes_json LIKE '%"${MANAGE_AGENT_SCOPE}"%'
+          AND EXISTS (SELECT 1 FROM json_each(d.scopes_json) WHERE json_each.value = '${MANAGE_AGENT_SCOPE}')
         WHERE a.kind = 'agent' AND (m.manager_id = ? OR d.delegation_id IS NOT NULL)
         ${archivedFilter}
         ${where}
@@ -398,7 +393,7 @@ export async function agentsManagedList(
       actor_id: row.actor_id,
       name: row.name,
       agent_session_id: row.agent_session_id,
-      share_url: shareUrl(row, origin),
+      share_url: agentShareUrl(row, origin),
       archived: row.archived_at !== null,
       disabled: row.disabled_at !== null,
       role: row.role,
@@ -686,7 +681,7 @@ function normalizeDisableReason(raw: string | undefined): string | null {
   if (raw === undefined) return null;
   const reason = raw.trim();
   if (!reason) return null;
-  if (CONTROL_CHARS.test(reason)) {
+  if (hasControlChars(reason)) {
     throw new BusinessError('INVALID_ARGUMENT', '停用原因不能包含控制字符或换行');
   }
   if (utf8Bytes(reason) > LIMITS.agentDisableReasonBytes) {
@@ -763,13 +758,7 @@ export async function disableAgent(
             WHERE actor_id = ? AND kind = 'agent'`,
         )
         .bind(target.actor_id, at, caller, reason, at, target.actor_id),
-      db
-        .prepare(
-          `UPDATE deliveries
-              SET state = 'cancelled', error = ?, updated_at = ?
-            WHERE recipient_id = ? AND state IN ('pending', 'claimed')`,
-        )
-        .bind('agent disabled', at, target.actor_id),
+      cancelOpenDeliveriesStatement(db, { recipientId: target.actor_id }, 'agent disabled', at),
       ...managementEventStatements(db, {
         eventKey,
         agentId: target.actor_id,

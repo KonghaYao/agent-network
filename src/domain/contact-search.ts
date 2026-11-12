@@ -2,6 +2,7 @@ import { BusinessError } from '../contracts/errors';
 import { clampPage, LIMITS } from '../contracts/limits';
 import type { ContactSearchInput } from '../contracts/schemas';
 import { nowMs, utf8Bytes } from '../storage/db';
+import { sortedPairKeySql } from '../storage/pair-key';
 import type { ActorRow } from '../storage/rows';
 import { MANAGE_AGENT_SCOPE } from './agent-access';
 import { actorView, type ContactActorView } from './contact-relations';
@@ -95,16 +96,10 @@ export async function contactSearch(
               pending.from_actor_id AS pending_from_actor_id
          FROM actors a
          LEFT JOIN contact_relations relation
-           ON relation.pair_key = CASE
-                WHEN ? < a.actor_id THEN ? || '|' || a.actor_id
-                ELSE a.actor_id || '|' || ?
-              END
+           ON relation.pair_key = ${sortedPairKeySql('a.actor_id', '?')}
           AND relation.status = 'active'
          LEFT JOIN contact_requests pending
-           ON pending.pair_key = CASE
-                WHEN ? < a.actor_id THEN ? || '|' || a.actor_id
-                ELSE a.actor_id || '|' || ?
-              END
+           ON pending.pair_key = ${sortedPairKeySql('a.actor_id', '?')}
           AND pending.status = 'pending'
           AND pending.expires_at > ?
         WHERE a.actor_id <> ?
@@ -129,7 +124,7 @@ export async function contactSearch(
                      AND delegation.delegate_actor_id = ?
                      AND delegation.status = 'active'
                      AND (delegation.expires_at IS NULL OR delegation.expires_at > ?)
-                     AND delegation.scopes_json LIKE '%"${MANAGE_AGENT_SCOPE}"%'
+                     AND EXISTS (SELECT 1 FROM json_each(delegation.scopes_json) WHERE json_each.value = '${MANAGE_AGENT_SCOPE}')
                 )
                 OR EXISTS (
                   SELECT 1

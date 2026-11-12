@@ -30,6 +30,7 @@ import {
   sleep,
 } from './lib/harness';
 import { messageFileLinkFixtures } from './lib/room-file-archive';
+import { reservePort, startTestServer } from './lib/test-server';
 import { runPresenceRestartAcceptance } from './lib/presence-restart';
 import { runPresenceIdleNotificationCheck } from './lib/presence-idle';
 import { runContactLinkWebAcceptance } from './lib/contact-link-web';
@@ -186,15 +187,14 @@ export async function startServer(): Promise<{
   dataDir: string;
   stop: () => Promise<void>;
 }> {
-  const port = 18900 + Math.floor(Math.random() * 700);
+  // Playwright 需要 PUBLIC_ORIGIN 与访问地址一致，先预留端口再交给共享启动器；
+  // 预留与绑定之间只有毫秒级窗口，避免多个套件用随机端口互相碰撞。
+  const port = reservePort();
   const base = `http://127.0.0.1:${port}`;
-  const dataDir = `/tmp/agentnet-web-${process.pid}-${Date.now()}`;
-  const proc = Bun.spawn(['bun', resolve(import.meta.dir, '../src/bun/main.ts')], {
-    cwd: resolve(import.meta.dir, '..'),
+  const server = await startTestServer({
+    port,
+    tag: 'web',
     env: {
-      ...process.env,
-      PORT: String(port),
-      DATA_DIR: dataDir,
       PUBLIC_ORIGIN: base,
       // 测试专用短宽限；生产默认仍由 contracts/limits.ts 决定。
       AGENT_PRESENCE_GRACE_MS: '1200',
@@ -202,36 +202,11 @@ export async function startServer(): Promise<{
       AGENT_PRESENCE_TOUCH_THROTTLE_MS: '100',
       AGENT_PRESENCE_SWEEP_MS: '150',
     },
-    stdout: 'ignore',
-    stderr: 'inherit',
   });
-  try {
-    let ready = false;
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      try {
-        const response = await fetch(`${base}/health`);
-        if (response.ok) {
-          ready = true;
-          break;
-        }
-      } catch {
-        // 服务尚未监听
-      }
-      await sleep(100);
-    }
-    if (!ready) throw new Error('本地验收实例未在 10s 内就绪');
-  } catch (error) {
-    proc.kill();
-    throw error;
-  }
   return {
-    base,
-    dataDir,
-    async stop() {
-      proc.kill();
-      await proc.exited.catch(() => undefined);
-      await rm(dataDir, { recursive: true, force: true });
-    },
+    base: server.base,
+    dataDir: server.dataDir,
+    stop: () => server.dispose(),
   };
 }
 

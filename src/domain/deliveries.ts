@@ -1,4 +1,5 @@
 import { BusinessError } from '../contracts/errors';
+export { cancelOpenDeliveriesStatement, type OpenDeliveryFilter } from './delivery-sql';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { clampPage, LIMITS } from '../contracts/limits';
 import type {

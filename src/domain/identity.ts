@@ -1,3 +1,4 @@
+import { parseMetadataObject } from '../contracts/metadata';
 import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
 import type {
@@ -28,6 +29,8 @@ import {
   requireManageAgent,
 } from './agent-access';
 import { actorId, actorResources, type Principal } from './principal';
+import { hasControlChars } from '../contracts/text';
+import { hashSecret } from './secrets';
 
 export interface IdentityView {
   actor_id: string;
@@ -42,24 +45,13 @@ export interface IdentityView {
   resources: string[];
 }
 
-function parseMetadata(raw: string): Record<string, unknown> {
-  try {
-    const value = JSON.parse(raw) as unknown;
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
 export function identityView(actor: ActorRow, origin: string): IdentityView {
   return {
     actor_id: actor.actor_id,
     kind: actor.kind,
     agent_session_id: actor.agent_session_id,
     name: actor.name,
-    metadata: parseMetadata(actor.metadata),
+    metadata: parseMetadataObject(actor.metadata),
     pending_count: actor.pending_count,
     inbox_head_seq: String(actor.inbox_head_seq),
     created_at: String(actor.created_at),
@@ -264,9 +256,6 @@ export interface MeRenameResult {
   updated_at: string;
 }
 
-/** C0/C1 控制字符、换行与 Unicode 行/段分隔符；名称不能借此注入新行。 */
-const ACTOR_NAME_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
-
 /**
  * 自助改名校验：trim、非空、字符/字节上限、拒绝控制字符。
  *
@@ -281,7 +270,7 @@ export function normalizeActorName(raw: string): string {
   if (utf8Bytes(name) > LIMITS.actorNameBytes) {
     throw new BusinessError('INVALID_ARGUMENT', `名称不能超过 ${LIMITS.actorNameBytes} 字节`);
   }
-  if (ACTOR_NAME_CONTROL.test(name)) {
+  if (hasControlChars(name)) {
     throw new BusinessError('INVALID_ARGUMENT', '名称不能包含控制字符或换行');
   }
   return name;
@@ -499,7 +488,7 @@ export async function recoveryCreate(
   const id = actorId(principal);
   const at = nowMs();
   const ticket = randomToken(32);
-  const ticketHash = await sha256Hex(`agent-network:ticket:${ticket}`);
+  const ticketHash = await hashSecret('ticket', ticket);
   const expiresAt = at + LIMITS.recoveryTicketMs;
   const result = { ticket, expires_at: String(expiresAt) };
   const payloadHash = await sha256Hex(stableStringify(input));
@@ -531,7 +520,7 @@ export async function recoveryRedeem(
   if (!principal.credentialHash) {
     throw new BusinessError('CREDENTIAL_INVALID', '恢复兑换需要 Bearer 凭据；新设备应先本地生成并保存');
   }
-  const ticketHash = await sha256Hex(`agent-network:ticket:${input.ticket}`);
+  const ticketHash = await hashSecret('ticket', input.ticket);
   const ticket = await db
     .prepare('SELECT * FROM recovery_tickets WHERE ticket_hash = ?')
     .bind(ticketHash)

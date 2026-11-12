@@ -78,7 +78,7 @@ export async function agentTransferList(
         SELECT 1 FROM agent_delegations d
          WHERE d.agent_id = t.agent_id AND d.delegate_actor_id = ? AND d.status = 'active'
            AND (d.expires_at IS NULL OR d.expires_at > ?)
-           AND d.scopes_json LIKE '%"${MANAGE_AGENT_SCOPE}"%'))`,
+           AND EXISTS (SELECT 1 FROM json_each(d.scopes_json) WHERE json_each.value = '${MANAGE_AGENT_SCOPE}')))`,
   ];
   const binds: unknown[] = [viewer, viewer, viewer, viewer, at];
   if (input.actor_id) {

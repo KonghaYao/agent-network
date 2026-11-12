@@ -38,7 +38,8 @@
     "test:memory-langfuse": "bun scripts/verify-memory-langfuse.ts",
     "test:memory-recovery": "bun scripts/verify-memory-recovery.ts",
     "test:memory-host": "bun scripts/verify-memory-host.ts",
-    "test:memory-integration": "bun scripts/verify-memory-integration.ts"
+    "test:memory-integration": "bun scripts/verify-memory-integration.ts",
+    "test:web:a11y": "bun scripts/verify-web-a11y.ts"
   },
   "dependencies": {
     "@isaacs/ttlcache": "^2.1.5",
@@ -63,6 +64,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@modelcontextprotocol/client": "2.3.1",
     "@types/bun": "^1.4.2",
     "@types/proper-lockfile": "4.1.4",

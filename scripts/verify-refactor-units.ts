@@ -23,7 +23,20 @@ import {
 } from '../src/events/subscriptions';
 import type { Env } from '../src/env';
 import { NotificationHub } from '../src/realtime/hub';
+import { AgentPresenceTimeline } from '../src/realtime/presence-timeline';
 import { GUARDS } from '../src/storage/guards';
+import { getMember, getRoom } from '../src/storage/queries';
+import { CAPABILITY_PREDICATES, roomCapabilitiesFor, type RoomCapability } from '../src/domain/room-access';
+import { hashSecret, hashToken, sortedPairKey } from '../src/storage/db';
+import { sortedPairKeySql } from '../src/storage/pair-key';
+import { decodeCursor, encodeCursor } from '../src/contracts/cursor';
+import { parseMetadataObject } from '../src/contracts/metadata';
+import {
+  exceedsUtf8Bytes,
+  hasControlChars,
+  replaceControlChars,
+  utf8Text,
+} from '../src/contracts/text';
 import { createApp, parseByteRange } from '../src/app';
 import { isSupportedDshVersion } from '../client/monitor/dsh-install';
 import { abortableSleep } from '../client/monitor/engine';
@@ -599,6 +612,243 @@ async function webhookChecks(): Promise<void> {
   }
 }
 
+/**
+ * 凭据摘要 golden vectors：输出必须与收口前逐字节一致。
+ *
+ * 期望值由旧实现（`sha256Hex('agent-network:<purpose>:<value>')`）生成；任何
+ * 前缀、分隔符或编码变化都会让这些断言失败，禁止改测试值。
+ */
+async function secretHashChecks(): Promise<void> {
+  const vectors: [string, string, string][] = [
+    ['token', 'ank_test_token', '8a9376f77209f52a94456f8a620b35f94103c02fdfbc193be6c34868dcd1e583'],
+    ['ticket', 'ticket-value', '8eab9e540238821f143031be924f235252962783009cd0de54de5f7fad1244b2'],
+    ['room-invite', 'rinv_value', '2fae7300807788f13fe5c6c0214c386ba7138e2c9ed6accb37e91277193a5287'],
+    ['claim', 'claim-code', '01beff931d91fefe25825187322c7b379dae86e065b58d3a0e013cf04126f5ee'],
+    ['pairing', 'PAIRING12', 'c79fbd361ae7e384f73d68ebfe59697a2fd073bd0d01ce47da8c830101c7764f'],
+    ['pairing-confirm', 'pr_1:digest', 'ccec9128111ccc21ecb998358855a2c9cfb661afde84a9062f820a4f8462ba8a'],
+    ['contact-link', 'clink-token', '911d3f85a729bfdbf118e2fb8bf6572ca3d1f67652683dc80680852d1e6b24b2'],
+  ];
+  for (const [purpose, value, expected] of vectors) {
+    checkEqual(`hashSecret ${purpose} golden`, await hashSecret(purpose as never, value), expected);
+  }
+  checkEqual('hashToken 与 hashSecret token 一致', await hashToken('ank_test_token'), vectors[0]![2]);
+}
+
+/** metadata 解析矩阵：坏 JSON/数组/null 都退化为空对象。 */
+function metadataChecks(): void {
+  checkEqual('metadata 解析对象', parseMetadataObject('{"a":1}').a, 1);
+  checkEqual('metadata 坏 JSON 退化为空对象', Object.keys(parseMetadataObject('{')).length, 0);
+  checkEqual('metadata 数组退化为空对象', Object.keys(parseMetadataObject('[1,2]')).length, 0);
+  checkEqual('metadata null 退化为空对象', Object.keys(parseMetadataObject('null')).length, 0);
+  checkEqual('metadata 字符串退化为空对象', Object.keys(parseMetadataObject('"x"')).length, 0);
+}
+
+/** pair_key SQL 片段只接受固定标识符，生成的 CASE 两侧顺序稳定。 */
+function pairKeySqlChecks(): void {
+  const sql = sortedPairKeySql('a', 'b');
+  check('pair_key SQL 含前后两向', sql.includes("a < b") && sql.includes("a || '|' || b"));
+  checkEqual('sortedPairKey 字典序', sortedPairKey('b', 'a'), 'a|b');
+  checkEqual('sortedPairKey 相同输入', sortedPairKey('a', 'a'), 'a|a');
+}
+
+/** 控制字符矩阵：C0/C1/DEL/U+2028/U+2029 与换行放行规则。 */
+function textValidationChecks(): void {
+  const cases: [string, string][] = [
+    ['NUL', '\u0000'],
+    ['C0 换行', '\n'],
+    ['DEL', '\u007f'],
+    ['C1', '\u0085'],
+    ['U+2028', '\u2028'],
+    ['U+2029', '\u2029'],
+  ];
+  for (const [label, value] of cases) {
+    check(`${label} 被拒绝`, hasControlChars(value));
+    check(`${label} 在 allowControl 下放行`, !hasControlChars(value, { allowControl: true }));
+  }
+  check('allowNewlines 放行 \\t\\n\\r', !hasControlChars('\t\n\r', { allowNewlines: true }));
+  check('allowNewlines 仍拒绝 C1', hasControlChars('\u0085', { allowNewlines: true }));
+  check('allowNewlines 仍拒绝 U+2028', hasControlChars('\u2028', { allowNewlines: true }));
+  check('普通中文与 emoji 合法', !hasControlChars('你好 👋'));
+  check('字节上限按 UTF-8 计算', exceedsUtf8Bytes('你好', 5) && !exceedsUtf8Bytes('你好', 6));
+  checkEqual(
+    'replaceControlChars 折叠为空格',
+    replaceControlChars('a\nb\u0085c', ' '),
+    'a b c',
+  );
+  const schema = utf8Text({ maxBytes: 6 });
+  check('Zod 合法中文', schema.safeParse('你好').success);
+  check('Zod 拒绝超字节', !schema.safeParse('你好吗').success);
+  check('Zod 拒绝控制字符', !schema.safeParse('a\u0000').success);
+}
+
+/** 游标：旧格式可读、坏 JSON/base64 与字段错误保持原错误码。 */
+function cursorChecks(): void {
+  const encoded = encodeCursor({
+    v: 1,
+    scope: 'room:rm_1',
+    dir: 'after',
+    seq: 42,
+    snapshot: 99,
+  });
+  const decoded = decodeCursor(encoded, 'room:rm_1');
+  checkEqual('游标 round-trip seq', decoded.seq, 42);
+  checkEqual('游标 round-trip snapshot', decoded.snapshot, 99);
+
+  const legacy = Buffer.from(JSON.stringify({ v: 1, scope: 'room:rm_1', dir: 'before', seq: 1, snapshot: 1 }))
+    .toString('base64url');
+  checkEqual('旧游标仍可读取', decodeCursor(legacy, 'room:rm_1').dir, 'before');
+
+  const expectCode = (label: string, fn: () => unknown, message: string): void => {
+    try {
+      fn();
+      check(label, false);
+    } catch (error) {
+      check(label, (error as { code?: string }).code === 'INVALID_ARGUMENT');
+      check(`${label} 文案`, (error as Error).message === message);
+    }
+  };
+  expectCode('坏 base64', () => decodeCursor('***', 'room:rm_1'), 'cursor 不是合法的版本化游标');
+  expectCode(
+    '坏 JSON',
+    () => decodeCursor(Buffer.from('{').toString('base64url'), 'room:rm_1'),
+    'cursor 不是合法的版本化游标',
+  );
+  expectCode(
+    '坏字段',
+    () => decodeCursor(Buffer.from(JSON.stringify({ v: 2 })).toString('base64url'), 'room:rm_1'),
+    'cursor 字段不完整或版本不受支持',
+  );
+  expectCode(
+    '跨 scope',
+    () => decodeCursor(encoded, 'room:rm_2'),
+    'cursor 不能跨 scope 重用',
+  );
+  check(
+    '未知字段透传',
+    decodeCursor(
+      Buffer.from(JSON.stringify({ v: 1, scope: 'room:rm_1', dir: 'after', seq: 1, snapshot: 1, extra: true }))
+        .toString('base64url'),
+      'room:rm_1',
+    ).seq === 1,
+  );
+}
+
+/**
+ * C10 权限一致性矩阵：同一房间/成员组合下，SQL 谓词与 TS 能力表必须一致。
+ *
+ * SQL 谓词只覆盖角色与策略；写能力还要叠加“群未解散”这一事务 guard，
+ * `view_role_history` 是读能力，不受解散影响。矩阵同时覆盖 direct/group、
+ * owner/admin/member、active/left/removed 与解散状态。
+ */
+async function permissionMatrixChecks(db: Database): Promise<void> {
+  const d1 = createD1(db);
+  const now = NOW;
+  db.prepare("INSERT OR IGNORE INTO actors (actor_id, kind, name, created_at, updated_at) VALUES ('a_owner', 'human', 'owner', ?, ?)").run(now, now);
+  db.prepare("INSERT OR IGNORE INTO actors (actor_id, kind, name, created_at, updated_at) VALUES ('a_subject', 'human', 'subject', ?, ?)").run(now, now);
+  const capabilities = Object.keys(CAPABILITY_PREDICATES) as RoomCapability[];
+  let mismatches = 0;
+  for (const kind of ['direct', 'group'] as const) {
+    for (const role of ['owner', 'admin', 'member'] as const) {
+      for (const status of ['active', 'left', 'removed'] as const) {
+        for (const dissolved of [null, now]) {
+          const roomId = `rm_m_${kind}_${role}_${status}_${dissolved === null ? 'live' : 'gone'}`;
+          db.prepare(
+            `INSERT OR REPLACE INTO rooms (room_id, kind, owner_id, title, created_at, updated_at, dissolved_at)
+             VALUES (?, ?, ?, '', ?, ?, ?)`,
+          ).run(roomId, kind, kind === 'group' ? 'a_owner' : null, now, now, dissolved);
+          db.prepare(
+            `INSERT OR REPLACE INTO room_members
+               (room_id, actor_id, role, status, joined_at, updated_at)
+             VALUES (?, 'a_owner', 'owner', 'active', ?, ?)`,
+          ).run(roomId, now, now);
+          db.prepare(
+            `INSERT OR REPLACE INTO room_members
+               (room_id, actor_id, role, status, joined_at, updated_at)
+             VALUES (?, 'a_subject', ?, ?, ?, ?)`,
+          ).run(roomId, role, status, now, now);
+          const room = await getRoom(d1, roomId);
+          const member = await getMember(d1, roomId, 'a_subject');
+          if (!room || !member) throw new Error('权限矩阵 fixture 读取失败');
+          const writable = !(kind === 'group' && dissolved !== null);
+          const active = member.status === 'active';
+          const ts = roomCapabilitiesFor(room, member);
+          for (const capability of capabilities) {
+            const row = db
+              .prepare(
+                `SELECT (${CAPABILITY_PREDICATES[capability]}) AS ok
+                   FROM rooms r
+                   JOIN room_members m
+                     ON m.room_id = r.room_id AND m.actor_id = 'a_subject'
+                  WHERE r.room_id = ?`,
+              )
+              .get(roomId) as { ok: number } | null;
+            const predicate = row?.ok === 1;
+            const sql =
+              capability === 'view_role_history'
+                ? predicate && active
+                : predicate && active && writable;
+            if (sql !== ts[capability]) {
+              mismatches += 1;
+              if (mismatches <= 5) {
+                check(
+                  `权限矩阵一致 ${kind}/${role}/${status}/${dissolved === null ? 'live' : 'gone'}/${capability}`,
+                  false,
+                  { sql, ts: ts[capability] },
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  checkEqual('C10 权限矩阵 SQL 与 TS 完全一致', mismatches, 0);
+}
+
+/**
+ * B10b presence touch 缓存：节流窗口内只读一次状态；任何状态转换后必须重新读。
+ */
+async function presenceTouchChecks(db: Database): Promise<void> {
+  const d1 = createD1(db);
+  const now = NOW;
+  await d1
+    .prepare(
+      "INSERT OR IGNORE INTO actors (actor_id, kind, name, created_at, updated_at) VALUES ('a_presence', 'agent', 'presence', ?, ?)",
+    )
+    .bind(now, now)
+    .run();
+  let reads = 0;
+  const counting = {
+    prepare(sql: string) {
+      if (/^SELECT \* FROM agent_presence_state/u.test(sql.trim())) reads += 1;
+      return d1.prepare(sql);
+    },
+    batch: d1.batch.bind(d1),
+  } as unknown as D1Database;
+  const timeline = new AgentPresenceTimeline(counting, {
+    graceMs: 1_000,
+    activityTtlMs: 1_000,
+    touchThrottleMs: 1_000,
+    now: () => now,
+  });
+  await timeline.recordLogin('a_presence', now);
+  const afterLogin = reads;
+  await timeline.touch('a_presence', now + 100);
+  const afterFirstTouch = reads;
+  await timeline.touch('a_presence', now + 200);
+  checkEqual('节流窗口内第二次 touch 不读状态', reads, afterFirstTouch);
+  check('首次 touch 读取状态', afterFirstTouch > afterLogin);
+
+  await timeline.recordLogin('a_presence', now + 300);
+  await timeline.touch('a_presence', now + 350);
+  check('状态转换后 touch 重新读状态', reads > afterFirstTouch);
+
+  const beforeDisconnect = reads;
+  timeline.connectionClosed('a_presence', now + 400);
+  await timeline.touch('a_presence', now + 410);
+  check('断连转换后 touch 重新读状态', reads > beforeDisconnect);
+}
+
 async function main(): Promise<void> {
   await sseChecks();
   const db = freshDb();
@@ -611,6 +861,13 @@ async function main(): Promise<void> {
   await cacheChecks(db);
   await versionAndSleepChecks();
   await webhookChecks();
+  await secretHashChecks();
+  metadataChecks();
+  pairKeySqlChecks();
+  textValidationChecks();
+  cursorChecks();
+  await permissionMatrixChecks(db);
+  await presenceTouchChecks(db);
   console.log(`\nRefactor units: ${checksPassed()} checks passed`);
 }
 

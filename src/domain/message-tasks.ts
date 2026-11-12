@@ -21,13 +21,14 @@ import { clampPage, LIMITS } from '../contracts/limits';
 import { nowMs, sha256Hex, stableStringify } from '../storage/db';
 import { eventStatement, outboxStatement, roomTopic } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getMember, getMessage, getRoom } from '../storage/queries';
+import { getMember, getMessage } from '../storage/queries';
 import type { MessageRow, RoomMemberRow, RoomRow } from '../storage/rows';
 import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
 import { actorId, type Principal } from './principal';
 import {
   assertRoomWritable,
   capabilityGuardStatement,
+  loadRoomAccess,
   requireRoomAccess,
   roomCapabilitiesFor,
   roomDissolvedGuardStatement,
@@ -201,12 +202,7 @@ export async function readableRoom(
   roomId: string,
 ): Promise<{ room: RoomRow; member: RoomMemberRow; boundary: HistoryBoundary }> {
   const viewer = actorId(principal);
-  const room = await getRoom(db, roomId);
-  if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
-  const member = await getMember(db, roomId, viewer);
-  if (!member || member.status !== 'active') {
-    throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
-  }
+  const { room, member } = await loadRoomAccess(db, roomId, viewer);
   return { room, member, boundary: historyBoundary(room, member) };
 }
 

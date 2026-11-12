@@ -1,10 +1,12 @@
+import { parseMetadataObject } from '../contracts/metadata';
 import { BusinessError } from '../contracts/errors';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { clampPage, LIMITS } from '../contracts/limits';
 import type { SyncInput } from '../contracts/schemas';
-import { getActor, getMember, getRoom } from '../storage/queries';
+import { getActor } from '../storage/queries';
 import type { EventRow } from '../storage/rows';
 import { actorId, type Principal } from './principal';
+import { loadRoomAccess } from './room-access';
 import { historyBoundary } from './room-history';
 
 export interface EventRef {
@@ -51,12 +53,7 @@ async function resolveScope(
   if (scope.startsWith('room:')) {
     const roomId = scope.slice('room:'.length);
     if (!roomId) throw new BusinessError('INVALID_ARGUMENT', 'scope 缺少 room_id');
-    const room = await getRoom(db, roomId);
-    if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
-    const member = await getMember(db, roomId, viewer);
-    if (!member || member.status !== 'active') {
-      throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
-    }
+    const { room, member } = await loadRoomAccess(db, roomId, viewer);
     // 旧游标只定位数据；加入前的事件不属于当前代次，不能通过补读重新获得。
     // 解散归档同时以 archived_head_seq 为读取上界。
     const boundary = historyBoundary(room, member);
@@ -75,17 +72,6 @@ async function resolveScope(
     };
   }
   throw new BusinessError('INVALID_ARGUMENT', 'scope 只支持 inbox 或 room:<room_id>');
-}
-
-function parseMetadata(raw: string): Record<string, unknown> {
-  try {
-    const value = JSON.parse(raw) as unknown;
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
 }
 
 /** 资源读取返回的同步入口：从当前 head 之后继续。 */
@@ -147,7 +133,7 @@ export async function sync(
       scope: `${row.scope_kind}:${row.scope_id}`,
       type: row.event_type,
       ref_id: row.ref_id,
-      metadata: parseMetadata(row.metadata),
+      metadata: parseMetadataObject(row.metadata),
       created_at: String(row.created_at),
     })),
     next_cursor: headCursor(input.scope, nextSeq),

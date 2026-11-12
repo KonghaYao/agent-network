@@ -28,6 +28,7 @@ import {
   type ContactRelationView,
 } from './contact-relations';
 import { actorId, type Principal } from './principal';
+import { hashSecret } from './secrets';
 
 /**
  * 好友邀请链接：A 生成一次性链接，B 打开并登录后直接建立双向好友关系。
@@ -90,7 +91,7 @@ interface ContactLinkJoinRow extends ContactInviteLinkRow {
 
 /** 只在数据库保存摘要；前缀避免与其他 token 摘要跨用途复用。 */
 function contactLinkHash(token: string): Promise<string> {
-  return sha256Hex(`agent-network:contact-link:${token}`);
+  return hashSecret('contact-link', token);
 }
 
 function effectiveStatus(row: ContactInviteLinkRow, at: number): ContactLinkStatus {

@@ -1,0 +1,24 @@
+{
+  "home": {
+    "critical": 0,
+    "serious": 1,
+    "rules": [
+      "color-contrast(serious)"
+    ]
+  },
+  "room": {
+    "critical": 1,
+    "serious": 1,
+    "rules": [
+      "aria-allowed-attr(critical)",
+      "color-contrast(serious)"
+    ]
+  },
+  "group-modal": {
+    "critical": 0,
+    "serious": 1,
+    "rules": [
+      "color-contrast(serious)"
+    ]
+  }
+}

@@ -33,6 +33,7 @@ import {
   endRelationStatements,
   type ContactActorView,
 } from './contact-relations';
+import { cancelOpenDeliveriesStatement } from './delivery-sql';
 import { actorId, type Principal } from './principal';
 
 /**
@@ -330,15 +331,12 @@ export function cancelBlockedDeliveriesStatements(
           WHERE actor_id = ?`,
       )
       .bind(blocker, blocked, at, blocker),
-    db
-      .prepare(
-        `UPDATE deliveries
-            SET state = 'cancelled', error = 'blocked', updated_at = ?
-          WHERE recipient_id = ?
-            AND state IN ('pending', 'claimed')
-            AND message_id IN (SELECT message_id FROM messages WHERE sender_id = ?)`,
-      )
-      .bind(at, blocker, blocked),
+    cancelOpenDeliveriesStatement(
+      db,
+      { recipientId: blocker, senderId: blocked },
+      'blocked',
+      at,
+    ),
   ];
 }
 
