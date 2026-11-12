@@ -85,8 +85,10 @@ export const FILES_STYLE = `
   .files-backdrop[hidden] { display: none; }
 
   .file-preview { position: fixed; inset: 0; z-index: 40; display: grid;
-    place-items: center; padding: 16px; background: rgb(0 0 0 / 58%); }
-  .file-preview[hidden] { display: none; }
+    place-items: center; width: auto; height: auto; max-width: none; max-height: none;
+    margin: 0; border: 0; padding: 16px; background: rgb(0 0 0 / 58%); color: inherit; }
+  .file-preview:not([open]) { display: none; }
+  .file-preview::backdrop { background: transparent; }
   .file-preview-card { width: min(900px, 100%); max-height: min(90dvh, 900px);
     display: flex; flex-direction: column; overflow: hidden;
     background: var(--wx-panel); color: var(--wx-text); border-radius: 10px;

@@ -476,12 +476,26 @@ export const APP_STYLE = `
   .empty-hint { margin: 0; font-size: 12px; color: var(--wx-muted); }
 
   .modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center;
-    padding: 16px; background: rgb(0 0 0 / 42%); }
-  .modal[hidden] { display: none; }
+    width: auto; height: auto; max-width: none; max-height: none; margin: 0; border: 0;
+    padding: 16px; background: rgb(0 0 0 / 42%); color: inherit; }
+  /* 原生的 dialog 未打开时默认 display:none；上面的 display:grid 必须让位。 */
+  .modal:not([open]) { display: none; }
+  .modal::backdrop { background: transparent; }
   .modal-card { width: min(420px, 100%); max-height: min(82dvh, 680px); overflow-y: auto;
     background: var(--wx-panel); color: var(--wx-text); border-radius: 10px;
     padding: 20px; box-shadow: var(--wx-shadow); }
   .modal-card h2 { margin: 0 0 14px; font-size: 17px; font-weight: 600; }
+  .confirm-card { width: min(380px, 100%); box-sizing: border-box; }
+  .confirm-message { margin: 0 0 16px; line-height: 1.65;
+    white-space: pre-wrap; overflow-wrap: anywhere; }
+  .confirm-card button.danger { background: var(--wx-danger); border-color: var(--wx-danger);
+    color: #fff; }
+  .confirm-card button.danger:hover { background: var(--wx-danger-strong);
+    border-color: var(--wx-danger-strong); }
+  .confirm-card button.danger:focus-visible { outline: 2px solid var(--wx-text);
+    outline-offset: 2px; }
+  .confirm-card button.danger:disabled { opacity: 1; background: #f6d5d5;
+    border-color: #f6d5d5; color: #7f1d1d; cursor: not-allowed; }
   .field { display: block; font-size: 12px; color: var(--wx-muted); }
   .field input { display: block; width: 100%; height: 36px; margin-top: 6px; padding: 0 10px;
     border: 1px solid var(--wx-line); border-radius: 4px; background: var(--wx-bg);

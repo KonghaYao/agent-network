@@ -6,8 +6,11 @@
  */
 export const DRAWBOARD_FALLBACK_STYLE = `
   .drawboard-fallback { position: fixed; inset: 0; z-index: 80; display: flex;
-    align-items: center; justify-content: center; padding: 20px;
-    background: rgb(0 0 0 / 58%); }
+    align-items: center; justify-content: center; width: auto; height: auto;
+    max-width: none; max-height: none; margin: 0; border: 0;
+    padding: 20px; background: rgb(0 0 0 / 58%); }
+  .drawboard-fallback:not([open]) { display: none; }
+  .drawboard-fallback::backdrop { background: transparent; }
   .drawboard-fallback-card { width: min(360px, 100%); padding: 22px 20px;
     border: 1px solid var(--wx-line, #e5e5e5); border-radius: 10px;
     background: var(--wx-panel, #fff); color: var(--wx-text, #1a1a1a);

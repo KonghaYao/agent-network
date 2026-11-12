@@ -54,7 +54,7 @@ function showGroupPicker(contacts, note) {
 function closeGroupModal() {
   groupLoadSeq += 1;
   groupBusy = false;
-  if (groupModal) groupModal.hidden = true;
+  closeNativeDialog(groupModal);
 }
 
 async function openGroupModal() {
@@ -62,7 +62,7 @@ async function openGroupModal() {
   groupLoadSeq += 1;
   const loadSeq = groupLoadSeq;
   groupBusy = false;
-  groupModal.hidden = false;
+  openNativeDialog(groupModal, closeGroupModal);
   if (groupTitleInput) { groupTitleInput.value = ''; groupTitleInput.disabled = false; }
   if (groupErrorElement) groupErrorElement.textContent = '';
   if (groupCreateButton) {
@@ -76,18 +76,18 @@ async function openGroupModal() {
   picker.setNote('正在读取好友…');
   try {
     await ensureIdentity();
-    if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
+    if (loadSeq !== groupLoadSeq || !groupModal.open) return;
     const contacts = await loadGroupContacts();
-    if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
+    if (loadSeq !== groupLoadSeq || !groupModal.open) return;
     picker.setExcluded(identity ? [identity.actor_id] : []);
     picker.setNote('正在读取本机与受管 Agent…');
     const ownerActorId = identity ? identity.actor_id : '';
     const merged = await mergeAgentPickerContacts(ownerActorId, contacts);
-    if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
+    if (loadSeq !== groupLoadSeq || !groupModal.open) return;
     showGroupPicker(merged.contacts);
     if (groupTitleInput) groupTitleInput.focus();
   } catch (error) {
-    if (loadSeq !== groupLoadSeq || groupModal.hidden) return;
+    if (loadSeq !== groupLoadSeq || !groupModal.open) return;
     picker.setContacts([]);
     picker.setNote('');
     if (groupErrorElement) {
@@ -98,20 +98,10 @@ async function openGroupModal() {
 
 if (newGroupButton) newGroupButton.addEventListener('click', openGroupModal);
 if (groupCancelButton) groupCancelButton.addEventListener('click', closeGroupModal);
-if (groupModal) {
-  groupModal.addEventListener('click', function (event) {
-    if (event.target === groupModal) closeGroupModal();
-  });
-}
-document.addEventListener('keydown', function (event) {
-  if (event.key !== 'Escape' || !groupModal || groupModal.hidden) return;
-  event.preventDefault();
-  closeGroupModal();
-});
 if (groupForm) {
   groupForm.addEventListener('submit', async function (event) {
     event.preventDefault();
-    if (groupBusy || !groupModal || groupModal.hidden) return;
+    if (groupBusy || !groupModal || !groupModal.open) return;
     const selected = groupPicker ? groupPicker.selectedIds() : [];
     if (selected.length === 0) {
       groupErrorElement.textContent = '请至少选择一个成员';
@@ -146,7 +136,7 @@ if (groupForm) {
       const currentFilter = roomFilter;
       const newRoomId = seedRoomCacheFromDetail(result);
       if (groupCreateIntent === intent) groupCreateIntent = null;
-      if (generation !== groupLoadSeq || groupModal.hidden) {
+      if (generation !== groupLoadSeq || !groupModal.open) {
         setRoomFilter(currentFilter);
         showToast('群聊已创建，可在会话列表打开');
         return;
@@ -157,7 +147,7 @@ if (groupForm) {
       closeGroupModal();
       navigateTo('/c/' + encodeURIComponent(newRoomId));
     } catch (error) {
-      if (generation !== groupLoadSeq || groupModal.hidden) return;
+      if (generation !== groupLoadSeq || !groupModal.open) return;
       groupErrorElement.textContent =
         '创建失败：' + (error && error.message ? error.message : error);
     } finally {

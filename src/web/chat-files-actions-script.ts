@@ -83,14 +83,14 @@ function openFilePreview(item, trigger) {
   if (filePreviewTitle) filePreviewTitle.textContent = item.name || '文件预览';
   if (filePreviewMeta) filePreviewMeta.textContent = fileMetaText(item);
   updatePreviewDownload(item);
-  filePreviewElement.hidden = false;
+  openNativeDialog(filePreviewElement, function () { closeFilePreview(true); });
   renderFilePreviewBody(normalized, kind);
   if (filePreviewClose) filePreviewClose.focus();
 }
 
 function closeFilePreview(restoreFocus) {
-  if (!filePreviewElement || filePreviewElement.hidden) return;
-  filePreviewElement.hidden = true;
+  if (!filePreviewElement || !filePreviewElement.open) return;
+  closeNativeDialog(filePreviewElement);
   if (filesPreviewAbort) {
     filesPreviewAbort.abort();
     filesPreviewAbort = null;
@@ -872,17 +872,10 @@ if (filesBindRetryButton) filesBindRetryButton.addEventListener('click', retryPe
 if (filePreviewClose) {
   filePreviewClose.addEventListener('click', function () { closeFilePreview(true); });
 }
-if (filePreviewElement) {
-  filePreviewElement.addEventListener('click', function (event) {
-    if (event.target === filePreviewElement) closeFilePreview(true);
-  });
-}
 document.addEventListener('keydown', function (event) {
   if (event.key !== 'Escape') return;
-  if (filePreviewElement && !filePreviewElement.hidden) {
-    closeFilePreview(true);
-    return;
-  }
+  // 预览打开时交给原生 <dialog> 的 cancel，统一走背板/Esc 的关闭清理。
+  if (filePreviewElement && filePreviewElement.open) return;
   if (filesOverlayOpen && filesVisible()) closeFilesPane();
 });
 window.addEventListener('resize', function () {

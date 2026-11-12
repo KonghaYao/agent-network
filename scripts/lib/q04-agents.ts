@@ -33,13 +33,11 @@ function parseTokenFromMcpUrl(value: string): string {
 }
 
 async function acceptDialogOnce(page: Page): Promise<string> {
-  return new Promise((resolve) => {
-    page.once('dialog', async (dialog) => {
-      const message = dialog.message();
-      await dialog.accept();
-      resolve(message);
-    });
-  });
+  const dialog = page.locator('#confirm-dialog[open]');
+  await dialog.waitFor();
+  const message = (await dialog.locator('#confirm-dialog-message').textContent()) ?? '';
+  await dialog.locator('[data-confirm-ok]').click();
+  return message;
 }
 
 export async function runAgentAcceptance(state: Q04State, browser: Browser): Promise<void> {

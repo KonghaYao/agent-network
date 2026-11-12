@@ -132,7 +132,8 @@ function openMessageMenu(node, x, y) {
   menu.append(messageActionButton('转发', function () { openMessageForward(item); }));
   if (identity && identity.kind === 'human' && item.sender_id === identity.actor_id && room && !room.read_only) {
     menu.append(messageActionButton('撤回', async function () {
-      if (!confirm('撤回这条消息？仅支持两分钟内的普通消息，已触发的 Agent 工作需单独取消。')) return;
+      if (!(await confirmDialog('撤回这条消息？仅支持两分钟内的普通消息，已触发的 Agent 工作需单独取消。',
+        { title: '撤回消息', danger: true, confirmText: '撤回' }))) return;
       try {
         await callTool('network_message_recall', { request_id: requestId('recall'), message_id: item.message_id });
         applyRecalledMessage(sourceRoom, item.message_id);

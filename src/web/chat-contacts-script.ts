@@ -208,7 +208,7 @@ async function performContactSearch() {
     if (
       generation !== contactSearchGeneration ||
       !contactModal ||
-      contactModal.hidden ||
+      !contactModal.open ||
       contactSearchInput.value.trim() !== query
     ) return;
     renderContactSearchResults(result && result.items ? result.items : []);
@@ -222,7 +222,7 @@ async function performContactSearch() {
     if (
       generation !== contactSearchGeneration ||
       !contactModal ||
-      contactModal.hidden ||
+      !contactModal.open ||
       contactSearchInput.value.trim() !== query
     ) return;
     renderContactSearchResults([]);
@@ -255,14 +255,14 @@ async function sendContactSearchRequest() {
       actor_id: selected.actor_id,
       ...(message ? { message: message } : {})
     });
-    if (generation !== contactSearchGeneration || !contactModal || contactModal.hidden) {
+    if (generation !== contactSearchGeneration || !contactModal || !contactModal.open) {
       if (result && (result.already_friends || result.status === 'accepted')) {
         scheduleRoomListRefresh(true);
       }
       return;
     }
     await Promise.allSettled([loadContactRequests(), refreshContactBadge()]);
-    if (generation !== contactSearchGeneration || contactModal.hidden) return;
+    if (generation !== contactSearchGeneration || !contactModal.open) return;
     if (contactSearchInput && contactSearchInput.value.trim() === contactSearchLastQuery) {
       await performContactSearch();
     }
@@ -273,14 +273,14 @@ async function sendContactSearchRequest() {
       setContactSearchStatus('好友邀请已发送，等待对方同意。', 'success');
     }
   } catch (error) {
-    if (generation !== contactSearchGeneration || !contactModal || contactModal.hidden) return;
+    if (generation !== contactSearchGeneration || !contactModal || !contactModal.open) return;
     setContactSearchStatus(
       '发送失败：' + (error && error.message ? error.message : String(error)),
       'error'
     );
   } finally {
     contactRequestBusy = false;
-    if (contactSearchSend && contactModal && !contactModal.hidden) {
+    if (contactSearchSend && contactModal && contactModal.open) {
       contactSearchSend.disabled = false;
     }
   }
@@ -766,7 +766,7 @@ async function openContactModal() {
   if (contactSearchResults) contactSearchResults.replaceChildren();
   resetContactSearchSelection();
   setContactSearchStatus('');
-  contactModal.hidden = false;
+  openNativeDialog(contactModal, closeContactModal);
   setContactStatus('');
   setContactLinkStatus('');
   contactRequestGeneration += 1;
@@ -781,7 +781,7 @@ async function openContactModal() {
     loadContactPolicy(),
     loadContactLinks()
   ]);
-  if (openGeneration !== contactSearchGeneration || contactModal.hidden) return;
+  if (openGeneration !== contactSearchGeneration || !contactModal.open) return;
   if (contactSearchInput && contactPanels.search && !contactPanels.search.hidden) {
     contactSearchInput.focus();
   }
@@ -795,7 +795,7 @@ function closeContactModal() {
   if (contactSearchAbort) contactSearchAbort.abort();
   contactSearchAbort = null;
   contactSearchBusy = false;
-  contactModal.hidden = true;
+  closeNativeDialog(contactModal);
   resetContactSearchSelection();
   if (contactRequestsButton) contactRequestsButton.focus();
 }
@@ -832,11 +832,6 @@ if (contactSegments) {
     if (!target) return;
     setContactTab(target.dataset.contactTab);
     target.focus();
-  });
-}
-if (contactModal) {
-  contactModal.addEventListener('click', function (event) {
-    if (event.target === contactModal) closeContactModal();
   });
 }
 if (contactSearchForm) {

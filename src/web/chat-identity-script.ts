@@ -277,7 +277,7 @@ function openHandoffDialog() {
   const modal = document.getElementById('handoff-modal');
   const closeButton = document.getElementById('handoff-close');
   if (!modal) return;
-  modal.hidden = false;
+  openNativeDialog(modal, closeHandoffDialog);
   if (button) button.setAttribute('aria-expanded', 'true');
   pairingSetStatus('', '');
   refreshPairings();
@@ -289,7 +289,7 @@ function closeHandoffDialog() {
   const button = document.getElementById('device-handoff');
   const modal = document.getElementById('handoff-modal');
   if (!modal) return;
-  modal.hidden = true;
+  closeNativeDialog(modal);
   if (button) button.setAttribute('aria-expanded', 'false');
 }
 
@@ -821,17 +821,8 @@ async function syncCatchUp() {
       window.location.href = '/pair';
     });
   }
-  if (handoffModal) {
-    handoffModal.addEventListener('click', function (event) {
-      if (event.target === handoffModal) closeHandoffDialog();
-    });
-  }
-  document.addEventListener('keydown', function (event) {
-    if (event.key !== 'Escape') return;
-    if (handoffModal && !handoffModal.hidden) closeHandoffDialog();
-  });
   window.addEventListener('agentnet:device', function () {
-    if (handoffModal && !handoffModal.hidden) refreshPairings();
+    if (handoffModal && handoffModal.open) refreshPairings();
   });
 })();
 `;

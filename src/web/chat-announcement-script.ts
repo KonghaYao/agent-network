@@ -60,7 +60,7 @@ function openAnnouncementModal() {
   announcementOpener = document.activeElement;
   announcementContext = { roomId: activeRoomId, epoch: roomEpoch,
     revision: room.announcement_revision, busy: false, retryPending: false };
-  announcementModal.hidden = false;
+  openNativeDialog(announcementModal, closeAnnouncementModal);
   if (announcementSave) { announcementSave.disabled = false; announcementSave.textContent = '保存'; }
   if (announcementInput) {
     announcementInput.value = announcementText();
@@ -81,7 +81,7 @@ function openAnnouncementModal() {
 
 function closeAnnouncementModal() {
   announcementContext = null;
-  if (announcementModal) announcementModal.hidden = true;
+  closeNativeDialog(announcementModal);
   setAnnouncementError('');
   const opener = announcementOpener;
   announcementOpener = null;
@@ -92,7 +92,7 @@ async function submitAnnouncementForm(event) {
   event.preventDefault();
   const context = announcementContext;
   if (!context || context.busy || !isActiveRoom(context.roomId, context.epoch)) return;
-  if (!announcementModal || announcementModal.hidden || !room || room.kind !== 'group') return;
+  if (!announcementModal || !announcementModal.open || !room || room.kind !== 'group') return;
   if (!canManageAnnouncement()) {
     setAnnouncementError('只有群 owner 或管理员可以编辑公告。');
     return;
@@ -167,15 +167,5 @@ if (roomAnnouncementEditButton) {
 }
 if (announcementClose) announcementClose.addEventListener('click', closeAnnouncementModal);
 if (announcementCancel) announcementCancel.addEventListener('click', closeAnnouncementModal);
-if (announcementModal) {
-  announcementModal.addEventListener('click', function (event) {
-    if (event.target === announcementModal) closeAnnouncementModal();
-  });
-}
 if (announcementForm) announcementForm.addEventListener('submit', submitAnnouncementForm);
-document.addEventListener('keydown', function (event) {
-  if (event.key !== 'Escape' || !announcementModal || announcementModal.hidden) return;
-  event.preventDefault();
-  closeAnnouncementModal();
-});
 `;

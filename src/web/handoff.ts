@@ -56,8 +56,8 @@ export function deviceHandoffAccount(): string {
  * 或账号区显式切换回来。不调用服务端，也不吊销 token。
  */
 export function logoutDialog(): string {
-  return `<div class="modal" id="logout-modal" hidden>
-  <div class="modal-card logout-card" role="dialog" aria-modal="true" aria-labelledby="logout-title">
+  return `<dialog class="modal" id="logout-modal" aria-labelledby="logout-title">
+  <div class="modal-card logout-card">
     <h2 id="logout-title">退出登录</h2>
     <p class="logout-warning">本机将清除当前身份的登录凭据、草稿队列与已保存的 Agent 连接提示词；其他已保存身份不受影响。当前 token 仍然有效，其他设备也不受影响。</p>
     <p class="logout-hint">只在本机退出，不调用服务端，也不会吊销 token。退出后会显示分享链接引导；需要继续使用时可显式切换到本机其他身份、创建新身份或重新配对。</p>
@@ -66,7 +66,7 @@ export function logoutDialog(): string {
       <button class="danger" id="logout-confirm" type="button" aria-label="确认退出登录">退出登录</button>
     </div>
   </div>
-</div>`;
+</dialog>`;
 }
 
 /**
@@ -75,9 +75,8 @@ export function logoutDialog(): string {
  * 保存成功后页面原地更新显示名，不重新加载房间或凭据。
  */
 export function meRenameDialog(): string {
-  return `<div class="modal" id="me-rename-modal" hidden>
-  <div class="modal-card me-rename-card" role="dialog" aria-modal="true"
-    aria-labelledby="me-rename-title">
+  return `<dialog class="modal" id="me-rename-modal" aria-labelledby="me-rename-title">
+  <div class="modal-card me-rename-card">
     <h2 id="me-rename-title">修改姓名</h2>
     <form id="me-rename-form">
       <label class="field">姓名
@@ -92,7 +91,7 @@ export function meRenameDialog(): string {
       </div>
     </form>
   </div>
-</div>`;
+</dialog>`;
 }
 
 /**
@@ -103,8 +102,8 @@ export function meRenameDialog(): string {
  * 不含登录 token；仍须已登录设备核对设备名称、平台与确认码后明确批准。
  */
 export function deviceHandoffDialog(): string {
-  return `<div class="modal" id="handoff-modal" hidden>
-  <div class="modal-card handoff-card" role="dialog" aria-modal="true" aria-labelledby="handoff-title">
+  return `<dialog class="modal" id="handoff-modal" aria-labelledby="handoff-title">
+  <div class="modal-card handoff-card">
     <h2 id="handoff-title">配对设备</h2>
     <p class="handoff-hint" id="handoff-hint">用另一台设备扫描或输入 12 位配对码。</p>
     <div class="handoff-columns">
@@ -137,7 +136,7 @@ export function deviceHandoffDialog(): string {
       <button id="handoff-close" type="button">关闭</button>
     </div>
   </div>
-</div>`;
+</dialog>`;
 }
 
 /** 追加到应用页样式表；二维码保持白底，暗色模式下仍可扫描。 */

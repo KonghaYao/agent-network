@@ -458,7 +458,8 @@ async function submitOwnerTransferResponse(action) {
 async function submitOwnerTransferCancel() {
   if (!room || room.kind !== 'group' || membersBusy || !ownerTransfer) return;
   const transfer = ownerTransfer;
-  if (!window.confirm('取消向「' + transfer.to_actor_name + '」的群主转让提议？')) return;
+  if (!(await confirmDialog('取消向「' + transfer.to_actor_name + '」的群主转让提议？',
+    { title: '取消转让', confirmText: '取消提议' }))) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
   const formGeneration = membersLoadToken;
@@ -518,7 +519,7 @@ function closeMembersModal() {
   inviteBusy = false;
   if (inviteCreateButton) inviteCreateButton.disabled = false;
   closeMemberMenu();
-  if (membersModal) membersModal.hidden = true;
+  closeNativeDialog(membersModal);
   setMembersError('');
   membersContactsCache = [];
   membersContactNote = '';
@@ -548,7 +549,7 @@ function membersCandidates(contacts) {
 async function openMembersModal() {
   if (!membersModal || !room || room.kind !== 'group') return;
   membersOpener = document.activeElement;
-  membersModal.hidden = false;
+  openNativeDialog(membersModal, closeMembersModal);
   if (membersCurrentSearch) membersCurrentSearch.value = '';
   setMembersError('');
   membersContactsCache = [];
@@ -581,7 +582,7 @@ async function openMembersModal() {
       loadToken !== membersLoadToken ||
       !isActiveRoom(roomId, epoch) ||
       !membersModal ||
-      membersModal.hidden
+      !membersModal.open
     ) {
       return;
     }
@@ -595,7 +596,7 @@ async function openMembersModal() {
       loadToken !== membersLoadToken ||
       !isActiveRoom(roomId, epoch) ||
       !membersModal ||
-      membersModal.hidden
+      !membersModal.open
     ) {
       return;
     }
@@ -695,7 +696,8 @@ async function submitOwnerTransfer(member) {
     setMembersError('已有待确认的群主转让提议，请先取消或等待对方处理。');
     return;
   }
-  if (!window.confirm('向「' + member.name + '」发起群主转让？对方接受后才会生效，确认前你仍负责群主事务。')) return;
+  if (!(await confirmDialog('向「' + member.name + '」发起群主转让？对方接受后才会生效，确认前你仍负责群主事务。',
+    { title: '发起转让', danger: true, confirmText: '发起转让' }))) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
   const formGeneration = membersLoadToken;
@@ -731,7 +733,8 @@ async function submitMemberRemoval(member) {
     setMembersError('当前群角色不能移除该成员。');
     return;
   }
-  if (!window.confirm('将「' + member.name + '」移出群聊？')) return;
+  if (!(await confirmDialog('将「' + member.name + '」移出群聊？',
+    { title: '移出成员', danger: true, confirmText: '移出' }))) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
   const formGeneration = membersLoadToken;
@@ -764,7 +767,7 @@ async function submitMemberRemoval(member) {
 async function submitMembersForm(event) {
   event.preventDefault();
   const roomId = activeRoomId;
-  if (!roomId || !room || room.kind !== 'group' || !membersModal || membersModal.hidden) return;
+  if (!roomId || !room || room.kind !== 'group' || !membersModal || !membersModal.open) return;
   if (membersBusy) return;
   const epoch = roomEpoch;
   const formGeneration = membersLoadToken;
@@ -805,7 +808,7 @@ async function submitMembersForm(event) {
       return !before.has(member.actor_id);
     });
     applyRoomDetail(result);
-    if (formGeneration !== membersLoadToken || !membersModal || membersModal.hidden) return;
+    if (formGeneration !== membersLoadToken || !membersModal || !membersModal.open) return;
     if (added.length === 0) {
       setMembersError('所选好友已在群里，成员没有变化。');
       renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
@@ -837,7 +840,7 @@ async function submitMembersForm(event) {
 if (membersButton) {
   membersButton.addEventListener('click', function () {
     openMembersModal().catch(function (error) {
-      if (!membersModal || membersModal.hidden) return;
+      if (!membersModal || !membersModal.open) return;
       setMembersError('读取成员失败：' + (error && error.message ? error.message : error));
       setMembersBusy(false);
     });
@@ -845,12 +848,6 @@ if (membersButton) {
 }
 if (membersCloseButton) membersCloseButton.addEventListener('click', closeMembersModal);
 if (membersCancelButton) membersCancelButton.addEventListener('click', closeMembersModal);
-if (membersModal) {
-  membersModal.addEventListener('click', function (event) {
-    // 只关闭遮罩本身；点击卡片内部不会误提交，也不会关闭。
-    if (event.target === membersModal) closeMembersModal();
-  });
-}
 if (membersContactsElement) {
   membersContactsElement.addEventListener('change', function (event) {
     const target = event.target;
@@ -859,7 +856,7 @@ if (membersContactsElement) {
   });
 }
 document.addEventListener('keydown', function (event) {
-  if (event.key !== 'Escape' || !membersModal || membersModal.hidden) return;
+  if (event.key !== 'Escape' || !membersModal || !membersModal.open) return;
   if (openMemberMenu) {
     event.preventDefault();
     closeMemberMenu({ focus: true });

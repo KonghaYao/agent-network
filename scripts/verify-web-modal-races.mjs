@@ -18,7 +18,7 @@ function groupHarness() {
   const calls = [], seeded = [], navigated = [];
   const context = vm.createContext({
     groupForm: { addEventListener(_name, fn) { context.submit = fn; } },
-    groupModal: { hidden: false }, groupLoadSeq: 1, groupBusy: false, groupCreateIntent: null,
+    groupModal: { open: true }, groupLoadSeq: 1, groupBusy: false, groupCreateIntent: null,
     groupCreateButton: { disabled: false }, groupErrorElement: { textContent: '' },
     groupTitleInput: { value: 'New group', disabled: false },
     groupPicker: { selectedIds: () => ['friend'], setBusy() {} },
@@ -28,7 +28,7 @@ function groupHarness() {
     callTool: (...args) => { calls.push(args); return pending.promise; },
     seedRoomCacheFromDetail: result => { seeded.push(result); return result.room.room_id; },
     navigateTo: path => navigated.push(path),
-    closeGroupModal: () => { context.groupLoadSeq++; context.groupModal.hidden = true; },
+    closeGroupModal: () => { context.groupLoadSeq++; context.groupModal.open = false; },
   });
   vm.runInContext(groupHandler, context);
   return { context, pending, calls, seeded, navigated };
@@ -49,7 +49,7 @@ for (const reopen of [false, true]) {
     h.context.closeGroupModal();
     if (reopen) {
       h.context.groupLoadSeq++;
-      h.context.groupModal.hidden = false;
+      h.context.groupModal.open = true;
     }
     h.context.groupErrorElement.textContent = 'new state';
     h.context.groupCreateButton.disabled = true;
@@ -58,7 +58,7 @@ for (const reopen of [false, true]) {
     await first;
     assert.equal(h.seeded.length, fail ? 0 : 1, 'successful background creation remains discoverable');
     assert.equal(h.navigated.length, 0, 'dismissed create must not interrupt navigation');
-    assert.equal(h.context.groupModal.hidden, !reopen, 'old result must not close reopened modal');
+    assert.equal(h.context.groupModal.open, reopen, 'old result must not close reopened modal');
     assert.equal(h.context.groupErrorElement.textContent, 'new state');
     assert.equal(h.context.groupCreateButton.disabled, true, 'old result must not release new submission lock');
   }
@@ -68,7 +68,7 @@ for (const fail of [false, true]) {
   let applied = 0, cleared = 0;
   const context = vm.createContext({
     activeRoomId: 'room', roomEpoch: 1, room: { kind: 'group' },
-    membersModal: { hidden: false }, membersBusy: false, membersLoadToken: 1,
+    membersModal: { open: true }, membersBusy: false, membersLoadToken: 1,
     members: new Map(), invitedMembers: new Map(), MEMBER_CHANGE_MAX: 100,
     canInviteMembers: () => true, selectedMemberIds: () => ['friend'],
     setMembersError: value => { context.error = value; },

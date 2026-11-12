@@ -67,13 +67,11 @@ async function clickMemberMenuItem(row: Locator, label: string): Promise<void> {
 }
 
 async function acceptDialog(page: Page): Promise<string> {
-  return new Promise((resolve) => {
-    page.once('dialog', async (dialog) => {
-      const message = dialog.message();
-      await dialog.accept();
-      resolve(message);
-    });
-  });
+  const dialog = page.locator('#confirm-dialog[open]');
+  await dialog.waitFor();
+  const message = (await dialog.locator('#confirm-dialog-message').textContent()) ?? '';
+  await dialog.locator('[data-confirm-ok]').click();
+  return message;
 }
 
 /** 先挂监听再点击，避免等待一个尚未触发的对话框。 */

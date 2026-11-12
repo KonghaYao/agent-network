@@ -417,7 +417,8 @@ async function clearMonitor() {
     setMonitorStatus('');
     return;
   }
-  if (!window.confirm('清除此会话的网址？其他设备也会同步清除。')) return;
+  if (!(await confirmDialog('清除此会话的网址？其他设备也会同步清除。',
+    { title: '清除网址', danger: true, confirmText: '清除' }))) return;
   await commitMonitor(null);
 }
 

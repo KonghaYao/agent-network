@@ -78,62 +78,55 @@ function loadDrawboardModule(forceRetry) {
 
 function closeDrawboardLoading() {
   if (!drawboardLoadingOverlay) return;
+  closeNativeDialog(drawboardLoadingOverlay);
   drawboardLoadingOverlay.remove();
   drawboardLoadingOverlay = null;
-  document.removeEventListener('keydown', onDrawboardLoadingKeydown, true);
-}
-
-function onDrawboardLoadingKeydown(event) {
-  if (event.key !== 'Escape') return;
-  event.preventDefault();
-  event.stopPropagation();
-  drawboardRequestSeq += 1;
-  drawboardOpening = false;
-  closeDrawboardLoading();
-  if (attachFileButton) attachFileButton.focus();
 }
 
 function showDrawboardLoading() {
   if (drawboardLoadingOverlay) return;
-  const overlay = document.createElement('div');
+  const overlay = document.createElement('dialog');
   overlay.className = 'drawboard-fallback';
   overlay.setAttribute('data-drawboard-fallback', 'loading');
-  overlay.innerHTML = '<div class="drawboard-fallback-card" role="dialog" aria-modal="true" ' +
-    'aria-label="画板加载中"><p class="drawboard-fallback-title">正在加载画板…</p>' +
+  overlay.setAttribute('aria-label', '画板加载中');
+  overlay.innerHTML = '<div class="drawboard-fallback-card">' +
+    '<p class="drawboard-fallback-title">正在加载画板…</p>' +
     '<p class="drawboard-fallback-text">首次打开需要加载绘图组件。</p></div>';
   document.body.append(overlay);
   drawboardLoadingOverlay = overlay;
-  document.addEventListener('keydown', onDrawboardLoadingKeydown, true);
+  openNativeDialog(overlay, function () {
+    drawboardRequestSeq += 1;
+    drawboardOpening = false;
+    closeDrawboardLoading();
+    if (attachFileButton) attachFileButton.focus();
+  });
 }
 
 function closeDrawboardError() {
   if (!drawboardErrorOverlay) return;
+  closeNativeDialog(drawboardErrorOverlay);
   drawboardErrorOverlay.remove();
   drawboardErrorOverlay = null;
-  document.removeEventListener('keydown', onDrawboardErrorKeydown, true);
-}
-
-function onDrawboardErrorKeydown(event) {
-  if (event.key !== 'Escape') return;
-  event.preventDefault();
-  event.stopPropagation();
-  closeDrawboardError();
-  if (attachFileButton) attachFileButton.focus();
 }
 
 function showDrawboardError() {
   if (drawboardErrorOverlay) return;
-  const overlay = document.createElement('div');
+  const overlay = document.createElement('dialog');
   overlay.className = 'drawboard-fallback';
   overlay.setAttribute('data-drawboard-fallback', 'error');
-  overlay.innerHTML = '<div class="drawboard-fallback-card" role="dialog" aria-modal="true" ' +
-    'aria-label="画板加载失败"><p class="drawboard-fallback-title">画板加载失败</p>' +
+  overlay.setAttribute('aria-label', '画板加载失败');
+  overlay.innerHTML = '<div class="drawboard-fallback-card">' +
+    '<p class="drawboard-fallback-title">画板加载失败</p>' +
     '<p class="drawboard-fallback-text">无法加载绘图组件，请检查网络后重试。</p>' +
     '<div class="drawboard-fallback-actions">' +
     '<button type="button" class="primary" id="drawboard-retry">重试</button>' +
     '<button type="button" id="drawboard-error-close">关闭</button></div></div>';
   document.body.append(overlay);
   drawboardErrorOverlay = overlay;
+  openNativeDialog(overlay, function () {
+    closeDrawboardError();
+    if (attachFileButton) attachFileButton.focus();
+  });
   const retry = overlay.querySelector('#drawboard-retry');
   const close = overlay.querySelector('#drawboard-error-close');
   if (retry) {
@@ -148,7 +141,6 @@ function showDrawboardError() {
       if (attachFileButton) attachFileButton.focus();
     });
   }
-  document.addEventListener('keydown', onDrawboardErrorKeydown, true);
   if (retry && typeof retry.focus === 'function') retry.focus();
 }
 

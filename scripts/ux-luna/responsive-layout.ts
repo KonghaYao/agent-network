@@ -136,12 +136,12 @@ try {
         ['#files-close', '#files-upload', '#files-drop']);
       await checkHeight(`${width}×${height} files`, '#files-pane',
         ['#files-close', '#files-upload'], '#files-list');
-      await page.locator('#file-preview').evaluate((element) => element.removeAttribute('hidden'));
+      await page.locator('#file-preview').evaluate((element: HTMLDialogElement) => element.showModal());
       await checkHeight(`${width}×${height} preview`, '#file-preview .file-preview-card',
         ['#file-preview-close'], '#file-preview-body');
       await check(`${width}×${height} preview controls`, ['#file-preview .file-preview-card'],
         ['#file-preview-close']);
-      await page.locator('#file-preview').evaluate((element) => element.setAttribute('hidden', ''));
+      await page.locator('#file-preview').evaluate((element: HTMLDialogElement) => element.close());
       await page.locator('#files-close').click();
       await page.locator('#monitor-toggle').click();
       await check(`${width}×${height} monitor`, ['#monitor-pane', '.monitor-toolbar', '#monitor-url', '#monitor-close'],

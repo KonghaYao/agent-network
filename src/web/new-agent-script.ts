@@ -85,15 +85,15 @@ function newAgentOpen() {
   newAgentOpener = document.activeElement;
   if (newAgentNameInput) newAgentNameInput.value = '';
   newAgentReset();
-  newAgentModal.hidden = false;
+  openNativeDialog(newAgentModal, newAgentClose);
   if (newAgentButton) newAgentButton.setAttribute('aria-expanded', 'true');
   if (newAgentNameInput) newAgentNameInput.focus();
 }
 
 function newAgentClose() {
-  if (!newAgentModal || newAgentModal.hidden) return;
+  if (!newAgentModal || !newAgentModal.open) return;
   newAgentReset();
-  newAgentModal.hidden = true;
+  closeNativeDialog(newAgentModal);
   if (newAgentButton) newAgentButton.setAttribute('aria-expanded', 'false');
   // 关闭时再对账一次，覆盖会话创建响应丢失或流通知未及时到达；不阻塞关闭。
   loadRooms().catch(function () {});
@@ -294,14 +294,6 @@ async function newAgentCreate(event) {
 if (newAgentButton) newAgentButton.addEventListener('click', newAgentOpen);
 if (newAgentForm) newAgentForm.addEventListener('submit', newAgentCreate);
 if (newAgentCloseButton) newAgentCloseButton.addEventListener('click', newAgentClose);
-if (newAgentModal) {
-  newAgentModal.addEventListener('click', function (event) {
-    if (event.target === newAgentModal) newAgentClose();
-  });
-}
-document.addEventListener('keydown', function (event) {
-  if (event.key === 'Escape' && newAgentModal && !newAgentModal.hidden) newAgentClose();
-});
 if (newAgentCopyButton) {
   newAgentCopyButton.addEventListener('click', function () {
     newAgentCopy(newAgentCopyButton, newAgentUrlInput, ' MCP URL ');

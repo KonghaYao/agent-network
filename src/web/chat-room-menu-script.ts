@@ -780,7 +780,8 @@ async function reissueRoomAgentToken() {
   const status = document.getElementById('room-menu-status');
   const copyButton = document.getElementById('room-menu-copy-prompt');
   const button = document.getElementById('room-menu-reissue-token');
-  if (!window.confirm(ROOM_MENU_REISSUE_CONFIRM)) {
+  if (!(await confirmDialog(ROOM_MENU_REISSUE_CONFIRM,
+    { title: '重置链接', danger: true, confirmText: '重新生成' }))) {
     if (roomMenuTarget === target && status) {
       status.textContent = ROOM_MENU_REISSUE_CANCELLED;
       status.hidden = false;
@@ -956,7 +957,8 @@ async function toggleRoomAgentDisabled() {
     const state = await callTool('network_agent_management_get', { actor_id: peer.actor_id });
     if (roomMenuTarget !== target) return;
     const disabled = Boolean(state && state.disabled);
-    if (!disabled && !window.confirm(ROOM_MENU_DISABLE_CONFIRM)) {
+    if (!disabled && !(await confirmDialog(ROOM_MENU_DISABLE_CONFIRM,
+      { title: '停用 Agent', danger: true, confirmText: '停用' }))) {
       if (status) {
         status.textContent = '已取消停用。';
         status.hidden = false;
@@ -1101,6 +1103,7 @@ if (roomMenuToggleButton) {
 }
 
 document.addEventListener('pointerdown', function (event) {
+  if (nativeDialogOpen()) return;
   const menu = roomMenuNode();
   if (!menu || menu.hidden) return;
   if (event.target instanceof Node && menu.contains(event.target)) return;
@@ -1109,6 +1112,7 @@ document.addEventListener('pointerdown', function (event) {
 
 document.addEventListener('keydown', function (event) {
   if (event.key !== 'Escape') return;
+  if (nativeDialogOpen()) return;
   const menu = roomMenuNode();
   if (!menu || menu.hidden) return;
   const anchor = roomMenuAnchor;

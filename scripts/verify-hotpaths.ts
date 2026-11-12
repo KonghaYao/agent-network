@@ -368,9 +368,9 @@ try {
   await page.evaluate('window.__oldList = loadRooms(); void 0');
   await oldListFetched;
   await page.locator('#room-list a[data-room-id="'+foreign.room.room_id+'"]').click({button:'right'});
-  page.once('dialog',dialog=>dialog.accept());
   const marker=await page.evaluate('window.__spaMarker');
   await page.click('#room-menu-leave-group');
+  await page.locator('#confirm-dialog[open] [data-confirm-ok]').click();
   await page.waitForFunction(`!roomEntries.some(entry => entry.room_id === ${JSON.stringify(foreign.room.room_id)})`);
   assert.equal(await page.evaluate('activeRoomId'),bId);
   assert.equal(await page.evaluate('window.__spaMarker'),marker);
@@ -400,8 +400,8 @@ try {
   await route(bId);
   // Dissolve current room through visible settings and retain read-only history.
   await page.click('#add-members');
-  page.once('dialog',dialog=>dialog.accept());
   await page.click('#group-dissolve');
+  await page.locator('#confirm-dialog[open] [data-confirm-ok]').click();
   await page.waitForFunction(`document.getElementById('room-archive-banner').hidden === false`);
   assert.equal(await page.locator('#composer').isHidden(),true);
   await route(aId);

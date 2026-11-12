@@ -625,6 +625,15 @@ async function acceptRoomInvites(token: string, roomId: string): Promise<number>
   return accepted;
 }
 
+/** 统一的 Promise 确认框：读取文案并点击确认/取消，替代原生 window.confirm。 */
+async function resolveConfirmDialog(page: Page, accept: boolean): Promise<string> {
+  const dialog = page.locator('#confirm-dialog[open]');
+  await dialog.waitFor();
+  const message = (await dialog.locator('#confirm-dialog-message').textContent()) ?? '';
+  await dialog.locator(accept ? '[data-confirm-ok]' : '[data-confirm-cancel]').click();
+  return message;
+}
+
 async function waitForText(page: Page, selector: string, text: string, timeout = 10_000): Promise<void> {
   if (selector === '#messages') {
     // 本地 outbox 的“发送中”也含正文；只有真实消息行才能证明服务端提交并回读。
@@ -3998,6 +4007,162 @@ async function runQuoteReferenceAcceptance(
   }
 }
 
+/**
+ * Phase 3 可访问性验收：原生 dialog 焦点陷阱、Esc/背板关闭、焦点恢复，
+ * 以及 Promise 版 confirmDialog 的确认/取消/危险色/IME 键盘行为。
+ */
+async function runDialogAccessibilityAcceptance(
+  browser: Browser,
+  base: string,
+  token: string,
+  allErrors: string[],
+): Promise<void> {
+  const { context, page } = await makeContext(
+    browser,
+    token,
+    { width: 1280, height: 800 },
+    allErrors,
+  );
+  try {
+    await page.goto(`${base}/`);
+    const opener = page.locator('#new-group');
+    await opener.waitFor();
+    await opener.focus();
+    await opener.click();
+    const groupDialog = page.locator('#group-modal');
+    await groupDialog.waitFor({ state: 'visible' });
+    checkEqual(
+      '建群弹窗使用原生 dialog',
+      await groupDialog.evaluate((node) => node.tagName),
+      'DIALOG',
+    );
+    checkEqual(
+      '建群弹窗以模态方式打开',
+      await groupDialog.evaluate((node: HTMLDialogElement) => node.open),
+      true,
+    );
+    const focusInsideGroup = (): Promise<boolean> =>
+      page.evaluate(
+        `(() => {
+          const dialog = document.getElementById('group-modal');
+          return Boolean(dialog && dialog.contains(document.activeElement));
+        })()`,
+      );
+    check('建群弹窗打开后焦点进入内部', await focusInsideGroup());
+    for (let index = 0; index < 20; index += 1) await page.keyboard.press('Tab');
+    check('Tab 不逃逸建群弹窗', await focusInsideGroup());
+    for (let index = 0; index < 20; index += 1) await page.keyboard.press('Shift+Tab');
+    check('Shift+Tab 不逃逸建群弹窗', await focusInsideGroup());
+    await page.keyboard.press('Escape');
+    await groupDialog.waitFor({ state: 'hidden' });
+    checkEqual(
+      'Esc 关闭建群弹窗后焦点回到触发按钮',
+      await page.evaluate('document.activeElement ? document.activeElement.id : ""'),
+      'new-group',
+    );
+
+    await opener.click();
+    await groupDialog.waitFor({ state: 'visible' });
+    const groupBox = await groupDialog.boundingBox();
+    await page.mouse.click((groupBox?.x ?? 0) + 3, (groupBox?.y ?? 0) + 3);
+    await groupDialog.waitFor({ state: 'hidden' });
+    check('点击背板关闭建群弹窗', true);
+
+    // confirmDialog 直接调用：确认/取消、危险色、焦点与 IME。
+    await page.evaluate(`(() => {
+      window.__confirmResult = null;
+      document.getElementById('new-group').focus();
+      confirmDialog('危险操作文案', {
+        title: '危险确认',
+        danger: true,
+        confirmText: '执行'
+      }).then(function (value) { window.__confirmResult = value; });
+    })()`);
+    const confirm = page.locator('#confirm-dialog[open]');
+    await confirm.waitFor();
+    checkEqual(
+      '确认框使用统一标题',
+      await confirm.locator('#confirm-dialog-title').textContent(),
+      '危险确认',
+    );
+    checkEqual(
+      '确认框使用调用方按钮文案',
+      await confirm.locator('[data-confirm-ok]').textContent(),
+      '执行',
+    );
+    checkEqual(
+      '危险确认使用统一危险色',
+      await confirm.locator('[data-confirm-ok]').evaluate(
+        (node) => getComputedStyle(node).backgroundColor,
+      ),
+      'rgb(192, 57, 43)',
+    );
+    check(
+      '确认框默认聚焦取消按钮',
+      await page.evaluate(
+        `document.activeElement === document.querySelector('#confirm-dialog [data-confirm-cancel]')`,
+      ),
+    );
+    for (let index = 0; index < 10; index += 1) await page.keyboard.press('Tab');
+    check(
+      'Tab 不逃逸确认框',
+      await page.evaluate(
+        `(() => {
+          const dialog = document.getElementById('confirm-dialog');
+          return Boolean(dialog && dialog.contains(document.activeElement));
+        })()`,
+      ),
+    );
+    await confirm.locator('[data-confirm-cancel]').click();
+    await page.waitForFunction('window.__confirmResult === false');
+    checkEqual('取消返回 false', await page.evaluate('window.__confirmResult'), false);
+    checkEqual(
+      '取消后焦点回到触发按钮',
+      await page.evaluate('document.activeElement ? document.activeElement.id : ""'),
+      'new-group',
+    );
+
+    await page.evaluate(`(() => {
+      window.__confirmResult = null;
+      confirmDialog('二次确认').then(function (value) { window.__confirmResult = value; });
+    })()`);
+    await confirm.waitFor();
+    await confirm.locator('[data-confirm-ok]').click();
+    await page.waitForFunction('window.__confirmResult === true');
+    checkEqual('确认返回 true', await page.evaluate('window.__confirmResult'), true);
+
+    await page.evaluate(`(() => {
+      window.__confirmResult = null;
+      confirmDialog('输入法测试').then(function (value) { window.__confirmResult = value; });
+    })()`);
+    await confirm.waitFor();
+    await page.evaluate(`(() => {
+      document.getElementById('confirm-dialog').dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape', code: 'Escape', isComposing: true, bubbles: true
+      }));
+    })()`);
+    checkEqual(
+      'IME 组合期间 Esc 不关闭确认框',
+      await page.evaluate(`document.getElementById('confirm-dialog').open`),
+      true,
+    );
+    await page.keyboard.press('Escape');
+    await page.waitForFunction('window.__confirmResult === false');
+    checkEqual('普通 Esc 取消确认', await page.evaluate('window.__confirmResult'), false);
+
+    await page.evaluate(`(() => {
+      window.__confirmResult = null;
+      confirmDialog('背板测试').then(function (value) { window.__confirmResult = value; });
+    })()`);
+    await confirm.waitFor();
+    await page.mouse.click(2, 2);
+    await page.waitForFunction('window.__confirmResult === false');
+    checkEqual('点击确认框背板返回 false', await page.evaluate('window.__confirmResult'), false);
+  } finally {
+    await context.close();
+  }
+}
+
 async function main(): Promise<void> {
   await runFileTicketSecretChecks();
   const server = await startServer();
@@ -6200,13 +6365,7 @@ async function main(): Promise<void> {
       check('菜单安全提示不再使用长段落', Array.from(directHint).length <= 40, directHint);
 
       // 拉黑与删除都必须二次确认，且文案明确“解封不恢复好友”。
-      const blockDialog = new Promise<string>((resolve) => {
-        page.once('dialog', async (dialog) => {
-          const message = dialog.message();
-          await dialog.dismiss();
-          resolve(message);
-        });
-      });
+      const blockDialog = resolveConfirmDialog(page, false);
       await page.locator('#room-menu-block').click();
       const blockCopy = await blockDialog;
       check(
@@ -6218,13 +6377,7 @@ async function main(): Promise<void> {
       );
       checkEqual('取消拉黑后菜单仍显示拉黑', await page.locator('#room-menu').isVisible(), true);
 
-      const deleteDialog = new Promise<string>((resolve) => {
-        page.once('dialog', async (dialog) => {
-          const message = dialog.message();
-          await dialog.dismiss();
-          resolve(message);
-        });
-      });
+      const deleteDialog = resolveConfirmDialog(page, false);
       await page.locator('#room-menu-delete-friend').click();
       const deleteCopy = await deleteDialog;
       check(
@@ -6246,13 +6399,7 @@ async function main(): Promise<void> {
       await page.waitForFunction(
         `document.getElementById('room-menu-block').textContent.trim() === '拉黑'`,
       );
-      const blockAccepted = new Promise<string>((resolve) => {
-        page.once('dialog', async (dialog) => {
-          const message = dialog.message();
-          await dialog.accept();
-          resolve(message);
-        });
-      });
+      const blockAccepted = resolveConfirmDialog(page, true);
       await page.locator('#room-menu-block').click();
       const acceptedBlockCopy = await blockAccepted;
       check(
@@ -6291,13 +6438,7 @@ async function main(): Promise<void> {
         (await page.locator('#room-menu-block').textContent())?.trim(),
         '解除拉黑',
       );
-      const unblockAccepted = new Promise<string>((resolve) => {
-        page.once('dialog', async (dialog) => {
-          const message = dialog.message();
-          await dialog.accept();
-          resolve(message);
-        });
-      });
+      const unblockAccepted = resolveConfirmDialog(page, true);
       await page.locator('#room-menu-block').click();
       const acceptedUnblockCopy = await unblockAccepted;
       check(
@@ -6456,12 +6597,7 @@ async function main(): Promise<void> {
 
       await page.locator(roomLink(deletedRoom.room.room_id)).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
-      const deleteAccepted = new Promise<void>((resolve) => {
-        page.once('dialog', async (dialog) => {
-          await dialog.accept();
-          resolve();
-        });
-      });
+      const deleteAccepted = resolveConfirmDialog(page, true);
       await page.locator('#room-menu-delete-friend').click();
       await deleteAccepted;
       await page.waitForFunction(
@@ -6631,12 +6767,7 @@ async function main(): Promise<void> {
       await page.locator(roomLink(legacyRoom.room.room_id)).waitFor();
       await page.locator(roomLink(legacyRoom.room.room_id)).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
-      const legacyDeleteAccepted = new Promise<void>((resolve) => {
-        page.once('dialog', async (dialog) => {
-          await dialog.accept();
-          resolve();
-        });
-      });
+      const legacyDeleteAccepted = resolveConfirmDialog(page, true);
       await page.locator('#room-menu-delete-friend').click();
       await legacyDeleteAccepted;
       await page.waitForFunction(
@@ -6813,10 +6944,9 @@ async function main(): Promise<void> {
       const resetDirectPrompt = async (): Promise<string> => {
         await page.locator(directSelector).click({ button: 'right' });
         await page.locator('#room-menu').waitFor({ state: 'visible' });
-        page.once('dialog', async (dialog) => {
-          await dialog.accept();
-        });
+        const resetAccepted = resolveConfirmDialog(page, true);
         await page.locator('#room-menu-reissue-token').click();
+        await resetAccepted;
         await page.waitForFunction(
           `document.getElementById('room-menu-status').textContent === '已重置：新 token 已生成，旧 token 已失效。请点击「复制提示词」。'`,
         );
@@ -7633,19 +7763,19 @@ async function main(): Promise<void> {
       );
       await page.keyboard.press('Escape');
       const escapedState = (await page.evaluate(`(() => ({
-        modalHidden: document.getElementById('new-agent-modal').hidden,
+        modalClosed: !document.getElementById('new-agent-modal').open,
         resultHidden: document.getElementById('new-agent-result').hidden,
         url: document.getElementById('new-agent-url').value,
         prompt: document.getElementById('new-agent-prompt').value
       }))()`)) as {
-        modalHidden: boolean;
+        modalClosed: boolean;
         resultHidden: boolean;
         url: string;
         prompt: string;
       };
       check(
         'Escape 关闭后清空凭据与提示词',
-        escapedState.modalHidden &&
+        escapedState.modalClosed &&
           escapedState.resultHidden &&
           escapedState.url === '' &&
           escapedState.prompt === '',
@@ -8867,12 +8997,7 @@ async function main(): Promise<void> {
       );
       await page.locator(directLink).click({ button: 'right' });
       await page.locator('#room-menu').waitFor({ state: 'visible' });
-      const dismissed = new Promise<void>((resolve) => {
-        page.once('dialog', async (dialog) => {
-          await dialog.dismiss();
-          resolve();
-        });
-      });
+      const dismissed = resolveConfirmDialog(page, false);
       await page.locator('#room-menu-reissue-token').click();
       await dismissed;
       await page.waitForFunction(
@@ -9744,11 +9869,12 @@ async function main(): Promise<void> {
             }),
           });
         });
-        page.once('dialog', async (dialog) => {
-          check('停用确认说明待处理投递会被取消', dialog.message().includes('待处理投递会被取消'));
-          await dialog.accept();
-        });
+        const disableConfirm = resolveConfirmDialog(page, true);
         await page.locator('#room-menu-toggle-disabled').click();
+        check(
+          '停用确认说明待处理投递会被取消',
+          (await disableConfirm).includes('待处理投递会被取消'),
+        );
         await page.waitForFunction(
           `(document.getElementById('room-menu-status').textContent || '').includes('停用/启用失败：模拟停用失败')`,
         );
@@ -9759,10 +9885,9 @@ async function main(): Promise<void> {
         );
         await page.unroute('**/mcp');
 
-        page.once('dialog', async (dialog) => {
-          await dialog.accept();
-        });
+        const enableConfirm = resolveConfirmDialog(page, true);
         await page.locator('#room-menu-toggle-disabled').click();
+        await enableConfirm;
         await page.waitForFunction(
           `document.getElementById('room-menu-stopped').hidden === false`,
         );
@@ -9835,10 +9960,9 @@ async function main(): Promise<void> {
 
         // 真实停用：展示 pending delivery 数与 claimed 任务描述。
         await openAgentMenu(pendingAgent.name, pendingRoom.room.room_id);
-        page.once('dialog', async (dialog) => {
-          await dialog.accept();
-        });
+        const realDisableConfirm = resolveConfirmDialog(page, true);
         await page.locator('#room-menu-toggle-disabled').click();
+        await realDisableConfirm;
         await page.waitForFunction(
           `document.getElementById('room-menu-stopped').hidden === false`,
         );
@@ -10091,14 +10215,14 @@ async function main(): Promise<void> {
           await successorView.page.locator('#transfer-accept').isVisible(),
           true,
         );
-        successorView.page.once('dialog', async (dialog) => {
-          check(
-            '接受确认说明旧管理者立即失权',
-            dialog.message().includes('原管理者立即失权') && dialog.message().includes('旧运行 token 失效'),
-          );
-          await dialog.accept();
-        });
+        const acceptTransferDialog = resolveConfirmDialog(successorView.page, true);
         await successorView.page.locator('#transfer-accept').click();
+        const acceptTransferMessage = await acceptTransferDialog;
+        check(
+          '接受确认说明旧管理者立即失权',
+          acceptTransferMessage.includes('原管理者立即失权') &&
+            acceptTransferMessage.includes('旧运行 token 失效'),
+        );
         await successorView.page.waitForFunction(
           `document.getElementById('transfer-token-panel').hidden === false`,
         );
@@ -10475,14 +10599,19 @@ async function main(): Promise<void> {
       await page.locator('#members-contacts input[type=checkbox]').first().waitFor();
       checkEqual('添加成员弹窗打开', await page.locator('#members-modal').isVisible(), true);
       checkEqual(
-        '添加成员弹窗使用 dialog 语义',
-        await page.locator('#members-modal .modal-card').getAttribute('role'),
-        'dialog',
+        '添加成员弹窗使用原生 dialog',
+        await page.locator('#members-modal').evaluate((node) => node.tagName),
+        'DIALOG',
       );
       checkEqual(
-        '添加成员弹窗为模态',
-        await page.locator('#members-modal .modal-card').getAttribute('aria-modal'),
-        'true',
+        '添加成员弹窗可访问名称来自标题',
+        await page.locator('#members-modal').getAttribute('aria-labelledby'),
+        'members-modal-title',
+      );
+      checkEqual(
+        '添加成员弹窗以模态方式打开',
+        await page.locator('#members-modal').evaluate((node: HTMLDialogElement) => node.open),
+        true,
       );
       checkEqual('左栏标题为已在群', await page.locator('#members-current-title').textContent(), '已在群');
       checkEqual('右栏标题为未在群', await page.locator('#members-candidates-title').textContent(), '未在群');
@@ -10519,10 +10648,11 @@ async function main(): Promise<void> {
         await page.locator('#members-invites-list .member-invite-item').count(),
         1,
       );
-      page.once('dialog', (dialog) => dialog.accept());
+      const revokeInviteDialog = resolveConfirmDialog(page, true);
       await page
         .locator('#members-invites-list .member-invite-item .member-action')
         .click();
+      await revokeInviteDialog;
       await page.waitForFunction(() => {
         const count = document.getElementById('members-invites-count');
         return Boolean(count && count.textContent === '0');
@@ -11662,14 +11792,13 @@ async function main(): Promise<void> {
       await waitRoom(ownerPage, transferRoomId, '转让确认界面群');
       await ownerPage.locator('#add-members').click();
       await rowOf(ownerPage, data.agentB.name).waitFor();
-      let proposeDialog = '';
-      ownerPage.once('dialog', async (dialog) => {
-        proposeDialog = dialog.message();
-        await dialog.accept();
-      });
+      const proposeDialog = resolveConfirmDialog(ownerPage, true);
       await clickMemberMenuItem(rowOf(ownerPage, data.agentB.name), '转让群主');
       await waitForText(ownerPage, '#members-transfer', '等待确认');
-      check('转让发起确认说明需对方接受后生效', proposeDialog.includes('对方接受后才会生效'));
+      check(
+        '转让发起确认说明需对方接受后生效',
+        (await proposeDialog).includes('对方接受后才会生效'),
+      );
       check(
         '发起后成员弹窗显示待确认提议与双方名称',
         ((await ownerPage.locator('#members-transfer').textContent()) ?? '').includes(
@@ -11760,10 +11889,9 @@ async function main(): Promise<void> {
 
       // 新 owner 在网页再次发起，原 owner 用拒绝入口关闭提议。
       await targetPage.locator('#members-current .member-roster-item').first().waitFor();
-      targetPage.once('dialog', async (dialog) => {
-        await dialog.accept();
-      });
+      const proposeAgainDialog = resolveConfirmDialog(targetPage, true);
       await clickMemberMenuItem(rowOf(targetPage, data.human.name), '转让群主');
+      await proposeAgainDialog;
       await waitForText(targetPage, '#members-transfer', '等待确认');
       await ownerPage
         .locator('#members-transfer .member-action')
@@ -11785,15 +11913,13 @@ async function main(): Promise<void> {
       checkEqual('网页拒绝后提议关闭', rejectedState.owner_transfer, null);
 
       // 新 owner 再发起并由自己在网页取消。
-      targetPage.once('dialog', async (dialog) => {
-        await dialog.accept();
-      });
+      const proposeThirdDialog = resolveConfirmDialog(targetPage, true);
       await clickMemberMenuItem(rowOf(targetPage, data.human.name), '转让群主');
+      await proposeThirdDialog;
       await waitForText(targetPage, '#members-transfer', '等待确认');
-      targetPage.once('dialog', async (dialog) => {
-        await dialog.accept();
-      });
+      const cancelProposalDialog = resolveConfirmDialog(targetPage, true);
       await targetPage.locator('#members-transfer .member-action').filter({ hasText: '取消提议' }).click();
+      await cancelProposalDialog;
       await targetPage.waitForFunction(
         `document.getElementById('members-transfer').hidden === true`,
       );
@@ -11952,20 +12078,11 @@ async function main(): Promise<void> {
       await archivePage.keyboard.press('Escape');
 
       // P2-4：退出确认补充失去只读归档访问。
-      await archivePage.evaluate(`(() => {
-        window.__leaveConfirm = '';
-        window.confirm = function (message) {
-          window.__leaveConfirm = String(message || '');
-          return false;
-        };
-      })()`);
       await archivePage.locator(roomLink(archiveRoomId)).click({ button: 'right' });
       await archivePage.locator('#room-menu').waitFor({ state: 'visible' });
+      const leaveConfirm = resolveConfirmDialog(archivePage, false);
       await archivePage.locator('#room-menu-leave-group').click();
-      await archivePage.waitForFunction(
-        `(window.__leaveConfirm || '').includes('失去该群的只读归档访问')`,
-      );
-      const leaveConfirmText = (await archivePage.evaluate('window.__leaveConfirm')) as string;
+      const leaveConfirmText = await leaveConfirm;
       check(
         '解散群退群确认说明失去归档且不能重新加入',
         leaveConfirmText.includes('失去该群的只读归档访问') &&
@@ -14825,11 +14942,9 @@ async function main(): Promise<void> {
         ((await page.locator('#monitor-status').textContent()) ?? '').includes('已刷新'),
       );
 
-      page.once('dialog', async (dialog) => {
-        check('清除前提示其他设备同步', dialog.message().includes('其他设备'));
-        await dialog.accept();
-      });
+      const clearMonitorDialog = resolveConfirmDialog(page, true);
       await page.locator('#monitor-clear').click();
+      check('清除前提示其他设备同步', (await clearMonitorDialog).includes('其他设备'));
       await page.locator('#monitor-empty').waitFor({ state: 'visible' });
       checkEqual(
         '清除后空态只显示暂无网页',
@@ -23355,13 +23470,10 @@ async function main(): Promise<void> {
         !((await page.locator('#room-menu').innerText()) ?? '').includes(reissueOldToken),
       );
 
-      let cancelMessage = '';
-      page.once('dialog', async (dialog) => {
-        cancelMessage = dialog.message();
-        await dialog.dismiss();
-      });
+      const cancelMessageDialog = resolveConfirmDialog(page, false);
       const reissueCallsBefore = await mcpCallCount(page, 'network_agent_reissue_token');
       await page.locator('#room-menu-reissue-token').click();
+      const cancelMessage = await cancelMessageDialog;
       await page.waitForFunction(
         `document.getElementById('room-menu-status').textContent === '已取消重置链接。'`,
       );
@@ -23380,10 +23492,9 @@ async function main(): Promise<void> {
       const stillOld = await rawTool<Actor>(reissueOldToken, 'network_me', {});
       checkEqual('取消后旧 token 仍有效', stillOld.actor_id, reissueAgent.actor_id);
 
-      page.once('dialog', async (dialog) => {
-        await dialog.accept();
-      });
+      const acceptedReissueDialog = resolveConfirmDialog(page, true);
       await page.locator('#room-menu-reissue-token').click();
+      await acceptedReissueDialog;
       await page.waitForFunction(
         `document.getElementById('room-menu-status').textContent === '已重置：新 token 已生成，旧 token 已失效。请点击「复制提示词」。'`,
       );
@@ -23664,10 +23775,9 @@ async function main(): Promise<void> {
       });
       await page.locator('#room-filter-agent').click();
       await openMenu(reissueLink);
-      page.once('dialog', async (dialog) => {
-        await dialog.accept();
-      });
+      const failedReissueDialog = resolveConfirmDialog(page, true);
       await page.locator('#room-menu-reissue-token').click();
+      await failedReissueDialog;
       await page.waitForFunction(
         `(document.getElementById('room-menu-status').textContent || '').includes('重置失败：模拟重置失败')`,
       );
@@ -23799,12 +23909,9 @@ async function main(): Promise<void> {
           mobileMenuMetrics.doc <= mobileMenuMetrics.view,
         mobileMenuMetrics,
       );
-      let mobileConfirmMessage = '';
-      mobile.page.once('dialog', async (dialog) => {
-        mobileConfirmMessage = dialog.message();
-        await dialog.accept();
-      });
+      const mobileConfirmDialog = resolveConfirmDialog(mobile.page, true);
       await mobile.page.locator('#room-menu-reissue-token').click();
+      const mobileConfirmMessage = await mobileConfirmDialog;
       await mobile.page.waitForFunction(
         `document.getElementById('room-menu-status').textContent === '已重置：新 token 已生成，旧 token 已失效。请点击「复制提示词」。'`,
       );
@@ -23983,12 +24090,9 @@ async function main(): Promise<void> {
           fallbackPrompt,
         );
 
-        let forcedConfirm = '';
-        page.once('dialog', async (dialog) => {
-          forcedConfirm = dialog.message();
-          await dialog.accept();
-        });
-        await page.evaluate(`window.reissueRoomAgentToken()`);
+        const forcedConfirmDialog = resolveConfirmDialog(page, true);
+        await page.evaluate(`void window.reissueRoomAgentToken()`);
+        const forcedConfirm = await forcedConfirmDialog;
         await page.waitForFunction(
           `(document.getElementById('room-menu-status').textContent || '')` +
             `.includes('只有该 Agent 的管理者或受托人可以重置')`,
@@ -24061,6 +24165,8 @@ async function main(): Promise<void> {
       disabledBase: server.base,
       allErrors,
     });
+
+    await runDialogAccessibilityAcceptance(browser, server.base, data.humanToken, allErrors);
 
     checkEqual('无未捕获页面错误', allErrors.length, 0);
     console.log(`\n浏览器验收通过 ${checksPassed()} 项`);

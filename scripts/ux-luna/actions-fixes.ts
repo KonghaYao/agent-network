@@ -102,9 +102,8 @@ try {
   const forwarded = await rawTool<any>(d.me.token, 'network_history_list', { room_id: d.rooms.directLi.room_id });
   check(forwarded.items.filter((item: any) => item.preview.includes('【转发消息】') && item.preview.includes('引用不会丢草稿')).length === 1, '确认转发仅发送到选中会话一次');
   await sent.getByRole('button', { name: '消息操作', exact: true }).click();
-  const dialogPromise = page.waitForEvent('dialog');
-  const clickPromise = page.getByRole('menuitem', { name: '撤回', exact: true }).click();
-  await (await dialogPromise).accept(); await clickPromise;
+  await page.getByRole('menuitem', { name: '撤回', exact: true }).click();
+  await page.locator('#confirm-dialog[open] [data-confirm-ok]').click();
   await page.locator('#messages .msg-recalled').waitFor();
   check(await page.locator('#messages').getByText('引用不会丢草稿', { exact: true }).count() === 0, '撤回后原气泡消失显示墓碑');
 

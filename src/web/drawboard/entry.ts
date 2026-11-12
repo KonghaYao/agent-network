@@ -51,7 +51,7 @@ const TOOLS: { value: DrawTool; label: string }[] = [
   { value: 'text', label: '文本' },
 ];
 
-const TEMPLATE = `<div class="db-shell" role="dialog" aria-modal="true" aria-label="画板">
+const TEMPLATE = `<div class="db-shell">
   <div class="db-toolbar" role="toolbar" aria-label="画板工具">
     <div class="db-group" role="group" aria-label="绘图工具">${TOOLS.map(
       (tool) =>
@@ -95,11 +95,13 @@ export function openDrawboard(options: DrawboardOptions): DrawboardHandle {
   style.textContent = DRAWBOARD_STYLE;
   document.head.append(style);
 
-  const overlay = document.createElement('div');
+  const overlay = document.createElement('dialog');
   overlay.className = 'db-overlay';
   overlay.setAttribute('data-drawboard-overlay', '1');
+  overlay.setAttribute('aria-label', '画板');
   overlay.innerHTML = TEMPLATE;
   document.body.append(overlay);
+  overlay.showModal();
   document.body.style.overflow = 'hidden';
 
   const stage = must<HTMLElement>(overlay, '#db-stage');
@@ -325,6 +327,8 @@ export function openDrawboard(options: DrawboardOptions): DrawboardHandle {
       editable: true,
       objectCaching: false,
     });
+    // 模态 <dialog> 之外的 body 是 inert；文本编辑的隐藏 textarea 必须挂在画板内部。
+    text.hiddenTextareaContainer = overlay;
     canvas.add(text);
     canvas.setActiveObject(text);
     text.enterEditing();
@@ -337,6 +341,9 @@ export function openDrawboard(options: DrawboardOptions): DrawboardHandle {
     restoring = true;
     try {
       await canvas.loadFromJSON(snapshotText);
+      for (const object of canvas.getObjects()) {
+        if (object instanceof IText) object.hiddenTextareaContainer = overlay;
+      }
       canvas.backgroundColor = '#ffffff';
       canvas.renderAll();
     } catch {
@@ -433,6 +440,7 @@ export function openDrawboard(options: DrawboardOptions): DrawboardHandle {
     closed = true;
     activeClose = null;
     window.removeEventListener('keydown', onKeyDown, true);
+    if (overlay.open) overlay.close();
     overlay.remove();
     style.remove();
     document.body.style.overflow = previousOverflow;
