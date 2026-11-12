@@ -7,7 +7,6 @@
  */
 
 import { rm } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 
 import {
@@ -23,6 +22,7 @@ import {
   type McpConnection,
 } from './harness';
 import { befriend, registerIdentity } from './acceptance-helpers';
+import { startTestServer } from './test-server';
 
 const STREAM_URI = 'agentnet://stream';
 const STREAM_META = 'io.agent-network/event';
@@ -72,45 +72,19 @@ async function waitAgentOffline(dataDir: string, agentId: string): Promise<void>
   }
 }
 
-async function waitForHealth(base: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      const response = await fetch(`${base}/health`);
-      if (response.ok) return;
-    } catch {
-      // 服务尚未监听
-    }
-    await sleep(100);
-  }
-  throw new Error(`空闲通知验收实例未在 10s 内就绪: ${base}`);
-}
-
 async function startServer(dataDir: string): Promise<{ base: string; proc: ServerProcess }> {
-  const port = 19150 + Math.floor(Math.random() * 100);
-  const base = `http://127.0.0.1:${port}`;
-  const proc = Bun.spawn(['bun', resolve(import.meta.dir, '../../src/bun/main.ts')], {
-    cwd: resolve(import.meta.dir, '../..'),
+  const server = await startTestServer({
+    dataDir,
+    tag: 'presence-idle',
     env: {
-      ...process.env,
-      PORT: String(port),
-      DATA_DIR: dataDir,
-      PUBLIC_ORIGIN: base,
+      PUBLIC_ORIGIN: undefined,
       AGENT_PRESENCE_GRACE_MS: String(GRACE_MS),
       AGENT_PRESENCE_ACTIVITY_TTL_MS: String(GRACE_MS),
       AGENT_PRESENCE_TOUCH_THROTTLE_MS: '100',
       AGENT_PRESENCE_SWEEP_MS: '150',
     },
-    stdout: 'ignore',
-    stderr: 'inherit',
   });
-  try {
-    await waitForHealth(base);
-  } catch (error) {
-    proc.kill('SIGKILL');
-    await proc.exited.catch(() => undefined);
-    throw error;
-  }
-  return { base, proc: proc as unknown as ServerProcess };
+  return { base: server.base, proc: server.proc };
 }
 
 export async function runPresenceIdleNotificationCheck(): Promise<void> {

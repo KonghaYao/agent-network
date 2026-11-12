@@ -44,6 +44,12 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/** `PORT=0` 表示由内核分配端口；测试 harness 依赖启动日志里的真实端口。 */
+function portNumber(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 && parsed <= 65_535 ? parsed : fallback;
+}
+
 function parseAllowlist(value: string | undefined): ReadonlySet<string> | null {
   if (!value) return null;
   const hosts = value
@@ -102,7 +108,7 @@ async function loadEventsConfig(environment: string): Promise<EventsConfig | und
   };
 }
 
-const port = positiveInt(process.env.PORT, 8792);
+const port = portNumber(process.env.PORT, 8792);
 const hostname = process.env.HOST ?? '0.0.0.0';
 const dataDir = resolve(process.env.DATA_DIR ?? '.data');
 const databasePath = resolve(process.env.DATABASE_PATH ?? `${dataDir}/agent-network.sqlite`);

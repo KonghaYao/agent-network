@@ -15,6 +15,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from 'playwrig
 import { Database } from 'bun:sqlite';
 
 import { rawRpc, sleep } from './harness';
+import { reservePort, startTestServer } from './test-server';
 
 export { check, checkEqual, checksPassed, ToolError, CheckFailure } from './harness';
 export { sleep };
@@ -125,17 +126,13 @@ export async function startQ04Server(): Promise<{
   dbPath: string;
   stop: () => Promise<void>;
 }> {
-  const port = 19100 + Math.floor(Math.random() * 700);
+  // 浏览器套件需要 PUBLIC_ORIGIN 与访问地址一致，先预留端口再启动。
+  const port = reservePort();
   const base = `http://127.0.0.1:${port}`;
-  const dataDir = `/tmp/agentnet-q04-${process.pid}-${Date.now()}`;
-  const dbPath = resolve(dataDir, 'agent-network.sqlite');
-  const proc = Bun.spawn(['bun', resolve(import.meta.dir, '../../src/bun/main.ts')], {
-    cwd: resolve(import.meta.dir, '../..'),
+  const server = await startTestServer({
+    port,
+    tag: 'q04',
     env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: '127.0.0.1',
-      DATA_DIR: dataDir,
       PUBLIC_ORIGIN: base,
       // Q04 专用短 presence 窗口；生产默认仍由 contracts/limits.ts 决定。
       AGENT_PRESENCE_GRACE_MS: '1200',
@@ -145,37 +142,13 @@ export async function startQ04Server(): Promise<{
       // 让测试失败可诊断，但不改变业务分支。
       NODE_ENV: 'test',
     },
-    stdout: 'ignore',
-    stderr: 'inherit',
   });
-  try {
-    let ready = false;
-    for (let attempt = 0; attempt < 150; attempt += 1) {
-      try {
-        const response = await fetch(`${base}/health`);
-        if (response.ok) {
-          ready = true;
-          break;
-        }
-      } catch {
-        // 服务尚未监听
-      }
-      await sleep(100);
-    }
-    if (!ready) throw new Error('Q04 本地实例未在 15s 内就绪');
-  } catch (error) {
-    proc.kill();
-    throw error;
-  }
+  const dbPath = resolve(server.dataDir, 'agent-network.sqlite');
   return {
-    base,
-    dataDir,
+    base: server.base,
+    dataDir: server.dataDir,
     dbPath,
-    async stop() {
-      proc.kill();
-      await proc.exited.catch(() => undefined);
-      await rm(dataDir, { recursive: true, force: true });
-    },
+    stop: () => server.dispose(),
   };
 }
 

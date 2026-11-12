@@ -1,14 +1,14 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 
 import {
   FILE_TICKET_KEY_FILE,
   resolveFileTicketSecret,
 } from '../../src/bun/file-ticket-secret';
 import { check, checkEqual } from './harness';
+import { startTestServer } from './test-server';
 
-const WORKTREE_ROOT = resolve(import.meta.dir, '../..');
 const HEX_SECRET = /^[0-9a-f]{64}$/u;
 
 /**
@@ -63,45 +63,18 @@ export async function runFileTicketSecretChecks(): Promise<void> {
 
 /** 启动一个最小实例，等待 /health 后停止，返回合并的 stdout/stderr。 */
 async function runServerOnce(dataDir: string): Promise<string> {
-  const port = 20200 + Math.floor(Math.random() * 600);
-  const base = `http://127.0.0.1:${port}`;
-  const proc = Bun.spawn(['bun', resolve(WORKTREE_ROOT, 'src/bun/main.ts')], {
-    cwd: WORKTREE_ROOT,
+  const server = await startTestServer({
+    dataDir,
+    tag: 'file-ticket',
     env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: '127.0.0.1',
-      DATA_DIR: dataDir,
-      PUBLIC_ORIGIN: base,
+      PUBLIC_ORIGIN: undefined,
       ENVIRONMENT: 'test',
       DRIVE_DISABLED: '1',
       EVENTS_ENABLED: '0',
       // 显式清空，避免外部环境影响“未配置”分支。
       FILE_TICKET_SECRET: '',
     },
-    stdout: 'pipe',
-    stderr: 'pipe',
   });
-  const stdout = new Response(proc.stdout).text();
-  const stderr = new Response(proc.stderr).text();
-  try {
-    let ready = false;
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      try {
-        const response = await fetch(`${base}/health`);
-        if (response.ok) {
-          ready = true;
-          break;
-        }
-      } catch {
-        // 服务尚未监听。
-      }
-      await Bun.sleep(50);
-    }
-    if (!ready) throw new Error('票据密钥验收实例未在 10s 内就绪');
-  } finally {
-    proc.kill();
-    await proc.exited.catch(() => undefined);
-  }
-  return `${await stdout}\n${await stderr}`;
+  await server.stop();
+  return server.logs();
 }
