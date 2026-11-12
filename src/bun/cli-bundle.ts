@@ -31,7 +31,8 @@ export function cliBuildConfig(outdir?: string): Bun.BuildConfig {
     entrypoints: [CLI_ENTRY],
     target: 'bun',
     format: 'esm',
-    minify: false,
+    // 单文件 CLI 会被下载执行；minify 让新增锁/原子写依赖仍落在 400KB 预算内。
+    minify: true,
     sourcemap: 'none',
     banner: CLI_BUNDLE_SHEBANG,
     ...(outdir ? { outdir, naming: CLI_BUNDLE_FILENAME, write: true } : { write: false }),
