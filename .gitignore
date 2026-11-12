@@ -6,3 +6,8 @@ dist/
 .env
 .env.*
 !.env.example
+.claude/
+.peri/
+__pycache__/
+*.pyc
+public/skills/agentnet.js
