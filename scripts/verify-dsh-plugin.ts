@@ -1,10 +1,11 @@
 /** Isolated DSH auto-install + the exact shipped consumer, without model calls or real credentials. */
-import { appendFile, chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { cliBuildConfig } from '../src/bun/cli-bundle';
+import { isSupportedDshVersion } from '../client/monitor/dsh-install';
 import { check, checkEqual, checksPassed, sleep, waitUntil } from './lib/harness';
 
 const root = resolve(import.meta.dir, '..');
@@ -85,9 +86,14 @@ process.exit(2);
   const built = await Bun.build(cliBuildConfig());
   check('包含插件源码的单文件 CLI 构建成功', built.success, built.logs);
   await writeFile(bundle, await built.outputs.find((item) => item.kind === 'entry-point')!.text());
-  const checkOnly = await cli(['--check']);
+  const checkOnly = await cli(['--check-config']);
   checkEqual('静态预检退出 0', checkOnly.code, 0);
   check('静态预检不检测或安装插件', !existsSync(dshHome) && !existsSync(calls));
+  check('semver 接受 0.2.1-rc.5', isSupportedDshVersion('0.2.1-rc.5'));
+  check('semver 拒绝 0.2.2-beta', !isSupportedDshVersion('0.2.2-beta'));
+  check('semver 接受 0.2.2-rc.1', isSupportedDshVersion('0.2.2-rc.1'));
+  check('semver 拒绝 0.3.0', !isSupportedDshVersion('0.3.0'));
+  check('semver 拒绝 0.1.5-rc.2', !isSupportedDshVersion('0.1.5-rc.2'));
   const removedInstallCommand = await cli(['install']);
   check('不再暴露单独 install 子命令', removedInstallCommand.code !== 0 && !existsSync(calls));
   const missing = await cli(['start'], { DSH_PROFILE: undefined, DSH_SESSION_ID: undefined });
@@ -123,6 +129,19 @@ process.exit(2);
   check('插件已存在时启动路径报告 present', repeated.stderr.includes('DSH_PLUGIN status=present'), repeated);
   checkEqual('已存在时不重复安装', addCalls(await dshCalls()).length, 1);
   checkEqual('已存在时不新增绑定', await readFile(bindingsFile, 'utf8'), bindingBefore);
+
+  // 模拟崩溃遗留的安装锁：mtime 超过 stale 窗口后应恢复，而不是永久锁死 profile。
+  const staleLock = join(dshHome, 'profiles/web.lock');
+  await mkdir(staleLock, { recursive: true });
+  const old = new Date(Date.now() - 10 * 60_000);
+  await utimes(staleLock, old, old);
+  const staleRecovered = await cli(['start']);
+  check(
+    '崩溃遗留锁在 stale 后恢复',
+    staleRecovered.stderr.includes('DSH_PLUGIN status=present') &&
+      !staleRecovered.stderr.includes('正在检查/安装'),
+    staleRecovered,
+  );
 
   await rm(pluginState, { force: true });
   const repaired = await cli(['start']);

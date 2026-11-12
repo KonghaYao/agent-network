@@ -129,6 +129,8 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | `room_files` schema 与配额/权限闸门 | `migrations/0003_room_files.sql` |
 | `drive_files` / `artifacts` / `file_references` 与 `room_files.retained` | `migrations/0026_private_files_retention.sql` |
 | MCP Events 定义、订阅、扫描、投递、安全与运行时 | `src/events/definitions.ts`、`subscriptions.ts`、`scanner.ts`、`dispatcher.ts`、`security.ts`、`client.ts`、`runtime.ts` |
+| 共享 SSE 解析（CLI/monitor/harness，BOM/CRLF/CR/多行 data） | `src/contracts/sse.ts` |
+| 事务闸门表、错误码/文案与 details 单一映射 | `src/storage/guards.ts`、`src/storage/transactions/runner.ts` |
 | Events 阶段日志与脱敏文件 sink | `src/events/log.ts`、`src/events/log-file.ts` |
 | MCP Events 方法与顶层能力声明 | `src/mcp/events.ts`、`src/mcp/server.ts` |
 | Events 契约（事件名/错误码 `-32015`） | `src/contracts/events.ts` |

@@ -10,6 +10,7 @@
     "build:client": "bun scripts/build-client.ts",
     "typecheck": "tsrs --noEmit",
     "typecheck:tsc": "tsc --noEmit",
+    "test:units": "bun scripts/verify-refactor-units.ts",
     "test:protocol": "bun scripts/verify-protocol.ts",
     "test:acceptance": "bun scripts/acceptance.ts",
     "test:client-contract": "bun scripts/verify-client-contract.ts",
