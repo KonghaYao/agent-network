@@ -29,6 +29,8 @@ export const MEMORY_CURSOR_KINDS = {
   recallWatermark: 'recall_watermark',
   catchupScan: 'catchup_scan',
   reconciled: 'reconciled',
+  /** MF09 Langfuse 拉取水位；按 binding 追加稳定后缀。 */
+  langfuseImport: 'langfuse_import',
 } as const;
 
 export interface ClaimedMemoryJob {

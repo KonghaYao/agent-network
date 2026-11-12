@@ -7,6 +7,7 @@ import { LIMITS } from '../contracts/limits';
 import { createDrive } from '../drive/service';
 import { MemoryRuntime } from '../memory/runtime';
 import { memoryHostPolicyFromEnv } from '../memory/host-bridge';
+import { loadLangfuseConfigFromEnv } from '../memory/sources/langfuse-config';
 import {
   HindsightMemoryAdapter,
   loadHindsightConfigFromEnv,
@@ -202,6 +203,18 @@ if (process.env.MEMORY_ENABLED === '1') {
   } catch (error) {
     // Memory 本地启动失败不阻塞聊天；持久账本仍由数据库保留，下一轮部署可恢复。
     console.error('agent-network memory runtime failed to start', error);
+  }
+}
+
+// MF09：Langfuse 来源默认关闭；这里只做服务端配置注入与 fail-closed 校验，
+// 不启动定时拉取（MF10 集成）。凭据/host/project 不写入日志或工具/页面结果。
+if (process.env.LANGFUSE_ENABLED === '1') {
+  const loaded = loadLangfuseConfigFromEnv(process.env);
+  if (loaded.ok) {
+    env.LANGFUSE = loaded.config;
+    console.log('langfuse source configured (importer not started)');
+  } else {
+    console.warn(`langfuse source disabled: ${loaded.error}`);
   }
 }
 

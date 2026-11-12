@@ -593,7 +593,7 @@ AGENTNET_URL=http://127.0.0.1:18892 EVENTS_ACCEPTANCE=1 bun run test:acceptance
 4. 用事件里的 `delivery_id` 调 `network_delivery_claim` / `network_delivery_complete`，确认 webhook 触发的待办可以闭环。
 5. 用 500/410/413 receiver 验证重试与停止行为；重启服务后确认订阅仍在并在 `refreshBefore` 前刷新。
 
-### Memory 运行时（MF03/MF04/MF05/MF06/MF07/MF11）
+### Memory 运行时（MF03/MF04/MF05/MF06/MF07/MF09/MF11）
 
 Memory 账本随迁移 `0045_memory_ledger.sql` 建立；MF11 的补读快照、请求幂等与证据追加由 `0046_memory_experience_catchup.sql` 补齐。默认副本可先不启动作业领取，聊天与投递不受影响。
 
@@ -612,6 +612,17 @@ MF04 在 `src/memory/adapters/hindsight.ts` 提供 HTTP 适配器，仍只实现
 - **search**：有 query 时走 recall，无 query 时走 memories/list 分页并本地复核硬过滤；时间窗口在 Hindsight 仅排序，因此声明 `unsupported`，不静默降级。fact 正文默认映射为不可逐字证明的 summary，只有返回 hash 与保留 hash 一致时才映射为 raw。
 - **remove**：按 source revision / representation / curated 标签枚举文档，DELETE 后重新列出确认消失；未确认全部副本清除时保持 `purge_pending`/`unknown`，不以 2xx 当清除证据。partition 级目标在缺少可证明路由时返回 `unsupported_granularity`。
 - **observation**：`observation_scopes` 按 origin + source revision 或单个表示锚定，限制跨域汇总。真实部署还需完成网关键权验收；默认仍使用 stub，stub 明确返回 unsupported。
+
+MF09 新增 `src/memory/sources/langfuse*.ts`，提供可注入的 Langfuse 来源 importer 与受控假服务验收：
+
+- **配置**：`LANGFUSE_ENABLED=1` 时才读取 `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BINDINGS_JSON`。Public API 使用 HTTP Basic Auth（public key 为用户名、secret key 为密码）；凭据只进入 `Authorization` 头，不进入 URL、错误、capabilities、导入结果或日志。缺失/非法时 fail closed，不发起请求；错误只包含变量名。
+- **读取**：只请求 `GET /api/public/v2/observations`，携带 `fromStartTime` / `toStartTime` / `fields` / `limit` / `cursor`。单页默认 100、上限 1000；单轮页数上限与重试/超时/外部取消都在 `LIMITS` 与服务端配置内。响应形状不符、cursor 循环或页数耗尽时终止且不推进水位。
+- **trusted binding**：`LANGFUSE_BINDINGS_JSON` 把单个 Langfuse project、可选 trace 名称、observation 名称精确映射到 WeBots `agent_actor_id` 与 `room_id`；一个 importer 只能使用一个 project（API key 是 project-scoped）。trace 自带 `userId`、`metadata` 或名称不能声明 agent/room/verified；`trace_user_id`/`trace_session_id` 只作为业务引用中的溯源字段保留。未映射或无法确定受众的 trace/observation 直接跳过（拒绝），不默认共享；当前版本不提供“无房间私有隔离”绑定。binding agent 必须已有 active Memory space；importer 不创建或转让空间，缺失时按 `space_missing` 跳过。
+- **来源映射**：`original_input` / `business_event` / `tool_result` → `raw_fragment`；`summary` → `summary`（必须引用同 space/agent 的最终输入 manifest，依赖来自 manifest 的实际表示）；`memory_context` → `memory_context`（必须引用同 space/agent、未过期且依赖非空的 Context，正文取服务端 Context 而不是 trace 文本）。`authored` / `agent_claim` 明确跳过，不生成独立证据；WeBots 消息/验收仍是权威来源。Langfuse 观测不会自动生成 `memory_curated`：人工/外部知识导入仍走显式 `network_memory_put/correct`，不把模型输出冒充人工确认。
+- **来源身份与排除**：source key 为 `langfuse:<binding_id>:<trace_id>:<observation_id>`，revision 首次为 1，digest 与正文一致；同一 key 的新正文不自动升版本，返回 conflict 由显式治理处理。来源写入与 representation 同一 `db.batch()`。已 tombstone 的来源键永久拒绝回放；重复导入按 source key + 表示 id 幂等。
+- **回声抑制**：raw observation 的 digest 命中同 space/agent 的 Context 正文、manifest item 文本或已接纳 summary/context 表示时跳过，避免把注入的 Memory Context 回流当作新的原文证据；summary/context 表示额外把自身 Langfuse source 列为依赖，来源 tombstone/撤权会撤销派生表示。
+- **水位**：每个 binding 在 `memory_cursors` 记录 `langfuse_import:<binding_id>` 水位；重启从持久水位继续。显式 `from` 是补跑/重放，仍按 source key 去重；失败（网络/超时/取消/非法响应/本地写入）不推进水位。`MEMORY_CAPTURE=0` 时 importer 不拉取新来源；已有来源的 tombstone/撤权屏障仍有效。
+- **能力与限制**：未配置时 importer `capabilities().status = disabled`，不影响 WeBots 消息/任务来源。当前只实现 Observations API v2（Langfuse Cloud / self-hosted v4）；self-hosted v3 的 v1 observations 端点、真实凭据联调、定时拉取与 MCP 能力目录暴露属于 MF10 集成，尚无真实 Langfuse 端到端验收。水位按 observation `startTime` 推进；上游延迟写入时，调度方应使用显式 `from` 做重叠补跑（重复项按 source key 幂等），不要依赖水位自动发现更早的数据。
 
 MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.ts`、`catchup.ts` 与 `host-protocol.ts`：
 
@@ -638,6 +649,17 @@ MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.t
 | `MEMORY_INSTANCE_ID` | 可选；固定部署 namespace。首次初始化后不得随意更换，配置与既有 `memory_instances` 不一致会 fail closed。 |
 | `MEMORY_CAPTURE=0` | 可选；停止新增 retain/来源写入，但撤回/遗忘屏障仍保留并继续执行。 |
 | `MEMORY_HOST_TRUST` | 可选；服务端签发 HostBinding 等级：`tool_only`（默认）、`adapted_host`、`controlled_gateway`。客户端声明的 capabilities 只能缩小能力，不能提升等级。 |
+| `LANGFUSE_ENABLED=1` | 启用 MF09 来源配置加载；不设置时 importer 为 disabled，不读取凭据、不发起请求。 |
+| `LANGFUSE_HOST` | Langfuse 部署根地址（可带部署前缀或 `/api/public`）；只接受 http/https，不得含凭据、查询或 fragment。 |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse Public API public key；只用于 Basic Auth 用户名。 |
+| `LANGFUSE_SECRET_KEY` | Langfuse Public API secret key；只用于 Basic Auth 密码，不打印、不写入结果或日志。缺失时 fail closed。 |
+| `LANGFUSE_BINDINGS_JSON` | 必填；受控 binding 数组。一个 importer 只能有一个 `project_id`，按 observation 名称精确映射到 agent/room；未映射项跳过。 |
+| `LANGFUSE_TIMEOUT_MS` | 可选；单次请求超时，默认取 `LIMITS.memoryAdapterTimeoutMs`。 |
+| `LANGFUSE_MAX_RETRIES` | 可选；只读 GET 的重试次数，默认取 `LIMITS.memoryAdapterMaxRetries`。 |
+| `LANGFUSE_RETRY_BASE_MS` | 可选；指数退避基数，默认取 `LIMITS.memoryAdapterRetryBaseMs`。 |
+| `LANGFUSE_PAGE_SIZE` | 可选；Observations v2 单页条数，默认 100，上限 1000。 |
+| `LANGFUSE_MAX_PAGES` | 可选；单轮最多拉取页数，默认取 `LIMITS.memoryLangfuseMaxPages`；耗尽时不推进水位。 |
+| `LANGFUSE_INITIAL_FROM` | 可选；首次没有水位时的起点（epoch ms 或 ISO 8601）；缺省回看 24 小时。 |
 
 本地验证：
 
@@ -647,6 +669,7 @@ bun run test:memory-ledger
 bun run test:memory-experience
 bun run test:memory-intake
 bun run test:memory-hindsight
+bun run test:memory-langfuse
 bun run test:memory-host
 ```
 

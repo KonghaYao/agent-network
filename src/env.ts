@@ -2,6 +2,7 @@ import type { FileService } from '@peri-code/mcpp/files';
 
 import type { MemoryRuntime } from './memory/runtime';
 import type { MemoryHostPolicy } from './memory/host-bridge';
+import type { LangfuseSourceConfig } from './memory/sources/langfuse-config';
 import type { NotificationHub } from './realtime/hub';
 import type { AgentPresenceTimeline } from './realtime/presence-timeline';
 
@@ -48,4 +49,9 @@ export interface Env {
    * 缺省 tool_only：只能显式查询与读取已准备结果。
    */
   MEMORY_HOST?: MemoryHostPolicy;
+  /**
+   * MF09 Langfuse 来源配置；只在 LANGFUSE_ENABLED=1 且全部字段合法时存在。
+   * 这里只保存服务端配置，当前不启动定时拉取；凭据不进入工具/页面/日志。
+   */
+  LANGFUSE?: LangfuseSourceConfig;
 }

@@ -507,6 +507,13 @@ export const LIMITS = {
   memoryAdapterRetryBaseMs: 250,
   /** 适配器列举 documents/memories 的页大小上限。 */
   memoryAdapterListPageSize: 100,
+  /** Langfuse Observations v2 单页上限（官方最多 1000）与单轮最多页数。 */
+  memoryLangfusePageSize: 100,
+  memoryLangfuseMaxPages: 20,
+  /** 首次导入没有水位时的默认回看窗口。 */
+  memoryLangfuseInitialLookbackMs: 24 * 60 * 60_000,
+  /** 单条 trace observation 可导入的 UTF-8 字节上限；超出按跳过处理。 */
+  memoryLangfuseMaxObservationBytes: 256 * 1024,
   /** Web Memory 面板单页大小；服务端仍按工具 schema 再夹取。 */
   memoryWebPageSize: 20,
   /** Web 显式召回候选与输出预算；只用于发起请求，不改变服务端策略。 */
