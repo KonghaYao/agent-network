@@ -5,10 +5,10 @@ import { type RoomLeaveInput } from '../../contracts/schemas';
 import { nowMs, sha256Hex, stableStringify } from '../../storage/db';
 import { eventStatement, inboxHeadStatement, inboxTopic, outboxStatement, roomMemberVersionStatement, roomTopic } from '../../storage/events';
 import { guardSql } from '../../storage/guards';
-import { getMember, getRoom } from '../../storage/queries';
+import { getRoom } from '../../storage/queries';
 import { operationsStatement, runIdempotent } from '../../storage/transactions/runner';
 import { actorId, type Principal } from '../principal';
-import { requireExpectedRoleRevision, roleRevisionGuardStatement } from '../room-access';
+import { loadRoomAccess, requireExpectedRoleRevision, roleRevisionGuardStatement } from '../room-access';
 import { roomAuditStatement } from '../room-audit';
 import { roomLeavePreview } from '../room-lifecycle';
 import { cancelDeliveriesForMemberStatements } from './membership';
@@ -31,10 +31,7 @@ export async function roomLeave(
   if (room.kind !== 'group') {
     throw new BusinessError('INVALID_ARGUMENT', '单聊不支持离开');
   }
-  const member = await getMember(db, room.room_id, caller);
-  if (!member || member.status !== 'active') {
-    throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
-  }
+  const { member } = await loadRoomAccess(db, room.room_id, caller);
   requireExpectedRoleRevision(member, input.expected_role_revision);
   // 群主在任何未解散群中都不能直接退群，即使只剩自己一人：否则会留下
   // `owner_id = NULL AND dissolved_at = NULL` 的无主活跃群，旧邀请还能

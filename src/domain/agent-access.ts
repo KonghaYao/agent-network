@@ -222,7 +222,7 @@ export function managementPermissionGuard(
                      AND d.delegate_actor_id = ?
                      AND d.status = 'active'
                      AND (d.expires_at IS NULL OR d.expires_at > ?)
-                     AND d.scopes_json LIKE '%"${MANAGE_AGENT_SCOPE}"%'
+                     AND EXISTS (SELECT 1 FROM json_each(d.scopes_json) WHERE json_each.value = '${MANAGE_AGENT_SCOPE}')
                 )
               )
          )`,

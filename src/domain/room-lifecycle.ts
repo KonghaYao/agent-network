@@ -8,15 +8,17 @@ import {
   roomTopic,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getMember, getRoom } from '../storage/queries';
+import { getRoom } from '../storage/queries';
 import {
   operationsStatement,
   resolveReplay,
   runIdempotent,
 } from '../storage/transactions/runner';
+import { cancelOpenDeliveriesStatement } from './delivery-sql';
 import { actorId, type Principal } from './principal';
 import {
   capabilityGuardStatement,
+  loadRoomAccess,
   roomDissolvedGuardStatement,
 } from './room-access';
 import { roomAuditStatement } from './room-audit';
@@ -83,10 +85,7 @@ export async function roomLeavePreview(
   if (room.kind !== 'group') {
     throw new BusinessError('INVALID_ARGUMENT', '单聊不支持离开');
   }
-  const member = await getMember(db, room.room_id, caller);
-  if (!member || member.status !== 'active') {
-    throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
-  }
+  const { member } = await loadRoomAccess(db, room.room_id, caller);
   const deliveries = await deliveryCounts(db, room.room_id, caller);
   const dissolved = room.dissolved_at !== null;
   // 群主在任何未解散群里都不能直接退群，即使只剩自己一人：否则会留下
@@ -128,13 +127,7 @@ function cancelRoomDeliveriesStatements(
           )`,
       )
       .bind(roomId, at, roomId),
-    db
-      .prepare(
-        `UPDATE deliveries
-            SET state = 'cancelled', error = 'room_dissolved', updated_at = ?
-          WHERE room_id = ? AND state IN ('pending', 'claimed')`,
-      )
-      .bind(at, roomId),
+    cancelOpenDeliveriesStatement(db, { roomId }, 'room_dissolved', at),
   ];
 }
 
@@ -156,10 +149,7 @@ export async function roomDissolve(
   if (room.kind !== 'group') {
     throw new BusinessError('INVALID_ARGUMENT', '单聊不支持解散');
   }
-  const member = await getMember(db, room.room_id, caller);
-  if (!member || member.status !== 'active') {
-    throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
-  }
+  const { member } = await loadRoomAccess(db, room.room_id, caller);
   if (member.role !== 'owner') {
     throw new BusinessError('NOT_OWNER', '只有群 owner 可以解散群聊');
   }

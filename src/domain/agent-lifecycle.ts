@@ -28,6 +28,7 @@ import {
 import type { MemorySpaceRow } from '../memory/rows';
 import { normalizeActorName } from './identity';
 import { actorId, type Principal } from './principal';
+import { hashSecret } from './secrets';
 
 /**
  * A01 生命周期：human 原子创建 Agent；未绑定 Agent 通过自身凭据 + human
@@ -36,7 +37,7 @@ import { actorId, type Principal } from './principal';
  */
 
 function claimCodeHash(code: string): Promise<string> {
-  return sha256Hex(`agent-network:claim:${code}`);
+  return hashSecret('claim', code);
 }
 
 export interface AgentCreateResult {

@@ -32,6 +32,7 @@ import {
   type RoomInvitationView,
 } from './room-invitations';
 import { actorId, type Principal } from './principal';
+import { memberCount } from './rooms/views';
 import { roomMembersUpdate } from './rooms';
 
 /**
@@ -142,16 +143,6 @@ function creatorView(view: RoomInvitationView): RoomInvitationView {
     next_step: view.kind === 'link' ? 'share' : 'invalid',
     can_respond: false,
   };
-}
-
-async function memberCount(db: D1Database, roomId: string): Promise<number> {
-  const row = await db
-    .prepare(
-      "SELECT COUNT(*) AS total FROM room_members WHERE room_id = ? AND status = 'active'",
-    )
-    .bind(roomId)
-    .first<{ total: number }>();
-  return row?.total ?? 0;
 }
 
 /**

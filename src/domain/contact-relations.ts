@@ -10,11 +10,12 @@ import {
   outboxStatementIfAbsent,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getActor, getActorBySession, type D1Like } from '../storage/queries';
+import { getActor, type D1Like } from '../storage/queries';
 import type { ActorRow, ContactRelationRow, ContactRequestRow } from '../storage/rows';
 import { mapBatchError } from '../storage/transactions/runner';
 import { getActiveManagement } from './agent-access';
 import { contactBlockGuardStatement } from './contact-blocks';
+import { resolveContactTarget } from './contact-target';
 import { directRoomIdFor, directRoomStatements } from './direct-room';
 
 /**
@@ -344,16 +345,7 @@ export async function resolveTarget(
   db: D1Database,
   input: ContactRequestInput,
 ): Promise<ActorRow> {
-  const hasId = typeof input.actor_id === 'string';
-  const hasSession = typeof input.agent_session_id === 'string';
-  if (hasId === hasSession) {
-    throw new BusinessError('INVALID_ARGUMENT', 'actor_id 与 agent_session_id 必须且只能提供一个');
-  }
-  const actor = hasId
-    ? await getActor(db, input.actor_id as string)
-    : await getActorBySession(db, input.agent_session_id as string);
-  if (!actor) throw new BusinessError('NOT_FOUND', '目标 actor 不存在');
-  return actor;
+  return resolveContactTarget(db, input);
 }
 
 export async function pendingForPair(

@@ -5,13 +5,13 @@ import { LIMITS } from '../../contracts/limits';
 import { type MessageSendInput, type MessageSendStatusInput } from '../../contracts/schemas';
 import { memoryMessageChangeStatements, type MemoryIntakeOptions } from '../../memory/intake';
 import { newId, nowMs, sha256Hex, stableStringify, truncateUtf8, utf8Bytes } from '../../storage/db';
-import { getMember, getMessage, getRoom } from '../../storage/queries';
+import { getMessage } from '../../storage/queries';
 import { type DeliveryRow, type MessageRow } from '../../storage/rows';
 import { isMessageConflict, operationsStatement, runIdempotent } from '../../storage/transactions/runner';
 import { filterMutedMentions } from '../contact-blocks';
 import { type MentionSource } from '../message-view-helpers';
 import { actorId, type Principal } from '../principal';
-import { assertRoomWritable } from '../room-access';
+import { assertRoomWritable, loadRoomAccess } from '../room-access';
 import { historyBoundary } from '../room-history';
 import { resolveGroupTextMentions, assertInvoke, assertMentions, agentAutoMentionPlan } from './mentions';
 import { messageView, messageGuardStatements, messageCoreStatements, resolveRootLink, type MessageView, type DeliverySeed, type MentionSeed, type MentionReminderSeed, type MessageCore } from './view';
@@ -28,12 +28,7 @@ export async function messageSend(
   memory?: MemoryIntakeOptions | null,
 ): Promise<SendResult> {
   const sender = actorId(principal);
-  const room = await getRoom(db, input.room_id);
-  if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
-  const member = await getMember(db, room.room_id, sender);
-  if (!member || member.status !== 'active') {
-    throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
-  }
+  const { room, member } = await loadRoomAccess(db, input.room_id, sender);
   assertRoomWritable(room);
   const boundary = historyBoundary(room, member);
 

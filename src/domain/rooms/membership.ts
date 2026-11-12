@@ -10,6 +10,7 @@ import { getMember } from '../../storage/queries';
 import { type RoomMemberRow } from '../../storage/rows';
 import { operationsStatement, resolveReplay, runIdempotent } from '../../storage/transactions/runner';
 import { contactBlockGuardStatement, isBlockedBetween, roomInviteRateGuardStatement } from '../contact-blocks';
+import { cancelOpenDeliveriesStatement } from '../delivery-sql';
 import { actorId, type Principal } from '../principal';
 import { capabilityGuardStatement, assertOwnerPresent, assertRoomWritable, loadRoomAccess, memberActionsFor, memberRemovalGuardStatement, ownerMissingGuardStatement, requireExpectedRoleRevision, roleRevisionGuardStatement, roomDissolvedGuardStatement } from '../room-access';
 import { roomAuditStatement, type RoomAuditSpec } from '../room-audit';
@@ -38,13 +39,7 @@ export function cancelDeliveriesForMemberStatements(
           WHERE actor_id = ?`,
       )
       .bind(roomId, member, at, member),
-    db
-      .prepare(
-        `UPDATE deliveries
-            SET state = 'cancelled', error = ?, updated_at = ?
-          WHERE room_id = ? AND recipient_id = ? AND state IN ('pending', 'claimed')`,
-      )
-      .bind(reason, at, roomId, member),
+    cancelOpenDeliveriesStatement(db, { roomId, recipientId: member }, reason, at),
   ];
 }
 

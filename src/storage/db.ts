@@ -50,8 +50,27 @@ export async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * 凭据摘要的唯一入口：`agent-network:<purpose>:<value>`。
+ *
+ * purpose 是域分隔前缀，保证同一明文在不同用途下得到不同摘要；输出与旧实现
+ * 逐字节一致（golden vectors 见 `verify-refactor-units`）。
+ */
+export type SecretPurpose =
+  | 'token'
+  | 'ticket'
+  | 'room-invite'
+  | 'claim'
+  | 'pairing'
+  | 'pairing-confirm'
+  | 'contact-link';
+
+export async function hashSecret(purpose: SecretPurpose, value: string): Promise<string> {
+  return sha256Hex(`agent-network:${purpose}:${value}`);
+}
+
 export async function hashToken(token: string): Promise<string> {
-  return sha256Hex(`agent-network:token:${token}`);
+  return hashSecret('token', token);
 }
 
 export function randomToken(bytes = 32): string {

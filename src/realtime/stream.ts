@@ -1,3 +1,4 @@
+import { parseMetadataObject } from '../contracts/metadata';
 import { LIMITS } from '../contracts/limits';
 import {
   DELIVERY_REMINDER_EVENT,
@@ -102,17 +103,6 @@ export interface FanoutStats {
   streamFrames: number;
   streamItems: number;
   streamDropped: number;
-}
-
-function parseMetadata(raw: string): Record<string, unknown> {
-  try {
-    const value = JSON.parse(raw) as unknown;
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
 }
 
 function stringField(metadata: Record<string, unknown>, key: string): string | undefined {
@@ -917,7 +907,7 @@ export async function fanoutStreamItems(
   };
 
   for (const row of ordered) {
-    const metadata = parseMetadata(row.metadata);
+    const metadata = parseMetadataObject(row.metadata);
     if (row.scope_kind === 'inbox') {
       const item = inboxStreamItem(row, metadata);
       if (item) addItem(actorItems, row.scope_id, item);

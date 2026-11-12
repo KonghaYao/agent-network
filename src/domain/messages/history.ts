@@ -7,9 +7,10 @@ import { type HistoryListInput, type MessageReadInput, type RoomMarkReadInput } 
 import { newId, nowMs, sliceUtf8Chunk } from '../../storage/db';
 import { inboxHeadStatementIfEvent, inboxTopic } from '../../storage/events';
 import { guardSql } from '../../storage/guards';
-import { getActorsByIds, getMember, getMessage, getRoom } from '../../storage/queries';
+import { getActorsByIds, getMember, getMessage } from '../../storage/queries';
 import { deliveryStatesFor, mentionsFor, nullableString, HISTORY_MESSAGE_COLUMNS, type HistoryMessageRow } from '../message-view-helpers';
 import { actorId, type Principal } from '../principal';
+import { loadRoomAccess } from '../room-access';
 import { decodeHistoryCursor, historyBoundary, historyCursorScope, historySnapshot, visibleMessage } from '../room-history';
 import { timelineList, type TimelinePage } from '../timeline';
 import { type MessagePage } from './view';
@@ -20,12 +21,7 @@ export async function historyList(
   input: HistoryListInput,
 ): Promise<MessagePage | TimelinePage> {
   const viewer = actorId(principal);
-  const room = await getRoom(db, input.room_id);
-  if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
-  const member = await getMember(db, room.room_id, viewer);
-  if (!member || member.status !== 'active') {
-    throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
-  }
+  const { room, member } = await loadRoomAccess(db, input.room_id, viewer);
   // 本次请求只使用这一份授权快照：即使策略在查询期间变化，列表、游标与
   // 返回的 authorization 仍按同一代次/边界解释；下一次请求重新计算。
   const boundary = historyBoundary(room, member);
@@ -165,12 +161,7 @@ export async function messageRead(
   const viewer = actorId(principal);
   const message = await getMessage(db, input.message_id);
   if (!message) throw new BusinessError('NOT_FOUND', '消息不存在');
-  const member = await getMember(db, message.room_id, viewer);
-  if (!member || member.status !== 'active') {
-    throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
-  }
-  const room = await getRoom(db, message.room_id);
-  if (!room) throw new BusinessError('NOT_FOUND', '消息不存在');
+  const { room, member } = await loadRoomAccess(db, message.room_id, viewer);
   if (!visibleMessage(message, historyBoundary(room, member))) {
     // 按 ID 直读与列表共用同一可见性；不区分“不存在”和“加入前”，避免探测。
     throw new BusinessError('NOT_FOUND', '消息不存在或当前不可见');
@@ -210,12 +201,7 @@ export async function roomMarkRead(
   if (!Number.isSafeInteger(through) || through < 0) {
     throw new BusinessError('INVALID_ARGUMENT', 'through_seq 必须是非负整数');
   }
-  const room = await getRoom(db, input.room_id);
-  if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
-  const current = await getMember(db, room.room_id, viewer);
-  if (!current || current.status !== 'active') {
-    throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
-  }
+  const { room, member: current } = await loadRoomAccess(db, input.room_id, viewer);
   // 加入前的内容不属于当前代次，阅读水位不能低于本次加入边界。
   const floor = historyBoundary(room, current).fromSeq;
   const clampThrough = Math.max(through, floor);

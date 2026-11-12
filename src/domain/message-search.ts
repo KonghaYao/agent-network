@@ -5,7 +5,7 @@ import { LIMITS } from '../contracts/limits';
 import { sha256Hex } from '../storage/db';
 import { decodeHistoryCursor, historyBoundary, historyCursorScope } from './room-history';
 import { actorId, type Principal } from './principal';
-import { getMember, getRoom } from '../storage/queries';
+import { loadRoomAccess } from './room-access';
 
 export const messageSearchSchema = z.object({
   room_id: z.string().min(1).max(128),
@@ -34,10 +34,7 @@ type ContextInput = z.infer<typeof messageContextSchema>;
 interface MessageRow { message_id: string; room_id: string; sender_id: string; sender_name: string; sender_kind: string; body_bytes: number; preview: string; created_at: number; created_seq: number; reply_to: string | null; }
 interface SearchRow extends MessageRow { snippet: string; }
 async function authorized(db: D1Database, principal: Principal, roomId: string) {
-  const room = await getRoom(db, roomId);
-  if (!room) throw new BusinessError('NOT_FOUND', '房间不存在');
-  const member = await getMember(db, roomId, actorId(principal));
-  if (!member || member.status !== 'active') throw new BusinessError('NOT_MEMBER', '当前身份不是该房间的有效成员');
+  const { room, member } = await loadRoomAccess(db, roomId, actorId(principal));
   return { room, boundary: historyBoundary(room, member) };
 }
 

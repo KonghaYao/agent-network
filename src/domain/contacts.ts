@@ -7,10 +7,12 @@ import type {
   ContactsListInput,
 } from '../contracts/schemas';
 import { nowMs, sha256Hex, stableStringify } from '../storage/db';
-import { getActor, getActorBySession, visibleActorSql } from '../storage/queries';
+import { sortedPairKeySql } from '../storage/pair-key';
+import { getActor, visibleActorSql } from '../storage/queries';
 import type { ActorRow, ContactRow } from '../storage/rows';
 import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
 import { endRelationStatements, getActiveRelation, relationEndedByBlockSql } from './contact-relations';
+import { resolveContactTarget } from './contact-target';
 import { actorId, type Principal } from './principal';
 
 export interface ContactView {
@@ -72,11 +74,7 @@ export async function contactsList(
          FROM contacts c
          JOIN actors a ON a.actor_id = c.target_actor_id
          LEFT JOIN contact_relations r
-           ON r.pair_key = CASE
-                WHEN c.owner_actor_id < c.target_actor_id
-                  THEN c.owner_actor_id || '|' || c.target_actor_id
-                ELSE c.target_actor_id || '|' || c.owner_actor_id
-              END
+           ON r.pair_key = ${sortedPairKeySql('c.owner_actor_id', 'c.target_actor_id')}
           AND r.status = 'active'
         WHERE ${where} AND ${visibleActorSql('a')}
           -- 删除好友后关系为 ended 且没有拉黑来源：双方都不再把过期收藏
@@ -84,11 +82,7 @@ export async function contactsList(
           AND NOT EXISTS (
             SELECT 1
               FROM contact_relations ended
-             WHERE ended.pair_key = CASE
-                     WHEN c.owner_actor_id < c.target_actor_id
-                       THEN c.owner_actor_id || '|' || c.target_actor_id
-                     ELSE c.target_actor_id || '|' || c.owner_actor_id
-                   END
+             WHERE ended.pair_key = ${sortedPairKeySql('c.owner_actor_id', 'c.target_actor_id')}
                AND ended.status = 'ended'
                AND NOT ${relationEndedByBlockSql(
                  'c.owner_actor_id',
@@ -124,22 +118,6 @@ export async function contactsList(
   };
 }
 
-async function resolveTarget(
-  db: D1Database,
-  input: ContactAddInput,
-): Promise<ActorRow> {
-  const hasId = typeof input.actor_id === 'string';
-  const hasSession = typeof input.agent_session_id === 'string';
-  if (hasId === hasSession) {
-    throw new BusinessError('INVALID_ARGUMENT', 'actor_id 与 agent_session_id 必须且只能提供一个');
-  }
-  const actor = hasId
-    ? await getActor(db, input.actor_id as string)
-    : await getActorBySession(db, input.agent_session_id as string);
-  if (!actor) throw new BusinessError('NOT_FOUND', '目标 actor 不存在');
-  return actor;
-}
-
 /** 幂等建立单侧个人收藏；不代表对方同意，也不产生双向关系。 */
 export async function contactAdd(
   db: D1Database,
@@ -147,7 +125,7 @@ export async function contactAdd(
   input: ContactAddInput,
 ): Promise<{ contact: ContactView }> {
   const owner = actorId(principal);
-  const target = await resolveTarget(db, input);
+  const target = await resolveContactTarget(db, input);
   if (target.actor_id === owner) {
     throw new BusinessError('INVALID_ARGUMENT', '不能把自己添加为好友');
   }
