@@ -130,14 +130,10 @@ export class MonitorRpc {
 
   /** POST JSON-RPC；传输层失败抛错，RPC 业务错误保留在返回 payload。 */
   private async post(method: string, params: JsonObject, name?: string): Promise<JsonObject> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
-    const onAbort = (): void => controller.abort();
     const outer = this.config.signal;
-    if (outer) {
-      if (outer.aborted) controller.abort();
-      else outer.addEventListener('abort', onAbort, { once: true });
-    }
+    const signal = outer
+      ? AbortSignal.any([outer, AbortSignal.timeout(30_000)])
+      : AbortSignal.timeout(30_000);
     const body = {
       jsonrpc: '2.0',
       id: `monitor-${crypto.randomUUID()}`,
@@ -147,38 +143,33 @@ export class MonitorRpc {
     const headers = this.authHeaders(method, 'application/json, text/event-stream');
     // modern-only 服务端要求带 params.name 的方法在请求头重复 MCP-Name。
     if (name) headers['mcp-name'] = name;
+    let response: Response;
     try {
-      let response: Response;
-      try {
-        response = await fetch(this.endpoint, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        throw new MonitorTransportError(redact(reason, this.token));
-      }
-      const text = await response.text().catch(() => '');
-      if (response.status === 400) {
-        throw new MonitorFatalError('protocol', this.describeRejection(response.status, text));
-      }
-      if (response.status === 401 || response.status === 403) {
-        throw new MonitorFatalError('credential', 'credential_invalid');
-      }
-      if (!response.ok) {
-        throw new MonitorTransportError(`HTTP ${response.status}`, response.status);
-      }
-      const payload = parseRpcPayload(text, response.headers.get('content-type') ?? '');
-      if (payload === null) {
-        throw new MonitorTransportError('invalid_response');
-      }
-      return payload;
-    } finally {
-      clearTimeout(timeout);
-      outer?.removeEventListener('abort', onAbort);
+      response = await fetch(this.endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new MonitorTransportError(redact(reason, this.token));
     }
+    const text = await response.text().catch(() => '');
+    if (response.status === 400) {
+      throw new MonitorFatalError('protocol', this.describeRejection(response.status, text));
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new MonitorFatalError('credential', 'credential_invalid');
+    }
+    if (!response.ok) {
+      throw new MonitorTransportError(`HTTP ${response.status}`, response.status);
+    }
+    const payload = parseRpcPayload(text, response.headers.get('content-type') ?? '');
+    if (payload === null) {
+      throw new MonitorTransportError('invalid_response');
+    }
+    return payload;
   }
 
   /** 能力发现：只接受 2026-07-28，不降级。 */

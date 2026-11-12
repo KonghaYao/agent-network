@@ -124,9 +124,8 @@ interface CodexWatcherOptions {
 
 class CodexWatcher {
   private readonly rpc: MonitorRpc;
-  private readonly externalSignal: AbortSignal;
   private readonly controller = new AbortController();
-  private readonly onExternalAbort = (): void => this.controller.abort();
+  private readonly signal: AbortSignal;
   private readonly log: (line: string) => void;
   private readonly events = new AsyncQueue<WatcherEvent>();
 
@@ -147,21 +146,15 @@ class CodexWatcher {
   private ackInflight: Promise<void> | null = null;
 
   constructor(options: CodexWatcherOptions) {
-    this.externalSignal = options.signal;
+    this.signal = AbortSignal.any([options.signal, this.controller.signal]);
     this.log = options.log ?? writeStdout;
     this.rpc = new MonitorRpc({
       endpoint: options.endpoint,
       token: options.token,
-      signal: this.controller.signal,
+      signal: this.signal,
       clientName: CLIENT_NAME,
       clientVersion: CLIENT_VERSION,
     });
-    if (options.signal.aborted) this.controller.abort();
-    else options.signal.addEventListener('abort', this.onExternalAbort, { once: true });
-  }
-
-  private get signal(): AbortSignal {
-    return this.controller.signal;
   }
 
   async run(): Promise<number> {
@@ -180,7 +173,6 @@ class CodexWatcher {
       this.events.close();
       if (stream !== null) await stream.catch(() => undefined);
       await this.cancelAck();
-      this.externalSignal.removeEventListener('abort', this.onExternalAbort);
       this.connection?.close();
       this.threadLock?.release();
     }
