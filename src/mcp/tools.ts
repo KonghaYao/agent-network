@@ -2,6 +2,7 @@ import type { McpServer, StandardSchemaWithJSON } from '@modelcontextprotocol/se
 import { z } from 'zod';
 
 import { isBusinessError } from '../contracts/errors';
+import { memoryIntakeFromEnv } from '../memory/intake';
 import { messageSearch, messageContext, messageSearchSchema, messageContextSchema, messageSearchOutputSchema, messageContextOutputSchema } from '../domain/message-search';
 import {
   messageTaskMark,
@@ -323,8 +324,10 @@ import {
 import type { Principal } from '../domain/principal';
 import {
   clientGuide, clientGuideInputSchema, clientGuideOutputSchema,
-  clientServiceInfo, recordToolContract, serviceInfoSchema,
+  clientServiceInfo, recordToolContract, registeredToolNames, serviceInfoSchema,
 } from './client-contract';
+import { memoryCapabilityCatalog } from '../memory/capability-catalog';
+import { DEFAULT_MEMORY_HOST_POLICY } from '../memory/host-bridge';
 
 type ToolReturn = {
   content: { type: 'text'; text: string }[];
@@ -447,6 +450,17 @@ export function registerTools(
   const db = env.DB;
   const origin = env.PUBLIC_ORIGIN;
   const ticketSecret = fileTicketSecret(env.FILE_TICKET_SECRET);
+  // MEMORY_ENABLED=1 且运行时已启动时才追加来源/预热语句；否则保持原事务。
+  const memory = memoryIntakeFromEnv(env);
+  const memoryCatalog = () =>
+    memoryCapabilityCatalog({
+      enabled: env.MEMORY?.instanceId != null,
+      capture: env.MEMORY?.captureEnabled ?? false,
+      policy: env.MEMORY_HOST ?? DEFAULT_MEMORY_HOST_POLICY,
+      tools: registeredToolNames(server).filter((name) => name.startsWith('network_memory_')),
+      engine: env.MEMORY_ENGINE ?? null,
+      reflect: env.MEMORY?.capabilities().reflect ?? false,
+    });
 
   register(
     server,
@@ -518,13 +532,13 @@ export function registerTools(
 
   register(server, 'network_me', '读取当前身份与 service（协议/契约版本、工具集摘要和可用能力）。完整宿主流程用 network_client_guide；服务端工具与连接器目录不同步时刷新目录，不要换身份。', meSchema, identitySchema.extend({ service: serviceInfoSchema }), async () => {
     requireActor(principal);
-    return { ...(await me(db, principal, origin)), service: clientServiceInfo(server, !!env.EVENTS) };
+    return { ...(await me(db, principal, origin)), service: clientServiceInfo(server, !!env.EVENTS, memoryCatalog()) };
   }, { readOnlyHint: true });
 
   register(server, 'network_client_guide',
     '按 one_shot（默认单次操作）、webhook（宿主事件回调）或 persistent（常驻 MCP 客户端）读取完整操作指引与当前工具目录。可传 client_tool_names 比对连接器缺失项；只读，不注册身份、不 login、不订阅、不领取工作。',
     clientGuideInputSchema, clientGuideOutputSchema,
-    async (input) => clientGuide(server, !!env.EVENTS, input), { readOnlyHint: true });
+    async (input) => clientGuide(server, !!env.EVENTS, memoryCatalog(), input), { readOnlyHint: true });
 
   register(
     server,
@@ -1500,7 +1514,7 @@ export function registerTools(
     sendResultSchema,
     async (input) => {
       requireActor(principal);
-      const result = await messageSend(db, principal, input);
+      const result = await messageSend(db, principal, input, memory);
       await runMessageCommittedHook(hooks, {
         messageId: result.message.message_id,
         roomId: result.message.room_id,
@@ -1518,7 +1532,7 @@ export function registerTools(
     z.object({ message_id: z.string(), recalled: z.literal(true) }),
     async (input) => {
       requireActor(principal);
-      return messageRecall(db, principal, input);
+      return messageRecall(db, principal, input, memory);
     },
   );
 
@@ -1560,7 +1574,7 @@ export function registerTools(
     taskMarkResultSchema,
     async (input) => {
       requireActor(principal);
-      return messageTaskMark(db, principal, input);
+      return messageTaskMark(db, principal, input, memory);
     },
     { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   );
@@ -1573,7 +1587,7 @@ export function registerTools(
     taskUnmarkResultSchema,
     async (input) => {
       requireActor(principal);
-      return messageTaskUnmark(db, principal, input);
+      return messageTaskUnmark(db, principal, input, memory);
     },
     { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   );
@@ -1701,7 +1715,7 @@ export function registerTools(
     completeResultSchema,
     async (input) => {
       requireActor(principal);
-      const result = await deliveryComplete(db, principal, input);
+      const result = await deliveryComplete(db, principal, input, memory);
       if (input.final_body && result.message) {
         await runMessageCommittedHook(hooks, {
           messageId: result.message.message_id,

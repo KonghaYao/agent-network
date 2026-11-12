@@ -33,6 +33,8 @@ import {
   type AgentTransferView,
   type TransferContextStored,
 } from './agent-transfer-store';
+import { memoryOwnershipTransferStatements } from '../memory/statements';
+import type { MemorySpaceRow } from '../memory/rows';
 import { actorId, type Principal } from './principal';
 
 /**
@@ -372,6 +374,10 @@ export async function agentTransferRespond(
     },
   };
   const eventKey = `management_transfer_accepted:${row.transfer_id}:${input.request_id}`;
+  const previousSpace = await db
+    .prepare('SELECT * FROM memory_spaces WHERE agent_actor_id = ? AND active = 1')
+    .bind(agent.actor_id)
+    .first<MemorySpaceRow>();
 
   const outcome = await runIdempotent(db, {
     actorId: caller,
@@ -464,6 +470,18 @@ export async function agentTransferRespond(
             WHERE transfer_id = ? AND status = 'pending' AND to_manager_id = ?`,
         )
         .bind(at, caller, JSON.stringify(acceptedContext), at, row.transfer_id, caller),
+      ...memoryOwnershipTransferStatements(db, {
+        previous: previousSpace,
+        nextSpaceId: newId('msp'),
+        transitionId: newId('mtr'),
+        instanceId: newId('mni'),
+        agentId: agent.actor_id,
+        ownerActorId: successor.actor_id,
+        ownershipKind: 'managed',
+        managementBindingId: management.binding_id,
+        kind: 'management_transfer',
+        now: at,
+      }),
       ...lifecycleStatements(db, {
         agentId: agent.actor_id,
         transferId: row.transfer_id,

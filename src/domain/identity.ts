@@ -21,6 +21,7 @@ import { getActor, getActorBySession, getCredentialByHash } from '../storage/que
 import type { ActorRow, CredentialRow, RecoveryTicketRow } from '../storage/rows';
 import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
 import { managementEventStatements } from './agent-management';
+import { memoryInitialSpaceStatements } from '../memory/statements';
 import {
   managementPermissionGuard,
   managementVersionGuard,
@@ -164,6 +165,18 @@ export async function register(
          WHERE devices.status = 'active'`,
       )
       .bind(actorKey, input.device_id ?? 'default', at, at),
+    ...(input.kind === 'agent'
+      ? memoryInitialSpaceStatements(db, {
+          spaceId: newId('msp'),
+          transitionId: newId('mtr'),
+          instanceId: newId('mni'),
+          agentId: actorKey,
+          ownerActorId: actorKey,
+          ownershipKind: 'self_owned',
+          managementBindingId: null,
+          now: at,
+        })
+      : []),
   ];
 
   try {

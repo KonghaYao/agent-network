@@ -45,6 +45,11 @@ import {
   type HistorySnapshot,
 } from './room-history';
 import { assertRoomWritable, roomDissolvedGuardStatement } from './room-access';
+import {
+  memoryFileChangeStatements,
+  memoryFileRetractionStatements,
+  type MemoryIntakeOptions,
+} from '../memory/intake';
 
 /**
  * 聊天绑定文件（room_files）。
@@ -176,8 +181,9 @@ export async function roomFileBind(
   source: RoomFileSource,
   publicOrigin: string,
   ticketSecret: string,
+  memory?: MemoryIntakeOptions | null,
 ): Promise<{ file: RoomFileView; authorization: HistorySnapshot }> {
-  const { caller, room, boundary } = await requireRoomMember(db, principal, input.room_id);
+  const { caller, room, member, boundary } = await requireRoomMember(db, principal, input.room_id);
   const payloadHash = await sha256Hex(stableStringify(input));
 
   // 先查幂等重放，再读文件：重放不依赖文件是否仍然可读。
@@ -254,6 +260,28 @@ export async function roomFileBind(
   };
   const result = { file: roomFileView(row, context), authorization: historySnapshot(boundary) };
   const eventKey = `room_file:added:${roomFileId}`;
+  // 文件绑定成为房间共享来源：只保存 file_id + sha256 与绑定事件序号，
+  // 不保存会过期的下载票据；MEMORY_CAPTURE 关闭时不登记新来源。
+  const memoryStatements = memory?.capture
+    ? memoryFileChangeStatements(db, memory, {
+        fileId: row.file_id,
+        name: row.name,
+        mimeType: row.mime_type,
+        size: row.size,
+        sha256: row.sha256,
+        uploaderId: row.uploader_id,
+        eventKey,
+        origin: {
+          roomId: room.room_id,
+          memberGeneration: member.member_generation,
+          policyRevision: boundary.policyRevision,
+          joinedSeq: member.joined_seq,
+          joinedAt: member.joined_at,
+          archiveHeadSeq: room.archive_head_seq,
+        },
+        now: at,
+      })
+    : [];
 
   // 唯一键恢复分支返回已存在的行；必须使用 runIdempotent 的返回值。
   const stored = await runIdempotent(db, {
@@ -343,6 +371,7 @@ export async function roomFileBind(
         )
         .bind(eventKey, roomFileId),
       outboxStatement(db, { topic: roomTopic(room.room_id), eventKey }, at),
+      ...memoryStatements,
     ],
     onUniqueConflict: async (error) => {
       if (!isRoomFileConflict(error)) return undefined;
@@ -490,6 +519,7 @@ export async function roomFileDelete(
   db: D1Database,
   principal: Principal,
   input: RoomFileDeleteInput,
+  memory?: MemoryIntakeOptions | null,
 ): Promise<{ file_id: string; deleted: true }> {
   const { caller, room, boundary } = await requireRoomMember(db, principal, input.room_id);
   assertRoomWritable(room);
@@ -513,6 +543,10 @@ export async function roomFileDelete(
   const payloadHash = await sha256Hex(stableStringify(input));
   const result = { file_id: input.file_id, deleted: true as const };
   const eventKey = `room_file:deleted:${row.room_file_id}`;
+  // 删除文件是永久来源排除；MEMORY_CAPTURE 关闭时仍保留屏障。
+  const memoryStatements = memory
+    ? memoryFileRetractionStatements(db, memory, { fileId: row.file_id, now: at })
+    : [];
 
   const stored = await runIdempotent(db, {
     actorId: caller,
@@ -577,6 +611,7 @@ export async function roomFileDelete(
         at,
       ),
       outboxStatement(db, { topic: roomTopic(room.room_id), eventKey }, at),
+      ...memoryStatements,
     ],
   });
 

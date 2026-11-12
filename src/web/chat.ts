@@ -18,6 +18,8 @@ import {
   transferDialog,
 } from './chat-panels';
 import { chatClientScript } from './chat-script';
+import { memoryDrawer } from './chat-memory-panels';
+import { MEMORY_STYLE } from './chat-memory-styles';
 import { DRAWBOARD_FALLBACK_STYLE } from './chat-drawboard-styles';
 import { FILES_STYLE } from './chat-files-styles';
 import { MONITOR_STYLE } from './chat-monitor-styles';
@@ -78,9 +80,10 @@ ${transferDialog()}
 ${deviceHandoffDialog()}
 ${logoutDialog()}
 ${meRenameDialog()}
+${memoryDrawer()}
 ${toastPane()}
 ${chatClientScript(roomId, markdownVersion, resizerVersion, drawboardVersion, iconVersion)}`,
-    APP_STYLE + FILES_STYLE + UPLOAD_STYLE + MONITOR_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE + DRAWBOARD_FALLBACK_STYLE + MESSAGE_ACTIONS_STYLE + MOBILE_UX_STYLE + TASK_TRACE_STYLE,
+    APP_STYLE + FILES_STYLE + UPLOAD_STYLE + MONITOR_STYLE + MESSAGE_FILES_STYLE + MARKDOWN_STYLE + DEVICE_HANDOFF_STYLE + DRAWBOARD_FALLBACK_STYLE + MESSAGE_ACTIONS_STYLE + MOBILE_UX_STYLE + TASK_TRACE_STYLE + MEMORY_STYLE,
     { wide: true, bodyClass: isHome ? 'page-home' : 'page-room' },
   );
 }

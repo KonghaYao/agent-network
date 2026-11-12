@@ -34,6 +34,7 @@ import { runPresenceRestartAcceptance } from './lib/presence-restart';
 import { runPresenceIdleNotificationCheck } from './lib/presence-idle';
 import { runContactLinkWebAcceptance } from './lib/contact-link-web';
 import { runFileTicketSecretChecks } from './lib/file-ticket-secret-check';
+import { runMemoryWebAcceptance } from './lib/memory-web';
 import { runMessageTaskWebAcceptance } from './lib/message-task-web';
 
 interface Actor {
@@ -7852,9 +7853,9 @@ async function main(): Promise<void> {
         !((await page.locator('#account').textContent()) ?? '').includes('复制 ID'),
       );
       checkEqual(
-        '账号区保留新建 Agent 与配对设备文字按钮',
+        '账号区保留新建 Agent、配对设备与记忆文字按钮',
         accountActions.map((label) => label.trim()).filter(Boolean).join('|'),
-        '新建 Agent|配对设备',
+        '新建 Agent|配对设备|记忆',
       );
       checkEqual('账号区新增单个已归档图标按钮', await page.locator('#archived-agents').count(), 1);
       checkEqual(
@@ -24078,6 +24079,12 @@ async function main(): Promise<void> {
       ownerToken: data.humanToken,
       allErrors,
       rawTool,
+    });
+
+    await runMemoryWebAcceptance({
+      browser,
+      disabledBase: server.base,
+      allErrors,
     });
 
     checkEqual('无未捕获页面错误', allErrors.length, 0);

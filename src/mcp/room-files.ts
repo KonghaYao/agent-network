@@ -19,6 +19,7 @@ import {
 import type { Principal } from '../domain/principal';
 import { fileTicketSecret } from '../domain/file-ticket';
 import type { Env } from '../env';
+import { memoryIntakeFromEnv } from '../memory/intake';
 import { getRoomFile } from '../storage/queries';
 import { requireActor } from './auth';
 import { roomFileDeletedSchema, roomFilePageSchema, roomFileResultSchema } from './outputs';
@@ -78,6 +79,7 @@ export function createMessageFileArchiver(
 ): (input: MessageCommittedHookInput) => Promise<void> {
   const source = createRoomFileSource(binding);
   const ticketSecret = fileTicketSecret(env.FILE_TICKET_SECRET);
+  const memory = memoryIntakeFromEnv(env);
   return async (input) => {
     const fileIds = extractMessageFileLinks(input.body, env.PUBLIC_ORIGIN);
     if (fileIds.length === 0) return;
@@ -99,6 +101,7 @@ export function createMessageFileArchiver(
           source,
           env.PUBLIC_ORIGIN,
           ticketSecret,
+          memory,
         );
       } catch {
         // best-effort：FILE_UNAVAILABLE / CONFLICT / ROOM_FILE_LIMIT /
@@ -126,6 +129,7 @@ export function registerRoomFileTools(
   const origin = env.PUBLIC_ORIGIN;
   const ticketSecret = fileTicketSecret(env.FILE_TICKET_SECRET);
   const source = createRoomFileSource(binding);
+  const memory = memoryIntakeFromEnv(env);
 
   register(
     server,
@@ -135,7 +139,7 @@ export function registerRoomFileTools(
     roomFileResultSchema,
     async (input) => {
       requireActor(principal);
-      return roomFileBind(db, principal, input, source, origin, ticketSecret);
+      return roomFileBind(db, principal, input, source, origin, ticketSecret, memory);
     },
   );
 
@@ -173,7 +177,7 @@ export function registerRoomFileTools(
     roomFileDeletedSchema,
     async (input) => {
       requireActor(principal);
-      return roomFileDelete(db, principal, input);
+      return roomFileDelete(db, principal, input, memory);
     },
   );
 }

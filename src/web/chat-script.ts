@@ -22,6 +22,9 @@ import { CHAT_MEMBER_PICKER_SCRIPT } from './chat-member-picker';
 import { CHAT_MEMBERS_SCRIPT } from './chat-members-script';
 import { CHAT_MENTION_SCRIPT } from './chat-mention-script';
 import { CHAT_MESSAGE_FILES_SCRIPT } from './chat-message-files-script';
+import { CHAT_MEMORY_GOVERNANCE_SCRIPT } from './chat-memory-governance-script';
+import { CHAT_MEMORY_SCRIPT } from './chat-memory-script';
+import { CHAT_MEMORY_STATE_SCRIPT } from './chat-memory-state-script';
 import { CHAT_MONITOR_SCRIPT } from './chat-monitor-script';
 import { CHAT_OUTBOX_SCRIPT } from './chat-outbox-script';
 import { CHAT_TIMELINE_RENDER_SCRIPT } from './chat-timeline-render-script';
@@ -95,6 +98,11 @@ const MESSAGE_FILE_MAX = ${LIMITS.messageFileLinksMax};
 const CLAIM_STALE_MS = ${LIMITS.claimedStaleMs};
 const WEB_REQUEST_TIMEOUT_MS = ${LIMITS.webRequestTimeoutMs};
 const WEB_REFRESH_DEBOUNCE_MS = ${LIMITS.webRefreshDebounceMs};
+// Memory 面板分页与显式召回预算；阈值只在 limits.ts 维护。
+const MEMORY_WEB_PAGE_SIZE = ${LIMITS.memoryWebPageSize};
+const MEMORY_WEB_RECALL_CANDIDATES = ${LIMITS.memoryWebRecallCandidates};
+const MEMORY_WEB_RECALL_OUTPUT_BYTES = ${LIMITS.memoryWebRecallOutputBytes};
+const MEMORY_WEB_CURATED_LIMIT = ${LIMITS.memoryWebCuratedLimit};
 // Agent 截断消息在该字节数内自动读取全文；只在浏览器做展示收敛，不改服务端契约。
 const WEB_AGENT_AUTO_EXPAND_BYTES = ${LIMITS.webAgentAutoExpandBytes};
 // 超长正文默认折叠为「查看全文 / 收起」；阈值只在 limits.ts 维护。
@@ -210,6 +218,9 @@ ${CHAT_HISTORY_SCRIPT}
 ${CHAT_MESSAGE_ACTIONS_SCRIPT}
 ${CHAT_TASK_TRACE_SCRIPT}
 ${CHAT_MESSAGE_SEARCH_SCRIPT}
+${CHAT_MEMORY_STATE_SCRIPT}
+${CHAT_MEMORY_SCRIPT}
+${CHAT_MEMORY_GOVERNANCE_SCRIPT}
 ${CHAT_STREAM_SCRIPT}
 ${CHAT_FILES_SCRIPT}
 ${CHAT_FILES_ACTIONS_SCRIPT}

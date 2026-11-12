@@ -383,6 +383,25 @@ async function main(): Promise<void> {
     'network_delivery_fail',
     'network_delivery_cancel',
     'network_delivery_retry',
+    'network_memory_status',
+    'network_memory_recall',
+    'network_memory_context_list',
+    'network_memory_context_get',
+    'network_memory_list',
+    'network_memory_get',
+    'network_memory_put',
+    'network_memory_correct',
+    'network_memory_forget',
+    'network_memory_operation_get',
+    'network_memory_host_bind',
+    'network_memory_host_close',
+    'network_memory_input_prepare',
+    'network_memory_input_status',
+    'network_memory_admit',
+    'network_memory_catchup_prepare',
+    'network_memory_catchup_get',
+    'network_memory_experience_list',
+    'network_memory_experience_get',
   ];
   const roomFileTools = [
     'network_room_file_bind',
@@ -472,6 +491,10 @@ async function main(): Promise<void> {
     'network_delivery_cancel',
     'network_delivery_retry',
     'network_sync',
+    'network_memory_status',
+    'network_memory_recall',
+    'network_memory_context_list',
+    'network_memory_host_bind',
   ];
   for (const required of requiredCoreTools) {
     check(`工具 ${required} 已注册`, toolNames.includes(required), toolNames);
@@ -1343,6 +1366,33 @@ async function main(): Promise<void> {
     newAgentIdentity?.actor_id,
   );
   checkEqual('新建 Agent 流程：network_me 返回注册名称', newAgentMeIdentity?.name, newAgentName);
+  const meService = toolStructured<{
+    service?: {
+      memory?: {
+        enabled: boolean;
+        contract_version: string;
+        host_modes: string[];
+        tools: string[];
+        supported: string[];
+        unsupported: string[];
+        reason: string | null;
+      };
+    };
+  }>(newAgentMe.body);
+  const memoryCatalog = meService?.service?.memory;
+  check('network_me 返回 memory 能力目录', memoryCatalog !== undefined, meService);
+  checkEqual('memory contract version 一致', memoryCatalog?.contract_version, '2026-11-09.1');
+  check(
+    'memory 工具目录与 tools/list 一致',
+    Array.isArray(memoryCatalog?.tools) &&
+      memoryCatalog.tools.every((name) => toolNames.includes(name)) &&
+      toolNames.filter((name) => name.startsWith('network_memory_')).every((name) => memoryCatalog.tools.includes(name)),
+    memoryCatalog?.tools,
+  );
+  check('memory 声明 tool-only 为最低宿主等级', memoryCatalog?.host_modes.includes('tool_only') === true);
+  if (!memoryCatalog?.enabled) {
+    checkEqual('memory disabled 原因明确', memoryCatalog?.reason, 'memory_disabled');
+  }
 
   // 问题反馈：已注册但未 login 的 Agent 可提交；认证失败时返回 CREDENTIAL_INVALID。
   const feedbackArgs = {

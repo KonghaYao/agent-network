@@ -479,6 +479,52 @@ export const LIMITS = {
   feedbackEnvironmentBytes: 4 * 1024,
   /** feedback problem 原始 UTF-8 字节上限。 */
   feedbackProblemBytes: 16 * 1024,
+  /** Memory 后端作业租约（毫秒）；过期只表示可对账，不等于远端失败。 */
+  memoryJobLeaseMs: 60_000,
+  /** 单轮 Memory 作业领取上限。 */
+  memoryJobBatchLimit: 20,
+  /** Memory 可重试作业最大尝试次数；耗尽后保持 failed 显式状态。 */
+  memoryJobMaxAttempts: 8,
+  /** Memory 作业重试退避基数 / 上限（毫秒）。 */
+  memoryJobBackoffBaseMs: 1_000,
+  memoryJobBackoffMaxMs: 5 * 60_000,
+  /** 运行时 tick 周期（毫秒）；由 Bun 入口定时调用。 */
+  memoryTickIntervalMs: 5_000,
+  /** unknown 作业对账周期；与领取分开，避免把未知当失败重跑。 */
+  memoryReconcileIntervalMs: 30_000,
+  /** Langfuse importer 定时拉取周期；LANGFUSE_ENABLED=1 时才调度。 */
+  memoryLangfuseIntervalMs: 60_000,
+  /** prepared selection / catchup 计划的短期 TTL（毫秒）。 */
+  memoryPreparedTtlMs: 10 * 60_000,
+  memoryCatchupTtlMs: 24 * 60 * 60_000,
+  /** lookup/bound Context 的默认 TTL；到期后重验不通过，不回写正文。 */
+  memoryContextTtlMs: 60 * 60_000,
+  /** HostBinding 默认租约；宿主不续租即视为运行边界已结束。 */
+  memoryHostLeaseMs: 24 * 60 * 60_000,
+  /** 已完成 Memory 作业的审计留存（毫秒）；来源/tombstone 不受此期限影响。 */
+  memoryJobRetentionMs: 30 * 24 * 60 * 60_000,
+  /** Hindsight 单次 HTTP 请求默认超时；调用方 deadline_at 可缩短。 */
+  memoryAdapterTimeoutMs: 10_000,
+  /** 只对幂等请求（含 operation_id 的 retain / 读 / delete）重试的次数。 */
+  memoryAdapterMaxRetries: 2,
+  /** 指数退避基数（毫秒）；仍受 deadline_at 约束。 */
+  memoryAdapterRetryBaseMs: 250,
+  /** 适配器列举 documents/memories 的页大小上限。 */
+  memoryAdapterListPageSize: 100,
+  /** Langfuse Observations v2 单页上限（官方最多 1000）与单轮最多页数。 */
+  memoryLangfusePageSize: 100,
+  memoryLangfuseMaxPages: 20,
+  /** 首次导入没有水位时的默认回看窗口。 */
+  memoryLangfuseInitialLookbackMs: 24 * 60 * 60_000,
+  /** 单条 trace observation 可导入的 UTF-8 字节上限；超出按跳过处理。 */
+  memoryLangfuseMaxObservationBytes: 256 * 1024,
+  /** Web Memory 面板单页大小；服务端仍按工具 schema 再夹取。 */
+  memoryWebPageSize: 20,
+  /** Web 显式召回候选与输出预算；只用于发起请求，不改变服务端策略。 */
+  memoryWebRecallCandidates: 10,
+  memoryWebRecallOutputBytes: 64 * 1024,
+  /** Web 人工记忆列表上限；curated 当前不分页。 */
+  memoryWebCuratedLimit: 50,
 } as const;
 
 export function clampPage(value: number | undefined, fallback: number, max: number): number {

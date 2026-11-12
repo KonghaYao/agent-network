@@ -822,6 +822,7 @@ async function openRoom(roomId, options) {
     closeRoomView();
     return;
   }
+  memoryHandleRoomChange();
   if (activeRoomId === roomId && room && !settings.force) {
     const epoch = roomEpoch;
     try {

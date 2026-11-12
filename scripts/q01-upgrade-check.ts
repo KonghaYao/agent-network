@@ -3,10 +3,10 @@
  *
  * 用真实 migrations 构造停在 `0035_task_recovery.sql` 的合成库，写入
  * credentials/devices、无主群与 A06 的关键历史行，再顺序应用
- * `0036`–`0044`。检查重点是“升级不扩大权限”：旧凭据只回填设备行、不新增
+ * `0036`–`0046`。检查重点是“升级不扩大权限”：旧凭据只回填设备行、不新增
  * credentials；无主群不被自动解散或回填 owner；审计表重建保留旧行；
  * 0042 删除旧任务表/列后普通业务行仍可读；0043 只把存量群回填为 full；
- * 0044 只把未删除文件回填为 public。
+ * 0044 只把未删除文件回填为 public；0045/0046 只新增 Memory 表与索引。
  *
  * 运行：`bun scripts/q01-upgrade-check.ts`
  * 该脚本使用临时目录，不访问服务端、不读取或写入 `.data`。
@@ -32,6 +32,8 @@ const NEW_MIGRATIONS = [
   '0042_drop_legacy_tasks.sql',
   '0043_group_history_full_backfill.sql',
   '0044_files_public_backfill.sql',
+  '0045_memory_ledger.sql',
+  '0046_memory_experience_catchup.sql',
 ];
 const AT = 1_700_000_000_000;
 
@@ -150,17 +152,17 @@ try {
   checkEqual('升级前没有设备行', before.devices, 0);
 
   const appliedNow = migrate(db, SOURCE_MIGRATIONS);
-  checkEqual('恰好应用 0036–0044', appliedNow.join(','), NEW_MIGRATIONS.join(','));
+  checkEqual('恰好应用 0036–0046', appliedNow.join(','), NEW_MIGRATIONS.join(','));
   const expectedMigrations = [
     ...Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(4, '0')),
-    ...Array.from({ length: 28 }, (_, i) => String(i + 17).padStart(4, '0')),
+    ...Array.from({ length: 30 }, (_, i) => String(i + 17).padStart(4, '0')),
   ];
   const actualMigrations = (
     db.prepare('SELECT name FROM schema_migrations ORDER BY name').all() as Array<{ name: string }>
   ).map((row) => row.name);
-  checkEqual('迁移总数为 40', actualMigrations.length, 40);
+  checkEqual('迁移总数为 42', actualMigrations.length, 42);
   check(
-    '迁移序号为 0001–0012、0017–0044',
+    '迁移序号为 0001–0012、0017–0046',
     actualMigrations.every((name, i) => name.startsWith(`${expectedMigrations[i]}_`)),
     actualMigrations,
   );

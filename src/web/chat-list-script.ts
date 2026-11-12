@@ -520,6 +520,7 @@ function updateAccount(me) {
   if (newGroupButton) newGroupButton.disabled = false;
   const startButton = document.getElementById('logged-out-start');
   if (startButton) startButton.hidden = true;
+  memoryIdentityChanged();
   syncLogoutVisibility();
 }
 

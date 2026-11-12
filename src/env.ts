@@ -1,5 +1,10 @@
 import type { FileService } from '@peri-code/mcpp/files';
 
+import type { MemoryRuntime } from './memory/runtime';
+import type { MemoryIntegration } from './memory/integration';
+import type { MemoryHostPolicy } from './memory/host-bridge';
+import type { MemoryEngineInfo } from './memory/capability-catalog';
+import type { LangfuseSourceConfig } from './memory/sources/langfuse-config';
 import type { NotificationHub } from './realtime/hub';
 import type { AgentPresenceTimeline } from './realtime/presence-timeline';
 
@@ -36,4 +41,26 @@ export interface Env {
   FILES?: FileService;
   /** 启用 MCP Events 时存在；缺失时不声明 events 能力、不注册方法。 */
   EVENTS?: EventsConfig;
+  /**
+   * MF03 Memory 运行时；MEMORY_ENABLED=1 时由 Bun 入口构造。
+   * 缺失表示不启动作业领取，但已提交的 Memory 账本与遗忘屏障仍保留。
+   */
+  MEMORY?: MemoryRuntime;
+  /** MF10 运行时组合；存在表示作业/对账/来源拉取已按生命周期调度。 */
+  MEMORY_INTEGRATION?: MemoryIntegration;
+  /**
+   * MF10 引擎能力摘要；只来自部署配置与实际适配器声明。
+   * 不包含 provider/bank 路由或凭据，用于能力目录与 UI 状态。
+   */
+  MEMORY_ENGINE?: MemoryEngineInfo;
+  /**
+   * MF07 宿主信任策略；只由部署配置/受控网关构造，不能来自客户端输入。
+   * 缺省 tool_only：只能显式查询与读取已准备结果。
+   */
+  MEMORY_HOST?: MemoryHostPolicy;
+  /**
+   * MF09 Langfuse 来源配置；只在 LANGFUSE_ENABLED=1 且全部字段合法时存在。
+   * MF10 在 Memory 运行时启动后按周期拉取；凭据不进入工具/页面/日志。
+   */
+  LANGFUSE?: LangfuseSourceConfig;
 }
