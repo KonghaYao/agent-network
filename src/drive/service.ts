@@ -85,7 +85,7 @@ export function createDrive(env: Env, options: DriveOptions): DriveRuntime {
   return { fileService, mount };
 }
 
-/** 上传成功响应追加私有访问地址；不改变 MCPP Files 的既有字段。 */
+/** 上传成功响应追加访问地址；不改变 MCPP Files 的既有字段。 */
 export interface UploadAccessOptions {
   publicOrigin: string;
   db: D1Database;
@@ -95,12 +95,13 @@ export interface UploadAccessOptions {
 }
 
 /**
- * 登记上传为上传者私有草稿，并返回带短时票据的预览/下载地址。
+ * 登记上传并返回访问地址。
  *
- * 上传响应中的 `publicUrl` 仍是文件身份，但新上传默认私有；裸链接返回 404。
- * `previewUrl` / `downloadUrl` 携带 `ownerScope` 文件票据，供 `<img>`、Range
- * 与下载链接在不携带 Bearer 的情况下使用。票据每次使用仍校验文件登记状态
- * 与所有权；发布为公开文件必须另走 `network_file_publish`。
+ * 上传响应中的 `publicUrl` 是裸 `/f/<fileId>` 地址；新上传默认公开，链接
+ * 本身即可读取。`previewUrl` / `downloadUrl` 仍携带 `ownerScope` 文件票据，
+ * 供文件被 `network_file_publish { public: false }` 撤销后继续按上传者身份
+ * 访问，也兼容需要显式票据的旧客户端。票据每次使用仍校验文件登记状态与
+ * 所有权；公开/私有状态以 `drive_files.visibility` 为准。
  */
 export async function attachPublicUrl(
   response: Response,

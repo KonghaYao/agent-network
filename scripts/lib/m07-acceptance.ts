@@ -121,22 +121,30 @@ export async function runPrivateFileAcceptance(): Promise<void> {
     await acceptGroupInvites(otherConn, roomId);
 
     const uploaded = await createFile(ownerConn, 'm07-secret.txt', 'm07 secret bytes');
+    checkEqual('[M07-T01] 上传默认可见性为 public', uploaded.visibility, 'public');
+    checkEqual('[M07-T01] 默认公开的裸 publicUrl 可读', await statusOf(uploaded.publicUrl), 200);
     const bound = await bind(ownerConn, roomId, uploaded.fileId);
+    // 显式撤销公开，进入票据/成员代次授权路径。
+    await callTool(ownerConn.client, 'network_file_publish', {
+      request_id: newRequestId('unpublish'),
+      file_id: uploaded.fileId,
+      public: false,
+    });
 
     // M07-T01：非成员知道 file_id / 旧裸 URL / Range 也读不到私有字节。
-    checkEqual('[M07-T01] 裸 publicUrl GET 返回 404', await statusOf(uploaded.publicUrl), 404);
+    checkEqual('[M07-T01] 私有文件裸 publicUrl GET 返回 404', await statusOf(uploaded.publicUrl), 404);
     checkEqual(
-      '[M07-T01] 裸 publicUrl 带 Range 仍返回 404',
+      '[M07-T01] 私有文件裸 publicUrl 带 Range 仍返回 404',
       await statusOf(uploaded.publicUrl, { headers: { range: 'bytes=0-3' } }),
       404,
     );
     checkEqual(
-      '[M07-T01] 裸 publicUrl HEAD 返回 404',
+      '[M07-T01] 私有文件裸 publicUrl HEAD 返回 404',
       await statusOf(uploaded.publicUrl, { method: 'HEAD' }),
       404,
     );
     checkEqual(
-      '[M07-T01] 裸 publicUrl ?download=1 返回 404',
+      '[M07-T01] 私有文件裸 publicUrl ?download=1 返回 404',
       await statusOf(`${uploaded.publicUrl}?download=1`),
       404,
     );
@@ -152,7 +160,7 @@ export async function runPrivateFileAcceptance(): Promise<void> {
       'NOT_MEMBER',
     );
     checkEqual(
-      '[M07-T01] 上传时的私有草稿票据在绑定后失效',
+      '[M07-T01] 上传时的文件票据不能读取已绑定私有文件',
       await statusOf(uploaded.previewUrl),
       404,
     );
@@ -241,29 +249,24 @@ export async function runPrivateFileAcceptance(): Promise<void> {
       imageResponse.headers.get('content-disposition'),
     );
 
-    // 公开发布是独立、需权限的动作；默认关闭，显式公开后才允许裸 URL。
+    // 公开发布是独立、需权限的动作；默认公开，显式撤销后裸 URL 立即 404。
     const publishable = await createFile(ownerConn, 'm07-publish.txt', 'm07 public bytes');
-    await bind(ownerConn, roomId, publishable.fileId);
+    const publishableBound = await bind(ownerConn, roomId, publishable.fileId);
+    checkEqual(
+      '[M07-PUB] 新文件默认公开裸 URL 可读',
+      await statusOf(publishableBound.file.public_url),
+      200,
+    );
     const memberPublish = await expectToolError(
-      '[M07-PUB] 普通成员不能发布',
+      '[M07-PUB] 普通成员不能切换可见性',
       callTool(otherConn.client, 'network_file_publish', {
         request_id: newRequestId('publish'),
         file_id: publishable.fileId,
-        public: true,
+        public: false,
       }),
       'NOT_OWNER',
     );
     checkEqual('[M07-PUB] 普通成员发布错误码', memberPublish.code, 'NOT_OWNER');
-    const published = await callTool<{ public: boolean; public_url: string }>(
-      ownerConn.client,
-      'network_file_publish',
-      {
-        request_id: newRequestId('publish'),
-        file_id: publishable.fileId,
-        public: true,
-      },
-    );
-    checkEqual('[M07-PUB] 显式发布后裸 URL 可读', await statusOf(published.public_url), 200);
     const unpublished = await callTool<{ public: boolean; public_url: string; preview_url: string }>(
       ownerConn.client,
       'network_file_publish',
@@ -273,14 +276,23 @@ export async function runPrivateFileAcceptance(): Promise<void> {
         public: false,
       },
     );
-    checkEqual('[M07-PUB] 撤销发布后裸 URL 立即 404', await statusOf(unpublished.public_url), 404);
-    // 撤销后可以再次发布：事件键不能按 file_id 复用。
-    await callTool(ownerConn.client, 'network_file_publish', {
-      request_id: newRequestId('publish'),
-      file_id: publishable.fileId,
-      public: true,
-    });
-    checkEqual('[M07-PUB] 再次发布裸 URL 可读', await statusOf(published.public_url), 200);
+    checkEqual('[M07-PUB] 撤销公开后裸 URL 立即 404', await statusOf(unpublished.public_url), 404);
+    checkEqual(
+      '[M07-PUB] 撤销公开后带票据地址仍可读',
+      await statusOf(unpublished.preview_url),
+      200,
+    );
+    // 撤销后可以再次公开：事件键不能按 file_id 复用。
+    const republished = await callTool<{ public_url: string }>(
+      ownerConn.client,
+      'network_file_publish',
+      {
+        request_id: newRequestId('publish'),
+        file_id: publishable.fileId,
+        public: true,
+      },
+    );
+    checkEqual('[M07-PUB] 再次公开裸 URL 可读', await statusOf(republished.public_url), 200);
     await callTool(ownerConn.client, 'network_file_publish', {
       request_id: newRequestId('unpublish'),
       file_id: publishable.fileId,

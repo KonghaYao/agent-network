@@ -113,6 +113,7 @@ export function createMessageFileArchiver(
  * 房间文件工具。
  *
  * 只在启用 MCPP Files 时注册；公开 URL 仍由 `/f/<file_id>` 提供，
+ * 默认公开，`network_file_publish { public: false }` 可单独撤销。
  * 绑定/删除不会改变文件本身的过期时间，也不提供续期接口。
  */
 export function registerRoomFileTools(
@@ -129,7 +130,7 @@ export function registerRoomFileTools(
   register(
     server,
     'network_room_file_bind',
-    '把当前身份上传且未过期的 fileId 绑定到房间，返回 file.public_url（文件身份）以及带短时票据的 file.preview_url / file.download_url。上传默认是私有草稿，裸 public_url 不携带票据时 404；绑定后按房间成员资格、成员代次与历史边界授权，移出、重新加入的新代次或策略收紧后旧链接与旧票据立即失效。公开发布是独立、需有权限的动作（network_file_publish），默认关闭。',
+    '把当前身份上传且未过期的 fileId 绑定到房间，返回 file.public_url（裸文件地址）以及带短时票据的 file.preview_url / file.download_url。上传与绑定默认公开，裸 public_url 可直接读取（链接即授权）；需要限制时由上传者或群 owner 调用 network_file_publish { public: false } 撤销，撤销后裸链接 404。私有文件按房间成员资格、成员代次与历史边界授权，移出、重新加入的新代次或策略收紧后旧票据失效；公开文件不会因成员变化自动收回，必须先撤销发布。',
     roomFileBindSchema,
     roomFileResultSchema,
     async (input) => {

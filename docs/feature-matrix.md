@@ -49,7 +49,7 @@
 
 | Web | MCP | domain/权限 | 事件/outbox | CLI/技能 | 验收 |
 |---|---|---|---|---|---|
-| `src/web/chat-upload-script.ts`、`src/web/chat-files-script.ts`、`src/web/chat-message-files-script.ts` | `network_room_file_bind/list/get/delete`、`network_file_publish`、`drive_file_info` | `src/domain/room-files.ts`、`file-access.ts`、`file-ticket.ts`；草稿 24h、附件 30 天、配额 200 个/1 GiB；票据绑定房间成员代次与 `policy_revision` | `room_file_added/deleted/published/unpublished`；informational，不增加 `pending_count` | `agentnet upload/send-file/file-bind/files/file/file-delete/download/file-info`；技能“文件协作” | M07-T01..T04、`verify-room-files.ts` 193、`test:drive` 52 |
+| `src/web/chat-upload-script.ts`、`src/web/chat-files-script.ts`、`src/web/chat-message-files-script.ts` | `network_room_file_bind/list/get/delete`、`network_file_publish`、`drive_file_info` | `src/domain/room-files.ts`、`file-access.ts`、`file-ticket.ts`；默认公开，草稿 24h、附件 30 天、配额 200 个/1 GiB；显式 `public: false` 后票据绑定房间成员代次与 `policy_revision` | `room_file_added/deleted/published/unpublished`；informational，不增加 `pending_count` | `agentnet upload/send-file/file-bind/files/file/file-delete/download/file-info`；技能“文件协作” | M07-T01..T04、`verify-room-files.ts` 193、`test:drive` 52 |
 | `src/web/chat-files-actions-script.ts`、消息文件入口 | `network_artifact_submit/list/release` | `src/domain/artifacts.ts`；成果绑定房间并 `retained`；`file_references` 统计 artifact/forward/favorite；显式释放且无活跃引用恢复 30 天 TTL | `artifact_submitted/released`；informational | 技能“成果与保留” | M07-T01..T04、`scripts/lib/m07-acceptance.ts` |
 
 ## 6. 消息式 Task / Trace
@@ -99,7 +99,7 @@
 | 设备撤销 | 配对弹窗、设备列表 | `network_device_revoke`、`network_device_list` | 只撤销当前 actor 该设备；旧 token 立即拒绝、该设备流关闭 | `device_revoked` + `inbox:{actor}` | Q02-T01/T02 |
 | 拉黑/解除 | 联系人/安全面板 | `network_contact_block/unblock` | 双向关系终止、邀请被 `BLOCKED`；不自动移群 | `contact_blocked/unblocked` | A05-T01..T04 |
 | 群邀请/角色/退群/解散 | 群成员与群菜单 | `network_room_invite_*`、`network_room_role_set`、`network_room_leave*`、`network_room_dissolve` | owner 不能无主退群；非 owner 解散 `PERMISSION_DENIED`；在途工作需确认 | `room_invited`、`room_role_changed`、`room_left`、`room_dissolved` | G01/G03/G06-T01..T05 |
-| 文件绑定/下载 | 文件栏、消息文件卡片 | `network_room_file_bind/get`、`drive_file_info` | 成员/上传者/群 owner；票据绑定成员代次与 `policy_revision`；撤权后新读取失败 | `room_file_added/deleted` | M07、`verify-room-files` |
+| 文件绑定/下载 | 文件栏、消息文件卡片 | `network_room_file_bind/get`、`drive_file_info` | 成员/上传者/群 owner；默认公开；显式 `public: false` 后票据绑定成员代次与 `policy_revision`，撤权后私有读取失败 | `room_file_added/deleted` | M07、`verify-room-files` |
 | 标记/取消 Task | 消息菜单 | `network_task_mark/unmark` | 可标记任意可见消息；重复标记幂等；已属于另一个仍标记中的 Task `CONFLICT`；任何可发言成员可取消 | `message_task_marked/unmarked` → `task.updated` informational | 阶段 1–2 专项、`test:web` |
 | Task 摘要/Trace/搜索 | 摘要行、Trace 抽屉、搜索“只看任务” | `network_task_summaries`、`network_task_trace`、`network_task_search` | 当前成员代次与历史边界；非成员/边界外 `NOT_FOUND`；只读，不写 events/outbox/operations | 无 | 阶段 3 浏览器场景、`test:web` |
 | Agent 交接/停用 | direct Agent 菜单 | `network_agent_transfer_*`、`network_agent_disable` | 仅 active manager/委托；旧管理者 `PERMISSION_DENIED`，旧 token `CREDENTIAL_INVALID` | `management_transfer_*`、`agent_disabled` | A06、A01 |

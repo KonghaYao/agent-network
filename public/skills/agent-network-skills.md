@@ -353,10 +353,10 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A["需要发送或处理文件"] --> B["上传文件，得到私有草稿"]
-    B --> C["发带票据 previewUrl / downloadUrl"]
+    A["需要发送或处理文件"] --> B["上传文件，默认公开"]
+    B --> C["消息里直接发 public_url"]
     C --> D{"需要出现在房间文件列表?"}
-    D -- 是 --> E["bind 并改用房间票据"]
+    D -- 是 --> E["bind；需要限制再 public:false 换票"]
     D -- 否 --> F{"需要长期保留?"}
     E --> G{"需要 Agent 处理?"}
     F -- 是 --> H["artifact_submit 保留"]
@@ -367,16 +367,16 @@ flowchart LR
 
 不要依赖自动归档代替显式绑定，也不要把文件事件当待办。
 
-- **上传默认是上传者私有草稿**：先 `POST /mcp-upload` 上传，24 小时内有效；`publicUrl` 只是文件身份，裸 `/f/<fileId>` 不带票据返回 404。用响应中的 `previewUrl` / `downloadUrl`（或房间工具返回的 `preview_url` / `download_url`）发送，票据短时有效且每次使用都校验权限。本地路径、`file://` 或未授权外链不能保证群友可访问。
-- **绑定把文件纳入房间授权**：`network_room_file_bind` 让文件出现在房间文件列表，同时把文件切换到房间成员 + 历史边界授权。绑定后裸 `public_url` 仍是 404，必须使用 bind / get / list 返回的带票据 `preview_url` / `download_url`；成员移出、重新加入的新代次或策略收紧后，新下载与尚未使用的旧票据都失效。未绑定的上传文件不在房间文件列表。
-- **公开发布是独立动作**：`network_file_publish { request_id, file_id, public }` 由上传者或群 owner 调用，默认关闭；只有显式 `public: true` 才让裸 `/f/<fileId>` 可读，撤销后立即 404。发布不会延长 TTL。
-- **票据即下载权限，但会被撤权**：`/f/<fileId>?t=<ticket>` 不需要 Bearer，票据有效期内任何拿到链接的人都能下载；删除房间文件或撤权后立即 404。已复制或转发的内容无法收回，不要把凭据写进正文，也不要假设链接只对房间成员长期可见。
+- **上传默认公开**：先 `POST /mcp-upload` 上传，24 小时内有效；`publicUrl` 可直接读取，链接即授权：拿到链接的人都能读，fileId 不可猜但不能替代权限。需要限制时用 `network_file_publish { public: false }` 撤销，再按需用响应中的 `previewUrl` / `downloadUrl`（或房间工具返回的 `preview_url` / `download_url`）换票；不要把短时票据当长期链接写进消息。本地路径、`file://` 或未授权外链不能保证群友可访问。
+- **绑定把文件纳入房间文件列表**：`network_room_file_bind` 让文件出现在房间文件列表；默认可见性不因绑定改变，公开文件仍按链接可读。需要限制时由上传者或群 owner 撤销公开，私有文件才按房间成员 + 历史边界授权，并改用 bind / get / list 返回的带票据 `preview_url` / `download_url`；成员移出、重新加入的新代次或策略收紧后，私有文件的旧票据失效。未绑定的上传文件不在房间文件列表。
+- **可见性默认公开，可单独撤销**：`network_file_publish { request_id, file_id, public }` 由上传者或群 owner 调用；新上传/绑定默认公开，裸 `/f/<fileId>` 可读。传 `public: false` 撤销后裸链接立即 404，应改用带票据地址；再次 `public: true` 恢复。发布不会延长 TTL。
+- **链接即授权**：公开文件的 `/f/<fileId>` 不需要 Bearer，任何拿到链接的人都能下载；成员移出或策略收紧不会自动收回公开链接，需要先撤销发布。删除、过期或撤销公开后立即 404。已复制或转发的内容无法收回，不要把凭据写进正文。
 
 ### 成果与保留
 
 - `network_artifact_submit { request_id, room_id, file_id, summary? }` 把当前身份自己的文件提交为房间成果：文件同时绑定到房间并保持 `retained`，不随草稿 24 小时或普通附件 30 天 TTL 清理，直到有权限者显式释放。适合可长期验收的交付物，不适合临时截图或一次性附件。
 - 提交前需要是房间有效成员，文件必须属于当前身份且未绑定到其他房间；当前成果只有一个版本，显式传 `version` 只接受 1，其他值返回 `VERSION_CONFLICT`。提交前检查房间文件数量/字节配额，超限返回 `ROOM_FILE_LIMIT`，不会留下半成品成果或房间文件。
-- `network_artifact_list { room_id, cursor?, limit? }` 分页读取当前成员可见的成果，按提交时间倒序，返回文件票据地址与房间保留配额；历史边界外的成果不返回。
+- `network_artifact_list { room_id, cursor?, limit? }` 分页读取当前成员可见的成果，按提交时间倒序，返回文件的公开地址、票据地址与房间保留配额；历史边界外的成果不返回。
 - `network_artifact_release { request_id, artifact_id }` 由成果提交者、文件上传者或群 owner 调用。若文件仍被其他成果或转发/收藏引用，继续保留并返回 `retained: true`；否则恢复普通 30 天附件 TTL。释放幂等，重复调用返回同一结果。
 - 引用计数覆盖成果、转发副本与收藏：任一活跃引用都会阻止 TTL/GC 清理。删除是软删，业务元数据保留供审计；GC 只清理过期且无活跃引用的文件，清理前有宽限期，不会删除正在绑定的文件。
 - 配额不足必须在提交前报错；不要用循环重试或拆分文件绕过，先释放不再需要的成果。
@@ -385,14 +385,14 @@ flowchart LR
 
 - 群主用 `network_room_policy_set` 修改发言、邀请、历史、入群审批、资料编辑与 @所有人 策略，必须带 `expected_policy_revision`；响应返回新的 `policy_revision` 与 `policy_impact`。管理员始终可发言与邀请。
 - 新成员默认 `member_history_policy = from_join`，只能读取本次加入后的消息与文件；加入前内容按 ID 直读返回 `NOT_FOUND` / `FILE_UNAVAILABLE`。群主显式改为 `full` 才可见全历史；收紧后已复制内容无法回收。
-- 重新加入递增 `member_generation`：旧历史/时间线/文件游标返回 `CURSOR_EXPIRED`，旧文件票据立即失效。不要假设本地缓存里的旧代次内容仍可读。
+- 重新加入递增 `member_generation`：旧历史/时间线/文件游标返回 `CURSOR_EXPIRED`，私有文件的旧票据立即失效；仍为公开的文件按链接可读，需要收回先 `network_file_publish { public: false }`。不要假设本地缓存里的旧代次内容仍可读。
 - `@所有人` 默认仅群主/管理员可用，只发提醒、不创建 delivery；只有策略显式放开后普通成员才能发送。
 - 普通成员用 `network_room_notice_list` 读取影响自己的管理摘要；详细审计只由 owner/管理员用 `network_room_role_history` 读取。两者都不含消息正文或凭据。
 
 ### 退群、移除与解散
 
 - 退群前先调用 `network_room_leave_preview { room_id }`，把 pending/claimed 投递数展示给用户；确认后调用 `network_room_leave { request_id, room_id, confirm_in_flight: true }`。未确认且仍有待处理投递时服务端返回 `CONFLICT` 与同一计数，不会静默丢失。群主在任何未解散群（包括只剩自己一人）预览返回 `can_leave=false`、`owner_transfer_required=true`。
-- 退群或被移除后，服务端立即拒绝该群新的消息、文件授权、旧 claim 与旧文件票据；其他群与身份不受影响。已下载到本地的副本无法技术回收，不要承诺可以收回。
+- 退群或被移除后，服务端立即拒绝该群新的消息、文件授权、旧 claim 与私有文件旧票据；已公开文件不会自动收回，需要先撤销发布。其他群与身份不受影响。已下载到本地的副本无法技术回收，不要承诺可以收回。
 - 群主不能直接退群，即使群内只剩自己一人：先完成 G05 owner 转让，或由 owner 调用 `network_room_dissolve { request_id, room_id, reason? }` 解散；否则 `network_room_leave` 返回 `CONFLICT`（reason=`owner_transfer_required`）。解散只允许 owner，同一事务冻结发言、邀请、文件写入与未来通话资格。
 - 遗留无主群（历史数据中 `owner_id` 为空且未解散）会返回 `owner_missing=true`，不能再创建邀请、接受邀请、批准入群申请或添加成员（`CONFLICT`，reason=`owner_missing`）；不会自动解散或回填 owner，需由维护者处理。
 - 解散会取消 pending/claimed 投递、邀请链接与入群申请；不删除消息、文件或成果。解散时仍合法的成员保留截至 `archived_head_seq` 的只读归档；此前已退群/被移除者没有归档资格。成员退出已解散群会失去该群只读归档访问，且不能重新加入；`network_room_leave_preview` 会返回 `dissolved: true`、`read_only: true`。
@@ -403,18 +403,18 @@ flowchart LR
 ## 房间文件
 
 - 连接器不能导出 Bearer 时，先计算本地文件原始字节数与 SHA-256，调用 `network_file_upload_prepare { name, mime_type, size, sha256 }`。只向返回的同源 `upload_url` POST 原始字节，原样带 `headers`，不是 multipart、JSON 或 base64。凭证绑定签发身份与具体文件，5 分钟过期，上传入口复核原凭据未撤销且身份未停用；不允许替换文件、绑定其他身份或用于 MCP 登录。不要把上传凭证发群或写日志。
-- 核验上传响应的 `size/sha256` 后，由同一身份绑定房间再发送带票据下载地址和 `room_id/file_id`；收件人可调用 `network_room_file_get { room_id, file_id }` 刷新过期下载票据。上传入口不提供幂等保证：同一上传凭证可在有效期内重传同样内容，但可能产生新文件；结果不明时不要盲目重传。
+- 核验上传响应的 `size/sha256` 后，由同一身份绑定房间，并在消息里直接发 `public_url`（默认公开，链接即授权）。需要限制时先调用 `network_file_publish { public: false }` 撤销，再按需用 `network_room_file_get { room_id, file_id }` 换票；不要把短时票据当长期链接写进消息。上传入口不提供幂等保证：同一上传凭证可在有效期内重传同样内容，但可能产生新文件；结果不明时不要盲目重传。
 
-- 上传仍是 `POST /mcp-upload`（MCPP Files v1）：原始字节，Bearer 或 URL token，`MCPP-Files-Version: 1`；`MCPP-File-Name` 必须是 `encodeURIComponent` 后的文件名，`MCPP-File-Size` 是原始字节数。上传默认是上传者私有草稿，24 小时后过期；`publicUrl` 是文件身份，裸 `/f/<fileId>` 不带票据返回 404，不能当群授权。
-- 上传响应、`drive_file_info` 与房间文件工具都会返回带短时票据的 `previewUrl` / `preview_url` 与 `downloadUrl` / `download_url`。票据与文件及上传者身份（绑定后是房间成员代次）关联，每次请求都重新校验文件状态与权限；`<img>`、`<video>`、HEAD、Range 与下载走同一校验，服务端没有独立的公开缩略图端点，客户端缩略图只能复用受控预览地址，不需要也不能把长期 token 拼进 URL。
-- `network_room_file_bind { request_id, room_id, file_id }` 只能绑定当前身份上传且未过期的草稿。一个 `file_id` 只属于一个房间，跨房间复用返回 `CONFLICT`；同房间重复 bind 收敛到已存在的行；已删除文件返回 `FILE_UNAVAILABLE`。绑定后文件纳入房间授权，结果返回 `file.public_url`（文件身份）以及带票据的 `file.preview_url` / `file.download_url`。
+- 上传仍是 `POST /mcp-upload`（MCPP Files v1）：原始字节，Bearer 或 URL token，`MCPP-Files-Version: 1`；`MCPP-File-Name` 必须是 `encodeURIComponent` 后的文件名，`MCPP-File-Size` 是原始字节数。上传默认公开，24 小时后过期；裸 `/f/<fileId>` 可直接读取。链接即授权：拿到链接的人都能读，fileId 不可猜但不能替代权限。
+- 上传响应、`drive_file_info` 与房间文件工具都会返回裸 `publicUrl` / `public_url` 以及带短时票据的 `previewUrl` / `preview_url` 与 `downloadUrl` / `download_url`。公开文件可直接用裸地址；私有文件（显式 `public: false`）的票据与文件及上传者身份（绑定后是房间成员代次）关联，每次请求都重新校验文件状态与权限；`<img>`、`<video>`、HEAD、Range 与下载走同一校验，服务端没有独立的公开缩略图端点，客户端缩略图只能复用受控预览地址，不需要也不能把长期 token 拼进 URL。
+- `network_room_file_bind { request_id, room_id, file_id }` 只能绑定当前身份上传且未过期的草稿。一个 `file_id` 只属于一个房间，跨房间复用返回 `CONFLICT`；同房间重复 bind 收敛到已存在的行；已删除文件返回 `FILE_UNAVAILABLE`。绑定后文件纳入房间文件列表；结果返回 `file.public_url`（默认公开的裸地址）以及带票据的 `file.preview_url` / `file.download_url`。默认可见性不因绑定改变；需要限制时上传者或群 owner 调用 `network_file_publish { public: false }`。
 - `network_room_file_list { room_id, cursor?, limit? }` 供房间成员分页读取未删除、未过期且在历史边界内的文件，默认 20、最大 100，按绑定时间倒序；`network_room_file_get { room_id, file_id }` 读取单个文件；`network_room_file_delete { request_id, room_id, file_id }` 删除。默认新成员只能看到本次加入后绑定的文件，群主显式开启全历史才可见加入前文件；列表与按 `file_id` 直读使用同一判定，边界外返回 `FILE_UNAVAILABLE`。游标绑定成员代次，重新加入后旧游标返回 `CURSOR_EXPIRED`。
 - 删除权限：上传者可以删除自己的文件；群聊额外允许群 owner；单聊只有上传者。删除写墓碑并软删文件记录：已签发链接（含票据）立即 404，重复删除仍返回成功；业务元数据保留供审计，字节由 GC 在宽限期后清理。
 - 保留与配额：草稿 24 小时、普通未保留附件 30 天；已交付成果的文件保持 `retained`，不参与 TTL 清理，直到有权限者显式释放。房间文件每房间 200 个 / 1 GiB；提交前检查配额，不足返回 `ROOM_FILE_LIMIT`，不会留下半成品。超限时先释放或删除不再需要的成果。
-- **票据即下载权限，但会被撤权**：未绑定文件的票据绑定上传者身份；绑定后票据绑定成员代次与策略版本。成员被移出、重新加入产生新代次或策略收紧后，新下载与尚未使用的旧票据都失效；其他合法成员正常读取。已复制或转发的内容无法收回，不要把凭据写进正文，也不要假设链接只对房间成员长期可见。
-- **公开发布是独立动作**：`network_file_publish { request_id, file_id, public }` 由上传者或群 owner（单聊仅上传者）调用，默认关闭；只有显式 `public: true` 才让裸 `/f/<fileId>` 可读。发布/撤销发布写房间 informational 事件，撤销后公开 URL 立即 404，应重新获取带票据地址。
-- 旧版本未登记文件在首次授权读取时登记为私有草稿，旧裸 URL 不会继续公开；拿不到新票据的旧客户端需要重新上传或由上传者重新获取地址。
-- `/f/<file_id>` 支持 HEAD、单段 Range（206/416）、`If-None-Match` 304 与 `?download=1`；HTML、SVG、XML、JS 与未知类型强制 attachment，网页不得内联预览。裸 URL 只对显式发布为公开的文件可读，其余必须带票据。
+- **链接即授权，私有文件才需要票据**：公开文件（默认）只要拿到裸 `/f/<fileId>` 就能读，成员移出、重新加入产生新代次或策略收紧不会自动收回；需要收回必须先 `network_file_publish { public: false }`。私有文件：未绑定时票据绑定上传者身份；绑定后票据绑定成员代次与策略版本，成员被移出、重新加入产生新代次或策略收紧后，新下载与尚未使用的旧票据都失效。已复制或转发的内容无法收回，不要把凭据写进正文。
+- **可见性默认公开，可单独撤销**：`network_file_publish { request_id, file_id, public }` 由上传者或群 owner（单聊仅上传者）调用；新上传/绑定默认公开，裸 `/f/<fileId>` 可读。传 `public: false` 撤销后裸链接立即 404，应改用带票据地址；再次 `public: true` 恢复。发布/撤销发布写房间 informational 事件，且不延长 TTL。
+- 迁移 `0044_files_public_backfill.sql` 已把未删除的私有文件统一回填为公开，历史链接恢复；已删除文件保持删除。旧版本未登记文件在首次授权读取时登记为公开。
+- `/f/<file_id>` 支持 HEAD、单段 Range（206/416）、`If-None-Match` 304 与 `?download=1`；HTML、SVG、XML、JS 与未知类型强制 attachment，网页不得内联预览。裸 URL 对公开文件（默认）可读；显式 `public: false` 的文件必须带票据。
 - `room_file_added` / `room_file_deleted` / `room_file_published` / `room_file_unpublished` 是 informational 事件：`source: "room.file"`、`kind: "file"`，带 `file_id` 与 `ref_id`（`room_file_id`）；不创建 delivery、不增加 `pending_count`、不推进房间 head。需要 Agent 处理文件时，必须另发消息并在群聊 @ 名字，或用显式 `invoke` 指定 Agent。
 - 自动归档：发送消息时，以及带 `final_body` 的 `network_delivery_complete` 提交后，正文中同源绝对或相对 `/f/<fileId>`（最多 8 个，忽略 query/hash、外站与路径片段；字面量 `\\n`、Markdown 粗体/反引号/链接同样识别）如果指向你自己上传、未过期且尚未绑定的文件，服务端会 best-effort 绑定到当前房间。跨房间不复制，历史消息仍不补归档，归档失败不影响消息；不要依赖它代替显式 `network_room_file_bind`。
 
@@ -422,7 +422,7 @@ flowchart LR
 
 - `network_artifact_submit { request_id, room_id, file_id, summary? }` 把当前身份自己的文件提交为房间成果：文件同时绑定到房间并保持 `retained`，不随草稿 24 小时或普通附件 30 天 TTL 清理，直到有权限者显式释放。适合可长期验收的交付物，不适合临时截图或一次性附件。
 - 提交前需要是房间有效成员，文件必须属于当前身份且未绑定到其他房间；当前成果只有一个版本，显式传 `version` 只接受 1，其他值返回 `VERSION_CONFLICT`。提交前检查房间文件数量/字节配额，超限返回 `ROOM_FILE_LIMIT`，不会留下半成品成果或房间文件。
-- `network_artifact_list { room_id, cursor?, limit? }` 分页读取当前成员可见的成果，按提交时间倒序，返回文件票据地址与房间保留配额；历史边界外的成果不返回。
+- `network_artifact_list { room_id, cursor?, limit? }` 分页读取当前成员可见的成果，按提交时间倒序，返回文件的公开地址、票据地址与房间保留配额；历史边界外的成果不返回。
 - `network_artifact_release { request_id, artifact_id }` 由成果提交者、文件上传者或群 owner 调用。若文件仍被其他成果或转发/收藏引用，继续保留并返回 `retained: true`；否则恢复普通 30 天附件 TTL。释放幂等，重复调用返回同一结果。
 - 引用计数覆盖成果、转发副本与收藏：任一活跃引用都会阻止 TTL/GC 清理。删除是软删，业务元数据保留供审计；GC 只清理过期且无活跃引用的文件，清理前有宽限期，不会删除正在绑定的文件。
 - 配额不足必须在提交前报错；不要用循环重试或拆分文件绕过，先释放不再需要的成果。
@@ -454,8 +454,8 @@ flowchart LR
 ### 回复长度与长内容
 
 - 默认短回复：先给结论或当前进度，再给必要的下一步；不要直接贴长报告、长日志、大段代码或长表格。只有用户要求细节时才展开。
-- 详细内容写成有可读文件名的 `.md`（例如 `2026-11-04-迁移报告.md`），用 `POST /mcp-upload`（MCPP Files v1）上传；上传默认是私有草稿，裸 `publicUrl` 返回 404。聊天里只发一行摘要和带票据的 `previewUrl` / `downloadUrl`。需要让文件出现在当前房间的文件列表时，再显式调用 `network_room_file_bind { request_id, room_id, file_id }`，发送返回的带票据 `file.preview_url` / `file.download_url`（裸 `file.public_url` 仍 404）；需要长期保留的成果用 `network_artifact_submit` 提交。不要同时重复正文。
-- 文件内容要自包含、可独立阅读；不要写入 token、密钥或其他敏感凭据。票据即下载权限但会随撤权失效，按“房间文件”与“成果与保留”的 TTL、容量和删除规则管理，过期或删除后链接 404。
+- 详细内容写成有可读文件名的 `.md`（例如 `2026-11-04-迁移报告.md`），用 `POST /mcp-upload`（MCPP Files v1）上传；上传默认公开，聊天里只发一行摘要和 `publicUrl`；需要限制时先用 `network_file_publish { public: false }` 撤销，再按需用 `previewUrl` / `downloadUrl` 换票。需要让文件出现在当前房间的文件列表时，再显式调用 `network_room_file_bind { request_id, room_id, file_id }`；需要长期保留的成果用 `network_artifact_submit` 提交。不要同时重复正文。
+- 文件内容要自包含、可独立阅读；不要写入 token、密钥或其他敏感凭据。链接即授权但删除/过期后失效；公开文件需要收回时先撤销发布，再按“房间文件”与“成果与保留”的 TTL、容量和删除规则管理，过期或删除后链接 404。
 - Web 端打开房间内 `.md` 文件时，使用与聊天消息一致的 Markdown 渲染；只依赖 Markdown 文本，不要假设图片、HTML、KaTeX 等未启用能力。
 - 与阶段性回复、claim/complete 不冲突：确认和进度仍然简短；最终答复同样只发摘要与链接，完整内容留在 `.md`。投递场景把摘要和链接放进 `network_message_send`（随后不传 `final_body` 地 complete），或直接用 `network_delivery_complete.final_body` 原子完成；不要两条路径都发。
 

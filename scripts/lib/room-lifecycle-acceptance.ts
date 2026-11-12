@@ -241,6 +241,12 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
       room_id: room1,
       file_id: uploaded.fileId,
     });
+    // 显式撤销公开，验证移除成员后私有文件票据立即失效。
+    await callTool(u1Conn.client, 'network_file_publish', {
+      request_id: newRequestId('g06_unpublish'),
+      file_id: uploaded.fileId,
+      public: false,
+    });
     const b1Files = await callTool<FileListView>(b1Conn.client, 'network_room_file_list', {
       room_id: room1,
     });
@@ -378,6 +384,11 @@ export async function runRoomLifecycleAcceptance(): Promise<void> {
       request_id: newRequestId('g06_t03_bind'),
       room_id: room3,
       file_id: archiveFile.fileId,
+    });
+    await callTool(u1Conn.client, 'network_file_publish', {
+      request_id: newRequestId('g06_t03_unpublish'),
+      file_id: archiveFile.fileId,
+      public: false,
     });
     const b2FilesBefore = await callTool<FileListView>(b2Conn.client, 'network_room_file_list', {
       room_id: room3,

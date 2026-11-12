@@ -15216,6 +15216,12 @@ async function main(): Promise<void> {
       const dedupeTwo = cardFile('第二文件.txt');
       const relativeFile = cardFile('相对路径.txt');
       const ticketRefresh = cardFile('票据重签.txt');
+      // 票据重签用例需要私有文件：默认公开会先命中裸地址，无法触发换票。
+      await rawTool(data.humanToken, 'network_file_publish', {
+        request_id: requestId('unpublish'),
+        file_id: ticketRefresh.fileId,
+        public: false,
+      });
       const xssFile = cardFile(xssFileName);
       const longFile = cardFile(longFileName);
 
@@ -15549,9 +15555,8 @@ async function main(): Promise<void> {
       const zipDownloadUrl = new URL(zipDownloadHref);
       checkEqual('下载链接路径', zipDownloadUrl.pathname, `/f/${zip.fileId}`);
       check(
-        '下载链接带票据并强制 attachment',
-        zipDownloadUrl.searchParams.get('download') === '1' &&
-          (zipDownloadUrl.searchParams.get('t')?.length ?? 0) > 0,
+        '下载链接强制 attachment',
+        zipDownloadUrl.searchParams.get('download') === '1',
         zipDownloadUrl.searchParams.get('download'),
       );
       checkEqual('下载链接 rel', await zipDownload.getAttribute('rel'), 'noopener noreferrer');
@@ -16070,9 +16075,9 @@ async function main(): Promise<void> {
       );
       checkEqual('外站 URL 不发起请求', externalRequests, 0);
       checkEqual(
-        '同 fileId 共两次 HEAD（裸 URL 探测 + 票据重试）',
+        '同 fileId 默认公开只发起一次裸 URL HEAD',
         headCount(headObserver, dedupeOne.fileId),
-        2,
+        1,
       );
 
       const maxMessage = page.locator('#messages .msg').filter({ hasText: maxMarker });
@@ -16318,7 +16323,7 @@ async function main(): Promise<void> {
         await dedupeMessage.locator('.msg-file-name').filter({ hasText: '去重文件.txt' }).count(),
         1,
       );
-      checkEqual('成功缓存 5 分钟内不重复 HEAD', headCount(headObserver, dedupeOne.fileId), 2);
+      checkEqual('成功缓存 5 分钟内不重复 HEAD', headCount(headObserver, dedupeOne.fileId), 1);
       await failureMessage.locator('.msg-file.unavailable').waitFor();
       checkEqual('失败缓存 60 秒内不重复 HEAD', headCount(headObserver, failureId), 1);
 
@@ -18109,16 +18114,16 @@ async function main(): Promise<void> {
       const drawFileUrlMatch = /(https?:\/\/[^\s]+\/f\/f_[A-Za-z0-9_-]{22})/u.exec(
         drawSentArgs?.body ?? '',
       );
-      check('画板消息包含公开文件 URL（绑定后需票据）', Boolean(drawFileUrlMatch));
+      check('画板消息包含公开文件 URL', Boolean(drawFileUrlMatch));
       const drawDownloadHref = await drawMessage
         .locator('a.msg-file-download')
         .first()
         .getAttribute('href');
       const drawFetchUrl = drawDownloadHref ? new URL(drawDownloadHref, server.base).href : '';
-      check('画板文件卡片提供带票据下载地址', drawFetchUrl.length > 0);
+      check('画板文件卡片提供可下载地址', drawFetchUrl.length > 0);
       if (drawFileUrlMatch && drawFetchUrl) {
         const drawPngResponse = await fetch(drawFetchUrl);
-        checkEqual('画板导出的绑定文件凭票据返回 200', drawPngResponse.status, 200);
+        checkEqual('画板导出的绑定文件返回 200', drawPngResponse.status, 200);
         const drawPngBytes = Buffer.from(await drawPngResponse.arrayBuffer());
         check(
           '画板导出内容是 PNG',

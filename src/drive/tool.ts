@@ -52,7 +52,7 @@ export function registerDriveTool(server: McpServer, binding: DriveToolBinding):
 
   const config = {
     description:
-      '读取当前身份已上传文件的元数据、配额与带短时票据的访问地址（previewUrl / downloadUrl）。fileId 来自 POST /mcp-upload 的响应。上传默认是上传者私有草稿（24 小时）；裸 publicUrl 不携带票据时返回 404。network_room_file_bind 把文件绑定到房间后，读取按成员资格、成员代次与历史边界授权，必须使用返回的带票据地址；network_file_publish 是独立、需有权限的公开发布动作，默认关闭。旧版本未登记文件在首次授权读取时登记为私有，旧裸 URL 同样失效。本地路径或 file:// 对群友不可见；未授权外链不能保证群友可访问。',
+      '读取当前身份已上传文件的元数据、配额与访问地址（previewUrl / downloadUrl）。fileId 来自 POST /mcp-upload 的响应。上传默认公开：裸 publicUrl 可直接读取（链接即授权，fileId 不可猜但不能替代权限）；需要限制时由上传者调用 network_file_publish { public: false } 撤销，撤销后裸链接 404，必须使用带短时票据的 previewUrl / downloadUrl。network_room_file_bind 把文件绑定到房间后，公开文件仍按链接可读；私有文件按成员资格、成员代次与历史边界授权。旧版本未登记文件在首次授权读取时登记为公开，已删除文件不会恢复。本地路径或 file:// 对群友不可见；未授权外链不能保证群友可访问。',
     inputSchema: z.object({
       fileId: z
         .string()

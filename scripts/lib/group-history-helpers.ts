@@ -264,17 +264,27 @@ export async function bindFile(
   roomId: string,
   name: string,
   body: string,
+  options: { private?: boolean } = {},
 ): Promise<FileResultView> {
   const uploaded = await uploadTestFile(owner.connection.token, {
     name,
     mimeType: 'text/plain',
     body,
   });
-  return callTool<FileResultView>(owner.connection.client, 'network_room_file_bind', {
+  const bound = await callTool<FileResultView>(owner.connection.client, 'network_room_file_bind', {
     request_id: newRequestId('g07_bind'),
     room_id: roomId,
     file_id: uploaded.fileId,
   });
+  // 历史边界/撤权用例需要私有文件；默认公开会按链接放行。
+  if (options.private) {
+    await callTool(owner.connection.client, 'network_file_publish', {
+      request_id: newRequestId('g07_unpublish'),
+      file_id: uploaded.fileId,
+      public: false,
+    });
+  }
+  return bound;
 }
 
 export async function listFiles(

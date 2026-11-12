@@ -442,10 +442,12 @@ async function main(): Promise<void> {
       body: textBody,
     });
 
+    checkEqual('上传默认可见性为 public', uploaded.visibility, 'public');
     const baseline = await fetch(uploaded.publicUrl);
-    checkEqual('私有草稿裸 public_url 无票据时 404', baseline.status, 404);
+    checkEqual('公开草稿裸 public_url 可直接读取', baseline.status, 200);
+    checkEqual('公开草稿裸 public_url 内容一致', await baseline.text(), textBody);
     const draftPreview = await fetch(uploaded.previewUrl);
-    checkEqual('私有草稿带票据可下载', draftPreview.status, 200);
+    checkEqual('公开草稿带票据地址仍可下载', draftPreview.status, 200);
 
     const requestId = newRequestId('bind');
     const bound = await bind(aConn, roomId, uploaded.fileId, requestId);
@@ -480,7 +482,7 @@ async function main(): Promise<void> {
       boundDownload.searchParams.get('t'),
       boundPreview.searchParams.get('t'),
     );
-    checkEqual('绑定的裸 public_url 无票据时 404', (await fetch(bound.file.public_url)).status, 404);
+    checkEqual('绑定的裸 public_url 默认公开可读', (await fetch(bound.file.public_url)).status, 200);
     checkEqual('text/plain 预览分类为 text', bound.file.preview_kind, 'text');
     checkEqual('上传者可以删除', bound.file.can_delete, true);
     check(
@@ -589,6 +591,11 @@ async function main(): Promise<void> {
       body: 'direct room file',
     });
     await bind(aConn, directRoom.room.room_id, directFile.fileId);
+    checkEqual(
+      '单聊绑定文件默认公开可读',
+      (await fetch(`${baseUrl()}/f/${directFile.fileId}`)).status,
+      200,
+    );
     await expectToolError(
       '单聊中非上传者不能删除文件',
       deleteFile(cConn, directRoom.room.room_id, directFile.fileId),
@@ -818,6 +825,17 @@ async function main(): Promise<void> {
       body: 'still downloadable',
     });
     const survivingBound = await bind(aConn, membershipRoom, surviving.fileId);
+    // 显式撤销公开后才进入票据/成员代次授权路径。
+    await callTool(aConn.client, 'network_file_publish', {
+      request_id: newRequestId('unpublish'),
+      file_id: surviving.fileId,
+      public: false,
+    });
+    checkEqual(
+      '撤销公开后裸 public_url 返回 404',
+      (await fetch(survivingBound.file.public_url)).status,
+      404,
+    );
     const memberTicket = await callTool<{ file: { preview_url: string } }>(
       bConn.client,
       'network_room_file_get',

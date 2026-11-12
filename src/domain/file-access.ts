@@ -30,12 +30,14 @@ import { actorId, type Principal } from './principal';
 import { assertRoomWritable, roomDissolvedGuardStatement } from './room-access';
 
 /**
- * 私有文件的应用层授权模型。
+ * 文件可见性的应用层授权模型。
  *
- * - 每个 MCPP Files 上传在 `drive_files` 登记；上传即上传者私有草稿。
- * - 绑定房间后，读取必须同时满足成员资格、成员代次与历史边界；裸 `/f` 链接
- *   不构成群授权。
- * - 公开发布是独立字段，只有上传者或群 owner 可切换；默认关闭。
+ * - 每个 MCPP Files 上传在 `drive_files` 登记；新上传与绑定默认 `public`，
+ *   裸 `/f/<fileId>` 可直接读取（链接即授权，fileId 不可猜但不能替代权限）。
+ * - 上传者或群 owner 可用 `network_file_publish { public: false }` 单独撤销；
+ *   私有文件读取才要求上传者文件票据或房间成员票据。
+ * - 私有房间文件必须同时满足成员资格、成员代次与历史边界；公开文件按链接
+ *   放行，成员移出或策略收紧不会撤回已经公开的链接，需要先撤销发布。
  * - 有效成果通过 `file_references` 把文件标记为 retained，禁止 TTL 清理。
  */
 
@@ -88,9 +90,9 @@ export function roomFileUsable(row: RoomFileRow, at = Date.now()): boolean {
  * 登记一次上传或旧文件。
  *
  * - 新上传：`draftTtlMs` 为 24 小时，`expiresAt` 取草稿期限与底层记录有效期
- *   的较小值。
+ *   的较小值；默认 `visibility = 'public'`，裸链接可读。
  * - 旧文件首次通过授权客户端访问：`expiresAt` 保留底层记录原有效期，不因
- *   升级突然延长或缩短；登记后旧裸 URL 立即需要票据。
+ *   升级突然延长或缩短；登记同样默认公开，已删除状态保持不变。
  */
 export async function registerDriveFile(
   db: D1Database,
@@ -113,7 +115,7 @@ export async function registerDriveFile(
              (file_id, owner_scope, uploader_id, name, mime_type, size, sha256,
               state, visibility, room_id, created_at, expires_at, retained,
               deleted_at, deleted_by, purged_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', 'private', NULL, ?, ?, 0, NULL, NULL, NULL)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', 'public', NULL, ?, ?, 0, NULL, NULL, NULL)`,
         )
         .bind(
           record.fileId,
@@ -282,7 +284,8 @@ export interface FileAccessDecision {
  * `/f` 的唯一授权入口。
  *
  * 返回 null 时统一 404，不区分“文件不存在/无票据/权限已撤销”。
- * 已绑定房间的文件只接受 room 票据；file 票据不能绕过房间撤权。
+ * 公开文件（默认）按链接放行；私有房间文件只接受 room 票据，file 票据
+ * 不能绕过房间撤权。
  */
 export async function authorizeFileDownload(
   db: D1Database,

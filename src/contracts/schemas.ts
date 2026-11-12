@@ -750,7 +750,7 @@ export const roomFileDeleteSchema = z.object({
 });
 
 /**
- * 公开发布是独立、需有权限的动作，默认关闭。
+ * 文件可见性切换；新上传与绑定默认公开，`public: false` 单独撤销。
  *
  * - 已绑定文件：上传者或群 owner 可切换；单聊只有上传者。
  * - 未绑定草稿：只有上传身份可以切换，`room_id` 省略。

@@ -97,16 +97,16 @@ export async function runRoomFileAcceptance(): Promise<void> {
       mimeType: 'text/plain',
       body: 'room file acceptance',
     });
-    checkEqual('上传默认为私有草稿', uploaded.state, 'draft');
-    checkEqual('上传默认不公开', uploaded.visibility, 'private');
+    checkEqual('上传默认为草稿', uploaded.state, 'draft');
+    checkEqual('上传默认可见性为 public', uploaded.visibility, 'public');
     checkEqual(
-      '私有草稿裸 publicUrl 不携带票据返回 404',
+      '公开草稿裸 publicUrl 可直接读取',
       (await fetch(uploaded.publicUrl)).status,
-      404,
+      200,
     );
     const draftPreview = await fetch(uploaded.previewUrl);
-    checkEqual('私有草稿凭预览票据可读', draftPreview.status, 200);
-    checkEqual('私有草稿预览内容一致', await draftPreview.text(), 'room file acceptance');
+    checkEqual('公开草稿预览地址仍可读', draftPreview.status, 200);
+    checkEqual('公开草稿预览内容一致', await draftPreview.text(), 'room file acceptance');
     const bound = await callTool<{
       file: { room_file_id: string; public_url: string; preview_url: string };
     }>(ownerConn.client, 'network_room_file_bind', {
@@ -119,6 +119,26 @@ export async function runRoomFileAcceptance(): Promise<void> {
       '房间文件预览地址携带票据',
       new URL(bound.file.preview_url).searchParams.get('t') !== null,
       bound.file.preview_url,
+    );
+    checkEqual(
+      '绑定后裸 public_url 默认仍可读',
+      (await fetch(uploaded.publicUrl)).status,
+      200,
+    );
+    await callTool(ownerConn.client, 'network_file_publish', {
+      request_id: newRequestId('unpublish'),
+      file_id: uploaded.fileId,
+      public: false,
+    });
+    checkEqual(
+      '显式撤销公开后裸 public_url 返回 404',
+      (await fetch(uploaded.publicUrl)).status,
+      404,
+    );
+    checkEqual(
+      '显式撤销公开后带票据地址仍可读',
+      (await fetch(bound.file.preview_url)).status,
+      200,
     );
 
     const items = await waitForFileItems(collector.events, 1, '统一流收到 room.file 新增');
@@ -138,7 +158,7 @@ export async function runRoomFileAcceptance(): Promise<void> {
     checkEqual('房间文件票据下载无需 Bearer', download.status, 200);
     checkEqual('房间文件公开内容一致', await download.text(), 'room file acceptance');
     checkEqual(
-      '绑定后的裸 public_url 不能绕过票据',
+      '私有房间文件裸 public_url 不能绕过票据',
       (await fetch(uploaded.publicUrl)).status,
       404,
     );
