@@ -1,5 +1,7 @@
 import type { Database } from 'bun:sqlite';
 
+import { TTLCache } from '@isaacs/ttlcache';
+
 import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
 import { actorTopic } from '../storage/events';
@@ -55,11 +57,18 @@ export interface HubPresenceHooks {
   onAgentLastConnectionClosed?: (actorId: string) => void;
 }
 
+/** 撤销标记只需覆盖“数据库已撤销、旧订阅仍在建立”的竞态窗口。 */
+const REVOKED_CREDENTIAL_TTL_MS = 10 * 60_000;
+const REVOKED_CREDENTIAL_MAX = 100_000;
+
 export class NotificationHub {
   readonly #actorStreams = new Map<string, ActorStreamState>();
   readonly #hooks: HubPresenceHooks;
-  /** 已撤销凭据；阻止撤销与建立连接并发时旧凭据重新注册流。 */
-  readonly #revokedCredentials = new Set<string>();
+  /** 已撤销凭据；DB `authenticate` 是权威，这里只挡住并发窗口。 */
+  readonly #revokedCredentials = new TTLCache<string, true>({
+    ttl: REVOKED_CREDENTIAL_TTL_MS,
+    max: REVOKED_CREDENTIAL_MAX,
+  });
   #counter = 0;
 
   constructor(_db: Database, hooks: HubPresenceHooks = {}) {
@@ -229,8 +238,13 @@ export class NotificationHub {
    * 连接并发时，迟到的旧凭据订阅也会被拒绝。
    */
   revokeCredential(credentialId: string): number {
-    this.#revokedCredentials.add(credentialId);
+    this.#revokedCredentials.set(credentialId, true);
     return this.closeByCredential(credentialId);
+  }
+
+  /** 单测/诊断：撤销缓存大小，不会超过 `REVOKED_CREDENTIAL_MAX`。 */
+  revokedCredentialCount(): number {
+    return this.#revokedCredentials.size;
   }
 
   /**
