@@ -147,11 +147,12 @@ export class Q05Server {
     await server.stop();
   }
 
-  /** 用新进程读同一 DATA_DIR；预留端口避免与其它套件碰撞。 */
+  /** 用新进程读同一 DATA_DIR；优先复用原端口，让已签发的上传 URL 仍可用。 */
   async restart(): Promise<void> {
     await this.stop();
+    const previousPort = this.port;
     try {
-      await this.spawn();
+      await this.spawn(previousPort);
     } catch {
       await Bun.sleep(200);
       await this.spawn();

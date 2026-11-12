@@ -16,6 +16,8 @@ import { join, resolve } from 'node:path';
 
 const WORKTREE_ROOT = resolve(import.meta.dir, '../..');
 const LISTENING_PATTERN = /agent-network listening on http:\/\/[^:\s]+:(\d+)/u;
+/** 只保留最近的日志；避免长时间套件把进程输出无界累积在内存。 */
+const MAX_LOG_BYTES = 2 * 1024 * 1024;
 
 export interface TestServerOptions {
   /** 显式端口；省略或 0 表示由内核分配。 */
@@ -87,6 +89,8 @@ interface RunningProcess {
   readonly port: number;
   readonly logs: () => string;
   readonly tail: (limit?: number) => string;
+  /** stdout/stderr 读取结束；stop() 用它保证日志断言看到完整输出。 */
+  readonly drained: Promise<void>;
 }
 
 async function spawnOnce(options: {
@@ -133,17 +137,19 @@ async function spawnOnce(options: {
     }
   };
 
-  void pump(proc.stdout, (text) => {
-    stdout += text;
-    if (port !== null) return;
-    const match = LISTENING_PATTERN.exec(stdout);
-    if (!match) return;
-    const parsed = Number(match[1]);
-    if (Number.isSafeInteger(parsed) && parsed > 0) port = parsed;
-  });
-  void pump(proc.stderr, (text) => {
-    stderr += text;
-  });
+  const pumps = Promise.all([
+    pump(proc.stdout, (text) => {
+      stdout = (stdout + text).slice(-MAX_LOG_BYTES);
+      if (port !== null) return;
+      const match = LISTENING_PATTERN.exec(stdout);
+      if (!match) return;
+      const parsed = Number(match[1]);
+      if (Number.isSafeInteger(parsed) && parsed > 0) port = parsed;
+    }),
+    pump(proc.stderr, (text) => {
+      stderr = (stderr + text).slice(-MAX_LOG_BYTES);
+    }),
+  ]).then(() => undefined);
 
   const logs = (): string => `${stdout}\n${stderr}`;
   const tail = (limit = 12): string => logs().split('\n').slice(-limit).join('\n');
@@ -153,7 +159,7 @@ async function spawnOnce(options: {
     if (candidate !== null) {
       try {
         const response = await fetch(`http://${options.hostname}:${candidate}${options.readyPath}`);
-        if (response.ok) return { proc, port: candidate, logs, tail };
+        if (response.ok) return { proc, port: candidate, logs, tail, drained: pumps };
       } catch {
         // 尚未监听。
       }
@@ -216,6 +222,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
         running.proc.kill('SIGKILL');
         await running.proc.exited.catch(() => undefined);
       }
+      await Promise.race([running.drained, Bun.sleep(500)]);
     },
     dispose: async () => {
       await server.stop();
