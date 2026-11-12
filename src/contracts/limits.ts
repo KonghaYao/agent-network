@@ -495,6 +495,14 @@ export const LIMITS = {
   memoryCatchupTtlMs: 24 * 60 * 60_000,
   /** 已完成 Memory 作业的审计留存（毫秒）；来源/tombstone 不受此期限影响。 */
   memoryJobRetentionMs: 30 * 24 * 60 * 60_000,
+  /** Hindsight 单次 HTTP 请求默认超时；调用方 deadline_at 可缩短。 */
+  memoryAdapterTimeoutMs: 10_000,
+  /** 只对幂等请求（含 operation_id 的 retain / 读 / delete）重试的次数。 */
+  memoryAdapterMaxRetries: 2,
+  /** 指数退避基数（毫秒）；仍受 deadline_at 约束。 */
+  memoryAdapterRetryBaseMs: 250,
+  /** 适配器列举 documents/memories 的页大小上限。 */
+  memoryAdapterListPageSize: 100,
 } as const;
 
 export function clampPage(value: number | undefined, fallback: number, max: number): number {

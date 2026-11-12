@@ -6,6 +6,11 @@ import { createApp, runScheduled } from '../app';
 import { LIMITS } from '../contracts/limits';
 import { createDrive } from '../drive/service';
 import { MemoryRuntime } from '../memory/runtime';
+import {
+  HindsightMemoryAdapter,
+  loadHindsightConfigFromEnv,
+} from '../memory/adapters/hindsight';
+import type { MemoryAdapter } from '../memory/adapters/types';
 import { StubMemoryAdapter } from '../memory/adapters/stub';
 import type { Env, EventsConfig } from '../env';
 import { loadEncryptionKey } from '../events/security';
@@ -159,12 +164,29 @@ const env: Env = {
 };
 envRef = env;
 
-// MF03：Memory 运行时默认关闭；MEMORY_ENABLED=1 才启动作业领取与恢复。
-// 适配器尚未接真实 Hindsight（MF04），stub 只记录可恢复意图，绝不伪报已记住。
+// MF03/MF04：Memory 运行时默认关闭；MEMORY_ENABLED=1 才启动作业领取与恢复。
+// MEMORY_ADAPTER=hindsight 时配置缺失会构造 fail-closed 适配器：不请求后端、
+// 不伪报已记住；凭据与 bank 路由只在服务端，开始日志不输出。
 let memoryRuntime: MemoryRuntime | undefined;
 if (process.env.MEMORY_ENABLED === '1') {
+  const adapterKind = (process.env.MEMORY_ADAPTER ?? 'stub').trim().toLowerCase();
+  let adapter: MemoryAdapter;
+  if (adapterKind === 'stub') {
+    adapter = new StubMemoryAdapter();
+  } else if (adapterKind === 'hindsight') {
+    const loaded = loadHindsightConfigFromEnv(process.env);
+    if (loaded.ok) {
+      adapter = new HindsightMemoryAdapter(loaded.config);
+      console.log('memory adapter enabled: hindsight');
+    } else {
+      adapter = new HindsightMemoryAdapter(null);
+      console.warn(`memory adapter disabled: ${loaded.error}`);
+    }
+  } else {
+    throw new Error('MEMORY_ADAPTER must be stub or hindsight');
+  }
   const candidate = new MemoryRuntime(d1, {
-    adapter: new StubMemoryAdapter(),
+    adapter,
     instanceId: process.env.MEMORY_INSTANCE_ID?.trim() || null,
     capture: process.env.MEMORY_CAPTURE !== '0',
   });

@@ -593,7 +593,7 @@ AGENTNET_URL=http://127.0.0.1:18892 EVENTS_ACCEPTANCE=1 bun run test:acceptance
 4. 用事件里的 `delivery_id` 调 `network_delivery_claim` / `network_delivery_complete`，确认 webhook 触发的待办可以闭环。
 5. 用 500/410/413 receiver 验证重试与停止行为；重启服务后确认订阅仍在并在 `refreshBefore` 前刷新。
 
-### Memory 运行时（MF03/MF05/MF11）
+### Memory 运行时（MF03/MF04/MF05/MF11）
 
 Memory 账本随迁移 `0045_memory_ledger.sql` 建立；MF11 的补读快照、请求幂等与证据追加由 `0046_memory_experience_catchup.sql` 补齐。默认副本可先不启动作业领取，聊天与投递不受影响。
 
@@ -605,17 +605,33 @@ MF05 在现有业务事务内追加纯 SQL 来源/预热意图（`src/memory/int
 - **撤回/删除**：消息撤回同时使 `message:*` 与 `task_offer:*` 不可读并写永久 tombstone；文件删除写 `file_deleted` tombstone。`MEMORY_CAPTURE=0` 时停止新增来源/预热，但撤回与删除屏障照常执行。
 - **开关**：只有 `MEMORY_ENABLED=1` 且运行时已启动时才追加上述语句；未启用时不新增查询或语句，聊天事务保持原样。
 
+MF04 在 `src/memory/adapters/hindsight.ts` 提供 HTTP 适配器，仍只实现六操作 `capabilities/ensureSpace/retain/search/remove/jobStatus`：
+
+- **配置**：`MEMORY_ADAPTER=hindsight` 时从服务端 `HINDSIGHT_URL` / `HINDSIGHT_API_KEY` 读取；bank 由 space + ownership_epoch + backend_binding_epoch 派生为不可猜测的哈希，凭据与 bank 路由不进入 MCP/UI、结果、capabilities、错误文本或日志。配置缺失/非法时 fail closed，不发请求也不伪报成功。
+- **retain**：只发送已接纳表示中的准确文本，校验 UTF-8 字节与 SHA-256；不会凭 `source_id` 回抓未消费原文。`operation_key` 派生稳定 Hindsight `operation_id`，同 key 不同正文由后端 409 映射为 `fenced`；异步返回的 JobRef 永远绑定原 `backend_binding_epoch`。
+- **search**：有 query 时走 recall，无 query 时走 memories/list 分页并本地复核硬过滤；时间窗口在 Hindsight 仅排序，因此声明 `unsupported`，不静默降级。fact 正文默认映射为不可逐字证明的 summary，只有返回 hash 与保留 hash 一致时才映射为 raw。
+- **remove**：按 source revision / representation / curated 标签枚举文档，DELETE 后重新列出确认消失；未确认全部副本清除时保持 `purge_pending`/`unknown`，不以 2xx 当清除证据。partition 级目标在缺少可证明路由时返回 `unsupported_granularity`。
+- **observation**：`observation_scopes` 按 origin + source revision 或单个表示锚定，限制跨域汇总。真实部署还需完成网关键权验收；默认仍使用 stub，stub 明确返回 unsupported。
+
 MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.ts`、`catchup.ts` 与 `host-protocol.ts`：
 
 - **分群经历**：按 space + ownership_epoch + agent + origin room + member_generation 独立；只有合格 ExposureReceipt 产生 experienced 条目。`raw_full/raw_fragment` 才推进原文覆盖，`preview/summary/memory_context` 不推进；`authored`、`curated` 各自独立，不伪造 input_exposure。
 - **最终清单**：`SubmittedInputManifest` 由服务端按 selection 与实际 payload 重建，items 只读；同一 invocation 只能绑定一个 manifest，换清单/hash 返回 `IDEMPOTENCY_CONFLICT`。prepared selection 不产生经历。
 - **补读**：`planCatchup` 固定本轮 H、成员代次与策略版本；`prepareCatchupSelections` 只生成 `not_consumed` selection。未读集合不会写 events、pending_count 或经历，计划过期/退群重加后不可继续消费。
 - **证据协议**：`host-protocol.ts` 冻结 HostBridge 消息：宿主提交 `MemoryHostFinalManifestReport`（invocation、target、实际 payload、逐项 selection/representation/hash）与 `MemoryHostExposureReport`（manifest/payload hash、request_id，不含 evidence/trusted）；证据等级由服务端按 HostBinding 等级派生，客户端自报 `trusted/verified/evidence` 返回 `INVALID_ARGUMENT`。受控网关另报 `MemoryGatewayObservationReport` 追加独立 proof，不新建 receipt、不重复经历。MF07 尚未实现，仓库内只有服务端协议与受控 stub 路径。
-- **限制（未完成）**：未接 Hindsight 真实 API，未注册 MCP 工具与 UI（MF06/MF08），未实现宿主 SDK/网关（MF07）；跨房披露必须由服务端传入已核实 grant，客户端不能自报。当前任务模型是消息式 Task（迁移 0042 已删除旧任务实体），因此只登记 `task_offer` 角色来源，不实现旧 `task_submission/task_review/task_handoff` 路径。未绑定到房间的 Drive 草稿不是共享来源，绑定到房间时才登记 `file:<file_id>`；来源正文只在策略允许时保存，业务权威仍在原消息/文件系统。
+- **限制（未完成）**：Hindsight 真实部署鉴权与写入尚未验收；未注册 MCP 工具与 UI（MF06/MF08），未实现宿主 SDK/网关（MF07）；跨房披露必须由服务端传入已核实 grant，客户端不能自报。当前任务模型是消息式 Task（迁移 0042 已删除旧任务实体），因此只登记 `task_offer` 角色来源，不实现旧 `task_submission/task_review/task_handoff` 路径。未绑定到房间的 Drive 草稿不是共享来源，绑定到房间时才登记 `file:<file_id>`；来源正文只在策略允许时保存，业务权威仍在原消息/文件系统。
 
 | 变量 | 说明 |
 | --- | --- |
 | `MEMORY_ENABLED=1` | 启动作业领取、启动恢复与租约扫描；不设置时不接管任何 Memory 作业。 |
+| `MEMORY_ADAPTER` | `stub`（默认）或 `hindsight`；未知值使 Memory 启动失败并保留持久账本，不静默降级。 |
+| `HINDSIGHT_URL` | Hindsight API 根地址；仅在 `MEMORY_ADAPTER=hindsight` 时读取。别名 `HINDSIGHT_BASE_URL`。 |
+| `HINDSIGHT_API_KEY` | 服务端 bearer 凭据；只用于请求头，不打印、不写入结果或日志。缺失时适配器 fail closed。 |
+| `HINDSIGHT_BANK_PREFIX` | 可选；bank 路由前缀，默认 `agentnet`。只允许小写字母/数字/连字符。 |
+| `HINDSIGHT_TIMEOUT_MS` | 可选；单次请求超时，默认取 `LIMITS.memoryAdapterTimeoutMs`。 |
+| `HINDSIGHT_MAX_RETRIES` | 可选；幂等请求重试次数，默认取 `LIMITS.memoryAdapterMaxRetries`。 |
+| `HINDSIGHT_RETRY_BASE_MS` | 可选；指数退避基数，默认取 `LIMITS.memoryAdapterRetryBaseMs`。 |
+| `HINDSIGHT_LIST_PAGE_SIZE` | 可选；documents/memories 列表页大小，默认取 `LIMITS.memoryAdapterListPageSize`，上限 100。 |
 | `MEMORY_INSTANCE_ID` | 可选；固定部署 namespace。首次初始化后不得随意更换，配置与既有 `memory_instances` 不一致会 fail closed。 |
 | `MEMORY_CAPTURE=0` | 可选；停止新增 retain/来源写入，但撤回/遗忘屏障仍保留并继续执行。 |
 
@@ -626,9 +642,10 @@ bun run test:memory-access
 bun run test:memory-ledger
 bun run test:memory-experience
 bun run test:memory-intake
+bun run test:memory-hindsight
 ```
 
-MF03 只提供持久意图与租约；真实 Hindsight 适配器在 MF04，未启用前 stub 明确返回 unsupported，不伪报“已记住”。
+MF03 提供持久意图与租约；MF04 提供可配置的 Hindsight HTTP 适配器与受控假服务验收。默认仍使用 stub，stub 明确返回 unsupported，不伪报“已记住”。
 
 常见配置错误：
 

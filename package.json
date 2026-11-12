@@ -33,6 +33,7 @@
     "test:memory-intake": "bun scripts/verify-memory-intake.ts",
     "test:memory-ledger": "bun scripts/verify-memory-ledger.ts && bun scripts/verify-memory-recovery.ts && bun scripts/verify-memory-intake.ts",
     "test:memory-experience": "bun scripts/verify-memory-experience.ts && bun scripts/verify-memory-coverage.ts && bun scripts/verify-memory-catchup.ts",
+    "test:memory-hindsight": "bun scripts/verify-memory-hindsight.ts",
     "test:memory-recovery": "bun scripts/verify-memory-recovery.ts"
   },
   "dependencies": {
