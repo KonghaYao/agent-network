@@ -18,3 +18,4 @@ export * from './contracts-core';
 export * from './experience-contracts';
 export * from './recall-contracts';
 export * from './schema-contracts';
+export * from './host-protocol';

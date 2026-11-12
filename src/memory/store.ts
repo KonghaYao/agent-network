@@ -18,6 +18,7 @@ import {
   isValidByteRange,
   mergeByteRanges,
   type MemoryContextDeliveryReceipt,
+  type MemoryCrossRoomGrant,
   type MemoryExactRepresentation,
   type MemoryExposureReceipt,
   type MemoryOriginKind,
@@ -106,6 +107,11 @@ export interface MemoryStoreOptions {
 
 export interface MemoryAdmissionExperience {
   experienceId: string;
+  /**
+   * MF11 经验去重键；省略时沿用 raw 的 representation/range/hash 规则。
+   * summary/authored 使用自己的稳定身份，避免新 representation ID 重复制造事实。
+   */
+  dedupeKey?: string;
   key: {
     space_id: string;
     ownership_epoch: number;
@@ -141,6 +147,8 @@ export interface MemoryAdmissionInput {
     evidence: string | null;
   }[];
   minimumEvidence: 'host_reported_submitted' | 'gateway_observed_submitted';
+  /** 服务端已核实的跨房披露授权；客户端不能自报。 */
+  crossRoomGrant?: MemoryCrossRoomGrant | null;
   now?: number;
 }
 
@@ -251,7 +259,7 @@ export async function ownershipTransferStatements(
 
 /** 共享来源登记；业务 batch 与测试共用。 */
 export function sourceMutationStatements(
-  db: D1Database,
+  db: D1Like,
   input: Omit<MemorySourceMutationInput, 'sourceId'> & { sourceId?: string },
 ): D1PreparedStatement[] {
   return memorySourceMutationStatements(db, {
@@ -478,6 +486,7 @@ export async function admitExposureReceipt(
           source,
           agentId: options.agentId,
           target_scope: receipt.target_scope,
+          grant: options.crossRoomGrant ?? null,
           at,
         });
         if (!sourceAccess.allowed) {
@@ -557,38 +566,50 @@ export async function admitExposureReceipt(
   const retainIds: string[] = [];
   const experienceWrites: MemoryExperienceWrite[] = [];
   const coverageWrites: D1PreparedStatement[] = [];
+  /** 请求中的临时 experienceId -> 实际持久 experienceId。 */
+  const admittedIdMap = new Map<string, string>();
   for (const item of admitted) {
     const experience = item.experience;
-    experienceIds.push(experience.experienceId);
-    const dedupeKey = [
-      'exp',
-      current.space_id,
-      String(current.ownership_epoch),
-      options.agentId,
-      experience.originRoomId ?? '',
-      String(experience.key.origin_member_generation),
-      experience.key.source_id ?? '',
-      String(experience.key.source_revision ?? ''),
-      experience.key.representation_kind,
-      experience.key.representation_id,
-      String(experience.key.range?.start ?? ''),
-      String(experience.key.range?.end ?? ''),
-      experience.key.text_sha256,
-    ].join('|');
-    experienceWrites.push({
-      experienceId: experience.experienceId,
-      dedupeKey,
-      key: experience.key,
-      originKind: experience.originKind,
-      producerKind: experience.producerKind,
-      representationId: experience.key.representation_id,
-      representationKind: experience.key.representation_kind,
-      receiptId: receipt.receipt_id,
-      evidence: item.evidence,
-      capture: experience.capture ?? 'pending',
-      originRoomId: experience.originRoomId,
-      now: at,
-    });
+    const dedupeKey =
+      experience.dedupeKey ??
+      [
+        'exp',
+        current.space_id,
+        String(current.ownership_epoch),
+        options.agentId,
+        experience.originRoomId ?? '',
+        String(experience.key.origin_member_generation),
+        experience.key.source_id ?? '',
+        String(experience.key.source_revision ?? ''),
+        experience.key.representation_kind,
+        experience.key.representation_id,
+        String(experience.key.range?.start ?? ''),
+        String(experience.key.range?.end ?? ''),
+        experience.key.text_sha256,
+      ].join('|');
+    const existing = await db
+      .prepare('SELECT experience_id FROM memory_experiences WHERE dedupe_key = ?')
+      .bind(dedupeKey)
+      .first<{ experience_id: string }>();
+    const storedExperienceId = existing?.experience_id ?? experience.experienceId;
+    admittedIdMap.set(experience.experienceId, storedExperienceId);
+    experienceIds.push(storedExperienceId);
+    if (!existing) {
+      experienceWrites.push({
+        experienceId: experience.experienceId,
+        dedupeKey,
+        key: experience.key,
+        originKind: experience.originKind,
+        producerKind: experience.producerKind,
+        representationId: experience.key.representation_id,
+        representationKind: experience.key.representation_kind,
+        receiptId: receipt.receipt_id,
+        evidence: item.evidence,
+        capture: experience.capture ?? 'pending',
+        originRoomId: experience.originRoomId,
+        now: at,
+      });
+    }
     if (
       item.source &&
       experience.originRoomId &&
@@ -601,7 +622,7 @@ export async function admitExposureReceipt(
           spaceId: current.space_id,
           ownershipEpoch: current.ownership_epoch,
           agentActorId: options.agentId,
-          experienceId: experience.experienceId,
+          experienceId: storedExperienceId,
           key: experience.key,
           originRoomId: experience.originRoomId,
           sourceId: experience.key.source_id,
@@ -624,7 +645,12 @@ export async function admitExposureReceipt(
 
   const admittedIds = new Set(experienceIds);
   for (const intent of options.retain ?? []) {
-    if (intent.experienceId && !admittedIds.has(intent.experienceId)) continue;
+    if (intent.experienceId && !admittedIdMap.has(intent.experienceId) && !admittedIds.has(intent.experienceId)) {
+      continue;
+    }
+    const storedExperienceId = intent.experienceId
+      ? admittedIdMap.get(intent.experienceId) ?? intent.experienceId
+      : null;
     const retainId = intent.retainId;
     const payloadHash = await sha256Hex(
       stableStringify({
@@ -646,7 +672,7 @@ export async function admitExposureReceipt(
         ownershipEpoch: current.ownership_epoch,
         agentActorId: options.agentId,
         originKind: intent.originKind,
-        experienceId: intent.experienceId,
+        experienceId: storedExperienceId,
         representationId: intent.representationId,
         sourceId: intent.sourceId,
         sourceRevision: intent.sourceRevision,

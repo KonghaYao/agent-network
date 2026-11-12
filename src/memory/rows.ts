@@ -1,7 +1,8 @@
 /**
  * Memory 持久化行类型（MF02/MF03）。
  *
- * 只描述 `0045_memory_ledger.sql` 的物理列，不包含业务判断。access/store/jobs
+ * 只描述 `0045_memory_ledger.sql` + `0046_memory_experience_catchup.sql`
+ * 的物理列，不包含业务判断。access/store/jobs
  * 共用这些形状，避免各模块自行解读 SQLite 返回值的 null/数值语义。
  */
 import type {
@@ -214,7 +215,7 @@ export interface MemoryExperienceRow {
   source_id: string | null;
   source_revision: number | null;
   representation_id: string;
-  representation_kind: string;
+  representation_kind: MemoryRepresentationKind;
   range_start: number | null;
   range_end: number | null;
   text_sha256: string;

@@ -31,6 +31,7 @@
     "db:migrate": "bun src/bun/migrate.ts",
     "test:memory-access": "bun scripts/verify-memory-access.ts",
     "test:memory-ledger": "bun scripts/verify-memory-ledger.ts && bun scripts/verify-memory-recovery.ts",
+    "test:memory-experience": "bun scripts/verify-memory-experience.ts && bun scripts/verify-memory-coverage.ts && bun scripts/verify-memory-catchup.ts",
     "test:memory-recovery": "bun scripts/verify-memory-recovery.ts"
   },
   "dependencies": {

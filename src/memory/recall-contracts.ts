@@ -364,6 +364,81 @@ export function hostMayReportEvidence(
 }
 
 // ---------------------------------------------------------------------------
+// 补读计划（CatchupPlan）
+// ---------------------------------------------------------------------------
+
+/**
+ * 补读计划状态。
+ *
+ * `partial` 表示本轮因预算/扫描上限没有覆盖全部候选或必要资料不完整；
+ * `missing_required` 表示明确要求的消息当前不可见/不存在。两者都不是
+ * “已读完”，也不推进任何消费范围。
+ */
+export const MEMORY_CATCHUP_STATUSES = [
+  'ready',
+  'partial',
+  'missing_required',
+  'expired',
+] as const;
+
+export type MemoryCatchupStatus = (typeof MEMORY_CATCHUP_STATUSES)[number];
+
+export type MemoryCatchupSelectionState = 'selected' | 'not_selected' | 'missing';
+
+/** 补读预算：候选扫描、选中条数与最终文本预算分开计量。 */
+export interface MemoryCatchupBudget {
+  candidate_limit: number;
+  selected_limit: number;
+  output_bytes: MemoryUtf8Bytes;
+}
+
+/** 计划项只表示本轮选择结果；未选择不是待办，selected 也不是已消费。 */
+export interface MemoryCatchupPlanItem {
+  message_id: string;
+  created_seq: number;
+  selection_state: MemoryCatchupSelectionState;
+  reason: string | null;
+}
+
+export interface MemoryCatchupSnapshot {
+  upper_bound: number;
+  member_generation: number;
+  policy_revision: number;
+  member_seq: number;
+  joined_seq: number;
+}
+
+/**
+ * 固定本轮 H 的补读计划。
+ *
+ * `scan_cursor` 只记录候选扫描位置；它不是消费游标，不能推进经历或未读。
+ * 计划过期/成员代次变化后不能继续返回正文。
+ */
+export interface MemoryCatchupPlan {
+  plan_id: string;
+  space: MemorySpaceRef;
+  agent_actor_id: string;
+  room_id: string;
+  snapshot: MemoryCatchupSnapshot;
+  query: string;
+  status: MemoryCatchupStatus;
+  budget: MemoryCatchupBudget;
+  items: readonly MemoryCatchupPlanItem[];
+  scan_cursor: string | null;
+  created_at: number;
+  expires_at: number | null;
+}
+
+export interface MemoryCatchupPage {
+  plan_id: string;
+  status: MemoryCatchupStatus;
+  snapshot: MemoryCatchupSnapshot;
+  items: readonly MemoryCatchupPlanItem[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // 治理
 // ---------------------------------------------------------------------------
 

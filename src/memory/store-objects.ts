@@ -42,6 +42,49 @@ export interface MemoryStoreOptions {
   now?: number;
 }
 
+function sameRepresentationIdentity(
+  row: MemoryRepresentationRow,
+  representation: MemoryExactRepresentation['representation'],
+): boolean {
+  if (
+    row.kind !== representation.kind ||
+    row.text_sha256 !== representation.text_sha256 ||
+    row.text_bytes !== representation.text_bytes
+  ) {
+    return false;
+  }
+  if (
+    representation.kind === 'raw_full' ||
+    representation.kind === 'raw_fragment' ||
+    representation.kind === 'preview'
+  ) {
+    return (
+      row.source_id === representation.source_id &&
+      row.source_revision === representation.source_revision &&
+      row.range_start === representation.range.start &&
+      row.range_end === representation.range.end
+    );
+  }
+  if (representation.kind === 'summary') {
+    return (
+      row.summary_id === representation.summary_id &&
+      row.summary_revision === representation.revision
+    );
+  }
+  if (representation.kind === 'memory_context') {
+    return row.source_context_id === representation.source_context_id;
+  }
+  if (representation.kind === 'authored') {
+    return (
+      row.source_id === representation.source_id &&
+      row.source_revision === representation.source_revision &&
+      row.producer_kind === representation.producer_kind &&
+      row.lineage === representation.lineage
+    );
+  }
+  return false;
+}
+
 /**
  * 写入/核对准确表示。
  *
@@ -71,25 +114,73 @@ export async function registerRepresentation(
       reason: 'representation_hash_mismatch',
     });
   }
-  if (
-    representation.kind === 'raw_full' ||
-    representation.kind === 'raw_fragment' ||
-    representation.kind === 'preview'
-  ) {
-    if (!isValidByteRange(representation.range, representation.text_bytes)) {
-      throw new BusinessError('MEMORY_EVIDENCE_INSUFFICIENT', 'raw 表示的字节范围非法', {
+  if (representation.kind === 'raw_full') {
+    if (
+      !isValidByteRange(representation.range, representation.text_bytes) ||
+      representation.range.start !== 0 ||
+      representation.range.end !== representation.text_bytes
+    ) {
+      throw new BusinessError('MEMORY_EVIDENCE_INSUFFICIENT', 'raw_full 字节范围非法', {
+        reason: 'invalid_byte_range',
+      });
+    }
+  } else if (representation.kind === 'raw_fragment' || representation.kind === 'preview') {
+    if (
+      !Number.isInteger(representation.range.start) ||
+      !Number.isInteger(representation.range.end) ||
+      representation.range.start < 0 ||
+      representation.range.end <= representation.range.start
+    ) {
+      throw new BusinessError('MEMORY_EVIDENCE_INSUFFICIENT', '片段字节范围非法', {
         reason: 'invalid_byte_range',
       });
     }
   }
   const existing = await db
-    .prepare('SELECT text_sha256 FROM memory_representations WHERE representation_id = ?')
+    .prepare('SELECT * FROM memory_representations WHERE representation_id = ?')
     .bind(representation.representation_id)
-    .first<Pick<MemoryRepresentationRow, 'text_sha256'>>();
+    .first<MemoryRepresentationRow>();
   if (existing) {
-    if (existing.text_sha256 !== representation.text_sha256) {
-      throw new BusinessError('MEMORY_EVIDENCE_INSUFFICIENT', '表示 ID 已绑定其他正文', {
+    const sameIdentity = sameRepresentationIdentity(existing, representation);
+    if (!sameIdentity) {
+      throw new BusinessError('MEMORY_EVIDENCE_INSUFFICIENT', '表示 ID 已绑定其他身份或范围', {
         reason: 'representation_conflict',
+        representation_id: representation.representation_id,
+      });
+    }
+    const existingDependencies = await db
+      .prepare(
+        `SELECT source_id, source_revision, depends_on_representation_id,
+                range_start, range_end
+           FROM memory_representation_dependencies
+          WHERE representation_id = ? ORDER BY dependency_index`,
+      )
+      .bind(representation.representation_id)
+      .all<{
+        source_id: string;
+        source_revision: number;
+        depends_on_representation_id: string | null;
+        range_start: number | null;
+        range_end: number | null;
+      }>();
+    const wanted = options.dependencies ?? representation.depends_on ?? [];
+    const sameDependencies =
+      existingDependencies.results.length === wanted.length &&
+      existingDependencies.results.every((row, index) => {
+        const dependency = wanted[index];
+        return (
+          dependency !== undefined &&
+          row.source_id === dependency.source_id &&
+          row.source_revision === dependency.source_revision &&
+          row.depends_on_representation_id === (dependency.representation_id ?? null) &&
+          row.range_start === (dependency.range?.start ?? null) &&
+          row.range_end === (dependency.range?.end ?? null)
+        );
+      });
+    if (!sameDependencies) {
+      throw new BusinessError('MEMORY_EVIDENCE_INSUFFICIENT', '表示 ID 已绑定其他依赖集合', {
+        reason: 'representation_dependency_conflict',
+        representation_id: representation.representation_id,
       });
     }
     return;

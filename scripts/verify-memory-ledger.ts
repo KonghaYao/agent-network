@@ -210,6 +210,7 @@ async function main(): Promise<void> {
     'memory_contexts',
     'memory_context_items',
     'memory_experiences',
+    'memory_experience_proofs',
     'memory_coverage_ranges',
     'memory_receipts',
     'memory_projections',
