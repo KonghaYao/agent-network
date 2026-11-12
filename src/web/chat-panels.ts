@@ -82,7 +82,16 @@ export function sidebarPane(): string {
     <button class="room-menu-item danger" id="room-menu-toggle-disabled" type="button"
       role="menuitem" hidden>停用 Agent</button>
     <button class="room-menu-item danger" id="room-menu-reissue-token" type="button"
-      role="menuitem" hidden>重置链接并复制</button>
+      role="menuitem" hidden>重置链接</button>
+    <div class="room-menu-reissue" id="room-menu-reissue" hidden>
+      <p class="room-menu-reissue-hint" id="room-menu-reissue-hint">
+        新 token 已生成，旧 token 已失效。只复制下面的提示词，不会再次更换 token。
+      </p>
+      <textarea class="room-menu-reissue-text" id="room-menu-reissue-text" rows="6"
+        readonly spellcheck="false" aria-label="新的 Agent 接入提示词"></textarea>
+      <button class="room-menu-item room-menu-reissue-copy" id="room-menu-reissue-copy-prompt"
+        type="button">复制提示词</button>
+    </div>
     <div class="room-menu-sep" id="room-menu-safety-sep" role="separator"></div>
     <button class="room-menu-item" id="room-menu-report" type="button"
       role="menuitem" hidden>举报</button>
