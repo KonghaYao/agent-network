@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { CliError, resolveConfig } from '../mcp';
 import { asArray, asRecord } from '../output';
 import { abortableSleep, reconnectDelay } from './engine';
+import { acquireLock } from './locks';
 import {
   MonitorFatalError,
   MonitorRpc,
@@ -214,29 +215,37 @@ class DshWatcher {
       this.diagnostics(`ERROR type=daemon message=already_running pid=${existing}`);
       return 1;
     }
+    let release: () => Promise<void>;
     try {
-      await writeFile(this.paths.pid, `${process.pid}\n`, { mode: 0o600 });
+      // 进程锁是互斥权威；PID 文件只供 status/stop 展示。崩溃遗留锁在 stale 后可恢复。
+      release = await acquireLock(this.paths.home, { stale: 30_000, update: 10_000 });
     } catch {
-      this.diagnostics('ERROR type=environment message=pid_file_failed');
+      this.diagnostics('ERROR type=daemon message=already_running');
       return 1;
     }
-
-    this.status = initialStatus(process.pid);
-    await writeStatusFile(this.paths, this.status);
-
     try {
-      this.seen = await MonitorState.create({ tempPrefix: 'dsh-watch.' });
-    } catch {
-      this.diagnostics('ERROR type=environment message=workdir_failed');
-      await this.removeOwnPid();
-      return 1;
-    }
+      try {
+        await writeFile(this.paths.pid, `${process.pid}\n`, { mode: 0o600 });
+      } catch {
+        this.diagnostics('ERROR type=environment message=pid_file_failed');
+        return 1;
+      }
 
-    try {
+      this.status = initialStatus(process.pid);
+      await writeStatusFile(this.paths, this.status);
+
+      try {
+        this.seen = await MonitorState.create({ tempPrefix: 'dsh-watch.' });
+      } catch {
+        this.diagnostics('ERROR type=environment message=workdir_failed');
+        return 1;
+      }
+
       return await this.main();
     } finally {
       await this.removeOwnPid();
-      await this.seen.cleanup();
+      await this.seen?.cleanup();
+      await release();
     }
   }
 
@@ -656,14 +665,10 @@ async function startDaemon(context: MonitorContext): Promise<number> {
   if (fd >= 0) closeSync(fd);
   child.unref();
 
-  try {
-    await writeFile(paths.pid, `${child.pid}\n`, { mode: 0o600 });
-  } catch {
-    // 子进程 run 自己也会写 PID；这里只为让 start 立即可见。
-  }
-
   await Bun.sleep(1000);
   if (pidRunning(child.pid)) {
+    // 子进程 run 也会写 PID；这里只为让 start 立即可见，且只写仍在运行的赢家。
+    await writeFile(paths.pid, `${child.pid}\n`, { mode: 0o600 }).catch(() => undefined);
     process.stdout.write(`STARTED pid=${child.pid} home=${paths.home}\n`);
     return 0;
   }

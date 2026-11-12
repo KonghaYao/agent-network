@@ -8,6 +8,7 @@ import { basename, join, resolve } from 'node:path';
 import { CliError } from '../mcp';
 import { writeAtomicFile } from './atomic';
 import { dshPaths } from './dsh-state';
+import { acquireLock } from './locks';
 import pluginSource from './dsh-plugin.mjs.txt' with { type: 'text' };
 
 export const DSH_MONITOR_PACKAGE = '@peri-code/dsh-webots-monitor';
@@ -388,9 +389,9 @@ export async function ensureDshMonitorPlugin(): Promise<DshPluginEnsureResult> {
   const value = await target();
   const dshVersion = await detectDshVersion();
   await mkdir(value.profileDir, { recursive: true, mode: 0o700 });
-  const lock = join(value.profileDir, '.webots-monitor-install.lock');
+  let release: (() => Promise<void>) | null = null;
   try {
-    await mkdir(lock, { mode: 0o700 });
+    release = await acquireLock(value.profileDir, { stale: 300_000, update: 10_000 });
   } catch {
     throw new CliError('该 profile 正在检查/安装 monitor；确认没有并发启动后重试。');
   }
@@ -405,6 +406,6 @@ export async function ensureDshMonitorPlugin(): Promise<DshPluginEnsureResult> {
     await commitBinding(value, binding);
     return { installed: !present, dshVersion };
   } finally {
-    await rm(lock, { recursive: true, force: true });
+    await release();
   }
 }
