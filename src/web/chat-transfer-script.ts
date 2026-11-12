@@ -370,8 +370,9 @@ if (transferProposeButton) {
 }
 const transferAcceptButton = document.getElementById('transfer-accept');
 if (transferAcceptButton) {
-  transferAcceptButton.addEventListener('click', function () {
-    if (!window.confirm('接受后你将获得该 Agent 的管理权；原管理者立即失权，旧运行 token 失效。确定继续？')) return;
+  transferAcceptButton.addEventListener('click', async function () {
+    if (!(await confirmDialog('接受后你将获得该 Agent 的管理权；原管理者立即失权，旧运行 token 失效。确定继续？',
+      { title: '接受交接', danger: true, confirmText: '接受' }))) return;
     transferRespond('accept').catch(function () {});
   });
 }

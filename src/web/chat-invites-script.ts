@@ -232,7 +232,8 @@ async function submitInviteCreate() {
 
 async function submitInviteRevoke(invitationId, label, revision) {
   if (!room || room.kind !== 'group' || inviteBusy || !invitationId) return;
-  if (!window.confirm('撤销' + label + '？撤销后所有设备上的旧链接和二维码立即失效。')) return;
+  if (!(await confirmDialog('撤销' + label + '？撤销后所有设备上的旧链接和二维码立即失效。',
+    { title: '撤销邀请', danger: true, confirmText: '撤销' }))) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
   const formGeneration = membersLoadToken;
@@ -268,7 +269,8 @@ async function submitJoinRequest(item, action) {
   const epoch = roomEpoch;
   const formGeneration = membersLoadToken;
   if (!roomId) return;
-  if (action === 'reject' && !window.confirm('拒绝「' + item.applicant.name + '」的入群申请？')) return;
+  if (action === 'reject' && !(await confirmDialog('拒绝「' + item.applicant.name + '」的入群申请？',
+    { title: '拒绝申请', confirmText: '拒绝' }))) return;
   inviteBusy = true;
   setMembersError('');
   try {

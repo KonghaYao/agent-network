@@ -458,7 +458,8 @@ async function submitOwnerTransferResponse(action) {
 async function submitOwnerTransferCancel() {
   if (!room || room.kind !== 'group' || membersBusy || !ownerTransfer) return;
   const transfer = ownerTransfer;
-  if (!window.confirm('取消向「' + transfer.to_actor_name + '」的群主转让提议？')) return;
+  if (!(await confirmDialog('取消向「' + transfer.to_actor_name + '」的群主转让提议？',
+    { title: '取消转让', confirmText: '取消提议' }))) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
   const formGeneration = membersLoadToken;
@@ -695,7 +696,8 @@ async function submitOwnerTransfer(member) {
     setMembersError('已有待确认的群主转让提议，请先取消或等待对方处理。');
     return;
   }
-  if (!window.confirm('向「' + member.name + '」发起群主转让？对方接受后才会生效，确认前你仍负责群主事务。')) return;
+  if (!(await confirmDialog('向「' + member.name + '」发起群主转让？对方接受后才会生效，确认前你仍负责群主事务。',
+    { title: '发起转让', danger: true, confirmText: '发起转让' }))) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
   const formGeneration = membersLoadToken;
@@ -731,7 +733,8 @@ async function submitMemberRemoval(member) {
     setMembersError('当前群角色不能移除该成员。');
     return;
   }
-  if (!window.confirm('将「' + member.name + '」移出群聊？')) return;
+  if (!(await confirmDialog('将「' + member.name + '」移出群聊？',
+    { title: '移出成员', danger: true, confirmText: '移出' }))) return;
   const roomId = activeRoomId;
   const epoch = roomEpoch;
   const formGeneration = membersLoadToken;

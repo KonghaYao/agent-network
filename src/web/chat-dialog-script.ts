@@ -56,4 +56,57 @@ document.addEventListener('keydown', function (event) {
   event.preventDefault();
   event.stopPropagation();
 }, true);
+
+let confirmDialogPending = false;
+
+/**
+ * 统一的 Promise 确认框：确认返回 true，取消/Esc/背板返回 false。
+ *
+ * 默认聚焦“取消”，危险动作使用醒目的红色按钮；文案保留调用方原文，
+ * 不在这里拼接业务细节，避免不同入口的承诺漂移。
+ */
+function confirmDialog(message, options) {
+  const config = options || {};
+  if (confirmDialogPending) return Promise.resolve(false);
+  confirmDialogPending = true;
+  return new Promise(function (resolve) {
+    let dialog = document.getElementById('confirm-dialog');
+    if (!dialog) {
+      dialog = document.createElement('dialog');
+      dialog.id = 'confirm-dialog';
+      dialog.className = 'modal confirm-modal';
+      dialog.setAttribute('aria-labelledby', 'confirm-dialog-title');
+      dialog.setAttribute('aria-describedby', 'confirm-dialog-message');
+      dialog.innerHTML = '<div class="modal-card confirm-card">' +
+        '<h2 id="confirm-dialog-title"></h2>' +
+        '<p id="confirm-dialog-message" class="confirm-message"></p>' +
+        '<div class="row modal-actions">' +
+        '<button type="button" data-confirm-cancel></button>' +
+        '<button type="button" data-confirm-ok></button>' +
+        '</div></div>';
+      document.body.append(dialog);
+    }
+    const titleElement = dialog.querySelector('#confirm-dialog-title');
+    const messageElement = dialog.querySelector('#confirm-dialog-message');
+    const cancelButton = dialog.querySelector('[data-confirm-cancel]');
+    const okButton = dialog.querySelector('[data-confirm-ok]');
+    let settled = false;
+    function finish(value) {
+      if (settled) return;
+      settled = true;
+      confirmDialogPending = false;
+      closeNativeDialog(dialog);
+      resolve(value);
+    }
+    titleElement.textContent = config.title || '请确认';
+    messageElement.textContent = String(message || '');
+    cancelButton.textContent = config.cancelText || '取消';
+    okButton.textContent = config.confirmText || '确定';
+    okButton.className = config.danger ? 'danger' : 'primary';
+    cancelButton.onclick = function () { finish(false); };
+    okButton.onclick = function () { finish(true); };
+    openNativeDialog(dialog, function () { finish(false); });
+    cancelButton.focus();
+  });
+}
 `;

@@ -117,7 +117,11 @@ async function safetyToggleBlock() {
   const target = roomMenuTarget;
   if (!target || safetyBusy || target.kind !== 'direct') return;
   const blocked = safetyBlockButton && safetyBlockButton.dataset.blocked === '1';
-  if (!window.confirm(blocked ? SAFETY_UNBLOCK_CONFIRM : SAFETY_BLOCK_CONFIRM)) return;
+  if (!(await confirmDialog(blocked ? SAFETY_UNBLOCK_CONFIRM : SAFETY_BLOCK_CONFIRM, {
+    title: blocked ? '解除拉黑' : '拉黑',
+    danger: !blocked,
+    confirmText: blocked ? '解除拉黑' : '拉黑'
+  }))) return;
   safetyBusy = true;
   if (safetyBlockButton) safetyBlockButton.disabled = true;
   try {
@@ -149,7 +153,8 @@ async function safetyToggleBlock() {
 async function safetyDeleteFriend() {
   const target = roomMenuTarget;
   if (!target || safetyBusy || target.kind !== 'direct') return;
-  if (!window.confirm(SAFETY_DELETE_CONFIRM)) return;
+  if (!(await confirmDialog(SAFETY_DELETE_CONFIRM,
+    { title: '删除好友', danger: true, confirmText: '删除好友' }))) return;
   safetyBusy = true;
   if (safetyDeleteButton) safetyDeleteButton.disabled = true;
   try {
@@ -206,7 +211,8 @@ async function safetyLeaveGroup(explicitTarget) {
       return;
     }
     if (explicitTarget ? activeRoomId !== target.roomId : roomMenuTarget !== target) return;
-    if (!window.confirm(message)) return;
+    if (!(await confirmDialog(message,
+      { title: '退出群聊', danger: true, confirmText: '退出群聊' }))) return;
     await callTool('network_room_leave', {
       request_id: requestId('web_room_leave'),
       room_id: target.roomId,
@@ -231,7 +237,8 @@ async function safetyLeaveGroup(explicitTarget) {
 async function safetyDissolveGroup(explicitTarget) {
   const target = explicitTarget || roomMenuTarget;
   if (!target || safetyBusy || target.kind !== 'group' || !target.can_dissolve) return;
-  if (!window.confirm(SAFETY_DISSOLVE_CONFIRM)) return;
+  if (!(await confirmDialog(SAFETY_DISSOLVE_CONFIRM,
+    { title: '解散群聊', danger: true, confirmText: '解散群聊' }))) return;
   safetyBusy = true;
   if (safetyDissolveButton) safetyDissolveButton.disabled = true;
   try {
