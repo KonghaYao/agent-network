@@ -59,7 +59,8 @@ export interface MemoryCapabilityCatalog {
   reason: string | null;
 }
 
-export function memoryCapabilityCatalog(input: MemoryCatalogInput): MemoryCapabilityCatalog {  const level = input.policy.trust_level;
+export function memoryCapabilityCatalog(input: MemoryCatalogInput): MemoryCapabilityCatalog {
+  const level = input.policy.trust_level;
   const hostModes: MemoryHostIntegrationLevel[] =
     level === 'controlled_gateway'
       ? ['tool_only', 'adapted_host', 'controlled_gateway']
