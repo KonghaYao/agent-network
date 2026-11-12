@@ -612,58 +612,29 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     }),
   );
 
-  // AI 消息 Markdown 岛：启动构建、内存缓存；构建失败或未注入时 404，
-  // 页面保留纯文本回退，不影响发送、文件卡片与其他交互。
-  app.get('/assets/chat-markdown.js', (c) => {
-    if (!deps.markdownAsset) {
+  // 浏览器岛 bundle：同一缓存策略、按文件名映射；构建失败或未注入时 404。
+  // 启动期已预计算内容哈希，ETag 直接用版本，不引入 hono/etag。
+  const assets: Record<
+    string,
+    { body: string | null | undefined; version: string | null | undefined }
+  > = {
+    'chat-markdown.js': { body: deps.markdownAsset, version: deps.markdownAssetVersion },
+    'chat-resizer.js': { body: deps.resizerAsset, version: deps.resizerAssetVersion },
+    'chat-drawboard.js': { body: deps.drawboardAsset, version: deps.drawboardAssetVersion },
+    'chat-icons.js': { body: deps.iconAsset, version: deps.iconAssetVersion },
+  };
+  app.get('/assets/:name', (c) => {
+    const asset = assets[c.req.param('name')];
+    if (!asset) return c.notFound();
+    const body = asset.body;
+    if (!body) {
       return c.text('Not Found', 404, { 'cache-control': 'no-store' });
     }
-    return c.body(deps.markdownAsset, 200, {
+    return c.body(body, 200, {
       'content-type': 'text/javascript; charset=utf-8',
       'cache-control': 'public, max-age=300',
       'x-content-type-options': 'nosniff',
-      ...(deps.markdownAssetVersion ? { etag: `"${deps.markdownAssetVersion}"` } : {}),
-    });
-  });
-
-  // 右侧面板拖拽岛：与 Markdown 岛相同的独立 bundle 与缓存策略。
-  // 构建失败时 404，页面保留 CSS 默认 50/50，分隔条不响应拖动。
-  app.get('/assets/chat-resizer.js', (c) => {
-    if (!deps.resizerAsset) {
-      return c.text('Not Found', 404, { 'cache-control': 'no-store' });
-    }
-    return c.body(deps.resizerAsset, 200, {
-      'content-type': 'text/javascript; charset=utf-8',
-      'cache-control': 'public, max-age=300',
-      'x-content-type-options': 'nosniff',
-      ...(deps.resizerAssetVersion ? { etag: `"${deps.resizerAssetVersion}"` } : {}),
-    });
-  });
-
-  // Fabric 画板岛：只在打开画板时动态导入；构建失败时 404，页面显示可读错误。
-  app.get('/assets/chat-drawboard.js', (c) => {
-    if (!deps.drawboardAsset) {
-      return c.text('Not Found', 404, { 'cache-control': 'no-store' });
-    }
-    return c.body(deps.drawboardAsset, 200, {
-      'content-type': 'text/javascript; charset=utf-8',
-      'cache-control': 'public, max-age=300',
-      'x-content-type-options': 'nosniff',
-      ...(deps.drawboardAssetVersion ? { etag: `"${deps.drawboardAssetVersion}"` } : {}),
-    });
-  });
-
-  // 图标悬停动效：页面先拿到服务端静态 SVG，这个 bundle 只做渐进增强。
-  // 构建失败时 404，图标保持静态，页面其他脚本不受影响。
-  app.get('/assets/chat-icons.js', (c) => {
-    if (!deps.iconAsset) {
-      return c.text('Not Found', 404, { 'cache-control': 'no-store' });
-    }
-    return c.body(deps.iconAsset, 200, {
-      'content-type': 'text/javascript; charset=utf-8',
-      'cache-control': 'public, max-age=300',
-      'x-content-type-options': 'nosniff',
-      ...(deps.iconAssetVersion ? { etag: `"${deps.iconAssetVersion}"` } : {}),
+      ...(asset.version ? { etag: `"${asset.version}"` } : {}),
     });
   });
 
