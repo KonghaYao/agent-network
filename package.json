@@ -13,6 +13,7 @@
     "test:protocol": "bun scripts/verify-protocol.ts",
     "test:acceptance": "bun scripts/acceptance.ts",
     "test:client-contract": "bun scripts/verify-client-contract.ts",
+    "test:memory-contracts": "bun scripts/verify-memory-contracts.ts",
     "test:client": "bun scripts/verify-client-cli.ts",
     "test:drive": "bun scripts/verify-drive.ts",
     "test:m07": "bun scripts/verify-m07.ts",
