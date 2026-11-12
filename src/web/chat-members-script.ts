@@ -518,7 +518,7 @@ function closeMembersModal() {
   inviteBusy = false;
   if (inviteCreateButton) inviteCreateButton.disabled = false;
   closeMemberMenu();
-  if (membersModal) membersModal.hidden = true;
+  closeNativeDialog(membersModal);
   setMembersError('');
   membersContactsCache = [];
   membersContactNote = '';
@@ -548,7 +548,7 @@ function membersCandidates(contacts) {
 async function openMembersModal() {
   if (!membersModal || !room || room.kind !== 'group') return;
   membersOpener = document.activeElement;
-  membersModal.hidden = false;
+  openNativeDialog(membersModal, closeMembersModal);
   if (membersCurrentSearch) membersCurrentSearch.value = '';
   setMembersError('');
   membersContactsCache = [];
@@ -581,7 +581,7 @@ async function openMembersModal() {
       loadToken !== membersLoadToken ||
       !isActiveRoom(roomId, epoch) ||
       !membersModal ||
-      membersModal.hidden
+      !membersModal.open
     ) {
       return;
     }
@@ -595,7 +595,7 @@ async function openMembersModal() {
       loadToken !== membersLoadToken ||
       !isActiveRoom(roomId, epoch) ||
       !membersModal ||
-      membersModal.hidden
+      !membersModal.open
     ) {
       return;
     }
@@ -764,7 +764,7 @@ async function submitMemberRemoval(member) {
 async function submitMembersForm(event) {
   event.preventDefault();
   const roomId = activeRoomId;
-  if (!roomId || !room || room.kind !== 'group' || !membersModal || membersModal.hidden) return;
+  if (!roomId || !room || room.kind !== 'group' || !membersModal || !membersModal.open) return;
   if (membersBusy) return;
   const epoch = roomEpoch;
   const formGeneration = membersLoadToken;
@@ -805,7 +805,7 @@ async function submitMembersForm(event) {
       return !before.has(member.actor_id);
     });
     applyRoomDetail(result);
-    if (formGeneration !== membersLoadToken || !membersModal || membersModal.hidden) return;
+    if (formGeneration !== membersLoadToken || !membersModal || !membersModal.open) return;
     if (added.length === 0) {
       setMembersError('所选好友已在群里，成员没有变化。');
       renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
@@ -837,7 +837,7 @@ async function submitMembersForm(event) {
 if (membersButton) {
   membersButton.addEventListener('click', function () {
     openMembersModal().catch(function (error) {
-      if (!membersModal || membersModal.hidden) return;
+      if (!membersModal || !membersModal.open) return;
       setMembersError('读取成员失败：' + (error && error.message ? error.message : error));
       setMembersBusy(false);
     });
@@ -845,12 +845,6 @@ if (membersButton) {
 }
 if (membersCloseButton) membersCloseButton.addEventListener('click', closeMembersModal);
 if (membersCancelButton) membersCancelButton.addEventListener('click', closeMembersModal);
-if (membersModal) {
-  membersModal.addEventListener('click', function (event) {
-    // 只关闭遮罩本身；点击卡片内部不会误提交，也不会关闭。
-    if (event.target === membersModal) closeMembersModal();
-  });
-}
 if (membersContactsElement) {
   membersContactsElement.addEventListener('change', function (event) {
     const target = event.target;
@@ -859,7 +853,7 @@ if (membersContactsElement) {
   });
 }
 document.addEventListener('keydown', function (event) {
-  if (event.key !== 'Escape' || !membersModal || membersModal.hidden) return;
+  if (event.key !== 'Escape' || !membersModal || !membersModal.open) return;
   if (openMemberMenu) {
     event.preventDefault();
     closeMemberMenu({ focus: true });

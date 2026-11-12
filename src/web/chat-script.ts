@@ -7,6 +7,7 @@ import { CHAT_ARCHIVE_SCRIPT } from './chat-archive-script';
 import { CHAT_AVATAR_SCRIPT } from './chat-avatar-script';
 import { CHAT_CONTACTS_SCRIPT } from './chat-contacts-script';
 import { CHAT_CONTACT_DIRECTORY_SCRIPT } from './chat-contact-directory-script';
+import { CHAT_DIALOG_SCRIPT } from './chat-dialog-script';
 import { CHAT_DRAWBOARD_SCRIPT } from './chat-drawboard-script';
 import { CHAT_FILES_ACTIONS_SCRIPT } from './chat-files-actions-script';
 import { CHAT_FILES_SCRIPT } from './chat-files-script';
@@ -185,6 +186,7 @@ const composerRequests = new Set();
 // 独立于按钮状态：刷新或切换房间不得释放仍在途的发送锁。
 const composerSendingRooms = new Set();
 
+${CHAT_DIALOG_SCRIPT}
 ${CHAT_IDENTITY_SCRIPT}
 ${CHAT_ROOM_PREFERENCES_SCRIPT}
 ${CHAT_LIST_SCRIPT}
@@ -526,14 +528,19 @@ function legacyCopyText(text) {
   area.style.position = 'fixed';
   area.style.left = '-9999px';
   area.style.top = '0';
-  document.body.appendChild(area);
+  // 原生模态 dialog 之外的节点是 inert；临时输入框必须挂进最上层 dialog，
+  // 否则 select/execCommand 无法取得焦点，复制会静默失败。
+  const modal = document.querySelector('dialog[open]');
+  const host = modal || document.body;
+  host.appendChild(area);
+  area.focus();
   area.select();
   area.setSelectionRange(0, area.value.length);
   let copied = false;
   try {
     copied = document.execCommand('copy');
   } finally {
-    document.body.removeChild(area);
+    host.removeChild(area);
   }
   if (!copied) throw new Error('浏览器拒绝了复制操作');
 }

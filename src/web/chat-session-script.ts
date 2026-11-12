@@ -361,7 +361,7 @@ function applyRoomDetail(detail) {
     renderRooms();
   }
   // 邀请接受后 active/invited 会互换；弹窗开着时立即按新状态重绘。
-  if (membersModal && !membersModal.hidden && previousMembers !==
+  if (membersModal && membersModal.open && previousMembers !==
       membersViewSignature(detail.members, detail.invited || [], ownerTransfer, room.capabilities)) {
     renderCurrentMembers();
     renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);

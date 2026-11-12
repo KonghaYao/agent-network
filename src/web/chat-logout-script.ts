@@ -58,7 +58,8 @@ function syncLogoutVisibility() {
 
   function closeDialog() {
     if (busy) return;
-    modal.hidden = true;
+    if (!modal.open) return;
+    closeNativeDialog(modal);
     button.setAttribute('aria-expanded', 'false');
     if (opener && opener.focus) opener.focus();
     opener = null;
@@ -67,7 +68,7 @@ function syncLogoutVisibility() {
   function openDialog() {
     if (busy || button.hidden) return;
     opener = document.activeElement;
-    modal.hidden = false;
+    openNativeDialog(modal, closeDialog);
     button.setAttribute('aria-expanded', 'true');
     // 默认聚焦“取消”，避免误按 Enter 直接退出。
     cancelButton.focus();
@@ -75,12 +76,6 @@ function syncLogoutVisibility() {
 
   button.addEventListener('click', openDialog);
   cancelButton.addEventListener('click', closeDialog);
-  modal.addEventListener('click', function (event) {
-    if (event.target === modal) closeDialog();
-  });
-  document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape' && !modal.hidden) closeDialog();
-  });
   confirmButton.addEventListener('click', function () {
     if (busy) return;
     busy = true;

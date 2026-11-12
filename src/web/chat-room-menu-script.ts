@@ -1101,6 +1101,7 @@ if (roomMenuToggleButton) {
 }
 
 document.addEventListener('pointerdown', function (event) {
+  if (nativeDialogOpen()) return;
   const menu = roomMenuNode();
   if (!menu || menu.hidden) return;
   if (event.target instanceof Node && menu.contains(event.target)) return;
@@ -1109,6 +1110,7 @@ document.addEventListener('pointerdown', function (event) {
 
 document.addEventListener('keydown', function (event) {
   if (event.key !== 'Escape') return;
+  if (nativeDialogOpen()) return;
   const menu = roomMenuNode();
   if (!menu || menu.hidden) return;
   const anchor = roomMenuAnchor;

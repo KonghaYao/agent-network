@@ -44,6 +44,7 @@ const SAFETY_DISSOLVE_CONFIRM =
 
 let safetyBusy = false;
 let safetyReportRoomId = null;
+let safetyReportOpener = null;
 
 function safetySetStatus(message, isError) {
   const status = document.getElementById('room-menu-status');
@@ -261,13 +262,14 @@ async function safetyDissolveGroup(explicitTarget) {
 async function openSafetyReport() {
   const target = roomMenuTarget;
   if (!target || !safetyReportModal || !safetyReportTarget) return;
+  safetyReportOpener = roomMenuAnchor;
   safetyReportRoomId = target.roomId;
   if (safetyReportStatus) safetyReportStatus.textContent = '';
   if (safetyReportNote) safetyReportNote.value = '';
   if (safetyReportCategory) safetyReportCategory.value = 'harassment';
   safetyReportTarget.replaceChildren();
   closeRoomMenu();
-  safetyReportModal.hidden = false;
+  openNativeDialog(safetyReportModal, closeSafetyReport);
   if (safetyReportSubmit) safetyReportSubmit.disabled = true;
   try {
     const detail = await callTool('network_room_get', { room_id: target.roomId });
@@ -284,7 +286,7 @@ async function openSafetyReport() {
       throw new Error('当前会话没有可举报的其他成员');
     }
     if (target.peer_actor_id) safetyReportTarget.value = target.peer_actor_id;
-    safetyReportModal.hidden = false;
+    openNativeDialog(safetyReportModal, closeSafetyReport);
     if (safetyReportSubmit) {
       safetyReportSubmit.disabled = false;
       safetyReportSubmit.focus();
@@ -298,7 +300,10 @@ async function openSafetyReport() {
 }
 
 function closeSafetyReport() {
-  if (safetyReportModal) safetyReportModal.hidden = true;
+  closeNativeDialog(safetyReportModal);
+  const opener = safetyReportOpener;
+  safetyReportOpener = null;
+  if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
 }
 
 async function submitSafetyReport() {
@@ -355,13 +360,5 @@ if (safetyReportButton) safetyReportButton.addEventListener('click', function ()
 if (safetyReportCancel) safetyReportCancel.addEventListener('click', closeSafetyReport);
 if (safetyReportSubmit) safetyReportSubmit.addEventListener('click', function () {
   submitSafetyReport().catch(function () {});
-});
-if (safetyReportModal) safetyReportModal.addEventListener('click', function (event) {
-  if (event.target === safetyReportModal) closeSafetyReport();
-});
-document.addEventListener('keydown', function (event) {
-  if (event.key !== 'Escape' || !safetyReportModal || safetyReportModal.hidden) return;
-  event.preventDefault();
-  closeSafetyReport();
 });
 `;

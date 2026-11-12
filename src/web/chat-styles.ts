@@ -476,8 +476,11 @@ export const APP_STYLE = `
   .empty-hint { margin: 0; font-size: 12px; color: var(--wx-muted); }
 
   .modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center;
-    padding: 16px; background: rgb(0 0 0 / 42%); }
-  .modal[hidden] { display: none; }
+    width: auto; height: auto; max-width: none; max-height: none; margin: 0; border: 0;
+    padding: 16px; background: rgb(0 0 0 / 42%); color: inherit; }
+  /* 原生的 dialog 未打开时默认 display:none；上面的 display:grid 必须让位。 */
+  .modal:not([open]) { display: none; }
+  .modal::backdrop { background: transparent; }
   .modal-card { width: min(420px, 100%); max-height: min(82dvh, 680px); overflow-y: auto;
     background: var(--wx-panel); color: var(--wx-text); border-radius: 10px;
     padding: 20px; box-shadow: var(--wx-shadow); }

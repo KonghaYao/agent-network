@@ -365,7 +365,7 @@ function handleStreamEventFrame(payload) {
         // 会话的默认可见性，需要重新读取列表；当前房间不刷新，历史仍可读。
         refreshContactBadge();
         refreshList = true;
-        if (contactModal && !contactModal.hidden) loadContactRequests();
+        if (contactModal && contactModal.open) loadContactRequests();
         break;
       case 'device':
         // 设备安全事件只让已打开的配对弹窗刷新；不产生待办或房间未读。

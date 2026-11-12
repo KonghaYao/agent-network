@@ -689,6 +689,10 @@ if (taskTraceDrawerElement) {
   });
 }
 const taskTraceCloseButton = document.getElementById('task-trace-close');
+if (taskTraceDrawerElement) {
+  // Esc（原生 cancel）与背板点击只关闭 <dialog>；close 事件负责同步内存状态。
+  taskTraceDrawerElement.addEventListener('close', closeTaskTrace);
+}
 if (taskTraceCloseButton) {
   taskTraceCloseButton.addEventListener('click', function () { closeTaskTrace(); });
 }

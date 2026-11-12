@@ -6,8 +6,11 @@
  */
 export const DRAWBOARD_STYLE = `
   .db-overlay { position: fixed; inset: 0; z-index: 80; display: flex;
-    align-items: center; justify-content: center; padding: 16px;
-    background: rgb(0 0 0 / 58%); }
+    align-items: center; justify-content: center; width: auto; height: auto;
+    max-width: none; max-height: none; margin: 0; border: 0;
+    padding: 16px; background: rgb(0 0 0 / 58%); }
+  .db-overlay:not([open]) { display: none; }
+  .db-overlay::backdrop { background: transparent; }
   .db-shell { display: flex; flex-direction: column; width: min(1200px, 100%);
     height: min(840px, 100%); min-height: 0; overflow: hidden;
     background: var(--wx-panel, #fff); color: var(--wx-text, #1a1a1a);

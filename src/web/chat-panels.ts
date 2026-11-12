@@ -239,8 +239,8 @@ export function emptyPane(): string {
 
 /** 新建群聊弹窗：保留 group-* 契约，视觉由 APP_STYLE 统一。 */
 export function groupDialog(): string {
-  return `<div class="modal" id="group-modal" hidden>
-  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="group-modal-title">
+  return `<dialog class="modal" id="group-modal" aria-labelledby="group-modal-title">
+  <div class="modal-card">
     <h2 id="group-modal-title">新建群聊</h2>
     <form id="group-form">
       <label class="field">群名（可选）
@@ -264,7 +264,7 @@ export function groupDialog(): string {
       </div>
     </form>
   </div>
-</div>`;
+</dialog>`;
 }
 
 /**
@@ -273,9 +273,8 @@ export function groupDialog(): string {
  * 按服务端 capabilities 展示操作；好友候选排除自己与当前成员。
  */
 export function membersDialog(): string {
-  return `<div class="modal" id="members-modal" hidden>
-  <div class="modal-card members-card" role="dialog" aria-modal="true"
-    aria-labelledby="members-modal-title">
+  return `<dialog class="modal" id="members-modal" aria-labelledby="members-modal-title">
+  <div class="modal-card members-card">
     <header class="members-head">
       <h2 id="members-modal-title">群组设置</h2>
       <button class="members-close" id="members-close" type="button"
@@ -364,7 +363,7 @@ export function membersDialog(): string {
       </div>
     </form>
   </div>
-</div>`;
+</dialog>`;
 }
 
 /**
@@ -374,9 +373,8 @@ export function membersDialog(): string {
  * 页面保留草稿并提示刷新，不静默覆盖他人公告。
  */
 export function announcementDialog(): string {
-  return `<div class="modal" id="announcement-modal" hidden>
-  <div class="modal-card announcement-card" role="dialog" aria-modal="true"
-    aria-labelledby="announcement-modal-title">
+  return `<dialog class="modal" id="announcement-modal" aria-labelledby="announcement-modal-title">
+  <div class="modal-card announcement-card">
     <header class="members-head">
       <h2 id="announcement-modal-title">群公告</h2>
       <button class="members-close" id="announcement-close" type="button"
@@ -394,7 +392,7 @@ export function announcementDialog(): string {
       </div>
     </form>
   </div>
-</div>`;
+</dialog>`;
 }
 
 /**
@@ -407,9 +405,8 @@ export function announcementDialog(): string {
  */
 /** A06 管理权交接面板；打开时通过公开工具读取，不在 SSR 输出任何凭据。 */
 export function transferDialog(): string {
-  return `<div class="modal" id="transfer-modal" hidden>
-  <div class="modal-card transfer-card" role="dialog" aria-modal="true"
-    aria-labelledby="transfer-title">
+  return `<dialog class="modal" id="transfer-modal" aria-labelledby="transfer-title">
+  <div class="modal-card transfer-card">
     <h2 id="transfer-title">交接 Agent 管理权</h2>
     <p id="transfer-loading" class="muted">正在读取管理关系…</p>
     <p id="transfer-status" class="form-error" role="status" aria-live="polite" hidden></p>
@@ -453,12 +450,12 @@ export function transferDialog(): string {
       <button id="transfer-close" type="button">关闭</button>
     </div>
   </div>
-</div>`;
+</dialog>`;
 }
 
 export function newAgentDialog(): string {
-  return `<div class="modal" id="new-agent-modal" hidden>
-  <div class="modal-card new-agent-card" role="dialog" aria-modal="true" aria-labelledby="new-agent-title">
+  return `<dialog class="modal" id="new-agent-modal" aria-labelledby="new-agent-title">
+  <div class="modal-card new-agent-card">
     <h2 id="new-agent-title">新建 Agent</h2>
     <form id="new-agent-form">
       <label class="field">Agent 名称
@@ -486,7 +483,7 @@ export function newAgentDialog(): string {
       </div>
     </form>
   </div>
-</div>`;
+</dialog>`;
 }
 
 /**
@@ -608,8 +605,8 @@ export function monitorBackdrop(): string {
  * 音视频原生控件；未知类型只给下载入口，绝不写入 HTML/SVG。
  */
 export function filePreviewDialog(): string {
-  return `<div class="file-preview" id="file-preview" hidden>
-  <div class="file-preview-card" role="dialog" aria-modal="true" aria-labelledby="file-preview-title">
+  return `<dialog class="file-preview" id="file-preview" aria-labelledby="file-preview-title">
+  <div class="file-preview-card">
     <header class="file-preview-head">
       <div class="file-preview-id">
         <h2 id="file-preview-title">文件预览</h2>
@@ -622,7 +619,7 @@ export function filePreviewDialog(): string {
       <a id="file-preview-download" href="#" download rel="noopener" hidden>下载文件</a>
     </footer>
   </div>
-</div>`;
+</dialog>`;
 }
 
 /**
@@ -633,8 +630,8 @@ export function filePreviewDialog(): string {
  * 入口承担，弹窗内不重复好友列表。
  */
 export function contactRequestsDialog(): string {
-  return `<div class="modal" id="contact-modal" hidden>
-  <div class="modal-card contact-modal-card" role="dialog" aria-modal="true" aria-labelledby="contact-modal-title">
+  return `<dialog class="modal" id="contact-modal" aria-labelledby="contact-modal-title">
+  <div class="modal-card contact-modal-card">
     <h2 id="contact-modal-title">添加好友</h2>
     <div class="contact-segments" id="contact-segments" role="tablist" aria-label="添加好友分类">
       <button id="contact-tab-search" type="button" role="tab" data-contact-tab="search"
@@ -705,13 +702,13 @@ export function contactRequestsDialog(): string {
       <button id="contact-modal-close" type="button">关闭</button>
     </div>
   </div>
-</div>`;
+</dialog>`;
 }
 
 /** 举报弹窗：类别、可选备注与房间/消息定位；只进入受控管理流程。 */
 export function reportDialog(): string {
-  return `<div class="modal" id="report-modal" hidden>
-  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="report-modal-title">
+  return `<dialog class="modal" id="report-modal" aria-labelledby="report-modal-title">
+  <div class="modal-card">
     <h2 id="report-modal-title">举报</h2>
     <p class="muted">举报只保存发送者、类别、短备注与消息定位，不复制消息正文，也不会自动对外发送。</p>
     <label class="field">被举报成员
@@ -734,5 +731,5 @@ export function reportDialog(): string {
       <button id="report-submit" class="primary" type="button">提交举报</button>
     </div>
   </div>
-</div>`;
+</dialog>`;
 }

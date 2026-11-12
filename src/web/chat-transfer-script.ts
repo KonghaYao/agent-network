@@ -17,6 +17,7 @@ let transferView = null;
 let transferContacts = null;
 let transferSelected = '';
 let transferBusy = false;
+let transferOpener = null;
 
 function transferNode(id) {
   return document.getElementById(id);
@@ -50,8 +51,8 @@ function transferReset() {
 
 function transferClose() {
   const modal = transferNode(TRANSFER_MODAL_ID);
-  if (!modal || modal.hidden) return;
-  modal.hidden = true;
+  if (!modal || !modal.open) return;
+  closeNativeDialog(modal);
   // token 只显示一次：关闭时立即从 DOM 清除，不留在隐藏输入框里。
   const token = transferNode('transfer-token');
   if (token) token.value = '';
@@ -60,6 +61,9 @@ function transferClose() {
   transferContacts = null;
   transferSelected = '';
   transferBusy = false;
+  const opener = transferOpener;
+  transferOpener = null;
+  if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
 }
 
 async function transferLoad() {
@@ -327,16 +331,17 @@ async function transferCopyToken() {
   }
 }
 
-function openTransferDialog(agentId) {
+function openTransferDialog(agentId, opener) {
   if (!agentId) return;
   const modal = transferNode(TRANSFER_MODAL_ID);
   if (!modal) return;
+  transferOpener = opener || document.activeElement;
   transferAgentId = agentId;
   transferView = null;
   transferContacts = null;
   transferSelected = '';
   transferBusy = false;
-  modal.hidden = false;
+  openNativeDialog(modal, transferClose);
   const search = transferNode('transfer-successor-search');
   if (search) search.value = '';
   transferLoad().catch(function (error) {
@@ -350,8 +355,9 @@ const transferButton = document.getElementById('room-menu-transfer');
 if (transferButton) {
   transferButton.addEventListener('click', function () {
     const agentId = roomMenuTarget ? roomMenuTarget.peer_actor_id : '';
+    const opener = roomMenuAnchor;
     closeRoomMenu();
-    openTransferDialog(agentId);
+    openTransferDialog(agentId, opener);
   });
 }
 const transferCloseButton = document.getElementById('transfer-close');
@@ -390,12 +396,6 @@ if (transferSearchInput) {
   transferSearchInput.addEventListener('input', function () {
     if (!transferContacts) return;
     transferContacts.then(transferRenderSuccessors);
-  });
-}
-const transferModalNode = transferNode(TRANSFER_MODAL_ID);
-if (transferModalNode) {
-  transferModalNode.addEventListener('pointerdown', function (event) {
-    if (event.target === transferModalNode) transferClose();
   });
 }
 `;

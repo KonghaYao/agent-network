@@ -27,7 +27,8 @@ export const CHAT_ACCOUNT_RENAME_SCRIPT = `
 
   function closeDialog(force) {
     if (busy && !force) return;
-    modal.hidden = true;
+    if (!modal.open) return;
+    closeNativeDialog(modal);
     button.setAttribute('aria-expanded', 'false');
     if (opener && opener.focus) opener.focus();
     opener = null;
@@ -38,7 +39,7 @@ export const CHAT_ACCOUNT_RENAME_SCRIPT = `
     opener = document.activeElement;
     input.value = identity.name || '';
     setError('');
-    modal.hidden = false;
+    openNativeDialog(modal, function () { closeDialog(false); });
     button.setAttribute('aria-expanded', 'true');
     input.focus();
     input.select();
@@ -88,12 +89,6 @@ export const CHAT_ACCOUNT_RENAME_SCRIPT = `
 
   button.addEventListener('click', openDialog);
   cancelButton.addEventListener('click', function () { closeDialog(false); });
-  modal.addEventListener('click', function (event) {
-    if (event.target === modal) closeDialog(false);
-  });
-  document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape' && !modal.hidden) closeDialog(false);
-  });
 
   form.addEventListener('submit', async function (event) {
     event.preventDefault();
