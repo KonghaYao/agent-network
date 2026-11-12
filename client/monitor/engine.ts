@@ -9,6 +9,8 @@
  * - 每个投递先 claim，成功后才输出可处理的 delivery 事件；
  * - claude 在 claim 后读正文并写 event_file；peri 刻意不读正文，事件不含正文；
  * - 同一时刻只保留一个 claim（由服务端约束），deferred 不写永久 seen；
+ * - inbox 查询失败按指数退避重试，恢复后补领 pending；
+ * - deferred 进入本地待领队列，按退避重试 claim，同一状态只提示一次；
  * - 正文只进 event_file 与 stdout 的预览，不写日志。
  */
 
@@ -41,6 +43,14 @@ const ACK_TIMEOUT_MS = 60_000;
 const IDLE_TIMEOUT_MS = 15_000;
 const CLAIMED_RESET_MS = 30_000;
 const SAFE_ID = /^[A-Za-z0-9_-]+$/u;
+/** inbox 查询失败重试：1/2/4/8/16/30 秒封顶，持续到成功或退出。 */
+const INBOX_RETRY_BASE_MS = 1_000;
+const INBOX_RETRY_MAX_MS = 30_000;
+/** deferred 重新 claim：2/4/8/16/30 秒封顶，单条投递在成功前持续重试。 */
+const CLAIM_RETRY_BASE_MS = 2_000;
+const CLAIM_RETRY_MAX_MS = 30_000;
+/** 同一投递的 claim 失败提示每到这么多轮才重复一次，避免刷屏。 */
+const RETRY_ERROR_NOTICE_EVERY = 10;
 
 /** Peri 宿主 monitor 的单次上限；到期后 CLI 主动结束，避免静默失效。 */
 export const PERI_MAX_RUNTIME_MS = 24 * 60 * 60 * 1000;
@@ -110,6 +120,36 @@ type EmitResult = 'emitted' | 'deferred' | 'error';
 export type ClaimResult =
   | { ok: true; claim: ClaimInfo }
   | { ok: false; failure: ClaimFailure };
+
+interface DeferredDelivery {
+  item: JsonObject;
+  fields: DeliveryFields;
+  source: string;
+  failures: number;
+  nextAt: number;
+  lastErrorNotice: number;
+}
+
+/** 纯退避曲线，便于验收断言封顶；实际调用会叠加测试用固定毫秒覆盖。 */
+export function retryDelayMs(attempt: number, baseMs: number, maxMs: number): number {
+  const safeAttempt = Math.max(1, Math.floor(attempt));
+  return Math.min(maxMs, baseMs * 2 ** (safeAttempt - 1));
+}
+
+function monitorRetryDelay(attempt: number, baseMs: number, maxMs: number): number {
+  // 验收脚本用固定毫秒覆盖退避，避免等待 30 秒；生产不设置。
+  const override = Number(process.env.AGENTNET_MONITOR_RETRY_BASE_MS);
+  if (Number.isFinite(override) && override > 0) return override;
+  return retryDelayMs(attempt, baseMs, maxMs);
+}
+
+export function inboxRetryDelay(attempt: number): number {
+  return monitorRetryDelay(attempt, INBOX_RETRY_BASE_MS, INBOX_RETRY_MAX_MS);
+}
+
+export function claimRetryDelay(attempt: number): number {
+  return monitorRetryDelay(attempt, CLAIM_RETRY_BASE_MS, CLAIM_RETRY_MAX_MS);
+}
 
 /**
  * 自动 claim；CLAIM_CONFLICT 只读一次 claimed inbox 区分“自己已领取”
@@ -271,6 +311,22 @@ export class MonitorEngine {
   private expiringEmitted = false;
   private deadlineTimers: ReturnType<typeof setTimeout>[] = [];
 
+  /** inbox 查询失败后的补领状态；恢复后重置。 */
+  private inboxRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private inboxRetryAttempt = 0;
+  private inboxRetryInFlight = false;
+
+  /** 服务端单 claim 约束下暂时领不到的投递；成功后移除。 */
+  private readonly deferred = new Map<string, DeferredDelivery>();
+  private deferredTimer: ReturnType<typeof setTimeout> | null = null;
+  private deferredRunning = false;
+  /** 防止通知路径与退避定时器同时 claim 同一条投递。 */
+  private readonly claiming = new Set<string>();
+  /** 已输出的 claim（delivery:attempt:claim_id），阻止重复事件与重复回复。 */
+  private readonly emittedClaims = new Set<string>();
+  /** deferred 提示去重：同一状态只输出一次，holder/attempt 变化再输出。 */
+  private readonly deferredNoticeKeys = new Map<string, string>();
+
   constructor(options: MonitorEngineOptions) {
     this.rpc = options.rpc;
     this.state = options.state;
@@ -350,6 +406,18 @@ export class MonitorEngine {
       return this.reportStop(error);
     } finally {
       this.clearDeadlineTimers();
+      this.clearRetryTimers();
+    }
+  }
+
+  private clearRetryTimers(): void {
+    if (this.inboxRetryTimer !== null) {
+      clearTimeout(this.inboxRetryTimer);
+      this.inboxRetryTimer = null;
+    }
+    if (this.deferredTimer !== null) {
+      clearTimeout(this.deferredTimer);
+      this.deferredTimer = null;
     }
   }
 
@@ -578,6 +646,18 @@ export class MonitorEngine {
         continue;
       }
 
+      // 收到 retry 回执时立即把待领队列里的同一条投递放回队首。
+      if (source === 'delivery.retried') this.releaseDeferred(id);
+
+      if (this.claiming.has(id)) continue;
+      const queued = this.deferred.get(id);
+      if (queued !== undefined) {
+        // 重复通知只刷新快照，不重复 claim、不重复输出 deferred。
+        queued.item = item;
+        queued.source = 'stream';
+        continue;
+      }
+
       let attempt: number;
       let key: string;
       if (pending !== null) {
@@ -599,35 +679,103 @@ export class MonitorEngine {
       else if (result === 'error') return;
     }
 
+    if (items.some((item) => this.isDeliveryReceipt(item))) this.wakeDeferred(0);
+
     if (envelope.more === true || asNumber(envelope.dropped, 0) > 0) {
       await this.emitPendingSnapshot();
     }
   }
 
-  /** 只在通知需要时读一次 pending；失败时退回事件自身的 attempt。 */
-  private async pendingDeliveryMap(): Promise<Map<string, number> | null> {
+  private isDeliveryReceipt(item: JsonObject): boolean {
+    const source = asString(item.source);
+    if (source === 'delivery.updated') return true;
+    const state = asString(item.state);
+    return state === 'completed' || state === 'failed' || state === 'cancelled';
+  }
+
+  private async fetchPending(): Promise<
+    { ok: true; items: JsonObject[] } | { ok: false; code: string }
+  > {
     let outcome;
     try {
       outcome = await listInboxPages(this.rpc, 'pending');
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
-      this.control(
-        'error',
-        { code: 'pending_lookup_failed', error_type: 'inbox' },
-        'ERROR type=inbox message=pending_lookup_failed',
-      );
-      return null;
+      return { ok: false, code: 'pending_lookup_failed' };
     }
     if (!outcome.ok) {
+      return { ok: false, code: 'pending_lookup_failed' };
+    }
+    return { ok: true, items: asArray(outcome.data.items).map(asRecord) };
+  }
+
+  /** 记录 inbox 查询失败并按退避安排补领；首次与周期性失败都可见，不静默跳过。 */
+  private reportInboxFailure(code: string): void {
+    this.inboxRetryAttempt += 1;
+    const attempt = this.inboxRetryAttempt;
+    const retryIn = inboxRetryDelay(attempt);
+    if (attempt === 1 || attempt % RETRY_ERROR_NOTICE_EVERY === 0) {
       this.control(
         'error',
-        { code: 'pending_lookup_failed', error_type: 'inbox' },
-        'ERROR type=inbox message=pending_lookup_failed',
+        { code, error_type: 'inbox', attempt, retry_in_ms: retryIn },
+        `ERROR type=inbox message=${code} attempt=${attempt} retry_in_ms=${retryIn}`,
       );
+    }
+    this.scheduleInboxRetry();
+  }
+
+  /** 查询恢复：重置退避并输出一次可见恢复事件，随后由调用方补领 pending。 */
+  private noteInboxSuccess(): void {
+    if (this.inboxRetryAttempt === 0) return;
+    const attempts = this.inboxRetryAttempt;
+    this.inboxRetryAttempt = 0;
+    this.control(
+      'inbox_recovered',
+      { error_type: 'inbox', attempts },
+      `RECOVERED type=inbox attempts=${attempts}`,
+    );
+  }
+
+  private scheduleInboxRetry(): void {
+    if (this.signal.aborted || this.inboxRetryTimer !== null) return;
+    const delay = inboxRetryDelay(this.inboxRetryAttempt);
+    this.inboxRetryTimer = setTimeout(() => {
+      this.inboxRetryTimer = null;
+      void this.retryInbox().catch((error: unknown) => this.reportStop(error));
+    }, delay);
+    (this.inboxRetryTimer as { unref?: () => void }).unref?.();
+  }
+
+  /** 后台补领：查询成功后才遍历 pending，失败继续退避，不会丢消息。 */
+  private async retryInbox(): Promise<void> {
+    if (this.signal.aborted || this.inboxRetryInFlight) return;
+    this.inboxRetryInFlight = true;
+    try {
+      const outcome = await this.fetchPending();
+      if (!outcome.ok) {
+        this.reportInboxFailure(outcome.code);
+        return;
+      }
+      this.noteInboxSuccess();
+      await this.emitPendingItems(outcome.items, 'inbox.snapshot');
+    } catch (error) {
+      if (error instanceof MonitorFatalError) throw error;
+      this.reportInboxFailure('pending_lookup_failed');
+    } finally {
+      this.inboxRetryInFlight = false;
+    }
+  }
+
+  /** 只在通知需要时读一次 pending；失败时退回事件自身的 attempt 并安排补领。 */
+  private async pendingDeliveryMap(): Promise<Map<string, number> | null> {
+    const outcome = await this.fetchPending();
+    if (!outcome.ok) {
+      this.reportInboxFailure('pending_lookup_failed');
       return null;
     }
+    this.noteInboxSuccess();
     const map = new Map<string, number>();
-    for (const raw of asArray(outcome.data.items).map(asRecord)) {
+    for (const raw of outcome.items) {
       const message = asRecord(raw.message);
       if (asString(message.sender_id) === this.meId) continue;
       const id = asString(raw.delivery_id);
@@ -638,34 +786,34 @@ export class MonitorEngine {
   }
 
   private async emitPendingSnapshot(): Promise<void> {
-    let outcome;
-    try {
-      outcome = await listInboxPages(this.rpc, 'pending');
-    } catch (error) {
-      if (error instanceof MonitorFatalError) throw error;
-      this.control(
-        'error',
-        { code: 'snapshot_failed', error_type: 'inbox' },
-        'ERROR type=inbox message=snapshot_failed',
-      );
-      return;
-    }
+    const outcome = await this.fetchPending();
     if (!outcome.ok) {
-      this.control(
-        'error',
-        { code: 'snapshot_failed', error_type: 'inbox' },
-        'ERROR type=inbox message=snapshot_failed',
-      );
+      this.reportInboxFailure('pending_lookup_failed');
       return;
     }
+    this.noteInboxSuccess();
+    await this.emitPendingItems(outcome.items, 'inbox.snapshot');
+  }
 
-    for (const item of asArray(outcome.data.items).map(asRecord)) {
+  private async emitPendingItems(items: JsonObject[], source: string): Promise<void> {
+    for (const item of items) {
+      if (this.signal.aborted) return;
       if (asString(asRecord(item.message).sender_id) === this.meId) continue;
       const id = asString(item.delivery_id);
       if (id.length === 0) continue;
+      if (this.claiming.has(id)) continue;
+      const queued = this.deferred.get(id);
+      if (queued !== undefined) {
+        // 新的 pending 快照是更可靠的状态来源：刷新条目并立即重试。
+        queued.item = item;
+        queued.fields = deliveryFields(item);
+        queued.source = source;
+        this.wakeDeferred(0);
+        continue;
+      }
       const key = `pending:${id}:${asNumber(item.attempt, 0)}`;
       if (this.state.hasSeen(key)) continue;
-      const result = await this.emitFound(item, 'inbox.snapshot');
+      const result = await this.emitFound(item, source);
       if (result === 'emitted') await this.state.markSeen(key);
       else if (result === 'error') return;
     }
@@ -689,16 +837,63 @@ export class MonitorEngine {
       );
       return 'error';
     }
+    if (this.claiming.has(fields.deliveryId)) return 'deferred';
 
-    const claim = await claimDelivery(this.rpc, fields.deliveryId);
-    if (claim === null) return 'error';
-    if (!claim.ok) {
-      const failure = this.format.claimNotice
-        ? this.format.claimNotice(item, fields, claim.failure, source)
-        : claimNoticeEvent(fields, claim.failure, source);
-      this.emitEvent(failure);
-      return claim.failure.kind === 'deferred' ? 'deferred' : 'emitted';
+    this.claiming.add(fields.deliveryId);
+    let claim: ClaimResult | null;
+    try {
+      claim = await claimDelivery(this.rpc, fields.deliveryId);
+    } catch (error) {
+      if (error instanceof MonitorFatalError) throw error;
+      claim = null;
+    } finally {
+      this.claiming.delete(fields.deliveryId);
     }
+
+    if (claim === null) {
+      this.control(
+        'error',
+        {
+          code: 'claim_retry_failed',
+          error_type: 'claim',
+          delivery_id: fields.deliveryId,
+        },
+        `ERROR type=claim message=claim_retry_failed delivery_id=${fields.deliveryId}`,
+      );
+      this.deferDelivery(
+        item,
+        fields,
+        {
+          deliveryId: fields.deliveryId,
+          code: 'CLAIM_REQUEST_FAILED',
+          message: 'claim request failed',
+          kind: 'deferred',
+        },
+        source,
+      );
+      return 'deferred';
+    }
+    if (!claim.ok) {
+      if (claim.failure.kind === 'deferred') {
+        this.deferDelivery(item, fields, claim.failure, source);
+        return 'deferred';
+      }
+      this.emitClaimFailureNotice(item, fields, claim.failure, source);
+      return 'emitted';
+    }
+
+    return await this.emitClaimed(item, fields, claim.claim, source);
+  }
+
+  /** claim 成功后的唯一出口；同一交付只输出一次，避免重复回复。 */
+  private async emitClaimed(
+    item: JsonObject,
+    fields: DeliveryFields,
+    claim: ClaimInfo,
+    source: string,
+  ): Promise<EmitResult> {
+    const claimKey = `${fields.deliveryId}:${claim.attempt}:${claim.claimId}`;
+    if (this.emittedClaims.has(claimKey)) return 'emitted';
 
     if (!this.readBody) {
       const delivery = this.format.deliveryWithoutBody;
@@ -710,13 +905,15 @@ export class MonitorEngine {
         );
         return 'error';
       }
-      this.emitEvent(delivery(item, fields, claim.claim, source));
+      this.emittedClaims.add(claimKey);
+      this.emitEvent(delivery(item, fields, claim, source));
       return 'emitted';
     }
 
     const read = await this.readMessage(fields.messageId, fields.deliveryId);
     if (!read.ok) {
-      this.emitEvent(readFailedEvent(fields, claim.claim, source));
+      this.emittedClaims.add(claimKey);
+      this.emitEvent(readFailedEvent(fields, claim, source));
       return 'emitted';
     }
 
@@ -724,7 +921,7 @@ export class MonitorEngine {
     try {
       eventFile = await this.state.writeEventFile(
         fields.deliveryId,
-        eventFilePayload(fields, claim.claim, source, read.body),
+        eventFilePayload(fields, claim, source, read.body),
       );
     } catch {
       this.control(
@@ -732,20 +929,200 @@ export class MonitorEngine {
         { code: 'event_write_failed', error_type: 'message', delivery_id: fields.deliveryId },
         `ERROR type=message message=event_write_failed delivery_id=${fields.deliveryId}`,
       );
-      this.emitEvent(readFailedEvent(fields, claim.claim, source));
+      this.emittedClaims.add(claimKey);
+      this.emitEvent(readFailedEvent(fields, claim, source));
       return 'emitted';
     }
 
+    this.emittedClaims.add(claimKey);
     this.emitEvent(
       deliveryEvent(
         fields,
-        claim.claim,
+        claim,
         source,
         previewBody(read.body, this.bodyPreviewChars),
         eventFile,
       ),
     );
     return 'emitted';
+  }
+
+  private emitClaimFailureNotice(
+    item: JsonObject,
+    fields: DeliveryFields,
+    failure: ClaimFailure,
+    source: string,
+    retryAttempt?: number,
+    retryInMs?: number,
+  ): void {
+    const enriched: ClaimFailure =
+      retryAttempt === undefined
+        ? failure
+        : { ...failure, retryAttempt, retryInMs };
+    const notice = this.format.claimNotice
+      ? this.format.claimNotice(item, fields, enriched, source)
+      : claimNoticeEvent(fields, enriched, source);
+    this.emitEvent(notice);
+  }
+
+  /** 进入本地待领队列；同一 holder/attempt 状态只提示一次。 */
+  private deferDelivery(
+    item: JsonObject,
+    fields: DeliveryFields,
+    failure: ClaimFailure,
+    source: string,
+  ): void {
+    const existing = this.deferred.get(fields.deliveryId);
+    const failures = existing?.failures ?? 0;
+    const nextAt = Date.now() + claimRetryDelay(failures + 1);
+    const noticeKey = [
+      failure.kind,
+      failure.code,
+      failure.claimedDeliveryId ?? '',
+      fields.attempt,
+    ].join('|');
+    this.deferred.set(fields.deliveryId, {
+      item,
+      fields,
+      source,
+      failures,
+      nextAt,
+      lastErrorNotice: existing?.lastErrorNotice ?? 0,
+    });
+    if (this.deferredNoticeKeys.get(fields.deliveryId) !== noticeKey) {
+      this.deferredNoticeKeys.set(fields.deliveryId, noticeKey);
+      this.emitClaimFailureNotice(
+        item,
+        fields,
+        failure,
+        source,
+        failures + 1,
+        claimRetryDelay(failures + 1),
+      );
+    }
+    this.scheduleDeferred();
+  }
+
+  private releaseDeferred(deliveryId: string): void {
+    if (!this.deferred.delete(deliveryId)) return;
+    this.deferredNoticeKeys.delete(deliveryId);
+    this.scheduleDeferred();
+  }
+
+  /** 收到 claim 完成/失败/重试回执后，立即唤醒待领队列。 */
+  private wakeDeferred(delayMs: number): void {
+    if (this.deferred.size === 0) return;
+    const at = Date.now() + delayMs;
+    for (const entry of this.deferred.values()) {
+      entry.nextAt = Math.min(entry.nextAt, at);
+    }
+    this.scheduleDeferred();
+  }
+
+  private scheduleDeferred(): void {
+    if (this.deferredTimer !== null) {
+      clearTimeout(this.deferredTimer);
+      this.deferredTimer = null;
+    }
+    if (this.signal.aborted || this.deferred.size === 0) return;
+    let nextAt = Number.POSITIVE_INFINITY;
+    for (const entry of this.deferred.values()) nextAt = Math.min(nextAt, entry.nextAt);
+    const delay = Math.max(0, nextAt - Date.now());
+    this.deferredTimer = setTimeout(() => {
+      this.deferredTimer = null;
+      void this.runDeferredRetries().catch((error: unknown) => this.reportStop(error));
+    }, delay);
+    (this.deferredTimer as { unref?: () => void }).unref?.();
+  }
+
+  /** 按退避重试 claim；成功才输出 delivery，槽位仍被占用时继续排队。 */
+  private async runDeferredRetries(): Promise<void> {
+    if (this.deferredRunning || this.signal.aborted) return;
+    this.deferredRunning = true;
+    try {
+      const now = Date.now();
+      for (const [deliveryId, entry] of [...this.deferred.entries()]) {
+        if (this.signal.aborted) break;
+        if (entry.nextAt > now || this.claiming.has(deliveryId)) continue;
+
+        this.claiming.add(deliveryId);
+        let claim: ClaimResult | null;
+        try {
+          claim = await claimDelivery(this.rpc, deliveryId);
+        } catch (error) {
+          if (error instanceof MonitorFatalError) throw error;
+          claim = null;
+        } finally {
+          this.claiming.delete(deliveryId);
+        }
+
+        if (claim === null) {
+          entry.failures += 1;
+          entry.nextAt = Date.now() + claimRetryDelay(entry.failures);
+          if (
+            entry.lastErrorNotice === 0 ||
+            entry.failures % RETRY_ERROR_NOTICE_EVERY === 0
+          ) {
+            entry.lastErrorNotice = entry.failures;
+            this.control(
+              'error',
+              {
+                code: 'claim_retry_failed',
+                error_type: 'claim',
+                delivery_id: deliveryId,
+                attempt: entry.failures,
+                retry_in_ms: claimRetryDelay(entry.failures + 1),
+              },
+              `ERROR type=claim message=claim_retry_failed delivery_id=${deliveryId} ` +
+                `attempt=${entry.failures} retry_in_ms=${claimRetryDelay(entry.failures + 1)}`,
+            );
+          }
+          continue;
+        }
+
+        if (claim.ok) {
+          this.deferred.delete(deliveryId);
+          this.deferredNoticeKeys.delete(deliveryId);
+          const result = await this.emitClaimed(entry.item, entry.fields, claim.claim, entry.source);
+          if (result === 'emitted') {
+            await this.state.markSeen(`pending:${deliveryId}:${entry.fields.attempt}`);
+          }
+          continue;
+        }
+
+        if (claim.failure.kind === 'deferred') {
+          entry.failures += 1;
+          entry.nextAt = Date.now() + claimRetryDelay(entry.failures);
+          const noticeKey = [
+            claim.failure.kind,
+            claim.failure.code,
+            claim.failure.claimedDeliveryId ?? '',
+            entry.fields.attempt,
+          ].join('|');
+          if (this.deferredNoticeKeys.get(deliveryId) !== noticeKey) {
+            this.deferredNoticeKeys.set(deliveryId, noticeKey);
+            this.emitClaimFailureNotice(
+              entry.item,
+              entry.fields,
+              claim.failure,
+              entry.source,
+              entry.failures + 1,
+              claimRetryDelay(entry.failures + 1),
+            );
+          }
+          continue;
+        }
+
+        // 终态冲突/失败：不再重试，标记 seen 避免快照反复尝试。
+        this.deferred.delete(deliveryId);
+        this.deferredNoticeKeys.delete(deliveryId);
+        this.emitClaimFailureNotice(entry.item, entry.fields, claim.failure, entry.source);
+        await this.state.markSeen(`pending:${deliveryId}:${entry.fields.attempt}`);
+      }
+    } finally {
+      this.deferredRunning = false;
+      this.scheduleDeferred();
+    }
   }
 
   /**

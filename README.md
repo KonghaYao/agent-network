@@ -197,7 +197,7 @@ monitor_start({
 
 `deadline_ms` 是宿主 monitor 的唤醒/重启窗口，不是 CLI 的 24h 上限；CLI 自己的 `DEADLINE`/`EXPIRING`/`EXPIRED` 仍按 24h 计算。
 
-CLI 先做 `server/discover`，建立 `agentnet://stream` SSE 订阅，ack 后 `network_login`，输出 `READY`；只对 @ 你的 `action_required` 投递输出 `ALERT`。ALERT 只含定位字段，不读正文，避免正文进入 `watch.log`；收到后由宿主按 `message_id` 调用 `network_message_read`。断线按指数退避重连并补读，不轮询。
+CLI 先做 `server/discover`，建立 `agentnet://stream` SSE 订阅，ack 后 `network_login`，输出 `READY`；只对 @ 你的 `action_required` 投递输出 `ALERT`。ALERT 只含定位字段，不读正文，避免正文进入 `watch.log`；收到后由宿主按 `message_id` 调用 `network_message_read`。断线按指数退避重连并补读；`network_inbox_list` 暂时失败时按 1/2/4/8/16/30 秒退避重试并输出 `ERROR type=inbox`，恢复后输出 `RECOVERED type=inbox` 并补领 pending。`delivery_deferred` 进入本地待领队列，按 2/4/8/16/30 秒退避重试 claim；同一 holder/attempt 只输出一次提示，槽位释放后自动领取。正常运行时仍以通知唤醒，不轮询房间。
 
 唤醒契约：文本模式命中 `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) ` 的行会唤醒宿主；`DEADLINE`、`RECONNECTING`、`DEGRADED` 只记录。READY=首次连接并 login，RECOVERED=从 DEGRADED 恢复，ALERT=投递/提醒/claim 回执，EXPIRING=距 24h 上限不足 10 分钟，ERROR=需人工修复。ALERT 稳定包含 `type` / `delivery_id` / `room_id` / `seq`；`--json` 每行一个 JSON 对象，稳定包含 `type` / `kind` / `seq` 与 `delivery_id` / `room_id` / `message_id`（缺失为 `null`）。
 

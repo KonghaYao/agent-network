@@ -34,6 +34,7 @@ import { join, resolve } from 'node:path';
 import { check, checkEqual, checksPassed } from './lib/harness';
 import { listInboxPages, type MonitorRpc } from '../client/monitor/rpc';
 import { BODY_PREVIEW_CHARS } from '../client/monitor/events';
+import { retryDelayMs } from '../client/monitor/engine';
 
 const ROOT = resolve(import.meta.dir, '..');
 const CLI = resolve(ROOT, 'client/cli.ts');
@@ -76,6 +77,8 @@ interface MockState {
   loginHeadSeq: string | null;
   /** 接下来 N 次 subscriptions/listen 返回 500，用于触发 DEGRADED/RECOVERED。 */
   listenFailures: number;
+  /** 接下来 N 次 pending inbox 查询返回工具错误，用于验证查询退避。 */
+  inboxFailures: number;
 }
 
 interface MockServer {
@@ -170,6 +173,8 @@ interface MockOptions {
   meKind?: string;
   /** 启动时先失败 N 次 subscriptions/listen。 */
   listenFailures?: number;
+  /** 启动时先失败 N 次 pending inbox 查询。 */
+  inboxFailures?: number;
 }
 
 function createMock(options: MockOptions = {}): MockServer {
@@ -187,6 +192,7 @@ function createMock(options: MockOptions = {}): MockServer {
     loginPending: null,
     loginHeadSeq: null,
     listenFailures: options.listenFailures ?? 0,
+    inboxFailures: options.inboxFailures ?? 0,
   };
 
   const stopKeepalives = (): void => {
@@ -305,6 +311,10 @@ function createMock(options: MockOptions = {}): MockServer {
         }
         case 'network_inbox_list': {
           const wanted = String(args.state ?? 'active');
+          if (wanted === 'pending' && state.inboxFailures > 0) {
+            state.inboxFailures -= 1;
+            return toolError(body.id, 'UNAVAILABLE', 'inbox temporarily unavailable');
+          }
           const items = wanted === 'claimed' ? [...state.claims.values()] : [...state.pending.values()];
           const offset = Number(args.cursor ?? 0);
           const limit = Number(args.limit ?? 50);
@@ -641,7 +651,9 @@ function expect(condition: unknown, message: string): asserts condition {
 
 async function runClaudeChecks(): Promise<void> {
   const mock = createMock();
-  const watcher = startWatcher(mock.base);
+  // 本组保留手动重连快照语义，避免自动 deferred 重试打乱既有断言；
+  // 自动重试由 runMonitorRetryChecks 单独覆盖。
+  const watcher = startWatcher(mock.base, { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' });
   try {
     const ready = await waitForLine(watcher.stderr, (line) => line.includes('READY'), 'claude READY');
     check('READY 写 stderr 并带 actor/subscription', /READY actor=agt_me pending=\d+ subscription=sub-/.test(ready));
@@ -712,10 +724,15 @@ async function runClaudeChecks(): Promise<void> {
     check('deferred 不含正文', !('body' in deferred));
     checkEqual('deferred 指向当前 claim', deferred.claimed_delivery_id, 'dlv_ok');
     check(
-      'deferred hint 提示 complete/fail 且不轮询',
+      'deferred hint 提示 complete/fail 与自动退避重试',
       typeof deferred.hint === 'string' &&
         deferred.hint.includes('complete/fail') &&
-        deferred.hint.includes('watcher 不轮询'),
+        deferred.hint.includes('自动重试'),
+    );
+    check(
+      'deferred 带重试轮次与间隔',
+      typeof deferred.retry_attempt === 'number' && typeof deferred.retry_in_ms === 'number',
+      deferred,
     );
     checkEqual('deferred 不产生 delivery', eventCount(watcher.stdout, 'delivery', 'dlv_deferred'), 0);
     checkEqual('单 claim 约束：mock 从未同时持有多条 claim', mock.state.maxConcurrentClaims, 1);
@@ -852,7 +869,7 @@ async function runClaudeChecks(): Promise<void> {
 
 async function runPeriChecks(): Promise<void> {
   const mock = createMock();
-  const watcher = startPeriWatcher(mock.base);
+  const watcher = startPeriWatcher(mock.base, { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' });
   try {
     const ready = await waitForLine(watcher.stdout, (line) => line.includes('READY'), 'peri READY');
     check(
@@ -939,10 +956,15 @@ async function runPeriChecks(): Promise<void> {
     check('peri deferred 不含正文', !('body' in deferred));
     checkEqual('peri deferred 指向当前 claim', deferred.claimed_delivery_id, 'dlv_ok');
     check(
-      'peri deferred hint 提示 complete/fail 且不轮询',
+      'peri deferred hint 提示 complete/fail 与自动退避重试',
       typeof deferred.hint === 'string' &&
         deferred.hint.includes('complete/fail') &&
-        deferred.hint.includes('watcher 不轮询'),
+        deferred.hint.includes('自动重试'),
+    );
+    check(
+      'peri deferred 带重试轮次与间隔',
+      typeof deferred.retry_attempt === 'number' && typeof deferred.retry_in_ms === 'number',
+      deferred,
     );
     checkEqual('peri deferred 不产生 delivery', alertCount(watcher.stdout, 'delivery', 'dlv_deferred'), 0);
     mock.state.pending.delete('dlv_deferred');
@@ -2066,6 +2088,128 @@ async function runOtherChecks(): Promise<void> {
   await rm(workdir, { recursive: true, force: true });
 }
 
+/**
+ * 漏消息回归：inbox 查询失败重试、deferred 槽位释放后重领、
+ * 重复通知去重与可见事件字段。
+ */
+async function runMonitorRetryChecks(): Promise<void> {
+  checkEqual('inbox 退避 1 秒起', retryDelayMs(1, 1_000, 30_000), 1_000);
+  checkEqual('inbox 退避指数增长', retryDelayMs(4, 1_000, 30_000), 8_000);
+  checkEqual('inbox 退避封顶 30 秒', retryDelayMs(20, 1_000, 30_000), 30_000);
+  checkEqual('claim 退避封顶 30 秒', retryDelayMs(20, 2_000, 30_000), 30_000);
+
+  // 1) pending inbox 查询连续失败后恢复，必须补领并输出可见 ERROR/RECOVERED。
+  const inboxMock = createMock({ inboxFailures: 2 });
+  inboxMock.state.pending.set('dlv_inbox_retry', delivery('dlv_inbox_retry'));
+  const inboxWatcher = startWatcher(inboxMock.base, { AGENTNET_MONITOR_RETRY_BASE_MS: '20' });
+  try {
+    const errorLine = await waitForLine(
+      inboxWatcher.stderr,
+      (line) => line.includes('ERROR type=inbox') && line.includes('pending_lookup_failed'),
+      'inbox retry ERROR',
+      10_000,
+    );
+    check('inbox 失败输出 attempt/retry_in_ms', /attempt=1 retry_in_ms=\d+/.test(errorLine), errorLine);
+    const recovered = await waitForLine(
+      inboxWatcher.stderr,
+      (line) => line.startsWith('RECOVERED type=inbox'),
+      'inbox recovered',
+      10_000,
+    );
+    check('inbox 恢复输出尝试次数', recovered.includes('attempts=2'), recovered);
+    const inboxEvent = await waitForEvent(inboxWatcher.stdout, 'delivery', 'dlv_inbox_retry');
+    checkEqual('inbox 恢复后补领 pending', inboxMock.state.claimCalls.get('dlv_inbox_retry'), 1);
+    checkEqual('inbox 补领只输出一条 delivery', eventCount(inboxWatcher.stdout, 'delivery', 'dlv_inbox_retry'), 1);
+    checkEqual('inbox 补领事件 claim_state', inboxEvent.claim_state, 'claimed');
+  } finally {
+    await inboxWatcher.kill();
+    inboxMock.stop();
+  }
+
+  // 2) deferred 队列：槽位占用时退避重试、重复通知只提示一次、槽位释放后领取。
+  const deferredMock = createMock();
+  const deferredWatcher = startWatcher(deferredMock.base, {
+    AGENTNET_MONITOR_RETRY_BASE_MS: '30',
+  });
+  try {
+    await waitForLine(deferredWatcher.stderr, (line) => line.includes('READY'), 'deferred READY');
+    deferredMock.state.claims.set('dlv_hold', claimedDelivery('dlv_hold'));
+    deferredMock.state.pending.set('dlv_wait', delivery('dlv_wait'));
+    sendItems(deferredMock, [notificationItem('dlv_wait', 'delivery.created', 'evt_wait_1')]);
+    const deferred = await waitForEvent(deferredWatcher.stdout, 'delivery_deferred', 'dlv_wait');
+    checkEqual('deferred 指向当前占用者', deferred.claimed_delivery_id, 'dlv_hold');
+    check(
+      'deferred 带重试轮次与间隔',
+      typeof deferred.retry_attempt === 'number' && typeof deferred.retry_in_ms === 'number',
+      deferred,
+    );
+
+    sendItems(deferredMock, [notificationItem('dlv_wait', 'delivery.created', 'evt_wait_2')]);
+    await Bun.sleep(250);
+    checkEqual(
+      '重复通知不重复输出 deferred',
+      eventCount(deferredWatcher.stdout, 'delivery_deferred', 'dlv_wait'),
+      1,
+    );
+    check(
+      '槽位占用期间持续退避重试',
+      (deferredMock.state.claimCalls.get('dlv_wait') ?? 0) >= 2,
+      deferredMock.state.claimCalls.get('dlv_wait'),
+    );
+
+    deferredMock.state.claims.clear();
+    const delivered = await waitForEvent(deferredWatcher.stdout, 'delivery', 'dlv_wait', 10_000);
+    checkEqual('槽位释放后自动领取 attempt', delivered.attempt, 1);
+    checkEqual(
+      '自动领取只输出一条 delivery',
+      eventCount(deferredWatcher.stdout, 'delivery', 'dlv_wait'),
+      1,
+    );
+    const claimCallsAfter = deferredMock.state.claimCalls.get('dlv_wait') ?? 0;
+    sendItems(deferredMock, [notificationItem('dlv_wait', 'delivery.created', 'evt_wait_3')]);
+    await Bun.sleep(300);
+    checkEqual('成功领取后的重复事件不重复 claim', deferredMock.state.claimCalls.get('dlv_wait'), claimCallsAfter);
+    checkEqual(
+      '成功领取后的重复事件不重复输出',
+      eventCount(deferredWatcher.stdout, 'delivery', 'dlv_wait'),
+      1,
+    );
+    checkEqual('deferred 重试全程保持单 claim', deferredMock.state.maxConcurrentClaims, 1);
+  } finally {
+    await deferredWatcher.kill();
+    deferredMock.stop();
+  }
+
+  // 3) peri --json：inbox 失败仍输出结构化 error，恢复后正常 delivery。
+  const jsonMock = createMock({ inboxFailures: 1 });
+  jsonMock.state.pending.set('dlv_json_retry', delivery('dlv_json_retry'));
+  const jsonWatcher = startPeriWatcher(
+    jsonMock.base,
+    { AGENTNET_MONITOR_RETRY_BASE_MS: '20' },
+    ['--json'],
+  );
+  try {
+    const jsonError = await waitForEvent(jsonWatcher.stdout, 'error');
+    checkEqual('peri --json inbox 错误 kind', jsonError.kind, 'error');
+    checkEqual('peri --json inbox 错误 code', jsonError.code, 'pending_lookup_failed');
+    checkEqual('peri --json inbox 错误 error_type', jsonError.error_type, 'inbox');
+    checkEqual('peri --json inbox 错误 seq', jsonError.seq, null);
+    checkEqual('peri --json inbox 错误 delivery_id', jsonError.delivery_id, null);
+    checkEqual('peri --json inbox 错误 attempt', jsonError.attempt, 1);
+    check(
+      'peri --json inbox 错误带 retry_in_ms',
+      typeof jsonError.retry_in_ms === 'number' && jsonError.retry_in_ms > 0,
+      jsonError,
+    );
+    const jsonDelivery = await waitForEvent(jsonWatcher.stdout, 'delivery', 'dlv_json_retry');
+    checkEqual('peri --json 恢复后补领', jsonMock.state.claimCalls.get('dlv_json_retry'), 1);
+    checkEqual('peri --json 补领 kind', jsonDelivery.kind, 'delivery');
+  } finally {
+    await jsonWatcher.kill();
+    jsonMock.stop();
+  }
+}
+
 async function main(): Promise<void> {
   const requests: JsonObject[] = [];
   const paginatedRpc = {
@@ -2109,6 +2253,8 @@ async function main(): Promise<void> {
   check('inbox 无分页标记不得误判为完整结果', rejectedMalformed);
   console.log('TS monitor: claude harness');
   await runClaudeChecks();
+  console.log('TS monitor: inbox/deferred retry');
+  await runMonitorRetryChecks();
   console.log('TS monitor: signal cleanup');
   await runCleanupCheck();
   console.log('TS monitor: peri harness');

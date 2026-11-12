@@ -13,7 +13,7 @@ import type { JsonObject } from './rpc';
 export const BODY_PREVIEW_CHARS = 4000;
 
 export const DEFERRED_HINT =
-  '先 complete/fail 当前 claim，再 network_inbox_list 核对并 claim 这条；watcher 不轮询，需手动 claim 或重连快照重试';
+  '先 complete/fail 当前 claim；watcher 会按退避自动重试并补领，也可手动 claim 或重连快照';
 export const CONFLICT_HINT = '跳过，不要处理；如需重新处理，由接收者用 network_delivery_retry 放回 pending';
 export const CLAIM_FAILED_HINT = '不要处理；按 code 修复或等待人工核对后重试';
 export const READ_FAILED_REASON = '投递已 claim，但读取正文或写事件文件失败';
@@ -44,6 +44,9 @@ export interface ClaimFailure {
   message: string;
   kind: 'deferred' | 'conflict' | 'failed';
   claimedDeliveryId?: string;
+  /** deferred 自动重试轮次与等待毫秒；终态失败为 undefined。 */
+  retryAttempt?: number;
+  retryInMs?: number;
 }
 
 export interface BodyPreview {
@@ -179,6 +182,12 @@ export function claimNoticeEvent(
     reason: failure.message,
     claim_state: failure.kind,
     claimed_delivery_id: failure.kind === 'deferred' ? (failure.claimedDeliveryId ?? null) : null,
+    ...(failure.kind === 'deferred'
+      ? {
+          retry_attempt: failure.retryAttempt ?? null,
+          retry_in_ms: failure.retryInMs ?? null,
+        }
+      : {}),
     hint,
   };
 }

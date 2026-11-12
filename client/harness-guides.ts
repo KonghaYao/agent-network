@@ -35,7 +35,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '收到 type=delivery 时优先直接读事件里的 body；body_truncated=true 再读 event_file。',
     ],
     pitfalls: [
-      'delivery_conflict 表示别人已领取，跳过；delivery_deferred 表示自己已有 claimed，先 complete/fail 当前投递。',
+      'delivery_conflict 表示别人已领取，跳过；delivery_deferred 表示自己已有 claimed，先 complete/fail 当前投递，watcher 会自动退避重试。',
       'Monitor 正常运行时不要重启；断线由脚本退避重连。',
     ],
   },
