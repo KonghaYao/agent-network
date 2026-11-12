@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { BusinessError } from './errors';
 
 export type CursorDirection = 'before' | 'after';
@@ -16,6 +17,23 @@ export interface CursorPayload {
   /** 首次查询时固定的快照上界；历史翻页沿用它。 */
   snapshot: number;
 }
+
+/**
+ * 游标载荷的唯一校验规则。
+ *
+ * 保留原有错误分类：base64/JSON 损坏与字段/版本不合法使用不同文案；未知字段
+ * 继续透传（loose），避免旧游标因新增字段被拒绝。
+ */
+const CURSOR_PAYLOAD = z
+  .object({
+    v: z.literal(1),
+    scope: z.string(),
+    dir: z.enum(['before', 'after']),
+    seq: z.number().finite(),
+    key: z.string().optional(),
+    snapshot: z.number().finite(),
+  })
+  .loose();
 
 const encoder = new TextEncoder();
 
@@ -42,27 +60,16 @@ export function decodeCursor(cursor: string, scope: string): CursorPayload {
   } catch {
     throw new BusinessError('INVALID_ARGUMENT', 'cursor 不是合法的版本化游标');
   }
-  if (typeof payload !== 'object' || payload === null) {
-    throw new BusinessError('INVALID_ARGUMENT', 'cursor 不是合法的版本化游标');
-  }
-  const record = payload as Partial<CursorPayload>;
-  if (
-    record.v !== 1 ||
-    typeof record.scope !== 'string' ||
-    (record.dir !== 'before' && record.dir !== 'after') ||
-    typeof record.seq !== 'number' ||
-    !Number.isFinite(record.seq) ||
-    typeof record.snapshot !== 'number' ||
-    !Number.isFinite(record.snapshot) ||
-    (record.key !== undefined && typeof record.key !== 'string')
-  ) {
+  const parsed = CURSOR_PAYLOAD.safeParse(payload);
+  if (!parsed.success) {
     throw new BusinessError('INVALID_ARGUMENT', 'cursor 字段不完整或版本不受支持');
   }
+  const record = parsed.data as CursorPayload;
   if (record.scope !== scope) {
     throw new BusinessError('INVALID_ARGUMENT', 'cursor 不能跨 scope 重用', {
       expected: scope,
       actual: record.scope,
     });
   }
-  return record as CursorPayload;
+  return record;
 }
