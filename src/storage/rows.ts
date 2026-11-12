@@ -219,7 +219,7 @@ export interface ContactReportRow {
 
 export type RoomRole = 'owner' | 'admin' | 'member';
 export type GroupMemberPolicy = 'members' | 'owner_admin';
-/** 新成员默认只看当前这次加入后的历史；`full` 由群主显式开启。 */
+/** 群默认 `full`；`from_join` 只保留本次加入后的历史，由群主显式收紧。 */
 export type GroupHistoryPolicy = 'from_join' | 'full';
 /** `open` 保持直接邀请；`approval` 由 G02 在邀请接受路径强制执行。 */
 export type GroupJoinPolicy = 'open' | 'approval';

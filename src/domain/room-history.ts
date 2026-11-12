@@ -10,9 +10,9 @@ import type { RoomMemberRow, RoomRow } from '../storage/rows';
  * 按当前成员代次和当前群策略计算，旧游标只定位数据，不携带授权。
  *
  * - direct 房间保持既有单聊语义，不设加入边界。
- * - group 默认 `from_join`：只能读取 `joined_seq`/`joined_at` 之后的内容。
- * - group `full`：群主显式开启后边界为 0；关闭后下一次读取立即回到
- *   `from_join`，已复制内容无法回收。
+ * - group 默认 `full`：新建群与迁移后的存量群边界为 0。
+ * - group `from_join`：群主收紧后只能读取 `joined_seq`/`joined_at` 之后的内容；
+ *   再次放开后回到 0，已复制内容无法回收。
  */
 export interface HistoryBoundary {
   full: boolean;

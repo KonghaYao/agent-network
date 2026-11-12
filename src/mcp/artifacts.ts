@@ -69,7 +69,7 @@ export function registerArtifactTools(
   register(
     server,
     'network_artifact_list',
-    '分页读取当前成员可见的成果版本，按提交时间倒序。新成员默认只能看到加入后提交的成果；历史边界外的成果不返回。返回附带文件票据地址与房间保留配额。',
+    '分页读取当前成员可见的成果版本，按提交时间倒序。群默认全历史，成员可见全部成果；群主收紧为 from_join 后只能看到加入后提交的成果。历史边界外的成果不返回。返回附带文件票据地址与房间保留配额。',
     artifactListSchema,
     artifactPageSchema,
     async (input) => {

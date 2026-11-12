@@ -251,6 +251,18 @@ export async function runMessageTaskAcceptance(): Promise<void> {
     for (const peer of [a1Conn, a2Conn, a3Conn]) {
       await acceptGroupInvites(peer, roomId);
     }
+    // 本验收依赖晚到成员只能看到加入后内容；新建群默认 full，显式收紧。
+    const initialPolicy = await callTool<{ room: { policy_revision: number } }>(
+      hConn.client,
+      'network_room_get',
+      { room_id: roomId },
+    );
+    await callTool(hConn.client, 'network_room_policy_set', {
+      request_id: newRequestId('mt_history_from_join'),
+      room_id: roomId,
+      member_history_policy: 'from_join',
+      expected_policy_revision: initialPolicy.room.policy_revision,
+    });
     check('消息式 Task 验收群建立', Boolean(roomId), roomId);
 
     const send = (

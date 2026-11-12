@@ -36,12 +36,14 @@ try {
   if (!denied) throw new Error('nonmember search was not denied');
   const preJoin = await rawTool<any>(d.wang.token, 'network_room_create', { request_id: id(), kind: 'group', title: '历史边界验证', members: [d.me.actor_id] });
   const edgeRoom = preJoin.room;
+  // 新建群默认 full；先显式收紧，再让 d.me 在加入前消息之后重新入群。
+  const narrowedEdge = await rawTool<any>(d.wang.token, 'network_room_policy_set', { request_id: id(), room_id: edgeRoom.room_id, member_history_policy: 'from_join', expected_policy_revision: edgeRoom.policy_revision ?? 1 });
+  await rawTool(d.wang.token, 'network_room_members_update', { request_id: id(), room_id: edgeRoom.room_id, remove: [d.me.actor_id] });
   await rawTool(d.wang.token, 'network_message_send', { request_id: id(), client_message_id: id(), room_id: edgeRoom.room_id, body: '加入前私密标记', invoke: [] });
-  const invitation = preJoin.invited.find((item: any) => item.actor_id === d.me.actor_id);
-  await rawTool(d.me.token, 'network_room_invite_respond', { request_id: id(), invitation_id: invitation.invitation_id, action: 'accept' });
+  await rawTool(d.wang.token, 'network_room_members_update', { request_id: id(), room_id: edgeRoom.room_id, add: [d.me.actor_id] });
   const hiddenBeforeJoin = await rawTool<any>(d.me.token, 'network_message_search', { room_id: edgeRoom.room_id, query: '加入前私密标记' });
   if (hiddenBeforeJoin.items.length) throw new Error('from_join leaked a pre-join message');
-  let policyRevision = edgeRoom.policy_revision ?? 1;
+  let policyRevision = narrowedEdge.room?.policy_revision ?? narrowedEdge.policy_revision ?? ((edgeRoom.policy_revision ?? 1) + 1);
   const fullPolicy = await rawTool<any>(d.wang.token, 'network_room_policy_set', { request_id: id(), room_id: edgeRoom.room_id, member_history_policy: 'full', expected_policy_revision: policyRevision });
   policyRevision = fullPolicy.room?.policy_revision ?? fullPolicy.policy_revision ?? policyRevision + 1;
   const visibleWithFull = await rawTool<any>(d.me.token, 'network_message_search', { room_id: edgeRoom.room_id, query: '加入前私密标记' });

@@ -21,6 +21,7 @@ import {
 import { runStreamProtocolChecks } from './lib/stream-protocol';
 import { runAgentPresenceUnitChecks } from './lib/presence-unit';
 import { runFeedbackUnitChecks } from './lib/feedback-unit';
+import { runGroupHistoryMigrationUnitChecks } from './lib/group-history-migration-unit';
 import { runDeliveryReminderUnitChecks } from './lib/delivery-reminder-unit';
 import { runDeliverySenderUnitChecks } from './lib/delivery-sender-unit';
 import { runRoomInviteReplayUnitChecks } from './lib/room-invite-replay-unit';
@@ -4053,6 +4054,7 @@ async function main(): Promise<void> {
   await runStreamProtocolChecks(secondToken, newAgentIdentity?.actor_id);
   await runAgentPresenceUnitChecks();
   await runFeedbackUnitChecks();
+  runGroupHistoryMigrationUnitChecks();
   await runOwnerlessRoomUnitChecks();
   await runRoomQuotaUnitChecks();
   await runDeliveryReminderUnitChecks();

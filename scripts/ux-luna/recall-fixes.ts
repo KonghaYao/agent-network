@@ -27,6 +27,8 @@ try {
   const detail = await call(alice.token, 'network_room_create', { request_id: id(), kind: 'group', title: '撤回测试群', members: [bob.actor_id] });
   for (const invitation of detail.invited ?? []) await call(bob.token, 'network_room_invite_respond', { request_id: id(), invitation_id: invitation.invitation_id, action: 'accept' });
   const roomId = detail.room.room_id;
+  // 新建群默认 full；本用例验证重入后看不到旧消息，先显式收紧。
+  await call(alice.token, 'network_room_policy_set', { request_id: id(), room_id: roomId, member_history_policy: 'from_join', expected_policy_revision: detail.room.policy_revision ?? 1 });
   const sendRequest = id();
   const clientMessageId = id();
   const message = await call(alice.token, 'network_message_send', { request_id: sendRequest, client_message_id: clientMessageId, room_id: roomId, body: '撤回前的私密内容', invoke: [] });

@@ -842,8 +842,8 @@ export async function roomCreate(
         db
           .prepare(
             `INSERT INTO rooms
-               (room_id, kind, owner_id, title, direct_pair_key, head_seq, events_min_seq, member_seq, last_message_id, created_at, updated_at)
-             VALUES (?, 'group', ?, ?, NULL, 0, 0, 0, NULL, ?, ?)`,
+               (room_id, kind, owner_id, title, direct_pair_key, head_seq, events_min_seq, member_seq, last_message_id, member_history_policy, created_at, updated_at)
+             VALUES (?, 'group', ?, ?, NULL, 0, 0, 0, NULL, 'full', ?, ?)`,
           )
           .bind(roomId, owner, input.title ?? '', at, at),
         eventStatement(

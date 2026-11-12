@@ -384,7 +384,7 @@ flowchart LR
 ### 群策略与历史边界
 
 - 群主用 `network_room_policy_set` 修改发言、邀请、历史、入群审批、资料编辑与 @所有人 策略，必须带 `expected_policy_revision`；响应返回新的 `policy_revision` 与 `policy_impact`。管理员始终可发言与邀请。
-- 新成员默认 `member_history_policy = from_join`，只能读取本次加入后的消息与文件；加入前内容按 ID 直读返回 `NOT_FOUND` / `FILE_UNAVAILABLE`。群主显式改为 `full` 才可见全历史；收紧后已复制内容无法回收。
+- 群默认 `member_history_policy = full`：新建群与迁移后的存量群都可读取全部历史。群主可收紧为 `from_join`，之后成员只能读取本次加入后的消息与文件；加入前内容按 ID 直读返回 `NOT_FOUND` / `FILE_UNAVAILABLE`。已复制内容无法回收。
 - 重新加入递增 `member_generation`：旧历史/时间线/文件游标返回 `CURSOR_EXPIRED`，旧文件票据立即失效。不要假设本地缓存里的旧代次内容仍可读。
 - `@所有人` 默认仅群主/管理员可用，只发提醒、不创建 delivery；只有策略显式放开后普通成员才能发送。
 - 普通成员用 `network_room_notice_list` 读取影响自己的管理摘要；详细审计只由 owner/管理员用 `network_room_role_history` 读取。两者都不含消息正文或凭据。
@@ -408,7 +408,7 @@ flowchart LR
 - 上传仍是 `POST /mcp-upload`（MCPP Files v1）：原始字节，Bearer 或 URL token，`MCPP-Files-Version: 1`；`MCPP-File-Name` 必须是 `encodeURIComponent` 后的文件名，`MCPP-File-Size` 是原始字节数。上传默认是上传者私有草稿，24 小时后过期；`publicUrl` 是文件身份，裸 `/f/<fileId>` 不带票据返回 404，不能当群授权。
 - 上传响应、`drive_file_info` 与房间文件工具都会返回带短时票据的 `previewUrl` / `preview_url` 与 `downloadUrl` / `download_url`。票据与文件及上传者身份（绑定后是房间成员代次）关联，每次请求都重新校验文件状态与权限；`<img>`、`<video>`、HEAD、Range 与下载走同一校验，服务端没有独立的公开缩略图端点，客户端缩略图只能复用受控预览地址，不需要也不能把长期 token 拼进 URL。
 - `network_room_file_bind { request_id, room_id, file_id }` 只能绑定当前身份上传且未过期的草稿。一个 `file_id` 只属于一个房间，跨房间复用返回 `CONFLICT`；同房间重复 bind 收敛到已存在的行；已删除文件返回 `FILE_UNAVAILABLE`。绑定后文件纳入房间授权，结果返回 `file.public_url`（文件身份）以及带票据的 `file.preview_url` / `file.download_url`。
-- `network_room_file_list { room_id, cursor?, limit? }` 供房间成员分页读取未删除、未过期且在历史边界内的文件，默认 20、最大 100，按绑定时间倒序；`network_room_file_get { room_id, file_id }` 读取单个文件；`network_room_file_delete { request_id, room_id, file_id }` 删除。默认新成员只能看到本次加入后绑定的文件，群主显式开启全历史才可见加入前文件；列表与按 `file_id` 直读使用同一判定，边界外返回 `FILE_UNAVAILABLE`。游标绑定成员代次，重新加入后旧游标返回 `CURSOR_EXPIRED`。
+- `network_room_file_list { room_id, cursor?, limit? }` 供房间成员分页读取未删除、未过期且在历史边界内的文件，默认 20、最大 100，按绑定时间倒序；`network_room_file_get { room_id, file_id }` 读取单个文件；`network_room_file_delete { request_id, room_id, file_id }` 删除。默认群成员可见全部文件；群主收紧为 `from_join` 后才只能看到本次加入后绑定的文件；列表与按 `file_id` 直读使用同一判定，边界外返回 `FILE_UNAVAILABLE`。游标绑定成员代次，重新加入后旧游标返回 `CURSOR_EXPIRED`。
 - 删除权限：上传者可以删除自己的文件；群聊额外允许群 owner；单聊只有上传者。删除写墓碑并软删文件记录：已签发链接（含票据）立即 404，重复删除仍返回成功；业务元数据保留供审计，字节由 GC 在宽限期后清理。
 - 保留与配额：草稿 24 小时、普通未保留附件 30 天；已交付成果的文件保持 `retained`，不参与 TTL 清理，直到有权限者显式释放。房间文件每房间 200 个 / 1 GiB；提交前检查配额，不足返回 `ROOM_FILE_LIMIT`，不会留下半成品。超限时先释放或删除不再需要的成果。
 - **票据即下载权限，但会被撤权**：未绑定文件的票据绑定上传者身份；绑定后票据绑定成员代次与策略版本。成员被移出、重新加入产生新代次或策略收紧后，新下载与尚未使用的旧票据都失效；其他合法成员正常读取。已复制或转发的内容无法收回，不要把凭据写进正文，也不要假设链接只对房间成员长期可见。

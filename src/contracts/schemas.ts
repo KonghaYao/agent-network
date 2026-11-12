@@ -449,7 +449,7 @@ export const roomPolicySetSchema = z
     room_id: id(),
     member_message_policy: groupPolicy.optional(),
     member_invite_policy: groupPolicy.optional(),
-    /** `from_join`（默认）只可见当前加入后；`full` 由群主显式开启。 */
+    /** `full`（默认）可见全部历史；`from_join` 仅当前加入后，由群主显式收紧。 */
     member_history_policy: groupHistoryPolicy.optional(),
     /** `approval` 由 G02 的邀请接受路径强制执行；G07 持久化并返回。 */
     member_join_policy: groupJoinPolicy.optional(),
