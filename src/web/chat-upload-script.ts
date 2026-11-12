@@ -75,7 +75,7 @@ function updateComposerUpload(entry, percent, phase) {
   if (activeRoomId === entry.roomId) renderComposerFiles(entry.roomId);
 }
 
-/** bind 返回文件身份与带票据地址后才可发送与删除；响应缺字段按失败处理。 */
+/** bind 返回公开地址与带票据地址后才可发送与删除；响应缺字段按失败处理。 */
 function completeComposerUpload(entry, bound) {
   if (!entry) return false;
   const boundFile = bound && bound.file && typeof bound.file === 'object' ? bound.file : bound;

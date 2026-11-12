@@ -79,8 +79,8 @@ async function main(): Promise<void> {
     const info = await upload(token);
     check('返回 fileId', /^f_[A-Za-z0-9_-]{22}$/u.test(info.fileId), info);
     checkEqual('返回文件身份 URL', info.publicUrl, `${baseUrl()}/f/${info.fileId}`);
-    checkEqual('上传默认为私有草稿', info.state, 'draft');
-    checkEqual('上传默认不公开', info.visibility, 'private');
+    checkEqual('上传默认为草稿', info.state, 'draft');
+    checkEqual('上传默认可见性为 public', info.visibility, 'public');
     check(
       '预览与下载地址携带票据',
       new URL(info.previewUrl).searchParams.get('t') !== null &&
@@ -88,10 +88,32 @@ async function main(): Promise<void> {
       info,
     );
     checkEqual(
-      '裸 publicUrl 不携带票据返回 404',
+      '裸 publicUrl 默认可直接读取',
       (await fetch(info.publicUrl)).status,
-      404,
+      200,
     );
+
+    const unpublished = await callTool<{ public_url: string; preview_url: string }>(
+      connection.client,
+      'network_file_publish',
+      {
+        request_id: newRequestId('unpublish'),
+        file_id: info.fileId,
+        public: false,
+      },
+    );
+    checkEqual('撤销公开后裸链返回 404', (await fetch(unpublished.public_url)).status, 404);
+    checkEqual(
+      '撤销公开后带票据地址仍可读',
+      (await fetch(unpublished.preview_url)).status,
+      200,
+    );
+    await callTool(connection.client, 'network_file_publish', {
+      request_id: newRequestId('publish'),
+      file_id: info.fileId,
+      public: true,
+    });
+    checkEqual('再次公开后裸链恢复 200', (await fetch(info.publicUrl)).status, 200);
     checkEqual('返回文件大小', info.size, new TextEncoder().encode(BODY).length);
 
     const download = await fetch(info.previewUrl);

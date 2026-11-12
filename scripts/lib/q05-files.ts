@@ -120,6 +120,13 @@ export function q05FileBindingRound(
       room_id: roomId,
       file_id: uploaded.fileId,
     });
+    // 显式撤销默认公开，后面继续验证私有文件的票据与撤权语义。
+    await q05Tool(server, executor.token, 'network_file_publish', {
+      request_id: newRequestId(`unpublish_${round}`),
+      file_id: uploaded.fileId,
+      public: false,
+    });
+    q05Equal(`第 ${round} 轮撤销公开后裸链 404`, await statusOf(uploaded.publicUrl), 404);
     const before = await statusOf(bound.file.preview_url);
     q05Equal(`第 ${round} 轮上传者绑定票据可读`, before, 200);
 

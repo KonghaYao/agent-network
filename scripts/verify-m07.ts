@@ -48,6 +48,7 @@ import {
 import { runPrivateFileAcceptance } from './lib/m07-acceptance';
 
 const MIGRATIONS = join(import.meta.dir, '../migrations');
+const BACKFILL_MIGRATION = '0044_files_public_backfill.sql';
 const ORIGIN = 'https://m07.test';
 const SECRET = 'm07-unit-ticket-secret';
 const OWNER = 'agt_m07_owner';
@@ -171,6 +172,7 @@ function count(db: Database, table: string): number {
 
 function stateOf(db: Database, fileId: string): {
   state: string;
+  visibility: string;
   retained: number;
   expires_at: number | null;
   deleted_at: number | null;
@@ -178,10 +180,11 @@ function stateOf(db: Database, fileId: string): {
 } {
   return db
     .prepare(
-      'SELECT state, retained, expires_at, deleted_at, purged_at FROM drive_files WHERE file_id = ?',
+      'SELECT state, visibility, retained, expires_at, deleted_at, purged_at FROM drive_files WHERE file_id = ?',
     )
     .get(fileId) as {
     state: string;
+    visibility: string;
     retained: number;
     expires_at: number | null;
     deleted_at: number | null;
@@ -326,6 +329,11 @@ async function retentionCases(): Promise<void> {
       checkEqual('[M07-T03] 并发成功后未被清理', drive.purged_at, null);
       checkEqual('[M07-T03] 并发成功后没有删除字节', world.purged.length, 0);
       const ticket = new URL(submitted.value.file.preview_url).searchParams.get('t');
+      // 默认公开已在上面覆盖；这里显式撤销，验证私有成果票据仍可读。
+      await world.d1
+        .prepare("UPDATE drive_files SET visibility = 'private' WHERE file_id = ?")
+        .bind(fileId)
+        .run();
       checkEqual(
         '[M07-T03] 并发成功后成果字节仍可被授权读取',
         (await authorizeFileDownload(world.d1, fileId, `actor:${OWNER}`, ticket, SECRET))?.via,
@@ -363,8 +371,14 @@ async function quotaAndRetentionCases(): Promise<void> {
   );
   checkEqual('[M07-T04] 成果提交绑定文件', submitted.file.file_id, fileId);
   checkEqual('[M07-T04] 成果文件进入保留', submitted.file.retained, true);
+  checkEqual('[M07-T04] 成果文件默认公开', stateOf(world.db, fileId).visibility, 'public');
   const artifactId = submitted.artifact.artifact_id;
   checkEqual('[M07-T04] 成果引用已建立', count(world.db, 'file_references'), 1);
+  // 显式撤销公开，继续验证私有成果文件的票据授权。
+  await world.d1
+    .prepare("UPDATE drive_files SET visibility = 'private' WHERE file_id = ?")
+    .bind(fileId)
+    .run();
 
   // 模拟原 30 天 TTL 已过：保留中的文件仍不应被清理。
   const past = Date.now() - 40 * 24 * 60 * 60_000;
@@ -544,6 +558,85 @@ async function legacyCase(): Promise<void> {
 }
 
 /**
+ * 迁移 0044：未删除的私有文件回填为 public，已删除文件保持不变。
+ *
+ * 先应用全部迁移再插入三种可见性/状态组合，然后移除 0044 的 schema_migrations
+ * 记录并重新运行真实迁移文件，覆盖 draft/bound/deleted 与已 public 的行。
+ */
+async function visibilityBackfillCase(): Promise<void> {
+  const db = new Database(':memory:');
+  db.exec('PRAGMA foreign_keys = ON;');
+  migrate(db, MIGRATIONS);
+  const at = 1_700_000_000_000;
+  const insert = db.prepare(
+    `INSERT INTO drive_files
+       (file_id, owner_scope, uploader_id, name, mime_type, size, sha256,
+        state, visibility, room_id, created_at, expires_at, retained,
+        deleted_at, deleted_by, purged_at)
+     VALUES (?, 'actor:owner', '${OWNER}', ?, 'text/plain', 1, ?, ?, ?, ?, ?, NULL, 0,
+             ?, NULL, NULL)`,
+  );
+  insert.run('f_backfill_draft', 'draft.txt', 'a'.repeat(64), 'draft', 'private', null, at, null);
+  insert.run('f_backfill_bound', 'bound.txt', 'b'.repeat(64), 'bound', 'private', ROOM, at, null);
+  insert.run(
+    'f_backfill_deleted_private',
+    'deleted-private.txt',
+    'c'.repeat(64),
+    'deleted',
+    'private',
+    null,
+    at,
+    at,
+  );
+  insert.run(
+    'f_backfill_deleted_public',
+    'deleted-public.txt',
+    'd'.repeat(64),
+    'deleted',
+    'public',
+    null,
+    at,
+    at,
+  );
+  insert.run('f_backfill_public', 'public.txt', 'e'.repeat(64), 'draft', 'public', null, at, null);
+  db.prepare('DELETE FROM schema_migrations WHERE name = ?').run(BACKFILL_MIGRATION);
+  const applied = migrate(db, MIGRATIONS);
+  checkEqual('[M07-BACKFILL] 只应用 0044 迁移', applied.join(','), BACKFILL_MIGRATION);
+
+  const visibility = (fileId: string): string =>
+    (db.prepare('SELECT visibility FROM drive_files WHERE file_id = ?').get(fileId) as {
+      visibility: string;
+    }).visibility;
+  checkEqual('[M07-BACKFILL] draft 私有回填为 public', visibility('f_backfill_draft'), 'public');
+  checkEqual('[M07-BACKFILL] bound 私有回填为 public', visibility('f_backfill_bound'), 'public');
+  checkEqual(
+    '[M07-BACKFILL] 已删除私有文件保持不变',
+    visibility('f_backfill_deleted_private'),
+    'private',
+  );
+  checkEqual(
+    '[M07-BACKFILL] 已删除公开文件保持不变',
+    visibility('f_backfill_deleted_public'),
+    'public',
+  );
+  checkEqual('[M07-BACKFILL] 已公开的活跃文件保持不变', visibility('f_backfill_public'), 'public');
+
+  const counts = db
+    .prepare(
+      `SELECT
+         SUM(CASE WHEN state <> 'deleted' AND visibility = 'public' THEN 1 ELSE 0 END) AS active_public,
+         SUM(CASE WHEN state <> 'deleted' AND visibility = 'private' THEN 1 ELSE 0 END) AS active_private,
+         SUM(CASE WHEN state = 'deleted' THEN 1 ELSE 0 END) AS deleted
+       FROM drive_files`,
+    )
+    .get() as { active_public: number; active_private: number; deleted: number };
+  checkEqual('[M07-BACKFILL] 活跃文件全部 public', counts.active_private, 0);
+  checkEqual('[M07-BACKFILL] 回填后活跃 public 计数', counts.active_public, 3);
+  checkEqual('[M07-BACKFILL] 已删除文件计数不变', counts.deleted, 2);
+  db.close();
+}
+
+/**
  * 票据与 TTL：
  * - 草稿 24 小时、绑定后普通附件 30 天；
  * - 票据使用时重新检查成员资格、代次与房间策略版本；
@@ -563,10 +656,16 @@ async function ttlAndTicketCases(): Promise<void> {
     draftTtlMs: LIMITS.fileDraftTtlMs,
     at: now,
   });
+  checkEqual('[M07-T01] 新上传默认 visibility 为 public', draft.visibility, 'public');
   check(
     '[M07-T01] 上传草稿默认 24 小时',
     Math.abs((draft.expires_at ?? 0) - (now + LIMITS.fileDraftTtlMs)) < 5_000,
     draft.expires_at,
+  );
+  checkEqual(
+    '[M07-T01] 公开草稿无票据可按链接读取',
+    (await authorizeFileDownload(world.d1, fileId, 'actor:anyone', null, SECRET, now))?.via,
+    'public',
   );
 
   await roomFileBind(
@@ -593,6 +692,16 @@ async function ttlAndTicketCases(): Promise<void> {
 
   const ownerFile = await roomFileGet(world.d1, principal, { room_id: ROOM, file_id: fileId }, ORIGIN, SECRET);
   const ownerTicket = new URL(ownerFile.file.preview_url).searchParams.get('t');
+  // 显式撤销公开后，绑定文件才进入房间票据授权路径。
+  await world.d1
+    .prepare("UPDATE drive_files SET visibility = 'private' WHERE file_id = ?")
+    .bind(fileId)
+    .run();
+  checkEqual(
+    '[M07-T01] 私有文件无票据不可读',
+    await authorizeFileDownload(world.d1, fileId, `actor:${OWNER}`, null, SECRET),
+    null,
+  );
   checkEqual(
     '[M07-T01] 成员票据可读绑定文件',
     (await authorizeFileDownload(world.d1, fileId, `actor:${OWNER}`, ownerTicket, SECRET))?.via,
@@ -660,7 +769,22 @@ async function ttlAndTicketCases(): Promise<void> {
   checkEqual('[M07-T01] 旧库已绑定文件登记为 bound', aligned.state, 'bound');
   checkEqual('[M07-T01] 旧库已绑定文件保留原房间', aligned.room_id, ROOM);
   checkEqual('[M07-T01] 旧库已绑定文件沿用附件期限', aligned.expires_at, expiresAt);
+  checkEqual('[M07-T01] 旧库已绑定文件登记后默认公开', aligned.visibility, 'public');
+  checkEqual(
+    '[M07-T01] 旧库已绑定公开文件无票据可读',
+    (await authorizeFileDownload(world.d1, legacyId, `actor:${MEMBER}`, null, SECRET, now))?.via,
+    'public',
+  );
 
+  await world.d1
+    .prepare("UPDATE drive_files SET visibility = 'private' WHERE file_id = ?")
+    .bind(legacyId)
+    .run();
+  checkEqual(
+    '[M07-T01] 旧库文件撤销公开后无票据不可读',
+    await authorizeFileDownload(world.d1, legacyId, `actor:${MEMBER}`, null, SECRET, now),
+    null,
+  );
   const legacyTicket = new URL(
     roomFileUrls(SECRET, ORIGIN, legacyId, ROOM, MEMBER, {
       full: true,
@@ -683,6 +807,7 @@ async function ttlAndTicketCases(): Promise<void> {
 async function main(): Promise<void> {
   console.log('M07 私有文件授权与成果保留');
   await runPrivateFileAcceptance();
+  await visibilityBackfillCase();
   await ttlAndTicketCases();
   await legacyCase();
   await retentionCases();

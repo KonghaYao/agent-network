@@ -12,7 +12,7 @@ import { BusinessError } from '../contracts/errors';
  * - `scope: 'room'`：票据发给房间成员的某一成员代次，使用时检查成员仍 active、
  *   代次一致、房间策略版本一致、当前历史边界仍允许该文件；移出、退群、重新
  *   加入或策略收紧后旧票据立即失效。
- * - `scope: 'file'`：票据发给上传身份（MCPP ownerScope），用于私有草稿、
+ * - `scope: 'file'`：票据发给上传身份（MCPP ownerScope），用于私有文件、
  *   旧公开文件收紧后的授权客户端访问，以及正式成果绑定前的预览。
  *
  * 票据不携带长期 Bearer；密钥由启动流程解析（部署方提供的

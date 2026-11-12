@@ -84,13 +84,13 @@ async function main() {
     checkEqual('content hash matches local bytes', file.sha256, metadata.sha256);
     checkEqual('byte size matches Unicode content', file.size, bytes.length);
     checkEqual('unicode name survives transport', file.name, metadata.name);
-    checkEqual('upload defaults to private draft', `${file.state}/${file.visibility}`, 'draft/private');
-    checkEqual('bare file URL is not authorization', (await fetch(file.publicUrl)).status, 404);
+    checkEqual('upload defaults to public draft', `${file.state}/${file.visibility}`, 'draft/public');
+    checkEqual('bare file URL is publicly readable by default', (await fetch(file.publicUrl)).status, 200);
     const downloaded = new Uint8Array(await (await fetch(file.downloadUrl)).arrayBuffer());
-    checkEqual('private ticket downloads original bytes', digest(downloaded), metadata.sha256);
+    checkEqual('ticket downloads original bytes', digest(downloaded), metadata.sha256);
     const info = await callTool<Uploaded>(owner.client, 'drive_file_info', { fileId: file.fileId });
     checkEqual('same actor can read upload through MCP', info.fileId, file.fileId);
-    await expectToolError('other actor cannot read private draft', callTool(other.client, 'drive_file_info', { fileId: file.fileId }), 'FILE_UNAVAILABLE');
+    await expectToolError('other actor cannot read upload metadata', callTool(other.client, 'drive_file_info', { fileId: file.fileId }), 'FILE_UNAVAILABLE');
     checkEqual('upload does not create delivery', (await callTool<{ pending_count: number }>(owner.client, 'network_me')).pending_count, beforeUpload.pending_count);
     const preflight = await fetch(prepared.upload_url, { method: 'OPTIONS', headers: { Origin: 'https://client.test', 'Access-Control-Request-Headers': UPLOAD_TICKET_HEADER } });
     checkEqual('ticket CORS preflight', preflight.status, 204);

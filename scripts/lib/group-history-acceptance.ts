@@ -58,7 +58,7 @@ export async function runGroupHistoryAcceptance(options: { hasDrive: boolean }):
     );
     const beforeJoin = await sendMessage(owner.connection, roomId, HISTORY_MARKER);
     const beforeFile = options.hasDrive
-      ? await bindFile(owner, roomId, 'g07-before-join.txt', HISTORY_MARKER)
+      ? await bindFile(owner, roomId, 'g07-before-join.txt', HISTORY_MARKER, { private: true })
       : null;
 
     await callTool(owner.connection.client, 'network_room_members_update', {
@@ -212,8 +212,8 @@ export async function runGroupHistoryAcceptance(options: { hasDrive: boolean }):
     let secondFile: FileResultView | null = null;
     let oldFileCursor: string | null = null;
     if (options.hasDrive) {
-      firstFile = await bindFile(owner, roomId, 'g07-gen1-a.txt', POST_MARKER);
-      secondFile = await bindFile(owner, roomId, 'g07-gen1-b.txt', POST_MARKER);
+      firstFile = await bindFile(owner, roomId, 'g07-gen1-a.txt', POST_MARKER, { private: true });
+      secondFile = await bindFile(owner, roomId, 'g07-gen1-b.txt', POST_MARKER, { private: true });
       const memberFirst = await callTool<FileResultView>(
         member.connection.client,
         'network_room_file_get',

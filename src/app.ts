@@ -830,8 +830,9 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     return c.html(renderJoinPage(inviteKey), 200, { 'cache-control': 'no-store' });
   });
 
-  // 私有下载：新上传默认私有草稿；绑定房间后必须携带房间票据并在每次使用时
-  // 复核成员资格、代次、策略版本与历史边界；公开链接只在显式发布后生效。
+  // 文件下载：新上传默认公开，裸链接按链接即授权读取；撤销公开的文件
+  // （network_file_publish public:false）必须携带上传者或房间票据，并在
+  // 每次使用时复核成员资格、代次、策略版本与历史边界。
   app.get('/f/:fileId', async (c) => {
     const fileId = c.req.param('fileId');
     if (!FILE_ID.test(fileId) || !env.FILES) return c.text('Not Found', 404);

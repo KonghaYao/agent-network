@@ -65,7 +65,7 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
     );
     const preJoinMessage = await sendMessage(owner.connection, roomId, 'G07 策略加入前消息');
     let materialFile: FileResultView | null = options.hasDrive
-      ? await bindFile(owner, roomId, 'g07-material.txt', 'G07 材料任务')
+      ? await bindFile(owner, roomId, 'g07-material.txt', 'G07 材料任务', { private: true })
       : null;
     await callTool(owner.connection.client, 'network_room_members_update', {
       request_id: newRequestId('g07_policy_add_members'),

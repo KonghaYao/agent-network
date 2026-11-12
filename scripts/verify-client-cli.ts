@@ -205,7 +205,7 @@ function startMock(): {
             previewUrl: `${origin}/f/${UPLOAD_FILE_ID}?t=${SIGNED_MARKER}`,
             downloadUrl: `${origin}/f/${UPLOAD_FILE_ID}?t=${SIGNED_MARKER}&download=1`,
             state: 'draft',
-            visibility: 'private',
+            visibility: 'public',
             retained: false,
             quota: { used_bytes: 13, limit_bytes: 1024, used_files: 1, limit_files: 10 },
           },
@@ -690,7 +690,7 @@ function startMock(): {
             createdAt: '2026-11-04T00:00:00.000Z',
             expiresAt: '2026-12-04T00:00:00.000Z',
             state: 'draft',
-            visibility: 'private',
+            visibility: 'public',
             retained: false,
             publicUrl: `${origin}/f/${fileId}`,
             previewUrl: `${origin}/f/${fileId}?t=${SIGNED_MARKER}`,
@@ -2111,7 +2111,7 @@ async function main(): Promise<void> {
     checkEqual('file-info 退出 0', infoHuman.code, 0);
     check(
       'file-info 输出状态与可见性',
-      infoHuman.stdout.includes('state=draft') && infoHuman.stdout.includes('visibility=private'),
+      infoHuman.stdout.includes('state=draft') && infoHuman.stdout.includes('visibility=public'),
       infoHuman.stdout,
     );
 

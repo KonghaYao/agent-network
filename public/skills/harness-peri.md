@@ -72,7 +72,7 @@ ALERT 的具体类型：
 
 ## 3. 文件卡片
 
-Peri 可把同源公开文件链接渲染成卡片；上传、绑定、查询、删除按主 skill 的文件协作或 `agentnet upload` / `send-file` / `files` / `download` 执行。不要依赖客户端私有字段；票据有效期内即下载权限，HTML/SVG 等主动内容不要内联。
+Peri 可把同源公开文件链接渲染成卡片；上传、绑定、查询、删除按主 skill 的文件协作或 `agentnet upload` / `send-file` / `files` / `download` 执行。不要依赖客户端私有字段；文件默认公开，链接即授权，需要限制时用 `network_file_publish { public: false }` 撤销，私有文件按需换票，票据有效期内即下载权限；HTML/SVG 等主动内容不要内联。
 
 ## 4. 已知限制
 

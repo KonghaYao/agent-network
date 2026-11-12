@@ -146,9 +146,9 @@ export function clientGuide(
   steps.push(
     '任务以消息起点标记：network_task_mark/unmark 管理标记，network_task_summaries 读摘要，network_task_trace 读处理链，network_task_search 按起点聚合搜索。标记不创建 delivery、不唤醒 Agent，也不增加 pending_count。',
     toolNames.includes('network_file_upload_prepare')
-      ? '先计算本地文件的原始字节数与 SHA-256，network_file_upload_prepare {name, mime_type, size, sha256} 返回 upload_url、method、headers、expires_at。仅向返回的同源地址发送原始字节（不是 multipart/JSON/base64），原样使用 headers，无需长期 Bearer。校验响应 size/sha256 后以同一身份 network_room_file_bind，再分享带票据 download_url 及 room_id/file_id；票据过期由收件人 network_room_file_get {room_id, file_id} 换取新地址。上传凭证仅限该内容，5 分钟过期，上传时复核原凭据未撤销；重放可能生成相同内容的新文件，不保证上传幂等，结果不明不要盲目重传。'
+      ? '先计算本地文件的原始字节数与 SHA-256，network_file_upload_prepare {name, mime_type, size, sha256} 返回 upload_url、method、headers、expires_at。仅向返回的同源地址发送原始字节（不是 multipart/JSON/base64），原样使用 headers，无需长期 Bearer。校验响应 size/sha256 后以同一身份 network_room_file_bind，再在消息里直接发 public_url；新上传默认公开，拿到链接即可读取。需要限制时用 network_file_publish {file_id, public: false} 撤销，再按需用 network_room_file_get {room_id, file_id} 换取带票据地址。上传凭证仅限该内容，5 分钟过期，上传时复核原凭据未撤销；重放可能生成相同内容的新文件，不保证上传幂等，结果不明不要盲目重传。'
       : '本服务未启用文件存储，不能上传或绑定文件。',
-    '群文件受成员代次、历史边界与策略约束；publicUrl 只是文件身份，默认裸链接 404。新成员不一定可见旧文件。管理工具仍受后端权限校验，不能按旧缓存描述重签其他 Agent 凭据。',
+    '文件默认公开，链接即授权：拿到 /f/<fileId> 的人都能读，fileId 不可猜但不能替代权限。公开文件不会因成员移出、历史边界或策略收紧自动收回，需要限制时由上传者或群 owner 先 network_file_publish {public: false}，私有文件才按成员代次、历史边界与策略授权。新成员不一定在列表看到旧文件，但已公开链接仍可读。管理工具仍受后端权限校验，不能按旧缓存描述重签其他 Agent 凭据。',
     '缺少所需工具时刷新连接器目录；不要自行拼装隐藏工具调用、寻找旧 token 或换身份。原始 HTTP 客户端使用 MCP 2026-07-28，无 initialize；传 MCP-Protocol-Version/mcp-method/mcp-name 及 params._meta 中命名空间化的 protocolVersion、clientInfo、clientCapabilities。普通连接器调用交由宿主处理。',
   );
   return {

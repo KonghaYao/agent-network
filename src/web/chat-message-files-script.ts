@@ -70,7 +70,7 @@ function messageFileHref(fileId) {
   return fileSafeUrl('/f/' + fileId);
 }
 
-/** 裸地址只用于文件身份展示与重试；点击下载前必须换取带票据地址。 */
+/** 裸地址用于公开文件；私有文件点击下载前再换取带票据地址。 */
 function messageFileRawDownloadHref(fileId) {
   return fileSafeUrl('/f/' + fileId + '?download=1');
 }
@@ -88,10 +88,11 @@ function messageFileTicketEntry(fileId) {
 /**
  * 房间绑定文件的短时票据地址。
  *
- * 正文里的 \`/f/<id>\` 只是文件身份；绑定到房间后需要成员代次票据才能读取。
- * HEAD 先试裸地址（未绑定上传仍公开），失败时用当前房间调用
- * \`network_room_file_get\` 取带 \`?t=\` 的地址；票据按 fileId 缓存，超过
- * 客户端安全年龄后丢弃，下次渲染会向服务端重新换取。
+ * 正文里的 \`/f/<id>\` 默认公开，裸地址可直接读；只有显式
+ * \`network_file_publish { public: false }\` 撤销后，才需要用当前房间调用
+ * \`network_room_file_get\` 取带 \`?t=\` 的地址。HEAD 先试裸地址，失败时
+ * 再换取票据；票据按 fileId 缓存，超过客户端安全年龄后丢弃，下次渲染会
+ * 向服务端重新换取。
  */
 function messageFileTicketUrl(fileId) {
   const ticket = messageFileTicketEntry(fileId);
@@ -123,7 +124,7 @@ function messageFileResolveTicket(fileId) {
   ).catch(function () { return null; });
 }
 
-/** 带票据地址才能读取私有文件；没有票据时返回 null，由点击流程换取。 */
+/** 私有文件使用带票据地址；公开文件可没有票据，返回 null 时由点击流程按需换取。 */
 function messageFileDownloadUrl(fileId) {
   const ticket = messageFileTicketEntry(fileId);
   if (!ticket) return null;
@@ -537,7 +538,8 @@ function messageFileDownloadLink(fileId, name) {
   link.referrerPolicy = 'no-referrer';
   link.setAttribute('download', name || '文件');
   link.textContent = '下载';
-  // 始终拦截默认跳转：裸地址对私有文件必然 404，点击时再换取票据。
+  // 始终拦截默认跳转：公开文件可直接下载，私有文件的裸地址会 404，
+  // 点击时再按需换取票据。
   link.addEventListener('click', function (event) {
     event.preventDefault();
     messageFileRequestDownload(link.closest('.msg-file'));

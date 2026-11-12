@@ -603,14 +603,14 @@ async function main(): Promise<void> {
     }
     const driveTool = listed?.tools?.find((tool) => tool.name === 'drive_file_info');
     check(
-      'drive_file_info 描述声明上传默认私有、裸链接 404、需票据读取',
+      'drive_file_info 描述声明默认公开、可撤销与票据读取',
       typeof driveTool?.description === 'string' &&
         driveTool.description.includes('本地路径') &&
         driveTool.description.includes('file://') &&
         driveTool.description.includes('POST /mcp-upload') &&
         driveTool.description.includes('publicUrl') &&
-        driveTool.description.includes('私有草稿') &&
-        driveTool.description.includes('返回 404') &&
+        driveTool.description.includes('默认公开') &&
+        driveTool.description.includes('链接即授权') &&
         driveTool.description.includes('network_room_file_bind') &&
         driveTool.description.includes('network_file_publish') &&
         driveTool.description.includes('previewUrl') &&
@@ -621,16 +621,17 @@ async function main(): Promise<void> {
     );
     const bindTool = listed?.tools?.find((tool) => tool.name === 'network_room_file_bind');
     check(
-      'room_file_bind 描述声明私有草稿、按历史边界授权、裸 public_url 404',
+      'room_file_bind 描述声明默认公开、可撤销、私有文件按历史边界授权',
       typeof bindTool?.description === 'string' &&
         bindTool.description.includes('未过期') &&
         bindTool.description.includes('public_url') &&
         bindTool.description.includes('preview_url') &&
         bindTool.description.includes('download_url') &&
-        bindTool.description.includes('私有草稿') &&
+        bindTool.description.includes('默认公开') &&
+        bindTool.description.includes('链接即授权') &&
         bindTool.description.includes('历史边界') &&
         bindTool.description.includes('network_file_publish') &&
-        bindTool.description.includes('立即失效') &&
+        bindTool.description.includes('旧票据失效') &&
         !bindTool.description.includes('文件移出房间'),
       bindTool?.description,
     );
@@ -735,17 +736,18 @@ async function main(): Promise<void> {
     sendTool?.outputSchema,
   );
   check(
-    'message_send 描述声明上传默认私有、绑定后须用带票据地址',
+    'message_send 描述声明默认公开、可撤销与按需换票',
     typeof sendTool?.description === 'string' &&
       sendTool.description.includes('本地路径') &&
       sendTool.description.includes('file://') &&
       sendTool.description.includes('POST /mcp-upload') &&
       sendTool.description.includes('publicUrl') &&
-      sendTool.description.includes('私有草稿') &&
+      sendTool.description.includes('默认公开') &&
+      sendTool.description.includes('链接即授权') &&
       sendTool.description.includes('network_file_publish') &&
       sendTool.description.includes('network_room_file_bind') &&
       sendTool.description.includes('房间文件列表') &&
-      sendTool.description.includes('带票据') &&
+      sendTool.description.includes('短时票据') &&
       sendTool.description.includes('preview_url') &&
       sendTool.description.includes('download_url') &&
       !sendTool.description.includes('未绑定的文件保持公开') &&
@@ -1948,9 +1950,9 @@ async function main(): Promise<void> {
     skillText.slice(0, 240),
   );
   check(
-    '技能正文说明上传默认私有、绑定/成果按历史边界使用票据',
+    '技能正文说明上传默认公开、链接即授权与显式撤销',
     [
-      '上传默认是上传者私有草稿',
+      '上传默认公开',
       'POST /mcp-upload',
       'publicUrl',
       'previewUrl',
@@ -1960,8 +1962,8 @@ async function main(): Promise<void> {
       'network_artifact_submit',
       'network_artifact_release',
       '历史边界',
-      '带票据',
-      '旧票据',
+      '链接即授权',
+      'public: false',
     ].every((marker) => skillText.includes(marker)),
     skillText.slice(0, 400),
   );
@@ -2443,9 +2445,9 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 240),
   );
   check(
-    '静态技能说明上传默认私有、绑定/成果按历史边界使用票据',
+    '静态技能说明上传默认公开、链接即授权与显式撤销',
     [
-      '上传默认是上传者私有草稿',
+      '上传默认公开',
       'POST /mcp-upload',
       'publicUrl',
       'previewUrl',
@@ -2455,8 +2457,8 @@ async function main(): Promise<void> {
       'network_artifact_submit',
       'network_artifact_release',
       '历史边界',
-      '带票据',
-      '旧票据',
+      '链接即授权',
+      'public: false',
     ].every((marker) => skillDocText.includes(marker)),
     skillDocText.slice(0, 400),
   );
@@ -2560,12 +2562,12 @@ async function main(): Promise<void> {
   );
   const fileShareRules = (text: string): string[] => {
     const markers = [
-      '上传默认是上传者私有草稿',
-      '裸 `/f/<fileId>`',
-      '- **公开发布是独立动作**',
+      '上传默认公开',
+      '链接即授权',
+      '- **链接即授权，私有文件才需要票据**',
       '`network_file_publish',
-      '- **票据即下载权限，但会被撤权**',
-      '不要假设链接只对房间成员长期可见。',
+      '- **可见性默认公开，可单独撤销**',
+      '需要收回必须先 `network_file_publish { public: false }`',
     ];
     return markers.filter((marker) => text.includes(marker));
   };
@@ -2816,7 +2818,9 @@ async function main(): Promise<void> {
     'POST /mcp-upload',
     'publicUrl',
     'public_url',
-    '私有草稿',
+    '默认公开',
+    '链接即授权',
+    'network_file_publish',
     'network_room_file_bind',
     'network_room_file_list',
     'network_room_file_get',
@@ -2825,10 +2829,9 @@ async function main(): Promise<void> {
     '房间文件列表',
     '历史边界',
     '带票据',
-    '旧票据',
   ];
   check(
-    'ChatGPT 指南说明上传默认私有、绑定/成果按历史边界使用票据',
+    'ChatGPT 指南说明默认公开、链接即授权与私有文件票据',
     chatgptFileMarkers.every((marker) => chatgptGuideText.includes(marker)),
     { missing: chatgptFileMarkers.filter((marker) => !chatgptGuideText.includes(marker)) },
   );

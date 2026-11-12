@@ -26,8 +26,9 @@ import { register } from './tools';
 import { requireActor } from './auth';
 
 /**
- * 私有文件发布与成果保留工具。
+ * 文件发布与成果保留工具。
  *
+ * 文件默认公开；`network_file_publish { public: false }` 单独撤销。
  * 与房间文件工具一起只在启用 MCPP Files 时注册；所有写操作都走
  * runIdempotent，配额与权限在同一事务内裁决。
  */
@@ -45,7 +46,7 @@ export function registerArtifactTools(
   register(
     server,
     'network_file_publish',
-    '显式发布或撤销发布文件。公开发布是独立、需有权限的动作，默认关闭；发布不会延长 TTL，公开文件仍受草稿 24 小时或附件 30 天期限约束。已绑定房间的文件只有上传者或群 owner（单聊仅上传者）可以操作；未绑定草稿只有上传者可以操作。撤销后公开 URL 立即 404，客户端应重新调用 network_room_file_get 或 drive_file_info 获取带票据地址。',
+    '切换文件可见性。新上传与绑定默认公开，裸 public_url 可直接读取；需要限制时传 public: false 撤销，撤销后裸链接 404，必须使用带短时票据的 preview_url / download_url。发布不会延长 TTL，公开文件仍受草稿 24 小时或附件 30 天期限约束。已绑定房间的文件只有上传者或群 owner（单聊仅上传者）可以操作；未绑定草稿只有上传者可以操作。撤销后客户端应重新调用 network_room_file_get 或 drive_file_info 获取带票据地址，再次公开传 public: true。',
     filePublishSchema,
     filePublishResultSchema,
     async (input) => {
