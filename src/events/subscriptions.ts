@@ -1,3 +1,5 @@
+import { TTLCache } from '@isaacs/ttlcache';
+
 import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
 import {
@@ -65,7 +67,13 @@ export interface SubscribeResult {
   truncated: boolean;
 }
 
-const verificationAttempts = new Map<string, number[]>();
+const VERIFICATION_WINDOW_MS = 60_000;
+const VERIFICATION_HOSTS_MAX = 10_000;
+/** 每 host 滑动窗口；TTL + max 保证轮换 hostname 时进程内存有界。 */
+const verificationAttempts = new TTLCache<string, number[]>({
+  ttl: VERIFICATION_WINDOW_MS,
+  max: VERIFICATION_HOSTS_MAX,
+});
 
 function requireIdentity(principal: Principal): {
   actorId: string;
@@ -176,9 +184,9 @@ async function verificationCached(
   return existing !== null;
 }
 
-function beginVerification(hostname: string, now: number, perMinute: number): void {
-  const attempts = verificationAttempts.get(hostname) ?? [];
-  const cutoff = now - 60_000;
+export function beginVerification(hostname: string, now: number, perMinute: number): void {
+  const attempts = verificationAttempts.get(hostname, { checkAgeOnGet: true }) ?? [];
+  const cutoff = now - VERIFICATION_WINDOW_MS;
   const recent = attempts.filter((at) => at > cutoff);
   if (recent.length >= perMinute) {
     verificationAttempts.set(hostname, recent);
@@ -189,6 +197,11 @@ function beginVerification(hostname: string, now: number, perMinute: number): vo
   }
   recent.push(now);
   verificationAttempts.set(hostname, recent);
+}
+
+/** 单测/诊断：当前有记录的 host 数，不会超过 `VERIFICATION_HOSTS_MAX`。 */
+export function verificationAttemptHostCount(): number {
+  return verificationAttempts.size;
 }
 
 function callbackDiagnostics(error: CallbackRequestError): Record<string, string | number | null> {

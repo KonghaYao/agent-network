@@ -10,6 +10,7 @@
  * 这里不打印 token，也不把 Authorization 写进错误文本。
  */
 
+import { sseMessageStream } from '../../src/contracts/sse';
 import { asArray, asRecord, asString } from '../output';
 import { parseRpcPayload, PROTOCOL_VERSION, redact } from '../mcp';
 
@@ -130,14 +131,10 @@ export class MonitorRpc {
 
   /** POST JSON-RPC；传输层失败抛错，RPC 业务错误保留在返回 payload。 */
   private async post(method: string, params: JsonObject, name?: string): Promise<JsonObject> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
-    const onAbort = (): void => controller.abort();
     const outer = this.config.signal;
-    if (outer) {
-      if (outer.aborted) controller.abort();
-      else outer.addEventListener('abort', onAbort, { once: true });
-    }
+    const signal = outer
+      ? AbortSignal.any([outer, AbortSignal.timeout(30_000)])
+      : AbortSignal.timeout(30_000);
     const body = {
       jsonrpc: '2.0',
       id: `monitor-${crypto.randomUUID()}`,
@@ -147,38 +144,33 @@ export class MonitorRpc {
     const headers = this.authHeaders(method, 'application/json, text/event-stream');
     // modern-only 服务端要求带 params.name 的方法在请求头重复 MCP-Name。
     if (name) headers['mcp-name'] = name;
+    let response: Response;
     try {
-      let response: Response;
-      try {
-        response = await fetch(this.endpoint, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        throw new MonitorTransportError(redact(reason, this.token));
-      }
-      const text = await response.text().catch(() => '');
-      if (response.status === 400) {
-        throw new MonitorFatalError('protocol', this.describeRejection(response.status, text));
-      }
-      if (response.status === 401 || response.status === 403) {
-        throw new MonitorFatalError('credential', 'credential_invalid');
-      }
-      if (!response.ok) {
-        throw new MonitorTransportError(`HTTP ${response.status}`, response.status);
-      }
-      const payload = parseRpcPayload(text, response.headers.get('content-type') ?? '');
-      if (payload === null) {
-        throw new MonitorTransportError('invalid_response');
-      }
-      return payload;
-    } finally {
-      clearTimeout(timeout);
-      outer?.removeEventListener('abort', onAbort);
+      response = await fetch(this.endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new MonitorTransportError(redact(reason, this.token));
     }
+    const text = await response.text().catch(() => '');
+    if (response.status === 400) {
+      throw new MonitorFatalError('protocol', this.describeRejection(response.status, text));
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new MonitorFatalError('credential', 'credential_invalid');
+    }
+    if (!response.ok) {
+      throw new MonitorTransportError(`HTTP ${response.status}`, response.status);
+    }
+    const payload = parseRpcPayload(text, response.headers.get('content-type') ?? '');
+    if (payload === null) {
+      throw new MonitorTransportError('invalid_response');
+    }
+    return payload;
   }
 
   /** 能力发现：只接受 2026-07-28，不降级。 */
@@ -427,38 +419,14 @@ export async function subscribe(
         else throw error;
       }
     } else {
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      const dataLines: string[] = [];
       try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
+        for await (const event of sseMessageStream(response.body, {
+          onComment: () => {
+            lastActivity = Date.now();
+          },
+        })) {
           lastActivity = Date.now();
-          buffer += decoder.decode(value, { stream: true });
-          const lineBreak = /^(.*?)(\r\n|\n|\r)/;
-          for (;;) {
-            const match = lineBreak.exec(buffer);
-            if (!match) break;
-            const line = match[1] ?? '';
-            buffer = buffer.slice(match[0].length);
-            if (line === '') {
-              if (dataLines.length > 0) {
-                const data = dataLines.join('\n');
-                dataLines.length = 0;
-                await dispatch(data);
-              }
-            } else if (line.startsWith('data:')) {
-              dataLines.push(line.slice(5).trimStart());
-            }
-          }
-        }
-        if (buffer.startsWith('data:')) dataLines.push(buffer.slice(5).trimStart());
-        if (dataLines.length > 0) {
-          const data = dataLines.join('\n');
-          dataLines.length = 0;
-          await dispatch(data);
+          if (event.data.length > 0) await dispatch(event.data);
         }
       } catch (error) {
         if (error instanceof MonitorFatalError) {
@@ -466,8 +434,6 @@ export async function subscribe(
         } else if (!controller.signal.aborted) {
           reason = 'connection_reset';
         }
-      } finally {
-        reader.releaseLock();
       }
     }
   } catch (error) {

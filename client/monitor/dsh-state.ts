@@ -2,14 +2,15 @@
  * dsh 监听器的本地状态：WEBBOTS_HOME 路径、status.json、PID、wake.queue 游标。
  *
  * 这些格式与旧 shell 监听完全一致；只做纯 I/O，不访问网络、
- * 不接触 token。status 写入使用临时文件 + rename，避免巡检读到半截 JSON。
+ * 不接触 token。status 写入使用 write-file-atomic，避免巡检读到半截 JSON。
  */
 
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { asRecord } from '../output';
+import { writeAtomicFile } from './atomic';
 import type { JsonObject } from './rpc';
 
 export interface DshPaths {
@@ -37,8 +38,6 @@ export interface DshStatus {
   startedAt: string | null;
   updatedAt: string;
 }
-
-let statusWriteSeq = 0;
 
 export function nowIso(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/u, 'Z');
@@ -141,11 +140,7 @@ export async function ensureHome(paths: DshPaths): Promise<string | null> {
 }
 
 export async function writeAtomic(path: string, content: string): Promise<void> {
-  statusWriteSeq += 1;
-  const temp = `${path}.tmp.${process.pid}.${statusWriteSeq}`;
-  await writeFile(temp, content, { mode: 0o600 });
-  await chmod(temp, 0o600).catch(() => undefined);
-  await rename(temp, path);
+  await writeAtomicFile(path, content);
 }
 
 export async function writeStatusFile(paths: DshPaths, status: DshStatus): Promise<void> {

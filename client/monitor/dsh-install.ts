@@ -1,12 +1,14 @@
 /** Ensure the shipped DSH consumer exists before the DSH monitor starts. */
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
 import { CliError } from '../mcp';
+import { writeAtomicFile } from './atomic';
 import { dshPaths } from './dsh-state';
+import { acquireLock } from './locks';
 import pluginSource from './dsh-plugin.mjs.txt' with { type: 'text' };
 
 export const DSH_MONITOR_PACKAGE = '@peri-code/dsh-webots-monitor';
@@ -181,11 +183,23 @@ function parseVersion(text: string): {
   };
 }
 
-function supportedVersion(version: NonNullable<ReturnType<typeof parseVersion>>): boolean {
-  if (version.major !== 0 || version.minor !== 2 || version.patch < 1) return false;
-  if (version.patch > 1 || version.prerelease === null) return true;
+/**
+ * 受支持的 DSH 版本。
+ *
+ * 基础区间交给 `Bun.semver`；Bun 对 `<0.3.0` 的预发布一律返回 false，
+ * 因此 rc 版本再用同一条区间校验核心版本，只允许 `rc.N`：
+ * `0.2.1-rc.5` 起、`0.2.2-rc.*` 放行，`0.2.2-beta` 拒绝。
+ */
+export function isSupportedDshVersion(raw: string): boolean {
+  const version = parseVersion(raw);
+  if (!version) return false;
+  if (Bun.semver.satisfies(version.raw, DSH_SUPPORTED_RANGE)) return true;
+  if (version.prerelease === null) return false;
   const rc = /^rc\.(\d+)$/u.exec(version.prerelease);
-  return rc !== null && Number(rc[1]) >= 5;
+  if (!rc) return false;
+  const core = `${version.major}.${version.minor}.${version.patch}`;
+  if (!Bun.semver.satisfies(core, DSH_SUPPORTED_RANGE)) return false;
+  return version.patch > 1 || (version.patch === 1 && Number(rc[1]) >= 5);
 }
 
 async function detectDshVersion(): Promise<string> {
@@ -195,7 +209,7 @@ async function detectDshVersion(): Promise<string> {
   }
   const version = parseVersion(`${result.stdout}\n${result.stderr}`);
   if (!version) throw new CliError('无法识别 DSH 版本输出；请升级到受支持版本。');
-  if (!supportedVersion(version)) {
+  if (!isSupportedDshVersion(version.raw)) {
     throw new CliError(
       `DSH ${version.raw} 不受支持；需要 ${DSH_SUPPORTED_RANGE}，请先升级或切换版本。`,
     );
@@ -367,23 +381,17 @@ async function planBinding(value: Target): Promise<BindingPlan> {
 
 async function commitBinding(value: Target, plan: BindingPlan): Promise<void> {
   await mkdir(value.home, { recursive: true, mode: 0o700 });
-  const temporary = `${value.bindingsFile}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(plan.ownerPath, plan.owner, { mode: 0o600 });
-    await writeFile(temporary, `${JSON.stringify(plan.bindings, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, value.bindingsFile);
-  } finally {
-    await rm(temporary, { force: true });
-  }
+  await writeAtomicFile(plan.ownerPath, plan.owner);
+  await writeAtomicFile(value.bindingsFile, `${JSON.stringify(plan.bindings, null, 2)}\n`);
 }
 
 export async function ensureDshMonitorPlugin(): Promise<DshPluginEnsureResult> {
   const value = await target();
   const dshVersion = await detectDshVersion();
   await mkdir(value.profileDir, { recursive: true, mode: 0o700 });
-  const lock = join(value.profileDir, '.webots-monitor-install.lock');
+  let release: (() => Promise<void>) | null = null;
   try {
-    await mkdir(lock, { mode: 0o700 });
+    release = await acquireLock(value.profileDir, { stale: 300_000, update: 10_000 });
   } catch {
     throw new CliError('该 profile 正在检查/安装 monitor；确认没有并发启动后重试。');
   }
@@ -398,6 +406,6 @@ export async function ensureDshMonitorPlugin(): Promise<DshPluginEnsureResult> {
     await commitBinding(value, binding);
     return { installed: !present, dshVersion };
   } finally {
-    await rm(lock, { recursive: true, force: true });
+    await release();
   }
 }

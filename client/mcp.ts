@@ -11,6 +11,8 @@
 
 import { readFileSync, statSync } from 'node:fs';
 
+import { parseSseJsonText } from '../src/contracts/sse';
+
 export const PROTOCOL_VERSION = '2026-07-28';
 export const CLIENT_NAME = 'agentnet-cli';
 export const CLIENT_VERSION = '3.0.0';
@@ -186,24 +188,7 @@ export function parseRpcPayload(text: string, contentType: string): Record<strin
     // 继续尝试 SSE。
   }
   if (!contentType.includes('text/event-stream')) return null;
-  let candidate: Record<string, unknown> | null = null;
-  for (const frame of trimmed.split(/\r?\n\r?\n/u)) {
-    const data = frame
-      .split(/\r?\n/u)
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart())
-      .join('\n');
-    if (data.length === 0) continue;
-    try {
-      const parsed: unknown = JSON.parse(data);
-      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        candidate = parsed as Record<string, unknown>;
-      }
-    } catch {
-      // 忽略无法解析的帧；SSE 可能包含 keepalive 或通知。
-    }
-  }
-  return candidate;
+  return parseSseJsonText(trimmed);
 }
 
 function toolErrorDetail(result: ToolResult): { message: string; code?: string; details?: unknown } {

@@ -566,59 +566,6 @@ export function parseByteRange(header: string, size: number): ByteRange | 'unsat
   return { start, end };
 }
 
-/** 跳过 start 字节后只输出 length 字节；提前关闭底层流，避免读完整个文件。 */
-export function sliceReadable(
-  source: Readable,
-  start: number,
-  length: number,
-): ReadableStream<Uint8Array> {
-  const iterator = source[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
-  let skip = start;
-  let remaining = length;
-  let finished = false;
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (finished) return;
-      try {
-        while (remaining > 0) {
-          const next = await iterator.next();
-          if (next.done) {
-            finished = true;
-            controller.close();
-            return;
-          }
-          const chunk = next.value;
-          if (skip >= chunk.length) {
-            skip -= chunk.length;
-            continue;
-          }
-          const body = skip > 0 ? chunk.subarray(skip) : chunk;
-          skip = 0;
-          const take = body.subarray(0, remaining);
-          remaining -= take.length;
-          controller.enqueue(new Uint8Array(take));
-          if (remaining === 0) {
-            finished = true;
-            void iterator.return?.();
-            controller.close();
-          }
-          return;
-        }
-        finished = true;
-        controller.close();
-      } catch (error) {
-        finished = true;
-        controller.error(error);
-      }
-    },
-    async cancel() {
-      finished = true;
-      await iterator.return?.();
-      source.destroy();
-    },
-  });
-}
-
 /** `If-None-Match` 只接受精确匹配或 `*`；弱比较前缀按 RFC 9110 处理。 */
 function matchesEtag(header: string | undefined, etag: string): boolean {
   if (!header) return false;
@@ -643,8 +590,14 @@ function retiredSkillResponse(): Response {
   );
 }
 
-async function openPayload(fileService: FileService, payloadKey: string): Promise<Readable> {
-  return fileService.disk.getStream(payloadKey);
+async function openPayload(
+  fileService: FileService,
+  payloadKey: string,
+  range?: ByteRange,
+): Promise<Readable> {
+  return range
+    ? fileService.disk.getStream(payloadKey, { range: { start: range.start, end: range.end } })
+    : fileService.disk.getStream(payloadKey);
 }
 
 export function createApp(env: Env, deps: AppDeps = {}): Hono {
@@ -659,58 +612,29 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     }),
   );
 
-  // AI 消息 Markdown 岛：启动构建、内存缓存；构建失败或未注入时 404，
-  // 页面保留纯文本回退，不影响发送、文件卡片与其他交互。
-  app.get('/assets/chat-markdown.js', (c) => {
-    if (!deps.markdownAsset) {
+  // 浏览器岛 bundle：同一缓存策略、按文件名映射；构建失败或未注入时 404。
+  // 启动期已预计算内容哈希，ETag 直接用版本，不引入 hono/etag。
+  const assets: Record<
+    string,
+    { body: string | null | undefined; version: string | null | undefined }
+  > = {
+    'chat-markdown.js': { body: deps.markdownAsset, version: deps.markdownAssetVersion },
+    'chat-resizer.js': { body: deps.resizerAsset, version: deps.resizerAssetVersion },
+    'chat-drawboard.js': { body: deps.drawboardAsset, version: deps.drawboardAssetVersion },
+    'chat-icons.js': { body: deps.iconAsset, version: deps.iconAssetVersion },
+  };
+  app.get('/assets/:name', (c) => {
+    const asset = assets[c.req.param('name')];
+    if (!asset) return c.notFound();
+    const body = asset.body;
+    if (!body) {
       return c.text('Not Found', 404, { 'cache-control': 'no-store' });
     }
-    return c.body(deps.markdownAsset, 200, {
+    return c.body(body, 200, {
       'content-type': 'text/javascript; charset=utf-8',
       'cache-control': 'public, max-age=300',
       'x-content-type-options': 'nosniff',
-      ...(deps.markdownAssetVersion ? { etag: `"${deps.markdownAssetVersion}"` } : {}),
-    });
-  });
-
-  // 右侧面板拖拽岛：与 Markdown 岛相同的独立 bundle 与缓存策略。
-  // 构建失败时 404，页面保留 CSS 默认 50/50，分隔条不响应拖动。
-  app.get('/assets/chat-resizer.js', (c) => {
-    if (!deps.resizerAsset) {
-      return c.text('Not Found', 404, { 'cache-control': 'no-store' });
-    }
-    return c.body(deps.resizerAsset, 200, {
-      'content-type': 'text/javascript; charset=utf-8',
-      'cache-control': 'public, max-age=300',
-      'x-content-type-options': 'nosniff',
-      ...(deps.resizerAssetVersion ? { etag: `"${deps.resizerAssetVersion}"` } : {}),
-    });
-  });
-
-  // Fabric 画板岛：只在打开画板时动态导入；构建失败时 404，页面显示可读错误。
-  app.get('/assets/chat-drawboard.js', (c) => {
-    if (!deps.drawboardAsset) {
-      return c.text('Not Found', 404, { 'cache-control': 'no-store' });
-    }
-    return c.body(deps.drawboardAsset, 200, {
-      'content-type': 'text/javascript; charset=utf-8',
-      'cache-control': 'public, max-age=300',
-      'x-content-type-options': 'nosniff',
-      ...(deps.drawboardAssetVersion ? { etag: `"${deps.drawboardAssetVersion}"` } : {}),
-    });
-  });
-
-  // 图标悬停动效：页面先拿到服务端静态 SVG，这个 bundle 只做渐进增强。
-  // 构建失败时 404，图标保持静态，页面其他脚本不受影响。
-  app.get('/assets/chat-icons.js', (c) => {
-    if (!deps.iconAsset) {
-      return c.text('Not Found', 404, { 'cache-control': 'no-store' });
-    }
-    return c.body(deps.iconAsset, 200, {
-      'content-type': 'text/javascript; charset=utf-8',
-      'cache-control': 'public, max-age=300',
-      'x-content-type-options': 'nosniff',
-      ...(deps.iconAssetVersion ? { etag: `"${deps.iconAssetVersion}"` } : {}),
+      ...(asset.version ? { etag: `"${asset.version}"` } : {}),
     });
   });
 
@@ -873,13 +797,10 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
           return new Response(null, { status: 416, headers });
         }
         if (range) {
-          const stream = await openPayload(env.FILES, record.payloadKey);
+          const stream = await openPayload(env.FILES, record.payloadKey, range);
           headers.set('content-range', `bytes ${range.start}-${range.end}/${record.size}`);
           headers.set('content-length', String(range.end - range.start + 1));
-          return new Response(
-            sliceReadable(stream, range.start, range.end - range.start + 1),
-            { status: 206, headers },
-          );
+          return new Response(Readable.toWeb(stream) as ReadableStream, { status: 206, headers });
         }
       }
 

@@ -10,6 +10,8 @@ import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { abortableSleep } from './engine';
+
 export interface OtherHarnessOptions {
   log?: string;
   maxWait?: string;
@@ -33,20 +35,6 @@ export function countAlerts(text: string): number {
 
 export function alertLines(text: string): string[] {
   return text.split(/\r?\n/u).filter((line) => line.startsWith('ALERT'));
-}
-
-function abortableSleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
-  if (ms <= 0) return Promise.resolve();
-  return new Promise((resolveSleep) => {
-    const timer = setTimeout(finish, ms);
-    function finish(): void {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', finish);
-      resolveSleep();
-    }
-    if (signal?.aborted) finish();
-    else signal?.addEventListener('abort', finish, { once: true });
-  });
 }
 
 async function readLog(path: string): Promise<string | null> {

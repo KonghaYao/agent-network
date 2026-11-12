@@ -1,6 +1,5 @@
-import { LIMITS } from '../../contracts/limits';
-import { BusinessError, type BusinessErrorCode } from '../../contracts/errors';
-import { guardMessageMatch } from '../guards';
+import { BusinessError } from '../../contracts/errors';
+import { GUARDS, guardMessageMatch, type GuardDefinition } from '../guards';
 import type { OperationRow } from '../rows';
 import { getOperation } from '../queries';
 
@@ -8,153 +7,6 @@ function errorText(error: unknown): string {
   if (error instanceof Error) return `${error.name}: ${error.message}`;
   return String(error);
 }
-
-const GUARD_CODES: Record<string, BusinessErrorCode> = {
-  notMember: 'NOT_MEMBER',
-  notOwner: 'NOT_OWNER',
-  queueFull: 'QUEUE_FULL',
-  budgetExceeded: 'CONFLICT',
-  invalidTarget: 'INVALID_ARGUMENT',
-  invalidMention: 'INVALID_ARGUMENT',
-  claimConflict: 'CLAIM_CONFLICT',
-  staleAttempt: 'STALE_ATTEMPT',
-  roomFull: 'ROOM_FULL',
-  roomLimit: 'CONFLICT',
-  actorExists: 'ACTOR_EXISTS',
-  recoveryInvalid: 'RECOVERY_INVALID',
-  roomFileLimit: 'ROOM_FILE_LIMIT',
-  notFileOwner: 'NOT_OWNER',
-  roomTaskLimit: 'CONFLICT',
-  taskConflict: 'CLAIM_CONFLICT',
-  taskEditor: 'NOT_OWNER',
-  eventSubscriptionLimit: 'RESOURCE_EXHAUSTED',
-  eventSubscriptionGlobal: 'RESOURCE_EXHAUSTED',
-  presenceStale: 'CONFLICT',
-  permissionDenied: 'PERMISSION_DENIED',
-  membershipStale: 'MEMBERSHIP_STALE',
-  versionConflict: 'VERSION_CONFLICT',
-  roleRevision: 'VERSION_CONFLICT',
-  policyRevision: 'VERSION_CONFLICT',
-  announcementRevision: 'VERSION_CONFLICT',
-  assignmentStale: 'ASSIGNMENT_STALE',
-  reviewStale: 'REVIEW_STALE',
-  quotaExceeded: 'QUOTA_EXCEEDED',
-  requestExpired: 'REQUEST_EXPIRED',
-  inviteExhausted: 'INVITE_EXHAUSTED',
-  blocked: 'BLOCKED',
-  actorDisabled: 'ACTOR_DISABLED',
-  pairingInvalid: 'PAIRING_INVALID',
-  deviceStale: 'CONFLICT',
-  taskState: 'CONFLICT',
-  friendRequired: 'FRIEND_REQUIRED',
-  contactRequestStale: 'CONFLICT',
-  ownerTransferRequired: 'CONFLICT',
-  ownerMissing: 'CONFLICT',
-  rateLimited: 'RATE_LIMITED',
-  invitationStale: 'CONFLICT',
-  inviteTargetsMissing: 'FRIEND_REQUIRED',
-  joinRequestStale: 'CONFLICT',
-  roomInviteLimit: 'QUOTA_EXCEEDED',
-  ownerTransferStale: 'CONFLICT',
-  fileUnavailable: 'FILE_UNAVAILABLE',
-  artifactConflict: 'CONFLICT',
-  fileReferenced: 'CONFLICT',
-  handoffConflict: 'CONFLICT',
-  roomDissolved: 'CONFLICT',
-  contactLinkInvalid: 'CONTACT_LINK_INVALID',
-  contactLinkLimit: 'QUOTA_EXCEEDED',
-  taskMarkUnavailable: 'NOT_FOUND',
-  taskMarkConflict: 'CONFLICT',
-};
-
-const GUARD_MESSAGES: Record<string, string> = {
-  notMember: '当前身份不是该房间的有效成员',
-  notOwner: '只有群 owner 可以执行该操作',
-  queueFull: '目标 Agent 的待办队列已满',
-  budgetExceeded: '协作深度或 root 累计派发预算已用尽',
-  invalidTarget: '目标不是当前房间中的有效 Agent 成员',
-  invalidMention: '被提及的成员不是当前房间中的有效人类成员',
-  claimConflict: '该工作已被领取或状态已变化',
-  staleAttempt: 'attempt 或 claim_id 已过期',
-  roomFull: '群成员数量达到上限',
-  roomLimit: '活跃房间数量达到上限',
-  actorExists: '该 actor_id 已被其他凭据占用',
-  recoveryInvalid: '恢复 ticket 无效、已过期或已被使用',
-  roomFileLimit: '房间文件数量或总大小达到上限',
-  notFileOwner: '只有上传者或群 owner 可以删除该文件',
-  roomTaskLimit: '房间任务数量达到上限',
-  taskConflict: '任务已被他人领取或状态已变化',
-  taskEditor: '只有任务创建者或房间 owner 可以修改或删除任务',
-  eventSubscriptionLimit: '该身份的事件订阅数量达到上限',
-  eventSubscriptionGlobal: '全局事件订阅数量达到上限',
-  presenceStale: '在线状态已变化',
-  permissionDenied: '当前身份没有执行该管理操作的权限',
-  membershipStale: '成员资格或加入边界已变化',
-  versionConflict: '权限版本已变化，请刷新后重试',
-  roleRevision: '群角色版本已变化，请刷新后重试',
-  policyRevision: '群策略版本已变化，请刷新后重试',
-  announcementRevision: '群公告版本已变化，请刷新后重试',
-  assignmentStale: '当前执行资格已失效',
-  reviewStale: '验收版本已变化或已被处理，请刷新后重试',
-  quotaExceeded: '资源配额已用尽',
-  requestExpired: '请求已过期，请重新发起',
-  inviteExhausted: '邀请次数已用尽',
-  blocked: '对方已拉黑，操作被拒绝',
-  actorDisabled: 'Agent 已停用，不能继续执行或接收新投递',
-  pairingInvalid: '设备配对挑战无效或已被使用',
-  deviceStale: '设备状态已变化，请刷新设备列表后重试',
-  taskState: '任务状态已变化',
-  friendRequired: '需要有效的好友关系',
-  contactRequestStale: '好友申请状态已变化，请刷新后重试',
-  ownerTransferRequired: '群 owner 不能直接退群；请先转移 owner 或解散群聊',
-  ownerMissing: '群主缺失，群已冻结，不能邀请或加入成员',
-  rateLimited: '操作过于频繁，请稍后再试',
-  invitationStale: '邀请状态已变化，请刷新后重试',
-  inviteTargetsMissing: '成员资格在提交时已变化，群未创建',
-  joinRequestStale: '入群申请状态已变化，请刷新后重试',
-  roomInviteLimit: '该群同时有效的邀请链接数量达到上限',
-  ownerTransferStale: '群主转让提议状态已变化，请刷新后重试',
-  fileUnavailable: '文件不存在、已删除、已过期或正在被清理',
-  artifactConflict: '成果版本已变化或文件已被其他成果占用',
-  fileReferenced: '文件仍被有效任务或成果引用，不能删除或释放保留',
-  handoffConflict: '交接包版本已变化，请刷新后重试',
-  roomDissolved: '群已解散，当前为只读归档，不能继续写入',
-  contactLinkInvalid: '好友链接无效、已过期、已被使用或已被撤销',
-  contactLinkLimit: '待使用的好友链接数量达到上限',
-  taskMarkUnavailable: '消息不存在、当前不可见或已撤回',
-  taskMarkConflict: '消息已属于另一个 Task；请另选起点或先取消原标记',
-};
-
-/** 限额类 guard 的稳定 data，供 MCP Events 映射 -32025。 */
-const GUARD_DETAILS: Record<string, Record<string, unknown>> = {
-  inviteTargetsMissing: {
-    reason: 'invite_targets_missing',
-  },
-  eventSubscriptionLimit: {
-    limit: 'subscriptions',
-    max: LIMITS.eventsSubscriptionsPerActor,
-  },
-  eventSubscriptionGlobal: {
-    limit: 'global_subscriptions',
-    max: LIMITS.eventsSubscriptionsGlobal,
-  },
-  roomDissolved: {
-    reason: 'room_dissolved',
-    read_only: true,
-  },
-  ownerMissing: {
-    reason: 'owner_missing',
-    owner_missing: true,
-  },
-  ownerTransferRequired: {
-    reason: 'owner_transfer_required',
-    owner_transfer_required: true,
-  },
-  contactLinkLimit: {
-    reason: 'contact_link_pending_limit',
-    max: LIMITS.contactLinkPendingMax,
-  },
-};
 
 /** 把 D1 batch 抛出的约束错误映射成有类型的业务错误。 */
 export function mapBatchError(error: unknown): BusinessError | null {
@@ -164,11 +16,8 @@ export function mapBatchError(error: unknown): BusinessError | null {
   }
   const guard = guardMessageMatch(text);
   if (guard) {
-    return new BusinessError(
-      GUARD_CODES[guard] ?? 'CONFLICT',
-      GUARD_MESSAGES[guard] ?? '事务条件不满足',
-      GUARD_DETAILS[guard],
-    );
+    const definition: GuardDefinition = GUARDS[guard];
+    return new BusinessError(definition.code, definition.message, definition.details);
   }
   return null;
 }

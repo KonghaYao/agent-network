@@ -14,6 +14,8 @@
  * - 正文只进 event_file 与 stdout 的预览，不写日志。
  */
 
+import { setTimeout as sleepPromise } from 'node:timers/promises';
+
 import { asArray, asNumber, asRecord, asString } from '../output';
 import {
   BODY_PREVIEW_CHARS,
@@ -249,19 +251,13 @@ export function reconnectDelay(attempt: number): number {
   return Math.round(base * jitter * 10) / 10;
 }
 
-/** 可被信号打断的 sleep；dsh 的重连等待复用。 */
-export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+/** 可被信号打断的 sleep；abort 时仍 resolve，由调用方读取 signal 决定退出。 */
+export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (ms <= 0) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(finish, ms);
-    function finish(): void {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', finish);
-      resolve();
-    }
-    if (signal.aborted) finish();
-    else signal.addEventListener('abort', finish, { once: true });
-  });
+  return sleepPromise(ms, undefined, signal ? { signal } : undefined).then(
+    () => undefined,
+    () => undefined,
+  );
 }
 
 function newSubscriptionId(generation: number): string {

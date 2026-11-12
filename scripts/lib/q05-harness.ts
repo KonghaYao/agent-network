@@ -11,6 +11,7 @@ import { resolve } from 'node:path';
 
 import { Database } from 'bun:sqlite';
 
+import { parseSseJsonText } from '../../src/contracts/sse';
 import { rawRpc, sleep, waitUntil } from './harness';
 
 export { sleep, waitUntil };
@@ -849,24 +850,17 @@ export async function openQ05Stream(
 export function streamEventIds(frames: string[]): string[] {
   const ids: string[] = [];
   for (const frame of frames) {
-    const dataLine = frame
-      .split('\n')
-      .find((line) => line.startsWith('data: '));
-    if (!dataLine) continue;
-    try {
-      const payload = JSON.parse(dataLine.slice(6)) as {
-        params?: {
-          _meta?: {
-            'io.agent-network/event'?: { items?: { event_id?: string; seq?: string }[] };
-          };
+    const payload = parseSseJsonText(frame) as {
+      params?: {
+        _meta?: {
+          'io.agent-network/event'?: { items?: { event_id?: string; seq?: string }[] };
         };
       };
-      for (const item of payload.params?._meta?.['io.agent-network/event']?.items ?? []) {
-        const id = item.event_id ?? item.seq;
-        if (id) ids.push(String(id));
-      }
-    } catch {
-      // 非 JSON 帧（keepalive/ack）跳过
+    } | null;
+    if (!payload) continue;
+    for (const item of payload.params?._meta?.['io.agent-network/event']?.items ?? []) {
+      const id = item.event_id ?? item.seq;
+      if (id) ids.push(String(id));
     }
   }
   return ids;

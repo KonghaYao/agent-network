@@ -1,3 +1,5 @@
+import pLimit from 'p-limit';
+
 import { LIMITS } from '../contracts/limits';
 import type { Env } from '../env';
 import { addJitter, nowMs } from '../storage/db';
@@ -368,16 +370,6 @@ async function deliverOne(
   return 'retried';
 }
 
-async function runLimited<T>(
-  items: T[],
-  limit: number,
-  worker: (item: T) => Promise<void>,
-): Promise<void> {
-  for (let index = 0; index < items.length; index += limit) {
-    await Promise.all(items.slice(index, index + limit).map((item) => worker(item)));
-  }
-}
-
 /** 领取并投递到期的 webhook；同一订阅始终最多一条在途。 */
 export async function drainEventDeliveries(env: Env): Promise<DeliveryRunResult> {
   const result: DeliveryRunResult = { claimed: 0, delivered: 0, retried: 0, abandoned: 0 };
@@ -429,12 +421,18 @@ export async function drainEventDeliveries(env: Env): Promise<DeliveryRunResult>
   }
   result.claimed = claimed.length;
 
-  await runLimited(claimed, LIMITS.eventsWebhookConcurrency, async (row) => {
-    const outcome = await deliverOne(env, row, leaseToken, nowMs());
-    if (outcome === 'delivered') result.delivered += 1;
-    else if (outcome === 'retried') result.retried += 1;
-    else if (outcome === 'abandoned') result.abandoned += 1;
-  });
+  // 工作池而非固定批次：慢回调只占一个槽位，不阻塞其他订阅。
+  const limit = pLimit(LIMITS.eventsWebhookConcurrency);
+  await Promise.all(
+    claimed.map((row) =>
+      limit(async () => {
+        const outcome = await deliverOne(env, row, leaseToken, nowMs());
+        if (outcome === 'delivered') result.delivered += 1;
+        else if (outcome === 'retried') result.retried += 1;
+        else if (outcome === 'abandoned') result.abandoned += 1;
+      }),
+    ),
+  );
   return result;
 }
 
