@@ -566,59 +566,6 @@ export function parseByteRange(header: string, size: number): ByteRange | 'unsat
   return { start, end };
 }
 
-/** 跳过 start 字节后只输出 length 字节；提前关闭底层流，避免读完整个文件。 */
-export function sliceReadable(
-  source: Readable,
-  start: number,
-  length: number,
-): ReadableStream<Uint8Array> {
-  const iterator = source[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
-  let skip = start;
-  let remaining = length;
-  let finished = false;
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (finished) return;
-      try {
-        while (remaining > 0) {
-          const next = await iterator.next();
-          if (next.done) {
-            finished = true;
-            controller.close();
-            return;
-          }
-          const chunk = next.value;
-          if (skip >= chunk.length) {
-            skip -= chunk.length;
-            continue;
-          }
-          const body = skip > 0 ? chunk.subarray(skip) : chunk;
-          skip = 0;
-          const take = body.subarray(0, remaining);
-          remaining -= take.length;
-          controller.enqueue(new Uint8Array(take));
-          if (remaining === 0) {
-            finished = true;
-            void iterator.return?.();
-            controller.close();
-          }
-          return;
-        }
-        finished = true;
-        controller.close();
-      } catch (error) {
-        finished = true;
-        controller.error(error);
-      }
-    },
-    async cancel() {
-      finished = true;
-      await iterator.return?.();
-      source.destroy();
-    },
-  });
-}
-
 /** `If-None-Match` 只接受精确匹配或 `*`；弱比较前缀按 RFC 9110 处理。 */
 function matchesEtag(header: string | undefined, etag: string): boolean {
   if (!header) return false;
@@ -643,8 +590,14 @@ function retiredSkillResponse(): Response {
   );
 }
 
-async function openPayload(fileService: FileService, payloadKey: string): Promise<Readable> {
-  return fileService.disk.getStream(payloadKey);
+async function openPayload(
+  fileService: FileService,
+  payloadKey: string,
+  range?: ByteRange,
+): Promise<Readable> {
+  return range
+    ? fileService.disk.getStream(payloadKey, { range: { start: range.start, end: range.end } })
+    : fileService.disk.getStream(payloadKey);
 }
 
 export function createApp(env: Env, deps: AppDeps = {}): Hono {
@@ -873,13 +826,10 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
           return new Response(null, { status: 416, headers });
         }
         if (range) {
-          const stream = await openPayload(env.FILES, record.payloadKey);
+          const stream = await openPayload(env.FILES, record.payloadKey, range);
           headers.set('content-range', `bytes ${range.start}-${range.end}/${record.size}`);
           headers.set('content-length', String(range.end - range.start + 1));
-          return new Response(
-            sliceReadable(stream, range.start, range.end - range.start + 1),
-            { status: 206, headers },
-          );
+          return new Response(Readable.toWeb(stream) as ReadableStream, { status: 206, headers });
         }
       }
 
