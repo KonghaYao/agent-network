@@ -10,6 +10,7 @@
  * 这里不打印 token，也不把 Authorization 写进错误文本。
  */
 
+import { sseMessageStream } from '../../src/contracts/sse';
 import { asArray, asRecord, asString } from '../output';
 import { parseRpcPayload, PROTOCOL_VERSION, redact } from '../mcp';
 
@@ -418,38 +419,14 @@ export async function subscribe(
         else throw error;
       }
     } else {
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      const dataLines: string[] = [];
       try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
+        for await (const event of sseMessageStream(response.body, {
+          onComment: () => {
+            lastActivity = Date.now();
+          },
+        })) {
           lastActivity = Date.now();
-          buffer += decoder.decode(value, { stream: true });
-          const lineBreak = /^(.*?)(\r\n|\n|\r)/;
-          for (;;) {
-            const match = lineBreak.exec(buffer);
-            if (!match) break;
-            const line = match[1] ?? '';
-            buffer = buffer.slice(match[0].length);
-            if (line === '') {
-              if (dataLines.length > 0) {
-                const data = dataLines.join('\n');
-                dataLines.length = 0;
-                await dispatch(data);
-              }
-            } else if (line.startsWith('data:')) {
-              dataLines.push(line.slice(5).trimStart());
-            }
-          }
-        }
-        if (buffer.startsWith('data:')) dataLines.push(buffer.slice(5).trimStart());
-        if (dataLines.length > 0) {
-          const data = dataLines.join('\n');
-          dataLines.length = 0;
-          await dispatch(data);
+          if (event.data.length > 0) await dispatch(event.data);
         }
       } catch (error) {
         if (error instanceof MonitorFatalError) {
@@ -457,8 +434,6 @@ export async function subscribe(
         } else if (!controller.signal.aborted) {
           reason = 'connection_reset';
         }
-      } finally {
-        reader.releaseLock();
       }
     }
   } catch (error) {

@@ -6,6 +6,7 @@
  * `_meta`、keepalive、abort、错误分类与连接上限。
  */
 
+import { parseSseJsonText } from '../../src/contracts/sse';
 import {
   baseUrl,
   callTool,
@@ -23,15 +24,7 @@ const STREAM_URI = 'agentnet://stream';
 const STREAM_EVENT_META = 'io.agent-network/event';
 
 function frameData(frame: string): Record<string, unknown> | null {
-  const line = frame
-    .split('\n')
-    .find((item) => item.startsWith('data: '));
-  if (!line) return null;
-  try {
-    return JSON.parse(line.slice('data: '.length)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  return parseSseJsonText(frame);
 }
 
 function streamEnvelope(frame: string): Record<string, unknown> | null {
