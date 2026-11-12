@@ -160,8 +160,41 @@ function statusCatalog(env: Env): ReturnType<typeof memoryCapabilityCatalog> {
     capture: runtime?.captureEnabled ?? false,
     policy: env.MEMORY_HOST ?? DEFAULT_MEMORY_HOST_POLICY,
     tools: [],
+    engine: env.MEMORY_ENGINE ?? null,
     reflect: runtime?.capabilities().reflect ?? false,
   });
+}
+
+/**
+ * 来源状态只含配置/阶段/时间，不含 host、project、observation 正文或凭据。
+ */
+function sourceStatus(env: Env): {
+  langfuse: {
+    configured: boolean;
+    status: string;
+    reason: string | null;
+    last_at: number | null;
+  };
+} {
+  const langfuse = env.MEMORY_INTEGRATION?.status().langfuse;
+  if (!langfuse || !langfuse.configured) {
+    return {
+      langfuse: {
+        configured: false,
+        status: 'disabled',
+        reason: env.LANGFUSE ? 'importer_unavailable' : 'not_configured',
+        last_at: null,
+      },
+    };
+  }
+  return {
+    langfuse: {
+      configured: true,
+      status: langfuse.last_status ?? 'pending',
+      reason: langfuse.last_reason,
+      last_at: langfuse.last_at,
+    },
+  };
 }
 
 
@@ -203,6 +236,7 @@ export function registerMemoryTools(
         return {
           enabled: false,
           capture: false,
+          engine_status: 'unavailable',
           space_id: '',
           ownership_epoch: 0,
           backend_binding_epoch: 0,
@@ -211,6 +245,7 @@ export function registerMemoryTools(
           modes: catalog.recall_modes,
           counts: { jobs_pending: 0, jobs_unknown: 0, jobs_failed: 0, retain_pending: 0, contexts_ready: 0 },
           unsupported: catalog.unsupported,
+          sources: sourceStatus(env),
         };
       }
       const context = await memoryContext(env, principal);
@@ -224,7 +259,12 @@ export function registerMemoryTools(
         supportedHostModes: catalog.host_modes,
         now: nowMs(),
       });
-      return { ...snapshot, unsupported: catalog.unsupported };
+      return {
+        ...snapshot,
+        engine_status: catalog.engine_status,
+        unsupported: catalog.unsupported,
+        sources: sourceStatus(env),
+      };
     },
     { readOnlyHint: true },
   );

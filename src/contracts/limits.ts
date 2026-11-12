@@ -490,6 +490,10 @@ export const LIMITS = {
   memoryJobBackoffMaxMs: 5 * 60_000,
   /** 运行时 tick 周期（毫秒）；由 Bun 入口定时调用。 */
   memoryTickIntervalMs: 5_000,
+  /** unknown 作业对账周期；与领取分开，避免把未知当失败重跑。 */
+  memoryReconcileIntervalMs: 30_000,
+  /** Langfuse importer 定时拉取周期；LANGFUSE_ENABLED=1 时才调度。 */
+  memoryLangfuseIntervalMs: 60_000,
   /** prepared selection / catchup 计划的短期 TTL（毫秒）。 */
   memoryPreparedTtlMs: 10 * 60_000,
   memoryCatchupTtlMs: 24 * 60 * 60_000,

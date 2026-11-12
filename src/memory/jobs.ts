@@ -194,7 +194,9 @@ export async function reconcileUnknownMemoryJobs(
     if (status === 'completed') {
       await completeMemoryJob(db, {
         jobId: job.job_id,
-        stage: 'derived_ready',
+        // 远端 completed 只证明写入处理器完成/源可读；observation/consolidation
+        // 是否就绪由后续证据决定，不把对账结果升级成 derived_ready。
+        stage: 'source_applied',
         now: at,
       });
       completed += 1;

@@ -207,6 +207,10 @@ function memoryAppendCatalogFacts(root, catalog, status) {
   facts.append(memoryChip('capture=' + (status ? (status.capture ? 'true' : 'false') : (catalog.capture ? 'true' : 'false')),
     (status ? status.capture : catalog.capture) ? 'good' : 'warn'));
   if (catalog.contract_version) facts.append(memoryChip('契约 ' + catalog.contract_version, 'info'));
+  if (catalog.engine_status) {
+    const ready = catalog.engine_status === 'ready';
+    facts.append(memoryChip('引擎=' + catalog.engine_status, ready ? 'good' : 'warn'));
+  }
   root.append(facts);
   if (status && status.host_level) {
     const current = memoryCreate('div', 'memory-chip-row');
@@ -272,10 +276,26 @@ function memoryRenderCapability(catalog, me, status, statusError) {
   head.append(memoryChip(me && me.kind === 'agent' ? 'Agent 身份' : '人类身份',
     me && me.kind === 'agent' ? 'good' : 'info'));
   memoryCapabilityElement.append(head);
+  if (catalog.engine_status && catalog.engine_status !== 'ready') {
+    memoryCapabilityElement.append(memoryErrorCard(
+      '记忆引擎暂不可用',
+      catalog.engine_status === 'unsupported'
+        ? '当前适配器不支持检索/提炼。本地账本、已有上下文与遗忘屏障仍然保留；召回会如实返回 unsupported，不显示伪造空库。'
+        : '引擎暂时不可用。已提交的账本与遗忘屏障仍然保留；召回会如实返回 unavailable，恢复后无需重建本地记录。',
+      'is-danger'
+    ));
+  }
   memoryAppendCatalogFacts(memoryCapabilityElement, catalog, status);
   if (status && status.capture === false) {
     memoryCapabilityElement.append(memoryCreate('p', 'memory-note',
       '采集已关闭：不会新增消息来源或预热，但已有记忆、撤回与遗忘屏障仍然保留。'));
+  }
+  if (status && status.sources && status.sources.langfuse) {
+    const source = status.sources.langfuse;
+    memoryCapabilityElement.append(memoryCreate('p', 'memory-note',
+      'Langfuse 来源：' + (source.configured ? '已配置（' + source.status + '）' : '未配置') +
+      (source.reason ? '；原因：' + source.reason : '') +
+      '。这里只显示阶段，不包含 host、project 或凭据。'));
   }
   if (me && me.kind !== 'agent') {
     memoryCapabilityElement.append(memoryCreate('p', 'memory-note',

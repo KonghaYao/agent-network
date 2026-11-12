@@ -6,18 +6,28 @@
  * 输入稳定重算，因此重试幂等且不依赖后端返回的内部 ID。
  */
 import { sha256Hex } from '../../storage/db';
-import {
-  MEMORY_EXPOSURE_EVIDENCE_KINDS,
-  MEMORY_ORIGIN_KINDS,
-  MEMORY_PRODUCER_KINDS,
-  MEMORY_REPRESENTATION_KINDS,
-  type MemoryExposureEvidenceKind,
-  type MemoryOriginKind,
-  type MemoryRepresentationKind,
-  type MemorySourceDependency,
-  type MemorySourceRef,
-  type MemorySpaceRef,
+import type {
+  MemorySourceDependency,
+  MemorySourceRef,
+  MemorySpaceRef,
 } from '../contracts';
+import {
+  RAW_REPRESENTATION_KINDS,
+  nonEmptyString,
+} from './validation';
+
+export {
+  isEvidenceKind,
+  isHex64,
+  isOriginKind,
+  isProducerKind,
+  isRecord,
+  isRepresentationKind,
+  nonEmptyString,
+  validEpoch,
+  validSourceRef,
+  validSpaceRef,
+} from './validation';
 
 export const ORIGIN_TAG = 'agentnet:o:';
 export const SOURCE_TAG = 'agentnet:s:';
@@ -29,64 +39,7 @@ export const CURATED_TAG = 'agentnet:c:';
 export const CURATED_REVISION_TAG = 'agentnet:cr:';
 export const PARTITION_TAG = 'agentnet:g:';
 
-export const RAW_KINDS = new Set<MemoryRepresentationKind>(['raw_full', 'raw_fragment', 'preview']);
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-export function nonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0;
-}
-
-export function validEpoch(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-}
-
-export function validSourceRef(value: unknown): value is MemorySourceRef {
-  return (
-    isRecord(value) &&
-    nonEmptyString(value.source_id) &&
-    typeof value.source_revision === 'number' &&
-    Number.isSafeInteger(value.source_revision) &&
-    value.source_revision >= 1
-  );
-}
-
-export function validSpaceRef(value: unknown): value is MemorySpaceRef {
-  return (
-    isRecord(value) &&
-    nonEmptyString(value.space_id) &&
-    validEpoch(value.ownership_epoch) &&
-    validEpoch(value.backend_binding_epoch)
-  );
-}
-
-export function isHex64(value: unknown): value is string {
-  return typeof value === 'string' && /^[0-9a-f]{64}$/iu.test(value);
-}
-
-export function isOriginKind(value: unknown): value is MemoryOriginKind {
-  return typeof value === 'string' && (MEMORY_ORIGIN_KINDS as readonly string[]).includes(value);
-}
-
-export function isRepresentationKind(value: unknown): value is MemoryRepresentationKind {
-  return (
-    typeof value === 'string' &&
-    (MEMORY_REPRESENTATION_KINDS as readonly string[]).includes(value)
-  );
-}
-
-export function isEvidenceKind(value: unknown): value is MemoryExposureEvidenceKind {
-  return (
-    typeof value === 'string' &&
-    (MEMORY_EXPOSURE_EVIDENCE_KINDS as readonly string[]).includes(value)
-  );
-}
-
-export function isProducerKind(value: unknown): boolean {
-  return typeof value === 'string' && (MEMORY_PRODUCER_KINDS as readonly string[]).includes(value);
-}
+export const RAW_KINDS = RAW_REPRESENTATION_KINDS;
 
 export function metadataValue(metadata: Record<string, unknown> | null, key: string): string | null {
   if (!metadata) return null;

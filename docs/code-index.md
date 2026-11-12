@@ -115,6 +115,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | Memory 网页状态、召回、上下文、经历、宿主与治理 | `src/web/chat-memory-panels.ts`、`src/web/chat-memory-state-script.ts`、`src/web/chat-memory-script.ts`、`src/web/chat-memory-governance-script.ts`、`src/web/chat-memory-styles.ts` |
 | Memory 网页验收（禁用降级、真实经历/Context、遗忘确认、移动端/暗色） | `scripts/lib/memory-web.ts`、`scripts/verify-web.ts` |
 | MF09 Langfuse 来源配置、HTTP 拉取、受控映射与假服务验收 | `src/memory/sources/langfuse-config.ts`、`langfuse-http.ts`、`langfuse-mapping.ts`、`langfuse-import.ts`、`scripts/verify-memory-langfuse.ts` |
+| MF10 运行时组合、第二适配器与故障验收 | `src/memory/integration.ts`、`src/memory/adapters/local.ts`、`src/memory/adapters/validation.ts`、`scripts/verify-memory-integration.ts`、`scripts/lib/memory-integration-child.ts`、`scripts/lib/memory-admission-fixture.ts` |
 | `messages.task_root_id` 标记列与索引 | `migrations/0041_message_task_trace.sql` |
 | G06/A06 专项验收 | `scripts/lib/room-lifecycle-acceptance.ts`、`scripts/lib/agent-transfer-acceptance.ts` |
 | Q01 文档/工具一致性与迁移升级检查 | `scripts/q01-doc-check.ts`、`scripts/q01-upgrade-check.ts`、`docs/feature-matrix.md`、`reports/Q01.md` |

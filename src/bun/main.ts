@@ -6,12 +6,19 @@ import { createApp, runScheduled } from '../app';
 import { LIMITS } from '../contracts/limits';
 import { createDrive } from '../drive/service';
 import { MemoryRuntime } from '../memory/runtime';
+import { MemoryIntegration } from '../memory/integration';
+import { memoryEngineInfo, type MemoryEngineStatus } from '../memory/capability-catalog';
 import { memoryHostPolicyFromEnv } from '../memory/host-bridge';
-import { loadLangfuseConfigFromEnv } from '../memory/sources/langfuse-config';
+import {
+  loadLangfuseConfigFromEnv,
+  resolveLangfuseSourceConfig,
+} from '../memory/sources/langfuse-config';
+import { LangfuseSourceImporter } from '../memory/sources/langfuse-import';
 import {
   HindsightMemoryAdapter,
   loadHindsightConfigFromEnv,
 } from '../memory/adapters/hindsight';
+import { LocalMemoryAdapter } from '../memory/adapters/local';
 import type { MemoryAdapter } from '../memory/adapters/types';
 import { StubMemoryAdapter } from '../memory/adapters/stub';
 import type { Env, EventsConfig } from '../env';
@@ -169,53 +176,105 @@ envRef = env;
 // MF07：宿主信任等级只来自部署配置，缺省 tool-only；普通 Agent 不能自报。
 env.MEMORY_HOST = memoryHostPolicyFromEnv(process.env.MEMORY_HOST_TRUST);
 
-// MF03/MF04：Memory 运行时默认关闭；MEMORY_ENABLED=1 才启动作业领取与恢复。
-// MEMORY_ADAPTER=hindsight 时配置缺失会构造 fail-closed 适配器：不请求后端、
+// MF03/MF04/MF10：Memory 运行时默认关闭；MEMORY_ENABLED=1 才启动作业领取、
+// 启动恢复、unknown 对账与来源拉取。适配器配置缺失时 fail closed：不请求后端、
 // 不伪报已记住；凭据与 bank 路由只在服务端，开始日志不输出。
 let memoryRuntime: MemoryRuntime | undefined;
+let memoryIntegration: MemoryIntegration | undefined;
 if (process.env.MEMORY_ENABLED === '1') {
   const adapterKind = (process.env.MEMORY_ADAPTER ?? 'stub').trim().toLowerCase();
-  let adapter: MemoryAdapter;
-  if (adapterKind === 'stub') {
-    adapter = new StubMemoryAdapter();
-  } else if (adapterKind === 'hindsight') {
-    const loaded = loadHindsightConfigFromEnv(process.env);
-    if (loaded.ok) {
-      adapter = new HindsightMemoryAdapter(loaded.config);
-      console.log('memory adapter enabled: hindsight');
-    } else {
-      adapter = new HindsightMemoryAdapter(null);
-      console.warn(`memory adapter disabled: ${loaded.error}`);
-    }
-  } else {
-    throw new Error('MEMORY_ADAPTER must be stub or hindsight');
+  if (!['stub', 'hindsight', 'local', 'local-sqlite'].includes(adapterKind)) {
+    // 明确配置错误保持 fail loud；未配置引擎与后端故障不影响聊天。
+    throw new Error('MEMORY_ADAPTER must be stub, hindsight or local-sqlite');
   }
-  const candidate = new MemoryRuntime(d1, {
-    adapter,
-    instanceId: process.env.MEMORY_INSTANCE_ID?.trim() || null,
-    capture: process.env.MEMORY_CAPTURE !== '0',
-  });
+  let adapter: MemoryAdapter | null = null;
+  let engineStatus: MemoryEngineStatus = 'unavailable';
   try {
-    await candidate.start();
-    memoryRuntime = candidate;
-    env.MEMORY = candidate;
-    console.log(`memory runtime enabled (instance ${candidate.instanceId ?? 'unknown'})`);
+    if (adapterKind === 'stub') {
+      adapter = new StubMemoryAdapter();
+      engineStatus = 'unsupported';
+      console.warn('memory adapter enabled: stub (no recall/retain backend)');
+    } else if (adapterKind === 'hindsight') {
+      const loaded = loadHindsightConfigFromEnv(process.env);
+      if (loaded.ok) {
+        adapter = new HindsightMemoryAdapter(loaded.config);
+        engineStatus = 'ready';
+        console.log('memory adapter enabled: hindsight');
+      } else {
+        adapter = new HindsightMemoryAdapter(null);
+        engineStatus = 'unavailable';
+        console.warn(`memory adapter disabled: ${loaded.error}`);
+      }
+    } else {
+      adapter = new LocalMemoryAdapter({
+        path: resolve(process.env.MEMORY_LOCAL_PATH ?? `${dataDir}/memory-local.sqlite`),
+      });
+      engineStatus = 'ready';
+      console.log('memory adapter enabled: local-sqlite');
+    }
   } catch (error) {
-    // Memory 本地启动失败不阻塞聊天；持久账本仍由数据库保留，下一轮部署可恢复。
-    console.error('agent-network memory runtime failed to start', error);
+    // 适配器初始化失败只关闭 Memory；聊天、群聊、任务与文件继续工作。
+    console.error('agent-network memory adapter failed to initialize', error);
+    adapter = null;
+  }
+  if (adapter) {
+    env.MEMORY_ENGINE = memoryEngineInfo(adapter, engineStatus);
+    const candidate = new MemoryRuntime(d1, {
+      adapter,
+      instanceId: process.env.MEMORY_INSTANCE_ID?.trim() || null,
+      capture: process.env.MEMORY_CAPTURE !== '0',
+    });
+    try {
+      await candidate.start();
+      memoryRuntime = candidate;
+      env.MEMORY = candidate;
+      console.log(`memory runtime enabled (instance ${candidate.instanceId ?? 'unknown'})`);
+    } catch (error) {
+      // Memory 本地启动失败不阻塞聊天；持久账本仍由数据库保留，下一轮部署可恢复。
+      console.error('agent-network memory runtime failed to start', error);
+    }
   }
 }
 
-// MF09：Langfuse 来源默认关闭；这里只做服务端配置注入与 fail-closed 校验，
-// 不启动定时拉取（MF10 集成）。凭据/host/project 不写入日志或工具/页面结果。
+// MF09/MF10：Langfuse 来源默认关闭；只有 Memory 实际启动后才构造 importer。
+// 凭据/host/project 不写入日志或工具/页面结果；调度周期与作业 tick 解耦。
+let langfuseImporter: LangfuseSourceImporter | null = null;
 if (process.env.LANGFUSE_ENABLED === '1') {
   const loaded = loadLangfuseConfigFromEnv(process.env);
   if (loaded.ok) {
     env.LANGFUSE = loaded.config;
-    console.log('langfuse source configured (importer not started)');
+    if (memoryRuntime?.instanceId) {
+      try {
+        langfuseImporter = new LangfuseSourceImporter({
+          db: d1,
+          instanceId: memoryRuntime.instanceId,
+          config: resolveLangfuseSourceConfig(loaded.config),
+        });
+        console.log('langfuse source enabled: importer scheduled');
+      } catch (error) {
+        console.warn(
+          `langfuse source disabled: ${error instanceof Error ? error.message : 'invalid configuration'}`,
+        );
+      }
+    } else {
+      console.warn('langfuse source configured but Memory runtime is not available');
+    }
   } else {
     console.warn(`langfuse source disabled: ${loaded.error}`);
   }
+}
+
+if (memoryRuntime) {
+  memoryIntegration = new MemoryIntegration({
+    runtime: memoryRuntime,
+    langfuse: langfuseImporter,
+    onError: (error, scope) => {
+      // 不记录来源正文、token 或 provider 路由。
+      console.error(`agent-network memory ${scope} failed`, error);
+    },
+  });
+  await memoryIntegration.start();
+  env.MEMORY_INTEGRATION = memoryIntegration;
 }
 
 // 启动扫描：崩溃遗留的 online 转为 pending/inferred；已到期的 pending 立即确认。
@@ -347,26 +406,15 @@ const reminderSweep = setInterval(() => {
     });
 }, LIMITS.deliveryReminderScanMs);
 
-// Memory 作业租约与 outbox/maintenance 解耦；tick 内部保证单进程不重入。
-const memorySweep = memoryRuntime
-  ? setInterval(() => {
-      void (async () => {
-        const tick = await memoryRuntime!.tick();
-        if (tick.unknown > 0) await memoryRuntime!.reconcile();
-      })().catch(() => {
-        // 不记录来源正文、token 或 provider 路由。
-        console.error('agent-network memory sweep failed');
-      });
-    }, LIMITS.memoryTickIntervalMs)
-  : undefined;
+// Memory 作业租约、unknown 对账与 Langfuse 拉取由 MemoryIntegration 统一调度；
+// 它与 outbox/maintenance 解耦，tick 内部保证单轮不重入。
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {
     clearInterval(schedule);
     clearInterval(presenceSweep);
     clearInterval(reminderSweep);
-    if (memorySweep) clearInterval(memorySweep);
-    await memoryRuntime?.stop();
+    await memoryIntegration?.stop();
     // 先给活动 SSE 发 graceful close，再停止接收新请求。
     if (env.NOTIFICATION_HUB.closeAllStreams() > 0) {
       await new Promise((resolve) => setTimeout(resolve, 50));

@@ -593,9 +593,9 @@ AGENTNET_URL=http://127.0.0.1:18892 EVENTS_ACCEPTANCE=1 bun run test:acceptance
 4. 用事件里的 `delivery_id` 调 `network_delivery_claim` / `network_delivery_complete`，确认 webhook 触发的待办可以闭环。
 5. 用 500/410/413 receiver 验证重试与停止行为；重启服务后确认订阅仍在并在 `refreshBefore` 前刷新。
 
-### Memory 运行时（MF03/MF04/MF05/MF06/MF07/MF09/MF11）
+### Memory 运行时（MF03/MF04/MF05/MF06/MF07/MF09/MF10/MF11）
 
-Memory 账本随迁移 `0045_memory_ledger.sql` 建立；MF11 的补读快照、请求幂等与证据追加由 `0046_memory_experience_catchup.sql` 补齐。默认副本可先不启动作业领取，聊天与投递不受影响。
+Memory 账本随迁移 `0045_memory_ledger.sql` 建立；MF11 的补读快照、请求幂等与证据追加由 `0046_memory_experience_catchup.sql` 补齐；MF10 不新增迁移。默认副本可先不启动作业领取，聊天与投递不受影响。
 
 MF05 在现有业务事务内追加纯 SQL 来源/预热意图（`src/memory/intake.ts`）：
 
@@ -622,7 +622,15 @@ MF09 新增 `src/memory/sources/langfuse*.ts`，提供可注入的 Langfuse 来�
 - **来源身份与排除**：source key 为 `langfuse:<binding_id>:<trace_id>:<observation_id>`，revision 首次为 1，digest 与正文一致；同一 key 的新正文不自动升版本，返回 conflict 由显式治理处理。来源写入与 representation 同一 `db.batch()`。已 tombstone 的来源键永久拒绝回放；重复导入按 source key + 表示 id 幂等。
 - **回声抑制**：raw observation 的 digest 命中同 space/agent 的 Context 正文、manifest item 文本或已接纳 summary/context 表示时跳过，避免把注入的 Memory Context 回流当作新的原文证据；summary/context 表示额外把自身 Langfuse source 列为依赖，来源 tombstone/撤权会撤销派生表示。
 - **水位**：每个 binding 在 `memory_cursors` 记录 `langfuse_import:<binding_id>` 水位；重启从持久水位继续。显式 `from` 是补跑/重放，仍按 source key 去重；失败（网络/超时/取消/非法响应/本地写入）不推进水位。`MEMORY_CAPTURE=0` 时 importer 不拉取新来源；已有来源的 tombstone/撤权屏障仍有效。
-- **能力与限制**：未配置时 importer `capabilities().status = disabled`，不影响 WeBots 消息/任务来源。当前只实现 Observations API v2（Langfuse Cloud / self-hosted v4）；self-hosted v3 的 v1 observations 端点、真实凭据联调、定时拉取与 MCP 能力目录暴露属于 MF10 集成，尚无真实 Langfuse 端到端验收。水位按 observation `startTime` 推进；上游延迟写入时，调度方应使用显式 `from` 做重叠补跑（重复项按 source key 幂等），不要依赖水位自动发现更早的数据。
+- **能力与限制**：未配置时 importer `capabilities().status = disabled`，不影响 WeBots 消息/任务来源。MF10 起 `LANGFUSE_ENABLED=1` 且 Memory 运行时已启动时，`MemoryIntegration` 按 `LIMITS.memoryLangfuseIntervalMs` 定时拉取；`MEMORY_CAPTURE=0` 或进程关闭时不再新增拉取，但已有来源的 tombstone/撤权屏障仍有效。当前只实现 Observations API v2（Langfuse Cloud / self-hosted v4）；self-hosted v3 的 v1 observations 端点与真实凭据联调仍未验收。水位按 observation `startTime` 推进；上游延迟写入时，调度方应使用显式 `from` 做重叠补跑（重复项按 source key 幂等），不要依赖水位自动发现更早的数据。
+
+MF10 新增 `src/memory/integration.ts` 与第二适配器 `src/memory/adapters/local.ts`：
+
+- **运行时组合**：`MemoryIntegration` 统一负责启动恢复后的作业 drain、unknown 作业对账与 Langfuse 定时拉取，不再由入口各自 `setInterval`。`runOnce()` 同一时刻只跑一轮；关闭顺序为停止调度 → 中止 importer → 等待当前轮 → `MemoryRuntime.stop()`（中止在途适配器请求）。已提交意图与租约仍由 SQLite 保留，重启继续。
+- **懒建后端分区**：空间行先于外部后端存在时，retain/remove/recall 在首次访问该 `space + ownership_epoch + backend_binding_epoch` 时调用一次 `ensureSpace` 并缓存结果。ensure 失败只让当前作业重排或让召回明确 `unavailable`，不把分区当成已存在，也不写业务数据。未知作业只对账原 JobRef，不重跑写入。
+- **第二适配器（local-sqlite）**：`MEMORY_ADAPTER=local-sqlite`（别名 `local`）使用独立 SQLite 文件，逐字保存准确表示，`source_completeness=exact`、`time_window=hard_filter`、`reflect/native_export=false`、`remove_granularity=exact_representation`、`write_fence=provider_revision`。retain/remove 同步完成（`source_applied`/`derived_ready` 为真），以 operation_key + payload hash 做 fencing，同一逻辑表示按不可变 revision 追加；删除会清空正文、保留最小审计键，并阻止同目标被后续重试复活。时间硬过滤使用适配器接受该表示的记录时间，不冒充业务来源时间。它不实现 reflect/native export，能力目录如实声明。
+- **能力目录联动**：`network_me.service.memory` 与 `network_memory_status` 增加 `engine_status`（`ready`/`unavailable`/`unsupported`）及 `sources.langfuse` 阶段；`supported/unsupported` 跟随实际适配器声明（显式召回、硬时间过滤、native reflect/export）。Memory 关闭或引擎不可用时分别显示 `memory_disabled`/`engine_unavailable`/`engine_unsupported`，不返回伪造空库；页面只显示阶段，不包含 host、project、bank 或凭据。
+- **故障验收**：`scripts/verify-memory-integration.ts` 覆盖本地提交后/外部响应前后退出（重启不丢意图、不重复 retain）、外部 500/超时/401/取消、本地事务失败不提前 ACK、关闭采集仍执行撤回/遗忘，以及 LocalMemoryAdapter 与 Hindsight 受控假服务的同一契约不变量。
 
 MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.ts`、`catchup.ts` 与 `host-protocol.ts`：
 
@@ -633,12 +641,13 @@ MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.t
 - **HostBridge（MF07）**：`src/memory/host-bridge.ts` 实现 bind → prepare input → SubmittedInputManifest → ExposureReceipt → retain 资格。`prepare` 只返回准确 selection 正文并固定 `retain_eligible: false`；manifest 与 receipt 校验 hash/受众/claim/ownership，合格 receipt 才原子写经历与 retain 意图。状态区分 `prepared`、`host_queued`（宿主本进程声明，不是证据）、`host_reported_submitted`、`gateway_observed_submitted`；关闭/过期绑定返回 `skipped_no_boundary`，迟到报告返回 `rejected`。受控网关观测只允许部署方配置的 `controlled_gateway` 绑定；显式 `session_incarnation` 重新 bind 会递增 generation 并关闭旧绑定，旧 run 不能再准备或提交。
 - **MCP 工具（MF06）**：`src/mcp/memory.ts` 注册 `network_memory_status/recall/context_list/context_get/list/get/put/correct/forget/operation_get/host_bind/host_close/input_prepare/input_status/admit/catchup_prepare/catchup_get/experience_list/experience_get`。输入 strict，拒绝客户端自报 space/provider/bank/verified/trusted/through_seq；`network_me.service.memory` 宣告 `memory_enabled`、契约版本、支持/不支持的宿主等级与能力，工具始终注册，Memory 关闭时内容工具返回 `MEMORY_DISABLED`。
 - **网页 Memory 面板（MF08）**：账号区“记忆”打开右侧抽屉；服务端只输出空壳，客户端按当前身份调用既有工具。人类身份只展示 `network_me.service.memory` 能力目录并说明 Agent 私有正文不可读；部署未启用时只显示降级说明，不渲染召回/经历/治理入口。Agent 身份可查看状态、召回（lookup/reflect）、上下文 list/get（含过期/不可用）、稀疏经历 list/get（原文/片段/摘要/自身发布、证据等级、来源房间与成员代次）、宿主 manifest 状态与遗忘/移除确认。页面复用 `roomEpoch`、身份代次与请求代次丢弃陈旧响应；Memory 正文不写 localStorage，不展示 provider/bank/space 路由；移动端全宽单栏，暗色跟随系统。
-- **限制（未完成）**：Hindsight 真实部署鉴权与写入尚未验收；未提供外部宿主 SDK、真实网关或 MF10 集成；`auto_injection` 需要 claim 后的 bound Context，当前仅声明 unsupported，预热不直接注入。跨房披露必须由服务端传入已核实 grant，客户端不能自报。当前任务模型是消息式 Task（迁移 0042 已删除旧任务实体），因此只登记 `task_offer` 角色来源，不实现旧 `task_submission/task_review/task_handoff` 路径；`network_memory_*` 的 task 目标明确返回 `MEMORY_UNSUPPORTED`。未绑定到房间的 Drive 草稿不是共享来源，绑定到房间时才登记 `file:<file_id>`；来源正文只在策略允许时保存，业务权威仍在原消息/文件系统。
+- **限制（未完成）**：Hindsight 真实部署鉴权与写入尚未验收；未提供外部宿主 SDK 或真实网关；`auto_injection` 需要 claim 后的 bound Context，当前仅声明 unsupported，预热不直接注入。LocalMemoryAdapter 是受控本地后端，不提供跨宿主共享、向量检索或原生 reflect；需要跨进程共享时仍应使用真实外部引擎。跨房披露必须由服务端传入已核实 grant，客户端不能自报。当前任务模型是消息式 Task（迁移 0042 已删除旧任务实体），因此只登记 `task_offer` 角色来源，不实现旧 `task_submission/task_review/task_handoff` 路径；`network_memory_*` 的 task 目标明确返回 `MEMORY_UNSUPPORTED`。未绑定到房间的 Drive 草稿不是共享来源，绑定到房间时才登记 `file:<file_id>`；来源正文只在策略允许时保存，业务权威仍在原消息/文件系统。
 
 | 变量 | 说明 |
 | --- | --- |
-| `MEMORY_ENABLED=1` | 启动作业领取、启动恢复与租约扫描；不设置时不接管任何 Memory 作业。 |
-| `MEMORY_ADAPTER` | `stub`（默认）或 `hindsight`；未知值使 Memory 启动失败并保留持久账本，不静默降级。 |
+| `MEMORY_ENABLED=1` | 启动作业领取、启动恢复、unknown 对账、租约扫描与已配置来源的定时拉取；不设置时不接管任何 Memory 作业。 |
+| `MEMORY_ADAPTER` | `stub`（默认）、`hindsight` 或 `local-sqlite`（别名 `local`）；未知值使 Memory 启动失败并保留持久账本，不静默降级。 |
+| `MEMORY_LOCAL_PATH` | 可选；`MEMORY_ADAPTER=local-sqlite` 时适配器自己的 SQLite 文件，缺省 `${DATA_DIR}/memory-local.sqlite`；不新增业务迁移。 |
 | `HINDSIGHT_URL` | Hindsight API 根地址；仅在 `MEMORY_ADAPTER=hindsight` 时读取。别名 `HINDSIGHT_BASE_URL`。 |
 | `HINDSIGHT_API_KEY` | 服务端 bearer 凭据；只用于请求头，不打印、不写入结果或日志。缺失时适配器 fail closed。 |
 | `HINDSIGHT_BANK_PREFIX` | 可选；bank 路由前缀，默认 `agentnet`。只允许小写字母/数字/连字符。 |
@@ -671,9 +680,10 @@ bun run test:memory-intake
 bun run test:memory-hindsight
 bun run test:memory-langfuse
 bun run test:memory-host
+bun run test:memory-integration
 ```
 
-MF03 提供持久意图与租约；MF04 提供可配置的 Hindsight HTTP 适配器与受控假服务验收。默认仍使用 stub，stub 明确返回 unsupported，不伪报“已记住”。
+MF03 提供持久意图与租约；MF04 提供可配置的 Hindsight HTTP 适配器与受控假服务验收；MF10 提供统一运行时组合与 local-sqlite 第二适配器。默认仍使用 stub，stub 明确返回 unsupported，不伪报“已记住”。
 
 常见配置错误：
 

@@ -458,6 +458,7 @@ export function registerTools(
       capture: env.MEMORY?.captureEnabled ?? false,
       policy: env.MEMORY_HOST ?? DEFAULT_MEMORY_HOST_POLICY,
       tools: registeredToolNames(server).filter((name) => name.startsWith('network_memory_')),
+      engine: env.MEMORY_ENGINE ?? null,
       reflect: env.MEMORY?.capabilities().reflect ?? false,
     });
 

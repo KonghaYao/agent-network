@@ -125,10 +125,15 @@ const MEMORY_SUPPORTED_LABELS = {
   submitted_input_manifest: '最终输入清单',
   input_exposure_receipt: '源输入消费回执',
   gateway_observation: '网关观察',
-  native_reflect: '原生综合分析'
+  native_reflect: '原生综合分析',
+  native_export: '原生导出',
+  hard_time_filter: '硬时间过滤'
 };
 const MEMORY_UNSUPPORTED_LABELS = {
   native_reflect: '原生综合分析',
+  native_export: '原生导出',
+  hard_time_filter: '硬时间过滤',
+  engine_recall: '引擎召回',
   task_target: '任务目标',
   auto_injection: '自动注入',
   curated_backend_retain: '人工记忆后端保留',
@@ -155,6 +160,8 @@ const MEMORY_REASON_LABELS = {
   source_not_active: '来源已排除或不可用',
   source_missing: '来源不存在',
   memory_disabled: '部署未启用 Memory',
+  engine_unavailable: '记忆引擎暂不可用',
+  engine_unsupported: '记忆引擎不支持检索',
   agent_credential_required: '需要 Agent 自身凭据',
   credential_revoked: '凭据已撤销'
 };

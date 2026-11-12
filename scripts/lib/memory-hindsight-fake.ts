@@ -171,6 +171,13 @@ export class FakeHindsight {
     ).length;
   }
 
+  /** 当前各 bank 实际保留的文档数；`documents` 包含已删除的历史用于回放断言。 */
+  visibleDocumentCount(): number {
+    let total = 0;
+    for (const bank of this.#banks.values()) total += bank.documents.length;
+    return total;
+  }
+
   async waitForRequest(
     method: string,
     pathContains: string,

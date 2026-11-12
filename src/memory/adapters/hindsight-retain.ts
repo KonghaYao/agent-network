@@ -2,12 +2,9 @@
  * retain 请求构造：只接受已接纳的准确表示与资格，绝不按 source_id 扩抓原文。
  */
 import { sha256Hex, utf8Bytes } from '../../storage/db';
-import {
-  isValidByteRange,
-  type MemoryRepresentation,
-  type MemorySourceDependency,
-  type MemorySourceRef,
-  type MemorySpaceRef,
+import type {
+  MemorySourceRef,
+  MemorySpaceRef,
 } from '../contracts';
 import type { MemoryAdapterRetainItem } from './types';
 import {
@@ -18,19 +15,11 @@ import {
   curatedTag,
   dependencyTags,
   documentIdFor,
-  isEvidenceKind,
-  isHex64,
-  isOriginKind,
-  isProducerKind,
-  isRecord,
-  isRepresentationKind,
-  nonEmptyString,
   partitionTag,
   sourceRevisionTag,
   sourceTag,
-  validSourceRef,
-  validSpaceRef,
 } from './hindsight-tags';
+import { validateRetainItem, validRetainEnvelope } from './validation';
 
 export type PrepareRetainResult = { items: Record<string, unknown>[] } | { error: true };
 
@@ -47,64 +36,21 @@ export async function prepareRetainItems(
   return { items: prepared };
 }
 
-export function validRetainEnvelope(input: {
-  space: unknown;
-  operation_key: unknown;
-  payload_sha256: unknown;
-  items: unknown;
-}): boolean {
-  return (
-    validSpaceRef(input.space) &&
-    nonEmptyString(input.operation_key) &&
-    isHex64(input.payload_sha256) &&
-    Array.isArray(input.items) &&
-    input.items.length > 0
-  );
-}
+export { validRetainEnvelope };
 
 async function buildRetainItem(
   space: MemorySpaceRef,
   item: MemoryAdapterRetainItem,
 ): Promise<Record<string, unknown> | null> {
-  if (!item || !isRecord(item)) return null;
-  const representation = item.representation?.representation;
-  const text = item.representation?.text;
-  if (!representation || typeof text !== 'string' || text.length === 0) return null;
-  if (!isRepresentationKind(representation.kind)) return null;
-  if (!nonEmptyString(representation.representation_id)) return null;
+  const validated = validateRetainItem(item);
+  if (!validated) return null;
+  const representation = item.representation.representation;
+  const text = item.representation.text;
   if (representation.text_bytes !== utf8Bytes(text)) return null;
   if (representation.text_sha256 !== (await sha256Hex(text))) return null;
-  if (!isOriginKind(item.origin_kind)) return null;
-  if (!validRepresentationShape(representation)) return null;
-  if (!validEligibility(item)) return null;
-  if (item.source !== null && !validSourceRef(item.source)) return null;
 
-  const rawSource: MemorySourceRef | null =
-    'source_id' in representation && typeof representation.source_id === 'string'
-      ? {
-          source_id: representation.source_id,
-          source_revision:
-            'source_revision' in representation &&
-            typeof representation.source_revision === 'number'
-              ? representation.source_revision
-              : 0,
-        }
-      : null;
-  if (item.source && rawSource) {
-    if (
-      item.source.source_id !== rawSource.source_id ||
-      item.source.source_revision !== rawSource.source_revision
-    ) {
-      return null;
-    }
-  }
-  const dependencies = Array.isArray(representation.depends_on)
-    ? representation.depends_on
-    : [];
-  if (!dependencies.every(validDependency)) return null;
-
-  const primarySource: MemorySourceRef | null =
-    item.source ?? rawSource ?? dependencies[0] ?? null;
+  const primarySource: MemorySourceRef | null = validated.source;
+  const dependencies = representation.depends_on;
 
   const tags = new Set<string>();
   tags.add(`${ORIGIN_TAG}${item.origin_kind}`);
@@ -194,85 +140,4 @@ async function buildRetainItem(
     metadata,
     observation_scopes: [scope],
   };
-}
-
-function validRepresentationShape(representation: MemoryRepresentation): boolean {
-  switch (representation.kind) {
-    case 'raw_full':
-    case 'raw_fragment':
-    case 'preview':
-      return (
-        nonEmptyString(representation.source_id) &&
-        Number.isSafeInteger(representation.source_revision) &&
-        representation.source_revision >= 1 &&
-        isValidByteRange(representation.range, representation.text_bytes)
-      );
-    case 'summary':
-      return (
-        nonEmptyString(representation.summary_id) &&
-        Number.isSafeInteger(representation.revision) &&
-        representation.revision >= 1
-      );
-    case 'memory_context':
-      return nonEmptyString(representation.source_context_id);
-    case 'authored':
-      return (
-        nonEmptyString(representation.source_id) &&
-        Number.isSafeInteger(representation.source_revision) &&
-        representation.source_revision >= 1 &&
-        isProducerKind(representation.producer_kind) &&
-        (representation.lineage === 'run_bound' ||
-          representation.lineage === 'lineage_unknown')
-      );
-  }
-}
-
-function validEligibility(item: MemoryAdapterRetainItem): boolean {
-  const eligibility = item.eligibility;
-  if (!eligibility || typeof eligibility !== 'object') return false;
-  switch (eligibility.kind) {
-    case 'experienced':
-      return (
-        item.origin_kind === 'experienced' &&
-        isEvidenceKind(eligibility.evidence) &&
-        nonEmptyString(eligibility.receipt_id) &&
-        nonEmptyString(eligibility.proof_id)
-      );
-    case 'authored':
-      return (
-        item.origin_kind === 'authored' &&
-        isProducerKind(eligibility.producer_kind) &&
-        nonEmptyString(eligibility.experience_id)
-      );
-    case 'curated':
-      return (
-        item.origin_kind === 'curated' &&
-        nonEmptyString(eligibility.curated_id) &&
-        Number.isSafeInteger(eligibility.revision) &&
-        eligibility.revision >= 1
-      );
-    default:
-      return false;
-  }
-}
-
-function validDependency(value: unknown): value is MemorySourceDependency {
-  if (!isRecord(value) || !validSourceRef(value)) return false;
-  const representationId = value.representation_id;
-  if (representationId !== null && !nonEmptyString(representationId)) return false;
-  const range = value.range;
-  if (range !== null) {
-    if (!isRecord(range)) return false;
-    if (
-      typeof range.start !== 'number' ||
-      typeof range.end !== 'number' ||
-      !isValidByteRange(
-        { start: range.start, end: range.end },
-        Number.MAX_SAFE_INTEGER,
-      )
-    ) {
-      return false;
-    }
-  }
-  return true;
 }
