@@ -3847,6 +3847,181 @@ async function runRpcBodyDeadlineAcceptance(
   }
 }
 
+/**
+ * 引用块布局：位于正文上方、长文本两行截断、暗色可读，并保留点击查看原消息。
+ */
+async function runQuoteReferenceAcceptance(
+  browser: Browser,
+  base: string,
+  allErrors: string[],
+): Promise<void> {
+  console.log('· 引用块布局与可读性');
+  const humanToken = crypto.randomUUID();
+  await rawTool<Actor>(humanToken, 'network_register', {
+    request_id: requestId('quote_human'),
+    kind: 'human',
+    name: '引用验收人类',
+  });
+  const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+  const agent = await rawTool<Actor>(agentToken, 'network_register', {
+    request_id: requestId('quote_agent'),
+    kind: 'agent',
+    name: '引用验收 Agent',
+    agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+  });
+  await rawBefriend(humanToken, agentToken, { actor_id: agent.actor_id });
+  const room = await rawTool<RoomDetail>(humanToken, 'network_room_create', {
+    request_id: requestId('quote_room'),
+    kind: 'direct',
+    members: [agent.actor_id],
+  });
+  const roomId = room.room.room_id;
+  const targetBody = '引用目标消息：' + '这是一段用于验证两行截断的长文本。'.repeat(12);
+  const target = await rawTool<{ message: { message_id: string } }>(
+    agentToken,
+    'network_message_send',
+    {
+      request_id: requestId('quote_target'),
+      client_message_id: crypto.randomUUID(),
+      room_id: roomId,
+      body: targetBody,
+    },
+  );
+  const reply = await rawTool<{ message: { message_id: string } }>(
+    humanToken,
+    'network_message_send',
+    {
+      request_id: requestId('quote_reply'),
+      client_message_id: crypto.randomUUID(),
+      room_id: roomId,
+      body: '引用布局验收正文',
+      reply_to: target.message.message_id,
+    },
+  );
+  const { context, page } = await makeContext(
+    browser,
+    humanToken,
+    { width: 1280, height: 800 },
+    allErrors,
+  );
+  try {
+    await page.goto(`${base}/c/${roomId}`);
+    const replyNode = page.locator(
+      `#messages .msg[data-message-id="${reply.message.message_id}"]`,
+    );
+    await replyNode.waitFor();
+    const layout = (await replyNode.evaluate((node) => {
+      const content = node.querySelector('.msg-content');
+      const bubble = content ? content.querySelector('.bubble') : null;
+      const quote = content ? content.querySelector('.reply-reference') : null;
+      if (!content || !bubble || !quote) return null;
+      const children = Array.from(content.children);
+      const style = getComputedStyle(quote);
+      return {
+        quoteIndex: children.indexOf(quote),
+        bubbleIndex: children.indexOf(bubble),
+        text: quote.textContent || '',
+        lineClamp: style.webkitLineClamp,
+        overflow: style.overflow,
+        textOverflow: style.textOverflow,
+        clientHeight: quote.clientHeight,
+        scrollHeight: quote.scrollHeight,
+      };
+    })) as {
+      quoteIndex: number;
+      bubbleIndex: number;
+      text: string;
+      lineClamp: string;
+      overflow: string;
+      textOverflow: string;
+      clientHeight: number;
+      scrollHeight: number;
+    } | null;
+    check(
+      '引用节点位于正文之前',
+      Boolean(layout && layout.quoteIndex >= 0 && layout.quoteIndex < layout.bubbleIndex),
+      layout,
+    );
+    checkEqual(
+      '引用紧贴正文上方',
+      layout ? layout.quoteIndex : -1,
+      layout ? layout.bubbleIndex - 1 : -2,
+    );
+    check('引用显示原消息摘要', Boolean(layout && layout.text.includes('引用目标消息')), layout?.text);
+    checkEqual('引用最多两行', layout?.lineClamp, '2');
+    checkEqual('引用隐藏溢出', layout?.overflow, 'hidden');
+    checkEqual('引用使用省略号', layout?.textOverflow, 'ellipsis');
+    check('长引用发生截断', Boolean(layout && layout.scrollHeight > layout.clientHeight), layout);
+
+    const targetNode = page.locator(
+      `#messages .msg[data-message-id="${target.message.message_id}"]`,
+    );
+    await targetNode.scrollIntoViewIfNeeded();
+    await targetNode.getByRole('button', { name: '消息操作', exact: true }).click();
+    await page.getByRole('menuitem', { name: '引用', exact: true }).click();
+    await page.locator('#composer-reply').waitFor();
+    const composerLayout = (await page.evaluate(`(() => {
+      const bar = document.getElementById('composer-reply');
+      const body = document.getElementById('body');
+      const label = bar ? bar.querySelector('span') : null;
+      if (!bar || !body || !label) return null;
+      const barBox = bar.getBoundingClientRect();
+      const bodyBox = body.getBoundingClientRect();
+      return {
+        parentClass: bar.parentElement ? bar.parentElement.className : '',
+        barBottom: barBox.bottom,
+        bodyTop: bodyBox.top,
+        labelScrollWidth: label.scrollWidth,
+        labelClientWidth: label.clientWidth,
+      };
+    })()`)) as {
+      parentClass: string;
+      barBottom: number;
+      bodyTop: number;
+      labelScrollWidth: number;
+      labelClientWidth: number;
+    } | null;
+    check(
+      '输入框引用条位于输入框上方',
+      Boolean(
+        composerLayout &&
+          composerLayout.parentClass.includes('composer-main') &&
+          composerLayout.barBottom <= composerLayout.bodyTop + 1,
+      ),
+      composerLayout,
+    );
+    check(
+      '输入框引用条长文本单行截断',
+      Boolean(
+        composerLayout && composerLayout.labelScrollWidth > composerLayout.labelClientWidth,
+      ),
+      composerLayout,
+    );
+    await page.locator('#composer-reply button').click();
+
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.waitForFunction(`matchMedia('(prefers-color-scheme: dark)').matches`);
+    const dark = (await replyNode.locator('.reply-reference').evaluate((node) => {
+      const style = getComputedStyle(node);
+      return { color: style.color, background: style.backgroundColor };
+    })) as { color: string; background: string };
+    check(
+      '暗色引用文字与底色保持可读对比',
+      contrastRatio(dark.color, dark.background) >= 3,
+      dark,
+    );
+
+    await replyNode.locator('.reply-reference').click();
+    const dialog = page.getByRole('dialog', { name: '查看上下文' });
+    await dialog.waitFor();
+    await dialog.getByText('引用目标消息', { exact: false }).first().waitFor();
+    check('点击引用打开原消息上下文', await dialog.isVisible());
+    await page.getByRole('button', { name: '关闭上下文' }).click();
+  } finally {
+    await context.close();
+  }
+}
+
 async function main(): Promise<void> {
   await runFileTicketSecretChecks();
   const server = await startServer();
@@ -23863,6 +24038,8 @@ async function main(): Promise<void> {
     });
 
     await runMessageOutboxAcceptance(browser, server.base, allErrors);
+
+    await runQuoteReferenceAcceptance(browser, server.base, allErrors);
 
     await runLongHistoryAcceptance(browser, server.base, allErrors);
 
