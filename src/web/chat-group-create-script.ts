@@ -153,9 +153,7 @@ if (groupForm) {
       }
       groupErrorElement.textContent = '';
       const failures = (result.results || []).filter(function (entry) { return entry.status === 'failed'; });
-      const invited = (result.invited || []).length;
       if (failures.length) showToast('群已创建，未加入：' + failures.map(function (entry) { return entry.name; }).join('、'));
-      else if (invited) showToast('群已创建，' + invited + ' 人等待确认邀请');
       closeGroupModal();
       navigateTo('/c/' + encodeURIComponent(newRoomId));
     } catch (error) {

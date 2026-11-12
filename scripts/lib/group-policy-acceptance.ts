@@ -6,7 +6,7 @@
  * 读取并发时的单响应授权一致性。
  */
 
-import { acceptGroupInvites } from './acceptance-helpers';
+
 import { callTool, check, checkEqual, expectToolError, newRequestId } from './harness';
 import {
   assertAuthorization,
@@ -35,24 +35,25 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
   const owner = await createActor('G07 策略群主', 'human');
   const member = await createActor('G07 策略成员', 'human');
   const agent = await createActor('G07 策略 Agent', 'agent');
+  const seed = await createActor('G07 策略种子', 'agent');
   await makeFriends(owner, member);
   await makeFriends(owner, agent);
   try {
+    // 人拉人直接入群：用种子 Agent 建群，先写入加入前消息与材料，再把
+    // member 与 agent 直接加入，验证 from_join 边界。
     const roomId = await createRoom(
       owner.connection,
-      [member.actor.actor_id],
+      [seed.actor.actor_id],
       'G07 策略并发群',
     );
     const preJoinMessage = await sendMessage(owner.connection, roomId, 'G07 策略加入前消息');
     let materialFile: FileResultView | null = options.hasDrive
       ? await bindFile(owner, roomId, 'g07-material.txt', 'G07 材料任务')
       : null;
-    await acceptGroupInvites(member.connection, roomId);
-    // unclaimed Agent 直接加入，但必须晚于 preJoin 消息与材料文件。
     await callTool(owner.connection.client, 'network_room_members_update', {
-      request_id: newRequestId('g07_policy_add_agent'),
+      request_id: newRequestId('g07_policy_add_members'),
       room_id: roomId,
-      add: [agent.actor.actor_id],
+      add: [member.actor.actor_id, agent.actor.actor_id],
     });
 
     await expectToolError(
@@ -395,6 +396,7 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
       owner.connection.close(),
       member.connection.close(),
       agent.connection.close(),
+      seed.connection.close(),
     ]);
   }
 }

@@ -58,6 +58,20 @@ interface InviteCreateView {
   share_url: string | null;
 }
 
+/** 指定 target_actor_id 时直接入群，不再创建邀请。 */
+interface DirectAddView {
+  invitation: null;
+  invite_key: null;
+  share_url: null;
+  member: {
+    actor_id: string;
+    kind: 'human' | 'agent';
+    name: string;
+    role: 'owner' | 'admin' | 'member';
+    status: 'active';
+  } | null;
+}
+
 interface MemberView {
   actor_id: string;
   role: 'owner' | 'admin' | 'member';
@@ -627,7 +641,7 @@ async function runT04(): Promise<void> {
     const group = await createGroup(ownerConn, 'G02 T04 移出重入', [seedAgent.actor_id]);
     const roomId = group.room.room_id;
 
-    const direct = await callTool<InviteCreateView>(
+    const direct = await callTool<DirectAddView>(
       ownerConn.client,
       'network_room_invite_create',
       {
@@ -636,17 +650,15 @@ async function runT04(): Promise<void> {
         target_actor_id: target.actor_id,
       },
     );
-    checkEqual('G02-T04 定向邀请不返回明文链接', direct.invite_key, null);
-    const accepted = await callTool<RespondView>(
-      targetConn.client,
-      'network_room_invite_respond',
-      {
-        request_id: newRequestId('g02_direct_accept'),
-        invitation_id: direct.invitation.invitation_id,
-        action: 'accept',
-      },
+    checkEqual('G02-T04 定向添加直接成为成员', direct.member?.status, 'active');
+    checkEqual('G02-T04 定向添加不创建邀请', direct.invitation, null);
+    checkEqual('G02-T04 定向添加不返回明文链接', direct.invite_key, null);
+    const directJoined = await roomDetail(targetConn, roomId);
+    check(
+      'G02-T04 定向添加后无需接受即可读取',
+      directJoined.members.some((member) => member.actor_id === target.actor_id),
+      directJoined.members,
     );
-    checkEqual('G02-T04 定向邀请首次加入成功', accepted.status, 'accepted');
 
     const kickMarker = `移出前消息-${crypto.randomUUID().replaceAll('-', '')}`;
     const beforeKick = await callTool<{ message: { message_id: string; created_seq: string } }>(
@@ -680,17 +692,8 @@ async function runT04(): Promise<void> {
       acceptLink(targetConn, sharedLink.invitation.invitation_id, sharedLink.invite_key!),
       'CONFLICT',
     );
-    await expectToolError(
-      'G02-T04 已接受的旧定向邀请不能复用',
-      callTool(targetConn.client, 'network_room_invite_respond', {
-        request_id: newRequestId('g02_old_direct'),
-        invitation_id: direct.invitation.invitation_id,
-        action: 'accept',
-      }),
-      'CONFLICT',
-    );
-
-    // 重新审批：切换为 approval 后新建定向邀请，确认只创建申请。
+    // 人拉人直接入群：即使群策略为 approval，owner 重新添加也立即 active，
+    // 审批只约束链接自助加入。
     const beforePolicy = await roomDetail(ownerConn, roomId);
     await callTool(ownerConn.client, 'network_room_policy_set', {
       request_id: newRequestId('g02_rejoin_policy'),
@@ -698,7 +701,7 @@ async function runT04(): Promise<void> {
       member_join_policy: 'approval',
       expected_policy_revision: beforePolicy.room.policy_revision,
     });
-    const fresh = await callTool<InviteCreateView>(
+    const fresh = await callTool<DirectAddView>(
       ownerConn.client,
       'network_room_invite_create',
       {
@@ -707,42 +710,23 @@ async function runT04(): Promise<void> {
         target_actor_id: target.actor_id,
       },
     );
-    const requested = await callTool<RespondView>(
-      targetConn.client,
-      'network_room_invite_respond',
-      {
-        request_id: newRequestId('g02_rejoin_accept'),
-        invitation_id: fresh.invitation.invitation_id,
-        action: 'accept',
-      },
-    );
-    checkEqual('G02-T04 新定向邀请进入审批', requested.status, 'requested');
-    await expectToolError(
-      'G02-T04 审批通过前仍不是成员',
-      callTool(targetConn.client, 'network_room_get', { room_id: roomId }),
-      'NOT_MEMBER',
+    checkEqual('G02-T04 approval 策略下定向添加仍直接 active', fresh.member?.status, 'active');
+    const rejoinedImmediately = await roomDetail(targetConn, roomId);
+    check(
+      'G02-T04 重入无需审批即可读取',
+      rejoinedImmediately.members.some((member) => member.actor_id === target.actor_id),
+      rejoinedImmediately.members,
     );
     const pending = await callTool<JoinRequestPageView>(
       ownerConn.client,
       'network_room_join_request_list',
       { room_id: roomId, status: 'pending', limit: 20 },
     );
-    const rejoinRequest = pending.items.find(
-      (item) => item.applicant.actor_id === target.actor_id,
+    check(
+      'G02-T04 定向添加不创建入群申请',
+      !pending.items.some((item) => item.applicant.actor_id === target.actor_id),
+      pending.items,
     );
-    check('G02-T04 审批列表出现重入申请', Boolean(rejoinRequest));
-    if (!rejoinRequest) throw new Error('缺少重入申请');
-    const approved = await callTool<JoinRespondView>(
-      ownerConn.client,
-      'network_room_join_request_respond',
-      {
-        request_id: newRequestId('g02_rejoin_approve'),
-        join_request_id: rejoinRequest.join_request_id,
-        action: 'approve',
-        expected_revision: rejoinRequest.revision,
-      },
-    );
-    checkEqual('G02-T04 管理员批准重入', approved.status, 'approved');
 
     const rejoined = await roomDetail(targetConn, roomId);
     check(

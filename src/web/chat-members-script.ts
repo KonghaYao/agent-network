@@ -21,9 +21,6 @@ const membersContactsElement = document.getElementById('members-contacts');
 const membersContactsCountElement = document.getElementById('members-contacts-count');
 const membersSearchElement = document.getElementById('members-search');
 const membersMoreButton = document.getElementById('members-more');
-const membersInvitedWrapElement = document.getElementById('members-invited-wrap');
-const membersInvitedElement = document.getElementById('members-invited');
-const membersInvitedCountElement = document.getElementById('members-invited-count');
 const membersSelectionElement = document.getElementById('members-selection');
 const membersErrorElement = document.getElementById('members-error');
 const membersAddButton = document.getElementById('members-add');
@@ -364,47 +361,7 @@ function renderCurrentMembers() {
   }
   if (membersCurrentEmptyElement) membersCurrentEmptyElement.hidden = members.size > 0;
   filterCurrentMembers();
-  renderInvitedMembers();
   renderOwnerTransferPanel();
-}
-
-/**
- * 邀请中成员只用于展示，不计入 active 成员数，也不渲染成已加入。
- * 定向邀请可在这里立即撤销；链接邀请在下方“邀请链接”区块管理。
- */
-function renderInvitedMembers() {
-  if (!membersInvitedElement || !membersInvitedWrapElement) return;
-  membersInvitedElement.replaceChildren();
-  const invited = invitedMembers ? Array.from(invitedMembers.values()) : [];
-  for (const entry of invited) {
-    const item = document.createElement('li');
-    item.className = 'member-roster-item member-invited-item';
-    item.append(avatarElement(
-      entry.name,
-      entry.kind === 'agent' ? 'agent' : null,
-      'avatar member-avatar'
-    ));
-    const name = document.createElement('span');
-    name.className = 'member-roster-name';
-    name.textContent = entry.name;
-    const role = document.createElement('span');
-    role.className = 'member-roster-role';
-    role.textContent = '等待确认 · ' + (entry.kind === 'agent' ? 'Agent' : '人');
-    item.append(name, role);
-    if (entry.invitation_id) {
-      const tools = document.createElement('span');
-      tools.className = 'member-roster-actions';
-      tools.append(memberActionButton('撤销邀请', true, function () {
-        return submitInviteRevoke(entry.invitation_id, '定向邀请', undefined);
-      }));
-      item.append(tools);
-    }
-    membersInvitedElement.append(item);
-  }
-  if (membersInvitedCountElement) {
-    membersInvitedCountElement.textContent = String(invited.length);
-  }
-  membersInvitedWrapElement.hidden = invited.length === 0;
 }
 
 /** 提议有效期展示只做本地估算；接受/拒绝仍由服务端按 expires_at 判定。 */
@@ -576,8 +533,6 @@ function closeMembersModal() {
 /** 好友 - 当前成员 - 自己；同时去重，避免分页边界重复候选。 */
 function membersCandidates(contacts) {
   const excluded = new Set(members.keys());
-  // 邀请中不是“未在群”：再次直接添加会绕过对方确认。
-  for (const invited of invitedMembers.values()) excluded.add(invited.actor_id);
   if (identity) excluded.add(identity.actor_id);
   const seen = new Set();
   return contacts.filter(function (contact) {
@@ -838,7 +793,6 @@ async function submitMembersForm(event) {
   setMembersError('');
   setMembersBusy(true, '正在添加…');
   const before = new Set(members.keys());
-  const previousInvites = new Set(invitedMembers.keys());
   try {
     const result = await callTool('network_room_members_update', {
       request_id: requestId('members'),
@@ -850,12 +804,9 @@ async function submitMembersForm(event) {
     const added = afterMembers.filter(function (member) {
       return !before.has(member.actor_id);
     });
-    const invitations = (result.invited || []).filter(function (entry) {
-      return !previousInvites.has(entry.actor_id);
-    });
     applyRoomDetail(result);
     if (formGeneration !== membersLoadToken || !membersModal || membersModal.hidden) return;
-    if (added.length === 0 && invitations.length === 0) {
+    if (added.length === 0) {
       setMembersError('所选好友已在群里，成员没有变化。');
       renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
       return;
@@ -865,8 +816,7 @@ async function submitMembersForm(event) {
     renderCurrentMembers();
     renderMembersContacts(membersCandidates(membersContactsCache), membersContactNote);
     setMembersError('');
-    const message = [added.length ? '已添加 ' + added.length + ' 名成员' : '',
-      invitations.length ? '已邀请 ' + invitations.length + ' 人，等待对方确认' : ''].filter(Boolean).join('；');
+    const message = '已添加 ' + added.length + ' 名成员，对方已直接入群';
     setMembersError(message);
     statusElement.textContent = message;
     // 更新响应已立即刷新头部与成员；后台再读一次 room_get 校准侧栏。

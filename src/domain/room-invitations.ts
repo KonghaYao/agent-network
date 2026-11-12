@@ -5,11 +5,10 @@ import type {
   RoomInviteGetInput,
   RoomInviteRespondInput,
 } from '../contracts/schemas';
-import { newId, nowMs, sha256Hex, sortedPairKey, stableStringify } from '../storage/db';
+import { newId, nowMs, sha256Hex, stableStringify } from '../storage/db';
 import {
   eventStatement,
   eventStatementIfAbsent,
-  inboxHeadStatementIfEvent,
   inboxTopic,
   outboxStatement,
   outboxStatementIfAbsent,
@@ -30,12 +29,13 @@ import { requestJoinApproval } from './room-join-requests';
 import { actorId, type Principal } from './principal';
 
 /**
- * G01 最小定向群邀请。
+ * 群邀请兼容层。
  *
- * 邀请不是成员：`room_invitations` 单独存储，pending 不进入
- * `room_members`、不计入 `room.member_count`、不占 100 人容量。
- * 本模块只实现定向邀请的读取、接受和拒绝；开放链接、二维码、
- * 审批与撤销由 G02 在同一对象上扩展。
+ * 人拉人已改为直接加入：`network_room_create`、`network_room_members_update`
+ * 与 `network_room_invite_create { target_actor_id }` 都不再产生定向邀请。
+ * 本模块保留历史 pending 定向邀请的读取、接受与拒绝，供升级前的数据库行
+ * 继续收敛；链接邀请仍由 `room-invite-links` 创建并通过本模块预览与确认。
+ * 邀请不是成员：pending 不进入 `room_members`、不计入 `member_count`。
  */
 
 export interface RoomInvitationView {
@@ -153,88 +153,11 @@ export async function loadInvitedMembers(
 }
 
 /**
- * 为群创建写入定向邀请语句。
- *
- * 返回的邀请对象只用于事务内的 target 集合；调用方必须在同一 batch 中
- * 同时插入邀请行、目标 inbox 事件与 outbox，任何一步失败整批回滚。
- *
- * 插入时重新检查好友关系与拉黑，而不是只依赖提交前的预检：并发解除
- * 好友或拉黑会让该目标的邀请不落库，由调用方按逐对象结果返回，其他
- * 成员的邀请不受影响。
- */
-export function directInvitationStatements(
-  db: D1Database,
-  input: {
-    roomId: string;
-    inviterId: string;
-    targets: string[];
-    at: number;
-    expiresAt: number;
-  },
-): { invitations: RoomInvitationRow[]; statements: D1PreparedStatement[] } {
-  const invitations: RoomInvitationRow[] = [];
-  const statements: D1PreparedStatement[] = [];
-  for (const target of input.targets) {
-    const invitation: RoomInvitationRow = {
-      invitation_id: newId('rinv'),
-      room_id: input.roomId,
-      inviter_id: input.inviterId,
-      target_actor_id: target,
-      token_hash: null,
-      kind: 'direct',
-      status: 'pending',
-      max_uses: 1,
-      used_count: 0,
-      expires_at: input.expiresAt,
-      revision: 1,
-      created_at: input.at,
-      updated_at: input.at,
-    };
-    invitations.push(invitation);
-    statements.push(
-      db
-        .prepare(
-          `INSERT INTO room_invitations
-             (invitation_id, room_id, inviter_id, target_actor_id, token_hash, kind, status,
-              max_uses, used_count, expires_at, revision, created_at, updated_at)
-           SELECT ?, ?, ?, ?, NULL, 'direct', 'pending', 1, 0, ?, 1, ?, ?
-            WHERE NOT EXISTS (
-                    SELECT 1 FROM contact_blocks
-                     WHERE released_at IS NULL
-                       AND ((blocker_actor_id = ? AND blocked_actor_id = ?)
-                         OR (blocker_actor_id = ? AND blocked_actor_id = ?))
-                  )
-              AND EXISTS (
-                    SELECT 1 FROM contact_relations
-                     WHERE pair_key = ? AND status = 'active'
-                  )
-           ON CONFLICT DO NOTHING`,
-        )
-        .bind(
-          invitation.invitation_id,
-          invitation.room_id,
-          invitation.inviter_id,
-          target,
-          input.expiresAt,
-          input.at,
-          input.at,
-          input.inviterId,
-          target,
-          target,
-          input.inviterId,
-          sortedPairKey(input.inviterId, target),
-        ),
-    );
-  }
-  return { invitations, statements };
-}
-
-/**
  * 撤销单个目标在该群的 pending 定向邀请。
  *
- * 直接加人后邀请已被绕过，移除成员后旧邀请必须失效；两者都在
- * `roomMembersUpdate` 的同一事务里撤销，避免旧 invitation_id 之后
- * 把 removed 成员重新激活。没有 pending 邀请时是空操作。
+ * 旧版定向邀请已不再创建，但历史行仍可能存在于升级前的数据库；移除成员
+ * 后旧邀请必须失效。两者都在 `roomMembersUpdate` 的同一事务里撤销，避免
+ * 旧 invitation_id 之后把 removed 成员重新激活。没有 pending 邀请时是空操作。
  */
 export function revokeDirectInvitationStatement(
   db: D1Database,
@@ -249,56 +172,6 @@ export function revokeDirectInvitationStatement(
         WHERE room_id = ? AND target_actor_id = ? AND kind = 'direct' AND status = 'pending'`,
     )
     .bind(at, roomId, targetActorId);
-}
-
-/**
- * 邀请目标的 inbox 提示；不增加 pending_count，也不创建 delivery。
- *
- * 事件、outbox 与 inbox head 都以邀请行真实落库为前提：并发下定向邀请
- * 可能因关系失效而未写入，此时不能留下指向不存在邀请的提示。
- */
-export function invitationInboxStatements(
-  db: D1Database,
-  invitations: RoomInvitationRow[],
-  at: number,
-): D1PreparedStatement[] {
-  const statements: D1PreparedStatement[] = [];
-  for (const invitation of invitations) {
-    if (!invitation.target_actor_id) continue;
-    const eventKey = `room_invited:${invitation.invitation_id}`;
-    statements.push(
-      db
-        .prepare(
-          `INSERT INTO events
-             (scope_kind, scope_id, event_type, ref_id, metadata, event_key, created_at)
-           SELECT 'inbox', ?, 'room_invited', ?, ?, ?, ?
-            WHERE EXISTS (
-              SELECT 1 FROM room_invitations WHERE invitation_id = ?
-            )
-           ON CONFLICT(event_key) DO NOTHING`,
-        )
-        .bind(
-          invitation.target_actor_id,
-          invitation.room_id,
-          JSON.stringify({
-            room_id: invitation.room_id,
-            invitation_id: invitation.invitation_id,
-            inviter_id: invitation.inviter_id,
-            expires_at: String(invitation.expires_at),
-          }),
-          eventKey,
-          at,
-          invitation.invitation_id,
-        ),
-      outboxStatementIfAbsent(
-        db,
-        { topic: inboxTopic(invitation.target_actor_id), eventKey },
-        at,
-      ),
-      inboxHeadStatementIfEvent(db, invitation.target_actor_id, eventKey, at, 0),
-    );
-  }
-  return statements;
 }
 
 function invitationStatus(

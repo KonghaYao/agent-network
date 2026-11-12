@@ -345,8 +345,7 @@ try {
   await route(bId);
   // Leave a non-active group from the sidebar without reloading or navigating away.
   const foreign=await tool('network_room_create',{request_id:id(),kind:'group',title:'好友发起群',members:[(await tool('network_me')).actor_id]},friendToken);
-  const invite=foreign.invited.find((x:any)=>x.actor_id === a.room.owner_id);
-  await tool('network_room_invite_respond',{request_id:id(),invitation_id:invite.invitation_id,action:'accept'});
+  // 人拉人直接入群：owner 已被好友直接加入，不需要接受邀请。
   await page.evaluate('loadRooms()');
   // loadRooms can share a pre-join read; let the queued membership refresh materialize the row.
   await page.locator('#room-list a[data-room-id="'+foreign.room.room_id+'"]').waitFor();

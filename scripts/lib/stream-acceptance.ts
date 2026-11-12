@@ -239,12 +239,11 @@ export async function runUnifiedStreamAcceptance(): Promise<void> {
     await sleep(500);
     checkEqual('统一流：未 login 的 C 收不到邀请流', streamEvents(cCollector).length, 0);
     check(
-      '统一流：人类不 login 也收到群邀请',
+      '统一流：人类成员直接收到 room.created',
       streamEvents(hCollector).some((event) =>
         payloadOf(event)?.items.some(
           (item) =>
-            item.source === 'room.membership' &&
-            item.change === 'invited' &&
+            item.source === 'room.created' &&
             item.room_id === groupId,
         ),
       ),

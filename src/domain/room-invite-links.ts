@@ -5,7 +5,7 @@ import type {
   RoomInviteGetInput,
   RoomInviteRevokeInput,
 } from '../contracts/schemas';
-import { newId, nowMs, randomToken, sha256Hex, sortedPairKey, stableStringify } from '../storage/db';
+import { newId, nowMs, randomToken, sha256Hex, stableStringify } from '../storage/db';
 import { eventStatement, outboxStatement, roomTopic } from '../storage/events';
 import { guardSql } from '../storage/guards';
 import { getActor, getMember, getOperation } from '../storage/queries';
@@ -15,7 +15,6 @@ import {
   resolveOperation,
   runIdempotent,
 } from '../storage/transactions/runner';
-import { contactBlockGuardStatement } from './contact-blocks';
 import {
   assertOwnerPresent,
   assertRoomWritable,
@@ -26,15 +25,25 @@ import {
 } from './room-access';
 import { roomAuditStatement } from './room-audit';
 import {
-  directInvitationStatements,
   hashRoomInviteKey,
-  invitationInboxStatements,
   invitationView,
   type InvitationJoinRow,
   type RoomInvitationPage,
   type RoomInvitationView,
 } from './room-invitations';
 import { actorId, type Principal } from './principal';
+import { roomMembersUpdate } from './rooms';
+
+/**
+ * 定向添加复用的成员写入 request_id。
+ *
+ * 直接用调用方 request_id 会让 `roomMembersUpdate` 的 operations 行占用
+ * 该键；这里派生一个稳定键，让重试收敛到同一次成员写入，再由本工具把
+ * 对外结果写回调用方 request_id。
+ */
+async function directAddRequestId(requestId: string): Promise<string> {
+  return `rinv_add:${await sha256Hex(requestId)}`;
+}
 
 /**
  * G02 邀请链接、二维码与撤销。
@@ -45,9 +54,18 @@ import { actorId, type Principal } from './principal';
  */
 
 export interface RoomInviteCreateResult {
-  invitation: RoomInvitationView;
+  /** 链接邀请的邀请对象；定向添加不再创建邀请，返回 null。 */
+  invitation: RoomInvitationView | null;
   invite_key: string | null;
   share_url: string | null;
+  /** 定向添加直接成为成员时返回目标摘要；链接邀请为 null。 */
+  member: {
+    actor_id: string;
+    kind: 'human' | 'agent';
+    name: string;
+    role: 'owner' | 'admin' | 'member';
+    status: 'active';
+  } | null;
 }
 
 /**
@@ -57,7 +75,8 @@ export interface RoomInviteCreateResult {
  * 状态，不会恢复或伪造明文链接。
  */
 interface RoomInviteCreateStored {
-  invitation: RoomInvitationView;
+  invitation: RoomInvitationView | null;
+  member: RoomInviteCreateResult['member'];
 }
 
 const INVITATION_SELECT = `SELECT i.*, r.title AS room_title, a.name AS inviter_name,
@@ -168,10 +187,63 @@ export async function roomInviteCreate(
     return { ...replayed, invite_key: null, share_url: null };
   }
 
+  if (input.target_actor_id) {
+    // 人拉人直接入群：定向添加不再创建 pending 邀请，目标在同一事务内成为
+    // active 成员。权限、拉黑、好友/Agent 例外、容量、群状态与 owner_missing
+    // 全部复用 network_room_members_update 的 guard，避免两套加人语义分叉。
+    const target = input.target_actor_id;
+    if (target === viewer) {
+      throw new BusinessError('INVALID_ARGUMENT', '不能邀请自己');
+    }
+    const targetActor = await getActor(db, target);
+    if (!targetActor) {
+      throw new BusinessError('NOT_FOUND', '目标不存在');
+    }
+    if ((await getMember(db, input.room_id, target))?.status === 'active') {
+      throw new BusinessError('CONFLICT', '目标已经是该群成员', {
+        current_state: 'active',
+        expected_state: 'member',
+      });
+    }
+    // 派生 request_id：重试收敛到同一次成员写入；本次工具结果再按调用方
+    // request_id 落库，保证两条幂等键都稳定。
+    const detail = await roomMembersUpdate(db, principal, {
+      request_id: await directAddRequestId(input.request_id),
+      room_id: input.room_id,
+      add: [target],
+    });
+    const member = detail.members.find((entry) => entry.actor_id === target);
+    if (!member) {
+      throw new BusinessError('CONFLICT', '成员添加未生效，请刷新后重试', {
+        actor_id: target,
+      });
+    }
+    const stored: RoomInviteCreateStored = {
+      invitation: null,
+      member: {
+        actor_id: member.actor_id,
+        kind: member.kind,
+        name: member.name,
+        role: member.role,
+        status: 'active',
+      },
+    };
+    await runIdempotent(db, {
+      actorId: viewer,
+      requestId: input.request_id,
+      payloadHash,
+      result: stored,
+      build: (resultJson) => [
+        operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, at),
+      ],
+    });
+    return { ...stored, invite_key: null, share_url: null };
+  }
+
+  // 链接邀请保持原有语义：可分享、可撤销、按群审批策略加入。
   const expiresAt = at + (input.expires_in_ms ?? LIMITS.roomInviteTtlMs);
   const inviterName = (await getActor(db, viewer))?.name ?? '';
   const count = await memberCount(db, input.room_id);
-  const requiresApproval = access.room.member_join_policy === 'approval';
 
   const viewFor = (invitation: RoomInvitationRow): RoomInvitationView =>
     creatorView(
@@ -191,106 +263,6 @@ export async function roomInviteCreate(
       ),
     );
 
-  if (input.target_actor_id) {
-    const target = input.target_actor_id;
-    if (target === viewer) {
-      throw new BusinessError('INVALID_ARGUMENT', '不能邀请自己');
-    }
-    if (!(await getActor(db, target))) {
-      throw new BusinessError('NOT_FOUND', '目标不存在');
-    }
-    if ((await getMember(db, input.room_id, target))?.status === 'active') {
-      throw new BusinessError('CONFLICT', '目标已经是该群成员', {
-        current_state: 'active',
-        expected_state: 'invited',
-      });
-    }
-    const relation = await db
-      .prepare(
-        "SELECT 1 AS ok FROM contact_relations WHERE pair_key = ? AND status = 'active'",
-      )
-      .bind(sortedPairKey(viewer, target))
-      .first<{ ok: number }>();
-    if (!relation) throw new BusinessError('FRIEND_REQUIRED', '只能邀请好友加入群聊');
-    const existing = await db
-      .prepare(
-        `SELECT invitation_id FROM room_invitations
-          WHERE room_id = ? AND target_actor_id = ? AND kind = 'direct' AND status = 'pending'`,
-      )
-      .bind(input.room_id, target)
-      .first<{ invitation_id: string }>();
-    if (existing) {
-      const view = await loadInvitationView(db, target, existing.invitation_id, at);
-      return { invitation: creatorView(view), invite_key: null, share_url: null };
-    }
-
-    const { invitations, statements } = directInvitationStatements(db, {
-      roomId: input.room_id,
-      inviterId: viewer,
-      targets: [target],
-      at,
-      expiresAt,
-    });
-    const invitation = invitations[0]!;
-    const stored: RoomInviteCreateStored = { invitation: viewFor(invitation) };
-    await runIdempotent(db, {
-      actorId: viewer,
-      requestId: input.request_id,
-      payloadHash,
-      result: stored,
-      build: (resultJson) => [
-        operationsStatement(db, viewer, input.request_id, payloadHash, resultJson, at),
-        capabilityGuardStatement(db, input.room_id, viewer, 'invite_members'),
-        roomDissolvedGuardStatement(db, input.room_id),
-        ownerMissingGuardStatement(db, input.room_id),
-        db
-          .prepare(
-            guardSql(
-              'friendRequired',
-              `NOT EXISTS (
-                 SELECT 1 FROM contact_relations
-                  WHERE pair_key = ? AND status = 'active'
-               )`,
-            ),
-          )
-          .bind(sortedPairKey(viewer, target)),
-        contactBlockGuardStatement(db, viewer, target),
-        db
-          .prepare(
-            guardSql(
-              'invitationStale',
-              `EXISTS (
-                 SELECT 1 FROM room_invitations
-                  WHERE room_id = ? AND target_actor_id = ? AND kind = 'direct'
-                    AND status = 'pending'
-               )`,
-            ),
-          )
-          .bind(input.room_id, target),
-        ...statements,
-        roomAuditStatement(
-          db,
-          {
-            roomId: input.room_id,
-            action: 'invite_created',
-            targetActorId: target,
-            resultingRevision: 1,
-            changedBy: viewer,
-            requestId: input.request_id,
-            detail: {
-              invitation_id: invitation.invitation_id,
-              kind: 'direct',
-              expires_at: expiresAt,
-            },
-          },
-          at,
-        ),
-        ...invitationInboxStatements(db, invitations, at),
-      ],
-    });
-    return { ...stored, invite_key: null, share_url: null };
-  }
-
   const inviteKey = randomToken(LIMITS.roomInviteKeyBytes);
   const invitation: RoomInvitationRow = {
     invitation_id: newId('rinv'),
@@ -308,7 +280,7 @@ export async function roomInviteCreate(
     updated_at: at,
   };
   const shareUrl = `${origin.replace(/\/+$/u, '')}/j/${inviteKey}`;
-  const stored: RoomInviteCreateStored = { invitation: viewFor(invitation) };
+  const stored: RoomInviteCreateStored = { invitation: viewFor(invitation), member: null };
   const outcome = await runIdempotent(db, {
     actorId: viewer,
     requestId: input.request_id,

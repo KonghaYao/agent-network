@@ -180,7 +180,10 @@ export const ownerTransferSchema = z.object({
 export const roomDetailSchema = z.object({
   room: roomSchema,
   members: z.array(memberSchema),
-  /** 待确认邀请；只有群主/管理员可见，不计入 member_count。 */
+  /**
+   * 历史遗留的 pending 定向邀请；新版“人拉人”直接入群，不再产生新行。
+   * 只有群主/管理员可见，不计入 member_count。
+   */
   invited: z.array(
     z.object({
       invitation_id: z.string(),
@@ -274,9 +277,20 @@ export const roomInvitationRespondSchema = z.object({
 
 /** 创建邀请：链接只在创建响应中出现一次明文 key 与分享 URL。 */
 export const roomInviteCreateResultSchema = z.object({
-  invitation: roomInvitationSchema,
+  /** 链接邀请对象；指定 target_actor_id 时目标直接入群，这里为 null。 */
+  invitation: roomInvitationSchema.nullable(),
   invite_key: z.string().nullable(),
   share_url: z.string().nullable(),
+  /** 定向添加直接成为 active 成员时的目标摘要；链接邀请为 null。 */
+  member: z
+    .object({
+      actor_id: z.string(),
+      kind: z.enum(['human', 'agent']),
+      name: z.string(),
+      role: z.enum(['owner', 'admin', 'member']),
+      status: z.literal('active'),
+    })
+    .nullable(),
 });
 
 /** 入群申请视图；只有 owner/admin 能读取。 */

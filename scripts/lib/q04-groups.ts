@@ -1,6 +1,6 @@
 /**
  * Q04 联系人与群组正向验收：好友申请/拒绝/接受、拉黑/解除、建群多选、
- * 角色任免、owner 退群限制、待处理投递退群预览、邀请链接审批、移除成员、
+ * 角色任免、owner 退群限制、待处理投递退群预览、直接加人、邀请链接审批、移除成员、
  * owner 转让、解散归档与无主群拒绝加入。
  *
  * 所有写操作优先经真实控件；rawRpc 只用于准备邀请/消息与对账服务端状态。
@@ -408,7 +408,7 @@ export async function runGroupSetupAcceptance(
     await leaverContext.context.close();
   }
 
-  // 邀请：定向邀请 + 邀请链接审批 + 重复扫码不重复加人 + 移除。
+  // 人拉人直接入群 + 邀请链接审批 + 重复扫码不重复加人 + 移除。
   const inviteGroup = await rawTool<RoomView>(state.tokens.u1, 'network_room_create', {
     request_id: newRequestId('q04_invite_group'),
     kind: 'group',
@@ -418,29 +418,31 @@ export async function runGroupSetupAcceptance(
   state.rooms.invite = inviteGroup.room.room_id;
   await acceptRoomInvites(state.tokens.u2, state.rooms.invite);
 
-  // 定向邀请 U4，UI 移除。
-  await rawTool(state.tokens.u1, 'network_room_invite_create', {
+  // 定向添加 U4：新语义直接入群，不再生成待确认邀请；后续 UI 移除仍走同一路径。
+  const targetedAdd = await rawTool<{
+    invitation: unknown;
+    member?: { actor_id: string; status: string } | null;
+  }>(state.tokens.u1, 'network_room_invite_create', {
     request_id: newRequestId('q04_target_invite'),
     room_id: state.rooms.invite,
     target_actor_id: state.actors.u4.actor_id,
   });
-  const targeted = await rawTool<{ items: { invitation_id: string; room_id: string; status: string }[] }>(
-    state.tokens.u4,
-    'network_room_invite_get',
-    { status: 'pending', limit: 100 },
+  checkEqual('定向添加不返回邀请', targetedAdd.invitation, null);
+  checkEqual('定向添加返回 active 成员', targetedAdd.member?.actor_id, state.actors.u4.actor_id);
+  checkEqual('定向添加成员状态为 active', targetedAdd.member?.status, 'active');
+  const targetedPending = await rawTool<{
+    items: { invitation_id: string; room_id: string; status: string }[];
+  }>(state.tokens.u4, 'network_room_invite_get', { status: 'pending', limit: 100 });
+  checkEqual(
+    '定向添加不产生 pending 邀请',
+    targetedPending.items.filter((item) => item.room_id === state.rooms.invite).length,
+    0,
   );
-  const targetedInvite = targeted.items.find((item) => item.room_id === state.rooms.invite);
-  if (!targetedInvite) throw new Error('U4 未收到定向邀请');
-  await rawTool(state.tokens.u4, 'network_room_invite_respond', {
-    request_id: newRequestId('q04_target_accept'),
-    invitation_id: targetedInvite.invitation_id,
-    action: 'accept',
-  });
   let inviteDetail = await rawTool<RoomView>(state.tokens.u1, 'network_room_get', {
     room_id: state.rooms.invite,
   });
   check(
-    '定向邀请接受后 U4 active',
+    '定向添加后 U4 立即 active',
     inviteDetail.members.some((member) => member.actor_id === state.actors.u4.actor_id && member.status !== 'invited'),
     inviteDetail.members,
   );
