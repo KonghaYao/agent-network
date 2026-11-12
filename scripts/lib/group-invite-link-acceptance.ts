@@ -549,6 +549,14 @@ async function runT03(): Promise<void> {
     const seedAgent = await createManagedAgent(ownerConn, 'G02 T03 群内 Agent');
     const group = await createGroup(ownerConn, 'G02 T03 最小介绍', [seedAgent.actor_id]);
     const roomId = group.room.room_id;
+    // 新建群默认 full；本用例验证链接加入后的 from_join 边界，先显式收紧。
+    const initialPolicy = await roomDetail(ownerConn, roomId);
+    await callTool(ownerConn.client, 'network_room_policy_set', {
+      request_id: newRequestId('g02_t03_history_from_join'),
+      room_id: roomId,
+      member_history_policy: 'from_join',
+      expected_policy_revision: initialPolicy.room.policy_revision,
+    });
     const marker = `加入前消息-${crypto.randomUUID().replaceAll('-', '')}`;
     const beforeJoin = await callTool<{ message: { message_id: string } }>(
       ownerConn.client,
@@ -640,6 +648,14 @@ async function runT04(): Promise<void> {
     const seedAgent = await createManagedAgent(ownerConn, 'G02 T04 群内 Agent');
     const group = await createGroup(ownerConn, 'G02 T04 移出重入', [seedAgent.actor_id]);
     const roomId = group.room.room_id;
+    // 新建群默认 full；本用例验证移出重入后的 from_join 边界，先显式收紧。
+    const initialPolicy = await roomDetail(ownerConn, roomId);
+    await callTool(ownerConn.client, 'network_room_policy_set', {
+      request_id: newRequestId('g02_history_from_join'),
+      room_id: roomId,
+      member_history_policy: 'from_join',
+      expected_policy_revision: initialPolicy.room.policy_revision,
+    });
 
     const direct = await callTool<DirectAddView>(
       ownerConn.client,

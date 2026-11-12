@@ -1395,7 +1395,7 @@ export function registerTools(
   register(
     server,
     'network_room_policy_set',
-    '群主设置普通成员策略：发言、邀请、历史、入群审批、资料编辑与 @所有人。值为 members（普通成员可用）或 owner_admin（仅 owner/管理员）；历史为 from_join（默认，仅当前加入后）或 full（全历史）。管理员始终可发言与邀请；@所有人默认仅 owner/admin。expected_policy_revision 必须匹配当前版本。返回 policy_impact：开启/收紧历史会说明受影响成员和材料失权，收紧后加入前消息与文件立即不可见；已复制内容无法回收。',
+    '群主设置普通成员策略：发言、邀请、历史、入群审批、资料编辑与 @所有人。值为 members（普通成员可用）或 owner_admin（仅 owner/管理员）；历史为 full（默认，全历史）或 from_join（群主收紧后仅当前加入后）。管理员始终可发言与邀请；@所有人默认仅 owner/admin。expected_policy_revision 必须匹配当前版本。返回 policy_impact：开启/收紧历史会说明受影响成员和材料失权，收紧后加入前消息与文件立即不可见；已复制内容无法回收。',
     roomPolicySetSchema,
     roomPolicySetResultSchema,
     async (input) => {

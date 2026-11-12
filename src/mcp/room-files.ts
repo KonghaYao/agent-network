@@ -141,7 +141,7 @@ export function registerRoomFileTools(
   register(
     server,
     'network_room_file_list',
-    '分页读取当前身份可见的房间文件，按绑定时间倒序。默认新成员只能看到本次加入后绑定的文件；群主开启全历史才可见加入前文件。历史边界外的文件不出现在列表，按 ID 读取也返回 FILE_UNAVAILABLE。游标绑定成员代次，重新加入后旧游标返回 CURSOR_EXPIRED。',
+    '分页读取当前身份可见的房间文件，按绑定时间倒序。群默认全历史，成员可见全部文件；群主收紧为 from_join 后才只可见本次加入后绑定的文件。历史边界外的文件不出现在列表，按 ID 读取也返回 FILE_UNAVAILABLE。游标绑定成员代次，重新加入后旧游标返回 CURSOR_EXPIRED。',
     roomFileListSchema,
     roomFilePageSchema,
     async (input) => {

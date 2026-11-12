@@ -3,9 +3,9 @@
  *
  * 用真实 migrations 构造停在 `0035_task_recovery.sql` 的合成库，写入
  * credentials/devices、无主群与 A06 的关键历史行，再顺序应用
- * `0036`–`0042`。检查重点是“升级不扩大权限”：旧凭据只回填设备行、不新增
+ * `0036`–`0043`。检查重点是“升级不扩大权限”：旧凭据只回填设备行、不新增
  * credentials；无主群不被自动解散或回填 owner；审计表重建保留旧行；
- * 0042 删除旧任务表/列后普通业务行仍可读。
+ * 0042 删除旧任务表/列后普通业务行仍可读；0043 只把存量群回填为 full。
  *
  * 运行：`bun scripts/q01-upgrade-check.ts`
  * 该脚本使用临时目录，不访问服务端、不读取或写入 `.data`。
@@ -29,6 +29,7 @@ const NEW_MIGRATIONS = [
   '0040_contact_invite_links.sql',
   '0041_message_task_trace.sql',
   '0042_drop_legacy_tasks.sql',
+  '0043_group_history_full_backfill.sql',
 ];
 const AT = 1_700_000_000_000;
 
@@ -147,17 +148,17 @@ try {
   checkEqual('升级前没有设备行', before.devices, 0);
 
   const appliedNow = migrate(db, SOURCE_MIGRATIONS);
-  checkEqual('恰好应用 0036–0042', appliedNow.join(','), NEW_MIGRATIONS.join(','));
+  checkEqual('恰好应用 0036–0043', appliedNow.join(','), NEW_MIGRATIONS.join(','));
   const expectedMigrations = [
     ...Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(4, '0')),
-    ...Array.from({ length: 26 }, (_, i) => String(i + 17).padStart(4, '0')),
+    ...Array.from({ length: 27 }, (_, i) => String(i + 17).padStart(4, '0')),
   ];
   const actualMigrations = (
     db.prepare('SELECT name FROM schema_migrations ORDER BY name').all() as Array<{ name: string }>
   ).map((row) => row.name);
-  checkEqual('迁移总数为 38', actualMigrations.length, 38);
+  checkEqual('迁移总数为 39', actualMigrations.length, 39);
   check(
-    '迁移序号为 0001–0012、0017–0042',
+    '迁移序号为 0001–0012、0017–0043',
     actualMigrations.every((name, i) => name.startsWith(`${expectedMigrations[i]}_`)),
     actualMigrations,
   );
@@ -262,6 +263,27 @@ try {
     ),
   );
   checkEqual('升级后普通 rooms 行数保持', scalar<number>(db, 'SELECT COUNT(*) FROM rooms'), 2);
+  checkEqual(
+    '0043 把存量群回填为 full',
+    scalar<number>(
+      db,
+      "SELECT COUNT(*) FROM rooms WHERE kind = 'group' AND member_history_policy = 'full'",
+    ),
+    2,
+  );
+  checkEqual(
+    '0043 递增存量群 policy_revision',
+    scalar<string>(
+      db,
+      "SELECT group_concat(policy_revision, ',') FROM (SELECT policy_revision FROM rooms ORDER BY room_id)",
+    ),
+    '2,2',
+  );
+  checkEqual(
+    '0043 不修改 updated_at',
+    scalar<number>(db, `SELECT COUNT(*) FROM rooms WHERE updated_at <> ${AT}`),
+    0,
+  );
   checkEqual('升级后普通 actors 行数保持', scalar<number>(db, 'SELECT COUNT(*) FROM actors'), before.actors);
   checkEqual(
     'A06 管理权交接历史可读',

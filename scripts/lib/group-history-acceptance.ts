@@ -1,8 +1,9 @@
 /**
  * G07 群历史边界与重新加入端到端验收（T01–T02）。
  *
- * T01：新成员默认只能读取当前加入后的消息；已知 message_id、文件 URL、
- * 引用、房间摘要、sync 与任务上下文都不能绕过边界。
+ * T01：群默认 full 下新成员可读全部历史；群主收紧为 from_join 后只能读取
+ * 当前加入后的消息；已知 message_id、文件 URL、引用、房间摘要、sync 与任务
+ * 上下文都不能绕过收紧后的边界。
  * T02：重新加入产生新代次；旧历史/文件/时间线游标返回 CURSOR_EXPIRED，
  * 旧签名 URL 立即失效，新代次只获得新加入后的内容。
  *
@@ -26,6 +27,7 @@ import {
   makeFriends,
   roomDetail,
   sendMessage,
+  setPolicy,
   timeline,
   type FileResultView,
   type RoomListView,
@@ -41,12 +43,18 @@ export async function runGroupHistoryAcceptance(options: { hasDrive: boolean }):
   await makeFriends(owner, agent);
   try {
     // ---- G07-T01：新成员不能绕过历史边界 ----
-    // 人拉人直接入群后，成员在加入前已是 active；用种子 Agent 建群，
-    // 发送加入前消息后再直接添加 member 与 agent，才能验证 from_join。
+    // 新建群默认 full：先让 member 以默认策略加入，确认加入前消息可见且边界为
+    // 0；再由群主显式收紧为 from_join，验证加入前内容立即不可见。
     const roomId = await createRoom(
       owner.connection,
       [seed.actor.actor_id],
       'G07 历史边界群',
+    );
+    const defaultDetail = await roomDetail(owner.connection, roomId);
+    checkEqual(
+      'G07-T01 新建群默认历史策略为 full',
+      defaultDetail.room.policies.member_history,
+      'full',
     );
     const beforeJoin = await sendMessage(owner.connection, roomId, HISTORY_MARKER);
     const beforeFile = options.hasDrive
@@ -58,6 +66,33 @@ export async function runGroupHistoryAcceptance(options: { hasDrive: boolean }):
       room_id: roomId,
       add: [member.actor.actor_id, agent.actor.actor_id],
     });
+
+    const fullMemberDetail = await roomDetail(member.connection, roomId);
+    checkEqual(
+      'G07-T01 默认 full 下新成员历史下界为 0',
+      fullMemberDetail.room.history_from_seq,
+      '0',
+    );
+    const fullMemberHistory = await history(member.connection, roomId);
+    check(
+      'G07-T01 默认 full 下新成员可见加入前消息',
+      fullMemberHistory.items.some(
+        (item) => item.message_id === beforeJoin.message.message_id,
+      ),
+      fullMemberHistory.items,
+    );
+
+    const tightened = await setPolicy(
+      owner.connection,
+      roomId,
+      fullMemberDetail.room.policy_revision,
+      { member_history_policy: 'from_join' },
+    );
+    checkEqual(
+      'G07-T01 群主可显式收紧为 from_join',
+      tightened.room.policies.member_history,
+      'from_join',
+    );
 
     const memberDetail = await roomDetail(member.connection, roomId);
     checkEqual('G07-T01 新成员代次从 1 开始', memberDetail.room.my_member_generation, 1);

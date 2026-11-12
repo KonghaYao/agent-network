@@ -39,12 +39,29 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
   await makeFriends(owner, member);
   await makeFriends(owner, agent);
   try {
-    // 人拉人直接入群：用种子 Agent 建群，先写入加入前消息与材料，再把
-    // member 与 agent 直接加入，验证 from_join 边界。
+    // 人拉人直接入群：新建群默认 full；本用例先断言默认值，再显式收紧为
+    // from_join，然后写入加入前消息与材料，验证收紧后的边界。
     const roomId = await createRoom(
       owner.connection,
       [seed.actor.actor_id],
       'G07 策略并发群',
+    );
+    const defaultPolicyDetail = await roomDetail(owner.connection, roomId);
+    checkEqual(
+      'G07-T03 新建群默认历史策略为 full',
+      defaultPolicyDetail.room.policies.member_history,
+      'full',
+    );
+    const tightened = await setPolicy(
+      owner.connection,
+      roomId,
+      defaultPolicyDetail.room.policy_revision,
+      { member_history_policy: 'from_join' },
+    );
+    checkEqual(
+      'G07-T03 群主可显式收紧为 from_join',
+      tightened.room.policies.member_history,
+      'from_join',
     );
     const preJoinMessage = await sendMessage(owner.connection, roomId, 'G07 策略加入前消息');
     let materialFile: FileResultView | null = options.hasDrive
@@ -66,7 +83,7 @@ export async function runGroupPolicyAcceptance(options: { hasDrive: boolean }): 
 
     let policyDetail = await roomDetail(owner.connection, roomId);
     checkEqual(
-      'G07-T03 默认历史策略为 from_join',
+      'G07-T03 收紧后历史策略为 from_join',
       policyDetail.room.policies.member_history,
       'from_join',
     );
