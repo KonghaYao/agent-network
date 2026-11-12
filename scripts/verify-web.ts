@@ -3848,7 +3848,7 @@ async function runRpcBodyDeadlineAcceptance(
 }
 
 /**
- * 引用块布局：位于正文上方、长文本两行截断、暗色可读，并保留点击查看原消息。
+ * 引用块布局：消息内引用位于正文下方、长文本两行截断、暗色可读；输入框引用条位于输入框上方。
  */
 async function runQuoteReferenceAcceptance(
   browser: Browser,
@@ -3938,14 +3938,14 @@ async function runQuoteReferenceAcceptance(
       scrollHeight: number;
     } | null;
     check(
-      '引用节点位于正文之前',
-      Boolean(layout && layout.quoteIndex >= 0 && layout.quoteIndex < layout.bubbleIndex),
+      '引用节点位于正文之后',
+      Boolean(layout && layout.quoteIndex > layout.bubbleIndex && layout.bubbleIndex >= 0),
       layout,
     );
     checkEqual(
-      '引用紧贴正文上方',
+      '引用紧贴正文下方',
       layout ? layout.quoteIndex : -1,
-      layout ? layout.bubbleIndex - 1 : -2,
+      layout ? layout.bubbleIndex + 1 : -2,
     );
     check('引用显示原消息摘要', Boolean(layout && layout.text.includes('引用目标消息')), layout?.text);
     checkEqual('引用最多两行', layout?.lineClamp, '2');

@@ -12,7 +12,7 @@ export const MESSAGE_ACTIONS_STYLE = `
     color: var(--wx-muted); cursor: pointer; font: inherit; font-size: 12px; padding: 5px 8px; }
   .message-actions button:hover, .message-actions button:focus-visible { background: var(--wx-hover); }
   .reply-reference { box-sizing: border-box; display: -webkit-box; max-width: 100%;
-    margin: 0 0 6px; padding: 4px 8px; text-align: left; overflow: hidden;
+    margin: 6px 0 0; padding: 4px 8px; text-align: left; overflow: hidden;
     text-overflow: ellipsis; overflow-wrap: anywhere; -webkit-box-orient: vertical;
     -webkit-line-clamp: 2; border-left: 3px solid var(--wx-line); border-radius: 4px;
     background: var(--wx-hover); color: var(--wx-muted); }

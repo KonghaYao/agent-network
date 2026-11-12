@@ -589,8 +589,7 @@ function messageItem(item) {
           if (stale()) return;
           filesRef.current = mountMessageFiles(fullText, filesRef.current);
           if (filesRef.current && !filesRef.current.isConnected) {
-            // 引用块在正文上方；附件重新挂载时仍保持在正文下方、展开按钮之前。
-            content.insertBefore(filesRef.current, expand);
+            content.insertBefore(filesRef.current, content.querySelector('.reply-reference') || expand);
           }
           if (rendered || !agent) {
             rememberExpandedBody(item.message_id, fullText);
@@ -773,8 +772,7 @@ async function runAgentAutoExpand(task) {
     if (!element.isConnected || !bubble.isConnected) return;
     filesRef.current = mountMessageFiles(fullText, filesRef.current);
     if (filesRef.current && !filesRef.current.isConnected) {
-      // 引用块在正文上方；附件重新挂载时仍保持在正文下方、展开按钮之前。
-      content.insertBefore(filesRef.current, expand);
+      content.insertBefore(filesRef.current, content.querySelector('.reply-reference') || expand);
     }
     if (rendered) {
       rememberExpandedBody(item.message_id, fullText);

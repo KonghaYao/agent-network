@@ -62,7 +62,7 @@ try {
       quote: quote ? children.indexOf(quote) : -1,
     };
   });
-  check(quoteOrder !== null && quoteOrder.quote === quoteOrder.bubble - 1, '引用块紧接正文上方');
+  check(quoteOrder !== null && quoteOrder.quote === quoteOrder.bubble + 1, '引用块紧接正文下方');
   const history = await rawTool<any>(d.me.token, 'network_history_list', { room_id: d.rooms.directWang.room_id });
   const reply = history.items.find((item: any) => item.preview === '引用不会丢草稿');
   check(reply?.reply_to === originalId, '发送引用保留真实reply_to');
@@ -91,8 +91,8 @@ try {
       quote: quote ? children.indexOf(quote) : -1,
     };
   });
-  check(fileOrder !== null && fileOrder.quote < fileOrder.bubble && fileOrder.bubble < fileOrder.files,
-    '引用块位于正文上方、附件位于正文下方');
+  check(fileOrder !== null && fileOrder.bubble < fileOrder.files && fileOrder.files < fileOrder.quote,
+    '引用块位于附件下方、正文与附件在上');
   await sent.getByRole('button', { name: '消息操作', exact: true }).click();
   await page.getByRole('menuitem', { name: '转发', exact: true }).click();
   const modal = page.getByRole('dialog', { name: '转发消息' });

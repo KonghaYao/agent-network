@@ -86,10 +86,10 @@ async function resolveQuotePreview(roomId, messageId, quote) {
     if (quote.isConnected && activeRoomId === roomId) quote.textContent = '引用消息不可见';
   }
 }
-/** 引用块位于正文上方：紧贴 .bubble 之前，附件与操作按钮仍在正文下方。 */
+/** 引用块跟随正文底部区域：有附件时排在附件之后，否则紧接正文。 */
 function placeReplyReference(quote, content) {
-  const bubble = content.querySelector('.bubble');
-  if (bubble) content.insertBefore(quote, bubble); else content.prepend(quote);
+  const anchor = content.querySelector('.msg-files') || content.querySelector('.bubble');
+  if (anchor) anchor.after(quote); else content.append(quote);
 }
 function appendMessageActions(item, content) {
   if (item.reply_to) {
