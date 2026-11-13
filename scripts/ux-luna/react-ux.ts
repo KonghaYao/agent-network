@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { chromium, type Page } from 'playwright';
 
 import { createFixture } from './fixture';
 import { rawTool } from '../verify-web';
@@ -23,6 +23,55 @@ function check(condition: unknown, label: string, detail?: unknown): void {
   }
   failures.push(`${label} ${detail === undefined ? '' : JSON.stringify(detail)}`);
   console.error(`失败：${label}`, detail ?? '');
+}
+
+interface AccountLayout {
+  actionsVisible: boolean;
+  labels: string;
+  ids: string;
+  avatar: { width: number; height: number } | null;
+  footer: { width: number; height: number } | null;
+  footerBackground: string | null;
+  nameFontSize: string | null;
+  actionFontSize: string | null;
+  actionColor: string | null;
+  actionGap: string | null;
+  menuToggle: boolean;
+}
+
+/** 左下角账号区：legacy 平铺操作行，不是「···」菜单。 */
+async function accountLayout(page: Page): Promise<AccountLayout | null> {
+  return (await page.evaluate(
+    `(() => {
+      const footer = document.querySelector('.sidebar-foot');
+      const account = document.getElementById('account');
+      const avatar = document.getElementById('account-avatar');
+      const name = document.getElementById('account-name');
+      const actions = document.querySelector('.account-actions');
+      const buttons = actions
+        ? Array.from(actions.querySelectorAll('button')).filter((node) => !node.hidden)
+        : [];
+      const box = (node) => {
+        if (!node) return null;
+        const rect = node.getBoundingClientRect();
+        return { width: Math.round(rect.width), height: Math.round(rect.height) };
+      };
+      if (!footer || !account || !actions) return null;
+      return {
+        actionsVisible: getComputedStyle(actions).display !== 'none',
+        labels: buttons.map((node) => (node.textContent || '').trim()).join('|'),
+        ids: buttons.map((node) => node.id).join(','),
+        avatar: box(avatar),
+        footer: box(footer),
+        footerBackground: getComputedStyle(footer).backgroundColor,
+        nameFontSize: name ? getComputedStyle(name).fontSize : null,
+        actionFontSize: buttons[0] ? getComputedStyle(buttons[0]).fontSize : null,
+        actionColor: buttons[0] ? getComputedStyle(buttons[0]).color : null,
+        actionGap: getComputedStyle(actions).gap,
+        menuToggle: Boolean(document.getElementById('account-menu-toggle'))
+      };
+    })()`,
+  )) as AccountLayout | null;
 }
 
 async function loginContext(options: {
@@ -56,6 +105,29 @@ try {
     });
     await page.goto(fixture.base);
     await page.locator('#room-list a').first().waitFor();
+    const account = await accountLayout(page);
+    check(account?.actionsVisible === true, '桌面账号区直接显示 legacy 操作行', account);
+    check(
+      account?.labels === '新建 Agent|配对设备|记忆||' &&
+        account?.ids === 'new-agent,device-handoff,memory-open,archived-agents,logout',
+      '桌面账号区操作顺序与 legacy 一致',
+      account,
+    );
+    check(
+      account?.avatar?.width === 36 && account?.avatar?.height === 36,
+      '桌面账号头像保持 36×36',
+      account?.avatar,
+    );
+    check(account?.footer?.height === 74, '桌面账号区高度保持 74px', account?.footer);
+    check(
+      account?.nameFontSize === '13px' &&
+        account?.actionFontSize === '12px' &&
+        account?.actionGap === '2px 10px' &&
+        account?.actionColor === 'rgb(87, 107, 149)',
+      '桌面账号区字号/间距/颜色保持 legacy',
+      account,
+    );
+    check(account?.menuToggle === false, '桌面账号区不再使用「···」菜单');
     const sidebar = await page.locator('.sidebar').boundingBox();
     check(
       sidebar !== null && sidebar.width >= 280 && sidebar.width <= 322,
@@ -94,6 +166,27 @@ try {
     await page.locator('#room-list a').first().waitFor();
     check(await page.locator('.sidebar').isVisible(), '390px 首页显示会话列表');
     check(await page.locator('.chat-pane').isHidden(), '390px 首页隐藏聊天区');
+    const mobileAccount = await accountLayout(page);
+    check(mobileAccount?.actionsVisible === true, '390px 账号区显示 legacy 操作行', mobileAccount);
+    check(
+      mobileAccount?.labels === '新建 Agent|配对设备|记忆||',
+      '390px 账号区保留三个文字入口',
+      mobileAccount,
+    );
+    check(
+      mobileAccount?.avatar?.width === 36 && mobileAccount?.avatar?.height === 36,
+      '390px 账号头像保持 36×36',
+      mobileAccount?.avatar,
+    );
+    check(
+      mobileAccount?.footer?.width === 390 && mobileAccount?.footer?.height === 74,
+      '390px 账号区保持单栏 74px 高度',
+      mobileAccount?.footer,
+    );
+    const homeOverflow = (await page.evaluate(
+      `document.documentElement.scrollWidth - window.innerWidth`,
+    )) as number;
+    check(homeOverflow <= 1, '390px 首页无横向溢出', homeOverflow);
     await page.locator(`#room-list a[href="/c/${d.rooms.directWang.room_id}"]`).click();
     await page.locator('#chat-body').waitFor();
     check(await page.locator('.sidebar').isHidden(), '390px 聊天页隐藏会话列表');
@@ -115,6 +208,18 @@ try {
     });
     await page.goto(`${fixture.base}/c/${d.rooms.directWang.room_id}`);
     await page.locator('#messages .msg').first().waitFor();
+    const darkAccount = await accountLayout(page);
+    check(darkAccount?.actionsVisible === true, '暗色账号区显示 legacy 操作行', darkAccount);
+    check(
+      darkAccount?.footerBackground === 'rgb(43, 43, 43)',
+      '暗色账号区背景使用 #2b2b2b',
+      darkAccount?.footerBackground,
+    );
+    check(
+      darkAccount?.actionColor === 'rgb(87, 107, 149)',
+      '暗色账号操作文字保持 legacy 链接色',
+      darkAccount?.actionColor,
+    );
     const background = (await page.evaluate(
       `getComputedStyle(document.body).backgroundColor`,
     )) as string;

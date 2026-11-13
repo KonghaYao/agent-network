@@ -309,7 +309,6 @@ test.describe('SPA 右栏与剩余入口', () => {
 
   test('new agent entry creates credentials and memory drawer opens', async ({ page }) => {
     await login(page, base, tokenA);
-    await page.locator('#account-menu-toggle').click();
     await page.locator('#new-agent').click();
     await expect(page.locator('#new-agent-modal')).toBeVisible();
     await page.fill('#new-agent-name', `UI Agent ${Date.now()}`);
@@ -322,7 +321,6 @@ test.describe('SPA 右栏与剩余入口', () => {
     await page.locator('#new-agent-close').click();
     await expect(page.locator('#new-agent-modal')).toBeHidden();
 
-    await page.locator('#account-menu-toggle').click();
     await page.locator('#memory-open').click();
     await expect(page.locator('#memory-drawer')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('#memory-capability')).toContainText(
@@ -399,7 +397,6 @@ test.describe('SPA 右栏与剩余入口', () => {
     expect(await violations('#monitor-pane')).toEqual([]);
     await page.locator('#monitor-close').click();
 
-    await page.locator('#account-menu-toggle').click();
     await page.locator('#new-agent').click();
     await expect(page.locator('#new-agent-modal')).toBeVisible();
     await page.waitForTimeout(220);
@@ -407,7 +404,6 @@ test.describe('SPA 右栏与剩余入口', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('#new-agent-modal')).toBeHidden();
 
-    await page.locator('#account-menu-toggle').click();
     await page.locator('#memory-open').click();
     await expect(page.locator('#memory-drawer')).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(220);

@@ -27,7 +27,9 @@ export const DEVICE_HANDOFF_STYLE = `
   .account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px;
     margin-top: 1px; }
   .account-actions[hidden] { display: none; }
-  .account-scan { padding: 0; border: 0; background: none;
+  /* legacy 基础样式对 button 应用 font: inherit；SPA 壳没有该重置，
+     账号文字入口需显式继承，否则浏览器表单控件会回退到 Arial 并改变宽度。 */
+  .account-scan { padding: 0; border: 0; background: none; font: inherit;
     color: var(--wx-link, #576b95); font-size: 12px; cursor: pointer; }
   .account-scan:hover { text-decoration: underline; }
   .account-icon { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: 0;
