@@ -1,7 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { useActorStream } from '../../app/mcp/useActorStream';
+import { useActorStream, type ActorStreamEvent } from '../../app/mcp/useActorStream';
+import { LIMITS } from '../../../contracts/limits';
 import { useRoomPreferences } from '../../hooks/useRoomPreferences';
 import { useRooms } from '../../hooks/useRooms';
 import { useWebSession } from '../../hooks/useWebSession';
@@ -45,19 +46,40 @@ export function AppSidebar({ notice = null, live = true, streamError = null }: A
   const actorId = session.session?.identity.actor_id ?? null;
   const roomPreferences = useRoomPreferences(actorId);
 
+  const streamRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const streamContactRef = useRef(false);
+  useEffect(
+    () => () => {
+      if (streamRefreshTimerRef.current) clearTimeout(streamRefreshTimerRef.current);
+    },
+    [],
+  );
+
   const stream = useActorStream({
     token: live ? (session.session?.token ?? null) : null,
     onEvent: useCallback(
-      (source: string) => {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.rooms(actorId) });
-        // 好友申请只随 contact 事件变化；普通消息不重复拉申请列表。
-        if (source !== 'contact') return;
-        void queryClient.invalidateQueries({
-          queryKey: queryKeys.contactRequests(actorId),
-        });
-        void queryClient.invalidateQueries({
-          queryKey: queryKeys.contactRequestBadge(actorId),
-        });
+      (event: ActorStreamEvent) => {
+        // 首次 ack 由初始 rooms_list 覆盖；重连才补拉，避免搜索/分类期间
+        // 迟到的刷新把“只过滤已加载会话”变成额外工具调用。
+        if (event.type === 'ack' && !event.reconnect) return;
+        if (event.type === 'event' && event.source === 'contact') {
+          streamContactRef.current = true;
+        }
+        // 同一 300ms 窗口内的多 item 只刷新一次会话列表。
+        if (streamRefreshTimerRef.current) return;
+        streamRefreshTimerRef.current = setTimeout(() => {
+          streamRefreshTimerRef.current = null;
+          void queryClient.invalidateQueries({ queryKey: queryKeys.rooms(actorId) });
+          // 好友申请只随 contact 事件变化；普通消息不重复拉申请列表。
+          if (!streamContactRef.current) return;
+          streamContactRef.current = false;
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.contactRequests(actorId),
+          });
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.contactRequestBadge(actorId),
+          });
+        }, LIMITS.webRefreshDebounceMs);
       },
       [actorId, queryClient],
     ),

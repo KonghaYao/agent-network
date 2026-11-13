@@ -87,6 +87,10 @@ interface RoomList {
   items: { room_id: string; kind: string; peer?: { actor_id?: string } | null }[];
 }
 
+interface RoomDetail {
+  room: { room_id: string };
+}
+
 interface ContactRequestResult {
   request: { contact_request_id: string } | null;
 }
@@ -141,6 +145,46 @@ async function waitForHistory(
   throw new Error(`历史中未找到消息：${expected}`);
 }
 
+async function countHistoryWithoutCursor(
+  page: Page,
+  roomId: string,
+): Promise<number> {
+  return page.evaluate((targetRoom) => {
+    const calls =
+      (
+        window as unknown as {
+          __mcpCalls?: { body?: { params?: { name?: string; arguments?: { room_id?: string; cursor?: string } } } }[];
+        }
+      ).__mcpCalls ?? [];
+    return calls.filter((call) => {
+      const params = call.body?.params;
+      return (
+        params?.name === 'network_history_list' &&
+        params.arguments?.room_id === targetRoom &&
+        !params.arguments?.cursor
+      );
+    }).length;
+  }, roomId);
+}
+
+async function countRoomCalls(page: Page, name: string, roomId: string): Promise<number> {
+  return page.evaluate(
+    ({ targetName, targetRoom }) => {
+      const calls =
+        (
+          window as unknown as {
+            __mcpCalls?: { body?: { params?: { name?: string; arguments?: { room_id?: string } } } }[];
+          }
+        ).__mcpCalls ?? [];
+      return calls.filter((call) => {
+        const params = call.body?.params;
+        return params?.name === targetName && params.arguments?.room_id === targetRoom;
+      }).length;
+    },
+    { targetName: name, targetRoom: roomId },
+  );
+}
+
 test.describe('SPA Chat', () => {
 
   let base = '';
@@ -148,6 +192,7 @@ test.describe('SPA Chat', () => {
   let tokenB = '';
   let nameB = '';
   let roomId = '';
+  let otherRoomId = '';
 
   test.beforeAll(async () => {
     base = await baseUrl();
@@ -193,6 +238,13 @@ test.describe('SPA Chat', () => {
       body: 'Chat E2E 初始消息',
       invoke: [],
     });
+    const other = await callTool<RoomDetail>(base, tokenA, 'network_room_create', {
+      request_id: requestId('e2e_room'),
+      kind: 'group',
+      title: 'Chat E2E 其他房间',
+      members: [b.actor_id],
+    });
+    otherRoomId = other.room.room_id;
   });
 
   test.beforeEach(async ({ page }) => {
@@ -285,6 +337,45 @@ test.describe('SPA Chat', () => {
       return typeof args?.reply_to === 'string' && args.reply_to.length > 0;
     });
     expect(hasReplyTo).toBe(true);
+  });
+
+  test('scopes stream invalidation to the current room', async ({ page }) => {
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#messages .msg .bubble').first()).toContainText('Chat E2E 初始消息');
+    await page.waitForTimeout(600);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(1);
+
+    // 其他房间是群聊；切到群聊分类后侧栏才渲染它。
+    await page.locator('#room-filter-group').click();
+    const otherItem = page.locator(
+      `#room-list a.room-item[href="/c/${encodeURIComponent(otherRoomId)}"]`,
+    );
+    await expect(otherItem).toBeVisible();
+
+    const otherMarker = `E2E 其他房间 ${Date.now()}`;
+    await callTool(base, tokenB, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: requestId('e2e_cm'),
+      room_id: otherRoomId,
+      body: otherMarker,
+      invoke: [],
+    });
+    await expect(otherItem).toContainText(otherMarker, { timeout: 15_000 });
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(1);
+    expect(await countRoomCalls(page, 'network_room_get', roomId)).toBe(1);
+
+    const currentMarker = `E2E 当前房间 ${Date.now()}`;
+    await callTool(base, tokenB, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: requestId('e2e_cm'),
+      room_id: roomId,
+      body: currentMarker,
+      invoke: [],
+    });
+    await expect(page.locator('#messages .msg .bubble').last()).toContainText(currentMarker, {
+      timeout: 15_000,
+    });
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(2);
   });
 
   test('keeps IME Enter, Shift+Enter and 1–4 line composer behavior', async ({ page }) => {

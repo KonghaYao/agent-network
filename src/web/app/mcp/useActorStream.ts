@@ -26,9 +26,13 @@ const FATAL_CODES = new Set([
 
 interface StreamOptions {
   token: string | null;
-  /** 事件来源；ack 补拉传空串。页面只据此刷新相关查询。 */
-  onEvent: (source: string) => void;
+  /** 事件来源；ack 补拉传 `{ type: 'ack', reconnect }`。页面只据此刷新相关查询。 */
+  onEvent: (event: ActorStreamEvent) => void;
 }
+
+export type ActorStreamEvent =
+  | { type: 'ack'; reconnect: boolean }
+  | { type: 'event'; source: string; kind: string; roomId: string | null };
 
 interface StreamState {
   error: string | null;
@@ -108,20 +112,28 @@ function notificationUri(message: unknown): string | null {
   return STREAM_URI;
 }
 
-/** 信封里的最后一个 item 来源；不解析正文，只用于决定刷新哪些查询。 */
-function notificationSource(message: unknown): string {
-  if (!message || typeof message !== 'object') return '';
+/** 信封里的 item 只取定位字段；不解析正文，只用于决定刷新哪些查询。 */
+function notificationEvents(message: unknown): ActorStreamEvent[] {
+  if (!message || typeof message !== 'object') return [];
   const value = message as {
     params?: { _meta?: Record<string, unknown> };
   };
   const envelope = value.params?._meta?.[EVENT_META_KEY];
-  if (!envelope || typeof envelope !== 'object') return '';
+  if (!envelope || typeof envelope !== 'object') return [];
   const items = (envelope as { items?: unknown }).items;
-  if (!Array.isArray(items) || items.length === 0) return '';
-  const last = items[items.length - 1];
-  if (!last || typeof last !== 'object') return '';
-  const source = (last as { source?: unknown }).source;
-  return typeof source === 'string' ? source : '';
+  if (!Array.isArray(items)) return [];
+  const events: ActorStreamEvent[] = [];
+  for (const raw of items) {
+    if (!raw || typeof raw !== 'object') continue;
+    const item = raw as { source?: unknown; kind?: unknown; room_id?: unknown };
+    events.push({
+      type: 'event',
+      source: typeof item.source === 'string' ? item.source : '',
+      kind: typeof item.kind === 'string' ? item.kind : '',
+      roomId: typeof item.room_id === 'string' ? item.room_id : null,
+    });
+  }
+  return events;
 }
 
 interface StreamFailure {
@@ -165,6 +177,8 @@ export function useActorStream({ token, onEvent }: StreamOptions): StreamState {
     let controller: AbortController | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
+    /** 首次 ack 由首屏查询覆盖；只有重连后的 ack 才需要补拉。 */
+    let connected = false;
 
     const schedule = (delay: number) => {
       if (disposed) return;
@@ -234,10 +248,23 @@ export function useActorStream({ token, onEvent }: StreamOptions): StreamState {
               }
               if (isAck(message)) {
                 acknowledged = true;
-                // ack 后补拉一次，覆盖连接建立前错过的事件。
-                handlerRef.current('');
+                // 首次连接由首屏查询覆盖；重连才补拉，避免首屏重复读取。
+                const reconnect = connected;
+                connected = true;
+                handlerRef.current({ type: 'ack', reconnect });
               } else if (notificationUri(message)) {
-                handlerRef.current(notificationSource(message));
+                const events = notificationEvents(message);
+                if (events.length === 0) {
+                  // 信封合法但没有可定位 item：保守刷新，仍不解析正文。
+                  handlerRef.current({
+                    type: 'event',
+                    source: '',
+                    kind: '',
+                    roomId: null,
+                  });
+                } else {
+                  for (const event of events) handlerRef.current(event);
+                }
               }
             }
             boundary = buffer.indexOf('\n\n');
