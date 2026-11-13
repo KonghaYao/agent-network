@@ -6,6 +6,7 @@ import { MESSAGE_ACTIONS_STYLE } from './chat-message-actions-styles';
 import { MESSAGE_FILES_STYLE } from './chat-message-files-styles';
 import { MEMORY_STYLE } from './chat-memory-styles';
 import { MONITOR_STYLE } from './chat-monitor-styles';
+import { TASK_TRACE_STYLE } from './chat-task-trace-styles';
 import { UPLOAD_STYLE } from './chat-upload-styles';
 import { DEVICE_HANDOFF_STYLE } from './handoff';
 import { escapeHtml, jsonForScript } from './layout';
@@ -55,7 +56,7 @@ const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}${MEMORY_STYLE}
 `;
 
 /** Chat 复用 legacy 的 Markdown、回执菜单、附件、文件、监控与画板样式。 */
-const CHAT_STYLE = `${SPA_STYLE}${MARKDOWN_STYLE}${MESSAGE_ACTIONS_STYLE}${MESSAGE_FILES_STYLE}${UPLOAD_STYLE}${FILES_STYLE}${MONITOR_STYLE}${DRAWBOARD_FALLBACK_STYLE}
+const CHAT_STYLE = `${SPA_STYLE}${MARKDOWN_STYLE}${MESSAGE_ACTIONS_STYLE}${MESSAGE_FILES_STYLE}${UPLOAD_STYLE}${FILES_STYLE}${MONITOR_STYLE}${TASK_TRACE_STYLE}${DRAWBOARD_FALLBACK_STYLE}
   /* Chat 是单栏 React 页，桌面也保留返回入口；legacy 双栏由侧栏承担。 */
   body.page-room .chat-pane .back { display: inline-flex; }
 `;

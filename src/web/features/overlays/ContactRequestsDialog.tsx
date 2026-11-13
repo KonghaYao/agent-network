@@ -1,38 +1,26 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 
-import {
-  useContactRequests,
-  type ContactRequestActor,
-  type ContactRequestView,
-} from '../../hooks/useContactRequests';
+import { useContactRequestBadge } from '../../hooks/useContactRequests';
 import { useWebSession } from '../../hooks/useWebSession';
-import { callTool } from '../../lib/mcp-client';
-import { queryKeys } from '../../lib/query-keys';
-import { newRequestId } from '../../lib/request-id';
+import { ContactLinksPanel } from '../contacts/ContactLinksPanel';
+import { ContactRequestsPanel } from '../contacts/ContactRequestsPanel';
+import { ContactSearchPanel } from '../contacts/ContactSearchPanel';
 import { Modal } from './Modal';
 
-function actorLabel(actor: ContactRequestActor | undefined): string {
-  if (!actor || typeof actor.name !== 'string') return '未知身份';
-  return `${actor.name}${actor.kind === 'agent' ? ' · Agent' : ' · 人'}`;
-}
+type ContactTab = 'search' | 'requests' | 'more';
 
-function requestTitle(item: ContactRequestView, identityId: string | null): string {
-  if (item.direction === 'incoming') {
-    const forManagedAgent = item.to_actor && item.to_actor.actor_id !== identityId;
-    return `${actorLabel(item.from_actor)}${
-      forManagedAgent ? ` 请求添加 ${actorLabel(item.to_actor)} 为好友` : ' 请求添加你为好友'
-    }`;
-  }
-  return `你向 ${actorLabel(item.to_actor)} 发送了好友申请`;
-}
+const TABS: { value: ContactTab; label: string; id: string; panel: string }[] = [
+  { value: 'search', label: '搜索添加', id: 'contact-tab-search', panel: 'contact-panel-search' },
+  { value: 'requests', label: '好友申请', id: 'contact-tab-requests', panel: 'contact-panel-requests' },
+  { value: 'more', label: '链接与设置', id: 'contact-tab-more', panel: 'contact-panel-more' },
+];
 
 /**
- * 好友申请弹窗：只处理 pending 申请，不把单侧收藏当成好友。
+ * 添加好友弹窗：搜索添加、好友申请、链接与接收策略。
  *
- * 复用 `network_contact_requests_list`、`network_contact_request_respond`
- * 与 `network_contact_request_cancel`；接受、拒绝、撤销后失效申请角标与
- * 会话列表，接受产生的 direct 会话由服务端在同一事务里创建。
+ * 打开后默认进入搜索页，与 legacy 一致；好友申请页只处理 pending，
+ * 链接明文只保存在 `ContactLinksPanel` 的内存状态。关闭后焦点回到
+ * `#contact-requests` 由调用方负责，Radix 负责弹窗内的焦点陷阱。
  */
 export function ContactRequestsDialog({
   open,
@@ -42,95 +30,41 @@ export function ContactRequestsDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const session = useWebSession();
-  const identityId = session.session?.identity.actor_id ?? null;
   const token = session.session?.token ?? null;
-  const requests = useContactRequests(open);
-  const queryClient = useQueryClient();
-  const [status, setStatus] = useState('');
-  const [error, setError] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const identityId = session.session?.identity.actor_id ?? null;
+  const badge = useContactRequestBadge();
+  const [tab, setTab] = useState<ContactTab>('search');
 
   useEffect(() => {
     if (!open) return;
-    setStatus('');
-    setError(false);
-    setBusyId(null);
+    setTab('search');
   }, [open]);
 
-  const pending = requests.items.filter((item) => item.status === 'pending');
-  const count = pending.filter((item) => item.direction === 'incoming').length;
-
-  const refresh = async () => {
-    if (!identityId) return;
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.contactRequests(identityId) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.contactRequestBadge(identityId) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.rooms(identityId) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.contacts(identityId) }),
-    ]);
+  const focusTab = (next: ContactTab) => {
+    setTab(next);
+    requestAnimationFrame(() => {
+      document.getElementById(`contact-tab-${next}`)?.focus();
+    });
   };
 
-  const setMessage = (message: string, isError = false) => {
-    setStatus(message);
-    setError(isError);
-  };
-
-  const respond = async (item: ContactRequestView, action: 'accept' | 'reject') => {
-    if (!token || busyId) return;
-    setBusyId(item.contact_request_id);
-    setMessage(action === 'accept' ? '正在接受…' : '正在拒绝…');
-    try {
-      await callTool(
-        'network_contact_request_respond',
-        {
-          request_id: newRequestId('web_contact_respond'),
-          contact_request_id: item.contact_request_id,
-          action,
-        },
-        { token },
-      );
-      setMessage(action === 'accept' ? '已接受好友申请。' : '已拒绝好友申请。');
-      await refresh();
-    } catch (failure) {
-      setMessage(
-        `处理失败：${failure instanceof Error ? failure.message : String(failure)}`,
-        true,
-      );
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const cancel = async (item: ContactRequestView) => {
-    if (!token || busyId) return;
-    setBusyId(item.contact_request_id);
-    setMessage('正在撤销…');
-    try {
-      await callTool(
-        'network_contact_request_cancel',
-        {
-          request_id: newRequestId('web_contact_cancel'),
-          contact_request_id: item.contact_request_id,
-        },
-        { token },
-      );
-      setMessage('已撤销好友申请。');
-      await refresh();
-    } catch (failure) {
-      setMessage(
-        `撤销失败：${failure instanceof Error ? failure.message : String(failure)}`,
-        true,
-      );
-    } finally {
-      setBusyId(null);
-    }
+  const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const index = TABS.findIndex((entry) => entry.value === tab);
+    let next = index;
+    if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = TABS.length - 1;
+    else if (event.key === 'ArrowLeft') next = (index - 1 + TABS.length) % TABS.length;
+    else next = (index + 1) % TABS.length;
+    const target = TABS[next];
+    if (target) focusTab(target.value);
   };
 
   return (
     <Modal
       open={open}
       onOpenChange={onOpenChange}
-      title="好友申请"
+      title="添加好友"
       titleId="contact-modal-title"
       contentId="contact-modal"
       className="contact-modal-card"
@@ -142,103 +76,56 @@ export function ContactRequestsDialog({
         </div>
       }
     >
-      <p className="contact-request-summary">
-        <span id="contact-request-count" className="contact-count" hidden={count === 0}>
-          {count}
-          {requests.hasMore ? '+' : ''}
-        </span>
-        <span className="contact-request-summary-text">
-          {count === 0 ? '暂无待处理申请。' : `${count} 条待处理申请`}
-        </span>
-      </p>
-      <p
-        id="contact-request-status"
-        className="contact-search-status"
-        role="status"
-        data-error={error ? '1' : undefined}
+      <div
+        className="contact-segments"
+        id="contact-segments"
+        role="tablist"
+        aria-label="添加好友分类"
+        onKeyDown={onTabKeyDown}
       >
-        {status}
-      </p>
-      <ul
-        id="contact-request-list"
-        className="contact-request-list"
-        aria-label="待处理好友申请"
-      >
-        {requests.loading ? (
-          <li className="contact-request-empty" role="status">
-            正在读取好友申请…
-          </li>
-        ) : pending.length === 0 ? (
-          <li className="contact-request-empty">暂无待处理申请。</li>
+        {TABS.map((entry) => {
+          const selected = tab === entry.value;
+          return (
+            <button
+              key={entry.value}
+              id={entry.id}
+              type="button"
+              role="tab"
+              data-contact-tab={entry.value}
+              aria-selected={selected}
+              aria-controls={entry.panel}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => setTab(entry.value)}
+            >
+              {entry.label}
+              {entry.value === 'requests' && badge.count > 0 ? (
+                <span id="contact-request-count" className="contact-count contact-tab-count">
+                  {badge.count}
+                  {badge.hasMore ? '+' : ''}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+      <div className="contact-panels">
+        {token && identityId ? (
+          <>
+            <ContactSearchPanel
+              token={token}
+              identityId={identityId}
+              active={tab === 'search'}
+              onAccepted={() => undefined}
+            />
+            <ContactRequestsPanel active={tab === 'requests'} onChanged={() => undefined} />
+            <ContactLinksPanel token={token} active={tab === 'more'} />
+          </>
         ) : (
-          pending.map((item) => {
-            const busy = busyId === item.contact_request_id;
-            return (
-              <li
-                key={item.contact_request_id}
-                className="contact-request-item"
-                data-contact-request-id={item.contact_request_id}
-                data-direction={item.direction}
-              >
-                <div className="contact-request-main">
-                  <p className="contact-request-title">{requestTitle(item, identityId)}</p>
-                  {item.message ? (
-                    <p className="contact-request-message">{item.message}</p>
-                  ) : null}
-                  <p className="contact-request-meta">
-                    {item.auto_accepted ? '已自动建立' : '等待确认'}
-                  </p>
-                </div>
-                <div className="contact-request-actions">
-                  {item.direction === 'incoming' && item.can_respond ? (
-                    <>
-                      <button
-                        type="button"
-                        className="primary"
-                        disabled={busyId !== null}
-                        onClick={() => void respond(item, 'accept')}
-                      >
-                        {busy ? '处理中…' : '接受'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busyId !== null}
-                        onClick={() => void respond(item, 'reject')}
-                      >
-                        拒绝
-                      </button>
-                    </>
-                  ) : null}
-                  {item.can_cancel ? (
-                    <button
-                      type="button"
-                      disabled={busyId !== null}
-                      onClick={() => void cancel(item)}
-                    >
-                      {busy ? '处理中…' : '撤销申请'}
-                    </button>
-                  ) : null}
-                </div>
-              </li>
-            );
-          })
+          <p className="contact-request-empty" role="status">
+            浏览器身份尚未初始化，请稍后重试。
+          </p>
         )}
-      </ul>
-      {requests.error ? (
-        <p className="field-error" role="alert">
-          {requests.error}
-        </p>
-      ) : null}
-      <button
-        id="contact-request-more"
-        className="list-retry"
-        type="button"
-        hidden={!requests.hasMore}
-        disabled={requests.loadingMore}
-        onClick={() => void requests.loadMore()}
-      >
-        {requests.loadingMore ? '正在加载…' : '加载更多申请'}
-      </button>
+      </div>
     </Modal>
   );
 }

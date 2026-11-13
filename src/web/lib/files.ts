@@ -137,8 +137,12 @@ export function extractFileCards(body: string): FileCard[] {
 /** 非安全上下文没有 navigator.clipboard 时的兜底复制。 */
 export async function copyText(text: string): Promise<void> {
   if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // 非安全上下文、权限被拒或焦点丢失时继续走 execCommand 回退。
+    }
   }
   const area = document.createElement('textarea');
   area.value = text;

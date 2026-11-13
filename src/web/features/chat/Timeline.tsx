@@ -21,6 +21,7 @@ interface TimelineProps {
   members: Map<string, RoomMember>;
   identityId: string;
   identityName: string;
+  identityKind: 'human' | 'agent';
   mentions: string[];
   outbox: OutboxIntent[];
   olderLoading: boolean;
@@ -34,6 +35,10 @@ interface TimelineProps {
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
   onMarkRead: (throughSeq: string) => void;
+  onToggleTask: (item: HistoryMessage) => void;
+  onOpenTask: (rootId: string, focusMessageId: string | null) => void;
+  onRecall: (item: HistoryMessage) => void;
+  onForward: (item: HistoryMessage) => void;
 }
 
 export function Timeline({
@@ -42,6 +47,7 @@ export function Timeline({
   members,
   identityId,
   identityName,
+  identityKind,
   mentions,
   outbox,
   olderLoading,
@@ -55,6 +61,10 @@ export function Timeline({
   onQuote,
   onStatus,
   onMarkRead,
+  onToggleTask,
+  onOpenTask,
+  onRecall,
+  onForward,
 }: TimelineProps) {
   const listRef = useRef<HTMLOListElement>(null);
   const pinnedRef = useRef(true);
@@ -191,10 +201,15 @@ export function Timeline({
           room={room}
           identityId={identityId}
           identityName={identityName}
+          identityKind={identityKind}
           mentions={mentions}
           allItems={messages}
           onQuote={onQuote}
           onStatus={onStatus}
+          onToggleTask={onToggleTask}
+          onOpenTask={onOpenTask}
+          onRecall={onRecall}
+          onForward={onForward}
         />,
       );
     }

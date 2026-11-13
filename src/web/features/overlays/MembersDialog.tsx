@@ -8,6 +8,8 @@ import { callTool, type McpError } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { newRequestId } from '../../lib/request-id';
 import { confirmDialog } from './confirm';
+import { GroupInvitesPanel } from './GroupInvitesPanel';
+import { GroupPoliciesPanel } from './GroupPoliciesPanel';
 import { Modal } from './Modal';
 
 const ROLE_LABEL: Record<RoomMember['role'], string> = {
@@ -86,6 +88,67 @@ export function MembersDialog({
     });
     if (!confirmed) return;
     await update({ remove: [member.actor_id] }, member.actor_id);
+  };
+
+  const setRole = async (member: RoomMember, role: 'admin' | 'member') => {
+    if (busy) return;
+    if (!member.role_revision) {
+      setError('成员角色版本缺失，请关闭弹窗后重新打开再试。');
+      return;
+    }
+    setBusy(`${role}-${member.actor_id}`);
+    setError('');
+    try {
+      await callTool(
+        'network_room_role_set',
+        {
+          request_id: newRequestId('web_room_role'),
+          room_id: room.room_id,
+          actor_id: member.actor_id,
+          role,
+          expected_role_revision: member.role_revision,
+        },
+        { token },
+      );
+      await queryClient.invalidateQueries({ queryKey: queryKeys.room(room.room_id) });
+    } catch (failure) {
+      setError(
+        (failure as McpError).message ||
+          (role === 'admin' ? '设置管理员失败' : '撤销管理员失败'),
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const dissolve = async () => {
+    if (busy || room.can_dissolve !== true) return;
+    const confirmed = await confirmDialog({
+      title: '解散群聊',
+      message:
+        '解散群聊后：\n· 所有成员立即失去新的发言、邀请与文件写入权限\n· 待处理投递与邀请链接、入群申请立即失效\n· 解散时仍在群的成员保留截至解散点的只读归档；此前已退群/被移除者无归档资格\n· 已下载到本地的文件副本无法收回\n\n解散不删除消息、文件或成果。确定解散？',
+      confirmText: '解散群聊',
+      danger: true,
+    });
+    if (!confirmed) return;
+    setBusy('dissolve');
+    setError('');
+    try {
+      await callTool(
+        'network_room_dissolve',
+        { request_id: newRequestId('web_room_dissolve'), room_id: room.room_id },
+        { token },
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.room(room.room_id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.rooms(identityId) }),
+      ]);
+      onOpenChange(false);
+    } catch (failure) {
+      setError((failure as McpError).message || '解散群聊失败');
+    } finally {
+      setBusy(null);
+    }
   };
 
   const transferCandidates = members.filter(
@@ -172,6 +235,17 @@ export function MembersDialog({
       className="members-card"
       footer={
         <div className="row modal-actions">
+          {room.can_dissolve === true && !room.read_only ? (
+            <button
+              id="group-dissolve"
+              className="danger"
+              type="button"
+              disabled={busy !== null}
+              onClick={() => void dissolve()}
+            >
+              解散群聊
+            </button>
+          ) : null}
           <button id="members-close" type="button" onClick={() => onOpenChange(false)}>
             关闭
           </button>
@@ -186,6 +260,26 @@ export function MembersDialog({
               {member.actor_id === identityId ? '（我）' : ''}
             </span>
             <span className="spa-member-role">{ROLE_LABEL[member.role] ?? '成员'}</span>
+            {member.actions?.can_set_admin ? (
+              <button
+                type="button"
+                disabled={busy !== null}
+                aria-label={`设为管理员 ${member.name}`}
+                onClick={() => void setRole(member, 'admin')}
+              >
+                设为管理员
+              </button>
+            ) : null}
+            {member.actions?.can_revoke_admin ? (
+              <button
+                type="button"
+                disabled={busy !== null}
+                aria-label={`撤销管理员 ${member.name}`}
+                onClick={() => void setRole(member, 'member')}
+              >
+                撤销管理员
+              </button>
+            ) : null}
             {member.actions?.can_remove ? (
               <button
                 type="button"
@@ -333,6 +427,9 @@ export function MembersDialog({
           </div>
         </div>
       ) : null}
+
+      <GroupInvitesPanel room={room} token={token} active={open} />
+      <GroupPoliciesPanel room={room} token={token} active={open} />
 
       {busy ? <p id="members-status" role="status">正在处理「{busy}」…</p> : null}
       {error ? (
