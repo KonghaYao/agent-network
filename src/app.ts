@@ -22,7 +22,7 @@ import {
 import { runEventsTick, scheduleEventsTick } from './events/runtime';
 import { authenticate } from './mcp/auth';
 import { createCompatMethods } from './mcp/compat/methods';
-import { buildServer, buildUseServer } from './mcp/server';
+import { buildServer } from './mcp/server';
 import { serveActorStream } from './mcp/stream';
 import { createMcpTransport, type McpTransport } from './mcp/transport';
 import { maintain } from './maintenance';
@@ -357,38 +357,24 @@ function handlerFor(
 ): McpTransport {
   const driveFor = (scope: () => FileScope) =>
     env.FILES ? { fileService: env.FILES, scope } : undefined;
-  const nativeFactory = (context: McpRequestContext) =>
-    buildServer(
-      env,
-      principal,
-      env.FILES && mount ? driveFor(() => fileScopeFor(context)) : undefined,
-    );
-  const useMcpUse = env.MCP_IMPL === 'mcp-use';
-  const buildUse = useMcpUse
-    ? (request: Request) =>
-        buildUseServer(
-          env,
-          principal,
-          env.FILES && mount
-            ? driveFor(() =>
-                // FileScope 以原始 Request 为 key；这里只取挂载层已写入的映射。
-                fileScopeFor({ requestInfo: request } as McpRequestContext),
-              )
-            : undefined,
-        )
-    : undefined;
   return createMcpTransport({
-    implementation: env.MCP_IMPL,
-    nativeFactory: mount ? mount.wrapFactory(nativeFactory) : nativeFactory,
-    buildUseServer: buildUse,
-    // 自定义方法在传输层应答；能力目录只修正 mcp-use 的 discover 响应。
-    compat: useMcpUse ? createCompatMethods(env, principal) : undefined,
-    capabilities: useMcpUse
-      ? {
-          events: Boolean(env.EVENTS),
-          files: env.FILES && mount ? env.FILES.capability(mount.uploadPath) : null,
-        }
-      : undefined,
+    buildServer: (request: Request) =>
+      buildServer(
+        env,
+        principal,
+        env.FILES && mount
+          ? driveFor(() =>
+              // FileScope 以原始 Request 为 key；这里只取挂载层已写入的映射。
+              fileScopeFor({ requestInfo: request } as McpRequestContext),
+            )
+          : undefined,
+      ),
+    // 自定义方法在传输层应答；能力目录只修正 discover 响应。
+    compat: createCompatMethods(env, principal),
+    capabilities: {
+      events: Boolean(env.EVENTS),
+      files: env.FILES && mount ? env.FILES.capability(mount.uploadPath) : null,
+    },
   });
 }
 

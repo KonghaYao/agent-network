@@ -11,8 +11,7 @@
  *
  * 运行：bun scripts/verify-memory-host.ts
  */
-import { Client } from '@modelcontextprotocol/client';
-import { InMemoryTransport, type McpServer } from '@modelcontextprotocol/server';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 import { createD1 } from '../src/bun/d1';
 import { buildServer } from '../src/mcp/server';
@@ -954,16 +953,25 @@ async function connectServer(env: Env, principal: Principal): Promise<{
   client: Client;
   close: () => Promise<void>;
 }> {
-  const server: McpServer = buildServer(env, principal);
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await server.connect(serverTransport);
-  const client = new Client({ name: 'mf06-mf07-acceptance', version: '0.1.0' });
-  await client.connect(clientTransport);
+  // mcp-use 没有 InMemoryTransport 入口；用自定义 fetch 在进程内把官方
+  // Streamable HTTP 客户端接到同一个 `MCPServer.fetch`，保持 MCP 帧语义。
+  const server = buildServer(env, principal);
+  const transport = new StreamableHTTPClientTransport(new URL('http://test.local/mcp'), {
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      return server.fetch(request);
+    },
+  });
+  const client = new Client(
+    { name: 'mf06-mf07-acceptance', version: '0.1.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  );
+  await client.connect(transport);
   return {
     client,
     close: async () => {
-      await client.close();
-      await server.close();
+      await client.close().catch(() => undefined);
+      await server.close().catch(() => undefined);
     },
   };
 }

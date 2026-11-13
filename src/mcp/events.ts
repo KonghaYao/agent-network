@@ -263,7 +263,7 @@ function failureFields(error: unknown): Record<string, string | number | null> {
   return { error_kind: 'internal', error_code: null, reason: null, detail: null, status: null };
 }
 
-/** MCP Events 自定义方法；native 与 mcp-use 路径共用同一批处理器。 */
+/** MCP Events 自定义方法；由传输层兼容分发。 */
 export const EVENTS_METHODS = [
   'events/list',
   'events/subscribe',
@@ -275,8 +275,7 @@ export type EventsMethod = (typeof EVENTS_METHODS)[number];
 /**
  * 分发一个 events 方法。
  *
- * 注册（native `setRequestHandler`）与传输层兼容分发（mcp-use）都调用这里，
- * 阶段日志、错误映射与业务实现只有一份。
+ * 传输层兼容分发调用这里，阶段日志、错误映射与业务实现只有一份。
  */
 export async function dispatchEventsMethod(
   method: EventsMethod,

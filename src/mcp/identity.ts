@@ -1,9 +1,8 @@
 /**
  * 服务端身份常量。
  *
- * native `McpServer` 与 mcp-use 的 `MCPServer` 共用同一份身份；自定义方法
- * 由传输层应答时必须自行补齐结果级 `_meta.serverInfo`，才能与 SDK 的
- * 输出逐帧一致。
+ * `MCPServer` 与传输层自定义方法共用同一份身份；自定义方法应答时必须自行
+ * 补齐结果级 `_meta.serverInfo`，才能与标准方法输出一致。
  */
 export const SERVER_IDENTITY = {
   name: 'peri-agent-network',

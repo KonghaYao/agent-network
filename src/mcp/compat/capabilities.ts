@@ -1,12 +1,11 @@
 /**
- * `server/discover` 能力修正（仅 mcp-use 路径）。
+ * `server/discover` 能力修正。
  *
  * mcp-use 的 `MCPServer` 会声明 `logging`、`prompts` 与
  * `resources.listChanged` 等自身默认能力，也不会知道 MCPP Files 挂载与
- * 顶层 `events` 扩展。native 路径由 SDK 依据注册表生成能力目录，因此这里
- * 只对 mcp-use 的响应做最小修正，使其与 native 逐字段一致：
+ * 顶层 `events` 扩展。能力目录由本层按固定契约修正：
  *
- * - 删除 native 未声明的 `logging` / `prompts`；
+ * - 删除未声明的 `logging` / `prompts` 与 `resources.listChanged`；
  * - 固定 `resources.subscribe: true`；
  * - 声明 SEP-2640 Skills 扩展（技能面由 compat 传输层提供，不使用
  *   mcp-use 的文件式 Skills，因此值恒为 `{}`）；
