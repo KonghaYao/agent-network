@@ -47,7 +47,43 @@ interface HistoryCache {
   nextOlder: string | null;
   olderEnded: boolean;
   olderLoaded: boolean;
+  /** 已成功并入的 older 页数；刷新响应继承该值，翻页响应加一。 */
+  olderPages: number;
   resumeCursor: string | null;
+}
+
+/**
+ * 刷新响应只包含最新一页，必须并入“提交时”的缓存，而不是请求发出时的快照。
+ *
+ * - 消息按稳定 key 合并，已加载的 older 页不会因为刷新响应晚到而消失；
+ * - `olderLoaded` 一旦为 true 不回退；游标与结束状态由 older 页数更多的一侧
+ *   持有，刷新响应只在尚未翻页时决定游标；
+ * - 同时作为 `structuralSharing` 在缓存写入时再合并一次，覆盖“翻页在刷新
+ *   响应返回前一刻完成”的窗口。
+ */
+function mergeHistoryCache(
+  current: HistoryCache | undefined,
+  incoming: HistoryCache,
+): HistoryCache {
+  if (!current) return incoming;
+  const olderLoaded = current.olderLoaded || incoming.olderLoaded;
+  const owner = incoming.olderPages >= current.olderPages ? incoming : current;
+  return {
+    items: mergeTimelineItems(current.items, incoming.items),
+    nextOlder: owner.nextOlder,
+    olderEnded: owner.olderEnded,
+    olderLoaded,
+    olderPages: Math.max(current.olderPages, incoming.olderPages),
+    resumeCursor: incoming.resumeCursor ?? current.resumeCursor,
+  };
+}
+
+/** React Query 的 structuralSharing 签名固定为 unknown，这里只做类型收窄。 */
+function shareHistoryCache(oldData: unknown, newData: unknown): HistoryCache {
+  return mergeHistoryCache(
+    oldData as HistoryCache | undefined,
+    newData as HistoryCache,
+  );
 }
 
 function failureMessage(error: unknown): string {
@@ -128,9 +164,11 @@ export function useRoomChat(roomId: string) {
       callTool<RoomDetail>('network_room_get', { room_id: roomId }, { token: token ?? undefined, signal }),
   });
 
-  const historyQuery = useQuery({
+  const historyQuery = useQuery<HistoryCache>({
     queryKey: historyKey,
     enabled: Boolean(token),
+    // 翻页与刷新写同一份缓存；提交时以当时的缓存为准，避免晚到的刷新覆盖 older。
+    structuralSharing: shareHistoryCache,
     queryFn: async ({ client, signal, queryKey }) => {
       const previous = client.getQueryData<HistoryCache>(queryKey) ?? null;
       const page = await callTool<HistoryPage>(
@@ -155,25 +193,17 @@ export function useRoomChat(roomId: string) {
           signal,
         );
       }
-      const items = previous ? mergeTimelineItems(previous.items, incoming) : incoming;
-      let nextOlder: string | null;
-      let olderEnded: boolean;
-      if (previous) {
-        nextOlder = previous.olderLoaded
-          ? previous.nextOlder
-          : nextOlderCursor(page, humanTimeline);
-        olderEnded = previous.olderLoaded ? previous.olderEnded : nextOlder === null;
-      } else {
-        nextOlder = nextOlderCursor(page, humanTimeline);
-        olderEnded = nextOlder === null;
-      }
-      return {
-        items,
-        nextOlder,
-        olderEnded,
-        olderLoaded: previous?.olderLoaded ?? false,
-        resumeCursor: page.timeline_resume_cursor ?? previous?.resumeCursor ?? null,
-      } satisfies HistoryCache;
+      // 请求期间可能已完成翻页；以此刻的缓存为基准，而不是请求前的 previous。
+      const current = client.getQueryData<HistoryCache>(queryKey) ?? previous ?? undefined;
+      const pageNextOlder = nextOlderCursor(page, humanTimeline);
+      return mergeHistoryCache(current, {
+        items: incoming,
+        nextOlder: pageNextOlder,
+        olderEnded: pageNextOlder === null,
+        olderLoaded: false,
+        olderPages: 0,
+        resumeCursor: page.timeline_resume_cursor ?? current?.resumeCursor ?? null,
+      });
     },
   });
 
@@ -201,6 +231,7 @@ export function useRoomChat(roomId: string) {
           items: merged,
           nextOlder,
           olderLoaded: true,
+          olderPages: previous.olderPages + 1,
           olderEnded: nextOlder === null,
         };
       });
