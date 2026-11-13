@@ -1,6 +1,6 @@
 import { createMcpHandler, type McpHttpHandler, type McpRequestContext } from '@modelcontextprotocol/server';
 import { FILE_ID_PATTERN, FileError, fileScopeFor, type FileMount, type FileService } from '@peri-code/mcpp/files';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { stat } from 'node:fs/promises';
 import { basename, extname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
@@ -32,7 +32,7 @@ import { renderInvalidJoinPage, renderJoinPage } from './web/join';
 import { renderPairPage } from './web/pair';
 import { renderHomePage, renderInvalidSharePage, renderSharePage } from './web/share';
 import { renderSpaShell } from './web/spa-shell';
-import type { SpaManifest, SpaRoute } from './web/spa-manifest';
+import { IMPLEMENTED_SPA_ROUTES, parseSpaRoutes, type SpaManifest, type SpaRoute } from './web/spa-manifest';
 import type { Env } from './env';
 
 interface RpcBody {
@@ -63,6 +63,89 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.png': 'image/png',
 };
 const STATIC_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+
+/** SPA 灰度 cookie：值是与 `WEB_SPA_ROUTES` 相同的逗号列表。 */
+const SPA_COOKIE = 'agent-network-spa';
+const SPA_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+const EMPTY_SPA_ROUTES: ReadonlySet<SpaRoute> = new Set<SpaRoute>();
+
+interface SpaRequestState {
+  readonly routes: ReadonlySet<SpaRoute>;
+  readonly setCookie: string | null;
+  readonly varyCookie: boolean;
+}
+
+/** 只解析第一个同名 cookie；畸形百分号编码按原始值处理，不抛错。 */
+function cookieValue(header: string | undefined, name: string): string | null {
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=');
+    if (index <= 0) continue;
+    if (part.slice(0, index).trim() !== name) continue;
+    const raw = part.slice(index + 1).trim();
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  }
+  return null;
+}
+
+function spaCookieHeader(value: string, maxAge: number, secure: boolean): string {
+  const encoded = value ? encodeURIComponent(value) : '';
+  return `${SPA_COOKIE}=${encoded}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure ? '; Secure' : ''}`;
+}
+
+/**
+ * 解析当前请求实际启用的 SPA route。
+ *
+ * - `WEB_SPA_ROUTES` 为空：完全保持 legacy，连 cookie/query 都不读取；
+ * - `?spa=1`：把 env 允许的集合写入 cookie；`?spa=0`：清除 cookie；
+ * - 有 cookie：取 env ∩ cookie，防止用户启用未部署的页面。
+ */
+function resolveSpaRequest(
+  c: Context,
+  envRoutes: ReadonlySet<SpaRoute>,
+): SpaRequestState {
+  if (envRoutes.size === 0) {
+    return { routes: EMPTY_SPA_ROUTES, setCookie: null, varyCookie: false };
+  }
+  const secure = c.req.url.startsWith('https:');
+  const flag = c.req.query('spa');
+  if (flag === '0') {
+    return {
+      routes: EMPTY_SPA_ROUTES,
+      setCookie: spaCookieHeader('', 0, secure),
+      varyCookie: true,
+    };
+  }
+  if (flag === '1') {
+    return {
+      routes: envRoutes,
+      setCookie: spaCookieHeader([...envRoutes].join(','), SPA_COOKIE_MAX_AGE_SECONDS, secure),
+      varyCookie: true,
+    };
+  }
+  const stored = cookieValue(c.req.header('cookie'), SPA_COOKIE);
+  if (stored === null) return { routes: envRoutes, setCookie: null, varyCookie: true };
+  const cookieRoutes = parseSpaRoutes(stored);
+  return {
+    routes: new Set([...envRoutes].filter((route) => cookieRoutes.has(route))),
+    setCookie: null,
+    varyCookie: true,
+  };
+}
+
+function spaResponseHeaders(
+  state: SpaRequestState,
+  extra: Record<string, string> = {},
+): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  if (state.varyCookie) headers.vary = 'Cookie';
+  if (state.setCookie) headers['set-cookie'] = state.setCookie;
+  return headers;
+}
 
 /** 旧 shell 包装已删除，保留一个发布周期的 410 让存量客户端得到明确迁移信号。 */
 const RETIRED_SKILL_PATH = /^[a-z0-9][a-z0-9._-]*\.sh$/u;
@@ -622,11 +705,16 @@ async function openPayload(
 export function createApp(env: Env, deps: AppDeps = {}): Hono {
   const app = new Hono();
   const spaDistDir = deps.spaDistDir ?? WEB_DIST_ROOT;
-  const spaHtml = (route: SpaRoute): string | null =>
-    deps.spaManifest && deps.spaRoutes?.has(route)
+  const envSpaRoutes = deps.spaRoutes ?? EMPTY_SPA_ROUTES;
+  const spaHtml = (
+    route: SpaRoute,
+    state: SpaRequestState,
+  ): string | null =>
+    deps.spaManifest &&
+    IMPLEMENTED_SPA_ROUTES.has(route) &&
+    state.routes.has(route)
       ? renderSpaShell(route, deps.spaManifest)
       : null;
-  const spaHeaders = { 'cache-control': 'no-store', vary: 'Cookie' };
 
   // 只服务 Vite 构建产物：扩展名白名单、拒绝路径穿越、目录不列表。
   // 文件名带内容哈希，因此可以长期 immutable；ETag 直接取文件名。
@@ -756,8 +844,11 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
   });
 
   app.get('/', (c) => {
-    const shell = spaHtml('home');
-    if (shell) return c.html(shell, 200, spaHeaders);
+    const spa = resolveSpaRequest(c, envSpaRoutes);
+    const shell = spaHtml('home', spa);
+    if (shell) {
+      return c.html(shell, 200, spaResponseHeaders(spa, { 'cache-control': 'no-store' }));
+    }
     return c.html(
       renderHomePage(
         deps.markdownAssetVersion ?? null,
@@ -766,7 +857,7 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
         deps.iconAssetVersion ?? null,
       ),
       200,
-      { 'cache-control': 'no-store' },
+      spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
     );
   });
   app.get('/a/:sessionId', async (c) => {
@@ -774,13 +865,23 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     if (!actor) {
       return c.html(renderInvalidSharePage(), 404, { 'cache-control': 'no-store' });
     }
-    const shell = spaHtml('share');
-    if (shell) return c.html(shell, 200, spaHeaders);
-    return c.html(renderSharePage(actor), 200, { 'cache-control': 'no-store' });
+    const spa = resolveSpaRequest(c, envSpaRoutes);
+    const shell = spaHtml('share', spa);
+    if (shell) {
+      return c.html(shell, 200, spaResponseHeaders(spa, { 'cache-control': 'no-store' }));
+    }
+    return c.html(
+      renderSharePage(actor),
+      200,
+      spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
+    );
   });
   app.get('/c/:roomId', (c) => {
-    const shell = spaHtml('room');
-    if (shell) return c.html(shell, 200, spaHeaders);
+    const spa = resolveSpaRequest(c, envSpaRoutes);
+    const shell = spaHtml('room', spa);
+    if (shell) {
+      return c.html(shell, 200, spaResponseHeaders(spa, { 'cache-control': 'no-store' }));
+    }
     return c.html(
       renderChatPage(
         c.req.param('roomId'),
@@ -790,21 +891,26 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
         deps.iconAssetVersion ?? null,
       ),
       200,
-      {
-        'cache-control': 'no-store',
-      },
+      spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
     );
   });
 
   // 新设备配对页：challenge 只在 URL fragment 中，由客户端读取并立即清除；
   // 服务端不解析 challenge，也不输出任何身份或房间数据。
   app.get('/pair', (c) => {
-    const shell = spaHtml('pair');
-    if (shell) return c.html(shell, 200, spaHeaders);
-    return c.html(renderPairPage(), 200, {
-      'cache-control': 'no-store',
-      'referrer-policy': 'no-referrer',
-    });
+    const spa = resolveSpaRequest(c, envSpaRoutes);
+    const shell = spaHtml('pair', spa);
+    if (shell) {
+      return c.html(shell, 200, spaResponseHeaders(spa, { 'cache-control': 'no-store' }));
+    }
+    return c.html(
+      renderPairPage(),
+      200,
+      spaResponseHeaders(spa, {
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+      }),
+    );
   });
 
   // 群邀请落地页。邀请码只是加入能力，不是身份凭据：这里不解析任何群数据，
@@ -814,9 +920,16 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     if (!INVITE_KEY.test(inviteKey)) {
       return c.html(renderInvalidJoinPage(), 404, { 'cache-control': 'no-store' });
     }
-    const shell = spaHtml('join');
-    if (shell) return c.html(shell, 200, spaHeaders);
-    return c.html(renderJoinPage(inviteKey), 200, { 'cache-control': 'no-store' });
+    const spa = resolveSpaRequest(c, envSpaRoutes);
+    const shell = spaHtml('join', spa);
+    if (shell) {
+      return c.html(shell, 200, spaResponseHeaders(spa, { 'cache-control': 'no-store' }));
+    }
+    return c.html(
+      renderJoinPage(inviteKey),
+      200,
+      spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
+    );
   });
 
   // 文件下载：新上传默认公开，裸链接按链接即授权读取；撤销公开的文件
