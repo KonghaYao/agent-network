@@ -116,6 +116,7 @@ export function useRoomChat(roomId: string) {
   const sessionState = useWebSession();
   const session = sessionState.session;
   const token = session?.token ?? null;
+  const actorId = session?.identity.actor_id ?? null;
   const humanTimeline = session?.identity.kind === 'human';
   const detailKey = queryKeys.room(roomId);
   const historyKey = queryKeys.history(roomId, humanTimeline);
@@ -258,6 +259,7 @@ export function useRoomChat(roomId: string) {
   }, [queryClient, refresh, token]);
 
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const contactRefreshRef = useRef(false);
   useEffect(
     () => () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
@@ -265,17 +267,35 @@ export function useRoomChat(roomId: string) {
     [],
   );
 
-  /** SSE 只给“某处变了”的提示；300ms 合并后让查询自己重读权威状态。 */
-  const scheduleRefresh = useCallback(() => {
-    if (!token) return;
-    if (refreshTimerRef.current) return;
-    refreshTimerRef.current = setTimeout(() => {
-      refreshTimerRef.current = null;
-      void queryClient.invalidateQueries({ queryKey: detailKey });
-      // 文件面板可见时才存在活动查询；不可见时仅标脏，不额外发请求。
-      void queryClient.invalidateQueries({ queryKey: queryKeys.roomFiles(roomId) });
-    }, LIMITS.webRefreshDebounceMs);
-  }, [detailKey, queryClient, roomId, token]);
+  /**
+   * SSE 只给“某处变了”的提示；300ms 合并后让查询自己重读权威状态。
+   * 桌面聊天页的侧栏与 Home 共用 `useRooms`，同一事件也要失效会话列表；
+   * contact 事件额外刷新好友申请角标，避免第二条 subscriptions/listen。
+   */
+  const scheduleRefresh = useCallback(
+    (source: string) => {
+      if (!token) return;
+      if (source === 'contact') contactRefreshRef.current = true;
+      if (refreshTimerRef.current) return;
+      refreshTimerRef.current = setTimeout(() => {
+        refreshTimerRef.current = null;
+        void queryClient.invalidateQueries({ queryKey: detailKey });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.rooms(actorId) });
+        // 文件面板可见时才存在活动查询；不可见时仅标脏，不额外发请求。
+        void queryClient.invalidateQueries({ queryKey: queryKeys.roomFiles(roomId) });
+        if (contactRefreshRef.current) {
+          contactRefreshRef.current = false;
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.contactRequests(actorId),
+          });
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.contactRequestBadge(actorId),
+          });
+        }
+      }, LIMITS.webRefreshDebounceMs);
+    },
+    [actorId, detailKey, queryClient, roomId, token],
+  );
 
   const stream = useActorStream({ token, onEvent: scheduleRefresh });
 

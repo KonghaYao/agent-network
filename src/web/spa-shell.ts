@@ -56,10 +56,7 @@ const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}${MEMORY_STYLE}
 `;
 
 /** Chat 复用 Markdown、回执菜单、附件、文件、监控与画板样式。 */
-const CHAT_STYLE = `${SPA_STYLE}${MARKDOWN_STYLE}${MESSAGE_ACTIONS_STYLE}${MESSAGE_FILES_STYLE}${UPLOAD_STYLE}${FILES_STYLE}${MONITOR_STYLE}${TASK_TRACE_STYLE}${DRAWBOARD_FALLBACK_STYLE}
-  /* Chat 是单栏 React 页，桌面也保留返回入口；legacy 双栏由侧栏承担。 */
-  body.page-room .chat-pane .back { display: inline-flex; }
-`;
+const CHAT_STYLE = `${SPA_STYLE}${MARKDOWN_STYLE}${MESSAGE_ACTIONS_STYLE}${MESSAGE_FILES_STYLE}${UPLOAD_STYLE}${FILES_STYLE}${MONITOR_STYLE}${TASK_TRACE_STYLE}${DRAWBOARD_FALLBACK_STYLE}`;
 
 /**
  * 输出 React 壳 HTML。

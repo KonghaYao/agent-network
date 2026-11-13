@@ -47,7 +47,7 @@ async function loginContext(options: {
 }
 
 try {
-  // 1. 桌面：侧栏 280–320px、聊天单栏 + 返回、无横向溢出。
+  // 1. 桌面：侧栏 280–320px，聊天页保留会话侧栏且不显示返回箭头。
   {
     const { context, page } = await loginContext({
       token: d.me.token,
@@ -67,7 +67,14 @@ try {
     await page.waitForFunction(
       () => document.querySelector('#chat-body')?.getAttribute('aria-busy') === 'false',
     );
-    check(await page.locator('#back').isVisible(), '桌面聊天页保留返回入口');
+    check(await page.locator('.sidebar').isVisible(), '桌面聊天页显示会话侧栏');
+    const chatSidebar = await page.locator('.sidebar').boundingBox();
+    check(
+      chatSidebar !== null && chatSidebar.width >= 280 && chatSidebar.width <= 322,
+      '桌面聊天页侧栏宽度保持 280–320px',
+      chatSidebar,
+    );
+    check(await page.locator('#back').isHidden(), '桌面聊天页隐藏返回箭头');
     const overflow = (await page.evaluate(
       `document.documentElement.scrollWidth - window.innerWidth`,
     )) as number;
