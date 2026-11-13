@@ -45,11 +45,11 @@
 }
 
 .spa-dialog-content.members-card {
-  width: min(560px, calc(100vw - 32px));
-  /* legacy GROUP_STYLE 把 `.members-card` 当成 flex 列；React 弹窗由外层滚动，
-     成员列表不应被邀请/策略区块挤成一条缝。 */
-  display: block;
-  overflow-y: auto;
+  width: min(680px, calc(100vw - 32px));
+  /* 双栏与底部动作固定在卡片内，只有 `.members-scroll` 滚动。 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .spa-dialog-close {
@@ -415,8 +415,45 @@
     border-radius: 12px;
   }
 
+  /* 群成员弹窗在移动端是全屏工作区，不是抽屉；两栏堆叠，底部动作固定。 */
   .spa-dialog-content.members-card {
-    width: calc(100vw - 24px);
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    transform: none;
+    border-radius: 0;
+    padding: calc(12px + env(safe-area-inset-top)) 14px
+      calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .spa-dialog-content.members-card .members-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .spa-dialog-content.members-card .contact-list,
+  .spa-dialog-content.members-card .member-roster {
+    max-height: min(24dvh, 200px);
+  }
+
+  .spa-dialog-content.members-card .member-picker-search,
+  .spa-dialog-content.members-card .members-actions button {
+    min-height: 44px;
+  }
+
+  .spa-dialog-content.members-card .members-actions {
+    gap: 8px;
+  }
+
+  .spa-dialog-content.members-card .members-selection {
+    flex: 1 1 100%;
+    margin-right: 0;
+  }
+
+  .spa-dialog-content.members-card .member-menu-toggle {
+    width: 44px;
+    height: 44px;
   }
 }
 
@@ -801,7 +838,8 @@ body #root button.primary:hover {
   font-size: 12px;
 }
 
-.member-roster-item {
+.members-invites .member-roster-item,
+.members-requests .member-roster-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -821,6 +859,8 @@ body #root button.primary:hover {
 
 .group-policies .field {
   display: flex;
+  /* `.field` 默认是列方向；在列方向下 flex-basis 会变成 select 的高度。 */
+  flex-direction: row;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -830,6 +870,13 @@ body #root button.primary:hover {
 .group-policies .field select {
   flex: 0 1 180px;
   min-width: 0;
+  height: 34px;
+  min-height: 34px;
+  padding: 4px 8px;
+  border: 1px solid var(--wx-line);
+  border-radius: 4px;
+  background: var(--wx-panel);
+  color: var(--wx-text);
 }
 
 #group-policy-status[data-error='1'],

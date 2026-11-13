@@ -4805,14 +4805,21 @@ async function main(): Promise<void> {
     // 6. 群管理：成员、公告、改名、群主转让入口与退群预览。
     {
       const roomId = data.group.room.room_id;
-      // 新增一个好友作为可添加成员，避免候选为空。
+      // 新增两个好友作为可添加成员，覆盖多选一次提交。
       const newcomerToken = crypto.randomUUID();
       const newcomer = await rawTool<Actor>(newcomerToken, 'network_register', {
         request_id: requestId('reg'),
         kind: 'human',
-        name: '群管理新成员',
+        name: '群管理新成员A',
       });
       await rawBefriend(data.humanToken, newcomerToken, { actor_id: newcomer.actor_id });
+      const newcomerBToken = crypto.randomUUID();
+      const newcomerB = await rawTool<Actor>(newcomerBToken, 'network_register', {
+        request_id: requestId('reg'),
+        kind: 'human',
+        name: '群管理新成员B',
+      });
+      await rawBefriend(data.humanToken, newcomerBToken, { actor_id: newcomerB.actor_id });
 
       const { context, page } = await makeContext(
         browser,
@@ -4835,13 +4842,73 @@ async function main(): Promise<void> {
         '成员弹窗列出 Agent 成员',
         (await page.locator('#members-current .spa-member').count()) >= 2,
       );
-      await page.locator('#members-search').fill('群管理新成员');
-      await page.locator('#members-contacts .spa-combobox-item').first().click();
-      await page.waitForFunction(
-        `Array.from(document.querySelectorAll('#members-current .spa-member')).some(function (node) { return node.textContent.includes('群管理新成员'); })`,
+      await page.waitForFunction(`document.activeElement === document.getElementById('members-close')`);
+      // pop-in 动画带 scale，等动画结束后再量真实几何。
+      await page.waitForTimeout(220);
+      const membersLayout = (await page.evaluate(
+        `(() => {
+          const card = document.getElementById('members-modal').getBoundingClientRect();
+          const columns = Array.from(document.querySelectorAll('.members-columns > .members-column')).map(
+            function (node) { return node.getBoundingClientRect().width; }
+          );
+          const grid = getComputedStyle(document.querySelector('.members-columns'));
+          return {
+            cardWidth: card.width,
+            columns: columns,
+            gap: grid.columnGap,
+            addOutsideScroll: document.getElementById('members-add').closest('.members-scroll') === null
+          };
+        })()`,
+      )) as { cardWidth: number; columns: number[]; gap: string; addOutsideScroll: boolean };
+      checkEqual('成员弹窗宽度为 legacy 680px', Math.round(membersLayout.cardWidth), 680);
+      check(
+        '成员弹窗双栏等宽',
+        membersLayout.columns.length === 2 &&
+          Math.abs(membersLayout.columns[0]! - membersLayout.columns[1]!) <= 1,
+        membersLayout.columns,
       );
-      check('成员弹窗可直接添加好友', true);
+      checkEqual('成员弹窗双栏间距 12px', membersLayout.gap, '12px');
+      check('添加按钮不在滚动区内', membersLayout.addOutsideScroll);
+      await page.locator('#members-search').fill('群管理新成员');
+      await page.waitForFunction(
+        `Array.from(document.querySelectorAll('#members-contacts .contact-choice')).filter(function (node) { return node.textContent.includes('群管理新成员'); }).length === 2`,
+      );
+      await page
+        .locator('#members-contacts .contact-choice')
+        .filter({ hasText: '群管理新成员A' })
+        .locator('input[type=checkbox]')
+        .check();
+      await page
+        .locator('#members-contacts .contact-choice')
+        .filter({ hasText: '群管理新成员B' })
+        .locator('input[type=checkbox]')
+        .check();
+      checkEqual(
+        '勾选两人后显示已选人数',
+        (await page.locator('#members-selection').textContent())?.trim(),
+        '已选 2 人',
+      );
+      await page.locator('#members-add').click();
+      await page.waitForFunction(
+        `['群管理新成员A', '群管理新成员B'].every(function (name) {
+          return Array.from(document.querySelectorAll('#members-current .spa-member')).some(function (node) {
+            return node.textContent.includes(name);
+          });
+        })`,
+      );
+      const addPayloads = (await page.evaluate(
+        `(window.__mcpCalls || []).filter(function (call) {
+          const args = call.body && call.body.params && call.body.params.arguments;
+          return call.name === 'network_room_members_update' && Array.isArray(args && args.add);
+        }).map(function (call) { return call.body.params.arguments.add; })`,
+      )) as string[][];
+      checkEqual('勾选两人只提交一次成员更新', addPayloads.length, 1);
+      checkEqual('单次提交包含两名成员', addPayloads[0]?.length, 2);
+      await page.waitForFunction(
+        `document.getElementById('members-selection').textContent.trim() === '未选择'`,
+      );
       await page.locator('#members-close').click();
+      await page.waitForFunction(`document.activeElement === document.getElementById('room-menu-toggle')`);
 
       await openMenu('room-menu-announcement');
       await page.locator('#announcement-modal').waitFor({ state: 'visible' });
