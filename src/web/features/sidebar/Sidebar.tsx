@@ -7,6 +7,7 @@ import {
   type RoomSummary,
 } from '../../lib/rooms';
 import { ContactRequestsButton } from './ContactRequestsButton';
+import { LoggedOutStart } from './LoggedOutStart';
 import { RoomRow } from './RoomRow';
 import { SidebarAccount } from './SidebarAccount';
 
@@ -189,6 +190,7 @@ export function Sidebar(props: SidebarProps) {
         <p id="room-list-status" className="list-hint" role="status" hidden={!message}>
           {message}
         </p>
+        {status === 'logged-out' ? <LoggedOutStart /> : null}
         {showRetry ? (
           <button id="room-list-retry" className="list-retry" type="button" onClick={onRetry}>
             重试
