@@ -8,7 +8,7 @@ import { MEMORY_STYLE } from './chat-memory-styles';
 import { MONITOR_STYLE } from './chat-monitor-styles';
 import { TASK_TRACE_STYLE } from './chat-task-trace-styles';
 import { UPLOAD_STYLE } from './chat-upload-styles';
-import { DEVICE_HANDOFF_STYLE } from './handoff';
+import { DEVICE_HANDOFF_STYLE } from './device-handoff-styles';
 import { escapeHtml, jsonForScript } from './layout';
 import type { SpaManifest, SpaRoute } from './spa-manifest';
 
@@ -44,8 +44,8 @@ export interface SpaShellOptions {
 }
 
 /**
- * React 壳复用 legacy 的应用页样式：会话项、头像、空状态、移动端单栏
- * 与 Memory 抽屉都沿用同一套 CSS 变量和选择器，避免灰度期间两套视觉。
+ * React 壳复用原有的应用页样式：会话项、头像、空状态、移动端单栏
+ * 与 Memory 抽屉都沿用同一套 CSS 变量和选择器。
  */
 const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}${MEMORY_STYLE}
   html, body { height: 100%; }
@@ -55,7 +55,7 @@ const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}${MEMORY_STYLE}
   body.wide #root > main { flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; }
 `;
 
-/** Chat 复用 legacy 的 Markdown、回执菜单、附件、文件、监控与画板样式。 */
+/** Chat 复用 Markdown、回执菜单、附件、文件、监控与画板样式。 */
 const CHAT_STYLE = `${SPA_STYLE}${MARKDOWN_STYLE}${MESSAGE_ACTIONS_STYLE}${MESSAGE_FILES_STYLE}${UPLOAD_STYLE}${FILES_STYLE}${MONITOR_STYLE}${TASK_TRACE_STYLE}${DRAWBOARD_FALLBACK_STYLE}
   /* Chat 是单栏 React 页，桌面也保留返回入口；legacy 双栏由侧栏承担。 */
   body.page-room .chat-pane .back { display: inline-flex; }
@@ -65,8 +65,7 @@ const CHAT_STYLE = `${SPA_STYLE}${MARKDOWN_STYLE}${MESSAGE_ACTIONS_STYLE}${MESSA
  * 输出 React 壳 HTML。
  *
  * 只包含静态标记与 bootstrap JSON：不输出 token、身份、房间或消息数据
- * （分享页只输出公开资料）。`root` 由入口脚本水合/挂载。`no-store` 与
- * `Vary: Cookie` 由调用方设置。
+ * （分享页只输出公开资料）。`root` 由入口脚本水合/挂载。`no-store` 由调用方设置。
  */
 export function renderSpaShell(
   route: SpaRoute,

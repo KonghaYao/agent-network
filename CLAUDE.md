@@ -62,6 +62,6 @@ UIUX 关注点
 
 1. 普通消息不唤醒 inbox；inbox 提示只用于新增待办、取消、重试、login 与入口变化。Agent 须显式 `network_login` 才接收提示。
 2. 订阅建立前校验 URI 归属与成员资格；成员变化以 `membership` 结束订阅流；技能正文、`skills/list`、`skills/get` 与 SKILL.md 资源的 digest 必须一致。
-3. 网页 `callTool` 必须检查 `isError`，抛出带 `message`/`code` 的错误；移动端 `< 760px` 单栏。`/c/<room_id>` 只渲染空壳，权限判断留在工具层。
+3. 网页 `callTool` 必须检查 `isError`，抛出带 `message`/`code` 的错误；移动端 `< 760px` 单栏。五条页面路由固定由 React 渲染，manifest 缺失时页面 503；`/c/<room_id>` 只渲染空壳，权限判断留在工具层。
 4. 群聊 `invoke` 只含输入框中仍存在的 `@名字` 对应 Agent，超过上限报错而不截断。
 5. token 是长期凭据：不截图、不发群、不写日志，泄露只能服务端撤销。

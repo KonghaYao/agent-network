@@ -126,6 +126,15 @@ async function main(): Promise<void> {
     await page.goto(`${base}/`);
     await page.locator('#new-group').click();
     await page.locator('#group-modal:not([hidden])').waitFor({ timeout: 10_000 });
+    // 等好友候选加载完毕并把鼠标移开，避免扫描到 loading/hover 的瞬时配色。
+    await page.waitForFunction(
+      `(document.getElementById('group-contacts')?.textContent || '').includes('没有可选好友') ||
+       !!document.querySelector('#group-contacts .spa-combobox-item')`,
+      undefined,
+      { timeout: 10_000 },
+    ).catch(() => undefined);
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(150);
     current['group-modal'] = await scan(page, 'group-modal');
 
     for (const route of ROUTES) {

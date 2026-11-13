@@ -50,15 +50,7 @@ function App({ bootstrap }: { bootstrap: SpaBootstrap | null }) {
       bootstrap?.route === 'join' ? bootstrap.inviteKey : route.inviteKey;
     page = <JoinPage inviteKey={inviteKey} />;
   } else if (route.name === 'pair') page = <PairPage />;
-  else {
-    page = (
-      <main className="spa-shell">
-        <h1>页面尚未迁移</h1>
-        <p>该页面仍由旧版渲染。</p>
-        <a href="/?spa=0">切换到旧版</a>
-      </main>
-    );
-  }
+  else page = <HomePage />;
   return (
     <>
       {page}

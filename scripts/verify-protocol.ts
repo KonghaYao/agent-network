@@ -2240,6 +2240,13 @@ async function main(): Promise<void> {
   const shareHtml = await sharePage.text();
   check('分享页包含 actor_id', shareHtml.includes(shareIdentity?.actor_id ?? '\u0000'));
   check('分享页包含 agent_session_id', shareHtml.includes(shareSession));
+  check(
+    '分享页为 React SSR 并保留 OG',
+    shareHtml.includes('data-spa-route="share"') &&
+      shareHtml.includes('id="spa-bootstrap"') &&
+      shareHtml.includes('property="og:title"'),
+  );
+  check('分享页不输出浏览器 token', !shareHtml.includes(`Bearer ${shareToken}`));
 
   const missingShare = await fetch(
     `${baseUrl()}/a/${encodeURIComponent(`missing_${crypto.randomUUID().replaceAll('-', '')}`)}`,
@@ -2250,6 +2257,10 @@ async function main(): Promise<void> {
     (missingShare.headers.get('content-type') ?? '').includes('text/html'),
     missingShare.headers.get('content-type'),
   );
+  check(
+    '未知分享 session 仍输出 React 壳',
+    (await missingShare.text()).includes('data-spa-route="share"'),
+  );
 
   const home = await fetch(`${baseUrl()}/`);
   checkEqual('GET / 返回 200', home.status, 200);
@@ -2258,87 +2269,33 @@ async function main(): Promise<void> {
     (home.headers.get('content-type') ?? '').includes('text/html'),
     home.headers.get('content-type'),
   );
+  checkEqual('首页 not-store', home.headers.get('cache-control'), 'no-store');
   const homeHtml = await home.text();
-  check('首页包含会话列表容器', homeHtml.includes('id="room-list"'));
-  check('首页包含双栏空状态', homeHtml.includes('id="empty-state"') && homeHtml.includes('选择一个会话开始聊天'));
-  check('首页包含会话搜索框', homeHtml.includes('id="room-search"') && homeHtml.includes('搜索'));
-  check('首页包含新建群聊入口', homeHtml.includes('id="new-group"'));
-  check('首页包含新建群聊弹窗', homeHtml.includes('id="group-modal"'));
   check(
-    '首页包含新建 Agent 入口',
-    homeHtml.includes('id="new-agent"') && homeHtml.includes('新建 Agent'),
+    '首页为 React 壳并带 bootstrap',
+    homeHtml.includes('data-spa-route="home"') &&
+      homeHtml.includes('<div id="root"></div>') &&
+      homeHtml.includes('id="spa-bootstrap"'),
   );
-  check(
-    '首页包含新建 Agent 弹窗',
-    homeHtml.includes('id="new-agent-modal"') &&
-      homeHtml.includes('id="new-agent-name"') &&
-      homeHtml.includes('id="new-agent-create"') &&
-      homeHtml.includes('id="new-agent-url"') &&
-      homeHtml.includes('id="new-agent-copy"') &&
-      homeHtml.includes('id="new-agent-prompt"') &&
-      homeHtml.includes('id="new-agent-prompt-copy"') &&
-      homeHtml.includes('id="new-agent-close"') &&
-      homeHtml.includes('id="new-agent-error"'),
-  );
-  check(
-    '新建 Agent 弹窗不再包含分享链接与技能 URL',
-    !homeHtml.includes('id="new-agent-share"') &&
-      !homeHtml.includes('id="new-agent-skill-url"') &&
-      !homeHtml.includes('复制分享链接') &&
-      !homeHtml.includes('技能 URL'),
-  );
-  check(
-    '新建 Agent 弹窗只保留一条凭据说明',
-    homeHtml.includes('MCP URL 与提示词含长期 token') &&
-      homeHtml.includes('只在本机使用') &&
-      homeHtml.includes('不要截图、发群或写入日志') &&
-      !homeHtml.includes('localStorage 可被同源脚本读取'),
-  );
-  check(
-    '新建 Agent 通过 network_agent_create 原子创建',
-    homeHtml.includes('network_agent_create') &&
-      homeHtml.includes("requestId('web_agent_create')") &&
-      !homeHtml.includes('network_issue_token'),
-  );
-  check('首页包含配对设备入口', homeHtml.includes('id="device-handoff"') && homeHtml.includes('配对设备'));
-  check(
-    '首页不再包含复制 actor ID 按钮',
-    !homeHtml.includes('id="account-copy-id"') && !homeHtml.includes('复制 ID'),
-  );
-  check(
-    '首页脚本包含剪贴板复制与 execCommand 兜底',
-    homeHtml.includes('navigator.clipboard') &&
-      homeHtml.includes('writeText') &&
-      homeHtml.includes("execCommand('copy')"),
-  );
-  check(
-    '首页包含配对弹窗与打开即生成的一次性挑战',
-    homeHtml.includes('id="handoff-modal"') &&
-      homeHtml.includes('id="handoff-qr"') &&
-      homeHtml.includes('id="pairing-create"') &&
-      homeHtml.includes('id="pairing-code"') &&
-      homeHtml.includes('重新生成') &&
-      homeHtml.includes('createPairingChallenge()') &&
-      !homeHtml.includes('id="legacy-token-modal"'),
-  );
-  check(
-    '旧 #t= 不再捕获或采纳',
-    !homeHtml.includes('__agentNetworkLegacyToken') &&
-      !homeHtml.includes('legacy-token') &&
-      !homeHtml.includes('#t=') &&
-      !homeHtml.includes('确认切换'),
-  );
-  check(
-    '配对弹窗只保留简短配对与安全提示',
-    homeHtml.includes('用另一台设备扫描或输入 12 位配对码') &&
-      homeHtml.includes('只在核对设备名称/平台/确认码后批准；请勿截图或分享配对码') &&
-      !homeHtml.includes('旧方式') &&
-      !homeHtml.includes('长期凭据'),
-  );
-  check(
-    '首页脚本首次访问自动注册 human 身份',
-    homeHtml.includes("requestId('web_reg')") && homeHtml.includes("kind: 'human'"),
-  );
+  check('首页不再内联 legacy 会话列表', !homeHtml.includes('id="room-list"'));
+  check('首页不再内联 legacy 弹窗与脚本', !homeHtml.includes('id="group-modal"') && !homeHtml.includes('initialRoomId'));
+  check('首页不输出浏览器 token', !/ank_[0-9a-z]{32}/iu.test(homeHtml));
+  const staticEntry = homeHtml.match(/src="(\/static\/[^"]+\.js)"/u)?.[1] ?? '';
+  check('首页引用 Vite 构建入口', staticEntry.startsWith('/static/'), staticEntry);
+  if (staticEntry) {
+    const asset = await fetch(`${baseUrl()}${staticEntry}`);
+    checkEqual('静态入口返回 200', asset.status, 200);
+    checkEqual(
+      '静态入口使用不可变缓存',
+      asset.headers.get('cache-control'),
+      'public, max-age=31536000, immutable',
+    );
+  }
+  for (const retired of ['chat-resizer.js', 'chat-icons.js']) {
+    const response = await fetch(`${baseUrl()}/assets/${retired}`);
+    checkEqual(`${retired} 已退役返回 410`, response.status, 410);
+  }
+
   const invalidJoin = await fetch(`${baseUrl()}/j/not-a-valid-key`);
   checkEqual('格式错误的邀请 key 落地页返回 404', invalidJoin.status, 404);
   const handoffExchange = await fetch(`${baseUrl()}/j/${'a'.repeat(32)}`, { method: 'POST' });
@@ -2349,59 +2306,22 @@ async function main(): Promise<void> {
   checkEqual('群邀请落地页禁止缓存', joinLanding.headers.get('cache-control'), 'no-store');
   check(
     '群邀请落地页只展示最小介绍与确认入口',
-    joinLandingHtml.includes('id="join-action"') &&
-      joinLandingHtml.includes('邀请码有效不等于已加入') &&
-      joinLandingHtml.includes("callTool('network_room_invite_get'"),
+    joinLandingHtml.includes('data-spa-route="join"') &&
+      joinLandingHtml.includes('id="join-action"') &&
+      joinLandingHtml.includes('邀请码有效不等于已加入'),
   );
   check(
-    '群邀请落地页不内联邀请码以外的身份凭据',
+    '群邀请落地页不内联身份凭据',
     !joinLandingHtml.includes('agent-network-token='),
   );
+  const pairPage = await fetch(`${baseUrl()}/pair`);
+  const pairHtml = await pairPage.text();
+  checkEqual('配对页可打开', pairPage.status, 200);
   check(
-    '首页不再包含服务信息入口与折叠面板',
-    !homeHtml.includes('服务信息') &&
-      !homeHtml.includes('class="service-info"') &&
-      !homeHtml.includes('/a/&lt;agent_session_id&gt;'),
+    '配对页为 React 壳且 HTML 不含 challenge',
+    pairHtml.includes('data-spa-route="pair"') && !pairHtml.includes('id="pair-challenge"'),
   );
-  check(
-    '首页包含本人姓名编辑入口与弹窗',
-    homeHtml.includes('id="account-rename"') &&
-      homeHtml.includes('aria-label="编辑姓名"') &&
-      homeHtml.includes('id="me-rename-modal"') &&
-      homeHtml.includes('id="me-rename-input"') &&
-      homeHtml.includes("callTool('network_me_rename'"),
-  );
-  check(
-    '首页脚本内联 claimed 超时提示与阈值',
-    homeHtml.includes('CLAIM_STALE_MS') && homeHtml.includes('处理中未更新'),
-  );
-  check(
-    '首页包含 Agent 在线状态点与在线/离线/未知文案',
-    homeHtml.includes('presence-dot') &&
-      homeHtml.includes('在线') &&
-      homeHtml.includes('离线') &&
-      homeHtml.includes('未知'),
-  );
-  check(
-    '首页包含消息式 Task 摘要与 Trace 入口',
-    homeHtml.includes('id="task-trace-drawer"') &&
-      homeHtml.includes('id="task-trace-items"') &&
-      homeHtml.includes('id="task-trace-title"') &&
-      homeHtml.includes('network_task_summaries') &&
-      homeHtml.includes('network_task_trace') &&
-      homeHtml.includes('network_task_mark') &&
-      !homeHtml.includes('id="task-toggle"') &&
-      !homeHtml.includes('id="task-create"') &&
-      !homeHtml.includes('network_task_create'),
-  );
-  check(
-    '消息式 Task UI 使用 textContent 且保留分页入口',
-    homeHtml.includes('taskTraceTitleElement.textContent') &&
-      homeHtml.includes('taskTraceItemsElement.replaceChildren') &&
-      homeHtml.includes('id="task-trace-older"') &&
-      homeHtml.includes('id="task-trace-newer"') &&
-      !homeHtml.includes('taskTraceItemsElement.innerHTML'),
-  );
+  checkEqual('配对页 no-referrer', pairPage.headers.get('referrer-policy'), 'no-referrer');
 
   const skillDoc = await fetch(`${baseUrl()}/skills/agent-network-skills.md`);
   checkEqual('GET /skills/agent-network-skills.md 返回 200', skillDoc.status, 200);
@@ -4037,21 +3957,22 @@ async function main(): Promise<void> {
     chatPage.headers.get('content-type'),
   );
   const chatHtml = await chatPage.text();
-  check('单聊页包含 room_id', chatHtml.includes(roomResult?.room?.room_id ?? '\u0000'));
-  check('单聊页包含会话列表容器', chatHtml.includes('id="room-list"'));
-  check('单聊页包含消息输入框', chatHtml.includes('id="composer"'));
-  check('单聊页包含改名入口', chatHtml.includes('id="rename"'));
-  check('单聊页包含 @ 成员选择器', chatHtml.includes('id="mention-picker"'));
-  check('单聊页包含手机扫码入口', chatHtml.includes('id="device-handoff"'));
-  check('单聊页订阅统一 stream', chatHtml.includes('agentnet://stream'));
   check(
-    '单聊页头部按成员 online 渲染在线状态',
-    chatHtml.includes('presenceLabel(peer.online)'),
+    '单聊页为 React 壳',
+    chatHtml.includes('data-spa-route="room"') &&
+      chatHtml.includes('<div id="root"></div>') &&
+      chatHtml.includes('id="spa-bootstrap"'),
   );
   check(
-    '单聊页回执包含 claimed 超时提示',
-    chatHtml.includes('CLAIM_STALE_MS') && chatHtml.includes('处理中未更新'),
+    '单聊页 HTML 不输出房间数据',
+    !chatHtml.includes(roomResult?.room?.room_id ?? '\u0000') &&
+      !chatHtml.includes('initialRoomId'),
   );
+  check(
+    '单聊页引用 Vite 构建入口',
+    /src="\/static\/[^"]+\.js"/u.test(chatHtml),
+  );
+  check('单聊页 HTML 不输出浏览器 token', !/ank_[0-9a-z]{32}/iu.test(chatHtml));
 
   const getResponse = await fetch(`${baseUrl()}/mcp`);
   checkEqual('GET /mcp 返回 405', getResponse.status, 405);
