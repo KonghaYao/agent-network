@@ -13,6 +13,7 @@ export const queryKeys = {
     ['room', roomId, 'history', timeline ? 'timeline' : 'default'] as const,
   taskSummary: (roomId: string, rootId: string, version: string) =>
     ['room', roomId, 'task-summary', rootId, version] as const,
+  taskSummaries: (roomId: string) => ['room', roomId, 'task-summary'] as const,
   contacts: (actorId: string | null) => ['contacts', actorId ?? 'anonymous'] as const,
   contactBlocks: (actorId: string | null) => ['contact-blocks', actorId ?? 'anonymous'] as const,
   agentManagement: (actorId: string | null) =>

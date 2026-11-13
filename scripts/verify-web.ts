@@ -1399,6 +1399,22 @@ async function mcpCallCount(page: Page, name: string): Promise<number> {
   )) as number;
 }
 
+async function roomCallCount(page: Page, name: string, roomId: string): Promise<number> {
+  return (await page.evaluate(`(window.__mcpCalls || []).filter(function (call) {
+    const args = call.body && call.body.params ? call.body.params.arguments : null;
+    return call.name === ${JSON.stringify(name)} && args && args.room_id === ${JSON.stringify(roomId)};
+  }).length`)) as number;
+}
+
+/** 首屏刷新请求：当前房间、无 cursor 的 history。 */
+async function roomHistoryWithoutCursor(page: Page, roomId: string): Promise<number> {
+  return (await page.evaluate(`(window.__mcpCalls || []).filter(function (call) {
+    const args = call.body && call.body.params ? call.body.params.arguments : null;
+    return call.name === 'network_history_list' && args &&
+      args.room_id === ${JSON.stringify(roomId)} && !args.cursor;
+  }).length`)) as number;
+}
+
 /**
  * 带 cursor 的“更早”历史请求 = “加载更早”；首屏不带 cursor。
  * after 是断线补页，单独统计，不能算作加载更早。
@@ -4327,6 +4343,148 @@ function runAutoMentionPlanChecks(): void {
   checkEqual('计划：人类选择器进入 mentions', humanSelected.mentions[0], humanTarget.actor_id);
 }
 
+/**
+ * 流失效范围回归：首屏只读一次最新页，其他房间事件不碰当前房间历史，
+ * 当前房间消息只刷新一次且不丢已加载的 older 页。
+ */
+async function runStreamInvalidationAcceptance(
+  browser: Browser,
+  base: string,
+  allErrors: string[],
+  data: {
+    humanToken: string;
+    agentAToken: string;
+    agentA: Actor;
+  },
+): Promise<void> {
+  // 新建一个最新好友会话作为“其他房间”，确保它出现在侧栏第一页。
+  const otherToken = crypto.randomUUID();
+  const other = await rawTool<Actor>(otherToken, 'network_register', {
+    request_id: requestId('web_reg'),
+    kind: 'human',
+    name: '流失效其他房间',
+  });
+  await rawBefriend(data.humanToken, otherToken, { actor_id: other.actor_id });
+  const rooms = await rawTool<{
+    items: { room_id: string; kind: string; peer?: { actor_id?: string } | null }[];
+  }>(data.humanToken, 'network_rooms_list', { limit: 50 });
+  const otherRoom = rooms.items.find(
+    (room) => room.kind === 'direct' && room.peer?.actor_id === other.actor_id,
+  );
+  if (!otherRoom) throw new Error('未找到“其他房间”的 direct 会话');
+
+  const room = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+    request_id: requestId('room'),
+    kind: 'group',
+    title: '流失效范围验收群',
+    members: [data.agentA.actor_id],
+  });
+  const roomId = room.room.room_id;
+  for (let index = 1; index <= 60; index += 1) {
+    await rawTool(data.humanToken, 'network_message_send', {
+      request_id: requestId('msg'),
+      client_message_id: crypto.randomUUID(),
+      room_id: roomId,
+      body: `流失效范围消息 ${index}`,
+    });
+  }
+
+  const { context, page } = await makeContext(
+    browser,
+    data.humanToken,
+    { width: 1280, height: 900 },
+    allErrors,
+  );
+  try {
+    await page.goto(`${base}/c/${roomId}`);
+    await waitRoom(page, roomId, '流失效范围验收群');
+    await waitUntil(
+      async () =>
+        (await page.locator('#messages .msg[data-message-id]').count()) === 50,
+      '流失效范围首屏 50 条',
+      20_000,
+    );
+    await sleep(600);
+
+    checkEqual(
+      '首屏无 cursor history 恰好 1 次',
+      await roomHistoryWithoutCursor(page, roomId),
+      1,
+    );
+    checkEqual('首屏 room_get 恰好 1 次', await roomCallCount(page, 'network_room_get', roomId), 1);
+    checkEqual('首屏 rooms_list 恰好 1 次', await mcpCallCount(page, 'network_rooms_list'), 1);
+
+    // 先加载 older，后续刷新必须保留这一页。
+    await page.evaluate(`document.getElementById('older')?.click()`);
+    await waitUntil(
+      async () =>
+        (await page.locator('#messages .msg[data-message-id]').count()) === 60,
+      '流失效范围补齐 60 条',
+      20_000,
+    );
+    const oldestId = await page.locator('#messages .msg[data-message-id]').first().getAttribute(
+      'data-message-id',
+    );
+    const beforeOther = {
+      history: await roomHistoryWithoutCursor(page, roomId),
+      roomGet: await roomCallCount(page, 'network_room_get', roomId),
+      rooms: await mcpCallCount(page, 'network_rooms_list'),
+    };
+
+    const otherMarker = `无关房间消息 ${crypto.randomUUID()}`;
+    await sendRoomMessage(otherToken, otherRoom.room_id, otherMarker);
+    await waitForText(page, roomLink(otherRoom.room_id), otherMarker, 15_000);
+    const afterOther = {
+      history: await roomHistoryWithoutCursor(page, roomId),
+      roomGet: await roomCallCount(page, 'network_room_get', roomId),
+      rooms: await mcpCallCount(page, 'network_rooms_list'),
+    };
+    checkEqual(
+      '无关房间消息不重新读取当前房间 history',
+      afterOther.history,
+      beforeOther.history,
+    );
+    checkEqual(
+      '无关房间消息不重新读取当前房间 room_get',
+      afterOther.roomGet,
+      beforeOther.roomGet,
+    );
+    check(
+      '无关房间消息仍刷新侧栏会话列表',
+      afterOther.rooms > beforeOther.rooms,
+      { before: beforeOther.rooms, after: afterOther.rooms },
+    );
+
+    const currentMarker = `当前房间消息 ${crypto.randomUUID()}`;
+    await sendRoomMessage(data.agentAToken, roomId, currentMarker);
+    await waitForMessageText(page, currentMarker, 15_000);
+    const afterCurrent = {
+      history: await roomHistoryWithoutCursor(page, roomId),
+      roomGet: await roomCallCount(page, 'network_room_get', roomId),
+      count: await page.locator('#messages .msg[data-message-id]').count(),
+      ids: (await page.evaluate(`Array.from(document.querySelectorAll('#messages .msg[data-message-id]')).map(function (item) { return item.dataset.messageId; })`)) as string[],
+    };
+    checkEqual(
+      '当前房间消息只触发 1 次无 cursor history',
+      afterCurrent.history - afterOther.history,
+      1,
+    );
+    checkEqual(
+      '当前房间消息只触发 1 次 room_get',
+      afterCurrent.roomGet - afterOther.roomGet,
+      1,
+    );
+    checkEqual('刷新后已加载 older 不丢', afterCurrent.count, 61);
+    check(
+      '刷新后最早一条仍在',
+      oldestId !== null && afterCurrent.ids.includes(oldestId),
+      { oldestId, count: afterCurrent.ids.length },
+    );
+  } finally {
+    await context.close();
+  }
+}
+
 async function main(): Promise<void> {
   await runFileTicketSecretChecks();
   runAutoMentionPlanChecks();
@@ -5105,6 +5263,13 @@ async function main(): Promise<void> {
       }
       await context.close();
     }
+
+    // 11. 流失效范围：首屏去重、无关房间不碰当前历史、older 不丢。
+    await runStreamInvalidationAcceptance(browser, server.base, allErrors, {
+      humanToken: data.humanToken,
+      agentAToken: data.agentAToken,
+      agentA: data.agentA,
+    });
 
     await runPresenceRestartAcceptance();
     await runPresenceIdleNotificationCheck();
