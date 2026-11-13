@@ -4705,6 +4705,126 @@ async function main(): Promise<void> {
         `localStorage.getItem('agent-network-token') === null`,
       );
       checkEqual('退出登录清除本机 token', true, true);
+      await page.locator('#logged-out-start').waitFor({ state: 'visible' });
+      check('退出后显示创建新身份入口', await page.locator('#logged-out-start').isVisible());
+      checkEqual(
+        '退出后保留退出标记',
+        await page.evaluate(`localStorage.getItem('agent-network-logged-out')`),
+        '1',
+      );
+
+      // 刷新退出页仍显示入口：恢复入口不是一次性内存状态。
+      await page.reload();
+      await page.locator('#logged-out-start').waitFor({ state: 'visible' });
+      check('刷新退出页仍显示恢复入口', await page.locator('#logged-out-start').isVisible());
+
+      // 注册失败：显示可重试错误，不留下 token，也不清除退出标记。
+      let failRegister = true;
+      await page.route('**/mcp', async (route) => {
+        if (route.request().headers()['mcp-name'] !== 'network_register' || !failRegister) {
+          await route.continue();
+          return;
+        }
+        failRegister = false;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            error: { code: -32000, message: '模拟注册失败', data: { code: 'INTERNAL' } },
+          }),
+        });
+      });
+      await page.locator('#logged-out-start').click();
+      await page.locator('#logged-out-error').waitFor({ state: 'visible' });
+      const registerFailure = (await page.locator('#logged-out-error').textContent()) ?? '';
+      check('注册失败显示错误', registerFailure.includes('模拟注册失败'), registerFailure);
+      checkEqual(
+        '注册失败后按钮可重试',
+        await page.locator('#logged-out-start').isEnabled(),
+        true,
+      );
+      checkEqual(
+        '注册失败不保留 token',
+        await page.evaluate(`localStorage.getItem('agent-network-token')`),
+        null,
+      );
+      checkEqual(
+        '注册失败保留退出标记',
+        await page.evaluate(`localStorage.getItem('agent-network-logged-out')`),
+        '1',
+      );
+
+      // 双击只发起一次注册；成功后恢复为新的可用身份。
+      const registrations: string[] = [];
+      page.on('request', (request) => {
+        if (request.headers()['mcp-name'] === 'network_register') {
+          registrations.push(request.url());
+        }
+      });
+      await page.evaluate(`(() => {
+        const button = document.getElementById('logged-out-start');
+        if (!button) throw new Error('缺少恢复入口');
+        button.click();
+        button.click();
+      })()`);
+      await page.waitForFunction(
+        `(() => {
+          const name = document.getElementById('account-name');
+          return Boolean(localStorage.getItem('agent-network-token')) &&
+            Boolean(name) && name.textContent !== '未登录';
+        })()`,
+      );
+      checkEqual('双击恢复只注册一次', registrations.length, 1);
+      const restoredToken = await page.evaluate(
+        `localStorage.getItem('agent-network-token')`,
+      );
+      check(
+        '恢复后生成本机新 token',
+        typeof restoredToken === 'string' && restoredToken !== data.humanToken,
+        restoredToken ? '[redacted]' : restoredToken,
+      );
+      checkEqual(
+        '恢复后清除退出标记',
+        await page.evaluate(`localStorage.getItem('agent-network-logged-out')`),
+        null,
+      );
+      checkEqual(
+        '恢复后入口消失',
+        await page.locator('#logged-out-start').count(),
+        0,
+      );
+      if (typeof restoredToken === 'string') {
+        const restored = await rawTool<Actor>(restoredToken, 'network_me', {});
+        check(
+          '恢复后是新 actor',
+          restored.actor_id !== data.human.actor_id,
+          { before: data.human.actor_id, after: restored.actor_id },
+        );
+        const restoredRooms = await rawTool<{ items: unknown[] }>(
+          restoredToken,
+          'network_rooms_list',
+          { limit: 50 },
+        );
+        check('恢复后用新身份可加载会话列表', Array.isArray(restoredRooms.items));
+      }
+
+      // 恢复后刷新沿用同一身份，不再重复注册。
+      const beforeReload = registrations.length;
+      await page.reload();
+      await page.waitForFunction(
+        `(() => {
+          const name = document.getElementById('account-name');
+          return Boolean(localStorage.getItem('agent-network-token')) &&
+            Boolean(name) && name.textContent !== '未登录';
+        })()`,
+      );
+      checkEqual('恢复后刷新不重复注册', registrations.length, beforeReload);
+      check(
+        '恢复后刷新仍是同一身份',
+        (await page.evaluate(`localStorage.getItem('agent-network-token')`)) === restoredToken,
+      );
       await context.close();
     }
 

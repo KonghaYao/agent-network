@@ -145,7 +145,7 @@ export function roomFilterEmptyMessage(
   credentialInvalid = false,
 ): string {
   if (loggedOut) {
-    return '已退出登录。本机登录凭据与已保存的 Agent 连接提示词已清除；打开 Agent 分享链接或使用已有连接提示词即可继续。';
+    return '已退出登录。点击「创建新身份并继续」，或打开 Agent 分享链接。';
   }
   if (credentialInvalid) {
     return '当前凭据已失效或已被撤销；本机不会自动创建替代身份。请用另一台已登录设备生成配对码后打开 /pair。';

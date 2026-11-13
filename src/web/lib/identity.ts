@@ -2,6 +2,7 @@ import {
   callTool,
   mcpError,
   readBrowserToken,
+  removeBrowserToken,
   writeBrowserToken,
   type McpError,
 } from './mcp-client';
@@ -34,6 +35,7 @@ const DEVICE_ID_KEY = 'agent-network-device-id-v1';
 
 let cached: WebSession | null = null;
 let pending: Promise<WebSession> | null = null;
+let freshPending: Promise<WebSession> | null = null;
 
 function storageGet(key: string): string | null {
   try {
@@ -54,6 +56,20 @@ function storageSet(key: string, value: string): boolean {
 
 export function isLoggedOut(): boolean {
   return storageGet(LOGGED_OUT_KEY) !== null;
+}
+
+function storageRemove(key: string): boolean {
+  try {
+    localStorage.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 只在用户显式点击“创建新身份并继续”后调用。 */
+function clearLoggedOutState(): void {
+  storageRemove(LOGGED_OUT_KEY);
 }
 
 function ensureDeviceId(): string {
@@ -93,7 +109,10 @@ async function register(token: string): Promise<WebIdentity> {
 
 async function bootstrap(): Promise<WebSession> {
   if (isLoggedOut()) {
-    throw mcpError('已退出登录。请先在首页创建新身份，或打开 Agent 分享链接。', 'LOGGED_OUT');
+    throw mcpError(
+      '已退出登录。请点击“创建新身份并继续”，或打开 Agent 分享链接。',
+      'LOGGED_OUT',
+    );
   }
 
   const stored = readBrowserToken();
@@ -131,6 +150,38 @@ async function bootstrap(): Promise<WebSession> {
   return { identity, token: retryToken };
 }
 
+/**
+ * 显式创建新身份：只由退出后的恢复入口调用。
+ *
+ * 与 `bootstrap()` 不同，这里允许在 `agent-network-logged-out` 存在时注册；
+ * 成功后清除退出标记。注册失败会撤掉本次写入的 token 并保留退出标记，
+ * 避免刷新后自动注册，也避免留下半初始化身份。
+ */
+export function createFreshIdentity(): Promise<WebSession> {
+  if (cached) return Promise.resolve(cached);
+  if (freshPending) return freshPending;
+
+  freshPending = (async () => {
+    const token = newToken();
+    if (!writeBrowserToken(token)) {
+      throw mcpError('浏览器无法保存身份，请允许本地存储后刷新页面', 'STORAGE_UNAVAILABLE');
+    }
+    let identity: WebIdentity;
+    try {
+      identity = await register(token);
+    } catch (error) {
+      removeBrowserToken();
+      throw error;
+    }
+    clearLoggedOutState();
+    cached = { identity, token };
+    return cached;
+  })().finally(() => {
+    freshPending = null;
+  });
+  return freshPending;
+}
+
 /** single-flight：首屏列表与实时订阅同时启动时只注册一次。 */
 export function ensureWebSession(): Promise<WebSession> {
   if (cached) return Promise.resolve(cached);
@@ -150,4 +201,5 @@ export function ensureWebSession(): Promise<WebSession> {
 export function resetWebSession(): void {
   cached = null;
   pending = null;
+  freshPending = null;
 }
