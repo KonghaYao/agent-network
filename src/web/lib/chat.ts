@@ -517,11 +517,13 @@ function maintainerMention(members: Map<string, RoomMember>, identityId: string)
 }
 
 /**
- * 人类群聊发送计划。
+ * 发送计划。
  *
  * - 只信选择器保存的 actor_id：Agent 进 invoke，人类进 mentions；
- * - 没有存活选择器目标时不传 invoke（`invokeExplicit = false`），把正文
- *   唯一精确成员的兜底解析留给服务端；有目标时显式发送，包含空列表；
+ * - 人类群聊没有存活选择器目标时不传 invoke（`invokeExplicit = false`），
+ *   把正文唯一精确成员的兜底解析留给服务端；有目标时显式发送，包含空列表；
+ * - Agent 身份始终显式发送 invoke（无目标时为空数组），避免服务端把省略
+ *   invoke 的 Agent 群消息按发送者/正文猜测并自动 @ 上一位成员；
  * - 人类群聊在正文与选择器都没有有效 @ 时恢复 legacy 自动 @：正文优先
  *   命中唯一其他成员，其次最新一条消息的发送者，附件再兜底维护员；
  * - direct 自动唤醒对端 Agent（人类对端不派活），不做文本自动 @。
@@ -558,7 +560,8 @@ export function buildSendPlan(input: {
     return {
       body,
       invoke: targets,
-      invokeExplicit: targets.length > 0,
+      // Agent 身份始终显式携带 invoke（可为空），关闭服务端按发送者猜测。
+      invokeExplicit: identityKind === 'agent' || targets.length > 0,
       mentions: [],
       error: null,
     };
@@ -609,7 +612,15 @@ export function buildSendPlan(input: {
       if (messageBodyBytes(candidate) <= LIMITS.messageBodyBytes) outgoing = candidate;
     }
   }
-  return { body: outgoing, invoke, invokeExplicit: resolved > 0, mentions, error: null };
+  // Agent 身份必须显式发送 invoke：省略会让服务端自动 @ 上一位成员并
+  // 追加 text 提及；前端只传选择器解析出的目标，不参与正文猜测。
+  return {
+    body: outgoing,
+    invoke,
+    invokeExplicit: identityKind === 'agent' || resolved > 0,
+    mentions,
+    error: null,
+  };
 }
 
 /** 正文 + 附件公开链接；每行一个 URL，与 legacy 发送格式一致。 */

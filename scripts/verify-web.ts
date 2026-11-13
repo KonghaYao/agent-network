@@ -4191,6 +4191,7 @@ function runAutoMentionPlanChecks(): void {
   const plan = (
     body: string,
     options: {
+      room?: RoomView;
       members?: Map<string, RoomMember>;
       identityId?: string;
       identityKind?: 'human' | 'agent';
@@ -4200,7 +4201,7 @@ function runAutoMentionPlanChecks(): void {
     } = {},
   ) =>
     buildSendPlan({
-      room,
+      room: options.room ?? room,
       members: options.members ?? members,
       identityId: options.identityId ?? human.actor_id,
       identityKind: options.identityKind ?? 'human',
@@ -4289,7 +4290,20 @@ function runAutoMentionPlanChecks(): void {
     items: [planMessage(agentB.actor_id, '5')],
   });
   checkEqual('计划：Agent 发送不自动 @', agentReply.body, 'Agent 自己回复');
-  checkEqual('计划：Agent 发送不显式 invoke', agentReply.invokeExplicit, false);
+  checkEqual('计划：Agent 发送显式 invoke', agentReply.invokeExplicit, true);
+  checkEqual('计划：Agent 发送空 invoke 数组', agentReply.invoke.length, 0);
+  checkEqual('计划：Agent 发送不追加 text 提及', agentReply.mentions.length, 0);
+
+  const agentDirect = plan('Agent 单聊回复', {
+    room: { ...room, room_id: 'plan_direct', kind: 'direct' },
+    identityId: agentA.actor_id,
+    identityKind: 'agent',
+    members: new Map([
+      [agentA.actor_id, agentA],
+      [human.actor_id, human],
+    ]),
+  });
+  checkEqual('计划：Agent 单聊同样显式 invoke', agentDirect.invokeExplicit, true);
 
   const explicit = plan('请 @自动提及 Agent 处理', {
     items: [planMessage(agentA.actor_id, '6')],

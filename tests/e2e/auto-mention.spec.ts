@@ -5,11 +5,14 @@ import { resolve } from 'node:path';
 import { LIMITS } from '../../src/contracts/limits';
 
 /**
- * 人类群聊发送回归：自动 @、手动 @、选择器与 invoke 省略语义。
+ * 群聊发送回归：自动 @、手动 @、选择器与 invoke 省略语义。
  *
  * 服务端由 Playwright globalSetup 隔离启动；页面请求经 instrumentFetch 记录，
  * 断言直接检查 `network_message_send` 是否携带 invoke，再用 Agent 收件箱
  * 与历史确认 delivery 是否真实建立。
+ *
+ * 人类场景验证自动 @ 兜底；Agent 身份必须在 SPA 中显式携带空 invoke，
+ * 阻止服务端把省略 invoke 的 Agent 群消息自动 @ 上一位成员。
  */
 
 async function baseUrl(): Promise<string> {
@@ -90,8 +93,15 @@ interface RoomCreated {
   room: { room_id: string };
 }
 
+interface HistoryItem {
+  message_id: string;
+  preview: string;
+  mentions?: { actor_id: string; kind: 'human' | 'agent'; source: 'explicit' | 'text' | 'all' }[];
+  delivery_states?: Record<string, number>;
+}
+
 interface HistoryPage {
-  items: { message_id: string; preview: string }[];
+  items: HistoryItem[];
 }
 
 interface InboxPage {
@@ -502,5 +512,97 @@ test.describe('SPA human group auto mention', () => {
     await expect
       .poll(() => pendingDeliveryOrNull(base, maintainer!.token, messageId))
       .not.toBeNull();
+  });
+});
+
+test.describe('SPA agent identity group send', () => {
+  let base = '';
+  let humanToken = '';
+  let agent: { token: string; actor: Actor } | null = null;
+  let groupRoomId = '';
+
+  test.beforeAll(async () => {
+    base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    humanToken = crypto.randomUUID();
+    const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+    const agentActor = await callTool<Actor>(base, agentToken, 'network_register', {
+      request_id: requestId('e2e_reg'),
+      kind: 'agent',
+      name: `Agent 发送身份 ${suffix}`,
+      agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+    });
+    agent = { token: agentToken, actor: agentActor };
+    await callTool<Actor>(base, humanToken, 'network_register', {
+      request_id: requestId('e2e_reg'),
+      kind: 'human',
+      name: `Agent 发送人类 ${suffix}`,
+      device_id: `e2e-agent-send-${suffix}`,
+    });
+
+    const group = await callTool<RoomCreated>(base, humanToken, 'network_room_create', {
+      request_id: requestId('e2e_agent_group'),
+      kind: 'group',
+      title: `Agent 发送群 ${suffix}`,
+      members: [agent.actor.actor_id],
+    });
+    groupRoomId = group.room.room_id;
+    // 上一条是人类消息：若 Agent 发送时省略 invoke，服务端会把它当作自动 @ 目标。
+    await callTool(base, humanToken, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: crypto.randomUUID(),
+      room_id: groupRoomId,
+      body: 'Agent 发送前的人类消息',
+      invoke: [],
+    });
+  });
+
+  test('agent identity sends explicit empty invoke and skips server auto mention', async ({
+    page,
+  }) => {
+    if (!agent) throw new Error('fixture 未初始化');
+    await instrumentFetch(page);
+    await page.addInitScript((token) => {
+      try {
+        localStorage.setItem('agent-network-token', token);
+        localStorage.removeItem('agent-network-logged-out');
+      } catch {
+        // 浏览器禁用存储时由页面错误态兜底。
+      }
+    }, agent.token);
+    await page.goto(`${base}/c/${groupRoomId}`);
+    await expect(page.locator('#composer')).toBeVisible();
+    await expect(
+      page.locator('#messages .msg').filter({ hasText: 'Agent 发送前的人类消息' }),
+    ).toBeVisible();
+
+    const marker = `Agent 纯文本 ${Date.now()}`;
+    const args = await sendAndCapture(page, marker);
+    expect(args.body).toBe(marker);
+    expect(Object.hasOwn(args, 'invoke')).toBe(true);
+    expect(args.invoke).toEqual([]);
+    expect(Object.hasOwn(args, 'mentions')).toBe(false);
+
+    const messageId = await messageIdFor(base, agent.token, groupRoomId, marker);
+    const body = await callTool<{ chunk: string; eof: boolean }>(
+      base,
+      agent.token,
+      'network_message_read',
+      { message_id: messageId },
+    );
+    expect(body.chunk).toBe(marker);
+    expect(body.eof).toBe(true);
+
+    const history = await callTool<HistoryPage>(base, agent.token, 'network_history_list', {
+      room_id: groupRoomId,
+      direction: 'before',
+      limit: 50,
+    });
+    const stored = history.items.find((item) => item.message_id === messageId);
+    if (!stored) throw new Error('历史中缺少 Agent 发送的消息');
+    expect(stored.preview).toBe(marker);
+    expect(stored.mentions ?? []).toEqual([]);
+    expect(stored.delivery_states ?? {}).toEqual({});
+    expect(await pendingDeliveryOrNull(base, agent.token, messageId)).toBeNull();
   });
 });

@@ -322,8 +322,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
         body: plan.body,
         invoke: plan.invoke,
         mentions: plan.mentions,
-        // 无存活选择器目标时省略 invoke，恢复服务端按正文唯一成员解析；
-        // 有目标时显式发送（可能为空 []），阻止服务端再猜测其他 Agent。
+        // 人类无存活选择器目标时省略 invoke，恢复服务端按正文唯一成员解析；
+        // 有目标或发送者是 Agent 时显式发送（可能为空 []），阻止服务端猜测。
         invokeExplicit: plan.invokeExplicit,
         replyTo: reply?.messageId ?? null,
       });
