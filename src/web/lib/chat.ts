@@ -69,6 +69,13 @@ export interface RoomMember {
   agent_session_id: string | null;
   role: 'owner' | 'admin' | 'member';
   online: boolean | null;
+  /** 服务端按调用者角色计算的成员操作；旧响应缺失时按不可操作处理。 */
+  actions?: {
+    can_remove: boolean;
+    can_set_admin: boolean;
+    can_revoke_admin: boolean;
+    can_transfer_owner: boolean;
+  } | null;
 }
 
 export interface RoomView {
@@ -82,6 +89,14 @@ export interface RoomView {
   my_role: 'owner' | 'admin' | 'member';
   my_last_read_seq: string;
   announcement: string;
+  announcement_revision?: number;
+  capabilities?: {
+    edit_profile?: boolean;
+    invite_members?: boolean;
+    manage_announcement?: boolean;
+    [key: string]: boolean | undefined;
+  } | null;
+  can_leave?: boolean;
   status: 'active' | 'dissolved';
   read_only: boolean;
   created_at: string;

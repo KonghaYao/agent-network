@@ -40,6 +40,15 @@ import {
 import { createApp, parseByteRange } from '../src/app';
 import { parseMcpImplementation } from '../src/mcp/transport';
 import { isSupportedDshVersion } from '../client/monitor/dsh-install';
+import {
+  findMentionQuery,
+  insertMention,
+  mentionCandidates,
+  pruneSelections,
+  upsertSelection,
+} from '../src/web/lib/mentions';
+import { groupCreateFormSchema, announcementFormSchema } from '../src/contracts/web-forms';
+import type { RoomMember } from '../src/web/lib/chat';
 import { abortableSleep } from '../client/monitor/engine';
 import { acquireLock } from '../client/monitor/locks';
 import { MonitorState } from '../client/monitor/state';
@@ -864,6 +873,51 @@ async function mcpTransportChecks(): Promise<void> {
   checkEqual('MCP_IMPL 非法值启动期失败', message, 'MCP_IMPL must be native or mcp-use');
 }
 
+function componentModelChecks(): void {
+  const members = new Map<string, RoomMember>([
+    ['usr_a', { actor_id: 'usr_a', kind: 'human', name: 'Alice', agent_session_id: null, role: 'member', online: null }],
+    ['usr_b', { actor_id: 'usr_b', kind: 'agent', name: 'Bob', agent_session_id: 'sess_b', role: 'member', online: true }],
+    ['usr_c', { actor_id: 'usr_c', kind: 'agent', name: 'Bobby', agent_session_id: 'sess_c', role: 'member', online: false }],
+  ]);
+  const query = findMentionQuery('hello @bo', 9);
+  check('提及查询解析 @', query !== null);
+  checkEqual('提及查询起点', query?.start, 6);
+  checkEqual('提及查询词', query?.query, 'bo');
+  const matches = mentionCandidates(members, 'usr_a', 'bo');
+  checkEqual('提及候选按名称过滤', matches.map((member) => member.actor_id).join(','), 'usr_b,usr_c');
+  checkEqual(
+    '提及候选排除自己',
+    mentionCandidates(members, 'usr_a', '').map((member) => member.actor_id).join(','),
+    'usr_b,usr_c',
+  );
+  const insertion = insertMention('hello @bo', query!, members.get('usr_b')!);
+  checkEqual('插入提及正文', insertion.text, 'hello @Bob ');
+  checkEqual('插入提及光标', insertion.caret, 11);
+  const merged = upsertSelection(
+    [{ actor_id: 'usr_b', name: 'Bob', kind: 'agent' }],
+    insertion.selection,
+  );
+  checkEqual('提及选择按 actor 去重', merged.length, 1);
+  checkEqual(
+    '正文删除后丢弃选择',
+    pruneSelections(merged, 'hello', members).length,
+    0,
+  );
+
+  check(
+    '建群表单接受好友成员',
+    groupCreateFormSchema.safeParse({ title: '群', members: ['usr_a'] }).success,
+  );
+  check(
+    '建群表单拒绝空成员',
+    !groupCreateFormSchema.safeParse({ title: '群', members: [] }).success,
+  );
+  check(
+    '公告表单按 UTF-8 字节限制',
+    !announcementFormSchema.safeParse({ announcement: '好'.repeat(LIMITS.roomAnnouncementBytes) }).success,
+  );
+}
+
 async function main(): Promise<void> {
   await sseChecks();
   const db = freshDb();
@@ -884,6 +938,7 @@ async function main(): Promise<void> {
   await permissionMatrixChecks(db);
   await presenceTouchChecks(db);
   await mcpTransportChecks();
+  componentModelChecks();
   console.log(`\nRefactor units: ${checksPassed()} checks passed`);
 }
 
