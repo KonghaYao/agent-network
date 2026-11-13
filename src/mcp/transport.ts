@@ -4,11 +4,12 @@
  * `native` 直接使用官方 SDK 的 `createMcpHandler`；`mcp-use` 标准方法交给
  * `mcp-use` 的 `MCPServer`（工具/资源由 `buildUseServer` 注册）。
  *
- * `MCPServer` 没有公开的底层 `McpServer` 访问器，`skills/*`、`events/*` 与
- * `server/discover` 由 native 兼容服务器处理：自定义方法走 `customFactory`，
- * discover 也走兼容服务器以保留原有 capabilities、instructions 与
- * `io.mcpp/files` 扩展。鉴权、405/`Allow`、`subscriptions/listen`、结果
- * `_meta` 剥离与 CORS 仍留在 `src/app.ts`。
+ * `MCPServer` 没有公开的底层 `McpServer` 访问器，无法注册 `skills/*` 与
+ * `events/*`。4D-3 起这些自定义方法由本层在处理请求前直接分发
+ * （`src/mcp/compat/methods.ts`），不再构建第二个 native 兼容服务器；
+ * `server/discover` 仍由 mcp-use 应答，只在响应上修正 capabilities。
+ * 鉴权、405/`Allow`、`subscriptions/listen`、结果 `_meta` 剥离与 CORS
+ * 仍在 `src/app.ts`。
  */
 import {
   createMcpHandler,
@@ -20,7 +21,13 @@ import {
 import { getRequestBag, type MCPServer } from 'mcp-use';
 
 import { LIMITS } from '../contracts/limits';
+import { asRecord } from '../events/log';
 import type { McpImplementation } from '../env';
+import {
+  patchDiscoverResponse,
+  type DiscoverCapabilities,
+} from './compat/capabilities';
+import type { CompatMethodTable } from './compat/shared';
 
 /** 只暴露调用方需要的 `fetch`，避免把 SDK handler 的 close/notify 泄漏到路由层。 */
 export interface McpTransport {
@@ -29,12 +36,14 @@ export interface McpTransport {
 
 export interface McpTransportOptions {
   implementation?: McpImplementation;
-  /** native 主实现；mcp-use 模式下用于非 POST 的协议错误响应。 */
+  /** native 实现；`mcp-use` 模式只使用 `buildUseServer`。 */
   nativeFactory: McpServerFactory;
-  /** mcp-use 模式下 `skills/*`、`events/*` 与 `server/discover` 的兼容工厂。 */
-  customFactory?: McpServerFactory;
   /** mcp-use 模式下的 `MCPServer` 构建器；按请求创建以绑定 FileScope。 */
   buildUseServer?: (request: Request) => MCPServer;
+  /** `skills/*`、`events/*` 的传输层处理器。 */
+  compat?: CompatMethodTable;
+  /** mcp-use 的 `server/discover` 能力修正参数。 */
+  capabilities?: DiscoverCapabilities;
 }
 
 /**
@@ -61,22 +70,6 @@ const HANDLER_OPTIONS: CreateMcpHandlerOptions = {
   keepAliveMs: LIMITS.keepaliveMs,
 };
 
-/**
- * 无法在 mcp-use `MCPServer` 上注册的方法。
- *
- * `server/discover` 不是自定义方法，但由兼容服务器回答才能保持原有
- * capabilities、instructions 与文件扩展；其余为 SEP-2640 Skills 与
- * MCP Events 自定义方法。
- */
-const COMPAT_METHODS: ReadonlySet<string> = new Set([
-  'server/discover',
-  'skills/list',
-  'skills/get',
-  'events/list',
-  'events/subscribe',
-  'events/unsubscribe',
-]);
-
 function jsonRpcError(status: number, code: number, message: string): Response {
   return Response.json({ jsonrpc: '2.0', error: { code, message }, id: null }, { status });
 }
@@ -90,8 +83,8 @@ interface ParsedBody {
  * 在进入 mcp-use 前按官方入口相同的方式计数并返回 413；同时把解析结果
  * 写回 mcp-use 的 request bag，避免它再次 clone/解析已消费的请求体。
  *
- * 读取 `request.clone()`，不重建或消费原请求：MCPP Files 的 FileScope
- * 以原请求对象为 WeakMap key，兼容服务器也要拿到原始 body。
+ * 读取 `request.clone()`，不重建或消费原始请求：MCPP Files 的 FileScope
+ * 以原请求对象为 WeakMap key，自定义方法也要拿到原始 body。
  */
 async function readBody(
   request: Request,
@@ -147,19 +140,19 @@ async function readBody(
   } catch {
     return jsonRpcError(400, -32_700, 'Parse error: the request body is not valid JSON');
   }
-  const method =
-    parsed !== null &&
-    typeof parsed === 'object' &&
-    !Array.isArray(parsed) &&
-    typeof (parsed as { method?: unknown }).method === 'string'
-      ? ((parsed as { method: string }).method)
-      : null;
+  const record = asRecord(parsed);
+  const method = typeof record?.method === 'string' ? record.method : null;
   return { parsed, method };
+}
+
+function requestIdOf(parsed: unknown): string | number | null {
+  const id = asRecord(parsed)?.id;
+  return typeof id === 'string' || typeof id === 'number' ? id : null;
 }
 
 export function createMcpTransport(options: McpTransportOptions): McpTransport {
   const implementation = options.implementation ?? DEFAULT_MCP_IMPL;
-  const { nativeFactory, customFactory, buildUseServer } = options;
+  const { nativeFactory, buildUseServer, compat, capabilities } = options;
   if (implementation === 'native') {
     const handler: McpHttpHandler = createMcpHandler(nativeFactory, HANDLER_OPTIONS);
     return { fetch: handler.fetch };
@@ -167,18 +160,26 @@ export function createMcpTransport(options: McpTransportOptions): McpTransport {
   if (!buildUseServer) {
     throw new Error('mcp-use transport requires buildUseServer');
   }
-  // createMcpTransport 本身按请求创建，兼容 handler 复用同一个工厂即可。
-  const compatHandler = createMcpHandler(customFactory ?? nativeFactory, HANDLER_OPTIONS);
   return {
     async fetch(request: Request): Promise<Response> {
       const body = await readBody(request, LIMITS.httpBodyBytes);
       if (body instanceof Response) return body;
-      if (request.method !== 'POST') return compatHandler.fetch(request);
-      if (body.method !== null && COMPAT_METHODS.has(body.method)) {
-        return compatHandler.fetch(request);
+      // 自定义方法在进入 mcp-use 前应答，避免构建第二个服务端。
+      if (compat !== undefined && body.method !== null && compat.has(body.method)) {
+        return compat.handle(body.method, asRecord(body.parsed)?.params, {
+          requestId: requestIdOf(body.parsed),
+        });
       }
       if (body.parsed !== undefined) getRequestBag(request).parsedBody = body.parsed;
-      return buildUseServer(request).fetch(request);
+      const response = await buildUseServer(request).fetch(request);
+      if (
+        capabilities !== undefined &&
+        body.method === 'server/discover' &&
+        response.status === 200
+      ) {
+        return patchDiscoverResponse(response, capabilities);
+      }
+      return response;
     },
   };
 }

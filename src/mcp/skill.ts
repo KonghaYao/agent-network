@@ -1,10 +1,3 @@
-import {
-  McpServer,
-  ProtocolError,
-  ProtocolErrorCode,
-} from '@modelcontextprotocol/server';
-import { z } from 'zod';
-
 import { sha256Hex } from '../storage/db';
 import type { RegistrationServer } from './registration';
 
@@ -398,17 +391,7 @@ export async function skillEntry(): Promise<SkillEntry> {
   };
 }
 
-/** `skills/list` 分页参数；当前只有一个技能，接受 `cursor` 但不返回 `nextCursor`。 */
-const SKILLS_LIST_PARAMS = z.object({ cursor: z.string().optional() });
-
-/** `skills/get` 参数：技能 URI（SKILL.md 自身）。 */
-const SKILLS_GET_PARAMS = z.object({ uri: z.string() });
-
-/**
- * 技能资源可注册到 native 或 mcp-use；`resources/read` 由后者服务。
- * `skills/list|get` 是自定义方法，由 `registerSkillMethods` 注册在 native
- * 兼容服务器上。
- */
+/** `skills/list|get` 是自定义方法，注册与传输层分发见 `compat/skills.ts`。 */
 export function registerSkillResource(server: RegistrationServer): void {
   server.registerResource(
     'skill',
@@ -421,29 +404,5 @@ export function registerSkillResource(server: RegistrationServer): void {
     async (uri) => ({
       contents: [{ uri: uri.href, mimeType: 'text/markdown', text: SKILL_MARKDOWN }],
     }),
-  );
-}
-
-/** `skills/list|get` 是自定义方法，只能注册在 native 兼容服务器上。 */
-export function registerSkillMethods(server: McpServer): void {
-  server.server.setRequestHandler(
-    'skills/list',
-    { params: SKILLS_LIST_PARAMS },
-    async () => ({
-      skills: [await skillEntry()],
-      ttlMs: 0,
-      cacheScope: 'private',
-    }),
-  );
-
-  server.server.setRequestHandler(
-    'skills/get',
-    { params: SKILLS_GET_PARAMS },
-    async ({ uri }) => {
-      if (uri !== SKILL_URI) {
-        throw new ProtocolError(ProtocolErrorCode.InvalidParams, `未知技能 URI: ${uri}`);
-      }
-      return { skill: await skillEntry() };
-    },
   );
 }

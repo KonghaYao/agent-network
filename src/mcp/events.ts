@@ -1,8 +1,4 @@
-import {
-  McpServer,
-  ProtocolError,
-  type ServerCapabilities,
-} from '@modelcontextprotocol/server';
+import { ProtocolError, type ServerCapabilities } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 import { BusinessError, isBusinessError } from '../contracts/errors';
@@ -26,13 +22,6 @@ import {
   type SubscribeInput,
   type UnsubscribeInput,
 } from '../events/subscriptions';
-
-/**
- * 自定义方法用宽松对象接收参数，由本文件做显式校验：
- * SDK 的 schema 失败发生在 handler 之前，会丢失阶段日志；ChatGPT 也可能
- * 发送未知字段或显式 null，这些都不应直接变成 -32602。
- */
-const RAW_PARAMS = z.record(z.string(), z.unknown());
 
 const SUBSCRIBE_DELIVERY = z.object({
   mode: z.string().min(1),
@@ -274,24 +263,41 @@ function failureFields(error: unknown): Record<string, string | number | null> {
   return { error_kind: 'internal', error_code: null, reason: null, detail: null, status: null };
 }
 
-/** 只在 EVENTS 配置有效时注册；未声明能力时客户端应得到 -32601。 */
-export function registerEvents(server: McpServer, env: Env, principal: Principal): void {
-  server.server.setRequestHandler('events/list', { params: RAW_PARAMS }, async (raw, ctx) => {
-    const log = createEventsLogger('events/list', ctx.mcpReq.id);
-    log.info('list', {
-      stage: 'list',
-      param_keys: Object.keys(raw).sort(),
-    });
-    const result = await listEventDefinitions();
-    log.info('list', { stage: 'list', result: 'ok', event_count: result.events.length });
-    return result;
-  });
+/** MCP Events 自定义方法；native 与 mcp-use 路径共用同一批处理器。 */
+export const EVENTS_METHODS = [
+  'events/list',
+  'events/subscribe',
+  'events/unsubscribe',
+] as const;
 
-  server.server.setRequestHandler(
-    'events/subscribe',
-    { params: RAW_PARAMS },
-    async (raw, ctx) => {
-      const log = createEventsLogger('events/subscribe', ctx.mcpReq.id);
+export type EventsMethod = (typeof EVENTS_METHODS)[number];
+
+/**
+ * 分发一个 events 方法。
+ *
+ * 注册（native `setRequestHandler`）与传输层兼容分发（mcp-use）都调用这里，
+ * 阶段日志、错误映射与业务实现只有一份。
+ */
+export async function dispatchEventsMethod(
+  method: EventsMethod,
+  raw: Record<string, unknown>,
+  env: Env,
+  principal: Principal,
+  requestId: string | number | null,
+): Promise<Record<string, unknown>> {
+  switch (method) {
+    case 'events/list': {
+      const log = createEventsLogger('events/list', requestId);
+      log.info('list', {
+        stage: 'list',
+        param_keys: Object.keys(raw).sort(),
+      });
+      const result = await listEventDefinitions();
+      log.info('list', { stage: 'list', result: 'ok', event_count: result.events.length });
+      return result;
+    }
+    case 'events/subscribe': {
+      const log = createEventsLogger('events/subscribe', requestId);
       try {
         const input = parseSubscribeInput(raw, log);
         const result = await subscribeEvents(env, principal, input, log);
@@ -311,14 +317,9 @@ export function registerEvents(server: McpServer, env: Env, principal: Principal
         });
         throw toProtocolError(error);
       }
-    },
-  );
-
-  server.server.setRequestHandler(
-    'events/unsubscribe',
-    { params: RAW_PARAMS },
-    async (raw, ctx) => {
-      const log = createEventsLogger('events/unsubscribe', ctx.mcpReq.id);
+    }
+    case 'events/unsubscribe': {
+      const log = createEventsLogger('events/unsubscribe', requestId);
       try {
         const input = parseUnsubscribeInput(raw, log);
         const result = await unsubscribeEvents(env, principal, input, log);
@@ -332,8 +333,8 @@ export function registerEvents(server: McpServer, env: Env, principal: Principal
         });
         throw toProtocolError(error);
       }
-    },
-  );
+    }
+  }
 }
 
 export type EventsCapabilities = ServerCapabilities & {
