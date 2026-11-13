@@ -24,13 +24,16 @@ const SPA_ROUTE_SET: ReadonlySet<string> = new Set(SPA_ROUTES);
 /**
  * 解析 `WEB_SPA_ROUTES`。
  *
- * 默认空集合 = 全部 legacy；未知名称忽略，避免拼写错误把未部署页面打开。
+ * - 空值 = 全部 legacy（默认，仍可在一次重启内回退）；
+ * - `all` = 全部已实现 route，便于本地/验收一次打开；
+ * - 未知名称忽略，避免拼写错误把未部署页面打开。
  */
 export function parseSpaRoutes(value: string | undefined): ReadonlySet<SpaRoute> {
   if (!value) return new Set();
   const routes = new Set<SpaRoute>();
   for (const raw of value.split(',')) {
     const name = raw.trim().toLowerCase();
+    if (name === 'all') return new Set(SPA_ROUTES);
     if (SPA_ROUTE_SET.has(name)) routes.add(name as SpaRoute);
   }
   return routes;

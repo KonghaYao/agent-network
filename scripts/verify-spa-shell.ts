@@ -116,6 +116,11 @@ async function main() {
   const parsed = parseSpaRoutes(' home , ROOM,unknown,share ');
   checkEqual('known routes parsed', [...parsed].sort().join(','), 'home,room,share');
   checkEqual('unknown route ignored', parseSpaRoutes('nope').size, 0);
+  checkEqual(
+    'all expands to every implemented route',
+    [...parseSpaRoutes('all')].sort().join(','),
+    'home,join,pair,room,share',
+  );
   checkEqual('missing manifest returns null', await missingManifest(), null);
   checkEqual('broken manifest returns null', await brokenManifest(), null);
 
@@ -284,11 +289,11 @@ async function main() {
 
     spaAll = await startTestServer({
       tag: 'spa-multi',
-      env: { ENVIRONMENT: 'test', WEB_SPA_ROUTES: 'home,room', WEB_DIST_DIR: DIST },
+      env: { ENVIRONMENT: 'test', WEB_SPA_ROUTES: 'all', WEB_DIST_DIR: DIST },
     });
     const multiHome = await fetchText(`${spaAll.base}/`);
     check(
-      'multi route config still renders implemented home',
+      'all route config renders implemented home',
       multiHome.text.includes('data-spa-route="home"'),
     );
     const multiRoom = await fetchText(`${spaAll.base}/c/room-test`);

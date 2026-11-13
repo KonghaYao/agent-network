@@ -272,8 +272,10 @@ export function useRoomChat(roomId: string) {
     refreshTimerRef.current = setTimeout(() => {
       refreshTimerRef.current = null;
       void queryClient.invalidateQueries({ queryKey: detailKey });
+      // 文件面板可见时才存在活动查询；不可见时仅标脏，不额外发请求。
+      void queryClient.invalidateQueries({ queryKey: queryKeys.roomFiles(roomId) });
     }, LIMITS.webRefreshDebounceMs);
-  }, [detailKey, queryClient, token]);
+  }, [detailKey, queryClient, roomId, token]);
 
   const stream = useActorStream({ token, onEvent: scheduleRefresh });
 

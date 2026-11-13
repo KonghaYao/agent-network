@@ -8,6 +8,7 @@ export const queryKeys = {
   session: () => ['session'] as const,
   rooms: (actorId: string | null) => ['rooms', actorId ?? 'anonymous'] as const,
   room: (roomId: string) => ['room', roomId] as const,
+  roomFiles: (roomId: string) => ['room', roomId, 'files'] as const,
   history: (roomId: string, timeline: boolean) =>
     ['room', roomId, 'history', timeline ? 'timeline' : 'default'] as const,
   contacts: (actorId: string | null) => ['contacts', actorId ?? 'anonymous'] as const,

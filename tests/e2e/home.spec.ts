@@ -98,7 +98,7 @@ const SPA_ENABLED =
   (process.env.WEB_SPA_ROUTES ?? '')
     .split(',')
     .map((value) => value.trim())
-    .includes('home');
+    .some((value) => value === 'home' || value === 'all');
 
 test.describe('SPA Home', () => {
   test.skip(!SPA_ENABLED, '需要 WEB_SPA_ROUTES=home E2E_SPA=1 才运行 React Home 用例');

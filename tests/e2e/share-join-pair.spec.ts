@@ -106,7 +106,7 @@ const ROUTES = (process.env.WEB_SPA_ROUTES ?? '')
   .map((value) => value.trim());
 const ENABLED =
   process.env.E2E_SPA === '1' &&
-  ['share', 'join', 'pair'].every((route) => ROUTES.includes(route));
+  (ROUTES.includes('all') || ['share', 'join', 'pair'].every((route) => ROUTES.includes(route)));
 
 test.describe('SPA Share / Join / Pair', () => {
   test.skip(!ENABLED, '需要 WEB_SPA_ROUTES=home,room,share,join,pair E2E_SPA=1');

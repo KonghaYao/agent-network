@@ -2,7 +2,13 @@ import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 
 import type { RoomView } from '../../lib/chat';
 
-export type RoomOverlay = 'members' | 'announcement' | 'rename' | 'report' | 'leave';
+export type RoomOverlay =
+  | 'members'
+  | 'announcement'
+  | 'rename'
+  | 'report'
+  | 'leave'
+  | 'transfer';
 
 /**
  * 聊天头部菜单：群成员/公告/改名/举报/退群。
@@ -24,6 +30,7 @@ export function RoomMenu({
   const canAnnounce = group && room.capabilities?.manage_announcement === true;
   const canLeave = group && room.can_leave !== false;
   const canReport = !group && peerName !== null;
+  const canTransfer = !group && room.peer_can_manage === true;
 
   return (
     <DropdownMenuPrimitive.Root>
@@ -41,7 +48,7 @@ export function RoomMenu({
       <DropdownMenuPrimitive.Portal>
         <DropdownMenuPrimitive.Content
           id="room-menu"
-          className="room-menu"
+          className="room-menu spa-menu"
           aria-label="会话操作"
           sideOffset={6}
           align="end"
@@ -80,6 +87,15 @@ export function RoomMenu({
               onSelect={() => onOpen('report')}
             >
               举报 {peerName}
+            </DropdownMenuPrimitive.Item>
+          ) : null}
+          {canTransfer ? (
+            <DropdownMenuPrimitive.Item
+              id="room-menu-transfer"
+              className="room-menu-item"
+              onSelect={() => onOpen('transfer')}
+            >
+              交接管理权
             </DropdownMenuPrimitive.Item>
           ) : null}
           {canLeave ? (
