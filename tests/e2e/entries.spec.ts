@@ -5,7 +5,6 @@ import { resolve } from 'node:path';
 
 /**
  * 4B-5b 剩余入口：好友申请、设备配对与已归档 Agents。
- * 需要 `WEB_SPA_ROUTES=all E2E_SPA=1 bun run test:e2e`。
  */
 
 async function baseUrl(): Promise<string> {
@@ -113,14 +112,6 @@ interface AgentGetPage {
   items: { actor_id: string; archived: boolean }[];
 }
 
-const ROUTES = (process.env.WEB_SPA_ROUTES ?? '')
-  .split(',')
-  .map((value) => value.trim());
-const SPA_ENABLED =
-  process.env.E2E_SPA === '1' &&
-  (ROUTES.includes('all') ||
-    ['home', 'room', 'share', 'join', 'pair'].every((route) => ROUTES.includes(route)));
-
 async function login(page: Page, base: string, token: string): Promise<void> {
   await page.addInitScript((value) => {
     try {
@@ -176,7 +167,6 @@ async function openAccountMenu(page: Page): Promise<void> {
 }
 
 test.describe('SPA 剩余入口', () => {
-  test.skip(!SPA_ENABLED, '需要 WEB_SPA_ROUTES=all E2E_SPA=1');
 
   test('好友申请可列出、接受、拒绝与撤销，并同步角标和会话列表', async ({ page }) => {
     const base = await baseUrl();

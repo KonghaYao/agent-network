@@ -11,30 +11,34 @@ async function baseUrl(): Promise<string> {
 }
 
 /**
- * 基础设施冒烟用例：只有显式运行 `bun run test:e2e` 才执行。
- * 默认测试清单不包含 Playwright。
+ * 4B-6 壳冒烟：legacy 默认页已删除，`/` 与 `/c/*` 始终输出 React 壳。
+ * Home 的列表/搜索/SSE 细节在 `home.spec.ts`。
  */
-test('legacy home remains the default shell', async ({ request }) => {
-  test.skip(process.env.E2E_SPA === '1', 'E2E_SPA=1 时 `/` 由 React Home 接管');
+test('home always renders the React shell', async ({ request }) => {
   const base = await baseUrl();
   const response = await request.get(`${base}/`);
   expect(response.ok()).toBe(true);
   const html = await response.text();
-  expect(html).toContain('id="room-search"');
-  expect(html).not.toContain('data-spa-route');
+  expect(html).toContain('data-spa-route="home"');
+  expect(html).toContain('id="spa-bootstrap"');
+  expect(html).not.toContain('initialRoomId');
+  expect(html).not.toContain('/assets/chat-resizer.js');
 });
 
-/**
- * SPA 壳冒烟用例需要 `WEB_SPA_ROUTES=home E2E_SPA=1`；Home 的列表/搜索/SSE
- * 细节在 `home.spec.ts`，默认测试清单不包含 Playwright。
- */
-test.describe('SPA shell placeholder', () => {
-  test.skip(!process.env.E2E_SPA, 'SPA routes are not enabled in Sprint 0');
+test('room renders the React chat shell', async ({ request }) => {
+  const base = await baseUrl();
+  const response = await request.get(`${base}/c/room-placeholder`);
+  expect(response.ok()).toBe(true);
+  const html = await response.text();
+  expect(html).toContain('data-spa-route="room"');
+  expect(html).toContain('class="wide page-room"');
+  expect(html).not.toContain('initialRoomId');
+});
 
-  test('home renders the React shell when enabled', async ({ page }) => {
-    const base = await baseUrl();
-    await page.goto(`${base}/`);
-    await expect(page.locator('body[data-spa-route="home"]')).toBeVisible();
-    await expect(page.locator('#root')).toContainText('WeBots');
-  });
+test('removed legacy assets return 410', async ({ request }) => {
+  const base = await baseUrl();
+  for (const name of ['chat-resizer.js', 'chat-icons.js']) {
+    const response = await request.get(`${base}/assets/${name}`);
+    expect(response.status()).toBe(410);
+  }
 });

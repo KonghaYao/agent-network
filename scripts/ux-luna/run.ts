@@ -5,10 +5,7 @@ import { join, resolve } from 'node:path';
 // Each suite owns a fresh server, temporary SQLite store and synthetic actors.
 // Run sequentially: the fixtures also own their browser and listen port.
 const output = process.env.UX_OUTPUT || await mkdtemp(join(tmpdir(), 'webots-ux-results-'));
-const suites = [
-  'client-syntax', 'recall-fixes', 'chat-fixes', 'group-fixes',
-  'search-fixes', 'actions-fixes', 'recall-offline', 'mobile-fixes', 'responsive-layout', 'desktop-layout',
-];
+const suites = ['recall-fixes', 'search-fixes', 'react-ux'];
 for (const suite of suites) {
   console.log(`\nRunning UX suite: ${suite}`);
   const process = Bun.spawn([Bun.which('bun') || 'bun', resolve(import.meta.dir, `${suite}.ts`)], {

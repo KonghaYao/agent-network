@@ -5,7 +5,6 @@ import { resolve } from 'node:path';
 /**
  * 4B-3 Share / Join / Pair e2e。
  *
- * 需要 `WEB_SPA_ROUTES` 同时包含 share/join/pair，并显式 `E2E_SPA=1`。
  * 分享页验证 SSR/OG 与好友申请；邀请页验证预览不读群消息、确认后进入群聊；
  * 配对页验证 fragment 一次性挑战、已登录设备批准与显式切换身份。
  */
@@ -101,15 +100,7 @@ interface PairingList {
   items: { pairing_id: string; confirm_code: string | null; status: string }[];
 }
 
-const ROUTES = (process.env.WEB_SPA_ROUTES ?? '')
-  .split(',')
-  .map((value) => value.trim());
-const ENABLED =
-  process.env.E2E_SPA === '1' &&
-  (ROUTES.includes('all') || ['share', 'join', 'pair'].every((route) => ROUTES.includes(route)));
-
 test.describe('SPA Share / Join / Pair', () => {
-  test.skip(!ENABLED, '需要 WEB_SPA_ROUTES=home,room,share,join,pair E2E_SPA=1');
 
   let base = '';
   let ownerToken = '';
