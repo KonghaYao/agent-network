@@ -11,9 +11,15 @@
 import { BusinessError } from '../contracts/errors';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { LIMITS } from '../contracts/limits';
-import { getMember, getRoom } from '../storage/queries';
+import {
+  getLatestMemorySource,
+  getMemoryRepresentation,
+  getMember,
+  getRoom,
+  listMemoryRepresentationDependencies,
+  type D1Like,
+} from '../storage/queries';
 import { newId, nowMs, sha256Hex } from '../storage/db';
-import type { D1Like } from '../storage/queries';
 import {
   countsAsRawCoverage,
   isFullRawCoverage,
@@ -287,19 +293,10 @@ export async function loadRepresentationExact(
   db: D1Like,
   representationId: string,
 ): Promise<MemoryExactRepresentation | null> {
-  const row = await db
-    .prepare('SELECT * FROM memory_representations WHERE representation_id = ?')
-    .bind(representationId)
-    .first<MemoryRepresentationRow>();
+  const row = await getMemoryRepresentation(db, representationId);
   if (!row) return null;
-  const dependencies = await db
-    .prepare(
-      `SELECT * FROM memory_representation_dependencies
-        WHERE representation_id = ? ORDER BY dependency_index`,
-    )
-    .bind(representationId)
-    .all<MemoryRepresentationDependencyRow>();
-  const dependsOn: MemorySourceDependency[] = dependencies.results.map((dependency) => ({
+  const dependencies = await listMemoryRepresentationDependencies(db, representationId);
+  const dependsOn: MemorySourceDependency[] = dependencies.map((dependency) => ({
     source_id: dependency.source_id,
     source_revision: dependency.source_revision,
     representation_id: dependency.depends_on_representation_id,
@@ -569,10 +566,7 @@ async function originScopeForDerived(
   if ('source_id' in representation) sourceIds.add(representation.source_id);
   for (const dependency of representation.depends_on) sourceIds.add(dependency.source_id);
   for (const sourceId of sourceIds) {
-    const source = await db
-      .prepare('SELECT * FROM memory_sources WHERE source_id = ? ORDER BY revision DESC LIMIT 1')
-      .bind(sourceId)
-      .first<MemorySourceRow>();
+    const source = await getLatestMemorySource(db, sourceId);
     if (source?.origin_room_id) {
       return {
         room_id: source.origin_room_id,

@@ -2,7 +2,7 @@
  * 4C-0 schema parity harness。
  *
  * 1. 在内存 SQLite 应用全部 `migrations/*.sql`（唯一事实源）；
- * 2. 用 drizzle-kit 从 core schema 生成 DDL，应用到第二个内存库；
+ * 2. 用 drizzle-kit 从已登记 schema 生成 DDL，应用到第二个内存库；
  * 3. 逐表比较 columns / indexes / foreign keys / CHECK 约束；
  * 4. 生成并校验可 review 的 `tests/fixtures/schema-surface.json`；
  * 5. 验证 guard 表、FTS5 触发器与 Drizzle 生产边界：
@@ -25,6 +25,7 @@ import { getTableName } from 'drizzle-orm';
 import { migrate } from '../src/bun/migrate';
 import { GUARDS } from '../src/storage/guards';
 import { CORE_TABLES } from '../src/storage/schema/core';
+import { MEMORY_TABLES } from '../src/storage/schema/memory';
 import { stableStringify } from '../src/storage/db';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
@@ -481,9 +482,11 @@ async function main() {
   const drizzleSql = await generateDrizzleSql();
   const drizzleDb = applyDrizzleSql(drizzleSql);
   try {
-    const expectedTables: string[] = CORE_TABLES.map((table) => getTableName(table)).sort();
+    const expectedTables: string[] = [...CORE_TABLES, ...MEMORY_TABLES]
+      .map((table) => getTableName(table))
+      .sort();
     checkEqual(
-      'Drizzle 只生成 core 表',
+      'Drizzle 只生成已登记表',
       tableNames(drizzleDb).join(','),
       expectedTables.join(','),
     );
@@ -512,7 +515,7 @@ async function main() {
     const rawOnly = tableNames(migrated).filter(
       (name) => !expectedTables.includes(name) && !name.startsWith('guard_'),
     );
-    console.log(`\nDrizzle core coverage: ${expectedTables.join(', ')}`);
+    console.log(`\nDrizzle schema coverage: ${expectedTables.join(', ')}`);
     console.log(`raw-only tables (${rawOnly.length}): ${rawOnly.join(', ')}\n`);
 
     const surface = buildSurface(migrated, names, digest);

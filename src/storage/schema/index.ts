@@ -6,3 +6,4 @@
  * `drizzle-kit` 只用于 parity 生成 DDL，禁止对真实库执行 push/migrate。
  */
 export * from './core';
+export * from './memory';

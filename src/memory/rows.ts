@@ -262,6 +262,89 @@ export interface MemoryManifestRow {
   created_at: number;
 }
 
+export interface MemoryManifestItemRow {
+  manifest_id: string;
+  item_index: number;
+  selection_id: string | null;
+  representation_id: string;
+  origin_scope_json: string;
+  text_sha256: string;
+}
+
+export interface MemorySelectionRow {
+  selection_id: string;
+  space_id: string;
+  ownership_epoch: number;
+  agent_actor_id: string;
+  recall_id: string | null;
+  representation_id: string;
+  origin_scope_json: string;
+  target_scope_json: string;
+  versions_json: string;
+  consumption: 'not_consumed';
+  state: 'available' | 'expired';
+  issued_at: number;
+  expires_at: number | null;
+}
+
+export interface MemoryCatchupPlanRow {
+  plan_id: string;
+  space_id: string;
+  ownership_epoch: number;
+  agent_actor_id: string;
+  room_id: string;
+  member_generation: number;
+  upper_bound: number;
+  query: string;
+  status: 'ready' | 'partial' | 'missing_required' | 'expired';
+  budget_json: string;
+  scan_cursor_json: string | null;
+  created_at: number;
+  updated_at: number;
+  expires_at: number | null;
+  request_key: string | null;
+  request_sha256: string | null;
+  policy_revision: number;
+  member_seq: number;
+  joined_seq: number;
+  snapshot_sha256: string | null;
+}
+
+export interface MemoryCatchupItemRow {
+  plan_id: string;
+  item_index: number;
+  message_id: string;
+  created_seq: number;
+  selection_state: 'selected' | 'not_selected' | 'missing';
+  reason: string | null;
+}
+
+export interface MemoryRecallRequestRow {
+  recall_id: string;
+  space_id: string;
+  ownership_epoch: number;
+  agent_actor_id: string;
+  request_key: string;
+  mode: string;
+  dispatch: 'explicit' | 'auto';
+  status:
+    | 'pending'
+    | 'ready'
+    | 'empty'
+    | 'unavailable'
+    | 'unsupported'
+    | 'disabled'
+    | 'skipped_no_boundary';
+  target_json: string | null;
+  plan_json: string | null;
+  budget_json: string | null;
+  warmup_only: number;
+  result_json: string | null;
+  created_at: number;
+  updated_at: number;
+  expires_at: number | null;
+}
+
 export interface MemoryContextRow {
   context_id: string;
   space_id: string;

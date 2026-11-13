@@ -13,7 +13,17 @@
 import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
 import { nowMs, sha256Hex, stableStringify } from '../storage/db';
-import type { D1Like } from '../storage/queries';
+import {
+  getActiveMemoryHostBindingBySession,
+  getLatestActiveMemoryHostBinding,
+  getLatestMemoryReceiptForManifest,
+  getMemoryHostBinding,
+  getMemoryManifest,
+  getMemorySelection,
+  hasMemoryGatewayProof,
+  hasMemoryReceiptForManifest,
+  type D1Like,
+} from '../storage/queries';
 import {
   assertHostProtocolVersion,
   assertNoClientTrustClaims,
@@ -58,7 +68,7 @@ import {
 import { loadRepresentationExact } from './experience-source';
 import { getSource } from './store';
 import { bindMemoryHost } from './store-objects';
-import type { MemoryHostBindingRow, MemoryManifestRow, MemoryReceiptRow } from './rows';
+import type { MemoryHostBindingRow } from './rows';
 import {
   assertDeliveryAttemptUnchanged,
   resolveMessageContextTarget,
@@ -225,13 +235,11 @@ export class MemoryHostBridge {
       expected: this.#options.space,
       at,
     });
-    const existing = await this.#db
-      .prepare(
-        `SELECT * FROM memory_host_bindings
-          WHERE space_id = ? AND session_incarnation = ? AND state = 'active'`,
-      )
-      .bind(context.space.space_id, sessionIncarnation)
-      .first<MemoryHostBindingRow>();
+    const existing = await getActiveMemoryHostBindingBySession(
+      this.#db,
+      context.space.space_id,
+      sessionIncarnation,
+    );
     // 显式 session 的重复 bind 视为新的运行代次：旧 generation 立即失效，
     // 避免宿主 run 重启后旧 run 仍能接收迟到补充。只有省略 session 时用
     // request_id 派生的稳定会话做幂等重放。
@@ -294,14 +302,11 @@ export class MemoryHostBridge {
 
   /** 当前活动绑定；用于工具层解析 generation。 */
   async activeBinding(): Promise<MemoryHostBindingRow | null> {
-    return this.#db
-      .prepare(
-        `SELECT * FROM memory_host_bindings
-          WHERE space_id = ? AND agent_actor_id = ? AND state = 'active'
-          ORDER BY created_at DESC LIMIT 1`,
-      )
-      .bind(this.#options.space.space_id, this.#options.agentId)
-      .first<MemoryHostBindingRow>();
+    return getLatestActiveMemoryHostBinding(
+      this.#db,
+      this.#options.space.space_id,
+      this.#options.agentId,
+    );
   }
 
   private async requireBridgeBinding(input: {
@@ -402,22 +407,7 @@ export class MemoryHostBridge {
     let snapshotUpperBound = 0;
     let expiresAt: number | null = null;
     for (const selectionId of input.selection_ids) {
-      const row = await this.#db
-        .prepare('SELECT * FROM memory_selections WHERE selection_id = ?')
-        .bind(selectionId)
-        .first<{
-          selection_id: string;
-          space_id: string;
-          ownership_epoch: number;
-          agent_actor_id: string;
-          representation_id: string;
-          origin_scope_json: string;
-          target_scope_json: string;
-          versions_json: string;
-          state: 'available' | 'expired';
-          issued_at: number;
-          expires_at: number | null;
-        }>();
+      const row = await getMemorySelection(this.#db, selectionId);
       if (!row) {
         throw new BusinessError('MEMORY_TARGET_INVALID', 'selection 不存在', {
           reason: 'selection_missing',
@@ -587,10 +577,7 @@ export class MemoryHostBridge {
    */
   async markHostQueued(manifestId: string): Promise<MemoryInputStateView> {
     const at = this.now();
-    const manifest = await this.#db
-      .prepare('SELECT * FROM memory_manifests WHERE manifest_id = ?')
-      .bind(manifestId)
-      .first<MemoryManifestRow>();
+    const manifest = await getMemoryManifest(this.#db, manifestId);
     if (!manifest) {
       throw new BusinessError('MEMORY_TARGET_INVALID', 'manifest 不存在', {
         reason: 'manifest_missing',
@@ -610,13 +597,7 @@ export class MemoryHostBridge {
       generation: manifest.host_generation,
       at,
     });
-    const receipt = await this.#db
-      .prepare(
-        `SELECT 1 AS hit FROM memory_receipts
-          WHERE kind = 'input_exposure' AND manifest_id = ? LIMIT 1`,
-      )
-      .bind(manifest.manifest_id)
-      .first<{ hit: number }>();
+    const receipt = await hasMemoryReceiptForManifest(this.#db, manifest.manifest_id);
     if (receipt) return this.inputState(manifest.manifest_id);
     this.#queued.set(manifest.manifest_id, {
       binding_id: manifest.host_binding_id,
@@ -646,10 +627,7 @@ export class MemoryHostBridge {
   async submitExposure(report: MemoryHostExposureReport): Promise<MemoryHostExposureAck> {
     assertHostProtocolVersion(report.protocol_version);
     assertNoClientTrustClaims(report);
-    const manifest = await this.#db
-      .prepare('SELECT * FROM memory_manifests WHERE manifest_id = ?')
-      .bind(report.manifest_id)
-      .first<MemoryManifestRow>();
+    const manifest = await getMemoryManifest(this.#db, report.manifest_id);
     if (!manifest) {
       throw new BusinessError('MEMORY_TARGET_INVALID', 'manifest 不存在', {
         reason: 'manifest_missing',
@@ -760,10 +738,7 @@ export class MemoryHostBridge {
 
   /** 读取清单/回执/网关证据，明确区分 prepared、queued、submitted、observed。 */
   async inputState(manifestId: string): Promise<MemoryInputStateView> {
-    const manifest = await this.#db
-      .prepare('SELECT * FROM memory_manifests WHERE manifest_id = ?')
-      .bind(manifestId)
-      .first<MemoryManifestRow>();
+    const manifest = await getMemoryManifest(this.#db, manifestId);
     if (!manifest) {
       throw new BusinessError('NOT_FOUND', 'manifest 不存在', { manifest_id: manifestId });
     }
@@ -774,21 +749,8 @@ export class MemoryHostBridge {
     ) {
       throw new BusinessError('PERMISSION_DENIED', 'manifest 不属于当前空间');
     }
-    const receipt = await this.#db
-      .prepare(
-        `SELECT * FROM memory_receipts
-          WHERE kind = 'input_exposure' AND manifest_id = ?
-          ORDER BY recorded_at DESC LIMIT 1`,
-      )
-      .bind(manifestId)
-      .first<MemoryReceiptRow>();
-    const gateway = await this.#db
-      .prepare(
-        `SELECT 1 AS hit FROM memory_experience_proofs
-          WHERE manifest_id = ? AND evidence = 'gateway_observed_submitted' LIMIT 1`,
-      )
-      .bind(manifestId)
-      .first<{ hit: number }>();
+    const receipt = await getLatestMemoryReceiptForManifest(this.#db, manifestId);
+    const gateway = await hasMemoryGatewayProof(this.#db, manifestId);
     const retain = receipt
       ? await this.#db
           .prepare(
@@ -799,7 +761,7 @@ export class MemoryHostBridge {
       : { results: [] as { retain_id: string }[] };
     const queued = this.#queued.get(manifestId);
     const submittedEvidence =
-      gateway?.hit === 1
+      gateway
         ? 'gateway_observed_submitted'
         : receipt?.evidence === 'host_reported_submitted'
           ? 'host_reported_submitted'
@@ -831,10 +793,7 @@ export class MemoryHostBridge {
   }): Promise<{ closed: boolean; binding_id: string; generation: number; reason: string }> {
     const at = this.now();
     const row = input?.binding_id
-      ? await this.#db
-          .prepare('SELECT * FROM memory_host_bindings WHERE binding_id = ?')
-          .bind(input.binding_id)
-          .first<MemoryHostBindingRow>()
+      ? await getMemoryHostBinding(this.#db, input.binding_id)
       : await this.activeBinding();
     if (!row || row.agent_actor_id !== this.#options.agentId) {
       throw new BusinessError('NOT_FOUND', 'HostBinding 不存在', {

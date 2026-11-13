@@ -9,8 +9,14 @@ import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { newId, nowMs, sha256Hex, stableStringify } from '../storage/db';
-import type { D1Like } from '../storage/queries';
-import { getMember, getRoom } from '../storage/queries';
+import {
+  getCurrentCuratedRevision,
+  getMemoryExperience,
+  getMember,
+  getRoom,
+  listCurrentCuratedMemories,
+  type D1Like,
+} from '../storage/queries';
 import {
   type MemoryAvailability,
   type MemoryCuratedId,
@@ -303,17 +309,13 @@ export async function listMemoryCurated(
     at: options.now,
   });
   const limit = Math.max(1, Math.min(options.limit ?? 50, 100));
-  const rows = await db
-    .prepare(
-      `SELECT curated_id, revision, title, content, content_sha256, origin, created_at, updated_at
-         FROM memory_curated
-        WHERE space_id = ? AND ownership_epoch = ? AND current = 1
-        ORDER BY updated_at DESC, curated_id
-        LIMIT ?`,
-    )
-    .bind(context.space.space_id, context.space.ownership_epoch, limit)
-    .all<MemoryCuratedRecord>();
-  return rows.results;
+  const rows = await listCurrentCuratedMemories(
+    db,
+    context.space.space_id,
+    context.space.ownership_epoch,
+    limit,
+  );
+  return rows;
 }
 
 export async function getMemoryCurated(
@@ -431,10 +433,7 @@ export async function putMemoryCurated(
     }
   }
   const curatedId = options.curated_id ?? newId('mcur');
-  const current = await db
-    .prepare('SELECT revision FROM memory_curated WHERE curated_id = ? AND current = 1')
-    .bind(curatedId)
-    .first<{ revision: number }>();
+  const current = await getCurrentCuratedRevision(db, curatedId);
   if (isCorrect && !current) {
     throw new BusinessError('NOT_FOUND', 'curated 记忆不存在', { curated_id: curatedId });
   }
@@ -680,10 +679,7 @@ export async function forgetMemory(
       purge: 'unknown',
     };
   }
-  const experience = await db
-    .prepare('SELECT * FROM memory_experiences WHERE experience_id = ?')
-    .bind(options.target.experience_id)
-    .first<MemoryExperienceRow>();
+  const experience = await getMemoryExperience(db, options.target.experience_id);
   if (
     !experience ||
     experience.space_id !== context.space.space_id ||

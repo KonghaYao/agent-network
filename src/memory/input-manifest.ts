@@ -12,7 +12,14 @@
  */
 import { BusinessError } from '../contracts/errors';
 import { newId, nowMs, sha256Hex, stableStringify } from '../storage/db';
-import type { D1Like } from '../storage/queries';
+import {
+  getMemoryHostBinding,
+  getMemoryManifest,
+  getMemoryManifestByInvocation,
+  getMemorySelection,
+  listMemoryManifestItems,
+  type D1Like,
+} from '../storage/queries';
 import {
   decodeUtf8Range,
   loadRepresentationExact,
@@ -122,10 +129,7 @@ export async function requireHostBinding(
     at: number;
   },
 ): Promise<MemoryHostBindingRow> {
-  const row = await db
-    .prepare('SELECT * FROM memory_host_bindings WHERE binding_id = ?')
-    .bind(input.bindingId)
-    .first<MemoryHostBindingRow>();
+  const row = await getMemoryHostBinding(db, input.bindingId);
   if (!row) {
     throw new BusinessError('MEMORY_TARGET_INVALID', 'HostBinding 不存在', {
       reason: 'host_binding_missing',
@@ -359,10 +363,7 @@ export async function buildSubmittedInputManifest(
       });
     }
     seenSelections.add(item.selection_id);
-    const selection = await db
-      .prepare('SELECT * FROM memory_selections WHERE selection_id = ?')
-      .bind(item.selection_id)
-      .first<MemorySelectionRow>();
+    const selection = await getMemorySelection(db, item.selection_id);
     if (!selection) {
       throw new BusinessError('MEMORY_TARGET_INVALID', 'selection 不存在', {
         reason: 'selection_missing',
@@ -449,20 +450,13 @@ export async function buildSubmittedInputManifest(
       items: canonicalItems,
     }),
   );
-  const existing = await db
-    .prepare(
-      `SELECT * FROM memory_manifests
-        WHERE space_id = ? AND ownership_epoch = ? AND agent_actor_id = ?
-          AND host_binding_id = ? AND invocation_id = ?`,
-    )
-    .bind(
-      context.space.space_id,
-      context.space.ownership_epoch,
-      input.agentId,
-      input.hostBindingId,
-      input.invocation.invocation_id,
-    )
-    .first<MemoryManifestRow>();
+  const existing = await getMemoryManifestByInvocation(db, {
+    spaceId: context.space.space_id,
+    ownershipEpoch: context.space.ownership_epoch,
+    agentId: input.agentId,
+    hostBindingId: input.hostBindingId,
+    invocationId: input.invocation.invocation_id,
+  });
   if (existing) {
     if (existing.manifest_sha256 !== manifestSha || existing.payload_sha256 !== actualPayloadSha) {
       throw new BusinessError('IDEMPOTENCY_CONFLICT', '同一 invocation 已绑定其他输入清单', {
@@ -534,20 +528,13 @@ export async function buildSubmittedInputManifest(
     await runMemoryBatch(db, statements);
   } catch (error) {
     // 并发同 invocation 写入由唯一索引兜底；只对账同一内容，不覆盖其他清单。
-    const raced = await db
-      .prepare(
-        `SELECT * FROM memory_manifests
-          WHERE space_id = ? AND ownership_epoch = ? AND agent_actor_id = ?
-            AND host_binding_id = ? AND invocation_id = ?`,
-      )
-      .bind(
-        context.space.space_id,
-        context.space.ownership_epoch,
-        input.agentId,
-        input.hostBindingId,
-        input.invocation.invocation_id,
-      )
-      .first<MemoryManifestRow>();
+    const raced = await getMemoryManifestByInvocation(db, {
+      spaceId: context.space.space_id,
+      ownershipEpoch: context.space.ownership_epoch,
+      agentId: input.agentId,
+      hostBindingId: input.hostBindingId,
+      invocationId: input.invocation.invocation_id,
+    });
     if (raced && raced.manifest_sha256 === manifestSha && raced.payload_sha256 === actualPayloadSha) {
       return {
         manifest: storedManifest(raced, canonicalItems),
@@ -557,10 +544,7 @@ export async function buildSubmittedInputManifest(
     }
     throw error;
   }
-  const stored = await db
-    .prepare('SELECT * FROM memory_manifests WHERE manifest_id = ?')
-    .bind(manifestId)
-    .first<MemoryManifestRow>();
+  const stored = await getMemoryManifest(db, manifestId);
   if (!stored) {
     throw new BusinessError('MEMORY_UNAVAILABLE', 'manifest 写入后无法读取');
   }
@@ -615,13 +599,8 @@ export async function loadManifestItems(
   db: D1Like,
   manifestId: string,
 ): Promise<readonly MemoryManifestItemRow[]> {
-  const rows = await db
-    .prepare(
-      `SELECT * FROM memory_manifest_items WHERE manifest_id = ? ORDER BY item_index`,
-    )
-    .bind(manifestId)
-    .all<MemoryManifestItemRow>();
-  return rows.results;
+  const rows = await listMemoryManifestItems(db, manifestId);
+  return rows;
 }
 
 export async function loadSubmittedInputManifest(
@@ -632,10 +611,7 @@ export async function loadSubmittedInputManifest(
     manifestId: string;
   },
 ): Promise<MemorySubmittedInputManifest | null> {
-  const row = await db
-    .prepare('SELECT * FROM memory_manifests WHERE manifest_id = ?')
-    .bind(options.manifestId)
-    .first<MemoryManifestRow>();
+  const row = await getMemoryManifest(db, options.manifestId);
   if (!row) return null;
   if (
     row.space_id !== options.space.space_id ||

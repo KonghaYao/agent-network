@@ -9,13 +9,19 @@
  */
 import { LIMITS } from '../contracts/limits';
 import { nowMs, sha256Hex } from '../storage/db';
-import type { D1Like } from '../storage/queries';
+import {
+  getMemoryRecallRequest,
+  getMemoryReceipt,
+  getMemoryRepresentation,
+  getMemorySourceRevision,
+  getMemorySpaceById,
+  listMemoryRepresentationDependencies,
+  type D1Like,
+} from '../storage/queries';
 import type {
   MemoryJobRow,
-  MemoryReceiptRow,
   MemoryRepresentationRow,
   MemoryRetainIntentRow,
-  MemorySourceRow,
   MemorySpaceRow,
 } from './rows';
 import {
@@ -332,10 +338,7 @@ export class MemoryRuntime {
     leaseId: string,
   ): Promise<'completed' | 'requeued' | 'unknown' | 'failed' | 'cancelled' | 'suppressed'> {
     try {
-      const space = await this.#db
-        .prepare('SELECT * FROM memory_spaces WHERE space_id = ?')
-        .bind(job.space_id)
-        .first<MemorySpaceRow>();
+      const space = await getMemorySpaceById(this.#db, job.space_id);
       const ownershipChanged =
         !space ||
         space.ownership_epoch !== job.ownership_epoch ||
@@ -600,34 +603,23 @@ export class MemoryRuntime {
     intent: MemoryRetainIntentRow,
     job: MemoryJobRow,
   ): Promise<RetainRequest> {
-    const representationRow = await this.#db
-      .prepare('SELECT * FROM memory_representations WHERE representation_id = ?')
-      .bind(intent.representation_id)
-      .first<MemoryRepresentationRow>();
+    const representationRow = await getMemoryRepresentation(
+      this.#db,
+      intent.representation_id,
+    );
     if (!representationRow) throw new Error('retain representation missing');
     const actualHash = await sha256Hex(representationRow.text);
     if (actualHash !== representationRow.text_sha256) {
       throw new Error('retain representation hash mismatch');
     }
     const representation = representationFromRow(representationRow);
-    const dependencyRows = await this.#db
-      .prepare(
-        `SELECT source_id, source_revision, depends_on_representation_id, range_start, range_end
-           FROM memory_representation_dependencies
-          WHERE representation_id = ?
-          ORDER BY dependency_index`,
-      )
-      .bind(intent.representation_id)
-      .all<{
-        source_id: string;
-        source_revision: number;
-        depends_on_representation_id: string | null;
-        range_start: number | null;
-        range_end: number | null;
-      }>();
+    const dependencyRows = await listMemoryRepresentationDependencies(
+      this.#db,
+      intent.representation_id,
+    );
     const representationWithDependencies: MemoryRepresentation = {
       ...representation,
-      depends_on: dependencyRows.results.map((row) => ({
+      depends_on: dependencyRows.map((row) => ({
         source_id: row.source_id,
         source_revision: row.source_revision,
         representation_id: row.depends_on_representation_id,
@@ -639,20 +631,18 @@ export class MemoryRuntime {
     } as MemoryRepresentation;
     let source: { source_id: string; source_revision: number } | null = null;
     if (intent.source_id && intent.source_revision !== null) {
-      const sourceRow = await this.#db
-        .prepare('SELECT * FROM memory_sources WHERE source_id = ? AND revision = ?')
-        .bind(intent.source_id, intent.source_revision)
-        .first<MemorySourceRow>();
+      const sourceRow = await getMemorySourceRevision(
+        this.#db,
+        intent.source_id,
+        intent.source_revision,
+      );
       if (!sourceRow) throw new Error('retain source missing');
       source = { source_id: sourceRow.source_id, source_revision: sourceRow.revision };
     }
     let eligibility: RetainRequest['items'][number]['eligibility'];
     if (intent.origin_kind === 'experienced') {
       const receipt = intent.receipt_id
-        ? await this.#db
-            .prepare('SELECT * FROM memory_receipts WHERE receipt_id = ?')
-            .bind(intent.receipt_id)
-            .first<MemoryReceiptRow>()
+        ? await getMemoryReceipt(this.#db, intent.receipt_id)
         : null;
       if (!receipt || !receipt.evidence) throw new Error('experienced retain missing receipt');
       eligibility = {
@@ -783,10 +773,7 @@ export class MemoryRuntime {
       });
       return 'failed';
     }
-    const recall = await this.#db
-      .prepare('SELECT * FROM memory_recall_requests WHERE recall_id = ?')
-      .bind(job.recall_id)
-      .first<{ plan_json: string | null; target_json: string | null }>();
+    const recall = await getMemoryRecallRequest(this.#db, job.recall_id);
     if (!recall) {
       await failMemoryJob(this.#db, {
         jobId: job.job_id,
@@ -853,10 +840,7 @@ export class MemoryRuntime {
       limit: this.#options.batchLimit ?? LIMITS.memoryJobBatchLimit,
       queryStatus: async (job) => {
         const ref = toJobRef(job);
-        const space = await this.#db
-          .prepare('SELECT * FROM memory_spaces WHERE space_id = ?')
-          .bind(job.space_id)
-          .first<MemorySpaceRow>();
+        const space = await getMemorySpaceById(this.#db, job.space_id);
         if (!ref || !space || space.backend_binding_epoch !== job.backend_binding_epoch) {
           return 'unsupported';
         }

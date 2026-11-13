@@ -8,7 +8,13 @@
 import { BusinessError } from '../contracts/errors';
 import { LIMITS } from '../contracts/limits';
 import { newId, nowMs, sha256Hex, stableStringify } from '../storage/db';
-import type { D1Like } from '../storage/queries';
+import {
+  getMessage,
+  getMemoryRecallRequest,
+  getMemoryRecallRequestByKey,
+  listMemoryRecallCandidates,
+  type D1Like,
+} from '../storage/queries';
 import type { MemoryRuntime } from './runtime';
 import type {
   MemoryAdapterCapabilities,
@@ -31,7 +37,6 @@ import {
 } from './access';
 import { createLookupMemoryContext, resolveContextOriginScope } from './context';
 import { loadRepresentationExact } from './experience-source';
-import { getMessage } from '../storage/queries';
 import { requireHostBinding, integrationLevel, bindingCapabilities } from './input-manifest';
 import { hostSupports } from './contracts';
 import { assertRecallMessageVisible, taskTargetUnsupported } from './target';
@@ -244,21 +249,14 @@ async function persistRecall(
     expected: options.space,
     at,
   });
-  const existing = await db
-    .prepare(
-      `SELECT recall_id, status, result_json FROM memory_recall_requests
-        WHERE space_id = ? AND request_key = ?`,
-    )
-    .bind(context.space.space_id, options.input.request_id)
-    .first<{ recall_id: string; status: string; result_json: string | null }>();
+  const existing = await getMemoryRecallRequestByKey(
+    db,
+    context.space.space_id,
+    options.input.request_id,
+  );
   if (existing) {
     const storedHash = await sha256Hex(canonical);
-    const row = await db
-      .prepare(
-        `SELECT target_json FROM memory_recall_requests WHERE recall_id = ?`,
-      )
-      .bind(existing.recall_id)
-      .first<{ target_json: string | null }>();
+    const row = await getMemoryRecallRequest(db, existing.recall_id);
     let storedTarget: { input_sha256?: string } | null = null;
     try {
       storedTarget = row?.target_json ? (JSON.parse(row.target_json) as { input_sha256?: string }) : null;
@@ -305,12 +303,11 @@ async function persistRecall(
       options.input.request_id,
     )
     .run();
-  const stored = await db
-    .prepare(
-      'SELECT recall_id FROM memory_recall_requests WHERE space_id = ? AND request_key = ?',
-    )
-    .bind(context.space.space_id, options.input.request_id)
-    .first<{ recall_id: string }>();
+  const stored = await getMemoryRecallRequestByKey(
+    db,
+    context.space.space_id,
+    options.input.request_id,
+  );
   return { recallId: stored?.recall_id ?? recallId, existing: null };
 }
 
@@ -346,36 +343,19 @@ async function buildBootstrapResult(
     expected: options.space,
     at: options.now,
   });
-  const rows = await db
-    .prepare(
-      `SELECT experience_id, origin_room_id, origin_member_generation, representation_id,
-              evidence, created_at
-         FROM memory_experiences
-        WHERE space_id = ? AND ownership_epoch = ? AND agent_actor_id = ?
-          AND available = 1 AND origin_kind = 'experienced'
-        ORDER BY created_at DESC LIMIT ?`,
-    )
-    .bind(
-      context.space.space_id,
-      context.space.ownership_epoch,
-      options.agentId,
-      options.input.budget.candidate_limit,
-    )
-    .all<{
-      experience_id: string;
-      origin_room_id: string | null;
-      origin_member_generation: number;
-      representation_id: string;
-      evidence: string | null;
-      created_at: number;
-    }>();
+  const rows = await listMemoryRecallCandidates(db, {
+    spaceId: context.space.space_id,
+    ownershipEpoch: context.space.ownership_epoch,
+    agentId: options.agentId,
+    limit: options.input.budget.candidate_limit,
+  });
   const items: MemoryRecallItem[] = [];
   const contextItems: Array<{
     exact: { representation: import('./contracts').MemoryRepresentation; text: string };
     origin_scope: import('./contracts').MemoryOriginScope;
     evidence: 'host_reported_submitted' | 'gateway_observed_submitted';
   }> = [];
-  for (const row of rows.results) {
+  for (const row of rows) {
     const evidence =
       row.evidence === 'gateway_observed_submitted'
         ? 'gateway_observed_submitted'
@@ -437,12 +417,12 @@ async function buildBootstrapResult(
     context: created ? (created.context as MemoryRecallResult['context']) : null,
     exclusions: [],
     budget_used: {
-      candidates: rows.results.length,
+      candidates: rows.length,
       packaged_bytes: contextItems.reduce(
         (sum, item) => sum + new TextEncoder().encode(item.exact.text).length,
         0,
       ),
-      truncated: rows.results.length >= options.input.budget.candidate_limit,
+      truncated: rows.length >= options.input.budget.candidate_limit,
     },
   };
 }
