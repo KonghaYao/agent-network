@@ -1,0 +1,417 @@
+/*
+ * React 页面专属样式。
+ *
+ * legacy 的 `chat-styles.ts` 仍由服务端壳输出；这里只补充 React 才有的
+ * 结构（Radix/Ariakit portal、resizable panels、拖拽覆盖层），避免改动
+ * 旧选择器。
+ */
+
+/* ---- Radix / Ariakit 浮层 ------------------------------------------------- */
+
+/*
+ * Radix 把 Content 包在固定定位的 wrapper 里；legacy 的 `.room-menu`
+ * / `.attach-menu` / `.message-action-menu` 自带 fixed/absolute，会和
+ * wrapper 的 transform 叠加。新组件统一加 `.spa-menu` 复位为静态流。
+ */
+.spa-menu {
+  position: static;
+  left: auto;
+  bottom: auto;
+}
+
+.mention-picker.spa-floating {
+  left: auto;
+  bottom: auto;
+}
+
+.spa-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgb(0 0 0 / 42%);
+  animation: spa-fade-in 120ms ease-out;
+}
+
+.spa-dialog-content {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 41;
+  transform: translate(-50%, -50%);
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(82dvh, 680px);
+  overflow-y: auto;
+  animation: spa-pop-in 140ms ease-out;
+}
+
+.spa-dialog-content.members-card {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.spa-dialog-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wx-muted);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.spa-dialog-close:hover {
+  background: var(--wx-hover);
+}
+
+.spa-dialog-button {
+  padding: 8px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--wx-line);
+  background: var(--wx-panel);
+  color: var(--wx-text);
+}
+
+.spa-dialog-button.primary,
+.spa-dialog-content button.primary {
+  /* 品牌绿 #07c160 与白字对比不足；弹窗内用更深的绿保证 AA。 */
+  background: #067d3f;
+  border-color: #067d3f;
+  color: #fff;
+}
+
+.spa-dialog-button.primary:hover,
+.spa-dialog-content button.primary:hover {
+  background: #056b36;
+  border-color: #056b36;
+}
+
+.spa-dialog-button.danger {
+  background: var(--wx-danger);
+  border-color: var(--wx-danger);
+  color: #fff;
+}
+
+.spa-dialog-button.danger:hover {
+  background: var(--wx-danger-strong);
+  border-color: var(--wx-danger-strong);
+}
+
+.spa-dialog-content button.primary.danger {
+  background: var(--wx-danger);
+  border-color: var(--wx-danger);
+  color: #fff;
+}
+
+.spa-dialog-content button.primary.danger:hover {
+  background: var(--wx-danger-strong);
+  border-color: var(--wx-danger-strong);
+}
+
+.spa-popover {
+  z-index: 35;
+  width: min(320px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid var(--wx-line);
+  border-radius: 8px;
+  background: var(--wx-panel);
+  color: var(--wx-text);
+  box-shadow: var(--wx-shadow);
+}
+
+.spa-popover-text {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+@keyframes spa-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes spa-pop-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.98);
+  }
+}
+
+/* ---- 表单 / 选择器 -------------------------------------------------------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.field > span {
+  color: #5c5c5c;
+}
+
+.spa-dialog-content .list-hint {
+  color: #5c5c5c;
+}
+
+@media (prefers-color-scheme: dark) {
+  .field > span,
+  .spa-dialog-content .list-hint,
+  .spa-member-role {
+    color: #b0b0b0;
+  }
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--wx-line);
+  border-radius: 4px;
+  background: var(--wx-panel);
+  color: var(--wx-text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.field textarea {
+  resize: vertical;
+  min-height: 88px;
+}
+
+.field-error {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--wx-unread);
+  overflow-wrap: anywhere;
+}
+
+.spa-combobox-list {
+  max-height: 220px;
+  margin: 0 0 10px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--wx-line);
+  border-radius: 6px;
+  background: var(--wx-panel);
+}
+
+.spa-combobox-item {
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.spa-combobox-item:hover,
+.spa-combobox-item[data-active-item] {
+  background: var(--wx-hover);
+}
+
+.spa-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 0;
+  margin: 0 0 6px;
+}
+
+.spa-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px 4px 3px 8px;
+  border: 1px solid var(--wx-line);
+  border-radius: 999px;
+  background: var(--wx-search);
+  font-size: 12px;
+}
+
+.spa-chip > button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--wx-muted);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.spa-chip > button:hover {
+  background: var(--wx-hover);
+  color: var(--wx-text);
+}
+
+.spa-member-list {
+  max-height: min(42dvh, 320px);
+  margin: 0 0 14px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--wx-line);
+  border-radius: 6px;
+}
+
+.spa-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.spa-member:hover {
+  background: var(--wx-hover);
+}
+
+.spa-member-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spa-member-role {
+  flex: 0 0 auto;
+  color: #5c5c5c;
+  font-size: 12px;
+}
+
+.spa-member > button {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid var(--wx-line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wx-danger-text);
+  font-size: 12px;
+}
+
+.spa-member > button:hover {
+  background: var(--wx-danger-tint);
+}
+
+/* ---- Resizable panels ----------------------------------------------------- */
+
+.spa-split {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.spa-split-sidebar {
+  display: flex;
+  min-width: 280px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.spa-split-sidebar > .sidebar {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+.spa-split-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 320px;
+  min-height: 0;
+}
+
+.spa-resizer {
+  position: relative;
+  flex: 0 0 6px;
+  width: 6px;
+  min-width: 6px;
+  align-self: stretch;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.spa-resizer:hover,
+.spa-resizer:focus-visible,
+.spa-resizer[data-separator='active'] {
+  background: var(--wx-hover);
+}
+
+.spa-resizer[data-separator='active'] {
+  background: var(--wx-green);
+}
+
+.spa-resizer-grip {
+  position: absolute;
+  inset: 0;
+  width: 1px;
+  height: 36px;
+  margin: auto;
+  border-radius: 1px;
+  background: var(--wx-line);
+}
+
+/* ---- Composer / 账号 / 公告 ----------------------------------------------- */
+
+.composer {
+  position: relative;
+}
+
+.account-more {
+  width: 24px;
+  height: 24px;
+  margin-left: 4px;
+  font-size: 16px;
+}
+
+.announcement-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--wx-line);
+  color: var(--wx-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.announcement-dot:hover {
+  background: var(--wx-hover);
+  color: var(--wx-text);
+}
+
+@media (max-width: 759px) {
+  .spa-dialog-content {
+    width: calc(100vw - 24px);
+    max-height: 86dvh;
+    border-radius: 12px;
+  }
+
+  .spa-dialog-content.members-card {
+    width: calc(100vw - 24px);
+  }
+}

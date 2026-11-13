@@ -1,11 +1,17 @@
+import * as Ariakit from '@ariakit/react';
+import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
+  type ClipboardEvent,
   type KeyboardEvent,
 } from 'react';
+import { useDropzone } from 'react-dropzone';
 
 import { LIMITS } from '../../../contracts/limits';
 import {
@@ -23,11 +29,18 @@ import {
 } from '../../lib/files';
 import { callTool } from '../../lib/mcp-client';
 import type { WebIdentity } from '../../lib/identity';
+import {
+  findMentionQuery,
+  insertMention,
+  mentionCandidates,
+  pruneSelections,
+  upsertSelection,
+  type MentionQuery,
+} from '../../lib/mentions';
 import type { SendOutcome } from '../../hooks/useSendQueue';
 
 const DRAFT_PREFIX = 'agent-network-draft-v1:';
 const MAX_TEXTAREA_HEIGHT = 96;
-const MENTION_LIMIT = 20;
 
 interface ComposerFile {
   key: string;
@@ -40,13 +53,6 @@ interface ComposerFile {
   fileId: string | null;
   publicUrl: string | null;
   error: string;
-}
-
-interface MentionState {
-  start: number;
-  end: number;
-  items: RoomMember[];
-  active: number;
 }
 
 export interface ComposerSendInput {
@@ -96,6 +102,13 @@ function fileMeta(file: ComposerFile): string {
   return formatFileSize(file.size);
 }
 
+/**
+ * 输入区：IME、1–4 行自适应、@ 提及、附件上传与拖放。
+ *
+ * - 提及用 Ariakit Combobox，textarea 不替换；组合输入期间不打开候选；
+ * - 附件仍走 XHR 上传进度与 `network_room_file_bind`；
+ * - react-dropzone 只接管拖拽/粘贴入口，点击上传保持原按钮。
+ */
 export function Composer({
   room,
   members,
@@ -111,15 +124,18 @@ export function Composer({
   const [text, setText] = useState(() => readDraft(key));
   const [files, setFiles] = useState<ComposerFile[]>([]);
   const [selections, setSelections] = useState<MentionSelection[]>([]);
-  const [mention, setMention] = useState<MentionState | null>(null);
-  const [attachOpen, setAttachOpen] = useState(false);
+  const [mention, setMention] = useState<MentionQuery | null>(null);
   const [localSending, setLocalSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const pendingCaretRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
   const compositionEndedAtRef = useRef(0);
+  const suppressEnterRef = useRef(false);
   const sendingRef = useRef(false);
   const mountedRef = useRef(true);
+
+  const combobox = Ariakit.useComboboxStore({ defaultOpen: false });
 
   useEffect(() => {
     mountedRef.current = true;
@@ -139,6 +155,17 @@ export function Composer({
     saveDraft(key, text);
   }, [key, text]);
 
+  // 插入提及后必须在本帧内把光标放到尾随空格之后；rAF 会晚于快速键入。
+  useLayoutEffect(() => {
+    const caret = pendingCaretRef.current;
+    if (caret === null) return;
+    const element = textareaRef.current;
+    if (!element) return;
+    element.focus();
+    element.setSelectionRange(caret, caret);
+    pendingCaretRef.current = null;
+  }, [text]);
+
   useEffect(() => {
     const element = textareaRef.current;
     if (!element) return;
@@ -148,25 +175,34 @@ export function Composer({
     element.style.overflowY = element.scrollHeight > MAX_TEXTAREA_HEIGHT ? 'auto' : 'hidden';
   }, [text]);
 
+  const comboboxOpen = Ariakit.useStoreState(combobox, 'open');
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    // 点击外部/焦点离开时 Ariakit 会自行关闭；同步清掉触发查询，避免
+    // `hidden={mention === null}` 把已经关闭的浮层重新显示出来。
+    if (wasOpenRef.current && !comboboxOpen) setMention(null);
+    wasOpenRef.current = comboboxOpen;
+  }, [comboboxOpen]);
+
+  // 候选列表由 Ariakit 管 open/active id；这里只同步触发查询。
+  useEffect(() => {
+    if (mention) {
+      combobox.setInputValue(mention.query);
+      combobox.setOpen(true);
+    } else {
+      combobox.setOpen(false);
+    }
+  }, [combobox, mention]);
+
+  const candidates = useMemo(
+    () => (mention ? mentionCandidates(members, identity.actor_id, mention.query) : []),
+    [mention, members, identity.actor_id],
+  );
+
   const uploading = files.some((file) => file.status === 'uploading');
   const busy = sending || localSending;
   const readyFiles = files.filter((file) => file.status === 'ready' && file.publicUrl);
   const canSend = !busy && !uploading && !room.read_only && (text.trim().length > 0 || readyFiles.length > 0);
-
-  const candidateMembers = useCallback(
-    (query: string) => {
-      const lower = query.toLowerCase();
-      const items: RoomMember[] = [];
-      for (const member of members.values()) {
-        if (member.actor_id === identity.actor_id) continue;
-        if (lower && !member.name.toLowerCase().includes(lower)) continue;
-        items.push(member);
-        if (items.length >= MENTION_LIMIT) break;
-      }
-      return items;
-    },
-    [members, identity.actor_id],
-  );
 
   const refreshMention = useCallback(
     (value: string, caret: number) => {
@@ -174,42 +210,26 @@ export function Composer({
         setMention(null);
         return;
       }
-      const before = value.slice(0, caret);
-      const match = /@([^\s@]*)$/u.exec(before);
-      if (!match) {
-        setMention(null);
-        return;
-      }
-      const query = match[1] ?? '';
-      const items = candidateMembers(query);
-      const start = caret - query.length - 1;
-      setMention((previous) => ({
-        start,
-        end: caret,
-        items,
-        active: previous && previous.start === start ? Math.min(previous.active, items.length - 1) : 0,
-      }));
+      setMention(findMentionQuery(value, caret));
     },
-    [candidateMembers, room.kind],
+    [room.kind],
   );
 
-  const insertMention = (member: RoomMember) => {
+  const pickMention = (member: RoomMember) => {
     if (!mention) return;
-    const value = `${text.slice(0, mention.start)}@${member.name} ${text.slice(mention.end)}`;
-    const caret = mention.start + member.name.length + 2;
-    setText(value);
-    setSelections((previous) => {
-      const next = previous.filter((item) => item.actor_id !== member.actor_id);
-      next.push({ actor_id: member.actor_id, name: member.name, kind: member.kind });
-      return next;
-    });
+    const insertion = insertMention(text, mention, member);
+    /*
+     * Ariakit 可能在同一次 Enter 事件里先完成选择，再轮到我们的 keydown；
+     * 如果此时 mention 已变成 null，就会把“选择”当成“发送”。用一次性
+     * 标记挡住同一事件里的 Enter，宏任务结束后自动失效，不影响下一次。
+     */
+    suppressEnterRef.current = true;
+    pendingCaretRef.current = insertion.caret;
+    setText(insertion.text);
+    setSelections((previous) => upsertSelection(previous, insertion.selection));
     setMention(null);
-    requestAnimationFrame(() => {
-      const element = textareaRef.current;
-      if (!element) return;
-      element.focus();
-      element.setSelectionRange(caret, caret);
-    });
+    combobox.setInputValue('');
+    combobox.hide();
   };
 
   const updateFile = (fileKey: string, patch: Partial<ComposerFile>) => {
@@ -218,47 +238,57 @@ export function Composer({
     );
   };
 
-  const addFiles = (fileList: FileList | File[]) => {
-    const incoming = Array.from(fileList);
-    for (const file of incoming) {
-      const fileKey = `cf_${crypto.randomUUID()}`;
-      const entry: ComposerFile = {
-        key: fileKey,
-        name: file.name,
-        size: file.size,
-        mime: file.type,
-        status: 'uploading',
-        percent: 0,
-        phase: 'upload',
-        fileId: null,
-        publicUrl: null,
-        error: '',
-      };
-      setFiles((previous) => [...previous, entry]);
-      void (async () => {
-        try {
-          const uploaded = await uploadFileToDrive(file, token, (percent) => {
-            if (mountedRef.current) updateFile(fileKey, { percent });
-          });
-          if (mountedRef.current) updateFile(fileKey, { percent: 100, phase: 'join' });
-          const bound = await bindFileToRoom(room.room_id, uploaded.file_id, token);
-          if (!mountedRef.current) return;
-          updateFile(fileKey, {
-            status: 'ready',
-            percent: 100,
-            fileId: bound.file_id,
-            publicUrl: bound.public_url,
-            mime: bound.mime_type || file.type,
-          });
-        } catch (error) {
-          if (!mountedRef.current) return;
-          const message = (error as Error).message || '上传失败';
-          updateFile(fileKey, { status: 'failed', error: message });
-          onStatus(`上传「${file.name}」失败：${message}`);
-        }
-      })();
-    }
-  };
+  const addFiles = useCallback(
+    (fileList: FileList | File[]) => {
+      const incoming = Array.from(fileList);
+      for (const file of incoming) {
+        const fileKey = `cf_${crypto.randomUUID()}`;
+        const entry: ComposerFile = {
+          key: fileKey,
+          name: file.name,
+          size: file.size,
+          mime: file.type,
+          status: 'uploading',
+          percent: 0,
+          phase: 'upload',
+          fileId: null,
+          publicUrl: null,
+          error: '',
+        };
+        setFiles((previous) => [...previous, entry]);
+        void (async () => {
+          try {
+            const uploaded = await uploadFileToDrive(file, token, (percent) => {
+              if (mountedRef.current) updateFile(fileKey, { percent });
+            });
+            if (mountedRef.current) updateFile(fileKey, { percent: 100, phase: 'join' });
+            const bound = await bindFileToRoom(room.room_id, uploaded.file_id, token);
+            if (!mountedRef.current) return;
+            updateFile(fileKey, {
+              status: 'ready',
+              percent: 100,
+              fileId: bound.file_id,
+              publicUrl: bound.public_url,
+              mime: bound.mime_type || file.type,
+            });
+          } catch (error) {
+            if (!mountedRef.current) return;
+            const message = (error as Error).message || '上传失败';
+            updateFile(fileKey, { status: 'failed', error: message });
+            onStatus(`上传「${file.name}」失败：${message}`);
+          }
+        })();
+      }
+    },
+    [onStatus, room.room_id, token],
+  );
+
+  const { getRootProps, isDragActive } = useDropzone({
+    noClick: true,
+    noKeyboard: true,
+    multiple: true,
+    onDrop: addFiles,
+  });
 
   const removeFile = async (file: ComposerFile) => {
     if (file.status === 'ready' && file.fileId) {
@@ -311,6 +341,12 @@ export function Composer({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // 非 Enter 的按键说明已离开选择动作，清掉一次性标记。
+    if (event.key !== 'Enter') suppressEnterRef.current = false;
+    if (event.key === 'Enter' && suppressEnterRef.current) {
+      event.preventDefault();
+      return;
+    }
     const native = event.nativeEvent;
     const composing = composingRef.current || native.isComposing || native.keyCode === 229;
     if (composing) return;
@@ -319,30 +355,14 @@ export function Composer({
       return;
     }
     if (mention) {
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault();
-        setMention((previous) => {
-          if (!previous || previous.items.length === 0) return previous;
-          const direction = event.key === 'ArrowDown' ? 1 : -1;
-          return {
-            ...previous,
-            active:
-              (previous.active + direction + previous.items.length) % previous.items.length,
-          };
-        });
-        return;
-      }
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        const target = mention.items[mention.active];
-        if (target) insertMention(target);
-        return;
-      }
       if (event.key === 'Escape') {
         event.preventDefault();
         setMention(null);
+        combobox.hide();
         return;
       }
+      // 方向键与 Enter 交给 Ariakit 选择候选；不要在打开候选时发送。
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter') return;
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -353,82 +373,95 @@ export function Composer({
   const onChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
     const value = event.target.value;
     setText(value);
+    setSelections((previous) => pruneSelections(previous, value, members));
     const caret = event.target.selectionStart ?? value.length;
     if (!composingRef.current) refreshMention(value, caret);
   };
 
-  const mentionOptions = mention?.items ?? [];
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = Array.from(event.clipboardData.files ?? []);
+    if (pasted.length === 0) return;
+    event.preventDefault();
+    addFiles(pasted);
+  };
 
   return (
     <>
-      <div
+      <Ariakit.ComboboxPopover
+        store={combobox}
         id="mention-picker"
-        className="mention-picker"
-        role="listbox"
+        className="mention-picker spa-floating"
         aria-label="选择要 @ 的成员"
         hidden={mention === null}
+        unmountOnHide
+        fitViewport
+        getAnchorRect={() => textareaRef.current?.getBoundingClientRect() ?? null}
       >
-        {mention && mentionOptions.length === 0 ? (
-          <p className="list-hint">
-            {(mention ? text.slice(mention.start + 1, mention.end) : '') ? '没有匹配成员' : '房间还没有其他成员'}
-          </p>
+        {mention && candidates.length === 0 ? (
+          <p className="list-hint">{mention.query ? '没有匹配成员' : '房间还没有其他成员'}</p>
         ) : null}
-        {mentionOptions.map((member, index) => (
-          <button
+        {candidates.map((member) => (
+          <Ariakit.ComboboxItem
             key={member.actor_id}
-            type="button"
-            className={`mention-item${index === mention?.active ? ' keyboard-active' : ''}`}
-            role="option"
+            className="mention-item"
+            value={member.name}
             id={`mention-option-${member.actor_id.replace(/[^a-zA-Z0-9_-]/gu, '-')}`}
             data-actor-id={member.actor_id}
-            aria-selected={index === mention?.active}
-            style={{ backgroundColor: index === mention?.active ? 'var(--wx-hover)' : undefined }}
-            onMouseDown={(event) => {
-              event.preventDefault();
-              insertMention(member);
-            }}
+            focusOnHover
+            onClick={() => pickMention(member)}
           >
             <span>{member.name}</span>
             <span className="mention-kind">{member.kind === 'agent' ? 'Agent' : '人'}</span>
-          </button>
+          </Ariakit.ComboboxItem>
         ))}
-      </div>
+      </Ariakit.ComboboxPopover>
       <form
-        id="composer"
-        className="composer"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submit();
-        }}
+        {...getRootProps({
+          id: 'composer',
+          className: 'composer',
+          onSubmit: (event) => {
+            event.preventDefault();
+            void submit();
+          },
+        })}
       >
-        <button
-          className="attach-btn"
-          id="attach-file"
-          type="button"
-          aria-label="添加附件"
-          aria-haspopup="menu"
-          aria-controls="attach-menu"
-          aria-expanded={attachOpen}
-          title="添加附件"
-          disabled={room.read_only}
-          onClick={() => setAttachOpen((value) => !value)}
-        >
-          +
-        </button>
-        <div className="attach-menu" id="attach-menu" role="menu" aria-label="添加附件" hidden={!attachOpen}>
-          <button
-            className="attach-menu-item"
-            id="attach-menu-file"
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setAttachOpen(false);
-              fileInputRef.current?.click();
-            }}
-          >
-            上传文件
-          </button>
+        <div id="composer-drop" className="composer-drop" hidden={!isDragActive}>
+          <span className="composer-drop-title">松开上传附件</span>
+          <span className="composer-drop-hint">支持拖拽多个文件，上传后随消息发送</span>
         </div>
+        <DropdownMenuPrimitive.Root>
+          <DropdownMenuPrimitive.Trigger asChild>
+            <button
+              className="attach-btn"
+              id="attach-file"
+              type="button"
+              aria-label="添加附件"
+              aria-haspopup="menu"
+              aria-controls="attach-menu"
+              title="添加附件"
+              disabled={room.read_only}
+            >
+              +
+            </button>
+          </DropdownMenuPrimitive.Trigger>
+          <DropdownMenuPrimitive.Portal>
+            <DropdownMenuPrimitive.Content
+              id="attach-menu"
+              className="attach-menu spa-menu"
+              aria-label="添加附件"
+              sideOffset={6}
+              align="start"
+            >
+              <DropdownMenuPrimitive.Item
+                className="attach-menu-item"
+                id="attach-menu-file"
+                onSelect={() => fileInputRef.current?.click()}
+              >
+                上传文件
+              </DropdownMenuPrimitive.Item>
+            </DropdownMenuPrimitive.Content>
+          </DropdownMenuPrimitive.Portal>
+        </DropdownMenuPrimitive.Root>
         <input
           id="composer-file-input"
           ref={fileInputRef}
@@ -480,43 +513,53 @@ export function Composer({
               </div>
             ))}
           </div>
-          <textarea
-            id="body"
-            ref={textareaRef}
-            rows={1}
-            maxLength={LIMITS.messageBodyBytes}
-            placeholder="输入消息…"
-            aria-label="消息正文"
-            aria-controls="mention-picker"
-            aria-expanded={mention !== null}
-            aria-activedescendant={
-              mention && mention.items[mention.active]
-                ? `mention-option-${mention.items[mention.active]!.actor_id.replace(/[^a-zA-Z0-9_-]/gu, '-')}`
-                : undefined
-            }
+          <Ariakit.Combobox
+            store={combobox}
             value={text}
-            onChange={onChange}
-            onKeyDown={onKeyDown}
-            onKeyUp={(event) => {
-              if (composingRef.current) return;
-              const caret = event.currentTarget.selectionStart ?? text.length;
-              refreshMention(text, caret);
-            }}
-            onClick={(event) => {
-              if (composingRef.current) return;
-              refreshMention(text, event.currentTarget.selectionStart ?? text.length);
-            }}
-            onCompositionStart={() => {
-              composingRef.current = true;
-            }}
-            onCompositionEnd={() => {
-              composingRef.current = false;
-              compositionEndedAtRef.current = Date.now();
-              const element = textareaRef.current;
-              if (element) {
-                refreshMention(element.value, element.selectionStart ?? element.value.length);
-              }
-            }}
+            setValueOnChange={false}
+            showOnChange={false}
+            showOnKeyPress={false}
+            showOnClick={false}
+            autoSelect
+            render={
+              <textarea
+                id="body"
+                ref={textareaRef}
+                rows={1}
+                maxLength={LIMITS.messageBodyBytes}
+                placeholder="输入消息…"
+                aria-label="消息正文"
+                aria-controls="mention-picker"
+                onChange={onChange}
+                onKeyDown={onKeyDown}
+                onPaste={onPaste}
+                onKeyUp={(event) => {
+                  if (event.key === 'Enter' && suppressEnterRef.current) {
+                    suppressEnterRef.current = false;
+                    return;
+                  }
+                  if (composingRef.current) return;
+                  const caret = event.currentTarget.selectionStart ?? text.length;
+                  refreshMention(event.currentTarget.value, caret);
+                }}
+                onClick={(event) => {
+                  if (composingRef.current) return;
+                  refreshMention(
+                    event.currentTarget.value,
+                    event.currentTarget.selectionStart ?? text.length,
+                  );
+                }}
+                onCompositionStart={() => {
+                  composingRef.current = true;
+                }}
+                onCompositionEnd={(event) => {
+                  composingRef.current = false;
+                  compositionEndedAtRef.current = Date.now();
+                  const element = event.currentTarget;
+                  refreshMention(element.value, element.selectionStart ?? element.value.length);
+                }}
+              />
+            }
           />
         </div>
         <button className="send-btn primary" id="send" type="submit" disabled={!canSend}>

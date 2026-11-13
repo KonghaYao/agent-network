@@ -3,6 +3,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppShell } from '../app/AppShell';
 import { Composer, type ComposerSendInput } from '../features/chat/Composer';
 import { Timeline } from '../features/chat/Timeline';
+import { AnnouncementDialog } from '../features/overlays/AnnouncementDialog';
+import { AnnouncementPopover } from '../features/overlays/AnnouncementPopover';
+import { LeaveRoomDialog } from '../features/overlays/LeaveRoomDialog';
+import { MembersDialog } from '../features/overlays/MembersDialog';
+import { RenameRoomDialog } from '../features/overlays/RenameRoomDialog';
+import { ReportDialog } from '../features/overlays/ReportDialog';
+import { RoomMenu, type RoomOverlay } from '../features/overlays/RoomMenu';
 import { useRoomChat } from '../hooks/useRoomChat';
 import { useSendQueue } from '../hooks/useSendQueue';
 import {
@@ -35,6 +42,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const [status, setStatus] = useState('');
   const [reply, setReply] = useState<{ messageId: string; label: string } | null>(null);
   const [forcePinToken, setForcePinToken] = useState(0);
+  const [overlay, setOverlay] = useState<RoomOverlay | null>(null);
 
   const identity = chat.session?.identity ?? null;
   const token = chat.session?.token ?? null;
@@ -61,6 +69,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
   useEffect(() => {
     setReply(null);
     setStatus('');
+    setOverlay(null);
   }, [roomId]);
 
   useEffect(() => {
@@ -159,90 +168,146 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const ready = chat.status === 'ready' && Boolean(room && identity && token);
 
   return (
-    <AppShell
-      main={
-        <section className="chat-pane" aria-label="聊天区">
-          <header className="chat-head">
-            <a className="back" id="back" href="/" aria-label="返回会话列表">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M15 6l-6 6 6 6" />
-              </svg>
-            </a>
-            <div className="chat-id">
-              <div className="title-row">
-                <h2 id="title">{title}</h2>
+    <>
+      <AppShell
+        main={
+          <section className="chat-pane" aria-label="聊天区">
+            <header className="chat-head">
+              <a className="back" id="back" href="/" aria-label="返回会话列表">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M15 6l-6 6 6 6" />
+                </svg>
+              </a>
+              <div className="chat-id">
+                <div className="title-row">
+                  <h2 id="title">{title}</h2>
+                </div>
+                <p className="muted" id="subtitle" hidden={!subtitle}>
+                  {subtitle}
+                </p>
               </div>
-              <p className="muted" id="subtitle" hidden={!subtitle}>
-                {subtitle}
+              {room ? (
+                <div className="chat-head-actions">
+                  {room.announcement ? (
+                    <AnnouncementPopover
+                      announcement={room.announcement}
+                      canEdit={
+                        !room.read_only && room.capabilities?.manage_announcement === true
+                      }
+                      onEdit={() => setOverlay('announcement')}
+                    />
+                  ) : null}
+                  <RoomMenu room={room} peerName={peer?.name ?? null} onOpen={setOverlay} />
+                </div>
+              ) : null}
+            </header>
+            {room?.announcement ? (
+              <div id="room-announcement" className="room-announcement" role="note">
+                {room.announcement}
+              </div>
+            ) : null}
+            {room?.read_only ? (
+              <div id="room-archive-banner" className="room-archive-banner" role="note">
+                群聊已解散，当前为只读归档；截至解散点的历史仍可查看。
+              </div>
+            ) : null}
+            <div className="chat-body" id="chat-body" aria-busy={chat.status === 'loading'}>
+              <div id="chat-loading" className="chat-loading" role="status" hidden={chat.status !== 'loading'}>
+                正在加载会话…
+              </div>
+              <div id="chat-error" className="chat-error" role="alert" hidden={chat.status !== 'error'}>
+                <p id="chat-error-text">{chat.error || '读取会话失败'}</p>
+                <div className="chat-error-actions">
+                  <button id="chat-error-retry" type="button" onClick={() => void chat.load()}>
+                    重试
+                  </button>
+                  <a id="chat-error-back" href="/">
+                    返回会话列表
+                  </a>
+                </div>
+              </div>
+              {ready && room && identity ? (
+                <Timeline
+                  items={chat.items}
+                  room={room}
+                  members={members}
+                  identityId={identity.actor_id}
+                  identityName={identity.name}
+                  mentions={mentions}
+                  outbox={queue.items}
+                  olderLoading={chat.olderLoading}
+                  olderError={chat.olderError}
+                  olderEnded={chat.olderEnded}
+                  hasOlder={chat.hasOlder}
+                  forcePinToken={forcePinToken}
+                  onLoadOlder={chat.loadOlder}
+                  onRetryOutbox={(id) => void onRetryOutbox(id)}
+                  onRemoveOutbox={queue.remove}
+                  onQuote={onQuote}
+                  onStatus={onStatus}
+                  onMarkRead={chat.markRead}
+                />
+              ) : null}
+              <p id="status" role="status">
+                {shownStatus}
               </p>
+              {ready && room && identity && token && !room.read_only ? (
+                <Composer
+                  room={room}
+                  members={members}
+                  identity={identity}
+                  token={token}
+                  reply={reply}
+                  sending={false}
+                  onCancelReply={() => setReply(null)}
+                  onSend={onSend}
+                  onStatus={onStatus}
+                />
+              ) : null}
             </div>
-          </header>
-          {room?.announcement ? (
-            <div id="room-announcement" className="room-announcement" role="note">
-              {room.announcement}
-            </div>
+          </section>
+        }
+      />
+      {ready && room && identity && token ? (
+        <>
+          <MembersDialog
+            open={overlay === 'members'}
+            onOpenChange={(open) => setOverlay(open ? 'members' : null)}
+            room={room}
+            members={Array.from(members.values())}
+            identityId={identity.actor_id}
+            token={token}
+          />
+          <AnnouncementDialog
+            open={overlay === 'announcement'}
+            onOpenChange={(open) => setOverlay(open ? 'announcement' : null)}
+            room={room}
+            token={token}
+          />
+          <RenameRoomDialog
+            open={overlay === 'rename'}
+            onOpenChange={(open) => setOverlay(open ? 'rename' : null)}
+            room={room}
+            token={token}
+          />
+          {peer ? (
+            <ReportDialog
+              open={overlay === 'report'}
+              onOpenChange={(open) => setOverlay(open ? 'report' : null)}
+              targetId={peer.actor_id}
+              targetName={peer.name}
+              roomId={room.room_id}
+              token={token}
+            />
           ) : null}
-          {room?.read_only ? (
-            <div id="room-archive-banner" className="room-archive-banner" role="note">
-              群聊已解散，当前为只读归档；截至解散点的历史仍可查看。
-            </div>
-          ) : null}
-          <div className="chat-body" id="chat-body" aria-busy={chat.status === 'loading'}>
-            <div id="chat-loading" className="chat-loading" role="status" hidden={chat.status !== 'loading'}>
-              正在加载会话…
-            </div>
-            <div id="chat-error" className="chat-error" role="alert" hidden={chat.status !== 'error'}>
-              <p id="chat-error-text">{chat.error || '读取会话失败'}</p>
-              <div className="chat-error-actions">
-                <button id="chat-error-retry" type="button" onClick={() => void chat.load()}>
-                  重试
-                </button>
-                <a id="chat-error-back" href="/">
-                  返回会话列表
-                </a>
-              </div>
-            </div>
-            {ready && room && identity ? (
-              <Timeline
-                items={chat.items}
-                room={room}
-                members={members}
-                identityId={identity.actor_id}
-                identityName={identity.name}
-                mentions={mentions}
-                outbox={queue.items}
-                olderLoading={chat.olderLoading}
-                olderError={chat.olderError}
-                olderEnded={chat.olderEnded}
-                hasOlder={chat.hasOlder}
-                forcePinToken={forcePinToken}
-                onLoadOlder={chat.loadOlder}
-                onRetryOutbox={(id) => void onRetryOutbox(id)}
-                onRemoveOutbox={queue.remove}
-                onQuote={onQuote}
-                onStatus={onStatus}
-                onMarkRead={chat.markRead}
-              />
-            ) : null}
-            <p id="status" role="status">
-              {shownStatus}
-            </p>
-            {ready && room && identity && token && !room.read_only ? (
-              <Composer
-                room={room}
-                members={members}
-                identity={identity}
-                token={token}
-                reply={reply}
-                sending={false}
-                onCancelReply={() => setReply(null)}
-                onSend={onSend}
-                onStatus={onStatus}
-              />
-            ) : null}
-          </div>
-        </section>
-      }
-    />
+          <LeaveRoomDialog
+            open={overlay === 'leave'}
+            onOpenChange={(open) => setOverlay(open ? 'leave' : null)}
+            room={room}
+            token={token}
+          />
+        </>
+      ) : null}
+    </>
   );
 }
