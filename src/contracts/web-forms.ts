@@ -61,8 +61,31 @@ export const reportFormSchema = z.object({
     .optional(),
 });
 
+/** 新建 Agent：名称上限与 legacy 共用 `LIMITS.actorNameMax`。 */
+export const newAgentFormSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, '名称不能为空')
+    .max(LIMITS.actorNameMax, `名称最多 ${LIMITS.actorNameMax} 个字符`),
+});
+
+/** 监控 URL 允许留空（表示清除），否则只接受 http/https。 */
+export const monitorUrlFormSchema = z.object({
+  url: z
+    .string()
+    .trim()
+    .max(LIMITS.roomMonitorUrlMax, `网址不能超过 ${LIMITS.roomMonitorUrlMax} 个字符`)
+    .refine(
+      (value) => value === '' || /^https?:\/\/[^\s]+$/iu.test(value),
+      '只允许 http 或 https 网址',
+    ),
+});
+
 export type GroupCreateForm = z.infer<typeof groupCreateFormSchema>;
 export type MeRenameForm = z.infer<typeof meRenameFormSchema>;
 export type RoomRenameForm = z.infer<typeof roomRenameFormSchema>;
 export type AnnouncementForm = z.infer<typeof announcementFormSchema>;
 export type ReportForm = z.infer<typeof reportFormSchema>;
+export type NewAgentForm = z.infer<typeof newAgentFormSchema>;
+export type MonitorUrlForm = z.infer<typeof monitorUrlFormSchema>;

@@ -68,6 +68,7 @@ export interface RoomMember {
   name: string;
   agent_session_id: string | null;
   role: 'owner' | 'admin' | 'member';
+  role_revision?: number;
   online: boolean | null;
   /** 服务端按调用者角色计算的成员操作；旧响应缺失时按不可操作处理。 */
   actions?: {
@@ -97,6 +98,8 @@ export interface RoomView {
     [key: string]: boolean | undefined;
   } | null;
   can_leave?: boolean;
+  /** direct 对端 Agent 的查看者管理权限；群聊不返回。 */
+  peer_can_manage?: boolean;
   status: 'active' | 'dissolved';
   read_only: boolean;
   created_at: string;
@@ -106,6 +109,24 @@ export interface RoomView {
 export interface RoomDetail {
   room: RoomView;
   members: RoomMember[];
+  owner_transfer?: OwnerTransferView | null;
+}
+
+/** 群主转让提议；`can_*` 由服务端按调用者身份计算。 */
+export interface OwnerTransferView {
+  transfer_id: string;
+  room_id: string;
+  from_owner_id: string;
+  from_owner_name: string;
+  to_actor_id: string;
+  to_actor_name: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'cancelled' | 'expired';
+  version: number;
+  expires_at: string;
+  created_at: string;
+  can_accept: boolean;
+  can_reject: boolean;
+  can_cancel: boolean;
 }
 
 export interface HistoryFetch {
