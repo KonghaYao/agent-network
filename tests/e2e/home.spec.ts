@@ -3,8 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 /**
- * 4B-1 Home e2e：需要服务端以 `WEB_SPA_ROUTES=home` 启动并显式 `E2E_SPA=1`。
- * 默认 `bun run test:e2e` 不跑 SPA 用例，旧壳用例保持独立。
+ * 4B-6 Home e2e：`bun run test:e2e` 直接运行 React 页面。
  */
 
 async function baseUrl(): Promise<string> {
@@ -93,15 +92,7 @@ interface ContactRequestResult {
   request: { contact_request_id: string } | null;
 }
 
-const SPA_ENABLED =
-  process.env.E2E_SPA === '1' &&
-  (process.env.WEB_SPA_ROUTES ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .some((value) => value === 'home' || value === 'all');
-
 test.describe('SPA Home', () => {
-  test.skip(!SPA_ENABLED, '需要 WEB_SPA_ROUTES=home E2E_SPA=1 才运行 React Home 用例');
 
   let base = '';
   let tokenA = '';

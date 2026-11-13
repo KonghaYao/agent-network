@@ -1,14 +1,14 @@
 /**
- * 4B-1 验收：Vite manifest、`/static/*`、`WEB_SPA_ROUTES` 与灰度 cookie。
+ * 4B-6 验收：Vite manifest、`/static/*`、SSR 壳与 legacy 资源退役。
  *
- * 默认（flag 为空）时页面输出必须与 `renderHomePage` / `renderChatPage`
- * 逐字节一致；只有显式开启 route 且 manifest 有效时才输出 React 壳。
+ * 4B-6 删除 legacy 页面壳后不再有 `WEB_SPA_ROUTES` 灰度；五条页面路由
+ * 始终由 React 壳渲染。manifest 缺失时页面返回 503，而不是静默回退。
  */
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { IMPLEMENTED_SPA_ROUTES, loadSpaManifest, parseSpaRoutes } from '../src/web/spa-manifest';
+import { loadSpaManifest } from '../src/web/spa-manifest';
 import { check, checkEqual, checksPassed } from './lib/harness';
 import { startTestServer, type TestServer } from './lib/test-server';
 
@@ -111,16 +111,6 @@ function bootstrapJson(html: string): Record<string, unknown> | null {
 
 async function main() {
   check('dist manifest exists (run bun run build:web first)', await Bun.file(MANIFEST).exists());
-  checkEqual('WEB_SPA_ROUTES default is empty', parseSpaRoutes(undefined).size, 0);
-  checkEqual('blank WEB_SPA_ROUTES is empty', parseSpaRoutes('  ').size, 0);
-  const parsed = parseSpaRoutes(' home , ROOM,unknown,share ');
-  checkEqual('known routes parsed', [...parsed].sort().join(','), 'home,room,share');
-  checkEqual('unknown route ignored', parseSpaRoutes('nope').size, 0);
-  checkEqual(
-    'all expands to every implemented route',
-    [...parseSpaRoutes('all')].sort().join(','),
-    'home,join,pair,room,share',
-  );
   checkEqual('missing manifest returns null', await missingManifest(), null);
   checkEqual('broken manifest returns null', await brokenManifest(), null);
 
@@ -134,41 +124,17 @@ async function main() {
     manifest.css,
   );
 
-  let legacy: TestServer | undefined;
   let spa: TestServer | undefined;
-  let spaAll: TestServer | undefined;
-  let spaPages: TestServer | undefined;
-  let spaShareOnly: TestServer | undefined;
   let fallback: TestServer | undefined;
   let emptyDist: string | undefined;
   try {
-    legacy = await startTestServer({
-      tag: 'spa-legacy',
-      env: { ENVIRONMENT: 'test', WEB_SPA_ROUTES: '', WEB_DIST_DIR: DIST },
+    spa = await startTestServer({
+      tag: 'spa-shell',
+      env: { ENVIRONMENT: 'test', WEB_DIST_DIR: DIST },
     });
-    const home = await fetchText(`${legacy.base}/`);
-    checkEqual('legacy home status', home.response.status, 200);
-    check('legacy home keeps existing shell', home.text.includes('id="room-search"'));
-    check('legacy home is not the SPA shell', !home.text.includes('data-spa-route'));
-    check('legacy home has no bootstrap payload', !home.text.includes('spa-bootstrap'));
-    checkEqual(
-      'legacy home cache-control',
-      home.response.headers.get('cache-control'),
-      'no-store',
-    );
-    const legacyFlag = await fetchText(`${legacy.base}/?spa=1`, {
-      cookie: 'agent-network-spa=home',
-    });
-    check(
-      'empty WEB_SPA_ROUTES ignores spa flag and cookie',
-      legacyFlag.text.includes('id="room-search"') &&
-        !legacyFlag.text.includes('data-spa-route') &&
-        legacyFlag.response.headers.get('set-cookie') === null,
-    );
-    const legacyChat = await fetchText(`${legacy.base}/c/room-test`);
-    check('legacy chat keeps existing shell', legacyChat.text.includes('page-room'));
 
-    const asset = await fetchText(`${legacy.base}${manifest.entry}`);
+    // 静态资源：白名单、不可变缓存、ETag/304、拒绝 manifest 与路径穿越。
+    const asset = await fetchText(`${spa.base}${manifest.entry}`);
     checkEqual('static asset status', asset.response.status, 200);
     checkEqual(
       'static asset content-type',
@@ -183,142 +149,78 @@ async function main() {
     checkEqual('static asset nosniff', asset.response.headers.get('x-content-type-options'), 'nosniff');
     const etag = asset.response.headers.get('etag');
     check('static asset has etag', typeof etag === 'string' && etag.length > 2, etag);
-    const notModified = await fetch(`${legacy.base}${manifest.entry}`, {
+    const notModified = await fetch(`${spa.base}${manifest.entry}`, {
       headers: { 'if-none-match': etag ?? '' },
     });
     checkEqual('static asset 304 on etag match', notModified.status, 304);
-
     checkEqual(
       'static json is not served',
-      (await fetch(`${legacy.base}/static/.vite/manifest.json`)).status,
+      (await fetch(`${spa.base}/static/.vite/manifest.json`)).status,
       404,
     );
     checkEqual(
       'static directory is not listed',
-      (await fetch(`${legacy.base}/static/assets/`)).status,
+      (await fetch(`${spa.base}/static/assets/`)).status,
       404,
     );
     checkEqual(
       'static path traversal rejected',
-      (await fetch(`${legacy.base}/static/..%2f..%2fpackage.json`)).status,
+      (await fetch(`${spa.base}/static/..%2f..%2fpackage.json`)).status,
       404,
     );
 
-    spa = await startTestServer({
-      tag: 'spa-home',
-      env: { ENVIRONMENT: 'test', WEB_SPA_ROUTES: 'home', WEB_DIST_DIR: DIST },
-    });
-    const shell = await fetchText(`${spa.base}/`);
-    checkEqual('spa home status', shell.response.status, 200);
-    check('spa home renders shell', shell.text.includes('data-spa-route="home"'));
-    check('spa home has root mount', shell.text.includes('<div id="root"></div>'));
+    // 五条页面路由始终输出 React 壳；灰度 query/cookie 不再生效。
+    for (const [path, route] of [
+      ['/', 'home'],
+      ['/c/room-test', 'room'],
+      ['/pair', 'pair'],
+    ] as const) {
+      const page = await fetchText(`${spa.base}${path}`);
+      checkEqual(`${route} status`, page.response.status, 200);
+      check(
+        `${route} renders the React shell`,
+        page.text.includes(`data-spa-route="${route}"`) &&
+          page.text.includes('<div id="root"></div>') &&
+          page.text.includes('id="spa-bootstrap"'),
+      );
+      checkEqual(`${route} no-store`, page.response.headers.get('cache-control'), 'no-store');
+      check(`${route} has no legacy spa cookie`, page.response.headers.get('set-cookie') === null);
+      check(`${route} has no credential`, !/ank_[0-9a-z]{32}/iu.test(page.text));
+    }
+    const home = await fetchText(`${spa.base}/`);
     check(
-      'spa shell references built entry',
-      shell.text.includes(`${manifest.entry}`),
+      'home no longer embeds the legacy client',
+      !home.text.includes('initialRoomId') &&
+        !home.text.includes('id="composer"') &&
+        !home.text.includes('id="room-search"'),
     );
-    checkEqual('spa home no-store', shell.response.headers.get('cache-control'), 'no-store');
-    check(
-      'spa home varies by cookie',
-      (shell.response.headers.get('vary') ?? '').toLowerCase().includes('cookie'),
-      shell.response.headers.get('vary'),
-    );
-    check('spa shell has no credential', !/ank_[0-9a-z]/iu.test(shell.text));
-    check(
-      'spa home uses the app shell layout',
-      shell.text.includes('class="wide page-home"') &&
-        shell.text.includes('id="root"') &&
-        shell.text.includes('spa-bootstrap'),
-    );
-    check(
-      'spa home does not load legacy chat client',
-      !shell.text.includes('initialRoomId') &&
-        !shell.text.includes('id="composer"') &&
-        !shell.text.includes('/assets/chat-markdown.js'),
-    );
-
-    const flagged = await fetchText(`${spa.base}/?spa=1`);
-    check('spa flag renders home', flagged.text.includes('data-spa-route="home"'));
-    const flagCookie = flagged.response.headers.get('set-cookie') ?? '';
-    check(
-      'spa flag writes route cookie',
-      flagCookie.includes('agent-network-spa=home') && flagCookie.includes('Max-Age='),
-      flagCookie,
+    checkEqual(
+      'spa=0 no longer restores a legacy page',
+      (await fetchText(`${spa.base}/?spa=0`)).text.includes('data-spa-route="home"'),
+      true,
     );
     const cookieHome = await fetchText(`${spa.base}/`, {
-      cookie: 'agent-network-spa=home',
-    });
-    check(
-      'cookie keeps home shell',
-      cookieHome.text.includes('data-spa-route="home"'),
-    );
-    const cookieOther = await fetchText(`${spa.base}/`, {
       cookie: 'agent-network-spa=room',
     });
     check(
-      'cookie cannot enable route absent from env',
-      cookieOther.text.includes('id="room-search"') &&
-        !cookieOther.text.includes('data-spa-route'),
+      'spa cookie is ignored',
+      cookieHome.text.includes('data-spa-route="home"') &&
+        cookieHome.response.headers.get('set-cookie') === null,
     );
-    const cookieBroken = await fetchText(`${spa.base}/`, {
-      cookie: 'agent-network-spa=%E0%A4%A',
-    });
+    const chat = await fetchText(`${spa.base}/c/room-test`);
     check(
-      'malformed cookie falls back to legacy',
-      cookieBroken.response.status === 200 && !cookieBroken.text.includes('data-spa-route'),
-    );
-    const disabled = await fetchText(`${spa.base}/?spa=0`, {
-      cookie: 'agent-network-spa=home',
-    });
-    check(
-      'spa=0 returns legacy',
-      disabled.text.includes('id="room-search"') && !disabled.text.includes('data-spa-route'),
-    );
-    check(
-      'spa=0 clears cookie',
-      (disabled.response.headers.get('set-cookie') ?? '').includes('Max-Age=0'),
-      disabled.response.headers.get('set-cookie'),
+      'room renders the chat shell',
+      chat.text.includes('data-spa-route="room"') &&
+        chat.text.includes('class="wide page-room"') &&
+        !chat.text.includes('initialRoomId'),
     );
 
-    const spaChat = await fetchText(`${spa.base}/c/room-test`);
-    // legacy 页面内的图标渐变 ID 在每次进程构建时随机，不能跨进程做字节比较；
-    // 这里只断言未启用的 route 仍由旧壳渲染，且没有注入 SPA 标记。
+    // 分享/邀请/配对：SSR 静态标记保留，HTML 不含 token 或私有数据。
+    const agent = await registerAgent(spa.base);
+    const share = await fetchText(`${spa.base}/a/${encodeURIComponent(agent.agent_session_id)}`);
+    checkEqual('share status', share.response.status, 200);
     check(
-      'unlisted room route stays legacy',
-      spaChat.text.includes('page-room') && !spaChat.text.includes('data-spa-route'),
-    );
-
-    spaAll = await startTestServer({
-      tag: 'spa-multi',
-      env: { ENVIRONMENT: 'test', WEB_SPA_ROUTES: 'all', WEB_DIST_DIR: DIST },
-    });
-    const multiHome = await fetchText(`${spaAll.base}/`);
-    check(
-      'all route config renders implemented home',
-      multiHome.text.includes('data-spa-route="home"'),
-    );
-    const multiRoom = await fetchText(`${spaAll.base}/c/room-test`);
-    check(
-      'implemented room renders the React shell',
-      multiRoom.text.includes('data-spa-route="room"') &&
-        multiRoom.text.includes('class="wide page-room"') &&
-        multiRoom.text.includes('<div id="root"></div>') &&
-        !multiRoom.text.includes('initialRoomId'),
-    );
-    checkEqual(
-      'all five routes are implemented',
-      [...IMPLEMENTED_SPA_ROUTES].sort().join(','),
-      'home,join,pair,room,share',
-    );
-
-    spaPages = await startTestServer({
-      tag: 'spa-pages',
-      env: { ENVIRONMENT: 'test', WEB_SPA_ROUTES: 'share,join,pair', WEB_DIST_DIR: DIST },
-    });
-    const agent = await registerAgent(spaPages.base);
-    const share = await fetchText(`${spaPages.base}/a/${encodeURIComponent(agent.agent_session_id)}`);
-    checkEqual('spa share status', share.response.status, 200);
-    check(
-      'spa share is server-rendered with public data',
+      'share is server-rendered with public data',
       share.text.includes('data-spa-route="share"') &&
         share.text.includes('class="page-share"') &&
         share.text.includes('id="add"') &&
@@ -326,150 +228,109 @@ async function main() {
         share.text.includes('发送好友申请'),
     );
     check(
-      'spa share keeps title and OG metadata',
+      'share keeps title and OG metadata',
       share.text.includes('<title>添加 SPA 分享 · WeBots</title>') &&
         share.text.includes('property="og:title"') &&
-        share.text.includes('property="og:description"') &&
-        share.text.includes('SPA 分享'),
+        share.text.includes('property="og:description"'),
     );
     check(
-      'spa share does not leak legacy token or inline client',
-      !share.text.includes('agent-network-token=') &&
-        !share.text.includes(agent.token) &&
-        !share.text.includes("callTool('network_register'") &&
+      'share does not leak token or legacy client',
+      !share.text.includes(agent.token) &&
+        !share.text.includes('agent-network-token=') &&
         !share.text.includes('id="room-search"'),
     );
     const shareBootstrap = bootstrapJson(share.text);
     check(
-      'spa share bootstrap only carries public profile',
+      'share bootstrap only carries public profile',
       shareBootstrap?.route === 'share' &&
         (shareBootstrap.actor as { actor_id?: string } | null)?.actor_id === agent.actor_id &&
         !JSON.stringify(shareBootstrap).includes(agent.token),
     );
-    checkEqual('spa share cache-control', share.response.headers.get('cache-control'), 'no-store');
 
-    const missingShare = await fetchText(`${spaPages.base}/a/missing_${crypto.randomUUID()}`);
-    checkEqual('spa share unknown session is 404', missingShare.response.status, 404);
+    const missingShare = await fetchText(`${spa.base}/a/missing_${crypto.randomUUID()}`);
+    checkEqual('share unknown session is 404', missingShare.response.status, 404);
     check(
-      'spa share 404 keeps the React shell and readable copy',
+      'share 404 keeps the React shell',
       missingShare.text.includes('data-spa-route="share"') &&
         missingShare.text.includes('分享链接无效'),
     );
 
-    const joinPage = await fetchText(`${spaPages.base}/j/${'b'.repeat(32)}`);
-    checkEqual('spa join status', joinPage.response.status, 200);
+    const joinPage = await fetchText(`${spa.base}/j/${'b'.repeat(32)}`);
+    checkEqual('join status', joinPage.response.status, 200);
     check(
-      'spa join is server-rendered shell without group data',
+      'join is an SSR shell without group data',
       joinPage.text.includes('data-spa-route="join"') &&
         joinPage.text.includes('class="page-join"') &&
         joinPage.text.includes('id="join-action"') &&
         joinPage.text.includes('邀请码有效不等于已加入') &&
-        !joinPage.text.includes('join-title">群聊') &&
-        !joinPage.text.includes('initialRoomId'),
+        !joinPage.text.includes('join-title">群聊'),
     );
     check(
-      'spa join keeps title and OG metadata',
-      joinPage.text.includes('<title>加入群聊 · WeBots</title>') &&
-        joinPage.text.includes('property="og:title"') &&
-        joinPage.text.includes('property="og:description"'),
-    );
-    check(
-      'spa join bootstrap carries invite key',
+      'join bootstrap carries invite key',
       (bootstrapJson(joinPage.text)?.inviteKey as string | undefined) === 'b'.repeat(32),
     );
-    checkEqual('spa join cache-control', joinPage.response.headers.get('cache-control'), 'no-store');
-
-    const invalidJoin = await fetchText(`${spaPages.base}/j/not-a-valid-key`);
-    checkEqual('spa join invalid key is 404', invalidJoin.response.status, 404);
+    const invalidJoin = await fetchText(`${spa.base}/j/not-a-valid-key`);
+    checkEqual('join invalid key is 404', invalidJoin.response.status, 404);
     check(
-      'spa join 404 keeps the React shell',
+      'join 404 keeps the React shell',
       invalidJoin.text.includes('data-spa-route="join"') &&
         invalidJoin.text.includes('邀请无效'),
     );
 
-    const pair = await fetchText(`${spaPages.base}/pair`);
-    checkEqual('spa pair status', pair.response.status, 200);
+    const pair = await fetchText(`${spa.base}/pair`);
+    checkEqual('pair status', pair.response.status, 200);
     check(
-      'spa pair is a CSR card shell',
+      'pair is a CSR card shell without challenge',
       pair.text.includes('data-spa-route="pair"') &&
         pair.text.includes('class="page-pair"') &&
         pair.text.includes('<div id="root"></div>') &&
         !pair.text.includes('id="pair-challenge"'),
     );
-    check(
-      'spa pair keeps no-referrer',
-      pair.response.headers.get('referrer-policy') === 'no-referrer',
-    );
-    const pairFlagged = await fetchText(`${spaPages.base}/pair`, {
-      cookie: 'agent-network-spa=pair',
-    });
-    check(
-      'cookie can enable pair without enabling join',
-      pairFlagged.text.includes('data-spa-route="pair"'),
-    );
-    const joinStillLegacy = await fetchText(`${spaPages.base}/j/${'c'.repeat(32)}`, {
-      cookie: 'agent-network-spa=pair',
-    });
-    check(
-      'cookie intersection keeps unlisted join legacy',
-      joinStillLegacy.text.includes('id="join-action"') &&
-        !joinStillLegacy.text.includes('data-spa-route'),
-    );
-    check(
-      'home stays legacy when only share/join/pair are enabled',
-      (await fetchText(`${spaPages.base}/`)).text.includes('id="room-search"'),
+    checkEqual(
+      'pair keeps no-referrer',
+      pair.response.headers.get('referrer-policy'),
+      'no-referrer',
     );
 
-    spaShareOnly = await startTestServer({
-      tag: 'spa-share-only',
-      env: { ENVIRONMENT: 'test', WEB_SPA_ROUTES: 'share', WEB_DIST_DIR: DIST },
-    });
-    const shareOnlyAgent = await registerAgent(spaShareOnly.base);
-    check(
-      'single-route flag still renders share',
-      (
-        await fetchText(
-          `${spaShareOnly.base}/a/${encodeURIComponent(shareOnlyAgent.agent_session_id)}`,
-        )
-      ).text.includes('data-spa-route="share"'),
-    );
-    const legacyJoin = await fetchText(`${spaShareOnly.base}/j/${'d'.repeat(32)}`);
-    check(
-      'share-only flag keeps join legacy',
-      legacyJoin.text.includes('id="join-action"') &&
-        !legacyJoin.text.includes('data-spa-route'),
-    );
-    const legacyPair = await fetchText(`${spaShareOnly.base}/pair`);
-    check(
-      'share-only flag keeps pair legacy',
-      legacyPair.text.includes('id="pair-challenge"') &&
-        !legacyPair.text.includes('data-spa-route'),
+    // 4B-6 资源退役：Markdown/画板仍被 React 懒加载；旧 resizer/icons 返回 410。
+    const markdown = await fetch(`${spa.base}/assets/chat-markdown.js`);
+    checkEqual('markdown asset still served', markdown.status, 200);
+    const drawboard = await fetch(`${spa.base}/assets/chat-drawboard.js`);
+    checkEqual('drawboard asset still served', drawboard.status, 200);
+    for (const retired of ['chat-resizer.js', 'chat-icons.js']) {
+      const response = await fetch(`${spa.base}/assets/${retired}`);
+      checkEqual(`${retired} returns 410`, response.status, 410);
+      checkEqual(`${retired} is not cached`, response.headers.get('cache-control'), 'no-store');
+    }
+    checkEqual(
+      'unknown asset returns 404',
+      (await fetch(`${spa.base}/assets/unknown.js`)).status,
+      404,
     );
 
+    // manifest 缺失：页面 503，API/健康检查与浏览器岛不受影响。
     emptyDist = await mkdtemp(join(tmpdir(), 'agentnet-spa-empty-'));
     fallback = await startTestServer({
-      tag: 'spa-fallback',
-      env: {
-        ENVIRONMENT: 'test',
-        WEB_SPA_ROUTES: 'home',
-        WEB_DIST_DIR: emptyDist,
-      },
+      tag: 'spa-no-manifest',
+      env: { ENVIRONMENT: 'test', WEB_DIST_DIR: emptyDist },
     });
-    const fallbackHome = await fetchText(`${fallback.base}/`);
-    check(
-      'missing manifest falls back to legacy',
-      fallbackHome.text.includes('id="room-search"') &&
-        !fallbackHome.text.includes('data-spa-route'),
+    for (const path of ['/', '/c/room-test', '/a/sess_missing', '/j/abcdefghijklmnop', '/pair']) {
+      const response = await fetch(`${fallback.base}${path}`);
+      checkEqual(`missing manifest ${path} returns 503`, response.status, 503);
+      checkEqual(
+        `missing manifest ${path} is not cached`,
+        response.headers.get('cache-control'),
+        'no-store',
+      );
+    }
+    checkEqual('health still works without manifest', (await fetch(`${fallback.base}/health`)).status, 200);
+    checkEqual(
+      'markdown bundle is independent of the manifest',
+      (await fetch(`${fallback.base}/assets/chat-markdown.js`)).status,
+      200,
     );
   } finally {
-    await Promise.all([
-      legacy?.dispose(),
-      spa?.dispose(),
-      spaAll?.dispose(),
-      spaPages?.dispose(),
-      spaShareOnly?.dispose(),
-      fallback?.dispose(),
-    ]);
+    await Promise.all([spa?.dispose(), fallback?.dispose()]);
     if (emptyDist) await rm(emptyDist, { recursive: true, force: true }).catch(() => undefined);
   }
 

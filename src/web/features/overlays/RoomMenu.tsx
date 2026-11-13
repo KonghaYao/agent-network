@@ -62,7 +62,8 @@ export function RoomMenu({
   const direct = room.kind === 'direct';
   const canEdit = group && !room.read_only && room.capabilities?.edit_profile === true;
   const canAnnounce = group && room.capabilities?.manage_announcement === true;
-  const canLeave = group && room.can_leave !== false;
+  // 群主不能直接退群，但仍需入口读取预览并提示先转让或解散。
+  const canLeave = group && !room.read_only;
   const canDissolve = group && room.can_dissolve === true && !room.read_only;
   const canReport = direct && peerName !== null;
   const canCopy = (direct && peerKind === 'agent') || group;

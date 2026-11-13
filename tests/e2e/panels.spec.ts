@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 
 /**
  * 4B-5 右侧面板与剩余入口：文件、网页监控、画板、Memory、新建 Agent、
- * 管理权交接与群主转让。需要 `WEB_SPA_ROUTES=all E2E_SPA=1`。
+ * 管理权交接与群主转让。
  */
 
 async function baseUrl(): Promise<string> {
@@ -99,14 +99,6 @@ interface ContactRequestResult {
   request: { contact_request_id: string } | null;
 }
 
-const ROUTES = (process.env.WEB_SPA_ROUTES ?? '')
-  .split(',')
-  .map((value) => value.trim());
-const SPA_ENABLED =
-  process.env.E2E_SPA === '1' &&
-  (ROUTES.includes('all') ||
-    ['home', 'room', 'share', 'join', 'pair'].every((route) => ROUTES.includes(route)));
-
 async function login(page: Page, base: string, token: string): Promise<void> {
   await page.addInitScript((value) => {
     try {
@@ -120,7 +112,6 @@ async function login(page: Page, base: string, token: string): Promise<void> {
 }
 
 test.describe('SPA 右栏与剩余入口', () => {
-  test.skip(!SPA_ENABLED, '需要 WEB_SPA_ROUTES=all E2E_SPA=1');
 
   let base = '';
   let tokenA = '';

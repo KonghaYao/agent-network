@@ -1,43 +1,9 @@
 import { readFile, stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 
-/** 可以由 React 壳接管的页面；未列出的路径始终走 legacy 渲染。 */
+/** React 壳接管的页面。4B-6 起所有页面都由 React 渲染，不再有 legacy 分支。 */
 export const SPA_ROUTES = ['home', 'room', 'share', 'join', 'pair'] as const;
 export type SpaRoute = (typeof SPA_ROUTES)[number];
-
-/**
- * 已迁移到 React 的 route。
- *
- * 4B-2 接管 home 与 room；4B-3 接管 share/join/pair。flag 仍按 route 独立
- * 灰度，未列出的 route 继续渲染 legacy。
- */
-export const IMPLEMENTED_SPA_ROUTES: ReadonlySet<SpaRoute> = new Set<SpaRoute>([
-  'home',
-  'room',
-  'share',
-  'join',
-  'pair',
-]);
-
-const SPA_ROUTE_SET: ReadonlySet<string> = new Set(SPA_ROUTES);
-
-/**
- * 解析 `WEB_SPA_ROUTES`。
- *
- * - 空值 = 全部 legacy（默认，仍可在一次重启内回退）；
- * - `all` = 全部已实现 route，便于本地/验收一次打开；
- * - 未知名称忽略，避免拼写错误把未部署页面打开。
- */
-export function parseSpaRoutes(value: string | undefined): ReadonlySet<SpaRoute> {
-  if (!value) return new Set();
-  const routes = new Set<SpaRoute>();
-  for (const raw of value.split(',')) {
-    const name = raw.trim().toLowerCase();
-    if (name === 'all') return new Set(SPA_ROUTES);
-    if (SPA_ROUTE_SET.has(name)) routes.add(name as SpaRoute);
-  }
-  return routes;
-}
 
 export interface SpaManifest {
   /** 入口脚本的公开 URL，例如 `/static/assets/main-abc.js`。 */
@@ -67,7 +33,8 @@ async function isFile(path: string): Promise<boolean> {
 /**
  * 读取 Vite 构建 manifest；缺失、损坏或引用文件不存在时返回 null。
  *
- * 启动时调用一次，失败只回退 legacy，不影响 `/static/*` 或其它路由。
+ * 启动时调用一次。4B-6 起 legacy 壳已删除，页面路由在 manifest 缺失时
+ * 返回 503，提示先执行 `bun run build:web`；`/static/*` 与其它路由不受影响。
  */
 export async function loadSpaManifest(distDir: string): Promise<SpaManifest | null> {
   const manifestPath = resolve(distDir, '.vite/manifest.json');
