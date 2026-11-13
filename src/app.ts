@@ -33,6 +33,8 @@ import { renderChatPage } from './web/chat';
 import { renderInvalidJoinPage, renderJoinPage } from './web/join';
 import { renderPairPage } from './web/pair';
 import { renderHomePage, renderInvalidSharePage, renderSharePage } from './web/share';
+import { renderInvalidJoinSpaPage, renderJoinSpaPage } from './web/ssr/join';
+import { renderInvalidShareSpaPage, renderShareSpaPage } from './web/ssr/share';
 import { renderSpaShell } from './web/spa-shell';
 import { IMPLEMENTED_SPA_ROUTES, parseSpaRoutes, type SpaManifest, type SpaRoute } from './web/spa-manifest';
 import type { Env } from './env';
@@ -713,15 +715,22 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
   const app = new Hono();
   const spaDistDir = deps.spaDistDir ?? WEB_DIST_ROOT;
   const envSpaRoutes = deps.spaRoutes ?? EMPTY_SPA_ROUTES;
-  const spaHtml = (
+  const spaManifestFor = (
     route: SpaRoute,
     state: SpaRequestState,
-  ): string | null =>
+  ): SpaManifest | null =>
     deps.spaManifest &&
     IMPLEMENTED_SPA_ROUTES.has(route) &&
     state.routes.has(route)
-      ? renderSpaShell(route, deps.spaManifest)
+      ? deps.spaManifest
       : null;
+  const spaHtml = (
+    route: SpaRoute,
+    state: SpaRequestState,
+  ): string | null => {
+    const manifest = spaManifestFor(route, state);
+    return manifest ? renderSpaShell(route, manifest) : null;
+  };
 
   // 只服务 Vite 构建产物：扩展名白名单、拒绝路径穿越、目录不列表。
   // 文件名带内容哈希，因此可以长期 immutable；ETag 直接取文件名。
@@ -868,17 +877,18 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     );
   });
   app.get('/a/:sessionId', async (c) => {
+    const spa = resolveSpaRequest(c, envSpaRoutes);
+    const manifest = spaManifestFor('share', spa);
     const actor = await getActorBySession(env.DB, c.req.param('sessionId'));
     if (!actor) {
-      return c.html(renderInvalidSharePage(), 404, { 'cache-control': 'no-store' });
-    }
-    const spa = resolveSpaRequest(c, envSpaRoutes);
-    const shell = spaHtml('share', spa);
-    if (shell) {
-      return c.html(shell, 200, spaResponseHeaders(spa, { 'cache-control': 'no-store' }));
+      return c.html(
+        manifest ? renderInvalidShareSpaPage(manifest) : renderInvalidSharePage(),
+        404,
+        spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
+      );
     }
     return c.html(
-      renderSharePage(actor),
+      manifest ? renderShareSpaPage(actor, manifest) : renderSharePage(actor),
       200,
       spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
     );
@@ -908,7 +918,14 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     const spa = resolveSpaRequest(c, envSpaRoutes);
     const shell = spaHtml('pair', spa);
     if (shell) {
-      return c.html(shell, 200, spaResponseHeaders(spa, { 'cache-control': 'no-store' }));
+      return c.html(
+        shell,
+        200,
+        spaResponseHeaders(spa, {
+          'cache-control': 'no-store',
+          'referrer-policy': 'no-referrer',
+        }),
+      );
     }
     return c.html(
       renderPairPage(),
@@ -924,16 +941,17 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
   // 由页面用浏览器 token 调工具预览与确认，权限判定全部留在工具层。
   app.get('/j/:inviteKey', (c) => {
     const inviteKey = c.req.param('inviteKey');
-    if (!INVITE_KEY.test(inviteKey)) {
-      return c.html(renderInvalidJoinPage(), 404, { 'cache-control': 'no-store' });
-    }
     const spa = resolveSpaRequest(c, envSpaRoutes);
-    const shell = spaHtml('join', spa);
-    if (shell) {
-      return c.html(shell, 200, spaResponseHeaders(spa, { 'cache-control': 'no-store' }));
+    const manifest = spaManifestFor('join', spa);
+    if (!INVITE_KEY.test(inviteKey)) {
+      return c.html(
+        manifest ? renderInvalidJoinSpaPage(manifest) : renderInvalidJoinPage(),
+        404,
+        spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
+      );
     }
     return c.html(
-      renderJoinPage(inviteKey),
+      manifest ? renderJoinSpaPage(inviteKey, manifest) : renderJoinPage(inviteKey),
       200,
       spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
     );
