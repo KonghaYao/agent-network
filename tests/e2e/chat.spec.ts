@@ -404,13 +404,25 @@ test.describe('SPA Chat', () => {
     await expect(page.locator('#older-status')).toContainText('已经到最早的消息了');
   });
 
-  test('desktop back returns to the home shell', async ({ page }) => {
-    await page.goto(`${base}/c/${roomId}`);
-    await expect(page.locator('#back')).toBeVisible();
-    await page.locator('#back').click();
-    await expect(page).toHaveURL(`${base}/`);
-    await expect(page.locator('body[data-spa-route="home"]')).toBeVisible();
-    await expect(page.locator('#room-list')).toBeVisible();
+  test.describe('desktop', () => {
+    test.use({ viewport: { width: 1280, height: 800 } });
+
+    test('keeps the conversation sidebar and hides the back affordance', async ({ page }) => {
+      await page.goto(`${base}/c/${roomId}`);
+      await expect(page.locator('.chat-pane')).toBeVisible();
+      const sidebar = page.locator('.sidebar');
+      await expect(sidebar).toBeVisible();
+      const width = (await sidebar.boundingBox())?.width ?? 0;
+      expect(width).toBeGreaterThanOrEqual(280);
+      expect(width).toBeLessThanOrEqual(322);
+      await expect(page.locator('#room-list')).toBeVisible();
+      await expect(page.locator('#back')).toBeHidden();
+      await expect(page.locator('#composer')).toBeVisible();
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBeLessThanOrEqual(1);
+    });
   });
 
   test.describe('mobile', () => {

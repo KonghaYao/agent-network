@@ -423,9 +423,9 @@
 /* ---- Chat 右栏：文件 / 网页监控 / Memory ---------------------------------- */
 
 /*
- * React Chat 只渲染聊天区，没有 legacy 侧栏；右栏宽度按自身容器计算，
- * 不再沿用 `100% - 300px` 的旧公式。平板抽屉与移动端全屏仍由
- * FILES_STYLE/MONITOR_STYLE 控制。
+ * React Chat 桌面 ≥760px 与 Home 一样由侧栏 + 聊天区组成；右栏宽度按
+ * 聊天区自身容器计算，不再沿用 `100% - 300px` 的旧公式。平板抽屉与
+ * 移动端全屏仍由 FILES_STYLE/MONITOR_STYLE 控制。
  */
 @media (min-width: 1200px) {
   body.page-room #root > main > .files-pane,

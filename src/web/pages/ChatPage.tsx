@@ -5,6 +5,7 @@ import { AppShell } from '../app/AppShell';
 import { Composer, type ComposerSendInput } from '../features/chat/Composer';
 import { ForwardDialog } from '../features/chat/ForwardDialog';
 import { Timeline } from '../features/chat/Timeline';
+import { AppSidebar } from '../features/layout/AppSidebar';
 import { AgentReissueDialog } from '../features/overlays/AgentReissueDialog';
 import { AnnouncementDialog } from '../features/overlays/AnnouncementDialog';
 import { AnnouncementPopover } from '../features/overlays/AnnouncementPopover';
@@ -453,6 +454,12 @@ export function ChatPage({ roomId }: ChatPageProps) {
   return (
     <>
       <AppShell
+        // 桌面 ≥760px 恢复 legacy 双栏；移动端只保留聊天区，返回箭头由 CSS 显示。
+        sidebar={
+          mobile ? undefined : (
+            <AppSidebar live={false} streamError={chat.streamError} />
+          )
+        }
         main={
           <>
             <section className="chat-pane" aria-label="聊天区">
@@ -514,7 +521,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     >
                       文件
                     </button>
-                    {identity ? <AccountMenu me={identity} /> : null}
+                    {/* 桌面账号区在侧栏；移动端侧栏隐藏，才在聊天头部提供入口。 */}
+                    {identity && mobile ? <AccountMenu me={identity} /> : null}
                     {room.announcement ? (
                       <AnnouncementPopover
                         announcement={room.announcement}

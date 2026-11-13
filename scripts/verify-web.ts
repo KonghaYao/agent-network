@@ -4224,7 +4224,8 @@ async function main(): Promise<void> {
       })()`)) as number;
       check('Chat 页只有一条 subscriptions/listen', listens === 1, listens);
       checkEqual('聊天页由 React 壳渲染', await page.locator('body').getAttribute('data-spa-route'), 'room');
-      checkEqual('聊天页桌面保留返回入口', await page.locator('#back').isVisible(), true);
+      checkEqual('聊天页桌面显示会话侧栏', await page.locator('.sidebar').isVisible(), true);
+      checkEqual('聊天页桌面隐藏返回入口', await page.locator('#back').isHidden(), true);
       check('首屏加载消息', (await page.locator('#messages .msg').count()) >= 10);
 
       // 中文输入法组合期间 Enter 不发送；组合结束后的 Enter 发送。
@@ -4290,9 +4291,6 @@ async function main(): Promise<void> {
         check('加载更早消息追加到时间线', (await page.locator('#messages .msg').count()) > before);
       }
 
-      await page.locator('#back').click();
-      await page.locator('body[data-spa-route="home"]').waitFor();
-      check('返回首页', page.url().endsWith('/'));
       await context.close();
     }
 
