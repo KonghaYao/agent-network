@@ -7,7 +7,12 @@ import {
   MESSAGE_CREATED_EVENT_NAME,
 } from '../contracts/events';
 import type { Env } from '../env';
-import { getMember, getRoom } from '../storage/queries';
+import {
+  earliestPendingEventDeliverySeq,
+  getEventSubscription as readEventSubscription,
+  getMember,
+  getRoom,
+} from '../storage/queries';
 import { newId, nowMs, randomToken } from '../storage/db';
 import {
   guardSql,
@@ -474,15 +479,9 @@ async function verifyCallback(
 }
 
 async function safeCursor(env: Env, subscriptionId: string, scanned: number): Promise<string> {
-  const pending = await env.DB
-    .prepare(
-      `SELECT MIN(event_seq) AS seq FROM mcp_event_deliveries
-        WHERE subscription_id = ? AND status IN ('pending', 'processing')`,
-    )
-    .bind(subscriptionId)
-    .first<{ seq: number | null }>();
-  if (pending?.seq !== null && pending?.seq !== undefined) {
-    return String(Math.max(0, pending.seq - 1));
+  const pendingSeq = await earliestPendingEventDeliverySeq(env.DB, subscriptionId);
+  if (pendingSeq !== null) {
+    return String(Math.max(0, pendingSeq - 1));
   }
   return String(Math.max(0, scanned));
 }
@@ -593,10 +592,7 @@ export async function subscribeEvents(
     refresh_before: new Date(refreshBefore).toISOString(),
   });
 
-  const existing = await env.DB
-    .prepare('SELECT * FROM mcp_event_subscriptions WHERE subscription_id = ?')
-    .bind(subscriptionId)
-    .first<EventSubscriptionRow>();
+  const existing = await readEventSubscription(env.DB, subscriptionId);
 
   const { head, floor } = await headAndFloor(
     env,
@@ -873,10 +869,7 @@ export async function getEventSubscription(
   env: Env,
   subscriptionId: string,
 ): Promise<EventSubscriptionRow | null> {
-  return env.DB
-    .prepare('SELECT * FROM mcp_event_subscriptions WHERE subscription_id = ?')
-    .bind(subscriptionId)
-    .first<EventSubscriptionRow>();
+  return readEventSubscription(env.DB, subscriptionId);
 }
 
 export function newEventDeliveryId(): string {

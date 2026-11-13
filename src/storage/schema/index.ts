@@ -7,11 +7,21 @@
  */
 export * from './contacts';
 export * from './core';
+export * from './files-events';
 export * from './rooms';
 
 import { CONTACT_TABLES } from './contacts';
 import { CORE_TABLES } from './core';
+import { driveFiles, mcpEventDeliveries, mcpEventSubscriptions, roomFiles } from './files-events';
 import { ROOMS_TABLES } from './rooms';
 
 /** schema parity 与运行时共用的表清单；新增域表时同时加入这里。 */
-export const SCHEMA_TABLES = [...CORE_TABLES, ...CONTACT_TABLES, ...ROOMS_TABLES] as const;
+export const SCHEMA_TABLES = [
+  ...CORE_TABLES,
+  ...CONTACT_TABLES,
+  ...ROOMS_TABLES,
+  driveFiles,
+  roomFiles,
+  mcpEventSubscriptions,
+  mcpEventDeliveries,
+] as const;

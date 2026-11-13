@@ -2,6 +2,10 @@ import { LIMITS } from '../contracts/limits';
 import type { Env } from '../env';
 import { nowMs, utf8Bytes } from '../storage/db';
 import {
+  countPendingEventDeliveries,
+  listEventSubscriptionsForScan,
+} from '../storage/queries';
+import {
   buildMessageCreatedPayload,
   buildWebhookOccurrence,
   MESSAGE_CREATED_ARGUMENTS,
@@ -28,10 +32,6 @@ interface DeliveryMatchRow {
 interface SubscriptionHeadRow {
   head: number;
   floor: number;
-}
-
-interface CountRow {
-  n: number;
 }
 
 async function suspendSubscription(
@@ -97,17 +97,6 @@ async function isActiveMember(env: Env, actorIdValue: string, roomId: string): P
     .bind(roomId, actorIdValue)
     .first<{ ok: number }>();
   return row !== null;
-}
-
-async function pendingDeliveryCount(env: Env, subscriptionId: string): Promise<number> {
-  const row = await env.DB
-    .prepare(
-      `SELECT COUNT(*) AS n FROM mcp_event_deliveries
-        WHERE subscription_id = ? AND status IN ('pending', 'processing')`,
-    )
-    .bind(subscriptionId)
-    .first<CountRow>();
-  return row?.n ?? 0;
 }
 
 async function deliveryMatches(
@@ -215,7 +204,7 @@ async function scanSubscription(
     subscription.actor_id,
     rows.results.map((row) => row.message_id),
   );
-  const queueCount = await pendingDeliveryCount(env, subscription.subscription_id);
+  const queueCount = await countPendingEventDeliveries(env.DB, subscription.subscription_id);
   let available = Math.max(
     0,
     LIMITS.eventsPendingDeliveriesPerSubscription - queueCount,
@@ -350,16 +339,13 @@ export async function scanEventSubscriptions(env: Env, afterId = ''): Promise<Sc
   let moreToScan = false;
   let failed = false;
   const now = nowMs();
-  const subscriptions = await env.DB
-    .prepare(
-      `SELECT * FROM mcp_event_subscriptions
-        WHERE active = 1 AND refresh_before > ? AND subscription_id > ?
-        ORDER BY subscription_id ASC
-        LIMIT ?`,
-    )
-    .bind(now, afterId, LIMITS.eventsScanSubscriptionsPerTick + 1)
-    .all<EventSubscriptionRow>();
-  const batch = subscriptions.results.slice(0, LIMITS.eventsScanSubscriptionsPerTick);
+  const subscriptions = await listEventSubscriptionsForScan(
+    env.DB,
+    now,
+    afterId,
+    LIMITS.eventsScanSubscriptionsPerTick + 1,
+  );
+  const batch = subscriptions.slice(0, LIMITS.eventsScanSubscriptionsPerTick);
   for (const subscription of batch) {
     try {
       moreToScan = (await scanSubscription(env, subscription, now)) || moreToScan;
@@ -372,7 +358,7 @@ export async function scanEventSubscriptions(env: Env, afterId = ''): Promise<Sc
     }
   }
   return {
-    nextSubscriptionId: subscriptions.results.length > batch.length
+    nextSubscriptionId: subscriptions.length > batch.length
       ? batch[batch.length - 1]!.subscription_id : null,
     moreToScan,
     failed,
