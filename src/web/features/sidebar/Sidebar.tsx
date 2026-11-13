@@ -1,3 +1,4 @@
+import type { RoomPreferenceMap } from '../../lib/room-preferences';
 import type { WebIdentity } from '../../lib/identity';
 import {
   firstChar,
@@ -27,6 +28,8 @@ interface SidebarProps {
   loadingMore: boolean;
   loadMoreError: string | null;
   streamError: string | null;
+  preferences?: RoomPreferenceMap;
+  notice?: { message: string; error: boolean } | null;
   onQueryChange: (value: string) => void;
   onFilterChange: (value: RoomFilter) => void;
   onCreateGroup: () => void;
@@ -65,6 +68,8 @@ export function Sidebar(props: SidebarProps) {
     loadingMore,
     loadMoreError,
     streamError,
+    preferences = {},
+    notice = null,
     onQueryChange,
     onFilterChange,
     onCreateGroup,
@@ -155,6 +160,15 @@ export function Sidebar(props: SidebarProps) {
             );
           })}
         </div>
+        <p
+          id="contact-link-banner"
+          className="contact-link-banner"
+          role="status"
+          data-error={notice?.error ? '1' : undefined}
+          hidden={!notice}
+        >
+          {notice?.message ?? ''}
+        </p>
       </header>
       <div className="sidebar-list">
         <ol id="room-list" className="room-list" aria-label={filterLabel}>
@@ -168,7 +182,9 @@ export function Sidebar(props: SidebarProps) {
                   </span>
                 </li>
               ))
-            : rooms.map((room) => <RoomRow key={room.room_id} room={room} />)}
+            : rooms.map((room) => (
+                <RoomRow key={room.room_id} room={room} preferences={preferences} />
+              ))}
         </ol>
         <p id="room-list-status" className="list-hint" role="status" hidden={!message}>
           {message}

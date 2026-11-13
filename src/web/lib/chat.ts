@@ -88,16 +88,29 @@ export interface RoomView {
   member_seq: string;
   member_count: number;
   my_role: 'owner' | 'admin' | 'member';
+  my_role_revision?: number;
   my_last_read_seq: string;
+  policy_revision?: number;
+  policies?: {
+    member_message: 'members' | 'owner_admin';
+    member_invite: 'members' | 'owner_admin';
+    member_history: 'from_join' | 'full';
+    member_join: 'open' | 'approval';
+    member_profile: 'members' | 'owner_admin';
+    member_mention_all: 'members' | 'owner_admin';
+  } | null;
   announcement: string;
   announcement_revision?: number;
   capabilities?: {
     edit_profile?: boolean;
     invite_members?: boolean;
     manage_announcement?: boolean;
+    manage_policy?: boolean;
+    approve_joins?: boolean;
     [key: string]: boolean | undefined;
   } | null;
   can_leave?: boolean;
+  can_dissolve?: boolean;
   /** direct 对端 Agent 的查看者管理权限；群聊不返回。 */
   peer_can_manage?: boolean;
   status: 'active' | 'dissolved';

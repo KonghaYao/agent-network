@@ -1,3 +1,5 @@
+import { roomPreference, type RoomPreferenceMap } from './room-preferences';
+
 /**
  * 会话列表的纯展示模型：只在已加载的 `network_rooms_list` 数据上过滤、排序，
  * 不发起请求、不读写服务端状态。
@@ -81,6 +83,11 @@ export function isUnread(room: RoomSummary): boolean {
   return Number(room.my_last_read_seq) < Number(room.head_seq);
 }
 
+/** 免打扰只抑制红点，不改变未读水位或服务端已读位置。 */
+export function hasUnreadAttention(room: RoomSummary, preferences: RoomPreferenceMap): boolean {
+  return isUnread(room) && !roomPreference(preferences, room.room_id).muted;
+}
+
 /** 归档 Agent、解散/只读会话不进入默认列表；与 legacy 首页一致。 */
 function isDefaultVisible(room: RoomSummary): boolean {
   return !room.peer_archived && !room.read_only;
@@ -98,8 +105,15 @@ function messageTime(room: RoomSummary): number {
   return room.last_message ? Number(room.last_message.created_at) || 0 : 0;
 }
 
-export function sortRooms(rooms: RoomSummary[]): RoomSummary[] {
+export function sortRooms(
+  rooms: RoomSummary[],
+  preferences: RoomPreferenceMap = {},
+): RoomSummary[] {
   return rooms.slice().sort((left, right) => {
+    const pinned =
+      Number(roomPreference(preferences, right.room_id).pinned) -
+      Number(roomPreference(preferences, left.room_id).pinned);
+    if (pinned !== 0) return pinned;
     const byMessage = messageTime(right) - messageTime(left);
     if (byMessage !== 0) return byMessage;
     return (Number(right.updated_at) || 0) - (Number(left.updated_at) || 0);
@@ -111,6 +125,7 @@ export function filterRooms(
   rooms: RoomSummary[],
   filter: RoomFilter,
   query: string,
+  preferences: RoomPreferenceMap = {},
 ): RoomSummary[] {
   const normalized = query.trim().toLowerCase();
   const byFilter = rooms.filter((room) => matchesFilter(room, filter));
@@ -121,7 +136,7 @@ export function filterRooms(
         return preview.toLowerCase().includes(normalized);
       })
     : byFilter;
-  return sortRooms(matched);
+  return sortRooms(matched, preferences);
 }
 
 export function roomFilterEmptyMessage(

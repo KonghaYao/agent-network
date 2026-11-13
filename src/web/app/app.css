@@ -46,6 +46,10 @@
 
 .spa-dialog-content.members-card {
   width: min(560px, calc(100vw - 32px));
+  /* legacy GROUP_STYLE 把 `.members-card` 当成 flex 列；React 弹窗由外层滚动，
+     成员列表不应被邀请/策略区块挤成一条缝。 */
+  display: block;
+  overflow-y: auto;
 }
 
 .spa-dialog-close {
@@ -663,4 +667,345 @@ body #root button.primary:hover {
   .contact-request-actions {
     justify-content: flex-end;
   }
+}
+
+/* ---- 4B-6b：好友链接 / 群管理 / Task / 搜索 / 转发 ------------------------ */
+
+.contact-search-hint {
+  margin: 0 0 10px;
+  color: var(--wx-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.contact-search-form label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--wx-muted);
+  font-size: 12px;
+}
+
+.contact-search-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.contact-search-controls input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.contact-search-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--wx-line);
+}
+
+.contact-search-main {
+  min-width: 0;
+}
+
+.contact-search-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.contact-search-name {
+  overflow-wrap: anywhere;
+}
+
+.contact-search-kind,
+.contact-search-id,
+.contact-search-state {
+  color: var(--wx-muted);
+  font-size: 11px;
+}
+
+.contact-search-id {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.contact-search-confirm {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--wx-line);
+  border-radius: 8px;
+}
+
+.contact-search-confirm code {
+  display: block;
+  margin: 6px 0 10px;
+  overflow-wrap: anywhere;
+}
+
+.contact-search-confirm textarea {
+  width: 100%;
+  min-height: 64px;
+}
+
+.contact-search-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.members-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 14px 0 8px;
+}
+
+.members-section-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.members-invite-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.members-invite-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--wx-muted);
+  font-size: 11px;
+}
+
+.members-invite-form input {
+  width: 82px;
+}
+
+.members-invite-share {
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--wx-line);
+  border-radius: 8px;
+}
+
+.members-invite-url {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.member-roster-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--wx-line);
+}
+
+.group-policies {
+  margin-top: 12px;
+}
+
+.group-policy-form {
+  display: grid;
+  gap: 8px;
+}
+
+.group-policies .field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+}
+
+.group-policies .field select {
+  flex: 0 1 180px;
+  min-width: 0;
+}
+
+#group-policy-status[data-error='1'],
+#members-invites-status[data-error='1'],
+#contact-search-status[data-error='1'] {
+  color: var(--wx-danger);
+}
+
+.spa-dialog-content.agent-reissue-card {
+  width: min(620px, calc(100vw - 32px));
+}
+
+.room-menu-reissue-text {
+  width: 100%;
+  min-height: 150px;
+  font:
+    12px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  overflow-wrap: anywhere;
+}
+
+.spa-dialog-content.message-search-card {
+  width: min(680px, calc(100vw - 32px));
+}
+
+.message-search-form {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.message-search-results {
+  max-height: min(50dvh, 440px);
+  overflow-y: auto;
+}
+
+.message-search-result,
+.task-search-result {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px;
+  border: 0;
+  border-top: 1px solid var(--wx-line);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.message-search-result:hover,
+.message-search-result:focus-visible,
+.task-search-result:hover,
+.task-search-result:focus-visible {
+  background: var(--wx-hover);
+}
+
+.message-search-result strong {
+  display: block;
+  font-size: 12px;
+}
+
+.message-search-result span,
+.task-search-preview {
+  display: block;
+  margin-top: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.task-search-main {
+  display: block;
+}
+
+.task-search-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-search-count {
+  flex: 0 0 auto;
+  color: var(--wx-muted);
+  font-size: 11px;
+}
+
+.message-context-items {
+  max-height: min(55dvh, 480px);
+  overflow-y: auto;
+}
+
+.message-context-item {
+  padding: 10px 8px;
+  border-top: 1px solid var(--wx-line);
+}
+
+.message-context-item.is-focus {
+  background: color-mix(in srgb, var(--wx-link) 12%, transparent);
+}
+
+.message-context-item header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--wx-muted);
+  font-size: 11px;
+}
+
+.message-context-item p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.spa-dialog-content.forward-card {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.forward-preview {
+  max-height: 160px;
+  margin: 0 0 10px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.forward-rooms {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.forward-rooms button {
+  min-height: 44px;
+  text-align: left;
+}
+
+.forward-rooms button[aria-pressed='true'] {
+  border-color: var(--wx-green);
+  background: color-mix(in srgb, var(--wx-green) 12%, transparent);
+}
+
+.spa-dialog-content.task-trace-card {
+  top: 0;
+  right: 0;
+  left: auto;
+  width: min(560px, 100vw);
+  height: 100dvh;
+  max-height: 100dvh;
+  transform: none;
+  border-radius: 0;
+}
+
+@media (max-width: 759px) {
+  .spa-dialog-content.agent-reissue-card,
+  .spa-dialog-content.message-search-card,
+  .spa-dialog-content.forward-card,
+  .spa-dialog-content.task-trace-card {
+    inset: 0;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    transform: none;
+    padding: calc(16px + env(safe-area-inset-top)) 16px
+      calc(16px + env(safe-area-inset-bottom));
+  }
+}
+
+#message-search-button {
+  min-height: 32px;
+  padding: 0 8px;
 }

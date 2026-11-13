@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { EmptyPane } from '../app/AppShell';
 import { useActorStream } from '../app/mcp/useActorStream';
@@ -7,8 +7,16 @@ import { SplitLayout } from '../features/layout/SplitLayout';
 import { ContactRequestsDialog } from '../features/overlays/ContactRequestsDialog';
 import { GroupCreateDialog } from '../features/overlays/GroupCreateDialog';
 import { Sidebar, type SidebarStatus } from '../features/sidebar/Sidebar';
+import { useRoomPreferences } from '../hooks/useRoomPreferences';
 import { useRooms } from '../hooks/useRooms';
 import { useWebSession } from '../hooks/useWebSession';
+import {
+  friendLinkFailure,
+  friendLinkReason,
+  previewFriendLink,
+  redeemFriendLink,
+  takeFriendLinkToken,
+} from '../lib/friend-link';
 import { filterRooms } from '../lib/rooms';
 import { queryKeys } from '../lib/query-keys';
 import { useRoomFilterStore } from '../stores/ui';
@@ -28,6 +36,12 @@ export function HomePage() {
   const [contactsOpen, setContactsOpen] = useState(false);
   const filter = useRoomFilterStore((state) => state.filter);
   const changeFilter = useRoomFilterStore((state) => state.setFilter);
+  const roomPreferences = useRoomPreferences(session.session?.identity.actor_id ?? null);
+  const friendToken = useRef<string | null>(null);
+  const friendRead = useRef(false);
+  const [friendNotice, setFriendNotice] = useState<{ message: string; error: boolean } | null>(
+    null,
+  );
 
   const token = session.session?.token ?? null;
   const actorId = session.session?.identity.actor_id ?? null;
@@ -55,9 +69,55 @@ export function HomePage() {
     });
   }, []);
 
+  useEffect(() => {
+    if (friendRead.current) return;
+    friendRead.current = true;
+    friendToken.current = takeFriendLinkToken();
+  }, []);
+
+  useEffect(() => {
+    if (!friendToken.current) return;
+    if (session.status === 'logged-out' || session.status === 'credential-invalid') {
+      setFriendNotice({
+        message: '好友链接需要可用的浏览器身份；请先创建身份或完成设备配对后重新打开链接。',
+        error: true,
+      });
+      friendToken.current = null;
+      return;
+    }
+    const token = session.session?.token;
+    const identity = session.session?.identity;
+    if (session.status !== 'ready' || !token || !identity) return;
+    const pending = friendToken.current;
+    friendToken.current = null;
+    void (async () => {
+      try {
+        const preview = await previewFriendLink(pending, token);
+        if (!preview.valid) {
+          setFriendNotice({ message: friendLinkReason(preview.reason), error: true });
+          return;
+        }
+        const result = await redeemFriendLink(pending, token);
+        const ownerName = result.owner?.name ?? preview.owner?.name ?? '对方';
+        setFriendNotice({
+          message: result.already_friends
+            ? `已是好友：${ownerName}`
+            : `已添加好友：${ownerName}`,
+          error: false,
+        });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.rooms(identity.actor_id) }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.contacts(identity.actor_id) }),
+        ]);
+      } catch (failure) {
+        setFriendNotice({ message: `添加好友失败：${friendLinkFailure(failure)}`, error: true });
+      }
+    })();
+  }, [queryClient, session.session, session.status]);
+
   const rooms = useMemo(
-    () => filterRooms(roomsState.rooms, filter, query),
-    [roomsState.rooms, filter, query],
+    () => filterRooms(roomsState.rooms, filter, query, roomPreferences.preferences),
+    [roomsState.rooms, filter, query, roomPreferences.preferences],
   );
 
   const status: SidebarStatus =
@@ -108,6 +168,8 @@ export function HomePage() {
             loadingMore={roomsState.loadingMore}
             loadMoreError={roomsState.loadMoreError}
             streamError={stream.error}
+            preferences={roomPreferences.preferences}
+            notice={friendNotice}
             onQueryChange={setQuery}
             onFilterChange={changeFilter}
             onCreateGroup={() => setGroupOpen(true)}

@@ -1,24 +1,31 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { AppShell } from '../app/AppShell';
 import { Composer, type ComposerSendInput } from '../features/chat/Composer';
+import { ForwardDialog } from '../features/chat/ForwardDialog';
 import { Timeline } from '../features/chat/Timeline';
+import { AgentReissueDialog } from '../features/overlays/AgentReissueDialog';
 import { AnnouncementDialog } from '../features/overlays/AnnouncementDialog';
 import { AnnouncementPopover } from '../features/overlays/AnnouncementPopover';
 import { confirmDialog } from '../features/overlays/confirm';
 import { LeaveRoomDialog } from '../features/overlays/LeaveRoomDialog';
 import { MembersDialog } from '../features/overlays/MembersDialog';
+import { RenameAgentDialog } from '../features/overlays/RenameAgentDialog';
 import { RenameRoomDialog } from '../features/overlays/RenameRoomDialog';
 import { ReportDialog } from '../features/overlays/ReportDialog';
 import { RoomMenu, type RoomOverlay } from '../features/overlays/RoomMenu';
 import { TransferDialog } from '../features/overlays/TransferDialog';
+import { MessageSearchDialog } from '../features/tasks/MessageSearchDialog';
+import { TaskTraceDialog } from '../features/tasks/TaskTraceDialog';
 import { AccountMenu } from '../features/sidebar/AccountMenu';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useRoomChat } from '../hooks/useRoomChat';
 import { useRoomFiles } from '../hooks/useRoomFiles';
 import { useRoomMonitor } from '../hooks/useRoomMonitor';
+import { useRoomPreferences } from '../hooks/useRoomPreferences';
+import { useRoomMenuActions, type AgentManagementView } from '../hooks/useRoomMenuActions';
 import { useSendQueue } from '../hooks/useSendQueue';
 import {
   buildSendPlan,
@@ -27,7 +34,7 @@ import {
   senderName,
   type HistoryMessage,
 } from '../lib/chat';
-import { callTool } from '../lib/mcp-client';
+import { callTool, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import { newRequestId } from '../lib/request-id';
 
@@ -63,10 +70,21 @@ interface ChatPageProps {
   roomId: string;
 }
 
+interface ContactBlockPage {
+  items: {
+    active: boolean;
+    blocked_actor: { actor_id: string } | null;
+  }[];
+}
+
 function onlineLabel(online: boolean | null): string {
   if (online === true) return '在线';
   if (online === false) return '离线';
   return '未知';
+}
+
+function failureText(error: unknown): string {
+  return (error as McpError).message || String(error);
 }
 
 /**
@@ -90,12 +108,16 @@ export function ChatPage({ roomId }: ChatPageProps) {
     readPreference(MONITOR_OPEN_KEY, false),
   );
   const [overlayPane, setOverlayPane] = useState<'files' | 'monitor' | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [trace, setTrace] = useState<{ rootId: string; focusId: string | null } | null>(null);
+  const [forwardItem, setForwardItem] = useState<HistoryMessage | null>(null);
   const desktop = useMediaQuery('(min-width: 1200px)');
   const tablet = useMediaQuery('(min-width: 760px) and (max-width: 1199px)');
   const mobile = useIsMobile();
 
   const identity = chat.session?.identity ?? null;
   const token = chat.session?.token ?? null;
+  const roomPreferences = useRoomPreferences(identity?.actor_id ?? null);
   const room = chat.detail?.room ?? null;
   const members = useMemo(
     () => new Map((chat.detail?.members ?? []).map((member) => [member.actor_id, member])),
@@ -120,6 +142,10 @@ export function ChatPage({ roomId }: ChatPageProps) {
     setReply(null);
     setStatus('');
     setOverlay(null);
+    setSearchOpen(false);
+    setTrace(null);
+    setForwardItem(null);
+    roomActions.setRenameAgentOpen(false);
   }, [roomId]);
 
   useEffect(() => {
@@ -139,6 +165,38 @@ export function ChatPage({ roomId }: ChatPageProps) {
     return null;
   }, [room, identity, members]);
 
+  const management = useQuery({
+    queryKey: queryKeys.agentManagement(peer?.actor_id ?? null),
+    enabled: Boolean(token && room?.kind === 'direct' && peer?.kind === 'agent'),
+    queryFn: ({ signal }) =>
+      callTool<AgentManagementView>(
+        'network_agent_management_get',
+        { actor_id: peer?.actor_id ?? '' },
+        { token: token ?? undefined, signal },
+      ),
+    retry: false,
+    staleTime: 10_000,
+  });
+
+  const blocks = useQuery({
+    queryKey: queryKeys.contactBlocks(identity?.actor_id ?? null),
+    enabled: Boolean(token && room?.kind === 'direct' && peer),
+    queryFn: ({ signal }) =>
+      callTool<ContactBlockPage>(
+        'network_contact_blocks_list',
+        { limit: 100 },
+        { token: token ?? undefined, signal },
+      ),
+    retry: false,
+    staleTime: 10_000,
+  });
+
+  const blocked = Boolean(
+    peer &&
+      blocks.data?.items.some(
+        (item) => item.active && item.blocked_actor?.actor_id === peer.actor_id,
+      ),
+  );
   const title = !room
     ? '会话'
     : room.kind === 'direct'
@@ -164,28 +222,82 @@ export function ChatPage({ roomId }: ChatPageProps) {
     setStatus(message);
   }, []);
 
-  const onArchive = useCallback(async () => {
-    if (!peer || peer.kind !== 'agent' || !token || !identity) return;
-    const confirmed = await confirmDialog({
-      title: '归档 Agent',
-      message: `归档 ${peer.name} 后，这个单聊会从默认会话列表隐藏，可随时在“已归档 Agents”中恢复；消息、文件与凭据都不受影响。`,
-      confirmText: '归档',
-    });
-    if (!confirmed) return;
-    try {
-      await callTool(
-        'network_agent_archive',
-        { request_id: newRequestId('web_agent_archive'), actor_id: peer.actor_id },
-        { token },
-      );
-      setStatus('已归档，可在已归档 Agents 中恢复');
-      await queryClient.invalidateQueries({ queryKey: queryKeys.rooms(identity.actor_id) });
-    } catch (error) {
-      setStatus(
-        `归档失败：${error instanceof Error ? error.message : String(error)}`,
-      );
+  const roomActions = useRoomMenuActions({
+    room,
+    peer,
+    identity,
+    token,
+    members,
+    management: management.data ?? null,
+    blocked,
+    preferences: roomPreferences,
+    queryClient,
+    setStatus,
+    closeOverlays: () => setOverlay(null),
+  });
+
+  const onToggleTask = useCallback(
+    async (item: HistoryMessage) => {
+      if (!token || !room || room.read_only) return;
+      const mark = item.task_root_id !== item.message_id;
+      try {
+        await callTool(
+          mark ? 'network_task_mark' : 'network_task_unmark',
+          {
+            request_id: newRequestId('web_task_mark'),
+            room_id: room.room_id,
+            message_id: item.message_id,
+          },
+          { token },
+        );
+        setStatus(mark ? '已标记为 Task' : '已取消 Task 标记');
+        if (!mark && trace?.rootId === item.message_id) setTrace(null);
+        await queryClient.invalidateQueries({ queryKey: queryKeys.room(room.room_id) });
+      } catch (error) {
+        setStatus(`${mark ? '标记失败' : '取消标记失败'}：${failureText(error)}`);
+      }
+    },
+    [queryClient, room, token, trace],
+  );
+
+  const onRecall = useCallback(
+    async (item: HistoryMessage) => {
+      if (!token || !room) return;
+      const confirmed = await confirmDialog({
+        title: '撤回消息',
+        message: '撤回这条消息？仅支持两分钟内的普通消息，已触发的 Agent 工作需单独取消。',
+        confirmText: '撤回',
+        danger: true,
+      });
+      if (!confirmed) return;
+      try {
+        await callTool(
+          'network_message_recall',
+          { request_id: newRequestId('web_recall'), message_id: item.message_id },
+          { token },
+        );
+        setStatus('消息已撤回');
+        if (trace?.rootId === item.message_id) setTrace(null);
+        if (reply?.messageId === item.message_id) setReply(null);
+        setSearchOpen(false);
+        setForwardItem((current) =>
+          current?.message_id === item.message_id ? null : current,
+        );
+        await queryClient.invalidateQueries({ queryKey: queryKeys.room(room.room_id) });
+      } catch (error) {
+        setStatus(`撤回失败：${failureText(error)}`);
+      }
+    },
+    [queryClient, reply, room, token, trace],
+  );
+
+  const onJumpToMessage = useCallback((messageId: string) => {
+    for (const node of document.querySelectorAll<HTMLElement>('[data-message-id]')) {
+      if (node.dataset.messageId !== messageId) continue;
+      node.scrollIntoView({ block: 'center' });
+      return;
     }
-  }, [identity, peer, queryClient, token]);
+  }, []);
 
   const onSend = useCallback(
     async (input: ComposerSendInput) => {
@@ -360,6 +472,26 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 </div>
                 {room ? (
                   <div className="chat-head-actions">
+                    {peer?.kind === 'agent' ? (
+                      <button
+                        className="link-btn"
+                        id="rename"
+                        type="button"
+                        onClick={() => roomActions.setRenameAgentOpen(true)}
+                      >
+                        改名
+                      </button>
+                    ) : null}
+                    <button
+                      className="link-btn"
+                      id="message-search-button"
+                      type="button"
+                      aria-label="搜索聊天记录"
+                      title="搜索聊天记录"
+                      onClick={() => setSearchOpen(true)}
+                    >
+                      搜索
+                    </button>
                     <button
                       className={`monitor-toggle${monitorVisible ? ' active' : ''}`}
                       id="monitor-toggle"
@@ -396,8 +528,31 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       room={room}
                       peerName={peer?.name ?? null}
                       peerKind={peer?.kind ?? null}
+                      preference={roomPreferences.preference(room.room_id)}
+                      blocked={blocked}
+                      agent={
+                        peer?.kind === 'agent'
+                          ? {
+                              canManage: roomActions.canManageAgent === true,
+                              disabled: management.data?.disabled === true,
+                              canTransfer:
+                                management.data?.can_transfer === true ||
+                                management.data?.pending_transfer?.can_accept === true ||
+                                management.data?.pending_transfer?.can_cancel === true ||
+                                room.peer_can_manage === true,
+                              canArchive: roomActions.canManageAgent === true,
+                            }
+                          : null
+                      }
                       onOpen={setOverlay}
-                      onArchive={() => void onArchive()}
+                      onTogglePreference={roomActions.onTogglePreference}
+                      onArchive={() => void roomActions.onArchive()}
+                      onCopyPrompt={() => void roomActions.onCopyPrompt()}
+                      onToggleBlock={() => void roomActions.onToggleBlock()}
+                      onDeleteFriend={() => void roomActions.onDeleteFriend()}
+                      onToggleAgentDisabled={() => void roomActions.onToggleAgentDisabled()}
+                      onReissueToken={() => void roomActions.onReissueToken()}
+                      onDissolve={() => void roomActions.onDissolve()}
                     />
                   </div>
                 ) : null}
@@ -434,6 +589,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     members={members}
                     identityId={identity.actor_id}
                     identityName={identity.name}
+                    identityKind={identity.kind}
                     mentions={mentions}
                     outbox={queue.items}
                     olderLoading={chat.olderLoading}
@@ -447,6 +603,10 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onQuote={onQuote}
                     onStatus={onStatus}
                     onMarkRead={chat.markRead}
+                    onToggleTask={(item) => void onToggleTask(item)}
+                    onOpenTask={(rootId, focusId) => setTrace({ rootId, focusId })}
+                    onRecall={(item) => void onRecall(item)}
+                    onForward={setForwardItem}
                   />
                 ) : null}
                 <p id="status" role="status">
@@ -546,6 +706,76 @@ export function ChatPage({ roomId }: ChatPageProps) {
             room={room}
             token={token}
           />
+          <AgentReissueDialog
+            open={roomActions.reissue !== null}
+            onOpenChange={(open) => {
+              if (!open) roomActions.setReissue(null);
+            }}
+            agentName={roomActions.reissue?.name ?? peer?.name ?? 'Agent'}
+            prompt={roomActions.reissue?.prompt ?? ''}
+          />
+          {peer?.kind === 'agent' ? (
+            <RenameAgentDialog
+              open={roomActions.renameAgentOpen}
+              onOpenChange={roomActions.setRenameAgentOpen}
+              actorId={peer.actor_id}
+              currentName={peer.name}
+              token={token}
+              onRenamed={() => {
+                setStatus('已更新 Agent 名称');
+                void queryClient.invalidateQueries({
+                  queryKey: queryKeys.room(room.room_id),
+                });
+                void queryClient.invalidateQueries({
+                  queryKey: queryKeys.rooms(identity.actor_id),
+                });
+              }}
+            />
+          ) : null}
+          <MessageSearchDialog
+            open={searchOpen}
+            onOpenChange={setSearchOpen}
+            roomId={room.room_id}
+            token={token}
+            onOpenTask={(rootId, focusId) => {
+              setSearchOpen(false);
+              setTrace({ rootId, focusId });
+            }}
+          />
+          <TaskTraceDialog
+            open={trace !== null}
+            onOpenChange={(open) => {
+              if (!open) setTrace(null);
+            }}
+            roomId={room.room_id}
+            rootId={trace?.rootId ?? null}
+            focusId={trace?.focusId ?? null}
+            token={token}
+            onJump={onJumpToMessage}
+          />
+          {forwardItem ? (
+            <ForwardDialog
+              open
+              onOpenChange={(open) => {
+                if (!open) setForwardItem(null);
+              }}
+              item={forwardItem}
+              senderLabel={senderName(
+                forwardItem.sender_id,
+                members,
+                identity.name,
+                identity.actor_id,
+              )}
+              sourceRoomId={room.room_id}
+              token={token}
+              onSent={(roomName) => {
+                setStatus(`已转发给 ${roomName}`);
+                void queryClient.invalidateQueries({
+                  queryKey: queryKeys.rooms(identity.actor_id),
+                });
+              }}
+            />
+          ) : null}
         </>
       ) : null}
     </>
