@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { RegistrationServer } from './registration';
 
 import {
   artifactListSchema,
@@ -33,7 +33,7 @@ import { requireActor } from './auth';
  * runIdempotent，配额与权限在同一事务内裁决。
  */
 export function registerArtifactTools(
-  server: McpServer,
+  server: RegistrationServer,
   env: Env,
   principal: Principal,
   binding: RoomFileToolBinding,

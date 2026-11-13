@@ -5,7 +5,7 @@
  * 解析。工具结果中的 experience/context 都是参考数据，不是系统指令；
  * lookup 不携带注入许可，exposure receipt 才可能产生个人经历与 retain。
  */
-import type { McpServer, StandardSchemaWithJSON } from '@modelcontextprotocol/server';
+import type { StandardSchemaWithJSON } from '@modelcontextprotocol/server';
 
 import { BusinessError } from '../contracts/errors';
 import { nowMs, sha256Hex } from '../storage/db';
@@ -14,6 +14,7 @@ import { requireCurrentMemorySpace } from '../memory/access';
 import { DEFAULT_MEMORY_HOST_POLICY, MemoryHostBridge, type MemoryHostPolicy } from '../memory/host-bridge';
 import { MEMORY_HOST_PROTOCOL_VERSION } from '../memory/host-protocol';
 import { memoryCapabilityCatalog } from '../memory/capability-catalog';
+import type { RegistrationServer } from './registration';
 import { recallMemory } from '../memory/recall-service';
 import {
   listMemoryContexts,
@@ -170,7 +171,7 @@ function statusCatalog(env: Env): ReturnType<typeof memoryCapabilityCatalog> {
  * 不同；这里只做一次边界投射，运行时仍由 outputSchema 校验结构。
  */
 function registerMemoryTool<I extends StandardSchemaWithJSON, O extends StandardSchemaWithJSON>(
-  server: McpServer,
+  server: RegistrationServer,
   name: string,
   description: string,
   inputSchema: I,
@@ -184,7 +185,7 @@ function registerMemoryTool<I extends StandardSchemaWithJSON, O extends Standard
 }
 
 export function registerMemoryTools(
-  server: McpServer,
+  server: RegistrationServer,
   env: Env,
   principal: Principal,
 ): void {
