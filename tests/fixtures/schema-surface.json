@@ -1,0 +1,2841 @@
+{
+  "version": 1,
+  "migrations": [
+    "0001_initial.sql",
+    "0002_named_guards.sql",
+    "0003_room_files.sql",
+    "0004_mcp_events.sql",
+    "0005_agent_archive.sql",
+    "0006_agent_presence.sql",
+    "0007_agent_presence_activity.sql",
+    "0008_actor_room_monitors.sql",
+    "0009_feedback.sql",
+    "0010_room_tasks.sql",
+    "0011_delivery_reminders.sql",
+    "0012_identity_management_devices.sql",
+    "0017_task_workflow.sql",
+    "0018_p0_guards.sql",
+    "0019_contact_relations.sql",
+    "0020_group_roles.sql",
+    "0021_owner_leave_guard.sql",
+    "0022_contact_blocks_reports.sql",
+    "0023_room_invitations.sql",
+    "0024_room_owner_transfers.sql",
+    "0025_group_history_boundary.sql",
+    "0026_private_files_retention.sql",
+    "0027_group_invite_links.sql",
+    "0028_message_mentions.sql",
+    "0029_task_progress.sql",
+    "0030_task_initial_assignee.sql",
+    "0031_task_initial_assignee_known.sql",
+    "0032_task_submission_sources.sql",
+    "0033_task_review_acceptance.sql",
+    "0034_task_handoff_packs.sql",
+    "0035_task_recovery.sql",
+    "0036_device_pairing_sync.sql",
+    "0037_room_lifecycle.sql",
+    "0038_ownerless_room_guard.sql",
+    "0039_delivery_message_state_index.sql",
+    "0040_contact_invite_links.sql",
+    "0041_message_task_trace.sql",
+    "0042_drop_legacy_tasks.sql",
+    "0043_group_history_full_backfill.sql",
+    "0044_files_public_backfill.sql",
+    "0045_memory_ledger.sql",
+    "0046_memory_experience_catchup.sql",
+    "0047_message_search_fts.sql"
+  ],
+  "migrationsDigest": "a121ed575d948ed7f7f9371ad4444632b9dda5c025d0ff9a20bd2235815ef125",
+  "counts": {
+    "tables": 120,
+    "guardTables": 48,
+    "messageSearchTables": 5,
+    "indexes": 219,
+    "triggers": 7
+  },
+  "tables": {
+    "actor_room_monitors": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "actor_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=2|h=0",
+        "url|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_actor_room_monitors_1|u=1|o=pk|p=0|cols=actor_id,room_id|desc=0,0"
+      ],
+      "foreignKeys": [
+        "actor_id->actors.actor_id|on_update=no action|on_delete=cascade|match=none",
+        "room_id->rooms.room_id|on_update=no action|on_delete=cascade|match=none"
+      ],
+      "checks": [
+        "(url<>'')"
+      ],
+      "sqlDigest": "81fda1facfc113c9cca5462bb5b66ad3b6d5586e38cae7f61bcd6d96e1260636"
+    },
+    "actors": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "actor_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "agent_session_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "name|TEXT|nn=1|d=null|pk=0|h=0",
+        "metadata|TEXT|nn=1|d='{}'|pk=0|h=0",
+        "inbox_head_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "inbox_min_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "pending_count|INTEGER|nn=1|d=0|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "archived_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "archived_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "disabled_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "disabled_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "disabled_reason|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_actors_1|u=1|o=pk|p=0|cols=actor_id|desc=0",
+        "sqlite_autoindex_actors_2|u=1|o=u|p=0|cols=agent_session_id|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(kind in('human','agent'))",
+        "(pending_count>=0)"
+      ],
+      "sqlDigest": "5b2d1378394da3700127ed0403f16bb97d3298d4d3097e0c89d24a90d859ca9a"
+    },
+    "agent_claims": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "claim_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "agent_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "claim_code_hash|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "attempts|INTEGER|nn=1|d=0|pk=0|h=0",
+        "max_attempts|INTEGER|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "confirmed_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "confirmed_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_agent_claims_pending|u=1|o=c|p=1|cols=agent_id|desc=0",
+        "idx_agent_claims_status|u=0|o=c|p=0|cols=status,expires_at|desc=0,0",
+        "sqlite_autoindex_agent_claims_1|u=1|o=pk|p=0|cols=claim_id|desc=0",
+        "sqlite_autoindex_agent_claims_2|u=1|o=u|p=0|cols=claim_code_hash|desc=0"
+      ],
+      "foreignKeys": [
+        "agent_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(attempts>=0)",
+        "(max_attempts>0)",
+        "(status in('pending','confirmed','rejected','cancelled','expired'))"
+      ],
+      "sqlDigest": "d96b2c56a343fa4dd13284ac235b4f67758cb7ff64e697f941f5dfbde5a4c3aa"
+    },
+    "agent_delegations": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "delegation_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "agent_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "delegate_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "scopes_json|TEXT|nn=1|d='[]'|pk=0|h=0",
+        "permission_version|INTEGER|nn=1|d=1|pk=0|h=0",
+        "created_by|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "revoked_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "revoked_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_agent_delegations_active|u=1|o=c|p=1|cols=agent_id,delegate_actor_id|desc=0,0",
+        "idx_agent_delegations_delegate|u=0|o=c|p=0|cols=delegate_actor_id,status|desc=0,0",
+        "sqlite_autoindex_agent_delegations_1|u=1|o=pk|p=0|cols=delegation_id|desc=0"
+      ],
+      "foreignKeys": [
+        "agent_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "delegate_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(permission_version>=1)",
+        "(status in('active','revoked','expired'))"
+      ],
+      "sqlDigest": "09cbb2b38607e1cf436b9ff110d9708ec83107268154859cc550cb2f2a79f618"
+    },
+    "agent_management_transfers": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "transfer_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "agent_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "from_manager_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "to_manager_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "from_permission_version|INTEGER|nn=1|d=null|pk=0|h=0",
+        "context_json|TEXT|nn=1|d='{}'|pk=0|h=0",
+        "created_by|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "responded_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "responded_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_agent_transfers_pending|u=1|o=c|p=1|cols=agent_id|desc=0",
+        "sqlite_autoindex_agent_management_transfers_1|u=1|o=pk|p=0|cols=transfer_id|desc=0"
+      ],
+      "foreignKeys": [
+        "agent_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "from_manager_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "to_manager_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(status in('pending','accepted','rejected','cancelled','expired'))"
+      ],
+      "sqlDigest": "7244772894cf28afddb169a71f2ae4a91b8ea0367544717d43a4b9a20eb20170"
+    },
+    "agent_managements": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "binding_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "agent_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "manager_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "grant_source|TEXT|nn=1|d=null|pk=0|h=0",
+        "scopes_json|TEXT|nn=1|d='[]'|pk=0|h=0",
+        "permission_version|INTEGER|nn=1|d=1|pk=0|h=0",
+        "initiated_by|TEXT|nn=1|d=null|pk=0|h=0",
+        "confirmed_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "confirmed_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "revoked_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "revoked_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_agent_managements_active|u=1|o=c|p=1|cols=agent_id|desc=0",
+        "idx_agent_managements_agent|u=0|o=c|p=0|cols=agent_id,status|desc=0,0",
+        "idx_agent_managements_manager|u=0|o=c|p=0|cols=manager_id,status,updated_at|desc=0,0,1",
+        "sqlite_autoindex_agent_managements_1|u=1|o=pk|p=0|cols=binding_id|desc=0"
+      ],
+      "foreignKeys": [
+        "agent_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "manager_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(grant_source in('created','claim','transfer','legacy'))",
+        "(permission_version>=1)",
+        "(status in('active','revoked','expired'))"
+      ],
+      "sqlDigest": "7efe9871325abe94d7169dd5cec9376102fc74cc72b4f6d66b78b992d2fbb026"
+    },
+    "agent_presence_state": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "actor_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "revision|INTEGER|nn=1|d=0|pk=0|h=0",
+        "generation_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "phase|TEXT|nn=1|d=null|pk=0|h=0",
+        "online_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "disconnect_observed_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "offline_due_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "time_basis|TEXT|nn=1|d='observed'|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "last_seen_at|INTEGER|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_agent_presence_activity|u=0|o=c|p=0|cols=phase,last_seen_at|desc=0,0",
+        "idx_agent_presence_due|u=0|o=c|p=0|cols=phase,offline_due_at|desc=0,0",
+        "sqlite_autoindex_agent_presence_state_1|u=1|o=pk|p=0|cols=actor_id|desc=0"
+      ],
+      "foreignKeys": [
+        "actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(phase in('offline','online','pending_offline'))",
+        "(time_basis in('observed','inferred'))"
+      ],
+      "sqlDigest": "ebac2b50a4a73faae6ff0b65f0852a2069d9f55ce7847526f6ee27d33b612f6e"
+    },
+    "artifacts": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "artifact_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "version|INTEGER|nn=1|d=null|pk=0|h=0",
+        "file_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_by|TEXT|nn=1|d=null|pk=0|h=0",
+        "summary|TEXT|nn=1|d=''|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "created_seq|INTEGER|nn=0|d=null|pk=0|h=0",
+        "released_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "released_by|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_artifacts_file|u=1|o=c|p=0|cols=file_id|desc=0",
+        "idx_artifacts_room_created|u=0|o=c|p=0|cols=room_id,created_at,artifact_id|desc=0,1,1",
+        "sqlite_autoindex_artifacts_1|u=1|o=pk|p=0|cols=artifact_id|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(status in('delivered','released'))",
+        "(version>=1)"
+      ],
+      "sqlDigest": "8da28b3c8c72aac00fe4e00819e25ab9b56b94179d4e9c96493c33f1bc1778cd"
+    },
+    "contact_blocks": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "block_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "blocker_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "blocked_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "reason|TEXT|nn=1|d=''|pk=0|h=0",
+        "mute_mentions|INTEGER|nn=1|d=1|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "released_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "released_by|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_contact_blocks_active|u=1|o=c|p=1|cols=blocker_actor_id,blocked_actor_id|desc=0,0",
+        "idx_contact_blocks_blocked|u=0|o=c|p=0|cols=blocked_actor_id,released_at,created_at|desc=0,0,1",
+        "idx_contact_blocks_blocker|u=0|o=c|p=0|cols=blocker_actor_id,released_at,created_at|desc=0,0,1",
+        "sqlite_autoindex_contact_blocks_1|u=1|o=pk|p=0|cols=block_id|desc=0"
+      ],
+      "foreignKeys": [
+        "blocked_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "blocker_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "released_by->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(blocker_actor_id<>blocked_actor_id)",
+        "(mute_mentions in(0,1))"
+      ],
+      "sqlDigest": "93cf15ae12348e521b0bfe6c6de765c174262f7ab5ecaa18c2f3b125c0869821"
+    },
+    "contact_invite_links": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "link_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "owner_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "token_hash|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "used_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "used_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "revoked_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "revoked_by|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_contact_invite_links_owner|u=0|o=c|p=0|cols=owner_actor_id,status,created_at|desc=0,0,1",
+        "idx_contact_invite_links_status|u=0|o=c|p=0|cols=status,expires_at|desc=0,0",
+        "sqlite_autoindex_contact_invite_links_1|u=1|o=pk|p=0|cols=link_id|desc=0",
+        "sqlite_autoindex_contact_invite_links_2|u=1|o=u|p=0|cols=token_hash|desc=0"
+      ],
+      "foreignKeys": [
+        "owner_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "revoked_by->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "used_by->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(owner_actor_id<>used_by)",
+        "(status in('pending','used','revoked','expired'))"
+      ],
+      "sqlDigest": "1ee5a0c0753a31192b254979eea32b8fc77cdae438373030152358980b8f3943"
+    },
+    "contact_receive_policies": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "actor_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "policy|TEXT|nn=1|d=null|pk=0|h=0",
+        "updated_by|TEXT|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_contact_receive_policies_1|u=1|o=pk|p=0|cols=actor_id|desc=0"
+      ],
+      "foreignKeys": [
+        "actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(policy in('self_approval','manager_approval','auto_accept'))"
+      ],
+      "sqlDigest": "98c0c2c5e3b6035cc776269d5dec9cd9f3b64af18838d2df57060bc9520ec94f"
+    },
+    "contact_relations": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "pair_key|TEXT|nn=0|d=null|pk=1|h=0",
+        "actor_a|TEXT|nn=1|d=null|pk=0|h=0",
+        "actor_b|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "source|TEXT|nn=1|d=null|pk=0|h=0",
+        "request_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "ended_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "ended_by|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_contact_relations_actor_a|u=0|o=c|p=0|cols=actor_a,status,updated_at|desc=0,0,1",
+        "idx_contact_relations_actor_b|u=0|o=c|p=0|cols=actor_b,status,updated_at|desc=0,0,1",
+        "sqlite_autoindex_contact_relations_1|u=1|o=pk|p=0|cols=pair_key|desc=0"
+      ],
+      "foreignKeys": [
+        "actor_a->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "actor_b->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(actor_a<actor_b)",
+        "(source in('request','auto_manager','invite_link'))",
+        "(status in('active','ended'))"
+      ],
+      "sqlDigest": "4858462b9676a3e195a07d0f8e98b2e4c68e17642347744500cf036780a3f676"
+    },
+    "contact_reports": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "report_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "reporter_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "target_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "category|TEXT|nn=1|d=null|pk=0|h=0",
+        "note|TEXT|nn=1|d=''|pk=0|h=0",
+        "room_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "message_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "evidence_json|TEXT|nn=1|d='{}'|pk=0|h=0",
+        "status|TEXT|nn=1|d='received'|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_contact_reports_reporter|u=0|o=c|p=0|cols=reporter_actor_id,created_at,report_id|desc=0,1,1",
+        "idx_contact_reports_target|u=0|o=c|p=0|cols=target_actor_id,created_at|desc=0,1",
+        "sqlite_autoindex_contact_reports_1|u=1|o=pk|p=0|cols=report_id|desc=0"
+      ],
+      "foreignKeys": [
+        "reporter_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "target_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(category in('harassment','spam','fraud','other'))",
+        "(reporter_actor_id<>target_actor_id)",
+        "(status in('received'))"
+      ],
+      "sqlDigest": "5d44fb8124aeb7c024f081ea8bcef35921a7e599482ef52ebdefaf485d81f487"
+    },
+    "contact_requests": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "contact_request_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "pair_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "from_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "to_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "message|TEXT|nn=1|d=''|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "auto_accepted|INTEGER|nn=1|d=0|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "responded_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "responded_by|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_contact_requests_actor_created|u=0|o=c|p=0|cols=from_actor_id,created_at|desc=0,1",
+        "idx_contact_requests_expiry|u=0|o=c|p=0|cols=status,expires_at|desc=0,0",
+        "idx_contact_requests_pair_created|u=0|o=c|p=0|cols=pair_key,created_at|desc=0,1",
+        "idx_contact_requests_pending_pair|u=1|o=c|p=1|cols=pair_key|desc=0",
+        "idx_contact_requests_source|u=0|o=c|p=0|cols=from_actor_id,status,created_at|desc=0,0,1",
+        "idx_contact_requests_target|u=0|o=c|p=0|cols=to_actor_id,status,created_at|desc=0,0,1",
+        "sqlite_autoindex_contact_requests_1|u=1|o=pk|p=0|cols=contact_request_id|desc=0"
+      ],
+      "foreignKeys": [
+        "from_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "to_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(auto_accepted in(0,1))",
+        "(from_actor_id<>to_actor_id)",
+        "(status in('pending','accepted','rejected','cancelled','expired'))"
+      ],
+      "sqlDigest": "2c2cf0127a99fb7045fee3b30e4463d3bcfff0fc31c8946b3054e1e20dfb29af"
+    },
+    "contacts": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "owner_actor_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "target_actor_id|TEXT|nn=1|d=null|pk=2|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_contacts_owner_created|u=0|o=c|p=0|cols=owner_actor_id,created_at,target_actor_id|desc=0,1,0",
+        "sqlite_autoindex_contacts_1|u=1|o=pk|p=0|cols=owner_actor_id,target_actor_id|desc=0,0"
+      ],
+      "foreignKeys": [],
+      "checks": [],
+      "sqlDigest": "746fabdc52cb735e3efeec3f4ddc5d4833d33e57a5e79c9c4663471ad82d41ef"
+    },
+    "credentials": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "credential_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "device_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "token_hash|TEXT|nn=1|d=null|pk=0|h=0",
+        "revoked_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "last_used_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "revoked_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "label|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_credentials_actor|u=0|o=c|p=0|cols=actor_id|desc=0",
+        "idx_credentials_device|u=0|o=c|p=0|cols=actor_id,device_id,revoked_at|desc=0,0,0",
+        "sqlite_autoindex_credentials_1|u=1|o=pk|p=0|cols=credential_id|desc=0",
+        "sqlite_autoindex_credentials_2|u=1|o=u|p=0|cols=token_hash|desc=0"
+      ],
+      "foreignKeys": [
+        "actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [],
+      "sqlDigest": "a18dfa24ad4af307282c7be456bbd24d9fc3ff3de782417d6e42c941f9f1e4de"
+    },
+    "deliveries": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "delivery_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "recipient_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "message_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "state|TEXT|nn=1|d=null|pk=0|h=0",
+        "attempt|INTEGER|nn=1|d=0|pk=0|h=0",
+        "claim_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "claimed_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "progress_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "result_message_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "error|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_seq|INTEGER|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "last_reminded_at|INTEGER|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_deliveries_claimed_progress|u=0|o=c|p=1|cols=progress_at,last_reminded_at|desc=0,0",
+        "idx_deliveries_message_state|u=0|o=c|p=0|cols=message_id,state,claimed_at,updated_at|desc=0,0,0,0",
+        "idx_deliveries_message|u=0|o=c|p=0|cols=message_id|desc=0",
+        "idx_deliveries_one_claimed|u=1|o=c|p=1|cols=recipient_id|desc=0",
+        "idx_deliveries_recipient_state|u=0|o=c|p=0|cols=recipient_id,state,created_seq|desc=0,0,0",
+        "sqlite_autoindex_deliveries_1|u=1|o=pk|p=0|cols=delivery_id|desc=0",
+        "sqlite_autoindex_deliveries_2|u=1|o=u|p=0|cols=recipient_id,message_id|desc=0,0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(state in('pending','claimed','completed','failed','cancelled'))"
+      ],
+      "sqlDigest": "01fac4f0a79108e3459a86db13e48a3dd479252a7196749ecee5650b83780414"
+    },
+    "device_pairings": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "pairing_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "challenge_hash|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "actor_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "approved_by_actor_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "approved_by_credential_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "approved_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "redeemed_credential_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "redeemed_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "attempts|INTEGER|nn=1|d=0|pk=0|h=0",
+        "max_attempts|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "created_by_credential_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "device_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "device_label|TEXT|nn=1|d=''|pk=0|h=0",
+        "platform|TEXT|nn=1|d=''|pk=0|h=0",
+        "device_token_hash|TEXT|nn=0|d=null|pk=0|h=0",
+        "cancelled_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "cancelled_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "cancel_reason|TEXT|nn=1|d=''|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_device_pairings_actor_status|u=0|o=c|p=0|cols=actor_id,status,created_at|desc=0,0,1",
+        "idx_device_pairings_device_token|u=0|o=c|p=1|cols=device_token_hash|desc=0",
+        "idx_device_pairings_status|u=0|o=c|p=0|cols=status,expires_at|desc=0,0",
+        "sqlite_autoindex_device_pairings_1|u=1|o=pk|p=0|cols=pairing_id|desc=0",
+        "sqlite_autoindex_device_pairings_2|u=1|o=u|p=0|cols=challenge_hash|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(attempts>=0)",
+        "(max_attempts>0)",
+        "(status in('pending','approved','redeemed','expired','cancelled'))"
+      ],
+      "sqlDigest": "88687024b1ad42ca1078974725392a67302bd2826666ffe6df1dab91db734676"
+    },
+    "devices": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "actor_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "device_id|TEXT|nn=1|d=null|pk=2|h=0",
+        "label|TEXT|nn=1|d=''|pk=0|h=0",
+        "platform|TEXT|nn=1|d=''|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "last_seen_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "revoked_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "revoked_by|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_devices_actor_status|u=0|o=c|p=0|cols=actor_id,status,last_seen_at|desc=0,0,0",
+        "sqlite_autoindex_devices_1|u=1|o=pk|p=0|cols=actor_id,device_id|desc=0,0"
+      ],
+      "foreignKeys": [
+        "actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(status in('active','revoked'))"
+      ],
+      "sqlDigest": "420208e53d8ea2056b11810ee4ba218fee61d13cb4da34c8172f36d20d20cb43"
+    },
+    "drive_files": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "file_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "owner_scope|TEXT|nn=1|d=null|pk=0|h=0",
+        "uploader_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "name|TEXT|nn=1|d=null|pk=0|h=0",
+        "mime_type|TEXT|nn=1|d=null|pk=0|h=0",
+        "size|INTEGER|nn=1|d=null|pk=0|h=0",
+        "sha256|TEXT|nn=1|d=null|pk=0|h=0",
+        "state|TEXT|nn=1|d=null|pk=0|h=0",
+        "visibility|TEXT|nn=1|d='private'|pk=0|h=0",
+        "room_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "retained|INTEGER|nn=1|d=0|pk=0|h=0",
+        "deleted_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "deleted_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "purged_at|INTEGER|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_drive_files_expiry|u=0|o=c|p=1|cols=expires_at|desc=0",
+        "idx_drive_files_owner|u=0|o=c|p=0|cols=owner_scope,state,created_at,file_id|desc=0,0,1,1",
+        "idx_drive_files_room|u=0|o=c|p=0|cols=room_id,state,created_at|desc=0,0,1",
+        "sqlite_autoindex_drive_files_1|u=1|o=pk|p=0|cols=file_id|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(length(sha256)=64)",
+        "(retained in(0,1))",
+        "(size>=0)",
+        "(state in('draft','bound','deleted'))",
+        "(visibility in('private','public'))"
+      ],
+      "sqlDigest": "03b605bbb0c71cf79a30092c317f5a7c08a42df8740e0397d7893a938353b5e0"
+    },
+    "events": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "event_seq|INTEGER|nn=0|d=null|pk=1|h=0",
+        "scope_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "scope_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "event_type|TEXT|nn=1|d=null|pk=0|h=0",
+        "ref_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "metadata|TEXT|nn=1|d='{}'|pk=0|h=0",
+        "event_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_events_scope_seq|u=0|o=c|p=0|cols=scope_kind,scope_id,event_seq|desc=0,0,0",
+        "sqlite_autoindex_events_1|u=1|o=u|p=0|cols=event_key|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(scope_kind in('room','inbox','actor'))"
+      ],
+      "sqlDigest": "6a9939372c529f697763b172a9946a44d5efab55eead5672091892e6c40db7af"
+    },
+    "feedback": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "feedback_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "environment|TEXT|nn=1|d=null|pk=0|h=0",
+        "harness|TEXT|nn=1|d=null|pk=0|h=0",
+        "problem|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_feedback_created|u=0|o=c|p=0|cols=created_at,feedback_id|desc=1,0",
+        "sqlite_autoindex_feedback_1|u=1|o=pk|p=0|cols=feedback_id|desc=0"
+      ],
+      "foreignKeys": [
+        "actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [],
+      "sqlDigest": "544b8bb43305026d760667811e4b49f9a1a669c89462f409f2991eedcb584ff8"
+    },
+    "file_references": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "reference_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "file_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "ref_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "room_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "state|TEXT|nn=1|d='active'|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "released_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "released_by|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_file_references_file|u=0|o=c|p=0|cols=file_id,state|desc=0,0",
+        "idx_file_references_identity|u=1|o=c|p=0|cols=kind,ref_id,file_id|desc=0,0,0",
+        "idx_file_references_ref|u=0|o=c|p=0|cols=kind,ref_id,state|desc=0,0,0",
+        "sqlite_autoindex_file_references_1|u=1|o=pk|p=0|cols=reference_id|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(kind in('task','artifact','forward','favorite'))",
+        "(state in('active','released'))"
+      ],
+      "sqlDigest": "e60c57ea0cd0ee519ca00cb6050f3cbf54b8005c8465ff2e4d234003dc2c3e01"
+    },
+    "guard_actor_disabled": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "5cd7ed6823b96267627b7dd377f2d84dc5dd86171f71a9486307901435109a98"
+    },
+    "guard_actor_exists": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "e7b807872fd0a5bed703fb8775674eb2e3b0275ee5b63e2e405440f86e6214b4"
+    },
+    "guard_announcement_revision": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "93217ef26d75bcf3318a6346531fa7750b0a0d47ab27f7efdb681a99c0cf5454"
+    },
+    "guard_artifact_conflict": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "778874818aadbda8bf8883ef0370dd57229209591a193318f87706e04ca64e51"
+    },
+    "guard_blocked": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "ac65e21fbf3879010821cd7825b1ece2f479fff4a88025f1c762f24bfa0dba53"
+    },
+    "guard_budget_exceeded": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "87164d4c9713e11c8450a1f7d5381a9d8bc32bd1916469633b369390137f7355"
+    },
+    "guard_claim_conflict": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "c90987cfca2d0fa7aebdf674526a920a62e692f7bf81cb2718198b04a180146f"
+    },
+    "guard_contact_link_invalid": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "1957f6e51ba780fcaac8c787993a3b411963ae82dcb09685034ce91fe3434bbe"
+    },
+    "guard_contact_link_limit": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "730b47c059de7ea758766ac5958bbf7350100735bd51ecb8e9b5fbf5539a8707"
+    },
+    "guard_contact_request_stale": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "e4c535fff225297ea4436b67a03c26a34c8860b99c988da7cd2ae561730858bb"
+    },
+    "guard_device_stale": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "1fde7c18d90c7e7694ac4bc4cab4c56a93d1c80ce57a6cca2105a3d2d82a9255"
+    },
+    "guard_event_subscription_global": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "40c811bc0c123b23ac4bad86698b02ab6e1d5e443eb852473ee6142ad44b8e8a"
+    },
+    "guard_event_subscription_limit": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "4b22dbc0990db41ba8f94e6f72efd9504307b63eaa4ae8b944097d59362a0a4e"
+    },
+    "guard_file_referenced": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "b75ebf580650f3f9aa7cf4a83fd0ee958f0b992fd12f306f298f8005234ea965"
+    },
+    "guard_file_unavailable": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "f776444da08b53dfa6e38c2444b9d4025ea5e1d63131c5b04474d15de36f8bab"
+    },
+    "guard_friend_required": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "453f6cdbfb002c1367e08c400824599d1d42c8eddf43861dd307b17639fda5a1"
+    },
+    "guard_invalid_mention": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "f21707428f798a3f144653bfa4f9c3cab33a6c261a94be4e4e5fed869623b60a"
+    },
+    "guard_invalid_target": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "27d7a7e2f2966bd1eb7410356da76f00ed0b2224f6c576e68a560d8ca20f2117"
+    },
+    "guard_invitation_stale": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "f47fc783578709c43e0c25eada54b6c174efbade41947f4ef6c760a1d53671f5"
+    },
+    "guard_invite_exhausted": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "b3132cd8a67b582cfdd25efb5063afe83b79a1051cd084bd0ef27a1a0f951eb0"
+    },
+    "guard_invite_targets_missing": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "b32aa29d8e423dfd8ef78466da560bfe4691a1cc545a1b603b24d7caafc03bef"
+    },
+    "guard_join_request_stale": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "fc3b972cd75f6b2d5a4f246ebae49e31f5d6d12128e1b1645183486bdc0d1e7d"
+    },
+    "guard_membership_stale": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "8604ae719fe0d8636428cee80c6fa0bcf2390e7f194ec556e3be2fdc6d6b4d2c"
+    },
+    "guard_not_file_owner": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "277a11ec5e0838c20168a44d827a01b6372c082b4cb92abd60b70b73eff8c289"
+    },
+    "guard_not_member": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "2934fc7fdfd645f39021c9d47f8bbb8b00f0044a6651555a18d1bd08beda3e7a"
+    },
+    "guard_not_owner": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "0edb9fe605280a83d410365b2764c9cda7c0b92cf2d33fa99a464adbe6a61d8a"
+    },
+    "guard_owner_missing": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "ca86fb69b776c9652d82ea5901a8507843217e28074c4f2a76bab765006a1eda"
+    },
+    "guard_owner_transfer_required": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "fb3ca40d21b8c2f0446b266facc48aa877ecd465fb4bb4565913e15a2e8fae36"
+    },
+    "guard_owner_transfer_stale": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "730ec7367dd36752619dcb42500fe58e295f4d8bb8e52bf3ee7d139a1ccf899b"
+    },
+    "guard_pairing_invalid": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "95381d8b3a1655aac1e78955722114769f2caccce5858f3092b09e1d5d410a6f"
+    },
+    "guard_permission_denied": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "e0552042b5b399904cf2f79b148fc458d787ba4bc63f84ea44b344dc9dfa69cb"
+    },
+    "guard_policy_revision": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "43ca7a266e029c2e6a4a21aa3c36c45836be02dc7dfefffaecef80b53d13d5c3"
+    },
+    "guard_presence_stale": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "34c39829d9acf831af5607b389a29d726c6a3f2cca20de00b23cfc5ea58d5362"
+    },
+    "guard_queue_full": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "0162c7b019eac5817aca8dc7dd24d96c2e556ef411dabbe850be64a51e40ca8a"
+    },
+    "guard_quota_exceeded": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "f9f065009d198f567425b03e3c428e156514758d03ad0a07e21ae474b0ee3a81"
+    },
+    "guard_rate_limited": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "c9e4df11705730bf4e9d582551a12000a54ed0187e2aa576eae131c9cbfb5346"
+    },
+    "guard_recovery_invalid": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "a77d9f1a8a253259b73d6eb7567ffd5795f277c0644985f87f41542bf59f7e22"
+    },
+    "guard_request_expired": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "5bf2a5c11e0ea311ed590a307115f43eb68d06768612fa7d4117d947403c0020"
+    },
+    "guard_role_revision": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "519d5a774313565541d6f78258f030eefcd51daa8e6f3d2abfb62d1d9b0b3ed8"
+    },
+    "guard_room_dissolved": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "61e25ee03619a60b40b011a8598e68f1b16cf568f7bb838782306b4a1dd7776d"
+    },
+    "guard_room_file_limit": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "61b9c71f8610d0ce42f7d82a34fe3ead047686adb0fa1631f5d23d23e9023a0a"
+    },
+    "guard_room_full": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "97b298427838bfe8d646d856ff00ccdfdf79c157e0ec75c871ba6cb7fbef6401"
+    },
+    "guard_room_invite_limit": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "e555ee1700343647ce2381d59363bae5232b5e19afdd3b0775043a3770e08832"
+    },
+    "guard_room_limit": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "eb90d8f401901589b079f6f2bcc2d81c4e6ed7d102f2f77877976f56ab5a90cc"
+    },
+    "guard_stale_attempt": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "345af4484680ebec638abce0e3793867d9edad023acc3c5d0d28d54eba2db8c2"
+    },
+    "guard_task_mark_conflict": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "752def4138abf74e84eeac14d18b33edd0e3de59c36576ba01944a4aa0ab490f"
+    },
+    "guard_task_mark_unavailable": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "2cca9b1cea335f475e97182d892a1d92e2a25e1f6c076223d07e842b407af2fd"
+    },
+    "guard_version_conflict": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "ce0ee4ed08d3e010779fbd0fdc4fe08d50b0a6d60cfca27fa653a764515ad510"
+    },
+    "mcp_event_deliveries": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "delivery_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "subscription_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "event_seq|INTEGER|nn=1|d=null|pk=0|h=0",
+        "event_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "payload_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "attempts|INTEGER|nn=1|d=0|pk=0|h=0",
+        "next_attempt_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "lease_token|TEXT|nn=0|d=null|pk=0|h=0",
+        "lease_until|INTEGER|nn=0|d=null|pk=0|h=0",
+        "last_http_status|INTEGER|nn=0|d=null|pk=0|h=0",
+        "last_error|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "delivered_at|INTEGER|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_mcp_event_deliveries_cleanup|u=0|o=c|p=0|cols=status,created_at|desc=0,0",
+        "idx_mcp_event_deliveries_due|u=0|o=c|p=0|cols=status,next_attempt_at|desc=0,0",
+        "idx_mcp_event_deliveries_sub|u=0|o=c|p=0|cols=subscription_id,event_seq|desc=0,0",
+        "sqlite_autoindex_mcp_event_deliveries_1|u=1|o=pk|p=0|cols=delivery_id|desc=0",
+        "sqlite_autoindex_mcp_event_deliveries_2|u=1|o=u|p=0|cols=subscription_id,event_seq|desc=0,0"
+      ],
+      "foreignKeys": [
+        "subscription_id->mcp_event_subscriptions.subscription_id|on_update=no action|on_delete=cascade|match=none"
+      ],
+      "checks": [
+        "(status in('pending','processing','delivered','abandoned'))"
+      ],
+      "sqlDigest": "ebcd0064e550dbe98bdb68ffbcf8a4cb10d31dcf9c520d3dc4810e60c2f1d422"
+    },
+    "mcp_event_subscriptions": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "subscription_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "event_name|TEXT|nn=1|d=null|pk=0|h=0",
+        "arguments_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "callback_url|TEXT|nn=1|d=null|pk=0|h=0",
+        "callback_url_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "credential_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "secret_ciphertext|TEXT|nn=1|d=null|pk=0|h=0",
+        "secret_nonce|TEXT|nn=1|d=null|pk=0|h=0",
+        "previous_secret_ciphertext|TEXT|nn=0|d=null|pk=0|h=0",
+        "previous_secret_nonce|TEXT|nn=0|d=null|pk=0|h=0",
+        "previous_secret_expires_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "refresh_before|INTEGER|nn=1|d=null|pk=0|h=0",
+        "scanned_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "last_scan_at|INTEGER|nn=1|d=0|pk=0|h=0",
+        "last_delivery_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "last_error|TEXT|nn=0|d=null|pk=0|h=0",
+        "consecutive_failures|INTEGER|nn=1|d=0|pk=0|h=0",
+        "active|INTEGER|nn=1|d=1|pk=0|h=0",
+        "verified_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_mcp_event_subs_actor|u=0|o=c|p=0|cols=actor_id,active|desc=0,0",
+        "idx_mcp_event_subs_scan|u=0|o=c|p=0|cols=active,refresh_before,last_scan_at,subscription_id|desc=0,0,0,0",
+        "sqlite_autoindex_mcp_event_subscriptions_1|u=1|o=pk|p=0|cols=subscription_id|desc=0",
+        "sqlite_autoindex_mcp_event_subscriptions_2|u=1|o=u|p=0|cols=actor_id,callback_url_key,event_name,arguments_json|desc=0,0,0,0"
+      ],
+      "foreignKeys": [
+        "actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "credential_id->credentials.credential_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(active in(0,1))"
+      ],
+      "sqlDigest": "5263d52e500527fd2dcb7ff82e78ac05027235ff6436ea6311a31e14a1853292"
+    },
+    "memory_catchup_items": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "plan_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "item_index|INTEGER|nn=1|d=null|pk=2|h=0",
+        "message_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_seq|INTEGER|nn=1|d=null|pk=0|h=0",
+        "selection_state|TEXT|nn=1|d=null|pk=0|h=0",
+        "reason|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_memory_catchup_items_1|u=1|o=pk|p=0|cols=plan_id,item_index|desc=0,0"
+      ],
+      "foreignKeys": [
+        "plan_id->memory_catchup_plans.plan_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(item_index>=0)",
+        "(selection_state in('selected','not_selected','missing'))"
+      ],
+      "sqlDigest": "7062ff70dc5deb1d5381681d1cbfb044e84eadfbeeebaa263ad9b95d4669baed"
+    },
+    "memory_catchup_plans": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "plan_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "member_generation|INTEGER|nn=1|d=null|pk=0|h=0",
+        "upper_bound|INTEGER|nn=1|d=null|pk=0|h=0",
+        "query|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "budget_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "scan_cursor_json|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "request_key|TEXT|nn=0|d=null|pk=0|h=0",
+        "request_sha256|TEXT|nn=0|d=null|pk=0|h=0",
+        "policy_revision|INTEGER|nn=1|d=0|pk=0|h=0",
+        "member_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "joined_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "snapshot_sha256|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_catchup_agent|u=0|o=c|p=0|cols=space_id,agent_actor_id,room_id,status|desc=0,0,0,0",
+        "idx_memory_catchup_request|u=1|o=c|p=1|cols=space_id,agent_actor_id,request_key|desc=0,0,0",
+        "idx_memory_catchup_snapshot|u=0|o=c|p=0|cols=space_id,agent_actor_id,room_id,member_generation,upper_bound|desc=0,0,0,0,0",
+        "sqlite_autoindex_memory_catchup_plans_1|u=1|o=pk|p=0|cols=plan_id|desc=0"
+      ],
+      "foreignKeys": [
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(status in('ready','partial','missing_required','expired'))"
+      ],
+      "sqlDigest": "df12e8c3ea4d80fdfe5ebff68db21f9b49630e4f3f6fa681e5b528e37ae8c89c"
+    },
+    "memory_context_items": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "context_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "item_index|INTEGER|nn=1|d=null|pk=2|h=0",
+        "experience_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "representation_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "source_dependencies_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "evidence|TEXT|nn=0|d=null|pk=0|h=0",
+        "origin_scope_json|TEXT|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_context_items_representation|u=0|o=c|p=0|cols=representation_id|desc=0",
+        "sqlite_autoindex_memory_context_items_1|u=1|o=pk|p=0|cols=context_id,item_index|desc=0,0"
+      ],
+      "foreignKeys": [
+        "context_id->memory_contexts.context_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(item_index>=0)"
+      ],
+      "sqlDigest": "b76ada4cd798ae00e439bbe9bcfeb4446119bdf63089342fe9ecc828176fa357"
+    },
+    "memory_contexts": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "context_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "recall_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "body|TEXT|nn=1|d=null|pk=0|h=0",
+        "body_sha256|TEXT|nn=1|d=null|pk=0|h=0",
+        "body_bytes|INTEGER|nn=1|d=null|pk=0|h=0",
+        "target_json|TEXT|nn=0|d=null|pk=0|h=0",
+        "versions_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "policy_version|INTEGER|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_contexts_agent|u=0|o=c|p=0|cols=space_id,agent_actor_id,status,created_at|desc=0,0,0,0",
+        "sqlite_autoindex_memory_contexts_1|u=1|o=pk|p=0|cols=context_id|desc=0"
+      ],
+      "foreignKeys": [
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(body_bytes>=0)",
+        "(kind in('lookup','bound'))",
+        "(status in('ready','invalidated','expired','purged'))"
+      ],
+      "sqlDigest": "b33170c93cdc8698d95528d97c46ff6efb7693dfbca72a065178d68b6c54e618"
+    },
+    "memory_coverage_ranges": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "coverage_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "dedupe_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "origin_room_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "origin_member_generation|INTEGER|nn=1|d=null|pk=0|h=0",
+        "source_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "source_revision|INTEGER|nn=1|d=null|pk=0|h=0",
+        "range_start|INTEGER|nn=1|d=null|pk=0|h=0",
+        "range_end|INTEGER|nn=1|d=null|pk=0|h=0",
+        "text_sha256|TEXT|nn=1|d=null|pk=0|h=0",
+        "experience_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_coverage_scope|u=0|o=c|p=0|cols=space_id,ownership_epoch,agent_actor_id,origin_room_id,origin_member_generation,source_id,source_revision|desc=0,0,0,0,0,0,0",
+        "sqlite_autoindex_memory_coverage_ranges_1|u=1|o=pk|p=0|cols=coverage_id|desc=0",
+        "sqlite_autoindex_memory_coverage_ranges_2|u=1|o=u|p=0|cols=dedupe_key|desc=0"
+      ],
+      "foreignKeys": [
+        "experience_id->memory_experiences.experience_id|on_update=no action|on_delete=no action|match=none",
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(range_end>range_start)",
+        "(range_start>=0)"
+      ],
+      "sqlDigest": "abdf336a43895a5c23ea9f5fe0dae4e1f1d99bee1fc235481d589b08913e6a0d"
+    },
+    "memory_curated": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "curated_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "revision|INTEGER|nn=1|d=null|pk=2|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "origin|TEXT|nn=1|d=null|pk=0|h=0",
+        "title|TEXT|nn=1|d=null|pk=0|h=0",
+        "content|TEXT|nn=1|d=null|pk=0|h=0",
+        "content_sha256|TEXT|nn=1|d=null|pk=0|h=0",
+        "current|INTEGER|nn=1|d=1|pk=0|h=0",
+        "created_by|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_curated_current|u=1|o=c|p=1|cols=curated_id|desc=0",
+        "idx_memory_curated_space|u=0|o=c|p=0|cols=space_id,current|desc=0,0",
+        "sqlite_autoindex_memory_curated_1|u=1|o=pk|p=0|cols=curated_id,revision|desc=0,0"
+      ],
+      "foreignKeys": [
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(current in(0,1))",
+        "(origin in('manual','imported_external_knowledge'))",
+        "(ownership_epoch>=1)",
+        "(revision>=1)"
+      ],
+      "sqlDigest": "189b7615c6598eeedee1f25611ce252600421edd5c4d46a1920bbeefb084bce5"
+    },
+    "memory_cursors": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "scope_kind|TEXT|nn=1|d=null|pk=1|h=0",
+        "scope_id|TEXT|nn=1|d=null|pk=2|h=0",
+        "cursor_kind|TEXT|nn=1|d=null|pk=3|h=0",
+        "value|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_memory_cursors_1|u=1|o=pk|p=0|cols=scope_kind,scope_id,cursor_kind|desc=0,0,0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(scope_kind in('space','agent','room','recall'))"
+      ],
+      "sqlDigest": "c3e85068d1b16990de6b30ea7cffd3ac66643978637cd55e3f2d7bc10ba0947e"
+    },
+    "memory_experience_proofs": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "experience_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "proof_id|TEXT|nn=1|d=null|pk=2|h=0",
+        "receipt_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "evidence|TEXT|nn=1|d=null|pk=0|h=0",
+        "invocation_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "manifest_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_experience_proofs_evidence|u=0|o=c|p=0|cols=experience_id,evidence|desc=0,0",
+        "idx_memory_experience_proofs_proof|u=0|o=c|p=0|cols=proof_id|desc=0",
+        "sqlite_autoindex_memory_experience_proofs_1|u=1|o=pk|p=0|cols=experience_id,proof_id|desc=0,0"
+      ],
+      "foreignKeys": [
+        "experience_id->memory_experiences.experience_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(evidence in('host_reported_submitted','gateway_observed_submitted'))"
+      ],
+      "sqlDigest": "5412b235d12cc20974588c14db45d52816a5e1ae0cf40d58b4ba825aa8d3227a"
+    },
+    "memory_experiences": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "experience_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "dedupe_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "origin_room_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "origin_member_generation|INTEGER|nn=1|d=0|pk=0|h=0",
+        "origin_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "producer_kind|TEXT|nn=0|d=null|pk=0|h=0",
+        "source_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "source_revision|INTEGER|nn=0|d=null|pk=0|h=0",
+        "representation_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "representation_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "range_start|INTEGER|nn=0|d=null|pk=0|h=0",
+        "range_end|INTEGER|nn=0|d=null|pk=0|h=0",
+        "text_sha256|TEXT|nn=1|d=null|pk=0|h=0",
+        "receipt_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "evidence|TEXT|nn=0|d=null|pk=0|h=0",
+        "capture|TEXT|nn=1|d=null|pk=0|h=0",
+        "available|INTEGER|nn=1|d=1|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_experiences_kind|u=0|o=c|p=0|cols=space_id,ownership_epoch,agent_actor_id,origin_room_id,origin_member_generation,origin_kind,created_at|desc=0,0,0,0,0,0,0",
+        "idx_memory_experiences_lookup|u=0|o=c|p=0|cols=space_id,ownership_epoch,agent_actor_id,origin_room_id,origin_member_generation,created_at|desc=0,0,0,0,0,0",
+        "idx_memory_experiences_representation|u=0|o=c|p=0|cols=representation_id|desc=0",
+        "idx_memory_experiences_source|u=0|o=c|p=0|cols=source_id,source_revision|desc=0,0",
+        "sqlite_autoindex_memory_experiences_1|u=1|o=pk|p=0|cols=experience_id|desc=0",
+        "sqlite_autoindex_memory_experiences_2|u=1|o=u|p=0|cols=dedupe_key|desc=0"
+      ],
+      "foreignKeys": [
+        "representation_id->memory_representations.representation_id|on_update=no action|on_delete=no action|match=none",
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(available in(0,1))",
+        "(capture in('none','pending','extracted','excluded'))",
+        "(origin_kind in('experienced','authored','curated'))",
+        "(ownership_epoch>=1)",
+        "(producer_kind is null or producer_kind in('agent_text','server_template','mixed'))"
+      ],
+      "sqlDigest": "49ff147c6515b9984db64b70ffa021e1fb01d5082cda0e954fe43d8d67887227"
+    },
+    "memory_governance_commands": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "space_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "command_seq|INTEGER|nn=1|d=null|pk=2|h=0",
+        "command_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "mutation_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "target_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "target_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "target_revision|INTEGER|nn=0|d=null|pk=0|h=0",
+        "payload_sha256|TEXT|nn=1|d=null|pk=0|h=0",
+        "idempotency_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "result_json|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "applied_at|INTEGER|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_governance_idempotency|u=1|o=c|p=0|cols=space_id,idempotency_key|desc=0,0",
+        "idx_memory_governance_status|u=0|o=c|p=0|cols=space_id,status,command_seq|desc=0,0,0",
+        "idx_memory_governance_target|u=0|o=c|p=0|cols=target_kind,target_id,command_seq|desc=0,0,0",
+        "sqlite_autoindex_memory_governance_commands_1|u=1|o=u|p=0|cols=command_id|desc=0",
+        "sqlite_autoindex_memory_governance_commands_2|u=1|o=pk|p=0|cols=space_id,command_seq|desc=0,0"
+      ],
+      "foreignKeys": [
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(command_seq>=1)",
+        "(mutation_kind in('source_register','source_retract','source_correct','curated_put','curated_correct','forget','space_close'))",
+        "(status in('pending','applied','unknown','failed'))"
+      ],
+      "sqlDigest": "24f97e9a5a6f1c812f10878e4b16ac627b88abe281b06bfc1ad6ae145df91575"
+    },
+    "memory_host_bindings": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "binding_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "credential_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "generation|INTEGER|nn=1|d=null|pk=0|h=0",
+        "session_incarnation|TEXT|nn=1|d=null|pk=0|h=0",
+        "declared_capabilities_json|TEXT|nn=1|d='[]'|pk=0|h=0",
+        "trust_level|TEXT|nn=1|d=null|pk=0|h=0",
+        "state|TEXT|nn=1|d=null|pk=0|h=0",
+        "lease_until|INTEGER|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "closed_at|INTEGER|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_host_bindings_active|u=1|o=c|p=1|cols=space_id,session_incarnation|desc=0,0",
+        "idx_memory_host_bindings_agent|u=0|o=c|p=0|cols=agent_actor_id,state,updated_at|desc=0,0,1",
+        "sqlite_autoindex_memory_host_bindings_1|u=1|o=pk|p=0|cols=binding_id|desc=0"
+      ],
+      "foreignKeys": [
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(generation>=1)",
+        "(ownership_epoch>=1)",
+        "(state in('active','closed','expired','revoked'))",
+        "(trust_level in('api_tool_only','adapted_host','controlled_gateway'))"
+      ],
+      "sqlDigest": "d33c2fff88e1a2f13116ebe4eb4068781fe4597f2afa6f6c73287ed69a6541c8"
+    },
+    "memory_instances": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "instance_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "capture_default|TEXT|nn=1|d='enabled'|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_memory_instances_1|u=1|o=pk|p=0|cols=instance_id|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(capture_default in('enabled','disabled'))"
+      ],
+      "sqlDigest": "21fcb289fd488e3442e5e02edc4d4bc16da3d68873e81c228324e73c0809ab9e"
+    },
+    "memory_jobs": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "job_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "operation_type|TEXT|nn=1|d=null|pk=0|h=0",
+        "operation_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "payload_sha256|TEXT|nn=1|d=null|pk=0|h=0",
+        "source_command_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "recall_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "retain_intent_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "target_json|TEXT|nn=0|d=null|pk=0|h=0",
+        "result_json|TEXT|nn=0|d=null|pk=0|h=0",
+        "backend_binding_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "provider_job_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "stage|TEXT|nn=1|d=null|pk=0|h=0",
+        "attempt|INTEGER|nn=1|d=0|pk=0|h=0",
+        "lease_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "lease_until|INTEGER|nn=0|d=null|pk=0|h=0",
+        "next_attempt_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "unknown_since|INTEGER|nn=0|d=null|pk=0|h=0",
+        "last_error|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "completed_at|INTEGER|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_jobs_due|u=0|o=c|p=0|cols=status,next_attempt_at,operation_type|desc=0,0,0",
+        "idx_memory_jobs_lease|u=0|o=c|p=0|cols=status,lease_until|desc=0,0",
+        "idx_memory_jobs_operation|u=1|o=c|p=0|cols=space_id,operation_key|desc=0,0",
+        "idx_memory_jobs_retain|u=0|o=c|p=1|cols=retain_intent_id|desc=0",
+        "idx_memory_jobs_space|u=0|o=c|p=0|cols=space_id,operation_type,status|desc=0,0,0",
+        "sqlite_autoindex_memory_jobs_1|u=1|o=pk|p=0|cols=job_id|desc=0"
+      ],
+      "foreignKeys": [
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(attempt>=0)",
+        "(backend_binding_epoch>=1)",
+        "(operation_type in('ensure_space','source_apply','retain','remove','recall','rebuild'))",
+        "(ownership_epoch>=1)",
+        "(stage in('accepted','source_applied','derived_ready','unknown'))",
+        "(status in('pending','leased','completed','failed','unknown','cancelled'))"
+      ],
+      "sqlDigest": "15a9d73754b621b4f843adff9ab8e94e52ba5109b5898b3b80445f389adcf564"
+    },
+    "memory_manifest_items": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "manifest_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "item_index|INTEGER|nn=1|d=null|pk=2|h=0",
+        "selection_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "representation_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "origin_scope_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "text_sha256|TEXT|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_memory_manifest_items_1|u=1|o=pk|p=0|cols=manifest_id,item_index|desc=0,0"
+      ],
+      "foreignKeys": [
+        "manifest_id->memory_manifests.manifest_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(item_index>=0)"
+      ],
+      "sqlDigest": "2eb881fb85a39ef8eac277e58a60d15a9aebc3d672d06da69334b2e8b834495b"
+    },
+    "memory_manifests": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "manifest_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "host_binding_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "host_generation|INTEGER|nn=0|d=null|pk=0|h=0",
+        "session_incarnation|TEXT|nn=0|d=null|pk=0|h=0",
+        "run_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "input_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "input_revision|INTEGER|nn=0|d=null|pk=0|h=0",
+        "invocation_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "manifest_sha256|TEXT|nn=1|d=null|pk=0|h=0",
+        "payload_sha256|TEXT|nn=1|d=null|pk=0|h=0",
+        "target_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_manifests_invocation|u=1|o=c|p=1|cols=space_id,ownership_epoch,agent_actor_id,host_binding_id,invocation_id|desc=0,0,0,0,0",
+        "sqlite_autoindex_memory_manifests_1|u=1|o=pk|p=0|cols=manifest_id|desc=0"
+      ],
+      "foreignKeys": [
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [],
+      "sqlDigest": "245402f59d2fca0100d6ea8c56be6a7da6f4cd5bcd0ac4f979bbbf7721b5e0c5"
+    },
+    "memory_projections": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "projection_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "backend_binding_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "provider|TEXT|nn=1|d=null|pk=0|h=0",
+        "provider_ref|TEXT|nn=1|d=null|pk=0|h=0",
+        "source_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "source_revision|INTEGER|nn=0|d=null|pk=0|h=0",
+        "representation_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "state|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_projections_ref|u=1|o=c|p=0|cols=space_id,backend_binding_epoch,provider,provider_ref|desc=0,0,0,0",
+        "sqlite_autoindex_memory_projections_1|u=1|o=pk|p=0|cols=projection_id|desc=0"
+      ],
+      "foreignKeys": [
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(state in('active','superseded','purged','unknown'))"
+      ],
+      "sqlDigest": "8aefa2e9e628643203fb58a27a1eba210b1e6e495fcf60b3ec3faaf6e68ad274"
+    },
+    "memory_recall_requests": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "recall_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "request_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "mode|TEXT|nn=1|d=null|pk=0|h=0",
+        "dispatch|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "target_json|TEXT|nn=0|d=null|pk=0|h=0",
+        "plan_json|TEXT|nn=0|d=null|pk=0|h=0",
+        "budget_json|TEXT|nn=0|d=null|pk=0|h=0",
+        "warmup_only|INTEGER|nn=1|d=1|pk=0|h=0",
+        "result_json|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_recall_request_key|u=1|o=c|p=0|cols=space_id,request_key|desc=0,0",
+        "idx_memory_recall_status|u=0|o=c|p=0|cols=space_id,status,created_at|desc=0,0,0",
+        "sqlite_autoindex_memory_recall_requests_1|u=1|o=pk|p=0|cols=recall_id|desc=0"
+      ],
+      "foreignKeys": [
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(dispatch in('explicit','auto'))",
+        "(status in('pending','ready','empty','unavailable','unsupported','disabled','skipped_no_boundary'))",
+        "(warmup_only in(0,1))"
+      ],
+      "sqlDigest": "8409562b9e40bfbce25f551d186de8fdb20f53ec188a6f47e8b15cfc83827833"
+    },
+    "memory_receipts": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "receipt_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "host_binding_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "host_generation|INTEGER|nn=0|d=null|pk=0|h=0",
+        "session_incarnation|TEXT|nn=0|d=null|pk=0|h=0",
+        "run_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "input_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "input_revision|INTEGER|nn=0|d=null|pk=0|h=0",
+        "invocation_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "manifest_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "manifest_sha256|TEXT|nn=0|d=null|pk=0|h=0",
+        "payload_sha256|TEXT|nn=0|d=null|pk=0|h=0",
+        "context_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "context_sha256|TEXT|nn=0|d=null|pk=0|h=0",
+        "target_scope_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "origin_scopes_json|TEXT|nn=1|d='[]'|pk=0|h=0",
+        "evidence|TEXT|nn=1|d=null|pk=0|h=0",
+        "proof_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "idempotency_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "disposition|TEXT|nn=1|d=null|pk=0|h=0",
+        "reason|TEXT|nn=0|d=null|pk=0|h=0",
+        "recorded_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_receipts_idempotency|u=1|o=c|p=0|cols=idempotency_key|desc=0",
+        "idx_memory_receipts_invocation|u=1|o=c|p=1|cols=kind,space_id,ownership_epoch,agent_actor_id,host_binding_id,invocation_id|desc=0,0,0,0,0,0",
+        "idx_memory_receipts_proof|u=1|o=c|p=0|cols=proof_id|desc=0",
+        "idx_memory_receipts_space|u=0|o=c|p=0|cols=space_id,kind,recorded_at|desc=0,0,0",
+        "sqlite_autoindex_memory_receipts_1|u=1|o=pk|p=0|cols=receipt_id|desc=0"
+      ],
+      "foreignKeys": [
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(disposition in('applied','history_only','rejected'))",
+        "(kind in('input_exposure','context_delivery'))"
+      ],
+      "sqlDigest": "847c0b9ff5f095bb1b8bb6196e7d6a9863946daf7ed42386ab34b465ed857e3a"
+    },
+    "memory_representation_dependencies": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "representation_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "dependency_index|INTEGER|nn=1|d=null|pk=2|h=0",
+        "source_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "source_revision|INTEGER|nn=1|d=null|pk=0|h=0",
+        "depends_on_representation_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "range_start|INTEGER|nn=0|d=null|pk=0|h=0",
+        "range_end|INTEGER|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_representation_dependencies_source|u=0|o=c|p=0|cols=source_id,source_revision|desc=0,0",
+        "sqlite_autoindex_memory_representation_dependencies_1|u=1|o=pk|p=0|cols=representation_id,dependency_index|desc=0,0"
+      ],
+      "foreignKeys": [
+        "representation_id->memory_representations.representation_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(dependency_index>=0)"
+      ],
+      "sqlDigest": "e1de3ecc70343ecf0add418749d4fe664c5c71e9e74c9a10c7ddae3d8ecb7059"
+    },
+    "memory_representations": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "representation_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "instance_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "source_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "source_revision|INTEGER|nn=0|d=null|pk=0|h=0",
+        "summary_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "summary_revision|INTEGER|nn=0|d=null|pk=0|h=0",
+        "source_context_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "producer_kind|TEXT|nn=0|d=null|pk=0|h=0",
+        "lineage|TEXT|nn=0|d=null|pk=0|h=0",
+        "partition_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "partition_generation|INTEGER|nn=0|d=null|pk=0|h=0",
+        "partition_policy_revision|INTEGER|nn=0|d=null|pk=0|h=0",
+        "range_start|INTEGER|nn=0|d=null|pk=0|h=0",
+        "range_end|INTEGER|nn=0|d=null|pk=0|h=0",
+        "text|TEXT|nn=1|d=null|pk=0|h=0",
+        "text_bytes|INTEGER|nn=1|d=null|pk=0|h=0",
+        "text_sha256|TEXT|nn=1|d=null|pk=0|h=0",
+        "verbatim|INTEGER|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_representations_source|u=0|o=c|p=0|cols=source_id,source_revision|desc=0,0",
+        "idx_memory_representations_summary|u=0|o=c|p=0|cols=summary_id,summary_revision|desc=0,0",
+        "sqlite_autoindex_memory_representations_1|u=1|o=pk|p=0|cols=representation_id|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(kind in('raw_full','raw_fragment','preview','summary','memory_context','authored'))",
+        "(lineage is null or lineage in('run_bound','lineage_unknown'))",
+        "(producer_kind is null or producer_kind in('agent_text','server_template','mixed'))",
+        "(range_start is null or(range_start>=0 and range_end>range_start))",
+        "(text_bytes>=0)",
+        "(verbatim in(0,1))"
+      ],
+      "sqlDigest": "25041a3052f008c2768feeb4f74097614eebb6ab58ea7f31aa5529e1f9fda53d"
+    },
+    "memory_retain_intents": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "retain_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "origin_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "experience_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "representation_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "source_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "source_revision|INTEGER|nn=0|d=null|pk=0|h=0",
+        "receipt_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "curated_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "curated_revision|INTEGER|nn=0|d=null|pk=0|h=0",
+        "evidence|TEXT|nn=0|d=null|pk=0|h=0",
+        "policy_version|INTEGER|nn=1|d=null|pk=0|h=0",
+        "operation_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "payload_sha256|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "job_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_retain_operation|u=1|o=c|p=0|cols=space_id,operation_key|desc=0,0",
+        "idx_memory_retain_receipt|u=0|o=c|p=1|cols=receipt_id|desc=0",
+        "idx_memory_retain_status|u=0|o=c|p=0|cols=space_id,status,created_at|desc=0,0,0",
+        "sqlite_autoindex_memory_retain_intents_1|u=1|o=pk|p=0|cols=retain_id|desc=0"
+      ],
+      "foreignKeys": [
+        "representation_id->memory_representations.representation_id|on_update=no action|on_delete=no action|match=none",
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(evidence is null or evidence in('host_reported_submitted','gateway_observed_submitted'))",
+        "(origin_kind in('experienced','authored','curated'))",
+        "(ownership_epoch>=1)",
+        "(status in('pending','leased','retained','skipped','suppressed','unknown','failed'))"
+      ],
+      "sqlDigest": "bd3f08fcd945ab1fff6625f5b420844e48652e7c9fd2cccff8d665f2a2125f07"
+    },
+    "memory_selections": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "selection_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "recall_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "representation_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "origin_scope_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "target_scope_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "versions_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "consumption|TEXT|nn=1|d='not_consumed'|pk=0|h=0",
+        "state|TEXT|nn=1|d=null|pk=0|h=0",
+        "issued_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_selections_recall|u=0|o=c|p=1|cols=recall_id|desc=0",
+        "idx_memory_selections_space|u=0|o=c|p=0|cols=space_id,state,issued_at|desc=0,0,0",
+        "sqlite_autoindex_memory_selections_1|u=1|o=pk|p=0|cols=selection_id|desc=0"
+      ],
+      "foreignKeys": [
+        "representation_id->memory_representations.representation_id|on_update=no action|on_delete=no action|match=none",
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(consumption='not_consumed')",
+        "(state in('available','expired'))"
+      ],
+      "sqlDigest": "fe6ab76b0b8d87b11afbe17a1382c4703e58aef402a311fbefcf8be75257b0a3"
+    },
+    "memory_sources": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "source_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "instance_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "source_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "source_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "business_ref_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "business_ref_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "origin_room_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "origin_member_generation|INTEGER|nn=1|d=0|pk=0|h=0",
+        "origin_policy_revision|INTEGER|nn=1|d=0|pk=0|h=0",
+        "origin_joined_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "origin_joined_at|INTEGER|nn=1|d=0|pk=0|h=0",
+        "origin_archive_head_seq|INTEGER|nn=0|d=null|pk=0|h=0",
+        "origin_seq|INTEGER|nn=0|d=null|pk=0|h=0",
+        "origin_created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "author_actor_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "state|TEXT|nn=1|d=null|pk=0|h=0",
+        "revision|INTEGER|nn=1|d=null|pk=0|h=0",
+        "content_text|TEXT|nn=0|d=null|pk=0|h=0",
+        "content_sha256|TEXT|nn=0|d=null|pk=0|h=0",
+        "content_bytes|INTEGER|nn=0|d=null|pk=0|h=0",
+        "superseded_by_source_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "superseded_by_revision|INTEGER|nn=0|d=null|pk=0|h=0",
+        "retracted_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_sources_active|u=1|o=c|p=1|cols=instance_id,source_key|desc=0,0",
+        "idx_memory_sources_author|u=0|o=c|p=0|cols=author_actor_id,state|desc=0,0",
+        "idx_memory_sources_revision|u=1|o=c|p=0|cols=instance_id,source_key,revision|desc=0,0,0",
+        "idx_memory_sources_room|u=0|o=c|p=0|cols=origin_room_id,state,origin_created_at|desc=0,0,0",
+        "sqlite_autoindex_memory_sources_1|u=1|o=pk|p=0|cols=source_id|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(content_bytes is null or content_bytes>=0)",
+        "(origin_member_generation>=0)",
+        "(origin_policy_revision>=0)",
+        "(revision>=1)",
+        "(source_kind in('message','task_offer','task_detail','task_attachment','task_submission','task_review','task_handoff','file','langfuse_observation','manual'))",
+        "(state in('active','superseded','retracted'))"
+      ],
+      "sqlDigest": "5689ec8a37e374f21717410a81591fbcf0d1c0388561b2354a89eed3bf3e0632"
+    },
+    "memory_space_transitions": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "transition_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "space_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "previous_space_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "previous_owner_actor_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "next_owner_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "previous_ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "next_ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "closed_host_binding_ids|TEXT|nn=1|d='[]'|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_space_transitions_epoch|u=1|o=c|p=0|cols=agent_actor_id,next_ownership_epoch|desc=0,0",
+        "idx_memory_space_transitions_space|u=0|o=c|p=0|cols=space_id,created_at|desc=0,1",
+        "sqlite_autoindex_memory_space_transitions_1|u=1|o=pk|p=0|cols=transition_id|desc=0"
+      ],
+      "foreignKeys": [
+        "agent_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "space_id->memory_spaces.space_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(kind in('initial_enable','initial_claim','management_transfer'))",
+        "(next_ownership_epoch>=1)"
+      ],
+      "sqlDigest": "f7ef338c8d83689a45db55b58daec9c37e1e4a8617b7d7b14eb998329fadd4fa"
+    },
+    "memory_spaces": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "space_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "instance_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "agent_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "owner_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "ownership_epoch|INTEGER|nn=1|d=null|pk=0|h=0",
+        "backend_binding_epoch|INTEGER|nn=1|d=1|pk=0|h=0",
+        "management_binding_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "capture|TEXT|nn=1|d='pending'|pk=0|h=0",
+        "active|INTEGER|nn=1|d=1|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_spaces_active|u=1|o=c|p=1|cols=agent_actor_id|desc=0",
+        "idx_memory_spaces_instance|u=0|o=c|p=0|cols=instance_id,active|desc=0,0",
+        "idx_memory_spaces_owner|u=0|o=c|p=0|cols=owner_actor_id,active|desc=0,0",
+        "sqlite_autoindex_memory_spaces_1|u=1|o=pk|p=0|cols=space_id|desc=0"
+      ],
+      "foreignKeys": [
+        "agent_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "instance_id->memory_instances.instance_id|on_update=no action|on_delete=no action|match=none",
+        "owner_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(active in(0,1))",
+        "(backend_binding_epoch>=1)",
+        "(capture in('none','pending','extracted','excluded'))",
+        "(ownership_epoch>=1)",
+        "(ownership_kind in('managed','self_owned'))"
+      ],
+      "sqlDigest": "234ec3dd0dce0b40013c5347e6545fd83e4ce2fb7aad86f0a30b2e1ae263e504"
+    },
+    "memory_tombstones": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "tombstone_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "instance_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "target_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "target_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "source_key|TEXT|nn=0|d=null|pk=0|h=0",
+        "reason|TEXT|nn=1|d=null|pk=0|h=0",
+        "command_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_memory_tombstones_source_key|u=0|o=c|p=1|cols=source_key|desc=0",
+        "idx_memory_tombstones_target|u=1|o=c|p=0|cols=target_kind,target_id,reason|desc=0,0,0",
+        "sqlite_autoindex_memory_tombstones_1|u=1|o=pk|p=0|cols=tombstone_id|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(reason in('recall','forget','permission','file_deleted','transfer','policy'))",
+        "(target_kind in('source','source_key','representation','curated','space','partition','context'))"
+      ],
+      "sqlDigest": "32666d2047513704e9f46a15bae3022d5685e685f8886554d1a1819127c95a10"
+    },
+    "message_mentions": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "message_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "actor_id|TEXT|nn=1|d=null|pk=2|h=0",
+        "actor_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "source|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_message_mentions_actor|u=0|o=c|p=0|cols=actor_id,created_at,message_id|desc=0,1,0",
+        "sqlite_autoindex_message_mentions_1|u=1|o=pk|p=0|cols=message_id,actor_id|desc=0,0"
+      ],
+      "foreignKeys": [
+        "actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "message_id->messages.message_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(actor_kind in('human','agent'))",
+        "(source in('explicit','text','all'))"
+      ],
+      "sqlDigest": "9c1916a50b017dfd46811ede67e676a883625b261be8d916e5847d5ba4e549a9"
+    },
+    "message_search_fts": {
+      "type": "table",
+      "virtual": true,
+      "columns": [
+        "body||nn=0|d=null|pk=0|h=0",
+        "message_search_fts||nn=0|d=null|pk=0|h=1",
+        "rank||nn=0|d=null|pk=0|h=1"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [],
+      "sqlDigest": "f639181a27fc9a84e6790873ea22188815c842635d0363b29aa5e48943bcce64"
+    },
+    "message_search_fts_config": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "k||nn=1|d=null|pk=1|h=0",
+        "v||nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_message_search_fts_config_1|u=1|o=pk|p=0|cols=k|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [],
+      "sqlDigest": "db307fe3ec9027540bd9c91783d4d6670ee2d0b8ca3e455cd270343469edd436"
+    },
+    "message_search_fts_data": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "id|INTEGER|nn=0|d=null|pk=1|h=0",
+        "block|BLOB|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [],
+      "sqlDigest": "f32cbde9781c03a8fb52e8e418746464917f02b7aac623ae3730e87fb07bb580"
+    },
+    "message_search_fts_docsize": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "id|INTEGER|nn=0|d=null|pk=1|h=0",
+        "sz|BLOB|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [],
+      "sqlDigest": "f625242b74fb9e45cacddf555fb513e1dad24a73b51b054aa4b879dbfa43666d"
+    },
+    "message_search_fts_idx": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "segid||nn=1|d=null|pk=1|h=0",
+        "term||nn=1|d=null|pk=2|h=0",
+        "pgno||nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_message_search_fts_idx_1|u=1|o=pk|p=0|cols=segid,term|desc=0,0"
+      ],
+      "foreignKeys": [],
+      "checks": [],
+      "sqlDigest": "27d46f799b9a97b0a576865584ea323589dd16d35353a93975cc0abc89a272cf"
+    },
+    "messages": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "message_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "sender_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "client_message_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_seq|INTEGER|nn=1|d=null|pk=0|h=0",
+        "body|TEXT|nn=1|d=null|pk=0|h=0",
+        "body_bytes|INTEGER|nn=1|d=null|pk=0|h=0",
+        "preview|TEXT|nn=1|d=null|pk=0|h=0",
+        "reply_to|TEXT|nn=0|d=null|pk=0|h=0",
+        "root_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "hop|INTEGER|nn=1|d=0|pk=0|h=0",
+        "root_invocations_used|INTEGER|nn=1|d=0|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "task_root_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "task_marked_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "task_marked_at|INTEGER|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_messages_room_reply_to|u=0|o=c|p=1|cols=room_id,reply_to,created_seq|desc=0,0,0",
+        "idx_messages_room_seq|u=0|o=c|p=0|cols=room_id,created_seq|desc=0,1",
+        "idx_messages_root|u=0|o=c|p=0|cols=root_id,created_seq|desc=0,0",
+        "idx_messages_task_root|u=0|o=c|p=1|cols=room_id,task_root_id,created_seq|desc=0,0,0",
+        "sqlite_autoindex_messages_1|u=1|o=pk|p=0|cols=message_id|desc=0",
+        "sqlite_autoindex_messages_2|u=1|o=u|p=0|cols=sender_id,client_message_id|desc=0,0"
+      ],
+      "foreignKeys": [],
+      "checks": [],
+      "sqlDigest": "33cbfac2d9c7bd4294a13641d8179803de0808425a4b5eb013d612281717e9e6"
+    },
+    "operations": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "actor_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "request_id|TEXT|nn=1|d=null|pk=2|h=0",
+        "payload_hash|TEXT|nn=1|d=null|pk=0|h=0",
+        "write_nonce|TEXT|nn=1|d=null|pk=0|h=0",
+        "result_json|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_operations_created|u=0|o=c|p=0|cols=created_at|desc=0",
+        "sqlite_autoindex_operations_1|u=1|o=pk|p=0|cols=actor_id,request_id|desc=0,0"
+      ],
+      "foreignKeys": [],
+      "checks": [],
+      "sqlDigest": "899efc43c19f615734036e54c71802f6683f3c2a63e0986d720490122c975c73"
+    },
+    "outbox": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "outbox_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "topic|TEXT|nn=1|d=null|pk=0|h=0",
+        "event_seq|INTEGER|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "attempts|INTEGER|nn=1|d=0|pk=0|h=0",
+        "next_attempt_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "lease_token|TEXT|nn=0|d=null|pk=0|h=0",
+        "lease_until|INTEGER|nn=0|d=null|pk=0|h=0",
+        "completed_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_outbox_due|u=0|o=c|p=0|cols=status,next_attempt_at|desc=0,0",
+        "sqlite_autoindex_outbox_1|u=1|o=pk|p=0|cols=outbox_id|desc=0",
+        "sqlite_autoindex_outbox_2|u=1|o=u|p=0|cols=topic,event_seq|desc=0,0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(status in('pending','processing','completed'))"
+      ],
+      "sqlDigest": "f49b57dc16366d53f1357ba21b6c7bfbf12c1e9aa0792c9784c79d58e3b8dfdb"
+    },
+    "presence_pending_rooms": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "generation_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=2|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_presence_pending_rooms_1|u=1|o=pk|p=0|cols=generation_id,room_id|desc=0,0"
+      ],
+      "foreignKeys": [],
+      "checks": [],
+      "sqlDigest": "ca19f7aa04c512e06c086a0501aa5b41234565ebcb252496d9e11cfbadf2a3b8"
+    },
+    "recovery_tickets": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "ticket_hash|TEXT|nn=0|d=null|pk=1|h=0",
+        "actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "consumed_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "redeemed_credential_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "redeem_request_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_recovery_expires|u=0|o=c|p=0|cols=expires_at|desc=0",
+        "sqlite_autoindex_recovery_tickets_1|u=1|o=pk|p=0|cols=ticket_hash|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [],
+      "sqlDigest": "a1bda286ec7e6efed2be9a1939eb411d56f1a8551fb565cec1f4201c793a0581"
+    },
+    "room_files": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "room_file_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "file_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "uploader_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "name|TEXT|nn=1|d=null|pk=0|h=0",
+        "mime_type|TEXT|nn=1|d=null|pk=0|h=0",
+        "size|INTEGER|nn=1|d=null|pk=0|h=0",
+        "sha256|TEXT|nn=1|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "deleted_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "deleted_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_seq|INTEGER|nn=0|d=null|pk=0|h=0",
+        "retained|INTEGER|nn=1|d=0|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_room_files_expiry|u=0|o=c|p=0|cols=expires_at|desc=0",
+        "idx_room_files_file|u=1|o=c|p=0|cols=file_id|desc=0",
+        "idx_room_files_room_created|u=0|o=c|p=0|cols=room_id,created_at,room_file_id|desc=0,1,1",
+        "idx_room_files_room_seq|u=0|o=c|p=0|cols=room_id,created_seq,file_id|desc=0,0,0",
+        "idx_room_files_uploader|u=0|o=c|p=0|cols=uploader_id,created_at|desc=0,1",
+        "sqlite_autoindex_room_files_1|u=1|o=pk|p=0|cols=room_file_id|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(expires_at>created_at)",
+        "(length(sha256)=64)",
+        "(retained in(0,1))",
+        "(size>=0)"
+      ],
+      "sqlDigest": "8b853a30b67900957a44f746f655aaa422e8e4db6cd3a438601fa79337e86cf0"
+    },
+    "room_invitations": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "invitation_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "inviter_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "target_actor_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "token_hash|TEXT|nn=0|d=null|pk=0|h=0",
+        "kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "max_uses|INTEGER|nn=1|d=1|pk=0|h=0",
+        "used_count|INTEGER|nn=1|d=0|pk=0|h=0",
+        "expires_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "revision|INTEGER|nn=1|d=1|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_room_invitations_pending_direct|u=1|o=c|p=1|cols=room_id,target_actor_id|desc=0,0",
+        "idx_room_invitations_room|u=0|o=c|p=0|cols=room_id,status,expires_at|desc=0,0,0",
+        "idx_room_invitations_target|u=0|o=c|p=0|cols=target_actor_id,status,expires_at|desc=0,0,0",
+        "idx_room_invitations_token|u=0|o=c|p=1|cols=token_hash|desc=0",
+        "sqlite_autoindex_room_invitations_1|u=1|o=pk|p=0|cols=invitation_id|desc=0",
+        "sqlite_autoindex_room_invitations_2|u=1|o=u|p=0|cols=token_hash|desc=0"
+      ],
+      "foreignKeys": [
+        "inviter_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "room_id->rooms.room_id|on_update=no action|on_delete=no action|match=none",
+        "target_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "((kind='direct' and target_actor_id is not null)or(kind='link' and target_actor_id is null))",
+        "(kind in('direct','link'))",
+        "(max_uses>0)",
+        "(status in('pending','accepted','rejected','revoked','expired','exhausted'))",
+        "(used_count>=0 and used_count<=max_uses)"
+      ],
+      "sqlDigest": "b3b2fe515d9cb2db2c553b0caaea227cd8d90e718b5f8d8e97ef1f1de304c12f"
+    },
+    "room_join_requests": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "join_request_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "invitation_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "applicant_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "message|TEXT|nn=1|d=''|pk=0|h=0",
+        "revision|INTEGER|nn=1|d=1|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "decided_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "decided_by|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_room_join_requests_applicant|u=0|o=c|p=0|cols=applicant_id,status,created_at|desc=0,0,1",
+        "idx_room_join_requests_pending|u=1|o=c|p=1|cols=invitation_id,applicant_id|desc=0,0",
+        "idx_room_join_requests_room|u=0|o=c|p=0|cols=room_id,status,created_at,join_request_id|desc=0,0,1,1",
+        "sqlite_autoindex_room_join_requests_1|u=1|o=pk|p=0|cols=join_request_id|desc=0"
+      ],
+      "foreignKeys": [
+        "applicant_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "decided_by->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "invitation_id->room_invitations.invitation_id|on_update=no action|on_delete=no action|match=none",
+        "room_id->rooms.room_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(revision>=1)",
+        "(status in('pending','approved','rejected','cancelled','expired'))"
+      ],
+      "sqlDigest": "ed8bd8c31ddac795e386610adef3986558d3eea22378d958e1372e91421e7a7b"
+    },
+    "room_management_audit": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "audit_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "action|TEXT|nn=1|d=null|pk=0|h=0",
+        "target_actor_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "previous_role|TEXT|nn=0|d=null|pk=0|h=0",
+        "new_role|TEXT|nn=0|d=null|pk=0|h=0",
+        "previous_status|TEXT|nn=0|d=null|pk=0|h=0",
+        "new_status|TEXT|nn=0|d=null|pk=0|h=0",
+        "expected_revision|INTEGER|nn=0|d=null|pk=0|h=0",
+        "resulting_revision|INTEGER|nn=1|d=null|pk=0|h=0",
+        "changed_by|TEXT|nn=1|d=null|pk=0|h=0",
+        "request_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "detail_json|TEXT|nn=1|d='{}'|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_room_management_audit_actor|u=0|o=c|p=0|cols=target_actor_id,created_at|desc=0,1",
+        "idx_room_management_audit_room|u=0|o=c|p=0|cols=room_id,created_at,audit_id|desc=0,1,1",
+        "sqlite_autoindex_room_management_audit_1|u=1|o=pk|p=0|cols=audit_id|desc=0"
+      ],
+      "foreignKeys": [
+        "changed_by->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "room_id->rooms.room_id|on_update=no action|on_delete=no action|match=none",
+        "target_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(action in('member_added','member_removed','member_left','admin_appointed','admin_revoked','owner_transferred','owner_transfer_proposed','owner_transfer_accepted','owner_transfer_rejected','owner_transfer_cancelled','owner_transfer_expired','policy_updated','announcement_updated','invite_created','invite_revoked','join_requested','join_approved','join_rejected','room_dissolved'))",
+        "(new_role is null or new_role in('owner','admin','member'))",
+        "(new_status is null or new_status in('active','left','removed'))",
+        "(previous_role is null or previous_role in('owner','admin','member'))",
+        "(previous_status is null or previous_status in('active','left','removed'))"
+      ],
+      "sqlDigest": "52ababe7791b148cdc0a5e54bc86abf615a77082e909f31560bada4a0c2789c8"
+    },
+    "room_members": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "room_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "actor_id|TEXT|nn=1|d=null|pk=2|h=0",
+        "role|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "joined_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "last_read_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "joined_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "role_revision|INTEGER|nn=1|d=1|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=0|pk=0|h=0",
+        "member_generation|INTEGER|nn=1|d=1|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_room_members_actor|u=0|o=c|p=0|cols=actor_id,status,room_id|desc=0,0,0",
+        "idx_room_members_one_owner|u=1|o=c|p=1|cols=room_id|desc=0",
+        "idx_room_members_room_role|u=0|o=c|p=0|cols=room_id,role,status|desc=0,0,0",
+        "sqlite_autoindex_room_members_1|u=1|o=pk|p=0|cols=room_id,actor_id|desc=0,0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(role in('owner','admin','member'))",
+        "(status in('active','left','removed'))"
+      ],
+      "sqlDigest": "84f522c6fb48bb64260d3954a11938b421edda36c1fdca70e319abc9c51284b1"
+    },
+    "room_owner_transfers": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "transfer_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "from_owner_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "to_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "version|INTEGER|nn=1|d=1|pk=0|h=0",
+        "target_role_revision|INTEGER|nn=1|d=null|pk=0|h=0",
+        "invalid_reason|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "responded_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "responded_by|TEXT|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_room_owner_transfers_pending|u=1|o=c|p=1|cols=room_id|desc=0",
+        "idx_room_owner_transfers_room|u=0|o=c|p=0|cols=room_id,created_at,transfer_id|desc=0,1,1",
+        "idx_room_owner_transfers_target|u=0|o=c|p=0|cols=to_actor_id,status,expires_at|desc=0,0,0",
+        "sqlite_autoindex_room_owner_transfers_1|u=1|o=pk|p=0|cols=transfer_id|desc=0"
+      ],
+      "foreignKeys": [
+        "from_owner_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "responded_by->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "room_id->rooms.room_id|on_update=no action|on_delete=no action|match=none",
+        "to_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(from_owner_id<>to_actor_id)",
+        "(status in('pending','accepted','rejected','cancelled','expired'))",
+        "(target_role_revision>=1)",
+        "(version>=1)"
+      ],
+      "sqlDigest": "97639ab520753ee7246f79f60c4c09ab4779ad6dbe67c0123882b3e5aad4dd3a"
+    },
+    "room_presence_events": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "presence_event_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "agent_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "generation_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "transition|TEXT|nn=1|d=null|pk=0|h=0",
+        "occurred_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "recorded_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "timeline_seq|INTEGER|nn=1|d=null|pk=0|h=0",
+        "time_basis|TEXT|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_room_presence_agent|u=0|o=c|p=0|cols=agent_id,occurred_at|desc=0,0",
+        "idx_room_presence_seq|u=0|o=c|p=0|cols=room_id,timeline_seq|desc=0,0",
+        "idx_room_presence_timeline|u=0|o=c|p=0|cols=room_id,occurred_at,timeline_seq|desc=0,1,1",
+        "sqlite_autoindex_room_presence_events_1|u=1|o=pk|p=0|cols=presence_event_id|desc=0",
+        "sqlite_autoindex_room_presence_events_2|u=1|o=u|p=0|cols=room_id,generation_id,transition|desc=0,0,0"
+      ],
+      "foreignKeys": [],
+      "checks": [
+        "(time_basis in('observed','inferred'))",
+        "(transition in('online','offline'))"
+      ],
+      "sqlDigest": "e3b147cea95532d8152a59c94193663760112514536fdef97c38d9cfa034e8f0"
+    },
+    "rooms": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "room_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "owner_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "title|TEXT|nn=1|d=''|pk=0|h=0",
+        "direct_pair_key|TEXT|nn=0|d=null|pk=0|h=0",
+        "head_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "events_min_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "member_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "last_message_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "policy_revision|INTEGER|nn=1|d=1|pk=0|h=0",
+        "member_message_policy|TEXT|nn=1|d='members'|pk=0|h=0",
+        "member_invite_policy|TEXT|nn=1|d='owner_admin'|pk=0|h=0",
+        "announcement|TEXT|nn=1|d=''|pk=0|h=0",
+        "announcement_revision|INTEGER|nn=1|d=1|pk=0|h=0",
+        "announcement_updated_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "announcement_updated_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "member_history_policy|TEXT|nn=1|d='from_join'|pk=0|h=0",
+        "member_join_policy|TEXT|nn=1|d='open'|pk=0|h=0",
+        "member_profile_policy|TEXT|nn=1|d='owner_admin'|pk=0|h=0",
+        "member_mention_all_policy|TEXT|nn=1|d='owner_admin'|pk=0|h=0",
+        "dissolved_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "dissolved_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "dissolve_reason|TEXT|nn=0|d=null|pk=0|h=0",
+        "archive_head_seq|INTEGER|nn=0|d=null|pk=0|h=0",
+        "archive_member_seq|INTEGER|nn=0|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_rooms_updated|u=0|o=c|p=0|cols=updated_at,room_id|desc=1,0",
+        "sqlite_autoindex_rooms_1|u=1|o=pk|p=0|cols=room_id|desc=0",
+        "sqlite_autoindex_rooms_2|u=1|o=u|p=0|cols=direct_pair_key|desc=0"
+      ],
+      "foreignKeys": [
+        "dissolved_by->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(kind in('direct','group'))",
+        "(member_history_policy in('from_join','full'))",
+        "(member_invite_policy in('members','owner_admin'))",
+        "(member_join_policy in('open','approval'))",
+        "(member_mention_all_policy in('members','owner_admin'))",
+        "(member_message_policy in('members','owner_admin'))",
+        "(member_profile_policy in('members','owner_admin'))"
+      ],
+      "sqlDigest": "f63d725d1523255228fcd4be41a6cee7f30912964badc6d82ea32f079db2f606"
+    },
+    "schema_migrations": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "name|TEXT|nn=0|d=null|pk=1|h=0",
+        "applied_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_schema_migrations_1|u=1|o=pk|p=0|cols=name|desc=0"
+      ],
+      "foreignKeys": [],
+      "checks": [],
+      "sqlDigest": "08a77360304f8bdb839d547c0fb5724507cbf6794159fb2cc9d3da89b395426a"
+    },
+    "webhook_verifications": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "actor_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "callback_url_key|TEXT|nn=1|d=null|pk=2|h=0",
+        "verified_at|INTEGER|nn=1|d=null|pk=0|h=0",
+        "expires_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_webhook_verifications_expires|u=0|o=c|p=0|cols=expires_at|desc=0",
+        "sqlite_autoindex_webhook_verifications_1|u=1|o=pk|p=0|cols=actor_id,callback_url_key|desc=0,0"
+      ],
+      "foreignKeys": [
+        "actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [],
+      "sqlDigest": "eb4f73a14ed84d048ceccf661bf82746c4ad9db552fbf156a30c276c53dc3af8"
+    }
+  },
+  "triggers": {
+    "memory_contexts_body_immutable": "849c2f9ff7d9e0c2bb83fed122598b73656619b052aeb34cf0402975ce68842b",
+    "memory_manifest_items_immutable": "36fa09740228d1a7154dd40932d130855730950bf259417ec509423801bbb0e0",
+    "memory_manifest_items_no_delete": "d0cfa05c996bcb5fe0925f84a4bfdbe06d83bae89f871a063ed39435f8d623f6",
+    "memory_tombstones_no_delete": "e21f0b249f1afe15b638cf3fc99b601fd240ed76c823f3169a64cb9f9ed599e5",
+    "message_search_fts_ad": "d9b06b2983f2eaa38352d48f306e73315760c521d3e03cdd30ea445313c21b77",
+    "message_search_fts_ai": "c0d538ed07edf48bcc8dfff50d1adf2158b1ef1c75e528640877b7ac08b0fe71",
+    "message_search_fts_au": "af71582b06026e26c1b0acb0e15b6d4e504f8b85450ac9351d70042408abbaf7"
+  },
+  "digest": "ad9548abc7bc5f12a760af1b4dfcbb9145f63d9622a76c9f2d459ea5fb95e2aa"
+}
