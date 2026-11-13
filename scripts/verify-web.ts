@@ -4367,26 +4367,118 @@ async function main(): Promise<void> {
       await page.locator('#room-filter-agent').click();
       await waitRoomListName(page, data.agentA.name);
 
-      await page.locator('#account-menu-toggle').click();
+      // 左下角账号区恢复 legacy 横向操作行，而不是收进「···」菜单。
+      const accountLayout = (await page.evaluate(
+        `(() => {
+          const footer = document.querySelector('.sidebar-foot');
+          const account = document.getElementById('account');
+          const avatar = document.getElementById('account-avatar');
+          const name = document.getElementById('account-name');
+          const actions = document.querySelector('.account-actions');
+          const buttons = actions
+            ? Array.from(actions.querySelectorAll('button')).filter((node) => !node.hidden)
+            : [];
+          const box = (node) => {
+            if (!node) return null;
+            const rect = node.getBoundingClientRect();
+            return { width: Math.round(rect.width), height: Math.round(rect.height) };
+          };
+          const pencil = document.getElementById('account-rename');
+          return {
+            hasAccount: Boolean(account),
+            actionsVisible: actions ? getComputedStyle(actions).display !== 'none' : false,
+            labels: buttons.map((node) => (node.textContent || '').trim()),
+            ids: buttons.map((node) => node.id),
+            avatar: box(avatar),
+            footer: box(footer),
+            account: box(account),
+            actions: box(actions),
+            pencilColor: pencil ? getComputedStyle(pencil).color : null,
+            buttonsDisabled: buttons.map((node) => node.disabled),
+            buttonsOpacity: buttons.map((node) => getComputedStyle(node).opacity),
+            nameFontSize: name ? getComputedStyle(name).fontSize : null,
+            actionFontSize: actions && buttons[0] ? getComputedStyle(buttons[0]).fontSize : null,
+            actionGap: actions ? getComputedStyle(actions).gap : null,
+            menuToggle: Boolean(document.getElementById('account-menu-toggle'))
+          };
+        })()`,
+      )) as {
+        hasAccount: boolean;
+        actionsVisible: boolean;
+        labels: string[];
+        ids: string[];
+        avatar: { width: number; height: number } | null;
+        footer: { width: number; height: number } | null;
+        account: { width: number; height: number } | null;
+        actions: { width: number; height: number } | null;
+        pencilColor: string | null;
+        buttonsDisabled: boolean[];
+        buttonsOpacity: string[];
+        nameFontSize: string | null;
+        actionFontSize: string | null;
+        actionGap: string | null;
+        menuToggle: boolean;
+      } | null;
+      check('账号区存在', accountLayout?.hasAccount === true);
+      check('账号区直接显示横向操作行', accountLayout?.actionsVisible === true);
+      checkEqual(
+        '账号区操作顺序与 legacy 一致',
+        accountLayout?.labels.join('|'),
+        '新建 Agent|配对设备|记忆||',
+      );
+      checkEqual(
+        '账号区操作入口 id',
+        accountLayout?.ids.join(','),
+        'new-agent,device-handoff,memory-open,archived-agents,logout',
+      );
+      check(
+        '账号头像保持 36×36',
+        accountLayout?.avatar?.width === 36 && accountLayout?.avatar?.height === 36,
+        accountLayout?.avatar,
+      );
+      checkEqual('账号名称字号保持 13px', accountLayout?.nameFontSize, '13px');
+      checkEqual('账号操作文字字号保持 12px', accountLayout?.actionFontSize, '12px');
+      checkEqual('账号操作行间距保持 2px 10px', accountLayout?.actionGap, '2px 10px');
+      checkEqual('账号区高度保持 legacy 55px', accountLayout?.account?.height, 55);
+      checkEqual('账号操作行高度保持 legacy 22px', accountLayout?.actions?.height, 22);
+      checkEqual(
+        '改名铅笔保持 legacy 浅色 #999',
+        accountLayout?.pencilColor,
+        'rgb(153, 153, 153)',
+      );
+      checkEqual(
+        '人类身份五项入口全部可用',
+        accountLayout?.buttonsDisabled.join(','),
+        'false,false,false,false,false',
+      );
+      checkEqual(
+        '人类身份五项入口不透明度为 1',
+        [...new Set(accountLayout?.buttonsOpacity ?? [])].join(','),
+        '1',
+      );
+      check(
+        '账号区高度保持 legacy 74px',
+        accountLayout?.footer?.height === 74,
+        accountLayout?.footer,
+      );
+      checkEqual('侧栏账号区不再使用「···」菜单', accountLayout?.menuToggle, false);
+
       await page.locator('#memory-open').click();
       await page.locator('#memory-drawer').waitFor({ state: 'visible' });
       check('Memory 抽屉可打开', await page.locator('#memory-drawer').isVisible());
       await page.locator('#memory-close').click();
 
-      await page.locator('#account-menu-toggle').click();
       await page.locator('#archived-agents').click();
       await page.locator('#archive-popover').waitFor({ state: 'visible' });
       check('已归档 Agents 浮层可打开', await page.locator('#archive-popover').isVisible());
       await page.locator('#archive-popover-close').click();
 
-      await page.locator('#account-menu-toggle').click();
       await page.locator('#device-handoff').click();
       await page.locator('#handoff-modal').waitFor({ state: 'visible' });
       await page.locator('#pairing-qr-wrap').waitFor({ state: 'visible' });
       check('配对弹窗显示二维码与短码', await page.locator('#pairing-code').isVisible());
       await page.locator('#handoff-close').click();
 
-      await page.locator('#account-menu-toggle').click();
       await page.locator('#new-agent').click();
       await page.locator('#new-agent-modal').waitFor({ state: 'visible' });
       await page.fill('#new-agent-name', 'React 新建 Agent');
@@ -4395,8 +4487,7 @@ async function main(): Promise<void> {
       check('新建 Agent 展示一次性结果', await page.locator('#new-agent-url').isVisible());
       await page.locator('#new-agent-close').click();
 
-      await page.locator('#account-menu-toggle').click();
-      await page.locator('#account-logout').click();
+      await page.locator('#logout').click();
       await page.locator('#logout-modal').waitFor({ state: 'visible' });
       await page.locator('#logout-confirm').click();
       await page.waitForFunction(
@@ -4404,6 +4495,100 @@ async function main(): Promise<void> {
       );
       checkEqual('退出登录清除本机 token', true, true);
       await context.close();
+    }
+
+    // 5b. 暗色与 Agent 身份：铅笔颜色跟随 legacy，五项入口不被禁用。
+    {
+      const dark = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+        false,
+        false,
+        { colorScheme: 'dark' },
+      );
+      await dark.page.goto(`${server.base}/`);
+      await dark.page.waitForFunction(`Boolean(document.getElementById('account-rename'))`);
+      const darkPencil = (await dark.page.evaluate(
+        `(() => {
+          const node = document.getElementById('account-rename');
+          return node ? getComputedStyle(node).color : null;
+        })()`,
+      )) as string | null;
+      checkEqual('改名铅笔保持 legacy 暗色 #8c8c8c', darkPencil, 'rgb(140, 140, 140)');
+      await dark.context.close();
+    }
+
+    {
+      const agent = await makeContext(
+        browser,
+        data.agentAToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await agent.page.goto(`${server.base}/`);
+      await agent.page.waitForFunction(
+        `document.getElementById('account-name') && document.getElementById('account-name').textContent === ${JSON.stringify(data.agentA.name)}`,
+      );
+      const agentState = (await agent.page.evaluate(
+        `(() => {
+          const actions = document.querySelector('.account-actions');
+          const buttons = actions ? Array.from(actions.querySelectorAll('button')) : [];
+          const pencil = document.getElementById('account-rename');
+          return {
+            ids: buttons.map((node) => node.id).join(','),
+            disabled: buttons.map((node) => node.disabled),
+            opacity: buttons.map((node) => getComputedStyle(node).opacity),
+            pencilColor: pencil ? getComputedStyle(pencil).color : null
+          };
+        })()`,
+      )) as {
+        ids: string;
+        disabled: boolean[];
+        opacity: string[];
+        pencilColor: string | null;
+      };
+      checkEqual(
+        'Agent 身份入口顺序与 legacy 一致',
+        agentState.ids,
+        'new-agent,device-handoff,memory-open,archived-agents,logout',
+      );
+      checkEqual(
+        'Agent 身份五项入口全部可用',
+        agentState.disabled.join(','),
+        'false,false,false,false,false',
+      );
+      checkEqual(
+        'Agent 身份五项入口不透明度为 1',
+        [...new Set(agentState.opacity)].join(','),
+        '1',
+      );
+      checkEqual(
+        'Agent 身份改名铅笔保持 legacy 浅色 #999',
+        agentState.pencilColor,
+        'rgb(153, 153, 153)',
+      );
+
+      const openAndClose = async (
+        trigger: string,
+        surface: string,
+        close: string,
+      ): Promise<void> => {
+        await agent.page.locator(`#${trigger}`).click();
+        await agent.page.locator(`#${surface}`).waitFor({ state: 'visible' });
+        await agent.page.locator(`#${close}`).click();
+        await agent.page.locator(`#${surface}`).waitFor({ state: 'hidden' });
+        await agent.page.waitForFunction(
+          `document.activeElement && document.activeElement.id === ${JSON.stringify(trigger)}`,
+        );
+      };
+      await openAndClose('new-agent', 'new-agent-modal', 'new-agent-close');
+      await openAndClose('archived-agents', 'archive-popover', 'archive-popover-close');
+      await openAndClose('memory-open', 'memory-drawer', 'memory-close');
+      await openAndClose('device-handoff', 'handoff-modal', 'handoff-close');
+      await openAndClose('logout', 'logout-modal', 'logout-cancel');
+      await agent.context.close();
     }
 
     // 6. 群管理：成员、公告、改名、群主转让入口与退群预览。

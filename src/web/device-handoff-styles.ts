@@ -16,9 +16,12 @@ export const DEVICE_HANDOFF_STYLE = `
   .account-name { display: block; flex: 0 1 auto; min-width: 0; font-size: 13px;
     font-weight: 500; color: var(--wx-text, #333);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* legacy 账号铅笔固定 #999/#8c8c8c；SPA 的 --wx-muted 为对比度调整过，
+     不能套用到该装饰图标，否则与 legacy 观感不一致。 */
   .account-edit { flex: 0 0 auto; width: 20px; height: 20px; padding: 0; border: 0;
-    border-radius: 4px; background: none; color: var(--wx-muted, #999);
+    border-radius: 4px; background: none; color: #999;
     display: grid; place-items: center; cursor: pointer; }
+  @media (prefers-color-scheme: dark) { .account-edit { color: #8c8c8c; } }
   .account-edit:hover { background: var(--wx-hover, #ececec); color: var(--wx-text, #333); }
   .account-edit[hidden] { display: none; }
   .account-edit svg { width: 14px; height: 14px; fill: none; stroke: currentColor;
@@ -27,7 +30,9 @@ export const DEVICE_HANDOFF_STYLE = `
   .account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px;
     margin-top: 1px; }
   .account-actions[hidden] { display: none; }
-  .account-scan { padding: 0; border: 0; background: none;
+  /* legacy 基础样式对 button 应用 font: inherit；SPA 壳没有该重置，
+     账号文字入口需显式继承，否则浏览器表单控件会回退到 Arial 并改变宽度。 */
+  .account-scan { padding: 0; border: 0; background: none; font: inherit;
     color: var(--wx-link, #576b95); font-size: 12px; cursor: pointer; }
   .account-scan:hover { text-decoration: underline; }
   .account-icon { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: 0;

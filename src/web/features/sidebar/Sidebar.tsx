@@ -1,14 +1,13 @@
 import type { RoomPreferenceMap } from '../../lib/room-preferences';
 import type { WebIdentity } from '../../lib/identity';
 import {
-  firstChar,
   roomFilterEmptyMessage,
   type RoomFilter,
   type RoomSummary,
 } from '../../lib/rooms';
-import { AccountMenu } from './AccountMenu';
 import { ContactRequestsButton } from './ContactRequestsButton';
 import { RoomRow } from './RoomRow';
+import { SidebarAccount } from './SidebarAccount';
 
 export type SidebarStatus =
   | 'loading'
@@ -226,19 +225,7 @@ export function Sidebar(props: SidebarProps) {
             data-state={streamError.startsWith('实时连接已停止') ? 'stopped' : undefined}
           />
         ) : null}
-        <div className="account" id="account">
-          <span className="account-avatar" id="account-avatar" aria-hidden="true">
-            {me ? firstChar(me.name) : '?'}
-          </span>
-          <div className="account-main">
-            <div className="account-name-row">
-              <span className="account-name" id="account-name">
-                {me ? me.name : '未登录'}
-              </span>
-              <AccountMenu me={me} />
-            </div>
-          </div>
-        </div>
+        <SidebarAccount me={me} />
       </footer>
     </aside>
   );

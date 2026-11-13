@@ -121,6 +121,7 @@ test.describe('SPA 右栏与剩余入口', () => {
   let roomId = '';
   let groupId = '';
   let agentId = '';
+  let agentToken = '';
   let agentName = '';
 
   test.beforeAll(async () => {
@@ -171,11 +172,12 @@ test.describe('SPA 右栏与剩余入口', () => {
     });
     groupId = group.room.room_id;
 
-    const agent = await callTool<{ actor_id: string }>(base, tokenA, 'network_agent_create', {
+    const agent = await callTool<{ actor_id: string; token: string }>(base, tokenA, 'network_agent_create', {
       request_id: requestId('e2e_agent'),
       name: agentName,
     });
     agentId = agent.actor_id;
+    agentToken = agent.token;
     const agentRoom = await callTool<{ room: { room_id: string } }>(base, tokenA, 'network_room_create', {
       request_id: requestId('e2e_agent_room'),
       kind: 'direct',
@@ -309,7 +311,6 @@ test.describe('SPA 右栏与剩余入口', () => {
 
   test('new agent entry creates credentials and memory drawer opens', async ({ page }) => {
     await login(page, base, tokenA);
-    await page.locator('#account-menu-toggle').click();
     await page.locator('#new-agent').click();
     await expect(page.locator('#new-agent-modal')).toBeVisible();
     await page.fill('#new-agent-name', `UI Agent ${Date.now()}`);
@@ -322,7 +323,6 @@ test.describe('SPA 右栏与剩余入口', () => {
     await page.locator('#new-agent-close').click();
     await expect(page.locator('#new-agent-modal')).toBeHidden();
 
-    await page.locator('#account-menu-toggle').click();
     await page.locator('#memory-open').click();
     await expect(page.locator('#memory-drawer')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('#memory-capability')).toContainText(
@@ -331,6 +331,35 @@ test.describe('SPA 右栏与剩余入口', () => {
     await expect(page.locator('#memory-tabs')).toHaveCount(0);
     await page.locator('#memory-close').click({ timeout: 5000 });
     await expect(page.locator('#memory-drawer')).toBeHidden();
+  });
+
+  test('agent identity keeps all sidebar account entries enabled', async ({ page }) => {
+    await login(page, base, agentToken);
+    await expect(page.locator('#account-name')).toHaveText(agentName);
+    const entries = page.locator('.account-actions button');
+    await expect(entries).toHaveCount(5);
+    const states = await entries.evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        id: node.id,
+        disabled: (node as HTMLButtonElement).disabled,
+        opacity: getComputedStyle(node).opacity,
+      })),
+    );
+    expect(states.map((item) => item.id)).toEqual([
+      'new-agent',
+      'device-handoff',
+      'memory-open',
+      'archived-agents',
+      'logout',
+    ]);
+    expect(states.every((item) => item.disabled === false)).toBe(true);
+    expect(states.every((item) => item.opacity === '1')).toBe(true);
+
+    await page.locator('#new-agent').click();
+    await expect(page.locator('#new-agent-modal')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#new-agent-modal')).toBeHidden();
+    await expect(page.locator('#new-agent')).toBeFocused();
   });
 
   test('agent management transfer dialog loads from the room menu', async ({ page }) => {
@@ -399,7 +428,6 @@ test.describe('SPA 右栏与剩余入口', () => {
     expect(await violations('#monitor-pane')).toEqual([]);
     await page.locator('#monitor-close').click();
 
-    await page.locator('#account-menu-toggle').click();
     await page.locator('#new-agent').click();
     await expect(page.locator('#new-agent-modal')).toBeVisible();
     await page.waitForTimeout(220);
@@ -407,7 +435,6 @@ test.describe('SPA 右栏与剩余入口', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('#new-agent-modal')).toBeHidden();
 
-    await page.locator('#account-menu-toggle').click();
     await page.locator('#memory-open').click();
     await expect(page.locator('#memory-drawer')).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(220);

@@ -218,8 +218,12 @@ async function seriousViolations(page: Page, selector: string): Promise<string[]
 }
 
 async function openAccountMenu(page: Page): Promise<void> {
-  await page.locator('#account-menu-toggle').click();
-  await expect(page.locator('#account-menu')).toBeVisible();
+  // 桌面与移动端列表页的账号入口直接平铺；只有移动端聊天头部仍是「···」菜单。
+  const toggle = page.locator('#account-menu-toggle');
+  if (await toggle.isVisible().catch(() => false)) {
+    await toggle.click();
+    await expect(page.locator('#account-menu')).toBeVisible();
+  }
 }
 
 test.describe('SPA 剩余入口', () => {
@@ -360,7 +364,7 @@ test.describe('SPA 剩余入口', () => {
 
     await page.locator('#handoff-close').click();
     await expect(page.locator('#handoff-modal')).toBeHidden();
-    await expect(page.locator('#account-menu-toggle')).toBeFocused();
+    await expect(page.locator('#device-handoff')).toBeFocused();
 
     const fragment = await callTool<DevicePairingCreated>(
       base,
