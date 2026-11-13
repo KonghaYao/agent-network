@@ -47,6 +47,36 @@ const MonitorPane = lazy(() =>
   import('../features/panels/MonitorPane').then((module) => ({ default: module.MonitorPane })),
 );
 
+/**
+ * 文件栏 chunk 到达前的同宽骨架。
+ *
+ * `FilesPane` 是 lazy chunk，若 Suspense 用 `fallback={null}`，聊天区会先
+ * 占满宽度，chunk 到达后再被 360px 文件栏挤窄。这里复用最终文件栏的根
+ * class 与加载骨架，使首帧就按最终宽度布局；chunk 到达后只替换内容。
+ * 骨架不占用 `#files-pane` id：Suspense 切换时 React 会短暂保留旧占位
+ * DOM，两个同名 id 会破坏 `getElementById` 与测试的 strict 定位。
+ */
+function FilesPaneFallback() {
+  return (
+    <aside className="files-pane" aria-label="房间文件" aria-busy="true">
+      <header className="files-head">
+        <h2>文件</h2>
+      </header>
+      <ul className="files-list" aria-label="文件列表">
+        {Array.from({ length: 3 }, (_, index) => (
+          <li className="file-skeleton" aria-hidden="true" key={index}>
+            <span className="skeleton-avatar" />
+            <span className="file-skeleton-lines">
+              <span />
+              <span />
+            </span>
+          </li>
+        ))}
+      </ul>
+    </aside>
+  );
+}
+
 const FILES_OPEN_KEY = 'agent-network-files-open';
 const MONITOR_OPEN_KEY = 'agent-network-monitor-open';
 
@@ -359,8 +389,10 @@ export function ChatPage({ roomId }: ChatPageProps) {
 
   const shownStatus = status || chat.refreshError || chat.streamError || '';
   const ready = chat.status === 'ready' && Boolean(room && identity && token);
-  const filesVisible =
-    ready && (desktop ? filesDesktopOpen : overlayPane === 'files');
+  const filesRequested = desktop ? filesDesktopOpen : overlayPane === 'files';
+  const filesVisible = ready && filesRequested;
+  // 房间读取失败时不再显示骨架，避免错误页被永久占位；就绪前仍按最终宽度占位。
+  const filesShellVisible = filesRequested && chat.status !== 'error';
   const monitorVisible =
     ready && (desktop ? monitorDesktopOpen : overlayPane === 'monitor');
   const files = useRoomFiles(roomId, token, filesVisible);
@@ -643,16 +675,20 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 ) : null}
               </div>
             </section>
-            {filesVisible ? (
-              <Suspense fallback={null}>
-                <FilesPane
-                  roomId={roomId}
-                  token={token ?? ''}
-                  readOnly={room?.read_only === true}
-                  open={filesVisible}
-                  onClose={closeFiles}
-                  files={files}
-                />
+            {filesShellVisible ? (
+              <Suspense fallback={<FilesPaneFallback />}>
+                {filesVisible ? (
+                  <FilesPane
+                    roomId={roomId}
+                    token={token ?? ''}
+                    readOnly={room?.read_only === true}
+                    open={filesVisible}
+                    onClose={closeFiles}
+                    files={files}
+                  />
+                ) : (
+                  <FilesPaneFallback />
+                )}
               </Suspense>
             ) : null}
             {monitorVisible ? (

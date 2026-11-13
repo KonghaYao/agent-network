@@ -151,16 +151,16 @@ export const FILES_STYLE = `
     .chat-pane { flex: 1 1 auto; min-width: 320px; }
     /* 右栏打开时为聊天头留出完整联系人标题与常用操作的空间。比例偏大时
        允许文件/监控栏收窄，并让聊天头换行；不要把标题压成几字宽。 */
-    body.page-room:has(#files-pane:not([hidden])) .chat-head,
+    body.page-room:has(.files-pane:not([hidden])) .chat-head,
     body.page-room:has(#monitor-pane:not([hidden])) .chat-head {
       flex-wrap: wrap; row-gap: 4px; padding-top: 8px; padding-bottom: 8px; }
-    body.page-room:has(#files-pane:not([hidden])) .chat-id,
+    body.page-room:has(.files-pane:not([hidden])) .chat-id,
     body.page-room:has(#monitor-pane:not([hidden])) .chat-id {
       flex: 1 1 220px; min-width: 220px; }
-    body.page-room:has(#files-pane:not([hidden])) .title-row,
+    body.page-room:has(.files-pane:not([hidden])) .title-row,
     body.page-room:has(#monitor-pane:not([hidden])) .title-row {
       flex-wrap: wrap; row-gap: 2px; }
-    body.page-room:has(#files-pane:not([hidden])) .title-row h2,
+    body.page-room:has(.files-pane:not([hidden])) .title-row h2,
     body.page-room:has(#monitor-pane:not([hidden])) .title-row h2 {
       flex: 1 1 120px; min-width: 120px; }
     /* 先减去 300px 会话栏、分隔条和 320px 聊天工作区，再按比例分配；
