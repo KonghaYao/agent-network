@@ -14,6 +14,7 @@ import {
   resolveLangfuseSourceConfig,
 } from '../memory/sources/langfuse-config';
 import { LangfuseSourceImporter } from '../memory/sources/langfuse-import';
+import { parseMcpImplementation } from '../mcp/transport';
 import {
   HindsightMemoryAdapter,
   loadHindsightConfigFromEnv,
@@ -135,6 +136,7 @@ if (applied.length > 0) {
 }
 
 const environment = process.env.ENVIRONMENT ?? 'development';
+const mcpImplementation = parseMcpImplementation(process.env.MCP_IMPL);
 const eventsConfig = await loadEventsConfig(environment);
 
 let hubRef: NotificationHub | null = null;
@@ -175,6 +177,7 @@ const env: Env = {
   PRESENCE: presence,
   ENVIRONMENT: environment,
   PUBLIC_ORIGIN: publicOrigin,
+  MCP_IMPL: mcpImplementation,
   MESSAGE_SEARCH_FTS: process.env.MESSAGE_SEARCH_FTS !== '0',
   FILE_TICKET_SECRET: fileTicketSecretValue,
   ...(eventsConfig ? { EVENTS: eventsConfig } : {}),
@@ -394,6 +397,7 @@ const server = Bun.serve({
 
 console.log(`agent-network listening on http://${hostname}:${server.port}`);
 console.log(`mcp endpoint: ${publicOrigin}/mcp`);
+console.log(`mcp implementation: ${mcpImplementation}`);
 if (mount) console.log(`upload endpoint: ${publicOrigin}${mount.uploadPath}`);
 // 重启后立即接回持久队列；无需等待新的工具请求或一分钟维护周期。
 scheduleEventsTick(env);

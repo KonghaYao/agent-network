@@ -4060,6 +4060,44 @@ async function main(): Promise<void> {
   const deleteResponse = await fetch(`${baseUrl()}/mcp`, { method: 'DELETE' });
   checkEqual('DELETE /mcp 返回 405', deleteResponse.status, 405);
 
+  // 4D-1：mcp-use 的 mount 会预解析 body，必须在兼容层保留 SDK 的 413 上限。
+  const oversizedBody = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 'oversized',
+    method: 'tools/list',
+    params: { padding: 'x'.repeat(600 * 1024) },
+  });
+  const oversizedResponse = await fetch(`${baseUrl()}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${newToken()}`,
+      'content-type': 'application/json',
+      'mcp-protocol-version': '2026-07-28',
+    },
+    body: oversizedBody,
+  });
+  checkEqual('超大请求体返回 413', oversizedResponse.status, 413);
+  const oversizedError = (await oversizedResponse.json()) as {
+    error?: { code?: number; message?: string };
+  };
+  checkEqual('超大请求体错误码为 -32000', oversizedError.error?.code, -32000);
+  check(
+    '超大请求体错误信息与官方入口一致',
+    (oversizedError.error?.message ?? '').startsWith('Payload Too Large: Request body must not exceed'),
+    oversizedError.error?.message,
+  );
+
+  const wrongTypeResponse = await fetch(`${baseUrl()}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${newToken()}`,
+      'content-type': 'text/plain',
+      'mcp-protocol-version': '2026-07-28',
+    },
+    body: 'not json',
+  });
+  checkEqual('非 JSON Content-Type 返回 415', wrongTypeResponse.status, 415);
+
   const unregistered = newToken();
   const connection = await connectClient(unregistered);
   try {
