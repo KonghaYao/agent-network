@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { McpServer, StandardSchemaWithJSON } from '@modelcontextprotocol/server';
+import type { StandardSchemaWithJSON } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 import { stableStringify } from '../storage/db';
@@ -28,11 +28,12 @@ interface ToolContract {
   annotations?: Record<string, unknown>;
 }
 
-const catalogs = new WeakMap<McpServer, Map<string, () => ToolContract>>();
+/** key 是注册目标本身：native server 或 mcp-use 注册适配器。 */
+const catalogs = new WeakMap<object, Map<string, () => ToolContract>>();
 
 /** Record at the two registration boundaries, without depending on SDK private fields. */
 export function recordToolContract(
-  server: McpServer,
+  server: object,
   name: string,
   config: {
     description: string;
@@ -75,7 +76,7 @@ export function toolsetDigest(tools: ToolContract[]): string {
   return createHash('sha256').update(stableStringify(contracts)).digest('hex');
 }
 
-export function registeredToolNames(server: McpServer): string[] {
+export function registeredToolNames(server: object): string[] {
   return [...(catalogs.get(server)?.keys() ?? [])].sort();
 }
 
@@ -92,7 +93,7 @@ export const serviceInfoSchema = z.object({
 });
 
 export function clientServiceInfo(
-  server: McpServer,
+  server: object,
   eventsEnabled: boolean,
   memory: MemoryCapabilityCatalog,
 ): z.infer<typeof serviceInfoSchema> {
@@ -124,7 +125,7 @@ export const clientGuideOutputSchema = z.object({
 });
 
 export function clientGuide(
-  server: McpServer,
+  server: object,
   eventsEnabled: boolean,
   memory: MemoryCapabilityCatalog,
   input: z.input<typeof clientGuideInputSchema>,

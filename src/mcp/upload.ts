@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { RegistrationServer } from './registration';
 import { z } from 'zod';
 
 import { fileTicketSecret } from '../domain/file-ticket';
@@ -8,7 +8,7 @@ import { issueUploadTicket, UPLOAD_TICKET_HEADER, uploadMetadataSchema } from '.
 import { requireActor } from './auth';
 import { register } from './tools';
 
-export function registerUploadTool(server: McpServer, env: Env, principal: Principal): void {
+export function registerUploadTool(server: RegistrationServer, env: Env, principal: Principal): void {
   if (!env.FILES) return;
   const maxBytes = env.FILES.maxFileBytes;
   register(server, 'network_file_upload_prepare',

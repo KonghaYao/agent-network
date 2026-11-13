@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import type { ServerCapabilities } from '@modelcontextprotocol/server';
+import { MCPServer } from 'mcp-use';
 import type { FileScope, FileService } from '@peri-code/mcpp/files';
 
 import { CLIENT_INSTRUCTIONS } from './client-contract';
@@ -12,9 +13,18 @@ import { registerEvents } from './events';
 import { registerResources } from './resources';
 import { createMessageFileArchiver, registerRoomFileTools } from './room-files';
 import { registerArtifactTools } from './artifacts';
-import { registerSkill } from './skill';
+import { registerSkillMethods, registerSkillResource } from './skill';
 import { registerMemoryTools } from './memory';
+import {
+  mcpUseRegistrationServer,
+  nativeRegistrationServer,
+  type RegistrationServer,
+} from './registration';
 import { registerTools, type ToolHooks } from './tools';
+
+// mcp-use 默认写入 .mcp-use/usage.json 并上报匿名使用事件；自托管服务不引入
+// 隐式遥测，部署方显式设为 true 时才启用。
+process.env.MCP_USE_ANONYMIZED_TELEMETRY ??= 'false';
 
 type WeBotsCapabilities = ServerCapabilities & { events?: Record<string, unknown> };
 
@@ -23,9 +33,14 @@ export interface DriveBinding {
   scope: () => FileScope;
 }
 
-export function buildServer(env: Env, principal: Principal, drive?: DriveBinding): McpServer {
-  const instructions = CLIENT_INSTRUCTIONS;
-  const capabilities: WeBotsCapabilities = {
+const SERVER_IDENTITY = { name: 'peri-agent-network', title: 'WeBots', version: '0.1.0' } as const;
+
+/**
+ * 工具/资源清单与实现无关：native 与 mcp-use 共用同一份注册调用，
+ * 只在注册边界换成对应的适配器。
+ */
+function capabilities(env: Env): WeBotsCapabilities {
+  return {
     tools: {},
     resources: { subscribe: true },
     // SEP-2640：声明 Skills 扩展后，客户端才走 skills/list 发现路径。
@@ -33,13 +48,14 @@ export function buildServer(env: Env, principal: Principal, drive?: DriveBinding
     // MCP Events 是顶层能力（不是 extensions）；配置无效时不声明。
     ...(env.EVENTS ? { events: {} } : {}),
   };
-  const server = new McpServer(
-    { name: 'peri-agent-network', title: 'WeBots', version: '0.1.0' },
-    {
-      capabilities,
-      instructions,
-    },
-  );
+}
+
+function registerToolSet(
+  server: RegistrationServer,
+  env: Env,
+  principal: Principal,
+  drive?: DriveBinding,
+): void {
   const hooks: ToolHooks =
     env.FILES && drive
       ? { afterMessageCommitted: createMessageFileArchiver(env, principal, drive) }
@@ -49,8 +65,7 @@ export function buildServer(env: Env, principal: Principal, drive?: DriveBinding
   // 能力目录同时声明 memory.enabled=false，避免隐藏工具被误认为可调用。
   registerMemoryTools(server, env, principal);
   registerResources(server, env, principal);
-  registerSkill(server);
-  if (env.EVENTS) registerEvents(server, env, principal);
+  registerSkillResource(server);
   if (env.FILES && drive) {
     registerDriveTool(server, {
       ...drive,
@@ -63,5 +78,57 @@ export function buildServer(env: Env, principal: Principal, drive?: DriveBinding
     registerRoomFileTools(server, env, principal, drive);
     registerArtifactTools(server, env, principal, drive);
   }
+}
+
+/** native 默认实现：工具、资源与自定义方法都在同一个 SDK server 上。 */
+export function buildServer(env: Env, principal: Principal, drive?: DriveBinding): McpServer {
+  const server = new McpServer(SERVER_IDENTITY, {
+    capabilities: capabilities(env),
+    instructions: CLIENT_INSTRUCTIONS,
+  });
+  registerToolSet(nativeRegistrationServer(server), env, principal, drive);
+  registerSkillMethods(server);
+  if (env.EVENTS) registerEvents(server, env, principal);
+  return server;
+}
+
+/**
+ * mcp-use 注册实现：工具/资源走 `MCPServer.tool()` / `MCPServer.resource()`。
+ *
+ * `MCPServer` 没有公开的底层 `McpServer` 访问器，无法注册 `skills/*`、
+ * `events/*` 这类自定义方法；同一请求由 `buildCustomServer` 的 native
+ * 兼容服务器先行处理这些方法与 `server/discover`。
+ */
+export function buildUseServer(
+  env: Env,
+  principal: Principal,
+  drive?: DriveBinding,
+): MCPServer {
+  const server = new MCPServer({
+    ...SERVER_IDENTITY,
+    instructions: CLIENT_INSTRUCTIONS,
+    basePath: '/mcp',
+    legacy: 'reject',
+    // 不启用约定目录的 Skills、landing、logging；技能面由兼容层提供。
+    skills: false,
+    logging: { enabled: false },
+  });
+  registerToolSet(mcpUseRegistrationServer(server), env, principal, drive);
+  return server;
+}
+
+/**
+ * 自定义方法与 `server/discover` 的兼容服务器。
+ *
+ * 只声明能力并注册 `skills/*`、`events/*`；不注册工具或资源，
+ * 因此不会与 mcp-use 的清单重复，也不复制任何工具定义。
+ */
+export function buildCustomServer(env: Env, principal: Principal): McpServer {
+  const server = new McpServer(SERVER_IDENTITY, {
+    capabilities: capabilities(env),
+    instructions: CLIENT_INSTRUCTIONS,
+  });
+  registerSkillMethods(server);
+  if (env.EVENTS) registerEvents(server, env, principal);
   return server;
 }

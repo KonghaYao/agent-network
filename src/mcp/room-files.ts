@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { RegistrationServer } from './registration';
 import type { FileScope, FileService } from '@peri-code/mcpp/files';
 
 import { BusinessError } from '../contracts/errors';
@@ -120,7 +120,7 @@ export function createMessageFileArchiver(
  * 绑定/删除不会改变文件本身的过期时间，也不提供续期接口。
  */
 export function registerRoomFileTools(
-  server: McpServer,
+  server: RegistrationServer,
   env: Env,
   principal: Principal,
   binding: RoomFileToolBinding,

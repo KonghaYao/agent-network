@@ -1,4 +1,4 @@
-import type { McpServer, StandardSchemaWithJSON } from '@modelcontextprotocol/server';
+import type { StandardSchemaWithJSON } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 import { isBusinessError } from '../contracts/errors';
@@ -328,6 +328,7 @@ import {
 } from './client-contract';
 import { memoryCapabilityCatalog } from '../memory/capability-catalog';
 import { DEFAULT_MEMORY_HOST_POLICY } from '../memory/host-bridge';
+import type { RegistrationServer } from './registration';
 
 type ToolReturn = {
   content: { type: 'text'; text: string }[];
@@ -385,7 +386,7 @@ export function register<
   I extends StandardSchemaWithJSON,
   O extends StandardSchemaWithJSON,
 >(
-  server: McpServer,
+  server: RegistrationServer,
   name: string,
   description: string,
   inputSchema: I,
@@ -442,7 +443,7 @@ async function runMessageCommittedHook(
 }
 
 export function registerTools(
-  server: McpServer,
+  server: RegistrationServer,
   env: Env,
   principal: Principal,
   hooks: ToolHooks = {},

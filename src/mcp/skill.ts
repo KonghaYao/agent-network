@@ -6,6 +6,7 @@ import {
 import { z } from 'zod';
 
 import { sha256Hex } from '../storage/db';
+import type { RegistrationServer } from './registration';
 
 /** 标准 MCP skill 的 SKILL.md 位置；由 `skills/list` 下发给客户端。 */
 export const SKILL_URI = 'skill://agent-network/agent-network/SKILL.md';
@@ -404,11 +405,11 @@ const SKILLS_LIST_PARAMS = z.object({ cursor: z.string().optional() });
 const SKILLS_GET_PARAMS = z.object({ uri: z.string() });
 
 /**
- * 暴露 SEP-2640 技能面：`skills/list` + `skills/get` + `resources/read`
- * 读取 SKILL.md。客户端按条目 resources 的 digest 校验正文，并按
- * frontmatter 逐字段比对；三处内容必须同源（`SKILL_MARKDOWN`）。
+ * 技能资源可注册到 native 或 mcp-use；`resources/read` 由后者服务。
+ * `skills/list|get` 是自定义方法，由 `registerSkillMethods` 注册在 native
+ * 兼容服务器上。
  */
-export function registerSkill(server: McpServer): void {
+export function registerSkillResource(server: RegistrationServer): void {
   server.registerResource(
     'skill',
     SKILL_URI,
@@ -421,7 +422,10 @@ export function registerSkill(server: McpServer): void {
       contents: [{ uri: uri.href, mimeType: 'text/markdown', text: SKILL_MARKDOWN }],
     }),
   );
+}
 
+/** `skills/list|get` 是自定义方法，只能注册在 native 兼容服务器上。 */
+export function registerSkillMethods(server: McpServer): void {
   server.server.setRequestHandler(
     'skills/list',
     { params: SKILLS_LIST_PARAMS },

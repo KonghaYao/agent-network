@@ -1,11 +1,11 @@
 import {
-  McpServer,
   ResourceNotFoundError,
 } from '@modelcontextprotocol/server';
 
 import { LIMITS } from '../contracts/limits';
 import type { Env } from '../env';
 import type { Principal } from '../domain/principal';
+import type { RegistrationServer } from './registration';
 
 const CACHE_HINT = { ttlMs: 0, cacheScope: 'private' as const };
 
@@ -29,7 +29,7 @@ function withUri(uri: URL, value: unknown) {
  * 兼容注册。
  */
 export function registerResources(
-  server: McpServer,
+  server: RegistrationServer,
   env: Env,
   principal: Principal,
 ): void {

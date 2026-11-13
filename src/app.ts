@@ -1,5 +1,5 @@
 import type { McpRequestContext } from '@modelcontextprotocol/server';
-import { FILE_ID_PATTERN, FileError, fileScopeFor, type FileMount, type FileService } from '@peri-code/mcpp/files';
+import { FILE_ID_PATTERN, FileError, fileScopeFor, type FileMount, type FileScope, type FileService } from '@peri-code/mcpp/files';
 import { Hono, type Context } from 'hono';
 import { stat } from 'node:fs/promises';
 import { basename, extname, resolve, sep } from 'node:path';
@@ -21,7 +21,7 @@ import {
 } from './events/log';
 import { runEventsTick, scheduleEventsTick } from './events/runtime';
 import { authenticate } from './mcp/auth';
-import { buildServer } from './mcp/server';
+import { buildCustomServer, buildServer, buildUseServer } from './mcp/server';
 import { serveActorStream } from './mcp/stream';
 import { createMcpTransport, type McpTransport } from './mcp/transport';
 import { maintain } from './maintenance';
@@ -354,18 +354,37 @@ function handlerFor(
   principal: Awaited<ReturnType<typeof authenticate>>,
   mount?: FileMount,
 ): McpTransport {
-  const factory = (context: McpRequestContext) =>
+  const driveFor = (scope: () => FileScope) =>
+    env.FILES ? { fileService: env.FILES, scope } : undefined;
+  const nativeFactory = (context: McpRequestContext) =>
     buildServer(
       env,
       principal,
-      env.FILES && mount
-        ? {
-            fileService: env.FILES,
-            scope: () => fileScopeFor(context),
-          }
-        : undefined,
+      env.FILES && mount ? driveFor(() => fileScopeFor(context)) : undefined,
     );
-  return createMcpTransport(mount ? mount.wrapFactory(factory) : factory, env.MCP_IMPL);
+  // 自定义方法与 server/discover 仍由 native SDK 服务器回答；只声明能力，
+  // 不注册工具，避免与 mcp-use 的清单重复。
+  const customFactory = () => buildCustomServer(env, principal);
+  const buildUse =
+    env.MCP_IMPL === 'mcp-use'
+      ? (request: Request) =>
+          buildUseServer(
+            env,
+            principal,
+            env.FILES && mount
+              ? driveFor(() =>
+                  // FileScope 以原始 Request 为 key；这里只取挂载层已写入的映射。
+                  fileScopeFor({ requestInfo: request } as McpRequestContext),
+                )
+              : undefined,
+          )
+      : undefined;
+  return createMcpTransport({
+    implementation: env.MCP_IMPL,
+    nativeFactory: mount ? mount.wrapFactory(nativeFactory) : nativeFactory,
+    customFactory: mount ? mount.wrapFactory(customFactory) : customFactory,
+    buildUseServer: buildUse,
+  });
 }
 
 /**

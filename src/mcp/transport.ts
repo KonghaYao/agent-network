@@ -1,12 +1,14 @@
 /**
  * 服务端 MCP 传输/挂载层的实现选择。
  *
- * `native` 直接使用官方 SDK 的 `createMcpHandler`；`mcp-use` 交给
- * `mcp-use` 的 `createMcpMount`。两者最终都调用同一个 `McpServerFactory`，
- * 因此工具/资源注册、工具清单与 schema 不随实现改变。
+ * `native` 直接使用官方 SDK 的 `createMcpHandler`；`mcp-use` 标准方法交给
+ * `mcp-use` 的 `MCPServer`（工具/资源由 `buildUseServer` 注册）。
  *
- * 兼容层保留在 `src/app.ts`：鉴权、405/`Allow`、`subscriptions/listen`、
- * `events/*`、`skills/*`、结果 `_meta` 剥离与 CORS 都不进入 transport。
+ * `MCPServer` 没有公开的底层 `McpServer` 访问器，`skills/*`、`events/*` 与
+ * `server/discover` 由 native 兼容服务器处理：自定义方法走 `customFactory`，
+ * discover 也走兼容服务器以保留原有 capabilities、instructions 与
+ * `io.mcpp/files` 扩展。鉴权、405/`Allow`、`subscriptions/listen`、结果
+ * `_meta` 剥离与 CORS 仍留在 `src/app.ts`。
  */
 import {
   createMcpHandler,
@@ -15,7 +17,7 @@ import {
   type McpHttpHandler,
   type McpServerFactory,
 } from '@modelcontextprotocol/server';
-import { createMcpMount, getRequestBag } from 'mcp-use';
+import { getRequestBag, type MCPServer } from 'mcp-use';
 
 import { LIMITS } from '../contracts/limits';
 import type { McpImplementation } from '../env';
@@ -23,6 +25,16 @@ import type { McpImplementation } from '../env';
 /** 只暴露调用方需要的 `fetch`，避免把 SDK handler 的 close/notify 泄漏到路由层。 */
 export interface McpTransport {
   fetch(request: Request): Promise<Response>;
+}
+
+export interface McpTransportOptions {
+  implementation?: McpImplementation;
+  /** native 主实现；mcp-use 模式下用于非 POST 的协议错误响应。 */
+  nativeFactory: McpServerFactory;
+  /** mcp-use 模式下 `skills/*`、`events/*` 与 `server/discover` 的兼容工厂。 */
+  customFactory?: McpServerFactory;
+  /** mcp-use 模式下的 `MCPServer` 构建器；按请求创建以绑定 FileScope。 */
+  buildUseServer?: (request: Request) => MCPServer;
 }
 
 /**
@@ -50,37 +62,46 @@ const HANDLER_OPTIONS: CreateMcpHandlerOptions = {
 };
 
 /**
- * `mcp-use` 的 Node/Bun 入口内联了一份官方 SDK，`instanceof McpServer`
- * 无法跨包成立；它真正需要的是 `McpServer.server` 这个低层 `Server`。
- * 传低层实例对 `mcp-use` 的 import/node 两种入口都成立，也不改变注册结果。
+ * 无法在 mcp-use `MCPServer` 上注册的方法。
+ *
+ * `server/discover` 不是自定义方法，但由兼容服务器回答才能保持原有
+ * capabilities、instructions 与文件扩展；其余为 SEP-2640 Skills 与
+ * MCP Events 自定义方法。
  */
-function lowLevelFactory(factory: McpServerFactory): McpServerFactory {
-  return async (context) => {
-    const product = await factory(context);
-    return 'server' in product ? product.server : product;
-  };
-}
+const COMPAT_METHODS: ReadonlySet<string> = new Set([
+  'server/discover',
+  'skills/list',
+  'skills/get',
+  'events/list',
+  'events/subscribe',
+  'events/unsubscribe',
+]);
 
 function jsonRpcError(status: number, code: number, message: string): Response {
   return Response.json({ jsonrpc: '2.0', error: { code, message }, id: null }, { status });
 }
 
+interface ParsedBody {
+  parsed: unknown;
+  method: string | null;
+}
+
 /**
- * mcp-use 的 mount 会先解析 body 再交给 SDK；SDK 对 `parsedBody` 跳过
- * `maxRequestBodySize` 检查（见 CreateMcpHandlerOptions 文档）。这里在进入
- * mount 前按官方入口相同的方式计数并返回 413，同时把解析结果写回 mcp-use
- * 的 request bag，避免它再次 clone/解析已消费的请求体。
+ * 在进入 mcp-use 前按官方入口相同的方式计数并返回 413；同时把解析结果
+ * 写回 mcp-use 的 request bag，避免它再次 clone/解析已消费的请求体。
  *
- * 不重建 `Request`：MCPP Files 的 FileScope 以请求对象为 WeakMap key，替换
- * 对象会让文件工具丢失身份。
+ * 读取 `request.clone()`，不重建或消费原请求：MCPP Files 的 FileScope
+ * 以原请求对象为 WeakMap key，兼容服务器也要拿到原始 body。
  */
 async function readBody(
   request: Request,
   limit: number,
-): Promise<{ parsed: unknown } | Response> {
-  if (request.method !== 'POST') return { parsed: undefined };
+): Promise<ParsedBody | Response> {
+  if (request.method !== 'POST') return { parsed: undefined, method: null };
   // 非 JSON Content-Type 由 SDK 返回 415；此时不读取/消耗 body，保持官方优先级。
-  if (!isJsonContentType(request.headers.get('content-type'))) return { parsed: undefined };
+  if (!isJsonContentType(request.headers.get('content-type'))) {
+    return { parsed: undefined, method: null };
+  }
   if (Number(request.headers.get('content-length')) > limit) {
     return jsonRpcError(
       413,
@@ -88,10 +109,11 @@ async function readBody(
       `Payload Too Large: Request body must not exceed ${limit} bytes`,
     );
   }
-  if (request.body === null) {
+  const source = request.clone();
+  if (source.body === null) {
     return jsonRpcError(400, -32_700, 'Parse error: the request body is not valid JSON');
   }
-  const reader = request.body.getReader();
+  const reader = source.body.getReader();
   const decoder = new TextDecoder();
   let received = 0;
   let text = '';
@@ -119,31 +141,44 @@ async function readBody(
   if (text.length === 0) {
     return jsonRpcError(400, -32_700, 'Parse error: the request body is not valid JSON');
   }
+  let parsed: unknown;
   try {
-    return { parsed: JSON.parse(text) as unknown };
+    parsed = JSON.parse(text) as unknown;
   } catch {
     return jsonRpcError(400, -32_700, 'Parse error: the request body is not valid JSON');
   }
+  const method =
+    parsed !== null &&
+    typeof parsed === 'object' &&
+    !Array.isArray(parsed) &&
+    typeof (parsed as { method?: unknown }).method === 'string'
+      ? ((parsed as { method: string }).method)
+      : null;
+  return { parsed, method };
 }
 
-export function createMcpTransport(
-  factory: McpServerFactory,
-  implementation: McpImplementation = DEFAULT_MCP_IMPL,
-): McpTransport {
-  if (implementation === 'mcp-use') {
-    const mount = createMcpMount(lowLevelFactory(factory), {
-      path: '/mcp',
-      handler: HANDLER_OPTIONS,
-    });
-    return {
-      async fetch(request: Request): Promise<Response> {
-        const body = await readBody(request, LIMITS.httpBodyBytes);
-        if (body instanceof Response) return body;
-        if (body.parsed !== undefined) getRequestBag(request).parsedBody = body.parsed;
-        return mount.fetch(request);
-      },
-    };
+export function createMcpTransport(options: McpTransportOptions): McpTransport {
+  const implementation = options.implementation ?? DEFAULT_MCP_IMPL;
+  const { nativeFactory, customFactory, buildUseServer } = options;
+  if (implementation === 'native') {
+    const handler: McpHttpHandler = createMcpHandler(nativeFactory, HANDLER_OPTIONS);
+    return { fetch: handler.fetch };
   }
-  const handler: McpHttpHandler = createMcpHandler(factory, HANDLER_OPTIONS);
-  return { fetch: handler.fetch };
+  if (!buildUseServer) {
+    throw new Error('mcp-use transport requires buildUseServer');
+  }
+  // createMcpTransport 本身按请求创建，兼容 handler 复用同一个工厂即可。
+  const compatHandler = createMcpHandler(customFactory ?? nativeFactory, HANDLER_OPTIONS);
+  return {
+    async fetch(request: Request): Promise<Response> {
+      const body = await readBody(request, LIMITS.httpBodyBytes);
+      if (body instanceof Response) return body;
+      if (request.method !== 'POST') return compatHandler.fetch(request);
+      if (body.method !== null && COMPAT_METHODS.has(body.method)) {
+        return compatHandler.fetch(request);
+      }
+      if (body.parsed !== undefined) getRequestBag(request).parsedBody = body.parsed;
+      return buildUseServer(request).fetch(request);
+    },
+  };
 }

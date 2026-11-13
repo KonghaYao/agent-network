@@ -1,5 +1,4 @@
 import { FILE_ID_PATTERN, type FileScope, type FileService } from '@peri-code/mcpp/files';
-import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 import type { Principal } from '../domain/principal';
@@ -12,6 +11,7 @@ import {
 import { historyBoundary } from '../domain/room-history';
 import { getMember, getRoom, getRoomFile } from '../storage/queries';
 import { recordToolContract } from '../mcp/client-contract';
+import type { RegistrationServer } from '../mcp/registration';
 
 export interface DriveToolBinding {
   fileService: FileService;
@@ -46,7 +46,7 @@ type RegisterToolCall = (
  * 可以据此识别；服务端校验不依赖客户端能力声明，普通 MCP 客户端也能读取
  * 自己的文件。
  */
-export function registerDriveTool(server: McpServer, binding: DriveToolBinding): void {
+export function registerDriveTool(server: RegistrationServer, binding: DriveToolBinding): void {
   const { fileService, scope, publicOrigin, principal, db, ticketSecret } = binding;
   const register = server.registerTool as unknown as RegisterToolCall;
 
