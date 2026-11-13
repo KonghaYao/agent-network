@@ -20,7 +20,17 @@ import {
   roomTopic,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getActor, getDelivery, getMember, getMessage, getRoom } from '../storage/queries';
+import {
+  getActor,
+  getClaimedDeliveryId,
+  getDelivery,
+  getMember,
+  getMessage,
+  getMessageSenderSummary,
+  getRoom,
+  listInboxDeliveries,
+  type MessageSenderSummaryRow,
+} from '../storage/queries';
 import type { DeliveryRow } from '../storage/rows';
 import {
   isOneClaimedConflict,
@@ -78,22 +88,11 @@ export interface InboxPage {
 const encoder = new TextEncoder();
 void encoder;
 
-interface DeliveryMessageRow {
-  message_id: string;
-  sender_id: string;
-  created_seq: number;
-  preview: string;
-  body_bytes: number;
-  created_at: number;
-  sender_name: string | null;
-  sender_kind: 'human' | 'agent' | null;
-}
-
 function senderNameOf(value: string | null): string | null {
   return value === null || value === '' ? null : value;
 }
 
-function deliveryMessageView(row: DeliveryMessageRow | null): DeliveryMessageView | null {
+function deliveryMessageView(row: MessageSenderSummaryRow | null): DeliveryMessageView | null {
   if (!row) return null;
   return {
     message_id: row.message_id,
@@ -111,17 +110,7 @@ async function getDeliveryMessageView(
   db: D1Database,
   messageId: string,
 ): Promise<DeliveryMessageView | null> {
-  const row = await db
-    .prepare(
-      `SELECT m.message_id, m.sender_id, m.created_seq, m.preview, m.body_bytes, m.created_at,
-              a.name AS sender_name, a.kind AS sender_kind
-         FROM messages m
-         LEFT JOIN actors a ON a.actor_id = m.sender_id
-        WHERE m.message_id = ?`,
-    )
-    .bind(messageId)
-    .first<DeliveryMessageRow>();
-  return deliveryMessageView(row);
+  return deliveryMessageView(await getMessageSenderSummary(db, messageId));
 }
 
 function view(row: DeliveryRow, message: DeliveryMessageView | null): DeliveryView {
@@ -148,15 +137,6 @@ async function deliveryView(db: D1Database, row: DeliveryRow): Promise<DeliveryV
   return view(row, await getDeliveryMessageView(db, row.message_id));
 }
 
-interface InboxRow extends DeliveryRow {
-  m_preview: string;
-  m_body_bytes: number;
-  m_sender_id: string;
-  m_sender_name: string | null;
-  m_sender_kind: 'human' | 'agent' | null;
-  m_created_at: number;
-}
-
 export async function inboxList(
   db: D1Database,
   principal: Principal,
@@ -167,38 +147,22 @@ export async function inboxList(
   const scope = `inbox:${actor}`;
   const cursor = input.cursor ? decodeCursor(input.cursor, scope) : null;
   const state = input.state ?? 'active';
-  const states =
+  const states: DeliveryRow['state'][] | null =
     state === 'all' ? null : state === 'active' ? ['pending', 'claimed'] : [state];
-  const stateFilter = states ? `AND d.state IN (${states.map(() => '?').join(',')})` : '';
-  const binds: unknown[] = states ? [actor, ...states] : [actor];
-  if (cursor) binds.push(cursor.seq);
-  binds.push(limit + 1);
 
-  const rows = await db
-    .prepare(
-      `SELECT d.*, m.preview AS m_preview, m.body_bytes AS m_body_bytes,
-              m.sender_id AS m_sender_id, m.created_at AS m_created_at,
-              a.name AS m_sender_name, a.kind AS m_sender_kind
-         FROM deliveries d
-         JOIN messages m ON m.message_id = d.message_id
-         LEFT JOIN actors a ON a.actor_id = m.sender_id
-        WHERE d.recipient_id = ? ${stateFilter}
-          ${cursor ? 'AND d.created_seq > ?' : ''}
-        ORDER BY d.created_seq ASC
-        LIMIT ?`,
-    )
-    .bind(...binds)
-    .all<InboxRow>();
+  const rows = await listInboxDeliveries(db, {
+    recipientId: actor,
+    states,
+    afterSeq: cursor?.seq ?? null,
+    limit: limit + 1,
+  });
 
-  const page = rows.results.slice(0, limit);
-  const hasMore = rows.results.length > limit;
+  const page = rows.slice(0, limit);
+  const hasMore = rows.length > limit;
   const last = page.at(-1);
-  const [actorRow, claimed] = await Promise.all([
+  const [actorRow, claimedDeliveryId] = await Promise.all([
     getActor(db, actor),
-    db
-      .prepare("SELECT delivery_id FROM deliveries WHERE recipient_id = ? AND state = 'claimed' LIMIT 1")
-      .bind(actor)
-      .first<{ delivery_id: string }>(),
+    getClaimedDeliveryId(db, actor),
   ]);
 
   return {
@@ -226,7 +190,7 @@ export async function inboxList(
         : null,
     has_more: hasMore,
     pending_count: actorRow?.pending_count ?? 0,
-    claimed_delivery_id: claimed?.delivery_id ?? null,
+    claimed_delivery_id: claimedDeliveryId,
   };
 }
 

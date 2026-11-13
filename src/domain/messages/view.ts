@@ -6,11 +6,11 @@ import { LIMITS } from '../../contracts/limits';
 import { type MessageSendInput } from '../../contracts/schemas';
 import { eventStatement, inboxHeadStatement, inboxTopic, outboxStatement, roomHeadStatement, roomTopic } from '../../storage/events';
 import { guardSql } from '../../storage/guards';
-import { getClaimedDelivery, getDelivery, getMessage } from '../../storage/queries';
+import { getClaimedDelivery, getDelivery, getMessage, listDeliveryStates } from '../../storage/queries';
 import { type MessageRow } from '../../storage/rows';
 import { directBlockGuardStatement } from '../contact-blocks';
 import { directMessageGuardStatement } from '../contact-relations';
-import { mentionsFor, nullableString, summarizeDeliveryStates, type DeliveryStateRow, type MentionSource, type MentionView } from '../message-view-helpers';
+import { mentionsFor, nullableString, summarizeDeliveryStates, type MentionSource, type MentionView } from '../message-view-helpers';
 import { actorId } from '../principal';
 import { capabilityGuardStatement, roomDissolvedGuardStatement } from '../room-access';
 import { visibleMessage, type HistoryBoundary, type HistorySnapshot } from '../room-history';
@@ -105,16 +105,7 @@ export async function messageView(
   db: D1Database,
   row: MessageRow,
 ): Promise<MessageView> {
-  const states = await db
-    .prepare(
-      `SELECT state, COUNT(*) AS n,
-              MAX(CASE WHEN state = 'claimed' THEN claimed_at END) AS max_claimed_at,
-              MAX(CASE WHEN state = 'claimed' THEN updated_at END) AS max_updated_at
-         FROM deliveries WHERE message_id = ? GROUP BY state`,
-    )
-    .bind(row.message_id)
-    .all<DeliveryStateRow>();
-  const summary = summarizeDeliveryStates(states.results);
+  const summary = summarizeDeliveryStates(await listDeliveryStates(db, [row.message_id]));
   const mentions = await mentionsFor(db, [row.message_id]);
   return {
     message_id: row.message_id,

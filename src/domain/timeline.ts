@@ -2,15 +2,9 @@ import { BusinessError } from '../contracts/errors';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { clampPage, LIMITS } from '../contracts/limits';
 import type { HistoryListInput } from '../contracts/schemas';
-import { getActorsByIds } from '../storage/queries';
+import { getActorsByIds, listHistoryMessagesByIds } from '../storage/queries';
 import type { RoomRow } from '../storage/rows';
-import {
-  deliveryStatesFor,
-  mentionsFor,
-  nullableString,
-  HISTORY_MESSAGE_COLUMNS,
-  type HistoryMessageRow,
-} from './message-view-helpers';
+import { deliveryStatesFor, mentionsFor, nullableString } from './message-view-helpers';
 import type { HistoryMessageView } from './messages';
 import {
   decodeHistoryCursor,
@@ -213,17 +207,7 @@ async function materialize(
     .map((key) => key.item_id);
 
   const messageRows =
-    messageIds.length === 0
-      ? []
-      : (
-          await db
-            .prepare(
-              `SELECT ${HISTORY_MESSAGE_COLUMNS} FROM messages
-                WHERE message_id IN (${placeholders(messageIds.length)})`,
-            )
-            .bind(...messageIds)
-            .all<HistoryMessageRow>()
-        ).results;
+    messageIds.length === 0 ? [] : await listHistoryMessagesByIds(db, messageIds);
   const presenceRows =
     presenceIds.length === 0
       ? []

@@ -7,8 +7,14 @@ import { type HistoryListInput, type MessageReadInput, type RoomMarkReadInput } 
 import { newId, nowMs, sliceUtf8Chunk } from '../../storage/db';
 import { inboxHeadStatementIfEvent, inboxTopic } from '../../storage/events';
 import { guardSql } from '../../storage/guards';
-import { getActorsByIds, getMember, getMessage } from '../../storage/queries';
-import { deliveryStatesFor, mentionsFor, nullableString, HISTORY_MESSAGE_COLUMNS, type HistoryMessageRow } from '../message-view-helpers';
+import {
+  getActorsByIds,
+  getMember,
+  getMessage,
+  listHistoryMessagesAfter,
+  listHistoryMessagesBefore,
+} from '../../storage/queries';
+import { deliveryStatesFor, mentionsFor, nullableString } from '../message-view-helpers';
 import { actorId, type Principal } from '../principal';
 import { loadRoomAccess } from '../room-access';
 import { decodeHistoryCursor, historyBoundary, historyCursorScope, historySnapshot, visibleMessage } from '../room-history';
@@ -49,33 +55,22 @@ export async function historyList(
       ? readHead
       : Math.max(boundary.fromSeq, cursor?.snapshot ?? readHead);
 
-  let rows: HistoryMessageRow[];
-  if (direction === 'before') {
-    const predicate = cursor ? 'AND created_seq < ?' : '';
-    const binds: unknown[] = cursor
-      ? [room.room_id, snapshot, boundary.fromSeq, cursor.seq, limit + 1]
-      : [room.room_id, snapshot, boundary.fromSeq, limit + 1];
-    const result = await db
-      .prepare(
-        `SELECT ${HISTORY_MESSAGE_COLUMNS} FROM messages
-          WHERE room_id = ? AND created_seq <= ? AND created_seq >= ? ${predicate}
-          ORDER BY created_seq DESC LIMIT ?`,
-      )
-      .bind(...binds)
-      .all<HistoryMessageRow>();
-    rows = result.results;
-  } else {
-    const start = Math.max(boundary.fromSeq, cursor?.seq ?? snapshot);
-    const result = await db
-      .prepare(
-        `SELECT ${HISTORY_MESSAGE_COLUMNS} FROM messages
-          WHERE room_id = ? AND created_seq <= ? AND created_seq > ? AND created_seq >= ?
-          ORDER BY created_seq ASC LIMIT ?`,
-      )
-      .bind(room.room_id, snapshot, start, boundary.fromSeq, limit + 1)
-      .all<HistoryMessageRow>();
-    rows = result.results;
-  }
+  const rows =
+    direction === 'before'
+      ? await listHistoryMessagesBefore(db, {
+          roomId: room.room_id,
+          snapshot,
+          fromSeq: boundary.fromSeq,
+          beforeSeq: cursor?.seq ?? null,
+          limit: limit + 1,
+        })
+      : await listHistoryMessagesAfter(db, {
+          roomId: room.room_id,
+          snapshot,
+          fromSeq: boundary.fromSeq,
+          afterSeq: Math.max(boundary.fromSeq, cursor?.seq ?? snapshot),
+          limit: limit + 1,
+        });
 
   const page = rows.slice(0, limit);
   const hasMore = rows.length > limit;
