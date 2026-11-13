@@ -1,0 +1,53 @@
+:root {
+  color-scheme: light dark;
+  --spa-bg: #ededed;
+  --spa-surface: #ffffff;
+  --spa-text: #1a1a1a;
+  --spa-muted: #666666;
+  --spa-accent: #07c160;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --spa-bg: #191919;
+    --spa-surface: #242424;
+    --spa-text: #e5e5e5;
+    --spa-muted: #a3a3a3;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background: var(--spa-bg);
+  color: var(--spa-text);
+  font:
+    14px/1.6 -apple-system,
+    BlinkMacSystemFont,
+    'PingFang SC',
+    'Helvetica Neue',
+    'Microsoft YaHei',
+    sans-serif;
+}
+
+.spa-shell {
+  max-width: 460px;
+  margin: 24px auto;
+  padding: 32px 28px;
+  background: var(--spa-surface);
+  border-radius: 12px;
+}
+
+.spa-shell h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+
+.spa-shell p {
+  margin: 0;
+  color: var(--spa-muted);
+}

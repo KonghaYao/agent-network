@@ -1,7 +1,8 @@
 import { createMcpHandler, type McpHttpHandler, type McpRequestContext } from '@modelcontextprotocol/server';
 import { FILE_ID_PATTERN, FileError, fileScopeFor, type FileMount, type FileService } from '@peri-code/mcpp/files';
 import { Hono } from 'hono';
-import { resolve, sep } from 'node:path';
+import { stat } from 'node:fs/promises';
+import { basename, extname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 
 import { CLI_BUNDLE_FILENAME } from './bun/cli-bundle';
@@ -30,6 +31,8 @@ import { renderChatPage } from './web/chat';
 import { renderInvalidJoinPage, renderJoinPage } from './web/join';
 import { renderPairPage } from './web/pair';
 import { renderHomePage, renderInvalidSharePage, renderSharePage } from './web/share';
+import { renderSpaShell } from './web/spa-shell';
+import type { SpaManifest, SpaRoute } from './web/spa-manifest';
 import type { Env } from './env';
 
 interface RpcBody {
@@ -50,6 +53,16 @@ const FILE_ID = new RegExp(FILE_ID_PATTERN);
 const INVITE_KEY = /^[A-Za-z0-9_-]{16,64}$/u;
 const SKILLS_ROOT = resolve(import.meta.dir, '../public/skills');
 const AGENT_ICONS_ROOT = resolve(import.meta.dir, '../public/agent-icons');
+/** Vite 构建产物目录；`WEB_DIST_DIR` 只用于测试/自定义部署覆盖。 */
+const WEB_DIST_ROOT = resolve(import.meta.dir, '../dist/web');
+const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.woff2': 'font/woff2',
+  '.svg': 'image/svg+xml; charset=utf-8',
+  '.png': 'image/png',
+};
+const STATIC_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 
 /** 旧 shell 包装已删除，保留一个发布周期的 410 让存量客户端得到明确迁移信号。 */
 const RETIRED_SKILL_PATH = /^[a-z0-9][a-z0-9._-]*\.sh$/u;
@@ -534,6 +547,12 @@ export interface AppDeps {
   clientAsset?: string | null;
   /** CLI bundle 内容哈希；作为 ETag，客户端重复请求可命中 304。 */
   clientAssetVersion?: string | null;
+  /** `WEB_SPA_ROUTES` 解析结果；空集合或缺失表示所有页面继续 legacy。 */
+  spaRoutes?: ReadonlySet<SpaRoute>;
+  /** 启动时读取的 Vite manifest；null 表示未构建/损坏，回退 legacy。 */
+  spaManifest?: SpaManifest | null;
+  /** Vite 产物目录；默认仓库根的 `dist/web`，测试可指向临时目录。 */
+  spaDistDir?: string;
 }
 
 interface ByteRange {
@@ -602,6 +621,42 @@ async function openPayload(
 
 export function createApp(env: Env, deps: AppDeps = {}): Hono {
   const app = new Hono();
+  const spaDistDir = deps.spaDistDir ?? WEB_DIST_ROOT;
+  const spaHtml = (route: SpaRoute): string | null =>
+    deps.spaManifest && deps.spaRoutes?.has(route)
+      ? renderSpaShell(route, deps.spaManifest)
+      : null;
+  const spaHeaders = { 'cache-control': 'no-store', vary: 'Cookie' };
+
+  // 只服务 Vite 构建产物：扩展名白名单、拒绝路径穿越、目录不列表。
+  // 文件名带内容哈希，因此可以长期 immutable；ETag 直接取文件名。
+  app.get('/static/*', async (c) => {
+    let relative: string;
+    try {
+      relative = decodeURIComponent(c.req.path.slice('/static/'.length));
+    } catch {
+      return c.notFound();
+    }
+    if (relative.length === 0 || relative.includes('\0')) return c.notFound();
+    const contentType = STATIC_CONTENT_TYPES[extname(relative).toLowerCase()];
+    if (!contentType) return c.notFound();
+    const path = resolve(spaDistDir, relative);
+    if (!path.startsWith(`${spaDistDir}${sep}`)) return c.notFound();
+    const info = await stat(path).catch(() => null);
+    if (!info?.isFile()) return c.notFound();
+    const etag = `"${basename(path)}"`;
+    const headers = {
+      'content-type': contentType,
+      'cache-control': STATIC_CACHE_CONTROL,
+      'x-content-type-options': 'nosniff',
+      'referrer-policy': 'same-origin',
+      etag,
+    };
+    if (matchesEtag(c.req.header('if-none-match'), etag)) {
+      return c.body(null, 304, headers);
+    }
+    return c.body(await Bun.file(path).arrayBuffer(), 200, headers);
+  });
 
   app.get('/health', (c) =>
     c.json({
@@ -700,8 +755,10 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     });
   });
 
-  app.get('/', (c) =>
-    c.html(
+  app.get('/', (c) => {
+    const shell = spaHtml('home');
+    if (shell) return c.html(shell, 200, spaHeaders);
+    return c.html(
       renderHomePage(
         deps.markdownAssetVersion ?? null,
         deps.resizerAssetVersion ?? null,
@@ -710,17 +767,21 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
       ),
       200,
       { 'cache-control': 'no-store' },
-    ),
-  );
+    );
+  });
   app.get('/a/:sessionId', async (c) => {
     const actor = await getActorBySession(env.DB, c.req.param('sessionId'));
     if (!actor) {
       return c.html(renderInvalidSharePage(), 404, { 'cache-control': 'no-store' });
     }
+    const shell = spaHtml('share');
+    if (shell) return c.html(shell, 200, spaHeaders);
     return c.html(renderSharePage(actor), 200, { 'cache-control': 'no-store' });
   });
-  app.get('/c/:roomId', (c) =>
-    c.html(
+  app.get('/c/:roomId', (c) => {
+    const shell = spaHtml('room');
+    if (shell) return c.html(shell, 200, spaHeaders);
+    return c.html(
       renderChatPage(
         c.req.param('roomId'),
         deps.markdownAssetVersion ?? null,
@@ -732,17 +793,19 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
       {
         'cache-control': 'no-store',
       },
-    ),
-  );
+    );
+  });
 
   // 新设备配对页：challenge 只在 URL fragment 中，由客户端读取并立即清除；
   // 服务端不解析 challenge，也不输出任何身份或房间数据。
-  app.get('/pair', (c) =>
-    c.html(renderPairPage(), 200, {
+  app.get('/pair', (c) => {
+    const shell = spaHtml('pair');
+    if (shell) return c.html(shell, 200, spaHeaders);
+    return c.html(renderPairPage(), 200, {
       'cache-control': 'no-store',
       'referrer-policy': 'no-referrer',
-    }),
-  );
+    });
+  });
 
   // 群邀请落地页。邀请码只是加入能力，不是身份凭据：这里不解析任何群数据，
   // 由页面用浏览器 token 调工具预览与确认，权限判定全部留在工具层。
@@ -751,6 +814,8 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     if (!INVITE_KEY.test(inviteKey)) {
       return c.html(renderInvalidJoinPage(), 404, { 'cache-control': 'no-store' });
     }
+    const shell = spaHtml('join');
+    if (shell) return c.html(shell, 200, spaHeaders);
     return c.html(renderJoinPage(inviteKey), 200, { 'cache-control': 'no-store' });
   });
 
