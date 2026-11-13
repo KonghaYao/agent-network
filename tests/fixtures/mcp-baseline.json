@@ -2,7 +2,7 @@
   "version": 1,
   "protocolVersion": "2026-07-28",
   "toolCount": 133,
-  "toolsetSha256": "0b799d8fef0539d31d49837967343898e3379dab53abd67384df125bb38434eb",
+  "toolsetSha256": "5d90ff4dc9cb9009c52e8fdd961b8822367e43657393236374e47287a92f1a3b",
   "instructionsSha256": "21154a7b030a600fa8fb8772dc3808ed559936211e526a03feedffddb328eaaf",
   "frames": [
     {
@@ -205,8 +205,8 @@
       "response": {
         "result": {
           "toolCount": 133,
-          "toolset_sha256": "0b799d8fef0539d31d49837967343898e3379dab53abd67384df125bb38434eb",
-          "listing_sha256": "eb63c6b36fee95dbbfd7bac16fce33fe7a98c07f277e14f6fa2dd3f0b6461df6",
+          "toolset_sha256": "5d90ff4dc9cb9009c52e8fdd961b8822367e43657393236374e47287a92f1a3b",
+          "listing_sha256": "5510a79906768fb5f09bf5a6e8633d656493cf1d1804cb63e4c5cc18836e3db9",
           "tools": [
             {
               "name": "network_issue_token",
@@ -630,7 +630,7 @@
             },
             {
               "name": "network_memory_recall",
-              "digest": "c6b5dcb6738f7263d233d872ec38a1a14d1f7b1e4d8834a7cee8cbdbccdfdf93"
+              "digest": "b7a88350994f652b5be7838ed5ba491392fc75b5968c96abe2e6772398040c30"
             },
             {
               "name": "network_memory_context_list",
@@ -772,7 +772,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-12.1\",\"toolset_sha256\":\"0b799d8fef0539d31d49837967343898e3379dab53abd67384df125bb38434eb\",\"tool_count\":133,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-09.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
+              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-12.1\",\"toolset_sha256\":\"5d90ff4dc9cb9009c52e8fdd961b8822367e43657393236374e47287a92f1a3b\",\"tool_count\":133,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-09.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
             }
           ],
           "structuredContent": {
@@ -791,7 +791,7 @@
             "service": {
               "protocol_version": "2026-07-28",
               "contract_version": "2026-11-12.1",
-              "toolset_sha256": "0b799d8fef0539d31d49837967343898e3379dab53abd67384df125bb38434eb",
+              "toolset_sha256": "5d90ff4dc9cb9009c52e8fdd961b8822367e43657393236374e47287a92f1a3b",
               "tool_count": 133,
               "guide_tool": "network_client_guide",
               "files_enabled": true,
@@ -1923,8 +1923,8 @@
       "response": {
         "result": {
           "toolCount": 133,
-          "toolset_sha256": "0b799d8fef0539d31d49837967343898e3379dab53abd67384df125bb38434eb",
-          "listing_sha256": "eb63c6b36fee95dbbfd7bac16fce33fe7a98c07f277e14f6fa2dd3f0b6461df6",
+          "toolset_sha256": "5d90ff4dc9cb9009c52e8fdd961b8822367e43657393236374e47287a92f1a3b",
+          "listing_sha256": "5510a79906768fb5f09bf5a6e8633d656493cf1d1804cb63e4c5cc18836e3db9",
           "tools": [
             {
               "name": "network_issue_token",
@@ -2348,7 +2348,7 @@
             },
             {
               "name": "network_memory_recall",
-              "digest": "c6b5dcb6738f7263d233d872ec38a1a14d1f7b1e4d8834a7cee8cbdbccdfdf93"
+              "digest": "b7a88350994f652b5be7838ed5ba491392fc75b5968c96abe2e6772398040c30"
             },
             {
               "name": "network_memory_context_list",
@@ -3282,5 +3282,5 @@
       "response": ""
     }
   ],
-  "digest": "64091cdb514dd1e92d8b328f38a8f8ba74eb35325076bf83e25aa116b5c05f34"
+  "digest": "f47d7bc73b4c8804268306c8ad9ff2c1651c5e3efbc577e49eb7d35d1eaba49b"
 }
