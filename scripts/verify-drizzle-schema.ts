@@ -5,7 +5,9 @@
  * 2. 用 drizzle-kit 从 core schema 生成 DDL，应用到第二个内存库；
  * 3. 逐表比较 columns / indexes / foreign keys / CHECK 约束；
  * 4. 生成并校验可 review 的 `tests/fixtures/schema-surface.json`；
- * 5. 验证 guard 表、FTS5 触发器与“生产代码不 import Drizzle”边界。
+ * 5. 验证 guard 表、FTS5 触发器与 Drizzle 生产边界：
+ *    `drizzle-orm` 只允许出现在 `src/storage/drizzle.ts` / `src/storage/queries.ts`，
+ *    schema 只允许由 `src/storage/drizzle.ts` 直接引用。
  *
  * 用法：
  *   bun scripts/verify-drizzle-schema.ts            # 校验
@@ -435,19 +437,32 @@ function checkFts(db: Database): void {
   checkEqual('FTS delete 后不可搜索', match('delta'), 0);
 }
 
-function checkNoProductionDrizzleImport(): void {
+/** Drizzle 只允许出现在核心存储查询层；域层统一 import `storage/queries`。 */
+const DRIZZLE_IMPORTERS = new Set(['src/storage/drizzle.ts', 'src/storage/queries.ts']);
+/** schema 模块只允许由运行时入口引用，避免表定义扩散到业务代码。 */
+const SCHEMA_IMPORTERS = new Set(['src/storage/drizzle.ts']);
+
+function checkDrizzleBoundary(): void {
   const files = [
     ...new Bun.Glob('src/**/*.ts').scanSync({ cwd: ROOT }),
     ...new Bun.Glob('src/**/*.tsx').scanSync({ cwd: ROOT }),
   ].filter((file) => !file.startsWith('src/storage/schema/'));
-  const offenders: string[] = [];
-  const importPattern =
+  const drizzleOffenders: string[] = [];
+  const schemaOffenders: string[] = [];
+  const drizzlePattern =
     /(?:from\s+|require\()\s*['"]drizzle-(?:orm|kit)(?:\/[^'"]*)?['"]/u;
+  const schemaPattern = /(?:from\s+|require\()\s*['"](?:[^'"]*\/)?schema(?:\/index)?['"]/u;
   for (const file of files) {
     const source = readFileSync(resolve(ROOT, file), 'utf8');
-    if (importPattern.test(source)) offenders.push(file);
+    if (drizzlePattern.test(source) && !DRIZZLE_IMPORTERS.has(file)) {
+      drizzleOffenders.push(file);
+    }
+    if (schemaPattern.test(source) && !SCHEMA_IMPORTERS.has(file)) {
+      schemaOffenders.push(file);
+    }
   }
-  checkEqual('生产代码不 import Drizzle', offenders.join(','), '');
+  checkEqual('Drizzle import 限定在存储查询层', drizzleOffenders.join(','), '');
+  checkEqual('只有 storage/drizzle.ts 直接 import schema', schemaOffenders.join(','), '');
   for (const required of ['src/app.ts', 'src/bun/main.ts']) {
     const source = readFileSync(resolve(ROOT, required), 'utf8');
     check(`${required} 不引用 schema`, !source.includes('storage/schema'));
@@ -516,7 +531,7 @@ async function main() {
 
     await checkGuardTables(migrated);
     checkFts(migrated);
-    checkNoProductionDrizzleImport();
+    checkDrizzleBoundary();
 
     console.log(`\nschema parity checks passed: ${checksPassed()}`);
   } finally {

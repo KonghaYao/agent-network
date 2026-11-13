@@ -1,3 +1,6 @@
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
+
+import { orm, schema, toD1, type D1Queryable } from './drizzle';
 import type {
   ActorRow,
   ArtifactRow,
@@ -10,20 +13,30 @@ import type {
   RoomRow,
 } from './rows';
 
-export interface D1Like {
-  prepare(query: string): D1PreparedStatement;
+export interface D1Like extends D1Queryable {
   batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
 }
 
+/**
+ * 4C-1 核心只读查询：actors / credentials / rooms / room_members 由 Drizzle 构建 SQL，
+ * 仍经 `toD1()` 回到现有 D1 shim 执行。消息、投递、文件等域仍保留手写 SQL，
+ * 留给 4C-4/4C-5；guard/FTS/复杂权限 SQL 不进入 Drizzle。
+ */
+
 export async function getActor(db: D1Like, actorId: string): Promise<ActorRow | null> {
-  return db.prepare('SELECT * FROM actors WHERE actor_id = ?').bind(actorId).first<ActorRow>();
+  const query = orm(db)
+    .select()
+    .from(schema.actors)
+    .where(eq(schema.actors.actor_id, actorId));
+  return toD1(db, query).first<ActorRow>();
 }
 
 export async function getActorBySession(db: D1Like, sessionId: string): Promise<ActorRow | null> {
-  return db
-    .prepare('SELECT * FROM actors WHERE agent_session_id = ?')
-    .bind(sessionId)
-    .first<ActorRow>();
+  const query = orm(db)
+    .select()
+    .from(schema.actors)
+    .where(eq(schema.actors.agent_session_id, sessionId));
+  return toD1(db, query).first<ActorRow>();
 }
 
 /** 历史/时间线只判定发送者类型；不要在这里读取 metadata 或管理字段。 */
@@ -49,11 +62,11 @@ export async function getActorsByIds(
   actorIds: string[],
 ): Promise<ActorKindRow[]> {
   if (actorIds.length === 0) return [];
-  const placeholders = actorIds.map(() => '?').join(', ');
-  const result = await db
-    .prepare(`SELECT actor_id, kind FROM actors WHERE actor_id IN (${placeholders})`)
-    .bind(...actorIds)
-    .all<ActorKindRow>();
+  const query = orm(db)
+    .select({ actor_id: schema.actors.actor_id, kind: schema.actors.kind })
+    .from(schema.actors)
+    .where(inArray(schema.actors.actor_id, actorIds));
+  const result = await toD1(db, query).all<ActorKindRow>();
   return result.results;
 }
 
@@ -77,20 +90,27 @@ export async function getActorManagementByIds(
   actorIds: string[],
 ): Promise<ActorManagementRow[]> {
   if (actorIds.length === 0) return [];
-  const placeholders = actorIds.map(() => '?').join(', ');
-  const result = await db
-    .prepare(
-      `SELECT actor_id, kind, agent_session_id, name, archived_at, archived_by,
-              disabled_at, disabled_by, disabled_reason
-         FROM actors WHERE actor_id IN (${placeholders})`,
-    )
-    .bind(...actorIds)
-    .all<ActorManagementRow>();
+  const query = orm(db)
+    .select({
+      actor_id: schema.actors.actor_id,
+      kind: schema.actors.kind,
+      agent_session_id: schema.actors.agent_session_id,
+      name: schema.actors.name,
+      archived_at: schema.actors.archived_at,
+      archived_by: schema.actors.archived_by,
+      disabled_at: schema.actors.disabled_at,
+      disabled_by: schema.actors.disabled_by,
+      disabled_reason: schema.actors.disabled_reason,
+    })
+    .from(schema.actors)
+    .where(inArray(schema.actors.actor_id, actorIds));
+  const result = await toD1(db, query).all<ActorManagementRow>();
   return result.results;
 }
 
 export async function getRoom(db: D1Like, roomId: string): Promise<RoomRow | null> {
-  return db.prepare('SELECT * FROM rooms WHERE room_id = ?').bind(roomId).first<RoomRow>();
+  const query = orm(db).select().from(schema.rooms).where(eq(schema.rooms.room_id, roomId));
+  return toD1(db, query).first<RoomRow>();
 }
 
 export async function getMember(
@@ -98,18 +118,70 @@ export async function getMember(
   roomId: string,
   actorId: string,
 ): Promise<RoomMemberRow | null> {
-  return db
-    .prepare('SELECT * FROM room_members WHERE room_id = ? AND actor_id = ?')
-    .bind(roomId, actorId)
-    .first<RoomMemberRow>();
+  const query = orm(db)
+    .select()
+    .from(schema.roomMembers)
+    .where(
+      and(eq(schema.roomMembers.room_id, roomId), eq(schema.roomMembers.actor_id, actorId)),
+    );
+  return toD1(db, query).first<RoomMemberRow>();
 }
 
 export async function isActiveMember(db: D1Like, roomId: string, actorId: string): Promise<boolean> {
-  const row = await db
-    .prepare("SELECT 1 AS ok FROM room_members WHERE room_id = ? AND actor_id = ? AND status = 'active'")
-    .bind(roomId, actorId)
-    .first<{ ok: number }>();
+  const query = orm(db)
+    .select({ ok: sql<number>`1`.as('ok') })
+    .from(schema.roomMembers)
+    .where(
+      and(
+        eq(schema.roomMembers.room_id, roomId),
+        eq(schema.roomMembers.actor_id, actorId),
+        eq(schema.roomMembers.status, 'active'),
+      ),
+    )
+    .limit(1);
+  const row = await toD1(db, query).first<{ ok: number }>();
   return row !== null;
+}
+
+/** 会话列表的只读对端：当前页 direct 房间的另一位 active 成员。 */
+export interface RoomPeerRow {
+  room_id: string;
+  actor_id: string;
+  name: string;
+  kind: 'human' | 'agent';
+}
+
+/**
+ * 按当前页房间批量读取对端；不在服务端逐房间调用 roomGet。
+ *
+ * 同一房间若存在多个对端（遗留数据），调用方保持“按 room_id 首次命中”的原有
+ * 语义；这里仍按 room_id、actor_id 排序，保证结果稳定。
+ */
+export async function listActiveRoomPeers(
+  db: D1Like,
+  roomIds: string[],
+  viewerId: string,
+): Promise<RoomPeerRow[]> {
+  if (roomIds.length === 0) return [];
+  const query = orm(db)
+    .select({
+      room_id: schema.roomMembers.room_id,
+      actor_id: schema.actors.actor_id,
+      name: schema.actors.name,
+      kind: schema.actors.kind,
+    })
+    .from(schema.roomMembers)
+    .innerJoin(schema.actors, eq(schema.actors.actor_id, schema.roomMembers.actor_id))
+    .where(
+      and(
+        inArray(schema.roomMembers.room_id, roomIds),
+        eq(schema.roomMembers.status, 'active'),
+        ne(schema.roomMembers.actor_id, viewerId),
+      ),
+    )
+    .orderBy(schema.roomMembers.room_id, schema.actors.actor_id);
+  const result = await toD1(db, query).all<RoomPeerRow>();
+  return result.results;
 }
 
 export async function getMessage(db: D1Like, messageId: string): Promise<MessageRow | null> {
@@ -218,19 +290,24 @@ export async function getCredentialByHash(
   db: D1Like,
   tokenHash: string,
 ): Promise<import('./rows').CredentialRow | null> {
-  return db
-    .prepare('SELECT * FROM credentials WHERE token_hash = ?')
-    .bind(tokenHash)
-    .first<import('./rows').CredentialRow>();
+  const query = orm(db)
+    .select()
+    .from(schema.credentials)
+    .where(eq(schema.credentials.token_hash, tokenHash));
+  return toD1(db, query).first<import('./rows').CredentialRow>();
 }
 
 export async function activeRoomCount(db: D1Like, actorId: string): Promise<number> {
-  const row = await db
-    .prepare(
-      "SELECT COUNT(*) AS n FROM room_members WHERE actor_id = ? AND status = 'active'",
-    )
-    .bind(actorId)
-    .first<{ n: number }>();
+  const query = orm(db)
+    .select({ n: sql<number>`count(*)`.as('n') })
+    .from(schema.roomMembers)
+    .where(
+      and(
+        eq(schema.roomMembers.actor_id, actorId),
+        eq(schema.roomMembers.status, 'active'),
+      ),
+    );
+  const row = await toD1(db, query).first<{ n: number }>();
   return row?.n ?? 0;
 }
 
