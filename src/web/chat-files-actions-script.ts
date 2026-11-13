@@ -91,6 +91,7 @@ function openFilePreview(item, trigger) {
 function closeFilePreview(restoreFocus) {
   if (!filePreviewElement || !filePreviewElement.open) return;
   closeNativeDialog(filePreviewElement);
+  destroyPreviewMarkdown();
   if (filesPreviewAbort) {
     filesPreviewAbort.abort();
     filesPreviewAbort = null;
@@ -133,6 +134,7 @@ function updatePreviewDownload(item) {
 
 function renderFilePreviewBody(item, kind) {
   if (!filePreviewBody) return;
+  destroyPreviewMarkdown();
   filePreviewBody.replaceChildren();
   const previewUrl = fileSafeUrl(item.preview_url || item.download_url || item.public_url);
   if (kind === 'image') {
@@ -167,6 +169,14 @@ function renderFilePreviewBody(item, kind) {
     frame.title = item.name || 'PDF 预览';
     frame.src = previewUrl;
     filePreviewBody.append(frame);
+    return;
+  }
+  if (kind === 'markdown') {
+    if (!previewUrl) {
+      appendPreviewNote('预览链接无效，请下载后查看。');
+      return;
+    }
+    renderMarkdownPreview(item, previewUrl);
     return;
   }
   if (kind === 'text') {
@@ -230,11 +240,123 @@ async function loadTextPreview(url, pre) {
   }
 }
 
+function destroyPreviewMarkdown() {
+  if (!filesPreviewMarkdownHandle) return;
+  try {
+    filesPreviewMarkdownHandle.destroy();
+  } catch (error) {
+    // React root 可能已经随预览 DOM 一起移除。
+  }
+  filesPreviewMarkdownHandle = null;
+}
+
+/**
+ * .md 预览：复用 AI 消息的 streamdown + rehype-harden 岛。
+ *
+ * 只接受 text/markdown 或以 .md/.markdown 结尾的纯文本；HTML/SVG 等主动
+ * 内容由 filePreviewKind 先归为 download，不会进入这里。超大文件、读取失败
+ * 或 Markdown 岛不可用时保留纯文本，并保留“查看原文/渲染视图”切换。
+ */
+function renderMarkdownPreview(item, previewUrl) {
+  if (!filePreviewBody) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'file-preview-markdown';
+  const note = document.createElement('p');
+  note.className = 'file-preview-note file-preview-md-note';
+  note.hidden = true;
+  const toolbar = document.createElement('div');
+  toolbar.className = 'file-preview-md-toolbar';
+  toolbar.hidden = true;
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'file-preview-md-toggle';
+  toggle.textContent = '查看原文';
+  toolbar.append(toggle);
+  const viewer = document.createElement('div');
+  viewer.className = 'file-preview-md-viewer';
+  viewer.hidden = true;
+  const source = document.createElement('pre');
+  source.className = 'file-preview-md-source';
+  source.textContent = '正在读取 Markdown…';
+  wrap.append(note, toolbar, viewer, source);
+  filePreviewBody.append(wrap);
+
+  let showingSource = false;
+  toggle.addEventListener('click', function () {
+    if (!viewer.isConnected || !source.isConnected) return;
+    showingSource = !showingSource;
+    viewer.hidden = showingSource;
+    source.hidden = !showingSource;
+    toggle.textContent = showingSource ? '渲染视图' : '查看原文';
+  });
+
+  // 与文本预览共用 256 KB Range 上限；超过上限不再把整份大文档交给解析器。
+  if (Number(item.size) > FILES_TEXT_PREVIEW_BYTES) {
+    note.hidden = false;
+    note.textContent = '文件较大，已显示纯文本前 256 KB。';
+    loadTextPreview(previewUrl, source);
+    return;
+  }
+  loadMarkdownText(viewer, source, note, toolbar, previewUrl);
+}
+
+async function loadMarkdownText(viewer, source, note, toolbar, url) {
+  if (filesPreviewAbort) filesPreviewAbort.abort();
+  const controller = new AbortController();
+  filesPreviewAbort = controller;
+  let text = '';
+  try {
+    const response = await fetch(url, {
+      headers: { Range: FILES_PREVIEW_RANGE },
+      credentials: 'omit',
+      redirect: 'error',
+      referrerPolicy: 'no-referrer',
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    text = await response.text();
+  } catch (error) {
+    if (isAbortError(error) || !source.isConnected) return;
+    source.textContent = '读取 Markdown 预览失败：' + errorMessage(error);
+    return;
+  } finally {
+    if (filesPreviewAbort === controller) filesPreviewAbort = null;
+  }
+  if (!source.isConnected) return;
+  if (text.length >= FILES_TEXT_PREVIEW_BYTES) {
+    source.textContent = text.slice(0, FILES_TEXT_PREVIEW_BYTES);
+    note.hidden = false;
+    note.textContent = '文件较大，已显示纯文本前 256 KB。';
+    return;
+  }
+  if (text.length === 0) {
+    source.textContent = '（空文件）';
+    return;
+  }
+  const module = await loadMarkdownBundle();
+  if (!source.isConnected) return;
+  const handle = module && typeof module.mountMarkdown === 'function'
+    ? module.mountMarkdown(viewer, text)
+    : null;
+  if (!handle) {
+    source.textContent = text;
+    note.hidden = false;
+    note.textContent = 'Markdown 渲染不可用，已显示纯文本。';
+    return;
+  }
+  filesPreviewMarkdownHandle = handle;
+  source.textContent = text;
+  source.hidden = true;
+  viewer.hidden = false;
+  toolbar.hidden = false;
+}
+
 function filePreviewKind(item) {
   const kind = String(item.preview_kind || '').toLowerCase();
   const mime = String(item.mime_type || '').toLowerCase();
   if (kind === 'pdf' && mime.indexOf('application/pdf') !== 0) return 'other';
   if (previewImageMime(item.mime_type, item.name)) return 'image';
+  if (kind === 'markdown' || isMarkdownPreview(item)) return 'markdown';
   if (kind === 'image' || kind === 'pdf' || kind === 'text' || kind === 'audio' || kind === 'video') {
     return kind;
   }
@@ -255,6 +377,22 @@ function isRasterImage(item) {
   // 与缩略图/待发送共用同一判定：image/jpg 归一，octet-stream 按扩展名兜底；
   // 未知类型不内联，宁可下载，也不把 HTML/SVG 交给图片解码器。
   return previewImageMime(item.mime_type, item.name) !== null;
+}
+
+/**
+ * Markdown 只按显式 MIME 或 .md/.markdown 扩展名识别。
+ *
+ * 扩展名兜底只接受空 MIME、text/plain 与 application/octet-stream；html/xml/js
+ * 等主动内容即使文件名像 Markdown 也保持 download，不进入渲染器。
+ */
+const MARKDOWN_MIMES = new Set(['text/markdown', 'text/x-markdown']);
+const MARKDOWN_EXTENSION = /\\.(?:md|markdown)$/iu;
+
+function isMarkdownPreview(item) {
+  const mime = String(item.mime_type || '').split(';')[0].trim().toLowerCase();
+  if (MARKDOWN_MIMES.has(mime)) return true;
+  if (mime && mime !== 'text/plain' && mime !== 'application/octet-stream') return false;
+  return MARKDOWN_EXTENSION.test(String(item.name || ''));
 }
 
 /**
@@ -294,6 +432,7 @@ function isPreviewImage(mime, name) {
 function fileIconLabel(kind) {
   if (kind === 'image') return '图片';
   if (kind === 'pdf') return 'PDF';
+  if (kind === 'markdown') return 'MD';
   if (kind === 'text') return 'TXT';
   if (kind === 'audio') return '音频';
   if (kind === 'video') return '视频';

@@ -49,6 +49,7 @@ let filesOverlayOpen = false;
 let filesFocusBeforeOpen = null;
 let filesPreviewFocus = null;
 let filesPreviewAbort = null;
+let filesPreviewMarkdownHandle = null;
 let filesUploadTasks = [];
 let filesUploadRunning = false;
 let filesPendingBinds = new Map();

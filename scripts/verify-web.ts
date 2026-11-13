@@ -928,6 +928,32 @@ const PNG_BYTES = Buffer.from(
 );
 const PDF_BYTES = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
 
+/** Markdown 文件预览：结构渲染 + 原始 HTML/事件属性剥离 + 安全链接。 */
+const MARKDOWN_PREVIEW_BODY = [
+  '# 项目说明',
+  '',
+  '这是 **加粗** 文本与 [安全链接](https://example.com/docs)。',
+  '',
+  '- 第一项',
+  '- 第二项',
+  '',
+  '> 引用内容',
+  '',
+  '| 名称 | 值 |',
+  '| --- | --- |',
+  '| A | 1 |',
+  '',
+  '```js',
+  'const answer = 42;',
+  '```',
+  '',
+  '<script>window.__mdPreviewXss = true</script>',
+  '<img src=x onerror="window.__mdPreviewXss = true">',
+].join('\n');
+
+/** 超过 256 KB Range 上限，预览必须回退纯文本。 */
+const BIG_MARKDOWN_BODY = ['# 大文件', '', 'a'.repeat(262144)].join('\n');
+
 async function waitUntil(
   predicate: () => boolean | Promise<boolean>,
   label: string,
@@ -13628,6 +13654,10 @@ async function main(): Promise<void> {
         { name: '图片 <b>一.png', mimeType: 'image/png', body: PNG_BYTES },
         { name: '报告.pdf', mimeType: 'application/pdf', body: PDF_BYTES },
         { name: '说明.txt', mimeType: 'text/plain', body: '第一行\n第二行' },
+        { name: '说明.md', mimeType: 'text/markdown', body: MARKDOWN_PREVIEW_BODY },
+        { name: '大文件.md', mimeType: 'text/markdown', body: BIG_MARKDOWN_BODY },
+        { name: '失败.md', mimeType: 'text/markdown', body: '# 读取失败' },
+        { name: '伪装.md', mimeType: 'text/html', body: '<script>alert(1)</script>' },
         { name: '语音.mp3', mimeType: 'audio/mpeg', body: Buffer.from('ID3mock') },
         { name: '演示.mp4', mimeType: 'video/mp4', body: Buffer.from('videomock') },
         { name: '归档.zip', mimeType: 'application/zip', body: Buffer.from('zipmock') },
@@ -13643,7 +13673,12 @@ async function main(): Promise<void> {
       ]);
       const textFile = humanFiles.find((file) => file.name === '说明.txt');
       const zipFile = humanFiles.find((file) => file.name === '归档.zip');
-      if (!textFile || !zipFile) throw new Error('文件 fixture 缺失');
+      const markdownFile = humanFiles.find((file) => file.name === '说明.md');
+      const bigMarkdownFile = humanFiles.find((file) => file.name === '大文件.md');
+      const failingMarkdownFile = humanFiles.find((file) => file.name === '失败.md');
+      if (!textFile || !zipFile || !markdownFile || !bigMarkdownFile || !failingMarkdownFile) {
+        throw new Error('文件 fixture 缺失');
+      }
       const { context, page } = await makeContext(
         browser,
         data.humanToken,
@@ -13655,6 +13690,14 @@ async function main(): Promise<void> {
       });
       const rangeObserver = await observeFileRanges(page);
       const upload = await observeUploads(page);
+      const failingMarkdownPath = new URL(failingMarkdownFile.publicUrl).pathname;
+      await page.route('**/f/**', async (route) => {
+        if (new URL(route.request().url()).pathname === failingMarkdownPath) {
+          await route.fulfill({ status: 500, contentType: 'text/plain', body: 'boom' });
+          return;
+        }
+        await route.fallback();
+      });
       let failNextBind = false;
       await page.route('**/mcp', async (route) => {
         const request = route.request();
@@ -13680,7 +13723,7 @@ async function main(): Promise<void> {
       });
       await page.goto(`${server.base}/c/${directId}`);
       await waitRoom(page, directId, data.agentA.name);
-      await page.waitForFunction('document.querySelectorAll("#files-list .file-item").length === 9');
+      await page.waitForFunction('document.querySelectorAll("#files-list .file-item").length === 13');
       checkEqual('桌面显示右侧文件栏', await page.locator('#files-pane').isVisible(), true);
       checkEqual('桌面文件栏无遮罩', await page.locator('#files-backdrop').isHidden(), true);
       checkEqual('桌面保留会话列表', await page.locator('.sidebar').isVisible(), true);
@@ -13763,6 +13806,136 @@ async function main(): Promise<void> {
       );
       await page.locator('#file-preview-close').click();
 
+      const markdownItem = page.locator('#files-list .file-item').filter({ hasText: '说明.md' });
+      await markdownItem.getByRole('button', { name: '预览' }).click();
+      await page.locator('#file-preview-body .msg-markdown h1').waitFor();
+      checkEqual(
+        'Markdown 预览渲染标题',
+        (await page.locator('#file-preview-body .msg-markdown h1').textContent())?.trim(),
+        '项目说明',
+      );
+      checkEqual('Markdown 预览渲染列表', await page.locator('#file-preview-body .msg-markdown li').count(), 2);
+      check(
+        'Markdown 预览渲染代码块',
+        ((await page.locator('#file-preview-body .msg-markdown pre').textContent()) ?? '').includes(
+          'const answer = 42;',
+        ),
+      );
+      checkEqual(
+        'Markdown 预览渲染表格',
+        (await page.locator('#file-preview-body .msg-markdown td').first().textContent())?.trim(),
+        'A',
+      );
+      check(
+        'Markdown 预览渲染引用',
+        ((await page.locator('#file-preview-body .msg-markdown blockquote').textContent()) ?? '').includes(
+          '引用内容',
+        ),
+      );
+      const markdownLink = page.locator(
+        '#file-preview-body .msg-markdown a[href="https://example.com/docs"]',
+      );
+      checkEqual('Markdown 预览链接 target', await markdownLink.getAttribute('target'), '_blank');
+      checkEqual(
+        'Markdown 预览链接 rel',
+        await markdownLink.getAttribute('rel'),
+        'noopener noreferrer nofollow',
+      );
+      checkEqual(
+        'Markdown 预览链接 no-referrer',
+        await markdownLink.getAttribute('referrerpolicy'),
+        'no-referrer',
+      );
+      checkEqual('Markdown 预览剥离 script', await page.locator('#file-preview-body script').count(), 0);
+      checkEqual(
+        'Markdown 预览剥离事件属性',
+        await page.locator('#file-preview-body [onerror], #file-preview-body [onclick]').count(),
+        0,
+      );
+      checkEqual(
+        'Markdown 预览不执行内联脚本',
+        await page.evaluate('window.__mdPreviewXss === undefined'),
+        true,
+      );
+      const markdownToggle = page.locator('#file-preview-body .file-preview-md-toggle');
+      await markdownToggle.click();
+      checkEqual(
+        '查看原文显示源码',
+        await page.locator('#file-preview-body .file-preview-md-source').isVisible(),
+        true,
+      );
+      checkEqual(
+        '查看原文隐藏渲染视图',
+        await page.locator('#file-preview-body .file-preview-md-viewer').isVisible(),
+        false,
+      );
+      check(
+        '原文包含 Markdown 源',
+        ((await page.locator('#file-preview-body .file-preview-md-source').textContent()) ?? '').includes(
+          '# 项目说明',
+        ),
+      );
+      await markdownToggle.click();
+      checkEqual(
+        '切回渲染视图',
+        await page.locator('#file-preview-body .file-preview-md-viewer').isVisible(),
+        true,
+      );
+      checkEqual(
+        'Markdown 预览读取 Range 上限',
+        rangeObserver.ranges[new URL(markdownFile.publicUrl).pathname],
+        'bytes=0-262143',
+      );
+      await page.locator('#file-preview-close').click();
+
+      const bigMarkdownItem = page.locator('#files-list .file-item').filter({ hasText: '大文件.md' });
+      await bigMarkdownItem.getByRole('button', { name: '预览' }).click();
+      await waitForText(page, '#file-preview-body .file-preview-md-note', '文件较大');
+      await waitForText(page, '#file-preview-body pre', '# 大文件');
+      checkEqual(
+        '超大 Markdown 回退纯文本',
+        await page.locator('#file-preview-body .msg-markdown').count(),
+        0,
+      );
+      checkEqual('超大 Markdown 保留源码 pre', await page.locator('#file-preview-body pre').count(), 1);
+      check(
+        '超大 Markdown 显示可读内容',
+        ((await page.locator('#file-preview-body pre').textContent()) ?? '').includes('# 大文件'),
+      );
+      await page.locator('#file-preview-close').click();
+
+      const failingMarkdownItem = page.locator('#files-list .file-item').filter({
+        hasText: '失败.md',
+      });
+      await failingMarkdownItem.getByRole('button', { name: '预览' }).click();
+      await waitForText(page, '#file-preview-body .file-preview-md-source', 'HTTP 500');
+      checkEqual(
+        'Markdown 读取失败不渲染',
+        await page.locator('#file-preview-body .msg-markdown').count(),
+        0,
+      );
+      checkEqual(
+        'Markdown 读取失败保留源码',
+        await page.locator('#file-preview-body pre').count(),
+        1,
+      );
+      await page.locator('#file-preview-close').click();
+
+      const disguisedMarkdownItem = page.locator('#files-list .file-item').filter({
+        hasText: '伪装.md',
+      });
+      await disguisedMarkdownItem.getByRole('button', { name: '预览' }).click();
+      checkEqual(
+        '主动内容 Markdown 扩展名不渲染',
+        await page.locator('#file-preview-body .msg-markdown').count(),
+        0,
+      );
+      check(
+        '主动内容 Markdown 仍提示下载',
+        ((await page.locator('#file-preview-body').textContent()) ?? '').includes('不支持在线预览'),
+      );
+      await page.locator('#file-preview-close').click();
+
       const audioItem = page.locator('#files-list .file-item').filter({ hasText: '语音.mp3' });
       await audioItem.getByRole('button', { name: '预览' }).click();
       checkEqual(
@@ -13834,7 +14007,7 @@ async function main(): Promise<void> {
       checkEqual('删除需要二次确认', await deleteButton.textContent(), '确认删除');
       await deleteButton.click();
       await page.waitForFunction(
-        'document.querySelectorAll("#files-list .file-item").length === 8',
+        'document.querySelectorAll("#files-list .file-item").length === 12',
       );
       const afterDelete = await rawTool<{ items: { file_id: string }[] }>(
         data.humanToken,
