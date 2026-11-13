@@ -70,15 +70,6 @@ interface MemoryCatchupPlanRow {
   snapshot_sha256: string | null;
 }
 
-interface MemoryCatchupItemRow {
-  plan_id: string;
-  item_index: number;
-  message_id: string;
-  created_seq: number;
-  selection_state: 'selected' | 'not_selected' | 'missing';
-  reason: string | null;
-}
-
 interface MemoryMessageRow {
   message_id: string;
   room_id: string;

@@ -5,7 +5,6 @@
  * lookup 包永远没有注入许可；bound 包只有在目标、来源、受众与遗忘屏障全部
  * 通过当前重验时才标为可注入。正文写入后 immutable，失效通过状态标记表达。
  */
-import { BusinessError } from '../contracts/errors';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { LIMITS } from '../contracts/limits';
 import { nowMs, sha256Hex, stableStringify } from '../storage/db';

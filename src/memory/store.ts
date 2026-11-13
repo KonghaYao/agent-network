@@ -26,9 +26,6 @@ import {
   MEMORY_POLICY_VERSION,
   countsAsRawCoverage,
   decideExperienceAdmission,
-  isFullRawCoverage,
-  isValidByteRange,
-  mergeByteRanges,
   type MemoryContextDeliveryReceipt,
   type MemoryCrossRoomGrant,
   type MemoryExactRepresentation,
@@ -40,19 +37,13 @@ import {
   type MemoryRepresentationKind,
   type MemorySpaceRef,
   type MemorySourceState,
-  type MemoryTargetScope,
 } from './contracts';
 import {
-  authorizeRepresentationRead,
   authorizeSourceRead,
   ensureMemoryInstance,
   ensureAgentMemorySpace,
-  isTombstoned,
-  loadMemoryAccessVersions,
   requireCurrentMemorySpace,
-  resolveCurrentOwner,
 } from './access';
-import { getActiveManagement } from '../domain/agent-access';
 import {
   memoryCoverageStatements,
   memoryExperienceStatements,

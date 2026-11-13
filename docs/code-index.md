@@ -68,6 +68,13 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 - 新建 Agent：`src/web/new-agent-script.ts` 用新 Agent token 注册，再用当前 human token 调 `network_contact_add { actor_id }` 建立单向、幂等、无需接受的联系人关系，然后调 `network_room_create { kind: 'direct' }`，`seedRoomCacheFromDetail` 立即插入左侧并 `network_room_mark_read` 推进到 `head_seq`；联系人/会话创建失败都不回滚 Agent/凭据/注册表，`mark_read` 失败时仅本地视为已读，关闭弹窗再 `loadRooms()` 对账。`src/web/chat-agents-script.ts` 提供按本地注册表补齐联系人的 helper（并发上限 4）；`chat-script.ts` 的新建群聊与 `chat-members-script.ts` 的添加成员在打开时对 `network_contacts_list` 分页结果去重、补齐 `owner_actor_id` 等于当前 human 的缺失 Agent，失败只显示非致命提示，不阻塞已有好友展示。
 - 限制只在 `src/contracts/limits.ts` 维护；错误码与可重试语义在 `src/contracts/errors.ts`。
 
+### 存储层 Drizzle/raw 边界
+
+- 只读：`src/storage/queries.ts` 中已迁移的 actor/credentials/room/room_members 与 memory 只读查询由 Drizzle 构建 SQL，经 `toD1()` 回到 D1 shim 执行；`src/storage/schema/` 只登记这些表，入口 `schema/index.ts` 是唯一汇总点，不再维护 `CORE_TABLES` / `MEMORY_TABLES` 手工清单。
+- 写路径：所有写入仍在 `runIdempotent` 的 raw D1 batch 内（`src/storage/transactions/runner.ts`、`src/storage/events.ts`、`src/memory/statements.ts`、文件与配额语句等）；Drizzle 生产路径禁止 `insert` / `update` / `delete` 与自带事务。
+- 不迁移：`guard_*`（`src/storage/guards.ts` 与迁移）、`message_search_fts*` 与 `0047` 触发器、memory 不可变触发器（`0045` / `0046`）、JOIN/UNION/EXISTS、`json_each` 权限谓词、`CASE` / CTE 与 `EXPLAIN` 敏感查询，以及 messages / deliveries / files / events / tasks 等未迁移域的 raw SQL。
+- 迁移：`migrations/*.sql` + `schema_migrations` 仍是唯一事实源；`drizzle-kit` 只允许 `generate` 供 parity 使用，禁止 `push` / `migrate`。`test:schema-parity` 校验入口只导出表、每张表都被 `storage/queries` 使用、生产路径只构建 SELECT，以及 guard/FTS/trigger 白名单。
+
 ## 入口
 
 | 职责 | 入口 |
@@ -185,6 +192,8 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 - `bun scripts/q01-upgrade-check.ts`：24 项本地检查（合成 0035 旧库升级到 0038、34 个迁移、integrity/foreign_key、旧数据映射）
 - `AGENTNET_URL=http://127.0.0.1:8792 bun scripts/q01-doc-check.ts`：34 项（tools/list 114、文档工具名、技能 digest、CLI 覆盖、无旧 shell 脚本、Harness 默认路径、用户名搜索与 actor_id 核对流程）
 - `bun run test:drive`：52 项（MCPP Files 上传、公开下载、`drive_file_info` 与 Drive 生命周期）
+- `bun run test:schema-parity`：312 项（43 个迁移 vs 24 张 Drizzle 只读表 parity、入口只导出表、每张表都被 `storage/queries` 使用、生产路径只构建 SELECT、`drizzle-kit` 仅 generate、guard/FTS/trigger 白名单）
+- `bun run test:drizzle`：107 项（raw 与 Drizzle 查询逐行一致、EXPLAIN 计划一致、只读基准）
 - `bun run test:ts-monitor`：TS 监听（claude/peri/dsh/other），覆盖事件字段、`wake.queue` 固定字段与过滤、`catchup`、EOF/truncate、`start`/`stop`/`status` 生命周期、`CREDENTIAL_INVALID` 立即退出与 token 不落盘；不访问生产
 - `bun run test:ts-codex-monitor`：TS codex 桥接，覆盖 app-server WebSocket、claim/turn/steer、deferred 与提醒分支；不访问生产
 - `DATA_DIR=.data bun scripts/verify-room-files.ts`：193 项（bind/list/get/delete、上传者与群 owner 权限、200 个 / 1 GiB 配额、30 天 TTL 上限、墓碑、公开 URL、HEAD/Range/416/304/`?download=1`、P0 安全头、`room.file` informational 事件，以及同源文件链接解析与消息提交后自动归档（含 final_body）的幂等/跨房间/他人/删除/过期/配额跳过）

@@ -9,54 +9,35 @@
  *   preview / memory_context 不推进原文覆盖。
  */
 import { BusinessError } from '../contracts/errors';
-import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { LIMITS } from '../contracts/limits';
 import {
   getLatestMemorySource,
   getMemoryRepresentation,
-  getMember,
-  getRoom,
   listMemoryRepresentationDependencies,
   type D1Like,
 } from '../storage/queries';
 import { newId, nowMs, sha256Hex } from '../storage/db';
 import {
-  countsAsRawCoverage,
-  isFullRawCoverage,
   isValidByteRange,
-  mergeByteRanges,
   type MemoryByteRange,
   type MemoryCrossRoomGrant,
   type MemoryExactRepresentation,
   type MemoryOriginKind,
   type MemoryOriginScope,
-  type MemoryOwnershipKind,
-  type MemoryProducerKind,
   type MemorySourceDependency,
   type MemorySourceSelection,
   type MemorySpaceRef,
   type MemoryTargetScope,
   type MemoryRepresentation,
-  type MemoryRepresentationKind,
 } from './contracts';
 import {
   authorizeRepresentationRead,
   authorizeSourceRead,
-  isTombstoned,
   requireCurrentMemorySpace,
-  roomArchived,
-  roomAccessVersion,
 } from './access';
 import { getSource, runMemoryBatch } from './store';
 import { registerRepresentation } from './store-objects';
-import { memoryRepresentationInsertStatements } from './representation-statements';
-import { historyBoundary, visibleMessage } from '../domain/room-history';
-import type {
-  MemoryExperienceRow,
-  MemoryRepresentationDependencyRow,
-  MemoryRepresentationRow,
-  MemorySourceRow,
-} from './rows';
+import type { MemoryRepresentationRow, MemorySourceRow } from './rows';
 
 export interface MemoryExperienceStoreOptions {
   instanceId: string;
