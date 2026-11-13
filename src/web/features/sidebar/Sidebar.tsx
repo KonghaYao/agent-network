@@ -1,3 +1,4 @@
+import { Link } from '../../app/router';
 import type { RoomPreferenceMap } from '../../lib/room-preferences';
 import type { WebIdentity } from '../../lib/identity';
 import {
@@ -194,9 +195,9 @@ export function Sidebar(props: SidebarProps) {
           </button>
         ) : null}
         {status === 'credential-invalid' ? (
-          <a id="credential-invalid-pair" className="list-retry" href="/pair">
+          <Link id="credential-invalid-pair" className="list-retry" to="/pair">
             用另一台设备配对
-          </a>
+          </Link>
         ) : null}
         {moreVisible ? (
           <button

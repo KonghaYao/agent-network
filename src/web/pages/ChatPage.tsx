@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { AppShell } from '../app/AppShell';
+import { Link } from '../app/router';
 import { Composer, type ComposerSendInput } from '../features/chat/Composer';
 import { ForwardDialog } from '../features/chat/ForwardDialog';
 import { Timeline } from '../features/chat/Timeline';
@@ -470,11 +471,11 @@ export function ChatPage({ roomId }: ChatPageProps) {
           <>
             <section className="chat-pane" aria-label="聊天区">
               <header className="chat-head">
-                <a className="back" id="back" href="/" aria-label="返回会话列表">
+                <Link className="back" id="back" to="/" aria-label="返回会话列表">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M15 6l-6 6 6 6" />
                   </svg>
-                </a>
+                </Link>
                 <div className="chat-id">
                   <div className="title-row">
                     <h2 id="title">{title}</h2>
@@ -592,9 +593,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     <button id="chat-error-retry" type="button" onClick={() => void chat.load()}>
                       重试
                     </button>
-                    <a id="chat-error-back" href="/">
+                    <Link id="chat-error-back" to="/">
                       返回会话列表
-                    </a>
+                    </Link>
                   </div>
                 </div>
                 {ready && room && identity ? (
