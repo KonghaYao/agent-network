@@ -257,6 +257,94 @@ test.describe('SPA 右栏与剩余入口', () => {
     await expect(page.locator('#monitor-pane')).toBeHidden();
   });
 
+  test('files pane reserves its width before the lazy chunk loads', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await login(page, base, tokenA);
+    let delayedChunks = 0;
+    await page.route('**/assets/FilesPane-*.js', async (route) => {
+      delayedChunks += 1;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await route.continue();
+    });
+    await page.addInitScript(() => {
+      const widths: number[] = [];
+      // 只统计聊天区/文件栏内部元素造成的位移；侧栏列表加载不计入。
+      const shifts: number[] = [];
+      (window as unknown as { __chatWidths: number[] }).__chatWidths = widths;
+      (window as unknown as { __layoutShifts: number[] }).__layoutShifts = shifts;
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries() as unknown as {
+          hadRecentInput: boolean;
+          value: number;
+          sources: { node: Node | null }[];
+        }[]) {
+          if (entry.hadRecentInput) continue;
+          if (
+            entry.sources.some((source) =>
+              (source.node as Element | null)?.closest?.('.chat-pane, .files-pane'),
+            )
+          ) {
+            shifts.push(entry.value);
+          }
+        }
+      }).observe({ type: 'layout-shift', buffered: true });
+      const tick = () => {
+        const chat = document.querySelector('.chat-pane');
+        if (chat) widths.push(Math.round(chat.getBoundingClientRect().width));
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#files-pane')).toBeVisible();
+    await expect(page.locator('#files-input')).toBeAttached();
+    await expect(page.locator('#composer')).toBeVisible();
+
+    const result = await page.evaluate(() => ({
+      widths: (window as unknown as { __chatWidths: number[] }).__chatWidths,
+      shifts: (window as unknown as { __layoutShifts: number[] }).__layoutShifts,
+      paneCount: document.querySelectorAll('#files-pane').length,
+      chatWidth: Math.round(document.querySelector('.chat-pane')!.getBoundingClientRect().width),
+      filesWidth: Math.round(document.querySelector('#files-pane')!.getBoundingClientRect().width),
+    }));
+
+    // 1280 - 300 侧栏 - 360 文件栏 = 620；文件栏打开期间聊天区不得回到 980。
+    expect(delayedChunks).toBe(1);
+    expect(result.chatWidth).toBe(620);
+    expect(result.filesWidth).toBe(360);
+    expect(result.paneCount).toBe(1);
+    expect(result.widths.length).toBeGreaterThan(5);
+    expect(Math.max(...result.widths) - Math.min(...result.widths)).toBeLessThanOrEqual(1);
+    expect(result.shifts.reduce((sum, value) => sum + value, 0)).toBeLessThan(0.001);
+  });
+
+  test('closed files pane keeps chat full width and toggles cleanly', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.addInitScript(() => {
+      localStorage.setItem('agent-network-files-open', '0');
+    });
+    await login(page, base, tokenA);
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#composer')).toBeVisible();
+    await expect(page.locator('.files-pane')).toHaveCount(0);
+    expect(
+      await page.locator('.chat-pane').evaluate((node) => Math.round(node.getBoundingClientRect().width)),
+    ).toBe(980);
+
+    await page.locator('#files-toggle').click();
+    await expect(page.locator('#files-pane')).toBeVisible();
+    expect(
+      await page.locator('.chat-pane').evaluate((node) => Math.round(node.getBoundingClientRect().width)),
+    ).toBe(620);
+
+    await page.locator('#files-close').click();
+    await expect(page.locator('.files-pane')).toHaveCount(0);
+    expect(
+      await page.locator('.chat-pane').evaluate((node) => Math.round(node.getBoundingClientRect().width)),
+    ).toBe(980);
+  });
+
   test('mobile right panes are single column full-screen pages', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await login(page, base, tokenA);
