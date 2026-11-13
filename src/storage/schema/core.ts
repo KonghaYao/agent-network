@@ -6,6 +6,7 @@ import {
   primaryKey,
   sqliteTable,
   text,
+  unique,
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 

@@ -573,18 +573,18 @@ function seed(sqlite: Database): void {
   subscription.run('sub_c', 'act_agent_1', 'message.created', '{}', 'https://c.test/hook', 'https://c.test/hook', 'cred_a1', 'ct_c', 'nonce_c', null, null, null, 5_000, 0, 0, null, null, 0, 0, 100, 100, 200);
   subscription.run('sub_d', 'act_agent_1', 'message.created', '{"room_id":"room_group_1","attention":"informational"}', 'https://d.test/hook', 'https://d.test/hook', 'cred_a1', 'ct_d', 'nonce_d', null, null, null, 1_000, 0, 0, null, null, 0, 1, 100, 100, 200);
 
-  const delivery = sqlite.prepare(
+  const eventDelivery = sqlite.prepare(
     `INSERT INTO mcp_event_deliveries
        (delivery_id, subscription_id, event_seq, event_id, payload_json, status,
         attempts, next_attempt_at, lease_token, lease_until, last_http_status,
         last_error, created_at, delivered_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  delivery.run('evd_a1', 'sub_a', 1, 'evt_a1', '{"n":1}', 'pending', 0, 1_100, null, null, null, null, 100, null);
-  delivery.run('evd_a2', 'sub_a', 2, 'evt_a2', '{"n":2}', 'processing', 1, 1_100, 'lease_a', 9_000, null, null, 100, null);
-  delivery.run('evd_a3', 'sub_a', 3, 'evt_a3', '{"n":3}', 'delivered', 1, 1_100, null, null, 200, null, 100, 1_200);
-  delivery.run('evd_b1', 'sub_b', 1, 'evt_b1', '{"n":1}', 'pending', 0, 1_100, null, null, null, null, 100, null);
-  delivery.run('evd_c1', 'sub_c', 1, 'evt_c1', '{"n":1}', 'pending', 0, 1_100, null, null, null, null, 100, null);
+  eventDelivery.run('evd_a1', 'sub_a', 1, 'evt_a1', '{"n":1}', 'pending', 0, 1_100, null, null, null, null, 100, null);
+  eventDelivery.run('evd_a2', 'sub_a', 2, 'evt_a2', '{"n":2}', 'processing', 1, 1_100, 'lease_a', 9_000, null, null, 100, null);
+  eventDelivery.run('evd_a3', 'sub_a', 3, 'evt_a3', '{"n":3}', 'delivered', 1, 1_100, null, null, 200, null, 100, 1_200);
+  eventDelivery.run('evd_b1', 'sub_b', 1, 'evt_b1', '{"n":1}', 'pending', 0, 1_100, null, null, null, null, 100, null);
+  eventDelivery.run('evd_c1', 'sub_c', 1, 'evt_c1', '{"n":1}', 'pending', 0, 1_100, null, null, null, null, 100, null);
   seedMemory(sqlite);
 }
 
@@ -1858,6 +1858,782 @@ async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> 
     );
   }
   checkEqual('earliestPendingEventDeliverySeq value', await earliestPendingEventDeliverySeq(db, 'sub_a'), 1);
+  checkEqual(
+    'getContact existing',
+    JSON.stringify(await getContact(db, 'act_human_1', 'act_agent_1')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM contacts WHERE owner_actor_id = ? AND target_actor_id = ?', [
+        'act_human_1',
+        'act_agent_1',
+      ]),
+    ),
+  );
+  checkEqual('getContact missing', await getContact(db, 'act_human_1', 'act_agent_2'), null);
+
+  checkEqual(
+    'getActiveContactRelation',
+    JSON.stringify(await getActiveContactRelation(db, 'act_agent_1|act_human_1')),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        "SELECT * FROM contact_relations WHERE pair_key = ? AND status = 'active'",
+        ['act_agent_1|act_human_1'],
+      ),
+    ),
+  );
+  checkEqual(
+    'getActiveContactRelation ended',
+    await getActiveContactRelation(db, 'act_human_1|act_human_2'),
+    null,
+  );
+  checkEqual(
+    'getContactRelation ended',
+    JSON.stringify(await getContactRelation(db, 'act_human_1|act_human_2')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM contact_relations WHERE pair_key = ?', [
+        'act_human_1|act_human_2',
+      ]),
+    ),
+  );
+  checkEqual('getContactRelation missing', await getContactRelation(db, 'missing|pair'), null);
+
+  checkEqual(
+    'getPendingContactRequest',
+    JSON.stringify(await getPendingContactRequest(db, 'act_agent_1|act_human_1')),
+    JSON.stringify(
+      rawFirst(sqlite, "SELECT * FROM contact_requests WHERE pair_key = ? AND status = 'pending'", [
+        'act_agent_1|act_human_1',
+      ]),
+    ),
+  );
+  checkEqual(
+    'getPendingContactRequest ended pair',
+    await getPendingContactRequest(db, 'act_human_1|act_human_2'),
+    null,
+  );
+  checkEqual(
+    'getContactRequestById',
+    JSON.stringify(await getContactRequestById(db, 'req_3')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM contact_requests WHERE contact_request_id = ?', ['req_3'])),
+  );
+  checkEqual('getContactRequestById missing', await getContactRequestById(db, 'req_missing'), null);
+
+  const expiredSql = `SELECT * FROM contact_requests
+        WHERE status = 'pending' AND expires_at <= ?
+        ORDER BY expires_at ASC, contact_request_id ASC
+        LIMIT ?`;
+  checkEqual(
+    'listExpiredPendingContactRequests',
+    JSON.stringify(await listExpiredPendingContactRequests(db, 1_000, 10)),
+    JSON.stringify(rawAll(sqlite, expiredSql, [1_000, 10])),
+  );
+  checkEqual(
+    'listExpiredPendingContactRequests limit',
+    JSON.stringify(await listExpiredPendingContactRequests(db, 1_000, 1)),
+    JSON.stringify(rawAll(sqlite, expiredSql, [1_000, 1])),
+  );
+
+  checkEqual(
+    'getExpiredPendingContactRequestForPair',
+    JSON.stringify(await getExpiredPendingContactRequestForPair(db, 'act_agent_1|act_human_1', 1_000)),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        `SELECT * FROM contact_requests
+          WHERE pair_key = ? AND status = 'pending' AND expires_at <= ?`,
+        ['act_agent_1|act_human_1', 1_000],
+      ),
+    ),
+  );
+
+  // 4C-3 rooms 域只读查询：逐行与迁移前手写 SQL 对比。
+  checkEqual('getActorRowsByIds empty', JSON.stringify(await getActorRowsByIds(db, [])), '[]');
+  checkEqual(
+    'getActorRowsByIds many',
+    JSON.stringify(await getActorRowsByIds(db, actorIds)),
+    JSON.stringify(
+      rawAll(sqlite, `SELECT * FROM actors WHERE actor_id IN (${placeholders(actorIds)})`, actorIds),
+    ),
+  );
+
+  checkEqual(
+    'countActiveRoomMembers group',
+    await countActiveRoomMembers(db, 'room_group_1'),
+    rawFirst<{ n: number }>(
+      sqlite,
+      "SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND status = 'active'",
+      ['room_group_1'],
+    )?.n ?? 0,
+  );
+  checkEqual('countActiveRoomMembers missing', await countActiveRoomMembers(db, 'room_missing'), 0);
+  checkEqual(
+    'countActiveRoomMembersWithJoinHistory group',
+    await countActiveRoomMembersWithJoinHistory(db, 'room_group_1'),
+    rawFirst<{ n: number }>(
+      sqlite,
+      "SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND status = 'active' AND joined_seq > 0",
+      ['room_group_1'],
+    )?.n ?? 0,
+  );
+  checkEqual(
+    'countActiveRoomMembersWithJoinHistory missing',
+    await countActiveRoomMembersWithJoinHistory(db, 'room_missing'),
+    0,
+  );
+
+  const managerSql = "SELECT actor_id FROM room_members WHERE room_id = ? AND status = 'active' AND role IN ('owner', 'admin')";
+  checkEqual(
+    'listActiveRoomManagerIds group',
+    JSON.stringify([...(await listActiveRoomManagerIds(db, 'room_group_1'))].sort()),
+    JSON.stringify(
+      (rawAll<{ actor_id: string }>(sqlite, managerSql, ['room_group_1']) as { actor_id: string }[])
+        .map((row) => row.actor_id)
+        .sort(),
+    ),
+  );
+  checkEqual('listActiveRoomManagerIds missing', JSON.stringify(await listActiveRoomManagerIds(db, 'room_missing')), '[]');
+
+  const invitedSql = `SELECT i.invitation_id, i.target_actor_id AS actor_id, a.kind, a.name,
+              i.inviter_id AS invited_by, i.created_at, i.expires_at
+         FROM room_invitations i
+         JOIN actors a ON a.actor_id = i.target_actor_id
+        WHERE i.room_id = ? AND i.kind = 'direct' AND i.status = 'pending'
+          AND i.expires_at > ? AND (a.kind <> 'agent' OR a.archived_at IS NULL)
+        ORDER BY i.created_at ASC, i.invitation_id ASC`;
+  checkEqual(
+    'listPendingDirectInvitationMembers group',
+    JSON.stringify(await listPendingDirectInvitationMembers(db, 'room_group_1', 1_000)),
+    JSON.stringify(rawAll(sqlite, invitedSql, ['room_group_1', 1_000])),
+  );
+  checkEqual(
+    'listPendingDirectInvitationMembers hides archived agent',
+    JSON.stringify(await listPendingDirectInvitationMembers(db, 'room_group_1', 1_000)),
+    JSON.stringify(
+      rawAll(sqlite, invitedSql, ['room_group_1', 1_000]).filter(
+        (row) => (row as { actor_id: string }).actor_id !== 'act_agent_2',
+      ),
+    ),
+  );
+  checkEqual(
+    'getExpiredPendingContactRequestForPair not due',
+    await getExpiredPendingContactRequestForPair(db, 'act_agent_3|act_human_1', 1_000),
+    null,
+  );
+
+  checkEqual(
+    'listPendingContactRequests',
+    JSON.stringify(await listPendingContactRequests(db, 'act_agent_1|act_human_1')),
+    JSON.stringify(
+      rawAll(sqlite, "SELECT * FROM contact_requests WHERE pair_key = ? AND status = 'pending'", [
+        'act_agent_1|act_human_1',
+      ]),
+    ),
+  );
+
+  checkEqual(
+    'getActiveContactBlock',
+    JSON.stringify(await getActiveContactBlock(db, 'act_human_1', 'act_agent_3')),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        `SELECT * FROM contact_blocks
+          WHERE blocker_actor_id = ? AND blocked_actor_id = ? AND released_at IS NULL`,
+        ['act_human_1', 'act_agent_3'],
+      ),
+    ),
+  );
+
+  // -------- 4C-4 messages --------
+  checkEqual(
+    'getMessage',
+    JSON.stringify(await getMessage(db, 'msg_d1_2')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM messages WHERE message_id = ?', ['msg_d1_2'])),
+  );
+  checkEqual(
+    'getMessage task root',
+    JSON.stringify(await getMessage(db, 'msg_g1_9')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM messages WHERE message_id = ?', ['msg_g1_9'])),
+  );
+  checkEqual('getMessage missing', await getMessage(db, 'msg_missing'), null);
+
+  checkEqual(
+    'listHistoryMessagesBefore first page',
+    JSON.stringify(
+      await listHistoryMessagesBefore(db, {
+        roomId: 'room_direct_1',
+        snapshot: 5,
+        fromSeq: 0,
+        beforeSeq: null,
+        limit: 3,
+      }),
+    ),
+    rawHistoryBefore(sqlite, 'room_direct_1', 5, 0, null, 3),
+  );
+  checkEqual(
+    'listHistoryMessagesBefore cursor',
+    JSON.stringify(
+      await listHistoryMessagesBefore(db, {
+        roomId: 'room_direct_1',
+        snapshot: 5,
+        fromSeq: 0,
+        beforeSeq: 5,
+        limit: 3,
+      }),
+    ),
+    rawHistoryBefore(sqlite, 'room_direct_1', 5, 0, 5, 3),
+  );
+  checkEqual(
+    'listHistoryMessagesBefore from_join boundary',
+    JSON.stringify(
+      await listHistoryMessagesBefore(db, {
+        roomId: 'room_group_1',
+        snapshot: 9,
+        fromSeq: 4,
+        beforeSeq: null,
+        limit: 20,
+      }),
+    ),
+    rawHistoryBefore(sqlite, 'room_group_1', 9, 4, null, 20),
+  );
+  checkEqual(
+    'listHistoryMessagesBefore empty room',
+    JSON.stringify(
+      await listHistoryMessagesBefore(db, {
+        roomId: 'room_missing',
+        snapshot: 9,
+        fromSeq: 0,
+        beforeSeq: null,
+        limit: 20,
+      }),
+    ),
+    rawHistoryBefore(sqlite, 'room_missing', 9, 0, null, 20),
+  );
+  checkEqual(
+    'listHistoryMessagesAfter',
+    JSON.stringify(
+      await listHistoryMessagesAfter(db, {
+        roomId: 'room_direct_1',
+        snapshot: 5,
+        fromSeq: 0,
+        afterSeq: 2,
+        limit: 5,
+      }),
+    ),
+    rawHistoryAfter(sqlite, 'room_direct_1', 5, 0, 2, 5),
+  );
+  checkEqual(
+    'listHistoryMessagesAfter fromSeq floor',
+    JSON.stringify(
+      await listHistoryMessagesAfter(db, {
+        roomId: 'room_group_1',
+        snapshot: 9,
+        fromSeq: 4,
+        afterSeq: 4,
+        limit: 20,
+      }),
+    ),
+    rawHistoryAfter(sqlite, 'room_group_1', 9, 4, 4, 20),
+  );
+  checkEqual(
+    'listHistoryMessagesAfter snapshot upper bound',
+    JSON.stringify(
+      await listHistoryMessagesAfter(db, {
+        roomId: 'room_group_1',
+        snapshot: 8,
+        fromSeq: 0,
+        afterSeq: 3,
+        limit: 20,
+      }),
+    ),
+    rawHistoryAfter(sqlite, 'room_group_1', 8, 0, 3, 20),
+  );
+
+  const messageIds = ['msg_g1_9', 'msg_d1_1', 'msg_missing'];
+  checkEqual(
+    'listHistoryMessagesByIds',
+    JSON.stringify(await listHistoryMessagesByIds(db, messageIds)),
+    JSON.stringify(
+      rawAll(
+        sqlite,
+        `SELECT ${HISTORY_SELECT} FROM messages WHERE message_id IN (${placeholders(messageIds)})`,
+        messageIds,
+      ),
+    ),
+  );
+  checkEqual('listHistoryMessagesByIds empty', JSON.stringify(await listHistoryMessagesByIds(db, [])), '[]');
+
+  // -------- 4C-4 message context --------
+  checkEqual(
+    'getMessageContextAnchor',
+    JSON.stringify(await getMessageContextAnchor(db, 'room_group_1', 'msg_g1_8')),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        `SELECT ${CONTEXT_SELECT} FROM messages m JOIN actors a ON a.actor_id = m.sender_id
+          WHERE m.room_id = ? AND m.message_id = ?`,
+        ['room_group_1', 'msg_g1_8'],
+      ),
+    ),
+  );
+  checkEqual(
+    'getActiveContactBlock released',
+    await getActiveContactBlock(db, 'act_human_2', 'act_human_1'),
+    null,
+  );
+
+  const betweenSql = `SELECT * FROM contact_blocks
+        WHERE released_at IS NULL
+          AND ((blocker_actor_id = ? AND blocked_actor_id = ?)
+            OR (blocker_actor_id = ? AND blocked_actor_id = ?))
+        LIMIT 1`;
+  checkEqual(
+    'findActiveContactBlockBetween',
+    JSON.stringify(await findActiveContactBlockBetween(db, 'act_human_1', 'act_agent_3')),
+    JSON.stringify(rawFirst(sqlite, betweenSql, ['act_human_1', 'act_agent_3', 'act_agent_3', 'act_human_1'])),
+  );
+  checkEqual(
+    'findActiveContactBlockBetween reverse',
+    JSON.stringify(await findActiveContactBlockBetween(db, 'act_agent_3', 'act_human_1')),
+    JSON.stringify(rawFirst(sqlite, betweenSql, ['act_agent_3', 'act_human_1', 'act_human_1', 'act_agent_3'])),
+  );
+  checkEqual(
+    'findActiveContactBlockBetween none',
+    await findActiveContactBlockBetween(db, 'act_human_1', 'act_human_2'),
+    null,
+  );
+
+  checkEqual(
+    'listPendingDirectInvitationMembers later cutoff',
+    JSON.stringify(await listPendingDirectInvitationMembers(db, 'room_group_1', 5_000)),
+    JSON.stringify(rawAll(sqlite, invitedSql, ['room_group_1', 5_000])),
+  );
+
+  checkEqual(
+    'getRoomInvitationById direct',
+    JSON.stringify(await getRoomInvitationById(db, 'inv_direct_h2')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_invitations WHERE invitation_id = ?', ['inv_direct_h2'])),
+  );
+  checkEqual(
+    'getRoomInvitationById link',
+    JSON.stringify(await getRoomInvitationById(db, 'inv_link_1')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_invitations WHERE invitation_id = ?', ['inv_link_1'])),
+  );
+  checkEqual('getRoomInvitationById missing', await getRoomInvitationById(db, 'missing'), null);
+
+  checkEqual(
+    'getRoomJoinRequestById',
+    JSON.stringify(await getRoomJoinRequestById(db, 'jrq_2')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_join_requests WHERE join_request_id = ?', ['jrq_2'])),
+  );
+  checkEqual('getRoomJoinRequestById missing', await getRoomJoinRequestById(db, 'missing'), null);
+
+  const latestSql = `SELECT * FROM room_join_requests
+        WHERE invitation_id = ? AND applicant_id = ?
+        ORDER BY created_at DESC, join_request_id DESC LIMIT 1`;
+  checkEqual(
+    'getLatestJoinRequestForApplicant',
+    JSON.stringify(await getLatestJoinRequestForApplicant(db, 'inv_link_1', 'act_agent_1')),
+    JSON.stringify(rawFirst(sqlite, latestSql, ['inv_link_1', 'act_agent_1'])),
+  );
+  checkEqual(
+    'getLatestJoinRequestForApplicant missing',
+    await getLatestJoinRequestForApplicant(db, 'inv_link_1', 'act_human_1'),
+    null,
+  );
+
+  checkEqual(
+    'listMutedMentionBlockers',
+    JSON.stringify(
+      (await listMutedMentionBlockers(db, 'act_agent_3', ['act_human_1', 'act_human_2'])).sort(),
+    ),
+    JSON.stringify(
+      rawAll<{ blocker_actor_id: string }>(
+        sqlite,
+        `SELECT blocker_actor_id FROM contact_blocks
+          WHERE released_at IS NULL
+            AND mute_mentions = 1
+            AND blocked_actor_id = ?
+            AND blocker_actor_id IN (?, ?)`,
+        ['act_agent_3', 'act_human_1', 'act_human_2'],
+      )
+        .map((row) => row.blocker_actor_id)
+        .sort(),
+    ),
+  );
+  checkEqual('listMutedMentionBlockers empty', JSON.stringify(await listMutedMentionBlockers(db, 'x', [])), '[]');
+
+  const blockListSql = `SELECT b.*,
+              a.kind AS blocked_kind, a.name AS blocked_name,
+              a.agent_session_id AS blocked_session
+         FROM contact_blocks b
+         JOIN actors a ON a.actor_id = b.blocked_actor_id
+        WHERE b.blocker_actor_id = ?
+        ORDER BY b.created_at DESC, b.block_id ASC
+        LIMIT ?`;
+  checkEqual(
+    'listContactBlocks',
+    JSON.stringify(await listContactBlocks(db, 'act_human_1', 2, null)),
+    JSON.stringify(rawAll(sqlite, blockListSql, ['act_human_1', 2])),
+  );
+  const blockCursorSql = `SELECT b.*,
+              a.kind AS blocked_kind, a.name AS blocked_name,
+              a.agent_session_id AS blocked_session
+         FROM contact_blocks b
+         JOIN actors a ON a.actor_id = b.blocked_actor_id
+        WHERE b.blocker_actor_id = ?
+          AND (b.created_at < ? OR (b.created_at = ? AND b.block_id > ?))
+        ORDER BY b.created_at DESC, b.block_id ASC
+        LIMIT ?`;
+  checkEqual(
+    'listContactBlocks cursor',
+    JSON.stringify(await listContactBlocks(db, 'act_human_1', 2, { createdAt: 700, blockId: 'blk_1' })),
+    JSON.stringify(rawAll(sqlite, blockCursorSql, ['act_human_1', 700, 700, 'blk_1', 2])),
+  );
+
+  checkEqual(
+    'getActiveAgentManagement',
+    JSON.stringify(await getActiveAgentManagement(db, 'act_agent_1')),
+    JSON.stringify(
+      rawFirst(sqlite, "SELECT * FROM agent_managements WHERE agent_id = ? AND status = 'active'", [
+        'act_agent_1',
+      ]),
+    ),
+  );
+  checkEqual(
+    'getActiveAgentManagement revoked',
+    await getActiveAgentManagement(db, 'act_agent_3'),
+    null,
+  );
+
+  const managementIds = ['act_agent_1', 'act_agent_2', 'act_agent_3'];
+  checkEqual(
+    'listActiveManagementBindings',
+    JSON.stringify(await listActiveManagementBindings(db, managementIds)),
+    JSON.stringify(
+      rawAll(
+        sqlite,
+        `SELECT agent_id, manager_id FROM agent_managements
+          WHERE status = 'active' AND agent_id IN (${placeholders(managementIds)})`,
+        managementIds,
+      ),
+    ),
+  );
+  checkEqual(
+    'listActiveManagementBindings empty',
+    JSON.stringify(await listActiveManagementBindings(db, [])),
+    '[]',
+  );
+
+  checkEqual(
+    'countActiveCredentials',
+    await countActiveCredentials(db, 'act_human_1'),
+    rawFirst<{ n: number }>(
+      sqlite,
+      'SELECT COUNT(*) AS n FROM credentials WHERE actor_id = ? AND revoked_at IS NULL',
+      ['act_human_1'],
+    )?.n ?? 0,
+  );
+  checkEqual(
+    'countActiveCredentials none',
+    await countActiveCredentials(db, 'act_agent_1'),
+    0,
+  );
+
+  checkEqual(
+    'getOwnerTransferById',
+    JSON.stringify(await getOwnerTransferById(db, 'tr_1')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_owner_transfers WHERE transfer_id = ?', ['tr_1'])),
+  );
+  checkEqual('getOwnerTransferById missing', await getOwnerTransferById(db, 'missing'), null);
+
+  const joinRequestListSql = `SELECT jr.*, i.kind AS invitation_kind, i.status AS invitation_status,
+              i.expires_at AS invitation_expires_at,
+              i.max_uses AS invitation_max_uses,
+              i.used_count AS invitation_used_count,
+              a.kind AS applicant_kind, a.name AS applicant_name,
+              a.agent_session_id AS applicant_session_id
+         FROM room_join_requests jr
+         JOIN room_invitations i ON i.invitation_id = jr.invitation_id
+         JOIN actors a ON a.actor_id = jr.applicant_id
+        WHERE jr.room_id = ? AND jr.status = ?
+        ORDER BY jr.created_at DESC, jr.join_request_id DESC
+        LIMIT ?`;
+  checkEqual(
+    'listJoinRequestRows pending',
+    JSON.stringify(await listJoinRequestRows(db, 'room_group_1', 'pending', null, 10)),
+    JSON.stringify(rawAll(sqlite, joinRequestListSql, ['room_group_1', 'pending', 10])),
+  );
+  checkEqual(
+    'listJoinRequestRows page limit',
+    JSON.stringify(await listJoinRequestRows(db, 'room_group_1', 'pending', null, 2)),
+    JSON.stringify(rawAll(sqlite, joinRequestListSql, ['room_group_1', 'pending', 2])),
+  );
+  const joinRequestCursorSql = `SELECT jr.*, i.kind AS invitation_kind, i.status AS invitation_status,
+              i.expires_at AS invitation_expires_at,
+              i.max_uses AS invitation_max_uses,
+              i.used_count AS invitation_used_count,
+              a.kind AS applicant_kind, a.name AS applicant_name,
+              a.agent_session_id AS applicant_session_id
+         FROM room_join_requests jr
+         JOIN room_invitations i ON i.invitation_id = jr.invitation_id
+         JOIN actors a ON a.actor_id = jr.applicant_id
+        WHERE jr.room_id = ? AND jr.status = ?
+          AND (jr.created_at < ? OR (jr.created_at = ? AND jr.join_request_id < ?))
+        ORDER BY jr.created_at DESC, jr.join_request_id DESC
+        LIMIT ?`;
+  checkEqual(
+    'listJoinRequestRows cursor tie-break',
+    JSON.stringify(
+      await listJoinRequestRows(db, 'room_group_1', 'pending', { seq: 300, key: 'jrq_3' }, 10),
+    ),
+    JSON.stringify(rawAll(sqlite, joinRequestCursorSql, ['room_group_1', 'pending', 300, 300, 'jrq_3', 10])),
+  );
+  checkEqual(
+    'listJoinRequestRows approved',
+    JSON.stringify(await listJoinRequestRows(db, 'room_group_1', 'approved', null, 10)),
+    JSON.stringify(rawAll(sqlite, joinRequestListSql, ['room_group_1', 'approved', 10])),
+  );
+
+  const auditListSql = `SELECT a.*, target.name AS target_name, changer.name AS changed_by_name
+         FROM room_management_audit a
+         LEFT JOIN actors target ON target.actor_id = a.target_actor_id
+         LEFT JOIN actors changer ON changer.actor_id = a.changed_by
+        WHERE a.room_id = ?
+        ORDER BY a.created_at DESC, a.audit_id DESC
+        LIMIT ?`;
+  checkEqual(
+    'listRoomAuditRows page',
+    JSON.stringify(await listRoomAuditRows(db, 'room_group_1', null, 10)),
+    JSON.stringify(rawAll(sqlite, auditListSql, ['room_group_1', 10])),
+  );
+  checkEqual(
+    'listRoomAuditRows limit',
+    JSON.stringify(await listRoomAuditRows(db, 'room_group_1', null, 2)),
+    JSON.stringify(rawAll(sqlite, auditListSql, ['room_group_1', 2])),
+  );
+  const auditCursorSql = `SELECT a.*, target.name AS target_name, changer.name AS changed_by_name
+         FROM room_management_audit a
+         LEFT JOIN actors target ON target.actor_id = a.target_actor_id
+         LEFT JOIN actors changer ON changer.actor_id = a.changed_by
+        WHERE a.room_id = ?
+          AND (a.created_at < ? OR (a.created_at = ? AND a.audit_id < ?))
+        ORDER BY a.created_at DESC, a.audit_id DESC
+        LIMIT ?`;
+  checkEqual(
+    'listRoomAuditRows cursor tie-break',
+    JSON.stringify(await listRoomAuditRows(db, 'room_group_1', { seq: 500, key: 'aud_2' }, 10)),
+    JSON.stringify(rawAll(sqlite, auditCursorSql, ['room_group_1', 500, 500, 'aud_2', 10])),
+  );
+  checkEqual(
+    'listRoomAuditRows empty',
+    JSON.stringify(await listRoomAuditRows(db, 'room_missing', null, 10)),
+    '[]',
+  );
+
+  checkEqual(
+    'getMessageContextAnchor missing',
+    await getMessageContextAnchor(db, 'room_group_1', 'msg_missing'),
+    null,
+  );
+  checkEqual(
+    'listMessageContextWindow before full',
+    JSON.stringify(
+      await listMessageContextWindow(db, {
+        roomId: 'room_group_1',
+        pivotSeq: 8,
+        direction: 'before',
+        fromSeq: null,
+        toSeq: null,
+        limit: 2,
+      }),
+    ),
+    rawContextBefore(sqlite, 'room_group_1', 8, null, 2),
+  );
+  checkEqual(
+    'listMessageContextWindow before from_join',
+    JSON.stringify(
+      await listMessageContextWindow(db, {
+        roomId: 'room_group_1',
+        pivotSeq: 8,
+        direction: 'before',
+        fromSeq: 4,
+        toSeq: 8,
+        limit: 20,
+      }),
+    ),
+    rawContextBefore(sqlite, 'room_group_1', 8, 4, 20),
+  );
+  checkEqual(
+    'listMessageContextWindow after full',
+    JSON.stringify(
+      await listMessageContextWindow(db, {
+        roomId: 'room_group_1',
+        pivotSeq: 8,
+        direction: 'after',
+        fromSeq: null,
+        toSeq: null,
+        limit: 20,
+      }),
+    ),
+    rawContextAfter(sqlite, 'room_group_1', 8, null, null, 20),
+  );
+  checkEqual(
+    'listMessageContextWindow after archived',
+    JSON.stringify(
+      await listMessageContextWindow(db, {
+        roomId: 'room_group_1',
+        pivotSeq: 3,
+        direction: 'after',
+        fromSeq: 3,
+        toSeq: 8,
+        limit: 20,
+      }),
+    ),
+    rawContextAfter(sqlite, 'room_group_1', 3, 3, 8, 20),
+  );
+
+  // -------- 4C-4 messages / deliveries joins --------
+  const senderSql = `SELECT m.message_id, m.sender_id, m.created_seq, m.preview, m.body_bytes,
+              m.created_at, a.name AS sender_name, a.kind AS sender_kind
+         FROM messages m LEFT JOIN actors a ON a.actor_id = m.sender_id
+        WHERE m.message_id = ?`;
+  checkEqual(
+    'getMessageSenderSummary',
+    JSON.stringify(await getMessageSenderSummary(db, 'msg_g1_8')),
+    JSON.stringify(rawFirst(sqlite, senderSql, ['msg_g1_8'])),
+  );
+  checkEqual(
+    'getMessageSenderSummary ghost sender',
+    JSON.stringify(await getMessageSenderSummary(db, 'msg_ghost')),
+    JSON.stringify(rawFirst(sqlite, senderSql, ['msg_ghost'])),
+  );
+  checkEqual('getMessageSenderSummary missing', await getMessageSenderSummary(db, 'msg_missing'), null);
+
+  const stateIds = ['msg_d1_2', 'msg_g1_8', 'msg_g1_9', 'msg_missing'];
+  checkEqual(
+    'listDeliveryStates',
+    deliveryStateRows(await listDeliveryStates(db, stateIds)),
+    deliveryStateRows(
+      rawAll(
+        sqlite,
+        `SELECT message_id, state, COUNT(*) AS n,
+                MAX(CASE WHEN state = 'claimed' THEN claimed_at END) AS max_claimed_at,
+                MAX(CASE WHEN state = 'claimed' THEN updated_at END) AS max_updated_at
+           FROM deliveries WHERE message_id IN (${placeholders(stateIds)})
+          GROUP BY message_id, state`,
+        stateIds,
+      ),
+    ),
+  );
+  checkEqual('listDeliveryStates empty', JSON.stringify(await listDeliveryStates(db, [])), '[]');
+
+  const mentionIds = ['msg_g1_8', 'msg_g1_9', 'msg_missing'];
+  checkEqual(
+    'listMessageMentions',
+    JSON.stringify(await listMessageMentions(db, mentionIds)),
+    JSON.stringify(
+      rawAll(
+        sqlite,
+        `SELECT message_id, actor_id, actor_kind, source FROM message_mentions
+          WHERE message_id IN (${placeholders(mentionIds)})
+          ORDER BY message_id, actor_id`,
+        mentionIds,
+      ),
+    ),
+  );
+  checkEqual('listMessageMentions empty', JSON.stringify(await listMessageMentions(db, [])), '[]');
+
+  // -------- 4C-4 deliveries --------
+  checkEqual(
+    'getDelivery',
+    JSON.stringify(await getDelivery(db, 'del_claimed_1')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM deliveries WHERE delivery_id = ?', ['del_claimed_1'])),
+  );
+  checkEqual('getDelivery missing', await getDelivery(db, 'del_missing'), null);
+  checkEqual(
+    'getDeliveryForMessage',
+    JSON.stringify(await getDeliveryForMessage(db, 'act_agent_1', 'msg_g1_8')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM deliveries WHERE recipient_id = ? AND message_id = ?', [
+        'act_agent_1',
+        'msg_g1_8',
+      ]),
+    ),
+  );
+  checkEqual('getDeliveryForMessage missing', await getDeliveryForMessage(db, 'act_agent_3', 'msg_d1_1'), null);
+  checkEqual(
+    'getClaimedDelivery',
+    JSON.stringify(await getClaimedDelivery(db, 'act_agent_1')),
+    JSON.stringify(
+      rawFirst(sqlite, "SELECT * FROM deliveries WHERE recipient_id = ? AND state = 'claimed' LIMIT 1", [
+        'act_agent_1',
+      ]),
+    ),
+  );
+  checkEqual('getClaimedDelivery none', await getClaimedDelivery(db, 'act_agent_2'), null);
+  checkEqual('getClaimedDeliveryId', await getClaimedDeliveryId(db, 'act_agent_1'), 'del_claimed_1');
+  checkEqual('getClaimedDeliveryId none', await getClaimedDeliveryId(db, 'act_human_1'), null);
+
+  checkEqual(
+    'listInboxDeliveries active',
+    JSON.stringify(
+      await listInboxDeliveries(db, {
+        recipientId: 'act_agent_1',
+        states: ['pending', 'claimed'],
+        afterSeq: null,
+        limit: 3,
+      }),
+    ),
+    rawInbox(sqlite, 'act_agent_1', ['pending', 'claimed'], null, 3),
+  );
+  checkEqual(
+    'listInboxDeliveries cursor',
+    JSON.stringify(
+      await listInboxDeliveries(db, {
+        recipientId: 'act_agent_1',
+        states: ['pending', 'claimed'],
+        afterSeq: 1,
+        limit: 3,
+      }),
+    ),
+    rawInbox(sqlite, 'act_agent_1', ['pending', 'claimed'], 1, 3),
+  );
+  checkEqual(
+    'listInboxDeliveries all states',
+    JSON.stringify(
+      await listInboxDeliveries(db, {
+        recipientId: 'act_agent_1',
+        states: null,
+        afterSeq: null,
+        limit: 10,
+      }),
+    ),
+    rawInbox(sqlite, 'act_agent_1', null, null, 10),
+  );
+  checkEqual(
+    'listInboxDeliveries single state',
+    JSON.stringify(
+      await listInboxDeliveries(db, {
+        recipientId: 'act_agent_2',
+        states: ['pending'],
+        afterSeq: null,
+        limit: 10,
+      }),
+    ),
+    rawInbox(sqlite, 'act_agent_2', ['pending'], null, 10),
+  );
+  checkEqual(
+    'listInboxDeliveries empty',
+    JSON.stringify(
+      await listInboxDeliveries(db, {
+        recipientId: 'act_human_1',
+        states: ['pending'],
+        afterSeq: null,
+        limit: 10,
+      }),
+    ),
+    rawInbox(sqlite, 'act_human_1', ['pending'], null, 10),
+  );
 }
 
 function explainChecks(sqlite: Database, db: D1Database): void {
@@ -2118,6 +2894,9 @@ function explainChecks(sqlite: Database, db: D1Database): void {
             eq(schema.mcpEventDeliveries.subscription_id, 'sub_a'),
             inArray(schema.mcpEventDeliveries.status, ['pending', 'processing']),
           ),
+        ),
+    },
+    {
       label: 'getMemoryInstance',
       raw: 'SELECT instance_id, capture_default FROM memory_instances LIMIT 1',
       params: [],
@@ -2400,764 +3179,14 @@ function explainChecks(sqlite: Database, db: D1Database): void {
     },
   ];
 
-  checkEqual(
-    'getContact existing',
-    JSON.stringify(await getContact(db, 'act_human_1', 'act_agent_1')),
-    JSON.stringify(
-      rawFirst(sqlite, 'SELECT * FROM contacts WHERE owner_actor_id = ? AND target_actor_id = ?', [
-        'act_human_1',
-        'act_agent_1',
-      ]),
-    ),
-  );
-  checkEqual('getContact missing', await getContact(db, 'act_human_1', 'act_agent_2'), null);
-
-  checkEqual(
-    'getActiveContactRelation',
-    JSON.stringify(await getActiveContactRelation(db, 'act_agent_1|act_human_1')),
-    JSON.stringify(
-      rawFirst(
-        sqlite,
-        "SELECT * FROM contact_relations WHERE pair_key = ? AND status = 'active'",
-        ['act_agent_1|act_human_1'],
-      ),
-    ),
-  );
-  checkEqual(
-    'getActiveContactRelation ended',
-    await getActiveContactRelation(db, 'act_human_1|act_human_2'),
-    null,
-  );
-  checkEqual(
-    'getContactRelation ended',
-    JSON.stringify(await getContactRelation(db, 'act_human_1|act_human_2')),
-    JSON.stringify(
-      rawFirst(sqlite, 'SELECT * FROM contact_relations WHERE pair_key = ?', [
-        'act_human_1|act_human_2',
-      ]),
-    ),
-  );
-  checkEqual('getContactRelation missing', await getContactRelation(db, 'missing|pair'), null);
-
-  checkEqual(
-    'getPendingContactRequest',
-    JSON.stringify(await getPendingContactRequest(db, 'act_agent_1|act_human_1')),
-    JSON.stringify(
-      rawFirst(sqlite, "SELECT * FROM contact_requests WHERE pair_key = ? AND status = 'pending'", [
-        'act_agent_1|act_human_1',
-      ]),
-    ),
-  );
-  checkEqual(
-    'getPendingContactRequest ended pair',
-    await getPendingContactRequest(db, 'act_human_1|act_human_2'),
-    null,
-  );
-  checkEqual(
-    'getContactRequestById',
-    JSON.stringify(await getContactRequestById(db, 'req_3')),
-    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM contact_requests WHERE contact_request_id = ?', ['req_3'])),
-  );
-  checkEqual('getContactRequestById missing', await getContactRequestById(db, 'req_missing'), null);
-
-  const expiredSql = `SELECT * FROM contact_requests
-        WHERE status = 'pending' AND expires_at <= ?
-        ORDER BY expires_at ASC, contact_request_id ASC
-        LIMIT ?`;
-  checkEqual(
-    'listExpiredPendingContactRequests',
-    JSON.stringify(await listExpiredPendingContactRequests(db, 1_000, 10)),
-    JSON.stringify(rawAll(sqlite, expiredSql, [1_000, 10])),
-  );
-  checkEqual(
-    'listExpiredPendingContactRequests limit',
-    JSON.stringify(await listExpiredPendingContactRequests(db, 1_000, 1)),
-    JSON.stringify(rawAll(sqlite, expiredSql, [1_000, 1])),
-  );
-
-  checkEqual(
-    'getExpiredPendingContactRequestForPair',
-    JSON.stringify(await getExpiredPendingContactRequestForPair(db, 'act_agent_1|act_human_1', 1_000)),
-    JSON.stringify(
-      rawFirst(
-        sqlite,
-        `SELECT * FROM contact_requests
-          WHERE pair_key = ? AND status = 'pending' AND expires_at <= ?`,
-        ['act_agent_1|act_human_1', 1_000],
-  // 4C-3 rooms 域只读查询：逐行与迁移前手写 SQL 对比。
-  checkEqual('getActorRowsByIds empty', JSON.stringify(await getActorRowsByIds(db, [])), '[]');
-  checkEqual(
-    'getActorRowsByIds many',
-    JSON.stringify(await getActorRowsByIds(db, actorIds)),
-    JSON.stringify(
-      rawAll(sqlite, `SELECT * FROM actors WHERE actor_id IN (${placeholders(actorIds)})`, actorIds),
-    ),
-  );
-
-  checkEqual(
-    'countActiveRoomMembers group',
-    await countActiveRoomMembers(db, 'room_group_1'),
-    rawFirst<{ n: number }>(
-      sqlite,
-      "SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND status = 'active'",
-      ['room_group_1'],
-    )?.n ?? 0,
-  );
-  checkEqual('countActiveRoomMembers missing', await countActiveRoomMembers(db, 'room_missing'), 0);
-  checkEqual(
-    'countActiveRoomMembersWithJoinHistory group',
-    await countActiveRoomMembersWithJoinHistory(db, 'room_group_1'),
-    rawFirst<{ n: number }>(
-      sqlite,
-      "SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND status = 'active' AND joined_seq > 0",
-      ['room_group_1'],
-    )?.n ?? 0,
-  );
-  checkEqual(
-    'countActiveRoomMembersWithJoinHistory missing',
-    await countActiveRoomMembersWithJoinHistory(db, 'room_missing'),
-    0,
-  );
-
-  const managerSql = "SELECT actor_id FROM room_members WHERE room_id = ? AND status = 'active' AND role IN ('owner', 'admin')";
-  checkEqual(
-    'listActiveRoomManagerIds group',
-    JSON.stringify([...(await listActiveRoomManagerIds(db, 'room_group_1'))].sort()),
-    JSON.stringify(
-      (rawAll<{ actor_id: string }>(sqlite, managerSql, ['room_group_1']) as { actor_id: string }[])
-        .map((row) => row.actor_id)
-        .sort(),
-    ),
-  );
-  checkEqual('listActiveRoomManagerIds missing', JSON.stringify(await listActiveRoomManagerIds(db, 'room_missing')), '[]');
-
-  const invitedSql = `SELECT i.invitation_id, i.target_actor_id AS actor_id, a.kind, a.name,
-              i.inviter_id AS invited_by, i.created_at, i.expires_at
-         FROM room_invitations i
-         JOIN actors a ON a.actor_id = i.target_actor_id
-        WHERE i.room_id = ? AND i.kind = 'direct' AND i.status = 'pending'
-          AND i.expires_at > ? AND (a.kind <> 'agent' OR a.archived_at IS NULL)
-        ORDER BY i.created_at ASC, i.invitation_id ASC`;
-  checkEqual(
-    'listPendingDirectInvitationMembers group',
-    JSON.stringify(await listPendingDirectInvitationMembers(db, 'room_group_1', 1_000)),
-    JSON.stringify(rawAll(sqlite, invitedSql, ['room_group_1', 1_000])),
-  );
-  checkEqual(
-    'listPendingDirectInvitationMembers hides archived agent',
-    JSON.stringify(await listPendingDirectInvitationMembers(db, 'room_group_1', 1_000)),
-    JSON.stringify(
-      rawAll(sqlite, invitedSql, ['room_group_1', 1_000]).filter(
-        (row) => (row as { actor_id: string }).actor_id !== 'act_agent_2',
-      ),
-    ),
-  );
-  checkEqual(
-    'getExpiredPendingContactRequestForPair not due',
-    await getExpiredPendingContactRequestForPair(db, 'act_agent_3|act_human_1', 1_000),
-    null,
-  );
-
-  checkEqual(
-    'listPendingContactRequests',
-    JSON.stringify(await listPendingContactRequests(db, 'act_agent_1|act_human_1')),
-    JSON.stringify(
-      rawAll(sqlite, "SELECT * FROM contact_requests WHERE pair_key = ? AND status = 'pending'", [
-        'act_agent_1|act_human_1',
-      ]),
-    ),
-  );
-
-  checkEqual(
-    'getActiveContactBlock',
-    JSON.stringify(await getActiveContactBlock(db, 'act_human_1', 'act_agent_3')),
-    JSON.stringify(
-      rawFirst(
-        sqlite,
-        `SELECT * FROM contact_blocks
-          WHERE blocker_actor_id = ? AND blocked_actor_id = ? AND released_at IS NULL`,
-        ['act_human_1', 'act_agent_3'],
-  // -------- 4C-4 messages --------
-  checkEqual(
-    'getMessage',
-    JSON.stringify(await getMessage(db, 'msg_d1_2')),
-    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM messages WHERE message_id = ?', ['msg_d1_2'])),
-  );
-  checkEqual(
-    'getMessage task root',
-    JSON.stringify(await getMessage(db, 'msg_g1_9')),
-    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM messages WHERE message_id = ?', ['msg_g1_9'])),
-  );
-  checkEqual('getMessage missing', await getMessage(db, 'msg_missing'), null);
-
-  checkEqual(
-    'listHistoryMessagesBefore first page',
-    JSON.stringify(
-      await listHistoryMessagesBefore(db, {
-        roomId: 'room_direct_1',
-        snapshot: 5,
-        fromSeq: 0,
-        beforeSeq: null,
-        limit: 3,
-      }),
-    ),
-    rawHistoryBefore(sqlite, 'room_direct_1', 5, 0, null, 3),
-  );
-  checkEqual(
-    'listHistoryMessagesBefore cursor',
-    JSON.stringify(
-      await listHistoryMessagesBefore(db, {
-        roomId: 'room_direct_1',
-        snapshot: 5,
-        fromSeq: 0,
-        beforeSeq: 5,
-        limit: 3,
-      }),
-    ),
-    rawHistoryBefore(sqlite, 'room_direct_1', 5, 0, 5, 3),
-  );
-  checkEqual(
-    'listHistoryMessagesBefore from_join boundary',
-    JSON.stringify(
-      await listHistoryMessagesBefore(db, {
-        roomId: 'room_group_1',
-        snapshot: 9,
-        fromSeq: 4,
-        beforeSeq: null,
-        limit: 20,
-      }),
-    ),
-    rawHistoryBefore(sqlite, 'room_group_1', 9, 4, null, 20),
-  );
-  checkEqual(
-    'listHistoryMessagesBefore empty room',
-    JSON.stringify(
-      await listHistoryMessagesBefore(db, {
-        roomId: 'room_missing',
-        snapshot: 9,
-        fromSeq: 0,
-        beforeSeq: null,
-        limit: 20,
-      }),
-    ),
-    rawHistoryBefore(sqlite, 'room_missing', 9, 0, null, 20),
-  );
-  checkEqual(
-    'listHistoryMessagesAfter',
-    JSON.stringify(
-      await listHistoryMessagesAfter(db, {
-        roomId: 'room_direct_1',
-        snapshot: 5,
-        fromSeq: 0,
-        afterSeq: 2,
-        limit: 5,
-      }),
-    ),
-    rawHistoryAfter(sqlite, 'room_direct_1', 5, 0, 2, 5),
-  );
-  checkEqual(
-    'listHistoryMessagesAfter fromSeq floor',
-    JSON.stringify(
-      await listHistoryMessagesAfter(db, {
-        roomId: 'room_group_1',
-        snapshot: 9,
-        fromSeq: 4,
-        afterSeq: 4,
-        limit: 20,
-      }),
-    ),
-    rawHistoryAfter(sqlite, 'room_group_1', 9, 4, 4, 20),
-  );
-  checkEqual(
-    'listHistoryMessagesAfter snapshot upper bound',
-    JSON.stringify(
-      await listHistoryMessagesAfter(db, {
-        roomId: 'room_group_1',
-        snapshot: 8,
-        fromSeq: 0,
-        afterSeq: 3,
-        limit: 20,
-      }),
-    ),
-    rawHistoryAfter(sqlite, 'room_group_1', 8, 0, 3, 20),
-  );
-
-  const messageIds = ['msg_g1_9', 'msg_d1_1', 'msg_missing'];
-  checkEqual(
-    'listHistoryMessagesByIds',
-    JSON.stringify(await listHistoryMessagesByIds(db, messageIds)),
-    JSON.stringify(
-      rawAll(
-        sqlite,
-        `SELECT ${HISTORY_SELECT} FROM messages WHERE message_id IN (${placeholders(messageIds)})`,
-        messageIds,
-      ),
-    ),
-  );
-  checkEqual('listHistoryMessagesByIds empty', JSON.stringify(await listHistoryMessagesByIds(db, [])), '[]');
-
-  // -------- 4C-4 message context --------
-  checkEqual(
-    'getMessageContextAnchor',
-    JSON.stringify(await getMessageContextAnchor(db, 'room_group_1', 'msg_g1_8')),
-    JSON.stringify(
-      rawFirst(
-        sqlite,
-        `SELECT ${CONTEXT_SELECT} FROM messages m JOIN actors a ON a.actor_id = m.sender_id
-          WHERE m.room_id = ? AND m.message_id = ?`,
-        ['room_group_1', 'msg_g1_8'],
-      ),
-    ),
-  );
-  checkEqual(
-    'getActiveContactBlock released',
-    await getActiveContactBlock(db, 'act_human_2', 'act_human_1'),
-    null,
-  );
-
-  const betweenSql = `SELECT * FROM contact_blocks
-        WHERE released_at IS NULL
-          AND ((blocker_actor_id = ? AND blocked_actor_id = ?)
-            OR (blocker_actor_id = ? AND blocked_actor_id = ?))
-        LIMIT 1`;
-  checkEqual(
-    'findActiveContactBlockBetween',
-    JSON.stringify(await findActiveContactBlockBetween(db, 'act_human_1', 'act_agent_3')),
-    JSON.stringify(rawFirst(sqlite, betweenSql, ['act_human_1', 'act_agent_3', 'act_agent_3', 'act_human_1'])),
-  );
-  checkEqual(
-    'findActiveContactBlockBetween reverse',
-    JSON.stringify(await findActiveContactBlockBetween(db, 'act_agent_3', 'act_human_1')),
-    JSON.stringify(rawFirst(sqlite, betweenSql, ['act_agent_3', 'act_human_1', 'act_human_1', 'act_agent_3'])),
-  );
-  checkEqual(
-    'findActiveContactBlockBetween none',
-    await findActiveContactBlockBetween(db, 'act_human_1', 'act_human_2'),
-    'listPendingDirectInvitationMembers later cutoff',
-    JSON.stringify(await listPendingDirectInvitationMembers(db, 'room_group_1', 5_000)),
-    JSON.stringify(rawAll(sqlite, invitedSql, ['room_group_1', 5_000])),
-  );
-
-  checkEqual(
-    'getRoomInvitationById direct',
-    JSON.stringify(await getRoomInvitationById(db, 'inv_direct_h2')),
-    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_invitations WHERE invitation_id = ?', ['inv_direct_h2'])),
-  );
-  checkEqual(
-    'getRoomInvitationById link',
-    JSON.stringify(await getRoomInvitationById(db, 'inv_link_1')),
-    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_invitations WHERE invitation_id = ?', ['inv_link_1'])),
-  );
-  checkEqual('getRoomInvitationById missing', await getRoomInvitationById(db, 'missing'), null);
-
-  checkEqual(
-    'getRoomJoinRequestById',
-    JSON.stringify(await getRoomJoinRequestById(db, 'jrq_2')),
-    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_join_requests WHERE join_request_id = ?', ['jrq_2'])),
-  );
-  checkEqual('getRoomJoinRequestById missing', await getRoomJoinRequestById(db, 'missing'), null);
-
-  const latestSql = `SELECT * FROM room_join_requests
-        WHERE invitation_id = ? AND applicant_id = ?
-        ORDER BY created_at DESC, join_request_id DESC LIMIT 1`;
-  checkEqual(
-    'getLatestJoinRequestForApplicant',
-    JSON.stringify(await getLatestJoinRequestForApplicant(db, 'inv_link_1', 'act_agent_1')),
-    JSON.stringify(rawFirst(sqlite, latestSql, ['inv_link_1', 'act_agent_1'])),
-  );
-  checkEqual(
-    'getLatestJoinRequestForApplicant missing',
-    await getLatestJoinRequestForApplicant(db, 'inv_link_1', 'act_human_1'),
-    null,
-  );
-
-  checkEqual(
-    'listMutedMentionBlockers',
-    JSON.stringify(
-      (await listMutedMentionBlockers(db, 'act_agent_3', ['act_human_1', 'act_human_2'])).sort(),
-    ),
-    JSON.stringify(
-      rawAll<{ blocker_actor_id: string }>(
-        sqlite,
-        `SELECT blocker_actor_id FROM contact_blocks
-          WHERE released_at IS NULL
-            AND mute_mentions = 1
-            AND blocked_actor_id = ?
-            AND blocker_actor_id IN (?, ?)`,
-        ['act_agent_3', 'act_human_1', 'act_human_2'],
-      )
-        .map((row) => row.blocker_actor_id)
-        .sort(),
-    ),
-  );
-  checkEqual('listMutedMentionBlockers empty', JSON.stringify(await listMutedMentionBlockers(db, 'x', [])), '[]');
-
-  const blockListSql = `SELECT b.*,
-              a.kind AS blocked_kind, a.name AS blocked_name,
-              a.agent_session_id AS blocked_session
-         FROM contact_blocks b
-         JOIN actors a ON a.actor_id = b.blocked_actor_id
-        WHERE b.blocker_actor_id = ?
-        ORDER BY b.created_at DESC, b.block_id ASC
-        LIMIT ?`;
-  checkEqual(
-    'listContactBlocks',
-    JSON.stringify(await listContactBlocks(db, 'act_human_1', 2, null)),
-    JSON.stringify(rawAll(sqlite, blockListSql, ['act_human_1', 2])),
-  );
-  const blockCursorSql = `SELECT b.*,
-              a.kind AS blocked_kind, a.name AS blocked_name,
-              a.agent_session_id AS blocked_session
-         FROM contact_blocks b
-         JOIN actors a ON a.actor_id = b.blocked_actor_id
-        WHERE b.blocker_actor_id = ?
-          AND (b.created_at < ? OR (b.created_at = ? AND b.block_id > ?))
-        ORDER BY b.created_at DESC, b.block_id ASC
-        LIMIT ?`;
-  checkEqual(
-    'listContactBlocks cursor',
-    JSON.stringify(await listContactBlocks(db, 'act_human_1', 2, { createdAt: 700, blockId: 'blk_1' })),
-    JSON.stringify(rawAll(sqlite, blockCursorSql, ['act_human_1', 700, 700, 'blk_1', 2])),
-  );
-
-  checkEqual(
-    'getActiveAgentManagement',
-    JSON.stringify(await getActiveAgentManagement(db, 'act_agent_1')),
-    JSON.stringify(
-      rawFirst(sqlite, "SELECT * FROM agent_managements WHERE agent_id = ? AND status = 'active'", [
-        'act_agent_1',
-      ]),
-    ),
-  );
-  checkEqual(
-    'getActiveAgentManagement revoked',
-    await getActiveAgentManagement(db, 'act_agent_3'),
-    null,
-  );
-
-  const managementIds = ['act_agent_1', 'act_agent_2', 'act_agent_3'];
-  checkEqual(
-    'listActiveManagementBindings',
-    JSON.stringify(await listActiveManagementBindings(db, managementIds)),
-    JSON.stringify(
-      rawAll(
-        sqlite,
-        `SELECT agent_id, manager_id FROM agent_managements
-          WHERE status = 'active' AND agent_id IN (${placeholders(managementIds)})`,
-        managementIds,
-      ),
-    ),
-  );
-  checkEqual(
-    'listActiveManagementBindings empty',
-    JSON.stringify(await listActiveManagementBindings(db, [])),
-    '[]',
-  );
-
-  checkEqual(
-    'countActiveCredentials',
-    await countActiveCredentials(db, 'act_human_1'),
-    rawFirst<{ n: number }>(
-      sqlite,
-      'SELECT COUNT(*) AS n FROM credentials WHERE actor_id = ? AND revoked_at IS NULL',
-      ['act_human_1'],
-    )?.n ?? 0,
-  );
-  checkEqual(
-    'countActiveCredentials none',
-    await countActiveCredentials(db, 'act_agent_1'),
-    0,
-    'getOwnerTransferById',
-    JSON.stringify(await getOwnerTransferById(db, 'tr_1')),
-    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_owner_transfers WHERE transfer_id = ?', ['tr_1'])),
-  );
-  checkEqual('getOwnerTransferById missing', await getOwnerTransferById(db, 'missing'), null);
-
-  const joinRequestListSql = `SELECT jr.*, i.kind AS invitation_kind, i.status AS invitation_status,
-              i.expires_at AS invitation_expires_at,
-              i.max_uses AS invitation_max_uses,
-              i.used_count AS invitation_used_count,
-              a.kind AS applicant_kind, a.name AS applicant_name,
-              a.agent_session_id AS applicant_session_id
-         FROM room_join_requests jr
-         JOIN room_invitations i ON i.invitation_id = jr.invitation_id
-         JOIN actors a ON a.actor_id = jr.applicant_id
-        WHERE jr.room_id = ? AND jr.status = ?
-        ORDER BY jr.created_at DESC, jr.join_request_id DESC
-        LIMIT ?`;
-  checkEqual(
-    'listJoinRequestRows pending',
-    JSON.stringify(await listJoinRequestRows(db, 'room_group_1', 'pending', null, 10)),
-    JSON.stringify(rawAll(sqlite, joinRequestListSql, ['room_group_1', 'pending', 10])),
-  );
-  checkEqual(
-    'listJoinRequestRows page limit',
-    JSON.stringify(await listJoinRequestRows(db, 'room_group_1', 'pending', null, 2)),
-    JSON.stringify(rawAll(sqlite, joinRequestListSql, ['room_group_1', 'pending', 2])),
-  );
-  const joinRequestCursorSql = `SELECT jr.*, i.kind AS invitation_kind, i.status AS invitation_status,
-              i.expires_at AS invitation_expires_at,
-              i.max_uses AS invitation_max_uses,
-              i.used_count AS invitation_used_count,
-              a.kind AS applicant_kind, a.name AS applicant_name,
-              a.agent_session_id AS applicant_session_id
-         FROM room_join_requests jr
-         JOIN room_invitations i ON i.invitation_id = jr.invitation_id
-         JOIN actors a ON a.actor_id = jr.applicant_id
-        WHERE jr.room_id = ? AND jr.status = ?
-          AND (jr.created_at < ? OR (jr.created_at = ? AND jr.join_request_id < ?))
-        ORDER BY jr.created_at DESC, jr.join_request_id DESC
-        LIMIT ?`;
-  checkEqual(
-    'listJoinRequestRows cursor tie-break',
-    JSON.stringify(
-      await listJoinRequestRows(db, 'room_group_1', 'pending', { seq: 300, key: 'jrq_3' }, 10),
-    ),
-    JSON.stringify(rawAll(sqlite, joinRequestCursorSql, ['room_group_1', 'pending', 300, 300, 'jrq_3', 10])),
-  );
-  checkEqual(
-    'listJoinRequestRows approved',
-    JSON.stringify(await listJoinRequestRows(db, 'room_group_1', 'approved', null, 10)),
-    JSON.stringify(rawAll(sqlite, joinRequestListSql, ['room_group_1', 'approved', 10])),
-  );
-
-  const auditListSql = `SELECT a.*, target.name AS target_name, changer.name AS changed_by_name
-         FROM room_management_audit a
-         LEFT JOIN actors target ON target.actor_id = a.target_actor_id
-         LEFT JOIN actors changer ON changer.actor_id = a.changed_by
-        WHERE a.room_id = ?
-        ORDER BY a.created_at DESC, a.audit_id DESC
-        LIMIT ?`;
-  checkEqual(
-    'listRoomAuditRows page',
-    JSON.stringify(await listRoomAuditRows(db, 'room_group_1', null, 10)),
-    JSON.stringify(rawAll(sqlite, auditListSql, ['room_group_1', 10])),
-  );
-  checkEqual(
-    'listRoomAuditRows limit',
-    JSON.stringify(await listRoomAuditRows(db, 'room_group_1', null, 2)),
-    JSON.stringify(rawAll(sqlite, auditListSql, ['room_group_1', 2])),
-  );
-  const auditCursorSql = `SELECT a.*, target.name AS target_name, changer.name AS changed_by_name
-         FROM room_management_audit a
-         LEFT JOIN actors target ON target.actor_id = a.target_actor_id
-         LEFT JOIN actors changer ON changer.actor_id = a.changed_by
-        WHERE a.room_id = ?
-          AND (a.created_at < ? OR (a.created_at = ? AND a.audit_id < ?))
-        ORDER BY a.created_at DESC, a.audit_id DESC
-        LIMIT ?`;
-  checkEqual(
-    'listRoomAuditRows cursor tie-break',
-    JSON.stringify(await listRoomAuditRows(db, 'room_group_1', { seq: 500, key: 'aud_2' }, 10)),
-    JSON.stringify(rawAll(sqlite, auditCursorSql, ['room_group_1', 500, 500, 'aud_2', 10])),
-  );
-  checkEqual(
-    'listRoomAuditRows empty',
-    JSON.stringify(await listRoomAuditRows(db, 'room_missing', null, 10)),
-    '[]',
-    'getMessageContextAnchor missing',
-    await getMessageContextAnchor(db, 'room_group_1', 'msg_missing'),
-    null,
-  );
-  checkEqual(
-    'listMessageContextWindow before full',
-    JSON.stringify(
-      await listMessageContextWindow(db, {
-        roomId: 'room_group_1',
-        pivotSeq: 8,
-        direction: 'before',
-        fromSeq: null,
-        toSeq: null,
-        limit: 2,
-      }),
-    ),
-    rawContextBefore(sqlite, 'room_group_1', 8, null, 2),
-  );
-  checkEqual(
-    'listMessageContextWindow before from_join',
-    JSON.stringify(
-      await listMessageContextWindow(db, {
-        roomId: 'room_group_1',
-        pivotSeq: 8,
-        direction: 'before',
-        fromSeq: 4,
-        toSeq: 8,
-        limit: 20,
-      }),
-    ),
-    rawContextBefore(sqlite, 'room_group_1', 8, 4, 20),
-  );
-  checkEqual(
-    'listMessageContextWindow after full',
-    JSON.stringify(
-      await listMessageContextWindow(db, {
-        roomId: 'room_group_1',
-        pivotSeq: 8,
-        direction: 'after',
-        fromSeq: null,
-        toSeq: null,
-        limit: 20,
-      }),
-    ),
-    rawContextAfter(sqlite, 'room_group_1', 8, null, null, 20),
-  );
-  checkEqual(
-    'listMessageContextWindow after archived',
-    JSON.stringify(
-      await listMessageContextWindow(db, {
-        roomId: 'room_group_1',
-        pivotSeq: 3,
-        direction: 'after',
-        fromSeq: 3,
-        toSeq: 8,
-        limit: 20,
-      }),
-    ),
-    rawContextAfter(sqlite, 'room_group_1', 3, 3, 8, 20),
-  );
-
-  // -------- 4C-4 messages / deliveries joins --------
-  const senderSql = `SELECT m.message_id, m.sender_id, m.created_seq, m.preview, m.body_bytes,
-              m.created_at, a.name AS sender_name, a.kind AS sender_kind
-         FROM messages m LEFT JOIN actors a ON a.actor_id = m.sender_id
-        WHERE m.message_id = ?`;
-  checkEqual(
-    'getMessageSenderSummary',
-    JSON.stringify(await getMessageSenderSummary(db, 'msg_g1_8')),
-    JSON.stringify(rawFirst(sqlite, senderSql, ['msg_g1_8'])),
-  );
-  checkEqual(
-    'getMessageSenderSummary ghost sender',
-    JSON.stringify(await getMessageSenderSummary(db, 'msg_ghost')),
-    JSON.stringify(rawFirst(sqlite, senderSql, ['msg_ghost'])),
-  );
-  checkEqual('getMessageSenderSummary missing', await getMessageSenderSummary(db, 'msg_missing'), null);
-
-  const stateIds = ['msg_d1_2', 'msg_g1_8', 'msg_g1_9', 'msg_missing'];
-  checkEqual(
-    'listDeliveryStates',
-    deliveryStateRows(await listDeliveryStates(db, stateIds)),
-    deliveryStateRows(
-      rawAll(
-        sqlite,
-        `SELECT message_id, state, COUNT(*) AS n,
-                MAX(CASE WHEN state = 'claimed' THEN claimed_at END) AS max_claimed_at,
-                MAX(CASE WHEN state = 'claimed' THEN updated_at END) AS max_updated_at
-           FROM deliveries WHERE message_id IN (${placeholders(stateIds)})
-          GROUP BY message_id, state`,
-        stateIds,
-      ),
-    ),
-  );
-  checkEqual('listDeliveryStates empty', JSON.stringify(await listDeliveryStates(db, [])), '[]');
-
-  const mentionIds = ['msg_g1_8', 'msg_g1_9', 'msg_missing'];
-  checkEqual(
-    'listMessageMentions',
-    JSON.stringify(await listMessageMentions(db, mentionIds)),
-    JSON.stringify(
-      rawAll(
-        sqlite,
-        `SELECT message_id, actor_id, actor_kind, source FROM message_mentions
-          WHERE message_id IN (${placeholders(mentionIds)})
-          ORDER BY message_id, actor_id`,
-        mentionIds,
-      ),
-    ),
-  );
-  checkEqual('listMessageMentions empty', JSON.stringify(await listMessageMentions(db, [])), '[]');
-
-  // -------- 4C-4 deliveries --------
-  checkEqual(
-    'getDelivery',
-    JSON.stringify(await getDelivery(db, 'del_claimed_1')),
-    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM deliveries WHERE delivery_id = ?', ['del_claimed_1'])),
-  );
-  checkEqual('getDelivery missing', await getDelivery(db, 'del_missing'), null);
-  checkEqual(
-    'getDeliveryForMessage',
-    JSON.stringify(await getDeliveryForMessage(db, 'act_agent_1', 'msg_g1_8')),
-    JSON.stringify(
-      rawFirst(sqlite, 'SELECT * FROM deliveries WHERE recipient_id = ? AND message_id = ?', [
-        'act_agent_1',
-        'msg_g1_8',
-      ]),
-    ),
-  );
-  checkEqual('getDeliveryForMessage missing', await getDeliveryForMessage(db, 'act_agent_3', 'msg_d1_1'), null);
-  checkEqual(
-    'getClaimedDelivery',
-    JSON.stringify(await getClaimedDelivery(db, 'act_agent_1')),
-    JSON.stringify(
-      rawFirst(sqlite, "SELECT * FROM deliveries WHERE recipient_id = ? AND state = 'claimed' LIMIT 1", [
-        'act_agent_1',
-      ]),
-    ),
-  );
-  checkEqual('getClaimedDelivery none', await getClaimedDelivery(db, 'act_agent_2'), null);
-  checkEqual('getClaimedDeliveryId', await getClaimedDeliveryId(db, 'act_agent_1'), 'del_claimed_1');
-  checkEqual('getClaimedDeliveryId none', await getClaimedDeliveryId(db, 'act_human_1'), null);
-
-  checkEqual(
-    'listInboxDeliveries active',
-    JSON.stringify(
-      await listInboxDeliveries(db, {
-        recipientId: 'act_agent_1',
-        states: ['pending', 'claimed'],
-        afterSeq: null,
-        limit: 3,
-      }),
-    ),
-    rawInbox(sqlite, 'act_agent_1', ['pending', 'claimed'], null, 3),
-  );
-  checkEqual(
-    'listInboxDeliveries cursor',
-    JSON.stringify(
-      await listInboxDeliveries(db, {
-        recipientId: 'act_agent_1',
-        states: ['pending', 'claimed'],
-        afterSeq: 1,
-        limit: 3,
-      }),
-    ),
-    rawInbox(sqlite, 'act_agent_1', ['pending', 'claimed'], 1, 3),
-  );
-  checkEqual(
-    'listInboxDeliveries all states',
-    JSON.stringify(
-      await listInboxDeliveries(db, {
-        recipientId: 'act_agent_1',
-        states: null,
-        afterSeq: null,
-        limit: 10,
-      }),
-    ),
-    rawInbox(sqlite, 'act_agent_1', null, null, 10),
-  );
-  checkEqual(
-    'listInboxDeliveries single state',
-    JSON.stringify(
-      await listInboxDeliveries(db, {
-        recipientId: 'act_agent_2',
-        states: ['pending'],
-        afterSeq: null,
-        limit: 10,
-      }),
-    ),
-    rawInbox(sqlite, 'act_agent_2', ['pending'], null, 10),
-  );
-  checkEqual(
-    'listInboxDeliveries empty',
-    JSON.stringify(
-      await listInboxDeliveries(db, {
-        recipientId: 'act_human_1',
-        states: ['pending'],
-        afterSeq: null,
-        limit: 10,
-      }),
-    ),
-    rawInbox(sqlite, 'act_human_1', ['pending'], null, 10),
-  );
+  for (const item of cases) {
+    const compiled = item.query.toSQL();
+    checkEqual(
+      `EXPLAIN ${item.label}`,
+      JSON.stringify(plan(sqlite, compiled.sql, compiled.params)),
+      JSON.stringify(plan(sqlite, item.raw, item.params)),
+    );
+  }
 }
 
 function explainFilesEventsChecks(sqlite: Database, db: D1Database): void {
@@ -3463,6 +3492,8 @@ function explainFilesEventsChecks(sqlite: Database, db: D1Database): void {
             isNull(schema.credentials.revoked_at),
           ),
         ),
+    },
+    {
       label: 'getActorRowsByIds',
       raw: 'SELECT * FROM actors WHERE actor_id IN (?, ?, ?)',
       params: ['act_human_1', 'act_agent_2', 'act_agent_3'],
