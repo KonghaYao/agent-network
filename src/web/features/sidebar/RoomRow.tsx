@@ -1,3 +1,4 @@
+import { Link } from '../../app/router';
 import {
   avatarColor,
   firstChar,
@@ -12,7 +13,8 @@ import type { RoomPreferenceMap } from '../../lib/room-preferences';
  * 会话列表行。
  *
  * 保留 legacy 的 `room-item`、`data-room-*`、`unread` 与 `presence-dot`
- * 契约；始终用普通链接进入 `/c/:id`，4B-6 起该路由固定由 React Chat 渲染。
+ * 契约；用真实链接进入 `/c/:id`，由 `Link` 接管同源左键点击，避免整页
+ * 重载造成白闪。修饰键与中键仍走浏览器默认行为。
  */
 export function RoomRow({
   room,
@@ -25,9 +27,9 @@ export function RoomRow({
   const offline = room.peer_kind === 'agent' && room.peer_online === false;
   return (
     <li>
-      <a
+      <Link
         className="room-item"
-        href={`/c/${encodeURIComponent(room.room_id)}`}
+        to={`/c/${encodeURIComponent(room.room_id)}`}
         title={room.name}
         data-room-id={room.room_id}
         data-room-name={room.name}
@@ -62,7 +64,7 @@ export function RoomRow({
                 : '还没有消息'}
           </div>
         </div>
-      </a>
+      </Link>
     </li>
   );
 }
