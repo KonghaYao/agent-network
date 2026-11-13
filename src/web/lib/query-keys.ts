@@ -12,6 +12,12 @@ export const queryKeys = {
   history: (roomId: string, timeline: boolean) =>
     ['room', roomId, 'history', timeline ? 'timeline' : 'default'] as const,
   contacts: (actorId: string | null) => ['contacts', actorId ?? 'anonymous'] as const,
+  contactRequests: (actorId: string | null) =>
+    ['contact-requests', actorId ?? 'anonymous'] as const,
+  contactRequestBadge: (actorId: string | null) =>
+    ['contact-requests', actorId ?? 'anonymous', 'badge'] as const,
+  archivedAgents: (actorId: string | null, ids: readonly string[]) =>
+    ['archived-agents', actorId ?? 'anonymous', ids.join('|')] as const,
   leavePreview: (roomId: string) => ['room', roomId, 'leave-preview'] as const,
 };
 

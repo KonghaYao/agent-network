@@ -3,6 +3,8 @@ import { lazy, Suspense, useState } from 'react';
 
 import type { WebIdentity } from '../../lib/identity';
 import { useWebSession } from '../../hooks/useWebSession';
+import { ArchiveAgentsDialog } from '../overlays/ArchiveAgentsDialog';
+import { DeviceHandoffDialog } from '../overlays/DeviceHandoffDialog';
 import { LogoutDialog } from '../overlays/LogoutDialog';
 import { MeRenameDialog } from '../overlays/MeRenameDialog';
 import { NewAgentDialog } from '../overlays/NewAgentDialog';
@@ -24,6 +26,21 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+
+  const closeAndReturnFocus = (
+    setter: (open: boolean) => void,
+  ): ((open: boolean) => void) => {
+    return (open) => {
+      setter(open);
+      if (open) return;
+      // 入口在 DropdownMenu 中，菜单关闭后会卸载；把焦点还给稳定的触发按钮。
+      requestAnimationFrame(() => {
+        document.getElementById('account-menu-toggle')?.focus();
+      });
+    };
+  };
 
   return (
     <>
@@ -65,6 +82,22 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
               新建 Agent
             </DropdownMenuPrimitive.Item>
             <DropdownMenuPrimitive.Item
+              id="device-handoff"
+              className="room-menu-item"
+              disabled={!token}
+              onSelect={() => setHandoffOpen(true)}
+            >
+              配对设备
+            </DropdownMenuPrimitive.Item>
+            <DropdownMenuPrimitive.Item
+              id="archived-agents"
+              className="room-menu-item"
+              disabled={!token || me?.kind !== 'human'}
+              onSelect={() => setArchiveOpen(true)}
+            >
+              已归档 Agents
+            </DropdownMenuPrimitive.Item>
+            <DropdownMenuPrimitive.Item
               id="memory-open"
               className="room-menu-item"
               disabled={!token}
@@ -96,6 +129,15 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
         onOpenChange={setNewAgentOpen}
         identity={me}
         token={token}
+      />
+      <DeviceHandoffDialog
+        open={handoffOpen}
+        onOpenChange={closeAndReturnFocus(setHandoffOpen)}
+        token={token}
+      />
+      <ArchiveAgentsDialog
+        open={archiveOpen}
+        onOpenChange={closeAndReturnFocus(setArchiveOpen)}
       />
       {memoryOpen ? (
         <Suspense fallback={null}>
