@@ -290,13 +290,6 @@ function memoryRenderCapability(catalog, me, status, statusError) {
     memoryCapabilityElement.append(memoryCreate('p', 'memory-note',
       '采集已关闭：不会新增消息来源或预热，但已有记忆、撤回与遗忘屏障仍然保留。'));
   }
-  if (status && status.sources && status.sources.langfuse) {
-    const source = status.sources.langfuse;
-    memoryCapabilityElement.append(memoryCreate('p', 'memory-note',
-      'Langfuse 来源：' + (source.configured ? '已配置（' + source.status + '）' : '未配置') +
-      (source.reason ? '；原因：' + source.reason : '') +
-      '。这里只显示阶段，不包含 host、project 或凭据。'));
-  }
   if (me && me.kind !== 'agent') {
     memoryCapabilityElement.append(memoryCreate('p', 'memory-note',
       '当前身份是人类。Agent 私有记忆的正文、标题、范围与治理入口只对 Agent 自身凭据开放；' +

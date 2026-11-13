@@ -73,6 +73,52 @@ async function main(): Promise<void> {
     .get(adapted.agent) as { n: number };
   checkEqual('adapted 经历已落库', experienceCount.n, 1);
 
+  // 1b. 直接 manifest + invocation 证据：身份、去重与写库不依赖 trace/project/observation。
+  const manifestRow = env.db
+    .prepare(
+      `SELECT run_id, input_id, input_revision, invocation_id, payload_sha256
+         FROM memory_manifests WHERE manifest_id = ?`,
+    )
+    .get(adaptedFlow.manifestId) as {
+    run_id: string;
+    input_id: string;
+    input_revision: number;
+    invocation_id: string;
+    payload_sha256: string;
+  };
+  checkEqual('直接 manifest 记录 run_id', manifestRow.run_id, `run_${adapted.agent}`);
+  checkEqual('直接 manifest 记录 input_id', manifestRow.input_id, `input_${adapted.agent}`);
+  checkEqual('直接 manifest 记录 input_revision', manifestRow.input_revision, 1);
+  checkEqual(
+    '直接 manifest 记录 invocation_id',
+    manifestRow.invocation_id,
+    `inv_${adapted.agent}_${adaptedFlow.binding.generation}`,
+  );
+  checkEqual('直接 manifest 的 payload hash 即提交内容', manifestRow.payload_sha256, adaptedFlow.payloadSha256);
+  const manifestColumns = (
+    env.db.prepare('PRAGMA table_info(memory_manifests)').all() as Array<{ name: string }>
+  ).map((column) => column.name);
+  check(
+    '直接 manifest 表不存储 trace/project/observation',
+    !manifestColumns.includes('trace_id') &&
+      !manifestColumns.includes('project_id') &&
+      !manifestColumns.includes('observation_id'),
+    manifestColumns,
+  );
+  const experienceRow = env.db
+    .prepare(
+      `SELECT representation_kind, source_id, evidence FROM memory_experiences
+        WHERE agent_actor_id = ? ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(adapted.agent) as {
+    representation_kind: string;
+    source_id: string | null;
+    evidence: string;
+  };
+  checkEqual('直接宿主经历来自 invocation 的准确表示', experienceRow.representation_kind, 'raw_full');
+  checkEqual('直接宿主经历绑定业务来源', experienceRow.source_id, adapted.sourceId);
+  checkEqual('直接宿主证据由服务端派生', experienceRow.evidence, 'host_reported_submitted');
+
   // 2. claim 更换后旧 target 不能在 manifest/receipt 继续绑定
   const stale = await setupFixture(env, 'claim_stale');
   const staleBridge = bridgeFor(stale, { trust_level: 'adapted_host' });

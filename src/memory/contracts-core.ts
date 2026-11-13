@@ -340,7 +340,6 @@ export const MEMORY_SOURCE_KINDS = [
   'task_review',
   'task_handoff',
   'file',
-  'langfuse_observation',
   'manual',
 ] as const;
 
@@ -373,7 +372,6 @@ export type MemorySourceBusinessRef =
   | { kind: 'task_review'; task_id: string; review_id: string; submission_id: string; version: number }
   | { kind: 'handoff'; pack_id: string; item_id: string }
   | { kind: 'file'; file_id: string; sha256: MemorySha256 }
-  | { kind: 'langfuse'; trace_id: string; observation_id: string }
   | { kind: 'manual'; entry_id: string };
 
 export interface MemorySourceRef {
