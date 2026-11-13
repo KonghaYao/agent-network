@@ -40,6 +40,8 @@ export interface RoomSummary {
   kind: 'direct' | 'group';
   name: string;
   peer_kind: ActorKind | null;
+  /** direct 对端 actor_id；归档浮层籍此批量读取管理摘要。 */
+  peer_actor_id: string | null;
   peer_online: boolean | null;
   head_seq: string;
   my_last_read_seq: string;
@@ -64,6 +66,7 @@ export function summarizeRoom(entry: RawRoom): RoomSummary {
     kind: entry.kind,
     name,
     peer_kind: peerKind,
+    peer_actor_id: peer?.actor_id ?? null,
     peer_online: peerKind === 'agent' ? (peer?.online ?? null) : null,
     head_seq: entry.head_seq,
     my_last_read_seq: entry.my_last_read_seq,

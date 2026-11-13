@@ -36,14 +36,14 @@ export interface RoomsState {
  * 后台刷新（SSE ack 或新事件）调用 `refetch`，React Query 会重读所有已
  * 加载页；这比旧实现只替换第一页更简单，也不会丢失用户翻过的页。
  */
-export function useRooms(): RoomsState {
+export function useRooms(enabled = true): RoomsState {
   const { session } = useWebSession();
   const token = session?.token ?? null;
   const actorId = session?.identity.actor_id ?? null;
 
   const query = useInfiniteQuery({
     queryKey: queryKeys.rooms(actorId),
-    enabled: Boolean(token),
+    enabled: enabled && Boolean(token),
     initialPageParam: null as string | null,
     queryFn: ({ pageParam, signal }) =>
       callTool<RoomsPage>(

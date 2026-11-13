@@ -6,6 +6,7 @@ import {
   type RoomSummary,
 } from '../../lib/rooms';
 import { AccountMenu } from './AccountMenu';
+import { ContactRequestsButton } from './ContactRequestsButton';
 import { RoomRow } from './RoomRow';
 
 export type SidebarStatus =
@@ -29,6 +30,7 @@ interface SidebarProps {
   onQueryChange: (value: string) => void;
   onFilterChange: (value: RoomFilter) => void;
   onCreateGroup: () => void;
+  onOpenContacts: () => void;
   onRetry: () => void;
   onLoadMore: () => void;
 }
@@ -66,6 +68,7 @@ export function Sidebar(props: SidebarProps) {
     onQueryChange,
     onFilterChange,
     onCreateGroup,
+    onOpenContacts,
     onRetry,
     onLoadMore,
   } = props;
@@ -80,6 +83,7 @@ export function Sidebar(props: SidebarProps) {
       <header className="sidebar-head">
         <div className="brand-row">
           <h1>WeBots</h1>
+          <ContactRequestsButton onOpen={onOpenContacts} />
           <button
             className="icon-btn"
             id="new-group"

@@ -19,11 +19,15 @@ export type RoomOverlay =
 export function RoomMenu({
   room,
   peerName,
+  peerKind,
   onOpen,
+  onArchive,
 }: {
   room: RoomView;
   peerName: string | null;
+  peerKind: 'human' | 'agent' | null;
   onOpen: (overlay: RoomOverlay) => void;
+  onArchive: () => void;
 }) {
   const group = room.kind === 'group';
   const canEdit = group && !room.read_only && room.capabilities?.edit_profile === true;
@@ -31,6 +35,7 @@ export function RoomMenu({
   const canLeave = group && room.can_leave !== false;
   const canReport = !group && peerName !== null;
   const canTransfer = !group && room.peer_can_manage === true;
+  const canArchive = canTransfer && peerKind === 'agent';
 
   return (
     <DropdownMenuPrimitive.Root>
@@ -96,6 +101,15 @@ export function RoomMenu({
               onSelect={() => onOpen('transfer')}
             >
               交接管理权
+            </DropdownMenuPrimitive.Item>
+          ) : null}
+          {canArchive ? (
+            <DropdownMenuPrimitive.Item
+              id="room-menu-archive"
+              className="room-menu-item"
+              onSelect={onArchive}
+            >
+              归档
             </DropdownMenuPrimitive.Item>
           ) : null}
           {canLeave ? (

@@ -189,10 +189,11 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 
 - 运行壳与路由：`src/web/app/main.tsx`、`router.tsx`、`providers.tsx`、`bootstrap.ts`、`AppShell.tsx`、`query.ts`；`src/web/pages/{HomePage,ChatPage,SharePage,JoinPage,PairPage}.tsx`。
 - 数据与行为：`src/web/lib/{mcp-client,identity,chat,rooms,outbox,mentions,files,files-ui,agents,query-keys}.ts`、`src/web/hooks/{useWebSession,useRooms,useRoomChat,useRoomFiles,useRoomMonitor,useSendQueue,useContacts,useMediaQuery}.ts`；`src/web/app/mcp/useActorStream.ts` 保持单订阅与退避重连。
-- 组件：`src/web/features/chat/*`（消息、时间线、Composer、Markdown）、`features/sidebar/*`（会话列表、账号菜单）、`features/overlays/*`（Radix Dialog/AlertDialog、建群、改名、公告、举报、退出、本人改名、新建 Agent、Agent 管理权交接）、`features/panels/{FilesPane,MonitorPane,MemoryDialog}.tsx`（文件/监控按需加载，Memory 抽屉懒加载）、`features/layout/SplitLayout.tsx`。
+- 组件：`src/web/features/chat/*`（消息、时间线、Composer、Markdown）、`features/sidebar/*`（会话列表、好友申请角标、账号菜单）、`features/overlays/*`（Radix Dialog/AlertDialog、建群、改名、公告、举报、退出、本人改名、新建 Agent、Agent 管理权交接、好友申请、设备配对、已归档 Agents）、`features/panels/{FilesPane,MonitorPane,MemoryDialog}.tsx`（文件/监控按需加载，Memory 抽屉懒加载）、`features/layout/SplitLayout.tsx`。
+- 4B-5b 入口：`features/sidebar/ContactRequestsButton.tsx` + `features/overlays/ContactRequestsDialog.tsx` 复用 `network_contact_requests_list` / `network_contact_request_respond` / `network_contact_request_cancel`；`features/overlays/DeviceHandoffDialog.tsx` 复用 `network_device_pairing_{create,list,approve,cancel}`，二维码由 `uqr` 0.1.3 在 `lib/qr-canvas.ts` 本地绘制，`/pair#c=` 仍由 `lib/token-handoff.ts` 读取并清除；`features/overlays/ArchiveAgentsDialog.tsx` 与聊天菜单 `#room-menu-archive` 复用 `network_agents_get` / `network_agent_archive` / `network_agent_unarchive`，归档与恢复都经 `confirmDialog`。数据 hooks 为 `useContactRequests.ts`（含角标）与 `useArchivedAgents.ts`，不新增 MCP 工具、表或迁移。
 - 右栏：文件列表/上传/bind/预览/删除与网页监控 URL 保存/清除/iframe 均在 React 中实现，复用 legacy 的 DOM id/class 与 `network_room_file_*` / `network_room_monitor_*` 工具；桌面右栏、平板抽屉与移动端全屏断点与 legacy 一致。Memory 抽屉只在 Agent 自身凭据下显示内容工具；人类身份只显示能力与不支持项。
 - 画板：`features/chat/Composer.tsx` 的 `+` 菜单按需 `import('/assets/chat-drawboard.js')`，导出 PNG 后回到同一上传/chip 链路；新增 Agent、记忆、群主转让入口复用 Radix 菜单与 RHF 表单，不新增后端端点。
-- 验收：`bun run test:spa-shell`（flag/`all`/cookie/manifest 回退）、`WEB_SPA_ROUTES=all E2E_SPA=1 bun run test:e2e`（`tests/e2e/{home,chat,components,panels,share-join-pair,shell}.spec.ts`）；旧壳回归仍由 `bun run test:web` 覆盖，4B-6 前不删除 legacy 与 `/assets/*`。
+- 验收：`bun run test:spa-shell`（flag/`all`/cookie/manifest 回退）、`WEB_SPA_ROUTES=all E2E_SPA=1 bun run test:e2e`（`tests/e2e/{home,chat,components,panels,entries,share-join-pair,shell}.spec.ts`）；旧壳回归仍由 `bun run test:web` 覆盖，4B-6 前不删除 legacy 与 `/assets/*`。
 
 ## 验证
 
