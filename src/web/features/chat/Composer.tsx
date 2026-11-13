@@ -41,6 +41,35 @@ import type { SendOutcome } from '../../hooks/useSendQueue';
 
 const DRAFT_PREFIX = 'agent-network-draft-v1:';
 const MAX_TEXTAREA_HEIGHT = 96;
+const DRAWBOARD_ASSET_URL = '/assets/chat-drawboard.js';
+
+interface DrawboardModule {
+  openDrawboard(options: { onInsert: (file: File) => void }): void;
+}
+
+let drawboardPromise: Promise<DrawboardModule> | null = null;
+let drawboardRetry = 0;
+
+/** 成功只请求一次；重试加 query 绕过浏览器失败缓存。 */
+function loadDrawboard(forceRetry: boolean): Promise<DrawboardModule> {
+  if (!drawboardPromise || forceRetry) {
+    if (forceRetry) drawboardRetry += 1;
+    const url = forceRetry ? `${DRAWBOARD_ASSET_URL}?r=${drawboardRetry}` : DRAWBOARD_ASSET_URL;
+    drawboardPromise = import(/* @vite-ignore */ url)
+      .then((module: unknown) => {
+        const candidate = module as Partial<DrawboardModule>;
+        if (typeof candidate.openDrawboard !== 'function') {
+          throw new Error('invalid drawboard bundle');
+        }
+        return candidate as DrawboardModule;
+      })
+      .catch((error: unknown) => {
+        drawboardPromise = null;
+        throw error;
+      });
+  }
+  return drawboardPromise;
+}
 
 interface ComposerFile {
   key: string;
@@ -126,6 +155,9 @@ export function Composer({
   const [selections, setSelections] = useState<MentionSelection[]>([]);
   const [mention, setMention] = useState<MentionQuery | null>(null);
   const [localSending, setLocalSending] = useState(false);
+  const [drawboardLoading, setDrawboardLoading] = useState(false);
+  const [drawboardError, setDrawboardError] = useState(false);
+  const drawboardOpening = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pendingCaretRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -289,6 +321,43 @@ export function Composer({
     multiple: true,
     onDrop: addFiles,
   });
+
+  const openDrawboard = useCallback(
+    async (forceRetry = false) => {
+      if (room.read_only) {
+        onStatus('群已解散，当前为只读归档，不能使用画板。');
+        return;
+      }
+      if (drawboardOpening.current) return;
+      drawboardOpening.current = true;
+      setDrawboardError(false);
+      setDrawboardLoading(true);
+      try {
+        const module = await loadDrawboard(forceRetry);
+        if (!mountedRef.current) return;
+        setDrawboardLoading(false);
+        module.openDrawboard({
+          onInsert: (file) => addFiles([file]),
+        });
+      } catch {
+        if (!mountedRef.current) return;
+        setDrawboardLoading(false);
+        setDrawboardError(true);
+      } finally {
+        drawboardOpening.current = false;
+      }
+    },
+    [addFiles, onStatus, room.read_only],
+  );
+
+  useEffect(() => {
+    if (!drawboardError) return undefined;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setDrawboardError(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [drawboardError]);
 
   const removeFile = async (file: ComposerFile) => {
     if (file.status === 'ready' && file.fileId) {
@@ -459,6 +528,13 @@ export function Composer({
               >
                 上传文件
               </DropdownMenuPrimitive.Item>
+              <DropdownMenuPrimitive.Item
+                className="attach-menu-item"
+                id="attach-menu-draw"
+                onSelect={() => void openDrawboard()}
+              >
+                画板
+              </DropdownMenuPrimitive.Item>
             </DropdownMenuPrimitive.Content>
           </DropdownMenuPrimitive.Portal>
         </DropdownMenuPrimitive.Root>
@@ -566,6 +642,51 @@ export function Composer({
           发送
         </button>
       </form>
+      {drawboardLoading ? (
+        <div
+          className="spa-drawboard-fallback"
+          data-drawboard-fallback="loading"
+          role="dialog"
+          aria-label="画板加载中"
+          aria-modal="true"
+        >
+          <div className="drawboard-fallback-card">
+            <p className="drawboard-fallback-title">正在加载画板…</p>
+            <p className="drawboard-fallback-text">首次打开需要加载绘图组件。</p>
+          </div>
+        </div>
+      ) : null}
+      {drawboardError ? (
+        <div
+          className="spa-drawboard-fallback"
+          data-drawboard-fallback="error"
+          role="dialog"
+          aria-label="画板加载失败"
+          aria-modal="true"
+        >
+          <div className="drawboard-fallback-card">
+            <p className="drawboard-fallback-title">画板加载失败</p>
+            <p className="drawboard-fallback-text">无法加载绘图组件，请检查网络后重试。</p>
+            <div className="drawboard-fallback-actions">
+              <button
+                type="button"
+                className="primary"
+                id="drawboard-retry"
+                autoFocus
+                onClick={() => {
+                  setDrawboardError(false);
+                  void openDrawboard(true);
+                }}
+              >
+                重试
+              </button>
+              <button type="button" id="drawboard-error-close" onClick={() => setDrawboardError(false)}>
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

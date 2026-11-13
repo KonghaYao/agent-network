@@ -1,7 +1,11 @@
 import { APP_STYLE } from './chat-styles';
+import { DRAWBOARD_FALLBACK_STYLE } from './chat-drawboard-styles';
+import { FILES_STYLE } from './chat-files-styles';
 import { MARKDOWN_STYLE } from './chat-markdown-styles';
 import { MESSAGE_ACTIONS_STYLE } from './chat-message-actions-styles';
 import { MESSAGE_FILES_STYLE } from './chat-message-files-styles';
+import { MEMORY_STYLE } from './chat-memory-styles';
+import { MONITOR_STYLE } from './chat-monitor-styles';
 import { UPLOAD_STYLE } from './chat-upload-styles';
 import { DEVICE_HANDOFF_STYLE } from './handoff';
 import { escapeHtml, jsonForScript } from './layout';
@@ -39,10 +43,10 @@ export interface SpaShellOptions {
 }
 
 /**
- * React 壳复用 legacy 的应用页样式：会话项、头像、空状态与移动端单栏
- * 都沿用同一套 CSS 变量和选择器，避免灰度期间两套视觉。
+ * React 壳复用 legacy 的应用页样式：会话项、头像、空状态、移动端单栏
+ * 与 Memory 抽屉都沿用同一套 CSS 变量和选择器，避免灰度期间两套视觉。
  */
-const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}
+const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}${MEMORY_STYLE}
   html, body { height: 100%; }
   body.wide { display: block; min-height: 100dvh; height: 100dvh; padding: 0;
     overflow: hidden; background: var(--wx-bg); }
@@ -50,8 +54,8 @@ const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}
   body.wide #root > main { flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; }
 `;
 
-/** Chat 复用 legacy 的 Markdown、回执菜单、附件与文件卡片样式。 */
-const CHAT_STYLE = `${SPA_STYLE}${MARKDOWN_STYLE}${MESSAGE_ACTIONS_STYLE}${MESSAGE_FILES_STYLE}${UPLOAD_STYLE}
+/** Chat 复用 legacy 的 Markdown、回执菜单、附件、文件、监控与画板样式。 */
+const CHAT_STYLE = `${SPA_STYLE}${MARKDOWN_STYLE}${MESSAGE_ACTIONS_STYLE}${MESSAGE_FILES_STYLE}${UPLOAD_STYLE}${FILES_STYLE}${MONITOR_STYLE}${DRAWBOARD_FALLBACK_STYLE}
   /* Chat 是单栏 React 页，桌面也保留返回入口；legacy 双栏由侧栏承担。 */
   body.page-room .chat-pane .back { display: inline-flex; }
 `;

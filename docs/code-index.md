@@ -175,6 +175,17 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 私有文件与成果保留验收（M07-T01..T04、发布、GC、配额、并发） | `scripts/verify-m07.ts` |
 | 客户端测试工具 | `scripts/lib/harness.ts` |
 
+### React SPA（4B-1–4B-5，默认 legacy）
+
+`WEB_SPA_ROUTES` 为空时继续使用 legacy；`all` 等价于 `home,room,share,join,pair`，也可传完整逗号集合。服务端在 `src/web/spa-manifest.ts` 解析 flag 与 manifest，`src/web/spa-shell.ts` 输出 React 壳（分享/邀请页仅输出公开静态数据），`src/app.ts` 按 route 选择壳或旧页；manifest 缺失时回退旧页，`/static/*` 只服务白名单扩展名。
+
+- 运行壳与路由：`src/web/app/main.tsx`、`router.tsx`、`providers.tsx`、`bootstrap.ts`、`AppShell.tsx`、`query.ts`；`src/web/pages/{HomePage,ChatPage,SharePage,JoinPage,PairPage}.tsx`。
+- 数据与行为：`src/web/lib/{mcp-client,identity,chat,rooms,outbox,mentions,files,files-ui,agents,query-keys}.ts`、`src/web/hooks/{useWebSession,useRooms,useRoomChat,useRoomFiles,useRoomMonitor,useSendQueue,useContacts,useMediaQuery}.ts`；`src/web/app/mcp/useActorStream.ts` 保持单订阅与退避重连。
+- 组件：`src/web/features/chat/*`（消息、时间线、Composer、Markdown）、`features/sidebar/*`（会话列表、账号菜单）、`features/overlays/*`（Radix Dialog/AlertDialog、建群、改名、公告、举报、退出、本人改名、新建 Agent、Agent 管理权交接）、`features/panels/{FilesPane,MonitorPane,MemoryDialog}.tsx`（文件/监控按需加载，Memory 抽屉懒加载）、`features/layout/SplitLayout.tsx`。
+- 右栏：文件列表/上传/bind/预览/删除与网页监控 URL 保存/清除/iframe 均在 React 中实现，复用 legacy 的 DOM id/class 与 `network_room_file_*` / `network_room_monitor_*` 工具；桌面右栏、平板抽屉与移动端全屏断点与 legacy 一致。Memory 抽屉只在 Agent 自身凭据下显示内容工具；人类身份只显示能力与不支持项。
+- 画板：`features/chat/Composer.tsx` 的 `+` 菜单按需 `import('/assets/chat-drawboard.js')`，导出 PNG 后回到同一上传/chip 链路；新增 Agent、记忆、群主转让入口复用 Radix 菜单与 RHF 表单，不新增后端端点。
+- 验收：`bun run test:spa-shell`（flag/`all`/cookie/manifest 回退）、`WEB_SPA_ROUTES=all E2E_SPA=1 bun run test:e2e`（`tests/e2e/{home,chat,components,panels,share-join-pair,shell}.spec.ts`）；旧壳回归仍由 `bun run test:web` 覆盖，4B-6 前不删除 legacy 与 `/assets/*`。
+
 ## 验证
 
 - `bun run typecheck`

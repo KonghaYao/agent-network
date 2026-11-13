@@ -415,3 +415,156 @@
     width: calc(100vw - 24px);
   }
 }
+
+/* ---- Chat 右栏：文件 / 网页监控 / Memory ---------------------------------- */
+
+/*
+ * React Chat 只渲染聊天区，没有 legacy 侧栏；右栏宽度按自身容器计算，
+ * 不再沿用 `100% - 300px` 的旧公式。平板抽屉与移动端全屏仍由
+ * FILES_STYLE/MONITOR_STYLE 控制。
+ */
+@media (min-width: 1200px) {
+  body.page-room #root > main > .files-pane,
+  body.page-room #root > main > .monitor-pane {
+    flex: 0 0 360px;
+    width: 360px;
+    min-width: 280px;
+    max-width: 440px;
+  }
+
+  body.page-room #root > main > .monitor-pane {
+    flex-basis: 420px;
+    width: 420px;
+  }
+
+  body.page-room #root > main > .chat-pane {
+    flex: 1 1 auto;
+    min-width: 320px;
+  }
+}
+
+.spa-file-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgb(0 0 0 / 58%);
+}
+
+.spa-file-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 41;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 20px;
+  outline: none;
+}
+
+.spa-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  background: rgb(0 0 0 / 32%);
+}
+
+@media (max-width: 759px) {
+  .spa-file-preview {
+    padding: 0;
+  }
+}
+
+/* 账号菜单在聊天头部时保持 32px 触发区，避免挤占标题。 */
+.chat-head-actions .account-more {
+  width: 32px;
+  height: 32px;
+  margin-left: 0;
+}
+
+/* 画板加载/失败提示复用 legacy 卡片，但用 React 覆盖层而不是 <dialog open>。 */
+.spa-drawboard-fallback {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 20px;
+  background: rgb(0 0 0 / 58%);
+}
+
+/* 群主转让说明用正文色而非 legacy 的 muted，保证 WCAG AA。 */
+#members-transfer .members-transfer-meta {
+  color: #5c5c5c;
+}
+
+@media (prefers-color-scheme: dark) {
+  #members-transfer .members-transfer-meta {
+    color: #b0b0b0;
+  }
+}
+
+/* Memory 抽屉必须盖住自己的遮罩层，否则关闭按钮会被 overlay 拦截。 */
+body .memory-drawer {
+  z-index: 40;
+}
+
+/*
+ * SPA 对比度基线：legacy 的 muted #999 与品牌绿 #07c160 在浅色底上
+ * 达不到 AA。只在 React 根内覆盖，旧壳保持原样；深色使用 #b0b0b0。
+ */
+body #root {
+  --wx-muted: #5c5c5c;
+}
+
+@media (prefers-color-scheme: dark) {
+  body #root {
+    --wx-muted: #b0b0b0;
+  }
+}
+
+body #root button.primary {
+  border-color: #067d3f;
+  background: #067d3f;
+  color: #fff;
+}
+
+body #root button.primary:hover {
+  border-color: #056b36;
+  background: #056b36;
+}
+
+/* Radix portal 挂在 body 下，不继承 `#root` 的对比度变量。 */
+.spa-dialog-content,
+.room-menu,
+.attach-menu,
+.spa-popover,
+.memory-drawer,
+.spa-file-preview,
+.spa-drawboard-fallback {
+  --wx-muted: #5c5c5c;
+}
+
+@media (prefers-color-scheme: dark) {
+  .spa-dialog-content,
+  .room-menu,
+  .attach-menu,
+  .spa-popover,
+  .memory-drawer,
+  .spa-file-preview,
+  .spa-drawboard-fallback {
+    --wx-muted: #b0b0b0;
+  }
+}
+
+.memory-chip.warn {
+  color: #92400e;
+}
+
+@media (prefers-color-scheme: dark) {
+  .memory-chip.warn {
+    color: #fbbf24;
+  }
+}

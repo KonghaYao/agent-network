@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { AppShell } from '../app/AppShell';
 import { Composer, type ComposerSendInput } from '../features/chat/Composer';
@@ -10,7 +10,13 @@ import { MembersDialog } from '../features/overlays/MembersDialog';
 import { RenameRoomDialog } from '../features/overlays/RenameRoomDialog';
 import { ReportDialog } from '../features/overlays/ReportDialog';
 import { RoomMenu, type RoomOverlay } from '../features/overlays/RoomMenu';
+import { TransferDialog } from '../features/overlays/TransferDialog';
+import { AccountMenu } from '../features/sidebar/AccountMenu';
+import { useIsMobile } from '../hooks/useIsMobile';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useRoomChat } from '../hooks/useRoomChat';
+import { useRoomFiles } from '../hooks/useRoomFiles';
+import { useRoomMonitor } from '../hooks/useRoomMonitor';
 import { useSendQueue } from '../hooks/useSendQueue';
 import {
   buildSendPlan,
@@ -19,6 +25,34 @@ import {
   senderName,
   type HistoryMessage,
 } from '../lib/chat';
+
+const FilesPane = lazy(() =>
+  import('../features/panels/FilesPane').then((module) => ({ default: module.FilesPane })),
+);
+const MonitorPane = lazy(() =>
+  import('../features/panels/MonitorPane').then((module) => ({ default: module.MonitorPane })),
+);
+
+const FILES_OPEN_KEY = 'agent-network-files-open';
+const MONITOR_OPEN_KEY = 'agent-network-monitor-open';
+
+function readPreference(key: string, fallback: boolean): boolean {
+  try {
+    const value = localStorage.getItem(key);
+    if (value === null) return fallback;
+    return value === '1';
+  } catch {
+    return fallback;
+  }
+}
+
+function writePreference(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, value ? '1' : '0');
+  } catch {
+    // 隐私模式只影响记忆，不影响本次开关。
+  }
+}
 
 interface ChatPageProps {
   roomId: string;
@@ -43,6 +77,16 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const [reply, setReply] = useState<{ messageId: string; label: string } | null>(null);
   const [forcePinToken, setForcePinToken] = useState(0);
   const [overlay, setOverlay] = useState<RoomOverlay | null>(null);
+  const [filesDesktopOpen, setFilesDesktopOpen] = useState(() =>
+    readPreference(FILES_OPEN_KEY, true),
+  );
+  const [monitorDesktopOpen, setMonitorDesktopOpen] = useState(() =>
+    readPreference(MONITOR_OPEN_KEY, false),
+  );
+  const [overlayPane, setOverlayPane] = useState<'files' | 'monitor' | null>(null);
+  const desktop = useMediaQuery('(min-width: 1200px)');
+  const tablet = useMediaQuery('(min-width: 760px) and (max-width: 1199px)');
+  const mobile = useIsMobile();
 
   const identity = chat.session?.identity ?? null;
   const token = chat.session?.token ?? null;
@@ -166,106 +210,258 @@ export function ChatPage({ roomId }: ChatPageProps) {
 
   const shownStatus = status || chat.refreshError || chat.streamError || '';
   const ready = chat.status === 'ready' && Boolean(room && identity && token);
+  const filesVisible =
+    ready && (desktop ? filesDesktopOpen : overlayPane === 'files');
+  const monitorVisible =
+    ready && (desktop ? monitorDesktopOpen : overlayPane === 'monitor');
+  const files = useRoomFiles(roomId, token, filesVisible);
+  const monitor = useRoomMonitor(roomId, token, monitorVisible);
+
+  useEffect(() => {
+    setOverlayPane(null);
+    setOverlay(null);
+  }, [roomId]);
+
+  useEffect(() => {
+    const body = document.body;
+    body.classList.toggle('files-drawer-open', tablet && filesVisible);
+    body.classList.toggle('monitor-drawer-open', tablet && monitorVisible);
+    body.classList.toggle('files-page-open', mobile && filesVisible);
+    body.classList.toggle('monitor-page-open', mobile && monitorVisible);
+    return () => {
+      body.classList.remove(
+        'files-drawer-open',
+        'monitor-drawer-open',
+        'files-page-open',
+        'monitor-page-open',
+      );
+    };
+  }, [filesVisible, mobile, monitorVisible, tablet]);
+
+  useEffect(() => {
+    if (!overlayPane) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const toggle =
+        overlayPane === 'files'
+          ? document.getElementById('files-toggle')
+          : document.getElementById('monitor-toggle');
+      setOverlayPane(null);
+      toggle?.focus();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [overlayPane]);
+
+  useEffect(() => {
+    if (!mobile) return;
+    if (filesVisible) document.getElementById('files-close')?.focus();
+    else if (monitorVisible) document.getElementById('monitor-close')?.focus();
+  }, [filesVisible, mobile, monitorVisible]);
+
+  const toggleFiles = useCallback(() => {
+    if (!ready) return;
+    if (desktop) {
+      setMonitorDesktopOpen(false);
+      writePreference(MONITOR_OPEN_KEY, false);
+      setFilesDesktopOpen((open) => {
+        const next = !open;
+        writePreference(FILES_OPEN_KEY, next);
+        return next;
+      });
+      return;
+    }
+    setOverlayPane((current) => (current === 'files' ? null : 'files'));
+  }, [desktop, ready]);
+
+  const toggleMonitor = useCallback(() => {
+    if (!ready) return;
+    if (desktop) {
+      setFilesDesktopOpen(false);
+      writePreference(FILES_OPEN_KEY, false);
+      setMonitorDesktopOpen((open) => {
+        const next = !open;
+        writePreference(MONITOR_OPEN_KEY, next);
+        return next;
+      });
+      return;
+    }
+    setOverlayPane((current) => (current === 'monitor' ? null : 'monitor'));
+  }, [desktop, ready]);
+
+  const closeFiles = useCallback(() => {
+    if (desktop) {
+      setFilesDesktopOpen(false);
+      writePreference(FILES_OPEN_KEY, false);
+    } else {
+      setOverlayPane(null);
+    }
+    document.getElementById('files-toggle')?.focus();
+  }, [desktop]);
+
+  const closeMonitor = useCallback(() => {
+    if (desktop) {
+      setMonitorDesktopOpen(false);
+      writePreference(MONITOR_OPEN_KEY, false);
+    } else {
+      setOverlayPane(null);
+    }
+    document.getElementById('monitor-toggle')?.focus();
+  }, [desktop]);
 
   return (
     <>
       <AppShell
         main={
-          <section className="chat-pane" aria-label="聊天区">
-            <header className="chat-head">
-              <a className="back" id="back" href="/" aria-label="返回会话列表">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M15 6l-6 6 6 6" />
-                </svg>
-              </a>
-              <div className="chat-id">
-                <div className="title-row">
-                  <h2 id="title">{title}</h2>
+          <>
+            <section className="chat-pane" aria-label="聊天区">
+              <header className="chat-head">
+                <a className="back" id="back" href="/" aria-label="返回会话列表">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M15 6l-6 6 6 6" />
+                  </svg>
+                </a>
+                <div className="chat-id">
+                  <div className="title-row">
+                    <h2 id="title">{title}</h2>
+                  </div>
+                  <p className="muted" id="subtitle" hidden={!subtitle}>
+                    {subtitle}
+                  </p>
                 </div>
-                <p className="muted" id="subtitle" hidden={!subtitle}>
-                  {subtitle}
+                {room ? (
+                  <div className="chat-head-actions">
+                    <button
+                      className={`monitor-toggle${monitorVisible ? ' active' : ''}`}
+                      id="monitor-toggle"
+                      type="button"
+                      aria-controls="monitor-pane"
+                      aria-expanded={monitorVisible}
+                      aria-label="打开网页监控"
+                      title="网页监控"
+                      onClick={toggleMonitor}
+                    >
+                      <span>网页</span>
+                    </button>
+                    <button
+                      className={`files-toggle${filesVisible ? ' active' : ''}`}
+                      id="files-toggle"
+                      type="button"
+                      aria-controls="files-pane"
+                      aria-expanded={filesVisible}
+                      onClick={toggleFiles}
+                    >
+                      文件
+                    </button>
+                    {identity ? <AccountMenu me={identity} /> : null}
+                    {room.announcement ? (
+                      <AnnouncementPopover
+                        announcement={room.announcement}
+                        canEdit={
+                          !room.read_only && room.capabilities?.manage_announcement === true
+                        }
+                        onEdit={() => setOverlay('announcement')}
+                      />
+                    ) : null}
+                    <RoomMenu room={room} peerName={peer?.name ?? null} onOpen={setOverlay} />
+                  </div>
+                ) : null}
+              </header>
+              {room?.announcement ? (
+                <div id="room-announcement" className="room-announcement" role="note">
+                  {room.announcement}
+                </div>
+              ) : null}
+              {room?.read_only ? (
+                <div id="room-archive-banner" className="room-archive-banner" role="note">
+                  群聊已解散，当前为只读归档；截至解散点的历史仍可查看。
+                </div>
+              ) : null}
+              <div className="chat-body" id="chat-body" aria-busy={chat.status === 'loading'}>
+                <div id="chat-loading" className="chat-loading" role="status" hidden={chat.status !== 'loading'}>
+                  正在加载会话…
+                </div>
+                <div id="chat-error" className="chat-error" role="alert" hidden={chat.status !== 'error'}>
+                  <p id="chat-error-text">{chat.error || '读取会话失败'}</p>
+                  <div className="chat-error-actions">
+                    <button id="chat-error-retry" type="button" onClick={() => void chat.load()}>
+                      重试
+                    </button>
+                    <a id="chat-error-back" href="/">
+                      返回会话列表
+                    </a>
+                  </div>
+                </div>
+                {ready && room && identity ? (
+                  <Timeline
+                    items={chat.items}
+                    room={room}
+                    members={members}
+                    identityId={identity.actor_id}
+                    identityName={identity.name}
+                    mentions={mentions}
+                    outbox={queue.items}
+                    olderLoading={chat.olderLoading}
+                    olderError={chat.olderError}
+                    olderEnded={chat.olderEnded}
+                    hasOlder={chat.hasOlder}
+                    forcePinToken={forcePinToken}
+                    onLoadOlder={chat.loadOlder}
+                    onRetryOutbox={(id) => void onRetryOutbox(id)}
+                    onRemoveOutbox={queue.remove}
+                    onQuote={onQuote}
+                    onStatus={onStatus}
+                    onMarkRead={chat.markRead}
+                  />
+                ) : null}
+                <p id="status" role="status">
+                  {shownStatus}
                 </p>
+                {ready && room && identity && token && !room.read_only ? (
+                  <Composer
+                    room={room}
+                    members={members}
+                    identity={identity}
+                    token={token}
+                    reply={reply}
+                    sending={false}
+                    onCancelReply={() => setReply(null)}
+                    onSend={onSend}
+                    onStatus={onStatus}
+                  />
+                ) : null}
               </div>
-              {room ? (
-                <div className="chat-head-actions">
-                  {room.announcement ? (
-                    <AnnouncementPopover
-                      announcement={room.announcement}
-                      canEdit={
-                        !room.read_only && room.capabilities?.manage_announcement === true
-                      }
-                      onEdit={() => setOverlay('announcement')}
-                    />
-                  ) : null}
-                  <RoomMenu room={room} peerName={peer?.name ?? null} onOpen={setOverlay} />
-                </div>
-              ) : null}
-            </header>
-            {room?.announcement ? (
-              <div id="room-announcement" className="room-announcement" role="note">
-                {room.announcement}
-              </div>
-            ) : null}
-            {room?.read_only ? (
-              <div id="room-archive-banner" className="room-archive-banner" role="note">
-                群聊已解散，当前为只读归档；截至解散点的历史仍可查看。
-              </div>
-            ) : null}
-            <div className="chat-body" id="chat-body" aria-busy={chat.status === 'loading'}>
-              <div id="chat-loading" className="chat-loading" role="status" hidden={chat.status !== 'loading'}>
-                正在加载会话…
-              </div>
-              <div id="chat-error" className="chat-error" role="alert" hidden={chat.status !== 'error'}>
-                <p id="chat-error-text">{chat.error || '读取会话失败'}</p>
-                <div className="chat-error-actions">
-                  <button id="chat-error-retry" type="button" onClick={() => void chat.load()}>
-                    重试
-                  </button>
-                  <a id="chat-error-back" href="/">
-                    返回会话列表
-                  </a>
-                </div>
-              </div>
-              {ready && room && identity ? (
-                <Timeline
-                  items={chat.items}
-                  room={room}
-                  members={members}
-                  identityId={identity.actor_id}
-                  identityName={identity.name}
-                  mentions={mentions}
-                  outbox={queue.items}
-                  olderLoading={chat.olderLoading}
-                  olderError={chat.olderError}
-                  olderEnded={chat.olderEnded}
-                  hasOlder={chat.hasOlder}
-                  forcePinToken={forcePinToken}
-                  onLoadOlder={chat.loadOlder}
-                  onRetryOutbox={(id) => void onRetryOutbox(id)}
-                  onRemoveOutbox={queue.remove}
-                  onQuote={onQuote}
-                  onStatus={onStatus}
-                  onMarkRead={chat.markRead}
+            </section>
+            {filesVisible ? (
+              <Suspense fallback={null}>
+                <FilesPane
+                  roomId={roomId}
+                  token={token ?? ''}
+                  readOnly={room?.read_only === true}
+                  open={filesVisible}
+                  onClose={closeFiles}
+                  files={files}
                 />
-              ) : null}
-              <p id="status" role="status">
-                {shownStatus}
-              </p>
-              {ready && room && identity && token && !room.read_only ? (
-                <Composer
-                  room={room}
-                  members={members}
-                  identity={identity}
-                  token={token}
-                  reply={reply}
-                  sending={false}
-                  onCancelReply={() => setReply(null)}
-                  onSend={onSend}
-                  onStatus={onStatus}
-                />
-              ) : null}
-            </div>
-          </section>
+              </Suspense>
+            ) : null}
+            {monitorVisible ? (
+              <Suspense fallback={null}>
+                <MonitorPane open={monitorVisible} onClose={closeMonitor} monitor={monitor} />
+              </Suspense>
+            ) : null}
+            <div
+              className="files-backdrop"
+              id="files-backdrop"
+              hidden={!tablet || !filesVisible}
+              onClick={() => setOverlayPane(null)}
+            />
+            <div
+              className="monitor-backdrop"
+              id="monitor-backdrop"
+              hidden={!tablet || !monitorVisible}
+              onClick={() => setOverlayPane(null)}
+            />
+          </>
         }
       />
       {ready && room && identity && token ? (
@@ -275,6 +471,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
             onOpenChange={(open) => setOverlay(open ? 'members' : null)}
             room={room}
             members={Array.from(members.values())}
+            ownerTransfer={chat.detail?.owner_transfer ?? null}
             identityId={identity.actor_id}
             token={token}
           />
@@ -297,6 +494,14 @@ export function ChatPage({ roomId }: ChatPageProps) {
               targetId={peer.actor_id}
               targetName={peer.name}
               roomId={room.room_id}
+              token={token}
+            />
+          ) : null}
+          {peer?.kind === 'agent' ? (
+            <TransferDialog
+              open={overlay === 'transfer'}
+              onOpenChange={(open) => setOverlay(open ? 'transfer' : null)}
+              agentId={peer.actor_id}
               token={token}
             />
           ) : null}

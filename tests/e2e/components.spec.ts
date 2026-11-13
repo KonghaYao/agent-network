@@ -85,7 +85,7 @@ const SPA_ENABLED =
   (process.env.WEB_SPA_ROUTES ?? '')
     .split(',')
     .map((value) => value.trim())
-    .includes('room');
+    .some((value) => value === 'room' || value === 'all');
 
 async function login(page: Page, base: string, token: string): Promise<void> {
   await page.addInitScript(
