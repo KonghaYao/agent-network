@@ -34,6 +34,7 @@ import { buildChatIconsBundle } from '../web/chat-icons-bundle';
 import { buildDrawboardBundle } from '../web/drawboard-bundle';
 import { buildMarkdownBundle } from '../web/markdown-bundle';
 import { buildResizerBundle } from '../web/resizer-bundle';
+import { loadSpaManifest, parseSpaRoutes } from '../web/spa-manifest';
 import { buildCliBundle } from './cli-bundle';
 import { createD1 } from './d1';
 import { resolveFileTicketSecret } from './file-ticket-secret';
@@ -349,6 +350,21 @@ if (cliBundle) {
   );
 }
 
+// 4B-0：只有显式配置 `WEB_SPA_ROUTES` 时才读取 manifest；默认空集合保持 legacy。
+// manifest 缺失或引用文件不存在时回退旧页面，不阻塞启动、不返回 500。
+const spaRoutes = parseSpaRoutes(process.env.WEB_SPA_ROUTES);
+const spaDistDir = resolve(
+  process.env.WEB_DIST_DIR ?? resolve(import.meta.dir, '../../dist/web'),
+);
+const spaManifest = spaRoutes.size > 0 ? await loadSpaManifest(spaDistDir) : null;
+if (spaRoutes.size > 0) {
+  console.log(
+    spaManifest
+      ? `web spa routes enabled: ${[...spaRoutes].join(',')} (${spaDistDir})`
+      : `web spa manifest unavailable; falling back to legacy pages (${spaDistDir})`,
+  );
+}
+
 const app = createApp(env, {
   mount,
   markdownAsset: markdownBundle?.code ?? null,
@@ -361,6 +377,9 @@ const app = createApp(env, {
   iconAssetVersion: iconBundle?.version ?? null,
   clientAsset: cliBundle?.code ?? null,
   clientAssetVersion: cliBundle?.version ?? null,
+  spaRoutes,
+  spaManifest,
+  spaDistDir,
 });
 
 const server = Bun.serve({

@@ -1,6 +1,10 @@
 node_modules/
 .data/
 dist/
+.e2e/
+.drizzle/
+playwright-report/
+test-results/
 *.log
 .DS_Store
 .env

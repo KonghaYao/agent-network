@@ -423,11 +423,16 @@ bun scripts/verify-ts-monitor.ts       # TS 监听：claude/peri/dsh/other
 bun run test:dsh-plugin                # DSH 启动时版本/插件自检、缺失自动添加、会话绑定与队列消费者；当前 47 项
 bun scripts/verify-ts-codex-monitor.ts # TS codex 桥接
 bun run test:events         # 独立实例 + 自签 HTTPS receiver；默认端口 18890；当前 339 项
-bun scripts/q01-upgrade-check.ts   # 合成 0035 旧库升级到 0038，校验 34 个迁移与旧数据映射
+bun scripts/q01-upgrade-check.ts   # 合成 0035 旧库升级到 0047，校验 43 个迁移与旧数据映射
+bun run build:web                  # Vite 产出 dist/web；默认不接管路由
+bun run test:spa-shell             # build:web + manifest/static/flag 回退
+bun run test:schema-parity         # 43 个迁移 vs Drizzle core schema parity
+bun run test:mcp-parity            # 固定 MCP 协议帧 baseline
+bun run capture:mcp-baseline       # 协议/工具契约变更后重新录制 baseline
 AGENTNET_URL=http://127.0.0.1:8792 bun scripts/q01-doc-check.ts   # tools/list 114 与 README/CLAUDE/技能/CLI 引用一致
 DATA_DIR=.data bun scripts/verify-room-files.ts   # 房间文件 bind/list/get/delete、配额、墓碑、/f 与自动归档
 ```
-迁移共 34 个：`0001`–`0012`、`0017`–`0038`（`0013`–`0016` 历史上未使用）。`scripts/q01-upgrade-check.ts` 使用临时目录构造停在 `0035_task_recovery.sql` 的合成库，再顺序应用 `0036`–`0038`，验证 `integrity_check=ok`、`foreign_key_check` 无违规、`credentials→devices` 回填、`guard_owner_missing` 与 `room_management_audit` 重建不扩大权限。
+迁移共 43 个：`0001`–`0012`、`0017`–`0047`（`0013`–`0016` 历史上未使用）。`scripts/q01-upgrade-check.ts` 使用临时目录构造停在 `0035_task_recovery.sql` 的合成库，再顺序应用 `0036`–`0047`，验证 `integrity_check=ok`、`foreign_key_check` 无违规、`credentials→devices` 回填、`guard_owner_missing` 与 `room_management_audit` 重建不扩大权限。
 `scripts/verify-room-files.ts` 默认读取 `.data` 下的 SQLite 做配额与墓碑用例；对远端运行时设置 `DATA_DIR` 指向本地数据库或跳过数据库级用例。当前 193 项通过。
 
 MCP Events 验收会自行启动独立实例（`EVENTS_TEST_PORT`，默认 18890），不需要主实例开启 events；`EVENTS_TEST_DATA_DIR` 可指定临时数据目录。`test:acceptance` 只有在显式设置 `EVENTS_ACCEPTANCE=1` 且目标实例允许测试私网 callback 时才跑 events 闭环。
@@ -525,6 +530,7 @@ AI 消息 Markdown 与安全边界：
 - `src/web/markdown/entry.tsx` 是唯一的 React 子树：`streamdown` 2.7.0、React 19，`mode="static"`、`parseIncompleteMarkdown={false}`，不导入 Tailwind，不使用 `dangerouslySetInnerHTML`。`components.a` 只保留安全协议并强制 `target="_blank"`/`rel`/`referrerPolicy`，`components.img` 返回 `null`，错误边界回退纯文本。
 - 安全插件为 `rehype-sanitize` + `rehype-harden`，不含 `rehype-raw`；`allowedProtocols` 只留 `http`/`https`/`mailto`，`allowedImagePrefixes: []`、`allowDataImages: false`、`defaultOrigin: location.origin`。原始 HTML 作为文本，代码块只作文本展示。
 - `src/bun/main.ts` 启动时调用 `src/web/markdown-bundle.ts` 与 `src/web/resizer-bundle.ts` 的 `Bun.build`（browser、ESM、minify、`NODE_ENV=production`、单文件），产物保存在内存；`GET /assets/chat-markdown.js` 与 `GET /assets/chat-resizer.js` 返回 `text/javascript; charset=utf-8`、`nosniff` 与 5 分钟缓存。构建失败返回 404，Markdown 回退纯文本，右侧分栏保留 CSS 默认 50/50。
+- Vite/React 壳（4B-0）默认关闭：`bun run build:web` 产出 `dist/web`，启动只读 `.vite/manifest.json`；`WEB_SPA_ROUTES` 为空时继续渲染旧页面，只有列出的 route（`home`/`room`/`share`/`join`/`pair`）且 manifest 有效时才返回 `/static/*` 壳。manifest 缺失或引用文件不存在时回退 legacy；`/static/*` 只服务白名单扩展名，拒绝路径穿越与 `.map`。
 - 桥接层只在第一条 AI 消息出现时 `import()` 一次；asset 404、React 错误或消息被移除都不影响消息、文件卡片、发送与滚动。Markdown 升级后若 `pinned` 则保持底部，上翻时按视口上沿高度差补偿 `scrollTop` 并用阅读锚点校正；加载更早消息同样保持锚点、不自动滚底。
 
 ## MCP Events（webhook 订阅）

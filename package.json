@@ -8,6 +8,15 @@
     "dev": "bun --watch src/bun/main.ts",
     "start": "bun src/bun/main.ts",
     "build:client": "bun scripts/build-client.ts",
+    "build:web": "vite build",
+    "dev:web": "vite",
+    "preview:web": "vite preview",
+    "test:e2e": "playwright test",
+    "test:spa-shell": "bun run build:web && bun scripts/verify-spa-shell.ts",
+    "test:schema-parity": "bun scripts/verify-drizzle-schema.ts",
+    "test:mcp-parity": "bun scripts/verify-mcp-parity.ts",
+    "capture:mcp-baseline": "bun scripts/capture-mcp-baseline.ts",
+    "q01-upgrade-check": "bun scripts/q01-upgrade-check.ts",
     "typecheck": "tsrs --noEmit",
     "typecheck:tsc": "tsc --noEmit",
     "test:units": "bun scripts/verify-refactor-units.ts",
@@ -47,6 +56,7 @@
     "@peri-code/mcpp": "0.9.0",
     "@use-gesture/react": "^10.3.1",
     "commander": "^15.1.0",
+    "drizzle-orm": "0.45.4",
     "eventsource-parser": "^3.1.1",
     "fabric": "^6.7.0",
     "flydrive": "2.2.0",
@@ -66,12 +76,16 @@
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
     "@modelcontextprotocol/client": "2.3.1",
+    "@playwright/test": "1.64.1",
     "@types/bun": "^1.4.2",
     "@types/proper-lockfile": "4.1.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "drizzle-kit": "0.31.11",
     "playwright": "^1.64.1",
     "tsrs": "0.21.0-ts7.1.0-beta",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vite": "7.3.8"
   }
 }
