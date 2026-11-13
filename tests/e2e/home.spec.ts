@@ -100,6 +100,7 @@ test.describe('SPA Home', () => {
   let nameA = '';
   let nameB = '';
   let roomId = '';
+  let groupId = '';
 
   test.beforeAll(async () => {
     base = await baseUrl();
@@ -149,6 +150,19 @@ test.describe('SPA Home', () => {
       body: 'E2E 初始未读消息',
       invoke: [],
     });
+
+    const group = await callTool<{ room: { room_id: string } }>(
+      base,
+      tokenA,
+      'network_room_create',
+      {
+        request_id: requestId('e2e_group'),
+        kind: 'group',
+        members: [b.actor_id],
+        title: `E2E 群聊 ${suffix}`,
+      },
+    );
+    groupId = group.room.room_id;
   });
 
   test.beforeEach(async ({ page }) => {
@@ -215,6 +229,53 @@ test.describe('SPA Home', () => {
     await expect(page).toHaveURL(`${base}/c/${roomId}`);
     await expect(page.locator('body')).toHaveClass(/page-room/);
     await expect(page.locator('#composer')).toBeVisible();
+  });
+
+  test('clicking a conversation row is a client-side navigation', async ({ page }) => {
+    const documentRequests: string[] = [];
+    const loadEvents: string[] = [];
+    page.on('request', (request) => {
+      if (request.resourceType() === 'document') documentRequests.push(request.url());
+    });
+    page.on('load', () => loadEvents.push(page.url()));
+
+    await page.goto(`${base}/`);
+    await expect(page.locator('#room-list .room-item').first()).toBeVisible();
+    await page.locator('#room-filter-group').click();
+    const row = page.locator(`#room-list a[data-room-id="${groupId}"]`);
+    await expect(row).toBeVisible();
+
+    const before = await page.evaluate(() => {
+      (window as typeof window & { __roomNavMarker?: string }).__roomNavMarker = 'kept';
+      return {
+        timeOrigin: performance.timeOrigin,
+        navigationEntries: performance.getEntriesByType('navigation').length,
+      };
+    });
+    documentRequests.length = 0;
+    loadEvents.length = 0;
+
+    await row.click();
+
+    await expect(page).toHaveURL(`${base}/c/${groupId}`);
+    await expect(page.locator('body')).toHaveClass(/page-room/);
+    await expect(page.locator('#composer')).toBeVisible();
+
+    // A full document navigation replaces `window` and starts a new
+    // performance timeline; a client-side route keeps both.
+    expect(
+      await page.evaluate(
+        () => (window as typeof window & { __roomNavMarker?: string }).__roomNavMarker,
+      ),
+    ).toBe('kept');
+    const after = await page.evaluate(() => ({
+      timeOrigin: performance.timeOrigin,
+      navigationEntries: performance.getEntriesByType('navigation').length,
+    }));
+    expect(after.timeOrigin).toBe(before.timeOrigin);
+    expect(after.navigationEntries).toBe(before.navigationEntries);
+    expect(documentRequests).toEqual([]);
+    expect(loadEvents).toEqual([]);
   });
 
   test.describe('mobile', () => {
