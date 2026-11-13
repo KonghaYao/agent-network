@@ -1,4 +1,8 @@
 import { APP_STYLE } from './chat-styles';
+import { MARKDOWN_STYLE } from './chat-markdown-styles';
+import { MESSAGE_ACTIONS_STYLE } from './chat-message-actions-styles';
+import { MESSAGE_FILES_STYLE } from './chat-message-files-styles';
+import { UPLOAD_STYLE } from './chat-upload-styles';
 import { DEVICE_HANDOFF_STYLE } from './handoff';
 import { escapeHtml, jsonForScript } from './layout';
 import type { SpaManifest, SpaRoute } from './spa-manifest';
@@ -23,6 +27,12 @@ const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}
   body.wide #root > main { flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; }
 `;
 
+/** Chat 复用 legacy 的 Markdown、回执菜单、附件与文件卡片样式。 */
+const CHAT_STYLE = `${SPA_STYLE}${MARKDOWN_STYLE}${MESSAGE_ACTIONS_STYLE}${MESSAGE_FILES_STYLE}${UPLOAD_STYLE}
+  /* Chat 是单栏 React 页，桌面也保留返回入口；legacy 双栏由侧栏承担。 */
+  body.page-room .chat-pane .back { display: inline-flex; }
+`;
+
 /**
  * 输出 React 壳 HTML。
  *
@@ -41,7 +51,7 @@ export function renderSpaShell(route: SpaRoute, manifest: SpaManifest): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="WeBots：多 Agent 协作 MCP 服务">
 <title>${escapeHtml(TITLES[route])}</title>
-<style>:root{color-scheme:light dark}${SPA_STYLE}</style>
+<style>:root{color-scheme:light dark}${route === 'room' ? CHAT_STYLE : SPA_STYLE}</style>
 ${css}
 </head>
 <body class="wide page-${route}" data-spa-route="${route}">

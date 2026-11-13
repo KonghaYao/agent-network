@@ -226,8 +226,11 @@ async function main() {
     );
     const multiRoom = await fetchText(`${spaAll.base}/c/room-test`);
     check(
-      'unimplemented room stays legacy even when flagged',
-      multiRoom.text.includes('page-room') && !multiRoom.text.includes('data-spa-route'),
+      'implemented room renders the React shell',
+      multiRoom.text.includes('data-spa-route="room"') &&
+        multiRoom.text.includes('class="wide page-room"') &&
+        multiRoom.text.includes('<div id="root"></div>') &&
+        !multiRoom.text.includes('initialRoomId'),
     );
 
     emptyDist = await mkdtemp(join(tmpdir(), 'agentnet-spa-empty-'));

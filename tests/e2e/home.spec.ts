@@ -218,7 +218,7 @@ test.describe('SPA Home', () => {
     expect(await page.evaluate(() => window.sessionStorage.getItem('__homeMarker'))).toBe('1');
   });
 
-  test('clicking a room loads the legacy chat page', async ({ page }) => {
+  test('clicking a room opens the chat page', async ({ page }) => {
     await page.goto(`${base}/`);
     await page.locator(`#room-list a[href="/c/${roomId}"]`).click();
     await expect(page).toHaveURL(`${base}/c/${roomId}`);

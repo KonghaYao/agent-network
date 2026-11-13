@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
  * React 运行壳：只接管应用页的 `<main>` 容器，侧栏/主区由页面组合。
  * 保留 legacy 的 `main` 语义与 APP_STYLE 双栏布局。
  */
-export function AppShell({ sidebar, main }: { sidebar: ReactNode; main: ReactNode }) {
+export function AppShell({ sidebar, main }: { sidebar?: ReactNode; main: ReactNode }) {
   return (
     <main>
       {sidebar}
