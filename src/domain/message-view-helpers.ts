@@ -1,14 +1,12 @@
 /** 历史页共用的投递状态聚合；消息与 timeline 使用同一投影。 */
 
-import type { MessageRow } from '../storage/rows';
+import {
+  listDeliveryStates,
+  listMessageMentions,
+  type DeliveryStateRow,
+} from '../storage/queries';
 
-export interface DeliveryStateRow {
-  message_id?: string;
-  state: string;
-  n: number;
-  max_claimed_at: number | null;
-  max_updated_at: number | null;
-}
+export type { DeliveryStateRow };
 
 export interface DeliveryStateSummary {
   states: Record<string, number>;
@@ -18,41 +16,10 @@ export interface DeliveryStateSummary {
 
 export type MentionSource = 'explicit' | 'text' | 'all';
 
-/**
- * 历史与时间线列表所需的消息列；绝不包含 `body`。
- *
- * 正文只能通过 `network_message_read` 分块读取，列表页不需要把最大
- * 256 KiB 的 body 复制进 JS 再丢弃。
- */
-export type HistoryMessageRow = Pick<
-  MessageRow,
-  | 'message_id'
-  | 'room_id'
-  | 'sender_id'
-  | 'created_seq'
-  | 'preview'
-  | 'body_bytes'
-  | 'created_at'
-  | 'reply_to'
-  | 'root_id'
-  | 'task_root_id'
-  | 'hop'
->;
-
-export const HISTORY_MESSAGE_COLUMNS =
-  'message_id, room_id, sender_id, created_seq, preview, body_bytes, created_at, reply_to, root_id, task_root_id, hop';
-
 /** 消息提及的稳定投影；source 表示目标来自显式选择、正文还是 @所有人。 */
 export interface MentionView {
   actor_id: string;
   kind: 'human' | 'agent';
-  source: MentionSource;
-}
-
-interface MessageMentionRow {
-  message_id: string;
-  actor_id: string;
-  actor_kind: 'human' | 'agent';
   source: MentionSource;
 }
 
@@ -87,20 +54,9 @@ export async function deliveryStatesFor(
   db: D1Database,
   messageIds: string[],
 ): Promise<Map<string, DeliveryStateSummary>> {
-  if (messageIds.length === 0) return new Map();
-  const placeholders = messageIds.map(() => '?').join(',');
-  const rows = await db
-    .prepare(
-      `SELECT message_id, state, COUNT(*) AS n,
-              MAX(CASE WHEN state = 'claimed' THEN claimed_at END) AS max_claimed_at,
-              MAX(CASE WHEN state = 'claimed' THEN updated_at END) AS max_updated_at
-         FROM deliveries
-        WHERE message_id IN (${placeholders}) GROUP BY message_id, state`,
-    )
-    .bind(...messageIds)
-    .all<DeliveryStateRow & { message_id: string }>();
+  const rows = await listDeliveryStates(db, messageIds);
   const grouped = new Map<string, DeliveryStateRow[]>();
-  for (const row of rows.results) {
+  for (const row of rows) {
     const list = grouped.get(row.message_id) ?? [];
     list.push(row);
     grouped.set(row.message_id, list);
@@ -115,19 +71,9 @@ export async function mentionsFor(
   db: D1Database,
   messageIds: string[],
 ): Promise<Map<string, MentionView[]>> {
-  if (messageIds.length === 0) return new Map();
-  const placeholders = messageIds.map(() => '?').join(',');
-  const rows = await db
-    .prepare(
-      `SELECT message_id, actor_id, actor_kind, source
-         FROM message_mentions
-        WHERE message_id IN (${placeholders})
-        ORDER BY message_id, actor_id`,
-    )
-    .bind(...messageIds)
-    .all<MessageMentionRow>();
+  const rows = await listMessageMentions(db, messageIds);
   const map = new Map<string, MentionView[]>();
-  for (const row of rows.results) {
+  for (const row of rows) {
     const list = map.get(row.message_id) ?? [];
     list.push({ actor_id: row.actor_id, kind: row.actor_kind, source: row.source });
     map.set(row.message_id, list);

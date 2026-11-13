@@ -1,9 +1,10 @@
 /**
- * 4C-1 Drizzle 只读查询运行时对比。
+ * 4C-1/4C-4 Drizzle 只读查询运行时对比。
  *
  * 对 `src/storage/queries.ts` 中已迁移到 Drizzle 的核心读查询，逐条执行：
  * 1. 手写 SQL（迁移前的原语句）与 Drizzle 构建结果逐行比较，包含字段顺序；
- * 2. 比较 `EXPLAIN QUERY PLAN`，确认索引选择与扫描顺序不变；
+ * 2. 用生产实际执行的 SQL 做 `EXPLAIN QUERY PLAN`，与手写 SQL 的计划比较
+ *    （4C-4 的手写 SQL 使用 `d`/`m`/`a` 别名，只归一化 FROM/JOIN 表标识）；
  * 3. 记录 raw / Drizzle 构建+执行的基准耗时。
  *
  * 只读内存库，不触碰真实 DATA_DIR；执行仍走生产同款 `createD1()` shim。
@@ -24,12 +25,26 @@ import {
   getActorBySession,
   getActorManagementByIds,
   getActorsByIds,
+  getClaimedDelivery,
+  getClaimedDeliveryId,
   getCredentialByHash,
+  getDelivery,
+  getDeliveryForMessage,
   getEventsMinSeq,
   getMember,
+  getMessage,
+  getMessageContextAnchor,
+  getMessageSenderSummary,
   getRoom,
   isActiveMember,
   listActiveRoomPeers,
+  listDeliveryStates,
+  listHistoryMessagesAfter,
+  listHistoryMessagesBefore,
+  listHistoryMessagesByIds,
+  listInboxDeliveries,
+  listMessageContextWindow,
+  listMessageMentions,
 } from '../src/storage/queries';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
@@ -120,6 +135,113 @@ function seed(sqlite: Database): void {
   member.run('room_group_1', 'act_agent_1', 'admin', 'active', 2, 9, 215, 1, 215, 2);
   member.run('room_group_1', 'act_human_2', 'member', 'left', 3, 3, 216, 1, 216, 1);
   member.run('room_group_1', 'act_agent_3', 'member', 'active', 4, 4, 217, 1, 217, 3);
+
+  const message = sqlite.prepare(
+    `INSERT INTO messages
+       (message_id, room_id, sender_id, client_message_id, created_seq, body, body_bytes,
+        preview, reply_to, root_id, hop, root_invocations_used, created_at,
+        task_root_id, task_marked_by, task_marked_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const messages: [
+    string,
+    string,
+    string,
+    number,
+    string,
+    string | null,
+    string | null,
+    number,
+    string,
+    string | null,
+    string | null,
+    number | null,
+  ][] = [
+    ['msg_d1_1', 'room_direct_1', 'act_human_1', 1, 'hello direct', null, null, 0, 'cm_d1_1', null, null, null],
+    ['msg_d1_2', 'room_direct_1', 'act_agent_1', 2, 'agent reply', 'msg_d1_1', 'msg_d1_1', 1, 'cm_d1_2', null, null, null],
+    ['msg_d1_5', 'room_direct_1', 'act_human_1', 5, 'later message', null, null, 0, 'cm_d1_5', null, null, null],
+    ['msg_d2_1', 'room_direct_2', 'act_agent_2', 1, 'second room', null, null, 0, 'cm_d2_1', null, null, null],
+    ['msg_d2_2', 'room_direct_2', 'act_human_1', 2, 'second reply', null, null, 0, 'cm_d2_2', null, null, null],
+    ['msg_g1_3', 'room_group_1', 'act_human_1', 3, 'group start', null, null, 0, 'cm_g1_3', null, null, null],
+    ['msg_g1_8', 'room_group_1', 'act_agent_1', 8, 'group task', null, null, 0, 'cm_g1_8', 'msg_g1_8', 'act_human_1', 1_300],
+    ['msg_g1_9', 'room_group_1', 'act_agent_3', 9, 'group answer', 'msg_g1_8', 'msg_g1_8', 1, 'cm_g1_9', 'msg_g1_9', 'act_agent_1', 1_400],
+    ['msg_ghost', 'room_group_1', 'act_missing', 7, 'ghost sender', null, null, 0, 'cm_ghost', null, null, null],
+  ];
+  for (const [
+    id,
+    roomId,
+    senderId,
+    seq,
+    body,
+    replyTo,
+    rootId,
+    hop,
+    clientMessageId,
+    taskRootId,
+    taskMarkedBy,
+    taskMarkedAt,
+  ] of messages) {
+    message.run(
+      id,
+      roomId,
+      senderId,
+      clientMessageId,
+      seq,
+      body,
+      Buffer.byteLength(body, 'utf8'),
+      body,
+      replyTo,
+      rootId,
+      hop,
+      hop,
+      1_000 + seq,
+      taskRootId,
+      taskMarkedBy,
+      taskMarkedAt,
+    );
+  }
+
+  const delivery = sqlite.prepare(
+    `INSERT INTO deliveries
+       (delivery_id, recipient_id, message_id, room_id, state, attempt, claim_id, claimed_at,
+        progress_at, result_message_id, error, created_seq, created_at, updated_at,
+        last_reminded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const deliveries: [
+    string,
+    string,
+    string,
+    string,
+    string,
+    number,
+    string | null,
+    number | null,
+    number | null,
+    string | null,
+    string | null,
+    number,
+    number,
+    number,
+    number | null,
+  ][] = [
+    ['del_pending_1', 'act_agent_1', 'msg_d1_2', 'room_direct_1', 'pending', 0, null, null, null, null, null, 1, 1_100, 1_100, null],
+    ['del_claimed_1', 'act_agent_1', 'msg_g1_8', 'room_group_1', 'claimed', 1, 'claim_1', 1_200, 1_210, null, null, 2, 1_200, 1_220, 1_230],
+    ['del_pending_2', 'act_agent_3', 'msg_g1_8', 'room_group_1', 'pending', 0, null, null, null, null, null, 3, 1_210, 1_210, null],
+    ['del_completed_1', 'act_agent_1', 'msg_g1_9', 'room_group_1', 'completed', 2, null, null, null, null, null, 4, 1_300, 1_400, null],
+    ['del_failed_1', 'act_agent_2', 'msg_g1_9', 'room_group_1', 'failed', 1, null, null, null, null, 'boom', 5, 1_301, 1_401, null],
+    ['del_ghost', 'act_agent_2', 'msg_ghost', 'room_group_1', 'pending', 0, null, null, null, null, null, 6, 1_302, 1_302, null],
+  ];
+  for (const row of deliveries) delivery.run(...row);
+
+  const mention = sqlite.prepare(
+    `INSERT INTO message_mentions (message_id, actor_id, actor_kind, source, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  );
+  mention.run('msg_g1_8', 'act_human_1', 'human', 'explicit', 1_200);
+  mention.run('msg_g1_8', 'act_agent_2', 'agent', 'text', 1_200);
+  mention.run('msg_g1_9', 'act_agent_3', 'agent', 'all', 1_300);
+  mention.run('msg_d1_2', 'act_agent_1', 'agent', 'explicit', 1_100);
 }
 
 function rawFirst<T>(sqlite: Database, sql: string, params: unknown[]): T | null {
@@ -140,6 +262,148 @@ function plan(sqlite: Database, sql: string, params: unknown[]): string[] {
 
 function placeholders(values: unknown[]): string {
   return values.map(() => '?').join(', ');
+}
+
+/** 历史页共享列；与生产 `historyMessageSelection` 的列和顺序一致。 */
+const HISTORY_SELECT =
+  'message_id, room_id, sender_id, created_seq, preview, body_bytes, created_at, reply_to, root_id, task_root_id, hop';
+
+function rawHistoryBefore(
+  sqlite: Database,
+  roomId: string,
+  snapshot: number,
+  fromSeq: number,
+  beforeSeq: number | null,
+  limit: number,
+): string {
+  const predicate = beforeSeq === null ? '' : 'AND created_seq < ?';
+  const params: unknown[] =
+    beforeSeq === null
+      ? [roomId, snapshot, fromSeq, limit]
+      : [roomId, snapshot, fromSeq, beforeSeq, limit];
+  return JSON.stringify(
+    rawAll(
+      sqlite,
+      `SELECT ${HISTORY_SELECT} FROM messages
+        WHERE room_id = ? AND created_seq <= ? AND created_seq >= ? ${predicate}
+        ORDER BY created_seq DESC LIMIT ?`,
+      params,
+    ),
+  );
+}
+
+function rawHistoryAfter(
+  sqlite: Database,
+  roomId: string,
+  snapshot: number,
+  fromSeq: number,
+  afterSeq: number,
+  limit: number,
+): string {
+  return JSON.stringify(
+    rawAll(
+      sqlite,
+      `SELECT ${HISTORY_SELECT} FROM messages
+        WHERE room_id = ? AND created_seq <= ? AND created_seq > ? AND created_seq >= ?
+        ORDER BY created_seq ASC LIMIT ?`,
+      [roomId, snapshot, afterSeq, fromSeq, limit],
+    ),
+  );
+}
+
+const CONTEXT_SELECT = `m.message_id, m.room_id, m.sender_id, a.name AS sender_name,
+  a.kind AS sender_kind, m.body_bytes, m.preview, m.created_at, m.created_seq, m.reply_to`;
+
+function rawContextBefore(
+  sqlite: Database,
+  roomId: string,
+  pivotSeq: number,
+  fromSeq: number | null,
+  limit: number,
+): string {
+  const lower = fromSeq === null ? '' : 'AND m.created_seq >= ?';
+  const params: unknown[] =
+    fromSeq === null ? [roomId, pivotSeq, limit] : [roomId, pivotSeq, fromSeq, limit];
+  return JSON.stringify(
+    rawAll(
+      sqlite,
+      `SELECT ${CONTEXT_SELECT} FROM messages m JOIN actors a ON a.actor_id = m.sender_id
+        WHERE m.room_id = ? AND m.created_seq < ? ${lower}
+        ORDER BY m.created_seq DESC LIMIT ?`,
+      params,
+    ),
+  );
+}
+
+function rawContextAfter(
+  sqlite: Database,
+  roomId: string,
+  pivotSeq: number,
+  fromSeq: number | null,
+  toSeq: number | null,
+  limit: number,
+): string {
+  const lower = fromSeq === null ? '' : 'AND m.created_seq >= ?';
+  const upper = toSeq === null ? '' : 'AND m.created_seq <= ?';
+  const params: unknown[] = [
+    roomId,
+    pivotSeq,
+    ...(fromSeq === null ? [] : [fromSeq]),
+    ...(toSeq === null ? [] : [toSeq]),
+    limit,
+  ];
+  return JSON.stringify(
+    rawAll(
+      sqlite,
+      `SELECT ${CONTEXT_SELECT} FROM messages m JOIN actors a ON a.actor_id = m.sender_id
+        WHERE m.room_id = ? AND m.created_seq > ? ${lower} ${upper}
+        ORDER BY m.created_seq ASC LIMIT ?`,
+      params,
+    ),
+  );
+}
+
+function rawInbox(
+  sqlite: Database,
+  recipientId: string,
+  states: string[] | null,
+  afterSeq: number | null,
+  limit: number,
+): string {
+  const stateFilter = states ? `AND d.state IN (${placeholders(states)})` : '';
+  const cursor = afterSeq === null ? '' : 'AND d.created_seq > ?';
+  const params: unknown[] = states ? [recipientId, ...states] : [recipientId];
+  if (afterSeq !== null) params.push(afterSeq);
+  params.push(limit);
+  return JSON.stringify(
+    rawAll(
+      sqlite,
+      `SELECT d.*, m.preview AS m_preview, m.body_bytes AS m_body_bytes,
+              m.sender_id AS m_sender_id, m.created_at AS m_created_at,
+              a.name AS m_sender_name, a.kind AS m_sender_kind
+         FROM deliveries d
+         JOIN messages m ON m.message_id = d.message_id
+         LEFT JOIN actors a ON a.actor_id = m.sender_id
+        WHERE d.recipient_id = ? ${stateFilter} ${cursor}
+        ORDER BY d.created_seq ASC
+        LIMIT ?`,
+      params,
+    ),
+  );
+}
+
+function deliveryStateRows(rows: {
+  message_id: string;
+  state: string;
+  n: number;
+  max_claimed_at: number | null;
+  max_updated_at: number | null;
+}[]): string {
+  return JSON.stringify(
+    rows
+      .map((row) => [row.message_id, row.state, row.n, row.max_claimed_at, row.max_updated_at])
+      .sort((left, right) => `${left[0]}:${left[1]}`.localeCompare(`${right[0]}:${right[1]}`)),
+  );
 }
 
 async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> {
@@ -305,6 +569,343 @@ async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> 
     ])?.inbox_min_seq ?? 0,
   );
   checkEqual('getEventsMinSeq actor', await getEventsMinSeq(db, 'actor', 'act_human_1'), 0);
+
+  // -------- 4C-4 messages --------
+  checkEqual(
+    'getMessage',
+    JSON.stringify(await getMessage(db, 'msg_d1_2')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM messages WHERE message_id = ?', ['msg_d1_2'])),
+  );
+  checkEqual(
+    'getMessage task root',
+    JSON.stringify(await getMessage(db, 'msg_g1_9')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM messages WHERE message_id = ?', ['msg_g1_9'])),
+  );
+  checkEqual('getMessage missing', await getMessage(db, 'msg_missing'), null);
+
+  checkEqual(
+    'listHistoryMessagesBefore first page',
+    JSON.stringify(
+      await listHistoryMessagesBefore(db, {
+        roomId: 'room_direct_1',
+        snapshot: 5,
+        fromSeq: 0,
+        beforeSeq: null,
+        limit: 3,
+      }),
+    ),
+    rawHistoryBefore(sqlite, 'room_direct_1', 5, 0, null, 3),
+  );
+  checkEqual(
+    'listHistoryMessagesBefore cursor',
+    JSON.stringify(
+      await listHistoryMessagesBefore(db, {
+        roomId: 'room_direct_1',
+        snapshot: 5,
+        fromSeq: 0,
+        beforeSeq: 5,
+        limit: 3,
+      }),
+    ),
+    rawHistoryBefore(sqlite, 'room_direct_1', 5, 0, 5, 3),
+  );
+  checkEqual(
+    'listHistoryMessagesBefore from_join boundary',
+    JSON.stringify(
+      await listHistoryMessagesBefore(db, {
+        roomId: 'room_group_1',
+        snapshot: 9,
+        fromSeq: 4,
+        beforeSeq: null,
+        limit: 20,
+      }),
+    ),
+    rawHistoryBefore(sqlite, 'room_group_1', 9, 4, null, 20),
+  );
+  checkEqual(
+    'listHistoryMessagesBefore empty room',
+    JSON.stringify(
+      await listHistoryMessagesBefore(db, {
+        roomId: 'room_missing',
+        snapshot: 9,
+        fromSeq: 0,
+        beforeSeq: null,
+        limit: 20,
+      }),
+    ),
+    rawHistoryBefore(sqlite, 'room_missing', 9, 0, null, 20),
+  );
+  checkEqual(
+    'listHistoryMessagesAfter',
+    JSON.stringify(
+      await listHistoryMessagesAfter(db, {
+        roomId: 'room_direct_1',
+        snapshot: 5,
+        fromSeq: 0,
+        afterSeq: 2,
+        limit: 5,
+      }),
+    ),
+    rawHistoryAfter(sqlite, 'room_direct_1', 5, 0, 2, 5),
+  );
+  checkEqual(
+    'listHistoryMessagesAfter fromSeq floor',
+    JSON.stringify(
+      await listHistoryMessagesAfter(db, {
+        roomId: 'room_group_1',
+        snapshot: 9,
+        fromSeq: 4,
+        afterSeq: 4,
+        limit: 20,
+      }),
+    ),
+    rawHistoryAfter(sqlite, 'room_group_1', 9, 4, 4, 20),
+  );
+  checkEqual(
+    'listHistoryMessagesAfter snapshot upper bound',
+    JSON.stringify(
+      await listHistoryMessagesAfter(db, {
+        roomId: 'room_group_1',
+        snapshot: 8,
+        fromSeq: 0,
+        afterSeq: 3,
+        limit: 20,
+      }),
+    ),
+    rawHistoryAfter(sqlite, 'room_group_1', 8, 0, 3, 20),
+  );
+
+  const messageIds = ['msg_g1_9', 'msg_d1_1', 'msg_missing'];
+  checkEqual(
+    'listHistoryMessagesByIds',
+    JSON.stringify(await listHistoryMessagesByIds(db, messageIds)),
+    JSON.stringify(
+      rawAll(
+        sqlite,
+        `SELECT ${HISTORY_SELECT} FROM messages WHERE message_id IN (${placeholders(messageIds)})`,
+        messageIds,
+      ),
+    ),
+  );
+  checkEqual('listHistoryMessagesByIds empty', JSON.stringify(await listHistoryMessagesByIds(db, [])), '[]');
+
+  // -------- 4C-4 message context --------
+  checkEqual(
+    'getMessageContextAnchor',
+    JSON.stringify(await getMessageContextAnchor(db, 'room_group_1', 'msg_g1_8')),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        `SELECT ${CONTEXT_SELECT} FROM messages m JOIN actors a ON a.actor_id = m.sender_id
+          WHERE m.room_id = ? AND m.message_id = ?`,
+        ['room_group_1', 'msg_g1_8'],
+      ),
+    ),
+  );
+  checkEqual(
+    'getMessageContextAnchor missing',
+    await getMessageContextAnchor(db, 'room_group_1', 'msg_missing'),
+    null,
+  );
+  checkEqual(
+    'listMessageContextWindow before full',
+    JSON.stringify(
+      await listMessageContextWindow(db, {
+        roomId: 'room_group_1',
+        pivotSeq: 8,
+        direction: 'before',
+        fromSeq: null,
+        toSeq: null,
+        limit: 2,
+      }),
+    ),
+    rawContextBefore(sqlite, 'room_group_1', 8, null, 2),
+  );
+  checkEqual(
+    'listMessageContextWindow before from_join',
+    JSON.stringify(
+      await listMessageContextWindow(db, {
+        roomId: 'room_group_1',
+        pivotSeq: 8,
+        direction: 'before',
+        fromSeq: 4,
+        toSeq: 8,
+        limit: 20,
+      }),
+    ),
+    rawContextBefore(sqlite, 'room_group_1', 8, 4, 20),
+  );
+  checkEqual(
+    'listMessageContextWindow after full',
+    JSON.stringify(
+      await listMessageContextWindow(db, {
+        roomId: 'room_group_1',
+        pivotSeq: 8,
+        direction: 'after',
+        fromSeq: null,
+        toSeq: null,
+        limit: 20,
+      }),
+    ),
+    rawContextAfter(sqlite, 'room_group_1', 8, null, null, 20),
+  );
+  checkEqual(
+    'listMessageContextWindow after archived',
+    JSON.stringify(
+      await listMessageContextWindow(db, {
+        roomId: 'room_group_1',
+        pivotSeq: 3,
+        direction: 'after',
+        fromSeq: 3,
+        toSeq: 8,
+        limit: 20,
+      }),
+    ),
+    rawContextAfter(sqlite, 'room_group_1', 3, 3, 8, 20),
+  );
+
+  // -------- 4C-4 messages / deliveries joins --------
+  const senderSql = `SELECT m.message_id, m.sender_id, m.created_seq, m.preview, m.body_bytes,
+              m.created_at, a.name AS sender_name, a.kind AS sender_kind
+         FROM messages m LEFT JOIN actors a ON a.actor_id = m.sender_id
+        WHERE m.message_id = ?`;
+  checkEqual(
+    'getMessageSenderSummary',
+    JSON.stringify(await getMessageSenderSummary(db, 'msg_g1_8')),
+    JSON.stringify(rawFirst(sqlite, senderSql, ['msg_g1_8'])),
+  );
+  checkEqual(
+    'getMessageSenderSummary ghost sender',
+    JSON.stringify(await getMessageSenderSummary(db, 'msg_ghost')),
+    JSON.stringify(rawFirst(sqlite, senderSql, ['msg_ghost'])),
+  );
+  checkEqual('getMessageSenderSummary missing', await getMessageSenderSummary(db, 'msg_missing'), null);
+
+  const stateIds = ['msg_d1_2', 'msg_g1_8', 'msg_g1_9', 'msg_missing'];
+  checkEqual(
+    'listDeliveryStates',
+    deliveryStateRows(await listDeliveryStates(db, stateIds)),
+    deliveryStateRows(
+      rawAll(
+        sqlite,
+        `SELECT message_id, state, COUNT(*) AS n,
+                MAX(CASE WHEN state = 'claimed' THEN claimed_at END) AS max_claimed_at,
+                MAX(CASE WHEN state = 'claimed' THEN updated_at END) AS max_updated_at
+           FROM deliveries WHERE message_id IN (${placeholders(stateIds)})
+          GROUP BY message_id, state`,
+        stateIds,
+      ),
+    ),
+  );
+  checkEqual('listDeliveryStates empty', JSON.stringify(await listDeliveryStates(db, [])), '[]');
+
+  const mentionIds = ['msg_g1_8', 'msg_g1_9', 'msg_missing'];
+  checkEqual(
+    'listMessageMentions',
+    JSON.stringify(await listMessageMentions(db, mentionIds)),
+    JSON.stringify(
+      rawAll(
+        sqlite,
+        `SELECT message_id, actor_id, actor_kind, source FROM message_mentions
+          WHERE message_id IN (${placeholders(mentionIds)})
+          ORDER BY message_id, actor_id`,
+        mentionIds,
+      ),
+    ),
+  );
+  checkEqual('listMessageMentions empty', JSON.stringify(await listMessageMentions(db, [])), '[]');
+
+  // -------- 4C-4 deliveries --------
+  checkEqual(
+    'getDelivery',
+    JSON.stringify(await getDelivery(db, 'del_claimed_1')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM deliveries WHERE delivery_id = ?', ['del_claimed_1'])),
+  );
+  checkEqual('getDelivery missing', await getDelivery(db, 'del_missing'), null);
+  checkEqual(
+    'getDeliveryForMessage',
+    JSON.stringify(await getDeliveryForMessage(db, 'act_agent_1', 'msg_g1_8')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM deliveries WHERE recipient_id = ? AND message_id = ?', [
+        'act_agent_1',
+        'msg_g1_8',
+      ]),
+    ),
+  );
+  checkEqual('getDeliveryForMessage missing', await getDeliveryForMessage(db, 'act_agent_3', 'msg_d1_1'), null);
+  checkEqual(
+    'getClaimedDelivery',
+    JSON.stringify(await getClaimedDelivery(db, 'act_agent_1')),
+    JSON.stringify(
+      rawFirst(sqlite, "SELECT * FROM deliveries WHERE recipient_id = ? AND state = 'claimed' LIMIT 1", [
+        'act_agent_1',
+      ]),
+    ),
+  );
+  checkEqual('getClaimedDelivery none', await getClaimedDelivery(db, 'act_agent_2'), null);
+  checkEqual('getClaimedDeliveryId', await getClaimedDeliveryId(db, 'act_agent_1'), 'del_claimed_1');
+  checkEqual('getClaimedDeliveryId none', await getClaimedDeliveryId(db, 'act_human_1'), null);
+
+  checkEqual(
+    'listInboxDeliveries active',
+    JSON.stringify(
+      await listInboxDeliveries(db, {
+        recipientId: 'act_agent_1',
+        states: ['pending', 'claimed'],
+        afterSeq: null,
+        limit: 3,
+      }),
+    ),
+    rawInbox(sqlite, 'act_agent_1', ['pending', 'claimed'], null, 3),
+  );
+  checkEqual(
+    'listInboxDeliveries cursor',
+    JSON.stringify(
+      await listInboxDeliveries(db, {
+        recipientId: 'act_agent_1',
+        states: ['pending', 'claimed'],
+        afterSeq: 1,
+        limit: 3,
+      }),
+    ),
+    rawInbox(sqlite, 'act_agent_1', ['pending', 'claimed'], 1, 3),
+  );
+  checkEqual(
+    'listInboxDeliveries all states',
+    JSON.stringify(
+      await listInboxDeliveries(db, {
+        recipientId: 'act_agent_1',
+        states: null,
+        afterSeq: null,
+        limit: 10,
+      }),
+    ),
+    rawInbox(sqlite, 'act_agent_1', null, null, 10),
+  );
+  checkEqual(
+    'listInboxDeliveries single state',
+    JSON.stringify(
+      await listInboxDeliveries(db, {
+        recipientId: 'act_agent_2',
+        states: ['pending'],
+        afterSeq: null,
+        limit: 10,
+      }),
+    ),
+    rawInbox(sqlite, 'act_agent_2', ['pending'], null, 10),
+  );
+  checkEqual(
+    'listInboxDeliveries empty',
+    JSON.stringify(
+      await listInboxDeliveries(db, {
+        recipientId: 'act_human_1',
+        states: ['pending'],
+        afterSeq: null,
+        limit: 10,
+      }),
+    ),
+    rawInbox(sqlite, 'act_human_1', ['pending'], null, 10),
+  );
 }
 
 function explainChecks(sqlite: Database, db: D1Database): void {
@@ -427,6 +1028,261 @@ function explainChecks(sqlite: Database, db: D1Database): void {
   }
 }
 
+interface ExecutedQuery {
+  sql: string;
+  params: unknown[];
+}
+
+/** 记录 D1 实际执行的 SQL，用于对生产语句本身做 EXPLAIN，而不是在测试里重写 builder。 */
+function capture(inner: D1Database): { db: D1Database; executed: ExecutedQuery[] } {
+  const executed: ExecutedQuery[] = [];
+  const wrap = (
+    statement: D1PreparedStatement,
+    sql: string,
+    values: unknown[],
+  ): D1PreparedStatement => ({
+    bind: (...next) => wrap(statement.bind(...next), sql, next),
+    first: async <T = unknown>(colName?: string) => {
+      executed.push({ sql, params: values });
+      return statement.first<T>(colName);
+    },
+    all: async <T = unknown>() => {
+      executed.push({ sql, params: values });
+      return statement.all<T>();
+    },
+    run: async <T = unknown>() => {
+      executed.push({ sql, params: values });
+      return statement.run<T>();
+    },
+    raw: async <T = unknown>() => {
+      executed.push({ sql, params: values });
+      return statement.raw<T>();
+    },
+  });
+  const db: D1Database = {
+    prepare: (sql) => wrap(inner.prepare(sql), sql, []),
+    batch: (statements) => inner.batch(statements),
+    exec: (query) => inner.exec(query),
+  };
+  return { db, executed };
+}
+
+const EXPLAIN_ALIASES: Record<string, string> = {
+  d: 'deliveries',
+  m: 'messages',
+  a: 'actors',
+};
+
+/** 手写 SQL 使用 `d`/`m`/`a` 别名，Drizzle 使用表名；只归一化 FROM/JOIN 的表标识。 */
+function normalizePlan(lines: string[]): string[] {
+  return lines.map((line) =>
+    line.replace(/\b(SCAN|SEARCH) (d|m|a)\b/gu, (_match, op: string, alias: string) => {
+      return `${op} ${EXPLAIN_ALIASES[alias] ?? alias}`;
+    }),
+  );
+}
+
+interface ExplainCase {
+  label: string;
+  /** 从捕获到的语句中挑选目标 SQL；未命中即失败。 */
+  pattern: RegExp;
+  run: (db: D1Database) => Promise<unknown>;
+  raw: string;
+  params: unknown[];
+}
+
+async function messageExplainChecks(sqlite: Database, db: D1Database): Promise<void> {
+  const cases: ExplainCase[] = [
+    {
+      label: 'getMessage',
+      pattern: /^select .* from "messages" where "messages"\."message_id" = \?$/u,
+      run: (target) => getMessage(target, 'msg_d1_2'),
+      raw: 'SELECT * FROM messages WHERE message_id = ?',
+      params: ['msg_d1_2'],
+    },
+    {
+      label: 'listHistoryMessagesBefore first page',
+      pattern: /from "messages" where .*order by "messages"\."created_seq" desc limit \?$/u,
+      run: (target) =>
+        listHistoryMessagesBefore(target, {
+          roomId: 'room_group_1',
+          snapshot: 9,
+          fromSeq: 4,
+          beforeSeq: null,
+          limit: 20,
+        }),
+      raw: `SELECT ${HISTORY_SELECT} FROM messages
+        WHERE room_id = ? AND created_seq <= ? AND created_seq >= ?
+        ORDER BY created_seq DESC LIMIT ?`,
+      params: ['room_group_1', 9, 4, 20],
+    },
+    {
+      label: 'listHistoryMessagesBefore cursor',
+      pattern: /from "messages" where .*order by "messages"\."created_seq" desc limit \?$/u,
+      run: (target) =>
+        listHistoryMessagesBefore(target, {
+          roomId: 'room_group_1',
+          snapshot: 9,
+          fromSeq: 4,
+          beforeSeq: 9,
+          limit: 20,
+        }),
+      raw: `SELECT ${HISTORY_SELECT} FROM messages
+        WHERE room_id = ? AND created_seq <= ? AND created_seq >= ? AND created_seq < ?
+        ORDER BY created_seq DESC LIMIT ?`,
+      params: ['room_group_1', 9, 4, 9, 20],
+    },
+    {
+      label: 'listHistoryMessagesAfter',
+      pattern: /from "messages" where .*order by "messages"\."created_seq" asc limit \?$/u,
+      run: (target) =>
+        listHistoryMessagesAfter(target, {
+          roomId: 'room_group_1',
+          snapshot: 9,
+          fromSeq: 4,
+          afterSeq: 4,
+          limit: 20,
+        }),
+      raw: `SELECT ${HISTORY_SELECT} FROM messages
+        WHERE room_id = ? AND created_seq <= ? AND created_seq > ? AND created_seq >= ?
+        ORDER BY created_seq ASC LIMIT ?`,
+      params: ['room_group_1', 9, 4, 4, 20],
+    },
+    {
+      label: 'listHistoryMessagesByIds',
+      pattern: /from "messages" where "messages"\."message_id" in \(\?, \?\)$/u,
+      run: (target) => listHistoryMessagesByIds(target, ['msg_g1_8', 'msg_g1_9']),
+      raw: `SELECT ${HISTORY_SELECT} FROM messages WHERE message_id IN (?, ?)`,
+      params: ['msg_g1_8', 'msg_g1_9'],
+    },
+    {
+      label: 'getMessageContextAnchor',
+      pattern: /inner join "actors" .*where .*"messages"\."message_id" = \?\)$/u,
+      run: (target) => getMessageContextAnchor(target, 'room_group_1', 'msg_g1_8'),
+      raw: `SELECT ${CONTEXT_SELECT} FROM messages m JOIN actors a ON a.actor_id = m.sender_id
+        WHERE m.room_id = ? AND m.message_id = ?`,
+      params: ['room_group_1', 'msg_g1_8'],
+    },
+    {
+      label: 'listMessageContextWindow before',
+      pattern: /inner join "actors" .*order by "messages"\."created_seq" desc limit \?$/u,
+      run: (target) =>
+        listMessageContextWindow(target, {
+          roomId: 'room_group_1',
+          pivotSeq: 8,
+          direction: 'before',
+          fromSeq: 4,
+          toSeq: 8,
+          limit: 20,
+        }),
+      raw: `SELECT ${CONTEXT_SELECT} FROM messages m JOIN actors a ON a.actor_id = m.sender_id
+        WHERE m.room_id = ? AND m.created_seq < ? AND m.created_seq >= ?
+        ORDER BY m.created_seq DESC LIMIT ?`,
+      params: ['room_group_1', 8, 4, 20],
+    },
+    {
+      label: 'listMessageContextWindow after',
+      pattern: /inner join "actors" .*order by "messages"\."created_seq" asc limit \?$/u,
+      run: (target) =>
+        listMessageContextWindow(target, {
+          roomId: 'room_group_1',
+          pivotSeq: 3,
+          direction: 'after',
+          fromSeq: 3,
+          toSeq: 8,
+          limit: 20,
+        }),
+      raw: `SELECT ${CONTEXT_SELECT} FROM messages m JOIN actors a ON a.actor_id = m.sender_id
+        WHERE m.room_id = ? AND m.created_seq > ? AND m.created_seq >= ? AND m.created_seq <= ?
+        ORDER BY m.created_seq ASC LIMIT ?`,
+      params: ['room_group_1', 3, 3, 8, 20],
+    },
+    {
+      label: 'getMessageSenderSummary',
+      pattern: /left join "actors" .*where "messages"\."message_id" = \?$/u,
+      run: (target) => getMessageSenderSummary(target, 'msg_g1_8'),
+      raw: `SELECT m.message_id, m.sender_id, m.created_seq, m.preview, m.body_bytes,
+              m.created_at, a.name AS sender_name, a.kind AS sender_kind
+         FROM messages m LEFT JOIN actors a ON a.actor_id = m.sender_id
+        WHERE m.message_id = ?`,
+      params: ['msg_g1_8'],
+    },
+    {
+      label: 'listDeliveryStates',
+      pattern: /from "deliveries" where .*group by "deliveries"\."message_id", "deliveries"\."state"$/u,
+      run: (target) => listDeliveryStates(target, ['msg_g1_8', 'msg_g1_9']),
+      raw: `SELECT message_id, state, COUNT(*) AS n,
+              MAX(CASE WHEN state = 'claimed' THEN claimed_at END) AS max_claimed_at,
+              MAX(CASE WHEN state = 'claimed' THEN updated_at END) AS max_updated_at
+         FROM deliveries WHERE message_id IN (?, ?) GROUP BY message_id, state`,
+      params: ['msg_g1_8', 'msg_g1_9'],
+    },
+    {
+      label: 'listMessageMentions',
+      pattern: /from "message_mentions" where .*order by "message_mentions"\."message_id", "message_mentions"\."actor_id"$/u,
+      run: (target) => listMessageMentions(target, ['msg_g1_8', 'msg_g1_9']),
+      raw: `SELECT message_id, actor_id, actor_kind, source FROM message_mentions
+        WHERE message_id IN (?, ?) ORDER BY message_id, actor_id`,
+      params: ['msg_g1_8', 'msg_g1_9'],
+    },
+    {
+      label: 'listInboxDeliveries active',
+      pattern: /from "deliveries" inner join "messages".*order by "deliveries"\."created_seq" asc limit \?$/u,
+      run: (target) =>
+        listInboxDeliveries(target, {
+          recipientId: 'act_agent_1',
+          states: ['pending', 'claimed'],
+          afterSeq: null,
+          limit: 3,
+        }),
+      raw: `SELECT d.*, m.preview AS m_preview, m.body_bytes AS m_body_bytes,
+              m.sender_id AS m_sender_id, m.created_at AS m_created_at,
+              a.name AS m_sender_name, a.kind AS m_sender_kind
+         FROM deliveries d
+         JOIN messages m ON m.message_id = d.message_id
+         LEFT JOIN actors a ON a.actor_id = m.sender_id
+        WHERE d.recipient_id = ? AND d.state IN (?, ?)
+        ORDER BY d.created_seq ASC
+        LIMIT ?`,
+      params: ['act_agent_1', 'pending', 'claimed', 3],
+    },
+    {
+      label: 'listInboxDeliveries cursor',
+      pattern: /from "deliveries" inner join "messages".*order by "deliveries"\."created_seq" asc limit \?$/u,
+      run: (target) =>
+        listInboxDeliveries(target, {
+          recipientId: 'act_agent_1',
+          states: ['pending', 'claimed'],
+          afterSeq: 1,
+          limit: 3,
+        }),
+      raw: `SELECT d.*, m.preview AS m_preview, m.body_bytes AS m_body_bytes,
+              m.sender_id AS m_sender_id, m.created_at AS m_created_at,
+              a.name AS m_sender_name, a.kind AS m_sender_kind
+         FROM deliveries d
+         JOIN messages m ON m.message_id = d.message_id
+         LEFT JOIN actors a ON a.actor_id = m.sender_id
+        WHERE d.recipient_id = ? AND d.state IN (?, ?) AND d.created_seq > ?
+        ORDER BY d.created_seq ASC
+        LIMIT ?`,
+      params: ['act_agent_1', 'pending', 'claimed', 1, 3],
+    },
+  ];
+
+  console.log('\nmessage/delivery query plans (EXPLAIN QUERY PLAN):');
+  for (const item of cases) {
+    const captured = capture(db);
+    await item.run(captured.db);
+    const query = captured.executed.find((entry) => item.pattern.test(entry.sql));
+    check(`捕获 ${item.label} 的 SQL`, query !== undefined);
+    if (!query) continue;
+    const actual = normalizePlan(plan(sqlite, query.sql, query.params));
+    const expected = normalizePlan(plan(sqlite, item.raw, item.params));
+    checkEqual(`EXPLAIN ${item.label}`, JSON.stringify(actual), JSON.stringify(expected));
+    console.log(`  ${item.label}: ${actual.join(' | ')}`);
+  }
+}
+
 async function bench(label: string, fn: () => Promise<unknown>, iterations = 3_000): Promise<string> {
   for (let index = 0; index < 200; index += 1) await fn();
   const started = performance.now();
@@ -465,6 +1321,66 @@ async function benchmark(sqlite: Database, db: D1Database): Promise<void> {
     return getActor(db, credential.actor_id);
   };
 
+  const rawMessage = async (): Promise<unknown> =>
+    rawFirst(sqlite, 'SELECT * FROM messages WHERE message_id = ?', ['msg_g1_8']);
+  const ormMessage = async (): Promise<unknown> => getMessage(db, 'msg_g1_8');
+  const rawHistory = async (): Promise<unknown> =>
+    rawAll(
+      sqlite,
+      `SELECT ${HISTORY_SELECT} FROM messages
+        WHERE room_id = ? AND created_seq <= ? AND created_seq >= ?
+        ORDER BY created_seq DESC LIMIT ?`,
+      ['room_group_1', 9, 4, 21],
+    );
+  const ormHistory = async (): Promise<unknown> =>
+    listHistoryMessagesBefore(db, {
+      roomId: 'room_group_1',
+      snapshot: 9,
+      fromSeq: 4,
+      beforeSeq: null,
+      limit: 21,
+    });
+  const rawStates = async (): Promise<unknown> =>
+    rawAll(
+      sqlite,
+      `SELECT message_id, state, COUNT(*) AS n,
+              MAX(CASE WHEN state = 'claimed' THEN claimed_at END) AS max_claimed_at,
+              MAX(CASE WHEN state = 'claimed' THEN updated_at END) AS max_updated_at
+         FROM deliveries WHERE message_id IN (?, ?) GROUP BY message_id, state`,
+      ['msg_g1_8', 'msg_g1_9'],
+    );
+  const ormStates = async (): Promise<unknown> =>
+    listDeliveryStates(db, ['msg_g1_8', 'msg_g1_9']);
+  const rawInboxBench = async (): Promise<unknown> =>
+    rawAll(
+      sqlite,
+      `SELECT d.*, m.preview AS m_preview, m.body_bytes AS m_body_bytes,
+              m.sender_id AS m_sender_id, m.created_at AS m_created_at,
+              a.name AS m_sender_name, a.kind AS m_sender_kind
+         FROM deliveries d
+         JOIN messages m ON m.message_id = d.message_id
+         LEFT JOIN actors a ON a.actor_id = m.sender_id
+        WHERE d.recipient_id = ? AND d.state IN (?, ?)
+        ORDER BY d.created_seq ASC LIMIT ?`,
+      ['act_agent_1', 'pending', 'claimed', 21],
+    );
+  const ormInboxBench = async (): Promise<unknown> =>
+    listInboxDeliveries(db, {
+      recipientId: 'act_agent_1',
+      states: ['pending', 'claimed'],
+      afterSeq: null,
+      limit: 21,
+    });
+  const rawMentionsBench = async (): Promise<unknown> =>
+    rawAll(
+      sqlite,
+      `SELECT message_id, actor_id, actor_kind, source FROM message_mentions
+        WHERE message_id IN (?, ?) ORDER BY message_id, actor_id`,
+      ['msg_g1_8', 'msg_g1_9'],
+    );
+  const ormMentionsBench = async (): Promise<unknown> =>
+    listMessageMentions(db, ['msg_g1_8', 'msg_g1_9']);
+
   console.log('\nread query benchmark (in-memory, includes drizzle build):');
   console.log(`  raw   ${await bench('actor', rawActor)}`);
   console.log(`  orm   ${await bench('actor', ormActor)}`);
@@ -474,6 +1390,16 @@ async function benchmark(sqlite: Database, db: D1Database): Promise<void> {
   console.log(`  orm   ${await bench('count', ormCount)}`);
   console.log(`  raw   ${await bench('identity', rawIdentity)}`);
   console.log(`  orm   ${await bench('identity', ormIdentity)}`);
+  console.log(`  raw   ${await bench('message', rawMessage, 2_000)}`);
+  console.log(`  orm   ${await bench('message', ormMessage, 2_000)}`);
+  console.log(`  raw   ${await bench('history', rawHistory, 2_000)}`);
+  console.log(`  orm   ${await bench('history', ormHistory, 2_000)}`);
+  console.log(`  raw   ${await bench('states', rawStates, 2_000)}`);
+  console.log(`  orm   ${await bench('states', ormStates, 2_000)}`);
+  console.log(`  raw   ${await bench('inbox', rawInboxBench, 2_000)}`);
+  console.log(`  orm   ${await bench('inbox', ormInboxBench, 2_000)}`);
+  console.log(`  raw   ${await bench('mentions', rawMentionsBench, 2_000)}`);
+  console.log(`  orm   ${await bench('mentions', ormMentionsBench, 2_000)}`);
 }
 
 async function main(): Promise<void> {
@@ -484,6 +1410,7 @@ async function main(): Promise<void> {
   try {
     await rowParityChecks(sqlite, db);
     explainChecks(sqlite, db);
+    await messageExplainChecks(sqlite, db);
     await benchmark(sqlite, db);
     console.log(`\ndrizzle runtime checks passed: ${checksPassed()}`);
   } finally {

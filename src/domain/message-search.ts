@@ -3,6 +3,7 @@ import { BusinessError } from '../contracts/errors';
 import { encodeCursor } from '../contracts/cursor';
 import { LIMITS } from '../contracts/limits';
 import { sha256Hex } from '../storage/db';
+import { getMessageContextAnchor, listMessageContextWindow } from '../storage/queries';
 import { decodeHistoryCursor, historyBoundary, historyCursorScope } from './room-history';
 import { actorId, type Principal } from './principal';
 import { loadRoomAccess } from './room-access';
@@ -87,19 +88,14 @@ export async function messageSearch(
 /** Load a bounded window around a message ID without walking the room's oldest history. */
 export async function messageContext(db: D1Database, principal: Principal, input: ContextInput) {
   const { room, boundary } = await authorized(db, principal, input.room_id);
-  const columns = `m.message_id, m.room_id, m.sender_id, a.name AS sender_name, a.kind AS sender_kind,
-    m.body_bytes, m.preview, m.created_at, m.created_seq, m.reply_to`;
-  const base = await db.prepare(`SELECT ${columns} FROM messages m JOIN actors a ON a.actor_id=m.sender_id WHERE m.room_id=? AND m.message_id=?`).bind(room.room_id, input.message_id).first<MessageRow>();
+  const base = await getMessageContextAnchor(db, room.room_id, input.message_id);
   if (!base || base.created_seq < boundary.fromSeq || (boundary.toSeq !== null && base.created_seq > boundary.toSeq)) throw new BusinessError('NOT_FOUND', '消息不存在或当前历史授权不可见');
   const before = Math.min(input.before ?? LIMITS.messageContextDefault, LIMITS.messageContextMax);
   const after = Math.min(input.after ?? LIMITS.messageContextDefault, LIMITS.messageContextMax);
-  const lower = boundary.full ? '1=1' : 'm.created_seq>=?';
-  const bindsBefore: unknown[] = [room.room_id, base.created_seq, ...(boundary.full ? [] : [boundary.fromSeq]), before];
-  const bindsAfter: unknown[] = [room.room_id, base.created_seq, ...(boundary.full ? [] : [boundary.fromSeq]), ...(boundary.toSeq === null ? [] : [boundary.toSeq]), after];
-  const upper = boundary.toSeq === null ? '1=1' : 'm.created_seq<=?';
+  const window = { roomId: room.room_id, pivotSeq: base.created_seq, fromSeq: boundary.full ? null : boundary.fromSeq, toSeq: boundary.toSeq };
   const [prior, following] = await Promise.all([
-    before ? db.prepare(`SELECT ${columns} FROM messages m JOIN actors a ON a.actor_id=m.sender_id WHERE m.room_id=? AND m.created_seq<? AND ${lower} ORDER BY m.created_seq DESC LIMIT ?`).bind(...bindsBefore).all<MessageRow>() : Promise.resolve({ results: [] as MessageRow[] }),
-    after ? db.prepare(`SELECT ${columns} FROM messages m JOIN actors a ON a.actor_id=m.sender_id WHERE m.room_id=? AND m.created_seq>? AND ${lower} AND ${upper} ORDER BY m.created_seq ASC LIMIT ?`).bind(...bindsAfter).all<MessageRow>() : Promise.resolve({ results: [] as MessageRow[] }),
+    before ? listMessageContextWindow(db, { ...window, direction: 'before', limit: before }) : Promise.resolve([]),
+    after ? listMessageContextWindow(db, { ...window, direction: 'after', limit: after }) : Promise.resolve([]),
   ]);
-  return { items: [...prior.results.reverse(), base, ...following.results], authorization: { policy_revision: boundary.policyRevision, history_from_seq: String(boundary.fromSeq), member_generation: String(boundary.memberGeneration) } };
+  return { items: [...prior.reverse(), base, ...following], authorization: { policy_revision: boundary.policyRevision, history_from_seq: String(boundary.fromSeq), member_generation: String(boundary.memberGeneration) } };
 }

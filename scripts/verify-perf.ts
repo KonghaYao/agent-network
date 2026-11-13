@@ -270,7 +270,7 @@ async function main(): Promise<void> {
         },
         samples,
       );
-      const planQuery = findQuery(executed, /FROM messages[\s\S]*ORDER BY created_seq/u);
+      const planQuery = findQuery(executed, /from "?messages"?[\s\S]*order by "?messages"?\.?"?created_seq"?/iu);
       const plan = planQuery ? explain(fixture.db, planQuery) : [];
       scenarios.push({ name: `messages_page_${pageNumber}`, timed, plan });
     }
@@ -354,7 +354,10 @@ async function main(): Promise<void> {
 
     executed.length = 0;
     await historyPage();
-    const deliveryQuery = findQuery(executed, /FROM deliveries[\s\S]*GROUP BY message_id, state/u);
+    const deliveryQuery = findQuery(
+      executed,
+      /from "?deliveries"?[\s\S]*group by "?deliveries"?\.?"?message_id"?, "?deliveries"?\.?"?state"?/iu,
+    );
     if (!deliveryQuery) throw new Error('未捕获 delivery 聚合 SQL');
     const deliveryPlan = explain(fixture.db, deliveryQuery);
     const indexExists = Boolean(
@@ -375,7 +378,7 @@ async function main(): Promise<void> {
     }
 
     const pageQueries = executed.filter((query) =>
-      /FROM messages|FROM actors|FROM deliveries/u.test(query.sql),
+      /from "?(?:messages|actors|deliveries)"?/iu.test(query.sql),
     );
     const offenders = selectStarOffenders(pageQueries);
     if (baselineMode) {

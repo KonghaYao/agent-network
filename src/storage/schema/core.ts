@@ -192,6 +192,40 @@ export const messages = sqliteTable(
   ],
 );
 
+/**
+ * 结构化提及；`messages` 仍是消息本体唯一权威。
+ *
+ * 只用于 4C-4 的批量读取；写入仍走发送事务里的 raw SQL（显式选择优先于
+ * 正文解析，正文解析优先于 @所有人）。
+ */
+export const messageMentions = sqliteTable(
+  'message_mentions',
+  {
+    message_id: text('message_id')
+      .notNull()
+      .references(() => messages.message_id),
+    actor_id: text('actor_id')
+      .notNull()
+      .references(() => actors.actor_id),
+    actor_kind: text('actor_kind').notNull(),
+    source: text('source').notNull(),
+    created_at: integer('created_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.message_id, table.actor_id] }),
+    index('idx_message_mentions_actor').on(
+      table.actor_id,
+      sql`${table.created_at} desc`,
+      table.message_id,
+    ),
+    check(
+      'message_mentions_actor_kind_check',
+      sql`${table.actor_kind} in ('human', 'agent')`,
+    ),
+    check('message_mentions_source_check', sql`${table.source} in ('explicit', 'text', 'all')`),
+  ],
+);
+
 export const deliveries = sqliteTable(
   'deliveries',
   {
@@ -287,6 +321,7 @@ export const CORE_TABLES = [
   rooms,
   roomMembers,
   messages,
+  messageMentions,
   deliveries,
   operations,
   outbox,
