@@ -5,6 +5,14 @@ import { resolve, sep } from 'node:path';
 export const SPA_ROUTES = ['home', 'room', 'share', 'join', 'pair'] as const;
 export type SpaRoute = (typeof SPA_ROUTES)[number];
 
+/**
+ * 已迁移到 React 的 route。
+ *
+ * 4B-1 只接管 home；`WEB_SPA_ROUTES` 仍接受全部名称，但未实现的 route
+ * 继续渲染 legacy，避免灰度开关把占位壳暴露给用户。
+ */
+export const IMPLEMENTED_SPA_ROUTES: ReadonlySet<SpaRoute> = new Set<SpaRoute>(['home']);
+
 const SPA_ROUTE_SET: ReadonlySet<string> = new Set(SPA_ROUTES);
 
 /**

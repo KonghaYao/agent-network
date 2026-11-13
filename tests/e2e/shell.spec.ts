@@ -15,6 +15,7 @@ async function baseUrl(): Promise<string> {
  * 默认测试清单不包含 Playwright。
  */
 test('legacy home remains the default shell', async ({ request }) => {
+  test.skip(process.env.E2E_SPA === '1', 'E2E_SPA=1 时 `/` 由 React Home 接管');
   const base = await baseUrl();
   const response = await request.get(`${base}/`);
   expect(response.ok()).toBe(true);
@@ -24,8 +25,8 @@ test('legacy home remains the default shell', async ({ request }) => {
 });
 
 /**
- * SPA 壳用例在 4B-1 接管路由后才启用；Sprint 0 默认跳过。
- * 运行方式：WEB_SPA_ROUTES=home E2E_SPA=1 bun run test:e2e。
+ * SPA 壳冒烟用例需要 `WEB_SPA_ROUTES=home E2E_SPA=1`；Home 的列表/搜索/SSE
+ * 细节在 `home.spec.ts`，默认测试清单不包含 Playwright。
  */
 test.describe('SPA shell placeholder', () => {
   test.skip(!process.env.E2E_SPA, 'SPA routes are not enabled in Sprint 0');
