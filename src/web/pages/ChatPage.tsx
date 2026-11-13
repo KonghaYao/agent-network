@@ -88,7 +88,7 @@ function failureText(error: unknown): string {
 }
 
 /**
- * React Chat 页：`/c/:room_id` 在 `WEB_SPA_ROUTES=room` 时接管。
+ * React Chat 页：`/c/:room_id` 固定由 React 渲染（4B-6 已删除 legacy 壳）。
  *
  * 保留 legacy 的 DOM id/class（`composer`、`messages`、`title`、`subtitle`、
  * `status` 等），复用同一 MCP 工具与 localStorage key。发送意图在服务端

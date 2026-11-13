@@ -1,11 +1,9 @@
-import { chromium } from 'playwright';
 import { createFixture } from './fixture';
 import { rawTool } from '../verify-web';
 
 const fixture = await createFixture(['chat']);
 const d = fixture.scenarios.chat;
 const id = () => crypto.randomUUID();
-const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, args: ['--no-sandbox'] });
 try {
   const found = await rawTool<any>(d.me.token, 'network_message_search', { room_id: d.rooms.history.room_id, query: '青柠', limit: 10 });
   const recent = await rawTool<any>(d.me.token, 'network_history_list', { room_id: d.rooms.history.room_id, limit: 50 });
@@ -63,22 +61,8 @@ try {
   try { await rawTool(d.me.token, 'network_message_search', { room_id: edgeRoom.room_id, query: '重加游标标记', limit: 1, cursor: beforeRejoin.next_cursor }); } catch (error: any) { staleRejoinCursorDenied = /CURSOR_EXPIRED/.test(error.message); }
   if (!staleRejoinCursorDenied) throw new Error('pre-rejoin cursor was not rejected after rejoining');
 
-  const contextPage = await browser.newContext({ viewport: { width: 390, height: 844 } });
-  await contextPage.addInitScript((token) => localStorage.setItem('agent-network-token', token), d.me.token);
-  const page = await contextPage.newPage(); page.setDefaultTimeout(10000);
-  await page.goto(fixture.base + '/c/' + d.rooms.history.room_id);
-  await page.locator('#chat-body').waitFor();
-  const searchButton = page.getByRole('button', { name: '搜索聊天记录' });
-  await searchButton.waitFor(); await searchButton.click();
-  await page.getByRole('searchbox', { name: '搜索消息内容' }).fill('青柠');
-  await page.getByRole('button', { name: '搜索', exact: true }).click();
-  await page.getByText(/青柠会议室/).waitFor();
-  await page.getByText(/青柠会议室/).click();
-  await page.getByRole('dialog', { name: '查看上下文' }).waitFor();
-  await page.getByText(/第 22 条/).waitFor();
-  await contextPage.close();
   await rawTool(d.me.token, 'network_room_dissolve', { request_id: id(), room_id: d.rooms.history.room_id });
   const archiveContext = await rawTool<any>(d.me.token, 'network_message_context', { room_id: d.rooms.history.room_id, message_id: found.items[0].message_id });
   if (!archiveContext.items.some((item: any) => item.message_id === found.items[0].message_id)) throw new Error('dissolved archive context was unavailable');
-  console.log(JSON.stringify({ searchMatchSeq: found.items[0].created_seq, contextRows: context.items.length, nonmemberDenied: denied, fixedSnapshotAndQueryBoundCursor: true, longUnicodeQueryCursor: true, recalledMessageExcluded: true, fromJoinAndFullPolicyBoundaries: true, staleRejoinCursorDenied, wrongRoomDenied, dissolvedArchiveContext: true, mobileSearchAndContext: true }));
-} finally { await browser.close(); await fixture.stop(); }
+  console.log(JSON.stringify({ searchMatchSeq: found.items[0].created_seq, contextRows: context.items.length, nonmemberDenied: denied, fixedSnapshotAndQueryBoundCursor: true, longUnicodeQueryCursor: true, recalledMessageExcluded: true, fromJoinAndFullPolicyBoundaries: true, staleRejoinCursorDenied, wrongRoomDenied, dissolvedArchiveContext: true }));
+} finally { await fixture.stop(); }

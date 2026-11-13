@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -42,6 +42,12 @@ export default async function globalSetup(): Promise<(() => Promise<void>) | und
   if (process.env.E2E_BASE_URL) return undefined;
 
   const root = resolve(process.cwd());
+  const manifest = resolve(root, 'dist/web/.vite/manifest.json');
+  try {
+    await access(manifest);
+  } catch {
+    throw new Error('缺少 dist/web/.vite/manifest.json；先运行 `bun run build:web` 再执行 test:e2e');
+  }
   const port = await reservePort();
   const base = `http://127.0.0.1:${port}`;
   dataDir = await mkdtemp(join(tmpdir(), 'agentnet-e2e-'));
@@ -54,8 +60,6 @@ export default async function globalSetup(): Promise<(() => Promise<void>) | und
       DATA_DIR: dataDir,
       PUBLIC_ORIGIN: base,
       ENVIRONMENT: 'test',
-      // 默认不启用 SPA；需要 SPA 用例时由调用方显式设置。
-      WEB_SPA_ROUTES: process.env.WEB_SPA_ROUTES ?? '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

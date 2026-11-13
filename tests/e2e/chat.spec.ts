@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 /**
- * 4B-2 Chat e2e：需要 `WEB_SPA_ROUTES=home,room E2E_SPA=1`。
+ * 4B-6 Chat e2e：五条页面路由始终由 React 渲染。
  *
  * 覆盖发送/接收、引用、附件、IME/Shift+Enter、1–4 行、移动端、暗色与
  * 单一 `subscriptions/listen`。服务端仍由 Playwright globalSetup 隔离启动。
@@ -95,13 +95,6 @@ interface HistoryPage {
   items: { preview: string; sender_id: string }[];
 }
 
-const SPA_ENABLED =
-  process.env.E2E_SPA === '1' &&
-  (process.env.WEB_SPA_ROUTES ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .some((value) => value === 'room' || value === 'all');
-
 async function instrumentFetch(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const target = window as unknown as {
@@ -149,7 +142,6 @@ async function waitForHistory(
 }
 
 test.describe('SPA Chat', () => {
-  test.skip(!SPA_ENABLED, '需要 WEB_SPA_ROUTES=home,room E2E_SPA=1 才运行 React Chat 用例');
 
   let base = '';
   let tokenA = '';

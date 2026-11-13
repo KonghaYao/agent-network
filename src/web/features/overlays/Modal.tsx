@@ -1,5 +1,5 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 
 /**
  * Radix Dialog 的薄封装。
@@ -27,6 +27,9 @@ export function Modal({
   className?: string;
   contentId?: string;
 }) {
+  // 打开弹窗的元素可能是普通按钮而非 Radix Trigger；显式记录并在关闭时
+  // 归还焦点，避免焦点落到 body（键盘用户丢失上下文）。
+  const restoreRef = useRef<HTMLElement | null>(null);
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
@@ -35,6 +38,14 @@ export function Modal({
           id={contentId}
           className={`modal-card spa-dialog-content ${className}`.trim()}
           aria-describedby={undefined}
+          onOpenAutoFocus={() => {
+            restoreRef.current =
+              document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            restoreRef.current?.focus();
+          }}
         >
           <DialogPrimitive.Title asChild>
             <h2 id={titleId}>{title}</h2>
