@@ -23,31 +23,20 @@ import {
 import {
   decodeUtf8Range,
   loadRepresentationExact,
-  type MemoryExperienceStoreOptions,
 } from './experience';
 import {
   assertNoClientTrustClaims,
-  assertHostProtocolVersion,
-  deriveGatewayObservationEvidence,
   deriveHostSubmissionEvidence,
-  MEMORY_HOST_PROTOCOL_VERSION,
-  type MemoryGatewayObservationReport,
-  type MemoryHostExposureAck,
-  type MemoryHostExposureReport,
-  type MemoryHostFinalManifestReport,
   type MemoryHostManifestItemReport,
 } from './host-protocol';
 import { MEMORY_HOST_CAPABILITIES, type MemoryHostCapability } from './recall-contracts';
-import { runMemoryBatch, admitExposureReceipt, type MemoryAdmissionExperience } from './store';
+import { runMemoryBatch } from './store';
 import { requireCurrentMemorySpace } from './access';
 import type {
-  MemoryByteRange,
   MemoryContextTarget,
   MemoryExactRepresentation,
   MemoryExposureEvidenceKind,
-  MemoryExposureReceipt,
   MemoryInvocationIdentity,
-  MemoryManifestId,
   MemoryManifestItem,
   MemoryOriginScope,
   MemoryRepresentation,
@@ -67,19 +56,6 @@ interface MemoryManifestItemRow {
   representation_id: string;
   origin_scope_json: string;
   text_sha256: string;
-}
-
-interface MemorySelectionRow {
-  selection_id: string;
-  space_id: string;
-  ownership_epoch: number;
-  agent_actor_id: string;
-  representation_id: string;
-  origin_scope_json: string;
-  target_scope_json: string;
-  state: 'available' | 'expired';
-  issued_at: number;
-  expires_at: number | null;
 }
 
 export function parseJson<T>(value: string | null): T | null {

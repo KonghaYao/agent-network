@@ -45,15 +45,16 @@ export interface D1Like extends D1Queryable {
 }
 
 /**
- * 4C-1/4C-3/4C-4/4C-5/4C-6 核心只读查询：actors / credentials / rooms / room_members 以及
- * rooms 域的邀请、入群申请、群主转让与管理审计由 Drizzle 构建 SQL，仍经
- * `toD1()` 回到现有 D1 shim 执行。4C-4 追加 messages / deliveries 的只读查询：
- * 单条读取、历史分页、时间线物化、消息上下文、收件箱投递列表与状态聚合、
- * 提及批量读取；4C-5 追加 files/events 的简单单表读取；4C-6 追加 memory
- * 单表读取。以下内容继续保留 raw：FTS5 `MATCH` 与 `instr` 片段搜索、
- * `messages.task_root_id` 任务查询、`EXISTS`/`CASE` 权限与闸门 SQL、timeline
- * 的 `UNION ALL`，以及全部写路径；复杂 JOIN、历史边界、guard 与状态机 SQL
- * 继续保留手写。
+ * 存储层语义化查询入口。
+ *
+ * 已迁移的只读路径（actors / credentials / rooms / room_members / contacts /
+ * messages / deliveries / files / events / memory）由 Drizzle 构建 SQL，再经
+ * `toD1()` 回到 D1 shim 执行。FTS5 `MATCH`/`instr` 片段搜索、任务查询、
+ * `EXISTS`/`CASE` 权限与闸门 SQL、timeline 的 `UNION ALL`、复杂聚合与
+ * 依赖递归继续保留 raw；具体边界见 `storage/drizzle.ts` 顶部清单。
+ *
+ * 禁止在这里调用 Drizzle 的 insert/update/delete 或自带事务；写操作必须走
+ * `runIdempotent` 的 raw batch。
  */
 
 export async function getActor(db: D1Like, actorId: string): Promise<ActorRow | null> {

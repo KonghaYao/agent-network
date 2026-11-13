@@ -6,15 +6,18 @@ import {
   primaryKey,
   sqliteTable,
   text,
-  unique,
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
 /**
- * 4C-0 的 Drizzle core schema 骨架。
+ * Drizzle core schema（身份、凭据、房间、成员、消息与投递）。
  *
- * 本文件只覆盖最稳定的 8 张核心表；迁移 SQL 仍是唯一事实源。guard、FTS5、trigger、
- * 复杂权限 SQL 与其余业务表继续保留 raw，其他域的表在独立文件中补齐。
+ * 迁移 SQL 仍是唯一事实源；这里只登记 `src/storage/queries.ts` 只读查询使用的
+ * 表定义，不定义 guard、FTS5、trigger、复杂权限 SQL 与未迁移域的表。
+ * operations、outbox 等写路径表仍以 raw SQL 为准，不进入 Drizzle schema。
+ *
+ * 本文件只导出表对象，不再维护重复的表名清单；`schema/index.ts` 是唯一汇总
+ * 入口，parity 脚本从该入口的导出派生表清单。
  *
  * 为与迁移保持 PRAGMA 一致：
  * - 主键统一用表级 `primaryKey()`，避免 Drizzle 给单列主键额外加 `NOT NULL`；
@@ -272,57 +275,3 @@ export const deliveries = sqliteTable(
     ),
   ],
 );
-
-export const operations = sqliteTable(
-  'operations',
-  {
-    actor_id: text('actor_id').notNull(),
-    request_id: text('request_id').notNull(),
-    payload_hash: text('payload_hash').notNull(),
-    write_nonce: text('write_nonce').notNull(),
-    result_json: text('result_json').notNull(),
-    created_at: integer('created_at').notNull(),
-  },
-  (table) => [
-    primaryKey({ columns: [table.actor_id, table.request_id] }),
-    index('idx_operations_created').on(table.created_at),
-  ],
-);
-
-export const outbox = sqliteTable(
-  'outbox',
-  {
-    outbox_id: text('outbox_id'),
-    topic: text('topic').notNull(),
-    event_seq: integer('event_seq').notNull(),
-    status: text('status').notNull(),
-    attempts: integer('attempts').notNull().default(0),
-    next_attempt_at: integer('next_attempt_at').notNull(),
-    lease_token: text('lease_token'),
-    lease_until: integer('lease_until'),
-    completed_at: integer('completed_at'),
-    created_at: integer('created_at').notNull(),
-  },
-  (table) => [
-    primaryKey({ columns: [table.outbox_id] }),
-    index('idx_outbox_due').on(table.status, table.next_attempt_at),
-    unique('outbox_topic_event_unique').on(table.topic, table.event_seq),
-    check(
-      'outbox_status_check',
-      sql`${table.status} in ('pending', 'processing', 'completed')`,
-    ),
-  ],
-);
-
-/** 4C-0 覆盖的表；未列出的表仍由迁移 SQL 定义。 */
-export const CORE_TABLES = [
-  actors,
-  credentials,
-  rooms,
-  roomMembers,
-  messages,
-  messageMentions,
-  deliveries,
-  operations,
-  outbox,
-] as const;

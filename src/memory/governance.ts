@@ -12,7 +12,6 @@ import { newId, nowMs, sha256Hex, stableStringify } from '../storage/db';
 import {
   getCurrentCuratedRevision,
   getMemoryExperience,
-  getMember,
   getRoom,
   listCurrentCuratedMemories,
   type D1Like,

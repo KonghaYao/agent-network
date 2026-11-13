@@ -217,10 +217,3 @@ export const agentManagements = sqliteTable(
 );
 
 /** 4C-2 覆盖的表；未列出的联系人表仍由迁移 SQL 定义。 */
-export const CONTACT_TABLES = [
-  contacts,
-  contactRelations,
-  contactRequests,
-  contactBlocks,
-  agentManagements,
-] as const;

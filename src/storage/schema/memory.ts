@@ -12,7 +12,7 @@ import {
 import { actors } from './core';
 
 /**
- * 4C-6 Memory 只读 schema。
+ * Memory 只读 schema。
  *
  * 迁移 SQL 仍是唯一事实源；这里只覆盖由 `storage/queries` 只读查询使用的表，
  * 列顺序与 `0045_memory_ledger.sql` / `0046_memory_experience_catchup.sql`
@@ -22,6 +22,8 @@ import { actors } from './core';
  * - `memory_jobs`、`memory_retain_intents`、`memory_governance_commands`、
  *   `memory_cursors`、`memory_projections`、`memory_space_transitions`；
  * - `memory_contexts_body_immutable` 等触发器不进入 Drizzle schema。
+ *
+ * 只导出表对象；表清单由 `schema/index.ts` 汇总后交给 parity 脚本派生。
  */
 export const memoryInstances = sqliteTable(
   'memory_instances',
@@ -826,25 +828,3 @@ export const memoryTombstones = sqliteTable(
 );
 
 /** 只导出 4C-6 覆盖的表；未列出的 memory 表仍由迁移 SQL 独占。 */
-export const MEMORY_TABLES = [
-  memoryInstances,
-  memorySpaces,
-  memorySources,
-  memoryCurated,
-  memoryRepresentations,
-  memoryRepresentationDependencies,
-  memorySelections,
-  memoryManifests,
-  memoryManifestItems,
-  memoryRecallRequests,
-  memoryContexts,
-  memoryContextItems,
-  memoryExperiences,
-  memoryCoverageRanges,
-  memoryReceipts,
-  memoryHostBindings,
-  memoryCatchupPlans,
-  memoryCatchupItems,
-  memoryExperienceProofs,
-  memoryTombstones,
-] as const;

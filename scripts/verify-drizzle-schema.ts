@@ -1,13 +1,15 @@
 /**
- * 4C-0 schema parity harness。
+ * 4C schema parity harness。
  *
  * 1. 在内存 SQLite 应用全部 `migrations/*.sql`（唯一事实源）；
- * 2. 用 drizzle-kit 从已登记 schema 生成 DDL，应用到第二个内存库；
- * 3. 逐表比较 columns / indexes / foreign keys / CHECK 约束；
+ * 2. 用 drizzle-kit 从 `src/storage/schema/index.ts` 生成 DDL，应用到第二个内存库；
+ * 3. 从 schema 入口导出派生表清单，逐表比较 columns / indexes / foreign keys /
+ *    CHECK 约束；入口只允许导出表对象，且每张表都必须被 `storage/queries` 使用；
  * 4. 生成并校验可 review 的 `tests/fixtures/schema-surface.json`；
  * 5. 验证 guard 表、FTS5 触发器与 Drizzle 生产边界：
  *    `drizzle-orm` 只允许出现在 `src/storage/drizzle.ts` / `src/storage/queries.ts`，
- *    schema 只允许由 `src/storage/drizzle.ts` 直接引用。
+ *    schema 只允许由 `src/storage/drizzle.ts` 直接引用，生产路径只构建 SELECT，
+ *    且 `drizzle-kit` 只执行 generate。
  *
  * 用法：
  *   bun scripts/verify-drizzle-schema.ts            # 校验
@@ -20,11 +22,12 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { getTableName } from 'drizzle-orm';
+import { getTableName, is } from 'drizzle-orm';
+import { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
 import { migrate } from '../src/bun/migrate';
 import { GUARDS } from '../src/storage/guards';
-import { SCHEMA_TABLES } from '../src/storage/schema';
+import * as schema from '../src/storage/schema';
 import { stableStringify } from '../src/storage/db';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
@@ -441,6 +444,8 @@ function checkFts(db: Database): void {
 const DRIZZLE_IMPORTERS = new Set(['src/storage/drizzle.ts', 'src/storage/queries.ts']);
 /** schema 模块只允许由运行时入口引用，避免表定义扩散到业务代码。 */
 const SCHEMA_IMPORTERS = new Set(['src/storage/drizzle.ts']);
+/** Drizzle 生产路径只构建只读 SELECT；写路径与事务仍由 raw D1 batch 负责。 */
+const DRIZZLE_READ_ONLY = ['src/storage/drizzle.ts', 'src/storage/queries.ts'];
 
 function checkDrizzleBoundary(): void {
   const files = [
@@ -467,6 +472,25 @@ function checkDrizzleBoundary(): void {
     const source = readFileSync(resolve(ROOT, required), 'utf8');
     check(`${required} 不引用 schema`, !source.includes('storage/schema'));
   }
+
+  const writePattern = /\.(?:insert|update|delete)\s*\(|\bdb\.(?:transaction|batch)\s*\(/u;
+  const writeOffenders = DRIZZLE_READ_ONLY.filter((file) =>
+    writePattern.test(readFileSync(resolve(ROOT, file), 'utf8')),
+  );
+  checkEqual('Drizzle 生产路径只构建 SELECT', writeOffenders.join(','), '');
+
+  const packageJson = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')) as {
+    scripts?: Record<string, string>;
+  };
+  const kitScripts = Object.entries(packageJson.scripts ?? {})
+    .filter(([, command]) => command.includes('drizzle-kit'))
+    .map(([name]) => name);
+  checkEqual('package scripts 不直接调用 drizzle-kit', kitScripts.join(','), '');
+  const kitArgs = [...new Bun.Glob('scripts/**/*.ts').scanSync({ cwd: ROOT })].flatMap((file) => {
+    const source = readFileSync(resolve(ROOT, file), 'utf8');
+    return [...source.matchAll(/DRIZZLE_KIT[\s\S]{0,120}?['"](\w+)['"]/gu)].map((match) => match[1]);
+  });
+  checkEqual('drizzle-kit 只执行 generate', [...new Set(kitArgs)].join(','), 'generate');
 }
 
 async function main() {
@@ -481,7 +505,21 @@ async function main() {
   const drizzleSql = await generateDrizzleSql();
   const drizzleDb = applyDrizzleSql(drizzleSql);
   try {
-    const expectedTables: string[] = SCHEMA_TABLES.map((table) => getTableName(table)).sort();
+    const schemaEntries = Object.entries(schema);
+    const nonTables = schemaEntries
+      .filter(([, value]) => !is(value, SQLiteTable))
+      .map(([name]) => name);
+    checkEqual('schema 入口只导出表对象', nonTables.join(','), '');
+    const schemaTables = schemaEntries.map(([exportName, value]) => ({
+      exportName,
+      tableName: getTableName(value as SQLiteTable),
+    }));
+    const expectedTables: string[] = schemaTables.map((entry) => entry.tableName).sort();
+    const querySource = readFileSync(resolve(ROOT, 'src/storage/queries.ts'), 'utf8');
+    const unusedSchema = schemaTables
+      .filter((entry) => !querySource.includes(`schema.${entry.exportName}`))
+      .map((entry) => entry.exportName);
+    checkEqual('schema 表都被 storage/queries 使用', unusedSchema.join(','), '');
     checkEqual(
       'Drizzle 只生成声明的表',
       tableNames(drizzleDb).join(','),
@@ -490,6 +528,16 @@ async function main() {
     for (const table of expectedTables) {
       assertTableParity('parity', migrated, drizzleDb, table);
     }
+    checkEqual(
+      '不存在 drizzle 迁移表',
+      tableNames(migrated).filter((name) => name.includes('drizzle')).length,
+      0,
+    );
+    checkEqual(
+      'schema_migrations 行数为 43',
+      (migrated.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get() as { n: number }).n,
+      43,
+    );
     checkEqual(
       'Drizzle 不生成 guard 表',
       tableNames(drizzleDb).filter((name) => name.startsWith('guard_')).length,

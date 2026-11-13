@@ -230,9 +230,4 @@ export const roomManagementAudit = sqliteTable(
   ],
 );
 
-export const ROOMS_TABLES = [
-  roomInvitations,
-  roomJoinRequests,
-  roomOwnerTransfers,
-  roomManagementAudit,
-] as const;
+/** 4C-3 覆盖的表；未列出的房间表仍由迁移 SQL 定义。 */

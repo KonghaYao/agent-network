@@ -36,7 +36,6 @@ import {
 } from './host-protocol';
 import {
   bindingCapabilities,
-  buildSubmittedInputManifest,
   integrationLevel,
   requireHostBinding,
   type MemoryManifestBuildResult,
@@ -44,7 +43,6 @@ import {
 import {
   hostCapabilities,
   hostSupports,
-  MEMORY_POLICY_VERSION,
   type MemoryExposureEvidenceKind,
   type MemoryHostCapability,
   type MemoryHostIntegrationLevel,
@@ -60,7 +58,6 @@ import {
 } from './contracts';
 import { authorizeRepresentationRead, requireCurrentMemorySpace } from './access';
 import {
-  recordHostInputExposure,
   submitGatewayObservation,
   submitHostExposureReport,
   submitHostManifestReport,
