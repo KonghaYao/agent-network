@@ -2075,7 +2075,7 @@ function explainChecks(sqlite: Database, db: D1Database): void {
   );
 }
 
-function explainChecks(sqlite: Database, db: D1Database): void {
+function explainFilesEventsChecks(sqlite: Database, db: D1Database): void {
   const auditTarget = alias(schema.actors, 'target');
   const auditChanger = alias(schema.actors, 'changer');
   const cases: { label: string; raw: string; params: unknown[]; query: { toSQL(): { sql: string; params: unknown[] } } }[] = [
@@ -3118,6 +3118,7 @@ async function main(): Promise<void> {
   try {
     await rowParityChecks(sqlite, db);
     explainChecks(sqlite, db);
+    explainFilesEventsChecks(sqlite, db);
     await messageExplainChecks(sqlite, db);
     await benchmark(sqlite, db);
     console.log(`\ndrizzle runtime checks passed: ${checksPassed()}`);
