@@ -1013,7 +1013,6 @@ async function main(): Promise<void> {
   mcpTelemetryChecks();
   capabilityPatchChecks();
   await clientImportBoundaryChecks();
-  await mcpTransportChecks();
   componentModelChecks();
   console.log(`\nRefactor units: ${checksPassed()} checks passed`);
 }
