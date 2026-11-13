@@ -1,4 +1,5 @@
-import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lt, lte, ne, or, sql, type SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 
 import { orm, schema, toD1, type D1Queryable } from './drizzle';
 import type {
@@ -14,7 +15,11 @@ import type {
   FileReferenceRow,
   MessageRow,
   RoomFileRow,
+  RoomInvitationRow,
+  RoomJoinRequestRow,
+  RoomManagementAuditRow,
   RoomMemberRow,
+  RoomOwnerTransferRow,
   RoomRow,
 } from './rows';
 
@@ -23,9 +28,13 @@ export interface D1Like extends D1Queryable {
 }
 
 /**
- * 4C-1 核心只读查询：actors / credentials / rooms / room_members 由 Drizzle 构建 SQL，
- * 仍经 `toD1()` 回到现有 D1 shim 执行。消息、投递、文件等域仍保留手写 SQL，
- * 留给 4C-4/4C-5；guard/FTS/复杂权限 SQL 不进入 Drizzle。
+ * 4C-1/4C-3 核心只读查询：actors / credentials / rooms / room_members 以及 rooms
+ * 域的邀请、入群申请、群主转让与管理审计由 Drizzle 构建 SQL，仍经 `toD1()`
+ * 回到现有 D1 shim 执行。消息、投递、文件等域仍保留手写 SQL，留给 4C-4/4C-5；
+ * guard/FTS/复杂权限 SQL 不进入 Drizzle。
+ *
+ * rooms 域保留 raw 的已知边界：`roomsList`（相关子查询/EXISTS/关系闸门）、
+ * `loadMembers`（CASE 排序 + 动态可见性）、邀请列表（相关子查询）与全部写路径。
  */
 
 export async function getActor(db: D1Like, actorId: string): Promise<ActorRow | null> {
@@ -72,6 +81,17 @@ export async function getActorsByIds(
     .from(schema.actors)
     .where(inArray(schema.actors.actor_id, actorIds));
   const result = await toD1(db, query).all<ActorKindRow>();
+  return result.results;
+}
+
+/** 只按已知 actor_id 批量读取完整 actor 行；成员校验等场景需要完整字段。 */
+export async function getActorRowsByIds(db: D1Like, actorIds: string[]): Promise<ActorRow[]> {
+  if (actorIds.length === 0) return [];
+  const query = orm(db)
+    .select()
+    .from(schema.actors)
+    .where(inArray(schema.actors.actor_id, actorIds));
+  const result = await toD1(db, query).all<ActorRow>();
   return result.results;
 }
 
@@ -494,6 +514,292 @@ export async function listActiveRoomPeers(
     )
     .orderBy(schema.roomMembers.room_id, schema.actors.actor_id);
   const result = await toD1(db, query).all<RoomPeerRow>();
+  return result.results;
+}
+
+/* ------------------------------------------------------------------ rooms 域只读 */
+
+/** 房间有效成员数；`room_get` 与邀请容量检查共用。 */
+export async function countActiveRoomMembers(db: D1Like, roomId: string): Promise<number> {
+  const query = orm(db)
+    .select({ n: sql<number>`count(*)`.as('n') })
+    .from(schema.roomMembers)
+    .where(
+      and(
+        eq(schema.roomMembers.room_id, roomId),
+        eq(schema.roomMembers.status, 'active'),
+      ),
+    );
+  const row = await toD1(db, query).first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/** 历史策略收紧时受影响的成员数：active 且 joined_seq > 0。 */
+export async function countActiveRoomMembersWithJoinHistory(
+  db: D1Like,
+  roomId: string,
+): Promise<number> {
+  const query = orm(db)
+    .select({ n: sql<number>`count(*)`.as('n') })
+    .from(schema.roomMembers)
+    .where(
+      and(
+        eq(schema.roomMembers.room_id, roomId),
+        eq(schema.roomMembers.status, 'active'),
+        gt(schema.roomMembers.joined_seq, 0),
+      ),
+    );
+  const row = await toD1(db, query).first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/** active owner/admin 成员；入群申请通知的接收者。原查询无 ORDER BY。 */
+export async function listActiveRoomManagerIds(
+  db: D1Like,
+  roomId: string,
+): Promise<string[]> {
+  const query = orm(db)
+    .select({ actor_id: schema.roomMembers.actor_id })
+    .from(schema.roomMembers)
+    .where(
+      and(
+        eq(schema.roomMembers.room_id, roomId),
+        eq(schema.roomMembers.status, 'active'),
+        inArray(schema.roomMembers.role, ['owner', 'admin']),
+      ),
+    );
+  const result = await toD1(db, query).all<{ actor_id: string }>();
+  return result.results.map((row) => row.actor_id);
+}
+
+export interface PendingDirectInvitationMemberRow {
+  invitation_id: string;
+  actor_id: string;
+  kind: 'human' | 'agent';
+  name: string;
+  invited_by: string;
+  created_at: number;
+  expires_at: number;
+}
+
+/**
+ * 群主/管理员可见的待确认定向邀请成员。
+ *
+ * 只读 pending 且未过期；group 成员面板隐藏已归档 Agent，与
+ * `visibleActorSql('a')` 等价（`kind <> 'agent' OR archived_at IS NULL`）。
+ * 顺序保持 `created_at ASC, invitation_id ASC`。
+ */
+export async function listPendingDirectInvitationMembers(
+  db: D1Like,
+  roomId: string,
+  at: number,
+): Promise<PendingDirectInvitationMemberRow[]> {
+  const query = orm(db)
+    .select({
+      invitation_id: schema.roomInvitations.invitation_id,
+      actor_id: sql<string>`${schema.roomInvitations.target_actor_id}`.as('actor_id'),
+      kind: schema.actors.kind,
+      name: schema.actors.name,
+      invited_by: sql<string>`${schema.roomInvitations.inviter_id}`.as('invited_by'),
+      created_at: schema.roomInvitations.created_at,
+      expires_at: schema.roomInvitations.expires_at,
+    })
+    .from(schema.roomInvitations)
+    .innerJoin(schema.actors, eq(schema.actors.actor_id, schema.roomInvitations.target_actor_id))
+    .where(
+      and(
+        eq(schema.roomInvitations.room_id, roomId),
+        eq(schema.roomInvitations.kind, 'direct'),
+        eq(schema.roomInvitations.status, 'pending'),
+        gt(schema.roomInvitations.expires_at, at),
+        or(ne(schema.actors.kind, 'agent'), isNull(schema.actors.archived_at)),
+      ),
+    )
+    .orderBy(asc(schema.roomInvitations.created_at), asc(schema.roomInvitations.invitation_id));
+  const result = await toD1(db, query).all<PendingDirectInvitationMemberRow>();
+  return result.results;
+}
+
+export async function getRoomInvitationById(
+  db: D1Like,
+  invitationId: string,
+): Promise<RoomInvitationRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.roomInvitations)
+    .where(eq(schema.roomInvitations.invitation_id, invitationId));
+  return toD1(db, query).first<RoomInvitationRow>();
+}
+
+export async function getRoomJoinRequestById(
+  db: D1Like,
+  joinRequestId: string,
+): Promise<RoomJoinRequestRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.roomJoinRequests)
+    .where(eq(schema.roomJoinRequests.join_request_id, joinRequestId));
+  return toD1(db, query).first<RoomJoinRequestRow>();
+}
+
+/** 同一邀请对同一申请人的最新申请；重复打开链接时用于收敛状态。 */
+export async function getLatestJoinRequestForApplicant(
+  db: D1Like,
+  invitationId: string,
+  applicantId: string,
+): Promise<RoomJoinRequestRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.roomJoinRequests)
+    .where(
+      and(
+        eq(schema.roomJoinRequests.invitation_id, invitationId),
+        eq(schema.roomJoinRequests.applicant_id, applicantId),
+      ),
+    )
+    .orderBy(
+      desc(schema.roomJoinRequests.created_at),
+      desc(schema.roomJoinRequests.join_request_id),
+    )
+    .limit(1);
+  return toD1(db, query).first<RoomJoinRequestRow>();
+}
+
+export async function getOwnerTransferById(
+  db: D1Like,
+  transferId: string,
+): Promise<RoomOwnerTransferRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.roomOwnerTransfers)
+    .where(eq(schema.roomOwnerTransfers.transfer_id, transferId));
+  return toD1(db, query).first<RoomOwnerTransferRow>();
+}
+
+export interface JoinRequestListRow extends RoomJoinRequestRow {
+  invitation_kind: 'direct' | 'link';
+  invitation_status: RoomInvitationRow['status'];
+  invitation_expires_at: number;
+  invitation_max_uses: number;
+  invitation_used_count: number;
+  applicant_kind: 'human' | 'agent';
+  applicant_name: string;
+  applicant_session_id: string | null;
+}
+
+/**
+ * 入群申请分页行（调用方传 `limit + 1` 判断 has_more）。
+ *
+ * keyset 与 `roomJoinRequestList` 完全一致：`created_at DESC,
+ * join_request_id DESC`。
+ */
+export async function listJoinRequestRows(
+  db: D1Like,
+  roomId: string,
+  status: RoomJoinRequestRow['status'],
+  cursor: { seq: number; key: string } | null,
+  limit: number,
+): Promise<JoinRequestListRow[]> {
+  const conditions: SQL[] = [
+    eq(schema.roomJoinRequests.room_id, roomId),
+    eq(schema.roomJoinRequests.status, status),
+  ];
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(schema.roomJoinRequests.created_at, cursor.seq),
+        and(
+          eq(schema.roomJoinRequests.created_at, cursor.seq),
+          lt(schema.roomJoinRequests.join_request_id, cursor.key),
+        ),
+      )!,
+    );
+  }
+  const query = orm(db)
+    .select({
+      ...getTableColumns(schema.roomJoinRequests),
+      invitation_kind: sql<'direct' | 'link'>`${schema.roomInvitations.kind}`.as('invitation_kind'),
+      invitation_status: sql<RoomInvitationRow['status']>`${schema.roomInvitations.status}`.as(
+        'invitation_status',
+      ),
+      invitation_expires_at: sql<number>`${schema.roomInvitations.expires_at}`.as(
+        'invitation_expires_at',
+      ),
+      invitation_max_uses: sql<number>`${schema.roomInvitations.max_uses}`.as(
+        'invitation_max_uses',
+      ),
+      invitation_used_count: sql<number>`${schema.roomInvitations.used_count}`.as(
+        'invitation_used_count',
+      ),
+      applicant_kind: sql<'human' | 'agent'>`${schema.actors.kind}`.as('applicant_kind'),
+      applicant_name: sql<string>`${schema.actors.name}`.as('applicant_name'),
+      applicant_session_id: sql<string | null>`${schema.actors.agent_session_id}`.as(
+        'applicant_session_id',
+      ),
+    })
+    .from(schema.roomJoinRequests)
+    .innerJoin(
+      schema.roomInvitations,
+      eq(schema.roomInvitations.invitation_id, schema.roomJoinRequests.invitation_id),
+    )
+    .innerJoin(schema.actors, eq(schema.actors.actor_id, schema.roomJoinRequests.applicant_id))
+    .where(and(...conditions))
+    .orderBy(
+      desc(schema.roomJoinRequests.created_at),
+      desc(schema.roomJoinRequests.join_request_id),
+    )
+    .limit(limit);
+  const result = await toD1(db, query).all<JoinRequestListRow>();
+  return result.results;
+}
+
+export interface RoomAuditListRow extends RoomManagementAuditRow {
+  target_name: string | null;
+  changed_by_name: string | null;
+}
+
+/**
+ * 角色/成员管理审计分页行（调用方传 `limit + 1` 判断 has_more）。
+ *
+ * keyset 与 `roomRoleHistory` 完全一致：`created_at DESC, audit_id DESC`；
+ * target/changer 名称来自 LEFT JOIN，目标缺失时保持 NULL。
+ */
+export async function listRoomAuditRows(
+  db: D1Like,
+  roomId: string,
+  cursor: { seq: number; key: string } | null,
+  limit: number,
+): Promise<RoomAuditListRow[]> {
+  const target = alias(schema.actors, 'target');
+  const changer = alias(schema.actors, 'changer');
+  const conditions: SQL[] = [eq(schema.roomManagementAudit.room_id, roomId)];
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(schema.roomManagementAudit.created_at, cursor.seq),
+        and(
+          eq(schema.roomManagementAudit.created_at, cursor.seq),
+          lt(schema.roomManagementAudit.audit_id, cursor.key),
+        ),
+      )!,
+    );
+  }
+  const query = orm(db)
+    .select({
+      ...getTableColumns(schema.roomManagementAudit),
+      target_name: sql<string | null>`${target.name}`.as('target_name'),
+      changed_by_name: sql<string | null>`${changer.name}`.as('changed_by_name'),
+    })
+    .from(schema.roomManagementAudit)
+    .leftJoin(target, eq(target.actor_id, schema.roomManagementAudit.target_actor_id))
+    .leftJoin(changer, eq(changer.actor_id, schema.roomManagementAudit.changed_by))
+    .where(and(...conditions))
+    .orderBy(
+      desc(schema.roomManagementAudit.created_at),
+      desc(schema.roomManagementAudit.audit_id),
+    )
+    .limit(limit);
+  const result = await toD1(db, query).all<RoomAuditListRow>();
   return result.results;
 }
 

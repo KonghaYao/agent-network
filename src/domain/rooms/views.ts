@@ -5,7 +5,7 @@ import { type BusinessErrorCode } from '../../contracts/errors';
 import { clampPage, LIMITS } from '../../contracts/limits';
 import { type RoomsListInput } from '../../contracts/schemas';
 import { nowMs } from '../../storage/db';
-import { getMessage, listActiveRoomPeers, visibleActorSql } from '../../storage/queries';
+import { countActiveRoomMembers, getMessage, listActiveRoomPeers, visibleActorSql } from '../../storage/queries';
 import { type ActorRow, type MessageRow, type RoomManagementAuditRow, type RoomMemberRow, type RoomRow } from '../../storage/rows';
 import { manageableAgentIds } from '../agent-access';
 import { relationEndedByBlockSql } from '../contact-relations';
@@ -263,11 +263,7 @@ export function roomView(
 }
 
 export async function memberCount(db: D1Database, roomId: string): Promise<number> {
-  const row = await db
-    .prepare("SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND status = 'active'")
-    .bind(roomId)
-    .first<{ n: number }>();
-  return row?.n ?? 0;
+  return countActiveRoomMembers(db, roomId);
 }
 
 export async function loadRoomView(

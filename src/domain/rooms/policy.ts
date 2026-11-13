@@ -7,7 +7,11 @@ import { type RoomAnnouncementSetInput, type RoomPolicySetInput, type RoomRoleHi
 import { nowMs, sha256Hex, stableStringify } from '../../storage/db';
 import { eventStatement, outboxStatement, roomMemberSeqStatement, roomTopic } from '../../storage/events';
 import { guardSql } from '../../storage/guards';
-import { type RoomManagementAuditRow } from '../../storage/rows';
+import {
+  countActiveRoomMembersWithJoinHistory,
+  listRoomAuditRows,
+  type RoomAuditListRow,
+} from '../../storage/queries';
 import { operationsStatement, resolveReplay, runIdempotent } from '../../storage/transactions/runner';
 import { actorId, type Principal } from '../principal';
 import { capabilityGuardStatement, assertRoomWritable, requireExpectedRoleRevision, requireGroupAccess, requireTargetMember, roleRevisionGuardStatement, roleTargetGuardStatement, roomDissolvedGuardStatement, roomPolicies, type RoomPolicies } from '../room-access';
@@ -134,14 +138,7 @@ export async function policyImpactFor(
   let hiddenFiles = 0;
 
   if (historyChanged && next.member_history === 'from_join') {
-    const memberRow = await db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM room_members
-          WHERE room_id = ? AND status = 'active' AND joined_seq > 0`,
-      )
-      .bind(roomId)
-      .first<{ n: number }>();
-    affectedMembers = memberRow?.n ?? 0;
+    affectedMembers = await countActiveRoomMembersWithJoinHistory(db, roomId);
     const fileRow = await db
       .prepare(
         `SELECT COUNT(*) AS n FROM room_files rf
@@ -374,11 +371,6 @@ export async function roomAnnouncementSet(
   return roomDetail(db, access.room.room_id, caller);
 }
 
-export interface RoomAuditListRow extends RoomManagementAuditRow {
-  target_name: string | null;
-  changed_by_name: string | null;
-}
-
 /** 管理审计分页；只有 owner/admin 可读。 */
 export async function roomRoleHistory(
   db: D1Database,
@@ -394,27 +386,15 @@ export async function roomRoleHistory(
     LIMITS.roomRoleHistoryPageMax,
   );
   const cursor = input.cursor ? decodeCursor(input.cursor, scope) : null;
-  const keyset = cursor
-    ? 'AND (a.created_at < ? OR (a.created_at = ? AND a.audit_id < ?))'
-    : '';
-  const binds: unknown[] = cursor
-    ? [input.room_id, cursor.seq, cursor.seq, cursor.key ?? '']
-    : [input.room_id];
 
-  const rows = await db
-    .prepare(
-      `SELECT a.*, target.name AS target_name, changer.name AS changed_by_name
-         FROM room_management_audit a
-         LEFT JOIN actors target ON target.actor_id = a.target_actor_id
-         LEFT JOIN actors changer ON changer.actor_id = a.changed_by
-        WHERE a.room_id = ? ${keyset}
-        ORDER BY a.created_at DESC, a.audit_id DESC
-        LIMIT ?`,
-    )
-    .bind(...binds, limit + 1)
-    .all<RoomAuditListRow>();
+  const rows = await listRoomAuditRows(
+    db,
+    input.room_id,
+    cursor ? { seq: cursor.seq, key: cursor.key ?? '' } : null,
+    limit + 1,
+  );
 
-  const page = rows.results.slice(0, limit);
+  const page = rows.slice(0, limit);
   let detail: Record<string, unknown> = {};
   const items = page.map((row) => {
     try {
@@ -445,7 +425,7 @@ export async function roomRoleHistory(
       created_at: String(row.created_at),
     };
   });
-  const hasMore = rows.results.length > limit;
+  const hasMore = rows.length > limit;
   const last = page.at(-1);
   return {
     items,

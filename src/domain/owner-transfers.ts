@@ -15,7 +15,7 @@ import {
   roomTopic,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getMember, getRoom } from '../storage/queries';
+import { getMember, getOwnerTransferById, getRoom } from '../storage/queries';
 import type { RoomOwnerTransferRow } from '../storage/rows';
 import {
   operationsStatement,
@@ -90,10 +90,7 @@ async function getOwnerTransfer(
   db: D1Database,
   transferId: string,
 ): Promise<RoomOwnerTransferRow | null> {
-  return db
-    .prepare('SELECT * FROM room_owner_transfers WHERE transfer_id = ?')
-    .bind(transferId)
-    .first<RoomOwnerTransferRow>();
+  return getOwnerTransferById(db, transferId);
 }
 
 /**

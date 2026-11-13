@@ -12,7 +12,8 @@
  */
 
 import { Database } from 'bun:sqlite';
-import { and, asc, desc, eq, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 import { resolve } from 'node:path';
 
 import { createD1 } from '../src/bun/d1';
@@ -21,6 +22,8 @@ import { orm, schema } from '../src/storage/drizzle';
 import {
   activeRoomCount,
   countActiveCredentials,
+  countActiveRoomMembers,
+  countActiveRoomMembersWithJoinHistory,
   findActiveContactBlockBetween,
   getActiveAgentManagement,
   getActiveContactBlock,
@@ -28,6 +31,7 @@ import {
   getActor,
   getActorBySession,
   getActorManagementByIds,
+  getActorRowsByIds,
   getActorsByIds,
   getContact,
   getContactRelation,
@@ -35,16 +39,24 @@ import {
   getCredentialByHash,
   getEventsMinSeq,
   getExpiredPendingContactRequestForPair,
+  getLatestJoinRequestForApplicant,
   getMember,
+  getOwnerTransferById,
   getPendingContactRequest,
   getRoom,
+  getRoomInvitationById,
+  getRoomJoinRequestById,
   isActiveMember,
   listActiveManagementBindings,
+  listActiveRoomManagerIds,
   listActiveRoomPeers,
   listContactBlocks,
   listExpiredPendingContactRequests,
+  listJoinRequestRows,
   listMutedMentionBlockers,
   listPendingContactRequests,
+  listPendingDirectInvitationMembers,
+  listRoomAuditRows,
 } from '../src/storage/queries';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
@@ -306,6 +318,48 @@ function seed(sqlite: Database): void {
     null,
     132,
   );
+  const invitation = sqlite.prepare(
+    `INSERT INTO room_invitations
+       (invitation_id, room_id, inviter_id, target_actor_id, token_hash, kind, status,
+        max_uses, used_count, expires_at, revision, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  invitation.run('inv_direct_h2', 'room_group_1', 'act_human_1', 'act_human_2', null, 'direct', 'pending', 1, 0, 5_000, 1, 220, 220);
+  invitation.run('inv_direct_archived', 'room_group_1', 'act_human_1', 'act_agent_2', null, 'direct', 'pending', 1, 0, 5_000, 1, 221, 221);
+  invitation.run('inv_direct_expired', 'room_group_1', 'act_human_1', 'act_agent_3', null, 'direct', 'pending', 1, 0, 900, 1, 219, 219);
+  invitation.run('inv_link_1', 'room_group_1', 'act_human_1', null, 'tok_hash_link_1', 'link', 'pending', 20, 3, 9_000, 1, 222, 222);
+
+  const joinRequest = sqlite.prepare(
+    `INSERT INTO room_join_requests
+       (join_request_id, invitation_id, room_id, applicant_id, status, message, revision,
+        created_at, updated_at, decided_at, decided_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  joinRequest.run('jrq_0', 'inv_link_1', 'room_group_1', 'act_agent_1', 'rejected', '', 2, 250, 250, 251, 'act_human_1');
+  joinRequest.run('jrq_1', 'inv_link_1', 'room_group_1', 'act_human_2', 'pending', '', 1, 300, 300, null, null);
+  joinRequest.run('jrq_2', 'inv_link_1', 'room_group_1', 'act_agent_3', 'approved', 'hi', 2, 299, 299, 299, 'act_human_1');
+  joinRequest.run('jrq_3', 'inv_link_1', 'room_group_1', 'act_agent_1', 'pending', '', 1, 300, 300, null, null);
+
+  sqlite
+    .prepare(
+      `INSERT INTO room_owner_transfers
+         (transfer_id, room_id, from_owner_id, to_actor_id, status, version,
+          target_role_revision, invalid_reason, created_at, updated_at, expires_at,
+          responded_at, responded_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run('tr_1', 'room_group_1', 'act_human_1', 'act_agent_1', 'pending', 1, 1, null, 400, 400, 9_000, null, null);
+
+  const audit = sqlite.prepare(
+    `INSERT INTO room_management_audit
+       (audit_id, room_id, action, target_actor_id, previous_role, new_role,
+        previous_status, new_status, expected_revision, resulting_revision, changed_by,
+        request_id, detail_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  audit.run('aud_3', 'room_group_1', 'member_added', 'act_agent_1', null, 'admin', null, 'active', null, 2, 'act_human_1', 'req_3', '{"note":"c"}', 500);
+  audit.run('aud_2', 'room_group_1', 'admin_appointed', 'act_agent_1', 'member', 'admin', 'active', 'active', 1, 2, 'act_human_1', 'req_2', '{"note":"b"}', 500);
+  audit.run('aud_1', 'room_group_1', 'policy_updated', null, null, null, null, null, null, 2, 'act_human_1', 'req_1', '{"note":"a"}', 499);
 }
 
 function rawFirst<T>(sqlite: Database, sql: string, params: unknown[]): T | null {
@@ -576,6 +630,71 @@ async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> 
         `SELECT * FROM contact_requests
           WHERE pair_key = ? AND status = 'pending' AND expires_at <= ?`,
         ['act_agent_1|act_human_1', 1_000],
+  // 4C-3 rooms 域只读查询：逐行与迁移前手写 SQL 对比。
+  checkEqual('getActorRowsByIds empty', JSON.stringify(await getActorRowsByIds(db, [])), '[]');
+  checkEqual(
+    'getActorRowsByIds many',
+    JSON.stringify(await getActorRowsByIds(db, actorIds)),
+    JSON.stringify(
+      rawAll(sqlite, `SELECT * FROM actors WHERE actor_id IN (${placeholders(actorIds)})`, actorIds),
+    ),
+  );
+
+  checkEqual(
+    'countActiveRoomMembers group',
+    await countActiveRoomMembers(db, 'room_group_1'),
+    rawFirst<{ n: number }>(
+      sqlite,
+      "SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND status = 'active'",
+      ['room_group_1'],
+    )?.n ?? 0,
+  );
+  checkEqual('countActiveRoomMembers missing', await countActiveRoomMembers(db, 'room_missing'), 0);
+  checkEqual(
+    'countActiveRoomMembersWithJoinHistory group',
+    await countActiveRoomMembersWithJoinHistory(db, 'room_group_1'),
+    rawFirst<{ n: number }>(
+      sqlite,
+      "SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND status = 'active' AND joined_seq > 0",
+      ['room_group_1'],
+    )?.n ?? 0,
+  );
+  checkEqual(
+    'countActiveRoomMembersWithJoinHistory missing',
+    await countActiveRoomMembersWithJoinHistory(db, 'room_missing'),
+    0,
+  );
+
+  const managerSql = "SELECT actor_id FROM room_members WHERE room_id = ? AND status = 'active' AND role IN ('owner', 'admin')";
+  checkEqual(
+    'listActiveRoomManagerIds group',
+    JSON.stringify([...(await listActiveRoomManagerIds(db, 'room_group_1'))].sort()),
+    JSON.stringify(
+      (rawAll<{ actor_id: string }>(sqlite, managerSql, ['room_group_1']) as { actor_id: string }[])
+        .map((row) => row.actor_id)
+        .sort(),
+    ),
+  );
+  checkEqual('listActiveRoomManagerIds missing', JSON.stringify(await listActiveRoomManagerIds(db, 'room_missing')), '[]');
+
+  const invitedSql = `SELECT i.invitation_id, i.target_actor_id AS actor_id, a.kind, a.name,
+              i.inviter_id AS invited_by, i.created_at, i.expires_at
+         FROM room_invitations i
+         JOIN actors a ON a.actor_id = i.target_actor_id
+        WHERE i.room_id = ? AND i.kind = 'direct' AND i.status = 'pending'
+          AND i.expires_at > ? AND (a.kind <> 'agent' OR a.archived_at IS NULL)
+        ORDER BY i.created_at ASC, i.invitation_id ASC`;
+  checkEqual(
+    'listPendingDirectInvitationMembers group',
+    JSON.stringify(await listPendingDirectInvitationMembers(db, 'room_group_1', 1_000)),
+    JSON.stringify(rawAll(sqlite, invitedSql, ['room_group_1', 1_000])),
+  );
+  checkEqual(
+    'listPendingDirectInvitationMembers hides archived agent',
+    JSON.stringify(await listPendingDirectInvitationMembers(db, 'room_group_1', 1_000)),
+    JSON.stringify(
+      rawAll(sqlite, invitedSql, ['room_group_1', 1_000]).filter(
+        (row) => (row as { actor_id: string }).actor_id !== 'act_agent_2',
       ),
     ),
   );
@@ -631,6 +750,41 @@ async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> 
   checkEqual(
     'findActiveContactBlockBetween none',
     await findActiveContactBlockBetween(db, 'act_human_1', 'act_human_2'),
+    'listPendingDirectInvitationMembers later cutoff',
+    JSON.stringify(await listPendingDirectInvitationMembers(db, 'room_group_1', 5_000)),
+    JSON.stringify(rawAll(sqlite, invitedSql, ['room_group_1', 5_000])),
+  );
+
+  checkEqual(
+    'getRoomInvitationById direct',
+    JSON.stringify(await getRoomInvitationById(db, 'inv_direct_h2')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_invitations WHERE invitation_id = ?', ['inv_direct_h2'])),
+  );
+  checkEqual(
+    'getRoomInvitationById link',
+    JSON.stringify(await getRoomInvitationById(db, 'inv_link_1')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_invitations WHERE invitation_id = ?', ['inv_link_1'])),
+  );
+  checkEqual('getRoomInvitationById missing', await getRoomInvitationById(db, 'missing'), null);
+
+  checkEqual(
+    'getRoomJoinRequestById',
+    JSON.stringify(await getRoomJoinRequestById(db, 'jrq_2')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_join_requests WHERE join_request_id = ?', ['jrq_2'])),
+  );
+  checkEqual('getRoomJoinRequestById missing', await getRoomJoinRequestById(db, 'missing'), null);
+
+  const latestSql = `SELECT * FROM room_join_requests
+        WHERE invitation_id = ? AND applicant_id = ?
+        ORDER BY created_at DESC, join_request_id DESC LIMIT 1`;
+  checkEqual(
+    'getLatestJoinRequestForApplicant',
+    JSON.stringify(await getLatestJoinRequestForApplicant(db, 'inv_link_1', 'act_agent_1')),
+    JSON.stringify(rawFirst(sqlite, latestSql, ['inv_link_1', 'act_agent_1'])),
+  );
+  checkEqual(
+    'getLatestJoinRequestForApplicant missing',
+    await getLatestJoinRequestForApplicant(db, 'inv_link_1', 'act_human_1'),
     null,
   );
 
@@ -730,10 +884,100 @@ async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> 
     'countActiveCredentials none',
     await countActiveCredentials(db, 'act_agent_1'),
     0,
+    'getOwnerTransferById',
+    JSON.stringify(await getOwnerTransferById(db, 'tr_1')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_owner_transfers WHERE transfer_id = ?', ['tr_1'])),
+  );
+  checkEqual('getOwnerTransferById missing', await getOwnerTransferById(db, 'missing'), null);
+
+  const joinRequestListSql = `SELECT jr.*, i.kind AS invitation_kind, i.status AS invitation_status,
+              i.expires_at AS invitation_expires_at,
+              i.max_uses AS invitation_max_uses,
+              i.used_count AS invitation_used_count,
+              a.kind AS applicant_kind, a.name AS applicant_name,
+              a.agent_session_id AS applicant_session_id
+         FROM room_join_requests jr
+         JOIN room_invitations i ON i.invitation_id = jr.invitation_id
+         JOIN actors a ON a.actor_id = jr.applicant_id
+        WHERE jr.room_id = ? AND jr.status = ?
+        ORDER BY jr.created_at DESC, jr.join_request_id DESC
+        LIMIT ?`;
+  checkEqual(
+    'listJoinRequestRows pending',
+    JSON.stringify(await listJoinRequestRows(db, 'room_group_1', 'pending', null, 10)),
+    JSON.stringify(rawAll(sqlite, joinRequestListSql, ['room_group_1', 'pending', 10])),
+  );
+  checkEqual(
+    'listJoinRequestRows page limit',
+    JSON.stringify(await listJoinRequestRows(db, 'room_group_1', 'pending', null, 2)),
+    JSON.stringify(rawAll(sqlite, joinRequestListSql, ['room_group_1', 'pending', 2])),
+  );
+  const joinRequestCursorSql = `SELECT jr.*, i.kind AS invitation_kind, i.status AS invitation_status,
+              i.expires_at AS invitation_expires_at,
+              i.max_uses AS invitation_max_uses,
+              i.used_count AS invitation_used_count,
+              a.kind AS applicant_kind, a.name AS applicant_name,
+              a.agent_session_id AS applicant_session_id
+         FROM room_join_requests jr
+         JOIN room_invitations i ON i.invitation_id = jr.invitation_id
+         JOIN actors a ON a.actor_id = jr.applicant_id
+        WHERE jr.room_id = ? AND jr.status = ?
+          AND (jr.created_at < ? OR (jr.created_at = ? AND jr.join_request_id < ?))
+        ORDER BY jr.created_at DESC, jr.join_request_id DESC
+        LIMIT ?`;
+  checkEqual(
+    'listJoinRequestRows cursor tie-break',
+    JSON.stringify(
+      await listJoinRequestRows(db, 'room_group_1', 'pending', { seq: 300, key: 'jrq_3' }, 10),
+    ),
+    JSON.stringify(rawAll(sqlite, joinRequestCursorSql, ['room_group_1', 'pending', 300, 300, 'jrq_3', 10])),
+  );
+  checkEqual(
+    'listJoinRequestRows approved',
+    JSON.stringify(await listJoinRequestRows(db, 'room_group_1', 'approved', null, 10)),
+    JSON.stringify(rawAll(sqlite, joinRequestListSql, ['room_group_1', 'approved', 10])),
+  );
+
+  const auditListSql = `SELECT a.*, target.name AS target_name, changer.name AS changed_by_name
+         FROM room_management_audit a
+         LEFT JOIN actors target ON target.actor_id = a.target_actor_id
+         LEFT JOIN actors changer ON changer.actor_id = a.changed_by
+        WHERE a.room_id = ?
+        ORDER BY a.created_at DESC, a.audit_id DESC
+        LIMIT ?`;
+  checkEqual(
+    'listRoomAuditRows page',
+    JSON.stringify(await listRoomAuditRows(db, 'room_group_1', null, 10)),
+    JSON.stringify(rawAll(sqlite, auditListSql, ['room_group_1', 10])),
+  );
+  checkEqual(
+    'listRoomAuditRows limit',
+    JSON.stringify(await listRoomAuditRows(db, 'room_group_1', null, 2)),
+    JSON.stringify(rawAll(sqlite, auditListSql, ['room_group_1', 2])),
+  );
+  const auditCursorSql = `SELECT a.*, target.name AS target_name, changer.name AS changed_by_name
+         FROM room_management_audit a
+         LEFT JOIN actors target ON target.actor_id = a.target_actor_id
+         LEFT JOIN actors changer ON changer.actor_id = a.changed_by
+        WHERE a.room_id = ?
+          AND (a.created_at < ? OR (a.created_at = ? AND a.audit_id < ?))
+        ORDER BY a.created_at DESC, a.audit_id DESC
+        LIMIT ?`;
+  checkEqual(
+    'listRoomAuditRows cursor tie-break',
+    JSON.stringify(await listRoomAuditRows(db, 'room_group_1', { seq: 500, key: 'aud_2' }, 10)),
+    JSON.stringify(rawAll(sqlite, auditCursorSql, ['room_group_1', 500, 500, 'aud_2', 10])),
+  );
+  checkEqual(
+    'listRoomAuditRows empty',
+    JSON.stringify(await listRoomAuditRows(db, 'room_missing', null, 10)),
+    '[]',
   );
 }
 
 function explainChecks(sqlite: Database, db: D1Database): void {
+  const auditTarget = alias(schema.actors, 'target');
+  const auditChanger = alias(schema.actors, 'changer');
   const cases: { label: string; raw: string; params: unknown[]; query: { toSQL(): { sql: string; params: unknown[] } } }[] = [
     {
       label: 'getActor',
@@ -1034,6 +1278,280 @@ function explainChecks(sqlite: Database, db: D1Database): void {
             isNull(schema.credentials.revoked_at),
           ),
         ),
+      label: 'getActorRowsByIds',
+      raw: 'SELECT * FROM actors WHERE actor_id IN (?, ?, ?)',
+      params: ['act_human_1', 'act_agent_2', 'act_agent_3'],
+      query: orm(db)
+        .select()
+        .from(schema.actors)
+        .where(inArray(schema.actors.actor_id, ['act_human_1', 'act_agent_2', 'act_agent_3'])),
+    },
+    {
+      label: 'countActiveRoomMembers',
+      raw: "SELECT count(*) AS n FROM room_members WHERE room_id = ? AND status = 'active'",
+      params: ['room_group_1'],
+      query: orm(db)
+        .select({ n: schema.roomMembers.status })
+        .from(schema.roomMembers)
+        .where(
+          and(
+            eq(schema.roomMembers.room_id, 'room_group_1'),
+            eq(schema.roomMembers.status, 'active'),
+          ),
+        ),
+    },
+    {
+      label: 'countActiveRoomMembersWithJoinHistory',
+      raw: "SELECT count(*) AS n FROM room_members WHERE room_id = ? AND status = 'active' AND joined_seq > 0",
+      params: ['room_group_1'],
+      query: orm(db)
+        .select({ n: schema.roomMembers.status })
+        .from(schema.roomMembers)
+        .where(
+          and(
+            eq(schema.roomMembers.room_id, 'room_group_1'),
+            eq(schema.roomMembers.status, 'active'),
+            gt(schema.roomMembers.joined_seq, 0),
+          ),
+        ),
+    },
+    {
+      label: 'listActiveRoomManagerIds',
+      raw: "SELECT actor_id FROM room_members WHERE room_id = ? AND status = 'active' AND role IN ('owner', 'admin')",
+      params: ['room_group_1'],
+      query: orm(db)
+        .select({ actor_id: schema.roomMembers.actor_id })
+        .from(schema.roomMembers)
+        .where(
+          and(
+            eq(schema.roomMembers.room_id, 'room_group_1'),
+            eq(schema.roomMembers.status, 'active'),
+            inArray(schema.roomMembers.role, ['owner', 'admin']),
+          ),
+        ),
+    },
+    {
+      label: 'listPendingDirectInvitationMembers',
+      raw: `SELECT room_invitations.invitation_id, room_invitations.target_actor_id AS actor_id,
+              actors.kind, actors.name,
+              room_invitations.inviter_id AS invited_by,
+              room_invitations.created_at, room_invitations.expires_at
+         FROM room_invitations
+         JOIN actors ON actors.actor_id = room_invitations.target_actor_id
+        WHERE room_invitations.room_id = ? AND room_invitations.kind = 'direct'
+          AND room_invitations.status = 'pending'
+          AND room_invitations.expires_at > ?
+          AND (actors.kind <> 'agent' OR actors.archived_at IS NULL)
+        ORDER BY room_invitations.created_at ASC, room_invitations.invitation_id ASC`,
+      params: ['room_group_1', 1_000],
+      query: orm(db)
+        .select({
+          invitation_id: schema.roomInvitations.invitation_id,
+          actor_id: schema.roomInvitations.target_actor_id,
+          kind: schema.actors.kind,
+          name: schema.actors.name,
+          invited_by: schema.roomInvitations.inviter_id,
+          created_at: schema.roomInvitations.created_at,
+          expires_at: schema.roomInvitations.expires_at,
+        })
+        .from(schema.roomInvitations)
+        .innerJoin(
+          schema.actors,
+          eq(schema.actors.actor_id, schema.roomInvitations.target_actor_id),
+        )
+        .where(
+          and(
+            eq(schema.roomInvitations.room_id, 'room_group_1'),
+            eq(schema.roomInvitations.kind, 'direct'),
+            eq(schema.roomInvitations.status, 'pending'),
+            gt(schema.roomInvitations.expires_at, 1_000),
+            or(ne(schema.actors.kind, 'agent'), isNull(schema.actors.archived_at)),
+          ),
+        )
+        .orderBy(asc(schema.roomInvitations.created_at), asc(schema.roomInvitations.invitation_id)),
+    },
+    {
+      label: 'getRoomInvitationById',
+      raw: 'SELECT * FROM room_invitations WHERE invitation_id = ?',
+      params: ['inv_link_1'],
+      query: orm(db)
+        .select()
+        .from(schema.roomInvitations)
+        .where(eq(schema.roomInvitations.invitation_id, 'inv_link_1')),
+    },
+    {
+      label: 'getRoomJoinRequestById',
+      raw: 'SELECT * FROM room_join_requests WHERE join_request_id = ?',
+      params: ['jrq_2'],
+      query: orm(db)
+        .select()
+        .from(schema.roomJoinRequests)
+        .where(eq(schema.roomJoinRequests.join_request_id, 'jrq_2')),
+    },
+    {
+      label: 'getLatestJoinRequestForApplicant',
+      raw: `SELECT * FROM room_join_requests
+        WHERE invitation_id = ? AND applicant_id = ?
+        ORDER BY created_at DESC, join_request_id DESC LIMIT 1`,
+      params: ['inv_link_1', 'act_agent_1'],
+      query: orm(db)
+        .select()
+        .from(schema.roomJoinRequests)
+        .where(
+          and(
+            eq(schema.roomJoinRequests.invitation_id, 'inv_link_1'),
+            eq(schema.roomJoinRequests.applicant_id, 'act_agent_1'),
+          ),
+        )
+        .orderBy(
+          desc(schema.roomJoinRequests.created_at),
+          desc(schema.roomJoinRequests.join_request_id),
+        )
+        .limit(1),
+    },
+    {
+      label: 'getOwnerTransferById',
+      raw: 'SELECT * FROM room_owner_transfers WHERE transfer_id = ?',
+      params: ['tr_1'],
+      query: orm(db)
+        .select()
+        .from(schema.roomOwnerTransfers)
+        .where(eq(schema.roomOwnerTransfers.transfer_id, 'tr_1')),
+    },
+    {
+      label: 'listJoinRequestRows',
+      raw: `SELECT room_join_requests.*,
+              room_invitations.kind AS invitation_kind,
+              room_invitations.status AS invitation_status,
+              room_invitations.expires_at AS invitation_expires_at,
+              room_invitations.max_uses AS invitation_max_uses,
+              room_invitations.used_count AS invitation_used_count,
+              actors.kind AS applicant_kind, actors.name AS applicant_name,
+              actors.agent_session_id AS applicant_session_id
+         FROM room_join_requests
+         JOIN room_invitations
+           ON room_invitations.invitation_id = room_join_requests.invitation_id
+         JOIN actors ON actors.actor_id = room_join_requests.applicant_id
+        WHERE room_join_requests.room_id = ? AND room_join_requests.status = ?
+        ORDER BY room_join_requests.created_at DESC, room_join_requests.join_request_id DESC
+        LIMIT ?`,
+      params: ['room_group_1', 'pending', 10],
+      query: orm(db)
+        .select({
+          join_request_id: schema.roomJoinRequests.join_request_id,
+          invitation_kind: schema.roomInvitations.kind,
+          applicant_name: schema.actors.name,
+        })
+        .from(schema.roomJoinRequests)
+        .innerJoin(
+          schema.roomInvitations,
+          eq(schema.roomInvitations.invitation_id, schema.roomJoinRequests.invitation_id),
+        )
+        .innerJoin(
+          schema.actors,
+          eq(schema.actors.actor_id, schema.roomJoinRequests.applicant_id),
+        )
+        .where(
+          and(
+            eq(schema.roomJoinRequests.room_id, 'room_group_1'),
+            eq(schema.roomJoinRequests.status, 'pending'),
+          ),
+        )
+        .orderBy(
+          desc(schema.roomJoinRequests.created_at),
+          desc(schema.roomJoinRequests.join_request_id),
+        )
+        .limit(10),
+    },
+    {
+      label: 'listJoinRequestRows cursor',
+      raw: `SELECT room_join_requests.*,
+              room_invitations.kind AS invitation_kind,
+              room_invitations.status AS invitation_status,
+              room_invitations.expires_at AS invitation_expires_at,
+              room_invitations.max_uses AS invitation_max_uses,
+              room_invitations.used_count AS invitation_used_count,
+              actors.kind AS applicant_kind, actors.name AS applicant_name,
+              actors.agent_session_id AS applicant_session_id
+         FROM room_join_requests
+         JOIN room_invitations
+           ON room_invitations.invitation_id = room_join_requests.invitation_id
+         JOIN actors ON actors.actor_id = room_join_requests.applicant_id
+        WHERE room_join_requests.room_id = ? AND room_join_requests.status = ?
+          AND (room_join_requests.created_at < ?
+               OR (room_join_requests.created_at = ?
+                   AND room_join_requests.join_request_id < ?))
+        ORDER BY room_join_requests.created_at DESC, room_join_requests.join_request_id DESC
+        LIMIT ?`,
+      params: ['room_group_1', 'pending', 300, 300, 'jrq_3', 10],
+      query: orm(db)
+        .select({
+          join_request_id: schema.roomJoinRequests.join_request_id,
+          invitation_kind: schema.roomInvitations.kind,
+          applicant_name: schema.actors.name,
+        })
+        .from(schema.roomJoinRequests)
+        .innerJoin(
+          schema.roomInvitations,
+          eq(schema.roomInvitations.invitation_id, schema.roomJoinRequests.invitation_id),
+        )
+        .innerJoin(
+          schema.actors,
+          eq(schema.actors.actor_id, schema.roomJoinRequests.applicant_id),
+        )
+        .where(
+          and(
+            eq(schema.roomJoinRequests.room_id, 'room_group_1'),
+            eq(schema.roomJoinRequests.status, 'pending'),
+            or(
+              lt(schema.roomJoinRequests.created_at, 300),
+              and(
+                eq(schema.roomJoinRequests.created_at, 300),
+                lt(schema.roomJoinRequests.join_request_id, 'jrq_3'),
+              ),
+            )!,
+          ),
+        )
+        .orderBy(
+          desc(schema.roomJoinRequests.created_at),
+          desc(schema.roomJoinRequests.join_request_id),
+        )
+        .limit(10),
+    },
+    {
+      label: 'listRoomAuditRows',
+      raw: `SELECT room_management_audit.*, target.name AS target_name,
+              changer.name AS changed_by_name
+         FROM room_management_audit
+         LEFT JOIN actors target
+           ON target.actor_id = room_management_audit.target_actor_id
+         LEFT JOIN actors changer
+           ON changer.actor_id = room_management_audit.changed_by
+        WHERE room_management_audit.room_id = ?
+        ORDER BY room_management_audit.created_at DESC, room_management_audit.audit_id DESC
+        LIMIT ?`,
+      params: ['room_group_1', 10],
+      query: orm(db)
+        .select({
+          audit_id: schema.roomManagementAudit.audit_id,
+          target_name: auditTarget.name,
+          changed_by_name: auditChanger.name,
+        })
+        .from(schema.roomManagementAudit)
+        .leftJoin(
+          auditTarget,
+          eq(auditTarget.actor_id, schema.roomManagementAudit.target_actor_id),
+        )
+        .leftJoin(
+          auditChanger,
+          eq(auditChanger.actor_id, schema.roomManagementAudit.changed_by),
+        )
+        .where(eq(schema.roomManagementAudit.room_id, 'room_group_1'))
+        .orderBy(
+          desc(schema.roomManagementAudit.created_at),
+          desc(schema.roomManagementAudit.audit_id),
+        )
+        .limit(10),
     },
   ];
 
@@ -1111,6 +1629,15 @@ async function benchmark(sqlite: Database, db: D1Database): Promise<void> {
     ]);
   const ormManagement = async (): Promise<unknown> =>
     getActiveAgentManagement(db, 'act_agent_1');
+  const rawInvitation = async (): Promise<unknown> =>
+    rawFirst(sqlite, 'SELECT * FROM room_invitations WHERE invitation_id = ?', ['inv_link_1']);
+  const ormInvitation = async (): Promise<unknown> => getRoomInvitationById(db, 'inv_link_1');
+  const rawMemberCount = async (): Promise<unknown> =>
+    rawFirst(sqlite, "SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND status = 'active'", [
+      'room_group_1',
+    ]);
+  const ormMemberCount = async (): Promise<unknown> =>
+    countActiveRoomMembers(db, 'room_group_1');
 
   console.log('\nread query benchmark (in-memory, includes drizzle build):');
   console.log(`  raw   ${await bench('actor', rawActor)}`);
@@ -1129,6 +1656,10 @@ async function benchmark(sqlite: Database, db: D1Database): Promise<void> {
   console.log(`  orm   ${await bench('block', ormBlock)}`);
   console.log(`  raw   ${await bench('management', rawManagement)}`);
   console.log(`  orm   ${await bench('management', ormManagement)}`);
+  console.log(`  raw   ${await bench('invitation', rawInvitation)}`);
+  console.log(`  orm   ${await bench('invitation', ormInvitation)}`);
+  console.log(`  raw   ${await bench('room_member_count', rawMemberCount)}`);
+  console.log(`  orm   ${await bench('room_member_count', ormMemberCount)}`);
 }
 
 async function main(): Promise<void> {

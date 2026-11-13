@@ -3,7 +3,7 @@ import { drizzle } from 'drizzle-orm/d1';
 import * as schema from './schema';
 
 /**
- * 4C-1 生产只读查询的 Drizzle 入口。
+ * 4C-1/4C-3 生产只读查询的 Drizzle 入口。
  *
  * Drizzle 只负责构建 SQL；执行仍回到现有 D1 shim（`prepare/bind/first/all`），
  * 事务边界仍然是 `db.batch()` / `runIdempotent`。迁移历史继续由
