@@ -171,13 +171,21 @@ export interface MentionSelection {
 }
 
 export interface SendPlan {
+  body: string;
   invoke: string[];
+  invokeExplicit: boolean;
   mentions: string[];
   error: string | null;
 }
 
 const TIME_GAP = 5 * 60 * 1000;
 const textEncoder = new TextEncoder();
+const AUTO_MENTION_MAINTAINER = 'WeBots 维护员';
+/** 与服务端正文 @ 解析同一边界：只把独立 token 当作已提及。 */
+const MENTION_PREV_BLOCKED = /[\p{L}\p{N}_.%+\-]/u;
+const MENTION_WORD = /[\p{L}\p{N}_]/u;
+/** 成员显示名匹配只拦 ASCII 单词边界，中文与名字可直接相连。 */
+const NAME_ASCII_WORD = /[A-Za-z0-9_]/;
 
 export function historyItemKey(item: HistoryItem): string {
   return item.kind === 'presence'
@@ -383,56 +391,225 @@ export function mentionNames(
   return [...names].sort((left, right) => right.length - left.length);
 }
 
+/** 独立 `@名字` token：与服务端正文解析共用前后边界。 */
+function mentionTokenAt(body: string, at: number, name: string): boolean {
+  const start = at + 1;
+  if (!body.startsWith(name, start)) return false;
+  if (at > 0 && MENTION_PREV_BLOCKED.test(body.charAt(at - 1))) return false;
+  const after = body.charAt(start + name.length);
+  if (after && MENTION_WORD.test(after)) return false;
+  return true;
+}
+
+function bodyHasMention(body: string, name: string): boolean {
+  if (!name || !body.includes('@')) return false;
+  const token = `@${name}`;
+  let from = 0;
+  while (from <= body.length - token.length) {
+    const at = body.indexOf(token, from);
+    if (at < 0) return false;
+    if (mentionTokenAt(body, at, name)) return true;
+    from = at + 1;
+  }
+  return false;
+}
+
+/** 正文已提到任何 active 成员时，不再追加自动 @。 */
+function bodyHasAnyMention(body: string, members: Map<string, RoomMember>): boolean {
+  if (!body.includes('@')) return false;
+  for (const member of members.values()) {
+    if (member.name && bodyHasMention(body, member.name)) return true;
+  }
+  return false;
+}
+
+function nameHitAt(body: string, start: number, name: string): boolean {
+  const end = start + name.length;
+  if (start > 0 && NAME_ASCII_WORD.test(body.charAt(start - 1))) return false;
+  if (end < body.length && NAME_ASCII_WORD.test(body.charAt(end))) return false;
+  return true;
+}
+
 /**
- * 群聊发送计划：只信选择器保存的 actor_id。
+ * 正文优先的自动 @：唯一命中一个其他 active 成员时返回 `@名字`。
  *
- * - Agent 目标进入 invoke，人类进入 mentions；
- * - 选择器目标必须仍在正文里、且仍是 active 成员；
- * - 没有任何 @ 时显式发送 `invoke: []`，阻止服务端再从正文猜测目标；
- * - direct 自动唤醒对端 Agent（人类对端不派活）。
+ * `null` 表示正文没有命中成员，调用方回退到上一位发送者；空串表示重名
+ * 或命中多个成员，无法唯一解析，此时不猜。名字最长优先并收集已覆盖区间，
+ * 避免“WeBots 维护员”同时命中“WeBots”。
+ */
+function bodyMemberMention(
+  body: string,
+  members: Map<string, RoomMember>,
+  identityId: string,
+): string | null {
+  const byName = new Map<string, RoomMember[]>();
+  for (const member of members.values()) {
+    if (!member.name) continue;
+    const list = byName.get(member.name);
+    if (list) list.push(member);
+    else byName.set(member.name, [member]);
+  }
+  const hits: { start: number; end: number; members: RoomMember[] }[] = [];
+  for (const [name, list] of byName) {
+    let from = 0;
+    while (from <= body.length - name.length) {
+      const at = body.indexOf(name, from);
+      if (at < 0) break;
+      if (nameHitAt(body, at, name)) hits.push({ start: at, end: at + name.length, members: list });
+      from = at + 1;
+    }
+  }
+  if (hits.length === 0) return null;
+  hits.sort(
+    (left, right) => right.end - right.start - (left.end - left.start) || left.start - right.start,
+  );
+  const claimed: { start: number; end: number }[] = [];
+  const targets = new Map<string, string>();
+  let ambiguous = false;
+  for (const hit of hits) {
+    if (claimed.some((range) => hit.start < range.end && range.start < hit.end)) continue;
+    claimed.push({ start: hit.start, end: hit.end });
+    // 同名多个成员时服务端无法唯一解析，不能生成自动 @。
+    if (hit.members.length > 1) ambiguous = true;
+    for (const member of hit.members) {
+      if (member.actor_id === identityId) continue;
+      targets.set(member.actor_id, member.name);
+    }
+  }
+  if (ambiguous || targets.size > 1) return '';
+  const name = targets.values().next().value;
+  return name ? `@${name}` : null;
+}
+
+/** 上一位有效成员：只看最新一条消息；presence 与自己的消息都不追加。 */
+function previousMemberMention(
+  items: HistoryItem[],
+  members: Map<string, RoomMember>,
+  identityId: string,
+): string {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (!item || item.kind === 'presence') continue;
+    if (!item.sender_id || item.sender_id === identityId) return '';
+    const member = members.get(item.sender_id);
+    if (!member || !member.name) return '';
+    let named = 0;
+    for (const other of members.values()) {
+      if (other.name === member.name) named += 1;
+    }
+    if (named !== 1) return '';
+    return `@${member.name}`;
+  }
+  return '';
+}
+
+/** 附件兜底：群里恰有一个精确的 `WeBots 维护员` Agent 时才追加。 */
+function maintainerMention(members: Map<string, RoomMember>, identityId: string): string {
+  let target: RoomMember | null = null;
+  for (const member of members.values()) {
+    if (member.kind !== 'agent' || member.name !== AUTO_MENTION_MAINTAINER) continue;
+    // 重名 Agent 会让服务端无法唯一解析；发送者本人也不作为目标。
+    if (target) return '';
+    target = member;
+  }
+  if (!target || target.actor_id === identityId) return '';
+  return `@${AUTO_MENTION_MAINTAINER}`;
+}
+
+/**
+ * 人类群聊发送计划。
+ *
+ * - 只信选择器保存的 actor_id：Agent 进 invoke，人类进 mentions；
+ * - 没有存活选择器目标时不传 invoke（`invokeExplicit = false`），把正文
+ *   唯一精确成员的兜底解析留给服务端；有目标时显式发送，包含空列表；
+ * - 人类群聊在正文与选择器都没有有效 @ 时恢复 legacy 自动 @：正文优先
+ *   命中唯一其他成员，其次最新一条消息的发送者，附件再兜底维护员；
+ * - direct 自动唤醒对端 Agent（人类对端不派活），不做文本自动 @。
  */
 export function buildSendPlan(input: {
   room: RoomView | null;
   members: Map<string, RoomMember>;
   identityId: string;
+  identityKind: ActorKind;
   body: string;
   selections: MentionSelection[];
+  items?: HistoryItem[];
+  hasAttachments?: boolean;
 }): SendPlan {
-  const { room, members, identityId, body, selections } = input;
-  if (!room) return { invoke: [], mentions: [], error: '房间尚未加载' };
+  const {
+    room,
+    members,
+    identityId,
+    identityKind,
+    body,
+    selections,
+    items = [],
+    hasAttachments = false,
+  } = input;
+  if (!room) {
+    return { body, invoke: [], invokeExplicit: false, mentions: [], error: '房间尚未加载' };
+  }
   if (room.kind === 'direct') {
     const targets: string[] = [];
     for (const member of members.values()) {
       if (member.actor_id === identityId) continue;
       if (member.kind === 'agent') targets.push(member.actor_id);
     }
-    return { invoke: targets, mentions: [], error: null };
+    return {
+      body,
+      invoke: targets,
+      invokeExplicit: targets.length > 0,
+      mentions: [],
+      error: null,
+    };
   }
 
   const invoke: string[] = [];
   const mentions: string[] = [];
+  let resolved = 0;
   for (const selection of selections) {
     const member = members.get(selection.actor_id);
-    if (!member) return { invoke: [], mentions: [], error: '所选成员已不在房间，请重新选择' };
+    if (!member) {
+      return {
+        body,
+        invoke: [],
+        invokeExplicit: false,
+        mentions: [],
+        error: '所选成员已不在房间，请重新选择',
+      };
+    }
     if (!body.includes(`@${member.name}`)) continue;
+    resolved += 1;
     if (member.kind === 'agent') invoke.push(member.actor_id);
     else mentions.push(member.actor_id);
   }
+  const failed = (error: string): SendPlan => ({
+    body,
+    invoke: [],
+    invokeExplicit: false,
+    mentions: [],
+    error,
+  });
   if (invoke.length > LIMITS.invokeMax) {
-    return {
-      invoke: [],
-      mentions: [],
-      error: `一次最多 @ ${LIMITS.invokeMax} 个 Agent，请减少目标后重试`,
-    };
+    return failed(`一次最多 @ ${LIMITS.invokeMax} 个 Agent，请减少目标后重试`);
   }
   if (mentions.length > LIMITS.invokeMax) {
-    return {
-      invoke: [],
-      mentions: [],
-      error: `一次最多提醒 ${LIMITS.invokeMax} 个成员，请减少目标后重试`,
-    };
+    return failed(`一次最多提醒 ${LIMITS.invokeMax} 个成员，请减少目标后重试`);
   }
-  return { invoke, mentions, error: null };
+
+  let outgoing = body;
+  if (identityKind === 'human' && resolved === 0 && !bodyHasAnyMention(body, members)) {
+    let autoMention = bodyMemberMention(body, members, identityId);
+    if (autoMention === null) {
+      autoMention = previousMemberMention(items, members, identityId);
+      if (!autoMention && hasAttachments) autoMention = maintainerMention(members, identityId);
+    }
+    if (autoMention && !bodyHasMention(body, autoMention.slice(1))) {
+      const candidate = `${body}\n${autoMention}`;
+      if (messageBodyBytes(candidate) <= LIMITS.messageBodyBytes) outgoing = candidate;
+    }
+  }
+  return { body: outgoing, invoke, invokeExplicit: resolved > 0, mentions, error: null };
 }
 
 /** 正文 + 附件公开链接；每行一个 URL，与 legacy 发送格式一致。 */
