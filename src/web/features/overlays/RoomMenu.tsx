@@ -1,4 +1,5 @@
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
+import type { Ref } from 'react';
 
 import type { RoomView } from '../../lib/chat';
 import type { RoomPreference } from '../../lib/room-preferences';
@@ -41,6 +42,7 @@ export function RoomMenu({
   onToggleAgentDisabled,
   onReissueToken,
   onDissolve,
+  toggleRef,
 }: {
   room: RoomView;
   peerName: string | null;
@@ -57,6 +59,8 @@ export function RoomMenu({
   onToggleAgentDisabled: () => void;
   onReissueToken: () => void;
   onDissolve: () => void;
+  /** 弹窗关闭后需要把焦点还给菜单入口时传入。 */
+  toggleRef?: Ref<HTMLButtonElement>;
 }) {
   const group = room.kind === 'group';
   const direct = room.kind === 'direct';
@@ -75,6 +79,7 @@ export function RoomMenu({
     <DropdownMenuPrimitive.Root>
       <DropdownMenuPrimitive.Trigger asChild>
         <button
+          ref={toggleRef}
           id="room-menu-toggle"
           className="icon-btn"
           type="button"

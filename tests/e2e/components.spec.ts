@@ -359,10 +359,12 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(page.locator('#members-current')).not.toContainText(nameB);
     await page.fill('#members-search', nameB.slice(0, 4));
     const addOption = page
-      .locator('#members-contacts .spa-combobox-item')
+      .locator('#members-contacts .contact-choice')
       .filter({ hasText: nameB });
     await expect(addOption).toBeVisible();
-    await addOption.click();
+    await addOption.locator('input[type=checkbox]').check();
+    await expect(page.locator('#members-selection')).toHaveText('已选 1 人');
+    await page.locator('#members-add').click();
     await expect(page.locator('#members-current')).toContainText(nameB);
     await expect(page.locator('#members-error')).toHaveCount(0);
 

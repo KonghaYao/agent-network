@@ -1,5 +1,5 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { useRef, type ReactNode } from 'react';
+import { useRef, type ReactNode, type RefObject } from 'react';
 
 /**
  * Radix Dialog 的薄封装。
@@ -17,6 +17,10 @@ export function Modal({
   footer,
   className = '',
   contentId,
+  closeId,
+  closeButtonRef,
+  initialFocusRef,
+  returnFocusRef,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -26,6 +30,14 @@ export function Modal({
   footer?: ReactNode;
   className?: string;
   contentId?: string;
+  /** 保留 legacy 关闭按钮 id，供灰度与 E2E 对照。 */
+  closeId?: string;
+  /** 调用方需要显式聚焦内置关闭按钮时传入。 */
+  closeButtonRef?: RefObject<HTMLButtonElement | null>;
+  /** 打开后优先聚焦的元素；未提供时沿用 Radix 默认焦点。 */
+  initialFocusRef?: RefObject<HTMLElement | null>;
+  /** 打开者可能已被卸载（例如菜单项）时，由调用方指定关闭后的落点。 */
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   // 打开弹窗的元素可能是普通按钮而非 Radix Trigger；显式记录并在关闭时
   // 归还焦点，避免焦点落到 body（键盘用户丢失上下文）。
@@ -38,13 +50,18 @@ export function Modal({
           id={contentId}
           className={`modal-card spa-dialog-content ${className}`.trim()}
           aria-describedby={undefined}
-          onOpenAutoFocus={() => {
+          onOpenAutoFocus={(event) => {
             restoreRef.current =
               document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            if (initialFocusRef?.current) {
+              event.preventDefault();
+              initialFocusRef.current.focus();
+            }
           }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            restoreRef.current?.focus();
+            const target = returnFocusRef?.current ?? restoreRef.current;
+            if (target?.isConnected) target.focus();
           }}
         >
           <DialogPrimitive.Title asChild>
@@ -52,7 +69,12 @@ export function Modal({
           </DialogPrimitive.Title>
           {children}
           {footer}
-          <DialogPrimitive.Close className="spa-dialog-close" aria-label="关闭">
+          <DialogPrimitive.Close
+            id={closeId}
+            ref={closeButtonRef}
+            className="spa-dialog-close"
+            aria-label="关闭"
+          >
             ×
           </DialogPrimitive.Close>
         </DialogPrimitive.Content>

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { AppShell } from '../app/AppShell';
 import { Composer, type ComposerSendInput } from '../features/chat/Composer';
@@ -112,6 +112,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [trace, setTrace] = useState<{ rootId: string; focusId: string | null } | null>(null);
   const [forwardItem, setForwardItem] = useState<HistoryMessage | null>(null);
+  // 群成员弹窗从菜单项打开；菜单项随后卸载，关闭时必须显式回到触发按钮。
+  const roomMenuToggleRef = useRef<HTMLButtonElement>(null);
   const desktop = useMediaQuery('(min-width: 1200px)');
   const tablet = useMediaQuery('(min-width: 760px) and (max-width: 1199px)');
   const mobile = useIsMobile();
@@ -537,6 +539,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       />
                     ) : null}
                     <RoomMenu
+                      toggleRef={roomMenuToggleRef}
                       room={room}
                       peerName={peer?.name ?? null}
                       peerKind={peer?.kind ?? null}
@@ -681,6 +684,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
             ownerTransfer={chat.detail?.owner_transfer ?? null}
             identityId={identity.actor_id}
             token={token}
+            returnFocusRef={roomMenuToggleRef}
           />
           <AnnouncementDialog
             open={overlay === 'announcement'}
