@@ -8,7 +8,6 @@ import { BusinessError } from '../contracts/errors';
 import { newId, nowMs, sha256Hex } from '../storage/db';
 import type { D1Like } from '../storage/queries';
 import {
-  countsAsRawCoverage,
   isFullRawCoverage,
   isValidByteRange,
   mergeByteRanges,

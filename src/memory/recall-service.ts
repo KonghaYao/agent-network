@@ -23,7 +23,6 @@ import type {
 } from './adapters/types';
 import {
   MEMORY_POLICY_VERSION,
-  type MemoryRecallBudget,
   type MemoryRecallInput,
   type MemoryRecallItem,
   type MemoryRecallResult,

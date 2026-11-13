@@ -34,9 +34,15 @@ export interface D1Like extends D1Queryable {
 }
 
 /**
- * 4C-1 核心只读查询：actors / credentials / rooms / room_members 由 Drizzle 构建 SQL，
- * 仍经 `toD1()` 回到现有 D1 shim 执行。消息、投递、文件等域仍保留手写 SQL，
- * 留给 4C-4/4C-5；guard/FTS/复杂权限 SQL 不进入 Drizzle。
+ * 存储层语义化查询入口。
+ *
+ * 已迁移的只读路径（actors / credentials / rooms / room_members 与 memory 表）
+ * 由 Drizzle 构建 SQL，再经 `toD1()` 回到 D1 shim 执行。其余未迁移域
+ * （messages / deliveries / files / events / tasks）与所有写路径继续 raw SQL；
+ * 具体 raw 边界见 `storage/drizzle.ts` 顶部清单。
+ *
+ * 禁止在这里调用 Drizzle 的 insert/update/delete 或自带事务；写操作必须走
+ * `runIdempotent` 的 raw batch。
  */
 
 export async function getActor(db: D1Like, actorId: string): Promise<ActorRow | null> {

@@ -391,6 +391,7 @@ Agent 归档是**管理列表的软隐藏标记**，不是停用、删除、注�
 `migrations/0001_initial.sql` 建立 11 张业务表与 11 张条件闸门表。`migrations/0002_named_guards.sql` 为闸门约束命名，使 SQLite 的 `CHECK constraint failed: guard_*` 文本可以被稳定分类。`migrations/0003_room_files.sql` 建立 `room_files`、文件唯一索引、房间/上传者/过期索引与两条文件闸门。`migrations/0005_agent_archive.sql` 给 `actors` 增加 `archived_at` / `archived_by`（可空，不建索引）。`migrations/0009_feedback.sql` 新增 `feedback` 表与 `created_at` 索引。`migrations/0011_delivery_reminders.sql` 给 `deliveries` 增加可空 `last_reminded_at` 与 `idx_deliveries_claimed_progress` 部分索引（只加列/索引，可安全增量执行）。
 
 - 写操作走 `runIdempotent`：`operations` 唯一键取得本次操作所有权，其余语句与业务写入在同一个 `db.batch()` 中提交；任何约束失败整批回滚。
+- 存储层边界：只读查询可在 `src/storage/queries.ts` 用 Drizzle 构建 SQL；所有写入、`guard_*`、`message_search_fts*` 与触发器、JOIN/UNION/EXISTS、`json_each` 权限谓词以及未迁移域仍用 raw SQL。`migrations/*.sql` + `schema_migrations` 是唯一事实源，`drizzle-kit` 只执行 `generate` 供 schema parity，禁止 `push` / `migrate`。
 - 条件闸门表只接受 `x = 0`；`INSERT ... SELECT 1 WHERE <违反条件>` 命中时触发 CHECK 失败。禁止 `INSERT OR IGNORE` 后无条件继续写入。
 - 消息以 `(sender_id, client_message_id)` 长期去重；重复请求返回同一消息，正文不同返回 `IDEMPOTENCY_CONFLICT`。
 - 单聊房间 ID 由排序后的 actor 对哈希确定；并发创建由唯一约束收敛到同一 room。
@@ -426,8 +427,8 @@ bun run test:events         # 独立实例 + 自签 HTTPS receiver；默认端�
 bun scripts/q01-upgrade-check.ts   # 合成 0035 旧库升级到 0047，校验 43 个迁移与旧数据映射
 bun run build:web                  # Vite 产出 dist/web；默认不接管路由
 bun run test:spa-shell             # build:web + manifest/static/flag 回退
-bun run test:schema-parity         # 43 个迁移 vs Drizzle core schema parity
-bun run test:drizzle               # 核心只读查询 raw vs Drizzle 逐行一致 + EXPLAIN/基准
+bun run test:schema-parity         # 43 个迁移 vs Drizzle 只读 schema parity + raw 边界检查
+bun run test:drizzle               # 只读查询 raw vs Drizzle 逐行一致 + EXPLAIN/基准
 bun run test:mcp-parity            # 固定 MCP 协议帧 baseline
 bun run capture:mcp-baseline       # 协议/工具契约变更后重新录制 baseline
 AGENTNET_URL=http://127.0.0.1:8792 bun scripts/q01-doc-check.ts   # tools/list 114 与 README/CLAUDE/技能/CLI 引用一致

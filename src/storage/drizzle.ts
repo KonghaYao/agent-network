@@ -3,14 +3,28 @@ import { drizzle } from 'drizzle-orm/d1';
 import * as schema from './schema';
 
 /**
- * 4C-1 生产只读查询的 Drizzle 入口。
+ * Drizzle 只读查询入口与 raw 边界说明。
  *
- * Drizzle 只负责构建 SQL；执行仍回到现有 D1 shim（`prepare/bind/first/all`），
- * 事务边界仍然是 `db.batch()` / `runIdempotent`。迁移历史继续由
- * `migrations/*.sql` + `schema_migrations` 管理，禁止 `drizzle-kit push/migrate`。
+ * 迁移 SQL（`migrations/*.sql` + `schema_migrations`）是唯一事实源；
+ * Drizzle 只负责给只读 SELECT 构建 SQL，`toD1()` 把语句交回现有 D1 shim
+ * 执行。禁止 `drizzle-kit push` / `drizzle-kit migrate`；`drizzle-kit generate`
+ * 只服务于 schema parity。
  *
- * 边界：只有本文件与 `src/storage/queries.ts` 可以 import `drizzle-orm`；只有本文件
- * 可以 import `./schema`。域层继续 import `storage/queries` 的语义化函数。
+ * 固化边界（不要迁移到 Drizzle）：
+ * - 写路径：`runIdempotent` 内的 operations 所有权、业务写入与条件闸门，
+ *   以及 events/outbox、memory 语句、文件配额等，全部是 raw D1 batch；
+ * - guard：`src/storage/guards.ts` 的 `GUARDS` 与 `guard_*` 表；
+ * - FTS/trigger：`message_search_fts*` 与 `0047` 的同步触发器；memory 不可变
+ *   触发器（`0045`/`0046`）；
+ * - 复杂 SQL：JOIN/UNION/EXISTS、`json_each` 权限谓词、`CASE`、CTE 与
+ *   `EXPLAIN` 敏感查询；
+ * - 未迁移域：messages/deliveries/files/events/tasks 等仍以 raw SQL 为准。
+ *
+ * 边界约束：
+ * - 只有本文件与 `src/storage/queries.ts` 可以 import `drizzle-orm`；
+ * - 只有本文件可以 import `./schema`；
+ * - 生产路径只允许 `select()`；写操作必须回到 raw 边界；
+ * - 域层继续 import `storage/queries` 的语义化函数。
  */
 export interface D1Queryable {
   prepare(query: string): D1PreparedStatement;
