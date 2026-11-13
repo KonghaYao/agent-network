@@ -79,7 +79,7 @@ export function HomePage() {
     session.status === 'logged-out'
       ? {
           title: '已退出登录',
-          hint: '打开 Agent 分享链接，或使用已有连接提示词即可继续。',
+          hint: '点击左侧「创建新身份并继续」，或打开 Agent 分享链接。',
         }
       : session.status === 'credential-invalid'
         ? {

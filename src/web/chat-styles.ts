@@ -223,6 +223,9 @@ export const APP_STYLE = `
   .list-hint[hidden] { display: none; }
   .list-retry { display: block; margin: 0 auto 16px; font-size: 12px; }
   .list-retry[hidden] { display: none; }
+  .list-retry:disabled { opacity: 0.6; cursor: default; }
+  .logged-out-error { margin: 0 16px 16px; padding: 0; color: var(--wx-unread);
+    font-size: 12px; line-height: 1.6; text-align: center; overflow-wrap: anywhere; }
 
   /* 首屏会话骨架：只占位，不阻塞交互；数据到达后 renderRooms 覆盖。 */
   .room-skeleton { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 8px; }

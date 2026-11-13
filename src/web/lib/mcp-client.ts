@@ -40,6 +40,14 @@ export function writeBrowserToken(token: string): boolean {
   }
 }
 
+export function removeBrowserToken(): void {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // 存储不可用时没有可清理的 token。
+  }
+}
+
 export function mcpError(
   message: string,
   code?: string,
