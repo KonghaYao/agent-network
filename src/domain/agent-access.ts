@@ -1,7 +1,12 @@
 import { BusinessError } from '../contracts/errors';
 import { guardSql } from '../storage/guards';
 import type { AgentDelegationRow, AgentManagementRow, ActorRow } from '../storage/rows';
-import { getActor, type D1Like } from '../storage/queries';
+import {
+  getActiveAgentManagement,
+  getActor,
+  listActiveManagementBindings,
+  type D1Like,
+} from '../storage/queries';
 import type { Principal } from './principal';
 
 /**
@@ -54,10 +59,7 @@ export async function getActiveManagement(
   db: D1Like,
   agentId: string,
 ): Promise<AgentManagementRow | null> {
-  return db
-    .prepare("SELECT * FROM agent_managements WHERE agent_id = ? AND status = 'active'")
-    .bind(agentId)
-    .first<AgentManagementRow>();
+  return getActiveAgentManagement(db, agentId);
 }
 
 async function getActiveDelegation(
@@ -142,13 +144,7 @@ export async function manageableAgentIds(
   if (ids.length === 0) return new Set();
   const placeholders = ids.map(() => '?').join(',');
   const [managements, delegations] = await Promise.all([
-    db
-      .prepare(
-        `SELECT agent_id, manager_id FROM agent_managements
-          WHERE status = 'active' AND agent_id IN (${placeholders})`,
-      )
-      .bind(...ids)
-      .all<{ agent_id: string; manager_id: string }>(),
+    listActiveManagementBindings(db, ids),
     db
       .prepare(
         `SELECT agent_id, scopes_json FROM agent_delegations
@@ -160,7 +156,7 @@ export async function manageableAgentIds(
       .all<{ agent_id: string; scopes_json: string }>(),
   ]);
   const manageable = new Set<string>();
-  for (const row of managements.results) {
+  for (const row of managements) {
     if (row.manager_id === callerActorId) manageable.add(row.agent_id);
   }
   for (const row of delegations.results) {

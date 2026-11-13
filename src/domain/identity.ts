@@ -18,7 +18,12 @@ import {
 } from '../storage/db';
 import { eventStatement, inboxHeadStatement, inboxTopic, outboxStatement } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getActor, getActorBySession, getCredentialByHash } from '../storage/queries';
+import {
+  countActiveCredentials,
+  getActor,
+  getActorBySession,
+  getCredentialByHash,
+} from '../storage/queries';
 import type { ActorRow, CredentialRow, RecoveryTicketRow } from '../storage/rows';
 import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
 import { managementEventStatements } from './agent-management';
@@ -411,13 +416,10 @@ export async function reissueAgentToken(
   const token = randomToken(32);
   const tokenHash = await hashToken(token);
   const credentialId = newId('cred');
-  const active = await db
-    .prepare('SELECT COUNT(*) AS n FROM credentials WHERE actor_id = ? AND revoked_at IS NULL')
-    .bind(target.actor_id)
-    .first<{ n: number }>();
+  const activeCount = await countActiveCredentials(db, target.actor_id);
   const stored: AgentReissueTokenStored = {
     actor_id: target.actor_id,
-    revoked_count: active?.n ?? 0,
+    revoked_count: activeCount,
     issued_at: String(at),
   };
   const payloadHash = await sha256Hex(stableStringify(input));

@@ -1,9 +1,14 @@
-import { and, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 
 import { orm, schema, toD1, type D1Queryable } from './drizzle';
 import type {
   ActorRow,
+  AgentManagementRow,
   ArtifactRow,
+  ContactBlockRow,
+  ContactRelationRow,
+  ContactRequestRow,
+  ContactRow,
   DeliveryRow,
   DriveFileRow,
   FileReferenceRow,
@@ -106,6 +111,314 @@ export async function getActorManagementByIds(
     .where(inArray(schema.actors.actor_id, actorIds));
   const result = await toD1(db, query).all<ActorManagementRow>();
   return result.results;
+}
+
+/** 单侧个人收藏；不代表双向关系。 */
+export async function getContact(
+  db: D1Like,
+  ownerActorId: string,
+  targetActorId: string,
+): Promise<ContactRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.contacts)
+    .where(
+      and(
+        eq(schema.contacts.owner_actor_id, ownerActorId),
+        eq(schema.contacts.target_actor_id, targetActorId),
+      ),
+    );
+  return toD1(db, query).first<ContactRow>();
+}
+
+export async function getActiveContactRelation(
+  db: D1Like,
+  pairKey: string,
+): Promise<ContactRelationRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.contactRelations)
+    .where(
+      and(
+        eq(schema.contactRelations.pair_key, pairKey),
+        eq(schema.contactRelations.status, 'active'),
+      ),
+    );
+  return toD1(db, query).first<ContactRelationRow>();
+}
+
+export async function getContactRelation(
+  db: D1Like,
+  pairKey: string,
+): Promise<ContactRelationRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.contactRelations)
+    .where(eq(schema.contactRelations.pair_key, pairKey));
+  return toD1(db, query).first<ContactRelationRow>();
+}
+
+export async function getPendingContactRequest(
+  db: D1Like,
+  pairKey: string,
+): Promise<ContactRequestRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.contactRequests)
+    .where(
+      and(
+        eq(schema.contactRequests.pair_key, pairKey),
+        eq(schema.contactRequests.status, 'pending'),
+      ),
+    );
+  return toD1(db, query).first<ContactRequestRow>();
+}
+
+export async function getContactRequestById(
+  db: D1Like,
+  contactRequestId: string,
+): Promise<ContactRequestRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.contactRequests)
+    .where(eq(schema.contactRequests.contact_request_id, contactRequestId));
+  return toD1(db, query).first<ContactRequestRow>();
+}
+
+/** 同 pair 的过期 pending 申请；没有命中时返回 null。 */
+export async function getExpiredPendingContactRequestForPair(
+  db: D1Like,
+  pairKey: string,
+  at: number,
+): Promise<ContactRequestRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.contactRequests)
+    .where(
+      and(
+        eq(schema.contactRequests.pair_key, pairKey),
+        eq(schema.contactRequests.status, 'pending'),
+        lte(schema.contactRequests.expires_at, at),
+      ),
+    );
+  return toD1(db, query).first<ContactRequestRow>();
+}
+
+/** 拉黑时取消同 pair 的全部 pending 申请。 */
+export async function listPendingContactRequests(
+  db: D1Like,
+  pairKey: string,
+): Promise<ContactRequestRow[]> {
+  const query = orm(db)
+    .select()
+    .from(schema.contactRequests)
+    .where(
+      and(
+        eq(schema.contactRequests.pair_key, pairKey),
+        eq(schema.contactRequests.status, 'pending'),
+      ),
+    );
+  const result = await toD1(db, query).all<ContactRequestRow>();
+  return result.results;
+}
+
+/** 过期扫描：按到期时间与 id 稳定分页，结果交给逐行事务处理。 */
+export async function listExpiredPendingContactRequests(
+  db: D1Like,
+  at: number,
+  limit: number,
+): Promise<ContactRequestRow[]> {
+  const query = orm(db)
+    .select()
+    .from(schema.contactRequests)
+    .where(
+      and(
+        eq(schema.contactRequests.status, 'pending'),
+        lte(schema.contactRequests.expires_at, at),
+      ),
+    )
+    .orderBy(asc(schema.contactRequests.expires_at), asc(schema.contactRequests.contact_request_id))
+    .limit(limit);
+  const result = await toD1(db, query).all<ContactRequestRow>();
+  return result.results;
+}
+
+export async function getActiveContactBlock(
+  db: D1Like,
+  blockerActorId: string,
+  blockedActorId: string,
+): Promise<ContactBlockRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.contactBlocks)
+    .where(
+      and(
+        eq(schema.contactBlocks.blocker_actor_id, blockerActorId),
+        eq(schema.contactBlocks.blocked_actor_id, blockedActorId),
+        isNull(schema.contactBlocks.released_at),
+      ),
+    );
+  return toD1(db, query).first<ContactBlockRow>();
+}
+
+/** 任一方向的 active 拉黑；命中顺序与既有索引扫描一致。 */
+export async function findActiveContactBlockBetween(
+  db: D1Like,
+  actorA: string,
+  actorB: string,
+): Promise<ContactBlockRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.contactBlocks)
+    .where(
+      and(
+        isNull(schema.contactBlocks.released_at),
+        or(
+          and(
+            eq(schema.contactBlocks.blocker_actor_id, actorA),
+            eq(schema.contactBlocks.blocked_actor_id, actorB),
+          ),
+          and(
+            eq(schema.contactBlocks.blocker_actor_id, actorB),
+            eq(schema.contactBlocks.blocked_actor_id, actorA),
+          ),
+        ),
+      ),
+    )
+    .limit(1);
+  return toD1(db, query).first<ContactBlockRow>();
+}
+
+/** 群内定向 @ 静默：只返回拉黑发送者且 mute_mentions=1 的目标。 */
+export async function listMutedMentionBlockers(
+  db: D1Like,
+  senderActorId: string,
+  targetActorIds: string[],
+): Promise<string[]> {
+  if (targetActorIds.length === 0) return [];
+  const query = orm(db)
+    .select({ blocker_actor_id: schema.contactBlocks.blocker_actor_id })
+    .from(schema.contactBlocks)
+    .where(
+      and(
+        isNull(schema.contactBlocks.released_at),
+        eq(schema.contactBlocks.mute_mentions, 1),
+        eq(schema.contactBlocks.blocked_actor_id, senderActorId),
+        inArray(schema.contactBlocks.blocker_actor_id, targetActorIds),
+      ),
+    );
+  const result = await toD1(db, query).all<{ blocker_actor_id: string }>();
+  return result.results.map((row) => row.blocker_actor_id);
+}
+
+export interface ContactBlockJoinRow extends ContactBlockRow {
+  blocked_kind: 'human' | 'agent';
+  blocked_name: string;
+  blocked_session: string | null;
+}
+
+/** 拉黑列表：按 (created_at DESC, block_id ASC) 的复合 keyset。 */
+export async function listContactBlocks(
+  db: D1Like,
+  blockerActorId: string,
+  limit: number,
+  cursor: { createdAt: number; blockId: string } | null,
+): Promise<ContactBlockJoinRow[]> {
+  const where = cursor
+    ? and(
+        eq(schema.contactBlocks.blocker_actor_id, blockerActorId),
+        or(
+          lt(schema.contactBlocks.created_at, cursor.createdAt),
+          and(
+            eq(schema.contactBlocks.created_at, cursor.createdAt),
+            gt(schema.contactBlocks.block_id, cursor.blockId),
+          ),
+        ),
+      )
+    : eq(schema.contactBlocks.blocker_actor_id, blockerActorId);
+  const query = orm(db)
+    .select({
+      block_id: schema.contactBlocks.block_id,
+      blocker_actor_id: schema.contactBlocks.blocker_actor_id,
+      blocked_actor_id: schema.contactBlocks.blocked_actor_id,
+      reason: schema.contactBlocks.reason,
+      mute_mentions: schema.contactBlocks.mute_mentions,
+      created_at: schema.contactBlocks.created_at,
+      released_at: schema.contactBlocks.released_at,
+      released_by: schema.contactBlocks.released_by,
+      blocked_kind: sql<'human' | 'agent'>`${schema.actors.kind}`.as('blocked_kind'),
+      blocked_name: sql<string>`${schema.actors.name}`.as('blocked_name'),
+      blocked_session: sql<string | null>`${schema.actors.agent_session_id}`.as(
+        'blocked_session',
+      ),
+    })
+    .from(schema.contactBlocks)
+    .innerJoin(
+      schema.actors,
+      eq(schema.actors.actor_id, schema.contactBlocks.blocked_actor_id),
+    )
+    .where(where)
+    .orderBy(desc(schema.contactBlocks.created_at), asc(schema.contactBlocks.block_id))
+    .limit(limit);
+  const result = await toD1(db, query).all<ContactBlockJoinRow>();
+  return result.results;
+}
+
+export async function getActiveAgentManagement(
+  db: D1Like,
+  agentId: string,
+): Promise<AgentManagementRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.agentManagements)
+    .where(
+      and(
+        eq(schema.agentManagements.agent_id, agentId),
+        eq(schema.agentManagements.status, 'active'),
+      ),
+    );
+  return toD1(db, query).first<AgentManagementRow>();
+}
+
+export interface AgentManagementBindingRow {
+  agent_id: string;
+  manager_id: string;
+}
+
+/** 批量读取 active 管理权；只用于判定调用者本人是否为 manager。 */
+export async function listActiveManagementBindings(
+  db: D1Like,
+  agentIds: string[],
+): Promise<AgentManagementBindingRow[]> {
+  if (agentIds.length === 0) return [];
+  const query = orm(db)
+    .select({
+      agent_id: schema.agentManagements.agent_id,
+      manager_id: schema.agentManagements.manager_id,
+    })
+    .from(schema.agentManagements)
+    .where(
+      and(
+        eq(schema.agentManagements.status, 'active'),
+        inArray(schema.agentManagements.agent_id, agentIds),
+      ),
+    );
+  const result = await toD1(db, query).all<AgentManagementBindingRow>();
+  return result.results;
+}
+
+export async function countActiveCredentials(db: D1Like, actorId: string): Promise<number> {
+  const query = orm(db)
+    .select({ n: sql<number>`count(*)`.as('n') })
+    .from(schema.credentials)
+    .where(
+      and(
+        eq(schema.credentials.actor_id, actorId),
+        isNull(schema.credentials.revoked_at),
+      ),
+    );
+  const row = await toD1(db, query).first<{ n: number }>();
+  return row?.n ?? 0;
 }
 
 export async function getRoom(db: D1Like, roomId: string): Promise<RoomRow | null> {

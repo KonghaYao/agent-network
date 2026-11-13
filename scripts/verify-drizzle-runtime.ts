@@ -12,7 +12,7 @@
  */
 
 import { Database } from 'bun:sqlite';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { resolve } from 'node:path';
 
 import { createD1 } from '../src/bun/d1';
@@ -20,16 +20,31 @@ import { migrate } from '../src/bun/migrate';
 import { orm, schema } from '../src/storage/drizzle';
 import {
   activeRoomCount,
+  countActiveCredentials,
+  findActiveContactBlockBetween,
+  getActiveAgentManagement,
+  getActiveContactBlock,
+  getActiveContactRelation,
   getActor,
   getActorBySession,
   getActorManagementByIds,
   getActorsByIds,
+  getContact,
+  getContactRelation,
+  getContactRequestById,
   getCredentialByHash,
   getEventsMinSeq,
+  getExpiredPendingContactRequestForPair,
   getMember,
+  getPendingContactRequest,
   getRoom,
   isActiveMember,
+  listActiveManagementBindings,
   listActiveRoomPeers,
+  listContactBlocks,
+  listExpiredPendingContactRequests,
+  listMutedMentionBlockers,
+  listPendingContactRequests,
 } from '../src/storage/queries';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
@@ -120,6 +135,177 @@ function seed(sqlite: Database): void {
   member.run('room_group_1', 'act_agent_1', 'admin', 'active', 2, 9, 215, 1, 215, 2);
   member.run('room_group_1', 'act_human_2', 'member', 'left', 3, 3, 216, 1, 216, 1);
   member.run('room_group_1', 'act_agent_3', 'member', 'active', 4, 4, 217, 1, 217, 3);
+
+  const contact = sqlite.prepare(
+    'INSERT INTO contacts (owner_actor_id, target_actor_id, created_at) VALUES (?, ?, ?)',
+  );
+  contact.run('act_human_1', 'act_agent_1', 500);
+  contact.run('act_human_1', 'act_human_2', 400);
+  contact.run('act_human_1', 'act_agent_3', 300);
+  contact.run('act_human_2', 'act_human_1', 350);
+
+  const relation = sqlite.prepare(
+    `INSERT INTO contact_relations
+       (pair_key, actor_a, actor_b, status, source, request_id,
+        created_at, updated_at, ended_at, ended_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  relation.run(
+    'act_agent_1|act_human_1',
+    'act_agent_1',
+    'act_human_1',
+    'active',
+    'request',
+    'req_1',
+    500,
+    510,
+    null,
+    null,
+  );
+  relation.run(
+    'act_human_1|act_human_2',
+    'act_human_1',
+    'act_human_2',
+    'ended',
+    'auto_manager',
+    null,
+    300,
+    320,
+    330,
+    'act_human_1',
+  );
+
+  const request = sqlite.prepare(
+    `INSERT INTO contact_requests
+       (contact_request_id, pair_key, from_actor_id, to_actor_id, message, status,
+        auto_accepted, created_at, updated_at, expires_at, responded_at, responded_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  request.run(
+    'req_1',
+    'act_agent_1|act_human_1',
+    'act_human_1',
+    'act_agent_1',
+    'hello',
+    'pending',
+    0,
+    600,
+    601,
+    900,
+    null,
+    null,
+  );
+  request.run(
+    'req_2',
+    'act_agent_2|act_human_1',
+    'act_human_1',
+    'act_agent_2',
+    'hi',
+    'pending',
+    0,
+    500,
+    501,
+    700,
+    null,
+    null,
+  );
+  request.run(
+    'req_3',
+    'act_human_1|act_human_2',
+    'act_human_1',
+    'act_human_2',
+    'yo',
+    'accepted',
+    1,
+    400,
+    410,
+    900,
+    410,
+    'act_human_1',
+  );
+  request.run(
+    'req_4',
+    'act_agent_3|act_human_1',
+    'act_human_1',
+    'act_agent_3',
+    '',
+    'pending',
+    0,
+    800,
+    801,
+    1200,
+    null,
+    null,
+  );
+
+  const block = sqlite.prepare(
+    `INSERT INTO contact_blocks
+       (block_id, blocker_actor_id, blocked_actor_id, reason, mute_mentions,
+        created_at, released_at, released_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  block.run('blk_1', 'act_human_1', 'act_agent_3', 'spam', 1, 700, null, null);
+  block.run('blk_2', 'act_human_2', 'act_human_1', '', 1, 650, 660, 'act_human_2');
+  block.run('blk_3', 'act_human_1', 'act_agent_2', 'mute', 1, 720, null, null);
+
+  const management = sqlite.prepare(
+    `INSERT INTO agent_managements
+       (binding_id, agent_id, manager_id, status, grant_source, scopes_json,
+        permission_version, initiated_by, confirmed_by, created_at, confirmed_at,
+        expires_at, revoked_at, revoked_by, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  management.run(
+    'mg_1',
+    'act_agent_1',
+    'act_human_1',
+    'active',
+    'created',
+    '["manage_agent"]',
+    3,
+    'act_human_1',
+    'act_human_1',
+    100,
+    101,
+    null,
+    null,
+    null,
+    102,
+  );
+  management.run(
+    'mg_2',
+    'act_agent_3',
+    'act_human_1',
+    'revoked',
+    'created',
+    '[]',
+    1,
+    'act_human_1',
+    null,
+    110,
+    111,
+    null,
+    120,
+    'act_human_1',
+    121,
+  );
+  management.run(
+    'mg_3',
+    'act_agent_2',
+    'act_human_2',
+    'active',
+    'claim',
+    '[]',
+    1,
+    'act_human_2',
+    null,
+    130,
+    131,
+    null,
+    null,
+    null,
+    132,
+  );
 }
 
 function rawFirst<T>(sqlite: Database, sql: string, params: unknown[]): T | null {
@@ -305,6 +491,246 @@ async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> 
     ])?.inbox_min_seq ?? 0,
   );
   checkEqual('getEventsMinSeq actor', await getEventsMinSeq(db, 'actor', 'act_human_1'), 0);
+
+  checkEqual(
+    'getContact existing',
+    JSON.stringify(await getContact(db, 'act_human_1', 'act_agent_1')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM contacts WHERE owner_actor_id = ? AND target_actor_id = ?', [
+        'act_human_1',
+        'act_agent_1',
+      ]),
+    ),
+  );
+  checkEqual('getContact missing', await getContact(db, 'act_human_1', 'act_agent_2'), null);
+
+  checkEqual(
+    'getActiveContactRelation',
+    JSON.stringify(await getActiveContactRelation(db, 'act_agent_1|act_human_1')),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        "SELECT * FROM contact_relations WHERE pair_key = ? AND status = 'active'",
+        ['act_agent_1|act_human_1'],
+      ),
+    ),
+  );
+  checkEqual(
+    'getActiveContactRelation ended',
+    await getActiveContactRelation(db, 'act_human_1|act_human_2'),
+    null,
+  );
+  checkEqual(
+    'getContactRelation ended',
+    JSON.stringify(await getContactRelation(db, 'act_human_1|act_human_2')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM contact_relations WHERE pair_key = ?', [
+        'act_human_1|act_human_2',
+      ]),
+    ),
+  );
+  checkEqual('getContactRelation missing', await getContactRelation(db, 'missing|pair'), null);
+
+  checkEqual(
+    'getPendingContactRequest',
+    JSON.stringify(await getPendingContactRequest(db, 'act_agent_1|act_human_1')),
+    JSON.stringify(
+      rawFirst(sqlite, "SELECT * FROM contact_requests WHERE pair_key = ? AND status = 'pending'", [
+        'act_agent_1|act_human_1',
+      ]),
+    ),
+  );
+  checkEqual(
+    'getPendingContactRequest ended pair',
+    await getPendingContactRequest(db, 'act_human_1|act_human_2'),
+    null,
+  );
+  checkEqual(
+    'getContactRequestById',
+    JSON.stringify(await getContactRequestById(db, 'req_3')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM contact_requests WHERE contact_request_id = ?', ['req_3'])),
+  );
+  checkEqual('getContactRequestById missing', await getContactRequestById(db, 'req_missing'), null);
+
+  const expiredSql = `SELECT * FROM contact_requests
+        WHERE status = 'pending' AND expires_at <= ?
+        ORDER BY expires_at ASC, contact_request_id ASC
+        LIMIT ?`;
+  checkEqual(
+    'listExpiredPendingContactRequests',
+    JSON.stringify(await listExpiredPendingContactRequests(db, 1_000, 10)),
+    JSON.stringify(rawAll(sqlite, expiredSql, [1_000, 10])),
+  );
+  checkEqual(
+    'listExpiredPendingContactRequests limit',
+    JSON.stringify(await listExpiredPendingContactRequests(db, 1_000, 1)),
+    JSON.stringify(rawAll(sqlite, expiredSql, [1_000, 1])),
+  );
+
+  checkEqual(
+    'getExpiredPendingContactRequestForPair',
+    JSON.stringify(await getExpiredPendingContactRequestForPair(db, 'act_agent_1|act_human_1', 1_000)),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        `SELECT * FROM contact_requests
+          WHERE pair_key = ? AND status = 'pending' AND expires_at <= ?`,
+        ['act_agent_1|act_human_1', 1_000],
+      ),
+    ),
+  );
+  checkEqual(
+    'getExpiredPendingContactRequestForPair not due',
+    await getExpiredPendingContactRequestForPair(db, 'act_agent_3|act_human_1', 1_000),
+    null,
+  );
+
+  checkEqual(
+    'listPendingContactRequests',
+    JSON.stringify(await listPendingContactRequests(db, 'act_agent_1|act_human_1')),
+    JSON.stringify(
+      rawAll(sqlite, "SELECT * FROM contact_requests WHERE pair_key = ? AND status = 'pending'", [
+        'act_agent_1|act_human_1',
+      ]),
+    ),
+  );
+
+  checkEqual(
+    'getActiveContactBlock',
+    JSON.stringify(await getActiveContactBlock(db, 'act_human_1', 'act_agent_3')),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        `SELECT * FROM contact_blocks
+          WHERE blocker_actor_id = ? AND blocked_actor_id = ? AND released_at IS NULL`,
+        ['act_human_1', 'act_agent_3'],
+      ),
+    ),
+  );
+  checkEqual(
+    'getActiveContactBlock released',
+    await getActiveContactBlock(db, 'act_human_2', 'act_human_1'),
+    null,
+  );
+
+  const betweenSql = `SELECT * FROM contact_blocks
+        WHERE released_at IS NULL
+          AND ((blocker_actor_id = ? AND blocked_actor_id = ?)
+            OR (blocker_actor_id = ? AND blocked_actor_id = ?))
+        LIMIT 1`;
+  checkEqual(
+    'findActiveContactBlockBetween',
+    JSON.stringify(await findActiveContactBlockBetween(db, 'act_human_1', 'act_agent_3')),
+    JSON.stringify(rawFirst(sqlite, betweenSql, ['act_human_1', 'act_agent_3', 'act_agent_3', 'act_human_1'])),
+  );
+  checkEqual(
+    'findActiveContactBlockBetween reverse',
+    JSON.stringify(await findActiveContactBlockBetween(db, 'act_agent_3', 'act_human_1')),
+    JSON.stringify(rawFirst(sqlite, betweenSql, ['act_agent_3', 'act_human_1', 'act_human_1', 'act_agent_3'])),
+  );
+  checkEqual(
+    'findActiveContactBlockBetween none',
+    await findActiveContactBlockBetween(db, 'act_human_1', 'act_human_2'),
+    null,
+  );
+
+  checkEqual(
+    'listMutedMentionBlockers',
+    JSON.stringify(
+      (await listMutedMentionBlockers(db, 'act_agent_3', ['act_human_1', 'act_human_2'])).sort(),
+    ),
+    JSON.stringify(
+      rawAll<{ blocker_actor_id: string }>(
+        sqlite,
+        `SELECT blocker_actor_id FROM contact_blocks
+          WHERE released_at IS NULL
+            AND mute_mentions = 1
+            AND blocked_actor_id = ?
+            AND blocker_actor_id IN (?, ?)`,
+        ['act_agent_3', 'act_human_1', 'act_human_2'],
+      )
+        .map((row) => row.blocker_actor_id)
+        .sort(),
+    ),
+  );
+  checkEqual('listMutedMentionBlockers empty', JSON.stringify(await listMutedMentionBlockers(db, 'x', [])), '[]');
+
+  const blockListSql = `SELECT b.*,
+              a.kind AS blocked_kind, a.name AS blocked_name,
+              a.agent_session_id AS blocked_session
+         FROM contact_blocks b
+         JOIN actors a ON a.actor_id = b.blocked_actor_id
+        WHERE b.blocker_actor_id = ?
+        ORDER BY b.created_at DESC, b.block_id ASC
+        LIMIT ?`;
+  checkEqual(
+    'listContactBlocks',
+    JSON.stringify(await listContactBlocks(db, 'act_human_1', 2, null)),
+    JSON.stringify(rawAll(sqlite, blockListSql, ['act_human_1', 2])),
+  );
+  const blockCursorSql = `SELECT b.*,
+              a.kind AS blocked_kind, a.name AS blocked_name,
+              a.agent_session_id AS blocked_session
+         FROM contact_blocks b
+         JOIN actors a ON a.actor_id = b.blocked_actor_id
+        WHERE b.blocker_actor_id = ?
+          AND (b.created_at < ? OR (b.created_at = ? AND b.block_id > ?))
+        ORDER BY b.created_at DESC, b.block_id ASC
+        LIMIT ?`;
+  checkEqual(
+    'listContactBlocks cursor',
+    JSON.stringify(await listContactBlocks(db, 'act_human_1', 2, { createdAt: 700, blockId: 'blk_1' })),
+    JSON.stringify(rawAll(sqlite, blockCursorSql, ['act_human_1', 700, 700, 'blk_1', 2])),
+  );
+
+  checkEqual(
+    'getActiveAgentManagement',
+    JSON.stringify(await getActiveAgentManagement(db, 'act_agent_1')),
+    JSON.stringify(
+      rawFirst(sqlite, "SELECT * FROM agent_managements WHERE agent_id = ? AND status = 'active'", [
+        'act_agent_1',
+      ]),
+    ),
+  );
+  checkEqual(
+    'getActiveAgentManagement revoked',
+    await getActiveAgentManagement(db, 'act_agent_3'),
+    null,
+  );
+
+  const managementIds = ['act_agent_1', 'act_agent_2', 'act_agent_3'];
+  checkEqual(
+    'listActiveManagementBindings',
+    JSON.stringify(await listActiveManagementBindings(db, managementIds)),
+    JSON.stringify(
+      rawAll(
+        sqlite,
+        `SELECT agent_id, manager_id FROM agent_managements
+          WHERE status = 'active' AND agent_id IN (${placeholders(managementIds)})`,
+        managementIds,
+      ),
+    ),
+  );
+  checkEqual(
+    'listActiveManagementBindings empty',
+    JSON.stringify(await listActiveManagementBindings(db, [])),
+    '[]',
+  );
+
+  checkEqual(
+    'countActiveCredentials',
+    await countActiveCredentials(db, 'act_human_1'),
+    rawFirst<{ n: number }>(
+      sqlite,
+      'SELECT COUNT(*) AS n FROM credentials WHERE actor_id = ? AND revoked_at IS NULL',
+      ['act_human_1'],
+    )?.n ?? 0,
+  );
+  checkEqual(
+    'countActiveCredentials none',
+    await countActiveCredentials(db, 'act_agent_1'),
+    0,
+  );
 }
 
 function explainChecks(sqlite: Database, db: D1Database): void {
@@ -415,6 +841,200 @@ function explainChecks(sqlite: Database, db: D1Database): void {
         )
         .orderBy(schema.roomMembers.room_id, schema.actors.actor_id),
     },
+    {
+      label: 'getContact',
+      raw: 'SELECT * FROM contacts WHERE owner_actor_id = ? AND target_actor_id = ?',
+      params: ['act_human_1', 'act_agent_1'],
+      query: orm(db)
+        .select()
+        .from(schema.contacts)
+        .where(
+          and(
+            eq(schema.contacts.owner_actor_id, 'act_human_1'),
+            eq(schema.contacts.target_actor_id, 'act_agent_1'),
+          ),
+        ),
+    },
+    {
+      label: 'getActiveContactRelation',
+      raw: "SELECT * FROM contact_relations WHERE pair_key = ? AND status = 'active'",
+      params: ['act_agent_1|act_human_1'],
+      query: orm(db)
+        .select()
+        .from(schema.contactRelations)
+        .where(
+          and(
+            eq(schema.contactRelations.pair_key, 'act_agent_1|act_human_1'),
+            eq(schema.contactRelations.status, 'active'),
+          ),
+        ),
+    },
+    {
+      label: 'getPendingContactRequest',
+      raw: "SELECT * FROM contact_requests WHERE pair_key = ? AND status = 'pending'",
+      params: ['act_agent_1|act_human_1'],
+      query: orm(db)
+        .select()
+        .from(schema.contactRequests)
+        .where(
+          and(
+            eq(schema.contactRequests.pair_key, 'act_agent_1|act_human_1'),
+            eq(schema.contactRequests.status, 'pending'),
+          ),
+        ),
+    },
+    {
+      label: 'listExpiredPendingContactRequests',
+      raw: `SELECT * FROM contact_requests
+        WHERE status = 'pending' AND expires_at <= ?
+        ORDER BY expires_at ASC, contact_request_id ASC
+        LIMIT ?`,
+      params: [1_000, 10],
+      query: orm(db)
+        .select()
+        .from(schema.contactRequests)
+        .where(
+          and(
+            eq(schema.contactRequests.status, 'pending'),
+            lte(schema.contactRequests.expires_at, 1_000),
+          ),
+        )
+        .orderBy(
+          asc(schema.contactRequests.expires_at),
+          asc(schema.contactRequests.contact_request_id),
+        )
+        .limit(10),
+    },
+    {
+      label: 'getActiveContactBlock',
+      raw: `SELECT * FROM contact_blocks
+        WHERE blocker_actor_id = ? AND blocked_actor_id = ? AND released_at IS NULL`,
+      params: ['act_human_1', 'act_agent_3'],
+      query: orm(db)
+        .select()
+        .from(schema.contactBlocks)
+        .where(
+          and(
+            eq(schema.contactBlocks.blocker_actor_id, 'act_human_1'),
+            eq(schema.contactBlocks.blocked_actor_id, 'act_agent_3'),
+            isNull(schema.contactBlocks.released_at),
+          ),
+        ),
+    },
+    {
+      label: 'findActiveContactBlockBetween',
+      raw: `SELECT * FROM contact_blocks
+        WHERE released_at IS NULL
+          AND ((blocker_actor_id = ? AND blocked_actor_id = ?)
+            OR (blocker_actor_id = ? AND blocked_actor_id = ?))
+        LIMIT 1`,
+      params: ['act_human_1', 'act_agent_3', 'act_agent_3', 'act_human_1'],
+      query: orm(db)
+        .select()
+        .from(schema.contactBlocks)
+        .where(
+          and(
+            isNull(schema.contactBlocks.released_at),
+            or(
+              and(
+                eq(schema.contactBlocks.blocker_actor_id, 'act_human_1'),
+                eq(schema.contactBlocks.blocked_actor_id, 'act_agent_3'),
+              ),
+              and(
+                eq(schema.contactBlocks.blocker_actor_id, 'act_agent_3'),
+                eq(schema.contactBlocks.blocked_actor_id, 'act_human_1'),
+              ),
+            ),
+          ),
+        )
+        .limit(1),
+    },
+    {
+      label: 'listContactBlocks',
+      raw: `SELECT contact_blocks.*,
+              actors.kind AS blocked_kind, actors.name AS blocked_name,
+              actors.agent_session_id AS blocked_session
+         FROM contact_blocks
+         JOIN actors ON actors.actor_id = contact_blocks.blocked_actor_id
+        WHERE contact_blocks.blocker_actor_id = ?
+        ORDER BY contact_blocks.created_at DESC, contact_blocks.block_id ASC
+        LIMIT ?`,
+      params: ['act_human_1', 2],
+      query: orm(db)
+        .select({
+          block_id: schema.contactBlocks.block_id,
+          blocker_actor_id: schema.contactBlocks.blocker_actor_id,
+          blocked_actor_id: schema.contactBlocks.blocked_actor_id,
+          reason: schema.contactBlocks.reason,
+          mute_mentions: schema.contactBlocks.mute_mentions,
+          created_at: schema.contactBlocks.created_at,
+          released_at: schema.contactBlocks.released_at,
+          released_by: schema.contactBlocks.released_by,
+          blocked_kind: sql<'human' | 'agent'>`${schema.actors.kind}`.as('blocked_kind'),
+          blocked_name: sql<string>`${schema.actors.name}`.as('blocked_name'),
+          blocked_session: sql<string | null>`${schema.actors.agent_session_id}`.as(
+            'blocked_session',
+          ),
+        })
+        .from(schema.contactBlocks)
+        .innerJoin(
+          schema.actors,
+          eq(schema.actors.actor_id, schema.contactBlocks.blocked_actor_id),
+        )
+        .where(eq(schema.contactBlocks.blocker_actor_id, 'act_human_1'))
+        .orderBy(desc(schema.contactBlocks.created_at), asc(schema.contactBlocks.block_id))
+        .limit(2),
+    },
+    {
+      label: 'getActiveAgentManagement',
+      raw: "SELECT * FROM agent_managements WHERE agent_id = ? AND status = 'active'",
+      params: ['act_agent_1'],
+      query: orm(db)
+        .select()
+        .from(schema.agentManagements)
+        .where(
+          and(
+            eq(schema.agentManagements.agent_id, 'act_agent_1'),
+            eq(schema.agentManagements.status, 'active'),
+          ),
+        ),
+    },
+    {
+      label: 'listActiveManagementBindings',
+      raw: `SELECT agent_id, manager_id FROM agent_managements
+          WHERE status = 'active' AND agent_id IN (?, ?, ?)`,
+      params: ['act_agent_1', 'act_agent_2', 'act_agent_3'],
+      query: orm(db)
+        .select({
+          agent_id: schema.agentManagements.agent_id,
+          manager_id: schema.agentManagements.manager_id,
+        })
+        .from(schema.agentManagements)
+        .where(
+          and(
+            eq(schema.agentManagements.status, 'active'),
+            inArray(schema.agentManagements.agent_id, [
+              'act_agent_1',
+              'act_agent_2',
+              'act_agent_3',
+            ]),
+          ),
+        ),
+    },
+    {
+      label: 'countActiveCredentials',
+      raw: 'SELECT COUNT(*) AS n FROM credentials WHERE actor_id = ? AND revoked_at IS NULL',
+      params: ['act_human_1'],
+      query: orm(db)
+        .select({ n: sql<number>`count(*)`.as('n') })
+        .from(schema.credentials)
+        .where(
+          and(
+            eq(schema.credentials.actor_id, 'act_human_1'),
+            isNull(schema.credentials.revoked_at),
+          ),
+        ),
+    },
   ];
 
   for (const item of cases) {
@@ -464,6 +1084,33 @@ async function benchmark(sqlite: Database, db: D1Database): Promise<void> {
     if (!credential) return null;
     return getActor(db, credential.actor_id);
   };
+  const rawContact = async (): Promise<unknown> =>
+    rawFirst(sqlite, 'SELECT * FROM contacts WHERE owner_actor_id = ? AND target_actor_id = ?', [
+      'act_human_1',
+      'act_agent_1',
+    ]);
+  const ormContact = async (): Promise<unknown> => getContact(db, 'act_human_1', 'act_agent_1');
+  const rawRelation = async (): Promise<unknown> =>
+    rawFirst(sqlite, "SELECT * FROM contact_relations WHERE pair_key = ? AND status = 'active'", [
+      'act_agent_1|act_human_1',
+    ]);
+  const ormRelation = async (): Promise<unknown> =>
+    getActiveContactRelation(db, 'act_agent_1|act_human_1');
+  const rawBlock = async (): Promise<unknown> =>
+    rawFirst(
+      sqlite,
+      `SELECT * FROM contact_blocks
+        WHERE blocker_actor_id = ? AND blocked_actor_id = ? AND released_at IS NULL`,
+      ['act_human_1', 'act_agent_3'],
+    );
+  const ormBlock = async (): Promise<unknown> =>
+    getActiveContactBlock(db, 'act_human_1', 'act_agent_3');
+  const rawManagement = async (): Promise<unknown> =>
+    rawFirst(sqlite, "SELECT * FROM agent_managements WHERE agent_id = ? AND status = 'active'", [
+      'act_agent_1',
+    ]);
+  const ormManagement = async (): Promise<unknown> =>
+    getActiveAgentManagement(db, 'act_agent_1');
 
   console.log('\nread query benchmark (in-memory, includes drizzle build):');
   console.log(`  raw   ${await bench('actor', rawActor)}`);
@@ -474,6 +1121,14 @@ async function benchmark(sqlite: Database, db: D1Database): Promise<void> {
   console.log(`  orm   ${await bench('count', ormCount)}`);
   console.log(`  raw   ${await bench('identity', rawIdentity)}`);
   console.log(`  orm   ${await bench('identity', ormIdentity)}`);
+  console.log(`  raw   ${await bench('contact', rawContact)}`);
+  console.log(`  orm   ${await bench('contact', ormContact)}`);
+  console.log(`  raw   ${await bench('relation', rawRelation)}`);
+  console.log(`  orm   ${await bench('relation', ormRelation)}`);
+  console.log(`  raw   ${await bench('block', rawBlock)}`);
+  console.log(`  orm   ${await bench('block', ormBlock)}`);
+  console.log(`  raw   ${await bench('management', rawManagement)}`);
+  console.log(`  orm   ${await bench('management', ormManagement)}`);
 }
 
 async function main(): Promise<void> {
