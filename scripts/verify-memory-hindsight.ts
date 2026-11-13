@@ -15,6 +15,8 @@ import {
   loadHindsightConfigFromEnv,
 } from '../src/memory/adapters/hindsight';
 import { HindsightMemoryAdapter } from '../src/memory/adapters/hindsight';
+import { normalizeBaseUrl, resolveHindsightConfig } from '../src/memory/adapters/hindsight-config';
+import { HindsightTransport } from '../src/memory/adapters/hindsight-transport';
 import type {
   MemoryAdapterRetainItem,
   MemoryAdapterSearchPlan,
@@ -28,6 +30,10 @@ import type {
 import { sha256Hex, utf8Bytes } from '../src/storage/db';
 import { check, checkEqual, checksPassed } from './lib/harness';
 import { FakeHindsight } from './lib/memory-hindsight-fake';
+import {
+  realHindsightEnabled,
+  runRealHindsightContract,
+} from './lib/memory-hindsight-real';
 
 const AT = 1_700_000_000_000;
 const HASH = 'a'.repeat(64);
@@ -147,7 +153,7 @@ async function main(): Promise<void> {
       caps.hard_filters.join(','),
       'origin_kind,source_id',
     );
-    checkEqual('capabilities.time_window', caps.time_window, 'unsupported');
+    checkEqual('capabilities.time_window', caps.time_window, 'ranking_hint_only');
     checkEqual('capabilities.source_completeness', caps.source_completeness, 'partial');
     checkEqual('capabilities.partition_isolation', caps.partition_isolation, 'provider_partition');
     checkEqual('capabilities.reflect', caps.reflect, true);
@@ -813,8 +819,128 @@ async function main(): Promise<void> {
     }
     check('非法 URL 抛错', invalidUrlMessage.length > 0);
     check('非法 URL 错误不含凭据', !invalidUrlMessage.includes(token));
+
+    // ---------------------------------------------------------------------
+    // base URL 归一化与传输层错误/重试映射
+    // ---------------------------------------------------------------------
+    checkEqual(
+      'base URL 归一化去掉尾随斜杠',
+      normalizeBaseUrl(`${fake.baseUrl}/`),
+      fake.baseUrl,
+    );
+    const trailingConfig = loadHindsightConfigFromEnv({
+      HINDSIGHT_URL: `${fake.baseUrl}/`,
+      HINDSIGHT_API_KEY: token,
+    });
+    check(
+      'env 配置归一化 base URL',
+      trailingConfig.ok && trailingConfig.config.baseUrl === fake.baseUrl,
+    );
+    const trailingAdapter = new HindsightMemoryAdapter({
+      baseUrl: `${fake.baseUrl}/`,
+      apiKey: token,
+      requestTimeoutMs: 1_000,
+      maxRetries: 1,
+      retryBaseMs: 1,
+      sleepImpl: async () => undefined,
+    });
+    const trailingEnsured = await trailingAdapter.ensureSpace({
+      space: { ...space(7), space_id: 'sp_mf04_trailing_slash' },
+      operation_key: 'ensure-trailing-slash',
+      payload_sha256: HASH,
+      deadline_at: null,
+    });
+    checkEqual('尾随斜杠不产生 //path', trailingEnsured.status, 'ready');
+
+    let transportCalls = 0;
+    const transport = new HindsightTransport(
+      resolveHindsightConfig({
+        baseUrl: 'https://hindsight.example/',
+        apiKey: token,
+        maxRetries: 1,
+        retryBaseMs: 1,
+        sleepImpl: async () => undefined,
+        fetchImpl: (async (input, init) => {
+          transportCalls += 1;
+          const url = String(input);
+          check('传输 URL 不含凭据', !url.includes(token));
+          check(
+            '传输凭据只在 Authorization 头',
+            new Headers(init?.headers).get('authorization') === `Bearer ${token}`,
+          );
+          if (transportCalls === 1) {
+            return new Response(JSON.stringify({ error: 'rate limited' }), {
+              status: 429,
+              headers: { 'content-type': 'application/json', 'retry-after': '0' },
+            });
+          }
+          return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }) as typeof fetch,
+      })!,
+    );
+    const retriedOutcome = await transport.request('GET', '/v1/default/banks', {
+      deadlineAt: Date.now() + 5_000,
+      retry: true,
+    });
+    checkEqual('429 按 Retry-After 重试', retriedOutcome.kind, 'ok');
+    checkEqual('429 重试次数', transportCalls, 2);
+    check(
+      '传输结果不含凭据',
+      !JSON.stringify(retriedOutcome).includes(token),
+    );
+    checkEqual(
+      '429 分类',
+      transport.reasonFor({ kind: 'http', status: 429, body: null }, 'unknown'),
+      'unavailable',
+    );
+    checkEqual(
+      '425 分类',
+      transport.reasonFor({ kind: 'http', status: 425, body: null }, 'unknown'),
+      'unavailable',
+    );
+    checkEqual(
+      '408 分类',
+      transport.reasonFor({ kind: 'http', status: 408, body: null }, 'unknown'),
+      'timeout',
+    );
+    checkEqual(
+      '401 分类',
+      transport.reasonFor({ kind: 'http', status: 401, body: null }, 'unknown'),
+      'unavailable',
+    );
+    checkEqual(
+      '409 分类',
+      transport.reasonFor({ kind: 'http', status: 409, body: null }, 'unknown'),
+      'fenced',
+    );
+    checkEqual(
+      '422 分类',
+      transport.reasonFor({ kind: 'http', status: 422, body: null }, 'unknown'),
+      'invalid_request',
+    );
+    checkEqual(
+      '404 分类',
+      transport.reasonFor({ kind: 'http', status: 404, body: null }, 'unknown'),
+      'unknown',
+    );
   } finally {
     await fake.stop();
+  }
+
+  if (realHindsightEnabled()) {
+    console.log('--- Hindsight 真实契约（HINDSIGHT_REAL_TEST=1）---');
+    const real = await runRealHindsightContract();
+    console.log(
+      `real hindsight contract: retain=${real.retainStatus} job=${real.jobState} ` +
+        `recall_hits=${real.recallHits} list_hits=${real.listHits} ` +
+        `documents=${real.documentCount} remove=${real.removeStatus} ` +
+        `bank_deleted=${real.bankDeleted}`,
+    );
+  } else {
+    console.log('real hindsight contract skipped (HINDSIGHT_REAL_TEST!=1)');
   }
 
   console.log(`memory hindsight checks passed (${checksPassed()} assertions)`);

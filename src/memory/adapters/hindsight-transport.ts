@@ -70,6 +70,8 @@ export class HindsightTransport {
           body: options.body === undefined ? undefined : JSON.stringify(options.body),
           signal: controller.signal,
         });
+        // 429/503 的 Retry-After 是服务端给出的最短等待；仍受 deadline 约束。
+        const retryAfterMs = this.retryAfterMs(response.headers.get('retry-after'), config.now());
         const text = await response.text();
         let body: unknown = null;
         let parsed = true;
@@ -85,7 +87,9 @@ export class HindsightTransport {
         }
         if (options.retry && attempt < config.maxRetries && RETRYABLE_STATUS.has(response.status)) {
           attempt += 1;
-          if (!(await this.backoff(attempt, deadlineAt))) return { kind: 'timeout' };
+          if (!(await this.backoff(attempt, deadlineAt, retryAfterMs))) {
+            return { kind: 'http', status: response.status, body };
+          }
           continue;
         }
         return { kind: 'http', status: response.status, body };
@@ -95,7 +99,7 @@ export class HindsightTransport {
         }
         if (options.retry && attempt < config.maxRetries) {
           attempt += 1;
-          if (!(await this.backoff(attempt, deadlineAt))) return { kind: 'timeout' };
+          if (!(await this.backoff(attempt, deadlineAt, null))) return { kind: 'network' };
           continue;
         }
         return { kind: 'network' };
@@ -126,16 +130,34 @@ export class HindsightTransport {
         if (outcome.status === 409) return 'fenced';
         if (outcome.status === 401 || outcome.status === 403) return 'unavailable';
         if (outcome.status === 404) return 'unknown';
-        if (outcome.status === 408 || outcome.status === 425 || outcome.status === 429) {
-          return 'timeout';
-        }
+        if (outcome.status === 408) return 'timeout';
+        // 425/429 是服务端暂不可用/限流，不是客户端超时；重试由传输层负责。
+        if (outcome.status === 425 || outcome.status === 429) return 'unavailable';
         if (outcome.status >= 500) return 'unavailable';
         return fallback;
     }
   }
 
-  private async backoff(attempt: number, deadlineAt: number): Promise<boolean> {
-    const delay = Math.min(this.#config.retryBaseMs * 2 ** (attempt - 1), 5_000);
+  private retryAfterMs(value: string | null, now: number): number | null {
+    if (value === null) return null;
+    const trimmed = value.trim();
+    if (trimmed === '') return null;
+    if (/^\d+$/u.test(trimmed)) {
+      const seconds = Number(trimmed);
+      return Number.isSafeInteger(seconds) ? seconds * 1_000 : null;
+    }
+    const at = Date.parse(trimmed);
+    if (!Number.isFinite(at)) return null;
+    return Math.max(0, at - now);
+  }
+
+  private async backoff(
+    attempt: number,
+    deadlineAt: number,
+    retryAfterMs: number | null,
+  ): Promise<boolean> {
+    const exponential = Math.min(this.#config.retryBaseMs * 2 ** (attempt - 1), 5_000);
+    const delay = Math.min(Math.max(exponential, retryAfterMs ?? 0), 60_000);
     if (this.#config.now() + delay >= deadlineAt) return false;
     await this.#config.sleepImpl(delay);
     return this.#config.now() < deadlineAt;

@@ -87,8 +87,10 @@ export function loadHindsightConfigFromEnv(
   if (/[\r\n]/u.test(apiKey)) {
     return { ok: false, error: 'HINDSIGHT_API_KEY contains invalid characters' };
   }
+  let normalizedBaseUrl: string;
   try {
-    normalizeBaseUrl(baseUrl);
+    // 配置加载即归一化，调用方直接使用也不会拼出 `//v1/...`。
+    normalizedBaseUrl = normalizeBaseUrl(baseUrl);
   } catch {
     return { ok: false, error: 'HINDSIGHT_URL is invalid' };
   }
@@ -127,7 +129,7 @@ export function loadHindsightConfigFromEnv(
   return {
     ok: true,
     config: {
-      baseUrl,
+      baseUrl: normalizedBaseUrl,
       apiKey,
       bankPrefix,
       requestTimeoutMs: timeout.value,
