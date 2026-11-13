@@ -13,8 +13,8 @@ import {
 /**
  * 4C-0 的 Drizzle core schema 骨架。
  *
- * 只覆盖最稳定的 8 张核心表；迁移 SQL 仍是唯一事实源。guard、FTS5、trigger、
- * 复杂权限 SQL 与其余业务表继续保留 raw，等 4C-1 起按域补齐。
+ * 本文件只覆盖最稳定的 8 张核心表；迁移 SQL 仍是唯一事实源。guard、FTS5、trigger、
+ * 复杂权限 SQL 与其余业务表继续保留 raw，其他域的表在独立文件中补齐。
  *
  * 为与迁移保持 PRAGMA 一致：
  * - 主键统一用表级 `primaryKey()`，避免 Drizzle 给单列主键额外加 `NOT NULL`；
@@ -280,14 +280,6 @@ export const outbox = sqliteTable(
   ],
 );
 
-/** 4C-0 覆盖的表；未列出的表仍由迁移 SQL 定义。 */
-export const CORE_TABLES = [
-  actors,
-  credentials,
-  rooms,
-  roomMembers,
-  messages,
-  deliveries,
-  operations,
-  outbox,
-] as const;
+/**
+ * 4C 已声明的表清单由 `schema/index.ts` 统一导出；本文件只保留 core 表定义。
+ */

@@ -24,7 +24,7 @@ import { getTableName } from 'drizzle-orm';
 
 import { migrate } from '../src/bun/migrate';
 import { GUARDS } from '../src/storage/guards';
-import { CORE_TABLES } from '../src/storage/schema/core';
+import { CORE_TABLES } from '../src/storage/schema';
 import { stableStringify } from '../src/storage/db';
 import { check, checkEqual, checksPassed } from './lib/harness';
 

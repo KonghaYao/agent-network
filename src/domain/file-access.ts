@@ -5,10 +5,12 @@ import { nowMs, sha256Hex, stableStringify } from '../storage/db';
 import { eventStatement, outboxStatement, roomTopic } from '../storage/events';
 import { guardSql } from '../storage/guards';
 import {
+  driveFileQuotaUsage,
   getDriveFile,
   getMember,
   getRoom,
   getRoomFile,
+  roomFileQuotaUsage,
 } from '../storage/queries';
 import type { DriveFileRow, RoomFileRow, RoomMemberRow, RoomRow } from '../storage/rows';
 import {
@@ -181,22 +183,13 @@ export async function quotaForOwnerScope(
   ownerScope: string,
   at = Date.now(),
 ): Promise<FileQuota> {
-  const row = await db
-    .prepare(
-      `SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes,
-              COALESCE(SUM(CASE WHEN retained = 1 THEN size ELSE 0 END), 0) AS retained
-         FROM drive_files
-        WHERE owner_scope = ? AND state = 'draft'
-          AND (retained = 1 OR expires_at IS NULL OR expires_at > ?)`,
-    )
-    .bind(ownerScope, at)
-    .first<{ files: number; bytes: number; retained: number }>();
+  const row = await driveFileQuotaUsage(db, ownerScope, at);
   return {
-    used_bytes: row?.bytes ?? 0,
+    used_bytes: row.bytes,
     limit_bytes: LIMITS.draftBytesPerActor,
-    used_files: row?.files ?? 0,
+    used_files: row.files,
     limit_files: LIMITS.draftFilesPerActor,
-    retained_bytes: row?.retained ?? 0,
+    retained_bytes: row.retained,
   };
 }
 
@@ -205,21 +198,13 @@ export async function quotaForRoom(
   roomId: string,
   at = Date.now(),
 ): Promise<FileQuota> {
-  const row = await db
-    .prepare(
-      `SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes,
-              COALESCE(SUM(CASE WHEN retained = 1 THEN size ELSE 0 END), 0) AS retained
-         FROM room_files
-        WHERE room_id = ? AND deleted_at IS NULL AND (retained = 1 OR expires_at > ?)`,
-    )
-    .bind(roomId, at)
-    .first<{ files: number; bytes: number; retained: number }>();
+  const row = await roomFileQuotaUsage(db, roomId, at);
   return {
-    used_bytes: row?.bytes ?? 0,
+    used_bytes: row.bytes,
     limit_bytes: LIMITS.roomFileBytesPerRoom,
-    used_files: row?.files ?? 0,
+    used_files: row.files,
     limit_files: LIMITS.roomFilesPerRoom,
-    retained_bytes: row?.retained ?? 0,
+    retained_bytes: row.retained,
   };
 }
 

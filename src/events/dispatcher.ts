@@ -3,6 +3,7 @@ import pLimit from 'p-limit';
 import { LIMITS } from '../contracts/limits';
 import type { Env } from '../env';
 import { addJitter, nowMs } from '../storage/db';
+import { getEventSubscriptionRefresh } from '../storage/queries';
 import {
   decryptSecret,
   parseWebhookSecret,
@@ -17,17 +18,6 @@ import {
   logEventsInfo,
   logEventsWarn,
 } from './log';
-
-interface FreshSubscriptionRow {
-  active: number;
-  refresh_before: number;
-  credential_id: string;
-  secret_ciphertext: string;
-  secret_nonce: string;
-  previous_secret_ciphertext: string | null;
-  previous_secret_nonce: string | null;
-  previous_secret_expires_at: number | null;
-}
 
 interface DueDeliveryRow {
   delivery_id: string;
@@ -150,14 +140,7 @@ async function deliverOne(
   const startedAt = Date.now();
 
   // 领取后重新读取订阅，尽量缩小刷新轮换/撤销与在途投递的竞态。
-  const fresh = await env.DB
-    .prepare(
-      `SELECT active, refresh_before, credential_id, secret_ciphertext, secret_nonce,
-              previous_secret_ciphertext, previous_secret_nonce, previous_secret_expires_at
-         FROM mcp_event_subscriptions WHERE subscription_id = ?`,
-    )
-    .bind(row.subscription_id)
-    .first<FreshSubscriptionRow>();
+  const fresh = await getEventSubscriptionRefresh(env.DB, row.subscription_id);
   if (!fresh) {
     logEventsWarn('delivery.skip', {
       subscription_id: row.subscription_id,

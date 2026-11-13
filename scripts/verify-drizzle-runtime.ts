@@ -12,7 +12,7 @@
  */
 
 import { Database } from 'bun:sqlite';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { resolve } from 'node:path';
 
 import { createD1 } from '../src/bun/d1';
@@ -20,16 +20,25 @@ import { migrate } from '../src/bun/migrate';
 import { orm, schema } from '../src/storage/drizzle';
 import {
   activeRoomCount,
+  countPendingEventDeliveries,
+  driveFileQuotaUsage,
+  earliestPendingEventDeliverySeq,
   getActor,
   getActorBySession,
   getActorManagementByIds,
   getActorsByIds,
   getCredentialByHash,
+  getDriveFile,
+  getEventSubscription,
+  getEventSubscriptionRefresh,
   getEventsMinSeq,
   getMember,
   getRoom,
+  getRoomFile,
   isActiveMember,
   listActiveRoomPeers,
+  listEventSubscriptionsForScan,
+  roomFileQuotaUsage,
 } from '../src/storage/queries';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
@@ -120,6 +129,60 @@ function seed(sqlite: Database): void {
   member.run('room_group_1', 'act_agent_1', 'admin', 'active', 2, 9, 215, 1, 215, 2);
   member.run('room_group_1', 'act_human_2', 'member', 'left', 3, 3, 216, 1, 216, 1);
   member.run('room_group_1', 'act_agent_3', 'member', 'active', 4, 4, 217, 1, 217, 3);
+
+  const sha = (char: string): string => char.repeat(64);
+  const drive = sqlite.prepare(
+    `INSERT INTO drive_files
+       (file_id, owner_scope, uploader_id, name, mime_type, size, sha256, state,
+        visibility, room_id, created_at, expires_at, retained, deleted_at,
+        deleted_by, purged_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  drive.run('df_draft', 'actor:act_human_1', 'act_human_1', 'draft.txt', 'text/plain', 10, sha('a'), 'draft', 'public', null, 1_000, 3_000, 0, null, null, null);
+  drive.run('df_retained', 'actor:act_human_1', 'act_human_1', 'kept.bin', 'application/octet-stream', 20, sha('b'), 'draft', 'private', null, 1_000, null, 1, null, null, null);
+  drive.run('df_retained_expired', 'actor:act_human_1', 'act_human_1', 'kept-old.bin', 'application/octet-stream', 30, sha('c'), 'draft', 'private', null, 900, 1_000, 1, null, null, null);
+  drive.run('df_expired', 'actor:act_human_1', 'act_human_1', 'old.txt', 'text/plain', 40, sha('d'), 'draft', 'public', null, 900, 2_000, 0, null, null, null);
+  drive.run('df_deleted', 'actor:act_human_1', 'act_human_1', 'gone.txt', 'text/plain', 50, sha('e'), 'deleted', 'public', null, 1_000, 3_000, 0, 1_600, 'act_human_1', null);
+  drive.run('df_other', 'actor:act_human_2', 'act_human_2', 'bob.txt', 'text/plain', 60, sha('f'), 'draft', 'public', null, 1_000, 4_000, 0, null, null, null);
+
+  const roomFile = sqlite.prepare(
+    `INSERT INTO room_files
+       (room_file_id, room_id, file_id, uploader_id, name, mime_type, size, sha256,
+        created_at, expires_at, deleted_at, deleted_by, created_seq, retained)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  roomFile.run('rf_live', 'room_group_1', 'rf_file_live', 'act_human_1', 'live.txt', 'text/plain', 100, sha('1'), 1_000, 3_000, null, null, 5, 0);
+  roomFile.run('rf_retained_expired', 'room_group_1', 'rf_file_retained', 'act_agent_1', 'kept.txt', 'text/plain', 200, sha('2'), 900, 950, null, null, 1, 1);
+  roomFile.run('rf_expired', 'room_group_1', 'rf_file_expired', 'act_human_1', 'expired.txt', 'text/plain', 300, sha('3'), 900, 1_000, null, null, 2, 0);
+  roomFile.run('rf_deleted', 'room_group_1', 'rf_file_deleted', 'act_human_1', 'deleted.txt', 'text/plain', 400, sha('4'), 1_000, 3_000, 1_500, 'act_human_1', 3, 0);
+  roomFile.run('rf_other', 'room_direct_1', 'rf_file_other', 'act_human_1', 'other.txt', 'text/plain', 500, sha('5'), 1_000, 3_000, null, null, 4, 0);
+
+  const subscription = sqlite.prepare(
+    `INSERT INTO mcp_event_subscriptions
+       (subscription_id, actor_id, event_name, arguments_json, callback_url,
+        callback_url_key, credential_id, secret_ciphertext, secret_nonce,
+        previous_secret_ciphertext, previous_secret_nonce, previous_secret_expires_at,
+        refresh_before, scanned_seq, last_scan_at, last_delivery_at, last_error,
+        consecutive_failures, active, verified_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  subscription.run('sub_a', 'act_agent_1', 'message.created', '{"room_id":"room_group_1"}', 'https://a.test/hook', 'https://a.test/hook', 'cred_a1', 'ct_a', 'nonce_a', 'ct_prev_a', 'nonce_prev_a', 4_000, 5_000, 3, 10, 900, null, 0, 1, 100, 100, 200);
+  subscription.run('sub_b', 'act_agent_1', 'message.created', '{"room_id":"room_direct_1"}', 'https://b.test/hook', 'https://b.test/hook', 'cred_a1', 'ct_b', 'nonce_b', null, null, null, 5_000, 0, 0, null, null, 0, 1, 100, 100, 200);
+  subscription.run('sub_c', 'act_agent_1', 'message.created', '{}', 'https://c.test/hook', 'https://c.test/hook', 'cred_a1', 'ct_c', 'nonce_c', null, null, null, 5_000, 0, 0, null, null, 0, 0, 100, 100, 200);
+  subscription.run('sub_d', 'act_agent_1', 'message.created', '{"room_id":"room_group_1","attention":"informational"}', 'https://d.test/hook', 'https://d.test/hook', 'cred_a1', 'ct_d', 'nonce_d', null, null, null, 1_000, 0, 0, null, null, 0, 1, 100, 100, 200);
+
+  const delivery = sqlite.prepare(
+    `INSERT INTO mcp_event_deliveries
+       (delivery_id, subscription_id, event_seq, event_id, payload_json, status,
+        attempts, next_attempt_at, lease_token, lease_until, last_http_status,
+        last_error, created_at, delivered_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  delivery.run('evd_a1', 'sub_a', 1, 'evt_a1', '{"n":1}', 'pending', 0, 1_100, null, null, null, null, 100, null);
+  delivery.run('evd_a2', 'sub_a', 2, 'evt_a2', '{"n":2}', 'processing', 1, 1_100, 'lease_a', 9_000, null, null, 100, null);
+  delivery.run('evd_a3', 'sub_a', 3, 'evt_a3', '{"n":3}', 'delivered', 1, 1_100, null, null, 200, null, 100, 1_200);
+  delivery.run('evd_b1', 'sub_b', 1, 'evt_b1', '{"n":1}', 'pending', 0, 1_100, null, null, null, null, 100, null);
+  delivery.run('evd_c1', 'sub_c', 1, 'evt_c1', '{"n":1}', 'pending', 0, 1_100, null, null, null, null, 100, null);
 }
 
 function rawFirst<T>(sqlite: Database, sql: string, params: unknown[]): T | null {
@@ -305,6 +368,187 @@ async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> 
     ])?.inbox_min_seq ?? 0,
   );
   checkEqual('getEventsMinSeq actor', await getEventsMinSeq(db, 'actor', 'act_human_1'), 0);
+
+  checkEqual(
+    'getDriveFile draft',
+    JSON.stringify(await getDriveFile(db, 'df_draft')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM drive_files WHERE file_id = ?', ['df_draft'])),
+  );
+  checkEqual(
+    'getDriveFile deleted',
+    JSON.stringify(await getDriveFile(db, 'df_deleted')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM drive_files WHERE file_id = ?', ['df_deleted'])),
+  );
+  checkEqual('getDriveFile missing', await getDriveFile(db, 'df_missing'), null);
+
+  checkEqual(
+    'getRoomFile live',
+    JSON.stringify(await getRoomFile(db, 'rf_file_live')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM room_files WHERE file_id = ?', ['rf_file_live'])),
+  );
+  checkEqual(
+    'getRoomFile tombstone',
+    JSON.stringify(await getRoomFile(db, 'rf_file_deleted')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM room_files WHERE file_id = ?', ['rf_file_deleted']),
+    ),
+  );
+  checkEqual('getRoomFile missing', await getRoomFile(db, 'rf_file_missing'), null);
+
+  const driveQuotaSql = (ownerScope: string, at: number): { sql: string; params: unknown[] } => ({
+    sql: `SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes,
+                 COALESCE(SUM(CASE WHEN retained = 1 THEN size ELSE 0 END), 0) AS retained
+            FROM drive_files
+           WHERE owner_scope = ? AND state = 'draft'
+             AND (retained = 1 OR expires_at IS NULL OR expires_at > ?)`,
+    params: [ownerScope, at],
+  });
+  const quotaAt = 2_500;
+  checkEqual(
+    'driveFileQuotaUsage owner',
+    JSON.stringify(await driveFileQuotaUsage(db, 'actor:act_human_1', quotaAt)),
+    JSON.stringify(
+      rawFirst<{ files: number; bytes: number; retained: number }>(
+        sqlite,
+        driveQuotaSql('actor:act_human_1', quotaAt).sql,
+        driveQuotaSql('actor:act_human_1', quotaAt).params,
+      ),
+    ),
+  );
+  checkEqual(
+    'driveFileQuotaUsage other',
+    JSON.stringify(await driveFileQuotaUsage(db, 'actor:act_human_2', quotaAt)),
+    JSON.stringify(
+      rawFirst<{ files: number; bytes: number; retained: number }>(
+        sqlite,
+        driveQuotaSql('actor:act_human_2', quotaAt).sql,
+        driveQuotaSql('actor:act_human_2', quotaAt).params,
+      ),
+    ),
+  );
+  checkEqual(
+    'driveFileQuotaUsage none',
+    JSON.stringify(await driveFileQuotaUsage(db, 'actor:missing', quotaAt)),
+    JSON.stringify(rawFirst(sqlite, driveQuotaSql('actor:missing', quotaAt).sql, driveQuotaSql('actor:missing', quotaAt).params)),
+  );
+
+  const roomQuotaSql = (roomId: string, at: number): { sql: string; params: unknown[] } => ({
+    sql: `SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes,
+                 COALESCE(SUM(CASE WHEN retained = 1 THEN size ELSE 0 END), 0) AS retained
+            FROM room_files
+           WHERE room_id = ? AND deleted_at IS NULL AND (retained = 1 OR expires_at > ?)`,
+    params: [roomId, at],
+  });
+  checkEqual(
+    'roomFileQuotaUsage group',
+    JSON.stringify(await roomFileQuotaUsage(db, 'room_group_1', quotaAt)),
+    JSON.stringify(
+      rawFirst<{ files: number; bytes: number; retained: number }>(
+        sqlite,
+        roomQuotaSql('room_group_1', quotaAt).sql,
+        roomQuotaSql('room_group_1', quotaAt).params,
+      ),
+    ),
+  );
+  checkEqual(
+    'roomFileQuotaUsage direct',
+    JSON.stringify(await roomFileQuotaUsage(db, 'room_direct_1', quotaAt)),
+    JSON.stringify(
+      rawFirst<{ files: number; bytes: number; retained: number }>(
+        sqlite,
+        roomQuotaSql('room_direct_1', quotaAt).sql,
+        roomQuotaSql('room_direct_1', quotaAt).params,
+      ),
+    ),
+  );
+  checkEqual(
+    'roomFileQuotaUsage none',
+    JSON.stringify(await roomFileQuotaUsage(db, 'room_missing', quotaAt)),
+    JSON.stringify(rawFirst(sqlite, roomQuotaSql('room_missing', quotaAt).sql, roomQuotaSql('room_missing', quotaAt).params)),
+  );
+
+  checkEqual(
+    'getEventSubscription active',
+    JSON.stringify(await getEventSubscription(db, 'sub_a')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM mcp_event_subscriptions WHERE subscription_id = ?', ['sub_a']),
+    ),
+  );
+  checkEqual(
+    'getEventSubscription inactive',
+    JSON.stringify(await getEventSubscription(db, 'sub_c')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM mcp_event_subscriptions WHERE subscription_id = ?', ['sub_c']),
+    ),
+  );
+  checkEqual('getEventSubscription missing', await getEventSubscription(db, 'sub_missing'), null);
+
+  const refreshSql = `SELECT active, refresh_before, credential_id, secret_ciphertext, secret_nonce,
+              previous_secret_ciphertext, previous_secret_nonce, previous_secret_expires_at
+         FROM mcp_event_subscriptions WHERE subscription_id = ?`;
+  checkEqual(
+    'getEventSubscriptionRefresh rotated',
+    JSON.stringify(await getEventSubscriptionRefresh(db, 'sub_a')),
+    JSON.stringify(rawFirst(sqlite, refreshSql, ['sub_a'])),
+  );
+  checkEqual(
+    'getEventSubscriptionRefresh plain',
+    JSON.stringify(await getEventSubscriptionRefresh(db, 'sub_b')),
+    JSON.stringify(rawFirst(sqlite, refreshSql, ['sub_b'])),
+  );
+  checkEqual('getEventSubscriptionRefresh missing', await getEventSubscriptionRefresh(db, 'sub_missing'), null);
+
+  const scanSql = `SELECT * FROM mcp_event_subscriptions
+        WHERE active = 1 AND refresh_before > ? AND subscription_id > ?
+        ORDER BY subscription_id ASC
+        LIMIT ?`;
+  checkEqual(
+    'listEventSubscriptionsForScan all',
+    JSON.stringify(await listEventSubscriptionsForScan(db, 2_000, '', 10)),
+    JSON.stringify(rawAll(sqlite, scanSql, [2_000, '', 10])),
+  );
+  checkEqual(
+    'listEventSubscriptionsForScan after id',
+    JSON.stringify(await listEventSubscriptionsForScan(db, 2_000, 'sub_a', 10)),
+    JSON.stringify(rawAll(sqlite, scanSql, [2_000, 'sub_a', 10])),
+  );
+  checkEqual(
+    'listEventSubscriptionsForScan limit',
+    JSON.stringify(await listEventSubscriptionsForScan(db, 2_000, '', 1)),
+    JSON.stringify(rawAll(sqlite, scanSql, [2_000, '', 1])),
+  );
+  checkEqual(
+    'listEventSubscriptionsForScan expired refresh',
+    JSON.stringify(await listEventSubscriptionsForScan(db, 6_000, '', 10)),
+    JSON.stringify(rawAll(sqlite, scanSql, [6_000, '', 10])),
+  );
+
+  const pendingCountSql = `SELECT COUNT(*) AS n FROM mcp_event_deliveries
+        WHERE subscription_id = ? AND status IN ('pending', 'processing')`;
+  for (const [subscriptionId, expected] of [
+    ['sub_a', 2],
+    ['sub_b', 1],
+    ['sub_c', 1],
+    ['sub_missing', 0],
+  ] as const) {
+    checkEqual(
+      `countPendingEventDeliveries ${subscriptionId}`,
+      await countPendingEventDeliveries(db, subscriptionId),
+      rawFirst<{ n: number }>(sqlite, pendingCountSql, [subscriptionId])?.n ?? 0,
+    );
+    checkEqual(`countPendingEventDeliveries expected ${subscriptionId}`, expected, await countPendingEventDeliveries(db, subscriptionId));
+  }
+
+  const earliestSql = `SELECT MIN(event_seq) AS seq FROM mcp_event_deliveries
+        WHERE subscription_id = ? AND status IN ('pending', 'processing')`;
+  for (const subscriptionId of ['sub_a', 'sub_b', 'sub_c', 'sub_missing']) {
+    checkEqual(
+      `earliestPendingEventDeliverySeq ${subscriptionId}`,
+      await earliestPendingEventDeliverySeq(db, subscriptionId),
+      rawFirst<{ seq: number | null }>(sqlite, earliestSql, [subscriptionId])?.seq ?? null,
+    );
+  }
+  checkEqual('earliestPendingEventDeliverySeq value', await earliestPendingEventDeliverySeq(db, 'sub_a'), 1);
 }
 
 function explainChecks(sqlite: Database, db: D1Database): void {
@@ -415,6 +659,158 @@ function explainChecks(sqlite: Database, db: D1Database): void {
         )
         .orderBy(schema.roomMembers.room_id, schema.actors.actor_id),
     },
+    {
+      label: 'getDriveFile',
+      raw: 'SELECT * FROM drive_files WHERE file_id = ?',
+      params: ['df_draft'],
+      query: orm(db)
+        .select()
+        .from(schema.driveFiles)
+        .where(eq(schema.driveFiles.file_id, 'df_draft')),
+    },
+    {
+      label: 'getRoomFile',
+      raw: 'SELECT * FROM room_files WHERE file_id = ?',
+      params: ['rf_file_live'],
+      query: orm(db)
+        .select()
+        .from(schema.roomFiles)
+        .where(eq(schema.roomFiles.file_id, 'rf_file_live')),
+    },
+    {
+      label: 'driveFileQuotaUsage',
+      raw: `SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes,
+                   COALESCE(SUM(CASE WHEN retained = 1 THEN size ELSE 0 END), 0) AS retained
+              FROM drive_files
+             WHERE owner_scope = ? AND state = 'draft'
+               AND (retained = 1 OR expires_at IS NULL OR expires_at > ?)`,
+      params: ['actor:act_human_1', 2_500],
+      query: orm(db)
+        .select({
+          files: sql<number>`count(*)`.as('files'),
+          bytes: sql<number>`coalesce(sum(${schema.driveFiles.size}), 0)`.as('bytes'),
+          retained: sql<number>`coalesce(sum(case when ${schema.driveFiles.retained} = 1 then ${schema.driveFiles.size} else 0 end), 0)`.as(
+            'retained',
+          ),
+        })
+        .from(schema.driveFiles)
+        .where(
+          and(
+            eq(schema.driveFiles.owner_scope, 'actor:act_human_1'),
+            eq(schema.driveFiles.state, 'draft'),
+            or(
+              eq(schema.driveFiles.retained, 1),
+              isNull(schema.driveFiles.expires_at),
+              gt(schema.driveFiles.expires_at, 2_500),
+            ),
+          ),
+        ),
+    },
+    {
+      label: 'roomFileQuotaUsage',
+      raw: `SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes,
+                   COALESCE(SUM(CASE WHEN retained = 1 THEN size ELSE 0 END), 0) AS retained
+              FROM room_files
+             WHERE room_id = ? AND deleted_at IS NULL AND (retained = 1 OR expires_at > ?)`,
+      params: ['room_group_1', 2_500],
+      query: orm(db)
+        .select({
+          files: sql<number>`count(*)`.as('files'),
+          bytes: sql<number>`coalesce(sum(${schema.roomFiles.size}), 0)`.as('bytes'),
+          retained: sql<number>`coalesce(sum(case when ${schema.roomFiles.retained} = 1 then ${schema.roomFiles.size} else 0 end), 0)`.as(
+            'retained',
+          ),
+        })
+        .from(schema.roomFiles)
+        .where(
+          and(
+            eq(schema.roomFiles.room_id, 'room_group_1'),
+            isNull(schema.roomFiles.deleted_at),
+            or(eq(schema.roomFiles.retained, 1), gt(schema.roomFiles.expires_at, 2_500)),
+          ),
+        ),
+    },
+    {
+      label: 'getEventSubscription',
+      raw: 'SELECT * FROM mcp_event_subscriptions WHERE subscription_id = ?',
+      params: ['sub_a'],
+      query: orm(db)
+        .select()
+        .from(schema.mcpEventSubscriptions)
+        .where(eq(schema.mcpEventSubscriptions.subscription_id, 'sub_a')),
+    },
+    {
+      label: 'listEventSubscriptionsForScan',
+      raw: `SELECT * FROM mcp_event_subscriptions
+              WHERE active = 1 AND refresh_before > ? AND subscription_id > ?
+              ORDER BY subscription_id ASC
+              LIMIT ?`,
+      params: [2_000, '', 10],
+      query: orm(db)
+        .select()
+        .from(schema.mcpEventSubscriptions)
+        .where(
+          and(
+            eq(schema.mcpEventSubscriptions.active, 1),
+            gt(schema.mcpEventSubscriptions.refresh_before, 2_000),
+            gt(schema.mcpEventSubscriptions.subscription_id, ''),
+          ),
+        )
+        .orderBy(asc(schema.mcpEventSubscriptions.subscription_id))
+        .limit(10),
+    },
+    {
+      label: 'getEventSubscriptionRefresh',
+      raw: `SELECT active, refresh_before, credential_id, secret_ciphertext, secret_nonce,
+                    previous_secret_ciphertext, previous_secret_nonce, previous_secret_expires_at
+               FROM mcp_event_subscriptions WHERE subscription_id = ?`,
+      params: ['sub_a'],
+      query: orm(db)
+        .select({
+          active: schema.mcpEventSubscriptions.active,
+          refresh_before: schema.mcpEventSubscriptions.refresh_before,
+          credential_id: schema.mcpEventSubscriptions.credential_id,
+          secret_ciphertext: schema.mcpEventSubscriptions.secret_ciphertext,
+          secret_nonce: schema.mcpEventSubscriptions.secret_nonce,
+          previous_secret_ciphertext: schema.mcpEventSubscriptions.previous_secret_ciphertext,
+          previous_secret_nonce: schema.mcpEventSubscriptions.previous_secret_nonce,
+          previous_secret_expires_at: schema.mcpEventSubscriptions.previous_secret_expires_at,
+        })
+        .from(schema.mcpEventSubscriptions)
+        .where(eq(schema.mcpEventSubscriptions.subscription_id, 'sub_a')),
+    },
+    {
+      label: 'countPendingEventDeliveries',
+      raw: `SELECT COUNT(*) AS n FROM mcp_event_deliveries
+              WHERE subscription_id = ? AND status IN ('pending', 'processing')`,
+      params: ['sub_a'],
+      query: orm(db)
+        .select({ n: sql<number>`count(*)`.as('n') })
+        .from(schema.mcpEventDeliveries)
+        .where(
+          and(
+            eq(schema.mcpEventDeliveries.subscription_id, 'sub_a'),
+            inArray(schema.mcpEventDeliveries.status, ['pending', 'processing']),
+          ),
+        ),
+    },
+    {
+      label: 'earliestPendingEventDeliverySeq',
+      raw: `SELECT MIN(event_seq) AS seq FROM mcp_event_deliveries
+              WHERE subscription_id = ? AND status IN ('pending', 'processing')`,
+      params: ['sub_a'],
+      query: orm(db)
+        .select({
+          seq: sql<number | null>`min(${schema.mcpEventDeliveries.event_seq})`.as('seq'),
+        })
+        .from(schema.mcpEventDeliveries)
+        .where(
+          and(
+            eq(schema.mcpEventDeliveries.subscription_id, 'sub_a'),
+            inArray(schema.mcpEventDeliveries.status, ['pending', 'processing']),
+          ),
+        ),
+    },
   ];
 
   for (const item of cases) {
@@ -464,6 +860,23 @@ async function benchmark(sqlite: Database, db: D1Database): Promise<void> {
     if (!credential) return null;
     return getActor(db, credential.actor_id);
   };
+  const rawRoomFile = async (): Promise<unknown> =>
+    rawFirst(sqlite, 'SELECT * FROM room_files WHERE file_id = ?', ['rf_file_live']);
+  const ormRoomFile = async (): Promise<unknown> => getRoomFile(db, 'rf_file_live');
+  const rawSubscription = async (): Promise<unknown> =>
+    rawFirst(sqlite, 'SELECT * FROM mcp_event_subscriptions WHERE subscription_id = ?', [
+      'sub_a',
+    ]);
+  const ormSubscription = async (): Promise<unknown> => getEventSubscription(db, 'sub_a');
+  const rawPendingCount = async (): Promise<unknown> =>
+    rawFirst(
+      sqlite,
+      `SELECT COUNT(*) AS n FROM mcp_event_deliveries
+        WHERE subscription_id = ? AND status IN ('pending', 'processing')`,
+      ['sub_a'],
+    );
+  const ormPendingCount = async (): Promise<unknown> =>
+    countPendingEventDeliveries(db, 'sub_a');
 
   console.log('\nread query benchmark (in-memory, includes drizzle build):');
   console.log(`  raw   ${await bench('actor', rawActor)}`);
@@ -474,6 +887,12 @@ async function benchmark(sqlite: Database, db: D1Database): Promise<void> {
   console.log(`  orm   ${await bench('count', ormCount)}`);
   console.log(`  raw   ${await bench('identity', rawIdentity)}`);
   console.log(`  orm   ${await bench('identity', ormIdentity)}`);
+  console.log(`  raw   ${await bench('room-file', rawRoomFile)}`);
+  console.log(`  orm   ${await bench('room-file', ormRoomFile)}`);
+  console.log(`  raw   ${await bench('subscription', rawSubscription)}`);
+  console.log(`  orm   ${await bench('subscription', ormSubscription)}`);
+  console.log(`  raw   ${await bench('pending-count', rawPendingCount)}`);
+  console.log(`  orm   ${await bench('pending-count', ormPendingCount)}`);
 }
 
 async function main(): Promise<void> {

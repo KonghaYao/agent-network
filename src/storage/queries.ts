@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 
 import { orm, schema, toD1, type D1Queryable } from './drizzle';
 import type {
@@ -6,6 +6,7 @@ import type {
   ArtifactRow,
   DeliveryRow,
   DriveFileRow,
+  EventSubscriptionRow,
   FileReferenceRow,
   MessageRow,
   RoomFileRow,
@@ -18,9 +19,9 @@ export interface D1Like extends D1Queryable {
 }
 
 /**
- * 4C-1 核心只读查询：actors / credentials / rooms / room_members 由 Drizzle 构建 SQL，
- * 仍经 `toD1()` 回到现有 D1 shim 执行。消息、投递、文件等域仍保留手写 SQL，
- * 留给 4C-4/4C-5；guard/FTS/复杂权限 SQL 不进入 Drizzle。
+ * 4C 核心只读查询：actors / credentials / rooms / room_members 与 files/events 的
+ * 简单单表读取由 Drizzle 构建 SQL，仍经 `toD1()` 回到现有 D1 shim 执行。
+ * 消息、复杂 JOIN、历史边界、FTS、guard 与状态机 SQL 继续保留手写。
  */
 
 export async function getActor(db: D1Like, actorId: string): Promise<ActorRow | null> {
@@ -190,18 +191,83 @@ export async function getMessage(db: D1Like, messageId: string): Promise<Message
 
 /** 按 file_id 读取绑定记录；同一 file_id 全局唯一，含墓碑。 */
 export async function getRoomFile(db: D1Like, fileId: string): Promise<RoomFileRow | null> {
-  return db
-    .prepare('SELECT * FROM room_files WHERE file_id = ?')
-    .bind(fileId)
-    .first<RoomFileRow>();
+  const query = orm(db)
+    .select()
+    .from(schema.roomFiles)
+    .where(eq(schema.roomFiles.file_id, fileId));
+  return toD1(db, query).first<RoomFileRow>();
 }
 
 /** 按 file_id 读取应用层上传登记；旧库未登记的文件返回 null。 */
 export async function getDriveFile(db: D1Like, fileId: string): Promise<DriveFileRow | null> {
-  return db
-    .prepare('SELECT * FROM drive_files WHERE file_id = ?')
-    .bind(fileId)
-    .first<DriveFileRow>();
+  const query = orm(db)
+    .select()
+    .from(schema.driveFiles)
+    .where(eq(schema.driveFiles.file_id, fileId));
+  return toD1(db, query).first<DriveFileRow>();
+}
+
+/** 配额只统计仍有效（未过期或已保留）的行；字段顺序与 raw 聚合一致。 */
+export interface FileQuotaUsageRow {
+  files: number;
+  bytes: number;
+  retained: number;
+}
+
+/** 上传者草稿配额占用。 */
+export async function driveFileQuotaUsage(
+  db: D1Like,
+  ownerScope: string,
+  at: number,
+): Promise<FileQuotaUsageRow> {
+  const query = orm(db)
+    .select({
+      files: sql<number>`count(*)`.as('files'),
+      bytes: sql<number>`coalesce(sum(${schema.driveFiles.size}), 0)`.as('bytes'),
+      retained: sql<number>`coalesce(sum(case when ${schema.driveFiles.retained} = 1 then ${schema.driveFiles.size} else 0 end), 0)`.as(
+        'retained',
+      ),
+    })
+    .from(schema.driveFiles)
+    .where(
+      and(
+        eq(schema.driveFiles.owner_scope, ownerScope),
+        eq(schema.driveFiles.state, 'draft'),
+        or(
+          eq(schema.driveFiles.retained, 1),
+          isNull(schema.driveFiles.expires_at),
+          gt(schema.driveFiles.expires_at, at),
+        ),
+      ),
+    );
+  const row = await toD1(db, query).first<FileQuotaUsageRow>();
+  return row ?? { files: 0, bytes: 0, retained: 0 };
+}
+
+/** 房间附件配额占用。 */
+export async function roomFileQuotaUsage(
+  db: D1Like,
+  roomId: string,
+  at: number,
+): Promise<FileQuotaUsageRow> {
+  const query = orm(db)
+    .select({
+      files: sql<number>`count(*)`.as('files'),
+      bytes: sql<number>`coalesce(sum(${schema.roomFiles.size}), 0)`.as('bytes'),
+      retained: sql<number>`coalesce(sum(case when ${schema.roomFiles.retained} = 1 then ${schema.roomFiles.size} else 0 end), 0)`.as(
+        'retained',
+      ),
+    })
+    .from(schema.roomFiles)
+    .where(
+      and(
+        eq(schema.roomFiles.room_id, roomId),
+        isNull(schema.roomFiles.deleted_at),
+        or(eq(schema.roomFiles.retained, 1), gt(schema.roomFiles.expires_at, at)),
+      ),
+    );
+  const row = await toD1(db, query).first<FileQuotaUsageRow>();
+  return row ?? { files: 0, bytes: 0, retained: 0 };
 }
 
 /** 按 artifact_id 读取成果版本。 */
@@ -325,4 +391,108 @@ export async function getEventsMinSeq(
     return actor?.inbox_min_seq ?? 0;
   }
   return 0;
+}
+
+/** 按订阅 ID 读取完整订阅；缺失返回 null。 */
+export async function getEventSubscription(
+  db: D1Like,
+  subscriptionId: string,
+): Promise<EventSubscriptionRow | null> {
+  const query = orm(db)
+    .select()
+    .from(schema.mcpEventSubscriptions)
+    .where(eq(schema.mcpEventSubscriptions.subscription_id, subscriptionId));
+  return toD1(db, query).first<EventSubscriptionRow>();
+}
+
+/** 扫描器按稳定 ID 分页读取活跃订阅；调用方负责截断探针行。 */
+export async function listEventSubscriptionsForScan(
+  db: D1Like,
+  now: number,
+  afterId: string,
+  limit: number,
+): Promise<EventSubscriptionRow[]> {
+  const query = orm(db)
+    .select()
+    .from(schema.mcpEventSubscriptions)
+    .where(
+      and(
+        eq(schema.mcpEventSubscriptions.active, 1),
+        gt(schema.mcpEventSubscriptions.refresh_before, now),
+        gt(schema.mcpEventSubscriptions.subscription_id, afterId),
+      ),
+    )
+    .orderBy(asc(schema.mcpEventSubscriptions.subscription_id))
+    .limit(limit);
+  const result = await toD1(db, query).all<EventSubscriptionRow>();
+  return result.results;
+}
+
+/** 投递前复核订阅所需字段；字段顺序与 raw 查询保持一致。 */
+export interface EventSubscriptionRefreshRow {
+  active: number;
+  refresh_before: number;
+  credential_id: string;
+  secret_ciphertext: string;
+  secret_nonce: string;
+  previous_secret_ciphertext: string | null;
+  previous_secret_nonce: string | null;
+  previous_secret_expires_at: number | null;
+}
+
+/** 投递前复核订阅状态、密钥轮换与凭据。 */
+export async function getEventSubscriptionRefresh(
+  db: D1Like,
+  subscriptionId: string,
+): Promise<EventSubscriptionRefreshRow | null> {
+  const query = orm(db)
+    .select({
+      active: schema.mcpEventSubscriptions.active,
+      refresh_before: schema.mcpEventSubscriptions.refresh_before,
+      credential_id: schema.mcpEventSubscriptions.credential_id,
+      secret_ciphertext: schema.mcpEventSubscriptions.secret_ciphertext,
+      secret_nonce: schema.mcpEventSubscriptions.secret_nonce,
+      previous_secret_ciphertext: schema.mcpEventSubscriptions.previous_secret_ciphertext,
+      previous_secret_nonce: schema.mcpEventSubscriptions.previous_secret_nonce,
+      previous_secret_expires_at: schema.mcpEventSubscriptions.previous_secret_expires_at,
+    })
+    .from(schema.mcpEventSubscriptions)
+    .where(eq(schema.mcpEventSubscriptions.subscription_id, subscriptionId));
+  return toD1(db, query).first<EventSubscriptionRefreshRow>();
+}
+
+/** 订阅队列中待处理/处理中的投递数。 */
+export async function countPendingEventDeliveries(
+  db: D1Like,
+  subscriptionId: string,
+): Promise<number> {
+  const query = orm(db)
+    .select({ n: sql<number>`count(*)`.as('n') })
+    .from(schema.mcpEventDeliveries)
+    .where(
+      and(
+        eq(schema.mcpEventDeliveries.subscription_id, subscriptionId),
+        inArray(schema.mcpEventDeliveries.status, ['pending', 'processing']),
+      ),
+    );
+  const row = await toD1(db, query).first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/** 订阅队首的待处理/处理中事件序号；没有积压返回 null。 */
+export async function earliestPendingEventDeliverySeq(
+  db: D1Like,
+  subscriptionId: string,
+): Promise<number | null> {
+  const query = orm(db)
+    .select({ seq: sql<number | null>`min(${schema.mcpEventDeliveries.event_seq})`.as('seq') })
+    .from(schema.mcpEventDeliveries)
+    .where(
+      and(
+        eq(schema.mcpEventDeliveries.subscription_id, subscriptionId),
+        inArray(schema.mcpEventDeliveries.status, ['pending', 'processing']),
+      ),
+    );
+  const row = await toD1(db, query).first<{ seq: number | null }>();
+  return row?.seq ?? null;
 }
