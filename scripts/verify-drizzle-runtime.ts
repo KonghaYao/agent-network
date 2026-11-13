@@ -1,7 +1,7 @@
 /**
  * 4C-1/4C-4 Drizzle 只读查询运行时对比。
  *
- * 对 `src/storage/queries.ts` 中已迁移到 Drizzle 的核心读查询，逐条执行：
+ * 对 `src/storage/queries.ts` 中已迁移到 Drizzle 的读查询（core + 4C-6 memory），逐条执行：
  * 1. 手写 SQL（迁移前的原语句）与 Drizzle 构建结果逐行比较，包含字段顺序；
  * 2. 用生产实际执行的 SQL 做 `EXPLAIN QUERY PLAN`，与手写 SQL 的计划比较
  *    （4C-4 的手写 SQL 使用 `d`/`m`/`a` 别名，只归一化 FROM/JOIN 表标识）；
@@ -32,6 +32,10 @@ import {
   countPendingEventDeliveries,
   driveFileQuotaUsage,
   earliestPendingEventDeliverySeq,
+  countActiveMemoryHostBindings,
+  getActiveMemoryHostBindingBySession,
+  getActiveMemorySourceByKey,
+  getActiveMemorySpace,
   getActor,
   getActorBySession,
   getActorManagementByIds,
@@ -81,6 +85,44 @@ import {
   listMessageMentions,
   listEventSubscriptionsForScan,
   roomFileQuotaUsage,
+  getCurrentCuratedRevision,
+  getLatestActiveMemoryHostBinding,
+  getLatestMemoryReceiptForManifest,
+  getLatestMemorySource,
+  getMemoryCatchupPlan,
+  getMemoryCatchupPlanByRequestKey,
+  getMemoryContext,
+  getMemoryExperience,
+  getMemoryExperienceByDedupe,
+  getMemoryHostBinding,
+  getMemoryInstance,
+  getMemoryManifest,
+  getMemoryManifestByInvocation,
+  getMemoryRecallRequest,
+  getMemoryRecallRequestByKey,
+  getMemoryReceipt,
+  getMemoryReceiptByIdempotencyKey,
+  getMemoryReceiptByInvocation,
+  getMemoryRepresentation,
+  getMemoryRepresentationSourceId,
+  getMemorySelection,
+  getMemorySourceRevision,
+  getMemorySpaceById,
+  hasMemoryGatewayProof,
+  hasMemoryReceiptForManifest,
+  isMemoryTargetTombstoned,
+  isMemoryTombstonedBySourceKey,
+  listActiveMemoryHostBindingIds,
+  listCurrentCuratedMemories,
+  listMemoryCatchupItems,
+  listMemoryContextItems,
+  listMemoryContextSummaries,
+  listMemoryCoverageRanges,
+  listMemoryManifestItems,
+  listMemoryRecallCandidates,
+  listMemoryRepresentationDependencies,
+  listMemoryRepresentationDependencyLinks,
+  memorySpaceExists,
 } from '../src/storage/queries';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
@@ -543,6 +585,253 @@ function seed(sqlite: Database): void {
   delivery.run('evd_a3', 'sub_a', 3, 'evt_a3', '{"n":3}', 'delivered', 1, 1_100, null, null, 200, null, 100, 1_200);
   delivery.run('evd_b1', 'sub_b', 1, 'evt_b1', '{"n":1}', 'pending', 0, 1_100, null, null, null, null, 100, null);
   delivery.run('evd_c1', 'sub_c', 1, 'evt_c1', '{"n":1}', 'pending', 0, 1_100, null, null, null, null, 100, null);
+  seedMemory(sqlite);
+}
+
+function seedMemory(sqlite: Database): void {
+  sqlite
+    .prepare(
+      `INSERT INTO memory_instances (instance_id, capture_default, created_at, updated_at)
+       VALUES ('mni_test', 'enabled', 1, 1)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_spaces
+         (space_id, instance_id, agent_actor_id, owner_actor_id, ownership_kind,
+          ownership_epoch, backend_binding_epoch, management_binding_id, capture, active,
+          created_at, updated_at)
+       VALUES ('msp_test', 'mni_test', 'act_agent_1', 'act_human_1', 'managed', 2, 1,
+               'mg_test', 'pending', 1, 10, 11)`,
+    )
+    .run();
+  const source = sqlite.prepare(
+    `INSERT INTO memory_sources
+       (source_id, instance_id, source_key, source_kind, business_ref_kind, business_ref_json,
+        origin_room_id, origin_member_generation, origin_policy_revision, origin_joined_seq,
+        origin_joined_at, origin_archive_head_seq, origin_seq, origin_created_at, author_actor_id,
+        state, revision, content_text, content_sha256, content_bytes, superseded_by_source_id,
+        superseded_by_revision, retracted_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  source.run(
+    'src_1', 'mni_test', 'message:msg_mem_1', 'message', 'message',
+    '{"message_id":"msg_mem_1"}', 'room_group_1', 2, 2, 2, 215, null, 6, 500, 'act_agent_1',
+    'superseded', 1, 'old', 'sha_src_old', 3, 'src_1b', 2, null, 20, 21,
+  );
+  source.run(
+    'src_1b', 'mni_test', 'message:msg_mem_1', 'message', 'message',
+    '{"message_id":"msg_mem_1"}', 'room_group_1', 2, 2, 2, 215, null, 6, 500, 'act_agent_1',
+    'active', 2, 'hello', 'sha_src_1', 5, null, null, null, 22, 23,
+  );
+  source.run(
+    'src_manual', 'mni_test', 'manual:note_1', 'manual', 'manual',
+    '{"note":"note_1"}', null, 0, 0, 0, 0, null, null, 600, 'act_agent_1',
+    'active', 1, 'note', 'sha_manual', 4, null, null, null, 24, 25,
+  );
+  const representation = sqlite.prepare(
+    `INSERT INTO memory_representations
+       (representation_id, instance_id, kind, source_id, source_revision, summary_id,
+        summary_revision, source_context_id, producer_kind, lineage, partition_id,
+        partition_generation, partition_policy_revision, range_start, range_end,
+        text, text_bytes, text_sha256, verbatim, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  representation.run(
+    'rep_raw', 'mni_test', 'raw_full', 'src_1b', 2, null, null, null, null, null, null,
+    null, null, 0, 5, 'hello', 5, 'sha_text', 1, 30,
+  );
+  representation.run(
+    'rep_summary', 'mni_test', 'summary', null, null, 'sum_1', 1, null, 'server_template',
+    'run_bound', 'part_1', 1, 2, null, null, 'summary text', 12, 'sha_summary', 0, 31,
+  );
+  sqlite
+    .prepare(
+      `INSERT INTO memory_representation_dependencies
+         (representation_id, dependency_index, source_id, source_revision,
+          depends_on_representation_id, range_start, range_end)
+       VALUES ('rep_summary', 0, 'src_1b', 2, 'rep_raw', 0, 5)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_experiences
+         (experience_id, dedupe_key, space_id, ownership_epoch, agent_actor_id, origin_room_id,
+          origin_member_generation, origin_kind, producer_kind, source_id, source_revision,
+          representation_id, representation_kind, range_start, range_end, text_sha256,
+          receipt_id, evidence, capture, available, created_at, updated_at)
+       VALUES ('exp_1', 'dedupe_exp_1', 'msp_test', 2, 'act_agent_1', 'room_group_1', 2,
+               'experienced', null, 'src_1b', 2, 'rep_raw', 'raw_full', 0, 5, 'sha_text',
+               'rcp_1', 'host_reported_submitted', 'extracted', 1, 40, 41)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_experiences
+         (experience_id, dedupe_key, space_id, ownership_epoch, agent_actor_id, origin_room_id,
+          origin_member_generation, origin_kind, producer_kind, source_id, source_revision,
+          representation_id, representation_kind, range_start, range_end, text_sha256,
+          receipt_id, evidence, capture, available, created_at, updated_at)
+       VALUES ('exp_2', 'dedupe_exp_2', 'msp_test', 2, 'act_agent_1', null, 0,
+               'authored', 'agent_text', null, null, 'rep_summary', 'summary', null, null,
+               'sha_summary', null, null, 'none', 1, 42, 43)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_coverage_ranges
+         (coverage_id, dedupe_key, space_id, ownership_epoch, agent_actor_id, origin_room_id,
+          origin_member_generation, source_id, source_revision, range_start, range_end,
+          text_sha256, experience_id, created_at)
+       VALUES ('cov_1', 'dedupe_cov_1', 'msp_test', 2, 'act_agent_1', 'room_group_1', 2,
+               'src_1b', 2, 0, 5, 'sha_text', 'exp_1', 44)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_host_bindings
+         (binding_id, space_id, ownership_epoch, agent_actor_id, credential_id, generation,
+          session_incarnation, declared_capabilities_json, trust_level, state, lease_until,
+          created_at, updated_at, closed_at)
+       VALUES ('hb_1', 'msp_test', 2, 'act_agent_1', 'cred_a1', 1, 'sess_host_1',
+               '["lookup"]', 'adapted_host', 'active', 99999, 50, 51, null)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_contexts
+         (context_id, space_id, ownership_epoch, agent_actor_id, recall_id, kind, body,
+          body_sha256, body_bytes, target_json, versions_json, policy_version, status,
+          created_at, expires_at, updated_at)
+       VALUES ('ctx_1', 'msp_test', 2, 'act_agent_1', 'rec_1', 'lookup', 'context body',
+               'sha_ctx_1', 12, '{"audience":"agent"}', '{"v":1}', 1, 'ready', 60, 99999, 61)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_contexts
+         (context_id, space_id, ownership_epoch, agent_actor_id, recall_id, kind, body,
+          body_sha256, body_bytes, target_json, versions_json, policy_version, status,
+          created_at, expires_at, updated_at)
+       VALUES ('ctx_2', 'msp_test', 2, 'act_agent_1', null, 'bound', 'bound body',
+               'sha_ctx_2', 10, '{"audience":"agent"}', '{"v":1}', 1, 'ready', 61, null, 62)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_context_items
+         (context_id, item_index, experience_id, representation_id, source_dependencies_json,
+          evidence, origin_scope_json)
+       VALUES ('ctx_1', 0, 'exp_1', 'rep_raw', '[]', 'host_reported_submitted',
+               '{"room_id":"room_group_1"}')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_manifests
+         (manifest_id, space_id, ownership_epoch, agent_actor_id, host_binding_id,
+          host_generation, session_incarnation, run_id, input_id, input_revision, invocation_id,
+          manifest_sha256, payload_sha256, target_json, created_at)
+       VALUES ('mnf_1', 'msp_test', 2, 'act_agent_1', 'hb_1', 1, 'sess_host_1', 'run_1',
+               'input_1', 1, 'inv_1', 'sha_manifest', 'sha_payload', '{"audience":"agent"}', 70)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_manifest_items
+         (manifest_id, item_index, selection_id, representation_id, origin_scope_json, text_sha256)
+       VALUES ('mnf_1', 0, 'sel_1', 'rep_raw', '{"room_id":"room_group_1"}', 'sha_text')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_selections
+         (selection_id, space_id, ownership_epoch, agent_actor_id, recall_id, representation_id,
+          origin_scope_json, target_scope_json, versions_json, consumption, state, issued_at,
+          expires_at)
+       VALUES ('sel_1', 'msp_test', 2, 'act_agent_1', 'rec_1', 'rep_raw',
+               '{"room_id":"room_group_1"}', '{"audience":"agent"}', '{"v":1}',
+               'not_consumed', 'available', 80, 99999)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_receipts
+         (receipt_id, kind, space_id, ownership_epoch, agent_actor_id, host_binding_id,
+          host_generation, session_incarnation, run_id, input_id, input_revision, invocation_id,
+          manifest_id, manifest_sha256, payload_sha256, context_id, context_sha256,
+          target_scope_json, origin_scopes_json, evidence, proof_id, idempotency_key,
+          disposition, reason, recorded_at, created_at)
+       VALUES ('rcp_1', 'input_exposure', 'msp_test', 2, 'act_agent_1', 'hb_1', 1,
+               'sess_host_1', 'run_1', 'input_1', 1, 'inv_1', 'mnf_1', 'sha_manifest',
+               'sha_payload', null, null, '{"audience":"agent"}', '[]',
+               'host_reported_submitted', 'proof_1', 'idem_rcp_1', 'applied', null, 90, 91)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_experience_proofs
+         (experience_id, proof_id, receipt_id, evidence, invocation_id, manifest_id, created_at)
+       VALUES ('exp_1', 'proof_1', 'rcp_1', 'gateway_observed_submitted', 'inv_1', 'mnf_1', 92)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_curated
+         (curated_id, revision, space_id, ownership_epoch, origin, title, content,
+          content_sha256, current, created_by, created_at, updated_at)
+       VALUES ('cur_1', 1, 'msp_test', 2, 'manual', 'Title', 'Curated body', 'sha_cur_1', 0,
+               'act_human_1', 100, 101)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_curated
+         (curated_id, revision, space_id, ownership_epoch, origin, title, content,
+          content_sha256, current, created_by, created_at, updated_at)
+       VALUES ('cur_1', 2, 'msp_test', 2, 'manual', 'Title', 'Curated body v2', 'sha_cur_2', 1,
+               'act_human_1', 102, 103)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_catchup_plans
+         (plan_id, space_id, ownership_epoch, agent_actor_id, room_id, member_generation,
+          upper_bound, query, status, budget_json, scan_cursor_json, created_at, updated_at,
+          expires_at, request_key, request_sha256, policy_revision, member_seq, joined_seq,
+          snapshot_sha256)
+       VALUES ('plan_1', 'msp_test', 2, 'act_agent_1', 'room_group_1', 2, 9, 'query',
+               'ready', '{}', null, 110, 111, null, 'req_catchup_1', 'sha_req', 2, 2, 2,
+               'sha_snapshot')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_catchup_items
+         (plan_id, item_index, message_id, created_seq, selection_state, reason)
+       VALUES ('plan_1', 0, 'msg_mem_1', 6, 'selected', null),
+              ('plan_1', 1, 'msg_mem_2', 7, 'missing', 'not_visible')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_recall_requests
+         (recall_id, space_id, ownership_epoch, agent_actor_id, request_key, mode, dispatch,
+          status, target_json, plan_json, budget_json, warmup_only, result_json, created_at,
+          updated_at, expires_at)
+       VALUES ('rec_1', 'msp_test', 2, 'act_agent_1', 'req_recall_1', 'lookup', 'explicit',
+               'pending', '{"audience":"agent"}', null, '{}', 0, null, 120, 121, null)`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `INSERT INTO memory_tombstones
+         (tombstone_id, instance_id, target_kind, target_id, source_key, reason, command_id,
+          created_at)
+       VALUES ('tomb_1', 'mni_test', 'source_key', 'src_old', 'tomb:key', 'forget', null, 130),
+              ('tomb_2', 'mni_test', 'source', 'src_old', null, 'forget', null, 131)`,
+    )
+    .run();
 }
 
 function rawFirst<T>(sqlite: Database, sql: string, params: unknown[]): T | null {
@@ -706,6 +995,524 @@ function deliveryStateRows(rows: {
       .sort((left, right) => `${left[0]}:${left[1]}`.localeCompare(`${right[0]}:${right[1]}`)),
   );
 }
+
+async function memoryRowParityChecks(sqlite: Database, db: D1Database): Promise<void> {
+  checkEqual(
+    'getMemoryInstance',
+    JSON.stringify(await getMemoryInstance(db)),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT instance_id, capture_default FROM memory_instances LIMIT 1', []),
+    ),
+  );
+  checkEqual(
+    'getActiveMemorySpace',
+    JSON.stringify(await getActiveMemorySpace(db, 'act_agent_1')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM memory_spaces WHERE agent_actor_id = ? AND active = 1', [
+        'act_agent_1',
+      ]),
+    ),
+  );
+  checkEqual(
+    'getActiveMemorySpace missing',
+    await getActiveMemorySpace(db, 'act_agent_3'),
+    null,
+  );
+  checkEqual(
+    'getMemorySpaceById',
+    JSON.stringify(await getMemorySpaceById(db, 'msp_test')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM memory_spaces WHERE space_id = ?', ['msp_test'])),
+  );
+  checkEqual('memorySpaceExists true', await memorySpaceExists(db, 'msp_test'), true);
+  checkEqual('memorySpaceExists false', await memorySpaceExists(db, 'msp_missing'), false);
+
+  checkEqual(
+    'isMemoryTombstonedBySourceKey true',
+    await isMemoryTombstonedBySourceKey(db, 'tomb:key'),
+    true,
+  );
+  checkEqual(
+    'isMemoryTombstonedBySourceKey false',
+    await isMemoryTombstonedBySourceKey(db, 'missing'),
+    false,
+  );
+  checkEqual(
+    'isMemoryTargetTombstoned true',
+    await isMemoryTargetTombstoned(db, 'source', 'src_old'),
+    true,
+  );
+  checkEqual(
+    'isMemoryTargetTombstoned false',
+    await isMemoryTargetTombstoned(db, 'source', 'missing'),
+    false,
+  );
+
+  checkEqual(
+    'getMemorySourceRevision',
+    JSON.stringify(await getMemorySourceRevision(db, 'src_1', 1)),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM memory_sources WHERE source_id = ? AND revision = ?', [
+        'src_1',
+        1,
+      ]),
+    ),
+  );
+  checkEqual(
+    'getLatestMemorySource',
+    JSON.stringify(await getLatestMemorySource(db, 'src_1')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM memory_sources WHERE source_id = ? ORDER BY revision DESC LIMIT 1', [
+        'src_1',
+      ]),
+    ),
+  );
+  checkEqual(
+    'getActiveMemorySourceByKey',
+    JSON.stringify(await getActiveMemorySourceByKey(db, 'mni_test', 'message:msg_mem_1')),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        "SELECT * FROM memory_sources WHERE instance_id = ? AND source_key = ? AND state = 'active' LIMIT 1",
+        ['mni_test', 'message:msg_mem_1'],
+      ),
+    ),
+  );
+
+  checkEqual(
+    'getMemoryRepresentation',
+    JSON.stringify(await getMemoryRepresentation(db, 'rep_raw')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM memory_representations WHERE representation_id = ?', [
+        'rep_raw',
+      ]),
+    ),
+  );
+  checkEqual(
+    'getMemoryRepresentationSourceId',
+    JSON.stringify(await getMemoryRepresentationSourceId(db, 'rep_raw')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT source_id FROM memory_representations WHERE representation_id = ?', [
+        'rep_raw',
+      ]),
+    ),
+  );
+  checkEqual(
+    'listMemoryRepresentationDependencyLinks',
+    JSON.stringify(await listMemoryRepresentationDependencyLinks(db, 'rep_summary')),
+    JSON.stringify(
+      rawAll(
+        sqlite,
+        'SELECT source_id, depends_on_representation_id FROM memory_representation_dependencies WHERE representation_id = ?',
+        ['rep_summary'],
+      ),
+    ),
+  );
+  checkEqual(
+    'listMemoryRepresentationDependencies',
+    JSON.stringify(await listMemoryRepresentationDependencies(db, 'rep_summary')),
+    JSON.stringify(
+      rawAll(
+        sqlite,
+        'SELECT * FROM memory_representation_dependencies WHERE representation_id = ? ORDER BY dependency_index',
+        ['rep_summary'],
+      ),
+    ),
+  );
+
+  checkEqual(
+    'getMemoryExperience',
+    JSON.stringify(await getMemoryExperience(db, 'exp_1')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM memory_experiences WHERE experience_id = ?', [
+      'exp_1',
+    ])),
+  );
+  checkEqual(
+    'getMemoryExperienceByDedupe',
+    JSON.stringify(await getMemoryExperienceByDedupe(db, 'dedupe_exp_1')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT experience_id FROM memory_experiences WHERE dedupe_key = ?', [
+        'dedupe_exp_1',
+      ]),
+    ),
+  );
+
+  checkEqual(
+    'getMemoryContext',
+    JSON.stringify(await getMemoryContext(db, 'ctx_1')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM memory_contexts WHERE context_id = ?', ['ctx_1'])),
+  );
+  checkEqual(
+    'listMemoryContextItems',
+    JSON.stringify(await listMemoryContextItems(db, 'ctx_1')),
+    JSON.stringify(
+      rawAll(
+        sqlite,
+        'SELECT representation_id, evidence, origin_scope_json FROM memory_context_items WHERE context_id = ? ORDER BY item_index',
+        ['ctx_1'],
+      ),
+    ),
+  );
+  const contextSummaryRaw = (kind: string | null, cursor: { seq: number; key: string } | null): unknown[] => {
+    const conditions = ['space_id = ?', 'ownership_epoch = ?', 'agent_actor_id = ?'];
+    const params: unknown[] = ['msp_test', 2, 'act_agent_1'];
+    if (kind) {
+      conditions.push('kind = ?');
+      params.push(kind);
+    }
+    if (cursor) {
+      conditions.push('(created_at < ? OR (created_at = ? AND context_id < ?))');
+      params.push(cursor.seq, cursor.seq, cursor.key);
+    }
+    return rawAll(
+      sqlite,
+      `SELECT context_id, recall_id, kind, body_sha256, body_bytes, status, created_at, expires_at
+         FROM memory_contexts
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY created_at DESC, context_id DESC
+        LIMIT ?`,
+      [...params, 3],
+    );
+  };
+  checkEqual(
+    'listMemoryContextSummaries all',
+    JSON.stringify(
+      await listMemoryContextSummaries(db, {
+        spaceId: 'msp_test',
+        ownershipEpoch: 2,
+        agentId: 'act_agent_1',
+        limit: 3,
+      }),
+    ),
+    JSON.stringify(contextSummaryRaw(null, null)),
+  );
+  checkEqual(
+    'listMemoryContextSummaries kind',
+    JSON.stringify(
+      await listMemoryContextSummaries(db, {
+        spaceId: 'msp_test',
+        ownershipEpoch: 2,
+        agentId: 'act_agent_1',
+        kind: 'lookup',
+        limit: 3,
+      }),
+    ),
+    JSON.stringify(contextSummaryRaw('lookup', null)),
+  );
+  checkEqual(
+    'listMemoryContextSummaries cursor',
+    JSON.stringify(
+      await listMemoryContextSummaries(db, {
+        spaceId: 'msp_test',
+        ownershipEpoch: 2,
+        agentId: 'act_agent_1',
+        cursor: { seq: 61, key: 'ctx_2' },
+        limit: 3,
+      }),
+    ),
+    JSON.stringify(contextSummaryRaw(null, { seq: 61, key: 'ctx_2' })),
+  );
+
+  checkEqual(
+    'getMemoryManifest',
+    JSON.stringify(await getMemoryManifest(db, 'mnf_1')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM memory_manifests WHERE manifest_id = ?', ['mnf_1'])),
+  );
+  checkEqual(
+    'getMemoryManifestByInvocation',
+    JSON.stringify(
+      await getMemoryManifestByInvocation(db, {
+        spaceId: 'msp_test',
+        ownershipEpoch: 2,
+        agentId: 'act_agent_1',
+        hostBindingId: 'hb_1',
+        invocationId: 'inv_1',
+      }),
+    ),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        `SELECT * FROM memory_manifests
+          WHERE space_id = ? AND ownership_epoch = ? AND agent_actor_id = ?
+            AND host_binding_id = ? AND invocation_id = ?`,
+        ['msp_test', 2, 'act_agent_1', 'hb_1', 'inv_1'],
+      ),
+    ),
+  );
+  checkEqual(
+    'listMemoryManifestItems',
+    JSON.stringify(await listMemoryManifestItems(db, 'mnf_1')),
+    JSON.stringify(
+      rawAll(sqlite, 'SELECT * FROM memory_manifest_items WHERE manifest_id = ? ORDER BY item_index', [
+        'mnf_1',
+      ]),
+    ),
+  );
+  checkEqual(
+    'getMemorySelection',
+    JSON.stringify(await getMemorySelection(db, 'sel_1')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM memory_selections WHERE selection_id = ?', [
+      'sel_1',
+    ])),
+  );
+
+  checkEqual(
+    'getMemoryReceiptByIdempotencyKey',
+    JSON.stringify(await getMemoryReceiptByIdempotencyKey(db, 'idem_rcp_1')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM memory_receipts WHERE idempotency_key = ?', ['idem_rcp_1']),
+    ),
+  );
+  checkEqual(
+    'getMemoryReceipt',
+    JSON.stringify(await getMemoryReceipt(db, 'rcp_1')),
+    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM memory_receipts WHERE receipt_id = ?', ['rcp_1'])),
+  );
+  checkEqual(
+    'getMemoryReceiptByInvocation',
+    JSON.stringify(
+      await getMemoryReceiptByInvocation(db, {
+        kind: 'input_exposure',
+        spaceId: 'msp_test',
+        ownershipEpoch: 2,
+        agentId: 'act_agent_1',
+        hostBindingId: 'hb_1',
+        invocationId: 'inv_1',
+      }),
+    ),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        `SELECT * FROM memory_receipts
+          WHERE kind = 'input_exposure' AND space_id = ? AND ownership_epoch = ?
+            AND agent_actor_id = ? AND host_binding_id = ? AND invocation_id = ?`,
+        ['msp_test', 2, 'act_agent_1', 'hb_1', 'inv_1'],
+      ),
+    ),
+  );
+  checkEqual('hasMemoryReceiptForManifest', await hasMemoryReceiptForManifest(db, 'mnf_1'), true);
+  checkEqual(
+    'hasMemoryReceiptForManifest missing',
+    await hasMemoryReceiptForManifest(db, 'mnf_missing'),
+    false,
+  );
+  checkEqual(
+    'getLatestMemoryReceiptForManifest',
+    JSON.stringify(await getLatestMemoryReceiptForManifest(db, 'mnf_1')),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        `SELECT * FROM memory_receipts
+          WHERE kind = 'input_exposure' AND manifest_id = ?
+          ORDER BY recorded_at DESC LIMIT 1`,
+        ['mnf_1'],
+      ),
+    ),
+  );
+  checkEqual('hasMemoryGatewayProof', await hasMemoryGatewayProof(db, 'mnf_1'), true);
+  checkEqual('hasMemoryGatewayProof missing', await hasMemoryGatewayProof(db, 'mnf_missing'), false);
+
+  checkEqual(
+    'getMemoryHostBinding',
+    JSON.stringify(await getMemoryHostBinding(db, 'hb_1')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM memory_host_bindings WHERE binding_id = ?', ['hb_1']),
+    ),
+  );
+  checkEqual(
+    'getActiveMemoryHostBindingBySession',
+    JSON.stringify(await getActiveMemoryHostBindingBySession(db, 'msp_test', 'sess_host_1')),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        "SELECT * FROM memory_host_bindings WHERE space_id = ? AND session_incarnation = ? AND state = 'active'",
+        ['msp_test', 'sess_host_1'],
+      ),
+    ),
+  );
+  checkEqual(
+    'getLatestActiveMemoryHostBinding',
+    JSON.stringify(await getLatestActiveMemoryHostBinding(db, 'msp_test', 'act_agent_1')),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        `SELECT * FROM memory_host_bindings
+          WHERE space_id = ? AND agent_actor_id = ? AND state = 'active'
+          ORDER BY created_at DESC LIMIT 1`,
+        ['msp_test', 'act_agent_1'],
+      ),
+    ),
+  );
+  checkEqual(
+    'listActiveMemoryHostBindingIds',
+    JSON.stringify(await listActiveMemoryHostBindingIds(db, 'act_agent_1')),
+    JSON.stringify(
+      rawAll(
+        sqlite,
+        "SELECT binding_id FROM memory_host_bindings WHERE agent_actor_id = ? AND state = 'active'",
+        ['act_agent_1'],
+      ),
+    ),
+  );
+  checkEqual(
+    'countActiveMemoryHostBindings',
+    await countActiveMemoryHostBindings(db, 'msp_test'),
+    rawFirst<{ n: number }>(
+      sqlite,
+      "SELECT COUNT(*) AS n FROM memory_host_bindings WHERE space_id = ? AND state = 'active'",
+      ['msp_test'],
+    )?.n ?? 0,
+  );
+
+  checkEqual(
+    'getCurrentCuratedRevision',
+    JSON.stringify(await getCurrentCuratedRevision(db, 'cur_1')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT revision FROM memory_curated WHERE curated_id = ? AND current = 1', [
+        'cur_1',
+      ]),
+    ),
+  );
+  const curatedRaw = (limit: number | null): unknown[] => {
+    const sql = `SELECT curated_id, revision, title, content, content_sha256, origin, created_at, updated_at
+                   FROM memory_curated
+                  WHERE space_id = ? AND ownership_epoch = ? AND current = 1
+                  ORDER BY updated_at DESC${limit === null ? '' : ', curated_id'}
+                  ${limit === null ? '' : 'LIMIT ?'}`;
+    return rawAll(sqlite, sql, limit === null ? ['msp_test', 2] : ['msp_test', 2, limit]);
+  };
+  checkEqual(
+    'listCurrentCuratedMemories',
+    JSON.stringify(await listCurrentCuratedMemories(db, 'msp_test', 2)),
+    JSON.stringify(curatedRaw(null)),
+  );
+  checkEqual(
+    'listCurrentCuratedMemories limit',
+    JSON.stringify(await listCurrentCuratedMemories(db, 'msp_test', 2, 1)),
+    JSON.stringify(curatedRaw(1)),
+  );
+
+  checkEqual(
+    'getMemoryCatchupPlan',
+    JSON.stringify(await getMemoryCatchupPlan(db, 'plan_1')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM memory_catchup_plans WHERE plan_id = ?', ['plan_1']),
+    ),
+  );
+  checkEqual(
+    'getMemoryCatchupPlanByRequestKey',
+    JSON.stringify(await getMemoryCatchupPlanByRequestKey(db, 'msp_test', 'act_agent_1', 'req_catchup_1')),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        'SELECT * FROM memory_catchup_plans WHERE space_id = ? AND agent_actor_id = ? AND request_key = ?',
+        ['msp_test', 'act_agent_1', 'req_catchup_1'],
+      ),
+    ),
+  );
+  checkEqual(
+    'listMemoryCatchupItems',
+    JSON.stringify(await listMemoryCatchupItems(db, 'plan_1')),
+    JSON.stringify(
+      rawAll(sqlite, 'SELECT * FROM memory_catchup_items WHERE plan_id = ? ORDER BY item_index', [
+        'plan_1',
+      ]),
+    ),
+  );
+
+  checkEqual(
+    'getMemoryRecallRequest',
+    JSON.stringify(await getMemoryRecallRequest(db, 'rec_1')),
+    JSON.stringify(
+      rawFirst(sqlite, 'SELECT * FROM memory_recall_requests WHERE recall_id = ?', ['rec_1']),
+    ),
+  );
+  checkEqual(
+    'getMemoryRecallRequestByKey',
+    JSON.stringify(await getMemoryRecallRequestByKey(db, 'msp_test', 'req_recall_1')),
+    JSON.stringify(
+      rawFirst(
+        sqlite,
+        'SELECT * FROM memory_recall_requests WHERE space_id = ? AND request_key = ?',
+        ['msp_test', 'req_recall_1'],
+      ),
+    ),
+  );
+  checkEqual(
+    'listMemoryRecallCandidates',
+    JSON.stringify(
+      await listMemoryRecallCandidates(db, {
+        spaceId: 'msp_test',
+        ownershipEpoch: 2,
+        agentId: 'act_agent_1',
+        limit: 10,
+      }),
+    ),
+    JSON.stringify(
+      rawAll(
+        sqlite,
+        `SELECT experience_id, origin_room_id, origin_member_generation, representation_id,
+                evidence, created_at
+           FROM memory_experiences
+          WHERE space_id = ? AND ownership_epoch = ? AND agent_actor_id = ?
+            AND available = 1 AND origin_kind = 'experienced'
+          ORDER BY created_at DESC LIMIT ?`,
+        ['msp_test', 2, 'act_agent_1', 10],
+      ),
+    ),
+  );
+
+  const coverageRaw = (sourceId: string | null): unknown[] => {
+    const conditions = [
+      'space_id = ?',
+      'ownership_epoch = ?',
+      'agent_actor_id = ?',
+      'origin_room_id = ?',
+      'origin_member_generation = ?',
+    ];
+    const params: unknown[] = ['msp_test', 2, 'act_agent_1', 'room_group_1', 2];
+    if (sourceId) {
+      conditions.push('source_id = ?');
+      params.push(sourceId);
+    }
+    return rawAll(
+      sqlite,
+      `SELECT source_id, source_revision, range_start, range_end, text_sha256
+         FROM memory_coverage_ranges
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY source_id, source_revision, range_start, range_end`,
+      params,
+    );
+  };
+  checkEqual(
+    'listMemoryCoverageRanges',
+    JSON.stringify(
+      await listMemoryCoverageRanges(db, {
+        spaceId: 'msp_test',
+        ownershipEpoch: 2,
+        agentId: 'act_agent_1',
+        roomId: 'room_group_1',
+        memberGeneration: 2,
+      }),
+    ),
+    JSON.stringify(coverageRaw(null)),
+  );
+  checkEqual(
+    'listMemoryCoverageRanges source',
+    JSON.stringify(
+      await listMemoryCoverageRanges(db, {
+        spaceId: 'msp_test',
+        ownershipEpoch: 2,
+        agentId: 'act_agent_1',
+        roomId: 'room_group_1',
+        memberGeneration: 2,
+        sourceId: 'src_1b',
+        sourceRevision: 2,
+      }),
+    ),
+    JSON.stringify(coverageRaw('src_1b')),
+  );
+}
+
 
 async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> {
   const actorIds = ['act_human_1', 'act_agent_2', 'act_agent_3'];
@@ -1311,6 +2118,284 @@ function explainChecks(sqlite: Database, db: D1Database): void {
             eq(schema.mcpEventDeliveries.subscription_id, 'sub_a'),
             inArray(schema.mcpEventDeliveries.status, ['pending', 'processing']),
           ),
+      label: 'getMemoryInstance',
+      raw: 'SELECT instance_id, capture_default FROM memory_instances LIMIT 1',
+      params: [],
+      query: orm(db)
+        .select({
+          instance_id: schema.memoryInstances.instance_id,
+          capture_default: schema.memoryInstances.capture_default,
+        })
+        .from(schema.memoryInstances)
+        .limit(1),
+    },
+    {
+      label: 'getActiveMemorySpace',
+      raw: 'SELECT * FROM memory_spaces WHERE agent_actor_id = ? AND active = 1',
+      params: ['act_agent_1'],
+      query: orm(db)
+        .select()
+        .from(schema.memorySpaces)
+        .where(
+          and(
+            eq(schema.memorySpaces.agent_actor_id, 'act_agent_1'),
+            eq(schema.memorySpaces.active, 1),
+          ),
+        ),
+    },
+    {
+      label: 'isMemoryTombstonedBySourceKey',
+      raw: "SELECT tombstone_id FROM memory_tombstones WHERE source_key = ? AND target_kind IN ('source_key', 'source') LIMIT 1",
+      params: ['tomb:key'],
+      query: orm(db)
+        .select({ tombstone_id: schema.memoryTombstones.tombstone_id })
+        .from(schema.memoryTombstones)
+        .where(
+          and(
+            eq(schema.memoryTombstones.source_key, 'tomb:key'),
+            inArray(schema.memoryTombstones.target_kind, ['source_key', 'source']),
+          ),
+        )
+        .limit(1),
+    },
+    {
+      label: 'getMemorySourceRevision',
+      raw: 'SELECT * FROM memory_sources WHERE source_id = ? AND revision = ?',
+      params: ['src_1', 1],
+      query: orm(db)
+        .select()
+        .from(schema.memorySources)
+        .where(
+          and(eq(schema.memorySources.source_id, 'src_1'), eq(schema.memorySources.revision, 1)),
+        ),
+    },
+    {
+      label: 'getLatestMemorySource',
+      raw: 'SELECT * FROM memory_sources WHERE source_id = ? ORDER BY revision DESC LIMIT 1',
+      params: ['src_1'],
+      query: orm(db)
+        .select()
+        .from(schema.memorySources)
+        .where(eq(schema.memorySources.source_id, 'src_1'))
+        .orderBy(desc(schema.memorySources.revision))
+        .limit(1),
+    },
+    {
+      label: 'getMemoryRepresentation',
+      raw: 'SELECT * FROM memory_representations WHERE representation_id = ?',
+      params: ['rep_raw'],
+      query: orm(db)
+        .select()
+        .from(schema.memoryRepresentations)
+        .where(eq(schema.memoryRepresentations.representation_id, 'rep_raw')),
+    },
+    {
+      label: 'listMemoryContextSummaries',
+      raw: `SELECT context_id, recall_id, kind, body_sha256, body_bytes, status, created_at, expires_at
+              FROM memory_contexts
+             WHERE space_id = ? AND ownership_epoch = ? AND agent_actor_id = ?
+               AND (created_at < ? OR (created_at = ? AND context_id < ?))
+             ORDER BY created_at DESC, context_id DESC
+             LIMIT ?`,
+      params: ['msp_test', 2, 'act_agent_1', 61, 61, 'ctx_2', 3],
+      query: orm(db)
+        .select({
+          context_id: schema.memoryContexts.context_id,
+          recall_id: schema.memoryContexts.recall_id,
+          kind: schema.memoryContexts.kind,
+          body_sha256: schema.memoryContexts.body_sha256,
+          body_bytes: schema.memoryContexts.body_bytes,
+          status: schema.memoryContexts.status,
+          created_at: schema.memoryContexts.created_at,
+          expires_at: schema.memoryContexts.expires_at,
+        })
+        .from(schema.memoryContexts)
+        .where(
+          and(
+            eq(schema.memoryContexts.space_id, 'msp_test'),
+            eq(schema.memoryContexts.ownership_epoch, 2),
+            eq(schema.memoryContexts.agent_actor_id, 'act_agent_1'),
+            or(
+              lt(schema.memoryContexts.created_at, 61),
+              and(
+                eq(schema.memoryContexts.created_at, 61),
+                lt(schema.memoryContexts.context_id, 'ctx_2'),
+              ),
+            ),
+          ),
+        )
+        .orderBy(desc(schema.memoryContexts.created_at), desc(schema.memoryContexts.context_id))
+        .limit(3),
+    },
+    {
+      label: 'getMemoryManifestByInvocation',
+      raw: `SELECT * FROM memory_manifests
+             WHERE space_id = ? AND ownership_epoch = ? AND agent_actor_id = ?
+               AND host_binding_id = ? AND invocation_id = ?`,
+      params: ['msp_test', 2, 'act_agent_1', 'hb_1', 'inv_1'],
+      query: orm(db)
+        .select()
+        .from(schema.memoryManifests)
+        .where(
+          and(
+            eq(schema.memoryManifests.space_id, 'msp_test'),
+            eq(schema.memoryManifests.ownership_epoch, 2),
+            eq(schema.memoryManifests.agent_actor_id, 'act_agent_1'),
+            eq(schema.memoryManifests.host_binding_id, 'hb_1'),
+            eq(schema.memoryManifests.invocation_id, 'inv_1'),
+          ),
+        ),
+    },
+    {
+      label: 'getMemoryReceiptByInvocation',
+      raw: `SELECT * FROM memory_receipts
+             WHERE kind = 'input_exposure' AND space_id = ? AND ownership_epoch = ?
+               AND agent_actor_id = ? AND host_binding_id = ? AND invocation_id = ?`,
+      params: ['msp_test', 2, 'act_agent_1', 'hb_1', 'inv_1'],
+      query: orm(db)
+        .select()
+        .from(schema.memoryReceipts)
+        .where(
+          and(
+            eq(schema.memoryReceipts.kind, 'input_exposure'),
+            eq(schema.memoryReceipts.space_id, 'msp_test'),
+            eq(schema.memoryReceipts.ownership_epoch, 2),
+            eq(schema.memoryReceipts.agent_actor_id, 'act_agent_1'),
+            eq(schema.memoryReceipts.host_binding_id, 'hb_1'),
+            eq(schema.memoryReceipts.invocation_id, 'inv_1'),
+          ),
+        ),
+    },
+    {
+      label: 'getLatestActiveMemoryHostBinding',
+      raw: `SELECT * FROM memory_host_bindings
+             WHERE space_id = ? AND agent_actor_id = ? AND state = 'active'
+             ORDER BY created_at DESC LIMIT 1`,
+      params: ['msp_test', 'act_agent_1'],
+      query: orm(db)
+        .select()
+        .from(schema.memoryHostBindings)
+        .where(
+          and(
+            eq(schema.memoryHostBindings.space_id, 'msp_test'),
+            eq(schema.memoryHostBindings.agent_actor_id, 'act_agent_1'),
+            eq(schema.memoryHostBindings.state, 'active'),
+          ),
+        )
+        .orderBy(desc(schema.memoryHostBindings.created_at))
+        .limit(1),
+    },
+    {
+      label: 'listCurrentCuratedMemories',
+      raw: `SELECT curated_id, revision, title, content, content_sha256, origin, created_at, updated_at
+              FROM memory_curated
+             WHERE space_id = ? AND ownership_epoch = ? AND current = 1
+             ORDER BY updated_at DESC, curated_id
+             LIMIT ?`,
+      params: ['msp_test', 2, 1],
+      query: orm(db)
+        .select({
+          curated_id: schema.memoryCurated.curated_id,
+          revision: schema.memoryCurated.revision,
+          title: schema.memoryCurated.title,
+          content: schema.memoryCurated.content,
+          content_sha256: schema.memoryCurated.content_sha256,
+          origin: schema.memoryCurated.origin,
+          created_at: schema.memoryCurated.created_at,
+          updated_at: schema.memoryCurated.updated_at,
+        })
+        .from(schema.memoryCurated)
+        .where(
+          and(
+            eq(schema.memoryCurated.space_id, 'msp_test'),
+            eq(schema.memoryCurated.ownership_epoch, 2),
+            eq(schema.memoryCurated.current, 1),
+          ),
+        )
+        .orderBy(desc(schema.memoryCurated.updated_at), schema.memoryCurated.curated_id)
+        .limit(1),
+    },
+    {
+      label: 'getMemoryCatchupPlanByRequestKey',
+      raw: `SELECT * FROM memory_catchup_plans
+             WHERE space_id = ? AND agent_actor_id = ? AND request_key = ?`,
+      params: ['msp_test', 'act_agent_1', 'req_catchup_1'],
+      query: orm(db)
+        .select()
+        .from(schema.memoryCatchupPlans)
+        .where(
+          and(
+            eq(schema.memoryCatchupPlans.space_id, 'msp_test'),
+            eq(schema.memoryCatchupPlans.agent_actor_id, 'act_agent_1'),
+            eq(schema.memoryCatchupPlans.request_key, 'req_catchup_1'),
+          ),
+        ),
+    },
+    {
+      label: 'listMemoryRecallCandidates',
+      raw: `SELECT experience_id, origin_room_id, origin_member_generation, representation_id,
+                    evidence, created_at
+               FROM memory_experiences
+              WHERE space_id = ? AND ownership_epoch = ? AND agent_actor_id = ?
+                AND available = 1 AND origin_kind = 'experienced'
+              ORDER BY created_at DESC LIMIT ?`,
+      params: ['msp_test', 2, 'act_agent_1', 10],
+      query: orm(db)
+        .select({
+          experience_id: schema.memoryExperiences.experience_id,
+          origin_room_id: schema.memoryExperiences.origin_room_id,
+          origin_member_generation: schema.memoryExperiences.origin_member_generation,
+          representation_id: schema.memoryExperiences.representation_id,
+          evidence: schema.memoryExperiences.evidence,
+          created_at: schema.memoryExperiences.created_at,
+        })
+        .from(schema.memoryExperiences)
+        .where(
+          and(
+            eq(schema.memoryExperiences.space_id, 'msp_test'),
+            eq(schema.memoryExperiences.ownership_epoch, 2),
+            eq(schema.memoryExperiences.agent_actor_id, 'act_agent_1'),
+            eq(schema.memoryExperiences.available, 1),
+            eq(schema.memoryExperiences.origin_kind, 'experienced'),
+          ),
+        )
+        .orderBy(desc(schema.memoryExperiences.created_at))
+        .limit(10),
+    },
+    {
+      label: 'listMemoryCoverageRanges',
+      raw: `SELECT source_id, source_revision, range_start, range_end, text_sha256
+               FROM memory_coverage_ranges
+              WHERE space_id = ? AND ownership_epoch = ? AND agent_actor_id = ?
+                AND origin_room_id = ? AND origin_member_generation = ?
+                AND source_id = ? AND source_revision = ?
+              ORDER BY source_id, source_revision, range_start, range_end`,
+      params: ['msp_test', 2, 'act_agent_1', 'room_group_1', 2, 'src_1b', 2],
+      query: orm(db)
+        .select({
+          source_id: schema.memoryCoverageRanges.source_id,
+          source_revision: schema.memoryCoverageRanges.source_revision,
+          range_start: schema.memoryCoverageRanges.range_start,
+          range_end: schema.memoryCoverageRanges.range_end,
+          text_sha256: schema.memoryCoverageRanges.text_sha256,
+        })
+        .from(schema.memoryCoverageRanges)
+        .where(
+          and(
+            eq(schema.memoryCoverageRanges.space_id, 'msp_test'),
+            eq(schema.memoryCoverageRanges.ownership_epoch, 2),
+            eq(schema.memoryCoverageRanges.agent_actor_id, 'act_agent_1'),
+            eq(schema.memoryCoverageRanges.origin_room_id, 'room_group_1'),
+            eq(schema.memoryCoverageRanges.origin_member_generation, 2),
+            eq(schema.memoryCoverageRanges.source_id, 'src_1b'),
+            eq(schema.memoryCoverageRanges.source_revision, 2),
+          ),
+        )
+        .orderBy(
+          schema.memoryCoverageRanges.source_id,
+          schema.memoryCoverageRanges.source_revision,
+          schema.memoryCoverageRanges.range_start,
+          schema.memoryCoverageRanges.range_end,
         ),
     },
   ];
@@ -3117,6 +4202,7 @@ async function main(): Promise<void> {
   const db = createD1(sqlite);
   try {
     await rowParityChecks(sqlite, db);
+    await memoryRowParityChecks(sqlite, db);
     explainChecks(sqlite, db);
     explainFilesEventsChecks(sqlite, db);
     await messageExplainChecks(sqlite, db);

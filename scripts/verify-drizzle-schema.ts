@@ -2,7 +2,7 @@
  * 4C-0 schema parity harness。
  *
  * 1. 在内存 SQLite 应用全部 `migrations/*.sql`（唯一事实源）；
- * 2. 用 drizzle-kit 从 core schema 生成 DDL，应用到第二个内存库；
+ * 2. 用 drizzle-kit 从已登记 schema 生成 DDL，应用到第二个内存库；
  * 3. 逐表比较 columns / indexes / foreign keys / CHECK 约束；
  * 4. 生成并校验可 review 的 `tests/fixtures/schema-surface.json`；
  * 5. 验证 guard 表、FTS5 触发器与 Drizzle 生产边界：

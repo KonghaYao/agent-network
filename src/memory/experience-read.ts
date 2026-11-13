@@ -6,9 +6,16 @@
  */
 import { BusinessError } from '../contracts/errors';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
-import { getMember, getRoom } from '../storage/queries';
+import {
+  getActiveMemorySourceByKey,
+  getMemoryExperience,
+  getMemoryRepresentation,
+  getMember,
+  getRoom,
+  listMemoryCoverageRanges,
+  type D1Like,
+} from '../storage/queries';
 import { nowMs } from '../storage/db';
-import type { D1Like } from '../storage/queries';
 import {
   countsAsRawCoverage,
   isFullRawCoverage,
@@ -30,7 +37,7 @@ import {
 } from './access';
 import { getSource } from './store';
 import { historyBoundary, visibleMessage } from '../domain/room-history';
-import type { MemoryExperienceRow, MemoryRepresentationRow, MemorySourceRow } from './rows';
+import type { MemoryExperienceRow } from './rows';
 import { loadRepresentationExact, type MemoryExperienceStoreOptions } from './experience-source';
 
 // ---------------------------------------------------------------------------
@@ -198,10 +205,7 @@ export async function listExperiences(
   for (const row of rows.results) {
     if (items.length >= limit) break;
     if (row.available !== 1) continue;
-    const representation = await db
-      .prepare('SELECT * FROM memory_representations WHERE representation_id = ?')
-      .bind(row.representation_id)
-      .first<MemoryRepresentationRow>();
+    const representation = await getMemoryRepresentation(db, row.representation_id);
     if (!representation) continue;
     if (await isTombstoned(db, { kind: 'representation', id: row.representation_id })) continue;
     const decision = await authorizeRepresentationRead(db, {
@@ -287,10 +291,7 @@ export async function getExperience(
     expected: options.space,
     at,
   });
-  const row = await db
-    .prepare('SELECT * FROM memory_experiences WHERE experience_id = ?')
-    .bind(options.experienceId)
-    .first<MemoryExperienceRow>();
+  const row = await getMemoryExperience(db, options.experienceId);
   if (!row) return { available: false, reason: 'not_found' };
   if (
     row.space_id !== context.space.space_id ||
@@ -424,30 +425,17 @@ export async function experienceCoverage(
     };
   }
   const boundary = historyBoundary(room, member);
-  const coverageRows = await db
-    .prepare(
-      `SELECT source_id, source_revision, range_start, range_end, text_sha256
-         FROM memory_coverage_ranges
-        WHERE space_id = ? AND ownership_epoch = ? AND agent_actor_id = ?
-          AND origin_room_id = ? AND origin_member_generation = ?
-          ${options.sourceId ? 'AND source_id = ?' : ''}
-          ${options.sourceRevision === null || options.sourceRevision === undefined ? '' : 'AND source_revision = ?'}
-        ORDER BY source_id, source_revision, range_start, range_end`,
-    )
-    .bind(
-      context.space.space_id,
-      context.space.ownership_epoch,
-      options.agentId,
-      options.roomId,
-      options.memberGeneration,
-      ...(options.sourceId ? [options.sourceId] : []),
-      ...(options.sourceRevision === null || options.sourceRevision === undefined
-        ? []
-        : [options.sourceRevision]),
-    )
-    .all<{ source_id: string; source_revision: number; range_start: number; range_end: number }>();
+  const coverageRows = await listMemoryCoverageRanges(db, {
+    spaceId: context.space.space_id,
+    ownershipEpoch: context.space.ownership_epoch,
+    agentId: options.agentId,
+    roomId: options.roomId,
+    memberGeneration: options.memberGeneration,
+    sourceId: options.sourceId ?? null,
+    sourceRevision: options.sourceRevision,
+  });
   const grouped = new Map<string, { source_id: string; source_revision: number; ranges: MemoryByteRange[] }>();
-  for (const row of coverageRows.results) {
+  for (const row of coverageRows) {
     const key = `${row.source_id}|${row.source_revision}`;
     const entry =
       grouped.get(key) ??
@@ -490,37 +478,26 @@ export async function experienceCoverage(
   let firstGap: { message_id: string; created_seq: number } | null = null;
   for (const message of messages.results) {
     if (!visibleMessage(message, boundary)) continue;
-    const source = await db
-      .prepare(
-        `SELECT * FROM memory_sources
-          WHERE instance_id = ? AND source_key = ? AND state = 'active'
-          LIMIT 1`,
-      )
-      .bind(context.space.instance_id, `message:${message.message_id}`)
-      .first<MemorySourceRow>();
+    const source = await getActiveMemorySourceByKey(
+      db,
+      context.space.instance_id,
+      `message:${message.message_id}`,
+    );
     if (!source || source.content_bytes === null) {
       firstGap = message;
       break;
     }
-    const rows = await db
-      .prepare(
-        `SELECT range_start, range_end FROM memory_coverage_ranges
-          WHERE space_id = ? AND ownership_epoch = ? AND agent_actor_id = ?
-            AND origin_room_id = ? AND origin_member_generation = ?
-            AND source_id = ? AND source_revision = ?`,
-      )
-      .bind(
-        context.space.space_id,
-        context.space.ownership_epoch,
-        options.agentId,
-        options.roomId,
-        options.memberGeneration,
-        source.source_id,
-        source.revision,
-      )
-      .all<{ range_start: number; range_end: number }>();
+    const rows = await listMemoryCoverageRanges(db, {
+      spaceId: context.space.space_id,
+      ownershipEpoch: context.space.ownership_epoch,
+      agentId: options.agentId,
+      roomId: options.roomId,
+      memberGeneration: options.memberGeneration,
+      sourceId: source.source_id,
+      sourceRevision: source.revision,
+    });
     const complete = isFullRawCoverage(
-      rows.results.map((row) => ({ start: row.range_start, end: row.range_end })),
+      rows.map((row) => ({ start: row.range_start, end: row.range_end })),
       source.content_bytes,
     );
     if (!complete) {
@@ -590,26 +567,17 @@ export async function sourceRawCoverage(
       full: false,
     };
   }
-  const rows = await db
-    .prepare(
-      `SELECT range_start, range_end FROM memory_coverage_ranges
-        WHERE space_id = ? AND ownership_epoch = ? AND agent_actor_id = ?
-          AND origin_room_id = ? AND origin_member_generation = ?
-          AND source_id = ? AND source_revision = ?
-        ORDER BY range_start, range_end`,
-    )
-    .bind(
-      context.space.space_id,
-      context.space.ownership_epoch,
-      options.agentId,
-      options.originRoomId,
-      options.memberGeneration,
-      options.sourceId,
-      options.sourceRevision,
-    )
-    .all<{ range_start: number; range_end: number }>();
+  const rows = await listMemoryCoverageRanges(db, {
+    spaceId: context.space.space_id,
+    ownershipEpoch: context.space.ownership_epoch,
+    agentId: options.agentId,
+    roomId: options.originRoomId,
+    memberGeneration: options.memberGeneration,
+    sourceId: options.sourceId,
+    sourceRevision: options.sourceRevision,
+  });
   const ranges = mergeByteRanges(
-    rows.results.map((row) => ({ start: row.range_start, end: row.range_end })),
+    rows.map((row) => ({ start: row.range_start, end: row.range_end })),
   );
   const source = await getSource(db, options.sourceId, options.sourceRevision);
   if (!source || source.state !== 'active') {

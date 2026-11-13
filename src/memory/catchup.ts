@@ -8,9 +8,17 @@
 import { BusinessError } from '../contracts/errors';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { LIMITS } from '../contracts/limits';
-import { getMember, getRoom } from '../storage/queries';
+import {
+  getActiveMemorySourceByKey,
+  getMemoryCatchupPlan,
+  getMemoryCatchupPlanByRequestKey,
+  getMemoryRepresentation,
+  getMember,
+  getRoom,
+  listMemoryCatchupItems,
+  type D1Like,
+} from '../storage/queries';
 import { newId, nowMs, sha256Hex, stableStringify } from '../storage/db';
-import type { D1Like } from '../storage/queries';
 import {
   isValidByteRange,
   type MemoryCatchupBudget,
@@ -32,7 +40,7 @@ import { getSource, runMemoryBatch, sourceMutationStatements } from './store';
 import { loadRepresentationExact } from './experience';
 import { memoryRepresentationInsertStatements } from './representation-statements';
 import { historyBoundary, visibleMessage } from '../domain/room-history';
-import type { MemoryRepresentationRow, MemorySourceRow } from './rows';
+import type { MemorySourceRow } from './rows';
 
 export interface MemoryCatchupStoreOptions {
   instanceId: string;
@@ -160,11 +168,8 @@ async function itemsForPlan(
   db: D1Like,
   planId: string,
 ): Promise<readonly MemoryCatchupPlanItem[]> {
-  const rows = await db
-    .prepare('SELECT * FROM memory_catchup_items WHERE plan_id = ? ORDER BY item_index')
-    .bind(planId)
-    .all<MemoryCatchupItemRow>();
-  return rows.results.map((row) => ({
+  const rows = await listMemoryCatchupItems(db, planId);
+  return rows.map((row) => ({
     message_id: row.message_id,
     created_seq: row.created_seq,
     selection_state: row.selection_state,
@@ -176,10 +181,7 @@ async function loadPlanRow(
   db: D1Like,
   planId: string,
 ): Promise<MemoryCatchupPlanRow | null> {
-  return db
-    .prepare('SELECT * FROM memory_catchup_plans WHERE plan_id = ?')
-    .bind(planId)
-    .first<MemoryCatchupPlanRow>();
+  return getMemoryCatchupPlan(db, planId);
 }
 
 function snapshotMatches(
@@ -247,13 +249,12 @@ export async function planCatchup(
       snapshot,
     }),
   );
-  const existing = await db
-    .prepare(
-      `SELECT * FROM memory_catchup_plans
-        WHERE space_id = ? AND agent_actor_id = ? AND request_key = ?`,
-    )
-    .bind(context.space.space_id, input.agentId, input.requestKey)
-    .first<MemoryCatchupPlanRow>();
+  const existing = await getMemoryCatchupPlanByRequestKey(
+    db,
+    context.space.space_id,
+    input.agentId,
+    input.requestKey,
+  );
   if (existing) {
     if (existing.request_sha256 !== requestSha) {
       throw new BusinessError('IDEMPOTENCY_CONFLICT', '同一补读请求 key 绑定了不同问题/预算/快照', {
@@ -432,23 +433,21 @@ export async function planCatchup(
     await runMemoryBatch(db, statements);
   } catch (error) {
     // 并发同 requestKey 由唯一索引兜底；只有完全相同的请求才复用。
-    const raced = await db
-      .prepare(
-        `SELECT * FROM memory_catchup_plans
-          WHERE space_id = ? AND agent_actor_id = ? AND request_key = ?`,
-      )
-      .bind(context.space.space_id, input.agentId, input.requestKey)
-      .first<MemoryCatchupPlanRow>();
+    const raced = await getMemoryCatchupPlanByRequestKey(
+      db,
+      context.space.space_id,
+      input.agentId,
+      input.requestKey,
+    );
     if (!raced || raced.request_sha256 !== requestSha) throw error;
     return planRowToPlan(raced, context.space, await itemsForPlan(db, raced.plan_id));
   }
-  const stored = await db
-    .prepare(
-      `SELECT * FROM memory_catchup_plans
-        WHERE space_id = ? AND agent_actor_id = ? AND request_key = ?`,
-    )
-    .bind(context.space.space_id, input.agentId, input.requestKey)
-    .first<MemoryCatchupPlanRow>();
+  const stored = await getMemoryCatchupPlanByRequestKey(
+    db,
+    context.space.space_id,
+    input.agentId,
+    input.requestKey,
+  );
   if (!stored) {
     throw new BusinessError('MEMORY_UNAVAILABLE', '补读计划写入后无法读取');
   }
@@ -566,13 +565,7 @@ async function ensureMessageSource(
   },
 ): Promise<MemorySourceRow> {
   const sourceKey = `message:${input.message.message_id}`;
-  const existing = await db
-    .prepare(
-      `SELECT * FROM memory_sources
-        WHERE instance_id = ? AND source_key = ? AND state = 'active' LIMIT 1`,
-    )
-    .bind(input.instanceId, sourceKey)
-    .first<MemorySourceRow>();
+  const existing = await getActiveMemorySourceByKey(db, input.instanceId, sourceKey);
   if (existing) return existing;
   const sourceId = newId('msrc');
   const contentSha = input.message.body.length > 0 ? await sha256Hex(input.message.body) : null;
@@ -606,13 +599,7 @@ async function ensureMessageSource(
       }),
     );
   } catch {
-    const raced = await db
-      .prepare(
-        `SELECT * FROM memory_sources
-          WHERE instance_id = ? AND source_key = ? AND state = 'active' LIMIT 1`,
-      )
-      .bind(input.instanceId, sourceKey)
-      .first<MemorySourceRow>();
+    const raced = await getActiveMemorySourceByKey(db, input.instanceId, sourceKey);
     if (!raced) throw new BusinessError('MEMORY_UNAVAILABLE', '补读来源登记失败');
     return raced;
   }
@@ -713,10 +700,7 @@ export async function prepareCatchupSelections(
     const representationId = `mrp_c${(await sha256Hex(
       `catchup|${row.plan_id}|${message.message_id}|${source.source_id}|${source.revision}|${textSha}`,
     )).slice(0, 32)}`;
-    let representationRow = await db
-      .prepare('SELECT * FROM memory_representations WHERE representation_id = ?')
-      .bind(representationId)
-      .first<MemoryRepresentationRow>();
+    let representationRow = await getMemoryRepresentation(db, representationId);
     if (!representationRow) {
       const exact = {
         representation: {
@@ -745,10 +729,7 @@ export async function prepareCatchupSelections(
           now: at,
         }),
       );
-      representationRow = await db
-        .prepare('SELECT * FROM memory_representations WHERE representation_id = ?')
-        .bind(representationId)
-        .first<MemoryRepresentationRow>();
+      representationRow = await getMemoryRepresentation(db, representationId);
       if (!representationRow) {
         missing.push({ message_id: item.message_id, reason: 'representation_missing' });
         continue;

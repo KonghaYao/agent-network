@@ -5,7 +5,12 @@
  */
 import { BusinessError } from '../contracts/errors';
 import { newId, nowMs, sha256Hex } from '../storage/db';
-import type { D1Like } from '../storage/queries';
+import {
+  getCurrentCuratedRevision,
+  getMemoryExperienceByDedupe,
+  listCurrentCuratedMemories,
+  type D1Like,
+} from '../storage/queries';
 import type {
   MemoryExactRepresentation,
   MemorySpaceRef,
@@ -85,10 +90,7 @@ export async function recordAuthoredExperience(
     originKind: 'authored',
     representation,
   });
-  const existing = await db
-    .prepare('SELECT experience_id FROM memory_experiences WHERE dedupe_key = ?')
-    .bind(dedupeKey)
-    .first<{ experience_id: string }>();
+  const existing = await getMemoryExperienceByDedupe(db, dedupeKey);
   if (existing) return existing.experience_id;
   const experienceId = options.experienceId ?? newId('mexp');
   await runMemoryBatch(db, [
@@ -128,10 +130,7 @@ export async function recordAuthoredExperience(
         dedupeKey,
       ),
   ]);
-  const stored = await db
-    .prepare('SELECT experience_id FROM memory_experiences WHERE dedupe_key = ?')
-    .bind(dedupeKey)
-    .first<{ experience_id: string }>();
+  const stored = await getMemoryExperienceByDedupe(db, dedupeKey);
   return stored?.experience_id ?? experienceId;
 }
 
@@ -173,10 +172,7 @@ export async function saveCuratedMemory(
     at,
   });
   const curatedId = options.curatedId ?? newId('mcur');
-  const current = await db
-    .prepare('SELECT revision FROM memory_curated WHERE curated_id = ? AND current = 1')
-    .bind(curatedId)
-    .first<{ revision: number }>();
+  const current = await getCurrentCuratedRevision(db, curatedId);
   const nextRevision = (current?.revision ?? 0) + 1;
   if (options.expectedRevision !== undefined && options.expectedRevision !== (current?.revision ?? 0)) {
     throw new BusinessError('VERSION_CONFLICT', 'curated 修订已变化', {
@@ -241,25 +237,11 @@ export async function listCuratedMemories(
     instanceId: options.instanceId,
     expected: options.space,
   });
-  const rows = await db
-    .prepare(
-      `SELECT curated_id, revision, title, content, content_sha256, origin, created_at, updated_at
-         FROM memory_curated
-        WHERE space_id = ? AND ownership_epoch = ? AND current = 1
-        ORDER BY updated_at DESC`,
-    )
-    .bind(context.space.space_id, context.space.ownership_epoch)
-    .all<{
-      curated_id: string;
-      revision: number;
-      title: string;
-      content: string;
-      content_sha256: string;
-      origin: 'manual' | 'imported_external_knowledge';
-      created_at: number;
-      updated_at: number;
-    }>();
-  return rows.results;
+  return listCurrentCuratedMemories(
+    db,
+    context.space.space_id,
+    context.space.ownership_epoch,
+  );
 }
 
 /** 兼容旧读取路径：当前成员代次与策略是否仍与计划/范围一致。 */

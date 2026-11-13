@@ -22,7 +22,23 @@ import {
   visibleCreated,
   type HistoryBoundary,
 } from '../domain/room-history';
-import { getActor, getMember, getRoom, type D1Like } from '../storage/queries';
+import {
+  countActiveMemoryHostBindings,
+  getActiveMemorySpace,
+  getActor,
+  getLatestMemorySource,
+  getMemoryInstance,
+  getMemoryRepresentation,
+  getMemoryRepresentationSourceId,
+  getMemorySourceRevision,
+  getMember,
+  getRoom,
+  isMemoryTargetTombstoned,
+  isMemoryTombstonedBySourceKey,
+  listMemoryRepresentationDependencyLinks,
+  type D1Like,
+  type MemoryTombstoneTargetKind,
+} from '../storage/queries';
 import type { ActorRow, AgentManagementRow, RoomMemberRow, RoomRow } from '../storage/rows';
 import { newId, nowMs } from '../storage/db';
 import {
@@ -37,7 +53,7 @@ import {
   type MemorySpaceRef,
   type MemoryTargetScope,
 } from './contracts';
-import type { MemoryRepresentationRow, MemorySourceRow, MemorySpaceRow } from './rows';
+import type { MemorySourceRow, MemorySpaceRow } from './rows';
 
 export interface MemoryOwnerResolution {
   owner_actor_id: string;
@@ -144,9 +160,7 @@ export async function ensureMemoryInstance(
 ): Promise<string> {
   const at = options.now ?? nowMs();
   const configured = options.configuredId?.trim() || null;
-  const existing = await db
-    .prepare('SELECT instance_id, capture_default FROM memory_instances LIMIT 1')
-    .first<{ instance_id: string; capture_default: 'enabled' | 'disabled' }>();
+  const existing = await getMemoryInstance(db);
   if (existing) {
     if (configured && configured !== existing.instance_id) {
       throw new BusinessError('MEMORY_UNAVAILABLE', 'Memory instance 已初始化，配置值与现有 namespace 不一致', {
@@ -164,9 +178,7 @@ export async function ensureMemoryInstance(
     )
     .bind(instanceId, options.captureDefault ?? 'enabled', at, at)
     .run();
-  const stored = await db
-    .prepare('SELECT instance_id FROM memory_instances LIMIT 1')
-    .first<{ instance_id: string }>();
+  const stored = await getMemoryInstance(db);
   if (!stored) throw new BusinessError('MEMORY_UNAVAILABLE', 'Memory instance 初始化失败');
   return stored.instance_id;
 }
@@ -175,10 +187,7 @@ export async function loadActiveMemorySpace(
   db: D1Like,
   agentId: string,
 ): Promise<MemorySpaceRow | null> {
-  return db
-    .prepare('SELECT * FROM memory_spaces WHERE agent_actor_id = ? AND active = 1')
-    .bind(agentId)
-    .first<MemorySpaceRow>();
+  return getActiveMemorySpace(db, agentId);
 }
 
 async function requireAgentActor(db: D1Like, agentId: string): Promise<ActorRow> {
@@ -446,22 +455,12 @@ export function sourceOriginScope(source: MemorySourceRow): MemoryOriginScope | 
 
 export async function isTombstoned(
   db: D1Like,
-  target: { kind: string; id: string } | { sourceKey: string },
+  target: { kind: MemoryTombstoneTargetKind; id: string } | { sourceKey: string },
 ): Promise<boolean> {
   if ('sourceKey' in target) {
-    const row = await db
-      .prepare(
-        "SELECT 1 AS hit FROM memory_tombstones WHERE source_key = ? AND target_kind IN ('source_key','source') LIMIT 1",
-      )
-      .bind(target.sourceKey)
-      .first<{ hit: number }>();
-    return row !== null;
+    return isMemoryTombstonedBySourceKey(db, target.sourceKey);
   }
-  const row = await db
-    .prepare('SELECT 1 AS hit FROM memory_tombstones WHERE target_kind = ? AND target_id = ? LIMIT 1')
-    .bind(target.kind, target.id)
-    .first<{ hit: number }>();
-  return row !== null;
+  return isMemoryTargetTombstoned(db, target.kind, target.id);
 }
 
 /**
@@ -575,10 +574,7 @@ async function requireSourceRevision(
   db: D1Like,
   source: MemorySourceRef,
 ): Promise<MemorySourceRow | null> {
-  return db
-    .prepare('SELECT * FROM memory_sources WHERE source_id = ? AND revision = ?')
-    .bind(source.source_id, source.source_revision)
-    .first<MemorySourceRow>();
+  return getMemorySourceRevision(db, source.source_id, source.source_revision);
 }
 
 async function collectDependencies(
@@ -598,22 +594,14 @@ async function collectDependencies(
       unavailable = true;
       break;
     }
-    const representation = await db
-      .prepare('SELECT source_id FROM memory_representations WHERE representation_id = ?')
-      .bind(current)
-      .first<Pick<MemoryRepresentationRow, 'source_id'>>();
+    const representation = await getMemoryRepresentationSourceId(db, current);
     if (!representation) {
       unavailable = true;
       continue;
     }
     if (representation.source_id) sourceIds.add(representation.source_id);
-    const dependencies = await db
-      .prepare(
-        'SELECT source_id, depends_on_representation_id FROM memory_representation_dependencies WHERE representation_id = ?',
-      )
-      .bind(current)
-      .all<{ source_id: string; depends_on_representation_id: string | null }>();
-    for (const dependency of dependencies.results) {
+    const dependencies = await listMemoryRepresentationDependencyLinks(db, current);
+    for (const dependency of dependencies) {
       sourceIds.add(dependency.source_id);
       if (dependency.depends_on_representation_id) {
         representationIds.add(dependency.depends_on_representation_id);
@@ -634,10 +622,7 @@ export async function authorizeRepresentationRead(
   db: D1Like,
   options: MemoryRepresentationAccessOptions,
 ): Promise<MemoryRepresentationAccessDecision> {
-  const representation = await db
-    .prepare('SELECT * FROM memory_representations WHERE representation_id = ?')
-    .bind(options.representationId)
-    .first<MemoryRepresentationRow>();
+  const representation = await getMemoryRepresentation(db, options.representationId);
   if (!representation) {
     return { allowed: false, reason: 'source_missing', denied_source_ids: [] };
   }
@@ -657,10 +642,7 @@ export async function authorizeRepresentationRead(
       deniedReason ??= 'tombstoned';
       continue;
     }
-    const source = await db
-      .prepare('SELECT * FROM memory_sources WHERE source_id = ? ORDER BY revision DESC LIMIT 1')
-      .bind(sourceId)
-      .first<MemorySourceRow>();
+    const source = await getLatestMemorySource(db, sourceId);
     if (!source) {
       denied.push(sourceId);
       deniedReason ??= 'source_missing';
@@ -765,18 +747,13 @@ export async function describeMemorySpace(
 } | null> {
   const space = await loadActiveMemorySpace(db, agentId);
   if (!space) return null;
-  const bindings = await db
-    .prepare(
-      "SELECT COUNT(*) AS n FROM memory_host_bindings WHERE space_id = ? AND state = 'active'",
-    )
-    .bind(space.space_id)
-    .first<{ n: number }>();
+  const bindings = await countActiveMemoryHostBindings(db, space.space_id);
   return {
     space_id: space.space_id,
     ownership_epoch: space.ownership_epoch,
     owner_actor_id: space.owner_actor_id,
     ownership_kind: space.ownership_kind,
-    active_host_bindings: bindings?.n ?? 0,
+    active_host_bindings: bindings,
   };
 }
 

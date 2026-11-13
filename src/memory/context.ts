@@ -9,7 +9,12 @@ import { BusinessError } from '../contracts/errors';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { LIMITS } from '../contracts/limits';
 import { nowMs, sha256Hex, stableStringify } from '../storage/db';
-import type { D1Like } from '../storage/queries';
+import {
+  getMemoryContext,
+  listMemoryContextItems,
+  listMemoryContextSummaries,
+  type D1Like,
+} from '../storage/queries';
 import {
   MEMORY_PAYLOAD_AUTHORITY,
   MEMORY_POLICY_VERSION,
@@ -158,10 +163,7 @@ export async function createLookupMemoryContext(
   });
   const contextId =
     options.contextId ?? `mctx_${(await sha256Hex(`lookup|${digestInput}`)).slice(0, 32)}`;
-  const existing = await db
-    .prepare('SELECT * FROM memory_contexts WHERE context_id = ?')
-    .bind(contextId)
-    .first<MemoryContextRow>();
+  const existing = await getMemoryContext(db, contextId);
   if (existing) {
     const view = await readMemoryContextView(db, {
       instanceId: options.instanceId,
@@ -256,10 +258,7 @@ export async function readMemoryContextView(
     expected: options.space,
     at,
   });
-  const row = await db
-    .prepare('SELECT * FROM memory_contexts WHERE context_id = ?')
-    .bind(options.contextId)
-    .first<MemoryContextRow>();
+  const row = await getMemoryContext(db, options.contextId);
   if (!row) return { available: false, reason: 'not_found', context_row: null };
   if (
     row.space_id !== context.space.space_id ||
@@ -279,20 +278,10 @@ export async function readMemoryContextView(
   if (!targetScope) {
     return { available: false, reason: 'invalid_target', context_row: row };
   }
-  const itemRows = await db
-    .prepare(
-      `SELECT representation_id, evidence, origin_scope_json
-         FROM memory_context_items WHERE context_id = ? ORDER BY item_index`,
-    )
-    .bind(row.context_id)
-    .all<{
-      representation_id: string;
-      evidence: string | null;
-      origin_scope_json: string;
-    }>();
+  const itemRows = await listMemoryContextItems(db, row.context_id);
   const items: MemoryContextView['items'][number][] = [];
   const evidenceItems: MemoryContextEvidenceItem[] = [];
-  for (const item of itemRows.results) {
+  for (const item of itemRows) {
     const decision = await authorizeRepresentationRead(db, {
       space: context.space,
       representationId: item.representation_id,
@@ -464,45 +453,16 @@ export async function listMemoryContexts(
   const limit = Math.max(1, Math.min(options.input?.limit ?? 20, 100));
   const scope = `memory:context:${context.space.space_id}:${context.space.ownership_epoch}`;
   const cursor = options.input?.cursor ? decodeCursor(options.input.cursor, scope) : null;
-  const conditions = [
-    'space_id = ?',
-    'ownership_epoch = ?',
-    'agent_actor_id = ?',
-  ];
-  const bindings: unknown[] = [
-    context.space.space_id,
-    context.space.ownership_epoch,
-    options.agentId,
-  ];
-  if (options.input?.kind) {
-    conditions.push('kind = ?');
-    bindings.push(options.input.kind);
-  }
-  if (cursor) {
-    conditions.push('(created_at < ? OR (created_at = ? AND context_id < ?))');
-    bindings.push(cursor.seq, cursor.seq, cursor.key);
-  }
-  const rows = await db
-    .prepare(
-      `SELECT context_id, recall_id, kind, body_sha256, body_bytes, status, created_at, expires_at
-         FROM memory_contexts
-        WHERE ${conditions.join(' AND ')}
-        ORDER BY created_at DESC, context_id DESC
-        LIMIT ?`,
-    )
-    .bind(...bindings, limit + 1)
-    .all<{
-      context_id: string;
-      recall_id: string | null;
-      kind: 'lookup' | 'bound';
-      body_sha256: string;
-      body_bytes: number;
-      status: MemoryContextRow['status'];
-      created_at: number;
-      expires_at: number | null;
-    }>();
-  const hasMore = rows.results.length > limit;
-  const page = rows.results.slice(0, limit);
+  const rows = await listMemoryContextSummaries(db, {
+    spaceId: context.space.space_id,
+    ownershipEpoch: context.space.ownership_epoch,
+    agentId: options.agentId,
+    kind: options.input?.kind ?? null,
+    cursor: cursor ? { seq: cursor.seq, key: cursor.key ?? '' } : null,
+    limit: limit + 1,
+  });
+  const hasMore = rows.length > limit;
+  const page = rows.slice(0, limit);
   const last = page.at(-1);
   return {
     items: page.map((row) => ({

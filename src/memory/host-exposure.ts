@@ -6,7 +6,12 @@
  */
 import { BusinessError } from '../contracts/errors';
 import { newId, nowMs, sha256Hex } from '../storage/db';
-import type { D1Like } from '../storage/queries';
+import {
+  getMemoryExperienceByDedupe,
+  getMemoryManifest,
+  getMemoryReceiptByInvocation,
+  type D1Like,
+} from '../storage/queries';
 import {
   experienceDedupeKey,
   loadRepresentationExact,
@@ -44,7 +49,6 @@ import type {
   MemoryRepresentation,
   MemorySpaceRef,
 } from './contracts';
-import type { MemoryManifestRow } from './rows';
 
 // ---------------------------------------------------------------------------
 // 提交证据与经历接纳
@@ -178,10 +182,7 @@ export async function recordHostInputExposure(
       reason: 'submission_evidence_unsupported',
     });
   }
-  const manifestRow = await db
-    .prepare('SELECT * FROM memory_manifests WHERE manifest_id = ?')
-    .bind(input.manifestId)
-    .first<MemoryManifestRow>();
+  const manifestRow = await getMemoryManifest(db, input.manifestId);
   if (!manifestRow) {
     throw new BusinessError('MEMORY_TARGET_INVALID', 'manifest 不存在', {
       reason: 'manifest_missing',
@@ -213,30 +214,14 @@ export async function recordHostInputExposure(
       reason: 'manifest_target_corrupt',
     });
   }
-  const existingInvocation = await db
-    .prepare(
-      `SELECT receipt_id, manifest_id, manifest_sha256, payload_sha256, evidence,
-              disposition, reason
-         FROM memory_receipts
-        WHERE kind = 'input_exposure' AND space_id = ? AND ownership_epoch = ?
-          AND agent_actor_id = ? AND host_binding_id = ? AND invocation_id = ?
-        LIMIT 1`,
-    )
-    .bind(
-      context.space.space_id,
-      context.space.ownership_epoch,
-      input.agentId,
-      input.hostBindingId,
-      invocation.invocation_id,
-    )
-    .first<{
-      receipt_id: string;
-      manifest_id: string | null;
-      manifest_sha256: string | null;
-      payload_sha256: string | null;
-      disposition: 'applied' | 'history_only' | 'rejected';
-      reason: string | null;
-    }>();
+  const existingInvocation = await getMemoryReceiptByInvocation(db, {
+    kind: 'input_exposure',
+    spaceId: context.space.space_id,
+    ownershipEpoch: context.space.ownership_epoch,
+    agentId: input.agentId,
+    hostBindingId: input.hostBindingId,
+    invocationId: invocation.invocation_id,
+  });
   if (existingInvocation) {
     if (
       existingInvocation.manifest_sha256 !== manifestRow.manifest_sha256 ||
@@ -467,10 +452,7 @@ export async function appendGatewayObservationProof(
       reason: 'gateway_observation_unsupported',
     });
   }
-  const manifestRow = await db
-    .prepare('SELECT * FROM memory_manifests WHERE manifest_id = ?')
-    .bind(input.manifestId)
-    .first<MemoryManifestRow>();
+  const manifestRow = await getMemoryManifest(db, input.manifestId);
   if (
     !manifestRow ||
     manifestRow.space_id !== context.space.space_id ||
@@ -499,10 +481,7 @@ export async function appendGatewayObservationProof(
       originKind: 'experienced',
       representation: exact.representation,
     });
-    const row = await db
-      .prepare('SELECT experience_id FROM memory_experiences WHERE dedupe_key = ?')
-      .bind(dedupeKey)
-      .first<{ experience_id: string }>();
+    const row = await getMemoryExperienceByDedupe(db, dedupeKey);
     if (row) experienceIds.push(row.experience_id);
   }
   if (experienceIds.length === 0) {
@@ -511,21 +490,14 @@ export async function appendGatewayObservationProof(
   const proofId = `mpf_${await sha256Hex(
     `gateway|${input.hostBindingId}|${input.manifestId}|${input.observedPayloadSha256}`,
   )}`;
-  const receipt = await db
-    .prepare(
-      `SELECT receipt_id FROM memory_receipts
-        WHERE kind = 'input_exposure' AND space_id = ? AND ownership_epoch = ?
-          AND agent_actor_id = ? AND host_binding_id = ? AND invocation_id = ?
-        ORDER BY created_at ASC LIMIT 1`,
-    )
-    .bind(
-      context.space.space_id,
-      context.space.ownership_epoch,
-      input.agentId,
-      input.hostBindingId,
-      manifestRow.invocation_id ?? '',
-    )
-    .first<{ receipt_id: string }>();
+  const receipt = await getMemoryReceiptByInvocation(db, {
+    kind: 'input_exposure',
+    spaceId: context.space.space_id,
+    ownershipEpoch: context.space.ownership_epoch,
+    agentId: input.agentId,
+    hostBindingId: input.hostBindingId,
+    invocationId: manifestRow.invocation_id ?? '',
+  });
   await appendExperienceProofs(db, {
     experienceIds,
     proofId,

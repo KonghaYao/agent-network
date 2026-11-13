@@ -9,7 +9,19 @@
  */
 import { BusinessError, type BusinessErrorCode } from '../contracts/errors';
 import { newId, nowMs, sha256Hex, stableStringify } from '../storage/db';
-import type { D1Like } from '../storage/queries';
+import {
+  getActiveMemorySpace,
+  getLatestMemorySource,
+  getMemoryContext,
+  getMemoryExperienceByDedupe,
+  getMemoryReceiptByIdempotencyKey,
+  getMemoryReceiptByInvocation,
+  getMemoryRepresentation,
+  getMemorySourceRevision,
+  listActiveMemoryHostBindingIds,
+  memorySpaceExists,
+  type D1Like,
+} from '../storage/queries';
 import {
   MEMORY_POLICY_VERSION,
   countsAsRawCoverage,
@@ -59,11 +71,8 @@ import {
 } from './statements';
 import { memoryRepresentationInsertStatements } from './representation-statements';
 import type {
-  MemoryContextRow,
-  MemoryExperienceRow,
   MemoryGovernanceCommandRow,
   MemoryReceiptRow,
-  MemoryRepresentationRow,
   MemorySourceRow,
   MemorySpaceRow,
 } from './rows';
@@ -229,18 +238,8 @@ export async function ownershipTransferStatements(
     capture?: 'none' | 'pending' | 'excluded';
   },
 ): Promise<D1PreparedStatement[]> {
-  const previous = await db
-    .prepare('SELECT * FROM memory_spaces WHERE agent_actor_id = ? AND active = 1')
-    .bind(input.agentId)
-    .first<MemorySpaceRow>();
-  const closed = previous
-    ? await db
-        .prepare(
-          "SELECT binding_id FROM memory_host_bindings WHERE agent_actor_id = ? AND state = 'active'",
-        )
-        .bind(input.agentId)
-        .all<{ binding_id: string }>()
-    : { results: [] as { binding_id: string }[] };
+  const previous = await getActiveMemorySpace(db, input.agentId);
+  const closed = previous ? await listActiveMemoryHostBindingIds(db, input.agentId) : [];
   return memoryOwnershipTransferStatements(db, {
     previous,
     nextSpaceId: newId('msp'),
@@ -251,7 +250,7 @@ export async function ownershipTransferStatements(
     ownershipKind: input.ownershipKind,
     managementBindingId: input.managementBindingId,
     kind: input.kind,
-    closedHostBindingIds: closed.results.map((row) => row.binding_id),
+    closedHostBindingIds: closed.map((row) => row.binding_id),
     now: input.now,
     capture: input.capture,
   });
@@ -287,10 +286,7 @@ async function loadReceiptByIdempotencyKey(
   db: D1Like,
   key: string,
 ): Promise<MemoryReceiptRow | null> {
-  return db
-    .prepare('SELECT * FROM memory_receipts WHERE idempotency_key = ?')
-    .bind(key)
-    .first<MemoryReceiptRow>();
+  return getMemoryReceiptByIdempotencyKey(db, key);
 }
 
 /**
@@ -336,20 +332,14 @@ export async function admitExposureReceipt(
     };
   }
 
-  const existingInvocation = await db
-    .prepare(
-      `SELECT * FROM memory_receipts
-        WHERE kind = 'input_exposure' AND space_id = ? AND ownership_epoch = ?
-          AND agent_actor_id = ? AND host_binding_id = ? AND invocation_id = ?`,
-    )
-    .bind(
-      receipt.space.space_id,
-      receipt.space.ownership_epoch,
-      options.agentId,
-      receipt.invocation.host_binding_id,
-      receipt.invocation.invocation_id,
-    )
-    .first<MemoryReceiptRow>();
+  const existingInvocation = await getMemoryReceiptByInvocation(db, {
+    kind: 'input_exposure',
+    spaceId: receipt.space.space_id,
+    ownershipEpoch: receipt.space.ownership_epoch,
+    agentId: options.agentId,
+    hostBindingId: receipt.invocation.host_binding_id,
+    invocationId: receipt.invocation.invocation_id,
+  });
   if (existingInvocation) {
     if (
       existingInvocation.manifest_sha256 === receipt.manifest_sha256 &&
@@ -390,10 +380,7 @@ export async function admitExposureReceipt(
       error instanceof BusinessError &&
       (error.code === 'MEMORY_TARGET_INVALID' || error.code === 'ACTOR_DISABLED')
     ) {
-      const spaceExists = await db
-        .prepare('SELECT 1 AS hit FROM memory_spaces WHERE space_id = ?')
-        .bind(receipt.space.space_id)
-        .first<{ hit: number }>();
+      const spaceExists = await memorySpaceExists(db, receipt.space.space_id);
       if (!spaceExists) throw error;
       const reason = error.code === 'ACTOR_DISABLED' ? 'agent_disabled' : 'ownership_changed';
       const disposition: MemoryReceiptDisposition = {
@@ -441,10 +428,7 @@ export async function admitExposureReceipt(
     const supplied = exactRepresentations.get(experience.key.representation_id);
     const storedRepresentation = supplied
       ? null
-      : await db
-          .prepare('SELECT * FROM memory_representations WHERE representation_id = ?')
-          .bind(experience.key.representation_id)
-          .first<MemoryRepresentationRow>();
+      : await getMemoryRepresentation(db, experience.key.representation_id);
     const representation = supplied ?? storedRepresentation;
     if (
       !representation ||
@@ -475,10 +459,11 @@ export async function admitExposureReceipt(
     let source: MemorySourceRow | null = null;
     let sourceState: MemorySourceState = 'active';
     if (experience.key.source_id) {
-      source = await db
-        .prepare('SELECT * FROM memory_sources WHERE source_id = ? AND revision = ?')
-        .bind(experience.key.source_id, experience.key.source_revision ?? -1)
-        .first<MemorySourceRow>();
+      source = await getMemorySourceRevision(
+        db,
+        experience.key.source_id,
+        experience.key.source_revision ?? -1,
+      );
       if (source) {
         sourceState = source.state;
         const sourceAccess = await authorizeSourceRead(db, {
@@ -587,10 +572,7 @@ export async function admitExposureReceipt(
         String(experience.key.range?.end ?? ''),
         experience.key.text_sha256,
       ].join('|');
-    const existing = await db
-      .prepare('SELECT experience_id FROM memory_experiences WHERE dedupe_key = ?')
-      .bind(dedupeKey)
-      .first<{ experience_id: string }>();
+    const existing = await getMemoryExperienceByDedupe(db, dedupeKey);
     const storedExperienceId = existing?.experience_id ?? experience.experienceId;
     admittedIdMap.set(experience.experienceId, storedExperienceId);
     experienceIds.push(storedExperienceId);
@@ -719,20 +701,14 @@ export async function recordContextDeliveryReceipt(
       reason: receiptReasonToDisposition(existing.reason),
     };
   }
-  const existingInvocation = await db
-    .prepare(
-      `SELECT * FROM memory_receipts
-        WHERE kind = 'context_delivery' AND space_id = ? AND ownership_epoch = ?
-          AND agent_actor_id = ? AND host_binding_id = ? AND invocation_id = ?`,
-    )
-    .bind(
-      options.space.space_id,
-      options.space.ownership_epoch,
-      options.agentId,
-      options.receipt.invocation.host_binding_id,
-      options.receipt.invocation.invocation_id,
-    )
-    .first<MemoryReceiptRow>();
+  const existingInvocation = await getMemoryReceiptByInvocation(db, {
+    kind: 'context_delivery',
+    spaceId: options.space.space_id,
+    ownershipEpoch: options.space.ownership_epoch,
+    agentId: options.agentId,
+    hostBindingId: options.receipt.invocation.host_binding_id,
+    invocationId: options.receipt.invocation.invocation_id,
+  });
   if (existingInvocation) {
     if (
       existingInvocation.context_id === options.receipt.context_id &&
@@ -761,10 +737,7 @@ export async function recordContextDeliveryReceipt(
       error instanceof BusinessError &&
       (error.code === 'MEMORY_TARGET_INVALID' || error.code === 'ACTOR_DISABLED')
     ) {
-      const spaceExists = await db
-        .prepare('SELECT 1 AS hit FROM memory_spaces WHERE space_id = ?')
-        .bind(options.receipt.space.space_id)
-        .first<{ hit: number }>();
+      const spaceExists = await memorySpaceExists(db, options.receipt.space.space_id);
       if (!spaceExists) throw error;
       const reason = error.code === 'ACTOR_DISABLED' ? 'agent_disabled' : 'ownership_changed';
       const disposition: MemoryReceiptDisposition = {
@@ -783,10 +756,7 @@ export async function recordContextDeliveryReceipt(
     }
     throw error;
   }
-  const context = await db
-    .prepare('SELECT * FROM memory_contexts WHERE context_id = ?')
-    .bind(options.receipt.context_id)
-    .first<MemoryContextRow>();
+  const context = await getMemoryContext(db, options.receipt.context_id);
   const expired =
     !context || context.status !== 'ready' || (context.expires_at !== null && context.expires_at < at);
   const disposition: MemoryReceiptDisposition = {
@@ -810,15 +780,9 @@ export async function getSource(
   revision?: number,
 ): Promise<MemorySourceRow | null> {
   if (revision !== undefined) {
-    return db
-      .prepare('SELECT * FROM memory_sources WHERE source_id = ? AND revision = ?')
-      .bind(sourceId, revision)
-      .first<MemorySourceRow>();
+    return getMemorySourceRevision(db, sourceId, revision);
   }
-  return db
-    .prepare('SELECT * FROM memory_sources WHERE source_id = ? ORDER BY revision DESC LIMIT 1')
-    .bind(sourceId)
-    .first<MemorySourceRow>();
+  return getLatestMemorySource(db, sourceId);
 }
 
 /**
