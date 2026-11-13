@@ -191,6 +191,8 @@ async function listDocumentIds(
   const ids: string[] = [];
   let offset = 0;
   let total: number | null = null;
+  let totalIsEstimate = false;
+  let effectivePageSize = pageSize;
   for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
     const params = new URLSearchParams();
     for (const tag of tags) params.append('tags', tag);
@@ -217,9 +219,20 @@ async function listDocumentIds(
     if (typeof outcome.body.total === 'number' && Number.isSafeInteger(outcome.body.total)) {
       total = outcome.body.total;
     }
+    if (
+      typeof outcome.body.limit === 'number' &&
+      Number.isSafeInteger(outcome.body.limit) &&
+      outcome.body.limit > 0
+    ) {
+      effectivePageSize = outcome.body.limit;
+    }
+    // 真实 API 的 documents.total 可能是估算值；估算时不能据此提前结束分页。
+    if (outcome.body.total_is_estimate === true) totalIsEstimate = true;
     if (items.length === 0) return { ok: true, ids };
-    if (total !== null && offset >= total) return { ok: true, ids };
-    if (total === null && items.length < pageSize) return { ok: true, ids };
+    if (!totalIsEstimate && total !== null && offset >= total) return { ok: true, ids };
+    if ((totalIsEstimate || total === null) && items.length < effectivePageSize) {
+      return { ok: true, ids };
+    }
   }
   return { ok: false, outcome: { kind: 'parse' } };
 }

@@ -614,11 +614,12 @@ MF05 在现有业务事务内追加纯 SQL 来源/预热意图（`src/memory/int
 
 MF04 在 `src/memory/adapters/hindsight.ts` 提供 HTTP 适配器，仍只实现六操作 `capabilities/ensureSpace/retain/search/remove/jobStatus`：
 
-- **配置**：`MEMORY_ADAPTER=hindsight` 时从服务端 `HINDSIGHT_URL` / `HINDSIGHT_API_KEY` 读取；bank 由 space + ownership_epoch + backend_binding_epoch 派生为不可猜测的哈希，凭据与 bank 路由不进入 MCP/UI、结果、capabilities、错误文本或日志。配置缺失/非法时 fail closed，不发请求也不伪报成功。
-- **retain**：只发送已接纳表示中的准确文本，校验 UTF-8 字节与 SHA-256；不会凭 `source_id` 回抓未消费原文。`operation_key` 派生稳定 Hindsight `operation_id`，同 key 不同正文由后端 409 映射为 `fenced`；异步返回的 JobRef 永远绑定原 `backend_binding_epoch`。
-- **search**：有 query 时走 recall，无 query 时走 memories/list 分页并本地复核硬过滤；时间窗口在 Hindsight 仅排序，因此声明 `unsupported`，不静默降级。fact 正文默认映射为不可逐字证明的 summary，只有返回 hash 与保留 hash 一致时才映射为 raw。
-- **remove**：按 source revision / representation / curated 标签枚举文档，DELETE 后重新列出确认消失；未确认全部副本清除时保持 `purge_pending`/`unknown`，不以 2xx 当清除证据。partition 级目标在缺少可证明路由时返回 `unsupported_granularity`。
-- **observation**：`observation_scopes` 按 origin + source revision 或单个表示锚定，限制跨域汇总。真实部署还需完成网关键权验收；默认仍使用 stub，stub 明确返回 unsupported。
+- **配置**：`MEMORY_ADAPTER=hindsight` 时从服务端 `HINDSIGHT_URL` / `HINDSIGHT_API_KEY` 读取；`HINDSIGHT_URL` 是 Hindsight API 根地址（2026-11-13 实测 API 1.2.1，端点无额外前缀），可在末尾带 `/`，加载时归一化为 `origin + pathname`，避免拼出 `//v1/...`。凭据只进入 `Authorization: Bearer` 头，不进入 URL、MCP/UI、结果、capabilities、错误文本或日志。bank 由 space + ownership_epoch + backend_binding_epoch 派生为不可猜测的哈希。配置缺失/非法时 fail closed，不发请求也不伪报成功。
+- **retain**：只发送已接纳表示中的准确文本，校验 UTF-8 字节与 SHA-256；不会凭 `source_id` 回抓未消费原文。请求体为 `{ async: true, operation_id, items: [{ content, context, document_id, update_mode: 'replace', tags, metadata, observation_scopes }] }`；`operation_key` 派生稳定 UUID `operation_id`，同 key 不同正文由后端 409 映射为 `fenced`。响应取 `operation_id`（或 `operation_ids[0]`）作为 JobRef，永远绑定原 `backend_binding_epoch`；`jobStatus` 轮询 `GET /v1/default/banks/{bank}/operations/{operation_id}`，兼容真实 API 以 `200 + status: "not_found"` 表示未知作业。
+- **search**：有 query 时走 `POST .../memories/recall`，无 query 时走 `GET .../memories/list?limit&offset` 分页并本地复核硬过滤；recall 的 origin/source 通过 `tag_groups` 做服务端硬过滤。recall 的 `temporal_window` 只影响排序，list 的时间参数才过滤，因此能力声明为 `time_window: 'ranking_hint_only'`，任何时间过滤仍明确返回 `unsupported`，不静默降级。fact 正文默认映射为不可逐字证明的 summary，只有返回 hash 与保留 hash 一致时才映射为 raw。
+- **remove**：按 source revision / representation / curated 标签以 `tags_match=all_strict` 枚举 `GET .../documents`，DELETE 精确文档后重新列出确认消失；`total_is_estimate=true` 时不信任估算总数，继续分页直到空页/短页。未确认全部副本清除时保持 `purge_pending`/`unknown`，不以 2xx 当清除证据。partition 级目标在缺少可证明路由时返回 `unsupported_granularity`。
+- **observation**：`observation_scopes` 按 origin + source revision 或单个表示锚定，限制跨域汇总。真实部署已完成鉴权与写入验收；默认仍使用 stub，stub 明确返回 unsupported。
+- **真实契约测试**：`HINDSIGHT_REAL_TEST=1` 时追加运行 `scripts/lib/memory-hindsight-real.ts`，默认 CI 跳过。测试使用唯一 `webots-test-<uuid8>` bank 前缀：PUT bank → retain 1 条 → 轮询 job 完成 → recall 命中 → list/documents → adapter remove → `DELETE bank` 兜底清理；输出只含状态与数量，不打印正文、bank 路由或凭据。运行方式见下方“本地验证”。
 
 MF09 新增 `src/memory/sources/langfuse*.ts`，提供可注入的 Langfuse 来源 importer 与受控假服务验收：
 
@@ -648,15 +649,15 @@ MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.t
 - **HostBridge（MF07）**：`src/memory/host-bridge.ts` 实现 bind → prepare input → SubmittedInputManifest → ExposureReceipt → retain 资格。`prepare` 只返回准确 selection 正文并固定 `retain_eligible: false`；manifest 与 receipt 校验 hash/受众/claim/ownership，合格 receipt 才原子写经历与 retain 意图。状态区分 `prepared`、`host_queued`（宿主本进程声明，不是证据）、`host_reported_submitted`、`gateway_observed_submitted`；关闭/过期绑定返回 `skipped_no_boundary`，迟到报告返回 `rejected`。受控网关观测只允许部署方配置的 `controlled_gateway` 绑定；显式 `session_incarnation` 重新 bind 会递增 generation 并关闭旧绑定，旧 run 不能再准备或提交。
 - **MCP 工具（MF06）**：`src/mcp/memory.ts` 注册 `network_memory_status/recall/context_list/context_get/list/get/put/correct/forget/operation_get/host_bind/host_close/input_prepare/input_status/admit/catchup_prepare/catchup_get/experience_list/experience_get`。输入 strict，拒绝客户端自报 space/provider/bank/verified/trusted/through_seq；`network_me.service.memory` 宣告 `memory_enabled`、契约版本、支持/不支持的宿主等级与能力，工具始终注册，Memory 关闭时内容工具返回 `MEMORY_DISABLED`。
 - **网页 Memory 面板（MF08）**：账号区“记忆”打开右侧抽屉；服务端只输出空壳，客户端按当前身份调用既有工具。人类身份只展示 `network_me.service.memory` 能力目录并说明 Agent 私有正文不可读；部署未启用时只显示降级说明，不渲染召回/经历/治理入口。Agent 身份可查看状态、召回（lookup/reflect）、上下文 list/get（含过期/不可用）、稀疏经历 list/get（原文/片段/摘要/自身发布、证据等级、来源房间与成员代次）、宿主 manifest 状态与遗忘/移除确认。页面复用 `roomEpoch`、身份代次与请求代次丢弃陈旧响应；Memory 正文不写 localStorage，不展示 provider/bank/space 路由；移动端全宽单栏，暗色跟随系统。
-- **限制（未完成）**：Hindsight 真实部署鉴权与写入尚未验收；未提供外部宿主 SDK 或真实网关；`auto_injection` 需要 claim 后的 bound Context，当前仅声明 unsupported，预热不直接注入。LocalMemoryAdapter 是受控本地后端，不提供跨宿主共享、向量检索或原生 reflect；需要跨进程共享时仍应使用真实外部引擎。跨房披露必须由服务端传入已核实 grant，客户端不能自报。当前任务模型是消息式 Task（迁移 0042 已删除旧任务实体），因此只登记 `task_offer` 角色来源，不实现旧 `task_submission/task_review/task_handoff` 路径；`network_memory_*` 的 task 目标明确返回 `MEMORY_UNSUPPORTED`。未绑定到房间的 Drive 草稿不是共享来源，绑定到房间时才登记 `file:<file_id>`；来源正文只在策略允许时保存，业务权威仍在原消息/文件系统。
+- **限制（未完成）**：Hindsight 真实部署已完成 API 1.2.1 鉴权、retain/recall/list/documents/remove 与 bank 清理验收，但默认仍不启用；真实契约测试需显式 `HINDSIGHT_REAL_TEST=1`。未提供外部宿主 SDK 或真实网关；`auto_injection` 需要 claim 后的 bound Context，当前仅声明 unsupported，预热不直接注入。LocalMemoryAdapter 是受控本地后端，不提供跨宿主共享、向量检索或原生 reflect；需要跨进程共享时仍应使用真实外部引擎。跨房披露必须由服务端传入已核实 grant，客户端不能自报。当前任务模型是消息式 Task（迁移 0042 已删除旧任务实体），因此只登记 `task_offer` 角色来源，不实现旧 `task_submission/task_review/task_handoff` 路径；`network_memory_*` 的 task 目标明确返回 `MEMORY_UNSUPPORTED`。未绑定到房间的 Drive 草稿不是共享来源，绑定到房间时才登记 `file:<file_id>`；来源正文只在策略允许时保存，业务权威仍在原消息/文件系统。
 
 | 变量 | 说明 |
 | --- | --- |
 | `MEMORY_ENABLED=1` | 启动作业领取、启动恢复、unknown 对账、租约扫描与已配置来源的定时拉取；不设置时不接管任何 Memory 作业。 |
 | `MEMORY_ADAPTER` | `stub`（默认）、`hindsight` 或 `local-sqlite`（别名 `local`）；未知值使 Memory 启动失败并保留持久账本，不静默降级。 |
 | `MEMORY_LOCAL_PATH` | 可选；`MEMORY_ADAPTER=local-sqlite` 时适配器自己的 SQLite 文件，缺省 `${DATA_DIR}/memory-local.sqlite`；不新增业务迁移。 |
-| `HINDSIGHT_URL` | Hindsight API 根地址；仅在 `MEMORY_ADAPTER=hindsight` 时读取。别名 `HINDSIGHT_BASE_URL`。 |
-| `HINDSIGHT_API_KEY` | 服务端 bearer 凭据；只用于请求头，不打印、不写入结果或日志。缺失时适配器 fail closed。 |
+| `HINDSIGHT_URL` | Hindsight API 根地址（实测 `https://hindsight.peri-code.dev/`，端点无额外前缀）；仅在 `MEMORY_ADAPTER=hindsight` 时读取。别名 `HINDSIGHT_BASE_URL`。末尾 `/` 会被归一化，不得含凭据、查询或 fragment。 |
+| `HINDSIGHT_API_KEY` | 服务端 bearer 凭据；只以 `Authorization: Bearer <key>` 发送，不进入 URL、结果或日志。缺失时适配器 fail closed。 |
 | `HINDSIGHT_BANK_PREFIX` | 可选；bank 路由前缀，默认 `agentnet`。只允许小写字母/数字/连字符。 |
 | `HINDSIGHT_TIMEOUT_MS` | 可选；单次请求超时，默认取 `LIMITS.memoryAdapterTimeoutMs`。 |
 | `HINDSIGHT_MAX_RETRIES` | 可选；幂等请求重试次数，默认取 `LIMITS.memoryAdapterMaxRetries`。 |
@@ -688,6 +689,13 @@ bun run test:memory-hindsight
 bun run test:memory-langfuse
 bun run test:memory-host
 bun run test:memory-integration
+```
+
+Hindsight 真实契约测试默认跳过；设置 `HINDSIGHT_REAL_TEST=1` 并在进程环境提供 `HINDSIGHT_URL` / `HINDSIGHT_API_KEY` 后才运行（例如先从仅部署方可读的 env 文件加载，不要把密钥写进仓库）。测试只操作唯一 `webots-test-<uuid>` bank，结束（含失败）时执行 `DELETE bank` 清理，不写入生产 bank；输出只含状态与数量。
+
+```bash
+set -a; . <hindsight-env-file>; set +a
+HINDSIGHT_REAL_TEST=1 bun run test:memory-hindsight
 ```
 
 MF03 提供持久意图与租约；MF04 提供可配置的 Hindsight HTTP 适配器与受控假服务验收；MF10 提供统一运行时组合与 local-sqlite 第二适配器。默认仍使用 stub，stub 明确返回 unsupported，不伪报“已记住”。

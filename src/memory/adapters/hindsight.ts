@@ -1,7 +1,7 @@
 /**
  * MF04 Hindsight HTTP 适配器。
  *
- * 端点形状按 Hindsight HTTP API 1.1.0 官方文档实现：
+ * 端点形状按 Hindsight HTTP API 1.2.1（`GET /openapi.json`）实现：
  * - PUT    /v1/default/banks/{bank}
  * - POST   /v1/default/banks/{bank}/memories
  * - POST   /v1/default/banks/{bank}/memories/recall
@@ -10,10 +10,9 @@
  * - DELETE /v1/default/banks/{bank}/documents/{document}
  * - GET    /v1/default/banks/{bank}/operations/{operation}
  *
- * 真实部署的网关键权尚未通过（当前凭据对 /version 与 /v1/default/banks 均
- * 返回 401），因此本适配器只保证官方协议形状与受控假服务验收；真实写入
- * 必须等部署方完成鉴权后再启用。所有配置由服务端注入，凭据只通过
- * Authorization 头发送，不进入结果、capabilities、错误文本或日志。
+ * 真实部署已用唯一测试 bank 验收保留/召回/列表/删除与清理；默认仍使用 stub。
+ * 所有配置由服务端注入，base URL 在加载时归一化（去掉尾随 `/`），凭据只通过
+ * Authorization 头发送，不进入 URL、结果、capabilities、错误文本或日志。
  */
 import type { MemoryBackendRef, MemoryPurgeState } from '../contracts';
 import {
@@ -97,9 +96,11 @@ export class HindsightMemoryAdapter implements MemoryAdapter {
       provider: 'hindsight',
       // recall 是单次 top-K（无 offset）；query 为空时走 memories/list 分页。
       pagination: true,
-      // 只有 origin/source 能通过服务端标签做真硬过滤；时间窗口在 Hindsight 仅排序。
+      // origin/source 通过服务端标签真硬过滤。
       hard_filters: ['origin_kind', 'source_id'],
-      time_window: 'unsupported',
+      // recall 的 temporal_window 只影响排序；list 的 start_date/end_date 是硬过滤，
+      // 但语义召回（有 query）无法硬时间过滤，因此不能声明 hard_filter。
+      time_window: 'ranking_hint_only',
       // Hindsight 提取 fact，正文可能被改写；不能声称逐字来源完整。
       source_completeness: 'partial',
       // 每个 space + backend epoch 使用独立 bank。
@@ -298,6 +299,9 @@ export class HindsightMemoryAdapter implements MemoryAdapter {
           return this.jobState('failed', 'unknown', true, null);
         case 'cancelled':
           return this.jobState('cancelled', 'unknown', true, null);
+        case 'not_found':
+          // 真实 API 对未知 operation 返回 200 + not_found；等价于无法确认。
+          return this.jobStatusFailure('unknown');
         default:
           return this.jobStatusFailure('unknown');
       }
