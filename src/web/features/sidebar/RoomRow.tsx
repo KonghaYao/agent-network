@@ -2,10 +2,11 @@ import {
   avatarColor,
   firstChar,
   groupAvatarCells,
-  isUnread,
+  hasUnreadAttention,
   relativeTime,
   type RoomSummary,
 } from '../../lib/rooms';
+import type { RoomPreferenceMap } from '../../lib/room-preferences';
 
 /**
  * 会话列表行。
@@ -14,8 +15,14 @@ import {
  * 契约；始终用普通链接整页进入 `/c/:id`，由服务端按 `WEB_SPA_ROUTES`
  * 选择 React Chat 或 legacy 壳，避免 Home 开启而 room 未开启时渲染半成品页。
  */
-export function RoomRow({ room }: { room: RoomSummary }) {
-  const unread = isUnread(room);
+export function RoomRow({
+  room,
+  preferences = {},
+}: {
+  room: RoomSummary;
+  preferences?: RoomPreferenceMap;
+}) {
+  const unread = hasUnreadAttention(room, preferences);
   const offline = room.peer_kind === 'agent' && room.peer_online === false;
   return (
     <li>

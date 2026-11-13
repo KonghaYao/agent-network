@@ -20,6 +20,7 @@ import { avatarColor, firstChar } from '../../lib/rooms';
 import { openContextMenuAt, useLongPress } from '../../hooks/useLongPress';
 import { HumanBody } from './MessageBody';
 import { MarkdownIsland } from './MarkdownIsland';
+import { TaskSummaryBar } from '../tasks/TaskSummaryBar';
 
 interface ChatMessageProps {
   item: HistoryMessage;
@@ -27,10 +28,15 @@ interface ChatMessageProps {
   room: RoomView;
   identityId: string;
   identityName: string;
+  identityKind: 'human' | 'agent';
   mentions: string[];
   allItems: HistoryMessage[];
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
+  onToggleTask: (item: HistoryMessage) => void;
+  onOpenTask: (rootId: string, focusMessageId: string | null) => void;
+  onRecall: (item: HistoryMessage) => void;
+  onForward: (item: HistoryMessage) => void;
 }
 
 function Receipt({
@@ -123,10 +129,16 @@ interface MessageAction {
 function useMessageActions(
   item: HistoryMessage,
   room: RoomView,
+  identityId: string,
+  identityKind: 'human' | 'agent',
   onQuote: (item: HistoryMessage) => void,
   onStatus: (message: string) => void,
+  onToggleTask: (item: HistoryMessage) => void,
+  onRecall: (item: HistoryMessage) => void,
+  onForward: (item: HistoryMessage) => void,
 ): MessageAction[] {
   const truncated = item.body_bytes > messageBodyBytes(item.preview);
+  const mine = item.sender_id === identityId;
   const copy = async () => {
     try {
       const text = truncated ? await readFullMessage(item.message_id) : item.preview;
@@ -139,6 +151,19 @@ function useMessageActions(
   const actions: MessageAction[] = [{ id: 'message-action-copy', label: '复制', run: copy }];
   if (!room.read_only) {
     actions.push({ id: 'message-action-quote', label: '引用', run: () => onQuote(item) });
+  }
+  const canSend = !room.read_only && room.capabilities?.send_message !== false;
+  if (canSend) {
+    const marked = item.task_root_id === item.message_id;
+    actions.push({
+      id: 'message-action-task',
+      label: marked ? '取消 Task' : '标记为 Task',
+      run: () => onToggleTask(item),
+    });
+  }
+  actions.push({ id: 'message-action-forward', label: '转发', run: () => onForward(item) });
+  if (identityKind === 'human' && mine && !room.read_only) {
+    actions.push({ id: 'message-action-recall', label: '撤回', run: () => onRecall(item) });
   }
   return actions;
 }
@@ -171,15 +196,35 @@ function MessageMenuItems({
 function MessageActions({
   item,
   room,
+  identityId,
+  identityKind,
   onQuote,
   onStatus,
+  onToggleTask,
+  onRecall,
+  onForward,
 }: {
   item: HistoryMessage;
   room: RoomView;
+  identityId: string;
+  identityKind: 'human' | 'agent';
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
+  onToggleTask: (item: HistoryMessage) => void;
+  onRecall: (item: HistoryMessage) => void;
+  onForward: (item: HistoryMessage) => void;
 }) {
-  const actions = useMessageActions(item, room, onQuote, onStatus);
+  const actions = useMessageActions(
+    item,
+    room,
+    identityId,
+    identityKind,
+    onQuote,
+    onStatus,
+    onToggleTask,
+    onRecall,
+    onForward,
+  );
   return (
     <DropdownMenuPrimitive.Root>
       <DropdownMenuPrimitive.Trigger asChild>
@@ -209,17 +254,37 @@ function MessageActions({
 function MessageContextMenu({
   item,
   room,
+  identityId,
+  identityKind,
   onQuote,
   onStatus,
+  onToggleTask,
+  onRecall,
+  onForward,
   children,
 }: {
   item: HistoryMessage;
   room: RoomView;
+  identityId: string;
+  identityKind: 'human' | 'agent';
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
+  onToggleTask: (item: HistoryMessage) => void;
+  onRecall: (item: HistoryMessage) => void;
+  onForward: (item: HistoryMessage) => void;
   children: ReactNode;
 }) {
-  const actions = useMessageActions(item, room, onQuote, onStatus);
+  const actions = useMessageActions(
+    item,
+    room,
+    identityId,
+    identityKind,
+    onQuote,
+    onStatus,
+    onToggleTask,
+    onRecall,
+    onForward,
+  );
   return (
     <ContextMenuPrimitive.Root>
       <ContextMenuPrimitive.Trigger asChild>{children}</ContextMenuPrimitive.Trigger>
@@ -242,10 +307,15 @@ export const ChatMessage = memo(function ChatMessage({
   room,
   identityId,
   identityName,
+  identityKind,
   mentions,
   allItems,
   onQuote,
   onStatus,
+  onToggleTask,
+  onOpenTask,
+  onRecall,
+  onForward,
 }: ChatMessageProps) {
   const [fullBody, setFullBody] = useState<string | null>(null);
   const [loadingFull, setLoadingFull] = useState(false);
@@ -287,8 +357,13 @@ export const ChatMessage = memo(function ChatMessage({
       <MessageContextMenu
         item={item}
         room={room}
+        identityId={identityId}
+        identityKind={identityKind}
         onQuote={onQuote}
         onStatus={onStatus}
+        onToggleTask={onToggleTask}
+        onRecall={onRecall}
+        onForward={onForward}
       >
         <li
           className={`msg${mine ? ' mine has-receipt' : ''}`}
@@ -306,6 +381,12 @@ export const ChatMessage = memo(function ChatMessage({
           </span>
           <div className="msg-content">
             {!mine && room.kind === 'group' ? <div className="msg-sender">{name}</div> : null}
+            <TaskSummaryBar
+              item={item}
+              roomId={room.room_id}
+              headSeq={room.head_seq}
+              onOpen={onOpenTask}
+            />
             <div
               className={`bubble${collapsed ? ' is-collapsed' : ''}`}
               title={fullTime(item.created_at)}
@@ -372,7 +453,17 @@ export const ChatMessage = memo(function ChatMessage({
               </button>
             ) : null}
             {item.body_bytes > 0 ? (
-              <MessageActions item={item} room={room} onQuote={onQuote} onStatus={onStatus} />
+              <MessageActions
+                item={item}
+                room={room}
+                identityId={identityId}
+                identityKind={identityKind}
+                onQuote={onQuote}
+                onStatus={onStatus}
+                onToggleTask={onToggleTask}
+                onRecall={onRecall}
+                onForward={onForward}
+              />
             ) : null}
           </div>
         </li>

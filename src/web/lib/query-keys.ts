@@ -11,7 +11,12 @@ export const queryKeys = {
   roomFiles: (roomId: string) => ['room', roomId, 'files'] as const,
   history: (roomId: string, timeline: boolean) =>
     ['room', roomId, 'history', timeline ? 'timeline' : 'default'] as const,
+  taskSummary: (roomId: string, rootId: string, version: string) =>
+    ['room', roomId, 'task-summary', rootId, version] as const,
   contacts: (actorId: string | null) => ['contacts', actorId ?? 'anonymous'] as const,
+  contactBlocks: (actorId: string | null) => ['contact-blocks', actorId ?? 'anonymous'] as const,
+  agentManagement: (actorId: string | null) =>
+    ['agent-management', actorId ?? 'anonymous'] as const,
   contactRequests: (actorId: string | null) =>
     ['contact-requests', actorId ?? 'anonymous'] as const,
   contactRequestBadge: (actorId: string | null) =>
