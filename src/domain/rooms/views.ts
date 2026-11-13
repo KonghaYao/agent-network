@@ -5,7 +5,7 @@ import { type BusinessErrorCode } from '../../contracts/errors';
 import { clampPage, LIMITS } from '../../contracts/limits';
 import { type RoomsListInput } from '../../contracts/schemas';
 import { nowMs } from '../../storage/db';
-import { getMessage, visibleActorSql } from '../../storage/queries';
+import { getMessage, listActiveRoomPeers, visibleActorSql } from '../../storage/queries';
 import { type ActorRow, type MessageRow, type RoomManagementAuditRow, type RoomMemberRow, type RoomRow } from '../../storage/rows';
 import { manageableAgentIds } from '../agent-access';
 import { relationEndedByBlockSql } from '../contact-relations';
@@ -346,21 +346,9 @@ export async function listRoomPeers(
   roomIds: string[],
 ): Promise<Map<string, RoomPeerView>> {
   if (roomIds.length === 0) return new Map();
-  const placeholders = roomIds.map(() => '?').join(',');
-  const rows = await db
-    .prepare(
-      `SELECT rm.room_id, a.actor_id, a.name, a.kind
-         FROM room_members rm
-         JOIN actors a ON a.actor_id = rm.actor_id
-        WHERE rm.room_id IN (${placeholders})
-          AND rm.status = 'active'
-          AND rm.actor_id <> ?
-        ORDER BY rm.room_id, a.actor_id`,
-    )
-    .bind(...roomIds, viewerId)
-    .all<{ room_id: string; actor_id: string; name: string; kind: 'human' | 'agent' }>();
+  const rows = await listActiveRoomPeers(db, roomIds, viewerId);
   const peers = new Map<string, RoomPeerView>();
-  for (const row of rows.results) {
+  for (const row of rows) {
     if (peers.has(row.room_id)) continue;
     peers.set(row.room_id, {
       actor_id: row.actor_id,

@@ -427,6 +427,7 @@ bun scripts/q01-upgrade-check.ts   # 合成 0035 旧库升级到 0047，校验 4
 bun run build:web                  # Vite 产出 dist/web；默认不接管路由
 bun run test:spa-shell             # build:web + manifest/static/flag 回退
 bun run test:schema-parity         # 43 个迁移 vs Drizzle core schema parity
+bun run test:drizzle               # 核心只读查询 raw vs Drizzle 逐行一致 + EXPLAIN/基准
 bun run test:mcp-parity            # 固定 MCP 协议帧 baseline
 bun run capture:mcp-baseline       # 协议/工具契约变更后重新录制 baseline
 AGENTNET_URL=http://127.0.0.1:8792 bun scripts/q01-doc-check.ts   # tools/list 114 与 README/CLAUDE/技能/CLI 引用一致
