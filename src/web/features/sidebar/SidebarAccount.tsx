@@ -174,7 +174,6 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
                 className="account-scan"
                 id="new-agent"
                 type="button"
-                disabled={me.kind !== 'human'}
                 aria-haspopup="dialog"
                 aria-controls="new-agent-modal"
                 aria-expanded={newAgentOpen}
@@ -210,7 +209,6 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
                 type="button"
                 aria-label="已归档 Agents"
                 title="已归档 Agents"
-                disabled={me.kind !== 'human'}
                 aria-haspopup="dialog"
                 aria-controls="archive-popover"
                 aria-expanded={archiveOpen}

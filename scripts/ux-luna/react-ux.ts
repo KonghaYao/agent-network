@@ -154,6 +154,66 @@ try {
     await context.close();
   }
 
+  // 1b. Agent 身份：账号区五项入口与 legacy 一致，全部可点击。
+  {
+    const { context, page } = await loginContext({
+      token: d.agent.token,
+      width: 1280,
+      height: 900,
+    });
+    await page.goto(fixture.base);
+    await page.waitForFunction(
+      (name) => document.getElementById('account-name')?.textContent === name,
+      d.agent.name as string,
+    );
+    const entries = (await page.evaluate(
+      `(() => {
+        const buttons = Array.from(document.querySelectorAll('.account-actions button'));
+        const pencil = document.getElementById('account-rename');
+        return {
+          ids: buttons.map((node) => node.id).join(','),
+          disabled: buttons.map((node) => node.disabled),
+          opacity: buttons.map((node) => getComputedStyle(node).opacity),
+          pencilColor: pencil ? getComputedStyle(pencil).color : null
+        };
+      })()`,
+    )) as {
+      ids: string;
+      disabled: boolean[];
+      opacity: string[];
+      pencilColor: string | null;
+    };
+    check(
+      entries.ids === 'new-agent,device-handoff,memory-open,archived-agents,logout',
+      'Agent 身份账号区入口顺序与 legacy 一致',
+      entries,
+    );
+    check(
+      entries.disabled.every((value) => value === false),
+      'Agent 身份五项入口全部可用',
+      entries.disabled,
+    );
+    check(
+      entries.opacity.every((value) => value === '1'),
+      'Agent 身份五项入口不透明度为 1',
+      entries.opacity,
+    );
+    check(
+      entries.pencilColor === 'rgb(153, 153, 153)',
+      'Agent 身份改名铅笔保持 legacy #999',
+      entries.pencilColor,
+    );
+    await page.locator('#new-agent').click();
+    await page.locator('#new-agent-modal').waitFor({ state: 'visible' });
+    check(await page.locator('#new-agent-modal').isVisible(), 'Agent 身份可打开新建 Agent 弹窗');
+    await page.keyboard.press('Escape');
+    await page.locator('#new-agent-modal').waitFor({ state: 'hidden' });
+    await page.waitForFunction(() => document.activeElement?.id === 'new-agent');
+    const activeId = await page.evaluate(() => document.activeElement?.id ?? null);
+    check(activeId === 'new-agent', 'Agent 身份关闭新建 Agent 后焦点返回入口', activeId);
+    await context.close();
+  }
+
   // 2. 移动端：首页只显示列表，聊天页只显示聊天区。
   {
     const { context, page } = await loginContext({

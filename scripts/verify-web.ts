@@ -4383,6 +4383,7 @@ async function main(): Promise<void> {
             const rect = node.getBoundingClientRect();
             return { width: Math.round(rect.width), height: Math.round(rect.height) };
           };
+          const pencil = document.getElementById('account-rename');
           return {
             hasAccount: Boolean(account),
             actionsVisible: actions ? getComputedStyle(actions).display !== 'none' : false,
@@ -4390,6 +4391,11 @@ async function main(): Promise<void> {
             ids: buttons.map((node) => node.id),
             avatar: box(avatar),
             footer: box(footer),
+            account: box(account),
+            actions: box(actions),
+            pencilColor: pencil ? getComputedStyle(pencil).color : null,
+            buttonsDisabled: buttons.map((node) => node.disabled),
+            buttonsOpacity: buttons.map((node) => getComputedStyle(node).opacity),
             nameFontSize: name ? getComputedStyle(name).fontSize : null,
             actionFontSize: actions && buttons[0] ? getComputedStyle(buttons[0]).fontSize : null,
             actionGap: actions ? getComputedStyle(actions).gap : null,
@@ -4403,6 +4409,11 @@ async function main(): Promise<void> {
         ids: string[];
         avatar: { width: number; height: number } | null;
         footer: { width: number; height: number } | null;
+        account: { width: number; height: number } | null;
+        actions: { width: number; height: number } | null;
+        pencilColor: string | null;
+        buttonsDisabled: boolean[];
+        buttonsOpacity: string[];
         nameFontSize: string | null;
         actionFontSize: string | null;
         actionGap: string | null;
@@ -4428,6 +4439,23 @@ async function main(): Promise<void> {
       checkEqual('账号名称字号保持 13px', accountLayout?.nameFontSize, '13px');
       checkEqual('账号操作文字字号保持 12px', accountLayout?.actionFontSize, '12px');
       checkEqual('账号操作行间距保持 2px 10px', accountLayout?.actionGap, '2px 10px');
+      checkEqual('账号区高度保持 legacy 55px', accountLayout?.account?.height, 55);
+      checkEqual('账号操作行高度保持 legacy 22px', accountLayout?.actions?.height, 22);
+      checkEqual(
+        '改名铅笔保持 legacy 浅色 #999',
+        accountLayout?.pencilColor,
+        'rgb(153, 153, 153)',
+      );
+      checkEqual(
+        '人类身份五项入口全部可用',
+        accountLayout?.buttonsDisabled.join(','),
+        'false,false,false,false,false',
+      );
+      checkEqual(
+        '人类身份五项入口不透明度为 1',
+        [...new Set(accountLayout?.buttonsOpacity ?? [])].join(','),
+        '1',
+      );
       check(
         '账号区高度保持 legacy 74px',
         accountLayout?.footer?.height === 74,
@@ -4467,6 +4495,100 @@ async function main(): Promise<void> {
       );
       checkEqual('退出登录清除本机 token', true, true);
       await context.close();
+    }
+
+    // 5b. 暗色与 Agent 身份：铅笔颜色跟随 legacy，五项入口不被禁用。
+    {
+      const dark = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 800 },
+        allErrors,
+        false,
+        false,
+        { colorScheme: 'dark' },
+      );
+      await dark.page.goto(`${server.base}/`);
+      await dark.page.waitForFunction(`Boolean(document.getElementById('account-rename'))`);
+      const darkPencil = (await dark.page.evaluate(
+        `(() => {
+          const node = document.getElementById('account-rename');
+          return node ? getComputedStyle(node).color : null;
+        })()`,
+      )) as string | null;
+      checkEqual('改名铅笔保持 legacy 暗色 #8c8c8c', darkPencil, 'rgb(140, 140, 140)');
+      await dark.context.close();
+    }
+
+    {
+      const agent = await makeContext(
+        browser,
+        data.agentAToken,
+        { width: 1280, height: 800 },
+        allErrors,
+      );
+      await agent.page.goto(`${server.base}/`);
+      await agent.page.waitForFunction(
+        `document.getElementById('account-name') && document.getElementById('account-name').textContent === ${JSON.stringify(data.agentA.name)}`,
+      );
+      const agentState = (await agent.page.evaluate(
+        `(() => {
+          const actions = document.querySelector('.account-actions');
+          const buttons = actions ? Array.from(actions.querySelectorAll('button')) : [];
+          const pencil = document.getElementById('account-rename');
+          return {
+            ids: buttons.map((node) => node.id).join(','),
+            disabled: buttons.map((node) => node.disabled),
+            opacity: buttons.map((node) => getComputedStyle(node).opacity),
+            pencilColor: pencil ? getComputedStyle(pencil).color : null
+          };
+        })()`,
+      )) as {
+        ids: string;
+        disabled: boolean[];
+        opacity: string[];
+        pencilColor: string | null;
+      };
+      checkEqual(
+        'Agent 身份入口顺序与 legacy 一致',
+        agentState.ids,
+        'new-agent,device-handoff,memory-open,archived-agents,logout',
+      );
+      checkEqual(
+        'Agent 身份五项入口全部可用',
+        agentState.disabled.join(','),
+        'false,false,false,false,false',
+      );
+      checkEqual(
+        'Agent 身份五项入口不透明度为 1',
+        [...new Set(agentState.opacity)].join(','),
+        '1',
+      );
+      checkEqual(
+        'Agent 身份改名铅笔保持 legacy 浅色 #999',
+        agentState.pencilColor,
+        'rgb(153, 153, 153)',
+      );
+
+      const openAndClose = async (
+        trigger: string,
+        surface: string,
+        close: string,
+      ): Promise<void> => {
+        await agent.page.locator(`#${trigger}`).click();
+        await agent.page.locator(`#${surface}`).waitFor({ state: 'visible' });
+        await agent.page.locator(`#${close}`).click();
+        await agent.page.locator(`#${surface}`).waitFor({ state: 'hidden' });
+        await agent.page.waitForFunction(
+          `document.activeElement && document.activeElement.id === ${JSON.stringify(trigger)}`,
+        );
+      };
+      await openAndClose('new-agent', 'new-agent-modal', 'new-agent-close');
+      await openAndClose('archived-agents', 'archive-popover', 'archive-popover-close');
+      await openAndClose('memory-open', 'memory-drawer', 'memory-close');
+      await openAndClose('device-handoff', 'handoff-modal', 'handoff-close');
+      await openAndClose('logout', 'logout-modal', 'logout-cancel');
+      await agent.context.close();
     }
 
     // 6. 群管理：成员、公告、改名、群主转让入口与退群预览。
