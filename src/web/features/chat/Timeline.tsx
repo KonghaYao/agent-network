@@ -161,7 +161,13 @@ export function Timeline({
     } else if (pinnedRef.current) {
       setPin(false);
     }
-    if (hasOlder && !olderLoading && element.scrollTop <= element.clientHeight * LIMITS.webOlderAutoTopRatio) {
+    const scrollRange = element.scrollHeight - element.clientHeight;
+    if (
+      hasOlder &&
+      !olderLoading &&
+      scrollRange > 0 &&
+      element.scrollTop <= scrollRange * LIMITS.webOlderAutoTopRatio
+    ) {
       void loadOlder();
     }
   };
