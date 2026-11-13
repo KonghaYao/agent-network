@@ -14,6 +14,8 @@
     "test:e2e": "playwright test",
     "test:spa-shell": "bun run build:web && bun scripts/verify-spa-shell.ts",
     "test:schema-parity": "bun scripts/verify-drizzle-schema.ts",
+    "test:mcp-parity": "bun scripts/verify-mcp-parity.ts",
+    "capture:mcp-baseline": "bun scripts/capture-mcp-baseline.ts",
     "q01-upgrade-check": "bun scripts/q01-upgrade-check.ts",
     "typecheck": "tsrs --noEmit",
     "typecheck:tsc": "tsc --noEmit",
