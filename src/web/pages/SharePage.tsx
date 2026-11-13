@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import type { PublicShareActor } from '../app/bootstrap';
+import { Link, navigate } from '../app/router';
 import { callTool, type McpError } from '../lib/mcp-client';
 import { browserToken, newRequestId } from '../lib/token-handoff';
 
@@ -75,7 +76,7 @@ function ValidSharePage({ actor }: { actor: PublicShareActor }) {
           { token },
         );
         setStatus('已建立好友关系，正在进入单聊…');
-        window.location.href = `/c/${encodeURIComponent(room.room.room_id)}`;
+        navigate(`/c/${encodeURIComponent(room.room.room_id)}`);
         return;
       }
       if (requested.status === 'pending') {
@@ -170,7 +171,7 @@ function InvalidSharePage() {
         链接可能已失效，或会话尚未注册。请向对方索取新的分享链接。
       </p>
       <p>
-        <a href="/">返回 WeBots</a>
+        <Link to="/">返回 WeBots</Link>
       </p>
     </main>
   );

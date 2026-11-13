@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { Link, navigate } from '../app/router';
 import { callTool, type McpError } from '../lib/mcp-client';
 import { browserToken, newRequestId } from '../lib/token-handoff';
 
@@ -153,7 +154,7 @@ function ValidJoinPage({ inviteKey }: { inviteKey: string }) {
   async function confirmJoin() {
     if (busy || !invitation) return;
     if (invitation.next_step === 'member') {
-      window.location.href = `/c/${encodeURIComponent(invitation.room_id)}`;
+      navigate(`/c/${encodeURIComponent(invitation.room_id)}`);
       return;
     }
     setBusy(true);
@@ -183,7 +184,7 @@ function ValidJoinPage({ inviteKey }: { inviteKey: string }) {
         return;
       }
       setStatus('已加入群聊，正在进入…');
-      window.location.href = `/c/${encodeURIComponent(result.room_id)}`;
+      navigate(`/c/${encodeURIComponent(result.room_id)}`);
     } catch (failure) {
       setStatus(`加入失败：${(failure as McpError).message || String(failure)}`);
       setError(true);
@@ -234,7 +235,7 @@ function ValidJoinPage({ inviteKey }: { inviteKey: string }) {
           id="join-home"
           type="button"
           onClick={() => {
-            window.location.href = '/';
+            navigate('/');
           }}
         >
           返回 WeBots
@@ -265,7 +266,7 @@ function InvalidJoinPage() {
       </div>
       <p className="share-lead">请确认链接完整，或向群管理员索取新的邀请。</p>
       <p>
-        <a href="/">返回 WeBots</a>
+        <Link to="/">返回 WeBots</Link>
       </p>
     </main>
   );
