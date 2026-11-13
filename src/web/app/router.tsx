@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react';
 /**
  * 约 100 行的 history router。
  *
- * 4B-1 只用 home；其余 route 仍由服务端渲染 legacy，解析函数先固定语义，
- * 4B-2/3 接管时不需要换路由库。`Link` 只拦截同源普通左键点击。
+ * 4B-6 起五条页面路由全部由 React 接管；`parseRoute` 是唯一的路由语义，
+ * 未知路径回到首页。`Link` 只拦截同源普通左键点击。
  */
 export type AppRoute =
   | { name: 'home' }

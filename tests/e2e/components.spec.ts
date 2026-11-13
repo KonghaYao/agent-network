@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
  * 4B-4 组件验收：Radix dialog/menu/popover、Ariakit Combobox、dropzone、
  * resizable panels、RHF 表单与 zustand 持久化。
  *
- * 需要 `WEB_SPA_ROUTES=home,room E2E_SPA=1`。组与好友在 beforeAll 用真实
+ * 组与好友在 beforeAll 用真实
  * MCP 工具创建，页面断言只走浏览器交互。
  */
 
@@ -80,13 +80,6 @@ async function callTool<T>(
   return JSON.parse(text) as T;
 }
 
-const SPA_ENABLED =
-  process.env.E2E_SPA === '1' &&
-  (process.env.WEB_SPA_ROUTES ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .some((value) => value === 'room' || value === 'all');
-
 async function login(page: Page, base: string, token: string): Promise<void> {
   await page.addInitScript(
     ({ token, base: origin }) => {
@@ -104,7 +97,6 @@ async function login(page: Page, base: string, token: string): Promise<void> {
 }
 
 test.describe.serial('SPA 组件库与状态管理', () => {
-  test.skip(!SPA_ENABLED, '需要 WEB_SPA_ROUTES=home,room E2E_SPA=1 才运行组件用例');
 
   let base = '';
   let tokenA = '';

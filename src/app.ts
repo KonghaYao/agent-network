@@ -1,6 +1,6 @@
 import type { McpRequestContext } from '@modelcontextprotocol/server';
 import { FILE_ID_PATTERN, FileError, fileScopeFor, type FileMount, type FileService } from '@peri-code/mcpp/files';
-import { Hono, type Context } from 'hono';
+import { Hono } from 'hono';
 import { stat } from 'node:fs/promises';
 import { basename, extname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
@@ -28,14 +28,10 @@ import { maintain } from './maintenance';
 import { scheduleOutboxDrain } from './realtime/outbox';
 import { STREAM_URI } from './realtime/stream';
 import { getActorBySession } from './storage/queries';
-import { renderChatPage } from './web/chat';
-import { renderInvalidJoinPage, renderJoinPage } from './web/join';
-import { renderPairPage } from './web/pair';
-import { renderHomePage, renderInvalidSharePage, renderSharePage } from './web/share';
 import { renderInvalidJoinSpaPage, renderJoinSpaPage } from './web/ssr/join';
 import { renderInvalidShareSpaPage, renderShareSpaPage } from './web/ssr/share';
 import { renderSpaShell } from './web/spa-shell';
-import { IMPLEMENTED_SPA_ROUTES, parseSpaRoutes, type SpaManifest, type SpaRoute } from './web/spa-manifest';
+import type { SpaManifest, SpaRoute } from './web/spa-manifest';
 import type { Env } from './env';
 
 interface RpcBody {
@@ -67,88 +63,9 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
 };
 const STATIC_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 
-/** SPA 灰度 cookie：值是与 `WEB_SPA_ROUTES` 相同的逗号列表。 */
-const SPA_COOKIE = 'agent-network-spa';
-const SPA_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
-const EMPTY_SPA_ROUTES: ReadonlySet<SpaRoute> = new Set<SpaRoute>();
-
-interface SpaRequestState {
-  readonly routes: ReadonlySet<SpaRoute>;
-  readonly setCookie: string | null;
-  readonly varyCookie: boolean;
-}
-
-/** 只解析第一个同名 cookie；畸形百分号编码按原始值处理，不抛错。 */
-function cookieValue(header: string | undefined, name: string): string | null {
-  if (!header) return null;
-  for (const part of header.split(';')) {
-    const index = part.indexOf('=');
-    if (index <= 0) continue;
-    if (part.slice(0, index).trim() !== name) continue;
-    const raw = part.slice(index + 1).trim();
-    try {
-      return decodeURIComponent(raw);
-    } catch {
-      return raw;
-    }
-  }
-  return null;
-}
-
-function spaCookieHeader(value: string, maxAge: number, secure: boolean): string {
-  const encoded = value ? encodeURIComponent(value) : '';
-  return `${SPA_COOKIE}=${encoded}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure ? '; Secure' : ''}`;
-}
-
-/**
- * 解析当前请求实际启用的 SPA route。
- *
- * - `WEB_SPA_ROUTES` 为空：完全保持 legacy，连 cookie/query 都不读取；
- * - `?spa=1`：把 env 允许的集合写入 cookie；`?spa=0`：清除 cookie；
- * - 有 cookie：取 env ∩ cookie，防止用户启用未部署的页面。
- */
-function resolveSpaRequest(
-  c: Context,
-  envRoutes: ReadonlySet<SpaRoute>,
-): SpaRequestState {
-  if (envRoutes.size === 0) {
-    return { routes: EMPTY_SPA_ROUTES, setCookie: null, varyCookie: false };
-  }
-  const secure = c.req.url.startsWith('https:');
-  const flag = c.req.query('spa');
-  if (flag === '0') {
-    return {
-      routes: EMPTY_SPA_ROUTES,
-      setCookie: spaCookieHeader('', 0, secure),
-      varyCookie: true,
-    };
-  }
-  if (flag === '1') {
-    return {
-      routes: envRoutes,
-      setCookie: spaCookieHeader([...envRoutes].join(','), SPA_COOKIE_MAX_AGE_SECONDS, secure),
-      varyCookie: true,
-    };
-  }
-  const stored = cookieValue(c.req.header('cookie'), SPA_COOKIE);
-  if (stored === null) return { routes: envRoutes, setCookie: null, varyCookie: true };
-  const cookieRoutes = parseSpaRoutes(stored);
-  return {
-    routes: new Set([...envRoutes].filter((route) => cookieRoutes.has(route))),
-    setCookie: null,
-    varyCookie: true,
-  };
-}
-
-function spaResponseHeaders(
-  state: SpaRequestState,
-  extra: Record<string, string> = {},
-): Record<string, string> {
-  const headers: Record<string, string> = { ...extra };
-  if (state.varyCookie) headers.vary = 'Cookie';
-  if (state.setCookie) headers['set-cookie'] = state.setCookie;
-  return headers;
-}
+/** 4B-6 起 legacy 壳已删除；浏览器岛只保留 React 仍在用的 Markdown 与画板。 */
+const LIVE_ASSETS: ReadonlySet<string> = new Set(['chat-markdown.js', 'chat-drawboard.js']);
+const RETIRED_ASSETS: ReadonlySet<string> = new Set(['chat-resizer.js', 'chat-icons.js']);
 
 /** 旧 shell 包装已删除，保留一个发布周期的 410 让存量客户端得到明确迁移信号。 */
 const RETIRED_SKILL_PATH = /^[a-z0-9][a-z0-9._-]*\.sh$/u;
@@ -613,25 +530,15 @@ export interface AppDeps {
   markdownAsset?: string | null;
   /** bundle 内容哈希；页面用它生成带版本 URL，避免 CDN 继续命中旧缓存。 */
   markdownAssetVersion?: string | null;
-  /** 启动时构建的右侧面板拖拽 bundle；null 表示构建失败、保留默认 50/50。 */
-  resizerAsset?: string | null;
-  /** 拖拽 bundle 内容哈希；与 Markdown 共用同样的版本化 URL 策略。 */
-  resizerAssetVersion?: string | null;
   /** 按需加载的 Fabric 画板 bundle；null 表示构建失败、打开时显示可读错误。 */
   drawboardAsset?: string | null;
   /** 画板 bundle 内容哈希；只在首次打开画板时请求带版本 URL。 */
   drawboardAssetVersion?: string | null;
-  /** 启动时构建的图标悬停动效 bundle；null 表示构建失败、只保留静态 SVG。 */
-  iconAsset?: string | null;
-  /** 图标动效 bundle 内容哈希；与其他浏览器岛共用同样的版本化 URL 策略。 */
-  iconAssetVersion?: string | null;
   /** 启动时构建的 agentnet CLI bundle；null 表示构建失败、/skills/agentnet.js 返回 404。 */
   clientAsset?: string | null;
   /** CLI bundle 内容哈希；作为 ETag，客户端重复请求可命中 304。 */
   clientAssetVersion?: string | null;
-  /** `WEB_SPA_ROUTES` 解析结果；空集合或缺失表示所有页面继续 legacy。 */
-  spaRoutes?: ReadonlySet<SpaRoute>;
-  /** 启动时读取的 Vite manifest；null 表示未构建/损坏，回退 legacy。 */
+  /** 启动时读取的 Vite manifest；null 表示未构建/损坏，页面路由返回 503。 */
   spaManifest?: SpaManifest | null;
   /** Vite 产物目录；默认仓库根的 `dist/web`，测试可指向临时目录。 */
   spaDistDir?: string;
@@ -704,23 +611,21 @@ async function openPayload(
 export function createApp(env: Env, deps: AppDeps = {}): Hono {
   const app = new Hono();
   const spaDistDir = deps.spaDistDir ?? WEB_DIST_ROOT;
-  const envSpaRoutes = deps.spaRoutes ?? EMPTY_SPA_ROUTES;
-  const spaManifestFor = (
-    route: SpaRoute,
-    state: SpaRequestState,
-  ): SpaManifest | null =>
-    deps.spaManifest &&
-    IMPLEMENTED_SPA_ROUTES.has(route) &&
-    state.routes.has(route)
-      ? deps.spaManifest
-      : null;
-  const spaHtml = (
-    route: SpaRoute,
-    state: SpaRequestState,
-  ): string | null => {
-    const manifest = spaManifestFor(route, state);
-    return manifest ? renderSpaShell(route, manifest) : null;
-  };
+  const spaManifest = deps.spaManifest ?? null;
+  const spaHtml = (route: SpaRoute): string | null =>
+    spaManifest ? renderSpaShell(route, spaManifest) : null;
+  /** manifest 缺失时页面路由返回可读的 503，而不是静默渲染空白页。 */
+  const webUnavailable = (): Response =>
+    new Response(
+      'WeBots web assets are not built. Run `bun run build:web` and restart the service.',
+      {
+        status: 503,
+        headers: {
+          'content-type': 'text/plain; charset=utf-8',
+          'cache-control': 'no-store',
+        },
+      },
+    );
 
   // 只服务 Vite 构建产物：扩展名白名单、拒绝路径穿越、目录不列表。
   // 文件名带内容哈希，因此可以长期 immutable；ETag 直接取文件名。
@@ -761,21 +666,26 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     }),
   );
 
-  // 浏览器岛 bundle：同一缓存策略、按文件名映射；构建失败或未注入时 404。
-  // 启动期已预计算内容哈希，ETag 直接用版本，不引入 hono/etag。
+  // 浏览器岛 bundle：React 仍从 `/assets/*` 懒加载 Markdown 与画板。
+  // 4B-6 删除的 resizer/icons 返回 410，给仍缓存旧 HTML 的客户端明确迁移信号。
   const assets: Record<
     string,
     { body: string | null | undefined; version: string | null | undefined }
   > = {
     'chat-markdown.js': { body: deps.markdownAsset, version: deps.markdownAssetVersion },
-    'chat-resizer.js': { body: deps.resizerAsset, version: deps.resizerAssetVersion },
     'chat-drawboard.js': { body: deps.drawboardAsset, version: deps.drawboardAssetVersion },
-    'chat-icons.js': { body: deps.iconAsset, version: deps.iconAssetVersion },
   };
   app.get('/assets/:name', (c) => {
-    const asset = assets[c.req.param('name')];
-    if (!asset) return c.notFound();
-    const body = asset.body;
+    const name = c.req.param('name');
+    if (RETIRED_ASSETS.has(name)) {
+      return c.text('This browser asset has been removed in 4B-6.', 410, {
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+      });
+    }
+    if (!LIVE_ASSETS.has(name)) return c.notFound();
+    const asset = assets[name];
+    const body = asset?.body;
     if (!body) {
       return c.text('Not Found', 404, { 'cache-control': 'no-store' });
     }
@@ -850,100 +760,62 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
   });
 
   app.get('/', (c) => {
-    const spa = resolveSpaRequest(c, envSpaRoutes);
-    const shell = spaHtml('home', spa);
-    if (shell) {
-      return c.html(shell, 200, spaResponseHeaders(spa, { 'cache-control': 'no-store' }));
-    }
-    return c.html(
-      renderHomePage(
-        deps.markdownAssetVersion ?? null,
-        deps.resizerAssetVersion ?? null,
-        deps.drawboardAssetVersion ?? null,
-        deps.iconAssetVersion ?? null,
-      ),
-      200,
-      spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
-    );
+    const shell = spaHtml('home');
+    return shell
+      ? c.html(shell, 200, { 'cache-control': 'no-store' })
+      : webUnavailable();
   });
   app.get('/a/:sessionId', async (c) => {
-    const spa = resolveSpaRequest(c, envSpaRoutes);
-    const manifest = spaManifestFor('share', spa);
+    if (!spaManifest) return webUnavailable();
     const actor = await getActorBySession(env.DB, c.req.param('sessionId'));
     if (!actor) {
       return c.html(
-        manifest ? renderInvalidShareSpaPage(manifest) : renderInvalidSharePage(),
+        renderInvalidShareSpaPage(spaManifest),
         404,
-        spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
+        { 'cache-control': 'no-store' },
       );
     }
     return c.html(
-      manifest ? renderShareSpaPage(actor, manifest) : renderSharePage(actor),
+      renderShareSpaPage(actor, spaManifest),
       200,
-      spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
+      { 'cache-control': 'no-store' },
     );
   });
   app.get('/c/:roomId', (c) => {
-    const spa = resolveSpaRequest(c, envSpaRoutes);
-    const shell = spaHtml('room', spa);
-    if (shell) {
-      return c.html(shell, 200, spaResponseHeaders(spa, { 'cache-control': 'no-store' }));
-    }
-    return c.html(
-      renderChatPage(
-        c.req.param('roomId'),
-        deps.markdownAssetVersion ?? null,
-        deps.resizerAssetVersion ?? null,
-        deps.drawboardAssetVersion ?? null,
-        deps.iconAssetVersion ?? null,
-      ),
-      200,
-      spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
-    );
+    const shell = spaHtml('room');
+    return shell
+      ? c.html(shell, 200, { 'cache-control': 'no-store' })
+      : webUnavailable();
   });
 
   // 新设备配对页：challenge 只在 URL fragment 中，由客户端读取并立即清除；
   // 服务端不解析 challenge，也不输出任何身份或房间数据。
   app.get('/pair', (c) => {
-    const spa = resolveSpaRequest(c, envSpaRoutes);
-    const shell = spaHtml('pair', spa);
-    if (shell) {
-      return c.html(
-        shell,
-        200,
-        spaResponseHeaders(spa, {
+    const shell = spaHtml('pair');
+    return shell
+      ? c.html(shell, 200, {
           'cache-control': 'no-store',
           'referrer-policy': 'no-referrer',
-        }),
-      );
-    }
-    return c.html(
-      renderPairPage(),
-      200,
-      spaResponseHeaders(spa, {
-        'cache-control': 'no-store',
-        'referrer-policy': 'no-referrer',
-      }),
-    );
+        })
+      : webUnavailable();
   });
 
   // 群邀请落地页。邀请码只是加入能力，不是身份凭据：这里不解析任何群数据，
   // 由页面用浏览器 token 调工具预览与确认，权限判定全部留在工具层。
   app.get('/j/:inviteKey', (c) => {
+    if (!spaManifest) return webUnavailable();
     const inviteKey = c.req.param('inviteKey');
-    const spa = resolveSpaRequest(c, envSpaRoutes);
-    const manifest = spaManifestFor('join', spa);
     if (!INVITE_KEY.test(inviteKey)) {
       return c.html(
-        manifest ? renderInvalidJoinSpaPage(manifest) : renderInvalidJoinPage(),
+        renderInvalidJoinSpaPage(spaManifest),
         404,
-        spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
+        { 'cache-control': 'no-store' },
       );
     }
     return c.html(
-      manifest ? renderJoinSpaPage(inviteKey, manifest) : renderJoinPage(inviteKey),
+      renderJoinSpaPage(inviteKey, spaManifest),
       200,
-      spaResponseHeaders(spa, { 'cache-control': 'no-store' }),
+      { 'cache-control': 'no-store' },
     );
   });
 

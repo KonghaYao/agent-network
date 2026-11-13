@@ -7,7 +7,7 @@ import { MESSAGE_FILES_STYLE } from './chat-message-files-styles';
 import { MEMORY_STYLE } from './chat-memory-styles';
 import { MONITOR_STYLE } from './chat-monitor-styles';
 import { UPLOAD_STYLE } from './chat-upload-styles';
-import { DEVICE_HANDOFF_STYLE } from './handoff';
+import { DEVICE_HANDOFF_STYLE } from './device-handoff-styles';
 import { escapeHtml, jsonForScript } from './layout';
 import type { SpaManifest, SpaRoute } from './spa-manifest';
 

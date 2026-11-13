@@ -26,11 +26,9 @@ import { remindStaleDeliveries } from '../domain/delivery-reminders';
 import { NotificationHub } from '../realtime/hub';
 import { scheduleOutboxDrain } from '../realtime/outbox';
 import { AgentPresenceTimeline } from '../realtime/presence-timeline';
-import { buildChatIconsBundle } from '../web/chat-icons-bundle';
 import { buildDrawboardBundle } from '../web/drawboard-bundle';
 import { buildMarkdownBundle } from '../web/markdown-bundle';
-import { buildResizerBundle } from '../web/resizer-bundle';
-import { loadSpaManifest, parseSpaRoutes } from '../web/spa-manifest';
+import { loadSpaManifest } from '../web/spa-manifest';
 import { buildCliBundle } from './cli-bundle';
 import { createD1 } from './d1';
 import { resolveFileTicketSecret } from './file-ticket-secret';
@@ -287,11 +285,9 @@ if (process.env.DRIVE_DISABLED !== '1') {
   );
 }
 
-const [markdownBundle, resizerBundle, drawboardBundle, iconBundle, cliBundle] = await Promise.all([
+const [markdownBundle, drawboardBundle, cliBundle] = await Promise.all([
   buildMarkdownBundle(),
-  buildResizerBundle(),
   buildDrawboardBundle(),
-  buildChatIconsBundle(),
   buildCliBundle(),
 ]);
 if (markdownBundle) {
@@ -299,19 +295,9 @@ if (markdownBundle) {
     `markdown asset ready: ${(markdownBundle.code.length / 1024).toFixed(0)} KiB (v${markdownBundle.version})`,
   );
 }
-if (resizerBundle) {
-  console.log(
-    `resizer asset ready: ${(resizerBundle.code.length / 1024).toFixed(0)} KiB (v${resizerBundle.version})`,
-  );
-}
 if (drawboardBundle) {
   console.log(
     `drawboard asset ready: ${(drawboardBundle.code.length / 1024).toFixed(0)} KiB (v${drawboardBundle.version})`,
-  );
-}
-if (iconBundle) {
-  console.log(
-    `icon motion asset ready: ${(iconBundle.code.length / 1024).toFixed(0)} KiB (v${iconBundle.version})`,
   );
 }
 if (cliBundle) {
@@ -320,34 +306,26 @@ if (cliBundle) {
   );
 }
 
-// 4B-0：只有显式配置 `WEB_SPA_ROUTES` 时才读取 manifest；默认空集合保持 legacy。
-// manifest 缺失或引用文件不存在时回退旧页面，不阻塞启动、不返回 500。
-const spaRoutes = parseSpaRoutes(process.env.WEB_SPA_ROUTES);
+// 4B-6：legacy 壳已删除，Vite manifest 是页面路由的必需产物。
+// 缺失时仍然启动（/mcp、/health、/static 与下载不受影响），页面路由返回 503。
 const spaDistDir = resolve(
   process.env.WEB_DIST_DIR ?? resolve(import.meta.dir, '../../dist/web'),
 );
-const spaManifest = spaRoutes.size > 0 ? await loadSpaManifest(spaDistDir) : null;
-if (spaRoutes.size > 0) {
-  console.log(
-    spaManifest
-      ? `web spa routes enabled: ${[...spaRoutes].join(',')} (${spaDistDir})`
-      : `web spa manifest unavailable; falling back to legacy pages (${spaDistDir})`,
-  );
-}
+const spaManifest = await loadSpaManifest(spaDistDir);
+console.log(
+  spaManifest
+    ? `web spa manifest ready (${spaDistDir})`
+    : `web spa manifest unavailable; page routes return 503 until \`bun run build:web\` (${spaDistDir})`,
+);
 
 const app = createApp(env, {
   mount,
   markdownAsset: markdownBundle?.code ?? null,
   markdownAssetVersion: markdownBundle?.version ?? null,
-  resizerAsset: resizerBundle?.code ?? null,
-  resizerAssetVersion: resizerBundle?.version ?? null,
   drawboardAsset: drawboardBundle?.code ?? null,
   drawboardAssetVersion: drawboardBundle?.version ?? null,
-  iconAsset: iconBundle?.code ?? null,
-  iconAssetVersion: iconBundle?.version ?? null,
   clientAsset: cliBundle?.code ?? null,
   clientAssetVersion: cliBundle?.version ?? null,
-  spaRoutes,
   spaManifest,
   spaDistDir,
 });

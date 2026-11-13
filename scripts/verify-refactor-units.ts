@@ -270,20 +270,14 @@ async function httpChecks(): Promise<void> {
   const assetDeps = {
     markdownAsset: 'markdown-bundle',
     markdownAssetVersion: 'md-v1',
-    resizerAsset: 'resizer-bundle',
-    resizerAssetVersion: 'rs-v1',
     drawboardAsset: 'drawboard-bundle',
     drawboardAssetVersion: 'db-v1',
-    iconAsset: 'icons-bundle',
-    iconAssetVersion: 'ic-v1',
   };
   const assetEnv = fakeAppEnv(driveRow, () => Readable.from([payload]), []);
   const assetApp = createApp(assetEnv, assetDeps);
   const expected: Array<[string, string, string]> = [
     ['chat-markdown.js', 'markdown-bundle', 'md-v1'],
-    ['chat-resizer.js', 'resizer-bundle', 'rs-v1'],
     ['chat-drawboard.js', 'drawboard-bundle', 'db-v1'],
-    ['chat-icons.js', 'icons-bundle', 'ic-v1'],
   ];
   for (const [name, body, version] of expected) {
     const response = await assetApp.request(`/assets/${name}`);
@@ -293,6 +287,11 @@ async function httpChecks(): Promise<void> {
     checkEqual(`${name} nosniff`, response.headers.get('x-content-type-options'), 'nosniff');
     checkEqual(`${name} etag`, response.headers.get('etag'), `"${version}"`);
     checkEqual(`${name} 正文`, await response.text(), body);
+  }
+  for (const retired of ['chat-resizer.js', 'chat-icons.js']) {
+    const response = await assetApp.request(`/assets/${retired}`);
+    checkEqual(`${retired} 已退役 410`, response.status, 410);
+    checkEqual(`${retired} 不缓存`, response.headers.get('cache-control'), 'no-store');
   }
   const unknown = await assetApp.request('/assets/unknown.js');
   checkEqual('未知 asset 404', unknown.status, 404);
