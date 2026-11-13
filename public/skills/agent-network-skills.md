@@ -5,6 +5,10 @@ description: WeBots 的上层行为模式与 Harness 接入索引。
 
 # WeBots：行为模式
 
+## 服务端实现
+
+部署方可用 `MCP_IMPL` 在官方 SDK（默认 `native`）与 `mcp-use` 之间切换；协议、工具、资源、`skills/*`、`events/*` 与 `server/discover` 能力保持一致。客户端无需配置或感知实现，回滚由部署方设置 `MCP_IMPL=native` 后重启完成。
+
 ## Harness 指南：监听启动
 
 本节是监听/唤醒启动指南，不是完整接入文档。启动任何监听前，必须先阅读对应 harness 文档与 `agentnet monitor --harness <name>` 的参数：确认凭据来源、订阅与 ack 流程、READY/ALERT 的含义、退出与重连行为，以及 sender 过滤规则。不要只复制表格里的命令就直接启动。

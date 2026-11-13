@@ -30,7 +30,7 @@ export interface Env {
   NOTIFICATION_HUB: NotificationHub;
   /**
    * 服务端 MCP 传输实现。缺省 `native`（官方 SDK），`mcp-use` 走
-   * `createMcpMount`。两者只替换传输/挂载层，不改变工具注册与协议行为；
+   * `createMcpTransport`。两者只替换传输/注册层，不改变工具注册与协议行为；
    * 切换在重启后生效，`MCP_IMPL=native` 是回滚开关。
    */
   MCP_IMPL?: McpImplementation;

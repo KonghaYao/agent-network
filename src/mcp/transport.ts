@@ -11,6 +11,8 @@
  * 鉴权、405/`Allow`、`subscriptions/listen`、结果 `_meta` 剥离与 CORS
  * 仍在 `src/app.ts`。
  */
+import './telemetry';
+
 import {
   createMcpHandler,
   isJsonContentType,
@@ -34,7 +36,7 @@ export interface McpTransport {
   fetch(request: Request): Promise<Response>;
 }
 
-export interface McpTransportOptions {
+interface McpTransportOptions {
   implementation?: McpImplementation;
   /** native 实现；`mcp-use` 模式只使用 `buildUseServer`。 */
   nativeFactory: McpServerFactory;
@@ -50,7 +52,7 @@ export interface McpTransportOptions {
  * 缺省保留 native：4D-1 只提供可切换的 mcp-use 路径，生产默认值在验证一个
  * 发布周期后另行切换。非法值由 `parseMcpImplementation` 在启动期拒绝。
  */
-export const DEFAULT_MCP_IMPL: McpImplementation = 'native';
+const DEFAULT_MCP_IMPL: McpImplementation = 'native';
 
 export function parseMcpImplementation(value: string | undefined): McpImplementation {
   const normalized = value?.trim().toLowerCase();

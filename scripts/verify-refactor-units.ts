@@ -38,6 +38,8 @@ import {
   utf8Text,
 } from '../src/contracts/text';
 import { createApp, parseByteRange } from '../src/app';
+import { patchDiscoverResult } from '../src/mcp/compat/capabilities';
+import { applyMcpUseTelemetryDefault } from '../src/mcp/telemetry';
 import { parseMcpImplementation } from '../src/mcp/transport';
 import { isSupportedDshVersion } from '../client/monitor/dsh-install';
 import { abortableSleep } from '../client/monitor/engine';
@@ -864,6 +866,92 @@ async function mcpTransportChecks(): Promise<void> {
   checkEqual('MCP_IMPL 非法值启动期失败', message, 'MCP_IMPL must be native or mcp-use');
 }
 
+function mcpTelemetryChecks(): void {
+  const key = 'MCP_USE_ANONYMIZED_TELEMETRY';
+  const original = process.env[key];
+  try {
+    const cases: Array<[string | undefined, boolean]> = [
+      [undefined, false],
+      ['', false],
+      ['false', false],
+      ['0', false],
+      ['no', false],
+      ['true', true],
+      ['1', true],
+      [' TRUE ', true],
+    ];
+    for (const [value, expected] of cases) {
+      checkEqual(`mcp-use 遥测开关 ${JSON.stringify(value)}`, applyMcpUseTelemetryDefault(value), expected);
+      checkEqual(`mcp-use 遥测 env ${JSON.stringify(value)}`, process.env[key], expected ? 'true' : 'false');
+    }
+  } finally {
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
+}
+
+function capabilityPatchChecks(): void {
+  const source = {
+    supportedVersions: ['2026-07-28'],
+    instructions: 'guide',
+    resultType: 'complete',
+    ttlMs: 0,
+    cacheScope: 'private',
+    capabilities: {
+      logging: {},
+      prompts: {},
+      tools: { listChanged: true },
+      resources: { listChanged: true },
+      extensions: { keep: {} },
+    },
+  };
+  const patched = patchDiscoverResult(source, { events: true, files: { version: 1 } });
+  check('server/discover 保留版本与缓存提示', Bun.deepEquals(
+    [patched.supportedVersions, patched.instructions, patched.resultType, patched.ttlMs, patched.cacheScope],
+    [['2026-07-28'], 'guide', 'complete', 0, 'private'],
+  ));
+  check('server/discover 能力目录与 native 对齐', Bun.deepEquals(patched.capabilities, {
+    tools: { listChanged: true },
+    resources: { listChanged: true, subscribe: true },
+    extensions: {
+      keep: {},
+      'io.modelcontextprotocol/skills': {},
+      'io.mcpp/files': { version: 1 },
+    },
+    events: {},
+  }));
+  const minimal = patchDiscoverResult(
+    { capabilities: { tools: {}, resources: {} } },
+    { events: false, files: null },
+  );
+  check('server/discover 关闭 events/files 时不声明多余能力', Bun.deepEquals(minimal.capabilities, {
+    tools: {},
+    resources: { subscribe: true },
+    extensions: { 'io.modelcontextprotocol/skills': {} },
+  }));
+}
+
+async function clientImportBoundaryChecks(): Promise<void> {
+  const violations: string[] = [];
+  const files = await readdir(join(ROOT, 'client'), { recursive: true });
+  for (const relative of files) {
+    if (!relative.endsWith('.ts') && !relative.endsWith('.tsx')) continue;
+    const source = await readFile(join(ROOT, 'client', relative), 'utf8');
+    for (const match of source.matchAll(/(?:from\s+|import\s*\(\s*)['"]([^'"]+)['"]/gu)) {
+      const specifier = match[1] ?? '';
+      if (
+        specifier === 'mcp-use' ||
+        specifier.startsWith('mcp-use/') ||
+        specifier.startsWith('@mcp-use/') ||
+        /(^|\/)src\/mcp(\/|$)/u.test(specifier)
+      ) {
+        violations.push(`${relative}: ${specifier}`);
+      }
+    }
+  }
+  check('client 不依赖 mcp-use 或 src/mcp', violations.length === 0, violations);
+}
+
 async function main(): Promise<void> {
   await sseChecks();
   const db = freshDb();
@@ -884,6 +972,9 @@ async function main(): Promise<void> {
   await permissionMatrixChecks(db);
   await presenceTouchChecks(db);
   await mcpTransportChecks();
+  mcpTelemetryChecks();
+  capabilityPatchChecks();
+  await clientImportBoundaryChecks();
   console.log(`\nRefactor units: ${checksPassed()} checks passed`);
 }
 
