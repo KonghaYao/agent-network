@@ -1,3 +1,5 @@
+import './telemetry';
+
 import { McpServer } from '@modelcontextprotocol/server';
 import type { ServerCapabilities } from '@modelcontextprotocol/server';
 import { MCPServer } from 'mcp-use';
@@ -23,10 +25,6 @@ import {
   type RegistrationServer,
 } from './registration';
 import { registerTools, type ToolHooks } from './tools';
-
-// mcp-use 默认写入 .mcp-use/usage.json 并上报匿名使用事件；自托管服务不引入
-// 隐式遥测，部署方显式设为 true 时才启用。
-process.env.MCP_USE_ANONYMIZED_TELEMETRY ??= 'false';
 
 type WeBotsCapabilities = ServerCapabilities & { events?: Record<string, unknown> };
 

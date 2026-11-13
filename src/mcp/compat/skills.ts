@@ -19,7 +19,7 @@ import { parseMethodParams, type MethodHandler } from './shared';
 const SKILLS_LIST_PARAMS = z.object({ cursor: z.string().optional() });
 const SKILLS_GET_PARAMS = z.object({ uri: z.string() });
 
-export const SKILLS_METHODS = ['skills/list', 'skills/get'] as const;
+const SKILLS_METHODS = ['skills/list', 'skills/get'] as const;
 
 async function listSkills(): Promise<Record<string, unknown>> {
   return { skills: [await skillEntry()], ttlMs: 0, cacheScope: 'private' };

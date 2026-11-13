@@ -2,7 +2,7 @@
  * 对比实时 MCP 行为与固定 baseline。
  *
  * 4D-1 起同一份 baseline 同时约束两条传输：`native`（官方 SDK）与
- * `mcp-use`（`createMcpMount`）。两者共用工具注册与协议兼容层，任何帧差异
+ * `mcp-use`（`createMcpTransport`）。两者共用工具注册与协议兼容层，任何帧差异
  * 都视为回归。
  *
  * 失败时输出第一个差异路径；协议/工具契约的变更必须先说明并重新录制：

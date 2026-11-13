@@ -7,7 +7,8 @@
  * 避免每个注册函数判断实现，也不复制任何工具定义。
  *
  * `mcp-use` 没有公开的底层 `McpServer` 访问器，因此自定义方法
- * （`skills/*`、`events/*`）不走本适配层，仍由 native 兼容服务器处理。
+ * （`skills/*`、`events/*`）不走本适配层，由 `src/mcp/transport.ts` 在进入
+ * mcp-use 前分发（`src/mcp/compat/methods.ts`）。
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { MCPServer } from 'mcp-use';
