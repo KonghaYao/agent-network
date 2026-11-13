@@ -40,7 +40,6 @@ import {
 import { createApp, parseByteRange } from '../src/app';
 import { patchDiscoverResult } from '../src/mcp/compat/capabilities';
 import { applyMcpUseTelemetryDefault } from '../src/mcp/telemetry';
-import { parseMcpImplementation } from '../src/mcp/transport';
 import { isSupportedDshVersion } from '../client/monitor/dsh-install';
 import { abortableSleep } from '../client/monitor/engine';
 import { acquireLock } from '../client/monitor/locks';
@@ -852,20 +851,6 @@ async function presenceTouchChecks(db: Database): Promise<void> {
   check('断连转换后 touch 重新读状态', reads > beforeDisconnect);
 }
 
-async function mcpTransportChecks(): Promise<void> {
-  checkEqual('MCP_IMPL 缺省为 native', parseMcpImplementation(undefined), 'native');
-  checkEqual('MCP_IMPL 空串回退 native', parseMcpImplementation(''), 'native');
-  checkEqual('MCP_IMPL native 可显式回滚', parseMcpImplementation(' native '), 'native');
-  checkEqual('MCP_IMPL mcp-use 大小写与空白归一', parseMcpImplementation(' MCP-USE '), 'mcp-use');
-  let message = '';
-  try {
-    parseMcpImplementation('stateless');
-  } catch (error) {
-    message = (error as Error).message;
-  }
-  checkEqual('MCP_IMPL 非法值启动期失败', message, 'MCP_IMPL must be native or mcp-use');
-}
-
 function mcpTelemetryChecks(): void {
   const key = 'MCP_USE_ANONYMIZED_TELEMETRY';
   const original = process.env[key];
@@ -910,7 +895,7 @@ function capabilityPatchChecks(): void {
     [patched.supportedVersions, patched.instructions, patched.resultType, patched.ttlMs, patched.cacheScope],
     [['2026-07-28'], 'guide', 'complete', 0, 'private'],
   ));
-  check('server/discover 能力目录与 native 对齐', Bun.deepEquals(patched.capabilities, {
+  check('server/discover 能力目录与固定契约一致', Bun.deepEquals(patched.capabilities, {
     tools: { listChanged: true },
     resources: { listChanged: true, subscribe: true },
     extensions: {
@@ -971,7 +956,6 @@ async function main(): Promise<void> {
   cursorChecks();
   await permissionMatrixChecks(db);
   await presenceTouchChecks(db);
-  await mcpTransportChecks();
   mcpTelemetryChecks();
   capabilityPatchChecks();
   await clientImportBoundaryChecks();

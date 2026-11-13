@@ -28,7 +28,7 @@ interface ToolContract {
   annotations?: Record<string, unknown>;
 }
 
-/** key 是注册目标本身：native server 或 mcp-use 注册适配器。 */
+/** key 是注册目标本身：mcp-use 注册适配器。 */
 const catalogs = new WeakMap<object, Map<string, () => ToolContract>>();
 
 /** Record at the two registration boundaries, without depending on SDK private fields. */

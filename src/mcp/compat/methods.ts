@@ -2,8 +2,8 @@
  * 传输层自定义方法表。
  *
  * mcp-use 的 `MCPServer` 只公开工具/资源/提示注册，无法注册 `skills/*` 与
- * `events/*`；4D-2 曾用一个不注册工具/资源的 native 兼容服务器应答这些
- * 方法与 `server/discover`。4D-3 改为在传输层直接分发：
+ * `events/*`；4D-2 曾用一个不注册工具/资源的兼容服务器应答这些方法与
+ * `server/discover`。4D-3 改为在传输层直接分发：
  *
  * - 不复制工具/资源定义，也不为每个请求额外构建第二个 MCP 服务器；
  * - `server/discover` 由 mcp-use 应答后仅修正 capabilities（见

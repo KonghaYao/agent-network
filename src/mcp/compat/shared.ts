@@ -3,8 +3,7 @@
  *
  * `skills/*` 与 `events/*` 不是 MCP 标准方法，mcp-use 的 `MCPServer` 没有
  * 注册入口，因此由 `src/mcp/transport.ts` 在进入 mcp-use 之前直接应答。
- * native 路径仍通过 `McpServer.setRequestHandler` 注册同一批处理器，两边
- * 共用业务实现，错误码与文案保持一致。
+ * 业务实现、错误码与文案只有一份。
  */
 import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 import type { z } from 'zod';

@@ -6,11 +6,7 @@
  * 资源。这里保留最小的手写处理器：只复用 `src/mcp/skill.ts` 的技能正文与
  * digest，不复制任何资源或工具定义。
  */
-import {
-  McpServer,
-  ProtocolError,
-  ProtocolErrorCode,
-} from '@modelcontextprotocol/server';
+import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 import { SKILL_URI, skillEntry } from '../skill';
@@ -46,16 +42,4 @@ export function skillsMethodHandlers(): Record<
       return getSkill(uri);
     },
   };
-}
-
-/** native 路径仍注册到 SDK；mcp-use 路径走传输层分发。 */
-export function registerSkillMethods(server: McpServer): void {
-  server.server.setRequestHandler('skills/list', { params: SKILLS_LIST_PARAMS }, async () =>
-    listSkills(),
-  );
-  server.server.setRequestHandler(
-    'skills/get',
-    { params: SKILLS_GET_PARAMS },
-    async ({ uri }) => getSkill(uri),
-  );
 }

@@ -482,9 +482,7 @@ async function register(
   return { actor_id: value.actor_id };
 }
 
-async function startMainServer(
-  env?: Record<string, string | undefined>,
-): Promise<{ server: TestServer; base: string }> {
+async function startMainServer(): Promise<{ server: TestServer; base: string }> {
   const port = reservePort();
   const base = `http://127.0.0.1:${port}`;
   const server = await startTestServer({
@@ -498,15 +496,12 @@ async function startMainServer(
       AGENT_PRESENCE_ACTIVITY_TTL_MS: '60000',
       AGENT_PRESENCE_TOUCH_THROTTLE_MS: '1000',
       AGENT_PRESENCE_SWEEP_MS: '60000',
-      ...env,
     },
   });
   return { server, base };
 }
 
-async function startEventsServer(
-  env?: Record<string, string | undefined>,
-): Promise<{ server: TestServer; base: string }> {
+async function startEventsServer(): Promise<{ server: TestServer; base: string }> {
   const port = reservePort();
   const base = `http://127.0.0.1:${port}`;
   const server = await startTestServer({
@@ -521,18 +516,12 @@ async function startEventsServer(
       EVENTS_CALLBACK_ALLOWLIST: '127.0.0.1',
       EVENTS_VERIFICATION_TIMEOUT_MS: '10000',
       FILE_TICKET_SECRET: `parity_${randomBytes(16).toString('hex')}`,
-      ...env,
     },
   });
   return { server, base };
 }
 
-export interface RecordBaselineOptions {
-  /** 追加到临时实例的环境变量；4D-1 用它分别验证 native 与 mcp-use 传输。 */
-  readonly env?: Record<string, string | undefined>;
-}
-
-export async function recordBaseline(options: RecordBaselineOptions = {}): Promise<Baseline> {
+export async function recordBaseline(): Promise<Baseline> {
   const certificateDir = await mkdtemp(join(tmpdir(), 'agentnet-parity-cert-'));
   let main: TestServer | undefined;
   let events: TestServer | undefined;
@@ -541,7 +530,7 @@ export async function recordBaseline(options: RecordBaselineOptions = {}): Promi
   const sse: SseView[] = [];
   const transports: FrameView[] = [];
   try {
-    const started = await startMainServer(options.env);
+    const started = await startMainServer();
     main = started.server;
     const base = started.base;
     const sequence = { value: 1 };
@@ -744,7 +733,7 @@ export async function recordBaseline(options: RecordBaselineOptions = {}): Promi
     // events 服务器：独立实例 + 自签 HTTPS receiver。
     const certificate = await ensureTestCertificate(certificateDir);
     receiver = startTestReceiver({ certificate });
-    const eventsStarted = await startEventsServer(options.env);
+    const eventsStarted = await startEventsServer();
     events = eventsStarted.server;
     const eventsRecorder = new Recorder(
       eventsStarted.base,
