@@ -6,7 +6,7 @@ import { type RoomCreateInput } from '../../contracts/schemas';
 import { newId, nowMs, sha256Hex, sortedPairKey, stableStringify } from '../../storage/db';
 import { eventStatement, inboxChangeStatements, outboxStatement, roomHeadStatement, roomTopic } from '../../storage/events';
 import { guardSql } from '../../storage/guards';
-import { getActor } from '../../storage/queries';
+import { getActor, getActorRowsByIds } from '../../storage/queries';
 import { type ActorRow } from '../../storage/rows';
 import { operationsStatement, runIdempotent } from '../../storage/transactions/runner';
 import { getActiveManagement } from '../agent-access';
@@ -19,12 +19,8 @@ import { type RoomDetail, type RoomCreateMemberResult } from './views';
 
 export async function ensureActors(db: D1Database, ids: string[]): Promise<ActorRow[]> {
   if (ids.length === 0) return [];
-  const placeholders = ids.map(() => '?').join(',');
-  const rows = await db
-    .prepare(`SELECT * FROM actors WHERE actor_id IN (${placeholders})`)
-    .bind(...ids)
-    .all<ActorRow>();
-  const found = new Map(rows.results.map((row) => [row.actor_id, row]));
+  const rows = await getActorRowsByIds(db, ids);
+  const found = new Map(rows.map((row) => [row.actor_id, row]));
   const missing = ids.filter((id) => !found.has(id));
   if (missing.length > 0) {
     throw new BusinessError('INVALID_ARGUMENT', '成员 actor 不存在', { missing });

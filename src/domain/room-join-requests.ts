@@ -15,7 +15,18 @@ import {
   roomTopic,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getActor, getMember, getOperation, getRoom } from '../storage/queries';
+import {
+  getActor,
+  getLatestJoinRequestForApplicant,
+  getMember,
+  getOperation,
+  getRoom,
+  getRoomInvitationById,
+  getRoomJoinRequestById,
+  listActiveRoomManagerIds,
+  listJoinRequestRows,
+  type JoinRequestListRow as JoinRequestJoinRow,
+} from '../storage/queries';
 import type { RoomInvitationRow, RoomJoinRequestRow } from '../storage/rows';
 import {
   operationsStatement,
@@ -73,17 +84,6 @@ export interface JoinRequestRespondResult {
   invitation_id: string;
   room_id: string;
   status: 'approved' | 'rejected';
-}
-
-interface JoinRequestJoinRow extends RoomJoinRequestRow {
-  invitation_kind: 'direct' | 'link';
-  invitation_status: RoomInvitationRow['status'];
-  invitation_expires_at: number;
-  invitation_max_uses: number;
-  invitation_used_count: number;
-  applicant_kind: 'human' | 'agent';
-  applicant_name: string;
-  applicant_session_id: string | null;
 }
 
 function derivedRequestStatus(
@@ -228,14 +228,11 @@ export async function requestJoinApproval(
 ): Promise<JoinRequestCreationResult> {
   const applicant = actorId(input.principal);
   const { invitation, at } = input;
-  const latest = await db
-    .prepare(
-      `SELECT * FROM room_join_requests
-        WHERE invitation_id = ? AND applicant_id = ?
-        ORDER BY created_at DESC, join_request_id DESC LIMIT 1`,
-    )
-    .bind(invitation.invitation_id, applicant)
-    .first<RoomJoinRequestRow>();
+  const latest = await getLatestJoinRequestForApplicant(
+    db,
+    invitation.invitation_id,
+    applicant,
+  );
   if (latest?.status === 'pending') {
     return { join_request_id: latest.join_request_id, status: 'pending' };
   }
@@ -252,23 +249,17 @@ export async function requestJoinApproval(
     join_request_id: joinRequestId,
     status: 'pending',
   };
-  const admins = await db
-    .prepare(
-      `SELECT actor_id FROM room_members
-        WHERE room_id = ? AND status = 'active' AND role IN ('owner', 'admin')`,
-    )
-    .bind(invitation.room_id)
-    .all<{ actor_id: string }>();
+  const admins = await listActiveRoomManagerIds(db, invitation.room_id);
 
-  const inboxStatements = admins.results.flatMap((admin) => {
-    const inboxKey = `${eventKey}:${admin.actor_id}`;
+  const inboxStatements = admins.flatMap((admin) => {
+    const inboxKey = `${eventKey}:${admin}`;
     return [
       eventStatement(
         db,
         {
           eventKey: inboxKey,
           scopeKind: 'inbox',
-          scopeId: admin.actor_id,
+          scopeId: admin,
           eventType: 'room_join_requested',
           refId: invitation.room_id,
           metadata: {
@@ -280,8 +271,8 @@ export async function requestJoinApproval(
         },
         at,
       ),
-      outboxStatement(db, { topic: inboxTopic(admin.actor_id), eventKey: inboxKey }, at),
-      inboxHeadStatement(db, admin.actor_id, inboxKey, at, 0),
+      outboxStatement(db, { topic: inboxTopic(admin), eventKey: inboxKey }, at),
+      inboxHeadStatement(db, admin, inboxKey, at, 0),
     ];
   });
 
@@ -396,31 +387,15 @@ export async function roomJoinRequestList(
     LIMITS.roomJoinRequestsPageMax,
   );
   const cursor = input.cursor ? decodeCursor(input.cursor, scope) : null;
-  const where = ['jr.room_id = ?', 'jr.status = ?'];
-  const binds: unknown[] = [input.room_id, status];
-  if (cursor) {
-    where.push('(jr.created_at < ? OR (jr.created_at = ? AND jr.join_request_id < ?))');
-    binds.push(cursor.seq, cursor.seq, cursor.key ?? '');
-  }
-  const rows = await db
-    .prepare(
-      `SELECT jr.*, i.kind AS invitation_kind, i.status AS invitation_status,
-              i.expires_at AS invitation_expires_at,
-              i.max_uses AS invitation_max_uses,
-              i.used_count AS invitation_used_count,
-              a.kind AS applicant_kind, a.name AS applicant_name,
-              a.agent_session_id AS applicant_session_id
-         FROM room_join_requests jr
-         JOIN room_invitations i ON i.invitation_id = jr.invitation_id
-         JOIN actors a ON a.actor_id = jr.applicant_id
-        WHERE ${where.join(' AND ')}
-        ORDER BY jr.created_at DESC, jr.join_request_id DESC
-        LIMIT ?`,
-    )
-    .bind(...binds, limit + 1)
-    .all<JoinRequestJoinRow>();
-  const page = rows.results.slice(0, limit);
-  const hasMore = rows.results.length > limit;
+  const rows = await listJoinRequestRows(
+    db,
+    input.room_id,
+    status,
+    cursor ? { seq: cursor.seq, key: cursor.key ?? '' } : null,
+    limit + 1,
+  );
+  const page = rows.slice(0, limit);
+  const hasMore = rows.length > limit;
   const last = page.at(-1);
   return {
     items: page.map((row) => joinRequestView(row, at)),
@@ -443,10 +418,7 @@ async function loadJoinRequest(
   db: D1Database,
   joinRequestId: string,
 ): Promise<RoomJoinRequestRow> {
-  const row = await db
-    .prepare('SELECT * FROM room_join_requests WHERE join_request_id = ?')
-    .bind(joinRequestId)
-    .first<RoomJoinRequestRow>();
+  const row = await getRoomJoinRequestById(db, joinRequestId);
   if (!row) throw new BusinessError('NOT_FOUND', '入群申请不存在');
   return row;
 }
@@ -455,10 +427,7 @@ async function loadInvitation(
   db: D1Database,
   invitationId: string,
 ): Promise<RoomInvitationRow> {
-  const row = await db
-    .prepare('SELECT * FROM room_invitations WHERE invitation_id = ?')
-    .bind(invitationId)
-    .first<RoomInvitationRow>();
+  const row = await getRoomInvitationById(db, invitationId);
   if (!row) throw new BusinessError('NOT_FOUND', '邀请不存在');
   return row;
 }

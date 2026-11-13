@@ -16,7 +16,14 @@ import {
   roomTopic,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getActor, getMember, getOperation, getRoom, visibleActorSql } from '../storage/queries';
+import {
+  getActor,
+  getMember,
+  getOperation,
+  getRoom,
+  getRoomInvitationById,
+  listPendingDirectInvitationMembers,
+} from '../storage/queries';
 import type { ActorRow, RoomInvitationRow, RoomRow } from '../storage/rows';
 import {
   operationsStatement,
@@ -122,27 +129,8 @@ export async function loadInvitedMembers(
   roomId: string,
   at: number,
 ): Promise<InvitedMemberView[]> {
-  const rows = await db
-    .prepare(
-      `SELECT i.invitation_id, i.target_actor_id AS actor_id, a.kind, a.name,
-              i.inviter_id AS invited_by, i.created_at, i.expires_at
-         FROM room_invitations i
-         JOIN actors a ON a.actor_id = i.target_actor_id
-        WHERE i.room_id = ? AND i.kind = 'direct' AND i.status = 'pending'
-          AND i.expires_at > ? AND ${visibleActorSql('a')}
-        ORDER BY i.created_at ASC, i.invitation_id ASC`,
-    )
-    .bind(roomId, at)
-    .all<{
-      invitation_id: string;
-      actor_id: string;
-      kind: 'human' | 'agent';
-      name: string;
-      invited_by: string;
-      created_at: number;
-      expires_at: number;
-    }>();
-  return rows.results.map((row) => ({
+  const rows = await listPendingDirectInvitationMembers(db, roomId, at);
+  return rows.map((row) => ({
     invitation_id: row.invitation_id,
     actor_id: row.actor_id,
     kind: row.kind,
@@ -342,10 +330,7 @@ async function requireInvitationForRespondent(
   invitationId: string,
   inviteKey: string | undefined,
 ): Promise<RoomInvitationRow> {
-  const row = await db
-    .prepare('SELECT * FROM room_invitations WHERE invitation_id = ?')
-    .bind(invitationId)
-    .first<RoomInvitationRow>();
+  const row = await getRoomInvitationById(db, invitationId);
   if (!row) {
     throw new BusinessError('NOT_FOUND', '邀请不存在或不属于当前身份');
   }

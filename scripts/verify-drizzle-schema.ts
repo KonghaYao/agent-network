@@ -24,7 +24,7 @@ import { getTableName } from 'drizzle-orm';
 
 import { migrate } from '../src/bun/migrate';
 import { GUARDS } from '../src/storage/guards';
-import { CORE_TABLES } from '../src/storage/schema/core';
+import { SCHEMA_TABLES } from '../src/storage/schema';
 import { stableStringify } from '../src/storage/db';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
@@ -481,9 +481,9 @@ async function main() {
   const drizzleSql = await generateDrizzleSql();
   const drizzleDb = applyDrizzleSql(drizzleSql);
   try {
-    const expectedTables: string[] = CORE_TABLES.map((table) => getTableName(table)).sort();
+    const expectedTables: string[] = SCHEMA_TABLES.map((table) => getTableName(table)).sort();
     checkEqual(
-      'Drizzle 只生成 core 表',
+      'Drizzle 只生成声明的表',
       tableNames(drizzleDb).join(','),
       expectedTables.join(','),
     );
@@ -512,7 +512,7 @@ async function main() {
     const rawOnly = tableNames(migrated).filter(
       (name) => !expectedTables.includes(name) && !name.startsWith('guard_'),
     );
-    console.log(`\nDrizzle core coverage: ${expectedTables.join(', ')}`);
+    console.log(`\nDrizzle schema coverage: ${expectedTables.join(', ')}`);
     console.log(`raw-only tables (${rawOnly.length}): ${rawOnly.join(', ')}\n`);
 
     const surface = buildSurface(migrated, names, digest);

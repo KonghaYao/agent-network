@@ -6,3 +6,10 @@
  * `drizzle-kit` 只用于 parity 生成 DDL，禁止对真实库执行 push/migrate。
  */
 export * from './core';
+export * from './rooms';
+
+import { CORE_TABLES } from './core';
+import { ROOMS_TABLES } from './rooms';
+
+/** schema parity 与运行时共用的表清单；新增域表时同时加入这里。 */
+export const SCHEMA_TABLES = [...CORE_TABLES, ...ROOMS_TABLES] as const;
