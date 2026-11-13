@@ -568,3 +568,99 @@ body #root button.primary:hover {
     color: #fbbf24;
   }
 }
+
+/* ---- 4B-5b：好友申请 / 设备配对 / 已归档浮层 ----------------------------- */
+
+/* legacy `.contact-modal-card` / `.handoff-card` 的宽度会被 Radix 基础宽度覆盖。 */
+.spa-dialog-content.contact-modal-card {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.spa-dialog-content.handoff-card {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.spa-dialog-content.archive-dialog {
+  width: min(360px, calc(100vw - 32px));
+}
+
+.contact-request-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  color: var(--wx-muted);
+  font-size: 12px;
+}
+
+.contact-request-summary .contact-count[hidden] {
+  display: none;
+}
+
+.contact-request-summary-text {
+  min-width: 0;
+}
+
+.archive-popover-status[data-error='1'] {
+  color: var(--wx-danger);
+}
+
+/* 状态色在暗色面板上保持 AA；亮色沿用 legacy 文案色。 */
+@media (prefers-color-scheme: dark) {
+  .spa-dialog-content .pairing-status[data-success='1'] {
+    color: #4ade80;
+  }
+
+  .spa-dialog-content .pairing-status[data-error='1'],
+  .spa-dialog-content .archive-popover-status[data-error='1'] {
+    color: #ff8a80;
+  }
+}
+
+.archive-popover-status[hidden],
+.archive-popover-list:empty {
+  display: none;
+}
+
+.archive-dialog-note {
+  margin: 10px 0 0;
+  color: var(--wx-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+#handoff-modal .handoff-columns {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+@media (max-width: 759px) {
+  /* 移动端沿用 legacy 全屏弹窗，避免 2 列内容和键盘一起挤压。 */
+  .spa-dialog-content.contact-modal-card,
+  .spa-dialog-content.handoff-card {
+    inset: 0;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    transform: none;
+    padding: calc(16px + env(safe-area-inset-top)) 16px
+      calc(16px + env(safe-area-inset-bottom));
+  }
+
+  #handoff-modal .handoff-columns {
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
+
+  .contact-request-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .contact-request-actions {
+    justify-content: flex-end;
+  }
+}

@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { AppShell } from '../app/AppShell';
@@ -5,6 +6,7 @@ import { Composer, type ComposerSendInput } from '../features/chat/Composer';
 import { Timeline } from '../features/chat/Timeline';
 import { AnnouncementDialog } from '../features/overlays/AnnouncementDialog';
 import { AnnouncementPopover } from '../features/overlays/AnnouncementPopover';
+import { confirmDialog } from '../features/overlays/confirm';
 import { LeaveRoomDialog } from '../features/overlays/LeaveRoomDialog';
 import { MembersDialog } from '../features/overlays/MembersDialog';
 import { RenameRoomDialog } from '../features/overlays/RenameRoomDialog';
@@ -25,6 +27,9 @@ import {
   senderName,
   type HistoryMessage,
 } from '../lib/chat';
+import { callTool } from '../lib/mcp-client';
+import { queryKeys } from '../lib/query-keys';
+import { newRequestId } from '../lib/request-id';
 
 const FilesPane = lazy(() =>
   import('../features/panels/FilesPane').then((module) => ({ default: module.FilesPane })),
@@ -73,6 +78,7 @@ function onlineLabel(online: boolean | null): string {
  */
 export function ChatPage({ roomId }: ChatPageProps) {
   const chat = useRoomChat(roomId);
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState('');
   const [reply, setReply] = useState<{ messageId: string; label: string } | null>(null);
   const [forcePinToken, setForcePinToken] = useState(0);
@@ -157,6 +163,29 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const onStatus = useCallback((message: string) => {
     setStatus(message);
   }, []);
+
+  const onArchive = useCallback(async () => {
+    if (!peer || peer.kind !== 'agent' || !token || !identity) return;
+    const confirmed = await confirmDialog({
+      title: '归档 Agent',
+      message: `归档 ${peer.name} 后，这个单聊会从默认会话列表隐藏，可随时在“已归档 Agents”中恢复；消息、文件与凭据都不受影响。`,
+      confirmText: '归档',
+    });
+    if (!confirmed) return;
+    try {
+      await callTool(
+        'network_agent_archive',
+        { request_id: newRequestId('web_agent_archive'), actor_id: peer.actor_id },
+        { token },
+      );
+      setStatus('已归档，可在已归档 Agents 中恢复');
+      await queryClient.invalidateQueries({ queryKey: queryKeys.rooms(identity.actor_id) });
+    } catch (error) {
+      setStatus(
+        `归档失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }, [identity, peer, queryClient, token]);
 
   const onSend = useCallback(
     async (input: ComposerSendInput) => {
@@ -363,7 +392,13 @@ export function ChatPage({ roomId }: ChatPageProps) {
                         onEdit={() => setOverlay('announcement')}
                       />
                     ) : null}
-                    <RoomMenu room={room} peerName={peer?.name ?? null} onOpen={setOverlay} />
+                    <RoomMenu
+                      room={room}
+                      peerName={peer?.name ?? null}
+                      peerKind={peer?.kind ?? null}
+                      onOpen={setOverlay}
+                      onArchive={() => void onArchive()}
+                    />
                   </div>
                 ) : null}
               </header>

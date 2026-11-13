@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { EmptyPane } from '../app/AppShell';
 import { useActorStream } from '../app/mcp/useActorStream';
 import { SplitLayout } from '../features/layout/SplitLayout';
+import { ContactRequestsDialog } from '../features/overlays/ContactRequestsDialog';
 import { GroupCreateDialog } from '../features/overlays/GroupCreateDialog';
 import { Sidebar, type SidebarStatus } from '../features/sidebar/Sidebar';
 import { useRooms } from '../hooks/useRooms';
@@ -24,6 +25,7 @@ export function HomePage() {
   const roomsState = useRooms();
   const [query, setQuery] = useState('');
   const [groupOpen, setGroupOpen] = useState(false);
+  const [contactsOpen, setContactsOpen] = useState(false);
   const filter = useRoomFilterStore((state) => state.filter);
   const changeFilter = useRoomFilterStore((state) => state.setFilter);
 
@@ -32,10 +34,26 @@ export function HomePage() {
 
   const stream = useActorStream({
     token,
-    onEvent: useCallback(() => {
+    onEvent: useCallback((source: string) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.rooms(actorId) });
+      // 好友申请只随 contact 事件变化；普通消息不重复拉申请列表。
+      if (source !== 'contact') return;
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.contactRequests(actorId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.contactRequestBadge(actorId),
+      });
     }, [actorId, queryClient]),
   });
+
+  const changeContacts = useCallback((open: boolean) => {
+    setContactsOpen(open);
+    if (open) return;
+    requestAnimationFrame(() => {
+      document.getElementById('contact-requests')?.focus();
+    });
+  }, []);
 
   const rooms = useMemo(
     () => filterRooms(roomsState.rooms, filter, query),
@@ -93,6 +111,7 @@ export function HomePage() {
             onQueryChange={setQuery}
             onFilterChange={changeFilter}
             onCreateGroup={() => setGroupOpen(true)}
+            onOpenContacts={() => setContactsOpen(true)}
             onRetry={retry}
             onLoadMore={() => {
               void roomsState.loadMore();
@@ -102,6 +121,7 @@ export function HomePage() {
         main={<EmptyPane title={empty.title} hint={empty.hint} />}
       />
       <GroupCreateDialog open={groupOpen} onOpenChange={setGroupOpen} />
+      <ContactRequestsDialog open={contactsOpen} onOpenChange={changeContacts} />
     </>
   );
 }

@@ -26,7 +26,8 @@ const FATAL_CODES = new Set([
 
 interface StreamOptions {
   token: string | null;
-  onEvent: () => void;
+  /** 事件来源；ack 补拉传空串。页面只据此刷新相关查询。 */
+  onEvent: (source: string) => void;
 }
 
 interface StreamState {
@@ -105,6 +106,22 @@ function notificationUri(message: unknown): string | null {
   const meta = value.params._meta;
   if (!meta || typeof meta[EVENT_META_KEY] !== 'object') return null;
   return STREAM_URI;
+}
+
+/** 信封里的最后一个 item 来源；不解析正文，只用于决定刷新哪些查询。 */
+function notificationSource(message: unknown): string {
+  if (!message || typeof message !== 'object') return '';
+  const value = message as {
+    params?: { _meta?: Record<string, unknown> };
+  };
+  const envelope = value.params?._meta?.[EVENT_META_KEY];
+  if (!envelope || typeof envelope !== 'object') return '';
+  const items = (envelope as { items?: unknown }).items;
+  if (!Array.isArray(items) || items.length === 0) return '';
+  const last = items[items.length - 1];
+  if (!last || typeof last !== 'object') return '';
+  const source = (last as { source?: unknown }).source;
+  return typeof source === 'string' ? source : '';
 }
 
 interface StreamFailure {
@@ -218,9 +235,9 @@ export function useActorStream({ token, onEvent }: StreamOptions): StreamState {
               if (isAck(message)) {
                 acknowledged = true;
                 // ack 后补拉一次，覆盖连接建立前错过的事件。
-                handlerRef.current();
+                handlerRef.current('');
               } else if (notificationUri(message)) {
-                handlerRef.current();
+                handlerRef.current(notificationSource(message));
               }
             }
             boundary = buffer.indexOf('\n\n');
