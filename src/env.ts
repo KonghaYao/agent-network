@@ -8,6 +8,9 @@ import type { LangfuseSourceConfig } from './memory/sources/langfuse-config';
 import type { NotificationHub } from './realtime/hub';
 import type { AgentPresenceTimeline } from './realtime/presence-timeline';
 
+/** 4D-1 可切换的 MCP 传输实现。 */
+export type McpImplementation = 'native' | 'mcp-use';
+
 /** MCP Events 运行配置；只有 EVENTS_ENABLED=1 且密钥有效时才构造。 */
 export interface EventsConfig {
   /** AES-256-GCM 密钥，只用于加密 webhook secret。 */
@@ -27,6 +30,12 @@ export interface EventsConfig {
 export interface Env {
   DB: D1Database;
   NOTIFICATION_HUB: NotificationHub;
+  /**
+   * 服务端 MCP 传输实现。缺省 `native`（官方 SDK），`mcp-use` 走
+   * `createMcpMount`。两者只替换传输/挂载层，不改变工具注册与协议行为；
+   * 切换在重启后生效，`MCP_IMPL=native` 是回滚开关。
+   */
+  MCP_IMPL?: McpImplementation;
   /** Agent 上下线持久化时间线；缺失时只保留 hub 的进程内在线状态。 */
   PRESENCE?: AgentPresenceTimeline;
   ENVIRONMENT: string;

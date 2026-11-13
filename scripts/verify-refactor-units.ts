@@ -38,6 +38,7 @@ import {
   utf8Text,
 } from '../src/contracts/text';
 import { createApp, parseByteRange } from '../src/app';
+import { parseMcpImplementation } from '../src/mcp/transport';
 import { isSupportedDshVersion } from '../client/monitor/dsh-install';
 import { abortableSleep } from '../client/monitor/engine';
 import { acquireLock } from '../client/monitor/locks';
@@ -849,6 +850,20 @@ async function presenceTouchChecks(db: Database): Promise<void> {
   check('断连转换后 touch 重新读状态', reads > beforeDisconnect);
 }
 
+async function mcpTransportChecks(): Promise<void> {
+  checkEqual('MCP_IMPL 缺省为 native', parseMcpImplementation(undefined), 'native');
+  checkEqual('MCP_IMPL 空串回退 native', parseMcpImplementation(''), 'native');
+  checkEqual('MCP_IMPL native 可显式回滚', parseMcpImplementation(' native '), 'native');
+  checkEqual('MCP_IMPL mcp-use 大小写与空白归一', parseMcpImplementation(' MCP-USE '), 'mcp-use');
+  let message = '';
+  try {
+    parseMcpImplementation('stateless');
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  checkEqual('MCP_IMPL 非法值启动期失败', message, 'MCP_IMPL must be native or mcp-use');
+}
+
 async function main(): Promise<void> {
   await sseChecks();
   const db = freshDb();
@@ -868,6 +883,7 @@ async function main(): Promise<void> {
   cursorChecks();
   await permissionMatrixChecks(db);
   await presenceTouchChecks(db);
+  await mcpTransportChecks();
   console.log(`\nRefactor units: ${checksPassed()} checks passed`);
 }
 

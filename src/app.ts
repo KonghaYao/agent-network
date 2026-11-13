@@ -1,4 +1,4 @@
-import { createMcpHandler, type McpHttpHandler, type McpRequestContext } from '@modelcontextprotocol/server';
+import type { McpRequestContext } from '@modelcontextprotocol/server';
 import { FILE_ID_PATTERN, FileError, fileScopeFor, type FileMount, type FileService } from '@peri-code/mcpp/files';
 import { Hono } from 'hono';
 import { stat } from 'node:fs/promises';
@@ -23,6 +23,7 @@ import { runEventsTick, scheduleEventsTick } from './events/runtime';
 import { authenticate } from './mcp/auth';
 import { buildServer } from './mcp/server';
 import { serveActorStream } from './mcp/stream';
+import { createMcpTransport, type McpTransport } from './mcp/transport';
 import { maintain } from './maintenance';
 import { scheduleOutboxDrain } from './realtime/outbox';
 import { STREAM_URI } from './realtime/stream';
@@ -269,7 +270,7 @@ function handlerFor(
   env: Env,
   principal: Awaited<ReturnType<typeof authenticate>>,
   mount?: FileMount,
-): McpHttpHandler {
+): McpTransport {
   const factory = (context: McpRequestContext) =>
     buildServer(
       env,
@@ -281,11 +282,7 @@ function handlerFor(
           }
         : undefined,
     );
-  return createMcpHandler(mount ? mount.wrapFactory(factory) : factory, {
-    legacy: 'reject',
-    maxRequestBodySize: LIMITS.httpBodyBytes,
-    keepAliveMs: LIMITS.keepaliveMs,
-  });
+  return createMcpTransport(mount ? mount.wrapFactory(factory) : factory, env.MCP_IMPL);
 }
 
 /**
