@@ -1,4 +1,6 @@
-import { memo, useEffect, useMemo, useState } from 'react';
+import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
+import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
 import {
@@ -15,6 +17,7 @@ import {
 import { copyText, extractFileCards } from '../../lib/files';
 import { readFullMessage } from '../../lib/message-body';
 import { avatarColor, firstChar } from '../../lib/rooms';
+import { openContextMenuAt, useLongPress } from '../../hooks/useLongPress';
 import { HumanBody } from './MessageBody';
 import { MarkdownIsland } from './MarkdownIsland';
 
@@ -110,6 +113,61 @@ function ReplyReference({
   );
 }
 
+interface MessageAction {
+  id: string;
+  label: string;
+  run: () => void | Promise<void>;
+}
+
+/** 复制/引用同时供 `···` 下拉与右键菜单使用，避免两套逻辑漂移。 */
+function useMessageActions(
+  item: HistoryMessage,
+  room: RoomView,
+  onQuote: (item: HistoryMessage) => void,
+  onStatus: (message: string) => void,
+): MessageAction[] {
+  const truncated = item.body_bytes > messageBodyBytes(item.preview);
+  const copy = async () => {
+    try {
+      const text = truncated ? await readFullMessage(item.message_id) : item.preview;
+      await copyText(text);
+      onStatus('已复制');
+    } catch (error) {
+      onStatus((error as Error).message || '复制失败');
+    }
+  };
+  const actions: MessageAction[] = [{ id: 'message-action-copy', label: '复制', run: copy }];
+  if (!room.read_only) {
+    actions.push({ id: 'message-action-quote', label: '引用', run: () => onQuote(item) });
+  }
+  return actions;
+}
+
+function MessageMenuItems({
+  actions,
+  Item,
+}: {
+  actions: MessageAction[];
+  Item: React.ElementType;
+}) {
+  return (
+    <>
+      {actions.map((action) => (
+        <Item
+          key={action.id}
+          id={action.id}
+          className="room-menu-item"
+          onSelect={() => {
+            void action.run();
+          }}
+        >
+          {action.label}
+        </Item>
+      ))}
+    </>
+  );
+}
+
 function MessageActions({
   item,
   room,
@@ -121,85 +179,60 @@ function MessageActions({
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
 }) {
-  const [menu, setMenu] = useState<{ top: number; left: number } | null>(null);
-  const truncated = item.body_bytes > messageBodyBytes(item.preview);
-
-  useEffect(() => {
-    if (!menu) return undefined;
-    const close = () => setMenu(null);
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [menu]);
-
-  const copy = async () => {
-    try {
-      const text = truncated ? await readFullMessage(item.message_id) : item.preview;
-      await copyText(text);
-      onStatus('已复制');
-    } catch (error) {
-      onStatus((error as Error).message || '复制失败');
-    }
-  };
-
+  const actions = useMessageActions(item, room, onQuote, onStatus);
   return (
-    <>
-      <button
-        type="button"
-        className="message-actions-trigger"
-        aria-label="消息操作"
-        aria-haspopup="menu"
-        aria-expanded={menu !== null}
-        onClick={(event) => {
-          event.stopPropagation();
-          const rect = event.currentTarget.getBoundingClientRect();
-          setMenu((current) =>
-            current
-              ? null
-              : {
-                  top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 112)),
-                  left: Math.max(8, Math.min(rect.left, window.innerWidth - 156)),
-                },
-          );
-        }}
-      >
-        ···
-      </button>
-      {menu ? (
-        <div
+    <DropdownMenuPrimitive.Root>
+      <DropdownMenuPrimitive.Trigger asChild>
+        <button type="button" className="message-actions-trigger" aria-label="消息操作">
+          ···
+        </button>
+      </DropdownMenuPrimitive.Trigger>
+      <DropdownMenuPrimitive.Portal>
+        <DropdownMenuPrimitive.Content
           id="message-action-menu"
-          className="message-action-menu"
-          role="menu"
+          className="room-menu spa-menu message-action-menu"
           aria-label="消息操作"
-          style={{ top: menu.top, left: menu.left }}
-          onClick={(event) => event.stopPropagation()}
+          sideOffset={4}
+          align="start"
         >
-          <button
-            type="button"
-            className="room-menu-item"
-            role="menuitem"
-            onClick={() => {
-              setMenu(null);
-              void copy();
-            }}
-          >
-            复制
-          </button>
-          {!room.read_only ? (
-            <button
-              type="button"
-              className="room-menu-item"
-              role="menuitem"
-              onClick={() => {
-                setMenu(null);
-                onQuote(item);
-              }}
-            >
-              引用
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-    </>
+          <MessageMenuItems actions={actions} Item={DropdownMenuPrimitive.Item} />
+        </DropdownMenuPrimitive.Content>
+      </DropdownMenuPrimitive.Portal>
+    </DropdownMenuPrimitive.Root>
+  );
+}
+
+/**
+ * 消息右键/长按菜单。桌面走 contextmenu；移动端由 pointer 计时后合成
+ * 同一事件，Radix 负责 portal 定位、Esc 与焦点返回。
+ */
+function MessageContextMenu({
+  item,
+  room,
+  onQuote,
+  onStatus,
+  children,
+}: {
+  item: HistoryMessage;
+  room: RoomView;
+  onQuote: (item: HistoryMessage) => void;
+  onStatus: (message: string) => void;
+  children: ReactNode;
+}) {
+  const actions = useMessageActions(item, room, onQuote, onStatus);
+  return (
+    <ContextMenuPrimitive.Root>
+      <ContextMenuPrimitive.Trigger asChild>{children}</ContextMenuPrimitive.Trigger>
+      <ContextMenuPrimitive.Portal>
+        <ContextMenuPrimitive.Content
+          id="message-context-menu"
+          className="room-menu spa-menu message-action-menu"
+          aria-label="消息操作"
+        >
+          <MessageMenuItems actions={actions} Item={ContextMenuPrimitive.Item} />
+        </ContextMenuPrimitive.Content>
+      </ContextMenuPrimitive.Portal>
+    </ContextMenuPrimitive.Root>
   );
 }
 
@@ -217,6 +250,7 @@ export const ChatMessage = memo(function ChatMessage({
   const [fullBody, setFullBody] = useState<string | null>(null);
   const [loadingFull, setLoadingFull] = useState(false);
   const [longExpanded, setLongExpanded] = useState(false);
+  const longPress = useLongPress(openContextMenuAt);
   const mine = item.sender_id === identityId;
   const agent = isAgentMessage(item, members);
   const name = senderName(item.sender_id, members, identityName, identityId);
@@ -250,91 +284,99 @@ export const ChatMessage = memo(function ChatMessage({
 
   return (
     <>
-      <li
-        className={`msg${mine ? ' mine has-receipt' : ''}`}
-        data-message-id={item.message_id}
-        data-sender-kind={agent ? 'agent' : 'human'}
-        data-message-preview={item.preview}
+      <MessageContextMenu
+        item={item}
+        room={room}
+        onQuote={onQuote}
+        onStatus={onStatus}
       >
-        <span
-          className="msg-avatar"
-          aria-hidden="true"
-          style={{ background: avatarColor(mine ? identityName : name) }}
+        <li
+          className={`msg${mine ? ' mine has-receipt' : ''}`}
+          data-message-id={item.message_id}
+          data-sender-kind={agent ? 'agent' : 'human'}
+          data-message-preview={item.preview}
+          {...longPress}
         >
-          {firstChar(mine ? identityName : name)}
-        </span>
-        <div className="msg-content">
-          {!mine && room.kind === 'group' ? <div className="msg-sender">{name}</div> : null}
-          <div
-            className={`bubble${collapsed ? ' is-collapsed' : ''}`}
-            title={fullTime(item.created_at)}
+          <span
+            className="msg-avatar"
+            aria-hidden="true"
+            style={{ background: avatarColor(mine ? identityName : name) }}
           >
-            {agent ? (
-              <MarkdownIsland
-                text={shown}
-                mentions={mentions}
-                preview={truncated && fullBody === null}
-              />
-            ) : (
-              <HumanBody text={shown} mentions={mentions} />
-            )}
-          </div>
-          {cards.length > 0 ? (
-            <div className="msg-files">
-              {cards.map((card) => (
-                <a
-                  className="msg-file"
-                  key={card.fileId}
-                  href={card.url}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  aria-label={`打开附件 ${card.fileId}`}
-                >
-                  <span className="msg-file-kind" aria-hidden="true">
-                    FILE
-                  </span>
-                  <span className="msg-file-main">
-                    <span className="msg-file-name">附件 {card.fileId.slice(0, 10)}</span>
-                  </span>
-                </a>
-              ))}
+            {firstChar(mine ? identityName : name)}
+          </span>
+          <div className="msg-content">
+            {!mine && room.kind === 'group' ? <div className="msg-sender">{name}</div> : null}
+            <div
+              className={`bubble${collapsed ? ' is-collapsed' : ''}`}
+              title={fullTime(item.created_at)}
+            >
+              {agent ? (
+                <MarkdownIsland
+                  text={shown}
+                  mentions={mentions}
+                  preview={truncated && fullBody === null}
+                />
+              ) : (
+                <HumanBody text={shown} mentions={mentions} />
+              )}
             </div>
-          ) : null}
-          {item.reply_to ? (
-            <ReplyReference
-              item={item}
-              allItems={allItems}
-              members={members}
-              identityId={identityId}
-              identityName={identityName}
-            />
-          ) : null}
-          {fullBody === null && truncated ? (
-            <button
-              type="button"
-              className="expand"
-              aria-expanded="false"
-              disabled={loadingFull}
-              onClick={() => void loadFull()}
-            >
-              {loadingFull ? '正在展开…' : '查看全文'}
-            </button>
-          ) : null}
-          {fullBody !== null && longBody ? (
-            <button
-              type="button"
-              className="expand"
-              aria-expanded={longExpanded}
-              onClick={() => setLongExpanded((value) => !value)}
-            >
-              {longExpanded ? '收起' : '展开全文'}
-            </button>
-          ) : null}
-          {item.body_bytes > 0 ? (
-            <MessageActions item={item} room={room} onQuote={onQuote} onStatus={onStatus} />
-          ) : null}
-        </div>
-      </li>
+            {cards.length > 0 ? (
+              <div className="msg-files">
+                {cards.map((card) => (
+                  <a
+                    className="msg-file"
+                    key={card.fileId}
+                    href={card.url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    aria-label={`打开附件 ${card.fileId}`}
+                  >
+                    <span className="msg-file-kind" aria-hidden="true">
+                      FILE
+                    </span>
+                    <span className="msg-file-main">
+                      <span className="msg-file-name">附件 {card.fileId.slice(0, 10)}</span>
+                    </span>
+                  </a>
+                ))}
+              </div>
+            ) : null}
+            {item.reply_to ? (
+              <ReplyReference
+                item={item}
+                allItems={allItems}
+                members={members}
+                identityId={identityId}
+                identityName={identityName}
+              />
+            ) : null}
+            {fullBody === null && truncated ? (
+              <button
+                type="button"
+                className="expand"
+                aria-expanded="false"
+                disabled={loadingFull}
+                onClick={() => void loadFull()}
+              >
+                {loadingFull ? '正在展开…' : '查看全文'}
+              </button>
+            ) : null}
+            {fullBody !== null && longBody ? (
+              <button
+                type="button"
+                className="expand"
+                aria-expanded={longExpanded}
+                onClick={() => setLongExpanded((value) => !value)}
+              >
+                {longExpanded ? '收起' : '展开全文'}
+              </button>
+            ) : null}
+            {item.body_bytes > 0 ? (
+              <MessageActions item={item} room={room} onQuote={onQuote} onStatus={onStatus} />
+            ) : null}
+          </div>
+        </li>
+      </MessageContextMenu>
       {mine ? <Receipt item={item} members={members} identityId={identityId} /> : null}
     </>
   );

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
+import { useCallback, useEffect, useRef } from 'react';
 
 import { LIMITS } from '../../contracts/limits';
 import { useActorStream } from '../app/mcp/useActorStream';
@@ -10,15 +11,22 @@ import {
   type HistoryPage,
   type RoomDetail,
 } from '../lib/chat';
-import { ensureWebSession, type WebSession } from '../lib/identity';
+import type { WebSession } from '../lib/identity';
 import { callTool, type McpError } from '../lib/mcp-client';
+import { queryKeys } from '../lib/query-keys';
+import type { RoomsPage } from '../lib/rooms';
+import { useWebSession } from './useWebSession';
 
 /**
  * 房间会话状态：metadata、成员、历史、实时刷新与已读。
  *
- * 只发 `network_room_get` / `network_history_list` / `network_room_mark_read`；
- * 发送、附件和 outbox 由独立 hook 负责。历史页与首页列表共用同一套
- * `agentnet://stream` 单连接，不轮询。
+ * 服务端状态由 React Query 持有：
+ * - `network_room_get` 与 `network_history_list` 是只读查询；
+ * - SSE 只触发失效，查询重读后才更新页面；
+ * - 翻页与已读是 mutation，成功后写回对应缓存。
+ *
+ * 历史合并规则保持 4B-2 的语义：按 timeline 补读、稳定 key 去重、刷新时
+ * 不丢已加载的旧页。
  */
 
 export interface RoomChatState {
@@ -34,28 +42,23 @@ export interface RoomChatState {
   hasOlder: boolean;
 }
 
-const INITIAL: RoomChatState = {
-  status: 'loading',
-  session: null,
-  detail: null,
-  items: [],
-  error: null,
-  refreshError: null,
-  olderError: null,
-  olderLoading: false,
-  olderEnded: false,
-  hasOlder: false,
-};
-
-interface LoadResult {
-  session: WebSession;
-  detail: RoomDetail;
-  page: HistoryPage;
+interface HistoryCache {
+  items: HistoryItem[];
+  nextOlder: string | null;
+  olderEnded: boolean;
+  olderLoaded: boolean;
+  resumeCursor: string | null;
 }
 
 function failureMessage(error: unknown): string {
   const failure = error as McpError;
   return failure.message || '读取会话失败';
+}
+
+function fatalError(error: unknown): boolean {
+  if (!error) return false;
+  const failure = error as McpError;
+  return failure.code === 'CREDENTIAL_INVALID' || failure.code === 'LOGGED_OUT';
 }
 
 function historyArgs(roomId: string, humanTimeline: boolean, cursor?: string | null) {
@@ -109,275 +112,231 @@ async function catchUpTimeline(
 }
 
 export function useRoomChat(roomId: string) {
-  const [state, setState] = useState<RoomChatState>(INITIAL);
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  const queryClient = useQueryClient();
+  const sessionState = useWebSession();
+  const session = sessionState.session;
+  const token = session?.token ?? null;
+  const humanTimeline = session?.identity.kind === 'human';
+  const detailKey = queryKeys.room(roomId);
+  const historyKey = queryKeys.history(roomId, humanTimeline);
 
-  const mountedRef = useRef(true);
-  const sessionRef = useRef<WebSession | null>(null);
-  const itemsRef = useRef<HistoryItem[]>([]);
-  const nextOlderRef = useRef<string | null>(null);
-  const olderEndedRef = useRef(false);
-  const olderLoadingRef = useRef(false);
-  const loadedOlderRef = useRef(false);
-  const lastMarkedRef = useRef<string | null>(null);
-  const resumeCursorRef = useRef<string | null>(null);
-  const inFlightRef = useRef<Promise<void> | null>(null);
-  const queuedRef = useRef(false);
-  const abortRef = useRef<AbortController | null>(null);
-  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const epochRef = useRef(0);
-  const loadRef = useRef<() => Promise<void>>(async () => undefined);
-
-  const applyDetail = useCallback((detail: RoomDetail) => {
-    setState((previous) => ({ ...previous, detail }));
-  }, []);
-
-  const fetchSessionPage = useCallback(
-    async (session: WebSession, signal: AbortSignal): Promise<{ detail: RoomDetail; page: HistoryPage }> => {
-      const humanTimeline = session.identity.kind === 'human';
-      const [detail, page] = await Promise.all([
-        callTool<RoomDetail>('network_room_get', { room_id: roomId }, { token: session.token, signal }),
-        callTool<HistoryPage>(
-          'network_history_list',
-          historyArgs(roomId, humanTimeline),
-          { token: session.token, signal },
-        ),
-      ]);
-      return { detail, page };
-    },
-    [roomId],
-  );
-
-  const load = useCallback(async (): Promise<void> => {
-    if (!mountedRef.current) return;
-    const epoch = ++epochRef.current;
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setState((previous) => ({ ...previous, status: 'loading', error: null }));
-
-    try {
-      const session = await ensureWebSession();
-      if (!mountedRef.current || epoch !== epochRef.current) return;
-      sessionRef.current = session;
-      const { detail, page } = await fetchSessionPage(session, controller.signal);
-      if (!mountedRef.current || epoch !== epochRef.current) return;
-
-      const items = reverseChronological(page, session.identity.kind === 'human');
-      itemsRef.current = items;
-      nextOlderRef.current = nextOlderCursor(page, session.identity.kind === 'human');
-      olderEndedRef.current = nextOlderRef.current === null;
-      resumeCursorRef.current = page.timeline_resume_cursor ?? null;
-      loadedOlderRef.current = false;
-      olderLoadingRef.current = false;
-      setState({
-        status: 'ready',
-        session,
-        detail,
-        items,
-        error: null,
-        refreshError: null,
-        olderError: null,
-        olderLoading: false,
-        olderEnded: olderEndedRef.current,
-        hasOlder: nextOlderRef.current !== null,
-      });
-    } catch (error) {
-      if (!mountedRef.current || controller.signal.aborted || epoch !== epochRef.current) return;
-      setState((previous) => ({
-        ...previous,
-        status: 'error',
-        error: failureMessage(error),
-      }));
-    }
-  }, [fetchSessionPage]);
-
-  loadRef.current = load;
-
-  useEffect(() => {
-    mountedRef.current = true;
-    void load();
-    return () => {
-      mountedRef.current = false;
-      epochRef.current += 1;
-      abortRef.current?.abort();
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-    };
-  }, [load]);
-
-  const refresh = useCallback((): Promise<void> => {
-    if (!mountedRef.current) return Promise.resolve();
-    if (inFlightRef.current) {
-      queuedRef.current = true;
-      return inFlightRef.current;
-    }
-    const session = sessionRef.current;
-    if (!session) return loadRef.current();
-
-    const run = (async () => {
-      const controller = new AbortController();
-      abortRef.current?.abort();
-      abortRef.current = controller;
-      try {
-        const { detail, page } = await fetchSessionPage(session, controller.signal);
-        if (!mountedRef.current || controller.signal.aborted) return;
-        const humanTimeline = session.identity.kind === 'human';
-        let incoming = reverseChronological(page, humanTimeline);
-        if (
-          humanTimeline &&
-          page.timeline_resume_cursor &&
-          resumeCursorRef.current &&
-          page.timeline_resume_cursor !== resumeCursorRef.current &&
-          page.timeline_snapshot
-        ) {
-          incoming = await catchUpTimeline(
-            session.token,
-            roomId,
-            page.timeline_snapshot,
-            resumeCursorRef.current,
-            incoming,
-            controller.signal,
-          );
-        }
-        if (!mountedRef.current || controller.signal.aborted) return;
-        resumeCursorRef.current = page.timeline_resume_cursor ?? resumeCursorRef.current;
-        const merged = stateRef.current.items.length
-          ? mergeTimelineItems(stateRef.current.items, incoming)
-          : incoming;
-        itemsRef.current = merged;
-        if (olderEndedRef.current) {
-          nextOlderRef.current = null;
-        } else if (!loadedOlderRef.current || nextOlderRef.current === null) {
-          nextOlderRef.current = nextOlderCursor(page, humanTimeline);
-          olderEndedRef.current = nextOlderRef.current === null;
-        }
-        setState((previous) => ({
-          ...previous,
-          status: 'ready',
-          session,
-          detail,
-          items: merged,
-          error: null,
-          refreshError: null,
-          olderEnded: olderEndedRef.current,
-          hasOlder: nextOlderRef.current !== null,
-        }));
-      } catch (error) {
-        if (!mountedRef.current || controller.signal.aborted) return;
-        const failure = error as McpError;
-        if (failure.code === 'CREDENTIAL_INVALID' || failure.code === 'LOGGED_OUT') {
-          sessionRef.current = null;
-          setState((previous) => ({ ...previous, status: 'error', error: failureMessage(error) }));
-          return;
-        }
-        setState((previous) => ({ ...previous, refreshError: failureMessage(error) }));
-      }
-    })();
-
-    inFlightRef.current = run;
-    void run.then(() => {
-      if (inFlightRef.current !== run) return;
-      inFlightRef.current = null;
-      if (!queuedRef.current) return;
-      queuedRef.current = false;
-      queueMicrotask(() => {
-        if (mountedRef.current) void refresh();
-      });
-    });
-    return run;
-  }, [fetchSessionPage]);
-
-  /** SSE 只给“某处变了”的提示；300ms 合并后重新读取权威状态。 */
-  const scheduleRefresh = useCallback(() => {
-    if (!mountedRef.current) return;
-    if (refreshTimerRef.current) return;
-    refreshTimerRef.current = setTimeout(() => {
-      refreshTimerRef.current = null;
-      void refresh();
-    }, LIMITS.webRefreshDebounceMs);
-  }, [refresh]);
-
-  const stream = useActorStream({
-    token: state.session?.token ?? null,
-    onEvent: scheduleRefresh,
+  const detailQuery = useQuery({
+    queryKey: detailKey,
+    enabled: Boolean(token),
+    queryFn: ({ signal }) =>
+      callTool<RoomDetail>('network_room_get', { room_id: roomId }, { token: token ?? undefined, signal }),
   });
 
-  const loadOlder = useCallback(async (): Promise<void> => {
-    const session = sessionRef.current;
-    const cursor = nextOlderRef.current;
-    if (!session || !cursor || olderLoadingRef.current || olderEndedRef.current) return;
-    olderLoadingRef.current = true;
-    setState((previous) => ({ ...previous, olderLoading: true, olderError: null }));
-    try {
-      const humanTimeline = session.identity.kind === 'human';
+  const historyQuery = useQuery({
+    queryKey: historyKey,
+    enabled: Boolean(token),
+    queryFn: async ({ client, signal, queryKey }) => {
+      const previous = client.getQueryData<HistoryCache>(queryKey) ?? null;
+      const page = await callTool<HistoryPage>(
+        'network_history_list',
+        historyArgs(roomId, humanTimeline),
+        { token: token ?? undefined, signal },
+      );
+      let incoming = reverseChronological(page, humanTimeline);
+      if (
+        humanTimeline &&
+        page.timeline_resume_cursor &&
+        previous?.resumeCursor &&
+        page.timeline_resume_cursor !== previous.resumeCursor &&
+        page.timeline_snapshot
+      ) {
+        incoming = await catchUpTimeline(
+          token ?? '',
+          roomId,
+          page.timeline_snapshot,
+          previous.resumeCursor,
+          incoming,
+          signal,
+        );
+      }
+      const items = previous ? mergeTimelineItems(previous.items, incoming) : incoming;
+      let nextOlder: string | null;
+      let olderEnded: boolean;
+      if (previous) {
+        nextOlder = previous.olderLoaded
+          ? previous.nextOlder
+          : nextOlderCursor(page, humanTimeline);
+        olderEnded = previous.olderLoaded ? previous.olderEnded : nextOlder === null;
+      } else {
+        nextOlder = nextOlderCursor(page, humanTimeline);
+        olderEnded = nextOlder === null;
+      }
+      return {
+        items,
+        nextOlder,
+        olderEnded,
+        olderLoaded: previous?.olderLoaded ?? false,
+        resumeCursor: page.timeline_resume_cursor ?? previous?.resumeCursor ?? null,
+      } satisfies HistoryCache;
+    },
+  });
+
+  const older = useMutation({
+    mutationFn: async () => {
+      const state = queryClient.getQueryData<HistoryCache>(historyKey);
+      const cursor = state?.nextOlder ?? null;
+      if (!cursor) throw new Error('已经到最早的消息了');
       const page = await callTool<HistoryPage>(
         'network_history_list',
         historyArgs(roomId, humanTimeline, cursor),
-        { token: session.token },
+        { token: token ?? undefined },
       );
-      const incoming = reverseChronological(page, humanTimeline);
-      const merged = mergeTimelineItems(stateRef.current.items, incoming);
-      const next = nextOlderCursor(page, humanTimeline);
-      loadedOlderRef.current = true;
-      nextOlderRef.current = next && next !== cursor ? next : null;
-      olderEndedRef.current = nextOlderRef.current === null;
-      itemsRef.current = merged;
-      setState((previous) => ({
-        ...previous,
-        items: merged,
-        olderLoading: false,
-        olderError: null,
-        olderEnded: olderEndedRef.current,
-        hasOlder: nextOlderRef.current !== null,
-      }));
-    } catch (error) {
-      if (!mountedRef.current) return;
-      setState((previous) => ({
-        ...previous,
-        olderLoading: false,
-        olderError: `加载更早失败：${failureMessage(error)}`,
-      }));
-    } finally {
-      olderLoadingRef.current = false;
-    }
-  }, [roomId]);
-
-  const markRead = useCallback(async (throughSeq: string): Promise<void> => {
-    const session = sessionRef.current;
-    if (!session || !throughSeq) return;
-    if (lastMarkedRef.current === throughSeq) return;
-    lastMarkedRef.current = throughSeq;
-    try {
-      await callTool(
-        'network_room_mark_read',
-        { room_id: roomId, through_seq: throughSeq },
-        { token: session.token },
-      );
-      if (!mountedRef.current) return;
-      setState((previous) => {
-        if (!previous.detail) return previous;
+      return { page, cursor };
+    },
+    onSuccess: ({ page, cursor }) => {
+      queryClient.setQueryData<HistoryCache>(historyKey, (previous) => {
+        if (!previous) return previous;
+        const incoming = reverseChronological(page, humanTimeline);
+        const merged = mergeTimelineItems(previous.items, incoming);
+        const next = nextOlderCursor(page, humanTimeline);
+        const nextOlder = next && next !== cursor ? next : null;
         return {
           ...previous,
-          detail: {
-            ...previous.detail,
-            room: { ...previous.detail.room, my_last_read_seq: throughSeq },
-          },
+          items: merged,
+          nextOlder,
+          olderLoaded: true,
+          olderEnded: nextOlder === null,
         };
       });
-    } catch {
-      // 已读失败不影响聊天；保留未读，下一次滚到底或刷新再重试。
-      if (lastMarkedRef.current === throughSeq) lastMarkedRef.current = null;
+    },
+  });
+
+  const lastMarkedRef = useRef<string | null>(null);
+  const markReadMutation = useMutation({
+    mutationFn: (throughSeq: string) =>
+      callTool(
+        'network_room_mark_read',
+        { room_id: roomId, through_seq: throughSeq },
+        { token: token ?? undefined },
+      ),
+    onSuccess: (_result, throughSeq) => {
+      queryClient.setQueryData<RoomDetail>(detailKey, (previous) =>
+        previous
+          ? { ...previous, room: { ...previous.room, my_last_read_seq: throughSeq } }
+          : previous,
+      );
+      const actorId = session?.identity.actor_id ?? null;
+      queryClient.setQueryData<InfiniteData<RoomsPage, string | null>>(
+        queryKeys.rooms(actorId),
+        (previous) =>
+          previous
+            ? {
+                ...previous,
+                pages: previous.pages.map((page) => ({
+                  ...page,
+                  items: page.items.map((room) =>
+                    room.room_id === roomId
+                      ? { ...room, my_last_read_seq: throughSeq }
+                      : room,
+                  ),
+                })),
+              }
+            : previous,
+      );
+    },
+  });
+
+  const refresh = useCallback(async (): Promise<void> => {
+    if (!token) {
+      await queryClient.refetchQueries({ queryKey: queryKeys.session() });
+      return;
     }
-  }, [roomId]);
+    await Promise.all([detailQuery.refetch(), historyQuery.refetch()]);
+  }, [detailQuery, historyQuery, queryClient, token]);
+
+  const load = useCallback(async (): Promise<void> => {
+    if (!token) {
+      await queryClient.refetchQueries({ queryKey: queryKeys.session() });
+      return;
+    }
+    await refresh();
+  }, [queryClient, refresh, token]);
+
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    },
+    [],
+  );
+
+  /** SSE 只给“某处变了”的提示；300ms 合并后让查询自己重读权威状态。 */
+  const scheduleRefresh = useCallback(() => {
+    if (!token) return;
+    if (refreshTimerRef.current) return;
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      void queryClient.invalidateQueries({ queryKey: detailKey });
+    }, LIMITS.webRefreshDebounceMs);
+  }, [detailKey, queryClient, token]);
+
+  const stream = useActorStream({ token, onEvent: scheduleRefresh });
+
+  const loadOlder = useCallback(async (): Promise<void> => {
+    if (older.isPending) return;
+    await older.mutateAsync().catch(() => undefined);
+  }, [older]);
+
+  const markRead = useCallback(
+    async (throughSeq: string): Promise<void> => {
+      if (!token || !throughSeq) return;
+      if (lastMarkedRef.current === throughSeq) return;
+      lastMarkedRef.current = throughSeq;
+      await markReadMutation.mutateAsync(throughSeq).catch(() => {
+        lastMarkedRef.current = null;
+      });
+    },
+    [markReadMutation, token],
+  );
+
+  const detail = detailQuery.data ?? null;
+  const history = historyQuery.data ?? null;
+  const fatal =
+    sessionState.status === 'logged-out' ||
+    sessionState.status === 'credential-invalid' ||
+    fatalError(detailQuery.error) ||
+    fatalError(historyQuery.error);
+  const initialError =
+    sessionState.status === 'error' ||
+    sessionState.status === 'credential-invalid' ||
+    sessionState.status === 'logged-out'
+      ? sessionState.error
+      : (!detail || !history) && (detailQuery.error || historyQuery.error)
+        ? failureMessage(detailQuery.error ?? historyQuery.error)
+        : null;
+  const ready = Boolean(detail && history);
+  const status: RoomChatState['status'] =
+    fatal || (initialError && !ready) ? 'error' : ready ? 'ready' : 'loading';
+
+  const refreshErrorSource =
+    ready && !fatal ? (detailQuery.error ?? historyQuery.error) : null;
 
   return {
-    ...state,
+    status,
+    session,
+    detail,
+    items: history?.items ?? [],
+    error: initialError,
+    refreshError: refreshErrorSource && !fatal ? failureMessage(refreshErrorSource) : null,
     streamError: stream.error,
+    olderError: older.error ? `加载更早失败：${failureMessage(older.error)}` : null,
+    olderLoading: older.isPending,
+    olderEnded: history?.olderEnded ?? false,
+    hasOlder: Boolean(history?.nextOlder),
     load,
     refresh,
     loadOlder,
     markRead,
-    applyDetail,
+  } satisfies RoomChatState & {
+    streamError: string | null;
+    load: () => Promise<void>;
+    refresh: () => Promise<void>;
+    loadOlder: () => Promise<void>;
+    markRead: (throughSeq: string) => Promise<void>;
   };
 }

@@ -5,6 +5,7 @@ import {
   type RoomFilter,
   type RoomSummary,
 } from '../../lib/rooms';
+import { AccountMenu } from './AccountMenu';
 import { RoomRow } from './RoomRow';
 
 export type SidebarStatus =
@@ -27,6 +28,7 @@ interface SidebarProps {
   streamError: string | null;
   onQueryChange: (value: string) => void;
   onFilterChange: (value: RoomFilter) => void;
+  onCreateGroup: () => void;
   onRetry: () => void;
   onLoadMore: () => void;
 }
@@ -63,6 +65,7 @@ export function Sidebar(props: SidebarProps) {
     streamError,
     onQueryChange,
     onFilterChange,
+    onCreateGroup,
     onRetry,
     onLoadMore,
   } = props;
@@ -77,6 +80,16 @@ export function Sidebar(props: SidebarProps) {
       <header className="sidebar-head">
         <div className="brand-row">
           <h1>WeBots</h1>
+          <button
+            className="icon-btn"
+            id="new-group"
+            type="button"
+            aria-label="新建群聊"
+            title="新建群聊"
+            onClick={onCreateGroup}
+          >
+            +
+          </button>
         </div>
         <label className="search-box">
           <svg className="search-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -202,6 +215,7 @@ export function Sidebar(props: SidebarProps) {
               <span className="account-name" id="account-name">
                 {me ? me.name : '未登录'}
               </span>
+              <AccountMenu me={me} />
             </div>
           </div>
         </div>
