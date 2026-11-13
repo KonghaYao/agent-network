@@ -11,7 +11,8 @@ import {
  * 会话列表行。
  *
  * 保留 legacy 的 `room-item`、`data-room-*`、`unread` 与 `presence-dot`
- * 契约；聊天页尚未迁移，因此这里始终用普通链接整页进入 `/c/:id`。
+ * 契约；始终用普通链接整页进入 `/c/:id`，由服务端按 `WEB_SPA_ROUTES`
+ * 选择 React Chat 或 legacy 壳，避免 Home 开启而 room 未开启时渲染半成品页。
  */
 export function RoomRow({ room }: { room: RoomSummary }) {
   const unread = isUnread(room);
