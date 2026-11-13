@@ -1,4 +1,4 @@
-import { ProtocolError, type ServerCapabilities } from '@modelcontextprotocol/server';
+import { ProtocolError } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 import { BusinessError, isBusinessError } from '../contracts/errors';
@@ -336,7 +336,3 @@ export async function dispatchEventsMethod(
     }
   }
 }
-
-export type EventsCapabilities = ServerCapabilities & {
-  events?: Record<string, unknown>;
-};
