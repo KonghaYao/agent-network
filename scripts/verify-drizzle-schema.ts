@@ -24,6 +24,7 @@ import { getTableName } from 'drizzle-orm';
 
 import { migrate } from '../src/bun/migrate';
 import { GUARDS } from '../src/storage/guards';
+import { CONTACT_TABLES } from '../src/storage/schema/contacts';
 import { CORE_TABLES } from '../src/storage/schema/core';
 import { stableStringify } from '../src/storage/db';
 import { check, checkEqual, checksPassed } from './lib/harness';
@@ -481,9 +482,11 @@ async function main() {
   const drizzleSql = await generateDrizzleSql();
   const drizzleDb = applyDrizzleSql(drizzleSql);
   try {
-    const expectedTables: string[] = CORE_TABLES.map((table) => getTableName(table)).sort();
+    const expectedTables: string[] = [...CORE_TABLES, ...CONTACT_TABLES]
+      .map((table) => getTableName(table))
+      .sort();
     checkEqual(
-      'Drizzle 只生成 core 表',
+      'Drizzle 只生成已声明表',
       tableNames(drizzleDb).join(','),
       expectedTables.join(','),
     );

@@ -16,12 +16,18 @@ import {
   outboxStatementIfAbsent,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getActor } from '../storage/queries';
+import {
+  findActiveContactBlockBetween,
+  getActiveContactBlock,
+  getActor,
+  listContactBlocks,
+  listMutedMentionBlockers,
+  listPendingContactRequests,
+} from '../storage/queries';
 import type {
   ActorRow,
   ContactBlockRow,
   ContactReportRow,
-  ContactRequestRow,
 } from '../storage/rows';
 import {
   operationsStatement,
@@ -128,13 +134,7 @@ export async function getActiveBlock(
   blocker: string,
   blocked: string,
 ): Promise<ContactBlockRow | null> {
-  return db
-    .prepare(
-      `SELECT * FROM contact_blocks
-        WHERE blocker_actor_id = ? AND blocked_actor_id = ? AND released_at IS NULL`,
-    )
-    .bind(blocker, blocked)
-    .first<ContactBlockRow>();
+  return getActiveContactBlock(db, blocker, blocked);
 }
 
 /** 任一方向的 active 拉黑；用于私聊、申请与邀请的服务端裁决。 */
@@ -143,16 +143,7 @@ export async function findActiveBlockBetween(
   actorA: string,
   actorB: string,
 ): Promise<ContactBlockRow | null> {
-  return db
-    .prepare(
-      `SELECT * FROM contact_blocks
-        WHERE released_at IS NULL
-          AND ((blocker_actor_id = ? AND blocked_actor_id = ?)
-            OR (blocker_actor_id = ? AND blocked_actor_id = ?))
-        LIMIT 1`,
-    )
-    .bind(actorA, actorB, actorB, actorA)
-    .first<ContactBlockRow>();
+  return findActiveContactBlockBetween(db, actorA, actorB);
 }
 
 export async function isBlockedBetween(
@@ -351,18 +342,8 @@ export async function mutedMentionTargets(
   targets: string[],
 ): Promise<Set<string>> {
   if (targets.length === 0) return new Set();
-  const placeholders = targets.map(() => '?').join(', ');
-  const rows = await db
-    .prepare(
-      `SELECT blocker_actor_id FROM contact_blocks
-        WHERE released_at IS NULL
-          AND mute_mentions = 1
-          AND blocked_actor_id = ?
-          AND blocker_actor_id IN (${placeholders})`,
-    )
-    .bind(sender, ...targets)
-    .all<{ blocker_actor_id: string }>();
-  return new Set(rows.results.map((row) => row.blocker_actor_id));
+  const blockers = await listMutedMentionBlockers(db, sender, targets);
+  return new Set(blockers);
 }
 
 /** 拉黑时取消同 pair 的 pending 申请；不向被拉黑者发送申请取消提示。 */
@@ -373,12 +354,9 @@ async function pendingCancellationStatements(
   blockedActorId: string,
   at: number,
 ): Promise<D1PreparedStatement[]> {
-  const pending = await db
-    .prepare("SELECT * FROM contact_requests WHERE pair_key = ? AND status = 'pending'")
-    .bind(pairKey)
-    .all<ContactRequestRow>();
+  const pending = await listPendingContactRequests(db, pairKey);
   const statements: D1PreparedStatement[] = [];
-  for (const row of pending.results) {
+  for (const row of pending) {
     const eventKey = `contact_request_cancelled:${row.contact_request_id}`;
     statements.push(
       db
@@ -642,12 +620,6 @@ export async function contactUnblock(
   return stored as ContactUnblockResult;
 }
 
-interface BlockJoinRow extends ContactBlockRow {
-  blocked_kind: 'human' | 'agent';
-  blocked_name: string;
-  blocked_session: string | null;
-}
-
 export async function contactBlocksList(
   db: D1Database,
   principal: Principal,
@@ -661,27 +633,14 @@ export async function contactBlocksList(
   );
   const scope = `contact_blocks:${viewer}`;
   const cursor = input.cursor ? decodeCursor(input.cursor, scope) : null;
-  const where = cursor
-    ? 'b.blocker_actor_id = ? AND (b.created_at < ? OR (b.created_at = ? AND b.block_id > ?))'
-    : 'b.blocker_actor_id = ?';
-  const binds: unknown[] = cursor
-    ? [viewer, cursor.seq, cursor.seq, cursor.key ?? '']
-    : [viewer];
-  const rows = await db
-    .prepare(
-      `SELECT b.*,
-              a.kind AS blocked_kind, a.name AS blocked_name,
-              a.agent_session_id AS blocked_session
-         FROM contact_blocks b
-         JOIN actors a ON a.actor_id = b.blocked_actor_id
-        WHERE ${where}
-        ORDER BY b.created_at DESC, b.block_id ASC
-        LIMIT ?`,
-    )
-    .bind(...binds, limit + 1)
-    .all<BlockJoinRow>();
-  const page = rows.results.slice(0, limit);
-  const hasMore = rows.results.length > limit;
+  const rows = await listContactBlocks(
+    db,
+    viewer,
+    limit + 1,
+    cursor ? { createdAt: cursor.seq, blockId: cursor.key ?? '' } : null,
+  );
+  const page = rows.slice(0, limit);
+  const hasMore = rows.length > limit;
   const last = page.at(-1);
   return {
     items: page.map((row) =>

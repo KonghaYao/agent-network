@@ -10,7 +10,16 @@ import {
   outboxStatementIfAbsent,
 } from '../storage/events';
 import { guardSql } from '../storage/guards';
-import { getActor, type D1Like } from '../storage/queries';
+import {
+  getActiveContactRelation,
+  getActor,
+  getContactRelation,
+  getContactRequestById,
+  getExpiredPendingContactRequestForPair,
+  getPendingContactRequest,
+  listExpiredPendingContactRequests,
+  type D1Like,
+} from '../storage/queries';
 import type { ActorRow, ContactRelationRow, ContactRequestRow } from '../storage/rows';
 import { mapBatchError } from '../storage/transactions/runner';
 import { getActiveManagement } from './agent-access';
@@ -109,20 +118,14 @@ export async function getActiveRelation(
   actorB: string,
 ): Promise<ContactRelationRow | null> {
   const pairKey = sortedPairKey(actorA, actorB);
-  return db
-    .prepare("SELECT * FROM contact_relations WHERE pair_key = ? AND status = 'active'")
-    .bind(pairKey)
-    .first<ContactRelationRow>();
+  return getActiveContactRelation(db, pairKey);
 }
 
 export async function getRelationByPair(
   db: D1Like,
   pairKey: string,
 ): Promise<ContactRelationRow | null> {
-  return db
-    .prepare('SELECT * FROM contact_relations WHERE pair_key = ?')
-    .bind(pairKey)
-    .first<ContactRelationRow>();
+  return getContactRelation(db, pairKey);
 }
 
 /**
@@ -352,20 +355,14 @@ export async function pendingForPair(
   db: D1Like,
   pairKey: string,
 ): Promise<ContactRequestRow | null> {
-  return db
-    .prepare("SELECT * FROM contact_requests WHERE pair_key = ? AND status = 'pending'")
-    .bind(pairKey)
-    .first<ContactRequestRow>();
+  return getPendingContactRequest(db, pairKey);
 }
 
 export async function getRequest(
   db: D1Like,
   contactRequestId: string,
 ): Promise<ContactRequestRow | null> {
-  return db
-    .prepare('SELECT * FROM contact_requests WHERE contact_request_id = ?')
-    .bind(contactRequestId)
-    .first<ContactRequestRow>();
+  return getContactRequestById(db, contactRequestId);
 }
 
 /**
@@ -454,17 +451,9 @@ export async function expireContactRequests(
   at: number,
   limit = LIMITS.contactRequestExpiryBatchMax,
 ): Promise<number> {
-  const rows = await db
-    .prepare(
-      `SELECT * FROM contact_requests
-        WHERE status = 'pending' AND expires_at <= ?
-        ORDER BY expires_at ASC, contact_request_id ASC
-        LIMIT ?`,
-    )
-    .bind(at, limit)
-    .all<ContactRequestRow>();
+  const rows = await listExpiredPendingContactRequests(db, at, limit);
   let expired = 0;
-  for (const row of rows.results) {
+  for (const row of rows) {
     try {
       await expireRequestRow(db, row, at);
       expired += 1;
@@ -480,13 +469,7 @@ export async function expireForPair(
   pairKey: string,
   at: number,
 ): Promise<void> {
-  const row = await db
-    .prepare(
-      `SELECT * FROM contact_requests
-        WHERE pair_key = ? AND status = 'pending' AND expires_at <= ?`,
-    )
-    .bind(pairKey, at)
-    .first<ContactRequestRow>();
+  const row = await getExpiredPendingContactRequestForPair(db, pairKey, at);
   if (row) {
     try {
       await expireRequestRow(db, row, at);

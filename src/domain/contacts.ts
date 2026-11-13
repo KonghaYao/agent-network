@@ -8,8 +8,8 @@ import type {
 } from '../contracts/schemas';
 import { nowMs, sha256Hex, stableStringify } from '../storage/db';
 import { sortedPairKeySql } from '../storage/pair-key';
-import { getActor, visibleActorSql } from '../storage/queries';
-import type { ActorRow, ContactRow } from '../storage/rows';
+import { getActor, getContact, visibleActorSql } from '../storage/queries';
+import type { ActorRow } from '../storage/rows';
 import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
 import { endRelationStatements, getActiveRelation, relationEndedByBlockSql } from './contact-relations';
 import { resolveContactTarget } from './contact-target';
@@ -132,10 +132,7 @@ export async function contactAdd(
 
   const at = nowMs();
   const [existing, relationBefore] = await Promise.all([
-    db
-      .prepare('SELECT * FROM contacts WHERE owner_actor_id = ? AND target_actor_id = ?')
-      .bind(owner, target.actor_id)
-      .first<ContactRow>(),
+    getContact(db, owner, target.actor_id),
     getActiveRelation(db, owner, target.actor_id),
   ]);
   const payloadHash = await sha256Hex(stableStringify(input));
