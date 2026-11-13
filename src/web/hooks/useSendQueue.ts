@@ -204,8 +204,10 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
           client_message_id: intent.client_message_id,
           room_id: intent.room_id,
           body: intent.body,
-          invoke: intent.invoke,
         };
+        // 人类无存活选择器目标时省略 invoke，让服务端按正文唯一精确成员解析；
+        // 显式目标（含 []）与 Agent 身份照常发送，关闭服务端猜测。
+        if (intent.invoke_explicit) args.invoke = intent.invoke;
         if ((intent.mentions ?? []).length > 0) args.mentions = intent.mentions;
         if (intent.reply_to) args.reply_to = intent.reply_to;
         const result = await callTool<SendResult>('network_message_send', args, {

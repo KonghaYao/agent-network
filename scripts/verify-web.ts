@@ -18,6 +18,12 @@ import { chromium, type Browser, type BrowserContext, type Locator, type Page } 
 import { extractMessageFileLinks } from '../src/contracts/file-links';
 import { LIMITS } from '../src/contracts/limits';
 import {
+  buildSendPlan,
+  type HistoryItem,
+  type RoomMember,
+  type RoomView,
+} from '../src/web/lib/chat';
+import {
   callTool,
   check,
   checkEqual,
@@ -4117,8 +4123,213 @@ async function runDialogAccessibilityAcceptance(
   }
 }
 
+function planMember(actorId: string, name: string, kind: 'human' | 'agent'): RoomMember {
+  return {
+    actor_id: actorId,
+    kind,
+    name,
+    agent_session_id: null,
+    role: 'member',
+    role_revision: 0,
+    online: null,
+    actions: null,
+  };
+}
+
+function planGroupRoom(): RoomView {
+  return {
+    room_id: 'plan_room',
+    kind: 'group',
+    owner_id: 'plan_human',
+    title: '自动 @ 计划群',
+    head_seq: '0',
+    member_seq: '0',
+    member_count: 3,
+    my_role: 'owner',
+    my_last_read_seq: '0',
+    announcement: '',
+    status: 'active',
+    read_only: false,
+    created_at: '0',
+    updated_at: '0',
+  };
+}
+
+function planMessage(senderId: string, seq: string): HistoryItem {
+  return {
+    kind: 'message',
+    message_id: `plan_msg_${seq}`,
+    room_id: 'plan_room',
+    sender_id: senderId,
+    created_seq: seq,
+    preview: '',
+    body_bytes: 1,
+    created_at: seq,
+    reply_to: null,
+    root_id: null,
+    task_root_id: null,
+    hop: 0,
+    delivery_states: {},
+    mentions: [],
+    delivery_claimed_at: null,
+    delivery_updated_at: null,
+    sender_kind: null,
+  };
+}
+
+/** 纯发送计划分支：浏览器难以稳定构造的重名、边界与超长正文。 */
+function runAutoMentionPlanChecks(): void {
+  const human = planMember('plan_human', '计划人类', 'human');
+  const agentA = planMember('plan_agent_a', '自动提及 Agent', 'agent');
+  const agentB = planMember('plan_agent_b', '正文命中 Agent', 'agent');
+  const members = new Map([
+    [human.actor_id, human],
+    [agentA.actor_id, agentA],
+    [agentB.actor_id, agentB],
+  ]);
+  const room = planGroupRoom();
+  const plan = (
+    body: string,
+    options: {
+      room?: RoomView;
+      members?: Map<string, RoomMember>;
+      identityId?: string;
+      identityKind?: 'human' | 'agent';
+      items?: HistoryItem[];
+      hasAttachments?: boolean;
+      selections?: { actor_id: string; name: string; kind: 'human' | 'agent' }[];
+    } = {},
+  ) =>
+    buildSendPlan({
+      room: options.room ?? room,
+      members: options.members ?? members,
+      identityId: options.identityId ?? human.actor_id,
+      identityKind: options.identityKind ?? 'human',
+      body,
+      selections: options.selections ?? [],
+      items: options.items ?? [],
+      hasAttachments: options.hasAttachments ?? false,
+    });
+
+  const previous = plan('接着处理', { items: [planMessage(agentA.actor_id, '1')] });
+  checkEqual('计划：纯文本自动 @ 上一位 Agent', previous.body, '接着处理\n@自动提及 Agent');
+  checkEqual('计划：纯文本自动 @ 省略 invoke', previous.invokeExplicit, false);
+
+  const named = plan('请 正文命中 Agent 处理', {
+    items: [planMessage(agentA.actor_id, '2')],
+  });
+  checkEqual('计划：正文命中的成员优先于上一位发送者', named.body, '请 正文命中 Agent 处理\n@正文命中 Agent');
+
+  const duplicateA = planMember('plan_dup_a', '重名 Agent', 'agent');
+  const duplicateB = planMember('plan_dup_b', '重名 Agent', 'agent');
+  const duplicateMembers = new Map([
+    [human.actor_id, human],
+    [duplicateA.actor_id, duplicateA],
+    [duplicateB.actor_id, duplicateB],
+  ]);
+  const duplicate = plan('重名接一句', {
+    members: duplicateMembers,
+    items: [planMessage(duplicateA.actor_id, '3')],
+  });
+  checkEqual('计划：重名成员不追加自动 @', duplicate.body, '重名接一句');
+
+  const boundaryMembers = new Map([
+    [human.actor_id, human],
+    [agentA.actor_id, planMember('plan_agent_a', '边界 Agent', 'agent')],
+  ]);
+  checkEqual(
+    '计划：ASCII 前缀边界不命中名字',
+    plan('My边界 Agent 处理', { members: boundaryMembers }).body,
+    'My边界 Agent 处理',
+  );
+  checkEqual(
+    '计划：ASCII 后缀边界不命中名字',
+    plan('边界 Agenter 处理', { members: boundaryMembers }).body,
+    '边界 Agenter 处理',
+  );
+  checkEqual(
+    '计划：独立名字可命中并追加',
+    plan('发送给 边界 Agent 处理', { members: boundaryMembers }).body,
+    '发送给 边界 Agent 处理\n@边界 Agent',
+  );
+
+  const longBody = 'a'.repeat(LIMITS.messageBodyBytes);
+  checkEqual(
+    '计划：追加会超过正文上限时跳过',
+    plan(longBody, { items: [planMessage(agentA.actor_id, '4')] }).body,
+    longBody,
+  );
+
+  const maintainer = planMember('plan_maintainer', 'WeBots 维护员', 'agent');
+  const attachMembers = new Map([
+    [human.actor_id, human],
+    [maintainer.actor_id, maintainer],
+  ]);
+  checkEqual(
+    '计划：附件无目标兜底唯一维护员',
+    plan('附件说明', { members: attachMembers, hasAttachments: true }).body,
+    '附件说明\n@WeBots 维护员',
+  );
+  const duplicateMaintainer = planMember('plan_maintainer_2', 'WeBots 维护员', 'agent');
+  checkEqual(
+    '计划：重名维护员不兜底',
+    plan('附件说明', {
+      members: new Map([
+        [human.actor_id, human],
+        [maintainer.actor_id, maintainer],
+        [duplicateMaintainer.actor_id, duplicateMaintainer],
+      ]),
+      hasAttachments: true,
+    }).body,
+    '附件说明',
+  );
+
+  const agentReply = plan('Agent 自己回复', {
+    identityId: agentA.actor_id,
+    identityKind: 'agent',
+    items: [planMessage(agentB.actor_id, '5')],
+  });
+  checkEqual('计划：Agent 发送不自动 @', agentReply.body, 'Agent 自己回复');
+  checkEqual('计划：Agent 发送显式 invoke', agentReply.invokeExplicit, true);
+  checkEqual('计划：Agent 发送空 invoke 数组', agentReply.invoke.length, 0);
+  checkEqual('计划：Agent 发送不追加 text 提及', agentReply.mentions.length, 0);
+
+  const agentDirect = plan('Agent 单聊回复', {
+    room: { ...room, room_id: 'plan_direct', kind: 'direct' },
+    identityId: agentA.actor_id,
+    identityKind: 'agent',
+    members: new Map([
+      [agentA.actor_id, agentA],
+      [human.actor_id, human],
+    ]),
+  });
+  checkEqual('计划：Agent 单聊同样显式 invoke', agentDirect.invokeExplicit, true);
+
+  const explicit = plan('请 @自动提及 Agent 处理', {
+    items: [planMessage(agentA.actor_id, '6')],
+  });
+  checkEqual('计划：已有有效 @ 不重复追加', explicit.body, '请 @自动提及 Agent 处理');
+  checkEqual('计划：正文 @ 仍省略 invoke', explicit.invokeExplicit, false);
+
+  const selected = plan('请 @正文命中 Agent 处理', {
+    selections: [{ actor_id: agentB.actor_id, name: agentB.name, kind: 'agent' }],
+  });
+  checkEqual('计划：选择器目标显式带 invoke', selected.invokeExplicit, true);
+  check('计划：选择器 Agent 进入 invoke', selected.invoke.includes(agentB.actor_id));
+  checkEqual('计划：选择器目标不追加自动 @', selected.body, '请 @正文命中 Agent 处理');
+
+  const humanTarget = planMember('plan_human_b', '人类成员', 'human');
+  const humanSelected = plan('请 @人类成员 处理', {
+    members: new Map([...members, [humanTarget.actor_id, humanTarget]]),
+    selections: [{ actor_id: humanTarget.actor_id, name: humanTarget.name, kind: 'human' }],
+  });
+  checkEqual('计划：人类选择器仍显式发送 invoke（可为空）', humanSelected.invokeExplicit, true);
+  checkEqual('计划：人类选择器进入 mentions', humanSelected.mentions[0], humanTarget.actor_id);
+}
+
 async function main(): Promise<void> {
   await runFileTicketSecretChecks();
+  runAutoMentionPlanChecks();
   const server = await startServer();
   process.env.AGENTNET_URL = server.base;
   let browser: Browser | null = null;

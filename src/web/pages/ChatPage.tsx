@@ -308,19 +308,23 @@ export function ChatPage({ roomId }: ChatPageProps) {
         room,
         members,
         identityId: identity.actor_id,
+        identityKind: identity.kind,
         body,
         selections: input.selections,
+        items: chat.items,
+        hasAttachments: input.urls.length > 0,
       });
       if (plan.error) {
         setStatus(plan.error);
         return { ok: false, error: plan.error };
       }
       const outcome = await queue.send({
-        body,
+        body: plan.body,
         invoke: plan.invoke,
         mentions: plan.mentions,
-        // 页面始终显式发送 invoke（含 []），阻止服务端再从正文猜测目标。
-        invokeExplicit: true,
+        // 人类无存活选择器目标时省略 invoke，恢复服务端按正文唯一成员解析；
+        // 有目标或发送者是 Agent 时显式发送（可能为空 []），阻止服务端猜测。
+        invokeExplicit: plan.invokeExplicit,
         replyTo: reply?.messageId ?? null,
       });
       if (outcome.ok) {
@@ -333,7 +337,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
       }
       return outcome;
     },
-    [room, identity, members, queue, reply, refresh],
+    [room, identity, members, chat.items, queue, reply, refresh],
   );
 
   const onRetryOutbox = useCallback(
