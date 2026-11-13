@@ -233,6 +233,18 @@ export function useRoomChat(roomId: string) {
   const detailKey = queryKeys.room(roomId);
   const historyKey = queryKeys.history(roomId, humanTimeline);
 
+  /**
+   * 首屏 history 查询完成时刻，按挂载/切房后的首次查询记录。
+   * 首次 ack 晚于它时，两者之间存在不会被订阅重放的握手窗口。
+   */
+  const initialHistoryCompletedRef = useRef<{ roomId: string; at: number | null }>({
+    roomId,
+    at: null,
+  });
+  if (initialHistoryCompletedRef.current.roomId !== roomId) {
+    initialHistoryCompletedRef.current = { roomId, at: null };
+  }
+
   const detailQuery = useQuery({
     queryKey: detailKey,
     enabled: Boolean(token),
@@ -272,7 +284,7 @@ export function useRoomChat(roomId: string) {
       // 请求期间可能已完成翻页；以此刻的缓存为基准，而不是请求前的 previous。
       const current = client.getQueryData<HistoryCache>(queryKey) ?? previous ?? undefined;
       const pageNextOlder = nextOlderCursor(page, humanTimeline);
-      return mergeHistoryCache(current, {
+      const merged = mergeHistoryCache(current, {
         items: incoming,
         nextOlder: pageNextOlder,
         olderEnded: pageNextOlder === null,
@@ -280,6 +292,9 @@ export function useRoomChat(roomId: string) {
         olderPages: 0,
         resumeCursor: page.timeline_resume_cursor ?? current?.resumeCursor ?? null,
       });
+      const first = initialHistoryCompletedRef.current;
+      if (first.roomId === roomId && first.at === null) first.at = Date.now();
+      return merged;
     },
   });
 
@@ -367,6 +382,8 @@ export function useRoomChat(roomId: string) {
 
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRefreshRef = useRef<PendingRefresh>(emptyPendingRefresh());
+  /** 首次 ack 的握手补拉只允许发生一次；重连 ack 走独立分支。 */
+  const initialAckHandledRef = useRef(false);
   useEffect(
     () => () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
@@ -417,19 +434,34 @@ export function useRoomChat(roomId: string) {
 
   /**
    * SSE 只给“某处变了”的提示；300ms 窗口内按房间与查询类别合并，
-   * 窗口结束后让查询自己重读权威状态。首屏由初始查询负责，首次 ack 不重复补拉；
-   * 重连 ack 才刷新当前房间与侧栏，覆盖断线期间错过的事件。
+   * 窗口结束后让查询自己重读权威状态。
+   *
+   * 首次 ack 不代表订阅已经覆盖首屏：如果 ack 晚于首屏 history 完成，
+   * 两者之间写入的消息不会被重放，必须补拉一次当前房间。ack 早于或与
+   * 首屏 history 同时完成时，首屏查询已经覆盖，不额外读取。
+   * 重连 ack 仍整体刷新，覆盖断线期间错过的事件。
    */
   const scheduleRefresh = useCallback(
     (event: ActorStreamEvent) => {
       if (!token) return;
       const pending = pendingRefreshRef.current;
       if (event.type === 'ack') {
-        if (!event.reconnect) return;
-        pending.rooms = true;
-        pending.detail = true;
-        pending.history = true;
-        pending.files = true;
+        if (event.reconnect) {
+          pending.rooms = true;
+          pending.detail = true;
+          pending.history = true;
+          pending.files = true;
+        } else {
+          // 首次 ack 只判断一次，避免重复 ack/事件再次触发补拉。
+          if (initialAckHandledRef.current) return;
+          initialAckHandledRef.current = true;
+          const completedAt = initialHistoryCompletedRef.current.at;
+          if (completedAt === null || event.at <= completedAt) return;
+          // 握手窗口：history 已完成但 ack 迟到，窗口内事件不会重放。
+          // 只补当前房间；无关房间事件仍只刷新侧栏。
+          pending.history = true;
+          pending.detail = true;
+        }
       } else {
         markPendingRefresh(pending, event, roomId, humanTimeline);
       }

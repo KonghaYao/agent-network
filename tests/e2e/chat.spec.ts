@@ -107,6 +107,8 @@ async function instrumentFetch(page: Page): Promise<void> {
         stream: boolean;
         body: unknown;
       }[];
+      /** 首次 ack 被页面消费的时刻（浏览器时钟），用于快/慢握手断言。 */
+      __streamAckAt?: number;
       fetch: typeof fetch;
     };
     target.__mcpCalls = [];
@@ -120,9 +122,47 @@ async function instrumentFetch(page: Page): Promise<void> {
       }
       const method = body?.method ?? null;
       target.__mcpCalls?.push({ method, stream: method === 'subscriptions/listen', body });
-      return original(input, init);
+      const response = await original(input, init);
+      if (method === 'subscriptions/listen') {
+        // 只旁路观察 ack，不改变页面自己读取的 SSE 流。
+        try {
+          const clone = response.clone();
+          void (async () => {
+            try {
+              const reader = clone.body?.getReader();
+              if (!reader) return;
+              const decoder = new TextDecoder();
+              let text = '';
+              for (;;) {
+                const step = await reader.read();
+                if (step.done) return;
+                text += decoder.decode(step.value, { stream: true });
+                if (text.includes('notifications/subscriptions/acknowledged')) {
+                  target.__streamAckAt = Date.now();
+                  await reader.cancel().catch(() => undefined);
+                  return;
+                }
+                if (text.length > 16_384) text = text.slice(-2048);
+              }
+            } catch {
+              // 页面关闭或流被取消时忽略。
+            }
+          })();
+        } catch {
+          // clone 失败不能影响页面自身读取。
+        }
+      }
+      return response;
     }) as typeof fetch;
   });
+}
+
+async function waitForStreamAck(page: Page, timeout = 10_000): Promise<void> {
+  await page.waitForFunction(
+    () => typeof (window as unknown as { __streamAckAt?: number }).__streamAckAt === 'number',
+    undefined,
+    { timeout },
+  );
 }
 
 async function waitForHistory(
@@ -376,6 +416,95 @@ test.describe('SPA Chat', () => {
       timeout: 15_000,
     });
     expect(await countHistoryWithoutCursor(page, roomId)).toBe(2);
+  });
+
+  test('catches up current room when the first stream ack lags behind history', async ({ page }) => {
+    let releaseStream: () => void = () => undefined;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    let markStreamHeld: () => void = () => undefined;
+    const streamHeld = new Promise<void>((resolve) => {
+      markStreamHeld = resolve;
+    });
+    await page.route('**/mcp', async (route) => {
+      if (route.request().headers()['mcp-method'] === 'subscriptions/listen') {
+        markStreamHeld();
+        await streamGate;
+      }
+      await route.continue();
+    });
+
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#messages .msg .bubble').first()).toContainText('Chat E2E 初始消息');
+    await streamHeld;
+    await page.waitForTimeout(400);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(1);
+
+    const marker = `E2E 握手窗口 ${Date.now()}`;
+    await callTool(base, tokenB, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: requestId('e2e_cm'),
+      room_id: roomId,
+      body: marker,
+      invoke: [],
+    });
+    await waitForHistory(base, tokenB, roomId, marker);
+    // 订阅尚未建立，服务端不重放握手窗口内的事件：页面此刻看不到消息。
+    await expect(page.locator('#messages .msg .bubble', { hasText: marker })).toHaveCount(0);
+
+    releaseStream();
+    // 首次 ack 补拉一次即可看到消息，无需第二条消息事件。
+    await expect(page.locator('#messages .msg .bubble', { hasText: marker })).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(2);
+
+    // 只补一次，不形成循环，也不重建订阅。
+    await page.waitForTimeout(1_200);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(2);
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __mcpCalls?: { stream?: boolean }[];
+            }
+          ).__mcpCalls?.filter((call) => call.stream === true).length ?? 0,
+      ),
+    ).toBe(1);
+  });
+
+  test('does not re-read the first page when the stream ack wins the handshake', async ({ page }) => {
+    let releaseHistory: () => void = () => undefined;
+    const historyGate = new Promise<void>((resolve) => {
+      releaseHistory = resolve;
+    });
+    let markHistoryHeld: () => void = () => undefined;
+    const historyHeld = new Promise<void>((resolve) => {
+      markHistoryHeld = resolve;
+    });
+    await page.route('**/mcp', async (route) => {
+      const request = route.request();
+      if (
+        request.headers()['mcp-name'] === 'network_history_list' &&
+        !(request.postData() ?? '').includes('"cursor"')
+      ) {
+        markHistoryHeld();
+        await historyGate;
+      }
+      await route.continue();
+    });
+
+    await page.goto(`${base}/c/${roomId}`);
+    await historyHeld;
+    // 首屏 history 仍被挂起时 ack 已到达：属于 ack 先于 history 完成。
+    await waitForStreamAck(page);
+    releaseHistory();
+    await expect(page.locator('#messages .msg .bubble').first()).toContainText('Chat E2E 初始消息');
+    await page.waitForTimeout(1_200);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(1);
+    expect(await countRoomCalls(page, 'network_room_get', roomId)).toBe(1);
   });
 
   test('keeps IME Enter, Shift+Enter and 1–4 line composer behavior', async ({ page }) => {

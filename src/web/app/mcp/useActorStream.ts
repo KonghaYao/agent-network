@@ -31,7 +31,7 @@ interface StreamOptions {
 }
 
 export type ActorStreamEvent =
-  | { type: 'ack'; reconnect: boolean }
+  | { type: 'ack'; reconnect: boolean; at: number }
   | { type: 'event'; source: string; kind: string; roomId: string | null };
 
 interface StreamState {
@@ -177,7 +177,10 @@ export function useActorStream({ token, onEvent }: StreamOptions): StreamState {
     let controller: AbortController | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
-    /** 首次 ack 由首屏查询覆盖；只有重连后的 ack 才需要补拉。 */
+    /**
+     * 首次 ack 本身不直接补拉；调用方用 `at` 与首屏查询完成时刻比较，
+     * 只补握手窗口。重连 ack 仍由调用方整体刷新。
+     */
     let connected = false;
 
     const schedule = (delay: number) => {
@@ -248,10 +251,11 @@ export function useActorStream({ token, onEvent }: StreamOptions): StreamState {
               }
               if (isAck(message)) {
                 acknowledged = true;
-                // 首次连接由首屏查询覆盖；重连才补拉，避免首屏重复读取。
+                // 首次 ack 由首屏查询覆盖，握手窗口由调用方按 `at` 判断；
+                // 重连 ack 才需要整体补拉。
                 const reconnect = connected;
                 connected = true;
-                handlerRef.current({ type: 'ack', reconnect });
+                handlerRef.current({ type: 'ack', reconnect, at: Date.now() });
               } else if (notificationUri(message)) {
                 const events = notificationEvents(message);
                 if (events.length === 0) {
