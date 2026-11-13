@@ -8,7 +8,8 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { loadSpaManifest, parseSpaRoutes } from '../src/web/spa-manifest';import { check, checkEqual, checksPassed } from './lib/harness';
+import { IMPLEMENTED_SPA_ROUTES, loadSpaManifest, parseSpaRoutes } from '../src/web/spa-manifest';
+import { check, checkEqual, checksPassed } from './lib/harness';
 import { startTestServer, type TestServer } from './lib/test-server';
 
 const DIST = resolve(import.meta.dir, '../dist/web');
@@ -44,6 +45,70 @@ async function brokenManifest(): Promise<unknown> {
   }
 }
 
+function requestId(prefix: string): string {
+  return `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`;
+}
+
+interface RegisteredAgent {
+  actor_id: string;
+  agent_session_id: string;
+}
+
+/** 通过真实 MCP 注册 Agent，拿到可访问 /a/<session> 的 session 与 token。 */
+async function registerAgent(base: string): Promise<RegisteredAgent & { token: string }> {
+  const token = crypto.randomUUID();
+  const response = await fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'mcp-protocol-version': '2026-07-28',
+      'mcp-method': 'tools/call',
+      'mcp-name': 'network_register',
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: crypto.randomUUID(),
+      method: 'tools/call',
+      params: {
+        name: 'network_register',
+        arguments: {
+          request_id: requestId('spa_reg'),
+          kind: 'agent',
+          name: 'SPA 分享',
+          agent_session_id: `sess_spa_${crypto.randomUUID().replaceAll('-', '')}`,
+        },
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientInfo': {
+            name: 'agent-network-spa-test',
+            version: '0.1.0',
+          },
+          'io.modelcontextprotocol/clientCapabilities': {},
+        },
+      },
+    }),
+  });
+  const payload = (await response.json()) as {
+    result?: { structuredContent?: RegisteredAgent; isError?: boolean };
+  };
+  const identity = payload.result?.structuredContent;
+  if (!identity?.agent_session_id) throw new Error('注册 Agent 失败');
+  return { ...identity, token };
+}
+
+function bootstrapJson(html: string): Record<string, unknown> | null {
+  const match = /<script type="application\/json" id="spa-bootstrap">([\s\S]*?)<\/script>/u.exec(html);
+  if (!match?.[1]) return null;
+  try {
+    const parsed = JSON.parse(match[1]) as unknown;
+    return parsed !== null && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   check('dist manifest exists (run bun run build:web first)', await Bun.file(MANIFEST).exists());
   checkEqual('WEB_SPA_ROUTES default is empty', parseSpaRoutes(undefined).size, 0);
@@ -67,6 +132,8 @@ async function main() {
   let legacy: TestServer | undefined;
   let spa: TestServer | undefined;
   let spaAll: TestServer | undefined;
+  let spaPages: TestServer | undefined;
+  let spaShareOnly: TestServer | undefined;
   let fallback: TestServer | undefined;
   let emptyDist: string | undefined;
   try {
@@ -232,6 +299,147 @@ async function main() {
         multiRoom.text.includes('<div id="root"></div>') &&
         !multiRoom.text.includes('initialRoomId'),
     );
+    checkEqual(
+      'all five routes are implemented',
+      [...IMPLEMENTED_SPA_ROUTES].sort().join(','),
+      'home,join,pair,room,share',
+    );
+
+    spaPages = await startTestServer({
+      tag: 'spa-pages',
+      env: { ENVIRONMENT: 'test', WEB_SPA_ROUTES: 'share,join,pair', WEB_DIST_DIR: DIST },
+    });
+    const agent = await registerAgent(spaPages.base);
+    const share = await fetchText(`${spaPages.base}/a/${encodeURIComponent(agent.agent_session_id)}`);
+    checkEqual('spa share status', share.response.status, 200);
+    check(
+      'spa share is server-rendered with public data',
+      share.text.includes('data-spa-route="share"') &&
+        share.text.includes('class="page-share"') &&
+        share.text.includes('id="add"') &&
+        share.text.includes(agent.actor_id) &&
+        share.text.includes('发送好友申请'),
+    );
+    check(
+      'spa share keeps title and OG metadata',
+      share.text.includes('<title>添加 SPA 分享 · WeBots</title>') &&
+        share.text.includes('property="og:title"') &&
+        share.text.includes('property="og:description"') &&
+        share.text.includes('SPA 分享'),
+    );
+    check(
+      'spa share does not leak legacy token or inline client',
+      !share.text.includes('agent-network-token=') &&
+        !share.text.includes(agent.token) &&
+        !share.text.includes("callTool('network_register'") &&
+        !share.text.includes('id="room-search"'),
+    );
+    const shareBootstrap = bootstrapJson(share.text);
+    check(
+      'spa share bootstrap only carries public profile',
+      shareBootstrap?.route === 'share' &&
+        (shareBootstrap.actor as { actor_id?: string } | null)?.actor_id === agent.actor_id &&
+        !JSON.stringify(shareBootstrap).includes(agent.token),
+    );
+    checkEqual('spa share cache-control', share.response.headers.get('cache-control'), 'no-store');
+
+    const missingShare = await fetchText(`${spaPages.base}/a/missing_${crypto.randomUUID()}`);
+    checkEqual('spa share unknown session is 404', missingShare.response.status, 404);
+    check(
+      'spa share 404 keeps the React shell and readable copy',
+      missingShare.text.includes('data-spa-route="share"') &&
+        missingShare.text.includes('分享链接无效'),
+    );
+
+    const joinPage = await fetchText(`${spaPages.base}/j/${'b'.repeat(32)}`);
+    checkEqual('spa join status', joinPage.response.status, 200);
+    check(
+      'spa join is server-rendered shell without group data',
+      joinPage.text.includes('data-spa-route="join"') &&
+        joinPage.text.includes('class="page-join"') &&
+        joinPage.text.includes('id="join-action"') &&
+        joinPage.text.includes('邀请码有效不等于已加入') &&
+        !joinPage.text.includes('join-title">群聊') &&
+        !joinPage.text.includes('initialRoomId'),
+    );
+    check(
+      'spa join keeps title and OG metadata',
+      joinPage.text.includes('<title>加入群聊 · WeBots</title>') &&
+        joinPage.text.includes('property="og:title"') &&
+        joinPage.text.includes('property="og:description"'),
+    );
+    check(
+      'spa join bootstrap carries invite key',
+      (bootstrapJson(joinPage.text)?.inviteKey as string | undefined) === 'b'.repeat(32),
+    );
+    checkEqual('spa join cache-control', joinPage.response.headers.get('cache-control'), 'no-store');
+
+    const invalidJoin = await fetchText(`${spaPages.base}/j/not-a-valid-key`);
+    checkEqual('spa join invalid key is 404', invalidJoin.response.status, 404);
+    check(
+      'spa join 404 keeps the React shell',
+      invalidJoin.text.includes('data-spa-route="join"') &&
+        invalidJoin.text.includes('邀请无效'),
+    );
+
+    const pair = await fetchText(`${spaPages.base}/pair`);
+    checkEqual('spa pair status', pair.response.status, 200);
+    check(
+      'spa pair is a CSR card shell',
+      pair.text.includes('data-spa-route="pair"') &&
+        pair.text.includes('class="page-pair"') &&
+        pair.text.includes('<div id="root"></div>') &&
+        !pair.text.includes('id="pair-challenge"'),
+    );
+    check(
+      'spa pair keeps no-referrer',
+      pair.response.headers.get('referrer-policy') === 'no-referrer',
+    );
+    const pairFlagged = await fetchText(`${spaPages.base}/pair`, {
+      cookie: 'agent-network-spa=pair',
+    });
+    check(
+      'cookie can enable pair without enabling join',
+      pairFlagged.text.includes('data-spa-route="pair"'),
+    );
+    const joinStillLegacy = await fetchText(`${spaPages.base}/j/${'c'.repeat(32)}`, {
+      cookie: 'agent-network-spa=pair',
+    });
+    check(
+      'cookie intersection keeps unlisted join legacy',
+      joinStillLegacy.text.includes('id="join-action"') &&
+        !joinStillLegacy.text.includes('data-spa-route'),
+    );
+    check(
+      'home stays legacy when only share/join/pair are enabled',
+      (await fetchText(`${spaPages.base}/`)).text.includes('id="room-search"'),
+    );
+
+    spaShareOnly = await startTestServer({
+      tag: 'spa-share-only',
+      env: { ENVIRONMENT: 'test', WEB_SPA_ROUTES: 'share', WEB_DIST_DIR: DIST },
+    });
+    const shareOnlyAgent = await registerAgent(spaShareOnly.base);
+    check(
+      'single-route flag still renders share',
+      (
+        await fetchText(
+          `${spaShareOnly.base}/a/${encodeURIComponent(shareOnlyAgent.agent_session_id)}`,
+        )
+      ).text.includes('data-spa-route="share"'),
+    );
+    const legacyJoin = await fetchText(`${spaShareOnly.base}/j/${'d'.repeat(32)}`);
+    check(
+      'share-only flag keeps join legacy',
+      legacyJoin.text.includes('id="join-action"') &&
+        !legacyJoin.text.includes('data-spa-route'),
+    );
+    const legacyPair = await fetchText(`${spaShareOnly.base}/pair`);
+    check(
+      'share-only flag keeps pair legacy',
+      legacyPair.text.includes('id="pair-challenge"') &&
+        !legacyPair.text.includes('data-spa-route'),
+    );
 
     emptyDist = await mkdtemp(join(tmpdir(), 'agentnet-spa-empty-'));
     fallback = await startTestServer({
@@ -249,7 +457,14 @@ async function main() {
         !fallbackHome.text.includes('data-spa-route'),
     );
   } finally {
-    await Promise.all([legacy?.dispose(), spa?.dispose(), spaAll?.dispose(), fallback?.dispose()]);
+    await Promise.all([
+      legacy?.dispose(),
+      spa?.dispose(),
+      spaAll?.dispose(),
+      spaPages?.dispose(),
+      spaShareOnly?.dispose(),
+      fallback?.dispose(),
+    ]);
     if (emptyDist) await rm(emptyDist, { recursive: true, force: true }).catch(() => undefined);
   }
 

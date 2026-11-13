@@ -12,6 +12,8 @@ const TOKEN_KEY = 'agent-network-token';
 
 export interface McpError extends Error {
   code?: string;
+  /** 业务错误 details；配对页用 `reason` 区分过期、未批准等下一步。 */
+  details?: Record<string, unknown>;
   credentialInvalid?: boolean;
 }
 
@@ -38,10 +40,21 @@ export function writeBrowserToken(token: string): boolean {
   }
 }
 
-export function mcpError(message: string, code?: string): McpError {
+export function mcpError(
+  message: string,
+  code?: string,
+  details?: Record<string, unknown>,
+): McpError {
   const error = new Error(message) as McpError;
   if (code) error.code = code;
+  if (details) error.details = details;
   return error;
+}
+
+function asDetails(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function requestId(): string {
@@ -88,7 +101,7 @@ function requestParts(
 
 interface RpcFailure {
   message?: unknown;
-  data?: { code?: unknown };
+  data?: { code?: unknown; details?: unknown };
 }
 
 interface RpcResponse {
@@ -110,10 +123,14 @@ interface ToolResult {
 function parseToolError(result: ToolResult): McpError {
   const content = Array.isArray(result.content) ? (result.content as ToolContent[]) : [];
   const item = content.find((entry) => entry.type === 'text');
-  let detail: { message?: unknown; code?: unknown } | null = null;
+  let detail: { message?: unknown; code?: unknown; details?: unknown } | null = null;
   if (item && typeof item.text === 'string') {
     try {
-      detail = JSON.parse(item.text) as { message?: unknown; code?: unknown };
+      detail = JSON.parse(item.text) as {
+        message?: unknown;
+        code?: unknown;
+        details?: unknown;
+      };
     } catch {
       detail = { message: item.text };
     }
@@ -121,7 +138,7 @@ function parseToolError(result: ToolResult): McpError {
   const message =
     detail && typeof detail.message === 'string' ? detail.message : '请求失败';
   const code = detail && typeof detail.code === 'string' ? detail.code : undefined;
-  return mcpError(message, code);
+  return mcpError(message, code, asDetails(detail?.details));
 }
 
 /** 普通 JSON RPC；超时、调用方取消和格式错误都映射为可识别错误。 */
@@ -171,7 +188,7 @@ export async function callTool<T>(
         typeof payload.error.message === 'string' ? payload.error.message : '请求失败';
       const code =
         typeof payload.error.data?.code === 'string' ? payload.error.data.code : undefined;
-      throw mcpError(message, code);
+      throw mcpError(message, code, asDetails(payload.error.data?.details));
     }
     const result = payload.result as ToolResult | undefined;
     if (!result || typeof result !== 'object') {
