@@ -9,11 +9,6 @@ import { MemoryRuntime } from '../memory/runtime';
 import { MemoryIntegration } from '../memory/integration';
 import { memoryEngineInfo, type MemoryEngineStatus } from '../memory/capability-catalog';
 import { memoryHostPolicyFromEnv } from '../memory/host-bridge';
-import {
-  loadLangfuseConfigFromEnv,
-  resolveLangfuseSourceConfig,
-} from '../memory/sources/langfuse-config';
-import { LangfuseSourceImporter } from '../memory/sources/langfuse-import';
 import { parseMcpImplementation } from '../mcp/transport';
 import {
   HindsightMemoryAdapter,
@@ -188,7 +183,7 @@ envRef = env;
 env.MEMORY_HOST = memoryHostPolicyFromEnv(process.env.MEMORY_HOST_TRUST);
 
 // MF03/MF04/MF10：Memory 运行时默认关闭；MEMORY_ENABLED=1 才启动作业领取、
-// 启动恢复、unknown 对账与来源拉取。适配器配置缺失时 fail closed：不请求后端、
+// 启动恢复与 unknown 对账。适配器配置缺失时 fail closed：不请求后端、
 // 不伪报已记住；凭据与 bank 路由只在服务端，开始日志不输出。
 let memoryRuntime: MemoryRuntime | undefined;
 let memoryIntegration: MemoryIntegration | undefined;
@@ -247,45 +242,17 @@ if (process.env.MEMORY_ENABLED === '1') {
   }
 }
 
-// MF09/MF10：Langfuse 来源默认关闭；只有 Memory 实际启动后才构造 importer。
-// 凭据/host/project 不写入日志或工具/页面结果；调度周期与作业 tick 解耦。
-let langfuseImporter: LangfuseSourceImporter | null = null;
-if (process.env.LANGFUSE_ENABLED === '1') {
-  const loaded = loadLangfuseConfigFromEnv(process.env);
-  if (loaded.ok) {
-    env.LANGFUSE = loaded.config;
-    if (memoryRuntime?.instanceId) {
-      try {
-        langfuseImporter = new LangfuseSourceImporter({
-          db: d1,
-          instanceId: memoryRuntime.instanceId,
-          config: resolveLangfuseSourceConfig(loaded.config),
-        });
-        console.log('langfuse source enabled: importer scheduled');
-      } catch (error) {
-        console.warn(
-          `langfuse source disabled: ${error instanceof Error ? error.message : 'invalid configuration'}`,
-        );
-      }
-    } else {
-      console.warn('langfuse source configured but Memory runtime is not available');
-    }
-  } else {
-    console.warn(`langfuse source disabled: ${loaded.error}`);
-  }
-}
-
+// MF10：作业 tick、unknown 对账由 MemoryIntegration 统一调度；tick 内部保证
+// 单轮不重入。
 if (memoryRuntime) {
   memoryIntegration = new MemoryIntegration({
     runtime: memoryRuntime,
-    langfuse: langfuseImporter,
     onError: (error, scope) => {
       // 不记录来源正文、token 或 provider 路由。
       console.error(`agent-network memory ${scope} failed`, error);
     },
   });
   await memoryIntegration.start();
-  env.MEMORY_INTEGRATION = memoryIntegration;
 }
 
 // 启动扫描：崩溃遗留的 online 转为 pending/inferred；已到期的 pending 立即确认。
@@ -436,7 +403,7 @@ const reminderSweep = setInterval(() => {
     });
 }, LIMITS.deliveryReminderScanMs);
 
-// Memory 作业租约、unknown 对账与 Langfuse 拉取由 MemoryIntegration 统一调度；
+// Memory 作业租约与 unknown 对账由 MemoryIntegration 统一调度；
 // 它与 outbox/maintenance 解耦，tick 内部保证单轮不重入。
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

@@ -45,7 +45,6 @@
     "test:memory-ledger": "bun scripts/verify-memory-ledger.ts && bun scripts/verify-memory-recovery.ts && bun scripts/verify-memory-intake.ts",
     "test:memory-experience": "bun scripts/verify-memory-experience.ts && bun scripts/verify-memory-coverage.ts && bun scripts/verify-memory-catchup.ts",
     "test:memory-hindsight": "bun scripts/verify-memory-hindsight.ts",
-    "test:memory-langfuse": "bun scripts/verify-memory-langfuse.ts",
     "test:memory-recovery": "bun scripts/verify-memory-recovery.ts",
     "test:memory-host": "bun scripts/verify-memory-host.ts",
     "test:memory-integration": "bun scripts/verify-memory-integration.ts",

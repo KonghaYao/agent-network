@@ -4,11 +4,12 @@
  * 覆盖：
  * - LocalMemoryAdapter 六操作、能力声明与实际一致、准确文本/时间硬过滤/删除；
  * - 与 Hindsight（受控假服务）做同一契约不变量对照；
- * - MemoryIntegration 启动恢复、作业 drain、unknown 对账、定时 Langfuse、优雅关闭；
+ * - MemoryIntegration 启动恢复、作业 drain、unknown 对账、持久重试与优雅关闭；
  * - 进程在本地提交后/外部响应前后退出，重启不丢意图、不重复 retain；
  * - 外部 500/超时/401/取消；本地事务失败不提前 ACK；
  * - 关闭采集仍执行撤回/遗忘屏障；
- * - MCP 能力目录与 UI 状态联动（enabled、engine、来源阶段）。
+ * - 直接宿主 manifest + invocation 与 memory_context 回流不制造新原文证据；
+ * - MCP 能力目录与 UI 状态联动（enabled、engine）。
  *
  * 运行：bun run test:memory-integration
  */
@@ -29,13 +30,14 @@ import type {
   RetainRequest,
 } from '../src/memory/adapters/types';
 import { memoryCapabilityCatalog, memoryEngineInfo } from '../src/memory/capability-catalog';
+import { createLookupMemoryContext } from '../src/memory/context';
 import { forgetMemory } from '../src/memory/governance';
+import { MemoryHostBridge } from '../src/memory/host-bridge';
+import { MEMORY_HOST_PROTOCOL_VERSION } from '../src/memory/host-protocol';
 import { MemoryIntegration } from '../src/memory/integration';
 import { MemoryRuntime } from '../src/memory/runtime';
-import { resolveLangfuseSourceConfig } from '../src/memory/sources/langfuse-config';
-import { LangfuseSourceImporter } from '../src/memory/sources/langfuse-import';
-import { LANGFUSE_SKIP_REASONS } from '../src/memory/sources/langfuse-mapping';
-import type { LangfuseImportResult } from '../src/memory/sources/langfuse-import';
+import { createSourceSelections, loadRepresentationExact } from '../src/memory/experience-source';
+import { resolveRoomTargetScope } from '../src/memory/target';
 import {
   admitExposureReceipt,
   ensureSpaceForAgent,
@@ -57,8 +59,9 @@ import {
   waitUntil,
 } from './lib/harness';
 import { MEMORY_INTEGRATION_AT, seedMemoryAdmission } from './lib/memory-admission-fixture';
+import { instanceId } from './lib/memory-mf11';
+import { setupFixture } from './lib/memory-mf07';
 import { FakeHindsight } from './lib/memory-hindsight-fake';
-import { FakeLangfuse } from './lib/memory-langfuse-fake';
 import {
   createMemoryEnv,
   experienceEntry,
@@ -435,7 +438,6 @@ async function runtimeIntegrationChecks(root: string): Promise<void> {
     runtime,
     tickIntervalMs: 60_000,
     reconcileIntervalMs: 60_000,
-    importIntervalMs: 60_000,
     now: () => AT + 1000,
   });
   try {
@@ -497,7 +499,6 @@ async function crashChecks(root: string): Promise<void> {
       runtime,
       tickIntervalMs: 60_000,
       reconcileIntervalMs: 60_000,
-      importIntervalMs: 60_000,
       now: () => AT + 120_000,
     });
     try {
@@ -949,46 +950,21 @@ async function captureDisabledChecks(root: string): Promise<void> {
     capture: false,
     now: () => AT + 100,
   });
-  let importerCalls = 0;
-  const disabledResult: LangfuseImportResult = {
-    status: 'disabled',
-    reason: 'capture_disabled',
-    from: null,
-    to: AT,
-    fetched: 0,
-    imported: 0,
-    duplicates: 0,
-    conflicts: 0,
-    excluded: 0,
-    errors: 0,
-    skipped: Object.fromEntries(
-      LANGFUSE_SKIP_REASONS.map((reason) => [reason, 0]),
-    ) as LangfuseImportResult['skipped'],
-    watermarks: {},
-  };
   const integration = new MemoryIntegration({
     runtime,
-    langfuse: {
-      importOnce: async () => {
-        importerCalls += 1;
-        return disabledResult;
-      },
-    },
     tickIntervalMs: 60_000,
     reconcileIntervalMs: 60_000,
-    importIntervalMs: 1,
     now: () => AT + 100,
   });
   try {
     await integration.start();
-    await integration.runOnce({ import: true });
+    await integration.runOnce();
     checkEqual('MF10 capture 关闭仍执行 remove', (await jobStatusOf(fixture.env, 'remove')).status, 'completed');
     checkEqual('MF10 capture 关闭 suppress retain', (await jobStatusOf(fixture.env, 'retain')).status, 'cancelled');
     const intent = await fixture.env.d1
       .prepare('SELECT status FROM memory_retain_intents ORDER BY created_at DESC LIMIT 1')
       .first<{ status: string }>();
     checkEqual('MF10 retain 意图 suppressed', intent?.status, 'suppressed');
-    checkEqual('MF10 capture 关闭不拉取 Langfuse', importerCalls, 0);
     checkEqual('MF10 remove 后不可见', adapter.inspect(fixture.space).records.visible, 0);
   } finally {
     await integration.stop();
@@ -997,186 +973,279 @@ async function captureDisabledChecks(root: string): Promise<void> {
   }
 }
 
-async function langfuseChecks(root: string): Promise<void> {
-  const fixture = await seedMemoryAdmission(join(root, 'langfuse.sqlite'));
-  const fake = new FakeLangfuse('pk-mf10-test', 'sk-mf10-test');
-  fake.addObservation({
-    id: 'obs-mf10',
-    traceId: 'trace-mf10',
-    projectId: 'proj-mf10',
-    type: 'GENERATION',
-    name: 'user input',
-    startTime: new Date(AT + 1_000).toISOString(),
-    input: `LANGFUSE-MF10-${crypto.randomUUID()}`,
-  });
-  const config = resolveLangfuseSourceConfig({
-    host: fake.baseUrl,
-    publicKey: fake.publicKey,
-    secretKey: fake.secretKey,
-    bindings: [
-      {
-        binding_id: 'lfb_mf10',
-        project_id: 'proj-mf10',
-        agent_actor_id: fixture.agent,
-        origin: { room_id: fixture.room },
-        author_actor_id: fixture.agent,
-        observations: {
-          'user input': { class: 'original_input', field: 'input' },
-        },
-      },
-    ],
-    requestTimeoutMs: 500,
-    maxRetries: 0,
-    retryBaseMs: 1,
-    pageSize: 100,
-    maxPages: 5,
-    initialFrom: AT,
-    now: () => AT + 5_000,
-  });
-  if (!config) throw new Error('langfuse config unexpectedly disabled');
-  const importer = new LangfuseSourceImporter({
-    db: fixture.env.d1,
-    instanceId: fixture.instanceId,
-    config,
-  });
-  const adapter = new LocalMemoryAdapter({ path: join(root, 'langfuse-local.sqlite'), now: () => AT + 100 });
-  const runtime = new MemoryRuntime(fixture.env.d1, {
-    adapter,
-    instanceId: fixture.instanceId,
-    capture: true,
-    now: () => AT + 5_000,
-  });
-  const integration = new MemoryIntegration({
-    runtime,
-    langfuse: importer,
-    tickIntervalMs: 60_000,
-    reconcileIntervalMs: 60_000,
-    importIntervalMs: 60_000,
-    now: () => AT + 5_000,
-  });
-  try {
-    await integration.start();
-    await waitUntil(
-      'MF10 初始 tick',
-      () => integration.status().last_tick_at !== null && !integration.status().running,
-      2_000,
-      10,
-    );
-    const run = await integration.runOnce({ import: true });
-    checkEqual('MF10 Langfuse 导入一条', run.langfuse?.imported, 1);
-    checkEqual('MF10 Langfuse 状态 ready', integration.status().langfuse.last_status, 'ready');
-    checkEqual('MF10 Langfuse 上次导入数', integration.status().langfuse.last_imported, 1);
-    const sources = await count(fixture.env, 'memory_sources');
-    check('MF10 Langfuse 来源已入库', sources >= 2, sources);
-    const watermark = await fixture.env.d1
-      .prepare("SELECT COUNT(*) AS n FROM memory_cursors WHERE cursor_kind LIKE 'langfuse_import:%'")
-      .first<{ n: number }>();
-    check('MF10 Langfuse 水位已推进', Number(watermark?.n ?? 0) >= 1);
-    check('MF10 状态不泄露 key', !JSON.stringify(integration.status()).includes('sk-mf10-test'));
-  } finally {
-    await integration.stop();
-    adapter.close();
-    await fake.stop();
+class FlakyRetainAdapter extends LocalMemoryAdapter {
+  #failures: number;
+  retainCalls = 0;
+
+  constructor(options: { path: string; now?: () => number }, failures: number) {
+    super(options);
+    this.#failures = failures;
+  }
+
+  override async retain(request: RetainRequest): Promise<Awaited<ReturnType<LocalMemoryAdapter['retain']>>> {
+    this.retainCalls += 1;
+    if (this.#failures > 0) {
+      this.#failures -= 1;
+      throw new Error('injected local retain failure');
+    }
+    return super.retain(request);
   }
 }
 
-async function schedulerChecks(root: string): Promise<void> {
-  const fixture = await seedMemoryAdmission(join(root, 'scheduler.sqlite'));
-  const adapter = new LocalMemoryAdapter({ path: join(root, 'scheduler-local.sqlite'), now: () => Date.now() });
-  const runtime = new MemoryRuntime(fixture.env.d1, {
-    adapter,
+/**
+ * 持久作业重试：失败只改作业状态与退避时间，attempt/next_attempt_at 落在
+ * SQLite；进程重启后由新的集成实例继续领取，不重复写入已成功的表示。
+ */
+async function persistentRetryChecks(root: string): Promise<void> {
+  const fixture = await seedMemoryAdmission(join(root, 'persistent-retry.sqlite'));
+  const localPath = join(root, 'persistent-retry-local.sqlite');
+  let clock = AT + 100;
+  const first = new FlakyRetainAdapter({ path: localPath, now: () => clock }, 1);
+  const firstRuntime = new MemoryRuntime(fixture.env.d1, {
+    adapter: first,
     instanceId: fixture.instanceId,
     capture: true,
+    now: () => clock,
   });
-  const skipped: LangfuseImportResult = {
-    status: 'disabled',
-    reason: 'test',
-    from: null,
-    to: Date.now(),
-    fetched: 0,
-    imported: 0,
-    duplicates: 0,
-    conflicts: 0,
-    excluded: 0,
-    errors: 0,
-    skipped: Object.fromEntries(
-      LANGFUSE_SKIP_REASONS.map((reason) => [reason, 0]),
-    ) as LangfuseImportResult['skipped'],
-    watermarks: {},
-  };
-  let calls = 0;
-  const integration = new MemoryIntegration({
-    runtime,
-    langfuse: {
-      importOnce: async () => {
-        calls += 1;
-        return skipped;
-      },
-    },
-    tickIntervalMs: 10,
+  const firstIntegration = new MemoryIntegration({
+    runtime: firstRuntime,
+    tickIntervalMs: 60_000,
     reconcileIntervalMs: 60_000,
-    importIntervalMs: 1,
+    now: () => clock,
   });
+  let nextAttemptAt = 0;
   try {
-    await integration.start();
-    await waitUntil('MF10 定时 importer 调用', () => calls >= 2, 3_000, 10);
-    const seen = calls;
-    await integration.stop();
+    await firstIntegration.start();
+    await firstIntegration.runOnce();
+    const failed = await fixture.env.d1
+      .prepare(
+        `SELECT status, attempt, next_attempt_at FROM memory_jobs
+          WHERE operation_type = 'retain' ORDER BY created_at DESC LIMIT 1`,
+      )
+      .first<{ status: string; attempt: number; next_attempt_at: number }>();
+    checkEqual('MF10 持久重试：失败保持 pending', failed?.status, 'pending');
+    checkEqual('MF10 持久重试：attempt 落库', failed?.attempt, 1);
+    nextAttemptAt = Number(failed?.next_attempt_at ?? 0);
+    check('MF10 持久重试：退避写入数据库', nextAttemptAt > clock, nextAttemptAt - clock);
+    const callsAfterFailure = first.retainCalls;
+    await firstIntegration.stop();
     await sleep(80);
-    checkEqual('MF10 stop 后停止定时拉取', calls, seen);
-    checkEqual('MF10 stop 后状态 stopped', integration.started, false);
+    checkEqual('MF10 持久重试：stop 后不再调度', first.retainCalls, callsAfterFailure);
+    checkEqual('MF10 持久重试：stop 后状态 stopped', firstIntegration.started, false);
   } finally {
-    await integration.stop();
-    adapter.close();
-    fixture.env.db.close();
+    await firstIntegration.stop();
+    first.close();
   }
 
-  const cancelFixture = await seedMemoryAdmission(join(root, 'scheduler-cancel.sqlite'));
-  const cancelAdapter = new LocalMemoryAdapter({
-    path: join(root, 'scheduler-cancel-local.sqlite'),
-    now: () => Date.now(),
-  });
-  const cancelRuntime = new MemoryRuntime(cancelFixture.env.d1, {
-    adapter: cancelAdapter,
-    instanceId: cancelFixture.instanceId,
+  clock = nextAttemptAt + 1;
+  const second = new FlakyRetainAdapter({ path: localPath, now: () => clock }, 0);
+  const secondRuntime = new MemoryRuntime(fixture.env.d1, {
+    adapter: second,
+    instanceId: fixture.instanceId,
     capture: true,
+    now: () => clock,
   });
-  let aborted = false;
-  let markCalled: (() => void) | null = null;
-  const called = new Promise<void>((resolve) => {
-    markCalled = resolve;
-  });
-  const hanging = {
-    importOnce: ({ signal }: { signal: AbortSignal }) =>
-      new Promise<LangfuseImportResult>((resolve) => {
-        signal.addEventListener(
-          'abort',
-          () => {
-            aborted = true;
-            resolve(skipped);
-          },
-          { once: true },
-        );
-        markCalled?.();
-      }),
-  };
-  const cancelIntegration = new MemoryIntegration({
-    runtime: cancelRuntime,
-    langfuse: hanging,
-    tickIntervalMs: 10,
+  const secondIntegration = new MemoryIntegration({
+    runtime: secondRuntime,
+    tickIntervalMs: 60_000,
     reconcileIntervalMs: 60_000,
-    importIntervalMs: 1,
+    now: () => clock,
   });
   try {
-    await cancelIntegration.start();
-    await called;
-    await cancelIntegration.stop();
-    check('MF10 stop 中止在途 importer', aborted);
+    await secondIntegration.start();
+    await secondIntegration.runOnce();
+    const completed = await fixture.env.d1
+      .prepare(
+        `SELECT status, attempt FROM memory_jobs
+          WHERE operation_type = 'retain' ORDER BY created_at DESC LIMIT 1`,
+      )
+      .first<{ status: string; attempt: number }>();
+    checkEqual('MF10 持久重试：重启后完成', completed?.status, 'completed');
+    checkEqual('MF10 持久重试：沿用持久 attempt', completed?.attempt, 2);
+    checkEqual('MF10 持久重试：只写一次', second.inspect(fixture.space).records.visible, 1);
   } finally {
-    await cancelIntegration.stop();
-    cancelAdapter.close();
-    cancelFixture.env.db.close();
+    await secondIntegration.stop();
+    second.close();
+    fixture.env.db.close();
   }
+}
+
+/**
+ * memory_context 回流：宿主把上一轮已交付的 Context 再作为输入提交时，只登记
+ * `memory_context` 表示与经历，不新增 `memory_sources`、不推进原文覆盖。
+ * 不使用 trace/project/observation 标识，直接由 manifest + invocation 驱动。
+ */
+async function memoryContextReflowChecks(root: string): Promise<void> {
+  const env = createMemoryEnv(join(root, 'context-reflow.sqlite'));
+  const fixture = await setupFixture(env, 'reflow');
+  const db = env.d1;
+  const targetScope = await resolveRoomTargetScope(db, fixture.room, fixture.agent);
+  const raw = await loadRepresentationExact(db, fixture.representationId);
+  if (!raw) throw new Error('raw representation missing');
+  const originScope = {
+    room_id: fixture.room,
+    member_generation: 1,
+    policy_revision: 0,
+    joined_seq: 0,
+    joined_at: 0,
+    archive_head_seq: null,
+  };
+  const dependencies = [
+    {
+      source_id: fixture.sourceId,
+      source_revision: 1,
+      representation_id: fixture.representationId,
+      range: raw.representation.kind === 'raw_full' ? raw.representation.range : null,
+    },
+  ];
+  const context = await createLookupMemoryContext(db, {
+    instanceId,
+    agentId: fixture.agent,
+    space: fixture.space,
+    recallId: unique('mr_reflow'),
+    targetScope,
+    items: [{
+      exact: { representation: { ...raw.representation, depends_on: dependencies }, text: raw.text },
+      origin_scope: originScope,
+      evidence: 'host_reported_submitted',
+    }],
+    coverage: 'bounded',
+    evidenceComplete: true,
+    contextId: unique('mctx_reflow'),
+    now: AT + 10,
+  });
+  if (!context) throw new Error('lookup context creation failed');
+  const contextText = context.body;
+  const contextBytes = new TextEncoder().encode(contextText).length;
+  const contextHash = await sha256Hex(contextText);
+  const contextRepresentation = {
+    representation_id: unique('mrp_reflow_ctx'),
+    kind: 'memory_context' as const,
+    source_context_id: context.context_id,
+    depends_on: dependencies,
+    text_bytes: contextBytes,
+    text_sha256: contextHash,
+    verbatim: false,
+  };
+  await registerRepresentation(db, {
+    instanceId,
+    exact: { representation: contextRepresentation, text: contextText },
+    dependencies,
+    now: AT + 20,
+  });
+  const [selection] = await createSourceSelections(db, {
+    instanceId,
+    agentId: fixture.agent,
+    space: fixture.space,
+    targetScope,
+    representations: [{ representation: contextRepresentation, text: contextText }],
+    now: AT + 21,
+  });
+  if (!selection) throw new Error('context selection missing');
+
+  const bridge = new MemoryHostBridge({
+    db,
+    instanceId,
+    agentId: fixture.agent,
+    credentialId: fixture.credentialId,
+    space: fixture.space,
+    policy: { trust_level: 'adapted_host' },
+    now: () => AT + 30,
+  });
+  const binding = await bridge.bind({
+    request_id: unique('bind_reflow'),
+    session_incarnation: `reflow_${fixture.agent}`,
+    declared_capabilities: [
+      'explicit_lookup',
+      'run_binding',
+      'final_manifest_report',
+      'submission_evidence',
+    ],
+  });
+  const invocationId = `inv_reflow_${binding.generation}`;
+  const target = {
+    kind: 'message' as const,
+    host_binding_id: binding.binding_id,
+    host_generation: binding.generation,
+    session_incarnation: binding.session_incarnation,
+    run_id: `run_${invocationId}`,
+    input_id: `input_${invocationId}`,
+    input_revision: 1,
+    message: {
+      message_id: fixture.messageId,
+      delivery_id: fixture.deliveryId,
+      attempt: 0,
+      claim_id: fixture.claimId,
+    },
+  };
+  const prepared = await bridge.prepareInput({
+    request_id: unique('prepare_reflow'),
+    target,
+    selection_ids: [selection.selection_id],
+    budget: { candidate_limit: 10, output_bytes: 64 * 1024, deadline_at: null },
+  });
+  checkEqual('MF10 回流：prepare 成功', prepared.status, 'prepared');
+  if (prepared.status !== 'prepared') throw new Error('reflow prepare failed');
+  const payload = `SYSTEM\n${contextText}\nTAIL`;
+  const manifest = await bridge.submitManifest({
+    protocol_version: MEMORY_HOST_PROTOCOL_VERSION,
+    host_binding_id: binding.binding_id,
+    host_generation: binding.generation,
+    invocation: {
+      host_binding_id: binding.binding_id,
+      host_generation: binding.generation,
+      session_incarnation: binding.session_incarnation,
+      run_id: target.run_id,
+      input_id: target.input_id,
+      input_revision: target.input_revision,
+      invocation_id: invocationId,
+    },
+    target: prepared.target,
+    payload,
+    payload_sha256: await sha256Hex(payload),
+    items: [{
+      selection_id: selection.selection_id,
+      representation_id: contextRepresentation.representation_id,
+      text_sha256: contextHash,
+    }],
+  });
+  const sourcesBefore = await count(env, 'memory_sources');
+  const coverageBefore = await count(env, 'memory_coverage_ranges');
+  const experimentsBefore = await count(env, 'memory_experiences');
+  const acknowledged = await bridge.submitExposure({
+    protocol_version: MEMORY_HOST_PROTOCOL_VERSION,
+    host_binding_id: binding.binding_id,
+    host_generation: binding.generation,
+    manifest_id: manifest.manifest.manifest_id,
+    manifest_sha256: manifest.manifest.manifest_sha256,
+    payload_sha256: manifest.manifest.payload_sha256,
+    request_id: unique('receipt_reflow'),
+    submitted_at: AT + 30,
+  });
+  checkEqual('MF10 回流：receipt 被采纳', acknowledged.disposition, 'applied');
+  checkEqual('MF10 回流：不新增业务来源', await count(env, 'memory_sources'), sourcesBefore);
+  checkEqual('MF10 回流：不推进原文覆盖', await count(env, 'memory_coverage_ranges'), coverageBefore);
+  checkEqual('MF10 回流：新增经历', await count(env, 'memory_experiences'), experimentsBefore + 1);
+  const experience = await db
+    .prepare(
+      `SELECT representation_kind, source_id FROM memory_experiences
+        WHERE representation_id = ?`,
+    )
+    .bind(contextRepresentation.representation_id)
+    .first<{ representation_kind: string; source_id: string | null }>();
+  checkEqual('MF10 回流：经历类型 memory_context', experience?.representation_kind, 'memory_context');
+  checkEqual('MF10 回流：不绑定独立来源', experience?.source_id, null);
+  const invocationRow = await db
+    .prepare(
+      'SELECT run_id, input_id, input_revision, invocation_id FROM memory_manifests WHERE manifest_id = ?',
+    )
+    .bind(manifest.manifest.manifest_id)
+    .first<{ run_id: string; input_id: string; input_revision: number; invocation_id: string }>();
+  checkEqual('MF10 回流：直接 invocation run_id', invocationRow?.run_id, target.run_id);
+  checkEqual('MF10 回流：直接 invocation input_id', invocationRow?.input_id, target.input_id);
+  checkEqual('MF10 回流：直接 invocation revision', invocationRow?.input_revision, 1);
+  checkEqual('MF10 回流：直接 invocation id', invocationRow?.invocation_id, invocationId);
+  env.db.close();
 }
 
 function catalogChecks(): void {
@@ -1232,7 +1301,6 @@ interface MemoryStatusView {
   enabled: boolean;
   engine_status: string;
   capture: boolean;
-  sources: { langfuse: { configured: boolean; status: string } };
 }
 
 function restoreEnv(key: string, value: string | undefined): void {
@@ -1247,35 +1315,14 @@ async function mcpServerChecks(): Promise<void> {
     'MEMORY_LOCAL_PATH',
     'MEMORY_CAPTURE',
     'MEMORY_INSTANCE_ID',
-    'LANGFUSE_ENABLED',
-    'LANGFUSE_HOST',
-    'LANGFUSE_PUBLIC_KEY',
-    'LANGFUSE_SECRET_KEY',
-    'LANGFUSE_BINDINGS_JSON',
-    'LANGFUSE_INITIAL_FROM',
   ] as const;
   const saved = new Map(keys.map((key) => [key, process.env[key]]));
-  const langfuseFake = new FakeLangfuse('pk-mf10-server', 'sk-mf10-server');
   let enabledServer: Q05Server | null = null;
   let disabledServer: Q05Server | null = null;
   try {
     for (const key of keys) delete process.env[key];
     process.env.MEMORY_ENABLED = '1';
     process.env.MEMORY_ADAPTER = 'local';
-    process.env.LANGFUSE_ENABLED = '1';
-    process.env.LANGFUSE_HOST = langfuseFake.baseUrl;
-    process.env.LANGFUSE_PUBLIC_KEY = langfuseFake.publicKey;
-    process.env.LANGFUSE_SECRET_KEY = langfuseFake.secretKey;
-    process.env.LANGFUSE_BINDINGS_JSON = JSON.stringify([
-      {
-        binding_id: 'lfb_mf10_server',
-        project_id: 'proj-mf10-server',
-        agent_actor_id: 'agt_mf10_server_binding',
-        origin: { room_id: 'rm_mf10_server_binding' },
-        observations: { 'user input': { class: 'original_input', field: 'input' } },
-      },
-    ]);
-    process.env.LANGFUSE_INITIAL_FROM = String(Date.now());
     enabledServer = await Q05Server.start();
     const token = newToken();
     const connection = await connectClient(token);
@@ -1304,11 +1351,9 @@ async function mcpServerChecks(): Promise<void> {
       checkEqual('MF10 状态 enabled', status.enabled, true);
       checkEqual('MF10 状态 engine ready', status.engine_status, 'ready');
       checkEqual('MF10 状态 capture', status.capture, true);
-      checkEqual('MF10 状态 Langfuse 已配置', status.sources.langfuse.configured, true);
-      checkEqual('MF10 状态 Langfuse 等待首轮', status.sources.langfuse.status, 'pending');
       check(
-        'MF10 Langfuse 状态不含 key',
-        !JSON.stringify(status).includes(langfuseFake.secretKey),
+        'MF10 状态不再声明 Memory 来源能力',
+        !('sources' in (status as unknown as Record<string, unknown>)),
       );
       const recall = await callTool<{ status: string }>(connection.client, 'network_memory_recall', {
         request_id: newRequestId('recall'),
@@ -1358,7 +1403,6 @@ async function mcpServerChecks(): Promise<void> {
   } finally {
     await enabledServer?.destroy().catch(() => undefined);
     await disabledServer?.destroy().catch(() => undefined);
-    await langfuseFake.stop().catch(() => undefined);
     for (const key of keys) restoreEnv(key, saved.get(key));
   }
 }
@@ -1373,8 +1417,8 @@ async function main(): Promise<void> {
     await externalFailureChecks(root);
     await transactionFailureChecks(root);
     await captureDisabledChecks(root);
-    await langfuseChecks(root);
-    await schedulerChecks(root);
+    await persistentRetryChecks(root);
+    await memoryContextReflowChecks(root);
     catalogChecks();
     await mcpServerChecks();
     console.log(`memory integration checks passed (${checksPassed()} assertions)`);

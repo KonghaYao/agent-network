@@ -166,39 +166,6 @@ function statusCatalog(env: Env): ReturnType<typeof memoryCapabilityCatalog> {
 }
 
 /**
- * 来源状态只含配置/阶段/时间，不含 host、project、observation 正文或凭据。
- */
-function sourceStatus(env: Env): {
-  langfuse: {
-    configured: boolean;
-    status: string;
-    reason: string | null;
-    last_at: number | null;
-  };
-} {
-  const langfuse = env.MEMORY_INTEGRATION?.status().langfuse;
-  if (!langfuse || !langfuse.configured) {
-    return {
-      langfuse: {
-        configured: false,
-        status: 'disabled',
-        reason: env.LANGFUSE ? 'importer_unavailable' : 'not_configured',
-        last_at: null,
-      },
-    };
-  }
-  return {
-    langfuse: {
-      configured: true,
-      status: langfuse.last_status ?? 'pending',
-      reason: langfuse.last_reason,
-      last_at: langfuse.last_at,
-    },
-  };
-}
-
-
-/**
  * Memory 服务返回领域对象（含 readonly 数组），与 Zod 输出投影的精确类型
  * 不同；这里只做一次边界投射，运行时仍由 outputSchema 校验结构。
  */
@@ -245,7 +212,6 @@ export function registerMemoryTools(
           modes: catalog.recall_modes,
           counts: { jobs_pending: 0, jobs_unknown: 0, jobs_failed: 0, retain_pending: 0, contexts_ready: 0 },
           unsupported: catalog.unsupported,
-          sources: sourceStatus(env),
         };
       }
       const context = await memoryContext(env, principal);
@@ -263,7 +229,6 @@ export function registerMemoryTools(
         ...snapshot,
         engine_status: catalog.engine_status,
         unsupported: catalog.unsupported,
-        sources: sourceStatus(env),
       };
     },
     { readOnlyHint: true },

@@ -60,7 +60,6 @@ const MEMORY_SOURCE_KIND_LABELS = {
   task_review: '任务验收',
   task_handoff: '交接材料',
   file: '文件',
-  langfuse_observation: '外部观察',
   manual: '人工来源'
 };
 const MEMORY_SOURCE_STATE_LABELS = {
