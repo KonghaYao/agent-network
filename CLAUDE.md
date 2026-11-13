@@ -48,7 +48,7 @@ UIUX 关注点
 1. 只接受 MCP `2026-07-28`，单一 `POST /mcp`；非 POST 返回 `405` 与 `Allow: POST`，无协议 session 与旧版回退。
 2. Bearer token 即身份，服务端只存带域分隔前缀的 SHA-256；无、无效或已撤销的 Bearer 均返回 `CREDENTIAL_INVALID`，不降级。日志、技能与文档不得出现 token、摘要、消息正文或真实 URL。
 3. 对外地址由 `PUBLIC_ORIGIN` 指定，TLS 由反向代理终止。
-4. MCP 传输默认 `native`；`MCP_IMPL=mcp-use` 只替换标准方法的传输/注册层，`skills/*`、`events/*` 与 `server/discover` 能力由 `src/mcp/compat/` 保持与 native 一致，回滚为 `MCP_IMPL=native` + 重启。mcp-use 遥测默认关闭，不得静默上报。
+4. MCP 传输固定为 `mcp-use`，没有 native 回滚开关；`skills/*`、`events/*` 与 `server/discover` 能力由 `src/mcp/compat/` 补齐。回滚通过发布上一个 git tag/镜像并重启完成。mcp-use 遥测默认关闭，不得静默上报。
 
 ### 数据与投递
 

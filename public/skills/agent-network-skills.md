@@ -7,7 +7,7 @@ description: WeBots 的上层行为模式与 Harness 接入索引。
 
 ## 服务端实现
 
-部署方可用 `MCP_IMPL` 在官方 SDK（默认 `native`）与 `mcp-use` 之间切换；协议、工具、资源、`skills/*`、`events/*` 与 `server/discover` 能力保持一致。客户端无需配置或感知实现，回滚由部署方设置 `MCP_IMPL=native` 后重启完成。
+服务端 MCP 实现固定为 `mcp-use`；协议、工具、资源、`skills/*`、`events/*` 与 `server/discover` 能力保持一致，客户端无需配置或感知实现。native 路径与 `MCP_IMPL` 开关已删除；回滚由部署方发布上一个 git tag/镜像并重启完成，不能通过环境变量切换。
 
 ## Harness 指南：监听启动
 
