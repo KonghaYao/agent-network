@@ -148,9 +148,14 @@ function sortTimelineItems(items: InsightTimelineItem[]): InsightTimelineItem[] 
   });
 }
 
-function dayRange(ms: number): { key: string; label: string; start: string; end: string } {
-  const date = new Date(ms);
-  const startMs = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+function dayRange(
+  ms: number,
+  tzOffsetMinutes: number,
+): { key: string; label: string; start: string; end: string } {
+  const offsetMs = tzOffsetMinutes * 60_000;
+  const date = new Date(ms + offsetMs);
+  const localStartMs = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  const startMs = localStartMs - offsetMs;
   const year = date.getUTCFullYear();
   const month = date.getUTCMonth() + 1;
   const day = date.getUTCDate();
@@ -162,13 +167,18 @@ function dayRange(ms: number): { key: string; label: string; start: string; end:
   };
 }
 
-function weekRange(ms: number): { key: string; label: string; start: string; end: string } {
-  const date = new Date(ms);
+function weekRange(
+  ms: number,
+  tzOffsetMinutes: number,
+): { key: string; label: string; start: string; end: string } {
+  const offsetMs = tzOffsetMinutes * 60_000;
+  const date = new Date(ms + offsetMs);
   const weekday = date.getUTCDay() || 7;
-  const startMs =
+  const localWeekStartMs =
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) -
     (weekday - 1) * DAY_MS;
-  const thursday = new Date(startMs + 3 * DAY_MS);
+  const startMs = localWeekStartMs - offsetMs;
+  const thursday = new Date(localWeekStartMs + 3 * DAY_MS);
   const year = thursday.getUTCFullYear();
   const week = Math.floor((thursday.getTime() - Date.UTC(year, 0, 1)) / DAY_MS / 7) + 1;
   return {
@@ -179,22 +189,27 @@ function weekRange(ms: number): { key: string; label: string; start: string; end
   };
 }
 
-function monthRange(ms: number): { key: string; label: string; start: string; end: string } {
-  const date = new Date(ms);
+function monthRange(
+  ms: number,
+  tzOffsetMinutes: number,
+): { key: string; label: string; start: string; end: string } {
+  const offsetMs = tzOffsetMinutes * 60_000;
+  const date = new Date(ms + offsetMs);
   const year = date.getUTCFullYear();
   const month = date.getUTCMonth() + 1;
-  const startMs = Date.UTC(year, month - 1, 1);
+  const startMs = Date.UTC(year, month - 1, 1) - offsetMs;
   return {
     key: `${year}-${String(month).padStart(2, '0')}`,
     label: `${year}年${month}月`,
     start: new Date(startMs).toISOString(),
-    end: new Date(Date.UTC(year, month, 1)).toISOString(),
+    end: new Date(Date.UTC(year, month, 1) - offsetMs).toISOString(),
   };
 }
 
 function buildTimelineGroups(
   items: InsightTimelineItem[],
   granularity: 'day' | 'week' | 'month',
+  tzOffsetMinutes: number,
 ): InsightTimelineGroup[] {
   const rangeOf = granularity === 'day' ? dayRange : granularity === 'week' ? weekRange : monthRange;
   const groups: InsightTimelineGroup[] = [];
@@ -204,7 +219,7 @@ function buildTimelineGroups(
     const range =
       ms === null
         ? { key: 'undated', label: '无日期', start: null, end: null }
-        : rangeOf(ms);
+        : rangeOf(ms, tzOffsetMinutes);
     if (!current || current.key !== range.key) {
       current = {
         ...range,
@@ -220,11 +235,14 @@ function buildTimelineGroups(
   return groups;
 }
 
-function timelineGroups(items: InsightTimelineItem[]): InsightTimelineResult['groups'] {
+function timelineGroups(
+  items: InsightTimelineItem[],
+  tzOffsetMinutes: number,
+): InsightTimelineResult['groups'] {
   return {
-    day: buildTimelineGroups(items, 'day'),
-    week: buildTimelineGroups(items, 'week'),
-    month: buildTimelineGroups(items, 'month'),
+    day: buildTimelineGroups(items, 'day', tzOffsetMinutes),
+    week: buildTimelineGroups(items, 'week', tzOffsetMinutes),
+    month: buildTimelineGroups(items, 'month', tzOffsetMinutes),
   };
 }
 
@@ -427,6 +445,7 @@ export class MemoryInsightService {
         input.limit ?? LIMITS.memoryPanelTimelineLimitDefault,
         LIMITS.memoryPanelTimelineLimitMax,
       );
+      const tzOffsetMinutes = input.tz_offset_minutes ?? 0;
       const base = this.#base(target);
       const gate = this.#gate();
       if (gate) return this.#emptyTimeline(base, gate, days, limit);
@@ -435,7 +454,12 @@ export class MemoryInsightService {
       if (!space) return this.#emptyTimeline(base, 'no_space', days, limit);
       const bank = await reader.bankFor(spaceRef(space));
       return this.#cache.getOrLoad(
-        this.#cacheKey(space, 'timeline', { days, type: input.type, limit }),
+        this.#cacheKey(space, 'timeline', {
+          days,
+          type: input.type,
+          limit,
+          tz_offset_minutes: tzOffsetMinutes,
+        }),
         async () => {
           const deadlineAt = this.#now() + LIMITS.memoryPanelTimeoutMs;
           const end = new Date(this.#now());
@@ -502,13 +526,13 @@ export class MemoryInsightService {
             available: true,
             reason: 'ok',
             items: sorted,
-            groups: timelineGroups(sorted),
+            groups: timelineGroups(sorted, tzOffsetMinutes),
             summary: timelineSummary(sorted, total),
             days,
             limit,
             truncated: hasMore,
           };
-          if (this.#fitTimelineBytes(result)) result.truncated = true;
+          if (this.#fitTimelineBytes(result, tzOffsetMinutes)) result.truncated = true;
           return result;
         },
         { refresh: input.refresh },
@@ -854,19 +878,19 @@ export class MemoryInsightService {
   }
 
   /** 超出 JSON 预算时从尾部（最旧事件）移除，并重建分组索引。 */
-  #fitTimelineBytes(result: InsightTimelineResult): boolean {
+  #fitTimelineBytes(result: InsightTimelineResult, tzOffsetMinutes: number): boolean {
     let trimmed = false;
     while (jsonBytes(result) > LIMITS.memoryPanelTimelineBytes && result.items.length > 0) {
       const nextLength = Math.max(0, result.items.length - 16);
       result.items.splice(nextLength);
-      this.#refreshTimeline(result);
+      this.#refreshTimeline(result, tzOffsetMinutes);
       trimmed = true;
     }
     return trimmed;
   }
 
-  #refreshTimeline(result: InsightTimelineResult): void {
-    result.groups = timelineGroups(result.items);
+  #refreshTimeline(result: InsightTimelineResult, tzOffsetMinutes: number): void {
+    result.groups = timelineGroups(result.items, tzOffsetMinutes);
     result.summary = timelineSummary(result.items, result.summary.total);
   }
 

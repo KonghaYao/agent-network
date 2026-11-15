@@ -147,39 +147,49 @@ interface TimelineFixtureItem {
   entities: string[];
 }
 
-function timelineRange(ms: number, granularity: 'day' | 'week' | 'month') {
-  const date = new Date(ms);
+function timelineRange(
+  ms: number,
+  granularity: 'day' | 'week' | 'month',
+  tzOffsetMinutes: number,
+) {
+  const offsetMs = tzOffsetMinutes * 60_000;
+  const date = new Date(ms + offsetMs);
   if (granularity === 'month') {
-    const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
-    const end = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
+    const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1) - offsetMs);
+    const end = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) - offsetMs);
     const key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
     return { key, label: key, start: start.toISOString(), end: end.toISOString() };
   }
   if (granularity === 'week') {
     const weekday = date.getUTCDay() || 7;
-    const startMs =
+    const localStartMs =
       Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) -
       (weekday - 1) * DAY;
-    const start = new Date(startMs);
-    const key = `${start.toISOString().slice(0, 10)}-W`;
+    const start = new Date(localStartMs - offsetMs);
+    const key = `${new Date(localStartMs).toISOString().slice(0, 10)}-W`;
     return {
       key,
       label: key,
       start: start.toISOString(),
-      end: new Date(startMs + 7 * DAY).toISOString(),
+      end: new Date(localStartMs - offsetMs + 7 * DAY).toISOString(),
     };
   }
-  const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-  const key = start.toISOString().slice(0, 10);
+  const localStartMs = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  const start = new Date(localStartMs - offsetMs);
+  const key = new Date(localStartMs).toISOString().slice(0, 10);
   return {
     key,
     label: key,
     start: start.toISOString(),
-    end: new Date(start.getTime() + DAY).toISOString(),
+    end: new Date(localStartMs - offsetMs + DAY).toISOString(),
   };
 }
 
-function timelineGroups(items: TimelineFixtureItem[], granularity: 'day' | 'week' | 'month') {
+function timelineGroups(
+  items: TimelineFixtureItem[],
+  granularity: 'day' | 'week' | 'month',
+  tzOffsetMinutes: number,
+) {
   const groups: {
     key: string;
     label: string;
@@ -191,7 +201,7 @@ function timelineGroups(items: TimelineFixtureItem[], granularity: 'day' | 'week
   }[] = [];
   items.forEach((item, index) => {
     const ms = Date.parse(item.occurred_at ?? item.mentioned_at);
-    const range = timelineRange(ms, granularity);
+    const range = timelineRange(ms, granularity, tzOffsetMinutes);
     const last = groups.at(-1);
     if (!last || last.key !== range.key) {
       groups.push({ ...range, count: 0, start_index: index, end_index: index + 1 });
@@ -364,6 +374,7 @@ async function installMemoryStub(
     } else if (name === 'network_agent_memory_timeline') {
       const days = Number(args.days ?? 30);
       const type = typeof args.type === 'string' ? args.type : '';
+      const tzOffsetMinutes = Number(args.tz_offset_minutes ?? 0);
       const cutoff = Date.now() - days * DAY;
       const items: TimelineFixtureItem[] = MEMORIES.filter((item) => {
         if (type && item.fact_type !== type) return false;
@@ -390,9 +401,9 @@ async function installMemoryStub(
         fetched_at: Date.now(),
         items,
         groups: {
-          day: timelineGroups(items, 'day'),
-          week: timelineGroups(items, 'week'),
-          month: timelineGroups(items, 'month'),
+          day: timelineGroups(items, 'day', tzOffsetMinutes),
+          week: timelineGroups(items, 'week', tzOffsetMinutes),
+          month: timelineGroups(items, 'month', tzOffsetMinutes),
         },
         summary: {
           total: items.length,
@@ -704,6 +715,8 @@ test.describe('Agent 记忆：星座、时间线、实体', () => {
     await expect(page.locator('#memory-timeline-note')).toContainText('共 4 条');
     await expect.poll(timelineCalls).toHaveLength(1);
     expect(listCalls()).toHaveLength(0);
+    const browserOffset = await page.evaluate(() => -new Date().getTimezoneOffset());
+    expect(timelineCalls()[0]?.args.tz_offset_minutes).toBe(browserOffset);
     const chartText = (await chart.textContent()) ?? '';
     expect(chartText).not.toContain(SECRET_OBSERVATION);
     expect(chartText).toContain('[已隐藏]');
@@ -717,6 +730,14 @@ test.describe('Agent 记忆：星座、时间线、实体', () => {
     const groups = chart.locator('.memory-timeline-group');
     await expect(groups).toHaveCount(4);
     await expect(page.locator('#memory-timeline-position')).toHaveText('1 / 4');
+    const firstGroupKey = await groups.first().getAttribute('data-timeline-group');
+    const firstCardText = (await cards.first().textContent()) ?? '';
+    const cardDate = firstCardText.match(/(\d{1,2})\s*(?:\/|月)\s*(\d{1,2})/u);
+    expect(firstGroupKey).toMatch(/^\d{4}-\d{2}-\d{2}$/u);
+    expect(cardDate).not.toBeNull();
+    expect(firstGroupKey).toBe(
+      `${firstGroupKey!.slice(0, 4)}-${cardDate![1]!.padStart(2, '0')}-${cardDate![2]!.padStart(2, '0')}`,
+    );
     await page.locator('#memory-timeline-next').click();
     await expect(page.locator('#memory-timeline-position')).toHaveText('2 / 4');
     await page.locator('#memory-timeline-last').click();

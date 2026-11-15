@@ -344,6 +344,8 @@ export async function fetchMemoryTimeline(
     {
       actor_id: actorId,
       days: query.days,
+      // 分组必须和卡片本地时间一致：UTC+8 传 480。
+      tz_offset_minutes: -new Date().getTimezoneOffset(),
       ...(query.type ? { type: query.type } : {}),
       ...(query.limit !== undefined ? { limit: query.limit } : {}),
     },

@@ -2,7 +2,7 @@
   "version": 1,
   "protocolVersion": "2026-07-28",
   "toolCount": 139,
-  "toolsetSha256": "b1998d91157d739a9b512f502661dabdcefbb16db32420e4672955325ca0e7f4",
+  "toolsetSha256": "4744ea70c3592ed663321090b86dfae15540ec302032e404674c5eb03fd9b9b5",
   "instructionsSha256": "21154a7b030a600fa8fb8772dc3808ed559936211e526a03feedffddb328eaaf",
   "frames": [
     {
@@ -205,8 +205,8 @@
       "response": {
         "result": {
           "toolCount": 139,
-          "toolset_sha256": "b1998d91157d739a9b512f502661dabdcefbb16db32420e4672955325ca0e7f4",
-          "listing_sha256": "f9cfda20ce5ba4aa070100aaea42310ab01df556aef63edfa726a62d2dd5b512",
+          "toolset_sha256": "4744ea70c3592ed663321090b86dfae15540ec302032e404674c5eb03fd9b9b5",
+          "listing_sha256": "27e959c402e39b90788a83c83d77995d17a85f202126b64478ba123c3a51f2ae",
           "tools": [
             {
               "name": "network_issue_token",
@@ -714,7 +714,7 @@
             },
             {
               "name": "network_agent_memory_timeline",
-              "digest": "676fa4ecd128a73797ca9380ffeb6a4987264f01397d518fb77aaada35c035a4"
+              "digest": "6497af2c13928473eb17ac6262cc11b34c7fba7da20b6e47f295b6e433b6bcd3"
             },
             {
               "name": "network_agent_memory_get",
@@ -796,7 +796,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-12.1\",\"toolset_sha256\":\"b1998d91157d739a9b512f502661dabdcefbb16db32420e4672955325ca0e7f4\",\"tool_count\":139,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-09.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
+              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-12.1\",\"toolset_sha256\":\"4744ea70c3592ed663321090b86dfae15540ec302032e404674c5eb03fd9b9b5\",\"tool_count\":139,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-09.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
             }
           ],
           "structuredContent": {
@@ -815,7 +815,7 @@
             "service": {
               "protocol_version": "2026-07-28",
               "contract_version": "2026-11-12.1",
-              "toolset_sha256": "b1998d91157d739a9b512f502661dabdcefbb16db32420e4672955325ca0e7f4",
+              "toolset_sha256": "4744ea70c3592ed663321090b86dfae15540ec302032e404674c5eb03fd9b9b5",
               "tool_count": 139,
               "guide_tool": "network_client_guide",
               "files_enabled": true,
@@ -1947,8 +1947,8 @@
       "response": {
         "result": {
           "toolCount": 139,
-          "toolset_sha256": "b1998d91157d739a9b512f502661dabdcefbb16db32420e4672955325ca0e7f4",
-          "listing_sha256": "f9cfda20ce5ba4aa070100aaea42310ab01df556aef63edfa726a62d2dd5b512",
+          "toolset_sha256": "4744ea70c3592ed663321090b86dfae15540ec302032e404674c5eb03fd9b9b5",
+          "listing_sha256": "27e959c402e39b90788a83c83d77995d17a85f202126b64478ba123c3a51f2ae",
           "tools": [
             {
               "name": "network_issue_token",
@@ -2456,7 +2456,7 @@
             },
             {
               "name": "network_agent_memory_timeline",
-              "digest": "676fa4ecd128a73797ca9380ffeb6a4987264f01397d518fb77aaada35c035a4"
+              "digest": "6497af2c13928473eb17ac6262cc11b34c7fba7da20b6e47f295b6e433b6bcd3"
             },
             {
               "name": "network_agent_memory_get",
@@ -3330,5 +3330,5 @@
       "response": ""
     }
   ],
-  "digest": "548f6fce4b24f178822ac03fe6d5f5266928a4a7962922551032f839cf44252b"
+  "digest": "664a10b82eadb5302368ea3df0204805514f7f325ed97119a153ae7b482edd32"
 }

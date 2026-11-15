@@ -304,6 +304,13 @@ export const insightTimelineInputSchema = z.strictObject({
   days: z.union([z.literal(7), z.literal(30), z.literal(90)]).optional(),
   type: z.enum(INSIGHT_FACT_TYPES).optional(),
   limit: z.number().int().min(1).max(LIMITS.memoryPanelTimelineLimitMax).optional(),
+  /**
+   * 本地时间 = UTC + offset，单位分钟（UTC+8 为 480）。
+   *
+   * 服务端按该偏移生成日/周/月分组，保证与浏览器本地时间显示一致；缺省 0
+   * 保持纯 UTC 分组。
+   */
+  tz_offset_minutes: z.number().int().min(-840).max(840).optional(),
   refresh,
 });
 
