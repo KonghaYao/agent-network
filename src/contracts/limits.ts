@@ -413,6 +413,8 @@ export const LIMITS = {
    * 避免把数百条已加载历史整表重绘后再被刷新覆盖。
    */
   webRoomCacheRenderMax: 80,
+  /** 按房间保留的滚动恢复快照上限；只保存在当前页面生命周期内。 */
+  webRoomScrollCacheMax: 50,
   /** Browser full-text cache; mounted messages retain their current bodies. */
   webExpandedBodyCacheBytes: 4 * 1024 * 1024,
   webExpandedBodyCacheMax: 256,
