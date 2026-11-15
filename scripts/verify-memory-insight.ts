@@ -15,6 +15,7 @@ import {
   type InsightViewer,
 } from '../src/memory/insight/contracts';
 import { HindsightInsightReader } from '../src/memory/insight/hindsight-read';
+import { fitGraphBytes, jsonBytes, normalizeMemoryGraph } from '../src/memory/insight/normalize';
 import { MemoryInsightService } from '../src/memory/insight/service';
 import { sortedPairKey, utf8Bytes } from '../src/storage/db';
 import { check, checkEqual, checksPassed } from './lib/harness';
@@ -274,6 +275,76 @@ function rowsGraphFixture(): Record<string, unknown> {
     edges,
     table_rows: tableRows,
     total_units: ROW_FIXTURE_COUNT,
+    total_edges: edges.length,
+  };
+}
+
+/**
+ * 中文长文本图 fixture：120 节点 × 600 中文字符 + 600 条边。
+ * 仅正文 UTF-8 就约 216 KB；旧裁剪顺序会先把边裁到 0，再截正文。
+ */
+function chineseLongTextGraphFixture(): Record<string, unknown> {
+  const nodes = Array.from({ length: LIMITS.memoryPanelGraphNodesMax }, (_, index) => ({
+    data: {
+      id: `cn-${index}`,
+      label: `中文节点 ${index}`,
+      text: '长'.repeat(LIMITS.memoryPanelGraphTextChars),
+      date: new Date(Date.parse('2026-11-01T00:00:00Z') - index * 3_600_000).toISOString(),
+      entities: ['中文实体'],
+    },
+  }));
+  const edges = Array.from({ length: LIMITS.memoryPanelGraphEdgesMax }, (_, index) => {
+    const sourceIndex = index % LIMITS.memoryPanelGraphNodesMax;
+    const lane = Math.floor(index / LIMITS.memoryPanelGraphNodesMax);
+    return {
+      data: {
+        id: `cn-edge-${index}`,
+        source: `cn-${sourceIndex}`,
+        target: `cn-${(sourceIndex + 1 + lane) % LIMITS.memoryPanelGraphNodesMax}`,
+        linkType: index % 2 === 0 ? 'semantic' : 'entity',
+        weight: 1 + (index % 7),
+      },
+    };
+  });
+  return {
+    nodes,
+    edges,
+    total_units: nodes.length,
+    total_edges: edges.length,
+  };
+}
+
+/**
+ * 极端 fixture：240 节点 × 600 中文字符、80 字中文 label + 600 条边。
+ * 正文压到下限后仍超过 200 KiB 图核心预算，用于验证边保留下限生效。
+ */
+function extremeChineseGraphFixture(): Record<string, unknown> {
+  const nodeCount = LIMITS.memoryPanelGraphNodesRequestMax;
+  const nodes = Array.from({ length: nodeCount }, (_, index) => ({
+    data: {
+      id: `ex-${index}`,
+      label: '标'.repeat(LIMITS.memoryPanelGraphLabelChars),
+      text: '记'.repeat(LIMITS.memoryPanelGraphTextChars),
+      entities: ['极端实体'],
+    },
+  }));
+  const edges = Array.from({ length: LIMITS.memoryPanelGraphEdgesMax }, (_, index) => {
+    const sourceIndex = index % nodeCount;
+    const lane = Math.floor(index / nodeCount);
+    return {
+      data: {
+        id: `ex-edge-${index}`,
+        source: `ex-${sourceIndex}`,
+        target: `ex-${(sourceIndex + 1 + lane) % nodeCount}`,
+        linkType: index % 2 === 0 ? 'semantic' : 'entity',
+        weight: index + 1,
+      },
+    };
+  });
+  return {
+    nodes,
+    edges,
+    total_units: nodes.length,
     total_edges: edges.length,
   };
 }
@@ -897,6 +968,113 @@ async function main(): Promise<void> {
   checkEqual('graph merge fact_type', graph.nodes.find((node) => node.id === 'n0')?.fact_type, 'world');
   checkEqual('graph request limit', fake.requests.find((item) => item.path.endsWith('/graph'))?.query.get('limit'), '120');
   assertNoSensitive('graph 输出', graph, targetBank);
+
+  console.log('--- graph 中文长文本裁剪顺序 ---');
+  const chineseGraph = normalizeMemoryGraph(chineseLongTextGraphFixture(), {
+    nodeLimit: LIMITS.memoryPanelGraphNodesMax,
+    edgeLimit: LIMITS.memoryPanelGraphEdgesMax,
+    textChars: LIMITS.memoryPanelGraphTextChars,
+  });
+  check('中文图归一化成功', chineseGraph !== null);
+  if (chineseGraph) {
+    checkEqual('中文图节点数', chineseGraph.nodes.length, LIMITS.memoryPanelGraphNodesMax);
+    checkEqual('中文图边数', chineseGraph.edges.length, LIMITS.memoryPanelGraphEdgesMax);
+    check(
+      '中文图裁剪前超过核心预算',
+      jsonBytes(chineseGraph) > LIMITS.memoryPanelGraphCoreBytes,
+      jsonBytes(chineseGraph),
+    );
+    const chineseFit = fitGraphBytes(chineseGraph);
+    const chineseBytes = jsonBytes(chineseGraph);
+    const chineseMaxText = Math.max(...chineseGraph.nodes.map((node) => (node.text ?? '').length));
+    check('中文图标记额外裁剪', chineseFit);
+    console.log(
+      `中文图裁剪实测：边 ${chineseGraph.edges.length}/${LIMITS.memoryPanelGraphEdgesMax}，正文上限 ${chineseMaxText} 字符，字节 ${chineseBytes}/${LIMITS.memoryPanelGraphCoreBytes}`,
+    );
+    check(
+      '中文图保留边不低于下限',
+      chineseGraph.edges.length >= LIMITS.memoryPanelGraphEdgesMin,
+      `${chineseGraph.edges.length}/${LIMITS.memoryPanelGraphEdgesMin}`,
+    );
+    checkEqual('中文图不丢边', chineseGraph.edges.length, LIMITS.memoryPanelGraphEdgesMax);
+    checkEqual('中文图正文截到下限', chineseMaxText, LIMITS.memoryPanelGraphTextFloorChars);
+    check(
+      '中文图总字节不超过核心预算',
+      chineseBytes <= LIMITS.memoryPanelGraphCoreBytes,
+      `${chineseBytes}/${LIMITS.memoryPanelGraphCoreBytes}`,
+    );
+    const chineseNodeIds = new Set(chineseGraph.nodes.map((node) => node.id));
+    check(
+      '中文图裁剪后无自环/悬空边',
+      chineseGraph.edges.every(
+        (edge) =>
+          edge.source !== edge.target &&
+          chineseNodeIds.has(edge.source) &&
+          chineseNodeIds.has(edge.target),
+      ),
+    );
+  }
+
+  console.log('--- graph 极端输入保留边下限 ---');
+  const extremeGraph = normalizeMemoryGraph(extremeChineseGraphFixture(), {
+    nodeLimit: LIMITS.memoryPanelGraphNodesRequestMax,
+    edgeLimit: LIMITS.memoryPanelGraphEdgesMax,
+    textChars: LIMITS.memoryPanelGraphTextChars,
+  });
+  check('极端图归一化成功', extremeGraph !== null);
+  if (extremeGraph) {
+    checkEqual('极端图节点数', extremeGraph.nodes.length, LIMITS.memoryPanelGraphNodesRequestMax);
+    checkEqual('极端图边数', extremeGraph.edges.length, LIMITS.memoryPanelGraphEdgesMax);
+    const extremeFloorPreview = {
+      ...extremeGraph,
+      nodes: extremeGraph.nodes.map((node) => ({
+        ...node,
+        text: (node.text ?? '').slice(0, LIMITS.memoryPanelGraphTextFloorChars),
+      })),
+    };
+    check(
+      '极端图正文到下限后仍超过核心预算',
+      jsonBytes(extremeFloorPreview) > LIMITS.memoryPanelGraphCoreBytes,
+      jsonBytes(extremeFloorPreview),
+    );
+    const extremeFit = fitGraphBytes(extremeGraph);
+    const extremeBytes = jsonBytes(extremeGraph);
+    const extremeMaxText = Math.max(...extremeGraph.nodes.map((node) => (node.text ?? '').length));
+    check('极端图标记额外裁剪', extremeFit);
+    console.log(
+      `极端图裁剪实测：边 ${extremeGraph.edges.length}/${LIMITS.memoryPanelGraphEdgesMax}（下限 ${LIMITS.memoryPanelGraphEdgesMin}），正文上限 ${extremeMaxText} 字符，字节 ${extremeBytes}/${LIMITS.memoryPanelGraphCoreBytes}`,
+    );
+    check(
+      '极端图确实删过边',
+      extremeGraph.edges.length < LIMITS.memoryPanelGraphEdgesMax,
+      extremeGraph.edges.length,
+    );
+    check(
+      '极端图至少保留边下限',
+      extremeGraph.edges.length >= LIMITS.memoryPanelGraphEdgesMin,
+      `${extremeGraph.edges.length}/${LIMITS.memoryPanelGraphEdgesMin}`,
+    );
+    check(
+      '极端图正文不超过下限',
+      extremeMaxText <= LIMITS.memoryPanelGraphTextFloorChars,
+      extremeMaxText,
+    );
+    check(
+      '极端图总字节不超过核心预算',
+      extremeBytes <= LIMITS.memoryPanelGraphCoreBytes,
+      `${extremeBytes}/${LIMITS.memoryPanelGraphCoreBytes}`,
+    );
+    const extremeNodeIds = new Set(extremeGraph.nodes.map((node) => node.id));
+    check(
+      '极端图裁剪后无自环/悬空边',
+      extremeGraph.edges.every(
+        (edge) =>
+          edge.source !== edge.target &&
+          extremeNodeIds.has(edge.source) &&
+          extremeNodeIds.has(edge.target),
+      ),
+    );
+  }
 
   const largeLimitGraph = await service.graph(viewer('human', friend), {
     actor_id: target,

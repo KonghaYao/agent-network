@@ -575,6 +575,18 @@ export const LIMITS = {
   /** 记忆图节点文本 / label 字符上限。 */
   memoryPanelGraphTextChars: 600,
   memoryPanelGraphLabelChars: 80,
+  /**
+   * 字节预算裁剪时的节点正文下限（字符）。
+   *
+   * 长文本节点先截到该下限，把预算留给边；只有边已到下限仍超预算才继续压正文。
+   */
+  memoryPanelGraphTextFloorChars: 140,
+  /**
+   * 字节预算裁剪时至少保留的边数（min(现有边数, 该值)）。
+   *
+   * 星座视图依赖边；即使长文本把图核心撑爆，也不能先把边裁光。
+   */
+  memoryPanelGraphEdgesMin: 120,
   /** 事实列表正文截断字符数。 */
   memoryPanelFactsTextChars: 1_200,
   /** 记忆详情正文 UTF-8 字节上限。 */

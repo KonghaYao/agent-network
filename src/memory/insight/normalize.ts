@@ -313,40 +313,64 @@ export function jsonBytes(value: unknown): number {
 }
 
 /**
- * 把图压到字节预算内：先减边，再减节点文本，最后减节点。
+ * 把图压到字节预算内。裁剪顺序保证星座视图优先保住边：
+ * 1. 节点正文先截到 memoryPanelGraphTextFloorChars；长中文记忆的字节主要在这里；
+ * 2. 仍超预算时按权重/覆盖度裁剪边，但不低于 min(现有边数, memoryPanelGraphEdgesMin)；
+ * 3. 仍超预算时继续减半节点正文，正文压空后才允许跌破边下限；
+ * 4. 最后才删节点，并同步清理悬空边。
  * 返回是否发生额外裁剪。
  */
 export function fitGraphBytes<T extends { nodes: InsightGraphNode[]; edges: InsightGraphEdge[] }>(
   graph: T,
   maxBytes: number = LIMITS.memoryPanelGraphCoreBytes,
 ): boolean {
+  if (jsonBytes(graph) <= maxBytes) return false;
   let truncated = false;
+
+  for (const node of graph.nodes) {
+    const text = node.text ?? '';
+    if (text.length > LIMITS.memoryPanelGraphTextFloorChars) {
+      node.text = truncateChars(text, LIMITS.memoryPanelGraphTextFloorChars);
+      truncated = true;
+    }
+  }
+
+  const edgeFloor = Math.min(graph.edges.length, LIMITS.memoryPanelGraphEdgesMin);
+  while (graph.edges.length > edgeFloor && jsonBytes(graph) > maxBytes) {
+    graph.edges = trimEdges(
+      graph.edges,
+      Math.max(edgeFloor, Math.floor(graph.edges.length * 0.75)),
+    );
+    truncated = true;
+  }
+
+  // 正文仍可继续压缩时优先牺牲正文，不跌破边下限。
   while (jsonBytes(graph) > maxBytes) {
-    if (graph.edges.length > 0) {
-      const next = Math.max(0, Math.floor(graph.edges.length * 0.75));
-      graph.edges.splice(next);
-      truncated = true;
-      continue;
+    let shrunk = false;
+    for (const node of graph.nodes) {
+      const text = node.text ?? '';
+      if (text.length === 0) continue;
+      node.text = truncateChars(text, Math.floor(text.length / 2));
+      shrunk = true;
     }
-    const textNodes = graph.nodes.filter((node) => (node.text?.length ?? 0) > 0);
-    if (textNodes.length > 0) {
-      for (const node of textNodes) {
-        node.text = truncateChars(node.text ?? '', Math.floor((node.text?.length ?? 0) / 2));
-      }
-      truncated = true;
-      continue;
+    if (!shrunk) break;
+    truncated = true;
+  }
+
+  // 正文已压空仍超预算，才允许跌破边下限。
+  while (graph.edges.length > 0 && jsonBytes(graph) > maxBytes) {
+    graph.edges = trimEdges(graph.edges, Math.floor(graph.edges.length * 0.75));
+    truncated = true;
+  }
+
+  while (jsonBytes(graph) > maxBytes && graph.nodes.length > 0) {
+    graph.nodes.pop();
+    const ids = new Set(graph.nodes.map((node) => node.id));
+    for (let index = graph.edges.length - 1; index >= 0; index -= 1) {
+      const edge = graph.edges[index]!;
+      if (!ids.has(edge.source) || !ids.has(edge.target)) graph.edges.splice(index, 1);
     }
-    if (graph.nodes.length > 0) {
-      graph.nodes.pop();
-      const ids = new Set(graph.nodes.map((node) => node.id));
-      for (let index = graph.edges.length - 1; index >= 0; index -= 1) {
-        const edge = graph.edges[index]!;
-        if (!ids.has(edge.source) || !ids.has(edge.target)) graph.edges.splice(index, 1);
-      }
-      truncated = true;
-      continue;
-    }
-    break;
+    truncated = true;
   }
   return truncated;
 }
