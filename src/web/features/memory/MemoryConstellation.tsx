@@ -8,11 +8,12 @@ import {
   memoryFailureOf,
   type MemoryFactType,
   type MemoryFailure,
-  type MemoryGraphEdge,
   type MemoryGraphNode,
   type MemoryGraphResult,
 } from './memory-data';
-import { GraphCanvas, GraphNodeTable, type VizEdge, type VizNode } from './MemoryGraphCanvas';
+import { GraphNodeTable } from './MemoryGraphCanvas';
+import { ConstellationCanvas } from './ConstellationCanvas';
+import { adaptMemoryGraph } from './constellation-adapter';
 import './memory-viz.css';
 
 type TypeFilter = 'all' | MemoryFactType;
@@ -25,32 +26,6 @@ const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
 ];
 
 const NODE_LIMITS = [20, 50, 120] as const;
-
-const NODE_COLOR: Record<MemoryFactType | 'unknown', string> = {
-  world: '#2563eb',
-  experience: '#15803d',
-  observation: '#b45309',
-  unknown: '#6b7280',
-};
-
-const EDGE_PALETTE = ['#2563eb', '#0d9488', '#b45309', '#9333ea', '#dc2626', '#64748b', '#ca8a04'];
-const EDGE_NAMED: Record<string, string> = {
-  semantic: '#2563eb',
-  temporal: '#0d9488',
-  entity: '#b45309',
-  caused_by: '#9333ea',
-  contradicts: '#dc2626',
-};
-
-function edgeColor(type: string, order: string[]): string {
-  if (EDGE_NAMED[type]) return EDGE_NAMED[type];
-  const index = order.indexOf(type);
-  return EDGE_PALETTE[index % EDGE_PALETTE.length] ?? '#64748b';
-}
-
-function nodeColor(node: MemoryGraphNode): string {
-  return NODE_COLOR[node.fact_type ?? 'unknown'];
-}
 
 function nodeLabel(node: MemoryGraphNode): string {
   return node.label || node.text || '未命名记忆';
@@ -123,29 +98,18 @@ export function MemoryConstellation({
     [edges],
   );
 
-  const vizNodes = useMemo<VizNode[]>(
-    () =>
-      nodes.map((node) => ({
-        id: node.id,
-        label: nodeLabel(node),
-        typeLabel: node.fact_type ? FACT_TYPE_LABEL[node.fact_type] : '未分类',
-        color: nodeColor(node),
-        ...(node.mention_count !== undefined ? { weight: node.mention_count } : {}),
-      })),
-    [nodes],
+  const graph = useMemo(
+    () => adaptMemoryGraph(nodes, edges, { edgeTypeOrder }),
+    [edgeTypeOrder, edges, nodes],
   );
 
-  const vizEdges = useMemo<VizEdge[]>(
-    () =>
-      edges.map((edge: MemoryGraphEdge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        color: edgeColor(edge.type, edgeTypeOrder),
-        weight: edge.weight,
-      })),
-    [edgeTypeOrder, edges],
-  );
+  const legendTypes = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const link of graph.links) {
+      if (!seen.has(link.type)) seen.set(link.type, link.color);
+    }
+    return [...seen.entries()];
+  }, [graph.links]);
 
   const degrees = useMemo(() => {
     const map = new Map<string, number>();
@@ -263,21 +227,21 @@ export function MemoryConstellation({
               {truncatedText}
             </p>
           ) : null}
-          <GraphCanvas
-            nodes={vizNodes}
-            edges={vizEdges}
+          <ConstellationCanvas
+            graph={graph}
             selectedId={activeId}
             onSelect={(id) => selectNode(id)}
             canvasId="memory-graph-canvas"
             label="滚轮缩放，拖拽平移，点击节点查看记忆详情；也可以使用下方表格。"
+            legendTypes={legendTypes}
           />
-          {edgeTypeOrder.length > 0 ? (
+          {legendTypes.length > 0 ? (
             <ul className="memory-graph-legend" aria-label="关系类型图例">
-              {edgeTypeOrder.map((type) => (
+              {legendTypes.map(([type, color]) => (
                 <li key={type}>
                   <span
                     className="memory-graph-swatch"
-                    style={{ background: edgeColor(type, edgeTypeOrder) }}
+                    style={{ background: color }}
                     aria-hidden="true"
                   />
                   {type}
