@@ -376,13 +376,8 @@ export class MemoryInsightService {
           };
           // include_rows 时先只按图核心预算裁剪 nodes/edges，保证星座图可用；
           // table_rows/timeline 随后由 #fitGraphResponse 在单一总预算内处理。
-          const graphTrimmed = includeRows
-            ? fitGraphBytes(
-                { nodes: result.nodes, edges: result.edges },
-                LIMITS.memoryPanelGraphCoreBytes,
-              )
-            : fitGraphBytes(result);
-          if (graphTrimmed) result.truncated = true;
+          // fitGraphBytes 原地修改 nodes/edges，裁剪结果直接落在 result 上。
+          if (fitGraphBytes(result, LIMITS.memoryPanelGraphCoreBytes)) result.truncated = true;
           if (includeRows) {
             const normalizedRows = normalizeGraphRows(outcome.body, {
               limit: rowsLimit,
@@ -946,8 +941,9 @@ export class MemoryInsightService {
    *
    * 优先级：图核心已先按 memoryPanelGraphCoreBytes 裁剪；仍超总预算时先按最旧行
    * 成块丢弃并重建 timeline，图核心不受行影响；只有行裁空后仍超限，才兜底裁剪
-   * 边、节点文本与节点，并置 truncated=true。上游 total 大于返回行数时也标记
-   * rows_truncated，避免把子集当完整数据。
+   * 图：先压节点正文到下限，再在边保留下限内删边，然后继续压正文并置
+   * truncated=true。上游 total 大于返回行数时也标记 rows_truncated，避免把子集
+   * 当完整数据。
    */
   #fitGraphResponse(
     result: InsightGraphResult,
