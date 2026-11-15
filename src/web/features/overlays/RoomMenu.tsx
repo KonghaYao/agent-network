@@ -27,6 +27,7 @@ export interface RoomMenuItemsProps {
   blocked: boolean;
   agent: RoomAgentMenuState | null;
   onOpen: (overlay: RoomOverlay) => void;
+  onViewMemory: (() => void) | null;
   onTogglePreference: (field: keyof RoomPreference) => void;
   onArchive: () => void;
   onCopyPrompt: () => void;
@@ -55,6 +56,7 @@ export function RoomMenuItems({
   blocked,
   agent,
   onOpen,
+  onViewMemory,
   onTogglePreference,
   onArchive,
   onCopyPrompt,
@@ -106,6 +108,15 @@ export function RoomMenuItems({
       >
         {preference.muted ? '恢复消息提醒' : '消息免打扰'}
       </Item>
+      {direct && peerKind === 'agent' && onViewMemory ? (
+        <Item
+          id={`${idPrefix}-memory`}
+          className="room-menu-item"
+          onSelect={onViewMemory}
+        >
+          查看 Agent 记忆
+        </Item>
+      ) : null}
       {group ? (
         <>
           <Separator className="room-menu-sep" />

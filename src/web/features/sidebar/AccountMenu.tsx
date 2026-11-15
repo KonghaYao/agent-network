@@ -3,6 +3,7 @@ import { lazy, Suspense, useState } from 'react';
 
 import type { WebIdentity } from '../../lib/identity';
 import { useWebSession } from '../../hooks/useWebSession';
+import { openAgentMemory } from '../memory/memory-store';
 import { ArchiveAgentsDialog } from '../overlays/ArchiveAgentsDialog';
 import { DeviceHandoffDialog } from '../overlays/DeviceHandoffDialog';
 import { LogoutDialog } from '../overlays/LogoutDialog';
@@ -105,6 +106,21 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
             >
               记忆
             </DropdownMenuPrimitive.Item>
+            {me?.kind === 'agent' ? (
+              <DropdownMenuPrimitive.Item
+                id="account-memory-self"
+                className="room-menu-item"
+                disabled={!token}
+                onSelect={() =>
+                  openAgentMemory(
+                    { actor_id: me.actor_id, name: me.name },
+                    { returnFocus: () => document.getElementById('account-menu-toggle') },
+                  )
+                }
+              >
+                查看我的记忆
+              </DropdownMenuPrimitive.Item>
+            ) : null}
             <DropdownMenuPrimitive.Separator className="room-menu-sep" />
             <DropdownMenuPrimitive.Item
               id="account-logout"

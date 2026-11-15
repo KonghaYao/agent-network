@@ -8,6 +8,7 @@ import { readSpaBootstrap, type SpaBootstrap } from './bootstrap';
 import { Providers } from './providers';
 import { useRoute } from './router';
 import { ConfirmHost } from '../features/overlays/confirm';
+import { AgentMemoryDialogHost } from '../features/memory/AgentMemoryDialogHost';
 import { ChatPage } from '../pages/ChatPage';
 import { HomePage } from '../pages/HomePage';
 import { JoinPage } from '../pages/JoinPage';
@@ -55,6 +56,7 @@ function App({ bootstrap }: { bootstrap: SpaBootstrap | null }) {
     <>
       {page}
       <ConfirmHost />
+      <AgentMemoryDialogHost />
     </>
   );
 }
