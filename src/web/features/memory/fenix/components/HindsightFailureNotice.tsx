@@ -1,7 +1,8 @@
 /**
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/components/HindsightFailureNotice.tsx
- * Modified for Agent Network: 平台导入替换；失败块结构不变。
+ * Modified for Agent Network: 平台导入替换；失败块结构不变；新增 `unavailable`
+ * 分支（可预期的「记忆暂不可用」，无重试入口）。
  */
 
 import { EmptyState } from "../ui/empty-state";
@@ -42,18 +43,23 @@ export function HindsightFailureNotice({
 }: HindsightFailureNoticeProps) {
   const { t } = useTranslation(NS.HINDSIGHT);
   const forbidden = failure.kind === "forbidden";
-  const resolvedTitleKey = forbidden ? "errors.forbiddenTitle" : titleKey;
+  const unavailable = failure.kind === "unavailable";
+  const resolvedTitleKey = forbidden
+    ? "errors.forbiddenTitle"
+    : unavailable
+      ? "errors.unavailableTitle"
+      : titleKey;
 
   return (
     <EmptyState
-      tone="danger"
+      tone={unavailable ? "neutral" : "danger"}
       role="alert"
       className={className}
       icon={<AlertCircle />}
       title={resolvedTitleKey ? t(resolvedTitleKey) : null}
       description={forbidden ? t("errors.forbiddenHint") : failure.detail}
       action={
-        !forbidden && onRetry && retryKey
+        !forbidden && !unavailable && onRetry && retryKey
           ? { label: t(retryKey), onClick: onRetry, icon: <RefreshCw className="size-4" /> }
           : undefined
       }

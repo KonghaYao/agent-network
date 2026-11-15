@@ -39,43 +39,43 @@ Modifications for this repository:
   populated. Missing fields such as `context`, `occurred`, `proof` and `tags`
   are intentionally not fabricated.
 
-## Fenix memory panel vendor scaffold (stage 2)
+## Fenix memory panel vendor (stage 2 scaffold, stage 4 wired)
 
 - Source: https://github.com/HuangPuStar/FenixAgent
 - Commit: `72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9`
 - License: Apache License 2.0 (see `LICENSES/Apache-2.0.txt`); the upstream repository has no `NOTICE` file, and no upstream notice text is fabricated here.
 - Upstream root for memory UI: `packages/resources/memory/web/pages/hindsight/`
 - Upstream root for UI primitives: `packages/ui-components/web/`
-- These files live under `src/web/features/memory/fenix/` and are not referenced by the production SPA in this phase.
+- These files live under `src/web/features/memory/fenix/`. Since stage 4 they are loaded by the lazy `AgentMemoryDialog`/`DataView` chunks; the SPA entry still does not inline them.
 
 | Vendored file | Upstream path | Modifications |
 | --- | --- | --- |
-| `types.ts` | `pages/hindsight/types.ts` | Verbatim type definitions. |
-| `failure.ts` | `pages/hindsight/failure.ts` | `ApiError` check replaced by local `FenixApiError`; failure classification unchanged. |
+| `types.ts` | `pages/hindsight/types.ts` | Added `occurred_at`, `rows_truncated` and `MemoryGraphTimeline` types for the graph `include_rows` output; no fields beyond the server contract. |
+| `failure.ts` | `pages/hindsight/failure.ts` | `ApiError` check replaced by local `FenixApiError`; added the `unavailable` classification for `available=false` responses (no retry, not empty data). |
 | `recency.ts` | `pages/hindsight/recency.ts` | Verbatim. |
 | `memory-type-title.ts` | `pages/hindsight/memory-type-title.ts` | Verbatim. |
 | `element-height.ts` | `pages/hindsight/element-height.ts` | Verbatim. |
 | `MemoriesPage.tsx` | `pages/hindsight/MemoriesPage.tsx` | Removed the `mental-models` perspective (no backend contract in this repository); master-detail shell replaced with a local shim; platform imports redirected to fenix modules. |
 | `MemoriesPage.css` | `pages/hindsight/MemoriesPage.css` | Verbatim. |
 | `i18n.ts` | `packages/resources/memory/web/i18n/locales/zh/hindsight.json` | Dictionary keys/copy copied; i18next/react-i18next replaced with a local `useTranslation`/`t()` shim. |
-| `components/DataView.tsx` | `pages/hindsight/components/DataView.tsx` | Platform imports redirected; the graph view renders a local placeholder because cytoscape is not vendored in this phase. |
-| `components/use-data-view-data.ts` | `pages/hindsight/components/use-data-view-data.ts` | Imports redirected to local `api`/`useRequest`; fetch and derivation semantics unchanged. |
+| `components/DataView.tsx` | `pages/hindsight/components/DataView.tsx` | Platform imports redirected; the cytoscape graph view is not offered (constellation/table/timeline only); the missing upstream empty-state image reference was removed; on narrow viewports node clicks open the detail modal instead of the hidden sidebar. |
+| `components/use-data-view-data.ts` | `pages/hindsight/components/use-data-view-data.ts` | Imports redirected to local `api`/`useRequest`; the observation bank-stats request was removed so each user action sends exactly one graph call. |
 | `components/data-view-model.ts` | `pages/hindsight/components/data-view-model.ts` | Verbatim. |
-| `components/data-view-table.tsx` | `pages/hindsight/components/data-view-table.tsx` | Platform imports redirected; displayed text/entities/tags pass through `maskSecrets`. |
-| `components/data-view-timeline.tsx` | `pages/hindsight/components/data-view-timeline.tsx` | Platform imports redirected; text/entities pass through `maskSecrets`. |
-| `components/data-view-control-panel.tsx` | `pages/hindsight/components/data-view-control-panel.tsx` | Platform imports redirected. |
+| `components/data-view-table.tsx` | `pages/hindsight/components/data-view-table.tsx` | Platform imports redirected; text/entities/tags pass through `maskSecrets`; occurred column falls back to `occurred_at`; chip text colors meet WCAG AA; the scroll region is keyboard focusable. |
+| `components/data-view-timeline.tsx` | `pages/hindsight/components/data-view-timeline.tsx` | Platform imports redirected; text/entities pass through `maskSecrets`; grouping now consumes the server `timeline.groups` (year/month/week/day) instead of regrouping locally. |
+| `components/data-view-control-panel.tsx` | `pages/hindsight/components/data-view-control-panel.tsx` | Platform imports redirected; the recency select has an `aria-label`. |
 | `components/EntitiesView.tsx` | `pages/hindsight/components/EntitiesView.tsx` | Platform imports redirected; entity names pass through `maskSecrets`. |
 | `components/graph-model.ts` | `pages/hindsight/components/graph-model.ts` | Verbatim. |
 | `components/Graph2d.tsx` | `pages/hindsight/components/Graph2d.tsx` | Local placeholder, not a port: upstream requires cytoscape/cytoscape-fcose, which are deliberately not added in this phase. |
-| `components/HindsightFailureNotice.tsx` | `pages/hindsight/components/HindsightFailureNotice.tsx` | Platform imports redirected. |
-| `components/MemoryDetailBody.tsx` | `pages/hindsight/components/MemoryDetailBody.tsx` | Platform imports redirected; text/context/entities/tags pass through `maskSecrets` (reveal flow deferred to the UI-switch phase). |
-| `components/MemoryDetailModal.tsx` | `pages/hindsight/components/MemoryDetailModal.tsx` | Platform imports redirected. |
+| `components/HindsightFailureNotice.tsx` | `pages/hindsight/components/HindsightFailureNotice.tsx` | Platform imports redirected; added the `unavailable` branch (neutral tone, no retry). |
+| `components/MemoryDetailBody.tsx` | `pages/hindsight/components/MemoryDetailBody.tsx` | Platform imports redirected; text/context/entities/tags pass through `maskSecrets`. Added the Agent Network reveal extension: text/context render masked until the user clicks “查看原文” (`aria-expanded`); entities/tags stay masked after reveal. |
+| `components/MemoryDetailModal.tsx` | `pages/hindsight/components/MemoryDetailModal.tsx` | Platform imports redirected; nested inside the Agent memory dialog it uses `z-[70]` so the detail sits above the panel. |
 | `components/MemoryDetailPanel.tsx` | `pages/hindsight/components/MemoryDetailPanel.tsx` | Platform imports redirected; `sonner` toast replaced by a local DOM-event shim. |
 | `components/MemoryDetailPanel.css` | `pages/hindsight/components/MemoryDetailPanel.css` | Verbatim. |
-| `components/MemoryPagination.tsx` | `pages/hindsight/components/MemoryPagination.tsx` | Platform imports redirected. |
+| `components/MemoryPagination.tsx` | `pages/hindsight/components/MemoryPagination.tsx` | Platform imports redirected; icon-only page buttons have localized `aria-label`s. |
 | `components/MemoryViewSwitcher.tsx` | `pages/hindsight/components/MemoryViewSwitcher.tsx` | Platform imports redirected. |
 | `components/MemoryVisualizationShell.tsx` | `pages/hindsight/components/MemoryVisualizationShell.tsx` | Platform imports redirected. |
-| `components/Constellation.tsx` | `pages/hindsight/components/Constellation.tsx` | Platform imports redirected; theme comes from `prefers-color-scheme` instead of the upstream forced-light provider. |
+| `components/Constellation.tsx` | `pages/hindsight/components/Constellation.tsx` | Platform imports redirected; theme comes from `prefers-color-scheme`; canvas has `role="img"` + label, stable `fenix-constellation*` classes, and fullscreen Escape is intercepted in the capture phase so it does not close the host dialog. |
 | `components/constellation-scene.ts` | `pages/hindsight/components/constellation-scene.ts` | `@chenglou/pretext` removed; layout/heat/link-index semantics unchanged. |
 | `components/constellation-labels.ts` | `pages/hindsight/components/constellation-labels.ts` | Pretext wrapping replaced by canvas `measureText` greedy wrapping; labels pass through `maskSecrets`. |
 | `components/constellation-paint.ts` | `pages/hindsight/components/constellation-paint.ts` | `TFunction` imported from local i18n. |
@@ -99,7 +99,7 @@ Modifications for this repository:
 | `theme.ts` | `packages/ui-components/web/lib/theme.tsx` | Rewritten to follow `prefers-color-scheme` (upstream forces light). |
 
 Local (not ported) files in the same tree, kept small and documented in their own headers:
-`api.ts` (adapter boundary; default rejects), `hooks/use-request.ts` (ahooks subset),
+`api.ts` (adapter boundary; default rejects), `memory-api.ts` (stage 4 MCP adapter for graph/include_rows and get; not ported), `hooks/use-request.ts` (ahooks subset),
 `ui/toast.ts` (sonner subset), `css/fenix.css` (scoped Tailwind entry, no preflight),
 `index.ts` (vendor entry), and the `Graph2d.tsx` placeholder above.
 

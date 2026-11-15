@@ -169,6 +169,31 @@ export interface MemoryGraphEdge {
   entity?: string | null;
 }
 
+export interface MemoryGraphRow {
+  id: string;
+  text: string;
+  fact_type: MemoryFactType | null;
+  state?: 'valid' | 'invalidated';
+  occurred_at: string | null;
+  mentioned_at: string | null;
+  occurred_start: string | null;
+  occurred_end: string | null;
+  entities: string[];
+  proof_count: number;
+  tags: string[];
+}
+
+export interface MemoryGraphTimeline {
+  groups: {
+    year: MemoryTimelineGroup[];
+    month: MemoryTimelineGroup[];
+    week: MemoryTimelineGroup[];
+    day: MemoryTimelineGroup[];
+  };
+  summary: MemoryTimelineSummary;
+  basis: 'occurred_at';
+}
+
 export interface MemoryGraphResult {
   available: boolean;
   reason: MemoryAvailabilityReason;
@@ -182,11 +207,20 @@ export interface MemoryGraphResult {
   raw_edge_count: number;
   limit: number;
   truncated: boolean;
+  /** `include_rows=true` 时与图来自同一次上游响应。 */
+  table_rows?: MemoryGraphRow[];
+  rows_truncated?: boolean;
+  timeline?: MemoryGraphTimeline;
 }
 
 export interface MemoryGraphQuery {
   type?: MemoryFactType;
-  limit: number;
+  limit?: number;
+  q?: string;
+  /** 为 true 时同一次调用返回表格行与时间线分组。 */
+  includeRows?: boolean;
+  rowsLimit?: number;
+  rowsTextChars?: number;
 }
 
 export interface MemoryEntityItem {
@@ -344,7 +378,7 @@ export async function fetchMemoryTimeline(
     {
       actor_id: actorId,
       days: query.days,
-      ...timelineTimeZoneArgs(),
+      ...memoryTimeZoneArgs(),
       ...(query.type ? { type: query.type } : {}),
       ...(query.limit !== undefined ? { limit: query.limit } : {}),
     },
@@ -356,7 +390,7 @@ export async function fetchMemoryTimeline(
  * 分组必须和卡片本地时间一致：优先传 IANA 时区名（DST 切换日仍正确），
  * 浏览器不提供时回退到固定 offset。
  */
-function timelineTimeZoneArgs(): { timezone?: string; tz_offset_minutes: number } {
+export function memoryTimeZoneArgs(): { timezone?: string; tz_offset_minutes: number } {
   const tz_offset_minutes = -new Date().getTimezoneOffset();
   try {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -392,8 +426,19 @@ export async function fetchMemoryGraph(
     'network_agent_memory_graph',
     {
       actor_id: actorId,
-      limit: query.limit,
+      ...(query.limit !== undefined ? { limit: query.limit } : {}),
       ...(query.type ? { type: query.type } : {}),
+      ...(query.q ? { q: query.q } : {}),
+      ...(query.includeRows
+        ? {
+            include_rows: true,
+            ...(query.rowsLimit !== undefined ? { rows_limit: query.rowsLimit } : {}),
+            ...(query.rowsTextChars !== undefined
+              ? { rows_text_chars: query.rowsTextChars }
+              : {}),
+            ...memoryTimeZoneArgs(),
+          }
+        : {}),
     },
     { token, signal },
   );

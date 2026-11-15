@@ -5,6 +5,8 @@
  */
 
 import { Button } from "../ui/button";
+import { NS } from "../i18n";
+import { useTranslation } from "../i18n";
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -35,6 +37,7 @@ export function MemoryPagination({
   rangeLabel,
   disabled = false,
 }: MemoryPaginationProps) {
+  const { t } = useTranslation(NS.HINDSIGHT);
   // 单页时不渲染：与两个视图迁移前的 `totalPages > 1 &&` 判断一致。
   if (totalPages <= 1) return null;
 
@@ -49,6 +52,7 @@ export function MemoryPagination({
           variant="outline"
           size="sm"
           onClick={() => onPageChange(1)}
+          aria-label={t("dataView.first")}
           disabled={atFirstPage}
           className="h-7 w-7 p-0"
         >
@@ -58,6 +62,7 @@ export function MemoryPagination({
           variant="outline"
           size="sm"
           onClick={() => onPageChange(currentPage - 1)}
+          aria-label={t("dataView.previous")}
           disabled={atFirstPage}
           className="h-7 w-7 p-0"
         >
@@ -70,6 +75,7 @@ export function MemoryPagination({
           variant="outline"
           size="sm"
           onClick={() => onPageChange(currentPage + 1)}
+          aria-label={t("dataView.next")}
           disabled={atLastPage}
           className="h-7 w-7 p-0"
         >
@@ -79,6 +85,7 @@ export function MemoryPagination({
           variant="outline"
           size="sm"
           onClick={() => onPageChange(totalPages)}
+          aria-label={t("dataView.last")}
           disabled={atLastPage}
           className="h-7 w-7 p-0"
         >

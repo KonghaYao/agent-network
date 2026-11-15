@@ -28,6 +28,10 @@ const ZH: Dictionary = {
   perspectives: {
     title: '记忆视角',
     description: '按形成方式查看长期认知',
+    world: '世界',
+    experience: '经历',
+    observation: '观察',
+    entities: '实体',
     worldDescription: '可验证的客观信息',
     experienceDescription: '用户与 Agent 的经历',
     observationDescription: '从行为中形成的判断',
@@ -80,6 +84,7 @@ const ZH: Dictionary = {
   },
   errors: {
     forbiddenTitle: '无权访问该记忆库',
+    unavailableTitle: '记忆暂不可用',
     forbiddenHint:
       '当前账号在所属组织内没有对应的记忆库（bank）映射，因此无法加载数据。重试不会改变结果，请联系管理员核对组织成员映射。',
   },
@@ -146,6 +151,7 @@ const ZH: Dictionary = {
     columnMentioned: '提及时间',
     columnEntities: '实体',
     columnOccurred: '发生时间',
+    tableScrollRegion: '记忆表格（可横向滚动）',
     copyId: '复制 ID',
     noMemoriesMatchFilter: '无记忆匹配您的筛选条件',
     noMemoriesFound: '未找到记忆',
@@ -182,6 +188,8 @@ const ZH: Dictionary = {
     typeWorldFact: '世界事实',
     typeExperience: '经历',
     defaultTitle: '记忆详情',
+    revealText: '查看原文',
+    hideText: '隐藏原文',
   },
   memoryDetailModal: {
     errorPrefix: '错误：{{message}}',
@@ -250,6 +258,7 @@ const ZH: Dictionary = {
     optionalHint: '上游 Graph2d 依赖 cytoscape / cytoscape-fcose，本阶段未引入；请使用星座图、表格或时间线。',
   },
   constellation: {
+    canvasLabel: '记忆星座图（{{count}} 个节点）；切换到表格视图可逐条阅读',
     hudStats: '记忆: {{memories}} · 可见: {{visible}} · 标签: {{labels}} · 链接: {{links}} · 缩放: {{zoom}}x',
     linkTypeSemantic: '语义',
     linkTypeTemporal: '时间',

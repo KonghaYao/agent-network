@@ -2,6 +2,8 @@
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/components/MemoryDetailModal.tsx
  * Modified for Agent Network: 平台导入替换；弹窗外壳与取数依赖不变。
+ * 阶段 4：嵌套在 Agent 记忆弹窗内时用 `z-[70]` 保证详情在上层；正文默认掩码，
+ * 揭示入口在 `MemoryDetailBody`。
  */
 
 import { EmptyState } from "../ui/empty-state";
@@ -43,7 +45,7 @@ export function MemoryDetailModal({ memoryId, onClose }: MemoryDetailModalProps)
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+      <DialogContent className="z-[70] max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle>{memory ? memoryTypeTitle(t, memory.type) : t("memoryDetail.defaultTitle")}</DialogTitle>
         </DialogHeader>
@@ -75,6 +77,8 @@ export function MemoryDetailModal({ memoryId, onClose }: MemoryDetailModalProps)
               entities: t("memoryDetailModal.sectionEntities"),
               tags: t("memoryDetailModal.sectionTags"),
               memoryId: t("memoryDetailModal.sectionMemoryId"),
+              revealText: t("memoryDetail.revealText"),
+              hideText: t("memoryDetail.hideText"),
             }}
           />
         ) : null}

@@ -2,6 +2,8 @@
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/components/use-data-view-data.ts
  * Modified for Agent Network: 导入改为本地 api/useRequest；取数口径与派生逻辑不变。
+ * 观察类型的整合状态改为不展示——本仓库的 Web 面板契约是「每个用户动作只发一次
+ * graph（include_rows）」，不能再额外请求 bank stats。
  */
 
 /**
@@ -103,27 +105,18 @@ export function useDataViewData({ factType, documentId, chunkId, initialQuery }:
         document_id: documentId,
         chunk_id: chunkId,
       }),
-    { onError: (err) => console.error("[DataView] loadData failed:", err) },
+    // 失败由调用方渲染可见失败块；不在这里打印 error，避免把服务端文案或正文写进控制台。
   );
 
   // 表格行数据（已由服务端过滤）
   const tableRows = useMemo(() => data?.table_rows ?? [], [data]);
 
   /**
-   * 观察类型的整合状态是辅助信息：图谱拿到数据后才有意义（`ready` 的前置数据语义），
-   * 失败只回落 `console.error` 并隐藏该块，不遮盖已经加载好的图数据——与改造前嵌套 `try/catch` 同形。
+   * 观察类型的整合状态属于辅助信息，但本仓库 Web 面板的取数契约禁止在 graph 之外
+   * 再发一次调用，因此该块固定不展示（`DataView` 在该值为 null 时整体隐藏）。
+   * 需要恢复时应由服务端在同一次 graph 响应里附带统计，而不是前端并行取数。
    */
-  const { data: bankStats, error: bankStatsError } = useRequest(() => hindsightApi.getBankStats(), {
-    ready: !!data && factType === "observation",
-    onError: (err) => console.error("[DataView] getBankStats failed:", err),
-  });
-  const consolidationStatus =
-    bankStats && !bankStatsError
-      ? {
-          pending_consolidation: bankStats.pending_consolidation ?? 0,
-          last_consolidated_at: bankStats.last_consolidated_at ?? null,
-        }
-      : null;
+  const consolidationStatus = null;
 
   // 转换 Graph2D 数据
   const graphData = useMemo(() => {

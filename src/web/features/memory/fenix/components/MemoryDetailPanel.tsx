@@ -113,6 +113,8 @@ export function MemoryDetailPanel({ memory, onClose, compact = false, inPanel = 
               entities: t("memoryDetailPanel.sectionEntities"),
               tags: t("memoryDetailPanel.sectionTags"),
               memoryId: t("memoryDetailPanel.sectionMemoryId"),
+              revealText: t("memoryDetail.revealText"),
+              hideText: t("memoryDetail.hideText"),
             }}
           />
         )}

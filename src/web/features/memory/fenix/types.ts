@@ -1,7 +1,9 @@
 /**
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/types.ts
- * Modified for Agent Network: 原样移植类型定义；未凭记忆新增字段。
+ * Modified for Agent Network: 原样移植类型定义；为 `network_agent_memory_graph`
+ * 的 `include_rows`/`timeline` 输出补充 `occurred_at`、`rows_truncated` 与
+ * `MemoryGraphTimeline`，未凭记忆新增服务端不存在的字段。
  */
 
 /** 内存单元 */
@@ -173,6 +175,8 @@ export interface MemoryTableRow {
   context?: string;
   occurred_start?: string | null;
   occurred_end?: string | null;
+  /** 服务端 `occurred_start ?? mentioned_at` 的回退值；时间线分组依据。 */
+  occurred_at?: string | null;
   mentioned_at?: string | null;
   proof_count?: number;
   tags?: string[];
@@ -182,9 +186,39 @@ export interface MemoryTableRow {
   node_id?: string;
 }
 
+/** 服务端一次返回的时间线分组；`start_index`/`end_index` 指向 `table_rows`。 */
+export interface MemoryTimelineGroup {
+  key: string;
+  label: string;
+  start: string | null;
+  end: string | null;
+  count: number;
+  start_index: number;
+  end_index: number;
+}
+
+export interface MemoryGraphTimeline {
+  groups: {
+    year: MemoryTimelineGroup[];
+    month: MemoryTimelineGroup[];
+    week: MemoryTimelineGroup[];
+    day: MemoryTimelineGroup[];
+  };
+  summary?: {
+    total: number | null;
+    returned: number;
+    dated: number;
+    undated: number;
+  };
+  basis: 'occurred_at';
+}
+
 /** Graph API 返回的整体数据结构 */
 export interface GraphApiData {
   table_rows?: MemoryTableRow[];
+  rows_truncated?: boolean;
+  /** `include_rows=true` 时同一次 graph 响应返回的分组。 */
+  timeline?: MemoryGraphTimeline;
   nodes?: Array<{ data: { id: string; label?: string; color?: string } }>;
   edges?: Array<{
     data: {

@@ -1,14 +1,17 @@
 /**
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/components/DataView.tsx
- * Modified for Agent Network: 平台导入替换；Graph2d 视图改为本地占位（本阶段不引入 cytoscape），其余四视图编排保持上游结构。
+ * Modified for Agent Network: 平台导入替换；Graph2d 视图改为本地占位（本阶段不引入 cytoscape），
+ * 其余四视图编排保持上游结构。
+ * 阶段 4：不展示 cytoscape 图谱入口（仅保留星座图/表格/时间线三种视图），并移除上游
+ * 缺失的 `images/memories-empty.webp` 插画引用；取数与视图切换结构不变。
  */
 
 import { EmptyState } from "../ui/empty-state";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { NS } from "../i18n";
-import { Calendar, CheckCircle, Clock, List, Network, ScatterChart } from "lucide-react";
+import { Calendar, CheckCircle, Clock, List, ScatterChart } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "../i18n";
 import { toHindsightFailure } from "../failure";
@@ -19,7 +22,6 @@ import { DataViewControlPanel } from "./data-view-control-panel";
 import type { FactType, RecencyBasis, ViewMode } from "./data-view-model";
 import { DataViewTable } from "./data-view-table";
 import { DataViewTimeline } from "./data-view-timeline";
-import { Graph2D } from "./Graph2d";
 import type { GraphNode } from "./graph-model";
 import { HindsightFailureNotice } from "./HindsightFailureNotice";
 import { MemoryDetailModal } from "./MemoryDetailModal";
@@ -58,8 +60,6 @@ export function DataView({
   onExpandToggle,
 }: DataViewProps) {
   const { t } = useTranslation(NS.HINDSIGHT);
-  // 图片在 vite base（/ctrl/）下分发：绝对路径必须以 BASE_URL 开头，缺前缀会落到后端非路由路径而加载失败。
-  const assetBase = import.meta.env.BASE_URL;
   const [viewMode, setViewMode] = useState<ViewMode>("constellation");
   const [compactMode, setCompactMode] = useState(compact);
   const [currentPage, setCurrentPage] = useState(1);
@@ -74,7 +74,6 @@ export function DataView({
   };
 
   // 图谱控制状态
-  const [showLabels] = useState(true);
   const [showControlPanel, setShowControlPanel] = useState(true);
 
   const {
@@ -86,7 +85,6 @@ export function DataView({
     consolidationStatus,
     graphData,
     linkStats,
-    maxNodes,
     recencyBasis,
     setRecencyBasis,
     recencyLookup,
@@ -110,13 +108,18 @@ export function DataView({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedGraphNode]);
 
-  // 节点点击回调
+  // 节点点击回调：窄屏没有侧栏空间，直接打开详情弹窗（桌面仍用右侧面板）。
   const handleGraphNodeClick = useCallback(
     (node: GraphNode) => {
       const nodeData = data?.table_rows?.find((row: MemoryTableRow) => row.id === node.id);
-      if (nodeData) {
-        setSelectedGraphNode(nodeData);
+      if (!nodeData) return;
+      const compactViewport =
+        typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
+      if (compactViewport) {
+        setModalMemoryId(nodeData.id);
+        return;
       }
+      setSelectedGraphNode(nodeData);
     },
     [data],
   );
@@ -132,7 +135,10 @@ export function DataView({
   };
 
   return (
-    <div className="fenix-memory-root flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+    <div
+      className="fenix-memory-root flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+      data-fenix-view={viewMode}
+    >
       {loading && !data ? (
         <Spinner label={t("dataView.loadingMemories")} className="flex py-12" />
       ) : failure ? (
@@ -150,12 +156,7 @@ export function DataView({
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <p className="text-sm font-semibold text-foreground">{t("dataView.emptyTitle")}</p>
           <p className="mt-1 text-xs text-muted-foreground">{t("dataView.emptyHint")}</p>
-          <img
-            src={`${assetBase}images/memories-empty.webp`}
-            alt={t("dataView.emptyTitle")}
-            className="w-[70%] max-w-full mt-6 mb-4 opacity-80"
-          />
-          <p className="text-xs text-muted-foreground">{t("dataView.emptyFooter")}</p>
+          <p className="mt-6 mb-4 text-xs text-muted-foreground">{t("dataView.emptyFooter")}</p>
         </div>
       ) : (
         <>
@@ -186,7 +187,7 @@ export function DataView({
                     {t("dataView.compact", { defaultValue: "Compact" })}
                   </Button>
                 )}
-                <div className="text-sm text-muted-foreground">
+                <div className="text-sm text-muted-foreground" data-fenix-summary>
                   {(data.table_rows?.length ?? 0) < (data.total_units ?? 0)
                     ? t("dataView.showingMemories", {
                         shown: data.table_rows?.length ?? 0,
@@ -226,7 +227,6 @@ export function DataView({
                 ariaLabel={t("dataView.viewSwitcher")}
                 options={[
                   { value: "constellation", icon: ScatterChart, label: t("dataView.constellation") },
-                  { value: "graph", icon: Network, label: t("dataView.graph") },
                   { value: "table", icon: List, label: t("dataView.table") },
                   { value: "timeline", icon: Calendar, label: t("dataView.timeline") },
                 ]}
@@ -234,8 +234,8 @@ export function DataView({
             </div>
           )}
 
-          {/* ── Graph / Constellation 共享可视化容器 ── */}
-          {!compactMode && (viewMode === "graph" || viewMode === "constellation") && (
+          {/* ── Constellation 可视化容器 ── */}
+          {!compactMode && viewMode === "constellation" && (
             <div className="min-h-0 flex-1">
               <MemoryVisualizationShell
                 panelOpen={showControlPanel}
@@ -257,36 +257,24 @@ export function DataView({
                   )
                 }
               >
-                {(height) =>
-                  viewMode === "graph" ? (
-                    <Graph2D
-                      data={graphData}
-                      height={height}
-                      showLabels={showLabels}
-                      onNodeClick={handleGraphNodeClick}
-                      maxNodes={maxNodes}
-                      nodeColorFn={nodeColorFn}
-                      linkColorFn={linkColorFn}
-                    />
-                  ) : (
-                    <Constellation
-                      data={graphData}
-                      height={height}
-                      onNodeClick={handleGraphNodeClick}
-                      nodeColorFn={nodeColorFn}
-                      linkColorFn={linkColorFn}
-                      nodeSizeFn={factType === "observation" ? observationNodeSizeFn : undefined}
-                      sizeLegendLabel={factType === "observation" ? t("dataView.sourceFactsLabel") : undefined}
-                      nodeHeatFn={recencyLookup ? recencyHeatFn : undefined}
-                      heatLegendLabel={
-                        recencyLookup
-                          ? t("dataView.recencyLabel", { basis: RECENCY_BASIS_LABEL[recencyBasis] })
-                          : undefined
-                      }
-                      heatLegendEndpoints={recencyEndpoints(recencyLookup)}
-                    />
-                  )
-                }
+                {(height) => (
+                  <Constellation
+                    data={graphData}
+                    height={height}
+                    onNodeClick={handleGraphNodeClick}
+                    nodeColorFn={nodeColorFn}
+                    linkColorFn={linkColorFn}
+                    nodeSizeFn={factType === "observation" ? observationNodeSizeFn : undefined}
+                    sizeLegendLabel={factType === "observation" ? t("dataView.sourceFactsLabel") : undefined}
+                    nodeHeatFn={recencyLookup ? recencyHeatFn : undefined}
+                    heatLegendLabel={
+                      recencyLookup
+                        ? t("dataView.recencyLabel", { basis: RECENCY_BASIS_LABEL[recencyBasis] })
+                        : undefined
+                    }
+                    heatLegendEndpoints={recencyEndpoints(recencyLookup)}
+                  />
+                )}
               </MemoryVisualizationShell>
             </div>
           )}

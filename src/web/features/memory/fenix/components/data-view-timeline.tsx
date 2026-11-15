@@ -2,6 +2,8 @@
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/components/data-view-timeline.tsx
  * Modified for Agent Network: 平台导入替换；渲染结构不变。
+ * 阶段 4：分组改为消费同一次 graph 响应里的 `timeline.groups`（year/month/week/day），
+ * 粒度切换只切本地索引、不再按 `occurred_start` 重新分组；组顺序沿用服务端的倒序。
  */
 
 import { EmptyState } from "../ui/empty-state";
@@ -11,22 +13,24 @@ import { Calendar, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ZoomI
 import { useMemo, useState } from "react";
 import { useTranslation } from "../i18n";
 import { maskSecrets } from '../../mask';
-import type { GraphApiData, MemoryTableRow } from "../types";
+import type { GraphApiData, MemoryTableRow, MemoryTimelineGroup } from "../types";
 
 /**
  * `DataView` 的时间线视图：按粒度（年 / 月 / 周 / 日）分组的记忆条目流，带缩放与组间跳转。
  *
- * 从 `DataView` 抽出：它与表格 / 图谱并列、彼此不共享渲染，粒度与当前组的游标也都是它自持的
- * （切视图即卸载，与页面无关）。分组口径（含「周」这一档的键与标签算法）就地留在本文件——
- * 只有这一个消费方，按「抽象延迟到第二个真实用例」先不单开模型层。
+ * 分组由服务端在同一次 `network_agent_memory_graph` 响应里给出（`timeline.groups`），
+ * `start_index`/`end_index` 指向 `table_rows`。粒度切换、组间导航都只读本地数据，不发请求。
  */
 type Granularity = "year" | "month" | "week" | "day";
 
 export interface DataViewTimelineProps {
-  /** 迁移前该 props 就未被使用（时间线只读 `filteredRows`），保留以免改口调用方。 */
   _data: GraphApiData;
   filteredRows: MemoryTableRow[];
   onMemoryClick: (id: string) => void;
+}
+
+function rowTime(row: MemoryTableRow): string | null {
+  return row.occurred_start ?? row.occurred_at ?? row.mentioned_at ?? null;
 }
 
 export function DataViewTimeline({ _data, filteredRows, onMemoryClick }: DataViewTimelineProps) {
@@ -34,83 +38,22 @@ export function DataViewTimeline({ _data, filteredRows, onMemoryClick }: DataVie
   const [granularity, setGranularity] = useState<Granularity>("month");
   const [currentIndex, setCurrentIndex] = useState(0);
 
-  // 过滤并按日期排序
-  const { sortedItems, itemsWithoutDates } = useMemo(() => {
-    if (!filteredRows || filteredRows.length === 0) return { sortedItems: [], itemsWithoutDates: [] };
-    const withDates = filteredRows
-      .filter((row) => row.occurred_start)
-      .sort((a, b) => new Date(a.occurred_start!).getTime() - new Date(b.occurred_start!).getTime());
-    const withoutDates = filteredRows.filter((row) => !row.occurred_start);
-    return { sortedItems: withDates, itemsWithoutDates: withoutDates };
-  }, [filteredRows]);
+  const timeline = _data.timeline;
+  const undated = timeline?.summary?.undated ?? 0;
 
-  // 按粒度分组
   const timelineGroups = useMemo(() => {
-    if (sortedItems.length === 0) return [];
+    const groups: MemoryTimelineGroup[] = timeline?.groups?.[granularity] ?? [];
+    return groups
+      .map((group) => ({
+        key: group.key,
+        label: group.label,
+        items: filteredRows.slice(group.start_index, group.end_index),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [timeline, granularity, filteredRows]);
 
-    const getGroupKey = (date: Date): string => {
-      const year = date.getFullYear();
-      const month = date.getMonth();
-      const day = date.getDate();
-      switch (granularity) {
-        case "year":
-          return `${year}`;
-        case "month":
-          return `${year}-${String(month + 1).padStart(2, "0")}`;
-        case "week": {
-          const startOfWeek = new Date(date);
-          startOfWeek.setDate(day - date.getDay());
-          return `${startOfWeek.getFullYear()}-W${String(Math.ceil(startOfWeek.getDate() / 7)).padStart(2, "0")}-${String(startOfWeek.getMonth() + 1).padStart(2, "0")}-${String(startOfWeek.getDate()).padStart(2, "0")}`;
-        }
-        case "day":
-          return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-      }
-    };
-
-    const getGroupLabel = (key: string, date: Date): string => {
-      switch (granularity) {
-        case "year":
-          return key;
-        case "month":
-          return date.toLocaleDateString(undefined, { year: "numeric", month: "short" });
-        case "week": {
-          const endOfWeek = new Date(date);
-          endOfWeek.setDate(date.getDate() + 6);
-          return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} - ${endOfWeek.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
-        }
-        case "day":
-          return date.toLocaleDateString(undefined, {
-            weekday: "short",
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          });
-      }
-    };
-
-    const groups: { [key: string]: { items: MemoryTableRow[]; date: Date } } = {};
-    sortedItems.forEach((row) => {
-      const date = new Date(row.occurred_start!);
-      const key = getGroupKey(date);
-      if (!groups[key]) {
-        let groupDate = date;
-        if (granularity === "week") {
-          const parts = key.split("-");
-          groupDate = new Date(
-            parseInt(parts[0] ?? '0', 10),
-            parseInt(parts[2] ?? '1', 10) - 1,
-            parseInt(parts[3] ?? '1', 10),
-          );
-        }
-        groups[key] = { items: [], date: groupDate };
-      }
-      groups[key].items.push(row);
-    });
-
-    return Object.entries(groups)
-      .sort(([, a], [, b]) => a.date.getTime() - b.date.getTime())
-      .map(([key, { items, date }]) => ({ key, label: getGroupLabel(key, date), items, date }));
-  }, [sortedItems, granularity]);
+  const totalItems = timelineGroups.reduce((total, group) => total + group.items.length, 0);
+  const activeIndex = Math.min(currentIndex, Math.max(timelineGroups.length - 1, 0));
 
   const scrollToGroup = (index: number) => {
     const clampedIndex = Math.max(0, Math.min(index, timelineGroups.length - 1));
@@ -119,11 +62,16 @@ export function DataViewTimeline({ _data, filteredRows, onMemoryClick }: DataVie
     element?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  const changeGranularity = (next: Granularity) => {
+    setGranularity(next);
+    setCurrentIndex(0);
+  };
+
   const zoomIn = () => {
     const levels: Granularity[] = ["year", "month", "week", "day"];
     const currentIdx = levels.indexOf(granularity);
     if (currentIdx < levels.length - 1) {
-      setGranularity(levels[currentIdx + 1]!);
+      changeGranularity(levels[currentIdx + 1]!);
     }
   };
 
@@ -131,17 +79,21 @@ export function DataViewTimeline({ _data, filteredRows, onMemoryClick }: DataVie
     const levels: Granularity[] = ["year", "month", "week", "day"];
     const currentIdx = levels.indexOf(granularity);
     if (currentIdx > 0) {
-      setGranularity(levels[currentIdx - 1]!);
+      changeGranularity(levels[currentIdx - 1]!);
     }
   };
 
-  if (sortedItems.length === 0) {
+  if (timelineGroups.length === 0) {
     return (
       <EmptyState
         className="py-12"
         icon={<Calendar />}
         title={t("dataView.noTimelineData")}
-        description={t("dataView.noTimelineDataDescription")}
+        description={
+          undated > 0
+            ? t("dataView.memoriesWithoutDatesInTable", { count: undated })
+            : t("dataView.noTimelineDataDescription")
+        }
       />
     );
   }
@@ -158,9 +110,8 @@ export function DataViewTimeline({ _data, filteredRows, onMemoryClick }: DataVie
       {/* 控制栏 */}
       <div className="flex shrink-0 items-center justify-between mb-3 gap-4">
         <div className="text-xs text-muted-foreground">
-          {t("dataView.timelineMemoriesCount", { count: sortedItems.length })}
-          {itemsWithoutDates.length > 0 &&
-            ` ${t("dataView.timelineWithoutDates", { count: itemsWithoutDates.length })}`}
+          {t("dataView.timelineMemoriesCount", { count: totalItems })}
+          {undated > 0 && ` ${t("dataView.timelineWithoutDates", { count: undated })}`}
         </div>
 
         <div className="flex items-center gap-1">
@@ -173,6 +124,7 @@ export function DataViewTimeline({ _data, filteredRows, onMemoryClick }: DataVie
               disabled={granularity === "year"}
               className="h-7 w-7 p-0"
               title={t("dataView.zoomOut")}
+              aria-label={t("dataView.zoomOut")}
             >
               <ZoomOut className="h-3 w-3" />
             </Button>
@@ -186,6 +138,7 @@ export function DataViewTimeline({ _data, filteredRows, onMemoryClick }: DataVie
               disabled={granularity === "day"}
               className="h-7 w-7 p-0"
               title={t("dataView.zoomIn")}
+              aria-label={t("dataView.zoomIn")}
             >
               <ZoomIn className="h-3 w-3" />
             </Button>
@@ -199,27 +152,30 @@ export function DataViewTimeline({ _data, filteredRows, onMemoryClick }: DataVie
               onClick={() => scrollToGroup(0)}
               disabled={timelineGroups.length <= 1}
               className="h-7 w-7 p-0"
+              aria-label={t("dataView.first")}
             >
               <ChevronsLeft className="h-3 w-3" />
             </Button>
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => scrollToGroup(currentIndex - 1)}
-              disabled={currentIndex === 0}
+              onClick={() => scrollToGroup(activeIndex - 1)}
+              disabled={activeIndex === 0}
               className="h-7 w-7 p-0"
+              aria-label={t("dataView.previous")}
             >
               <ChevronLeft className="h-3 w-3" />
             </Button>
             <span className="text-3xs px-2 min-w-15 text-center border-x border-border text-foreground">
-              {currentIndex + 1} / {timelineGroups.length}
+              {activeIndex + 1} / {timelineGroups.length}
             </span>
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => scrollToGroup(currentIndex + 1)}
-              disabled={currentIndex >= timelineGroups.length - 1}
+              onClick={() => scrollToGroup(activeIndex + 1)}
+              disabled={activeIndex >= timelineGroups.length - 1}
               className="h-7 w-7 p-0"
+              aria-label={t("dataView.next")}
             >
               <ChevronRight className="h-3 w-3" />
             </Button>
@@ -229,6 +185,7 @@ export function DataViewTimeline({ _data, filteredRows, onMemoryClick }: DataVie
               onClick={() => scrollToGroup(timelineGroups.length - 1)}
               disabled={timelineGroups.length <= 1}
               className="h-7 w-7 p-0"
+              aria-label={t("dataView.last")}
             >
               <ChevronsRight className="h-3 w-3" />
             </Button>
@@ -266,13 +223,13 @@ export function DataViewTimeline({ _data, filteredRows, onMemoryClick }: DataVie
                 >
                   <div className="w-15 text-right pr-3 pt-1 flex-shrink-0">
                     <div className="text-3xs text-muted-foreground">
-                      {new Date(item.occurred_start!).toLocaleDateString(undefined, {
+                      {new Date(rowTime(item) ?? item.mentioned_at ?? "").toLocaleDateString(undefined, {
                         month: "short",
                         day: "numeric",
                       })}
                     </div>
                     <div className="text-3xs text-muted-foreground/70">
-                      {new Date(item.occurred_start!).toLocaleTimeString(undefined, {
+                      {new Date(rowTime(item) ?? item.mentioned_at ?? "").toLocaleTimeString(undefined, {
                         hour: "2-digit",
                         minute: "2-digit",
                         hour12: false,
@@ -291,7 +248,7 @@ export function DataViewTimeline({ _data, filteredRows, onMemoryClick }: DataVie
                           .map((entity: string, _i: number) => (
                             <span
                               key={entity}
-                              className="text-3xs px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-medium"
+                              className="text-3xs px-1.5 py-0.5 rounded-full bg-primary/10 text-emerald-800 dark:text-emerald-300 font-medium"
                             >
                               {maskSecrets(entity)}
                             </span>

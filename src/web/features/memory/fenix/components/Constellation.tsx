@@ -2,6 +2,8 @@
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/components/Constellation.tsx
  * Modified for Agent Network: 平台导入替换；主题改为系统暗色偏好；其余交互与渲染编排保持上游结构。
+ * 阶段 4：canvas 增加可读的 `role="img"` 标签，并补稳定的 `fenix-constellation*` class 供
+ * e2e/样式定位（视觉不变）。
  */
 
 /**
@@ -251,19 +253,25 @@ export function Constellation({
     setIsFullscreen((prev) => !prev);
   }, []);
 
-  // Esc to exit fullscreen
+  // Esc to exit fullscreen；capture 阶段拦下，避免同一次 Escape 继续关闭外层记忆弹窗。
   useEffect(() => {
     if (!isFullscreen) return;
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setIsFullscreen(false);
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsFullscreen(false);
+      }
     };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
+    window.addEventListener("keydown", handleKey, true);
+    return () => window.removeEventListener("keydown", handleKey, true);
   }, [isFullscreen]);
 
   return (
     <div
       ref={wrapperRef}
+      className={`fenix-constellation${isFullscreen ? " is-fullscreen" : ""}`}
+      data-theme={isDark ? "dark" : "light"}
       style={
         isFullscreen
           ? {
@@ -275,11 +283,18 @@ export function Constellation({
           : { position: "relative", width: "100%", height: `${height}px` }
       }
     >
-      <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
+      <canvas
+        ref={canvasRef}
+        className="fenix-constellation-canvas"
+        role="img"
+        aria-label={t("constellation.canvasLabel", { count: data.nodes.length })}
+        style={{ width: "100%", height: "100%", display: "block" }}
+      />
 
       {/* Fullscreen toggle — 图标改用 lucide 的 `Maximize2` / `Minimize2`（原为两份逐字相同的内联
           SVG 属性块，只差 polyline/line 子元素；路径与 14px 尺寸逐点对应，见 commit 正文）。 */}
       <button
+        className="fenix-constellation-fullscreen"
         onClick={toggleFullscreen}
         style={{
           position: "absolute",
@@ -314,6 +329,8 @@ export function Constellation({
       {/* Tooltip */}
       <div
         ref={tooltipRef}
+        className="fenix-constellation-tooltip"
+        aria-hidden="true"
         style={{
           display: "none",
           position: "absolute",

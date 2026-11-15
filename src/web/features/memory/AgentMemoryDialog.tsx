@@ -1,46 +1,92 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Eye, Fingerprint, Globe, Network, Search, type LucideIcon } from 'lucide-react';
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from 'react';
 
 import { useWebSession } from '../../hooks/useWebSession';
-import { MemoryDetail, MemoryDetailPlaceholder } from './MemoryDetail';
-import { MemoryFacts } from './MemoryFacts';
-import { MemoryOverview } from './MemoryOverview';
-import {
-  availabilityText,
-  fetchMemoryOverview,
-  memoryFailureOf,
-  type MemoryFailure,
-  type MemoryOverviewResult,
-} from './memory-data';
+import { configureFenixMemoryApi } from './fenix/api';
+import { EmptyState } from './fenix/ui/empty-state';
+import { Input } from './fenix/ui/input';
+import { Spinner } from './fenix/ui/spinner';
+import { createMemoryFenixApi } from './fenix/memory-api';
+import { NS, useTranslation } from './fenix/i18n';
 import type { AgentMemoryTarget } from './memory-store';
+import './fenix/css/fenix.css';
 import './memory-panel.css';
 
-const MemoryConstellation = lazy(() =>
-  import('./MemoryConstellation').then((module) => ({ default: module.MemoryConstellation })),
+const DataView = lazy(() =>
+  import('./fenix/components/DataView').then((module) => ({ default: module.DataView })),
 );
-const MemoryTimeline = lazy(() =>
-  import('./MemoryTimeline').then((module) => ({ default: module.MemoryTimeline })),
+const MemoryDetailModal = lazy(() =>
+  import('./fenix/components/MemoryDetailModal').then((module) => ({
+    default: module.MemoryDetailModal,
+  })),
 );
 const MemoryEntities = lazy(() =>
   import('./MemoryEntities').then((module) => ({ default: module.MemoryEntities })),
 );
 
-type MemoryTab = 'overview' | 'constellation' | 'timeline' | 'entities' | 'facts';
+type MemoryPerspective = 'world' | 'experience' | 'observation' | 'entities';
 
-const TABS: { id: MemoryTab; label: string }[] = [
-  { id: 'overview', label: '概览' },
-  { id: 'constellation', label: '星座' },
-  { id: 'timeline', label: '时间线' },
-  { id: 'entities', label: '实体' },
-  { id: 'facts', label: '事实' },
-];
+const PERSPECTIVES = [
+  {
+    id: 'world',
+    icon: Globe,
+    labelKey: 'perspectives.world',
+    descriptionKey: 'perspectives.worldDescription',
+    markClass: 'bg-sky-500',
+  },
+  {
+    id: 'experience',
+    icon: Fingerprint,
+    labelKey: 'perspectives.experience',
+    descriptionKey: 'perspectives.experienceDescription',
+    markClass: 'bg-violet-500',
+  },
+  {
+    id: 'observation',
+    icon: Eye,
+    labelKey: 'perspectives.observation',
+    descriptionKey: 'perspectives.observationDescription',
+    markClass: 'bg-amber-500',
+  },
+  {
+    id: 'entities',
+    icon: Network,
+    labelKey: 'perspectives.entities',
+    descriptionKey: 'perspectives.entitiesDescription',
+    markClass: 'bg-rose-500',
+  },
+] as const satisfies ReadonlyArray<{
+  id: MemoryPerspective;
+  icon: LucideIcon;
+  labelKey: string;
+  descriptionKey: string;
+  markClass: string;
+}>;
+
+function isFactPerspective(
+  perspective: MemoryPerspective,
+): perspective is Exclude<MemoryPerspective, 'entities'> {
+  return perspective !== 'entities';
+}
 
 /**
- * 独立「Agent 记忆」弹窗：概览 / 星座 / 时间线 / 实体 / 事实。
+ * 独立「Agent 记忆」弹窗（Fenix 视角 IA）。
  *
- * 与本地账本 `MemoryDialog` 并存；不展示 bank/space/provider 等内部标识，
- * 正文默认掩码。弹窗本体由宿主懒加载；星座、时间线、实体在弹窗内再次
- * 懒加载，避免增加首屏主包体积。
+ * 视角栏：世界 / 经历 / 观察 / 实体；事实视角内由 Fenix `DataView` 提供
+ * 星座图 / 表格 / 时间线三种视图模式。每个用户动作只发一次
+ * `network_agent_memory_graph { include_rows: true, timezone }`；视图切换、
+ * 表格翻页、时间线缩放都不再取数。实体视角本阶段沿用既有 `MemoryEntities`
+ * （服务端分页），下一阶段再替换为 Fenix `EntitiesView`。
  */
 export function AgentMemoryDialog({
   target,
@@ -49,66 +95,24 @@ export function AgentMemoryDialog({
   target: AgentMemoryTarget;
   onClose: () => void;
 }) {
+  const { t } = useTranslation(NS.HINDSIGHT);
   const session = useWebSession();
   const token = session.session?.token ?? null;
-  const [overview, setOverview] = useState<MemoryOverviewResult | null>(null);
-  const [failure, setFailure] = useState<MemoryFailure | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [reloadKey, setReloadKey] = useState(0);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<MemoryTab>('overview');
-  const [visited, setVisited] = useState<Set<MemoryTab>>(() => new Set(['overview']));
+  const [perspective, setPerspective] = useState<MemoryPerspective>('world');
+  const [searchInput, setSearchInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
-  const detailTriggerRef = useRef<HTMLElement | null>(null);
-  const activeTabRef = useRef<MemoryTab>(activeTab);
-  activeTabRef.current = activeTab;
 
-  const selectMemory = (id: string, trigger?: HTMLElement | null) => {
-    detailTriggerRef.current = trigger ?? null;
-    setSelectedId(id);
-  };
+  const api = useMemo(
+    () => (token ? createMemoryFenixApi({ actorId: target.actor_id, token }) : null),
+    [target.actor_id, token],
+  );
 
-  /** 关闭详情后把焦点还给触发按钮；按钮因搜索/筛选卸载时回到当前 Tab。 */
-  const closeDetail = () => {
-    setSelectedId(null);
-    requestAnimationFrame(() => {
-      const trigger = detailTriggerRef.current;
-      if (trigger?.isConnected) {
-        trigger.focus({ preventScroll: true });
-        return;
-      }
-      document.getElementById(`memory-tab-${activeTabRef.current}`)?.focus({ preventScroll: true });
-    });
-  };
-
-  const switchTab = (next: MemoryTab) => {
-    if (next === activeTab) return;
-    setSelectedId(null);
-    detailTriggerRef.current = null;
-    setActiveTab(next);
-    setVisited((current) => {
-      if (current.has(next)) return current;
-      const updated = new Set(current);
-      updated.add(next);
-      return updated;
-    });
-  };
-
-  const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const index = TABS.findIndex((tab) => tab.id === activeTab);
-    let nextIndex = -1;
-    if (event.key === 'ArrowRight') nextIndex = (index + 1) % TABS.length;
-    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + TABS.length) % TABS.length;
-    else if (event.key === 'Home') nextIndex = 0;
-    else if (event.key === 'End') nextIndex = TABS.length - 1;
-    if (nextIndex < 0) return;
-    event.preventDefault();
-    const next = TABS[nextIndex]!;
-    switchTab(next.id);
-    requestAnimationFrame(() =>
-      document.getElementById(`memory-tab-${next.id}`)?.focus({ preventScroll: true }),
-    );
-  };
+  // 必须在子组件渲染/发起取数之前完成注入：Fenix 组件在 effect 里读取
+  // 模块级 `hindsightApi`，父组件 render 早于子组件 effect。
+  if (api) configureFenixMemoryApi(api);
+  useEffect(() => () => configureFenixMemoryApi(null), []);
 
   useEffect(() => {
     const previous = document.body.style.overflow;
@@ -118,73 +122,44 @@ export function AgentMemoryDialog({
     };
   }, []);
 
-  useEffect(() => {
-    if (!token) {
-      setLoading(false);
-      setFailure({ kind: 'error', message: '浏览器身份尚未初始化，请刷新页面后重试。' });
-      return undefined;
-    }
-    const controller = new AbortController();
-    setLoading(true);
-    setFailure(null);
-    setOverview(null);
-    void (async () => {
-      try {
-        const result = await fetchMemoryOverview(target.actor_id, token, controller.signal);
-        if (controller.signal.aborted) return;
-        setOverview(result);
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setFailure(memoryFailureOf(error));
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    })();
-    return () => controller.abort();
-  }, [reloadKey, target.actor_id, token]);
+  const switchPerspective = (next: MemoryPerspective) => {
+    if (next === perspective) return;
+    setSelectedMemoryId(null);
+    setPerspective(next);
+  };
 
-  const name = overview?.actor.name ?? target.name;
-  const canBrowse = Boolean(token && overview?.available && overview.stats);
-  const reachedBottom = Boolean(selectedId);
-
-  const unavailable = overview ? availabilityText(overview.reason) : null;
-
-  const panelProps = (id: MemoryTab) => ({
-    id: `memory-panel-${id}`,
-    role: 'tabpanel' as const,
-    'aria-labelledby': `memory-tab-${id}`,
-    hidden: activeTab !== id,
-    className: 'memory-tab-panel',
-  });
-
-  const unavailableNote = (id: string) => {
-    if (loading) {
-      return (
-        <p className="memory-status" id={id} role="status">
-          正在读取记忆统计…
-        </p>
-      );
+  const onPerspectiveKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    const index = PERSPECTIVES.findIndex((item) => item.id === perspective);
+    let nextIndex = -1;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = (index + 1) % PERSPECTIVES.length;
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = (index - 1 + PERSPECTIVES.length) % PERSPECTIVES.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = PERSPECTIVES.length - 1;
     }
-    if (failure) {
-      return (
-        <p className="memory-empty" id={id} data-state={failure.kind} role="status">
-          {failure.message}
-        </p>
-      );
-    }
-    if (overview && !overview.available) {
-      return (
-        <p className="memory-empty" id={id} data-state={overview.reason} role="status">
-          {unavailable}
-        </p>
-      );
-    }
-    return (
-      <p className="memory-empty" id={id} data-state="unavailable" role="status">
-        记忆面板暂不可用。
-      </p>
+    if (nextIndex < 0) return;
+    event.preventDefault();
+    const next = PERSPECTIVES[nextIndex]!;
+    switchPerspective(next.id);
+    requestAnimationFrame(() =>
+      document.getElementById(`memory-perspective-${next.id}`)?.focus({ preventScroll: true }),
     );
   };
+
+  const submitSearch = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSearchQuery(searchInput.trim());
+  };
+
+  const sessionError =
+    session.status === 'logged-out' || session.status === 'credential-invalid'
+      ? session.error
+      : session.status === 'error'
+        ? session.error
+        : null;
 
   return (
     <DialogPrimitive.Root open onOpenChange={(next) => (next ? undefined : onClose())}>
@@ -194,12 +169,6 @@ export function AgentMemoryDialog({
           className="agent-memory-dialog"
           id="agent-memory-dialog"
           aria-describedby="agent-memory-note"
-          onEscapeKeyDown={(event) => {
-            // 详情打开时 Escape 只关闭详情，并把焦点交还触发按钮。
-            if (!selectedId) return;
-            event.preventDefault();
-            closeDetail();
-          }}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             closeRef.current?.focus();
@@ -212,7 +181,7 @@ export function AgentMemoryDialog({
                 <h2 id="agent-memory-title">Agent 记忆</h2>
               </DialogPrimitive.Title>
               <span className="agent-memory-target" id="agent-memory-target">
-                {name}
+                {target.name}
               </span>
               <span className="memory-badge" id="agent-memory-readonly">
                 只读
@@ -231,154 +200,105 @@ export function AgentMemoryDialog({
             </button>
           </header>
 
-          <div className="agent-memory-body">
-            <div className="agent-memory-main">
-              <div className="memory-tabs" role="tablist" aria-label="记忆视图" onKeyDown={onTabKeyDown}>
-                {TABS.map((tab) => (
-                  <button
-                    type="button"
-                    role="tab"
-                    key={tab.id}
-                    id={`memory-tab-${tab.id}`}
-                    className={`memory-tab${activeTab === tab.id ? ' active' : ''}`}
-                    aria-selected={activeTab === tab.id}
-                    aria-controls={`memory-panel-${tab.id}`}
-                    tabIndex={activeTab === tab.id ? 0 : -1}
-                    onClick={() => switchTab(tab.id)}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
+          <div className="agent-memory-fenix-body fenix-memory-root">
+            <aside className="agent-memory-perspectives">
+              <div className="agent-memory-perspectives-head">
+                <strong>{t('perspectives.title')}</strong>
+                <span>{t('perspectives.description')}</span>
               </div>
 
-              <div className="memory-tab-panels">
-                <div {...panelProps('overview')}>
-                  {visited.has('overview') ? (
-                    <>
-                      <MemoryOverview
-                        targetName={name}
-                        result={overview}
-                        failure={failure}
-                        loading={loading}
-                      />
-                      {failure ? (
-                        <button
-                          type="button"
-                          className="memory-retry"
-                          id="memory-overview-retry"
-                          onClick={() => setReloadKey((value) => value + 1)}
-                        >
-                          重新读取
-                        </button>
-                      ) : null}
-                    </>
-                  ) : null}
-                </div>
+              {isFactPerspective(perspective) ? (
+                <form className="agent-memory-search" onSubmit={submitSearch} role="search">
+                  <Search aria-hidden="true" />
+                  <Input
+                    id="memory-fenix-search"
+                    value={searchInput}
+                    onInput={(event) => setSearchInput(event.currentTarget.value)}
+                    placeholder={t('workspace.searchPlaceholder')}
+                    aria-label={t('workspace.searchPlaceholder')}
+                    className="bg-background pl-9"
+                  />
+                </form>
+              ) : null}
 
-                <div {...panelProps('constellation')}>
-                  {visited.has('constellation') ? (
-                    canBrowse && token ? (
-                      <Suspense
-                        fallback={
-                          <p className="memory-status" role="status">
-                            正在加载星座图…
-                          </p>
-                        }
-                      >
-                        <MemoryConstellation
-                          actorId={target.actor_id}
-                          token={token}
-                          activeId={selectedId}
-                          onSelect={selectMemory}
-                        />
-                      </Suspense>
-                    ) : (
-                      unavailableNote('memory-graph-status')
-                    )
-                  ) : null}
-                </div>
-
-                <div {...panelProps('timeline')}>
-                  {visited.has('timeline') ? (
-                    canBrowse && token ? (
-                      <Suspense
-                        fallback={
-                          <p className="memory-status" role="status">
-                            正在加载时间线…
-                          </p>
-                        }
-                      >
-                        <MemoryTimeline
-                          actorId={target.actor_id}
-                          token={token}
-                          activeId={selectedId}
-                          onSelect={selectMemory}
-                        />
-                      </Suspense>
-                    ) : (
-                      unavailableNote('memory-timeline-status')
-                    )
-                  ) : null}
-                </div>
-
-                <div {...panelProps('entities')}>
-                  {visited.has('entities') ? (
-                    canBrowse && token ? (
-                      <Suspense
-                        fallback={
-                          <p className="memory-status" role="status">
-                            正在加载实体…
-                          </p>
-                        }
-                      >
-                        <MemoryEntities
-                          actorId={target.actor_id}
-                          token={token}
-                          onSelectMemory={selectMemory}
-                        />
-                      </Suspense>
-                    ) : (
-                      unavailableNote('memory-entities-status')
-                    )
-                  ) : null}
-                </div>
-
-                <div {...panelProps('facts')}>
-                  {visited.has('facts') ? (
-                    canBrowse && token ? (
-                      <MemoryFacts
-                        actorId={target.actor_id}
-                        token={token}
-                        activeId={selectedId}
-                        onSelect={selectMemory}
-                      />
-                    ) : (
-                      unavailableNote('memory-facts-status')
-                    )
-                  ) : null}
-                </div>
-              </div>
-            </div>
-            <aside
-              className={`memory-detail-column${reachedBottom ? ' open' : ''}`}
-              aria-label="记忆详情"
-            >
-              {canBrowse && token && selectedId ? (
-                <MemoryDetail
-                  actorId={target.actor_id}
-                  token={token}
-                  memoryId={selectedId}
-                  onClose={closeDetail}
-                />
-              ) : (
-                <MemoryDetailPlaceholder />
-              )}
+              <nav
+                className="agent-memory-perspective-list"
+                aria-label={t('perspectives.title')}
+                onKeyDown={onPerspectiveKeyDown}
+              >
+                {PERSPECTIVES.map(({ id, icon: Icon, labelKey, descriptionKey, markClass }) => {
+                  const selected = perspective === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      id={`memory-perspective-${id}`}
+                      className={`agent-memory-perspective${selected ? ' active' : ''}`}
+                      aria-pressed={selected}
+                      onClick={() => switchPerspective(id)}
+                    >
+                      <span className={`agent-memory-perspective-mark ${markClass}`} aria-hidden="true" />
+                      <Icon aria-hidden="true" />
+                      <span className="agent-memory-perspective-text">
+                        <strong>{t(labelKey)}</strong>
+                        <span>{t(descriptionKey)}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </nav>
             </aside>
+
+            <div className="agent-memory-content">
+              {session.status === 'loading' ? (
+                <Spinner className="flex py-16" label="正在读取浏览器身份…" />
+              ) : sessionError ? (
+                <EmptyState
+                  tone="danger"
+                  role="alert"
+                  className="py-16"
+                  title="浏览器身份尚未就绪"
+                  description={sessionError}
+                />
+              ) : !token ? (
+                <EmptyState
+                  role="alert"
+                  className="py-16"
+                  title="浏览器身份尚未初始化"
+                  description="请刷新页面后重试。"
+                />
+              ) : perspective === 'entities' ? (
+                <Suspense fallback={<Spinner className="flex py-16" label="正在加载实体…" />}>
+                  <MemoryEntities
+                    actorId={target.actor_id}
+                    token={token}
+                    onSelectMemory={(id) => setSelectedMemoryId(id)}
+                  />
+                </Suspense>
+              ) : (
+                <Suspense fallback={<Spinner className="flex py-16" label="正在加载记忆…" />}>
+                  <DataView
+                    key={`${perspective}:${searchQuery}`}
+                    factType={perspective}
+                    initialQuery={searchQuery}
+                  />
+                </Suspense>
+              )}
+            </div>
           </div>
 
           <p className="agent-memory-note" id="agent-memory-note" role="note">
             后端原始记忆，可能包含其他会话信息；本地遗忘可能尚未同步。面板只读，不修改任何记忆。
           </p>
+
+          {selectedMemoryId ? (
+            <Suspense fallback={null}>
+              <MemoryDetailModal
+                memoryId={selectedMemoryId}
+                onClose={() => setSelectedMemoryId(null)}
+              />
+            </Suspense>
+          ) : null}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
