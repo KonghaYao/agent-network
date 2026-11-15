@@ -549,6 +549,10 @@ export const LIMITS = {
   memoryPanelEntitiesPageMax: 100,
   /** 搜索词字符上限。 */
   memoryPanelSearchMax: 120,
+  /** 搜索输入防抖（毫秒）。 */
+  memoryPanelSearchDebounceMs: 400,
+  /** 事实列表每条展示的实体预览数。 */
+  memoryPanelFactEntitiesShown: 3,
   /** 记忆图节点文本 / label 字符上限。 */
   memoryPanelGraphTextChars: 600,
   memoryPanelGraphLabelChars: 80,

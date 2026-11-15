@@ -108,6 +108,25 @@ const SECRET_BEARER = 'sk-testonly-memory-panel-token';
 const SECRET_URL = 'SECRET-URL-TOKEN';
 const SECRET_CONTEXT = 'sk-testonly-context-token';
 const SECRET_SOURCE = 'SRC-TOKEN-987654';
+const SECRET_PASSWORD = 'hunter2-panel-secret';
+const SECRET_COOKIE = 'session-cookie-778899';
+const SECRET_SET_COOKIE = 'set-cookie-445566';
+const SECRET_PRIVATE_KEY = 'MIIEowIBAAKCAQEAprivatekeybody';
+const SECRET_AWS = 'AKIAIOSFODNN7EXAMPLE';
+const SECRET_ENTITY_AWS = 'AKIAENTITYSECRET1234';
+const SECRET_ENTITY_PASSWORD = 'entity-secret-800';
+const SECRET_TAG_PASSWORD = 'tag-secret-900';
+
+const MEMORY_TEXT = [
+  `Deploy runbook uses Authorization: Bearer ${SECRET_BEARER} and https://example.com/hook?token=${SECRET_URL}`,
+  `password=${SECRET_PASSWORD}`,
+  `Cookie: session=${SECRET_COOKIE}`,
+  `Set-Cookie: sid=${SECRET_SET_COOKIE}`,
+  `${SECRET_AWS}`,
+  '-----BEGIN RSA PRIVATE KEY-----',
+  SECRET_PRIVATE_KEY,
+  '-----END RSA PRIVATE KEY-----',
+].join('\n');
 
 function memoryItem(id: string, type: 'world' | 'experience' | 'observation', text: string) {
   return {
@@ -118,9 +137,9 @@ function memoryItem(id: string, type: 'world' | 'experience' | 'observation', te
     mentioned_at: '2026-10-01T09:30:00.000Z',
     occurred_start: null,
     occurred_end: null,
-    entities: ['deploy', 'runbook'],
+    entities: ['deploy', 'runbook'] as string[],
     proof_count: 3,
-    tags: [],
+    tags: [] as string[],
   };
 }
 
@@ -136,12 +155,12 @@ async function installMemoryStub(
     archived: false,
     disabled: false,
   };
+  const primary = memoryItem('mem-1', 'world', MEMORY_TEXT);
+  // 实体与标签同样可能被上游写入敏感值，默认渲染必须走 maskSecrets。
+  primary.entities = ['deploy', SECRET_ENTITY_AWS, `password=${SECRET_ENTITY_PASSWORD}`];
+  primary.tags = ['ops', SECRET_ENTITY_AWS, `password=${SECRET_TAG_PASSWORD}`];
   const items = [
-    memoryItem(
-      'mem-1',
-      'world',
-      `Deploy runbook uses Authorization: Bearer ${SECRET_BEARER} and https://example.com/hook?token=${SECRET_URL}`,
-    ),
+    primary,
     memoryItem('mem-2', 'experience', 'Experience: deploy window is Thursday; retry after rollback.'),
     memoryItem('mem-3', 'observation', 'Observation: the deploy dashboard was slow twice.'),
     memoryItem('mem-4', 'world', 'World: the staging deploy uses an isolated project.'),
@@ -410,14 +429,31 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(facts).toHaveCount(4);
     await expect(page.locator('#memory-facts-more')).toHaveCount(0);
 
-    // 详情默认掩码，原文秘密不能进入 DOM。
+    // 事实列表的实体预览默认掩码；详情、上下文、来源与标签默认掩码。
+    const factListText = await page.locator('#memory-facts-list').textContent();
+    expect(factListText).not.toContain(SECRET_ENTITY_AWS);
+    expect(factListText).not.toContain(SECRET_ENTITY_PASSWORD);
+    expect(factListText).toContain('[已隐藏]');
+
     await facts.first().click();
     await expect(page.locator('#memory-detail-text')).toBeVisible();
-    const dialogText = await page.locator('#agent-memory-dialog').innerText();
-    expect(dialogText).not.toContain(SECRET_BEARER);
-    expect(dialogText).not.toContain(SECRET_URL);
-    expect(dialogText).not.toContain(SECRET_CONTEXT);
-    expect(dialogText).not.toContain(SECRET_SOURCE);
+    const dialogText = (await page.locator('#agent-memory-dialog').textContent()) ?? '';
+    for (const secret of [
+      SECRET_BEARER,
+      SECRET_URL,
+      SECRET_CONTEXT,
+      SECRET_SOURCE,
+      SECRET_PASSWORD,
+      SECRET_COOKIE,
+      SECRET_SET_COOKIE,
+      SECRET_PRIVATE_KEY,
+      SECRET_AWS,
+      SECRET_ENTITY_AWS,
+      SECRET_ENTITY_PASSWORD,
+      SECRET_TAG_PASSWORD,
+    ]) {
+      expect(dialogText).not.toContain(secret);
+    }
     expect(dialogText).toContain('[已隐藏]');
     for (const forbidden of ['bank', 'bank_id', 'space_id', 'provider', 'document_id', 'chunk_id']) {
       expect(dialogText.toLowerCase()).not.toContain(forbidden);
@@ -425,9 +461,19 @@ test.describe('Agent 记忆弹窗', () => {
     await page.locator('#memory-detail-reveal').click();
     await expect(page.locator('#memory-detail-text')).toContainText(SECRET_BEARER);
     await expect(page.locator('#memory-detail-text')).toContainText(SECRET_URL);
+    await expect(page.locator('#memory-detail-text')).toContainText(SECRET_PASSWORD);
+    await expect(page.locator('#memory-detail-text')).toContainText(SECRET_COOKIE);
+    await expect(page.locator('#memory-detail-text')).toContainText(SECRET_SET_COOKIE);
+    await expect(page.locator('#memory-detail-text')).toContainText(SECRET_AWS);
+    await expect(page.locator('#memory-detail-text')).toContainText(SECRET_PRIVATE_KEY);
     await expect(page.locator('#memory-detail-reveal')).toHaveText('隐藏原文');
     await expect(page.locator('#memory-detail-context')).toContainText(SECRET_CONTEXT);
     await expect(page.locator('#memory-detail-sources')).toContainText(SECRET_SOURCE);
+    await expect(page.locator('#memory-detail-tags')).toContainText(SECRET_ENTITY_AWS);
+    await expect(page.locator('#memory-detail-tags')).toContainText(`password=${SECRET_TAG_PASSWORD}`);
+    // 实体没有「查看原文」入口，即使正文已展开也必须保持掩码。
+    await expect(facts.first()).not.toContainText(SECRET_ENTITY_AWS);
+    await expect(facts.first()).not.toContainText(SECRET_ENTITY_PASSWORD);
 
     const serious = (
       await new AxeBuilder({ page })
@@ -437,8 +483,18 @@ test.describe('Agent 记忆弹窗', () => {
     ).violations.filter((item) => item.impact === 'critical' || item.impact === 'serious');
     expect(serious.map((item) => `${item.id}(${item.impact})`)).toEqual([]);
 
+    // 关闭详情后焦点回到触发详情的事实按钮。
     await page.locator('#memory-detail-close').click();
     await expect(page.locator('#memory-detail-text')).toHaveCount(0);
+    await expect(facts.first()).toBeFocused();
+
+    // Escape 优先关闭详情并归还焦点，不关闭整个弹窗。
+    await facts.first().click();
+    await expect(page.locator('#memory-detail-text')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#memory-detail-text')).toHaveCount(0);
+    await expect(page.locator('#agent-memory-dialog')).toBeVisible();
+    await expect(facts.first()).toBeFocused();
 
     const listCalls = () => calls.filter((call) => call.name === 'network_agent_memory_list');
     const beforeSearch = listCalls().length;

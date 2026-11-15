@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { LIMITS } from '../../../contracts/limits';
 import {
   availabilityText,
   FACT_TYPE_LABEL,
@@ -137,7 +138,9 @@ export function MemoryDetail({
             ) : null}
           </div>
           {memory.text_truncated ? (
-            <p className="memory-hint">正文超过 32 KB，服务端已截断。</p>
+            <p className="memory-hint">
+              正文超过 {Math.round(LIMITS.memoryPanelDetailTextBytes / 1024)} KB，服务端已截断。
+            </p>
           ) : null}
 
           {memory.context ? (
@@ -190,7 +193,11 @@ export function MemoryDetail({
               {memory.tags.length > 0 ? (
                 <div>
                   <dt>标签</dt>
-                  <dd>{memory.tags.join('、')}</dd>
+                  <dd id="memory-detail-tags">
+                    {revealed
+                      ? memory.tags.join('、')
+                      : memory.tags.map((tag) => maskSecrets(tag)).join('、')}
+                  </dd>
                 </div>
               ) : null}
             </dl>

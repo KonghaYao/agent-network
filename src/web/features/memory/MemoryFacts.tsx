@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 
+import { LIMITS } from '../../../contracts/limits';
 import {
   availabilityText,
   FACT_TYPE_LABEL,
@@ -13,7 +14,6 @@ import {
 import { maskSecrets } from './mask';
 
 type TypeFilter = 'all' | MemoryFactType;
-const PAGE_SIZE = 20;
 
 const FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'all', label: '全部类型' },
@@ -35,7 +35,7 @@ export function MemoryFacts({
   actorId: string;
   token: string;
   activeId: string | null;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, trigger: HTMLButtonElement) => void;
 }) {
   const [queryInput, setQueryInput] = useState('');
   const [query, setQuery] = useState('');
@@ -53,7 +53,7 @@ export function MemoryFacts({
   const requestRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    const timer = setTimeout(() => setQuery(queryInput.trim()), 400);
+    const timer = setTimeout(() => setQuery(queryInput.trim()), LIMITS.memoryPanelSearchDebounceMs);
     return () => clearTimeout(timer);
   }, [queryInput]);
 
@@ -76,7 +76,7 @@ export function MemoryFacts({
           actorId,
           token,
           {
-            limit: PAGE_SIZE,
+            limit: LIMITS.memoryPanelFactsPageDefault,
             offset: 0,
             ...(query ? { q: query } : {}),
             ...(typeFilter === 'all' ? {} : { type: typeFilter }),
@@ -116,7 +116,7 @@ export function MemoryFacts({
         actorId,
         token,
         {
-          limit: PAGE_SIZE,
+          limit: LIMITS.memoryPanelFactsPageDefault,
           offset: nextOffset,
           ...(query ? { q: query } : {}),
           ...(typeFilter === 'all' ? {} : { type: typeFilter }),
@@ -170,7 +170,7 @@ export function MemoryFacts({
             id="memory-facts-search"
             type="search"
             value={queryInput}
-            maxLength={120}
+            maxLength={LIMITS.memoryPanelSearchMax}
             placeholder="搜索记忆正文（服务端子串匹配）"
             autoComplete="off"
             onChange={(event) => setQueryInput(event.target.value)}
@@ -232,7 +232,7 @@ export function MemoryFacts({
                 className={`memory-fact${activeId === item.id ? ' active' : ''}`}
                 data-fact-id={item.id}
                 aria-pressed={activeId === item.id}
-                onClick={() => onSelect(item.id)}
+                onClick={(event) => onSelect(item.id, event.currentTarget)}
               >
                 <span className="memory-fact-head">
                   <span
@@ -248,13 +248,15 @@ export function MemoryFacts({
                 </span>
                 <span className="memory-fact-text">{maskSecrets(item.text)}</span>
                 <span className="memory-fact-meta">
-                  {item.entities.slice(0, 3).map((entity) => (
+                  {item.entities.slice(0, LIMITS.memoryPanelFactEntitiesShown).map((entity) => (
                     <span className="memory-entity" key={entity}>
-                      {entity}
+                      {maskSecrets(entity)}
                     </span>
                   ))}
-                  {item.entities.length > 3 ? (
-                    <span className="memory-entity">+{item.entities.length - 3}</span>
+                  {item.entities.length > LIMITS.memoryPanelFactEntitiesShown ? (
+                    <span className="memory-entity">
+                      +{item.entities.length - LIMITS.memoryPanelFactEntitiesShown}
+                    </span>
                   ) : null}
                   <span>证据 {item.proof_count}</span>
                 </span>

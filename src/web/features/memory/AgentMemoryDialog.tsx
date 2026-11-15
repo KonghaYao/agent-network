@@ -35,6 +35,21 @@ export function AgentMemoryDialog({
   const [reloadKey, setReloadKey] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const detailTriggerRef = useRef<HTMLButtonElement | null>(null);
+
+  const selectMemory = (id: string, trigger: HTMLButtonElement) => {
+    detailTriggerRef.current = trigger;
+    setSelectedId(id);
+  };
+
+  /** 关闭详情后把焦点还给触发按钮；按钮因搜索/筛选卸载时保持原状。 */
+  const closeDetail = () => {
+    setSelectedId(null);
+    requestAnimationFrame(() => {
+      const trigger = detailTriggerRef.current;
+      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+    });
+  };
 
   useEffect(() => {
     const previous = document.body.style.overflow;
@@ -81,6 +96,12 @@ export function AgentMemoryDialog({
           className="agent-memory-dialog"
           id="agent-memory-dialog"
           aria-describedby="agent-memory-note"
+          onEscapeKeyDown={(event) => {
+            // 详情打开时 Escape 只关闭详情，并把焦点交还事实按钮。
+            if (!selectedId) return;
+            event.preventDefault();
+            closeDetail();
+          }}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             closeRef.current?.focus();
@@ -135,7 +156,7 @@ export function AgentMemoryDialog({
                   actorId={target.actor_id}
                   token={token}
                   activeId={selectedId}
-                  onSelect={setSelectedId}
+                  onSelect={selectMemory}
                 />
               ) : null}
             </div>
@@ -148,7 +169,7 @@ export function AgentMemoryDialog({
                   actorId={target.actor_id}
                   token={token}
                   memoryId={selectedId}
-                  onClose={() => setSelectedId(null)}
+                  onClose={closeDetail}
                 />
               ) : (
                 <MemoryDetailPlaceholder />

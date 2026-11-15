@@ -17,6 +17,7 @@ import { chromium, type Browser, type BrowserContext, type Locator, type Page } 
 
 import { extractMessageFileLinks } from '../src/contracts/file-links';
 import { LIMITS } from '../src/contracts/limits';
+import { maskSecrets } from '../src/web/features/memory/mask';
 import {
   buildSendPlan,
   type HistoryItem,
@@ -4499,9 +4500,44 @@ async function runStreamInvalidationAcceptance(
   }
 }
 
+function runMemoryMaskChecks(): void {
+  const cases: { label: string; input: string; secret: string }[] = [
+    { label: '掩码：password=', input: 'db password=hunter2-pass', secret: 'hunter2-pass' },
+    { label: '掩码：passwd:', input: 'passwd: hunter3-pass', secret: 'hunter3-pass' },
+    { label: '掩码：Cookie 头', input: 'Cookie: session=abc123; theme=dark', secret: 'abc123' },
+    { label: '掩码：Set-Cookie 头', input: 'Set-Cookie: sid=xyz789; HttpOnly', secret: 'xyz789' },
+    { label: '掩码：JSON password', input: '{"password": "json-secret-1"}', secret: 'json-secret-1' },
+    { label: '掩码：?key=', input: 'https://example.com/hook?key=legacy-key', secret: 'legacy-key' },
+    {
+      label: '掩码：私钥块',
+      input:
+        '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAprivatekeybody\n-----END RSA PRIVATE KEY-----',
+      secret: 'MIIEowIBAAKCAQEAprivatekeybody',
+    },
+    {
+      label: '掩码：AWS access key',
+      input: 'AKIAIOSFODNN7EXAMPLE',
+      secret: 'AKIAIOSFODNN7EXAMPLE',
+    },
+    {
+      label: '掩码：Bearer',
+      input: `Authorization: Bearer ${'a'.repeat(24)}`,
+      secret: 'a'.repeat(24),
+    },
+    { label: '掩码：sk- 前缀', input: 'sk-testonly-memory-key', secret: 'sk-testonly-memory-key' },
+  ];
+  for (const { label, input, secret } of cases) {
+    const masked = maskSecrets(input);
+    check(label, !masked.includes(secret) && masked.includes('[已隐藏]'), masked);
+  }
+  checkEqual('掩码：普通文本保持不变', maskSecrets('Deploy window is Thursday.'), 'Deploy window is Thursday.');
+  checkEqual('掩码：裸 key= 不误伤', maskSecrets('key=value'), 'key=value');
+}
+
 async function main(): Promise<void> {
   await runFileTicketSecretChecks();
   runAutoMentionPlanChecks();
+  runMemoryMaskChecks();
   const server = await startServer();
   process.env.AGENTNET_URL = server.base;
   let browser: Browser | null = null;
