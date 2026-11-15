@@ -178,8 +178,8 @@ export function useActorStream({ token, onEvent }: StreamOptions): StreamState {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
     /**
-     * 首次 ack 本身不直接补拉；调用方用 `at` 与首屏查询完成时刻比较，
-     * 只补握手窗口。重连 ack 仍由调用方整体刷新。
+     * 首次 ack 本身不直接补拉；调用方用 `at` 与首屏 history 请求发起
+     * 时刻比较，只补握手窗口。重连 ack 仍由调用方整体刷新。
      */
     let connected = false;
 

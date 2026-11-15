@@ -4404,15 +4404,29 @@ async function runStreamInvalidationAcceptance(
       '流失效范围首屏 50 条',
       20_000,
     );
-    await sleep(600);
+    // 首次 ack 晚于 history 请求发起时必须补拉一次，因此首屏允许 2 次；
+    // 等补拉落定后再取基线，随后再观察 600ms 确认不形成循环。
+    await sleep(1_200);
 
-    checkEqual(
-      '首屏无 cursor history 恰好 1 次',
-      await roomHistoryWithoutCursor(page, roomId),
-      1,
-    );
-    checkEqual('首屏 room_get 恰好 1 次', await roomCallCount(page, 'network_room_get', roomId), 1);
+    const firstHistory = await roomHistoryWithoutCursor(page, roomId);
+    check('首屏无 cursor history 至少 1 次', firstHistory >= 1, firstHistory);
+    check('首屏无 cursor history 至多 2 次', firstHistory <= 2, firstHistory);
+    const firstRoomGet = await roomCallCount(page, 'network_room_get', roomId);
+    check('首屏 room_get 至少 1 次', firstRoomGet >= 1, firstRoomGet);
+    check('首屏 room_get 至多 2 次', firstRoomGet <= 2, firstRoomGet);
     checkEqual('首屏 rooms_list 恰好 1 次', await mcpCallCount(page, 'network_rooms_list'), 1);
+
+    await sleep(600);
+    checkEqual(
+      '首屏无 cursor history 不循环',
+      await roomHistoryWithoutCursor(page, roomId),
+      firstHistory,
+    );
+    checkEqual(
+      '首屏 room_get 不循环',
+      await roomCallCount(page, 'network_room_get', roomId),
+      firstRoomGet,
+    );
 
     // 先加载 older，后续刷新必须保留这一页。
     await page.evaluate(`document.getElementById('older')?.click()`);

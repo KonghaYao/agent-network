@@ -234,15 +234,18 @@ export function useRoomChat(roomId: string) {
   const historyKey = queryKeys.history(roomId, humanTimeline);
 
   /**
-   * 首屏 history 查询完成时刻，按挂载/切房后的首次查询记录。
-   * 首次 ack 晚于它时，两者之间存在不会被订阅重放的握手窗口。
+   * 首屏 history 请求发起时刻，按挂载/切房后的首次查询记录。
+   *
+   * 不能用“响应完成时刻”判断握手窗口：请求可能先被服务端读取快照，
+   * 响应却晚于 ack 才完成。只要 ack 晚于请求发起，快照就可能早于订阅
+   * 覆盖，必须补拉一次；响应何时完成不影响判断。
    */
-  const initialHistoryCompletedRef = useRef<{ roomId: string; at: number | null }>({
+  const initialHistoryRequestedRef = useRef<{ roomId: string; at: number | null }>({
     roomId,
     at: null,
   });
-  if (initialHistoryCompletedRef.current.roomId !== roomId) {
-    initialHistoryCompletedRef.current = { roomId, at: null };
+  if (initialHistoryRequestedRef.current.roomId !== roomId) {
+    initialHistoryRequestedRef.current = { roomId, at: null };
   }
 
   const detailQuery = useQuery({
@@ -258,6 +261,8 @@ export function useRoomChat(roomId: string) {
     // 翻页与刷新写同一份缓存；提交时以当时的缓存为准，避免晚到的刷新覆盖 older。
     structuralSharing: shareHistoryCache,
     queryFn: async ({ client, signal, queryKey }) => {
+      const first = initialHistoryRequestedRef.current;
+      if (first.roomId === roomId && first.at === null) first.at = Date.now();
       const previous = client.getQueryData<HistoryCache>(queryKey) ?? null;
       const page = await callTool<HistoryPage>(
         'network_history_list',
@@ -292,8 +297,6 @@ export function useRoomChat(roomId: string) {
         olderPages: 0,
         resumeCursor: page.timeline_resume_cursor ?? current?.resumeCursor ?? null,
       });
-      const first = initialHistoryCompletedRef.current;
-      if (first.roomId === roomId && first.at === null) first.at = Date.now();
       return merged;
     },
   });
@@ -436,10 +439,11 @@ export function useRoomChat(roomId: string) {
    * SSE 只给“某处变了”的提示；300ms 窗口内按房间与查询类别合并，
    * 窗口结束后让查询自己重读权威状态。
    *
-   * 首次 ack 不代表订阅已经覆盖首屏：如果 ack 晚于首屏 history 完成，
-   * 两者之间写入的消息不会被重放，必须补拉一次当前房间。ack 早于或与
-   * 首屏 history 同时完成时，首屏查询已经覆盖，不额外读取。
-   * 重连 ack 仍整体刷新，覆盖断线期间错过的事件。
+   * 首次 ack 不代表订阅已经覆盖首屏：只要 ack 晚于首屏 history 的请求
+   * 发起时刻，服务端可能已经读过更早的快照，而 ack 之前写入的消息不会
+   * 被订阅重放，必须补拉一次当前房间，与响应何时完成无关。
+   * ack 早于或等于请求发起时，请求在订阅建立后才发出，首屏查询已经覆盖，
+   * 不额外读取。重连 ack 仍整体刷新，覆盖断线期间错过的事件。
    */
   const scheduleRefresh = useCallback(
     (event: ActorStreamEvent) => {
@@ -455,9 +459,9 @@ export function useRoomChat(roomId: string) {
           // 首次 ack 只判断一次，避免重复 ack/事件再次触发补拉。
           if (initialAckHandledRef.current) return;
           initialAckHandledRef.current = true;
-          const completedAt = initialHistoryCompletedRef.current.at;
-          if (completedAt === null || event.at <= completedAt) return;
-          // 握手窗口：history 已完成但 ack 迟到，窗口内事件不会重放。
+          const requestedAt = initialHistoryRequestedRef.current.at;
+          if (requestedAt === null || event.at <= requestedAt) return;
+          // 握手窗口：history 请求早于 ack，快照可能不含 ack 前的写入。
           // 只补当前房间；无关房间事件仍只刷新侧栏。
           pending.history = true;
           pending.detail = true;

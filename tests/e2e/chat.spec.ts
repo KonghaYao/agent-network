@@ -382,8 +382,17 @@ test.describe('SPA Chat', () => {
   test('scopes stream invalidation to the current room', async ({ page }) => {
     await page.goto(`${base}/c/${roomId}`);
     await expect(page.locator('#messages .msg .bubble').first()).toContainText('Chat E2E 初始消息');
+    // 首次 ack 晚于 history 请求发起时允许补拉一次；等补拉落定后再取基线。
+    await page.waitForTimeout(1_200);
+    const firstHistory = await countHistoryWithoutCursor(page, roomId);
+    expect(firstHistory).toBeGreaterThanOrEqual(1);
+    expect(firstHistory).toBeLessThanOrEqual(2);
+    const firstRoomGet = await countRoomCalls(page, 'network_room_get', roomId);
+    expect(firstRoomGet).toBeGreaterThanOrEqual(1);
+    expect(firstRoomGet).toBeLessThanOrEqual(2);
     await page.waitForTimeout(600);
-    expect(await countHistoryWithoutCursor(page, roomId)).toBe(1);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(firstHistory);
+    expect(await countRoomCalls(page, 'network_room_get', roomId)).toBe(firstRoomGet);
 
     // 其他房间是群聊；切到群聊分类后侧栏才渲染它。
     await page.locator('#room-filter-group').click();
@@ -401,8 +410,8 @@ test.describe('SPA Chat', () => {
       invoke: [],
     });
     await expect(otherItem).toContainText(otherMarker, { timeout: 15_000 });
-    expect(await countHistoryWithoutCursor(page, roomId)).toBe(1);
-    expect(await countRoomCalls(page, 'network_room_get', roomId)).toBe(1);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(firstHistory);
+    expect(await countRoomCalls(page, 'network_room_get', roomId)).toBe(firstRoomGet);
 
     const currentMarker = `E2E 当前房间 ${Date.now()}`;
     await callTool(base, tokenB, 'network_message_send', {
@@ -415,7 +424,7 @@ test.describe('SPA Chat', () => {
     await expect(page.locator('#messages .msg .bubble').last()).toContainText(currentMarker, {
       timeout: 15_000,
     });
-    expect(await countHistoryWithoutCursor(page, roomId)).toBe(2);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(firstHistory + 1);
   });
 
   test('catches up current room when the first stream ack lags behind history', async ({ page }) => {
@@ -475,7 +484,7 @@ test.describe('SPA Chat', () => {
     ).toBe(1);
   });
 
-  test('does not re-read the first page when the stream ack wins the handshake', async ({ page }) => {
+  test('catches up when ack arrives while the first history response is suspended', async ({ page }) => {
     let releaseHistory: () => void = () => undefined;
     const historyGate = new Promise<void>((resolve) => {
       releaseHistory = resolve;
@@ -484,24 +493,107 @@ test.describe('SPA Chat', () => {
     const historyHeld = new Promise<void>((resolve) => {
       markHistoryHeld = resolve;
     });
+    let releaseStream: () => void = () => undefined;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    let markStreamHeld: () => void = () => undefined;
+    const streamHeld = new Promise<void>((resolve) => {
+      markStreamHeld = resolve;
+    });
+
+    let heldHistory = false;
     await page.route('**/mcp', async (route) => {
       const request = route.request();
+      if (request.headers()['mcp-method'] === 'subscriptions/listen') {
+        markStreamHeld();
+        await streamGate;
+        await route.continue().catch(() => undefined);
+        return;
+      }
       if (
+        !heldHistory &&
         request.headers()['mcp-name'] === 'network_history_list' &&
         !(request.postData() ?? '').includes('"cursor"')
       ) {
+        heldHistory = true;
+        // 先让服务端读取快照，再挂起响应：复现“快照早于 ack、响应晚于 ack”。
+        const response = await route.fetch();
         markHistoryHeld();
         await historyGate;
+        await route.fulfill({ response }).catch(() => undefined);
+        return;
       }
       await route.continue();
     });
 
     await page.goto(`${base}/c/${roomId}`);
     await historyHeld;
-    // 首屏 history 仍被挂起时 ack 已到达：属于 ack 先于 history 完成。
+    await streamHeld;
+
+    const marker = `E2E 响应晚于 ack ${Date.now()}`;
+    await callTool(base, tokenB, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: requestId('e2e_cm'),
+      room_id: roomId,
+      body: marker,
+      invoke: [],
+    });
+    await waitForHistory(base, tokenB, roomId, marker);
+    // 订阅尚未建立、首屏响应仍被挂起：页面此刻看不到消息。
+    await expect(page.locator('#messages .msg .bubble', { hasText: marker })).toHaveCount(0);
+
+    releaseStream();
     await waitForStreamAck(page);
+    // 先释放 history 响应：它的完成时刻晚于 ack，但快照早于握手窗口。
     releaseHistory();
+    await expect(page.locator('#messages .msg .bubble', { hasText: marker })).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(2);
+
+    // 只补一次，不形成循环，也不重建订阅。
+    await page.waitForTimeout(1_200);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(2);
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __mcpCalls?: { stream?: boolean }[];
+            }
+          ).__mcpCalls?.filter((call) => call.stream === true).length ?? 0,
+      ),
+    ).toBe(1);
+  });
+
+  test('keeps one first-page read when the ack predates the history request', async ({ page }) => {
+    // 正常加载顺序中 history 先发起、ack 后到，必然保守补拉；该用例把页面
+    // 时钟固定后再回拨，模拟 ack 时间戳早于请求发起的分支，验证不补拉。
+    await page.clock.setFixedTime(new Date('2026-11-13T12:00:00Z'));
+    let releaseStream: () => void = () => undefined;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    let markStreamHeld: () => void = () => undefined;
+    const streamHeld = new Promise<void>((resolve) => {
+      markStreamHeld = resolve;
+    });
+    await page.route('**/mcp', async (route) => {
+      if (route.request().headers()['mcp-method'] === 'subscriptions/listen') {
+        markStreamHeld();
+        await streamGate;
+      }
+      await route.continue();
+    });
+
+    await page.goto(`${base}/c/${roomId}`);
     await expect(page.locator('#messages .msg .bubble').first()).toContainText('Chat E2E 初始消息');
+    await streamHeld;
+    // ack 在回拨后的时钟到达，早于 history 请求发起时刻。
+    await page.clock.setFixedTime(new Date('2026-11-13T11:59:00Z'));
+    releaseStream();
+    await waitForStreamAck(page);
     await page.waitForTimeout(1_200);
     expect(await countHistoryWithoutCursor(page, roomId)).toBe(1);
     expect(await countRoomCalls(page, 'network_room_get', roomId)).toBe(1);
