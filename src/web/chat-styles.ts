@@ -22,6 +22,8 @@ export const APP_STYLE = `
     --wx-mine: #95ec69;
     --wx-mine-text: #111111;
     --wx-unread: #fa5151;
+    --wx-unread-muted: #8a8a8a;
+    --wx-pref-label: #6b6b6b;
     --wx-danger: #c0392b;
     --wx-danger-strong: #a93226;
     /* 危险菜单项用红字透明底；暗色只换文字色与淡红底，避免低对比。 */
@@ -50,6 +52,8 @@ export const APP_STYLE = `
       --wx-active: #404040;
       --wx-bubble: #2c2c2c;
       --wx-search: #3a3a3a;
+      --wx-unread-muted: #a6a6a6;
+      --wx-pref-label: #c2c2c2;
       --wx-danger-text: #ff8a80;
       --wx-danger-tint: rgb(255 138 128 / 8%);
       --wx-danger-tint-strong: rgb(255 138 128 / 12%);
@@ -100,10 +104,16 @@ export const APP_STYLE = `
     background: var(--wx-search); border-radius: 6px; }
   .room-filter button { flex: 1 1 0; min-width: 0; height: 26px; padding: 0 6px;
     border: 0; border-radius: 4px; background: transparent; color: var(--wx-muted);
-    font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: inline-flex; align-items: center; justify-content: center; gap: 3px; }
   .room-filter button:hover { background: var(--wx-hover); color: var(--wx-text); }
   .room-filter button[aria-selected="true"] { background: var(--wx-panel);
     color: var(--wx-text); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 8%); }
+  /* 分类未读徽标只计会话数；title 提供数量说明，读屏由 aria-live 汇总播报。 */
+  .room-filter-unread { display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 auto; min-width: 15px; height: 15px; padding: 0 3px; box-sizing: border-box;
+    border-radius: 8px; background: var(--wx-unread); color: #fff; font-size: 10px;
+    font-weight: 400; line-height: 1; }
 
   .sidebar-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
   .room-list { list-style: none; margin: 0; padding: 2px 8px 12px; }
@@ -117,6 +127,9 @@ export const APP_STYLE = `
   .room-top { display: flex; align-items: center; gap: 6px; }
   .room-name { flex: 1 1 auto; min-width: 0; font-size: 14px; color: var(--wx-text);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 偏好标签放在名称外，避免参与名称省略号；暗色使用独立变量保证可读。 */
+  .room-pref-label { flex: 0 0 auto; color: var(--wx-pref-label); font-size: 10px;
+    font-weight: 400; white-space: nowrap; }
   .room-time { flex: 0 0 auto; margin-left: auto; font-size: 11px; color: var(--wx-muted); }
   .room-preview { margin-top: 3px; font-size: 12px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -211,6 +224,8 @@ export const APP_STYLE = `
   .unread { position: absolute; top: -1px; right: -1px; width: 9px; height: 9px;
     border-radius: 50%; background: var(--wx-unread); box-sizing: content-box;
     border: 2px solid var(--wx-sidebar); }
+  /* 免打扰的未读仍保留灰点，提示“有消息但不打扰”。 */
+  .unread.muted { background: var(--wx-unread-muted); }
   /* 侧栏只标离线：灰色圆点位于右下，在线/未知不渲染，与右上未读点分离。 */
   .presence-dot { position: absolute; right: -1px; bottom: -1px; width: 9px; height: 9px;
     border-radius: 50%; box-sizing: content-box; background: var(--wx-muted);
@@ -220,6 +235,8 @@ export const APP_STYLE = `
   .room-item.active .unread, .room-item.active .presence-dot { border-color: var(--wx-active); }
   .list-hint { margin: 0; padding: 32px 20px; color: var(--wx-muted); font-size: 13px;
     line-height: 1.7; text-align: center; overflow-wrap: anywhere; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   .list-hint[hidden] { display: none; }
   .list-retry { display: block; margin: 0 auto 16px; font-size: 12px; }
   .list-retry[hidden] { display: none; }

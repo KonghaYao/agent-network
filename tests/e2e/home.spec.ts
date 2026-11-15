@@ -97,6 +97,7 @@ test.describe('SPA Home', () => {
   let base = '';
   let tokenA = '';
   let tokenB = '';
+  let actorA = '';
   let nameA = '';
   let nameB = '';
   let roomId = '';
@@ -110,12 +111,13 @@ test.describe('SPA Home', () => {
     nameA = `E2E A ${suffix}`;
     nameB = `E2E B ${suffix}`;
 
-    await callTool<Registered>(base, tokenA, 'network_register', {
+    const a = await callTool<Registered>(base, tokenA, 'network_register', {
       request_id: requestId('e2e_reg'),
       kind: 'human',
       name: nameA,
       device_id: `e2e-${suffix}-a`,
     });
+    actorA = a.actor_id;
     const b = await callTool<Registered>(base, tokenB, 'network_register', {
       request_id: requestId('e2e_reg'),
       kind: 'human',
@@ -199,6 +201,41 @@ test.describe('SPA Home', () => {
     await expect(page.locator('#room-list .room-item')).toHaveCount(1);
 
     expect(errors).toEqual([]);
+  });
+
+  test('shows category unread badges and preference labels', async ({ page }) => {
+    await callTool(base, tokenB, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: requestId('e2e_cm'),
+      room_id: roomId,
+      body: `E2E 徽标未读 ${Date.now()}`,
+      invoke: [],
+    });
+
+    await page.goto(`${base}/`);
+    const row = page.locator(`#room-list a[data-room-id="${roomId}"]`);
+    await expect(row).toBeVisible();
+    await expect(row.locator('.unread')).toHaveAttribute('aria-label', '未读');
+    await expect(page.locator('#room-filter-friend .room-filter-unread')).toHaveText('1');
+    await expect(page.locator('#room-filter-agent .room-filter-unread')).toHaveCount(0);
+    await expect(page.locator('#room-filter-group .room-filter-unread')).toHaveCount(0);
+    await expect(page.locator('#room-filter-unread-status')).toHaveText(/好友 1 个会话未读/);
+
+    await page.evaluate(
+      ({ actorId, targetRoomId }) => {
+        localStorage.setItem(
+          `agent-network-room-preferences-v1:${actorId}`,
+          JSON.stringify({ [targetRoomId]: { pinned: true, muted: true } }),
+        );
+      },
+      { actorId: actorA, targetRoomId: roomId },
+    );
+    await page.reload();
+    const updated = page.locator(`#room-list a[data-room-id="${roomId}"]`);
+    await expect(updated.locator('.room-pref-label')).toHaveText('置顶 · 免打扰');
+    await expect(updated.locator('.unread')).toHaveClass(/muted/);
+    await expect(updated.locator('.unread')).toHaveAttribute('aria-label', '未读，消息免打扰');
+    await expect(page.locator('#room-filter-friend .room-filter-unread')).toHaveCount(0);
   });
 
   test('stream notification refreshes the list without a reload', async ({ page }) => {

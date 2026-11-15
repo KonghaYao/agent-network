@@ -3,11 +3,11 @@ import {
   avatarColor,
   firstChar,
   groupAvatarCells,
-  hasUnreadAttention,
+  isUnread,
   relativeTime,
   type RoomSummary,
 } from '../../lib/rooms';
-import type { RoomPreferenceMap } from '../../lib/room-preferences';
+import { roomPreference, type RoomPreferenceMap } from '../../lib/room-preferences';
 
 /**
  * 会话列表行。
@@ -23,8 +23,12 @@ export function RoomRow({
   room: RoomSummary;
   preferences?: RoomPreferenceMap;
 }) {
-  const unread = hasUnreadAttention(room, preferences);
+  const preference = roomPreference(preferences, room.room_id);
+  const unread = isUnread(room);
   const offline = room.peer_kind === 'agent' && room.peer_online === false;
+  const preferenceLabel = [preference.pinned ? '置顶' : '', preference.muted ? '免打扰' : '']
+    .filter(Boolean)
+    .join(' · ');
   return (
     <li>
       <Link
@@ -45,11 +49,21 @@ export function RoomRow({
               title="离线"
             />
           ) : null}
-          {unread ? <span className="unread" aria-label="未读" /> : null}
+          {unread ? (
+            <span
+              className={preference.muted ? 'unread muted' : 'unread'}
+              aria-label={preference.muted ? '未读，消息免打扰' : '未读'}
+            />
+          ) : null}
         </span>
         <div className="room-main">
           <div className="room-top">
             <span className="room-name">{room.name}</span>
+            {preferenceLabel ? (
+              <span className="room-pref-label" aria-label={preferenceLabel}>
+                {preferenceLabel}
+              </span>
+            ) : null}
             <span className="room-time">
               {relativeTime(
                 room.last_message ? room.last_message.created_at : room.updated_at,

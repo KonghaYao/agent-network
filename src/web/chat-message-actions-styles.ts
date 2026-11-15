@@ -36,8 +36,6 @@ export const MESSAGE_ACTIONS_STYLE = `
   .forward-preview { max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
   .forward-modal footer { display: flex; gap: 8px; justify-content: flex-end; }
   .room-preference-hint { color: var(--wx-muted); font-size: 11px; padding: 4px 12px; margin: 0; }
-  .unread.muted { background: var(--wx-muted); }
-  .room-pref-label { font-size: 10px; color: var(--wx-muted); margin-inline: 4px; white-space: nowrap; }
   @media (max-width: 759px) { .message-actions-trigger { min-width: 44px; min-height: 44px; } .message-actions button, .reply-reference { min-height: 44px; }
     .message-actions { gap: 0; } }
 `;
