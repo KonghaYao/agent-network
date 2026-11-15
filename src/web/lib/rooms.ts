@@ -83,7 +83,7 @@ export function isUnread(room: RoomSummary): boolean {
   return Number(room.my_last_read_seq) < Number(room.head_seq);
 }
 
-/** 免打扰只抑制红点，不改变未读水位或服务端已读位置。 */
+/** 免打扰只把红点降级为灰点，不改变未读水位或服务端已读位置。 */
 export function hasUnreadAttention(room: RoomSummary, preferences: RoomPreferenceMap): boolean {
   return isUnread(room) && !roomPreference(preferences, room.room_id).muted;
 }
