@@ -31,7 +31,6 @@ export class FenixApiError extends Error {
 
 export interface GraphQuery {
   type: string;
-  limit?: number;
   q?: string;
   tags?: string[];
   document_id?: string;

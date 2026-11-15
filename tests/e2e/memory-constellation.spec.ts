@@ -77,6 +77,31 @@ test.describe('Fenix 星座图移植', () => {
     await expect(tooltip).not.toContainText(SECRET_PASSWORD);
   });
 
+  test('字符串形式的 entities 元数据仍逐段掩码', async ({ page }) => {
+    // 服务端兼容路径：`table_rows[].entities` 以逗号字符串返回时，
+    // tooltip 必须先 split 再逐段 maskSecrets，不能掩码整串。
+    const rows = memoryRows().map((rowItem) => ({
+      ...rowItem,
+      entities: ['deploy', SECRET_ENTITY_AWS, `password=${SECRET_PASSWORD}`],
+    }));
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, {
+      actorId: identity.agentId,
+      actorName: identity.agentName,
+      rows,
+      graphEntitiesAsString: true,
+    });
+    await login(page, identity.base, identity.token);
+    await openMemory(page, identity.directRoom);
+
+    expect(await hoverNode(page)).toBe(true);
+    const tooltip = page.locator('.fenix-constellation-tooltip');
+    await expect(tooltip).toContainText('实体');
+    await expect(tooltip).toContainText('password=[已隐藏]');
+    await expect(tooltip).not.toContainText(SECRET_ENTITY_AWS);
+    await expect(tooltip).not.toContainText(SECRET_PASSWORD);
+  });
+
   test('画布交互：节点标签、滚轮缩放与拖拽平移都会更新绘制', async ({ page }) => {
     const calls: MemoryCall[] = [];
     await installMemoryFenixStub(page, calls, {

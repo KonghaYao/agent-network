@@ -159,6 +159,8 @@ export interface InstallMemoryFenixStubOptions {
   graphFailure?: boolean;
   totalUnits?: number;
   rows?: FenixRow[];
+  /** 让 `table_rows[].entities` 以逗号字符串返回，覆盖 tooltip 的字符串分支。 */
+  graphEntitiesAsString?: boolean;
 }
 
 export async function installMemoryFenixStub(
@@ -285,7 +287,9 @@ export async function installMemoryFenixStub(
           raw_edge_count: 2,
           limit: 120,
           truncated: false,
-          table_rows: filtered,
+          table_rows: options.graphEntitiesAsString
+            ? filtered.map((row) => ({ ...row, entities: row.entities.join(', ') }))
+            : filtered,
           rows_truncated: false,
           timeline: graphTimeline(filtered, args),
         };

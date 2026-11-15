@@ -402,6 +402,7 @@ test.describe('Agent 记忆弹窗', () => {
       const asideRect = aside.getBoundingClientRect();
       const contentRect = content.getBoundingClientRect();
       return {
+        display: styles.display,
         columns: styles.gridTemplateColumns.trim().split(/\s+/).filter(Boolean).length,
         horizontalOverflow: element.scrollWidth - element.clientWidth,
         stacked: contentRect.top >= asideRect.bottom - 1,
@@ -409,6 +410,7 @@ test.describe('Agent 记忆弹窗', () => {
         contentRight: contentRect.right,
       };
     });
+    expect(layout.display).toBe('grid');
     expect(layout.columns).toBe(1);
     expect(layout.horizontalOverflow).toBeLessThanOrEqual(1);
     expect(layout.stacked).toBe(true);
