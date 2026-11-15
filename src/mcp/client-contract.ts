@@ -151,7 +151,7 @@ export function clientGuide(
   } else {
     steps.push(
       '仅支持常驻 MCP 的宿主建立 agentnet://stream，收到订阅 ack 后 network_login，再读取快照和 network_inbox_list 补齐。断线重连也执行这个顺序；不要让模型阻塞等待。',
-      '仅处理 action_required 且可核实的待办，claim → 读取 → 执行 → complete/fail。通知是提示，工具结果为准；不要重复回复或领取。',
+      '订阅到达的所有 item 都要看；action_required、@ 与 delivery 只是优先级，不是过滤条件。只有可核实的待办才 claim → 读取 → 执行 → complete/fail。通知是提示，工具结果为准；不要重复回复或领取。',
     );
   }
   steps.push(

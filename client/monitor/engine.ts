@@ -11,8 +11,12 @@
  * - 同一时刻只保留一个 claim（由服务端约束），deferred 不写永久 seen；
  * - inbox 查询失败按指数退避重试，恢复后补领 pending；
  * - deferred 进入本地待领队列，按退避重试 claim，同一状态只提示一次；
- * - room_message 默认关闭；开启后监听所有房间，只输出 informational 定位字段，
- *   按 message_id 精确去重，reconnect 时用 history after 游标补读一次；
+ * - room events 默认开启：所有 informational stream item（房间消息、成员、
+ *   文件、在线状态、Task、已读、好友、设备、资料、未知）都输出定位字段，
+ *   不按 @、attention、发送者或房间类型过滤；delivery 回执走 delivery_state，
+ *   真正的待办仍先 claim；按 message_id/event_id 精确去重；
+ * - 房间游标与最后 stream seq 持久化到 stateDir，重启后按已存游标有界补读；
+ *   reconnect 与 more/dropped 都触发所有房间的有界补读，2000 条截断后继续排队；
  *   成员代次变化触发 CURSOR_EXPIRED 时清游标、记录一次重置并重取基线；
  * - 正文只进 event_file 与 stdout 的预览，不写日志。
  */
@@ -25,11 +29,13 @@ import {
   claimNoticeEvent,
   deliveryEvent,
   deliveryFields,
+  deliveryStateEvent,
   eventFilePayload,
   previewBody,
   readFailedEvent,
   reminderEvent,
   roomMessageEvent,
+  streamItemEvent,
   type ClaimFailure,
   type ClaimInfo,
   type DeliveryFields,
@@ -68,13 +74,18 @@ const ROOM_HISTORY_MAX_PAGES = 20;
 const ROOM_HISTORY_MAX_ITEMS = ROOM_HISTORY_MAX_PAGES * ROOM_HISTORY_PAGE_LIMIT;
 /** 本进程已输出 room_message 的 message_id 记忆上限，用于 reconnect 补读去重。 */
 const ROOM_OUTPUT_MEMORY = 10_000;
+/** 非 room_message 的 stream item 去重窗口；内存有界，重启后允许重复提示。 */
+const INFORMATIONAL_DEDUPE_TTL_MS = 5 * 60_000;
+const INFORMATIONAL_SEEN_MAX = 4_096;
+/** 单次截断后最多连续续读的轮数；超过后等待下一次 reconnect/more/dropped。 */
+const ROOM_BACKFILL_MAX_ROUNDS = 10;
 
 /** `network_history_list` 的单次结果；游标失效需要按业务 code 区分。 */
 type RoomHistoryFetch =
   | { ok: true; data: JsonObject }
   | { ok: false; code: string };
 
-/** `--room-events`：开启后监听全部房间消息；缺省关闭。 */
+/** `--room-events`：开启后监听全部房间活动；缺省开启，`--no-room-events` 关闭。 */
 export type RoomEventScope = 'all';
 
 /** Peri 宿主 monitor 的单次上限；到期后 CLI 主动结束，避免静默失效。 */
@@ -138,8 +149,8 @@ export interface MonitorEngineOptions {
   expiringThresholdMs?: number;
   /** 到达 deadline 时通知宿主进程停止（通常传 AbortController.abort）。 */
   onDeadline?: () => void;
-  /** 可选输出 informational room 消息；缺省关闭。 */
-  roomEvents?: RoomEventScope;
+  /** 输出 informational 房间/信息事件的开关；缺省开启，false 关闭。 */
+  roomEvents?: RoomEventScope | false;
 }
 
 type EmitResult = 'emitted' | 'deferred' | 'error';
@@ -294,13 +305,15 @@ function newSubscriptionId(generation: number): string {
 /**
  * `--json` 事件行的粗分类，供宿主用稳定正则过滤：
  * delivery=可处理投递，reminder=进度提醒，notice=不可处理的 claim 回执，
- * room=已收到的 informational 房间消息（不含正文），
+ * room=房间消息，stream=其它 informational 事件，receipt=投递状态回执，
  * control=连接/期限事件，error=需要人工修复的错误。
  */
 export function eventKind(type: string): string {
   if (type === 'delivery') return 'delivery';
   if (type === 'reminder') return 'reminder';
   if (type === 'room_message') return 'room';
+  if (type === 'stream_event') return 'stream';
+  if (type === 'delivery_state') return 'receipt';
   if (type.startsWith('delivery_')) return 'notice';
   if (type === 'error') return 'error';
   return 'control';
@@ -322,14 +335,20 @@ export class MonitorEngine {
   private readonly maxRuntimeMs: number;
   private readonly expiringThresholdMs: number;
   private readonly onDeadline: (() => void) | undefined;
-  /** null 表示 `--room-events` 未开启。 */
+  /** null 表示 `--no-room-events` 关闭。 */
   private readonly roomEventScope: RoomEventScope | null;
-  /** 每个房间最近一次 history after 游标，仅用于 reconnect 补读。 */
+  /** 每个房间最近一次 history after 游标；启动时从 stateDir 恢复。 */
   private readonly roomHistoryCursors = new Map<string, string>();
-  /** message_id -> 去重截止时间；delivery 与 room_message 共用。 */
+  /** message_id(+change) -> 去重截止时间；delivery 与 room_message 共用。 */
   private readonly roomMessageSeen = new Map<string, number>();
   /** 本进程已见 delivery 或已输出 room_message 的 message_id；补读去重用。 */
   private readonly roomMessageHistory = new Set<string>();
+  /** 非 room_message 事件的短时去重；有界内存，不写入 seen 文件。 */
+  private readonly informationalSeen = new Map<string, number>();
+  /** 所有房间补读串行化，避免 ack、more/dropped 与续读轮次互相覆盖。 */
+  private roomSyncInFlight: Promise<void> | null = null;
+  private roomSyncAgain = false;
+  private roomBackfillRounds = 0;
 
   private meId = '';
   private readyEmitted = false;
@@ -374,7 +393,10 @@ export class MonitorEngine {
     this.maxRuntimeMs = options.maxRuntimeMs ?? 0;
     this.expiringThresholdMs = options.expiringThresholdMs ?? EXPIRING_THRESHOLD_MS;
     this.onDeadline = options.onDeadline;
-    this.roomEventScope = options.roomEvents === undefined ? null : 'all';
+    this.roomEventScope = options.roomEvents === false ? null : 'all';
+    for (const [roomId, cursor] of this.state.roomCursors()) {
+      this.roomHistoryCursors.set(roomId, cursor);
+    }
   }
 
   async run(): Promise<number> {
@@ -517,6 +539,7 @@ export class MonitorEngine {
       JSON.stringify({
         type,
         kind: eventKind(type),
+        event_kind: eventKind(type),
         seq: null,
         delivery_id: null,
         room_id: null,
@@ -653,43 +676,39 @@ export class MonitorEngine {
     const envelope = asRecord(asRecord(params._meta)['io.agent-network/event']);
     if (Object.keys(envelope).length === 0) return;
 
+    const rawEnvelopeSeq = envelope.seq;
+    const envelopeSeq =
+      typeof rawEnvelopeSeq === 'number' ? String(rawEnvelopeSeq) : asString(rawEnvelopeSeq);
+    if (envelopeSeq.length > 0) await this.state.setLastSeq(envelopeSeq);
+
     const rawItems = asArray(envelope.items).map(asRecord);
-    const deliveryItems = rawItems.filter(
+    const deliveryItems = rawItems.filter((item) => this.isClaimableDelivery(item));
+    const receiptItems = rawItems.filter((item) => this.isDeliveryReceipt(item));
+    const reminderItems = rawItems.filter(
       (item) =>
-        item.attention === 'action_required' &&
-        item.delivery_id !== null &&
-        item.delivery_id !== undefined &&
-        asString(item.sender_id) !== this.meId,
+        asString(item.source) === 'delivery.reminder' &&
+        asString(item.delivery_id).length > 0,
+    );
+    const informationalItems = rawItems.filter(
+      (item) =>
+        !this.isClaimableDelivery(item) &&
+        !this.isDeliveryReceipt(item) &&
+        !(
+          asString(item.source) === 'delivery.reminder' &&
+          asString(item.delivery_id).length > 0
+        ),
     );
 
-    // 同一帧里已经作为 delivery 出现的消息，不再重复输出 room_message。
-    for (const item of deliveryItems) {
-      const messageId = asString(item.message_id);
-      if (messageId.length > 0) {
-        this.rememberRoomMessage(messageId);
-        this.rememberRoomMessageHistory(messageId);
-      }
-    }
-
-    // 纯 informational 帧不查询 inbox，避免每帧一次 pending 扫描。
     if (deliveryItems.length > 0) {
       const pending = await this.pendingDeliveryMap();
 
       for (const item of deliveryItems) {
+        if (this.signal.aborted) return;
         const id = asString(item.delivery_id);
         if (id.length === 0) continue;
         const source = asString(item.source);
         const eventId = asString(item.event_id);
-        const fallback = [asString(item.source), asString(item.seq), id].join(':');
-
-        if (source === 'delivery.reminder') {
-          const key = `reminder:${id}:${eventId.length > 0 ? eventId : fallback}`;
-          if (this.state.hasSeen(key)) continue;
-          const event = this.format.reminder ? this.format.reminder(item) : reminderEvent(item);
-          this.emitEvent(event);
-          await this.state.markSeen(key);
-          continue;
-        }
+        const fallback = [source, asString(item.seq), id].join(':');
 
         // 收到 retry 回执时立即把待领队列里的同一条投递放回队首。
         if (source === 'delivery.retried') this.releaseDeferred(id);
@@ -708,6 +727,14 @@ export class MonitorEngine {
         if (pending !== null) {
           const found = pending.get(id);
           if (found === undefined) {
+            // 待办已不在 pending：不 claim，但状态变化仍要可见。
+            this.emitInformational(
+              deliveryStateEvent(
+                { ...item, state: asString(item.state) || 'not_pending' },
+                source,
+              ),
+              `delivery-state:${eventId.length > 0 ? eventId : fallback}`,
+            );
             await this.state.markSeen(`event:${eventId.length > 0 ? eventId : fallback}`);
             continue;
           }
@@ -723,31 +750,129 @@ export class MonitorEngine {
         if (result === 'emitted') await this.state.markSeen(key);
         else if (result === 'error') return;
       }
-
-      if (deliveryItems.some((item) => this.isDeliveryReceipt(item))) this.wakeDeferred(0);
     }
 
-    this.emitRoomMessages(rawItems);
+    for (const item of reminderItems) {
+      if (this.signal.aborted) return;
+      const id = asString(item.delivery_id);
+      const source = asString(item.source);
+      const eventId = asString(item.event_id);
+      const fallback = [source, asString(item.seq), id].join(':');
+      const key = `reminder:${id}:${eventId.length > 0 ? eventId : fallback}`;
+      if (this.state.hasSeen(key)) continue;
+      const event = this.format.reminder ? this.format.reminder(item) : reminderEvent(item);
+      this.emitEvent(event);
+      await this.state.markSeen(key);
+    }
+
+    for (const item of receiptItems) {
+      if (this.signal.aborted) return;
+      const source = asString(item.source);
+      const eventId = asString(item.event_id);
+      const fallback = [source, asString(item.seq), asString(item.delivery_id)].join(':');
+      this.emitInformational(
+        deliveryStateEvent(item, source),
+        `delivery-state:${eventId.length > 0 ? eventId : fallback}`,
+      );
+    }
+    if (receiptItems.length > 0) this.wakeDeferred(0);
+
+    for (const item of informationalItems) {
+      if (this.signal.aborted) return;
+      this.emitInformationalItem(item);
+    }
 
     if (envelope.more === true || asNumber(envelope.dropped, 0) > 0) {
       await this.emitPendingSnapshot();
+      await this.syncRoomEvents(true);
     }
   }
 
-  /** informational room.message → room_message；按 message_id 精确去重。 */
-  private emitRoomMessages(items: JsonObject[]): void {
-    if (this.roomEventScope === null) return;
-    for (const item of items) {
-      if (asString(item.source) !== 'room.message') continue;
-      if (item.attention !== 'informational') continue;
-      const roomId = asString(item.room_id);
-      const messageId = asString(item.message_id);
-      if (roomId.length === 0 || messageId.length === 0) continue;
-      if (this.hasRoomMessage(messageId)) continue;
-      this.rememberRoomMessage(messageId);
-      this.rememberRoomMessageHistory(messageId);
-      this.emitEvent(roomMessageEvent(item, 'stream'));
+  /** 真正的待办：delivery.* 事件、attention=action_required，且不是提醒或回执。 */
+  private isClaimableDelivery(item: JsonObject): boolean {
+    const deliveryId = asString(item.delivery_id);
+    if (deliveryId.length === 0) return false;
+    if (item.attention !== 'action_required') return false;
+    const source = asString(item.source);
+    if (!source.startsWith('delivery.')) return false;
+    if (source === 'delivery.reminder') return false;
+    if (this.isDeliveryReceipt(item)) return false;
+    return true;
+  }
+
+  /** informational stream item 默认全部输出；关闭时仍保留 action_required。 */
+  private emitInformationalItem(item: JsonObject): void {
+    if (this.roomEventScope === null && item.attention !== 'action_required') return;
+    const source = asString(item.source) || 'unknown';
+    const eventId = asString(item.event_id);
+    const fallback = [
+      source,
+      asString(item.seq),
+      asString(item.delivery_id),
+      asString(item.message_id),
+    ].join(':');
+    const key = `stream:${eventId.length > 0 ? eventId : fallback}`;
+
+    if (source === 'room.message') {
+      this.emitRoomMessage(item, 'stream');
+      return;
     }
+    this.emitInformational(
+      streamItemEvent(item, source),
+      key,
+      item.attention === 'action_required',
+    );
+  }
+
+  /** 回执等 informational 事件；用有界短时去重，避免重复帧刷屏。 */
+  private emitInformational(event: JsonObject, key: string, allowWhenOff = false): void {
+    if (this.roomEventScope === null && !allowWhenOff) return;
+    if (this.hasInformationalSeen(key)) return;
+    this.rememberInformationalSeen(key);
+    this.emitEvent(event);
+  }
+
+  private hasInformationalSeen(key: string): boolean {
+    const until = this.informationalSeen.get(key);
+    if (until === undefined) return false;
+    if (until > Date.now()) return true;
+    this.informationalSeen.delete(key);
+    return false;
+  }
+
+  private rememberInformationalSeen(key: string): void {
+    const now = Date.now();
+    if (this.informationalSeen.size >= INFORMATIONAL_SEEN_MAX) {
+      for (const [id, until] of this.informationalSeen) {
+        if (until <= now) this.informationalSeen.delete(id);
+      }
+      while (this.informationalSeen.size >= INFORMATIONAL_SEEN_MAX) {
+        const oldest = this.informationalSeen.keys().next().value;
+        if (oldest === undefined) break;
+        this.informationalSeen.delete(oldest);
+      }
+    }
+    this.informationalSeen.set(key, now + INFORMATIONAL_DEDUPE_TTL_MS);
+  }
+
+  /** informational room.message → room_message；按 message_id(+change) 去重。 */
+  private emitRoomMessage(item: JsonObject, source: string): void {
+    if (this.roomEventScope === null && item.attention !== 'action_required') return;
+    const roomId = asString(item.room_id);
+    const messageId = asString(item.message_id);
+    if (roomId.length === 0 || messageId.length === 0) return;
+    const key = this.roomMessageDedupeKey(item);
+    if (this.hasRoomMessage(key)) return;
+    this.rememberRoomMessage(key);
+    if (asString(item.change).length === 0) this.rememberRoomMessageHistory(messageId);
+    this.emitEvent(roomMessageEvent(item, source));
+  }
+
+  /** 撤回与原始消息共用 message_id，但必须作为独立变更输出。 */
+  private roomMessageDedupeKey(item: JsonObject): string {
+    const messageId = asString(item.message_id);
+    const change = asString(item.change);
+    return change.length > 0 ? `${messageId}:${change}` : messageId;
   }
 
   private hasRoomMessage(messageId: string): boolean {
@@ -764,6 +889,11 @@ export class MonitorEngine {
       for (const [id, until] of this.roomMessageSeen) {
         if (until <= now) this.roomMessageSeen.delete(id);
       }
+      while (this.roomMessageSeen.size >= 1024) {
+        const oldest = this.roomMessageSeen.keys().next().value;
+        if (oldest === undefined) break;
+        this.roomMessageSeen.delete(oldest);
+      }
     }
     this.roomMessageSeen.set(messageId, now + ROOM_MESSAGE_DEDUPE_TTL_MS);
   }
@@ -777,20 +907,50 @@ export class MonitorEngine {
   }
 
   /**
-   * 连接建立时记录 history 游标；只有 reconnect 才用该游标 after 补读一次。
-   * 首次连接只取基线，不回放旧消息。
+   * 所有房间补读：启动时若 stateDir 已有游标就按 after 有界补读，
+   * 否则取当前 head 基线。ack、reconnect、more/dropped 与截断续读共用，
+   * 串行执行，避免同一房间的游标被并发覆盖。
    */
-  private async syncRoomEvents(reconnect: boolean): Promise<void> {
+  private async syncRoomEvents(_reconnect: boolean): Promise<void> {
     if (this.roomEventScope === null) return;
+    if (this.roomSyncInFlight !== null) {
+      this.roomSyncAgain = true;
+      return this.roomSyncInFlight;
+    }
+    this.roomSyncInFlight = this.doSyncRoomEvents().finally(() => {
+      this.roomSyncInFlight = null;
+      if (this.roomSyncAgain && !this.signal.aborted) {
+        this.roomSyncAgain = false;
+        void this.syncRoomEvents(true).catch((error: unknown) => {
+          this.reportStop(error);
+        });
+      }
+    });
+    return this.roomSyncInFlight;
+  }
+
+  private async doSyncRoomEvents(): Promise<void> {
     const rooms = await this.roomEventRooms();
+    let truncated = false;
     for (const roomId of rooms) {
       if (this.signal.aborted) return;
-      const cursor = this.roomHistoryCursors.get(roomId);
-      if (reconnect && cursor !== undefined) {
-        await this.backfillRoom(roomId, cursor);
+      const cursor = this.roomHistoryCursors.get(roomId) ?? this.state.getRoomCursor(roomId);
+      if (cursor !== undefined) {
+        if ((await this.backfillRoom(roomId, cursor)) === 'truncated') truncated = true;
       } else {
         await this.captureRoomCursor(roomId);
       }
+    }
+
+    if (!truncated) {
+      this.roomBackfillRounds = 0;
+      return;
+    }
+    // 单轮 2000 条仍有积压：立即排队下一轮，而不是等下一次 reconnect。
+    // 连续轮次有上界，防止异常游标或持续写入导致本进程永不返回。
+    if (this.roomBackfillRounds < ROOM_BACKFILL_MAX_ROUNDS) {
+      this.roomBackfillRounds += 1;
+      this.roomSyncAgain = true;
     }
   }
 
@@ -839,7 +999,10 @@ export class MonitorEngine {
     const page = result.data;
     const items = asArray(page.items).map(asRecord);
     const next = advanceHistoryCursor(null, asString(page.next_cursor), items);
-    if (next.length > 0) this.roomHistoryCursors.set(roomId, next);
+    if (next.length > 0) {
+      this.roomHistoryCursors.set(roomId, next);
+      await this.state.setRoomCursor(roomId, next);
+    }
   }
 
   /**
@@ -849,6 +1012,7 @@ export class MonitorEngine {
    */
   private async resetRoomCursor(roomId: string): Promise<void> {
     this.roomHistoryCursors.delete(roomId);
+    await this.state.deleteRoomCursor(roomId);
     this.control(
       'room_history_reset',
       { error_type: 'room', room_id: roomId, reason: 'cursor_expired' },
@@ -857,20 +1021,23 @@ export class MonitorEngine {
     await this.captureRoomCursor(roomId);
   }
 
-  /** 用保存的游标 after 补读；分页直到 has_more=false，只输出定位字段。 */
-  private async backfillRoom(roomId: string, cursor: string): Promise<void> {
+  /**
+   * 用保存的游标 after 补读；分页直到 has_more=false，只输出定位字段。
+   * 单次最多 20 页；达到上限返回 truncated，由调用方立即排队续读。
+   */
+  private async backfillRoom(roomId: string, cursor: string): Promise<'done' | 'truncated'> {
     let current = cursor;
     let seen = 0;
     for (let page = 0; page < ROOM_HISTORY_MAX_PAGES; page += 1) {
-      if (this.signal.aborted) return;
+      if (this.signal.aborted) return 'done';
       const result = await this.fetchRoomHistory(roomId, current);
       if (!result.ok) {
         if (result.code === 'CURSOR_EXPIRED') {
           await this.resetRoomCursor(roomId);
-          return;
+          return 'done';
         }
         this.roomHistoryError('room_history_failed', roomId);
-        return;
+        return 'done';
       }
       const data = result.data;
 
@@ -888,20 +1055,24 @@ export class MonitorEngine {
 
       // 服务端游标正常已前进；仍按本页最后一条消息推进，兼容旧服务端。
       const next = advanceHistoryCursor(current, asString(data.next_cursor), items);
-      if (next.length > 0) this.roomHistoryCursors.set(roomId, next);
-      if (data.has_more !== true) return;
+      if (next.length > 0) {
+        this.roomHistoryCursors.set(roomId, next);
+        await this.state.setRoomCursor(roomId, next);
+      }
+      if (data.has_more !== true) return 'done';
       if (next.length === 0) {
         this.roomHistoryError('room_history_cursor_missing', roomId);
-        return;
+        return 'done';
       }
       if (next === current) {
         this.roomHistoryError('room_history_cursor_stalled', roomId);
-        return;
+        return 'done';
       }
       current = next;
     }
-    // 达到单次上限仍有积压：游标已保存，下一次 reconnect 从此处继续。
+    // 达到单次上限仍有积压：游标已保存，调用方会立即排队下一轮。
     this.roomHistoryTruncated(roomId, seen);
+    return 'truncated';
   }
 
   private async fetchRoomHistory(
@@ -936,7 +1107,7 @@ export class MonitorEngine {
     );
   }
 
-  /** 单次补读达到 2000 条上限：明确记录，下一次 reconnect 从保存游标继续。 */
+  /** 单次补读达到 2000 条上限：明确记录；调用方会立即排队下一轮续读。 */
   private roomHistoryTruncated(roomId: string, items: number): void {
     this.control(
       'room_history_truncated',
@@ -951,9 +1122,11 @@ export class MonitorEngine {
     );
   }
 
+  /** 投递回执：绝不 claim；claimed/progress/completed/failed/cancelled 都可见。 */
   private isDeliveryReceipt(item: JsonObject): boolean {
     const source = asString(item.source);
-    if (source === 'delivery.updated') return true;
+    if (source === 'delivery.updated' || source === 'delivery.cancelled') return true;
+    if (source === 'delivery.retried' || source === 'delivery.reminder') return false;
     const state = asString(item.state);
     return state === 'completed' || state === 'failed' || state === 'cancelled';
   }
@@ -1041,8 +1214,6 @@ export class MonitorEngine {
     this.noteInboxSuccess();
     const map = new Map<string, number>();
     for (const raw of outcome.items) {
-      const message = asRecord(raw.message);
-      if (asString(message.sender_id) === this.meId) continue;
       const id = asString(raw.delivery_id);
       if (id.length === 0) continue;
       map.set(id, asNumber(raw.attempt, 0));
@@ -1063,7 +1234,6 @@ export class MonitorEngine {
   private async emitPendingItems(items: JsonObject[], source: string): Promise<void> {
     for (const item of items) {
       if (this.signal.aborted) return;
-      if (asString(asRecord(item.message).sender_id) === this.meId) continue;
       const id = asString(item.delivery_id);
       if (id.length === 0) continue;
       if (this.claiming.has(id)) continue;
@@ -1086,11 +1256,6 @@ export class MonitorEngine {
 
   private async emitFound(item: JsonObject, source: string): Promise<EmitResult> {
     const fields = deliveryFields(item);
-    // 已作为 delivery 处理的消息（含 reconnect 快照）不再重复输出 room_message。
-    if (fields.messageId.length > 0) {
-      this.rememberRoomMessage(fields.messageId);
-      this.rememberRoomMessageHistory(fields.messageId);
-    }
     if (this.readBody && !SAFE_ID.test(fields.deliveryId)) {
       this.control(
         'error',
@@ -1163,7 +1328,10 @@ export class MonitorEngine {
     source: string,
   ): Promise<EmitResult> {
     const claimKey = `${fields.deliveryId}:${claim.attempt}:${claim.claimId}`;
-    if (this.emittedClaims.has(claimKey)) return 'emitted';
+    if (this.emittedClaims.has(claimKey)) {
+      this.noteDeliveryEmitted(fields);
+      return 'emitted';
+    }
 
     if (!this.readBody) {
       const delivery = this.format.deliveryWithoutBody;
@@ -1177,6 +1345,7 @@ export class MonitorEngine {
       }
       this.emittedClaims.add(claimKey);
       this.emitEvent(delivery(item, fields, claim, source));
+      this.noteDeliveryEmitted(fields);
       return 'emitted';
     }
 
@@ -1184,6 +1353,7 @@ export class MonitorEngine {
     if (!read.ok) {
       this.emittedClaims.add(claimKey);
       this.emitEvent(readFailedEvent(fields, claim, source));
+      this.noteDeliveryEmitted(fields);
       return 'emitted';
     }
 
@@ -1201,6 +1371,7 @@ export class MonitorEngine {
       );
       this.emittedClaims.add(claimKey);
       this.emitEvent(readFailedEvent(fields, claim, source));
+      this.noteDeliveryEmitted(fields);
       return 'emitted';
     }
 
@@ -1214,7 +1385,15 @@ export class MonitorEngine {
         eventFile,
       ),
     );
+    this.noteDeliveryEmitted(fields);
     return 'emitted';
+  }
+
+  /** 只有 delivery 真正输出后才占用 message_id，避免吞掉同帧 room_message。 */
+  private noteDeliveryEmitted(fields: DeliveryFields): void {
+    if (fields.messageId.length === 0) return;
+    this.rememberRoomMessage(fields.messageId);
+    this.rememberRoomMessageHistory(fields.messageId);
   }
 
   private emitClaimFailureNotice(
@@ -1402,11 +1581,13 @@ export class MonitorEngine {
   private emitEvent(event: JsonObject): void {
     if (this.json) {
       const type = asString(event.type);
+      const providedKind = asString(event.kind);
       this.stdout(
         JSON.stringify({
           ...event,
           type,
-          kind: eventKind(type),
+          event_kind: eventKind(type),
+          kind: providedKind.length > 0 ? providedKind : eventKind(type),
           seq: event.seq ?? null,
           delivery_id: event.delivery_id ?? null,
           room_id: event.room_id ?? null,

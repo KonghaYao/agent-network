@@ -1121,6 +1121,74 @@ async function runReminderChecks(): Promise<void> {
   }
 }
 
+async function runInfoChecks(): Promise<void> {
+  const fixture = await createFixture('info');
+  try {
+    await waitForLine(fixture.watcher.stdout, (line) => line.startsWith('READY actor='), 'READY');
+    fixture.mcp.sendItems([
+      {
+        source: 'room.message',
+        kind: 'message',
+        attention: 'informational',
+        room_id: 'rm_info',
+        message_id: 'msg_info',
+        sender_id: 'agt_me',
+        sender_name: 'Self',
+        sender_kind: 'agent',
+        seq: '201',
+        event_id: 'evt_info_message',
+      },
+      {
+        source: 'room.membership',
+        kind: 'room',
+        attention: 'action_required',
+        change: 'removed',
+        room_id: 'rm_info',
+        seq: '202',
+        event_id: 'evt_info_membership',
+      },
+      {
+        source: 'delivery.updated',
+        kind: 'receipt',
+        attention: 'informational',
+        delivery_id: 'dlv_info_receipt',
+        state: 'completed',
+        seq: '203',
+        event_id: 'evt_info_receipt',
+      },
+    ]);
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('STREAM_EVENT') && line.includes('message=msg_info'),
+      'info room.message',
+    );
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) =>
+        line.startsWith('STREAM_EVENT') &&
+        line.includes('source=room.membership') &&
+        line.includes('change=removed'),
+      'info membership',
+    );
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) =>
+        line.startsWith('STREAM_EVENT') &&
+        line.includes('source=delivery.updated') &&
+        line.includes('state=completed'),
+      'info receipt',
+    );
+    checkEqual('codex informational 不 claim', fixture.mcp.state.claimCalls.size, 0);
+    check(
+      'codex informational 不启动回合',
+      fixture.codex.requests.every((request) => request.method !== 'turn/start'),
+    );
+    checkEqual('codex informational 路径无 ERROR', countLines(fixture.watcher.stdout, 'ERROR'), 0);
+  } finally {
+    await fixture.stop();
+  }
+}
+
 async function runReconnectChecks(): Promise<void> {
   const fixture = await createFixture('reconnect');
   try {
@@ -1313,6 +1381,8 @@ async function main(): Promise<void> {
   await runDeferredChecks();
   console.log('TS codex monitor: reminders');
   await runReminderChecks();
+  console.log('TS codex monitor: informational stream items');
+  await runInfoChecks();
   console.log('TS codex monitor: reconnect/idle');
   await runReconnectChecks();
   console.log('TS codex monitor: disconnect cleanup');

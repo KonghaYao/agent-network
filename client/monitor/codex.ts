@@ -12,7 +12,9 @@
  * 投递语义：SSE 订阅 `agentnet://stream`，空闲时先 claim；工作中已有 claim
  * 时提示新消息并保留 pending，当前回合结束后依次领取处理；
  * deferred/conflict/claim_failed 分类记录；10 秒未结束的回合发送一次慢确认；
- * `delivery.reminder` 只提醒、不 claim。日志沿用旧脚本的行格式（stdout），
+ * `delivery.reminder` 只提醒、不 claim。所有 informational stream item
+ * （房间消息、成员、文件、在线状态、Task、回执等）都会记录；
+ * `--no-room-events` 可关闭这部分噪音。日志沿用旧脚本的行格式（stdout），
  * 不执行任何 `.sh`，也不依赖 Python。
  */
 
@@ -120,6 +122,8 @@ interface CodexWatcherOptions {
   token: string;
   signal: AbortSignal;
   log?: (line: string) => void;
+  /** false 时只处理投递；默认记录所有 informational stream item。 */
+  roomEvents?: boolean;
 }
 
 class CodexWatcher {
@@ -128,6 +132,7 @@ class CodexWatcher {
   private readonly signal: AbortSignal;
   private readonly log: (line: string) => void;
   private readonly events = new AsyncQueue<WatcherEvent>();
+  private readonly roomEvents: boolean;
 
   private readonly outstanding = new Map<string, JsonObject>();
   private readonly delivered = new Map<string, number>();
@@ -148,6 +153,7 @@ class CodexWatcher {
   constructor(options: CodexWatcherOptions) {
     this.signal = AbortSignal.any([options.signal, this.controller.signal]);
     this.log = options.log ?? writeStdout;
+    this.roomEvents = options.roomEvents !== false;
     this.rpc = new MonitorRpc({
       endpoint: options.endpoint,
       token: options.token,
@@ -256,6 +262,9 @@ class CodexWatcher {
         case 'reminder':
           await this.wakeReminder(event.item);
           break;
+        case 'info':
+          this.logInfo(event.item);
+          break;
         case 'alert':
           this.noteAlert(event.item);
           break;
@@ -346,20 +355,53 @@ class CodexWatcher {
       const item = asRecord(raw);
       const deliveryId = asString(item.delivery_id);
       const source = asString(item.source);
-      if (source === 'delivery.reminder') {
-        if (deliveryId.length > 0) this.events.push({ kind: 'reminder', item });
+      if (source === 'delivery.reminder' && deliveryId.length > 0) {
+        this.events.push({ kind: 'reminder', item });
         continue;
       }
-      if (
-        item.attention === 'action_required' &&
-        deliveryId.length > 0 &&
-        asString(item.sender_id) !== this.actorId
-      ) {
+      if (this.isClaimableDelivery(item)) {
         this.events.push({ kind: 'alert', item });
+        continue;
+      }
+      // 不按 source/attention/发送者/房间类型丢弃：其余 item 以 informational 日志输出。
+      if (this.roomEvents || item.attention === 'action_required') {
+        this.events.push({ kind: 'info', item });
       }
     }
 
     if (envelope.more === true || asNumber(envelope.dropped, 0) > 0) await this.snapshot();
+  }
+
+  /** 与共享引擎一致：真正的待办才 claim，回执/提醒/普通信息只记录。 */
+  private isClaimableDelivery(item: JsonObject): boolean {
+    const deliveryId = asString(item.delivery_id);
+    if (deliveryId.length === 0) return false;
+    if (item.attention !== 'action_required') return false;
+    const source = asString(item.source);
+    if (!source.startsWith('delivery.')) return false;
+    if (source === 'delivery.reminder') return false;
+    if (source === 'delivery.updated' || source === 'delivery.cancelled') return false;
+    const state = asString(item.state);
+    return state !== 'completed' && state !== 'failed' && state !== 'cancelled';
+  }
+
+  /** 只输出定位/变更字段，不输出正文、preview 或凭据。 */
+  private logInfo(item: JsonObject): void {
+    const text = (value: unknown): string => asString(value) || '-';
+    this.log(
+      [
+        'STREAM_EVENT',
+        `source=${text(item.source) === '-' ? 'unknown' : text(item.source)}`,
+        `kind=${text(item.kind)}`,
+        `attention=${text(item.attention)}`,
+        `room=${text(item.room_id)}`,
+        `message=${text(item.message_id)}`,
+        `delivery=${text(item.delivery_id)}`,
+        `change=${text(item.change)}`,
+        `state=${text(item.state)}`,
+        `ref=${text(item.ref_id)}`,
+      ].join(' '),
+    );
   }
 
   /** 重连后补读 pending；失败只记日志，不把整个监听器打挂。 */
@@ -379,7 +421,6 @@ class CodexWatcher {
     for (const raw of asArray(outcome.data.items)) {
       const item = asRecord(raw);
       if (asString(item.delivery_id).length === 0) continue;
-      if (asString(asRecord(item.message).sender_id) === this.actorId) continue;
       this.events.push({ kind: 'alert', item });
     }
   }
@@ -554,7 +595,6 @@ class CodexWatcher {
       const alertAttempt = typeof alert.attempt === 'number' ? alert.attempt : null;
       if (
         !match ||
-        asString(asRecord(match.message).sender_id) === this.actorId ||
         (alertAttempt !== null && match.attempt !== alertAttempt)
       ) {
         this.outstanding.delete(deliveryId);
@@ -850,7 +890,10 @@ function lastLine(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function runCodexMonitor(context: MonitorContext): Promise<number> {
+export async function runCodexMonitor(
+  context: MonitorContext,
+  options: { roomEvents?: boolean } = {},
+): Promise<number> {
   const token = context.token;
   if (!token) return fail('ERROR type=credential message=missing_token');
   if (/[\r\n]/u.test(token)) return fail('ERROR type=credential message=invalid_token_format');
@@ -876,7 +919,12 @@ export async function runCodexMonitor(context: MonitorContext): Promise<number> 
   process.on('SIGTERM', stop);
   process.on('SIGHUP', stop);
   try {
-    const watcher = new CodexWatcher({ endpoint, token, signal: controller.signal });
+    const watcher = new CodexWatcher({
+      endpoint,
+      token,
+      signal: controller.signal,
+      roomEvents: options.roomEvents,
+    });
     return await watcher.run();
   } finally {
     process.off('SIGINT', stop);

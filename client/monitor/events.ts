@@ -66,6 +66,12 @@ function asText(value: unknown): string {
   return String(value);
 }
 
+/** 事件字段缺失时写 null，避免宿主把空字符串误当成真实 ID。 */
+function nullableText(value: unknown): string | null {
+  const text = asText(value);
+  return text.length > 0 ? text : null;
+}
+
 export function deliveryFields(item: JsonObject): DeliveryFields {
   const message = (item.message ?? {}) as JsonObject;
   return {
@@ -220,17 +226,65 @@ export function readFailedEvent(fields: DeliveryFields, claim: ClaimInfo, source
 /**
  * informational room 消息只携带定位字段，不携带正文或 preview。
  * 宿主需要正文时按 message_id 调用 network_message_read。
+ *
+ * `change` 覆盖撤回（`recalled`）等变更；`sender_name`/`sender_kind`
+ * 让宿主无需额外查询即可判断发送者。
  */
 export function roomMessageEvent(item: JsonObject, source: string): JsonObject {
   return {
     type: 'room_message',
     source,
+    item_kind: asText(pick(item.kind, 'message')) || 'message',
+    attention: asText(pick(item.attention, 'informational')) || 'informational',
     room_id: asText(pick(item.room_id, '')),
     message_id: asText(pick(item.message_id, '')),
     sender_id: asText(pick(item.sender_id, '')),
+    sender_name: nullableText(item.sender_name),
+    sender_kind: nullableText(item.sender_kind),
+    change: nullableText(item.change),
+    ref_id: nullableText(item.ref_id),
     event_id: asText(pick(item.event_id, '')),
     seq: asText(pick(item.seq, pick(item.created_seq, ''))),
   };
+}
+
+/**
+ * 其他 informational stream item 的通用信封：房间成员/文件/在线状态、
+ * Task、已读、好友、设备、资料与未知类型都走这里。只带定位与变更字段，
+ * 不带正文、preview 或 error。
+ *
+ * `delivery_state` 是同一构造器的回执变体：claimed/progress/completed/
+ * failed/cancelled 可见，但绝不进入 claim。
+ */
+export function streamItemEvent(item: JsonObject, source: string, type = 'stream_event'): JsonObject {
+  return {
+    type,
+    source,
+    kind: asText(pick(item.kind, 'unknown')) || 'unknown',
+    item_kind: asText(pick(item.kind, 'unknown')) || 'unknown',
+    attention: asText(pick(item.attention, 'informational')) || 'informational',
+    change: nullableText(item.change),
+    ref_id: nullableText(item.ref_id),
+    room_id: asText(pick(item.room_id, '')),
+    message_id: asText(pick(item.message_id, '')),
+    delivery_id: asText(pick(item.delivery_id, '')),
+    sender_id: asText(pick(item.sender_id, '')),
+    sender_name: nullableText(item.sender_name),
+    sender_kind: nullableText(item.sender_kind),
+    event_id: asText(pick(item.event_id, '')),
+    seq: asText(pick(item.seq, pick(item.created_seq, ''))),
+    state: nullableText(item.state),
+    attempt: item.attempt === undefined || item.attempt === null ? null : asNumber(item.attempt, 0),
+    subject_id: nullableText(item.subject_id),
+    changed_by: nullableText(item.changed_by),
+    file_id: nullableText(item.file_id),
+    mention_all: item.mention_all === true,
+    transition: nullableText(item.transition),
+  };
+}
+
+export function deliveryStateEvent(item: JsonObject, source: string): JsonObject {
+  return streamItemEvent(item, source, 'delivery_state');
 }
 
 export function reminderEvent(item: JsonObject): JsonObject {

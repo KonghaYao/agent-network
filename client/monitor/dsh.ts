@@ -4,8 +4,9 @@
  * 对外契约（与旧 shell 守护一致）：
  * - `run` 前台运行，stdout 不写事件；start 把 run 重定向到 watch.log 后台运行；
  * - `start/stop/status/logs/wait` 只读写 WEBBOTS_HOME（默认 ~/.webbots）；
- * - 事件只写 wake.queue 的九个定位字段，不读正文、不 claim、不写 token；
- * - `action_required` 与直聊普通 `room.message` 入队，群聊普通消息丢弃；
+ * - 事件只写 wake.queue 的定位/变更字段，不读正文、不 claim、不写 token；
+ * - 默认入队所有 stream item：不再区分直聊/群聊，也不按 source/发送者丢弃；
+ *   `--no-room-events` 可只保留 action_required；
  * - `pending_count > 0` 时补 catchup，同一 pending/head 快照 30 秒内不重复；
  * - `CREDENTIAL_INVALID` 立即退出 3，`NOT_AGENT` 退出 4，`PROTOCOL` 退出 5。
  *
@@ -132,12 +133,17 @@ interface WakeLine {
 }
 
 /**
- * wake.queue 的固定九字段。缺失定位字段写 null，seq/event_id 保持字符串；
+ * wake.queue 的固定十三字段：九个定位字段 + kind/change/ref_id/state。
+ * 缺失定位字段写 null，seq/event_id 保持字符串；
  * 去重键仍是 source:event_id:delivery_id（与旧脚本一致）。
  */
 function buildWakeLine(item: JsonObject): WakeLine {
   const source = scalarText(item.source);
   const attention = pickText(item.attention, 'informational');
+  const kind = scalarText(item.kind);
+  const change = scalarText(item.change);
+  const refId = scalarText(item.ref_id);
+  const state = scalarText(item.state);
   const roomId = scalarText(item.room_id);
   const messageId = scalarText(item.message_id);
   const deliveryId = scalarText(item.delivery_id);
@@ -153,7 +159,11 @@ function buildWakeLine(item: JsonObject): WakeLine {
     key: `${source}:${eventId}:${deliveryId}`,
     line: JSON.stringify({
       source,
+      kind: nullable(kind),
       attention,
+      change: nullable(change),
+      ref_id: nullable(refId),
+      state: nullable(state),
       room_id: nullable(roomId),
       message_id: nullable(messageId),
       delivery_id: nullable(deliveryId),
@@ -171,7 +181,8 @@ class DshWatcher {
   private readonly signal: AbortSignal;
   private readonly diagnostics: (line: string) => void;
   private readonly rpc: MonitorRpc;
-  private readonly roomKinds = new Map<string, string>();
+  /** false 时只保留 action_required；默认入队所有 stream item。 */
+  private readonly roomEvents: boolean;
 
   private status = initialStatus(process.pid);
   private seen: MonitorState | null = null;
@@ -195,11 +206,13 @@ class DshWatcher {
     token: string;
     signal: AbortSignal;
     diagnostics?: (line: string) => void;
+    roomEvents?: boolean;
   }) {
     this.paths = options.paths;
     this.token = options.token;
     this.signal = options.signal;
     this.diagnostics = options.diagnostics ?? writeStderr;
+    this.roomEvents = options.roomEvents !== false;
     this.rpc = new MonitorRpc({
       endpoint: options.endpoint,
       token: options.token,
@@ -416,25 +429,8 @@ class DshWatcher {
     this.status.lastNotificationAt = nowIso();
 
     for (const item of asArray(envelope.items).map(asRecord)) {
-      const source = scalarText(item.source);
-      if (source === 'session.login' || source === 'delivery.updated') continue;
-      if (scalarText(item.sender_id) === this.myId) continue;
-
-      const attention = pickText(item.attention, 'informational');
-      if (attention !== 'action_required' && source !== 'room.message') continue;
-
-      if (attention !== 'action_required') {
-        // 只有直聊的普通消息入队；群聊普通消息不是任务。
-        const roomId = scalarText(item.room_id);
-        if (roomId.length === 0) continue;
-        const kind = await this.roomKind(roomId);
-        if (kind !== 'direct') {
-          // 查询失败同样按“不唤醒”处理，避免把群聊噪声当任务。
-          this.diagnostics(`DROP type=group_message room=${roomId}`);
-          continue;
-        }
-      }
-
+      // 默认全部入队；--no-room-events 只保留需要 Agent 处理的 action_required。
+      if (!this.roomEvents && item.attention !== 'action_required') continue;
       await this.emitWake(item);
     }
 
@@ -442,28 +438,6 @@ class DshWatcher {
       await this.emitCatchup('frame_truncated');
     }
     await this.writeStatus();
-  }
-
-  /** 每个房间只查一次 network_room_get；查询失败返回 unknown，由调用方丢弃。 */
-  private async roomKind(roomId: string): Promise<string> {
-    const cached = this.roomKinds.get(roomId);
-    if (cached !== undefined) return cached;
-
-    let outcome;
-    try {
-      outcome = await this.rpc.callTool('network_room_get', { room_id: roomId });
-    } catch (error) {
-      if (error instanceof MonitorFatalError) throw error;
-      return 'unknown';
-    }
-    if (!outcome.ok) return 'unknown';
-
-    const kind = scalarText(asRecord(outcome.data.room).kind);
-    if (kind === 'direct' || kind === 'group') {
-      this.roomKinds.set(roomId, kind);
-      return kind;
-    }
-    return 'unknown';
   }
 
   private async emitWake(item: JsonObject): Promise<void> {
@@ -489,7 +463,11 @@ class DshWatcher {
 
     const line = JSON.stringify({
       source: 'catchup',
+      kind: 'catchup',
       attention: 'action_required',
+      change: null,
+      ref_id: null,
+      state: null,
       room_id: null,
       message_id: null,
       delivery_id: null,
@@ -582,7 +560,7 @@ class DshWatcher {
   }
 }
 
-async function runWatcher(context: MonitorContext): Promise<number> {
+async function runWatcher(context: MonitorContext, roomEvents: boolean): Promise<number> {
   const resolved = resolveEndpoint(context);
   if ('line' in resolved) {
     writeStderr(resolved.line);
@@ -605,6 +583,7 @@ async function runWatcher(context: MonitorContext): Promise<number> {
       endpoint: resolved.endpoint,
       token,
       signal: controller.signal,
+      roomEvents,
     });
     return await watcher.run();
   } finally {
@@ -618,7 +597,7 @@ function selfCommand(): string[] {
   return [process.execPath];
 }
 
-async function startDaemon(context: MonitorContext): Promise<number> {
+async function startDaemon(context: MonitorContext, roomEvents: boolean): Promise<number> {
   const resolved = resolveEndpoint(context);
   if ('line' in resolved) {
     writeStderr(resolved.line);
@@ -650,7 +629,14 @@ async function startDaemon(context: MonitorContext): Promise<number> {
   try {
     fd = openSync(paths.log, 'a', 0o600);
     child = Bun.spawn({
-      cmd: [...selfCommand(), 'monitor', '--harness', 'dsh', 'run'],
+      cmd: [
+        ...selfCommand(),
+        'monitor',
+        '--harness',
+        'dsh',
+        'run',
+        ...(roomEvents ? [] : ['--no-room-events']),
+      ],
       env,
       stdin: 'ignore',
       stdout: fd,
@@ -854,16 +840,18 @@ async function runWait(argument: string | undefined, signal: AbortSignal): Promi
 export async function runDshMonitor(
   context: MonitorContext,
   scriptArgs: readonly string[],
+  options: { roomEvents?: boolean } = {},
 ): Promise<number> {
   const raw = [...scriptArgs];
   const command = raw[0] ?? 'run';
   const argument = raw[1];
+  const roomEvents = options.roomEvents !== false;
 
   switch (command) {
     case 'run':
-      return runWatcher(context);
+      return runWatcher(context, roomEvents);
     case 'start':
-      return startDaemon(context);
+      return startDaemon(context, roomEvents);
     case 'stop':
       return stopDaemon();
     case 'status':

@@ -11,7 +11,7 @@ description: WeBots 的上层行为模式与 Harness 接入索引。
 
 ## Harness 指南：监听启动
 
-本节是监听/唤醒启动指南，不是完整接入文档。启动任何监听前，必须先阅读对应 harness 文档与 `agentnet monitor --harness <name>` 的参数：确认凭据来源、订阅与 ack 流程、READY/ALERT 的含义、退出与重连行为，以及 sender 过滤规则。不要只复制表格里的命令就直接启动。
+本节是监听/唤醒启动指南，不是完整接入文档。启动任何监听前，必须先阅读对应 harness 文档与 `agentnet monitor --harness <name>` 的参数：确认凭据来源、订阅与 ack 流程、READY/ALERT 的含义、退出与重连行为，以及默认监听全部 stream item、@/delivery 仅作优先级的可见性规则。不要只复制表格里的命令就直接启动。
 
 | Harness | 监听方式 | 指南 |
 | --- | --- | --- |
@@ -449,7 +449,7 @@ flowchart LR
 ## CLI 宿主接入与唤醒契约
 
 - Peri 的宿主模板是 `monitor_start({ command, alert, deadline_ms })`：`command` 使用 `agentnet monitor --harness peri --json`，`alert` 匹配 JSON 事件，`deadline_ms` 示例 600000。不要用 shell `&` 或通用后台任务承载 monitor；进程被回收后 ALERT 无人消费，投递会停在 claimed。
-- 唤醒契约（文本模式）：匹配 `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) ` 的行会唤醒宿主；`DEADLINE`、`RECONNECTING`、`DEGRADED` 只记录。READY=首次连接并 login，RECOVERED=从 DEGRADED 恢复，ALERT=投递/提醒/claim 回执，EXPIRING=距 24h 上限不足 10 分钟，ERROR=需人工修复。
+- 唤醒契约（文本模式）：匹配 `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) ` 的行会唤醒宿主；`DEADLINE`、`RECONNECTING`、`DEGRADED` 只记录。READY=首次连接并 login，RECOVERED=从 DEGRADED 恢复，ALERT=投递/提醒/回执/房间与信息事件，EXPIRING=距 24h 上限不足 10 分钟，ERROR=需人工修复。
 - `ALERT` 行稳定包含 `type` / `delivery_id` / `room_id` / `seq`；delivery 与 reminder 另含 `message_id`。room_id/seq 来自事件，缺失时为空字符串，不会省略键。
 - `--json`（claude/peri）每行一个 JSON 对象，稳定包含 `type` / `kind` / `seq` 与 `delivery_id` / `room_id` / `message_id`（缺失为 null）；kind 为 delivery / reminder / notice / control / error。推荐 alert 正则 `"type":"(delivery|reminder|delivery_conflict|delivery_deferred|delivery_claim_failed|ready|recovered|expiring|error)"`。
 - Peri 默认 24h 上限：启动输出 `DEADLINE`（at 与 remaining_ms），剩余 10 分钟输出一次 `EXPIRING`，到期输出 `EXPIRED` 并退出；`--max-runtime <seconds>` 可覆盖，0 表示不限制。重启后先补读 inbox。

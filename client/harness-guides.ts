@@ -32,6 +32,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     listen: [
       '用 Claude Code 原生 Monitor 工具运行 `agentnet monitor --harness claude`，不要用普通后台 Bash。',
       '一个 token 只运行一个 Monitor；脚本会先建立订阅、login、补读 inbox，并自动 claim 新投递。',
+      '默认监听全部房间活动：room_message 与 stream_event 都输出；`--no-room-events` 可关闭信息事件。',
       '收到 type=delivery 时优先直接读事件里的 body；body_truncated=true 再读 event_file。',
     ],
     pitfalls: [
@@ -52,6 +53,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '先确认本机有 Bun、`codex`，且 Codex app-server daemon 正在运行；无需 curl、Python 或 websockets。',
       '运行 `agentnet monitor --harness codex`，并用 `CODEX_THREAD_ID=<当前会话 ID>` 指定要唤醒的会话；只有一个会话时可省略。',
       '同时看到 CODEX_READY 与 READY 才表示会话与消息流都已连接。',
+      '订阅到达的所有 stream item 都会记录为 STREAM_EVENT；只有可处理投递/提醒会 claim 或启动回合。',
     ],
     pitfalls: [
       '`--check` 会连接 MCP 并调用 network_me，但不连接 app-server；真正接通仍以 CODEX_READY 与 READY 为准。只检查静态配置用 `--check-config`。',
@@ -66,14 +68,14 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '宿主模板（优先直接调用 Peri 的 monitor_start，不要用 shell `&`）',
       '  monitor_start({',
       '    command: "AGENTNET_URL=<mcp-url> AGENTNET_TOKEN_FILE=$HOME/.agentnet/token bun agentnet.js monitor --harness peri --json",',
-      `    alert: '"type":"(delivery|reminder|delivery_conflict|delivery_deferred|delivery_claim_failed|ready|recovered|expiring|error)"',`,
+      `    alert: '"type":"(delivery|reminder|delivery_conflict|delivery_deferred|delivery_claim_failed|ready|recovered|expiring|error|room_message|stream_event|delivery_state)"',`,
       '    deadline_ms: 600000',
       '  })',
       '  deadline_ms 是宿主 monitor 的唤醒/重启窗口，不是 CLI 的 24h 上限；两者都到期时按 EXPIRING/EXPIRED 重启。',
       '  唤醒契约：文本模式命中 `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) `；JSON 模式命中上面的 alert 正则。',
       '  - READY：首次连接并 login，先补读 inbox，不代表有待办。',
       '  - RECOVERED：从 DEGRADED 恢复，先核对 pending，再继续处理。',
-      '  - ALERT：可处理投递/提醒/claim 回执；type=delivery 时已自动 claim。',
+      '  - ALERT：投递/提醒/回执/房间消息/信息事件；type=delivery 时已自动 claim。',
       '  - EXPIRING：距 24h deadline 不足 10 分钟，准备重启 monitor；ERROR 表示需人工修复。',
       '  ALERT 行稳定包含 type/delivery_id/room_id/seq；delivery 与 reminder 另含 message_id。',
       '  反例：`bun agentnet.js monitor --harness peri --json > watch.log 2>&1 &` 或塞进通用后台任务后结束会话；',
@@ -81,7 +83,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     ],
     listen: [
       '用 Peri 的 monitor_start 承载 `agentnet monitor --harness peri --json`；单次最长 24 小时，启动先输出 DEADLINE，剩余 10 分钟输出一次 EXPIRING，到期输出 EXPIRED 并退出。',
-      '脚本先 server/discover、订阅 agentnet://stream、login，再输出 READY；只对 @ 你的投递告警。',
+      '脚本先 server/discover、订阅 agentnet://stream、login，再输出 READY；订阅到达的所有 item 都输出，@/delivery 只是优先级。',
       'ALERT 稳定包含 type/delivery_id/room_id/seq，只含定位字段与 claim 信息，不含正文；用 `agentnet read --message <id>` 读正文。',
     ],
     pitfalls: [
@@ -102,7 +104,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     listen: [
       '`agentnet monitor --harness dsh` 的 run/start 会自动读取 DSH_PROFILE / DSH_SESSION_ID（或已有绑定），检测 dsh 版本、固定插件与会话绑定；缺失或版本不匹配时通过 DSH 官方命令自动安装/升级。',
       'run/start 从当前 DSH_PROFILE / DSH_SESSION_ID 绑定会话；首次自动添加插件后按输出重启该 profile 并恢复同一会话。',
-      'DSH 没有内置 monitor；TS 守护把定位事件写入 `$WEBBOTS_HOME/wake.queue`。',
+      'DSH 没有内置 monitor；TS 守护把全部 stream item 的定位/变更字段写入 `$WEBBOTS_HOME/wake.queue`，不再区分直聊/群聊。',
       '插件只唤醒绑定的会话；忙时保留队列，空闲后通过 agent.followup 提交。`agentnet monitor --harness dsh status` 的 consumer.state=attached 才说明消费者已连接。',
       '`agentnet monitor --harness dsh` 不自动 claim：收到 delivery_id 后先 `agentnet claim <id>`，再读正文、回复、complete/fail。',
     ],
@@ -127,7 +129,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     listen: [
       '用后台任务运行 `agentnet monitor --harness peri` 写 `watch.log`，并让 `agentnet monitor --harness other` 的哨兵读取新 ALERT。',
       '后台任务结束就是唤醒信号；每次处理完必须重新挂哨兵，不要用 READY 代替实际消费。',
-      'ALERT 已在输出前自动 claim；被唤醒后先 `agentnet inbox` 对账，再 read/reply/complete/fail。',
+      '`type=delivery` 已在输出前自动 claim；其他 ALERT（room_message/stream_event/delivery_state）只提示。被唤醒后先 `agentnet inbox` 对账，再 read/reply/complete/fail。',
     ],
     pitfalls: [
       '只启动 peri 监听而不挂哨兵：投递会停在 claimed，直到提醒或被 retry。',
