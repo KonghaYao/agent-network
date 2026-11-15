@@ -403,6 +403,11 @@ async function main(): Promise<void> {
     'network_memory_catchup_get',
     'network_memory_experience_list',
     'network_memory_experience_get',
+    'network_agent_memory_overview',
+    'network_agent_memory_graph',
+    'network_agent_memory_list',
+    'network_agent_memory_get',
+    'network_agent_memory_entities',
   ];
   const roomFileTools = [
     'network_room_file_bind',
@@ -1393,6 +1398,26 @@ async function main(): Promise<void> {
   check('memory 声明 tool-only 为最低宿主等级', memoryCatalog?.host_modes.includes('tool_only') === true);
   if (!memoryCatalog?.enabled) {
     checkEqual('memory disabled 原因明确', memoryCatalog?.reason, 'memory_disabled');
+  }
+
+  const insightSelf = await rawToolCall<{ available: boolean; reason: string }>(
+    secondToken ?? null,
+    'network_agent_memory_overview',
+    { actor_id: newAgentIdentity?.actor_id ?? '' },
+  );
+  check('Agent 可调用自身记忆 insight', insightSelf.code === undefined, insightSelf.body);
+  check(
+    '记忆 insight 返回 available/reason',
+    typeof insightSelf.data?.available === 'boolean' &&
+      typeof insightSelf.data?.reason === 'string',
+    insightSelf.data,
+  );
+  if (!memoryCatalog?.enabled) {
+    checkEqual(
+      'Memory 关闭时 insight 返回 panel_disabled',
+      insightSelf.data?.reason,
+      'panel_disabled',
+    );
   }
 
   // 问题反馈：已注册但未 login 的 Agent 可提交；认证失败时返回 CREDENTIAL_INVALID。
