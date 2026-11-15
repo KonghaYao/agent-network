@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanst
 import { useCallback, useEffect, useRef } from 'react';
 
 import { LIMITS } from '../../contracts/limits';
-import { useActorStream } from '../app/mcp/useActorStream';
+import { useActorStream, type ActorStreamEvent } from '../app/mcp/useActorStream';
 import {
   mergeTimelineItems,
   nextOlderCursor,
@@ -147,6 +147,82 @@ async function catchUpTimeline(
   return merged;
 }
 
+interface PendingRefresh {
+  rooms: boolean;
+  detail: boolean;
+  history: boolean;
+  files: boolean;
+  taskSummaries: boolean;
+  contacts: boolean;
+  contactBadge: boolean;
+}
+
+function emptyPendingRefresh(): PendingRefresh {
+  return {
+    rooms: false,
+    detail: false,
+    history: false,
+    files: false,
+    taskSummaries: false,
+    contacts: false,
+    contactBadge: false,
+  };
+}
+
+/**
+ * 把单个 stream item 映射为最小失效集合。
+ *
+ * 信封已带 `source` / `kind` / `room_id`，因此不需要解析正文：
+ * - 当前房间的消息、回执、成员/生命周期变化才失效 history 与 detail；
+ * - 其他房间只失效侧栏列表，不碰当前房间历史；
+ * - 文件与任务摘要各自失效，避免 `['room', id]` 前缀把 history 一并命中；
+ * - `room.read` 是本地 mark_read mutation 的回声，缓存已写回，不再重读。
+ */
+function markPendingRefresh(
+  pending: PendingRefresh,
+  event: Extract<ActorStreamEvent, { type: 'event' }>,
+  currentRoomId: string,
+  humanTimeline: boolean,
+): void {
+  const { source, kind, roomId } = event;
+  if (source === 'contact' || kind === 'contact') {
+    pending.rooms = true;
+    pending.contacts = true;
+    pending.contactBadge = true;
+    return;
+  }
+  if (!roomId) {
+    pending.rooms = true;
+    return;
+  }
+  if (roomId !== currentRoomId) {
+    pending.rooms = true;
+    return;
+  }
+  if (source === 'room.file' || kind === 'file') {
+    pending.files = true;
+    return;
+  }
+  if (source === 'room.read' || kind === 'read') {
+    return;
+  }
+  if (source === 'task.updated' || kind === 'task') {
+    pending.history = true;
+    pending.detail = true;
+    pending.taskSummaries = true;
+    return;
+  }
+  if (source === 'room.presence' || kind === 'presence') {
+    pending.detail = true;
+    pending.rooms = true;
+    if (humanTimeline) pending.history = true;
+    return;
+  }
+  pending.history = true;
+  pending.detail = true;
+  pending.rooms = true;
+}
+
 export function useRoomChat(roomId: string) {
   const queryClient = useQueryClient();
   const sessionState = useWebSession();
@@ -156,6 +232,21 @@ export function useRoomChat(roomId: string) {
   const humanTimeline = session?.identity.kind === 'human';
   const detailKey = queryKeys.room(roomId);
   const historyKey = queryKeys.history(roomId, humanTimeline);
+
+  /**
+   * 首屏 history 请求发起时刻，按挂载/切房后的首次查询记录。
+   *
+   * 不能用“响应完成时刻”判断握手窗口：请求可能先被服务端读取快照，
+   * 响应却晚于 ack 才完成。只要 ack 晚于请求发起，快照就可能早于订阅
+   * 覆盖，必须补拉一次；响应何时完成不影响判断。
+   */
+  const initialHistoryRequestedRef = useRef<{ roomId: string; at: number | null }>({
+    roomId,
+    at: null,
+  });
+  if (initialHistoryRequestedRef.current.roomId !== roomId) {
+    initialHistoryRequestedRef.current = { roomId, at: null };
+  }
 
   const detailQuery = useQuery({
     queryKey: detailKey,
@@ -170,6 +261,8 @@ export function useRoomChat(roomId: string) {
     // 翻页与刷新写同一份缓存；提交时以当时的缓存为准，避免晚到的刷新覆盖 older。
     structuralSharing: shareHistoryCache,
     queryFn: async ({ client, signal, queryKey }) => {
+      const first = initialHistoryRequestedRef.current;
+      if (first.roomId === roomId && first.at === null) first.at = Date.now();
       const previous = client.getQueryData<HistoryCache>(queryKey) ?? null;
       const page = await callTool<HistoryPage>(
         'network_history_list',
@@ -196,7 +289,7 @@ export function useRoomChat(roomId: string) {
       // 请求期间可能已完成翻页；以此刻的缓存为基准，而不是请求前的 previous。
       const current = client.getQueryData<HistoryCache>(queryKey) ?? previous ?? undefined;
       const pageNextOlder = nextOlderCursor(page, humanTimeline);
-      return mergeHistoryCache(current, {
+      const merged = mergeHistoryCache(current, {
         items: incoming,
         nextOlder: pageNextOlder,
         olderEnded: pageNextOlder === null,
@@ -204,6 +297,7 @@ export function useRoomChat(roomId: string) {
         olderPages: 0,
         resumeCursor: page.timeline_resume_cursor ?? current?.resumeCursor ?? null,
       });
+      return merged;
     },
   });
 
@@ -290,42 +384,95 @@ export function useRoomChat(roomId: string) {
   }, [queryClient, refresh, token]);
 
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const contactRefreshRef = useRef(false);
+  const pendingRefreshRef = useRef<PendingRefresh>(emptyPendingRefresh());
+  /** 首次 ack 的握手补拉只允许发生一次；重连 ack 走独立分支。 */
+  const initialAckHandledRef = useRef(false);
   useEffect(
     () => () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     },
     [],
   );
+  // 切换房间时旧房间的事件不能失效新房间的查询。
+  useEffect(() => {
+    pendingRefreshRef.current = emptyPendingRefresh();
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+    }
+  }, [roomId]);
+
+  const flushRefresh = useCallback(() => {
+    refreshTimerRef.current = null;
+    const pending = pendingRefreshRef.current;
+    pendingRefreshRef.current = emptyPendingRefresh();
+    if (pending.rooms) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.rooms(actorId) });
+    }
+    if (pending.detail) {
+      // exact：不能命中同前缀的 history / files / task-summary。
+      void queryClient.invalidateQueries({ queryKey: detailKey, exact: true });
+    }
+    if (pending.history) {
+      void queryClient.invalidateQueries({ queryKey: historyKey, exact: true });
+    }
+    // 文件面板可见时才存在活动查询；不可见时仅标脏，不额外发请求。
+    if (pending.files) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.roomFiles(roomId), exact: true });
+    }
+    if (pending.taskSummaries) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.taskSummaries(roomId) });
+    }
+    if (pending.contacts) {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.contactRequests(actorId),
+      });
+    }
+    if (pending.contactBadge) {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.contactRequestBadge(actorId),
+      });
+    }
+  }, [actorId, detailKey, historyKey, queryClient, roomId]);
 
   /**
-   * SSE 只给“某处变了”的提示；300ms 合并后让查询自己重读权威状态。
-   * 桌面聊天页的侧栏与 Home 共用 `useRooms`，同一事件也要失效会话列表；
-   * contact 事件额外刷新好友申请角标，避免第二条 subscriptions/listen。
+   * SSE 只给“某处变了”的提示；300ms 窗口内按房间与查询类别合并，
+   * 窗口结束后让查询自己重读权威状态。
+   *
+   * 首次 ack 不代表订阅已经覆盖首屏：只要 ack 晚于首屏 history 的请求
+   * 发起时刻，服务端可能已经读过更早的快照，而 ack 之前写入的消息不会
+   * 被订阅重放，必须补拉一次当前房间，与响应何时完成无关。
+   * ack 早于或等于请求发起时，请求在订阅建立后才发出，首屏查询已经覆盖，
+   * 不额外读取。重连 ack 仍整体刷新，覆盖断线期间错过的事件。
    */
   const scheduleRefresh = useCallback(
-    (source: string) => {
+    (event: ActorStreamEvent) => {
       if (!token) return;
-      if (source === 'contact') contactRefreshRef.current = true;
-      if (refreshTimerRef.current) return;
-      refreshTimerRef.current = setTimeout(() => {
-        refreshTimerRef.current = null;
-        void queryClient.invalidateQueries({ queryKey: detailKey });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.rooms(actorId) });
-        // 文件面板可见时才存在活动查询；不可见时仅标脏，不额外发请求。
-        void queryClient.invalidateQueries({ queryKey: queryKeys.roomFiles(roomId) });
-        if (contactRefreshRef.current) {
-          contactRefreshRef.current = false;
-          void queryClient.invalidateQueries({
-            queryKey: queryKeys.contactRequests(actorId),
-          });
-          void queryClient.invalidateQueries({
-            queryKey: queryKeys.contactRequestBadge(actorId),
-          });
+      const pending = pendingRefreshRef.current;
+      if (event.type === 'ack') {
+        if (event.reconnect) {
+          pending.rooms = true;
+          pending.detail = true;
+          pending.history = true;
+          pending.files = true;
+        } else {
+          // 首次 ack 只判断一次，避免重复 ack/事件再次触发补拉。
+          if (initialAckHandledRef.current) return;
+          initialAckHandledRef.current = true;
+          const requestedAt = initialHistoryRequestedRef.current.at;
+          if (requestedAt === null || event.at <= requestedAt) return;
+          // 握手窗口：history 请求早于 ack，快照可能不含 ack 前的写入。
+          // 只补当前房间；无关房间事件仍只刷新侧栏。
+          pending.history = true;
+          pending.detail = true;
         }
-      }, LIMITS.webRefreshDebounceMs);
+      } else {
+        markPendingRefresh(pending, event, roomId, humanTimeline);
+      }
+      if (refreshTimerRef.current) return;
+      refreshTimerRef.current = setTimeout(flushRefresh, LIMITS.webRefreshDebounceMs);
     },
-    [actorId, detailKey, queryClient, roomId, token],
+    [flushRefresh, humanTimeline, roomId, token],
   );
 
   const stream = useActorStream({ token, onEvent: scheduleRefresh });

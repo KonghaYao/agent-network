@@ -87,6 +87,10 @@ interface RoomList {
   items: { room_id: string; kind: string; peer?: { actor_id?: string } | null }[];
 }
 
+interface RoomDetail {
+  room: { room_id: string };
+}
+
 interface ContactRequestResult {
   request: { contact_request_id: string } | null;
 }
@@ -103,6 +107,8 @@ async function instrumentFetch(page: Page): Promise<void> {
         stream: boolean;
         body: unknown;
       }[];
+      /** 首次 ack 被页面消费的时刻（浏览器时钟），用于快/慢握手断言。 */
+      __streamAckAt?: number;
       fetch: typeof fetch;
     };
     target.__mcpCalls = [];
@@ -116,9 +122,47 @@ async function instrumentFetch(page: Page): Promise<void> {
       }
       const method = body?.method ?? null;
       target.__mcpCalls?.push({ method, stream: method === 'subscriptions/listen', body });
-      return original(input, init);
+      const response = await original(input, init);
+      if (method === 'subscriptions/listen') {
+        // 只旁路观察 ack，不改变页面自己读取的 SSE 流。
+        try {
+          const clone = response.clone();
+          void (async () => {
+            try {
+              const reader = clone.body?.getReader();
+              if (!reader) return;
+              const decoder = new TextDecoder();
+              let text = '';
+              for (;;) {
+                const step = await reader.read();
+                if (step.done) return;
+                text += decoder.decode(step.value, { stream: true });
+                if (text.includes('notifications/subscriptions/acknowledged')) {
+                  target.__streamAckAt = Date.now();
+                  await reader.cancel().catch(() => undefined);
+                  return;
+                }
+                if (text.length > 16_384) text = text.slice(-2048);
+              }
+            } catch {
+              // 页面关闭或流被取消时忽略。
+            }
+          })();
+        } catch {
+          // clone 失败不能影响页面自身读取。
+        }
+      }
+      return response;
     }) as typeof fetch;
   });
+}
+
+async function waitForStreamAck(page: Page, timeout = 10_000): Promise<void> {
+  await page.waitForFunction(
+    () => typeof (window as unknown as { __streamAckAt?: number }).__streamAckAt === 'number',
+    undefined,
+    { timeout },
+  );
 }
 
 async function waitForHistory(
@@ -141,6 +185,46 @@ async function waitForHistory(
   throw new Error(`历史中未找到消息：${expected}`);
 }
 
+async function countHistoryWithoutCursor(
+  page: Page,
+  roomId: string,
+): Promise<number> {
+  return page.evaluate((targetRoom) => {
+    const calls =
+      (
+        window as unknown as {
+          __mcpCalls?: { body?: { params?: { name?: string; arguments?: { room_id?: string; cursor?: string } } } }[];
+        }
+      ).__mcpCalls ?? [];
+    return calls.filter((call) => {
+      const params = call.body?.params;
+      return (
+        params?.name === 'network_history_list' &&
+        params.arguments?.room_id === targetRoom &&
+        !params.arguments?.cursor
+      );
+    }).length;
+  }, roomId);
+}
+
+async function countRoomCalls(page: Page, name: string, roomId: string): Promise<number> {
+  return page.evaluate(
+    ({ targetName, targetRoom }) => {
+      const calls =
+        (
+          window as unknown as {
+            __mcpCalls?: { body?: { params?: { name?: string; arguments?: { room_id?: string } } } }[];
+          }
+        ).__mcpCalls ?? [];
+      return calls.filter((call) => {
+        const params = call.body?.params;
+        return params?.name === targetName && params.arguments?.room_id === targetRoom;
+      }).length;
+    },
+    { targetName: name, targetRoom: roomId },
+  );
+}
+
 test.describe('SPA Chat', () => {
 
   let base = '';
@@ -148,6 +232,7 @@ test.describe('SPA Chat', () => {
   let tokenB = '';
   let nameB = '';
   let roomId = '';
+  let otherRoomId = '';
 
   test.beforeAll(async () => {
     base = await baseUrl();
@@ -193,6 +278,13 @@ test.describe('SPA Chat', () => {
       body: 'Chat E2E 初始消息',
       invoke: [],
     });
+    const other = await callTool<RoomDetail>(base, tokenA, 'network_room_create', {
+      request_id: requestId('e2e_room'),
+      kind: 'group',
+      title: 'Chat E2E 其他房间',
+      members: [b.actor_id],
+    });
+    otherRoomId = other.room.room_id;
   });
 
   test.beforeEach(async ({ page }) => {
@@ -285,6 +377,226 @@ test.describe('SPA Chat', () => {
       return typeof args?.reply_to === 'string' && args.reply_to.length > 0;
     });
     expect(hasReplyTo).toBe(true);
+  });
+
+  test('scopes stream invalidation to the current room', async ({ page }) => {
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#messages .msg .bubble').first()).toContainText('Chat E2E 初始消息');
+    // 首次 ack 晚于 history 请求发起时允许补拉一次；等补拉落定后再取基线。
+    await page.waitForTimeout(1_200);
+    const firstHistory = await countHistoryWithoutCursor(page, roomId);
+    expect(firstHistory).toBeGreaterThanOrEqual(1);
+    expect(firstHistory).toBeLessThanOrEqual(2);
+    const firstRoomGet = await countRoomCalls(page, 'network_room_get', roomId);
+    expect(firstRoomGet).toBeGreaterThanOrEqual(1);
+    expect(firstRoomGet).toBeLessThanOrEqual(2);
+    await page.waitForTimeout(600);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(firstHistory);
+    expect(await countRoomCalls(page, 'network_room_get', roomId)).toBe(firstRoomGet);
+
+    // 其他房间是群聊；切到群聊分类后侧栏才渲染它。
+    await page.locator('#room-filter-group').click();
+    const otherItem = page.locator(
+      `#room-list a.room-item[href="/c/${encodeURIComponent(otherRoomId)}"]`,
+    );
+    await expect(otherItem).toBeVisible();
+
+    const otherMarker = `E2E 其他房间 ${Date.now()}`;
+    await callTool(base, tokenB, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: requestId('e2e_cm'),
+      room_id: otherRoomId,
+      body: otherMarker,
+      invoke: [],
+    });
+    await expect(otherItem).toContainText(otherMarker, { timeout: 15_000 });
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(firstHistory);
+    expect(await countRoomCalls(page, 'network_room_get', roomId)).toBe(firstRoomGet);
+
+    const currentMarker = `E2E 当前房间 ${Date.now()}`;
+    await callTool(base, tokenB, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: requestId('e2e_cm'),
+      room_id: roomId,
+      body: currentMarker,
+      invoke: [],
+    });
+    await expect(page.locator('#messages .msg .bubble').last()).toContainText(currentMarker, {
+      timeout: 15_000,
+    });
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(firstHistory + 1);
+  });
+
+  test('catches up current room when the first stream ack lags behind history', async ({ page }) => {
+    let releaseStream: () => void = () => undefined;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    let markStreamHeld: () => void = () => undefined;
+    const streamHeld = new Promise<void>((resolve) => {
+      markStreamHeld = resolve;
+    });
+    await page.route('**/mcp', async (route) => {
+      if (route.request().headers()['mcp-method'] === 'subscriptions/listen') {
+        markStreamHeld();
+        await streamGate;
+      }
+      await route.continue();
+    });
+
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#messages .msg .bubble').first()).toContainText('Chat E2E 初始消息');
+    await streamHeld;
+    await page.waitForTimeout(400);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(1);
+
+    const marker = `E2E 握手窗口 ${Date.now()}`;
+    await callTool(base, tokenB, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: requestId('e2e_cm'),
+      room_id: roomId,
+      body: marker,
+      invoke: [],
+    });
+    await waitForHistory(base, tokenB, roomId, marker);
+    // 订阅尚未建立，服务端不重放握手窗口内的事件：页面此刻看不到消息。
+    await expect(page.locator('#messages .msg .bubble', { hasText: marker })).toHaveCount(0);
+
+    releaseStream();
+    // 首次 ack 补拉一次即可看到消息，无需第二条消息事件。
+    await expect(page.locator('#messages .msg .bubble', { hasText: marker })).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(2);
+
+    // 只补一次，不形成循环，也不重建订阅。
+    await page.waitForTimeout(1_200);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(2);
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __mcpCalls?: { stream?: boolean }[];
+            }
+          ).__mcpCalls?.filter((call) => call.stream === true).length ?? 0,
+      ),
+    ).toBe(1);
+  });
+
+  test('catches up when ack arrives while the first history response is suspended', async ({ page }) => {
+    let releaseHistory: () => void = () => undefined;
+    const historyGate = new Promise<void>((resolve) => {
+      releaseHistory = resolve;
+    });
+    let markHistoryHeld: () => void = () => undefined;
+    const historyHeld = new Promise<void>((resolve) => {
+      markHistoryHeld = resolve;
+    });
+    let releaseStream: () => void = () => undefined;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    let markStreamHeld: () => void = () => undefined;
+    const streamHeld = new Promise<void>((resolve) => {
+      markStreamHeld = resolve;
+    });
+
+    let heldHistory = false;
+    await page.route('**/mcp', async (route) => {
+      const request = route.request();
+      if (request.headers()['mcp-method'] === 'subscriptions/listen') {
+        markStreamHeld();
+        await streamGate;
+        await route.continue().catch(() => undefined);
+        return;
+      }
+      if (
+        !heldHistory &&
+        request.headers()['mcp-name'] === 'network_history_list' &&
+        !(request.postData() ?? '').includes('"cursor"')
+      ) {
+        heldHistory = true;
+        // 先让服务端读取快照，再挂起响应：复现“快照早于 ack、响应晚于 ack”。
+        const response = await route.fetch();
+        markHistoryHeld();
+        await historyGate;
+        await route.fulfill({ response }).catch(() => undefined);
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.goto(`${base}/c/${roomId}`);
+    await historyHeld;
+    await streamHeld;
+
+    const marker = `E2E 响应晚于 ack ${Date.now()}`;
+    await callTool(base, tokenB, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: requestId('e2e_cm'),
+      room_id: roomId,
+      body: marker,
+      invoke: [],
+    });
+    await waitForHistory(base, tokenB, roomId, marker);
+    // 订阅尚未建立、首屏响应仍被挂起：页面此刻看不到消息。
+    await expect(page.locator('#messages .msg .bubble', { hasText: marker })).toHaveCount(0);
+
+    releaseStream();
+    await waitForStreamAck(page);
+    // 先释放 history 响应：它的完成时刻晚于 ack，但快照早于握手窗口。
+    releaseHistory();
+    await expect(page.locator('#messages .msg .bubble', { hasText: marker })).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(2);
+
+    // 只补一次，不形成循环，也不重建订阅。
+    await page.waitForTimeout(1_200);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(2);
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __mcpCalls?: { stream?: boolean }[];
+            }
+          ).__mcpCalls?.filter((call) => call.stream === true).length ?? 0,
+      ),
+    ).toBe(1);
+  });
+
+  test('keeps one first-page read when the ack predates the history request', async ({ page }) => {
+    // 正常加载顺序中 history 先发起、ack 后到，必然保守补拉；该用例把页面
+    // 时钟固定后再回拨，模拟 ack 时间戳早于请求发起的分支，验证不补拉。
+    await page.clock.setFixedTime(new Date('2026-11-13T12:00:00Z'));
+    let releaseStream: () => void = () => undefined;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    let markStreamHeld: () => void = () => undefined;
+    const streamHeld = new Promise<void>((resolve) => {
+      markStreamHeld = resolve;
+    });
+    await page.route('**/mcp', async (route) => {
+      if (route.request().headers()['mcp-method'] === 'subscriptions/listen') {
+        markStreamHeld();
+        await streamGate;
+      }
+      await route.continue();
+    });
+
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#messages .msg .bubble').first()).toContainText('Chat E2E 初始消息');
+    await streamHeld;
+    // ack 在回拨后的时钟到达，早于 history 请求发起时刻。
+    await page.clock.setFixedTime(new Date('2026-11-13T11:59:00Z'));
+    releaseStream();
+    await waitForStreamAck(page);
+    await page.waitForTimeout(1_200);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBe(1);
+    expect(await countRoomCalls(page, 'network_room_get', roomId)).toBe(1);
   });
 
   test('keeps IME Enter, Shift+Enter and 1–4 line composer behavior', async ({ page }) => {
