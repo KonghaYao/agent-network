@@ -199,7 +199,13 @@ async function main(): Promise<void> {
       tags: [],
     },
   ];
-  fake.seedBank(targetBank, { memories });
+  const memoryDetails = Object.fromEntries(
+    memories.map((item) => [
+      item.id,
+      { ...item, context: '会话上下文', source_memories: [], history: [] },
+    ]),
+  );
+  fake.seedBank(targetBank, { memories, memoryDetails });
 
   const clock = Date.now();
   const reader = new HindsightInsightReader({
@@ -264,6 +270,33 @@ async function main(): Promise<void> {
   check('timeline 转发 start_date', Boolean(timelineRequest?.query.get('start_date')));
   check('timeline 转发 end_date', Boolean(timelineRequest?.query.get('end_date')));
   assertNoSensitive('timeline 输出', timeline, targetBank);
+
+  console.log('--- detail 与 timeline 时间基准 ---');
+  const detailM1 = await service.get(viewer('human', friend), {
+    actor_id: target,
+    memory_id: 'm1',
+    refresh: true,
+  });
+  const m1Timeline = timeline.items.find((item) => item.id === 'm1');
+  checkEqual('detail available', detailM1.available, true);
+  checkEqual('detail m1 返回 occurred_start', detailM1.memory?.occurred_start, '2026-10-01T00:00:00Z');
+  checkEqual('detail m1 返回 mentioned_at', detailM1.memory?.mentioned_at, '2026-11-01T00:00:00Z');
+  checkEqual(
+    'detail 与 timeline 使用同一发生时间',
+    detailM1.memory?.occurred_start,
+    m1Timeline?.occurred_at,
+  );
+  const detailEventAt = detailM1.memory?.occurred_start ?? detailM1.memory?.mentioned_at ?? null;
+  checkEqual('detail 事件日期以发生时间为准', localDateKey(detailEventAt, 'UTC'), '2026-10-01');
+  check(
+    'detail 事件日期落在 timeline day 分组内',
+    timeline.groups.day.some((group) => group.key === localDateKey(detailEventAt, 'UTC')),
+    timeline.groups.day.map((group) => group.key).join(','),
+  );
+  check(
+    'detail 提及时间会落到不同日期',
+    localDateKey(detailM1.memory?.mentioned_at ?? null, 'UTC') !== localDateKey(detailEventAt, 'UTC'),
+  );
 
   console.log('--- timeline 本地时区 offset ---');
   const localTimeline = await service.timeline(viewer('human', friend), {

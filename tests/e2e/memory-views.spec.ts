@@ -124,6 +124,7 @@ function memory(
   text: string,
   daysAgo: number,
   entities: string[] = [],
+  occurredDaysAgo?: number,
 ): FixtureMemory {
   return {
     id,
@@ -131,7 +132,10 @@ function memory(
     fact_type: type,
     state: 'valid',
     mentioned_at: new Date(Date.now() - daysAgo * DAY).toISOString(),
-    occurred_start: null,
+    occurred_start:
+      occurredDaysAgo === undefined
+        ? null
+        : new Date(Date.now() - occurredDaysAgo * DAY).toISOString(),
     occurred_end: null,
     entities,
     proof_count: 2,
@@ -142,7 +146,7 @@ function memory(
 const MEMORIES: FixtureMemory[] = [
   memory('mem-a', 'experience', 'Deploy window moved to Thursday for the alpha service.', 1, [
     'alpha',
-  ]),
+  ], 20),
   memory('mem-b', 'experience', 'Rollback completed after the beta migration.', 2, ['beta']),
   memory('mem-c', 'experience', 'Observation runbook updated for gamma.', 5, ['gamma']),
   memory('mem-d', 'observation', 'The dashboard was slow twice during the deploy.', 10, [
@@ -308,7 +312,11 @@ async function installMemoryStub(
         const at = item.mentioned_at ? Date.parse(item.mentioned_at) : Number.NaN;
         return Number.isFinite(at) && at >= cutoff;
       })
-        .sort((left, right) => Date.parse(right.mentioned_at ?? '') - Date.parse(left.mentioned_at ?? ''))
+        .sort(
+          (left, right) =>
+            Date.parse(right.occurred_start ?? right.mentioned_at ?? '') -
+            Date.parse(left.occurred_start ?? left.mentioned_at ?? ''),
+        )
         .map((item) => ({
           id: item.id,
           text:
@@ -695,6 +703,35 @@ test.describe('Agent 记忆：星座、时间线、实体', () => {
     await page.locator('#memory-detail-close').click();
     await expect(page.locator('#memory-detail-text')).toHaveCount(0);
     await expect(cards.first()).toBeFocused();
+
+    // 发生时间与提及时间不同：卡片和详情头部都必须按发生时间显示同一天。
+    const occurred = MEMORIES[0]!;
+    expect(occurred.occurred_start).not.toBeNull();
+    expect(occurred.occurred_start).not.toBe(occurred.mentioned_at);
+    const occurredCard = chart.locator('.memory-timeline-card[data-timeline-id="mem-a"]');
+    await expect(occurredCard).toBeVisible();
+    const cardTime = (await occurredCard.locator('.memory-timeline-card-time').textContent()) ?? '';
+    await occurredCard.click();
+    await expect(page.locator('#memory-detail-text')).toBeVisible({ timeout: 15_000 });
+    const detailTime = (await page.locator('#memory-detail-time').textContent()) ?? '';
+    const occurredDay = await page.evaluate(
+      (iso) => new Date(iso).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
+      occurred.occurred_start!,
+    );
+    const mentionedDay = await page.evaluate(
+      (iso) => new Date(iso).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
+      occurred.mentioned_at!,
+    );
+    expect(occurredDay).not.toBe(mentionedDay);
+    expect(cardTime).toContain(occurredDay);
+    expect(detailTime).toContain(occurredDay);
+    expect(detailTime).not.toContain(mentionedDay);
+    await page.locator('.memory-detail-more summary').click();
+    const moreInfo = (await page.locator('.memory-detail-more').textContent()) ?? '';
+    expect(moreInfo).toContain('发生时间');
+    expect(moreInfo).toContain('提及时间');
+    await page.locator('#memory-detail-close').click();
+    await expect(page.locator('#memory-detail-text')).toHaveCount(0);
 
     await page.selectOption('#memory-timeline-range', '7');
     await expect(cards).toHaveCount(3);
