@@ -26,8 +26,8 @@ import type {
 } from './rows';
 import {
   MEMORY_POLICY_VERSION,
-  type MemoryExposureEvidenceKind,
   type MemoryOriginKind,
+  type MemoryRecallEvidenceKind,
   type MemoryRepresentation,
   type MemorySpaceRef,
 } from './contracts';
@@ -647,7 +647,7 @@ export class MemoryRuntime {
       if (!receipt || !receipt.evidence) throw new Error('experienced retain missing receipt');
       eligibility = {
         kind: 'experienced',
-        evidence: receipt.evidence as MemoryExposureEvidenceKind,
+        evidence: receipt.evidence as MemoryRecallEvidenceKind,
         receipt_id: receipt.receipt_id,
         proof_id: receipt.proof_id,
       };

@@ -1352,6 +1352,7 @@ async function main(): Promise<void> {
       'network_agent_memory_overview',
       'network_agent_memory_graph',
       'network_agent_memory_list',
+      'network_agent_memory_timeline',
       'network_agent_memory_get',
       'network_agent_memory_entities',
     ]) {

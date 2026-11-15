@@ -381,6 +381,11 @@ async function main(): Promise<void> {
       'raw_full',
     );
     checkEqual('search 映射 verbatim', searchOne.hits[0]!.representation.verbatim, true);
+    checkEqual(
+      'search 映射本地 representation id（metadata 优先）',
+      searchOne.hits[0]!.representation.representation_id,
+      rawOne.representation_id,
+    );
     checkEqual('search evidence_complete', searchOne.evidence_complete, true);
     check('search 结果不含凭据', !JSON.stringify(searchOne).includes(token));
 

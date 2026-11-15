@@ -32,6 +32,10 @@ import {
   type InsightListResult,
   type InsightOverviewInput,
   type InsightOverviewResult,
+  type InsightTimelineGroup,
+  type InsightTimelineInput,
+  type InsightTimelineItem,
+  type InsightTimelineResult,
   type InsightViewer,
   type InsightView,
 } from './contracts';
@@ -42,6 +46,7 @@ import {
 import {
   fitGraphBytes,
   fitItemsToBytes,
+  jsonBytes,
   normalizeEntityDetail,
   normalizeEntityGraph,
   normalizeEntityList,
@@ -49,7 +54,13 @@ import {
   normalizeMemoryGraph,
   normalizeMemoryList,
   normalizeStats,
+  normalizeTimelineItem,
 } from './normalize';
+import {
+  resolveTimelineZone,
+  timelineRange,
+  type TimelineZone,
+} from './timeline-zone';
 
 export type FailedInsightRead = Extract<InsightReadResult, { ok: false }>;
 
@@ -116,6 +127,88 @@ function validateDateRange(startDate?: string, endDate?: string): void {
       });
     }
   }
+}
+
+const DAY_MS = 24 * 60 * 60_000;
+
+function timelineTimeMs(item: InsightTimelineItem): number | null {
+  for (const value of [item.occurred_at, item.mentioned_at]) {
+    if (!value) continue;
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function sortTimelineItems(items: InsightTimelineItem[]): InsightTimelineItem[] {
+  return [...items].sort((left, right) => {
+    const leftTime = timelineTimeMs(left);
+    const rightTime = timelineTimeMs(right);
+    if (leftTime !== rightTime) {
+      if (leftTime === null) return 1;
+      if (rightTime === null) return -1;
+      return rightTime - leftTime;
+    }
+    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+  });
+}
+
+function buildTimelineGroups(
+  items: InsightTimelineItem[],
+  granularity: 'day' | 'week' | 'month',
+  zone: TimelineZone,
+): InsightTimelineGroup[] {
+  const groups: InsightTimelineGroup[] = [];
+  let current: InsightTimelineGroup | null = null;
+  items.forEach((item, index) => {
+    const ms = timelineTimeMs(item);
+    const range =
+      ms === null
+        ? { key: 'undated', label: '无日期', start: null, end: null }
+        : timelineRange(ms, granularity, zone);
+    if (!current || current.key !== range.key) {
+      current = {
+        ...range,
+        count: 0,
+        start_index: index,
+        end_index: index + 1,
+      };
+      groups.push(current);
+    }
+    current.count += 1;
+    current.end_index = index + 1;
+  });
+  return groups;
+}
+
+function timelineGroups(
+  items: InsightTimelineItem[],
+  zone: TimelineZone,
+): InsightTimelineResult['groups'] {
+  return {
+    day: buildTimelineGroups(items, 'day', zone),
+    week: buildTimelineGroups(items, 'week', zone),
+    month: buildTimelineGroups(items, 'month', zone),
+  };
+}
+
+function timelineSummary(
+  items: InsightTimelineItem[],
+  total: number | null,
+): InsightTimelineResult['summary'] {
+  const byType = { world: 0, experience: 0, observation: 0 };
+  let dated = 0;
+  for (const item of items) {
+    if (item.fact_type) byType[item.fact_type] += 1;
+    if (timelineTimeMs(item) !== null) dated += 1;
+  }
+  return {
+    total,
+    returned: items.length,
+    dated,
+    undated: items.length - dated,
+    by_type: byType,
+  };
 }
 
 export class MemoryInsightService {
@@ -225,6 +318,7 @@ export class MemoryInsightService {
         LIMITS.memoryPanelFactsPageMax,
       );
       const offset = input.offset ?? 0;
+      const textChars = input.text_chars ?? LIMITS.memoryPanelFactsTextChars;
       const base = this.#base(target);
       const gate = this.#gate();
       if (gate) return this.#emptyList(base, gate, limit, offset);
@@ -241,6 +335,7 @@ export class MemoryInsightService {
         time_field: input.time_field,
         start_date: input.start_date,
         end_date: input.end_date,
+        text_chars: textChars,
       };
       return this.#cache.getOrLoad(
         this.#cacheKey(space, 'list', params),
@@ -253,7 +348,7 @@ export class MemoryInsightService {
             return this.#emptyList(base, 'backend_unsupported', limit, offset);
           }
           if (!outcome.ok) this.#throwReadFailure(outcome);
-          const normalized = normalizeMemoryList(outcome.body);
+          const normalized = normalizeMemoryList(outcome.body, { textChars });
           if (!normalized) throw insightBusinessError('UPSTREAM_UNAVAILABLE');
           const hasMore =
             normalized.raw_count > 0 &&
@@ -279,6 +374,112 @@ export class MemoryInsightService {
             result.next_offset =
               offset + Math.max(result.items.length, normalized.raw_count - dropped);
           }
+          return result;
+        },
+        { refresh: input.refresh },
+      );
+    });
+  }
+
+  async timeline(
+    viewer: InsightViewer,
+    input: InsightTimelineInput,
+  ): Promise<InsightTimelineResult> {
+    return this.#run(viewer, input.actor_id, 'timeline', async (target) => {
+      const days = input.days ?? LIMITS.memoryPanelTimelineDaysDefault;
+      const limit = Math.min(
+        input.limit ?? LIMITS.memoryPanelTimelineLimitDefault,
+        LIMITS.memoryPanelTimelineLimitMax,
+      );
+      const zone = resolveTimelineZone(input);
+      const base = this.#base(target);
+      const gate = this.#gate();
+      if (gate) return this.#emptyTimeline(base, gate, days, limit);
+      const reader = this.#reader!;
+      const space = await loadInsightSpace(this.#db, target.actor_id);
+      if (!space) return this.#emptyTimeline(base, 'no_space', days, limit);
+      const bank = await reader.bankFor(spaceRef(space));
+      return this.#cache.getOrLoad(
+        this.#cacheKey(space, 'timeline', {
+          days,
+          type: input.type,
+          limit,
+          timezone: zone.timeZone,
+          tz_offset_minutes: zone.offsetMinutes,
+        }),
+        async () => {
+          const deadlineAt = this.#now() + LIMITS.memoryPanelTimeoutMs;
+          const end = new Date(this.#now());
+          const start = new Date(end.getTime() - days * DAY_MS);
+          const collected: InsightTimelineItem[] = [];
+          const seen = new Set<string>();
+          let total: number | null = null;
+          let offset = 0;
+          let hasMore = false;
+
+          for (let page = 0; page < LIMITS.memoryPanelTimelinePagesMax; page += 1) {
+            const remaining = limit - collected.length;
+            if (remaining <= 0) break;
+            if (this.#now() >= deadlineAt) throw insightBusinessError('UPSTREAM_TIMEOUT');
+            const pageLimit = Math.min(remaining, LIMITS.memoryPanelTimelinePageMax);
+            const outcome = await reader.memories(bank, {
+              limit: pageLimit,
+              offset,
+              type: input.type,
+              time_field: 'mentioned_at',
+              start_date: start.toISOString(),
+              end_date: end.toISOString(),
+              deadline_at: deadlineAt,
+            });
+            if (httpStatusOf(outcome) === 404) {
+              return this.#emptyTimeline(base, 'bank_missing', days, limit);
+            }
+            if (httpStatusOf(outcome) === 405 || httpStatusOf(outcome) === 410) {
+              return this.#emptyTimeline(base, 'backend_unsupported', days, limit);
+            }
+            if (!outcome.ok) this.#throwReadFailure(outcome);
+            const normalized = normalizeMemoryList(outcome.body);
+            if (!normalized) throw insightBusinessError('UPSTREAM_UNAVAILABLE');
+            total = normalized.total;
+            const rawItems = Array.isArray((outcome.body as { items?: unknown }).items)
+              ? ((outcome.body as { items: unknown[] }).items)
+              : [];
+            for (const entry of rawItems) {
+              const item = normalizeTimelineItem(entry);
+              if (!item || seen.has(item.id)) continue;
+              seen.add(item.id);
+              collected.push(item);
+              if (collected.length >= limit) break;
+            }
+            offset += normalized.raw_count;
+            if (normalized.raw_count === 0) break;
+            const knownMore = total !== null ? offset < total : normalized.raw_count >= pageLimit;
+            if (!knownMore) break;
+            if (page === LIMITS.memoryPanelTimelinePagesMax - 1) {
+              hasMore = true;
+              break;
+            }
+            if (collected.length >= limit) {
+              hasMore = true;
+              break;
+            }
+            if (this.#now() >= deadlineAt) throw insightBusinessError('UPSTREAM_TIMEOUT');
+          }
+
+          if (total !== null) hasMore = total > collected.length;
+          const sorted = sortTimelineItems(collected);
+          const result: InsightTimelineResult = {
+            ...base,
+            available: true,
+            reason: 'ok',
+            items: sorted,
+            groups: timelineGroups(sorted, zone),
+            summary: timelineSummary(sorted, total),
+            days,
+            limit,
+            truncated: hasMore,
+          };
+          if (this.#fitTimelineBytes(result, zone)) result.truncated = true;
           return result;
         },
         { refresh: input.refresh },
@@ -602,6 +803,42 @@ export class MemoryInsightService {
       next_offset: null,
       truncated: false,
     };
+  }
+
+  #emptyTimeline(
+    base: BaseView,
+    reason: InsightAvailabilityReason,
+    days: number,
+    limit: number,
+  ): InsightTimelineResult {
+    return {
+      ...base,
+      available: false,
+      reason,
+      items: [],
+      groups: { day: [], week: [], month: [] },
+      summary: timelineSummary([], null),
+      days,
+      limit,
+      truncated: false,
+    };
+  }
+
+  /** 超出 JSON 预算时从尾部（最旧事件）移除，并重建分组索引。 */
+  #fitTimelineBytes(result: InsightTimelineResult, zone: TimelineZone): boolean {
+    let trimmed = false;
+    while (jsonBytes(result) > LIMITS.memoryPanelTimelineBytes && result.items.length > 0) {
+      const nextLength = Math.max(0, result.items.length - 16);
+      result.items.splice(nextLength);
+      this.#refreshTimeline(result, zone);
+      trimmed = true;
+    }
+    return trimmed;
+  }
+
+  #refreshTimeline(result: InsightTimelineResult, zone: TimelineZone): void {
+    result.groups = timelineGroups(result.items, zone);
+    result.summary = timelineSummary(result.items, result.summary.total);
   }
 
   #emptyGet(base: BaseView, reason: InsightAvailabilityReason): InsightGetResult {

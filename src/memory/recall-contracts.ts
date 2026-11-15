@@ -32,7 +32,7 @@ import {
   type MemoryTargetScope,
   type MemoryUtf8Bytes,
 } from './contracts-core';
-import { evidenceRank, type MemoryContextTarget, type MemoryExposureEvidenceKind, type MemoryMessageRef, type MemoryMinimumEvidence, type MemoryTaskRef } from './experience-contracts';
+import { evidenceRank, type MemoryContextTarget, type MemoryExposureEvidenceKind, type MemoryMessageRef, type MemoryMinimumEvidence, type MemoryRecallEvidenceKind, type MemoryTaskRef } from './experience-contracts';
 
 // ---------------------------------------------------------------------------
 // 召回请求与结果
@@ -156,7 +156,7 @@ export interface MemoryRecallExclusion {
 export interface MemoryRecallItem {
   origin_kind: MemoryOriginKind;
   representation: MemoryRepresentation;
-  evidence: MemoryExposureEvidenceKind | null;
+  evidence: MemoryRecallEvidenceKind | null;
   source: MemorySourceRef | null;
   score: number | null;
   trust: typeof MEMORY_PAYLOAD_AUTHORITY;
@@ -196,6 +196,7 @@ export type MemoryContextValidity = 'active' | 'expired' | 'revoked' | 'supersed
 
 export type MemoryContextEvidenceKind =
   | MemoryExposureEvidenceKind
+  | MemoryRecallEvidenceKind
   | 'authored_record'
   | 'curated_record';
 

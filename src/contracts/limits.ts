@@ -498,6 +498,14 @@ export const LIMITS = {
   memoryTickIntervalMs: 5_000,
   /** unknown 作业对账周期；与领取分开，避免把未知当失败重跑。 */
   memoryReconcileIntervalMs: 30_000,
+  /** 定时回填窗口宽度与调度周期（毫秒）；窗口按整点对齐。 */
+  memoryBackfillIntervalMs: 60 * 60_000,
+  memoryBackfillWindowMs: 60 * 60_000,
+  /** 停机后单轮最多补偿的窗口数；更早的窗口显式跳过并记录。 */
+  memoryBackfillMaxCatchupWindows: 24,
+  /** 回填单页消息数与 rowid 越界回看行数。 */
+  memoryBackfillPageSize: 100,
+  memoryBackfillScanSafetyRows: 200,
   /** prepared selection / catchup 计划的短期 TTL（毫秒）。 */
   memoryPreparedTtlMs: 10 * 60_000,
   memoryCatchupTtlMs: 24 * 60 * 60_000,
@@ -541,9 +549,20 @@ export const LIMITS = {
   memoryPanelEntityGraphEdgesRequestMax: 400,
   /** 实体共现图最大节点数。 */
   memoryPanelEntityGraphNodesMax: 200,
-  /** 记忆事实列表默认/最大页大小。 */
+  /** 记忆事实列表默认/最大页大小；UI 可一次取回大页后本地分页。 */
   memoryPanelFactsPageDefault: 20,
-  memoryPanelFactsPageMax: 50,
+  memoryPanelFactsPageMax: 500,
+  /** 时间线默认/最大事件数与上游合并页参数。 */
+  memoryPanelTimelineDaysDefault: 30,
+  memoryPanelTimelineLimitDefault: 300,
+  memoryPanelTimelineLimitMax: 500,
+  memoryPanelTimelinePageMax: 200,
+  memoryPanelTimelinePagesMax: 5,
+  memoryPanelTimelineTextChars: 96,
+  memoryPanelTimelineEntitiesMax: 3,
+  memoryPanelTimelineEntityChars: 40,
+  /** 时间线归一化结果 JSON 预算。 */
+  memoryPanelTimelineBytes: 248 * 1024,
   /** 实体列表默认/最大页大小。 */
   memoryPanelEntitiesPageDefault: 50,
   memoryPanelEntitiesPageMax: 100,

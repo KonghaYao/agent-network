@@ -23,6 +23,7 @@ export {
   isProducerKind,
   isRecord,
   isRepresentationKind,
+  isRecallEvidenceKind,
   nonEmptyString,
   validEpoch,
   validSourceRef,

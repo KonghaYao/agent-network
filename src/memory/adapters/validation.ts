@@ -5,6 +5,7 @@
  * 器必须对同一输入给出同一“接受/拒绝”结论，避免弱适配器放宽精确表示要求。
  */
 import {
+  isRecallEvidenceKind,
   isValidByteRange,
   MEMORY_EXPOSURE_EVIDENCE_KINDS,
   MEMORY_ORIGIN_KINDS,
@@ -19,6 +20,8 @@ import {
   type MemorySpaceRef,
 } from '../contracts';
 import type { MemoryAdapterRetainItem } from './types';
+
+export { isRecallEvidenceKind };
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -138,7 +141,7 @@ export function validEligibility(item: MemoryAdapterRetainItem): boolean {
     case 'experienced':
       return (
         item.origin_kind === 'experienced' &&
-        isEvidenceKind(eligibility.evidence) &&
+        isRecallEvidenceKind(eligibility.evidence) &&
         nonEmptyString(eligibility.receipt_id) &&
         nonEmptyString(eligibility.proof_id)
       );

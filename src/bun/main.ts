@@ -7,6 +7,7 @@ import { LIMITS } from '../contracts/limits';
 import { createDrive } from '../drive/service';
 import { MemoryRuntime } from '../memory/runtime';
 import { MemoryIntegration } from '../memory/integration';
+import { MemoryBackfill } from '../memory/backfill';
 import { memoryEngineInfo, type MemoryEngineStatus } from '../memory/capability-catalog';
 import { memoryHostPolicyFromEnv } from '../memory/host-bridge';
 import {
@@ -184,6 +185,7 @@ env.MEMORY_HOST = memoryHostPolicyFromEnv(process.env.MEMORY_HOST_TRUST);
 // 不伪报已记住；凭据与 bank 路由只在服务端，开始日志不输出。
 let memoryRuntime: MemoryRuntime | undefined;
 let memoryIntegration: MemoryIntegration | undefined;
+let memoryBackfill: MemoryBackfill | undefined;
 let insightReader: HindsightInsightReader | null = null;
 if (process.env.MEMORY_ENABLED === '1') {
   const adapterKind = (process.env.MEMORY_ADAPTER ?? 'stub').trim().toLowerCase();
@@ -256,10 +258,24 @@ env.MEMORY_INSIGHT = new MemoryInsightService({
 });
 
 // MF10：作业 tick、unknown 对账由 MemoryIntegration 统一调度；tick 内部保证
-// 单轮不重入。
+// 单轮不重入。定时回填默认关闭，MEMORY_BACKFILL=1 才把最近窗口入队。
 if (memoryRuntime) {
+  if (process.env.MEMORY_BACKFILL === '1') {
+    if (env.MEMORY_ENGINE?.status === 'ready') {
+      memoryBackfill = new MemoryBackfill({
+        db: d1,
+        instanceId: memoryRuntime.instanceId!,
+        capture: () => memoryRuntime!.captureEnabled,
+      });
+      console.log('memory backfill enabled (hourly aligned window)');
+    } else {
+      // stub/unavailable 时不制造必然失败的 retain 作业。
+      console.warn('memory backfill skipped: engine not ready');
+    }
+  }
   memoryIntegration = new MemoryIntegration({
     runtime: memoryRuntime,
+    backfill: memoryBackfill,
     onError: (error, scope) => {
       // 不记录来源正文、token 或 provider 路由。
       console.error(`agent-network memory ${scope} failed`, error);
