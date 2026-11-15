@@ -40,6 +40,7 @@ interface SidebarProps {
   onOpenContacts: () => void;
   onRetry: () => void;
   onLoadMore: () => void;
+  onActionStatus?: (message: string) => void;
 }
 
 const FILTERS: { value: RoomFilter; label: string }[] = [
@@ -83,6 +84,7 @@ export function Sidebar(props: SidebarProps) {
     onOpenContacts,
     onRetry,
     onLoadMore,
+    onActionStatus,
   } = props;
   const message = statusMessage(props);
   const skeleton = status === 'loading' && rooms.length === 0;
@@ -224,7 +226,12 @@ export function Sidebar(props: SidebarProps) {
                 </li>
               ))
             : rooms.map((room) => (
-                <RoomRow key={room.room_id} room={room} preferences={preferences} />
+                <RoomRow
+                  key={room.room_id}
+                  room={room}
+                  preferences={preferences}
+                  onStatus={onActionStatus}
+                />
               ))}
         </ol>
         <p id="room-list-status" className="list-hint" role="status" hidden={!message}>

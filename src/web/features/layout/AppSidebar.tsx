@@ -41,19 +41,32 @@ export function AppSidebar({ notice = null, live = true, streamError = null }: A
   const [query, setQuery] = useState('');
   const [groupOpen, setGroupOpen] = useState(false);
   const [contactsOpen, setContactsOpen] = useState(false);
+  const [actionNotice, setActionNotice] = useState<SidebarNotice | null>(null);
   const filter = useRoomFilterStore((state) => state.filter);
   const changeFilter = useRoomFilterStore((state) => state.setFilter);
   const actorId = session.session?.identity.actor_id ?? null;
   const roomPreferences = useRoomPreferences(actorId);
 
   const streamRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const actionNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamContactRef = useRef(false);
   useEffect(
     () => () => {
       if (streamRefreshTimerRef.current) clearTimeout(streamRefreshTimerRef.current);
+      if (actionNoticeTimerRef.current) clearTimeout(actionNoticeTimerRef.current);
     },
     [],
   );
+
+  const showActionStatus = useCallback((message: string) => {
+    if (!message) return;
+    setActionNotice({ message, error: /失败|错误|不能|没有/.test(message) });
+    if (actionNoticeTimerRef.current) clearTimeout(actionNoticeTimerRef.current);
+    actionNoticeTimerRef.current = setTimeout(() => {
+      actionNoticeTimerRef.current = null;
+      setActionNotice(null);
+    }, 4000);
+  }, []);
 
   const stream = useActorStream({
     token: live ? (session.session?.token ?? null) : null,
@@ -145,7 +158,7 @@ export function AppSidebar({ notice = null, live = true, streamError = null }: A
         streamError={live ? stream.error : streamError}
         preferences={roomPreferences.preferences}
         unreadCounts={unreadCounts}
-        notice={notice}
+        notice={actionNotice ?? notice}
         onQueryChange={setQuery}
         onFilterChange={changeFilter}
         onCreateGroup={() => setGroupOpen(true)}
@@ -154,6 +167,7 @@ export function AppSidebar({ notice = null, live = true, streamError = null }: A
         onLoadMore={() => {
           void roomsState.loadMore();
         }}
+        onActionStatus={showActionStatus}
       />
       <GroupCreateDialog open={groupOpen} onOpenChange={setGroupOpen} />
       <ContactRequestsDialog open={contactsOpen} onOpenChange={changeContacts} />

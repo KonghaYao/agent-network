@@ -1,4 +1,4 @@
-import { useRef, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
 
 const MOVE_TOLERANCE = 10;
 const DEFAULT_DELAY = 500;
@@ -22,15 +22,20 @@ export function useLongPress(
     startRef.current = null;
   };
 
+  useEffect(() => clear, []);
+
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.pointerType === 'mouse') return;
     clear();
+    // React 合成事件在处理器返回后会把 currentTarget 置空，计时器里必须
+    // 使用这里捕获的真实元素。
+    const target = event.currentTarget;
     startRef.current = { x: event.clientX, y: event.clientY };
     timerRef.current = setTimeout(() => {
       const start = startRef.current;
       timerRef.current = null;
       if (!start) return;
-      onLongPress(event.currentTarget, start.x, start.y);
+      onLongPress(target, start.x, start.y);
     }, delay);
   };
 
