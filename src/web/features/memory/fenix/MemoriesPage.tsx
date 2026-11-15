@@ -19,6 +19,7 @@ import { useTranslation } from "./i18n";
 import { useFenixMemoryApi } from "./api";
 import { HindsightFailureNotice } from "./components/HindsightFailureNotice";
 import { toHindsightFailure } from "./failure";
+import { logFenixError } from "./log-error";
 import { LIMITS } from "../../../../contracts/limits";
 
 /**
@@ -94,7 +95,7 @@ export function MemoriesPage({ showHeader = true }: { showHeader?: boolean } = {
     error: statusError,
     refresh: refreshStatus,
   } = useRequest(() => api.getStatus(), {
-    onError: (err) => console.error("Failed to get Hindsight status:", err),
+    onError: (err) => logFenixError("Failed to get Hindsight status:", err),
     refreshDeps: [api],
   });
 

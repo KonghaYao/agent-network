@@ -20,6 +20,7 @@ import { LIMITS } from '../src/contracts/limits';
 import { maskSecrets } from '../src/web/features/memory/mask';
 import { FenixApiError } from '../src/web/features/memory/fenix/api';
 import { toHindsightFailure } from '../src/web/features/memory/fenix/failure';
+import { logFenixError } from '../src/web/features/memory/fenix/log-error';
 import {
   buildSendPlan,
   type HistoryItem,
@@ -4504,6 +4505,20 @@ async function runStreamInvalidationAcceptance(
   }
 }
 
+function captureConsoleError(run: () => void): string[] {
+  const lines: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    lines.push(args.map((value) => String(value)).join(' '));
+  };
+  try {
+    run();
+  } finally {
+    console.error = original;
+  }
+  return lines;
+}
+
 function runMemoryMaskChecks(): void {
   const cases: { label: string; input: string; secret: string }[] = [
     { label: '掩码：password=', input: 'db password=hunter2-pass', secret: 'hunter2-pass' },
@@ -4544,6 +4559,32 @@ function runMemoryMaskChecks(): void {
     '掩码：错误详情中的 token=',
     failure.kind === 'error' && failure.detail.includes('token=[已隐藏]') && !failure.detail.includes('e2e-error-secret'),
     failure.kind === 'error' ? failure.detail : failure.kind,
+  );
+
+  // 错误日志与 DOM 走同一套掩码：FenixApiError.message 可能带 `?token=...`，
+  // 这里真实替换 console.error 捕获输出，断言日志里只剩掩码后的文本与错误码。
+  const logSecret = 'entity-console-secret';
+  const errorLogs = captureConsoleError(() => {
+    logFenixError(
+      'Failed to load entities:',
+      new FenixApiError(
+        `Failed to load entities: FenixApiError: https://hindsight.invalid/entities?token=${logSecret}`,
+        'REQUEST_FAILED',
+      ),
+    );
+  });
+  const firstErrorLog = errorLogs[0] ?? '';
+  check(
+    '掩码：错误日志中的 token=',
+    errorLogs.length === 1 &&
+      firstErrorLog.includes('token=[已隐藏]') &&
+      !firstErrorLog.includes(logSecret),
+    firstErrorLog,
+  );
+  check(
+    '掩码：错误日志保留错误码',
+    firstErrorLog.includes('[REQUEST_FAILED]'),
+    firstErrorLog,
   );
 }
 

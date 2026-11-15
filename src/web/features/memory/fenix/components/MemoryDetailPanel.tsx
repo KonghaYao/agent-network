@@ -19,6 +19,7 @@ import { useTranslation } from "../i18n";
 import { toast } from "../ui/toast";
 import { useFenixMemoryApi } from "../api";
 import { toHindsightFailure } from "../failure";
+import { logFenixError } from "../log-error";
 import { memoryTypeTitle } from "../memory-type-title";
 import type { MemoryDetail, MemoryTableRow } from "../types";
 import { HindsightFailureNotice } from "./HindsightFailureNotice";
@@ -48,7 +49,7 @@ export function MemoryDetailPanel({ memory, onClose, compact = false, inPanel = 
   } = useRequest(() => api.getMemory(memory.id), {
     ready: !!memory?.id,
     refreshDeps: [memory?.id, api],
-    onError: (err) => console.error("Failed to fetch memory details:", err),
+    onError: (err) => logFenixError("Failed to fetch memory details:", err),
   });
 
   // 失败一律不展示详情：`useRequest` 失败时保留上一次成功的数据，而这里的数据可能属于**另一条记忆**

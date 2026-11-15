@@ -18,9 +18,18 @@ const Fixture = lazy(async () => {
   const module = await loadFenixMemoryVendor();
   const ApiContext = module.FenixMemoryApiContext;
   const MemoryDetailPanel = module.MemoryDetailPanel;
+  const FenixApiError = module.FenixApiError;
   // The fixture deliberately supplies an adapter that rejects every call: the
   // panel's row-summary branch still renders the masked text without network.
-  const failing = (method: string) => () => Promise.reject(new Error(`fixture ${method}`));
+  // The rejection message carries a token so the e2e spec can prove the console
+  // error path masks it instead of printing the raw upstream message.
+  const failing = (method: string) => () =>
+    Promise.reject(
+      new FenixApiError(
+        `fixture ${method}: https://hindsight.invalid/api?token=e2e-console-secret`,
+        'REQUEST_FAILED',
+      ),
+    );
   const api = {
     getStatus: failing('getStatus'),
     getGraph: failing('getGraph'),

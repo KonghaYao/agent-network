@@ -14,6 +14,7 @@ import { useRequest } from "../hooks/use-request";
 import { useTranslation } from "../i18n";
 import { useFenixMemoryApi } from "../api";
 import { toHindsightFailure } from "../failure";
+import { logFenixError } from "../log-error";
 import { memoryTypeTitle } from "../memory-type-title";
 import { HindsightFailureNotice } from "./HindsightFailureNotice";
 import { MemoryDetailBody } from "./MemoryDetailBody";
@@ -38,7 +39,7 @@ export function MemoryDetailModal({ memoryId, onClose }: MemoryDetailModalProps)
   } = useRequest(() => api.getMemory(memoryId!), {
     ready: !!memoryId,
     refreshDeps: [memoryId, api],
-    onError: (err) => console.error("Error loading memory:", err),
+    onError: (err) => logFenixError("Error loading memory:", err),
   });
   const failure = loadError ? toHindsightFailure(loadError) : null;
 

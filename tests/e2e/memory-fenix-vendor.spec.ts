@@ -177,6 +177,9 @@ test('home first paint does not request any fenix chunk', async ({ page }) => {
 });
 
 test('isolated vendor build renders the detail panel and masks credentials', async ({ page }) => {
+  const consoleLines: string[] = [];
+  page.on('console', (message) => consoleLines.push(message.text()));
+
   await page.goto(`${vendorBase}${RENDER_PAGE}`, { waitUntil: 'load' });
 
   for (const testId of ['fenix-default-panel', 'fenix-compact-panel']) {
@@ -193,4 +196,16 @@ test('isolated vendor build renders the detail panel and masks credentials', asy
     expect(text).not.toContain('e2e-bearer-secret');
     expect(text).not.toContain('e2e-password');
   }
+
+  // The failing adapter rejects with a token-bearing FenixApiError; the panel's
+  // onError path must log the masked message, never the raw one.
+  const detailErrorLines = consoleLines.filter((line) =>
+    line.includes('Failed to fetch memory details'),
+  );
+  expect(detailErrorLines.length).toBeGreaterThan(0);
+  for (const line of detailErrorLines) {
+    expect(line).toContain('token=[已隐藏]');
+    expect(line).not.toContain('e2e-console-secret');
+  }
+  expect(consoleLines.join('\n')).not.toContain('e2e-console-secret');
 });

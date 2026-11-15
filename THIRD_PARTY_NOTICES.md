@@ -7,37 +7,10 @@
 - License: Apache License 2.0 (see `LICENSES/Apache-2.0.txt`)
 - Upstream path: `packages/resources/memory/web/pages/hindsight/`
 
-The following files under `src/web/features/memory/` are ports or adaptations of
-the FenixAgent memory constellation renderer:
-
-- `constellation-scene.ts` — ring layout, heat colour ramp, link indexing and
-  visual constants, adapted from `components/constellation-scene.ts`.
-- `constellation-state.ts` — pointer/view state shape, adapted from
-  `components/constellation-state.ts`.
-- `constellation-labels.ts` — inline/card label drawing and collision grid,
-  adapted from `components/constellation-labels.ts`.
-- `constellation-paint.ts` — on-demand frame painter, adapted from
-  `components/constellation-paint.ts`.
-- `ConstellationCanvas.tsx` — React shell and interaction wiring, adapted from
-  `components/Constellation.tsx`, `components/constellation-tooltip.ts` and the
-  legend behaviour in `components/constellation-legend.ts`.
-
-Modifications for this repository:
-
-- Removed the `@chenglou/pretext` dependency; label measurement and wrapping use
-  the Canvas 2D `measureText` API instead.
-- Replaced the continuous `requestAnimationFrame` loop with on-demand painting
-  driven by React effects.
-- Replaced the upstream tooltip DOM construction with React text nodes and
-  routed all displayed strings through `maskSecrets`.
-- Added a flat-graph adapter for `network_agent_memory_graph`, single-node
-  centering, fit-scale based zoom (100% = fit), selected-node outline, a DOM
-  HUD/heat legend for accessibility and tests, and native Fullscreen API
-  fullscreen mode with Escape handling and a keyboard focus loop.
-- The graph data model (`ConstellationGraphData`) differs from FenixAgent's
-  `GraphData`; only fields returned by this repository's MCP graph tool are
-  populated. Missing fields such as `context`, `occurred`, `proof` and `tags`
-  are intentionally not fabricated.
+The vendored memory UI, including the constellation renderer, lives under
+`src/web/features/memory/fenix/`. The file-by-file mapping and the modifications
+applied to this repository are listed in the vendor table below; that table is the
+source of truth for what is ported and what is local.
 
 ## Fenix memory panel vendor (stage 2 scaffold, stages 4–5 wired)
 
@@ -66,7 +39,6 @@ Modifications for this repository:
 | `components/data-view-control-panel.tsx` | `pages/hindsight/components/data-view-control-panel.tsx` | Platform imports redirected; the recency select has an `aria-label`. |
 | `components/EntitiesView.tsx` | `pages/hindsight/components/EntitiesView.tsx` | Platform imports redirected; entity names pass through `maskSecrets`. Stage 5 changes: default view is the server-paginated list so the first action sends exactly one `entities` call (the graph loads only after the user switches to it); the detail overlay is capped at the viewport width (`w-full max-w-105`); the detail close button has an accessible name; Escape closes the detail without closing the parent dialog and focus returns to the triggering list button; the list name is a focusable button so keyboard users can open details, with propagation stopped to avoid a duplicate detail request. |
 | `components/graph-model.ts` | `pages/hindsight/components/graph-model.ts` | Verbatim. |
-| `components/Graph2d.tsx` | `pages/hindsight/components/Graph2d.tsx` | Local placeholder, not a port: upstream requires cytoscape/cytoscape-fcose, which are deliberately not added in this phase. |
 | `components/HindsightFailureNotice.tsx` | `pages/hindsight/components/HindsightFailureNotice.tsx` | Platform imports redirected; added the `unavailable` branch (neutral tone, no retry). |
 | `components/MemoryDetailBody.tsx` | `pages/hindsight/components/MemoryDetailBody.tsx` | Platform imports redirected; text/context/entities/tags pass through `maskSecrets`. Added the Agent Network reveal extension: text/context render masked until the user clicks “查看原文” (`aria-expanded`); entities/tags stay masked after reveal. |
 | `components/MemoryDetailModal.tsx` | `pages/hindsight/components/MemoryDetailModal.tsx` | Platform imports redirected; nested inside the Agent memory dialog it uses `z-[70]` so the detail sits above the panel. |
@@ -100,8 +72,8 @@ Modifications for this repository:
 
 Local (not ported) files in the same tree, kept small and documented in their own headers:
 `api.ts` (adapter boundary; default rejects), `memory-api.ts` (stage 4 MCP adapter for graph/include_rows and get; not ported), `hooks/use-request.ts` (ahooks subset),
-`ui/toast.ts` (sonner subset), `css/fenix.css` (scoped Tailwind entry, no preflight),
-`index.ts` (vendor entry), and the `Graph2d.tsx` placeholder above.
+`log-error.ts` (masked error logging; not ported), `ui/toast.ts` (sonner subset), `css/fenix.css` (scoped Tailwind entry, no preflight),
+and `index.ts` (vendor entry).
 
 ### Dependencies added by this phase
 

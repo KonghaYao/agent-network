@@ -19,6 +19,7 @@ import { useTranslation } from "../i18n";
 import { useFenixMemoryApi } from "../api";
 import { useElementHeight } from "../element-height";
 import { toHindsightFailure } from "../failure";
+import { logFenixError } from "../log-error";
 import { maskSecrets } from '../../mask';
 import { recencyEndpoints, recencyHeat, toRecencyLookup } from "../recency";
 import { Constellation } from "./Constellation";
@@ -54,7 +55,7 @@ export function EntitiesView() {
     refresh: refreshEntities,
   } = useRequest(() => api.listEntities({ limit: ITEMS_PER_PAGE, offset }), {
     refreshDeps: [currentPage, api],
-    onError: (error) => console.error("Failed to load entities:", error),
+    onError: (error) => logFenixError("Failed to load entities:", error),
   });
   const entities = entitiesPage && Array.isArray(entitiesPage.items) ? entitiesPage.items : [];
   const total = entitiesPage?.total || 0;
@@ -72,7 +73,7 @@ export function EntitiesView() {
     run: runLoadEntityDetail,
   } = useRequest((entityId: string) => api.getEntity(entityId), {
     manual: true,
-    onError: (error) => console.error("Failed to load entity detail:", error),
+    onError: (error) => logFenixError("Failed to load entity detail:", error),
   });
   const selectedEntity =
     detailError || selectedEntityId === null || loadedEntity?.id !== selectedEntityId
@@ -93,7 +94,7 @@ export function EntitiesView() {
   } = useRequest(() => api.getEntityGraph({ limit: 2000, min_count: 1 }), {
     ready: viewMode === "relations",
     refreshDeps: [api],
-    onError: (error) => console.error("Failed to load entity graph:", error),
+    onError: (error) => logFenixError("Failed to load entity graph:", error),
   });
   const graphData = graphError ? null : (loadedGraph ?? null);
   const graphFailure = graphError ? toHindsightFailure(graphError) : null;
