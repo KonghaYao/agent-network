@@ -16,13 +16,13 @@
  *   ② 观察类型的整合状态是**辅助信息**：只有图谱先拿到数据才请求（`ready` 的前置数据语义），
  *      失败只记诊断并隐藏该块，不遮盖已经加载好的图数据。
  *
- * 图谱绘制不在这里：本 hook 只产出 `GraphData` 与过滤结果，两套图谱各自的渲染模型分别在
- * `Constellation.tsx` 与 `Graph2d.tsx`（刻意分叉，见前端规范 §4.8）。
+ * 图谱绘制不在这里：本 hook 只产出 `GraphData` 与过滤结果；当前只有
+ * `Constellation.tsx`（自绘 canvas）一个渲染器，Cytoscape `Graph2d` 未提供。
  */
 
 import { useRequest } from "../hooks/use-request";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { hindsightApi } from "../api";
+import { useFenixMemoryApi } from "../api";
 import type { RecencyLookup } from "../recency";
 import { recencyHeat } from "../recency";
 import type { GraphApiData, MemoryTableRow } from "../types";
@@ -81,6 +81,7 @@ export interface DataViewData {
 const ALL_LINK_TYPES = ["semantic", "temporal", "entity", "causal"];
 
 export function useDataViewData({ factType, documentId, chunkId, initialQuery }: UseDataViewDataOptions): DataViewData {
+  const api = useFenixMemoryApi();
   // 行数上限由 `memory-api.ts` 的 LIMITS 决定；这里不再保留恒为 1000 的死参数。
   const [recencyBasis, setRecencyBasis] = useState<RecencyBasis>("mentioned_at");
   const [maxNodes, setMaxNodes] = useState<number | undefined>(undefined);
@@ -98,13 +99,15 @@ export function useDataViewData({ factType, documentId, chunkId, initialQuery }:
     refresh: refreshData,
   } = useRequest(
     () =>
-      hindsightApi.getGraph({
+      api.getGraph({
         type: factType,
         q: initialQuery || undefined,
         document_id: documentId,
         chunk_id: chunkId,
       }),
-    // 失败由调用方渲染可见失败块；不在这里打印 error，避免把服务端文案或正文写进控制台。
+    // provider 切换（目标 actor/token）时重取；失败由调用方渲染可见失败块，
+    // 不在这里打印 error，避免把服务端文案或正文写进控制台。
+    { refreshDeps: [api] },
   );
 
   // 表格行数据（已由服务端过滤）

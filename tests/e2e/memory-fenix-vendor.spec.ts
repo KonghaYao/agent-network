@@ -6,13 +6,14 @@ import type { AddressInfo } from 'node:net';
 import { extname, resolve, sep } from 'node:path';
 
 /**
- * Fenix memory vendor guard (stage 4):
- * the ported tree is wired into the production panel, but only through the
- * dynamic `AgentMemoryDialog` -> `DataView` chunk chain. It must never be inlined
- * into the SPA entry or requested on first paint. The isolated lazy-chunk proof
- * lives in `scripts/verify-memory-fenix-vendor.ts` and this spec mirrors its
- * manifest semantics against the real production build; the render fixture from
- * that same build proves the vendor bundle actually renders and masks credentials.
+ * Fenix memory vendor guard:
+ * the ported tree is wired into the production panel only through the
+ * dynamic `AgentMemoryDialog` -> `MemoriesPage` -> `DataView`/`EntitiesView`
+ * chunk chain. It must never be inlined into the SPA entry or requested on
+ * first paint. The isolated lazy-chunk proof lives in
+ * `scripts/verify-memory-fenix-vendor.ts` and this spec mirrors its manifest
+ * semantics against the real production build; the render fixture from that
+ * same build proves the vendor bundle actually renders and masks credentials.
  */
 
 const VENDOR_DIST = resolve(process.cwd(), 'dist/fenix-vendor-check');
@@ -89,23 +90,38 @@ test('production SPA reaches the fenix tree only through dynamic chunks', async 
   const keys = Object.keys(manifest);
   const entryKey = keys.find((key) => key.endsWith('src/web/app/main.tsx'));
   const dialogKey = keys.find((key) => key.includes('AgentMemoryDialog') && key.endsWith('.js'));
+  const memoriesPageKey = keys.find((key) => key.includes('MemoriesPage') && key.endsWith('.js'));
   const dataViewKey = keys.find(
     (key) => key.includes('features/memory/fenix/components/DataView') && key.endsWith('.tsx'),
+  );
+  const entitiesViewKey = keys.find(
+    (key) => key.includes('features/memory/fenix/components/EntitiesView') && key.endsWith('.tsx'),
   );
 
   expect(entryKey, 'production entry resolves in the manifest').toBeTruthy();
   expect(dialogKey, 'AgentMemoryDialog chunk resolves in the manifest').toBeTruthy();
+  expect(memoriesPageKey, 'MemoriesPage chunk resolves in the manifest').toBeTruthy();
   expect(dataViewKey, 'Fenix DataView chunk resolves in the manifest').toBeTruthy();
+  expect(entitiesViewKey, 'Fenix EntitiesView chunk resolves in the manifest').toBeTruthy();
 
   const entry = manifest[entryKey as string]!;
   const dialog = manifest[dialogKey as string]!;
+  const memoriesPage = manifest[memoriesPageKey as string]!;
   const dataView = manifest[dataViewKey as string]!;
 
-  // 入口只允许动态 import 弹窗，弹窗只允许动态 import DataView。
+  // 入口只允许动态 import 弹窗；弹窗只允许动态 import MemoriesPage，
+  // MemoriesPage 再动态 import DataView / EntitiesView。
   expect(entry.dynamicImports ?? []).toContain(dialogKey as string);
   expect(entry.imports ?? []).not.toContain(dialogKey as string);
-  expect(dialog.dynamicImports ?? []).toContain(dataViewKey as string);
-  expect(dialog.imports ?? []).not.toContain(dataViewKey as string);
+  expect(dialog.dynamicImports ?? []).toContain(memoriesPageKey as string);
+  expect(dialog.imports ?? []).not.toContain(memoriesPageKey as string);
+  expect(
+    (dialog.dynamicImports ?? []).some((key) => key.includes('DataView') || key.includes('EntitiesView')),
+  ).toBe(false);
+  expect(memoriesPage.dynamicImports ?? []).toContain(dataViewKey as string);
+  expect(memoriesPage.dynamicImports ?? []).toContain(entitiesViewKey as string);
+  expect(memoriesPage.imports ?? []).not.toContain(dataViewKey as string);
+  expect(memoriesPage.imports ?? []).not.toContain(entitiesViewKey as string);
 
   // 从入口沿静态 import 图可达的 chunk 不得触及 fenix 目录：动态 chunk 一旦被
   // 静态并入首屏，这里就会失败，而不是像旧的「只要存在就通过」那样放过。

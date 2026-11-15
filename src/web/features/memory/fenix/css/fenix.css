@@ -47,6 +47,51 @@
   --color-cyan: #009296;
   --color-status-warning: #f59e0b;
   --color-accent-pink: #8b5cf6;
+  /*
+   * Ported from upstream `packages/ui-components/web/styles/theme.css` compact scale.
+   * Tailwind resolves these namespaces at build time; `inline` makes the generated
+   * utilities carry literal compact values (9px, 12px, …) instead of emitting
+   * global spacing variables that would leak into the rest of the SPA.
+   */
+  --padding-2: 6px;
+  --padding-2\.5: 8px;
+  --padding-3: 9px;
+  --padding-3\.5: 10px;
+  --padding-4: 12px;
+  --padding-4\.25: 13px;
+  --padding-4\.5: 14px;
+  --padding-5: 16px;
+  --padding-5\.5: 17px;
+  --padding-5\.75: 18px;
+  --padding-6: 18px;
+  --padding-7: 22px;
+  --padding-8: 24px;
+  --padding-9: 28px;
+  --padding-10: 32px;
+  --padding-12: 36px;
+  --padding-16: 48px;
+  --padding-20: 60px;
+  --padding-24: 72px;
+  --margin-3: 9px;
+  --margin-4: 12px;
+  --margin-5: 16px;
+  --margin-6: 18px;
+  --margin-8: 24px;
+  --margin-10: 32px;
+  --margin-12: 36px;
+  --margin-16: 48px;
+  --gap-1: 3px;
+  --gap-1\.5: 5px;
+  --gap-2: 6px;
+  --gap-2\.5: 8px;
+  --gap-3: 9px;
+  --gap-4: 12px;
+  --gap-5: 16px;
+  --gap-6: 18px;
+  --gap-8: 24px;
+  --gap-10: 32px;
+  --gap-12: 36px;
+  --radius-lg: 12px;
   --text-3xs: 0.625rem;
   --text-3xs--line-height: 0.875rem;
   --text-4xs: 0.5625rem;
@@ -54,6 +99,13 @@
 }
 
 @layer base {
+  /* Upstream font stack; spacing/radius are inlined by the `@theme inline` block above. */
+  .fenix-memory-root {
+    --font-sans:
+      system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Helvetica, "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+  }
+
   .fenix-memory-root,
   .fenix-memory-root *,
   .fenix-memory-root *::before,

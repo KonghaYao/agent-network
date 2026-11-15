@@ -48,7 +48,7 @@ test.describe('Agent 记忆：实体视角与响应式', () => {
     await login(page, identity.base, identity.token);
     await openMemory(page, identity.directRoom);
 
-    await page.locator('#memory-perspective-entities').click();
+    await page.locator('[data-fenix-perspective="entities"]').click();
     const rows = page.locator('[data-slot="table"] tbody tr');
     await expect(rows).toHaveCount(50, { timeout: 15_000 });
 
@@ -121,7 +121,7 @@ test.describe('Agent 记忆：实体视角与响应式', () => {
     await login(page, identity.base, identity.token);
     await openMemory(page, identity.directRoom);
 
-    await page.locator('#memory-perspective-entities').click();
+    await page.locator('[data-fenix-perspective="entities"]').click();
     const trigger = page.locator('[data-entity-id="entity-1"]');
     await expect(trigger).toBeVisible({ timeout: 15_000 });
     await expect(trigger).toContainText('[已隐藏]');
@@ -135,6 +135,10 @@ test.describe('Agent 记忆：实体视角与响应式', () => {
     await expect(detail).not.toContainText(SECRET_ENTITY_AWS);
     // 关联记忆正文即使存在也未渲染；默认掩码不泄露 Bearer 凭据。
     await expect(detail).not.toContainText(SECRET_BEARER);
+    const overlayZ = await page
+      .locator('[data-fenix-entity-detail-overlay]')
+      .evaluate((element) => Number(getComputedStyle(element).zIndex));
+    expect(overlayZ).toBeGreaterThan(61);
     expect(
       callsOf(calls, 'network_agent_memory_entities').filter(
         (call) => call.args.view === 'detail',
@@ -158,7 +162,7 @@ test.describe('Agent 记忆：实体视角与响应式', () => {
     });
     await login(page, identity.base, identity.token);
     await openMemory(page, identity.directRoom);
-    await page.locator('#memory-perspective-entities').click();
+    await page.locator('[data-fenix-perspective="entities"]').click();
     await expect(page.getByText('未找到实体')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByRole('alert')).toHaveCount(0);
     expect(callsOf(emptyCalls, 'network_agent_memory_entities')).toHaveLength(1);
@@ -173,7 +177,7 @@ test.describe('Agent 记忆：实体视角与响应式', () => {
       entitiesFailure: true,
     });
     await openMemory(page, identity.directRoom);
-    await page.locator('#memory-perspective-entities').click();
+    await page.locator('[data-fenix-perspective="entities"]').click();
     await expect(page.getByRole('alert')).toContainText('加载实体列表失败', { timeout: 15_000 });
     await expect(page.getByRole('alert')).toContainText('实体服务暂时不可用');
     await expect(page.getByRole('button', { name: '重试' })).toBeVisible();
@@ -188,7 +192,7 @@ test.describe('Agent 记忆：实体视角与响应式', () => {
       entitiesUnavailable: 'panel_disabled',
     });
     await openMemory(page, identity.directRoom);
-    await page.locator('#memory-perspective-entities').click();
+    await page.locator('[data-fenix-perspective="entities"]').click();
     await expect(page.getByRole('alert')).toContainText('记忆暂不可用', { timeout: 15_000 });
     await expect(page.getByRole('alert')).toContainText('当前部署未开启 Agent 记忆面板');
     await expect(page.getByRole('button', { name: '重试' })).toHaveCount(0);
@@ -206,7 +210,7 @@ test.describe('Agent 记忆：实体视角与响应式', () => {
     });
     await login(page, identity.base, identity.token);
     await openMemory(page, identity.directRoom);
-    await page.locator('#memory-perspective-entities').click();
+    await page.locator('[data-fenix-perspective="entities"]').click();
     await expect(page.locator('[data-slot="table"] tbody tr')).toHaveCount(3, {
       timeout: 15_000,
     });
@@ -252,8 +256,8 @@ test.describe('Agent 记忆：实体视角与响应式', () => {
     });
     await login(page, identity.base, identity.token);
     await openMemory(page, identity.directRoom);
-    const world = page.locator('#memory-perspective-world');
-    const experience = page.locator('#memory-perspective-experience');
+    const world = page.locator('[data-fenix-perspective="world"]');
+    const experience = page.locator('[data-fenix-perspective="experience"]');
     await world.focus();
     await page.keyboard.press('ArrowRight');
     await expect(experience).toBeFocused();

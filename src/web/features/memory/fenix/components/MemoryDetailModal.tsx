@@ -12,7 +12,7 @@ import { Spinner } from "../ui/spinner";
 import { NS } from "../i18n";
 import { useRequest } from "../hooks/use-request";
 import { useTranslation } from "../i18n";
-import { hindsightApi } from "../api";
+import { useFenixMemoryApi } from "../api";
 import { toHindsightFailure } from "../failure";
 import { memoryTypeTitle } from "../memory-type-title";
 import { HindsightFailureNotice } from "./HindsightFailureNotice";
@@ -26,6 +26,7 @@ interface MemoryDetailModalProps {
 /** 内存详情弹窗 — 简化版，点击表格行/时间线条目时弹出 */
 export function MemoryDetailModal({ memoryId, onClose }: MemoryDetailModalProps) {
   const { t } = useTranslation(NS.HINDSIGHT);
+  const api = useFenixMemoryApi();
 
   // 加载记忆详情。`memoryId` 既是参数也是刷新依赖：换一条记忆即重取，弹窗关闭（null）时不发请求——
   // `ready: false` 会让 ahooks 在 `onBefore` 直接拦下请求（含 `refresh()`），无需自己判空。
@@ -34,9 +35,9 @@ export function MemoryDetailModal({ memoryId, onClose }: MemoryDetailModalProps)
     data: memory = null,
     loading,
     error: loadError,
-  } = useRequest(() => hindsightApi.getMemory(memoryId!), {
+  } = useRequest(() => api.getMemory(memoryId!), {
     ready: !!memoryId,
-    refreshDeps: [memoryId],
+    refreshDeps: [memoryId, api],
     onError: (err) => console.error("Error loading memory:", err),
   });
   const failure = loadError ? toHindsightFailure(loadError) : null;
@@ -45,7 +46,10 @@ export function MemoryDetailModal({ memoryId, onClose }: MemoryDetailModalProps)
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="z-[70] max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+      <DialogContent
+        className="z-[70] max-w-2xl max-h-[80vh] overflow-hidden flex flex-col"
+        overlayClassName="z-[70]"
+      >
         <DialogHeader>
           <DialogTitle>{memory ? memoryTypeTitle(t, memory.type) : t("memoryDetail.defaultTitle")}</DialogTitle>
         </DialogHeader>

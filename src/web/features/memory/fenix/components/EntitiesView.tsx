@@ -16,7 +16,7 @@ import { useRequest } from "../hooks/use-request";
 import { List, ScatterChart, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "../i18n";
-import { hindsightApi } from "../api";
+import { useFenixMemoryApi } from "../api";
 import { useElementHeight } from "../element-height";
 import { toHindsightFailure } from "../failure";
 import { maskSecrets } from '../../mask';
@@ -33,6 +33,7 @@ const ITEMS_PER_PAGE = 50;
 
 export function EntitiesView() {
   const { t } = useTranslation(NS.HINDSIGHT);
+  const api = useFenixMemoryApi();
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   // 首屏只取列表：关系图需要用户显式切到「关系图」，保证一个动作只发一次请求。
   const [viewMode, setViewMode] = useState<ViewMode>("list");
@@ -51,8 +52,8 @@ export function EntitiesView() {
     loading,
     error: entitiesError,
     refresh: refreshEntities,
-  } = useRequest(() => hindsightApi.listEntities({ limit: ITEMS_PER_PAGE, offset }), {
-    refreshDeps: [currentPage],
+  } = useRequest(() => api.listEntities({ limit: ITEMS_PER_PAGE, offset }), {
+    refreshDeps: [currentPage, api],
     onError: (error) => console.error("Failed to load entities:", error),
   });
   const entities = entitiesPage && Array.isArray(entitiesPage.items) ? entitiesPage.items : [];
@@ -69,7 +70,7 @@ export function EntitiesView() {
     loading: loadingDetail,
     error: detailError,
     run: runLoadEntityDetail,
-  } = useRequest((entityId: string) => hindsightApi.getEntity(entityId), {
+  } = useRequest((entityId: string) => api.getEntity(entityId), {
     manual: true,
     onError: (error) => console.error("Failed to load entity detail:", error),
   });
@@ -89,8 +90,9 @@ export function EntitiesView() {
     loading: graphLoading,
     error: graphError,
     refresh: refreshGraph,
-  } = useRequest(() => hindsightApi.getEntityGraph({ limit: 2000, min_count: 1 }), {
+  } = useRequest(() => api.getEntityGraph({ limit: 2000, min_count: 1 }), {
     ready: viewMode === "relations",
+    refreshDeps: [api],
     onError: (error) => console.error("Failed to load entity graph:", error),
   });
   const graphData = graphError ? null : (loadedGraph ?? null);
@@ -342,7 +344,7 @@ export function EntitiesView() {
 
       {selectedEntityId && (loadingDetail || detailFailure) && (
         <div
-          className="fixed right-4 top-4 z-50 flex w-80 flex-col items-center gap-3 rounded-lg border bg-card p-5 text-center shadow-lg"
+          className="fixed right-4 top-4 z-[70] flex w-80 flex-col items-center gap-3 rounded-lg border bg-card p-5 text-center shadow-lg"
           role={detailFailure ? "alert" : "status"}
         >
           {detailFailure ? (
@@ -373,7 +375,15 @@ export function EntitiesView() {
       {/* Entity Detail Panel - Fixed overlay */}
       {selectedEntity && (
         <div
-          className="fixed right-0 top-0 z-50 h-screen w-full max-w-105 overflow-y-auto border-l-2 border-primary bg-card shadow-2xl animate-in slide-in-from-right duration-300 ease-out"
+          className="fixed inset-0 z-[69] bg-black/30"
+          data-fenix-entity-detail-overlay
+          aria-hidden="true"
+          onClick={closeEntityDetail}
+        />
+      )}
+      {selectedEntity && (
+        <div
+          className="fixed right-0 top-0 z-[70] h-screen w-full max-w-105 overflow-y-auto border-l-2 border-primary bg-card shadow-2xl animate-in slide-in-from-right duration-300 ease-out"
           role="dialog"
           aria-modal="false"
           aria-labelledby="memory-entity-detail-title"

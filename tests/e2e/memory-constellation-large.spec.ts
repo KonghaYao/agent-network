@@ -78,7 +78,7 @@ test.describe('Fenix 星座图移植（大图）', () => {
     expect(callsOf(calls, 'network_agent_memory_graph')).toHaveLength(1);
 
     await page.getByRole('button', { name: '时间线' }).click();
-    await expect(page.locator('.agent-memory-content')).toContainText('S:', { timeout: 15_000 });
+    await expect(page.locator('[data-fenix-memory-content]')).toContainText('S:', { timeout: 15_000 });
     expect(callsOf(calls, 'network_agent_memory_graph')).toHaveLength(1);
 
     expect(pageErrors).toEqual([]);

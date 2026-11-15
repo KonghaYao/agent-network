@@ -8,6 +8,7 @@
  */
 
 import { FenixApiError } from "./api";
+import { maskSecrets } from "../mask";
 
 /**
  * Hindsight 请求失败的分类：把「无权限」从通用加载失败里拆出来。
@@ -48,8 +49,11 @@ export function isForbiddenFailure(error: unknown): boolean {
 export function toHindsightFailure(error: unknown, fallbackDetail = ""): HindsightFailure {
   if (isForbiddenFailure(error)) return { kind: "forbidden" };
   const message = error instanceof Error ? error.message : "";
+  // 错误文案同样可能来自上游响应或用户粘贴的 URL；失败块是用户可见文本，
+  // 必须在归一化时就掩码，避免 token/api_key 通过错误态进入 DOM。
+  const detail = maskSecrets(message || fallbackDetail);
   if (error instanceof FenixApiError && UNAVAILABLE_CODES.has(error.code)) {
-    return { kind: "unavailable", detail: message || fallbackDetail };
+    return { kind: "unavailable", detail };
   }
-  return { kind: "error", detail: message || fallbackDetail };
+  return { kind: "error", detail };
 }

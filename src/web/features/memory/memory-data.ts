@@ -16,26 +16,6 @@ export interface MemoryActor {
   disabled: boolean;
 }
 
-export interface MemoryStats {
-  total_nodes: number;
-  total_links: number;
-  total_documents: number;
-  by_fact_type: Record<MemoryFactType, number>;
-  links_by_type: Record<string, number>;
-  pending_operations: number;
-  failed_operations: number;
-  last_write_at: string | null;
-  last_consolidated_at: string | null;
-}
-
-export interface MemoryOverviewResult {
-  available: boolean;
-  reason: MemoryAvailabilityReason;
-  actor: MemoryActor;
-  fetched_at: number;
-  stats: MemoryStats | null;
-}
-
 export interface MemoryItem {
   id: string;
   text: string;
@@ -63,50 +43,12 @@ export interface MemoryDetail extends MemoryItem {
   text_truncated: boolean;
 }
 
-export interface MemoryListResult {
-  available: boolean;
-  reason: MemoryAvailabilityReason;
-  actor: MemoryActor;
-  fetched_at: number;
-  items: MemoryItem[];
-  total: number | null;
-  limit: number;
-  offset: number;
-  has_more: boolean;
-  next_offset: number | null;
-  truncated: boolean;
-}
-
 export interface MemoryGetResult {
   available: boolean;
   reason: MemoryAvailabilityReason;
   actor: MemoryActor;
   fetched_at: number;
   memory: MemoryDetail | null;
-}
-
-export interface MemoryListQuery {
-  q?: string;
-  type?: MemoryFactType;
-  time_field?: 'created_at' | 'mentioned_at' | 'occurred_start' | 'occurred_end';
-  start_date?: string;
-  end_date?: string;
-  limit: number;
-  offset: number;
-  textChars?: number;
-}
-
-export type MemoryTimelineDays = 7 | 30 | 90;
-export type MemoryTimelineGranularity = 'year' | 'month' | 'week' | 'day';
-
-export interface MemoryTimelineItem {
-  id: string;
-  text: string;
-  fact_type: MemoryFactType | null;
-  state: 'valid' | 'invalidated';
-  occurred_at: string | null;
-  mentioned_at: string | null;
-  entities: string[];
 }
 
 export interface MemoryTimelineGroup {
@@ -125,29 +67,6 @@ export interface MemoryTimelineSummary {
   dated: number;
   undated: number;
   by_type: Record<MemoryFactType, number>;
-}
-
-export interface MemoryTimelineResult {
-  available: boolean;
-  reason: MemoryAvailabilityReason;
-  actor: MemoryActor;
-  fetched_at: number;
-  items: MemoryTimelineItem[];
-  groups: {
-    day: MemoryTimelineGroup[];
-    week: MemoryTimelineGroup[];
-    month: MemoryTimelineGroup[];
-  };
-  summary: MemoryTimelineSummary;
-  days: number;
-  limit: number;
-  truncated: boolean;
-}
-
-export interface MemoryTimelineQuery {
-  days: MemoryTimelineDays;
-  type?: MemoryFactType;
-  limit?: number;
 }
 
 export interface MemoryGraphNode {
@@ -294,12 +213,6 @@ export interface MemoryFailure {
   message: string;
 }
 
-export const FACT_TYPE_LABEL: Record<MemoryFactType, string> = {
-  world: '世界',
-  experience: '经历',
-  observation: '观察',
-};
-
 const AVAILABILITY_TEXT: Record<MemoryAvailabilityReason, string> = {
   ok: '',
   no_space: '这个 Agent 还没有启用记忆空间。',
@@ -334,60 +247,6 @@ export function memoryFailureOf(error: unknown): MemoryFailure {
     kind: 'error',
     message: failure?.message || '读取记忆失败，请重试。',
   };
-}
-
-export async function fetchMemoryOverview(
-  actorId: string,
-  token: string,
-  signal: AbortSignal,
-): Promise<MemoryOverviewResult> {
-  return callTool<MemoryOverviewResult>(
-    'network_agent_memory_overview',
-    { actor_id: actorId },
-    { token, signal },
-  );
-}
-
-export async function fetchMemoryList(
-  actorId: string,
-  token: string,
-  query: MemoryListQuery,
-  signal: AbortSignal,
-): Promise<MemoryListResult> {
-  return callTool<MemoryListResult>(
-    'network_agent_memory_list',
-    {
-      actor_id: actorId,
-      limit: query.limit,
-      offset: query.offset,
-      ...(query.q ? { q: query.q } : {}),
-      ...(query.type ? { type: query.type } : {}),
-      ...(query.time_field ? { time_field: query.time_field } : {}),
-      ...(query.start_date ? { start_date: query.start_date } : {}),
-      ...(query.end_date ? { end_date: query.end_date } : {}),
-      ...(query.textChars ? { text_chars: query.textChars } : {}),
-    },
-    { token, signal },
-  );
-}
-
-export async function fetchMemoryTimeline(
-  actorId: string,
-  token: string,
-  query: MemoryTimelineQuery,
-  signal: AbortSignal,
-): Promise<MemoryTimelineResult> {
-  return callTool<MemoryTimelineResult>(
-    'network_agent_memory_timeline',
-    {
-      actor_id: actorId,
-      days: query.days,
-      ...memoryTimeZoneArgs(),
-      ...(query.type ? { type: query.type } : {}),
-      ...(query.limit !== undefined ? { limit: query.limit } : {}),
-    },
-    { token, signal },
-  );
 }
 
 /**

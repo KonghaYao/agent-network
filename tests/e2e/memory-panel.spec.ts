@@ -3,6 +3,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { LIMITS } from '../../src/contracts/limits';
+
 import {
   SECRET_BEARER,
   SECRET_CONTEXT,
@@ -248,12 +250,16 @@ test.describe('Agent 记忆弹窗', () => {
       '显示 12 条记忆中的 3 条',
       { timeout: 15_000 },
     );
+    await expect(page.locator('[data-fenix-memory-search]')).toHaveAttribute(
+      'maxlength',
+      String(LIMITS.memoryPanelSearchMax),
+    );
 
     // 表格：一次 graph 带回的行，本地展示窗口。
     await page.getByRole('button', { name: '表格' }).click();
     const rows = page.locator('table tbody tr');
     await expect(rows).toHaveCount(3);
-    const tableText = (await page.locator('.agent-memory-content').textContent()) ?? '';
+    const tableText = (await page.locator('[data-fenix-memory-content]').textContent()) ?? '';
     expect(tableText).not.toContain(SECRET_ENTITY_AWS);
     expect(tableText).not.toContain(SECRET_TAG_PASSWORD);
     expect(tableText).toContain('[已隐藏]');
@@ -287,8 +293,8 @@ test.describe('Agent 记忆弹窗', () => {
     expect(serious.map((item) => `${item.id}(${item.impact})`)).toEqual([]);
 
     // 搜索：一次 graph，不分页累加。
-    await page.locator('#memory-fenix-search').fill('runbook');
-    await page.locator('#memory-fenix-search').press('Enter');
+    await page.locator('[data-fenix-memory-search]').fill('runbook');
+    await page.locator('[data-fenix-memory-search]').press('Enter');
     await expect.poll(() => callsOf(calls, 'network_agent_memory_graph').length).toBe(2);
     expect(callsOf(calls, 'network_agent_memory_graph')[1]!.args.q).toBe('runbook');
     await page.getByRole('button', { name: '表格' }).click();
@@ -296,10 +302,10 @@ test.describe('Agent 记忆弹窗', () => {
     expect(callsOf(calls, 'network_agent_memory_list')).toHaveLength(0);
 
     // 清空搜索后切到经历视角：各一次 graph，type 正确。
-    await page.locator('#memory-fenix-search').fill('');
-    await page.locator('#memory-fenix-search').press('Enter');
+    await page.locator('[data-fenix-memory-search]').fill('');
+    await page.locator('[data-fenix-memory-search]').press('Enter');
     await expect.poll(() => callsOf(calls, 'network_agent_memory_graph').length).toBe(3);
-    await page.locator('#memory-perspective-experience').click();
+    await page.locator('[data-fenix-perspective="experience"]').click();
     await expect.poll(() => callsOf(calls, 'network_agent_memory_graph').length).toBe(4);
     expect(callsOf(calls, 'network_agent_memory_graph')[3]!.args.type).toBe('experience');
     await page.getByRole('button', { name: '表格' }).click();
@@ -386,6 +392,116 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(page.locator('#room-menu-toggle')).toBeFocused();
   });
 
+  test('打开 Agent 记忆后聊天页 Memory 抽屉样式不变', async ({ page }) => {
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
+
+    // 开启 Agent 自身 Memory 抽屉的 tab/统计/chip 渲染：真实 network_me 上补
+    // service.memory.enabled，并给 network_memory_status 一个稳定快照。其余工具
+    // fallback 给上面的记忆面板 stub 或真实服务端。
+    await page.route('**/mcp', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.fallback();
+        return;
+      }
+      const body = JSON.parse(route.request().postData() ?? 'null') as {
+        id?: unknown;
+        params?: { name?: unknown };
+      };
+      const name = body?.params?.name;
+      if (name === 'network_me') {
+        const response = await route.fetch();
+        const payload = (await response.json()) as {
+          result?: { structuredContent?: { service?: { memory?: Record<string, unknown> } } };
+        };
+        const service = payload.result?.structuredContent?.service;
+        if (service) {
+          service.memory = {
+            ...(service.memory ?? {}),
+            enabled: true,
+            capture: true,
+            recall_modes: ['lookup'],
+            supported: ['lookup'],
+            unsupported: [],
+            reason: null,
+          };
+        }
+        await route.fulfill({ response, json: payload });
+        return;
+      }
+      if (name === 'network_memory_status') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              structuredContent: {
+                enabled: true,
+                capture: true,
+                host_level: 'tool_only',
+                counts: { context: 2, experience: 1, curated: 1, source: 1 },
+              },
+            },
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    await login(page, base, agentToken);
+    await expect(page.locator('#account-avatar')).toBeVisible({ timeout: 15_000 });
+
+    const readStyles = () =>
+      page.locator('#memory-drawer').evaluate(() => {
+        const read = (selector: string) => {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (!element) return null;
+          const style = getComputedStyle(element);
+          return {
+            display: style.display,
+            padding: style.padding,
+            gap: style.gap,
+            borderRadius: style.borderRadius,
+            fontSize: style.fontSize,
+            backgroundColor: style.backgroundColor,
+            color: style.color,
+          };
+        };
+        return {
+          tabs: read('.memory-tabs'),
+          statGrid: read('.memory-stat-grid'),
+          chip: read('.memory-chip'),
+        };
+      });
+
+    await page.locator('#memory-open').click();
+    await expect(page.locator('#memory-drawer')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#memory-drawer .memory-tabs')).toBeVisible();
+    await expect(page.locator('#memory-drawer .memory-stat-grid')).toBeVisible();
+    await expect(page.locator('#memory-drawer .memory-chip').first()).toBeVisible();
+    const before = await readStyles();
+    expect(before.tabs).not.toBeNull();
+    expect(before.statGrid).not.toBeNull();
+    expect(before.chip).not.toBeNull();
+    await page.locator('#memory-close').click();
+    await expect(page.locator('#memory-drawer')).toBeHidden();
+
+    await page.locator('.account .memory-avatar-trigger').click({ button: 'right' });
+    await page.locator('#memory-avatar-open').click();
+    await expect(page.locator('#agent-memory-dialog')).toBeVisible({ timeout: 15_000 });
+    await page.locator('#agent-memory-close').click();
+    await expect(page.locator('#agent-memory-dialog')).toBeHidden();
+
+    await page.locator('#memory-open').click();
+    await expect(page.locator('#memory-drawer')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#memory-drawer .memory-tabs')).toBeVisible();
+    const after = await readStyles();
+    expect(after).toEqual(before);
+  });
+
   test('390 移动端全屏单列、表格内部滚动、详情弹窗且无横向溢出', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const calls: MemoryCall[] = [];
@@ -394,10 +510,10 @@ test.describe('Agent 记忆弹窗', () => {
     await openRowMemory(page, directRoom);
 
     // 视角栏与内容区必须单列堆叠：grid 只有一条列轨，内容区在视角栏下方且不越界。
-    const layout = await page.locator('.agent-memory-fenix-body').evaluate((element) => {
+    const layout = await page.locator('[data-slot="agent-master-detail-workspace"]').evaluate((element) => {
       const styles = getComputedStyle(element);
-      const aside = element.querySelector<HTMLElement>('.agent-memory-perspectives');
-      const content = element.querySelector<HTMLElement>('.agent-memory-content');
+      const aside = element.querySelector<HTMLElement>('aside');
+      const content = element.querySelector<HTMLElement>('main');
       if (!aside || !content) throw new Error('缺少视角栏或内容区');
       const asideRect = aside.getBoundingClientRect();
       const contentRect = content.getBoundingClientRect();

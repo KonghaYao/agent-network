@@ -73,8 +73,18 @@ export function useRequest<T, P extends unknown[] = []>(
   }, [run]);
 
   useEffect(() => {
-    if (manual || !ready) return;
-    void run(...([] as unknown as P));
+    if (manual || !ready) return undefined;
+    // Defer the auto-run to a microtask and cancel it in cleanup. React StrictMode
+    // replays mount effects (setup -> cleanup -> setup) synchronously, so without
+    // this guard one user action issues two identical requests in development.
+    // Manual `run`/`refresh` stay synchronous (event handlers are not replayed).
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void run(...([] as unknown as P));
+    });
+    return () => {
+      cancelled = true;
+    };
     // `refreshDeps` is the upstream contract for re-running; the service identity
     // changes every render and must not be a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps

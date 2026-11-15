@@ -18,6 +18,8 @@ import { chromium, type Browser, type BrowserContext, type Locator, type Page } 
 import { extractMessageFileLinks } from '../src/contracts/file-links';
 import { LIMITS } from '../src/contracts/limits';
 import { maskSecrets } from '../src/web/features/memory/mask';
+import { FenixApiError } from '../src/web/features/memory/fenix/api';
+import { toHindsightFailure } from '../src/web/features/memory/fenix/failure';
 import {
   buildSendPlan,
   type HistoryItem,
@@ -4534,6 +4536,15 @@ function runMemoryMaskChecks(): void {
   }
   checkEqual('掩码：普通文本保持不变', maskSecrets('Deploy window is Thursday.'), 'Deploy window is Thursday.');
   checkEqual('掩码：裸 key= 不误伤', maskSecrets('key=value'), 'key=value');
+
+  const failure = toHindsightFailure(
+    new FenixApiError('upstream failed: https://hindsight.invalid/graph?token=e2e-error-secret', 'REQUEST_FAILED'),
+  );
+  check(
+    '掩码：错误详情中的 token=',
+    failure.kind === 'error' && failure.detail.includes('token=[已隐藏]') && !failure.detail.includes('e2e-error-secret'),
+    failure.kind === 'error' ? failure.detail : failure.kind,
+  );
 }
 
 async function main(): Promise<void> {

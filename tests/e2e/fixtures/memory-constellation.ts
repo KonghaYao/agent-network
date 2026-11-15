@@ -2,7 +2,7 @@ import { expect, type Locator, type Page } from '@playwright/test';
 import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { heatColor } from '../../../src/web/features/memory/constellation-scene';
+import { heatColor } from '../../../src/web/features/memory/fenix/components/constellation-scene';
 
 /**
  * Fenix 星座图 e2e 共享夹具与断言工具。
@@ -806,10 +806,6 @@ export function trackRequests(page: Page): string[] {
   const urls: string[] = [];
   page.on('request', (request) => urls.push(request.url()));
   return urls;
-}
-
-export function requestedConstellationChunk(urls: string[]): boolean {
-  return urls.some((url) => /MemoryConstellation-[^/]+\.js/u.test(url));
 }
 
 export function graphCalls(calls: MemoryCall[]): MemoryCall[] {

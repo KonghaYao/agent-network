@@ -32,6 +32,26 @@ async function openMemory(page: Page, directRoom: string): Promise<void> {
   await expect(page.locator('#agent-memory-dialog')).toBeVisible({ timeout: 15_000 });
 }
 
+/** Find a canvas point whose tooltip is visible; the same point is clickable. */
+async function findNodePoint(page: Page): Promise<{ x: number; y: number } | null> {
+  const canvas = page.locator('.fenix-constellation-canvas');
+  await expect(canvas).toBeVisible({ timeout: 15_000 });
+  const box = await canvas.boundingBox();
+  if (!box) return null;
+  for (let rowIndex = 1; rowIndex < 12; rowIndex += 1) {
+    for (let columnIndex = 1; columnIndex < 12; columnIndex += 1) {
+      const x = box.x + (box.width * columnIndex) / 12;
+      const y = box.y + (box.height * rowIndex) / 12;
+      await page.mouse.move(x, y);
+      const display = await page
+        .locator('.fenix-constellation-tooltip')
+        .evaluate((element) => getComputedStyle(element).display);
+      if (display !== 'none') return { x, y };
+    }
+  }
+  return null;
+}
+
 function generatedRows(count: number): FenixRow[] {
   return Array.from({ length: count }, (_, index) => {
     const day = String((index % 28) + 1).padStart(2, '0');
@@ -72,7 +92,7 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
       '显示 12 条记忆中的 3 条',
       { timeout: 15_000 },
     );
-    await expect(page.locator('#memory-perspective-world')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('[data-fenix-perspective="world"]')).toHaveAttribute('aria-pressed', 'true');
 
     expect(callsOf(calls, 'network_agent_memory_graph')).toHaveLength(1);
     const graphCall = callsOf(calls, 'network_agent_memory_graph')[0]!;
@@ -95,7 +115,7 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
 
     // 时间线：使用服务端 timeline.groups（标签带 S: 前缀），缩放/导航不发请求
     await page.getByRole('button', { name: '时间线' }).click();
-    await expect(page.locator('.agent-memory-content')).toContainText('S:', { timeout: 15_000 });
+    await expect(page.locator('[data-fenix-memory-content]')).toContainText('S:', { timeout: 15_000 });
     const beforeZoom = callsOf(calls, 'network_agent_memory_graph').length;
     await page.getByRole('button', { name: '放大' }).click();
     await page.getByRole('button', { name: '放大' }).click();
@@ -106,6 +126,138 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
     await page.getByRole('button', { name: '星座图' }).click();
     await expect(page.locator('.fenix-constellation-canvas')).toBeVisible();
     expect(callsOf(calls, 'network_agent_memory_graph')).toHaveLength(1);
+  });
+
+  test('星座节点侧栏：Esc 先关侧栏，不关闭记忆弹窗', async ({ page }) => {
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, {
+      actorId: identity.agentId,
+      actorName: identity.agentName,
+    });
+    await login(page, identity.base, identity.token);
+    await openMemory(page, identity.directRoom);
+
+    const point = await findNodePoint(page);
+    expect(point).not.toBeNull();
+    await page.mouse.click(point!.x, point!.y);
+    const sidePanel = page.getByRole('button', { name: '关闭记忆详情' });
+    await expect(sidePanel).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#agent-memory-dialog').getByRole('heading', { level: 3 })).toHaveText(
+      '世界事实',
+    );
+    expect(callsOf(calls, 'network_agent_memory_get')).toHaveLength(1);
+
+    await page.keyboard.press('Escape');
+    await expect(sidePanel).toHaveCount(0);
+    await expect(page.locator('#agent-memory-dialog')).toBeVisible();
+  });
+
+  test('视觉基线：238px 左列、surface 背景、compact 圆角与内距', async ({ page }) => {
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, {
+      actorId: identity.agentId,
+      actorName: identity.agentName,
+    });
+    await login(page, identity.base, identity.token);
+    await openMemory(page, identity.directRoom);
+    await expect(page.locator('[data-fenix-summary]')).toContainText(
+      '显示 12 条记忆中的 3 条',
+      { timeout: 15_000 },
+    );
+
+    const styles = await page
+      .locator('[data-slot="agent-master-detail-workspace"]')
+      .evaluate((element) => {
+        const workspace = getComputedStyle(element);
+        const index = element.querySelector<HTMLElement>('[data-fenix-memory-index]');
+        if (!index) throw new Error('缺少左列');
+        const indexStyle = getComputedStyle(index);
+        return {
+          indexWidth: index.getBoundingClientRect().width,
+          radius: workspace.borderTopLeftRadius,
+          indexPaddingLeft: indexStyle.paddingLeft,
+          background: workspace.backgroundColor,
+        };
+      });
+    expect(Math.round(styles.indexWidth)).toBe(238);
+    expect(styles.radius).toBe('12px');
+    expect(styles.indexPaddingLeft).toBe('9px');
+    expect(styles.background).not.toBe('rgba(0, 0, 0, 0)');
+  });
+
+  test('详情遮罩高于父弹窗，点击外部只关闭详情', async ({ page }) => {
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, {
+      actorId: identity.agentId,
+      actorName: identity.agentName,
+    });
+    await login(page, identity.base, identity.token);
+    await openMemory(page, identity.directRoom);
+
+    await page.getByRole('button', { name: '表格' }).click();
+    await page.locator('table tbody tr').first().click();
+    const detailText = page.locator('[data-memory-detail-text]');
+    await expect(detailText).toBeVisible({ timeout: 15_000 });
+
+    const overlayZ = await page
+      .locator('[data-slot="dialog-overlay"]')
+      .last()
+      .evaluate((element) => Number(getComputedStyle(element).zIndex));
+    expect(overlayZ).toBeGreaterThan(61);
+
+    await page.mouse.click(5, 5);
+    await expect(detailText).toHaveCount(0);
+    await expect(page.locator('#agent-memory-dialog')).toBeVisible();
+  });
+
+  test('短视口与横屏：单列、无横向溢出、最小高度归零', async ({ page }) => {
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, {
+      actorId: identity.agentId,
+      actorName: identity.agentName,
+    });
+    await login(page, identity.base, identity.token);
+
+    for (const viewport of [
+      { width: 390, height: 600 },
+      { width: 600, height: 390 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await openMemory(page, identity.directRoom);
+      await expect(page.locator('[data-fenix-summary]')).toContainText(
+        '显示 12 条记忆中的 3 条',
+        { timeout: 15_000 },
+      );
+
+      const layout = await page
+        .locator('[data-slot="agent-master-detail-workspace"]')
+        .evaluate((element) => {
+          const style = getComputedStyle(element);
+          const aside = element.querySelector<HTMLElement>('aside');
+          const content = element.querySelector<HTMLElement>('main');
+          if (!aside || !content) throw new Error('缺少视角栏或内容区');
+          const asideRect = aside.getBoundingClientRect();
+          const contentRect = content.getBoundingClientRect();
+          return {
+            columns: style.gridTemplateColumns.trim().split(/\s+/).filter(Boolean).length,
+            minHeight: style.minHeight,
+            horizontalOverflow: element.scrollWidth - element.clientWidth,
+            stacked: contentRect.top >= asideRect.bottom - 1,
+          };
+        });
+      expect(layout.columns).toBe(1);
+      expect(layout.minHeight).toBe('0px');
+      expect(layout.horizontalOverflow).toBeLessThanOrEqual(1);
+      expect(layout.stacked).toBe(true);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        ),
+      ).toBeLessThanOrEqual(1);
+
+      await page.locator('#agent-memory-close').click();
+      await expect(page.locator('#agent-memory-dialog')).toBeHidden();
+    }
   });
 
   test('表格翻页只是本地窗口：120 行 1 次 graph', async ({ page }) => {
@@ -178,8 +330,8 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
       { timeout: 15_000 },
     );
 
-    await page.locator('#memory-fenix-search').fill('runbook');
-    await page.locator('#memory-fenix-search').press('Enter');
+    await page.locator('[data-fenix-memory-search]').fill('runbook');
+    await page.locator('[data-fenix-memory-search]').press('Enter');
     await expect
       .poll(() => callsOf(calls, 'network_agent_memory_graph').length)
       .toBe(2);
@@ -206,19 +358,19 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
     );
     expect(callsOf(calls, 'network_agent_memory_graph')).toHaveLength(1);
 
-    await page.locator('#memory-perspective-experience').click();
+    await page.locator('[data-fenix-perspective="experience"]').click();
     await expect
       .poll(() => callsOf(calls, 'network_agent_memory_graph').length)
       .toBe(2);
     expect(callsOf(calls, 'network_agent_memory_graph')[1]!.args.type).toBe('experience');
 
-    await page.locator('#memory-perspective-observation').click();
+    await page.locator('[data-fenix-perspective="observation"]').click();
     await expect
       .poll(() => callsOf(calls, 'network_agent_memory_graph').length)
       .toBe(3);
     expect(callsOf(calls, 'network_agent_memory_graph')[2]!.args.type).toBe('observation');
 
-    await page.locator('#memory-perspective-entities').click();
+    await page.locator('[data-fenix-perspective="entities"]').click();
     await expect(page.locator('[data-slot="table"] tbody tr')).toHaveCount(3, {
       timeout: 15_000,
     });
@@ -246,10 +398,10 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
       { timeout: 15_000 },
     );
 
-    await page.locator('#memory-perspective-world').focus();
+    await page.locator('[data-fenix-perspective="world"]').focus();
     await page.keyboard.press('End');
-    await expect(page.locator('#memory-perspective-entities')).toBeFocused();
-    await expect(page.locator('#memory-perspective-entities')).toHaveAttribute(
+    await expect(page.locator('[data-fenix-perspective="entities"]')).toBeFocused();
+    await expect(page.locator('[data-fenix-perspective="entities"]')).toHaveAttribute(
       'aria-pressed',
       'true',
     );
@@ -258,7 +410,7 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
     });
 
     await page.keyboard.press('Home');
-    await expect(page.locator('#memory-perspective-world')).toBeFocused();
+    await expect(page.locator('[data-fenix-perspective="world"]')).toBeFocused();
     await expect
       .poll(() => callsOf(calls, 'network_agent_memory_graph').length)
       .toBe(2);
@@ -320,6 +472,24 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
     await expect(page.getByRole('alert')).toContainText('加载记忆失败');
     await expect(page.getByText('暂无记忆数据')).toHaveCount(0);
     await expect(page.getByRole('button', { name: '重试' })).toBeVisible();
+  });
+
+  test('错误详情携带 token= 时显示 [已隐藏]，不泄露原值', async ({ page }) => {
+    const secret = 'e2e-error-secret-token';
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, {
+      actorId: identity.agentId,
+      actorName: identity.agentName,
+      graphFailure: true,
+      graphFailureMessage: `上游失败：https://hindsight.invalid/graph?token=${secret}&mode=1`,
+    });
+    await login(page, identity.base, identity.token);
+    await openMemory(page, identity.directRoom);
+
+    const alert = page.getByRole('alert');
+    await expect(alert).toContainText('token=[已隐藏]', { timeout: 15_000 });
+    await expect(alert).not.toContainText(secret);
+    await expect(page.locator('#agent-memory-dialog')).not.toContainText(secret);
   });
 
   test('390 暗色：单栏、无页面横向溢出、表格内部滚动、axe 无 critical/serious', async ({
@@ -395,7 +565,7 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
     expect(assets.some((url) => /DataView-[^/]+\.js/u.test(url))).toBe(true);
     expect(assets.some((url) => /EntitiesView-[^/]+\.js/u.test(url))).toBe(false);
 
-    await page.locator('#memory-perspective-entities').click();
+    await page.locator('[data-fenix-perspective="entities"]').click();
     await expect(page.locator('[data-slot="table"] tbody tr')).toHaveCount(3, {
       timeout: 15_000,
     });

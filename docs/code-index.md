@@ -106,7 +106,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | 消息式 Task 网页摘要行、Trace 抽屉与样式 | `src/web/features/tasks/TaskSummaryBar.tsx`、`TaskTraceDialog.tsx`、`src/web/chat-task-trace-styles.ts` |
 | 消息式 Task 浏览器/端到端验收 | `scripts/verify-web.ts`、`scripts/verify-message-tasks.ts` |
 | Memory 网页状态、召回、上下文、经历、宿主与治理 | `src/web/features/panels/MemoryDialog.tsx`、`src/web/chat-memory-styles.ts`、`src/memory/` |
-| Agent 记忆弹窗（Fenix 视角 IA、graph/include_rows 单次取数、实体服务端分页、默认掩码） | `src/web/features/memory/AgentMemoryDialog.tsx`、`src/web/features/memory/memory-data.ts`、`src/web/features/memory/fenix/`（`memory-api.ts` 适配层、`components/DataView.tsx`、`components/EntitiesView.tsx`、`components/data-view-*.tsx`、`components/MemoryDetail*.tsx`）；旧 `MemoryEntities.tsx` 仅保留用于回滚 |
+| Agent 记忆弹窗（Fenix 单一壳、MCP 工具适配、graph/include_rows 单次取数、实体服务端分页、默认掩码） | `src/web/features/memory/AgentMemoryDialog.tsx`（chrome/会话闸门 + 动态 import）、`src/web/features/memory/memory-data.ts`、`src/web/features/memory/fenix/`（`MemoriesPage.tsx` 单一壳、`api.ts` context 适配边界、`memory-api.ts`、`components/DataView.tsx`、`components/EntitiesView.tsx`、`components/data-view-*.tsx`、`components/MemoryDetail*.tsx`）；legacy 自写组件与 `memory-viz.css` 已删除 |
 | Agent 记忆弹窗验收（单次取数、视图本地切换、掩码揭示、390/暗色/axe） | `tests/e2e/memory-fenix.spec.ts`、`tests/e2e/memory-panel.spec.ts`、`tests/e2e/memory-views.spec.ts`、`tests/e2e/memory-constellation*.spec.ts` |
 | Memory 网页验收（禁用降级、真实经历/Context、遗忘确认、移动端/暗色） | `scripts/verify-web.ts`、`scripts/verify-memory-experience.ts` |
 | MF10 运行时组合、第二适配器与故障验收 | `src/memory/integration.ts`、`src/memory/adapters/local.ts`、`src/memory/adapters/validation.ts`、`scripts/verify-memory-integration.ts`、`scripts/lib/memory-integration-child.ts`、`scripts/lib/memory-admission-fixture.ts` |

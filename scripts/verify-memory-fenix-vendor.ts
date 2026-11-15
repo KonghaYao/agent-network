@@ -10,8 +10,9 @@
  * 4. Asserts the ported JS contains no innerHTML-style sinks.
  * 5. Asserts the vendor chunks stay under the phase size budget.
  * 6. Requires the production SPA manifest and asserts the Fenix memory code is
- *    reachable only through the dynamic AgentMemoryDialog/DataView chunks
- *    (stage 4 wires the vendor UI into the panel), and stays within budgets.
+ *    reachable only through the dynamic AgentMemoryDialog -> MemoriesPage ->
+ *    DataView/EntitiesView chain, contains no legacy self-written modules or CSS,
+ *    and stays within budgets.
  */
 
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
@@ -79,8 +80,12 @@ check(Boolean(hostKey), 'lazy host entry exists in the build manifest');
 const hostChunk = hostKey ? manifest[hostKey] : undefined;
 check(Boolean(hostChunk), 'lazy host chunk resolved');
 
-const fenixKey = Object.keys(manifest).find((key) => key.includes('features/memory/fenix/index'));
-check(Boolean(fenixKey), 'fenix/index.ts is emitted as its own module chunk');
+// A re-export-only entry can be merged into the dynamic chunk Vite emits for the
+// host's `import()`; accept either the path-named module or that dynamic chunk.
+const fenixPathKey = Object.keys(manifest).find((key) => key.includes('features/memory/fenix/index'));
+const hostDynamicKeys = hostChunk?.dynamicImports ?? [];
+const fenixKey = fenixPathKey ?? hostDynamicKeys[0];
+check(Boolean(fenixKey), 'fenix vendor entry is emitted as a dynamic chunk');
 
 const renderKey = Object.keys(manifest).find((key) => key.includes('fenix-render-host.html'));
 check(Boolean(renderKey), 'render fixture HTML is emitted for the Playwright vendor spec');
@@ -90,21 +95,29 @@ check(
 );
 
 check(
-  Boolean(hostChunk && hostChunk.dynamicImports?.some((key) => key.includes('features/memory/fenix/index'))),
-  'lazy host references fenix/index.ts through a dynamic import',
+  Boolean(fenixKey && hostDynamicKeys.includes(fenixKey)),
+  'lazy host references the fenix vendor chunk through a dynamic import',
 );
 
 const hostCode = hostChunk ? read(join(outDir, hostChunk.file)) : '';
 check(
-  !hostCode.includes('FENIX_MEMORY_VENDOR_MARKER') && !hostCode.includes('fenix-memory-vendor-chunk'),
-  'host entry does not inline the fenix vendor chunk marker',
+  !hostCode.includes('fenix-memory-root') && !hostCode.includes('fenix-constellation'),
+  'host entry does not inline the fenix vendor markup',
 );
 
 const fenixChunk = fenixKey ? manifest[fenixKey] : undefined;
 const fenixCode = fenixChunk ? read(join(outDir, fenixChunk.file)) : '';
 check(
-  fenixCode.includes('fenix-memory-vendor-chunk') || hostCode.includes('FENIX_MEMORY_VENDOR_MARKER'),
-  'vendor marker is present outside the host entry (chunk separation proven)',
+  fenixCode.includes('fenix-memory-root'),
+  'fenix vendor chunk contains the scoped root selector (chunk separation proven)',
+);
+check(
+  Boolean(fenixChunk?.dynamicImports?.some((key) => key.includes('components/DataView'))),
+  'fenix vendor chunk dynamically imports DataView',
+);
+check(
+  Boolean(fenixChunk?.dynamicImports?.some((key) => key.includes('components/EntitiesView'))),
+  'fenix vendor chunk dynamically imports EntitiesView',
 );
 
 const cssFiles = readdirSync(join(outDir, 'assets')).filter((file) => file.endsWith('.css'));
@@ -173,6 +186,9 @@ if (hasProductionManifest) {
   const dialogKey = productionKeys.find(
     (key) => key.includes('AgentMemoryDialog') && key.endsWith('.js'),
   );
+  const memoriesPageKey = productionKeys.find(
+    (key) => key.includes('MemoriesPage') && key.endsWith('.js'),
+  );
   const dataViewKey = productionKeys.find(
     (key) => key.includes('features/memory/fenix/components/DataView') && key.endsWith('.tsx'),
   );
@@ -181,6 +197,7 @@ if (hasProductionManifest) {
   );
   const entry = entryKey ? productionManifest[entryKey] : undefined;
   const dialog = dialogKey ? productionManifest[dialogKey] : undefined;
+  const memoriesPage = memoriesPageKey ? productionManifest[memoriesPageKey] : undefined;
   const dataView = dataViewKey ? productionManifest[dataViewKey] : undefined;
   const entitiesView = entitiesViewKey ? productionManifest[entitiesViewKey] : undefined;
 
@@ -190,22 +207,65 @@ if (hasProductionManifest) {
     'AgentMemoryDialog stays behind a dynamic import from the SPA entry',
   );
   check(
-    Boolean(dataView && dialog?.dynamicImports?.some((key) => key.includes('features/memory/fenix/components/DataView'))),
-    'Fenix DataView stays behind a dynamic import from AgentMemoryDialog',
+    Boolean(memoriesPage && dialog?.dynamicImports?.some((key) => key.includes('MemoriesPage'))),
+    'AgentMemoryDialog dynamically imports the upstream MemoriesPage',
   );
   check(
     Boolean(
-      entitiesView &&
-        dialog?.dynamicImports?.some((key) =>
+      memoriesPage &&
+        dataView &&
+        memoriesPage.dynamicImports?.some((key) =>
+          key.includes('features/memory/fenix/components/DataView'),
+        ),
+    ),
+    'MemoriesPage dynamically imports Fenix DataView',
+  );
+  check(
+    Boolean(
+      memoriesPage &&
+        entitiesView &&
+        memoriesPage.dynamicImports?.some((key) =>
           key.includes('features/memory/fenix/components/EntitiesView'),
         ),
     ),
-    'Fenix EntitiesView stays behind a dynamic import from AgentMemoryDialog',
+    'MemoriesPage dynamically imports Fenix EntitiesView',
   );
   check(
-    !productionKeys.some((key) => key.includes('features/memory/MemoryEntities')),
-    'legacy MemoryEntities is no longer referenced by the production bundle',
+    !dialog?.dynamicImports?.some(
+      (key) =>
+        key.includes('features/memory/fenix/components/DataView') ||
+        key.includes('features/memory/fenix/components/EntitiesView'),
+    ),
+    'AgentMemoryDialog no longer mounts DataView/EntitiesView directly',
   );
+
+  const legacyModule = /features\/memory\/(MemoryOverview|MemoryFacts|MemoryTimeline|MemoryDetail|MemoryEntities|MemoryConstellation|ConstellationCanvas|MemoryGraphCanvas|constellation-adapter|constellation-labels|constellation-paint|constellation-scene|constellation-state)(?:\.|$)/u;
+  check(
+    !productionKeys.some((key) => legacyModule.test(key)),
+    'production manifest contains no legacy self-written memory modules',
+  );
+  check(
+    !productionKeys.some((key) => key.includes('fenix/components/Graph2d')),
+    'production manifest contains no disabled Graph2d placeholder',
+  );
+
+  const dialogCssFiles = dialog?.css ?? [];
+  const dialogCss = dialogCssFiles.map((file) => read(join(root, 'dist/web', file))).join('\n');
+  for (const selector of [
+    '.memory-tabs',
+    '.memory-tab',
+    '.memory-stat-grid',
+    '.memory-chip',
+    '.memory-detail',
+    '.agent-memory-perspectives',
+    '.agent-memory-content',
+    '.agent-memory-fenix-body',
+  ]) {
+    check(
+      !dialogCss.includes(selector),
+      `AgentMemoryDialog CSS no longer ships legacy selector ${selector}`,
+    );
+  }
 
   const entryCode = entry ? read(join(root, 'dist/web', entry.file)) : '';
   check(
