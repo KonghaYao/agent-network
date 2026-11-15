@@ -108,11 +108,67 @@
 }
 
 .agent-memory-main {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.memory-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--wx-line);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.memory-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.memory-tab {
+  flex: 0 0 auto;
+  padding: 10px 9px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--wx-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.memory-tab:hover {
+  background: transparent;
+  color: var(--wx-text);
+}
+
+.memory-tab.active {
+  border-bottom-color: #067d3f;
+  color: var(--wx-text);
+  font-weight: 600;
+}
+
+.memory-tab-panels {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 16px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 16px;
+}
+
+.memory-tab-panel {
+  min-width: 0;
+}
+
+.memory-tab-panel[hidden] {
+  display: none;
 }
 
 .agent-memory-note {
@@ -751,6 +807,21 @@
   }
 
   .agent-memory-main {
+    display: block;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .memory-tabs {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding-right: max(12px, env(safe-area-inset-right));
+    padding-left: max(12px, env(safe-area-inset-left));
+    background: var(--wx-panel);
+  }
+
+  .memory-tab-panels {
     overflow: visible;
     padding: 12px max(12px, env(safe-area-inset-right)) 12px max(12px, env(safe-area-inset-left));
   }

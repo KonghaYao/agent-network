@@ -88,8 +88,104 @@ export interface MemoryGetResult {
 export interface MemoryListQuery {
   q?: string;
   type?: MemoryFactType;
+  time_field?: 'created_at' | 'mentioned_at' | 'occurred_start' | 'occurred_end';
+  start_date?: string;
+  end_date?: string;
   limit: number;
   offset: number;
+}
+
+export interface MemoryGraphNode {
+  id: string;
+  label: string;
+  text?: string;
+  fact_type?: MemoryFactType;
+  date?: string | null;
+  entities?: string[];
+  mention_count?: number;
+}
+
+export interface MemoryGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: string;
+  weight: number;
+  entity?: string | null;
+}
+
+export interface MemoryGraphResult {
+  available: boolean;
+  reason: MemoryAvailabilityReason;
+  actor: MemoryActor;
+  fetched_at: number;
+  nodes: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  total_units: number | null;
+  total_edges: number;
+  raw_node_count: number;
+  raw_edge_count: number;
+  limit: number;
+  truncated: boolean;
+}
+
+export interface MemoryGraphQuery {
+  type?: MemoryFactType;
+  limit: number;
+}
+
+export interface MemoryEntityItem {
+  id: string;
+  name: string;
+  mention_count: number;
+  first_seen: string | null;
+  last_seen: string | null;
+}
+
+export interface MemoryEntityDetail extends MemoryEntityItem {
+  observations: { id: string; text: string; proof_count: number }[];
+  memories: {
+    id: string;
+    text_preview: string;
+    fact_type: MemoryFactType | null;
+    mentioned_at: string | null;
+  }[];
+}
+
+export interface MemoryEntityGraph {
+  nodes: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  total_entities: number | null;
+  total_edges: number;
+  raw_node_count: number;
+  raw_edge_count: number;
+  limit: number;
+  truncated: boolean;
+}
+
+export interface MemoryEntitiesResult {
+  available: boolean;
+  reason: MemoryAvailabilityReason;
+  actor: MemoryActor;
+  fetched_at: number;
+  view: 'list' | 'graph' | 'detail';
+  items: MemoryEntityItem[];
+  total: number | null;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  next_offset: number | null;
+  entity: MemoryEntityDetail | null;
+  graph: MemoryEntityGraph | null;
+  truncated: boolean;
+  partial: boolean;
+}
+
+export interface MemoryEntitiesQuery {
+  view: 'list' | 'graph' | 'detail';
+  entity_id?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export type MemoryFailureKind =
@@ -173,6 +269,9 @@ export async function fetchMemoryList(
       offset: query.offset,
       ...(query.q ? { q: query.q } : {}),
       ...(query.type ? { type: query.type } : {}),
+      ...(query.time_field ? { time_field: query.time_field } : {}),
+      ...(query.start_date ? { start_date: query.start_date } : {}),
+      ...(query.end_date ? { end_date: query.end_date } : {}),
     },
     { token, signal },
   );
@@ -187,6 +286,42 @@ export async function fetchMemoryDetail(
   return callTool<MemoryGetResult>(
     'network_agent_memory_get',
     { actor_id: actorId, memory_id: memoryId },
+    { token, signal },
+  );
+}
+
+export async function fetchMemoryGraph(
+  actorId: string,
+  token: string,
+  query: MemoryGraphQuery,
+  signal: AbortSignal,
+): Promise<MemoryGraphResult> {
+  return callTool<MemoryGraphResult>(
+    'network_agent_memory_graph',
+    {
+      actor_id: actorId,
+      limit: query.limit,
+      ...(query.type ? { type: query.type } : {}),
+    },
+    { token, signal },
+  );
+}
+
+export async function fetchMemoryEntities(
+  actorId: string,
+  token: string,
+  query: MemoryEntitiesQuery,
+  signal: AbortSignal,
+): Promise<MemoryEntitiesResult> {
+  return callTool<MemoryEntitiesResult>(
+    'network_agent_memory_entities',
+    {
+      actor_id: actorId,
+      view: query.view,
+      ...(query.entity_id ? { entity_id: query.entity_id } : {}),
+      ...(query.limit !== undefined ? { limit: query.limit } : {}),
+      ...(query.offset !== undefined ? { offset: query.offset } : {}),
+    },
     { token, signal },
   );
 }
