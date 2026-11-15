@@ -15,6 +15,59 @@ import { ChatMessage } from './ChatMessage';
 
 const TIME_GAP = 5 * 60 * 1000;
 
+interface ScrollAnchor {
+  messageId: string;
+  /** 消息顶部相对滚动容器顶部的偏移；可为负（消息顶部已在视口上方）。 */
+  offset: number;
+}
+
+interface ScrollSnapshot {
+  scrollTop: number;
+  pinned: boolean;
+  anchor: ScrollAnchor | null;
+}
+
+/**
+ * 按房间保留滚动快照。只在当前页面生命周期内有效，刷新后回到首次进入
+ * 的默认行为（底部），与 legacy 的 roomCache 一致。
+ */
+const roomScrollSnapshots = new Map<string, ScrollSnapshot>();
+
+function rememberRoomScroll(roomId: string, snapshot: ScrollSnapshot): void {
+  roomScrollSnapshots.delete(roomId);
+  roomScrollSnapshots.set(roomId, snapshot);
+  while (roomScrollSnapshots.size > LIMITS.webRoomScrollCacheMax) {
+    const oldest = roomScrollSnapshots.keys().next().value;
+    if (oldest === undefined) break;
+    roomScrollSnapshots.delete(oldest);
+  }
+}
+
+/** 视口内第一条消息；时间胶囊、分页器和底部 sentinel 都不是稳定锚点。 */
+function firstVisibleMessage(element: HTMLOListElement): ScrollAnchor | null {
+  const listTop = element.getBoundingClientRect().top;
+  const listBottom = element.getBoundingClientRect().bottom;
+  for (const child of element.children) {
+    const node = child as HTMLElement;
+    if (!node.dataset.messageId) continue;
+    const rect = node.getBoundingClientRect();
+    if (rect.top >= listBottom || rect.bottom <= listTop) continue;
+    return { messageId: node.dataset.messageId, offset: rect.top - listTop };
+  }
+  return null;
+}
+
+function findMessageElement(
+  element: HTMLOListElement,
+  messageId: string,
+): HTMLElement | null {
+  for (const child of element.children) {
+    const node = child as HTMLElement;
+    if (node.dataset.messageId === messageId) return node;
+  }
+  return null;
+}
+
 interface TimelineProps {
   items: HistoryItem[];
   room: RoomView;
@@ -68,6 +121,7 @@ export function Timeline({
 }: TimelineProps) {
   const listRef = useRef<HTMLOListElement>(null);
   const pinnedRef = useRef(true);
+  const anchorRef = useRef<ScrollAnchor | null>(null);
   const [pinned, setPinned] = useState(true);
   const [hasNew, setHasNew] = useState(false);
   const lastKeyRef = useRef<string | null>(null);
@@ -77,8 +131,34 @@ export function Timeline({
   const setPin = useCallback((value: boolean) => {
     pinnedRef.current = value;
     setPinned(value);
-    if (value) setHasNew(false);
+    if (value) {
+      setHasNew(false);
+      anchorRef.current = null;
+    }
   }, []);
+
+  const restoreAnchor = useCallback((anchor: ScrollAnchor | null) => {
+    const element = listRef.current;
+    if (!element || !anchor) return;
+    const target = findMessageElement(element, anchor.messageId);
+    if (!target) return;
+    const listTop = element.getBoundingClientRect().top;
+    const drift = target.getBoundingClientRect().top - listTop - anchor.offset;
+    if (Math.abs(drift) >= 0.5) element.scrollTop += drift;
+  }, []);
+
+  const rememberPosition = useCallback(() => {
+    const element = listRef.current;
+    if (!element) return;
+    const currentPinned = pinnedRef.current;
+    const anchor = currentPinned ? null : firstVisibleMessage(element);
+    anchorRef.current = anchor;
+    rememberRoomScroll(room.room_id, {
+      scrollTop: element.scrollTop,
+      pinned: currentPinned,
+      anchor,
+    });
+  }, [room.room_id]);
 
   const scrollBottom = useCallback((smooth = false) => {
     const element = listRef.current;
@@ -92,6 +172,36 @@ export function Timeline({
     () => items.filter((entry): entry is HistoryMessage => entry.kind !== 'presence'),
     [items],
   );
+
+  /**
+   * 房间切换后先恢复快照，再让下面的 items effect 决定是否钉底。
+   * 同步写入 lastKeyRef，避免把已缓存的历史误判成“切回后有新消息”。
+   */
+  useLayoutEffect(() => {
+    const element = listRef.current;
+    if (!element) return;
+    lastKeyRef.current = lastKey;
+    lastForceRef.current = forcePinToken;
+    setHasNew(false);
+
+    const snapshot = roomScrollSnapshots.get(room.room_id);
+    if (!snapshot) {
+      setPin(true);
+      element.scrollTop = element.scrollHeight;
+      return;
+    }
+    if (snapshot.pinned) {
+      setPin(true);
+      element.scrollTop = element.scrollHeight;
+      return;
+    }
+    setPin(false);
+    element.scrollTop = Math.max(0, snapshot.scrollTop);
+    anchorRef.current = snapshot.anchor;
+    restoreAnchor(snapshot.anchor);
+    // 只在房间变化时恢复；items 更新由下方 content effect 与 ResizeObserver 处理。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room.room_id]);
 
   useLayoutEffect(() => {
     if (!lastKey) return;
@@ -111,22 +221,34 @@ export function Timeline({
     const element = listRef.current;
     if (!element) return undefined;
     let frame = 0;
-    const keepPinned = () => {
-      if (!pinnedRef.current) return;
+    const settle = () => {
       if (frame) cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => scrollBottom());
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (pinnedRef.current) scrollBottom();
+        else restoreAnchor(anchorRef.current);
+      });
     };
-    const observer = new ResizeObserver(keepPinned);
+    const observer = new ResizeObserver(settle);
+    const observeChildren = () => {
+      for (const child of element.children) {
+        if (child instanceof HTMLElement) observer.observe(child);
+      }
+    };
     observer.observe(element);
-    // Markdown 岛晚一帧挂载只改变内容高度，不改变列表自身盒子；同时观察子树。
-    const mutations = new MutationObserver(keepPinned);
+    observeChildren();
+    // Markdown 岛晚一帧挂载只改变消息高度，不改变列表自身盒子；观察子树与每个消息。
+    const mutations = new MutationObserver(() => {
+      observeChildren();
+      settle();
+    });
     mutations.observe(element, { childList: true, subtree: true, characterData: true });
     return () => {
       observer.disconnect();
       mutations.disconnect();
       if (frame) cancelAnimationFrame(frame);
     };
-  }, [scrollBottom]);
+  }, [items, restoreAnchor, scrollBottom]);
 
   useEffect(() => {
     if (!pinned) return undefined;
@@ -146,11 +268,12 @@ export function Timeline({
         const next = listRef.current;
         if (!next) return;
         next.scrollTop = beforeTop + (next.scrollHeight - beforeHeight);
+        rememberPosition();
       });
     } finally {
       autoLoadingRef.current = false;
     }
-  }, [onLoadOlder]);
+  }, [onLoadOlder, rememberPosition]);
 
   const onScroll = () => {
     const element = listRef.current;
@@ -161,6 +284,7 @@ export function Timeline({
     } else if (pinnedRef.current) {
       setPin(false);
     }
+    rememberPosition();
     const scrollRange = element.scrollHeight - element.clientHeight;
     if (
       hasOlder &&
