@@ -28,6 +28,8 @@ import {
   type InsightGetResult,
   type InsightGraphInput,
   type InsightGraphResult,
+  type InsightGraphRow,
+  type InsightGraphTimeline,
   type InsightListInput,
   type InsightListResult,
   type InsightOverviewInput,
@@ -46,10 +48,12 @@ import {
 import {
   fitGraphBytes,
   fitItemsToBytes,
+  graphRowTimeMs,
   jsonBytes,
   normalizeEntityDetail,
   normalizeEntityGraph,
   normalizeEntityList,
+  normalizeGraphRows,
   normalizeMemoryDetail,
   normalizeMemoryGraph,
   normalizeMemoryList,
@@ -59,6 +63,7 @@ import {
 import {
   resolveTimelineZone,
   timelineRange,
+  type TimelineGranularity,
   type TimelineZone,
 } from './timeline-zone';
 
@@ -153,15 +158,18 @@ function sortTimelineItems(items: InsightTimelineItem[]): InsightTimelineItem[] 
   });
 }
 
-function buildTimelineGroups(
-  items: InsightTimelineItem[],
-  granularity: 'day' | 'week' | 'month',
+function buildTimelineGroups<T>(
+  items: T[],
+  granularity: TimelineGranularity,
   zone: TimelineZone,
+  timeOf: (item: T) => number | null,
+  includeUndated = true,
 ): InsightTimelineGroup[] {
   const groups: InsightTimelineGroup[] = [];
   let current: InsightTimelineGroup | null = null;
   items.forEach((item, index) => {
-    const ms = timelineTimeMs(item);
+    const ms = timeOf(item);
+    if (ms === null && !includeUndated) return;
     const range =
       ms === null
         ? { key: 'undated', label: '无日期', start: null, end: null }
@@ -186,9 +194,9 @@ function timelineGroups(
   zone: TimelineZone,
 ): InsightTimelineResult['groups'] {
   return {
-    day: buildTimelineGroups(items, 'day', zone),
-    week: buildTimelineGroups(items, 'week', zone),
-    month: buildTimelineGroups(items, 'month', zone),
+    day: buildTimelineGroups(items, 'day', zone, timelineTimeMs),
+    week: buildTimelineGroups(items, 'week', zone, timelineTimeMs),
+    month: buildTimelineGroups(items, 'month', zone, timelineTimeMs),
   };
 }
 
@@ -208,6 +216,42 @@ function timelineSummary(
     dated,
     undated: items.length - dated,
     by_type: byType,
+  };
+}
+
+function graphTimelineSummary(
+  rows: InsightGraphRow[],
+  total: number | null,
+): InsightGraphTimeline['summary'] {
+  const byType = { world: 0, experience: 0, observation: 0 };
+  let dated = 0;
+  for (const row of rows) {
+    if (row.fact_type) byType[row.fact_type] += 1;
+    if (graphRowTimeMs(row) !== null) dated += 1;
+  }
+  return {
+    total,
+    returned: rows.length,
+    dated,
+    undated: rows.length - dated,
+    by_type: byType,
+  };
+}
+
+function graphTimeline(
+  rows: InsightGraphRow[],
+  total: number | null,
+  zone: TimelineZone,
+): InsightGraphTimeline {
+  return {
+    groups: {
+      year: buildTimelineGroups(rows, 'year', zone, graphRowTimeMs, false),
+      month: buildTimelineGroups(rows, 'month', zone, graphRowTimeMs, false),
+      week: buildTimelineGroups(rows, 'week', zone, graphRowTimeMs, false),
+      day: buildTimelineGroups(rows, 'day', zone, graphRowTimeMs, false),
+    },
+    summary: graphTimelineSummary(rows, total),
+    basis: 'occurred_at',
   };
 }
 
@@ -261,26 +305,54 @@ export class MemoryInsightService {
         input.limit ?? LIMITS.memoryPanelGraphNodesDefault,
         LIMITS.memoryPanelGraphNodesMax,
       );
+      const includeRows = input.include_rows === true;
+      const rowsLimit = Math.min(
+        input.rows_limit ?? LIMITS.memoryPanelRowsDefault,
+        LIMITS.memoryPanelRowsMax,
+      );
+      const rowsTextChars = Math.min(
+        input.rows_text_chars ?? LIMITS.memoryPanelRowsTextCharsDefault,
+        LIMITS.memoryPanelRowsTextCharsMax,
+      );
+      const zone = resolveTimelineZone(input);
+      // 上游 graph 的 table_rows 与 nodes 来自同一个 units 页；提高 limit 才能在同一
+      // 快照里拿到 rows_limit 行，而输出节点数仍由本地 limit 裁剪。
+      const upstreamLimit = includeRows
+        ? Math.min(Math.max(limit, rowsLimit), LIMITS.memoryPanelRowsMax)
+        : limit;
       const base = this.#base(target);
       const gate = this.#gate();
-      if (gate) return this.#emptyGraph(base, gate, limit);
+      if (gate) return this.#emptyGraph(base, gate, limit, includeRows, zone);
       const reader = this.#reader!;
       const space = await loadInsightSpace(this.#db, target.actor_id);
-      if (!space) return this.#emptyGraph(base, 'no_space', limit);
+      if (!space) return this.#emptyGraph(base, 'no_space', limit, includeRows, zone);
       const bank = await reader.bankFor(spaceRef(space));
       return this.#cache.getOrLoad(
-        this.#cacheKey(space, 'graph', { limit, type: input.type, q: input.q }),
+        this.#cacheKey(space, 'graph', {
+          limit,
+          type: input.type,
+          q: input.q,
+          include_rows: includeRows,
+          ...(includeRows
+            ? {
+                rows_limit: rowsLimit,
+                rows_text_chars: rowsTextChars,
+                timezone: zone.timeZone,
+                tz_offset_minutes: zone.offsetMinutes,
+              }
+            : {}),
+        }),
         async () => {
           const outcome = await reader.graph(bank, {
-            limit,
+            limit: upstreamLimit,
             type: input.type,
             q: input.q,
           });
           if (httpStatusOf(outcome) === 404) {
-            return this.#emptyGraph(base, 'bank_missing', limit);
+            return this.#emptyGraph(base, 'bank_missing', limit, includeRows, zone);
           }
           if (httpStatusOf(outcome) === 405 || httpStatusOf(outcome) === 410) {
-            return this.#emptyGraph(base, 'backend_unsupported', limit);
+            return this.#emptyGraph(base, 'backend_unsupported', limit, includeRows, zone);
           }
           if (!outcome.ok) this.#throwReadFailure(outcome);
           const graph = normalizeMemoryGraph(outcome.body, {
@@ -302,7 +374,23 @@ export class MemoryInsightService {
             limit,
             truncated: graph.truncated,
           };
-          if (fitGraphBytes(result)) result.truncated = true;
+          // include_rows 时图预算只计算 nodes/edges，不能把随后附加的 table_rows
+          // 算进去；旧客户端仍按整包结果裁剪，保持原行为。
+          const graphTrimmed = includeRows
+            ? fitGraphBytes({ nodes: result.nodes, edges: result.edges })
+            : fitGraphBytes(result);
+          if (graphTrimmed) result.truncated = true;
+          if (includeRows) {
+            const normalizedRows = normalizeGraphRows(outcome.body, {
+              limit: rowsLimit,
+              textChars: rowsTextChars,
+            });
+            if (!normalizedRows) throw insightBusinessError('UPSTREAM_UNAVAILABLE');
+            result.table_rows = normalizedRows.rows;
+            result.rows_truncated = normalizedRows.truncated;
+            result.timeline = graphTimeline(normalizedRows.rows, graph.total_units, zone);
+            this.#fitGraphRows(result, graph.total_units, zone);
+          }
           return result;
         },
         { refresh: input.refresh },
@@ -769,8 +857,10 @@ export class MemoryInsightService {
     base: BaseView,
     reason: InsightAvailabilityReason,
     limit: number,
+    includeRows = false,
+    zone: TimelineZone = { timeZone: null, offsetMinutes: 0 },
   ): InsightGraphResult {
-    return {
+    const result: InsightGraphResult = {
       ...base,
       available: false,
       reason,
@@ -783,6 +873,12 @@ export class MemoryInsightService {
       limit,
       truncated: false,
     };
+    if (includeRows) {
+      result.table_rows = [];
+      result.rows_truncated = false;
+      result.timeline = graphTimeline([], null, zone);
+    }
+    return result;
   }
 
   #emptyList(
@@ -839,6 +935,32 @@ export class MemoryInsightService {
   #refreshTimeline(result: InsightTimelineResult, zone: TimelineZone): void {
     result.groups = timelineGroups(result.items, zone);
     result.summary = timelineSummary(result.items, result.summary.total);
+  }
+
+  /**
+   * 表格行预算：行预算与整包预算分别检查，从最旧行尾部裁剪并重建分组。
+   * 上游 total 大于返回行数时也标记 rows_truncated，避免把子集当完整数据。
+   */
+  #fitGraphRows(
+    result: InsightGraphResult,
+    total: number | null,
+    zone: TimelineZone,
+  ): boolean {
+    const rows = result.table_rows;
+    if (!rows) return false;
+    if (total !== null && total > rows.length) result.rows_truncated = true;
+    let trimmed = false;
+    while (
+      rows.length > 0 &&
+      (jsonBytes(rows) > LIMITS.memoryPanelRowsBytes ||
+        jsonBytes(result) > LIMITS.memoryPanelDataBytes)
+    ) {
+      rows.splice(Math.max(0, rows.length - 16));
+      result.timeline = graphTimeline(rows, total, zone);
+      result.rows_truncated = true;
+      trimmed = true;
+    }
+    return trimmed;
   }
 
   #emptyGet(base: BaseView, reason: InsightAvailabilityReason): InsightGetResult {

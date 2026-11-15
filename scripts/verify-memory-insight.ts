@@ -10,7 +10,10 @@
 import { BusinessError } from '../src/contracts/errors';
 import { LIMITS } from '../src/contracts/limits';
 import { bankIdFor } from '../src/memory/adapters/hindsight-tags';
-import type { InsightViewer } from '../src/memory/insight/contracts';
+import {
+  insightGraphInputSchema,
+  type InsightViewer,
+} from '../src/memory/insight/contracts';
 import { HindsightInsightReader } from '../src/memory/insight/hindsight-read';
 import { MemoryInsightService } from '../src/memory/insight/service';
 import { sortedPairKey, utf8Bytes } from '../src/storage/db';
@@ -142,6 +145,12 @@ function assertNoSensitive(label: string, value: unknown, bank: string): void {
   check(`${label} 不含内部 tags`, !text.includes(INTERNAL_TAG), text.slice(0, 200));
 }
 
+function groupCounts(
+  groups: { key: string; count: number }[] | undefined,
+): string {
+  return (groups ?? []).map((group) => `${group.key}:${group.count}`).join(',');
+}
+
 function graphFixture(): Record<string, unknown> {
   const nodes = Array.from({ length: 150 }, (_, index) => ({
     data: {
@@ -185,6 +194,137 @@ function graphFixture(): Record<string, unknown> {
   };
 }
 
+const ROW_FIXTURE_COUNT = 250;
+const ROW_FIXTURE_BASE = Date.parse('2026-11-01T00:00:00Z');
+const ROW_FIXTURE_STEP_MS = 36 * 60 * 60_000;
+
+/**
+ * 250 行同源 graph fixture：nodes/table_rows 共用一份 id，模拟 Hindsight
+ * v1.2.1 `graph_units(limit)` 的行为；正文 >1,200 字符以覆盖截断与字节预算。
+ */
+function rowsGraphFixture(): Record<string, unknown> {
+  const nodes = Array.from({ length: ROW_FIXTURE_COUNT }, (_, index) => ({
+    data: {
+      id: `row-${index}`,
+      label: `Row ${index}`,
+      text: 'row-node-'.repeat(20),
+      date: new Date(ROW_FIXTURE_BASE - index * ROW_FIXTURE_STEP_MS).toISOString(),
+      entities: 'Alice, Bob',
+      document_id: DOCUMENT_SECRET,
+      chunk_id: CHUNK_SECRET,
+    },
+  }));
+  const edges = Array.from({ length: ROW_FIXTURE_COUNT }, (_, index) => ({
+    data: {
+      id: `row-edge-${index}`,
+      source: `row-${index}`,
+      target: `row-${(index + 1) % ROW_FIXTURE_COUNT}`,
+      linkType: 'semantic',
+      weight: 1,
+    },
+  }));
+  const tableRows = Array.from({ length: ROW_FIXTURE_COUNT }, (_, index) => {
+    const at = new Date(ROW_FIXTURE_BASE - index * ROW_FIXTURE_STEP_MS).toISOString();
+    const undated = index >= 245;
+    const mentionedOnly = index === 100 || (index >= 240 && index < 245);
+    const row: Record<string, unknown> = {
+      id: `row-${index}`,
+      text: `row-text-${index}-${'x'.repeat(1_500)}`,
+      fact_type: ['world', 'experience', 'observation'][index % 3],
+      occurred_start: undated || mentionedOnly ? null : at,
+      occurred_end: null,
+      mentioned_at: undated
+        ? null
+        : new Date(ROW_FIXTURE_BASE - index * ROW_FIXTURE_STEP_MS + 3_600_000).toISOString(),
+      entities:
+        index === 4
+          ? Array.from({ length: 30 }, (_, entityIndex) => `Entity${entityIndex}`).join(', ')
+          : 'Alice, Bob, Alice',
+      proof_count: index % 3,
+      tags:
+        index === 4
+          ? [`tag-0`, ...Array.from({ length: 30 }, (_, tagIndex) => `tag-${tagIndex}`), INTERNAL_TAG]
+          : index % 4 === 0
+            ? [INTERNAL_TAG, 'public']
+            : ['public'],
+      document_id: DOCUMENT_SECRET,
+      chunk_id: CHUNK_SECRET,
+      metadata: { secret: METADATA_SECRET },
+      context: 'agentnet message room=rm_secret seq=3',
+    };
+    if (index === 1) row.state = 'invalidated';
+    if (index === 2) row.state = 'valid';
+    if (index === 3) row.invalidated_at = '2026-10-01T00:00:00Z';
+    return row;
+  });
+  return {
+    nodes,
+    edges,
+    table_rows: tableRows,
+    total_units: ROW_FIXTURE_COUNT,
+    total_edges: edges.length,
+  };
+}
+
+/** 年/月/周/日边界 fixture：NY 与 Shanghai 在跨年夜落在不同年份/日期。 */
+function tzGraphFixture(): Record<string, unknown> {
+  const rows = [
+    {
+      id: 'tz-mar',
+      occurred_start: '2026-03-09T04:30:00Z',
+      mentioned_at: '2026-03-09T05:00:00Z',
+      fact_type: 'world',
+    },
+    {
+      id: 'tz-feb',
+      occurred_start: null,
+      mentioned_at: '2026-02-15T12:00:00Z',
+      fact_type: 'experience',
+    },
+    {
+      id: 'tz-jan',
+      occurred_start: '2026-01-01T00:30:00Z',
+      mentioned_at: null,
+      fact_type: 'observation',
+    },
+    {
+      id: 'tz-dec-late',
+      occurred_start: '2025-12-31T23:30:00Z',
+      mentioned_at: null,
+      fact_type: 'world',
+    },
+    {
+      id: 'tz-dec',
+      occurred_start: '2025-12-29T12:00:00Z',
+      mentioned_at: null,
+      fact_type: 'world',
+    },
+    {
+      id: 'tz-undated',
+      occurred_start: null,
+      mentioned_at: null,
+      fact_type: 'experience',
+    },
+  ].map((row, index) => ({
+    ...row,
+    text: `tz row ${index}`,
+    occurred_end: null,
+    entities: ['Alice'],
+    proof_count: 1,
+    tags: [],
+  }));
+  return {
+    nodes: rows.map((row) => ({
+      data: { id: row.id, label: row.id, text: row.text, date: row.occurred_start ?? '' },
+    })),
+    edges: [],
+    table_rows: rows,
+    total_units: rows.length,
+    total_edges: 0,
+  };
+}
+
+
 function entityGraphFixture(): Record<string, unknown> {
   const nodes = Array.from({ length: 250 }, (_, index) => ({
     data: {
@@ -217,6 +357,18 @@ function entityGraphFixture(): Record<string, unknown> {
     },
     { data: { id: 'ee-dup-a', source: 'e1', target: 'e2', linkType: 'cooccurrence', weight: 1 } },
     { data: { id: 'ee-dup-b', source: 'e1', target: 'e2', linkType: 'cooccurrence', weight: 2 } },
+    // 上游缺字段与显式 null 两种情况：前者整个属性省略，后者保留 null。
+    { data: { id: 'ee-no-last', source: 'e10', target: 'e20', linkType: 'cooccurrence', weight: 500 } },
+    {
+      data: {
+        id: 'ee-null-last',
+        source: 'e20',
+        target: 'e30',
+        linkType: 'cooccurrence',
+        weight: 501,
+        lastCooccurred: null,
+      },
+    },
   );
   return {
     nodes,
@@ -261,6 +413,8 @@ async function main(): Promise<void> {
   const noSpaceAgent = unique('agt_nospace');
   const missingBankAgent = unique('agt_missingbank');
   const entityLimitAgent = unique('agt_entity_limit');
+  const rowsAgent = unique('agt_rows');
+  const tzAgent = unique('agt_tz');
   const humanTarget = unique('usr_human_target');
 
   seedActor(env, { actorId: friend, kind: 'human', name: '好友' });
@@ -276,6 +430,8 @@ async function main(): Promise<void> {
   seedActor(env, { actorId: noSpaceAgent, kind: 'agent', name: '无空间 Agent' });
   seedActor(env, { actorId: missingBankAgent, kind: 'agent', name: '缺 bank Agent' });
   seedActor(env, { actorId: entityLimitAgent, kind: 'agent', name: '实体上限 Agent' });
+  seedActor(env, { actorId: rowsAgent, kind: 'agent', name: '表格行 Agent' });
+  seedActor(env, { actorId: tzAgent, kind: 'agent', name: '时区 Agent' });
   seedActor(env, { actorId: humanTarget, kind: 'human', name: '人类目标' });
 
   seedFriend(env.d1, friend, target, 'active');
@@ -283,6 +439,8 @@ async function main(): Promise<void> {
   seedFriend(env.d1, friend, noSpaceAgent, 'active');
   seedFriend(env.d1, friend, missingBankAgent, 'active');
   seedFriend(env.d1, friend, entityLimitAgent, 'active');
+  seedFriend(env.d1, friend, rowsAgent, 'active');
+  seedFriend(env.d1, friend, tzAgent, 'active');
   seedFriend(env.d1, blockedFriend, target, 'active');
   seedFriend(env.d1, doubleBlocked, target, 'active');
   // 陌生人只是目标 Agent 的 manager；新策略明确不允许仅凭管理关系读取正文。
@@ -360,10 +518,34 @@ async function main(): Promise<void> {
     ownershipEpoch: entityLimitSpace.ownership_epoch,
     backendBindingEpoch: entityLimitSpace.backend_binding_epoch,
   });
+  const rowsSpace = {
+    space_id: 'msp_insight_rows',
+    ownership_epoch: 1,
+    backend_binding_epoch: 1,
+  };
+  seedSpace(env.d1, {
+    spaceId: rowsSpace.space_id,
+    agentId: rowsAgent,
+    ownershipEpoch: rowsSpace.ownership_epoch,
+    backendBindingEpoch: rowsSpace.backend_binding_epoch,
+  });
+  const tzSpace = {
+    space_id: 'msp_insight_tz',
+    ownership_epoch: 1,
+    backend_binding_epoch: 1,
+  };
+  seedSpace(env.d1, {
+    spaceId: tzSpace.space_id,
+    agentId: tzAgent,
+    ownershipEpoch: tzSpace.ownership_epoch,
+    backendBindingEpoch: tzSpace.backend_binding_epoch,
+  });
 
   const targetBank = await bankIdFor('agentnet', targetSpace);
   const missingBank = await bankIdFor('agentnet', missingBankSpace);
   const entityLimitBank = await bankIdFor('agentnet', entityLimitSpace);
+  const rowsBank = await bankIdFor('agentnet', rowsSpace);
+  const tzBank = await bankIdFor('agentnet', tzSpace);
   check('bank 由 space + epochs 派生', targetBank.startsWith('agentnet-') && targetBank.length === 49);
   check('不同 space 派生不同 bank', targetBank !== missingBank);
 
@@ -479,6 +661,8 @@ async function main(): Promise<void> {
     entityDetails,
   });
   fake.seedBank(entityLimitBank, { entityGraph: limitedEntityGraphFixture(5) });
+  fake.seedBank(rowsBank, { graph: rowsGraphFixture() });
+  fake.seedBank(tzBank, { graph: tzGraphFixture() });
 
   let clock = AT;
   const reader = new HindsightInsightReader({
@@ -624,6 +808,318 @@ async function main(): Promise<void> {
   checkEqual('graph 输入 240 被夹到 120', largeLimitGraph.limit, 120);
   check('graph 夹取后节点仍不超过 120', largeLimitGraph.nodes.length <= 120, largeLimitGraph.nodes.length);
 
+  console.log('--- graph include_rows ---');
+  const plainGraph = await service.graph(viewer('human', friend), {
+    actor_id: target,
+    q: 'plain-no-rows',
+    refresh: true,
+  });
+  check('默认不返回 table_rows', !Object.hasOwn(plainGraph, 'table_rows'));
+  check('默认不返回 rows_truncated', !Object.hasOwn(plainGraph, 'rows_truncated'));
+  check('默认不返回 timeline', !Object.hasOwn(plainGraph, 'timeline'));
+
+  fake.resetRequests();
+  const rowsGraph = await service.graph(viewer('human', friend), {
+    actor_id: rowsAgent,
+    include_rows: true,
+    refresh: true,
+  });
+  const graphRows = rowsGraph.table_rows ?? [];
+  checkEqual('include_rows 默认 200 行', graphRows.length, LIMITS.memoryPanelRowsDefault);
+  checkEqual(
+    'include_rows 默认提高上游 limit',
+    fake.requests.find((item) => item.path.endsWith('/graph'))?.query.get('limit'),
+    '200',
+  );
+  checkEqual('行数裁剪标记 rows_truncated', rowsGraph.rows_truncated, true);
+  check(
+    '默认正文截断 400 字符',
+    graphRows.every((row) => row.text.length <= LIMITS.memoryPanelRowsTextCharsDefault),
+  );
+  checkEqual('timeline basis', rowsGraph.timeline?.basis, 'occurred_at');
+  const timelineGroups = rowsGraph.timeline?.groups;
+  check(
+    'timeline 四组都存在',
+    Boolean(
+      timelineGroups &&
+        Array.isArray(timelineGroups.year) &&
+        Array.isArray(timelineGroups.month) &&
+        Array.isArray(timelineGroups.week) &&
+        Array.isArray(timelineGroups.day),
+    ),
+  );
+  check('timeline year 分组非空', (timelineGroups?.year.length ?? 0) > 0);
+  checkEqual('timeline summary returned', rowsGraph.timeline?.summary.returned, 200);
+  checkEqual('timeline summary total', rowsGraph.timeline?.summary.total, ROW_FIXTURE_COUNT);
+  checkEqual('默认切片无 undated', rowsGraph.timeline?.summary.undated, 0);
+  checkEqual('day 分组从 0 开始', timelineGroups?.day[0]?.start_index, 0);
+  checkEqual('day 分组覆盖全部行', timelineGroups?.day.at(-1)?.end_index, 200);
+  check(
+    '分组索引与 table_rows 对齐',
+    (timelineGroups?.day ?? []).every((group) => {
+      const first = graphRows[group.start_index];
+      const last = graphRows[group.end_index - 1];
+      return (
+        group.count === group.end_index - group.start_index &&
+        first !== undefined &&
+        last !== undefined &&
+        first.occurred_at !== null &&
+        last.occurred_at !== null
+      );
+    }),
+  );
+  const rowTimes = graphRows.map((row) => (row.occurred_at ? Date.parse(row.occurred_at) : null));
+  let rowsOrdered = true;
+  for (let index = 1; index < rowTimes.length; index += 1) {
+    const previous = rowTimes[index - 1]!;
+    const current = rowTimes[index]!;
+    if (previous === null) {
+      if (current !== null) rowsOrdered = false;
+      continue;
+    }
+    if (current !== null && previous < current) rowsOrdered = false;
+  }
+  check('行按 occurred_at 倒序', rowsOrdered);
+  checkEqual(
+    'occurred_at 回退 mentioned_at',
+    graphRows.find((row) => row.id === 'row-100')?.occurred_at,
+    new Date(ROW_FIXTURE_BASE - 100 * ROW_FIXTURE_STEP_MS + 3_600_000).toISOString(),
+  );
+  checkEqual(
+    '上游无 state 时省略',
+    Object.hasOwn(graphRows.find((row) => row.id === 'row-0') ?? {}, 'state'),
+    false,
+  );
+  checkEqual('invalidated state 透传', graphRows.find((row) => row.id === 'row-1')?.state, 'invalidated');
+  checkEqual('valid state 透传', graphRows.find((row) => row.id === 'row-2')?.state, 'valid');
+  checkEqual(
+    'invalidated_at 归一化为 invalidated',
+    graphRows.find((row) => row.id === 'row-3')?.state,
+    'invalidated',
+  );
+  check(
+    '行不含 document_id/chunk_id/metadata/context',
+    graphRows.every(
+      (row) =>
+        !Object.hasOwn(row, 'document_id') &&
+        !Object.hasOwn(row, 'chunk_id') &&
+        !Object.hasOwn(row, 'metadata') &&
+        !Object.hasOwn(row, 'context'),
+    ),
+  );
+  checkEqual(
+    '内部 tags 被过滤',
+    graphRows.find((row) => row.id === 'row-0')?.tags.includes(INTERNAL_TAG),
+    false,
+  );
+  const boundedRow = graphRows.find((row) => row.id === 'row-4');
+  check('行实体数量有界', (boundedRow?.entities.length ?? 0) === 20);
+  check('行 tags 数量有界', (boundedRow?.tags.length ?? 0) === 20);
+  assertNoSensitive('graph rows 输出', rowsGraph, rowsBank);
+
+  fake.resetRequests();
+  const allRows = await service.graph(viewer('human', friend), {
+    actor_id: rowsAgent,
+    include_rows: true,
+    rows_limit: LIMITS.memoryPanelRowsMax,
+    refresh: true,
+  });
+  checkEqual('rows_limit 500 返回全部行', allRows.table_rows?.length, ROW_FIXTURE_COUNT);
+  checkEqual(
+    'rows_limit 500 上游 limit',
+    fake.requests.find((item) => item.path.endsWith('/graph'))?.query.get('limit'),
+    '500',
+  );
+  checkEqual('全部行未裁剪', allRows.rows_truncated, false);
+  checkEqual('无日期行计入 summary', allRows.timeline?.summary.undated, 5);
+  checkEqual('无日期行排在最后', allRows.table_rows?.at(-1)?.occurred_at, null);
+  check(
+    '无日期行不进入分组',
+    !(allRows.timeline?.groups.day ?? []).some((group) => group.key === 'undated'),
+  );
+
+  const byteLimited = await service.graph(viewer('human', friend), {
+    actor_id: rowsAgent,
+    include_rows: true,
+    rows_limit: LIMITS.memoryPanelRowsMax,
+    rows_text_chars: LIMITS.memoryPanelRowsTextCharsMax,
+    refresh: true,
+  });
+  checkEqual('字节预算裁剪标记', byteLimited.rows_truncated, true);
+  check(
+    '字节预算后行数减少',
+    (byteLimited.table_rows?.length ?? 0) < ROW_FIXTURE_COUNT,
+    byteLimited.table_rows?.length,
+  );
+  check(
+    '行 JSON 不超过行预算',
+    utf8Bytes(JSON.stringify(byteLimited.table_rows)) <= LIMITS.memoryPanelRowsBytes,
+  );
+  check(
+    '整包 JSON 不超过总预算',
+    utf8Bytes(JSON.stringify(byteLimited)) <= LIMITS.memoryPanelDataBytes,
+  );
+  check(
+    'rows_text_chars 1200 生效',
+    (byteLimited.table_rows ?? []).every(
+      (row) => row.text.length <= LIMITS.memoryPanelRowsTextCharsMax,
+    ),
+  );
+
+  fake.resetRequests();
+  const smallRows = await service.graph(viewer('human', friend), {
+    actor_id: rowsAgent,
+    include_rows: true,
+    rows_limit: 20,
+    refresh: true,
+  });
+  checkEqual('rows_limit 20 条', smallRows.table_rows?.length, 20);
+  checkEqual(
+    'rows_limit 小于节点上限时上游仍取 120',
+    fake.requests.find((item) => item.path.endsWith('/graph'))?.query.get('limit'),
+    '120',
+  );
+  const shortRows = await service.graph(viewer('human', friend), {
+    actor_id: rowsAgent,
+    include_rows: true,
+    rows_limit: 20,
+    rows_text_chars: 50,
+    refresh: true,
+  });
+  check(
+    'rows_text_chars 50 生效',
+    (shortRows.table_rows ?? []).every((row) => row.text.length <= 50),
+  );
+
+  console.log('--- graph include_rows 时区 ---');
+  const nyRows = await service.graph(viewer('human', friend), {
+    actor_id: tzAgent,
+    include_rows: true,
+    timezone: 'America/New_York',
+    refresh: true,
+  });
+  checkEqual('NY year 分组', groupCounts(nyRows.timeline?.groups.year), '2026:2,2025:3');
+  checkEqual(
+    'NY month 分组',
+    groupCounts(nyRows.timeline?.groups.month),
+    '2026-03:1,2026-02:1,2025-12:3',
+  );
+  checkEqual(
+    'NY week 分组',
+    groupCounts(nyRows.timeline?.groups.week),
+    '2026-W11:1,2026-W07:1,2026-W01:3',
+  );
+  checkEqual(
+    'NY day 分组',
+    groupCounts(nyRows.timeline?.groups.day),
+    '2026-03-09:1,2026-02-15:1,2025-12-31:2,2025-12-29:1',
+  );
+  checkEqual(
+    'NY year 边界',
+    `${nyRows.timeline?.groups.year[0]?.start}/${nyRows.timeline?.groups.year[0]?.end}`,
+    '2026-01-01T05:00:00.000Z/2027-01-01T05:00:00.000Z',
+  );
+  checkEqual(
+    'NY DST 后 day 边界',
+    `${nyRows.timeline?.groups.day[0]?.start}/${nyRows.timeline?.groups.day[0]?.end}`,
+    '2026-03-09T04:00:00.000Z/2026-03-10T04:00:00.000Z',
+  );
+  checkEqual('NY undated 计数', nyRows.timeline?.summary.undated, 1);
+  check(
+    'NY 无 undated 分组',
+    !(nyRows.timeline?.groups.day ?? []).some((group) => group.key === 'undated'),
+  );
+
+  const shanghaiRows = await service.graph(viewer('human', friend), {
+    actor_id: tzAgent,
+    include_rows: true,
+    timezone: 'Asia/Shanghai',
+    refresh: true,
+  });
+  checkEqual('Shanghai year 分组', groupCounts(shanghaiRows.timeline?.groups.year), '2026:4,2025:1');
+  checkEqual(
+    'Shanghai month 分组',
+    groupCounts(shanghaiRows.timeline?.groups.month),
+    '2026-03:1,2026-02:1,2026-01:2,2025-12:1',
+  );
+  checkEqual(
+    'Shanghai day 分组',
+    groupCounts(shanghaiRows.timeline?.groups.day),
+    '2026-03-09:1,2026-02-15:1,2026-01-01:2,2025-12-29:1',
+  );
+  checkEqual(
+    'Shanghai year 边界',
+    `${shanghaiRows.timeline?.groups.year[0]?.start}/${shanghaiRows.timeline?.groups.year[0]?.end}`,
+    '2025-12-31T16:00:00.000Z/2026-12-31T16:00:00.000Z',
+  );
+
+  const offsetRows = await service.graph(viewer('human', friend), {
+    actor_id: tzAgent,
+    include_rows: true,
+    tz_offset_minutes: 480,
+    refresh: true,
+  });
+  checkEqual(
+    'tz_offset_minutes 回退与 Asia/Shanghai 一致',
+    JSON.stringify(offsetRows.timeline?.groups),
+    JSON.stringify(shanghaiRows.timeline?.groups),
+  );
+
+  fake.resetRequests();
+  await service.graph(viewer('human', friend), {
+    actor_id: tzAgent,
+    include_rows: true,
+    timezone: 'Asia/Shanghai',
+  });
+  checkEqual('相同 include_rows 参数命中缓存', fake.requestCount('GET', '/graph'), 0);
+  await service.graph(viewer('human', friend), {
+    actor_id: tzAgent,
+    include_rows: true,
+    timezone: 'Asia/Shanghai',
+    rows_limit: 100,
+  });
+  checkEqual('rows_limit 区分缓存', fake.requestCount('GET', '/graph'), 1);
+  await service.graph(viewer('human', friend), {
+    actor_id: tzAgent,
+    include_rows: true,
+  });
+  checkEqual('timezone 区分缓存', fake.requestCount('GET', '/graph'), 2);
+
+  fake.resetRequests();
+  const combined = await service.graph(viewer('human', friend), {
+    actor_id: rowsAgent,
+    include_rows: true,
+    refresh: true,
+  });
+  check('单次调用返回星座图', combined.nodes.length > 0);
+  check('单次调用返回表格行', (combined.table_rows?.length ?? 0) > 0);
+  check('单次调用返回时间线分组', (combined.timeline?.groups.year.length ?? 0) > 0);
+  checkEqual('单次调用只请求一次 graph', fake.requestCount('GET', '/graph'), 1);
+  checkEqual('单次调用不额外请求 memories/list', fake.requestCount('GET', '/memories/list'), 0);
+
+  console.log('--- graph include_rows 输入边界 ---');
+  const parseGraph = (value: Record<string, unknown>) =>
+    insightGraphInputSchema.safeParse({ actor_id: 'a', ...value }).success;
+  check('rows_limit 下界 1 接受', parseGraph({ rows_limit: 1 }));
+  check('rows_limit 上界 500 接受', parseGraph({ rows_limit: LIMITS.memoryPanelRowsMax }));
+  check('rows_limit 0 拒绝', !parseGraph({ rows_limit: 0 }));
+  check('rows_limit 501 拒绝', !parseGraph({ rows_limit: LIMITS.memoryPanelRowsMax + 1 }));
+  check('rows_text_chars 下界 1 接受', parseGraph({ rows_text_chars: 1 }));
+  check(
+    'rows_text_chars 上界 1200 接受',
+    parseGraph({ rows_text_chars: LIMITS.memoryPanelRowsTextCharsMax }),
+  );
+  check('rows_text_chars 0 拒绝', !parseGraph({ rows_text_chars: 0 }));
+  check(
+    'rows_text_chars 1201 拒绝',
+    !parseGraph({ rows_text_chars: LIMITS.memoryPanelRowsTextCharsMax + 1 }),
+  );
+  check('include_rows 非布尔拒绝', !parseGraph({ include_rows: 'yes' }));
+  check('tz_offset_minutes 下界 -840 接受', parseGraph({ tz_offset_minutes: -840 }));
+  check('tz_offset_minutes 上界 840 接受', parseGraph({ tz_offset_minutes: 840 }));
+  check('tz_offset_minutes 841 拒绝', !parseGraph({ tz_offset_minutes: 841 }));
+  check('timezone 非法拒绝', !parseGraph({ timezone: 'Not/AZone' }));
+
   console.log('--- list / get ---');
   const listed = await service.list(viewer('human', friend), { actor_id: target });
   checkEqual('list total', listed.total, 3);
@@ -750,6 +1246,24 @@ async function main(): Promise<void> {
     ),
   );
   assertNoSensitive('entities graph 输出', entityGraph, targetBank);
+  const withLast = (entityGraph.graph?.edges ?? []).find(
+    (edge) => edge.source === 'e0' && edge.target === 'e1',
+  );
+  checkEqual('实体图 last_cooccurred 透传', withLast?.last_cooccurred, '2026-11-01T00:00:00Z');
+  const withoutLast = (entityGraph.graph?.edges ?? []).find(
+    (edge) => edge.source === 'e10' && edge.target === 'e20',
+  );
+  check('实体图上游无 lastCooccurred 时省略字段', withoutLast !== undefined);
+  checkEqual(
+    '实体图 last_cooccurred 缺失时不出现',
+    withoutLast === undefined ? 'missing-edge' : Object.hasOwn(withoutLast, 'last_cooccurred'),
+    false,
+  );
+  const nullLast = (entityGraph.graph?.edges ?? []).find(
+    (edge) => edge.source === 'e20' && edge.target === 'e30',
+  );
+  check('实体图 lastCooccurred=null 时保留 null', nullLast !== undefined);
+  checkEqual('实体图 last_cooccurred 显式 null', nullLast?.last_cooccurred, null);
 
   const largeEntityGraph = await service.entities(viewer('human', friend), {
     actor_id: target,

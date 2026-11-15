@@ -16,6 +16,7 @@ import type {
   InsightFactType,
   InsightGraphEdge,
   InsightGraphNode,
+  InsightGraphRow,
   InsightMemoryDetail,
   InsightMemoryItem,
   InsightStats,
@@ -232,6 +233,14 @@ export function normalizeMemoryGraph(
     };
     const entity = stringValue(edge.entityName ?? edge.entity);
     if (entity) normalized.entity = truncateChars(entity, 80);
+    if (options.entityMode) {
+      // 上游没有该字段时省略整个属性；存在但为 null 时如实返回 null。
+      const hasLastCooccurred =
+        Object.hasOwn(edge, 'lastCooccurred') || Object.hasOwn(edge, 'last_cooccurred');
+      if (hasLastCooccurred) {
+        normalized.last_cooccurred = timestampValue(edge.lastCooccurred ?? edge.last_cooccurred);
+      }
+    }
     const existing = byKey.get(key);
     if (!existing || normalized.weight > existing.weight) byKey.set(key, normalized);
   }
@@ -395,6 +404,80 @@ export function normalizeTimelineItem(entry: unknown): InsightTimelineItem | nul
       LIMITS.memoryPanelTimelineEntitiesMax,
       LIMITS.memoryPanelTimelineEntityChars,
     ),
+  };
+}
+
+function graphRowState(entry: Record<string, unknown>): 'valid' | 'invalidated' | undefined {
+  if (entry.invalidated_at != null) return 'invalidated';
+  const state = stringValue(entry.state);
+  if (state === 'invalidated' || state === 'invalid') return 'invalidated';
+  if (state === 'valid') return 'valid';
+  // 只有上游显式给出 invalidated_at（即使为 null）才据此判断 valid。
+  if (Object.hasOwn(entry, 'invalidated_at')) return 'valid';
+  return undefined;
+}
+
+export function normalizeGraphRow(entry: unknown, textChars: number): InsightGraphRow | null {
+  if (!isRecord(entry)) return null;
+  const id = stringValue(entry.id);
+  if (!id) return null;
+  const occurredStart = timestampValue(entry.occurred_start);
+  const mentionedAt = timestampValue(entry.mentioned_at ?? entry.date);
+  const row: InsightGraphRow = {
+    id,
+    text: truncateChars(stringValue(entry.text) ?? '', textChars),
+    fact_type: factType(entry.fact_type ?? entry.type),
+    occurred_at: occurredStart ?? mentionedAt,
+    mentioned_at: mentionedAt,
+    occurred_start: occurredStart,
+    occurred_end: timestampValue(entry.occurred_end),
+    entities: entityArray(entry.entities),
+    proof_count: nonNegativeInt(entry.proof_count),
+    tags: publicTags(entry.tags),
+  };
+  const state = graphRowState(entry);
+  if (state) row.state = state;
+  return row;
+}
+
+export function graphRowTimeMs(row: InsightGraphRow): number | null {
+  if (!row.occurred_at) return null;
+  const parsed = Date.parse(row.occurred_at);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * 图表行：复用记忆项的白名单（不含 document_id/chunk_id/metadata/内部 tags），
+ * 按 occurred_at 倒序、无日期排最后，并截断到 rows_limit。
+ */
+export function normalizeGraphRows(
+  body: unknown,
+  options: { limit: number; textChars: number },
+): { rows: InsightGraphRow[]; raw_count: number; truncated: boolean } | null {
+  if (!isRecord(body)) return null;
+  const rawRows = Array.isArray(body.table_rows) ? body.table_rows : [];
+  const seen = new Set<string>();
+  const rows: InsightGraphRow[] = [];
+  for (const entry of rawRows) {
+    const row = normalizeGraphRow(entry, options.textChars);
+    if (!row || seen.has(row.id)) continue;
+    seen.add(row.id);
+    rows.push(row);
+  }
+  rows.sort((left, right) => {
+    const leftTime = graphRowTimeMs(left);
+    const rightTime = graphRowTimeMs(right);
+    if (leftTime !== rightTime) {
+      if (leftTime === null) return 1;
+      if (rightTime === null) return -1;
+      return rightTime - leftTime;
+    }
+    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+  });
+  return {
+    rows: rows.slice(0, options.limit),
+    raw_count: rawRows.length,
+    truncated: rows.length > options.limit,
   };
 }
 

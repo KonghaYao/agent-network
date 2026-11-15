@@ -141,7 +141,7 @@ export class FakeHindsightInsight {
       return json(bank.stats ?? {});
     }
     if (rest === 'graph') {
-      return json(bank.graph ?? { nodes: [], edges: [], table_rows: [] });
+      return this.#graphPage(bank, url.searchParams);
     }
     if (rest === 'memories/list') {
       return this.#listMemories(bank, url.searchParams);
@@ -167,6 +167,42 @@ export class FakeHindsightInsight {
       return detail ? json(detail) : json({ detail: 'not found' }, 404);
     }
     return json({ detail: 'not found' }, 404);
+  }
+
+  /**
+   * 模拟 Hindsight v1.2.1 的 graph 语义：nodes 与 table_rows 来自同一个
+   * `graph_units(limit)` 结果页，边的两个端点都必须在可见页内。
+   */
+  #graphPage(bank: FakeInsightBank, query: URLSearchParams): Response {
+    const fixture = bank.graph ?? { nodes: [], edges: [], table_rows: [] };
+    const limit = this.#intParam(query.get('limit'), 1_000);
+    const nodes = Array.isArray(fixture.nodes) ? fixture.nodes.slice(0, limit) : [];
+    const tableRows = Array.isArray(fixture.table_rows)
+      ? fixture.table_rows.slice(0, limit)
+      : [];
+    const visible = new Set<string>();
+    for (const entry of nodes) {
+      const record = this.#record(entry);
+      const id = this.#string(record?.id);
+      if (id) visible.add(id);
+    }
+    const edges = (Array.isArray(fixture.edges) ? fixture.edges : []).filter((entry) => {
+      const edge = this.#record(this.#record(entry)?.data ?? entry);
+      const source = this.#string(edge?.source);
+      const target = this.#string(edge?.target);
+      return source !== null && target !== null && visible.has(source) && visible.has(target);
+    });
+    return json({ ...fixture, nodes, edges, table_rows: tableRows });
+  }
+
+  #record(value: unknown): Record<string, unknown> | null {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  }
+
+  #string(value: unknown): string | null {
+    return typeof value === 'string' && value.length > 0 ? value : null;
   }
 
   #listMemories(bank: FakeInsightBank, query: URLSearchParams): Response {

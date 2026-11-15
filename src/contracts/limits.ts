@@ -534,8 +534,8 @@ export const LIMITS = {
   memoryPanelTimeoutMs: 12_000,
   /** 只读面板归一化 DTO 缓存（毫秒）。 */
   memoryPanelCacheTtlMs: 30_000,
-  /** 只读面板缓存最大条目数。 */
-  memoryPanelCacheEntries: 64,
+  /** 只读面板缓存最大条目数；include_rows 单条可达数百 KB，故按 32 条封顶。 */
+  memoryPanelCacheEntries: 32,
   /** 记忆图默认/最大节点数；服务端硬裁剪，超出即报 truncated。 */
   memoryPanelGraphNodesDefault: 120,
   memoryPanelGraphNodesMax: 120,
@@ -581,6 +581,15 @@ export const LIMITS = {
   memoryPanelDetailTextBytes: 32 * 1024,
   /** 记忆图归一化结果 JSON 字节预算。 */
   memoryPanelGraphBytes: 200 * 1024,
+  /** graph.include_rows 表格行默认/最大条数与正文截断字符数。 */
+  memoryPanelRowsDefault: 200,
+  memoryPanelRowsMax: 500,
+  memoryPanelRowsTextCharsDefault: 400,
+  memoryPanelRowsTextCharsMax: 1_200,
+  /** 表格行 JSON 预算；与图预算分开，避免行把星座图挤掉。 */
+  memoryPanelRowsBytes: 256 * 1024,
+  /** graph 单次响应（图 + 行 + 时间线分组）总 JSON 预算。 */
+  memoryPanelDataBytes: 456 * 1024,
   /** 时间过滤允许的最大跨度（天）。 */
   memoryPanelDateSpanDays: 366,
   /** 列表 offset 上限，避免深分页放大上游压力。 */

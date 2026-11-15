@@ -11,7 +11,7 @@ export interface TimelineZone {
   offsetMinutes: number;
 }
 
-export type TimelineGranularity = 'day' | 'week' | 'month';
+export type TimelineGranularity = 'year' | 'month' | 'week' | 'day';
 
 export interface TimelineRange {
   key: string;
@@ -181,6 +181,16 @@ export function timelineRange(
   zone: TimelineZone,
 ): TimelineRange {
   const parts = dateParts(ms, zone);
+  if (granularity === 'year') {
+    const yearStart: CivilDate = { year: parts.year, month: 1, day: 1 };
+    const nextYear: CivilDate = { year: parts.year + 1, month: 1, day: 1 };
+    return {
+      key: `${parts.year}`,
+      label: `${parts.year}年`,
+      start: new Date(startOfDayMs(yearStart, zone)).toISOString(),
+      end: new Date(startOfDayMs(nextYear, zone)).toISOString(),
+    };
+  }
   if (granularity === 'day') {
     const next = addDays(parts, 1);
     return {
