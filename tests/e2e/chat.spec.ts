@@ -291,9 +291,51 @@ async function chatShiftSum(page: Page): Promise<number> {
 }
 
 async function chatHeadHeight(page: Page): Promise<number> {
-  return page.locator('.chat-head').evaluate((element) =>
-    Math.round(element.getBoundingClientRect().height),
-  );
+  return page.locator('.chat-head').evaluate((element) => element.getBoundingClientRect().height);
+}
+
+/** 移动端首载头部：原始像素比较，不取整；同时覆盖骨架与静态输入区。 */
+async function expectStableMobileFirstLoad(
+  page: Page,
+  base: string,
+  room: string,
+): Promise<void> {
+  await trackChatLayoutShifts(page);
+  const release = await holdFirstLoad(page);
+  let loadingHeight = 0;
+  let loadingComposer = 0;
+  try {
+    await page.goto(`${base}/c/${room}`);
+    await expect(page.locator('#chat-skeleton')).toBeVisible();
+    await expect(page.locator('#composer')).toBeVisible();
+    loadingHeight = await chatHeadHeight(page);
+    loadingComposer = await page
+      .locator('#composer')
+      .evaluate((element) => element.getBoundingClientRect().height);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      ),
+    ).toBeLessThanOrEqual(1);
+  } finally {
+    release();
+  }
+
+  await expect(page.locator('#messages .msg .bubble').first()).toBeVisible();
+  const loadedHeight = await chatHeadHeight(page);
+  const loadedComposer = await page
+    .locator('#composer')
+    .evaluate((element) => element.getBoundingClientRect().height);
+  expect(Math.abs(loadedHeight - loadingHeight)).toBeLessThanOrEqual(4);
+  expect(Math.abs(loadedComposer - loadingComposer)).toBeLessThanOrEqual(1);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
+
+  await page.waitForTimeout(400);
+  expect(await chatShiftSum(page)).toBeLessThan(0.01);
 }
 
 test.describe('SPA Chat', () => {
@@ -304,6 +346,7 @@ test.describe('SPA Chat', () => {
   let nameB = '';
   let roomId = '';
   let otherRoomId = '';
+  let agentRoomId = '';
 
   test.beforeAll(async () => {
     base = await baseUrl();
@@ -356,6 +399,30 @@ test.describe('SPA Chat', () => {
       members: [b.actor_id],
     });
     otherRoomId = other.room.room_id;
+    await callTool(base, tokenA, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: requestId('e2e_cm'),
+      room_id: otherRoomId,
+      body: 'Chat E2E 群聊初始消息',
+      invoke: [],
+    });
+    const agent = await callTool<{ actor_id: string }>(base, tokenA, 'network_agent_create', {
+      request_id: requestId('e2e_agent'),
+      name: `Chat E2E Agent ${suffix}`,
+    });
+    const agentRoom = await callTool<RoomDetail>(base, tokenA, 'network_room_create', {
+      request_id: requestId('e2e_agent_room'),
+      kind: 'direct',
+      members: [agent.actor_id],
+    });
+    agentRoomId = agentRoom.room.room_id;
+    await callTool(base, tokenA, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: requestId('e2e_cm'),
+      room_id: agentRoomId,
+      body: 'Chat E2E Agent 初始消息',
+      invoke: [],
+    });
   });
 
   test.beforeEach(async ({ page }) => {
@@ -862,35 +929,27 @@ test.describe('SPA Chat', () => {
       expect(overflow).toBeLessThanOrEqual(1);
     });
 
-    test('first load keeps the header height stable without overflow', async ({ page }) => {
-      await trackChatLayoutShifts(page);
-      const release = await holdFirstLoad(page);
-      let loadingHeight = 0;
-      try {
-        await page.goto(`${base}/c/${roomId}`);
-        await expect(page.locator('#chat-skeleton')).toBeVisible();
-        await expect(page.locator('#composer')).toBeVisible();
-        loadingHeight = await chatHeadHeight(page);
-        expect(
-          await page.evaluate(
-            () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-          ),
-        ).toBeLessThanOrEqual(1);
-      } finally {
-        release();
-      }
+    test('first load keeps the direct human header height stable without overflow', async ({
+      page,
+    }) => {
+      await expectStableMobileFirstLoad(page, base, roomId);
+    });
 
-      await expect(page.locator('#messages .msg .bubble').first()).toBeVisible();
-      const loadedHeight = await chatHeadHeight(page);
-      expect(Math.abs(loadedHeight - loadingHeight)).toBeLessThanOrEqual(4);
-      expect(
-        await page.evaluate(
-          () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-        ),
-      ).toBeLessThanOrEqual(1);
+    test('first load keeps the group header height stable without overflow', async ({ page }) => {
+      await expectStableMobileFirstLoad(page, base, otherRoomId);
+    });
 
-      await page.waitForTimeout(400);
-      expect(await chatShiftSum(page)).toBeLessThan(0.01);
+    test('first load keeps the direct agent header height stable without overflow', async ({
+      page,
+    }) => {
+      await expectStableMobileFirstLoad(page, base, agentRoomId);
+    });
+
+    test('error state drops the skeleton and static composer', async ({ page }) => {
+      await page.goto(`${base}/c/room_missing_e2e`);
+      await expect(page.locator('#chat-error')).toBeVisible();
+      await expect(page.locator('#chat-skeleton')).toHaveCount(0);
+      await expect(page.locator('#composer')).toHaveCount(0);
     });
   });
 

@@ -488,6 +488,7 @@ export const APP_STYLE = `
     font-size: 14px; line-height: 22px; resize: none; overflow-y: auto; }
   .send-btn { flex: 0 0 auto; height: 38px; min-width: 64px; padding: 0 14px;
     border: 0; border-radius: 4px; font-size: 13px; }
+  .composer--loading .composer-main textarea { height: 38px; }
   .composer--loading textarea { color: var(--wx-muted); cursor: progress; }
   .composer--loading .attach-btn,
   .composer--loading .send-btn { opacity: .55; cursor: progress; }
@@ -634,7 +635,9 @@ ${GROUP_STYLE}
       min-height: calc(56px + env(safe-area-inset-top));
       padding-top: calc(6px + env(safe-area-inset-top));
       padding-bottom: 6px; }
-    .chat-id { flex: 1 1 160px; min-width: 160px; }
+    /* 预留标题 + 副标题两行：头部换行后，加载骨架与 group/Agent 真实头部同高；
+       单行布局仍由 56px min-height 决定，不产生额外空白。 */
+    .chat-id { flex: 1 1 160px; min-width: 160px; min-height: 40px; }
     .messages { padding: 10px 12px 14px; }
     .chat-skeleton { padding: 10px 12px 14px; }
     .jump-latest { bottom: calc(64px + env(safe-area-inset-bottom)); }
