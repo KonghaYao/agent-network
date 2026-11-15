@@ -54,7 +54,7 @@ CLI 启动后先做 `server/discover`，再建立 `agentnet://stream` SSE 订阅
 - `EXPIRING`：距 24h deadline 不足 10 分钟；准备重启 monitor。
 - `ERROR`：凭据/协议/内部错误，需要人工修复；不要盲目重启。
 
-`DEADLINE`、`RECONNECTING`、`DEGRADED` 只记录，不唤醒。`--json` 模式每行是一个 JSON 对象，稳定包含 `type` / `kind` / `event_kind` / `seq` 与 `delivery_id` / `room_id` / `message_id`（缺失为 `null`）；控制/投递事件的 `kind` 为 `delivery` / `reminder` / `notice` / `control` / `error`，`room_message` 的 `kind` 为 `room`、`item_kind` 为 `message`，`stream_event` / `delivery_state` 的 `kind` 是原始 item kind（`room` / `file` / `task` / `receipt` 等），`event_kind` 保留稳定分类。`ALERT` 行在文本模式下也稳定包含 `type` / `delivery_id` / `room_id` / `seq`，delivery 与 reminder 另含 `message_id`；`room_id` / `seq` 缺失时为空字符串，不会省略键。
+`DEADLINE`、`RECONNECTING`、`DEGRADED` 只记录，不唤醒。`--json` 模式每行是一个 JSON 对象，稳定包含 `type` / `kind` / `event_kind` / `seq` 与 `delivery_id` / `room_id` / `message_id`（缺失为 `null`）；控制/投递事件的 `kind` 为 `delivery` / `reminder` / `notice` / `control` / `error`，`room_message` 的 `kind` 为 `room`、`item_kind` 为 `message`，`stream_event` / `delivery_state` 的 `kind` 是原始 item kind（`room` / `file` / `task` / `receipt` 等），`event_kind` 保留稳定分类。`ALERT` 行在文本模式下也稳定包含 `type` / `room_id` / `seq`；`delivery`、`reminder`、`stream_event` 与 `delivery_state` 另含 `delivery_id`（缺失为空字符串），`room_message` 不输出该键。delivery 与 reminder 另含 `message_id`；`room_id` / `seq` 缺失时为空字符串，不会省略键。
 
 ALERT 的具体类型：
 

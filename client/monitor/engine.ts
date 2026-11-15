@@ -36,6 +36,7 @@ import {
   reminderEvent,
   roomMessageEvent,
   streamItemEvent,
+  visibleWithoutRoomEvents,
   type ClaimFailure,
   type ClaimInfo,
   type DeliveryFields,
@@ -734,6 +735,7 @@ export class MonitorEngine {
                 source,
               ),
               `delivery-state:${eventId.length > 0 ? eventId : fallback}`,
+              visibleWithoutRoomEvents(item),
             );
             await this.state.markSeen(`event:${eventId.length > 0 ? eventId : fallback}`);
             continue;
@@ -773,6 +775,7 @@ export class MonitorEngine {
       this.emitInformational(
         deliveryStateEvent(item, source),
         `delivery-state:${eventId.length > 0 ? eventId : fallback}`,
+        visibleWithoutRoomEvents(item),
       );
     }
     if (receiptItems.length > 0) this.wakeDeferred(0);
@@ -800,9 +803,9 @@ export class MonitorEngine {
     return true;
   }
 
-  /** informational stream item 默认全部输出；关闭时仍保留 action_required。 */
+  /** informational stream item 默认全部输出；关闭时仍保留 action_required 与提醒。 */
   private emitInformationalItem(item: JsonObject): void {
-    if (this.roomEventScope === null && item.attention !== 'action_required') return;
+    if (this.roomEventScope === null && !visibleWithoutRoomEvents(item)) return;
     const source = asString(item.source) || 'unknown';
     const eventId = asString(item.event_id);
     const fallback = [
@@ -820,7 +823,7 @@ export class MonitorEngine {
     this.emitInformational(
       streamItemEvent(item, source),
       key,
-      item.attention === 'action_required',
+      visibleWithoutRoomEvents(item),
     );
   }
 
@@ -857,7 +860,7 @@ export class MonitorEngine {
 
   /** informational room.message → room_message；按 message_id(+change) 去重。 */
   private emitRoomMessage(item: JsonObject, source: string): void {
-    if (this.roomEventScope === null && item.attention !== 'action_required') return;
+    if (this.roomEventScope === null && !visibleWithoutRoomEvents(item)) return;
     const roomId = asString(item.room_id);
     const messageId = asString(item.message_id);
     if (roomId.length === 0 || messageId.length === 0) return;

@@ -1157,6 +1157,116 @@ async function runRoomEventChecks(): Promise<void> {
       }).length,
       1,
     );
+
+    // 关闭 informational 房间事件后，发送方回执、提醒、邀请与真实投递仍必须输出。
+    const offDeliveryId = 'dlv_off_live';
+    offMock.state.pending.set(offDeliveryId, delivery(offDeliveryId));
+    sendItems(offMock, [
+      notificationItem(offDeliveryId, 'delivery.created', 'evt_off_delivery'),
+      streamItem('delivery.updated', {
+        kind: 'receipt',
+        attention: 'action_required',
+        delivery_id: 'dlv_off_completed',
+        room_id: 'rm_allowed',
+        state: 'completed',
+        attempt: 1,
+        seq: '22',
+        event_id: 'evt_off_completed',
+      }),
+      streamItem('delivery.updated', {
+        kind: 'receipt',
+        attention: 'action_required',
+        delivery_id: 'dlv_off_failed',
+        room_id: 'rm_allowed',
+        state: 'failed',
+        attempt: 1,
+        seq: '23',
+        event_id: 'evt_off_failed',
+      }),
+      streamItem('delivery.updated', {
+        kind: 'receipt',
+        delivery_id: 'dlv_off_claimed',
+        room_id: 'rm_allowed',
+        state: 'claimed',
+        attempt: 1,
+        seq: '24',
+        event_id: 'evt_off_claimed',
+      }),
+      streamItem('mention.reminder', {
+        kind: 'reminder',
+        room_id: 'rm_allowed',
+        message_id: 'msg_off_mention',
+        seq: '25',
+        event_id: 'evt_off_mention',
+      }),
+      streamItem('room.membership', {
+        kind: 'room',
+        attention: 'action_required',
+        change: 'invited',
+        room_id: 'rm_allowed',
+        seq: '26',
+        event_id: 'evt_off_invited',
+      }),
+      roomItem('rm_allowed', 'msg_off_pure_info', { seq: '27', eventId: 'evt_off_pure_info' }),
+      streamItem('room.file', {
+        kind: 'file',
+        room_id: 'rm_allowed',
+        file_id: 'file_off',
+        seq: '28',
+        event_id: 'evt_off_file',
+      }),
+    ]);
+
+    const offDelivery = await waitForEvent(offWatcher.stdout, 'delivery', offDeliveryId);
+    checkEqual('--no-room-events 仍输出真实 delivery', offDelivery.claim_state, 'claimed');
+    checkEqual(
+      '--no-room-events 真实 delivery 仍只 claim 一次',
+      offMock.state.claimCalls.get(offDeliveryId),
+      1,
+    );
+    const offCompleted = await waitForDeliveryState(
+      offWatcher.stdout,
+      'dlv_off_completed',
+      'completed',
+    );
+    checkEqual(
+      '--no-room-events 保留发送方 completed 回执',
+      offCompleted.attention,
+      'action_required',
+    );
+    const offFailed = await waitForDeliveryState(offWatcher.stdout, 'dlv_off_failed', 'failed');
+    checkEqual('--no-room-events 保留发送方 failed 回执', offFailed.attention, 'action_required');
+    const offMention = await waitForStreamEvent(offWatcher.stdout, 'mention.reminder');
+    checkEqual('--no-room-events 保留 mention.reminder', offMention.message_id, 'msg_off_mention');
+    const offInvite = await waitForStreamEvent(
+      offWatcher.stdout,
+      'room.membership',
+      (event) => event.change === 'invited',
+    );
+    checkEqual('--no-room-events 保留邀请 membership', offInvite.change, 'invited');
+
+    await Bun.sleep(700);
+    checkEqual(
+      '--no-room-events 不输出纯 informational room_message',
+      roomEventCount(offWatcher.stdout, 'msg_off_pure_info'),
+      0,
+    );
+    checkEqual(
+      '--no-room-events 不输出 informational 回执',
+      offWatcher.stdout.filter((line) => {
+        const event = parseEvent(line);
+        return event?.type === 'delivery_state' && event.delivery_id === 'dlv_off_claimed';
+      }).length,
+      0,
+    );
+    checkEqual(
+      '--no-room-events 不输出 informational room.file',
+      offWatcher.stdout.filter((line) => {
+        const event = parseEvent(line);
+        return event?.type === 'stream_event' && event.source === 'room.file';
+      }).length,
+      0,
+    );
   } finally {
     await offWatcher.kill();
     offMock.stop();

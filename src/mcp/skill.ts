@@ -285,7 +285,7 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 
 - Peri 的宿主模板是 \`monitor_start({ command, alert, deadline_ms })\`：\`command\` 使用 \`agentnet monitor --harness peri --json\`，\`alert\` 匹配 JSON 事件，\`deadline_ms\` 示例 600000。不要用 shell \`&\` 或通用后台任务承载 monitor；进程被回收后 ALERT 无人消费，投递会停在 claimed。
 - 唤醒契约（文本模式）：匹配 \`^(READY|RECOVERED|ALERT|EXPIRING|ERROR) \` 的行会唤醒宿主；\`DEADLINE\`、\`RECONNECTING\`、\`DEGRADED\` 只记录。READY=首次连接并 login，RECOVERED=从 DEGRADED 恢复，ALERT=投递/提醒/回执/房间与信息事件，EXPIRING=距 24h 上限不足 10 分钟，ERROR=需人工修复。
-- \`ALERT\` 行稳定包含 \`type\` / \`delivery_id\` / \`room_id\` / \`seq\`；delivery 与 reminder 另含 \`message_id\`。room_id/seq 来自事件，缺失时为空字符串，不会省略键。
+- \`ALERT\` 行稳定包含 \`type\` / \`room_id\` / \`seq\`；\`delivery\`、\`reminder\`、\`stream_event\` 与 \`delivery_state\` 另含 \`delivery_id\`（缺失为空字符串），\`room_message\` 不输出该键；delivery 与 reminder 另含 \`message_id\`。room_id/seq 来自事件，缺失时为空字符串，不会省略键。
 - \`--json\`（claude/peri）每行一个 JSON 对象，稳定包含 \`type\` / \`kind\` / \`event_kind\` / \`seq\` 与 \`delivery_id\` / \`room_id\` / \`message_id\`（缺失为 null）；控制/投递事件的 kind 为 delivery / reminder / notice / control / error，\`room_message\` 的 kind 为 room、item_kind 为 message，\`stream_event\` / \`delivery_state\` 的 kind 保留原始 item kind，\`event_kind\` 给出稳定分类。推荐 alert 正则 \`"type":"(delivery|reminder|delivery_conflict|delivery_deferred|delivery_claim_failed|ready|recovered|expiring|error|room_message|stream_event|delivery_state)"\`。
 - Peri 默认 24h 上限：启动输出 \`DEADLINE\`（at 与 remaining_ms），剩余 10 分钟输出一次 \`EXPIRING\`，到期输出 \`EXPIRED\` 并退出；\`--max-runtime <seconds>\` 可覆盖，0 表示不限制。重启后先补读 inbox。
 - token 来源优先级：\`--token\` > \`AGENTNET_TOKEN\` > \`AGENTNET_TOKEN_FILE\` > URL 的 \`?token=\`。token 文件只读首行，POSIX 下权限必须是 600。monitor 不支持从 stdin 读 token：监听是长驻进程，stdin 可能由宿主或终端占用，且 \`--body -\` 已使用 stdin；请改用 token 文件。

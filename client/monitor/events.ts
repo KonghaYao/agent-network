@@ -287,6 +287,20 @@ export function deliveryStateEvent(item: JsonObject, source: string): JsonObject
   return streamItemEvent(item, source, 'delivery_state');
 }
 
+/**
+ * `--no-room-events` 只抑制 informational 房间噪音。
+ *
+ * 服务端把发送方的 `delivery_completed` / `delivery_failed` 标为
+ * `action_required`；`mention.reminder` 是人类的个人提醒，`delivery.reminder`
+ * 是已领取投递的进度提醒。它们都不是房间广播，关闭 informational 房间事件时
+ * 仍必须输出，否则发送方看不到回执、人类看不到 @ 提醒。
+ */
+export function visibleWithoutRoomEvents(item: JsonObject): boolean {
+  if (item.attention === 'action_required') return true;
+  const source = asString(item.source);
+  return source === 'mention.reminder' || source === 'delivery.reminder';
+}
+
 export function reminderEvent(item: JsonObject): JsonObject {
   const message = (item.message ?? {}) as JsonObject;
   return {

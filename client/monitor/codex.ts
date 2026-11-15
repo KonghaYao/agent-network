@@ -14,14 +14,14 @@
  * deferred/conflict/claim_failed 分类记录；10 秒未结束的回合发送一次慢确认；
  * `delivery.reminder` 只提醒、不 claim。所有 informational stream item
  * （房间消息、成员、文件、在线状态、Task、回执等）都会记录；
- * `--no-room-events` 可关闭这部分噪音。日志沿用旧脚本的行格式（stdout），
+ * `--no-room-events` 只关闭 informational 房间事件，投递、回执与提醒仍记录。
  * 不执行任何 `.sh`，也不依赖 Python。
  */
 
 import { CliError, resolveConfig } from '../mcp';
 import { asArray, asNumber, asRecord, asString } from '../output';
 import { abortableSleep, claimDelivery } from './engine';
-import type { ClaimInfo } from './events';
+import { visibleWithoutRoomEvents, type ClaimInfo } from './events';
 import {
   AsyncQueue,
   CodexCallError,
@@ -122,7 +122,7 @@ interface CodexWatcherOptions {
   token: string;
   signal: AbortSignal;
   log?: (line: string) => void;
-  /** false 时只处理投递；默认记录所有 informational stream item。 */
+  /** false 时只关闭 informational 房间事件；投递、回执与提醒仍记录。 */
   roomEvents?: boolean;
 }
 
@@ -364,7 +364,7 @@ class CodexWatcher {
         continue;
       }
       // 不按 source/attention/发送者/房间类型丢弃：其余 item 以 informational 日志输出。
-      if (this.roomEvents || item.attention === 'action_required') {
+      if (this.roomEvents || visibleWithoutRoomEvents(item)) {
         this.events.push({ kind: 'info', item });
       }
     }

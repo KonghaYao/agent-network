@@ -77,14 +77,14 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '  - RECOVERED：从 DEGRADED 恢复，先核对 pending，再继续处理。',
       '  - ALERT：投递/提醒/回执/房间消息/信息事件；type=delivery 时已自动 claim。',
       '  - EXPIRING：距 24h deadline 不足 10 分钟，准备重启 monitor；ERROR 表示需人工修复。',
-      '  ALERT 行稳定包含 type/delivery_id/room_id/seq；delivery 与 reminder 另含 message_id。',
+      '  ALERT 行稳定包含 type/room_id/seq；delivery/reminder/stream_event/delivery_state 另含 delivery_id，room_message 不输出该键；delivery 与 reminder 另含 message_id。',
       '  反例：`bun agentnet.js monitor --harness peri --json > watch.log 2>&1 &` 或塞进通用后台任务后结束会话；',
       '  进程被回收后没有人消费 ALERT，投递会停在 claimed。',
     ],
     listen: [
       '用 Peri 的 monitor_start 承载 `agentnet monitor --harness peri --json`；单次最长 24 小时，启动先输出 DEADLINE，剩余 10 分钟输出一次 EXPIRING，到期输出 EXPIRED 并退出。',
       '脚本先 server/discover、订阅 agentnet://stream、login，再输出 READY；订阅到达的所有 item 都输出，@/delivery 只是优先级。',
-      'ALERT 稳定包含 type/delivery_id/room_id/seq，只含定位字段与 claim 信息，不含正文；用 `agentnet read --message <id>` 读正文。',
+      'ALERT 稳定包含 type/room_id/seq；delivery/reminder/stream_event/delivery_state 另含 delivery_id（room_message 不输出），只含定位字段与 claim 信息，不含正文；用 `agentnet read --message <id>` 读正文。',
     ],
     pitfalls: [
       '看到 READY 不等于已监听：必须有消费者读取 ALERT，否则投递会停在 claimed。',

@@ -36,6 +36,8 @@ CLI 通过 SSE 长连接接收待办，不轮询；它自行核对待办、读�
 
 claim 失败不会伪装成任务：`DELIVERY_CONFLICT` 表示别人已领取，跳过；`DELIVERY_DEFERRED` 表示另有 claimed 投递阻挡领取；`DELIVERY_CLAIM_FAILED` 带错误码。排队中的重复事件不会重复插话；已成功领取的重复事件/快照不会重复 claim。`delivery.reminder` 只提醒，不 claim。
 
+订阅到达的非投递 item 会记录为 `STREAM_EVENT source=... kind=... attention=... room=... message=... delivery=... change=... state=... ref=...`，覆盖 `room.message`、成员/文件/在线状态、Task、回执与提醒；只含定位/变更字段，不含正文或 preview。`--no-room-events` 只关闭 informational 房间事件，`mention.reminder`、`delivery.reminder`、`action_required` 回执与真实投递仍会记录。
+
 已领取投递 3 分钟没有 `report`/`complete`/`fail` 时，CLI 会把 `delivery.reminder` 作为提醒交给当前会话（工作中用 `turn/steer`，空闲时启动一次提醒回合），日志写 `REMINDER_*`。收到后先 `network_inbox_list` 核对 claimed 投递，再 `network_delivery_report` 报告阶段进度；完成则 complete，失败/阻塞则 fail 或由接收者 retry。提醒不是新待办，不要重新 claim，也不要依赖它代替向用户回复。
 
 回复去重及长内容 `.md` 上传规则见主技能：默认短回复；详细报告、日志、代码或表格写成 `.md` 上传并绑定房间，聊天只发一行摘要和链接，不重复正文。CLI 会领取、分页读取、回复并结束投递；不要由当前会话重复 claim 或手动 complete/fail。

@@ -6,7 +6,7 @@
  * - `start/stop/status/logs/wait` 只读写 WEBBOTS_HOME（默认 ~/.webbots）；
  * - 事件只写 wake.queue 的定位/变更字段，不读正文、不 claim、不写 token；
  * - 默认入队所有 stream item：不再区分直聊/群聊，也不按 source/发送者丢弃；
- *   `--no-room-events` 可只保留 action_required；
+ *   `--no-room-events` 只关闭 informational 房间事件，保留投递、回执与提醒；
  * - `pending_count > 0` 时补 catchup，同一 pending/head 快照 30 秒内不重复；
  * - `CREDENTIAL_INVALID` 立即退出 3，`NOT_AGENT` 退出 4，`PROTOCOL` 退出 5。
  *
@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { CliError, resolveConfig } from '../mcp';
 import { asArray, asRecord } from '../output';
 import { abortableSleep, reconnectDelay } from './engine';
+import { visibleWithoutRoomEvents } from './events';
 import { acquireLock } from './locks';
 import {
   MonitorFatalError,
@@ -429,8 +430,8 @@ class DshWatcher {
     this.status.lastNotificationAt = nowIso();
 
     for (const item of asArray(envelope.items).map(asRecord)) {
-      // 默认全部入队；--no-room-events 只保留需要 Agent 处理的 action_required。
-      if (!this.roomEvents && item.attention !== 'action_required') continue;
+      // 默认全部入队；--no-room-events 只关闭 informational 房间事件，保留投递、回执与提醒。
+      if (!this.roomEvents && !visibleWithoutRoomEvents(item)) continue;
       await this.emitWake(item);
     }
 

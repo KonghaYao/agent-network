@@ -602,18 +602,22 @@ async function createFixture(
     currentTurnId?: string;
     meKind?: string;
     env?: Record<string, string>;
+    args?: string[];
   } = {},
 ): Promise<Fixture> {
   const home = await mkdtemp(join(tmpdir(), `agentnet-codex-${label}-`));
   const mcp = createMcpMock({ meKind: options.meKind });
   const codex = createCodexMock(join(home, 'app-server.sock'), options);
-  const watcher = startProcess([process.execPath, CLI, 'monitor', '--harness', 'codex'], {
-    HOME: home,
-    AGENTNET_URL: mcp.base,
-    AGENTNET_TOKEN: TOKEN,
-    AGENTNET_CODEX_SOCKET: codex.socketPath,
-    ...(options.env ?? {}),
-  });
+  const watcher = startProcess(
+    [process.execPath, CLI, 'monitor', '--harness', 'codex', ...(options.args ?? [])],
+    {
+      HOME: home,
+      AGENTNET_URL: mcp.base,
+      AGENTNET_TOKEN: TOKEN,
+      AGENTNET_CODEX_SOCKET: codex.socketPath,
+      ...(options.env ?? {}),
+    },
+  );
   return {
     mcp,
     codex,
@@ -1189,6 +1193,68 @@ async function runInfoChecks(): Promise<void> {
   }
 }
 
+async function runOffModeInfoChecks(): Promise<void> {
+  const fixture = await createFixture('info-off', { args: ['--no-room-events'] });
+  try {
+    await waitForLine(fixture.watcher.stdout, (line) => line.startsWith('READY actor='), 'READY');
+    fixture.mcp.sendItems([
+      {
+        source: 'room.message',
+        kind: 'message',
+        attention: 'informational',
+        room_id: 'rm_off',
+        message_id: 'msg_off_room',
+        seq: '301',
+        event_id: 'evt_off_room',
+      },
+      {
+        source: 'mention.reminder',
+        kind: 'reminder',
+        attention: 'informational',
+        room_id: 'rm_off',
+        message_id: 'msg_off_mention',
+        seq: '302',
+        event_id: 'evt_off_mention',
+      },
+      {
+        source: 'delivery.updated',
+        kind: 'receipt',
+        attention: 'action_required',
+        delivery_id: 'dlv_off_done',
+        state: 'completed',
+        seq: '303',
+        event_id: 'evt_off_done',
+      },
+    ]);
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) =>
+        line.startsWith('STREAM_EVENT') && line.includes('source=mention.reminder'),
+      'off mention.reminder',
+    );
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) =>
+        line.startsWith('STREAM_EVENT') &&
+        line.includes('source=delivery.updated') &&
+        line.includes('state=completed'),
+      'off receipt',
+    );
+    await Bun.sleep(500);
+    check(
+      'codex --no-room-events 抑制 informational room.message',
+      !fixture.watcher.stdout.some(
+        (line) =>
+          line.startsWith('STREAM_EVENT') && line.includes('message=msg_off_room'),
+      ),
+      fixture.watcher.stdout.slice(-10),
+    );
+    checkEqual('codex --no-room-events 回执不 claim', fixture.mcp.state.claimCalls.size, 0);
+  } finally {
+    await fixture.stop();
+  }
+}
+
 async function runReconnectChecks(): Promise<void> {
   const fixture = await createFixture('reconnect');
   try {
@@ -1383,6 +1449,8 @@ async function main(): Promise<void> {
   await runReminderChecks();
   console.log('TS codex monitor: informational stream items');
   await runInfoChecks();
+  console.log('TS codex monitor: --no-room-events');
+  await runOffModeInfoChecks();
   console.log('TS codex monitor: reconnect/idle');
   await runReconnectChecks();
   console.log('TS codex monitor: disconnect cleanup');
