@@ -144,9 +144,14 @@ function memory(
 }
 
 const MEMORIES: FixtureMemory[] = [
-  memory('mem-a', 'experience', 'Deploy window moved to Thursday for the alpha service.', 1, [
-    'alpha',
-  ], 20),
+  memory(
+    'mem-a',
+    'experience',
+    'Deploy window moved to Thursday for the alpha service.',
+    1,
+    ['alpha'],
+    20,
+  ),
   memory('mem-b', 'experience', 'Rollback completed after the beta migration.', 2, ['beta']),
   memory('mem-c', 'experience', 'Observation runbook updated for gamma.', 5, ['gamma']),
   memory('mem-d', 'observation', 'The dashboard was slow twice during the deploy.', 10, [
