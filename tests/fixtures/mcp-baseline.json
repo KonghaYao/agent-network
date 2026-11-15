@@ -57,8 +57,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -118,8 +118,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -155,8 +155,8 @@
               "listChanged": true
             },
             "resources": {
-              "subscribe": true,
-              "listChanged": true
+              "listChanged": true,
+              "subscribe": true
             },
             "extensions": {
               "io.modelcontextprotocol/skills": {},
@@ -175,8 +175,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -869,8 +869,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -902,14 +902,14 @@
             {
               "uri": "agentnet://stream",
               "name": "stream",
-              "mimeType": "application/json",
-              "description": "当前 actor 的统一投递流快照（身份、在线、待办与房间摘要）"
+              "description": "当前 actor 的统一投递流快照（身份、在线、待办与房间摘要）",
+              "mimeType": "application/json"
             },
             {
               "uri": "skill://agent-network/agent-network/SKILL.md",
               "name": "skill",
-              "mimeType": "text/markdown",
-              "description": "WeBots 使用指南"
+              "description": "WeBots 使用指南",
+              "mimeType": "text/markdown"
             }
           ],
           "resultType": "complete",
@@ -918,8 +918,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -962,8 +962,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -990,6 +990,8 @@
         }
       },
       "response": {
+        "jsonrpc": "2.0",
+        "id": 7,
         "result": {
           "skills": [
             {
@@ -1009,9 +1011,7 @@
           "ttlMs": 0,
           "cacheScope": "private",
           "resultType": "complete"
-        },
-        "jsonrpc": "2.0",
-        "id": 7
+        }
       }
     },
     {
@@ -1035,6 +1035,8 @@
         }
       },
       "response": {
+        "jsonrpc": "2.0",
+        "id": 8,
         "result": {
           "skill": {
             "uri": "skill://agent-network/agent-network/SKILL.md",
@@ -1050,9 +1052,7 @@
             ]
           },
           "resultType": "complete"
-        },
-        "jsonrpc": "2.0",
-        "id": 8
+        }
       }
     },
     {
@@ -1090,8 +1090,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -1246,8 +1246,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -1387,8 +1387,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -1467,8 +1467,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -1546,8 +1546,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -1591,8 +1591,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -1667,8 +1667,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -1738,8 +1738,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -1787,8 +1787,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -1855,8 +1855,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -1917,8 +1917,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -2546,8 +2546,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -2798,8 +2798,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -2835,8 +2835,8 @@
               "listChanged": true
             },
             "resources": {
-              "subscribe": true,
-              "listChanged": true
+              "listChanged": true,
+              "subscribe": true
             },
             "extensions": {
               "io.modelcontextprotocol/skills": {},
@@ -2856,8 +2856,8 @@
           "_meta": {
             "io.modelcontextprotocol/serverInfo": {
               "name": "peri-agent-network",
-              "title": "WeBots",
-              "version": "0.1.0"
+              "version": "0.1.0",
+              "title": "WeBots"
             }
           }
         },
@@ -2884,6 +2884,8 @@
         }
       },
       "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
         "result": {
           "events": [
             {
@@ -2996,9 +2998,7 @@
               "version": "0.1.0"
             }
           }
-        },
-        "jsonrpc": "2.0",
-        "id": 3
+        }
       }
     },
     {
@@ -3028,6 +3028,8 @@
         }
       },
       "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
         "result": {
           "id": "<sub>",
           "refreshBefore": "<ts>",
@@ -3041,9 +3043,7 @@
               "version": "0.1.0"
             }
           }
-        },
-        "jsonrpc": "2.0",
-        "id": 4
+        }
       }
     },
     {
@@ -3072,6 +3072,8 @@
         }
       },
       "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
         "result": {
           "resultType": "complete",
           "_meta": {
@@ -3081,9 +3083,7 @@
               "version": "0.1.0"
             }
           }
-        },
-        "jsonrpc": "2.0",
-        "id": 5
+        }
       }
     },
     {
@@ -3330,5 +3330,5 @@
       "response": ""
     }
   ],
-  "digest": "510091af70b0423d177d3a451a0473d5cc98e4727ff28dcbc28d011edfe65499"
+  "digest": "30351ff8b5803c012e03547e8aa779ba64f638e3ca07fc5b93277a99c4e54daf"
 }
