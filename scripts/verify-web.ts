@@ -5670,13 +5670,46 @@ async function main(): Promise<void> {
         await page.locator(`#room-list a[data-room-id="${data.direct.room.room_id}"]`).click();
         await waitRoom(page, data.direct.room.room_id, data.agentA.name);
         // 进入房间会标记已读；先离开底部，再让 Agent 发新消息，保留未读用于观察灰点。
-        await page.evaluate(`(() => {
-          const node = document.getElementById('messages');
-          if (!node) return;
-          node.scrollTop = 0;
-          node.dispatchEvent(new Event('scroll', { bubbles: true }));
-        })()`);
-        await waitUntil(async () => (await bottomGap(page)) > 40, '聊天区离开底部');
+        // 不能用程序化 scrollTop：进入房间时 ResizeObserver 已排队一帧 scrollBottom，
+        // 它执行前不复查 pinned，会在约 10ms 后把列表拉回底部并重新粘底；新消息随后
+        // 被自动 mark_read，刷新后灰点消失。先等首屏粘底与排队帧落定，再用真实滚轮
+        // 离开底部，并确认“回到最新”可见（pinned=false）且跨过 mark_read 延迟仍稳定。
+        await page.waitForFunction(
+          `(() => {
+            const node = document.getElementById('messages');
+            const jump = document.getElementById('jump-latest');
+            if (!node || !jump) return false;
+            return jump.hidden === true &&
+              node.scrollHeight - node.scrollTop - node.clientHeight <= 2;
+          })()`,
+        );
+        await sleep(500);
+        await page.locator('#messages').hover();
+        const unpinned = async (): Promise<boolean> =>
+          (await page.evaluate(`(() => {
+            const node = document.getElementById('messages');
+            const jump = document.getElementById('jump-latest');
+            if (!node || !jump) return false;
+            return jump.hidden === false &&
+              node.scrollHeight - node.scrollTop - node.clientHeight > ${LIMITS.webScrollStickyPx};
+          })()`)) as boolean;
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          await page.mouse.wheel(0, -600);
+          await sleep(120);
+          if (await unpinned()) break;
+        }
+        await waitUntil(unpinned, '聊天区离开底部并取消粘底', 5_000);
+        let unpinnedSince = 0;
+        await waitUntil(async () => {
+          if (!(await unpinned())) {
+            // 仍有迟到帧把列表拉回底部时重新滚开，并重新计时。
+            await page.mouse.wheel(0, -600);
+            unpinnedSince = 0;
+            return false;
+          }
+          if (!unpinnedSince) unpinnedSince = Date.now();
+          return Date.now() - unpinnedSince >= LIMITS.webScrollMarkReadDelayMs + 350;
+        }, '聊天区稳定离开底部', 10_000);
         await rawTool(data.agentAToken, 'network_message_send', {
           request_id: requestId('sidebar_msg'),
           client_message_id: crypto.randomUUID(),
@@ -5687,6 +5720,23 @@ async function main(): Promise<void> {
           `#room-list a[data-room-id="${data.direct.room.room_id}"]`,
         );
         await mutedRow.locator('.unread:not(.muted)').waitFor({ timeout: 15_000 });
+        // 新消息到达时仍在底部上方：否则会被自动滚到底并 mark_read。
+        await page.waitForFunction(
+          (sticky) => {
+            const node = document.getElementById('messages');
+            const jump = document.getElementById('jump-latest');
+            const label = document.getElementById('jump-latest-label');
+            return Boolean(
+              node &&
+                jump &&
+                jump.hidden === false &&
+                label?.textContent?.includes('有新消息') &&
+                node.scrollHeight - node.scrollTop - node.clientHeight > sticky,
+            );
+          },
+          LIMITS.webScrollStickyPx,
+          { timeout: 15_000 },
+        );
         checkEqual(
           '聊天页收到新消息后侧栏立即显示红点',
           await mutedRow.locator('.unread').evaluate(
@@ -5825,6 +5875,9 @@ async function main(): Promise<void> {
             .locator(`#room-list a[data-room-id="${data.direct.room.room_id}"] .room-pref-label`)
             .isVisible(),
         );
+        // Agent A 的最后一次发送会刷新在线 TTL；等下线事件落定，避免下一次
+        // 首屏的流订阅收到迟到的 room.presence 而多刷新一次会话列表。
+        await waitAgentOffline(server.dataDir, data.agentA.actor_id);
       } finally {
         await context.close();
       }
