@@ -4706,6 +4706,133 @@ async function main(): Promise<void> {
       check('文件可预览', await page.locator('#file-preview').isVisible());
       await page.locator('#file-preview-close').click();
       checkEqual('关闭预览', await page.locator('#file-preview').isHidden(), true);
+
+      // Markdown 文件：复用 /assets/chat-markdown.js 渲染，保留原文切换与安全清洗。
+      const markdownText = [
+        '# Markdown 标题',
+        '',
+        '## 二级标题',
+        '',
+        '- 列表一',
+        '- 列表二',
+        '',
+        '> 引用块',
+        '',
+        '```js',
+        'const n = 1;',
+        '```',
+        '',
+        '<script>window.__mdXss = 1</script>',
+        '<img src=x onerror="window.__mdXss = 2">',
+        '',
+        '[危险](javascript:alert(1))',
+        '',
+        '[安全](https://example.com/doc)',
+      ].join('\n');
+      await page.setInputFiles('#files-input', [
+        {
+          name: 'react-markdown.md',
+          mimeType: 'text/markdown',
+          buffer: Buffer.from(markdownText),
+        },
+        {
+          name: 'react-big.md',
+          mimeType: 'text/markdown',
+          buffer: Buffer.from(`# big\n\n${'x'.repeat(300 * 1024)}`),
+        },
+      ]);
+      await waitForText(page, '#files-list', 'react-markdown.md');
+      await waitForText(page, '#files-list', 'react-big.md');
+      check('Markdown 文件上传后出现在列表', true);
+      const mdItem = page.locator('#files-list .file-item').filter({ hasText: 'react-markdown.md' });
+      checkEqual('Markdown 文件显示 MD 图标', (await mdItem.locator('.file-thumb').textContent())?.trim(), 'MD');
+      await mdItem.getByRole('button', { name: '预览', exact: true }).click();
+      const mdViewer = '#file-preview-body .file-preview-md-viewer';
+      await page.locator(`${mdViewer} h1`).waitFor({ timeout: 15_000 });
+      checkEqual(
+        'Markdown 渲染 h1',
+        (await page.locator(`${mdViewer} h1`).first().textContent())?.trim(),
+        'Markdown 标题',
+      );
+      check(
+        'Markdown 渲染 h2/列表/引用/代码块',
+        (await page.locator(`${mdViewer} h2`).count()) >= 1 &&
+          (await page.locator(`${mdViewer} li`).count()) >= 2 &&
+          (await page.locator(`${mdViewer} blockquote`).count()) >= 1 &&
+          (await page.locator(`${mdViewer} pre.md-pre`).count()) >= 1,
+      );
+      const mdToggle = page.locator('#file-preview-body .file-preview-md-toggle');
+      checkEqual('Markdown 默认渲染视图', (await mdToggle.textContent())?.trim(), '查看原文');
+      check(
+        'Markdown 危险 HTML 被剥离',
+        (await page
+          .locator(`${mdViewer} script, ${mdViewer} img, ${mdViewer} [onerror]`)
+          .count()) === 0 &&
+          (await page.evaluate(() => (window as { __mdXss?: number }).__mdXss)) === undefined,
+      );
+      checkEqual(
+        'javascript: 链接不生成 href',
+        await page.locator(`${mdViewer} a[href^="javascript:"]`).count(),
+        0,
+      );
+      checkEqual(
+        '危险链接不生成可点击元素',
+        await page.locator(`${mdViewer} a`).filter({ hasText: '危险' }).count(),
+        0,
+      );
+      checkEqual(
+        '安全外链保留 noopener noreferrer nofollow',
+        await page
+          .locator(`${mdViewer} a[href="https://example.com/doc"]`)
+          .getAttribute('rel'),
+        'noopener noreferrer nofollow',
+      );
+      await mdToggle.click();
+      check(
+        '切换到查看原文显示 pre',
+        (await page.locator('#file-preview-body .file-preview-md-source').isVisible()) &&
+          ((await page.locator('#file-preview-body .file-preview-md-source').textContent()) ?? '').includes(
+            '# Markdown 标题',
+          ),
+      );
+      checkEqual('原文模式按钮文案', (await mdToggle.textContent())?.trim(), '渲染视图');
+      await mdToggle.click();
+      await page.locator(`${mdViewer} h1`).waitFor({ timeout: 15_000 });
+      check('切回渲染视图', (await page.locator(`${mdViewer} h1`).count()) >= 1);
+      await page.locator('#file-preview-close').click();
+
+      const bigItem = page.locator('#files-list .file-item').filter({ hasText: 'react-big.md' });
+      await bigItem.getByRole('button', { name: '预览', exact: true }).click();
+      await waitForText(page, '#file-preview-body', '文件较大');
+      await waitForText(page, '#file-preview-body .file-preview-md-source', '# big');
+      check(
+        '超过 256 KB 回退纯文本并提示',
+        (await page.locator('#file-preview-body .file-preview-md-toggle').count()) === 0 &&
+          (
+            (await page.locator('#file-preview-body .file-preview-md-source').textContent()) ?? ''
+          ).includes('# big'),
+      );
+      await page.locator('#file-preview-close').click();
+
+      // 读取失败：只对该文件注入 500，成功路径保持真实响应。
+      await page.setInputFiles('#files-input', [
+        { name: 'react-fail.md', mimeType: 'text/markdown', buffer: Buffer.from('# 失败\n\n正文') },
+      ]);
+      await waitForText(page, '#files-list', 'react-fail.md');
+      const failItem = page.locator('#files-list .file-item').filter({ hasText: 'react-fail.md' });
+      const failFileId = await failItem.getAttribute('data-file-id');
+      check('失败用例文件 id 可读取', Boolean(failFileId));
+      await page.route(`**/f/${failFileId}**`, (route) =>
+        route.fulfill({ status: 500, contentType: 'text/plain', body: 'boom' }),
+      );
+      await failItem.getByRole('button', { name: '预览', exact: true }).click();
+      await waitForText(page, '#file-preview-body pre', '读取文本预览失败');
+      checkEqual(
+        '读取失败不显示渲染切换',
+        await page.locator('#file-preview-body .file-preview-md-toggle').count(),
+        0,
+      );
+      await page.locator('#file-preview-close').click();
       await page.locator('#files-close').click();
       checkEqual('关闭文件面板', await page.locator('#files-pane').isHidden(), true);
       await context.close();

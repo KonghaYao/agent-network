@@ -27,9 +27,11 @@ export interface RoomFilePage {
   has_more: boolean;
 }
 
-export type PreviewKind = 'image' | 'pdf' | 'text' | 'audio' | 'video' | 'other';
+export type PreviewKind = 'image' | 'pdf' | 'markdown' | 'text' | 'audio' | 'video' | 'other';
 
 const PREVIEW_TEXT_BYTES = 262_144;
+const MARKDOWN_MIMES = new Set(['text/markdown', 'text/x-markdown']);
+const MARKDOWN_EXTENSION = /\.(?:md|markdown)$/iu;
 const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
   png: 'image/png',
   jpg: 'image/jpeg',
@@ -56,11 +58,25 @@ export function previewImageMime(mimeType: string | undefined, name: string | un
   return null;
 }
 
+/**
+ * `.md` / `.markdown` 按 Markdown 预览。
+ *
+ * 扩展名兜底只接受空 MIME、`text/plain` 与 `application/octet-stream`；HTML/XML/JS
+ * 等主动内容即使文件名像 Markdown 也保持下载/其它分类，不进入渲染器。
+ */
+export function isMarkdownPreview(item: RoomFileItem): boolean {
+  const mime = String(item.mime_type ?? '').toLowerCase().split(';')[0]?.trim() ?? '';
+  if (MARKDOWN_MIMES.has(mime)) return true;
+  if (mime && mime !== 'text/plain' && mime !== 'application/octet-stream') return false;
+  return MARKDOWN_EXTENSION.test(String(item.name ?? ''));
+}
+
 export function filePreviewKind(item: RoomFileItem): PreviewKind {
   const kind = String(item.preview_kind ?? '').toLowerCase();
   const mime = String(item.mime_type ?? '').toLowerCase().split(';')[0]?.trim() ?? '';
   if (kind === 'pdf' && !mime.startsWith('application/pdf')) return 'other';
   if (previewImageMime(item.mime_type, item.name)) return 'image';
+  if (kind === 'markdown' || isMarkdownPreview(item)) return 'markdown';
   if (['image', 'pdf', 'text', 'audio', 'video'].includes(kind)) return kind as PreviewKind;
   if (['other', 'unknown', 'file', 'download'].includes(kind)) return 'other';
   if (mime.startsWith('image/')) return mime.includes('svg') ? 'other' : 'image';
@@ -103,6 +119,7 @@ export function fileKey(item: RoomFileItem): string {
 export function fileIconLabel(kind: PreviewKind): string {
   if (kind === 'image') return 'IMG';
   if (kind === 'pdf') return 'PDF';
+  if (kind === 'markdown') return 'MD';
   if (kind === 'text') return 'TXT';
   if (kind === 'audio') return 'AUD';
   if (kind === 'video') return 'VID';
