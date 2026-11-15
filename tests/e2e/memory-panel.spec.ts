@@ -393,6 +393,28 @@ test.describe('Agent 记忆弹窗', () => {
     await login(page, base, tokenA);
     await openRowMemory(page, directRoom);
 
+    // 视角栏与内容区必须单列堆叠：grid 只有一条列轨，内容区在视角栏下方且不越界。
+    const layout = await page.locator('.agent-memory-fenix-body').evaluate((element) => {
+      const styles = getComputedStyle(element);
+      const aside = element.querySelector<HTMLElement>('.agent-memory-perspectives');
+      const content = element.querySelector<HTMLElement>('.agent-memory-content');
+      if (!aside || !content) throw new Error('缺少视角栏或内容区');
+      const asideRect = aside.getBoundingClientRect();
+      const contentRect = content.getBoundingClientRect();
+      return {
+        columns: styles.gridTemplateColumns.trim().split(/\s+/).filter(Boolean).length,
+        horizontalOverflow: element.scrollWidth - element.clientWidth,
+        stacked: contentRect.top >= asideRect.bottom - 1,
+        contentLeft: contentRect.left,
+        contentRight: contentRect.right,
+      };
+    });
+    expect(layout.columns).toBe(1);
+    expect(layout.horizontalOverflow).toBeLessThanOrEqual(1);
+    expect(layout.stacked).toBe(true);
+    expect(layout.contentLeft).toBeGreaterThanOrEqual(0);
+    expect(layout.contentRight).toBeLessThanOrEqual(391);
+
     const box = await page.locator('#agent-memory-dialog').boundingBox();
     expect(box).not.toBeNull();
     expect(box!.x).toBeGreaterThanOrEqual(0);

@@ -154,6 +154,8 @@ export interface InstallMemoryFenixStubOptions {
   actorId: string;
   actorName: string;
   panelDisabled?: boolean;
+  /** `available=false` 但按空态渲染的服务端原因（如 bank_missing）。 */
+  bankMissing?: boolean;
   graphFailure?: boolean;
   totalUnits?: number;
   rows?: FenixRow[];
@@ -232,11 +234,16 @@ export async function installMemoryFenixStub(
 
     let structuredContent: unknown;
     if (name === 'network_agent_memory_graph') {
-      if (options.panelDisabled) {
+      const unavailableReason = options.bankMissing
+        ? 'bank_missing'
+        : options.panelDisabled
+          ? 'panel_disabled'
+          : null;
+      if (unavailableReason) {
         structuredContent = {
           ...base,
           available: false,
-          reason: 'panel_disabled',
+          reason: unavailableReason,
           nodes: [],
           edges: [],
           total_units: null,

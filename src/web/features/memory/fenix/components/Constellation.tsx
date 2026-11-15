@@ -110,7 +110,7 @@ export function Constellation({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    paintConstellationFrame(ctx, canvas, {
+    const stats = paintConstellationFrame(ctx, canvas, {
       state: stateRef.current,
       scene,
       isDark,
@@ -121,6 +121,12 @@ export function Constellation({
       heatLegendEndpoints,
       sizeLegendLabel,
     });
+    // 只写 dataset 供 e2e/回归断言（与旧 `ConstellationCanvas` 同口径），不触发 React 渲染。
+    canvas.dataset.zoom = stateRef.current.zoom.toFixed(3);
+    canvas.dataset.panX = stateRef.current.panX.toFixed(1);
+    canvas.dataset.panY = stateRef.current.panY.toFixed(1);
+    canvas.dataset.labels = String(stats.labels);
+    canvas.dataset.visibleCount = String(stats.visible);
 
     animRef.current = requestAnimationFrame(animate);
   }, [scene, isDark, compactLabels, nodeSizeFn, t, heatLegendLabel, heatLegendEndpoints, sizeLegendLabel]);

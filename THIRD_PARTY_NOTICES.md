@@ -81,7 +81,7 @@ Modifications for this repository:
 | `components/constellation-paint.ts` | `pages/hindsight/components/constellation-paint.ts` | `TFunction` imported from local i18n. |
 | `components/constellation-legend.ts` | `pages/hindsight/components/constellation-legend.ts` | `TFunction` imported from local i18n. |
 | `components/constellation-state.ts` | `pages/hindsight/components/constellation-state.ts` | Verbatim. |
-| `components/constellation-tooltip.ts` | `pages/hindsight/components/constellation-tooltip.ts` | `TFunction` imported from local i18n; values written with `textContent`/`replaceChildren` and masked; `document_id` row removed. |
+| `components/constellation-tooltip.ts` | `pages/hindsight/components/constellation-tooltip.ts` | `TFunction` imported from local i18n; values written with `textContent`/`replaceChildren` and masked; entity names are masked individually before joining (not only the joined string); `document_id` row removed. |
 | `components/agent-master-detail-workspace.tsx` | `packages/ui-components/web/components/agent-master-detail-workspace.tsx` | Native `overflow-auto` replaced upstream `ScrollArea`; slot layout preserved. |
 | `ui/button.tsx`, `ui/button.css` | `packages/ui-components/web/ui/button.tsx`, `button.css` | Local primitive copy; internal import paths changed. |
 | `ui/input.tsx` | `packages/ui-components/web/ui/input.tsx` | Local primitive copy; internal import paths changed. |

@@ -11,6 +11,7 @@
 
 import { LIMITS } from '../../../../contracts/limits';
 import {
+  availabilityKind,
   availabilityText,
   fetchMemoryDetail,
   fetchMemoryGraph,
@@ -133,6 +134,11 @@ export function createMemoryFenixApi({ actorId, token }: CreateMemoryFenixApiOpt
           },
           NO_ABORT,
         );
+        // `bank_missing` 表示「还没有形成可查看的记忆」，且服务端已在同一响应里返回
+        // 空 nodes/edges/table_rows；按空态渲染，不要归入「记忆暂不可用」。
+        if (!result.available && availabilityKind(result.reason) === 'empty') {
+          return toGraphData(result);
+        }
         assertAvailable(result);
         return toGraphData(result);
       } catch (error) {

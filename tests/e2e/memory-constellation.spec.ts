@@ -4,6 +4,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { createIdentity, login, row, type SuiteIdentity } from './fixtures/memory-constellation';
 import {
   SECRET_BEARER,
+  SECRET_ENTITY_AWS,
+  SECRET_PASSWORD,
   callsOf,
   installMemoryFenixStub,
   memoryRows,
@@ -48,6 +50,75 @@ test.describe('Fenix 星座图移植', () => {
 
   test.beforeAll(async () => {
     identity = await createIdentity();
+  });
+
+  test('默认世界视角 tooltip 逐个掩码实体名，不出现原文', async ({ page }) => {
+    // 世界视角的每个节点都带敏感实体名，保证悬停到任意节点都能验证实体行。
+    const rows = memoryRows().map((rowItem) => ({
+      ...rowItem,
+      entities: ['deploy', SECRET_ENTITY_AWS, `password=${SECRET_PASSWORD}`],
+    }));
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, {
+      actorId: identity.agentId,
+      actorName: identity.agentName,
+      rows,
+    });
+    await login(page, identity.base, identity.token);
+    await openMemory(page, identity.directRoom);
+
+    expect(await hoverNode(page)).toBe(true);
+    const tooltip = page.locator('.fenix-constellation-tooltip');
+    await expect(tooltip).toContainText('实体');
+    await expect(tooltip).toContainText('[已隐藏]');
+    // 实体行本身必须被掩码；只掩码正文/标签不足以满足该断言。
+    await expect(tooltip).toContainText('password=[已隐藏]');
+    await expect(tooltip).not.toContainText(SECRET_ENTITY_AWS);
+    await expect(tooltip).not.toContainText(SECRET_PASSWORD);
+  });
+
+  test('画布交互：节点标签、滚轮缩放与拖拽平移都会更新绘制', async ({ page }) => {
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, {
+      actorId: identity.agentId,
+      actorName: identity.agentName,
+    });
+    await login(page, identity.base, identity.token);
+    await openMemory(page, identity.directRoom);
+
+    const canvas = page.locator('.fenix-constellation-canvas');
+    await expect(canvas).toBeVisible({ timeout: 15_000 });
+    await expect.poll(async () => Number(await canvas.getAttribute('data-zoom'))).toBeGreaterThan(0);
+
+    // 悬停节点总会绘制标签（`paintConstellationFrame` 的 hovered 分支）。
+    expect(await hoverNode(page)).toBe(true);
+    await expect.poll(async () => Number(await canvas.getAttribute('data-labels'))).toBeGreaterThan(0);
+
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    const centerX = box!.x + box!.width / 2;
+    const centerY = box!.y + box!.height / 2;
+    const initialZoom = Number(await canvas.getAttribute('data-zoom'));
+
+    await page.mouse.move(centerX, centerY);
+    await page.mouse.wheel(0, -300);
+    await expect
+      .poll(async () => Number(await canvas.getAttribute('data-zoom')))
+      .toBeGreaterThan(initialZoom);
+
+    const initialPanX = Number(await canvas.getAttribute('data-pan-x'));
+    const initialPanY = Number(await canvas.getAttribute('data-pan-y'));
+    await page.mouse.move(centerX, centerY);
+    await page.mouse.down();
+    await page.mouse.move(centerX + 80, centerY + 50, { steps: 5 });
+    await page.mouse.up();
+    await expect
+      .poll(async () => Number(await canvas.getAttribute('data-pan-x')))
+      .toBeGreaterThan(initialPanX + 20);
+    await expect
+      .poll(async () => Number(await canvas.getAttribute('data-pan-y')))
+      .toBeGreaterThan(initialPanY + 10);
+    expect(callsOf(calls, 'network_agent_memory_graph')).toHaveLength(1);
   });
 
   test('canvas 可读标签、tooltip 掩码防注入、全屏与 Escape', async ({ page }) => {

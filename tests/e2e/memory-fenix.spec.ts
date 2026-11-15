@@ -286,6 +286,20 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
     await expect(page.getByRole('button', { name: '重试' })).toHaveCount(0);
   });
 
+  test('bank_missing 按空态渲染，不显示记忆暂不可用', async ({ page }) => {
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, {
+      actorId: identity.agentId,
+      actorName: identity.agentName,
+      bankMissing: true,
+    });
+    await login(page, identity.base, identity.token);
+    await openMemory(page, identity.directRoom);
+    await expect(page.getByText('暂无记忆数据')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    expect(callsOf(calls, 'network_agent_memory_graph')).toHaveLength(1);
+  });
+
   test('失败态可重试，不与空态混淆', async ({ page }) => {
     const calls: MemoryCall[] = [];
     await installMemoryFenixStub(page, calls, {

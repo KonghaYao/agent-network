@@ -35,11 +35,18 @@ export interface ConstellationFrameInput {
   sizeLegendLabel?: string;
 }
 
+export interface ConstellationFrameStats {
+  memories: number;
+  visible: number;
+  labels: number;
+  links: number;
+}
+
 export function paintConstellationFrame(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
   input: ConstellationFrameInput,
-): void {
+): ConstellationFrameStats {
   const { scene, isDark, compactLabels, t } = input;
   const { preparedNodes, linksByNode, linksWithIndices } = scene;
   const s = input.state;
@@ -279,4 +286,6 @@ export function paintConstellationFrame(
   });
 
   ctx.restore();
+
+  return { memories: preparedNodes.length, visible: visibleCount, labels: labelsShown, links: linksDrawn };
 }

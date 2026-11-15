@@ -81,7 +81,7 @@ export interface DataViewData {
 const ALL_LINK_TYPES = ["semantic", "temporal", "entity", "causal"];
 
 export function useDataViewData({ factType, documentId, chunkId, initialQuery }: UseDataViewDataOptions): DataViewData {
-  const [fetchLimit] = useState(1000);
+  // 行数上限由 `memory-api.ts` 的 LIMITS 决定；这里不再保留恒为 1000 的死参数。
   const [recencyBasis, setRecencyBasis] = useState<RecencyBasis>("mentioned_at");
   const [maxNodes, setMaxNodes] = useState<number | undefined>(undefined);
   const [visibleLinkTypes, setVisibleLinkTypes] = useState<Set<string>>(new Set(ALL_LINK_TYPES));
@@ -100,7 +100,6 @@ export function useDataViewData({ factType, documentId, chunkId, initialQuery }:
     () =>
       hindsightApi.getGraph({
         type: factType,
-        limit: fetchLimit,
         q: initialQuery || undefined,
         document_id: documentId,
         chunk_id: chunkId,

@@ -2,8 +2,9 @@
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/failure.ts
  * Modified for Agent Network: 把上游 ApiError 判定改为本地 FenixApiError，其余失败分类逻辑不变；
- * 新增 `unavailable` 分类（服务端 `available=false` 的 no_space/bank_missing/panel_disabled/
- * backend_* 是可预期状态，不是可重试故障，也不是空数据）。
+ * 新增 `unavailable` 分类（服务端 `available=false` 的 no_space/panel_disabled/backend_*
+ * 是可预期状态，不是可重试故障，也不是空数据）。`bank_missing` 不进入这里：
+ * `memory-api.ts` 按 `availabilityKind` 把它当空态渲染。
  */
 
 import { FenixApiError } from "./api";
