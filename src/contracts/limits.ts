@@ -127,17 +127,24 @@ export const LIMITS = {
    * Agent 消息预览被截断但正文不超过该字节数时，页面自动读取全文并直接渲染。
    * 超过该上限仍显示「查看全文」，避免一次刷新并发读取过多大消息。
    *
-   * 超过 `webLongMessageCollapseBytes` 的消息不再自动展开，由用户显式展开/收起。
+   * 只对视口内的消息触发，并受 `webAgentAutoExpandConcurrency` 限制。
+   * 16–32 KiB 的消息自动展开后仍可通过「收起」折叠；超过该值由用户显式展开。
    */
-  webAgentAutoExpandBytes: 16 * 1024,
+  webAgentAutoExpandBytes: 32 * 1024,
+  /**
+   * 自动展开全文的最大并发数。
+   *
+   * 每条消息可能分多块读取；并发过高会在首屏抢占连接并拖慢可见消息渲染。
+   */
+  webAgentAutoExpandConcurrency: 3,
   /**
    * 超长消息默认折叠为预览的正文阈值（UTF-8 字节）。
    *
    * 首屏只有 `body_bytes` 与 512B 预览，直接用字节数判断，避免为了折叠额外读取全文。
-   * 3 KiB 约等于 1000 个中文字符（3 字节/字），远超一屏；ASCII 长文会略早触发，
-   * 同样属于“超长”范围。低于该值的截断消息保持一次展开后不再折叠。
+   * 16 KiB 约等于 5500 个中文字符（3 字节/字），远超一屏；低于该值的截断消息
+   * 自动/手动展开后保持完整正文，不再折叠。
    */
-  webLongMessageCollapseBytes: 3 * 1024,
+  webLongMessageCollapseBytes: 16 * 1024,
   /**
    * 消息正文中连续 base64 文本的最小折叠长度（去除空白后的字符数）。
    *
@@ -575,6 +582,18 @@ export const LIMITS = {
   /** 记忆图节点文本 / label 字符上限。 */
   memoryPanelGraphTextChars: 600,
   memoryPanelGraphLabelChars: 80,
+  /**
+   * 字节预算裁剪时的节点正文下限（字符）。
+   *
+   * 长文本节点先截到该下限，把预算留给边；只有边已到下限仍超预算才继续压正文。
+   */
+  memoryPanelGraphTextFloorChars: 140,
+  /**
+   * 字节预算裁剪时至少保留的边数（min(现有边数, 该值)）。
+   *
+   * 星座视图依赖边；即使长文本把图核心撑爆，也不能先把边裁光。
+   */
+  memoryPanelGraphEdgesMin: 120,
   /** 事实列表正文截断字符数。 */
   memoryPanelFactsTextChars: 1_200,
   /** 记忆详情正文 UTF-8 字节上限。 */

@@ -3,7 +3,7 @@
  *
  * - 不使用 `dangerouslySetInnerHTML`，不引入 `rehype-raw`；
  * - 先 `rehype-sanitize` 再 `rehype-harden`，链接协议白名单只留 http/https/mailto；
- * - 图片一律不渲染，文件预览由气泡外的文件卡片负责；
+ * - 图片不加载，只显示 `[图片] alt` 占位，文件预览由气泡外的文件卡片负责；
  * - `@名字` 只在非代码/非链接文本节点中高亮；
  * - 渲染异常由错误边界回退为纯文本，不记录消息正文。
  */
@@ -341,9 +341,17 @@ function Anchor({ node: _node, href, children, ...rest }: AnchorProps) {
   );
 }
 
-/** Markdown 图片不加载；文件预览统一走气泡外的文件卡片。 */
-function BlockedImage(_props: ComponentPropsWithoutRef<'img'> & NodeProps) {
-  return null;
+/** Markdown 图片不加载；保留 alt 文本占位，避免整段内容消失。 */
+function BlockedImage({ alt }: ComponentPropsWithoutRef<'img'> & NodeProps) {
+  const label =
+    typeof alt === 'string'
+      ? alt.replace(/[\u0000-\u001f\u007f]/gu, ' ').trim().slice(0, 120)
+      : '';
+  return (
+    <span className="md-image-placeholder" data-image-blocked="1">
+      [图片]{label ? ` ${label}` : ''}
+    </span>
+  );
 }
 
 function MarkdownPre({ node: _node, className, children, ...rest }: PreProps) {
@@ -422,7 +430,8 @@ const rehypePlugins: PluggableList = [
     {
       allowedProtocols: ['http', 'https', 'mailto'],
       allowedLinkPrefixes: ['*'],
-      allowedImagePrefixes: [],
+      // 图片仍不加载：协议过滤后交给 `BlockedImage` 渲染 alt 占位，组件永不输出 img。
+      allowedImagePrefixes: ['*'],
       allowDataImages: false,
       defaultOrigin: location.origin,
     },
