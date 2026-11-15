@@ -217,6 +217,22 @@ export function readFailedEvent(fields: DeliveryFields, claim: ClaimInfo, source
   };
 }
 
+/**
+ * informational room 消息只携带定位字段，不携带正文或 preview。
+ * 宿主需要正文时按 message_id 调用 network_message_read。
+ */
+export function roomMessageEvent(item: JsonObject, source: string): JsonObject {
+  return {
+    type: 'room_message',
+    source,
+    room_id: asText(pick(item.room_id, '')),
+    message_id: asText(pick(item.message_id, '')),
+    sender_id: asText(pick(item.sender_id, '')),
+    event_id: asText(pick(item.event_id, '')),
+    seq: asText(pick(item.seq, pick(item.created_seq, ''))),
+  };
+}
+
 export function reminderEvent(item: JsonObject): JsonObject {
   const message = (item.message ?? {}) as JsonObject;
   return {

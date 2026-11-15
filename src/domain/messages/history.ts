@@ -112,21 +112,24 @@ export async function historyList(
 
   return {
     items,
+    // after 游标必须单调前进：本页有消息时指向最后一条 created_seq；
+    // 本页为空时推进到当前快照上界，避免下一次 after 重读同一段。
+    // before 保持旧契约：只有存在下一页时才返回游标。
     next_cursor:
-      hasMore && last
+      direction === 'after'
         ? encodeCursor({
             v: 1,
             scope,
             dir: direction,
-            seq: last.created_seq,
+            seq: last?.created_seq ?? Math.max(cursor?.seq ?? 0, snapshot),
             snapshot,
           })
-        : direction === 'after'
+        : hasMore && last
           ? encodeCursor({
               v: 1,
               scope,
               dir: direction,
-              seq: cursor?.seq ?? snapshot,
+              seq: last.created_seq,
               snapshot,
             })
           : null,

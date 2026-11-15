@@ -97,6 +97,19 @@ function toolStructured<T>(body: Record<string, unknown>): T | undefined {
   return (body.result as { structuredContent?: T } | undefined)?.structuredContent;
 }
 
+/** 测试侧解码版本化游标，只用于断言 seq 前进，不参与业务。 */
+function historyCursorSeq(cursor: string | null | undefined): number {
+  if (!cursor) return Number.NaN;
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as {
+      seq?: unknown;
+    };
+    return typeof parsed.seq === 'number' ? parsed.seq : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
+}
+
 async function main(): Promise<void> {
   console.log(`协议验收: ${baseUrl()}`);
 
@@ -3466,6 +3479,69 @@ async function main(): Promise<void> {
         item.sender_kind === undefined,
     ),
     historyResult?.items?.map((item) => item.sender_kind),
+  );
+
+  // after 游标必须单调前进：本页返回消息时指向最后一条 created_seq；
+  // 再次传入不得重复返回同一段，避免 CLI reconnect 补读原地打转。
+  const afterBaseline = await rawToolCall<{
+    items: unknown[];
+    next_cursor: string | null;
+    has_more: boolean;
+  }>(browserToken, 'network_history_list', {
+    room_id: historyRoomId,
+    direction: 'after',
+    limit: 100,
+  });
+  const baselineCursor = afterBaseline.data?.next_cursor ?? '';
+  check(
+    'after 基线返回游标',
+    baselineCursor.length > 0 && Number.isSafeInteger(historyCursorSeq(baselineCursor)),
+    afterBaseline.data,
+  );
+  const afterFixture = await rawToolCall<{ message: { created_seq: string } }>(
+    browserToken,
+    'network_message_send',
+    {
+      request_id: `after_cursor_${crypto.randomUUID().replaceAll('-', '')}`,
+      client_message_id: crypto.randomUUID(),
+      room_id: historyRoomId,
+      body: 'after 游标回归消息',
+    },
+  );
+  const fixtureSeq = Number(afterFixture.data?.message.created_seq);
+  check('after 游标 fixture 写入成功', Number.isSafeInteger(fixtureSeq), afterFixture);
+  const afterFirst = await rawToolCall<{
+    items: { created_seq: string }[];
+    next_cursor: string | null;
+    has_more: boolean;
+  }>(browserToken, 'network_history_list', {
+    room_id: historyRoomId,
+    direction: 'after',
+    cursor: baselineCursor,
+    limit: 100,
+  });
+  checkEqual('after 首次补读返回一条新消息', afterFirst.data?.items.length, 1);
+  checkEqual('after 首次补读消息序号', Number(afterFirst.data?.items[0]?.created_seq), fixtureSeq);
+  checkEqual(
+    'after 游标指向最后一条 created_seq',
+    historyCursorSeq(afterFirst.data?.next_cursor),
+    fixtureSeq,
+  );
+  const afterSecond = await rawToolCall<{
+    items: { created_seq: string }[];
+    next_cursor: string | null;
+    has_more: boolean;
+  }>(browserToken, 'network_history_list', {
+    room_id: historyRoomId,
+    direction: 'after',
+    cursor: afterFirst.data?.next_cursor,
+    limit: 100,
+  });
+  checkEqual('after 第二次补读不重复同一段', afterSecond.data?.items.length, 0);
+  check(
+    'after 第二次游标不后退',
+    historyCursorSeq(afterSecond.data?.next_cursor) >= fixtureSeq,
+    afterSecond.data,
   );
 
   // 消息式 Task：标记幂等、读工具不写事件、取消标记保留消息。
