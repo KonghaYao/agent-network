@@ -2,7 +2,7 @@
   "version": 1,
   "protocolVersion": "2026-07-28",
   "toolCount": 139,
-  "toolsetSha256": "ebaf11d4b12d76eb8a0215fb8ad5ba702fb385e7c4ba9fcee77d0574b549e120",
+  "toolsetSha256": "2ad5c414953b4483cd0a25fe21882de9604b783f3a52bf48215fa13ca469e08f",
   "instructionsSha256": "21154a7b030a600fa8fb8772dc3808ed559936211e526a03feedffddb328eaaf",
   "frames": [
     {
@@ -205,8 +205,8 @@
       "response": {
         "result": {
           "toolCount": 139,
-          "toolset_sha256": "ebaf11d4b12d76eb8a0215fb8ad5ba702fb385e7c4ba9fcee77d0574b549e120",
-          "listing_sha256": "ff75e037f40126c20ee8034e588689db1d51245c382f94ebd6c37d5698d3f1be",
+          "toolset_sha256": "2ad5c414953b4483cd0a25fe21882de9604b783f3a52bf48215fa13ca469e08f",
+          "listing_sha256": "078747eec800c65c9c031a086ad8d38f0b9dc77888a8e4b1db22cc92609a4292",
           "tools": [
             {
               "name": "network_issue_token",
@@ -706,7 +706,7 @@
             },
             {
               "name": "network_agent_memory_graph",
-              "digest": "c2acd4ad964318ae45e1aae5ab9e9027a422afbcce1dbf47a25e6fa9e57a8ccf"
+              "digest": "b40ed984991200da5c1f81eedd7c60ac20d31ce912348aed98b65fbb80299c97"
             },
             {
               "name": "network_agent_memory_list",
@@ -796,7 +796,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-12.1\",\"toolset_sha256\":\"ebaf11d4b12d76eb8a0215fb8ad5ba702fb385e7c4ba9fcee77d0574b549e120\",\"tool_count\":139,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-09.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
+              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-12.1\",\"toolset_sha256\":\"2ad5c414953b4483cd0a25fe21882de9604b783f3a52bf48215fa13ca469e08f\",\"tool_count\":139,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-09.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
             }
           ],
           "structuredContent": {
@@ -815,7 +815,7 @@
             "service": {
               "protocol_version": "2026-07-28",
               "contract_version": "2026-11-12.1",
-              "toolset_sha256": "ebaf11d4b12d76eb8a0215fb8ad5ba702fb385e7c4ba9fcee77d0574b549e120",
+              "toolset_sha256": "2ad5c414953b4483cd0a25fe21882de9604b783f3a52bf48215fa13ca469e08f",
               "tool_count": 139,
               "guide_tool": "network_client_guide",
               "files_enabled": true,
@@ -1947,8 +1947,8 @@
       "response": {
         "result": {
           "toolCount": 139,
-          "toolset_sha256": "ebaf11d4b12d76eb8a0215fb8ad5ba702fb385e7c4ba9fcee77d0574b549e120",
-          "listing_sha256": "ff75e037f40126c20ee8034e588689db1d51245c382f94ebd6c37d5698d3f1be",
+          "toolset_sha256": "2ad5c414953b4483cd0a25fe21882de9604b783f3a52bf48215fa13ca469e08f",
+          "listing_sha256": "078747eec800c65c9c031a086ad8d38f0b9dc77888a8e4b1db22cc92609a4292",
           "tools": [
             {
               "name": "network_issue_token",
@@ -2448,7 +2448,7 @@
             },
             {
               "name": "network_agent_memory_graph",
-              "digest": "c2acd4ad964318ae45e1aae5ab9e9027a422afbcce1dbf47a25e6fa9e57a8ccf"
+              "digest": "b40ed984991200da5c1f81eedd7c60ac20d31ce912348aed98b65fbb80299c97"
             },
             {
               "name": "network_agent_memory_list",
@@ -3330,5 +3330,5 @@
       "response": ""
     }
   ],
-  "digest": "0766ca217f97867649effe3cd57687ac3e1af355b68b919bb46168a25453c3e8"
+  "digest": "9edd89d2c3b88ec7cdf435b802916772e84d75c2361af03f712d552b699e3faa"
 }

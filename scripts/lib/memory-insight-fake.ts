@@ -182,17 +182,23 @@ export class FakeHindsightInsight {
       : [];
     const visible = new Set<string>();
     for (const entry of nodes) {
-      const record = this.#record(entry);
+      const record = this.#unwrap(entry);
       const id = this.#string(record?.id);
       if (id) visible.add(id);
     }
     const edges = (Array.isArray(fixture.edges) ? fixture.edges : []).filter((entry) => {
-      const edge = this.#record(this.#record(entry)?.data ?? entry);
+      const edge = this.#unwrap(entry);
       const source = this.#string(edge?.source);
       const target = this.#string(edge?.target);
       return source !== null && target !== null && visible.has(source) && visible.has(target);
     });
     return json({ ...fixture, nodes, edges, table_rows: tableRows });
+  }
+
+  /** Hindsight 的节点/边可能包在 `{ data: ... }` 里；两种形状都要能读。 */
+  #unwrap(value: unknown): Record<string, unknown> | null {
+    const record = this.#record(value);
+    return this.#record(record?.data) ?? record;
   }
 
   #record(value: unknown): Record<string, unknown> | null {

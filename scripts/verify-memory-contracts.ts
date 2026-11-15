@@ -10,6 +10,7 @@
  * 运行：bun run test:memory-contracts
  */
 import { BusinessError } from '../src/contracts/errors';
+import { LIMITS } from '../src/contracts/limits';
 import {
   MEMORY_ERROR_CODES,
   MEMORY_PAYLOAD_AUTHORITY,
@@ -530,6 +531,12 @@ function main(): void {
     proof_id: 'proof_1',
     submitted_at: 1,
   });
+
+  check(
+    'memory graph 单一总预算低于工具响应上限',
+    LIMITS.memoryPanelGraphResponseBytes <= LIMITS.toolResponseBytes,
+    `${LIMITS.memoryPanelGraphResponseBytes}/${LIMITS.toolResponseBytes}`,
+  );
 
   if (failures > 0) {
     console.error(`\nMemory 契约校验失败：${failures}/${checks} 项未通过`);

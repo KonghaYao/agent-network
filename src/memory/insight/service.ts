@@ -374,10 +374,13 @@ export class MemoryInsightService {
             limit,
             truncated: graph.truncated,
           };
-          // include_rows 时图预算只计算 nodes/edges，不能把随后附加的 table_rows
-          // 算进去；旧客户端仍按整包结果裁剪，保持原行为。
+          // include_rows 时先只按图核心预算裁剪 nodes/edges，保证星座图可用；
+          // table_rows/timeline 随后由 #fitGraphResponse 在单一总预算内处理。
           const graphTrimmed = includeRows
-            ? fitGraphBytes({ nodes: result.nodes, edges: result.edges })
+            ? fitGraphBytes(
+                { nodes: result.nodes, edges: result.edges },
+                LIMITS.memoryPanelGraphCoreBytes,
+              )
             : fitGraphBytes(result);
           if (graphTrimmed) result.truncated = true;
           if (includeRows) {
@@ -389,7 +392,7 @@ export class MemoryInsightService {
             result.table_rows = normalizedRows.rows;
             result.rows_truncated = normalizedRows.truncated;
             result.timeline = graphTimeline(normalizedRows.rows, graph.total_units, zone);
-            this.#fitGraphRows(result, graph.total_units, zone);
+            this.#fitGraphResponse(result, graph.total_units, zone);
           }
           return result;
         },
@@ -648,7 +651,7 @@ export class MemoryInsightService {
             const graph = normalizeEntityGraph(outcome.body, {
               edgeLimit: limit,
               nodeLimit: LIMITS.memoryPanelEntityGraphNodesMax,
-              bytes: LIMITS.memoryPanelGraphBytes,
+              bytes: LIMITS.memoryPanelGraphCoreBytes,
             });
             if (!graph) throw insightBusinessError('UPSTREAM_UNAVAILABLE');
             return {
@@ -938,29 +941,33 @@ export class MemoryInsightService {
   }
 
   /**
-   * 表格行预算：行预算与整包预算分别检查，从最旧行尾部裁剪并重建分组。
-   * 上游 total 大于返回行数时也标记 rows_truncated，避免把子集当完整数据。
+   * graph 响应的单一总预算：以完整结果（base/nodes/edges/table_rows/timeline）
+   * 序列化后的 JSON 字节数为准。
+   *
+   * 优先级：图核心已先按 memoryPanelGraphCoreBytes 裁剪；仍超总预算时先按最旧行
+   * 成块丢弃并重建 timeline，图核心不受行影响；只有行裁空后仍超限，才兜底裁剪
+   * 边、节点文本与节点，并置 truncated=true。上游 total 大于返回行数时也标记
+   * rows_truncated，避免把子集当完整数据。
    */
-  #fitGraphRows(
+  #fitGraphResponse(
     result: InsightGraphResult,
     total: number | null,
     zone: TimelineZone,
   ): boolean {
     const rows = result.table_rows;
-    if (!rows) return false;
-    if (total !== null && total > rows.length) result.rows_truncated = true;
-    let trimmed = false;
-    while (
-      rows.length > 0 &&
-      (jsonBytes(rows) > LIMITS.memoryPanelRowsBytes ||
-        jsonBytes(result) > LIMITS.memoryPanelDataBytes)
-    ) {
-      rows.splice(Math.max(0, rows.length - 16));
+    let rowsTrimmed = false;
+    if (rows && total !== null && total > rows.length) result.rows_truncated = true;
+    while (rows && rows.length > 0 && jsonBytes(result) > LIMITS.memoryPanelGraphResponseBytes) {
+      const keep = Math.max(0, rows.length - Math.max(1, Math.ceil(rows.length / 8)));
+      rows.splice(keep);
       result.timeline = graphTimeline(rows, total, zone);
       result.rows_truncated = true;
-      trimmed = true;
+      rowsTrimmed = true;
     }
-    return trimmed;
+    if (jsonBytes(result) > LIMITS.memoryPanelGraphResponseBytes) {
+      if (fitGraphBytes(result, LIMITS.memoryPanelGraphResponseBytes)) result.truncated = true;
+    }
+    return rowsTrimmed;
   }
 
   #emptyGet(base: BaseView, reason: InsightAvailabilityReason): InsightGetResult {

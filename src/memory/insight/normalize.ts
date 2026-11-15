@@ -60,6 +60,19 @@ function timestampValue(value: unknown): string | null {
   return null;
 }
 
+/** 可解析的 ISO 时间戳；不可解析的原样字符串不参与排序与分组。 */
+function parseableTimestamp(value: string | null): string | null {
+  return value !== null && Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+/**
+ * 事件时间：优先可解析的 occurred_start，否则回退可解析的 mentioned_at。
+ * 与 timeline 的分组回退保持一致；两者都不可解析时保留原值，最终归入 undated。
+ */
+function eventTimestamp(occurred: string | null, mentioned: string | null): string | null {
+  return parseableTimestamp(occurred) ?? parseableTimestamp(mentioned) ?? occurred ?? mentioned;
+}
+
 export function truncateChars(text: string, maxChars: number): string {
   if (maxChars <= 0) return '';
   if (text.length <= maxChars) return text;
@@ -305,7 +318,7 @@ export function jsonBytes(value: unknown): number {
  */
 export function fitGraphBytes<T extends { nodes: InsightGraphNode[]; edges: InsightGraphEdge[] }>(
   graph: T,
-  maxBytes: number = LIMITS.memoryPanelGraphBytes,
+  maxBytes: number = LIMITS.memoryPanelGraphCoreBytes,
 ): boolean {
   let truncated = false;
   while (jsonBytes(graph) > maxBytes) {
@@ -389,6 +402,8 @@ export function normalizeTimelineItem(entry: unknown): InsightTimelineItem | nul
   const id = stringValue(entry.id);
   if (!id) return null;
   const stateValue = stringValue(entry.state);
+  const occurredStart = timestampValue(entry.occurred_start ?? entry.occurred_at);
+  const mentionedAt = timestampValue(entry.mentioned_at ?? entry.date);
   return {
     id,
     text: truncateChars(stringValue(entry.text) ?? '', LIMITS.memoryPanelTimelineTextChars),
@@ -397,8 +412,8 @@ export function normalizeTimelineItem(entry: unknown): InsightTimelineItem | nul
       stateValue === 'invalidated' || stateValue === 'invalid' || entry.invalidated_at != null
         ? 'invalidated'
         : 'valid',
-    occurred_at: timestampValue(entry.occurred_start ?? entry.occurred_at),
-    mentioned_at: timestampValue(entry.mentioned_at ?? entry.date),
+    occurred_at: eventTimestamp(occurredStart, mentionedAt),
+    mentioned_at: mentionedAt,
     entities: entityArray(
       entry.entities,
       LIMITS.memoryPanelTimelineEntitiesMax,
@@ -427,7 +442,7 @@ export function normalizeGraphRow(entry: unknown, textChars: number): InsightGra
     id,
     text: truncateChars(stringValue(entry.text) ?? '', textChars),
     fact_type: factType(entry.fact_type ?? entry.type),
-    occurred_at: occurredStart ?? mentionedAt,
+    occurred_at: eventTimestamp(occurredStart, mentionedAt),
     mentioned_at: mentionedAt,
     occurred_start: occurredStart,
     occurred_end: timestampValue(entry.occurred_end),
