@@ -496,6 +496,37 @@ export async function isActiveMember(db: D1Like, roomId: string, actorId: string
   return row !== null;
 }
 
+/**
+ * 两人是否共享至少一个未解散房间且双方都是 active 成员。
+ *
+ * 只读记忆面板的授权依据；已解散房间与 left/removed 成员都不算。
+ */
+export async function sharesActiveRoom(
+  db: D1Like,
+  actorA: string,
+  actorB: string,
+): Promise<boolean> {
+  if (actorA === actorB) return false;
+  const left = alias(schema.roomMembers, 'left_member');
+  const right = alias(schema.roomMembers, 'right_member');
+  const query = orm(db)
+    .select({ room_id: left.room_id })
+    .from(left)
+    .innerJoin(right, eq(left.room_id, right.room_id))
+    .innerJoin(schema.rooms, eq(schema.rooms.room_id, left.room_id))
+    .where(
+      and(
+        eq(left.actor_id, actorA),
+        eq(left.status, 'active'),
+        eq(right.actor_id, actorB),
+        eq(right.status, 'active'),
+        isNull(schema.rooms.dissolved_at),
+      ),
+    )
+    .limit(1);
+  return (await toD1(db, query).first<{ room_id: string }>()) !== null;
+}
+
 /** 会话列表的只读对端：当前页 direct 房间的另一位 active 成员。 */
 export interface RoomPeerRow {
   room_id: string;

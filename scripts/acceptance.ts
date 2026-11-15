@@ -1346,10 +1346,18 @@ async function main(): Promise<void> {
 
     await runUnifiedStreamAcceptance();
     const toolList = await rawRpc('tools/list');
-    const hasDrive =
-      (toolList.body.result as { tools?: { name?: string }[] } | undefined)?.tools?.some(
-        (tool) => tool.name === 'drive_file_info',
-      ) ?? false;
+    const tools = (toolList.body.result as { tools?: { name?: string }[] } | undefined)?.tools ?? [];
+    const toolNames = new Set(tools.map((tool) => tool.name));
+    for (const name of [
+      'network_agent_memory_overview',
+      'network_agent_memory_graph',
+      'network_agent_memory_list',
+      'network_agent_memory_get',
+      'network_agent_memory_entities',
+    ]) {
+      check(`只读记忆工具 ${name} 已注册`, toolNames.has(name));
+    }
+    const hasDrive = toolNames.has('drive_file_info');
     if (hasDrive) {
       await runRoomFileAcceptance();
       await runPrivateFileAcceptance();

@@ -3,6 +3,7 @@ import type { FileService } from '@peri-code/mcpp/files';
 import type { MemoryRuntime } from './memory/runtime';
 import type { MemoryHostPolicy } from './memory/host-bridge';
 import type { MemoryEngineInfo } from './memory/capability-catalog';
+import type { MemoryInsightService } from './memory/insight/service';
 import type { NotificationHub } from './realtime/hub';
 import type { AgentPresenceTimeline } from './realtime/presence-timeline';
 
@@ -59,4 +60,9 @@ export interface Env {
    * 缺省 tool_only：只能显式查询与读取已准备结果。
    */
   MEMORY_HOST?: MemoryHostPolicy;
+  /**
+   * 只读 Agent 记忆 insight 服务；始终构造，Hindsight reader 仅在
+   * MEMORY_ADAPTER=hindsight 且配置完整时存在。缺失时工具返回降级原因。
+   */
+  MEMORY_INSIGHT?: MemoryInsightService;
 }

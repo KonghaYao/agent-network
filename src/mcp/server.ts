@@ -14,6 +14,7 @@ import { createMessageFileArchiver, registerRoomFileTools } from './room-files';
 import { registerArtifactTools } from './artifacts';
 import { registerSkillResource } from './skill';
 import { registerMemoryTools } from './memory';
+import { registerMemoryInsightTools } from './memory-insight';
 import { SERVER_IDENTITY } from './identity';
 import {
   mcpUseRegistrationServer,
@@ -40,6 +41,8 @@ function registerToolSet(
   // Memory 工具始终注册；MEMORY_ENABLED=0 时工具返回 MEMORY_DISABLED，
   // 能力目录同时声明 memory.enabled=false，避免隐藏工具被误认为可调用。
   registerMemoryTools(server, env, principal);
+  // 只读 Agent 记忆 insight 工具始终注册；未配置 Hindsight 时返回降级原因。
+  registerMemoryInsightTools(server, env, principal);
   registerResources(server, env, principal);
   registerSkillResource(server);
   if (env.FILES && drive) {

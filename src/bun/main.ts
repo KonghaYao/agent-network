@@ -13,6 +13,8 @@ import {
   HindsightMemoryAdapter,
   loadHindsightConfigFromEnv,
 } from '../memory/adapters/hindsight';
+import { HindsightInsightReader } from '../memory/insight/hindsight-read';
+import { MemoryInsightService } from '../memory/insight/service';
 import { LocalMemoryAdapter } from '../memory/adapters/local';
 import type { MemoryAdapter } from '../memory/adapters/types';
 import { StubMemoryAdapter } from '../memory/adapters/stub';
@@ -182,6 +184,7 @@ env.MEMORY_HOST = memoryHostPolicyFromEnv(process.env.MEMORY_HOST_TRUST);
 // 不伪报已记住；凭据与 bank 路由只在服务端，开始日志不输出。
 let memoryRuntime: MemoryRuntime | undefined;
 let memoryIntegration: MemoryIntegration | undefined;
+let insightReader: HindsightInsightReader | null = null;
 if (process.env.MEMORY_ENABLED === '1') {
   const adapterKind = (process.env.MEMORY_ADAPTER ?? 'stub').trim().toLowerCase();
   if (!['stub', 'hindsight', 'local', 'local-sqlite'].includes(adapterKind)) {
@@ -199,6 +202,12 @@ if (process.env.MEMORY_ENABLED === '1') {
       const loaded = loadHindsightConfigFromEnv(process.env);
       if (loaded.ok) {
         adapter = new HindsightMemoryAdapter(loaded.config);
+        // 只读面板固定 12s 超时与 1 次重试；与写路径的配置解耦。
+        insightReader = new HindsightInsightReader({
+          ...loaded.config,
+          requestTimeoutMs: LIMITS.memoryPanelTimeoutMs,
+          maxRetries: 1,
+        });
         engineStatus = 'ready';
         console.log('memory adapter enabled: hindsight');
       } else {
@@ -217,6 +226,7 @@ if (process.env.MEMORY_ENABLED === '1') {
     // 适配器初始化失败只关闭 Memory；聊天、群聊、任务与文件继续工作。
     console.error('agent-network memory adapter failed to initialize', error);
     adapter = null;
+    insightReader = null;
   }
   if (adapter) {
     env.MEMORY_ENGINE = memoryEngineInfo(adapter, engineStatus);
@@ -236,6 +246,14 @@ if (process.env.MEMORY_ENABLED === '1') {
     }
   }
 }
+
+// 只读 insight 始终构造：关闭 Memory 时仍先做授权再返回 panel_disabled，
+// 不因降级状态绕过“谁能看”的判断。
+env.MEMORY_INSIGHT = new MemoryInsightService({
+  db: d1,
+  reader: insightReader,
+  memoryEnabled: memoryRuntime !== undefined,
+});
 
 // MF10：作业 tick、unknown 对账由 MemoryIntegration 统一调度；tick 内部保证
 // 单轮不重入。
@@ -387,6 +405,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     clearInterval(presenceSweep);
     clearInterval(reminderSweep);
     await memoryIntegration?.stop();
+    insightReader?.cancelAll();
     // 先给活动 SSE 发 graceful close，再停止接收新请求。
     if (env.NOTIFICATION_HUB.closeAllStreams() > 0) {
       await new Promise((resolve) => setTimeout(resolve, 50));

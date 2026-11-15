@@ -522,6 +522,46 @@ export const LIMITS = {
   memoryWebRecallOutputBytes: 64 * 1024,
   /** Web 人工记忆列表上限；curated 当前不分页。 */
   memoryWebCuratedLimit: 50,
+  /** 只读 Agent 记忆面板的单次上游超时（毫秒）；比 Web 请求预算短。 */
+  memoryPanelTimeoutMs: 12_000,
+  /** 只读面板归一化 DTO 缓存（毫秒）。 */
+  memoryPanelCacheTtlMs: 30_000,
+  /** 只读面板缓存最大条目数。 */
+  memoryPanelCacheEntries: 64,
+  /** 记忆图默认/最大节点数；服务端硬裁剪，超出即报 truncated。 */
+  memoryPanelGraphNodesDefault: 120,
+  memoryPanelGraphNodesMax: 120,
+  /** 客户端请求的节点上限；服务端仍按真实输出上限夹取。 */
+  memoryPanelGraphNodesRequestMax: 240,
+  /** 记忆图最大边数。 */
+  memoryPanelGraphEdgesMax: 600,
+  /** 实体共现图最大边数。 */
+  memoryPanelEntityGraphEdgesMax: 200,
+  /** 客户端请求的实体图边上限；服务端仍按真实输出上限夹取。 */
+  memoryPanelEntityGraphEdgesRequestMax: 400,
+  /** 实体共现图最大节点数。 */
+  memoryPanelEntityGraphNodesMax: 200,
+  /** 记忆事实列表默认/最大页大小。 */
+  memoryPanelFactsPageDefault: 20,
+  memoryPanelFactsPageMax: 50,
+  /** 实体列表默认/最大页大小。 */
+  memoryPanelEntitiesPageDefault: 50,
+  memoryPanelEntitiesPageMax: 100,
+  /** 搜索词字符上限。 */
+  memoryPanelSearchMax: 120,
+  /** 记忆图节点文本 / label 字符上限。 */
+  memoryPanelGraphTextChars: 600,
+  memoryPanelGraphLabelChars: 80,
+  /** 事实列表正文截断字符数。 */
+  memoryPanelFactsTextChars: 1_200,
+  /** 记忆详情正文 UTF-8 字节上限。 */
+  memoryPanelDetailTextBytes: 32 * 1024,
+  /** 记忆图归一化结果 JSON 字节预算。 */
+  memoryPanelGraphBytes: 200 * 1024,
+  /** 时间过滤允许的最大跨度（天）。 */
+  memoryPanelDateSpanDays: 366,
+  /** 列表 offset 上限，避免深分页放大上游压力。 */
+  memoryPanelOffsetMax: 5_000,
 } as const;
 
 export function clampPage(value: number | undefined, fallback: number, max: number): number {
