@@ -30,8 +30,10 @@ const MemoryDetailModal = lazy(() =>
     default: module.MemoryDetailModal,
   })),
 );
-const MemoryEntities = lazy(() =>
-  import('./MemoryEntities').then((module) => ({ default: module.MemoryEntities })),
+const EntitiesView = lazy(() =>
+  import('./fenix/components/EntitiesView').then((module) => ({
+    default: module.EntitiesView,
+  })),
 );
 
 type MemoryPerspective = 'world' | 'experience' | 'observation' | 'entities';
@@ -85,8 +87,9 @@ function isFactPerspective(
  * 视角栏：世界 / 经历 / 观察 / 实体；事实视角内由 Fenix `DataView` 提供
  * 星座图 / 表格 / 时间线三种视图模式。每个用户动作只发一次
  * `network_agent_memory_graph { include_rows: true, timezone }`；视图切换、
- * 表格翻页、时间线缩放都不再取数。实体视角本阶段沿用既有 `MemoryEntities`
- * （服务端分页），下一阶段再替换为 Fenix `EntitiesView`。
+ * 表格翻页、时间线缩放都不再取数。实体视角使用 Fenix `EntitiesView`：
+ * 列表服务端分页 50/页、翻页只发 1 次并替换当前页；关系图与详情各按一次
+ * 用户动作取数；不提供客户端名称搜索（服务端实体工具没有 `q`）。
  */
 export function AgentMemoryDialog({
   target,
@@ -207,6 +210,8 @@ export function AgentMemoryDialog({
                 <span>{t('perspectives.description')}</span>
               </div>
 
+              {/* 实体视角不渲染搜索框：`network_agent_memory_entities` 没有 `q` 参数，
+                  不在已加载页内做客户端名称过滤冒充搜索。 */}
               {isFactPerspective(perspective) ? (
                 <form className="agent-memory-search" onSubmit={submitSearch} role="search">
                   <Search aria-hidden="true" />
@@ -269,11 +274,7 @@ export function AgentMemoryDialog({
                 />
               ) : perspective === 'entities' ? (
                 <Suspense fallback={<Spinner className="flex py-16" label="正在加载实体…" />}>
-                  <MemoryEntities
-                    actorId={target.actor_id}
-                    token={token}
-                    onSelectMemory={(id) => setSelectedMemoryId(id)}
-                  />
+                  <EntitiesView />
                 </Suspense>
               ) : (
                 <Suspense fallback={<Spinner className="flex py-16" label="正在加载记忆…" />}>

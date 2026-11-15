@@ -176,9 +176,13 @@ if (hasProductionManifest) {
   const dataViewKey = productionKeys.find(
     (key) => key.includes('features/memory/fenix/components/DataView') && key.endsWith('.tsx'),
   );
+  const entitiesViewKey = productionKeys.find(
+    (key) => key.includes('features/memory/fenix/components/EntitiesView') && key.endsWith('.tsx'),
+  );
   const entry = entryKey ? productionManifest[entryKey] : undefined;
   const dialog = dialogKey ? productionManifest[dialogKey] : undefined;
   const dataView = dataViewKey ? productionManifest[dataViewKey] : undefined;
+  const entitiesView = entitiesViewKey ? productionManifest[entitiesViewKey] : undefined;
 
   check(Boolean(entry), 'production entry resolves in the manifest');
   check(
@@ -188,6 +192,19 @@ if (hasProductionManifest) {
   check(
     Boolean(dataView && dialog?.dynamicImports?.some((key) => key.includes('features/memory/fenix/components/DataView'))),
     'Fenix DataView stays behind a dynamic import from AgentMemoryDialog',
+  );
+  check(
+    Boolean(
+      entitiesView &&
+        dialog?.dynamicImports?.some((key) =>
+          key.includes('features/memory/fenix/components/EntitiesView'),
+        ),
+    ),
+    'Fenix EntitiesView stays behind a dynamic import from AgentMemoryDialog',
+  );
+  check(
+    !productionKeys.some((key) => key.includes('features/memory/MemoryEntities')),
+    'legacy MemoryEntities is no longer referenced by the production bundle',
   );
 
   const entryCode = entry ? read(join(root, 'dist/web', entry.file)) : '';
@@ -202,7 +219,7 @@ if (hasProductionManifest) {
     .map((key) => productionManifest[key])
     .filter((chunk): chunk is NonNullable<typeof chunk> => Boolean(chunk?.file))
     .filter((chunk) =>
-      /(?:AgentMemoryDialog|DataView|MemoryDetailModal|MemoryEntities)-/.test(chunk.file),
+      /(?:AgentMemoryDialog|DataView|MemoryDetailModal|EntitiesView)-/.test(chunk.file),
     )
     .reduce((total, chunk) => total + sizeOf(join(root, 'dist/web', chunk.file)), 0);
   check(memoryJs > 0 && memoryJs <= 300 * 1024, `memory lazy JS total ${memoryJs} B <= 300 KiB`);

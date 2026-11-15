@@ -15,10 +15,11 @@ import {
 } from './fixtures/memory-fenix';
 
 /**
- * Agent 记忆弹窗的 Fenix 视角 IA（阶段 4）。
+ * Agent 记忆弹窗的 Fenix 视角 IA（阶段 4 事实视角、阶段 5 实体视角）。
  *
  * 断言口径：每个用户动作最多 1 次 `network_agent_memory_graph`；
- * overview/list/timeline 调用 0 次；视图切换、表格翻页、时间线缩放不发请求。
+ * 实体列表首屏/翻页各 1 次 `network_agent_memory_entities`；overview/list/timeline
+ * 调用 0 次；视图切换、表格翻页、时间线缩放不发请求。
  */
 
 async function openMemory(page: Page, directRoom: string): Promise<void> {
@@ -218,7 +219,9 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
     expect(callsOf(calls, 'network_agent_memory_graph')[2]!.args.type).toBe('observation');
 
     await page.locator('#memory-perspective-entities').click();
-    await expect(page.locator('#memory-entities-list')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-slot="table"] tbody tr')).toHaveCount(3, {
+      timeout: 15_000,
+    });
     const entityCalls = callsOf(calls, 'network_agent_memory_entities');
     expect(entityCalls).toHaveLength(1);
     expect(entityCalls[0]!.args.view).toBe('list');
@@ -250,7 +253,9 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
       'aria-pressed',
       'true',
     );
-    await expect(page.locator('#memory-entities-list')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-slot="table"] tbody tr')).toHaveCount(3, {
+      timeout: 15_000,
+    });
 
     await page.keyboard.press('Home');
     await expect(page.locator('#memory-perspective-world')).toBeFocused();
@@ -388,13 +393,15 @@ test.describe('Agent 记忆：Fenix 视角 IA', () => {
       performance.getEntriesByType('resource').map((entry) => entry.name),
     );
     expect(assets.some((url) => /DataView-[^/]+\.js/u.test(url))).toBe(true);
-    expect(assets.some((url) => /MemoryEntities-[^/]+\.js/u.test(url))).toBe(false);
+    expect(assets.some((url) => /EntitiesView-[^/]+\.js/u.test(url))).toBe(false);
 
     await page.locator('#memory-perspective-entities').click();
-    await expect(page.locator('#memory-entities-list')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-slot="table"] tbody tr')).toHaveCount(3, {
+      timeout: 15_000,
+    });
     const after = await page.evaluate(() =>
       performance.getEntriesByType('resource').map((entry) => entry.name),
     );
-    expect(after.some((url) => /MemoryEntities-[^/]+\.js/u.test(url))).toBe(true);
+    expect(after.some((url) => /EntitiesView-[^/]+\.js/u.test(url))).toBe(true);
   });
 });

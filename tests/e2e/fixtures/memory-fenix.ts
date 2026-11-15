@@ -150,6 +150,14 @@ function graphTimeline(rows: FenixRow[], args: Record<string, unknown>) {
   };
 }
 
+export interface FenixEntityFixture {
+  id: string;
+  name: string;
+  mention_count: number;
+  first_seen: string | null;
+  last_seen: string | null;
+}
+
 export interface InstallMemoryFenixStubOptions {
   actorId: string;
   actorName: string;
@@ -161,6 +169,34 @@ export interface InstallMemoryFenixStubOptions {
   rows?: FenixRow[];
   /** 让 `table_rows[].entities` 以逗号字符串返回，覆盖 tooltip 的字符串分支。 */
   graphEntitiesAsString?: boolean;
+  /** 实体列表 fixture；默认三名实体，用于详情/关系图。 */
+  entityItems?: FenixEntityFixture[];
+  /** 生成 N 个实体用于服务端分页断言（会覆盖 `entityItems`）。 */
+  entityCount?: number;
+  /** 实体列表/关系图/详情返回通用 MCP 错误。 */
+  entitiesFailure?: boolean;
+  /** 实体工具返回 `available=false`（不可用态）。 */
+  entitiesUnavailable?: 'panel_disabled' | 'bank_missing';
+}
+
+function defaultEntityItems(): FenixEntityFixture[] {
+  return ['Alpha Node', 'Beta Node', 'Gamma Node'].map((name, index) => ({
+    id: `entity-${index + 1}`,
+    name,
+    mention_count: 3 - index,
+    first_seen: '2026-07-01T00:00:00.000Z',
+    last_seen: '2026-10-01T00:00:00.000Z',
+  }));
+}
+
+function generatedEntityItems(count: number): FenixEntityFixture[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `entity-${index + 1}`,
+    name: `Entity ${index + 1}`,
+    mention_count: count - index,
+    first_seen: '2026-07-01T00:00:00.000Z',
+    last_seen: '2026-10-01T00:00:00.000Z',
+  }));
 }
 
 export async function installMemoryFenixStub(
@@ -182,13 +218,9 @@ export async function installMemoryFenixStub(
     actor,
     fetched_at: 1_760_000_000_000,
   };
-  const entityItems = ['Alpha Node', 'Beta Node', 'Gamma Node'].map((name, index) => ({
-    id: `entity-${index + 1}`,
-    name,
-    mention_count: 3 - index,
-    first_seen: '2026-07-01T00:00:00.000Z',
-    last_seen: '2026-10-01T00:00:00.000Z',
-  }));
+  const entityItems = options.entityCount
+    ? generatedEntityItems(options.entityCount)
+    : (options.entityItems ?? defaultEntityItems());
 
   await page.route('**/mcp', async (route) => {
     const request = route.request();
@@ -226,6 +258,29 @@ export async function installMemoryFenixStub(
               {
                 type: 'text',
                 text: JSON.stringify({ message: '上游记忆服务超时', code: 'UPSTREAM_TIMEOUT' }),
+              },
+            ],
+          },
+        }),
+      });
+      return;
+    }
+
+    const failEntities =
+      name === 'network_agent_memory_entities' && options.entitiesFailure;
+    if (failEntities) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: body?.id ?? null,
+          result: {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ message: '实体服务暂时不可用', code: 'UPSTREAM_UNAVAILABLE' }),
               },
             ],
           },
@@ -315,53 +370,93 @@ export async function installMemoryFenixStub(
         },
       };
     } else if (name === 'network_agent_memory_entities') {
+      const view = typeof args.view === 'string' ? args.view : 'list';
       const offset = Number(args.offset ?? 0);
       const limit = Number(args.limit ?? 50);
       const pageItems = entityItems.slice(offset, offset + limit);
-      structuredContent = {
-        ...base,
-        view: args.view ?? 'list',
-        items: args.view === 'graph' || args.view === 'detail' ? [] : pageItems,
-        total: entityItems.length,
-        limit,
-        offset,
-        has_more: offset + pageItems.length < entityItems.length,
-        next_offset:
-          offset + pageItems.length < entityItems.length ? offset + pageItems.length : null,
-        entity: {
-          id: 'entity-1',
-          name: 'Alpha Node',
-          mention_count: 3,
-          first_seen: '2026-07-01T00:00:00.000Z',
-          last_seen: '2026-10-01T00:00:00.000Z',
-          observations: [
-            { id: 'obs-1', text: 'Observation for Alpha Node', proof_count: 2 },
-          ],
-          memories: [
-            {
-              id: 'mem-1',
-              text_preview: `preview Authorization: Bearer ${SECRET_BEARER}`,
-              fact_type: 'world',
-              mentioned_at: '2026-10-01T09:30:00.000Z',
-            },
-          ],
-        },
-        graph: {
-          nodes: entityItems.map((item) => ({ id: item.id, name: item.name })),
-          edges: [
-            { id: 'edge-1', source: 'entity-1', target: 'entity-2', type: 'cooccurrence', weight: 4 },
-            { id: 'edge-2', source: 'entity-2', target: 'entity-3', type: 'cooccurrence', weight: 2 },
-          ],
-          total_entities: 3,
-          total_edges: 2,
-          raw_node_count: 3,
-          raw_edge_count: 2,
-          limit: 200,
+      const unavailableReason = options.entitiesUnavailable ?? null;
+      if (unavailableReason) {
+        structuredContent = {
+          ...base,
+          available: false,
+          reason: unavailableReason,
+          view,
+          items: [],
+          total: null,
+          limit,
+          offset,
+          has_more: false,
+          next_offset: null,
+          entity: null,
+          graph: null,
           truncated: false,
-        },
-        truncated: false,
-        partial: false,
-      };
+          partial: false,
+        };
+      } else {
+        const selected =
+          entityItems.find((item) => item.id === String(args.entity_id ?? '')) ?? entityItems[0];
+        structuredContent = {
+          ...base,
+          view,
+          items: view === 'graph' || view === 'detail' ? [] : pageItems,
+          total: entityItems.length,
+          limit,
+          offset,
+          has_more: offset + pageItems.length < entityItems.length,
+          next_offset:
+            offset + pageItems.length < entityItems.length ? offset + pageItems.length : null,
+          entity: selected
+            ? {
+                ...selected,
+                observations: [
+                  { id: 'obs-1', text: `Observation for ${selected.name}`, proof_count: 2 },
+                ],
+                memories: [
+                  {
+                    id: 'mem-1',
+                    text_preview: `preview Authorization: Bearer ${SECRET_BEARER}`,
+                    fact_type: 'world',
+                    mentioned_at: '2026-10-01T09:30:00.000Z',
+                  },
+                ],
+              }
+            : null,
+          graph: {
+            nodes: entityItems.map((item) => ({
+              id: item.id,
+              label: item.name,
+              mention_count: item.mention_count,
+              date: item.last_seen,
+            })),
+            edges: [
+              {
+                id: 'edge-1',
+                source: 'entity-1',
+                target: 'entity-2',
+                type: 'cooccurrence',
+                weight: 4,
+                last_cooccurred: '2026-10-01T00:00:00.000Z',
+              },
+              {
+                id: 'edge-2',
+                source: 'entity-2',
+                target: 'entity-3',
+                type: 'cooccurrence',
+                weight: 2,
+                last_cooccurred: '2026-09-01T00:00:00.000Z',
+              },
+            ],
+            total_entities: entityItems.length,
+            total_edges: 2,
+            raw_node_count: entityItems.length,
+            raw_edge_count: 2,
+            limit: 200,
+            truncated: false,
+          },
+          truncated: false,
+          partial: false,
+        };
+      }
     } else {
       // 阶段 4 后 Web 面板不得再调用 overview/list/timeline；记录后返回最小响应，
       // 让断言给出「调用次数」而不是被网络错误掩盖。

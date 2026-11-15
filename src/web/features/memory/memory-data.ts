@@ -167,6 +167,8 @@ export interface MemoryGraphEdge {
   type: string;
   weight: number;
   entity?: string | null;
+  /** 实体图专用：上游缺失时省略，存在但为 null 时如实返回 null。 */
+  last_cooccurred?: string | null;
 }
 
 export interface MemoryGraphRow {
@@ -275,6 +277,8 @@ export interface MemoryEntitiesQuery {
   entity_id?: string;
   limit?: number;
   offset?: number;
+  /** 实体共现图的最小共现次数；仅在 `view='graph'` 时生效。 */
+  min_count?: number;
 }
 
 export type MemoryFailureKind =
@@ -458,6 +462,7 @@ export async function fetchMemoryEntities(
       ...(query.entity_id ? { entity_id: query.entity_id } : {}),
       ...(query.limit !== undefined ? { limit: query.limit } : {}),
       ...(query.offset !== undefined ? { offset: query.offset } : {}),
+      ...(query.min_count !== undefined ? { min_count: query.min_count } : {}),
     },
     { token, signal },
   );

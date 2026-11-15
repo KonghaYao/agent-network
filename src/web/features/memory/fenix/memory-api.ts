@@ -14,12 +14,16 @@ import {
   availabilityKind,
   availabilityText,
   fetchMemoryDetail,
+  fetchMemoryEntities,
   fetchMemoryGraph,
   memoryFailureOf,
+  type MemoryEntitiesResult,
+  type MemoryEntityItem,
   type MemoryGraphResult,
 } from '../memory-data';
 import { FenixApiError, type FenixMemoryApi, type GraphQuery } from './api';
 import type {
+  EntityGraphResponse,
   EntityItem,
   GraphApiData,
   MemoryDetail as FenixMemoryDetail,
@@ -111,6 +115,50 @@ function toFenixDetail(memory: {
   };
 }
 
+/**
+ * 本仓库实体列表/详情字段是 `name`，上游是 `canonical_name`；只做字段改名，
+ * 不补造上游没有的标签或关联记忆正文。
+ */
+function toFenixEntity(entity: MemoryEntityItem): EntityItem {
+  return {
+    id: entity.id,
+    canonical_name: entity.name,
+    mention_count: entity.mention_count,
+    first_seen: entity.first_seen,
+    last_seen: entity.last_seen,
+  };
+}
+
+/** `bank_missing` 表示尚未形成可查看的记忆，按空态处理；其余不可用原因交给失败块。 */
+function assertEntitiesAvailable(result: MemoryEntitiesResult): void {
+  if (result.available) return;
+  if (availabilityKind(result.reason) === 'empty') return;
+  throw unavailable(result.reason);
+}
+
+function toEntityGraph(result: MemoryEntitiesResult): EntityGraphResponse {
+  const graph = result.graph;
+  if (!graph) throw new FenixApiError('实体图谱暂不可用。', 'REQUEST_FAILED');
+  return {
+    nodes: graph.nodes.map((node) => ({
+      data: {
+        id: node.id,
+        label: node.label,
+        ...(node.mention_count !== undefined ? { mention_count: node.mention_count } : {}),
+        ...(node.date ? { date: node.date } : {}),
+      },
+    })),
+    edges: graph.edges.map((edge) => ({
+      data: {
+        source: edge.source,
+        target: edge.target,
+        weight: edge.weight,
+        lastCooccurred: edge.last_cooccurred ?? null,
+      },
+    })),
+  };
+}
+
 export interface CreateMemoryFenixApiOptions {
   actorId: string;
   token: string;
@@ -162,16 +210,77 @@ export function createMemoryFenixApi({ actorId, token }: CreateMemoryFenixApiOpt
         translateError(error);
       }
     },
-    // 实体视角本阶段沿用既有 MemoryEntities；Fenix EntitiesView 的取数
-    // 适配留到下一阶段（不提前伪造数据）。
-    listEntities: async () => {
-      throw new FenixApiError('Fenix entities adapter is not enabled in this phase', 'FENIX_NOT_WIRED');
+    // 实体列表严格服务端分页：`EntitiesView` 每次页码变化只发一次 list 请求，
+    // 返回当前页并替换上一页；不做客户端多页累加。
+    listEntities: async (params?: { limit?: number; offset?: number }) => {
+      try {
+        const result = await fetchMemoryEntities(
+          actorId,
+          token,
+          {
+            view: 'list',
+            limit: params?.limit ?? LIMITS.memoryPanelEntitiesPageDefault,
+            offset: params?.offset ?? 0,
+          },
+          NO_ABORT,
+        );
+        assertEntitiesAvailable(result);
+        if (!result.available) {
+          // `bank_missing`：没有可浏览的记忆，按空列表渲染。
+          return { items: [], total: 0 };
+        }
+        return {
+          items: result.items.map(toFenixEntity),
+          // 上游可能不返回 total；用服务端的 `has_more` 保证至少还能翻到下一页，
+          // 不把推断值当作精确总数（每次请求仍以服务端返回的页为准）。
+          total:
+            result.total ??
+            result.offset + result.items.length + (result.has_more ? 1 : 0),
+        };
+      } catch (error) {
+        translateError(error);
+      }
     },
-    getEntity: async (): Promise<EntityItem> => {
-      throw new FenixApiError('Fenix entities adapter is not enabled in this phase', 'FENIX_NOT_WIRED');
+    getEntity: async (id: string): Promise<EntityItem> => {
+      try {
+        const result = await fetchMemoryEntities(
+          actorId,
+          token,
+          { view: 'detail', entity_id: id },
+          NO_ABORT,
+        );
+        assertEntitiesAvailable(result);
+        if (!result.available || !result.entity) {
+          throw new FenixApiError('实体不存在或已不可用。', 'NOT_FOUND');
+        }
+        return toFenixEntity(result.entity);
+      } catch (error) {
+        translateError(error);
+      }
     },
-    getEntityGraph: async () => {
-      throw new FenixApiError('Fenix entities adapter is not enabled in this phase', 'FENIX_NOT_WIRED');
+    // 关系图一次取数：`min_count` 由视图固定为 1，边上限使用服务端上限，
+    // 避免把上游默认的 2000 原样发给 MCP 工具。
+    getEntityGraph: async (params?: { limit?: number; min_count?: number }) => {
+      try {
+        const result = await fetchMemoryEntities(
+          actorId,
+          token,
+          {
+            view: 'graph',
+            limit: Math.min(
+              params?.limit ?? LIMITS.memoryPanelEntityGraphEdgesMax,
+              LIMITS.memoryPanelEntityGraphEdgesMax,
+            ),
+            min_count: params?.min_count ?? 1,
+          },
+          NO_ABORT,
+        );
+        assertEntitiesAvailable(result);
+        if (!result.available) return { nodes: [], edges: [] };
+        return toEntityGraph(result);
+      } catch (error) {
+        translateError(error);
+      }
     },
   };
 }

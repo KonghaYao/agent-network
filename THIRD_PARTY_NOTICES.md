@@ -39,14 +39,14 @@ Modifications for this repository:
   populated. Missing fields such as `context`, `occurred`, `proof` and `tags`
   are intentionally not fabricated.
 
-## Fenix memory panel vendor (stage 2 scaffold, stage 4 wired)
+## Fenix memory panel vendor (stage 2 scaffold, stages 4–5 wired)
 
 - Source: https://github.com/HuangPuStar/FenixAgent
 - Commit: `72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9`
 - License: Apache License 2.0 (see `LICENSES/Apache-2.0.txt`); the upstream repository has no `NOTICE` file, and no upstream notice text is fabricated here.
 - Upstream root for memory UI: `packages/resources/memory/web/pages/hindsight/`
 - Upstream root for UI primitives: `packages/ui-components/web/`
-- These files live under `src/web/features/memory/fenix/`. Since stage 4 they are loaded by the lazy `AgentMemoryDialog`/`DataView` chunks; the SPA entry still does not inline them.
+- These files live under `src/web/features/memory/fenix/`. Since stage 4 they are loaded by the lazy `AgentMemoryDialog`/`DataView` chunks; stage 5 adds the lazy `EntitiesView` chunk. The SPA entry still does not inline them.
 
 | Vendored file | Upstream path | Modifications |
 | --- | --- | --- |
@@ -64,7 +64,7 @@ Modifications for this repository:
 | `components/data-view-table.tsx` | `pages/hindsight/components/data-view-table.tsx` | Platform imports redirected; text/entities/tags pass through `maskSecrets`; occurred column falls back to `occurred_at`; chip text colors meet WCAG AA; the scroll region is keyboard focusable. |
 | `components/data-view-timeline.tsx` | `pages/hindsight/components/data-view-timeline.tsx` | Platform imports redirected; text/entities pass through `maskSecrets`; grouping now consumes the server `timeline.groups` (year/month/week/day) instead of regrouping locally. |
 | `components/data-view-control-panel.tsx` | `pages/hindsight/components/data-view-control-panel.tsx` | Platform imports redirected; the recency select has an `aria-label`. |
-| `components/EntitiesView.tsx` | `pages/hindsight/components/EntitiesView.tsx` | Platform imports redirected; entity names pass through `maskSecrets`. |
+| `components/EntitiesView.tsx` | `pages/hindsight/components/EntitiesView.tsx` | Platform imports redirected; entity names pass through `maskSecrets`. Stage 5 changes: default view is the server-paginated list so the first action sends exactly one `entities` call (the graph loads only after the user switches to it); the detail overlay is capped at the viewport width (`w-full max-w-105`); the detail close button has an accessible name; Escape closes the detail without closing the parent dialog and focus returns to the triggering list button; the list name is a focusable button so keyboard users can open details, with propagation stopped to avoid a duplicate detail request. |
 | `components/graph-model.ts` | `pages/hindsight/components/graph-model.ts` | Verbatim. |
 | `components/Graph2d.tsx` | `pages/hindsight/components/Graph2d.tsx` | Local placeholder, not a port: upstream requires cytoscape/cytoscape-fcose, which are deliberately not added in this phase. |
 | `components/HindsightFailureNotice.tsx` | `pages/hindsight/components/HindsightFailureNotice.tsx` | Platform imports redirected; added the `unavailable` branch (neutral tone, no retry). |

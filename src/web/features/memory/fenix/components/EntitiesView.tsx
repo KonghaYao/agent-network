@@ -2,6 +2,9 @@
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/components/EntitiesView.tsx
  * Modified for Agent Network: 平台导入替换；实体列表/关系图/详情结构与交互不变。
+ * 阶段 5 调整：默认视图改为列表（首屏只发一次 list，关系图按用户动作取数）；
+ * 详情浮层宽度限制在视口内、补齐关闭按钮名称、Escape 关闭与焦点归还；
+ * 列表名称改为可聚焦按钮（键盘可打开详情），并阻止冒泡避免重复请求。
  */
 
 import { EmptyState } from "../ui/empty-state";
@@ -11,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { NS } from "../i18n";
 import { useRequest } from "../hooks/use-request";
 import { List, ScatterChart, X } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "../i18n";
 import { hindsightApi } from "../api";
 import { useElementHeight } from "../element-height";
@@ -31,9 +34,12 @@ const ITEMS_PER_PAGE = 50;
 export function EntitiesView() {
   const { t } = useTranslation(NS.HINDSIGHT);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>("relations");
+  // 首屏只取列表：关系图需要用户显式切到「关系图」，保证一个动作只发一次请求。
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
   const graphPaneRef = useRef<HTMLDivElement>(null);
   const graphHeight = useElementHeight(graphPaneRef);
+  const detailCloseRef = useRef<HTMLButtonElement>(null);
+  const detailTriggerRef = useRef<HTMLElement | null>(null);
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -67,7 +73,10 @@ export function EntitiesView() {
     manual: true,
     onError: (error) => console.error("Failed to load entity detail:", error),
   });
-  const selectedEntity = detailError || selectedEntityId === null ? null : (loadedEntity ?? null);
+  const selectedEntity =
+    detailError || selectedEntityId === null || loadedEntity?.id !== selectedEntityId
+      ? null
+      : (loadedEntity ?? null);
   const detailFailure = detailError ? toHindsightFailure(detailError) : null;
 
   /**
@@ -87,14 +96,39 @@ export function EntitiesView() {
   const graphData = graphError ? null : (loadedGraph ?? null);
   const graphFailure = graphError ? toHindsightFailure(graphError) : null;
 
-  /** 打开实体详情：记录「当前打开的是哪一条」，再触发详情请求。 */
+  /** 打开实体详情：记录触发元素用于关闭后归还焦点，再触发一次详情请求。 */
   const openEntityDetail = useCallback(
-    (entityId: string) => {
+    (entityId: string, trigger?: HTMLElement | null) => {
+      if (trigger) detailTriggerRef.current = trigger;
       setSelectedEntityId(entityId);
       runLoadEntityDetail(entityId);
     },
     [runLoadEntityDetail],
   );
+
+  const closeEntityDetail = useCallback(() => {
+    setSelectedEntityId(null);
+    requestAnimationFrame(() => detailTriggerRef.current?.focus({ preventScroll: true }));
+  }, []);
+
+  // Escape 只关详情，不冒泡到 Radix Dialog 关闭整个记忆弹窗。
+  // 用 window 捕获阶段（比 document 上的 Radix 监听更早）并阻止同节点其余监听。
+  useEffect(() => {
+    if (!selectedEntityId) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeEntityDetail();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [selectedEntityId, closeEntityDetail]);
+
+  // 详情加载完成后把焦点移入浮层，避免键盘用户停留在被遮挡的列表上。
+  useEffect(() => {
+    if (selectedEntity) detailCloseRef.current?.focus({ preventScroll: true });
+  }, [selectedEntity]);
 
   // Handle page change
   const handlePageChange = (newPage: number) => {
@@ -253,12 +287,31 @@ export function EntitiesView() {
                     {entities.map((entity) => (
                       <TableRow
                         key={entity.id}
-                        onClick={() => openEntityDetail(entity.id)}
+                        onClick={(event) =>
+                          openEntityDetail(
+                            entity.id,
+                            event.currentTarget.querySelector("button"),
+                          )
+                        }
                         className={`cursor-pointer hover:bg-muted/50 ${
                           selectedEntity?.id === entity.id ? "bg-primary/10" : ""
                         }`}
                       >
-                        <TableCell className="font-medium text-card-foreground">{maskSecrets(entity.canonical_name)}</TableCell>
+                        <TableCell className="font-medium text-card-foreground">
+                          <Button
+                            type="button"
+                            variant="link"
+                            size="sm"
+                            data-entity-id={entity.id}
+                            className="h-auto max-w-full justify-start whitespace-normal p-0 text-left font-medium text-card-foreground"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openEntityDetail(entity.id, event.currentTarget);
+                            }}
+                          >
+                            {maskSecrets(entity.canonical_name)}
+                          </Button>
+                        </TableCell>
                         <TableCell className="text-card-foreground">{entity.mention_count}</TableCell>
                         <TableCell className="text-card-foreground">{formatDate(entity.first_seen)}</TableCell>
                         <TableCell className="text-card-foreground">{formatDate(entity.last_seen)}</TableCell>
@@ -306,7 +359,12 @@ export function EntitiesView() {
               <p className="text-sm font-medium">{t("entitiesView.loadingEntityDetail")}</p>
             </>
           )}
-          <Button variant="ghost" size="sm" onClick={() => setSelectedEntityId(null)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={t("entitiesView.close")}
+            onClick={closeEntityDetail}
+          >
             {t("entitiesView.close")}
           </Button>
         </div>
@@ -314,15 +372,32 @@ export function EntitiesView() {
 
       {/* Entity Detail Panel - Fixed overlay */}
       {selectedEntity && (
-        <div className="fixed right-0 top-0 h-screen w-105 bg-card border-l-2 border-primary shadow-2xl z-50 overflow-y-auto animate-in slide-in-from-right duration-300 ease-out">
+        <div
+          className="fixed right-0 top-0 z-50 h-screen w-full max-w-105 overflow-y-auto border-l-2 border-primary bg-card shadow-2xl animate-in slide-in-from-right duration-300 ease-out"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="memory-entity-detail-title"
+        >
           <div className="p-5">
             {/* Header */}
             <div className="flex justify-between items-center mb-6 pb-4 border-b border-border">
               <div>
-                <h3 className="text-xl font-bold text-card-foreground">{maskSecrets(selectedEntity.canonical_name)}</h3>
+                <h3
+                  id="memory-entity-detail-title"
+                  className="text-xl font-bold text-card-foreground"
+                >
+                  {maskSecrets(selectedEntity.canonical_name)}
+                </h3>
                 <p className="text-sm text-muted-foreground mt-1">{t("entitiesView.entityDetails")}</p>
               </div>
-              <Button variant="ghost" size="sm" onClick={() => setSelectedEntityId(null)} className="h-8 w-8 p-0">
+              <Button
+                ref={detailCloseRef}
+                variant="ghost"
+                size="sm"
+                aria-label={t("entitiesView.close")}
+                onClick={closeEntityDetail}
+                className="h-8 w-8 p-0"
+              >
                 <X className="h-4 w-4" />
               </Button>
             </div>
