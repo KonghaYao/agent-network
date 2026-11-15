@@ -343,13 +343,28 @@ export const APP_STYLE = `
     background: var(--wx-green); animation: chat-loading-slide 1.1s ease-in-out infinite; }
   @keyframes chat-loading-slide { 0% { transform: translateX(-110%); }
     100% { transform: translateX(260%); } }
-  .chat-skeleton { padding: 22px 20px; }
+  /* 首载骨架占满消息区，与 #messages 同盒尺寸；历史到达后只替换内容，不改变布局。 */
+  .chat-skeleton { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 12px 20px 18px; }
   .chat-skeleton[hidden] { display: none; }
   .skeleton-row { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 20px; }
   .skeleton-row.mine { flex-direction: row-reverse; }
-  .skeleton-row .skeleton-avatar { border-radius: 6px; }
+  .skeleton-row .skeleton-avatar { width: 36px; height: 36px; border-radius: 6px; }
   .skeleton-bubble { width: min(46%, 260px); height: 42px; border-radius: 4px;
     background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
+  /* 头部骨架：占位尺寸对齐搜索/网页/文件/账号/菜单，移动端换行行高与最终一致。 */
+  .chat-id--loading { position: relative; }
+  .chat-id--loading #title { visibility: hidden; }
+  .chat-skeleton-line { position: absolute; left: 0; display: block; border-radius: 4px;
+    background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
+  .chat-skeleton-line--title { top: 3px; width: 72px; height: 15px; }
+  .chat-skeleton-line--subtitle { top: 23px; width: 96px; height: 8px; }
+  .head-skeleton { flex: 0 0 auto; display: block; height: 32px; border-radius: 4px;
+    background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
+  .head-skeleton--search { width: 40px; }
+  .head-skeleton--monitor { width: 42px; }
+  .head-skeleton--files { width: 46px; }
+  .head-skeleton--account { width: 32px; border-radius: 50%; }
+  .head-skeleton--menu { width: 28px; height: 28px; }
   .chat-error { margin: 0; padding: 26px 20px; text-align: center; color: var(--wx-muted); }
   .chat-error[hidden] { display: none; }
   .chat-error p { margin: 0 0 12px; color: var(--wx-unread); font-size: 13px;
@@ -473,6 +488,9 @@ export const APP_STYLE = `
     font-size: 14px; line-height: 22px; resize: none; overflow-y: auto; }
   .send-btn { flex: 0 0 auto; height: 38px; min-width: 64px; padding: 0 14px;
     border: 0; border-radius: 4px; font-size: 13px; }
+  .composer--loading textarea { color: var(--wx-muted); cursor: progress; }
+  .composer--loading .attach-btn,
+  .composer--loading .send-btn { opacity: .55; cursor: progress; }
   #status { min-height: 0; margin: 0; font-size: 12px; color: var(--wx-unread); }
   #status:empty { display: none; }
   #status:not(:empty) { padding: 6px 16px 0; }
@@ -618,6 +636,7 @@ ${GROUP_STYLE}
       padding-bottom: 6px; }
     .chat-id { flex: 1 1 160px; min-width: 160px; }
     .messages { padding: 10px 12px 14px; }
+    .chat-skeleton { padding: 10px 12px 14px; }
     .jump-latest { bottom: calc(64px + env(safe-area-inset-bottom)); }
     .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
     .composer textarea { font-size: 16px; }
@@ -787,7 +806,8 @@ ${GROUP_STYLE}
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .skeleton-avatar, .skeleton-lines span, .skeleton-bubble { animation: none; }
+    .skeleton-avatar, .skeleton-lines span, .skeleton-bubble,
+    .chat-skeleton-line, .head-skeleton { animation: none; }
     .chat-loading::after { animation: none; width: 100%; }
     #older[aria-busy="true"]::before { animation: none; }
   }

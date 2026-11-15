@@ -225,6 +225,77 @@ async function countRoomCalls(page: Page, name: string, roomId: string): Promise
   );
 }
 
+async function countToolCalls(page: Page, name: string): Promise<number> {
+  return page.evaluate((targetName) => {
+    const calls =
+      (
+        window as unknown as {
+          __mcpCalls?: { body?: { params?: { name?: string } } }[];
+        }
+      ).__mcpCalls ?? [];
+    return calls.filter((call) => call.body?.params?.name === targetName).length;
+  }, name);
+}
+
+/** 延迟首屏 room/history，让骨架与静态输入区停留到断言结束。 */
+async function holdFirstLoad(page: Page): Promise<() => void> {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/mcp', async (route) => {
+    let body: { params?: { name?: string } } | null = null;
+    try {
+      body = JSON.parse(route.request().postData() ?? 'null');
+    } catch {
+      body = null;
+    }
+    const name = body?.params?.name;
+    if (name === 'network_room_get' || name === 'network_history_list') await gate;
+    await route.continue();
+  });
+  return release;
+}
+
+/** 只统计聊天区内的位移，侧栏/文件栏加载不计入。 */
+async function trackChatLayoutShifts(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const shifts: number[] = [];
+    (window as unknown as { __chatShifts?: number[] }).__chatShifts = shifts;
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as unknown as {
+        hadRecentInput: boolean;
+        value: number;
+        sources: { node: Node | null }[];
+      }[]) {
+        if (entry.hadRecentInput) continue;
+        if (
+          entry.sources.some((source) =>
+            (source.node as Element | null)?.closest?.('.chat-pane'),
+          )
+        ) {
+          shifts.push(entry.value);
+        }
+      }
+    }).observe({ type: 'layout-shift', buffered: true });
+  });
+}
+
+async function chatShiftSum(page: Page): Promise<number> {
+  return page.evaluate(() =>
+    ((window as unknown as { __chatShifts?: number[] }).__chatShifts ?? []).reduce(
+      (sum, value) => sum + value,
+      0,
+    ),
+  );
+}
+
+async function chatHeadHeight(page: Page): Promise<number> {
+  return page.locator('.chat-head').evaluate((element) =>
+    Math.round(element.getBoundingClientRect().height),
+  );
+}
+
 test.describe('SPA Chat', () => {
 
   let base = '';
@@ -298,6 +369,43 @@ test.describe('SPA Chat', () => {
         // 浏览器禁用存储时由页面错误态兜底。
       }
     }, tokenA);
+  });
+
+  test('first load reserves the chat shell without layout shift', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await trackChatLayoutShifts(page);
+    const release = await holdFirstLoad(page);
+    try {
+      await page.goto(`${base}/c/${roomId}`);
+
+      await expect(page.locator('#chat-skeleton')).toBeVisible();
+      await expect(page.locator('#chat-skeleton .skeleton-row')).toHaveCount(3);
+      await expect(page.locator('#composer')).toBeVisible();
+      await expect(page.locator('#body')).toBeDisabled();
+      await expect(page.locator('#send')).toBeDisabled();
+
+      const skeletonHeight = await page
+        .locator('#chat-skeleton')
+        .evaluate((element) => Math.round(element.getBoundingClientRect().height));
+      expect(skeletonHeight).toBeGreaterThan(200);
+      expect(await chatHeadHeight(page)).toBeGreaterThan(40);
+    } finally {
+      release();
+    }
+
+    await expect(page.locator('#chat-skeleton')).toHaveCount(0);
+    await expect(page.locator('#body')).toBeEnabled();
+    await expect(page.locator('#messages .msg .bubble').first()).toContainText(
+      'Chat E2E 初始消息',
+    );
+    await page.waitForTimeout(400);
+    expect(await chatShiftSum(page)).toBeLessThan(0.01);
+
+    // 首屏请求不因骨架/静态输入区增加：history 1–2 次，rooms_list 1 次。
+    expect(await countHistoryWithoutCursor(page, roomId)).toBeGreaterThanOrEqual(1);
+    expect(await countHistoryWithoutCursor(page, roomId)).toBeLessThanOrEqual(2);
+    expect(await countToolCalls(page, 'network_history_list')).toBeLessThanOrEqual(2);
+    expect(await countToolCalls(page, 'network_rooms_list')).toBe(1);
   });
 
   test('sends, receives, quotes and keeps one stream subscription', async ({ page }) => {
@@ -602,6 +710,8 @@ test.describe('SPA Chat', () => {
   test('keeps IME Enter, Shift+Enter and 1–4 line composer behavior', async ({ page }) => {
     await page.goto(`${base}/c/${roomId}`);
     await expect(page.locator('#composer')).toBeVisible();
+    // 静态 composer 在首载时即可见，历史快照要等真实输入区启用后再计数。
+    await expect(page.locator('#body')).toBeEnabled();
     const before = await page.locator('#messages .msg.mine').count();
 
     await page.locator('#body').click();
@@ -750,6 +860,37 @@ test.describe('SPA Chat', () => {
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
       expect(overflow).toBeLessThanOrEqual(1);
+    });
+
+    test('first load keeps the header height stable without overflow', async ({ page }) => {
+      await trackChatLayoutShifts(page);
+      const release = await holdFirstLoad(page);
+      let loadingHeight = 0;
+      try {
+        await page.goto(`${base}/c/${roomId}`);
+        await expect(page.locator('#chat-skeleton')).toBeVisible();
+        await expect(page.locator('#composer')).toBeVisible();
+        loadingHeight = await chatHeadHeight(page);
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          ),
+        ).toBeLessThanOrEqual(1);
+      } finally {
+        release();
+      }
+
+      await expect(page.locator('#messages .msg .bubble').first()).toBeVisible();
+      const loadedHeight = await chatHeadHeight(page);
+      expect(Math.abs(loadedHeight - loadingHeight)).toBeLessThanOrEqual(4);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        ),
+      ).toBeLessThanOrEqual(1);
+
+      await page.waitForTimeout(400);
+      expect(await chatShiftSum(page)).toBeLessThan(0.01);
     });
   });
 
