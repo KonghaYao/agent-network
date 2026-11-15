@@ -59,6 +59,7 @@ function registryToken(mcpUrl: string): string | null {
  */
 export function useRoomMenuActions({
   room,
+  roomId,
   peer,
   identity,
   token,
@@ -71,6 +72,8 @@ export function useRoomMenuActions({
   closeOverlays,
 }: {
   room: RoomView | null;
+  /** 会话行菜单在详情到达前也允许置顶/免打扰。 */
+  roomId?: string | null;
   peer: RoomMember | null;
   identity: WebIdentity | null;
   token: string | null;
@@ -84,6 +87,7 @@ export function useRoomMenuActions({
 }) {
   const [reissue, setReissue] = useState<ReissueState | null>(null);
   const [renameAgentOpen, setRenameAgentOpen] = useState(false);
+  const activeRoomId = room?.room_id ?? roomId ?? null;
 
   const canManageAgent =
     peer?.kind === 'agent' &&
@@ -91,11 +95,11 @@ export function useRoomMenuActions({
 
   const onTogglePreference = useCallback(
     (field: keyof RoomPreference) => {
-      if (!room) return;
-      const saved = preferences.toggle(room.room_id, field);
+      if (!activeRoomId) return;
+      const saved = preferences.toggle(activeRoomId, field);
       setStatus(saved ? '已更新，仅在此浏览器生效' : '已临时更新；浏览器未能保存设置');
     },
-    [preferences, room, setStatus],
+    [activeRoomId, preferences, setStatus],
   );
 
   const onCopyPrompt = useCallback(async () => {
