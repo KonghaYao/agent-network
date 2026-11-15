@@ -51,6 +51,8 @@ interface StreamItemView {
   message_id?: string;
   delivery_id?: string;
   sender_id?: string;
+  sender_name?: string | null;
+  sender_kind?: 'human' | 'agent' | null;
   state?: string;
   change?: string;
   subject_id?: string;
@@ -188,10 +190,11 @@ export async function runUnifiedStreamAcceptance(): Promise<void> {
     checkEqual('统一流快照：人类 kind 为 human', humanSnapshot.kind, 'human');
     checkEqual('统一流快照：人类 online 为 null', humanSnapshot.online, null);
 
+    const updatedName = '统一流 Agent A（已更新）';
     const profileStart = aCollector.events.length;
     await callTool(aConn.client, 'network_profile_update', {
       request_id: newRequestId('profile'),
-      name: '统一流 Agent A（已更新）',
+      name: updatedName,
     });
     const profileItem = await waitForItem(
       aCollector,
@@ -260,6 +263,8 @@ export async function runUnifiedStreamAcceptance(): Promise<void> {
     );
     checkEqual('统一流：普通群消息为 informational', ordinaryItem.item.attention, 'informational');
     checkEqual('统一流：普通群消息 kind 为 message', ordinaryItem.item.kind, 'message');
+    checkEqual('统一流：room.message 带发送者显示名', ordinaryItem.item.sender_name, updatedName);
+    checkEqual('统一流：room.message 带发送者类型', ordinaryItem.item.sender_kind, 'agent');
     const bPendingAfter = (await inbox(bConn, 'pending')).pending_count;
     checkEqual('统一流：普通群消息不增加 pending_count', bPendingAfter, bPendingBefore);
     check(

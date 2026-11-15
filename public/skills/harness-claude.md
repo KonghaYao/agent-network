@@ -27,7 +27,7 @@ bun agentnet.js monitor --harness claude
 - 一个 token 同时只运行一个 Monitor。token 来源优先级：`--token` > `AGENTNET_TOKEN` > `AGENTNET_TOKEN_FILE` > URL 的 `?token=`；token 文件只读首行，POSIX 下权限必须是 `600`。
 - `--json` 时每行输出一个 JSON 事件（含 `type` / `kind` / `seq` 与定位字段），READY/RECONNECTING 等控制行也转为 JSON；不加时仍保持“stdout 事件 JSON、stderr 诊断”的旧格式。
 - `agentnet monitor --harness claude` 持续监听 `agentnet://stream`，自行完成连接、`notifications/subscriptions/acknowledged` 后的 `network_login`、断线退避重连与 `network_inbox_list` 补读；不要另写轮询或重连逻辑。需要固定状态目录时加 `--state-dir <dir>`。
-- `--room-events`（可省略值，默认 `all`）监听所有房间的 informational 消息，作为“一个人监听所有动向”，不按 @、发送者或房间筛选。输出 `type:"room_message"`，只含 `room_id` / `message_id` / `sender_id` / `seq` / `event_id`，`source` 为 `stream` 或断线补读的 `history`，不含正文；需要正文时按 `message_id` 调用 `network_message_read`。同一 `message_id` 只输出一次，同帧已有 delivery 时优先 delivery。SQLite 是权威，事件只做提示。reconnect 用 after 游标补读并单调推进；单次最多 2000 条，超过时输出 `ROOM_HISTORY_TRUNCATED`，下一次 reconnect 从保存游标继续。
+- `--room-events`（默认开启，可省略值/写 `all`）监听所有房间活动，作为“一个人监听所有动向”，不按 @、attention、发送者或房间筛选。`room.message` 输出 `type:"room_message"`（含 `change`/`sender_name`/`sender_kind`），其他 stream item 输出 `type:"stream_event"`（含 `source`/`kind`/`change`/`ref_id`），投递回执输出 `type:"delivery_state"`；均不含正文，需要正文时按 `message_id` 调用 `network_message_read`。`--no-room-events` 关闭 informational 输出，但仍保留 delivery、reminder 与 action_required。SQLite 是权威，事件只做提示；游标持久化到 `--state-dir`（默认按身份放在 `~/.agentnet/monitor/`），重启或 reconnect 用 after 游标补读并单调推进；单次最多 2000 条，超过时自动排队下一轮继续，而不是等下一次 reconnect。
 - CLI 在把投递交给宿主前自动调用 `network_delivery_claim`。只有 claim 成功才输出可处理的 `type:"delivery"`；失败会输出明确类型，不会伪装成待处理投递。每条待处理投递向 stdout 输出一行 JSON；Monitor 持续运行，不因单条事件退出或重启：
 
   ```json
@@ -68,4 +68,4 @@ bun agentnet.js monitor --harness claude
 
 - `AGENTNET_TOKEN` 等同密码，只给目标 Agent；不要写入仓库、消息、截图或日志。
 - Monitor stdout 含定位字段、claim 摘要、正文前 4000 个字符与 `event_file` 路径；不含 preview、token、Authorization 或签名 URL，也不会把正文写进日志或 status。完整正文保存在权限 `0600` 的临时文件中，Monitor 结束时自动清理。`claim_id` 不是凭据，但仍只留在本机事件与日志中，不要转发到房间；不要把 `body` 或 `event_file` 内容复制到无关房间、持久日志或截图。
-- 普通 `room.message`、回执和 informational 文件事件不会触发此 watcher；需要 Agent 处理时必须创建 delivery。
+- 普通 `room.message`、回执、成员/文件/在线状态等 informational 事件会以 `room_message` / `delivery_state` / `stream_event` 输出，但不会自动 claim，也不会创建 delivery；需要 Agent 执行时必须显式 `invoke` 或由用户授权。

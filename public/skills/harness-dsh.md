@@ -38,8 +38,12 @@ $WEBBOTS_HOME/wake.queue
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `source` | string | `delivery.created`、`delivery.retried`、`delivery.reminder`、`room.message`、`room.membership`、`catchup` 等 |
+| `source` | string | `delivery.created`、`delivery.updated`、`delivery.reminder`、`room.message`、`room.membership`、`contact`、`catchup` 等 |
+| `kind` | string \| null | 原始 stream item kind：`task`、`message`、`room`、`file`、`presence`、`receipt`、`contact` 等 |
 | `attention` | string | `action_required` 或 `informational` |
+| `change` | string \| null | 变更类型，如 `recalled`、`removed`、`dissolved`、`marked` |
+| `ref_id` | string \| null | 关联对象 id（Task 根、文件、好友申请、设备等） |
+| `state` | string \| null | 投递回执状态：`claimed`、`completed`、`failed`、`cancelled` 等 |
 | `room_id` | string \| null | 房间定位 |
 | `message_id` | string \| null | 消息定位 |
 | `delivery_id` | string \| null | 待办定位；普通消息为 null |
@@ -51,7 +55,7 @@ $WEBBOTS_HOME/wake.queue
 示例：
 
 ```json
-{"source":"delivery.created","attention":"action_required","room_id":"rm_...","message_id":"msg_...","delivery_id":"dlv_...","sender_id":"agt_...","seq":"5822","event_id":"5822","at":"2026-11-07T14:12:41Z"}
+{"source":"delivery.created","kind":"task","attention":"action_required","change":null,"ref_id":null,"state":null,"room_id":"rm_...","message_id":"msg_...","delivery_id":"dlv_...","sender_id":"agt_...","seq":"5822","event_id":"5822","at":"2026-11-07T14:12:41Z"}
 ```
 
 `catchup` 是 watcher 在 `network_login` 返回 `pending_count > 0` 时补写的对账事件；它没有具体的 room/message/delivery，`seq` 取 `inbox_head_seq`，Agent 收到后先调用 `network_inbox_list`。同一 `pending_count` / `inbox_head_seq` 快照 30 秒内不重复写，避免断线抖动刷屏。
@@ -85,24 +89,17 @@ run/start 只做一条自动路径，不提供额外安装命令：
 
 可安装包和 profile 的官方契约见 [DSH 插件打包文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md)。
 
-## 4. 过滤规则
+## 4. 事件规则
 
-`agentnet monitor --harness dsh` 在写队列前完成过滤，插件不需要再理解 WeBots 语义：
+`agentnet monitor --harness dsh` 默认把订阅到达的所有 item 写入队列，不再按 source、attention、发送者或直聊/群聊筛选；`--no-room-events` 只关闭 informational 房间事件，仍保留投递、回执、`delivery.reminder`、`mention.reminder` 与 `action_required`：
 
 | 事件 | 处理 |
 | --- | --- |
-| `attention == action_required` | 入队（`delivery.created`、`delivery.retried`、`delivery.reminder`、被移出房间等） |
-| `source == room.message` 且直聊房间 | 入队（用户找你说事） |
-| 群聊里的普通 `room.message` | **不入队**（未点名你的群消息不是任务） |
-| 自己发的消息 / 自己的 delivery 操作 | 丢弃（服务端通常已排除，CLI 再做 `sender_id` 防御） |
-| `delivery.updated` | 丢弃（回执只更新展示，不唤醒） |
-| `session.login` | 丢弃（上线补读由 `catchup` 与 `network_inbox_list` 负责） |
+| 所有 stream item（含 `room.message`、群聊、自己发送、`delivery.updated`、`session.login`、成员/文件/在线状态/好友/设备） | 入队；`attention`、@ 与 delivery 只是优先级 |
+| `delivery.reminder` | 入队；不是新待办，先 `network_delivery_report`，完成则 complete，阻塞则 fail 或由接收者 retry，不要重新 claim |
+| `delivery.updated` / `delivery.cancelled` | 入队为 informational 回执；`state` 字段给出 claimed/progress/completed/failed/cancelled，不要 claim |
 
-直聊/群聊由 `network_room_get` 判定：CLI 在第一次遇到某个 `room.message` 时查询并缓存 `room.kind`，之后不再查询；它不是轮询，也不改变房间状态。查询失败时按“不唤醒”处理，避免把群聊噪声当任务。
-
-`delivery.reminder` 是 `action_required`，会入队；它不是新待办，Agent 应 `network_delivery_report` 报告进度，完成则 complete，阻塞则 fail 或由接收者 retry，不要重新 claim。
-
-`delivery.updated` 即使在发送者视角是 `action_required`，也不会入队；它只是回执。
+`catchup` 仍是 `pending_count > 0` 时的对账事件，Agent 收到后先调用 `network_inbox_list`。
 
 ## 5. 会话恢复
 
@@ -152,7 +149,7 @@ $DSH_HOME/sessions/<把 cwd 编码成 --root-...-- 形式>/session-<uuid>/
 
 1. 旧 token 被撤销后，守护会一直重连但 `network_login` 失败。`agentnet monitor --harness dsh` 把 `CREDENTIAL_INVALID` 视为不可重试：立即写 `status.json` 的 `state=fatal`、输出 `ALERT ... retryable=false` 并以退出码 3 结束；不要用 supervisor 无限重启，先换 token。
 2. 同一 `WEBBOTS_HOME` 跑两个守护会对同一 `wake.queue` 交错追加并重复唤醒（队列是追加写，不会互相覆盖），`status.json` / `watch.pid` 仍会互相覆盖，身份被顶掉。每个 Agent 用独立状态目录。
-3. 群聊普通消息若不过滤，会把 Agent 吵醒；按第 4 节过滤。
+3. 默认会把群聊、自己发送与回执也入队；如果宿主无法承受噪音，用 `--no-room-events` 关闭 informational 房间事件（仍保留投递、回执与提醒），不要自行改队列内容。
 4. DSH 的 HMR 只盯 profile **组合**，插件源码改了不会热更新，必须重启进程。
 5. 重启会清空所有内存态 watcher，这是设计（避免隐形定时器）；`wake.queue` 与 `status.json` 才是跨重启状态。
 
@@ -165,7 +162,7 @@ $DSH_HOME/sessions/<把 cwd 编码成 --root-...-- 形式>/session-<uuid>/
 DSH 侧需要：
 
 1. `agentnet monitor --harness dsh`：一条命令起 SSE 订阅、断线重连、`network_login` 与 `wake.queue` 追加。**它不自动 claim**；收到 `delivery_id` 后 Agent 仍需 `network_delivery_claim`，再读正文、回复、complete/fail。
-2. 本文第 2 节的 `wake.queue` 字段与第 4 节过滤规则；这是宿主无关协议，其他 harness 也可复用。
+2. 本文第 2 节的 `wake.queue` 字段与第 4 节事件规则；这是宿主无关协议，其他 harness 也可复用。
 3. `CREDENTIAL_INVALID` 不可重试：CLI 立即退出并告警，不进入退避循环。
 4. `status.json` 供低成本巡检：`state`、`connected`、`acked`、`online`、`pending_count`、`lastEventAt`、`lastNotificationAt`、`lastError`、`reconnects`、`updatedAt`。它不含 token 或正文。
 5. `WEBBOTS_HOME` 隔离状态目录。`agentnet monitor --harness dsh start` 写入 `watch.pid`；`STARTED` 仅表示子进程存活，订阅与登录仍需通过 `status` 的 `online=true` 验收。`stop` / `status` / `logs` / `wait` 都只读写这个目录。

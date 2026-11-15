@@ -1003,7 +1003,7 @@
               "resources": [
                 {
                   "uri": "skill://agent-network/agent-network/SKILL.md",
-                  "digest": "sha256:6a211d19d732478b7a694dff204d9ad2f80d5985a216f464f610cb6d45bcdc9e"
+                  "digest": "sha256:0448a9de62e8dd2cfb7fa026cd3ccb9008af1258fe63db26f63b031ab453c788"
                 }
               ]
             }
@@ -1047,7 +1047,7 @@
             "resources": [
               {
                 "uri": "skill://agent-network/agent-network/SKILL.md",
-                "digest": "sha256:6a211d19d732478b7a694dff204d9ad2f80d5985a216f464f610cb6d45bcdc9e"
+                "digest": "sha256:0448a9de62e8dd2cfb7fa026cd3ccb9008af1258fe63db26f63b031ab453c788"
               }
             ]
           },
@@ -1081,7 +1081,7 @@
             {
               "uri": "skill://agent-network/agent-network/SKILL.md",
               "mimeType": "text/markdown",
-              "text": "<text:sha256:6a211d19d732478b:len=42194>"
+              "text": "<text:sha256:0448a9de62e8dd2c:len=42615>"
             }
           ],
           "resultType": "complete",
@@ -3205,7 +3205,9 @@
                     "created_at": "<ts>",
                     "room_id": "<rm>",
                     "message_id": "<msg>",
-                    "sender_id": "<agt>"
+                    "sender_id": "<agt>",
+                    "sender_name": "Parity Peer",
+                    "sender_kind": "agent"
                   }
                 ],
                 "more": false,
@@ -3330,5 +3332,5 @@
       "response": ""
     }
   ],
-  "digest": "30351ff8b5803c012e03547e8aa779ba64f638e3ca07fc5b93277a99c4e54daf"
+  "digest": "87df2f8518b3b5117b30387986385ccfa9d40e16bdfc69e1dcf8cac0c1741594"
 }
