@@ -89,6 +89,27 @@ export const MEMORY_EXPOSURE_EVIDENCE_KINDS = [
 export type MemoryExposureEvidenceKind = (typeof MEMORY_EXPOSURE_EVIDENCE_KINDS)[number];
 
 /**
+ * 召回侧可识别的证据词表。
+ *
+ * `gateway_observed_room_history` 只表示网关确认该消息已持久化在房间历史中，
+ * 不声称宿主提交或模型看过；它不进入 `minimum_evidence` 公开枚举，因此
+ * 显式要求提交证据的召回不会把它当成已提交。
+ */
+export const MEMORY_RECALL_EVIDENCE_KINDS = [
+  ...MEMORY_EXPOSURE_EVIDENCE_KINDS,
+  'gateway_observed_room_history',
+] as const;
+
+export type MemoryRecallEvidenceKind = (typeof MEMORY_RECALL_EVIDENCE_KINDS)[number];
+
+export function isRecallEvidenceKind(value: unknown): value is MemoryRecallEvidenceKind {
+  return (
+    typeof value === 'string' &&
+    (MEMORY_RECALL_EVIDENCE_KINDS as readonly string[]).includes(value)
+  );
+}
+
+/**
  * 记忆包交付证据与源输入提交证据分开：交付只证明宿主拿到包，
  * 不能推出原群消息已被消费。
  */

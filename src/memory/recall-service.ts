@@ -18,13 +18,16 @@ import {
 import type { MemoryRuntime } from './runtime';
 import type {
   MemoryAdapterCapabilities,
+  MemoryAdapterSearchHit,
   MemoryAdapterSearchPlan,
   SearchResult,
 } from './adapters/types';
 import {
   MEMORY_POLICY_VERSION,
+  type MemoryExactRepresentation,
   type MemoryRecallInput,
   type MemoryRecallItem,
+  type MemoryRecallEvidenceKind,
   type MemoryRecallResult,
   type MemoryRecallStatus,
   type MemorySpaceRef,
@@ -70,6 +73,36 @@ function evidenceRank(evidence: string | null): number {
   if (evidence === 'gateway_observed_submitted') return 2;
   if (evidence === 'host_reported_submitted') return 1;
   return 0;
+}
+
+/**
+ * 命中映射兜底。
+ *
+ * 后端可能丢弃 retain metadata；此时 fact.id 不是本地 representation id。
+ * 先按 id 精确读；未命中再按 (source, revision, text_sha256) 找同一条逐字表示。
+ * 只使用现有 source 索引收窄，不新增索引或迁移。
+ */
+async function resolveHitExact(
+  db: D1Like,
+  hit: MemoryAdapterSearchHit,
+): Promise<MemoryExactRepresentation | null> {
+  const exact = await loadRepresentationExact(db, hit.representation.representation_id);
+  if (exact) return exact;
+  if (!hit.source) return null;
+  const row = await db
+    .prepare(
+      `SELECT representation_id FROM memory_representations
+        WHERE source_id = ? AND source_revision = ? AND text_sha256 = ? AND verbatim = 1
+        ORDER BY created_at DESC
+        LIMIT 1`,
+    )
+    .bind(
+      hit.source.source_id,
+      hit.source.source_revision,
+      hit.representation.text_sha256,
+    )
+    .first<{ representation_id: string }>();
+  return row ? loadRepresentationExact(db, row.representation_id) : null;
 }
 
 function requiredFilters(input: MemoryRecallInput): {
@@ -352,7 +385,7 @@ async function buildBootstrapResult(
   const contextItems: Array<{
     exact: { representation: import('./contracts').MemoryRepresentation; text: string };
     origin_scope: import('./contracts').MemoryOriginScope;
-    evidence: 'host_reported_submitted' | 'gateway_observed_submitted';
+    evidence: MemoryRecallEvidenceKind;
   }> = [];
   for (const row of rows) {
     const evidence =
@@ -595,7 +628,7 @@ export async function recallMemory(
   const contextItems: Array<{
     exact: { representation: import('./contracts').MemoryRepresentation; text: string };
     origin_scope: import('./contracts').MemoryOriginScope;
-    evidence: 'host_reported_submitted' | 'gateway_observed_submitted';
+    evidence: MemoryRecallEvidenceKind;
   }> = [];
   let packagedBytes = 0;
   let truncated = false;
@@ -614,7 +647,7 @@ export async function recallMemory(
       exclusions.push({ reason: 'evidence_below_minimum', source_id: hit.source?.source_id ?? null, detail: 'evidence_missing' });
       continue;
     }
-    const exact = await loadRepresentationExact(db, hit.representation.representation_id);
+    const exact = await resolveHitExact(db, hit);
     if (!exact) {
       exclusions.push({
         reason: 'source_not_active',
@@ -635,7 +668,7 @@ export async function recallMemory(
     }
     const decision = await authorizeRepresentationRead(db, {
       space: context.space,
-      representationId: hit.representation.representation_id,
+      representationId: exact.representation.representation_id,
       agentId: options.agentId,
       target_scope: PRIVATE_SCOPE,
       at,

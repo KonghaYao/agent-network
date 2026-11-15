@@ -640,6 +640,14 @@ MF10 新增 `src/memory/integration.ts` 与第二适配器 `src/memory/adapters/
 - **外部证据边界**：Δ01 移除了外部追踪平台的来源 importer、其凭据配置、定时拉取与 `sources` 能力声明，不保留隐藏 fallback。外部宿主只能通过 `MemoryHostFinalManifestReport` + invocation（`run_id`/`input_id`/`input_revision`/`invocation_id`）直接提交实际 payload；身份、去重、证据等级与写入都不依赖外部 trace/project/observation 标识。
 - **故障验收**：`scripts/verify-memory-integration.ts` 覆盖本地提交后/外部响应前后退出（重启不丢意图、不重复 retain）、外部 500/超时/401/取消、本地事务失败不提前 ACK、关闭采集仍执行撤回/遗忘、持久作业 attempt/next_attempt_at 在重启后继续、`memory_context` 回流不新增来源或推进原文覆盖，以及 LocalMemoryAdapter 与 Hindsight 受控假服务的同一契约不变量。
 
+定时回填 `MEMORY_BACKFILL` 新增 `src/memory/backfill*.ts`，由 `MemoryIntegration` 托管，默认关闭：
+
+- **窗口语义**：`to = floor(now / 1h) * 1h`、`from = to - 1h`，每次向前覆盖 1 小时；启动补偿与常规调度共用同一路径，单轮不重入，停机后最多补 24 个窗口，更早窗口显式记录 `skipped_windows`。水位只在一个窗口全部分页提交且无错误后写入 `memory_cursors('agent','memory-backfill','backfill_window_to')`；扫描位单独存 `backfill_scan_rowid`，恢复时回看 200 行吸收时序倒挂。窗口内按 rowid keyset 扫消息头，正文逐条读取，不依赖新索引。
+- **枚举与权限**：消息 → 房间 active Agent 成员 × active space 扇出；禁用 Agent、无 active space、`capture IN ('none','excluded')`、实例级 `capture_default=disabled` 与 `MEMORY_CAPTURE=0` 都不产生意图。读取权限只调用 `authorizeSourceRead`（成员代次、历史边界、策略版本、tombstone、ownership），不复制角色规则。旧消息缺少 `memory_sources` 时用发送者（退房则用首个可读成员）的当前成员快照生成确定性 source；已 `retracted`/`superseded` 的来源不会被复活。
+- **证据与召回**：回填写 `input_exposure` 回执，evidence 为召回侧的 `gateway_observed_room_history`（只表示网关确认消息已持久化在房间历史，不声称模型看过）。该值不进入公开 `minimum_evidence` 枚举，因此 `minimum_evidence: host_reported_submitted` 仍会排除回填项；意图表 `evidence` 留 NULL 以通过既有 CHECK，运行时从回执读取证据。Hindsight fact 的 `agentnet_representation_id` metadata 优先映射本地表示；metadata 丢失时 recall 按 `(source_id, revision, text_sha256)` 兜底，存量数据无需迁移。
+- **幂等与崩溃恢复**：每条消息对一批 space 的写入走 `runIdempotent`（`operations` 所有权 + 同一 `db.batch()` 内 source/representation/receipt/intent/job 的条件插入）；意图 `operation_key = backfill:<space>:<message>:<revision>` 不含窗口，重叠扫描自动收敛。Hindsight 只入队、不直连 HTTP，沿用 async retain、超时/重试/退避与 unknown 对账。
+- **容量与限制**：回填只写 `memory_jobs`/`memory_retain_intents`/receipt/representation，不写 `memory_experiences`，也不制造 events/outbox/未读。消费速率约 `memoryJobBatchLimit × 12 = 240 job/min`；窗口内 `消息数 × 房间 Agent 数` 超过约 14,400 会持续积压。`memory_retain_intents` 目前没有清理策略，需观察增长。回填假定单实例；多实例会重复入队（后端 document_id 幂等，但会浪费调用），扩容前需要全局锁。
+
 MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.ts`、`catchup.ts` 与 `host-protocol.ts`：
 
 - **分群经历**：按 space + ownership_epoch + agent + origin room + member_generation 独立；只有合格 ExposureReceipt 产生 experienced 条目。`raw_full/raw_fragment` 才推进原文覆盖，`preview/summary/memory_context` 不推进；`authored`、`curated` 各自独立，不伪造 input_exposure。
@@ -666,6 +674,7 @@ MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.t
 | `HINDSIGHT_LIST_PAGE_SIZE` | 可选；documents/memories 列表页大小，默认取 `LIMITS.memoryAdapterListPageSize`，上限 100。 |
 | `MEMORY_INSTANCE_ID` | 可选；固定部署 namespace。首次初始化后不得随意更换，配置与既有 `memory_instances` 不一致会 fail closed。 |
 | `MEMORY_CAPTURE=0` | 可选；停止新增 retain/来源写入，但撤回/遗忘屏障仍保留并继续执行。 |
+| `MEMORY_BACKFILL=1` | 可选；启用定时回填（整点对齐的最近 1 小时窗口），默认关闭。只入队 retain，不直连 Hindsight；`MEMORY_ENABLED=1` 且运行时已启动时才生效。 |
 | `MEMORY_HOST_TRUST` | 可选；服务端签发 HostBinding 等级：`tool_only`（默认）、`adapted_host`、`controlled_gateway`。客户端声明的 capabilities 只能缩小能力，不能提升等级。 |
 
 本地验证：
@@ -674,6 +683,7 @@ MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.t
 bun run test:memory-access
 bun run test:memory-ledger
 bun run test:memory-experience
+bun run test:memory-backfill
 bun run test:memory-intake
 bun run test:memory-hindsight
 bun run test:memory-host

@@ -15,8 +15,8 @@ import type {
 import type { MemoryAdapterSearchHit } from './types';
 import {
   RAW_KINDS,
-  isEvidenceKind,
   isOriginKind,
+  isRecallEvidenceKind,
   isRecord,
   isRepresentationKind,
   metadataValue,
@@ -52,7 +52,11 @@ export async function mapFact(fact: unknown, space: MemorySpaceRef): Promise<Map
       ? { source_id: primarySourceId, source_revision: primaryRevision }
       : dependencies[0] ?? null;
   const evidenceValue = metadataValue(metadata, 'agentnet_evidence_kind');
-  const evidence = isEvidenceKind(evidenceValue) ? evidenceValue : null;
+  const evidence = isRecallEvidenceKind(evidenceValue) ? evidenceValue : null;
+  // retain 把本地 representation id 写在 metadata；provider 的 fact.id 是后端身份，
+  // 不能互相冒充。metadata 缺失时保留 fact.id，recall 侧再按
+  // (source_id, revision, text_sha256) 兜底。
+  const localRepresentationId = metadataValue(metadata, 'agentnet_representation_id');
   const representationKind = metadataValue(metadata, 'agentnet_representation_kind');
   const textSha256 = await sha256Hex(text);
   const exactHash = metadataValue(metadata, 'agentnet_text_sha256');
@@ -72,7 +76,7 @@ export async function mapFact(fact: unknown, space: MemorySpaceRef): Promise<Map
     exactHash === textSha256
   ) {
     representation = {
-      representation_id: fact.id,
+      representation_id: localRepresentationId ?? fact.id,
       kind: representationKind as 'raw_full' | 'raw_fragment' | 'preview',
       text_bytes: utf8Bytes(text),
       text_sha256: textSha256,
@@ -84,7 +88,7 @@ export async function mapFact(fact: unknown, space: MemorySpaceRef): Promise<Map
     };
   } else {
     representation = {
-      representation_id: fact.id,
+      representation_id: localRepresentationId ?? fact.id,
       kind: 'summary',
       text_bytes: utf8Bytes(text),
       text_sha256: textSha256,

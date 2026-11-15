@@ -49,7 +49,8 @@
     "test:memory-recovery": "bun scripts/verify-memory-recovery.ts",
     "test:memory-host": "bun scripts/verify-memory-host.ts",
     "test:memory-integration": "bun scripts/verify-memory-integration.ts",
-    "test:web:a11y": "bun scripts/verify-web-a11y.ts"
+    "test:web:a11y": "bun scripts/verify-web-a11y.ts",
+    "test:memory-backfill": "bun scripts/verify-memory-backfill.ts"
   },
   "dependencies": {
     "@ariakit/react": "0.4.43",

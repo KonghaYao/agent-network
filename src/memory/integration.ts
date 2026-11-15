@@ -11,14 +11,23 @@
  */
 import { LIMITS } from '../contracts/limits';
 import { nowMs } from '../storage/db';
+import type { MemoryBackfillRun, MemoryBackfillStatus } from './backfill';
 import type { MemoryRuntime, MemoryRuntimeTickResult } from './runtime';
+
+/** 回填由运行时组合托管，避免入口再新增一个独立 setInterval。 */
+export interface MemoryBackfillRunner {
+  runOnce(): Promise<MemoryBackfillRun>;
+  status(): MemoryBackfillStatus;
+}
 
 export interface MemoryIntegrationOptions {
   runtime: MemoryRuntime;
+  backfill?: MemoryBackfillRunner;
   now?: () => number;
   tickIntervalMs?: number;
   reconcileIntervalMs?: number;
-  onError?: (error: unknown, scope: 'tick' | 'reconcile') => void;
+  backfillIntervalMs?: number;
+  onError?: (error: unknown, scope: 'tick' | 'reconcile' | 'backfill') => void;
 }
 
 export interface MemoryIntegrationStatus {
@@ -34,6 +43,9 @@ export interface MemoryIntegrationStatus {
     stillUnknown: number;
     unsupported: number;
   } | null;
+  backfill_interval_ms: number | null;
+  last_backfill_at: number | null;
+  backfill: MemoryBackfillStatus | null;
 }
 
 export interface MemoryIntegrationRun {
@@ -44,27 +56,37 @@ export interface MemoryIntegrationRun {
 
 export class MemoryIntegration {
   readonly #runtime: MemoryRuntime;
+  readonly #backfill: MemoryBackfillRunner | null;
   readonly #now: () => number;
   readonly #tickIntervalMs: number;
   readonly #reconcileIntervalMs: number;
+  readonly #backfillIntervalMs: number;
   readonly #onError: NonNullable<MemoryIntegrationOptions['onError']>;
 
   #started = false;
   #stopped = false;
   #timer: ReturnType<typeof setInterval> | null = null;
+  #backfillTimer: ReturnType<typeof setInterval> | null = null;
   #inFlight: Promise<MemoryIntegrationRun> | null = null;
+  #backfillInFlight: Promise<void> | null = null;
   #lastTickAt: number | null = null;
   #lastTick: MemoryRuntimeTickResult | null = null;
   #lastReconcileAt: number | null = null;
   #lastReconcile: MemoryIntegrationStatus['last_reconcile'] = null;
+  #lastBackfillAt: number | null = null;
 
   constructor(options: MemoryIntegrationOptions) {
     this.#runtime = options.runtime;
+    this.#backfill = options.backfill ?? null;
     this.#now = options.now ?? nowMs;
     this.#tickIntervalMs = Math.max(1, options.tickIntervalMs ?? LIMITS.memoryTickIntervalMs);
     this.#reconcileIntervalMs = Math.max(
       1,
       options.reconcileIntervalMs ?? LIMITS.memoryReconcileIntervalMs,
+    );
+    this.#backfillIntervalMs = Math.max(
+      1,
+      options.backfillIntervalMs ?? LIMITS.memoryBackfillIntervalMs,
     );
     this.#onError = options.onError ?? (() => undefined);
   }
@@ -81,9 +103,15 @@ export class MemoryIntegration {
     this.#timer = setInterval(() => {
       void this.runOnce().catch((error) => this.#onError(error, 'tick'));
     }, this.#tickIntervalMs);
+    if (this.#backfill) {
+      this.#backfillTimer = setInterval(() => {
+        void this.runBackfillOnce();
+      }, this.#backfillIntervalMs);
+    }
     // 启动恢复已经由 runtime.start 完成；立即跑一轮领取/对账，不等待首个周期。
-    // 不阻塞 HTTP 监听。
+    // 回填同样先排定定时器再补偿，不阻塞 HTTP 监听。
     void this.runOnce().catch((error) => this.#onError(error, 'tick'));
+    if (this.#backfill) void this.runBackfillOnce();
   }
 
   async stop(): Promise<void> {
@@ -93,9 +121,33 @@ export class MemoryIntegration {
       clearInterval(this.#timer);
       this.#timer = null;
     }
+    if (this.#backfillTimer) {
+      clearInterval(this.#backfillTimer);
+      this.#backfillTimer = null;
+    }
+    await this.#backfillInFlight?.catch(() => undefined);
     await this.#inFlight?.catch(() => undefined);
     await this.#runtime.stop();
     this.#started = false;
+  }
+
+  /** 执行一轮回填；定时器与启动补偿共享同一个 in-flight Promise。 */
+  async runBackfillOnce(): Promise<void> {
+    if (!this.#backfill || !this.#started || this.#stopped) return;
+    if (this.#backfillInFlight) return this.#backfillInFlight;
+    const run = this.#backfill
+      .runOnce()
+      .then(() => {
+        this.#lastBackfillAt = this.#now();
+      })
+      .catch((error) => {
+        this.#onError(error, 'backfill');
+      })
+      .finally(() => {
+        if (this.#backfillInFlight === run) this.#backfillInFlight = null;
+      });
+    this.#backfillInFlight = run;
+    return run;
   }
 
   /**
@@ -154,6 +206,9 @@ export class MemoryIntegration {
       last_tick: this.#lastTick,
       last_reconcile_at: this.#lastReconcileAt,
       last_reconcile: this.#lastReconcile,
+      backfill_interval_ms: this.#backfill ? this.#backfillIntervalMs : null,
+      last_backfill_at: this.#lastBackfillAt,
+      backfill: this.#backfill?.status() ?? null,
     };
   }
 }

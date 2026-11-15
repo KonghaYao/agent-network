@@ -29,6 +29,10 @@ export const MEMORY_CURSOR_KINDS = {
   recallWatermark: 'recall_watermark',
   catchupScan: 'catchup_scan',
   reconciled: 'reconciled',
+  /** 回填：已完整提交的窗口上界（毫秒，整点对齐）。 */
+  backfillWindowTo: 'backfill_window_to',
+  /** 回填：已检查到的最大 messages.rowid；恢复时回看安全行数。 */
+  backfillScanRowid: 'backfill_scan_rowid',
 } as const;
 
 export interface ClaimedMemoryJob {
