@@ -214,6 +214,212 @@ test.describe('SPA 右栏与剩余入口', () => {
     await expect(item).toHaveCount(0, { timeout: 15_000 });
   });
 
+  test('markdown preview renders, toggles source and sanitizes HTML', async ({ page }) => {
+    await login(page, base, tokenA);
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#files-pane')).toBeVisible();
+
+    const fileName = `preview-${Date.now()}.md`;
+    const markdown = [
+      '# 标题一',
+      '',
+      '## 标题二',
+      '',
+      '- 列表项一',
+      '- 列表项二',
+      '',
+      '> 引用内容',
+      '',
+      '```js',
+      'const answer = 42;',
+      '```',
+      '',
+      '<script>window.__mdXss = 1</script>',
+      '<img src=x onerror="window.__mdXss = 2">',
+      '',
+      '[危险链接](javascript:alert(1))',
+      '',
+      '[安全链接](https://example.com/docs)',
+    ].join('\n');
+    await page.locator('#files-input').setInputFiles({
+      name: fileName,
+      mimeType: 'text/markdown',
+      buffer: Buffer.from(markdown),
+    });
+    const item = page.locator('#files-list .file-item').filter({ hasText: fileName });
+    await expect(item).toBeVisible({ timeout: 15_000 });
+
+    await item.getByRole('button', { name: '预览', exact: true }).click();
+    await expect(page.locator('#file-preview')).toBeVisible();
+    const viewer = page.locator('#file-preview-body .file-preview-md-viewer');
+    await expect(viewer.locator('h1')).toHaveText('标题一', { timeout: 15_000 });
+    await expect(viewer.locator('h2')).toHaveText('标题二');
+    await expect(viewer.locator('li')).toHaveCount(2);
+    await expect(viewer.locator('blockquote')).toContainText('引用内容');
+    await expect(viewer.locator('pre.md-pre')).toContainText('const answer = 42;');
+
+    // 危险 HTML/协议不可执行，也不生成可点击链接。
+    await expect(viewer.locator('script')).toHaveCount(0);
+    await expect(viewer.locator('img')).toHaveCount(0);
+    await expect(viewer.locator('[onerror]')).toHaveCount(0);
+    await expect(viewer.locator('a[href^="javascript:"]')).toHaveCount(0);
+    await expect(viewer.locator('a').filter({ hasText: '危险链接' })).toHaveCount(0);
+    await expect(viewer).toContainText('危险链接');
+    expect(await page.evaluate(() => (window as { __mdXss?: number }).__mdXss)).toBeUndefined();
+
+    const safeLink = viewer.locator('a[href="https://example.com/docs"]');
+    await expect(safeLink).toHaveAttribute('rel', 'noopener noreferrer nofollow');
+    await expect(safeLink).toHaveAttribute('target', '_blank');
+
+    const toggle = page.locator('#file-preview-body .file-preview-md-toggle');
+    await expect(toggle).toHaveText('查看原文');
+    await toggle.click();
+    const source = page.locator('#file-preview-body .file-preview-md-source');
+    await expect(source).toBeVisible();
+    await expect(source).toContainText('# 标题一');
+    await expect(viewer).toHaveCount(0);
+    await expect(toggle).toHaveText('渲染视图');
+
+    await toggle.click();
+    await expect(page.locator('#file-preview-body .file-preview-md-viewer h1')).toHaveText(
+      '标题一',
+      { timeout: 15_000 },
+    );
+    await expect(toggle).toHaveText('查看原文');
+    await page.locator('#file-preview-close').click();
+    await expect(page.locator('#file-preview')).toBeHidden();
+
+    // 扩展名兜底不依赖 MIME，且大小写不敏感。
+    const extName = `UPPER-${Date.now()}.Markdown`;
+    await page.locator('#files-input').setInputFiles({
+      name: extName,
+      mimeType: 'application/octet-stream',
+      buffer: Buffer.from('# 扩展名标题'),
+    });
+    const extItem = page.locator('#files-list .file-item').filter({ hasText: extName });
+    await expect(extItem).toBeVisible({ timeout: 15_000 });
+    await expect(extItem.locator('.file-thumb')).toHaveText('MD');
+    await extItem.getByRole('button', { name: '预览', exact: true }).click();
+    await expect(page.locator('#file-preview-body .file-preview-md-viewer h1')).toHaveText(
+      '扩展名标题',
+      { timeout: 15_000 },
+    );
+    await page.locator('#file-preview-close').click();
+    await expect(page.locator('#file-preview')).toBeHidden();
+  });
+
+  test('markdown preview falls back to plain text for oversized and failed reads', async ({
+    page,
+  }) => {
+    await login(page, base, tokenA);
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#files-pane')).toBeVisible();
+
+    const bigName = `big-${Date.now()}.md`;
+    await page.locator('#files-input').setInputFiles({
+      name: bigName,
+      mimeType: 'text/markdown',
+      buffer: Buffer.from(`# big\n\n${'x'.repeat(300 * 1024)}`),
+    });
+    const bigItem = page.locator('#files-list .file-item').filter({ hasText: bigName });
+    await expect(bigItem).toBeVisible({ timeout: 15_000 });
+    await bigItem.getByRole('button', { name: '预览', exact: true }).click();
+    await expect(page.locator('#file-preview-body .file-preview-md-note')).toContainText(
+      '文件较大，已显示纯文本前 256 KB。',
+    );
+    await expect(page.locator('#file-preview-body .file-preview-md-source')).toContainText('# big');
+    await expect(page.locator('#file-preview-body .file-preview-md-toggle')).toHaveCount(0);
+    await expect(page.locator('#file-preview-body .file-preview-md-viewer')).toHaveCount(0);
+    await page.locator('#file-preview-close').click();
+    await expect(page.locator('#file-preview')).toBeHidden();
+
+    const failName = `fail-${Date.now()}.md`;
+    await page.locator('#files-input').setInputFiles({
+      name: failName,
+      mimeType: 'text/markdown',
+      buffer: Buffer.from('# 读取失败\n\n正文'),
+    });
+    const failItem = page.locator('#files-list .file-item').filter({ hasText: failName });
+    await expect(failItem).toBeVisible({ timeout: 15_000 });
+    const fileId = await failItem.getAttribute('data-file-id');
+    expect(fileId).toBeTruthy();
+    await page.route(`**/f/${fileId}**`, (route) =>
+      route.fulfill({ status: 500, contentType: 'text/plain', body: 'boom' }),
+    );
+    await failItem.getByRole('button', { name: '预览', exact: true }).click();
+    await expect(page.locator('#file-preview-body pre')).toContainText('读取文本预览失败');
+    await expect(page.locator('#file-preview-body .file-preview-md-toggle')).toHaveCount(0);
+    await page.locator('#file-preview-close').click();
+    await expect(page.locator('#file-preview')).toBeHidden();
+
+    // 渲染器不可用：阻断 Markdown bundle，回退为纯文本而不是空白。
+    await page.route('**/assets/chat-markdown.js', (route) => route.abort());
+    const fallbackName = `norender-${Date.now()}.md`;
+    await page.locator('#files-input').setInputFiles({
+      name: fallbackName,
+      mimeType: 'text/markdown',
+      buffer: Buffer.from('# 回退标题\n\n回退正文'),
+    });
+    const fallbackItem = page.locator('#files-list .file-item').filter({ hasText: fallbackName });
+    await expect(fallbackItem).toBeVisible({ timeout: 15_000 });
+    await fallbackItem.getByRole('button', { name: '预览', exact: true }).click();
+    await expect(page.locator('#file-preview-body .md-unavailable')).toContainText(
+      'Markdown 渲染不可用，已显示纯文本',
+    );
+    await expect(page.locator('#file-preview-body .md-fallback')).toContainText('# 回退标题');
+    await expect(page.locator('#file-preview-body .file-preview-md-toggle')).toHaveText('查看原文');
+    await page.locator('#file-preview-close').click();
+    await expect(page.locator('#file-preview')).toBeHidden();
+  });
+
+  test('markdown preview stays readable at 390x844 in dark mode', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await login(page, base, tokenA);
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#files-toggle')).toBeVisible();
+    await page.locator('#files-toggle').click();
+    await expect(page.locator('#files-pane')).toBeVisible();
+
+    const fileName = `mobile-${Date.now()}.md`;
+    await page.locator('#files-input').setInputFiles({
+      name: fileName,
+      mimeType: 'text/markdown',
+      buffer: Buffer.from('# 移动端\n\n## 二级标题\n\n- 第一项\n- 第二项\n\n> 引用\n\n```\ncode\n```'),
+    });
+    const item = page.locator('#files-list .file-item').filter({ hasText: fileName });
+    await expect(item).toBeVisible({ timeout: 15_000 });
+    await item.getByRole('button', { name: '预览', exact: true }).click();
+    await expect(page.locator('#file-preview-body .file-preview-md-viewer h1')).toHaveText(
+      '移动端',
+      { timeout: 15_000 },
+    );
+
+    const metrics = await page.evaluate(() => {
+      const card = document.querySelector<HTMLElement>('#file-preview-body .file-preview-markdown');
+      const viewer = document.querySelector<HTMLElement>('#file-preview-body .file-preview-md-viewer');
+      const toggle = document.querySelector<HTMLElement>('#file-preview-body .file-preview-md-toggle');
+      if (!card || !viewer || !toggle) return null;
+      const cardStyle = getComputedStyle(card);
+      const viewerStyle = getComputedStyle(viewer);
+      return {
+        cardBackground: cardStyle.backgroundColor,
+        cardWidth: card.getBoundingClientRect().width,
+        viewerColor: viewerStyle.color,
+        toggleVisible: toggle.getBoundingClientRect().width > 0,
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      };
+    });
+    expect(metrics).not.toBeNull();
+    expect(metrics!.cardBackground).toBe('rgb(43, 43, 43)');
+    expect(metrics!.viewerColor).toBe('rgb(229, 229, 229)');
+    expect(metrics!.cardWidth).toBeLessThanOrEqual(390);
+    expect(metrics!.toggleVisible).toBe(true);
+    expect(metrics!.overflow).toBeLessThanOrEqual(1);
+    await page.locator('#file-preview-close').click();
+    await expect(page.locator('#file-preview')).toBeHidden();
+  });
+
   test('monitor URL saves, renders iframe and closes back to files', async ({ page }) => {
     await login(page, base, tokenA);
     await page.goto(`${base}/c/${roomId}`);
