@@ -313,6 +313,20 @@ export function jsonBytes(value: unknown): number {
 }
 
 /**
+ * 按 code point 减半正文，并保证 UTF-16 长度严格递减。
+ *
+ * `truncateChars` 按 code point 截断，而 `text.length` 是 UTF-16 长度；纯 astral
+ * 文本（emoji）用 UTF-16 长度计算减半目标时会得到不小于实际 code point 数的值，
+ * 截断后原样返回，压缩循环永不结束。这里直接按 code point 取半，并用长度检查
+ * 兜底，确保每轮至少减少一个字符。
+ */
+function halveText(text: string): string {
+  const chars = Array.from(text);
+  const half = chars.slice(0, Math.floor(chars.length / 2)).join('');
+  return half.length < text.length ? half : chars.slice(0, chars.length - 1).join('');
+}
+
+/**
  * 把图压到字节预算内。裁剪顺序保证星座视图优先保住边：
  * 1. 节点正文先截到 memoryPanelGraphTextFloorChars；长中文记忆的字节主要在这里；
  * 2. 仍超预算时按权重/覆盖度裁剪边，但不低于 min(现有边数, memoryPanelGraphEdgesMin)；
@@ -337,10 +351,13 @@ export function fitGraphBytes<T extends { nodes: InsightGraphNode[]; edges: Insi
 
   const edgeFloor = Math.min(graph.edges.length, LIMITS.memoryPanelGraphEdgesMin);
   while (graph.edges.length > edgeFloor && jsonBytes(graph) > maxBytes) {
-    graph.edges = trimEdges(
+    const nextEdges = trimEdges(
       graph.edges,
       Math.max(edgeFloor, Math.floor(graph.edges.length * 0.75)),
     );
+    // 原地替换：调用方可能传入与结果共享 nodes/edges 的包装对象；重新赋值只会
+    // 更新包装对象，外部持有的 result.edges 仍指向旧数组，删节点后形成悬空边。
+    graph.edges.splice(0, graph.edges.length, ...nextEdges);
     truncated = true;
   }
 
@@ -350,7 +367,7 @@ export function fitGraphBytes<T extends { nodes: InsightGraphNode[]; edges: Insi
     for (const node of graph.nodes) {
       const text = node.text ?? '';
       if (text.length === 0) continue;
-      node.text = truncateChars(text, Math.floor(text.length / 2));
+      node.text = halveText(text);
       shrunk = true;
     }
     if (!shrunk) break;
@@ -359,7 +376,8 @@ export function fitGraphBytes<T extends { nodes: InsightGraphNode[]; edges: Insi
 
   // 正文已压空仍超预算，才允许跌破边下限。
   while (graph.edges.length > 0 && jsonBytes(graph) > maxBytes) {
-    graph.edges = trimEdges(graph.edges, Math.floor(graph.edges.length * 0.75));
+    const nextEdges = trimEdges(graph.edges, Math.floor(graph.edges.length * 0.75));
+    graph.edges.splice(0, graph.edges.length, ...nextEdges);
     truncated = true;
   }
 

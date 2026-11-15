@@ -376,13 +376,8 @@ export class MemoryInsightService {
           };
           // include_rows 时先只按图核心预算裁剪 nodes/edges，保证星座图可用；
           // table_rows/timeline 随后由 #fitGraphResponse 在单一总预算内处理。
-          const graphTrimmed = includeRows
-            ? fitGraphBytes(
-                { nodes: result.nodes, edges: result.edges },
-                LIMITS.memoryPanelGraphCoreBytes,
-              )
-            : fitGraphBytes(result);
-          if (graphTrimmed) result.truncated = true;
+          // fitGraphBytes 原地修改 nodes/edges，裁剪结果直接落在 result 上。
+          if (fitGraphBytes(result, LIMITS.memoryPanelGraphCoreBytes)) result.truncated = true;
           if (includeRows) {
             const normalizedRows = normalizeGraphRows(outcome.body, {
               limit: rowsLimit,

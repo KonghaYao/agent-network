@@ -53,6 +53,63 @@ async function expectBusiness(
   }
 }
 
+/**
+ * astral 压缩回归的硬超时探针。
+ *
+ * 同步循环一旦退化为死循环，`Promise.race` 的定时器同样无法触发；因此把直接
+ * 函数级用例放到子进程执行，由父进程在超时后 kill，避免整个验收脚本挂死。
+ */
+async function runAstralProbe(timeoutMs = 15_000): Promise<{
+  timedOut: boolean;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+}> {
+  const child = Bun.spawn({
+    cmd: [process.execPath, import.meta.path],
+    env: { ...process.env, MEMORY_INSIGHT_ASTRAL_PROBE: '1' },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill();
+  }, timeoutMs);
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  clearTimeout(timer);
+  return { timedOut, exitCode, stdout, stderr };
+}
+
+/** 子进程入口：240 节点 × 600 emoji + 8×80 字实体，验证减半循环有限步收敛。 */
+async function astralProbe(): Promise<void> {
+  const graph = normalizeMemoryGraph(astralGraphFixture(LIMITS.memoryPanelGraphNodesRequestMax), {
+    nodeLimit: LIMITS.memoryPanelGraphNodesRequestMax,
+    edgeLimit: LIMITS.memoryPanelGraphEdgesMax,
+    textChars: LIMITS.memoryPanelGraphTextChars,
+  });
+  if (!graph) throw new Error('astral probe normalize failed');
+  const trimmed = fitGraphBytes(graph);
+  const ids = new Set(graph.nodes.map((node) => node.id));
+  const dangling = graph.edges.filter(
+    (edge) => !ids.has(edge.source) || !ids.has(edge.target),
+  ).length;
+  console.log(
+    `ASTRAL_PROBE ${JSON.stringify({
+      trimmed,
+      bytes: jsonBytes(graph),
+      nodes: graph.nodes.length,
+      edges: graph.edges.length,
+      maxText: Math.max(0, ...graph.nodes.map((node) => Array.from(node.text ?? '').length)),
+      dangling,
+    })}`,
+  );
+}
+
 function seedFriend(
   db: D1Database,
   left: string,
@@ -315,7 +372,8 @@ function chineseLongTextGraphFixture(): Record<string, unknown> {
 }
 
 /**
- * 极端 fixture：240 节点 × 600 中文字符、80 字中文 label + 600 条边。
+ * 极端 fixture（仅直接函数级用例；服务端 service.graph 会把 limit 夹到 120）：
+ * 240 节点 × 600 中文字符、80 字中文 label + 600 条边。
  * 正文压到下限后仍超过 200 KiB 图核心预算，用于验证边保留下限生效。
  */
 function extremeChineseGraphFixture(): Record<string, unknown> {
@@ -402,6 +460,127 @@ function wireLimitGraphFixture(): Record<string, unknown> {
     total_units: tableRows.length,
     total_edges: edges.length,
   };
+}
+
+const BUDGET_ENTITY_PREFIXES = Array.from('甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉');
+
+/**
+ * 字节预算分支 fixture。
+ *
+ * 直接函数级用例可使用 240 节点（memoryPanelGraphNodesRequestMax）；服务端
+ * `service.graph` 会把请求节点数夹到 `memoryPanelGraphNodesMax`（120），
+ * 因此所有服务级 fixture 一律使用 120 节点，240 只出现在直接函数级用例。
+ */
+function budgetGraphFixture(options: {
+  nodeCount: number;
+  text: string;
+  entityCount?: number;
+  edgeCount?: number;
+  rows?: number;
+}): Record<string, unknown> {
+  const nodes = Array.from({ length: options.nodeCount }, (_, index) => ({
+    data: {
+      id: `bg-${index}`,
+      label: `预算节点 ${index}`,
+      text: options.text,
+      entities: Array.from({ length: options.entityCount ?? 0 }, (_, entityIndex) => {
+        const prefix = `${BUDGET_ENTITY_PREFIXES[entityIndex % BUDGET_ENTITY_PREFIXES.length]}${String(entityIndex).padStart(2, '0')}`;
+        return prefix + '实'.repeat(Math.max(0, LIMITS.memoryPanelGraphLabelChars - prefix.length));
+      }),
+    },
+  }));
+  const edgeCount = options.edgeCount ?? 200;
+  const edges = Array.from({ length: edgeCount }, (_, index) => {
+    const source = index % options.nodeCount;
+    const lane = Math.floor(index / options.nodeCount);
+    return {
+      data: {
+        id: `bg-edge-${index}`,
+        source: `bg-${source}`,
+        target: `bg-${(source + 1 + lane) % options.nodeCount}`,
+        linkType: index % 2 === 0 ? 'semantic' : 'entity',
+        weight: 1 + (index % 7),
+      },
+    };
+  });
+  const rowCount = options.rows ?? 0;
+  const tableRows = Array.from({ length: rowCount }, (_, index) => {
+    const at = new Date(Date.parse('2026-11-01T00:00:00Z') - index * 3_600_000).toISOString();
+    return {
+      id: `bg-row-${index}`,
+      text: 'r'.repeat(400),
+      fact_type: ['world', 'experience', 'observation'][index % 3],
+      occurred_start: at,
+      mentioned_at: at,
+      entities: Array.from({ length: 20 }, (_, entityIndex) => `Entity${entityIndex}`).join(', '),
+      proof_count: 1,
+      tags: ['public'],
+      document_id: DOCUMENT_SECRET,
+      chunk_id: CHUNK_SECRET,
+      metadata: { secret: METADATA_SECRET },
+    };
+  });
+  return {
+    nodes,
+    edges,
+    ...(rowCount > 0 ? { table_rows: tableRows } : {}),
+    total_units: rowCount > 0 ? rowCount : nodes.length,
+    total_edges: edges.length,
+  };
+}
+
+/** 正文减半分支（直接函数级 240 节点）：正文已在下限，仍超预算才继续减半。 */
+function halvingGraphFixture(): Record<string, unknown> {
+  return budgetGraphFixture({
+    nodeCount: LIMITS.memoryPanelGraphNodesRequestMax,
+    text: '记'.repeat(LIMITS.memoryPanelGraphTextFloorChars),
+    entityCount: 2,
+    edgeCount: LIMITS.memoryPanelGraphEdgesMax,
+  });
+}
+
+/** 跌破边下限分支（直接函数级）：正文压空后仍超预算，才允许边跌破 120。 */
+function belowFloorEdgeGraphFixture(): Record<string, unknown> {
+  return budgetGraphFixture({
+    nodeCount: 200,
+    text: '记'.repeat(LIMITS.memoryPanelGraphTextFloorChars),
+    entityCount: 4,
+    edgeCount: LIMITS.memoryPanelGraphEdgesMax,
+  });
+}
+
+/** 删节点分支（直接函数级 240 节点）：正文与边清空后仍超预算。 */
+function nodeDropGraphFixture(): Record<string, unknown> {
+  return budgetGraphFixture({
+    nodeCount: LIMITS.memoryPanelGraphNodesRequestMax,
+    text: '记'.repeat(LIMITS.memoryPanelGraphTextChars),
+    entityCount: 8,
+    edgeCount: LIMITS.memoryPanelGraphEdgesMax,
+  });
+}
+
+/** include_rows 核心预算回归（服务级可达 120 节点）：中文长正文 + 8×80 字实体 + 200 边 + 200 行。 */
+function includeRowsCoreGraphFixture(): Record<string, unknown> {
+  return budgetGraphFixture({
+    nodeCount: LIMITS.memoryPanelGraphNodesMax,
+    text: '记'.repeat(LIMITS.memoryPanelGraphTextChars),
+    entityCount: 8,
+    edgeCount: 200,
+    rows: LIMITS.memoryPanelRowsDefault,
+  });
+}
+
+/** 纯 astral 正文 fixture：用于验证按 code point 减半不会卡死循环。 */
+function astralGraphFixture(nodeCount: number, rows = 0): Record<string, unknown> {
+  return budgetGraphFixture({
+    nodeCount,
+    text: '😀'.repeat(LIMITS.memoryPanelGraphTextChars),
+    entityCount: 8,
+    edgeCount: nodeCount >= LIMITS.memoryPanelGraphNodesRequestMax
+      ? LIMITS.memoryPanelGraphEdgesMax
+      : 200,
+    rows,
+  });
 }
 
 /** 年/月/周/日边界 fixture：NY 与 Shanghai 在跨年夜落在不同年份/日期。 */
@@ -554,6 +733,8 @@ async function main(): Promise<void> {
   const rowsAgent = unique('agt_rows');
   const tzAgent = unique('agt_tz');
   const wireAgent = unique('agt_wire');
+  const coreAgent = unique('agt_core');
+  const astralAgent = unique('agt_astral');
   const humanTarget = unique('usr_human_target');
 
   seedActor(env, { actorId: friend, kind: 'human', name: '好友' });
@@ -572,6 +753,8 @@ async function main(): Promise<void> {
   seedActor(env, { actorId: rowsAgent, kind: 'agent', name: '表格行 Agent' });
   seedActor(env, { actorId: tzAgent, kind: 'agent', name: '时区 Agent' });
   seedActor(env, { actorId: wireAgent, kind: 'agent', name: '总预算 Agent' });
+  seedActor(env, { actorId: coreAgent, kind: 'agent', name: '核心预算 Agent' });
+  seedActor(env, { actorId: astralAgent, kind: 'agent', name: 'Astral Agent' });
   seedActor(env, { actorId: humanTarget, kind: 'human', name: '人类目标' });
 
   seedFriend(env.d1, friend, target, 'active');
@@ -582,6 +765,8 @@ async function main(): Promise<void> {
   seedFriend(env.d1, friend, rowsAgent, 'active');
   seedFriend(env.d1, friend, tzAgent, 'active');
   seedFriend(env.d1, friend, wireAgent, 'active');
+  seedFriend(env.d1, friend, coreAgent, 'active');
+  seedFriend(env.d1, friend, astralAgent, 'active');
   seedFriend(env.d1, blockedFriend, target, 'active');
   seedFriend(env.d1, doubleBlocked, target, 'active');
   // 陌生人只是目标 Agent 的 manager；新策略明确不允许仅凭管理关系读取正文。
@@ -692,6 +877,28 @@ async function main(): Promise<void> {
     ownershipEpoch: wireSpace.ownership_epoch,
     backendBindingEpoch: wireSpace.backend_binding_epoch,
   });
+  const coreSpace = {
+    space_id: 'msp_insight_core',
+    ownership_epoch: 1,
+    backend_binding_epoch: 1,
+  };
+  seedSpace(env.d1, {
+    spaceId: coreSpace.space_id,
+    agentId: coreAgent,
+    ownershipEpoch: coreSpace.ownership_epoch,
+    backendBindingEpoch: coreSpace.backend_binding_epoch,
+  });
+  const astralSpace = {
+    space_id: 'msp_insight_astral',
+    ownership_epoch: 1,
+    backend_binding_epoch: 1,
+  };
+  seedSpace(env.d1, {
+    spaceId: astralSpace.space_id,
+    agentId: astralAgent,
+    ownershipEpoch: astralSpace.ownership_epoch,
+    backendBindingEpoch: astralSpace.backend_binding_epoch,
+  });
 
   const targetBank = await bankIdFor('agentnet', targetSpace);
   const missingBank = await bankIdFor('agentnet', missingBankSpace);
@@ -699,6 +906,8 @@ async function main(): Promise<void> {
   const rowsBank = await bankIdFor('agentnet', rowsSpace);
   const tzBank = await bankIdFor('agentnet', tzSpace);
   const wireBank = await bankIdFor('agentnet', wireSpace);
+  const coreBank = await bankIdFor('agentnet', coreSpace);
+  const astralBank = await bankIdFor('agentnet', astralSpace);
   check('bank 由 space + epochs 派生', targetBank.startsWith('agentnet-') && targetBank.length === 49);
   check('不同 space 派生不同 bank', targetBank !== missingBank);
 
@@ -817,6 +1026,8 @@ async function main(): Promise<void> {
   fake.seedBank(rowsBank, { graph: rowsGraphFixture() });
   fake.seedBank(tzBank, { graph: tzGraphFixture() });
   fake.seedBank(wireBank, { graph: wireLimitGraphFixture() });
+  fake.seedBank(coreBank, { graph: includeRowsCoreGraphFixture() });
+  fake.seedBank(astralBank, { graph: astralGraphFixture(LIMITS.memoryPanelGraphNodesMax, LIMITS.memoryPanelRowsDefault) });
 
   let clock = AT;
   const reader = new HindsightInsightReader({
@@ -1073,6 +1284,139 @@ async function main(): Promise<void> {
           extremeNodeIds.has(edge.source) &&
           extremeNodeIds.has(edge.target),
       ),
+    );
+  }
+
+  console.log('--- graph 裁剪分支（直接函数级） ---');
+  const fitFixture = (
+    label: string,
+    fixture: Record<string, unknown>,
+    nodeLimit: number,
+  ) => {
+    const graph = normalizeMemoryGraph(fixture, {
+      nodeLimit,
+      edgeLimit: LIMITS.memoryPanelGraphEdgesMax,
+      textChars: LIMITS.memoryPanelGraphTextChars,
+    });
+    check(`${label} 归一化成功`, graph !== null);
+    if (!graph) return null;
+    const trimmed = fitGraphBytes(graph);
+    const ids = new Set(graph.nodes.map((node) => node.id));
+    const dangling = graph.edges.filter(
+      (edge) => !ids.has(edge.source) || !ids.has(edge.target),
+    ).length;
+    return { graph, trimmed, dangling };
+  };
+
+  const halving = fitFixture(
+    '正文减半',
+    halvingGraphFixture(),
+    LIMITS.memoryPanelGraphNodesRequestMax,
+  );
+  if (halving) {
+    const maxText = Math.max(
+      ...halving.graph.nodes.map((node) => Array.from(node.text ?? '').length),
+    );
+    checkEqual('正文减半：节点数不变', halving.graph.nodes.length, LIMITS.memoryPanelGraphNodesRequestMax);
+    check(
+      '正文减半：边不低于下限',
+      halving.graph.edges.length >= LIMITS.memoryPanelGraphEdgesMin,
+      halving.graph.edges.length,
+    );
+    check(
+      '正文减半：正文压到下限以下',
+      maxText < LIMITS.memoryPanelGraphTextFloorChars,
+      maxText,
+    );
+    check(
+      '正文减半：不超核心预算',
+      jsonBytes(halving.graph) <= LIMITS.memoryPanelGraphCoreBytes,
+      `${jsonBytes(halving.graph)}/${LIMITS.memoryPanelGraphCoreBytes}`,
+    );
+    checkEqual('正文减半：无悬空边', halving.dangling, 0);
+    check('正文减半：标记裁剪', halving.trimmed);
+  }
+
+  const belowFloor = fitFixture(
+    '跌破边下限',
+    belowFloorEdgeGraphFixture(),
+    LIMITS.memoryPanelGraphNodesRequestMax,
+  );
+  if (belowFloor) {
+    const maxText = Math.max(
+      ...belowFloor.graph.nodes.map((node) => Array.from(node.text ?? '').length),
+    );
+    check('跌破边下限：节点仍保留', belowFloor.graph.nodes.length > 0, belowFloor.graph.nodes.length);
+    check(
+      '跌破边下限：边数低于 120',
+      belowFloor.graph.edges.length < LIMITS.memoryPanelGraphEdgesMin,
+      belowFloor.graph.edges.length,
+    );
+    check('跌破边下限：仍有边', belowFloor.graph.edges.length > 0, belowFloor.graph.edges.length);
+    checkEqual('跌破边下限：正文已压空', maxText, 0);
+    check(
+      '跌破边下限：不超核心预算',
+      jsonBytes(belowFloor.graph) <= LIMITS.memoryPanelGraphCoreBytes,
+      `${jsonBytes(belowFloor.graph)}/${LIMITS.memoryPanelGraphCoreBytes}`,
+    );
+    checkEqual('跌破边下限：无悬空边', belowFloor.dangling, 0);
+    check('跌破边下限：标记裁剪', belowFloor.trimmed);
+  }
+
+  const nodeDrop = fitFixture(
+    '删节点',
+    nodeDropGraphFixture(),
+    LIMITS.memoryPanelGraphNodesRequestMax,
+  );
+  if (nodeDrop) {
+    check(
+      '删节点：节点数减少',
+      nodeDrop.graph.nodes.length < LIMITS.memoryPanelGraphNodesRequestMax,
+      nodeDrop.graph.nodes.length,
+    );
+    checkEqual('删节点：边已清空', nodeDrop.graph.edges.length, 0);
+    check(
+      '删节点：不超核心预算',
+      jsonBytes(nodeDrop.graph) <= LIMITS.memoryPanelGraphCoreBytes,
+      `${jsonBytes(nodeDrop.graph)}/${LIMITS.memoryPanelGraphCoreBytes}`,
+    );
+    checkEqual('删节点：无悬空边', nodeDrop.dangling, 0);
+    check('删节点：标记裁剪', nodeDrop.trimmed);
+  }
+
+  console.log('--- graph astral 正文裁剪（子进程硬超时） ---');
+  const astralProbeResult = await runAstralProbe();
+  check('astral 探针未超时', !astralProbeResult.timedOut, astralProbeResult.stderr.slice(0, 400));
+  checkEqual('astral 探针退出码', astralProbeResult.exitCode, 0);
+  const astralProbeLine = astralProbeResult.stdout
+    .split('\n')
+    .find((line) => line.startsWith('ASTRAL_PROBE '));
+  check('astral 探针输出结果', astralProbeLine !== undefined, astralProbeResult.stderr.slice(0, 400));
+  if (astralProbeLine) {
+    const astral = JSON.parse(astralProbeLine.slice('ASTRAL_PROBE '.length)) as {
+      trimmed: boolean;
+      bytes: number;
+      nodes: number;
+      edges: number;
+      maxText: number;
+      dangling: number;
+    };
+    check(
+      'astral 正文按 code point 持续收敛',
+      astral.maxText < LIMITS.memoryPanelGraphTextFloorChars,
+      astral.maxText,
+    );
+    check('astral 标记裁剪', astral.trimmed);
+    check(
+      'astral 不超核心预算',
+      astral.bytes <= LIMITS.memoryPanelGraphCoreBytes,
+      `${astral.bytes}/${LIMITS.memoryPanelGraphCoreBytes}`,
+    );
+    checkEqual('astral 无悬空边', astral.dangling, 0);
+    check(
+      'astral 重负载下触发删节点分支',
+      astral.nodes < LIMITS.memoryPanelGraphNodesRequestMax,
+      astral.nodes,
     );
   }
 
@@ -1361,6 +1705,79 @@ async function main(): Promise<void> {
     }),
   );
   assertNoSensitive('graph 总预算输出', wireGraph, wireBank);
+
+  console.log('--- graph include_rows 核心预算回归 ---');
+  const coreGraph = await service.graph(viewer('human', friend), {
+    actor_id: coreAgent,
+    include_rows: true,
+    q: 'include-rows-core-budget',
+    refresh: true,
+  });
+  const coreNodeIds = new Set(coreGraph.nodes.map((node) => node.id));
+  const coreDangling = coreGraph.edges.filter(
+    (edge) => !coreNodeIds.has(edge.source) || !coreNodeIds.has(edge.target),
+  ).length;
+  const coreBytes = jsonBytes({ nodes: coreGraph.nodes, edges: coreGraph.edges });
+  console.log(
+    `include_rows 核心预算实测：core ${coreBytes}/${LIMITS.memoryPanelGraphCoreBytes} B，节点 ${coreGraph.nodes.length}，边 ${coreGraph.edges.length}，悬空 ${coreDangling}，行 ${coreGraph.table_rows?.length ?? 0}`,
+  );
+  check(
+    'include_rows 核心预算：节点被裁剪',
+    coreGraph.nodes.length < LIMITS.memoryPanelGraphNodesMax,
+    coreGraph.nodes.length,
+  );
+  check(
+    'include_rows 核心预算：不超 200 KiB',
+    coreBytes <= LIMITS.memoryPanelGraphCoreBytes,
+    `${coreBytes}/${LIMITS.memoryPanelGraphCoreBytes}`,
+  );
+  checkEqual('include_rows 核心预算：无悬空边', coreDangling, 0);
+  checkEqual('include_rows 核心预算：truncated', coreGraph.truncated, true);
+  check(
+    'include_rows 核心预算：整包不超单一总预算',
+    utf8Bytes(JSON.stringify(coreGraph)) <= LIMITS.memoryPanelGraphResponseBytes,
+    `${utf8Bytes(JSON.stringify(coreGraph))}/${LIMITS.memoryPanelGraphResponseBytes}`,
+  );
+
+  console.log('--- graph astral 正文裁剪（服务级 120 节点） ---');
+  let astralTimer: ReturnType<typeof setTimeout> | undefined;
+  const astralGraph = await Promise.race([
+    service.graph(viewer('human', friend), {
+      actor_id: astralAgent,
+      include_rows: true,
+      q: 'astral-text-budget',
+      refresh: true,
+    }),
+    new Promise<never>((_, reject) => {
+      // 服务级兜底；同步死循环由上方子进程探针 kill。
+      astralTimer = setTimeout(() => reject(new Error('astral graph 服务级超时')), 15_000);
+    }),
+  ]).finally(() => {
+    if (astralTimer) clearTimeout(astralTimer);
+  });
+  const astralNodeIds = new Set(astralGraph.nodes.map((node) => node.id));
+  const astralDangling = astralGraph.edges.filter(
+    (edge) => !astralNodeIds.has(edge.source) || !astralNodeIds.has(edge.target),
+  ).length;
+  const astralCoreBytes = jsonBytes({ nodes: astralGraph.nodes, edges: astralGraph.edges });
+  check(
+    'astral 服务级：正文压到下限以下',
+    astralGraph.nodes.every(
+      (node) => Array.from(node.text ?? '').length < LIMITS.memoryPanelGraphTextFloorChars,
+    ),
+  );
+  check(
+    'astral 服务级：不超核心预算',
+    astralCoreBytes <= LIMITS.memoryPanelGraphCoreBytes,
+    `${astralCoreBytes}/${LIMITS.memoryPanelGraphCoreBytes}`,
+  );
+  checkEqual('astral 服务级：无悬空边', astralDangling, 0);
+  checkEqual('astral 服务级：truncated', astralGraph.truncated, true);
+  check(
+    'astral 服务级：整包不超单一总预算',
+    utf8Bytes(JSON.stringify(astralGraph)) <= LIMITS.memoryPanelGraphResponseBytes,
+    `${utf8Bytes(JSON.stringify(astralGraph))}/${LIMITS.memoryPanelGraphResponseBytes}`,
+  );
 
   fake.resetRequests();
   const smallRows = await service.graph(viewer('human', friend), {
@@ -1897,7 +2314,11 @@ async function main(): Promise<void> {
   console.log(`memory insight checks passed (${checksPassed()} assertions)`);
 }
 
-await main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (process.env.MEMORY_INSIGHT_ASTRAL_PROBE === '1') {
+  await astralProbe();
+} else {
+  await main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
