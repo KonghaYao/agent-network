@@ -98,8 +98,9 @@ const HELP_GUIDE = `
   file-info --file <file_id>
 
 监控（宿主差异）
-  monitor --harness claude|codex|peri|dsh|other [--check|--check-config] [--json] [--max-runtime <seconds>]
+  monitor --harness claude|codex|peri|dsh|other [--check|--check-config] [--json] [--max-runtime <seconds>] [--room-events <room_id|all>]
     claude  TS 引擎；stdout JSON 事件，stderr READY；可传 --state-dir <dir>
+    --room-events 仅 claude：额外输出 informational 房间消息（room_message，不含正文）
     codex   TS 桥接；app-server 自动 claim/turn/steer，用 CODEX_THREAD_ID 指定会话
     peri    TS 引擎；stdout 'ALERT <json>'，不读正文；默认 24h 上限，输出 DEADLINE/EXPIRING
     dsh     run/start 自动检测 DSH 版本与当前 profile 的固定插件；
@@ -335,6 +336,7 @@ function buildProgram(): Command {
       .option('--dry-run', '--check 的别名')
       .option('--state-dir <dir>', 'claude/peri 状态目录；默认使用临时目录')
       .option('--max-runtime <seconds>', '最长运行秒数；peri 默认 86400，0 表示不限制')
+      .option('--room-events <room_id|all>', 'claude：额外输出 informational 房间消息（不含正文）')
       .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')
       .option('--max-wait <seconds>', 'other 单次最长等待秒数；默认 360')
       .option('--poll <seconds>', 'other 轮询间隔秒数；默认 3'),
@@ -367,6 +369,7 @@ function buildProgram(): Command {
           stateDir: options.stateDir ?? globals.stateDir,
           json: globals.json === true,
           maxRuntime: options.maxRuntime ?? globals.maxRuntime,
+          roomEvents: options.roomEvents ?? globals.roomEvents,
           log: options.log ?? globals.log,
           maxWait: options.maxWait ?? globals.maxWait,
           poll: options.poll ?? globals.poll,
@@ -863,6 +866,7 @@ function buildProgram(): Command {
       .option('--dry-run', '--check 的别名')
       .option('--state-dir <dir>', 'claude/peri 状态目录；默认使用临时目录')
       .option('--max-runtime <seconds>', '最长运行秒数；peri 默认 86400，0 表示不限制')
+      .option('--room-events <room_id|all>', 'claude：额外输出 informational 房间消息（不含正文）')
       .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')
       .option('--max-wait <seconds>', 'other 单次最长等待秒数；默认 360')
       .option('--poll <seconds>', 'other 轮询间隔秒数；默认 3')
@@ -871,7 +875,7 @@ function buildProgram(): Command {
   monitorCommand
     .addHelpText(
       'after',
-      '\n示例\n  agentnet monitor --harness peri --check        # 真实握手，失败非 0\n  agentnet monitor --harness codex --check-config # 只看入口配置\n  agentnet monitor --harness peri --json         # 每行一个 JSON 事件\n  agentnet monitor --harness peri --max-runtime 3600\n  agentnet monitor --harness dsh start  # 自动检测版本与插件，缺失时安装\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
+      '\n示例\n  agentnet monitor --harness peri --check        # 真实握手，失败非 0\n  agentnet monitor --harness codex --check-config # 只看入口配置\n  agentnet monitor --harness peri --json         # 每行一个 JSON 事件\n  agentnet monitor --harness peri --max-runtime 3600\n  agentnet monitor --harness claude --room-events rm_xxx  # 输出非 @ 群消息（不含正文）\n  agentnet monitor --harness dsh start  # 自动检测版本与插件，缺失时安装\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
     )
     .action(
       async (
@@ -890,6 +894,7 @@ function buildProgram(): Command {
             stateDir: options.stateDir ?? globals.stateDir,
             json: globals.json === true,
             maxRuntime: options.maxRuntime ?? globals.maxRuntime,
+            roomEvents: options.roomEvents ?? globals.roomEvents,
             log: options.log ?? globals.log,
             maxWait: options.maxWait ?? globals.maxWait,
             poll: options.poll ?? globals.poll,

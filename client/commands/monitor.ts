@@ -26,7 +26,7 @@ import { runCodexMonitor } from '../monitor/codex';
 import { socketOverride } from '../monitor/codex-transport';
 import { runDshMonitor } from '../monitor/dsh';
 import { ensureDshMonitorPlugin } from '../monitor/dsh-install';
-import { PERI_MAX_RUNTIME_MS } from '../monitor/engine';
+import { PERI_MAX_RUNTIME_MS, type RoomEventScope } from '../monitor/engine';
 import { numeric, runOtherHarness } from '../monitor/other';
 import { runPeriMonitor } from '../monitor/peri';
 import { MonitorFatalError, MonitorRpc, MonitorTransportError } from '../monitor/rpc';
@@ -71,6 +71,8 @@ export interface MonitorOptions {
   json?: boolean;
   /** 最长运行秒数；peri 默认 24h，0 表示不限制。 */
   maxRuntime?: string;
+  /** claude：输出 informational room 消息；all 或显式 room_id。 */
+  roomEvents?: string;
 }
 
 interface ConfigCheck {
@@ -377,12 +379,26 @@ function maxRuntimeMs(harness: string, raw: string | undefined): number {
   return seconds * 1000;
 }
 
+/** `--room-events <room_id|all>`：只接受 all 或单个安全 room_id。 */
+export function parseRoomEvents(raw: string | undefined): RoomEventScope | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  if (raw === 'all') return 'all';
+  if (!/^[A-Za-z0-9_-]+$/u.test(raw)) {
+    throw new CliError('--room-events 只接受 all 或合法 room_id');
+  }
+  return [raw];
+}
+
 export async function monitor(
   context: MonitorContext,
   options: MonitorOptions,
   scriptArgs: readonly string[] = [],
 ): Promise<number> {
   const harness = assertHarness(options.harness);
+  const roomEvents = parseRoomEvents(options.roomEvents);
+  if (roomEvents !== undefined && harness !== 'claude') {
+    throw new CliError('--room-events 仅支持 --harness claude');
+  }
   const extra = [...scriptArgs];
   const dshCommand = harness === 'dsh' ? (extra[0] ?? 'run') : null;
   // dsh 需要在位置参数里收子命令（run/start/stop/status/logs/wait）。
@@ -401,6 +417,7 @@ export async function monitor(
       stateDir: options.stateDir,
       json: options.json,
       maxRuntimeMs: runtimeMs,
+      roomEvents,
     });
   }
   if (harness === 'peri') {
