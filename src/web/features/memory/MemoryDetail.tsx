@@ -116,7 +116,9 @@ export function MemoryDetail({
               {memory.fact_type ? FACT_TYPE_LABEL[memory.fact_type] : '未分类'}
             </span>
             <span>{memory.state === 'invalidated' ? '已失效' : '有效'}</span>
-            <span>{formatMemoryTime(memory.mentioned_at)}</span>
+            <span id="memory-detail-time">
+              {formatMemoryTime(memory.occurred_start ?? memory.mentioned_at)}
+            </span>
           </div>
           <p className="memory-detail-text" id="memory-detail-text">
             {revealed ? memory.text : masked}
@@ -177,6 +179,10 @@ export function MemoryDetail({
               <div>
                 <dt>发生时间</dt>
                 <dd>{formatMemoryTime(memory.occurred_start)}</dd>
+              </div>
+              <div>
+                <dt>提及时间</dt>
+                <dd>{formatMemoryTime(memory.mentioned_at)}</dd>
               </div>
               <div>
                 <dt>结束时间</dt>

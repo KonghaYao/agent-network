@@ -4,12 +4,17 @@ import { LIMITS } from '../../../contracts/limits';
 import {
   availabilityText,
   FACT_TYPE_LABEL,
-  fetchMemoryList,
+  fetchMemoryTimeline,
   memoryFailureOf,
-  type MemoryFactType,
   type MemoryFailure,
-  type MemoryItem,
+  type MemoryFactType,
+  type MemoryTimelineDays,
+  type MemoryTimelineGranularity,
+  type MemoryTimelineGroup,
+  type MemoryTimelineItem,
+  type MemoryTimelineResult,
 } from './memory-data';
+import { maskSecrets } from './mask';
 import './memory-viz.css';
 
 type TypeFilter = 'all' | MemoryFactType;
@@ -21,74 +26,92 @@ const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'observation', label: '观察' },
 ];
 
-const RANGES = [7, 30, 90] as const;
+const DAYS: MemoryTimelineDays[] = [7, 30, 90];
+const GRANULARITIES: { value: MemoryTimelineGranularity; label: string }[] = [
+  { value: 'year', label: '年' },
+  { value: 'month', label: '月' },
+  { value: 'week', label: '周' },
+  { value: 'day', label: '日' },
+];
+const GRANULARITY_ORDER: MemoryTimelineGranularity[] = ['year', 'month', 'week', 'day'];
 
-/** 时间线最多聚合的事实数；4 页 × 50 条，避免无限翻页拖慢弹窗。 */
-const MAX_ITEMS = 200;
-
-interface DayBucket {
-  key: string;
-  label: string;
-  count: number;
-}
-
-function dayKey(time: Date): string {
-  const year = time.getFullYear();
-  const month = String(time.getMonth() + 1).padStart(2, '0');
-  const day = String(time.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function buildDays(rangeDays: number, items: MemoryItem[]): DayBucket[] {
-  const end = new Date();
-  end.setHours(23, 59, 59, 999);
-  const start = new Date(end);
-  start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - (rangeDays - 1));
-  const counts = new Map<string, number>();
-  for (const item of items) {
-    if (!item.mentioned_at) continue;
-    const time = new Date(item.mentioned_at);
-    if (Number.isNaN(time.getTime()) || time < start || time > end) continue;
-    const key = dayKey(time);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+function buildYearGroups(monthGroups: MemoryTimelineGroup[]): MemoryTimelineGroup[] {
+  const result: MemoryTimelineGroup[] = [];
+  let current: MemoryTimelineGroup | null = null;
+  for (const group of monthGroups) {
+    if (group.key === 'undated') {
+      result.push(group);
+      current = null;
+      continue;
+    }
+    const year = group.key.slice(0, 4);
+    if (!current || current.key !== year) {
+      current = {
+        key: year,
+        label: `${year}年`,
+        start: group.start,
+        end: group.end,
+        count: group.count,
+        start_index: group.start_index,
+        end_index: group.end_index,
+      };
+      result.push(current);
+      continue;
+    }
+    current.count += group.count;
+    current.end_index = group.end_index;
+    current.end = group.end;
   }
-  const days: DayBucket[] = [];
-  const cursor = new Date(start);
-  while (cursor <= end) {
-    const key = dayKey(cursor);
-    days.push({
-      key,
-      label: `${cursor.getMonth() + 1}/${cursor.getDate()}`,
-      count: counts.get(key) ?? 0,
-    });
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return days;
+  return result;
 }
 
-function timeLabel(value: string): string {
+function eventTime(item: MemoryTimelineItem): { basis: string; value: string } {
+  const occurred = item.occurred_at;
+  const value = occurred ?? item.mentioned_at;
+  if (!value) return { basis: '时间', value: '无日期' };
   const time = new Date(value);
-  if (Number.isNaN(time.getTime())) return value;
-  return `${time.getMonth() + 1}/${time.getDate()}`;
+  if (Number.isNaN(time.getTime())) return { basis: occurred ? '发生' : '提及', value };
+  return {
+    basis: occurred ? '发生' : '提及',
+    value: time.toLocaleString('zh-CN', {
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }),
+  };
+}
+
+function groupItems(items: MemoryTimelineItem[], group: MemoryTimelineGroup): MemoryTimelineItem[] {
+  return items.slice(group.start_index, group.end_index);
 }
 
 /**
- * 时间线：服务端没有 timeseries 工具，这里按 list 分页取最近事实，
- * 在客户端按本地日期聚合。文案必须明确「基于已加载事实」。
+ * Fenix 风格时间线：服务端一次返回 compact 事件与天/周/月分组，前端只做
+ * 视图变换（年分组由月分组聚合），不逐页拉取 facts。
  */
-export function MemoryTimeline({ actorId, token }: { actorId: string; token: string }) {
-  const [rangeDays, setRangeDays] = useState<(typeof RANGES)[number]>(30);
+export function MemoryTimeline({
+  actorId,
+  token,
+  activeId,
+  onSelect,
+}: {
+  actorId: string;
+  token: string;
+  activeId: string | null;
+  onSelect: (id: string, trigger: HTMLButtonElement) => void;
+}) {
+  const [days, setDays] = useState<MemoryTimelineDays>(30);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
+  const [granularity, setGranularity] = useState<MemoryTimelineGranularity>('month');
+  const [currentIndex, setCurrentIndex] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
-  const [items, setItems] = useState<MemoryItem[]>([]);
-  const [serverTotal, setServerTotal] = useState<number | null>(null);
+  const [result, setResult] = useState<MemoryTimelineResult | null>(null);
   const [loading, setLoading] = useState(true);
-  const [progress, setProgress] = useState(0);
   const [failure, setFailure] = useState<MemoryFailure | null>(null);
-  const [reason, setReason] = useState<string | null>(null);
-  const [reasonCode, setReasonCode] = useState<string | null>(null);
   const requestRef = useRef<AbortController | null>(null);
+  const groupRefs = useRef<Map<number, HTMLElement>>(new Map());
 
   useEffect(() => {
     requestRef.current?.abort();
@@ -96,55 +119,23 @@ export function MemoryTimeline({ actorId, token }: { actorId: string; token: str
     requestRef.current = controller;
     setLoading(true);
     setFailure(null);
-    setReason(null);
-    setReasonCode(null);
-    setItems([]);
-    setServerTotal(null);
-    setProgress(0);
-
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
-    const start = new Date(end);
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() - (rangeDays - 1));
+    setResult(null);
+    setCurrentIndex(0);
 
     void (async () => {
       try {
-        const collected: MemoryItem[] = [];
-        const seen = new Set<string>();
-        let offset = 0;
-        for (let page = 0; page < Math.ceil(MAX_ITEMS / LIMITS.memoryPanelFactsPageMax); page += 1) {
-          setProgress(page + 1);
-          const result = await fetchMemoryList(
-            actorId,
-            token,
-            {
-              limit: LIMITS.memoryPanelFactsPageMax,
-              offset,
-              type: typeFilter === 'all' ? undefined : typeFilter,
-              time_field: 'mentioned_at',
-              start_date: start.toISOString(),
-              end_date: end.toISOString(),
-            },
-            controller.signal,
-          );
-          if (controller.signal.aborted) return;
-          if (!result.available) {
-            setReason(availabilityText(result.reason));
-            setReasonCode(result.reason);
-            return;
-          }
-          setServerTotal(result.total);
-          for (const item of result.items) {
-            if (seen.has(item.id)) continue;
-            seen.add(item.id);
-            collected.push(item);
-            if (collected.length >= MAX_ITEMS) break;
-          }
-          if (collected.length >= MAX_ITEMS || !result.has_more || result.next_offset === null) break;
-          offset = result.next_offset;
-        }
-        setItems(collected);
+        const next = await fetchMemoryTimeline(
+          actorId,
+          token,
+          {
+            days,
+            limit: LIMITS.memoryPanelTimelineLimitDefault,
+            ...(typeFilter === 'all' ? {} : { type: typeFilter }),
+          },
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        setResult(next);
       } catch (error) {
         if (controller.signal.aborted) return;
         setFailure(memoryFailureOf(error));
@@ -153,36 +144,54 @@ export function MemoryTimeline({ actorId, token }: { actorId: string; token: str
       }
     })();
     return () => controller.abort();
-  }, [actorId, rangeDays, reloadKey, token, typeFilter]);
+  }, [actorId, days, reloadKey, token, typeFilter]);
 
-  const days = useMemo(() => buildDays(rangeDays, items), [items, rangeDays]);
-  const maxCount = useMemo(() => Math.max(1, ...days.map((day) => day.count)), [days]);
-  const total = days.reduce((sum, day) => sum + day.count, 0);
-  const peak = days.reduce(
-    (best, day) => (day.count > best.count ? day : best),
-    { key: '', label: '', count: 0 } as DayBucket,
-  );
-  const undated = items.filter((item) => !item.mentioned_at).length;
-  const timestamps = items
-    .map((item) => (item.mentioned_at ? Date.parse(item.mentioned_at) : Number.NaN))
-    .filter((value) => Number.isFinite(value))
-    .sort((left, right) => left - right);
-  const first = timestamps.length > 0 ? new Date(timestamps[0]!).toISOString() : null;
-  const last = timestamps.length > 0 ? new Date(timestamps[timestamps.length - 1]!).toISOString() : null;
-  const loadedNote =
-    serverTotal !== null && serverTotal > items.length
-      ? `服务端共 ${serverTotal.toLocaleString('zh-CN')} 条匹配，这里只聚合已加载的 ${items.length.toLocaleString('zh-CN')} 条。`
-      : `基于已加载事实（最多 ${MAX_ITEMS} 条，按 mentioned_at 归档）。`;
+  const groups = useMemo(() => {
+    if (!result?.available) return [];
+    if (granularity === 'year') return buildYearGroups(result.groups.month);
+    return result.groups[granularity] ?? [];
+  }, [granularity, result]);
 
-  // fetchMemoryList 的类型尚未包含时间过滤；在这里显式传给工具，避免改主数据层契约。
+  const safeIndex = groups.length === 0 ? 0 : Math.min(currentIndex, groups.length - 1);
+  const reason = result && !result.available ? availabilityText(result.reason) : null;
+  const reasonCode = result && !result.available ? result.reason : null;
+  const items = result?.available ? result.items : [];
+  const summary = result?.summary;
+  const zoomIndex = GRANULARITY_ORDER.indexOf(granularity);
+
+  useEffect(() => {
+    if (loading || groups.length === 0) return;
+    const element = groupRefs.current.get(safeIndex);
+    element?.scrollIntoView({ block: 'nearest' });
+  }, [granularity, groups.length, loading, safeIndex]);
+
+  const goToGroup = (index: number) => {
+    if (groups.length === 0) return;
+    setCurrentIndex(Math.max(0, Math.min(groups.length - 1, index)));
+  };
+
+  const changeGranularity = (next: MemoryTimelineGranularity) => {
+    setGranularity(next);
+    setCurrentIndex(0);
+  };
+
+  const zoom = (direction: -1 | 1) => {
+    const next = GRANULARITY_ORDER[zoomIndex + direction];
+    if (next) changeGranularity(next);
+  };
+
+  const summaryText = loading
+    ? '正在读取…'
+    : summary
+      ? `共 ${(summary.total ?? summary.returned).toLocaleString('zh-CN')} 条 · 显示 ${summary.returned.toLocaleString('zh-CN')} 条${summary.undated > 0 ? ` · ${summary.undated} 条无日期` : ''}`
+      : '';
+
   return (
     <section className="memory-timeline" id="memory-timeline" aria-labelledby="memory-timeline-title">
       <div className="memory-section-head">
         <h3 id="memory-timeline-title">时间线</h3>
         <span className="memory-updated" id="memory-timeline-summary">
-          {loading
-            ? '正在读取…'
-            : `最近 ${rangeDays} 天 · 已加载 ${items.length.toLocaleString('zh-CN')} 条 · ${total.toLocaleString('zh-CN')} 条有日期`}
+          {summaryText}
         </span>
       </div>
 
@@ -193,13 +202,13 @@ export function MemoryTimeline({ actorId, token }: { actorId: string; token: str
         <select
           id="memory-timeline-range"
           className="memory-type-filter"
-          value={rangeDays}
+          value={days}
           onChange={(event) => {
             const value = Number(event.target.value);
-            if (value === 7 || value === 30 || value === 90) setRangeDays(value);
+            if (value === 7 || value === 30 || value === 90) setDays(value);
           }}
         >
-          {RANGES.map((value) => (
+          {DAYS.map((value) => (
             <option value={value} key={value}>
               最近 {value} 天
             </option>
@@ -224,91 +233,197 @@ export function MemoryTimeline({ actorId, token }: { actorId: string; token: str
 
       {loading ? (
         <p className="memory-status" id="memory-timeline-status" role="status">
-          正在读取事实{progress > 1 ? `（第 ${progress} 页）` : ''}…
+          正在读取时间线…
         </p>
       ) : null}
 
       {!loading && failure ? (
         <div className="memory-empty" id="memory-timeline-status" data-state={failure.kind} role="status">
           <p>{failure.message}</p>
-          <button
-            type="button"
-            id="memory-timeline-retry"
-            onClick={() => setReloadKey((value) => value + 1)}
-          >
+          <button type="button" id="memory-timeline-retry" onClick={() => setReloadKey((value) => value + 1)}>
             重试
           </button>
         </div>
       ) : null}
 
       {!loading && !failure && reason ? (
-        <p className="memory-empty" id="memory-timeline-status" data-state={reasonCode ?? 'unavailable'} role="status">
+        <p
+          className="memory-empty"
+          id="memory-timeline-status"
+          data-state={reasonCode ?? 'unavailable'}
+          role="status"
+        >
           {reason}
         </p>
       ) : null}
 
-      {!loading && !failure && !reason && total === 0 ? (
+      {!loading && !failure && !reason && items.length === 0 ? (
         <p className="memory-empty" id="memory-timeline-status" data-state="empty" role="status">
           {typeFilter === 'all'
-            ? `最近 ${rangeDays} 天没有带时间戳的事实。`
-            : `最近 ${rangeDays} 天没有「${FACT_TYPE_LABEL[typeFilter]}」类型的事实。`}
-          {items.length > 0 ? ' 已加载的事实缺少可用时间戳。' : ''}
+            ? `最近 ${days} 天没有可展示的记忆事件。`
+            : `最近 ${days} 天没有「${FACT_TYPE_LABEL[typeFilter]}」类型的记忆事件。`}
         </p>
       ) : null}
 
-      {!loading && !failure && !reason && total > 0 ? (
+      {!loading && !failure && !reason && items.length > 0 ? (
         <>
-          <div
-            className="memory-timeline-chart"
-            id="memory-timeline-chart"
-            role="img"
-            aria-label={`最近 ${rangeDays} 天的每日事实数量，共 ${total} 条，峰值 ${peak.count} 条`}
-          >
-            {days.map((day) => (
-              <span
-                key={day.key}
-                className={`memory-timeline-bar${day.count === 0 ? ' empty' : ''}`}
-                data-day={day.key}
-                data-count={day.count}
-                style={{ height: `${Math.max(3, Math.round((day.count / maxCount) * 100))}%` }}
-                title={`${day.key}：${day.count} 条`}
-                aria-hidden="true"
-              />
+          <div className="memory-timeline-toolbar" id="memory-timeline-toolbar">
+            <div className="memory-timeline-segments" role="group" aria-label="时间粒度">
+              {GRANULARITIES.map((entry) => (
+                <button
+                  type="button"
+                  key={entry.value}
+                  id={`memory-timeline-granularity-${entry.value}`}
+                  className={granularity === entry.value ? 'active' : ''}
+                  aria-pressed={granularity === entry.value}
+                  onClick={() => changeGranularity(entry.value)}
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="memory-timeline-nav" role="group" aria-label="时间线分组导航">
+              <button
+                type="button"
+                id="memory-timeline-first"
+                aria-label="跳到首组"
+                disabled={safeIndex <= 0}
+                onClick={() => goToGroup(0)}
+              >
+                «
+              </button>
+              <button
+                type="button"
+                id="memory-timeline-prev"
+                aria-label="上一组"
+                disabled={safeIndex <= 0}
+                onClick={() => goToGroup(safeIndex - 1)}
+              >
+                ‹
+              </button>
+              <span id="memory-timeline-position" aria-live="polite">
+                {safeIndex + 1} / {groups.length}
+              </span>
+              <button
+                type="button"
+                id="memory-timeline-next"
+                aria-label="下一组"
+                disabled={safeIndex >= groups.length - 1}
+                onClick={() => goToGroup(safeIndex + 1)}
+              >
+                ›
+              </button>
+              <button
+                type="button"
+                id="memory-timeline-last"
+                aria-label="跳到末组"
+                disabled={safeIndex >= groups.length - 1}
+                onClick={() => goToGroup(groups.length - 1)}
+              >
+                »
+              </button>
+            </div>
+
+            <div className="memory-timeline-zoom" role="group" aria-label="时间粒度缩放">
+              <button
+                type="button"
+                id="memory-timeline-zoom-out"
+                aria-label="缩小时间粒度"
+                disabled={zoomIndex <= 0}
+                onClick={() => zoom(-1)}
+              >
+                −
+              </button>
+              <span>{GRANULARITIES[zoomIndex]?.label ?? '月'}</span>
+              <button
+                type="button"
+                id="memory-timeline-zoom-in"
+                aria-label="放大时间粒度"
+                disabled={zoomIndex >= GRANULARITY_ORDER.length - 1}
+                onClick={() => zoom(1)}
+              >
+                +
+              </button>
+            </div>
+          </div>
+
+          <p className="memory-hint" id="memory-timeline-note">
+            {summaryText}。当前按{GRANULARITIES[zoomIndex]?.label ?? '月'}分组，共 {groups.length} 组；
+            切换粒度、导航与缩放不会重新请求。
+          </p>
+
+          {result?.truncated ? (
+            <p className="memory-truncated" id="memory-timeline-truncated" role="status">
+              已截断：只显示最近 {items.length.toLocaleString('zh-CN')} 条。请缩短时间范围或按类型筛选。
+            </p>
+          ) : null}
+
+          <div className="memory-timeline-chart" id="memory-timeline-chart">
+            {groups.map((group, index) => (
+              <section
+                className={`memory-timeline-group${index === safeIndex ? ' active' : ''}`}
+                key={group.key}
+                data-timeline-group={group.key}
+                data-count={group.count}
+                aria-labelledby={`memory-timeline-group-${index}`}
+                ref={(element) => {
+                  if (element) groupRefs.current.set(index, element);
+                  else groupRefs.current.delete(index);
+                }}
+              >
+                <div className="memory-timeline-group-rail">
+                  <span className="memory-timeline-group-label" id={`memory-timeline-group-${index}`}>
+                    {group.label}
+                  </span>
+                  <span className="memory-timeline-group-count">{group.count} 条</span>
+                </div>
+                <div className="memory-timeline-group-body">
+                  <ul className="memory-timeline-list" aria-label={`${group.label}的记忆事件`}>
+                    {groupItems(items, group).map((item) => {
+                      const time = eventTime(item);
+                      return (
+                        <li key={item.id}>
+                          <button
+                            type="button"
+                            className={`memory-timeline-card${activeId === item.id ? ' active' : ''}`}
+                            data-timeline-id={item.id}
+                            aria-pressed={activeId === item.id}
+                            onClick={(event) => onSelect(item.id, event.currentTarget)}
+                          >
+                            <span className="memory-timeline-card-head">
+                              <span
+                                className={`memory-type type-${item.fact_type ?? 'unknown'}`}
+                                data-type={item.fact_type ?? 'unknown'}
+                              >
+                                {item.fact_type ? FACT_TYPE_LABEL[item.fact_type] : '未分类'}
+                              </span>
+                              {item.state === 'invalidated' ? (
+                                <span className="memory-fact-invalid">已失效</span>
+                              ) : null}
+                              <span className="memory-timeline-card-time">
+                                {time.basis} {time.value}
+                              </span>
+                            </span>
+                            <span className="memory-timeline-card-text">{maskSecrets(item.text)}</span>
+                            {item.entities.length > 0 ? (
+                              <span className="memory-timeline-card-meta">
+                                {item.entities.map((entity) => (
+                                  <span className="memory-entity" key={entity}>
+                                    {maskSecrets(entity)}
+                                  </span>
+                                ))}
+                              </span>
+                            ) : null}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              </section>
             ))}
           </div>
-          <div className="memory-timeline-axis" aria-hidden="true">
-            <span>{days[0]?.label}</span>
-            <span>{days[Math.floor(days.length / 2)]?.label}</span>
-            <span>{days[days.length - 1]?.label}</span>
-          </div>
-          <p className="memory-hint" id="memory-timeline-note">
-            {loadedNote}
-            峰值 {peak.count > 0 ? `${peak.label}（${peak.count} 条）` : '—'}。
-            {undated > 0 ? ` ${undated} 条缺少时间戳，未计入柱状图。` : ''}
-            {first && last ? ` 已加载范围 ${timeLabel(first)} – ${timeLabel(last)}。` : ''}
-          </p>
-          <details className="memory-timeline-table" id="memory-timeline-table">
-            <summary>按天数据（表格）</summary>
-            <table>
-              <caption>每日事实数量</caption>
-              <thead>
-                <tr>
-                  <th scope="col">日期</th>
-                  <th scope="col">数量</th>
-                </tr>
-              </thead>
-              <tbody>
-                {days
-                  .filter((day) => day.count > 0)
-                  .map((day) => (
-                    <tr key={day.key}>
-                      <th scope="row">{day.key}</th>
-                      <td>{day.count}</td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </details>
         </>
       ) : null}
     </section>

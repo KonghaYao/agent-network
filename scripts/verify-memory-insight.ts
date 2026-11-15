@@ -680,6 +680,23 @@ async function main(): Promise<void> {
     }),
     'INVALID_ARGUMENT',
   );
+  const compactList = await service.list(viewer('human', friend), {
+    actor_id: target,
+    limit: 500,
+    text_chars: 160,
+    refresh: true,
+  });
+  checkEqual('list limit 可放大到 500', compactList.limit, 500);
+  checkEqual(
+    'list text_chars 按请求裁剪',
+    compactList.items[0]?.text.length,
+    160,
+  );
+  checkEqual(
+    'list 转发放大后的 limit',
+    fake.requests.filter((item) => item.path.endsWith('/memories/list')).at(-1)?.query.get('limit'),
+    '500',
+  );
 
   const detail = await service.get(viewer('human', friend), { actor_id: target, memory_id: 'm1' });
   checkEqual('get 返回详情', detail.memory?.id, 'm1');

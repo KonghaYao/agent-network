@@ -19,6 +19,7 @@ import type {
   InsightMemoryDetail,
   InsightMemoryItem,
   InsightStats,
+  InsightTimelineItem,
 } from './contracts';
 import { INSIGHT_FACT_TYPES } from './contracts';
 
@@ -370,6 +371,30 @@ function normalizeMemoryItem(entry: unknown, textChars: number): InsightMemoryIt
     entities: entityArray(entry.entities),
     proof_count: nonNegativeInt(entry.proof_count),
     tags: publicTags(entry.tags),
+  };
+}
+
+/** 时间线只保留渲染所需的 compact 字段；不返回 tags/document/chunk/metadata。 */
+export function normalizeTimelineItem(entry: unknown): InsightTimelineItem | null {
+  if (!isRecord(entry)) return null;
+  const id = stringValue(entry.id);
+  if (!id) return null;
+  const stateValue = stringValue(entry.state);
+  return {
+    id,
+    text: truncateChars(stringValue(entry.text) ?? '', LIMITS.memoryPanelTimelineTextChars),
+    fact_type: factType(entry.fact_type ?? entry.type),
+    state:
+      stateValue === 'invalidated' || stateValue === 'invalid' || entry.invalidated_at != null
+        ? 'invalidated'
+        : 'valid',
+    occurred_at: timestampValue(entry.occurred_start ?? entry.occurred_at),
+    mentioned_at: timestampValue(entry.mentioned_at ?? entry.date),
+    entities: entityArray(
+      entry.entities,
+      LIMITS.memoryPanelTimelineEntitiesMax,
+      LIMITS.memoryPanelTimelineEntityChars,
+    ),
   };
 }
 
