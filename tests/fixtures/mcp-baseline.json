@@ -1003,7 +1003,7 @@
               "resources": [
                 {
                   "uri": "skill://agent-network/agent-network/SKILL.md",
-                  "digest": "sha256:6a211d19d732478b7a694dff204d9ad2f80d5985a216f464f610cb6d45bcdc9e"
+                  "digest": "sha256:07a8bccefc41f3138c3e7a779fdb9c4f0169116757c13d28760d85a35754f789"
                 }
               ]
             }
@@ -1047,7 +1047,7 @@
             "resources": [
               {
                 "uri": "skill://agent-network/agent-network/SKILL.md",
-                "digest": "sha256:6a211d19d732478b7a694dff204d9ad2f80d5985a216f464f610cb6d45bcdc9e"
+                "digest": "sha256:07a8bccefc41f3138c3e7a779fdb9c4f0169116757c13d28760d85a35754f789"
               }
             ]
           },
@@ -1081,7 +1081,7 @@
             {
               "uri": "skill://agent-network/agent-network/SKILL.md",
               "mimeType": "text/markdown",
-              "text": "<text:sha256:6a211d19d732478b:len=42194>"
+              "text": "<text:sha256:07a8bccefc41f313:len=42528>"
             }
           ],
           "resultType": "complete",
@@ -3330,5 +3330,5 @@
       "response": ""
     }
   ],
-  "digest": "30351ff8b5803c012e03547e8aa779ba64f638e3ca07fc5b93277a99c4e54daf"
+  "digest": "763002950d30c0519303954d0c4f139898283bc4b29ffc47525f2c7b42084b63"
 }
