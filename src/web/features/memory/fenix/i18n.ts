@@ -179,6 +179,7 @@ const ZH: Dictionary = {
     recencyBasisOccurredEnd: '发生时间（结束）',
     sourceFactsLabel: '来源事实',
     errorLoadingData: '加载 {{factType}} 数据出错',
+    nodeRowMissing: '这个星座节点没有对应的表格行，无法打开详情。',
     of: '/',
     all: '全部',
     memoryComposition: '记忆构成',

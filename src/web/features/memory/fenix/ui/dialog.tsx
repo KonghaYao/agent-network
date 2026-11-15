@@ -55,6 +55,7 @@ const DIALOG_CONTENT_SIZE = {
 
 function DialogContent({
   className,
+  overlayClassName,
   children,
   size = "default",
   showCloseButton = true,
@@ -68,6 +69,8 @@ function DialogContent({
   size?: keyof typeof DIALOG_CONTENT_SIZE;
   showCloseButton?: boolean;
   showOverlay?: boolean;
+  /** 遮罩额外类名；嵌套在 Agent 记忆弹窗内时用于把遮罩抬到父弹窗之上。 */
+  overlayClassName?: string;
   /** 禁止点击遮罩关闭 */
   disableOverlayClose?: boolean;
   /** 禁止 ESC 关闭 */
@@ -76,7 +79,7 @@ function DialogContent({
 }) {
   return (
     <DialogPortal data-slot="dialog-portal">
-      {showOverlay && <DialogOverlay />}
+      {showOverlay && <DialogOverlay className={overlayClassName} />}
       <DialogPrimitive.Content
         ref={ref}
         data-slot="dialog-content"

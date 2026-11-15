@@ -1,0 +1,15 @@
+/**
+ * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
+ * Upstream: packages/ui-components/web/components/agent-master-detail-workspace.css
+ * Modified for Agent Network: 去掉页面级 `calc(100dvh - 210px)` 高度；弹窗提供高度链。
+ */
+
+.agent-master-detail-workspace {
+  box-shadow: 0 12px 38px rgb(36 57 92 / 8%);
+}
+
+@media (width >= 48rem) {
+  .agent-master-detail-workspace {
+    grid-template-columns: 238px minmax(0, 1fr);
+  }
+}

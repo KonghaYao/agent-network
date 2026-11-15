@@ -10,6 +10,7 @@ import { NS } from "../i18n";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { useTranslation } from "../i18n";
 import type { HindsightFailure } from "../failure";
+import { maskSecrets } from "../../mask";
 
 /**
  * 记忆页面加载失败的统一呈现（授权失败 / 通用失败）。
@@ -57,7 +58,7 @@ export function HindsightFailureNotice({
       className={className}
       icon={<AlertCircle />}
       title={resolvedTitleKey ? t(resolvedTitleKey) : null}
-      description={forbidden ? t("errors.forbiddenHint") : failure.detail}
+      description={forbidden ? t("errors.forbiddenHint") : maskSecrets(failure.detail)}
       action={
         !forbidden && !unavailable && onRetry && retryKey
           ? { label: t(retryKey), onClick: onRetry, icon: <RefreshCw className="size-4" /> }

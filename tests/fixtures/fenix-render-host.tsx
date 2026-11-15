@@ -14,9 +14,48 @@ import { lazy, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import { loadFenixMemoryVendor } from './fenix-lazy-host';
 
-const MemoryDetailPanel = lazy(async () => {
+const Fixture = lazy(async () => {
   const module = await loadFenixMemoryVendor();
-  return { default: module.MemoryDetailPanel };
+  const ApiContext = module.FenixMemoryApiContext;
+  const MemoryDetailPanel = module.MemoryDetailPanel;
+  const FenixApiError = module.FenixApiError;
+  // The fixture deliberately supplies an adapter that rejects every call: the
+  // panel's row-summary branch still renders the masked text without network.
+  // The rejection message carries a token so the e2e spec can prove the console
+  // error path masks it instead of printing the raw upstream message.
+  const failing = (method: string) => () =>
+    Promise.reject(
+      new FenixApiError(
+        `fixture ${method}: https://hindsight.invalid/api?token=e2e-console-secret`,
+        'REQUEST_FAILED',
+      ),
+    );
+  const api = {
+    getStatus: failing('getStatus'),
+    getGraph: failing('getGraph'),
+    getBankStats: failing('getBankStats'),
+    getMemory: failing('getMemory'),
+    listEntities: failing('listEntities'),
+    getEntity: failing('getEntity'),
+    getEntityGraph: failing('getEntityGraph'),
+  };
+
+  function Panels() {
+    return (
+      <ApiContext.Provider value={api}>
+        <div className="fenix-memory-root">
+          <div data-testid="fenix-default-panel">
+            <MemoryDetailPanel memory={MEMORY} onClose={() => undefined} />
+          </div>
+          <div data-testid="fenix-compact-panel">
+            <MemoryDetailPanel memory={MEMORY} onClose={() => undefined} compact />
+          </div>
+        </div>
+      </ApiContext.Provider>
+    );
+  }
+
+  return { default: Panels };
 });
 
 const SECRET_TEXT =
@@ -34,25 +73,12 @@ const MEMORY = {
   fact_type: 'world',
 };
 
-function Panels() {
-  return (
-    <div className="fenix-memory-root">
-      <div data-testid="fenix-default-panel">
-        <MemoryDetailPanel memory={MEMORY} onClose={() => undefined} />
-      </div>
-      <div data-testid="fenix-compact-panel">
-        <MemoryDetailPanel memory={MEMORY} onClose={() => undefined} compact />
-      </div>
-    </div>
-  );
-}
-
 const rootElement = document.getElementById('fenix-render-root');
 
 if (rootElement) {
   createRoot(rootElement).render(
     <Suspense fallback={<div data-testid="fenix-render-loading">loading</div>}>
-      <Panels />
+      <Fixture />
     </Suspense>,
   );
 }

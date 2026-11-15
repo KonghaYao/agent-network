@@ -165,6 +165,8 @@ export interface InstallMemoryFenixStubOptions {
   /** `available=false` 但按空态渲染的服务端原因（如 bank_missing）。 */
   bankMissing?: boolean;
   graphFailure?: boolean;
+  /** 覆盖 graph 失败文案；用于断言错误态也会掩码 token。 */
+  graphFailureMessage?: string;
   totalUnits?: number;
   rows?: FenixRow[];
   /** 让 `table_rows[].entities` 以逗号字符串返回，覆盖 tooltip 的字符串分支。 */
@@ -257,7 +259,10 @@ export async function installMemoryFenixStub(
             content: [
               {
                 type: 'text',
-                text: JSON.stringify({ message: '上游记忆服务超时', code: 'UPSTREAM_TIMEOUT' }),
+                text: JSON.stringify({
+                  message: options.graphFailureMessage ?? '上游记忆服务超时',
+                  code: 'UPSTREAM_TIMEOUT',
+                }),
               },
             ],
           },

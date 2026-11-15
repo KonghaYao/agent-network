@@ -1,10 +1,9 @@
 /**
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/components/DataView.tsx
- * Modified for Agent Network: 平台导入替换；Graph2d 视图改为本地占位（本阶段不引入 cytoscape），
- * 其余四视图编排保持上游结构。
- * 阶段 4：不展示 cytoscape 图谱入口（仅保留星座图/表格/时间线三种视图），并移除上游
- * 缺失的 `images/memories-empty.webp` 插画引用；取数与视图切换结构不变。
+ * Modified for Agent Network: 平台导入替换；不展示 cytoscape 图谱入口（仅保留星座图/表格/时间线
+ * 三种视图），`Graph2d.tsx` 占位已删除；移除上游缺失的 `images/memories-empty.webp`
+ * 插画引用。取数与视图切换结构不变。
  */
 
 import { EmptyState } from "../ui/empty-state";
@@ -65,6 +64,7 @@ export function DataView({
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedGraphNode, setSelectedGraphNode] = useState<MemoryTableRow | null>(null);
   const [modalMemoryId, setModalMemoryId] = useState<string | null>(null);
+  const [missingNodeId, setMissingNodeId] = useState<string | null>(null);
 
   // Constellation 近期颜色的时间基准
   const RECENCY_BASIS_LABEL: Record<RecencyBasis, string> = {
@@ -97,22 +97,30 @@ export function DataView({
 
   const failure = error ? toHindsightFailure(error, t("dataView.loadFailed")) : null;
 
-  // Esc 键取消选中
+  // Esc 只关侧栏详情，不冒泡到 Radix Dialog 关闭整个记忆弹窗。
+  // 捕获阶段早于 document 上的 Radix 监听，并阻止同节点其余监听。
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && selectedGraphNode) {
-        setSelectedGraphNode(null);
-      }
+    if (!selectedGraphNode) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setSelectedGraphNode(null);
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [selectedGraphNode]);
 
-  // 节点点击回调：窄屏没有侧栏空间，直接打开详情弹窗（桌面仍用右侧面板）。
+  // 节点与 table_rows 不同步时（例如服务端截断行）必须给出可见反馈，
+  // 不能点击后毫无反应。
   const handleGraphNodeClick = useCallback(
     (node: GraphNode) => {
       const nodeData = data?.table_rows?.find((row: MemoryTableRow) => row.id === node.id);
-      if (!nodeData) return;
+      if (!nodeData) {
+        setMissingNodeId(node.id);
+        return;
+      }
+      setMissingNodeId(null);
       const compactViewport =
         typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
       if (compactViewport) {
@@ -160,6 +168,15 @@ export function DataView({
         </div>
       ) : (
         <>
+          {missingNodeId ? (
+            <p
+              role="status"
+              data-fenix-node-missing
+              className="mb-2 shrink-0 rounded-md border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-xs text-foreground"
+            >
+              {t("dataView.nodeRowMissing")}
+            </p>
+          ) : null}
           {compactMode ? (
             <div className="flex items-center justify-between mb-2 px-1">
               <div className="text-xs text-muted-foreground">

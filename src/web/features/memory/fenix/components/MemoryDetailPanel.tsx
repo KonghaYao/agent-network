@@ -17,8 +17,9 @@ import { Check, Copy, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "../i18n";
 import { toast } from "../ui/toast";
-import { hindsightApi } from "../api";
+import { useFenixMemoryApi } from "../api";
 import { toHindsightFailure } from "../failure";
+import { logFenixError } from "../log-error";
 import { memoryTypeTitle } from "../memory-type-title";
 import type { MemoryDetail, MemoryTableRow } from "../types";
 import { HindsightFailureNotice } from "./HindsightFailureNotice";
@@ -34,6 +35,7 @@ interface MemoryDetailPanelProps {
 /** 内存详情侧面板 — 简化版，用于 Graph/Constellation 视图的节点详情展示 */
 export function MemoryDetailPanel({ memory, onClose, compact = false, inPanel = false }: MemoryDetailPanelProps) {
   const { t } = useTranslation(NS.HINDSIGHT);
+  const api = useFenixMemoryApi();
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // 取数：失败不再只写 `console.error` 后静默回落到行摘要（用户看不出「详情没取到」与「详情就是这样」），
@@ -44,10 +46,10 @@ export function MemoryDetailPanel({ memory, onClose, compact = false, inPanel = 
     loading,
     error: loadError,
     refresh: refreshMemory,
-  } = useRequest(() => hindsightApi.getMemory(memory.id), {
+  } = useRequest(() => api.getMemory(memory.id), {
     ready: !!memory?.id,
-    refreshDeps: [memory?.id],
-    onError: (err) => console.error("Failed to fetch memory details:", err),
+    refreshDeps: [memory?.id, api],
+    onError: (err) => logFenixError("Failed to fetch memory details:", err),
   });
 
   // 失败一律不展示详情：`useRequest` 失败时保留上一次成功的数据，而这里的数据可能属于**另一条记忆**

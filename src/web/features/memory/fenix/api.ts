@@ -4,11 +4,17 @@
  * Upstream `api/hindsight.ts` talks to Fenix's own `/web/hindsight` HTTP routes.
  * Agent Network must not add those routes in the vendor phase, so this module keeps
  * the exact call shape used by the ported components while delegating to an injected
- * adapter. The default adapter rejects every call: the panel cannot silently read
- * or write memory until a later phase wires it to `network_agent_memory_*`.
+ * adapter.
+ *
+ * The adapter is provided through React context rather than a module-level mutable
+ * singleton: switching the target actor/token creates a new provider value, and an
+ * unmounting dialog cannot clear the adapter used by a newer dialog (the previous
+ * render-time `configureFenixMemoryApi` + cleanup had exactly that race).
  *
  * Not ported from upstream: no network client, no credentials, no fetch.
  */
+
+import { createContext, useContext } from 'react';
 
 import type {
   BankStats,
@@ -52,39 +58,24 @@ export interface FenixMemoryApi {
   getEntityGraph(params?: { limit?: number; min_count?: number }): Promise<EntityGraphResponse>;
 }
 
-function notWired(method: string): Promise<never> {
-  return Promise.reject(
-    new FenixApiError(`Fenix memory adapter is not wired yet (${method})`, 'FENIX_NOT_WIRED'),
-  );
-}
-
-const DEFAULT_API: FenixMemoryApi = {
-  getStatus: () => notWired('getStatus'),
-  getGraph: () => notWired('getGraph'),
-  getBankStats: () => notWired('getBankStats'),
-  getMemory: () => notWired('getMemory'),
-  listEntities: () => notWired('listEntities'),
-  getEntity: () => notWired('getEntity'),
-  getEntityGraph: () => notWired('getEntityGraph'),
-};
-
-let current: FenixMemoryApi = DEFAULT_API;
+/**
+ * Injected by `AgentMemoryDialog` (production) and the vendor render fixture.
+ *
+ * The context value must be stable for the lifetime of one dialog instance; callers
+ * create it with `useMemo` from the target actor and token.
+ */
+export const FenixMemoryApiContext = createContext<FenixMemoryApi | null>(null);
 
 /**
- * Injected by the later memory-panel phase (or by tests/fixtures). Pass `null` to
- * restore the rejecting default so a test cannot leak a stub into another suite.
+ * Read the currently provided adapter.
+ *
+ * Throwing instead of falling back to a rejecting stub keeps a missing provider a
+ * visible integration error rather than a silent "记忆加载失败" in the UI.
  */
-export function configureFenixMemoryApi(api: FenixMemoryApi | null): void {
-  current = api ?? DEFAULT_API;
+export function useFenixMemoryApi(): FenixMemoryApi {
+  const api = useContext(FenixMemoryApiContext);
+  if (!api) {
+    throw new Error('FenixMemoryApiContext is missing; wrap the memory UI in a provider.');
+  }
+  return api;
 }
-
-/** Stable façade with the same method names the upstream components already call. */
-export const hindsightApi: FenixMemoryApi = {
-  getStatus: () => current.getStatus(),
-  getGraph: (params) => current.getGraph(params),
-  getBankStats: () => current.getBankStats(),
-  getMemory: (id) => current.getMemory(id),
-  listEntities: (params) => current.listEntities(params),
-  getEntity: (id) => current.getEntity(id),
-  getEntityGraph: (params) => current.getEntityGraph(params),
-};

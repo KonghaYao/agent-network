@@ -84,7 +84,7 @@ export interface DocumentChunk {
  *
  * 上游（`GET /mental-models`）允许 `content` / `source_query` / `max_tokens` / 时间为 `null`：
  * 模型在首次刷新完成前就是这种形态；`tags` 的数据库列同样可空。渲染前必须经
- * `hindsightApi` 归一化，不能直接拿原始响应当视图模型。
+ * `FenixMemoryApi` 适配层归一化，不能直接拿原始响应当视图模型。
  */
 export interface MentalModelResponse {
   id: string;
