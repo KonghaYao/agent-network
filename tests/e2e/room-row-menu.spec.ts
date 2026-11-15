@@ -222,6 +222,12 @@ test.describe('会话行右键与长按菜单', () => {
     const ab = row(page, directAB);
     await expect(ac).toBeVisible();
     await expect(ab).toBeVisible();
+    const scrollBefore = await page
+      .locator('.sidebar-list')
+      .evaluate((element) => element.scrollTop);
+    const bodyOverflowBefore = await page.evaluate(
+      () => getComputedStyle(document.body).overflow,
+    );
 
     await expect
       .poll(async () =>
@@ -269,6 +275,13 @@ test.describe('会话行右键与长按菜单', () => {
     await expect(ab.locator('.room-pref-label')).toHaveText('置顶 · 免打扰');
     await expect(ab.locator('.unread')).toHaveClass(/muted/);
     await expect(ab.locator('.unread')).toHaveAttribute('aria-label', '未读，消息免打扰');
+    // 菜单 portal 关闭后不改变侧栏滚动位置，也不锁 body 滚动。
+    expect(
+      await page.locator('.sidebar-list').evaluate((element) => element.scrollTop),
+    ).toBe(scrollBefore);
+    await expect
+      .poll(() => page.evaluate(() => getComputedStyle(document.body).overflow))
+      .toBe(bodyOverflowBefore);
 
     // 菜单关闭后客户端导航仍正常，且不残留遮罩/焦点陷阱。
     await ab.click();
