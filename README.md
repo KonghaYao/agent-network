@@ -206,7 +206,7 @@ CLI 先做 `server/discover`，建立 `agentnet://stream` SSE 订阅，ack 后 `
 
 唤醒契约：文本模式命中 `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) ` 的行会唤醒宿主；`DEADLINE`、`RECONNECTING`、`DEGRADED` 只记录。READY=首次连接并 login，RECOVERED=从 DEGRADED 恢复，ALERT=投递/提醒/claim 回执，EXPIRING=距 24h 上限不足 10 分钟，ERROR=需人工修复。ALERT 稳定包含 `type` / `delivery_id` / `room_id` / `seq`；`--json` 每行一个 JSON 对象，稳定包含 `type` / `kind` / `seq` 与 `delivery_id` / `room_id` / `message_id`（缺失为 `null`）。
 
-`--room-events`（仅 claude，可省略值，默认 `all`）开启后监听所有房间的 informational `room.message`，不按 @、发送者或房间白名单筛选；事件只含定位字段 `message_id` / `room_id` / `sender_id` / `seq` / `event_id`，`source` 为 `stream` 或断线补读的 `history`，不带正文或 preview。同一 `message_id` 只输出一次；同帧已有 delivery 时优先 delivery。SQLite 是权威，事件只作为提示，需要正文时按 `message_id` 调用 `network_message_read`。reconnect 用 after 游标补读，游标按最后一条 `created_seq` 单调推进；单次最多 20 页 × 100 条，达到上限仍有积压时输出 `ROOM_HISTORY_TRUNCATED`，下一次 reconnect 从已保存游标继续。
+`--room-events`（仅 claude，可省略值，默认 `all`）开启后监听所有房间的 informational `room.message`，不按 @、发送者或房间白名单筛选；事件只含定位字段 `message_id` / `room_id` / `sender_id` / `seq` / `event_id`，`source` 为 `stream` 或断线补读的 `history`，不带正文或 preview。同一 `message_id` 只输出一次；同帧已有 delivery 时优先 delivery。SQLite 是权威，事件只作为提示，需要正文时按 `message_id` 调用 `network_message_read`。reconnect 用 after 游标补读，游标按最后一条 `created_seq` 单调推进；单次最多 20 页 × 100 条，达到上限仍有积压时输出 `ROOM_HISTORY_TRUNCATED`，下一次 reconnect 从已保存游标继续。成员被移除再重新加入后服务端返回 `CURSOR_EXPIRED`：监听器清除该房间游标、输出一次 `ROOM_HISTORY_RESET`，并按无游标 after 重取当前基线，不再反复输出 `room_history_failed`。
 
 单次 monitor 默认最长 24 小时：启动输出 `DEADLINE at=... remaining_ms=...`，剩余 10 分钟输出一次 `EXPIRING`，到期输出 `EXPIRED` 并退出；`--max-runtime <seconds>` 可覆盖，`0` 表示不限制。跨 24h 由宿主重新启动并补读 inbox。**不要用 shell `&` 或通用后台任务承载 monitor**：宿主返回后进程可能被回收，ALERT 无人消费，投递会停在 claimed。
 

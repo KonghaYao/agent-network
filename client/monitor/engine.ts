@@ -13,6 +13,7 @@
  * - deferred 进入本地待领队列，按退避重试 claim，同一状态只提示一次；
  * - room_message 默认关闭；开启后监听所有房间，只输出 informational 定位字段，
  *   按 message_id 精确去重，reconnect 时用 history after 游标补读一次；
+ *   成员代次变化触发 CURSOR_EXPIRED 时清游标、记录一次重置并重取基线；
  * - 正文只进 event_file 与 stdout 的预览，不写日志。
  */
 
@@ -67,6 +68,11 @@ const ROOM_HISTORY_MAX_PAGES = 20;
 const ROOM_HISTORY_MAX_ITEMS = ROOM_HISTORY_MAX_PAGES * ROOM_HISTORY_PAGE_LIMIT;
 /** 本进程已输出 room_message 的 message_id 记忆上限，用于 reconnect 补读去重。 */
 const ROOM_OUTPUT_MEMORY = 10_000;
+
+/** `network_history_list` 的单次结果；游标失效需要按业务 code 区分。 */
+type RoomHistoryFetch =
+  | { ok: true; data: JsonObject }
+  | { ok: false; code: string };
 
 /** `--room-events`：开启后监听全部房间消息；缺省关闭。 */
 export type RoomEventScope = 'all';
@@ -819,13 +825,36 @@ export class MonitorEngine {
     return rooms;
   }
 
-  /** 取房间当前 head 的 after 游标，作为下一次 reconnect 的补读起点。 */
+  /**
+   * 取房间当前 head 的 after 游标，作为下一次 reconnect 的补读起点。
+   * 无游标的 after 按服务端契约从当前快照上界（成员加入边界之后）开始，
+   * 因此重新加入后重取基线不会回放加入前的消息。
+   */
   private async captureRoomCursor(roomId: string): Promise<void> {
-    const page = await this.fetchRoomHistory(roomId, null);
-    if (page === null) return;
+    const result = await this.fetchRoomHistory(roomId, null);
+    if (!result.ok) {
+      this.roomHistoryError('room_history_failed', roomId);
+      return;
+    }
+    const page = result.data;
     const items = asArray(page.items).map(asRecord);
     const next = advanceHistoryCursor(null, asString(page.next_cursor), items);
     if (next.length > 0) this.roomHistoryCursors.set(roomId, next);
+  }
+
+  /**
+   * 成员代次变化后服务端拒绝旧游标（CURSOR_EXPIRED）：丢弃旧游标，
+   * 记录一次可见重置，再按契约用无游标 after 取当前 head 作为新基线。
+   * 已输出的 message_id 由本地去重记忆保留，不会重复输出。
+   */
+  private async resetRoomCursor(roomId: string): Promise<void> {
+    this.roomHistoryCursors.delete(roomId);
+    this.control(
+      'room_history_reset',
+      { error_type: 'room', room_id: roomId, reason: 'cursor_expired' },
+      `ROOM_HISTORY_RESET room_id=${roomId} reason=cursor_expired`,
+    );
+    await this.captureRoomCursor(roomId);
   }
 
   /** 用保存的游标 after 补读；分页直到 has_more=false，只输出定位字段。 */
@@ -834,8 +863,16 @@ export class MonitorEngine {
     let seen = 0;
     for (let page = 0; page < ROOM_HISTORY_MAX_PAGES; page += 1) {
       if (this.signal.aborted) return;
-      const data = await this.fetchRoomHistory(roomId, current);
-      if (data === null) return;
+      const result = await this.fetchRoomHistory(roomId, current);
+      if (!result.ok) {
+        if (result.code === 'CURSOR_EXPIRED') {
+          await this.resetRoomCursor(roomId);
+          return;
+        }
+        this.roomHistoryError('room_history_failed', roomId);
+        return;
+      }
+      const data = result.data;
 
       const items = asArray(data.items).map(asRecord);
       seen += items.length;
@@ -870,7 +907,7 @@ export class MonitorEngine {
   private async fetchRoomHistory(
     roomId: string,
     cursor: string | null,
-  ): Promise<JsonObject | null> {
+  ): Promise<RoomHistoryFetch> {
     const args: JsonObject = {
       room_id: roomId,
       direction: 'after',
@@ -879,15 +916,11 @@ export class MonitorEngine {
     if (cursor !== null) args.cursor = cursor;
     try {
       const outcome = await this.rpc.callTool('network_history_list', args);
-      if (!outcome.ok) {
-        this.roomHistoryError('room_history_failed', roomId);
-        return null;
-      }
-      return outcome.data;
+      if (!outcome.ok) return { ok: false, code: outcome.code };
+      return { ok: true, data: outcome.data };
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
-      this.roomHistoryError('room_history_failed', roomId);
-      return null;
+      return { ok: false, code: 'TRANSPORT_ERROR' };
     }
   }
 

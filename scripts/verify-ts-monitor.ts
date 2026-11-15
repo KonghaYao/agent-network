@@ -77,6 +77,8 @@ interface MockState {
   history: Map<string, JsonObject[]>;
   /** 模拟旧服务端：/after 返回本页消息却仍给旧游标。 */
   historyCursorStuck: boolean;
+  /** 模拟成员重新加入：代次递增后旧代次游标返回 CURSOR_EXPIRED。 */
+  historyGeneration: number;
   historyCalls: Array<{ room_id: string; cursor: string | null; direction: string }>;
   /** informational 帧不应触发 pending inbox 查询。 */
   pendingListCalls: number;
@@ -200,6 +202,7 @@ function createMock(options: MockOptions = {}): MockServer {
     rooms: [],
     history: new Map(),
     historyCursorStuck: false,
+    historyGeneration: 1,
     historyCalls: [],
     pendingListCalls: 0,
     loginPending: null,
@@ -339,6 +342,9 @@ function createMock(options: MockOptions = {}): MockServer {
           const cursor = args.cursor === undefined ? null : String(args.cursor);
           state.historyCalls.push({ room_id: roomId, cursor, direction });
           const cursorState = cursor === null ? null : decodeHistoryCursor(cursor);
+          if (cursorState !== null && cursorState.generation !== state.historyGeneration) {
+            return toolError(body.id, 'CURSOR_EXPIRED', '成员代次或历史边界已变化，请重新读取');
+          }
           const start =
             cursor === null
               ? direction === 'after'
@@ -355,7 +361,7 @@ function createMock(options: MockOptions = {}): MockServer {
             : (lastSeq ?? Math.max(cursorState?.seq ?? 0, snapshot));
           return toolResult(body.id, {
             items: page,
-            next_cursor: encodeHistoryCursor(nextSeq, snapshot),
+            next_cursor: encodeHistoryCursor(nextSeq, snapshot, state.historyGeneration),
             has_more: start + limit < items.length,
             snapshot: String(snapshot),
             head_seq: String(snapshot),
@@ -525,22 +531,35 @@ function historyMessage(
   };
 }
 
-function encodeHistoryCursor(seq: number, snapshot: number): string {
+function encodeHistoryCursor(seq: number, snapshot: number, generation = 1): string {
   return Buffer.from(
-    JSON.stringify({ v: 1, scope: 'room:rm_test:history:g1', dir: 'after', seq, snapshot }),
+    JSON.stringify({
+      v: 1,
+      scope: `room:rm_test:history:g${generation}`,
+      dir: 'after',
+      seq,
+      snapshot,
+    }),
     'utf8',
   ).toString('base64url');
 }
 
-function decodeHistoryCursor(cursor: string): { seq: number; snapshot: number } | null {
+function decodeHistoryCursor(
+  cursor: string,
+): { seq: number; snapshot: number; generation: number } | null {
   try {
     const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as {
       seq?: unknown;
       snapshot?: unknown;
+      scope?: unknown;
     };
-    return typeof parsed.seq === 'number' && typeof parsed.snapshot === 'number'
-      ? { seq: parsed.seq, snapshot: parsed.snapshot }
-      : null;
+    if (typeof parsed.seq !== 'number' || typeof parsed.snapshot !== 'number') return null;
+    const match = typeof parsed.scope === 'string' ? /:g(\d+)$/u.exec(parsed.scope) : null;
+    return {
+      seq: parsed.seq,
+      snapshot: parsed.snapshot,
+      generation: match === null ? 0 : Number(match[1]),
+    };
   } catch {
     return null;
   }
@@ -1287,6 +1306,144 @@ async function runRoomEventChecks(): Promise<void> {
   } finally {
     await truncWatcher.kill();
     truncMock.stop();
+  }
+
+  // 成员移除→重新加入：服务端代次变化拒绝旧游标；客户端重置一次并重取基线。
+  const rejoinMock = createMock();
+  rejoinMock.state.rooms = ['rm_rejoin'];
+  const rejoinWatcher = startWatcher(
+    rejoinMock.base,
+    { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' },
+    ['--room-events'],
+  );
+  try {
+    await waitForLine(rejoinWatcher.stderr, (line) => line.includes('READY'), 'rejoin READY');
+    await waitForHistoryCall(
+      rejoinMock,
+      (call) => call.room_id === 'rm_rejoin' && call.cursor === null,
+      'rejoin initial baseline',
+    );
+    rejoinMock.state.history.set('rm_rejoin', [
+      historyMessage('rm_rejoin', 'msg_rejoin_seen', 1),
+      historyMessage('rm_rejoin', 'msg_rejoin_prebaseline', 2),
+    ]);
+    sendItems(rejoinMock, [roomItem('rm_rejoin', 'msg_rejoin_seen')]);
+    await waitForRoomEvent(rejoinWatcher.stdout, 'msg_rejoin_seen');
+
+    // 重新加入产生新代次：旧 g1 游标一律 CURSOR_EXPIRED。
+    rejoinMock.state.historyGeneration = 2;
+    const rejoinPrevious = rejoinMock.state.controller;
+    const callsBeforeReset = rejoinMock.state.historyCalls.length;
+    rejoinMock.closeStream();
+    await waitForReconnect(rejoinMock, rejoinPrevious, 'rejoin');
+    await waitForLine(
+      rejoinWatcher.stderr,
+      (line) => line.includes('READY') && line.includes('reconnect=1'),
+      'rejoin READY after reconnect',
+    );
+    await waitForLine(
+      rejoinWatcher.stderr,
+      (line) => line.includes('ROOM_HISTORY_RESET') && line.includes('room_id=rm_rejoin'),
+      'room history reset notice',
+    );
+    await waitForHistoryCall(
+      rejoinMock,
+      (call) =>
+        call.room_id === 'rm_rejoin' &&
+        call.cursor === null &&
+        rejoinMock.state.historyCalls.indexOf(call) >= callsBeforeReset,
+      'rejoin rebaseline',
+    );
+    checkEqual(
+      '重新加入后旧游标被服务端拒绝',
+      rejoinMock.state.historyCalls
+        .slice(callsBeforeReset)
+        .some(
+          (call) =>
+            call.room_id === 'rm_rejoin' &&
+            call.cursor !== null &&
+            decodeHistoryCursor(call.cursor)?.generation === 1,
+        ),
+      true,
+    );
+    await Bun.sleep(400);
+    checkEqual(
+      '重新加入后只记录一次重置',
+      rejoinWatcher.stderr.filter(
+        (line) => line.includes('ROOM_HISTORY_RESET') && line.includes('room_id=rm_rejoin'),
+      ).length,
+      1,
+    );
+    check(
+      '重新加入后不输出永久 room_history_failed',
+      !rejoinWatcher.stderr.some((line) => line.includes('room_history_failed')) &&
+        !rejoinWatcher.stdout.some((line) => line.includes('room_history_failed')),
+    );
+    checkEqual(
+      '重新加入后不重复输出已见消息',
+      roomEventCount(rejoinWatcher.stdout, 'msg_rejoin_seen'),
+      1,
+    );
+
+    // 重置后的流消息仍只输出一次。
+    sendItems(rejoinMock, [roomItem('rm_rejoin', 'msg_rejoin_after')]);
+    await waitForRoomEvent(rejoinWatcher.stdout, 'msg_rejoin_after');
+    checkEqual(
+      '重新加入后流消息输出一次',
+      roomEventCount(rejoinWatcher.stdout, 'msg_rejoin_after'),
+      1,
+    );
+
+    // 重置后的新游标可继续补读断线期间的消息。
+    rejoinMock.state.history.set('rm_rejoin', [
+      historyMessage('rm_rejoin', 'msg_rejoin_seen', 1),
+      historyMessage('rm_rejoin', 'msg_rejoin_prebaseline', 2),
+      historyMessage('rm_rejoin', 'msg_rejoin_after', 3),
+      historyMessage('rm_rejoin', 'msg_rejoin_gap', 4),
+    ]);
+    const rejoinAgain = rejoinMock.state.controller;
+    rejoinMock.closeStream();
+    await waitForReconnect(rejoinMock, rejoinAgain, 'rejoin backfill');
+    await waitForLine(
+      rejoinWatcher.stderr,
+      (line) => line.includes('READY') && line.includes('reconnect=1'),
+      'rejoin backfill READY',
+    );
+    await waitForRoomEvent(rejoinWatcher.stdout, 'msg_rejoin_gap');
+    await Bun.sleep(400);
+    checkEqual(
+      '重新加入后离线消息补读一次',
+      roomEventCount(rejoinWatcher.stdout, 'msg_rejoin_gap'),
+      1,
+    );
+    checkEqual(
+      '重新加入后流消息不因补读重复',
+      roomEventCount(rejoinWatcher.stdout, 'msg_rejoin_after'),
+      1,
+    );
+    const rejoinBackfill = await waitForHistoryCall(
+      rejoinMock,
+      (call) =>
+        call.room_id === 'rm_rejoin' &&
+        call.cursor !== null &&
+        decodeHistoryCursor(call.cursor)?.generation === 2,
+      'rejoin new generation backfill',
+    );
+    checkEqual(
+      '重新加入后补读使用新代次游标',
+      decodeHistoryCursor(rejoinBackfill.cursor ?? '')?.generation,
+      2,
+    );
+    checkEqual(
+      '重新加入后仍只记录一次重置',
+      rejoinWatcher.stderr.filter(
+        (line) => line.includes('ROOM_HISTORY_RESET') && line.includes('room_id=rm_rejoin'),
+      ).length,
+      1,
+    );
+  } finally {
+    await rejoinWatcher.kill();
+    rejoinMock.stop();
   }
 
   const nonClaude = Bun.spawnSync({
