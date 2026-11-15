@@ -1,0 +1,34 @@
+/**
+ * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
+ * Upstream: packages/ui-components/web/ui/badge.css
+ * Modified for Agent Network: 原样移植。
+ */
+
+.badge > svg {
+  pointer-events: none;
+  width: calc(var(--spacing) * 3);
+  height: calc(var(--spacing) * 3);
+}
+@media (hover: hover) {
+  a.badge[data-variant="default"]:hover {
+    background-color: color-mix(in oklab, var(--color-primary) 90%, transparent);
+  }
+
+  a.badge[data-variant="secondary"]:hover {
+    background-color: color-mix(in oklab, var(--color-secondary) 90%, transparent);
+  }
+
+  a.badge[data-variant="destructive"]:hover {
+    background-color: color-mix(in oklab, var(--color-destructive) 90%, transparent);
+  }
+
+  a.badge[data-variant="outline"]:hover,
+  a.badge[data-variant="ghost"]:hover {
+    background-color: var(--color-accent);
+    color: var(--color-accent-foreground);
+  }
+
+  a.badge[data-variant="link"]:hover {
+    text-decoration-line: underline;
+  }
+}

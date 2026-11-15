@@ -1,0 +1,11 @@
+/**
+ * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
+ * Upstream: packages/ui-components/web/ui/select.css
+ * Modified for Agent Network: 原样移植。
+ */
+
+.select-trigger svg,
+.select-item svg {
+  pointer-events: none;
+  flex-shrink: 0;
+}

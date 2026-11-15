@@ -1,0 +1,19 @@
+/**
+ * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
+ * Upstream: packages/resources/memory/web/pages/hindsight/MemoriesPage.css
+ * Modified for Agent Network: 原样移植；只在该懒加载 chunk 中生效。
+ */
+
+.memories-page-workspace {
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+.memories-page-workspace > div [data-slot="scroll-area-viewport"] > div {
+  height: 100%;
+}
+
+@media (width >= 48rem) {
+  .memories-page-workspace {
+    grid-template-rows: repeat(1, minmax(0, 1fr));
+  }
+}

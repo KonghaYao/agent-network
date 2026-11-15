@@ -1,0 +1,9 @@
+/**
+ * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
+ * Upstream: packages/resources/memory/web/pages/hindsight/components/MemoryDetailPanel.css
+ * Modified for Agent Network: 原样移植。
+ */
+
+.memory-detail-panel-card {
+  max-height: calc(100vh - 120px);
+}

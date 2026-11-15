@@ -1,0 +1,104 @@
+/**
+ * Scoped Tailwind entry for the vendored FenixAgent memory UI.
+ *
+ * Only theme + utilities are imported; preflight is intentionally omitted so the
+ * chat/home document is never reset by this lazily loaded stylesheet. A minimal
+ * reset is scoped under `.fenix-memory-root` instead.
+ *
+ * Upstream reference: FenixAgent apps/web/src/index.css (@import "tailwindcss").
+ * Modified for Agent Network: no preflight, @source limited to fenix/**, semantic
+ * colors mapped to the existing --wx-* tokens.
+ */
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@source "../**/*.{ts,tsx}";
+
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+@theme inline {
+  --color-background: var(--wx-panel, #ffffff);
+  --color-foreground: var(--wx-text, #1a1a1a);
+  --color-card: var(--wx-panel, #ffffff);
+  --color-card-foreground: var(--wx-text, #1a1a1a);
+  --color-popover: var(--wx-panel, #ffffff);
+  --color-popover-foreground: var(--wx-text, #1a1a1a);
+  --color-primary: var(--wx-green, #07c160);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--wx-hover, #ececec);
+  --color-secondary-foreground: var(--wx-text, #1a1a1a);
+  --color-muted: var(--wx-bg, #ededed);
+  --color-muted-foreground: var(--wx-muted, #8c8c8c);
+  --color-accent: var(--wx-hover, #ececec);
+  --color-accent-foreground: var(--wx-text, #1a1a1a);
+  --color-destructive: var(--wx-unread, #fa5151);
+  --color-border: var(--wx-line, #e5e5e5);
+  --color-input: var(--wx-line, #e5e5e5);
+  --color-ring: var(--wx-green, #07c160);
+  --color-surface-0: var(--wx-panel, #ffffff);
+  --color-surface-1: var(--wx-sidebar, #f7f7f7);
+  --color-text-muted: var(--wx-muted, #8c8c8c);
+  --color-text-secondary: var(--wx-text, #3f3f46);
+  --color-text-dim: var(--wx-muted, #a1a1aa);
+  --color-status-error: var(--wx-unread, #dc2626);
+  --color-brand: var(--wx-green, #07c160);
+  --color-brand-glow: rgb(7 193 96 / 25%);
+  --color-cyan: #009296;
+  --color-status-warning: #f59e0b;
+  --color-accent-pink: #8b5cf6;
+  --text-3xs: 0.625rem;
+  --text-3xs--line-height: 0.875rem;
+  --text-4xs: 0.5625rem;
+  --text-4xs--line-height: 0.8125rem;
+}
+
+@layer base {
+  .fenix-memory-root,
+  .fenix-memory-root *,
+  .fenix-memory-root *::before,
+  .fenix-memory-root *::after {
+    box-sizing: border-box;
+  }
+
+  .fenix-memory-root {
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .fenix-memory-root :where(h1, h2, h3, h4, p, dl, dd, dt, ul, ol, figure, blockquote) {
+    margin: 0;
+  }
+
+  .fenix-memory-root :where(button, input, select, textarea) {
+    color: inherit;
+    font: inherit;
+  }
+
+  .fenix-memory-root :where(button) {
+    background-color: transparent;
+    background-image: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .fenix-memory-root :where(table) {
+    border-collapse: collapse;
+    border-color: inherit;
+    text-indent: 0;
+  }
+
+  .fenix-memory-root :where(img, svg, canvas) {
+    display: block;
+    vertical-align: middle;
+  }
+
+  .fenix-memory-root :where(ul, ol) {
+    list-style: none;
+    padding: 0;
+  }
+}
