@@ -3,6 +3,7 @@
  *
  * 策略是显式的跨 actor 读取：
  * - Agent 只能看自己；
+ * - 任一方 active 拉黑另一方时直接拒绝，拉黑优先于好友与共享房间；
  * - human 必须是目标 Agent 的好友，或与它共享至少一个未解散房间。
  *
  * 管理关系与 `manage_agent` 委托都不参与授权；“能管理 Agent”不等于“能读
@@ -11,6 +12,7 @@
 import { BusinessError } from '../../contracts/errors';
 import { sortedPairKey } from '../../storage/db';
 import {
+  findActiveContactBlockBetween,
   getActiveContactRelation,
   getActor,
   getActiveMemorySpace,
@@ -51,6 +53,12 @@ export async function authorizeInsightViewer(
   if (viewer.kind === 'agent') {
     if (viewer.actor_id === target.actor_id) return 'self';
     throw new BusinessError('PERMISSION_DENIED', 'Agent 只能查看自己的记忆', {
+      reason: 'forbidden',
+      insight_code: 'FORBIDDEN',
+    });
+  }
+  if (await findActiveContactBlockBetween(db, viewer.actor_id, target.actor_id)) {
+    throw new BusinessError('PERMISSION_DENIED', '拉黑关系下无权查看该 Agent 的记忆', {
       reason: 'forbidden',
       insight_code: 'FORBIDDEN',
     });

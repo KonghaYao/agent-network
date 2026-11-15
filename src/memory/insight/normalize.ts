@@ -490,6 +490,10 @@ export function normalizeEntityGraph(
     entityMode: true,
   });
   if (!graph) return null;
+  // Hindsight 的 total_entities/total_edges 是本次返回子图的计数，不是全库总数；
+  // 返回数达到请求边上限或服务端节点上限时无法证明图完整，必须标记 truncated。
+  const capReached =
+    graph.nodes.length >= options.nodeLimit || graph.edges.length >= options.edgeLimit;
   const result: InsightEntityGraph = {
     nodes: graph.nodes,
     edges: graph.edges,
@@ -498,7 +502,7 @@ export function normalizeEntityGraph(
     raw_node_count: graph.raw_node_count,
     raw_edge_count: graph.raw_edge_count,
     limit: options.edgeLimit,
-    truncated: graph.truncated,
+    truncated: graph.truncated || capReached,
   };
   const extraTrimmed = fitGraphBytes(result, options.bytes);
   if (extraTrimmed) result.truncated = true;

@@ -66,6 +66,30 @@ function seedFriend(
     .run();
 }
 
+function seedBlock(
+  db: D1Database,
+  blocker: string,
+  blocked: string,
+): void {
+  db.prepare(
+    `INSERT INTO contact_blocks
+       (block_id, blocker_actor_id, blocked_actor_id, reason, mute_mentions, created_at, released_at, released_by)
+     VALUES (?, ?, ?, '', 1, ?, NULL, NULL)`,
+  )
+    .bind(unique('blk'), blocker, blocked, AT)
+    .run();
+}
+
+function releaseBlock(db: D1Database, blocker: string, blocked: string): void {
+  db.prepare(
+    `UPDATE contact_blocks
+        SET released_at = ?, released_by = ?
+      WHERE blocker_actor_id = ? AND blocked_actor_id = ? AND released_at IS NULL`,
+  )
+    .bind(AT + 1, blocker, blocker, blocked)
+    .run();
+}
+
 function seedSpace(
   db: D1Database,
   input: {
@@ -197,9 +221,27 @@ function entityGraphFixture(): Record<string, unknown> {
   return {
     nodes,
     edges,
-    total_entities: 1_020,
+    // 真实上游的 total 是本次返回子图的计数，不是全库总数。
+    total_entities: nodes.length,
     total_edges: edges.length,
   };
+}
+
+/** 生成恰好 edgeCount 条有效边/节点的实体子图，用于验证达到上限时的截断标记。 */
+function limitedEntityGraphFixture(edgeCount: number): Record<string, unknown> {
+  const nodes = Array.from({ length: edgeCount }, (_, index) => ({
+    data: { id: `l${index}`, label: `Limit ${index}`, mentionCount: index + 1 },
+  }));
+  const edges = Array.from({ length: edgeCount }, (_, index) => ({
+    data: {
+      id: `le-${index}`,
+      source: `l${index}`,
+      target: `l${(index + 1) % edgeCount}`,
+      linkType: 'cooccurrence',
+      weight: 1,
+    },
+  }));
+  return { nodes, edges, total_entities: nodes.length, total_edges: edges.length };
 }
 
 async function main(): Promise<void> {
@@ -211,10 +253,14 @@ async function main(): Promise<void> {
   const stranger = unique('usr_stranger');
   const endedFriend = unique('usr_ended');
   const leftViewer = unique('usr_left');
+  const blockedRoomViewer = unique('usr_blocked_room');
+  const blockedFriend = unique('usr_blocked_friend');
+  const doubleBlocked = unique('usr_double_blocked');
   const target = unique('agt_target');
   const otherAgent = unique('agt_other');
   const noSpaceAgent = unique('agt_nospace');
   const missingBankAgent = unique('agt_missingbank');
+  const entityLimitAgent = unique('agt_entity_limit');
   const humanTarget = unique('usr_human_target');
 
   seedActor(env, { actorId: friend, kind: 'human', name: '好友' });
@@ -222,24 +268,44 @@ async function main(): Promise<void> {
   seedActor(env, { actorId: stranger, kind: 'human', name: '陌生人' });
   seedActor(env, { actorId: endedFriend, kind: 'human', name: '旧好友' });
   seedActor(env, { actorId: leftViewer, kind: 'human', name: '已退群' });
+  seedActor(env, { actorId: blockedRoomViewer, kind: 'human', name: '被拉黑同房' });
+  seedActor(env, { actorId: blockedFriend, kind: 'human', name: '拉黑好友' });
+  seedActor(env, { actorId: doubleBlocked, kind: 'human', name: '双向拉黑好友' });
   seedActor(env, { actorId: target, kind: 'agent', name: '目标 Agent' });
   seedActor(env, { actorId: otherAgent, kind: 'agent', name: '另一个 Agent' });
   seedActor(env, { actorId: noSpaceAgent, kind: 'agent', name: '无空间 Agent' });
   seedActor(env, { actorId: missingBankAgent, kind: 'agent', name: '缺 bank Agent' });
+  seedActor(env, { actorId: entityLimitAgent, kind: 'agent', name: '实体上限 Agent' });
   seedActor(env, { actorId: humanTarget, kind: 'human', name: '人类目标' });
 
   seedFriend(env.d1, friend, target, 'active');
   seedFriend(env.d1, endedFriend, target, 'ended');
   seedFriend(env.d1, friend, noSpaceAgent, 'active');
   seedFriend(env.d1, friend, missingBankAgent, 'active');
+  seedFriend(env.d1, friend, entityLimitAgent, 'active');
+  seedFriend(env.d1, blockedFriend, target, 'active');
+  seedFriend(env.d1, doubleBlocked, target, 'active');
   // 陌生人只是目标 Agent 的 manager；新策略明确不允许仅凭管理关系读取正文。
   seedManagement(env, { agentId: target, managerId: stranger, bindingId: unique('amb') });
+
+  // 拉黑排除：目标被 Agent 拉黑但仍在同一 active direct room；human 拉黑 Agent
+  // 但仍是好友；以及双向拉黑。拉黑优先于好友/共享房间关系。
+  seedBlock(env.d1, target, blockedRoomViewer);
+  seedBlock(env.d1, blockedFriend, target);
+  seedBlock(env.d1, target, doubleBlocked);
+  seedBlock(env.d1, doubleBlocked, target);
 
   seedRoom(env, {
     roomId: unique('rm_shared'),
     kind: 'direct',
     ownerId: roomViewer,
     members: [{ actorId: roomViewer }, { actorId: target }],
+  });
+  seedRoom(env, {
+    roomId: unique('rm_blocked'),
+    kind: 'direct',
+    ownerId: blockedRoomViewer,
+    members: [{ actorId: blockedRoomViewer }, { actorId: target }],
   });
   seedRoom(env, {
     roomId: unique('rm_agent_shared'),
@@ -283,9 +349,21 @@ async function main(): Promise<void> {
     ownershipEpoch: missingBankSpace.ownership_epoch,
     backendBindingEpoch: missingBankSpace.backend_binding_epoch,
   });
+  const entityLimitSpace = {
+    space_id: 'msp_insight_entity_limit',
+    ownership_epoch: 1,
+    backend_binding_epoch: 1,
+  };
+  seedSpace(env.d1, {
+    spaceId: entityLimitSpace.space_id,
+    agentId: entityLimitAgent,
+    ownershipEpoch: entityLimitSpace.ownership_epoch,
+    backendBindingEpoch: entityLimitSpace.backend_binding_epoch,
+  });
 
   const targetBank = await bankIdFor('agentnet', targetSpace);
   const missingBank = await bankIdFor('agentnet', missingBankSpace);
+  const entityLimitBank = await bankIdFor('agentnet', entityLimitSpace);
   check('bank 由 space + epochs 派生', targetBank.startsWith('agentnet-') && targetBank.length === 49);
   check('不同 space 派生不同 bank', targetBank !== missingBank);
 
@@ -400,6 +478,7 @@ async function main(): Promise<void> {
     entities,
     entityDetails,
   });
+  fake.seedBank(entityLimitBank, { entityGraph: limitedEntityGraphFixture(5) });
 
   let clock = AT;
   const reader = new HindsightInsightReader({
@@ -442,6 +521,24 @@ async function main(): Promise<void> {
     'FORBIDDEN',
   );
   await expectBusiness(
+    '被 Agent 拉黑但仍在同一 active direct room 不能查看',
+    service.overview(viewer('human', blockedRoomViewer), { actor_id: target }),
+    'PERMISSION_DENIED',
+    'FORBIDDEN',
+  );
+  await expectBusiness(
+    '拉黑 Agent 但仍是 active 好友不能查看',
+    service.overview(viewer('human', blockedFriend), { actor_id: target }),
+    'PERMISSION_DENIED',
+    'FORBIDDEN',
+  );
+  await expectBusiness(
+    '双向拉黑且仍是 active 好友不能查看',
+    service.overview(viewer('human', doubleBlocked), { actor_id: target }),
+    'PERMISSION_DENIED',
+    'FORBIDDEN',
+  );
+  await expectBusiness(
     'Agent 不能查看其他 Agent（即使共享房间）',
     service.overview(viewer('agent', otherAgent), { actor_id: target }),
     'PERMISSION_DENIED',
@@ -457,6 +554,7 @@ async function main(): Promise<void> {
     service.overview(viewer('human', friend), { actor_id: 'agt_missing' }),
     'NOT_FOUND',
   );
+
 
   console.log('--- overview / bank 映射 ---');
   fake.resetRequests();
@@ -477,6 +575,19 @@ async function main(): Promise<void> {
   checkEqual('共享有效房间可查看', roomViewerOverview.available, true);
   const selfOverview = await service.overview(viewer('agent', target), { actor_id: target });
   checkEqual('Agent 本人可查看', selfOverview.available, true);
+
+  releaseBlock(env.d1, target, blockedRoomViewer);
+  const unblockedRoomOverview = await service.overview(viewer('human', blockedRoomViewer), {
+    actor_id: target,
+    refresh: true,
+  });
+  checkEqual('解除拉黑后同房恢复可查看', unblockedRoomOverview.available, true);
+  releaseBlock(env.d1, blockedFriend, target);
+  const unblockedFriendOverview = await service.overview(viewer('human', blockedFriend), {
+    actor_id: target,
+    refresh: true,
+  });
+  checkEqual('解除拉黑后好友恢复可查看', unblockedFriendOverview.available, true);
 
   const noSpace = await service.overview(viewer('human', friend), { actor_id: noSpaceAgent });
   checkEqual('无 active space 返回 no_space', noSpace.reason, 'no_space');
@@ -635,6 +746,34 @@ async function main(): Promise<void> {
     (largeEntityGraph.graph?.edges.length ?? 0) <= 200,
     largeEntityGraph.graph?.edges.length,
   );
+  checkEqual('实体图 total_entities 为子图节点计数', entityGraph.graph?.total_entities, 250);
+  checkEqual('实体图达到裁剪上限 truncated=true', entityGraph.graph?.truncated, true);
+
+  console.log('--- 实体图 truncated 边界 ---');
+  const belowLimitGraph = await service.entities(viewer('human', friend), {
+    actor_id: entityLimitAgent,
+    view: 'graph',
+    limit: 10,
+    refresh: true,
+  });
+  checkEqual('实体图低于上限 truncated=false', belowLimitGraph.graph?.truncated, false);
+  checkEqual('实体图低于上限返回边数', belowLimitGraph.graph?.edges.length, 5);
+  checkEqual('实体图保留 raw 边数', belowLimitGraph.graph?.raw_edge_count, 5);
+  checkEqual('实体图 total_edges 为子图计数', belowLimitGraph.graph?.total_edges, 5);
+
+  for (const limit of [10, 50, 200] as const) {
+    fake.seedBank(entityLimitBank, { entityGraph: limitedEntityGraphFixture(limit) });
+    const reached = await service.entities(viewer('human', friend), {
+      actor_id: entityLimitAgent,
+      view: 'graph',
+      limit,
+      refresh: true,
+    });
+    checkEqual(`实体图 limit=${limit} 返回边数达到上限`, reached.graph?.edges.length, limit);
+    checkEqual(`实体图 limit=${limit} truncated=true`, reached.graph?.truncated, true);
+    checkEqual(`实体图 limit=${limit} raw 边数保留`, reached.graph?.raw_edge_count, limit);
+    checkEqual(`实体图 limit=${limit} total_edges 为子图计数`, reached.graph?.total_edges, limit);
+  }
 
   const entityDetail = await service.entities(viewer('human', friend), {
     actor_id: target,
