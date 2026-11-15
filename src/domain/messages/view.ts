@@ -264,6 +264,8 @@ export function messageCoreStatements(
         refId: core.messageId,
         metadata: {
           sender_id: core.senderId,
+          sender_name: core.senderName ?? null,
+          sender_kind: core.senderKind ?? null,
           deliveries: core.deliveries.length,
           task_root_id: core.taskRootId ?? null,
         },

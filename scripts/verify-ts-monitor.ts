@@ -500,7 +500,14 @@ function notificationItem(deliveryId: string, source = 'delivery.created', event
 function roomItem(
   roomId: string,
   messageId: string,
-  options: { senderId?: string; seq?: string; eventId?: string } = {},
+  options: {
+    senderId?: string;
+    seq?: string;
+    eventId?: string;
+    senderName?: string | null;
+    senderKind?: string | null;
+    change?: string;
+  } = {},
 ): JsonObject {
   return {
     source: 'room.message',
@@ -509,14 +516,31 @@ function roomItem(
     room_id: roomId,
     message_id: messageId,
     sender_id: options.senderId ?? 'agt_user',
+    sender_name: options.senderName ?? null,
+    sender_kind: options.senderKind ?? null,
+    ...(options.change === undefined ? {} : { change: options.change }),
     seq: options.seq ?? '9',
     event_id: options.eventId ?? `evt_${messageId}`,
     created_at: new Date().toISOString(),
   };
 }
 
-function historyMessage(
-  roomId: string,
+function streamItem(
+  source: string,
+  fields: JsonObject = {},
+): JsonObject {
+  return {
+    source,
+    kind: 'room',
+    attention: 'informational',
+    seq: '9',
+    event_id: `evt_${source}_${String(fields.message_id ?? fields.delivery_id ?? '')}`,
+    created_at: new Date().toISOString(),
+    ...fields,
+  };
+}
+
+function historyMessage(  roomId: string,
   messageId: string,
   seq: number,
   senderId = 'agt_user',
@@ -646,6 +670,8 @@ function startWatcher(
   return startProcess([process.execPath, CLI, 'monitor', '--harness', 'claude', ...extraArgs], {
     AGENTNET_URL: base,
     AGENTNET_TOKEN: TOKEN,
+    // 每个 watcher 独立状态目录，避免持久游标/seen 在测试间串扰。
+    AGENTNET_MONITOR_STATE_DIR: mkdtempSync(join(tmpdir(), 'ts-monitor-claude-')),
     ...extraEnv,
   });
 }
@@ -658,6 +684,7 @@ function startPeriWatcher(
   return startProcess([process.execPath, CLI, 'monitor', '--harness', 'peri', ...extraArgs], {
     AGENTNET_URL: base,
     AGENTNET_TOKEN: TOKEN,
+    AGENTNET_MONITOR_STATE_DIR: mkdtempSync(join(tmpdir(), 'ts-monitor-peri-')),
     ...extraEnv,
   });
 }
@@ -724,6 +751,48 @@ async function waitForRoomEvent(
   }
   throw new Error(
     `timeout waiting for room_message/${messageId}; lines=${JSON.stringify(lines)}`,
+  );
+}
+
+async function waitForStreamEvent(
+  lines: string[],
+  source: string,
+  predicate: (event: JsonObject) => boolean = () => true,
+  timeoutMs = 10_000,
+): Promise<JsonObject> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    for (const line of lines) {
+      const event = parseEvent(line);
+      if (event?.type === 'stream_event' && event.source === source && predicate(event)) {
+        return event;
+      }
+    }
+    await Bun.sleep(50);
+  }
+  throw new Error(
+    `timeout waiting for stream_event/${source}; lines=${JSON.stringify(lines)}`,
+  );
+}
+
+async function waitForDeliveryState(
+  lines: string[],
+  deliveryId: string,
+  state?: string,
+  timeoutMs = 10_000,
+): Promise<JsonObject> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    for (const line of lines) {
+      const event = parseEvent(line);
+      if (event?.type !== 'delivery_state' || event.delivery_id !== deliveryId) continue;
+      if (state !== undefined && event.state !== state) continue;
+      return event;
+    }
+    await Bun.sleep(50);
+  }
+  throw new Error(
+    `timeout waiting for delivery_state/${deliveryId}/${state ?? '*'}; lines=${JSON.stringify(lines)}`,
   );
 }
 
@@ -1039,14 +1108,165 @@ async function runClaudeChecks(): Promise<void> {
 }
 
 async function runRoomEventChecks(): Promise<void> {
-  // 默认关闭：即使流里有 informational room.message，也不输出 room_message。
+  // 默认开启：即使没有 --room-events，也输出所有房间活动。
+  const defaultMock = createMock();
+  const defaultWatcher = startWatcher(defaultMock.base, {
+    AGENTNET_MONITOR_RETRY_BASE_MS: '600000',
+  });
+  try {
+    await waitForLine(defaultWatcher.stderr, (line) => line.includes('READY'), 'default READY');
+    sendItems(defaultMock, [roomItem('rm_allowed', 'msg_default_on')]);
+    await waitForRoomEvent(defaultWatcher.stdout, 'msg_default_on');
+    checkEqual(
+      '默认开启输出 room_message',
+      roomEventCount(defaultWatcher.stdout, 'msg_default_on'),
+      1,
+    );
+  } finally {
+    await defaultWatcher.kill();
+    defaultMock.stop();
+  }
+
+  // --no-room-events 关闭 informational 输出，但投递/提醒仍可用。
   const offMock = createMock();
-  const offWatcher = startWatcher(offMock.base, { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' });
+  const offWatcher = startWatcher(
+    offMock.base,
+    { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' },
+    ['--no-room-events'],
+  );
   try {
     await waitForLine(offWatcher.stderr, (line) => line.includes('READY'), 'room-events off READY');
-    sendItems(offMock, [roomItem('rm_allowed', 'msg_off')]);
+    sendItems(offMock, [
+      roomItem('rm_allowed', 'msg_off'),
+      streamItem('room.membership', {
+        attention: 'action_required',
+        change: 'removed',
+        room_id: 'rm_allowed',
+        seq: '21',
+        event_id: 'evt_off_membership',
+      }),
+    ]);
+    await waitForStreamEvent(offWatcher.stdout, 'room.membership');
     await Bun.sleep(700);
-    checkEqual('默认关闭不输出 room_message', roomEventCount(offWatcher.stdout, 'msg_off'), 0);
+    checkEqual('--no-room-events 不输出 room_message', roomEventCount(offWatcher.stdout, 'msg_off'), 0);
+    checkEqual(
+      '--no-room-events 仍保留 action_required',
+      offWatcher.stdout.filter((line) => {
+        const event = parseEvent(line);
+        return event?.type === 'stream_event' && event.source === 'room.membership';
+      }).length,
+      1,
+    );
+
+    // 关闭 informational 房间事件后，发送方回执、提醒、邀请与真实投递仍必须输出。
+    const offDeliveryId = 'dlv_off_live';
+    offMock.state.pending.set(offDeliveryId, delivery(offDeliveryId));
+    sendItems(offMock, [
+      notificationItem(offDeliveryId, 'delivery.created', 'evt_off_delivery'),
+      streamItem('delivery.updated', {
+        kind: 'receipt',
+        attention: 'action_required',
+        delivery_id: 'dlv_off_completed',
+        room_id: 'rm_allowed',
+        state: 'completed',
+        attempt: 1,
+        seq: '22',
+        event_id: 'evt_off_completed',
+      }),
+      streamItem('delivery.updated', {
+        kind: 'receipt',
+        attention: 'action_required',
+        delivery_id: 'dlv_off_failed',
+        room_id: 'rm_allowed',
+        state: 'failed',
+        attempt: 1,
+        seq: '23',
+        event_id: 'evt_off_failed',
+      }),
+      streamItem('delivery.updated', {
+        kind: 'receipt',
+        delivery_id: 'dlv_off_claimed',
+        room_id: 'rm_allowed',
+        state: 'claimed',
+        attempt: 1,
+        seq: '24',
+        event_id: 'evt_off_claimed',
+      }),
+      streamItem('mention.reminder', {
+        kind: 'reminder',
+        room_id: 'rm_allowed',
+        message_id: 'msg_off_mention',
+        seq: '25',
+        event_id: 'evt_off_mention',
+      }),
+      streamItem('room.membership', {
+        kind: 'room',
+        attention: 'action_required',
+        change: 'invited',
+        room_id: 'rm_allowed',
+        seq: '26',
+        event_id: 'evt_off_invited',
+      }),
+      roomItem('rm_allowed', 'msg_off_pure_info', { seq: '27', eventId: 'evt_off_pure_info' }),
+      streamItem('room.file', {
+        kind: 'file',
+        room_id: 'rm_allowed',
+        file_id: 'file_off',
+        seq: '28',
+        event_id: 'evt_off_file',
+      }),
+    ]);
+
+    const offDelivery = await waitForEvent(offWatcher.stdout, 'delivery', offDeliveryId);
+    checkEqual('--no-room-events 仍输出真实 delivery', offDelivery.claim_state, 'claimed');
+    checkEqual(
+      '--no-room-events 真实 delivery 仍只 claim 一次',
+      offMock.state.claimCalls.get(offDeliveryId),
+      1,
+    );
+    const offCompleted = await waitForDeliveryState(
+      offWatcher.stdout,
+      'dlv_off_completed',
+      'completed',
+    );
+    checkEqual(
+      '--no-room-events 保留发送方 completed 回执',
+      offCompleted.attention,
+      'action_required',
+    );
+    const offFailed = await waitForDeliveryState(offWatcher.stdout, 'dlv_off_failed', 'failed');
+    checkEqual('--no-room-events 保留发送方 failed 回执', offFailed.attention, 'action_required');
+    const offMention = await waitForStreamEvent(offWatcher.stdout, 'mention.reminder');
+    checkEqual('--no-room-events 保留 mention.reminder', offMention.message_id, 'msg_off_mention');
+    const offInvite = await waitForStreamEvent(
+      offWatcher.stdout,
+      'room.membership',
+      (event) => event.change === 'invited',
+    );
+    checkEqual('--no-room-events 保留邀请 membership', offInvite.change, 'invited');
+
+    await Bun.sleep(700);
+    checkEqual(
+      '--no-room-events 不输出纯 informational room_message',
+      roomEventCount(offWatcher.stdout, 'msg_off_pure_info'),
+      0,
+    );
+    checkEqual(
+      '--no-room-events 不输出 informational 回执',
+      offWatcher.stdout.filter((line) => {
+        const event = parseEvent(line);
+        return event?.type === 'delivery_state' && event.delivery_id === 'dlv_off_claimed';
+      }).length,
+      0,
+    );
+    checkEqual(
+      '--no-room-events 不输出 informational room.file',
+      offWatcher.stdout.filter((line) => {
+        const event = parseEvent(line);
+        return event?.type === 'stream_event' && event.source === 'room.file';
+      }).length,
+      0,
+    );
   } finally {
     await offWatcher.kill();
     offMock.stop();
@@ -1083,7 +1303,11 @@ async function runRoomEventChecks(): Promise<void> {
     sendItems(mock, [
       roomItem('rm_other', 'msg_other_room'),
       roomItem('rm_allowed', 'msg_self', { senderId: 'agt_me' }),
-      roomItem('rm_allowed', 'msg_info', { seq: '11' }),
+      roomItem('rm_allowed', 'msg_info', {
+        seq: '11',
+        senderName: 'Alice',
+        senderKind: 'human',
+      }),
     ]);
     const info = await waitForRoomEvent(watcher.stdout, 'msg_info');
     await waitForRoomEvent(watcher.stdout, 'msg_other_room');
@@ -1091,6 +1315,10 @@ async function runRoomEventChecks(): Promise<void> {
     checkEqual('room_message room_id', info.room_id, 'rm_allowed');
     checkEqual('room_message message_id', info.message_id, 'msg_info');
     checkEqual('room_message sender_id', info.sender_id, 'agt_user');
+    checkEqual('room_message sender_name', info.sender_name, 'Alice');
+    checkEqual('room_message sender_kind', info.sender_kind, 'human');
+    checkEqual('room_message change 缺失为 null', info.change, null);
+    checkEqual('room_message item_kind 保留 stream item kind', info.item_kind, 'message');
     checkEqual('room_message seq', info.seq, '11');
     checkEqual('room_message source', info.source, 'stream');
     check('room_message 不带正文', !('body' in info));
@@ -1099,7 +1327,169 @@ async function runRoomEventChecks(): Promise<void> {
     checkEqual('输出其他房间消息', roomEventCount(watcher.stdout, 'msg_other_room'), 1);
     checkEqual('纯 informational 帧不查询 pending inbox', mock.state.pendingListCalls, inboxBefore);
 
-    // 跨帧重复：同一 message_id 只输出一次（精确去重，不是业务筛选）。
+    // 撤回是同一 message_id 的独立变更，不能被普通消息去重吞掉。
+    sendItems(mock, [roomItem('rm_allowed', 'msg_recall', { seq: '12' })]);
+    await waitForRoomEvent(watcher.stdout, 'msg_recall');
+    sendItems(mock, [
+      roomItem('rm_allowed', 'msg_recall', {
+        seq: '12',
+        eventId: 'evt_msg_recall_changed',
+        change: 'recalled',
+      }),
+    ]);
+    await waitForLine(
+      watcher.stdout,
+      (line) => {
+        const event = parseEvent(line);
+        return (
+          event?.type === 'room_message' &&
+          event.message_id === 'msg_recall' &&
+          event.change === 'recalled'
+        );
+      },
+      'room_message recall change',
+    );
+    checkEqual(
+      '撤回作为独立变更输出',
+      watcher.stdout.filter((line) => {
+        const event = parseEvent(line);
+        return event?.type === 'room_message' && event.message_id === 'msg_recall';
+      }).length,
+      2,
+    );
+
+    // 所有 informational/action_required stream item 都输出；不按 source 过滤。
+    const claimCallsBefore = mock.state.claimCalls.size;
+    const pendingCallsBefore = mock.state.pendingListCalls;
+    sendItems(mock, [
+      streamItem('room.membership', {
+        attention: 'action_required',
+        change: 'removed',
+        room_id: 'rm_allowed',
+        subject_id: 'agt_me',
+        seq: '20',
+        event_id: 'evt_membership',
+      }),
+      streamItem('room.created', {
+        change: 'created',
+        room_id: 'rm_new',
+        seq: '21',
+        event_id: 'evt_room_created',
+      }),
+      streamItem('room.lifecycle', {
+        change: 'dissolved',
+        room_id: 'rm_old',
+        seq: '22',
+        event_id: 'evt_room_lifecycle',
+      }),
+      streamItem('room.file', {
+        kind: 'file',
+        change: 'added',
+        ref_id: 'file_1',
+        file_id: 'file_1',
+        room_id: 'rm_allowed',
+        seq: '23',
+        event_id: 'evt_room_file',
+      }),
+      streamItem('room.presence', {
+        kind: 'presence',
+        subject_id: 'agt_peer',
+        transition: 'online',
+        room_id: 'rm_allowed',
+        seq: '24',
+        event_id: 'evt_room_presence',
+      }),
+      streamItem('task.updated', {
+        kind: 'task',
+        change: 'marked',
+        ref_id: 'msg_root',
+        room_id: 'rm_allowed',
+        seq: '25',
+        event_id: 'evt_task',
+      }),
+      streamItem('room.read', {
+        kind: 'read',
+        room_id: 'rm_allowed',
+        seq: '26',
+        event_id: 'evt_room_read',
+      }),
+      streamItem('contact', {
+        kind: 'contact',
+        change: 'request_pending',
+        ref_id: 'req_1',
+        seq: '27',
+        event_id: 'evt_contact',
+      }),
+      streamItem('device', {
+        kind: 'device',
+        change: 'paired',
+        ref_id: 'dev_1',
+        seq: '28',
+        event_id: 'evt_device',
+      }),
+      streamItem('profile.updated', {
+        kind: 'profile',
+        seq: '29',
+        event_id: 'evt_profile',
+      }),
+      streamItem('unknown', {
+        kind: 'raw',
+        ref_id: 'raw_1',
+        seq: '30',
+        event_id: 'evt_unknown',
+      }),
+      streamItem('mention.reminder', {
+        kind: 'reminder',
+        room_id: 'rm_allowed',
+        message_id: 'msg_mention',
+        mention_all: true,
+        seq: '31',
+        event_id: 'evt_mention',
+      }),
+    ]);
+
+    const membership = await waitForStreamEvent(watcher.stdout, 'room.membership');
+    const created = await waitForStreamEvent(watcher.stdout, 'room.created');
+    const lifecycle = await waitForStreamEvent(watcher.stdout, 'room.lifecycle');
+    const file = await waitForStreamEvent(watcher.stdout, 'room.file');
+    const presence = await waitForStreamEvent(watcher.stdout, 'room.presence');
+    const task = await waitForStreamEvent(watcher.stdout, 'task.updated');
+    await waitForStreamEvent(watcher.stdout, 'room.read');
+    const contact = await waitForStreamEvent(watcher.stdout, 'contact');
+    const device = await waitForStreamEvent(watcher.stdout, 'device');
+    await waitForStreamEvent(watcher.stdout, 'profile.updated');
+    const unknown = await waitForStreamEvent(watcher.stdout, 'unknown');
+    const mention = await waitForStreamEvent(watcher.stdout, 'mention.reminder');
+
+    checkEqual('room.membership kind', membership.kind, 'room');
+    checkEqual('room.membership change', membership.change, 'removed');
+    checkEqual('room.membership attention', membership.attention, 'action_required');
+    checkEqual('room.membership subject_id', membership.subject_id, 'agt_me');
+    checkEqual('room.created change', created.change, 'created');
+    checkEqual('room.lifecycle change', lifecycle.change, 'dissolved');
+    checkEqual('room.file kind', file.kind, 'file');
+    checkEqual('room.file ref_id', file.ref_id, 'file_1');
+    checkEqual('room.file file_id', file.file_id, 'file_1');
+    checkEqual('room.presence subject_id', presence.subject_id, 'agt_peer');
+    checkEqual('task.updated change', task.change, 'marked');
+    checkEqual('task.updated ref_id', task.ref_id, 'msg_root');
+    checkEqual('contact ref_id', contact.ref_id, 'req_1');
+    checkEqual('device ref_id', device.ref_id, 'dev_1');
+    checkEqual('unknown kind', unknown.kind, 'raw');
+    checkEqual('unknown ref_id', unknown.ref_id, 'raw_1');
+    checkEqual('mention.reminder 无 delivery_id', mention.delivery_id, '');
+    checkEqual('mention.reminder message_id', mention.message_id, 'msg_mention');
+    checkEqual('mention.reminder mention_all', mention.mention_all, true);
+    check(
+      'stream_event 不带正文/preview',
+      [membership, created, lifecycle, file, task, contact, device, unknown, mention].every(
+        (event) => !('body' in event) && !('preview' in event) && !('text' in event),
+      ),
+    );
+    checkEqual('信息事件不触发 claim', mock.state.claimCalls.size, claimCallsBefore);
+    checkEqual('信息事件不查询 pending inbox', mock.state.pendingListCalls, pendingCallsBefore);
+
+
     sendItems(mock, [
       roomItem('rm_allowed', 'msg_info', { seq: '12', eventId: 'evt_info_dup' }),
       roomItem('rm_allowed', 'msg_self', { senderId: 'agt_me', eventId: 'evt_self_dup' }),
@@ -1107,6 +1497,57 @@ async function runRoomEventChecks(): Promise<void> {
     await Bun.sleep(600);
     checkEqual('跨帧重复 message_id 去重', roomEventCount(watcher.stdout, 'msg_info'), 1);
     checkEqual('自己消息跨帧去重', roomEventCount(watcher.stdout, 'msg_self'), 1);
+
+    // 投递回执可见，但绝不进入 claim。
+    const receiptClaimBefore = mock.state.claimCalls.size;
+    sendItems(mock, [
+      streamItem('delivery.updated', {
+        kind: 'receipt',
+        delivery_id: 'dlv_receipt_claimed',
+        room_id: 'rm_allowed',
+        state: 'claimed',
+        attempt: 1,
+        seq: '40',
+        event_id: 'evt_receipt_claimed',
+      }),
+      streamItem('delivery.updated', {
+        kind: 'receipt',
+        attention: 'action_required',
+        delivery_id: 'dlv_receipt_done',
+        room_id: 'rm_allowed',
+        state: 'completed',
+        attempt: 1,
+        seq: '41',
+        event_id: 'evt_receipt_done',
+      }),
+      streamItem('delivery.cancelled', {
+        kind: 'receipt',
+        delivery_id: 'dlv_receipt_cancel',
+        room_id: 'rm_allowed',
+        state: 'cancelled',
+        seq: '42',
+        event_id: 'evt_receipt_cancel',
+      }),
+    ]);
+    const claimedReceipt = await waitForDeliveryState(
+      watcher.stdout,
+      'dlv_receipt_claimed',
+      'claimed',
+    );
+    const completedReceipt = await waitForDeliveryState(
+      watcher.stdout,
+      'dlv_receipt_done',
+      'completed',
+    );
+    const cancelledReceipt = await waitForDeliveryState(
+      watcher.stdout,
+      'dlv_receipt_cancel',
+      'cancelled',
+    );
+    checkEqual('claimed 回执 kind', claimedReceipt.kind, 'receipt');
+    checkEqual('completed 回执 attention', completedReceipt.attention, 'action_required');
+    checkEqual('cancelled 回执 source', cancelledReceipt.source, 'delivery.cancelled');
+    checkEqual('回执不触发 claim', mock.state.claimCalls.size, receiptClaimBefore);
 
     // 同帧 delivery + room.message：delivery 优先，不重复输出 room_message。
     mock.state.pending.set('dlv_room_same', delivery('dlv_room_same', 'msg_room_same'));
@@ -1123,6 +1564,23 @@ async function runRoomEventChecks(): Promise<void> {
       '同帧 delivery 与 room.message 只输出 delivery',
       roomEventCount(watcher.stdout, 'msg_room_same'),
       0,
+    );
+
+    // delivery 没真正输出（deferred）时，同帧 room.message 仍必须可见。
+    mock.state.pending.set('dlv_room_deferred', delivery('dlv_room_deferred', 'msg_room_deferred'));
+    sendItems(mock, [
+      {
+        ...notificationItem('dlv_room_deferred', 'delivery.created', 'evt_room_deferred'),
+        message_id: 'msg_room_deferred',
+      },
+      roomItem('rm_allowed', 'msg_room_deferred'),
+    ]);
+    await waitForEvent(watcher.stdout, 'delivery_deferred', 'dlv_room_deferred');
+    await waitForRoomEvent(watcher.stdout, 'msg_room_deferred');
+    checkEqual(
+      'deferred 未输出 delivery 时仍输出 room_message',
+      roomEventCount(watcher.stdout, 'msg_room_deferred'),
+      1,
     );
 
     // reconnect 补读：所有房间都补，已输出过的不重复。
@@ -1245,7 +1703,7 @@ async function runRoomEventChecks(): Promise<void> {
     allMock.stop();
   }
 
-  // 2000+ 积压：单次补读到 20 页上限时明确记录截断，下一次 reconnect 续读。
+  // 2000+ 积压：单次补读到 20 页上限后自动排队下一轮，而不是等 reconnect。
   const truncMock = createMock();
   truncMock.state.rooms = ['rm_trunc'];
   const truncWatcher = startWatcher(
@@ -1278,34 +1736,168 @@ async function runRoomEventChecks(): Promise<void> {
       30_000,
     );
     checkEqual('截断前输出到第 2000 条', roomEventCount(truncWatcher.stdout, 'msg_trunc_2000'), 1);
-    await Bun.sleep(300);
-    checkEqual('截断时未输出第 2001 条', roomEventCount(truncWatcher.stdout, 'msg_trunc_2001'), 0);
 
-    const truncAgain = truncMock.state.controller;
-    truncMock.closeStream();
-    await waitForReconnect(truncMock, truncAgain, 'trunc resume');
-    await waitForLine(
-      truncWatcher.stderr,
-      (line) => line.includes('READY') && line.includes('reconnect=1'),
-      'trunc resume READY',
-      30_000,
-    );
+    // 不关闭连接：截断后应立即续读第 2001 条。
+    await waitForRoomEvent(truncWatcher.stdout, 'msg_trunc_2001', 30_000);
     const resumeCall = await waitForHistoryCall(
       truncMock,
       (call) =>
         call.room_id === 'rm_trunc' &&
         call.cursor !== null &&
         (decodeHistoryCursor(call.cursor)?.seq ?? 0) === 2000,
-      'trunc resume from saved cursor',
+      'trunc continuation from saved cursor',
     );
     checkEqual('截断后保存第 2000 条游标', decodeHistoryCursor(resumeCall.cursor ?? '')?.seq, 2000);
-    await waitForRoomEvent(truncWatcher.stdout, 'msg_trunc_2001', 30_000);
-    checkEqual('下一次 reconnect 续读第 2001 条', roomEventCount(truncWatcher.stdout, 'msg_trunc_2001'), 1);
+    checkEqual(
+      '自动续读第 2001 条',
+      roomEventCount(truncWatcher.stdout, 'msg_trunc_2001'),
+      1,
+    );
     await Bun.sleep(300);
     checkEqual('续读不重复前 2000 条', roomEventCount(truncWatcher.stdout, 'msg_trunc_2000'), 1);
   } finally {
     await truncWatcher.kill();
     truncMock.stop();
+  }
+
+  // more/dropped：除了补 pending，还要对所有房间做一次有界 backfill。
+  const dropMock = createMock();
+  dropMock.state.rooms = ['rm_drop_a', 'rm_drop_b'];
+  const dropWatcher = startWatcher(
+    dropMock.base,
+    { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' },
+    ['--room-events'],
+  );
+  try {
+    await waitForLine(dropWatcher.stderr, (line) => line.includes('READY'), 'drop READY');
+    await waitForHistoryCall(dropMock, (call) => call.room_id === 'rm_drop_a', 'drop baseline a');
+    await waitForHistoryCall(dropMock, (call) => call.room_id === 'rm_drop_b', 'drop baseline b');
+    const dropCallsBefore = dropMock.state.historyCalls.length;
+    const pendingBeforeDrop = dropMock.state.pendingListCalls;
+    sendItems(dropMock, [], { more: true, dropped: 3 });
+    const dropCallA = await waitForHistoryCall(
+      dropMock,
+      (call) =>
+        call.room_id === 'rm_drop_a' &&
+        call.cursor !== null &&
+        dropMock.state.historyCalls.indexOf(call) >= dropCallsBefore,
+      'dropped backfill room a',
+    );
+    const dropCallB = await waitForHistoryCall(
+      dropMock,
+      (call) =>
+        call.room_id === 'rm_drop_b' &&
+        call.cursor !== null &&
+        dropMock.state.historyCalls.indexOf(call) >= dropCallsBefore,
+      'dropped backfill room b',
+    );
+    checkEqual('dropped 补读房间 a 使用 after', dropCallA.direction, 'after');
+    checkEqual('dropped 补读房间 b 使用 after', dropCallB.direction, 'after');
+    check('dropped 仍补 pending', dropMock.state.pendingListCalls > pendingBeforeDrop);
+  } finally {
+    await dropWatcher.kill();
+    dropMock.stop();
+  }
+
+  // 游标与 last_seq 持久化：重启后首连按已存游标补读，而不是重取 head 基线。
+  const persistMock = createMock();
+  persistMock.state.rooms = ['rm_persist'];
+  const persistDir = await mkdtemp(join(tmpdir(), 'ts-monitor-persist-'));
+  const persistState = join(persistDir, 'state');
+  const persistWatcher = startWatcher(
+    persistMock.base,
+    {
+      AGENTNET_MONITOR_RETRY_BASE_MS: '600000',
+      AGENTNET_MONITOR_STATE_DIR: persistState,
+    },
+    ['--room-events'],
+  );
+  try {
+    await waitForLine(persistWatcher.stderr, (line) => line.includes('READY'), 'persist READY');
+    await waitForHistoryCall(
+      persistMock,
+      (call) => call.room_id === 'rm_persist' && call.cursor === null,
+      'persist baseline',
+    );
+    sendItems(persistMock, [roomItem('rm_persist', 'msg_persist_live', { seq: '77' })]);
+    await waitForRoomEvent(persistWatcher.stdout, 'msg_persist_live');
+    await Bun.sleep(300);
+    await persistWatcher.kill('SIGTERM');
+
+    const statePath = join(persistState, 'stream-state.json');
+    check('重启前已写入 stream-state.json', existsSync(statePath));
+    const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      cursors?: Record<string, string>;
+      last_seq?: string;
+    };
+    check(
+      '房间游标已持久化',
+      typeof persisted.cursors?.rm_persist === 'string' &&
+        persisted.cursors.rm_persist.length > 0,
+      persisted,
+    );
+    checkEqual('最后 stream seq 已持久化', persisted.last_seq, '1');
+
+    persistMock.state.history.set('rm_persist', [
+      historyMessage('rm_persist', 'msg_persisted_gap', 1),
+    ]);
+    const callsBeforeRestart = persistMock.state.historyCalls.length;
+    const restarted = startWatcher(
+      persistMock.base,
+      {
+        AGENTNET_MONITOR_RETRY_BASE_MS: '600000',
+        AGENTNET_MONITOR_STATE_DIR: persistState,
+      },
+      ['--room-events'],
+    );
+    try {
+      await waitForLine(restarted.stderr, (line) => line.includes('READY'), 'persist restart READY');
+      const restartCall = await waitForHistoryCall(
+        persistMock,
+        (call) =>
+          call.room_id === 'rm_persist' &&
+          call.cursor !== null &&
+          persistMock.state.historyCalls.indexOf(call) >= callsBeforeRestart,
+        'restart uses persisted cursor',
+      );
+      check('首连使用已存游标而非 null', restartCall.cursor !== null);
+      await waitForRoomEvent(restarted.stdout, 'msg_persisted_gap');
+      checkEqual(
+        '重启后补读断线窗口消息',
+        roomEventCount(restarted.stdout, 'msg_persisted_gap'),
+        1,
+      );
+    } finally {
+      await restarted.kill();
+    }
+  } finally {
+    await persistWatcher.kill();
+    persistMock.stop();
+    await rm(persistDir, { recursive: true, force: true });
+  }
+
+  // 未显式指定 stateDir 时，默认持久目录也要跨重启保留。
+  const defaultHome = mkdtempSync(join(tmpdir(), 'ts-monitor-home-'));
+  const defaultStateMock = createMock();
+  const defaultStateWatcher = startProcess(
+    [process.execPath, CLI, 'monitor', '--harness', 'claude', '--room-events'],
+    {
+      HOME: defaultHome,
+      AGENTNET_URL: defaultStateMock.base,
+      AGENTNET_TOKEN: TOKEN,
+      AGENTNET_MONITOR_RETRY_BASE_MS: '600000',
+    },
+  );
+  try {
+    await waitForLine(defaultStateWatcher.stderr, (line) => line.includes('READY'), 'default state READY');
+    const stateRoot = join(defaultHome, '.agentnet', 'monitor');
+    check('默认状态目录已创建', existsSync(stateRoot));
+    await defaultStateWatcher.kill('SIGTERM');
+    check('默认状态目录退出后保留', existsSync(stateRoot));
+  } finally {
+    await defaultStateWatcher.kill();
+    defaultStateMock.stop();
+    await rm(defaultHome, { recursive: true, force: true });
   }
 
   // 成员移除→重新加入：服务端代次变化拒绝旧游标；客户端重置一次并重取基线。
@@ -1454,8 +2046,22 @@ async function runRoomEventChecks(): Promise<void> {
     stderr: 'pipe',
   });
   check(
-    '--room-events 非 claude 明确拒绝',
-    nonClaude.exitCode !== 0 && nonClaude.stderr.toString().includes('仅支持 --harness claude'),
+    '--room-events 透传非 claude harness',
+    nonClaude.exitCode === 0 && nonClaude.stdout.toString().includes('harness=peri'),
+    nonClaude.stderr.toString(),
+  );
+
+  const noRoomEvents = Bun.spawnSync({
+    cmd: [process.execPath, CLI, 'monitor', '--harness', 'claude', '--no-room-events', '--check-config'],
+    cwd: ROOT,
+    env: { ...process.env, AGENTNET_TOKEN: TOKEN },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  check(
+    '--no-room-events 可用于关闭默认监听',
+    noRoomEvents.exitCode === 0,
+    noRoomEvents.stderr.toString(),
   );
 
   const invalidRoom = Bun.spawnSync({
@@ -1878,7 +2484,9 @@ async function runPeriCleanupCheck(): Promise<void> {
     check('peri 状态目录启动时存在', existsSync(stateDir));
     const code = await watcher.kill('SIGTERM');
     checkEqual('peri SIGTERM 退出码', code, 0);
-    check('peri 退出后清理状态目录', !existsSync(stateDir));
+    check('peri 退出后保留状态目录', existsSync(stateDir));
+    check('peri 退出后保留 seen', existsSync(join(stateDir, 'seen')));
+    check('peri 退出后清理事件文件', !existsSync(join(stateDir, 'events')));
   } finally {
     await watcher.kill();
     mock.stop();
@@ -1896,7 +2504,9 @@ async function runCleanupCheck(): Promise<void> {
     check('状态目录启动时存在', existsSync(stateDir));
     const code = await watcher.kill('SIGTERM');
     checkEqual('SIGTERM 退出码', code, 0);
-    check('退出后清理状态目录', !existsSync(stateDir));
+    check('退出后保留状态目录', existsSync(stateDir));
+    check('退出后保留 seen', existsSync(join(stateDir, 'seen')));
+    check('退出后清理事件文件', !existsSync(join(stateDir, 'events')));
   } finally {
     await watcher.kill();
     mock.stop();
@@ -2116,6 +2726,7 @@ async function runDshChecks(): Promise<void> {
         room_id: 'rm_direct',
         delivery_id: 'dlv_2',
         sender_id: 'agt_me',
+        state: 'claimed',
         seq: '105',
         event_id: '105',
       },
@@ -2171,16 +2782,20 @@ async function runDshChecks(): Promise<void> {
     const expectedKeys = [
       'attention',
       'at',
+      'change',
       'delivery_id',
       'event_id',
+      'kind',
       'message_id',
+      'ref_id',
       'room_id',
       'sender_id',
       'seq',
       'source',
+      'state',
     ].sort();
     check(
-      'dsh wake.queue 每条事件固定九个字段',
+      'dsh wake.queue 每条事件固定十三字段',
       queued.every(
         (event) => JSON.stringify(Object.keys(event).sort()) === JSON.stringify(expectedKeys),
       ),
@@ -2199,19 +2814,21 @@ async function runDshChecks(): Promise<void> {
     const deliveryIds = new Set(queued.map((event) => event.delivery_id));
     check('dsh 投递事件入队', deliveryIds.has('dlv_1'), queued);
     check('dsh 直聊普通消息入队', ids.has('102'), queued);
-    check('dsh 自己的消息不入队', !ids.has('104'), queued);
-    check('dsh 群聊普通消息不入队', !ids.has('103'), queued);
-    check('dsh 未知房间普通消息不入队', !ids.has('110'), queued);
-    check('dsh delivery.updated 不入队', !ids.has('105'), queued);
-    check('dsh session.login 不入队', !ids.has('106'), queued);
+    check('dsh 自己的消息也入队', ids.has('104'), queued);
+    check('dsh 群聊普通消息入队', ids.has('103'), queued);
+    check('dsh 未知房间普通消息入队', ids.has('110'), queued);
+    check('dsh delivery.updated 回执入队', ids.has('105'), queued);
+    check('dsh session.login 入队', ids.has('106'), queued);
     check('dsh delivery.reminder 入队', deliveryIds.has('dlv_3'), queued);
     check('dsh 被移出房间入队', ids.has('108'), queued);
     check('dsh delivery.retried 入队', deliveryIds.has('dlv_4'), queued);
-    checkEqual('dsh 直聊只查询一次房间类型', mock.state.roomGetCalls.get('rm_direct'), 1);
-    checkEqual('dsh 群聊只查询一次房间类型', mock.state.roomGetCalls.get('rm_group'), 1);
-    checkEqual('dsh 未知房间查询一次', mock.state.roomGetCalls.get('rm_unknown'), 1);
+    checkEqual('dsh 不再查询房间类型', mock.state.roomGetCalls.size, 0);
     checkEqual('dsh 不 claim', mock.state.claimCalls.size, 0);
     checkEqual('dsh 不读正文', mock.state.readCalls, 0);
+
+    const receipt = queued.find((event) => event.event_id === '105');
+    checkEqual('dsh 回执保留 state', receipt?.state, 'claimed');
+    checkEqual('dsh 回执保留 source', receipt?.source, 'delivery.updated');
 
     const delivery = queued.find((event) => event.event_id === '101');
     check(
@@ -2247,9 +2864,9 @@ async function runDshChecks(): Promise<void> {
       0o600,
     );
     check(
-      'dsh stderr 含 READY 与 DROP',
+      'dsh stderr 含 READY 且不再输出 DROP',
       watcher.stderr.some((line) => line.includes('READY')) &&
-        watcher.stderr.some((line) => line.includes('DROP type=group_message')),
+        !watcher.stderr.some((line) => line.includes('DROP type=group_message')),
       watcher.stderr,
     );
     check('dsh run 不向 stdout 写事件', watcher.stdout.join('').trim() === '', watcher.stdout);

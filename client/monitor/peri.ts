@@ -6,11 +6,12 @@
  * - 只有 claim 成功才输出可处理的 delivery，冲突输出 conflict/deferred/failed；
  * - 刻意不读正文、不写 event_file：Peri 常把 stdout 追加到 watch.log，
  *   正文不得因此持久化。宿主按 message_id 自行读取；
- * - 订阅、seen、退避、心跳与状态目录复用共享引擎，不执行旧脚本。
+ * - 订阅、seen、退避、心跳与状态目录复用共享引擎，不执行旧脚本；
+ * - 默认输出所有 informational stream item；`--no-room-events` 关闭。
  */
 
 import { CliError, resolveConfig } from '../mcp';
-import { MonitorEngine, type MonitorEventFormat } from './engine';
+import { MonitorEngine, type MonitorEventFormat, type RoomEventScope } from './engine';
 import {
   REMINDER_HINT,
   claimNoticeEvent,
@@ -20,7 +21,7 @@ import {
   type DeliveryFields,
 } from './events';
 import { MonitorRpc, type JsonObject } from './rpc';
-import { MonitorState } from './state';
+import { MonitorState, defaultMonitorStateDirectory } from './state';
 
 export interface MonitorContext {
   baseUrl: string | null;
@@ -165,7 +166,12 @@ function fail(line: string, json = false): number {
 
 export async function runPeriMonitor(
   context: MonitorContext,
-  options: { stateDir?: string; json?: boolean; maxRuntimeMs?: number } = {},
+  options: {
+    stateDir?: string;
+    json?: boolean;
+    maxRuntimeMs?: number;
+    roomEvents?: RoomEventScope | false;
+  } = {},
 ): Promise<number> {
   const token = context.token;
   if (!token) return fail('ERROR type=credential message=missing_token', options.json === true);
@@ -186,13 +192,17 @@ export async function runPeriMonitor(
     throw error;
   }
 
-  const stateDirectory = options.stateDir ?? process.env.AGENTNET_MONITOR_STATE_DIR;
+  const stateDirectory =
+    options.stateDir ??
+    process.env.AGENTNET_MONITOR_STATE_DIR ??
+    defaultMonitorStateDirectory('peri', endpoint, token);
   const keep = process.env.AGENTNET_MONITOR_KEEP === '1';
   let state: MonitorState;
   try {
     state = await MonitorState.create({
       directory: stateDirectory,
       keep,
+      persistent: true,
       tempPrefix: 'peri-watch.',
     });
   } catch {
@@ -224,6 +234,7 @@ export async function runPeriMonitor(
       json: options.json === true,
       maxRuntimeMs: options.maxRuntimeMs ?? 0,
       onDeadline: stop,
+      roomEvents: options.roomEvents,
     });
     return await engine.run();
   } finally {

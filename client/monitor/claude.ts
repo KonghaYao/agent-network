@@ -5,15 +5,16 @@
  * - stdout 每行一个事件 JSON；
  * - stderr 输出 READY、RECONNECTING、DEGRADED 与 ERROR；
  * - 自动 claim 成功后携带正文预览与 event_file；
- * - 可选 `--room-events [all]`：监听所有房间，额外输出不含正文的 room_message；
- * - SIGINT/SIGTERM/SIGHUP 清理状态目录后以 0 退出。
+ * - 默认（`all`）监听全部房间活动并输出所有 informational stream item；
+ *   `--no-room-events` 可关闭；
+ * - SIGINT/SIGTERM/SIGHUP 保留 seen/游标，清理事件文件后以 0 退出。
  */
 
 import { CliError, resolveConfig } from '../mcp';
 import { MonitorEngine, type RoomEventScope } from './engine';
 import { BODY_PREVIEW_CHARS } from './events';
 import { MonitorRpc } from './rpc';
-import { MonitorState } from './state';
+import { MonitorState, defaultMonitorStateDirectory } from './state';
 
 export interface MonitorContext {
   baseUrl: string | null;
@@ -35,7 +36,7 @@ export async function runClaudeMonitor(
     stateDir?: string;
     json?: boolean;
     maxRuntimeMs?: number;
-    roomEvents?: RoomEventScope;
+    roomEvents?: RoomEventScope | false;
   } = {},
 ): Promise<number> {
   const token = context.token;
@@ -55,11 +56,14 @@ export async function runClaudeMonitor(
     throw error;
   }
 
-  const stateDirectory = options.stateDir ?? process.env.AGENTNET_MONITOR_STATE_DIR;
+  const stateDirectory =
+    options.stateDir ??
+    process.env.AGENTNET_MONITOR_STATE_DIR ??
+    defaultMonitorStateDirectory('claude', endpoint, token);
   const keep = process.env.AGENTNET_MONITOR_KEEP === '1';
   let state: MonitorState;
   try {
-    state = await MonitorState.create({ directory: stateDirectory, keep });
+    state = await MonitorState.create({ directory: stateDirectory, keep, persistent: true });
   } catch {
     return fail('ERROR type=environment message=workdir_failed');
   }
