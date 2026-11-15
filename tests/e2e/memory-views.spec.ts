@@ -137,6 +137,72 @@ function memory(
   };
 }
 
+interface TimelineFixtureItem {
+  id: string;
+  text: string;
+  fact_type: FactType;
+  state: 'valid';
+  occurred_at: string | null;
+  mentioned_at: string;
+  entities: string[];
+}
+
+function timelineRange(ms: number, granularity: 'day' | 'week' | 'month') {
+  const date = new Date(ms);
+  if (granularity === 'month') {
+    const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+    const end = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
+    const key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+    return { key, label: key, start: start.toISOString(), end: end.toISOString() };
+  }
+  if (granularity === 'week') {
+    const weekday = date.getUTCDay() || 7;
+    const startMs =
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) -
+      (weekday - 1) * DAY;
+    const start = new Date(startMs);
+    const key = `${start.toISOString().slice(0, 10)}-W`;
+    return {
+      key,
+      label: key,
+      start: start.toISOString(),
+      end: new Date(startMs + 7 * DAY).toISOString(),
+    };
+  }
+  const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const key = start.toISOString().slice(0, 10);
+  return {
+    key,
+    label: key,
+    start: start.toISOString(),
+    end: new Date(start.getTime() + DAY).toISOString(),
+  };
+}
+
+function timelineGroups(items: TimelineFixtureItem[], granularity: 'day' | 'week' | 'month') {
+  const groups: {
+    key: string;
+    label: string;
+    start: string | null;
+    end: string | null;
+    count: number;
+    start_index: number;
+    end_index: number;
+  }[] = [];
+  items.forEach((item, index) => {
+    const ms = Date.parse(item.occurred_at ?? item.mentioned_at);
+    const range = timelineRange(ms, granularity);
+    const last = groups.at(-1);
+    if (!last || last.key !== range.key) {
+      groups.push({ ...range, count: 0, start_index: index, end_index: index + 1 });
+    }
+    const current = groups.at(-1)!;
+    current.count += 1;
+    current.end_index = index + 1;
+  });
+  return groups;
+}
+
 const MEMORIES: FixtureMemory[] = [
   memory('mem-a', 'experience', 'Deploy window moved to Thursday for the alpha service.', 1, [
     'alpha',
@@ -294,6 +360,54 @@ async function installMemoryStub(
         raw_edge_count: 900,
         limit: 120,
         truncated: true,
+      };
+    } else if (name === 'network_agent_memory_timeline') {
+      const days = Number(args.days ?? 30);
+      const type = typeof args.type === 'string' ? args.type : '';
+      const cutoff = Date.now() - days * DAY;
+      const items: TimelineFixtureItem[] = MEMORIES.filter((item) => {
+        if (type && item.fact_type !== type) return false;
+        const at = item.mentioned_at ? Date.parse(item.mentioned_at) : Number.NaN;
+        return Number.isFinite(at) && at >= cutoff;
+      })
+        .sort((left, right) => Date.parse(right.mentioned_at ?? '') - Date.parse(left.mentioned_at ?? ''))
+        .map((item) => ({
+          id: item.id,
+          text:
+            item.id === 'mem-a'
+              ? `${item.text} password=${SECRET_OBSERVATION}`
+              : item.text,
+          fact_type: item.fact_type,
+          state: 'valid' as const,
+          occurred_at: item.occurred_start,
+          mentioned_at: item.mentioned_at ?? '',
+          entities: item.entities.slice(0, 3),
+        }));
+      structuredContent = {
+        available: true,
+        reason: 'ok',
+        actor,
+        fetched_at: Date.now(),
+        items,
+        groups: {
+          day: timelineGroups(items, 'day'),
+          week: timelineGroups(items, 'week'),
+          month: timelineGroups(items, 'month'),
+        },
+        summary: {
+          total: items.length,
+          returned: items.length,
+          dated: items.length,
+          undated: 0,
+          by_type: {
+            world: items.filter((item) => item.fact_type === 'world').length,
+            experience: items.filter((item) => item.fact_type === 'experience').length,
+            observation: items.filter((item) => item.fact_type === 'observation').length,
+          },
+        },
+        days,
+        limit: Number(args.limit ?? 300),
+        truncated: items.length > 4,
       };
     } else if (name === 'network_agent_memory_list') {
       const offset = Number(args.offset ?? 0);
@@ -572,7 +686,7 @@ test.describe('Agent 记忆：星座、时间线、实体', () => {
     expect(serious.map((item) => `${item.id}(${item.impact})`)).toEqual([]);
   });
 
-  test('时间线按天聚合、范围切换、空态与表格', async ({ page }) => {
+  test('时间线一次取数、分组导航、缩放、详情与截断', async ({ page }) => {
     const calls: MemoryCall[] = [];
     await installMemoryStub(page, calls, { actorName: agentName, actorId: agentId });
     await login(page, base, tokenA);
@@ -580,30 +694,81 @@ test.describe('Agent 记忆：星座、时间线、实体', () => {
     await page.locator('#memory-tab-timeline').click();
 
     const chart = page.locator('#memory-timeline-chart');
+    const cards = chart.locator('.memory-timeline-card');
+    const timelineCalls = () =>
+      calls.filter((call) => call.name === 'network_agent_memory_timeline');
+    const listCalls = () => calls.filter((call) => call.name === 'network_agent_memory_list');
+
     await expect(chart).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('#memory-timeline-note')).toContainText('基于已加载事实');
-    const bars = page.locator('#memory-timeline-chart .memory-timeline-bar[data-count]');
-    await expect(bars).toHaveCount(30);
-    const nonEmpty30 = page.locator('#memory-timeline-chart .memory-timeline-bar:not(.empty)');
-    await expect(nonEmpty30).toHaveCount(4);
+    await expect(cards).toHaveCount(4);
+    await expect(page.locator('#memory-timeline-note')).toContainText('共 4 条');
+    await expect.poll(timelineCalls).toHaveLength(1);
+    expect(listCalls()).toHaveLength(0);
+    const chartText = (await chart.textContent()) ?? '';
+    expect(chartText).not.toContain(SECRET_OBSERVATION);
+    expect(chartText).toContain('[已隐藏]');
+    const dialogText = (await page.locator('#agent-memory-dialog').textContent()) ?? '';
+    expect(dialogText).not.toContain(tokenA);
+    expect(dialogText).not.toMatch(/\bbank\b|\bprovider\b/iu);
+
+    // 默认月粒度；切换粒度、导航和缩放都不重新请求。
+    const beforeInteraction = timelineCalls().length;
+    await page.locator('#memory-timeline-granularity-day').click();
+    const groups = chart.locator('.memory-timeline-group');
+    await expect(groups).toHaveCount(4);
+    await expect(page.locator('#memory-timeline-position')).toHaveText('1 / 4');
+    await page.locator('#memory-timeline-next').click();
+    await expect(page.locator('#memory-timeline-position')).toHaveText('2 / 4');
+    await page.locator('#memory-timeline-last').click();
+    await expect(page.locator('#memory-timeline-position')).toHaveText('4 / 4');
+    await page.locator('#memory-timeline-first').click();
+    await expect(page.locator('#memory-timeline-position')).toHaveText('1 / 4');
+    await expect(page.locator('#memory-timeline-prev')).toBeDisabled();
+
+    await page.locator('#memory-timeline-granularity-month').click();
+    await page.locator('#memory-timeline-zoom-in').click();
+    await expect(page.locator('#memory-timeline-granularity-week')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#memory-timeline-zoom-out').click();
+    await expect(page.locator('#memory-timeline-granularity-month')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#memory-timeline-granularity-year').click();
+    await expect(page.locator('#memory-timeline-granularity-year')).toHaveAttribute('aria-pressed', 'true');
+    await expect(chart).toBeVisible();
+    expect(timelineCalls()).toHaveLength(beforeInteraction);
+
+    // 键盘打开详情，关闭后焦点回到事件卡片；详情复用 MemoryDetail。
+    await page.locator('#memory-timeline-granularity-day').click();
+    await cards.first().focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#memory-detail-text')).toBeVisible({ timeout: 15_000 });
+    await page.locator('#memory-detail-close').click();
+    await expect(page.locator('#memory-detail-text')).toHaveCount(0);
+    await expect(cards.first()).toBeFocused();
 
     await page.selectOption('#memory-timeline-range', '7');
-    await expect(bars).toHaveCount(7);
-    await expect(page.locator('#memory-timeline-chart .memory-timeline-bar:not(.empty)')).toHaveCount(3);
-    await expect.poll(() => calls.some((call) => call.name === 'network_agent_memory_list' && call.args.time_field === 'mentioned_at')).toBe(true);
+    await expect(cards).toHaveCount(3);
+    await expect.poll(timelineCalls).toHaveLength(beforeInteraction + 1);
+    expect(timelineCalls().at(-1)?.args.days).toBe(7);
 
     await page.selectOption('#memory-timeline-range', '90');
-    await expect(bars).toHaveCount(90);
-    await expect(page.locator('#memory-timeline-chart .memory-timeline-bar:not(.empty)')).toHaveCount(5);
-
-    await page.locator('#memory-timeline-table summary').click();
-    await expect(page.locator('#memory-timeline-table tbody tr')).toHaveCount(5);
+    await expect(cards).toHaveCount(5);
+    await expect(page.locator('#memory-timeline-truncated')).toBeVisible();
+    await expect(page.locator('#memory-timeline-truncated')).toContainText('已截断');
 
     await page.selectOption('#memory-timeline-type-filter', 'world');
     await expect(page.locator('#memory-timeline-status')).toHaveAttribute('data-state', 'empty');
     await expect(page.locator('#memory-timeline-chart')).toHaveCount(0);
+    await expect.poll(() => calls.some((call) => call.name === 'network_agent_memory_timeline' && call.args.type === 'world')).toBe(true);
     await page.selectOption('#memory-timeline-type-filter', 'all');
     await expect(chart).toBeVisible();
+    expect(listCalls()).toHaveLength(0);
+
+    const serious = (
+      await new AxeBuilder({ page })
+        .include('#agent-memory-dialog')
+        .withTags(['wcag2a', 'wcag2aa'])
+        .analyze()
+    ).violations.filter((item) => item.impact === 'critical' || item.impact === 'serious');
+    expect(serious.map((item) => `${item.id}(${item.impact})`)).toEqual([]);
   });
 
   test('实体分页、客户端筛选、共现图与实体详情→记忆详情', async ({ page }) => {
@@ -729,6 +894,27 @@ test.describe('Agent 记忆：星座、时间线、实体', () => {
     expect(detail).not.toBeNull();
     expect(detail!.width).toBeGreaterThanOrEqual(389);
     expect(detail!.y + detail!.height).toBeLessThanOrEqual(845);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      ),
+    ).toBeLessThanOrEqual(1);
+    await page.locator('#memory-detail-close').click();
+    await expect(page.locator('.memory-detail-column')).toBeHidden();
+
+    await page.locator('#memory-tab-timeline').click();
+    await expect(page.locator('#memory-timeline-chart')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#memory-timeline-chart .memory-timeline-card')).toHaveCount(4);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      ),
+    ).toBeLessThanOrEqual(1);
+    await page.locator('#memory-timeline-chart .memory-timeline-card').first().click();
+    await expect(page.locator('#memory-detail-text')).toBeVisible({ timeout: 15_000 });
+    const timelineDetail = await page.locator('.memory-detail-column').boundingBox();
+    expect(timelineDetail).not.toBeNull();
+    expect(timelineDetail!.width).toBeGreaterThanOrEqual(389);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,

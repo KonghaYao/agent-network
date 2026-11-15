@@ -35,6 +35,8 @@ export interface InsightMemoryListQuery {
   time_field?: string;
   start_date?: string;
   end_date?: string;
+  /** 多页聚合共享同一个绝对截止时间；不传时每次请求各自按 transport 超时。 */
+  deadline_at?: number | null;
 }
 
 export interface InsightEntityListQuery {
@@ -120,6 +122,7 @@ export class HindsightInsightReader implements InsightReader {
         start_date: query.start_date,
         end_date: query.end_date,
       }),
+      query.deadline_at ?? null,
     );
   }
 
@@ -157,9 +160,9 @@ export class HindsightInsightReader implements InsightReader {
     return `/v1/default/banks/${encodeURIComponent(bank)}/${suffix}`;
   }
 
-  async #get(path: string): Promise<InsightReadResult> {
+  async #get(path: string, deadlineAt: number | null = null): Promise<InsightReadResult> {
     const outcome = await this.#transport.request('GET', path, {
-      deadlineAt: null,
+      deadlineAt,
       retry: true,
     });
     switch (outcome.kind) {

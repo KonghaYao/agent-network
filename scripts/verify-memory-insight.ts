@@ -680,6 +680,205 @@ async function main(): Promise<void> {
     }),
     'INVALID_ARGUMENT',
   );
+  const compactList = await service.list(viewer('human', friend), {
+    actor_id: target,
+    limit: 500,
+    text_chars: 160,
+    refresh: true,
+  });
+  checkEqual('list limit 可放大到 500', compactList.limit, 500);
+  checkEqual(
+    'list text_chars 按请求裁剪',
+    compactList.items[0]?.text.length,
+    160,
+  );
+  checkEqual(
+    'list 转发放大后的 limit',
+    fake.requests.filter((item) => item.path.endsWith('/memories/list')).at(-1)?.query.get('limit'),
+    '500',
+  );
+
+  console.log('--- timeline ---');
+  clock = Date.now();
+  await expectBusiness(
+    '陌生人不能查看 timeline',
+    service.timeline(viewer('human', stranger), { actor_id: target }),
+    'PERMISSION_DENIED',
+    'FORBIDDEN',
+  );
+  await expectBusiness(
+    'Agent 不能查看其他 Agent 的 timeline',
+    service.timeline(viewer('agent', otherAgent), { actor_id: target }),
+    'PERMISSION_DENIED',
+    'FORBIDDEN',
+  );
+  fake.resetRequests();
+  const timeline = await service.timeline(viewer('human', friend), {
+    actor_id: target,
+    days: 30,
+    refresh: true,
+  });
+  checkEqual('timeline available', timeline.available, true);
+  checkEqual('timeline 默认 days', timeline.days, 30);
+  checkEqual('timeline 默认 limit', timeline.limit, LIMITS.memoryPanelTimelineLimitDefault);
+  checkEqual('timeline 返回全部事实', timeline.items.length, 3);
+  checkEqual('timeline summary total', timeline.summary.total, 3);
+  checkEqual('timeline summary dated', timeline.summary.dated, 3);
+  checkEqual('timeline summary undated', timeline.summary.undated, 0);
+  checkEqual('timeline 正文上限', timeline.items.find((item) => item.id === 'm1')?.text.length, LIMITS.memoryPanelTimelineTextChars);
+  checkEqual('timeline 保留 occurred_at', timeline.items.find((item) => item.id === 'm1')?.occurred_at, '2026-10-01T00:00:00Z');
+  checkEqual('timeline 按发生时间倒序', timeline.items.map((item) => item.id).join(','), 'm3,m2,m1');
+  checkEqual('timeline day 分组', timeline.groups.day.map((group) => group.key).join(','), '2026-11-03,2026-11-02,2026-10-01');
+  checkEqual('timeline month 分组', timeline.groups.month.map((group) => group.key).join(','), '2026-11,2026-10');
+  checkEqual('timeline 分组计数一致', timeline.groups.day.reduce((sum, group) => sum + group.count, 0), timeline.items.length);
+  check(
+    'timeline 分组索引连续',
+    timeline.groups.day.every((group, index, all) =>
+      index === 0 ? group.start_index === 0 : group.start_index === all[index - 1]!.end_index,
+    ) && timeline.groups.day.at(-1)?.end_index === timeline.items.length,
+  );
+  const timelineRequest = fake.requests.filter((item) => item.path.endsWith('/memories/list')).at(-1);
+  checkEqual('timeline 转发 time_field', timelineRequest?.query.get('time_field'), 'mentioned_at');
+  checkEqual('timeline 单页上限 200', timelineRequest?.query.get('limit'), '200');
+  check('timeline 转发 start_date', Boolean(timelineRequest?.query.get('start_date')));
+  check('timeline 转发 end_date', Boolean(timelineRequest?.query.get('end_date')));
+  assertNoSensitive('timeline 输出', timeline, targetBank);
+
+  fake.seedBank(targetBank, {
+    stats: {
+      total_nodes: 42,
+      total_links: 84,
+      total_documents: 7,
+      nodes_by_fact_type: { world: 10, experience: 12, observation: 20 },
+      links_by_link_type: { semantic: 30, temporal: 54 },
+    },
+    graph: graphFixture(),
+    entityGraph: entityGraphFixture(),
+    memories: [
+      ...memories,
+      {
+        id: 'm-undated',
+        text: '无日期事件',
+        fact_type: 'world',
+        state: 'valid',
+        mentioned_at: null,
+        occurred_start: null,
+        occurred_end: null,
+        entities: [],
+        proof_count: 0,
+        tags: [],
+      },
+    ],
+    memoryDetails,
+    entities,
+    entityDetails,
+  });
+  const undatedTimeline = await service.timeline(viewer('human', friend), {
+    actor_id: target,
+    days: 30,
+    refresh: true,
+  });
+  checkEqual('timeline 无日期单独分组', undatedTimeline.groups.day.at(-1)?.key, 'undated');
+  checkEqual('timeline undated 计数', undatedTimeline.summary.undated, 1);
+
+  const largeMemories = Array.from({ length: 520 }, (_, index) => ({
+    id: `tl${index}`,
+    text: '时间线正文'.repeat(40),
+    fact_type: index % 3 === 0 ? 'world' : index % 3 === 1 ? 'experience' : 'observation',
+    state: 'valid',
+    mentioned_at: new Date(Date.parse('2026-11-10T00:00:00Z') - index * 3_600_000).toISOString(),
+    occurred_start: null,
+    occurred_end: null,
+    entities: [
+      `实体甲${'长'.repeat(40)}`,
+      `实体乙${'长'.repeat(40)}`,
+      `实体丙${'长'.repeat(40)}`,
+      `实体丁${'长'.repeat(40)}`,
+    ],
+    proof_count: 1,
+    tags: [],
+  }));
+  fake.seedBank(targetBank, {
+    stats: {
+      total_nodes: 42,
+      total_links: 84,
+      total_documents: 7,
+      nodes_by_fact_type: { world: 10, experience: 12, observation: 20 },
+      links_by_link_type: { semantic: 30, temporal: 54 },
+    },
+    graph: graphFixture(),
+    entityGraph: entityGraphFixture(),
+    memories: largeMemories,
+    memoryDetails,
+    entities,
+    entityDetails,
+  });
+  fake.resetRequests();
+  const largeTimeline = await service.timeline(viewer('human', friend), {
+    actor_id: target,
+    days: 90,
+    limit: 500,
+    refresh: true,
+  });
+  check('timeline 合并多页', largeTimeline.items.length > 200, largeTimeline.items.length);
+  check('timeline 不超过 limit', largeTimeline.items.length <= 500, largeTimeline.items.length);
+  check(
+    'timeline JSON 不超过 248KB',
+    utf8Bytes(JSON.stringify(largeTimeline)) <= LIMITS.memoryPanelTimelineBytes,
+    utf8Bytes(JSON.stringify(largeTimeline)),
+  );
+  check('timeline 超预算标记 truncated', largeTimeline.truncated);
+  checkEqual('timeline 实体最多 3 个', largeTimeline.items[0]?.entities.length, LIMITS.memoryPanelTimelineEntitiesMax);
+  check(
+    'timeline 最多合并 5 页',
+    fake.requestCount('GET', '/memories/list') <= LIMITS.memoryPanelTimelinePagesMax,
+    fake.requestCount('GET', '/memories/list'),
+  );
+  check('timeline 分页合并为 3 次上游请求', fake.requestCount('GET', '/memories/list') === 3, fake.requestCount('GET', '/memories/list'));
+  assertNoSensitive('large timeline 输出', largeTimeline, targetBank);
+
+  fake.resetRequests();
+  fake.delay('/memories/list', 120);
+  await Promise.all([
+    service.timeline(viewer('human', friend), {
+      actor_id: target,
+      days: 7,
+      limit: 500,
+      refresh: true,
+    }),
+    service.timeline(viewer('human', friend), {
+      actor_id: target,
+      days: 7,
+      limit: 500,
+      refresh: true,
+    }),
+  ]);
+  checkEqual(
+    '并发 timeline 合并为同一组上游请求',
+    fake.requestCount('GET', '/memories/list'),
+    3,
+  );
+
+  // 恢复基础 bank，后续 get/entities 仍使用同一份可控 fixture。
+  fake.seedBank(targetBank, {
+    stats: {
+      total_nodes: 42,
+      total_links: 84,
+      total_documents: 7,
+      nodes_by_fact_type: { world: 10, experience: 12, observation: 20 },
+      links_by_link_type: { semantic: 30, temporal: 54 },
+      pending_operations: 1,
+      failed_operations: 2,
+      last_memory_write_at: '2026-11-01T00:00:00Z',
+      last_consolidated_at: '2026-10-31T00:00:00Z',
+    },
+    graph: graphFixture(),
+    entityGraph: entityGraphFixture(),
+    memories,
+    memoryDetails,
+    entities,
+    entityDetails,
+  });
 
   const detail = await service.get(viewer('human', friend), { actor_id: target, memory_id: 'm1' });
   checkEqual('get 返回详情', detail.memory?.id, 'm1');

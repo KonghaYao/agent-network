@@ -93,6 +93,61 @@ export interface MemoryListQuery {
   end_date?: string;
   limit: number;
   offset: number;
+  textChars?: number;
+}
+
+export type MemoryTimelineDays = 7 | 30 | 90;
+export type MemoryTimelineGranularity = 'year' | 'month' | 'week' | 'day';
+
+export interface MemoryTimelineItem {
+  id: string;
+  text: string;
+  fact_type: MemoryFactType | null;
+  state: 'valid' | 'invalidated';
+  occurred_at: string | null;
+  mentioned_at: string | null;
+  entities: string[];
+}
+
+export interface MemoryTimelineGroup {
+  key: string;
+  label: string;
+  start: string | null;
+  end: string | null;
+  count: number;
+  start_index: number;
+  end_index: number;
+}
+
+export interface MemoryTimelineSummary {
+  total: number | null;
+  returned: number;
+  dated: number;
+  undated: number;
+  by_type: Record<MemoryFactType, number>;
+}
+
+export interface MemoryTimelineResult {
+  available: boolean;
+  reason: MemoryAvailabilityReason;
+  actor: MemoryActor;
+  fetched_at: number;
+  items: MemoryTimelineItem[];
+  groups: {
+    day: MemoryTimelineGroup[];
+    week: MemoryTimelineGroup[];
+    month: MemoryTimelineGroup[];
+  };
+  summary: MemoryTimelineSummary;
+  days: number;
+  limit: number;
+  truncated: boolean;
+}
+
+export interface MemoryTimelineQuery {
+  days: MemoryTimelineDays;
+  type?: MemoryFactType;
+  limit?: number;
 }
 
 export interface MemoryGraphNode {
@@ -272,6 +327,25 @@ export async function fetchMemoryList(
       ...(query.time_field ? { time_field: query.time_field } : {}),
       ...(query.start_date ? { start_date: query.start_date } : {}),
       ...(query.end_date ? { end_date: query.end_date } : {}),
+      ...(query.textChars ? { text_chars: query.textChars } : {}),
+    },
+    { token, signal },
+  );
+}
+
+export async function fetchMemoryTimeline(
+  actorId: string,
+  token: string,
+  query: MemoryTimelineQuery,
+  signal: AbortSignal,
+): Promise<MemoryTimelineResult> {
+  return callTool<MemoryTimelineResult>(
+    'network_agent_memory_timeline',
+    {
+      actor_id: actorId,
+      days: query.days,
+      ...(query.type ? { type: query.type } : {}),
+      ...(query.limit !== undefined ? { limit: query.limit } : {}),
     },
     { token, signal },
   );

@@ -308,7 +308,12 @@ export function AgentMemoryDialog({
                           </p>
                         }
                       >
-                        <MemoryTimeline actorId={target.actor_id} token={token} />
+                        <MemoryTimeline
+                          actorId={target.actor_id}
+                          token={token}
+                          activeId={selectedId}
+                          onSelect={selectMemory}
+                        />
                       </Suspense>
                     ) : (
                       unavailableNote('memory-timeline-status')
