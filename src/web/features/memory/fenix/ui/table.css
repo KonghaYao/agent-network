@@ -1,0 +1,18 @@
+/**
+ * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
+ * Upstream: packages/ui-components/web/ui/table.css
+ * Modified for Agent Network: 原样移植。
+ */
+
+.table-header tr {
+  border-bottom-style: var(--tw-border-style, solid);
+  border-bottom-width: 1px;
+}
+.table-body tr:last-child {
+  border-style: var(--tw-border-style, solid);
+  border-width: 0;
+}
+.table-footer > tr:last-child {
+  border-bottom-style: var(--tw-border-style, solid);
+  border-bottom-width: 0;
+}

@@ -1,0 +1,10 @@
+/**
+ * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
+ * Upstream: packages/ui-components/web/ui/button.css
+ * Modified for Agent Network: 原样移植。
+ */
+
+.button svg {
+  pointer-events: none;
+  flex-shrink: 0;
+}
