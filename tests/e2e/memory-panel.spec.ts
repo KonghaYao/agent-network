@@ -423,6 +423,8 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(page.locator('#memory-overview-last-write')).not.toHaveText('—');
 
     const facts = page.locator('#memory-facts-list .memory-fact');
+    await page.locator('#memory-tab-facts').click();
+    await expect(page.locator('#memory-panel-facts')).toBeVisible();
     await expect(facts).toHaveCount(2);
     await expect(page.locator('#memory-facts-range')).toContainText('已显示 2 / 4 条');
     await page.locator('#memory-facts-more').click();
@@ -613,6 +615,8 @@ test.describe('Agent 记忆弹窗', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
 
     await expect(page.locator('.memory-detail-column')).toBeHidden();
+    await page.locator('#memory-tab-facts').click();
+    await expect(page.locator('#memory-panel-facts')).toBeVisible();
     await page.locator('#memory-facts-list .memory-fact').first().click();
     await expect(page.locator('.memory-detail-column')).toBeVisible();
     const detail = await page.locator('.memory-detail-column').boundingBox();
