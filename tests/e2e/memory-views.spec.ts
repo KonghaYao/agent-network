@@ -3,6 +3,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { timelineGroups, type TimelineFixtureItem } from './fixtures/memory-timeline';
+
 /**
  * 记忆弹窗阶段 3：星座图 / 时间线 / 实体。
  *
@@ -122,6 +124,7 @@ function memory(
   text: string,
   daysAgo: number,
   entities: string[] = [],
+  occurredDaysAgo?: number,
 ): FixtureMemory {
   return {
     id,
@@ -129,7 +132,10 @@ function memory(
     fact_type: type,
     state: 'valid',
     mentioned_at: new Date(Date.now() - daysAgo * DAY).toISOString(),
-    occurred_start: null,
+    occurred_start:
+      occurredDaysAgo === undefined
+        ? null
+        : new Date(Date.now() - occurredDaysAgo * DAY).toISOString(),
     occurred_end: null,
     entities,
     proof_count: 2,
@@ -138,9 +144,14 @@ function memory(
 }
 
 const MEMORIES: FixtureMemory[] = [
-  memory('mem-a', 'experience', 'Deploy window moved to Thursday for the alpha service.', 1, [
-    'alpha',
-  ]),
+  memory(
+    'mem-a',
+    'experience',
+    'Deploy window moved to Thursday for the alpha service.',
+    1,
+    ['alpha'],
+    20,
+  ),
   memory('mem-b', 'experience', 'Rollback completed after the beta migration.', 2, ['beta']),
   memory('mem-c', 'experience', 'Observation runbook updated for gamma.', 5, ['gamma']),
   memory('mem-d', 'observation', 'The dashboard was slow twice during the deploy.', 10, [
@@ -294,6 +305,60 @@ async function installMemoryStub(
         raw_edge_count: 900,
         limit: 120,
         truncated: true,
+      };
+    } else if (name === 'network_agent_memory_timeline') {
+      const days = Number(args.days ?? 30);
+      const type = typeof args.type === 'string' ? args.type : '';
+      const tzOffsetMinutes = Number(args.tz_offset_minutes ?? 0);
+      const timeZone = typeof args.timezone === 'string' ? args.timezone : undefined;
+      const cutoff = Date.now() - days * DAY;
+      const items: TimelineFixtureItem[] = MEMORIES.filter((item) => {
+        if (type && item.fact_type !== type) return false;
+        const at = item.mentioned_at ? Date.parse(item.mentioned_at) : Number.NaN;
+        return Number.isFinite(at) && at >= cutoff;
+      })
+        .sort(
+          (left, right) =>
+            Date.parse(right.occurred_start ?? right.mentioned_at ?? '') -
+            Date.parse(left.occurred_start ?? left.mentioned_at ?? ''),
+        )
+        .map((item) => ({
+          id: item.id,
+          text:
+            item.id === 'mem-a'
+              ? `${item.text} password=${SECRET_OBSERVATION}`
+              : item.text,
+          fact_type: item.fact_type,
+          state: 'valid' as const,
+          occurred_at: item.occurred_start,
+          mentioned_at: item.mentioned_at ?? '',
+          entities: item.entities.slice(0, 3),
+        }));
+      structuredContent = {
+        available: true,
+        reason: 'ok',
+        actor,
+        fetched_at: Date.now(),
+        items,
+        groups: {
+          day: timelineGroups(items, 'day', timeZone, tzOffsetMinutes),
+          week: timelineGroups(items, 'week', timeZone, tzOffsetMinutes),
+          month: timelineGroups(items, 'month', timeZone, tzOffsetMinutes),
+        },
+        summary: {
+          total: items.length,
+          returned: items.length,
+          dated: items.length,
+          undated: 0,
+          by_type: {
+            world: items.filter((item) => item.fact_type === 'world').length,
+            experience: items.filter((item) => item.fact_type === 'experience').length,
+            observation: items.filter((item) => item.fact_type === 'observation').length,
+          },
+        },
+        days,
+        limit: Number(args.limit ?? 300),
+        truncated: items.length > 4,
       };
     } else if (name === 'network_agent_memory_list') {
       const offset = Number(args.offset ?? 0);
@@ -572,7 +637,7 @@ test.describe('Agent 记忆：星座、时间线、实体', () => {
     expect(serious.map((item) => `${item.id}(${item.impact})`)).toEqual([]);
   });
 
-  test('时间线按天聚合、范围切换、空态与表格', async ({ page }) => {
+  test('时间线一次取数、分组导航、缩放、详情与截断', async ({ page }) => {
     const calls: MemoryCall[] = [];
     await installMemoryStub(page, calls, { actorName: agentName, actorId: agentId });
     await login(page, base, tokenA);
@@ -580,30 +645,124 @@ test.describe('Agent 记忆：星座、时间线、实体', () => {
     await page.locator('#memory-tab-timeline').click();
 
     const chart = page.locator('#memory-timeline-chart');
+    const cards = chart.locator('.memory-timeline-card');
+    const timelineCalls = () =>
+      calls.filter((call) => call.name === 'network_agent_memory_timeline');
+    const listCalls = () => calls.filter((call) => call.name === 'network_agent_memory_list');
+
     await expect(chart).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('#memory-timeline-note')).toContainText('基于已加载事实');
-    const bars = page.locator('#memory-timeline-chart .memory-timeline-bar[data-count]');
-    await expect(bars).toHaveCount(30);
-    const nonEmpty30 = page.locator('#memory-timeline-chart .memory-timeline-bar:not(.empty)');
-    await expect(nonEmpty30).toHaveCount(4);
+    await expect(cards).toHaveCount(4);
+    await expect(page.locator('#memory-timeline-note')).toContainText('共 4 条');
+    await expect.poll(timelineCalls).toHaveLength(1);
+    expect(listCalls()).toHaveLength(0);
+    const browserOffset = await page.evaluate(() => -new Date().getTimezoneOffset());
+    const browserZone = await page.evaluate(
+      () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
+    expect(timelineCalls()[0]?.args.tz_offset_minutes).toBe(browserOffset);
+    expect(timelineCalls()[0]?.args.timezone).toBe(browserZone);
+    const chartText = (await chart.textContent()) ?? '';
+    expect(chartText).not.toContain(SECRET_OBSERVATION);
+    expect(chartText).toContain('[已隐藏]');
+    const dialogText = (await page.locator('#agent-memory-dialog').textContent()) ?? '';
+    expect(dialogText).not.toContain(tokenA);
+    expect(dialogText).not.toMatch(/\bbank\b|\bprovider\b/iu);
+
+    // 默认月粒度；切换粒度、导航和缩放都不重新请求。
+    const beforeInteraction = timelineCalls().length;
+    await page.locator('#memory-timeline-granularity-day').click();
+    const groups = chart.locator('.memory-timeline-group');
+    await expect(groups).toHaveCount(4);
+    await expect(page.locator('#memory-timeline-position')).toHaveText('1 / 4');
+    const firstGroupKey = await groups.first().getAttribute('data-timeline-group');
+    const firstCardText = (await cards.first().textContent()) ?? '';
+    const cardDate = firstCardText.match(/(\d{1,2})\s*(?:\/|月)\s*(\d{1,2})/u);
+    expect(firstGroupKey).toMatch(/^\d{4}-\d{2}-\d{2}$/u);
+    expect(cardDate).not.toBeNull();
+    expect(firstGroupKey).toBe(
+      `${firstGroupKey!.slice(0, 4)}-${cardDate![1]!.padStart(2, '0')}-${cardDate![2]!.padStart(2, '0')}`,
+    );
+    await page.locator('#memory-timeline-next').click();
+    await expect(page.locator('#memory-timeline-position')).toHaveText('2 / 4');
+    await page.locator('#memory-timeline-last').click();
+    await expect(page.locator('#memory-timeline-position')).toHaveText('4 / 4');
+    await page.locator('#memory-timeline-first').click();
+    await expect(page.locator('#memory-timeline-position')).toHaveText('1 / 4');
+    await expect(page.locator('#memory-timeline-prev')).toBeDisabled();
+
+    await page.locator('#memory-timeline-granularity-month').click();
+    await page.locator('#memory-timeline-zoom-in').click();
+    await expect(page.locator('#memory-timeline-granularity-week')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#memory-timeline-zoom-out').click();
+    await expect(page.locator('#memory-timeline-granularity-month')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#memory-timeline-granularity-year').click();
+    await expect(page.locator('#memory-timeline-granularity-year')).toHaveAttribute('aria-pressed', 'true');
+    await expect(chart).toBeVisible();
+    expect(timelineCalls()).toHaveLength(beforeInteraction);
+
+    // 键盘打开详情，关闭后焦点回到事件卡片；详情复用 MemoryDetail。
+    await page.locator('#memory-timeline-granularity-day').click();
+    await cards.first().focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#memory-detail-text')).toBeVisible({ timeout: 15_000 });
+    await page.locator('#memory-detail-close').click();
+    await expect(page.locator('#memory-detail-text')).toHaveCount(0);
+    await expect(cards.first()).toBeFocused();
+
+    // 发生时间与提及时间不同：卡片和详情头部都必须按发生时间显示同一天。
+    const occurred = MEMORIES[0]!;
+    expect(occurred.occurred_start).not.toBeNull();
+    expect(occurred.occurred_start).not.toBe(occurred.mentioned_at);
+    const occurredCard = chart.locator('.memory-timeline-card[data-timeline-id="mem-a"]');
+    await expect(occurredCard).toBeVisible();
+    const cardTime = (await occurredCard.locator('.memory-timeline-card-time').textContent()) ?? '';
+    await occurredCard.click();
+    await expect(page.locator('#memory-detail-text')).toBeVisible({ timeout: 15_000 });
+    const detailTime = (await page.locator('#memory-detail-time').textContent()) ?? '';
+    const occurredDay = await page.evaluate(
+      (iso) => new Date(iso).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
+      occurred.occurred_start!,
+    );
+    const mentionedDay = await page.evaluate(
+      (iso) => new Date(iso).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
+      occurred.mentioned_at!,
+    );
+    expect(occurredDay).not.toBe(mentionedDay);
+    expect(cardTime).toContain(occurredDay);
+    expect(detailTime).toContain(occurredDay);
+    expect(detailTime).not.toContain(mentionedDay);
+    await page.locator('.memory-detail-more summary').click();
+    const moreInfo = (await page.locator('.memory-detail-more').textContent()) ?? '';
+    expect(moreInfo).toContain('发生时间');
+    expect(moreInfo).toContain('提及时间');
+    await page.locator('#memory-detail-close').click();
+    await expect(page.locator('#memory-detail-text')).toHaveCount(0);
 
     await page.selectOption('#memory-timeline-range', '7');
-    await expect(bars).toHaveCount(7);
-    await expect(page.locator('#memory-timeline-chart .memory-timeline-bar:not(.empty)')).toHaveCount(3);
-    await expect.poll(() => calls.some((call) => call.name === 'network_agent_memory_list' && call.args.time_field === 'mentioned_at')).toBe(true);
+    await expect(cards).toHaveCount(3);
+    await expect.poll(timelineCalls).toHaveLength(beforeInteraction + 1);
+    expect(timelineCalls().at(-1)?.args.days).toBe(7);
 
     await page.selectOption('#memory-timeline-range', '90');
-    await expect(bars).toHaveCount(90);
-    await expect(page.locator('#memory-timeline-chart .memory-timeline-bar:not(.empty)')).toHaveCount(5);
-
-    await page.locator('#memory-timeline-table summary').click();
-    await expect(page.locator('#memory-timeline-table tbody tr')).toHaveCount(5);
+    await expect(cards).toHaveCount(5);
+    await expect(page.locator('#memory-timeline-truncated')).toBeVisible();
+    await expect(page.locator('#memory-timeline-truncated')).toContainText('已截断');
 
     await page.selectOption('#memory-timeline-type-filter', 'world');
     await expect(page.locator('#memory-timeline-status')).toHaveAttribute('data-state', 'empty');
     await expect(page.locator('#memory-timeline-chart')).toHaveCount(0);
+    await expect.poll(() => calls.some((call) => call.name === 'network_agent_memory_timeline' && call.args.type === 'world')).toBe(true);
     await page.selectOption('#memory-timeline-type-filter', 'all');
     await expect(chart).toBeVisible();
+    expect(listCalls()).toHaveLength(0);
+
+    const serious = (
+      await new AxeBuilder({ page })
+        .include('#agent-memory-dialog')
+        .withTags(['wcag2a', 'wcag2aa'])
+        .analyze()
+    ).violations.filter((item) => item.impact === 'critical' || item.impact === 'serious');
+    expect(serious.map((item) => `${item.id}(${item.impact})`)).toEqual([]);
   });
 
   test('实体分页、客户端筛选、共现图与实体详情→记忆详情', async ({ page }) => {
@@ -729,6 +888,27 @@ test.describe('Agent 记忆：星座、时间线、实体', () => {
     expect(detail).not.toBeNull();
     expect(detail!.width).toBeGreaterThanOrEqual(389);
     expect(detail!.y + detail!.height).toBeLessThanOrEqual(845);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      ),
+    ).toBeLessThanOrEqual(1);
+    await page.locator('#memory-detail-close').click();
+    await expect(page.locator('.memory-detail-column')).toBeHidden();
+
+    await page.locator('#memory-tab-timeline').click();
+    await expect(page.locator('#memory-timeline-chart')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#memory-timeline-chart .memory-timeline-card')).toHaveCount(4);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      ),
+    ).toBeLessThanOrEqual(1);
+    await page.locator('#memory-timeline-chart .memory-timeline-card').first().click();
+    await expect(page.locator('#memory-detail-text')).toBeVisible({ timeout: 15_000 });
+    const timelineDetail = await page.locator('.memory-detail-column').boundingBox();
+    expect(timelineDetail).not.toBeNull();
+    expect(timelineDetail!.width).toBeGreaterThanOrEqual(389);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,

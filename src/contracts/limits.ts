@@ -541,9 +541,20 @@ export const LIMITS = {
   memoryPanelEntityGraphEdgesRequestMax: 400,
   /** 实体共现图最大节点数。 */
   memoryPanelEntityGraphNodesMax: 200,
-  /** 记忆事实列表默认/最大页大小。 */
+  /** 记忆事实列表默认/最大页大小；UI 可一次取回大页后本地分页。 */
   memoryPanelFactsPageDefault: 20,
-  memoryPanelFactsPageMax: 50,
+  memoryPanelFactsPageMax: 500,
+  /** 时间线默认/最大事件数与上游合并页参数。 */
+  memoryPanelTimelineDaysDefault: 30,
+  memoryPanelTimelineLimitDefault: 300,
+  memoryPanelTimelineLimitMax: 500,
+  memoryPanelTimelinePageMax: 200,
+  memoryPanelTimelinePagesMax: 5,
+  memoryPanelTimelineTextChars: 96,
+  memoryPanelTimelineEntitiesMax: 3,
+  memoryPanelTimelineEntityChars: 40,
+  /** 时间线归一化结果 JSON 预算。 */
+  memoryPanelTimelineBytes: 248 * 1024,
   /** 实体列表默认/最大页大小。 */
   memoryPanelEntitiesPageDefault: 50,
   memoryPanelEntitiesPageMax: 100,

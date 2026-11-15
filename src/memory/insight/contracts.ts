@@ -8,6 +8,7 @@ import { z } from 'zod';
 
 import { BusinessError, type BusinessErrorCode } from '../../contracts/errors';
 import { LIMITS } from '../../contracts/limits';
+import { isValidTimeZoneName } from './timeline-zone';
 
 export const INSIGHT_FACT_TYPES = ['world', 'experience', 'observation'] as const;
 export type InsightFactType = (typeof INSIGHT_FACT_TYPES)[number];
@@ -30,7 +31,7 @@ export const INSIGHT_TIME_FIELDS = [
 ] as const;
 export type InsightTimeField = (typeof INSIGHT_TIME_FIELDS)[number];
 
-export type InsightView = 'overview' | 'graph' | 'list' | 'get' | 'entities';
+export type InsightView = 'overview' | 'graph' | 'list' | 'get' | 'entities' | 'timeline';
 export type InsightViewer = { actor_id: string; kind: 'human' | 'agent' };
 
 export type InsightFailureCode =
@@ -194,6 +195,49 @@ export interface InsightListResult {
   truncated: boolean;
 }
 
+export interface InsightTimelineItem {
+  id: string;
+  text: string;
+  fact_type: InsightFactType | null;
+  state: 'valid' | 'invalidated';
+  occurred_at: string | null;
+  mentioned_at: string | null;
+  entities: string[];
+}
+
+export interface InsightTimelineGroup {
+  key: string;
+  label: string;
+  start: string | null;
+  end: string | null;
+  count: number;
+  start_index: number;
+  end_index: number;
+}
+
+export type InsightTimelineGranularity = 'day' | 'week' | 'month';
+
+export interface InsightTimelineSummary {
+  total: number | null;
+  returned: number;
+  dated: number;
+  undated: number;
+  by_type: Record<InsightFactType, number>;
+}
+
+export interface InsightTimelineResult {
+  available: boolean;
+  reason: InsightAvailabilityReason;
+  actor: InsightActorView;
+  fetched_at: number;
+  items: InsightTimelineItem[];
+  groups: Record<InsightTimelineGranularity, InsightTimelineGroup[]>;
+  summary: InsightTimelineSummary;
+  days: number;
+  limit: number;
+  truncated: boolean;
+}
+
 export interface InsightGetResult {
   available: boolean;
   reason: InsightAvailabilityReason;
@@ -252,6 +296,31 @@ export const insightListInputSchema = z.strictObject({
   end_date: z.string().min(1).max(40).optional(),
   limit: z.number().int().min(1).max(LIMITS.memoryPanelFactsPageMax).optional(),
   offset: z.number().int().min(0).max(LIMITS.memoryPanelOffsetMax).optional(),
+  text_chars: z.number().int().min(1).max(LIMITS.memoryPanelFactsTextChars).optional(),
+  refresh,
+});
+
+export const insightTimelineInputSchema = z.strictObject({
+  actor_id: actorId,
+  days: z.union([z.literal(7), z.literal(30), z.literal(90)]).optional(),
+  type: z.enum(INSIGHT_FACT_TYPES).optional(),
+  limit: z.number().int().min(1).max(LIMITS.memoryPanelTimelineLimitMax).optional(),
+  /**
+   * 本地时间 = UTC + offset，单位分钟（UTC+8 为 480）。
+   *
+   * 没有 IANA 名称时回退到该偏移；`timezone` 存在时忽略此值。
+   */
+  tz_offset_minutes: z.number().int().min(-840).max(840).optional(),
+  /**
+   * IANA 时区名（如 `Asia/Shanghai`、`America/New_York`），优先级高于
+   * `tz_offset_minutes`；服务端按真实时区生成日/周/月分组，DST 切换日正确。
+   */
+  timezone: z
+    .string()
+    .min(1)
+    .max(64)
+    .refine(isValidTimeZoneName, { message: 'timezone 必须是有效的 IANA 时区名' })
+    .optional(),
   refresh,
 });
 
@@ -291,6 +360,7 @@ export const insightEntitiesInputSchema = z
 export type InsightOverviewInput = z.infer<typeof insightOverviewInputSchema>;
 export type InsightGraphInput = z.infer<typeof insightGraphInputSchema>;
 export type InsightListInput = z.infer<typeof insightListInputSchema>;
+export type InsightTimelineInput = z.infer<typeof insightTimelineInputSchema>;
 export type InsightGetInput = z.infer<typeof insightGetInputSchema>;
 export type InsightEntitiesInput = z.infer<typeof insightEntitiesInputSchema>;
 
@@ -432,6 +502,55 @@ export const insightListOutputSchema = z.looseObject({
   offset: z.number(),
   has_more: z.boolean(),
   next_offset: z.number().nullable(),
+  truncated: z.boolean(),
+});
+
+const timelineItemSchema = z.looseObject({
+  id: z.string(),
+  text: z.string(),
+  fact_type: z.enum(INSIGHT_FACT_TYPES).nullable(),
+  state: z.enum(['valid', 'invalidated']),
+  occurred_at: z.string().nullable(),
+  mentioned_at: z.string().nullable(),
+  entities: z.array(z.string()),
+});
+
+const timelineGroupSchema = z.looseObject({
+  key: z.string(),
+  label: z.string(),
+  start: z.string().nullable(),
+  end: z.string().nullable(),
+  count: z.number(),
+  start_index: z.number(),
+  end_index: z.number(),
+});
+
+const timelineSummarySchema = z.looseObject({
+  total: z.number().nullable(),
+  returned: z.number(),
+  dated: z.number(),
+  undated: z.number(),
+  by_type: z.looseObject({
+    world: z.number(),
+    experience: z.number(),
+    observation: z.number(),
+  }),
+});
+
+export const insightTimelineOutputSchema = z.looseObject({
+  available: z.boolean(),
+  reason: reasonSchema,
+  actor: actorSchema,
+  fetched_at: z.number(),
+  items: z.array(timelineItemSchema),
+  groups: z.looseObject({
+    day: z.array(timelineGroupSchema),
+    week: z.array(timelineGroupSchema),
+    month: z.array(timelineGroupSchema),
+  }),
+  summary: timelineSummarySchema,
+  days: z.number(),
+  limit: z.number(),
   truncated: z.boolean(),
 });
 

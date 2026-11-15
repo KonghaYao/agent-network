@@ -419,6 +419,7 @@ async function main(): Promise<void> {
     'network_agent_memory_overview',
     'network_agent_memory_graph',
     'network_agent_memory_list',
+    'network_agent_memory_timeline',
     'network_agent_memory_get',
     'network_agent_memory_entities',
   ];
@@ -1425,10 +1426,36 @@ async function main(): Promise<void> {
       typeof insightSelf.data?.reason === 'string',
     insightSelf.data,
   );
+  const insightTimeline = await rawToolCall<{
+    available: boolean;
+    reason: string;
+    items: unknown[];
+    groups: { day: unknown[]; week: unknown[]; month: unknown[] };
+    summary: { returned: number };
+  }>(secondToken ?? null, 'network_agent_memory_timeline', {
+    actor_id: newAgentIdentity?.actor_id ?? '',
+    days: 30,
+  });
+  check('timeline 工具可调用', insightTimeline.code === undefined, insightTimeline.body);
+  check(
+    'timeline 返回 compact 结构与分组',
+    typeof insightTimeline.data?.available === 'boolean' &&
+      Array.isArray(insightTimeline.data?.items) &&
+      Array.isArray(insightTimeline.data?.groups.day) &&
+      Array.isArray(insightTimeline.data?.groups.week) &&
+      Array.isArray(insightTimeline.data?.groups.month) &&
+      typeof insightTimeline.data?.summary.returned === 'number',
+    insightTimeline.data,
+  );
   if (!memoryCatalog?.enabled) {
     checkEqual(
       'Memory 关闭时 insight 返回 panel_disabled',
       insightSelf.data?.reason,
+      'panel_disabled',
+    );
+    checkEqual(
+      'Memory 关闭时 timeline 返回 panel_disabled',
+      insightTimeline.data?.reason,
       'panel_disabled',
     );
   }
