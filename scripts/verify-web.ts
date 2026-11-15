@@ -2916,7 +2916,7 @@ async function runLongHistoryAcceptance(
   const roomId = group.room.room_id;
   await acceptRoomInvites(agentToken, roomId);
 
-  // 55 条预览被截断但低于 16KB 的 Agent 消息 + 1 条超过阈值的消息。
+  // 55 条预览被截断但低于 32KB 自动展开上限的 Agent 消息 + 1 条超过阈值的消息。
   for (let index = 1; index <= 55; index += 1) {
     const marker = `长历史消息 ${String(index).padStart(2, '0')} 标记`;
     await rawTool(agentToken, 'network_message_send', {
@@ -2927,14 +2927,14 @@ async function runLongHistoryAcceptance(
       body: `${marker}\n\n${'长历史填充内容。'.repeat(120)}`,
     });
   }
-  const hugeMarker = '超大消息 16KB 标记';
+  const hugeMarker = '超大消息 32KB 标记';
   const hugeTail = '超大消息完整结尾';
   await rawTool(agentToken, 'network_message_send', {
     request_id: requestId('msg'),
     client_message_id: crypto.randomUUID(),
     room_id: roomId,
     invoke: [],
-    body: `${hugeMarker}\n\n${'超'.repeat(9000)}\n${hugeTail}`,
+    body: `${hugeMarker}\n\n${'超'.repeat(12000)}\n${hugeTail}`,
   });
 
   const { context, page } = await makeContext(
@@ -2992,12 +2992,14 @@ async function runLongHistoryAcceptance(
       .last();
     await hugeMessage.scrollIntoViewIfNeeded();
     checkEqual(
-      '超过 16KB 的 Agent 消息保留手动展开按钮',
+      '超过 32KB 的 Agent 消息保留手动展开按钮',
       await hugeMessage.locator('.expand').count(),
       1,
     );
     await hugeMessage.locator('.expand').click();
-    await hugeMessage.locator('.expand').waitFor({ state: 'detached' });
+    await hugeMessage.locator('.expand').filter({ hasText: '收起' }).waitFor({
+      timeout: 15_000,
+    });
     await waitUntil(
       async () => ((await hugeMessage.locator('.bubble').textContent()) ?? '').includes(hugeTail),
       '超过阈值的消息可手动展开全文',
@@ -5919,7 +5921,10 @@ async function main(): Promise<void> {
       }
     }
 
-    // 12. 流失效范围：首屏去重、无关房间不碰当前历史、older 不丢。
+    // 12. 长历史分片：仅视口内自动展开、滚动增量读取、手动展开与游标分页。
+    await runLongHistoryAcceptance(browser, server.base, allErrors);
+
+    // 13. 流失效范围：首屏去重、无关房间不碰当前历史、older 不丢。
     await runStreamInvalidationAcceptance(browser, server.base, allErrors, {
       humanToken: data.humanToken,
       agentAToken: data.agentAToken,

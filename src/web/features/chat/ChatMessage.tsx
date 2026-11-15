@@ -1,6 +1,6 @@
 import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
-import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
 import {
@@ -38,6 +38,40 @@ interface ChatMessageProps {
   onOpenTask: (rootId: string, focusMessageId: string | null) => void;
   onRecall: (item: HistoryMessage) => void;
   onForward: (item: HistoryMessage) => void;
+}
+
+/**
+ * 视口内自动展开的并发闸门。
+ *
+ * 队列跨消息共享，避免首屏同时触发几十条 `network_message_read`；只在消息
+ * 仍在视口且尚未展开时执行，卸载或滚出视口后释放名额。
+ */
+const autoExpandQueue: ((release: () => void) => void)[] = [];
+let autoExpandActive = 0;
+
+function drainAutoExpandQueue(): void {
+  while (autoExpandActive < LIMITS.webAgentAutoExpandConcurrency && autoExpandQueue.length > 0) {
+    const task = autoExpandQueue.shift();
+    if (!task) return;
+    autoExpandActive += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      autoExpandActive -= 1;
+      drainAutoExpandQueue();
+    };
+    try {
+      task(release);
+    } catch {
+      release();
+    }
+  }
+}
+
+function enqueueAutoExpand(task: (release: () => void) => void): void {
+  autoExpandQueue.push(task);
+  drainAutoExpandQueue();
 }
 
 function Receipt({
@@ -346,13 +380,21 @@ export const ChatMessage = memo(function ChatMessage({
 }: ChatMessageProps) {
   const [fullBody, setFullBody] = useState<string | null>(null);
   const [loadingFull, setLoadingFull] = useState(false);
+  const [autoPending, setAutoPending] = useState(false);
   const [longExpanded, setLongExpanded] = useState(false);
+  const rowRef = useRef<HTMLLIElement>(null);
+  const fullBodyRef = useRef<string | null>(null);
+  const loadingRef = useRef(false);
+  const visibleRef = useRef(false);
+  const autoRequestedRef = useRef(false);
   const longPress = useLongPress(openContextMenuAt);
   const mine = item.sender_id === identityId;
   const agent = isAgentMessage(item, members);
   const name = senderName(item.sender_id, members, identityName, identityId);
   const truncated = item.body_bytes > messageBodyBytes(item.preview);
   const longBody = item.body_bytes >= LIMITS.webLongMessageCollapseBytes;
+  const autoEligible =
+    agent && truncated && item.body_bytes <= LIMITS.webAgentAutoExpandBytes;
   const shown = fullBody ?? item.preview;
   const collapsed = longBody && fullBody !== null && !longExpanded;
   const cards = useMemo(() => extractFileCards(shown), [shown]);
@@ -361,18 +403,74 @@ export const ChatMessage = memo(function ChatMessage({
     : null;
 
   const loadFull = async () => {
-    if (fullBody !== null || loadingFull) return;
+    if (fullBodyRef.current !== null || loadingRef.current) return;
+    loadingRef.current = true;
     setLoadingFull(true);
     try {
       const text = await readFullMessage(item.message_id);
+      fullBodyRef.current = text;
       setFullBody(text);
-      setLongExpanded(false);
+      // 读取全文就是用户显式展开：直接显示完整正文与「收起」。
+      setLongExpanded(true);
     } catch (error) {
       onStatus((error as Error).message || '读取正文失败');
     } finally {
+      loadingRef.current = false;
       setLoadingFull(false);
     }
   };
+
+  useEffect(() => {
+    if (!autoEligible) return undefined;
+    const node = rowRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') return undefined;
+    let cancelled = false;
+    let controller: AbortController | null = null;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.some((entry) => entry.isIntersecting);
+        visibleRef.current = visible;
+        if (!visible || cancelled) return;
+        if (autoRequestedRef.current || fullBodyRef.current !== null) return;
+        autoRequestedRef.current = true;
+        setAutoPending(true);
+        enqueueAutoExpand((release) => {
+          void (async () => {
+            try {
+              // 排队期间可能已滚出视口、被卸载或已被手动展开。
+              if (cancelled || !visibleRef.current || fullBodyRef.current !== null) {
+                if (!cancelled) autoRequestedRef.current = false;
+                return;
+              }
+              controller = new AbortController();
+              const text = await readFullMessage(item.message_id, undefined, controller.signal);
+              if (cancelled) return;
+              fullBodyRef.current = text;
+              setFullBody(text);
+              setLongExpanded(true);
+            } catch {
+              // 自动展开失败只回退到「查看全文」，不打断列表。
+              if (!cancelled) autoRequestedRef.current = false;
+            } finally {
+              controller = null;
+              if (!cancelled) setAutoPending(false);
+              release();
+            }
+          })();
+        });
+      },
+      { threshold: 0.01 },
+    );
+    observer.observe(node);
+    return () => {
+      cancelled = true;
+      visibleRef.current = false;
+      observer.disconnect();
+      controller?.abort();
+      controller = null;
+      if (fullBodyRef.current === null) autoRequestedRef.current = false;
+    };
+  }, [autoEligible, item.message_id]);
 
   if (item.body_bytes === 0) {
     return (
@@ -401,6 +499,7 @@ export const ChatMessage = memo(function ChatMessage({
           data-message-id={item.message_id}
           data-sender-kind={agent ? 'agent' : 'human'}
           data-message-preview={item.preview}
+          ref={rowRef}
           {...longPress}
         >
           <span
@@ -423,11 +522,13 @@ export const ChatMessage = memo(function ChatMessage({
               title={fullTime(item.created_at)}
             >
               {agent ? (
-                <MarkdownIsland
-                  text={shown}
-                  mentions={mentions}
-                  preview={truncated && fullBody === null}
-                />
+                truncated && fullBody === null ? (
+                  // 512B 切口可能落在表格/代码围栏中间；全文加载前只显示纯文本，
+                  // 避免渲染半张表或把剩余文字吞进代码块。
+                  <div className="msg-plain-preview">{item.preview}</div>
+                ) : (
+                  <MarkdownIsland text={shown} mentions={mentions} preview={false} />
+                )
               ) : (
                 <HumanBody text={shown} mentions={mentions} />
               )}
@@ -462,7 +563,7 @@ export const ChatMessage = memo(function ChatMessage({
                 identityName={identityName}
               />
             ) : null}
-            {fullBody === null && truncated ? (
+            {fullBody === null && truncated && !autoPending ? (
               <button
                 type="button"
                 className="expand"
