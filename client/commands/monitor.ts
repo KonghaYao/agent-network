@@ -71,8 +71,8 @@ export interface MonitorOptions {
   json?: boolean;
   /** 最长运行秒数；peri 默认 24h，0 表示不限制。 */
   maxRuntime?: string;
-  /** claude：输出 informational room 消息；all 或显式 room_id。 */
-  roomEvents?: string;
+  /** claude：监听全部房间消息；缺省关闭。 */
+  roomEvents?: string | boolean;
 }
 
 interface ConfigCheck {
@@ -379,14 +379,11 @@ function maxRuntimeMs(harness: string, raw: string | undefined): number {
   return seconds * 1000;
 }
 
-/** `--room-events <room_id|all>`：只接受 all 或单个安全 room_id。 */
-export function parseRoomEvents(raw: string | undefined): RoomEventScope | undefined {
-  if (raw === undefined || raw === '') return undefined;
-  if (raw === 'all') return 'all';
-  if (!/^[A-Za-z0-9_-]+$/u.test(raw)) {
-    throw new CliError('--room-events 只接受 all 或合法 room_id');
-  }
-  return [raw];
+/** `--room-events [all]`：监听所有房间，不再支持房间白名单。 */
+export function parseRoomEvents(raw: string | boolean | undefined): RoomEventScope | undefined {
+  if (raw === undefined || raw === false) return undefined;
+  if (raw === true || raw === '' || raw === 'all') return 'all';
+  throw new CliError('--room-events 只接受 all（默认监听所有房间）');
 }
 
 export async function monitor(

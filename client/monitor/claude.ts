@@ -5,7 +5,7 @@
  * - stdout 每行一个事件 JSON；
  * - stderr 输出 READY、RECONNECTING、DEGRADED 与 ERROR；
  * - 自动 claim 成功后携带正文预览与 event_file；
- * - 可选 `--room-events <room_id|all>`：额外输出不含正文的 room_message；
+ * - 可选 `--room-events [all]`：监听所有房间，额外输出不含正文的 room_message；
  * - SIGINT/SIGTERM/SIGHUP 清理状态目录后以 0 退出。
  */
 

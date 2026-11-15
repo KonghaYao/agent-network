@@ -11,8 +11,8 @@
  * - 同一时刻只保留一个 claim（由服务端约束），deferred 不写永久 seen；
  * - inbox 查询失败按指数退避重试，恢复后补领 pending；
  * - deferred 进入本地待领队列，按退避重试 claim，同一状态只提示一次；
- * - room_message 默认关闭；开启后只输出 informational 定位字段，按 message_id
- *   去重，reconnect 时用 history after 游标补读一次；
+ * - room_message 默认关闭；开启后监听所有房间，只输出 informational 定位字段，
+ *   按 message_id 精确去重，reconnect 时用 history after 游标补读一次；
  * - 正文只进 event_file 与 stdout 的预览，不写日志。
  */
 
@@ -33,6 +33,7 @@ import {
   type ClaimInfo,
   type DeliveryFields,
 } from './events';
+import { advanceHistoryCursor } from './room-cursor';
 import {
   MonitorFatalError,
   MonitorRpc,
@@ -62,11 +63,13 @@ const ROOM_MESSAGE_DEDUPE_TTL_MS = 5 * 60_000;
 const ROOM_HISTORY_PAGE_LIMIT = 100;
 /** reconnect 补读单房间的最多页数，避免异常游标导致无限循环。 */
 const ROOM_HISTORY_MAX_PAGES = 20;
+/** 单次 reconnect 补读上限；超过时记录截断，下一次 reconnect 从保存的游标继续。 */
+const ROOM_HISTORY_MAX_ITEMS = ROOM_HISTORY_MAX_PAGES * ROOM_HISTORY_PAGE_LIMIT;
 /** 本进程已输出 room_message 的 message_id 记忆上限，用于 reconnect 补读去重。 */
 const ROOM_OUTPUT_MEMORY = 10_000;
 
-/** `--room-events`：all 或显式房间白名单；缺省关闭。 */
-export type RoomEventScope = 'all' | readonly string[];
+/** `--room-events`：开启后监听全部房间消息；缺省关闭。 */
+export type RoomEventScope = 'all';
 
 /** Peri 宿主 monitor 的单次上限；到期后 CLI 主动结束，避免静默失效。 */
 export const PERI_MAX_RUNTIME_MS = 24 * 60 * 60 * 1000;
@@ -314,7 +317,7 @@ export class MonitorEngine {
   private readonly expiringThresholdMs: number;
   private readonly onDeadline: (() => void) | undefined;
   /** null 表示 `--room-events` 未开启。 */
-  private readonly roomEventScope: { all: boolean; rooms: Set<string> } | null;
+  private readonly roomEventScope: RoomEventScope | null;
   /** 每个房间最近一次 history after 游标，仅用于 reconnect 补读。 */
   private readonly roomHistoryCursors = new Map<string, string>();
   /** message_id -> 去重截止时间；delivery 与 room_message 共用。 */
@@ -365,12 +368,7 @@ export class MonitorEngine {
     this.maxRuntimeMs = options.maxRuntimeMs ?? 0;
     this.expiringThresholdMs = options.expiringThresholdMs ?? EXPIRING_THRESHOLD_MS;
     this.onDeadline = options.onDeadline;
-    this.roomEventScope =
-      options.roomEvents === undefined
-        ? null
-        : options.roomEvents === 'all'
-          ? { all: true, rooms: new Set() }
-          : { all: false, rooms: new Set(options.roomEvents) };
+    this.roomEventScope = options.roomEvents === undefined ? null : 'all';
   }
 
   async run(): Promise<number> {
@@ -730,28 +728,20 @@ export class MonitorEngine {
     }
   }
 
-  /** informational room.message → room_message；按 message_id 做短 TTL 去重。 */
+  /** informational room.message → room_message；按 message_id 精确去重。 */
   private emitRoomMessages(items: JsonObject[]): void {
     if (this.roomEventScope === null) return;
     for (const item of items) {
       if (asString(item.source) !== 'room.message') continue;
       if (item.attention !== 'informational') continue;
-      if (asString(item.sender_id) === this.meId) continue;
       const roomId = asString(item.room_id);
       const messageId = asString(item.message_id);
       if (roomId.length === 0 || messageId.length === 0) continue;
-      if (!this.roomAllowed(roomId)) continue;
       if (this.hasRoomMessage(messageId)) continue;
       this.rememberRoomMessage(messageId);
       this.rememberRoomMessageHistory(messageId);
       this.emitEvent(roomMessageEvent(item, 'stream'));
     }
-  }
-
-  private roomAllowed(roomId: string): boolean {
-    const scope = this.roomEventScope;
-    if (scope === null) return false;
-    return scope.all || scope.rooms.has(roomId);
   }
 
   private hasRoomMessage(messageId: string): boolean {
@@ -799,9 +789,7 @@ export class MonitorEngine {
   }
 
   private async roomEventRooms(): Promise<string[]> {
-    const scope = this.roomEventScope;
-    if (scope === null) return [];
-    if (!scope.all) return [...scope.rooms];
+    if (this.roomEventScope === null) return [];
 
     const rooms: string[] = [];
     let cursor = '';
@@ -835,24 +823,25 @@ export class MonitorEngine {
   private async captureRoomCursor(roomId: string): Promise<void> {
     const page = await this.fetchRoomHistory(roomId, null);
     if (page === null) return;
-    const next = asString(page.next_cursor);
+    const items = asArray(page.items).map(asRecord);
+    const next = advanceHistoryCursor(null, asString(page.next_cursor), items);
     if (next.length > 0) this.roomHistoryCursors.set(roomId, next);
   }
 
   /** 用保存的游标 after 补读；分页直到 has_more=false，只输出定位字段。 */
   private async backfillRoom(roomId: string, cursor: string): Promise<void> {
     let current = cursor;
+    let seen = 0;
     for (let page = 0; page < ROOM_HISTORY_MAX_PAGES; page += 1) {
       if (this.signal.aborted) return;
       const data = await this.fetchRoomHistory(roomId, current);
       if (data === null) return;
 
-      for (const raw of asArray(data.items)) {
-        const item = asRecord(raw);
+      const items = asArray(data.items).map(asRecord);
+      seen += items.length;
+      for (const item of items) {
         const messageId = asString(item.message_id);
         if (messageId.length === 0) continue;
-        if (asString(item.sender_id) === this.meId) continue;
-        if (!this.roomAllowed(roomId)) continue;
         if (this.roomMessageHistory.has(messageId)) continue;
         if (this.hasRoomMessage(messageId)) continue;
         this.rememberRoomMessage(messageId);
@@ -860,11 +849,22 @@ export class MonitorEngine {
         this.emitEvent(roomMessageEvent(item, 'history'));
       }
 
-      const next = asString(data.next_cursor);
+      // 服务端游标正常已前进；仍按本页最后一条消息推进，兼容旧服务端。
+      const next = advanceHistoryCursor(current, asString(data.next_cursor), items);
       if (next.length > 0) this.roomHistoryCursors.set(roomId, next);
-      if (data.has_more !== true || next.length === 0 || next === current) return;
+      if (data.has_more !== true) return;
+      if (next.length === 0) {
+        this.roomHistoryError('room_history_cursor_missing', roomId);
+        return;
+      }
+      if (next === current) {
+        this.roomHistoryError('room_history_cursor_stalled', roomId);
+        return;
+      }
       current = next;
     }
+    // 达到单次上限仍有积压：游标已保存，下一次 reconnect 从此处继续。
+    this.roomHistoryTruncated(roomId, seen);
   }
 
   private async fetchRoomHistory(
@@ -900,6 +900,21 @@ export class MonitorEngine {
         ...(roomId === undefined ? {} : { room_id: roomId }),
       },
       `ERROR type=room message=${code}${roomId === undefined ? '' : ` room_id=${roomId}`}`,
+    );
+  }
+
+  /** 单次补读达到 2000 条上限：明确记录，下一次 reconnect 从保存游标继续。 */
+  private roomHistoryTruncated(roomId: string, items: number): void {
+    this.control(
+      'room_history_truncated',
+      {
+        error_type: 'room',
+        room_id: roomId,
+        items,
+        max_items: ROOM_HISTORY_MAX_ITEMS,
+        max_pages: ROOM_HISTORY_MAX_PAGES,
+      },
+      `ROOM_HISTORY_TRUNCATED room_id=${roomId} items=${items} max_items=${ROOM_HISTORY_MAX_ITEMS}`,
     );
   }
 
