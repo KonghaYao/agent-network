@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from 'react';
+
 import { Link } from '../../app/router';
 import type { RoomPreferenceMap } from '../../lib/room-preferences';
 import type { WebIdentity } from '../../lib/identity';
@@ -30,6 +32,7 @@ interface SidebarProps {
   loadMoreError: string | null;
   streamError: string | null;
   preferences?: RoomPreferenceMap;
+  unreadCounts?: Record<RoomFilter, number>;
   notice?: { message: string; error: boolean } | null;
   onQueryChange: (value: string) => void;
   onFilterChange: (value: RoomFilter) => void;
@@ -44,6 +47,8 @@ const FILTERS: { value: RoomFilter; label: string }[] = [
   { value: 'agent', label: 'Agent' },
   { value: 'group', label: '群聊' },
 ];
+
+const EMPTY_UNREAD_COUNTS: Record<RoomFilter, number> = { friend: 0, agent: 0, group: 0 };
 
 function statusMessage(props: SidebarProps): string {
   const { status, rooms, query, filter, error } = props;
@@ -70,6 +75,7 @@ export function Sidebar(props: SidebarProps) {
     loadMoreError,
     streamError,
     preferences = {},
+    unreadCounts = EMPTY_UNREAD_COUNTS,
     notice = null,
     onQueryChange,
     onFilterChange,
@@ -83,6 +89,22 @@ export function Sidebar(props: SidebarProps) {
   const moreVisible = loadingMore || loadMoreError !== null || hasMore;
   const showRetry = status === 'error' && rooms.length === 0;
   const filterLabel = FILTERS.find((entry) => entry.value === filter)?.label ?? '好友';
+
+  // 防抖后只播报变化后的汇总，避免消息连续到达时反复打断读屏。
+  const [filterAnnouncement, setFilterAnnouncement] = useState('');
+  const announcedCounts = useRef('');
+  useEffect(() => {
+    const parts = FILTERS.filter((entry) => unreadCounts[entry.value] > 0).map(
+      (entry) => `${entry.label} ${unreadCounts[entry.value]} 个会话未读`,
+    );
+    const next = parts.join('，');
+    if (next === announcedCounts.current) return undefined;
+    const timer = window.setTimeout(() => {
+      announcedCounts.current = next;
+      setFilterAnnouncement(next);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [unreadCounts]);
 
   return (
     <aside className="sidebar" aria-label="会话列表">
@@ -144,6 +166,7 @@ export function Sidebar(props: SidebarProps) {
         >
           {FILTERS.map((entry) => {
             const selected = entry.value === filter;
+            const count = unreadCounts[entry.value];
             return (
               <button
                 key={entry.value}
@@ -157,10 +180,27 @@ export function Sidebar(props: SidebarProps) {
                 onClick={() => onFilterChange(entry.value)}
               >
                 {entry.label}
+                {count > 0 ? (
+                  <span
+                    className="room-filter-unread"
+                    aria-hidden="true"
+                    title={`${count} 个会话有未读消息`}
+                  >
+                    {count > 99 ? '99+' : count}
+                  </span>
+                ) : null}
               </button>
             );
           })}
         </div>
+        <p
+          id="room-filter-unread-status"
+          className="visually-hidden"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {filterAnnouncement}
+        </p>
         <p
           id="contact-link-banner"
           className="contact-link-banner"

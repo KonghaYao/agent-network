@@ -5226,6 +5226,311 @@ async function main(): Promise<void> {
       await context.close();
     }
 
+    // 11. 侧栏未读与偏好：灰点、标签、分类徽标、同页即时更新与持久化。
+    {
+      const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+      const friendToken = crypto.randomUUID();
+      const friend = await rawTool<Actor>(friendToken, 'network_register', {
+        request_id: requestId('sidebar_reg'),
+        kind: 'human',
+        name: `侧栏好友 ${suffix}`,
+      });
+      await rawBefriend(data.humanToken, friendToken, { actor_id: friend.actor_id });
+      // 先清空所有房间未读，确保分类徽标只由本次构造的会话决定。
+      const allRooms = await rawTool<{ items: { room_id: string }[] }>(
+        data.humanToken,
+        'network_rooms_list',
+        { limit: 100 },
+      );
+      for (const item of allRooms.items) {
+        const detail = await rawTool<RoomDetail>(data.humanToken, 'network_room_get', {
+          room_id: item.room_id,
+        });
+        await rawTool(data.humanToken, 'network_room_mark_read', {
+          room_id: item.room_id,
+          through_seq: detail.room.head_seq,
+        });
+      }
+      const friendRoom = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('sidebar_room'),
+        kind: 'direct',
+        members: [friend.actor_id],
+      });
+      const unreadGroup = await rawTool<RoomDetail>(data.humanToken, 'network_room_create', {
+        request_id: requestId('sidebar_room'),
+        kind: 'group',
+        title: `侧栏未读群 ${suffix}`,
+        members: [data.agentA.actor_id],
+      });
+      await rawTool(friendToken, 'network_message_send', {
+        request_id: requestId('sidebar_msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: friendRoom.room.room_id,
+        body: '好友未读 1',
+      });
+      await rawTool(data.agentAToken, 'network_message_send', {
+        request_id: requestId('sidebar_msg'),
+        client_message_id: crypto.randomUUID(),
+        room_id: data.direct.room.room_id,
+        body: 'Agent 未读 1',
+      });
+      for (const text of ['群未读 1', '群未读 2']) {
+        await rawTool(data.agentAToken, 'network_message_send', {
+          request_id: requestId('sidebar_msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: unreadGroup.room.room_id,
+          body: text,
+        });
+      }
+
+      const { context, page } = await makeContext(
+        browser,
+        data.humanToken,
+        { width: 1280, height: 900 },
+        allErrors,
+      );
+      try {
+        await page.goto(`${server.base}/`);
+        await waitRoomListName(page, friend.name);
+        const friendRow = page.locator(
+          `#room-list a[data-room-id="${friendRoom.room.room_id}"]`,
+        );
+        checkEqual(
+          '非免打扰未读 aria-label 为未读',
+          await friendRow.locator('.unread').getAttribute('aria-label'),
+          '未读',
+        );
+        checkEqual(
+          '非免打扰未读使用红点',
+          await friendRow.locator('.unread').evaluate(
+            (node) => getComputedStyle(node).backgroundColor,
+          ),
+          'rgb(250, 81, 81)',
+        );
+        checkEqual(
+          '好友分类未读会话数徽标',
+          (await page.locator('#room-filter-friend .room-filter-unread').textContent())?.trim(),
+          '1',
+        );
+        checkEqual(
+          'Agent 分类未读会话数徽标',
+          (await page.locator('#room-filter-agent .room-filter-unread').textContent())?.trim(),
+          '1',
+        );
+        checkEqual(
+          '群聊分类未读会话数徽标按会话而非消息计数',
+          (await page.locator('#room-filter-group .room-filter-unread').textContent())?.trim(),
+          '1',
+        );
+        check(
+          '分类徽标带数量说明',
+          (await page
+            .locator('#room-filter-group .room-filter-unread')
+            .getAttribute('title'))?.includes('1 个会话') === true,
+        );
+        checkEqual(
+          '分类未读汇总使用 polite aria-live',
+          await page.locator('#room-filter-unread-status').getAttribute('aria-live'),
+          'polite',
+        );
+        await waitForText(
+          page,
+          '#room-filter-unread-status',
+          '好友 1 个会话未读，Agent 1 个会话未读，群聊 1 个会话未读',
+        );
+        check('分类未读汇总播报三类计数', true);
+
+        await page.locator('#room-filter-agent').click();
+        await waitRoomListName(page, data.agentA.name);
+        const orderBefore = (await page
+          .locator('#room-list .room-item')
+          .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-room-id')))) as string[];
+        check(
+          '置顶前未读 Agent 会话排在已读会话之前',
+          orderBefore.indexOf(data.direct.room.room_id) <
+            orderBefore.indexOf(data.extra.room.room_id),
+          orderBefore.slice(0, 3),
+        );
+
+        await page.locator(`#room-list a[data-room-id="${data.extra.room.room_id}"]`).click();
+        await waitRoom(page, data.extra.room.room_id, data.agentB.name);
+        await page.locator('#room-menu-toggle').click();
+        await page.locator('#room-menu-pin').click();
+        await page.waitForFunction(
+          `document.querySelector('#room-list .room-item')?.getAttribute('data-room-id') === ${JSON.stringify(data.extra.room.room_id)}`,
+        );
+        check('聊天页置顶后侧栏立即重排', true);
+        checkEqual(
+          '聊天页置顶后侧栏立即显示标签',
+          (await page
+            .locator(`#room-list a[data-room-id="${data.extra.room.room_id}"] .room-pref-label`)
+            .textContent())?.trim(),
+          '置顶',
+        );
+
+        await page.locator(`#room-list a[data-room-id="${data.direct.room.room_id}"]`).click();
+        await waitRoom(page, data.direct.room.room_id, data.agentA.name);
+        // 进入房间会标记已读；先离开底部，再让 Agent 发新消息，保留未读用于观察灰点。
+        await page.evaluate(`(() => {
+          const node = document.getElementById('messages');
+          if (!node) return;
+          node.scrollTop = 0;
+          node.dispatchEvent(new Event('scroll', { bubbles: true }));
+        })()`);
+        await waitUntil(async () => (await bottomGap(page)) > 40, '聊天区离开底部');
+        await rawTool(data.agentAToken, 'network_message_send', {
+          request_id: requestId('sidebar_msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: data.direct.room.room_id,
+          body: '免打扰前的实时未读',
+        });
+        const mutedRow = page.locator(
+          `#room-list a[data-room-id="${data.direct.room.room_id}"]`,
+        );
+        await mutedRow.locator('.unread:not(.muted)').waitFor({ timeout: 15_000 });
+        checkEqual(
+          '聊天页收到新消息后侧栏立即显示红点',
+          await mutedRow.locator('.unread').evaluate(
+            (node) => getComputedStyle(node).backgroundColor,
+          ),
+          'rgb(250, 81, 81)',
+        );
+        checkEqual(
+          '聊天页收到新消息后 Agent 分类徽标恢复',
+          (await page.locator('#room-filter-agent .room-filter-unread').textContent())?.trim(),
+          '1',
+        );
+        await page.locator('#room-menu-toggle').click();
+        await page.locator('#room-menu-mute').click();
+        await mutedRow.locator('.unread.muted').waitFor();
+        checkEqual(
+          '免打扰未读 aria-label 说明免打扰',
+          await mutedRow.locator('.unread').getAttribute('aria-label'),
+          '未读，消息免打扰',
+        );
+        checkEqual(
+          '免打扰未读使用灰点',
+          await mutedRow.locator('.unread').evaluate(
+            (node) => getComputedStyle(node).backgroundColor,
+          ),
+          'rgb(138, 138, 138)',
+        );
+        checkEqual(
+          '聊天页免打扰后侧栏立即显示标签',
+          (await mutedRow.locator('.room-pref-label').textContent())?.trim(),
+          '免打扰',
+        );
+        checkEqual(
+          '免打扰后 Agent 分类徽标清零消失',
+          await page.locator('#room-filter-agent .room-filter-unread').count(),
+          0,
+        );
+        checkEqual(
+          '免打扰不影响其他分类徽标',
+          (await page.locator('#room-filter-friend .room-filter-unread').textContent())?.trim(),
+          '1',
+        );
+        checkEqual(
+          '免打扰不改变群聊分类徽标',
+          (await page.locator('#room-filter-group .room-filter-unread').textContent())?.trim(),
+          '1',
+        );
+        await waitForText(
+          page,
+          '#room-filter-unread-status',
+          '好友 1 个会话未读，群聊 1 个会话未读',
+        );
+        check('免打扰后 aria-live 播报更新且移除 Agent 计数', true);
+
+        // 回首页刷新：首页不进入房间，不会触发 mark_read，可检查持久化后的灰点。
+        await page.goto(`${server.base}/`);
+        await page.locator('#room-filter-agent[aria-selected="true"]').waitFor();
+        await page.locator(`#room-list a[data-room-id="${data.extra.room.room_id}"]`).waitFor();
+        await page.locator(`#room-list a[data-room-id="${data.direct.room.room_id}"]`).waitFor();
+        checkEqual(
+          '刷新后置顶会话仍在首位',
+          await page
+            .locator('#room-list .room-item')
+            .first()
+            .getAttribute('data-room-id'),
+          data.extra.room.room_id,
+        );
+        checkEqual(
+          '刷新后置顶标签保留',
+          (await page
+            .locator(`#room-list a[data-room-id="${data.extra.room.room_id}"] .room-pref-label`)
+            .textContent())?.trim(),
+          '置顶',
+        );
+        checkEqual(
+          '刷新后免打扰标签保留',
+          (await page
+            .locator(`#room-list a[data-room-id="${data.direct.room.room_id}"] .room-pref-label`)
+            .textContent())?.trim(),
+          '免打扰',
+        );
+        check(
+          '刷新后免打扰未读仍是灰点',
+          (await page
+            .locator(
+              `#room-list a[data-room-id="${data.direct.room.room_id}"] .unread`,
+            )
+            .getAttribute('class'))?.includes('muted') === true,
+        );
+        const stored = (await page.evaluate(
+          (actorId) =>
+            JSON.parse(
+              localStorage.getItem(`agent-network-room-preferences-v1:${actorId}`) || '{}',
+            ),
+          data.human.actor_id,
+        )) as Record<string, { pinned?: boolean; muted?: boolean }>;
+        check(
+          '偏好继续写入 legacy localStorage key',
+          stored[data.extra.room.room_id]?.pinned === true &&
+            stored[data.direct.room.room_id]?.muted === true,
+          stored,
+        );
+
+        await page.emulateMedia({ colorScheme: 'dark' });
+        await page.waitForFunction(`matchMedia('(prefers-color-scheme: dark)').matches`);
+        const darkStyles = (await page.evaluate(
+          `(() => {
+            const label = document.querySelector(${JSON.stringify(
+              `#room-list a[data-room-id="${data.direct.room.room_id}"] .room-pref-label`,
+            )});
+            const dot = document.querySelector(${JSON.stringify(
+              `#room-list a[data-room-id="${data.direct.room.room_id}"] .unread`,
+            )});
+            const sidebar = document.querySelector('.sidebar');
+            if (!label || !dot || !sidebar) return null;
+            return {
+              label: getComputedStyle(label).color,
+              dot: getComputedStyle(dot).backgroundColor,
+              sidebar: getComputedStyle(sidebar).backgroundColor,
+            };
+          })()`,
+        )) as { label: string; dot: string; sidebar: string } | null;
+        check(
+          '暗色偏好标签保持可读对比',
+          Boolean(darkStyles && contrastRatio(darkStyles.label, darkStyles.sidebar) >= 4.5),
+          darkStyles,
+        );
+        check(
+          '暗色免打扰灰点与侧栏保持可辨对比',
+          Boolean(darkStyles && contrastRatio(darkStyles.dot, darkStyles.sidebar) >= 3),
+          darkStyles,
+        );
+        check(
+          '暗色下偏好标签仍可见',
+          await page
+            .locator(`#room-list a[data-room-id="${data.direct.room.room_id}"] .room-pref-label`)
+            .isVisible(),
+        );
+      } finally {
+        await context.close();
+      }
+    }
+
     await runPresenceRestartAcceptance();
     await runPresenceIdleNotificationCheck();
 

@@ -5,7 +5,7 @@ import { useActorStream } from '../../app/mcp/useActorStream';
 import { useRoomPreferences } from '../../hooks/useRoomPreferences';
 import { useRooms } from '../../hooks/useRooms';
 import { useWebSession } from '../../hooks/useWebSession';
-import { filterRooms } from '../../lib/rooms';
+import { filterRooms, hasUnreadAttention, matchesFilter, type RoomFilter } from '../../lib/rooms';
 import { queryKeys } from '../../lib/query-keys';
 import { useRoomFilterStore } from '../../stores/ui';
 import { ContactRequestsDialog } from '../overlays/ContactRequestsDialog';
@@ -76,6 +76,18 @@ export function AppSidebar({ notice = null, live = true, streamError = null }: A
     [roomsState.rooms, filter, query, roomPreferences.preferences],
   );
 
+  // 分类徽标统计已加载会话中需要提醒的未读，不含已免打扰的会话。
+  const unreadCounts = useMemo(() => {
+    const counts: Record<RoomFilter, number> = { friend: 0, agent: 0, group: 0 };
+    for (const room of roomsState.rooms) {
+      if (!hasUnreadAttention(room, roomPreferences.preferences)) continue;
+      if (matchesFilter(room, 'friend')) counts.friend += 1;
+      else if (matchesFilter(room, 'agent')) counts.agent += 1;
+      else if (matchesFilter(room, 'group')) counts.group += 1;
+    }
+    return counts;
+  }, [roomsState.rooms, roomPreferences.preferences]);
+
   const status: SidebarStatus =
     session.status === 'loading'
       ? 'loading'
@@ -110,6 +122,7 @@ export function AppSidebar({ notice = null, live = true, streamError = null }: A
         loadMoreError={roomsState.loadMoreError}
         streamError={live ? stream.error : streamError}
         preferences={roomPreferences.preferences}
+        unreadCounts={unreadCounts}
         notice={notice}
         onQueryChange={setQuery}
         onFilterChange={changeFilter}
