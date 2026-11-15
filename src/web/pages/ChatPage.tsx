@@ -21,6 +21,7 @@ import { TransferDialog } from '../features/overlays/TransferDialog';
 import { MessageSearchDialog } from '../features/tasks/MessageSearchDialog';
 import { TaskTraceDialog } from '../features/tasks/TaskTraceDialog';
 import { AccountMenu } from '../features/sidebar/AccountMenu';
+import { openAgentMemory } from '../features/memory/memory-store';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useRoomChat } from '../hooks/useRoomChat';
@@ -609,6 +610,15 @@ export function ChatPage({ roomId }: ChatPageProps) {
                           : null
                       }
                       onOpen={setOverlay}
+                      onViewMemory={
+                        peer?.kind === 'agent'
+                          ? () =>
+                              openAgentMemory(
+                                { actor_id: peer.actor_id, name: peer.name },
+                                { returnFocus: () => roomMenuToggleRef.current },
+                              )
+                          : null
+                      }
                       onTogglePreference={roomActions.onTogglePreference}
                       onArchive={() => void roomActions.onArchive()}
                       onCopyPrompt={() => void roomActions.onCopyPrompt()}
@@ -779,6 +789,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
             identityId={identity.actor_id}
             token={token}
             returnFocusRef={roomMenuToggleRef}
+            memoryFallbackFocus={() => roomMenuToggleRef.current}
           />
           <AnnouncementDialog
             open={overlay === 'announcement'}

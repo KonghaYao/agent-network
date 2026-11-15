@@ -8,6 +8,7 @@ import { callTool, type McpError } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { newRequestId } from '../../lib/request-id';
 import { avatarColor, firstChar } from '../../lib/rooms';
+import { AgentAvatarMenu } from '../memory/AgentAvatarMenu';
 import { confirmDialog } from './confirm';
 import { GroupInvitesPanel } from './GroupInvitesPanel';
 import { GroupPoliciesPanel } from './GroupPoliciesPanel';
@@ -72,6 +73,7 @@ export function MembersDialog({
   identityId,
   token,
   returnFocusRef,
+  memoryFallbackFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -81,6 +83,8 @@ export function MembersDialog({
   identityId: string;
   token: string;
   returnFocusRef?: RefObject<HTMLElement | null>;
+  /** 记忆弹窗关闭时成员弹窗已卸载，焦点退回稳定入口。 */
+  memoryFallbackFocus?: () => HTMLElement | null;
 }) {
   const queryClient = useQueryClient();
   const contacts = useContacts(open);
@@ -416,11 +420,27 @@ export function MembersDialog({
                 const actions = member.actions ?? null;
                 return (
                   <li className="member-roster-item spa-member" key={member.actor_id}>
-                    <MemberAvatar
-                      name={member.name}
-                      kind={member.kind}
-                      className="member-avatar"
-                    />
+                    {member.kind === 'agent' ? (
+                      <AgentAvatarMenu
+                        target={{ actor_id: member.actor_id, name: member.name }}
+                        label={`${member.name} 的头像`}
+                        fallbackFocus={memoryFallbackFocus}
+                        onBeforeOpen={() => onOpenChange(false)}
+                        portalContainer={() => document.getElementById('members-modal')}
+                      >
+                        <MemberAvatar
+                          name={member.name}
+                          kind={member.kind}
+                          className="member-avatar"
+                        />
+                      </AgentAvatarMenu>
+                    ) : (
+                      <MemberAvatar
+                        name={member.name}
+                        kind={member.kind}
+                        className="member-avatar"
+                      />
+                    )}
                     <span className="member-roster-name">
                       {member.name}
                       {member.actor_id === identityId ? '（我）' : ''}

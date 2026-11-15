@@ -1056,3 +1056,24 @@ body #root button.primary:hover {
   min-height: 32px;
   padding: 0 8px;
 }
+
+/* 头像右键/长按入口：不改变头像自身尺寸，只提供可聚焦触发区。 */
+.memory-avatar-trigger {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+}
+
+.memory-avatar-trigger:focus-visible {
+  outline: 2px solid #067d3f;
+  outline-offset: 2px;
+}

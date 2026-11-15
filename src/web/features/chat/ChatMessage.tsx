@@ -18,6 +18,7 @@ import { copyText, extractFileCards } from '../../lib/files';
 import { readFullMessage } from '../../lib/message-body';
 import { avatarColor, firstChar } from '../../lib/rooms';
 import { openContextMenuAt, useLongPress } from '../../hooks/useLongPress';
+import { openAgentMemory, type AgentMemoryTarget } from '../memory/memory-store';
 import { HumanBody } from './MessageBody';
 import { MarkdownIsland } from './MarkdownIsland';
 import { TaskSummaryBar } from '../tasks/TaskSummaryBar';
@@ -125,6 +126,15 @@ interface MessageAction {
   run: () => void | Promise<void>;
 }
 
+/** 菜单项选中后菜单会卸载，焦点回到同一条消息的可聚焦操作按钮。 */
+function findMessageAction(messageId: string): HTMLElement | null {
+  for (const node of document.querySelectorAll<HTMLElement>('[data-message-id]')) {
+    if (node.dataset.messageId !== messageId) continue;
+    return node.querySelector<HTMLElement>('button[aria-label="消息操作"]');
+  }
+  return null;
+}
+
 /** 复制/引用同时供 `···` 下拉与右键菜单使用，避免两套逻辑漂移。 */
 function useMessageActions(
   item: HistoryMessage,
@@ -136,6 +146,7 @@ function useMessageActions(
   onToggleTask: (item: HistoryMessage) => void,
   onRecall: (item: HistoryMessage) => void,
   onForward: (item: HistoryMessage) => void,
+  memoryTarget: AgentMemoryTarget | null,
 ): MessageAction[] {
   const truncated = item.body_bytes > messageBodyBytes(item.preview);
   const mine = item.sender_id === identityId;
@@ -162,6 +173,16 @@ function useMessageActions(
     });
   }
   actions.push({ id: 'message-action-forward', label: '转发', run: () => onForward(item) });
+  if (memoryTarget) {
+    actions.push({
+      id: 'message-action-memory',
+      label: mine ? '查看我的记忆' : '查看发送者记忆',
+      run: () =>
+        openAgentMemory(memoryTarget, {
+          returnFocus: () => findMessageAction(item.message_id),
+        }),
+    });
+  }
   if (identityKind === 'human' && mine && !room.read_only) {
     actions.push({ id: 'message-action-recall', label: '撤回', run: () => onRecall(item) });
   }
@@ -203,6 +224,7 @@ function MessageActions({
   onToggleTask,
   onRecall,
   onForward,
+  memoryTarget,
 }: {
   item: HistoryMessage;
   room: RoomView;
@@ -213,6 +235,7 @@ function MessageActions({
   onToggleTask: (item: HistoryMessage) => void;
   onRecall: (item: HistoryMessage) => void;
   onForward: (item: HistoryMessage) => void;
+  memoryTarget: AgentMemoryTarget | null;
 }) {
   const actions = useMessageActions(
     item,
@@ -224,6 +247,7 @@ function MessageActions({
     onToggleTask,
     onRecall,
     onForward,
+    memoryTarget,
   );
   return (
     <DropdownMenuPrimitive.Root>
@@ -261,6 +285,7 @@ function MessageContextMenu({
   onToggleTask,
   onRecall,
   onForward,
+  memoryTarget,
   children,
 }: {
   item: HistoryMessage;
@@ -272,6 +297,7 @@ function MessageContextMenu({
   onToggleTask: (item: HistoryMessage) => void;
   onRecall: (item: HistoryMessage) => void;
   onForward: (item: HistoryMessage) => void;
+  memoryTarget: AgentMemoryTarget | null;
   children: ReactNode;
 }) {
   const actions = useMessageActions(
@@ -284,6 +310,7 @@ function MessageContextMenu({
     onToggleTask,
     onRecall,
     onForward,
+    memoryTarget,
   );
   return (
     <ContextMenuPrimitive.Root>
@@ -329,6 +356,9 @@ export const ChatMessage = memo(function ChatMessage({
   const shown = fullBody ?? item.preview;
   const collapsed = longBody && fullBody !== null && !longExpanded;
   const cards = useMemo(() => extractFileCards(shown), [shown]);
+  const memoryTarget: AgentMemoryTarget | null = agent
+    ? { actor_id: item.sender_id, name: mine ? identityName : name }
+    : null;
 
   const loadFull = async () => {
     if (fullBody !== null || loadingFull) return;
@@ -364,6 +394,7 @@ export const ChatMessage = memo(function ChatMessage({
         onToggleTask={onToggleTask}
         onRecall={onRecall}
         onForward={onForward}
+        memoryTarget={memoryTarget}
       >
         <li
           className={`msg${mine ? ' mine has-receipt' : ''}`}
@@ -463,6 +494,7 @@ export const ChatMessage = memo(function ChatMessage({
                 onToggleTask={onToggleTask}
                 onRecall={onRecall}
                 onForward={onForward}
+                memoryTarget={memoryTarget}
               />
             ) : null}
           </div>

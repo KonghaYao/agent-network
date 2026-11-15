@@ -4,6 +4,7 @@ import { useWebSession } from '../../hooks/useWebSession';
 import { accountAvatarFor } from '../../lib/agent-avatar';
 import type { WebIdentity } from '../../lib/identity';
 import { avatarColor, firstChar } from '../../lib/rooms';
+import { AgentAvatarMenu } from '../memory/AgentAvatarMenu';
 import { ArchiveAgentsDialog } from '../overlays/ArchiveAgentsDialog';
 import { DeviceHandoffDialog } from '../overlays/DeviceHandoffDialog';
 import { LogoutDialog } from '../overlays/LogoutDialog';
@@ -146,7 +147,17 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
   return (
     <>
       <div className="account" id="account">
-        <AccountAvatar me={me} />
+        {me?.kind === 'agent' ? (
+          <AgentAvatarMenu
+            target={{ actor_id: me.actor_id, name: me.name }}
+            label={`${me.name} 的账号头像`}
+            menuLabel="查看我的记忆"
+          >
+            <AccountAvatar me={me} />
+          </AgentAvatarMenu>
+        ) : (
+          <AccountAvatar me={me} />
+        )}
         <div className="account-main">
           <div className="account-name-row">
             <span className="account-name" id="account-name">

@@ -25,6 +25,7 @@ import { RenameRoomDialog } from '../overlays/RenameRoomDialog';
 import { ReportDialog } from '../overlays/ReportDialog';
 import { RoomMenuItems, type RoomOverlay } from '../overlays/RoomMenu';
 import { TransferDialog } from '../overlays/TransferDialog';
+import { openAgentMemory } from '../memory/memory-store';
 
 interface ContactBlockPage {
   items: {
@@ -63,6 +64,7 @@ export function RoomRowMenu({
   const [overlay, setOverlay] = useState<RoomOverlay | null>(null);
   const scrollRestoreRef = useRef<{ scroller: HTMLElement; top: number } | null>(null);
   const overlayRef = useRef<RoomOverlay | null>(null);
+  const memoryOpenedRef = useRef(false);
   const session = useWebSession();
   const identity = session.session?.identity ?? null;
   const token = session.session?.token ?? null;
@@ -83,6 +85,7 @@ export function RoomRowMenu({
   const handleOpenChange = useCallback(
     (next: boolean) => {
       if (next) {
+        memoryOpenedRef.current = false;
         // 打开时记录侧栏位置；置顶会把行移到列表顶部，关闭后必须回到
         // 用户原来的位置，而不是被焦点带回顶部。
         const scroller = findRowElement(room.room_id)?.closest<HTMLElement>('.sidebar-list');
@@ -107,6 +110,11 @@ export function RoomRowMenu({
       // 阻止 Radix 默认的 trigger.focus()：行已被置顶重排，浏览器会把它
       // 滚动到可视区域顶部。手动聚焦时关闭滚动。
       event.preventDefault();
+      // 记忆弹窗接管焦点，关闭菜单时不要抢回行焦点。
+      if (memoryOpenedRef.current) {
+        memoryOpenedRef.current = false;
+        return;
+      }
       // 覆盖层（如群成员对话框）接管焦点时不抢回行焦点。
       if (!overlayRef.current) {
         findRowElement(room.room_id)?.focus({ preventScroll: true });
@@ -225,6 +233,17 @@ export function RoomRowMenu({
                   : null
               }
               onOpen={setOverlay}
+              onViewMemory={
+                peer?.kind === 'agent'
+                  ? () => {
+                      memoryOpenedRef.current = true;
+                      openAgentMemory(
+                        { actor_id: peer.actor_id, name: peer.name },
+                        { returnFocus: () => findRowElement(room.room_id) },
+                      );
+                    }
+                  : null
+              }
               onTogglePreference={actions.onTogglePreference}
               onArchive={() => void actions.onArchive()}
               onCopyPrompt={() => void actions.onCopyPrompt()}
@@ -281,6 +300,7 @@ export function RoomRowMenu({
             ownerTransfer={detail?.owner_transfer ?? null}
             identityId={identity.actor_id}
             token={token}
+            memoryFallbackFocus={() => findRowElement(room.room_id)}
           />
           <AnnouncementDialog
             open={overlay === 'announcement'}
