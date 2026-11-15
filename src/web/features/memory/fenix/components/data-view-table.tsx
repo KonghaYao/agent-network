@@ -2,6 +2,8 @@
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/components/data-view-table.tsx
  * Modified for Agent Network: 平台导入替换；渲染结构不变。
+ * 阶段 4：发生时间列优先用服务端行里的 `occurred_at`（= occurred_start ?? mentioned_at），
+ * 避免只有 `occurred_at` 的行被显示成空；实体/标签胶囊用更深的文字色满足 WCAG AA。
  */
 
 import { EmptyState } from "../ui/empty-state";
@@ -48,7 +50,11 @@ export function DataViewTable({ factType, rows, currentPage, onPageChange, onRow
   const { t } = useTranslation(NS.HINDSIGHT);
 
   return (
-    <div className="min-h-0 min-w-0 flex-1 overflow-auto">
+    <div
+      className="min-h-0 min-w-0 flex-1 overflow-auto"
+      tabIndex={0}
+      aria-label={t("dataView.tableScrollRegion")}
+    >
       <div className="min-w-256">
         <div className="pb-4">
           {rows.length > 0 ? (
@@ -81,7 +87,9 @@ export function DataViewTable({ factType, rows, currentPage, onPageChange, onRow
                     </TableHeader>
                     <TableBody>
                       {paginatedRows.map((row: MemoryTableRow, idx: number) => {
-                        const occurredDisplay = formatDate(row.occurred_start);
+                        const occurredDisplay = formatDate(
+                          row.occurred_start ?? row.occurred_at ?? row.mentioned_at,
+                        );
                         const mentionedDisplay = formatDate(row.mentioned_at);
                         const entities = row.entities
                           ? typeof row.entities === "string"
@@ -109,7 +117,7 @@ export function DataViewTable({ factType, rows, currentPage, onPageChange, onRow
                                 <div className="flex min-w-0 items-center overflow-hidden">
                                   <span
                                     title={maskSecrets(entities[0] ?? "")}
-                                    className="block min-w-0 max-w-full truncate rounded-full bg-primary/10 px-1.5 py-0.5 text-3xs font-medium text-primary"
+                                    className="block min-w-0 max-w-full truncate rounded-full bg-primary/10 px-1.5 py-0.5 text-3xs font-medium text-emerald-800 dark:text-emerald-300"
                                   >
                                     {maskSecrets(entities[0] ?? "")}
                                   </span>
@@ -128,7 +136,7 @@ export function DataViewTable({ factType, rows, currentPage, onPageChange, onRow
                                 <div className="flex min-w-0 items-center overflow-hidden">
                                   <span
                                     title={maskSecrets(tags[0] ?? "")}
-                                    className="block min-w-0 max-w-full truncate rounded-md border border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 font-mono text-3xs font-medium text-amber-700"
+                                    className="block min-w-0 max-w-full truncate rounded-md border border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 font-mono text-3xs font-medium text-amber-800 dark:text-amber-300"
                                   >
                                     #{tags[0]}
                                   </span>

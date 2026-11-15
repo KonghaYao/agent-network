@@ -18,7 +18,7 @@ export interface TimelineFixtureItem {
 
 export function timelineGroups(
   items: TimelineFixtureItem[],
-  granularity: 'day' | 'week' | 'month',
+  granularity: 'year' | 'day' | 'week' | 'month',
   timeZone: string | undefined,
   offsetMinutes: number,
 ) {

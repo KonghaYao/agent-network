@@ -9,7 +9,9 @@
  *    defaults (documented risk in the PR description).
  * 4. Asserts the ported JS contains no innerHTML-style sinks.
  * 5. Asserts the vendor chunks stay under the phase size budget.
- * 6. Requires the production SPA manifest and asserts it does not reference `fenix/`.
+ * 6. Requires the production SPA manifest and asserts the Fenix memory code is
+ *    reachable only through the dynamic AgentMemoryDialog/DataView chunks
+ *    (stage 4 wires the vendor UI into the panel), and stays within budgets.
  */
 
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
@@ -165,8 +167,45 @@ check(
   'production SPA manifest exists (run `bun run build:web` first)',
 );
 if (hasProductionManifest) {
-  const productionManifest = read(productionManifestPath);
-  check(!productionManifest.includes('features/memory/fenix'), 'production SPA manifest does not reference fenix/');
+  const productionManifest = JSON.parse(read(productionManifestPath)) as Manifest;
+  const productionKeys = Object.keys(productionManifest);
+  const entryKey = productionKeys.find((key) => key.endsWith('src/web/app/main.tsx'));
+  const dialogKey = productionKeys.find(
+    (key) => key.includes('AgentMemoryDialog') && key.endsWith('.js'),
+  );
+  const dataViewKey = productionKeys.find(
+    (key) => key.includes('features/memory/fenix/components/DataView') && key.endsWith('.tsx'),
+  );
+  const entry = entryKey ? productionManifest[entryKey] : undefined;
+  const dialog = dialogKey ? productionManifest[dialogKey] : undefined;
+  const dataView = dataViewKey ? productionManifest[dataViewKey] : undefined;
+
+  check(Boolean(entry), 'production entry resolves in the manifest');
+  check(
+    Boolean(dialog && entry?.dynamicImports?.includes(dialogKey as string)),
+    'AgentMemoryDialog stays behind a dynamic import from the SPA entry',
+  );
+  check(
+    Boolean(dataView && dialog?.dynamicImports?.some((key) => key.includes('features/memory/fenix/components/DataView'))),
+    'Fenix DataView stays behind a dynamic import from AgentMemoryDialog',
+  );
+
+  const entryCode = entry ? read(join(root, 'dist/web', entry.file)) : '';
+  check(
+    !entryCode.includes('fenix-memory-root') && !entryCode.includes('fenix-constellation'),
+    'production entry does not inline Fenix memory markup',
+  );
+  const entrySize = entry ? sizeOf(join(root, 'dist/web', entry.file)) : 0;
+  check(entrySize > 0 && entrySize <= 950 * 1024, `production entry size ${entrySize} B <= 950 KiB`);
+
+  const memoryJs = productionKeys
+    .map((key) => productionManifest[key])
+    .filter((chunk): chunk is NonNullable<typeof chunk> => Boolean(chunk?.file))
+    .filter((chunk) =>
+      /(?:AgentMemoryDialog|DataView|MemoryDetailModal|MemoryEntities)-/.test(chunk.file),
+    )
+    .reduce((total, chunk) => total + sizeOf(join(root, 'dist/web', chunk.file)), 0);
+  check(memoryJs > 0 && memoryJs <= 300 * 1024, `memory lazy JS total ${memoryJs} B <= 300 KiB`);
 }
 
 if (failures > 0) {

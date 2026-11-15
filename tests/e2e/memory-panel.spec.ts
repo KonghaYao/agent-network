@@ -3,10 +3,22 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import {
+  SECRET_BEARER,
+  SECRET_CONTEXT,
+  SECRET_ENTITY_AWS,
+  SECRET_TAG_PASSWORD,
+  SECRET_URL,
+  callsOf,
+  installMemoryFenixStub,
+  type MemoryCall,
+} from './fixtures/memory-fenix';
+
 /**
- * Agent 记忆弹窗：真实浏览器 + 真实 MCP 身份/房间；
- * 只对记忆工具的只读响应做请求级 fixture，验证分页、搜索、详情掩码与焦点。
- * 权限拒绝用真实服务端（拉黑后读取）验证，不替换成功响应。
+ * Agent 记忆弹窗的入口、权限与焦点行为。
+ *
+ * 记忆数据由 Fenix 事实视角渲染；具体视图/单次取数断言在
+ * `memory-fenix.spec.ts`。本文件只覆盖入口、真实服务端权限、390 与焦点归还。
  */
 
 async function baseUrl(): Promise<string> {
@@ -92,184 +104,6 @@ async function login(page: Page, base: string, token: string): Promise<void> {
 
 function row(page: Page, roomId: string) {
   return page.locator(`#room-list a[data-room-id="${roomId}"]`);
-}
-
-interface MemoryCall {
-  name: string;
-  args: Record<string, unknown>;
-}
-
-interface RpcBody {
-  id?: unknown;
-  params?: { name?: unknown; arguments?: unknown };
-}
-
-const SECRET_BEARER = 'sk-testonly-memory-panel-token';
-const SECRET_URL = 'SECRET-URL-TOKEN';
-const SECRET_CONTEXT = 'sk-testonly-context-token';
-const SECRET_SOURCE = 'SRC-TOKEN-987654';
-const SECRET_PASSWORD = 'hunter2-panel-secret';
-const SECRET_COOKIE = 'session-cookie-778899';
-const SECRET_SET_COOKIE = 'set-cookie-445566';
-const SECRET_PRIVATE_KEY = 'MIIEowIBAAKCAQEAprivatekeybody';
-const SECRET_AWS = 'AKIAIOSFODNN7EXAMPLE';
-const SECRET_ENTITY_AWS = 'AKIAENTITYSECRET1234';
-const SECRET_ENTITY_PASSWORD = 'entity-secret-800';
-const SECRET_TAG_PASSWORD = 'tag-secret-900';
-
-const MEMORY_TEXT = [
-  `Deploy runbook uses Authorization: Bearer ${SECRET_BEARER} and https://example.com/hook?token=${SECRET_URL}`,
-  `password=${SECRET_PASSWORD}`,
-  `Cookie: session=${SECRET_COOKIE}`,
-  `Set-Cookie: sid=${SECRET_SET_COOKIE}`,
-  `${SECRET_AWS}`,
-  '-----BEGIN RSA PRIVATE KEY-----',
-  SECRET_PRIVATE_KEY,
-  '-----END RSA PRIVATE KEY-----',
-].join('\n');
-
-function memoryItem(id: string, type: 'world' | 'experience' | 'observation', text: string) {
-  return {
-    id,
-    text,
-    fact_type: type,
-    state: 'valid' as const,
-    mentioned_at: '2026-10-01T09:30:00.000Z',
-    occurred_start: null,
-    occurred_end: null,
-    entities: ['deploy', 'runbook'] as string[],
-    proof_count: 3,
-    tags: [] as string[],
-  };
-}
-
-async function installMemoryStub(
-  page: Page,
-  calls: MemoryCall[],
-  options: { panelDisabled?: boolean; actorName: string; actorId: string },
-): Promise<void> {
-  const actor = {
-    actor_id: options.actorId,
-    name: options.actorName,
-    kind: 'agent' as const,
-    archived: false,
-    disabled: false,
-  };
-  const primary = memoryItem('mem-1', 'world', MEMORY_TEXT);
-  // 实体与标签同样可能被上游写入敏感值，默认渲染必须走 maskSecrets。
-  primary.entities = ['deploy', SECRET_ENTITY_AWS, `password=${SECRET_ENTITY_PASSWORD}`];
-  primary.tags = ['ops', SECRET_ENTITY_AWS, `password=${SECRET_TAG_PASSWORD}`];
-  const items = [
-    primary,
-    memoryItem('mem-2', 'experience', 'Experience: deploy window is Thursday; retry after rollback.'),
-    memoryItem('mem-3', 'observation', 'Observation: the deploy dashboard was slow twice.'),
-    memoryItem('mem-4', 'world', 'World: the staging deploy uses an isolated project.'),
-  ];
-
-  await page.route('**/mcp', async (route) => {
-    const request = route.request();
-    if (request.method() !== 'POST') {
-      await route.continue();
-      return;
-    }
-    let body: RpcBody | null = null;
-    try {
-      body = JSON.parse(request.postData() ?? 'null') as RpcBody;
-    } catch {
-      body = null;
-    }
-    const name = typeof body?.params?.name === 'string' ? body.params.name : null;
-    if (!name || !name.startsWith('network_agent_memory_')) {
-      await route.continue();
-      return;
-    }
-    const args =
-      body?.params?.arguments && typeof body.params.arguments === 'object'
-        ? (body.params.arguments as Record<string, unknown>)
-        : {};
-    calls.push({ name, args });
-
-    let structuredContent: unknown;
-    if (name === 'network_agent_memory_overview') {
-      structuredContent = options.panelDisabled
-        ? { available: false, reason: 'panel_disabled', actor, fetched_at: Date.now(), stats: null }
-        : {
-            available: true,
-            reason: 'ok',
-            actor,
-            fetched_at: 1_760_000_000_000,
-            stats: {
-              total_nodes: 42,
-              total_links: 81,
-              total_documents: 7,
-              by_fact_type: { world: 12, experience: 20, observation: 10 },
-              links_by_type: { semantic: 40, temporal: 20, entity: 15, caused_by: 6 },
-              pending_operations: 2,
-              failed_operations: 1,
-              last_write_at: '2026-10-01T10:00:00.000Z',
-              last_consolidated_at: '2026-10-01T09:00:00.000Z',
-            },
-          };
-    } else if (name === 'network_agent_memory_list') {
-      const offset = Number(args.offset ?? 0);
-      const q = typeof args.q === 'string' ? args.q.toLowerCase() : '';
-      const type = typeof args.type === 'string' ? args.type : '';
-      const filtered = items.filter(
-        (item) =>
-          (!type || item.fact_type === type) &&
-          (!q || item.text.toLowerCase().includes(q)),
-      );
-      const pageItems = filtered.slice(offset, offset + 2);
-      const next = offset + pageItems.length < filtered.length ? offset + pageItems.length : null;
-      structuredContent = {
-        available: true,
-        reason: 'ok',
-        actor,
-        fetched_at: 1_760_000_000_000,
-        items: pageItems,
-        total: filtered.length,
-        limit: 2,
-        offset,
-        has_more: next !== null,
-        next_offset: next,
-        truncated: false,
-      };
-    } else if (name === 'network_agent_memory_get') {
-      structuredContent = {
-        available: true,
-        reason: 'ok',
-        actor,
-        fetched_at: 1_760_000_000_000,
-        memory: {
-          ...items[0],
-          id: String(args.memory_id ?? 'mem-1'),
-          context: `context Authorization: Bearer ${SECRET_CONTEXT}`,
-          source_memories: [
-            {
-              id: 'source-1',
-              text: `source token=${SECRET_SOURCE}`,
-              type: 'world',
-              mentioned_at: '2026-09-30T10:00:00.000Z',
-            },
-          ],
-          history_count: 2,
-          text_truncated: false,
-        },
-      };
-    } else {
-      await route.continue();
-      return;
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: body?.id ?? null,
-        result: { structuredContent },
-      }),
-    });
-  });
 }
 
 async function openRowMemory(page: Page, roomId: string): Promise<void> {
@@ -381,31 +215,26 @@ test.describe('Agent 记忆弹窗', () => {
     });
   });
 
-  test('Panel disabled 状态来自只读工具', async ({ page }) => {
+  test('Panel disabled 显示不可用态，并归还焦点', async ({ page }) => {
     const calls: MemoryCall[] = [];
-    await installMemoryStub(page, calls, {
+    await installMemoryFenixStub(page, calls, {
       panelDisabled: true,
       actorName: agentName,
       actorId: agentId,
     });
     await login(page, base, tokenA);
     await openRowMemory(page, directRoom);
-    await expect(page.locator('#memory-overview-state')).toHaveAttribute(
-      'data-state',
-      'panel_disabled',
-    );
-    await expect(page.locator('#memory-overview-state')).toContainText(
-      '当前部署未开启 Agent 记忆面板',
-    );
-    await expect(page.locator('#memory-facts-list')).toHaveCount(0);
+    await expect(page.getByRole('alert')).toContainText('记忆暂不可用', { timeout: 15_000 });
+    await expect(page.getByRole('alert')).toContainText('当前部署未开启 Agent 记忆面板');
+    await expect(page.locator('table')).toHaveCount(0);
     await page.keyboard.press('Escape');
     await expect(page.locator('#agent-memory-dialog')).toBeHidden();
     await expect(row(page, directRoom)).toBeFocused();
   });
 
-  test('概览、分页、搜索、筛选、详情掩码与 axe', async ({ page }) => {
+  test('事实视角：表格、掩码、详情揭示、搜索、视角切换与 axe', async ({ page }) => {
     const calls: MemoryCall[] = [];
-    await installMemoryStub(page, calls, {
+    await installMemoryFenixStub(page, calls, {
       actorName: agentName,
       actorId: agentId,
     });
@@ -415,67 +244,39 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(page.locator('#agent-memory-target')).toHaveText(agentName);
     await expect(page.locator('#agent-memory-readonly')).toHaveText('只读');
     await expect(page.locator('#agent-memory-note')).toContainText('后端原始记忆');
-    await expect(page.locator('#memory-stat-nodes')).toHaveText('42');
-    await expect(page.locator('#memory-stat-links')).toHaveText('81');
-    await expect(page.locator('#memory-stat-docs')).toHaveText('7');
-    await expect(page.locator('#memory-overview-jobs')).toContainText('后台仍在整理 2 条记忆');
-    await expect(page.locator('#memory-overview-jobs')).toContainText('有 1 条整理失败');
-    await expect(page.locator('#memory-overview-last-write')).not.toHaveText('—');
+    await expect(page.locator('[data-fenix-summary]')).toContainText(
+      '显示 12 条记忆中的 3 条',
+      { timeout: 15_000 },
+    );
 
-    const facts = page.locator('#memory-facts-list .memory-fact');
-    await page.locator('#memory-tab-facts').click();
-    await expect(page.locator('#memory-panel-facts')).toBeVisible();
-    await expect(facts).toHaveCount(2);
-    await expect(page.locator('#memory-facts-range')).toContainText('已显示 2 / 4 条');
-    await page.locator('#memory-facts-more').click();
-    await expect(facts).toHaveCount(4);
-    await expect(page.locator('#memory-facts-more')).toHaveCount(0);
+    // 表格：一次 graph 带回的行，本地展示窗口。
+    await page.getByRole('button', { name: '表格' }).click();
+    const rows = page.locator('table tbody tr');
+    await expect(rows).toHaveCount(3);
+    const tableText = (await page.locator('.agent-memory-content').textContent()) ?? '';
+    expect(tableText).not.toContain(SECRET_ENTITY_AWS);
+    expect(tableText).not.toContain(SECRET_TAG_PASSWORD);
+    expect(tableText).toContain('[已隐藏]');
 
-    // 事实列表的实体预览默认掩码；详情、上下文、来源与标签默认掩码。
-    const factListText = await page.locator('#memory-facts-list').textContent();
-    expect(factListText).not.toContain(SECRET_ENTITY_AWS);
-    expect(factListText).not.toContain(SECRET_ENTITY_PASSWORD);
-    expect(factListText).toContain('[已隐藏]');
-
-    await facts.first().click();
-    await expect(page.locator('#memory-detail-text')).toBeVisible();
+    // 详情默认掩码；查看原文后才渲染原文。
+    await rows.first().click();
+    const detailText = page.locator('[data-memory-detail-text]');
+    await expect(detailText).toBeVisible({ timeout: 15_000 });
     const dialogText = (await page.locator('#agent-memory-dialog').textContent()) ?? '';
-    for (const secret of [
-      SECRET_BEARER,
-      SECRET_URL,
-      SECRET_CONTEXT,
-      SECRET_SOURCE,
-      SECRET_PASSWORD,
-      SECRET_COOKIE,
-      SECRET_SET_COOKIE,
-      SECRET_PRIVATE_KEY,
-      SECRET_AWS,
-      SECRET_ENTITY_AWS,
-      SECRET_ENTITY_PASSWORD,
-      SECRET_TAG_PASSWORD,
-    ]) {
+    for (const secret of [SECRET_BEARER, SECRET_URL, SECRET_CONTEXT, SECRET_ENTITY_AWS]) {
       expect(dialogText).not.toContain(secret);
     }
     expect(dialogText).toContain('[已隐藏]');
-    for (const forbidden of ['bank', 'bank_id', 'space_id', 'provider', 'document_id', 'chunk_id']) {
+    for (const forbidden of ['bank_id', 'space_id', 'provider', 'document_id', 'chunk_id']) {
       expect(dialogText.toLowerCase()).not.toContain(forbidden);
     }
-    await page.locator('#memory-detail-reveal').click();
-    await expect(page.locator('#memory-detail-text')).toContainText(SECRET_BEARER);
-    await expect(page.locator('#memory-detail-text')).toContainText(SECRET_URL);
-    await expect(page.locator('#memory-detail-text')).toContainText(SECRET_PASSWORD);
-    await expect(page.locator('#memory-detail-text')).toContainText(SECRET_COOKIE);
-    await expect(page.locator('#memory-detail-text')).toContainText(SECRET_SET_COOKIE);
-    await expect(page.locator('#memory-detail-text')).toContainText(SECRET_AWS);
-    await expect(page.locator('#memory-detail-text')).toContainText(SECRET_PRIVATE_KEY);
-    await expect(page.locator('#memory-detail-reveal')).toHaveText('隐藏原文');
-    await expect(page.locator('#memory-detail-context')).toContainText(SECRET_CONTEXT);
-    await expect(page.locator('#memory-detail-sources')).toContainText(SECRET_SOURCE);
-    await expect(page.locator('#memory-detail-tags')).toContainText(SECRET_ENTITY_AWS);
-    await expect(page.locator('#memory-detail-tags')).toContainText(`password=${SECRET_TAG_PASSWORD}`);
-    // 实体没有「查看原文」入口，即使正文已展开也必须保持掩码。
-    await expect(facts.first()).not.toContainText(SECRET_ENTITY_AWS);
-    await expect(facts.first()).not.toContainText(SECRET_ENTITY_PASSWORD);
+    await page.getByRole('button', { name: '查看原文' }).click();
+    await expect(detailText).toContainText(SECRET_BEARER);
+    await expect(detailText).toContainText(SECRET_URL);
+    await expect(page.locator('[data-memory-detail-context]')).toContainText(SECRET_CONTEXT);
+    await page.getByRole('button', { name: 'Close' }).click();
+    await expect(detailText).toHaveCount(0);
+    await expect(page.locator('#agent-memory-dialog')).toBeVisible();
 
     const serious = (
       await new AxeBuilder({ page })
@@ -485,36 +286,25 @@ test.describe('Agent 记忆弹窗', () => {
     ).violations.filter((item) => item.impact === 'critical' || item.impact === 'serious');
     expect(serious.map((item) => `${item.id}(${item.impact})`)).toEqual([]);
 
-    // 关闭详情后焦点回到触发详情的事实按钮。
-    await page.locator('#memory-detail-close').click();
-    await expect(page.locator('#memory-detail-text')).toHaveCount(0);
-    await expect(facts.first()).toBeFocused();
+    // 搜索：一次 graph，不分页累加。
+    await page.locator('#memory-fenix-search').fill('runbook');
+    await page.locator('#memory-fenix-search').press('Enter');
+    await expect.poll(() => callsOf(calls, 'network_agent_memory_graph').length).toBe(2);
+    expect(callsOf(calls, 'network_agent_memory_graph')[1]!.args.q).toBe('runbook');
+    await page.getByRole('button', { name: '表格' }).click();
+    await expect(rows).toHaveCount(1);
+    expect(callsOf(calls, 'network_agent_memory_list')).toHaveLength(0);
 
-    // Escape 优先关闭详情并归还焦点，不关闭整个弹窗。
-    await facts.first().click();
-    await expect(page.locator('#memory-detail-text')).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(page.locator('#memory-detail-text')).toHaveCount(0);
-    await expect(page.locator('#agent-memory-dialog')).toBeVisible();
-    await expect(facts.first()).toBeFocused();
-
-    const listCalls = () => calls.filter((call) => call.name === 'network_agent_memory_list');
-    const beforeSearch = listCalls().length;
-    await page.locator('#memory-facts-search').fill('runbook');
-    await page.locator('#memory-facts-search').press('Enter');
-    await expect.poll(() => listCalls().length).toBeGreaterThan(beforeSearch);
-    await expect.poll(() => listCalls().some((call) => call.args.q === 'runbook')).toBe(true);
-    await expect(facts).toHaveCount(1);
-    await expect(facts.first()).toContainText('Deploy runbook');
-
-    await page.locator('#memory-facts-search').fill('');
-    await page.locator('#memory-facts-search').press('Enter');
-    const beforeType = listCalls().length;
-    await page.selectOption('#memory-type-filter', 'experience');
-    await expect.poll(() => listCalls().length).toBeGreaterThan(beforeType);
-    await expect.poll(() => listCalls().some((call) => call.args.type === 'experience')).toBe(true);
-    await expect(facts).toHaveCount(1);
-    await expect(facts.first()).toContainText('Experience: deploy window');
+    // 清空搜索后切到经历视角：各一次 graph，type 正确。
+    await page.locator('#memory-fenix-search').fill('');
+    await page.locator('#memory-fenix-search').press('Enter');
+    await expect.poll(() => callsOf(calls, 'network_agent_memory_graph').length).toBe(3);
+    await page.locator('#memory-perspective-experience').click();
+    await expect.poll(() => callsOf(calls, 'network_agent_memory_graph').length).toBe(4);
+    expect(callsOf(calls, 'network_agent_memory_graph')[3]!.args.type).toBe('experience');
+    await page.getByRole('button', { name: '表格' }).click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toContainText('Experience: deploy window');
 
     await page.locator('#agent-memory-close').click();
     await expect(page.locator('#agent-memory-dialog')).toBeHidden();
@@ -528,7 +318,7 @@ test.describe('Agent 记忆弹窗', () => {
 
   test('消息头像菜单打开发送者记忆并归还焦点', async ({ page }) => {
     const calls: MemoryCall[] = [];
-    await installMemoryStub(page, calls, { actorName: agentName, actorId: agentId });
+    await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
     await login(page, base, tokenA);
     await page.goto(`${base}/c/${directRoom}`);
     await expect(page.locator(`[data-message-id="${agentMessageId}"]`)).toBeVisible({
@@ -546,7 +336,7 @@ test.describe('Agent 记忆弹窗', () => {
 
   test('群成员头像打开记忆，成员弹窗关闭后焦点回到房间菜单', async ({ page }) => {
     const calls: MemoryCall[] = [];
-    await installMemoryStub(page, calls, { actorName: agentName, actorId: agentId });
+    await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
     await login(page, base, tokenA);
     await page.goto(`${base}/c/${groupRoom}`);
     await expect(page.locator('#room-menu-toggle')).toBeVisible({ timeout: 15_000 });
@@ -565,7 +355,7 @@ test.describe('Agent 记忆弹窗', () => {
 
   test('Agent 自身账号头像右键打开记忆', async ({ page }) => {
     const calls: MemoryCall[] = [];
-    await installMemoryStub(page, calls, { actorName: agentName, actorId: agentId });
+    await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
     await login(page, base, agentToken);
     await expect(page.locator('#account-avatar')).toBeVisible({ timeout: 15_000 });
     const trigger = page.locator('.account .memory-avatar-trigger');
@@ -577,7 +367,7 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(trigger).toBeFocused();
   });
 
-  test('拉黑后的真实服务端拒绝显示 FORBIDDEN 空态', async ({ page }) => {
+  test('拉黑后的真实服务端拒绝显示 FORBIDDEN', async ({ page }) => {
     await login(page, base, tokenA);
     await page.goto(`${base}/c/${blockedGroup}`);
     await expect(page.locator('#room-menu-toggle')).toBeVisible({ timeout: 15_000 });
@@ -590,45 +380,70 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(page.locator('#memory-avatar-menu')).toBeVisible();
     await page.locator('#memory-avatar-open').click();
     await expect(page.locator('#agent-memory-dialog')).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('#memory-overview-state')).toHaveAttribute(
-      'data-state',
-      'forbidden',
-    );
-    await expect(page.locator('#memory-overview-state')).toContainText('无权查看');
-    await expect(page.locator('#memory-facts-list')).toHaveCount(0);
+    await expect(page.getByRole('alert')).toContainText('无权访问该记忆库', { timeout: 15_000 });
+    await expect(page.locator('table')).toHaveCount(0);
     await page.locator('#agent-memory-close').click();
     await expect(page.locator('#room-menu-toggle')).toBeFocused();
   });
 
-  test('390 移动端全屏单列、底部详情抽屉且无横向溢出', async ({ page }) => {
+  test('390 移动端全屏单列、表格内部滚动、详情弹窗且无横向溢出', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const calls: MemoryCall[] = [];
-    await installMemoryStub(page, calls, { actorName: agentName, actorId: agentId });
+    await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
     await login(page, base, tokenA);
     await openRowMemory(page, directRoom);
+
+    // 视角栏与内容区必须单列堆叠：grid 只有一条列轨，内容区在视角栏下方且不越界。
+    const layout = await page.locator('.agent-memory-fenix-body').evaluate((element) => {
+      const styles = getComputedStyle(element);
+      const aside = element.querySelector<HTMLElement>('.agent-memory-perspectives');
+      const content = element.querySelector<HTMLElement>('.agent-memory-content');
+      if (!aside || !content) throw new Error('缺少视角栏或内容区');
+      const asideRect = aside.getBoundingClientRect();
+      const contentRect = content.getBoundingClientRect();
+      return {
+        display: styles.display,
+        columns: styles.gridTemplateColumns.trim().split(/\s+/).filter(Boolean).length,
+        horizontalOverflow: element.scrollWidth - element.clientWidth,
+        stacked: contentRect.top >= asideRect.bottom - 1,
+        contentLeft: contentRect.left,
+        contentRight: contentRect.right,
+      };
+    });
+    expect(layout.display).toBe('grid');
+    expect(layout.columns).toBe(1);
+    expect(layout.horizontalOverflow).toBeLessThanOrEqual(1);
+    expect(layout.stacked).toBe(true);
+    expect(layout.contentLeft).toBeGreaterThanOrEqual(0);
+    expect(layout.contentRight).toBeLessThanOrEqual(391);
 
     const box = await page.locator('#agent-memory-dialog').boundingBox();
     expect(box).not.toBeNull();
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.width).toBeGreaterThanOrEqual(389);
     expect(box!.width).toBeLessThanOrEqual(391);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      ),
+    ).toBeLessThanOrEqual(1);
 
-    await expect(page.locator('.memory-detail-column')).toBeHidden();
-    await page.locator('#memory-tab-facts').click();
-    await expect(page.locator('#memory-panel-facts')).toBeVisible();
-    await page.locator('#memory-facts-list .memory-fact').first().click();
-    await expect(page.locator('.memory-detail-column')).toBeVisible();
-    const detail = await page.locator('.memory-detail-column').boundingBox();
-    expect(detail).not.toBeNull();
-    expect(detail!.x).toBeGreaterThanOrEqual(0);
-    expect(detail!.width).toBeGreaterThanOrEqual(389);
-    expect(detail!.y + detail!.height).toBeLessThanOrEqual(845);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
-
-    await page.locator('#memory-detail-close').click();
-    await expect(page.locator('.memory-detail-column')).toBeHidden();
-    await page.locator('#agent-memory-close').click();
-    await expect(page.locator('#agent-memory-dialog')).toBeHidden();
+    await page.getByRole('button', { name: '表格' }).click();
+    await expect(page.locator('table tbody tr')).toHaveCount(3, { timeout: 15_000 });
+    await page.locator('table tbody tr').first().click();
+    const detail = page.locator('[data-memory-detail-text]');
+    await expect(detail).toBeVisible({ timeout: 15_000 });
+    await expect(detail).toContainText('[已隐藏]');
+    const modal = await page.locator('[role="dialog"]').last().boundingBox();
+    expect(modal).not.toBeNull();
+    expect(modal!.x).toBeGreaterThanOrEqual(0);
+    expect(modal!.x + modal!.width).toBeLessThanOrEqual(391);
+    await page.getByRole('button', { name: 'Close' }).click();
+    await expect(detail).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      ),
+    ).toBeLessThanOrEqual(1);
   });
 });

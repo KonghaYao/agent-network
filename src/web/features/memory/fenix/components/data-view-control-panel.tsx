@@ -1,7 +1,8 @@
 /**
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/components/data-view-control-panel.tsx
- * Modified for Agent Network: 平台导入替换；控件结构与计数不变。
+ * Modified for Agent Network: 平台导入替换；控件结构与计数不变；着色依据下拉补
+ * `aria-label`，避免窄屏隐藏面板仍被 axe 判定为无名称控件。
  */
 
 import { Button } from "../ui/button";
@@ -50,7 +51,7 @@ export function DataViewControlPanel({
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">{t("dataView.colorBy")}</Label>
             <Select value={recencyBasis} onValueChange={(value) => onRecencyBasisChange(value as RecencyBasis)}>
-              <SelectTrigger className="h-8 w-full text-xs">
+              <SelectTrigger className="h-8 w-full text-xs" aria-label={t("dataView.colorBy")}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

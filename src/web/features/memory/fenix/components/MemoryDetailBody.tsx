@@ -2,11 +2,14 @@
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/components/MemoryDetailBody.tsx
  * Modified for Agent Network: 平台导入替换；字段区结构与标签注入方式不变。
+ * 阶段 4：正文与上下文默认经 `maskSecrets`，只有用户点击「查看原文」后才渲染原文
+ * （`aria-expanded`）；实体与标签即使揭示后也继续掩码。
  */
 
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Calendar, Check, Copy, Users } from "lucide-react";
+import { useState } from "react";
 import { maskSecrets } from '../../mask';
 import type { MemoryDetail } from "../types";
 
@@ -45,6 +48,8 @@ export interface MemoryDetailBodyLabels {
   entities: string;
   tags: string;
   memoryId: string;
+  revealText: string;
+  hideText: string;
 }
 
 export type MemoryDetailBodyVariant = "modal" | "panel";
@@ -115,6 +120,7 @@ export interface MemoryDetailBodyProps {
 /** 正文外层容器：沿用调用方外壳的滚动/间距 class。 */
 export function MemoryDetailBody({ memory, labels, variant, onCopyId, copiedId, className }: MemoryDetailBodyProps) {
   const style = BODY_STYLES[variant];
+  const [revealed, setRevealed] = useState(false);
   const entityLabels = toEntityLabels(memory.entities).map((entity) => maskSecrets(entity));
   const memoryId = memory.id || memory.node_id;
   const isObservation = memory.fact_type === "observation" || memory.type === "observation";
@@ -124,14 +130,27 @@ export function MemoryDetailBody({ memory, labels, variant, onCopyId, copiedId, 
       {/* 文本 */}
       <section>
         <div className={style.label}>{labels.text}</div>
-        <div className={style.textValue}>{maskSecrets(memory.text)}</div>
+        <div className={style.textValue} data-memory-detail-text>
+          {revealed ? memory.text : maskSecrets(memory.text)}
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-1 h-7 px-2 text-xs"
+          aria-expanded={revealed}
+          onClick={() => setRevealed((value) => !value)}
+        >
+          {revealed ? labels.hideText : labels.revealText}
+        </Button>
       </section>
 
       {/* 上下文 */}
       {memory.context && !(style.hideObservationContext && isObservation) && (
         <section>
           <div className={style.labelTight}>{labels.context}</div>
-          <div className={style.contextValue}>{maskSecrets(memory.context)}</div>
+          <div className={style.contextValue} data-memory-detail-context>
+            {revealed ? memory.context : maskSecrets(memory.context)}
+          </div>
         </section>
       )}
 

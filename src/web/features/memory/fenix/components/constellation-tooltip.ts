@@ -51,12 +51,16 @@ export function updateConstellationTooltip(input: ConstellationTooltipInput): vo
     s.prevHoverIndex = idx;
     const meta = node.metadata as Record<string, unknown> | undefined;
     const fullText = maskSecrets((meta?.text as string) || node.label || node.id);
-    const entities: string[] = meta?.entities
-      ? String(meta.entities)
-          .split(",")
-          .map((e: string) => e.trim())
-          .filter(Boolean)
-      : [];
+    // 实体名必须逐个掩码再拼接：只掩码 join 后的整串时，实体自身含逗号会被前端
+    // split 成多段，凭据可能跨段逃过匹配；数组直接取元素，避免 String([]) 的逗号拼接。
+    const entities: string[] = (Array.isArray(meta?.entities)
+      ? meta.entities.map((entity: unknown) => String(entity))
+      : meta?.entities
+        ? String(meta.entities).split(",")
+        : []
+    )
+      .map((entity) => maskSecrets(entity.trim()))
+      .filter(Boolean);
     const nodeColor = scene.preparedNodes[idx]!.heatColor;
     const linkCount = scene.preparedNodes[idx]!.linkCount;
     const factType = maskSecrets((meta?.fact_type as string) || node.group || "memory");

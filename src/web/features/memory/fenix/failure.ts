@@ -1,7 +1,10 @@
 /**
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/failure.ts
- * Modified for Agent Network: 把上游 ApiError 判定改为本地 FenixApiError，其余失败分类逻辑不变。
+ * Modified for Agent Network: 把上游 ApiError 判定改为本地 FenixApiError，其余失败分类逻辑不变；
+ * 新增 `unavailable` 分类（服务端 `available=false` 的 no_space/panel_disabled/backend_*
+ * 是可预期状态，不是可重试故障，也不是空数据）。`bank_missing` 不进入这里：
+ * `memory-api.ts` 按 `availabilityKind` 把它当空态渲染。
  */
 
 import { FenixApiError } from "./api";
@@ -19,10 +22,16 @@ import { FenixApiError } from "./api";
  * 响应**没有** code 时才按 HTTP status 归一（401/403 → `UNAUTHORIZED`）；带 code 的响应原样透传。
  * 只认 `UNAUTHORIZED` 会漏掉本包全部 403，正是这个缺口被复核指出的形态。
  */
-export type HindsightFailure = { kind: "forbidden" } | { kind: "error"; detail: string };
+export type HindsightFailure =
+  | { kind: "forbidden" }
+  | { kind: "unavailable"; detail: string }
+  | { kind: "error"; detail: string };
 
 /** 授权类错误码：`forbidden` 是本包后端值，`UNAUTHORIZED` 是 request 层对无 code 的 401/403 归一值。 */
-const FORBIDDEN_CODES: ReadonlySet<string> = new Set(["forbidden", "UNAUTHORIZED"]);
+const FORBIDDEN_CODES: ReadonlySet<string> = new Set(["forbidden", "UNAUTHORIZED", "PERMISSION_DENIED"]);
+
+/** 可预期但不可浏览的状态：不渲染重试入口，也不伪装成空数据。 */
+const UNAVAILABLE_CODES: ReadonlySet<string> = new Set(["UNAVAILABLE"]);
 
 /** 是否为授权类失败（401/403）：调用方据此决定不给重试入口。 */
 export function isForbiddenFailure(error: unknown): boolean {
@@ -39,5 +48,8 @@ export function isForbiddenFailure(error: unknown): boolean {
 export function toHindsightFailure(error: unknown, fallbackDetail = ""): HindsightFailure {
   if (isForbiddenFailure(error)) return { kind: "forbidden" };
   const message = error instanceof Error ? error.message : "";
+  if (error instanceof FenixApiError && UNAVAILABLE_CODES.has(error.code)) {
+    return { kind: "unavailable", detail: message || fallbackDetail };
+  }
   return { kind: "error", detail: message || fallbackDetail };
 }
