@@ -194,7 +194,13 @@ export function ConstellationCanvas({
     canvas.dataset.visibleCount = String(stats.visible);
     canvas.dataset.paintMs = elapsed.toFixed(1);
     canvas.dataset.paintCount = String(Number(canvas.dataset.paintCount ?? '0') + 1);
-    canvas.dataset.nodePoints = JSON.stringify(stats.points);
+    // 测试需要逐点坐标；默认不把整张图的 JSON 写进生产 DOM。
+    const exposePoints =
+      typeof window !== 'undefined' &&
+      (window as Window & { __AGENT_NETWORK_E2E_POINTS__?: boolean })
+        .__AGENT_NETWORK_E2E_POINTS__ === true;
+    if (exposePoints) canvas.dataset.nodePoints = JSON.stringify(stats.points);
+    else delete canvas.dataset.nodePoints;
     canvas.dataset.dpr = dpr.toFixed(2);
     canvas.dataset.width = String(state.W);
     canvas.dataset.height = String(state.H);
@@ -290,7 +296,7 @@ export function ConstellationCanvas({
   const content = (
     <div
       ref={wrapRef}
-      className={`memory-graph${isFullscreen ? ' is-fullscreen' : ''}`}
+      className={`memory-graph memory-graph-constellation${isFullscreen ? ' is-fullscreen' : ''}`}
       role="region"
       aria-label={isFullscreen ? '星座图全屏' : '星座图'}
       data-fullscreen={isFullscreen ? 'true' : 'false'}

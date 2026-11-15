@@ -4,15 +4,22 @@
  * 移植自 FenixAgent `constellation-paint.ts`（Apache-2.0，commit 72a1e47）。
  * 修改：由持续 RAF 改为组件按需调用；增加选中节点描边；统计值返回给组件
  * 写入 DOM data 属性与 HUD；仍保留 hover 时只画邻边、邻居高亮、其余淡化，
- * 热度色、节点半径、光晕与二次曲线参数与原版一致。
+ * 热度色、节点半径、光晕与二次曲线参数与原版一致。标签改为节点绘制完成后
+ * 按度数优先放置：48px 栅格 + 实测文本宽度，避让高度数节点，最多 24 个。
  */
 
 import { drawConstellationLabel } from './constellation-labels';
-import { nodeRadius, type ConstellationScene } from './constellation-scene';
+import { FONT_INLINE, nodeRadius, type ConstellationScene } from './constellation-scene';
 import type { ConstellationViewState } from './constellation-state';
 
 const MARGIN = 60;
-const LABEL_GRID_CELL = 90;
+const LABEL_GRID_CELL = 48;
+const INLINE_LABEL_HEIGHT = 14;
+const INLINE_LABEL_MAX_CHARS = 45;
+/** 度数达到该值的节点视为关键节点，行内标签主动避让。 */
+const KEY_NODE_DEGREE = 8;
+/** 100% 下最多画 24 个行内标签；先按度数挑最重要的节点，避免满屏文字。 */
+const MAX_INLINE_LABELS = 24;
 
 export interface ConstellationPaintInput {
   state: ConstellationViewState;
@@ -147,10 +154,34 @@ export function paintConstellationFrame(
       for (let r = r0; r <= r1; r += 1) labelGrid.add(`${c},${r}`);
     }
   };
+  /** 行内标签不要压住高度数节点；宁可少画，也不遮挡星图骨架。 */
+  const overlapsNode = (x: number, y: number, width: number, height: number): boolean => {
+    for (let index = 0; index < preparedNodes.length; index += 1) {
+      if (!visible[index] || preparedNodes[index]!.linkCount < KEY_NODE_DEGREE) continue;
+      const radius = nodeRadius(preparedNodes[index]!.linkCount, zoom) + 1.5;
+      const nx = screenX[index]!;
+      const ny = screenY[index]!;
+      if (nx + radius < x || nx - radius > x + width) continue;
+      if (ny + radius < y || ny - radius > y + height) continue;
+      return true;
+    }
+    return false;
+  };
 
   let visibleCount = 0;
   let labelsShown = 0;
   let drewCard = false;
+
+  interface LabelCandidate {
+    index: number;
+    sx: number;
+    sy: number;
+    radius: number;
+    isHovered: boolean;
+    isNeighbor: boolean;
+    linkCount: number;
+  }
+  const labelCandidates: LabelCandidate[] = [];
 
   // Hovered node last, on top.
   const order: number[] = [];
@@ -204,6 +235,31 @@ export function paintConstellationFrame(
       ctx.stroke();
     }
 
+    if (isHovered || isNeighbor || hoverIndex < 0) {
+      labelCandidates.push({
+        index,
+        sx,
+        sy,
+        radius,
+        isHovered,
+        isNeighbor,
+        linkCount: node.linkCount,
+      });
+    }
+  }
+
+  // Labels are placed after nodes: degree-first order keeps hubs labelled when
+  // the grid is busy, and drawing last keeps text above faint nodes and links.
+  labelCandidates.sort((left, right) => {
+    if (left.isHovered !== right.isHovered) return left.isHovered ? -1 : 1;
+    return right.linkCount - left.linkCount;
+  });
+
+  let inlineLabels = 0;
+  for (const candidate of labelCandidates) {
+    const node = preparedNodes[candidate.index]!;
+    const { sx, sy, radius, isHovered, isNeighbor } = candidate;
+
     if (isHovered) {
       drawConstellationLabel(ctx, node, sx, sy, radius, true, true, isDark, zoom);
       labelsShown += 1;
@@ -219,15 +275,21 @@ export function paintConstellationFrame(
         labelsShown += 1;
         drewCard = true;
       }
-    } else if (zoom > 0.5 || isNeighbor) {
-      const labelWidth = 155;
-      const labelHeight = 16;
+    } else if ((zoom > 0.5 || isNeighbor) && inlineLabels < MAX_INLINE_LABELS) {
+      const text = node.node.label;
+      const label = text.length > INLINE_LABEL_MAX_CHARS
+        ? `${text.slice(0, INLINE_LABEL_MAX_CHARS)}…`
+        : text;
+      ctx.font = FONT_INLINE;
+      const labelWidth = Math.min(155, Math.ceil(ctx.measureText(label).width) + 8);
       const labelX = sx + radius + 5;
       const labelY = sy - 8;
-      if (canPlace(labelX, labelY, labelWidth, labelHeight)) {
-        claim(labelX, labelY, labelWidth, labelHeight);
+      if (canPlace(labelX, labelY, labelWidth, INLINE_LABEL_HEIGHT)) {
+        if (overlapsNode(labelX, labelY, labelWidth, INLINE_LABEL_HEIGHT)) continue;
+        claim(labelX, labelY, labelWidth, INLINE_LABEL_HEIGHT);
         drawConstellationLabel(ctx, node, sx, sy, radius, false, isNeighbor, isDark, zoom);
         labelsShown += 1;
+        inlineLabels += 1;
       }
     }
   }

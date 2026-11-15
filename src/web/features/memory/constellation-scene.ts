@@ -64,6 +64,8 @@ export interface ConstellationScene {
 }
 
 export const FONT_SMALL = '11px Inter, -apple-system, "Segoe UI", sans-serif';
+/** 行内标签比卡片小 1px，让 120 节点在 100% 下能容纳更多不重叠的标签。 */
+export const FONT_INLINE = '10px Inter, -apple-system, "Segoe UI", sans-serif';
 
 /** 蓝 → 紫 → 橙红；与 Fenix 公开版的色带一致。 */
 export const HEAT_STOPS = [
@@ -213,7 +215,9 @@ export function prepareConstellationScene(data: ConstellationGraphData): Constel
 /** 按画布短边把最远节点放进视野；`zoom = 1` 表示适配尺寸。 */
 export function fitScaleFor(scene: ConstellationScene, width: number, height: number): number {
   if (width <= 0 || height <= 0 || scene.fitRadius <= 0) return 1;
-  return Math.min(width, height) / (scene.fitRadius * 2.5);
+  // Fenix 用 2.5 留白，120 节点只占画布中央一小块；收到 1.7 仍保留
+  // HUD/控件空间，同时让 100% 视图更接近画布主体。
+  return Math.min(width, height) / (scene.fitRadius * 1.7);
 }
 
 /** 节点半径随度数增长，但压在上限内；与 Fenix 的星等口径一致。 */

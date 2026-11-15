@@ -3,10 +3,10 @@
  *
  * 移植自 FenixAgent `constellation-labels.ts`（Apache-2.0，commit 72a1e47）。
  * 修改：去掉 `@chenglou/pretext`，折行改用 canvas `measureText` 逐字符贪心；
- * 字号、卡片宽度、配色与去冲突口径保持不变。
+ * 行内标签字号从 11px 收到 10px，卡片宽度、配色与去冲突口径保持不变。
  */
 
-import { FONT_SMALL, type PreparedNode } from './constellation-scene';
+import { FONT_INLINE, FONT_SMALL, type PreparedNode } from './constellation-scene';
 
 /** 按字符宽度折行；中英文都可用，过长单词按字符断开。 */
 export function wrapConstellationLabel(
@@ -96,7 +96,7 @@ export function drawConstellationLabel(
   }
 
   // Inline label
-  ctx.font = FONT_SMALL;
+  ctx.font = FONT_INLINE;
   ctx.fillStyle = isHovered ? (dark ? '#e4e4e7' : '#18181b') : dark ? '#52525b' : '#a1a1aa';
   ctx.globalAlpha = isHovered ? 1 : force ? 0.85 : Math.min(1, (zoom - 0.3) * 2.5);
   ctx.textAlign = 'left';

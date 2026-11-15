@@ -537,7 +537,7 @@
     height: 320px;
   }
 
-  .memory-graph-hint {
+  .memory-graph-constellation .memory-graph-hint {
     display: none;
   }
 
