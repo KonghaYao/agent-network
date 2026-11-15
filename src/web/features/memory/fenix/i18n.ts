@@ -160,6 +160,7 @@ const ZH: Dictionary = {
     previous: '上一页',
     next: '下一页',
     last: '末页',
+    loadMore: '加载更多',
     timelineItem: '条目',
     timelineItems: '条目',
     granularityYear: '年',

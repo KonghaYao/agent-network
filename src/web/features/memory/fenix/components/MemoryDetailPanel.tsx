@@ -1,11 +1,13 @@
 /**
  * Ported from FenixAgent (Apache-2.0), commit 72a1e4742bf04cb69aef6edfb5fd9ecaae9743a9
  * Upstream: packages/resources/memory/web/pages/hindsight/components/MemoryDetailPanel.tsx
- * Modified for Agent Network: 平台导入替换；toast 改为本地事件 shim；面板结构不变。
+ * Modified for Agent Network: 平台导入替换；toast 改为本地事件 shim；面板结构不变；
+ * 默认/紧凑分支的正文与 `MemoryDetailBody` 一样经 `maskSecrets` 掩码。
  */
 
 import "./MemoryDetailPanel.css";
 
+import { maskSecrets } from "../../mask";
 import { copyTextToClipboard } from "../clipboard";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
@@ -149,7 +151,9 @@ export function MemoryDetailPanel({ memory, onClose, compact = false, inPanel = 
             <div className={`${compact ? "text-3xs" : "text-xs"} font-bold text-muted-foreground uppercase mb-1`}>
               {t("memoryDetailPanel.sectionFullText")}
             </div>
-            <div className={`${compact ? "text-xs" : "text-sm"} whitespace-pre-wrap`}>{displayMemory.text}</div>
+            <div className={`${compact ? "text-xs" : "text-sm"} whitespace-pre-wrap`}>
+              {maskSecrets(displayMemory.text)}
+            </div>
           </div>
 
           {/* Memory ID */}
