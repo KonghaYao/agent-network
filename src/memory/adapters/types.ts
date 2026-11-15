@@ -18,11 +18,11 @@ import type {
   MemoryByteRange,
   MemoryCoverage,
   MemoryExactRepresentation,
-  MemoryExposureEvidenceKind,
   MemoryFreshness,
   MemoryOriginKind,
   MemoryProducerKind,
   MemoryPurgeState,
+  MemoryRecallEvidenceKind,
   MemoryRepresentation,
   MemorySha256,
   MemorySourceKind,
@@ -100,7 +100,7 @@ export interface EnsureSpaceResult {
 export type MemoryAdapterRetainEligibility =
   | {
       kind: 'experienced';
-      evidence: MemoryExposureEvidenceKind;
+      evidence: MemoryRecallEvidenceKind;
       receipt_id: string;
       proof_id: string;
     }
@@ -170,7 +170,7 @@ export interface MemoryAdapterSearchHit {
   representation: MemoryRepresentation;
   source: MemorySourceRef | null;
   origin_kind: MemoryOriginKind;
-  evidence: MemoryExposureEvidenceKind | null;
+  evidence: MemoryRecallEvidenceKind | null;
   /** 后端 score 只用于排序，不代表真实性、可信度或已核验。 */
   score: number | null;
 }

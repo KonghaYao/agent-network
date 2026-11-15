@@ -498,6 +498,14 @@ export const LIMITS = {
   memoryTickIntervalMs: 5_000,
   /** unknown 作业对账周期；与领取分开，避免把未知当失败重跑。 */
   memoryReconcileIntervalMs: 30_000,
+  /** 定时回填窗口宽度与调度周期（毫秒）；窗口按整点对齐。 */
+  memoryBackfillIntervalMs: 60 * 60_000,
+  memoryBackfillWindowMs: 60 * 60_000,
+  /** 停机后单轮最多补偿的窗口数；更早的窗口显式跳过并记录。 */
+  memoryBackfillMaxCatchupWindows: 24,
+  /** 回填单页消息数与 rowid 越界回看行数。 */
+  memoryBackfillPageSize: 100,
+  memoryBackfillScanSafetyRows: 200,
   /** prepared selection / catchup 计划的短期 TTL（毫秒）。 */
   memoryPreparedTtlMs: 10 * 60_000,
   memoryCatchupTtlMs: 24 * 60 * 60_000,

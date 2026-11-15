@@ -17,16 +17,17 @@ import {
 import {
   MEMORY_PAYLOAD_AUTHORITY,
   MEMORY_POLICY_VERSION,
+  isRecallEvidenceKind,
   type MemoryContext,
   type MemoryContextEvidence,
   type MemoryContextEvidenceItem,
   type MemoryContextTarget,
   type MemoryContextValidity,
   type MemoryCoverage,
-  type MemoryExposureEvidenceKind,
   type MemoryLookupContext,
   type MemoryOriginKind,
   type MemoryOriginScope,
+  type MemoryRecallEvidenceKind,
   type MemoryRepresentation,
   type MemorySpaceRef,
   type MemoryTargetScope,
@@ -50,7 +51,7 @@ export interface MemoryContextStoreOptions {
 export interface MemoryContextSourceItem {
   exact: { representation: MemoryRepresentation; text: string };
   origin_scope: MemoryOriginScope;
-  evidence: MemoryExposureEvidenceKind;
+  evidence: MemoryRecallEvidenceKind;
 }
 
 export interface MemoryContextView {
@@ -65,7 +66,7 @@ export interface MemoryContextView {
     representation_id: string;
     origin_kind: MemoryOriginKind;
     origin_scope: MemoryOriginScope;
-    evidence: MemoryExposureEvidenceKind;
+    evidence: MemoryRecallEvidenceKind;
     text: string;
     text_sha256: string;
     range: { start: number; end: number } | null;
@@ -299,11 +300,7 @@ export async function readMemoryContextView(
     } catch {
       return { available: false, reason: 'origin_scope_corrupt', context_row: row };
     }
-    const evidence =
-      item.evidence === 'gateway_observed_submitted' ||
-      item.evidence === 'host_reported_submitted'
-        ? item.evidence
-        : null;
+    const evidence = isRecallEvidenceKind(item.evidence) ? item.evidence : null;
     if (!evidence) return { available: false, reason: 'evidence_missing', context_row: row };
     items.push({
       representation_id: item.representation_id,
