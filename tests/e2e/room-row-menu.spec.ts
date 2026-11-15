@@ -115,13 +115,58 @@ function row(page: Page, roomId: string) {
   return page.locator(`#room-list a[data-room-id="${roomId}"]`);
 }
 
+function listScrollTop(page: Page): Promise<number> {
+  return page.locator('.sidebar-list').evaluate((element) => element.scrollTop);
+}
+
+async function setListScrollTop(page: Page, top: number): Promise<void> {
+  await page.locator('.sidebar-list').evaluate((element, value) => {
+    element.scrollTop = value;
+  }, top);
+  await expect.poll(() => listScrollTop(page)).toBe(top);
+}
+
+function rowIds(page: Page): Promise<(string | null)[]> {
+  return page
+    .locator('#room-list .room-item')
+    .evaluateAll((items) => items.map((item) => item.getAttribute('data-room-id')));
+}
+
+/** 返回当前完整落在侧栏可视区域内的第一个会话行 id。 */
+function visibleRowId(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const list = document.querySelector<HTMLElement>('.sidebar-list');
+    if (!list) return null;
+    const bounds = list.getBoundingClientRect();
+    for (const item of document.querySelectorAll<HTMLElement>('#room-list .room-item')) {
+      const rect = item.getBoundingClientRect();
+      if (rect.top >= bounds.top + 4 && rect.bottom <= bounds.bottom - 4) {
+        return item.dataset.roomId ?? null;
+      }
+    }
+    return null;
+  });
+}
+
+function bodyPointerEvents(page: Page): Promise<string> {
+  return page.evaluate(() => getComputedStyle(document.body).pointerEvents);
+}
+
+function expectScrollNear(actual: number, expected: number): void {
+  expect(Math.abs(actual - expected)).toBeLessThanOrEqual(1);
+}
+
 test.describe('会话行右键与长按菜单', () => {
+  // 复现报告使用 1280×800；移动端 describe 会覆盖该 viewport。
+  test.use({ viewport: { width: 1280, height: 800 } });
+
   let base = '';
   let tokenA = '';
   let actorB = '';
   let actorC = '';
   let directAB = '';
   let directAC = '';
+  let fillerRoomIds: string[] = [];
   let groupId = '';
   let groupTitle = '';
 
@@ -154,6 +199,21 @@ test.describe('会话行右键与长按菜单', () => {
     });
     actorC = c.actor_id;
 
+    // 至少 12 个默认可见的 direct 会话；16 行才能在 800px 高视口里
+    // 留出真实的 300px 滚动空间，避免 scrollBefore=0 让断言退化。
+    const fillerActorIds: string[] = [];
+    for (let index = 0; index < 14; index += 1) {
+      const token = crypto.randomUUID();
+      const filler = await callTool<{ actor_id: string }>(base, token, 'network_register', {
+        request_id: requestId('e2e_reg'),
+        kind: 'human',
+        name: `行菜单好友 ${suffix} ${index}`,
+        device_id: `e2e-row-menu-${suffix}-f${index}`,
+      });
+      fillerActorIds.push(filler.actor_id);
+      await contact(base, tokenA, token, filler.actor_id);
+    }
+
     await contact(base, tokenA, tokenB, actorB);
     await contact(base, tokenA, tokenC, actorC);
 
@@ -170,7 +230,15 @@ test.describe('会话行右键与长按菜单', () => {
     directAC =
       rooms.items.find((entry) => entry.kind === 'direct' && entry.peer?.actor_id === actorC)
         ?.room_id ?? '';
-    if (!directAB || !directAC) throw new Error('好友通过后未生成两个 direct 会话');
+    const fillerPeers = new Set(fillerActorIds);
+    fillerRoomIds = rooms.items
+      .filter(
+        (entry) => entry.kind === 'direct' && fillerPeers.has(entry.peer?.actor_id ?? ''),
+      )
+      .map((entry) => entry.room_id);
+    if (!directAB || !directAC || fillerRoomIds.length !== fillerActorIds.length) {
+      throw new Error('好友通过后未生成完整的 direct 会话');
+    }
 
     await callTool(base, tokenB, 'network_message_send', {
       request_id: requestId('e2e_send'),
@@ -217,25 +285,17 @@ test.describe('会话行右键与长按菜单', () => {
 
   test('桌面右键在行附近打开菜单，置顶重排、免打扰立即生效', async ({ page }) => {
     await page.goto(`${base}/`);
-    await expect(page.locator('#room-list .room-item')).toHaveCount(2);
+    await expect(page.locator('#room-list .room-item')).toHaveCount(16);
     const ac = row(page, directAC);
     const ab = row(page, directAB);
     await expect(ac).toBeVisible();
     await expect(ab).toBeVisible();
-    const scrollBefore = await page
-      .locator('.sidebar-list')
-      .evaluate((element) => element.scrollTop);
-    const bodyOverflowBefore = await page.evaluate(
-      () => getComputedStyle(document.body).overflow,
-    );
-
-    await expect
-      .poll(async () =>
-        page
-          .locator('#room-list .room-item')
-          .evaluateAll((items) => items.map((item) => item.getAttribute('data-room-id'))),
-      )
-      .toEqual([directAC, directAB]);
+    const scrollBefore = await listScrollTop(page);
+    const bodyPointerBefore = await bodyPointerEvents(page);
+    expect(bodyPointerBefore).toBe('auto');
+    const initialIds = (await rowIds(page)).filter((id): id is string => id !== null);
+    expect(initialIds).toHaveLength(16);
+    expect(initialIds.slice(0, 2)).toEqual([directAC, directAB]);
 
     const rowBox = await ab.boundingBox();
     expect(rowBox).not.toBeNull();
@@ -248,6 +308,8 @@ test.describe('会话行右键与长按菜单', () => {
     await expect(page.locator('#room-row-menu-pin')).toBeVisible();
     await expect(page.locator('#room-row-menu-mute')).toBeVisible();
     expect(page.url()).toBe(`${base}/`);
+    // 菜单是 modal：Radix 用 body pointer-events 锁住外部指针事件。
+    await expect.poll(() => bodyPointerEvents(page)).toBe('none');
 
     const menuBox = await menu.boundingBox();
     expect(menuBox).not.toBeNull();
@@ -258,12 +320,9 @@ test.describe('会话行右键与长按菜单', () => {
     await expect(menu).toBeHidden();
     await expect(ab.locator('.room-pref-label')).toHaveText('置顶');
     await expect
-      .poll(async () =>
-        page
-          .locator('#room-list .room-item')
-          .evaluateAll((items) => items.map((item) => item.getAttribute('data-room-id'))),
-      )
-      .toEqual([directAB, directAC]);
+      .poll(() => rowIds(page))
+      .toEqual([directAB, directAC, ...initialIds.slice(2)]);
+    await expect.poll(() => bodyPointerEvents(page)).toBe('auto');
 
     await ab.click({ button: 'right' });
     await expect(menu).toBeVisible();
@@ -275,18 +334,83 @@ test.describe('会话行右键与长按菜单', () => {
     await expect(ab.locator('.room-pref-label')).toHaveText('置顶 · 免打扰');
     await expect(ab.locator('.unread')).toHaveClass(/muted/);
     await expect(ab.locator('.unread')).toHaveAttribute('aria-label', '未读，消息免打扰');
-    // 菜单 portal 关闭后不改变侧栏滚动位置，也不锁 body 滚动。
-    expect(
-      await page.locator('.sidebar-list').evaluate((element) => element.scrollTop),
-    ).toBe(scrollBefore);
-    await expect
-      .poll(() => page.evaluate(() => getComputedStyle(document.body).overflow))
-      .toBe(bodyOverflowBefore);
+    // 菜单 portal 关闭后不改变侧栏滚动位置，也不残留指针锁。
+    expectScrollNear(await listScrollTop(page), scrollBefore);
+    await expect.poll(() => bodyPointerEvents(page)).toBe('auto');
 
     // 菜单关闭后客户端导航仍正常，且不残留遮罩/焦点陷阱。
     await ab.click();
     await expect(page).toHaveURL(`${base}/c/${directAB}`);
     await expect(page.locator('#composer')).toBeVisible();
+  });
+
+  test('非零滚动下置顶、免打扰与 Escape 保持侧栏位置和焦点', async ({ page }) => {
+    await page.goto(`${base}/`);
+    await expect(page.locator('#room-list .room-item')).toHaveCount(16);
+    const initialIds = (await rowIds(page)).filter((id): id is string => id !== null);
+    expect(initialIds.slice(0, 2)).toEqual([directAC, directAB]);
+    const list = page.locator('.sidebar-list');
+    const menu = page.locator('#room-row-menu');
+
+    const metrics = await list.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+    }));
+    expect(metrics.scrollHeight - metrics.clientHeight).toBeGreaterThan(300);
+    await setListScrollTop(page, 300);
+    expect(await bodyPointerEvents(page)).toBe('auto');
+
+    // 置顶当前可见行：行移动到顶部后 scrollTop 必须保持 300。
+    const pinnedId = await visibleRowId(page);
+    expect(pinnedId).not.toBeNull();
+    const pinnedRow = row(page, pinnedId as string);
+    await pinnedRow.click({ button: 'right', position: { x: 60, y: 24 } });
+    await expect(menu).toBeVisible();
+    await expect(page.locator('#room-row-menu-pin')).toBeVisible();
+    // 菜单打开时 Radix 通过 body pointer-events 加锁。
+    await expect.poll(() => bodyPointerEvents(page)).toBe('none');
+
+    await page.locator('#room-row-menu-pin').click();
+    await expect(menu).toBeHidden();
+    await expect(pinnedRow.locator('.room-pref-label')).toHaveText('置顶');
+    await expect
+      .poll(() => rowIds(page))
+      .toEqual([
+        pinnedId,
+        directAC,
+        directAB,
+        ...initialIds.slice(2).filter((id) => id !== pinnedId),
+      ]);
+    // 置顶把行移到顶部后，浏览器不得因焦点归还把它滚回顶部。
+    await expect.poll(() => listScrollTop(page)).toBeGreaterThanOrEqual(299);
+    await expect(pinnedRow).toBeFocused();
+    expectScrollNear(await listScrollTop(page), 300);
+    await expect.poll(() => bodyPointerEvents(page)).toBe('auto');
+
+    // Escape 关闭同样保持滚动与焦点。
+    const escapeId = await visibleRowId(page);
+    expect(escapeId).not.toBeNull();
+    const escapeRow = row(page, escapeId as string);
+    await escapeRow.click({ button: 'right', position: { x: 60, y: 24 } });
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+    await expect(escapeRow).toBeFocused();
+    expectScrollNear(await listScrollTop(page), 300);
+    await expect.poll(() => bodyPointerEvents(page)).toBe('auto');
+
+    // 免打扰不重排，也不得改变滚动与焦点。
+    const muteId = await visibleRowId(page);
+    expect(muteId).not.toBeNull();
+    const mutedRow = row(page, muteId as string);
+    await mutedRow.click({ button: 'right', position: { x: 60, y: 24 } });
+    await expect(menu).toBeVisible();
+    await page.locator('#room-row-menu-mute').click();
+    await expect(menu).toBeHidden();
+    await expect(mutedRow.locator('.room-pref-label')).toHaveText('免打扰');
+    await expect(mutedRow).toBeFocused();
+    expectScrollNear(await listScrollTop(page), 300);
+    await expect.poll(() => bodyPointerEvents(page)).toBe('auto');
   });
 
   test('群聊行菜单复用复制群信息动作', async ({ page }) => {

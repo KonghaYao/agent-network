@@ -1,6 +1,14 @@
 import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 
 import { useRoomMenuActions, type AgentManagementView } from '../../hooks/useRoomMenuActions';
 import { useRoomPreferences } from '../../hooks/useRoomPreferences';
@@ -25,6 +33,15 @@ interface ContactBlockPage {
   }[];
 }
 
+/** 用稳定 room id 找行，避免依赖 React ref 穿透 Link。 */
+function findRowElement(roomId: string): HTMLElement | null {
+  const rows = document.querySelectorAll<HTMLElement>('#room-list a[data-room-id]');
+  for (const row of rows) {
+    if (row.dataset.roomId === roomId) return row;
+  }
+  return null;
+}
+
 /**
  * 会话行右键 / 移动端长按菜单。
  *
@@ -44,6 +61,8 @@ export function RoomRowMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [overlay, setOverlay] = useState<RoomOverlay | null>(null);
+  const scrollRestoreRef = useRef<{ scroller: HTMLElement; top: number } | null>(null);
+  const overlayRef = useRef<RoomOverlay | null>(null);
   const session = useWebSession();
   const identity = session.session?.identity ?? null;
   const token = session.session?.token ?? null;
@@ -55,6 +74,45 @@ export function RoomRowMenu({
       onStatus?.(message);
     },
     [onStatus],
+  );
+
+  useEffect(() => {
+    overlayRef.current = overlay;
+  }, [overlay]);
+
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      if (next) {
+        // 打开时记录侧栏位置；置顶会把行移到列表顶部，关闭后必须回到
+        // 用户原来的位置，而不是被焦点带回顶部。
+        const scroller = findRowElement(room.room_id)?.closest<HTMLElement>('.sidebar-list');
+        scrollRestoreRef.current = scroller ? { scroller, top: scroller.scrollTop } : null;
+      }
+      setOpen(next);
+    },
+    [room.room_id],
+  );
+
+  // 关闭提交时立即恢复一次。layout effect 在 DOM 重排之后、绘制之前执行，
+  // 比 rAF 更早且不会被随后的用户滚动覆盖。
+  useLayoutEffect(() => {
+    if (open) return;
+    const pending = scrollRestoreRef.current;
+    scrollRestoreRef.current = null;
+    if (pending?.scroller.isConnected) pending.scroller.scrollTop = pending.top;
+  }, [open]);
+
+  const handleCloseAutoFocus = useCallback(
+    (event: Event) => {
+      // 阻止 Radix 默认的 trigger.focus()：行已被置顶重排，浏览器会把它
+      // 滚动到可视区域顶部。手动聚焦时关闭滚动。
+      event.preventDefault();
+      // 覆盖层（如群成员对话框）接管焦点时不抢回行焦点。
+      if (!overlayRef.current) {
+        findRowElement(room.room_id)?.focus({ preventScroll: true });
+      }
+    },
+    [room.room_id],
   );
 
   const detailQuery = useQuery({
@@ -133,13 +191,14 @@ export function RoomRowMenu({
   const preference = preferences.preference(room.room_id);
 
   return (
-    <ContextMenuPrimitive.Root open={open} onOpenChange={setOpen}>
+    <ContextMenuPrimitive.Root open={open} onOpenChange={handleOpenChange}>
       <ContextMenuPrimitive.Trigger asChild>{children}</ContextMenuPrimitive.Trigger>
       <ContextMenuPrimitive.Portal>
         <ContextMenuPrimitive.Content
           id="room-row-menu"
           className="room-menu spa-menu"
           aria-label="会话操作"
+          onCloseAutoFocus={handleCloseAutoFocus}
         >
           {roomView ? (
             <RoomMenuItems
