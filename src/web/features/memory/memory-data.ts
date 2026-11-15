@@ -344,13 +344,29 @@ export async function fetchMemoryTimeline(
     {
       actor_id: actorId,
       days: query.days,
-      // 分组必须和卡片本地时间一致：UTC+8 传 480。
-      tz_offset_minutes: -new Date().getTimezoneOffset(),
+      ...timelineTimeZoneArgs(),
       ...(query.type ? { type: query.type } : {}),
       ...(query.limit !== undefined ? { limit: query.limit } : {}),
     },
     { token, signal },
   );
+}
+
+/**
+ * 分组必须和卡片本地时间一致：优先传 IANA 时区名（DST 切换日仍正确），
+ * 浏览器不提供时回退到固定 offset。
+ */
+function timelineTimeZoneArgs(): { timezone?: string; tz_offset_minutes: number } {
+  const tz_offset_minutes = -new Date().getTimezoneOffset();
+  try {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (typeof timezone === 'string' && timezone.length > 0) {
+      return { timezone, tz_offset_minutes };
+    }
+  } catch {
+    // 无 Intl 时区支持时使用 offset 回退。
+  }
+  return { tz_offset_minutes };
 }
 
 export async function fetchMemoryDetail(

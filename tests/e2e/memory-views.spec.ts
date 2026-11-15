@@ -3,6 +3,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { timelineGroups, type TimelineFixtureItem } from './fixtures/memory-timeline';
+
 /**
  * 记忆弹窗阶段 3：星座图 / 时间线 / 实体。
  *
@@ -135,82 +137,6 @@ function memory(
     proof_count: 2,
     tags: [],
   };
-}
-
-interface TimelineFixtureItem {
-  id: string;
-  text: string;
-  fact_type: FactType;
-  state: 'valid';
-  occurred_at: string | null;
-  mentioned_at: string;
-  entities: string[];
-}
-
-function timelineRange(
-  ms: number,
-  granularity: 'day' | 'week' | 'month',
-  tzOffsetMinutes: number,
-) {
-  const offsetMs = tzOffsetMinutes * 60_000;
-  const date = new Date(ms + offsetMs);
-  if (granularity === 'month') {
-    const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1) - offsetMs);
-    const end = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) - offsetMs);
-    const key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
-    return { key, label: key, start: start.toISOString(), end: end.toISOString() };
-  }
-  if (granularity === 'week') {
-    const weekday = date.getUTCDay() || 7;
-    const localStartMs =
-      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) -
-      (weekday - 1) * DAY;
-    const start = new Date(localStartMs - offsetMs);
-    const key = `${new Date(localStartMs).toISOString().slice(0, 10)}-W`;
-    return {
-      key,
-      label: key,
-      start: start.toISOString(),
-      end: new Date(localStartMs - offsetMs + 7 * DAY).toISOString(),
-    };
-  }
-  const localStartMs = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
-  const start = new Date(localStartMs - offsetMs);
-  const key = new Date(localStartMs).toISOString().slice(0, 10);
-  return {
-    key,
-    label: key,
-    start: start.toISOString(),
-    end: new Date(localStartMs - offsetMs + DAY).toISOString(),
-  };
-}
-
-function timelineGroups(
-  items: TimelineFixtureItem[],
-  granularity: 'day' | 'week' | 'month',
-  tzOffsetMinutes: number,
-) {
-  const groups: {
-    key: string;
-    label: string;
-    start: string | null;
-    end: string | null;
-    count: number;
-    start_index: number;
-    end_index: number;
-  }[] = [];
-  items.forEach((item, index) => {
-    const ms = Date.parse(item.occurred_at ?? item.mentioned_at);
-    const range = timelineRange(ms, granularity, tzOffsetMinutes);
-    const last = groups.at(-1);
-    if (!last || last.key !== range.key) {
-      groups.push({ ...range, count: 0, start_index: index, end_index: index + 1 });
-    }
-    const current = groups.at(-1)!;
-    current.count += 1;
-    current.end_index = index + 1;
-  });
-  return groups;
 }
 
 const MEMORIES: FixtureMemory[] = [
@@ -375,6 +301,7 @@ async function installMemoryStub(
       const days = Number(args.days ?? 30);
       const type = typeof args.type === 'string' ? args.type : '';
       const tzOffsetMinutes = Number(args.tz_offset_minutes ?? 0);
+      const timeZone = typeof args.timezone === 'string' ? args.timezone : undefined;
       const cutoff = Date.now() - days * DAY;
       const items: TimelineFixtureItem[] = MEMORIES.filter((item) => {
         if (type && item.fact_type !== type) return false;
@@ -401,9 +328,9 @@ async function installMemoryStub(
         fetched_at: Date.now(),
         items,
         groups: {
-          day: timelineGroups(items, 'day', tzOffsetMinutes),
-          week: timelineGroups(items, 'week', tzOffsetMinutes),
-          month: timelineGroups(items, 'month', tzOffsetMinutes),
+          day: timelineGroups(items, 'day', timeZone, tzOffsetMinutes),
+          week: timelineGroups(items, 'week', timeZone, tzOffsetMinutes),
+          month: timelineGroups(items, 'month', timeZone, tzOffsetMinutes),
         },
         summary: {
           total: items.length,
@@ -716,7 +643,11 @@ test.describe('Agent 记忆：星座、时间线、实体', () => {
     await expect.poll(timelineCalls).toHaveLength(1);
     expect(listCalls()).toHaveLength(0);
     const browserOffset = await page.evaluate(() => -new Date().getTimezoneOffset());
+    const browserZone = await page.evaluate(
+      () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
     expect(timelineCalls()[0]?.args.tz_offset_minutes).toBe(browserOffset);
+    expect(timelineCalls()[0]?.args.timezone).toBe(browserZone);
     const chartText = (await chart.textContent()) ?? '';
     expect(chartText).not.toContain(SECRET_OBSERVATION);
     expect(chartText).toContain('[已隐藏]');

@@ -3,7 +3,8 @@
  *
  * 使用真实 migrations + 内存 SQLite + 受控 Hindsight HTTP 假服务，覆盖：
  * 授权、compact 上限、天/周/月分组、无日期事件、分页合并、字节裁剪、
- * single-flight、敏感字段过滤，以及 tz_offset_minutes 的本地时区分组。
+ * single-flight、敏感字段过滤，以及 tz_offset_minutes / IANA timezone 的
+ * 本地时区分组（含 America/New_York 夏令时切换日）。
  *
  * 运行：bun run test:memory-timeline
  */
@@ -100,6 +101,18 @@ function seedSpace(
       AT,
     )
     .run();
+}
+
+function localDateKey(value: string | null, timeZone: string): string {
+  if (!value) return '';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(value));
+  const read = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  return `${read('year')}-${read('month')}-${read('day')}`;
 }
 
 function assertNoSensitive(label: string, value: unknown, bank: string): void {
@@ -318,6 +331,179 @@ async function main(): Promise<void> {
   check(
     'timeline schema 拒绝非整数 offset',
     !insightTimelineInputSchema.safeParse({ actor_id: target, tz_offset_minutes: 480.5 }).success,
+  );
+
+  console.log('--- timeline IANA 时区与 DST ---');
+  const dstMemories = [
+    {
+      id: 'dst-before',
+      text: 'DST 切换前一天深夜',
+      fact_type: 'world',
+      state: 'valid',
+      mentioned_at: '2026-10-31T04:30:00Z',
+      occurred_start: null,
+      occurred_end: null,
+      entities: [],
+      proof_count: 0,
+      tags: [],
+    },
+    {
+      id: 'dst-start',
+      text: 'DST 切换当日凌晨',
+      fact_type: 'world',
+      state: 'valid',
+      mentioned_at: '2026-11-01T04:30:00Z',
+      occurred_start: null,
+      occurred_end: null,
+      entities: [],
+      proof_count: 0,
+      tags: [],
+    },
+    {
+      id: 'dst-end',
+      text: 'DST 切换当日深夜',
+      fact_type: 'world',
+      state: 'valid',
+      mentioned_at: '2026-11-02T04:30:00Z',
+      occurred_start: null,
+      occurred_end: null,
+      entities: [],
+      proof_count: 0,
+      tags: [],
+    },
+  ];
+  fake.seedBank(targetBank, { memories: dstMemories });
+  const nyTimeline = await service.timeline(viewer('human', friend), {
+    actor_id: target,
+    days: 30,
+    timezone: 'America/New_York',
+    refresh: true,
+  });
+  checkEqual(
+    'timeline NY 每条事件的 day key 与本地卡片日期一致',
+    nyTimeline.items
+      .map((item) => `${item.id}:${localDateKey(item.occurred_at ?? item.mentioned_at, 'America/New_York')}`)
+      .join(','),
+    'dst-end:2026-11-01,dst-start:2026-11-01,dst-before:2026-10-31',
+  );
+  checkEqual(
+    'timeline NY DST 前后 day 分组',
+    nyTimeline.groups.day.map((group) => group.key).join(','),
+    '2026-11-01,2026-10-31',
+  );
+  checkEqual('timeline NY DST 当日 label', nyTimeline.groups.day[0]?.label, '2026年11月1日');
+  checkEqual('timeline NY DST 当日计数', nyTimeline.groups.day[0]?.count, 2);
+  checkEqual(
+    'timeline NY DST 结束日 25 小时边界',
+    `${nyTimeline.groups.day[0]?.start}/${nyTimeline.groups.day[0]?.end}`,
+    '2026-11-01T04:00:00.000Z/2026-11-02T05:00:00.000Z',
+  );
+  checkEqual(
+    'timeline NY week 边界跨 DST',
+    `${nyTimeline.groups.week[0]?.start}/${nyTimeline.groups.week[0]?.end}`,
+    '2026-10-26T04:00:00.000Z/2026-11-02T05:00:00.000Z',
+  );
+  checkEqual(
+    'timeline NY 卡片本地时间',
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date('2026-10-31T04:30:00Z')),
+    '10/31, 00:30',
+  );
+
+  fake.resetRequests();
+  const cachedNy = await service.timeline(viewer('human', friend), {
+    actor_id: target,
+    days: 30,
+    timezone: 'America/New_York',
+  });
+  checkEqual('timeline NY 命中时区缓存', fake.requestCount('GET', '/memories/list'), 0);
+  checkEqual(
+    'timeline 缓存按 timezone 隔离（NY）',
+    cachedNy.groups.day.map((group) => group.key).join(','),
+    '2026-11-01,2026-10-31',
+  );
+
+  fake.seedBank(targetBank, { memories });
+  const shanghaiTimeline = await service.timeline(viewer('human', friend), {
+    actor_id: target,
+    days: 30,
+    timezone: 'Asia/Shanghai',
+    tz_offset_minutes: -480,
+    refresh: true,
+  });
+  checkEqual(
+    'timeline timezone 优先于 tz_offset_minutes',
+    shanghaiTimeline.groups.day.map((group) => group.key).join(','),
+    '2026-11-03,2026-10-01',
+  );
+  checkEqual('timeline Asia/Shanghai label', shanghaiTimeline.groups.day[0]?.label, '2026年11月3日');
+  checkEqual('timeline Asia/Shanghai day 起点', shanghaiTimeline.groups.day[0]?.start, '2026-11-02T16:00:00.000Z');
+  checkEqual(
+    'timeline Asia/Shanghai 卡片本地日期',
+    shanghaiTimeline.items
+      .map((item) => localDateKey(item.occurred_at ?? item.mentioned_at, 'Asia/Shanghai'))
+      .join(','),
+    '2026-11-03,2026-11-03,2026-10-01',
+  );
+
+  fake.resetRequests();
+  const cachedShanghai = await service.timeline(viewer('human', friend), {
+    actor_id: target,
+    days: 30,
+    timezone: 'Asia/Shanghai',
+    tz_offset_minutes: -480,
+  });
+  checkEqual('timeline Shanghai 命中时区缓存', fake.requestCount('GET', '/memories/list'), 0);
+  checkEqual('timeline 缓存返回 Shanghai 分组', cachedShanghai.groups.day[0]?.key, '2026-11-03');
+  const cachedUtcAgain = await service.timeline(viewer('human', friend), {
+    actor_id: target,
+    days: 30,
+  });
+  checkEqual('timeline 默认 UTC 不受 IANA 缓存影响', cachedUtcAgain.groups.day[0]?.key, '2026-11-03');
+  checkEqual(
+    'timeline 默认 UTC day 分组',
+    cachedUtcAgain.groups.day.map((group) => group.key).join(','),
+    '2026-11-03,2026-11-02,2026-10-01',
+  );
+
+  check(
+    'timeline schema 接受 Asia/Shanghai',
+    insightTimelineInputSchema.safeParse({ actor_id: target, timezone: 'Asia/Shanghai' }).success,
+  );
+  check(
+    'timeline schema 接受 America/New_York',
+    insightTimelineInputSchema.safeParse({ actor_id: target, timezone: 'America/New_York' }).success,
+  );
+  check(
+    'timeline schema 接受 UTC',
+    insightTimelineInputSchema.safeParse({ actor_id: target, timezone: 'UTC' }).success,
+  );
+  check(
+    'timeline schema 拒绝未知时区',
+    !insightTimelineInputSchema.safeParse({ actor_id: target, timezone: 'Mars/Olympus' }).success,
+  );
+  check(
+    'timeline schema 拒绝固定偏移时区',
+    !insightTimelineInputSchema.safeParse({ actor_id: target, timezone: '+05:30' }).success,
+  );
+  check(
+    'timeline schema 拒绝空时区',
+    !insightTimelineInputSchema.safeParse({ actor_id: target, timezone: '' }).success,
+  );
+  await expectBusiness(
+    'timeline 服务端拒绝无效 IANA 时区',
+    service.timeline(viewer('human', friend), {
+      actor_id: target,
+      days: 30,
+      timezone: 'Mars/Olympus',
+    }),
+    'INVALID_ARGUMENT',
   );
 
   console.log('--- timeline 无日期与字节裁剪 ---');

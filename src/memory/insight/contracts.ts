@@ -8,6 +8,7 @@ import { z } from 'zod';
 
 import { BusinessError, type BusinessErrorCode } from '../../contracts/errors';
 import { LIMITS } from '../../contracts/limits';
+import { isValidTimeZoneName } from './timeline-zone';
 
 export const INSIGHT_FACT_TYPES = ['world', 'experience', 'observation'] as const;
 export type InsightFactType = (typeof INSIGHT_FACT_TYPES)[number];
@@ -307,10 +308,19 @@ export const insightTimelineInputSchema = z.strictObject({
   /**
    * 本地时间 = UTC + offset，单位分钟（UTC+8 为 480）。
    *
-   * 服务端按该偏移生成日/周/月分组，保证与浏览器本地时间显示一致；缺省 0
-   * 保持纯 UTC 分组。
+   * 没有 IANA 名称时回退到该偏移；`timezone` 存在时忽略此值。
    */
   tz_offset_minutes: z.number().int().min(-840).max(840).optional(),
+  /**
+   * IANA 时区名（如 `Asia/Shanghai`、`America/New_York`），优先级高于
+   * `tz_offset_minutes`；服务端按真实时区生成日/周/月分组，DST 切换日正确。
+   */
+  timezone: z
+    .string()
+    .min(1)
+    .max(64)
+    .refine(isValidTimeZoneName, { message: 'timezone 必须是有效的 IANA 时区名' })
+    .optional(),
   refresh,
 });
 
