@@ -416,8 +416,12 @@ export const APP_STYLE = `
     background: rgb(0 0 0 / 4%); color: var(--wx-muted); font-size: 11px;
     text-align: center; overflow-wrap: anywhere; }
   .msg { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 18px; min-width: 0; }
-  /* 长会话才开启布局隔离；短会话保持原生滚动高度估算，避免滚动条跳动。 */
-  .messages--long .msg { content-visibility: auto; contain-intrinsic-size: auto 88px; }
+  /* 长会话只隔离固定形态的消息行；Markdown 高度差异大（实测中位数 215px、
+     长预览 324px），88px 估算会在滚动时反复改写滚动高度并留下空白，
+     因此正文含 Markdown 的行不做 content-visibility。纯文本截断预览受
+     512B 上限约束，180px 初始估算比 88px 更接近实际高度。 */
+  .messages--long .msg:not(:has(.msg-markdown)) {
+    content-visibility: auto; contain-intrinsic-size: auto 180px; }
   .messages--long .msg-time,
   .messages--long .msg-system { content-visibility: auto; contain-intrinsic-size: auto 32px; }
   .msg.mine { flex-direction: row-reverse; }
@@ -440,6 +444,8 @@ export const APP_STYLE = `
   .msg.mine .bubble::before { right: -6px; border-left: 6px solid var(--wx-mine); }
   .mention { color: var(--wx-link); }
   .msg.mine .mention { color: #2f6b45; }
+  /* 截断预览只显示纯文本：保留换行，避免半截 Markdown 结构。 */
+  .msg-plain-preview { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
   .msg .expand, .msg .collapse { margin-top: 4px; border: 0; background: none; padding: 0;
     color: var(--wx-link); font-size: 12px; }
   .msg .expand[hidden], .msg .collapse[hidden] { display: none; }
