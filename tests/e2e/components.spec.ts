@@ -311,6 +311,8 @@ test.describe.serial('SPA 组件库与状态管理', () => {
   test('拖放上传走 dropzone，仍保留 XHR 进度与文件 chip', async ({ page }) => {
     await page.goto(`${base}/c/${roomId}`);
     await expect(page.locator('#composer')).toBeVisible();
+    // 首载静态输入区不可交互，必须等真实 composer 接管后再触发 drop。
+    await expect(page.locator('#body')).toBeEnabled();
     await page.evaluate(() => {
       const form = document.getElementById('composer');
       if (!form) return;

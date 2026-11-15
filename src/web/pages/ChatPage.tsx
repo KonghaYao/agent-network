@@ -389,6 +389,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
 
   const shownStatus = status || chat.refreshError || chat.streamError || '';
   const ready = chat.status === 'ready' && Boolean(room && identity && token);
+  // 首载骨架与静态输入区：错误态让位给错误页，避免骨架长期占位。
+  const loadingShell = !ready && chat.status !== 'error';
   const filesRequested = desktop ? filesDesktopOpen : overlayPane === 'files';
   const filesVisible = ready && filesRequested;
   // 房间读取失败时不再显示骨架，避免错误页被永久占位；就绪前仍按最终宽度占位。
@@ -502,21 +504,35 @@ export function ChatPage({ roomId }: ChatPageProps) {
         main={
           <>
             <section className="chat-pane" aria-label="聊天区">
-              <header className="chat-head">
+              <header className={`chat-head${loadingShell ? ' chat-head--loading' : ''}`} aria-busy={loadingShell}>
                 <Link className="back" id="back" to="/" aria-label="返回会话列表">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M15 6l-6 6 6 6" />
                   </svg>
                 </Link>
-                <div className="chat-id">
+                <div className={`chat-id${loadingShell ? ' chat-id--loading' : ''}`}>
                   <div className="title-row">
                     <h2 id="title">{title}</h2>
                   </div>
-                  <p className="muted" id="subtitle" hidden={!subtitle}>
+                  <p className="muted" id="subtitle" hidden={loadingShell || !subtitle}>
                     {subtitle}
                   </p>
+                  {loadingShell ? (
+                    <>
+                      <span className="chat-skeleton-line chat-skeleton-line--title" aria-hidden="true" />
+                      <span className="chat-skeleton-line chat-skeleton-line--subtitle" aria-hidden="true" />
+                    </>
+                  ) : null}
                 </div>
-                {room ? (
+                {loadingShell ? (
+                  <div className="chat-head-actions chat-head-actions--skeleton" aria-hidden="true">
+                    <span className="head-skeleton head-skeleton--search" />
+                    <span className="head-skeleton head-skeleton--monitor" />
+                    <span className="head-skeleton head-skeleton--files" />
+                    <span className="head-skeleton head-skeleton--account" />
+                    <span className="head-skeleton head-skeleton--menu" />
+                  </div>
+                ) : room ? (
                   <div className="chat-head-actions">
                     {peer?.kind === 'agent' ? (
                       <button
@@ -615,10 +631,26 @@ export function ChatPage({ roomId }: ChatPageProps) {
                   群聊已解散，当前为只读归档；截至解散点的历史仍可查看。
                 </div>
               ) : null}
-              <div className="chat-body" id="chat-body" aria-busy={chat.status === 'loading'}>
+              <div className="chat-body" id="chat-body" aria-busy={loadingShell}>
                 <div id="chat-loading" className="chat-loading" role="status" hidden={chat.status !== 'loading'}>
                   正在加载会话…
                 </div>
+                {loadingShell ? (
+                  <div id="chat-skeleton" className="chat-skeleton" aria-hidden="true">
+                    <div className="skeleton-row">
+                      <span className="skeleton-avatar" />
+                      <span className="skeleton-bubble" />
+                    </div>
+                    <div className="skeleton-row mine">
+                      <span className="skeleton-avatar" />
+                      <span className="skeleton-bubble" />
+                    </div>
+                    <div className="skeleton-row">
+                      <span className="skeleton-avatar" />
+                      <span className="skeleton-bubble" />
+                    </div>
+                  </div>
+                ) : null}
                 <div id="chat-error" className="chat-error" role="alert" hidden={chat.status !== 'error'}>
                   <p id="chat-error-text">{chat.error || '读取会话失败'}</p>
                   <div className="chat-error-actions">
@@ -660,6 +692,31 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 <p id="status" role="status">
                   {shownStatus}
                 </p>
+                {loadingShell ? (
+                  // 静态输入区：与真实 composer 同高，避免历史到达时列表被撑开。
+                  <form
+                    id="composer"
+                    className="composer composer--loading"
+                    aria-busy="true"
+                    onSubmit={(event) => event.preventDefault()}
+                  >
+                    <button className="attach-btn" type="button" aria-label="添加附件" disabled>
+                      +
+                    </button>
+                    <div className="composer-main">
+                      <textarea
+                        id="body"
+                        rows={1}
+                        placeholder="正在加载会话…"
+                        aria-label="消息正文，加载中"
+                        disabled
+                      />
+                    </div>
+                    <button className="send-btn primary" id="send" type="submit" disabled>
+                      发送
+                    </button>
+                  </form>
+                ) : null}
                 {ready && room && identity && token && !room.read_only ? (
                   <Composer
                     room={room}
