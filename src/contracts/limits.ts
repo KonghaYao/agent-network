@@ -534,8 +534,8 @@ export const LIMITS = {
   memoryPanelTimeoutMs: 12_000,
   /** 只读面板归一化 DTO 缓存（毫秒）。 */
   memoryPanelCacheTtlMs: 30_000,
-  /** 只读面板缓存最大条目数。 */
-  memoryPanelCacheEntries: 64,
+  /** 只读面板缓存最大条目数；include_rows 单条可达数百 KB，故按 32 条封顶。 */
+  memoryPanelCacheEntries: 32,
   /** 记忆图默认/最大节点数；服务端硬裁剪，超出即报 truncated。 */
   memoryPanelGraphNodesDefault: 120,
   memoryPanelGraphNodesMax: 120,
@@ -579,8 +579,26 @@ export const LIMITS = {
   memoryPanelFactsTextChars: 1_200,
   /** 记忆详情正文 UTF-8 字节上限。 */
   memoryPanelDetailTextBytes: 32 * 1024,
-  /** 记忆图归一化结果 JSON 字节预算。 */
-  memoryPanelGraphBytes: 200 * 1024,
+  /**
+   * 记忆图核心（nodes/edges，含 base）JSON 字节预算。
+   *
+   * include_rows 时先按此预算保证星座图可用，再按下面的总预算附加/裁剪行。
+   */
+  memoryPanelGraphCoreBytes: 200 * 1024,
+  /** graph.include_rows 表格行默认/最大条数与正文截断字符数。 */
+  memoryPanelRowsDefault: 200,
+  memoryPanelRowsMax: 500,
+  memoryPanelRowsTextCharsDefault: 400,
+  memoryPanelRowsTextCharsMax: 1_200,
+  /**
+   * `network_agent_memory_graph` 单一总预算：完整结果（base、nodes/edges、
+   * table_rows、timeline 及其它字段）序列化 JSON 的 UTF-8 字节上限。
+   *
+   * 必须小于 `toolResponseBytes`（256 KiB）；240 KiB 为 MCP 的 content /
+   * structuredContent 字段包装留出余量。超限时先按最旧行成块裁剪 table_rows
+   * （置 rows_truncated=true 并重建 timeline），行裁空后才兜底裁剪边/节点。
+   */
+  memoryPanelGraphResponseBytes: 240 * 1024,
   /** 时间过滤允许的最大跨度（天）。 */
   memoryPanelDateSpanDays: 366,
   /** 列表 offset 上限，避免深分页放大上游压力。 */

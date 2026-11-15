@@ -15,6 +15,7 @@ import {
   insightTimelineInputSchema,
   type InsightViewer,
 } from '../src/memory/insight/contracts';
+import { resolveTimelineZone, timelineRange } from '../src/memory/insight/timeline-zone';
 import { HindsightInsightReader } from '../src/memory/insight/hindsight-read';
 import { MemoryInsightService } from '../src/memory/insight/service';
 import { sortedPairKey, utf8Bytes } from '../src/storage/db';
@@ -537,6 +538,44 @@ async function main(): Promise<void> {
       timezone: 'Mars/Olympus',
     }),
     'INVALID_ARGUMENT',
+  );
+
+  console.log('--- timeline year 粒度边界 ---');
+  const nyZone = resolveTimelineZone({ timezone: 'America/New_York' });
+  const shanghaiZone = resolveTimelineZone({ timezone: 'Asia/Shanghai' });
+  const nyYear = timelineRange(Date.parse('2026-03-09T04:30:00Z'), 'year', nyZone);
+  checkEqual('year key', nyYear.key, '2026');
+  checkEqual('year label', nyYear.label, '2026年');
+  checkEqual(
+    'year NY 本地边界',
+    `${nyYear.start}/${nyYear.end}`,
+    '2026-01-01T05:00:00.000Z/2027-01-01T05:00:00.000Z',
+  );
+  const shanghaiYear = timelineRange(Date.parse('2026-03-09T04:30:00Z'), 'year', shanghaiZone);
+  checkEqual(
+    'year Asia/Shanghai 本地边界',
+    `${shanghaiYear.start}/${shanghaiYear.end}`,
+    '2025-12-31T16:00:00.000Z/2026-12-31T16:00:00.000Z',
+  );
+  checkEqual(
+    '跨年夜 NY 仍属 2025',
+    timelineRange(Date.parse('2025-12-31T23:30:00Z'), 'year', nyZone).key,
+    '2025',
+  );
+  checkEqual(
+    '跨年夜 Asia/Shanghai 已属 2026',
+    timelineRange(Date.parse('2025-12-31T23:30:00Z'), 'year', shanghaiZone).key,
+    '2026',
+  );
+  const offsetYear = timelineRange(
+    Date.parse('2026-03-09T04:30:00Z'),
+    'year',
+    resolveTimelineZone({ tz_offset_minutes: 480 }),
+  );
+  checkEqual(
+    'year tz_offset_minutes 回退边界',
+    `${offsetYear.start}/${offsetYear.end}`,
+    '2025-12-31T16:00:00.000Z/2026-12-31T16:00:00.000Z',
   );
 
   console.log('--- timeline 无日期与字节裁剪 ---');

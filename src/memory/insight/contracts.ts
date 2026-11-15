@@ -145,6 +145,8 @@ export interface InsightGraphEdge {
   type: string;
   weight: number;
   entity?: string | null;
+  /** 实体共现图的上游 `lastCooccurred`；上游没有该字段时整个属性省略。 */
+  last_cooccurred?: string | null;
 }
 
 export interface InsightEntityGraph {
@@ -179,6 +181,34 @@ export interface InsightGraphResult {
   raw_edge_count: number;
   limit: number;
   truncated: boolean;
+  /** `include_rows=true` 时出现；与 nodes 来自同一次上游 graph 响应。 */
+  table_rows?: InsightGraphRow[];
+  rows_truncated?: boolean;
+  timeline?: InsightGraphTimeline;
+}
+
+/** 表格/时间线共享的行；不包含 document_id/chunk_id/metadata/内部 tags。 */
+export interface InsightGraphRow {
+  id: string;
+  text: string;
+  fact_type: InsightFactType | null;
+  /** 上游没有 state/invalidated_at 时省略，不伪造。 */
+  state?: 'valid' | 'invalidated';
+  occurred_at: string | null;
+  mentioned_at: string | null;
+  occurred_start: string | null;
+  occurred_end: string | null;
+  entities: string[];
+  proof_count: number;
+  tags: string[];
+}
+
+export type InsightGraphTimelineGranularity = 'year' | 'month' | 'week' | 'day';
+
+export interface InsightGraphTimeline {
+  groups: Record<InsightGraphTimelineGranularity, InsightTimelineGroup[]>;
+  summary: InsightTimelineSummary;
+  basis: 'occurred_at';
 }
 
 export interface InsightListResult {
@@ -282,6 +312,23 @@ export const insightGraphInputSchema = z.strictObject({
     .int()
     .min(1)
     .max(LIMITS.memoryPanelGraphNodesRequestMax)
+    .optional(),
+  /** 为 true 时同一份 graph 响应附带 table_rows 与 timeline 分组。 */
+  include_rows: z.boolean().optional(),
+  rows_limit: z.number().int().min(1).max(LIMITS.memoryPanelRowsMax).optional(),
+  rows_text_chars: z
+    .number()
+    .int()
+    .min(1)
+    .max(LIMITS.memoryPanelRowsTextCharsMax)
+    .optional(),
+  /** 与 timeline 工具同义：IANA 优先，缺省时回退 tz_offset_minutes。 */
+  tz_offset_minutes: z.number().int().min(-840).max(840).optional(),
+  timezone: z
+    .string()
+    .min(1)
+    .max(64)
+    .refine(isValidTimeZoneName, { message: 'timezone 必须是有效的 IANA 时区名' })
     .optional(),
   refresh,
 });
@@ -406,6 +453,7 @@ const graphEdgeSchema = z.looseObject({
   type: z.string(),
   weight: z.number(),
   entity: z.string().nullable().optional(),
+  last_cooccurred: z.string().nullable().optional(),
 });
 
 const memoryItemSchema = z.looseObject({
@@ -476,6 +524,53 @@ export const insightOverviewOutputSchema = z.looseObject({
   stats: statsSchema.nullable(),
 });
 
+const timelineGroupSchema = z.looseObject({
+  key: z.string(),
+  label: z.string(),
+  start: z.string().nullable(),
+  end: z.string().nullable(),
+  count: z.number(),
+  start_index: z.number(),
+  end_index: z.number(),
+});
+
+const timelineSummarySchema = z.looseObject({
+  total: z.number().nullable(),
+  returned: z.number(),
+  dated: z.number(),
+  undated: z.number(),
+  by_type: z.looseObject({
+    world: z.number(),
+    experience: z.number(),
+    observation: z.number(),
+  }),
+});
+
+const graphRowSchema = z.looseObject({
+  id: z.string(),
+  text: z.string(),
+  fact_type: z.enum(INSIGHT_FACT_TYPES).nullable(),
+  state: z.enum(['valid', 'invalidated']).optional(),
+  occurred_at: z.string().nullable(),
+  mentioned_at: z.string().nullable(),
+  occurred_start: z.string().nullable(),
+  occurred_end: z.string().nullable(),
+  entities: z.array(z.string()),
+  proof_count: z.number(),
+  tags: z.array(z.string()),
+});
+
+const graphTimelineSchema = z.looseObject({
+  groups: z.looseObject({
+    year: z.array(timelineGroupSchema),
+    month: z.array(timelineGroupSchema),
+    week: z.array(timelineGroupSchema),
+    day: z.array(timelineGroupSchema),
+  }),
+  summary: timelineSummarySchema,
+  basis: z.literal('occurred_at'),
+});
+
 export const insightGraphOutputSchema = z.looseObject({
   available: z.boolean(),
   reason: reasonSchema,
@@ -489,6 +584,9 @@ export const insightGraphOutputSchema = z.looseObject({
   raw_edge_count: z.number(),
   limit: z.number(),
   truncated: z.boolean(),
+  table_rows: z.array(graphRowSchema).optional(),
+  rows_truncated: z.boolean().optional(),
+  timeline: graphTimelineSchema.optional(),
 });
 
 export const insightListOutputSchema = z.looseObject({
@@ -513,28 +611,6 @@ const timelineItemSchema = z.looseObject({
   occurred_at: z.string().nullable(),
   mentioned_at: z.string().nullable(),
   entities: z.array(z.string()),
-});
-
-const timelineGroupSchema = z.looseObject({
-  key: z.string(),
-  label: z.string(),
-  start: z.string().nullable(),
-  end: z.string().nullable(),
-  count: z.number(),
-  start_index: z.number(),
-  end_index: z.number(),
-});
-
-const timelineSummarySchema = z.looseObject({
-  total: z.number().nullable(),
-  returned: z.number(),
-  dated: z.number(),
-  undated: z.number(),
-  by_type: z.looseObject({
-    world: z.number(),
-    experience: z.number(),
-    observation: z.number(),
-  }),
 });
 
 export const insightTimelineOutputSchema = z.looseObject({
