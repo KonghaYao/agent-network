@@ -72,6 +72,16 @@ interface MockState {
   encoder: TextEncoder;
   roomKinds: Map<string, string>;
   roomGetCalls: Map<string, number>;
+  /** --room-events 测试用：房间列表与 history after 分页。 */
+  rooms: string[];
+  history: Map<string, JsonObject[]>;
+  /** 模拟旧服务端：/after 返回本页消息却仍给旧游标。 */
+  historyCursorStuck: boolean;
+  /** 模拟成员重新加入：代次递增后旧代次游标返回 CURSOR_EXPIRED。 */
+  historyGeneration: number;
+  historyCalls: Array<{ room_id: string; cursor: string | null; direction: string }>;
+  /** informational 帧不应触发 pending inbox 查询。 */
+  pendingListCalls: number;
   /** dsh 测试用：覆盖 network_login 的 pending/head 快照。 */
   loginPending: number | null;
   loginHeadSeq: string | null;
@@ -189,6 +199,12 @@ function createMock(options: MockOptions = {}): MockServer {
     encoder: new TextEncoder(),
     roomKinds: new Map(),
     roomGetCalls: new Map(),
+    rooms: [],
+    history: new Map(),
+    historyCursorStuck: false,
+    historyGeneration: 1,
+    historyCalls: [],
+    pendingListCalls: 0,
     loginPending: null,
     loginHeadSeq: null,
     listenFailures: options.listenFailures ?? 0,
@@ -309,8 +325,51 @@ function createMock(options: MockOptions = {}): MockServer {
           if (!kind) return toolError(body.id, 'INVALID_ARGUMENT', 'room not found');
           return toolResult(body.id, { room: { room_id: roomId, kind } });
         }
+        case 'network_rooms_list': {
+          const offset = Number(args.cursor ?? 0);
+          const limit = Number(args.limit ?? 50);
+          const rooms = state.rooms.slice(offset, offset + limit);
+          return toolResult(body.id, {
+            items: rooms.map((roomId) => ({ room_id: roomId, kind: 'group', head_seq: '0' })),
+            next_cursor: offset + limit < state.rooms.length ? String(offset + limit) : null,
+            has_more: offset + limit < state.rooms.length,
+          });
+        }
+        case 'network_history_list': {
+          const roomId = String(args.room_id ?? '');
+          const direction = String(args.direction ?? 'before');
+          const items = state.history.get(roomId) ?? [];
+          const cursor = args.cursor === undefined ? null : String(args.cursor);
+          state.historyCalls.push({ room_id: roomId, cursor, direction });
+          const cursorState = cursor === null ? null : decodeHistoryCursor(cursor);
+          if (cursorState !== null && cursorState.generation !== state.historyGeneration) {
+            return toolError(body.id, 'CURSOR_EXPIRED', '成员代次或历史边界已变化，请重新读取');
+          }
+          const start =
+            cursor === null
+              ? direction === 'after'
+                ? items.length
+                : 0
+              : Math.max(0, cursorState?.seq ?? 0);
+          const limit = Number(args.limit ?? 50);
+          const page = items.slice(start, start + limit);
+          const last = page.at(-1);
+          const lastSeq = last === undefined ? null : Number(last.created_seq);
+          const snapshot = items.length;
+          const nextSeq = state.historyCursorStuck
+            ? (cursorState?.seq ?? start)
+            : (lastSeq ?? Math.max(cursorState?.seq ?? 0, snapshot));
+          return toolResult(body.id, {
+            items: page,
+            next_cursor: encodeHistoryCursor(nextSeq, snapshot, state.historyGeneration),
+            has_more: start + limit < items.length,
+            snapshot: String(snapshot),
+            head_seq: String(snapshot),
+          });
+        }
         case 'network_inbox_list': {
           const wanted = String(args.state ?? 'active');
+          if (wanted === 'pending') state.pendingListCalls += 1;
           if (wanted === 'pending' && state.inboxFailures > 0) {
             state.inboxFailures -= 1;
             return toolError(body.id, 'UNAVAILABLE', 'inbox temporarily unavailable');
@@ -438,6 +497,74 @@ function notificationItem(deliveryId: string, source = 'delivery.created', event
   };
 }
 
+function roomItem(
+  roomId: string,
+  messageId: string,
+  options: { senderId?: string; seq?: string; eventId?: string } = {},
+): JsonObject {
+  return {
+    source: 'room.message',
+    kind: 'message',
+    attention: 'informational',
+    room_id: roomId,
+    message_id: messageId,
+    sender_id: options.senderId ?? 'agt_user',
+    seq: options.seq ?? '9',
+    event_id: options.eventId ?? `evt_${messageId}`,
+    created_at: new Date().toISOString(),
+  };
+}
+
+function historyMessage(
+  roomId: string,
+  messageId: string,
+  seq: number,
+  senderId = 'agt_user',
+): JsonObject {
+  return {
+    message_id: messageId,
+    room_id: roomId,
+    sender_id: senderId,
+    created_seq: String(seq),
+    preview: 'history-preview-should-not-leak',
+    created_at: new Date().toISOString(),
+  };
+}
+
+function encodeHistoryCursor(seq: number, snapshot: number, generation = 1): string {
+  return Buffer.from(
+    JSON.stringify({
+      v: 1,
+      scope: `room:rm_test:history:g${generation}`,
+      dir: 'after',
+      seq,
+      snapshot,
+    }),
+    'utf8',
+  ).toString('base64url');
+}
+
+function decodeHistoryCursor(
+  cursor: string,
+): { seq: number; snapshot: number; generation: number } | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as {
+      seq?: unknown;
+      snapshot?: unknown;
+      scope?: unknown;
+    };
+    if (typeof parsed.seq !== 'number' || typeof parsed.snapshot !== 'number') return null;
+    const match = typeof parsed.scope === 'string' ? /:g(\d+)$/u.exec(parsed.scope) : null;
+    return {
+      seq: parsed.seq,
+      snapshot: parsed.snapshot,
+      generation: match === null ? 0 : Number(match[1]),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function sendItems(
   mock: MockServer,
   items: JsonObject[],
@@ -511,8 +638,12 @@ function startProcess(cmd: string[], env: Record<string, string>): RunningWatche
   };
 }
 
-function startWatcher(base: string, extraEnv: Record<string, string> = {}): RunningWatcher {
-  return startProcess([process.execPath, CLI, 'monitor', '--harness', 'claude'], {
+function startWatcher(
+  base: string,
+  extraEnv: Record<string, string> = {},
+  extraArgs: string[] = [],
+): RunningWatcher {
+  return startProcess([process.execPath, CLI, 'monitor', '--harness', 'claude', ...extraArgs], {
     AGENTNET_URL: base,
     AGENTNET_TOKEN: TOKEN,
     ...extraEnv,
@@ -578,6 +709,39 @@ async function waitForEvent(
   );
 }
 
+async function waitForRoomEvent(
+  lines: string[],
+  messageId: string,
+  timeoutMs = 10_000,
+): Promise<JsonObject> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    for (const line of lines) {
+      const event = parseEvent(line);
+      if (event?.type === 'room_message' && event.message_id === messageId) return event;
+    }
+    await Bun.sleep(50);
+  }
+  throw new Error(
+    `timeout waiting for room_message/${messageId}; lines=${JSON.stringify(lines)}`,
+  );
+}
+
+async function waitForHistoryCall(
+  mock: MockServer,
+  predicate: (call: { room_id: string; cursor: string | null; direction: string }) => boolean,
+  label: string,
+  timeoutMs = 10_000,
+): Promise<{ room_id: string; cursor: string | null; direction: string }> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const found = mock.state.historyCalls.find(predicate);
+    if (found) return found;
+    await Bun.sleep(50);
+  }
+  throw new Error(`timeout waiting for ${label}`);
+}
+
 async function waitForReconnect(
   mock: MockServer,
   previous: ReadableStreamDefaultController<Uint8Array> | null,
@@ -596,6 +760,13 @@ function eventCount(lines: string[], type: string, deliveryId: string): number {
   return lines.reduce((count, line) => {
     const event = parseEvent(line);
     return event?.type === type && event.delivery_id === deliveryId ? count + 1 : count;
+  }, 0);
+}
+
+function roomEventCount(lines: string[], messageId: string): number {
+  return lines.reduce((count, line) => {
+    const event = parseEvent(line);
+    return event?.type === 'room_message' && event.message_id === messageId ? count + 1 : count;
   }, 0);
 }
 
@@ -865,6 +1036,439 @@ async function runClaudeChecks(): Promise<void> {
     await watcher.kill();
     mock.stop();
   }
+}
+
+async function runRoomEventChecks(): Promise<void> {
+  // 默认关闭：即使流里有 informational room.message，也不输出 room_message。
+  const offMock = createMock();
+  const offWatcher = startWatcher(offMock.base, { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' });
+  try {
+    await waitForLine(offWatcher.stderr, (line) => line.includes('READY'), 'room-events off READY');
+    sendItems(offMock, [roomItem('rm_allowed', 'msg_off')]);
+    await Bun.sleep(700);
+    checkEqual('默认关闭不输出 room_message', roomEventCount(offWatcher.stdout, 'msg_off'), 0);
+  } finally {
+    await offWatcher.kill();
+    offMock.stop();
+  }
+
+  const mock = createMock();
+  mock.state.rooms = ['rm_allowed', 'rm_other'];
+  const watcher = startWatcher(
+    mock.base,
+    { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' },
+    ['--room-events'],
+  );
+  try {
+    await waitForLine(watcher.stderr, (line) => line.includes('READY'), 'room-events READY');
+    const baseline = await waitForHistoryCall(
+      mock,
+      (call) => call.room_id === 'rm_allowed' && call.cursor === null,
+      'initial room history baseline',
+    );
+    await waitForHistoryCall(
+      mock,
+      (call) => call.room_id === 'rm_other' && call.cursor === null,
+      'initial second room history baseline',
+    );
+    checkEqual('首次连接 history 基线使用 after', baseline.direction, 'after');
+    checkEqual(
+      '默认监听所有房间，各取一次基线',
+      mock.state.historyCalls.filter((call) => call.cursor === null).length,
+      2,
+    );
+
+    // 所有房间、自己发送与未 @ 的消息都输出；不做业务筛选。
+    const inboxBefore = mock.state.pendingListCalls;
+    sendItems(mock, [
+      roomItem('rm_other', 'msg_other_room'),
+      roomItem('rm_allowed', 'msg_self', { senderId: 'agt_me' }),
+      roomItem('rm_allowed', 'msg_info', { seq: '11' }),
+    ]);
+    const info = await waitForRoomEvent(watcher.stdout, 'msg_info');
+    await waitForRoomEvent(watcher.stdout, 'msg_other_room');
+    await waitForRoomEvent(watcher.stdout, 'msg_self');
+    checkEqual('room_message room_id', info.room_id, 'rm_allowed');
+    checkEqual('room_message message_id', info.message_id, 'msg_info');
+    checkEqual('room_message sender_id', info.sender_id, 'agt_user');
+    checkEqual('room_message seq', info.seq, '11');
+    checkEqual('room_message source', info.source, 'stream');
+    check('room_message 不带正文', !('body' in info));
+    check('room_message 不带 preview', !('preview' in info));
+    checkEqual('输出自己发送的消息', roomEventCount(watcher.stdout, 'msg_self'), 1);
+    checkEqual('输出其他房间消息', roomEventCount(watcher.stdout, 'msg_other_room'), 1);
+    checkEqual('纯 informational 帧不查询 pending inbox', mock.state.pendingListCalls, inboxBefore);
+
+    // 跨帧重复：同一 message_id 只输出一次（精确去重，不是业务筛选）。
+    sendItems(mock, [
+      roomItem('rm_allowed', 'msg_info', { seq: '12', eventId: 'evt_info_dup' }),
+      roomItem('rm_allowed', 'msg_self', { senderId: 'agt_me', eventId: 'evt_self_dup' }),
+    ]);
+    await Bun.sleep(600);
+    checkEqual('跨帧重复 message_id 去重', roomEventCount(watcher.stdout, 'msg_info'), 1);
+    checkEqual('自己消息跨帧去重', roomEventCount(watcher.stdout, 'msg_self'), 1);
+
+    // 同帧 delivery + room.message：delivery 优先，不重复输出 room_message。
+    mock.state.pending.set('dlv_room_same', delivery('dlv_room_same', 'msg_room_same'));
+    sendItems(mock, [
+      {
+        ...notificationItem('dlv_room_same', 'delivery.created', 'evt_room_same'),
+        message_id: 'msg_room_same',
+      },
+      roomItem('rm_allowed', 'msg_room_same'),
+    ]);
+    await waitForEvent(watcher.stdout, 'delivery', 'dlv_room_same');
+    await Bun.sleep(400);
+    checkEqual(
+      '同帧 delivery 与 room.message 只输出 delivery',
+      roomEventCount(watcher.stdout, 'msg_room_same'),
+      0,
+    );
+
+    // reconnect 补读：所有房间都补，已输出过的不重复。
+    mock.state.history.set('rm_allowed', [
+      historyMessage('rm_allowed', 'msg_info', 1),
+      historyMessage('rm_allowed', 'msg_backfill', 2),
+      historyMessage('rm_allowed', 'msg_self', 3, 'agt_me'),
+    ]);
+    mock.state.history.set('rm_other', [
+      historyMessage('rm_other', 'msg_other_room', 4),
+      historyMessage('rm_other', 'msg_other_new', 5),
+    ]);
+    const previous = mock.state.controller;
+    mock.closeStream();
+    await waitForReconnect(mock, previous, 'room-events');
+    await waitForLine(
+      watcher.stderr,
+      (line) => line.includes('READY') && line.includes('reconnect=1'),
+      'room-events READY after reconnect',
+    );
+    const backfilled = await waitForRoomEvent(watcher.stdout, 'msg_backfill');
+    const otherBackfilled = await waitForRoomEvent(watcher.stdout, 'msg_other_new');
+    checkEqual('补读事件 source', backfilled.source, 'history');
+    checkEqual('补读事件 seq 使用 created_seq', backfilled.seq, '2');
+    checkEqual('其他房间补读 source', otherBackfilled.source, 'history');
+    await Bun.sleep(500);
+    checkEqual('补读只输出新增消息', roomEventCount(watcher.stdout, 'msg_backfill'), 1);
+    checkEqual('补读其他房间新增消息', roomEventCount(watcher.stdout, 'msg_other_new'), 1);
+    checkEqual('补读不重复已输出的消息', roomEventCount(watcher.stdout, 'msg_info'), 1);
+    checkEqual('补读不重复自己已输出的消息', roomEventCount(watcher.stdout, 'msg_self'), 1);
+    checkEqual('补读不重复其他房间已输出消息', roomEventCount(watcher.stdout, 'msg_other_room'), 1);
+    const backfillCall = await waitForHistoryCall(
+      mock,
+      (call) => call.room_id === 'rm_allowed' && call.cursor !== null,
+      'reconnect room history backfill',
+    );
+    checkEqual('reconnect 补读使用 after', backfillCall.direction, 'after');
+
+    // 第二次重连没有新消息：不重复输出。
+    const previousAgain = mock.state.controller;
+    mock.closeStream();
+    await waitForReconnect(mock, previousAgain, 'room-events second');
+    await waitForLine(
+      watcher.stderr,
+      (line) => line.includes('READY') && line.includes('reconnect=1'),
+      'room-events second READY',
+    );
+    await Bun.sleep(700);
+    checkEqual('第二次重连不重复补读', roomEventCount(watcher.stdout, 'msg_backfill'), 1);
+    checkEqual('第二次重连不重复其他房间', roomEventCount(watcher.stdout, 'msg_other_new'), 1);
+
+    // 旧服务端可能返回与本页消息不匹配的旧游标；客户端仍须按最后一条推进。
+    mock.state.historyCursorStuck = true;
+    mock.state.history.set('rm_allowed', [
+      historyMessage('rm_allowed', 'msg_info', 1),
+      historyMessage('rm_allowed', 'msg_backfill', 2),
+      historyMessage('rm_allowed', 'msg_self', 3, 'agt_me'),
+      historyMessage('rm_allowed', 'msg_stuck', 4),
+    ]);
+    const stuckPrevious = mock.state.controller;
+    mock.closeStream();
+    await waitForReconnect(mock, stuckPrevious, 'room-events stuck cursor');
+    await waitForLine(
+      watcher.stderr,
+      (line) => line.includes('READY') && line.includes('reconnect=1'),
+      'room-events stuck READY',
+    );
+    await waitForRoomEvent(watcher.stdout, 'msg_stuck');
+    checkEqual('游标不前进时仍输出新消息', roomEventCount(watcher.stdout, 'msg_stuck'), 1);
+
+    const stuckAgain = mock.state.controller;
+    mock.closeStream();
+    await waitForReconnect(mock, stuckAgain, 'room-events stuck cursor second');
+    await waitForLine(
+      watcher.stderr,
+      (line) => line.includes('READY') && line.includes('reconnect=1'),
+      'room-events stuck second READY',
+    );
+    const advancedCall = await waitForHistoryCall(
+      mock,
+      (call) =>
+        call.room_id === 'rm_allowed' &&
+        call.cursor !== null &&
+        (decodeHistoryCursor(call.cursor)?.seq ?? 0) >= 4,
+      'stuck cursor advanced to last item',
+    );
+    checkEqual(
+      '客户端按最后一条 created_seq 推进游标',
+      decodeHistoryCursor(advancedCall.cursor ?? '')?.seq,
+      4,
+    );
+    await Bun.sleep(700);
+    checkEqual('旧游标第二次重连不重复', roomEventCount(watcher.stdout, 'msg_stuck'), 1);
+  } finally {
+    await watcher.kill();
+    mock.stop();
+  }
+
+  // 显式 all 与裸 --room-events 等价：枚举并接受任意房间的消息。
+  const allMock = createMock();
+  allMock.state.rooms = ['rm_allowed', 'rm_other'];
+  const allWatcher = startWatcher(
+    allMock.base,
+    { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' },
+    ['--room-events', 'all'],
+  );
+  try {
+    await waitForLine(allWatcher.stderr, (line) => line.includes('READY'), 'room-events all READY');
+    await waitForHistoryCall(allMock, (call) => call.room_id === 'rm_other', 'all baseline rm_other');
+    sendItems(allMock, [
+      roomItem('rm_allowed', 'msg_all_a'),
+      roomItem('rm_other', 'msg_all_b'),
+    ]);
+    await waitForRoomEvent(allWatcher.stdout, 'msg_all_a');
+    await waitForRoomEvent(allWatcher.stdout, 'msg_all_b');
+    checkEqual('all 输出首个房间消息', roomEventCount(allWatcher.stdout, 'msg_all_a'), 1);
+    checkEqual('all 输出第二个房间消息', roomEventCount(allWatcher.stdout, 'msg_all_b'), 1);
+  } finally {
+    await allWatcher.kill();
+    allMock.stop();
+  }
+
+  // 2000+ 积压：单次补读到 20 页上限时明确记录截断，下一次 reconnect 续读。
+  const truncMock = createMock();
+  truncMock.state.rooms = ['rm_trunc'];
+  const truncWatcher = startWatcher(
+    truncMock.base,
+    { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' },
+    ['--room-events'],
+  );
+  try {
+    await waitForLine(truncWatcher.stderr, (line) => line.includes('READY'), 'trunc READY');
+    await waitForHistoryCall(truncMock, (call) => call.room_id === 'rm_trunc', 'trunc baseline');
+    truncMock.state.history.set(
+      'rm_trunc',
+      Array.from({ length: 2001 }, (_, index) =>
+        historyMessage('rm_trunc', `msg_trunc_${index + 1}`, index + 1),
+      ),
+    );
+    const truncPrevious = truncMock.state.controller;
+    truncMock.closeStream();
+    await waitForReconnect(truncMock, truncPrevious, 'trunc');
+    await waitForLine(
+      truncWatcher.stderr,
+      (line) => line.includes('READY') && line.includes('reconnect=1'),
+      'trunc READY after reconnect',
+      30_000,
+    );
+    await waitForLine(
+      truncWatcher.stderr,
+      (line) => line.includes('ROOM_HISTORY_TRUNCATED') && line.includes('room_id=rm_trunc'),
+      'room history truncation notice',
+      30_000,
+    );
+    checkEqual('截断前输出到第 2000 条', roomEventCount(truncWatcher.stdout, 'msg_trunc_2000'), 1);
+    await Bun.sleep(300);
+    checkEqual('截断时未输出第 2001 条', roomEventCount(truncWatcher.stdout, 'msg_trunc_2001'), 0);
+
+    const truncAgain = truncMock.state.controller;
+    truncMock.closeStream();
+    await waitForReconnect(truncMock, truncAgain, 'trunc resume');
+    await waitForLine(
+      truncWatcher.stderr,
+      (line) => line.includes('READY') && line.includes('reconnect=1'),
+      'trunc resume READY',
+      30_000,
+    );
+    const resumeCall = await waitForHistoryCall(
+      truncMock,
+      (call) =>
+        call.room_id === 'rm_trunc' &&
+        call.cursor !== null &&
+        (decodeHistoryCursor(call.cursor)?.seq ?? 0) === 2000,
+      'trunc resume from saved cursor',
+    );
+    checkEqual('截断后保存第 2000 条游标', decodeHistoryCursor(resumeCall.cursor ?? '')?.seq, 2000);
+    await waitForRoomEvent(truncWatcher.stdout, 'msg_trunc_2001', 30_000);
+    checkEqual('下一次 reconnect 续读第 2001 条', roomEventCount(truncWatcher.stdout, 'msg_trunc_2001'), 1);
+    await Bun.sleep(300);
+    checkEqual('续读不重复前 2000 条', roomEventCount(truncWatcher.stdout, 'msg_trunc_2000'), 1);
+  } finally {
+    await truncWatcher.kill();
+    truncMock.stop();
+  }
+
+  // 成员移除→重新加入：服务端代次变化拒绝旧游标；客户端重置一次并重取基线。
+  const rejoinMock = createMock();
+  rejoinMock.state.rooms = ['rm_rejoin'];
+  const rejoinWatcher = startWatcher(
+    rejoinMock.base,
+    { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' },
+    ['--room-events'],
+  );
+  try {
+    await waitForLine(rejoinWatcher.stderr, (line) => line.includes('READY'), 'rejoin READY');
+    await waitForHistoryCall(
+      rejoinMock,
+      (call) => call.room_id === 'rm_rejoin' && call.cursor === null,
+      'rejoin initial baseline',
+    );
+    rejoinMock.state.history.set('rm_rejoin', [
+      historyMessage('rm_rejoin', 'msg_rejoin_seen', 1),
+      historyMessage('rm_rejoin', 'msg_rejoin_prebaseline', 2),
+    ]);
+    sendItems(rejoinMock, [roomItem('rm_rejoin', 'msg_rejoin_seen')]);
+    await waitForRoomEvent(rejoinWatcher.stdout, 'msg_rejoin_seen');
+
+    // 重新加入产生新代次：旧 g1 游标一律 CURSOR_EXPIRED。
+    rejoinMock.state.historyGeneration = 2;
+    const rejoinPrevious = rejoinMock.state.controller;
+    const callsBeforeReset = rejoinMock.state.historyCalls.length;
+    rejoinMock.closeStream();
+    await waitForReconnect(rejoinMock, rejoinPrevious, 'rejoin');
+    await waitForLine(
+      rejoinWatcher.stderr,
+      (line) => line.includes('READY') && line.includes('reconnect=1'),
+      'rejoin READY after reconnect',
+    );
+    await waitForLine(
+      rejoinWatcher.stderr,
+      (line) => line.includes('ROOM_HISTORY_RESET') && line.includes('room_id=rm_rejoin'),
+      'room history reset notice',
+    );
+    await waitForHistoryCall(
+      rejoinMock,
+      (call) =>
+        call.room_id === 'rm_rejoin' &&
+        call.cursor === null &&
+        rejoinMock.state.historyCalls.indexOf(call) >= callsBeforeReset,
+      'rejoin rebaseline',
+    );
+    checkEqual(
+      '重新加入后旧游标被服务端拒绝',
+      rejoinMock.state.historyCalls
+        .slice(callsBeforeReset)
+        .some(
+          (call) =>
+            call.room_id === 'rm_rejoin' &&
+            call.cursor !== null &&
+            decodeHistoryCursor(call.cursor)?.generation === 1,
+        ),
+      true,
+    );
+    await Bun.sleep(400);
+    checkEqual(
+      '重新加入后只记录一次重置',
+      rejoinWatcher.stderr.filter(
+        (line) => line.includes('ROOM_HISTORY_RESET') && line.includes('room_id=rm_rejoin'),
+      ).length,
+      1,
+    );
+    check(
+      '重新加入后不输出永久 room_history_failed',
+      !rejoinWatcher.stderr.some((line) => line.includes('room_history_failed')) &&
+        !rejoinWatcher.stdout.some((line) => line.includes('room_history_failed')),
+    );
+    checkEqual(
+      '重新加入后不重复输出已见消息',
+      roomEventCount(rejoinWatcher.stdout, 'msg_rejoin_seen'),
+      1,
+    );
+
+    // 重置后的流消息仍只输出一次。
+    sendItems(rejoinMock, [roomItem('rm_rejoin', 'msg_rejoin_after')]);
+    await waitForRoomEvent(rejoinWatcher.stdout, 'msg_rejoin_after');
+    checkEqual(
+      '重新加入后流消息输出一次',
+      roomEventCount(rejoinWatcher.stdout, 'msg_rejoin_after'),
+      1,
+    );
+
+    // 重置后的新游标可继续补读断线期间的消息。
+    rejoinMock.state.history.set('rm_rejoin', [
+      historyMessage('rm_rejoin', 'msg_rejoin_seen', 1),
+      historyMessage('rm_rejoin', 'msg_rejoin_prebaseline', 2),
+      historyMessage('rm_rejoin', 'msg_rejoin_after', 3),
+      historyMessage('rm_rejoin', 'msg_rejoin_gap', 4),
+    ]);
+    const rejoinAgain = rejoinMock.state.controller;
+    rejoinMock.closeStream();
+    await waitForReconnect(rejoinMock, rejoinAgain, 'rejoin backfill');
+    await waitForLine(
+      rejoinWatcher.stderr,
+      (line) => line.includes('READY') && line.includes('reconnect=1'),
+      'rejoin backfill READY',
+    );
+    await waitForRoomEvent(rejoinWatcher.stdout, 'msg_rejoin_gap');
+    await Bun.sleep(400);
+    checkEqual(
+      '重新加入后离线消息补读一次',
+      roomEventCount(rejoinWatcher.stdout, 'msg_rejoin_gap'),
+      1,
+    );
+    checkEqual(
+      '重新加入后流消息不因补读重复',
+      roomEventCount(rejoinWatcher.stdout, 'msg_rejoin_after'),
+      1,
+    );
+    const rejoinBackfill = await waitForHistoryCall(
+      rejoinMock,
+      (call) =>
+        call.room_id === 'rm_rejoin' &&
+        call.cursor !== null &&
+        decodeHistoryCursor(call.cursor)?.generation === 2,
+      'rejoin new generation backfill',
+    );
+    checkEqual(
+      '重新加入后补读使用新代次游标',
+      decodeHistoryCursor(rejoinBackfill.cursor ?? '')?.generation,
+      2,
+    );
+    checkEqual(
+      '重新加入后仍只记录一次重置',
+      rejoinWatcher.stderr.filter(
+        (line) => line.includes('ROOM_HISTORY_RESET') && line.includes('room_id=rm_rejoin'),
+      ).length,
+      1,
+    );
+  } finally {
+    await rejoinWatcher.kill();
+    rejoinMock.stop();
+  }
+
+  const nonClaude = Bun.spawnSync({
+    cmd: [process.execPath, CLI, 'monitor', '--harness', 'peri', '--room-events', 'all', '--check-config'],
+    cwd: ROOT,
+    env: { ...process.env, AGENTNET_TOKEN: TOKEN },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  check(
+    '--room-events 非 claude 明确拒绝',
+    nonClaude.exitCode !== 0 && nonClaude.stderr.toString().includes('仅支持 --harness claude'),
+  );
+
+  const invalidRoom = Bun.spawnSync({
+    cmd: [process.execPath, CLI, 'monitor', '--harness', 'claude', '--room-events', 'rm_allowed', '--check-config'],
+    cwd: ROOT,
+    env: { ...process.env, AGENTNET_TOKEN: TOKEN },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  check(
+    '--room-events 不再接受房间白名单',
+    invalidRoom.exitCode !== 0 && invalidRoom.stderr.toString().includes('只接受 all'),
+  );
 }
 
 async function runPeriChecks(): Promise<void> {
@@ -2253,6 +2857,8 @@ async function main(): Promise<void> {
   check('inbox 无分页标记不得误判为完整结果', rejectedMalformed);
   console.log('TS monitor: claude harness');
   await runClaudeChecks();
+  console.log('TS monitor: room events');
+  await runRoomEventChecks();
   console.log('TS monitor: inbox/deferred retry');
   await runMonitorRetryChecks();
   console.log('TS monitor: signal cleanup');

@@ -27,6 +27,7 @@ bun agentnet.js monitor --harness claude
 - 一个 token 同时只运行一个 Monitor。token 来源优先级：`--token` > `AGENTNET_TOKEN` > `AGENTNET_TOKEN_FILE` > URL 的 `?token=`；token 文件只读首行，POSIX 下权限必须是 `600`。
 - `--json` 时每行输出一个 JSON 事件（含 `type` / `kind` / `seq` 与定位字段），READY/RECONNECTING 等控制行也转为 JSON；不加时仍保持“stdout 事件 JSON、stderr 诊断”的旧格式。
 - `agentnet monitor --harness claude` 持续监听 `agentnet://stream`，自行完成连接、`notifications/subscriptions/acknowledged` 后的 `network_login`、断线退避重连与 `network_inbox_list` 补读；不要另写轮询或重连逻辑。需要固定状态目录时加 `--state-dir <dir>`。
+- `--room-events`（可省略值，默认 `all`）监听所有房间的 informational 消息，作为“一个人监听所有动向”，不按 @、发送者或房间筛选。输出 `type:"room_message"`，只含 `room_id` / `message_id` / `sender_id` / `seq` / `event_id`，`source` 为 `stream` 或断线补读的 `history`，不含正文；需要正文时按 `message_id` 调用 `network_message_read`。同一 `message_id` 只输出一次，同帧已有 delivery 时优先 delivery。SQLite 是权威，事件只做提示。reconnect 用 after 游标补读并单调推进；单次最多 2000 条，超过时输出 `ROOM_HISTORY_TRUNCATED`，下一次 reconnect 从保存游标继续。
 - CLI 在把投递交给宿主前自动调用 `network_delivery_claim`。只有 claim 成功才输出可处理的 `type:"delivery"`；失败会输出明确类型，不会伪装成待处理投递。每条待处理投递向 stdout 输出一行 JSON；Monitor 持续运行，不因单条事件退出或重启：
 
   ```json

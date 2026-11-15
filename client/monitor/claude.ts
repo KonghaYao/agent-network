@@ -5,11 +5,12 @@
  * - stdout 每行一个事件 JSON；
  * - stderr 输出 READY、RECONNECTING、DEGRADED 与 ERROR；
  * - 自动 claim 成功后携带正文预览与 event_file；
+ * - 可选 `--room-events [all]`：监听所有房间，额外输出不含正文的 room_message；
  * - SIGINT/SIGTERM/SIGHUP 清理状态目录后以 0 退出。
  */
 
 import { CliError, resolveConfig } from '../mcp';
-import { MonitorEngine } from './engine';
+import { MonitorEngine, type RoomEventScope } from './engine';
 import { BODY_PREVIEW_CHARS } from './events';
 import { MonitorRpc } from './rpc';
 import { MonitorState } from './state';
@@ -30,7 +31,12 @@ function fail(line: string): number {
 
 export async function runClaudeMonitor(
   context: MonitorContext,
-  options: { stateDir?: string; json?: boolean; maxRuntimeMs?: number } = {},
+  options: {
+    stateDir?: string;
+    json?: boolean;
+    maxRuntimeMs?: number;
+    roomEvents?: RoomEventScope;
+  } = {},
 ): Promise<number> {
   const token = context.token;
   if (!token) return fail('ERROR type=credential message=missing_token');
@@ -74,6 +80,7 @@ export async function runClaudeMonitor(
       json: options.json === true,
       maxRuntimeMs: options.maxRuntimeMs ?? 0,
       onDeadline: stop,
+      roomEvents: options.roomEvents,
     });
     return await engine.run();
   } finally {

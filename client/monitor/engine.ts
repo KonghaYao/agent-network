@@ -11,6 +11,9 @@
  * - 同一时刻只保留一个 claim（由服务端约束），deferred 不写永久 seen；
  * - inbox 查询失败按指数退避重试，恢复后补领 pending；
  * - deferred 进入本地待领队列，按退避重试 claim，同一状态只提示一次；
+ * - room_message 默认关闭；开启后监听所有房间，只输出 informational 定位字段，
+ *   按 message_id 精确去重，reconnect 时用 history after 游标补读一次；
+ *   成员代次变化触发 CURSOR_EXPIRED 时清游标、记录一次重置并重取基线；
  * - 正文只进 event_file 与 stdout 的预览，不写日志。
  */
 
@@ -26,10 +29,12 @@ import {
   previewBody,
   readFailedEvent,
   reminderEvent,
+  roomMessageEvent,
   type ClaimFailure,
   type ClaimInfo,
   type DeliveryFields,
 } from './events';
+import { advanceHistoryCursor } from './room-cursor';
 import {
   MonitorFatalError,
   MonitorRpc,
@@ -53,6 +58,24 @@ const CLAIM_RETRY_BASE_MS = 2_000;
 const CLAIM_RETRY_MAX_MS = 30_000;
 /** 同一投递的 claim 失败提示每到这么多轮才重复一次，避免刷屏。 */
 const RETRY_ERROR_NOTICE_EVERY = 10;
+/** room_message 的本地去重窗口；覆盖同帧重复与短时间内的重复通知。 */
+const ROOM_MESSAGE_DEDUPE_TTL_MS = 5 * 60_000;
+/** reconnect 补读每页条数；服务端 historyPageMax 为 100。 */
+const ROOM_HISTORY_PAGE_LIMIT = 100;
+/** reconnect 补读单房间的最多页数，避免异常游标导致无限循环。 */
+const ROOM_HISTORY_MAX_PAGES = 20;
+/** 单次 reconnect 补读上限；超过时记录截断，下一次 reconnect 从保存的游标继续。 */
+const ROOM_HISTORY_MAX_ITEMS = ROOM_HISTORY_MAX_PAGES * ROOM_HISTORY_PAGE_LIMIT;
+/** 本进程已输出 room_message 的 message_id 记忆上限，用于 reconnect 补读去重。 */
+const ROOM_OUTPUT_MEMORY = 10_000;
+
+/** `network_history_list` 的单次结果；游标失效需要按业务 code 区分。 */
+type RoomHistoryFetch =
+  | { ok: true; data: JsonObject }
+  | { ok: false; code: string };
+
+/** `--room-events`：开启后监听全部房间消息；缺省关闭。 */
+export type RoomEventScope = 'all';
 
 /** Peri 宿主 monitor 的单次上限；到期后 CLI 主动结束，避免静默失效。 */
 export const PERI_MAX_RUNTIME_MS = 24 * 60 * 60 * 1000;
@@ -115,6 +138,8 @@ export interface MonitorEngineOptions {
   expiringThresholdMs?: number;
   /** 到达 deadline 时通知宿主进程停止（通常传 AbortController.abort）。 */
   onDeadline?: () => void;
+  /** 可选输出 informational room 消息；缺省关闭。 */
+  roomEvents?: RoomEventScope;
 }
 
 type EmitResult = 'emitted' | 'deferred' | 'error';
@@ -269,11 +294,13 @@ function newSubscriptionId(generation: number): string {
 /**
  * `--json` 事件行的粗分类，供宿主用稳定正则过滤：
  * delivery=可处理投递，reminder=进度提醒，notice=不可处理的 claim 回执，
+ * room=已收到的 informational 房间消息（不含正文），
  * control=连接/期限事件，error=需要人工修复的错误。
  */
 export function eventKind(type: string): string {
   if (type === 'delivery') return 'delivery';
   if (type === 'reminder') return 'reminder';
+  if (type === 'room_message') return 'room';
   if (type.startsWith('delivery_')) return 'notice';
   if (type === 'error') return 'error';
   return 'control';
@@ -295,6 +322,14 @@ export class MonitorEngine {
   private readonly maxRuntimeMs: number;
   private readonly expiringThresholdMs: number;
   private readonly onDeadline: (() => void) | undefined;
+  /** null 表示 `--room-events` 未开启。 */
+  private readonly roomEventScope: RoomEventScope | null;
+  /** 每个房间最近一次 history after 游标，仅用于 reconnect 补读。 */
+  private readonly roomHistoryCursors = new Map<string, string>();
+  /** message_id -> 去重截止时间；delivery 与 room_message 共用。 */
+  private readonly roomMessageSeen = new Map<string, number>();
+  /** 本进程已见 delivery 或已输出 room_message 的 message_id；补读去重用。 */
+  private readonly roomMessageHistory = new Set<string>();
 
   private meId = '';
   private readyEmitted = false;
@@ -339,6 +374,7 @@ export class MonitorEngine {
     this.maxRuntimeMs = options.maxRuntimeMs ?? 0;
     this.expiringThresholdMs = options.expiringThresholdMs ?? EXPIRING_THRESHOLD_MS;
     this.onDeadline = options.onDeadline;
+    this.roomEventScope = options.roomEvents === undefined ? null : 'all';
   }
 
   async run(): Promise<number> {
@@ -580,6 +616,7 @@ export class MonitorEngine {
     }
 
     const pending = asNumber(login.data.pending_count, 0);
+    const reconnect = this.readyEmitted;
     if (!this.readyEmitted) {
       this.control(
         'ready',
@@ -608,6 +645,7 @@ export class MonitorEngine {
     }
     this.degraded = false;
     await this.emitPendingSnapshot();
+    await this.syncRoomEvents(reconnect);
   }
 
   private async handleFrame(frame: JsonObject): Promise<void> {
@@ -615,71 +653,302 @@ export class MonitorEngine {
     const envelope = asRecord(asRecord(params._meta)['io.agent-network/event']);
     if (Object.keys(envelope).length === 0) return;
 
-    const pending = await this.pendingDeliveryMap();
-    const items = asArray(envelope.items)
-      .map(asRecord)
-      .filter(
-        (item) =>
-          item.attention === 'action_required' &&
-          item.delivery_id !== null &&
-          item.delivery_id !== undefined &&
-          asString(item.sender_id) !== this.meId,
-      );
+    const rawItems = asArray(envelope.items).map(asRecord);
+    const deliveryItems = rawItems.filter(
+      (item) =>
+        item.attention === 'action_required' &&
+        item.delivery_id !== null &&
+        item.delivery_id !== undefined &&
+        asString(item.sender_id) !== this.meId,
+    );
 
-    for (const item of items) {
-      const id = asString(item.delivery_id);
-      if (id.length === 0) continue;
-      const source = asString(item.source);
-      const eventId = asString(item.event_id);
-      const fallback = [asString(item.source), asString(item.seq), id].join(':');
-
-      if (source === 'delivery.reminder') {
-        const key = `reminder:${id}:${eventId.length > 0 ? eventId : fallback}`;
-        if (this.state.hasSeen(key)) continue;
-        const event = this.format.reminder ? this.format.reminder(item) : reminderEvent(item);
-        this.emitEvent(event);
-        await this.state.markSeen(key);
-        continue;
+    // 同一帧里已经作为 delivery 出现的消息，不再重复输出 room_message。
+    for (const item of deliveryItems) {
+      const messageId = asString(item.message_id);
+      if (messageId.length > 0) {
+        this.rememberRoomMessage(messageId);
+        this.rememberRoomMessageHistory(messageId);
       }
-
-      // 收到 retry 回执时立即把待领队列里的同一条投递放回队首。
-      if (source === 'delivery.retried') this.releaseDeferred(id);
-
-      if (this.claiming.has(id)) continue;
-      const queued = this.deferred.get(id);
-      if (queued !== undefined) {
-        // 重复通知只刷新快照，不重复 claim、不重复输出 deferred。
-        queued.item = item;
-        queued.source = 'stream';
-        continue;
-      }
-
-      let attempt: number;
-      let key: string;
-      if (pending !== null) {
-        const found = pending.get(id);
-        if (found === undefined) {
-          await this.state.markSeen(`event:${eventId.length > 0 ? eventId : fallback}`);
-          continue;
-        }
-        attempt = found;
-        key = `pending:${id}:${attempt}`;
-      } else {
-        attempt = asNumber(item.attempt, 0);
-        key = `event:${eventId.length > 0 ? eventId : fallback}`;
-      }
-
-      if (this.state.hasSeen(key)) continue;
-      const result = await this.emitFound(item, 'stream');
-      if (result === 'emitted') await this.state.markSeen(key);
-      else if (result === 'error') return;
     }
 
-    if (items.some((item) => this.isDeliveryReceipt(item))) this.wakeDeferred(0);
+    // 纯 informational 帧不查询 inbox，避免每帧一次 pending 扫描。
+    if (deliveryItems.length > 0) {
+      const pending = await this.pendingDeliveryMap();
+
+      for (const item of deliveryItems) {
+        const id = asString(item.delivery_id);
+        if (id.length === 0) continue;
+        const source = asString(item.source);
+        const eventId = asString(item.event_id);
+        const fallback = [asString(item.source), asString(item.seq), id].join(':');
+
+        if (source === 'delivery.reminder') {
+          const key = `reminder:${id}:${eventId.length > 0 ? eventId : fallback}`;
+          if (this.state.hasSeen(key)) continue;
+          const event = this.format.reminder ? this.format.reminder(item) : reminderEvent(item);
+          this.emitEvent(event);
+          await this.state.markSeen(key);
+          continue;
+        }
+
+        // 收到 retry 回执时立即把待领队列里的同一条投递放回队首。
+        if (source === 'delivery.retried') this.releaseDeferred(id);
+
+        if (this.claiming.has(id)) continue;
+        const queued = this.deferred.get(id);
+        if (queued !== undefined) {
+          // 重复通知只刷新快照，不重复 claim、不重复输出 deferred。
+          queued.item = item;
+          queued.source = 'stream';
+          continue;
+        }
+
+        let attempt: number;
+        let key: string;
+        if (pending !== null) {
+          const found = pending.get(id);
+          if (found === undefined) {
+            await this.state.markSeen(`event:${eventId.length > 0 ? eventId : fallback}`);
+            continue;
+          }
+          attempt = found;
+          key = `pending:${id}:${attempt}`;
+        } else {
+          attempt = asNumber(item.attempt, 0);
+          key = `event:${eventId.length > 0 ? eventId : fallback}`;
+        }
+
+        if (this.state.hasSeen(key)) continue;
+        const result = await this.emitFound(item, 'stream');
+        if (result === 'emitted') await this.state.markSeen(key);
+        else if (result === 'error') return;
+      }
+
+      if (deliveryItems.some((item) => this.isDeliveryReceipt(item))) this.wakeDeferred(0);
+    }
+
+    this.emitRoomMessages(rawItems);
 
     if (envelope.more === true || asNumber(envelope.dropped, 0) > 0) {
       await this.emitPendingSnapshot();
     }
+  }
+
+  /** informational room.message → room_message；按 message_id 精确去重。 */
+  private emitRoomMessages(items: JsonObject[]): void {
+    if (this.roomEventScope === null) return;
+    for (const item of items) {
+      if (asString(item.source) !== 'room.message') continue;
+      if (item.attention !== 'informational') continue;
+      const roomId = asString(item.room_id);
+      const messageId = asString(item.message_id);
+      if (roomId.length === 0 || messageId.length === 0) continue;
+      if (this.hasRoomMessage(messageId)) continue;
+      this.rememberRoomMessage(messageId);
+      this.rememberRoomMessageHistory(messageId);
+      this.emitEvent(roomMessageEvent(item, 'stream'));
+    }
+  }
+
+  private hasRoomMessage(messageId: string): boolean {
+    const until = this.roomMessageSeen.get(messageId);
+    if (until === undefined) return false;
+    if (until > Date.now()) return true;
+    this.roomMessageSeen.delete(messageId);
+    return false;
+  }
+
+  private rememberRoomMessage(messageId: string): void {
+    const now = Date.now();
+    if (this.roomMessageSeen.size >= 1024) {
+      for (const [id, until] of this.roomMessageSeen) {
+        if (until <= now) this.roomMessageSeen.delete(id);
+      }
+    }
+    this.roomMessageSeen.set(messageId, now + ROOM_MESSAGE_DEDUPE_TTL_MS);
+  }
+
+  private rememberRoomMessageHistory(messageId: string): void {
+    if (this.roomMessageHistory.size >= ROOM_OUTPUT_MEMORY) {
+      const oldest = this.roomMessageHistory.values().next().value;
+      if (oldest !== undefined) this.roomMessageHistory.delete(oldest);
+    }
+    this.roomMessageHistory.add(messageId);
+  }
+
+  /**
+   * 连接建立时记录 history 游标；只有 reconnect 才用该游标 after 补读一次。
+   * 首次连接只取基线，不回放旧消息。
+   */
+  private async syncRoomEvents(reconnect: boolean): Promise<void> {
+    if (this.roomEventScope === null) return;
+    const rooms = await this.roomEventRooms();
+    for (const roomId of rooms) {
+      if (this.signal.aborted) return;
+      const cursor = this.roomHistoryCursors.get(roomId);
+      if (reconnect && cursor !== undefined) {
+        await this.backfillRoom(roomId, cursor);
+      } else {
+        await this.captureRoomCursor(roomId);
+      }
+    }
+  }
+
+  private async roomEventRooms(): Promise<string[]> {
+    if (this.roomEventScope === null) return [];
+
+    const rooms: string[] = [];
+    let cursor = '';
+    for (let page = 0; page < ROOM_HISTORY_MAX_PAGES; page += 1) {
+      const args: JsonObject = { limit: ROOM_HISTORY_PAGE_LIMIT };
+      if (cursor.length > 0) args.cursor = cursor;
+      let outcome;
+      try {
+        outcome = await this.rpc.callTool('network_rooms_list', args);
+      } catch (error) {
+        if (error instanceof MonitorFatalError) throw error;
+        this.roomHistoryError('room_list_failed');
+        return rooms;
+      }
+      if (!outcome.ok) {
+        this.roomHistoryError('room_list_failed');
+        return rooms;
+      }
+      for (const raw of asArray(outcome.data.items)) {
+        const roomId = asString(asRecord(raw).room_id);
+        if (roomId.length > 0) rooms.push(roomId);
+      }
+      const next = asString(outcome.data.next_cursor);
+      if (outcome.data.has_more !== true || next.length === 0 || next === cursor) return rooms;
+      cursor = next;
+    }
+    return rooms;
+  }
+
+  /**
+   * 取房间当前 head 的 after 游标，作为下一次 reconnect 的补读起点。
+   * 无游标的 after 按服务端契约从当前快照上界（成员加入边界之后）开始，
+   * 因此重新加入后重取基线不会回放加入前的消息。
+   */
+  private async captureRoomCursor(roomId: string): Promise<void> {
+    const result = await this.fetchRoomHistory(roomId, null);
+    if (!result.ok) {
+      this.roomHistoryError('room_history_failed', roomId);
+      return;
+    }
+    const page = result.data;
+    const items = asArray(page.items).map(asRecord);
+    const next = advanceHistoryCursor(null, asString(page.next_cursor), items);
+    if (next.length > 0) this.roomHistoryCursors.set(roomId, next);
+  }
+
+  /**
+   * 成员代次变化后服务端拒绝旧游标（CURSOR_EXPIRED）：丢弃旧游标，
+   * 记录一次可见重置，再按契约用无游标 after 取当前 head 作为新基线。
+   * 已输出的 message_id 由本地去重记忆保留，不会重复输出。
+   */
+  private async resetRoomCursor(roomId: string): Promise<void> {
+    this.roomHistoryCursors.delete(roomId);
+    this.control(
+      'room_history_reset',
+      { error_type: 'room', room_id: roomId, reason: 'cursor_expired' },
+      `ROOM_HISTORY_RESET room_id=${roomId} reason=cursor_expired`,
+    );
+    await this.captureRoomCursor(roomId);
+  }
+
+  /** 用保存的游标 after 补读；分页直到 has_more=false，只输出定位字段。 */
+  private async backfillRoom(roomId: string, cursor: string): Promise<void> {
+    let current = cursor;
+    let seen = 0;
+    for (let page = 0; page < ROOM_HISTORY_MAX_PAGES; page += 1) {
+      if (this.signal.aborted) return;
+      const result = await this.fetchRoomHistory(roomId, current);
+      if (!result.ok) {
+        if (result.code === 'CURSOR_EXPIRED') {
+          await this.resetRoomCursor(roomId);
+          return;
+        }
+        this.roomHistoryError('room_history_failed', roomId);
+        return;
+      }
+      const data = result.data;
+
+      const items = asArray(data.items).map(asRecord);
+      seen += items.length;
+      for (const item of items) {
+        const messageId = asString(item.message_id);
+        if (messageId.length === 0) continue;
+        if (this.roomMessageHistory.has(messageId)) continue;
+        if (this.hasRoomMessage(messageId)) continue;
+        this.rememberRoomMessage(messageId);
+        this.rememberRoomMessageHistory(messageId);
+        this.emitEvent(roomMessageEvent(item, 'history'));
+      }
+
+      // 服务端游标正常已前进；仍按本页最后一条消息推进，兼容旧服务端。
+      const next = advanceHistoryCursor(current, asString(data.next_cursor), items);
+      if (next.length > 0) this.roomHistoryCursors.set(roomId, next);
+      if (data.has_more !== true) return;
+      if (next.length === 0) {
+        this.roomHistoryError('room_history_cursor_missing', roomId);
+        return;
+      }
+      if (next === current) {
+        this.roomHistoryError('room_history_cursor_stalled', roomId);
+        return;
+      }
+      current = next;
+    }
+    // 达到单次上限仍有积压：游标已保存，下一次 reconnect 从此处继续。
+    this.roomHistoryTruncated(roomId, seen);
+  }
+
+  private async fetchRoomHistory(
+    roomId: string,
+    cursor: string | null,
+  ): Promise<RoomHistoryFetch> {
+    const args: JsonObject = {
+      room_id: roomId,
+      direction: 'after',
+      limit: ROOM_HISTORY_PAGE_LIMIT,
+    };
+    if (cursor !== null) args.cursor = cursor;
+    try {
+      const outcome = await this.rpc.callTool('network_history_list', args);
+      if (!outcome.ok) return { ok: false, code: outcome.code };
+      return { ok: true, data: outcome.data };
+    } catch (error) {
+      if (error instanceof MonitorFatalError) throw error;
+      return { ok: false, code: 'TRANSPORT_ERROR' };
+    }
+  }
+
+  private roomHistoryError(code: string, roomId?: string): void {
+    this.control(
+      'error',
+      {
+        code,
+        error_type: 'room',
+        ...(roomId === undefined ? {} : { room_id: roomId }),
+      },
+      `ERROR type=room message=${code}${roomId === undefined ? '' : ` room_id=${roomId}`}`,
+    );
+  }
+
+  /** 单次补读达到 2000 条上限：明确记录，下一次 reconnect 从保存游标继续。 */
+  private roomHistoryTruncated(roomId: string, items: number): void {
+    this.control(
+      'room_history_truncated',
+      {
+        error_type: 'room',
+        room_id: roomId,
+        items,
+        max_items: ROOM_HISTORY_MAX_ITEMS,
+        max_pages: ROOM_HISTORY_MAX_PAGES,
+      },
+      `ROOM_HISTORY_TRUNCATED room_id=${roomId} items=${items} max_items=${ROOM_HISTORY_MAX_ITEMS}`,
+    );
   }
 
   private isDeliveryReceipt(item: JsonObject): boolean {
@@ -817,6 +1086,11 @@ export class MonitorEngine {
 
   private async emitFound(item: JsonObject, source: string): Promise<EmitResult> {
     const fields = deliveryFields(item);
+    // 已作为 delivery 处理的消息（含 reconnect 快照）不再重复输出 room_message。
+    if (fields.messageId.length > 0) {
+      this.rememberRoomMessage(fields.messageId);
+      this.rememberRoomMessageHistory(fields.messageId);
+    }
     if (this.readBody && !SAFE_ID.test(fields.deliveryId)) {
       this.control(
         'error',
