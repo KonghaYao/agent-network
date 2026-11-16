@@ -49,6 +49,7 @@
     "test:memory-recovery": "bun scripts/verify-memory-recovery.ts",
     "test:memory-host": "bun scripts/verify-memory-host.ts",
     "test:memory-integration": "bun scripts/verify-memory-integration.ts",
+    "test:memory-provision": "bun scripts/verify-memory-provision.ts",
     "test:web:a11y": "bun scripts/verify-web-a11y.ts",
     "test:memory-backfill": "bun scripts/verify-memory-backfill.ts",
     "test:memory-fenix-vendor": "bun run build:web && bun scripts/verify-memory-fenix-vendor.ts"

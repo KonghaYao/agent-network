@@ -1,6 +1,7 @@
 import { BusinessError } from '../contracts/errors';
 import type { Principal } from '../domain/principal';
 import type { Env } from '../env';
+import { provisionAgentOnLogin } from '../memory/provision';
 import { buildSessionLoginFrame } from './stream';
 
 export interface LoginView {
@@ -34,6 +35,9 @@ export async function login(env: Env, principal: Principal): Promise<LoginView> 
       kind: actor.kind,
     });
   }
+
+  // Phase A：存量 Agent 上线即补齐 Memory space；失败只记录，不影响上线。
+  await provisionAgentOnLogin(env, actor.actor_id);
 
   const presence = env.NOTIFICATION_HUB.loginActor(
     actor.actor_id,

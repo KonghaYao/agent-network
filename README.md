@@ -621,6 +621,7 @@ MF05 在现有业务事务内追加纯 SQL 来源/预热意图（`src/memory/int
 - **预热**：只为真实 `deliveries` 写 `warmup_only=1` 的 RecallRequest，消息与任务分别使用 `auto:message:<id>` / `auto:task_offer:<id>`；不按正文 @ 字符串或空任务卡猜对象。预热不产生经历或 retain 资格，个人经历仍只由合格 ExposureReceipt 接纳。
 - **撤回/删除**：消息撤回同时使 `message:*` 与 `task_offer:*` 不可读并写永久 tombstone；文件删除写 `file_deleted` tombstone。`MEMORY_CAPTURE=0` 时停止新增来源/预热，但撤回与删除屏障照常执行。
 - **开关**：只有 `MEMORY_ENABLED=1` 且运行时已启动时才追加上述语句；未启用时不新增查询或语句，聊天事务保持原样。
+- **空间 provisioning（Phase A）**：`src/memory/provision.ts` 为 legacy Agent 幂等补齐 active space。触发点：`network_login`（Memory 已启用时）、`MemoryIntegration` 启动一次 + 每 6 小时 sweep（每批 50）、Agent 消息提交后的异步兜底。已有 active space 原样返回，不做隐式 transfer；新空间 `capture='pending'`，最近 space 为 `excluded` 时继承 `excluded`。`MEMORY_PROVISION=0` 可回滚，已建空间保留；失败只记录计数/分类，不影响 login、消息落库或投递。验收：`bun run test:memory-provision`。
 
 MF04 在 `src/memory/adapters/hindsight.ts` 提供 HTTP 适配器，仍只实现六操作 `capabilities/ensureSpace/retain/search/remove/jobStatus`：
 
@@ -677,6 +678,7 @@ MF11 新增 `src/memory/experience*.ts`、`input-manifest.ts`、`host-exposure.t
 | `MEMORY_INSTANCE_ID` | 可选；固定部署 namespace。首次初始化后不得随意更换，配置与既有 `memory_instances` 不一致会 fail closed。 |
 | `MEMORY_CAPTURE=0` | 可选；停止新增 retain/来源写入，但撤回/遗忘屏障仍保留并继续执行。 |
 | `MEMORY_BACKFILL=1` | 可选；启用定时回填（整点对齐的最近 1 小时窗口），默认关闭。只入队 retain，不直连 Hindsight；`MEMORY_ENABLED=1` 且运行时已启动时才生效。 |
+| `MEMORY_PROVISION=0` | 可选；关闭 Phase A 空间 provisioning（login/sweep/消息兜底），默认开。已建空间保留，不删除、不自动 transfer。 |
 | `MEMORY_HOST_TRUST` | 可选；服务端签发 HostBinding 等级：`tool_only`（默认）、`adapted_host`、`controlled_gateway`。客户端声明的 capabilities 只能缩小能力，不能提升等级。 |
 
 本地验证：
