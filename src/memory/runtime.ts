@@ -566,7 +566,7 @@ export class MemoryRuntime {
         }
       }
       if (immediatelyApplied) {
-        await completeMemoryJob(this.#db, {
+        const written = await completeMemoryJob(this.#db, {
           jobId: job.job_id,
           leaseId,
           stage: 'derived_ready',
@@ -580,6 +580,11 @@ export class MemoryRuntime {
             remote_confirmed_at: at,
           },
         });
+        if (!written) {
+          // 写回未生效时作业仍在租约内；不发完成事件，也不计入 completed。
+          this.report(new Error('memory_job_complete_writeback_rejected'), job);
+          return 'unknown';
+        }
         this.emitJobEvent(
           job,
           'remote_completed',
@@ -884,6 +889,7 @@ export class MemoryRuntime {
           event.retry_outcome,
         );
       },
+      onError: (error, job) => this.report(error, job),
       queryStatus: async (job) => {
         const ref = toJobRef(job);
         const space = await getMemorySpaceById(this.#db, job.space_id);

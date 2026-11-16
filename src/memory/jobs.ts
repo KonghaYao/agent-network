@@ -249,6 +249,8 @@ export async function reconcileUnknownMemoryJobs(
     queryStatus: (job: MemoryJobRow) => Promise<MemoryJobRemoteStatus>;
     retryRemote?: (job: MemoryJobRow) => Promise<MemoryJobRemoteRetry>;
     onEvent?: (event: MemoryJobReconcileEvent) => void;
+    /** 状态写回未生效等内部失败；只传分类信息，不含正文/凭据。 */
+    onError?: (error: unknown, job: MemoryJobRow) => void;
   },
 ): Promise<{
   completed: number;
@@ -290,6 +292,13 @@ export async function reconcileUnknownMemoryJobs(
       // 状态已写回；观测回调失败不能改变本次对账结果。
     }
   };
+  const reportFailure = (current: MemoryJobRow, classification: string): void => {
+    try {
+      options.onError?.(new Error(classification), current);
+    } catch {
+      // 观测回调失败不能改变本次对账结果。
+    }
+  };
   for (const job of rows.results) {
     const status = await options.queryStatus(job);
     const attempts = resultNumber(job.result_json, 'reconcile_attempts') + 1;
@@ -299,7 +308,7 @@ export async function reconcileUnknownMemoryJobs(
       provider_job_id: job.provider_job_id,
     };
     if (status === 'completed') {
-      await completeMemoryJob(db, {
+      const written = await completeMemoryJob(db, {
         jobId: job.job_id,
         // 远端 completed 只证明写入处理器完成/源可读；observation/consolidation
         // 是否就绪由后续证据决定，不把对账结果升级成 derived_ready。
@@ -315,6 +324,12 @@ export async function reconcileUnknownMemoryJobs(
           remote_confirmed_at: at,
         },
       });
+      if (!written) {
+        // 写回未生效时作业仍是 unknown；不能计数或发出完成事件。
+        reportFailure(job, 'memory_job_complete_writeback_rejected');
+        stillUnknown += 1;
+        continue;
+      }
       completed += 1;
       notify('remote_completed', job, 'completed');
     } else if (status === 'failed' || status === 'cancelled') {
@@ -324,11 +339,25 @@ export async function reconcileUnknownMemoryJobs(
         remote_state: status,
         remote_failure_at: at,
       };
-      if (options.retryRemote) {
+      // attempt 已到上限时不再请求远端 retry：远端即使重新入队，本地也无法再
+      // 领取执行，会留下“accepted 但永远 failed”的分裂状态。
+      const retryExhausted = job.attempt >= LIMITS.memoryJobMaxAttempts;
+      if (retryExhausted) {
+        const outcome = await failMemoryJob(db, {
+          jobId: job.job_id,
+          failure: 'unavailable',
+          message: 'remote_failure_attempts_exhausted',
+          now: at,
+          resultPatch: { ...failurePatch, retry_outcome: 'attempts_exhausted' },
+        });
+        if (outcome === 'failed') failed += 1;
+        else if (outcome === 'pending') requeued += 1;
+        notify('remote_failed', job, status);
+      } else if (options.retryRemote) {
         const retry = await options.retryRemote(job);
         if (retry === 'accepted') {
           // 远端已重新入队；本地回到 pending 走既有退避与幂等提交。
-          await failMemoryJob(db, {
+          const outcome = await failMemoryJob(db, {
             jobId: job.job_id,
             failure: 'unavailable',
             message: 'remote_retry_requested',
@@ -339,9 +368,14 @@ export async function reconcileUnknownMemoryJobs(
               retry_outcome: 'accepted',
             },
           });
-          retried += 1;
           notify('remote_failed', job, status, 'accepted');
-          notify('remote_retry_requested', job, status, 'accepted');
+          if (outcome === 'pending') {
+            retried += 1;
+            notify('remote_retry_requested', job, status, 'accepted');
+          } else {
+            // 防御性处理：远端已接受但没有回到 pending 时不报告 retry 成功。
+            failed += 1;
+          }
         } else {
           // 无法确认已重新入队时保留 unknown，继续可见、可再次对账。
           await mergeMemoryJobResult(db, {
@@ -356,14 +390,15 @@ export async function reconcileUnknownMemoryJobs(
       } else {
         // 没有显式 retry 的适配器沿用原策略：明确失败可安全重试，
         // operation_key 保证不重复写入。
-        await failMemoryJob(db, {
+        const outcome = await failMemoryJob(db, {
           jobId: job.job_id,
           failure: 'unavailable',
           message: 'reconciled remote failure',
           now: at,
           resultPatch: { ...failurePatch, retry_outcome: 'unsupported' },
         });
-        requeued += 1;
+        if (outcome === 'pending') requeued += 1;
+        else if (outcome === 'failed') failed += 1;
         notify('remote_failed', job, status, 'unsupported');
       }
     } else if (status === 'unsupported') {

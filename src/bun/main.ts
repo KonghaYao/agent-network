@@ -262,6 +262,21 @@ if (process.env.MEMORY_ENABLED === '1') {
           }),
         );
       },
+      onError: (error, job) => {
+        // 错误原文可能含远端细节；只记录稳定分类与作业标识。
+        const classification =
+          error instanceof Error && error.message.startsWith('memory_job_')
+            ? error.message
+            : 'memory_runtime_failure';
+        console.error(
+          'agent-network memory runtime error',
+          JSON.stringify({
+            classification,
+            job: job?.job_id ?? null,
+            operation: job?.operation_type ?? null,
+          }),
+        );
+      },
     });
     try {
       await candidate.start();
