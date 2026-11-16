@@ -14,6 +14,8 @@ export const MENTION_REMINDER_SOURCE = 'mention.reminder';
 export const MESSAGE_TASK_MARKED_EVENT = 'message_task_marked';
 /** 消息式 Task 起点取消标记；只撤销聚合入口，保留消息与引用。 */
 export const MESSAGE_TASK_UNMARKED_EVENT = 'message_task_unmarked';
+/** 消息式 Task 起点被标记完成；与 delivery 完成无关，不推进 head。 */
+export const MESSAGE_TASK_COMPLETED_EVENT = 'message_task_completed';
 
 /**
  * Callback endpoint 验证失败的错误码。

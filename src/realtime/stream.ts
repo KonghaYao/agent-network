@@ -6,6 +6,7 @@ import {
   MENTION_REMINDER_EVENT,
   MENTION_REMINDER_SOURCE,
   MESSAGE_TASK_MARKED_EVENT,
+  MESSAGE_TASK_COMPLETED_EVENT,
   MESSAGE_TASK_UNMARKED_EVENT,
 } from '../contracts/events';
 import type { Env } from '../env';
@@ -236,9 +237,15 @@ export function roomStreamItems(
       return result;
     }
     case MESSAGE_TASK_MARKED_EVENT:
-    case MESSAGE_TASK_UNMARKED_EVENT: {
+    case MESSAGE_TASK_UNMARKED_EVENT:
+    case MESSAGE_TASK_COMPLETED_EVENT: {
       // 消息式 Task 只通知 active human 刷新摘要行；不写 inbox、不产生 delivery。
-      const change = row.event_type === MESSAGE_TASK_MARKED_EVENT ? 'marked' : 'unmarked';
+      const change =
+        row.event_type === MESSAGE_TASK_MARKED_EVENT
+          ? 'marked'
+          : row.event_type === MESSAGE_TASK_COMPLETED_EVENT
+            ? 'completed'
+            : 'unmarked';
       const changedBy = stringField(metadata, 'changed_by');
       const taskRootId = stringField(metadata, 'task_root_id') ?? row.ref_id ?? undefined;
       for (const member of activeRecipients(members, eventSeq)) {

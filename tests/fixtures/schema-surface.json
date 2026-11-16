@@ -43,9 +43,10 @@
     "0044_files_public_backfill.sql",
     "0045_memory_ledger.sql",
     "0046_memory_experience_catchup.sql",
-    "0047_message_search_fts.sql"
+    "0047_message_search_fts.sql",
+    "0048_message_task_completion.sql"
   ],
-  "migrationsDigest": "a121ed575d948ed7f7f9371ad4444632b9dda5c025d0ff9a20bd2235815ef125",
+  "migrationsDigest": "dde81260e8f2eb90a279eb02b035746b49fce951094fc5f55baf3f6e10f8236a",
   "counts": {
     "tables": 120,
     "guardTables": 48,
@@ -2408,7 +2409,9 @@
         "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
         "task_root_id|TEXT|nn=0|d=null|pk=0|h=0",
         "task_marked_by|TEXT|nn=0|d=null|pk=0|h=0",
-        "task_marked_at|INTEGER|nn=0|d=null|pk=0|h=0"
+        "task_marked_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "task_completed_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "task_completed_by|TEXT|nn=0|d=null|pk=0|h=0"
       ],
       "indexes": [
         "idx_messages_room_reply_to|u=0|o=c|p=1|cols=room_id,reply_to,created_seq|desc=0,0,0",
@@ -2420,7 +2423,7 @@
       ],
       "foreignKeys": [],
       "checks": [],
-      "sqlDigest": "33cbfac2d9c7bd4294a13641d8179803de0808425a4b5eb013d612281717e9e6"
+      "sqlDigest": "c672973be8b0430b724ab028e6e2a425f2ebc6b9f3ec9867c4869834c2c5d88c"
     },
     "operations": {
       "type": "table",
@@ -2837,5 +2840,5 @@
     "message_search_fts_ai": "c0d538ed07edf48bcc8dfff50d1adf2158b1ef1c75e528640877b7ac08b0fe71",
     "message_search_fts_au": "af71582b06026e26c1b0acb0e15b6d4e504f8b85450ac9351d70042408abbaf7"
   },
-  "digest": "ad9548abc7bc5f12a760af1b4dfcbb9145f63d9622a76c9f2d459ea5fb95e2aa"
+  "digest": "b44d6c3e2a6729ef274808b722b133cedbd19b9d82f799af25d24c8e43b8a59b"
 }

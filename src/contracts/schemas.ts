@@ -659,6 +659,21 @@ export const messageTaskSearchSchema = z.object({
   cursor: z.string().min(1).max(LIMITS.messageSearchCursorMax).optional(),
 });
 
+/** 标记 Task 起点完成；完成与 delivery 完成无关。 */
+export const messageTaskCompleteSchema = z.object({
+  request_id: requestId,
+  room_id: id(),
+  root_message_id: id(),
+});
+
+/** 房间常驻 Task 列表；默认只返回 open，keyset 分页。 */
+export const messageTaskListSchema = z.object({
+  room_id: id(),
+  limit: z.number().int().min(1).max(LIMITS.taskListPageMax).optional(),
+  cursor: z.string().min(1).max(2048).optional(),
+  status: z.enum(['open', 'completed', 'all']).optional(),
+});
+
 export const historyListSchema = z.object({
   room_id: id(),
   direction: z.enum(['before', 'after']).optional(),

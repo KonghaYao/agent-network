@@ -15,6 +15,7 @@ import type { WebSession } from '../lib/identity';
 import { callTool, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import type { RoomsPage } from '../lib/rooms';
+import { invalidateRoomTasks, resetRoomTasks } from '../lib/task-cache';
 import { useWebSession } from './useWebSession';
 
 /**
@@ -153,6 +154,10 @@ interface PendingRefresh {
   history: boolean;
   files: boolean;
   taskSummaries: boolean;
+  /** 常驻 Task 列表与已打开的 Trace；普通消息也可能改变计数/预览。 */
+  tasks: boolean;
+  /** 成员代次、历史策略或生命周期变化：丢弃旧授权下的 Task 缓存。 */
+  taskReset: boolean;
   contacts: boolean;
   contactBadge: boolean;
 }
@@ -164,6 +169,8 @@ function emptyPendingRefresh(): PendingRefresh {
     history: false,
     files: false,
     taskSummaries: false,
+    tasks: false,
+    taskReset: false,
     contacts: false,
     contactBadge: false,
   };
@@ -210,6 +217,7 @@ function markPendingRefresh(
     pending.history = true;
     pending.detail = true;
     pending.taskSummaries = true;
+    pending.tasks = true;
     return;
   }
   if (source === 'room.presence' || kind === 'presence') {
@@ -218,9 +226,24 @@ function markPendingRefresh(
     if (humanTimeline) pending.history = true;
     return;
   }
+  if (source === 'room.membership' || source === 'room.lifecycle' || kind === 'room') {
+    // 成员代次/历史策略/归档会收紧可读边界：重新鉴权并清掉旧私有预览。
+    pending.history = true;
+    pending.detail = true;
+    pending.rooms = true;
+    pending.tasks = true;
+    pending.taskReset = true;
+    pending.taskSummaries = true;
+    return;
+  }
   pending.history = true;
   pending.detail = true;
   pending.rooms = true;
+  if (source === 'room.message' || kind === 'message') {
+    // 普通消息与撤回改变消息数、参与者、最近活动与 recent_messages。
+    pending.tasks = true;
+    pending.taskSummaries = true;
+  }
 }
 
 export function useRoomChat(roomId: string) {
@@ -420,8 +443,14 @@ export function useRoomChat(roomId: string) {
     if (pending.files) {
       void queryClient.invalidateQueries({ queryKey: queryKeys.roomFiles(roomId), exact: true });
     }
-    if (pending.taskSummaries) {
+    if (pending.taskSummaries && !pending.tasks && !pending.taskReset) {
       void queryClient.invalidateQueries({ queryKey: queryKeys.taskSummaries(roomId) });
+    }
+    if (pending.taskReset) {
+      // 丢弃旧代次下的列表与 Trace 预览；活动查询会重新鉴权后重读。
+      void resetRoomTasks(queryClient, roomId);
+    } else if (pending.tasks) {
+      void invalidateRoomTasks(queryClient, roomId);
     }
     if (pending.contacts) {
       void queryClient.invalidateQueries({
@@ -455,6 +484,11 @@ export function useRoomChat(roomId: string) {
           pending.detail = true;
           pending.history = true;
           pending.files = true;
+          pending.tasks = true;
+          // 断线期间成员代次或历史策略可能已收紧；ack 先按 live membership
+          // 同路径清空列表与 Trace 私有缓存，再由 room detail 重新鉴权补拉。
+          pending.taskReset = true;
+          pending.taskSummaries = true;
         } else {
           // 首次 ack 只判断一次，避免重复 ack/事件再次触发补拉。
           if (initialAckHandledRef.current) return;
@@ -465,6 +499,8 @@ export function useRoomChat(roomId: string) {
           // 只补当前房间；无关房间事件仍只刷新侧栏。
           pending.history = true;
           pending.detail = true;
+          pending.tasks = true;
+          pending.taskSummaries = true;
         }
       } else {
         markPendingRefresh(pending, event, roomId, humanTimeline);

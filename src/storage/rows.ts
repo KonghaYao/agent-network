@@ -376,6 +376,9 @@ export interface MessageRow {
   /** 起点标记审计；处理消息与普通消息为 NULL。 */
   task_marked_by: string | null;
   task_marked_at: number | null;
+  /** 起点完成事实；两列同时为空表示 open。 */
+  task_completed_at: number | null;
+  task_completed_by: string | null;
   created_at: number;
 }
 

@@ -368,6 +368,8 @@ async function main(): Promise<void> {
     'network_task_summaries',
     'network_task_trace',
     'network_task_search',
+    'network_task_list',
+    'network_task_complete',
     'network_room_members_update',
     'network_room_role_set',
     'network_room_owner_transfer',
@@ -1040,10 +1042,11 @@ async function main(): Promise<void> {
     'network_task_summaries',
     'network_task_trace',
     'network_task_search',
+    'network_task_list',
+    'network_task_complete',
   ];
   const retiredTaskToolNames = [
     'network_task_summary',
-    'network_task_list',
     'network_task_get',
     'network_task_create',
     'network_task_offer',
@@ -1076,7 +1079,7 @@ async function main(): Promise<void> {
     'network_task_reviewer_set',
   ];
   check(
-    '新旧任务工具边界：只注册 5 个消息式 Task 工具',
+    '新旧任务工具边界：只注册 7 个消息式 Task 工具',
     newTaskToolNames.every((name) => taskTools.has(name)) &&
       taskTools.size === newTaskToolNames.length &&
       retiredTaskToolNames.every((name) => !taskTools.has(name)),
