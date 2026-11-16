@@ -1,8 +1,9 @@
 /**
  * 回填的原子批语句。
  *
- * 每条语句都以 NOT EXISTS 条件插入；`operations` 行仍是整批所有权。回填不写
- * experiences/coverage，也不制造 events、outbox、pending_count 或 unread。
+ * 每条语句都以 NOT EXISTS 条件插入；`operations` 行仍是整批所有权。回填写入
+ * representation/receipt/intent/job 与稀疏 experience，不写 coverage，也不制造
+ * events、outbox、pending_count 或 unread。
  */
 import type { D1Like } from '../storage/queries';
 import type { MemorySourceRow } from './rows';
@@ -51,6 +52,88 @@ export async function findReusableRepresentationId(
     .bind(input.sourceId, input.sourceRevision, input.textSha256)
     .first<{ representation_id: string }>();
   return row?.representation_id ?? null;
+}
+
+/**
+ * 已有 experience 复用入口。
+ *
+ * dedupe_key 与宿主接纳路径共用同一算法；命中时沿用原 experience_id，避免
+ * 回填重放制造第二条同义经历。
+ */
+export async function findBackfillExperienceId(
+  db: D1Like,
+  dedupeKey: string,
+): Promise<string | null> {
+  const row = await db
+    .prepare('SELECT experience_id FROM memory_experiences WHERE dedupe_key = ? LIMIT 1')
+    .bind(dedupeKey)
+    .first<{ experience_id: string }>();
+  return row?.experience_id ?? null;
+}
+
+/**
+ * 房间历史观测对应的稀疏经历。
+ *
+ * `evidence` 使用召回侧内部证据 `gateway_observed_room_history`：只说明网关确认
+ * 消息已持久化在房间历史中，不冒充宿主提交。`receipt_id` 通过同批已插入（或
+ * 既有）回执的幂等键解析，避免引用不存在的回执。
+ */
+export function backfillExperienceStatement(
+  db: D1Like,
+  input: {
+    experienceId: string;
+    dedupeKey: string;
+    spaceId: string;
+    ownershipEpoch: number;
+    agentActorId: string;
+    originRoomId: string;
+    originMemberGeneration: number;
+    sourceId: string;
+    sourceRevision: number;
+    representationId: string;
+    rangeStart: number;
+    rangeEnd: number;
+    textSha256: string;
+    receiptIdempotencyKey: string;
+    now: number;
+  },
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO memory_experiences
+         (experience_id, dedupe_key, space_id, ownership_epoch, agent_actor_id,
+          origin_room_id, origin_member_generation, origin_kind, producer_kind,
+          source_id, source_revision, representation_id, representation_kind,
+          range_start, range_end, text_sha256, receipt_id, evidence, capture,
+          available, created_at, updated_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, 'experienced', NULL,
+              ?, ?, ?, 'raw_full', ?, ?, ?,
+              (SELECT receipt_id FROM memory_receipts WHERE idempotency_key = ? LIMIT 1),
+              ?, 'pending', 1, ?, ?
+        WHERE NOT EXISTS (
+          SELECT 1 FROM memory_experiences WHERE dedupe_key = ?
+        )`,
+    )
+    .bind(
+      input.experienceId,
+      input.dedupeKey,
+      input.spaceId,
+      input.ownershipEpoch,
+      input.agentActorId,
+      input.originRoomId,
+      input.originMemberGeneration,
+      input.sourceId,
+      input.sourceRevision,
+      input.representationId,
+      input.rangeStart,
+      input.rangeEnd,
+      input.textSha256,
+      input.receiptIdempotencyKey,
+      BACKFILL_EVIDENCE,
+      input.now,
+      input.now,
+      input.dedupeKey,
+    );
 }
 
 export async function hasBackfillIntent(

@@ -13,6 +13,7 @@ import {
 } from '../src/memory/backfill-window';
 import { ensureMemoryInstance } from '../src/memory/access';
 import { HindsightMemoryAdapter } from '../src/memory/adapters/hindsight';
+import { buildInjectionPack } from '../src/memory/injection';
 import { MemoryIntegration } from '../src/memory/integration';
 import { recallMemory } from '../src/memory/recall-service';
 import { MemoryRuntime } from '../src/memory/runtime';
@@ -31,6 +32,34 @@ type Env = ReturnType<typeof createMemoryEnv>;
 function count(env: Env, sql: string, ...binds: (string | number)[]): number {
   const row = env.db.prepare(sql).get(...binds) as { n: number } | null;
   return row?.n ?? 0;
+}
+
+/** 与 `collectSources` 相同的 experience 关联门。 */
+function sourceGateCount(
+  env: Env,
+  input: { roomId: string; spaceId: string; epoch: number; agentId: string },
+): number {
+  return count(
+    env,
+    `SELECT COUNT(*) AS n FROM memory_sources s
+      WHERE s.state = 'active'
+        AND s.origin_room_id = ?
+        AND EXISTS (
+              SELECT 1 FROM memory_experiences e
+               WHERE e.source_id = s.source_id
+                 AND e.source_revision = s.revision
+                 AND e.space_id = ?
+                 AND e.ownership_epoch = ?
+                 AND e.agent_actor_id = ?
+                 AND e.available = 1
+                 AND e.origin_room_id = ?
+            )`,
+    input.roomId,
+    input.spaceId,
+    input.epoch,
+    input.agentId,
+    input.roomId,
+  );
 }
 
 function insertMessage(
@@ -211,7 +240,7 @@ async function windowMathChecks(): Promise<void> {
 
 async function basicChecks(): Promise<void> {
   const fixture = await seedFixture();
-  const { env, instanceId, human, roomOne, roomTwo } = fixture;
+  const { env, instanceId, human, agentA, agentB, roomOne, roomTwo, spaceA } = fixture;
   const messageOne = unique('msg_bf');
   const messageTwo = unique('msg_bf');
   insertMessage(env, {
@@ -275,6 +304,88 @@ async function basicChecks(): Promise<void> {
   checkEqual('意图为 experienced', intent?.origin_kind, 'experienced');
   checkEqual('意图证据留 NULL 以通过 CHECK', intent?.evidence, null);
 
+  checkEqual('回填创建三条经历', first.created.experiences, 3);
+  checkEqual('经历数等于空间扇出', count(env, 'SELECT COUNT(*) AS n FROM memory_experiences'), 3);
+  const experience = env.db
+    .prepare(
+      `SELECT evidence, available, capture, origin_kind, representation_kind,
+              source_revision, receipt_id, origin_member_generation, dedupe_key
+         FROM memory_experiences
+        ORDER BY agent_actor_id
+        LIMIT 1`,
+    )
+    .get() as {
+    evidence: string | null;
+    available: number;
+    capture: string;
+    origin_kind: string;
+    representation_kind: string;
+    source_revision: number | null;
+    receipt_id: string | null;
+    origin_member_generation: number;
+    dedupe_key: string;
+  } | null;
+  checkEqual('经历使用房间历史证据', experience?.evidence, 'gateway_observed_room_history');
+  checkEqual('经历可用', experience?.available, 1);
+  checkEqual('经历类型 experienced', experience?.origin_kind, 'experienced');
+  checkEqual('经历表示 raw_full', experience?.representation_kind, 'raw_full');
+  checkEqual('经历捕获状态 pending', experience?.capture, 'pending');
+  check('经历绑定回执', experience?.receipt_id !== null);
+  checkEqual('经历绑定来源首版', experience?.source_revision, 1);
+  checkEqual('经历记录成员代次', experience?.origin_member_generation, 1);
+  check('经历去重键非空', (experience?.dedupe_key.length ?? 0) > 0);
+
+  const packA = await buildInjectionPack({
+    db: env.d1,
+    instanceId,
+    agentId: agentA,
+    roomId: roomOne,
+    now: AT + 1_000,
+  });
+  checkEqual('回填后 pack 可用', packA.available, true);
+  checkEqual('回填后 pack reason=ready', packA.reason, 'ready');
+  checkEqual('回填后 pack 非空', packA.item_count > 0, true);
+  checkEqual('回填后 pack 有经历', packA.stats.experiences, 1);
+  checkEqual('pack 只含当前房间', packA.items.every((item) => item.origin_room_id === roomOne), true);
+  checkEqual('pack 文本为消息正文', packA.items[0]?.text, `BACKFILL-BODY-${messageOne}`);
+  checkEqual('pack 经历携带房间历史证据', packA.items[0]?.evidence, 'gateway_observed_room_history');
+  const experienceA = env.db
+    .prepare(
+      `SELECT experience_id FROM memory_experiences
+        WHERE agent_actor_id = ? AND origin_room_id = ?`,
+    )
+    .get(agentA, roomOne) as { experience_id: string } | null;
+  checkEqual('pack 只使用本 Agent 经历', packA.items[0]?.item_id, `exp:${experienceA?.experience_id}`);
+  checkEqual(
+    '回填后 source 通过 experience 关联门',
+    sourceGateCount(env, {
+      roomId: roomOne,
+      spaceId: spaceA.space_id,
+      epoch: spaceA.ownership_epoch,
+      agentId: agentA,
+    }),
+    1,
+  );
+
+  const packAOtherRoom = await buildInjectionPack({
+    db: env.d1,
+    instanceId,
+    agentId: agentA,
+    roomId: roomTwo,
+    now: AT + 1_000,
+  });
+  checkEqual('跨房间 pack 为空', packAOtherRoom.item_count, 0);
+  checkEqual('跨房间 reason=empty', packAOtherRoom.reason, 'empty');
+  const packB = await buildInjectionPack({
+    db: env.d1,
+    instanceId,
+    agentId: agentB,
+    roomId: roomTwo,
+    now: AT + 1_000,
+  });
+  checkEqual('另一 Agent 在自己房间可见', packB.item_count, 1);
+  checkEqual('另一 Agent 只看到自己房间', packB.items[0]?.origin_room_id, roomTwo);
+
   checkEqual(
     '回填不写 events',
     count(env, "SELECT COUNT(*) AS n FROM events WHERE event_type LIKE 'memory%'"),
@@ -300,11 +411,13 @@ async function basicChecks(): Promise<void> {
     receipts: count(env, 'SELECT COUNT(*) AS n FROM memory_receipts'),
     intents: count(env, 'SELECT COUNT(*) AS n FROM memory_retain_intents'),
     jobs: count(env, 'SELECT COUNT(*) AS n FROM memory_jobs'),
+    experiences: count(env, 'SELECT COUNT(*) AS n FROM memory_experiences'),
     operations: count(env, 'SELECT COUNT(*) AS n FROM operations'),
   };
   const second = await runner.runOnce();
   checkEqual('第二次运行零新增回执', second.created.receipts, 0);
   checkEqual('第二次运行零新增意图', second.created.intents, 0);
+  checkEqual('第二次运行零新增经历', second.created.experiences, 0);
   checkEqual('第二次运行已追平不重扫', second.windows, 0);
   checkEqual(
     '第二次运行来源数不变',
@@ -331,6 +444,11 @@ async function basicChecks(): Promise<void> {
     count(env, 'SELECT COUNT(*) AS n FROM memory_jobs'),
     before.jobs,
   );
+  checkEqual(
+    '第二次运行经历数不变',
+    count(env, 'SELECT COUNT(*) AS n FROM memory_experiences'),
+    before.experiences,
+  );
 
   // 模拟“整窗提交后、水位推进前崩溃”：只删水位，保留扫描位与行。
   env.db
@@ -340,6 +458,7 @@ async function basicChecks(): Promise<void> {
     .run();
   const replay = await runner.runOnce();
   checkEqual('崩溃重放零新增意图', replay.created.intents, 0);
+  checkEqual('崩溃重放零新增经历', replay.created.experiences, 0);
   checkEqual('崩溃重放计为 already', replay.skips.already, 3);
   checkEqual(
     '崩溃重放不回退扫描位',
@@ -353,6 +472,144 @@ async function basicChecks(): Promise<void> {
     '崩溃重放 operations 不增长',
     count(env, 'SELECT COUNT(*) AS n FROM operations'),
     before.operations,
+  );
+  env.db.close();
+}
+
+/**
+ * 修复前生产数据形态：receipt/intent/job 已存在但 experience 全缺。
+ *
+ * 删除 experience 并清空回填游标后重扫同一窗口，验证 `exp:` 批次只补
+ * experience，不重复回执/意图/作业，并让 pack 恢复非空。
+ */
+async function experienceReplayChecks(): Promise<void> {
+  const fixture = await seedFixture();
+  const { env, instanceId, human, agentA, roomOne, roomTwo, spaceA } = fixture;
+  const messageId = unique('msg_bf');
+  insertMessage(env, {
+    messageId,
+    roomId: roomOne,
+    senderId: human,
+    seq: 1,
+    body: `REPAIR-BODY-${messageId}`,
+    createdAt: MESSAGE_AT,
+  });
+  const first = await backfill(fixture).runOnce();
+  checkEqual('修复场景先写入两份经历', first.created.experiences, 2);
+  const healthy = await buildInjectionPack({
+    db: env.d1,
+    instanceId,
+    agentId: agentA,
+    roomId: roomOne,
+    now: AT + 1_000,
+  });
+  check('修复前 pack 非空', healthy.item_count > 0);
+
+  // 模拟修复前的生产数据：删掉经历，保留回执/意图/作业。
+  env.db.prepare('DELETE FROM memory_experiences').run();
+  checkEqual(
+    '缺少经历时 source 关联门关闭',
+    sourceGateCount(env, {
+      roomId: roomOne,
+      spaceId: spaceA.space_id,
+      epoch: spaceA.ownership_epoch,
+      agentId: agentA,
+    }),
+    0,
+  );
+  const broken = await buildInjectionPack({
+    db: env.d1,
+    instanceId,
+    agentId: agentA,
+    roomId: roomOne,
+    now: AT + 1_000,
+  });
+  checkEqual('缺少经历时 pack 为空', broken.item_count, 0);
+  checkEqual('缺少经历时 reason=empty', broken.reason, 'empty');
+
+  const before = {
+    receipts: count(env, 'SELECT COUNT(*) AS n FROM memory_receipts'),
+    intents: count(env, 'SELECT COUNT(*) AS n FROM memory_retain_intents'),
+    jobs: count(env, 'SELECT COUNT(*) AS n FROM memory_jobs'),
+    operations: count(env, 'SELECT COUNT(*) AS n FROM operations'),
+  };
+  env.db
+    .prepare(
+      "DELETE FROM memory_cursors WHERE scope_kind = 'agent' AND scope_id = 'memory-backfill'",
+    )
+    .run();
+  const replay = await backfill(fixture).runOnce();
+  checkEqual('重放只补经历', replay.created.experiences, 2);
+  checkEqual('重放不新增回执', replay.created.receipts, 0);
+  checkEqual('重放不新增意图', replay.created.intents, 0);
+  checkEqual('重放不新增作业', replay.created.jobs, 0);
+  checkEqual('重放扫描一条消息', replay.scanned, 1);
+  checkEqual('重放把已有意图计为 already', replay.skips.already, 2);
+  checkEqual(
+    '重放回执数不变',
+    count(env, 'SELECT COUNT(*) AS n FROM memory_receipts'),
+    before.receipts,
+  );
+  checkEqual(
+    '重放意图数不变',
+    count(env, 'SELECT COUNT(*) AS n FROM memory_retain_intents'),
+    before.intents,
+  );
+  checkEqual(
+    '重放作业数不变',
+    count(env, 'SELECT COUNT(*) AS n FROM memory_jobs'),
+    before.jobs,
+  );
+  checkEqual(
+    '重放只新增一个经历批次 operation',
+    count(env, 'SELECT COUNT(*) AS n FROM operations'),
+    before.operations + 1,
+  );
+  checkEqual(
+    '重放后经历数恢复',
+    count(env, 'SELECT COUNT(*) AS n FROM memory_experiences'),
+    2,
+  );
+
+  const repaired = await buildInjectionPack({
+    db: env.d1,
+    instanceId,
+    agentId: agentA,
+    roomId: roomOne,
+    now: AT + 1_000,
+  });
+  checkEqual('重放后 pack 恢复', repaired.available, true);
+  checkEqual('重放后 pack 有经历', repaired.stats.experiences, 1);
+  checkEqual(
+    '重放后 source 关联门恢复',
+    sourceGateCount(env, {
+      roomId: roomOne,
+      spaceId: spaceA.space_id,
+      epoch: spaceA.ownership_epoch,
+      agentId: agentA,
+    }),
+    1,
+  );
+
+  const third = await backfill(fixture).runOnce();
+  checkEqual('再次运行零新增经历', third.created.experiences, 0);
+  checkEqual(
+    '再次运行 operations 不再增长',
+    count(env, 'SELECT COUNT(*) AS n FROM operations'),
+    before.operations + 1,
+  );
+  checkEqual(
+    '重放不扩大到其它房间',
+    (
+      await buildInjectionPack({
+        db: env.d1,
+        instanceId,
+        agentId: agentA,
+        roomId: roomTwo,
+        now: AT + 1_000,
+      })
+    ).item_count,
+    0,
   );
   env.db.close();
 }
@@ -661,7 +918,7 @@ async function integrationWiringChecks(): Promise<void> {
     skipped_windows: 0,
     scanned: 0,
     pairs: 0,
-    created: { representations: 0, receipts: 0, intents: 0, jobs: 0 },
+    created: { representations: 0, receipts: 0, intents: 0, jobs: 0, experiences: 0 },
     skips: {
       empty_body: 0,
       out_of_window: 0,
@@ -727,6 +984,8 @@ async function run(): Promise<void> {
   await windowMathChecks();
   console.log('memory backfill: basic + idempotency + crash replay');
   await basicChecks();
+  console.log('memory backfill: experience replay');
+  await experienceReplayChecks();
   console.log('memory backfill: skips + permissions');
   await skipAndPermissionChecks();
   console.log('memory backfill: recall end-to-end');
