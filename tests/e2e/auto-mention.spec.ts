@@ -606,3 +606,276 @@ test.describe('SPA agent identity group send', () => {
     expect(await pendingDeliveryOrNull(base, agent.token, messageId)).toBeNull();
   });
 });
+
+test.describe('SPA group reply auto mention', () => {
+  let base = '';
+  let humanToken = '';
+  let human: Actor | null = null;
+  let agent: { token: string; actor: Actor } | null = null;
+  let humanPeer: { token: string; actor: Actor } | null = null;
+  let replyRoomId = '';
+  let directRoomId = '';
+  let agentRootId = '';
+  let humanMiddleId = '';
+  let pureHumanRootId = '';
+  let directTargetId = '';
+
+  interface SentMessage {
+    message: { message_id: string };
+  }
+
+  test.beforeAll(async () => {
+    base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    humanToken = crypto.randomUUID();
+    human = await callTool<Actor>(base, humanToken, 'network_register', {
+      request_id: requestId('e2e_reg'),
+      kind: 'human',
+      name: `回复提及人类 ${suffix}`,
+      device_id: `e2e-reply-mention-${suffix}`,
+    });
+    const agentToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+    agent = {
+      token: agentToken,
+      actor: await callTool<Actor>(base, agentToken, 'network_register', {
+        request_id: requestId('e2e_reg'),
+        kind: 'agent',
+        name: `回复提及 Agent ${suffix}`,
+        agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+      }),
+    };
+    const peerToken = crypto.randomUUID();
+    humanPeer = {
+      token: peerToken,
+      actor: await callTool<Actor>(base, peerToken, 'network_register', {
+        request_id: requestId('e2e_reg'),
+        kind: 'human',
+        name: `回复提及人类同伴 ${suffix}`,
+        device_id: `e2e-reply-peer-${suffix}`,
+      }),
+    };
+
+    const peerContact = await callTool<{ request: { contact_request_id: string } | null }>(
+      base,
+      humanPeer.token,
+      'network_contact_request',
+      { request_id: requestId('e2e_contact'), actor_id: human.actor_id },
+    );
+    const peerContactId = peerContact.request?.contact_request_id;
+    if (!peerContactId) throw new Error('人类同伴好友申请未创建');
+    await callTool(base, humanToken, 'network_contact_request_respond', {
+      request_id: requestId('e2e_contact'),
+      contact_request_id: peerContactId,
+      action: 'accept',
+    });
+
+    const agentContact = await callTool<{ request: { contact_request_id: string } | null }>(
+      base,
+      agent.token,
+      'network_contact_request',
+      { request_id: requestId('e2e_contact'), actor_id: human.actor_id },
+    );
+    const agentContactId = agentContact.request?.contact_request_id;
+    if (!agentContactId) throw new Error('回复提及 Agent 好友申请未创建');
+    await callTool(base, humanToken, 'network_contact_request_respond', {
+      request_id: requestId('e2e_contact'),
+      contact_request_id: agentContactId,
+      action: 'accept',
+    });
+
+    const group = await callTool<RoomCreated>(base, humanToken, 'network_room_create', {
+      request_id: requestId('e2e_reply_group'),
+      kind: 'group',
+      title: `回复提及群 ${suffix}`,
+      members: [agent.actor.actor_id, humanPeer.actor.actor_id],
+    });
+    replyRoomId = group.room.room_id;
+
+    const root = await callTool<SentMessage>(base, agent.token, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: crypto.randomUUID(),
+      room_id: replyRoomId,
+      body: `线程顶部 Agent 消息 ${suffix}`,
+      invoke: [],
+    });
+    agentRootId = root.message.message_id;
+    const middle = await callTool<SentMessage>(base, humanPeer.token, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: crypto.randomUUID(),
+      room_id: replyRoomId,
+      body: `人类中间回复 ${suffix}`,
+      reply_to: agentRootId,
+      invoke: [],
+    });
+    humanMiddleId = middle.message.message_id;
+    const pureRoot = await callTool<SentMessage>(base, humanPeer.token, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: crypto.randomUUID(),
+      room_id: replyRoomId,
+      body: `纯人类线程根消息 ${suffix}`,
+      invoke: [],
+    });
+    pureHumanRootId = pureRoot.message.message_id;
+
+    const direct = await callTool<RoomCreated>(base, humanToken, 'network_room_create', {
+      request_id: requestId('e2e_direct'),
+      kind: 'direct',
+      members: [agent.actor.actor_id],
+    });
+    directRoomId = direct.room.room_id;
+    const directTarget = await callTool<SentMessage>(base, agent.token, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: crypto.randomUUID(),
+      room_id: directRoomId,
+      body: `单聊引用目标 ${suffix}`,
+      invoke: [],
+    });
+    directTargetId = directTarget.message.message_id;
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await instrumentFetch(page);
+    await page.addInitScript((token) => {
+      try {
+        localStorage.setItem('agent-network-token', token);
+        localStorage.removeItem('agent-network-logged-out');
+      } catch {
+        // 浏览器禁用存储时由页面错误态兜底。
+      }
+    }, humanToken);
+  });
+
+  async function quoteMessage(page: Page, messageId: string): Promise<void> {
+    const target = page.locator(`#messages .msg[data-message-id="${messageId}"]`);
+    await expect(target).toBeVisible();
+    await target.getByRole('button', { name: '消息操作', exact: true }).click();
+    await page.getByRole('menuitem', { name: '引用' }).click();
+    await expect(page.locator('#composer-reply')).toBeVisible();
+  }
+
+  function mentionCount(text: string, name: string): number {
+    return text.split(`@${name}`).length - 1;
+  }
+
+  test('reply to an Agent message fills @Agent and creates delivery', async ({ page }) => {
+    if (!agent) throw new Error('fixture 未初始化');
+    await page.goto(`${base}/c/${replyRoomId}`);
+    await quoteMessage(page, agentRootId);
+
+    const body = page.locator('#body');
+    await expect(body).toHaveValue(`@${agent.actor.name} `);
+    const marker = `回复自动提及 ${Date.now()}`;
+    await body.fill(`${await body.inputValue()}${marker}`);
+    await page.locator('#send').click();
+
+    const args = await lastSendArgs(page);
+    expect(args.body).toBe(`@${agent.actor.name} ${marker}`);
+    expect(args.invoke).toEqual([agent.actor.actor_id]);
+    expect(args.reply_to).toBe(agentRootId);
+
+    const messageId = await messageIdFor(base, humanToken, replyRoomId, marker);
+    await expect
+      .poll(() => pendingDeliveryOrNull(base, agent!.token, messageId))
+      .not.toBeNull();
+  });
+
+  test('reply does not duplicate an existing @ mention', async ({ page }) => {
+    if (!agent) throw new Error('fixture 未初始化');
+    await page.goto(`${base}/c/${replyRoomId}`);
+    await quoteMessage(page, agentRootId);
+
+    const body = page.locator('#body');
+    const preset = `@${agent.actor.name} 已有提及 ${Date.now()}`;
+    await body.fill(preset);
+    await quoteMessage(page, agentRootId);
+
+    const value = await body.inputValue();
+    expect(value).toBe(preset);
+    expect(mentionCount(value, agent.actor.name)).toBe(1);
+  });
+
+  test('reply to a human in an Agent thread picks the topmost Agent', async ({ page }) => {
+    if (!agent) throw new Error('fixture 未初始化');
+    await page.goto(`${base}/c/${replyRoomId}`);
+    await quoteMessage(page, humanMiddleId);
+
+    const body = page.locator('#body');
+    await expect(body).toHaveValue(`@${agent.actor.name} `);
+    const marker = `线程向上提及 ${Date.now()}`;
+    await body.fill(`${await body.inputValue()}${marker}`);
+    await page.locator('#send').click();
+
+    const args = await lastSendArgs(page);
+    expect(args.body).toBe(`@${agent.actor.name} ${marker}`);
+    expect(args.invoke).toEqual([agent.actor.actor_id]);
+    expect(args.reply_to).toBe(humanMiddleId);
+
+    const messageId = await messageIdFor(base, humanToken, replyRoomId, marker);
+    await expect
+      .poll(() => pendingDeliveryOrNull(base, agent!.token, messageId))
+      .not.toBeNull();
+  });
+
+  test('pure human thread does not auto mention', async ({ page }) => {
+    if (!agent || !humanPeer) throw new Error('fixture 未初始化');
+    await page.goto(`${base}/c/${replyRoomId}`);
+    await quoteMessage(page, pureHumanRootId);
+
+    const body = page.locator('#body');
+    expect(await body.inputValue()).toBe('');
+    const marker = `纯人类线程回复 ${Date.now()}`;
+    await body.fill(marker);
+    await page.locator('#send').click();
+
+    const args = await lastSendArgs(page);
+    expect(args.body).toBe(marker);
+    expect(Object.hasOwn(args, 'invoke')).toBe(false);
+    expect(args.reply_to).toBe(pureHumanRootId);
+
+    const messageId = await messageIdFor(base, humanToken, replyRoomId, marker);
+    expect(await pendingDeliveryOrNull(base, agent.token, messageId)).toBeNull();
+    expect(await pendingDeliveryOrNull(base, humanPeer.token, messageId)).toBeNull();
+  });
+
+  test('direct reply keeps the existing auto invoke without @ text', async ({ page }) => {
+    if (!agent) throw new Error('fixture 未初始化');
+    await page.goto(`${base}/c/${directRoomId}`);
+    await quoteMessage(page, directTargetId);
+
+    const body = page.locator('#body');
+    expect(await body.inputValue()).toBe('');
+    const marker = `单聊引用回复 ${Date.now()}`;
+    await body.fill(marker);
+    await page.locator('#send').click();
+
+    const args = await lastSendArgs(page);
+    expect(args.body).toBe(marker);
+    expect(args.invoke).toEqual([agent.actor.actor_id]);
+    expect(args.reply_to).toBe(directTargetId);
+
+    const messageId = await messageIdFor(base, humanToken, directRoomId, marker);
+    await expect
+      .poll(() => pendingDeliveryOrNull(base, agent!.token, messageId))
+      .not.toBeNull();
+  });
+
+  test('deleting the auto mention sends without a delivery', async ({ page }) => {
+    if (!agent) throw new Error('fixture 未初始化');
+    await page.goto(`${base}/c/${replyRoomId}`);
+    await quoteMessage(page, agentRootId);
+    const body = page.locator('#body');
+    await expect(body).toHaveValue(`@${agent.actor.name} `);
+
+    const marker = `删除提及后发送 ${Date.now()}`;
+    await body.fill(marker);
+    await page.locator('#send').click();
+
+    const args = await lastSendArgs(page);
+    expect(args.body).toBe(marker);
+    expect(Object.hasOwn(args, 'invoke')).toBe(false);
+    expect(args.reply_to).toBe(agentRootId);
+
+    const messageId = await messageIdFor(base, humanToken, replyRoomId, marker);
+    expect(await pendingDeliveryOrNull(base, agent.token, messageId)).toBeNull();
+  });
+});

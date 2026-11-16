@@ -4,7 +4,7 @@ import { useDropzone } from 'react-dropzone';
 
 import { AppShell } from '../app/AppShell';
 import { Link } from '../app/router';
-import { Composer, type ComposerSendInput } from '../features/chat/Composer';
+import { Composer, type ComposerReply, type ComposerSendInput } from '../features/chat/Composer';
 import { ForwardDialog } from '../features/chat/ForwardDialog';
 import { Timeline } from '../features/chat/Timeline';
 import { AppSidebar } from '../features/layout/AppSidebar';
@@ -35,6 +35,7 @@ import {
   buildSendPlan,
   composeMessageBody,
   mentionNames,
+  resolveReplyAgentTarget,
   senderName,
   type HistoryMessage,
 } from '../lib/chat';
@@ -132,7 +133,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const chat = useRoomChat(roomId);
   const queryClient = useQueryClient();
   const [status, setStatus] = useState('');
-  const [reply, setReply] = useState<{ messageId: string; label: string } | null>(null);
+  const [reply, setReply] = useState<ComposerReply | null>(null);
   const [forcePinToken, setForcePinToken] = useState(0);
   const [overlay, setOverlay] = useState<RoomOverlay | null>(null);
   const [filesDesktopOpen, setFilesDesktopOpen] = useState(() =>
@@ -251,13 +252,30 @@ export function ChatPage({ roomId }: ChatPageProps) {
         ? onlineLabel(peer.online)
         : '';
 
-  const onQuote = useCallback((item: HistoryMessage) => {
-    setReply({
-      messageId: item.message_id,
-      label: `${senderName(item.sender_id, members, identity?.name ?? null, identity?.actor_id ?? null)}：${item.preview.slice(0, 120)}`,
-    });
-    document.getElementById('body')?.focus();
-  }, [members, identity]);
+  const onQuote = useCallback(
+    (item: HistoryMessage) => {
+      // 群聊人类回复时预解析自动 @：被回复 Agent 优先，否则沿线程找最上面的
+      // 非自己 Agent；直聊、Agent 身份与找不到目标的线程保持原样。
+      const target =
+        room?.kind === 'group' && identity?.kind === 'human'
+          ? resolveReplyAgentTarget({
+              items: chat.items,
+              messageId: item.message_id,
+              members,
+              identityId: identity.actor_id,
+            })
+          : null;
+      setReply({
+        messageId: item.message_id,
+        label: `${senderName(item.sender_id, members, identity?.name ?? null, identity?.actor_id ?? null)}：${item.preview.slice(0, 120)}`,
+        mention: target
+          ? { actor_id: target.actor_id, name: target.name, kind: 'agent' }
+          : null,
+      });
+      document.getElementById('body')?.focus();
+    },
+    [chat.items, identity, members, room?.kind],
+  );
 
   const onStatus = useCallback((message: string) => {
     setStatus(message);
@@ -353,6 +371,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
         selections: input.selections,
         items: chat.items,
         hasAttachments: input.urls.length > 0,
+        hasReply: Boolean(reply?.messageId),
       });
       if (plan.error) {
         setStatus(plan.error);
