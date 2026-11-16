@@ -37,7 +37,12 @@ import { check, checkEqual, checksPassed } from './lib/harness';
 import { listInboxPages, type MonitorRpc } from '../client/monitor/rpc';
 import { fetchMemoryPack } from '../client/monitor/memory';
 import { BODY_PREVIEW_CHARS } from '../client/monitor/events';
-import { downloadAttachments } from '../client/monitor/attachments';
+import {
+  attachmentOrigins,
+  downloadAttachments,
+  extractAttachmentCandidates,
+  startAttachmentCleanup,
+} from '../client/monitor/attachments';
 import { retryDelayMs } from '../client/monitor/engine';
 import { LIMITS } from '../src/contracts/limits';
 
@@ -79,6 +84,8 @@ interface MockState {
   claims: Map<string, MockDelivery>;
   claimCalls: Map<string, number>;
   readCalls: number;
+  /** 按消息 id 返回的引用上下文；未登记时服务端返回 null。 */
+  quotes: Map<string, JsonObject>;
   maxConcurrentClaims: number;
   controller: ReadableStreamDefaultController<Uint8Array> | null;
   keepaliveTimer: ReturnType<typeof setInterval> | null;
@@ -248,6 +255,7 @@ function createMock(options: MockOptions = {}): MockServer {
     claims: new Map(),
     claimCalls: new Map(),
     readCalls: 0,
+    quotes: new Map(),
     maxConcurrentClaims: 0,
     controller: null,
     keepaliveTimer: null,
@@ -554,6 +562,7 @@ function createMock(options: MockOptions = {}): MockServer {
           state.readCalls += 1;
           const messageId = String(args.message_id ?? '');
           const full = state.bodies.get(messageId) ?? messageBody(messageId);
+          const quote = state.quotes.get(messageId) ?? null;
           if (messageId === LONG_MESSAGE_ID) {
             const cursor = String(args.chunk_cursor ?? '');
             const splitAt = 2400;
@@ -565,6 +574,7 @@ function createMock(options: MockOptions = {}): MockServer {
                 chunk_cursor: 'c1',
                 next_cursor: 'c1',
                 eof: false,
+                ...(quote ? { reply_to: String(quote.message_id ?? ''), quote } : {}),
               });
             }
             return toolResult(body.id, {
@@ -583,6 +593,8 @@ function createMock(options: MockOptions = {}): MockServer {
             chunk_cursor: '',
             next_cursor: null,
             eof: true,
+            reply_to: quote ? String(quote.message_id ?? '') : null,
+            quote,
           });
         }
         default:
@@ -1070,6 +1082,7 @@ async function runClaudeChecks(): Promise<void> {
     checkEqual('成功事件正文完整', ok.body, okBody);
     checkEqual('成功事件 body_bytes', ok.body_bytes, Buffer.byteLength(okBody, 'utf8'));
     checkEqual('短正文不截断', ok.body_truncated, false);
+    check('无引用时不带 quote 字段', !('quote' in ok));
     const eventFile = String(ok.event_file ?? '');
     check('event_file 存在', eventFile.length > 0 && existsSync(eventFile));
     const fileMode = statSync(eventFile).mode & 0o777;
@@ -1231,6 +1244,102 @@ async function runClaudeChecks(): Promise<void> {
     check('stdout 每行都是事件 JSON', watcher.stdout.every((line) => parseEvent(line) !== null));
     check('stdout 不含 token', !watcher.stdout.join('\n').includes(TOKEN));
     check('stderr 不含 token', !watcher.stderr.join('\n').includes(TOKEN));
+  } finally {
+    await watcher.kill();
+    mock.stop();
+  }
+}
+
+async function runDeliveryQuoteChecks(): Promise<void> {
+  const mock = createMock();
+  // 关闭记忆上下文，单独断言 quote 字段与既有事件键顺序。
+  const watcher = startWatcher(
+    mock.base,
+    { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' },
+    ['--no-memory-context'],
+  );
+  try {
+    await waitForLine(watcher.stderr, (line) => line.includes('READY'), 'quote READY');
+    const quote = {
+      message_id: 'msg_parent_quote',
+      sender_id: 'agt_quote_parent',
+      sender_name: '引用作者',
+      sender_kind: 'human',
+      preview: '被引用的父消息预览',
+      created_at: '2026-11-04T10:00:00.000Z',
+    };
+    mock.state.quotes.set('msg_dlv_quote', quote);
+    mock.state.pending.set('dlv_quote', delivery('dlv_quote'));
+    const beforeReads = mock.state.readCalls;
+    sendItems(mock, [notificationItem('dlv_quote', 'delivery.created', 'evt_quote')]);
+    const event = await waitForEvent(watcher.stdout, 'delivery', 'dlv_quote');
+    checkEqual('引用投递只读取一次', mock.state.readCalls - beforeReads, 1);
+    checkEqual('引用事件包含结构化 quote', JSON.stringify(event.quote), JSON.stringify(quote));
+    checkEqual('引用事件正文完整', event.body, messageBody('msg_dlv_quote'));
+    check(
+      '引用文本不拼进正文',
+      typeof event.body === 'string' && !event.body.includes(quote.preview),
+      event.body,
+    );
+    checkEqual(
+      '引用事件 quote 位于末尾',
+      keysOf(event),
+      'type,delivery_id,room_id,message_id,sender_id,event_id,seq,attempt,claim_id,claimed_at,auto_claimed,claim_state,claim,source,body,body_bytes,body_truncated,event_file,attachments,quote',
+    );
+    const quotedFile = JSON.parse(
+      readFileSync(String(event.event_file ?? ''), 'utf8'),
+    ) as JsonObject;
+    checkEqual('引用 event_file 含 quote', JSON.stringify(quotedFile.quote), JSON.stringify(quote));
+    checkEqual('引用 event_file 正文不含引用', quotedFile.body, messageBody('msg_dlv_quote'));
+
+    // 缺失 quote：只省略字段，正文照常投递，读取次数不增加。
+    mock.state.claims.clear();
+    mock.state.pending.set('dlv_no_quote', delivery('dlv_no_quote'));
+    const beforePlain = mock.state.readCalls;
+    sendItems(mock, [notificationItem('dlv_no_quote', 'delivery.created', 'evt_no_quote')]);
+    const plain = await waitForEvent(watcher.stdout, 'delivery', 'dlv_no_quote');
+    check('缺失 quote 时事件不带 quote', !('quote' in plain));
+    checkEqual('缺失 quote 时正文完整', plain.body, messageBody('msg_dlv_no_quote'));
+    checkEqual('缺失 quote 时读取次数仍为 1', mock.state.readCalls - beforePlain, 1);
+
+    // 不完整 quote：客户端按服务器契约拒绝该引用，正文照常投递。
+    mock.state.claims.clear();
+    mock.state.pending.set('dlv_partial_quote', delivery('dlv_partial_quote'));
+    mock.state.quotes.set('msg_dlv_partial_quote', {
+      message_id: 'msg_parent_partial',
+      sender_id: 'agt_parent_partial',
+      sender_name: '引用作者',
+    });
+    const beforePartial = mock.state.readCalls;
+    sendItems(mock, [
+      notificationItem('dlv_partial_quote', 'delivery.created', 'evt_partial_quote'),
+    ]);
+    const partial = await waitForEvent(watcher.stdout, 'delivery', 'dlv_partial_quote');
+    check('不完整 quote 时事件不带 quote', !('quote' in partial));
+    checkEqual('不完整 quote 时正文完整', partial.body, messageBody('msg_dlv_partial_quote'));
+    checkEqual('不完整 quote 时读取次数仍为 1', mock.state.readCalls - beforePartial, 1);
+
+    // 合并后 quote 与 attachments 必须同时出现在同一事件。
+    mock.state.claims.clear();
+    const quoteAttachmentId = attachFileId('Q');
+    mock.state.files.set(quoteAttachmentId, { body: ATTACH_PNG, contentType: 'image/png' });
+    mock.state.quotes.set('msg_dlv_quote_attach', quote);
+    mock.state.bodies.set(
+      'msg_dlv_quote_attach',
+      `引用并看图 ${mock.base}/f/${quoteAttachmentId}`,
+    );
+    mock.state.pending.set('dlv_quote_attach', delivery('dlv_quote_attach'));
+    sendItems(mock, [
+      notificationItem('dlv_quote_attach', 'delivery.created', 'evt_quote_attach'),
+    ]);
+    const combined = await waitForEvent(watcher.stdout, 'delivery', 'dlv_quote_attach');
+    checkEqual('quote 与 attachments 同时出现', JSON.stringify(combined.quote), JSON.stringify(quote));
+    checkEqual('quote 投递同样携带附件', attachmentItems(combined).length, 1);
+    const combinedFile = JSON.parse(
+      readFileSync(String(combined.event_file ?? ''), 'utf8'),
+    ) as JsonObject;
+    checkEqual('event_file 同时含 quote 与 attachments', JSON.stringify(combinedFile.quote), JSON.stringify(quote));
+    checkEqual('event_file 同时含附件', attachmentItems(combinedFile).length, 1);
   } finally {
     await watcher.kill();
     mock.stop();
@@ -2963,29 +3072,40 @@ async function runAttachmentChecks(): Promise<void> {
       'attachments count log',
     );
 
-    // 2) 非图片/PDF、超大文件、跨主机、userinfo、非 /f/ 路径都忽略。
+    // 2) 非图片/PDF、超大文件、跨主机、userinfo、非 /f/ 路径、query/hash 都拒绝。
     const textId = attachFileId('d');
     const oversizedId = attachFileId('e');
     const crossHostId = attachFileId('f');
     const userinfoId = attachFileId('g');
+    const queryId = attachFileId('v');
+    const hashId = attachFileId('w');
     mock.state.files.set(textId, { body: Buffer.from('hello'), contentType: 'text/plain' });
     mock.state.files.set(oversizedId, {
       body: new Uint8Array(LIMITS.monitorAttachmentBytes + 1),
       contentType: 'image/png',
     });
+    mock.state.files.set(queryId, { body: ATTACH_PNG, contentType: 'image/png' });
+    mock.state.files.set(hashId, { body: ATTACH_PNG, contentType: 'image/png' });
     const beforeSkip = mock.state.fileRequests.length;
     const skipEvent = await send(
       'dlv_attach_skip',
       `文本 ${mock.base}/f/${textId}，超大 ${mock.base}/f/${oversizedId}，` +
         `跨主机 ${other.base}/f/${crossHostId}，userinfo ` +
         `${mock.base.replace('http://', 'http://user:pass@')}/f/${userinfoId}，` +
-        `路径 /not-f/${imageId}，片段 ${mock.base}/f/${imageId}/extra`,
+        `路径 /not-f/${imageId}，片段 ${mock.base}/f/${imageId}/extra，` +
+        `query ${mock.base}/f/${queryId}?download=1，hash ${mock.base}/f/${hashId}#preview`,
     );
     checkEqual('被忽略的附件不进入事件', attachmentItems(skipEvent).length, 0);
     checkEqual(
       '只请求类型不支持与超大附件',
       mock.state.fileRequests.slice(beforeSkip).sort().join(','),
       [`/f/${textId}`, `/f/${oversizedId}`].sort().join(','),
+    );
+    check(
+      '带 query/hash 的候选不发起请求',
+      !mock.state.fileRequests.slice(beforeSkip).includes(`/f/${queryId}`) &&
+        !mock.state.fileRequests.slice(beforeSkip).includes(`/f/${hashId}`),
+      mock.state.fileRequests.slice(beforeSkip),
     );
     checkEqual('跨主机附件请求数为 0', other.hits.length, 0);
     await waitForLine(
@@ -3085,6 +3205,103 @@ async function runAttachmentChecks(): Promise<void> {
         elapsed < LIMITS.monitorAttachmentTimeoutMs + 1_000,
       elapsed,
     );
+
+    // 7) 目标文件已存在：一致则复用；不一致则跳过，绝不 rename 覆盖。
+    const existingId = attachFileId('x');
+    mock.state.files.set(existingId, { body: ATTACH_PNG, contentType: 'image/png' });
+    const existingHash = createHash('sha256').update(ATTACH_PNG).digest('hex');
+    const existingTarget = join(attachmentsDir, `${existingHash}.png`);
+    // 与下载内容等长但字节不同，确保走 SHA-256 校验而不是只比大小。
+    const sentinel = Buffer.alloc(ATTACH_PNG.byteLength, 0x42);
+    writeFileSync(existingTarget, sentinel);
+    chmodSync(existingTarget, 0o444);
+    const sentinelInode = statSync(existingTarget).ino;
+    const sentinelOutcome = await downloadAttachments({
+      body: `${mock.base}/f/${existingId}`,
+      origins: [mock.base],
+      directory: attachmentsDir,
+    });
+    checkEqual('已有目标内容不一致时不覆盖', sentinelOutcome.attachments.length, 0);
+    checkEqual('已有目标内容不一致时计入 skipped', sentinelOutcome.skipped, 1);
+    checkEqual(
+      '已有目标 sentinel 内容未被修改',
+      readFileSync(existingTarget).equals(sentinel),
+      true,
+    );
+    checkEqual('已有目标 inode 未变化', statSync(existingTarget).ino, sentinelInode);
+
+    chmodSync(existingTarget, 0o600);
+    writeFileSync(existingTarget, ATTACH_PNG);
+    chmodSync(existingTarget, 0o444);
+    const reusedInode = statSync(existingTarget).ino;
+    const reused = await downloadAttachments({
+      body: `${mock.base}/f/${existingId}`,
+      origins: [mock.base],
+      directory: attachmentsDir,
+    });
+    checkEqual('已有目标内容一致时复用', reused.attachments.length, 1);
+    checkEqual('复用不重写已有文件', statSync(existingTarget).ino, reusedInode);
+    checkEqual('复用保留已有文件内容', readFileSync(existingTarget).equals(ATTACH_PNG), true);
+  } finally {
+    await watcher.kill();
+    mock.stop();
+    other.stop();
+    await rm(workdir, { recursive: true, force: true });
+  }
+}
+
+async function runAttachmentOriginChecks(): Promise<void> {
+  checkEqual(
+    'attachmentOrigins 顺序为 PUBLIC_ORIGIN、AGENTNET_URL、endpoint',
+    attachmentOrigins(
+      'https://endpoint.example/mcp',
+      'https://public.example',
+      'https://agentnet.example',
+    ).join(','),
+    'https://public.example,https://agentnet.example,https://endpoint.example',
+  );
+  checkEqual(
+    'attachmentOrigins 去重后只保留 http(s)',
+    attachmentOrigins(
+      'https://same.example/mcp',
+      'https://same.example',
+      'ftp://agentnet.example',
+    ).join(','),
+    'https://same.example',
+  );
+
+  const mock = createMock();
+  const other = startOtherFileServer();
+  const workdir = await mkdtemp(join(tmpdir(), 'ts-monitor-attachment-origins-'));
+  const stateDir = join(workdir, 'state');
+  const watcher = startWatcher(mock.base, {
+    AGENTNET_MONITOR_STATE_DIR: stateDir,
+    PUBLIC_ORIGIN: other.base,
+  });
+  try {
+    await waitForLine(watcher.stderr, (line) => line.includes('READY'), 'attachment origins READY');
+
+    const publicId = attachFileId('A');
+    const endpointId = attachFileId('B');
+    const relativeId = attachFileId('C');
+    mock.state.files.set(endpointId, { body: ATTACH_PNG, contentType: 'image/png' });
+    const item = delivery('dlv_attach_origins');
+    mock.state.bodies.set(
+      item.message_id,
+      `${other.base}/f/${publicId}\n${mock.base}/f/${endpointId}\n/f/${relativeId}`,
+    );
+    mock.state.pending.set('dlv_attach_origins', item);
+    sendItems(mock, [notificationItem('dlv_attach_origins')]);
+    const event = await waitForEvent(watcher.stdout, 'delivery', 'dlv_attach_origins');
+    const urls = attachmentItems(event).map((attachment) => String(attachment.url));
+    checkEqual(
+      '双 origin 候选按正文顺序且按 URL 去重',
+      urls.join(','),
+      `${other.base}/f/${publicId},${mock.base}/f/${endpointId},${other.base}/f/${relativeId}`,
+    );
+    check('AGENTNET_URL origin 被接受', urls.includes(`${mock.base}/f/${endpointId}`), urls);
+    check('PUBLIC_ORIGIN origin 被接受', urls.includes(`${other.base}/f/${publicId}`), urls);
+    check('根相对 /f/ 解析到 PUBLIC_ORIGIN', urls[2] === `${other.base}/f/${relativeId}`, urls);
   } finally {
     await watcher.kill();
     mock.stop();
@@ -3111,6 +3328,24 @@ async function runAttachmentCleanupChecks(): Promise<void> {
     await waitForLine(watcher.stderr, (line) => line.includes('READY'), 'attachment cleanup READY');
     check('启动清理超过 24h 的附件', !existsSync(oldPath));
     check('启动保留未过期附件', existsSync(freshPath));
+
+    // 长进程周期清理：不依赖启动/退出，按配置间隔删除过期文件。
+    const periodicDir = join(workdir, 'periodic');
+    mkdirSync(periodicDir, { recursive: true });
+    const periodicOld = join(periodicDir, 'periodic-old.png');
+    const periodicFresh = join(periodicDir, 'periodic-fresh.png');
+    writeFileSync(periodicOld, 'old');
+    writeFileSync(periodicFresh, 'fresh');
+    utimesSync(periodicOld, stale, stale);
+    const stopPeriodic = startAttachmentCleanup(periodicDir, 20);
+    try {
+      const deadline = Date.now() + 2_000;
+      while (existsSync(periodicOld) && Date.now() < deadline) await Bun.sleep(20);
+    } finally {
+      stopPeriodic();
+    }
+    check('周期清理删除超过 24h 的附件', !existsSync(periodicOld));
+    check('周期清理保留未过期附件', existsSync(periodicFresh));
 
     const exitOldPath = join(attachmentsDir, 'exit-old.png');
     writeFileSync(exitOldPath, 'old');
@@ -4088,7 +4323,11 @@ async function main(): Promise<void> {
   await runClaudeChecks();
   console.log('TS monitor: claude attachments');
   await runAttachmentChecks();
+  console.log('TS monitor: claude attachment origins');
+  await runAttachmentOriginChecks();
   await runAttachmentCleanupChecks();
+  console.log('TS monitor: delivery quote');
+  await runDeliveryQuoteChecks();
   console.log('TS monitor: delivery memory context');
   await runMemoryContextChecks();
   console.log('TS monitor: room events');

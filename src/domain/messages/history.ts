@@ -4,20 +4,29 @@ import { encodeCursor } from '../../contracts/cursor';
 import { BusinessError } from '../../contracts/errors';
 import { clampPage, LIMITS } from '../../contracts/limits';
 import { type HistoryListInput, type MessageReadInput, type RoomMarkReadInput } from '../../contracts/schemas';
-import { newId, nowMs, sliceUtf8Chunk } from '../../storage/db';
+import { newId, nowMs, sliceUtf8Chunk, truncateUtf8 } from '../../storage/db';
 import { inboxHeadStatementIfEvent, inboxTopic } from '../../storage/events';
 import { guardSql } from '../../storage/guards';
 import {
+  getActor,
   getActorsByIds,
   getMember,
   getMessage,
   listHistoryMessagesAfter,
   listHistoryMessagesBefore,
 } from '../../storage/queries';
+import type { ActorRow, MessageRow } from '../../storage/rows';
 import { deliveryStatesFor, mentionsFor, nullableString } from '../message-view-helpers';
 import { actorId, type Principal } from '../principal';
 import { loadRoomAccess } from '../room-access';
-import { decodeHistoryCursor, historyBoundary, historyCursorScope, historySnapshot, visibleMessage } from '../room-history';
+import {
+  decodeHistoryCursor,
+  historyBoundary,
+  historyCursorScope,
+  historySnapshot,
+  type HistoryBoundary,
+  visibleMessage,
+} from '../room-history';
 import { timelineList, type TimelinePage } from '../timeline';
 import { type MessagePage } from './view';
 
@@ -149,6 +158,69 @@ export interface ReadChunk {
   eof: boolean;
   body_bytes: number;
   created_seq: string;
+  /** 仅首次分块返回；后续分块省略，避免每块重复引用元数据。 */
+  reply_to?: string | null;
+  /** 首次分块的引用上下文；不可见、已撤回或发送者缺失时为 null。 */
+  quote?: MessageQuote | null;
+}
+
+/** 引用消息的只读上下文；只按读取者当前历史边界判定，不扩大可见范围。 */
+export interface MessageQuote {
+  message_id: string;
+  sender_id: string;
+  sender_name: string;
+  sender_kind: 'human' | 'agent';
+  preview: string;
+  created_at: string;
+}
+
+type QuoteParentRow = Pick<
+  MessageRow,
+  'message_id' | 'room_id' | 'sender_id' | 'preview' | 'body_bytes' | 'created_seq' | 'created_at'
+>;
+
+type QuoteSenderRow = Pick<ActorRow, 'name' | 'kind'>;
+
+/**
+ * 引用的纯判定：父消息必须同房间、在读取者当前边界内、未撤回且发送者仍存在。
+ *
+ * 任一条件失败都返回 null，不区分“不存在”“加入前”“已撤回”，避免按 ID 探测。
+ */
+export function quoteFromParent(
+  parent: QuoteParentRow | null,
+  sender: QuoteSenderRow | null,
+  roomId: string,
+  boundary: HistoryBoundary,
+): MessageQuote | null {
+  if (!parent || !sender) return null;
+  if (parent.room_id !== roomId) return null;
+  if (!visibleMessage(parent, boundary)) return null;
+  if (parent.body_bytes <= 0) return null;
+  return {
+    message_id: parent.message_id,
+    sender_id: parent.sender_id,
+    // 名称与预览都在这里一次截断：引用不复制完整正文，也不重复发送事件。
+    sender_name: truncateUtf8(
+      Array.from(sender.name).slice(0, LIMITS.actorNameMax).join(''),
+      LIMITS.actorNameBytes,
+    ),
+    sender_kind: sender.kind,
+    preview: truncateUtf8(parent.preview, LIMITS.quotePreviewBytes),
+    created_at: String(parent.created_at),
+  };
+}
+
+/** 首次分块按主键回查父消息；不可见时仍返回 reply_to，只把 quote 置空。 */
+async function resolveQuote(
+  db: D1Database,
+  parentId: string,
+  roomId: string,
+  boundary: HistoryBoundary,
+): Promise<MessageQuote | null> {
+  const parent = await getMessage(db, parentId);
+  if (!parent) return null;
+  const sender = parent.body_bytes > 0 ? await getActor(db, parent.sender_id) : null;
+  return quoteFromParent(parent, sender, roomId, boundary);
 }
 
 export async function messageRead(
@@ -160,7 +232,8 @@ export async function messageRead(
   const message = await getMessage(db, input.message_id);
   if (!message) throw new BusinessError('NOT_FOUND', '消息不存在');
   const { room, member } = await loadRoomAccess(db, message.room_id, viewer);
-  if (!visibleMessage(message, historyBoundary(room, member))) {
+  const boundary = historyBoundary(room, member);
+  if (!visibleMessage(message, boundary)) {
     // 按 ID 直读与列表共用同一可见性；不区分“不存在”和“加入前”，避免探测。
     throw new BusinessError('NOT_FOUND', '消息不存在或当前不可见');
   }
@@ -177,6 +250,11 @@ export async function messageRead(
   }
   const chunk = sliceUtf8Chunk(message.body, offset, LIMITS.bodyChunkBytes);
   const eof = chunk.next >= chunk.total;
+  const firstChunk = offset === 0;
+  const quote =
+    firstChunk && message.reply_to
+      ? await resolveQuote(db, message.reply_to, message.room_id, boundary)
+      : null;
   return {
     message_id: message.message_id,
     room_id: message.room_id,
@@ -186,6 +264,7 @@ export async function messageRead(
     eof,
     body_bytes: message.body_bytes,
     created_seq: String(message.created_seq),
+    ...(firstChunk ? { reply_to: message.reply_to, quote } : {}),
   };
 }
 

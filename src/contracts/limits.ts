@@ -14,6 +14,8 @@ export const LIMITS = {
   actorMetadataBytes: 4 * 1024,
   /** 消息预览上限。 */
   previewBytes: 512,
+  /** `network_message_read` 首次分块返回的引用预览 UTF-8 上限。 */
+  quotePreviewBytes: 120,
   /** 历史页默认 / 最大条数。 */
   historyPageDefault: 50,
   historyPageMax: 100,
@@ -261,8 +263,10 @@ export const LIMITS = {
   monitorAttachmentTimeoutMs: 5_000,
   /** 附件下载的并发上限；保持有界，避免一次投递打满连接。 */
   monitorAttachmentConcurrency: 2,
-  /** 附件文件保留时长（毫秒）；启动与退出时清理更早的文件。 */
+  /** 附件文件保留时长（毫秒）；启动、退出与周期任务清理更早的文件。 */
   monitorAttachmentRetentionMs: 24 * 60 * 60_000,
+  /** 长进程中附件清理的周期（毫秒）；与保留期共同决定最迟删除时间。 */
+  monitorAttachmentCleanupIntervalMs: 60 * 60_000,
   /** 协作深度与每个 root 的累计 delivery 上限。 */
   cooperationDepthMax: 4,
   rootDeliveryMax: 32,
