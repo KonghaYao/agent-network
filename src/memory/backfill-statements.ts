@@ -1,8 +1,9 @@
 /**
  * 回填的原子批语句。
  *
- * 每条语句都以 NOT EXISTS 条件插入；`operations` 行仍是整批所有权。回填不写
- * experiences/coverage，也不制造 events、outbox、pending_count 或 unread。
+ * 每条语句都以 NOT EXISTS 条件插入；`operations` 行仍是整批所有权。回填写入
+ * representation/receipt/intent/job 与稀疏 experience，不写 coverage，也不制造
+ * events、outbox、pending_count 或 unread。
  */
 import type { D1Like } from '../storage/queries';
 import type { MemorySourceRow } from './rows';
@@ -53,17 +54,143 @@ export async function findReusableRepresentationId(
   return row?.representation_id ?? null;
 }
 
-export async function hasBackfillIntent(
+/**
+ * 已有 experience 复用入口。
+ *
+ * dedupe_key 与宿主接纳路径共用同一算法；命中时沿用原 experience_id，避免
+ * 回填重放制造第二条同义经历。
+ */
+export async function findBackfillExperienceId(
+  db: D1Like,
+  dedupeKey: string,
+): Promise<string | null> {
+  const row = await db
+    .prepare('SELECT experience_id FROM memory_experiences WHERE dedupe_key = ? LIMIT 1')
+    .bind(dedupeKey)
+    .first<{ experience_id: string }>();
+  return row?.experience_id ?? null;
+}
+
+/**
+ * 房间历史观测对应的稀疏经历。
+ *
+ * `evidence` 使用召回侧内部证据 `gateway_observed_room_history`：只说明网关确认
+ * 消息已持久化在房间历史中，不冒充宿主提交。`receipt_id` 通过同批已插入（或
+ * 既有）回执的幂等键解析，避免引用不存在的回执。
+ */
+export function backfillExperienceStatement(
+  db: D1Like,
+  input: {
+    experienceId: string;
+    dedupeKey: string;
+    spaceId: string;
+    ownershipEpoch: number;
+    agentActorId: string;
+    originRoomId: string;
+    originMemberGeneration: number;
+    sourceId: string;
+    sourceRevision: number;
+    representationId: string;
+    rangeStart: number;
+    rangeEnd: number;
+    textSha256: string;
+    receiptIdempotencyKey: string;
+    now: number;
+  },
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO memory_experiences
+         (experience_id, dedupe_key, space_id, ownership_epoch, agent_actor_id,
+          origin_room_id, origin_member_generation, origin_kind, producer_kind,
+          source_id, source_revision, representation_id, representation_kind,
+          range_start, range_end, text_sha256, receipt_id, evidence, capture,
+          available, created_at, updated_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, 'experienced', NULL,
+              ?, ?, ?, 'raw_full', ?, ?, ?,
+              (SELECT receipt_id FROM memory_receipts WHERE idempotency_key = ? LIMIT 1),
+              ?, 'pending', 1, ?, ?
+        WHERE NOT EXISTS (
+          SELECT 1 FROM memory_experiences WHERE dedupe_key = ?
+        )`,
+    )
+    .bind(
+      input.experienceId,
+      input.dedupeKey,
+      input.spaceId,
+      input.ownershipEpoch,
+      input.agentActorId,
+      input.originRoomId,
+      input.originMemberGeneration,
+      input.sourceId,
+      input.sourceRevision,
+      input.representationId,
+      input.rangeStart,
+      input.rangeEnd,
+      input.textSha256,
+      input.receiptIdempotencyKey,
+      BACKFILL_EVIDENCE,
+      input.now,
+      input.now,
+      input.dedupeKey,
+    );
+}
+
+/**
+ * 读取已有意图指向的 experience。
+ *
+ * 返回 `null` 表示没有意图；返回对象表示意图存在，`experience_id` 可能为 NULL。
+ * 回填重放用它发现“体验已存在、意图却仍指向旧/缺失 ID”的悬挂指针。
+ */
+export async function findBackfillIntentExperienceId(
   db: D1Like,
   input: { spaceId: string; operationKey: string },
-): Promise<boolean> {
-  const row = await db
+): Promise<{ experience_id: string | null } | null> {
+  return db
     .prepare(
-      'SELECT 1 AS yes FROM memory_retain_intents WHERE space_id = ? AND operation_key = ?',
+      'SELECT experience_id FROM memory_retain_intents WHERE space_id = ? AND operation_key = ?',
     )
     .bind(input.spaceId, input.operationKey)
-    .first<{ yes: number }>();
-  return row !== null;
+    .first<{ experience_id: string | null }>();
+}
+
+/**
+ * 同批修正意图的 experience 指针。
+ *
+ * 回填插入使用 `WHERE NOT EXISTS (dedupe_key)`；若并发宿主已插入同 dedupe key
+ * 但不同 ID 的 experience，回填的 INSERT 会跳过，而意图可能仍写计划 ID。此
+ * UPDATE 作为同批最后一步，按 dedupe key 重新解析实际 experience_id，并只在
+ * 指针不一致时更新，避免悬挂引用。
+ */
+export function backfillIntentExperienceRepairStatement(
+  db: D1Like,
+  input: { spaceId: string; operationKey: string; dedupeKey: string; now: number },
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE memory_retain_intents
+          SET experience_id = (
+                SELECT e.experience_id FROM memory_experiences e
+                 WHERE e.dedupe_key = ? LIMIT 1
+              ),
+              updated_at = ?
+        WHERE space_id = ? AND operation_key = ?
+          AND EXISTS (
+                SELECT 1 FROM memory_experiences e WHERE e.dedupe_key = ?
+              )
+          AND experience_id IS NOT (
+                SELECT e.experience_id FROM memory_experiences e
+                 WHERE e.dedupe_key = ? LIMIT 1
+              )`,
+    )
+    .bind(
+      input.dedupeKey,
+      input.now,
+      input.spaceId,
+      input.operationKey,
+      input.dedupeKey,
+      input.dedupeKey,
+    );
 }
 
 /**

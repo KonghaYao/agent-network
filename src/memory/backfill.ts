@@ -2,10 +2,14 @@
  * 记忆定时回填。
  *
  * 以消息为主扫描最近窗口，再按房间 active Agent 成员 × active space 扇出；
- * 权限只交给 `authorizeSourceRead`。回填只入队 retain，不直接调用 Hindsight。
+ * 权限只交给 `authorizeSourceRead`。回填写入 representation/receipt/retain 意图
+ * 与稀疏 experience，不直接调用 Hindsight，也不推进原文覆盖。
  *
- * 幂等：每个 (message, 授权 space 集合) 一个 `runIdempotent` 批，批内所有
+ * 幂等：每个 (message, 待处理 space 集合) 一个 `runIdempotent` 批，批内所有
  * 条件插入都以 NOT EXISTS 收敛；窗口水位只在整窗无错误提交后推进。
+ *
+ * 重放：已有 receipt/intent 但缺 experience 的旧数据，在同一窗口被重新扫描时
+ * 使用独立 `exp:` 批次补齐 experience，不重复回执/意图/作业。
  */
 import { LIMITS } from '../contracts/limits';
 import { sha256Hex, stableStringify, utf8Bytes } from '../storage/db';
@@ -16,16 +20,21 @@ import {
 import { authorizeSourceRead, sourceOriginScope } from './access';
 import {
   BACKFILL_ACTOR_ID,
+  backfillExperienceStatement,
+  backfillIntentExperienceRepairStatement,
   backfillOperationKey,
+  backfillReceiptIdempotencyKey,
   backfillReceiptStatement,
   backfillSourceKey,
+  findBackfillExperienceId,
+  findBackfillIntentExperienceId,
   findReusableRepresentationId,
-  hasBackfillIntent,
   loadBackfillMessageSource,
 } from './backfill-statements';
 import {
   countBackfillCandidates,
   listBackfillFanout,
+  planBackfillReplayWindows,
   planBackfillWindows,
   readBackfillRoom,
   readInstanceCaptureDefault,
@@ -43,6 +52,7 @@ import {
   type MemoryTargetScope,
 } from './contracts';
 import { advanceMemoryCursor, MEMORY_CURSOR_KINDS, readMemoryCursor } from './jobs';
+import { experienceDedupeKey } from './experience-source';
 import { memoryRepresentationInsertStatements } from './representation-statements';
 import type { MemorySourceRow } from './rows';
 import {
@@ -69,6 +79,10 @@ export interface MemoryBackfillOptions {
   now?: () => number;
   windowMs?: number;
   maxCatchupWindows?: number;
+  /** 一次性重放起点（毫秒）；设置后按窗口从水位向前推进，而不是只补最近 N 个窗口。 */
+  replayFrom?: number;
+  /** 一次性重放上界（毫秒）；默认 `now`，始终不超过 `now`。 */
+  replayUntil?: number;
   pageSize?: number;
   scanSafetyRows?: number;
   log?: (message: string, detail: Record<string, unknown>) => void;
@@ -79,6 +93,7 @@ export interface MemoryBackfillCreated {
   receipts: number;
   intents: number;
   jobs: number;
+  experiences: number;
 }
 
 export interface MemoryBackfillSkips {
@@ -114,7 +129,7 @@ export interface MemoryBackfillStatus {
 }
 
 function emptyCreated(): MemoryBackfillCreated {
-  return { representations: 0, receipts: 0, intents: 0, jobs: 0 };
+  return { representations: 0, receipts: 0, intents: 0, jobs: 0, experiences: 0 };
 }
 
 function emptySkips(): MemoryBackfillSkips {
@@ -155,6 +170,15 @@ interface WindowResult {
   errors: number;
 }
 
+interface BackfillExperiencePlan {
+  member: BackfillFanoutRow;
+  dedupeKey: string;
+  experienceId: string;
+  needsExperience: boolean;
+  /** 已有意图指向的 experience 与实际 experience 不一致（并发插入/旧数据）。 */
+  repairIntent: boolean;
+}
+
 export class MemoryBackfill {
   readonly #db: D1Database;
   readonly #instanceId: string;
@@ -162,6 +186,8 @@ export class MemoryBackfill {
   readonly #now: () => number;
   readonly #windowMs: number;
   readonly #maxCatchupWindows: number;
+  readonly #replayFrom: number | null;
+  readonly #replayUntil: number | null;
   readonly #pageSize: number;
   readonly #scanSafetyRows: number;
   readonly #log: NonNullable<MemoryBackfillOptions['log']>;
@@ -180,6 +206,8 @@ export class MemoryBackfill {
       1,
       options.maxCatchupWindows ?? LIMITS.memoryBackfillMaxCatchupWindows,
     );
+    this.#replayFrom = options.replayFrom ?? null;
+    this.#replayUntil = options.replayUntil ?? null;
     this.#pageSize = Math.max(1, options.pageSize ?? LIMITS.memoryBackfillPageSize);
     this.#scanSafetyRows = Math.max(
       0,
@@ -270,12 +298,21 @@ export class MemoryBackfill {
       scopeId: BACKFILL_SCOPE_ID,
       cursorKind: MEMORY_CURSOR_KINDS.backfillWindowTo,
     });
-    const plan = planBackfillWindows({
-      watermark,
-      now,
-      windowMs: this.#windowMs,
-      maxCatchupWindows: this.#maxCatchupWindows,
-    });
+    const plan =
+      this.#replayFrom === null
+        ? planBackfillWindows({
+            watermark,
+            now,
+            windowMs: this.#windowMs,
+            maxCatchupWindows: this.#maxCatchupWindows,
+          })
+        : planBackfillReplayWindows({
+            watermark,
+            from: this.#replayFrom,
+            until: Math.min(this.#replayUntil ?? now, now),
+            windowMs: this.#windowMs,
+            maxWindows: this.#maxCatchupWindows,
+          });
     skippedWindows = plan.skippedWindows;
     if (plan.skippedWindows > 0) {
       this.#log('memory-backfill skipped_windows', {
@@ -294,6 +331,7 @@ export class MemoryBackfill {
       created.receipts += result.created.receipts;
       created.intents += result.created.intents;
       created.jobs += result.created.jobs;
+      created.experiences += result.created.experiences;
       errors += result.errors;
       this.#log('memory-backfill window', {
         from: window.from,
@@ -419,6 +457,7 @@ export class MemoryBackfill {
           result.created.receipts += message.receipts;
           result.created.intents += message.intents;
           result.created.jobs += message.jobs;
+          result.created.experiences += message.experiences;
         } catch (error) {
           result.errors += 1;
           this.#log('memory-backfill message failed', {
@@ -451,8 +490,22 @@ export class MemoryBackfill {
     row: MessageScanRow,
     window: BackfillWindow,
     skips: MemoryBackfillSkips,
-  ): Promise<{ pairs: number; representations: number; receipts: number; intents: number; jobs: number }> {
-    const empty = { pairs: 0, representations: 0, receipts: 0, intents: 0, jobs: 0 };
+  ): Promise<{
+    pairs: number;
+    representations: number;
+    receipts: number;
+    intents: number;
+    jobs: number;
+    experiences: number;
+  }> {
+    const empty = {
+      pairs: 0,
+      representations: 0,
+      receipts: 0,
+      intents: 0,
+      jobs: 0,
+      experiences: 0,
+    };
     if (row.body_bytes <= 0) {
       skips.empty_body += 1;
       return empty;
@@ -546,35 +599,6 @@ export class MemoryBackfill {
     const representationId =
       reusable ??
       `mrp_bf_${(await sha256Hex(`backfill-representation|${source.source_key}|${source.revision}|${digest}`)).slice(0, 32)}`;
-
-    const pending: BackfillFanoutRow[] = [];
-    for (const member of authorized) {
-      const operationKey = backfillOperationKey(member.space_id, row.message_id);
-      if (await hasBackfillIntent(this.#db, { spaceId: member.space_id, operationKey })) {
-        skips.already += 1;
-      } else {
-        pending.push(member);
-      }
-    }
-    if (pending.length === 0) return empty;
-
-    const pairKeys = pending.map((member) => [
-      member.space_id,
-      member.ownership_epoch,
-      member.backend_binding_epoch,
-    ]);
-    const spaceSetHash = (await sha256Hex(stableStringify(pairKeys))).slice(0, 12);
-    const requestId = `memory-backfill:${window.from}:${row.message_id}:${spaceSetHash}`;
-    const payloadHash = await sha256Hex(
-      stableStringify({
-        from: window.from,
-        to: window.to,
-        message_id: row.message_id,
-        body_sha256: digest,
-        pairs: pairKeys,
-      }),
-    );
-    const result = { message_id: row.message_id, pairs: pending.length };
     const exact: MemoryExactRepresentation = {
       representation: {
         representation_id: representationId,
@@ -588,6 +612,99 @@ export class MemoryBackfill {
         depends_on: [],
       },
       text: body,
+    };
+
+    const plans: BackfillExperiencePlan[] = [];
+    const pending: BackfillFanoutRow[] = [];
+    for (const member of authorized) {
+      const dedupeKey = experienceDedupeKey({
+        spaceId: member.space_id,
+        ownershipEpoch: member.ownership_epoch,
+        agentId: member.actor_id,
+        originRoomId: origin.room_id,
+        memberGeneration: member.member_generation,
+        originKind: 'experienced',
+        representation: exact.representation,
+      });
+      const existingExperienceId = await findBackfillExperienceId(this.#db, dedupeKey);
+      const experienceId =
+        existingExperienceId ??
+        `mexp_bf_${(await sha256Hex(`backfill-experience|${dedupeKey}`)).slice(0, 24)}`;
+      const operationKey = backfillOperationKey(member.space_id, row.message_id);
+      const existingIntent = await findBackfillIntentExperienceId(this.#db, {
+        spaceId: member.space_id,
+        operationKey,
+      });
+      plans.push({
+        member,
+        dedupeKey,
+        experienceId,
+        needsExperience: existingExperienceId === null,
+        repairIntent:
+          existingExperienceId !== null &&
+          existingIntent !== null &&
+          existingIntent.experience_id !== existingExperienceId,
+      });
+      if (existingIntent !== null) {
+        skips.already += 1;
+      } else {
+        pending.push(member);
+      }
+    }
+    const pendingSpaces = new Set(pending.map((member) => member.space_id));
+    const targets = plans.filter(
+      (plan) =>
+        plan.needsExperience || plan.repairIntent || pendingSpaces.has(plan.member.space_id),
+    );
+    if (targets.length === 0) return empty;
+
+    const pairKeys = targets.map((plan) => [
+      plan.member.space_id,
+      plan.member.ownership_epoch,
+      plan.member.backend_binding_epoch,
+    ]);
+    // 请求键同时覆盖 experience 计划：同一批目标空间但补齐内容不同（例如旧
+    // experience 被移除、或意图指针需要修复）时不会命中旧 operations 行。
+    const planKeys = targets.map((plan) => [
+      plan.member.space_id,
+      plan.member.ownership_epoch,
+      plan.member.backend_binding_epoch,
+      plan.needsExperience
+        ? ['experience', plan.dedupeKey, plan.experienceId]
+        : plan.repairIntent
+          ? ['repair', plan.dedupeKey, plan.experienceId]
+          : null,
+    ]);
+    // 已有回执/意图的旧数据重放时，pending 为空但 experience 缺失；独立阶段
+    // 前缀避免与旧批次命中同一 operations 行而跳过补齐。
+    const phase = pending.length > 0 ? 'apply' : 'exp';
+    const spaceSetHash = (await sha256Hex(stableStringify(planKeys))).slice(0, 12);
+    const requestId = `memory-backfill:${phase}:${window.from}:${row.message_id}:${spaceSetHash}`;
+    const experiencePlans = plans.filter((plan) => plan.needsExperience);
+    const payloadHash = await sha256Hex(
+      stableStringify({
+        v: 2,
+        phase,
+        from: window.from,
+        to: window.to,
+        message_id: row.message_id,
+        body_sha256: digest,
+        pairs: pairKeys,
+        experiences: experiencePlans.map((plan) => [
+          plan.member.space_id,
+          plan.member.ownership_epoch,
+          plan.dedupeKey,
+          plan.experienceId,
+        ]),
+        repairs: plans
+          .filter((plan) => plan.repairIntent)
+          .map((plan) => [plan.member.space_id, plan.dedupeKey, plan.experienceId]),
+      }),
+    );
+    const result = {
+      message_id: row.message_id,
+      pairs: pending.length,
+      experiences: experiencePlans.length,
     };
 
     const statements: D1PreparedStatement[] = [];
@@ -627,20 +744,12 @@ export class MemoryBackfill {
     );
     const targetScopeJson = JSON.stringify(PRIVATE_TARGET);
     const originScopesJson = JSON.stringify([origin]);
+
+    // 回执必须先于 experience：后者用幂等键解析 receipt_id，同批内可见。
     for (const member of pending) {
       const operationKey = backfillOperationKey(member.space_id, row.message_id);
       const receiptId = `mrc_bf_${(await sha256Hex(`backfill-receipt|${member.space_id}|${row.message_id}`)).slice(0, 24)}`;
       const proofId = `mpf_${(await sha256Hex(`backfill-proof|${member.space_id}|${row.message_id}|${source.revision}`)).slice(0, 24)}`;
-      const retainId = `mrt_bf_${(await sha256Hex(`backfill-retain|${operationKey}`)).slice(0, 24)}`;
-      const jobId = `mjb_bf_${(await sha256Hex(`backfill-job|${operationKey}`)).slice(0, 24)}`;
-      const intentPayload = await sha256Hex(
-        stableStringify({
-          operation_key: operationKey,
-          representation_id: representationId,
-          message_id: row.message_id,
-          space_id: member.space_id,
-        }),
-      );
       statements.push(
         backfillReceiptStatement(this.#db, {
           receiptId,
@@ -654,6 +763,49 @@ export class MemoryBackfill {
           originScopesJson,
           now,
         }),
+      );
+    }
+
+    for (const plan of experiencePlans) {
+      statements.push(
+        backfillExperienceStatement(this.#db, {
+          experienceId: plan.experienceId,
+          dedupeKey: plan.dedupeKey,
+          spaceId: plan.member.space_id,
+          ownershipEpoch: plan.member.ownership_epoch,
+          agentActorId: plan.member.actor_id,
+          originRoomId: origin.room_id,
+          originMemberGeneration: plan.member.member_generation,
+          sourceId: source.source_id,
+          sourceRevision: source.revision,
+          representationId,
+          rangeStart: 0,
+          rangeEnd: textBytes,
+          textSha256: digest,
+          receiptIdempotencyKey: backfillReceiptIdempotencyKey(
+            plan.member.space_id,
+            row.message_id,
+          ),
+          now,
+        }),
+      );
+    }
+
+    const planBySpace = new Map(plans.map((plan) => [plan.member.space_id, plan]));
+    for (const member of pending) {
+      const operationKey = backfillOperationKey(member.space_id, row.message_id);
+      const receiptId = `mrc_bf_${(await sha256Hex(`backfill-receipt|${member.space_id}|${row.message_id}`)).slice(0, 24)}`;
+      const retainId = `mrt_bf_${(await sha256Hex(`backfill-retain|${operationKey}`)).slice(0, 24)}`;
+      const jobId = `mjb_bf_${(await sha256Hex(`backfill-job|${operationKey}`)).slice(0, 24)}`;
+      const intentPayload = await sha256Hex(
+        stableStringify({
+          operation_key: operationKey,
+          representation_id: representationId,
+          message_id: row.message_id,
+          space_id: member.space_id,
+        }),
+      );
+      statements.push(
         ...memoryRetainIntentStatements(this.#db, {
           retainId,
           jobId,
@@ -661,7 +813,7 @@ export class MemoryBackfill {
           ownershipEpoch: member.ownership_epoch,
           agentActorId: member.actor_id,
           originKind: 'experienced',
-          experienceId: null,
+          experienceId: planBySpace.get(member.space_id)?.experienceId ?? null,
           representationId,
           sourceId: source.source_id,
           sourceRevision: source.revision,
@@ -671,6 +823,19 @@ export class MemoryBackfill {
           operationKey,
           payloadSha256: intentPayload,
           backendBindingEpoch: member.backend_binding_epoch,
+          now,
+        }),
+      );
+    }
+
+    // 同批最后按 dedupe key 校正意图指针：如果并发路径抢先插入同义
+    // experience，回填的 NOT EXISTS 插入会跳过，这里把意图指到实际 ID。
+    for (const plan of targets) {
+      statements.push(
+        backfillIntentExperienceRepairStatement(this.#db, {
+          spaceId: plan.member.space_id,
+          operationKey: backfillOperationKey(plan.member.space_id, row.message_id),
+          dedupeKey: plan.dedupeKey,
           now,
         }),
       );
@@ -700,6 +865,7 @@ export class MemoryBackfill {
       receipts: pending.length,
       intents: pending.length,
       jobs: pending.length,
+      experiences: experiencePlans.length,
     };
   }
 
