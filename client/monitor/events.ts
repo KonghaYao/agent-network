@@ -7,6 +7,7 @@
  */
 
 import { asNumber, asString } from '../output';
+import { attachmentFields, type MonitorAttachment } from './attachments';
 import type { JsonObject } from './rpc';
 
 /** stdout 的 delivery 事件最多携带的正文码点数；完整正文始终在 event_file。 */
@@ -101,6 +102,7 @@ export function eventFilePayload(
   source: string,
   body: string,
   memory: JsonObject = {},
+  attachments: readonly MonitorAttachment[] = [],
 ): JsonObject {
   return {
     type: 'delivery',
@@ -122,6 +124,7 @@ export function eventFilePayload(
     },
     source,
     body,
+    attachments: attachmentFields(attachments),
     ...memory,
   };
 }
@@ -133,6 +136,7 @@ export function deliveryEvent(
   preview: BodyPreview,
   eventFile: string,
   memory: JsonObject = {},
+  attachments: readonly MonitorAttachment[] = [],
 ): JsonObject {
   return {
     type: 'delivery',
@@ -157,6 +161,7 @@ export function deliveryEvent(
     body_bytes: preview.bodyBytes,
     body_truncated: preview.bodyTruncated,
     event_file: eventFile,
+    attachments: attachmentFields(attachments),
     ...memory,
   };
 }

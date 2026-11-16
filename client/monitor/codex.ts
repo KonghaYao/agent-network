@@ -18,9 +18,19 @@
  * 不执行任何 `.sh`，也不依赖 Python。
  */
 
+import { join } from 'node:path';
+
 import { CliError, resolveConfig } from '../mcp';
 import { LIMITS } from '../../src/contracts/limits';
 import { asArray, asNumber, asRecord, asString } from '../output';
+import {
+  attachmentOrigins,
+  attachmentPromptLine,
+  cleanupOldAttachments,
+  downloadAttachments,
+  prepareAttachmentDirectory,
+  type MonitorAttachment,
+} from './attachments';
 import { abortableSleep, claimDelivery } from './engine';
 import { visibleWithoutRoomEvents, type ClaimInfo } from './events';
 import {
@@ -49,6 +59,7 @@ import {
   type JsonObject,
   type SubscriptionControl,
 } from './rpc';
+import { defaultMonitorStateDirectory } from './state';
 
 export interface MonitorContext {
   baseUrl: string | null;
@@ -75,11 +86,11 @@ function fail(line: string): number {
   return 1;
 }
 
-function steerPrompt(body: string, memory: string): string {
+function steerPrompt(body: string, memory: string, attachments: readonly MonitorAttachment[] = []): string {
   return (
     `${memory.length > 0 ? `${memory}\n\n` : ''}Agent Network 有一条新的用户消息在你工作期间到达。桥接器已自动领取该投递，` +
     '本条只供你调整当前工作；当前回合结束后会单独处理并答复，不要在此重复结束投递。\n\n' +
-    `新消息：\n${body}`
+    `新消息：\n${body}${attachmentPromptLine(attachments)}`
   );
 }
 
@@ -92,14 +103,20 @@ function queuedPrompt(body: string): string {
   );
 }
 
-function taskPrompt(deliveryId: string, claim: ClaimInfo, body: string, memory: string): string {
+function taskPrompt(
+  deliveryId: string,
+  claim: ClaimInfo,
+  body: string,
+  memory: string,
+  attachments: readonly MonitorAttachment[] = [],
+): string {
   return (
     `${memory.length > 0 ? `${memory}\n\n` : ''}这是一条来自 Agent Network 的用户任务。桥接器已自动领取投递并读取正文；` +
     `claim 已就绪（delivery_id=${deliveryId}, attempt=${claim.attempt}, ` +
     `claim_id=${claim.claimId}）。` +
     '你只需要处理下面的任务，给出最终答复，桥接器会用该答复结束投递。' +
     '不要泄露凭据，不要调用其他 Agent 身份的 network_* 工具回复本任务。\n\n' +
-    `任务正文：\n${body}`
+    `任务正文：\n${body}${attachmentPromptLine(attachments)}`
   );
 }
 
@@ -132,6 +149,8 @@ interface CodexWatcherOptions {
   roomEvents?: boolean;
   /** delivery 记忆参考包；缺省开启，`--no-memory-context` 关闭。 */
   memoryContext?: boolean;
+  /** claim 后下载同源附件；缺省不下载。 */
+  attachments?: { directory: string; origins: string[] };
 }
 
 class CodexWatcher {
@@ -142,6 +161,7 @@ class CodexWatcher {
   private readonly events = new AsyncQueue<WatcherEvent>();
   private readonly roomEvents: boolean;
   private readonly memoryContext: boolean;
+  private readonly attachmentConfig: { directory: string; origins: string[] } | undefined;
   private readonly memoryResults = new Map<string, MemoryContextResult>();
   private readonly memoryInflight = new Map<string, Promise<MemoryContextResult>>();
   private memoryToolUnavailable = false;
@@ -167,6 +187,7 @@ class CodexWatcher {
     this.log = options.log ?? writeStdout;
     this.roomEvents = options.roomEvents !== false;
     this.memoryContext = options.memoryContext !== false;
+    this.attachmentConfig = options.attachments;
     this.rpc = new MonitorRpc({
       endpoint: options.endpoint,
       token: options.token,
@@ -210,6 +231,35 @@ class CodexWatcher {
       return await task;
     } finally {
       this.memoryInflight.delete(key);
+    }
+  }
+
+  /**
+   * claim 成功后下载同源图片/PDF，供 Codex 直接读取本地路径。
+   * 失败只记录计数并返回空列表，绝不阻塞任务。
+   */
+  private async attachmentsFor(
+    deliveryId: string,
+    body: string,
+  ): Promise<MonitorAttachment[]> {
+    const config = this.attachmentConfig;
+    if (config === undefined) return [];
+    try {
+      const outcome = await downloadAttachments({
+        body,
+        origins: config.origins,
+        directory: config.directory,
+        signal: this.signal,
+      });
+      if (outcome.attachments.length > 0 || outcome.skipped > 0) {
+        this.log(
+          `ATTACHMENTS delivery=${deliveryId} downloaded=${outcome.attachments.length} ` +
+            `skipped=${outcome.skipped}`,
+        );
+      }
+      return outcome.attachments;
+    } catch {
+      return [];
     }
   }
 
@@ -689,6 +739,7 @@ class CodexWatcher {
 
         const body = await this.readForActive(claim, deliveryId, match);
         if (body === null) continue;
+        const attachments = await this.attachmentsFor(deliveryId, body);
         const memory = await this.memoryForDelivery(
           deliveryId,
           asString(match.room_id),
@@ -706,7 +757,7 @@ class CodexWatcher {
           await this.requireConnection().call('turn/steer', {
             threadId: this.threadId,
             expectedTurnId: asString(current.id),
-            input: [{ type: 'text', text: steerPrompt(body, memoryPromptBlock(memory)) }],
+            input: [{ type: 'text', text: steerPrompt(body, memoryPromptBlock(memory), attachments) }],
           });
         } catch (error) {
           this.notified.set(deliveryId, claim.attempt);
@@ -757,12 +808,18 @@ class CodexWatcher {
         asString(match.message_id),
         claim,
       );
+      const attachments = await this.attachmentsFor(deliveryId, body);
 
       let result;
       try {
         result = await this.requireConnection().call('turn/start', {
           threadId: this.threadId,
-          input: [{ type: 'text', text: taskPrompt(deliveryId, claim, body, memoryPromptBlock(memory)) }],
+          input: [
+            {
+              type: 'text',
+              text: taskPrompt(deliveryId, claim, body, memoryPromptBlock(memory), attachments),
+            },
+          ],
         });
       } catch (error) {
         if (error instanceof MonitorFatalError) throw error;
@@ -968,6 +1025,21 @@ export async function runCodexMonitor(
     return fail(`ERROR type=configuration message=${lastLine(error)}`);
   }
 
+  // 附件按 codex 自己的 state 目录存放；与 claude/peri 一样支持显式覆盖。
+  const attachmentDirectory = join(
+    process.env.AGENTNET_MONITOR_STATE_DIR ??
+      defaultMonitorStateDirectory('codex', endpoint, token),
+    'attachments',
+  );
+  let attachments: { directory: string; origins: string[] } | undefined;
+  try {
+    await prepareAttachmentDirectory(attachmentDirectory);
+    attachments = { directory: attachmentDirectory, origins: attachmentOrigins(endpoint) };
+  } catch {
+    // 目录不可用时只关闭附件，不影响监听与投递。
+    attachments = undefined;
+  }
+
   let lock: WatcherLock;
   try {
     lock = acquireWatcherLock(token);
@@ -987,12 +1059,14 @@ export async function runCodexMonitor(
       signal: controller.signal,
       roomEvents: options.roomEvents,
       memoryContext: options.memoryContext,
+      attachments,
     });
     return await watcher.run();
   } finally {
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
     process.off('SIGHUP', stop);
+    await cleanupOldAttachments(attachmentDirectory).catch(() => undefined);
     lock.release();
   }
 }

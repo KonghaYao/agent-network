@@ -12,6 +12,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { writeAtomicFile } from './atomic';
+import { cleanupOldAttachments, ensureAttachmentDirectory } from './attachments';
 import type { JsonObject } from './rpc';
 
 export interface MonitorStateOptions {
@@ -82,6 +83,7 @@ export class MonitorState {
   private constructor(
     readonly directory: string,
     readonly eventDir: string,
+    readonly attachmentsDir: string,
     readonly seenPath: string,
     private readonly statePath: string,
     private readonly keep: boolean,
@@ -99,6 +101,10 @@ export class MonitorState {
     const eventDir = join(directory, 'events');
     await mkdir(eventDir, { recursive: true, mode: 0o700 });
     await chmod(eventDir, 0o700);
+    // 附件目录跨重启保留（Agent 可能在下一轮才读取），只在启动/退出清理过期文件。
+    const attachmentsDir = join(directory, 'attachments');
+    await ensureAttachmentDirectory(attachmentsDir);
+    await cleanupOldAttachments(attachmentsDir);
     const seenPath = join(directory, 'seen');
     const statePath = join(directory, 'stream-state.json');
 
@@ -121,6 +127,7 @@ export class MonitorState {
     const state = new MonitorState(
       directory,
       eventDir,
+      attachmentsDir,
       seenPath,
       statePath,
       options.keep === true,
@@ -201,6 +208,8 @@ export class MonitorState {
 
   async cleanup(): Promise<void> {
     await this.persistChain.catch(() => undefined);
+    // 附件按保留期清理；keep/persistent 只影响 seen、游标与事件文件。
+    await cleanupOldAttachments(this.attachmentsDir).catch(() => undefined);
     if (this.keep) return;
     if (this.persistent) {
       // 保留 seen 与 stream-state.json 供重启续读；正文事件文件仍按旧语义清理。

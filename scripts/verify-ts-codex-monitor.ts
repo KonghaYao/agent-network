@@ -13,7 +13,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -40,6 +40,20 @@ interface MockDelivery extends JsonObject {
 
 function messageBody(messageId: string): string {
   return `body:${messageId}`;
+}
+
+const ATTACH_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+const ATTACH_PDF = Buffer.from(
+  '%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n',
+  'utf8',
+);
+
+/** 服务端 fileId 形状：`f_` + 22 个 URL 安全字符。 */
+function attachFileId(char: string): string {
+  return `f_${char.repeat(22)}`;
 }
 
 function makeDelivery(id: string): MockDelivery {
@@ -85,6 +99,11 @@ interface McpMockState {
   controller: ReadableStreamDefaultController<Uint8Array> | null;
   keepalive: ReturnType<typeof setInterval> | null;
   memoryCalls: JsonObject[];
+  /** 测试用正文覆盖；缺省 `body:<messageId>`。 */
+  bodies: Map<string, string>;
+  /** `/f/<fileId>` 响应与请求记录。 */
+  files: Map<string, { body: Uint8Array; contentType: string }>;
+  fileRequests: string[];
 }
 
 interface McpMock {
@@ -109,6 +128,9 @@ function createMcpMock(options: { meKind?: string } = {}): McpMock {
     controller: null,
     keepalive: null,
     memoryCalls: [],
+    bodies: new Map(),
+    files: new Map(),
+    fileRequests: [],
   };
   const completed: JsonObject[] = [];
   const failed: JsonObject[] = [];
@@ -127,6 +149,18 @@ function createMcpMock(options: { meKind?: string } = {}): McpMock {
     idleTimeout: 120,
     async fetch(request) {
       const url = new URL(request.url);
+      if (request.method === 'GET' || request.method === 'HEAD') {
+        if (!url.pathname.startsWith('/f/')) return new Response('not found', { status: 404 });
+        state.fileRequests.push(url.pathname);
+        const file = state.files.get(url.pathname.slice('/f/'.length));
+        if (file === undefined) return new Response('not found', { status: 404 });
+        return new Response(file.body as unknown as BodyInit, {
+          headers: {
+            'content-type': file.contentType,
+            'content-length': String(file.body.byteLength),
+          },
+        });
+      }
       if (request.method !== 'POST' || url.pathname !== '/mcp') {
         return new Response('not found', { status: 404 });
       }
@@ -265,7 +299,7 @@ function createMcpMock(options: { meKind?: string } = {}): McpMock {
         case 'network_message_read': {
           const messageId = String(args.message_id ?? '');
           return toolResult(body.id, {
-            chunk: messageBody(messageId),
+            chunk: state.bodies.get(messageId) ?? messageBody(messageId),
             chunk_cursor: '',
             next_cursor: null,
             eof: true,
@@ -1515,6 +1549,60 @@ async function runMemoryOffChecks(): Promise<void> {
   }
 }
 
+async function runAttachmentChecks(): Promise<void> {
+  const stateDir = await mkdtemp(join(tmpdir(), 'agentnet-codex-attachments-'));
+  const fixture = await createFixture('attachments', {
+    env: { AGENTNET_MONITOR_STATE_DIR: stateDir },
+  });
+  try {
+    await waitForLine(fixture.watcher.stdout, (line) => line.startsWith('READY actor='), 'READY');
+
+    const imageId = attachFileId('c');
+    const pdfId = attachFileId('d');
+    fixture.mcp.state.files.set(imageId, { body: ATTACH_PNG, contentType: 'image/png' });
+    fixture.mcp.state.files.set(pdfId, { body: ATTACH_PDF, contentType: 'application/pdf' });
+    fixture.mcp.state.bodies.set(
+      'msg_dlv_attach',
+      `请看图片 ${fixture.mcp.base}/f/${imageId} 和 PDF ${fixture.mcp.base}/f/${pdfId}`,
+    );
+    fixture.mcp.state.pending.set('dlv_attach', makeDelivery('dlv_attach'));
+    fixture.mcp.sendItems([notificationItem('dlv_attach')]);
+
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('TURN_STARTED delivery=dlv_attach'),
+      'attachment TURN_STARTED',
+    );
+
+    const imageHash = createHash('sha256').update(ATTACH_PNG).digest('hex');
+    const pdfHash = createHash('sha256').update(ATTACH_PDF).digest('hex');
+    const imagePath = join(stateDir, 'attachments', `${imageHash}.png`);
+    const pdfPath = join(stateDir, 'attachments', `${pdfHash}.pdf`);
+    check('codex 下载同源图片附件', existsSync(imagePath));
+    check('codex 下载同源 PDF 附件', existsSync(pdfPath));
+    checkEqual('codex 图片附件权限 0600', statSync(imagePath).mode & 0o777, 0o600);
+    checkEqual('codex 图片附件内容一致', readFileSync(imagePath).equals(ATTACH_PNG), true);
+    checkEqual('codex PDF 附件内容一致', readFileSync(pdfPath).equals(ATTACH_PDF), true);
+
+    const prompt = fixture.codex.startTexts[0] ?? '';
+    check(
+      'codex prompt 增加附件本地路径行',
+      prompt.includes(`附件本地路径：${imagePath}、${pdfPath}`),
+      prompt,
+    );
+    check('codex prompt 保留正文原链接', prompt.includes(`/f/${imageId}`), prompt);
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) =>
+        line.includes('ATTACHMENTS delivery=dlv_attach downloaded=2 skipped=0'),
+      'codex attachment count log',
+    );
+  } finally {
+    await fixture.stop();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}
+
 async function main(): Promise<void> {
   console.log('TS codex monitor: handshake');
   await runHandshakeChecks();
@@ -1522,6 +1610,8 @@ async function main(): Promise<void> {
   await runThreadOwnershipChecks();
   console.log('TS codex monitor: idle turn/complete');
   await runTurnChecks();
+  console.log('TS codex monitor: attachments');
+  await runAttachmentChecks();
   await runPagedChecks();
   console.log('TS codex monitor: memory off');
   await runMemoryOffChecks();
