@@ -456,8 +456,12 @@ export async function resolveRootLink(
     parent = await getMessage(db, delivery.message_id);
   } else {
     const claimed = await getClaimedDelivery(db, sender);
-    if (claimed) parent = await getMessage(db, claimed.message_id);
+    // 隐式挂接只对目标房间生效；跨房间的领取中投递不能决定本房间的引用链。
+    if (claimed && claimed.room_id === roomId) parent = await getMessage(db, claimed.message_id);
   }
+
+  // 防御性兜底：任何来源的父消息都必须属于目标房间，否则按无父消息处理。
+  if (parent && parent.room_id !== roomId) parent = null;
 
   let replyTo = input.reply_to ?? parent?.message_id ?? null;
   if (input.reply_to) {
@@ -468,7 +472,8 @@ export async function resolveRootLink(
     }
     if (replied.body === '') throw new BusinessError('INVALID_ARGUMENT', '不能回复已撤回的消息');
     replyTo = replied.message_id;
-    if (!parent) parent = replied;
+    // 显式引用决定 root/hop，避免隐式挂接的 claimed 投递覆盖引用链。
+    parent = replied;
   }
   if (parent && !visibleMessage(parent, boundary)) {
     throw new BusinessError('NOT_FOUND', '消息不存在或当前不可见');
