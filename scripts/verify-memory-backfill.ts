@@ -9,6 +9,7 @@
 import { MemoryBackfill } from '../src/memory/backfill';
 import {
   createBackfillWindow,
+  planBackfillReplayWindows,
   planBackfillWindows,
 } from '../src/memory/backfill-window';
 import { ensureMemoryInstance } from '../src/memory/access';
@@ -236,6 +237,43 @@ async function windowMathChecks(): Promise<void> {
     maxCatchupWindows: 24,
   });
   checkEqual('已追平不重复处理', currentPlan.windows.length, 0);
+
+  // 重放必须从起点向前逐窗口推进，而不是每次取最近 N 个窗口。
+  const replayUntil = current.to - 24 * W;
+  const replayFirst = planBackfillReplayWindows({
+    watermark: null,
+    from: current.to - 100 * W,
+    until: replayUntil,
+    windowMs: W,
+    maxWindows: 24,
+  });
+  checkEqual('重放首轮有界 24 窗口', replayFirst.windows.length, 24);
+  checkEqual('重放首轮从起点开始', replayFirst.windows[0]!.from, current.to - 100 * W);
+  check(
+    '重放首轮窗口连续',
+    replayFirst.windows.every(
+      (window, index) =>
+        window.to - window.from === W &&
+        (index === 0 || replayFirst.windows[index - 1]!.to === window.from),
+    ),
+  );
+  checkEqual('重放首轮剩余窗口可见', replayFirst.remainingWindows, 76 - 24);
+  let replayWatermark: number | null = null;
+  let replayRounds = 0;
+  for (;;) {
+    const plan = planBackfillReplayWindows({
+      watermark: replayWatermark,
+      from: current.to - 100 * W,
+      until: replayUntil,
+      windowMs: W,
+      maxWindows: 24,
+    });
+    if (plan.windows.length === 0) break;
+    replayRounds += 1;
+    replayWatermark = plan.windows.at(-1)!.to;
+  }
+  checkEqual('重放水位单调推进到上界', replayWatermark, replayUntil);
+  checkEqual('重放按 24 窗口分轮', replayRounds, Math.ceil(76 / 24));
 }
 
 async function basicChecks(): Promise<void> {
@@ -346,6 +384,7 @@ async function basicChecks(): Promise<void> {
   checkEqual('回填后 pack reason=ready', packA.reason, 'ready');
   checkEqual('回填后 pack 非空', packA.item_count > 0, true);
   checkEqual('回填后 pack 有经历', packA.stats.experiences, 1);
+  checkEqual('回填后 pack sources 为 0', packA.stats.sources, 0);
   checkEqual('pack 只含当前房间', packA.items.every((item) => item.origin_room_id === roomOne), true);
   checkEqual('pack 文本为消息正文', packA.items[0]?.text, `BACKFILL-BODY-${messageOne}`);
   checkEqual('pack 经历携带房间历史证据', packA.items[0]?.evidence, 'gateway_observed_room_history');
@@ -614,6 +653,206 @@ async function experienceReplayChecks(): Promise<void> {
   env.db.close();
 }
 
+function experienceCount(env: Env, messageId: string): number {
+  return count(
+    env,
+    `SELECT COUNT(*) AS n FROM memory_experiences e
+       JOIN memory_sources s
+         ON s.source_id = e.source_id AND s.revision = e.source_revision
+      WHERE s.source_key = ?`,
+    `message:${messageId}`,
+  );
+}
+
+/**
+ * B1 回归：大窗口一次性重放只覆盖过去的粗边界；常规调度只补最近 24h，
+ * 两者之间的 gap 会被永久跳过。重放必须按 1h 窗口向前推进补上 gap。
+ */
+async function multiDayReplayChecks(): Promise<void> {
+  const fixture = await seedFixture();
+  const { env, instanceId, human, agentA, roomOne } = fixture;
+  const badWindow = createBackfillWindow(AT, 3 * 24 * W);
+  const horizon = WINDOW.to - 24 * W;
+  const oldAt = badWindow.from + 60_000;
+  const gapAt = badWindow.to + 12 * W;
+  const recentAt = WINDOW.to - 2 * W;
+  check('gap 位于大窗口之后、最近 24h 之前', gapAt > badWindow.to && gapAt < horizon);
+
+  const oldId = unique('msg_bf');
+  const gapId = unique('msg_bf');
+  const recentId = unique('msg_bf');
+  const gapBody = `GAP-BODY-${gapId}`;
+  insertMessage(env, {
+    messageId: oldId,
+    roomId: roomOne,
+    senderId: human,
+    seq: 1,
+    body: `OLD-BODY-${oldId}`,
+    createdAt: oldAt,
+  });
+  insertMessage(env, {
+    messageId: gapId,
+    roomId: roomOne,
+    senderId: human,
+    seq: 2,
+    body: gapBody,
+    createdAt: gapAt,
+  });
+  insertMessage(env, {
+    messageId: recentId,
+    roomId: roomOne,
+    senderId: human,
+    seq: 3,
+    body: `RECENT-BODY-${recentId}`,
+    createdAt: recentAt,
+  });
+
+  // 旧的生产做法：windowMs=3d 一步推进到过去的粗边界。
+  const legacy = new MemoryBackfill({
+    db: env.d1,
+    instanceId,
+    now: () => AT,
+    windowMs: 3 * 24 * W,
+    maxCatchupWindows: 1,
+  });
+  const legacyRun = await legacy.runOnce();
+  checkEqual('大窗口只覆盖粗边界前的旧消息', legacyRun.created.experiences, 2);
+  checkEqual('大窗口后旧消息有经历', experienceCount(env, oldId), 2);
+  checkEqual('大窗口未覆盖 gap', experienceCount(env, gapId), 0);
+
+  // 常规调度只补最近 24 个窗口，gap 位于水位与最近 24h 之间。
+  const regular = await backfill(fixture).runOnce();
+  checkEqual('常规调度覆盖最近 24h', regular.created.experiences, 2);
+  checkEqual('常规调度未回看 gap', experienceCount(env, gapId), 0);
+  checkEqual('常规调度覆盖 recent', experienceCount(env, recentId), 2);
+
+  // 重放：清空两类游标后按 1h 窗口从起点推进到 now-24h。
+  env.db
+    .prepare(
+      "DELETE FROM memory_cursors WHERE scope_kind = 'agent' AND scope_id = 'memory-backfill'",
+    )
+    .run();
+  const replay = new MemoryBackfill({
+    db: env.d1,
+    instanceId,
+    now: () => AT,
+    windowMs: W,
+    maxCatchupWindows: 4,
+    replayFrom: oldAt,
+    replayUntil: horizon,
+  });
+  const totals = { windows: 0, experiences: 0, receipts: 0, intents: 0, jobs: 0, errors: 0 };
+  let replayRounds = 0;
+  let replayed = false;
+  for (; replayRounds < 40; replayRounds += 1) {
+    const run = await replay.runOnce();
+    totals.windows += run.windows;
+    totals.experiences += run.created.experiences;
+    totals.receipts += run.created.receipts;
+    totals.intents += run.created.intents;
+    totals.jobs += run.created.jobs;
+    totals.errors += run.errors;
+    if (run.caught_up) {
+      replayed = true;
+      break;
+    }
+  }
+  check('多日重放已追平', replayed);
+  checkEqual('多日重放覆盖全部 1h 窗口', totals.windows, 94);
+  checkEqual('多日重放只补 gap 经历', totals.experiences, 2);
+  checkEqual('多日重放只补 gap 回执', totals.receipts, 2);
+  checkEqual('多日重放只补 gap 意图', totals.intents, 2);
+  checkEqual('多日重放只补 gap 作业', totals.jobs, 2);
+  checkEqual('多日重放无错误', totals.errors, 0);
+  checkEqual('多日重放后 gap 有经历', experienceCount(env, gapId), 2);
+  checkEqual('多日重放不重复旧消息经历', experienceCount(env, oldId), 2);
+  checkEqual('多日重放不重复 recent 经历', experienceCount(env, recentId), 2);
+
+  const handoff = await backfill(fixture).runOnce();
+  checkEqual('重放后常规调度已追平', handoff.caught_up, true);
+  checkEqual('重放后常规调度零新增经历', handoff.created.experiences, 0);
+
+  const pack = await buildInjectionPack({
+    db: env.d1,
+    instanceId,
+    agentId: agentA,
+    roomId: roomOne,
+    now: AT + 1_000,
+  });
+  checkEqual('多日重放 pack 包含三条经历', pack.stats.experiences, 3);
+  checkEqual('多日重放 pack sources 为 0', pack.stats.sources, 0);
+  check(
+    '多日重放补上 gap 正文',
+    pack.items.some((item) => item.text === gapBody),
+  );
+  env.db.close();
+}
+
+/**
+ * 非阻塞竞态：同 dedupe key 的 experience 已被其它路径写入、意图仍指向计划 ID。
+ * 重放同窗口时必须把意图校正到实际 experience_id。
+ */
+async function intentExperienceRepairChecks(): Promise<void> {
+  const fixture = await seedFixture();
+  const { env, instanceId, human, agentA, roomOne } = fixture;
+  const messageId = unique('msg_bf');
+  insertMessage(env, {
+    messageId,
+    roomId: roomOne,
+    senderId: human,
+    seq: 1,
+    body: `RACE-BODY-${messageId}`,
+    createdAt: MESSAGE_AT,
+  });
+  const first = await backfill(fixture).runOnce();
+  checkEqual('竞态场景先写入两份经历', first.created.experiences, 2);
+
+  const existing = env.db
+    .prepare(
+      `SELECT experience_id FROM memory_experiences
+        WHERE agent_actor_id = ? AND origin_room_id = ?`,
+    )
+    .get(agentA, roomOne) as { experience_id: string } | null;
+  check('竞态场景存在经历', existing !== null);
+  const racedId = `mexp_race_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`;
+  env.db
+    .prepare('UPDATE memory_experiences SET experience_id = ? WHERE experience_id = ?')
+    .run(racedId, existing!.experience_id);
+  const intentBefore = env.db
+    .prepare(
+      'SELECT experience_id FROM memory_retain_intents WHERE agent_actor_id = ? AND source_id IS NOT NULL',
+    )
+    .get(agentA) as { experience_id: string | null } | null;
+  checkEqual('竞态前意图仍指向旧 ID', intentBefore?.experience_id, existing!.experience_id);
+
+  env.db
+    .prepare(
+      "DELETE FROM memory_cursors WHERE scope_kind = 'agent' AND scope_id = 'memory-backfill'",
+    )
+    .run();
+  const repairRun = await backfill(fixture).runOnce();
+  checkEqual('指针修复不新增经历', repairRun.created.experiences, 0);
+  const intentAfter = env.db
+    .prepare(
+      'SELECT experience_id FROM memory_retain_intents WHERE agent_actor_id = ? AND source_id IS NOT NULL',
+    )
+    .get(agentA) as { experience_id: string | null } | null;
+  checkEqual('重放把意图指向实际 experience', intentAfter?.experience_id, racedId);
+
+  const pack = await buildInjectionPack({
+    db: env.d1,
+    instanceId,
+    agentId: agentA,
+    roomId: roomOne,
+    now: AT + 1_000,
+  });
+  check(
+    '修复后 pack 使用实际经历',
+    pack.items.some((item) => item.item_id === `exp:${racedId}`),
+  );
+  env.db.close();
+}
+
 async function skipAndPermissionChecks(): Promise<void> {
   const fixture = await seedFixture();
   const { env, instanceId, human, roomOne } = fixture;
@@ -723,6 +962,21 @@ async function skipAndPermissionChecks(): Promise<void> {
     0,
   );
   checkEqual(
+    '禁用 Agent 无经历',
+    count(env, 'SELECT COUNT(*) AS n FROM memory_experiences WHERE agent_actor_id = ?', disabled),
+    0,
+  );
+  checkEqual(
+    '排除空间无经历',
+    count(env, 'SELECT COUNT(*) AS n FROM memory_experiences WHERE agent_actor_id = ?', excluded),
+    0,
+  );
+  checkEqual(
+    '无空间 Agent 无经历',
+    count(env, 'SELECT COUNT(*) AS n FROM memory_experiences WHERE agent_actor_id = ?', noSpace),
+    0,
+  );
+  checkEqual(
     '撤回消息无意图',
     count(
       env,
@@ -769,6 +1023,11 @@ async function skipAndPermissionChecks(): Promise<void> {
   checkEqual(
     '后加入成员不产生意图',
     count(env, 'SELECT COUNT(*) AS n FROM memory_retain_intents WHERE agent_actor_id = ?', lateAgent),
+    0,
+  );
+  checkEqual(
+    '后加入成员不产生经历',
+    count(env, 'SELECT COUNT(*) AS n FROM memory_experiences WHERE agent_actor_id = ?', lateAgent),
     0,
   );
 
@@ -986,6 +1245,10 @@ async function run(): Promise<void> {
   await basicChecks();
   console.log('memory backfill: experience replay');
   await experienceReplayChecks();
+  console.log('memory backfill: multi-day hourly replay');
+  await multiDayReplayChecks();
+  console.log('memory backfill: intent experience repair');
+  await intentExperienceRepairChecks();
   console.log('memory backfill: skips + permissions');
   await skipAndPermissionChecks();
   console.log('memory backfill: recall end-to-end');

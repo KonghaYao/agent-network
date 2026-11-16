@@ -53,6 +53,7 @@
     "test:memory-injection": "bun scripts/verify-memory-injection.ts",
     "test:web:a11y": "bun scripts/verify-web-a11y.ts",
     "test:memory-backfill": "bun scripts/verify-memory-backfill.ts",
+    "memory:replay": "bun scripts/replay-memory-backfill.ts",
     "test:memory-fenix-vendor": "bun run build:web && bun scripts/verify-memory-fenix-vendor.ts"
   },
   "dependencies": {

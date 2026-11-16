@@ -21,18 +21,20 @@ import { authorizeSourceRead, sourceOriginScope } from './access';
 import {
   BACKFILL_ACTOR_ID,
   backfillExperienceStatement,
+  backfillIntentExperienceRepairStatement,
   backfillOperationKey,
   backfillReceiptIdempotencyKey,
   backfillReceiptStatement,
   backfillSourceKey,
   findBackfillExperienceId,
+  findBackfillIntentExperienceId,
   findReusableRepresentationId,
-  hasBackfillIntent,
   loadBackfillMessageSource,
 } from './backfill-statements';
 import {
   countBackfillCandidates,
   listBackfillFanout,
+  planBackfillReplayWindows,
   planBackfillWindows,
   readBackfillRoom,
   readInstanceCaptureDefault,
@@ -77,6 +79,10 @@ export interface MemoryBackfillOptions {
   now?: () => number;
   windowMs?: number;
   maxCatchupWindows?: number;
+  /** 一次性重放起点（毫秒）；设置后按窗口从水位向前推进，而不是只补最近 N 个窗口。 */
+  replayFrom?: number;
+  /** 一次性重放上界（毫秒）；默认 `now`，始终不超过 `now`。 */
+  replayUntil?: number;
   pageSize?: number;
   scanSafetyRows?: number;
   log?: (message: string, detail: Record<string, unknown>) => void;
@@ -169,6 +175,8 @@ interface BackfillExperiencePlan {
   dedupeKey: string;
   experienceId: string;
   needsExperience: boolean;
+  /** 已有意图指向的 experience 与实际 experience 不一致（并发插入/旧数据）。 */
+  repairIntent: boolean;
 }
 
 export class MemoryBackfill {
@@ -178,6 +186,8 @@ export class MemoryBackfill {
   readonly #now: () => number;
   readonly #windowMs: number;
   readonly #maxCatchupWindows: number;
+  readonly #replayFrom: number | null;
+  readonly #replayUntil: number | null;
   readonly #pageSize: number;
   readonly #scanSafetyRows: number;
   readonly #log: NonNullable<MemoryBackfillOptions['log']>;
@@ -196,6 +206,8 @@ export class MemoryBackfill {
       1,
       options.maxCatchupWindows ?? LIMITS.memoryBackfillMaxCatchupWindows,
     );
+    this.#replayFrom = options.replayFrom ?? null;
+    this.#replayUntil = options.replayUntil ?? null;
     this.#pageSize = Math.max(1, options.pageSize ?? LIMITS.memoryBackfillPageSize);
     this.#scanSafetyRows = Math.max(
       0,
@@ -286,12 +298,21 @@ export class MemoryBackfill {
       scopeId: BACKFILL_SCOPE_ID,
       cursorKind: MEMORY_CURSOR_KINDS.backfillWindowTo,
     });
-    const plan = planBackfillWindows({
-      watermark,
-      now,
-      windowMs: this.#windowMs,
-      maxCatchupWindows: this.#maxCatchupWindows,
-    });
+    const plan =
+      this.#replayFrom === null
+        ? planBackfillWindows({
+            watermark,
+            now,
+            windowMs: this.#windowMs,
+            maxCatchupWindows: this.#maxCatchupWindows,
+          })
+        : planBackfillReplayWindows({
+            watermark,
+            from: this.#replayFrom,
+            until: Math.min(this.#replayUntil ?? now, now),
+            windowMs: this.#windowMs,
+            maxWindows: this.#maxCatchupWindows,
+          });
     skippedWindows = plan.skippedWindows;
     if (plan.skippedWindows > 0) {
       this.#log('memory-backfill skipped_windows', {
@@ -609,14 +630,22 @@ export class MemoryBackfill {
       const experienceId =
         existingExperienceId ??
         `mexp_bf_${(await sha256Hex(`backfill-experience|${dedupeKey}`)).slice(0, 24)}`;
+      const operationKey = backfillOperationKey(member.space_id, row.message_id);
+      const existingIntent = await findBackfillIntentExperienceId(this.#db, {
+        spaceId: member.space_id,
+        operationKey,
+      });
       plans.push({
         member,
         dedupeKey,
         experienceId,
         needsExperience: existingExperienceId === null,
+        repairIntent:
+          existingExperienceId !== null &&
+          existingIntent !== null &&
+          existingIntent.experience_id !== existingExperienceId,
       });
-      const operationKey = backfillOperationKey(member.space_id, row.message_id);
-      if (await hasBackfillIntent(this.#db, { spaceId: member.space_id, operationKey })) {
+      if (existingIntent !== null) {
         skips.already += 1;
       } else {
         pending.push(member);
@@ -624,7 +653,8 @@ export class MemoryBackfill {
     }
     const pendingSpaces = new Set(pending.map((member) => member.space_id));
     const targets = plans.filter(
-      (plan) => plan.needsExperience || pendingSpaces.has(plan.member.space_id),
+      (plan) =>
+        plan.needsExperience || plan.repairIntent || pendingSpaces.has(plan.member.space_id),
     );
     if (targets.length === 0) return empty;
 
@@ -634,13 +664,16 @@ export class MemoryBackfill {
       plan.member.backend_binding_epoch,
     ]);
     // 请求键同时覆盖 experience 计划：同一批目标空间但补齐内容不同（例如旧
-    // experience 被移除）时不会命中旧 operations 行而触发 IDEMPOTENCY_CONFLICT。
+    // experience 被移除、或意图指针需要修复）时不会命中旧 operations 行。
     const planKeys = targets.map((plan) => [
       plan.member.space_id,
       plan.member.ownership_epoch,
       plan.member.backend_binding_epoch,
-      plan.needsExperience ? plan.dedupeKey : null,
-      plan.needsExperience ? plan.experienceId : null,
+      plan.needsExperience
+        ? ['experience', plan.dedupeKey, plan.experienceId]
+        : plan.repairIntent
+          ? ['repair', plan.dedupeKey, plan.experienceId]
+          : null,
     ]);
     // 已有回执/意图的旧数据重放时，pending 为空但 experience 缺失；独立阶段
     // 前缀避免与旧批次命中同一 operations 行而跳过补齐。
@@ -663,6 +696,9 @@ export class MemoryBackfill {
           plan.dedupeKey,
           plan.experienceId,
         ]),
+        repairs: plans
+          .filter((plan) => plan.repairIntent)
+          .map((plan) => [plan.member.space_id, plan.dedupeKey, plan.experienceId]),
       }),
     );
     const result = {
@@ -787,6 +823,19 @@ export class MemoryBackfill {
           operationKey,
           payloadSha256: intentPayload,
           backendBindingEpoch: member.backend_binding_epoch,
+          now,
+        }),
+      );
+    }
+
+    // 同批最后按 dedupe key 校正意图指针：如果并发路径抢先插入同义
+    // experience，回填的 NOT EXISTS 插入会跳过，这里把意图指到实际 ID。
+    for (const plan of targets) {
+      statements.push(
+        backfillIntentExperienceRepairStatement(this.#db, {
+          spaceId: plan.member.space_id,
+          operationKey: backfillOperationKey(plan.member.space_id, row.message_id),
+          dedupeKey: plan.dedupeKey,
           now,
         }),
       );

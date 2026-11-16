@@ -136,17 +136,61 @@ export function backfillExperienceStatement(
     );
 }
 
-export async function hasBackfillIntent(
+/**
+ * 读取已有意图指向的 experience。
+ *
+ * 返回 `null` 表示没有意图；返回对象表示意图存在，`experience_id` 可能为 NULL。
+ * 回填重放用它发现“体验已存在、意图却仍指向旧/缺失 ID”的悬挂指针。
+ */
+export async function findBackfillIntentExperienceId(
   db: D1Like,
   input: { spaceId: string; operationKey: string },
-): Promise<boolean> {
-  const row = await db
+): Promise<{ experience_id: string | null } | null> {
+  return db
     .prepare(
-      'SELECT 1 AS yes FROM memory_retain_intents WHERE space_id = ? AND operation_key = ?',
+      'SELECT experience_id FROM memory_retain_intents WHERE space_id = ? AND operation_key = ?',
     )
     .bind(input.spaceId, input.operationKey)
-    .first<{ yes: number }>();
-  return row !== null;
+    .first<{ experience_id: string | null }>();
+}
+
+/**
+ * 同批修正意图的 experience 指针。
+ *
+ * 回填插入使用 `WHERE NOT EXISTS (dedupe_key)`；若并发宿主已插入同 dedupe key
+ * 但不同 ID 的 experience，回填的 INSERT 会跳过，而意图可能仍写计划 ID。此
+ * UPDATE 作为同批最后一步，按 dedupe key 重新解析实际 experience_id，并只在
+ * 指针不一致时更新，避免悬挂引用。
+ */
+export function backfillIntentExperienceRepairStatement(
+  db: D1Like,
+  input: { spaceId: string; operationKey: string; dedupeKey: string; now: number },
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE memory_retain_intents
+          SET experience_id = (
+                SELECT e.experience_id FROM memory_experiences e
+                 WHERE e.dedupe_key = ? LIMIT 1
+              ),
+              updated_at = ?
+        WHERE space_id = ? AND operation_key = ?
+          AND EXISTS (
+                SELECT 1 FROM memory_experiences e WHERE e.dedupe_key = ?
+              )
+          AND experience_id IS NOT (
+                SELECT e.experience_id FROM memory_experiences e
+                 WHERE e.dedupe_key = ? LIMIT 1
+              )`,
+    )
+    .bind(
+      input.dedupeKey,
+      input.now,
+      input.spaceId,
+      input.operationKey,
+      input.dedupeKey,
+      input.dedupeKey,
+    );
 }
 
 /**

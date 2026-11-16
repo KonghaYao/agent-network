@@ -96,6 +96,50 @@ export function planBackfillWindows(input: {
   };
 }
 
+export interface BackfillReplayPlan extends BackfillWindowPlan {
+  /** 本轮未处理、可由下一轮继续的小时窗口数；0 表示已到达重放上界。 */
+  remainingWindows: number;
+}
+
+/**
+ * 一次性重放：从水位（或显式起点）按窗口**向前**推进，而不是只看最近 N 个窗口。
+ *
+ * 常规调度在落后超过 `maxCatchupWindows` 时只补最近 N 个窗口；如果一次性重放
+ * 用大窗口直接把水位推到过去的粗边界，`watermark` 与最近 24h 之间的区间会被
+ * 永久跳过。重放路径必须保持 1h 窗口并逐轮向前，直到 `until`。
+ */
+export function planBackfillReplayWindows(input: {
+  watermark: number | null;
+  from: number;
+  until: number;
+  windowMs: number;
+  maxWindows: number;
+}): BackfillReplayPlan {
+  const windowMs = Math.max(1, input.windowMs);
+  const maxWindows = Math.max(1, input.maxWindows);
+  const alignedFrom = Math.floor(input.from / windowMs) * windowMs;
+  const until = Math.floor(input.until / windowMs) * windowMs;
+  const alignedWatermark =
+    input.watermark === null ? alignedFrom : Math.floor(input.watermark / windowMs) * windowMs;
+  const start = Math.max(alignedFrom, alignedWatermark);
+  if (start >= until) {
+    return { windows: [], skippedWindows: 0, currentTo: until, remainingWindows: 0 };
+  }
+  const total = Math.floor((until - start) / windowMs);
+  const covered = Math.min(total, maxWindows);
+  const windows: BackfillWindow[] = [];
+  for (let index = 0; index < covered; index += 1) {
+    const from = start + index * windowMs;
+    windows.push({ from, to: from + windowMs });
+  }
+  return {
+    windows,
+    skippedWindows: 0,
+    currentTo: until,
+    remainingWindows: total - covered,
+  };
+}
+
 export async function readInstanceCaptureDefault(
   db: D1Like,
   instanceId: string,
