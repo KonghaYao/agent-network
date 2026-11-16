@@ -5317,7 +5317,19 @@ async function main(): Promise<void> {
         await page.locator(`#${item}`).click();
       };
 
-      await openMenu('room-menu-members');
+      check(
+        '群成员入口位于搜索右侧同一行',
+        Boolean(
+          await page.evaluate(`(() => {
+            const search = document.getElementById('message-search-button').getBoundingClientRect();
+            const members = document.getElementById('members-button').getBoundingClientRect();
+            return members.left >= search.right - 1 && Math.abs(
+              (members.top + members.height / 2) - (search.top + search.height / 2)
+            ) <= 1;
+          })()`),
+        ),
+      );
+      await page.locator('#members-button').click();
       await page.locator('#members-modal').waitFor({ state: 'visible' });
       check(
         '成员弹窗列出 Agent 成员',
@@ -5389,7 +5401,7 @@ async function main(): Promise<void> {
         `document.getElementById('members-selection').textContent.trim() === '未选择'`,
       );
       await page.locator('#members-close').click();
-      await page.waitForFunction(`document.activeElement === document.getElementById('room-menu-toggle')`);
+      await page.waitForFunction(`document.activeElement === document.getElementById('members-button')`);
 
       await openMenu('room-menu-announcement');
       await page.locator('#announcement-modal').waitFor({ state: 'visible' });

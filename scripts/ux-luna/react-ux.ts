@@ -384,11 +384,13 @@ try {
     });
     await page.goto(`${fixture.base}/c/${d.rooms.owned.room_id}`);
     await page.locator('#messages .msg').first().waitFor();
+    check(await page.locator('#members-button').isVisible(), '搜索右侧提供群成员入口');
     await page.locator('#room-menu-toggle').click();
     await page.locator('#room-menu').waitFor({ state: 'visible' });
-    check(await page.locator('#room-menu-members').isVisible(), '会话菜单提供群成员入口');
     check(await page.locator('#room-menu-announcement').isVisible(), '会话菜单提供群公告入口');
-    await page.locator('#room-menu-members').click();
+    await page.keyboard.press('Escape');
+    await page.locator('#room-menu').waitFor({ state: 'hidden' });
+    await page.locator('#members-button').click();
     await page.locator('#members-modal').waitFor({ state: 'visible' });
     check(await page.locator('#members-current .spa-member').count() >= 2, '成员弹窗渲染当前成员');
     await page.locator('#members-close').click();

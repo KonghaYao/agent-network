@@ -146,7 +146,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [trace, setTrace] = useState<{ rootId: string; focusId: string | null } | null>(null);
   const [forwardItem, setForwardItem] = useState<HistoryMessage | null>(null);
-  // 群成员弹窗从菜单项打开；菜单项随后卸载，关闭时必须显式回到触发按钮。
+  // 群成员弹窗从搜索右侧的常驻入口打开；关闭时必须显式回到该按钮。
+  const membersButtonRef = useRef<HTMLButtonElement>(null);
+  // 会话菜单项打开的弹窗（记忆、公告等）关闭后回到菜单入口。
   const roomMenuToggleRef = useRef<HTMLButtonElement>(null);
   // 聊天区 dropzone 不持有上传状态；Composer 挂载后把 addFiles 注册到这里。
   const fileDropRef = useRef<((files: File[]) => void) | null>(null);
@@ -598,6 +600,17 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     >
                       搜索
                     </button>
+                    {room.kind === 'group' ? (
+                      <button
+                        ref={membersButtonRef}
+                        className="link-btn"
+                        id="members-button"
+                        type="button"
+                        onClick={() => setOverlay('members')}
+                      >
+                        群成员
+                      </button>
+                    ) : null}
                     <button
                       className={`monitor-toggle${monitorVisible ? ' active' : ''}`}
                       id="monitor-toggle"
@@ -844,8 +857,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
             ownerTransfer={chat.detail?.owner_transfer ?? null}
             identityId={identity.actor_id}
             token={token}
-            returnFocusRef={roomMenuToggleRef}
-            memoryFallbackFocus={() => roomMenuToggleRef.current}
+            returnFocusRef={membersButtonRef}
+            memoryFallbackFocus={() => membersButtonRef.current}
           />
           <AnnouncementDialog
             open={overlay === 'announcement'}
