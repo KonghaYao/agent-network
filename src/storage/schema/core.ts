@@ -181,6 +181,8 @@ export const messages = sqliteTable(
     task_root_id: text('task_root_id'),
     task_marked_by: text('task_marked_by'),
     task_marked_at: integer('task_marked_at'),
+    task_completed_at: integer('task_completed_at'),
+    task_completed_by: text('task_completed_by'),
   },
   (table) => [
     primaryKey({ columns: [table.message_id] }),

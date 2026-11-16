@@ -47,6 +47,15 @@ export const LIMITS = {
   taskSearchMatchesMax: 3,
   /** 单次 Task 搜索扫描的命中消息上限；超过时标记 truncated，不静默全表扫描。 */
   taskSearchScanMax: 2_000,
+  /** 房间常驻 Task 列表默认 / 最大条数。 */
+  taskListPageDefault: 20,
+  taskListPageMax: 20,
+  /** 列表项最多展示的 Agent 参与者；`participant_count` 仍返回完整计数。 */
+  taskListParticipantsMax: 3,
+  /** 列表项最近处理消息预览条数。 */
+  taskListRecentMessagesMax: 3,
+  /** 列表项根与最近消息的字符预览上限；完整正文仍走消息读取。 */
+  taskListPreviewChars: 160,
   /** 普通工具响应上限。 */
   toolResponseBytes: 256 * 1024,
   /** inbox 页默认 / 最大条数。 */

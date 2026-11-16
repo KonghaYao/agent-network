@@ -618,7 +618,12 @@ export const taskSummaryViewSchema = z.object({
   participants: z.array(taskSummaryParticipantSchema),
   participant_count: z.number(),
   message_count: z.number(),
+  status: z.enum(['open', 'completed']),
+  completed_at: z.string().nullable(),
+  completed_by: z.string().nullable(),
   can_unmark: z.boolean(),
+  /** 可发言且 Task 仍为 open；只读/禁言/已完成一律 false。 */
+  can_complete: z.boolean(),
 });
 
 export const taskSummariesResultSchema = z.object({
@@ -664,6 +669,9 @@ export const taskTraceResultSchema = z.object({
   has_more_after: z.boolean(),
   message_count: z.number(),
   focus_message_id: z.string().nullable(),
+  status: z.enum(['open', 'completed']),
+  completed_at: z.string().nullable(),
+  completed_by: z.string().nullable(),
   authorization: authorizationSnapshotSchema,
 });
 
@@ -688,6 +696,42 @@ export const taskSearchResultSchema = z.object({
   authorization: authorizationSnapshotSchema,
   /** 扫描达到上限时结果不完整；此时不再返回 next_cursor。 */
   truncated: z.boolean(),
+});
+
+export const taskCompleteResultSchema = z.object({
+  room_id: z.string(),
+  root_message_id: z.string(),
+  status: z.literal('completed'),
+  completed_at: z.string(),
+  completed_by: z.string(),
+});
+
+/** 最近一条非根处理消息；只给受限预览，完整正文仍走消息读取。 */
+export const taskListRecentMessageSchema = z.object({
+  message_id: z.string(),
+  sender_id: z.string(),
+  sender_name: z.string().nullable(),
+  sender_kind: z.enum(['human', 'agent']).nullable(),
+  created_seq: z.string(),
+  created_at: z.string(),
+  preview: z.string(),
+  recalled: z.boolean(),
+});
+
+export const taskListItemSchema = taskSummaryViewSchema.extend({
+  latest_activity_seq: z.string(),
+  latest_activity_at: z.string(),
+  latest_message_id: z.string(),
+  recent_messages: z.array(taskListRecentMessageSchema),
+});
+
+export const taskListResultSchema = z.object({
+  items: z.array(taskListItemSchema),
+  total_count: z.number(),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+  snapshot: z.string(),
+  authorization: authorizationSnapshotSchema,
 });
 
 export const inboxPageSchema = z.object({

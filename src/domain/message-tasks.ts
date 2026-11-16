@@ -43,6 +43,12 @@ import {
   type HistorySnapshot,
 } from './room-history';
 import {
+  orderedParticipants,
+  taskMemberAggregates,
+  TASK_ROOT_COLUMNS,
+  type TaskRootRow,
+} from './message-task-read';
+import {
   memoryTaskOfferChangeStatements,
   memoryTaskOfferRetractionStatements,
   nextTaskOfferRevision,
@@ -94,7 +100,11 @@ export interface TaskSummary {
   participants: TaskSummaryParticipant[];
   participant_count: number;
   message_count: number;
+  status: 'open' | 'completed';
+  completed_at: string | null;
+  completed_by: string | null;
   can_unmark: boolean;
+  can_complete: boolean;
 }
 
 export interface TaskSummariesInput {
@@ -139,37 +149,14 @@ export interface TaskTraceResult {
   message_count: number;
   /** 请求的焦点消息确实属于当前集合时返回原 ID；否则为 null。 */
   focus_message_id: string | null;
+  /** Task 完成态；Trace 本身不改变它。 */
+  status: 'open' | 'completed';
+  completed_at: string | null;
+  completed_by: string | null;
   authorization: HistorySnapshot;
 }
 
-interface RootRow extends Pick<
-  MessageRow,
-  | 'message_id'
-  | 'room_id'
-  | 'sender_id'
-  | 'created_seq'
-  | 'created_at'
-  | 'preview'
-  | 'body_bytes'
-  | 'task_root_id'
-  | 'task_marked_by'
-  | 'task_marked_at'
-> {
-  sender_name: string | null;
-  sender_kind: 'human' | 'agent' | null;
-}
-
-interface CountRow {
-  root_id: string;
-  n: number;
-}
-
-interface ParticipantRow {
-  root_id: string;
-  sender_id: string;
-  name: string;
-  first_seq: number;
-}
+type RootRow = TaskRootRow;
 
 interface TraceQueryRow extends Pick<
   MessageRow,
@@ -524,9 +511,7 @@ export async function messageTaskSummaries(
   const rootMarks = placeholders(rootIds.length);
   const rootRows = await db
     .prepare(
-      `SELECT m.message_id, m.room_id, m.sender_id, m.created_seq, m.created_at, m.preview,
-              m.body_bytes, m.task_root_id, m.task_marked_by, m.task_marked_at,
-              a.name AS sender_name, a.kind AS sender_kind
+      `SELECT ${TASK_ROOT_COLUMNS}, a.name AS sender_name, a.kind AS sender_kind
          FROM messages m
          LEFT JOIN actors a ON a.actor_id = m.sender_id
         WHERE m.message_id IN (${rootMarks}) AND m.room_id = ?
@@ -544,93 +529,15 @@ export async function messageTaskSummaries(
   if (roots.length === 0) return { items: [] };
 
   const validIds = roots.map((row) => row.message_id);
-  const validMarks = placeholders(validIds.length);
-  const memberFilter = `m.room_id = ? AND m.created_seq >= ? AND (? IS NULL OR m.created_seq <= ?)
-      AND (m.task_root_id IN (${validMarks}) OR (m.task_root_id IS NULL AND m.root_id IN (${validMarks})))`;
-  const memberBinds: unknown[] = [
-    room.room_id,
-    boundary.fromSeq,
-    boundary.toSeq,
-    boundary.toSeq,
-    ...validIds,
-    ...validIds,
-  ];
-
-  const [counts, participantRows, referenceCounts] = await Promise.all([
-    db
-      .prepare(
-        `SELECT COALESCE(m.task_root_id, m.root_id) AS root_id,
-                COUNT(DISTINCT m.message_id) AS n
-           FROM messages m
-          WHERE ${memberFilter}
-          GROUP BY COALESCE(m.task_root_id, m.root_id)`,
-      )
-      .bind(...memberBinds)
-      .all<CountRow>(),
-    db
-      .prepare(
-        `WITH member AS (
-           SELECT COALESCE(m.task_root_id, m.root_id) AS root_id, m.message_id,
-                  m.sender_id, m.body_bytes, m.created_seq
-             FROM messages m
-            WHERE ${memberFilter}
-         )
-         SELECT member.root_id, member.sender_id, a.name, MIN(member.created_seq) AS first_seq
-           FROM member JOIN actors a ON a.actor_id = member.sender_id
-          WHERE member.body_bytes > 0 AND a.kind = 'agent'
-          GROUP BY member.root_id, member.sender_id
-          ORDER BY member.root_id ASC, first_seq ASC`,
-      )
-      .bind(...memberBinds)
-      .all<ParticipantRow>(),
-    db
-      .prepare(
-        `WITH member AS (
-           SELECT COALESCE(m.task_root_id, m.root_id) AS root_id, m.message_id,
-                  m.reply_to, m.body_bytes
-             FROM messages m
-            WHERE ${memberFilter}
-         ), ref AS (
-           SELECT member.root_id, s.message_id
-             FROM member
-             JOIN messages s ON s.message_id = member.reply_to AND s.room_id = ?
-            WHERE member.body_bytes > 0
-              AND s.created_seq >= ? AND (? IS NULL OR s.created_seq <= ?)
-              AND NOT EXISTS (
-                SELECT 1 FROM member m2
-                 WHERE m2.root_id = member.root_id AND m2.message_id = s.message_id
-              )
-            GROUP BY member.root_id, s.message_id
-         )
-         SELECT root_id, COUNT(*) AS n FROM ref GROUP BY root_id`,
-      )
-      .bind(
-        ...memberBinds,
-        room.room_id,
-        boundary.fromSeq,
-        boundary.toSeq,
-        boundary.toSeq,
-      )
-      .all<CountRow>(),
-  ]);
-
-  const countByRoot = new Map(counts.results.map((row) => [row.root_id, row.n]));
-  const refByRoot = new Map(referenceCounts.results.map((row) => [row.root_id, row.n]));
-  const participantsByRoot = new Map<string, ParticipantRow[]>();
-  for (const row of participantRows.results) {
-    const list = participantsByRoot.get(row.root_id) ?? [];
-    list.push(row);
-    participantsByRoot.set(row.root_id, list);
-  }
+  const aggregates = await taskMemberAggregates(db, room.room_id, validIds, boundary);
   const canUnmark = roomCapabilitiesFor(room, member).send_message;
 
   const items = roots.map((root): TaskSummary => {
-    const participants = [...(participantsByRoot.get(root.message_id) ?? [])].sort((a, b) => {
-      const aRoot = a.sender_id === root.sender_id ? 0 : 1;
-      const bRoot = b.sender_id === root.sender_id ? 0 : 1;
-      if (aRoot !== bRoot) return aRoot - bRoot;
-      return a.first_seq - b.first_seq;
-    });
+    const participants = orderedParticipants(
+      aggregates.participants.get(root.message_id) ?? [],
+      root.sender_id,
+    );
+    const status = root.task_completed_at === null ? 'open' : 'completed';
     return {
       root_message_id: root.message_id,
       room_id: root.room_id,
@@ -648,8 +555,14 @@ export async function messageTaskSummaries(
       })),
       participant_count: participants.length,
       message_count:
-        (countByRoot.get(root.message_id) ?? 0) + (refByRoot.get(root.message_id) ?? 0),
+        (aggregates.counts.get(root.message_id) ?? 0) +
+        (aggregates.referenceCounts.get(root.message_id) ?? 0),
+      status,
+      completed_at:
+        root.task_completed_at === null ? null : String(root.task_completed_at),
+      completed_by: root.task_completed_by,
       can_unmark: canUnmark,
+      can_complete: canUnmark && status === 'open',
     };
   });
   return { items };
@@ -670,9 +583,7 @@ export async function messageTaskTrace(
   const { room, boundary } = await readableRoom(db, principal, input.room_id);
   const rootRow = await db
     .prepare(
-      `SELECT m.message_id, m.room_id, m.sender_id, m.created_seq, m.created_at, m.preview,
-              m.body_bytes, m.task_root_id, m.task_marked_by, m.task_marked_at,
-              a.name AS sender_name, a.kind AS sender_kind
+      `SELECT ${TASK_ROOT_COLUMNS}, a.name AS sender_name, a.kind AS sender_kind
          FROM messages m
          LEFT JOIN actors a ON a.actor_id = m.sender_id
         WHERE m.message_id = ? AND m.room_id = ? AND m.task_root_id = m.message_id`,
@@ -890,6 +801,10 @@ export async function messageTaskTrace(
     has_more_after: hasMoreAfter,
     message_count: total?.n ?? 0,
     focus_message_id: input.focus_message_id ?? null,
+    status: rootRow.task_completed_at === null ? 'open' : 'completed',
+    completed_at:
+      rootRow.task_completed_at === null ? null : String(rootRow.task_completed_at),
+    completed_by: rootRow.task_completed_by,
     authorization: historySnapshot(boundary),
   };
 }

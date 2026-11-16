@@ -5,13 +5,6 @@ import { isBusinessError } from '../contracts/errors';
 import { memoryIntakeFromEnv } from '../memory/intake';
 import { provisionAgentAfterMessage } from '../memory/provision';
 import { messageSearch, messageContext, messageSearchSchema, messageContextSchema, messageSearchOutputSchema, messageContextOutputSchema } from '../domain/message-search';
-import {
-  messageTaskMark,
-  messageTaskSummaries,
-  messageTaskTrace,
-  messageTaskUnmark,
-} from '../domain/message-tasks';
-import { messageTaskSearch } from '../domain/message-task-search';
 import { fileTicketSecret } from '../domain/file-ticket';
 import { messageRecallSchema } from '../contracts/message-recall';
 import { messageRecall } from '../domain/message-recall';
@@ -80,11 +73,6 @@ import {
   messageReadSchema,
   messageSendSchema,
   messageSendStatusSchema,
-  messageTaskMarkSchema,
-  messageTaskSearchSchema,
-  messageTaskSummariesSchema,
-  messageTaskTraceSchema,
-  messageTaskUnmarkSchema,
   profileUpdateSchema,
   recoveryCreateSchema,
   recoveryRedeemSchema,
@@ -316,17 +304,13 @@ import {
   sendResultSchema,
   messageSendStatusPageSchema,
   syncPageSchema,
-  taskMarkResultSchema,
-  taskSearchResultSchema,
-  taskSummariesResultSchema,
-  taskTraceResultSchema,
-  taskUnmarkResultSchema,
 } from './outputs';
 import type { Principal } from '../domain/principal';
 import {
   clientGuide, clientGuideInputSchema, clientGuideOutputSchema,
   clientServiceInfo, recordToolContract, registeredToolNames, serviceInfoSchema,
 } from './client-contract';
+import { registerTaskTools } from './task-tools';
 import { memoryCapabilityCatalog } from '../memory/capability-catalog';
 import { DEFAULT_MEMORY_HOST_POLICY } from '../memory/host-bridge';
 import type { RegistrationServer } from './registration';
@@ -1574,72 +1558,17 @@ export function registerTools(
     });
   }, { readOnlyHint: true });
 
-  register(
+  registerTaskTools(
     server,
-    'network_task_mark',
-    '把房间内任意当前可见、未撤回的消息标记为消息式 Task 起点；人类消息和 Agent 消息规则相同，可标记他人发送的消息。起点 ID 就是 message_id，不创建独立任务实体或表单。已是本起点时按幂等成功返回；消息已归属另一个仍标记中的 Task 时返回 CONFLICT。只写房间事件提示，不写 inbox、不增加 pending_count、不推进 head_seq、不唤醒 Agent。所有写操作带唯一 request_id。',
-    messageTaskMarkSchema,
-    taskMarkResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return messageTaskMark(db, principal, input, memory);
+    {
+      db,
+      principal,
+      memory,
+      ftsEnabled: env.MESSAGE_SEARCH_FTS !== false,
     },
-    { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    register,
   );
 
-  register(
-    server,
-    'network_task_unmark',
-    '取消消息式 Task 起点的聚合入口：只清空起点标记，原消息、处理消息与引用关系全部保留，重新标记后集合恢复。任何可发言成员都可以取消，不要求是原标记者。重复取消按幂等成功返回；只写房间事件提示，不写 inbox、不增加 pending_count、不推进 head_seq。',
-    messageTaskUnmarkSchema,
-    taskUnmarkResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return messageTaskUnmark(db, principal, input, memory);
-    },
-    { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
-  );
-
-  register(
-    server,
-    'network_task_summaries',
-    '批量读取消息式 Task 摘要：一次最多 20 个起点，返回短预览、起点发送者、参与 Agent 头像组去重顺序、可见消息计数与 can_unmark。未标记、已撤回或当前不可见的根直接省略，不泄露正文或数量。只读：不写 events/outbox/operations，不推进已读、pending_count 或 head_seq。',
-    messageTaskSummariesSchema,
-    taskSummariesResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return messageTaskSummaries(db, principal, input);
-    },
-    { readOnlyHint: true },
-  );
-
-  register(
-    server,
-    'network_task_trace',
-    '按原消息顺序分页展开消息式 Task 集合：返回起点、处理消息与一层引用来源，按 message_id 去重，引用项标为 reference；next_cursor / prev_cursor 双向翻页，has_more_before / has_more_after 表示两侧是否还有内容。传 focus_message_id 可从搜索命中处开始定位；正文用 network_message_read 读取。只读：不写 events/outbox/operations，不推进已读、pending_count 或 head_seq。',
-    messageTaskTraceSchema,
-    taskTraceResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return messageTaskTrace(db, principal, input);
-    },
-    { readOnlyHint: true },
-  );
-
-  register(
-    server,
-    'network_task_search',
-    '按起点聚合搜索消息式 Task：命中起点、处理消息或被引用的来源时只返回一个 Task 摘要，matches 最多 3 条命中并可直接作为 trace 的 focus_message_id；同一来源被多个 Task 引用时各自返回，不合并集合。普通 network_message_search 契约保持不变。只读：不写 events/outbox/operations，不推进已读、pending_count 或 head_seq；扫描达到上限时返回 truncated 并停止分页。',
-    messageTaskSearchSchema,
-    taskSearchResultSchema,
-    async (input) => {
-      requireActor(principal);
-      return messageTaskSearch(db, principal, input, {
-        ftsEnabled: env.MESSAGE_SEARCH_FTS !== false,
-      });
-    },
-    { readOnlyHint: true },
-  );
   register(server, 'network_message_context', '读取一条消息及其前后有限条上下文预览；长正文使用 network_message_read，服务端会重新检查房间成员与历史边界。', messageContextSchema, messageContextOutputSchema, async (input) => {
     requireActor(principal);
     return messageContext(db, principal, input);

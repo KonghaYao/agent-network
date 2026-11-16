@@ -3,11 +3,11 @@
  *
  * 用真实 migrations 构造停在 `0035_task_recovery.sql` 的合成库，写入
  * credentials/devices、无主群与 A06 的关键历史行，再顺序应用
- * `0036`–`0047`。检查重点是“升级不扩大权限”：旧凭据只回填设备行、不新增
+ * `0036`–`0048`。检查重点是“升级不扩大权限”：旧凭据只回填设备行、不新增
  * credentials；无主群不被自动解散或回填 owner；审计表重建保留旧行；
  * 0042 删除旧任务表/列后普通业务行仍可读；0043 只把存量群回填为 full；
  * 0044 只把未删除文件回填为 public；0045/0046 只新增 Memory 表与索引；
- * 0047 回填消息 FTS 索引且重复执行不重复写入。
+ * 0047 回填消息 FTS 索引且重复执行不重复写入；0048 只增加 Task 完成两列。
  *
  * 运行：`bun scripts/q01-upgrade-check.ts`
  * 该脚本使用临时目录，不访问服务端、不读取或写入 `.data`。
@@ -36,6 +36,7 @@ const NEW_MIGRATIONS = [
   '0045_memory_ledger.sql',
   '0046_memory_experience_catchup.sql',
   '0047_message_search_fts.sql',
+  '0048_message_task_completion.sql',
 ];
 const AT = 1_700_000_000_000;
 
@@ -161,19 +162,27 @@ try {
   checkEqual('升级前没有设备行', before.devices, 0);
 
   const appliedNow = migrate(db, SOURCE_MIGRATIONS);
-  checkEqual('恰好应用 0036–0047', appliedNow.join(','), NEW_MIGRATIONS.join(','));
+  checkEqual('恰好应用 0036–0048', appliedNow.join(','), NEW_MIGRATIONS.join(','));
   const expectedMigrations = [
     ...Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(4, '0')),
-    ...Array.from({ length: 31 }, (_, i) => String(i + 17).padStart(4, '0')),
+    ...Array.from({ length: 32 }, (_, i) => String(i + 17).padStart(4, '0')),
   ];
   const actualMigrations = (
     db.prepare('SELECT name FROM schema_migrations ORDER BY name').all() as Array<{ name: string }>
   ).map((row) => row.name);
-  checkEqual('迁移总数为 43', actualMigrations.length, 43);
+  checkEqual('迁移总数为 44', actualMigrations.length, 44);
   check(
-    '迁移序号为 0001–0012、0017–0047',
+    '迁移序号为 0001–0012、0017–0048',
     actualMigrations.every((name, i) => name.startsWith(`${expectedMigrations[i]}_`)),
     actualMigrations,
+  );
+  const messageColumns = db.prepare('PRAGMA table_info(messages)').all() as Array<{
+    name: string;
+  }>;
+  check(
+    '0048 增加 Task 完成两列',
+    messageColumns.some((column) => column.name === 'task_completed_at') &&
+      messageColumns.some((column) => column.name === 'task_completed_by'),
   );
 
   checkEqual('integrity_check=ok', scalar<string>(db, 'PRAGMA integrity_check'), 'ok');
