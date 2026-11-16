@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from 'react';
 
 import type { RoomView } from '../../lib/chat';
 import { taskAuthorizationKey } from '../../lib/task-cache';
@@ -17,11 +23,16 @@ interface CompleteState {
   returnFocus: HTMLElement | null;
 }
 
+/** 展开由指针触发后，指针移动超过该距离才重新允许 hover 预览。 */
+const HOVER_REARM_DISTANCE = 8;
+
 /**
- * 房间常驻未完成 Task：位于聊天区输入框上方，属于 chat-body 布局。
+ * 房间未完成 Task 浮动入口：浮动在输入框上方，不占聊天文档流。
  *
- * 默认展开紧凑列表，可折叠为 `Task N`。列表不覆盖消息或回到底部按钮；
- * 高度通过 CSS 变量同步给 `jump-latest`，滚动到最新按钮会随 dock 上移。
+ * 默认收起为 `Task N` 入口；点击展开列表，再次点击或 Esc/外部点击收起。
+ * 面板绝对定位锚在 composer 容器上，展开前后不推移消息、输入框或
+ * 「回到最新」。N=0 且收起时完全不渲染；展开时完成最后一条保留空态，
+ * 直到用户主动收起。
  */
 export function RoomTaskDock({
   roomId,
@@ -36,11 +47,14 @@ export function RoomTaskDock({
   actorId: string | null;
   onOpenTrace: (rootId: string, focusId: string | null) => void;
 }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [complete, setComplete] = useState<CompleteState | null>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
-  const slotRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLElement>(null);
+  const hoverArmedRef = useRef(true);
+  const pointerOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const previewEscapeEventRef = useRef<Event | null>(null);
   const readOnly = room?.read_only === true;
   const authorizationKey = taskAuthorizationKey(room);
   const tasks = useRoomTasks({
@@ -52,10 +66,77 @@ export function RoomTaskDock({
   });
 
   useEffect(() => {
-    setExpanded(true);
+    setExpanded(false);
     setPreview(null);
     setComplete(null);
   }, [roomId]);
+
+  useEffect(() => {
+    if (!expanded) setPreview(null);
+  }, [expanded]);
+
+  // 面板从入口上方浮出后，静止的指针仍停在入口/原位置；先要求指针移动
+  // 超过阈值，避免布局变化后的 hover 立即弹出预览挡住入口。
+  useEffect(() => {
+    if (!expanded) {
+      hoverArmedRef.current = true;
+      return undefined;
+    }
+    const origin = pointerOriginRef.current;
+    if (!origin) {
+      hoverArmedRef.current = true;
+      return undefined;
+    }
+    hoverArmedRef.current = false;
+    const onPointerMove = (event: PointerEvent) => {
+      if (
+        Math.hypot(event.clientX - origin.x, event.clientY - origin.y) >=
+        HOVER_REARM_DISTANCE
+      ) {
+        hoverArmedRef.current = true;
+      }
+    };
+    document.addEventListener('pointermove', onPointerMove, true);
+    return () => document.removeEventListener('pointermove', onPointerMove, true);
+  }, [expanded]);
+
+  const focusAfterCollapse = () => {
+    // 收起后入口可能因 N=0 卸载；此时把焦点还给输入框而不是 body。
+    requestAnimationFrame(() => {
+      if (toggleRef.current) {
+        toggleRef.current.focus();
+        return;
+      }
+      document.getElementById('body')?.focus();
+    });
+  };
+
+  const collapse = (restoreFocus: boolean) => {
+    setPreview(null);
+    setExpanded(false);
+    if (restoreFocus) focusAfterCollapse();
+  };
+
+  // 点击面板外部收起；预览浮层与 Dialog 走 Portal，不应连带收起面板。
+  useEffect(() => {
+    if (!expanded || preview) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (dockRef.current?.contains(target)) return;
+      if (
+        target.closest(
+          '.task-preview-popover, [role="dialog"], [role="alertdialog"], .spa-dialog-overlay',
+        )
+      ) {
+        return;
+      }
+      const focusInside = dockRef.current?.contains(document.activeElement) ?? false;
+      collapse(focusInside);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [expanded, preview]);
 
   useEffect(() => {
     if (!preview) return;
@@ -76,27 +157,6 @@ export function RoomTaskDock({
     }
   }, [preview, tasks.items]);
 
-  // 把 dock 实际高度交给 `.jump-latest`，避免“回到最新”被面板遮挡。
-  useLayoutEffect(() => {
-    const slot = slotRef.current;
-    const body = slot?.closest<HTMLElement>('.chat-body');
-    if (!slot || !body) return undefined;
-    const status = body.querySelector<HTMLElement>('#status');
-    const update = () => {
-      // dock 与状态行都在 composer 上方；两者高度共同决定回到底部按钮的位置。
-      const offset = slot.offsetHeight + (status?.offsetHeight ?? 0);
-      body.style.setProperty('--task-dock-height', `${offset}px`);
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(slot);
-    if (status) observer.observe(status);
-    return () => {
-      observer.disconnect();
-      body.style.removeProperty('--task-dock-height');
-    };
-  }, [roomId]);
-
   const requestOpen = (rootId: string) => {
     setPreview({ rootId, pinned: true });
   };
@@ -106,6 +166,7 @@ export function RoomTaskDock({
   };
 
   const hoverOpen = (rootId: string) => {
+    if (!hoverArmedRef.current) return;
     setPreview((current) => {
       if (current?.pinned) return current;
       return { rootId, pinned: false };
@@ -118,6 +179,11 @@ export function RoomTaskDock({
     );
   };
 
+  const onPreviewEscape = (event: Event) => {
+    // 记录被预览消费的原始 Esc 事件；下一次 Esc 是不同事件，不会误吞。
+    previewEscapeEventRef.current = event;
+  };
+
   const openComplete = (item: TaskListItemView) => {
     if (readOnly || !item.can_complete || item.status !== 'open') return;
     setPreview(null);
@@ -126,6 +192,34 @@ export function RoomTaskDock({
       returnFocus:
         document.activeElement instanceof HTMLElement ? document.activeElement : null,
     });
+  };
+
+  const onToggle = (event: MouseEvent<HTMLButtonElement>) => {
+    if (expanded) {
+      pointerOriginRef.current = null;
+      collapse(true);
+      return;
+    }
+    // 只有真实指针点击才需要 hover 抑制；键盘打开时指针不在入口上。
+    pointerOriginRef.current =
+      event.detail > 0 ? { x: event.clientX, y: event.clientY } : null;
+    setExpanded(true);
+  };
+
+  const onSectionKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Escape' || !expanded) return;
+    const target = event.target;
+    // 预览浮层内由 Radix 自己处理 Esc。
+    if (target instanceof Element && target.closest('.task-preview-popover')) return;
+    // 预览已打开时让 Radix 先关闭预览；Radix 在 document capture 阶段
+    // 处理，冒泡到这里时 preview 可能已变成 null，用同一个原生事件区分。
+    if (preview || previewEscapeEventRef.current === event.nativeEvent) {
+      previewEscapeEventRef.current = null;
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    collapse(true);
   };
 
   if (!room) return null;
@@ -138,13 +232,18 @@ export function RoomTaskDock({
       ? '正在加载 Task'
       : `${tasks.totalCount} 个未完成 Task`;
 
+  // N=0 且收起：完全不渲染，不留占位、不产生 `Task 0` 噪音。
+  if (!expanded && tasks.totalCount === 0) return null;
+
   return (
-    <div className="task-dock-slot" ref={slotRef}>
+    <div id="task-dock-slot" className="task-dock-slot">
       <section
+        ref={dockRef}
         id="task-dock"
         className={`task-dock${expanded ? '' : ' is-collapsed'}`}
         aria-label="未完成 Task"
         data-state={expanded ? 'expanded' : 'collapsed'}
+        onKeyDown={onSectionKeyDown}
       >
         <div className="task-dock-head">
           <button
@@ -162,7 +261,7 @@ export function RoomTaskDock({
                   : `Task ${tasks.totalCount} 个未完成`
             }
             title={toggleTitle}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={onToggle}
           >
             <span className="task-dock-title">Task</span>
             <span
@@ -196,9 +295,17 @@ export function RoomTaskDock({
             </p>
           ) : null}
           {!tasks.error && !tasks.loading && tasks.items.length === 0 ? (
-            <p id="task-dock-empty" className="task-dock-empty">
-              暂无未完成 Task
-            </p>
+            <div id="task-dock-empty" className="task-dock-empty">
+              <span>暂无未完成 Task</span>
+              <button
+                id="task-dock-empty-close"
+                className="task-dock-empty-close"
+                type="button"
+                onClick={() => collapse(true)}
+              >
+                收起
+              </button>
+            </div>
           ) : null}
           {tasks.items.length > 0 ? (
             <ul className="task-dock-list" aria-label="未完成 Task 列表">
@@ -216,6 +323,7 @@ export function RoomTaskDock({
                   onRequestClose={requestClose}
                   onHoverOpen={hoverOpen}
                   onHoverClose={hoverClose}
+                  onEscapeKeyDown={onPreviewEscape}
                   onOpenTrace={(rootId, focusId) => {
                     requestClose(rootId, false);
                     onOpenTrace(rootId, focusId);

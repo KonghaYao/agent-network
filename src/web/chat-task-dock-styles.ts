@@ -1,17 +1,24 @@
 /**
- * 房间常驻 Task dock、行预览与完成确认的样式。
+ * 房间浮动 Task dock、行预览与完成确认的样式。
  *
- * 全部取自聊天区 CSS 变量，暗色模式自动跟随；dock 位于 chat-body 的正常
- * 文档流中，不覆盖最后一条消息或输入框。实际高度写入 `--task-dock-height`，
- * 供 `jump-latest` 上移，避免“回到最新”按钮被遮挡。
+ * 全部取自聊天区 CSS 变量，暗色模式自动跟随；dock 绝对定位在 composer
+ * 容器上方，不占文档流、不推移消息或输入框。z-index 低于 Dialog，高于
+ * 消息流；`jump-latest` 保持原位并盖在面板之上，始终可点击。
  */
 export const TASK_DOCK_STYLE = `
-  .task-dock-slot { flex: 0 0 auto; display: flex; justify-content: flex-start;
-    padding: 0 16px 6px; background: var(--wx-bg); }
-  .task-dock { box-sizing: border-box; width: min(420px, 100%); min-width: 0;
-    border: 1px solid var(--wx-line); border-radius: 10px; background: var(--wx-panel);
-    box-shadow: 0 1px 3px rgb(0 0 0 / 6%); overflow: hidden; }
-  .task-dock-head { display: flex; align-items: center; }
+  .task-dock-slot { position: absolute; left: 16px; right: 16px;
+    bottom: calc(100% + 8px); z-index: 4; display: block;
+    min-width: 0; max-width: 420px; }
+  /* 无输入区（只读归档）时补上底部安全区。 */
+  .composer-area:not(:has(.composer)) .task-dock-slot {
+    bottom: calc(100% + 8px + env(safe-area-inset-bottom)); }
+  /* 入口保持在锚点，面板绝对定位在入口上方：展开不改变入口盒子。 */
+  .task-dock { position: relative; box-sizing: border-box; display: block;
+    width: 100%; min-width: 0; }
+  .task-dock-head { display: flex; align-items: center; width: fit-content;
+    max-width: 100%; box-sizing: border-box; border: 1px solid var(--wx-line);
+    border-radius: 10px; background: var(--wx-panel);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 14%); overflow: hidden; }
   .task-dock-toggle { flex: 1 1 auto; display: flex; align-items: center; gap: 8px;
     min-height: 44px; min-width: 0; padding: 6px 10px; border: 0; border-radius: 0;
     background: transparent; color: var(--wx-text); text-align: left; cursor: pointer; }
@@ -26,13 +33,26 @@ export const TASK_DOCK_STYLE = `
   .task-dock-caret { margin-left: auto; color: var(--wx-muted); font-size: 11px;
     line-height: 1; transition: transform .15s ease; }
   .task-dock.is-collapsed .task-dock-caret { transform: rotate(-90deg); }
-  .task-dock-body { display: flex; flex-direction: column; min-height: 0;
-    max-height: min(34dvh, 320px); border-top: 1px solid var(--wx-line); }
+  .task-dock-body { position: absolute; left: 0; right: 0;
+    bottom: calc(100% + 8px); box-sizing: border-box; display: flex;
+    flex-direction: column; width: 100%; max-height: min(50dvh, 460px);
+    border: 1px solid var(--wx-line); border-radius: 10px;
+    background: var(--wx-panel); box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+    overflow: hidden; }
   .task-dock-body[hidden] { display: none; }
-  .task-dock-list { flex: 1 1 auto; min-height: 0; max-height: 216px; margin: 0;
+  .task-dock-list { flex: 1 1 auto; min-height: 0; margin: 0;
     padding: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
-  .task-dock-status, .task-dock-empty { margin: 0; padding: 12px;
+  .task-dock-status { margin: 0; padding: 12px;
     color: var(--wx-muted); font-size: 12px; text-align: center; }
+  .task-dock-empty { display: flex; flex-direction: column; align-items: center;
+    gap: 4px; margin: 0; padding: 12px; color: var(--wx-muted);
+    font-size: 12px; text-align: center; }
+  .task-dock-empty-close { min-width: 88px; min-height: 44px; padding: 0 14px;
+    border: 1px solid var(--wx-line); border-radius: 999px; background: var(--wx-panel);
+    color: var(--wx-link); font-size: 12px; cursor: pointer; }
+  .task-dock-empty-close:hover { background: var(--wx-hover); }
+  .task-dock-empty-close:focus-visible { outline: 2px solid var(--wx-link);
+    outline-offset: 2px; }
   .task-dock-error { display: flex; flex-wrap: wrap; align-items: center;
     justify-content: center; gap: 8px; padding: 10px 12px; color: var(--wx-unread);
     font-size: 12px; line-height: 1.5; text-align: center; }
@@ -121,17 +141,11 @@ export const TASK_DOCK_STYLE = `
   .task-complete-error { margin: 0 0 12px; color: var(--wx-unread); font-size: 12px;
     line-height: 1.5; overflow-wrap: anywhere; }
 
-  /* 回到底部按钮跟随 dock 高度上移；不改变 dock 自身布局。 */
-  .chat-body .jump-latest { bottom: calc(70px + var(--task-dock-height, 0px)); }
-
+  /* 「回到底部」保持原位，靠 chat-styles 的更高 z-index 盖在浮动面板之上。 */
   @media (max-width: 759px) {
-    .task-dock-slot { padding: 0 8px 4px; }
-    .task-dock { width: 100%; }
-    .task-dock-body { max-height: min(38dvh, 300px); }
-    .task-dock-list { max-height: min(32dvh, 250px); }
+    .task-dock-slot { left: 8px; right: 8px; bottom: calc(100% + 6px);
+      max-width: none; }
     .task-preview-popover { width: calc(100vw - 20px);
       max-height: min(52dvh, 360px); }
-    .chat-body .jump-latest {
-      bottom: calc(64px + var(--task-dock-height, 0px) + env(safe-area-inset-bottom)); }
   }
 `;

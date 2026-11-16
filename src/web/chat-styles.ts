@@ -513,6 +513,8 @@ export const APP_STYLE = `
   .mention-item:hover, .mention-item:focus { background: var(--wx-hover); }
   .mention-kind { margin-left: auto; font-size: 11px; color: var(--wx-muted); }
 
+  /* Task dock 的定位锚点：只包住输入区，不参与消息流高度。 */
+  .composer-area { position: relative; flex: 0 0 auto; }
   .composer { flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
     padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
     background: var(--wx-sidebar); border-top: 1px solid var(--wx-line); }

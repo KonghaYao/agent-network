@@ -14,6 +14,7 @@ export function TaskListItem({
   onRequestClose,
   onHoverOpen,
   onHoverClose,
+  onEscapeKeyDown,
   onOpenTrace,
   onComplete,
 }: {
@@ -26,6 +27,7 @@ export function TaskListItem({
   onRequestClose: (rootId: string, restoreFocus: boolean) => void;
   onHoverOpen: (rootId: string) => void;
   onHoverClose: (rootId: string) => void;
+  onEscapeKeyDown: (event: Event) => void;
   onOpenTrace: (rootId: string, focusId: string | null) => void;
   onComplete: (item: TaskListItemView) => void;
 }) {
@@ -50,6 +52,7 @@ export function TaskListItem({
         onRequestClose={onRequestClose}
         onHoverOpen={onHoverOpen}
         onHoverClose={onHoverClose}
+        onEscapeKeyDown={onEscapeKeyDown}
         onOpenTrace={onOpenTrace}
       />
       <div className="task-dock-item-actions">

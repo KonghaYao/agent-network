@@ -1,10 +1,10 @@
 import { AxeBuilder } from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 /**
- * 常驻 Task dock：列表、预览、完成、分页与实时刷新。
+ * 浮动 Task dock：默认收起、展开/收起、布局稳定、预览、完成、分页与实时刷新。
  *
  * 服务端由 global-setup 启动；本文件只通过真实 MCP 调用创建 fixture，
  * 失败场景用请求级 mock，不替换成功响应。
@@ -232,8 +232,16 @@ async function openRoom(page: Page, base: string, token: string, roomId: string)
   await expect(page.locator('#task-dock')).toBeVisible();
 }
 
-test.describe('常驻 Task dock', () => {
-  test('展开/折叠、悬浮预览、固定与完成确认', async ({ page }) => {
+/** dock 默认收起；展开后列表与面板操作才可见。 */
+async function expandDock(page: Page) {
+  await expect(page.locator('#task-dock-panel')).toBeHidden();
+  await page.locator('#task-dock-toggle').click();
+  await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'expanded');
+  await expect(page.locator('#task-dock-panel')).toBeVisible();
+}
+
+test.describe('浮动 Task dock', () => {
+  test('默认收起、点击展开/收起、悬浮预览、固定与完成确认', async ({ page }) => {
     const base = await baseUrl();
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
     const fixture = await setupTaskRoom(base, suffix, { roots: 2, replies: 4 });
@@ -241,16 +249,24 @@ test.describe('常驻 Task dock', () => {
     if (!oldRoot || !newRoot) throw new Error('Task fixture 缺少 root');
 
     await openRoom(page, base, fixture.owner.token, fixture.roomId);
+    await expect(page.locator('#task-dock-slot')).toHaveCount(1);
+    // 默认收起：只显示入口和 total_count，列表项不可见。
+    await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'collapsed');
+    await expect(page.locator('#task-dock-panel')).toBeHidden();
+    await expect(page.locator('#task-dock-count')).toHaveText('2');
+    await expect(page.locator('#task-dock-toggle')).toContainText('Task');
+    await expect(page.locator('#task-dock .task-dock-item').first()).toBeHidden();
+
+    await expandDock(page);
     await expect(page.locator('#task-dock-count')).toHaveText('2');
     await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(2);
-    await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'expanded');
 
     const oldItem = itemLocator(page, oldRoot);
     await expect(oldItem).toContainText('待办');
     await expect(oldItem).toContainText('1 Agent');
     await expect(oldItem).toContainText('5 消息');
 
-    // 折叠后计数常驻，列表隐藏。
+    // 再次点击收起：计数常驻，列表隐藏；点击重新展开。
     await page.locator('#task-dock-toggle').click();
     await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'collapsed');
     await expect(page.locator('#task-dock-panel')).toBeHidden();
@@ -333,6 +349,176 @@ test.describe('常驻 Task dock', () => {
     expect(completed.items.some((item) => item.root_message_id === newRoot)).toBe(true);
   });
 
+  test('浮动定位不推移消息与输入框，Esc/外部点击收起', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const fixture = await setupTaskRoom(base, suffix, { roots: 2 });
+
+    await openRoom(page, base, fixture.owner.token, fixture.roomId);
+    await expect(page.locator('#task-dock-count')).toHaveText('2');
+    await expect(page.locator('#composer')).toBeVisible();
+    const message = page.locator('.msg').first();
+    await expect(message).toBeVisible();
+
+    const rect = async (locator: Locator) => {
+      const box = await locator.boundingBox();
+      if (!box) throw new Error('布局测量缺少 boundingBox');
+      return box;
+    };
+    const before = {
+      message: await rect(message),
+      composer: await rect(page.locator('#composer')),
+      body: await rect(page.locator('#body')),
+    };
+
+    await expandDock(page);
+    const panelBox = await rect(page.locator('#task-dock-panel'));
+    const composerAfter = await rect(page.locator('#composer'));
+    // 面板在输入框上方浮出，不覆盖 composer。
+    expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(composerAfter.y - 4);
+    const after = {
+      message: await rect(message),
+      composer: composerAfter,
+      body: await rect(page.locator('#body')),
+    };
+    const close = (left: number, right: number) => Math.abs(left - right) <= 1;
+    for (const key of ['message', 'composer', 'body'] as const) {
+      expect(close(after[key].x, before[key].x)).toBe(true);
+      expect(close(after[key].y, before[key].y)).toBe(true);
+      expect(close(after[key].width, before[key].width)).toBe(true);
+      expect(close(after[key].height, before[key].height)).toBe(true);
+    }
+
+    // Esc 收起并把焦点还给入口。
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'collapsed');
+    await expect(page.locator('#task-dock-panel')).toBeHidden();
+    await expect(page.locator('#task-dock-toggle')).toBeFocused();
+
+    // 点击面板外部收起。
+    await page.locator('#task-dock-toggle').click();
+    await expect(page.locator('#task-dock-panel')).toBeVisible();
+    await page.locator('#title').click();
+    await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'collapsed');
+    await expect(page.locator('#task-dock-panel')).toBeHidden();
+  });
+
+  test('入口展开前后位置不变，同一坐标二次点击立即收起', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const fixture = await setupTaskRoom(base, suffix, { roots: 2 });
+
+    await openRoom(page, base, fixture.owner.token, fixture.roomId);
+    await expect(page.locator('#task-dock-slot')).toHaveCount(1);
+    const toggle = page.locator('#task-dock-toggle');
+    const before = await toggle.boundingBox();
+    if (!before) throw new Error('入口缺少 boundingBox');
+    const point = {
+      x: before.x + before.width / 2,
+      y: before.y + before.height / 2,
+    };
+
+    await page.mouse.click(point.x, point.y);
+    await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'expanded');
+    await expect(page.locator('#task-dock-panel')).toBeVisible();
+
+    // 面板向上浮出，入口盒子完全不移动。
+    const after = await toggle.boundingBox();
+    expect(after).toEqual(before);
+    const panel = await page.locator('#task-dock-panel').boundingBox();
+    const head = await page.locator('.task-dock-head').boundingBox();
+    if (!panel || !head) throw new Error('面板或入口缺少 boundingBox');
+    expect(panel.y + panel.height).toBeLessThanOrEqual(head.y);
+
+    // 展开动作不让静止指针自动打开 hover 预览，入口中心仍是命中目标。
+    await page.waitForTimeout(500);
+    await expect(page.locator('.task-preview-popover')).toHaveCount(0);
+    expect(
+      await page.evaluate(({ x, y }) => {
+        const hit = document.elementFromPoint(x, y);
+        return hit instanceof Element && hit.closest('#task-dock-toggle') !== null;
+      }, point),
+    ).toBe(true);
+
+    // 同一坐标立即再次点击必须收起，而不是被预览拦截。
+    await page.mouse.click(point.x, point.y);
+    await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'collapsed');
+    await expect(page.locator('#task-dock-panel')).toBeHidden();
+    await expect(toggle).toBeFocused();
+  });
+
+  test('Task 行 Esc 先关预览再收起，并回焦入口', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const fixture = await setupTaskRoom(base, suffix, { roots: 1 });
+    const rootId = fixture.roots[0];
+    if (!rootId) throw new Error('Task fixture 缺少 root');
+
+    await openRoom(page, base, fixture.owner.token, fixture.roomId);
+    await expandDock(page);
+    const trigger = page.locator('#task-dock .task-dock-item-trigger').first();
+    const popover = page.locator(`#task-preview-${rootId}`);
+
+    // 预览未打开：焦点在 Task 行时 Esc 直接收起，并把焦点还给入口。
+    await trigger.focus();
+    await expect(popover).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'collapsed');
+    await expect(page.locator('#task-dock-panel')).toBeHidden();
+    await expect(page.locator('#task-dock-toggle')).toBeFocused();
+
+    // 预览固定打开：第一次 Esc 只关预览，第二次才收起面板。
+    await expandDock(page);
+    await trigger.focus();
+    await trigger.press('Enter');
+    await expect(popover).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(popover).toBeHidden();
+    await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'expanded');
+    await expect(trigger).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'collapsed');
+    await expect(page.locator('#task-dock-toggle')).toBeFocused();
+  });
+
+  test('展开 dock 不移动可见的「回到最新」', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const fixture = await setupTaskRoom(base, suffix, { roots: 18 });
+
+    await openRoom(page, base, fixture.owner.token, fixture.roomId);
+    await expect(page.locator('#task-dock-count')).toHaveText('18');
+    const messages = page.locator('#messages');
+    await expect(page.locator('#messages .msg')).toHaveCount(18);
+    // 等首屏 keepPinned 的 rAF 结束，避免它把列表重新拉回底部。
+    await page.waitForTimeout(300);
+    // 离开底部让「回到最新」出现，再展开 dock。
+    await messages.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event('scroll'));
+    });
+    const jump = page.locator('#jump-latest');
+    await expect(jump).toBeVisible();
+    const before = await jump.boundingBox();
+    if (!before) throw new Error('「回到最新」缺少 boundingBox');
+
+    await expandDock(page);
+    const after = await jump.boundingBox();
+    expect(after).toEqual(before);
+    expect(
+      await page.evaluate(() => {
+        const button = document.getElementById('jump-latest');
+        if (!button) return false;
+        const box = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          box.x + box.width / 2,
+          box.y + box.height / 2,
+        );
+        return hit instanceof Element && hit.closest('#jump-latest') !== null;
+      }),
+    ).toBe(true);
+  });
+
   test('完成失败保留条目，重试沿用 request_id', async ({ page }) => {
     const base = await baseUrl();
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
@@ -341,6 +527,7 @@ test.describe('常驻 Task dock', () => {
     if (!rootId) throw new Error('Task fixture 缺少 root');
 
     await openRoom(page, base, fixture.owner.token, fixture.roomId);
+    await expandDock(page);
     const requestIds: string[] = [];
     let attempts = 0;
     await page.route('**/mcp', async (route) => {
@@ -437,6 +624,7 @@ test.describe('常驻 Task dock', () => {
 
     await page.reload();
     await expect(page.locator('#task-dock')).toBeVisible();
+    await expandDock(page);
     await expect(page.locator('#task-dock-error')).toContainText('列表读取失败（模拟）');
     await expect(page.locator('#task-dock-count')).toHaveText('…');
     await expect(page.locator('#task-dock-count')).not.toHaveText('0');
@@ -445,11 +633,30 @@ test.describe('常驻 Task dock', () => {
     await page.locator('#task-dock-error button').click();
     await expect(page.locator('#task-dock-count')).toHaveText('1');
 
-    // 完成唯一 Task 后显示空态 `Task 0 / 暂无未完成 Task`。
+    // 展开时完成唯一 Task：保留面板并显示空态，不自动收起。
     await page.locator('#task-dock .task-dock-complete').click();
     await page.locator('#task-complete-confirm').click();
     await expect(page.locator('#task-dock-count')).toHaveText('0');
-    await expect(page.locator('#task-dock-empty')).toHaveText('暂无未完成 Task');
+    await expect(page.locator('#task-dock-empty')).toContainText('暂无未完成 Task');
+    await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'expanded');
+    await expect(page.locator('#task-dock-panel')).toBeVisible();
+
+    // 用户主动关闭后入口消失，不留 `Task 0`。
+    await page.locator('#task-dock-empty-close').click();
+    await expect(page.locator('#task-dock')).toHaveCount(0);
+  });
+
+  test('N=0 且收起时不渲染入口与占位', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const fixture = await setupTaskRoom(base, suffix, { roots: 0 });
+
+    await login(page, base, fixture.owner.token);
+    await page.goto(`${base}/c/${fixture.roomId}`);
+    await expect(page.locator('#title')).toHaveText(`Task Group ${suffix}`);
+    await expect(page.locator('#task-dock')).toHaveCount(0);
+    await expect(page.locator('#task-dock-slot')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText('Task 0');
   });
 
   test('归档只读时禁用完成', async ({ page }) => {
@@ -464,6 +671,7 @@ test.describe('常驻 Task dock', () => {
     await openRoom(page, base, fixture.owner.token, fixture.roomId);
     await expect(page.locator('#room-archive-banner')).toBeVisible();
     await expect(page.locator('#task-dock-count')).toHaveText('1');
+    await expandDock(page);
     await expect(page.locator('#task-dock .task-dock-complete')).toBeDisabled();
   });
 
@@ -476,6 +684,7 @@ test.describe('常驻 Task dock', () => {
 
     await openRoom(page, base, fixture.owner.token, fixture.roomId);
     await expect(page.locator('#task-dock-count')).toHaveText('21');
+    await expandDock(page);
     await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(20);
     await page.locator('#task-dock-load-more').click();
     await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(21);
@@ -532,6 +741,7 @@ test.describe('常驻 Task dock', () => {
 
     await openRoom(page, base, fixture.owner.token, fixture.roomId);
     await expect(page.locator('#task-dock-count')).toHaveText('21');
+    await expandDock(page);
     await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(20);
 
     let cursorRequests = 0;
@@ -642,6 +852,7 @@ test.describe('常驻 Task dock', () => {
     await page.goto(`${base}/c/${fixture.roomId}`);
     await expect(page.locator('#task-dock')).toBeVisible();
     await expect(page.locator('#task-dock-count')).toHaveText('1');
+    await expandDock(page);
     await expect(itemLocator(page, rootId)).toHaveCount(1);
 
     await itemLocator(page, rootId).locator('.task-dock-item-trigger').click();
@@ -769,6 +980,7 @@ test.describe('常驻 Task dock', () => {
     await page.locator(`#room-list a[data-room-id="${roomBId}"]`).click();
     await expect(page.locator('#title')).toHaveText(`Task Room B ${suffix}`);
     await expect(page.locator('#task-dock-count')).toHaveText('2');
+    await expandDock(page);
     await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(2);
     await expect(page.locator('#task-dock')).not.toContainText('迟到的 A Task 不得回填');
     await page.waitForTimeout(2_000);
@@ -789,8 +1001,22 @@ test.describe('mobile Task dock', () => {
 
     await openRoom(page, base, fixture.owner.token, fixture.roomId);
     await expect(page.locator('#task-dock-count')).toHaveText('1');
+    // 默认只显示入口，入口触控高度 >= 44px。
+    await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'collapsed');
+    await expect(page.locator('#task-dock-panel')).toBeHidden();
+    const collapsedDock = await page.locator('#task-dock').boundingBox();
+    expect(collapsedDock?.width ?? 0).toBeLessThanOrEqual(390);
+    const toggleBox = await page.locator('#task-dock-toggle').boundingBox();
+    expect(toggleBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+
+    await expandDock(page);
     const dockBox = await page.locator('#task-dock').boundingBox();
     expect(dockBox?.width ?? 0).toBeLessThanOrEqual(390);
+    const composerBox = await page.locator('#composer').boundingBox();
+    const panelBox = await page.locator('#task-dock-panel').boundingBox();
+    expect((panelBox?.y ?? 0) + (panelBox?.height ?? 0)).toBeLessThanOrEqual(
+      (composerBox?.y ?? 0) - 2,
+    );
     const completeBox = await page
       .locator('#task-dock .task-dock-complete')
       .boundingBox();
