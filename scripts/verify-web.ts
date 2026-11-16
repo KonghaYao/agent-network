@@ -22,8 +22,11 @@ import { FenixApiError } from '../src/web/features/memory/fenix/api';
 import { toHindsightFailure } from '../src/web/features/memory/fenix/failure';
 import { logFenixError } from '../src/web/features/memory/fenix/log-error';
 import {
+  appendMention,
   buildSendPlan,
+  resolveReplyAgentTarget,
   type HistoryItem,
+  type HistoryMessage,
   type RoomMember,
   type RoomView,
 } from '../src/web/lib/chat';
@@ -4110,6 +4113,7 @@ function runAutoMentionPlanChecks(): void {
       identityKind?: 'human' | 'agent';
       items?: HistoryItem[];
       hasAttachments?: boolean;
+      hasReply?: boolean;
       selections?: { actor_id: string; name: string; kind: 'human' | 'agent' }[];
     } = {},
   ) =>
@@ -4122,6 +4126,7 @@ function runAutoMentionPlanChecks(): void {
       selections: options.selections ?? [],
       items: options.items ?? [],
       hasAttachments: options.hasAttachments ?? false,
+      hasReply: options.hasReply ?? false,
     });
 
   const previous = plan('接着处理', { items: [planMessage(agentA.actor_id, '1')] });
@@ -4238,6 +4243,82 @@ function runAutoMentionPlanChecks(): void {
   });
   checkEqual('计划：人类选择器仍显式发送 invoke（可为空）', humanSelected.invokeExplicit, true);
   checkEqual('计划：人类选择器进入 mentions', humanSelected.mentions[0], humanTarget.actor_id);
+
+  // 回复自动 @：追加格式、去重与线程目标解析。
+  checkEqual('计划：回复自动 @ 追加尾随空格', appendMention('', agentA.name), `@${agentA.name} `);
+  checkEqual(
+    '计划：回复自动 @ 补分隔空格',
+    appendMention('请处理', agentA.name),
+    `请处理 @${agentA.name} `,
+  );
+  checkEqual(
+    '计划：回复自动 @ 不重复已有 token',
+    appendMention(`@${agentA.name} 请处理`, agentA.name),
+    `@${agentA.name} 请处理`,
+  );
+
+  const threadMessage = (
+    senderId: string,
+    seq: string,
+    replyTo: string | null,
+    rootId: string | null,
+  ): HistoryMessage => {
+    const message = planMessage(senderId, seq);
+    if (message.kind === 'presence') throw new Error('unexpected presence item');
+    return { ...message, reply_to: replyTo, root_id: rootId, hop: replyTo ? 1 : 0 };
+  };
+  const resolve = (items: HistoryItem[], messageId: string, identityId = human.actor_id) =>
+    resolveReplyAgentTarget({
+      items,
+      messageId,
+      members,
+      identityId,
+    });
+
+  const agentRoot = threadMessage(agentA.actor_id, '20', null, null);
+  const humanMiddle = threadMessage(human.actor_id, '21', agentRoot.message_id, agentRoot.message_id);
+  const humanTail = threadMessage(human.actor_id, '22', humanMiddle.message_id, agentRoot.message_id);
+  const threadItems = [agentRoot, humanMiddle, humanTail];
+  checkEqual(
+    '计划：回复消息优先命中被回复 Agent',
+    resolve(threadItems, agentRoot.message_id)?.actor_id,
+    agentA.actor_id,
+  );
+  checkEqual(
+    '计划：回复人类时沿线程找到最上面的非自己 Agent',
+    resolve(threadItems, humanTail.message_id)?.actor_id,
+    agentA.actor_id,
+  );
+
+  const humanRoot = threadMessage(human.actor_id, '30', null, null);
+  const agentTop = threadMessage(agentA.actor_id, '31', humanRoot.message_id, humanRoot.message_id);
+  const agentBottom = threadMessage(agentB.actor_id, '32', agentTop.message_id, humanRoot.message_id);
+  const humanTail2 = threadMessage(human.actor_id, '33', agentBottom.message_id, humanRoot.message_id);
+  checkEqual(
+    '计划：父链多个 Agent 时选最上面的一个',
+    resolve([humanRoot, agentTop, agentBottom, humanTail2], humanTail2.message_id)?.actor_id,
+    agentA.actor_id,
+  );
+
+  const pureRoot = threadMessage(human.actor_id, '40', null, null);
+  const pureTail = threadMessage(humanTarget.actor_id, '41', pureRoot.message_id, pureRoot.message_id);
+  checkEqual(
+    '计划：纯人类线程不自动 @',
+    resolve([pureRoot, pureTail], pureTail.message_id),
+    null,
+  );
+  checkEqual(
+    '计划：回复自己的 Agent 消息不自动 @',
+    resolve([agentRoot], agentRoot.message_id, agentA.actor_id),
+    null,
+  );
+
+  const replied = plan('接着处理', {
+    items: [planMessage(agentA.actor_id, '50')],
+    hasReply: true,
+  });
+  checkEqual('计划：回复时跳过 legacy 自动 @', replied.body, '接着处理');
+  checkEqual('计划：回复时没有目标则省略 invoke', replied.invokeExplicit, false);
 }
 
 /**
