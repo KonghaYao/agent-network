@@ -96,6 +96,30 @@ async function login(page: Page, base: string, token: string): Promise<void> {
   );
 }
 
+/** 在页面内真实构造 DataTransfer 并派发拖拽事件；返回默认行为是否被阻止。 */
+async function dragFile(
+  page: Page,
+  selector: string,
+  type: 'dragenter' | 'dragover' | 'drop',
+  name: string,
+): Promise<boolean> {
+  return page.evaluate(
+    ({ selector: targetSelector, type: eventType, name: fileName }) => {
+      const target = document.querySelector(targetSelector);
+      if (!target) throw new Error(`拖拽目标不存在: ${targetSelector}`);
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([`dropzone ${fileName}`], fileName, { type: 'text/plain' }));
+      const event = new DragEvent(eventType, {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: transfer,
+      });
+      return !target.dispatchEvent(event);
+    },
+    { selector, type, name },
+  );
+}
+
 test.describe.serial('SPA 组件库与状态管理', () => {
 
   let base = '';
@@ -328,6 +352,76 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(page.locator('#composer-files .composer-file-meta')).not.toContainText('上传中', {
       timeout: 15_000,
     });
+  });
+
+  test('聊天区拖拽上传：单一 dropzone 覆盖消息区、阻止默认并生成 chip', async ({ page }) => {
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#composer')).toBeVisible();
+    await expect(page.locator('#body')).toBeEnabled();
+    const name = `chat-drop-${Date.now()}.txt`;
+    const before = page.url();
+
+    expect(await dragFile(page, '#messages', 'dragenter', name)).toBe(true);
+    const overlay = page.locator('#composer-drop');
+    await expect(overlay).toBeVisible();
+    const overlayBox = await overlay.boundingBox();
+    const bodyBox = await page.locator('#chat-body').boundingBox();
+    expect(overlayBox && bodyBox).toBeTruthy();
+    if (overlayBox && bodyBox) {
+      // 提示层的视觉范围必须接近整个聊天区，和实际命中范围一致。
+      expect(overlayBox.width).toBeGreaterThan(bodyBox.width * 0.9);
+      expect(overlayBox.height).toBeGreaterThan(bodyBox.height * 0.9);
+    }
+    expect(await dragFile(page, '#messages', 'dragover', name)).toBe(true);
+    expect(await dragFile(page, '#messages', 'drop', name)).toBe(true);
+
+    await expect(overlay).toBeHidden();
+    expect(page.url()).toBe(before);
+    const chip = page.locator('#composer-files .composer-file');
+    await expect(chip).toHaveCount(1);
+    await expect(chip).toHaveAttribute('data-file-id', /.+/, { timeout: 15_000 });
+    await expect(chip.locator('.composer-file-meta')).not.toContainText('上传中');
+  });
+
+  test('只读归档房间不显示输入区，聊天区拖拽不上传且不导航', async ({ page }) => {
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const created = await callTool<{ room: { room_id: string } }>(
+      base,
+      tokenA,
+      'network_room_create',
+      {
+        request_id: requestId('e2e_readonly'),
+        kind: 'group',
+        title: `只读群 ${suffix}`,
+        members: [actorB],
+      },
+    );
+    const readOnlyRoom = created.room.room_id;
+    await callTool(base, tokenA, 'network_room_dissolve', {
+      request_id: requestId('e2e_dissolve'),
+      room_id: readOnlyRoom,
+    });
+
+    const uploads: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/mcp-upload')) uploads.push(request.url());
+    });
+
+    await page.goto(`${base}/c/${readOnlyRoom}`);
+    await expect(page.locator('#room-archive-banner')).toBeVisible();
+    await expect(page.locator('#composer')).toHaveCount(0);
+    await expect(page.locator('#composer-drop')).toHaveCount(0);
+    const before = page.url();
+
+    await dragFile(page, '#chat-body', 'dragenter', 'readonly-drop.txt');
+    await expect(page.locator('#composer-drop')).toHaveCount(0);
+    expect(await dragFile(page, '#chat-body', 'dragover', 'readonly-drop.txt')).toBe(true);
+    expect(await dragFile(page, '#chat-body', 'drop', 'readonly-drop.txt')).toBe(true);
+    await page.waitForTimeout(500);
+
+    expect(page.url()).toBe(before);
+    expect(uploads).toEqual([]);
+    await expect(page.locator('#composer-files .composer-file')).toHaveCount(0);
   });
 
   test('成员/公告/改名弹窗与确认框：Esc、背板、焦点与提交', async ({ page }) => {

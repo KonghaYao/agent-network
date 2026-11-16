@@ -11,7 +11,6 @@ import {
   type ClipboardEvent,
   type KeyboardEvent,
 } from 'react';
-import { useDropzone } from 'react-dropzone';
 
 import { LIMITS } from '../../../contracts/limits';
 import {
@@ -100,6 +99,11 @@ interface ComposerProps {
   onCancelReply: () => void;
   onSend: (input: ComposerSendInput) => Promise<SendOutcome>;
   onStatus: (message: string) => void;
+  /**
+   * 聊天区 dropzone 的唯一上传入口。Composer 挂载时注册 `addFiles`，
+   * 卸载时注销；拖拽事件由 ChatPage 的 `#chat-body` 统一接收，避免双处理。
+   */
+  registerFileDrop: (handler: ((files: File[]) => void) | null) => void;
 }
 
 function draftKey(actorId: string, roomId: string): string {
@@ -136,7 +140,8 @@ function fileMeta(file: ComposerFile): string {
  *
  * - 提及用 Ariakit Combobox，textarea 不替换；组合输入期间不打开候选；
  * - 附件仍走 XHR 上传进度与 `network_room_file_bind`；
- * - react-dropzone 只接管拖拽/粘贴入口，点击上传保持原按钮。
+ * - 拖拽由 ChatPage 的聊天区 dropzone 统一接管，这里只注册上传回调；
+ *   粘贴、画板与点击上传仍在本组件内完成。
  */
 export function Composer({
   room,
@@ -148,6 +153,7 @@ export function Composer({
   onCancelReply,
   onSend,
   onStatus,
+  registerFileDrop,
 }: ComposerProps) {
   const key = draftKey(identity.actor_id, room.room_id);
   const [text, setText] = useState(() => readDraft(key));
@@ -315,12 +321,10 @@ export function Composer({
     [onStatus, room.room_id, token],
   );
 
-  const { getRootProps, isDragActive } = useDropzone({
-    noClick: true,
-    noKeyboard: true,
-    multiple: true,
-    onDrop: addFiles,
-  });
+  useEffect(() => {
+    registerFileDrop(addFiles);
+    return () => registerFileDrop(null);
+  }, [addFiles, registerFileDrop]);
 
   const openDrawboard = useCallback(
     async (forceRetry = false) => {
@@ -485,19 +489,13 @@ export function Composer({
         ))}
       </Ariakit.ComboboxPopover>
       <form
-        {...getRootProps({
-          id: 'composer',
-          className: 'composer',
-          onSubmit: (event) => {
-            event.preventDefault();
-            void submit();
-          },
-        })}
+        id="composer"
+        className="composer"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
       >
-        <div id="composer-drop" className="composer-drop" hidden={!isDragActive}>
-          <span className="composer-drop-title">松开上传附件</span>
-          <span className="composer-drop-hint">支持拖拽多个文件，上传后随消息发送</span>
-        </div>
         <DropdownMenuPrimitive.Root>
           <DropdownMenuPrimitive.Trigger asChild>
             <button
