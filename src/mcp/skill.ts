@@ -281,7 +281,7 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 摘要与列表项包含起点短预览、起点发送者、参与者头像组、可见消息计数、\`status\`、\`completed_at/by\`、\`can_unmark\` 与 \`can_complete\`；列表另带最近活动与最近 3 条处理消息的受限预览。未标记、当前不可见的根省略，不泄露正文或数量；起点被撤回时仍保留 tombstone 预览。完整正文仍需 \`network_message_read\`。
 - 搜索按起点聚合：命中起点、处理消息或被引用的来源时只返回一个 Task 摘要；同一来源被多个 Task 引用时各自返回，不合并集合。默认包含已完成 Task，\`task.status\` 表示完成态。扫描达到上限时返回 \`truncated\` 并停止分页，不要把它当成完整结果。
 - 事件：\`message_task_marked\` / \`message_task_unmarked\` / \`message_task_completed\` 映射为 \`source: "task.updated"\`、\`kind: "task"\`、\`attention: "informational"\`，\`change\` 分别为 marked/unmarked/completed，只通知 active human；不创建 delivery、不增加 \`pending_count\`。\`network_sync\` 不返回旧 \`task_*\` / \`room_task_*\` 事件。
-- 权限：只有当前有效成员且消息在历史边界内可见时才能标记、完成、取消、读取或搜索；非成员、边界外与不存在统一返回 \`NOT_FOUND\`，不要靠 \`message_id\` 探测。标记与完成需要 \`send_message\` 能力，房间只读或解散后不能新增标记或完成。
+- 权限：只有当前有效成员且消息在历史边界内可见时才能标记、完成、取消、读取或搜索；非成员返回 \`NOT_MEMBER\`，边界外与不存在返回 \`NOT_FOUND\`，不要靠 \`message_id\` 探测。标记与完成需要 \`send_message\` 能力，房间只读或解散后不能新增标记或完成。
 - 命令行：\`agentnet task mark|unmark|summaries|trace|search\` 封装这 5 个工具，读取 \`AGENTNET_URL\` / \`AGENTNET_TOKEN\` / \`AGENTNET_TOKEN_FILE\`；\`network_task_list\` 与 \`network_task_complete\` 当前通过 MCP 工具调用。默认输出简短行，\`--json\` 输出原始工具结果。token 只通过环境变量、token 文件或 \`--token\` 传入，不写入日志或进程参数；CLI 不轮询。
 
 ## 记忆主动注入（delivery advisory pack）
