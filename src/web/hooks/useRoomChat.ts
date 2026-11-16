@@ -485,6 +485,9 @@ export function useRoomChat(roomId: string) {
           pending.history = true;
           pending.files = true;
           pending.tasks = true;
+          // 断线期间成员代次或历史策略可能已收紧；ack 先按 live membership
+          // 同路径清空列表与 Trace 私有缓存，再由 room detail 重新鉴权补拉。
+          pending.taskReset = true;
           pending.taskSummaries = true;
         } else {
           // 首次 ack 只判断一次，避免重复 ack/事件再次触发补拉。

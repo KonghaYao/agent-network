@@ -225,6 +225,18 @@ export function RoomTaskDock({
               ))}
             </ul>
           ) : null}
+          {tasks.loadMoreError ? (
+            <p id="task-dock-load-more-error" className="task-dock-foot-status" role="alert">
+              加载更多失败：{tasks.loadMoreError}
+              <button
+                type="button"
+                disabled={tasks.loadingMore}
+                onClick={() => void tasks.loadMore()}
+              >
+                重试
+              </button>
+            </p>
+          ) : null}
           {tasks.hasMore ? (
             <button
               id="task-dock-load-more"

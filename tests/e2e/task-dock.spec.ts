@@ -209,6 +209,23 @@ function itemLocator(page: Page, rootId: string) {
   return page.locator(`#task-dock .task-dock-item[data-task-root="${rootId}"]`);
 }
 
+const STREAM_ACK_FRAME = `data: ${JSON.stringify({
+  jsonrpc: '2.0',
+  method: 'notifications/subscriptions/acknowledged',
+  params: { notifications: { resourceSubscriptions: ['agentnet://stream'] } },
+})}\n\n`;
+
+function toolErrorBody(id: unknown, code: string, message: string): string {
+  return JSON.stringify({
+    jsonrpc: '2.0',
+    id,
+    result: {
+      isError: true,
+      content: [{ type: 'text', text: JSON.stringify({ code, message }) }],
+    },
+  });
+}
+
 async function openRoom(page: Page, base: string, token: string, roomId: string) {
   await login(page, base, token);
   await page.goto(`${base}/c/${roomId}`);
@@ -506,6 +523,150 @@ test.describe('常驻 Task dock', () => {
     await page.locator('#task-trace-close').click();
     await expect(itemLocator(page, targetRoot)).toHaveCount(0, { timeout: 10_000 });
     await expect(page.locator('#task-dock-count')).toHaveText('20', { timeout: 10_000 });
+  });
+
+  test('过期游标自动重建首页并提示', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const fixture = await setupTaskRoom(base, suffix, { roots: 21 });
+
+    await openRoom(page, base, fixture.owner.token, fixture.roomId);
+    await expect(page.locator('#task-dock-count')).toHaveText('21');
+    await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(20);
+
+    let cursorRequests = 0;
+    let rebuildRequests = 0;
+    let expired = false;
+    await page.route('**/mcp', async (route) => {
+      const request = route.request();
+      if (request.headers()['mcp-name'] !== 'network_task_list') {
+        await route.continue();
+        return;
+      }
+      const parsed = JSON.parse(request.postData() ?? '{}') as {
+        id?: unknown;
+        params?: { arguments?: { cursor?: unknown } };
+      };
+      const cursor = parsed.params?.arguments?.cursor;
+      if (typeof cursor !== 'string' || cursor.length === 0) {
+        rebuildRequests += 1;
+        await route.continue();
+        return;
+      }
+      cursorRequests += 1;
+      if (expired) {
+        await route.continue();
+        return;
+      }
+      expired = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: toolErrorBody(
+          parsed.id,
+          'CURSOR_EXPIRED',
+          'Task 列表已变化，请重新加载',
+        ),
+      });
+    });
+
+    // 第二页返回过期游标：自动回首页一次，并保留可继续翻页的新游标。
+    await page.locator('#task-dock-load-more').click();
+    await expect(page.locator('#task-dock-notice')).toHaveText(
+      'Task 列表已更新，已重新加载首页',
+    );
+    await expect(page.locator('#task-dock-count')).toHaveText('21');
+    await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(20);
+    await expect(page.locator('#task-dock-load-more-error')).toHaveCount(0);
+    await expect(page.locator('#task-dock')).not.toContainText('刷新失败');
+    expect(cursorRequests).toBe(1);
+    expect(rebuildRequests).toBeGreaterThanOrEqual(1);
+
+    await page.locator('#task-dock-load-more').click();
+    await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(21);
+    expect(cursorRequests).toBe(2);
+  });
+
+  test('重连 ack 清空 Task 列表与 Trace 缓存后重新鉴权', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const fixture = await setupTaskRoom(base, suffix, { roots: 1 });
+    const rootId = fixture.roots[0];
+    if (!rootId) throw new Error('Task fixture 缺少 root');
+
+    let releaseStream: (() => void) | null = null;
+    const streamGate = new Promise<void>((release) => {
+      releaseStream = release;
+    });
+    let listenCount = 0;
+    let failTaskReads = false;
+    let listRequests = 0;
+    let traceRequests = 0;
+
+    // 首页先正常加载；路由只接管进入房间后的第一条订阅流。
+    await login(page, base, fixture.owner.token);
+    await page.route('**/mcp', async (route) => {
+      const request = route.request();
+      const method = request.headers()['mcp-method'];
+      if (method === 'subscriptions/listen') {
+        listenCount += 1;
+        if (listenCount === 1) {
+          // 首条连接由测试提供，等首屏数据就绪后再发两个 ack：
+          // 第一个是首次 ack，第二个在同一条流里触发 reconnect 分支。
+          await streamGate;
+          await route.fulfill({
+            status: 200,
+            contentType: 'text/event-stream',
+            body: `${STREAM_ACK_FRAME}${STREAM_ACK_FRAME}`,
+          });
+          return;
+        }
+        await route.continue();
+        return;
+      }
+      const name = request.headers()['mcp-name'];
+      if (name === 'network_task_list') listRequests += 1;
+      if (name === 'network_task_trace') traceRequests += 1;
+      if (failTaskReads && (name === 'network_task_list' || name === 'network_task_trace')) {
+        const parsed = JSON.parse(request.postData() ?? '{}') as { id?: unknown };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: toolErrorBody(parsed.id, 'INTERNAL', '重连后读取失败（模拟）'),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.goto(`${base}/c/${fixture.roomId}`);
+    await expect(page.locator('#task-dock')).toBeVisible();
+    await expect(page.locator('#task-dock-count')).toHaveText('1');
+    await expect(itemLocator(page, rootId)).toHaveCount(1);
+
+    await itemLocator(page, rootId).locator('.task-dock-item-trigger').click();
+    await page.getByRole('button', { name: /查看全部 1 条消息/ }).click();
+    await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(1);
+
+    const listBefore = listRequests;
+    const traceBefore = traceRequests;
+    failTaskReads = true;
+    releaseStream!();
+
+    // reset 而不是 invalidate：旧数据立即丢弃，重读失败时不能继续展示旧列表。
+    await expect(page.locator('#task-dock-error')).toContainText(
+      '重连后读取失败（模拟）',
+      { timeout: 10_000 },
+    );
+    await expect(page.locator('#task-dock-count')).toHaveText('…');
+    await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(0);
+    await expect(page.locator('#task-trace-status')).toContainText(
+      '重连后读取失败（模拟）',
+      { timeout: 10_000 },
+    );
+    await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(0);
+    expect(listRequests).toBeGreaterThan(listBefore);
+    expect(traceRequests).toBeGreaterThan(traceBefore);
   });
 
   test('切房后迟到的列表响应不回填', async ({ page }) => {

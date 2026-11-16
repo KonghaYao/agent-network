@@ -40,6 +40,8 @@ export interface RoomTasksState {
   notice: string | null;
   hasMore: boolean;
   loadingMore: boolean;
+  /** `network_task_list` 翻页失败；列表本身仍保留上一页数据。 */
+  loadMoreError: string | null;
   completingRootId: string | null;
   loadMore: () => Promise<void>;
   retry: () => Promise<void>;
@@ -238,17 +240,19 @@ export function useRoomTasks({
     if (!query.hasNextPage || query.isFetchingNextPage) return;
     setNotice(null);
     try {
-      await query.fetchNextPage();
+      // TanStack Query 默认把查询错误解析为结果；只有显式 throwOnError 才能
+      // 在调用点区分 CURSOR_EXPIRED 与普通失败。
+      await query.fetchNextPage({ throwOnError: true });
     } catch (error) {
       const failure = error as McpError;
       if (failure.code === 'ABORTED') return;
       if (failure.code === 'CURSOR_EXPIRED') {
         // 集合 revision 已变：回首页一次，不循环重试旧游标。
-        await rebuildFirstPage();
-        setNotice('Task 列表已更新，已重新加载首页');
+        const rebuilt = await rebuildFirstPage();
+        if (rebuilt) setNotice('Task 列表已更新，已重新加载首页');
         return;
       }
-      setNotice(`加载更多失败：${failureMessage(error)}`);
+      // 列表保留已加载页；错误与重试由 dock 底部的 loadMoreError 呈现。
     }
   }, [query, rebuildFirstPage]);
 
@@ -276,10 +280,13 @@ export function useRoomTasks({
     error: !query.data && query.isError ? failureMessage(query.error) : null,
     refreshError:
       rebuildError ??
-      (query.data && query.isError ? failureMessage(query.error) : null),
+      (query.data && query.isError && !query.isFetchNextPageError
+        ? failureMessage(query.error)
+        : null),
     notice,
     hasMore: query.hasNextPage,
     loadingMore: query.isFetchingNextPage,
+    loadMoreError: query.isFetchNextPageError ? failureMessage(query.error) : null,
     completingRootId: completeMutation.isPending
       ? completeMutation.variables?.rootId ?? null
       : null,
