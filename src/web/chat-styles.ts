@@ -1,4 +1,8 @@
 import { GROUP_STYLE } from './chat-group-styles';
+import { GROUP_COLORS } from './lib/group-colors';
+
+/** 调色板首色，仅作为 `--group-color` 缺失时的 CSS 回退。 */
+const GROUP_COLOR_FALLBACK = GROUP_COLORS[0]!.hex;
 
 /**
  * 应用页（会话列表 + 聊天区）的全部内联样式。
@@ -260,9 +264,11 @@ export const APP_STYLE = `
     font-size: 16px; font-weight: 500; }
   .avatar-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
     gap: 1px; border-radius: 6px; background: var(--wx-line); }
-  /* 群聊专属色由 room_id 派生，四个首字色块共用同一个 --group-color。 */
+  /* 群聊专属色由 room_id 派生，四个首字色块共用同一个 --group-color；
+     变量缺失时回退到调色板首色，保证色块仍有底色。 */
   .avatar-cell { display: grid; place-items: center; width: 100%; height: 100%;
-    font-size: 10px; line-height: 1; color: #fff; background: var(--group-color); }
+    font-size: 10px; line-height: 1; color: #fff;
+    background: var(--group-color, ${GROUP_COLOR_FALLBACK}); }
   /*
    * 群聊头部色标：与列表头像同色。颜色只作辅助提示，群名与“群聊 · N 人”
    * 已表达身份；色标 aria-hidden。描边在浅色/暗色下都帮助色块脱离背景。

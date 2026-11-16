@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { groupColorFor } from '../../src/web/lib/group-colors';
+import { avatarColor } from '../../src/web/lib/rooms';
 
 /**
  * 群聊专属色 e2e：真实 MCP 身份/房间，验证列表 2×2 头像与聊天头部色标。
@@ -226,6 +227,14 @@ test.describe('群聊专属色', () => {
     await expect(directRow).toBeVisible();
     await expect(directRow.locator('.avatar-grid')).toHaveCount(0);
     await expect(directRow.locator('.avatar')).toHaveCount(1);
+
+    // 直聊头像仍按名称派生：运行时读取背景色，防止群色重构误改直聊。
+    const directName = (await directRow.getAttribute('data-room-name')) ?? '';
+    expect(directName).not.toBe('');
+    const directBackground = await directRow
+      .locator('.avatar')
+      .evaluate((avatar) => getComputedStyle(avatar).backgroundColor);
+    expect(directBackground).toBe(hexToRgb(avatarColor(directName)));
 
     await page.locator('#room-filter-group').click();
     const rowA = page.locator(`#room-list a[data-room-id="${groupA.roomId}"]`);

@@ -73,7 +73,9 @@ const SEMANTIC_COLORS: { label: string; rgb: Rgb }[] = [
 ];
 
 function verifyPalette(): void {
-  check('调色板至少 8 色', GROUP_COLORS.length >= 8, GROUP_COLORS.length);
+  // 映射是 `hash % length`，长度变化会重排所有已有群的颜色。锁死 10 色，
+  // 让任何扩色都必须连同版本化迁移一起显式修改本断言。
+  checkEqual('调色板长度锁定为 10（变更需版本化迁移）', GROUP_COLORS.length, 10);
   check(
     '调色板下标连续且唯一',
     GROUP_COLORS.every((color, index) => color.index === index),
