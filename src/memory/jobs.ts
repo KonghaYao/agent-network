@@ -403,7 +403,9 @@ export async function mergeMemoryJobResult(
     .first<{ result_json: string | null }>();
   if (!row) return;
   await db
-    .prepare('UPDATE memory_jobs SET result_json = ?, updated_at = ? WHERE job_id = ?')
+    .prepare(
+      "UPDATE memory_jobs SET result_json = ?, updated_at = ? WHERE job_id = ? AND status = 'unknown'",
+    )
     .bind(mergeResultJson(row.result_json, options.patch), at, options.jobId)
     .run();
 }
