@@ -33,6 +33,7 @@ $WEBBOTS_HOME/wake.queue
 - 文件被 truncate 时，消费者把偏移回退到 0；
 - 单写者：同一个 `WEBBOTS_HOME` 只运行一个 `agentnet monitor --harness dsh`；
 - 不写正文、preview、token 或 claim_id，只写定位字段。
+- 不写记忆正文；`wake.queue` 字段保持不变。Agent 被唤醒后按需调用一次 `network_memory_context_pack { room_id, message_id? }`，没有可用记忆时返回空包，不阻塞处理。
 
 固定字段：
 

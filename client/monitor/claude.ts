@@ -37,6 +37,8 @@ export async function runClaudeMonitor(
     json?: boolean;
     maxRuntimeMs?: number;
     roomEvents?: RoomEventScope | false;
+    /** 缺省 full：delivery 事件与 event_file 携带完整记忆参考包。 */
+    memoryContext?: boolean;
   } = {},
 ): Promise<number> {
   const token = context.token;
@@ -85,6 +87,7 @@ export async function runClaudeMonitor(
       maxRuntimeMs: options.maxRuntimeMs ?? 0,
       onDeadline: stop,
       roomEvents: options.roomEvents,
+      memoryMode: options.memoryContext === false ? 'off' : 'full',
     });
     return await engine.run();
   } finally {

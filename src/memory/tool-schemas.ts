@@ -7,6 +7,7 @@
  */
 import { z } from 'zod';
 
+import { LIMITS } from '../contracts/limits';
 import {
   MEMORY_EXPOSURE_EVIDENCE_KINDS,
   MEMORY_ORIGIN_KINDS,
@@ -130,6 +131,20 @@ export const memoryExperienceListInputSchema = z.strictObject({
 
 export const memoryExperienceGetInputSchema = z.strictObject({
   experience_id: id,
+});
+
+/**
+ * Phase C：delivery 记忆参考包输入。
+ *
+ * 只接受当前房间定位与有界条数；没有 agent_id/space_id/provider，调用者
+ * 只能读取自己的 active space。`query` 只做当前 room 候选的文本过滤，
+ * 不是第二套召回。
+ */
+export const memoryContextPackInputSchema = z.strictObject({
+  room_id: id,
+  message_id: id.optional(),
+  limit: positive.max(LIMITS.memoryInjectMessageMaxItems).optional(),
+  query: z.string().trim().min(1).max(200).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -326,6 +341,65 @@ export const memoryExperienceGetOutputSchema = z.looseObject({
   experience_id: z.string(),
   item: z.record(z.string(), z.unknown()).optional(),
   text: z.string().optional(),
+});
+
+/**
+ * Phase C：参考包输出。`authority=reference_data` 与
+ * `injection.eligible=false` 明确它不是 bound Context，也不产生注入许可。
+ */
+export const memoryContextPackOutputSchema = z.looseObject({
+  pack_id: z.string(),
+  trigger: z.literal('message'),
+  available: z.boolean(),
+  reason: z.enum([
+    'ready',
+    'empty',
+    'no_space',
+    'excluded',
+    'memory_disabled',
+    'injection_disabled',
+    'timeout',
+    'unavailable',
+    'target_invalid',
+  ]),
+  authority: z.literal('reference_data'),
+  as_of: z.number(),
+  expires_at: z.number(),
+  room_id: z.string(),
+  message_id: z.string().nullable(),
+  items: z
+    .array(
+      z.looseObject({
+        item_id: z.string(),
+        kind: z.enum(['experience', 'source']),
+        text: z.string(),
+        text_bytes: z.number(),
+        origin_room_id: z.string(),
+        source_message_id: z.string().nullable(),
+        sender_id: z.string().nullable(),
+        evidence: z.string().nullable(),
+        source_kind: z.string().nullable(),
+      }),
+    )
+    .readonly(),
+  item_count: z.number(),
+  items_bytes: z.number(),
+  truncated: z.boolean(),
+  omitted: z.number(),
+  stats: z.looseObject({
+    sources: z.number(),
+    experiences: z.number(),
+    rooms: z.number(),
+  }),
+  semantic: z.looseObject({
+    status: z.literal('not_requested'),
+    context_ref: z.string().nullable(),
+  }),
+  injection: z.looseObject({
+    eligible: z.literal(false),
+    admit_required: z.literal(true),
+    reason: z.literal('advisory_only'),
+  }),
 });
 
 export const memoryCatalogSchema = z.looseObject({

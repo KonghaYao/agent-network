@@ -398,6 +398,7 @@ async function main(): Promise<void> {
     'network_delivery_cancel',
     'network_delivery_retry',
     'network_memory_status',
+    'network_memory_context_pack',
     'network_memory_recall',
     'network_memory_context_list',
     'network_memory_context_get',
@@ -512,6 +513,7 @@ async function main(): Promise<void> {
     'network_delivery_retry',
     'network_sync',
     'network_memory_status',
+    'network_memory_context_pack',
     'network_memory_recall',
     'network_memory_context_list',
     'network_memory_host_bind',
@@ -1401,7 +1403,7 @@ async function main(): Promise<void> {
   }>(newAgentMe.body);
   const memoryCatalog = meService?.service?.memory;
   check('network_me 返回 memory 能力目录', memoryCatalog !== undefined, meService);
-  checkEqual('memory contract version 一致', memoryCatalog?.contract_version, '2026-11-09.1');
+  checkEqual('memory contract version 一致', memoryCatalog?.contract_version, '2026-11-10.1');
   check(
     'memory 工具目录与 tools/list 一致',
     Array.isArray(memoryCatalog?.tools) &&

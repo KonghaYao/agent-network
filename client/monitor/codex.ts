@@ -19,9 +19,15 @@
  */
 
 import { CliError, resolveConfig } from '../mcp';
+import { LIMITS } from '../../src/contracts/limits';
 import { asArray, asNumber, asRecord, asString } from '../output';
 import { abortableSleep, claimDelivery } from './engine';
 import { visibleWithoutRoomEvents, type ClaimInfo } from './events';
+import {
+  fetchMemoryPack,
+  memoryPromptBlock,
+  type MemoryContextResult,
+} from './memory';
 import {
   AsyncQueue,
   CodexCallError,
@@ -69,9 +75,9 @@ function fail(line: string): number {
   return 1;
 }
 
-function steerPrompt(body: string): string {
+function steerPrompt(body: string, memory: string): string {
   return (
-    'Agent Network 有一条新的用户消息在你工作期间到达。桥接器已自动领取该投递，' +
+    `${memory.length > 0 ? `${memory}\n\n` : ''}Agent Network 有一条新的用户消息在你工作期间到达。桥接器已自动领取该投递，` +
     '本条只供你调整当前工作；当前回合结束后会单独处理并答复，不要在此重复结束投递。\n\n' +
     `新消息：\n${body}`
   );
@@ -86,9 +92,9 @@ function queuedPrompt(body: string): string {
   );
 }
 
-function taskPrompt(deliveryId: string, claim: ClaimInfo, body: string): string {
+function taskPrompt(deliveryId: string, claim: ClaimInfo, body: string, memory: string): string {
   return (
-    '这是一条来自 Agent Network 的用户任务。桥接器已自动领取投递并读取正文；' +
+    `${memory.length > 0 ? `${memory}\n\n` : ''}这是一条来自 Agent Network 的用户任务。桥接器已自动领取投递并读取正文；` +
     `claim 已就绪（delivery_id=${deliveryId}, attempt=${claim.attempt}, ` +
     `claim_id=${claim.claimId}）。` +
     '你只需要处理下面的任务，给出最终答复，桥接器会用该答复结束投递。' +
@@ -124,6 +130,8 @@ interface CodexWatcherOptions {
   log?: (line: string) => void;
   /** false 时只关闭 informational 房间事件；投递、回执与提醒仍记录。 */
   roomEvents?: boolean;
+  /** delivery 记忆参考包；缺省开启，`--no-memory-context` 关闭。 */
+  memoryContext?: boolean;
 }
 
 class CodexWatcher {
@@ -133,6 +141,10 @@ class CodexWatcher {
   private readonly log: (line: string) => void;
   private readonly events = new AsyncQueue<WatcherEvent>();
   private readonly roomEvents: boolean;
+  private readonly memoryContext: boolean;
+  private readonly memoryResults = new Map<string, MemoryContextResult>();
+  private readonly memoryInflight = new Map<string, Promise<MemoryContextResult>>();
+  private memoryToolUnavailable = false;
 
   private readonly outstanding = new Map<string, JsonObject>();
   private readonly delivered = new Map<string, number>();
@@ -154,6 +166,7 @@ class CodexWatcher {
     this.signal = AbortSignal.any([options.signal, this.controller.signal]);
     this.log = options.log ?? writeStdout;
     this.roomEvents = options.roomEvents !== false;
+    this.memoryContext = options.memoryContext !== false;
     this.rpc = new MonitorRpc({
       endpoint: options.endpoint,
       token: options.token,
@@ -163,8 +176,44 @@ class CodexWatcher {
     });
   }
 
-  async run(): Promise<number> {
-    let stream: Promise<void> | null = null;
+  /**
+   * 每个已 claim 的 delivery:attempt 最多一次；并发合并、重连复用。
+   * Codex 只用它构造 prompt，不写 wake.queue 或事件文件。
+   */
+  private async memoryForDelivery(
+    deliveryId: string,
+    roomId: string,
+    messageId: string,
+    claim: ClaimInfo,
+  ): Promise<MemoryContextResult> {
+    if (!this.memoryContext) return { pack: null, reason: 'disabled', disabled: false };
+    const key = `${deliveryId}:${claim.attempt}`;
+    const cached = this.memoryResults.get(key);
+    if (cached) return cached;
+    const inflight = this.memoryInflight.get(key);
+    if (inflight) return await inflight;
+    if (this.memoryToolUnavailable) {
+      return { pack: null, reason: 'memory_disabled', disabled: true };
+    }
+    const task = (async (): Promise<MemoryContextResult> => {
+      const result = await fetchMemoryPack(this.rpc, { roomId, messageId });
+      if (result.disabled) this.memoryToolUnavailable = true;
+      if (this.memoryResults.size >= LIMITS.memoryInjectClientCacheEntries) {
+        const oldest = this.memoryResults.keys().next().value;
+        if (oldest !== undefined) this.memoryResults.delete(oldest);
+      }
+      this.memoryResults.set(key, result);
+      return result;
+    })();
+    this.memoryInflight.set(key, task);
+    try {
+      return await task;
+    } finally {
+      this.memoryInflight.delete(key);
+    }
+  }
+
+  async run(): Promise<number> {    let stream: Promise<void> | null = null;
     try {
       const socketPath = resolveSocketPath();
       this.connection = await CodexConnection.open(socketPath, this.events, this.signal);
@@ -640,6 +689,12 @@ class CodexWatcher {
 
         const body = await this.readForActive(claim, deliveryId, match);
         if (body === null) continue;
+        const memory = await this.memoryForDelivery(
+          deliveryId,
+          asString(match.room_id),
+          asString(match.message_id),
+          claim,
+        );
         const steeredItem: JsonObject = {
           ...match,
           attempt: claim.attempt,
@@ -651,7 +706,7 @@ class CodexWatcher {
           await this.requireConnection().call('turn/steer', {
             threadId: this.threadId,
             expectedTurnId: asString(current.id),
-            input: [{ type: 'text', text: steerPrompt(body) }],
+            input: [{ type: 'text', text: steerPrompt(body, memoryPromptBlock(memory)) }],
           });
         } catch (error) {
           this.notified.set(deliveryId, claim.attempt);
@@ -696,11 +751,18 @@ class CodexWatcher {
         continue;
       }
 
+      const memory = await this.memoryForDelivery(
+        deliveryId,
+        asString(match.room_id),
+        asString(match.message_id),
+        claim,
+      );
+
       let result;
       try {
         result = await this.requireConnection().call('turn/start', {
           threadId: this.threadId,
-          input: [{ type: 'text', text: taskPrompt(deliveryId, claim, body) }],
+          input: [{ type: 'text', text: taskPrompt(deliveryId, claim, body, memoryPromptBlock(memory)) }],
         });
       } catch (error) {
         if (error instanceof MonitorFatalError) throw error;
@@ -892,7 +954,7 @@ function lastLine(error: unknown): string {
 
 export async function runCodexMonitor(
   context: MonitorContext,
-  options: { roomEvents?: boolean } = {},
+  options: { roomEvents?: boolean; memoryContext?: boolean } = {},
 ): Promise<number> {
   const token = context.token;
   if (!token) return fail('ERROR type=credential message=missing_token');
@@ -924,6 +986,7 @@ export async function runCodexMonitor(
       token,
       signal: controller.signal,
       roomEvents: options.roomEvents,
+      memoryContext: options.memoryContext,
     });
     return await watcher.run();
   } finally {

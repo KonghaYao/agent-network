@@ -73,6 +73,8 @@ export interface MonitorOptions {
   maxRuntime?: string;
   /** 房间/信息事件：默认 all，`--no-room-events` 关闭。 */
   roomEvents?: string | boolean;
+  /** delivery 记忆参考包：默认开，`--no-memory-context` 关闭。 */
+  memoryContext?: boolean;
 }
 
 interface ConfigCheck {
@@ -415,6 +417,7 @@ export async function monitor(
       json: options.json,
       maxRuntimeMs: runtimeMs,
       roomEvents,
+      memoryContext: options.memoryContext !== false,
     });
   }
   if (harness === 'peri') {
@@ -423,6 +426,7 @@ export async function monitor(
       json: options.json,
       maxRuntimeMs: runtimeMs,
       roomEvents,
+      memoryContext: options.memoryContext !== false,
     });
   }
   if (harness === 'dsh') {
@@ -440,7 +444,10 @@ export async function monitor(
     return runDshMonitor(context, extra, { roomEvents: roomEvents !== false });
   }
   if (harness === 'codex') {
-    return runCodexMonitor(context, { roomEvents: roomEvents !== false });
+    return runCodexMonitor(context, {
+      roomEvents: roomEvents !== false,
+      memoryContext: options.memoryContext !== false,
+    });
   }
   return runOtherHarness({ log: options.log, maxWait: options.maxWait, poll: options.poll });
 }

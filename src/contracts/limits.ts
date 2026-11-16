@@ -508,6 +508,29 @@ export const LIMITS = {
   /** 空间 provisioning sweep 周期与单批上限；sweep 单轮最多处理一批。 */
   memoryProvisionIntervalMs: 6 * 60 * 60_000,
   memoryProvisionSweepBatch: 50,
+  /**
+   * Phase C：delivery 记忆参考包的预算。
+   *
+   * 每 delivery 最多一次工具调用；包只读当前 space 中 origin_room_id 等于
+   * 当前房间的来源/经历。正文按字符与 UTF-8 字节双重截断，最终 JSON 不超过
+   * `memoryInjectMessageMaxBytes`，也在 `memoryInjectResponseBytes` 硬上限内。
+   */
+  memoryInjectMessageMaxItems: 6,
+  memoryInjectItemMaxChars: 320,
+  memoryInjectItemMaxBytes: 1_024,
+  memoryInjectMessageMaxBytes: 4 * 1024,
+  /** 新工具结构化结果的绝对硬上限（16 KiB）；低于 MCP 通用响应上限。 */
+  memoryInjectResponseBytes: 16 * 1024,
+  /** 单次候选扫描条数；只做索引查询，不 JOIN messages、不调用 Hindsight。 */
+  memoryInjectScanCandidates: 50,
+  /** 服务端构建 pack 的硬超时（毫秒）；超时返回空块，不阻塞调用方。 */
+  memoryInjectMessageTimeoutMs: 250,
+  /** monitor 外层调用超时（毫秒）；失败只降级该投递，不阻塞 delivery。 */
+  memoryInjectMonitorTimeoutMs: 2_000,
+  /** 参考包建议有效期；过期只表示需要重新读取，不产生后台任务。 */
+  memoryInjectPackTtlMs: 30_000,
+  /** 客户端按 delivery:attempt 去重的有界条目数。 */
+  memoryInjectClientCacheEntries: 512,
   /** 定时回填窗口宽度与调度周期（毫秒）；窗口按整点对齐。 */
   memoryBackfillIntervalMs: 60 * 60_000,
   memoryBackfillWindowMs: 60 * 60_000,

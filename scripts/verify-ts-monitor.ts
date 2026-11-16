@@ -89,6 +89,11 @@ interface MockState {
   listenFailures: number;
   /** 接下来 N 次 pending inbox 查询返回工具错误，用于验证查询退避。 */
   inboxFailures: number;
+  /** Phase C：memory pack 调用记录与故障注入。 */
+  memoryCalls: JsonObject[];
+  memoryFailures: number;
+  memoryDelayMs: number;
+  memoryReason: string | null;
 }
 
 interface MockServer {
@@ -209,6 +214,10 @@ function createMock(options: MockOptions = {}): MockServer {
     loginHeadSeq: null,
     listenFailures: options.listenFailures ?? 0,
     inboxFailures: options.inboxFailures ?? 0,
+    memoryCalls: [],
+    memoryFailures: 0,
+    memoryDelayMs: 0,
+    memoryReason: null,
   };
 
   const stopKeepalives = (): void => {
@@ -318,6 +327,66 @@ function createMock(options: MockOptions = {}): MockServer {
             pending_count: state.loginPending ?? state.pending.size,
             inbox_head_seq: state.loginHeadSeq ?? '1',
           });
+        case 'network_memory_context_pack': {
+          state.memoryCalls.push(args);
+          if (state.memoryDelayMs > 0) await Bun.sleep(state.memoryDelayMs);
+          if (state.memoryFailures > 0) {
+            state.memoryFailures -= 1;
+            return toolError(body.id, 'MEMORY_UNAVAILABLE', 'memory backend unavailable');
+          }
+          if (state.memoryReason !== null) {
+            return toolResult(body.id, {
+              pack_id: 'mpk_test_empty',
+              trigger: 'message',
+              available: false,
+              reason: state.memoryReason,
+              authority: 'reference_data',
+              as_of: 1,
+              expires_at: 2,
+              room_id: String(args.room_id ?? ''),
+              message_id: args.message_id ?? null,
+              items: [],
+              item_count: 0,
+              items_bytes: 0,
+              truncated: false,
+              omitted: 0,
+              stats: { sources: 0, experiences: 0, rooms: 0 },
+              semantic: { status: 'not_requested', context_ref: null },
+              injection: { eligible: false, admit_required: true, reason: 'advisory_only' },
+            });
+          }
+          return toolResult(body.id, {
+            pack_id: 'mpk_test_ready',
+            trigger: 'message',
+            available: true,
+            reason: 'ready',
+            authority: 'reference_data',
+            as_of: 1,
+            expires_at: 2,
+            room_id: String(args.room_id ?? ''),
+            message_id: args.message_id ?? null,
+            items: [
+              {
+                item_id: 'exp:test',
+                kind: 'experience',
+                text: 'injected-memory-marker',
+                text_bytes: 22,
+                origin_room_id: String(args.room_id ?? ''),
+                source_message_id: null,
+                sender_id: 'agt_user',
+                evidence: 'experienced',
+                source_kind: 'message',
+              },
+            ],
+            item_count: 1,
+            items_bytes: 22,
+            truncated: false,
+            omitted: 0,
+            stats: { sources: 0, experiences: 1, rooms: 1 },
+            semantic: { status: 'not_requested', context_ref: null },
+            injection: { eligible: false, admit_required: true, reason: 'advisory_only' },
+          });
+        }
         case 'network_room_get': {
           const roomId = String(args.room_id ?? '');
           state.roomGetCalls.set(roomId, (state.roomGetCalls.get(roomId) ?? 0) + 1);
@@ -1104,6 +1173,114 @@ async function runClaudeChecks(): Promise<void> {
   } finally {
     await watcher.kill();
     mock.stop();
+  }
+}
+
+async function runMemoryContextChecks(): Promise<void> {
+  // claude：full 包进入 stdout delivery 与 event_file；每投递一次。
+  const mock = createMock();
+  const watcher = startWatcher(mock.base, { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' });
+  try {
+    await waitForLine(watcher.stderr, (line) => line.includes('READY'), 'memory READY');
+    mock.state.pending.set('dlv_mem', delivery('dlv_mem'));
+    sendItems(mock, [notificationItem('dlv_mem', 'delivery.created', 'evt_mem')]);
+    const event = await waitForEvent(watcher.stdout, 'delivery', 'dlv_mem');
+    const memory = event.memory_context as JsonObject;
+    checkEqual('claude delivery 带 memory_context', memory.available, true);
+    checkEqual('claude memory_pack_id', event.memory_pack_id, 'mpk_test_ready');
+    checkEqual('claude memory bytes', event.memory_context_bytes, 22);
+    checkEqual('claude memory truncated', event.memory_context_truncated, false);
+    check(
+      'claude 记忆块含正文',
+      JSON.stringify(memory.items).includes('injected-memory-marker'),
+      memory,
+    );
+    checkEqual('每 delivery 调用一次 pack', mock.state.memoryCalls.length, 1);
+    checkEqual('pack 带 room_id', mock.state.memoryCalls[0]?.room_id, 'rm_test');
+    checkEqual('pack 带 message_id', mock.state.memoryCalls[0]?.message_id, 'msg_dlv_mem');
+    const eventFile = String(event.event_file ?? '');
+    const file = JSON.parse(readFileSync(eventFile, 'utf8')) as JsonObject;
+    check('event_file 带完整 memory_context', JSON.stringify(file.memory_context).includes('injected-memory-marker'));
+    checkEqual('event_file memory_pack_id', file.memory_pack_id, 'mpk_test_ready');
+
+    // 重连后同一 delivery 不重复注入。
+    mock.closeStream();
+    await waitForLine(
+      watcher.stderr,
+      (line) => line.includes('READY') && line.includes('reconnect=1'),
+      'memory reconnect READY',
+    );
+    await Bun.sleep(200);
+    checkEqual('重连不重复调用 pack', mock.state.memoryCalls.length, 1);
+    checkEqual('重连不重复输出 delivery', eventCount(watcher.stdout, 'delivery', 'dlv_mem'), 1);
+
+    // 失败不阻塞 delivery，也不重试同一投递。
+    mock.state.claims.clear();
+    mock.state.memoryFailures = 1;
+    mock.state.pending.set('dlv_mem_fail', delivery('dlv_mem_fail'));
+    sendItems(mock, [notificationItem('dlv_mem_fail', 'delivery.created', 'evt_mem_fail')]);
+    const failed = await waitForEvent(watcher.stdout, 'delivery', 'dlv_mem_fail');
+    check('memory 失败仍输出 delivery', failed.claim_state === 'claimed');
+    const failedMemory = failed.memory_context as JsonObject;
+    checkEqual('memory 失败降级 available=false', failedMemory.available, false);
+    checkEqual('memory 失败 reason=request_failed', failedMemory.reason, 'request_failed');
+    checkEqual('失败投递只调用一次', mock.state.memoryCalls.length, 2);
+
+    // 超时不阻塞 delivery。
+    mock.state.claims.clear();
+    mock.state.memoryDelayMs = 2_500;
+    mock.state.pending.set('dlv_mem_timeout', delivery('dlv_mem_timeout'));
+    sendItems(mock, [notificationItem('dlv_mem_timeout', 'delivery.created', 'evt_mem_timeout')]);
+    const timed = await waitForEvent(watcher.stdout, 'delivery', 'dlv_mem_timeout');
+    checkEqual('memory 超时仍输出 delivery', timed.claim_state, 'claimed');
+    checkEqual('memory 超时 reason=timeout', (timed.memory_context as JsonObject).reason, 'timeout');
+    checkEqual('超时投递只调用一次', mock.state.memoryCalls.length, 3);
+    mock.state.memoryDelayMs = 0;
+  } finally {
+    await watcher.kill();
+    mock.stop();
+  }
+
+  // --no-memory-context 完全不调用工具，也不输出记忆字段。
+  const offMock = createMock();
+  const offWatcher = startWatcher(
+    offMock.base,
+    { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' },
+    ['--no-memory-context'],
+  );
+  try {
+    await waitForLine(offWatcher.stderr, (line) => line.includes('READY'), 'memory off READY');
+    offMock.state.pending.set('dlv_mem_off', delivery('dlv_mem_off'));
+    sendItems(offMock, [notificationItem('dlv_mem_off', 'delivery.created', 'evt_mem_off')]);
+    const event = await waitForEvent(offWatcher.stdout, 'delivery', 'dlv_mem_off');
+    checkEqual('--no-memory-context 不调用工具', offMock.state.memoryCalls.length, 0);
+    check('--no-memory-context 不输出 memory_context', !('memory_context' in event));
+    check('--no-memory-context 不输出 memory_pack_id', !('memory_pack_id' in event));
+  } finally {
+    await offWatcher.kill();
+    offMock.stop();
+  }
+
+  // peri：默认 pointer，只输出 pack id/条数/原因，不含正文。
+  const periMock = createMock();
+  const periWatcher = startPeriWatcher(periMock.base, {
+    AGENTNET_MONITOR_RETRY_BASE_MS: '600000',
+  });
+  try {
+    await waitForLine(periWatcher.stdout, (line) => line.includes('READY'), 'peri memory READY');
+    periMock.state.pending.set('dlv_mem_peri', delivery('dlv_mem_peri'));
+    sendItems(periMock, [
+      notificationItem('dlv_mem_peri', 'delivery.created', 'evt_mem_peri'),
+    ]);
+    const event = await waitForAlert(periWatcher.stdout, 'delivery', 'dlv_mem_peri');
+    checkEqual('peri pointer pack_id', event.memory_pack_id, 'mpk_test_ready');
+    checkEqual('peri pointer items', event.memory_items, 1);
+    checkEqual('peri pointer reason', event.memory_reason, 'ready');
+    check('peri 默认不含记忆正文', !JSON.stringify(event).includes('injected-memory-marker'));
+    checkEqual('peri 每 delivery 调用一次', periMock.state.memoryCalls.length, 1);
+  } finally {
+    await periWatcher.kill();
+    periMock.stop();
   }
 }
 
@@ -2122,7 +2299,7 @@ async function runPeriChecks(): Promise<void> {
     checkEqual(
       'peri delivery 键顺序',
       keysOf(ok),
-      'type,source,event_id,delivery_id,room_id,message_id,sender_id,seq,created_at,attempt,claim_id,claimed_at,auto_claimed,claim_state,claim',
+      'type,source,event_id,delivery_id,room_id,message_id,sender_id,seq,created_at,attempt,claim_id,claimed_at,auto_claimed,claim_state,claim,memory_pack_id,memory_items,memory_reason',
     );
     checkEqual('peri delivery source 来自事件', ok.source, 'delivery.created');
     checkEqual('peri delivery event_id', ok.event_id, 'evt_ok');
@@ -2253,7 +2430,7 @@ async function runPeriChecks(): Promise<void> {
     checkEqual(
       'peri snapshot 键顺序',
       keysOf(snapshot),
-      'type,source,delivery_id,room_id,message_id,sender_id,seq,created_seq,attempt,claim_id,claimed_at,auto_claimed,claim_state,claim',
+      'type,source,delivery_id,room_id,message_id,sender_id,seq,created_seq,attempt,claim_id,claimed_at,auto_claimed,claim_state,claim,memory_pack_id,memory_items,memory_reason',
     );
     checkEqual('peri snapshot source', snapshot.source, 'inbox.snapshot');
     checkEqual('peri snapshot seq 取 created_seq', snapshot.seq, '1');
@@ -3474,6 +3651,8 @@ async function main(): Promise<void> {
   check('inbox 无分页标记不得误判为完整结果', rejectedMalformed);
   console.log('TS monitor: claude harness');
   await runClaudeChecks();
+  console.log('TS monitor: delivery memory context');
+  await runMemoryContextChecks();
   console.log('TS monitor: room events');
   await runRoomEventChecks();
   console.log('TS monitor: inbox/deferred retry');
