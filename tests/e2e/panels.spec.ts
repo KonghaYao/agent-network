@@ -678,8 +678,7 @@ test.describe('SPA 右栏与剩余入口', () => {
   test('group owner transfer can be proposed from members dialog', async ({ page }) => {
     await login(page, base, tokenA);
     await page.goto(`${base}/c/${groupId}`);
-    await page.locator('#room-menu-toggle').click();
-    await page.locator('#room-menu-members').click();
+    await page.locator('#members-button').click();
     await expect(page.locator('#members-modal')).toBeVisible();
     await expect(page.locator('#members-transfer')).toBeVisible();
     await page.selectOption('#members-transfer-select', nameB);

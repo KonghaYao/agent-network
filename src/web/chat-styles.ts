@@ -660,6 +660,10 @@ ${GROUP_STYLE}
     /* 预留标题 + 副标题两行：头部换行后，加载骨架与 group/Agent 真实头部同高；
        单行布局仍由 56px min-height 决定，不产生额外空白。 */
     .chat-id { flex: 1 1 160px; min-width: 160px; min-height: 40px; }
+    /* 操作按钮自身也允许折行：搜索与群成员保持相邻，极窄宽度下按钮
+       换到下一行而不是把文档撑出横向滚动。 */
+    .chat-head-actions { flex-wrap: wrap; justify-content: flex-end;
+      max-width: 100%; row-gap: 4px; }
     .messages { padding: 10px 12px 14px; }
     .chat-skeleton { padding: 10px 12px 14px; }
     .jump-latest { bottom: calc(64px + env(safe-area-inset-bottom)); }

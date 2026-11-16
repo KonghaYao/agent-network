@@ -1052,9 +1052,11 @@ body #root button.primary:hover {
   }
 }
 
-#message-search-button {
+#message-search-button,
+#members-button {
   min-height: 32px;
   padding: 0 8px;
+  white-space: nowrap;
 }
 
 /* 头像右键/长按入口：不改变头像自身尺寸，只提供可聚焦触发区。 */

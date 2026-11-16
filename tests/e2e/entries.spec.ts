@@ -718,8 +718,7 @@ test.describe('SPA 剩余入口', () => {
     await page.goto(`${base}/c/${groupId}`);
     await expect(page.locator('#title')).toHaveText(`Parity Group ${suffix}`);
 
-    await page.locator('#room-menu-toggle').click();
-    await page.locator('#room-menu-members').click();
+    await page.locator('#members-button').click();
     await expect(page.locator('#members-modal')).toBeVisible();
     const memberRow = page
       .locator('#members-current .spa-member')

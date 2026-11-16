@@ -36,6 +36,11 @@ export interface RoomMenuItemsProps {
   onToggleAgentDisabled: () => void;
   onReissueToken: () => void;
   onDissolve: () => void;
+  /**
+   * 聊天头部把群成员入口提到搜索右侧时常驻展示，菜单里不再重复；
+   * 会话行右键菜单没有头部，仍保留这一项。
+   */
+  membersInMenu?: boolean;
 }
 
 /**
@@ -65,6 +70,7 @@ export function RoomMenuItems({
   onToggleAgentDisabled,
   onReissueToken,
   onDissolve,
+  membersInMenu = true,
 }: RoomMenuItemsProps & {
   Item: ElementType;
   Separator: ElementType;
@@ -120,13 +126,15 @@ export function RoomMenuItems({
       {group ? (
         <>
           <Separator className="room-menu-sep" />
-          <Item
-            id={`${idPrefix}-members`}
-            className="room-menu-item"
-            onSelect={() => onOpen('members')}
-          >
-            群成员
-          </Item>
+          {membersInMenu ? (
+            <Item
+              id={`${idPrefix}-members`}
+              className="room-menu-item"
+              onSelect={() => onOpen('members')}
+            >
+              群成员
+            </Item>
+          ) : null}
           <Item
             id={`${idPrefix}-announcement`}
             className="room-menu-item"
@@ -280,6 +288,8 @@ export function RoomMenu({
             Item={DropdownMenuPrimitive.Item}
             Separator={DropdownMenuPrimitive.Separator}
             {...items}
+            // 头部已有常驻「群成员」入口，菜单不重复。
+            membersInMenu={false}
           />
         </DropdownMenuPrimitive.Content>
       </DropdownMenuPrimitive.Portal>

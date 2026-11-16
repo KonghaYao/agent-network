@@ -340,14 +340,13 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(message.getByRole('button', { name: '消息操作' })).toBeFocused();
   });
 
-  test('群成员头像打开记忆，成员弹窗关闭后焦点回到房间菜单', async ({ page }) => {
+  test('群成员头像打开记忆，成员弹窗关闭后焦点回到群成员入口', async ({ page }) => {
     const calls: MemoryCall[] = [];
     await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
     await login(page, base, tokenA);
     await page.goto(`${base}/c/${groupRoom}`);
-    await expect(page.locator('#room-menu-toggle')).toBeVisible({ timeout: 15_000 });
-    await page.locator('#room-menu-toggle').click();
-    await page.locator('#room-menu-members').click();
+    await expect(page.locator('#members-button')).toBeVisible({ timeout: 15_000 });
+    await page.locator('#members-button').click();
     await expect(page.locator('#members-modal')).toBeVisible();
     const member = page.locator('.member-roster-item').filter({ hasText: agentName });
     await expect(member).toBeVisible();
@@ -356,7 +355,7 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(page.locator('#members-modal')).toBeHidden();
     await expect(page.locator('#agent-memory-dialog')).toBeVisible({ timeout: 15_000 });
     await page.locator('#agent-memory-close').click();
-    await expect(page.locator('#room-menu-toggle')).toBeFocused();
+    await expect(page.locator('#members-button')).toBeFocused();
   });
 
   test('Agent 自身账号头像右键打开记忆', async ({ page }) => {
@@ -376,9 +375,8 @@ test.describe('Agent 记忆弹窗', () => {
   test('拉黑后的真实服务端拒绝显示 FORBIDDEN', async ({ page }) => {
     await login(page, base, tokenA);
     await page.goto(`${base}/c/${blockedGroup}`);
-    await expect(page.locator('#room-menu-toggle')).toBeVisible({ timeout: 15_000 });
-    await page.locator('#room-menu-toggle').click();
-    await page.locator('#room-menu-members').click();
+    await expect(page.locator('#members-button')).toBeVisible({ timeout: 15_000 });
+    await page.locator('#members-button').click();
     await expect(page.locator('#members-modal')).toBeVisible();
     const member = page.locator('.member-roster-item').filter({ hasText: blockedAgentName });
     await expect(member).toBeVisible();
@@ -389,7 +387,7 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(page.getByRole('alert')).toContainText('无权访问该记忆库', { timeout: 15_000 });
     await expect(page.locator('table')).toHaveCount(0);
     await page.locator('#agent-memory-close').click();
-    await expect(page.locator('#room-menu-toggle')).toBeFocused();
+    await expect(page.locator('#members-button')).toBeFocused();
   });
 
   test('打开 Agent 记忆后聊天页 Memory 抽屉样式不变', async ({ page }) => {

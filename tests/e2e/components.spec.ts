@@ -428,9 +428,13 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await page.goto(`${base}/c/${roomId}`);
     await expect(page.locator('#title')).toHaveText(roomTitle);
 
+    // 群成员入口已常驻在搜索右侧，会话菜单不再重复。
     await page.locator('#room-menu-toggle').click();
     await expect(page.locator('#room-menu')).toBeVisible();
-    await page.locator('#room-menu-members').click();
+    await expect(page.locator('#room-menu-members')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#room-menu')).toBeHidden();
+    await page.locator('#members-button').click();
     const members = page.locator('#members-modal');
     await expect(members).toBeVisible();
     await expect(members).toContainText(nameB);
@@ -438,8 +442,7 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(members).toBeHidden();
 
     // 移除成员走 confirmDialog：取消不应改动成员。
-    await page.locator('#room-menu-toggle').click();
-    await page.locator('#room-menu-members').click();
+    await page.locator('#members-button').click();
     await page.getByRole('button', { name: `移除 ${nameB}` }).click();
     const confirm = page.locator('#confirm-dialog');
     await expect(confirm).toBeVisible();
@@ -485,6 +488,75 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(page.locator('#title')).toHaveText(`${roomTitle} 改名`);
   });
 
+  test('群成员入口位于搜索右侧并仍打开成员面板', async ({ page }) => {
+    await page.goto(`${base}/c/${roomId}`);
+    const search = page.locator('#message-search-button');
+    const members = page.locator('#members-button');
+    await expect(members).toBeVisible();
+    await expect(members).toHaveText('群成员');
+
+    // 同一操作容器内，DOM 顺序紧随搜索按钮。
+    const relation = await page.evaluate(() => {
+      const searchButton = document.getElementById('message-search-button');
+      const membersButton = document.getElementById('members-button');
+      if (!searchButton || !membersButton) return null;
+      return {
+        sameParent: searchButton.parentElement === membersButton.parentElement,
+        searchBeforeMembers: Boolean(
+          searchButton.compareDocumentPosition(membersButton) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ),
+      };
+    });
+    expect(relation).toEqual({ sameParent: true, searchBeforeMembers: true });
+
+    // 几何：左边缘在搜索右侧，垂直中心同一行。
+    const searchBox = await search.boundingBox();
+    const membersBox = await members.boundingBox();
+    expect(searchBox).not.toBeNull();
+    expect(membersBox).not.toBeNull();
+    expect(membersBox!.x).toBeGreaterThanOrEqual(searchBox!.x + searchBox!.width - 1);
+    expect(
+      Math.abs(
+        membersBox!.y + membersBox!.height / 2 - (searchBox!.y + searchBox!.height / 2),
+      ),
+    ).toBeLessThanOrEqual(1);
+
+    await members.click();
+    await expect(page.locator('#members-modal')).toBeVisible();
+    await expect(page.locator('#members-modal')).toContainText(nameB);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#members-modal')).toBeHidden();
+    await expect(members).toBeFocused();
+  });
+
+  test('390 下群成员入口在搜索右侧且无横向溢出', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${base}/c/${roomId}`);
+    const members = page.locator('#members-button');
+    await expect(page.locator('#message-search-button')).toBeVisible();
+    await expect(members).toBeVisible();
+    await expect(page.locator('#back')).toBeVisible();
+
+    const layout = await page.evaluate(() => {
+      const search = document.getElementById('message-search-button')!.getBoundingClientRect();
+      const membersButton = document.getElementById('members-button')!.getBoundingClientRect();
+      return {
+        searchRight: search.right,
+        membersLeft: membersButton.left,
+        membersRight: membersButton.right,
+        viewport: window.innerWidth,
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      };
+    });
+    expect(layout.overflow).toBeLessThanOrEqual(1);
+    expect(layout.membersLeft).toBeGreaterThanOrEqual(layout.searchRight - 1);
+    expect(layout.membersRight).toBeLessThanOrEqual(layout.viewport + 1);
+
+    await members.click();
+    await expect(page.locator('#members-modal')).toBeVisible();
+  });
+
   test('dialog/menu/combobox/resizer 无 critical/serious axe 违规', async ({ page }) => {
     page.on('console', (message) => {
       if (message.text().startsWith('AXE')) console.log(message.text());
@@ -525,7 +597,9 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(page.locator('#room-menu')).toBeVisible();
     await page.waitForTimeout(220);
     expect(await violations('#room-menu')).toEqual([]);
-    await page.locator('#room-menu-members').click();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#room-menu')).toBeHidden();
+    await page.locator('#members-button').click();
     await expect(page.locator('#members-modal')).toBeVisible();
     await page.waitForTimeout(220);
     expect(await violations('#members-modal')).toEqual([]);
