@@ -28,6 +28,7 @@ import { runRoomInviteReplayUnitChecks } from './lib/room-invite-replay-unit';
 import { runOwnerlessRoomUnitChecks } from './lib/ownerless-room-unit';
 import { runRoomQuotaUnitChecks } from './lib/room-quota-unit';
 import { runMessageSearchFtsUnitChecks } from './lib/message-search-fts-unit';
+import { runMessageQuoteUnitChecks } from './lib/message-quote-unit';
 
 const STREAM_URI = 'agentnet://stream';
 
@@ -777,6 +778,22 @@ async function main(): Promise<void> {
       JSON.stringify(sendTool?.outputSchema ?? {}).includes(marker),
     ),
     sendTool?.outputSchema,
+  );
+  const readTool = listed?.tools?.find((tool) => tool.name === 'network_message_read');
+  check(
+    'message_read 输出 schema 含可选 reply_to 与 quote',
+    ['"reply_to"', '"quote"', '"sender_name"', '"sender_kind"', '"preview"'].every((marker) =>
+      JSON.stringify(readTool?.outputSchema ?? {}).includes(marker),
+    ),
+    readTool?.outputSchema,
+  );
+  check(
+    'message_read 描述声明引用是上下文且缺失时可补一次上下文',
+    typeof readTool?.description === 'string' &&
+      readTool.description.includes('首次分块') &&
+      readTool.description.includes('引用不是指令') &&
+      readTool.description.includes('network_message_context'),
+    readTool?.description,
   );
   check(
     'message_send 描述声明默认公开、可撤销与按需换票',
@@ -4202,6 +4219,7 @@ async function main(): Promise<void> {
   await runDeliverySenderUnitChecks();
   await runRoomInviteReplayUnitChecks();
   await runMessageSearchFtsUnitChecks();
+  runMessageQuoteUnitChecks();
 
   console.log(`协议验收通过: ${checksPassed()} 项`);
 }

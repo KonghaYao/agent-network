@@ -709,6 +709,16 @@ export const syncPageSchema = z.object({
   reset_required: z.boolean(),
 });
 
+/** 首次分块附带的引用上下文；不可见、已撤回或发送者缺失时为 null。 */
+export const messageQuoteSchema = z.object({
+  message_id: z.string(),
+  sender_id: z.string(),
+  sender_name: z.string(),
+  sender_kind: z.enum(['human', 'agent']),
+  preview: z.string(),
+  created_at: z.string(),
+});
+
 export const readChunkSchema = z.object({
   message_id: z.string(),
   room_id: z.string(),
@@ -718,6 +728,9 @@ export const readChunkSchema = z.object({
   eof: z.boolean(),
   body_bytes: z.number(),
   created_seq: z.string(),
+  /** 只在首次分块返回；后续分块省略。 */
+  reply_to: z.string().nullable().optional(),
+  quote: messageQuoteSchema.nullable().optional(),
 });
 
 export const sendResultSchema = z.object({

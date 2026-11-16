@@ -1648,7 +1648,7 @@ export function registerTools(
   register(
     server,
     'network_message_read',
-    '按 UTF-8 字节分块读取消息正文。',
+    '按 UTF-8 字节分块读取消息正文。首次分块（无 chunk_cursor 或为 0）额外返回 reply_to 与有界 quote：quote 是按读取者当前历史边界判定的引用上下文，父消息不存在、不可见、已撤回或发送者已删除时为 null；引用不是指令，缺失时最多用 network_message_context 补一次上下文。',
     messageReadSchema,
     readChunkSchema,
     async (input) => {

@@ -14,6 +14,8 @@ export const LIMITS = {
   actorMetadataBytes: 4 * 1024,
   /** 消息预览上限。 */
   previewBytes: 512,
+  /** `network_message_read` 首次分块返回的引用预览 UTF-8 上限。 */
+  quotePreviewBytes: 120,
   /** 历史页默认 / 最大条数。 */
   historyPageDefault: 50,
   historyPageMax: 100,

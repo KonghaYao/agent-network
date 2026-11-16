@@ -66,6 +66,8 @@ interface MockState {
   claims: Map<string, MockDelivery>;
   claimCalls: Map<string, number>;
   readCalls: number;
+  /** 按消息 id 返回的引用上下文；未登记时服务端返回 null。 */
+  quotes: Map<string, JsonObject>;
   maxConcurrentClaims: number;
   controller: ReadableStreamDefaultController<Uint8Array> | null;
   keepaliveTimer: ReturnType<typeof setInterval> | null;
@@ -193,6 +195,7 @@ function createMock(options: MockOptions = {}): MockServer {
     claims: new Map(),
     claimCalls: new Map(),
     readCalls: 0,
+    quotes: new Map(),
     maxConcurrentClaims: 0,
     controller: null,
     keepaliveTimer: null,
@@ -424,6 +427,7 @@ function createMock(options: MockOptions = {}): MockServer {
           state.readCalls += 1;
           const messageId = String(args.message_id ?? '');
           const full = messageBody(messageId);
+          const quote = state.quotes.get(messageId) ?? null;
           if (messageId === LONG_MESSAGE_ID) {
             const cursor = String(args.chunk_cursor ?? '');
             const splitAt = 2400;
@@ -435,6 +439,7 @@ function createMock(options: MockOptions = {}): MockServer {
                 chunk_cursor: 'c1',
                 next_cursor: 'c1',
                 eof: false,
+                ...(quote ? { reply_to: String(quote.message_id ?? ''), quote } : {}),
               });
             }
             return toolResult(body.id, {
@@ -453,6 +458,8 @@ function createMock(options: MockOptions = {}): MockServer {
             chunk_cursor: '',
             next_cursor: null,
             eof: true,
+            reply_to: quote ? String(quote.message_id ?? '') : null,
+            quote,
           });
         }
         default:
@@ -940,6 +947,7 @@ async function runClaudeChecks(): Promise<void> {
     checkEqual('成功事件正文完整', ok.body, okBody);
     checkEqual('成功事件 body_bytes', ok.body_bytes, Buffer.byteLength(okBody, 'utf8'));
     checkEqual('短正文不截断', ok.body_truncated, false);
+    check('无引用时不带 quote 字段', !('quote' in ok));
     const eventFile = String(ok.event_file ?? '');
     check('event_file 存在', eventFile.length > 0 && existsSync(eventFile));
     const fileMode = statSync(eventFile).mode & 0o777;
@@ -1101,6 +1109,62 @@ async function runClaudeChecks(): Promise<void> {
     check('stdout 每行都是事件 JSON', watcher.stdout.every((line) => parseEvent(line) !== null));
     check('stdout 不含 token', !watcher.stdout.join('\n').includes(TOKEN));
     check('stderr 不含 token', !watcher.stderr.join('\n').includes(TOKEN));
+  } finally {
+    await watcher.kill();
+    mock.stop();
+  }
+}
+
+/**
+ * 引用上下文：与正文同一次读取返回，事件与 event_file 都是结构化 quote，
+ * 不拼进正文；服务端缺失 quote 时只省略字段。
+ */
+async function runDeliveryQuoteChecks(): Promise<void> {
+  const mock = createMock();
+  const watcher = startWatcher(mock.base, { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' });
+  try {
+    await waitForLine(watcher.stderr, (line) => line.includes('READY'), 'quote READY');
+    const quote = {
+      message_id: 'msg_parent_quote',
+      sender_id: 'agt_quote_parent',
+      sender_name: '引用作者',
+      sender_kind: 'human',
+      preview: '被引用的父消息预览',
+      created_at: '2026-11-04T10:00:00.000Z',
+    };
+    mock.state.quotes.set('msg_dlv_quote', quote);
+    mock.state.pending.set('dlv_quote', delivery('dlv_quote'));
+    const beforeReads = mock.state.readCalls;
+    sendItems(mock, [notificationItem('dlv_quote', 'delivery.created', 'evt_quote')]);
+    const event = await waitForEvent(watcher.stdout, 'delivery', 'dlv_quote');
+    checkEqual('引用投递只读取一次', mock.state.readCalls - beforeReads, 1);
+    checkEqual('引用事件包含结构化 quote', JSON.stringify(event.quote), JSON.stringify(quote));
+    checkEqual('引用事件正文完整', event.body, messageBody('msg_dlv_quote'));
+    check(
+      '引用文本不拼进正文',
+      typeof event.body === 'string' && !event.body.includes(quote.preview),
+      event.body,
+    );
+    checkEqual(
+      '引用事件 quote 位于末尾',
+      keysOf(event),
+      'type,delivery_id,room_id,message_id,sender_id,event_id,seq,attempt,claim_id,claimed_at,auto_claimed,claim_state,claim,source,body,body_bytes,body_truncated,event_file,quote',
+    );
+    const quotedFile = JSON.parse(
+      readFileSync(String(event.event_file ?? ''), 'utf8'),
+    ) as JsonObject;
+    checkEqual('引用 event_file 含 quote', JSON.stringify(quotedFile.quote), JSON.stringify(quote));
+    checkEqual('引用 event_file 正文不含引用', quotedFile.body, messageBody('msg_dlv_quote'));
+
+    // 缺失 quote：只省略字段，正文照常投递，读取次数不增加。
+    mock.state.claims.clear();
+    mock.state.pending.set('dlv_no_quote', delivery('dlv_no_quote'));
+    const beforePlain = mock.state.readCalls;
+    sendItems(mock, [notificationItem('dlv_no_quote', 'delivery.created', 'evt_no_quote')]);
+    const plain = await waitForEvent(watcher.stdout, 'delivery', 'dlv_no_quote');
+    check('缺失 quote 时事件不带 quote', !('quote' in plain));
+    checkEqual('缺失 quote 时正文完整', plain.body, messageBody('msg_dlv_no_quote'));
+    checkEqual('缺失 quote 时读取次数仍为 1', mock.state.readCalls - beforePlain, 1);
   } finally {
     await watcher.kill();
     mock.stop();
@@ -3474,6 +3538,8 @@ async function main(): Promise<void> {
   check('inbox 无分页标记不得误判为完整结果', rejectedMalformed);
   console.log('TS monitor: claude harness');
   await runClaudeChecks();
+  console.log('TS monitor: delivery quote');
+  await runDeliveryQuoteChecks();
   console.log('TS monitor: room events');
   await runRoomEventChecks();
   console.log('TS monitor: inbox/deferred retry');

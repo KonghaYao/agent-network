@@ -55,6 +55,34 @@ export interface BodyPreview {
   bodyTruncated: boolean;
 }
 
+/** 首次分块返回的引用上下文；只作为结构化字段，不拼进正文。 */
+export interface MessageQuote {
+  message_id: string;
+  sender_id: string;
+  sender_name: string;
+  sender_kind: string;
+  preview: string;
+  created_at: string;
+}
+
+/** 引用字段容错：缺失或关键字段不完整时返回 null，不阻塞正文投递。 */
+export function quoteOf(value: unknown): MessageQuote | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as JsonObject;
+  const messageId = asString(record.message_id);
+  const senderId = asString(record.sender_id);
+  const senderName = asString(record.sender_name);
+  if (messageId.length === 0 || senderId.length === 0 || senderName.length === 0) return null;
+  return {
+    message_id: messageId,
+    sender_id: senderId,
+    sender_name: senderName,
+    sender_kind: asString(record.sender_kind),
+    preview: asString(record.preview),
+    created_at: asString(record.created_at),
+  };
+}
+
 /** jq `//` 语义：null/undefined/false 才回退，空字符串保留。 */
 function pick(value: unknown, fallback: unknown): unknown {
   return value === null || value === undefined || value === false ? fallback : value;
@@ -100,6 +128,7 @@ export function eventFilePayload(
   claim: ClaimInfo,
   source: string,
   body: string,
+  quote: MessageQuote | null = null,
 ): JsonObject {
   return {
     type: 'delivery',
@@ -121,6 +150,7 @@ export function eventFilePayload(
     },
     source,
     body,
+    ...(quote ? { quote } : {}),
   };
 }
 
@@ -130,6 +160,7 @@ export function deliveryEvent(
   source: string,
   preview: BodyPreview,
   eventFile: string,
+  quote: MessageQuote | null = null,
 ): JsonObject {
   return {
     type: 'delivery',
@@ -154,6 +185,7 @@ export function deliveryEvent(
     body_bytes: preview.bodyBytes,
     body_truncated: preview.bodyTruncated,
     event_file: eventFile,
+    ...(quote ? { quote } : {}),
   };
 }
 
