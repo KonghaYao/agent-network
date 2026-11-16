@@ -41,7 +41,7 @@ function contrastRatio(first: Rgb, second: Rgb): number {
   return (Math.max(left, right) + 0.05) / (Math.min(left, right) + 0.05);
 }
 
-/** CIELAB；用于明度区间、彩度上限与 CIE76 色差。 */
+/** CIELAB；用于明度区间、彩度下限与 CIE76 色差。 */
 function lab(rgb: Rgb): Rgb {
   const [r, g, b] = rgb.map((value) => {
     const unit = value / 255;
@@ -64,6 +64,32 @@ function deltaE(first: Rgb, second: Rgb): number {
   const [l2, a2, b2] = lab(second);
   return Math.hypot(l1 - l2, a1 - a2, b1 - b2);
 }
+
+/** LCh 色相角；用于锁定色相家族与顺序。 */
+function hue(rgb: Rgb): number {
+  const [, a, b] = lab(rgb);
+  return ((Math.atan2(b, a) * 180) / Math.PI + 360) % 360;
+}
+
+/** 最短有向角差，避免 0°/360° 回绕误判。 */
+function hueDelta(first: number, second: number): number {
+  return ((first - second + 540) % 360) - 180;
+}
+
+/**
+ * 提亮前 10 个色位的 LCh 色相角。色值整体提亮、加饱和，但色位必须
+ * 仍落在同一色相家族内，顺序不能漂移。
+ */
+const HUE_ANCHORS: readonly number[] = [
+  36.6, 69.7, 97.3, 129.1, 166.7, 209.4, 253.1, 287.2, 314.2, 342.1,
+];
+
+/**
+ * 各色位的 LCh 彩度下限。湖蓝（index 5）色相约 209°，在 L* 56–60
+ * 区间内 sRGB 能表示的最大彩度只有约 32.5，无法达到 35；其余色位均
+ * 可稳定超过 35。
+ */
+const MIN_CHROMA: readonly number[] = [35, 35, 35, 35, 35, 31.5, 35, 35, 35, 35];
 
 const WHITE: Rgb = [255, 255, 255];
 const SIDEBAR_LIGHT: Rgb = [0xf7, 0xf7, 0xf7];
@@ -91,14 +117,26 @@ function verifyPalette(): void {
   checkEqual('色名唯一', names.size, GROUP_COLORS.length);
 
   const lightness: number[] = [];
-  for (const color of GROUP_COLORS) {
+  const hues: number[] = [];
+  for (let index = 0; index < GROUP_COLORS.length; index += 1) {
+    const color = GROUP_COLORS[index]!;
     const base = parseHex(color.hex);
     const dark = parseHex(color.dark);
     const [baseL, baseA, baseB] = lab(base);
     const baseChroma = Math.hypot(baseA, baseB);
+    const baseHue = hue(base);
     lightness.push(baseL);
-    check(`${color.name} 基色（渐变最亮端）白字对比度 >= 4.5`, contrastRatio(base, WHITE) >= 4.5);
-    check(`${color.name} 渐变终点白字对比度 >= 4.5`, contrastRatio(dark, WHITE) >= 4.5);
+    hues.push(baseHue);
+    check(
+      `${color.name} 基色（渐变最亮端）白字对比度 >= 3（WCAG AA 大字）`,
+      contrastRatio(base, WHITE) >= 3,
+      contrastRatio(base, WHITE).toFixed(2),
+    );
+    check(
+      `${color.name} 渐变终点白字对比度 >= 4.5`,
+      contrastRatio(dark, WHITE) >= 4.5,
+      contrastRatio(dark, WHITE).toFixed(2),
+    );
     check(
       `${color.name} 渐变终点比基色更暗`,
       relativeLuminance(dark) < relativeLuminance(base),
@@ -113,7 +151,21 @@ function verifyPalette(): void {
       contrastRatio(base, SIDEBAR_DARK) >= 3,
       contrastRatio(base, SIDEBAR_DARK),
     );
-    check(`${color.name} 彩度上限（低饱和）`, baseChroma <= 36, baseChroma.toFixed(1));
+    check(
+      `${color.name} 基色 L* 在 56–60`,
+      baseL >= 56 && baseL <= 60,
+      baseL.toFixed(2),
+    );
+    check(
+      `${color.name} 基色彩度 >= ${MIN_CHROMA[index]}`,
+      baseChroma >= MIN_CHROMA[index]!,
+      baseChroma.toFixed(2),
+    );
+    check(
+      `${color.name} 色相保持原家族（±3°）`,
+      Math.abs(hueDelta(baseHue, HUE_ANCHORS[index]!)) <= 3,
+      `${baseHue.toFixed(2)} vs ${HUE_ANCHORS[index]}`,
+    );
     for (const semantic of SEMANTIC_COLORS) {
       const distance = deltaE(base, semantic.rgb);
       check(
@@ -124,8 +176,15 @@ function verifyPalette(): void {
     }
   }
 
+  const average = lightness.reduce((sum, value) => sum + value, 0) / lightness.length;
+  check('十个群色平均 L* >= 57', average >= 57, average.toFixed(2));
   const spread = Math.max(...lightness) - Math.min(...lightness);
   check('十个群色处于同一明度区间（ΔL* <= 3）', spread <= 3, spread.toFixed(2));
+  check(
+    '色相顺序保持递增（暖→冷→暖，未漂移）',
+    hues.every((value, index) => index === 0 || value > hues[index - 1]!),
+    hues.map((value) => value.toFixed(1)).join(', '),
+  );
 
   let minimum = Number.POSITIVE_INFINITY;
   let pair = '';
@@ -141,7 +200,7 @@ function verifyPalette(): void {
       }
     }
   }
-  check('任意两色具有可感知差异', minimum >= 10, `${pair} ${minimum.toFixed(2)}`);
+  check('任意两色具有可感知差异（ΔE >= 12）', minimum >= 12, `${pair} ${minimum.toFixed(2)}`);
 }
 
 function verifyDerivation(): void {
