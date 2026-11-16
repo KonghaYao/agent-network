@@ -190,12 +190,15 @@ export function firstChar(name: string): string {
   return chars.length > 0 ? chars[0]! : '聊';
 }
 
-/** 群聊 2×2 首字色块；颜色顺序固定，刷新时不会跳色。 */
-export function groupAvatarCells(name: string): { char: string; color: string }[] {
+/**
+ * 群聊 2×2 首字色块；四个格子共用同一个由 `room_id` 派生的专属色，
+ * 让不同群在会话列表里可以一眼区分。颜色不随群名变化。
+ */
+export function groupAvatarCells(name: string, color: string): { char: string; color: string }[] {
   const chars = Array.from(String(name || '群聊').trim()).filter((char) => char.trim().length > 0);
   const effective = chars.length > 0 ? chars : ['群'];
   return Array.from({ length: 4 }, (_, index) => ({
     char: effective[index % effective.length]!,
-    color: AVATAR_COLORS[index % AVATAR_COLORS.length]!,
+    color,
   }));
 }

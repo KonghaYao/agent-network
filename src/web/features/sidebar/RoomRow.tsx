@@ -2,6 +2,7 @@ import { useRef } from 'react';
 
 import { Link } from '../../app/router';
 import { openContextMenuAt, useLongPress } from '../../hooks/useLongPress';
+import { groupColorFor, groupColorStyle } from '../../lib/group-colors';
 import {
   avatarColor,
   firstChar,
@@ -88,7 +89,11 @@ export function RoomRow({
           }}
         >
           <span className="avatar-wrap">
-            {room.kind === 'group' ? <GroupAvatar name={room.name} /> : <Avatar name={room.name} />}
+            {room.kind === 'group' ? (
+              <GroupAvatar name={room.name} roomId={room.room_id} />
+            ) : (
+              <Avatar name={room.name} />
+            )}
             {offline ? (
               <span
                 className="presence-dot offline"
@@ -144,15 +149,17 @@ function Avatar({ name }: { name: string }) {
   );
 }
 
-function GroupAvatar({ name }: { name: string }) {
+function GroupAvatar({ name, roomId }: { name: string; roomId: string }) {
+  const color = groupColorFor(roomId);
   return (
-    <span className="avatar avatar-grid" aria-hidden="true">
-      {groupAvatarCells(name).map((cell, index) => (
-        <span
-          key={`${cell.char}-${index}`}
-          className="avatar-cell"
-          style={{ background: cell.color }}
-        >
+    <span
+      className="avatar avatar-grid"
+      aria-hidden="true"
+      data-group-color={color.index}
+      style={groupColorStyle(color.hex)}
+    >
+      {groupAvatarCells(name, color.hex).map((cell, index) => (
+        <span key={`${cell.char}-${index}`} className="avatar-cell">
           {cell.char}
         </span>
       ))}

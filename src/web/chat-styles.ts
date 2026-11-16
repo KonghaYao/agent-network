@@ -260,8 +260,18 @@ export const APP_STYLE = `
     font-size: 16px; font-weight: 500; }
   .avatar-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
     gap: 1px; border-radius: 6px; background: var(--wx-line); }
+  /* 群聊专属色由 room_id 派生，四个首字色块共用同一个 --group-color。 */
   .avatar-cell { display: grid; place-items: center; width: 100%; height: 100%;
-    font-size: 10px; line-height: 1; color: #fff; }
+    font-size: 10px; line-height: 1; color: #fff; background: var(--group-color); }
+  /*
+   * 群聊头部色标：与列表头像同色。颜色只作辅助提示，群名与“群聊 · N 人”
+   * 已表达身份；色标 aria-hidden。描边在浅色/暗色下都帮助色块脱离背景。
+   */
+  .group-color-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--group-color); box-shadow: 0 0 0 1px rgb(0 0 0 / 12%); }
+  @media (prefers-color-scheme: dark) {
+    .group-color-dot { box-shadow: 0 0 0 1px rgb(255 255 255 / 24%); }
+  }
   /* 品牌图标：容器保留首字供图片失败时回退，img 覆盖并遮住首字。 */
   .avatar-icon { position: relative; background: var(--wx-avatar-icon-bg); color: #1f2329; }
   .avatar-icon .avatar-img { position: absolute; inset: 0; box-sizing: border-box;

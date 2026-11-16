@@ -39,6 +39,7 @@ import {
   senderName,
   type HistoryMessage,
 } from '../lib/chat';
+import { groupColorFor, groupColorStyle } from '../lib/group-colors';
 import { callTool, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import { newRequestId } from '../lib/request-id';
@@ -251,6 +252,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
       : peer?.kind === 'agent'
         ? onlineLabel(peer.online)
         : '';
+  // 群聊头部色标与会话列表 2×2 头像共用 room_id 派生色；直聊不渲染。
+  const groupColor = room?.kind === 'group' ? groupColorFor(room.room_id) : null;
 
   const onQuote = useCallback(
     (item: HistoryMessage) => {
@@ -556,6 +559,14 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 </Link>
                 <div className={`chat-id${loadingShell ? ' chat-id--loading' : ''}`}>
                   <div className="title-row">
+                    {groupColor && !loadingShell ? (
+                      <span
+                        className="group-color-dot"
+                        data-group-color={groupColor.index}
+                        style={groupColorStyle(groupColor.hex)}
+                        aria-hidden="true"
+                      />
+                    ) : null}
                     <h2 id="title">{title}</h2>
                   </div>
                   <p className="muted" id="subtitle" hidden={loadingShell || !subtitle}>
