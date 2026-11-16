@@ -1,5 +1,6 @@
 /**
- * 群聊专属色单测：不依赖服务端，只验证派生确定性、调色板边界与对比度。
+ * 群聊专属色单测：不依赖服务端，只验证派生确定性、调色板边界、对比度
+ * 与群头像文字规则。
  *
  * 运行：bun scripts/verify-group-colors.ts
  */
@@ -10,7 +11,7 @@ import {
   groupColorIndex,
   groupColorStyle,
 } from '../src/web/lib/group-colors';
-import { groupAvatarCells } from '../src/web/lib/rooms';
+import { groupAvatarLabel } from '../src/web/lib/rooms';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
 type Rgb = [number, number, number];
@@ -40,23 +41,25 @@ function contrastRatio(first: Rgb, second: Rgb): number {
   return (Math.max(left, right) + 0.05) / (Math.min(left, right) + 0.05);
 }
 
+/** CIELAB；用于明度区间、彩度上限与 CIE76 色差。 */
+function lab(rgb: Rgb): Rgb {
+  const [r, g, b] = rgb.map((value) => {
+    const unit = value / 255;
+    return unit <= 0.04045 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+  }) as Rgb;
+  const x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b;
+  const y = 0.2126729 * r + 0.7151522 * g + 0.072175 * b;
+  const z = 0.0193339 * r + 0.119192 * g + 0.9503041 * b;
+  const pivot = (value: number): number =>
+    value > 216 / 24389 ? Math.cbrt(value) : (24389 / 27) * value / 116 + 16 / 116;
+  const fx = pivot(x / 0.95047);
+  const fy = pivot(y);
+  const fz = pivot(z / 1.08883);
+  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+}
+
 /** CIE76 色差；约 2.3 为一个可觉察差异，这里用更宽松的阈值做设计边界。 */
 function deltaE(first: Rgb, second: Rgb): number {
-  const lab = (rgb: Rgb): Rgb => {
-    const [r, g, b] = rgb.map((value) => {
-      const unit = value / 255;
-      return unit <= 0.04045 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
-    }) as Rgb;
-    const x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b;
-    const y = 0.2126729 * r + 0.7151522 * g + 0.072175 * b;
-    const z = 0.0193339 * r + 0.119192 * g + 0.9503041 * b;
-    const pivot = (value: number): number =>
-      value > 216 / 24389 ? Math.cbrt(value) : (24389 / 27) * value / 116 + 16 / 116;
-    const fx = pivot(x / 0.95047);
-    const fy = pivot(y);
-    const fz = pivot(z / 1.08883);
-    return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
-  };
   const [l1, a1, b1] = lab(first);
   const [l2, a2, b2] = lab(second);
   return Math.hypot(l1 - l2, a1 - a2, b1 - b2);
@@ -81,18 +84,38 @@ function verifyPalette(): void {
     GROUP_COLORS.every((color, index) => color.index === index),
   );
   const hexes = new Set(GROUP_COLORS.map((color) => color.hex));
-  checkEqual('每个色值唯一', hexes.size, GROUP_COLORS.length);
+  const darks = new Set(GROUP_COLORS.map((color) => color.dark));
+  const names = new Set(GROUP_COLORS.map((color) => color.name));
+  checkEqual('每个基色唯一', hexes.size, GROUP_COLORS.length);
+  checkEqual('每个渐变终点唯一', darks.size, GROUP_COLORS.length);
+  checkEqual('色名唯一', names.size, GROUP_COLORS.length);
 
+  const lightness: number[] = [];
   for (const color of GROUP_COLORS) {
-    const rgb = parseHex(color.hex);
-    const textContrast = contrastRatio(rgb, WHITE);
-    const lightContrast = contrastRatio(rgb, SIDEBAR_LIGHT);
-    const darkContrast = contrastRatio(rgb, SIDEBAR_DARK);
-    check(`${color.name} 色块白字对比度 >= 4.5`, textContrast >= 4.5, textContrast);
-    check(`${color.name} 浅色头部非文本对比度 >= 3`, lightContrast >= 3, lightContrast);
-    check(`${color.name} 暗色头部非文本对比度 >= 3`, darkContrast >= 3, darkContrast);
+    const base = parseHex(color.hex);
+    const dark = parseHex(color.dark);
+    const [baseL, baseA, baseB] = lab(base);
+    const baseChroma = Math.hypot(baseA, baseB);
+    lightness.push(baseL);
+    check(`${color.name} 基色（渐变最亮端）白字对比度 >= 4.5`, contrastRatio(base, WHITE) >= 4.5);
+    check(`${color.name} 渐变终点白字对比度 >= 4.5`, contrastRatio(dark, WHITE) >= 4.5);
+    check(
+      `${color.name} 渐变终点比基色更暗`,
+      relativeLuminance(dark) < relativeLuminance(base),
+    );
+    check(
+      `${color.name} 浅色侧栏非文本对比度 >= 3`,
+      contrastRatio(base, SIDEBAR_LIGHT) >= 3,
+      contrastRatio(base, SIDEBAR_LIGHT),
+    );
+    check(
+      `${color.name} 暗色侧栏非文本对比度 >= 3`,
+      contrastRatio(base, SIDEBAR_DARK) >= 3,
+      contrastRatio(base, SIDEBAR_DARK),
+    );
+    check(`${color.name} 彩度上限（低饱和）`, baseChroma <= 36, baseChroma.toFixed(1));
     for (const semantic of SEMANTIC_COLORS) {
-      const distance = deltaE(rgb, semantic.rgb);
+      const distance = deltaE(base, semantic.rgb);
       check(
         `${color.name} 与${semantic.label}保持感知距离`,
         distance >= 25,
@@ -100,6 +123,9 @@ function verifyPalette(): void {
       );
     }
   }
+
+  const spread = Math.max(...lightness) - Math.min(...lightness);
+  check('十个群色处于同一明度区间（ΔL* <= 3）', spread <= 3, spread.toFixed(2));
 
   let minimum = Number.POSITIVE_INFINITY;
   let pair = '';
@@ -159,30 +185,52 @@ function verifyDerivation(): void {
   check('卡方检验通过（p=0.001）', chiSquare < 27.88, chiSquare.toFixed(3));
 }
 
+function verifyLabels(): void {
+  const pair = groupAvatarLabel('配色测试群');
+  checkEqual('中文群名取前 2 个汉字', pair.text, '配色');
+  checkEqual('中文群名标记 2 字', pair.length, 2);
+  checkEqual('中文群名标记汉字', pair.script, 'han');
+
+  const single = groupAvatarLabel('猫');
+  checkEqual('单字中文群名保留 1 字', single.text, '猫');
+  checkEqual('单字中文群名标记 1 字', single.length, 1);
+
+  const latin = groupAvatarLabel('Codex 讨论组');
+  checkEqual('英文/混合取前 2 个字母并大写', latin.text, 'CO');
+  checkEqual('英文标记 latin', latin.script, 'latin');
+
+  const oneLatin = groupAvatarLabel('Q 研究组');
+  checkEqual('单个英文字母只显示 1 个', oneLatin.text, 'Q');
+  checkEqual('单个英文字母标记 1 字', oneLatin.length, 1);
+
+  checkEqual('拉丁字母开头的混合名取字母', groupAvatarLabel('AI 研究小组').text, 'AI');
+  checkEqual('空格群名回退为“群聊”', groupAvatarLabel('   ').text, '群聊');
+  checkEqual('空群名回退为“群聊”', groupAvatarLabel('').text, '群聊');
+  checkEqual('标点包裹的中文名取汉字', groupAvatarLabel('「读书会」').text, '读书');
+  checkEqual('纯符号名取前 2 个字符', groupAvatarLabel('#!').text, '#!');
+
+  // 标签只由群名决定，颜色只由 room_id 决定，两者互不影响。
+  checkEqual(
+    '标签不改变颜色派生',
+    groupColorFor('rm_label_test').hex,
+    groupColorFor('rm_label_test').hex,
+  );
+}
+
 function verifyConsumers(): void {
   const roomId = 'rm_consumer_test';
   const color = groupColorFor(roomId);
-  const cells = groupAvatarCells('测试群聊', color.hex);
-  checkEqual('2×2 头像产生四个色块', cells.length, 4);
-  check(
-    '四个色块共用同一群色',
-    cells.every((cell) => cell.color === color.hex),
-    cells,
-  );
-  checkEqual('头像首字按群名循环', cells.map((cell) => cell.char).join(''), '测试群聊');
-  checkEqual(
-    '空群名回退为“群聊”',
-    groupAvatarCells('', color.hex).map((cell) => cell.char).join(''),
-    '群聊群聊',
-  );
-  const style = groupColorStyle(color.hex) as Record<string, string>;
-  checkEqual('CSS 自定义属性写入颜色', style['--group-color'], color.hex);
+  const style = groupColorStyle(color) as Record<string, string>;
+  checkEqual('CSS 自定义属性写入基色', style['--group-color'], color.hex);
+  checkEqual('CSS 自定义属性写入渐变终点', style['--group-color-dark'], color.dark);
+  check('渐变终点与基色不同', color.dark !== color.hex, color.dark);
 }
 
 function main(): void {
   console.log('群聊专属色单测');
   verifyPalette();
   verifyDerivation();
+  verifyLabels();
   verifyConsumers();
   console.log(`\n群聊专属色单测通过 ${checksPassed()} 项`);
 }

@@ -6,7 +6,7 @@ import { groupColorFor, groupColorStyle } from '../../lib/group-colors';
 import {
   avatarColor,
   firstChar,
-  groupAvatarCells,
+  groupAvatarLabel,
   isUnread,
   relativeTime,
   type RoomSummary,
@@ -151,18 +151,17 @@ function Avatar({ name }: { name: string }) {
 
 function GroupAvatar({ name, roomId }: { name: string; roomId: string }) {
   const color = groupColorFor(roomId);
+  const label = groupAvatarLabel(name);
   return (
     <span
-      className="avatar avatar-grid"
+      className="avatar avatar-tile"
       aria-hidden="true"
       data-group-color={color.index}
-      style={groupColorStyle(color.hex)}
+      data-label-length={label.length}
+      data-script={label.script}
+      style={groupColorStyle(color)}
     >
-      {groupAvatarCells(name, color.hex).map((cell, index) => (
-        <span key={`${cell.char}-${index}`} className="avatar-cell">
-          {cell.char}
-        </span>
-      ))}
+      {label.text}
     </span>
   );
 }

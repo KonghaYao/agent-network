@@ -224,14 +224,18 @@ export const APP_STYLE = `
     color: #fff; font-size: 13px; line-height: 1.5; text-align: center;
     overflow-wrap: anywhere; pointer-events: none; }
   .toast[hidden] { display: none; }
-  .avatar-wrap { position: relative; flex: 0 0 auto; display: block; width: 40px; height: 40px; }
-  .unread { position: absolute; top: -1px; right: -1px; width: 9px; height: 9px;
+  .avatar-wrap { --avatar-size: 40px; --avatar-offset: calc((44px - var(--avatar-size)) / 2 - 1px);
+    position: relative; flex: 0 0 auto; display: grid; place-items: center;
+    width: 44px; height: 44px; }
+  /* 群聊瓦片占满 44px 槽；直聊仍是 40px 圆形并居中，行高与间距不变。 */
+  .room-item[data-room-kind="group"] .avatar-wrap { --avatar-size: 44px; }
+  .unread { position: absolute; top: var(--avatar-offset); right: var(--avatar-offset); width: 9px; height: 9px;
     border-radius: 50%; background: var(--wx-unread); box-sizing: content-box;
     border: 2px solid var(--wx-sidebar); }
   /* 免打扰的未读仍保留灰点，提示“有消息但不打扰”。 */
   .unread.muted { background: var(--wx-unread-muted); }
   /* 侧栏只标离线：灰色圆点位于右下，在线/未知不渲染，与右上未读点分离。 */
-  .presence-dot { position: absolute; right: -1px; bottom: -1px; width: 9px; height: 9px;
+  .presence-dot { position: absolute; right: var(--avatar-offset); bottom: var(--avatar-offset); width: 9px; height: 9px;
     border-radius: 50%; box-sizing: content-box; background: var(--wx-muted);
     border: 2px solid var(--wx-sidebar); }
   .presence-dot.offline { background: var(--wx-muted); }
@@ -250,7 +254,7 @@ export const APP_STYLE = `
 
   /* 首屏会话骨架：只占位，不阻塞交互；数据到达后 renderRooms 覆盖。 */
   .room-skeleton { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 8px; }
-  .skeleton-avatar { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%;
+  .skeleton-avatar { flex: 0 0 auto; width: 44px; height: 44px; border-radius: 50%;
     background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
   .skeleton-lines { flex: 1 1 auto; display: flex; flex-direction: column; gap: 7px; }
   .skeleton-lines span { display: block; height: 10px; border-radius: 4px;
@@ -262,13 +266,23 @@ export const APP_STYLE = `
   .avatar { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%;
     display: grid; place-items: center; overflow: hidden; color: #fff;
     font-size: 16px; font-weight: 500; }
-  .avatar-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
-    gap: 1px; border-radius: 6px; background: var(--wx-line); }
-  /* 群聊专属色由 room_id 派生，四个首字色块共用同一个 --group-color；
-     变量缺失时回退到调色板首色，保证色块仍有底色。 */
-  .avatar-cell { display: grid; place-items: center; width: 100%; height: 100%;
-    font-size: 10px; line-height: 1; color: #fff;
-    background: var(--group-color, ${GROUP_COLOR_FALLBACK}); }
+  /*
+   * 群聊单块瓦片：44px、13px 圆角，背景是同一群色的柔和明暗渐变，
+   * 白色标签最多 2 字。--group-color 同时供头部色标使用；变量缺失时
+   * 回退到调色板首色，保证瓦片始终有底色。
+   */
+  .avatar-tile { width: 44px; height: 44px; box-sizing: border-box; border-radius: 13px;
+    padding: 0 4px; color: #fff; font-size: 16px; font-weight: 600; line-height: 1;
+    letter-spacing: .02em; text-align: center;
+    background-color: var(--group-color, ${GROUP_COLOR_FALLBACK});
+    background-image: linear-gradient(150deg,
+      var(--group-color, ${GROUP_COLOR_FALLBACK}) 0%,
+      var(--group-color-dark, var(--group-color, ${GROUP_COLOR_FALLBACK})) 100%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 14%); }
+  /* 单字放大，双字缩小；拉丁字母略放宽字距，避免两字粘连。 */
+  .avatar-tile[data-label-length="1"] { font-size: 21px; }
+  .avatar-tile[data-script="latin"] { font-size: 17px; letter-spacing: .04em; }
+  .avatar-tile[data-script="latin"][data-label-length="1"] { font-size: 21px; }
   /*
    * 群聊头部色标：与列表头像同色。颜色只作辅助提示，群名与“群聊 · N 人”
    * 已表达身份；色标 aria-hidden。描边在浅色/暗色下都帮助色块脱离背景。
