@@ -33,6 +33,7 @@ export function TaskPreviewPopover({
   onRequestClose,
   onHoverOpen,
   onHoverClose,
+  onEscapeKeyDown,
   onOpenTrace,
 }: {
   item: TaskListItemView;
@@ -42,6 +43,7 @@ export function TaskPreviewPopover({
   onRequestClose: (rootId: string, restoreFocus: boolean) => void;
   onHoverOpen: (rootId: string) => void;
   onHoverClose: (rootId: string) => void;
+  onEscapeKeyDown: (event: Event) => void;
   onOpenTrace: (rootId: string, focusId: string | null) => void;
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -182,6 +184,7 @@ export function TaskPreviewPopover({
           sideOffset={8}
           collisionPadding={12}
           aria-label={`Task 预览：${preview}`}
+          onEscapeKeyDown={onEscapeKeyDown}
           onOpenAutoFocus={(event) => {
             // 悬浮不抢焦点；键盘 Enter/Space 才允许焦点进入内容。
             if (!keyboardIntentRef.current) event.preventDefault();

@@ -7,17 +7,18 @@
  */
 export const TASK_DOCK_STYLE = `
   .task-dock-slot { position: absolute; left: 16px; right: 16px;
-    bottom: calc(100% + 8px); z-index: 4; display: flex; flex-direction: column;
-    align-items: flex-start; min-width: 0; max-width: 420px; }
+    bottom: calc(100% + 8px); z-index: 4; display: block;
+    min-width: 0; max-width: 420px; }
   /* 无输入区（只读归档）时补上底部安全区。 */
   .composer-area:not(:has(.composer)) .task-dock-slot {
     bottom: calc(100% + 8px + env(safe-area-inset-bottom)); }
-  .task-dock { box-sizing: border-box; display: flex; flex-direction: column;
-    width: 100%; min-width: 0; max-height: min(50dvh, 460px);
-    border: 1px solid var(--wx-line); border-radius: 10px; background: var(--wx-panel);
+  /* 入口保持在锚点，面板绝对定位在入口上方：展开不改变入口盒子。 */
+  .task-dock { position: relative; box-sizing: border-box; display: block;
+    width: 100%; min-width: 0; }
+  .task-dock-head { display: flex; align-items: center; width: fit-content;
+    max-width: 100%; box-sizing: border-box; border: 1px solid var(--wx-line);
+    border-radius: 10px; background: var(--wx-panel);
     box-shadow: 0 8px 24px rgb(0 0 0 / 14%); overflow: hidden; }
-  .task-dock.is-collapsed { width: auto; max-width: 100%; }
-  .task-dock-head { flex: 0 0 auto; display: flex; align-items: center; }
   .task-dock-toggle { flex: 1 1 auto; display: flex; align-items: center; gap: 8px;
     min-height: 44px; min-width: 0; padding: 6px 10px; border: 0; border-radius: 0;
     background: transparent; color: var(--wx-text); text-align: left; cursor: pointer; }
@@ -32,8 +33,12 @@ export const TASK_DOCK_STYLE = `
   .task-dock-caret { margin-left: auto; color: var(--wx-muted); font-size: 11px;
     line-height: 1; transition: transform .15s ease; }
   .task-dock.is-collapsed .task-dock-caret { transform: rotate(-90deg); }
-  .task-dock-body { flex: 1 1 auto; display: flex; flex-direction: column;
-    min-height: 0; overflow: hidden; border-top: 1px solid var(--wx-line); }
+  .task-dock-body { position: absolute; left: 0; right: 0;
+    bottom: calc(100% + 8px); box-sizing: border-box; display: flex;
+    flex-direction: column; width: 100%; max-height: min(50dvh, 460px);
+    border: 1px solid var(--wx-line); border-radius: 10px;
+    background: var(--wx-panel); box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+    overflow: hidden; }
   .task-dock-body[hidden] { display: none; }
   .task-dock-list { flex: 1 1 auto; min-height: 0; margin: 0;
     padding: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; }

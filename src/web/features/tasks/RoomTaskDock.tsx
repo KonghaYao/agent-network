@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from 'react';
 
 import type { RoomView } from '../../lib/chat';
 import { taskAuthorizationKey } from '../../lib/task-cache';
@@ -16,6 +22,9 @@ interface CompleteState {
   item: TaskListItemView;
   returnFocus: HTMLElement | null;
 }
+
+/** 展开由指针触发后，指针移动超过该距离才重新允许 hover 预览。 */
+const HOVER_REARM_DISTANCE = 8;
 
 /**
  * 房间未完成 Task 浮动入口：浮动在输入框上方，不占聊天文档流。
@@ -43,6 +52,9 @@ export function RoomTaskDock({
   const [complete, setComplete] = useState<CompleteState | null>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const dockRef = useRef<HTMLElement>(null);
+  const hoverArmedRef = useRef(true);
+  const pointerOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const previewEscapeEventRef = useRef<Event | null>(null);
   const readOnly = room?.read_only === true;
   const authorizationKey = taskAuthorizationKey(room);
   const tasks = useRoomTasks({
@@ -61,6 +73,31 @@ export function RoomTaskDock({
 
   useEffect(() => {
     if (!expanded) setPreview(null);
+  }, [expanded]);
+
+  // 面板从入口上方浮出后，静止的指针仍停在入口/原位置；先要求指针移动
+  // 超过阈值，避免布局变化后的 hover 立即弹出预览挡住入口。
+  useEffect(() => {
+    if (!expanded) {
+      hoverArmedRef.current = true;
+      return undefined;
+    }
+    const origin = pointerOriginRef.current;
+    if (!origin) {
+      hoverArmedRef.current = true;
+      return undefined;
+    }
+    hoverArmedRef.current = false;
+    const onPointerMove = (event: PointerEvent) => {
+      if (
+        Math.hypot(event.clientX - origin.x, event.clientY - origin.y) >=
+        HOVER_REARM_DISTANCE
+      ) {
+        hoverArmedRef.current = true;
+      }
+    };
+    document.addEventListener('pointermove', onPointerMove, true);
+    return () => document.removeEventListener('pointermove', onPointerMove, true);
   }, [expanded]);
 
   const focusAfterCollapse = () => {
@@ -129,6 +166,7 @@ export function RoomTaskDock({
   };
 
   const hoverOpen = (rootId: string) => {
+    if (!hoverArmedRef.current) return;
     setPreview((current) => {
       if (current?.pinned) return current;
       return { rootId, pinned: false };
@@ -141,6 +179,11 @@ export function RoomTaskDock({
     );
   };
 
+  const onPreviewEscape = (event: Event) => {
+    // 记录被预览消费的原始 Esc 事件；下一次 Esc 是不同事件，不会误吞。
+    previewEscapeEventRef.current = event;
+  };
+
   const openComplete = (item: TaskListItemView) => {
     if (readOnly || !item.can_complete || item.status !== 'open') return;
     setPreview(null);
@@ -151,21 +194,30 @@ export function RoomTaskDock({
     });
   };
 
-  const onToggle = () => {
-    if (expanded) collapse(true);
-    else setExpanded(true);
+  const onToggle = (event: MouseEvent<HTMLButtonElement>) => {
+    if (expanded) {
+      pointerOriginRef.current = null;
+      collapse(true);
+      return;
+    }
+    // 只有真实指针点击才需要 hover 抑制；键盘打开时指针不在入口上。
+    pointerOriginRef.current =
+      event.detail > 0 ? { x: event.clientX, y: event.clientY } : null;
+    setExpanded(true);
   };
 
   const onSectionKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key !== 'Escape' || !expanded) return;
-    // 预览浮层自己处理 Esc；否则收起面板并把焦点还给入口。
     const target = event.target;
-    if (
-      target instanceof Element &&
-      target.closest('.task-dock-item-trigger, .task-preview-popover')
-    ) {
+    // 预览浮层内由 Radix 自己处理 Esc。
+    if (target instanceof Element && target.closest('.task-preview-popover')) return;
+    // 预览已打开时让 Radix 先关闭预览；Radix 在 document capture 阶段
+    // 处理，冒泡到这里时 preview 可能已变成 null，用同一个原生事件区分。
+    if (preview || previewEscapeEventRef.current === event.nativeEvent) {
+      previewEscapeEventRef.current = null;
       return;
     }
+    event.preventDefault();
     event.stopPropagation();
     collapse(true);
   };
@@ -184,7 +236,7 @@ export function RoomTaskDock({
   if (!expanded && tasks.totalCount === 0) return null;
 
   return (
-    <div className="task-dock-slot">
+    <div id="task-dock-slot" className="task-dock-slot">
       <section
         ref={dockRef}
         id="task-dock"
@@ -271,6 +323,7 @@ export function RoomTaskDock({
                   onRequestClose={requestClose}
                   onHoverOpen={hoverOpen}
                   onHoverClose={hoverClose}
+                  onEscapeKeyDown={onPreviewEscape}
                   onOpenTrace={(rootId, focusId) => {
                     requestClose(rootId, false);
                     onOpenTrace(rootId, focusId);
