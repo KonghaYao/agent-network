@@ -46,6 +46,11 @@ import {
 } from './events';
 import { advanceHistoryCursor } from './room-cursor';
 import {
+  attachmentOrigins,
+  downloadAttachments,
+  type MonitorAttachment,
+} from './attachments';
+import {
   fetchMemoryPack,
   memoryEventFields,
   type MemoryContextResult,
@@ -167,6 +172,11 @@ export interface MonitorEngineOptions {
    * claude=full、peri=pointer；`--no-memory-context` 传 off。
    */
   memoryMode?: MemoryMode;
+  /**
+   * 是否下载正文中的同源附件（图片/PDF）并写入事件；缺省关闭。
+   * 只有会读正文并让 Agent 直接处理的 harness（claude）开启。
+   */
+  attachments?: boolean;
 }
 
 type EmitResult = 'emitted' | 'deferred' | 'error';
@@ -355,6 +365,10 @@ export class MonitorEngine {
   private readonly roomEventScope: RoomEventScope | null;
   /** delivery 记忆参考包粒度；off 时完全不调用工具。 */
   private readonly memoryMode: MemoryMode;
+  /** 开启后 claim 成功才下载同源附件；失败只计数，不影响投递。 */
+  private readonly attachmentsEnabled: boolean;
+  /** 允许下载的 origin：PUBLIC_ORIGIN、AGENTNET_URL 与监听 endpoint。 */
+  private readonly attachmentOrigins: string[];
   /** 同一 delivery:attempt 只注入一次；有界，防止长进程无限增长。 */
   private readonly memoryResults = new Map<string, MemoryContextResult>();
   /** 并发同 key 调用合并，避免通知与补读同时触发第二次工具调用。 */
@@ -419,6 +433,8 @@ export class MonitorEngine {
     this.onDeadline = options.onDeadline;
     this.roomEventScope = options.roomEvents === false ? null : 'all';
     this.memoryMode = options.memoryMode ?? 'off';
+    this.attachmentsEnabled = options.attachments === true;
+    this.attachmentOrigins = attachmentOrigins(options.rpc.endpoint);
     for (const [roomId, cursor] of this.state.roomCursors()) {
       this.roomHistoryCursors.set(roomId, cursor);
     }
@@ -1391,11 +1407,35 @@ export class MonitorEngine {
       return 'emitted';
     }
 
+    // 附件在 claim 成功且正文可读后才下载；任何失败只减少附件，不阻塞投递。
+    let attachments: MonitorAttachment[] = [];
+    if (this.attachmentsEnabled) {
+      const outcome = await downloadAttachments({
+        body: read.body,
+        origins: this.attachmentOrigins,
+        directory: this.state.attachmentsDir,
+        signal: this.signal,
+      });
+      attachments = outcome.attachments;
+      if (attachments.length > 0 || outcome.skipped > 0) {
+        this.control(
+          'attachments',
+          {
+            code: 'attachments',
+            delivery_id: fields.deliveryId,
+            downloaded: attachments.length,
+            skipped: outcome.skipped,
+          },
+          `ATTACHMENTS delivery=${fields.deliveryId} downloaded=${attachments.length} skipped=${outcome.skipped}`,
+        );
+      }
+    }
+
     let eventFile: string;
     try {
       eventFile = await this.state.writeEventFile(
         fields.deliveryId,
-        eventFilePayload(fields, claim, source, read.body, memoryFields, read.quote),
+        eventFilePayload(fields, claim, source, read.body, memoryFields, read.quote, attachments),
       );
     } catch {
       this.control(
@@ -1419,6 +1459,7 @@ export class MonitorEngine {
         eventFile,
         memoryFields,
         read.quote,
+        attachments,
       ),
     );
     this.noteDeliveryEmitted(fields);

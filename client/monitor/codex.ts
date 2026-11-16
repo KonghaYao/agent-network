@@ -18,9 +18,19 @@
  * 不执行任何 `.sh`，也不依赖 Python。
  */
 
+import { join } from 'node:path';
+
 import { CliError, resolveConfig } from '../mcp';
 import { LIMITS } from '../../src/contracts/limits';
 import { asArray, asNumber, asRecord, asString } from '../output';
+import {
+  attachmentOrigins,
+  cleanupOldAttachments,
+  downloadAttachments,
+  prepareAttachmentDirectory,
+  startAttachmentCleanup,
+  type MonitorAttachment,
+} from './attachments';
 import { abortableSleep, claimDelivery } from './engine';
 import {
   quoteOf,
@@ -60,6 +70,7 @@ import {
   type JsonObject,
   type SubscriptionControl,
 } from './rpc';
+import { defaultMonitorStateDirectory } from './state';
 
 export interface MonitorContext {
   baseUrl: string | null;
@@ -101,6 +112,8 @@ interface CodexWatcherOptions {
   roomEvents?: boolean;
   /** delivery 记忆参考包；缺省开启，`--no-memory-context` 关闭。 */
   memoryContext?: boolean;
+  /** claim 后下载同源附件；缺省不下载。 */
+  attachments?: { directory: string; origins: string[] };
 }
 
 class CodexWatcher {
@@ -111,6 +124,7 @@ class CodexWatcher {
   private readonly events = new AsyncQueue<WatcherEvent>();
   private readonly roomEvents: boolean;
   private readonly memoryContext: boolean;
+  private readonly attachmentConfig: { directory: string; origins: string[] } | undefined;
   private readonly memoryResults = new Map<string, MemoryContextResult>();
   private readonly memoryInflight = new Map<string, Promise<MemoryContextResult>>();
   private memoryToolUnavailable = false;
@@ -136,6 +150,7 @@ class CodexWatcher {
     this.log = options.log ?? writeStdout;
     this.roomEvents = options.roomEvents !== false;
     this.memoryContext = options.memoryContext !== false;
+    this.attachmentConfig = options.attachments;
     this.rpc = new MonitorRpc({
       endpoint: options.endpoint,
       token: options.token,
@@ -179,6 +194,35 @@ class CodexWatcher {
       return await task;
     } finally {
       this.memoryInflight.delete(key);
+    }
+  }
+
+  /**
+   * claim 成功后下载同源图片/PDF，供 Codex 直接读取本地路径。
+   * 失败只记录计数并返回空列表，绝不阻塞任务。
+   */
+  private async attachmentsFor(
+    deliveryId: string,
+    body: string,
+  ): Promise<MonitorAttachment[]> {
+    const config = this.attachmentConfig;
+    if (config === undefined) return [];
+    try {
+      const outcome = await downloadAttachments({
+        body,
+        origins: config.origins,
+        directory: config.directory,
+        signal: this.signal,
+      });
+      if (outcome.attachments.length > 0 || outcome.skipped > 0) {
+        this.log(
+          `ATTACHMENTS delivery=${deliveryId} downloaded=${outcome.attachments.length} ` +
+            `skipped=${outcome.skipped}`,
+        );
+      }
+      return outcome.attachments;
+    } catch {
+      return [];
     }
   }
 
@@ -658,6 +702,8 @@ class CodexWatcher {
 
         const read = await this.readForActive(claim, deliveryId, match);
         if (read === null) continue;
+        // turn/steer 也要带上附件本地路径，与 turn/start 保持一致。
+        const attachments = await this.attachmentsFor(deliveryId, read.body);
         const memory = await this.memoryForDelivery(
           deliveryId,
           asString(match.room_id),
@@ -678,7 +724,7 @@ class CodexWatcher {
             input: [
               {
                 type: 'text',
-                text: steerPrompt(read.body, memoryPromptBlock(memory), read.quote),
+                text: steerPrompt(read.body, memoryPromptBlock(memory), read.quote, attachments),
               },
             ],
           });
@@ -731,6 +777,7 @@ class CodexWatcher {
         asString(match.message_id),
         claim,
       );
+      const attachments = await this.attachmentsFor(deliveryId, read.body);
 
       let result;
       try {
@@ -745,6 +792,7 @@ class CodexWatcher {
                 read.body,
                 memoryPromptBlock(memory),
                 read.quote,
+                attachments,
               ),
             },
           ],
@@ -958,12 +1006,29 @@ export async function runCodexMonitor(
     return fail(`ERROR type=configuration message=${lastLine(error)}`);
   }
 
+  // 附件按 codex 自己的 state 目录存放；与 claude/peri 一样支持显式覆盖。
+  const attachmentDirectory = join(
+    process.env.AGENTNET_MONITOR_STATE_DIR ??
+      defaultMonitorStateDirectory('codex', endpoint, token),
+    'attachments',
+  );
+  let attachments: { directory: string; origins: string[] } | undefined;
+  try {
+    await prepareAttachmentDirectory(attachmentDirectory);
+    attachments = { directory: attachmentDirectory, origins: attachmentOrigins(endpoint) };
+  } catch {
+    // 目录不可用时只关闭附件，不影响监听与投递。
+    attachments = undefined;
+  }
+
   let lock: WatcherLock;
   try {
     lock = acquireWatcherLock(token);
   } catch (error) {
     return fail(`ERROR codex_watch=${lastLine(error)}`);
   }
+  const stopAttachmentCleanup =
+    attachments === undefined ? null : startAttachmentCleanup(attachmentDirectory);
 
   const controller = new AbortController();
   const stop = (): void => controller.abort();
@@ -977,12 +1042,15 @@ export async function runCodexMonitor(
       signal: controller.signal,
       roomEvents: options.roomEvents,
       memoryContext: options.memoryContext,
+      attachments,
     });
     return await watcher.run();
   } finally {
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
     process.off('SIGHUP', stop);
+    stopAttachmentCleanup?.();
+    await cleanupOldAttachments(attachmentDirectory).catch(() => undefined);
     lock.release();
   }
 }

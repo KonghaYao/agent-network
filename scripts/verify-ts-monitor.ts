@@ -15,6 +15,7 @@
  * 运行：bun scripts/verify-ts-monitor.ts
  */
 
+import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   chmodSync,
@@ -25,6 +26,7 @@ import {
   readdirSync,
   statSync,
   truncateSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
@@ -35,7 +37,14 @@ import { check, checkEqual, checksPassed } from './lib/harness';
 import { listInboxPages, type MonitorRpc } from '../client/monitor/rpc';
 import { fetchMemoryPack } from '../client/monitor/memory';
 import { BODY_PREVIEW_CHARS } from '../client/monitor/events';
+import {
+  attachmentOrigins,
+  downloadAttachments,
+  extractAttachmentCandidates,
+  startAttachmentCleanup,
+} from '../client/monitor/attachments';
 import { retryDelayMs } from '../client/monitor/engine';
+import { LIMITS } from '../src/contracts/limits';
 
 const ROOT = resolve(import.meta.dir, '..');
 const CLI = resolve(ROOT, 'client/cli.ts');
@@ -60,6 +69,14 @@ interface MockDelivery extends JsonObject {
   claim_id: string | null;
   claimed_at: string | null;
   message: MockMessage;
+}
+
+interface MockFile {
+  body: Uint8Array;
+  contentType: string;
+  status?: number;
+  location?: string;
+  delayMs?: number;
 }
 
 interface MockState {
@@ -98,6 +115,14 @@ interface MockState {
   memoryErrorCode: string;
   memoryDelayMs: number;
   memoryReason: string | null;
+  /** 附件下载：覆盖正文与 /f/<fileId> 响应，记录请求与并发。 */
+  bodies: Map<string, string>;
+  files: Map<string, MockFile>;
+  fileRequests: string[];
+  fileConcurrency: number;
+  maxFileConcurrency: number;
+  /** 每次 /f/ 请求的 Authorization/Cookie；应为空，证明不携带凭据。 */
+  fileCredentialHeaders: Array<{ authorization: string | null; cookie: string | null }>;
 }
 
 interface MockServer {
@@ -196,6 +221,34 @@ interface MockOptions {
   inboxFailures?: number;
 }
 
+/** 模拟 `/f/<fileId>`：记录请求、并发与可选的延迟/重定向。 */
+async function serveMockFile(state: MockState, request: Request, url: URL): Promise<Response> {
+  state.fileRequests.push(url.pathname);
+  state.fileCredentialHeaders.push({
+    authorization: request.headers.get('authorization'),
+    cookie: request.headers.get('cookie'),
+  });
+  state.fileConcurrency += 1;
+  state.maxFileConcurrency = Math.max(state.maxFileConcurrency, state.fileConcurrency);
+  try {
+    const file = state.files.get(url.pathname.slice('/f/'.length));
+    if (file === undefined) return new Response('not found', { status: 404 });
+    if (file.delayMs !== undefined) await Bun.sleep(file.delayMs);
+    if (file.location !== undefined) {
+      return new Response(null, { status: 302, headers: { location: file.location } });
+    }
+    return new Response(file.body as unknown as BodyInit, {
+      status: file.status ?? 200,
+      headers: {
+        'content-type': file.contentType,
+        'content-length': String(file.body.byteLength),
+      },
+    });
+  } finally {
+    state.fileConcurrency -= 1;
+  }
+}
+
 function createMock(options: MockOptions = {}): MockServer {
   const state: MockState = {
     pending: new Map(),
@@ -224,6 +277,12 @@ function createMock(options: MockOptions = {}): MockServer {
     memoryErrorCode: 'MEMORY_UNAVAILABLE',
     memoryDelayMs: 0,
     memoryReason: null,
+    bodies: new Map(),
+    files: new Map(),
+    fileRequests: [],
+    fileConcurrency: 0,
+    maxFileConcurrency: 0,
+    fileCredentialHeaders: [],
   };
 
   const stopKeepalives = (): void => {
@@ -250,6 +309,10 @@ function createMock(options: MockOptions = {}): MockServer {
     idleTimeout: 120,
     async fetch(request) {
       const url = new URL(request.url);
+      if (request.method === 'GET' || request.method === 'HEAD') {
+        if (!url.pathname.startsWith('/f/')) return new Response('not found', { status: 404 });
+        return await serveMockFile(state, request, url);
+      }
       if (request.method !== 'POST' || url.pathname !== '/mcp') {
         return new Response('not found', { status: 404 });
       }
@@ -498,7 +561,7 @@ function createMock(options: MockOptions = {}): MockServer {
         case 'network_message_read': {
           state.readCalls += 1;
           const messageId = String(args.message_id ?? '');
-          const full = messageBody(messageId);
+          const full = state.bodies.get(messageId) ?? messageBody(messageId);
           const quote = state.quotes.get(messageId) ?? null;
           if (messageId === LONG_MESSAGE_ID) {
             const cursor = String(args.chunk_cursor ?? '');
@@ -1221,7 +1284,7 @@ async function runDeliveryQuoteChecks(): Promise<void> {
     checkEqual(
       '引用事件 quote 位于末尾',
       keysOf(event),
-      'type,delivery_id,room_id,message_id,sender_id,event_id,seq,attempt,claim_id,claimed_at,auto_claimed,claim_state,claim,source,body,body_bytes,body_truncated,event_file,quote',
+      'type,delivery_id,room_id,message_id,sender_id,event_id,seq,attempt,claim_id,claimed_at,auto_claimed,claim_state,claim,source,body,body_bytes,body_truncated,event_file,attachments,quote',
     );
     const quotedFile = JSON.parse(
       readFileSync(String(event.event_file ?? ''), 'utf8'),
@@ -1255,6 +1318,28 @@ async function runDeliveryQuoteChecks(): Promise<void> {
     check('不完整 quote 时事件不带 quote', !('quote' in partial));
     checkEqual('不完整 quote 时正文完整', partial.body, messageBody('msg_dlv_partial_quote'));
     checkEqual('不完整 quote 时读取次数仍为 1', mock.state.readCalls - beforePartial, 1);
+
+    // 合并后 quote 与 attachments 必须同时出现在同一事件。
+    mock.state.claims.clear();
+    const quoteAttachmentId = attachFileId('Q');
+    mock.state.files.set(quoteAttachmentId, { body: ATTACH_PNG, contentType: 'image/png' });
+    mock.state.quotes.set('msg_dlv_quote_attach', quote);
+    mock.state.bodies.set(
+      'msg_dlv_quote_attach',
+      `引用并看图 ${mock.base}/f/${quoteAttachmentId}`,
+    );
+    mock.state.pending.set('dlv_quote_attach', delivery('dlv_quote_attach'));
+    sendItems(mock, [
+      notificationItem('dlv_quote_attach', 'delivery.created', 'evt_quote_attach'),
+    ]);
+    const combined = await waitForEvent(watcher.stdout, 'delivery', 'dlv_quote_attach');
+    checkEqual('quote 与 attachments 同时出现', JSON.stringify(combined.quote), JSON.stringify(quote));
+    checkEqual('quote 投递同样携带附件', attachmentItems(combined).length, 1);
+    const combinedFile = JSON.parse(
+      readFileSync(String(combined.event_file ?? ''), 'utf8'),
+    ) as JsonObject;
+    checkEqual('event_file 同时含 quote 与 attachments', JSON.stringify(combinedFile.quote), JSON.stringify(quote));
+    checkEqual('event_file 同时含附件', attachmentItems(combinedFile).length, 1);
   } finally {
     await watcher.kill();
     mock.stop();
@@ -2863,6 +2948,419 @@ async function runCleanupCheck(): Promise<void> {
   }
 }
 
+const ATTACH_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+const ATTACH_JPG = Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex');
+const ATTACH_PDF = Buffer.from(
+  '%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n',
+  'utf8',
+);
+
+/** 服务端 fileId 形状：`f_` + 22 个 URL 安全字符。 */
+function attachFileId(char: string): string {
+  return `f_${char.repeat(22)}`;
+}
+
+function attachmentItems(event: JsonObject): JsonObject[] {
+  return Array.isArray(event.attachments) ? (event.attachments as JsonObject[]) : [];
+}
+
+function startOtherFileServer(): { base: string; hits: string[]; stop: () => void } {
+  const hits: string[] = [];
+  const server = Bun.serve({
+    port: 0,
+    fetch(request) {
+      hits.push(new URL(request.url).pathname);
+      return new Response(ATTACH_PNG as unknown as BodyInit, {
+        headers: { 'content-type': 'image/png' },
+      });
+    },
+  });
+  return { base: `http://127.0.0.1:${server.port}`, hits, stop: () => server.stop(true) };
+}
+
+async function runAttachmentChecks(): Promise<void> {
+  const mock = createMock();
+  const other = startOtherFileServer();
+  const workdir = await mkdtemp(join(tmpdir(), 'ts-monitor-attachments-'));
+  const stateDir = join(workdir, 'state');
+  const attachmentsDir = join(stateDir, 'attachments');
+  const watcher = startWatcher(mock.base, {
+    AGENTNET_MONITOR_STATE_DIR: stateDir,
+    AGENTNET_MONITOR_RETRY_BASE_MS: '600000',
+  });
+  try {
+    await waitForLine(watcher.stderr, (line) => line.includes('READY'), 'attachments READY');
+
+    const send = async (id: string, body: string): Promise<JsonObject> => {
+      const item = delivery(id);
+      mock.state.bodies.set(item.message_id, body);
+      mock.state.pending.set(id, item);
+      sendItems(mock, [notificationItem(id, 'delivery.created', `evt_${id}`)]);
+      const event = await waitForEvent(watcher.stdout, 'delivery', id);
+      // 服务端一次只允许一个 claim；测试不实际 complete，直接释放 mock 状态。
+      mock.state.claims.clear();
+      return event;
+    };
+
+    // 1) 图片 + PDF + 相对路径；重复链接去重；并发有界。
+    const imageId = attachFileId('a');
+    const pdfId = attachFileId('b');
+    const relativeId = attachFileId('c');
+    mock.state.files.set(imageId, { body: ATTACH_PNG, contentType: 'image/png', delayMs: 80 });
+    mock.state.files.set(pdfId, { body: ATTACH_PDF, contentType: 'application/pdf', delayMs: 80 });
+    mock.state.files.set(relativeId, { body: ATTACH_JPG, contentType: 'image/jpeg', delayMs: 80 });
+    const okEvent = await send(
+      'dlv_attach_ok',
+      `看图 ${mock.base}/f/${imageId}，PDF ${mock.base}/f/${pdfId}，` +
+        `相对 /f/${relativeId}，重复 ${mock.base}/f/${imageId}`,
+    );
+    const okItems = attachmentItems(okEvent);
+    checkEqual('附件成功事件携带 3 个附件', okItems.length, 3);
+    checkEqual(
+      '附件 MIME 顺序保持正文顺序',
+      okItems.map((item) => item.mime).join(','),
+      'image/png,application/pdf,image/jpeg',
+    );
+    checkEqual('附件字节数来自实际内容', okItems[0]?.bytes, ATTACH_PNG.byteLength);
+    checkEqual('附件字节数 PDF', okItems[1]?.bytes, ATTACH_PDF.byteLength);
+    checkEqual(
+      '附件 sha256 为内容摘要',
+      okItems[0]?.sha256,
+      createHash('sha256').update(ATTACH_PNG).digest('hex'),
+    );
+    for (const item of okItems) {
+      const path = String(item.path);
+      check(`附件路径位于 state 目录: ${path}`, path.startsWith(`${attachmentsDir}/`));
+      check(`附件文件存在: ${path}`, existsSync(path));
+      checkEqual(`附件文件权限 0600: ${path}`, statSync(path).mode & 0o777, 0o600);
+    }
+    checkEqual(
+      '附件内容与响应一致',
+      readFileSync(String(okItems[0]?.path)).equals(ATTACH_PNG),
+      true,
+    );
+    checkEqual(
+      '附件目录权限 0700',
+      statSync(attachmentsDir).mode & 0o777,
+      0o700,
+    );
+    const okEventFile = JSON.parse(readFileSync(String(okEvent.event_file), 'utf8')) as JsonObject;
+    checkEqual('event_file 同样携带 attachments', attachmentItems(okEventFile).length, 3);
+    check(
+      '附件下载不携带凭据',
+      mock.state.fileCredentialHeaders.every(
+        (headers) => headers.authorization === null && headers.cookie === null,
+      ),
+      mock.state.fileCredentialHeaders,
+    );
+    check(
+      '附件下载并发不超过上限',
+      mock.state.maxFileConcurrency <= LIMITS.monitorAttachmentConcurrency,
+      mock.state.maxFileConcurrency,
+    );
+    check(
+      '附件下载确实并发执行',
+      mock.state.maxFileConcurrency >= 2,
+      mock.state.maxFileConcurrency,
+    );
+    await waitForLine(
+      watcher.stderr,
+      (line) => line.includes('ATTACHMENTS delivery=dlv_attach_ok downloaded=3 skipped=0'),
+      'attachments count log',
+    );
+
+    // 2) 非图片/PDF、超大文件、跨主机、userinfo、非 /f/ 路径、query/hash 都拒绝。
+    const textId = attachFileId('d');
+    const oversizedId = attachFileId('e');
+    const crossHostId = attachFileId('f');
+    const userinfoId = attachFileId('g');
+    const queryId = attachFileId('v');
+    const hashId = attachFileId('w');
+    mock.state.files.set(textId, { body: Buffer.from('hello'), contentType: 'text/plain' });
+    mock.state.files.set(oversizedId, {
+      body: new Uint8Array(LIMITS.monitorAttachmentBytes + 1),
+      contentType: 'image/png',
+    });
+    mock.state.files.set(queryId, { body: ATTACH_PNG, contentType: 'image/png' });
+    mock.state.files.set(hashId, { body: ATTACH_PNG, contentType: 'image/png' });
+    const beforeSkip = mock.state.fileRequests.length;
+    const skipEvent = await send(
+      'dlv_attach_skip',
+      `文本 ${mock.base}/f/${textId}，超大 ${mock.base}/f/${oversizedId}，` +
+        `跨主机 ${other.base}/f/${crossHostId}，userinfo ` +
+        `${mock.base.replace('http://', 'http://user:pass@')}/f/${userinfoId}，` +
+        `路径 /not-f/${imageId}，片段 ${mock.base}/f/${imageId}/extra，` +
+        `query ${mock.base}/f/${queryId}?download=1，hash ${mock.base}/f/${hashId}#preview`,
+    );
+    checkEqual('被忽略的附件不进入事件', attachmentItems(skipEvent).length, 0);
+    checkEqual(
+      '只请求类型不支持与超大附件',
+      mock.state.fileRequests.slice(beforeSkip).sort().join(','),
+      [`/f/${textId}`, `/f/${oversizedId}`].sort().join(','),
+    );
+    check(
+      '带 query/hash 的候选不发起请求',
+      !mock.state.fileRequests.slice(beforeSkip).includes(`/f/${queryId}`) &&
+        !mock.state.fileRequests.slice(beforeSkip).includes(`/f/${hashId}`),
+      mock.state.fileRequests.slice(beforeSkip),
+    );
+    checkEqual('跨主机附件请求数为 0', other.hits.length, 0);
+    await waitForLine(
+      watcher.stderr,
+      (line) => line.includes('ATTACHMENTS delivery=dlv_attach_skip downloaded=0 skipped=2'),
+      'attachments skipped log',
+    );
+
+    // 3) 超过 3 个只下载前 3 个。
+    const limitIds = ['h', 'i', 'j', 'k'].map(attachFileId);
+    limitIds.forEach((id, index) => {
+      mock.state.files.set(id, {
+        body: Buffer.concat([ATTACH_PNG, Buffer.from(String(index))]),
+        contentType: 'image/png',
+      });
+    });
+    const beforeLimit = mock.state.fileRequests.length;
+    const limitEvent = await send(
+      'dlv_attach_limit',
+      limitIds.map((id) => `${mock.base}/f/${id}`).join('\n'),
+    );
+    checkEqual('附件数量上限为 3', attachmentItems(limitEvent).length, 3);
+    checkEqual(
+      '第 4 个附件不发起请求',
+      mock.state.fileRequests.slice(beforeLimit).length,
+      3,
+    );
+    check(
+      '第 4 个附件未下载',
+      !mock.state.fileRequests.slice(beforeLimit).includes(`/f/${limitIds[3]}`),
+      mock.state.fileRequests.slice(beforeLimit),
+    );
+
+    // 4) 单个附件 404 不影响投递。
+    const missingId = attachFileId('m');
+    const failedEvent = await send('dlv_attach_404', `${mock.base}/f/${missingId}`);
+    checkEqual('附件 404 仍输出 delivery', failedEvent.type, 'delivery');
+    checkEqual('附件 404 只省略附件', attachmentItems(failedEvent).length, 0);
+    check(
+      '附件 404 不阻塞正文',
+      String(failedEvent.body).includes(`/f/${missingId}`),
+      failedEvent.body,
+    );
+    await waitForLine(
+      watcher.stderr,
+      (line) => line.includes('ATTACHMENTS delivery=dlv_attach_404 downloaded=0 skipped=1'),
+      'attachments 404 log',
+    );
+
+    // 5) 重定向到其它主机不跟随；同源 /f/ 重定向重新校验后允许。
+    const redirectCrossId = attachFileId('n');
+    mock.state.files.set(redirectCrossId, {
+      body: new Uint8Array(),
+      contentType: 'image/png',
+      location: `${other.base}/f/${attachFileId('p')}`,
+    });
+    const redirectCrossEvent = await send('dlv_attach_redirect_cross', `${mock.base}/f/${redirectCrossId}`);
+    checkEqual('跨主机重定向不产生附件', attachmentItems(redirectCrossEvent).length, 0);
+    checkEqual('跨主机重定向目标未被请求', other.hits.length, 0);
+
+    const redirectTargetId = attachFileId('q');
+    const redirectSameId = attachFileId('r');
+    mock.state.files.set(redirectTargetId, { body: ATTACH_PNG, contentType: 'image/png' });
+    mock.state.files.set(redirectSameId, {
+      body: new Uint8Array(),
+      contentType: 'image/png',
+      location: `${mock.base}/f/${redirectTargetId}`,
+    });
+    const redirectSameEvent = await send('dlv_attach_redirect_same', `${mock.base}/f/${redirectSameId}`);
+    const redirectItems = attachmentItems(redirectSameEvent);
+    checkEqual('同源重定向产生附件', redirectItems.length, 1);
+    checkEqual(
+      '附件 URL 记录重定向后的同源地址',
+      redirectItems[0]?.url,
+      `${mock.base}/f/${redirectTargetId}`,
+    );
+
+    // 6) 单个附件 5 秒超时只跳过，不影响其它候选。
+    const slowId = attachFileId('u');
+    mock.state.files.set(slowId, {
+      body: ATTACH_PNG,
+      contentType: 'image/png',
+      delayMs: LIMITS.monitorAttachmentTimeoutMs + 500,
+    });
+    const started = Date.now();
+    const slow = await downloadAttachments({
+      body: `${mock.base}/f/${slowId}`,
+      origins: [mock.base],
+      directory: attachmentsDir,
+    });
+    const elapsed = Date.now() - started;
+    checkEqual('附件超时被跳过', slow.attachments.length, 0);
+    checkEqual('附件超时计入 skipped', slow.skipped, 1);
+    check(
+      '附件超时按 5 秒生效',
+      elapsed >= LIMITS.monitorAttachmentTimeoutMs - 500 &&
+        elapsed < LIMITS.monitorAttachmentTimeoutMs + 1_000,
+      elapsed,
+    );
+
+    // 7) 目标文件已存在：一致则复用；不一致则跳过，绝不 rename 覆盖。
+    const existingId = attachFileId('x');
+    mock.state.files.set(existingId, { body: ATTACH_PNG, contentType: 'image/png' });
+    const existingHash = createHash('sha256').update(ATTACH_PNG).digest('hex');
+    const existingTarget = join(attachmentsDir, `${existingHash}.png`);
+    // 与下载内容等长但字节不同，确保走 SHA-256 校验而不是只比大小。
+    const sentinel = Buffer.alloc(ATTACH_PNG.byteLength, 0x42);
+    writeFileSync(existingTarget, sentinel);
+    chmodSync(existingTarget, 0o444);
+    const sentinelInode = statSync(existingTarget).ino;
+    const sentinelOutcome = await downloadAttachments({
+      body: `${mock.base}/f/${existingId}`,
+      origins: [mock.base],
+      directory: attachmentsDir,
+    });
+    checkEqual('已有目标内容不一致时不覆盖', sentinelOutcome.attachments.length, 0);
+    checkEqual('已有目标内容不一致时计入 skipped', sentinelOutcome.skipped, 1);
+    checkEqual(
+      '已有目标 sentinel 内容未被修改',
+      readFileSync(existingTarget).equals(sentinel),
+      true,
+    );
+    checkEqual('已有目标 inode 未变化', statSync(existingTarget).ino, sentinelInode);
+
+    chmodSync(existingTarget, 0o600);
+    writeFileSync(existingTarget, ATTACH_PNG);
+    chmodSync(existingTarget, 0o444);
+    const reusedInode = statSync(existingTarget).ino;
+    const reused = await downloadAttachments({
+      body: `${mock.base}/f/${existingId}`,
+      origins: [mock.base],
+      directory: attachmentsDir,
+    });
+    checkEqual('已有目标内容一致时复用', reused.attachments.length, 1);
+    checkEqual('复用不重写已有文件', statSync(existingTarget).ino, reusedInode);
+    checkEqual('复用保留已有文件内容', readFileSync(existingTarget).equals(ATTACH_PNG), true);
+  } finally {
+    await watcher.kill();
+    mock.stop();
+    other.stop();
+    await rm(workdir, { recursive: true, force: true });
+  }
+}
+
+async function runAttachmentOriginChecks(): Promise<void> {
+  checkEqual(
+    'attachmentOrigins 顺序为 PUBLIC_ORIGIN、AGENTNET_URL、endpoint',
+    attachmentOrigins(
+      'https://endpoint.example/mcp',
+      'https://public.example',
+      'https://agentnet.example',
+    ).join(','),
+    'https://public.example,https://agentnet.example,https://endpoint.example',
+  );
+  checkEqual(
+    'attachmentOrigins 去重后只保留 http(s)',
+    attachmentOrigins(
+      'https://same.example/mcp',
+      'https://same.example',
+      'ftp://agentnet.example',
+    ).join(','),
+    'https://same.example',
+  );
+
+  const mock = createMock();
+  const other = startOtherFileServer();
+  const workdir = await mkdtemp(join(tmpdir(), 'ts-monitor-attachment-origins-'));
+  const stateDir = join(workdir, 'state');
+  const watcher = startWatcher(mock.base, {
+    AGENTNET_MONITOR_STATE_DIR: stateDir,
+    PUBLIC_ORIGIN: other.base,
+  });
+  try {
+    await waitForLine(watcher.stderr, (line) => line.includes('READY'), 'attachment origins READY');
+
+    const publicId = attachFileId('A');
+    const endpointId = attachFileId('B');
+    const relativeId = attachFileId('C');
+    mock.state.files.set(endpointId, { body: ATTACH_PNG, contentType: 'image/png' });
+    const item = delivery('dlv_attach_origins');
+    mock.state.bodies.set(
+      item.message_id,
+      `${other.base}/f/${publicId}\n${mock.base}/f/${endpointId}\n/f/${relativeId}`,
+    );
+    mock.state.pending.set('dlv_attach_origins', item);
+    sendItems(mock, [notificationItem('dlv_attach_origins')]);
+    const event = await waitForEvent(watcher.stdout, 'delivery', 'dlv_attach_origins');
+    const urls = attachmentItems(event).map((attachment) => String(attachment.url));
+    checkEqual(
+      '双 origin 候选按正文顺序且按 URL 去重',
+      urls.join(','),
+      `${other.base}/f/${publicId},${mock.base}/f/${endpointId},${other.base}/f/${relativeId}`,
+    );
+    check('AGENTNET_URL origin 被接受', urls.includes(`${mock.base}/f/${endpointId}`), urls);
+    check('PUBLIC_ORIGIN origin 被接受', urls.includes(`${other.base}/f/${publicId}`), urls);
+    check('根相对 /f/ 解析到 PUBLIC_ORIGIN', urls[2] === `${other.base}/f/${relativeId}`, urls);
+  } finally {
+    await watcher.kill();
+    mock.stop();
+    other.stop();
+    await rm(workdir, { recursive: true, force: true });
+  }
+}
+
+async function runAttachmentCleanupChecks(): Promise<void> {
+  const mock = createMock();
+  const workdir = await mkdtemp(join(tmpdir(), 'ts-monitor-attachment-cleanup-'));
+  const stateDir = join(workdir, 'state');
+  const attachmentsDir = join(stateDir, 'attachments');
+  mkdirSync(attachmentsDir, { recursive: true });
+  const stale = new Date(Date.now() - LIMITS.monitorAttachmentRetentionMs - 60_000);
+  const oldPath = join(attachmentsDir, 'old.png');
+  const freshPath = join(attachmentsDir, 'fresh.png');
+  writeFileSync(oldPath, 'old');
+  writeFileSync(freshPath, 'fresh');
+  utimesSync(oldPath, stale, stale);
+
+  const watcher = startWatcher(mock.base, { AGENTNET_MONITOR_STATE_DIR: stateDir });
+  try {
+    await waitForLine(watcher.stderr, (line) => line.includes('READY'), 'attachment cleanup READY');
+    check('启动清理超过 24h 的附件', !existsSync(oldPath));
+    check('启动保留未过期附件', existsSync(freshPath));
+
+    // 长进程周期清理：不依赖启动/退出，按配置间隔删除过期文件。
+    const periodicDir = join(workdir, 'periodic');
+    mkdirSync(periodicDir, { recursive: true });
+    const periodicOld = join(periodicDir, 'periodic-old.png');
+    const periodicFresh = join(periodicDir, 'periodic-fresh.png');
+    writeFileSync(periodicOld, 'old');
+    writeFileSync(periodicFresh, 'fresh');
+    utimesSync(periodicOld, stale, stale);
+    const stopPeriodic = startAttachmentCleanup(periodicDir, 20);
+    try {
+      const deadline = Date.now() + 2_000;
+      while (existsSync(periodicOld) && Date.now() < deadline) await Bun.sleep(20);
+    } finally {
+      stopPeriodic();
+    }
+    check('周期清理删除超过 24h 的附件', !existsSync(periodicOld));
+    check('周期清理保留未过期附件', existsSync(periodicFresh));
+
+    const exitOldPath = join(attachmentsDir, 'exit-old.png');
+    writeFileSync(exitOldPath, 'old');
+    utimesSync(exitOldPath, stale, stale);
+    const code = await watcher.kill('SIGTERM');
+    checkEqual('附件清理场景 SIGTERM 退出码', code, 0);
+    check('退出清理超过 24h 的附件', !existsSync(exitOldPath));
+    check('退出保留未过期附件', existsSync(freshPath));
+  } finally {
+    await watcher.kill();
+    mock.stop();
+    await rm(workdir, { recursive: true, force: true });
+  }
+}
+
 interface DshFixture {
   dir: string;
   home: string;
@@ -3823,6 +4321,11 @@ async function main(): Promise<void> {
   check('inbox 无分页标记不得误判为完整结果', rejectedMalformed);
   console.log('TS monitor: claude harness');
   await runClaudeChecks();
+  console.log('TS monitor: claude attachments');
+  await runAttachmentChecks();
+  console.log('TS monitor: claude attachment origins');
+  await runAttachmentOriginChecks();
+  await runAttachmentCleanupChecks();
   console.log('TS monitor: delivery quote');
   await runDeliveryQuoteChecks();
   console.log('TS monitor: delivery memory context');

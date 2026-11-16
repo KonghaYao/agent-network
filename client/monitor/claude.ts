@@ -88,6 +88,8 @@ export async function runClaudeMonitor(
       onDeadline: stop,
       roomEvents: options.roomEvents,
       memoryMode: options.memoryContext === false ? 'off' : 'full',
+      // claude 宿主让 Agent 直接 Read 本地文件，因此下载同源图片/PDF 附件。
+      attachments: true,
     });
     return await engine.run();
   } finally {

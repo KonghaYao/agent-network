@@ -255,6 +255,18 @@ export const LIMITS = {
   messageSendStatusMax: 20,
   /** 单条消息正文中自动归档的同源文件链接上限。 */
   messageFileLinksMax: 8,
+  /** 客户端监听器每条投递最多下载并附带的同源附件数。 */
+  monitorAttachmentMax: 3,
+  /** 单个附件的字节上限；超过只跳过，不阻塞投递。 */
+  monitorAttachmentBytes: 5 * 1024 * 1024,
+  /** 单个附件的整体下载超时（毫秒），含重定向与读取。 */
+  monitorAttachmentTimeoutMs: 5_000,
+  /** 附件下载的并发上限；保持有界，避免一次投递打满连接。 */
+  monitorAttachmentConcurrency: 2,
+  /** 附件文件保留时长（毫秒）；启动、退出与周期任务清理更早的文件。 */
+  monitorAttachmentRetentionMs: 24 * 60 * 60_000,
+  /** 长进程中附件清理的周期（毫秒）；与保留期共同决定最迟删除时间。 */
+  monitorAttachmentCleanupIntervalMs: 60 * 60_000,
   /** 协作深度与每个 root 的累计 delivery 上限。 */
   cooperationDepthMax: 4,
   rootDeliveryMax: 32,
