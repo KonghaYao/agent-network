@@ -1457,7 +1457,7 @@ async function registerAvatarAgent(humanToken: string, name: string): Promise<Av
 
 /**
  * 品牌头像验收：资源可访问、关键词映射、侧栏/消息/成员/归档集成、
- * 群聊 2×2 不变、暗色 390px 与图片失败回退。
+ * 群聊单瓦片文字、暗色 390px 与图片失败回退。
  *
  * 独立创建 Agent 与房间，放在主流程末尾执行，避免影响既有列表/联系人计数。
  */
@@ -1810,7 +1810,7 @@ async function runAvatarAcceptance(
           src: image ? image.getAttribute('src') : null,
           text: avatar ? avatar.textContent : null,
           icon: avatar ? avatar.classList.contains('avatar-icon') : false,
-          cells: link.querySelectorAll('.avatar-cell').length
+          tiles: link.querySelectorAll('.avatar-tile').length
         };
       }
       return {
@@ -1822,11 +1822,11 @@ async function runAvatarAcceptance(
       };
     })()`,
   )) as {
-    codex: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
-    plain: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
-    tibo: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
-    poteto: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
-    kong: { src: string | null; text: string | null; icon: boolean; cells: number } | null;
+    codex: { src: string | null; text: string | null; icon: boolean; tiles: number } | null;
+    plain: { src: string | null; text: string | null; icon: boolean; tiles: number } | null;
+    tibo: { src: string | null; text: string | null; icon: boolean; tiles: number } | null;
+    poteto: { src: string | null; text: string | null; icon: boolean; tiles: number } | null;
+    kong: { src: string | null; text: string | null; icon: boolean; tiles: number } | null;
   };
   await page.locator('#room-filter-friend').click();
   await page.locator(roomLink(kongRoom.room.room_id)).waitFor();
@@ -1840,10 +1840,10 @@ async function runAvatarAcceptance(
         src: image ? image.getAttribute('src') : null,
         text: avatar ? avatar.textContent : null,
         icon: avatar ? avatar.classList.contains('avatar-icon') : false,
-        cells: link.querySelectorAll('.avatar-cell').length
+        tiles: link.querySelectorAll('.avatar-tile').length
       };
     })()`,
-  )) as { src: string | null; text: string | null; icon: boolean; cells: number } | null;
+  )) as { src: string | null; text: string | null; icon: boolean; tiles: number } | null;
   const directSidebar = { ...agentSidebar, kong: friendSidebar };
   await page.locator('#room-filter-group').click();
   const groupSidebar = (await page.evaluate(
@@ -1854,10 +1854,10 @@ async function runAvatarAcceptance(
         src: null,
         text: link.querySelector('.avatar') ? link.querySelector('.avatar').textContent : null,
         icon: false,
-        cells: link.querySelectorAll('.avatar-cell').length
+        tiles: link.querySelectorAll('.avatar-tile').length
       };
     })()`,
-  )) as { src: string | null; text: string | null; icon: boolean; cells: number } | null;
+  )) as { src: string | null; text: string | null; icon: boolean; tiles: number } | null;
   const sidebar = { ...directSidebar, group: groupSidebar };
   checkEqual('侧栏 Codex 品牌图标', sidebar.codex?.src, '/agent-icons/codex-color.svg');
   checkEqual('侧栏 Tibo 专用头像', sidebar.tibo?.src, TIBO_ICON_SRC);
@@ -1869,7 +1869,8 @@ async function runAvatarAcceptance(
   checkEqual('侧栏未命中保留首字', sidebar.plain?.src, null);
   checkEqual('侧栏未命中显示首字', sidebar.plain?.text, '琶');
   checkEqual('侧栏未命中不标记品牌图标', sidebar.plain?.icon, false);
-  checkEqual('群聊头像仍为 2×2', sidebar.group?.cells, 4);
+  checkEqual('群聊头像为单块瓦片', sidebar.group?.tiles, 1);
+  checkEqual('群聊头像显示前两个汉字', sidebar.group?.text, '头像');
   checkEqual('群聊不渲染单图图标', sidebar.group?.src, null);
 
   const pageHtml = await page.content();

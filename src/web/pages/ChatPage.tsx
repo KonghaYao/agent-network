@@ -254,7 +254,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
       : peer?.kind === 'agent'
         ? onlineLabel(peer.online)
         : '';
-  // 群聊头部色标与会话列表 2×2 头像共用 room_id 派生色；直聊不渲染。
+  // 群聊头部色标与会话列表群头像瓦片共用 room_id 派生色；直聊不渲染。
   const groupColor = room?.kind === 'group' ? groupColorFor(room.room_id) : null;
 
   const onQuote = useCallback(
@@ -565,7 +565,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       <span
                         className="group-color-dot"
                         data-group-color={groupColor.index}
-                        style={groupColorStyle(groupColor.hex)}
+                        style={groupColorStyle(groupColor)}
                         aria-hidden="true"
                       />
                     ) : null}

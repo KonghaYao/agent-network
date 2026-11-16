@@ -190,15 +190,47 @@ export function firstChar(name: string): string {
   return chars.length > 0 ? chars[0]! : '聊';
 }
 
+export interface GroupAvatarLabel {
+  /** 瓦片里显示的文字：1–2 个汉字、1–2 个大写字母或兜底字符。 */
+  text: string;
+  /** 字数；样式按 1 字/2 字切换字号。 */
+  length: 1 | 2;
+  /** 文字类别；拉丁字母用更宽的字距，避免两个大写字母挤在一起。 */
+  script: 'han' | 'latin' | 'other';
+}
+
+const HAN_RUN = /\p{Script=Han}+/u;
+const HAN_PREFIX = /^\p{Script=Han}{1,2}/u;
+const LATIN = /[A-Za-z]/gu;
+
 /**
- * 群聊 2×2 首字色块；四个格子共用同一个由 `room_id` 派生的专属色，
- * 让不同群在会话列表里可以一眼区分。颜色不随群名变化。
+ * 群聊头像文字：中文取前 2 个汉字，英文/混合取前 2 个大写字母。
+ *
+ * 规则固定、不依赖随机数：同一群名在任何设备上得到同一标签。空名称
+ * 回退到“群聊”；实在没有汉字或拉丁字母时取前 2 个字符。
  */
-export function groupAvatarCells(name: string, color: string): { char: string; color: string }[] {
-  const chars = Array.from(String(name || '群聊').trim()).filter((char) => char.trim().length > 0);
-  const effective = chars.length > 0 ? chars : ['群'];
-  return Array.from({ length: 4 }, (_, index) => ({
-    char: effective[index % effective.length]!,
-    color,
-  }));
+export function groupAvatarLabel(name: string): GroupAvatarLabel {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return { text: '群聊', length: 2, script: 'han' };
+
+  const hanPrefix = HAN_PREFIX.exec(trimmed);
+  if (hanPrefix) {
+    const text = hanPrefix[0];
+    return { text, length: text.length as 1 | 2, script: 'han' };
+  }
+
+  const letters = (trimmed.match(LATIN) ?? []).slice(0, 2).join('').toUpperCase();
+  if (letters) {
+    return { text: letters, length: letters.length as 1 | 2, script: 'latin' };
+  }
+
+  // 被标点/数字包住的中文名（如「读书会」）取第一段汉字的前 2 个。
+  const hanRun = trimmed.match(HAN_RUN)?.[0];
+  if (hanRun) {
+    const text = Array.from(hanRun).slice(0, 2).join('');
+    return { text, length: text.length as 1 | 2, script: 'han' };
+  }
+
+  const chars = Array.from(trimmed).slice(0, 2);
+  return { text: chars.join(''), length: chars.length as 1 | 2, script: 'other' };
 }
