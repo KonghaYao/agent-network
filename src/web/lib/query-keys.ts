@@ -14,6 +14,21 @@ export const queryKeys = {
   taskSummary: (roomId: string, rootId: string, version: string) =>
     ['room', roomId, 'task-summary', rootId, version] as const,
   taskSummaries: (roomId: string) => ['room', roomId, 'task-summary'] as const,
+  /** 房间级 Task 缓存前缀：列表、打开的 Trace 共用同一失效入口。
+   *  放在 `room` 前缀之外，避免房间级 invalidate 用旧游标重读所有列表页。 */
+  roomTasks: (roomId: string) => ['room-tasks', roomId] as const,
+  /** 只命中常驻列表，不命中 Trace。 */
+  taskLists: (roomId: string) => ['room-tasks', roomId, 'list'] as const,
+  taskList: (
+    roomId: string,
+    actorId: string | null,
+    status: 'open' | 'completed' | 'all',
+    authorization: string,
+  ) =>
+    ['room-tasks', roomId, 'list', actorId ?? 'anonymous', status, authorization] as const,
+  taskTraces: (roomId: string) => ['room-tasks', roomId, 'trace'] as const,
+  taskTrace: (roomId: string, rootId: string | null, focusId: string | null) =>
+    ['room-tasks', roomId, 'trace', rootId ?? 'none', focusId ?? 'root'] as const,
   contacts: (actorId: string | null) => ['contacts', actorId ?? 'anonymous'] as const,
   contactBlocks: (actorId: string | null) => ['contact-blocks', actorId ?? 'anonymous'] as const,
   agentManagement: (actorId: string | null) =>

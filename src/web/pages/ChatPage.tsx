@@ -20,7 +20,9 @@ import { ReportDialog } from '../features/overlays/ReportDialog';
 import { RoomMenu, type RoomOverlay } from '../features/overlays/RoomMenu';
 import { TransferDialog } from '../features/overlays/TransferDialog';
 import { MessageSearchDialog } from '../features/tasks/MessageSearchDialog';
+import { RoomTaskDock } from '../features/tasks/RoomTaskDock';
 import { TaskTraceDialog } from '../features/tasks/TaskTraceDialog';
+import { useRoomTaskController } from '../features/tasks/useRoomTaskController';
 import { AccountMenu } from '../features/sidebar/AccountMenu';
 import { openAgentMemory } from '../features/memory/memory-store';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -145,7 +147,6 @@ export function ChatPage({ roomId }: ChatPageProps) {
   );
   const [overlayPane, setOverlayPane] = useState<'files' | 'monitor' | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [trace, setTrace] = useState<{ rootId: string; focusId: string | null } | null>(null);
   const [forwardItem, setForwardItem] = useState<HistoryMessage | null>(null);
   // 群成员弹窗从搜索右侧的常驻入口打开；关闭时必须显式回到该按钮。
   const membersButtonRef = useRef<HTMLButtonElement>(null);
@@ -173,6 +174,14 @@ export function ChatPage({ roomId }: ChatPageProps) {
     [members, identity?.name],
   );
 
+  const {
+    trace: taskTrace,
+    openTrace,
+    closeTrace,
+    onToggleTask,
+    invalidateTasks,
+  } = useRoomTaskController({ roomId, room, token, onStatus: setStatus });
+
   const refresh = chat.refresh;
   const queue = useSendQueue({
     actorId: identity?.actor_id ?? null,
@@ -180,7 +189,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
     roomId,
     onCommitted: useCallback(() => {
       void refresh();
-    }, [refresh]),
+      // 本人发送不保证收到 room.message 回声；提交成功即主动失效 Task 列表。
+      invalidateTasks();
+    }, [invalidateTasks, refresh]),
   });
 
   useEffect(() => {
@@ -188,7 +199,6 @@ export function ChatPage({ roomId }: ChatPageProps) {
     setStatus('');
     setOverlay(null);
     setSearchOpen(false);
-    setTrace(null);
     setForwardItem(null);
     roomActions.setRenameAgentOpen(false);
   }, [roomId]);
@@ -300,30 +310,6 @@ export function ChatPage({ roomId }: ChatPageProps) {
     closeOverlays: () => setOverlay(null),
   });
 
-  const onToggleTask = useCallback(
-    async (item: HistoryMessage) => {
-      if (!token || !room || room.read_only) return;
-      const mark = item.task_root_id !== item.message_id;
-      try {
-        await callTool(
-          mark ? 'network_task_mark' : 'network_task_unmark',
-          {
-            request_id: newRequestId('web_task_mark'),
-            room_id: room.room_id,
-            message_id: item.message_id,
-          },
-          { token },
-        );
-        setStatus(mark ? '已标记为 Task' : '已取消 Task 标记');
-        if (!mark && trace?.rootId === item.message_id) setTrace(null);
-        await queryClient.invalidateQueries({ queryKey: queryKeys.room(room.room_id) });
-      } catch (error) {
-        setStatus(`${mark ? '标记失败' : '取消标记失败'}：${failureText(error)}`);
-      }
-    },
-    [queryClient, room, token, trace],
-  );
-
   const onRecall = useCallback(
     async (item: HistoryMessage) => {
       if (!token || !room) return;
@@ -341,18 +327,19 @@ export function ChatPage({ roomId }: ChatPageProps) {
           { token },
         );
         setStatus('消息已撤回');
-        if (trace?.rootId === item.message_id) setTrace(null);
+        if (taskTrace?.rootId === item.message_id) closeTrace();
         if (reply?.messageId === item.message_id) setReply(null);
         setSearchOpen(false);
         setForwardItem((current) =>
           current?.message_id === item.message_id ? null : current,
         );
+        invalidateTasks();
         await queryClient.invalidateQueries({ queryKey: queryKeys.room(room.room_id) });
       } catch (error) {
         setStatus(`撤回失败：${failureText(error)}`);
       }
     },
-    [queryClient, reply, room, token, trace],
+    [closeTrace, invalidateTasks, queryClient, reply, room, taskTrace, token],
   );
 
   const onJumpToMessage = useCallback((messageId: string) => {
@@ -773,9 +760,18 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onStatus={onStatus}
                     onMarkRead={chat.markRead}
                     onToggleTask={(item) => void onToggleTask(item)}
-                    onOpenTask={(rootId, focusId) => setTrace({ rootId, focusId })}
+                    onOpenTask={openTrace}
                     onRecall={(item) => void onRecall(item)}
                     onForward={setForwardItem}
+                  />
+                ) : null}
+                {ready && room && identity ? (
+                  <RoomTaskDock
+                    roomId={roomId}
+                    room={room}
+                    token={token}
+                    actorId={identity.actor_id}
+                    onOpenTrace={openTrace}
                   />
                 ) : null}
                 <p id="status" role="status">
@@ -924,6 +920,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
               token={token}
               onRenamed={() => {
                 setStatus('已更新 Agent 名称');
+                invalidateTasks();
                 void queryClient.invalidateQueries({
                   queryKey: queryKeys.room(room.room_id),
                 });
@@ -940,17 +937,17 @@ export function ChatPage({ roomId }: ChatPageProps) {
             token={token}
             onOpenTask={(rootId, focusId) => {
               setSearchOpen(false);
-              setTrace({ rootId, focusId });
+              openTrace(rootId, focusId);
             }}
           />
           <TaskTraceDialog
-            open={trace !== null}
+            open={taskTrace !== null}
             onOpenChange={(open) => {
-              if (!open) setTrace(null);
+              if (!open) closeTrace();
             }}
             roomId={room.room_id}
-            rootId={trace?.rootId ?? null}
-            focusId={trace?.focusId ?? null}
+            rootId={taskTrace?.rootId ?? null}
+            focusId={taskTrace?.focusId ?? null}
             token={token}
             onJump={onJumpToMessage}
           />
