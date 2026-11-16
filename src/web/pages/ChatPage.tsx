@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDropzone } from 'react-dropzone';
 
 import { AppShell } from '../app/AppShell';
 import { Link } from '../app/router';
@@ -146,6 +147,11 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const [forwardItem, setForwardItem] = useState<HistoryMessage | null>(null);
   // 群成员弹窗从菜单项打开；菜单项随后卸载，关闭时必须显式回到触发按钮。
   const roomMenuToggleRef = useRef<HTMLButtonElement>(null);
+  // 聊天区 dropzone 不持有上传状态；Composer 挂载后把 addFiles 注册到这里。
+  const fileDropRef = useRef<((files: File[]) => void) | null>(null);
+  const registerFileDrop = useCallback((handler: ((files: File[]) => void) | null) => {
+    fileDropRef.current = handler;
+  }, []);
   const desktop = useMediaQuery('(min-width: 1200px)');
   const tablet = useMediaQuery('(min-width: 760px) and (max-width: 1199px)');
   const mobile = useIsMobile();
@@ -390,6 +396,24 @@ export function ChatPage({ roomId }: ChatPageProps) {
 
   const shownStatus = status || chat.refreshError || chat.streamError || '';
   const ready = chat.status === 'ready' && Boolean(room && identity && token);
+  const dropEnabled = ready && room !== null && !room.read_only;
+  const onDropFiles = useCallback(
+    (files: File[]) => {
+      if (!dropEnabled) return;
+      fileDropRef.current?.(files);
+    },
+    [dropEnabled],
+  );
+  // 单一 dropzone 覆盖整个聊天区：Composer 只在 dropEnabled 时注册上传回调，
+  // 只读归档没有 Composer，drop 仍被 preventDefault 吞掉但不会上传。
+  const { getRootProps, isDragActive } = useDropzone({
+    noClick: true,
+    noKeyboard: true,
+    // Composer 自己处理粘贴；根节点不挂 onPaste，避免同一文件被粘贴和 drop 各传一次。
+    noPaste: true,
+    multiple: true,
+    onDrop: onDropFiles,
+  });
   // 首载骨架与静态输入区：错误态让位给错误页，避免骨架长期占位。
   const loadingShell = !ready && chat.status !== 'error';
   const filesRequested = desktop ? filesDesktopOpen : overlayPane === 'files';
@@ -641,7 +665,19 @@ export function ChatPage({ roomId }: ChatPageProps) {
                   群聊已解散，当前为只读归档；截至解散点的历史仍可查看。
                 </div>
               ) : null}
-              <div className="chat-body" id="chat-body" aria-busy={loadingShell}>
+              <div
+                {...getRootProps({
+                  className: 'chat-body',
+                  id: 'chat-body',
+                  'aria-busy': loadingShell,
+                })}
+              >
+                {dropEnabled ? (
+                  <div id="composer-drop" className="composer-drop" hidden={!isDragActive}>
+                    <span className="composer-drop-title">松开上传附件</span>
+                    <span className="composer-drop-hint">支持拖拽多个文件，上传后随消息发送</span>
+                  </div>
+                ) : null}
                 <div id="chat-loading" className="chat-loading" role="status" hidden={chat.status !== 'loading'}>
                   正在加载会话…
                 </div>
@@ -738,6 +774,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onCancelReply={() => setReply(null)}
                     onSend={onSend}
                     onStatus={onStatus}
+                    registerFileDrop={registerFileDrop}
                   />
                 ) : null}
               </div>
