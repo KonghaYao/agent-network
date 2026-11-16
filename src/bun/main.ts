@@ -247,6 +247,20 @@ if (process.env.MEMORY_ENABLED === '1') {
       adapter,
       instanceId: process.env.MEMORY_INSTANCE_ID?.trim() || null,
       capture: process.env.MEMORY_CAPTURE !== '0',
+      onJobEvent: (event) => {
+        // 只记录状态迁移与 provider 作业 id；不含正文、bank 路由或凭据。
+        console.log(
+          'memory job event',
+          JSON.stringify({
+            transition: event.transition,
+            job: event.job_id,
+            operation: event.operation_type,
+            provider_job_id: event.provider_job_id,
+            remote_state: event.remote_state,
+            attempt: event.attempt,
+          }),
+        );
+      },
     });
     try {
       await candidate.start();
@@ -300,6 +314,26 @@ if (memoryRuntime) {
     onError: (error, scope) => {
       // 不记录来源正文、token 或 provider 路由。
       console.error(`agent-network memory ${scope} failed`, error);
+    },
+    onCycle: (run) => {
+      const tick = run.tick;
+      const reconcile = run.reconcile;
+      const counts = {
+        claimed: tick?.claimed ?? 0,
+        submitted: tick?.submitted ?? 0,
+        completed: (tick?.completed ?? 0) + (reconcile?.completed ?? 0),
+        requeued: (tick?.requeued ?? 0) + (reconcile?.requeued ?? 0),
+        retried: reconcile?.retried ?? 0,
+        retry_rejected: reconcile?.retryRejected ?? 0,
+        unknown: (tick?.unknown ?? 0) + (reconcile?.stillUnknown ?? 0),
+        failed:
+          (tick?.failed ?? 0) +
+          (reconcile?.unsupported ?? 0) +
+          (reconcile?.failed ?? 0),
+      };
+      if (Object.values(counts).some((value) => value > 0)) {
+        console.log('memory cycle', JSON.stringify(counts));
+      }
     },
   });
   await memoryIntegration.start();

@@ -20,10 +20,10 @@ import {
 } from '../storage/queries';
 import type {
   MemoryJobRow,
-  MemoryRepresentationRow,
   MemoryRetainIntentRow,
   MemorySpaceRow,
 } from './rows';
+import { representationFromRow } from './representation-from-row';
 import {
   MEMORY_POLICY_VERSION,
   type MemoryOriginKind,
@@ -35,6 +35,7 @@ import { ensureMemoryInstance } from './access';
 import {
   claimDueMemoryJobs,
   completeMemoryJob,
+  countUnconfirmedCompletedMemoryJobs,
   failMemoryJob,
   loadRetainIntentForJob,
   reconcileUnknownMemoryJobs,
@@ -47,6 +48,7 @@ import type {
   MemoryAdapter,
   MemoryAdapterCapabilities,
   MemoryAdapterJobRef,
+  MemoryAdapterJobRetry,
   MemoryAdapterRemoveTarget,
   MemoryAdapterSearchPlan,
   RemoveRequest,
@@ -65,10 +67,28 @@ export interface MemoryRuntimeOptions {
   batchLimit?: number;
   now?: () => number;
   onError?: (error: unknown, job?: MemoryJobRow) => void;
+  /** 作业状态迁移事件；只含分类与 provider_job_id，不含正文/凭据。 */
+  onJobEvent?: (event: MemoryJobEvent) => void;
+}
+
+export type MemoryJobEventTransition =
+  | 'submitted'
+  | 'remote_completed'
+  | 'remote_failed'
+  | 'remote_retry_requested';
+
+export interface MemoryJobEvent {
+  transition: MemoryJobEventTransition;
+  job_id: string;
+  operation_type: MemoryJobRow['operation_type'];
+  provider_job_id: string | null;
+  remote_state: string | null;
+  attempt: number;
 }
 
 export interface MemoryRuntimeTickResult {
   claimed: number;
+  submitted: number;
   completed: number;
   requeued: number;
   unknown: number;
@@ -79,6 +99,7 @@ export interface MemoryRuntimeTickResult {
 
 const EMPTY_TICK: MemoryRuntimeTickResult = {
   claimed: 0,
+  submitted: 0,
   completed: 0,
   requeued: 0,
   unknown: 0,
@@ -86,73 +107,6 @@ const EMPTY_TICK: MemoryRuntimeTickResult = {
   cancelled: 0,
   suppressed: 0,
 };
-
-function representationFromRow(row: MemoryRepresentationRow): MemoryRepresentation {
-  const base = {
-    representation_id: row.representation_id,
-    text_bytes: row.text_bytes,
-    text_sha256: row.text_sha256,
-    verbatim: row.verbatim === 1,
-  };
-  switch (row.kind) {
-    case 'raw_full':
-    case 'raw_fragment':
-    case 'preview': {
-      if (row.source_id === null || row.source_revision === null || row.range_start === null || row.range_end === null) {
-        throw new Error('raw representation missing source/range');
-      }
-      return {
-        ...base,
-        kind: row.kind,
-        source_id: row.source_id,
-        source_revision: row.source_revision,
-        range: { start: row.range_start, end: row.range_end },
-        depends_on: [],
-      };
-    }
-    case 'summary':
-      if (row.summary_id === null || row.summary_revision === null) {
-        throw new Error('summary representation missing id/revision');
-      }
-      return {
-        ...base,
-        kind: 'summary',
-        summary_id: row.summary_id,
-        revision: row.summary_revision,
-        depends_on: [],
-        partition_proof:
-          row.partition_id && row.partition_generation !== null && row.partition_policy_revision !== null
-            ? {
-                partition_id: row.partition_id,
-                generation: row.partition_generation,
-                policy_revision: row.partition_policy_revision,
-                source_ids: [],
-              }
-            : null,
-      };
-    case 'memory_context':
-      if (row.source_context_id === null) throw new Error('context representation missing context id');
-      return {
-        ...base,
-        kind: 'memory_context',
-        source_context_id: row.source_context_id,
-        depends_on: [],
-      };
-    case 'authored':
-      if (row.source_id === null || row.source_revision === null || row.producer_kind === null) {
-        throw new Error('authored representation missing source/producer');
-      }
-      return {
-        ...base,
-        kind: 'authored',
-        source_id: row.source_id,
-        source_revision: row.source_revision,
-        producer_kind: row.producer_kind,
-        lineage: row.lineage ?? 'lineage_unknown',
-        depends_on: [],
-      };
-  }
-}
 
 function spaceRef(row: MemorySpaceRow): MemorySpaceRef {
   return {
@@ -180,6 +134,8 @@ export class MemoryRuntime {
   #inFlight: Promise<void> | null = null;
   #running = false;
   #capture: boolean;
+  /** 本轮 tick 中远端受理的 retain 数；只用于统计，不代替持久状态。 */
+  #tickSubmitted = 0;
   /** 本进程已确认的后端分区；键含 space/ownership/backend epoch。 */
   readonly #ensuredSpaces = new Set<string>();
 
@@ -285,17 +241,42 @@ export class MemoryRuntime {
     return this.#options.adapter.search({ space, plan });
   }
 
-  private async updateJobResult(jobId: string, result: unknown): Promise<void> {
+  private async updateJobResult(
+    jobId: string,
+    result: unknown,
+    extra: Record<string, unknown> = {},
+  ): Promise<void> {
+    const base =
+      typeof result === 'object' && result !== null && !Array.isArray(result)
+        ? (result as Record<string, unknown>)
+        : { result };
     await this.#db
       .prepare('UPDATE memory_jobs SET result_json = ?, updated_at = ? WHERE job_id = ?')
-      .bind(JSON.stringify(result), this.now(), jobId)
+      .bind(JSON.stringify({ ...base, ...extra }), this.now(), jobId)
       .run();
+  }
+
+  private emitJobEvent(
+    job: MemoryJobRow,
+    transition: MemoryJobEventTransition,
+    providerJobId: string | null,
+    remoteState: string | null,
+  ): void {
+    this.#options.onJobEvent?.({
+      transition,
+      job_id: job.job_id,
+      operation_type: job.operation_type,
+      provider_job_id: providerJobId,
+      remote_state: remoteState,
+      attempt: job.attempt,
+    });
   }
 
   async tick(): Promise<MemoryRuntimeTickResult> {
     if (!this.#started || this.#stopped) return { ...EMPTY_TICK };
     if (this.#running) return { ...EMPTY_TICK };
     this.#running = true;
+    this.#tickSubmitted = 0;
     const result: MemoryRuntimeTickResult = { ...EMPTY_TICK };
     this.#inFlight = (async () => {
       try {
@@ -319,6 +300,7 @@ export class MemoryRuntime {
             result[outcome] += 1;
           }
         }
+        result.submitted = this.#tickSubmitted;
       } finally {
         this.#running = false;
       }
@@ -550,19 +532,50 @@ export class MemoryRuntime {
     }
     const request = await this.buildRetainRequest(space, intent, job);
     const result = await this.#options.adapter.retain(request);
-    await this.updateJobResult(job.job_id, result);
+    const at = this.now();
+    const immediatelyApplied = result.source_applied && result.derived_ready;
+    await this.updateJobResult(job.job_id, result, {
+      provider_state: immediatelyApplied ? 'completed' : result.status,
+      provider_job_id: result.job_ref?.provider_job_id ?? null,
+      submitted_at: result.status === 'accepted' || result.status === 'pending' ? at : null,
+      last_error: result.reason,
+      ...(immediatelyApplied ? { remote_confirmed_at: at } : {}),
+    });
     if (result.status === 'accepted' || result.status === 'pending') {
+      this.#tickSubmitted += 1;
       if (result.job_ref) {
-        await setMemoryJobProviderRef(this.#db, {
+        const stored = await setMemoryJobProviderRef(this.#db, {
           jobId: job.job_id,
           leaseId,
           providerJobId: result.job_ref.provider_job_id,
           stage: result.source_applied ? 'source_applied' : 'accepted',
-          now: this.now(),
+          now: at,
         });
+        if (stored) {
+          this.emitJobEvent(job, 'submitted', result.job_ref.provider_job_id, 'accepted');
+        }
       }
-      if (result.source_applied && result.derived_ready) {
-        await completeMemoryJob(this.#db, { jobId: job.job_id, leaseId, stage: 'derived_ready', now: this.now() });
+      if (immediatelyApplied) {
+        await completeMemoryJob(this.#db, {
+          jobId: job.job_id,
+          leaseId,
+          stage: 'derived_ready',
+          now: at,
+          resultPatch: {
+            status: 'completed',
+            provider_state: 'completed',
+            remote_state: 'completed',
+            source_applied: true,
+            derived_ready: true,
+            remote_confirmed_at: at,
+          },
+        });
+        this.emitJobEvent(
+          job,
+          'remote_completed',
+          result.job_ref?.provider_job_id ?? null,
+          'completed',
+        );
         return 'completed';
       }
       if (result.job_ref) {
@@ -571,7 +584,12 @@ export class MemoryRuntime {
           leaseId,
           failure: 'unknown',
           message: 'retain_pending_remote_job',
-          now: this.now(),
+          now: at,
+          resultPatch: {
+            provider_state: 'accepted',
+            awaiting_remote: true,
+            provider_job_id: result.job_ref.provider_job_id,
+          },
         });
         return 'unknown';
       }
@@ -580,7 +598,8 @@ export class MemoryRuntime {
         leaseId,
         failure: 'unavailable',
         message: 'retain_pending',
-        now: this.now(),
+        now: at,
+        resultPatch: { provider_state: 'pending' },
       });
       return 'requeued';
     }
@@ -833,8 +852,16 @@ export class MemoryRuntime {
     return result.status === 'unsupported' ? 'failed' : 'requeued';
   }
 
-  /** 对账 unknown；只在明确 completed/failed 时推进。 */
-  async reconcile(): Promise<{ completed: number; requeued: number; stillUnknown: number; unsupported: number }> {
+  /** 对账 unknown；只在明确 completed/failed 时推进，失败先尝试远端重试。 */
+  async reconcile(): Promise<{
+    completed: number;
+    requeued: number;
+    retried: number;
+    retryRejected: number;
+    stillUnknown: number;
+    unsupported: number;
+    failed: number;
+  }> {
     return reconcileUnknownMemoryJobs(this.#db, {
       now: this.now(),
       limit: this.#options.batchLimit ?? LIMITS.memoryJobBatchLimit,
@@ -849,14 +876,49 @@ export class MemoryRuntime {
             space: spaceRef(space),
             job_ref: ref,
           });
-          if (status.state === 'completed') return 'completed';
-          if (status.state === 'failed' || status.state === 'cancelled') {
-            return status.retryable ? 'failed' : 'unsupported';
+          switch (status.state) {
+            case 'completed':
+              this.emitJobEvent(job, 'remote_completed', job.provider_job_id, 'completed');
+              return 'completed';
+            case 'failed':
+              if (!status.retryable) return 'unsupported';
+              this.emitJobEvent(job, 'remote_failed', job.provider_job_id, 'failed');
+              return 'failed';
+            case 'cancelled':
+              if (!status.retryable) return 'unsupported';
+              this.emitJobEvent(job, 'remote_failed', job.provider_job_id, 'cancelled');
+              return 'cancelled';
+            case 'pending':
+              return 'pending';
+            case 'running':
+              return 'processing';
+            default:
+              return 'unknown';
           }
-          return 'unknown';
         } catch (error) {
           this.report(error, job);
           return 'unknown';
+        }
+      },
+      retryRemote: async (job) => {
+        const adapter = this.#options.adapter as MemoryAdapter & Partial<MemoryAdapterJobRetry>;
+        if (typeof adapter.retryJob !== 'function') return 'unsupported';
+        const ref = toJobRef(job);
+        const space = await getMemorySpaceById(this.#db, job.space_id);
+        if (!ref || !space || space.backend_binding_epoch !== job.backend_binding_epoch) {
+          return 'unsupported';
+        }
+        try {
+          const outcome = await adapter.retryJob({ space: spaceRef(space), job_ref: ref });
+          if (outcome.accepted) return 'accepted';
+          if (outcome.reason === 'not_found') return 'not_found';
+          if (outcome.reason === 'not_retryable' || outcome.reason === 'invalid_request') {
+            return 'rejected';
+          }
+          return 'unavailable';
+        } catch (error) {
+          this.report(error, job);
+          return 'unavailable';
         }
       },
     });
@@ -870,6 +932,7 @@ export class MemoryRuntime {
     unknown: number;
     failed: number;
     retain_pending: number;
+    unconfirmed_completed: number;
   }> {
     const counts = await this.#db
       .prepare('SELECT status, COUNT(*) AS n FROM memory_jobs GROUP BY status')
@@ -886,6 +949,7 @@ export class MemoryRuntime {
       unknown: byStatus.get('unknown') ?? 0,
       failed: byStatus.get('failed') ?? 0,
       retain_pending: retain?.n ?? 0,
+      unconfirmed_completed: await countUnconfirmedCompletedMemoryJobs(this.#db),
     };
   }
 }

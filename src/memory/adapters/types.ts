@@ -232,6 +232,18 @@ export interface JobStatusRequest {
   job_ref: MemoryAdapterJobRef;
 }
 
+/**
+ * 远端失败作业的重新入队结果。
+ *
+ * 某些后端（Hindsight）接受同一 operation_id 的重复提交但不会重新执行，
+ * 重试必须走显式的 POST .../operations/{id}/retry；能力不在六操作核心面，
+ * 由可选方法提供，调用方必须先检测方法存在。
+ */
+export interface JobRetryResult {
+  accepted: boolean;
+  reason: MemoryAdapterFailureReason | 'not_retryable' | 'not_found' | null;
+}
+
 export type MemoryAdapterJobState =
   | 'pending'
   | 'running'
@@ -266,4 +278,15 @@ export interface MemoryAdapter {
   search(request: SearchRequest): Promise<SearchResult>;
   remove(request: RemoveRequest): Promise<RemoveResult>;
   jobStatus(request: JobStatusRequest): Promise<JobStatusResult>;
+}
+
+/**
+ * 可选扩展：重新入队远端 failed/cancelled 的异步作业。
+ *
+ * 故意不并入 `MemoryAdapter` 六操作核心面（契约测试断言 keyof 恰好为六项）；
+ * 调用方必须显式检测方法存在。Hindsight 对相同 operation_id 的重复 retain
+ * 只返回原作业、不会重跑，失败作业必须走显式的 operations retry 端点。
+ */
+export interface MemoryAdapterJobRetry {
+  retryJob(request: JobStatusRequest): Promise<JobRetryResult>;
 }

@@ -39,6 +39,8 @@ export interface MemoryIntegrationOptions {
     error: unknown,
     scope: 'tick' | 'reconcile' | 'backfill' | 'provision',
   ) => void;
+  /** 每轮领取/对账后的聚合计数；用于结构化日志，不含正文/凭据。 */
+  onCycle?: (run: MemoryIntegrationRun) => void;
 }
 
 export interface MemoryIntegrationStatus {
@@ -51,8 +53,11 @@ export interface MemoryIntegrationStatus {
   last_reconcile: {
     completed: number;
     requeued: number;
+    retried: number;
+    retryRejected: number;
     stillUnknown: number;
     unsupported: number;
+    failed: number;
   } | null;
   backfill_interval_ms: number | null;
   last_backfill_at: number | null;
@@ -78,6 +83,7 @@ export class MemoryIntegration {
   readonly #backfillIntervalMs: number;
   readonly #provisionIntervalMs: number;
   readonly #onError: NonNullable<MemoryIntegrationOptions['onError']>;
+  readonly #onCycle: NonNullable<MemoryIntegrationOptions['onCycle']>;
 
   #started = false;
   #stopped = false;
@@ -114,6 +120,7 @@ export class MemoryIntegration {
       options.provisionIntervalMs ?? LIMITS.memoryProvisionIntervalMs,
     );
     this.#onError = options.onError ?? (() => undefined);
+    this.#onCycle = options.onCycle ?? (() => undefined);
   }
 
   get started(): boolean {
@@ -223,9 +230,18 @@ export class MemoryIntegration {
       return { skipped: true, tick: null, reconcile: null };
     }
     if (this.#inFlight) return this.#inFlight;
-    const run = this.#execute().finally(() => {
-      if (this.#inFlight === run) this.#inFlight = null;
-    });
+    const run = this.#execute()
+      .then((result) => {
+        try {
+          this.#onCycle(result);
+        } catch (error) {
+          this.#onError(error, 'tick');
+        }
+        return result;
+      })
+      .finally(() => {
+        if (this.#inFlight === run) this.#inFlight = null;
+      });
     this.#inFlight = run;
     return run;
   }
