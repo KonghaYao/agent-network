@@ -110,6 +110,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | Agent 记忆弹窗验收（单次取数、视图本地切换、掩码揭示、390/暗色/axe） | `tests/e2e/memory-fenix.spec.ts`、`tests/e2e/memory-panel.spec.ts`、`tests/e2e/memory-views.spec.ts`、`tests/e2e/memory-constellation*.spec.ts` |
 | Memory 网页验收（禁用降级、真实经历/Context、遗忘确认、移动端/暗色） | `scripts/verify-web.ts`、`scripts/verify-memory-experience.ts` |
 | MF10 运行时组合、第二适配器与故障验收 | `src/memory/integration.ts`、`src/memory/adapters/local.ts`、`src/memory/adapters/validation.ts`、`scripts/verify-memory-integration.ts`、`scripts/lib/memory-integration-child.ts`、`scripts/lib/memory-admission-fixture.ts` |
+| Hindsight 异步写入对账、失败重试与只读核对 | `src/memory/jobs.ts`、`src/memory/runtime.ts`、`src/memory/adapters/hindsight.ts`、`scripts/verify-hindsight-writes.ts`、`scripts/lib/hindsight-write-audit.ts` |
 | `messages.task_root_id` 标记列与索引 | `migrations/0041_message_task_trace.sql` |
 | G06/A06 专项验收 | `scripts/lib/room-lifecycle-acceptance.ts`、`scripts/lib/agent-transfer-acceptance.ts` |
 | Q01 文档/工具一致性与迁移升级检查 | `scripts/q01-doc-check.ts`、`scripts/q01-upgrade-check.ts`、`docs/feature-matrix.md`、`reports/Q01.md` |

@@ -166,13 +166,80 @@ export async function recoverMemoryJobs(
   return { requeued, unknown };
 }
 
-export type MemoryJobRemoteStatus = 'completed' | 'failed' | 'unknown' | 'unsupported';
+export type MemoryJobRemoteStatus =
+  | 'pending'
+  | 'processing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'unknown'
+  | 'unsupported';
+
+/** 远端失败作业的显式重试结果；不与本地状态混淆。 */
+export type MemoryJobRemoteRetry =
+  | 'accepted'
+  | 'rejected'
+  | 'not_found'
+  | 'unavailable'
+  | 'unsupported';
+
+interface MemoryJobJsonRecord {
+  [key: string]: unknown;
+}
+
+function isJsonRecord(value: unknown): value is MemoryJobJsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 只合并观测字段；不把 provider 响应正文或凭据写回结果。 */
+function mergeResultJson(
+  existing: string | null,
+  patch: Record<string, unknown> | undefined,
+): string | null {
+  if (!patch) return existing;
+  let base: MemoryJobJsonRecord = {};
+  if (existing) {
+    try {
+      const parsed = JSON.parse(existing) as unknown;
+      if (isJsonRecord(parsed)) base = parsed;
+    } catch {
+      // 旧结果不合法时保留可诊断的分类字段，不复制原文。
+      base = { previous_result: 'unparseable' };
+    }
+  }
+  return JSON.stringify({ ...base, ...patch });
+}
+
+function resultNumber(existing: string | null, key: string): number {
+  if (!existing) return 0;
+  try {
+    const parsed = JSON.parse(existing) as unknown;
+    if (!isJsonRecord(parsed)) return 0;
+    const value = parsed[key];
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** 对账状态写回之后发出的观测事件；不参与状态裁决。 */
+export interface MemoryJobReconcileEvent {
+  transition: 'remote_completed' | 'remote_failed' | 'remote_retry_requested';
+  job: MemoryJobRow;
+  remote_state: string | null;
+  retry_outcome: MemoryJobRemoteRetry | null;
+}
 
 /**
  * 对账 unknown 作业。
  *
  * 查询结果来自原 BackendRef；调用方必须保留 backend_binding_epoch，不能用
- * 旧 JobRef 查新库。unknown 不自动重跑，只有明确 completed/failed 才推进。
+ * 旧 JobRef 查新库。unknown 不立刻重跑：pending/processing 继续等待；远端
+ * failed/cancelled 若适配器提供显式 retry，则先重新入队远端作业，再按既有
+ * 本地退避策略回到 pending；持续 unknown 且对账轮次用尽后才重新提交同一
+ * operation_id，不把“接受过”当作完成。
+ *
+ * 事件只在状态写回后发出；回调异常被吞掉，不能让已完成的写回变成 unknown。
  */
 export async function reconcileUnknownMemoryJobs(
   db: D1Like,
@@ -180,8 +247,20 @@ export async function reconcileUnknownMemoryJobs(
     now?: number;
     limit?: number;
     queryStatus: (job: MemoryJobRow) => Promise<MemoryJobRemoteStatus>;
+    retryRemote?: (job: MemoryJobRow) => Promise<MemoryJobRemoteRetry>;
+    onEvent?: (event: MemoryJobReconcileEvent) => void;
+    /** 状态写回未生效等内部失败；只传分类信息，不含正文/凭据。 */
+    onError?: (error: unknown, job: MemoryJobRow) => void;
   },
-): Promise<{ completed: number; requeued: number; stillUnknown: number; unsupported: number }> {
+): Promise<{
+  completed: number;
+  requeued: number;
+  retried: number;
+  retryRejected: number;
+  stillUnknown: number;
+  unsupported: number;
+  failed: number;
+}> {
   const at = options.now ?? nowMs();
   const rows = await db
     .prepare(
@@ -191,40 +270,179 @@ export async function reconcileUnknownMemoryJobs(
     .all<MemoryJobRow>();
   let completed = 0;
   let requeued = 0;
+  let retried = 0;
+  let retryRejected = 0;
   let stillUnknown = 0;
   let unsupported = 0;
+  let failed = 0;
+  const notify = (
+    transition: MemoryJobReconcileEvent['transition'],
+    current: MemoryJobRow,
+    remoteState: string | null,
+    retryOutcome: MemoryJobRemoteRetry | null = null,
+  ): void => {
+    try {
+      options.onEvent?.({
+        transition,
+        job: current,
+        remote_state: remoteState,
+        retry_outcome: retryOutcome,
+      });
+    } catch {
+      // 状态已写回；观测回调失败不能改变本次对账结果。
+    }
+  };
+  const reportFailure = (current: MemoryJobRow, classification: string): void => {
+    try {
+      options.onError?.(new Error(classification), current);
+    } catch {
+      // 观测回调失败不能改变本次对账结果。
+    }
+  };
   for (const job of rows.results) {
     const status = await options.queryStatus(job);
+    const attempts = resultNumber(job.result_json, 'reconcile_attempts') + 1;
+    const observed = {
+      reconcile_attempts: attempts,
+      last_checked_at: at,
+      provider_job_id: job.provider_job_id,
+    };
     if (status === 'completed') {
-      await completeMemoryJob(db, {
+      const written = await completeMemoryJob(db, {
         jobId: job.job_id,
         // 远端 completed 只证明写入处理器完成/源可读；observation/consolidation
         // 是否就绪由后续证据决定，不把对账结果升级成 derived_ready。
         stage: 'source_applied',
         now: at,
+        resultPatch: {
+          ...observed,
+          status: 'completed',
+          provider_state: 'completed',
+          remote_state: 'completed',
+          source_applied: true,
+          derived_ready: false,
+          remote_confirmed_at: at,
+        },
       });
+      if (!written) {
+        // 写回未生效时作业仍是 unknown；不能计数或发出完成事件。
+        reportFailure(job, 'memory_job_complete_writeback_rejected');
+        stillUnknown += 1;
+        continue;
+      }
       completed += 1;
-    } else if (status === 'failed') {
-      // 明确失败的远端作业可以安全重试；operation_key 保证不重复写入。
+      notify('remote_completed', job, 'completed');
+    } else if (status === 'failed' || status === 'cancelled') {
+      const failurePatch = {
+        ...observed,
+        provider_state: status,
+        remote_state: status,
+        remote_failure_at: at,
+      };
+      // attempt 已到上限时不再请求远端 retry：远端即使重新入队，本地也无法再
+      // 领取执行，会留下“accepted 但永远 failed”的分裂状态。
+      const retryExhausted = job.attempt >= LIMITS.memoryJobMaxAttempts;
+      if (retryExhausted) {
+        const outcome = await failMemoryJob(db, {
+          jobId: job.job_id,
+          failure: 'unavailable',
+          message: 'remote_failure_attempts_exhausted',
+          now: at,
+          resultPatch: { ...failurePatch, retry_outcome: 'attempts_exhausted' },
+        });
+        if (outcome === 'failed') failed += 1;
+        else if (outcome === 'pending') requeued += 1;
+        notify('remote_failed', job, status);
+      } else if (options.retryRemote) {
+        const retry = await options.retryRemote(job);
+        if (retry === 'accepted') {
+          // 远端已重新入队；本地回到 pending 走既有退避与幂等提交。
+          const outcome = await failMemoryJob(db, {
+            jobId: job.job_id,
+            failure: 'unavailable',
+            message: 'remote_retry_requested',
+            now: at,
+            resultPatch: {
+              ...failurePatch,
+              retry_requested_at: at,
+              retry_outcome: 'accepted',
+            },
+          });
+          notify('remote_failed', job, status, 'accepted');
+          if (outcome === 'pending') {
+            retried += 1;
+            notify('remote_retry_requested', job, status, 'accepted');
+          } else {
+            // 防御性处理：远端已接受但没有回到 pending 时不报告 retry 成功。
+            failed += 1;
+          }
+        } else {
+          // 无法确认已重新入队时保留 unknown，继续可见、可再次对账。
+          await mergeMemoryJobResult(db, {
+            jobId: job.job_id,
+            patch: { ...failurePatch, retry_outcome: retry },
+            now: at,
+          });
+          retryRejected += 1;
+          stillUnknown += 1;
+          notify('remote_failed', job, status, retry);
+        }
+      } else {
+        // 没有显式 retry 的适配器沿用原策略：明确失败可安全重试，
+        // operation_key 保证不重复写入。
+        const outcome = await failMemoryJob(db, {
+          jobId: job.job_id,
+          failure: 'unavailable',
+          message: 'reconciled remote failure',
+          now: at,
+          resultPatch: { ...failurePatch, retry_outcome: 'unsupported' },
+        });
+        if (outcome === 'pending') requeued += 1;
+        else if (outcome === 'failed') failed += 1;
+        notify('remote_failed', job, status, 'unsupported');
+      }
+    } else if (status === 'unsupported') {
       await failMemoryJob(db, {
         jobId: job.job_id,
-        failure: 'unavailable',
-        message: 'reconciled remote failure',
+        failure: 'unsupported',
+        message: 'remote_status_unsupported',
         now: at,
+        resultPatch: {
+          ...observed,
+          provider_state: 'unsupported',
+          remote_state: 'unsupported',
+        },
       });
-      requeued += 1;
-    } else if (status === 'unsupported') {
-      await db
-        .prepare(
-          `UPDATE memory_jobs
-              SET status = 'failed', last_error = 'remote_status_unsupported', updated_at = ?
-            WHERE job_id = ? AND status = 'unknown'`,
-        )
-        .bind(at, job.job_id)
-        .run();
       unsupported += 1;
     } else {
-      stillUnknown += 1;
+      // pending/processing 继续等待，不重复提交；真正查不到作业（unknown）
+      // 且已用完对账轮次时，按既有 attempt/backoff 重新提交同一 operation_id：
+      // 幂等键与稳定 document_id 保证不会产生第二份逻辑表示。
+      const remoteStillRunning = status === 'pending' || status === 'processing';
+      if (!remoteStillRunning && attempts >= LIMITS.memoryJobMaxAttempts) {
+        const outcome = await failMemoryJob(db, {
+          jobId: job.job_id,
+          failure: 'unavailable',
+          message: 'remote_operation_unknown_requeued',
+          now: at,
+          resultPatch: {
+            ...observed,
+            provider_state: status,
+            remote_state: status,
+            retry_requested_at: at,
+            retry_outcome: 'unknown_requeued',
+          },
+        });
+        if (outcome === 'pending') requeued += 1;
+        else failed += 1;
+      } else {
+        await mergeMemoryJobResult(db, {
+          jobId: job.job_id,
+          patch: { ...observed, provider_state: status, remote_state: status },
+          now: at,
+        });
+        stillUnknown += 1;
+      }
     }
   }
   const touchedSpaceIds = new Set(rows.results.map((job) => job.space_id));
@@ -238,7 +456,26 @@ export async function reconcileUnknownMemoryJobs(
       now: at,
     });
   }
-  return { completed, requeued, stillUnknown, unsupported };
+  return { completed, requeued, retried, retryRejected, stillUnknown, unsupported, failed };
+}
+
+/** 只更新结果观测字段，不改变作业状态；用于 pending/processing 轮询。 */
+export async function mergeMemoryJobResult(
+  db: D1Like,
+  options: { jobId: string; patch: Record<string, unknown>; now?: number },
+): Promise<void> {
+  const at = options.now ?? nowMs();
+  const row = await db
+    .prepare('SELECT result_json FROM memory_jobs WHERE job_id = ?')
+    .bind(options.jobId)
+    .first<{ result_json: string | null }>();
+  if (!row) return;
+  await db
+    .prepare(
+      "UPDATE memory_jobs SET result_json = ?, updated_at = ? WHERE job_id = ? AND status = 'unknown'",
+    )
+    .bind(mergeResultJson(row.result_json, options.patch), at, options.jobId)
+    .run();
 }
 
 export async function setMemoryJobProviderRef(
@@ -265,20 +502,33 @@ export async function setMemoryJobProviderRef(
 
 export async function completeMemoryJob(
   db: D1Like,
-  options: { jobId: string; leaseId?: string; stage: MemoryJobRow['stage']; now?: number },
+  options: {
+    jobId: string;
+    leaseId?: string;
+    stage: MemoryJobRow['stage'];
+    /** 与状态变更同一条 UPDATE 写入的观测字段；不包含正文/凭据。 */
+    resultPatch?: Record<string, unknown>;
+    now?: number;
+  },
 ): Promise<boolean> {
   const at = options.now ?? nowMs();
+  const current = await db
+    .prepare('SELECT * FROM memory_jobs WHERE job_id = ?')
+    .bind(options.jobId)
+    .first<MemoryJobRow>();
+  if (!current) return false;
   const result = await db
     .prepare(
       `UPDATE memory_jobs
           SET status = 'completed', stage = ?, lease_id = NULL, lease_until = NULL,
-              updated_at = ?, completed_at = ?
+              result_json = ?, updated_at = ?, completed_at = ?
         WHERE job_id = ?
           AND status IN ('leased', 'pending', 'unknown')
           AND (? IS NULL OR lease_id = ?)`,
     )
     .bind(
       options.stage,
+      mergeResultJson(current.result_json, options.resultPatch),
       at,
       at,
       options.jobId,
@@ -287,17 +537,11 @@ export async function completeMemoryJob(
     )
     .run();
   if (result.meta.changes === 1) {
-    const row = await db
-      .prepare('SELECT * FROM memory_jobs WHERE job_id = ?')
-      .bind(options.jobId)
-      .first<MemoryJobRow>();
-    if (row) {
-      await updateRetainIntentForJob(db, {
-        jobId: options.jobId,
-        status: 'retained',
-        now: at,
-      });
-    }
+    await updateRetainIntentForJob(db, {
+      jobId: options.jobId,
+      status: 'retained',
+      now: at,
+    });
   }
   return result.meta.changes === 1;
 }
@@ -320,6 +564,8 @@ export async function failMemoryJob(
     leaseId?: string;
     failure: MemoryJobFailure;
     message?: string;
+    /** 与状态变更同一条 UPDATE 写入的观测字段；不包含正文/凭据。 */
+    resultPatch?: Record<string, unknown>;
     now?: number;
   },
 ): Promise<MemoryJobRow['status']> {
@@ -345,7 +591,7 @@ export async function failMemoryJob(
     .prepare(
       `UPDATE memory_jobs
           SET status = ?, lease_id = NULL, lease_until = NULL,
-              next_attempt_at = ?, last_error = ?, updated_at = ?,
+              next_attempt_at = ?, last_error = ?, result_json = ?, updated_at = ?,
               unknown_since = CASE WHEN ? = 'unknown' THEN COALESCE(unknown_since, ?) ELSE unknown_since END
         WHERE job_id = ? AND (? IS NULL OR lease_id = ?)`,
     )
@@ -353,6 +599,7 @@ export async function failMemoryJob(
       status,
       nextAttemptAt,
       options.message ?? options.failure,
+      mergeResultJson(job.result_json, options.resultPatch),
       at,
       status,
       at,
@@ -481,6 +728,24 @@ export async function readMemoryCursor(
 export async function countUnknownMemoryJobs(db: D1Like): Promise<number> {
   const row = await db
     .prepare("SELECT COUNT(*) AS n FROM memory_jobs WHERE status = 'unknown'")
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/**
+ * 历史遗留的“已完成但无远端确认”retain 作业数。
+ *
+ * 新链路在 result_json 写 remote_confirmed_at；没有该字段的 completed 行
+ * 只可能来自旧版本或人工改库，必须可见而不是继续伪装成确认完成。
+ */
+export async function countUnconfirmedCompletedMemoryJobs(db: D1Like): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM memory_jobs
+        WHERE operation_type = 'retain'
+          AND status = 'completed'
+          AND (result_json IS NULL OR result_json NOT LIKE '%"remote_confirmed_at"%')`,
+    )
     .first<{ n: number }>();
   return row?.n ?? 0;
 }

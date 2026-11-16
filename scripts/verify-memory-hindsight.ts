@@ -29,6 +29,7 @@ import type {
 } from '../src/memory/contracts';
 import { sha256Hex, utf8Bytes } from '../src/storage/db';
 import { check, checkEqual, checksPassed } from './lib/harness';
+import { computeWriteCoverage } from './lib/hindsight-write-audit';
 import { FakeHindsight } from './lib/memory-hindsight-fake';
 import {
   realHindsightEnabled,
@@ -554,6 +555,47 @@ async function main(): Promise<void> {
     fake.setOperationStatus(jobRef.provider_job_id, 'cancelled');
     const cancelled = await adapter.jobStatus({ space: primarySpace, job_ref: jobRef });
     checkEqual('jobStatus cancelled', cancelled.state, 'cancelled');
+
+    // 失败作业的显式重试：同 operation_id 重复 retain 不会重跑，必须走 retry 端点。
+    fake.setOperationStatus(jobRef.provider_job_id, 'failed');
+    const retryOutcome = await adapter.retryJob({ space: primarySpace, job_ref: jobRef });
+    checkEqual('retryJob accepted', retryOutcome.accepted, true);
+    checkEqual('retryJob reason', retryOutcome.reason, null);
+    checkEqual('retryJob 只调用一次', fake.retryCount(jobRef.provider_job_id), 1);
+    checkEqual(
+      'retryJob 后端回到 pending',
+      (await adapter.jobStatus({ space: primarySpace, job_ref: jobRef })).state,
+      'pending',
+    );
+    const retryAgain = await adapter.retryJob({ space: primarySpace, job_ref: jobRef });
+    checkEqual('retryJob 非失败作业 rejected', retryAgain.accepted, false);
+    checkEqual('retryJob 409 reason', retryAgain.reason, 'not_retryable');
+    const retryMissing = await adapter.retryJob({
+      space: primarySpace,
+      job_ref: { backend_binding_epoch: 1, provider_job_id: 'op-does-not-exist' },
+    });
+    checkEqual('retryJob 404 reason', retryMissing.reason, 'not_found');
+    check('retryJob 结果不含凭据', !JSON.stringify(retryOutcome).includes(token));
+
+    // ---------------------------------------------------------------------
+    // 核对脚本覆盖计算：缺失/多余/匹配
+    // ---------------------------------------------------------------------
+    const coverage = computeWriteCoverage(
+      ['rep_a', 'rep_b', 'rep_c'],
+      ['rep_a', 'rep_b', 'rep_c', 'rep_old'],
+      ['rep_b', 'rep_c', 'rep_extra', 'rep_old'],
+    );
+    checkEqual('coverage expected', coverage.expected, 3);
+    checkEqual('coverage matched', coverage.matched, 2);
+    checkEqual('coverage missing', coverage.missing.join(','), 'rep_a');
+    checkEqual('coverage extra', coverage.extra.join(','), 'rep_extra');
+    checkEqual('coverage suppressed extra', coverage.suppressed_extra.join(','), 'rep_old');
+    const emptyCoverage = computeWriteCoverage([], [], ['rep_only_remote']);
+    checkEqual('coverage 空期望 matched', emptyCoverage.matched, 0);
+    checkEqual('coverage 空期望 extra', emptyCoverage.extra.join(','), 'rep_only_remote');
+    const duplicateCoverage = computeWriteCoverage(['rep_x'], [], ['rep_x', 'rep_x']);
+    checkEqual('coverage 去重 matched', duplicateCoverage.matched, 1);
+    checkEqual('coverage 去重 missing', duplicateCoverage.missing.length, 0);
 
     const missingJob = await adapter.jobStatus({
       space: primarySpace,

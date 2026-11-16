@@ -9,6 +9,7 @@
  * - GET    /v1/default/banks/{bank}/documents
  * - DELETE /v1/default/banks/{bank}/documents/{document}
  * - GET    /v1/default/banks/{bank}/operations/{operation}
+ * - POST   /v1/default/banks/{bank}/operations/{operation}/retry
  *
  * 真实部署已用唯一测试 bank 验收保留/召回/列表/删除与清理；默认仍使用 stub。
  * 所有配置由服务端注入，base URL 在加载时归一化（去掉尾随 `/`），凭据只通过
@@ -20,6 +21,7 @@ import {
   type EnsureSpaceResult,
   type JobStatusRequest,
   type JobStatusResult,
+  type JobRetryResult,
   type MemoryAdapter,
   type MemoryAdapterCapabilities,
   type MemoryAdapterFailureReason,
@@ -313,6 +315,49 @@ export class HindsightMemoryAdapter implements MemoryAdapter {
       }
     }
     return this.jobStatusFailure(transport.reasonFor(outcome, 'unknown'));
+  }
+
+  /**
+   * 重新入队远端 failed/cancelled 作业。
+   *
+   * Hindsight 对相同 operation_id 的重复 retain 只返回原作业、不会重跑；
+   * 失败作业必须走 POST /operations/{id}/retry。409 表示作业不在可重试
+   * 终态（可能已经完成），由调用方继续轮询而不是本地重复写入。
+   */
+  async retryJob(request: JobStatusRequest): Promise<JobRetryResult> {
+    const transport = this.#transport;
+    if (!transport) return { accepted: false, reason: 'unavailable' };
+    if (
+      !validSpaceRef(request.space) ||
+      !isRecord(request.job_ref) ||
+      !nonEmptyString(request.job_ref.provider_job_id) ||
+      !validEpoch(request.job_ref.backend_binding_epoch)
+    ) {
+      return { accepted: false, reason: 'invalid_request' };
+    }
+    if (request.job_ref.backend_binding_epoch !== request.space.backend_binding_epoch) {
+      return { accepted: false, reason: 'unsupported' };
+    }
+    const bankId = await bankIdFor(transport.config.bankPrefix, request.space);
+    const outcome = await transport.request(
+      'POST',
+      `/v1/default/banks/${encodeURIComponent(bankId)}/operations/${encodeURIComponent(request.job_ref.provider_job_id)}/retry`,
+      { deadlineAt: null, retry: false },
+    );
+    if (outcome.kind === 'ok') {
+      if (!isRecord(outcome.body) || outcome.body.success === false) {
+        return { accepted: false, reason: 'unknown' };
+      }
+      return { accepted: true, reason: null };
+    }
+    if (outcome.kind === 'http') {
+      if (outcome.status === 409) return { accepted: false, reason: 'not_retryable' };
+      if (outcome.status === 404) return { accepted: false, reason: 'not_found' };
+      if (outcome.status === 400 || outcome.status === 422) {
+        return { accepted: false, reason: 'invalid_request' };
+      }
+    }
+    return { accepted: false, reason: transport.reasonFor(outcome, 'unavailable') };
   }
 
   private operationIdFromBody(body: Record<string, unknown>): string | null {

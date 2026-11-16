@@ -118,6 +118,7 @@ export class FakeHindsight {
   readonly token: string;
   readonly behavior: FakeHindsightBehavior;
   readonly requests: FakeHindsightRequest[] = [];
+  readonly retries: string[] = [];
   readonly documents: FakeHindsightDocument[] = [];
   readonly #banks = new Map<string, FakeBank>();
   readonly #operations = new Map<string, FakeOperation>();
@@ -163,6 +164,12 @@ export class FakeHindsight {
   lastOperationId(): string | null {
     const ids = [...this.#operations.keys()];
     return ids[ids.length - 1] ?? null;
+  }
+
+  retryCount(operationId?: string): number {
+    return operationId === undefined
+      ? this.retries.length
+      : this.retries.filter((id) => id === operationId).length;
   }
 
   requestCount(method: string, pathContains: string): number {
@@ -249,6 +256,15 @@ export class FakeHindsight {
     }
     if (request.method === 'GET' && rest.startsWith('operations/')) {
       return this.operationStatus(rest.slice('operations/'.length));
+    }
+    if (
+      request.method === 'POST' &&
+      rest.startsWith('operations/') &&
+      rest.endsWith('/retry')
+    ) {
+      return this.retryOperation(
+        decodeURIComponent(rest.slice('operations/'.length, -'/retry'.length)),
+      );
     }
     if (request.method === 'GET' && rest === 'documents') {
       return this.listDocuments(bankId, url.searchParams);
@@ -372,6 +388,18 @@ export class FakeHindsight {
     });
   }
 
+  private async retryOperation(operationId: string): Promise<Response> {
+    await this.delay(this.behavior.operationDelayMs);
+    const operation = this.#operations.get(operationId);
+    if (!operation) return json({ detail: 'operation not found' }, 404);
+    if (operation.status !== 'failed' && operation.status !== 'cancelled') {
+      return json({ error: 'operation is not retryable' }, 409);
+    }
+    operation.status = 'pending';
+    this.retries.push(operationId);
+    return json({ success: true, id: operation.id, status: 'pending' });
+  }
+
   private async listDocuments(bankId: string, query: URLSearchParams): Promise<Response> {
     await this.delay(this.behavior.listDocumentDelayMs);
     const bank = this.#banks.get(bankId);
@@ -389,6 +417,7 @@ export class FakeHindsight {
       items: filtered.slice(offset, offset + limit).map((document) => ({
         id: document.id,
         tags: document.tags,
+        document_metadata: document.metadata,
       })),
       total: filtered.length,
       limit,
@@ -400,7 +429,7 @@ export class FakeHindsight {
     const bank = this.#banks.get(bankId);
     const document = bank?.documents.find((entry) => entry.id === documentId);
     return document
-      ? json({ id: document.id, tags: document.tags })
+      ? json({ id: document.id, tags: document.tags, document_metadata: document.metadata })
       : json({ detail: 'document not found' }, 404);
   }
 

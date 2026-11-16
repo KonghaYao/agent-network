@@ -420,8 +420,8 @@ bun run db:migrate
 bun run dev                 # bun --watch src/bun/main.ts，默认 8792
 bun run typecheck           # tsrs（Rust 版 tsc）检查
 bun run typecheck:tsc       # 对照/回退：官方 tsc --noEmit
-bun run test:protocol       # 默认 http://127.0.0.1:8792；当前 924 项、114 个工具
-bun run test:acceptance     # 当前 1925 项（短 presence 窗口；EVENTS_ACCEPTANCE=1 另跑 events）
+bun run test:protocol       # 默认 http://127.0.0.1:8792；当前 938 项、114 个工具
+bun run test:acceptance     # 当前 1933 项（短 presence 窗口；EVENTS_ACCEPTANCE=1 另跑 events）
 bun run test:web            # Playwright 全量浏览器验收；当前 79 项
 bun run test:architecture   # 好友过期读取、入群审批竞态、实时通知失败重试专项
 bun run test:drive          # MCPP Files 上传、公开下载与 drive_file_info；当前 55 项
@@ -625,10 +625,13 @@ MF05 在现有业务事务内追加纯 SQL 来源/预热意图（`src/memory/int
 - **delivery 主动注入（Phase C）**：新只读工具 `network_memory_context_pack { room_id, message_id?, limit?, query? }` 只读调用者自己的 active space，硬过滤 `origin_room_id = room_id`，只返回当前房间的 sources/experiences 摘要、计数与来源标记；不 JOIN `messages`、不调用 Hindsight、不写 `memory_contexts`/`operations`/`events`/`outbox`，也不产生 lookup/bound 注入许可。人类身份、跨 Agent、跨房间与撤销凭据均拒绝；无空间/无内容/超时返回 `available=false` 空包。响应文本按 `maskSecrets` 语义掩码并去控制字符，结构化结果有 4 KiB 预算与 16 KiB 绝对上限。`MEMORY_INJECT=off|0|false|login` 回滚主动注入（工具返回 `injection_disabled` 空包，已建空间保留）。验收：`bun run test:memory-injection`。
 - **monitor 注入上界**：claude 每个已 claim delivery 最多调用一次，完整 `memory_context` 进入事件与 event_file；peri 默认只输出 `memory_pack_id`/`memory_items`/`memory_reason` pointer，不把记忆正文写进 watch.log；codex 在 `taskPrompt`/`steerPrompt` 前置只读记忆块；DSH 的 `wake.queue` 字段不变，由 Agent 唤醒后自行读取。失败/超时只降级该投递，不阻塞 claim、回复或 complete/fail；重连和同一 `delivery:attempt` 不重复调用。`--no-memory-context` 完全关闭客户端调用。
 
-MF04 在 `src/memory/adapters/hindsight.ts` 提供 HTTP 适配器，仍只实现六操作 `capabilities/ensureSpace/retain/search/remove/jobStatus`：
+MF04 在 `src/memory/adapters/hindsight.ts` 提供 HTTP 适配器，核心面仍是六操作 `capabilities/ensureSpace/retain/search/remove/jobStatus`；另提供不进入 `MemoryAdapter` 契约的 `retryJob` 扩展（`MemoryAdapterJobRetry`），供运行时对账失败作业时显式调用：
 
 - **配置**：`MEMORY_ADAPTER=hindsight` 时从服务端 `HINDSIGHT_URL` / `HINDSIGHT_API_KEY` 读取；`HINDSIGHT_URL` 是 Hindsight API 根地址（2026-11-13 实测 API 1.2.1，端点无额外前缀），可在末尾带 `/`，加载时归一化为 `origin + pathname`，避免拼出 `//v1/...`。凭据只进入 `Authorization: Bearer` 头，不进入 URL、MCP/UI、结果、capabilities、错误文本或日志。bank 由 space + ownership_epoch + backend_binding_epoch 派生为不可猜测的哈希。配置缺失/非法时 fail closed，不发请求也不伪报成功。
 - **retain**：只发送已接纳表示中的准确文本，校验 UTF-8 字节与 SHA-256；不会凭 `source_id` 回抓未消费原文。请求体为 `{ async: true, operation_id, items: [{ content, context, document_id, update_mode: 'replace', tags, metadata, observation_scopes }] }`；`operation_key` 派生稳定 UUID `operation_id`，同 key 不同正文由后端 409 映射为 `fenced`。响应取 `operation_id`（或 `operation_ids[0]`）作为 JobRef，永远绑定原 `backend_binding_epoch`；`jobStatus` 轮询 `GET /v1/default/banks/{bank}/operations/{operation_id}`，兼容真实 API 以 `200 + status: "not_found"` 表示未知作业。
+- **异步完成对账**：`async: true` 的 `accepted` 只表示远端受理，不再等价于本地完成。提交后本地 job 进入 `unknown` 并保存 `provider_job_id`；对账轮询 `pending/processing` 时保持 `unknown` 可见，只有远端 `completed` 才写本地 `completed`/`stage=source_applied`，并在 `result_json` 写入 `provider_state=completed`、`source_applied=true`、`derived_ready=false`、`remote_confirmed_at` 与 `last_checked_at`。远端 `failed/cancelled` 先调用 `POST /v1/default/banks/{bank}/operations/{operation_id}/retry`（Hindsight 对相同 `operation_id` 的重复 retain 不会重跑），成功后在本地按既有 attempt/backoff 回到 `pending`；retry 不可用或被拒绝时保留 `unknown`，不静默完成。本地 attempt 已达到 `memoryJobMaxAttempts` 时不再请求远端 retry：远端即使重新入队也无法再被本进程领取，因此直接落本地 `failed`，记录 `retry_outcome=attempts_exhausted`，且不计 `retried`。持续查不到作业（`unknown`/`not_found`）且对账轮次达到 `memoryJobMaxAttempts` 后，才按同一 `operation_id` 重新提交；稳定 document_id + `update_mode: 'replace'` 保证不会产生第二份逻辑表示。进程重启后 `memory_jobs` 中的 `unknown`/租约与 `provider_job_id` 仍在，`MemoryIntegration` 启动即继续对账，不依赖进程内定时器。
+- **可观测性**：`MemoryRuntime` 发出 `submitted/remote_completed/remote_failed/remote_retry_requested` 事件（含 `job_id`、`operation_type`、`provider_job_id`、`remote_state`、`attempt`；失败与重试事件另带 `retry_outcome`）。对账事件只在状态写回后发出；`completeMemoryJob` 返回 `changes=0` 时不计数 `completed`、不发 `remote_completed`，经 `onError` 记录分类 `memory_job_complete_writeback_rejected`。`onJobEvent` 回调抛错只经 `onError` 记录，不回滚也不改变作业状态。`MemoryIntegration` 每轮输出 `submitted/completed/requeued/retried/retry_rejected/unknown/failed` 计数；`MemoryRuntime.health()` 增加 `unconfirmed_completed`，用于发现历史遗留的“completed 但没有 `remote_confirmed_at`”行。日志不含正文、bank 路由或凭据。
+- **写入核对脚本**：`bun scripts/verify-hindsight-writes.ts --dry-run` 只读打印本地 space → bank 映射、expected/known、retain 意图与 retain 作业计数；去掉 `--dry-run` 并设置 `HINDSIGHT_URL`/`HINDSIGHT_API_KEY` 后，脚本分页拉取 `GET .../documents`（必要时回退 `GET .../memories/list`），按 `document_metadata.agentnet_representation_id` 计算 matched/missing/extra/suppressed_extra，输出缺失 id。还支持 `--agent`/`--space`/`--bank`/`--json`/`--show-banks`/`--fail-on-gap`；全程只读 SQLite 与 Hindsight，不输出正文或凭据。
 - **search**：有 query 时走 `POST .../memories/recall`，无 query 时走 `GET .../memories/list?limit&offset` 分页并本地复核硬过滤；recall 的 origin/source 通过 `tag_groups` 做服务端硬过滤。recall 的 `temporal_window` 只影响排序，list 的时间参数才过滤，因此能力声明为 `time_window: 'ranking_hint_only'`，任何时间过滤仍明确返回 `unsupported`，不静默降级。fact 正文默认映射为不可逐字证明的 summary，只有返回 hash 与保留 hash 一致时才映射为 raw。
 - **remove**：按 source revision / representation / curated 标签以 `tags_match=all_strict` 枚举 `GET .../documents`，DELETE 精确文档后重新列出确认消失；`total_is_estimate=true` 时不信任估算总数，继续分页直到空页/短页。未确认全部副本清除时保持 `purge_pending`/`unknown`，不以 2xx 当清除证据。partition 级目标在缺少可证明路由时返回 `unsupported_granularity`。
 - **observation**：`observation_scopes` 按 origin + source revision 或单个表示锚定，限制跨域汇总。真实部署已完成鉴权与写入验收；默认仍使用 stub，stub 明确返回 unsupported。
@@ -706,6 +709,16 @@ Hindsight 真实契约测试默认跳过；设置 `HINDSIGHT_REAL_TEST=1` 并在
 set -a; . <hindsight-env-file>; set +a
 HINDSIGHT_REAL_TEST=1 bun run test:memory-hindsight
 ```
+
+写入核对脚本默认只读；没有 Hindsight 凭据时先用 `--dry-run` 看本地范围，再在提供 `HINDSIGHT_URL` / `HINDSIGHT_API_KEY` 的环境运行远端覆盖：
+
+```bash
+bun scripts/verify-hindsight-writes.ts --dry-run
+set -a; . <hindsight-env-file>; set +a
+bun scripts/verify-hindsight-writes.ts --json --show-banks
+```
+
+`expected` 取本地 retain 意图（排除 `suppressed`/`skipped` 与已墓碑化 representation）；`matched` 是其中远端文档带同名 `agentnet_representation_id` 的表示；`missing` 是远端缺失；`extra` 是远端有但本地该 space 从未记录；`suppressed_extra` 是远端有但本地已抑制/墓碑化。`--fail-on-gap` 时存在缺口返回退出码 2。
 
 MF03 提供持久意图与租约；MF04 提供可配置的 Hindsight HTTP 适配器与受控假服务验收；MF10 提供统一运行时组合与 local-sqlite 第二适配器。默认仍使用 stub，stub 明确返回 unsupported，不伪报“已记住”。
 
