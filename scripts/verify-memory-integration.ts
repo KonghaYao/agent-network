@@ -686,6 +686,46 @@ async function hindsightLifecycleChecks(root: string): Promise<void> {
     }
   }
 
+  // 事件回调抛错只记录，不得把已写回的 completed 变回 unknown。
+  {
+    const fake = new FakeHindsight(`test_hindsight_event_error_${crypto.randomUUID().replaceAll('-', '')}`);
+    const fixture = await seedMemoryAdmission(join(root, 'hindsight-event-error.sqlite'));
+    const errors: unknown[] = [];
+    const clock = AT + 1_000;
+    const runtime = new MemoryRuntime(fixture.env.d1, {
+      adapter: hindsightAdapter(fake),
+      instanceId: fixture.instanceId,
+      capture: true,
+      now: () => clock,
+      onJobEvent: () => {
+        throw new Error('job event handler failed');
+      },
+      onError: (error) => errors.push(error),
+    });
+    try {
+      await runtime.start();
+      const tick = await runtime.tick();
+      checkEqual('HS 事件回调抛错仍受理提交', tick.submitted, 1);
+      const operationId = (await jobSnapshotOf(fixture.env)).provider_job_id;
+      check('HS 事件回调抛错响应后 provider_job_id 保留', operationId !== null);
+      fake.setOperationStatus(operationId!, 'completed');
+      const reconciled = await runtime.reconcile();
+      checkEqual('HS 事件回调抛错仍完成对账', reconciled.completed, 1);
+      const confirmed = await jobSnapshotOf(fixture.env);
+      checkEqual('HS 事件回调抛错 job 仍 completed', confirmed.status, 'completed');
+      checkEqual('HS 事件回调抛错 stage 仍 source_applied', confirmed.stage, 'source_applied');
+      check(
+        'HS 事件回调抛错仍写 remote_confirmed_at',
+        confirmed.result_json?.includes('"remote_confirmed_at"') === true,
+      );
+      check('HS 事件回调异常被记录', errors.length > 0);
+    } finally {
+      await runtime.stop();
+      fixture.env.db.close();
+      await fake.stop();
+    }
+  }
+
   // accepted -> failed：先调远端 retry，再按既有本地退避回到 pending。
   {
     const fake = new FakeHindsight(`test_hindsight_retry_${crypto.randomUUID().replaceAll('-', '')}`);
@@ -720,6 +760,15 @@ async function hindsightLifecycleChecks(root: string): Promise<void> {
         events.some(
           (event) =>
             event.transition === 'remote_failed' && event.provider_job_id === operationId,
+        ),
+      );
+      check(
+        'HS retry requested 事件含 provider_job_id 与 retry 结果',
+        events.some(
+          (event) =>
+            event.transition === 'remote_retry_requested' &&
+            event.provider_job_id === operationId &&
+            event.retry_outcome === 'accepted',
         ),
       );
       // 退避到期后重新提交同一 operation_id；后端只返回原作业，不重复建文档。

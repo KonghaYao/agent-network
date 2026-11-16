@@ -222,6 +222,14 @@ function resultNumber(existing: string | null, key: string): number {
   }
 }
 
+/** 对账状态写回之后发出的观测事件；不参与状态裁决。 */
+export interface MemoryJobReconcileEvent {
+  transition: 'remote_completed' | 'remote_failed' | 'remote_retry_requested';
+  job: MemoryJobRow;
+  remote_state: string | null;
+  retry_outcome: MemoryJobRemoteRetry | null;
+}
+
 /**
  * 对账 unknown 作业。
  *
@@ -230,6 +238,8 @@ function resultNumber(existing: string | null, key: string): number {
  * failed/cancelled 若适配器提供显式 retry，则先重新入队远端作业，再按既有
  * 本地退避策略回到 pending；持续 unknown 且对账轮次用尽后才重新提交同一
  * operation_id，不把“接受过”当作完成。
+ *
+ * 事件只在状态写回后发出；回调异常被吞掉，不能让已完成的写回变成 unknown。
  */
 export async function reconcileUnknownMemoryJobs(
   db: D1Like,
@@ -238,6 +248,7 @@ export async function reconcileUnknownMemoryJobs(
     limit?: number;
     queryStatus: (job: MemoryJobRow) => Promise<MemoryJobRemoteStatus>;
     retryRemote?: (job: MemoryJobRow) => Promise<MemoryJobRemoteRetry>;
+    onEvent?: (event: MemoryJobReconcileEvent) => void;
   },
 ): Promise<{
   completed: number;
@@ -262,6 +273,23 @@ export async function reconcileUnknownMemoryJobs(
   let stillUnknown = 0;
   let unsupported = 0;
   let failed = 0;
+  const notify = (
+    transition: MemoryJobReconcileEvent['transition'],
+    current: MemoryJobRow,
+    remoteState: string | null,
+    retryOutcome: MemoryJobRemoteRetry | null = null,
+  ): void => {
+    try {
+      options.onEvent?.({
+        transition,
+        job: current,
+        remote_state: remoteState,
+        retry_outcome: retryOutcome,
+      });
+    } catch {
+      // 状态已写回；观测回调失败不能改变本次对账结果。
+    }
+  };
   for (const job of rows.results) {
     const status = await options.queryStatus(job);
     const attempts = resultNumber(job.result_json, 'reconcile_attempts') + 1;
@@ -288,6 +316,7 @@ export async function reconcileUnknownMemoryJobs(
         },
       });
       completed += 1;
+      notify('remote_completed', job, 'completed');
     } else if (status === 'failed' || status === 'cancelled') {
       const failurePatch = {
         ...observed,
@@ -311,6 +340,8 @@ export async function reconcileUnknownMemoryJobs(
             },
           });
           retried += 1;
+          notify('remote_failed', job, status, 'accepted');
+          notify('remote_retry_requested', job, status, 'accepted');
         } else {
           // 无法确认已重新入队时保留 unknown，继续可见、可再次对账。
           await mergeMemoryJobResult(db, {
@@ -320,6 +351,7 @@ export async function reconcileUnknownMemoryJobs(
           });
           retryRejected += 1;
           stillUnknown += 1;
+          notify('remote_failed', job, status, retry);
         }
       } else {
         // 没有显式 retry 的适配器沿用原策略：明确失败可安全重试，
@@ -332,6 +364,7 @@ export async function reconcileUnknownMemoryJobs(
           resultPatch: { ...failurePatch, retry_outcome: 'unsupported' },
         });
         requeued += 1;
+        notify('remote_failed', job, status, 'unsupported');
       }
     } else if (status === 'unsupported') {
       await failMemoryJob(db, {

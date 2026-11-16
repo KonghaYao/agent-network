@@ -41,6 +41,7 @@ import {
   reconcileUnknownMemoryJobs,
   recoverMemoryJobs,
   setMemoryJobProviderRef,
+  type MemoryJobRemoteRetry,
 } from './jobs';
 import type {
   EnsureSpaceRequest,
@@ -84,6 +85,8 @@ export interface MemoryJobEvent {
   provider_job_id: string | null;
   remote_state: string | null;
   attempt: number;
+  /** 仅 remote_failed / remote_retry_requested 提供远端重试结果。 */
+  retry_outcome?: MemoryJobRemoteRetry | null;
 }
 
 export interface MemoryRuntimeTickResult {
@@ -261,15 +264,22 @@ export class MemoryRuntime {
     transition: MemoryJobEventTransition,
     providerJobId: string | null,
     remoteState: string | null,
+    retryOutcome: MemoryJobRemoteRetry | null = null,
   ): void {
-    this.#options.onJobEvent?.({
-      transition,
-      job_id: job.job_id,
-      operation_type: job.operation_type,
-      provider_job_id: providerJobId,
-      remote_state: remoteState,
-      attempt: job.attempt,
-    });
+    try {
+      this.#options.onJobEvent?.({
+        transition,
+        job_id: job.job_id,
+        operation_type: job.operation_type,
+        provider_job_id: providerJobId,
+        remote_state: remoteState,
+        attempt: job.attempt,
+        retry_outcome: retryOutcome,
+      });
+    } catch (error) {
+      // 观测回调只记录，不影响已写回的作业状态。
+      this.report(error, job);
+    }
   }
 
   async tick(): Promise<MemoryRuntimeTickResult> {
@@ -865,6 +875,15 @@ export class MemoryRuntime {
     return reconcileUnknownMemoryJobs(this.#db, {
       now: this.now(),
       limit: this.#options.batchLimit ?? LIMITS.memoryJobBatchLimit,
+      onEvent: (event) => {
+        this.emitJobEvent(
+          event.job,
+          event.transition,
+          event.job.provider_job_id,
+          event.remote_state,
+          event.retry_outcome,
+        );
+      },
       queryStatus: async (job) => {
         const ref = toJobRef(job);
         const space = await getMemorySpaceById(this.#db, job.space_id);
@@ -878,15 +897,12 @@ export class MemoryRuntime {
           });
           switch (status.state) {
             case 'completed':
-              this.emitJobEvent(job, 'remote_completed', job.provider_job_id, 'completed');
               return 'completed';
             case 'failed':
               if (!status.retryable) return 'unsupported';
-              this.emitJobEvent(job, 'remote_failed', job.provider_job_id, 'failed');
               return 'failed';
             case 'cancelled':
               if (!status.retryable) return 'unsupported';
-              this.emitJobEvent(job, 'remote_failed', job.provider_job_id, 'cancelled');
               return 'cancelled';
             case 'pending':
               return 'pending';

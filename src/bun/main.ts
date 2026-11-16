@@ -257,6 +257,7 @@ if (process.env.MEMORY_ENABLED === '1') {
             operation: event.operation_type,
             provider_job_id: event.provider_job_id,
             remote_state: event.remote_state,
+            retry_outcome: event.retry_outcome,
             attempt: event.attempt,
           }),
         );
