@@ -9,6 +9,7 @@ import { MONITOR_STYLE } from './chat-monitor-styles';
 import { TASK_TRACE_STYLE } from './chat-task-trace-styles';
 import { UPLOAD_STYLE } from './chat-upload-styles';
 import { DEVICE_HANDOFF_STYLE } from './device-handoff-styles';
+import { BASE_FAVICON_HREF } from './lib/favicon';
 import { escapeHtml, jsonForScript } from './layout';
 import type { SpaManifest, SpaRoute } from './spa-manifest';
 
@@ -85,6 +86,7 @@ export function renderSpaShell(
 <meta property="og:title" content="${escapeHtml(title)}">
 <meta property="og:description" content="${escapeHtml(description)}">
 <meta property="og:type" content="website">
+<link rel="icon" type="image/svg+xml" href="${escapeHtml(BASE_FAVICON_HREF)}">
 <title>${escapeHtml(title)}</title>
 <style>:root{color-scheme:light dark}${route === 'room' ? CHAT_STYLE : SPA_STYLE}</style>
 ${css}
