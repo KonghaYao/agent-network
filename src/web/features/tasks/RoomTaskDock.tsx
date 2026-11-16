@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { RoomView } from '../../lib/chat';
 import { taskAuthorizationKey } from '../../lib/task-cache';
@@ -18,10 +18,12 @@ interface CompleteState {
 }
 
 /**
- * 房间常驻未完成 Task：位于聊天区输入框上方，属于 chat-body 布局。
+ * 房间未完成 Task 浮动入口：浮动在输入框上方，不占聊天文档流。
  *
- * 默认展开紧凑列表，可折叠为 `Task N`。列表不覆盖消息或回到底部按钮；
- * 高度通过 CSS 变量同步给 `jump-latest`，滚动到最新按钮会随 dock 上移。
+ * 默认收起为 `Task N` 入口；点击展开列表，再次点击或 Esc/外部点击收起。
+ * 面板绝对定位锚在 composer 容器上，展开前后不推移消息、输入框或
+ * 「回到最新」。N=0 且收起时完全不渲染；展开时完成最后一条保留空态，
+ * 直到用户主动收起。
  */
 export function RoomTaskDock({
   roomId,
@@ -36,11 +38,11 @@ export function RoomTaskDock({
   actorId: string | null;
   onOpenTrace: (rootId: string, focusId: string | null) => void;
 }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [complete, setComplete] = useState<CompleteState | null>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
-  const slotRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLElement>(null);
   const readOnly = room?.read_only === true;
   const authorizationKey = taskAuthorizationKey(room);
   const tasks = useRoomTasks({
@@ -52,10 +54,52 @@ export function RoomTaskDock({
   });
 
   useEffect(() => {
-    setExpanded(true);
+    setExpanded(false);
     setPreview(null);
     setComplete(null);
   }, [roomId]);
+
+  useEffect(() => {
+    if (!expanded) setPreview(null);
+  }, [expanded]);
+
+  const focusAfterCollapse = () => {
+    // 收起后入口可能因 N=0 卸载；此时把焦点还给输入框而不是 body。
+    requestAnimationFrame(() => {
+      if (toggleRef.current) {
+        toggleRef.current.focus();
+        return;
+      }
+      document.getElementById('body')?.focus();
+    });
+  };
+
+  const collapse = (restoreFocus: boolean) => {
+    setPreview(null);
+    setExpanded(false);
+    if (restoreFocus) focusAfterCollapse();
+  };
+
+  // 点击面板外部收起；预览浮层与 Dialog 走 Portal，不应连带收起面板。
+  useEffect(() => {
+    if (!expanded || preview) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (dockRef.current?.contains(target)) return;
+      if (
+        target.closest(
+          '.task-preview-popover, [role="dialog"], [role="alertdialog"], .spa-dialog-overlay',
+        )
+      ) {
+        return;
+      }
+      const focusInside = dockRef.current?.contains(document.activeElement) ?? false;
+      collapse(focusInside);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [expanded, preview]);
 
   useEffect(() => {
     if (!preview) return;
@@ -75,27 +119,6 @@ export function RoomTaskDock({
       requestAnimationFrame(() => toggleRef.current?.focus());
     }
   }, [preview, tasks.items]);
-
-  // 把 dock 实际高度交给 `.jump-latest`，避免“回到最新”被面板遮挡。
-  useLayoutEffect(() => {
-    const slot = slotRef.current;
-    const body = slot?.closest<HTMLElement>('.chat-body');
-    if (!slot || !body) return undefined;
-    const status = body.querySelector<HTMLElement>('#status');
-    const update = () => {
-      // dock 与状态行都在 composer 上方；两者高度共同决定回到底部按钮的位置。
-      const offset = slot.offsetHeight + (status?.offsetHeight ?? 0);
-      body.style.setProperty('--task-dock-height', `${offset}px`);
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(slot);
-    if (status) observer.observe(status);
-    return () => {
-      observer.disconnect();
-      body.style.removeProperty('--task-dock-height');
-    };
-  }, [roomId]);
 
   const requestOpen = (rootId: string) => {
     setPreview({ rootId, pinned: true });
@@ -128,6 +151,25 @@ export function RoomTaskDock({
     });
   };
 
+  const onToggle = () => {
+    if (expanded) collapse(true);
+    else setExpanded(true);
+  };
+
+  const onSectionKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Escape' || !expanded) return;
+    // 预览浮层自己处理 Esc；否则收起面板并把焦点还给入口。
+    const target = event.target;
+    if (
+      target instanceof Element &&
+      target.closest('.task-dock-item-trigger, .task-preview-popover')
+    ) {
+      return;
+    }
+    event.stopPropagation();
+    collapse(true);
+  };
+
   if (!room) return null;
 
   const countLabel =
@@ -138,13 +180,18 @@ export function RoomTaskDock({
       ? '正在加载 Task'
       : `${tasks.totalCount} 个未完成 Task`;
 
+  // N=0 且收起：完全不渲染，不留占位、不产生 `Task 0` 噪音。
+  if (!expanded && tasks.totalCount === 0) return null;
+
   return (
-    <div className="task-dock-slot" ref={slotRef}>
+    <div className="task-dock-slot">
       <section
+        ref={dockRef}
         id="task-dock"
         className={`task-dock${expanded ? '' : ' is-collapsed'}`}
         aria-label="未完成 Task"
         data-state={expanded ? 'expanded' : 'collapsed'}
+        onKeyDown={onSectionKeyDown}
       >
         <div className="task-dock-head">
           <button
@@ -162,7 +209,7 @@ export function RoomTaskDock({
                   : `Task ${tasks.totalCount} 个未完成`
             }
             title={toggleTitle}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={onToggle}
           >
             <span className="task-dock-title">Task</span>
             <span
@@ -196,9 +243,17 @@ export function RoomTaskDock({
             </p>
           ) : null}
           {!tasks.error && !tasks.loading && tasks.items.length === 0 ? (
-            <p id="task-dock-empty" className="task-dock-empty">
-              暂无未完成 Task
-            </p>
+            <div id="task-dock-empty" className="task-dock-empty">
+              <span>暂无未完成 Task</span>
+              <button
+                id="task-dock-empty-close"
+                className="task-dock-empty-close"
+                type="button"
+                onClick={() => collapse(true)}
+              >
+                收起
+              </button>
+            </div>
           ) : null}
           {tasks.items.length > 0 ? (
             <ul className="task-dock-list" aria-label="未完成 Task 列表">

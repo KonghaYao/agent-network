@@ -765,57 +765,60 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onForward={setForwardItem}
                   />
                 ) : null}
-                {ready && room && identity ? (
-                  <RoomTaskDock
-                    roomId={roomId}
-                    room={room}
-                    token={token}
-                    actorId={identity.actor_id}
-                    onOpenTrace={openTrace}
-                  />
-                ) : null}
                 <p id="status" role="status">
                   {shownStatus}
                 </p>
-                {loadingShell ? (
-                  // 静态输入区：与真实 composer 同高，避免历史到达时列表被撑开。
-                  <form
-                    id="composer"
-                    className="composer composer--loading"
-                    aria-busy="true"
-                    onSubmit={(event) => event.preventDefault()}
-                  >
-                    <button className="attach-btn" type="button" aria-label="添加附件" disabled>
-                      +
-                    </button>
-                    <div className="composer-main">
-                      <textarea
-                        id="body"
-                        rows={1}
-                        placeholder="正在加载会话…"
-                        aria-label="消息正文，加载中"
-                        disabled
-                      />
-                    </div>
-                    <button className="send-btn primary" id="send" type="submit" disabled>
-                      发送
-                    </button>
-                  </form>
-                ) : null}
-                {ready && room && identity && token && !room.read_only ? (
-                  <Composer
-                    room={room}
-                    members={members}
-                    identity={identity}
-                    token={token}
-                    reply={reply}
-                    sending={false}
-                    onCancelReply={() => setReply(null)}
-                    onSend={onSend}
-                    onStatus={onStatus}
-                    registerFileDrop={registerFileDrop}
-                  />
-                ) : null}
+                {/* Task dock 浮动锚点：绝对定位不占文档流，不推移消息或输入框。 */}
+                <div className="composer-area">
+                  {ready && room && identity ? (
+                    <RoomTaskDock
+                      roomId={roomId}
+                      room={room}
+                      token={token}
+                      actorId={identity.actor_id}
+                      onOpenTrace={openTrace}
+                    />
+                  ) : null}
+                  {loadingShell ? (
+                    // 静态输入区：与真实 composer 同高，避免历史到达时列表被撑开。
+                    <form
+                      id="composer"
+                      className="composer composer--loading"
+                      aria-busy="true"
+                      onSubmit={(event) => event.preventDefault()}
+                    >
+                      <button className="attach-btn" type="button" aria-label="添加附件" disabled>
+                        +
+                      </button>
+                      <div className="composer-main">
+                        <textarea
+                          id="body"
+                          rows={1}
+                          placeholder="正在加载会话…"
+                          aria-label="消息正文，加载中"
+                          disabled
+                        />
+                      </div>
+                      <button className="send-btn primary" id="send" type="submit" disabled>
+                        发送
+                      </button>
+                    </form>
+                  ) : null}
+                  {ready && room && identity && token && !room.read_only ? (
+                    <Composer
+                      room={room}
+                      members={members}
+                      identity={identity}
+                      token={token}
+                      reply={reply}
+                      sending={false}
+                      onCancelReply={() => setReply(null)}
+                      onSend={onSend}
+                      onStatus={onStatus}
+                      registerFileDrop={registerFileDrop}
+                    />
+                  ) : null}
+                </div>
               </div>
             </section>
             {filesShellVisible ? (
