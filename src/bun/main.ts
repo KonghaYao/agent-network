@@ -8,6 +8,7 @@ import { createDrive } from '../drive/service';
 import { MemoryRuntime } from '../memory/runtime';
 import { MemoryIntegration } from '../memory/integration';
 import { MemoryBackfill } from '../memory/backfill';
+import { MemoryProvisioner } from '../memory/provision';
 import { memoryEngineInfo, type MemoryEngineStatus } from '../memory/capability-catalog';
 import { memoryHostPolicyFromEnv } from '../memory/host-bridge';
 import {
@@ -177,6 +178,10 @@ const env: Env = {
 };
 envRef = env;
 
+// Phase A：空间 provisioning 默认开；MEMORY_PROVISION=0 回滚。缺失 MEMORY
+// 运行时（MEMORY_ENABLED!=1）时 login/message 入口仍保持 no-op。
+env.MEMORY_PROVISION = process.env.MEMORY_PROVISION !== '0';
+
 // MF07：宿主信任等级只来自部署配置，缺省 tool-only；普通 Agent 不能自报。
 env.MEMORY_HOST = memoryHostPolicyFromEnv(process.env.MEMORY_HOST_TRUST);
 
@@ -186,6 +191,7 @@ env.MEMORY_HOST = memoryHostPolicyFromEnv(process.env.MEMORY_HOST_TRUST);
 let memoryRuntime: MemoryRuntime | undefined;
 let memoryIntegration: MemoryIntegration | undefined;
 let memoryBackfill: MemoryBackfill | undefined;
+let memoryProvisioner: MemoryProvisioner | undefined;
 let insightReader: HindsightInsightReader | null = null;
 if (process.env.MEMORY_ENABLED === '1') {
   const adapterKind = (process.env.MEMORY_ADAPTER ?? 'stub').trim().toLowerCase();
@@ -273,9 +279,19 @@ if (memoryRuntime) {
       console.warn('memory backfill skipped: engine not ready');
     }
   }
+  if (env.MEMORY_PROVISION) {
+    memoryProvisioner = new MemoryProvisioner({
+      db: d1,
+      instanceId: memoryRuntime.instanceId!,
+    });
+    console.log('memory provisioning enabled (startup + 6h sweep)');
+  } else {
+    console.log('memory provisioning disabled (MEMORY_PROVISION=0)');
+  }
   memoryIntegration = new MemoryIntegration({
     runtime: memoryRuntime,
     backfill: memoryBackfill,
+    provision: memoryProvisioner,
     onError: (error, scope) => {
       // 不记录来源正文、token 或 provider 路由。
       console.error(`agent-network memory ${scope} failed`, error);

@@ -505,6 +505,9 @@ export const LIMITS = {
   memoryTickIntervalMs: 5_000,
   /** unknown 作业对账周期；与领取分开，避免把未知当失败重跑。 */
   memoryReconcileIntervalMs: 30_000,
+  /** 空间 provisioning sweep 周期与单批上限；sweep 单轮最多处理一批。 */
+  memoryProvisionIntervalMs: 6 * 60 * 60_000,
+  memoryProvisionSweepBatch: 50,
   /** 定时回填窗口宽度与调度周期（毫秒）；窗口按整点对齐。 */
   memoryBackfillIntervalMs: 60 * 60_000,
   memoryBackfillWindowMs: 60 * 60_000,

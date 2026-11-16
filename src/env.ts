@@ -51,6 +51,11 @@ export interface Env {
    */
   MEMORY?: MemoryRuntime;
   /**
+   * Phase A 空间 provisioning 开关；只在 MEMORY 存在时生效。
+   * 缺省开（`MEMORY_PROVISION=0` 回滚），已建空间保留。
+   */
+  MEMORY_PROVISION?: boolean;
+  /**
    * MF10 引擎能力摘要；只来自部署配置与实际适配器声明。
    * 不包含 provider/bank 路由或凭据，用于能力目录与 UI 状态。
    */

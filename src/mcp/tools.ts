@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { isBusinessError } from '../contracts/errors';
 import { memoryIntakeFromEnv } from '../memory/intake';
+import { provisionAgentAfterMessage } from '../memory/provision';
 import { messageSearch, messageContext, messageSearchSchema, messageContextSchema, messageSearchOutputSchema, messageContextOutputSchema } from '../domain/message-search';
 import {
   messageTaskMark,
@@ -1516,6 +1517,10 @@ export function registerTools(
     async (input) => {
       requireActor(principal);
       const result = await messageSend(db, principal, input, memory);
+      // Phase A：发送事务提交后异步补建空间；失败不影响消息落库或响应。
+      if (principal.actor?.kind === 'agent') {
+        provisionAgentAfterMessage(env, principal.actor.actor_id);
+      }
       await runMessageCommittedHook(hooks, {
         messageId: result.message.message_id,
         roomId: result.message.room_id,
@@ -1722,6 +1727,10 @@ export function registerTools(
       requireActor(principal);
       const result = await deliveryComplete(db, principal, input, memory);
       if (input.final_body && result.message) {
+        // 最终答复同样是 Agent 发出的消息；异步兜底不改变完成结果。
+        if (principal.actor?.kind === 'agent') {
+          provisionAgentAfterMessage(env, principal.actor.actor_id);
+        }
         await runMessageCommittedHook(hooks, {
           messageId: result.message.message_id,
           roomId: result.message.room_id,
