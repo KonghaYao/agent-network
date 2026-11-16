@@ -1727,6 +1727,10 @@ export function registerTools(
       requireActor(principal);
       const result = await deliveryComplete(db, principal, input, memory);
       if (input.final_body && result.message) {
+        // 最终答复同样是 Agent 发出的消息；异步兜底不改变完成结果。
+        if (principal.actor?.kind === 'agent') {
+          provisionAgentAfterMessage(env, principal.actor.actor_id);
+        }
         await runMessageCommittedHook(hooks, {
           messageId: result.message.message_id,
           roomId: result.message.room_id,
