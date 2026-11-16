@@ -33,6 +33,7 @@ import {
   deliveryStateEvent,
   eventFilePayload,
   previewBody,
+  quoteOf,
   readFailedEvent,
   reminderEvent,
   roomMessageEvent,
@@ -41,6 +42,7 @@ import {
   type ClaimFailure,
   type ClaimInfo,
   type DeliveryFields,
+  type MessageQuote,
 } from './events';
 import { advanceHistoryCursor } from './room-cursor';
 import {
@@ -1393,7 +1395,7 @@ export class MonitorEngine {
     try {
       eventFile = await this.state.writeEventFile(
         fields.deliveryId,
-        eventFilePayload(fields, claim, source, read.body, memoryFields),
+        eventFilePayload(fields, claim, source, read.body, memoryFields, read.quote),
       );
     } catch {
       this.control(
@@ -1416,6 +1418,7 @@ export class MonitorEngine {
         previewBody(read.body, this.bodyPreviewChars),
         eventFile,
         memoryFields,
+        read.quote,
       ),
     );
     this.noteDeliveryEmitted(fields);
@@ -1686,9 +1689,10 @@ export class MonitorEngine {
   private async readMessage(
     messageId: string,
     deliveryId: string,
-  ): Promise<{ ok: true; body: string } | { ok: false }> {
+  ): Promise<{ ok: true; body: string; quote: MessageQuote | null } | { ok: false }> {
     const chunks: string[] = [];
     let cursor = '';
+    let quote: MessageQuote | null = null;
     for (let index = 0; index < 10_000; index += 1) {
       const args: JsonObject = { message_id: messageId };
       if (cursor.length > 0) args.chunk_cursor = cursor;
@@ -1723,9 +1727,11 @@ export class MonitorEngine {
         );
         return { ok: false };
       }
+      // 引用只在首次分块返回；缺失或格式不符时省略，不影响正文。
+      if (cursor.length === 0) quote = quoteOf(outcome.data.quote);
       chunks.push(typeof chunk === 'string' ? chunk : '');
       if (outcome.data.eof === true) {
-        return { ok: true, body: chunks.join('') };
+        return { ok: true, body: chunks.join(''), quote };
       }
       const next = asString(outcome.data.next_cursor);
       if (next.length === 0 || next === cursor) {

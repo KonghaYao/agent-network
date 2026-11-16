@@ -55,6 +55,46 @@ export interface BodyPreview {
   bodyTruncated: boolean;
 }
 
+/** 首次分块返回的引用上下文；只作为结构化字段，不拼进正文。 */
+export interface MessageQuote {
+  message_id: string;
+  sender_id: string;
+  sender_name: string;
+  sender_kind: string;
+  preview: string;
+  created_at: string;
+}
+
+/** 引用字段容错：结构缺失或任一契约字段为空/取值不符时返回 null，不阻塞正文投递。 */
+export function quoteOf(value: unknown): MessageQuote | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as JsonObject;
+  const messageId = asString(record.message_id);
+  const senderId = asString(record.sender_id);
+  const senderName = asString(record.sender_name);
+  const senderKind = asString(record.sender_kind);
+  const preview = asString(record.preview);
+  const createdAt = asString(record.created_at);
+  if (
+    messageId.length === 0 ||
+    senderId.length === 0 ||
+    senderName.length === 0 ||
+    (senderKind !== 'human' && senderKind !== 'agent') ||
+    preview.length === 0 ||
+    createdAt.length === 0
+  ) {
+    return null;
+  }
+  return {
+    message_id: messageId,
+    sender_id: senderId,
+    sender_name: senderName,
+    sender_kind: senderKind,
+    preview,
+    created_at: createdAt,
+  };
+}
+
 /** jq `//` 语义：null/undefined/false 才回退，空字符串保留。 */
 function pick(value: unknown, fallback: unknown): unknown {
   return value === null || value === undefined || value === false ? fallback : value;
@@ -101,6 +141,7 @@ export function eventFilePayload(
   source: string,
   body: string,
   memory: JsonObject = {},
+  quote: MessageQuote | null = null,
 ): JsonObject {
   return {
     type: 'delivery',
@@ -123,6 +164,7 @@ export function eventFilePayload(
     source,
     body,
     ...memory,
+    ...(quote ? { quote } : {}),
   };
 }
 
@@ -133,6 +175,7 @@ export function deliveryEvent(
   preview: BodyPreview,
   eventFile: string,
   memory: JsonObject = {},
+  quote: MessageQuote | null = null,
 ): JsonObject {
   return {
     type: 'delivery',
@@ -158,6 +201,7 @@ export function deliveryEvent(
     body_truncated: preview.bodyTruncated,
     event_file: eventFile,
     ...memory,
+    ...(quote ? { quote } : {}),
   };
 }
 

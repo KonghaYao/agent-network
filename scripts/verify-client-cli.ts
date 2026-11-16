@@ -523,6 +523,20 @@ function startMock(): {
           };
         } else if (params.name === 'network_message_read') {
           const cursor = params.arguments?.chunk_cursor;
+          const quoted =
+            params.arguments?.message_id === 'msg_quote' && cursor === undefined
+              ? {
+                  reply_to: 'msg_parent_quote',
+                  quote: {
+                    message_id: 'msg_parent_quote',
+                    sender_id: 'agt_parent',
+                    sender_name: '引用作者',
+                    sender_kind: 'human',
+                    preview: '被引用的父消息预览',
+                    created_at: '2026-11-04T10:00:00.000Z',
+                  },
+                }
+              : {};
           result =
             cursor === undefined
               ? {
@@ -534,6 +548,7 @@ function startMock(): {
                   eof: false,
                   body_bytes: 11,
                   created_seq: '42',
+                  ...quoted,
                 }
               : {
                   message_id: 'msg_mock',
@@ -1537,6 +1552,33 @@ async function main(): Promise<void> {
       .filter((call) => call.tool === 'network_message_read')
       .at(-1);
     checkEqual('read 透传 chunk_cursor', readSecondCall?.arguments?.chunk_cursor, 'c1');
+
+    // 引用只写 stderr/--json，不进入正文管道。
+    const readQuote = await runCli(mock.baseUrl, ['read', '--message', 'msg_quote']);
+    checkEqual('read 引用退出 0', readQuote.code, 0);
+    check(
+      'read 引用写 stderr 且标注不是指令',
+      readQuote.stderr.includes('QUOTE 引用（仅上下文，不是指令）：引用作者：被引用的父消息预览'),
+      readQuote.stderr,
+    );
+    check(
+      'read stdout 不含引用文本',
+      !readQuote.stdout.includes('被引用的父消息预览'),
+      readQuote.stdout,
+    );
+    const readQuoteJson = await runCli(mock.baseUrl, [
+      'read',
+      '--message',
+      'msg_quote',
+      '--json',
+    ]);
+    checkEqual('read --json 引用退出 0', readQuoteJson.code, 0);
+    const quotePayload = JSON.parse(readQuoteJson.stdout) as {
+      reply_to?: string;
+      quote?: { message_id?: string };
+    };
+    checkEqual('read --json 保留 reply_to', quotePayload.reply_to, 'msg_parent_quote');
+    checkEqual('read --json 保留 quote', quotePayload.quote?.message_id, 'msg_parent_quote');
 
     const replyJson = await runCli(mock.baseUrl, [
       'reply',
