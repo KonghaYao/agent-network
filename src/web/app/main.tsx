@@ -7,6 +7,7 @@ import './app.css';
 import { readSpaBootstrap, type SpaBootstrap } from './bootstrap';
 import { Providers } from './providers';
 import { useRoute } from './router';
+import { TabUnreadBadge } from './TabUnreadBadge';
 import { ConfirmHost } from '../features/overlays/confirm';
 import { AgentMemoryDialogHost } from '../features/memory/AgentMemoryDialogHost';
 import { ChatPage } from '../pages/ChatPage';
@@ -22,25 +23,32 @@ import { SharePage } from '../pages/SharePage';
  * 数据，这里用同一份 bootstrap hydrate，保留链接预览与无 JS 可读内容。
  * `ConfirmHost` 与路由同级只挂一次，任何页面都能 await `confirmDialog()`。
  */
+const APP_TITLES: Record<string, string> = {
+  home: 'WeBots',
+  room: '会话 · WeBots',
+  share: 'Agent 分享 · WeBots',
+  join: '加入群聊 · WeBots',
+  pair: '设备配对 · WeBots',
+};
+
 function App({ bootstrap }: { bootstrap: SpaBootstrap | null }) {
   const route = useRoute();
+  const baseTitle = APP_TITLES[route.name] ?? 'WeBots';
+  const appRoute = route.name === 'home' || route.name === 'room';
   // 客户端导航（建群后跳转、popstate）不会重新请求 HTML；legacy CSS 仍按
   // body class 决定显示侧栏还是聊天区，因此必须同步。
   useEffect(() => {
-    const titles: Record<string, string> = {
-      home: 'WeBots',
-      room: '会话 · WeBots',
-      share: 'Agent 分享 · WeBots',
-      join: '加入群聊 · WeBots',
-      pair: '设备配对 · WeBots',
-    };
     const body = document.body;
     for (const name of ['home', 'room', 'share', 'join', 'pair']) {
       body.classList.toggle(`page-${name}`, route.name === name);
     }
     body.dataset.spaRoute = route.name;
-    document.title = titles[route.name] ?? document.title;
   }, [route.name]);
+  // 应用页标题由 TabUnreadBadge 组合未读前缀；卡片页沿用服务端标题。
+  useEffect(() => {
+    if (appRoute) return;
+    document.title = baseTitle;
+  }, [appRoute, baseTitle]);
   let page;
   if (route.name === 'home') page = <HomePage />;
   else if (route.name === 'room') page = <ChatPage roomId={route.roomId} />;
@@ -55,6 +63,7 @@ function App({ bootstrap }: { bootstrap: SpaBootstrap | null }) {
   return (
     <>
       {page}
+      {appRoute ? <TabUnreadBadge baseTitle={baseTitle} /> : null}
       <ConfirmHost />
       <AgentMemoryDialogHost />
     </>
