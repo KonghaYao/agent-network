@@ -1238,6 +1238,23 @@ async function runDeliveryQuoteChecks(): Promise<void> {
     check('缺失 quote 时事件不带 quote', !('quote' in plain));
     checkEqual('缺失 quote 时正文完整', plain.body, messageBody('msg_dlv_no_quote'));
     checkEqual('缺失 quote 时读取次数仍为 1', mock.state.readCalls - beforePlain, 1);
+
+    // 不完整 quote：客户端按服务器契约拒绝该引用，正文照常投递。
+    mock.state.claims.clear();
+    mock.state.pending.set('dlv_partial_quote', delivery('dlv_partial_quote'));
+    mock.state.quotes.set('msg_dlv_partial_quote', {
+      message_id: 'msg_parent_partial',
+      sender_id: 'agt_parent_partial',
+      sender_name: '引用作者',
+    });
+    const beforePartial = mock.state.readCalls;
+    sendItems(mock, [
+      notificationItem('dlv_partial_quote', 'delivery.created', 'evt_partial_quote'),
+    ]);
+    const partial = await waitForEvent(watcher.stdout, 'delivery', 'dlv_partial_quote');
+    check('不完整 quote 时事件不带 quote', !('quote' in partial));
+    checkEqual('不完整 quote 时正文完整', partial.body, messageBody('msg_dlv_partial_quote'));
+    checkEqual('不完整 quote 时读取次数仍为 1', mock.state.readCalls - beforePartial, 1);
   } finally {
     await watcher.kill();
     mock.stop();

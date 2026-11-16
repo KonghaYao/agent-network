@@ -1597,6 +1597,7 @@ async function runCheckAndConfigChecks(): Promise<void> {
 
   const sources = [
     readFileSync(join(ROOT, 'client/monitor/codex.ts'), 'utf8'),
+    readFileSync(join(ROOT, 'client/monitor/codex-prompt.ts'), 'utf8'),
     readFileSync(join(ROOT, 'client/monitor/codex-transport.ts'), 'utf8'),
   ].join('\n');
   check(

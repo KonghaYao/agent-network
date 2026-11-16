@@ -65,21 +65,33 @@ export interface MessageQuote {
   created_at: string;
 }
 
-/** 引用字段容错：缺失或关键字段不完整时返回 null，不阻塞正文投递。 */
+/** 引用字段容错：结构缺失或任一契约字段为空/取值不符时返回 null，不阻塞正文投递。 */
 export function quoteOf(value: unknown): MessageQuote | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as JsonObject;
   const messageId = asString(record.message_id);
   const senderId = asString(record.sender_id);
   const senderName = asString(record.sender_name);
-  if (messageId.length === 0 || senderId.length === 0 || senderName.length === 0) return null;
+  const senderKind = asString(record.sender_kind);
+  const preview = asString(record.preview);
+  const createdAt = asString(record.created_at);
+  if (
+    messageId.length === 0 ||
+    senderId.length === 0 ||
+    senderName.length === 0 ||
+    (senderKind !== 'human' && senderKind !== 'agent') ||
+    preview.length === 0 ||
+    createdAt.length === 0
+  ) {
+    return null;
+  }
   return {
     message_id: messageId,
     sender_id: senderId,
     sender_name: senderName,
-    sender_kind: asString(record.sender_kind),
-    preview: asString(record.preview),
-    created_at: asString(record.created_at),
+    sender_kind: senderKind,
+    preview,
+    created_at: createdAt,
   };
 }
 
