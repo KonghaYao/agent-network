@@ -36,11 +36,18 @@ import {
   prepareCatchupSelections,
 } from '../memory/catchup';
 import { listExperiences, getExperience } from '../memory/experience-read';
+import {
+  assertPackCaller,
+  assertPackTarget,
+  buildInjectionPackWithTimeout,
+  injectionDisabledPack,
+} from '../memory/injection';
 import { recordContextDeliveryReceipt } from '../memory/store';
 import { requireHostBinding } from '../memory/input-manifest';
 import {
   memoryContextGetInputSchema,
   memoryContextListInputSchema,
+  memoryContextPackInputSchema,
   memoryCorrectInputSchema,
   memoryCatchupGetInputSchema,
   memoryCatchupPrepareInputSchema,
@@ -60,6 +67,7 @@ import {
   memoryRecallOutputSchema,
   memoryContextListOutputSchema,
   memoryContextGetOutputSchema,
+  memoryContextPackOutputSchema,
   memoryListOutputSchema,
   memoryGetOutputSchema,
   memoryPutOutputSchema,
@@ -231,6 +239,41 @@ export function registerMemoryTools(
         engine_status: catalog.engine_status,
         unsupported: catalog.unsupported,
       };
+    },
+    { readOnlyHint: true },
+  );
+
+  registerMemoryTool(
+    server,
+    'network_memory_context_pack',
+    '读取当前 Agent 自己空间的只读记忆参考包：按 room_id 硬过滤 origin_room_id，可选 message_id 与有界 limit/query；返回来源/经历摘要、计数、来源标记与截断信息。只读 SQLite，不调用 Hindsight，不写 memory_contexts/operations/events/outbox，不产生 lookup/bound 注入许可。人类身份、跨 Agent、跨房间与撤销凭据均拒绝；无空间/无内容/超时返回 available=false 的空包，不阻塞投递。',
+    memoryContextPackInputSchema,
+    memoryContextPackOutputSchema,
+    async (input) => {
+      const runtime = env.MEMORY;
+      if (!runtime?.instanceId) memoryDisabled();
+      const { agentId } = await assertPackCaller({ db: env.DB, principal });
+      await assertPackTarget(env.DB, agentId, {
+        roomId: input.room_id,
+        messageId: input.message_id ?? null,
+      });
+      if (env.MEMORY_INJECT === false) {
+        return await injectionDisabledPack({
+          instanceId: runtime.instanceId,
+          agentId,
+          roomId: input.room_id,
+          messageId: input.message_id ?? null,
+        });
+      }
+      return await buildInjectionPackWithTimeout({
+        db: env.DB,
+        instanceId: runtime.instanceId,
+        agentId,
+        roomId: input.room_id,
+        messageId: input.message_id ?? null,
+        query: input.query ?? null,
+        limit: input.limit,
+      });
     },
     { readOnlyHint: true },
   );

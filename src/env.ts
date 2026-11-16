@@ -56,6 +56,14 @@ export interface Env {
    */
   MEMORY_PROVISION?: boolean;
   /**
+   * Phase C：delivery 记忆参考包开关；缺省开。
+   *
+   * `MEMORY_INJECT=off|0|false|login` 关闭当前 delivery 注入（`login` 留给
+   * Phase B，不启用本阶段的 message pack）。关闭后工具仍注册，但只返回
+   * `injection_disabled` 空包，便于客户端停止调用；不回滚已建空间。
+   */
+  MEMORY_INJECT?: boolean;
+  /**
    * MF10 引擎能力摘要；只来自部署配置与实际适配器声明。
    * 不包含 provider/bank 路由或凭据，用于能力目录与 UI 状态。
    */

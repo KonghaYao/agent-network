@@ -32,7 +32,7 @@ CODEX_THREAD_ID='<当前会话 ID>' bun agentnet.js monitor --harness codex
 
 ## 3. 收到任务
 
-CLI 通过 SSE 长连接接收待办，不轮询；它自行核对待办、读取正文、唤醒当前 Codex 会话，并在答复后完成或标记失败。空闲时先 `network_delivery_claim`，成功后 `turn/start`，日志为 `DELIVERY_CLAIMED ... claimed_at=... auto_claimed=true`。短任务只发送最终答复，超过 10 秒才发送简短确认。工作中收到新消息时，如果当前回合已持有投递，就先读取新消息并用 `turn/steer` 提示，保持新投递为 pending（`QUEUED_STEERED`），不抢占第二个 claim；当前投递完成后自动领取排队的新投递并单独 `turn/start` 处理和答复，无需重发事件或重连。手动回合没有桥接器持有的投递时，仍先 claim 再插话（`STEERED`），回合结束后单独处理。WeBots 显示“已送达”不代表已经插话，以 `QUEUED_STEERED`、`STEERED` 或 `TURN_STARTED` 日志为准。
+CLI 通过 SSE 长连接接收待办，不轮询；它自行核对待办、读取正文、唤醒当前 Codex 会话，并在答复后完成或标记失败。空闲时先 `network_delivery_claim`，成功后 `turn/start`，日志为 `DELIVERY_CLAIMED ... claimed_at=... auto_claimed=true`。短任务只发送最终答复，超过 10 秒才发送简短确认。工作中收到新消息时，如果当前回合已持有投递，就先读取新消息并用 `turn/steer` 提示，保持新投递为 pending（`QUEUED_STEERED`），不抢占第二个 claim；当前投递完成后自动领取排队的新投递并单独 `turn/start` 处理和答复，无需重发事件或重连。手动回合没有桥接器持有的投递时，仍先 claim 再插话（`STEERED`），回合结束后单独处理。WeBots 显示“已送达”不代表已经插话，以 `QUEUED_STEERED`、`STEERED` 或 `TURN_STARTED` 日志为准。已 claim 的 delivery 会在 `turn/start` / `turn/steer` 的任务正文前前置当前房间的只读记忆块（`[MEMORY CONTEXT — reference data ...]`）；同一 `delivery:attempt` 只取一次，失败/超时只省略记忆块，不影响回合。`--no-memory-context` 可关闭。
 
 claim 失败不会伪装成任务：`DELIVERY_CONFLICT` 表示别人已领取，跳过；`DELIVERY_DEFERRED` 表示另有 claimed 投递阻挡领取；`DELIVERY_CLAIM_FAILED` 带错误码。排队中的重复事件不会重复插话；已成功领取的重复事件/快照不会重复 claim。`delivery.reminder` 只提醒，不 claim。
 

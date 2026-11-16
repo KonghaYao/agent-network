@@ -65,7 +65,12 @@ function claimObject(fields: DeliveryFields, claim: ClaimInfo): JsonObject {
  * 流通知 delivery：保留事件自身的 source/event_id/seq/created_at，
  * 不附加正文与 event_file。键顺序与 jq 输出一致。
  */
-function streamDelivery(item: JsonObject, fields: DeliveryFields, claim: ClaimInfo): JsonObject {
+function streamDelivery(
+  item: JsonObject,
+  fields: DeliveryFields,
+  claim: ClaimInfo,
+  memory: JsonObject = {},
+): JsonObject {
   return {
     type: 'delivery',
     source: streamSource(item),
@@ -82,11 +87,17 @@ function streamDelivery(item: JsonObject, fields: DeliveryFields, claim: ClaimIn
     auto_claimed: true,
     claim_state: 'claimed',
     claim: claimObject(fields, claim),
+    ...memory,
   };
 }
 
 /** 重连快照 delivery：取 inbox 条目的 created_seq 与 message.sender_id。 */
-function snapshotDelivery(item: JsonObject, fields: DeliveryFields, claim: ClaimInfo): JsonObject {
+function snapshotDelivery(
+  item: JsonObject,
+  fields: DeliveryFields,
+  claim: ClaimInfo,
+  memory: JsonObject = {},
+): JsonObject {
   return {
     type: 'delivery',
     source: 'inbox.snapshot',
@@ -102,6 +113,7 @@ function snapshotDelivery(item: JsonObject, fields: DeliveryFields, claim: Claim
     auto_claimed: true,
     claim_state: 'claimed',
     claim: claimObject(fields, claim),
+    ...memory,
   };
 }
 
@@ -110,10 +122,11 @@ function periDelivery(
   fields: DeliveryFields,
   claim: ClaimInfo,
   source: string,
+  memory: JsonObject = {},
 ): JsonObject {
   return source === 'inbox.snapshot'
-    ? snapshotDelivery(item, fields, claim)
-    : streamDelivery(item, fields, claim);
+    ? snapshotDelivery(item, fields, claim, memory)
+    : streamDelivery(item, fields, claim, memory);
 }
 
 /** reminder 不 claim、不带正文；attempt/progress_at 保持 jq 的 null 语义。 */
@@ -171,6 +184,8 @@ export async function runPeriMonitor(
     json?: boolean;
     maxRuntimeMs?: number;
     roomEvents?: RoomEventScope | false;
+    /** 缺省 pointer：只输出 pack id/条数，不把正文写进 watch.log。 */
+    memoryContext?: boolean;
   } = {},
 ): Promise<number> {
   const token = context.token;
@@ -235,6 +250,7 @@ export async function runPeriMonitor(
       maxRuntimeMs: options.maxRuntimeMs ?? 0,
       onDeadline: stop,
       roomEvents: options.roomEvents,
+      memoryMode: options.memoryContext === false ? 'off' : 'pointer',
     });
     return await engine.run();
   } finally {

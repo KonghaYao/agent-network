@@ -58,7 +58,7 @@ CLI 启动后先做 `server/discover`，再建立 `agentnet://stream` SSE 订阅
 
 ALERT 的具体类型：
 
-- `ALERT { "type": "delivery", ... }`：已自动 claim 的待处理投递，包含定位字段、真实 `attempt` / `claim_id` / `claimed_at`、`auto_claimed:true`、`claim_state:"claimed"` 与 `claim` 对象，不含正文或凭据。收到后按 `message_id` 用 `network_message_read` 读取正文并处理，不要再 claim。**这是有意与 `--harness claude` / `--harness codex` 不同**：Peri 的 stdout 常被 Other harness 追加到 `watch.log`，而日志不得持久化消息正文；需要直接正文投递时请使用 Claude Code 或 Codex 的监听，Peri 侧等待后续 opt-in body 模式。
+- `ALERT { "type": "delivery", ... }`：已自动 claim 的待处理投递，包含定位字段、真实 `attempt` / `claim_id` / `claimed_at`、`auto_claimed:true`、`claim_state:"claimed"` 与 `claim` 对象，不含正文或凭据。已 claim 的 delivery 默认只带 `memory_pack_id` / `memory_items` / `memory_reason` pointer，不输出记忆正文；需要时由 Agent 显式调用 `network_memory_context_pack`，避免 `watch.log` 落盘。收到后按 `message_id` 用 `network_message_read` 读取正文并处理，不要再 claim。**这是有意与 `--harness claude` / `--harness codex` 不同**：Peri 的 stdout 常被 Other harness 追加到 `watch.log`，而日志不得持久化消息正文；需要直接正文投递时请使用 Claude Code 或 Codex 的监听，Peri 侧等待后续 opt-in body 模式。
 - `ALERT { "type": "delivery_conflict", ... }`：别人已领取或投递已结束；跳过，不要处理。
 - `ALERT { "type": "delivery_deferred", ... }`：自己已有另一条 claimed（`claimed_delivery_id`）；先 complete/fail 当前 claim，再手动 claim 或重连快照重试。CLI 不轮询，不要等下一次事件自动处理。
 - `ALERT { "type": "delivery_claim_failed", ... }`：claim 失败，带 `code`（例如 `STALE_ATTEMPT`）；不要当成可处理投递，按 `code` 修复。

@@ -82,6 +82,8 @@ export function memoryCapabilityCatalog(input: MemoryCatalogInput): MemoryCapabi
       'experience_list_get',
       'catchup_plan',
       'host_bind_close',
+      // Phase C：delivery 只读参考包；不是 bound Context 自动注入。
+      'advisory_injection',
     );
     if (engineStatus === 'ready') {
       supported.push('explicit_lookup', 'lookup_context');

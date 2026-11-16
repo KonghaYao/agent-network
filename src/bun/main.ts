@@ -182,6 +182,11 @@ envRef = env;
 // 运行时（MEMORY_ENABLED!=1）时 login/message 入口仍保持 no-op。
 env.MEMORY_PROVISION = process.env.MEMORY_PROVISION !== '0';
 
+// Phase C：delivery 参考包默认开；off/0/false/login 关闭本阶段的 message pack。
+// 关闭只影响主动注入，不删除已建空间，也不回滚已落库的来源/经历。
+const memoryInjectMode = (process.env.MEMORY_INJECT ?? 'messages').trim().toLowerCase();
+env.MEMORY_INJECT = !['0', 'off', 'false', 'login'].includes(memoryInjectMode);
+
 // MF07：宿主信任等级只来自部署配置，缺省 tool-only；普通 Agent 不能自报。
 env.MEMORY_HOST = memoryHostPolicyFromEnv(process.env.MEMORY_HOST_TRUST);
 
