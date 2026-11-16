@@ -17,6 +17,7 @@ import type { MemoryRuntime } from '../src/memory/runtime';
 import { ensureAgentSpace } from '../src/memory/provision';
 import {
   buildInjectionPackWithTimeout,
+  sanitizeMemoryText,
   type MemoryInjectionPack,
 } from '../src/memory/injection';
 import { getActor } from '../src/storage/queries';
@@ -258,6 +259,18 @@ async function expectToolError(
 }
 
 async function main(): Promise<void> {
+  const sanitized = sanitizeMemoryText(
+    'a\rb\u202eRTL\u2066LRI\u2069PDI\u200fRLM\u061cALM\u202aLRE\u0000NUL',
+  );
+  check('sanitize 去除 CR', !sanitized.includes('\r'), sanitized);
+  check(
+    'sanitize 去除 bidi 控制符',
+    !/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(sanitized),
+    sanitized,
+  );
+  checkEqual('sanitize 保留换行', sanitizeMemoryText('a\r\nb'), 'a\nb');
+  checkEqual('sanitize 保留普通文本', sanitizeMemoryText('可见文本 visible'), '可见文本 visible');
+
   const env = createMemoryEnv();
   const agentA = unique('agt_inj_a');
   const agentB = unique('agt_inj_b');

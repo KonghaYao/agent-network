@@ -116,10 +116,14 @@ interface SourceCandidate {
   source_message_id: string | null;
 }
 
-const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/gu;
+const CONTROL_CHARS =
+  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 const HORIZONTAL_SPACE = /[ \t\f\v]+/gu;
 
-/** 基础清洗：去控制字符、折叠水平空白、限制连续空行；保留换行语义。 */
+/**
+ * 基础清洗：去控制字符与 bidi 控制符（含 CR，避免 `\r\n` 与孤立 CR 改变
+ * 渲染）、折叠水平空白、限制连续空行；保留换行语义。
+ */
 export function sanitizeMemoryText(value: string): string {
   return maskSecrets(
     value

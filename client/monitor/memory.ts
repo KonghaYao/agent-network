@@ -109,6 +109,19 @@ export function parseMemoryPack(data: JsonObject): MemoryPack | null {
 }
 
 /**
+ * 只有明确“工具不存在”才把记忆注入全局停用；`UNKNOWN`、超时与普通业务
+ * 失败只降级当前投递，下一次 delivery 仍应重试。
+ */
+function memoryToolMissing(outcome: { code: string; message: string }): boolean {
+  if (outcome.code === 'METHOD_NOT_FOUND' || outcome.code === '-32601') return true;
+  // 官方 SDK：`Tool <name> not found`；JSON-RPC：`Method not found: tools/call`。
+  return (
+    /\btool\s+['"`]?[\w.:/-]+['"`]?\s+(?:is\s+)?not found\b/iu.test(outcome.message) ||
+    /\bmethod not found\b/iu.test(outcome.message)
+  );
+}
+
+/**
  * 每个 claimed delivery 调用一次。任何业务失败都返回空结果；只有
  * credential/protocol 致命错误继续抛给 monitor 的统一退出路径。
  */
@@ -128,7 +141,7 @@ export async function fetchMemoryPack(
       { timeoutMs: LIMITS.memoryInjectMonitorTimeoutMs },
     );
     if (!outcome.ok) {
-      const disabled = outcome.code === 'MEMORY_DISABLED' || outcome.code === 'UNKNOWN';
+      const disabled = outcome.code === 'MEMORY_DISABLED' || memoryToolMissing(outcome);
       return {
         pack: null,
         reason: disabled ? 'memory_disabled' : 'request_failed',

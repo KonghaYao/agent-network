@@ -33,6 +33,7 @@ import { join, resolve } from 'node:path';
 
 import { check, checkEqual, checksPassed } from './lib/harness';
 import { listInboxPages, type MonitorRpc } from '../client/monitor/rpc';
+import { fetchMemoryPack } from '../client/monitor/memory';
 import { BODY_PREVIEW_CHARS } from '../client/monitor/events';
 import { retryDelayMs } from '../client/monitor/engine';
 
@@ -92,6 +93,7 @@ interface MockState {
   /** Phase C：memory pack 调用记录与故障注入。 */
   memoryCalls: JsonObject[];
   memoryFailures: number;
+  memoryErrorCode: string;
   memoryDelayMs: number;
   memoryReason: string | null;
 }
@@ -216,6 +218,7 @@ function createMock(options: MockOptions = {}): MockServer {
     inboxFailures: options.inboxFailures ?? 0,
     memoryCalls: [],
     memoryFailures: 0,
+    memoryErrorCode: 'MEMORY_UNAVAILABLE',
     memoryDelayMs: 0,
     memoryReason: null,
   };
@@ -332,7 +335,7 @@ function createMock(options: MockOptions = {}): MockServer {
           if (state.memoryDelayMs > 0) await Bun.sleep(state.memoryDelayMs);
           if (state.memoryFailures > 0) {
             state.memoryFailures -= 1;
-            return toolError(body.id, 'MEMORY_UNAVAILABLE', 'memory backend unavailable');
+            return toolError(body.id, state.memoryErrorCode, 'memory backend unavailable');
           }
           if (state.memoryReason !== null) {
             return toolResult(body.id, {
@@ -1177,6 +1180,40 @@ async function runClaudeChecks(): Promise<void> {
 }
 
 async function runMemoryContextChecks(): Promise<void> {
+  // 失败分类：只有明确关闭/工具缺失才全局停用。
+  const classify = async (outcome: { ok: false; code: string; message: string }) =>
+    fetchMemoryPack(
+      { callTool: async () => outcome },
+      { roomId: 'rm_test', messageId: 'msg_mem_classify' },
+    );
+  checkEqual(
+    'UNKNOWN 不全局停用',
+    (await classify({ ok: false, code: 'UNKNOWN', message: 'boom' })).disabled,
+    false,
+  );
+  checkEqual(
+    'MEMORY_DISABLED 全局停用',
+    (await classify({ ok: false, code: 'MEMORY_DISABLED', message: 'Memory 未启用' })).disabled,
+    true,
+  );
+  checkEqual(
+    'tool not found 全局停用',
+    (
+      await classify({
+        ok: false,
+        code: 'UNKNOWN',
+        message: 'Tool network_memory_context_pack not found',
+      })
+    ).disabled,
+    true,
+  );
+  checkEqual(
+    'method not found 全局停用',
+    (await classify({ ok: false, code: 'UNKNOWN', message: 'Method not found: tools/call' }))
+      .disabled,
+    true,
+  );
+
   // claude：full 包进入 stdout delivery 与 event_file；每投递一次。
   const mock = createMock();
   const watcher = startWatcher(mock.base, { AGENTNET_MONITOR_RETRY_BASE_MS: '600000' });
@@ -1236,6 +1273,59 @@ async function runMemoryContextChecks(): Promise<void> {
     checkEqual('memory 超时 reason=timeout', (timed.memory_context as JsonObject).reason, 'timeout');
     checkEqual('超时投递只调用一次', mock.state.memoryCalls.length, 3);
     mock.state.memoryDelayMs = 0;
+
+    // UNKNOWN 只降级当前投递，下一次 delivery 仍调用工具。
+    mock.state.claims.clear();
+    mock.state.memoryFailures = 1;
+    mock.state.memoryErrorCode = 'UNKNOWN';
+    mock.state.pending.set('dlv_mem_unknown', delivery('dlv_mem_unknown'));
+    sendItems(mock, [
+      notificationItem('dlv_mem_unknown', 'delivery.created', 'evt_mem_unknown'),
+    ]);
+    const unknown = await waitForEvent(watcher.stdout, 'delivery', 'dlv_mem_unknown');
+    checkEqual(
+      'UNKNOWN 降级当前投递',
+      (unknown.memory_context as JsonObject).reason,
+      'request_failed',
+    );
+    checkEqual('UNKNOWN 投递调用一次', mock.state.memoryCalls.length, 4);
+
+    mock.state.claims.clear();
+    mock.state.pending.set('dlv_mem_unknown_next', delivery('dlv_mem_unknown_next'));
+    sendItems(mock, [
+      notificationItem('dlv_mem_unknown_next', 'delivery.created', 'evt_mem_unknown_next'),
+    ]);
+    await waitForEvent(watcher.stdout, 'delivery', 'dlv_mem_unknown_next');
+    checkEqual('UNKNOWN 后下一次仍调用', mock.state.memoryCalls.length, 5);
+
+    // 只有 MEMORY_DISABLED 才全局停用后续投递。
+    mock.state.claims.clear();
+    mock.state.memoryFailures = 1;
+    mock.state.memoryErrorCode = 'MEMORY_DISABLED';
+    mock.state.pending.set('dlv_mem_disabled', delivery('dlv_mem_disabled'));
+    sendItems(mock, [
+      notificationItem('dlv_mem_disabled', 'delivery.created', 'evt_mem_disabled'),
+    ]);
+    const disabled = await waitForEvent(watcher.stdout, 'delivery', 'dlv_mem_disabled');
+    checkEqual(
+      'MEMORY_DISABLED 降级当前投递',
+      (disabled.memory_context as JsonObject).reason,
+      'memory_disabled',
+    );
+    checkEqual('MEMORY_DISABLED 投递调用一次', mock.state.memoryCalls.length, 6);
+
+    mock.state.claims.clear();
+    mock.state.pending.set('dlv_mem_disabled_next', delivery('dlv_mem_disabled_next'));
+    sendItems(mock, [
+      notificationItem('dlv_mem_disabled_next', 'delivery.created', 'evt_mem_disabled_next'),
+    ]);
+    const disabledNext = await waitForEvent(watcher.stdout, 'delivery', 'dlv_mem_disabled_next');
+    checkEqual('MEMORY_DISABLED 后不再调用', mock.state.memoryCalls.length, 6);
+    checkEqual(
+      'MEMORY_DISABLED 后 reason 稳定',
+      (disabledNext.memory_context as JsonObject).reason,
+      'memory_disabled',
+    );
   } finally {
     await watcher.kill();
     mock.stop();
