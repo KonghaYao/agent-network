@@ -17,7 +17,7 @@
 import type { BusinessErrorCode } from '../contracts/errors';
 
 /** Memory 领域契约版本；协议版本仍由 client-contract 维护。 */
-export const MEMORY_CONTRACT_VERSION = '2026-11-09.1';
+export const MEMORY_CONTRACT_VERSION = '2026-11-10.1';
 
 /** 召回与证据策略版本；策略收紧后旧结果必须按新版本重新过滤。 */
 export const MEMORY_POLICY_VERSION = 1;

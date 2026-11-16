@@ -128,6 +128,7 @@ export function eventFilePayload(
   claim: ClaimInfo,
   source: string,
   body: string,
+  memory: JsonObject = {},
   quote: MessageQuote | null = null,
 ): JsonObject {
   return {
@@ -150,6 +151,7 @@ export function eventFilePayload(
     },
     source,
     body,
+    ...memory,
     ...(quote ? { quote } : {}),
   };
 }
@@ -160,6 +162,7 @@ export function deliveryEvent(
   source: string,
   preview: BodyPreview,
   eventFile: string,
+  memory: JsonObject = {},
   quote: MessageQuote | null = null,
 ): JsonObject {
   return {
@@ -185,6 +188,7 @@ export function deliveryEvent(
     body_bytes: preview.bodyBytes,
     body_truncated: preview.bodyTruncated,
     event_file: eventFile,
+    ...memory,
     ...(quote ? { quote } : {}),
   };
 }
@@ -230,7 +234,12 @@ export function claimNoticeEvent(
   };
 }
 
-export function readFailedEvent(fields: DeliveryFields, claim: ClaimInfo, source: string): JsonObject {
+export function readFailedEvent(
+  fields: DeliveryFields,
+  claim: ClaimInfo,
+  source: string,
+  memory: JsonObject = {},
+): JsonObject {
   return {
     type: 'delivery_claim_failed',
     source,
@@ -252,6 +261,7 @@ export function readFailedEvent(fields: DeliveryFields, claim: ClaimInfo, source
       claim_id: claim.claimId,
     },
     hint: READ_FAILED_HINT,
+    ...memory,
   };
 }
 

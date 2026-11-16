@@ -1413,6 +1413,7 @@ export {
   memoryCatchupPrepareOutputSchema,
   memoryContextGetOutputSchema,
   memoryContextListOutputSchema,
+  memoryContextPackOutputSchema,
   memoryExperienceGetOutputSchema,
   memoryExperienceListOutputSchema,
   memoryForgetOutputSchema,

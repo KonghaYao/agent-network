@@ -34,6 +34,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '一个 token 只运行一个 Monitor；脚本会先建立订阅、login、补读 inbox，并自动 claim 新投递。',
       '默认监听全部房间活动：room_message 与 stream_event 都输出；`--no-room-events` 可关闭信息事件。',
       '收到 type=delivery 时优先直接读事件里的 body；body_truncated=true 再读 event_file。',
+      'delivery 事件与 event_file 可能带 memory_context（当前 room 的只读参考包）；每条 delivery 最多注入一次，失败或超时不影响处理。`--no-memory-context` 可关闭。',
     ],
     pitfalls: [
       'delivery_conflict 表示别人已领取，跳过；delivery_deferred 表示自己已有 claimed，先 complete/fail 当前投递，watcher 会自动退避重试。',
@@ -54,6 +55,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '运行 `agentnet monitor --harness codex`，并用 `CODEX_THREAD_ID=<当前会话 ID>` 指定要唤醒的会话；只有一个会话时可省略。',
       '同时看到 CODEX_READY 与 READY 才表示会话与消息流都已连接。',
       '订阅到达的所有 stream item 都会记录为 STREAM_EVENT；只有可处理投递/提醒会 claim 或启动回合。',
+      '已 claim 的 delivery 会在 turn/start 或 turn/steer prompt 前置当前房间的只读记忆块；同一 delivery:attempt 只取一次。`--no-memory-context` 可关闭。',
     ],
     pitfalls: [
       '`--check` 会连接 MCP 并调用 network_me，但不连接 app-server；真正接通仍以 CODEX_READY 与 READY 为准。只检查静态配置用 `--check-config`。',
@@ -85,6 +87,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '用 Peri 的 monitor_start 承载 `agentnet monitor --harness peri --json`；单次最长 24 小时，启动先输出 DEADLINE，剩余 10 分钟输出一次 EXPIRING，到期输出 EXPIRED 并退出。',
       '脚本先 server/discover、订阅 agentnet://stream、login，再输出 READY；订阅到达的所有 item 都输出，@/delivery 只是优先级。',
       'ALERT 稳定包含 type/room_id/seq；delivery/reminder/stream_event/delivery_state 另含 delivery_id（room_message 不输出），只含定位字段与 claim 信息，不含正文；用 `agentnet read --message <id>` 读正文。',
+      'type=delivery 默认只带 `memory_pack_id`/`memory_items`/`memory_reason` pointer，不含记忆正文；需要正文时由 Agent 显式调用 `network_memory_context_pack`，避免 watch.log 落盘。',
     ],
     pitfalls: [
       '看到 READY 不等于已监听：必须有消费者读取 ALERT，否则投递会停在 claimed。',
@@ -107,6 +110,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       'DSH 没有内置 monitor；TS 守护把全部 stream item 的定位/变更字段写入 `$WEBBOTS_HOME/wake.queue`，不再区分直聊/群聊。',
       '插件只唤醒绑定的会话；忙时保留队列，空闲后通过 agent.followup 提交。`agentnet monitor --harness dsh status` 的 consumer.state=attached 才说明消费者已连接。',
       '`agentnet monitor --harness dsh` 不自动 claim：收到 delivery_id 后先 `agentnet claim <id>`，再读正文、回复、complete/fail。',
+      '`wake.queue` 保持既有定位字段，不写入记忆正文；Agent 被唤醒后自行调用一次 `network_memory_context_pack { room_id, message_id? }`（没有可用记忆时返回空包，不阻塞处理）。',
     ],
     pitfalls: [
       '`start` 输出 STARTED 仅表示守护进程已启动，不表示订阅成功；用 `status` 核对 online=true。',

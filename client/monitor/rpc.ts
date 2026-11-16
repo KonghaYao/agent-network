@@ -42,6 +42,14 @@ export type ToolCallOutcome =
   | { ok: true; data: JsonObject }
   | { ok: false; code: string; message: string };
 
+export interface ToolCallOptions {
+  /**
+   * 单次工具调用超时（毫秒）。缺省 30s；记忆参考包使用更短的外层超时，
+   * 失败只降级该投递，不能把整个 monitor 打成 ERROR。
+   */
+  timeoutMs?: number;
+}
+
 export interface MonitorRpcConfig {
   endpoint: string;
   token: string;
@@ -130,11 +138,15 @@ export class MonitorRpc {
   }
 
   /** POST JSON-RPC；传输层失败抛错，RPC 业务错误保留在返回 payload。 */
-  private async post(method: string, params: JsonObject, name?: string): Promise<JsonObject> {
+  private async post(
+    method: string,
+    params: JsonObject,
+    name?: string,
+    timeoutMs = 30_000,
+  ): Promise<JsonObject> {
     const outer = this.config.signal;
-    const signal = outer
-      ? AbortSignal.any([outer, AbortSignal.timeout(30_000)])
-      : AbortSignal.timeout(30_000);
+    const timeout = AbortSignal.timeout(Math.max(1, timeoutMs));
+    const signal = outer ? AbortSignal.any([outer, timeout]) : timeout;
     const body = {
       jsonrpc: '2.0',
       id: `monitor-${crypto.randomUUID()}`,
@@ -153,6 +165,7 @@ export class MonitorRpc {
         signal,
       });
     } catch (error) {
+      if (timeout.aborted) throw new MonitorTransportError('timeout');
       const reason = error instanceof Error ? error.message : String(error);
       throw new MonitorTransportError(redact(reason, this.token));
     }
@@ -198,8 +211,17 @@ export class MonitorRpc {
     }
   }
 
-  async callTool(name: string, args: JsonObject = {}): Promise<ToolCallOutcome> {
-    const payload = await this.post('tools/call', { name, arguments: args }, name);
+  async callTool(
+    name: string,
+    args: JsonObject = {},
+    options: ToolCallOptions = {},
+  ): Promise<ToolCallOutcome> {
+    const payload = await this.post(
+      'tools/call',
+      { name, arguments: args },
+      name,
+      options.timeoutMs,
+    );
     if (payload.error !== undefined) {
       const error = asRecord(payload.error);
       const data = asRecord(error.data);

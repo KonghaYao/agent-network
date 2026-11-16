@@ -14,6 +14,7 @@ import {
 
 import { LIMITS } from '../../../contracts/limits';
 import {
+  appendMention,
   composeMessageBody,
   messageBodyBytes,
   type MentionSelection,
@@ -89,12 +90,19 @@ export interface ComposerSendInput {
   selections: MentionSelection[];
 }
 
+/** 引用目标；群聊回复 Agent 时由页面预先解析出自动 @ 成员。 */
+export interface ComposerReply {
+  messageId: string;
+  label: string;
+  mention: MentionSelection | null;
+}
+
 interface ComposerProps {
   room: RoomView;
   members: Map<string, RoomMember>;
   identity: WebIdentity;
   token: string;
-  reply: { messageId: string; label: string } | null;
+  reply: ComposerReply | null;
   sending: boolean;
   onCancelReply: () => void;
   onSend: (input: ComposerSendInput) => Promise<SendOutcome>;
@@ -165,7 +173,10 @@ export function Composer({
   const [drawboardError, setDrawboardError] = useState(false);
   const drawboardOpening = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textRef = useRef(text);
   const pendingCaretRef = useRef<number | null>(null);
+  const autoCaretRef = useRef(false);
+  const handledReplyRef = useRef<ComposerReply | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
   const compositionEndedAtRef = useRef(0);
@@ -190,15 +201,44 @@ export function Composer({
   }, [key]);
 
   useEffect(() => {
+    textRef.current = text;
+  }, [text]);
+
+  /*
+   * 群聊回复 Agent 时把 `@名字 ` 补进输入框，用户仍可编辑或删除。
+   * 只在每次点击引用（新的 reply 对象）时处理一次：删除后不会被重新补回；
+   * 正文已有该 token 时不重复插入，但仍然登记选择，让发送计划显式 invoke。
+   */
+  useEffect(() => {
+    if (!reply || handledReplyRef.current === reply) return;
+    handledReplyRef.current = reply;
+    const mention = reply.mention;
+    if (room.kind !== 'group' || identity.kind !== 'human') return;
+    if (!mention || mention.actor_id === identity.actor_id) return;
+    setSelections((previous) => upsertSelection(previous, mention));
+    const next = appendMention(textRef.current, mention.name);
+    if (next === textRef.current) return;
+    autoCaretRef.current = true;
+    setText(next);
+  }, [identity.actor_id, identity.kind, reply, room.kind]);
+
+  useEffect(() => {
     saveDraft(key, text);
   }, [key, text]);
 
   // 插入提及后必须在本帧内把光标放到尾随空格之后；rAF 会晚于快速键入。
   useLayoutEffect(() => {
-    const caret = pendingCaretRef.current;
-    if (caret === null) return;
     const element = textareaRef.current;
     if (!element) return;
+    if (autoCaretRef.current) {
+      autoCaretRef.current = false;
+      element.focus();
+      const end = element.value.length;
+      element.setSelectionRange(end, end);
+      return;
+    }
+    const caret = pendingCaretRef.current;
+    if (caret === null) return;
     element.focus();
     element.setSelectionRange(caret, caret);
     pendingCaretRef.current = null;

@@ -23,6 +23,7 @@
 
 import { setTimeout as sleepPromise } from 'node:timers/promises';
 
+import { LIMITS } from '../../src/contracts/limits';
 import { asArray, asNumber, asRecord, asString } from '../output';
 import {
   BODY_PREVIEW_CHARS,
@@ -44,6 +45,12 @@ import {
   type MessageQuote,
 } from './events';
 import { advanceHistoryCursor } from './room-cursor';
+import {
+  fetchMemoryPack,
+  memoryEventFields,
+  type MemoryContextResult,
+  type MemoryMode,
+} from './memory';
 import {
   MonitorFatalError,
   MonitorRpc,
@@ -118,6 +125,7 @@ export interface MonitorEventFormat {
     fields: DeliveryFields,
     claim: ClaimInfo,
     source: string,
+    memory?: JsonObject,
   ) => JsonObject;
   /** 覆盖 claim 失败通知；默认与旧 shell 监听一致。 */
   claimNotice?: (
@@ -154,6 +162,11 @@ export interface MonitorEngineOptions {
   onDeadline?: () => void;
   /** 输出 informational 房间/信息事件的开关；缺省开启，false 关闭。 */
   roomEvents?: RoomEventScope | false;
+  /**
+   * delivery 记忆参考包粒度；缺省 off，由各 harness 入口显式开启。
+   * claude=full、peri=pointer；`--no-memory-context` 传 off。
+   */
+  memoryMode?: MemoryMode;
 }
 
 type EmitResult = 'emitted' | 'deferred' | 'error';
@@ -340,6 +353,14 @@ export class MonitorEngine {
   private readonly onDeadline: (() => void) | undefined;
   /** null 表示 `--no-room-events` 关闭。 */
   private readonly roomEventScope: RoomEventScope | null;
+  /** delivery 记忆参考包粒度；off 时完全不调用工具。 */
+  private readonly memoryMode: MemoryMode;
+  /** 同一 delivery:attempt 只注入一次；有界，防止长进程无限增长。 */
+  private readonly memoryResults = new Map<string, MemoryContextResult>();
+  /** 并发同 key 调用合并，避免通知与补读同时触发第二次工具调用。 */
+  private readonly memoryInflight = new Map<string, Promise<MemoryContextResult>>();
+  /** 旧服务/关闭开关后不再逐投递尝试。 */
+  private memoryToolUnavailable = false;
   /** 每个房间最近一次 history after 游标；启动时从 stateDir 恢复。 */
   private readonly roomHistoryCursors = new Map<string, string>();
   /** message_id(+change) -> 去重截止时间；delivery 与 room_message 共用。 */
@@ -397,6 +418,7 @@ export class MonitorEngine {
     this.expiringThresholdMs = options.expiringThresholdMs ?? EXPIRING_THRESHOLD_MS;
     this.onDeadline = options.onDeadline;
     this.roomEventScope = options.roomEvents === false ? null : 'all';
+    this.memoryMode = options.memoryMode ?? 'off';
     for (const [roomId, cursor] of this.state.roomCursors()) {
       this.roomHistoryCursors.set(roomId, cursor);
     }
@@ -1348,16 +1370,23 @@ export class MonitorEngine {
         );
         return 'error';
       }
+      const memory = await this.memoryForDelivery(fields, claim);
       this.emittedClaims.add(claimKey);
-      this.emitEvent(delivery(item, fields, claim, source));
+      this.emitEvent(
+        delivery(item, fields, claim, source, this.memoryFields(memory)),
+      );
       this.noteDeliveryEmitted(fields);
       return 'emitted';
     }
 
+    // 记忆读取与正文读取并行：任一失败都不阻塞 delivery 输出。
+    const memoryPromise = this.memoryForDelivery(fields, claim);
     const read = await this.readMessage(fields.messageId, fields.deliveryId);
+    const memory = await memoryPromise;
+    const memoryFields = this.memoryFields(memory);
     if (!read.ok) {
       this.emittedClaims.add(claimKey);
-      this.emitEvent(readFailedEvent(fields, claim, source));
+      this.emitEvent(readFailedEvent(fields, claim, source, memoryFields));
       this.noteDeliveryEmitted(fields);
       return 'emitted';
     }
@@ -1366,7 +1395,7 @@ export class MonitorEngine {
     try {
       eventFile = await this.state.writeEventFile(
         fields.deliveryId,
-        eventFilePayload(fields, claim, source, read.body, read.quote),
+        eventFilePayload(fields, claim, source, read.body, memoryFields, read.quote),
       );
     } catch {
       this.control(
@@ -1375,7 +1404,7 @@ export class MonitorEngine {
         `ERROR type=message message=event_write_failed delivery_id=${fields.deliveryId}`,
       );
       this.emittedClaims.add(claimKey);
-      this.emitEvent(readFailedEvent(fields, claim, source));
+      this.emitEvent(readFailedEvent(fields, claim, source, memoryFields));
       this.noteDeliveryEmitted(fields);
       return 'emitted';
     }
@@ -1388,11 +1417,63 @@ export class MonitorEngine {
         source,
         previewBody(read.body, this.bodyPreviewChars),
         eventFile,
+        memoryFields,
         read.quote,
       ),
     );
     this.noteDeliveryEmitted(fields);
     return 'emitted';
+  }
+
+  /** off 模式不产生任何记忆字段；否则按 full/pointer 裁剪。 */
+  private memoryFields(result: MemoryContextResult): JsonObject {
+    if (this.memoryMode === 'off') return {};
+    return memoryEventFields(result, this.memoryMode);
+  }
+
+  /**
+   * 每个 `delivery_id:attempt` 最多一次工具调用；并发同 key 合并，重连后
+   * 复用同一结果。缓存有界，避免长进程无限增长。
+   */
+  private async memoryForDelivery(
+    fields: DeliveryFields,
+    claim: ClaimInfo,
+  ): Promise<MemoryContextResult> {
+    if (this.memoryMode === 'off') {
+      return { pack: null, reason: 'disabled', disabled: false };
+    }
+    const key = `${fields.deliveryId}:${claim.attempt}`;
+    const cached = this.memoryResults.get(key);
+    if (cached) return cached;
+    const inflight = this.memoryInflight.get(key);
+    if (inflight) return await inflight;
+    if (this.memoryToolUnavailable) {
+      return { pack: null, reason: 'memory_disabled', disabled: true };
+    }
+
+    const task = (async (): Promise<MemoryContextResult> => {
+      const result = await fetchMemoryPack(this.rpc, {
+        roomId: fields.roomId,
+        messageId: fields.messageId,
+      });
+      if (result.disabled) this.memoryToolUnavailable = true;
+      this.rememberMemoryResult(key, result);
+      return result;
+    })();
+    this.memoryInflight.set(key, task);
+    try {
+      return await task;
+    } finally {
+      this.memoryInflight.delete(key);
+    }
+  }
+
+  private rememberMemoryResult(key: string, result: MemoryContextResult): void {
+    if (this.memoryResults.size >= LIMITS.memoryInjectClientCacheEntries) {
+      const oldest = this.memoryResults.keys().next().value;
+      if (oldest !== undefined) this.memoryResults.delete(oldest);
+    }
+    this.memoryResults.set(key, result);
   }
 
   /** 只有 delivery 真正输出后才占用 message_id，避免吞掉同帧 room_message。 */

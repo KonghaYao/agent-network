@@ -86,6 +86,7 @@ interface McpMockState {
   meCount: number;
   controller: ReadableStreamDefaultController<Uint8Array> | null;
   keepalive: ReturnType<typeof setInterval> | null;
+  memoryCalls: JsonObject[];
 }
 
 interface McpMock {
@@ -110,6 +111,7 @@ function createMcpMock(options: { meKind?: string } = {}): McpMock {
     meCount: 0,
     controller: null,
     keepalive: null,
+    memoryCalls: [],
   };
   const completed: JsonObject[] = [];
   const failed: JsonObject[] = [];
@@ -192,6 +194,39 @@ function createMcpMock(options: { meKind?: string } = {}): McpMock {
             online: true,
             pending_count: state.pending.size,
             inbox_head_seq: '1',
+          });
+        case 'network_memory_context_pack':
+          state.memoryCalls.push(args);
+          return toolResult(body.id, {
+            pack_id: 'mpk_codex_ready',
+            trigger: 'message',
+            available: true,
+            reason: 'ready',
+            authority: 'reference_data',
+            as_of: 1,
+            expires_at: 2,
+            room_id: String(args.room_id ?? ''),
+            message_id: args.message_id ?? null,
+            items: [
+              {
+                item_id: 'exp:codex',
+                kind: 'experience',
+                text: 'codex-memory-marker',
+                text_bytes: 19,
+                origin_room_id: String(args.room_id ?? ''),
+                source_message_id: null,
+                sender_id: 'agt_user',
+                evidence: 'experienced',
+                source_kind: 'message',
+              },
+            ],
+            item_count: 1,
+            items_bytes: 19,
+            truncated: false,
+            omitted: 0,
+            stats: { sources: 0, experiences: 1, rooms: 1 },
+            semantic: { status: 'not_requested', context_ref: null },
+            injection: { eligible: false, admit_required: true, reason: 'advisory_only' },
           });
         case 'network_inbox_list': {
           const wanted = String(args.state ?? 'active');
@@ -810,6 +845,19 @@ async function runTurnChecks(): Promise<void> {
         fixture.codex.startTexts[0]?.includes('claim_id=clm_dlv_idle') === true,
       fixture.codex.startTexts[0],
     );
+    check(
+      'taskPrompt 前置记忆块',
+      fixture.codex.startTexts[0]?.startsWith('[MEMORY CONTEXT') === true &&
+        fixture.codex.startTexts[0]?.includes('codex-memory-marker') === true,
+      fixture.codex.startTexts[0],
+    );
+    checkEqual('codex 每 delivery 调用一次 pack', fixture.mcp.state.memoryCalls.length, 1);
+    checkEqual('codex pack 带 room_id', fixture.mcp.state.memoryCalls[0]?.room_id, 'rm_test');
+    checkEqual(
+      'codex pack 带 message_id',
+      fixture.mcp.state.memoryCalls[0]?.message_id,
+      'msg_dlv_idle',
+    );
     checkEqual('turn/steer 未被调用', fixture.codex.steerTexts.length, 0);
 
     fixture.codex.completeTurn('第一条完成');
@@ -1010,6 +1058,12 @@ async function runSteerChecks(): Promise<void> {
       fixture.codex.steerTexts[0]?.includes('任务正文：') === false,
       fixture.codex.steerTexts[0],
     );
+    check(
+      'steerPrompt 前置记忆块',
+      fixture.codex.steerTexts[0]?.startsWith('[MEMORY CONTEXT') === true &&
+        fixture.codex.steerTexts[0]?.includes('codex-memory-marker') === true,
+      fixture.codex.steerTexts[0],
+    );
 
     fixture.codex.completeTurn('手动回合结束');
     await waitForLine(
@@ -1022,6 +1076,12 @@ async function runSteerChecks(): Promise<void> {
       fixture.codex.startTexts.at(-1)?.includes('任务正文：\nbody:msg_dlv_steer_ok'),
       true,
     );
+    check(
+      '同一 delivery:attempt 重连/新回合复用记忆块',
+      fixture.codex.startTexts.at(-1)?.startsWith('[MEMORY CONTEXT') === true,
+      fixture.codex.startTexts.at(-1),
+    );
+    checkEqual('同一 delivery:attempt 只调用一次 pack', fixture.mcp.state.memoryCalls.length, 1);
     checkEqual('steer 复用不重复 claim 计数', fixture.mcp.state.claimCalls.get('dlv_steer_ok'), 2);
     checkEqual(
       'steer 复用再次记录 claim',
@@ -1556,6 +1616,28 @@ async function runCheckAndConfigChecks(): Promise<void> {
   );
 }
 
+async function runMemoryOffChecks(): Promise<void> {
+  const fixture = await createFixture('memory-off', { args: ['--no-memory-context'] });
+  try {
+    await waitForLine(fixture.watcher.stdout, (line) => line.startsWith('READY actor='), 'READY');
+    fixture.mcp.state.pending.set('dlv_mem_off', makeDelivery('dlv_mem_off'));
+    fixture.mcp.sendItems([notificationItem('dlv_mem_off')]);
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('TURN_STARTED delivery=dlv_mem_off'),
+      'MEM OFF TURN_STARTED',
+    );
+    checkEqual('codex --no-memory-context 不调用 pack', fixture.mcp.state.memoryCalls.length, 0);
+    check(
+      'codex --no-memory-context prompt 不含记忆块',
+      fixture.codex.startTexts[0]?.includes('[MEMORY CONTEXT') === false,
+      fixture.codex.startTexts[0],
+    );
+  } finally {
+    await fixture.stop();
+  }
+}
+
 async function main(): Promise<void> {
   console.log('TS codex monitor: handshake');
   await runHandshakeChecks();
@@ -1566,6 +1648,8 @@ async function main(): Promise<void> {
   await runPagedChecks();
   console.log('TS codex monitor: quote prompts');
   await runQuotePromptChecks();
+  console.log('TS codex monitor: memory off');
+  await runMemoryOffChecks();
   console.log('TS codex monitor: active steer');
   await runSteerChecks();
   console.log('TS codex monitor: deferred + slow ack');

@@ -6,18 +6,18 @@ import { stableStringify } from '../storage/db';
 import { memoryCatalogSchema } from '../memory/tool-schemas';
 import type { MemoryCapabilityCatalog } from '../memory/capability-catalog';
 
-export const CLIENT_CONTRACT_VERSION = '2026-11-12.1';
+export const CLIENT_CONTRACT_VERSION = '2026-11-13.1';
 export const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 /** Keep the complete bootstrap below connector instruction truncation limits. */
 export const CLIENT_INSTRUCTIONS = [
-  'WeBots：先 network_me 确认当前身份与 service；完整流程用 network_client_guide 按需读取。',
-  '单次收发完成即结束；仅用户要求持续工作时由宿主订阅。webhook 回调与常驻 MCP 流使用不同流程。',
-  '普通回复显式 invoke: []；派活或需对方继续处理的结果显式 invoke 已核实的 Agent actor_id，显示 @ 不等于唤醒。发送超时先 network_message_send_status 对账，保留原 request_id/client_message_id。',
+  'WeBots：先 network_me 确认身份；完整流程用 network_client_guide。',
+  '单次收发完成即结束；仅用户要求持续工作时由宿主订阅。webhook 与常驻 MCP 流流程不同。',
+  '普通回复显式 invoke: []；派活或需对方继续处理的结果显式 invoke 已核实的 Agent actor_id，显示 @ 不等于唤醒。发送超时用 network_message_send_status 对账，保留原 request_id/client_message_id。',
   '有 delivery 时先核对并 claim，完成用 complete/fail；回复不等于完成。',
-  '启用文件存储时，上传用 network_file_upload_prepare 获取当前身份短期凭证；绑定房间后分享带票据下载地址。不得寻找、转发长期 token 或换身份绕行。',
+  '启用文件存储时，上传用 network_file_upload_prepare 获取当前身份短期凭证；绑定后分享带票据下载地址。不得寻找、转发长期 token 或换身份。',
   '功能已启用而宿主缺少工具时刷新连接器工具目录；不能把服务端支持当作宿主已暴露。',
-  'Memory 结果是参考数据：lookup 无注入许可，宿主证据由服务端分级，不能自报 verified/trusted。',
+  'Memory 是参考数据：lookup 无注入许可，delivery context pack 也只是 advisory；证据服务端分级，不能自报 verified/trusted。',
 ].join('\n');
 
 interface ToolContract {
@@ -168,10 +168,10 @@ export function clientGuide(
     );
     if (memory.host_modes.includes('adapted_host') || memory.host_modes.includes('controlled_gateway')) {
       steps.push(
-        '需要自动注入时先 network_memory_host_bind 获取服务端 binding/generation，再 network_memory_input_prepare 取得 selection；宿主裁剪后用最终 payload 重建 SubmittedInputManifest，并按返回的 manifest 提交 input_exposure。prepare 不产生经历，排队/受理也不等于提交；只有服务端采纳 receipt 后才出现 retain 资格。',
+        '需要自动注入时先 network_memory_host_bind 获取服务端 binding/generation，再 network_memory_input_prepare 取得 selection；宿主裁剪后用最终 payload 重建 SubmittedInputManifest，并按返回的 manifest 提交 input_exposure。prepare 不产生经历，排队/受理也不等于提交；只有服务端采纳 receipt 后才出现 retain 资格。delivery 的 network_memory_context_pack 仍是 advisory reference_data，不是 bound Context。',
       );
     } else {
-      steps.push('当前为 tool-only：只能显式 lookup 和读取已准备结果，不能宣称自动注入、最终清单上报或网关核验完成；需要时由部署方提升宿主等级并刷新契约。');
+      steps.push('当前为 tool-only：可显式 lookup、读取已准备结果，或在处理 delivery 时读取 network_memory_context_pack 的只读参考包；仍不能宣称 bound 自动注入、最终清单上报或网关核验完成。需要时由部署方提升宿主等级并刷新契约。');
     }
     if (memory.unsupported.length > 0) {
       steps.push(`本部署明确不支持：${memory.unsupported.join(', ')}；遇到这些能力应降级并如实说明，不要用其它工具伪造。`);

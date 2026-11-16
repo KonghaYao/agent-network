@@ -401,7 +401,8 @@ function mentionTokenAt(body: string, at: number, name: string): boolean {
   return true;
 }
 
-function bodyHasMention(body: string, name: string): boolean {
+/** 正文是否已有独立 `@名字` token；与发送计划的正文解析共用边界。 */
+export function bodyHasMention(body: string, name: string): boolean {
   if (!name || !body.includes('@')) return false;
   const token = `@${name}`;
   let from = 0;
@@ -412,6 +413,64 @@ function bodyHasMention(body: string, name: string): boolean {
     from = at + 1;
   }
   return false;
+}
+
+/**
+ * 把 `@名字 ` 追加到正文末尾，供回复时自动提及。
+ *
+ * 已有该独立 token 时保持原文，不重复插入；正文非空且末尾不是空白时先补
+ * 一个分隔空格，格式与 `insertMention` 一致（尾随空格）。
+ */
+export function appendMention(text: string, name: string): string {
+  if (!name || bodyHasMention(text, name)) return text;
+  const separator = text.length === 0 || /\s$/u.test(text) ? '' : ' ';
+  return `${text}${separator}@${name} `;
+}
+
+/**
+ * 回复时自动 @ 的目标：优先被回复消息的发送者（Agent 且不是自己），否则
+ * 沿 `reply_to` 父链向上，返回最上面的非自己 Agent；已加载的 `root_id`
+ * 直接作为线程顶部参与判断。只用已加载数据，找不到时返回 null。
+ */
+export function resolveReplyAgentTarget(input: {
+  items: HistoryItem[];
+  messageId: string;
+  members: Map<string, RoomMember>;
+  identityId: string;
+}): RoomMember | null {
+  const messages = new Map<string, HistoryMessage>();
+  for (const item of input.items) {
+    if (item.kind === 'presence') continue;
+    messages.set(item.message_id, item);
+  }
+  const target = messages.get(input.messageId);
+  if (!target) return null;
+  const agentFor = (message: HistoryMessage): RoomMember | null => {
+    if (message.sender_id === input.identityId) return null;
+    if (!isAgentMessage(message, input.members)) return null;
+    return input.members.get(message.sender_id) ?? null;
+  };
+
+  const direct = agentFor(target);
+  if (direct) return direct;
+
+  // 线程根在父链最上方；已加载且是 Agent 时就是“最上面的非自己 Agent”。
+  const root = target.root_id ? messages.get(target.root_id) : null;
+  const rootAgent = root ? agentFor(root) : null;
+  if (rootAgent) return rootAgent;
+
+  let topmost: RoomMember | null = null;
+  let parentId = target.reply_to;
+  const visited = new Set<string>([target.message_id]);
+  while (parentId && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = messages.get(parentId);
+    if (!parent) break;
+    // 越靠近线程根越优先，循环结束后保留的是最上面的 Agent。
+    topmost = agentFor(parent) ?? topmost;
+    parentId = parent.reply_to;
+  }
+  return topmost;
 }
 
 /** 正文已提到任何 active 成员时，不再追加自动 @。 */
@@ -526,6 +585,8 @@ function maintainerMention(members: Map<string, RoomMember>, identityId: string)
  *   invoke 的 Agent 群消息按发送者/正文猜测并自动 @ 上一位成员；
  * - 人类群聊在正文与选择器都没有有效 @ 时恢复 legacy 自动 @：正文优先
  *   命中唯一其他成员，其次最新一条消息的发送者，附件再兜底维护员；
+ *   回复（引用）状态下不再追加 legacy 自动 @，让用户删除自动提及后发送
+ *   不会产生投递；
  * - direct 自动唤醒对端 Agent（人类对端不派活），不做文本自动 @。
  */
 export function buildSendPlan(input: {
@@ -537,6 +598,7 @@ export function buildSendPlan(input: {
   selections: MentionSelection[];
   items?: HistoryItem[];
   hasAttachments?: boolean;
+  hasReply?: boolean;
 }): SendPlan {
   const {
     room,
@@ -547,6 +609,7 @@ export function buildSendPlan(input: {
     selections,
     items = [],
     hasAttachments = false,
+    hasReply = false,
   } = input;
   if (!room) {
     return { body, invoke: [], invokeExplicit: false, mentions: [], error: '房间尚未加载' };
@@ -601,7 +664,12 @@ export function buildSendPlan(input: {
   }
 
   let outgoing = body;
-  if (identityKind === 'human' && resolved === 0 && !bodyHasAnyMention(body, members)) {
+  if (
+    identityKind === 'human' &&
+    resolved === 0 &&
+    !hasReply &&
+    !bodyHasAnyMention(body, members)
+  ) {
     let autoMention = bodyMemberMention(body, members, identityId);
     if (autoMention === null) {
       autoMention = previousMemberMention(items, members, identityId);

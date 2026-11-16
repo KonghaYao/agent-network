@@ -338,6 +338,7 @@ function buildProgram(): Command {
       .option('--max-runtime <seconds>', '最长运行秒数；peri 默认 86400，0 表示不限制')
       .option('--room-events [scope]', '监听所有房间与 informational 事件（默认 all）')
       .option('--no-room-events', '关闭 informational 输出（保留投递/提醒/action_required）')
+      .option('--no-memory-context', '关闭 delivery 记忆参考包注入')
       .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')
       .option('--max-wait <seconds>', 'other 单次最长等待秒数；默认 360')
       .option('--poll <seconds>', 'other 轮询间隔秒数；默认 3'),
@@ -371,6 +372,7 @@ function buildProgram(): Command {
           json: globals.json === true,
           maxRuntime: options.maxRuntime ?? globals.maxRuntime,
           roomEvents: options.roomEvents ?? globals.roomEvents,
+          memoryContext: options.memoryContext ?? globals.memoryContext,
           log: options.log ?? globals.log,
           maxWait: options.maxWait ?? globals.maxWait,
           poll: options.poll ?? globals.poll,
@@ -869,6 +871,7 @@ function buildProgram(): Command {
       .option('--max-runtime <seconds>', '最长运行秒数；peri 默认 86400，0 表示不限制')
       .option('--room-events [scope]', '监听所有房间与 informational 事件（默认 all）')
       .option('--no-room-events', '关闭 informational 输出（保留投递/提醒/action_required）')
+      .option('--no-memory-context', '关闭 delivery 记忆参考包注入')
       .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')
       .option('--max-wait <seconds>', 'other 单次最长等待秒数；默认 360')
       .option('--poll <seconds>', 'other 轮询间隔秒数；默认 3')
@@ -877,7 +880,7 @@ function buildProgram(): Command {
   monitorCommand
     .addHelpText(
       'after',
-      '\n示例\n  agentnet monitor --harness peri --check        # 真实握手，失败非 0\n  agentnet monitor --harness codex --check-config # 只看入口配置\n  agentnet monitor --harness peri --json         # 每行一个 JSON 事件\n  agentnet monitor --harness peri --max-runtime 3600\n  agentnet monitor --harness claude --no-room-events  # 只保留投递/提醒/action_required\n  agentnet monitor --harness claude --room-events  # 显式开启全部房间活动（默认）\n  agentnet monitor --harness dsh start  # 自动检测版本与插件，缺失时安装\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
+      '\n示例\n  agentnet monitor --harness peri --check        # 真实握手，失败非 0\n  agentnet monitor --harness codex --check-config # 只看入口配置\n  agentnet monitor --harness peri --json         # 每行一个 JSON 事件\n  agentnet monitor --harness peri --max-runtime 3600\n  agentnet monitor --harness claude --no-room-events  # 只保留投递/提醒/action_required\n  agentnet monitor --harness claude --no-memory-context  # 不注入 delivery 记忆参考包\n  agentnet monitor --harness claude --room-events  # 显式开启全部房间活动（默认）\n  agentnet monitor --harness dsh start  # 自动检测版本与插件，缺失时安装\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
     )
     .action(
       async (
@@ -897,6 +900,7 @@ function buildProgram(): Command {
             json: globals.json === true,
             maxRuntime: options.maxRuntime ?? globals.maxRuntime,
             roomEvents: options.roomEvents ?? globals.roomEvents,
+            memoryContext: options.memoryContext ?? globals.memoryContext,
             log: options.log ?? globals.log,
             maxWait: options.maxWait ?? globals.maxWait,
             poll: options.poll ?? globals.poll,
