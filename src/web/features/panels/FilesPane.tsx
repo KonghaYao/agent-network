@@ -262,6 +262,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
               className="files-close"
               id="files-close"
               type="button"
+              style={{ color: 'var(--wx-text)', backgroundColor: 'transparent' }}
               aria-label="关闭文件栏"
               title="关闭文件栏"
               onClick={onClose}

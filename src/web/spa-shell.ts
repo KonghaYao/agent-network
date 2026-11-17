@@ -89,7 +89,7 @@ export function renderSpaShell(
 <meta property="og:type" content="website">
 <link rel="icon" type="image/svg+xml" href="${escapeHtml(BASE_FAVICON_HREF)}">
 <title>${escapeHtml(title)}</title>
-<style>:root{color-scheme:light dark}${route === 'room' ? CHAT_STYLE : SPA_STYLE}</style>
+<style>:root{color-scheme:light dark}${CHAT_STYLE}</style>
 ${css}
 </head>
 <body class="${escapeHtml(bodyClass)}" data-spa-route="${route}">

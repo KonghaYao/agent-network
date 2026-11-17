@@ -103,6 +103,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
             className="monitor-icon"
             id="monitor-clear"
             type="button"
+            style={{ color: 'var(--wx-text)' }}
             aria-label="清除网页地址"
             title="清除网页地址"
             disabled={monitor.busy}
@@ -129,6 +130,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
             className="monitor-icon"
             id="monitor-refresh"
             type="button"
+            style={{ color: 'var(--wx-text)' }}
             aria-label="刷新网页"
             title="刷新网页（重新读取地址）"
             disabled={monitor.busy}
@@ -140,6 +142,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
             className="monitor-icon monitor-close"
             id="monitor-close"
             type="button"
+            style={{ color: 'var(--wx-text)' }}
             aria-label="关闭网页监控"
             title="关闭网页监控"
             onClick={onClose}

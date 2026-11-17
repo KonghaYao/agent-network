@@ -186,6 +186,17 @@ test.describe('SPA 右栏与剩余入口', () => {
     expect(agentRoom.room.room_id).toBeTruthy();
   });
 
+  test('home-to-room navigation keeps the files pane styled', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await login(page, base, tokenA);
+    await page.goto(base);
+    await page.locator(`#room-list a[data-room-id="${roomId}"]`).click();
+    await expect(page.locator('#files-pane')).toBeVisible();
+    await expect(page.locator('.files-head')).toHaveCSS('display', 'flex');
+    await expect(page.locator('#files-list')).toHaveCSS('list-style-type', 'none');
+    await expect(page.locator('#files-pane')).toHaveCSS('display', 'flex');
+  });
+
   test('files pane uploads, previews and deletes a file', async ({ page }) => {
     await login(page, base, tokenA);
     await page.goto(`${base}/c/${roomId}`);
