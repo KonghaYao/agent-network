@@ -3304,7 +3304,7 @@ async function runRoomListPaginationAcceptance(
   try {
     await page.goto(`${base}/c/${activeRoomId}`);
     await waitRoom(page, activeRoomId, activeTitle);
-    if ((await page.locator('#room-filter-group').getAttribute('aria-selected')) !== 'true') {
+    if ((await page.locator('#room-filter-group').locator('xpath=ancestor::button').getAttribute('aria-checked')) !== 'true') {
       await page.locator('#room-filter-group').click();
     }
     await waitUntil(
@@ -5890,7 +5890,7 @@ async function main(): Promise<void> {
 
         // 回首页刷新：首页不进入房间，不会触发 mark_read，可检查持久化后的灰点。
         await page.goto(`${server.base}/`);
-        await page.locator('#room-filter-agent[aria-selected="true"]').waitFor();
+        await page.locator('#room-filter-agent').locator('xpath=ancestor::button[@aria-checked="true"]').waitFor();
         await page.locator(`#room-list a[data-room-id="${data.extra.room.room_id}"]`).waitFor();
         await page.locator(`#room-list a[data-room-id="${data.direct.room.room_id}"]`).waitFor();
         checkEqual(

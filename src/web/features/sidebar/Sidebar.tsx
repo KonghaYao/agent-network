@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, SegmentedControl } from '../../app/lenso-controls';
 import { useEffect, useRef, useState } from 'react';
 
 import { Link } from '../../app/router';
@@ -145,56 +145,34 @@ export function Sidebar(props: SidebarProps) {
             }}
           />
         </label>
-        <div
-          className="room-filter"
-          id="room-filter"
-          role="tablist"
-          aria-label="会话类型"
-          onKeyDown={(event) => {
-            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-            event.preventDefault();
-            const index = FILTERS.findIndex((entry) => entry.value === filter);
-            let next = index;
-            if (event.key === 'Home') next = 0;
-            else if (event.key === 'End') next = FILTERS.length - 1;
-            else if (event.key === 'ArrowLeft') {
-              next = (index - 1 + FILTERS.length) % FILTERS.length;
-            } else next = (index + 1) % FILTERS.length;
-            const target = FILTERS[next];
-            if (!target) return;
-            onFilterChange(target.value);
-            const button = document.getElementById(`room-filter-${target.value}`);
-            button?.focus();
-          }}
-        >
-          {FILTERS.map((entry) => {
-            const selected = entry.value === filter;
-            const count = unreadCounts[entry.value];
-            return (
-              <Button
-                key={entry.value}
-                id={`room-filter-${entry.value}`}
-                type="button"
-                role="tab"
-                data-room-filter={entry.value}
-                aria-selected={selected}
-                aria-controls="room-list"
-                tabIndex={selected ? 0 : -1}
-                onClick={() => onFilterChange(entry.value)}
-              >
-                {entry.label}
-                {count > 0 ? (
-                  <span
-                    className="room-filter-unread"
-                    aria-hidden="true"
-                    title={`${count} 个会话有未读消息`}
-                  >
-                    {count > 99 ? '99+' : count}
+        <div className="room-filter" id="room-filter">
+          <SegmentedControl
+            aria-label="会话类型"
+            value={filter}
+            onValueChange={(value) => {
+              if (value === 'friend' || value === 'agent' || value === 'group') onFilterChange(value);
+            }}
+            items={FILTERS.map((entry) => {
+              const count = unreadCounts[entry.value];
+              return {
+                value: entry.value,
+                label: (
+                  <span id={`room-filter-${entry.value}`} data-room-filter={entry.value}>
+                    {entry.label}
+                    {count > 0 ? (
+                      <span
+                        className="room-filter-unread"
+                        aria-hidden="true"
+                        title={`${count} 个会话有未读消息`}
+                      >
+                        {count > 99 ? '99+' : count}
+                      </span>
+                    ) : null}
                   </span>
-                ) : null}
-              </Button>
-            );
-          })}
+                ),
+              };
+            })}
+          />
         </div>
         <p
           id="room-filter-unread-status"

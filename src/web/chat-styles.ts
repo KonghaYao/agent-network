@@ -81,15 +81,10 @@ export const APP_STYLE = `
   #room-search::placeholder { color: var(--wx-muted); }
   #room-search::-webkit-search-cancel-button { -webkit-appearance: none; }
 
-  .room-filter { display: flex; gap: 2px; margin-top: 8px; padding: 2px;
-    background: var(--wx-search); border-radius: 6px; }
-  .room-filter button { flex: 1 1 0; min-width: 0; height: 26px; padding: 0 6px;
-    border: 0; border-radius: 4px; background: transparent; color: var(--wx-muted);
-    font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    display: inline-flex; align-items: center; justify-content: center; gap: 3px; }
-  .room-filter button:hover { background: var(--wx-hover); color: var(--wx-text); }
-  .room-filter button[aria-selected="true"] { background: var(--wx-panel);
-    color: var(--wx-text); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 8%); }
+  .room-filter { margin-top: 8px; }
+  .room-filter > [role="radiogroup"] { display: flex; width: 100%; }
+  .room-filter [role="radio"] { flex: 1 1 0; min-width: 0; }
+  .room-filter [data-room-filter] { display: inline-flex; align-items: center; justify-content: center; gap: 3px; }
   /* 分类未读徽标只计会话数；title 提供数量说明，读屏由 aria-live 汇总播报。 */
   .room-filter-unread { display: inline-flex; align-items: center; justify-content: center;
     flex: 0 0 auto; min-width: 15px; height: 15px; padding: 0 3px; box-sizing: border-box;

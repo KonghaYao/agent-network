@@ -195,7 +195,12 @@ test.describe.serial('SPA 组件库与状态管理', () => {
   test('home 保留筛选与 zustand 持久化，面板可键盘缩放并双击复位', async ({ page }) => {
     await page.goto(`${base}/`);
     await expect(page.locator('#room-list .room-item')).toHaveCount(1);
-    await expect(page.locator('#room-filter-group')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#room-filter [data-lenso-slot="segmented-control"]')).toBeVisible();
+    await expect(page.locator('#room-filter-group').locator('xpath=ancestor::button')).toHaveAttribute('aria-checked', 'true');
+    await page.locator('#room-filter-friend').click();
+    await page.locator('#room-filter-friend').locator('xpath=ancestor::button').press('ArrowRight');
+    await expect(page.locator('#room-filter-agent').locator('xpath=ancestor::button')).toHaveAttribute('aria-checked', 'true');
+    await page.locator('#room-filter-group').click();
     // legacy 兼容：筛选仍是纯字符串，不是 zustand 的 JSON。
     expect(await page.evaluate(() => localStorage.getItem('agent-network-room-filter'))).toBe(
       'group',

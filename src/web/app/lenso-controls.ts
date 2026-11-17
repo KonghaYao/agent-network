@@ -1,4 +1,4 @@
-import type { ButtonRootProps } from '@lenso/ui';
+import type { ButtonRootProps, SegmentedControlProps } from '@lenso/ui';
 import { createElement, useEffect, useSyncExternalStore, type ComponentPropsWithRef } from 'react';
 
 type LensoModule = typeof import('@lenso/ui');
@@ -45,6 +45,24 @@ export function Button({ className, variant, ...props }: LegacyButtonProps) {
     className,
     variant: variant ?? (className?.split(/\s+/).includes('primary') ? 'prominent' : undefined),
   } as ButtonRootProps);
+}
+
+type SegmentedControlAdapterProps = Omit<SegmentedControlProps, 'onValueChange'> & {
+  onValueChange?: (value: string | null) => void;
+};
+
+export function SegmentedControl({ items, value, onValueChange, ...props }: SegmentedControlAdapterProps) {
+  const lenso = useLenso();
+  if (lenso) return createElement(lenso.SegmentedControl, { ...props, items, value, onValueChange });
+  return createElement('div', { role: 'radiogroup', 'aria-label': props['aria-label'] },
+    items.map((item) => createElement('button', {
+      key: item.value,
+      type: 'button',
+      role: 'radio',
+      'aria-checked': item.value === value,
+      onClick: () => onValueChange?.(item.value),
+    }, item.label)),
+  );
 }
 
 export function ThemeScope({ className, ...props }: ComponentPropsWithRef<'div'>) {
