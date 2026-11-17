@@ -394,6 +394,95 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(chip.locator('.composer-file-meta')).not.toContainText('上传中');
   });
 
+  test('输入区按钮保持视觉尺寸并用 ::after 扩到 44px 命中区', async ({ page }) => {
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#composer')).toBeVisible();
+    await expect(page.locator('#body')).toBeEnabled();
+    await page.fill('#body', '命中区探针');
+    await page.locator('#composer-file-input').setInputFiles({
+      name: 'hit-area.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+        'base64',
+      ),
+    });
+    await expect(page.locator('#composer-files .composer-file')).toHaveCount(1);
+    await expect(page.locator('#composer-files .composer-file-meta')).not.toContainText('上传中', {
+      timeout: 15_000,
+    });
+    const chipThumb = page.locator('#composer-files .composer-file-thumb');
+    await expect(chipThumb).toBeVisible({ timeout: 15_000 });
+    expect(await chipThumb.boundingBox()).toMatchObject({ width: 48, height: 48 });
+
+    const surfaces = await page.evaluate(() => {
+      const read = (selector: string) => {
+        const element = document.querySelector(selector);
+        if (!(element instanceof HTMLElement)) return null;
+        const box = element.getBoundingClientRect();
+        const cx = box.left + box.width / 2;
+        const cy = box.top + box.height / 2;
+        const hit = (dx: number, dy: number) => {
+          const target = document.elementFromPoint(cx + dx, cy + dy);
+          return target instanceof Element && target.closest(selector) === element;
+        };
+        return {
+          width: Math.round(box.width),
+          height: Math.round(box.height),
+          up: hit(0, -21),
+          down: hit(0, 21),
+          left: hit(-21, 0),
+          right: hit(21, 0),
+        };
+      };
+      return {
+        attach: read('#attach-file'),
+        send: read('#send'),
+        remove: read('.composer-file-remove'),
+        search: read('#message-search-button'),
+      };
+    });
+
+    // 视觉盒保持原尺寸：38px 附件/发送、22px 移除。
+    expect(surfaces.attach).toMatchObject({
+      width: 38,
+      height: 38,
+      up: true,
+      down: true,
+      left: true,
+      right: true,
+    });
+    expect(surfaces.send).toMatchObject({
+      height: 38,
+      up: true,
+      down: true,
+      left: true,
+      right: true,
+    });
+    expect(surfaces.remove).toMatchObject({
+      width: 22,
+      height: 22,
+      up: true,
+      down: true,
+      left: true,
+      right: true,
+    });
+    // 头部文字按钮只用 ::after 纵向扩到 44px，不把 56px 头撑高。
+    expect(surfaces.search).toMatchObject({ up: true, down: true });
+    const header = await page.evaluate(() => {
+      const node = document.querySelector('.chat-head');
+      const actions = document.querySelector('.chat-head-actions');
+      if (!(node instanceof HTMLElement) || !(actions instanceof HTMLElement)) return null;
+      return {
+        height: node.getBoundingClientRect().height,
+        actionsHeight: actions.getBoundingClientRect().height,
+      };
+    });
+    expect(header).not.toBeNull();
+    expect(header!.height).toBeLessThan(59);
+    expect(header!.actionsHeight).toBeLessThan(44);
+  });
+
   test('只读归档房间不显示输入区，聊天区拖拽不上传且不导航', async ({ page }) => {
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
     const created = await callTool<{ room: { room_id: string } }>(

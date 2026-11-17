@@ -249,6 +249,8 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
               className="primary files-upload"
               id="files-upload"
               type="button"
+              variant="prominent"
+              size="sm"
               disabled={readOnly || upload !== null}
               onClick={() => inputRef.current?.click()}
             >
@@ -258,6 +260,8 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
               className="files-close"
               id="files-close"
               type="button"
+              variant="borderless"
+              size="sm"
               style={{ color: 'var(--wx-text)', backgroundColor: 'transparent' }}
               aria-label="关闭文件栏"
               title="关闭文件栏"
@@ -326,6 +330,8 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
             id="files-bind-retry"
             className="files-bind-retry"
             type="button"
+            variant="bordered"
+            size="sm"
             onClick={() => void retryBind()}
           >
             重试加入房间
@@ -334,7 +340,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
         {files.error ? (
           <div id="files-error" className="files-error" role="alert">
             <p id="files-error-text">读取文件失败：{files.error}</p>
-            <Button id="files-retry" type="button" onClick={() => void files.refresh()}>
+            <Button id="files-retry" type="button" variant="bordered" size="sm" onClick={() => void files.refresh()}>
               重试
             </Button>
           </div>
@@ -373,11 +379,11 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
                       </div>
                     </div>
                     <div className="file-actions">
-                      <Button className="file-action" type="button" onClick={() => setPreview(item)}>
+                      <Button className="file-action" type="button" variant="borderless" size="sm" onClick={() => setPreview(item)}>
                         预览
                       </Button>
                       {fileCopyUrl(item) ? (
-                        <Button className="file-action" type="button" onClick={() => void copyLink(item)}>
+                        <Button className="file-action" type="button" variant="borderless" size="sm" onClick={() => void copyLink(item)}>
                           复制链接
                         </Button>
                       ) : null}
@@ -396,6 +402,8 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
                         <Button
                           className={`file-action${deletePending === key ? ' danger' : ''}`}
                           type="button"
+                          variant="borderless"
+                          size="sm"
                           disabled={busyDelete !== null}
                           onClick={() => void requestDelete(item)}
                         >
@@ -422,6 +430,8 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
             id="files-more"
             className="files-more"
             type="button"
+            variant="borderless"
+            size="sm"
             disabled={files.loadingMore}
             onClick={() => void files.loadMore()}
           >

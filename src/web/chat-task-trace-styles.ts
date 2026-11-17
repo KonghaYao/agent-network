@@ -104,6 +104,9 @@ export const TASK_TRACE_STYLE = `
   .task-trace-item.is-focus { background: color-mix(in srgb, var(--wx-link) 12%, transparent);
     outline: 1px solid var(--wx-link); }
   .task-trace-item.is-recalled { cursor: default; color: var(--wx-muted); }
+  /* 条目内部按列排布；显式覆盖 Lenso Button 根节点的水平居中。 */
+  .task-trace-items .task-trace-item { display: flex; flex-direction: column;
+    justify-content: flex-start; width: 100%; text-align: left; }
   .task-trace-item-head { display: flex; align-items: center; gap: 6px; min-width: 0;
     font-size: 11px; color: var(--wx-muted); }
   .task-trace-sender { flex: 0 1 auto; min-width: 0; overflow: hidden;

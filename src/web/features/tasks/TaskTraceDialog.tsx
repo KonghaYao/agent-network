@@ -47,7 +47,13 @@ export function TaskTraceDialog({
       className="task-trace-card"
       footer={
         <div className="row modal-actions">
-          <Button id="task-trace-close" type="button" onClick={() => onOpenChange(false)}>
+          <Button
+            id="task-trace-close"
+            type="button"
+            variant="bordered"
+            size="md"
+            onClick={() => onOpenChange(false)}
+          >
             关闭
           </Button>
         </div>
@@ -72,6 +78,8 @@ export function TaskTraceDialog({
           id="task-trace-refresh"
           className="link-btn"
           type="button"
+          variant="borderless"
+          size="sm"
           disabled={busy}
           onClick={() => void trace.refresh()}
         >
@@ -85,6 +93,8 @@ export function TaskTraceDialog({
         id="task-trace-older"
         className="task-trace-page"
         type="button"
+        variant="bordered"
+        size="sm"
         hidden={!trace.hasBefore}
         disabled={busy}
         onClick={() => void trace.loadOlder()}
@@ -99,6 +109,8 @@ export function TaskTraceDialog({
             <Button
               type="button"
               key={item.message_id}
+              variant="borderless"
+              size="sm"
               className={`task-trace-item${item.role === 'root' ? ' is-focus' : ''}${item.recalled ? ' is-recalled' : ''}`}
               role="listitem"
               disabled={item.recalled}

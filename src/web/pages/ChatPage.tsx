@@ -586,7 +586,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                   <div className="chat-head-actions">
                     {peer?.kind === 'agent' ? (
                       <Button
-                        className="link-btn"
+                        className="link-btn" variant="borderless" size="sm"
                         id="rename"
                         type="button"
                         onClick={() => roomActions.setRenameAgentOpen(true)}
@@ -595,7 +595,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       </Button>
                     ) : null}
                     <Button
-                      className="link-btn"
+                      className="link-btn" variant="borderless" size="sm"
                       id="message-search-button"
                       type="button"
                       aria-label="搜索聊天记录"
@@ -607,7 +607,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     {room.kind === 'group' ? (
                       <Button
                         ref={membersButtonRef}
-                        className="link-btn"
+                        className="link-btn" variant="borderless" size="sm"
                         id="members-button"
                         type="button"
                         onClick={() => setOverlay('members')}
@@ -616,7 +616,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       </Button>
                     ) : null}
                     <Button
-                      className={`monitor-toggle${monitorVisible ? ' active' : ''}`}
+                      className={`monitor-toggle${monitorVisible ? ' active' : ''}`} variant="borderless" size="sm"
                       id="monitor-toggle"
                       type="button"
                       aria-controls="monitor-pane"
@@ -628,7 +628,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       <span>网页</span>
                     </Button>
                     <Button
-                      className={`files-toggle${filesVisible ? ' active' : ''}`}
+                      className={`files-toggle${filesVisible ? ' active' : ''}`} variant="borderless" size="sm"
                       id="files-toggle"
                       type="button"
                       aria-controls="files-pane"
@@ -736,7 +736,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 <div id="chat-error" className="chat-error" role="alert" hidden={chat.status !== 'error'}>
                   <p id="chat-error-text">{chat.error || '读取会话失败'}</p>
                   <div className="chat-error-actions">
-                    <Button id="chat-error-retry" type="button" onClick={() => void chat.load()}>
+                    <Button id="chat-error-retry" type="button" variant="prominent" size="md" onClick={() => void chat.load()}>
                       重试
                     </Button>
                     <Link id="chat-error-back" to="/">
@@ -797,7 +797,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       aria-busy="true"
                       onSubmit={(event) => event.preventDefault()}
                     >
-                      <Button className="attach-btn" type="button" aria-label="添加附件" disabled>
+                      <Button className="attach-btn" type="button" variant="bordered" size="md" aria-label="添加附件" disabled>
                         +
                       </Button>
                       <div className="composer-main">
@@ -809,7 +809,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                           disabled
                         />
                       </div>
-                      <Button className="send-btn primary" id="send" type="submit" disabled>
+                      <Button className="send-btn primary" id="send" type="submit" variant="prominent" size="md" disabled>
                         发送
                       </Button>
                     </form>

@@ -311,10 +311,13 @@ export const APP_STYLE = `
   .chat-id .muted { margin: 1px 0 0; font-size: 11px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chat-id .muted[hidden] { display: none; }
-  .link-btn { flex: 0 0 auto; border: 0; background: none; padding: 2px 4px;
+  .link-btn { position: relative; flex: 0 0 auto; }
+  .link-btn:not([data-lenso-slot]) { border: 0; background: none; padding: 2px 4px;
     color: var(--wx-link); font-size: 12px; }
-  .link-btn:hover { background: var(--wx-hover); }
+  .link-btn:not([data-lenso-slot]):hover { background: var(--wx-hover); }
   .link-btn[hidden] { display: none; }
+  .link-btn::after { content: ""; position: absolute; left: 0; right: 0; top: 50%;
+    height: 44px; transform: translateY(-50%); }
   .copy-group-info { flex: 0 0 auto; display: inline-flex; align-items: center;
     justify-content: center; width: 32px; height: 32px; padding: 0; border: 0;
     border-radius: 6px; background: none; color: var(--wx-text); }
@@ -405,14 +408,14 @@ export const APP_STYLE = `
     overflow-anchor: none; overscroll-behavior: contain; scrollbar-gutter: stable; }
   /* 消息末尾的 1px 观察点：只参与 IntersectionObserver，不占视觉空间。 */
   .messages-end { height: 1px; margin: 0; padding: 0; list-style: none; }
-  .jump-latest { position: absolute; left: 50%; z-index: var(--app-z-float);
+  #jump-latest { position: absolute; left: 50%; z-index: var(--app-z-float);
     bottom: calc(70px + env(safe-area-inset-bottom)); transform: translateX(-50%);
     display: inline-flex; align-items: center; gap: 4px; max-width: calc(100% - 32px);
     padding: 7px 14px; border: 1px solid var(--wx-line); border-radius: 999px;
     background: var(--wx-panel); color: var(--wx-link); font-size: 12px;
     line-height: 1.2; white-space: nowrap; box-shadow: var(--wx-shadow); }
-  .jump-latest[hidden] { display: none; }
-  .jump-latest:hover { background: var(--wx-hover); }
+  #jump-latest[hidden] { display: none; }
+  #jump-latest:hover { background: var(--wx-hover); }
   .msg-time { margin: 10px 0; text-align: center; font-size: 11px; color: var(--wx-muted); }
   .msg-time span { padding: 2px 7px; border-radius: 3px; background: rgb(0 0 0 / 4%); }
   /* 系统行：上下线时间线与投递回执共用，居中、无头像/气泡。 */
@@ -492,15 +495,24 @@ export const APP_STYLE = `
   .composer-area { position: relative; flex: 0 0 auto; }
   .composer { flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
     padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
-    background: var(--wx-sidebar); border-top: 1px solid var(--wx-line); }
+    background: var(--lenso-background-primary); border-top: 1px solid var(--lenso-separator); }
   .composer-main { flex: 1 1 auto; min-width: 0; display: flex;
     flex-direction: column; gap: 6px; }
   .composer-main textarea { width: 100%; flex: 1 1 auto; min-width: 0; min-height: 38px; max-height: 96px;
-    padding: 8px 10px; border: 1px solid var(--wx-line); border-radius: 4px;
-    background: var(--wx-panel); color: var(--wx-text); font: inherit;
-    font-size: 14px; line-height: 22px; resize: none; overflow-y: auto; }
-  .send-btn { flex: 0 0 auto; height: 38px; min-width: 64px; padding: 0 14px;
-    border: 0; border-radius: 4px; font-size: 13px; }
+    padding: 8px 10px;
+    border: var(--lenso-field-stroke-width) solid var(--lenso-control-field-border);
+    border-radius: var(--lenso-shape-field);
+    background: var(--lenso-control-field-fill); color: var(--lenso-label-primary); font: inherit;
+    font-size: 14px; line-height: 22px; resize: none; overflow-y: auto;
+    box-shadow: var(--lenso-field-shadow); }
+  .composer-main textarea:focus-visible {
+    outline: var(--lenso-focus-ring-width) solid var(--lenso-focus-ring);
+    outline-offset: var(--lenso-focus-ring-offset); }
+  .composer .send-btn { position: relative; flex: 0 0 auto; height: 38px; min-height: 38px;
+    min-width: 64px; padding: 0 14px; border: 0;
+    border-radius: var(--lenso-shape-field); font-size: 13px; }
+  .composer .send-btn::after { content: ""; position: absolute; left: 50%; top: 50%;
+    width: 44px; height: 44px; transform: translate(-50%, -50%); }
   .composer--loading .composer-main textarea { height: 38px; }
   .composer--loading textarea { color: var(--wx-muted); cursor: progress; }
   .composer--loading .attach-btn,
@@ -511,11 +523,13 @@ export const APP_STYLE = `
   /* 拖拽覆盖层只做提示；pointer-events:none 保证不阻塞聊天区操作。 */
   .composer-drop { position: absolute; inset: 8px; z-index: var(--app-z-drop); display: grid;
     place-content: center; gap: 4px; box-sizing: border-box; padding: 16px;
-    border: 2px dashed var(--wx-green); border-radius: 10px;
+    border: 2px dashed var(--lenso-control-tint, var(--lenso-tint));
+    border-radius: var(--lenso-shape-content-3xl);
     background: var(--lenso-control-tint-subtle-fill); text-align: center; pointer-events: none; }
   .composer-drop[hidden] { display: none; }
-  .composer-drop-title { font-size: 15px; font-weight: 600; color: var(--wx-green); }
-  .composer-drop-hint { font-size: 12px; color: var(--wx-muted); }
+  .composer-drop-title { font-size: 15px; font-weight: 600;
+    color: var(--lenso-control-tint, var(--lenso-tint)); }
+  .composer-drop-hint { font-size: 12px; color: var(--lenso-label-secondary); }
 
   .empty-pane { align-items: center; justify-content: center; }
   .empty { padding: 24px; text-align: center; }
@@ -652,7 +666,7 @@ ${GROUP_STYLE}
       max-width: 100%; row-gap: 4px; }
     .messages { padding: 10px 12px 14px; }
     .chat-skeleton { padding: 10px 12px 14px; }
-    .jump-latest { bottom: calc(64px + env(safe-area-inset-bottom)); }
+    #jump-latest { bottom: calc(64px + env(safe-area-inset-bottom)); }
     .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
     .composer textarea { font-size: 16px; }
     .composer-drop { inset: 6px; }

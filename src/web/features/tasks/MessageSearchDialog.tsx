@@ -1,6 +1,7 @@
 import { Button, SearchInput } from '../../app/lenso-controls';
 import { useEffect, useState, type FormEvent } from 'react';
 
+import { LIMITS } from '../../../contracts/limits';
 import type { McpError } from '../../lib/mcp-client';
 import { callTool } from '../../lib/mcp-client';
 import type { TaskSummary } from './TaskSummaryBar';
@@ -218,7 +219,9 @@ export function MessageSearchDialog({
             <span>搜索消息内容</span>
             <SearchInput
               id="message-search-input"
+              name="query"
               required
+              maxLength={LIMITS.messageSearchQueryMax}
               autoComplete="off"
               placeholder="搜索完整聊天记录"
               value={query}

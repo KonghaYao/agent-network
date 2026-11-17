@@ -19,12 +19,16 @@ export const MESSAGE_ACTIONS_STYLE = `
   .reply-reference:hover, .reply-reference:focus-visible {
     background: var(--wx-active); color: var(--wx-text); }
   .composer-reply { display: flex; align-items: center; gap: 8px; padding: 6px 12px;
-    box-sizing: border-box; width: 100%; background: var(--wx-hover); border-radius: 6px; font-size: 12px; }
+    box-sizing: border-box; width: 100%; background: var(--lenso-control-fill);
+    border: 1px solid var(--lenso-separator); border-radius: var(--lenso-shape-content-2xl);
+    font-size: 12px; }
   .composer-reply[hidden] { display: none; }
   .composer-reply span { flex: 1; min-width: 0; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
-  .composer-reply button { min-width: 44px; min-height: 36px; border: 0;
-    background: transparent; color: inherit; cursor: pointer; }
+  .composer-reply button { position: relative; min-width: 44px; min-height: 36px;
+    border: 0; background: transparent; color: inherit; cursor: pointer; }
+  .composer-reply button::after { content: ""; position: absolute; left: 50%; top: 50%;
+    width: 44px; height: 44px; transform: translate(-50%, -50%); }
   .forward-modal { width: min(480px, calc(100vw - 32px)); max-height: 80dvh;
     overflow: auto; border: 1px solid var(--wx-line); border-radius: 12px;
     color: var(--wx-text); background: var(--wx-chat-bg, var(--wx-panel)); }
@@ -32,7 +36,7 @@ export const MESSAGE_ACTIONS_STYLE = `
   .forward-modal h2 { font-size: 16px; }
   .forward-modal input { width: 100%; box-sizing: border-box; padding: 10px; }
   .forward-rooms { display: grid; gap: 6px; margin: 12px 0; }
-  .forward-rooms button { text-align: left; min-height: 44px; overflow-wrap: anywhere; }
+  .forward-rooms button { justify-content: flex-start; text-align: left; min-height: 44px; overflow-wrap: anywhere; }
   .forward-preview { max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
   .forward-modal footer { display: flex; gap: 8px; justify-content: flex-end; }
   .room-preference-hint { color: var(--wx-muted); font-size: 11px; padding: 4px 12px; margin: 0; }

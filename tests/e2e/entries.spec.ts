@@ -3,6 +3,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { LIMITS } from '../../src/contracts/limits';
+
 /**
  * 4B-5b 剩余入口：好友申请、设备配对与已归档 Agents。
  */
@@ -792,6 +794,13 @@ test.describe('SPA 剩余入口', () => {
     await expect(page.locator('#message-search-input')).toHaveAttribute(
       'data-lenso-slot',
       'search-field-input',
+    );
+    // SearchField 适配器必须把表单约束透传到真实 input。
+    await expect(page.locator('#message-search-input')).toHaveAttribute('id', 'message-search-input');
+    await expect(page.locator('#message-search-input')).toHaveAttribute('required', '');
+    await expect(page.locator('#message-search-input')).toHaveAttribute(
+      'maxlength',
+      String(LIMITS.messageSearchQueryMax),
     );
     await page.locator('#message-search-input').fill('柠');
     await page.locator('#message-search-form button[type="submit"]').click();

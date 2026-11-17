@@ -68,13 +68,21 @@ function Base64Block({ text }: { text: string }) {
         <span className="msg-base64-actions">
           <Button
             type="button"
+            variant="borderless"
+            size="sm"
             className="msg-base64-toggle"
             aria-expanded={expanded}
             onClick={() => setExpanded((value) => !value)}
           >
             {expanded ? '收起' : '查看'}
           </Button>
-          <Button type="button" className="msg-base64-copy" onClick={() => void handleCopy()}>
+          <Button
+            type="button"
+            variant="borderless"
+            size="sm"
+            className="msg-base64-copy"
+            onClick={() => void handleCopy()}
+          >
             复制
           </Button>
           <span className="msg-base64-status" role="status" aria-live="polite">

@@ -210,6 +210,7 @@ export const MessageFileCard = memo(function MessageFileCard({
         <Button
           type="button"
           variant="borderless"
+          size="sm"
           className="msg-file-thumb"
           style={{
             width: '100%',

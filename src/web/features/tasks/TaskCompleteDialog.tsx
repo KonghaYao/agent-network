@@ -115,17 +115,23 @@ export function TaskCompleteDialog({
             </p>
           ) : null}
           <div className="row modal-actions">
-            <AlertDialogPrimitive.Cancel
-              id="task-complete-cancel"
-              className="spa-dialog-button"
-              disabled={busy}
-              onClick={() => onOpenChange(false)}
-            >
-              取消
+            <AlertDialogPrimitive.Cancel asChild>
+              <Button
+                id="task-complete-cancel"
+                variant="bordered"
+                size="md"
+                className="spa-dialog-button"
+                disabled={busy}
+                onClick={() => onOpenChange(false)}
+              >
+                取消
+              </Button>
             </AlertDialogPrimitive.Cancel>
             <Button
               id="task-complete-confirm"
               type="button"
+              variant="prominent"
+              size="md"
               className="spa-dialog-button primary"
               aria-busy={busy ? 'true' : undefined}
               disabled={busy}

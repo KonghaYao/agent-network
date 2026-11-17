@@ -5,9 +5,12 @@
  * 面板显隐由 `hidden` 属性控制，布局只负责尺寸与定位。
  */
 export const FILES_STYLE = `
-  .files-toggle { flex: 0 0 auto; height: 32px; padding: 0 10px; border: 0;
+  .files-toggle { position: relative; flex: 0 0 auto; }
+  .files-toggle:not([data-lenso-slot]) { height: 32px; padding: 0 10px; border: 0;
     background: transparent; color: var(--wx-link); font-size: 13px; }
   .files-toggle:hover, .files-toggle.active { background: var(--wx-hover); }
+  .files-toggle::after { content: ""; position: absolute; left: 0; right: 0;
+    top: 50%; height: 44px; transform: translateY(-50%); }
 
   .files-pane { flex: 0 0 var(--app-pane-width-inline); width: var(--app-pane-width-inline);
     min-width: 0; max-width: var(--app-pane-width-inline);
@@ -39,7 +42,7 @@ export const FILES_STYLE = `
     line-height: 1.5; overflow-wrap: anywhere; }
   .files-status:empty { display: none; }
   .files-status.error { color: var(--wx-unread); }
-  .files-bind-retry { display: block; margin: 6px 12px 0; font-size: 12px; }
+  .files-pane .files-bind-retry { display: block; margin: 6px 12px 0; font-size: 12px; }
   .files-bind-retry[hidden] { display: none; }
   .files-error { margin: 8px 12px 0; padding: 8px 10px; border-radius: 6px;
     background: var(--wx-bg); border: 1px solid var(--wx-line); }

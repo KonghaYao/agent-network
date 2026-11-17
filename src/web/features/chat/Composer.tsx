@@ -213,18 +213,8 @@ function ComposerFileChip({
         <Button
           type="button"
           variant="borderless"
+          size="sm"
           className="composer-file-thumb"
-          style={{
-            flex: '0 0 auto',
-            width: 48,
-            height: 48,
-            margin: 0,
-            padding: 0,
-            border: 0,
-            borderRadius: 6,
-            overflow: 'hidden',
-            background: 'var(--wx-search)',
-          }}
           title={file.name}
           aria-label={`预览图片 ${file.name}`}
           onClick={() => onOpenFile(item)}
@@ -251,6 +241,9 @@ function ComposerFileChip({
       </span>
       <Button
         type="button"
+        variant="borderless"
+        size="sm"
+        isIconOnly
         className="composer-file-remove"
         aria-label={`移除 ${file.name}`}
         title={`移除 ${file.name}`}
@@ -694,6 +687,8 @@ export function Composer({
           <DropdownMenuPrimitive.Trigger asChild>
             <Button
               className="attach-btn"
+              variant="bordered"
+              size="md"
               id="attach-file"
               type="button"
               aria-label="添加附件"
@@ -745,7 +740,14 @@ export function Composer({
           {reply ? (
             <div id="composer-reply" className="composer-reply">
               <span>引用 {reply.label}</span>
-              <Button type="button" aria-label="取消引用" onClick={onCancelReply}>
+              <Button
+                type="button"
+                variant="borderless"
+                size="sm"
+                isIconOnly
+                aria-label="取消引用"
+                onClick={onCancelReply}
+              >
                 ×
               </Button>
             </div>
@@ -816,7 +818,14 @@ export function Composer({
             }
           />
         </div>
-        <Button className="send-btn primary" id="send" type="submit" disabled={!canSend}>
+        <Button
+          className="send-btn primary"
+          variant="prominent"
+          size="md"
+          id="send"
+          type="submit"
+          disabled={!canSend}
+        >
           发送
         </Button>
       </form>

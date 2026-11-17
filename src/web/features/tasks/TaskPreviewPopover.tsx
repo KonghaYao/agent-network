@@ -156,6 +156,8 @@ export function TaskPreviewPopover({
         <Button
           ref={triggerRef}
           type="button"
+          variant="borderless"
+          size="sm"
           className="task-dock-item-trigger"
           aria-label={`查看 Task：${preview}，${item.message_count} 条消息，${item.participant_count} 个 Agent 参与`}
           onPointerEnter={scheduleOpen}
@@ -233,6 +235,8 @@ export function TaskPreviewPopover({
                     <li key={message.message_id}>
                       <Button
                         type="button"
+                        variant="borderless"
+                        size="sm"
                         className={`task-preview-recent${message.recalled ? ' is-recalled' : ''}`}
                         aria-label={`查看 ${sender} 的回复：${text}`}
                         onClick={() => {
@@ -260,6 +264,8 @@ export function TaskPreviewPopover({
             {canAsk ? (
               <Button
                 type="button"
+                variant="bordered"
+                size="sm"
                 className="task-preview-ask"
                 onClick={() => {
                   suppressRestoreFocusRef.current = true;
@@ -272,6 +278,8 @@ export function TaskPreviewPopover({
             ) : null}
             <Button
               type="button"
+              variant="bordered"
+              size="sm"
               className="task-preview-all"
               onClick={() => {
                 triggerRef.current?.focus();

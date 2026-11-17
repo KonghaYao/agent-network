@@ -67,6 +67,8 @@ export function TaskListItem({
         {askable ? (
           <Button
             type="button"
+            variant="bordered"
+            size="sm"
             className="task-dock-ask"
             aria-label={`询问进度：${preview}`}
             title="引用这条 Task 并询问 Agent 进度"
@@ -77,6 +79,8 @@ export function TaskListItem({
         ) : null}
         <Button
           type="button"
+          variant="bordered"
+          size="sm"
           className="task-dock-complete"
           disabled={!canComplete || completing}
           aria-busy={completing ? 'true' : undefined}

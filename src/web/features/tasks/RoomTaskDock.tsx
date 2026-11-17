@@ -267,6 +267,8 @@ export function RoomTaskDock({
             id="task-dock-toggle"
             className="task-dock-toggle"
             type="button"
+            variant="borderless"
+            size="sm"
             aria-expanded={expanded}
             aria-controls="task-dock-panel"
             aria-label={
@@ -300,7 +302,7 @@ export function RoomTaskDock({
           {tasks.error ? (
             <div id="task-dock-error" className="task-dock-error" role="alert">
               <span>Task 加载失败：{tasks.error}</span>
-              <Button type="button" onClick={() => void tasks.retry()}>
+              <Button type="button" variant="bordered" size="sm" onClick={() => void tasks.retry()}>
                 重试
               </Button>
             </div>
@@ -317,6 +319,8 @@ export function RoomTaskDock({
                 id="task-dock-empty-close"
                 className="task-dock-empty-close"
                 type="button"
+                variant="bordered"
+                size="sm"
                 onClick={() => collapse(true)}
               >
                 收起
@@ -356,6 +360,8 @@ export function RoomTaskDock({
               加载更多失败：{tasks.loadMoreError}
               <Button
                 type="button"
+                variant="bordered"
+                size="sm"
                 disabled={tasks.loadingMore}
                 onClick={() => void tasks.loadMore()}
               >
@@ -368,6 +374,8 @@ export function RoomTaskDock({
               id="task-dock-load-more"
               className="task-dock-more"
               type="button"
+              variant="bordered"
+              size="sm"
               disabled={tasks.loadingMore}
               aria-busy={tasks.loadingMore ? 'true' : undefined}
               onClick={() => void tasks.loadMore()}
@@ -378,7 +386,7 @@ export function RoomTaskDock({
           {tasks.refreshError ? (
             <p className="task-dock-foot-status" role="status">
               刷新失败：{tasks.refreshError}
-              <Button type="button" onClick={() => void tasks.retry()}>
+              <Button type="button" variant="bordered" size="sm" onClick={() => void tasks.retry()}>
                 重试
               </Button>
             </p>

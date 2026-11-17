@@ -122,13 +122,22 @@ export function ForwardDialog({
       className="forward-card"
       footer={
         <div className="row modal-actions">
-          <Button id="forward-cancel" type="button" disabled={busy} onClick={() => onOpenChange(false)}>
+          <Button
+            id="forward-cancel"
+            type="button"
+            variant="bordered"
+            size="md"
+            disabled={busy}
+            onClick={() => onOpenChange(false)}
+          >
             取消
           </Button>
           <Button
             id="forward-send"
             className="primary"
             type="button"
+            variant="prominent"
+            size="md"
             disabled={!selected || text === null || busy}
             onClick={() => void send()}
           >
@@ -155,6 +164,8 @@ export function ForwardDialog({
           <Button
             key={room.room_id}
             type="button"
+            variant={selected === room.room_id ? 'prominent' : 'bordered'}
+            size="md"
             aria-pressed={selected === room.room_id}
             disabled={busy}
             onClick={() => {
@@ -171,6 +182,8 @@ export function ForwardDialog({
             id="forward-more"
             className="list-retry"
             type="button"
+            variant="bordered"
+            size="sm"
             disabled={rooms.loadingMore}
             onClick={() => void rooms.loadMore()}
           >

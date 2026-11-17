@@ -24,6 +24,9 @@ export const TASK_DOCK_STYLE = `
     background: transparent; color: var(--wx-text); text-align: left; cursor: pointer; }
   .task-dock-toggle:hover { background: var(--wx-hover); }
   .task-dock-toggle:focus-visible { outline: 2px solid var(--wx-link); outline-offset: -2px; }
+  /* Lenso Button 根样式会改成水平居中；dock 入口保持左对齐与 44px 行高。 */
+  .task-dock .task-dock-toggle { display: flex; justify-content: flex-start;
+    min-height: 44px; text-align: left; }
   .task-dock-title { flex: 0 0 auto; font-size: 13px; font-weight: 600; }
   .task-dock-count { flex: 0 0 auto; display: inline-flex; align-items: center;
     justify-content: center; min-width: 20px; height: 20px; padding: 0 6px;
@@ -68,6 +71,9 @@ export const TASK_DOCK_STYLE = `
   .task-dock-item-trigger:hover { background: var(--wx-hover); }
   .task-dock-item-trigger:focus-visible { outline: 2px solid var(--wx-link);
     outline-offset: -2px; }
+  /* 触发按钮内部是两行信息，不能被 Lenso 的水平居中布局改写。 */
+  .task-dock-list .task-dock-item-trigger { display: flex; flex-direction: column;
+    align-items: stretch; justify-content: flex-start; width: 100%; text-align: left; }
   .task-dock-preview { display: -webkit-box; -webkit-line-clamp: 2;
     -webkit-box-orient: vertical; overflow: hidden; font-size: 12.5px;
     line-height: 1.45; overflow-wrap: anywhere; }
@@ -123,6 +129,8 @@ export const TASK_DOCK_STYLE = `
   .task-preview-recent:hover, .task-preview-recent:focus-visible {
     background: var(--wx-hover); }
   .task-preview-recent.is-recalled { color: var(--wx-muted); }
+  .task-preview-recent-list .task-preview-recent { display: flex; flex-direction: column;
+    justify-content: flex-start; width: 100%; text-align: left; }
   .task-preview-recent-head { display: flex; align-items: baseline; gap: 8px; }
   .task-preview-recent-sender { min-width: 0; font-size: 12px; font-weight: 600;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

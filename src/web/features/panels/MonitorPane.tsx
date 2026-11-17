@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, Input } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useEffect, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
@@ -76,7 +76,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
         <h2 id="monitor-title" className="monitor-title">
           网页监控
         </h2>
-        <input
+        <Input
           id="monitor-url"
           type="text"
           inputMode="url"
@@ -93,6 +93,8 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
             className="monitor-icon primary"
             id="monitor-save"
             type="submit"
+            variant="prominent"
+            size="sm"
             aria-label="保存网页地址"
             title="保存网页地址（Enter）"
             disabled={monitor.busy}
@@ -103,6 +105,8 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
             className="monitor-icon"
             id="monitor-clear"
             type="button"
+            variant="borderless"
+            size="sm"
             style={{ color: 'var(--wx-text)' }}
             aria-label="清除网页地址"
             title="清除网页地址"
@@ -130,6 +134,8 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
             className="monitor-icon"
             id="monitor-refresh"
             type="button"
+            variant="borderless"
+            size="sm"
             style={{ color: 'var(--wx-text)' }}
             aria-label="刷新网页"
             title="刷新网页（重新读取地址）"
@@ -142,6 +148,8 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
             className="monitor-icon monitor-close"
             id="monitor-close"
             type="button"
+            variant="borderless"
+            size="sm"
             style={{ color: 'var(--wx-text)' }}
             aria-label="关闭网页监控"
             title="关闭网页监控"
@@ -162,7 +170,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
       {monitor.error ? (
         <div id="monitor-error" className="monitor-error" role="alert">
           <p id="monitor-error-text">{monitor.error}</p>
-          <Button id="monitor-retry" type="button" onClick={() => void monitor.refresh()}>
+          <Button id="monitor-retry" type="button" variant="bordered" size="sm" onClick={() => void monitor.refresh()}>
             重试
           </Button>
         </div>

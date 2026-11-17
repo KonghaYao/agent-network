@@ -246,6 +246,8 @@ export function Timeline({
             <Button
               id="older"
               type="button"
+              variant="bordered"
+              size="sm"
               aria-busy={olderLoading ? 'true' : 'false'}
               disabled={olderLoading || !hasOlder}
               onClick={() => void loadOlder()}
@@ -280,6 +282,8 @@ export function Timeline({
                 <Button
                   className="outbox-retry"
                   type="button"
+                  variant="borderless"
+                  size="sm"
                   onClick={() => onRetryOutbox(item.client_message_id)}
                 >
                   重试
@@ -289,6 +293,8 @@ export function Timeline({
                 <Button
                   className="outbox-dismiss"
                   type="button"
+                  variant="borderless"
+                  size="sm"
                   onClick={() => onRemoveOutbox(item.client_message_id)}
                 >
                   移除
@@ -303,6 +309,8 @@ export function Timeline({
         id="jump-latest"
         className="jump-latest"
         type="button"
+        variant="bordered"
+        size="sm"
         hidden={pinned}
         onClick={() => {
           setPin(true);

@@ -6,10 +6,13 @@
  * iframe 内容由目标站点决定，不强制反色。
  */
 export const MONITOR_STYLE = `
-  .monitor-toggle { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px;
-    height: 32px; padding: 0 8px; border: 0; background: transparent;
-    color: var(--wx-link); font-size: 13px; }
+  .monitor-toggle { position: relative; flex: 0 0 auto; display: inline-flex;
+    align-items: center; gap: 4px; }
+  .monitor-toggle:not([data-lenso-slot]) { height: 32px; padding: 0 8px; border: 0;
+    background: transparent; color: var(--wx-link); font-size: 13px; }
   .monitor-toggle:hover, .monitor-toggle.active { background: var(--wx-hover); }
+  .monitor-toggle::after { content: ""; position: absolute; left: 0; right: 0;
+    top: 50%; height: 44px; transform: translateY(-50%); }
   .monitor-toggle svg { width: 16px; height: 16px; fill: none;
     stroke: currentColor; stroke-width: 1.7; }
 
@@ -24,10 +27,13 @@ export const MONITOR_STYLE = `
     gap: 6px; min-width: 0; padding: 8px 10px; border-bottom: 1px solid var(--wx-line); }
   .monitor-title { flex: 0 0 auto; margin: 0; font-size: 12px; font-weight: 600;
     color: var(--wx-muted); white-space: nowrap; }
-  #monitor-url { flex: 1 1 0; width: auto; min-width: 0; height: 30px; padding: 0 8px;
-    box-sizing: border-box; border: 1px solid var(--wx-line); border-radius: 4px;
-    background: var(--wx-panel); color: var(--wx-text); font: inherit; font-size: 13px; }
+  #monitor-url { flex: 1 1 0; width: auto; min-width: 0; height: 36px; padding: 0 10px;
+    box-sizing: border-box; border: 0; border-radius: var(--lenso-shape-field);
+    background: var(--lenso-control-field-fill); color: var(--lenso-label-primary);
+    font: inherit; font-size: 13px; }
   .monitor-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; }
+  .monitor-actions .monitor-icon { height: 30px; min-width: 30px; padding: 0 6px;
+    border-radius: var(--lenso-shape-content-md); }
   .monitor-icon { flex: 0 0 auto; display: inline-flex; align-items: center;
     justify-content: center; width: 30px; height: 30px; padding: 0; border: 0;
     border-radius: 4px; background: transparent; color: var(--wx-muted);
