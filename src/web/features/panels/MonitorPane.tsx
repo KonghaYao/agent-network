@@ -86,6 +86,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
           aria-label="网页地址"
           maxLength={LIMITS.roomMonitorUrlMax}
           placeholder="https://…"
+          style={{ height: 36, borderRadius: 8 }}
           {...register('url')}
         />
         <div className="monitor-actions">

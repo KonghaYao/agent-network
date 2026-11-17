@@ -140,6 +140,8 @@ export function TaskTraceDialog({
         id="task-trace-newer"
         className="task-trace-page"
         type="button"
+        variant="bordered"
+        size="sm"
         hidden={!trace.hasAfter}
         disabled={busy}
         onClick={() => void trace.loadNewer()}

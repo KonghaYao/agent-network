@@ -501,7 +501,7 @@ export const APP_STYLE = `
   .composer-main textarea { width: 100%; flex: 1 1 auto; min-width: 0; min-height: 38px; max-height: 96px;
     padding: 8px 10px;
     border: var(--lenso-field-stroke-width) solid var(--lenso-control-field-border);
-    border-radius: var(--lenso-shape-field);
+    border-radius: var(--app-radius-md);
     background: var(--lenso-control-field-fill); color: var(--lenso-label-primary); font: inherit;
     font-size: 14px; line-height: 22px; resize: none; overflow-y: auto;
     box-shadow: var(--lenso-field-shadow); }
