@@ -100,18 +100,25 @@ export const FILES_STYLE = `
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .file-preview-meta { margin: 2px 0 0; font-size: 11px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .file-preview-body { flex: 1 1 auto; min-height: 0; overflow: auto;
-    display: grid; place-items: center; background: var(--wx-bg); padding: 8px; }
-  .file-preview-body img { max-width: 100%; max-height: 72dvh; }
-  .file-preview-body iframe { width: 100%; height: 70dvh; border: 0; background: #fff; }
-  .file-preview-body pre { width: 100%; align-self: stretch; margin: 0; padding: 10px;
-    max-height: 70dvh; overflow: auto; background: var(--wx-panel); color: var(--wx-text);
+  /* 正文区是唯一滚动容器；子项不收缩，短内容用 min-height 撑满，
+     长内容正常超出并交给 overflow-y 滚动。 */
+  .file-preview-body { flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    overscroll-behavior: contain; display: flex; flex-direction: column;
+    background: var(--wx-bg); padding: 8px; }
+  .file-preview-body > * { flex: 0 0 auto; }
+  .file-preview-body img { display: block; margin: auto; max-width: 100%; max-height: 72dvh; }
+  .file-preview-body iframe { width: 100%; height: 70dvh; margin: auto 0;
+    border: 0; background: #fff; }
+  .file-preview-body > pre,
+  .file-preview-body .file-preview-md-source { box-sizing: border-box; width: 100%;
+    margin: 0; padding: 10px; background: var(--wx-panel); color: var(--wx-text);
     font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
     white-space: pre-wrap; overflow-wrap: anywhere; }
-  .file-preview-body audio, .file-preview-body video { width: min(100%, 720px); }
-  .file-preview-markdown { box-sizing: border-box; align-self: stretch; justify-self: center;
-    width: 100%; max-width: 760px; min-width: 0; background: var(--wx-panel);
-    border: 1px solid var(--wx-line); border-radius: 8px; overflow: hidden; }
+  .file-preview-body > pre { min-height: 100%; }
+  .file-preview-body audio, .file-preview-body video { width: min(100%, 720px); margin: auto; }
+  .file-preview-markdown { box-sizing: border-box; width: 100%; max-width: 760px;
+    min-height: 100%; min-width: 0; margin: 0 auto; background: var(--wx-panel);
+    border: 1px solid var(--wx-line); border-radius: 8px; }
   .file-preview-md-toolbar { display: flex; justify-content: flex-end; padding: 4px 10px 0; }
   .file-preview-md-toolbar[hidden] { display: none; }
   .file-preview-md-toggle { border: 0; background: none; padding: 4px 6px; border-radius: 4px;
@@ -124,7 +131,7 @@ export const FILES_STYLE = `
   .file-preview-md-note { padding: 10px 16px; text-align: left;
     border-bottom: 1px solid var(--wx-line); }
   .file-preview-md-note[hidden] { display: none; }
-  .file-preview-note { margin: 0; padding: 24px 16px; text-align: center;
+  .file-preview-note { margin: auto 0; padding: 24px 16px; text-align: center;
     color: var(--wx-muted); font-size: 13px; line-height: 1.7; }
   .file-preview-foot { flex: 0 0 auto; display: flex; justify-content: flex-end;
     padding: 8px 14px; border-top: 1px solid var(--wx-line); }
