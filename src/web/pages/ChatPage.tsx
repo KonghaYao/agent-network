@@ -8,7 +8,7 @@ import { Composer, type ComposerReply, type ComposerSendInput } from '../feature
 import { ForwardDialog } from '../features/chat/ForwardDialog';
 import { Timeline } from '../features/chat/Timeline';
 import { AppSidebar } from '../features/layout/AppSidebar';
-import { FilePreviewDialog } from '../features/panels/FilePreviewDialog';
+import { LazyFilePreviewDialog } from '../features/panels/LazyFilePreviewDialog';
 import { AgentReissueDialog } from '../features/overlays/AgentReissueDialog';
 import { AnnouncementDialog } from '../features/overlays/AnnouncementDialog';
 import { AnnouncementPopover } from '../features/overlays/AnnouncementPopover';
@@ -993,7 +993,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
           ) : null}
         </>
       ) : null}
-      <FilePreviewDialog item={previewFile} onClose={() => setPreviewFile(null)} />
+      <LazyFilePreviewDialog item={previewFile} onClose={() => setPreviewFile(null)} />
     </>
   );
 }

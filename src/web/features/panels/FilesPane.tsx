@@ -18,7 +18,7 @@ import {
 } from '../../lib/files';
 import { callTool } from '../../lib/mcp-client';
 import { newRequestId } from '../../lib/request-id';
-import { FilePreviewDialog } from './FilePreviewDialog';
+import { LazyFilePreviewDialog } from './LazyFilePreviewDialog';
 
 interface FilesPaneProps {
   roomId: string;
@@ -427,7 +427,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
           </button>
         ) : null}
       </aside>
-      <FilePreviewDialog item={preview} onClose={() => setPreview(null)} />
+      <LazyFilePreviewDialog item={preview} onClose={() => setPreview(null)} />
     </>
   );
 }

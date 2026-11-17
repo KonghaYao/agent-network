@@ -1269,6 +1269,45 @@ test.describe('SPA Chat file cards', () => {
     expect(await thumb.getAttribute('src')).toContain('t=');
   });
 
+  test('re-signs an expired ticket before opening the preview', async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-11-13T12:00:00Z'));
+    const file = await seedRoomFile(base, humanToken, directRoomId, {
+      name: '过期票据.txt',
+      mimeType: 'text/plain',
+      body: Buffer.from('expired ticket preview'),
+    });
+    const marker = `FILE-EXPIRED-${crypto.randomUUID().slice(0, 8)}`;
+    await sendFileMessage(
+      base,
+      humanToken,
+      directRoomId,
+      `${marker}\n[过期票据.txt](${file.publicUrl})`,
+    );
+
+    await page.goto(`${base}/c/${directRoomId}`);
+    const message = page.locator('#messages .msg').filter({ hasText: marker });
+    await message.scrollIntoViewIfNeeded();
+    const download = message.locator('.msg-file-download');
+    await expect(download).toBeVisible({ timeout: 10_000 });
+    const initialHref = await download.getAttribute('href');
+    expect(initialHref).toMatch(/\/f\/f_[A-Za-z0-9_-]{22}\?download=1&t=/u);
+
+    // 关闭缓存 TTL 后点击预览：卡片必须先重签，再把新票据交给弹窗。
+    await page.clock.setFixedTime(new Date('2026-11-13T13:00:00Z'));
+    await message.locator('.msg-file-preview').click();
+    await expect(page.locator('#file-preview')).toBeVisible({ timeout: 10_000 });
+    const freshDownload = page.locator('#file-preview-download');
+    await expect(freshDownload).toBeVisible();
+    const freshHref = await freshDownload.getAttribute('href');
+    expect(freshHref).toMatch(/\/f\/f_[A-Za-z0-9_-]{22}\?download=1&t=/u);
+    expect(freshHref).not.toBe(initialHref);
+    const ticketOf = (href: string | null): string | null =>
+      href ? new URL(href, base).searchParams.get('t') : null;
+    expect(ticketOf(freshHref)).not.toBe(ticketOf(initialHref));
+    await page.locator('#file-preview-close').click();
+    await expect(page.locator('#file-preview')).toHaveCount(0);
+  });
+
   test('separates image MIME variants, non-images and active content', async ({ page }) => {
     const marker = `FILE-TYPES-${crypto.randomUUID().slice(0, 8)}`;
     const pdf = await seedRoomFile(base, humanToken, directRoomId, {

@@ -1,6 +1,6 @@
 import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
 import {
@@ -22,8 +22,15 @@ import { openContextMenuAt, useLongPress } from '../../hooks/useLongPress';
 import { openAgentMemory, type AgentMemoryTarget } from '../memory/memory-store';
 import { HumanBody } from './MessageBody';
 import { MarkdownIsland } from './MarkdownIsland';
-import { MessageFileCard } from './MessageFileCard';
 import { TaskSummaryBar } from '../tasks/TaskSummaryBar';
+
+/**
+ * 文件卡片只在消息正文含同源 `/f/` 链接时才会第一次渲染，因此把元数据、
+ * 票据与降级逻辑拆成独立 chunk；普通消息不下载这部分代码。
+ */
+const MessageFileCard = lazy(() =>
+  import('./MessageFileCard').then((module) => ({ default: module.MessageFileCard })),
+);
 
 interface ChatMessageProps {
   item: HistoryMessage;
@@ -541,16 +548,18 @@ export const ChatMessage = memo(function ChatMessage({
             </div>
             {cards.length > 0 ? (
               <div className="msg-files">
-                {cards.map((card) => (
-                  <MessageFileCard
-                    key={card.fileId}
-                    roomId={room.room_id}
-                    fileId={card.fileId}
-                    token={token}
-                    fallbackName={card.fallbackName}
-                    onOpenPreview={onOpenFile}
-                  />
-                ))}
+                <Suspense fallback={null}>
+                  {cards.map((card) => (
+                    <MessageFileCard
+                      key={card.fileId}
+                      roomId={room.room_id}
+                      fileId={card.fileId}
+                      token={token}
+                      fallbackName={card.fallbackName}
+                      onOpenPreview={onOpenFile}
+                    />
+                  ))}
+                </Suspense>
               </div>
             ) : null}
             {item.reply_to ? (
