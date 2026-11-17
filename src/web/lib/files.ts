@@ -1,4 +1,8 @@
-import { LIMITS } from '../../contracts/limits';
+import {
+  MESSAGE_FILE_ID_SOURCE,
+  extractMessageFileLinks,
+  normalizeEscapedNewlines,
+} from '../../contracts/file-links';
 
 import { callTool } from './mcp-client';
 
@@ -104,34 +108,71 @@ export async function bindFileToRoom(
   return file;
 }
 
-const FILE_URL =
-  /(?:https?:\/\/[^\s<>"'`）)]+\/f\/|\/f\/)([A-Za-z0-9_-]{20,})(?:\?[^\s<>"'`）)]*)?/gu;
+const MARKDOWN_LINK = /\[([^\]\n]{0,200})\]\(\s*<?([^)\s>]+)>?\s*\)/gu;
+const EXACT_FILE_URL = new RegExp(`^/f/(${MESSAGE_FILE_ID_SOURCE})$`, 'u');
+const MARKDOWN_WRAPPERS = [
+  /^\*\*([\s\S]+)\*\*$/u,
+  /^__([\s\S]+)__$/u,
+  /^`([^`]+)`$/u,
+];
 
 export interface FileCard {
   fileId: string;
   url: string;
+  /** Markdown alt 或 URL 前一行；元数据到达前的兜底文件名。 */
+  fallbackName: string;
 }
 
-/** 从正文提取同源/绝对 `/f/<fileId>`；只用于气泡外卡片，不改写正文。 */
-export function extractFileCards(body: string): FileCard[] {
-  const cards: FileCard[] = [];
-  const seen = new Set<string>();
-  for (const match of body.matchAll(FILE_URL)) {
-    const fileId = match[1];
-    if (!fileId || seen.has(fileId)) continue;
+function cleanFallbackName(value: string): string {
+  let text = String(value)
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/gu, ' ')
+    .trim();
+  for (const wrapper of MARKDOWN_WRAPPERS) text = text.replace(wrapper, '$1');
+  if (text.length > 160) text = text.slice(0, 160);
+  return text.trim();
+}
+
+/** Markdown `[文件名](/f/<id>)` 的标签；key 为 fileId。 */
+function markdownFileLabels(body: string): Map<string, string> {
+  const labels = new Map<string, string>();
+  for (const match of normalizeEscapedNewlines(body).matchAll(MARKDOWN_LINK)) {
     let url: URL;
     try {
-      url = new URL(match[0], window.location.origin);
+      url = new URL(match[2]!, window.location.origin);
     } catch {
       continue;
     }
-    // 只把同源 /f/ 渲染成文件卡片；外站链接仍按正文普通链接处理。
-    if (url.origin !== window.location.origin) continue;
-    seen.add(fileId);
-    cards.push({ fileId, url: url.href });
-    if (cards.length >= LIMITS.messageFileLinksMax) break;
+    if (url.origin !== window.location.origin || url.username || url.password) continue;
+    const fileId = url.pathname.match(EXACT_FILE_URL)?.[1];
+    const label = cleanFallbackName(match[1] ?? '');
+    if (fileId && label) labels.set(fileId, label);
   }
-  return cards;
+  return labels;
+}
+
+/** URL 前一行作为文件名；遇到另一个 URL 或 Markdown 链接时停止。 */
+function previousLineName(body: string, fileId: string): string {
+  const text = normalizeEscapedNewlines(body);
+  const index = text.indexOf(`/f/${fileId}`);
+  if (index < 0) return '';
+  const lines = text.slice(0, index).split('\n');
+  for (let cursor = lines.length - 2; cursor >= 0; cursor -= 1) {
+    const line = cleanFallbackName(lines[cursor] ?? '');
+    if (!line) continue;
+    if (line.includes('/f/') || /^https?:/iu.test(line)) return '';
+    return line;
+  }
+  return '';
+}
+
+/** 从正文提取同源 `/f/<fileId>`；只用于气泡外卡片，不改写正文。 */
+export function extractFileCards(body: string): FileCard[] {
+  const labels = markdownFileLabels(body);
+  return extractMessageFileLinks(body, window.location.origin).map((fileId) => ({
+    fileId,
+    url: `/f/${fileId}`,
+    fallbackName: labels.get(fileId) ?? previousLineName(body, fileId),
+  }));
 }
 
 /** 非安全上下文没有 navigator.clipboard 时的兜底复制。 */

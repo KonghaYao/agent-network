@@ -27,6 +27,11 @@ import {
   formatFileSize,
   uploadFileToDrive,
 } from '../../lib/files';
+import {
+  fileSafeUrl,
+  previewImageMime,
+  type RoomFileItem,
+} from '../../lib/files-ui';
 import { callTool } from '../../lib/mcp-client';
 import type { WebIdentity } from '../../lib/identity';
 import {
@@ -81,6 +86,8 @@ interface ComposerFile {
   phase: 'upload' | 'join';
   fileId: string | null;
   publicUrl: string | null;
+  previewUrl: string | null;
+  downloadUrl: string | null;
   error: string;
 }
 
@@ -129,6 +136,7 @@ interface ComposerProps {
   onCancelReply: () => void;
   onSend: (input: ComposerSendInput) => Promise<SendOutcome>;
   onStatus: (message: string) => void;
+  onOpenFile: (item: RoomFileItem) => void;
   /**
    * 聊天区 dropzone 的唯一上传入口。Composer 挂载时注册 `addFiles`，
    * 卸载时注销；拖拽事件由 ChatPage 的 `#chat-body` 统一接收，避免双处理。
@@ -166,6 +174,83 @@ function fileMeta(file: ComposerFile): string {
 }
 
 /**
+ * 待发送文件 chip。
+ *
+ * 已绑定且可判定的图片显示 48px 缩略图，地址只接受同源 `/f/` 的带票据
+ * `preview_url`；加载失败或未就绪时回退到类型 badge，不显示破图。
+ */
+function ComposerFileChip({
+  file,
+  onOpenFile,
+  onRemove,
+  removeDisabled,
+}: {
+  file: ComposerFile;
+  onOpenFile: (item: RoomFileItem) => void;
+  onRemove: () => void;
+  removeDisabled: boolean;
+}) {
+  const [thumbBroken, setThumbBroken] = useState(false);
+  const image = file.status === 'ready' ? previewImageMime(file.mime, file.name) : null;
+  const thumb = image ? fileSafeUrl(file.previewUrl ?? undefined) : null;
+  const item: RoomFileItem | null =
+    thumb && file.fileId
+      ? {
+          file_id: file.fileId,
+          name: file.name,
+          size: file.size,
+          mime_type: file.mime,
+          public_url: file.publicUrl ?? undefined,
+          preview_url: thumb,
+          download_url: file.downloadUrl ?? undefined,
+        }
+      : null;
+
+  return (
+    <div className="composer-file" role="listitem" data-file-id={file.fileId ?? ''}>
+      {thumb && item && !thumbBroken ? (
+        <button
+          type="button"
+          className="composer-file-thumb"
+          title={file.name}
+          aria-label={`预览图片 ${file.name}`}
+          onClick={() => onOpenFile(item)}
+        >
+          <img
+            src={thumb}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            referrerPolicy="no-referrer"
+            onError={() => setThumbBroken(true)}
+          />
+        </button>
+      ) : (
+        <span className="composer-file-badge" aria-hidden="true">
+          {fileBadge(file.name)}
+        </span>
+      )}
+      <span className="composer-file-main">
+        <span className="composer-file-name" title={file.name}>
+          {file.name}
+        </span>
+        <span className="composer-file-meta">{fileMeta(file)}</span>
+      </span>
+      <button
+        type="button"
+        className="composer-file-remove"
+        aria-label={`移除 ${file.name}`}
+        title={`移除 ${file.name}`}
+        disabled={removeDisabled}
+        onClick={onRemove}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+/**
  * 输入区：IME、1–4 行自适应、@ 提及、附件上传与拖放。
  *
  * - 提及用 Ariakit Combobox，textarea 不替换；组合输入期间不打开候选；
@@ -185,6 +270,7 @@ export function Composer({
   onCancelReply,
   onSend,
   onStatus,
+  onOpenFile,
   registerFileDrop,
 }: ComposerProps) {
   const key = draftKey(identity.actor_id, room.room_id);
@@ -382,6 +468,8 @@ export function Composer({
           phase: 'upload',
           fileId: null,
           publicUrl: null,
+          previewUrl: null,
+          downloadUrl: null,
           error: '',
         };
         setFiles((previous) => [...previous, entry]);
@@ -398,6 +486,8 @@ export function Composer({
               percent: 100,
               fileId: bound.file_id,
               publicUrl: bound.public_url,
+              previewUrl: bound.preview_url ?? null,
+              downloadUrl: bound.download_url ?? null,
               mime: bound.mime_type || file.type,
             });
           } catch (error) {
@@ -655,27 +745,13 @@ export function Composer({
             hidden={files.length === 0}
           >
             {files.map((file) => (
-              <div className="composer-file" role="listitem" key={file.key} data-file-id={file.fileId ?? ''}>
-                <span className="composer-file-badge" aria-hidden="true">
-                  {fileBadge(file.name)}
-                </span>
-                <span className="composer-file-main">
-                  <span className="composer-file-name" title={file.name}>
-                    {file.name}
-                  </span>
-                  <span className="composer-file-meta">{fileMeta(file)}</span>
-                </span>
-                <button
-                  type="button"
-                  className="composer-file-remove"
-                  aria-label={`移除 ${file.name}`}
-                  title={`移除 ${file.name}`}
-                  disabled={file.status === 'uploading'}
-                  onClick={() => void removeFile(file)}
-                >
-                  ×
-                </button>
-              </div>
+              <ComposerFileChip
+                key={file.key}
+                file={file}
+                onOpenFile={onOpenFile}
+                onRemove={() => void removeFile(file)}
+                removeDisabled={file.status === 'uploading'}
+              />
             ))}
           </div>
           <Ariakit.Combobox

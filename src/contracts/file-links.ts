@@ -1,5 +1,3 @@
-import { FILE_ID_PATTERN } from '@peri-code/mcpp/files';
-
 import { LIMITS } from './limits';
 
 /**
@@ -11,15 +9,15 @@ import { LIMITS } from './limits';
  * 最多返回 `LIMITS.messageFileLinksMax` 个。
  */
 
-const FILE_ID = new RegExp(FILE_ID_PATTERN, 'u');
-
 /**
- * 客户端内联脚本可用的 fileId 片段（去掉 `^`/`$`）。
+ * 与 `@peri-code/mcpp/files` 的 `FILE_ID_PATTERN` 保持一致。
  *
- * 网页用 `MESSAGE_FILE_ID_SOURCE` 构造与这里相同的精确 `f_<22>` 扫描，
- * 避免客户端/服务端规则漂移；精确校验仍使用 `FILE_ID`。
+ * 该包会拉入 Node 依赖，不能进入浏览器 bundle；网页与内联脚本都从这里
+ * 读取同一协议片段，服务端仍以 MCPP 的精确模式处理实际文件。
  */
-export const MESSAGE_FILE_ID_SOURCE = FILE_ID_PATTERN.replace(/^\^|\$$/gu, '');
+export const MESSAGE_FILE_ID_SOURCE = 'f_[A-Za-z0-9_-]{22}';
+
+const FILE_ID = new RegExp(`^${MESSAGE_FILE_ID_SOURCE}$`, 'u');
 
 const ESCAPED_NEWLINES = /\\r\\n|\\n|\\r|\\t/gu;
 

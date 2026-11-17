@@ -8,6 +8,7 @@ import { Composer, type ComposerReply, type ComposerSendInput } from '../feature
 import { ForwardDialog } from '../features/chat/ForwardDialog';
 import { Timeline } from '../features/chat/Timeline';
 import { AppSidebar } from '../features/layout/AppSidebar';
+import { LazyFilePreviewDialog } from '../features/panels/LazyFilePreviewDialog';
 import { AgentReissueDialog } from '../features/overlays/AgentReissueDialog';
 import { AnnouncementDialog } from '../features/overlays/AnnouncementDialog';
 import { AnnouncementPopover } from '../features/overlays/AnnouncementPopover';
@@ -43,6 +44,7 @@ import {
   type HistoryMessage,
 } from '../lib/chat';
 import { groupColorFor, groupColorStyle } from '../lib/group-colors';
+import type { RoomFileItem } from '../lib/files-ui';
 import { callTool, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import { newRequestId } from '../lib/request-id';
@@ -149,6 +151,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const [overlayPane, setOverlayPane] = useState<'files' | 'monitor' | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [forwardItem, setForwardItem] = useState<HistoryMessage | null>(null);
+  const [previewFile, setPreviewFile] = useState<RoomFileItem | null>(null);
   // 群成员弹窗从搜索右侧的常驻入口打开；关闭时必须显式回到该按钮。
   const membersButtonRef = useRef<HTMLButtonElement>(null);
   // 会话菜单项打开的弹窗（记忆、公告等）关闭后回到菜单入口。
@@ -750,6 +753,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     identityId={identity.actor_id}
                     identityName={identity.name}
                     identityKind={identity.kind}
+                    token={token ?? ''}
                     mentions={mentions}
                     outbox={queue.items}
                     olderLoading={chat.olderLoading}
@@ -765,6 +769,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onMarkRead={chat.markRead}
                     onToggleTask={(item) => void onToggleTask(item)}
                     onOpenTask={openTrace}
+                    onOpenFile={setPreviewFile}
                     onRecall={(item) => void onRecall(item)}
                     onForward={setForwardItem}
                   />
@@ -823,6 +828,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       onCancelReply={() => setReply(null)}
                       onSend={onSend}
                       onStatus={onStatus}
+                      onOpenFile={setPreviewFile}
                       registerFileDrop={registerFileDrop}
                     />
                   ) : null}
@@ -987,6 +993,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
           ) : null}
         </>
       ) : null}
+      <LazyFilePreviewDialog item={previewFile} onClose={() => setPreviewFile(null)} />
     </>
   );
 }

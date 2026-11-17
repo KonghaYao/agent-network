@@ -1,6 +1,6 @@
 import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
 import {
@@ -15,6 +15,7 @@ import {
   type RoomView,
 } from '../../lib/chat';
 import { copyText, extractFileCards } from '../../lib/files';
+import type { RoomFileItem } from '../../lib/files-ui';
 import { readFullMessage } from '../../lib/message-body';
 import { avatarColor, firstChar } from '../../lib/rooms';
 import { openContextMenuAt, useLongPress } from '../../hooks/useLongPress';
@@ -23,6 +24,14 @@ import { HumanBody } from './MessageBody';
 import { MarkdownIsland } from './MarkdownIsland';
 import { TaskSummaryBar } from '../tasks/TaskSummaryBar';
 
+/**
+ * 文件卡片只在消息正文含同源 `/f/` 链接时才会第一次渲染，因此把元数据、
+ * 票据与降级逻辑拆成独立 chunk；普通消息不下载这部分代码。
+ */
+const MessageFileCard = lazy(() =>
+  import('./MessageFileCard').then((module) => ({ default: module.MessageFileCard })),
+);
+
 interface ChatMessageProps {
   item: HistoryMessage;
   members: Map<string, RoomMember>;
@@ -30,12 +39,14 @@ interface ChatMessageProps {
   identityId: string;
   identityName: string;
   identityKind: 'human' | 'agent';
+  token: string;
   mentions: string[];
   allItems: HistoryMessage[];
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
   onToggleTask: (item: HistoryMessage) => void;
   onOpenTask: (rootId: string, focusMessageId: string | null) => void;
+  onOpenFile: (item: RoomFileItem) => void;
   onRecall: (item: HistoryMessage) => void;
   onForward: (item: HistoryMessage) => void;
 }
@@ -369,12 +380,14 @@ export const ChatMessage = memo(function ChatMessage({
   identityId,
   identityName,
   identityKind,
+  token,
   mentions,
   allItems,
   onQuote,
   onStatus,
   onToggleTask,
   onOpenTask,
+  onOpenFile,
   onRecall,
   onForward,
 }: ChatMessageProps) {
@@ -535,23 +548,18 @@ export const ChatMessage = memo(function ChatMessage({
             </div>
             {cards.length > 0 ? (
               <div className="msg-files">
-                {cards.map((card) => (
-                  <a
-                    className="msg-file"
-                    key={card.fileId}
-                    href={card.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    aria-label={`打开附件 ${card.fileId}`}
-                  >
-                    <span className="msg-file-kind" aria-hidden="true">
-                      FILE
-                    </span>
-                    <span className="msg-file-main">
-                      <span className="msg-file-name">附件 {card.fileId.slice(0, 10)}</span>
-                    </span>
-                  </a>
-                ))}
+                <Suspense fallback={null}>
+                  {cards.map((card) => (
+                    <MessageFileCard
+                      key={card.fileId}
+                      roomId={room.room_id}
+                      fileId={card.fileId}
+                      token={token}
+                      fallbackName={card.fallbackName}
+                      onOpenPreview={onOpenFile}
+                    />
+                  ))}
+                </Suspense>
               </div>
             ) : null}
             {item.reply_to ? (

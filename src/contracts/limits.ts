@@ -264,6 +264,14 @@ export const LIMITS = {
   messageSendStatusMax: 20,
   /** 单条消息正文中自动归档的同源文件链接上限。 */
   messageFileLinksMax: 8,
+  /** 消息文件卡片元数据/票据请求的并发上限。 */
+  webMessageFileConcurrency: 4,
+  /** 消息文件卡片元数据 LRU 条数。 */
+  webMessageFileCacheMax: 256,
+  /** 元数据与票据缓存时间；票据有效期 60 分钟，提前 5 分钟重签。 */
+  webMessageFileCacheTtlMs: 55 * 60_000,
+  /** 元数据失败缓存时间（毫秒）；用户仍可手动重试。 */
+  webMessageFileFailureTtlMs: 60_000,
   /** 客户端监听器每条投递最多下载并附带的同源附件数。 */
   monitorAttachmentMax: 3,
   /** 单个附件的字节上限；超过只跳过，不阻塞投递。 */
