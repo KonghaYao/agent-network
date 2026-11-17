@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { HistoryItem, RoomMember, RoomView } from '../../lib/chat';
 import type { WebIdentity } from '../../lib/identity';
+import { readFullMessage } from '../../lib/message-body';
 import type { ComposerDraftRequest, ComposerReply } from '../chat/Composer';
 import {
   buildTaskAskDraft,
@@ -15,7 +16,9 @@ import type { TaskListItemView } from './types';
 /**
  * Task dock「询问进度」的页面接线：引用根消息、写入草稿请求、只读保护。
  *
- * 不调用工具、不改变 Task 状态；目标解析全部来自已加载历史与列表项。
+ * 默认只使用已加载历史与列表项；当根消息预览无法定位全部 mention 时，
+ * 用现有 `network_message_read` 读取一次正文后按正文顺序重排。读取失败
+ * 或正文仍不可用时退回服务端 mentions 顺序。不改变 Task 状态，也不轮询。
  */
 export function useTaskAskProgress({
   roomId,
@@ -33,18 +36,21 @@ export function useTaskAskProgress({
   setReply: (reply: ComposerReply | null) => void;
 }) {
   const [draftRequest, setDraftRequest] = useState<ComposerDraftRequest | null>(null);
+  const askSequence = useRef(0);
 
   useEffect(() => {
+    askSequence.current += 1;
     setDraftRequest(null);
   }, [roomId]);
 
   const taskAskPlan = useCallback(
-    (item: TaskListItemView) =>
+    (item: TaskListItemView, rootText?: string | null) =>
       resolveTaskAskPlan({
         item,
         items,
         members,
         selfId: identity?.actor_id ?? null,
+        rootText,
       }),
     [identity?.actor_id, items, members],
   );
@@ -55,9 +61,26 @@ export function useTaskAskProgress({
   );
 
   const onAskTaskProgress = useCallback(
-    (item: TaskListItemView) => {
+    async (item: TaskListItemView) => {
       if (!room || room.read_only || !identity) return;
-      const targets = taskAskTargets(taskAskPlan(item));
+      let plan = taskAskPlan(item);
+      if (taskAskTargets(plan).length === 0) return;
+      const sequence = ++askSequence.current;
+
+      if (plan.needsRootBody) {
+        try {
+          const body = await readFullMessage(item.root_message_id);
+          if (sequence !== askSequence.current) return;
+          plan = taskAskPlan(item, body);
+        } catch {
+          if (sequence !== askSequence.current) return;
+          // 正文读取失败时仍引用根消息，但按服务端 mentions 顺序兜底。
+          plan = taskAskPlan(item, null);
+        }
+      }
+      if (sequence !== askSequence.current) return;
+
+      const targets = taskAskTargets(plan);
       if (targets.length === 0) return;
       const rootSender =
         item.root_sender_id === identity.actor_id

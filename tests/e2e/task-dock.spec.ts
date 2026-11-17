@@ -1040,12 +1040,15 @@ test.describe('Task dock 询问进度', () => {
       agentA.actor_id,
       agentB.actor_id,
     ]);
+    // 服务端 mentions 按 actor_id 排序；让正文顺序与之相反，直接验证前端按正文排序。
+    const [first, second] =
+      agentA.actor_id < agentB.actor_id ? [agentB, agentA] : [agentA, agentB];
     const rootId = await createTask(
       base,
       owner.token,
       roomId,
-      `@${agentA.name} @${agentB.name} 请同步交付里程碑`,
-      [agentA.actor_id, agentB.actor_id],
+      `@${first.name} @${second.name} 请同步交付里程碑`,
+      [first.actor_id, second.actor_id],
     );
     await sendMessage(base, agentA.token, roomId, 'A 正在核对', { taskRootId: rootId });
     await sendMessage(base, agentB.token, roomId, 'B 正在核对', { taskRootId: rootId });
@@ -1074,7 +1077,13 @@ test.describe('Task dock 询问进度', () => {
     const value = await page.locator('#body').inputValue();
     expect(value.trim().endsWith('这个 task 现在进度如何？')).toBe(true);
 
-    // 复原顺序与服务端 mentions 顺序一致，两个 Agent 都保留。
+    // 直接断言正文顺序：不能从服务端 mentions 数组推导期望。
+    const firstPosition = value.indexOf(`@${first.name}`);
+    const secondPosition = value.indexOf(`@${second.name}`);
+    expect(firstPosition).toBeGreaterThanOrEqual(0);
+    expect(secondPosition).toBeGreaterThanOrEqual(0);
+    expect(firstPosition).toBeLessThan(secondPosition);
+
     interface HistoryPage {
       items: { message_id: string; mentions: { actor_id: string; kind: string }[] }[];
     }
@@ -1086,22 +1095,104 @@ test.describe('Task dock 询问进度', () => {
     );
     const root = history.items.find((entry) => entry.message_id === rootId);
     expect(root).toBeTruthy();
-    const names = new Map([
-      [agentA.actor_id, agentA.name],
-      [agentB.actor_id, agentB.name],
-      [owner.actor_id, owner.name],
+    // 服务端数组与正文顺序相反，证明这个 fixture 真正覆盖了排序缺陷。
+    expect(root?.mentions.map((mention) => mention.actor_id)).toEqual([
+      second.actor_id,
+      first.actor_id,
     ]);
-    const expected = (root?.mentions ?? [])
-      .map((mention) => names.get(mention.actor_id))
-      .filter((name): name is string => Boolean(name));
-    expect(expected).toHaveLength(2);
-    const positions = expected.map((name) => value.indexOf(`@${name}`));
-    for (const position of positions) expect(position).toBeGreaterThanOrEqual(0);
-    expect(positions).toEqual([...positions].sort((left, right) => left - right));
 
     await page.waitForTimeout(300);
     expect(sends).toHaveLength(0);
     await expect(page.locator('#body')).toHaveValue(value);
+  });
+
+  test('预览被截断时读取一次根正文，按完整正文顺序复原', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `Ask Read Owner ${suffix}`);
+    const agentA = await createAgent(base, owner.token, `Ask Read A ${suffix}`);
+    const agentB = await createAgent(base, owner.token, `Ask Read B ${suffix}`);
+    const roomId = await createGroup(base, owner.token, `Ask Read ${suffix}`, [
+      agentA.actor_id,
+      agentB.actor_id,
+    ]);
+    // 服务端 preview 上限 512 字节：填充文本占满预览，两个 @ 只能从正文读取。
+    const [first, second] =
+      agentA.actor_id < agentB.actor_id ? [agentB, agentA] : [agentA, agentB];
+    const filler = '进度背景说明。'.repeat(80);
+    const rootId = await createTask(
+      base,
+      owner.token,
+      roomId,
+      `${filler}@${first.name} @${second.name} 请同步进度`,
+      [first.actor_id, second.actor_id],
+    );
+
+    await openRoom(page, base, owner.token, roomId);
+    await expandDock(page);
+    const readRequest = page.waitForRequest(
+      (request) =>
+        request.headers()['mcp-name'] === 'network_message_read' &&
+        (request.postData() ?? '').includes(rootId),
+    );
+    await itemLocator(page, rootId).locator('.task-dock-ask').click();
+    await readRequest;
+
+    await expect
+      .poll(() => page.locator('#body').inputValue())
+      .toContain(`@${first.name}`);
+    const value = await page.locator('#body').inputValue();
+    expect(value.indexOf(`@${first.name}`)).toBeGreaterThanOrEqual(0);
+    expect(value.indexOf(`@${second.name}`)).toBeGreaterThanOrEqual(0);
+    expect(value.indexOf(`@${first.name}`)).toBeLessThan(value.indexOf(`@${second.name}`));
+  });
+
+  test('根正文读取失败时按服务端顺序兜底', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `Ask Fallback Owner ${suffix}`);
+    const agentA = await createAgent(base, owner.token, `Ask Fallback A ${suffix}`);
+    const agentB = await createAgent(base, owner.token, `Ask Fallback B ${suffix}`);
+    const roomId = await createGroup(base, owner.token, `Ask Fallback ${suffix}`, [
+      agentA.actor_id,
+      agentB.actor_id,
+    ]);
+    const [first, second] =
+      agentA.actor_id < agentB.actor_id ? [agentB, agentA] : [agentA, agentB];
+    const filler = '进度背景说明。'.repeat(80);
+    const rootId = await createTask(
+      base,
+      owner.token,
+      roomId,
+      `${filler}@${first.name} @${second.name} 请同步进度`,
+      [first.actor_id, second.actor_id],
+    );
+
+    await page.route('**/mcp', async (route) => {
+      if (route.request().headers()['mcp-name'] !== 'network_message_read') {
+        await route.continue();
+        return;
+      }
+      const parsed = JSON.parse(route.request().postData() ?? '{}') as { id?: unknown };
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: toolErrorBody(parsed.id, 'MESSAGE_UNAVAILABLE', '读取失败（模拟）'),
+      });
+    });
+
+    await openRoom(page, base, owner.token, roomId);
+    await expandDock(page);
+    await itemLocator(page, rootId).locator('.task-dock-ask').click();
+
+    await expect
+      .poll(() => page.locator('#body').inputValue())
+      .toContain(`@${second.name}`);
+    const value = await page.locator('#body').inputValue();
+    // 服务端 mentions 按 actor_id 排序，与正文顺序相反。
+    expect(value.indexOf(`@${second.name}`)).toBeGreaterThanOrEqual(0);
+    expect(value.indexOf(`@${first.name}`)).toBeGreaterThanOrEqual(0);
+    expect(value.indexOf(`@${second.name}`)).toBeLessThan(value.indexOf(`@${first.name}`));
   });
 
   test('无根 @ 时回退最近参与的 Agent，预览入口共用同一处理', async ({ page }) => {

@@ -1,11 +1,15 @@
-import type { HistoryItem, MentionSelection, RoomMember } from '../../lib/chat';
+import type { HistoryItem, HistoryMessage, MentionSelection, RoomMember } from '../../lib/chat';
 import type { TaskListItemView } from './types';
 
 /**
  * 「询问进度」的目标解析与草稿文案。
  *
- * 只使用 Task 列表项与已加载历史，不额外调用工具：
- * - 根消息在已加载历史里时复原它原有的 mention（含 human/agent，保持服务端顺序）；
+ * 默认只使用 Task 列表项与已加载历史；只有预览无法定位全部目标时才读取一次
+ * 根消息正文：
+ * - 根消息在已加载历史里时复原它原有的 mention（含 human/agent），按正文中
+ *   `@名字` 出现的顺序排序，而不是服务端 `mentions` 的 actor_id 顺序；
+ * - 预览被截断、找不到某个目标时，由页面读取一次根消息正文后重排；
+ * - 正文读取失败或仍找不到目标时，按服务端顺序兜底；
  * - 根消息不在已加载窗口时忽略 mentions，回退到最近参与的 Agent；
  * - 根 mentions 没有 Agent 时追加回退 Agent，保证「询问进度」仍触达 Agent；
  * - 回退顺序：recent_messages 最近一条 Agent → 根消息发送者（Agent）→ participants。
@@ -22,10 +26,63 @@ export interface TaskAskMention {
 }
 
 export interface TaskAskPlan {
-  /** 根消息原有 mention 中能按当前成员表解析出的目标，保持服务端顺序。 */
+  /**
+   * 根消息原有 mention 中能按当前成员表解析出的目标，按正文顺序排列；
+   * 正文不可用时保持服务端顺序。
+   */
   mentions: TaskAskMention[];
   /** 根 mentions 没有 Agent 时追加、或完全无 mentions 时使用的回退 Agent。 */
   agent: TaskAskMention | null;
+  /** 已加载预览定位不到全部目标，需要读取一次根消息正文后重排。 */
+  needsRootBody: boolean;
+}
+
+/**
+ * 正文中 `@名字` 的位置。
+ *
+ * 名字前后都要断开，避免 `@A` 命中 `@AB` 或邮箱本地部分；与服务端文本
+ * 提及的边界规则保持一致。
+ */
+function mentionIndex(text: string, name: string): number {
+  const token = `@${name}`;
+  let from = 0;
+  while (from <= text.length - token.length) {
+    const index = text.indexOf(token, from);
+    if (index < 0) return -1;
+    const before = index > 0 ? text[index - 1]! : '';
+    const after = text[index + token.length] ?? '';
+    if (
+      (!before || !/[\p{L}\p{N}_.%+\-]/u.test(before)) &&
+      (!after || !/[\p{L}\p{N}_]/u.test(after))
+    ) {
+      return index;
+    }
+    from = index + 1;
+  }
+  return -1;
+}
+
+/**
+ * 按正文位置重排；找不到位置的目标保持原来的服务端顺序排在最后。
+ * 因此正文完全不可用时，结果就是服务端顺序。
+ */
+export function orderTaskAskMentions(
+  mentions: TaskAskMention[],
+  text: string,
+): TaskAskMention[] {
+  return mentions
+    .map((mention, index) => ({
+      mention,
+      index,
+      position: mentionIndex(text, mention.name),
+    }))
+    .sort((left, right) => {
+      const leftPosition = left.position < 0 ? Number.POSITIVE_INFINITY : left.position;
+      const rightPosition = right.position < 0 ? Number.POSITIVE_INFINITY : right.position;
+      if (leftPosition !== rightPosition) return leftPosition - rightPosition;
+      return left.index - right.index;
+    })
+    .map((entry) => entry.mention);
 }
 
 function trimmedName(value: string | null | undefined): string | null {
@@ -101,18 +158,15 @@ export function resolveTaskAskAgent(
  * 根消息原有的 mention，按服务端顺序去重；成员已不在房间时无法取得显示名，
  * 跳过该条，而不是伪造 actor_id 作为 @ 文案。
  */
-export function resolveTaskAskMentions(input: {
-  item: TaskListItemView;
-  items: HistoryItem[];
-  members: Map<string, RoomMember>;
-}): TaskAskMention[] {
-  const root = findRoot(input.items, input.item.root_message_id);
-  if (!root) return [];
+function collectRootMentions(
+  root: HistoryMessage,
+  members: Map<string, RoomMember>,
+): TaskAskMention[] {
   const seen = new Set<string>();
   const mentions: TaskAskMention[] = [];
   for (const mention of root.mentions) {
     if (seen.has(mention.actor_id)) continue;
-    const member = input.members.get(mention.actor_id);
+    const member = members.get(mention.actor_id);
     if (!member) continue;
     const name = trimmedName(member.name);
     if (!name) continue;
@@ -122,15 +176,41 @@ export function resolveTaskAskMentions(input: {
   return mentions;
 }
 
+export function resolveTaskAskMentions(input: {
+  item: TaskListItemView;
+  items: HistoryItem[];
+  members: Map<string, RoomMember>;
+  /**
+   * `undefined` 使用已加载的 `preview` 排序；字符串按给定正文排序；
+   * `null` 表示正文不可用，保持服务端顺序。
+   */
+  rootText?: string | null;
+}): TaskAskMention[] {
+  const root = findRoot(input.items, input.item.root_message_id);
+  if (!root) return [];
+  const mentions = collectRootMentions(root, input.members);
+  if (input.rootText === null) return mentions;
+  return orderTaskAskMentions(mentions, input.rootText ?? root.preview);
+}
+
 export function resolveTaskAskPlan(input: {
   item: TaskListItemView;
   items: HistoryItem[];
   members: Map<string, RoomMember>;
   selfId: string | null;
+  rootText?: string | null;
 }): TaskAskPlan {
+  const root = findRoot(input.items, input.item.root_message_id);
+  const mentions = resolveTaskAskMentions(input);
+  const needsRootBody =
+    input.rootText === undefined &&
+    root !== null &&
+    mentions.length > 0 &&
+    mentions.some((mention) => mentionIndex(root.preview, mention.name) < 0);
   return {
-    mentions: resolveTaskAskMentions(input),
+    mentions,
     agent: resolveTaskAskAgent(input.item, input.selfId, input.members),
+    needsRootBody,
   };
 }
 
