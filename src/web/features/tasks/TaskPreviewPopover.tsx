@@ -35,6 +35,8 @@ export function TaskPreviewPopover({
   onHoverClose,
   onEscapeKeyDown,
   onOpenTrace,
+  canAsk,
+  onAskProgress,
 }: {
   item: TaskListItemView;
   open: boolean;
@@ -45,11 +47,15 @@ export function TaskPreviewPopover({
   onHoverClose: (rootId: string) => void;
   onEscapeKeyDown: (event: Event) => void;
   onOpenTrace: (rootId: string, focusId: string | null) => void;
+  canAsk: boolean;
+  onAskProgress: (item: TaskListItemView) => void;
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const openTimerRef = useRef<number | null>(null);
   const closeTimerRef = useRef<number | null>(null);
   const restoreFocusRef = useRef(false);
+  /** 「询问进度」要交焦给 composer，关闭预览时不得把焦点抢回触发按钮。 */
+  const suppressRestoreFocusRef = useRef(false);
   const keyboardIntentRef = useRef(false);
   const hoverCapable = useMediaQuery('(hover: hover) and (pointer: fine)');
   const mobile = useIsMobile();
@@ -105,12 +111,15 @@ export function TaskPreviewPopover({
   };
 
   const requestClose = (restoreFocus: boolean) => {
-    restoreFocusRef.current = restoreFocus;
-    onRequestClose(item.root_message_id, restoreFocus);
+    const restore = restoreFocus && !suppressRestoreFocusRef.current;
+    suppressRestoreFocusRef.current = false;
+    restoreFocusRef.current = restore;
+    onRequestClose(item.root_message_id, restore);
   };
 
   const handleOpenChange = (next: boolean) => {
     if (next) {
+      suppressRestoreFocusRef.current = false;
       onRequestOpen(item.root_message_id);
       return;
     }
@@ -247,6 +256,19 @@ export function TaskPreviewPopover({
             )}
           </div>
           <div className="task-preview-actions">
+            {canAsk ? (
+              <button
+                type="button"
+                className="task-preview-ask"
+                onClick={() => {
+                  suppressRestoreFocusRef.current = true;
+                  restoreFocusRef.current = false;
+                  onAskProgress(item);
+                }}
+              >
+                询问进度
+              </button>
+            ) : null}
             <button
               type="button"
               className="task-preview-all"

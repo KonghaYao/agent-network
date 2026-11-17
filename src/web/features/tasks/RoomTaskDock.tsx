@@ -39,12 +39,16 @@ export function RoomTaskDock({
   room,
   token,
   actorId,
+  canAskTask,
+  onAskProgress,
   onOpenTrace,
 }: {
   roomId: string;
   room: RoomView | null;
   token: string | null;
   actorId: string | null;
+  canAskTask: (item: TaskListItemView) => boolean;
+  onAskProgress: (item: TaskListItemView) => void;
   onOpenTrace: (rootId: string, focusId: string | null) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -194,6 +198,17 @@ export function RoomTaskDock({
     });
   };
 
+  /**
+   * 引用 Task 根消息并询问进度由 ChatPage 处理；dock 只负责收起自身，
+   * 让焦点回到输入框。只读房间没有 composer，入口本身不渲染。
+   */
+  const askProgress = (item: TaskListItemView) => {
+    if (readOnly) return;
+    setPreview(null);
+    setExpanded(false);
+    onAskProgress(item);
+  };
+
   const onToggle = (event: MouseEvent<HTMLButtonElement>) => {
     if (expanded) {
       pointerOriginRef.current = null;
@@ -315,6 +330,7 @@ export function RoomTaskDock({
                   item={item}
                   readOnly={readOnly}
                   completing={tasks.completingRootId === item.root_message_id}
+                  canAsk={canAskTask(item)}
                   previewOpen={preview?.rootId === item.root_message_id}
                   previewPinned={
                     preview?.rootId === item.root_message_id && preview.pinned
@@ -328,6 +344,7 @@ export function RoomTaskDock({
                     requestClose(rootId, false);
                     onOpenTrace(rootId, focusId);
                   }}
+                  onAskProgress={askProgress}
                   onComplete={openComplete}
                 />
               ))}
