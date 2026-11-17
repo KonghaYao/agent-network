@@ -217,6 +217,127 @@ test.describe('Agent 记忆弹窗', () => {
     });
   });
 
+  test('Memory 三个下拉使用 Lenso Select，保留空值 option 与提交值', async ({ page }) => {
+    const calls: { name: string; args: Record<string, unknown> }[] = [];
+    await page.route('**/mcp', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.fallback();
+        return;
+      }
+      let body: {
+        id?: unknown;
+        params?: { name?: string; arguments?: Record<string, unknown> };
+      } | null = null;
+      try {
+        body = JSON.parse(route.request().postData() ?? 'null') as {
+          id?: unknown;
+          params?: { name?: string; arguments?: Record<string, unknown> };
+        };
+      } catch {
+        // 非 JSON 请求直接放行。
+      }
+      const name = body?.params?.name;
+      if (name === 'network_me') {
+        const response = await route.fetch();
+        const payload = (await response.json()) as {
+          result?: { structuredContent?: { service?: { memory?: Record<string, unknown> } } };
+        };
+        const service = payload.result?.structuredContent?.service;
+        if (service) {
+          service.memory = {
+            ...(service.memory ?? {}),
+            enabled: true,
+            capture: true,
+            recall_modes: ['lookup', 'reflect'],
+            supported: ['lookup', 'reflect'],
+            unsupported: [],
+            reason: null,
+          };
+        }
+        await route.fulfill({ response, json: payload });
+        return;
+      }
+      if (name === 'network_memory_status') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: body?.id ?? null,
+            result: {
+              structuredContent: {
+                enabled: true,
+                capture: true,
+                host_level: 'tool_only',
+                counts: { context: 2, experience: 1, curated: 1, source: 1 },
+              },
+            },
+          }),
+        });
+        return;
+      }
+      if (name && body?.params?.arguments) {
+        calls.push({ name, args: body.params.arguments });
+      }
+      await route.continue();
+    });
+
+    await login(page, base, agentToken);
+    await page.goto(base);
+    await page.locator('#memory-open').click();
+    await expect(page.locator('#memory-drawer')).toBeVisible({ timeout: 15_000 });
+
+    const mode = page.locator('#memory-recall-mode');
+    await expect(mode).toHaveAttribute('data-lenso-slot', 'select-trigger');
+    await expect(mode).toHaveAttribute('role', 'combobox');
+    await expect(mode).toContainText('lookup');
+    const hitHeight = await mode.evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element, '::after').height),
+    );
+    expect(hitHeight).toBeGreaterThanOrEqual(44);
+
+    await mode.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('listbox')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('listbox')).toBeHidden();
+    await expect(mode).toBeFocused();
+    await expect(page.locator('#memory-drawer')).toBeVisible();
+
+    await mode.click();
+    await page.getByRole('option', { name: 'reflect · 综合分析', exact: true }).click();
+    await expect(mode).toContainText('reflect');
+
+    const evidence = page.locator('#memory-recall-evidence');
+    await expect(evidence).toContainText('不限');
+    await evidence.click();
+    await page.getByRole('option', { name: '宿主报告已提交', exact: true }).click();
+    await expect(evidence).toContainText('宿主报告已提交');
+    await evidence.click();
+    await page.getByRole('option', { name: '不限', exact: true }).click();
+    await expect(evidence).toContainText('不限');
+
+    await page.locator('[data-memory-tab="context"]').click();
+    const contextKind = page.locator('#memory-context-kind');
+    await expect(contextKind).toContainText('全部');
+    await contextKind.click();
+    await page.getByRole('option', { name: 'bound', exact: true }).click();
+    await expect(contextKind).toContainText('bound');
+    const contextCalls = () => calls.filter((call) => call.name === 'network_memory_context_list');
+    const beforeContext = contextCalls().length;
+    await page.locator('#memory-panel-context .memory-toolbar').getByRole('button', { name: '刷新' }).click();
+    await expect.poll(() => contextCalls().length).toBeGreaterThan(beforeContext);
+    expect(contextCalls().at(-1)?.args.kind).toBe('bound');
+
+    await page.locator('[data-memory-tab="recall"]').click();
+    await page.fill('#memory-recall-query', '发布流程');
+    await page.locator('#memory-recall-form button[type="submit"]').click();
+    await expect.poll(() => calls.filter((call) => call.name === 'network_memory_recall').length).toBe(1);
+    const recall = calls.find((call) => call.name === 'network_memory_recall');
+    expect(recall?.args.mode).toBe('reflect');
+    expect(recall?.args).not.toHaveProperty('minimum_evidence');
+  });
+
   test('Panel disabled 显示不可用态，并归还焦点', async ({ page }) => {
     const calls: MemoryCall[] = [];
     await installMemoryFenixStub(page, calls, {

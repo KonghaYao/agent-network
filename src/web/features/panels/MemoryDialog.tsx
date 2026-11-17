@@ -1,4 +1,9 @@
-import { Button, Input } from '../../app/lenso-controls';
+import { Button, Input, Select } from '../../app/lenso-controls';
+import {
+  CONTEXT_KIND_OPTIONS,
+  RECALL_EVIDENCE_OPTIONS,
+  RECALL_MODE_OPTIONS,
+} from './memory-select-options';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
@@ -585,17 +590,16 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                     <div id="memory-panels" className="memory-panels">
                       <section id="memory-panel-recall" className="memory-panel" hidden={tab !== 'recall'}>
                         <form id="memory-recall-form" className="memory-form" onSubmit={(event) => void submitRecall(event)}>
-                          <label className="memory-field">
-                            模式
-                            <select
+                          <div className="memory-field">
+                            <span>模式</span>
+                            <Select
                               id="memory-recall-mode"
+                              aria-label="召回模式"
                               value={recallMode}
-                              onChange={(event) => setRecallMode(event.target.value)}
-                            >
-                              <option value="lookup">lookup · 显式查询</option>
-                              <option value="reflect">reflect · 综合分析</option>
-                            </select>
-                          </label>
+                              options={RECALL_MODE_OPTIONS}
+                              onChange={setRecallMode}
+                            />
+                          </div>
                           <label className="memory-field">
                             查询
                             <Input
@@ -608,18 +612,16 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                               onChange={(event) => setRecallQuery(event.target.value)}
                             />
                           </label>
-                          <label className="memory-field">
-                            最低证据
-                            <select
+                          <div className="memory-field">
+                            <span>最低证据</span>
+                            <Select
                               id="memory-recall-evidence"
+                              aria-label="最低证据"
                               value={recallEvidence}
-                              onChange={(event) => setRecallEvidence(event.target.value)}
-                            >
-                              <option value="">不限</option>
-                              <option value="host_reported_submitted">宿主报告已提交</option>
-                              <option value="gateway_observed_submitted">网关观察已提交</option>
-                            </select>
-                          </label>
+                              options={RECALL_EVIDENCE_OPTIONS}
+                              onChange={setRecallEvidence}
+                            />
+                          </div>
                           <Button className="primary memory-submit" type="submit">
                             召回
                           </Button>
@@ -656,14 +658,16 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 
                       <section id="memory-panel-context" className="memory-panel" hidden={tab !== 'context'}>
                         <div className="memory-toolbar">
-                          <label className="memory-field">
-                            类型
-                            <select value={contextKind} onChange={(event) => setContextKind(event.target.value)}>
-                              <option value="">全部</option>
-                              <option value="lookup">lookup</option>
-                              <option value="bound">bound</option>
-                            </select>
-                          </label>
+                          <div className="memory-field">
+                            <span>类型</span>
+                            <Select
+                              id="memory-context-kind"
+                              aria-label="上下文类型"
+                              value={contextKind}
+                              options={CONTEXT_KIND_OPTIONS}
+                              onChange={setContextKind}
+                            />
+                          </div>
                           <Button className="memory-small-btn" type="button" onClick={() => void loadContexts(true)}>
                             刷新
                           </Button>

@@ -530,8 +530,80 @@ test.describe('SPA 剩余入口', () => {
     await page.locator('#confirm-dialog-ok').click();
     await expect(page.locator('#contact-link-status')).toContainText('已撤销好友链接');
 
-    await page.locator('#contact-policy-select').selectOption('auto_accept');
+    const policySelect = page.locator('#contact-policy-select');
+    await expect(policySelect).toHaveAttribute('data-lenso-slot', 'select-trigger');
+    await expect(policySelect).toHaveAttribute('role', 'combobox');
+    const hitHeight = await policySelect.evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element, '::after').height),
+    );
+    expect(hitHeight).toBeGreaterThanOrEqual(44);
+    await policySelect.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('listbox')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('listbox')).toBeHidden();
+    await expect(policySelect).toBeFocused();
+    await policySelect.click();
+    await expect(page.getByRole('listbox')).toBeVisible();
+    await page.getByRole('option', { name: '自动接受', exact: true }).click();
+    await expect(policySelect).toContainText('自动接受');
     await expect(page.locator('#contact-policy-status')).toContainText('自动接受');
+    const savedPolicy = await callTool<{ policy: string }>(
+      base,
+      owner.token,
+      'network_contact_policy_get',
+      {},
+    );
+    expect(savedPolicy.policy).toBe('auto_accept');
+
+    // 保存期间禁用下拉；放行后恢复，失败时回滚到上一个值。
+    let releasePolicy: () => void = () => undefined;
+    const policyGate = new Promise<void>((resolve) => {
+      releasePolicy = resolve;
+    });
+    await page.route('**/mcp', async (route) => {
+      if (route.request().method() === 'POST') {
+        try {
+          const body = JSON.parse(route.request().postData() ?? 'null') as {
+            params?: { name?: string };
+          };
+          if (body.params?.name === 'network_contact_policy_set') await policyGate;
+        } catch {
+          // 非 JSON 请求直接放行。
+        }
+      }
+      await route.continue();
+    });
+    await policySelect.click();
+    await page.getByRole('option', { name: '本人确认', exact: true }).click();
+    await expect(policySelect).toBeDisabled();
+    await expect(page.locator('#contact-policy-status')).toContainText('正在保存');
+    releasePolicy();
+    await expect(page.locator('#contact-policy-status')).toContainText('好友申请需要你本人确认');
+    await expect(policySelect).toBeEnabled();
+    await page.unroute('**/mcp');
+
+    await page.route('**/mcp', async (route) => {
+      if (route.request().method() === 'POST') {
+        try {
+          const body = JSON.parse(route.request().postData() ?? 'null') as {
+            params?: { name?: string };
+          };
+          if (body.params?.name === 'network_contact_policy_set') {
+            await route.abort('failed');
+            return;
+          }
+        } catch {
+          // 非 JSON 请求直接放行。
+        }
+      }
+      await route.continue();
+    });
+    await policySelect.click();
+    await page.getByRole('option', { name: '自动接受', exact: true }).click();
+    await expect(page.locator('#contact-policy-status')).toContainText('保存失败');
+    await expect(policySelect).toContainText('本人确认');
+    await page.unroute('**/mcp');
 
     const created = await callTool<ContactLinkCreated>(
       base,
@@ -553,6 +625,59 @@ test.describe('SPA 剩余入口', () => {
     } finally {
       await guestContext.close();
     }
+  });
+
+  test('举报类型使用 Lenso Select 并通过 RHF 提交选中值', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `Report Owner ${suffix}`);
+    const peer = await registerHuman(base, `Report Peer ${suffix}`);
+    await befriend(base, owner, peer);
+    const roomId = await createDirectRoom(base, owner, peer);
+
+    const reports: Record<string, unknown>[] = [];
+    await page.route('**/mcp', async (route) => {
+      if (route.request().method() === 'POST') {
+        try {
+          const body = JSON.parse(route.request().postData() ?? 'null') as {
+            params?: { name?: string; arguments?: Record<string, unknown> };
+          };
+          if (body.params?.name === 'network_contact_report' && body.params.arguments) {
+            reports.push(body.params.arguments);
+          }
+        } catch {
+          // 非 JSON 请求直接放行。
+        }
+      }
+      await route.continue();
+    });
+
+    await login(page, base, owner.token);
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#title')).toHaveText(peer.name);
+    await page.locator('#room-menu-toggle').click();
+    await page.locator('#room-menu-report').click();
+    await expect(page.locator('#report-modal')).toBeVisible();
+
+    const category = page.locator('#report-category');
+    await expect(category).toHaveAttribute('data-lenso-slot', 'select-trigger');
+    await expect(category).toHaveAttribute('role', 'combobox');
+    await expect(category).toContainText('其他');
+    await category.click();
+    await expect(page.getByRole('listbox')).toBeVisible();
+    await page.getByRole('option', { name: '垃圾信息', exact: true }).click();
+    await expect(category).toContainText('垃圾信息');
+    const hitHeight = await category.evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element, '::after').height),
+    );
+    expect(hitHeight).toBeGreaterThanOrEqual(44);
+    expect(await seriousViolations(page, '#report-modal')).toEqual([]);
+
+    await page.locator('#report-submit').click();
+    await expect(page.locator('#report-modal')).toBeHidden();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.category).toBe('spam');
+    expect(reports[0]?.target_actor_id).toBe(peer.actor_id);
   });
 
   test('置顶、免打扰、拉黑/解除与删除好友写回服务端', async ({ page }) => {

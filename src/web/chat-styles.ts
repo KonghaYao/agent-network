@@ -819,6 +819,14 @@ ${GROUP_STYLE}
   .contact-policy-field select { flex: 0 1 160px; min-width: 0; height: 30px; padding: 0 8px;
     border: 1px solid var(--wx-line); border-radius: 4px; background: var(--wx-panel);
     color: var(--wx-text); font: inherit; font-size: 12px; }
+  .contact-policy-field [data-lenso-slot="select-trigger"] { flex: 0 1 160px; min-width: 0;
+    width: auto !important; height: 30px !important; min-height: 30px !important;
+    padding: 0 8px !important; border: 1px solid var(--wx-line) !important;
+    border-radius: 4px !important; background: var(--wx-panel) !important;
+    color: var(--wx-text) !important; font-family: inherit !important; font-size: 12px !important;
+    font-weight: 400 !important; line-height: normal !important; letter-spacing: normal !important; }
+  .contact-policy-field [data-lenso-slot="select-trigger"]:disabled {
+    color: var(--wx-muted) !important; }
   .contact-policy-status { min-height: 1.2em; margin: 6px 0 0; color: var(--wx-muted);
     font-size: 11px; }
 

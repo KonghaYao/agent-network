@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, Select } from '../../app/lenso-controls';
 import { useCallback, useEffect, useState } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -27,6 +27,11 @@ interface LinkCreateResult {
 interface PolicyResult {
   policy: 'self_approval' | 'manager_approval' | 'auto_accept';
 }
+
+const POLICY_OPTIONS = [
+  { value: 'self_approval', label: '本人确认' },
+  { value: 'auto_accept', label: '自动接受' },
+];
 
 function failureMessage(error: unknown): string {
   const failure = error as McpError;
@@ -71,6 +76,7 @@ export function ContactLinksPanel({
   const [linkError, setLinkError] = useState(false);
   const [policy, setPolicy] = useState<'self_approval' | 'auto_accept'>('self_approval');
   const [policyStatus, setPolicyStatus] = useState('');
+  const [policySaving, setPolicySaving] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -185,7 +191,9 @@ export function ContactLinksPanel({
   };
 
   const savePolicy = async (next: 'self_approval' | 'auto_accept') => {
+    const previous = policy;
     setPolicy(next);
+    setPolicySaving(true);
     setPolicyStatus('正在保存…');
     try {
       const result = await callTool<PolicyResult>(
@@ -204,7 +212,10 @@ export function ContactLinksPanel({
           : '好友申请需要你本人确认。',
       );
     } catch (failure) {
+      setPolicy(previous);
       setPolicyStatus(`保存失败：${failureMessage(failure)}`);
+    } finally {
+      setPolicySaving(false);
     }
   };
 
@@ -282,19 +293,19 @@ export function ContactLinksPanel({
         </ul>
       </section>
       <section className="contact-policy" aria-label="我的接收策略">
-        <label className="contact-policy-field" htmlFor="contact-policy-select">
-          我的接收策略
-          <select
+        <div className="contact-policy-field">
+          <label htmlFor="contact-policy-select">我的接收策略</label>
+          <Select
             id="contact-policy-select"
+            aria-label="我的接收策略"
             value={policy}
-            onChange={(event) =>
-              void savePolicy(event.target.value === 'auto_accept' ? 'auto_accept' : 'self_approval')
+            disabled={policySaving}
+            options={POLICY_OPTIONS}
+            onChange={(next) =>
+              void savePolicy(next === 'auto_accept' ? 'auto_accept' : 'self_approval')
             }
-          >
-            <option value="self_approval">本人确认</option>
-            <option value="auto_accept">自动接受</option>
-          </select>
-        </label>
+          />
+        </div>
         <p id="contact-policy-status" className="contact-policy-status" role="status">
           {policyStatus}
         </p>

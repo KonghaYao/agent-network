@@ -1,7 +1,7 @@
-import { Button, TextArea } from '../../app/lenso-controls';
+import { Button, Select, TextArea } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 
 import { LIMITS } from '../../../contracts/limits';
 import { reportFormSchema, type ReportForm } from '../../../contracts/web-forms';
@@ -34,6 +34,7 @@ export function ReportDialog({
 }) {
   const [status, setStatus] = useState('');
   const {
+    control,
     register,
     handleSubmit,
     reset,
@@ -90,16 +91,26 @@ export function ReportDialog({
       }
     >
       <form id="report-form" onSubmit={(event) => void submit(event)}>
-        <label className="field">
+        <div className="field">
           <span>类型</span>
-          <select id="report-category" {...register('category')}>
-            {CATEGORIES.map((category) => (
-              <option key={category.value} value={category.value}>
-                {category.label}
-              </option>
-            ))}
-          </select>
-        </label>
+          <Controller
+            control={control}
+            name="category"
+            render={({ field, fieldState }) => (
+              <Select
+                id="report-category"
+                name="category"
+                aria-label="举报类型"
+                aria-invalid={fieldState.invalid}
+                value={field.value}
+                options={CATEGORIES}
+                onChange={field.onChange}
+                ref={field.ref}
+              />
+            )}
+          />
+        </div>
+        {errors.category ? <p className="field-error">{errors.category.message}</p> : null}
         <label className="field">
           <span>补充说明（可选）</span>
           <TextArea

@@ -7,8 +7,10 @@ import {
   cloneElement,
   createElement,
   Fragment,
+  useCallback,
   useEffect,
   useRef,
+  useState,
   useSyncExternalStore,
   type ChangeEvent,
   type ComponentProps,
@@ -103,6 +105,162 @@ export function Button({ className, variant, ...props }: LegacyButtonProps) {
     destructive: props.destructive ?? tokens.has('danger'),
     'data-lenso-slot': props['data-lenso-slot'] ?? 'button',
   } as ButtonRootProps);
+}
+
+export interface SelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+export interface SelectAdapterProps {
+  id?: string;
+  name?: string;
+  required?: boolean;
+  disabled?: boolean;
+  value: string;
+  options: readonly SelectOption[];
+  onChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+  'aria-label'?: string;
+  'aria-invalid'?: boolean;
+  'aria-describedby'?: string;
+  ref?: ComponentPropsWithRef<'button'>['ref'];
+}
+
+/**
+ * 下拉选择：未就绪时回退原生 select；就绪后 `id` 挂在 trigger，
+ * `name/required/disabled` 挂在根节点，保持受控值与 RHF Controller 契约。
+ */
+export function Select({
+  id,
+  name,
+  required,
+  disabled,
+  value,
+  options,
+  onChange,
+  placeholder,
+  className,
+  'aria-label': ariaLabel,
+  'aria-invalid': ariaInvalid,
+  'aria-describedby': ariaDescribedBy,
+  ref,
+}: SelectAdapterProps) {
+  const lenso = useLenso();
+  const [open, setOpen] = useState(false);
+  const hasEmpty = options.some((option) => option.value === '');
+  const lensoValue = value === '' && placeholder && !hasEmpty ? null : value;
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const assignTriggerRef = useCallback(
+    (node: HTMLButtonElement | null) => {
+      triggerRef.current = node;
+      if (typeof ref === 'function') ref(node);
+      else if (ref) (ref as { current: HTMLButtonElement | null }).current = node;
+    },
+    [ref],
+  );
+
+  // Radix 弹窗在 document 捕获阶段监听 Escape；下拉展开时先在 window 捕获阶段
+  // 收口，避免一次 Escape 同时关闭下拉和整个弹窗。
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [open]);
+
+  if (!lenso) {
+    return createElement(
+      'select',
+      {
+        id,
+        name,
+        required,
+        disabled,
+        value,
+        className,
+        'aria-label': ariaLabel,
+        'aria-invalid': ariaInvalid,
+        'aria-describedby': ariaDescribedBy,
+        'data-lenso-slot': 'select-fallback',
+        ref: ref as ComponentPropsWithRef<'select'>['ref'],
+        onChange: (event: ChangeEvent<HTMLSelectElement>) => onChange(event.currentTarget.value),
+      },
+      placeholder && !hasEmpty
+        ? createElement('option', { key: '', value: '', disabled: true }, placeholder)
+        : null,
+      options.map((option) =>
+        createElement(
+          'option',
+          { key: option.value, value: option.value, disabled: option.disabled },
+          option.label,
+        ),
+      ),
+    );
+  }
+
+  const Root = lenso.Select as unknown as ComponentType<Record<string, unknown>>;
+  const Trigger = lenso.Select.Trigger as unknown as ComponentType<Record<string, unknown>>;
+  const Value = lenso.Select.Value as unknown as ComponentType<Record<string, unknown>>;
+  const Indicator = lenso.Select.Indicator as unknown as ComponentType<Record<string, unknown>>;
+  const Content = lenso.Select.Content as unknown as ComponentType<Record<string, unknown>>;
+  const Item = lenso.Select.Item as unknown as ComponentType<Record<string, unknown>>;
+  const ItemText = lenso.Select.ItemText as unknown as ComponentType<Record<string, unknown>>;
+  const ItemIndicator = lenso.Select.ItemIndicator as unknown as ComponentType<
+    Record<string, unknown>
+  >;
+  return createElement(
+    Root,
+    {
+      value: lensoValue,
+      name,
+      required,
+      disabled,
+      placeholder,
+      open,
+      onOpenChange: (next: boolean) => setOpen(next),
+      items: options.map((option) => ({
+        value: option.value,
+        label: option.label,
+        disabled: option.disabled,
+      })),
+      onValueChange: (next: string | null) => onChange(next ?? ''),
+    },
+    createElement(
+      Trigger,
+      {
+        id,
+        ref: assignTriggerRef,
+        className,
+        'aria-label': ariaLabel,
+        'aria-invalid': ariaInvalid,
+        'aria-describedby': ariaDescribedBy,
+        'data-lenso-slot': 'select-trigger',
+      },
+      createElement(Value),
+      createElement(Indicator),
+    ),
+    createElement(
+      Content,
+      null,
+      options.map((option) =>
+        createElement(
+          Item,
+          { key: option.value, value: option.value, disabled: option.disabled },
+          createElement(ItemText, null, option.label),
+          createElement(ItemIndicator),
+        ),
+      ),
+    ),
+  );
 }
 
 type InputAdapterProps = Omit<ComponentPropsWithRef<'input'>, 'className'> & {

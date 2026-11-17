@@ -80,6 +80,11 @@ export const MEMORY_STYLE = `
     border-radius: 8px; background: var(--wx-panel); color: var(--wx-text);
     font-size: 13px; }
   .memory-field input:not([data-lenso-slot])::placeholder { color: var(--wx-muted); }
+  .memory-field [data-lenso-slot="select-trigger"] { width: 100% !important; max-width: 100%;
+    min-height: 0 !important; padding: 8px 9px !important; border: 1px solid var(--wx-line) !important;
+    border-radius: 8px !important; background: var(--wx-panel) !important;
+    color: var(--wx-text) !important; font-family: inherit !important; font-size: 13px !important;
+    font-weight: 400 !important; line-height: normal !important; letter-spacing: normal !important; }
   .memory-submit { align-self: flex-start; min-height: 40px; padding: 7px 16px; }
   .memory-small-btn { min-height: 36px; padding: 5px 10px; font-size: 12px; }
   .memory-page-btn { display: block; width: 100%; min-height: 40px; margin-top: 8px;
