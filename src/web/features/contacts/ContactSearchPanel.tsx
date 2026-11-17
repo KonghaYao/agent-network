@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 
@@ -181,9 +182,9 @@ export function ContactSearchPanel({
               setSelected(null);
             }}
           />
-          <button id="contact-search-submit" className="primary" type="submit" disabled={busy}>
+          <Button id="contact-search-submit" className="primary" type="submit" disabled={busy}>
             {busy ? '搜索中…' : '搜索'}
-          </button>
+          </Button>
         </div>
       </form>
       <p
@@ -214,7 +215,7 @@ export function ContactSearchPanel({
               ) : pending ? (
                 <span className="contact-search-state">待处理申请</span>
               ) : (
-                <button
+                <Button
                   type="button"
                   disabled={busy}
                   onClick={() => {
@@ -224,7 +225,7 @@ export function ContactSearchPanel({
                   }}
                 >
                   核对 ID
-                </button>
+                </Button>
               )}
             </li>
           );
@@ -245,7 +246,7 @@ export function ContactSearchPanel({
             onChange={(event) => setMessage(event.target.value)}
           />
           <div className="contact-search-confirm-actions">
-            <button
+            <Button
               id="contact-search-cancel"
               type="button"
               disabled={busy}
@@ -256,8 +257,8 @@ export function ContactSearchPanel({
               }}
             >
               取消
-            </button>
-            <button
+            </Button>
+            <Button
               id="contact-search-send"
               className="primary"
               type="button"
@@ -265,7 +266,7 @@ export function ContactSearchPanel({
               onClick={() => void send()}
             >
               发送邀请
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}

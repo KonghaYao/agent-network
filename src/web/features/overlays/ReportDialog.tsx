@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
@@ -73,10 +74,10 @@ export function ReportDialog({
       contentId="report-modal"
       footer={
         <div className="row modal-actions">
-          <button id="report-cancel" type="button" onClick={() => onOpenChange(false)}>
+          <Button id="report-cancel" type="button" onClick={() => onOpenChange(false)}>
             取消
-          </button>
-          <button
+          </Button>
+          <Button
             id="report-submit"
             type="submit"
             form="report-form"
@@ -84,7 +85,7 @@ export function ReportDialog({
             disabled={isSubmitting}
           >
             {isSubmitting ? '正在提交…' : '提交举报'}
-          </button>
+          </Button>
         </div>
       }
     >

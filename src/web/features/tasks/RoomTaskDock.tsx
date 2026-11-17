@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import {
   useEffect,
   useRef,
@@ -261,7 +262,7 @@ export function RoomTaskDock({
         onKeyDown={onSectionKeyDown}
       >
         <div className="task-dock-head">
-          <button
+          <Button
             ref={toggleRef}
             id="task-dock-toggle"
             className="task-dock-toggle"
@@ -288,7 +289,7 @@ export function RoomTaskDock({
             <span className="task-dock-caret" aria-hidden="true">
               ▾
             </span>
-          </button>
+          </Button>
         </div>
         <div
           id="task-dock-panel"
@@ -299,9 +300,9 @@ export function RoomTaskDock({
           {tasks.error ? (
             <div id="task-dock-error" className="task-dock-error" role="alert">
               <span>Task 加载失败：{tasks.error}</span>
-              <button type="button" onClick={() => void tasks.retry()}>
+              <Button type="button" onClick={() => void tasks.retry()}>
                 重试
-              </button>
+              </Button>
             </div>
           ) : null}
           {!tasks.error && tasks.loading ? (
@@ -312,14 +313,14 @@ export function RoomTaskDock({
           {!tasks.error && !tasks.loading && tasks.items.length === 0 ? (
             <div id="task-dock-empty" className="task-dock-empty">
               <span>暂无未完成 Task</span>
-              <button
+              <Button
                 id="task-dock-empty-close"
                 className="task-dock-empty-close"
                 type="button"
                 onClick={() => collapse(true)}
               >
                 收起
-              </button>
+              </Button>
             </div>
           ) : null}
           {tasks.items.length > 0 ? (
@@ -353,17 +354,17 @@ export function RoomTaskDock({
           {tasks.loadMoreError ? (
             <p id="task-dock-load-more-error" className="task-dock-foot-status" role="alert">
               加载更多失败：{tasks.loadMoreError}
-              <button
+              <Button
                 type="button"
                 disabled={tasks.loadingMore}
                 onClick={() => void tasks.loadMore()}
               >
                 重试
-              </button>
+              </Button>
             </p>
           ) : null}
           {tasks.hasMore ? (
-            <button
+            <Button
               id="task-dock-load-more"
               className="task-dock-more"
               type="button"
@@ -372,14 +373,14 @@ export function RoomTaskDock({
               onClick={() => void tasks.loadMore()}
             >
               {tasks.loadingMore ? '加载中…' : '加载更多'}
-            </button>
+            </Button>
           ) : null}
           {tasks.refreshError ? (
             <p className="task-dock-foot-status" role="status">
               刷新失败：{tasks.refreshError}
-              <button type="button" onClick={() => void tasks.retry()}>
+              <Button type="button" onClick={() => void tasks.retry()}>
                 重试
-              </button>
+              </Button>
             </p>
           ) : null}
           {tasks.notice ? (

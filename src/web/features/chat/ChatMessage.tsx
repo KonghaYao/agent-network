@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -143,14 +144,14 @@ function ReplyReference({
       .catch(() => setFallback('引用消息不可见'));
   };
   return (
-    <button
+    <Button
       type="button"
       className="reply-reference"
       data-reply-to={item.reply_to ?? undefined}
       onClick={showTarget}
     >
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -286,9 +287,9 @@ function MessageActions({
   return (
     <DropdownMenuPrimitive.Root>
       <DropdownMenuPrimitive.Trigger asChild>
-        <button type="button" className="message-actions-trigger" aria-label="消息操作">
+        <Button type="button" className="message-actions-trigger" aria-label="消息操作">
           ···
-        </button>
+        </Button>
       </DropdownMenuPrimitive.Trigger>
       <DropdownMenuPrimitive.Portal>
         <DropdownMenuPrimitive.Content
@@ -564,7 +565,7 @@ export const ChatMessage = memo(function ChatMessage({
               />
             ) : null}
             {fullBody === null && truncated && !autoPending ? (
-              <button
+              <Button
                 type="button"
                 className="expand"
                 aria-expanded="false"
@@ -572,17 +573,17 @@ export const ChatMessage = memo(function ChatMessage({
                 onClick={() => void loadFull()}
               >
                 {loadingFull ? '正在展开…' : '查看全文'}
-              </button>
+              </Button>
             ) : null}
             {fullBody !== null && longBody ? (
-              <button
+              <Button
                 type="button"
                 className="expand"
                 aria-expanded={longExpanded}
                 onClick={() => setLongExpanded((value) => !value)}
               >
                 {longExpanded ? '收起' : '展开全文'}
-              </button>
+              </Button>
             ) : null}
             {item.body_bytes > 0 ? (
               <MessageActions

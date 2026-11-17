@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { Modal } from '../overlays/Modal';
 import { useTaskTrace } from '../../hooks/useTaskTrace';
 
@@ -46,9 +47,9 @@ export function TaskTraceDialog({
       className="task-trace-card"
       footer={
         <div className="row modal-actions">
-          <button id="task-trace-close" type="button" onClick={() => onOpenChange(false)}>
+          <Button id="task-trace-close" type="button" onClick={() => onOpenChange(false)}>
             关闭
-          </button>
+          </Button>
         </div>
       }
     >
@@ -67,7 +68,7 @@ export function TaskTraceDialog({
         ))}
       </div>
       <div className="task-trace-toolbar">
-        <button
+        <Button
           id="task-trace-refresh"
           className="link-btn"
           type="button"
@@ -75,12 +76,12 @@ export function TaskTraceDialog({
           onClick={() => void trace.refresh()}
         >
           刷新
-        </button>
+        </Button>
         <span id="task-trace-status" role="status" aria-live="polite">
           {trace.status}
         </span>
       </div>
-      <button
+      <Button
         id="task-trace-older"
         className="task-trace-page"
         type="button"
@@ -89,13 +90,13 @@ export function TaskTraceDialog({
         onClick={() => void trace.loadOlder()}
       >
         加载更早
-      </button>
+      </Button>
       <div id="task-trace-items" className="task-trace-items" role="list">
         {trace.items.length === 0 && !busy ? (
           <p className="task-trace-empty">没有可显示的消息</p>
         ) : (
           trace.items.map((item) => (
-            <button
+            <Button
               type="button"
               key={item.message_id}
               className={`task-trace-item${item.role === 'root' ? ' is-focus' : ''}${item.recalled ? ' is-recalled' : ''}`}
@@ -119,11 +120,11 @@ export function TaskTraceDialog({
               {item.has_unavailable_reference ? (
                 <span className="task-trace-note">引用的来源已不可见</span>
               ) : null}
-            </button>
+            </Button>
           ))
         )}
       </div>
-      <button
+      <Button
         id="task-trace-newer"
         className="task-trace-page"
         type="button"
@@ -132,7 +133,7 @@ export function TaskTraceDialog({
         onClick={() => void trace.loadNewer()}
       >
         加载更晚
-      </button>
+      </Button>
       {trace.items.length > 0 ? (
         <p className="task-trace-meta">
           {trace.items.length} / {trace.count || trace.items.length} 条已加载

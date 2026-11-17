@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useEffect, useRef, useState } from 'react';
 
 import { Link } from '../../app/router';
@@ -114,7 +115,7 @@ export function Sidebar(props: SidebarProps) {
         <div className="brand-row">
           <h1>WeBots</h1>
           <ContactRequestsButton onOpen={onOpenContacts} />
-          <button
+          <Button
             className="icon-btn"
             id="new-group"
             type="button"
@@ -123,7 +124,7 @@ export function Sidebar(props: SidebarProps) {
             onClick={onCreateGroup}
           >
             +
-          </button>
+          </Button>
         </div>
         <label className="search-box">
           <svg className="search-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -170,7 +171,7 @@ export function Sidebar(props: SidebarProps) {
             const selected = entry.value === filter;
             const count = unreadCounts[entry.value];
             return (
-              <button
+              <Button
                 key={entry.value}
                 id={`room-filter-${entry.value}`}
                 type="button"
@@ -191,7 +192,7 @@ export function Sidebar(props: SidebarProps) {
                     {count > 99 ? '99+' : count}
                   </span>
                 ) : null}
-              </button>
+              </Button>
             );
           })}
         </div>
@@ -239,9 +240,9 @@ export function Sidebar(props: SidebarProps) {
         </p>
         {status === 'logged-out' ? <LoggedOutStart /> : null}
         {showRetry ? (
-          <button id="room-list-retry" className="list-retry" type="button" onClick={onRetry}>
+          <Button id="room-list-retry" className="list-retry" type="button" onClick={onRetry}>
             重试
-          </button>
+          </Button>
         ) : null}
         {status === 'credential-invalid' ? (
           <Link id="credential-invalid-pair" className="list-retry" to="/pair">
@@ -249,7 +250,7 @@ export function Sidebar(props: SidebarProps) {
           </Link>
         ) : null}
         {moreVisible ? (
-          <button
+          <Button
             id="room-list-more"
             className="list-retry"
             type="button"
@@ -261,7 +262,7 @@ export function Sidebar(props: SidebarProps) {
               : loadMoreError
                 ? '加载更多失败，点击重试'
                 : '加载更多会话'}
-          </button>
+          </Button>
         ) : null}
       </div>
       <footer className="sidebar-foot">

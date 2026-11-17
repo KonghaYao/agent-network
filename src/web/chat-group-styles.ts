@@ -80,7 +80,8 @@ export const GROUP_STYLE = `
   .members-empty[hidden] { display: none; }
   .member-roster-item[hidden] { display: none; }
   .members-actions { flex: 0 0 auto; align-items: center; }
-  #group-leave, #group-dissolve { color: var(--wx-danger); margin-right: auto; }
+  #group-leave, #group-dissolve { color: var(--wx-danger-text) !important;
+    background: var(--wx-panel) !important; margin-right: auto; }
   .group-profile { flex: 0 0 auto; margin-bottom: 12px; }
   .group-profile label { font-size: 12px; color: var(--wx-muted); }
   #group-name-input { flex: 1; min-width: 0; width: 100%; padding: 7px 10px;

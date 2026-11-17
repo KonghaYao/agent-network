@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -166,10 +167,10 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
       className="new-agent-card"
       footer={
         <div className="row modal-actions">
-          <button id="new-agent-close" type="button" onClick={() => close(false)} disabled={isSubmitting}>
+          <Button id="new-agent-close" type="button" onClick={() => close(false)} disabled={isSubmitting}>
             关闭
-          </button>
-          <button
+          </Button>
+          <Button
             className="primary"
             id="new-agent-create"
             type="submit"
@@ -177,7 +178,7 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
             disabled={isSubmitting || created !== null}
           >
             {isSubmitting ? '创建中…' : created ? '已创建' : '创建'}
-          </button>
+          </Button>
         </div>
       }
     >
@@ -209,14 +210,14 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
               <span>MCP URL</span>
               <input id="new-agent-url" type="text" readOnly value={created.mcp_url} />
             </label>
-            <button
+            <Button
               className="new-agent-copy"
               id="new-agent-copy"
               type="button"
               onClick={() => void copy('url')}
             >
               {copied === 'url' ? '已复制' : '复制 MCP URL'}
-            </button>
+            </Button>
             <div className="new-agent-prompt">
               <label className="field">
                 <span>提示词</span>
@@ -230,14 +231,14 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
                   value={prompt}
                 />
               </label>
-              <button
+              <Button
                 className="new-agent-copy"
                 id="new-agent-prompt-copy"
                 type="button"
                 onClick={() => void copy('prompt')}
               >
                 {copied === 'prompt' ? '已复制' : '复制提示词'}
-              </button>
+              </Button>
             </div>
           </div>
         ) : null}

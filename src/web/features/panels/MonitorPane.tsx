@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useEffect, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
@@ -88,7 +89,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
           {...register('url')}
         />
         <div className="monitor-actions">
-          <button
+          <Button
             className="monitor-icon primary"
             id="monitor-save"
             type="submit"
@@ -97,8 +98,8 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
             disabled={monitor.busy}
           >
             保存
-          </button>
-          <button
+          </Button>
+          <Button
             className="monitor-icon"
             id="monitor-clear"
             type="button"
@@ -108,7 +109,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
             onClick={() => void clear()}
           >
             清除
-          </button>
+          </Button>
           <a
             className="monitor-icon monitor-external"
             id="monitor-external"
@@ -124,7 +125,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
           >
             外链
           </a>
-          <button
+          <Button
             className="monitor-icon"
             id="monitor-refresh"
             type="button"
@@ -134,8 +135,8 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
             onClick={() => void monitor.refresh()}
           >
             刷新
-          </button>
-          <button
+          </Button>
+          <Button
             className="monitor-icon monitor-close"
             id="monitor-close"
             type="button"
@@ -144,7 +145,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
             onClick={onClose}
           >
             关闭
-          </button>
+          </Button>
         </div>
       </form>
       {formState.errors.url ? (
@@ -158,9 +159,9 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
       {monitor.error ? (
         <div id="monitor-error" className="monitor-error" role="alert">
           <p id="monitor-error-text">{monitor.error}</p>
-          <button id="monitor-retry" type="button" onClick={() => void monitor.refresh()}>
+          <Button id="monitor-retry" type="button" onClick={() => void monitor.refresh()}>
             重试
-          </button>
+          </Button>
         </div>
       ) : null}
       {mixed ? (

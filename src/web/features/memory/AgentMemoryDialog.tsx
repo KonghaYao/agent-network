@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { lazy, Suspense, useEffect, useMemo, useRef } from 'react';
 
@@ -86,7 +87,7 @@ export function AgentMemoryDialog({
               </span>
               <span className="memory-badge subtle">后端原始记忆</span>
             </div>
-            <button
+            <Button
               type="button"
               className="agent-memory-close"
               id="agent-memory-close"
@@ -95,7 +96,7 @@ export function AgentMemoryDialog({
               onClick={onClose}
             >
               ×
-            </button>
+            </Button>
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden" id="agent-memory-content">

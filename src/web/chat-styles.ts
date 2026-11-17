@@ -7,24 +7,23 @@ const GROUP_COLOR_FALLBACK = GROUP_COLORS[0]!.hex;
 /**
  * 应用页（会话列表 + 聊天区）的全部内联样式。
  *
- * 视觉基线是微信桌面端：浅灰页面、白色气泡、自己为 `#95ec69` 绿气泡、
- * 会话项 64px、消息头像 36px。颜色集中为 CSS 变量，暗色模式只换变量。
+ * 保留既有会话布局；颜色从 Lenso 语义变量读取，暗色模式跟随主题。
  */
 export const APP_STYLE = `
   :root {
-    --wx-green: #07c160;
-    --wx-green-strong: #06ad56;
-    --wx-bg: #ededed;
-    --wx-sidebar: #f7f7f7;
-    --wx-panel: #ffffff;
-    --wx-line: #e5e5e5;
-    --wx-text: #1a1a1a;
-    --wx-muted: #999999;
-    --wx-hover: #ececec;
-    --wx-active: #e3e3e3;
-    --wx-bubble: #ffffff;
-    --wx-mine: #95ec69;
-    --wx-mine-text: #111111;
+    --wx-green: var(--lenso-tint, #007aff);
+    --wx-green-strong: var(--lenso-control-tint-hover-fill, #0066d6);
+    --wx-bg: var(--lenso-background-primary, #f5f5f7);
+    --wx-sidebar: var(--lenso-background-secondary, #ffffff);
+    --wx-panel: var(--lenso-background-secondary, #ffffff);
+    --wx-line: var(--lenso-separator, #e5e5e5);
+    --wx-text: var(--lenso-label-primary, #1a1a1a);
+    --wx-muted: var(--lenso-label-secondary, #5c5c5c);
+    --wx-hover: var(--lenso-fill-tertiary, #ececec);
+    --wx-active: var(--lenso-fill-secondary, #e3e3e3);
+    --wx-bubble: var(--lenso-background-secondary, #ffffff);
+    --wx-mine: var(--lenso-control-tint-subtle-fill, #dceeff);
+    --wx-mine-text: var(--lenso-label-primary, #111111);
     --wx-unread: #fa5151;
     --wx-unread-muted: #8a8a8a;
     --wx-pref-label: #6b6b6b;
@@ -46,16 +45,16 @@ export const APP_STYLE = `
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --wx-bg: #191919;
-      --wx-sidebar: #2b2b2b;
-      --wx-panel: #2b2b2b;
-      --wx-line: #333333;
-      --wx-text: #e5e5e5;
-      --wx-muted: #8c8c8c;
-      --wx-hover: #333333;
-      --wx-active: #404040;
-      --wx-bubble: #2c2c2c;
-      --wx-search: #3a3a3a;
+      --wx-bg: var(--lenso-background-primary, #191919);
+      --wx-sidebar: var(--lenso-background-secondary, #2b2b2b);
+      --wx-panel: var(--lenso-background-secondary, #2b2b2b);
+      --wx-line: var(--lenso-separator, #333333);
+      --wx-text: var(--lenso-label-primary, #e5e5e5);
+      --wx-muted: var(--lenso-label-secondary, #b0b0b0);
+      --wx-hover: var(--lenso-fill-tertiary, #333333);
+      --wx-active: var(--lenso-fill-secondary, #404040);
+      --wx-bubble: var(--lenso-background-secondary, #2c2c2c);
+      --wx-search: var(--lenso-control-field-fill, #3a3a3a);
       --wx-unread-muted: #a6a6a6;
       --wx-pref-label: #c2c2c2;
       --wx-danger-text: #ff8a80;
@@ -71,12 +70,12 @@ export const APP_STYLE = `
     -webkit-font-smoothing: antialiased; }
   main { display: flex; min-height: 0; }
 
-  button { border-radius: 4px; border: 1px solid var(--wx-line); background: var(--wx-panel);
+  button:where(:not([data-lenso-slot])) { border-radius: 4px; border: 1px solid var(--wx-line); background: var(--wx-panel);
     color: var(--wx-text); padding: 7px 14px; font-size: 13px; cursor: pointer; }
-  button:hover { background: var(--wx-hover); }
-  button.primary { background: var(--wx-green); border-color: var(--wx-green); color: #fff; }
-  button.primary:hover { background: var(--wx-green-strong); border-color: var(--wx-green-strong); }
-  button:disabled { opacity: .55; cursor: not-allowed; }
+  button:where(:not([data-lenso-slot])):hover { background: var(--wx-hover); }
+  button:where(:not([data-lenso-slot])).primary { background: var(--wx-green); border-color: var(--wx-green); color: #fff; }
+  button:where(:not([data-lenso-slot])).primary:hover { background: var(--wx-green-strong); border-color: var(--wx-green-strong); }
+  button:where(:not([data-lenso-slot])):disabled { opacity: .55; cursor: not-allowed; }
   button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible,
   summary:focus-visible { outline: 2px solid var(--wx-green); outline-offset: 2px; }
 

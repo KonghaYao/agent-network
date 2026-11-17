@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useEffect, useState, type KeyboardEvent } from 'react';
 
 import { useContactRequestBadge } from '../../hooks/useContactRequests';
@@ -70,9 +71,9 @@ export function ContactRequestsDialog({
       className="contact-modal-card"
       footer={
         <div className="row modal-actions">
-          <button id="contact-modal-close" type="button" onClick={() => onOpenChange(false)}>
+          <Button id="contact-modal-close" type="button" onClick={() => onOpenChange(false)}>
             关闭
-          </button>
+          </Button>
         </div>
       }
     >
@@ -86,7 +87,7 @@ export function ContactRequestsDialog({
         {TABS.map((entry) => {
           const selected = tab === entry.value;
           return (
-            <button
+            <Button
               key={entry.value}
               id={entry.id}
               type="button"
@@ -104,7 +105,7 @@ export function ContactRequestsDialog({
                   {badge.hasMore ? '+' : ''}
                 </span>
               ) : null}
-            </button>
+            </Button>
           );
         })}
       </div>

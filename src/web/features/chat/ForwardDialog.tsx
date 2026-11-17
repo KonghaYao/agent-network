@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useEffect, useMemo, useState } from 'react';
 
 import { useRooms } from '../../hooks/useRooms';
@@ -121,10 +122,10 @@ export function ForwardDialog({
       className="forward-card"
       footer={
         <div className="row modal-actions">
-          <button id="forward-cancel" type="button" disabled={busy} onClick={() => onOpenChange(false)}>
+          <Button id="forward-cancel" type="button" disabled={busy} onClick={() => onOpenChange(false)}>
             取消
-          </button>
-          <button
+          </Button>
+          <Button
             id="forward-send"
             className="primary"
             type="button"
@@ -132,7 +133,7 @@ export function ForwardDialog({
             onClick={() => void send()}
           >
             {busy ? '正在转发…' : '确认转发'}
-          </button>
+          </Button>
         </div>
       }
     >
@@ -152,7 +153,7 @@ export function ForwardDialog({
       </label>
       <div id="forward-rooms" className="forward-rooms" role="group" aria-label="转发目标">
         {targets.map((room) => (
-          <button
+          <Button
             key={room.room_id}
             type="button"
             aria-pressed={selected === room.room_id}
@@ -163,11 +164,11 @@ export function ForwardDialog({
             }}
           >
             {room.kind === 'group' ? '群聊' : '单聊'} · {room.name}
-          </button>
+          </Button>
         ))}
         {targets.length === 0 ? <p className="list-hint">没有匹配的会话</p> : null}
         {rooms.hasMore ? (
-          <button
+          <Button
             id="forward-more"
             className="list-retry"
             type="button"
@@ -175,7 +176,7 @@ export function ForwardDialog({
             onClick={() => void rooms.loadMore()}
           >
             {rooms.loadingMore ? '正在加载…' : '加载更多会话'}
-          </button>
+          </Button>
         ) : null}
       </div>
       <p id="forward-status" className="contact-search-status" role="status">

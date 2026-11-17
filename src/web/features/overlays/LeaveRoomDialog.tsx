@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -119,7 +120,7 @@ export function LeaveRoomDialog({
             <AlertDialogPrimitive.Cancel id="leave-cancel" className="spa-dialog-button">
               取消
             </AlertDialogPrimitive.Cancel>
-            <button
+            <Button
               id="leave-confirm"
               type="button"
               className="spa-dialog-button danger"
@@ -127,7 +128,7 @@ export function LeaveRoomDialog({
               onClick={() => void leave()}
             >
               {busy ? '正在退出…' : '退出群聊'}
-            </button>
+            </Button>
           </div>
         </AlertDialogPrimitive.Content>
       </AlertDialogPrimitive.Portal>

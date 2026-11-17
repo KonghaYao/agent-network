@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
@@ -485,7 +486,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                   {me ? `${me.name} · ${me.kind === 'agent' ? 'Agent' : '人类'}` : '正在读取身份…'}
                 </p>
               </div>
-              <button
+              <Button
                 id="memory-refresh"
                 className="memory-icon-btn"
                 type="button"
@@ -494,8 +495,8 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                 onClick={() => void load()}
               >
                 ↻
-              </button>
-              <button
+              </Button>
+              <Button
                 id="memory-close"
                 className="memory-icon-btn"
                 type="button"
@@ -504,7 +505,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                 onClick={() => onOpenChange(false)}
               >
                 ×
-              </button>
+              </Button>
             </header>
             <p id="memory-status" className="memory-state" role="status" aria-live="polite">
               {loading ? '正在读取身份与 Memory 状态…' : error}
@@ -561,7 +562,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                   <>
                     <nav id="memory-tabs" className="memory-tabs" aria-label="Memory 视图">
                       {(['recall', 'context', 'experience', 'host', 'governance'] as const).map((name) => (
-                        <button
+                        <Button
                           key={name}
                           className="memory-tab"
                           type="button"
@@ -578,7 +579,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                                 : name === 'host'
                                   ? '宿主'
                                   : '治理'}
-                        </button>
+                        </Button>
                       ))}
                     </nav>
                     <div id="memory-panels" className="memory-panels">
@@ -619,9 +620,9 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                               <option value="gateway_observed_submitted">网关观察已提交</option>
                             </select>
                           </label>
-                          <button className="primary memory-submit" type="submit">
+                          <Button className="primary memory-submit" type="submit">
                             召回
-                          </button>
+                          </Button>
                         </form>
                         <p id="memory-recall-status" className="memory-state" role="status">
                           {recallStatus}
@@ -663,9 +664,9 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                               <option value="bound">bound</option>
                             </select>
                           </label>
-                          <button className="memory-small-btn" type="button" onClick={() => void loadContexts(true)}>
+                          <Button className="memory-small-btn" type="button" onClick={() => void loadContexts(true)}>
                             刷新
-                          </button>
+                          </Button>
                         </div>
                         <p id="memory-context-status" className="memory-state" role="status">
                           {contextStatus}
@@ -673,7 +674,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                         <div id="memory-context-list" className="memory-list" role="list">
                           {contexts.map((item, index) => (
                             <div className="memory-list-item" role="listitem" key={text(item.context_id, String(index))}>
-                              <button
+                              <Button
                                 className="memory-row"
                                 type="button"
                                 onClick={() => void openContext(text(item.context_id))}
@@ -685,19 +686,19 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                                 <span className="memory-row-meta">
                                   有效性 {text(item.validity, '未知')} · 创建 {time(item.created_at)}
                                 </span>
-                              </button>
+                              </Button>
                             </div>
                           ))}
                         </div>
                         {contextMore ? (
-                          <button
+                          <Button
                             id="memory-context-more"
                             className="memory-page-btn"
                             type="button"
                             onClick={() => void loadContexts(false)}
                           >
                             加载更多
-                          </button>
+                          </Button>
                         ) : null}
                         {contextDetail ? (
                           <div id="memory-context-detail" className="memory-detail">
@@ -721,14 +722,14 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 
                       <section id="memory-panel-experience" className="memory-panel" hidden={tab !== 'experience'}>
                         <div className="memory-toolbar">
-                          <button
+                          <Button
                             id="memory-experience-refresh"
                             className="memory-small-btn"
                             type="button"
                             onClick={() => void loadExperiences(true)}
                           >
                             刷新
-                          </button>
+                          </Button>
                         </div>
                         <p id="memory-experience-status" className="memory-state" role="status">
                           {experienceStatus}
@@ -736,7 +737,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                         <div id="memory-experience-list" className="memory-list" role="list">
                           {experiences.map((item, index) => (
                             <div className="memory-list-item" role="listitem" key={text(item.experience_id, String(index))}>
-                              <button
+                              <Button
                                 className="memory-row"
                                 type="button"
                                 onClick={() => void openExperience(text(item.experience_id))}
@@ -747,19 +748,19 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                                 <span className="memory-row-meta">
                                   {text(item.origin_kind, '来源未知')} · {time(item.created_at)}
                                 </span>
-                              </button>
+                              </Button>
                             </div>
                           ))}
                         </div>
                         {experienceMore ? (
-                          <button
+                          <Button
                             id="memory-experience-more"
                             className="memory-page-btn"
                             type="button"
                             onClick={() => void loadExperiences(false)}
                           >
                             加载更多
-                          </button>
+                          </Button>
                         ) : null}
                         {experienceDetail ? (
                           <div id="memory-experience-detail" className="memory-detail">
@@ -795,9 +796,9 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                               onChange={(event) => setManifestId(event.target.value)}
                             />
                           </label>
-                          <button className="primary memory-submit" type="submit">
+                          <Button className="primary memory-submit" type="submit">
                             查询清单状态
-                          </button>
+                          </Button>
                         </form>
                         <p id="memory-manifest-status" className="memory-state" role="status">
                           {manifestStatus}
@@ -841,12 +842,12 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                                 无法确认后端副本清除时会保持“清除状态未知”。
                               </p>
                               <div className="memory-confirm-actions">
-                                <button className="memory-action" type="button" onClick={() => setForgetTarget(null)}>
+                                <Button className="memory-action" type="button" onClick={() => setForgetTarget(null)}>
                                   取消
-                                </button>
-                                <button className="memory-action danger" type="button" onClick={() => void confirmForget()}>
+                                </Button>
+                                <Button className="memory-action danger" type="button" onClick={() => void confirmForget()}>
                                   确认遗忘
-                                </button>
+                                </Button>
                               </div>
                             </div>
                           ) : null}
@@ -854,9 +855,9 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                         <section className="memory-block" aria-labelledby="memory-curated-title">
                           <div className="memory-block-head">
                             <h3 id="memory-curated-title">人工记忆</h3>
-                            <button className="memory-small-btn" type="button" onClick={() => void loadGovernance()}>
+                            <Button className="memory-small-btn" type="button" onClick={() => void loadGovernance()}>
                               刷新
-                            </button>
+                            </Button>
                           </div>
                           <p className="memory-note">人工保存只代表明确写入，不是群消息阅读证明。</p>
                           <div id="memory-curated-list" className="memory-list" role="list">
@@ -870,7 +871,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                                   </p>
                                   <p className="memory-row-preview">{excerpt(item.content)}</p>
                                   <div className="memory-row-actions">
-                                    <button
+                                    <Button
                                       className="memory-action danger"
                                       type="button"
                                       onClick={() =>
@@ -883,7 +884,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                                       }
                                     >
                                       遗忘/移除
-                                    </button>
+                                    </Button>
                                   </div>
                                 </div>
                               </div>
@@ -914,7 +915,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                                   </p>
                                   {item.available === true ? (
                                     <div className="memory-row-actions">
-                                      <button
+                                      <Button
                                         className="memory-action danger"
                                         type="button"
                                         onClick={() =>
@@ -927,7 +928,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                                         }
                                       >
                                         遗忘/移除来源
-                                      </button>
+                                      </Button>
                                     </div>
                                   ) : null}
                                 </div>
@@ -935,14 +936,14 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                             ))}
                           </div>
                           {sourceMore ? (
-                            <button
+                            <Button
                               id="memory-source-more"
                               className="memory-page-btn"
                               type="button"
                               onClick={() => void loadGovernance(true)}
                             >
                               加载更多来源
-                            </button>
+                            </Button>
                           ) : null}
                         </section>
                         {operation ? (

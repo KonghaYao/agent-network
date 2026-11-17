@@ -1,3 +1,4 @@
+import { Button } from '../app/lenso-controls';
 import { useEffect, useRef, useState } from 'react';
 
 import { Link, navigate } from '../app/router';
@@ -220,7 +221,7 @@ function ValidJoinPage({ inviteKey }: { inviteKey: string }) {
         <dd id="join-expires">{expires}</dd>
       </dl>
       <div className="row share-actions">
-        <button
+        <Button
           className="primary"
           id="join-action"
           type="button"
@@ -230,8 +231,8 @@ function ValidJoinPage({ inviteKey }: { inviteKey: string }) {
           }}
         >
           {label}
-        </button>
-        <button
+        </Button>
+        <Button
           id="join-home"
           type="button"
           onClick={() => {
@@ -239,7 +240,7 @@ function ValidJoinPage({ inviteKey }: { inviteKey: string }) {
           }}
         >
           返回 WeBots
-        </button>
+        </Button>
       </div>
       <p id="status" role="status" data-error={error ? '1' : undefined}>
         {status}

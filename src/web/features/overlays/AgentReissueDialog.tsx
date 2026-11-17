@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useState } from 'react';
 
 import { copyText } from '../../lib/files';
@@ -51,9 +52,9 @@ export function AgentReissueDialog({
       className="agent-reissue-card"
       footer={
         <div className="row modal-actions">
-          <button id="agent-reissue-close" type="button" onClick={() => onOpenChange(false)}>
+          <Button id="agent-reissue-close" type="button" onClick={() => onOpenChange(false)}>
             关闭
-          </button>
+          </Button>
         </div>
       }
     >
@@ -72,9 +73,9 @@ export function AgentReissueDialog({
         />
       </label>
       <div className="row">
-        <button id="room-menu-reissue-copy-prompt" className="primary" type="button" onClick={() => void copy()}>
+        <Button id="room-menu-reissue-copy-prompt" className="primary" type="button" onClick={() => void copy()}>
           {copied ? '已复制' : '复制提示词'}
-        </button>
+        </Button>
       </div>
       <p id="room-menu-reissue-status" className="contact-link-status" role="status">
         {status}

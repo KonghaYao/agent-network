@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
 import { useRef, type ReactNode } from 'react';
 
@@ -36,7 +37,7 @@ export function AgentAvatarMenu({
   return (
     <ContextMenuPrimitive.Root>
       <ContextMenuPrimitive.Trigger asChild>
-        <button
+        <Button
           ref={triggerRef}
           type="button"
           className={`memory-avatar-trigger${className ? ` ${className}` : ''}`}
@@ -45,7 +46,7 @@ export function AgentAvatarMenu({
           {...longPress}
         >
           {children}
-        </button>
+        </Button>
       </ContextMenuPrimitive.Trigger>
       <ContextMenuPrimitive.Portal container={portalContainer?.() ?? undefined}>
         <ContextMenuPrimitive.Content

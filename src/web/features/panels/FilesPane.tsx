@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 
@@ -248,7 +249,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
         <header className="files-head">
           <h2>文件</h2>
           <div className="files-head-actions">
-            <button
+            <Button
               className="primary files-upload"
               id="files-upload"
               type="button"
@@ -256,8 +257,8 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
               onClick={() => inputRef.current?.click()}
             >
               上传
-            </button>
-            <button
+            </Button>
+            <Button
               className="files-close"
               id="files-close"
               type="button"
@@ -266,7 +267,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
               onClick={onClose}
             >
               关闭
-            </button>
+            </Button>
           </div>
         </header>
         <input
@@ -324,21 +325,21 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
           {status}
         </p>
         {failedBind ? (
-          <button
+          <Button
             id="files-bind-retry"
             className="files-bind-retry"
             type="button"
             onClick={() => void retryBind()}
           >
             重试加入房间
-          </button>
+          </Button>
         ) : null}
         {files.error ? (
           <div id="files-error" className="files-error" role="alert">
             <p id="files-error-text">读取文件失败：{files.error}</p>
-            <button id="files-retry" type="button" onClick={() => void files.refresh()}>
+            <Button id="files-retry" type="button" onClick={() => void files.refresh()}>
               重试
-            </button>
+            </Button>
           </div>
         ) : null}
         <ul id="files-list" className="files-list" aria-label="文件列表">
@@ -375,13 +376,13 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
                       </div>
                     </div>
                     <div className="file-actions">
-                      <button className="file-action" type="button" onClick={() => setPreview(item)}>
+                      <Button className="file-action" type="button" onClick={() => setPreview(item)}>
                         预览
-                      </button>
+                      </Button>
                       {fileCopyUrl(item) ? (
-                        <button className="file-action" type="button" onClick={() => void copyLink(item)}>
+                        <Button className="file-action" type="button" onClick={() => void copyLink(item)}>
                           复制链接
-                        </button>
+                        </Button>
                       ) : null}
                       {download ? (
                         <a
@@ -395,14 +396,14 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
                         </a>
                       ) : null}
                       {item.can_delete === true && !readOnly ? (
-                        <button
+                        <Button
                           className={`file-action${deletePending === key ? ' danger' : ''}`}
                           type="button"
                           disabled={busyDelete !== null}
                           onClick={() => void requestDelete(item)}
                         >
                           {busyDelete === key ? '删除中…' : deletePending === key ? '确认删除' : '删除'}
-                        </button>
+                        </Button>
                       ) : null}
                     </div>
                   </li>
@@ -420,7 +421,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
           </p>
         ) : null}
         {files.hasMore ? (
-          <button
+          <Button
             id="files-more"
             className="files-more"
             type="button"
@@ -428,7 +429,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
             onClick={() => void files.loadMore()}
           >
             {files.loadingMore ? '加载中…' : '加载更多'}
-          </button>
+          </Button>
         ) : null}
       </aside>
       <FilePreviewDialog item={preview} onClose={() => setPreview(null)} />
@@ -508,9 +509,9 @@ function FilePreviewDialog({ item, onClose }: { item: RoomFileItem | null; onClo
                   {item ? fileMetaText(item) : ''}
                 </p>
               </div>
-              <button id="file-preview-close" type="button" aria-label="关闭预览" onClick={onClose}>
+              <Button id="file-preview-close" type="button" aria-label="关闭预览" onClick={onClose}>
                 关闭
-              </button>
+              </Button>
             </header>
             <div id="file-preview-body" className="file-preview-body">
               {!item ? null : kind === 'image' ? (
@@ -546,13 +547,13 @@ function FilePreviewDialog({ item, onClose }: { item: RoomFileItem | null; onClo
                   ) : null}
                   {markdownToggleVisible ? (
                     <div className="file-preview-md-toolbar">
-                      <button
+                      <Button
                         className="file-preview-md-toggle"
                         type="button"
                         onClick={() => setShowMarkdownSource((value) => !value)}
                       >
                         {showMarkdownSource ? '渲染视图' : '查看原文'}
-                      </button>
+                      </Button>
                     </div>
                   ) : null}
                   {!markdownToggleVisible || showMarkdownSource ? (

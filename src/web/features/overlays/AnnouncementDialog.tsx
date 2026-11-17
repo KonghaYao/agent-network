@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -71,10 +72,10 @@ export function AnnouncementDialog({
       contentId="announcement-modal"
       footer={
         <div className="row modal-actions">
-          <button id="announcement-cancel" type="button" onClick={() => onOpenChange(false)}>
+          <Button id="announcement-cancel" type="button" onClick={() => onOpenChange(false)}>
             取消
-          </button>
-          <button
+          </Button>
+          <Button
             id="announcement-save"
             type="submit"
             form="announcement-form"
@@ -82,7 +83,7 @@ export function AnnouncementDialog({
             disabled={isSubmitting}
           >
             {isSubmitting ? '正在保存…' : '保存'}
-          </button>
+          </Button>
         </div>
       }
     >

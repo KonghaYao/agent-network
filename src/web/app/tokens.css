@@ -1,18 +1,23 @@
 :root {
   color-scheme: light dark;
-  --spa-bg: #ededed;
-  --spa-surface: #ffffff;
-  --spa-text: #1a1a1a;
-  --spa-muted: #666666;
-  --spa-accent: #07c160;
+  --lenso-tint: #0759a9;
+  --lenso-link: #0759a9;
+  --spa-bg: var(--lenso-background-primary, #f5f5f7);
+  --spa-surface: var(--lenso-background-secondary, #ffffff);
+  --spa-text: var(--lenso-label-primary, #1a1a1a);
+  --spa-muted: var(--lenso-label-secondary, #666666);
+  --spa-accent: var(--lenso-tint, #007aff);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --spa-bg: #191919;
-    --spa-surface: #242424;
-    --spa-text: #e5e5e5;
-    --spa-muted: #a3a3a3;
+    --lenso-background-primary: #191919;
+    --lenso-background-secondary: #242424;
+    --lenso-link: #85c3ff;
+    --spa-bg: var(--lenso-background-primary, #191919);
+    --spa-surface: var(--lenso-background-secondary, #242424);
+    --spa-text: var(--lenso-label-primary, #e5e5e5);
+    --spa-muted: var(--lenso-label-secondary, #a3a3a3);
   }
 }
 

@@ -87,6 +87,14 @@
   color: #fff;
 }
 
+.spa-dialog-content button[data-lenso-slot='button']:not(.primary):not(.danger) {
+  color: var(--wx-text) !important;
+}
+
+.contact-segments button[data-lenso-slot='button'] {
+  color: var(--wx-text) !important;
+}
+
 .spa-dialog-button.primary:hover,
 .spa-dialog-content button.primary:hover {
   background: #056b36;
@@ -465,20 +473,20 @@
  * 移动端全屏仍由 FILES_STYLE/MONITOR_STYLE 控制。
  */
 @media (min-width: 1200px) {
-  body.page-room #root > main > .files-pane,
-  body.page-room #root > main > .monitor-pane {
+  body.page-room #root > .lenso-root > main > .files-pane,
+  body.page-room #root > .lenso-root > main > .monitor-pane {
     flex: 0 0 360px;
     width: 360px;
     min-width: 280px;
     max-width: 440px;
   }
 
-  body.page-room #root > main > .monitor-pane {
+  body.page-room #root > .lenso-root > main > .monitor-pane {
     flex-basis: 420px;
     width: 420px;
   }
 
-  body.page-room #root > main > .chat-pane {
+  body.page-room #root > .lenso-root > main > .chat-pane {
     flex: 1 1 auto;
     min-width: 320px;
   }
@@ -566,13 +574,13 @@ body #root {
   }
 }
 
-body #root button.primary {
+body #root button.primary:not([data-lenso-slot]) {
   border-color: #067d3f;
   background: #067d3f;
   color: #fff;
 }
 
-body #root button.primary:hover {
+body #root button.primary:not([data-lenso-slot]):hover {
   border-color: #056b36;
   background: #056b36;
 }
@@ -644,6 +652,10 @@ body #root button.primary:hover {
 
 .archive-popover-status[data-error='1'] {
   color: var(--wx-danger);
+}
+
+.spa-dialog-content .pairing-status[data-success='1'] {
+  color: #116633;
 }
 
 /* 状态色在暗色面板上保持 AA；亮色沿用 legacy 文案色。 */

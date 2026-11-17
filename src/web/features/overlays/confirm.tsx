@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
 import { useEffect, useSyncExternalStore } from 'react';
 
@@ -110,14 +111,14 @@ export function ConfirmHost() {
               onOpenChange(false)，可能抢先把 Promise 结算成 false。这里
               显式结算 true，再由 onOpenChange 做收尾（pending 已空）。
             */}
-            <button
+            <Button
               id="confirm-dialog-ok"
               type="button"
               className={`spa-dialog-button primary${options?.danger ? ' danger' : ''}`}
               onClick={() => settle(true)}
             >
               {options?.confirmText ?? '确定'}
-            </button>
+            </Button>
           </div>
         </AlertDialogPrimitive.Content>
       </AlertDialogPrimitive.Portal>

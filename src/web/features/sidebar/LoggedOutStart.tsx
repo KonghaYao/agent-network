@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 
@@ -32,7 +33,7 @@ export function LoggedOutStart() {
 
   return (
     <>
-      <button
+      <Button
         id="logged-out-start"
         className="list-retry"
         type="button"
@@ -43,7 +44,7 @@ export function LoggedOutStart() {
         }}
       >
         {busy ? '正在创建新身份…' : '创建新身份并继续'}
-      </button>
+      </Button>
       {error ? (
         <p id="logged-out-error" className="logged-out-error" role="alert">
           {error}

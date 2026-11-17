@@ -1,6 +1,7 @@
 import { StrictMode, useEffect } from 'react';
 import { createRoot, hydrateRoot } from 'react-dom/client';
 
+import '@lenso/tokens/styles.css';
 import './tokens.css';
 import './pages.css';
 import './app.css';

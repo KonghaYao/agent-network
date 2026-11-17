@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useContacts } from '../../hooks/useContacts';
@@ -216,9 +217,9 @@ export function TransferDialog({
       className="transfer-card"
       footer={
         <div className="row modal-actions">
-          <button id="transfer-close" type="button" onClick={() => onOpenChange(false)}>
+          <Button id="transfer-close" type="button" onClick={() => onOpenChange(false)}>
             关闭
-          </button>
+          </Button>
         </div>
       }
     >
@@ -278,7 +279,7 @@ export function TransferDialog({
                 接任者必须是有有效凭据的真人；接受前管理权不变。
               </p>
               <div className="transfer-actions">
-                <button
+                <Button
                   className="primary"
                   id="transfer-propose"
                   type="button"
@@ -286,17 +287,17 @@ export function TransferDialog({
                   onClick={() => void propose()}
                 >
                   {busy ? '正在发起…' : '发起交接'}
-                </button>
+                </Button>
               </div>
               {contacts.hasMore ? (
-                <button
+                <Button
                   className="list-retry"
                   type="button"
                   disabled={contacts.loadingMore}
                   onClick={() => void contacts.loadMore()}
                 >
                   {contacts.loadingMore ? '正在加载…' : '加载更多好友'}
-                </button>
+                </Button>
               ) : null}
             </div>
           ) : null}
@@ -314,7 +315,7 @@ export function TransferDialog({
               </p>
               <div className="transfer-actions">
                 {pending.can_accept ? (
-                  <button
+                  <Button
                     className="primary"
                     id="transfer-accept"
                     type="button"
@@ -322,20 +323,20 @@ export function TransferDialog({
                     onClick={() => void respond('accept')}
                   >
                     接受
-                  </button>
+                  </Button>
                 ) : null}
                 {pending.can_reject ? (
-                  <button
+                  <Button
                     id="transfer-reject"
                     type="button"
                     disabled={busy}
                     onClick={() => void respond('reject')}
                   >
                     拒绝
-                  </button>
+                  </Button>
                 ) : null}
                 {pending.can_cancel ? (
-                  <button
+                  <Button
                     className="danger"
                     id="transfer-cancel"
                     type="button"
@@ -343,7 +344,7 @@ export function TransferDialog({
                     onClick={() => void cancel()}
                   >
                     取消交接
-                  </button>
+                  </Button>
                 ) : null}
               </div>
             </div>
@@ -379,7 +380,7 @@ export function TransferDialog({
                   value={accepted.mcp_url ?? ''}
                 />
               </label>
-              <button
+              <Button
                 className="new-agent-copy"
                 id="transfer-token-copy"
                 type="button"
@@ -388,7 +389,7 @@ export function TransferDialog({
                 }}
               >
                 复制 MCP URL
-              </button>
+              </Button>
             </div>
           ) : null}
         </div>

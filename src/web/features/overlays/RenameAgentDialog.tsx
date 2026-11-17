@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useEffect, useState, type FormEvent } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -71,12 +72,12 @@ export function RenameAgentDialog({
       contentId="rename-modal"
       footer={
         <div className="row modal-actions">
-          <button id="rename-cancel" type="button" disabled={busy} onClick={() => onOpenChange(false)}>
+          <Button id="rename-cancel" type="button" disabled={busy} onClick={() => onOpenChange(false)}>
             取消
-          </button>
-          <button id="rename-save" className="primary" type="submit" form="rename-form" disabled={busy}>
+          </Button>
+          <Button id="rename-save" className="primary" type="submit" form="rename-form" disabled={busy}>
             {busy ? '正在保存…' : '保存'}
-          </button>
+          </Button>
         </div>
       }
     >

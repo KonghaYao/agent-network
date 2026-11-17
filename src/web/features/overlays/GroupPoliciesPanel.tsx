@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 
@@ -209,9 +210,9 @@ export function GroupPoliciesPanel({
           onChange={(value) => setForm((current) => ({ ...current, member_mention_all: value }))}
         />
         <div className="row">
-          <button id="group-policy-save" className="primary" type="submit" disabled={busy}>
+          <Button id="group-policy-save" className="primary" type="submit" disabled={busy}>
             {busy ? '正在保存…' : '保存策略'}
-          </button>
+          </Button>
         </div>
       </form>
       <p

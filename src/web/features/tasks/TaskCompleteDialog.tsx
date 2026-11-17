@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 
@@ -122,7 +123,7 @@ export function TaskCompleteDialog({
             >
               取消
             </AlertDialogPrimitive.Cancel>
-            <button
+            <Button
               id="task-complete-confirm"
               type="button"
               className="spa-dialog-button primary"
@@ -131,7 +132,7 @@ export function TaskCompleteDialog({
               onClick={() => void submit()}
             >
               {busy ? '完成中…' : error ? '重试' : '确认完成'}
-            </button>
+            </Button>
           </div>
         </AlertDialogPrimitive.Content>
       </AlertDialogPrimitive.Portal>

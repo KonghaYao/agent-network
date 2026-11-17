@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 
 /**
@@ -18,7 +19,7 @@ export function AnnouncementPopover({
   return (
     <PopoverPrimitive.Root>
       <PopoverPrimitive.Trigger asChild>
-        <button
+        <Button
           id="room-announcement-info"
           className="icon-btn announcement-dot"
           type="button"
@@ -26,7 +27,7 @@ export function AnnouncementPopover({
           title="查看群公告"
         >
           !
-        </button>
+        </Button>
       </PopoverPrimitive.Trigger>
       <PopoverPrimitive.Portal>
         <PopoverPrimitive.Content
@@ -41,13 +42,13 @@ export function AnnouncementPopover({
           <div className="row">
             {canEdit ? (
               <PopoverPrimitive.Close asChild>
-                <button id="room-announcement-edit" type="button" className="primary" onClick={onEdit}>
+                <Button id="room-announcement-edit" type="button" className="primary" onClick={onEdit}>
                   编辑公告
-                </button>
+                </Button>
               </PopoverPrimitive.Close>
             ) : (
               <PopoverPrimitive.Close asChild>
-                <button type="button">关闭</button>
+                <Button type="button">关闭</Button>
               </PopoverPrimitive.Close>
             )}
           </div>

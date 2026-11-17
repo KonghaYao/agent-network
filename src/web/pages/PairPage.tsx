@@ -1,3 +1,4 @@
+import { Button } from '../app/lenso-controls';
 import { useEffect, useRef, useState } from 'react';
 
 import { callTool, type McpError } from '../lib/mcp-client';
@@ -317,7 +318,7 @@ export function PairPage() {
         挑战 5 分钟内有效，用后即失效。
       </p>
       <div className="row share-actions">
-        <button
+        <Button
           className="primary"
           id="pair-start"
           type="button"
@@ -327,15 +328,15 @@ export function PairPage() {
           }}
         >
           开始配对
-        </button>
-        <button
+        </Button>
+        <Button
           id="pair-switch"
           type="button"
           hidden={!switchVisible}
           onClick={switchIdentity}
         >
           切换到此身份并进入
-        </button>
+        </Button>
       </div>
       <dl className="pair-identities">
         <dt>当前身份</dt>

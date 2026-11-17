@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -235,7 +236,7 @@ export function Timeline({
       >
         {showPager ? (
           <li id="history-pager" className="history-pager">
-            <button
+            <Button
               id="older"
               type="button"
               aria-busy={olderLoading ? 'true' : 'false'}
@@ -243,7 +244,7 @@ export function Timeline({
               onClick={() => void loadOlder()}
             >
               加载更早
-            </button>
+            </Button>
             <span id="older-status" className="history-status" role="status" aria-live="polite">
               {olderError ?? (olderEnded && items.length > 0 ? '已经到最早的消息了' : '')}
             </span>
@@ -269,29 +270,29 @@ export function Timeline({
                 {state} · {outboxPreview(item.body)}
               </span>
               {item.status === 'failed' && item.retryable ? (
-                <button
+                <Button
                   className="outbox-retry"
                   type="button"
                   onClick={() => onRetryOutbox(item.client_message_id)}
                 >
                   重试
-                </button>
+                </Button>
               ) : null}
               {item.status === 'failed' ? (
-                <button
+                <Button
                   className="outbox-dismiss"
                   type="button"
                   onClick={() => onRemoveOutbox(item.client_message_id)}
                 >
                   移除
-                </button>
+                </Button>
               ) : null}
             </li>
           );
         })}
         <li id="messages-end" className="messages-end" aria-hidden="true" />
       </ol>
-      <button
+      <Button
         id="jump-latest"
         className="jump-latest"
         type="button"
@@ -302,7 +303,7 @@ export function Timeline({
         }}
       >
         <span id="jump-latest-label">{hasNew ? '有新消息 · 回到最新' : '回到最新'}</span>
-      </button>
+      </Button>
     </div>
   );
 }

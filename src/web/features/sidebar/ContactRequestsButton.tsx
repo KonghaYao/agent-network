@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useContactRequestBadge } from '../../hooks/useContactRequests';
 
 /**
@@ -13,7 +14,7 @@ export function ContactRequestsButton({ onOpen }: { onOpen: () => void }) {
       ? `添加好友（${badge.count}${badge.hasMore ? '+' : ''} 条待处理申请）`
       : '添加好友';
   return (
-    <button
+    <Button
       className="icon-btn"
       id="contact-requests"
       type="button"
@@ -30,6 +31,6 @@ export function ContactRequestsButton({ onOpen }: { onOpen: () => void }) {
         {badge.count}
         {badge.hasMore ? '+' : ''}
       </span>
-    </button>
+    </Button>
   );
 }

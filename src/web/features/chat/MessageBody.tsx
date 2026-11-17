@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { Fragment, useMemo, useState } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -65,17 +66,17 @@ function Base64Block({ text }: { text: string }) {
       <div className="msg-base64-head">
         <span className="msg-base64-title">{base64SizeLabel(text)}</span>
         <span className="msg-base64-actions">
-          <button
+          <Button
             type="button"
             className="msg-base64-toggle"
             aria-expanded={expanded}
             onClick={() => setExpanded((value) => !value)}
           >
             {expanded ? '收起' : '查看'}
-          </button>
-          <button type="button" className="msg-base64-copy" onClick={() => void handleCopy()}>
+          </Button>
+          <Button type="button" className="msg-base64-copy" onClick={() => void handleCopy()}>
             复制
-          </button>
+          </Button>
           <span className="msg-base64-status" role="status" aria-live="polite">
             {copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : ''}
           </span>

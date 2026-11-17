@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import type { RoomView } from '../../lib/chat';
@@ -248,9 +249,9 @@ export function GroupInvitesPanel({
                 onChange={(event) => setUses(Number(event.target.value))}
               />
             </label>
-            <button id="members-invite-create" className="primary" type="submit" disabled={busy}>
+            <Button id="members-invite-create" className="primary" type="submit" disabled={busy}>
               {busy ? '正在创建…' : '创建邀请链接'}
-            </button>
+            </Button>
           </form>
           {shareUrl ? (
             <div id="members-invite-share" className="members-invite-share">
@@ -258,16 +259,16 @@ export function GroupInvitesPanel({
                 {shareUrl}
               </p>
               <div className="row">
-                <button id="members-invite-copy" type="button" onClick={() => void copy()}>
+                <Button id="members-invite-copy" type="button" onClick={() => void copy()}>
                   复制链接
-                </button>
-                <button
+                </Button>
+                <Button
                   id="members-invite-dismiss"
                   type="button"
                   onClick={() => setShareUrl(null)}
                 >
                   收起
-                </button>
+                </Button>
               </div>
             </div>
           ) : null}
@@ -280,7 +281,7 @@ export function GroupInvitesPanel({
                   <span>
                     {item.used_count}/{item.max_uses} 次 · 有效至 {expiry(item.expires_at)}
                   </span>
-                  <button
+                  <Button
                     type="button"
                     className="danger"
                     disabled={busy}
@@ -288,7 +289,7 @@ export function GroupInvitesPanel({
                     onClick={() => void revoke(item)}
                   >
                     撤销
-                  </button>
+                  </Button>
                 </li>
               ))
             )}
@@ -316,7 +317,7 @@ export function GroupInvitesPanel({
                     {item.message ? `：${item.message}` : ''}
                   </span>
                   <span className="row">
-                    <button
+                    <Button
                       type="button"
                       className="primary"
                       disabled={busy}
@@ -324,8 +325,8 @@ export function GroupInvitesPanel({
                       onClick={() => void respond(item, 'approve')}
                     >
                       批准
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
                       className="danger"
                       disabled={busy}
@@ -333,7 +334,7 @@ export function GroupInvitesPanel({
                       onClick={() => void respond(item, 'reject')}
                     >
                       拒绝
-                    </button>
+                    </Button>
                   </span>
                 </li>
               ))
