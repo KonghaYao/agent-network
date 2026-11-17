@@ -3,14 +3,14 @@
    这里只保留遮罩、内容框、标题/徽章、关闭、说明、焦点和移动端全屏弹窗。 */
 
 .agent-memory-overlay {
-  z-index: 60;
+  z-index: var(--app-z-memory-overlay);
 }
 
 .agent-memory-dialog {
   position: fixed;
   top: 50%;
   left: 50%;
-  z-index: 61;
+  z-index: var(--app-z-memory-dialog);
   display: flex;
   flex-direction: column;
   width: min(1100px, calc(100vw - 48px));

@@ -27,7 +27,7 @@
 .spa-dialog-overlay {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--app-z-dialog-overlay);
   background: var(--lenso-scrim);
   animation: spa-fade-in 120ms ease-out;
 }
@@ -36,7 +36,7 @@
   position: fixed;
   top: 50%;
   left: 50%;
-  z-index: 41;
+  z-index: var(--app-z-dialog);
   transform: translate(-50%, -50%);
   width: min(440px, calc(100vw - 32px));
   max-height: min(82dvh, 680px);
@@ -123,7 +123,7 @@
 }
 
 .spa-popover {
-  z-index: 35;
+  z-index: var(--app-z-popover);
   width: min(320px, calc(100vw - 24px));
   padding: 12px;
   border: 1px solid var(--wx-line);
@@ -328,7 +328,7 @@
 
 .spa-split-sidebar {
   display: flex;
-  min-width: 280px;
+  min-width: var(--app-sidebar-min);
   min-height: 0;
   overflow: hidden;
 }
@@ -343,7 +343,7 @@
 .spa-split-main {
   display: flex;
   flex: 1 1 auto;
-  min-width: 320px;
+  min-width: var(--app-chat-min);
   min-height: 0;
 }
 
@@ -460,40 +460,40 @@
 
 /*
  * React Chat 桌面 ≥760px 与 Home 一样由侧栏 + 聊天区组成；右栏宽度按
- * 聊天区自身容器计算，不再沿用 `100% - 300px` 的旧公式。平板抽屉与
- * 移动端全屏仍由 FILES_STYLE/MONITOR_STYLE 控制。
+ * 聊天区自身容器计算，宽度来自 `--app-pane-*` / `--app-monitor-width`。
+ * 平板抽屉与移动端全屏仍由 FILES_STYLE/MONITOR_STYLE 控制。
  */
 @media (min-width: 1200px) {
   body.page-room #root > .lenso-root > main > .files-pane,
   body.page-room #root > .lenso-root > main > .monitor-pane {
-    flex: 0 0 360px;
-    width: 360px;
-    min-width: 280px;
-    max-width: 440px;
+    flex: 0 0 var(--app-pane-width);
+    width: var(--app-pane-width);
+    min-width: var(--app-pane-min);
+    max-width: var(--app-pane-max);
   }
 
   body.page-room #root > .lenso-root > main > .monitor-pane {
-    flex-basis: 420px;
-    width: 420px;
+    flex-basis: var(--app-monitor-width);
+    width: var(--app-monitor-width);
   }
 
   body.page-room #root > .lenso-root > main > .chat-pane {
     flex: 1 1 auto;
-    min-width: 320px;
+    min-width: var(--app-chat-min);
   }
 }
 
 .spa-file-preview-overlay {
   position: fixed;
   inset: 0;
-  z-index: 40;
-  background: rgb(0 0 0 / 58%);
+  z-index: var(--app-z-dialog-overlay);
+  background: var(--lenso-scrim);
 }
 
 .spa-file-preview {
   position: fixed;
   inset: 0;
-  z-index: 41;
+  z-index: var(--app-z-dialog);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -505,8 +505,8 @@
 .spa-drawer-overlay {
   position: fixed;
   inset: 0;
-  z-index: 39;
-  background: rgb(0 0 0 / 32%);
+  z-index: var(--app-z-drawer-overlay);
+  background: var(--lenso-scrim);
 }
 
 @media (max-width: 759px) {
@@ -526,13 +526,13 @@
 .spa-drawboard-fallback {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: var(--app-z-drawboard);
   display: flex;
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
   padding: 20px;
-  background: rgb(0 0 0 / 58%);
+  background: var(--lenso-scrim);
 }
 
 /* 群主转让说明用正文色而非 legacy 的 muted，保证 WCAG AA。 */
@@ -542,7 +542,7 @@
 
 /* Memory 抽屉必须盖住自己的遮罩层，否则关闭按钮会被 overlay 拦截。 */
 body .memory-drawer {
-  z-index: 40;
+  z-index: var(--app-z-dialog-overlay);
 }
 
 .memory-chip.warn {

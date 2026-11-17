@@ -15,7 +15,7 @@ export const UPLOAD_STYLE = `
   .attach-btn[aria-busy="true"] { cursor: progress; }
 
   .composer { position: relative; }
-  .attach-menu { position: absolute; left: 16px; bottom: calc(100% - 2px); z-index: 8;
+  .attach-menu { position: absolute; left: 16px; bottom: calc(100% - 2px); z-index: var(--app-z-attach);
     min-width: 148px; padding: 6px; border: 1px solid var(--wx-line);
     border-radius: 8px; background: var(--wx-panel); box-shadow: var(--wx-shadow); }
   .attach-menu[hidden] { display: none; }

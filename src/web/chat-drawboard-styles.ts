@@ -5,7 +5,7 @@
  * 不包含任何凭据或用户内容，失败提示使用固定文案。
  */
 export const DRAWBOARD_FALLBACK_STYLE = `
-  .drawboard-fallback { position: fixed; inset: 0; z-index: 80; display: flex;
+  .drawboard-fallback { position: fixed; inset: 0; z-index: var(--app-z-drawboard); display: flex;
     align-items: center; justify-content: center; width: auto; height: auto;
     max-width: none; max-height: none; margin: 0; border: 0;
     padding: 20px; background: var(--lenso-scrim); }

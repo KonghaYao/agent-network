@@ -1,29 +1,27 @@
 import { Button } from '../app/lenso-controls';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useDropzone } from 'react-dropzone';
 
 import { AppShell } from '../app/AppShell';
 import { Link } from '../app/router';
+import { ChatDialogsMount } from '../features/chat/ChatDialogsMount';
 import { Composer, type ComposerReply, type ComposerSendInput } from '../features/chat/Composer';
-import { ForwardDialog } from '../features/chat/ForwardDialog';
 import { Timeline } from '../features/chat/Timeline';
 import { AppSidebar } from '../features/layout/AppSidebar';
 import { LazyFilePreviewDialog } from '../features/panels/LazyFilePreviewDialog';
-import { AgentReissueDialog } from '../features/overlays/AgentReissueDialog';
-import { AnnouncementDialog } from '../features/overlays/AnnouncementDialog';
 import { AnnouncementPopover } from '../features/overlays/AnnouncementPopover';
 import { confirmDialog } from '../features/overlays/confirm';
-import { LeaveRoomDialog } from '../features/overlays/LeaveRoomDialog';
-import { MembersDialog } from '../features/overlays/MembersDialog';
-import { RenameAgentDialog } from '../features/overlays/RenameAgentDialog';
-import { RenameRoomDialog } from '../features/overlays/RenameRoomDialog';
-import { ReportDialog } from '../features/overlays/ReportDialog';
 import { RoomMenu, type RoomOverlay } from '../features/overlays/RoomMenu';
-import { TransferDialog } from '../features/overlays/TransferDialog';
-import { MessageSearchDialog } from '../features/tasks/MessageSearchDialog';
 import { RoomTaskDock } from '../features/tasks/RoomTaskDock';
-import { TaskTraceDialog } from '../features/tasks/TaskTraceDialog';
 import { useRoomTaskController } from '../features/tasks/useRoomTaskController';
 import { useTaskAskProgress } from '../features/tasks/useTaskAskProgress';
 import { AccountMenu } from '../features/sidebar/AccountMenu';
@@ -873,126 +871,28 @@ export function ChatPage({ roomId }: ChatPageProps) {
         }
       />
       {ready && room && identity && token ? (
-        <>
-          <MembersDialog
-            open={overlay === 'members'}
-            onOpenChange={(open) => setOverlay(open ? 'members' : null)}
-            room={room}
-            members={Array.from(members.values())}
-            ownerTransfer={chat.detail?.owner_transfer ?? null}
-            identityId={identity.actor_id}
-            token={token}
-            returnFocusRef={membersButtonRef}
-            memoryFallbackFocus={() => membersButtonRef.current}
-          />
-          <AnnouncementDialog
-            open={overlay === 'announcement'}
-            onOpenChange={(open) => setOverlay(open ? 'announcement' : null)}
-            room={room}
-            token={token}
-          />
-          <RenameRoomDialog
-            open={overlay === 'rename'}
-            onOpenChange={(open) => setOverlay(open ? 'rename' : null)}
-            room={room}
-            token={token}
-          />
-          {peer ? (
-            <ReportDialog
-              open={overlay === 'report'}
-              onOpenChange={(open) => setOverlay(open ? 'report' : null)}
-              targetId={peer.actor_id}
-              targetName={peer.name}
-              roomId={room.room_id}
-              token={token}
-            />
-          ) : null}
-          {peer?.kind === 'agent' ? (
-            <TransferDialog
-              open={overlay === 'transfer'}
-              onOpenChange={(open) => setOverlay(open ? 'transfer' : null)}
-              agentId={peer.actor_id}
-              token={token}
-            />
-          ) : null}
-          <LeaveRoomDialog
-            open={overlay === 'leave'}
-            onOpenChange={(open) => setOverlay(open ? 'leave' : null)}
-            room={room}
-            token={token}
-          />
-          <AgentReissueDialog
-            open={roomActions.reissue !== null}
-            onOpenChange={(open) => {
-              if (!open) roomActions.setReissue(null);
-            }}
-            agentName={roomActions.reissue?.name ?? peer?.name ?? 'Agent'}
-            prompt={roomActions.reissue?.prompt ?? ''}
-          />
-          {peer?.kind === 'agent' ? (
-            <RenameAgentDialog
-              open={roomActions.renameAgentOpen}
-              onOpenChange={roomActions.setRenameAgentOpen}
-              actorId={peer.actor_id}
-              currentName={peer.name}
-              token={token}
-              onRenamed={() => {
-                setStatus('已更新 Agent 名称');
-                invalidateTasks();
-                void queryClient.invalidateQueries({
-                  queryKey: queryKeys.room(room.room_id),
-                });
-                void queryClient.invalidateQueries({
-                  queryKey: queryKeys.rooms(identity.actor_id),
-                });
-              }}
-            />
-          ) : null}
-          <MessageSearchDialog
-            open={searchOpen}
-            onOpenChange={setSearchOpen}
-            roomId={room.room_id}
-            token={token}
-            onOpenTask={(rootId, focusId) => {
-              setSearchOpen(false);
-              openTrace(rootId, focusId);
-            }}
-          />
-          <TaskTraceDialog
-            open={taskTrace !== null}
-            onOpenChange={(open) => {
-              if (!open) closeTrace();
-            }}
-            roomId={room.room_id}
-            rootId={taskTrace?.rootId ?? null}
-            focusId={taskTrace?.focusId ?? null}
-            token={token}
-            onJump={onJumpToMessage}
-          />
-          {forwardItem ? (
-            <ForwardDialog
-              open
-              onOpenChange={(open) => {
-                if (!open) setForwardItem(null);
-              }}
-              item={forwardItem}
-              senderLabel={senderName(
-                forwardItem.sender_id,
-                members,
-                identity.name,
-                identity.actor_id,
-              )}
-              sourceRoomId={room.room_id}
-              token={token}
-              onSent={(roomName) => {
-                setStatus(`已转发给 ${roomName}`);
-                void queryClient.invalidateQueries({
-                  queryKey: queryKeys.rooms(identity.actor_id),
-                });
-              }}
-            />
-          ) : null}
-        </>
+        <ChatDialogsMount
+          room={room}
+          peer={peer}
+          identity={identity}
+          token={token}
+          members={members}
+          overlay={overlay}
+          onOverlayChange={setOverlay}
+          membersButtonRef={membersButtonRef}
+          ownerTransfer={chat.detail?.owner_transfer ?? null}
+          roomActions={roomActions}
+          searchOpen={searchOpen}
+          onSearchOpenChange={setSearchOpen}
+          onOpenTrace={openTrace}
+          taskTrace={taskTrace}
+          onCloseTrace={closeTrace}
+          onJumpToMessage={onJumpToMessage}
+          forwardItem={forwardItem}
+          onForwardItemChange={setForwardItem}
+          invalidateTasks={invalidateTasks}
+          setStatus={setStatus}
+        />
       ) : null}
       <LazyFilePreviewDialog item={previewFile} onClose={() => setPreviewFile(null)} />
     </>

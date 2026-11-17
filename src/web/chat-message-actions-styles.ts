@@ -1,5 +1,5 @@
 export const MESSAGE_ACTIONS_STYLE = `
-  .message-action-menu { position: fixed; z-index: 100; min-width: 140px; padding: 6px;
+  .message-action-menu { position: fixed; z-index: var(--app-z-message-menu); min-width: 140px; padding: 6px;
     background: var(--wx-panel); color: var(--wx-text); border: 1px solid var(--wx-line);
     border-radius: 8px; box-shadow: var(--lenso-surface-shadow); }
   .message-action-menu button { min-height: 40px; }

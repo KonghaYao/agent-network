@@ -7,7 +7,7 @@
  */
 export const TASK_DOCK_STYLE = `
   .task-dock-slot { position: absolute; left: 16px; right: 16px;
-    bottom: calc(100% + 8px); z-index: 4; display: block;
+    bottom: calc(100% + 8px); z-index: var(--app-z-dock); display: block;
     min-width: 0; max-width: 420px; }
   /* 无输入区（只读归档）时补上底部安全区。 */
   .composer-area:not(:has(.composer)) .task-dock-slot {
@@ -18,7 +18,7 @@ export const TASK_DOCK_STYLE = `
   .task-dock-head { display: flex; align-items: center; width: fit-content;
     max-width: 100%; box-sizing: border-box; border: 1px solid var(--wx-line);
     border-radius: 10px; background: var(--wx-panel);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 14%); overflow: hidden; }
+    box-shadow: var(--lenso-overlay-shadow); overflow: hidden; }
   .task-dock-toggle { flex: 1 1 auto; display: flex; align-items: center; gap: 8px;
     min-height: 44px; min-width: 0; padding: 6px 10px; border: 0; border-radius: 0;
     background: transparent; color: var(--wx-text); text-align: left; cursor: pointer; }
@@ -37,7 +37,7 @@ export const TASK_DOCK_STYLE = `
     bottom: calc(100% + 8px); box-sizing: border-box; display: flex;
     flex-direction: column; width: 100%; max-height: min(50dvh, 460px);
     border: 1px solid var(--wx-line); border-radius: 10px;
-    background: var(--wx-panel); box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+    background: var(--wx-panel); box-shadow: var(--lenso-overlay-shadow);
     overflow: hidden; }
   .task-dock-body[hidden] { display: none; }
   .task-dock-list { flex: 1 1 auto; min-height: 0; margin: 0;
@@ -98,7 +98,7 @@ export const TASK_DOCK_STYLE = `
     color: var(--wx-muted); font-size: 11px; line-height: 1.45; text-align: center; }
 
   /* 预览浮层由 Portal 挂到 body，自带颜色与限高。 */
-  .task-preview-popover { z-index: 40; box-sizing: border-box;
+  .task-preview-popover { z-index: var(--app-z-dialog-overlay); box-sizing: border-box;
     width: min(380px, calc(100vw - 24px)); max-height: min(58dvh, 420px);
     overflow-y: auto; padding: 12px; border: 1px solid var(--wx-line);
     border-radius: 10px; background: var(--wx-panel); color: var(--wx-text);

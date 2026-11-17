@@ -13,7 +13,8 @@ export const MONITOR_STYLE = `
   .monitor-toggle svg { width: 16px; height: 16px; fill: none;
     stroke: currentColor; stroke-width: 1.7; }
 
-  .monitor-pane { flex: 0 0 420px; width: 420px; min-width: 0; max-width: 420px;
+  .monitor-pane { flex: 0 0 var(--app-monitor-width); width: var(--app-monitor-width);
+    min-width: 0; max-width: var(--app-monitor-width);
     min-height: 0; display: flex; flex-direction: column;
     background: var(--wx-sidebar); border-left: 1px solid var(--wx-line); }
   .monitor-pane[hidden] { display: none; }
@@ -70,28 +71,30 @@ export const MONITOR_STYLE = `
     color: var(--wx-muted); font-size: 12px; line-height: 1.4; }
   .monitor-empty[hidden] { display: none; }
 
-  .monitor-backdrop { position: fixed; inset: 0; z-index: 23; background: rgb(0 0 0 / 40%); }
+  .monitor-backdrop { position: fixed; inset: 0; z-index: var(--app-z-pane-scrim);
+    background: var(--lenso-scrim); }
   .monitor-backdrop[hidden] { display: none; }
 
   @media (min-width: 760px) and (max-width: 1199px) {
-    .monitor-pane { position: fixed; top: 0; right: 0; bottom: 0; z-index: 24;
-      width: 420px; min-width: 420px; max-width: 420px; height: 100dvh;
-      box-shadow: -8px 0 28px rgb(0 0 0 / 22%); }
+    .monitor-pane { position: fixed; top: 0; right: 0; bottom: 0; z-index: var(--app-z-pane);
+      width: var(--app-monitor-width); min-width: var(--app-monitor-width);
+      max-width: var(--app-monitor-width); height: 100dvh;
+      box-shadow: -8px 0 28px var(--lenso-scrim); }
   }
 
   @media (min-width: 1200px) {
     .monitor-backdrop { display: none !important; }
     /* 与文件栏共用分隔条和比例变量；默认 50/50，不再固定 20%。 */
-    .chat-pane { flex: 1 1 auto; min-width: 320px; }
-    .monitor-pane { flex: 0 0 calc((100% - 300px - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
-      width: calc((100% - 300px - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
-      min-width: 280px;
-      max-width: calc(100% - 300px - var(--pane-resizer-width) - 320px);
+    .chat-pane { flex: 1 1 auto; min-width: var(--app-chat-min); }
+    .monitor-pane { flex: 0 0 calc((100% - var(--app-sidebar-width) - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
+      width: calc((100% - var(--app-sidebar-width) - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
+      min-width: var(--app-pane-min);
+      max-width: calc(100% - var(--app-sidebar-width) - var(--pane-resizer-width) - var(--app-chat-min));
       box-sizing: border-box; }
   }
 
   @media (max-width: 759px) {
-    .monitor-pane { position: fixed; inset: 0; z-index: 30; width: 100%;
+    .monitor-pane { position: fixed; inset: 0; z-index: var(--app-z-legacy-modal); width: 100%;
       min-width: 0; max-width: none; height: 100dvh; border-left: 0;
       padding-top: env(safe-area-inset-top);
       padding-bottom: env(safe-area-inset-bottom); }

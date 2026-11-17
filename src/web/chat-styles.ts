@@ -57,7 +57,8 @@ export const APP_STYLE = `
   button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible,
   summary:focus-visible { outline: 2px solid var(--wx-green); outline-offset: 2px; }
 
-  .sidebar { flex: 0 0 300px; width: 300px; min-width: 280px; max-width: 320px;
+  .sidebar { flex: 0 0 var(--app-sidebar-width); width: var(--app-sidebar-width);
+    min-width: var(--app-sidebar-min); max-width: var(--app-sidebar-max);
     display: flex; flex-direction: column; min-height: 0;
     background: var(--wx-sidebar); border-right: 1px solid var(--wx-line); }
   .sidebar-head { flex: 0 0 auto; padding: 16px 12px 10px; }
@@ -115,7 +116,7 @@ export const APP_STYLE = `
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 会话右键/长按菜单：固定定位，靠近指针并限制在视口内。 */
   /* 固定宽度：短提示与操作项保持紧凑，避免菜单撑满整屏挡住聊天区。 */
-  .room-menu { position: fixed; z-index: 26; width: 260px;
+  .room-menu { position: fixed; z-index: var(--app-z-menu); width: 260px;
     max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto;
     box-sizing: border-box; padding: 6px;
     border-radius: 8px; background: var(--wx-panel); border: 1px solid var(--wx-line);
@@ -164,7 +165,7 @@ export const APP_STYLE = `
   .room-menu-stopped-empty { margin: 4px 0 0; color: var(--wx-muted); }
   .room-menu-stopped-empty[hidden] { display: none; }
   /* 已归档 Agents：账号区图标上方的轻量浮层，不是全屏弹窗。 */
-  .archive-popover { position: fixed; z-index: 30; box-sizing: border-box;
+  .archive-popover { position: fixed; z-index: var(--app-z-legacy-modal); box-sizing: border-box;
     width: min(320px, calc(100vw - 16px)); max-height: min(60vh, calc(100vh - 16px));
     display: flex; flex-direction: column; padding: 10px; border-radius: 8px;
     background: var(--wx-panel); border: 1px solid var(--wx-line);
@@ -192,7 +193,7 @@ export const APP_STYLE = `
     color: var(--wx-muted); font-size: 13px; text-align: center; }
   .archive-popover-empty[hidden] { display: none; }
   /* 归档/恢复反馈：轻量、不可点击，不遮挡输入区操作。 */
-  .toast { position: fixed; z-index: 50; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom));
+  .toast { position: fixed; z-index: var(--app-z-toast); left: 50%; bottom: calc(24px + env(safe-area-inset-bottom));
     transform: translateX(-50%); max-width: calc(100vw - 32px); box-sizing: border-box;
     padding: 8px 14px; border-radius: 6px; background: rgb(0 0 0 / 78%);
     color: #fff; font-size: 13px; line-height: 1.5; text-align: center;
@@ -280,7 +281,7 @@ export const APP_STYLE = `
   /* 可拖拽分隔条：默认隐藏，仅桌面端且右侧面板打开时由下方媒体查询显示。 */
   .pane-resizer { display: none; flex: 0 0 var(--pane-resizer-width);
     width: var(--pane-resizer-width); align-self: stretch; position: relative;
-    z-index: 6; touch-action: none; }
+    z-index: var(--app-z-drop); touch-action: none; }
   .pane-resizer-handle { display: flex; align-items: center; justify-content: center;
     width: 100%; height: 100%; cursor: col-resize; touch-action: none; outline: none; }
   .pane-resizer-handle::before { content: ""; width: 1px; height: 100%;
@@ -341,7 +342,7 @@ export const APP_STYLE = `
     position: relative; background: var(--wx-bg); }
   /* 细加载条：只提示“正在取新房间”，不覆盖内容、不阻塞操作。 */
   .chat-loading { position: absolute; top: 0; left: 0; right: 0; height: 2px;
-    overflow: hidden; z-index: 4; }
+    overflow: hidden; z-index: var(--app-z-dock); }
   .chat-loading[hidden] { display: none; }
   .chat-loading::after { content: ""; display: block; width: 42%; height: 100%;
     background: var(--wx-green); animation: chat-loading-slide 1.1s ease-in-out infinite; }
@@ -404,7 +405,7 @@ export const APP_STYLE = `
     overflow-anchor: none; overscroll-behavior: contain; scrollbar-gutter: stable; }
   /* 消息末尾的 1px 观察点：只参与 IntersectionObserver，不占视觉空间。 */
   .messages-end { height: 1px; margin: 0; padding: 0; list-style: none; }
-  .jump-latest { position: absolute; left: 50%; z-index: 5;
+  .jump-latest { position: absolute; left: 50%; z-index: var(--app-z-float);
     bottom: calc(70px + env(safe-area-inset-bottom)); transform: translateX(-50%);
     display: inline-flex; align-items: center; gap: 4px; max-width: calc(100% - 32px);
     padding: 7px 14px; border: 1px solid var(--wx-line); border-radius: 999px;
@@ -475,7 +476,7 @@ export const APP_STYLE = `
   .msg-outbox button:hover { background: var(--wx-hover); }
   .msg-outbox .outbox-dismiss { color: var(--wx-muted); }
 
-  .mention-picker { position: absolute; left: 16px; bottom: 74px; z-index: 5;
+  .mention-picker { position: absolute; left: 16px; bottom: 74px; z-index: var(--app-z-float);
     min-width: 190px; max-width: min(320px, calc(100% - 32px)); max-height: 220px;
     overflow-y: auto; padding: 6px; background: var(--wx-panel);
     border: 1px solid var(--wx-line); border-radius: 8px; box-shadow: var(--wx-shadow); }
@@ -508,7 +509,7 @@ export const APP_STYLE = `
   #status:empty { display: none; }
   #status:not(:empty) { padding: 6px 16px 0; }
   /* 拖拽覆盖层只做提示；pointer-events:none 保证不阻塞聊天区操作。 */
-  .composer-drop { position: absolute; inset: 8px; z-index: 6; display: grid;
+  .composer-drop { position: absolute; inset: 8px; z-index: var(--app-z-drop); display: grid;
     place-content: center; gap: 4px; box-sizing: border-box; padding: 16px;
     border: 2px dashed var(--wx-green); border-radius: 10px;
     background: var(--lenso-control-tint-subtle-fill); text-align: center; pointer-events: none; }
@@ -526,7 +527,7 @@ export const APP_STYLE = `
   .empty-title { margin: 0 0 6px; font-size: 15px; color: var(--wx-text); }
   .empty-hint { margin: 0; font-size: 12px; color: var(--wx-muted); }
 
-  .modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center;
+  .modal { position: fixed; inset: 0; z-index: var(--app-z-legacy-modal); display: grid; place-items: center;
     width: auto; height: auto; max-width: none; max-height: none; margin: 0; border: 0;
     padding: 16px; background: rgb(0 0 0 / 42%); color: inherit; }
   /* 原生的 dialog 未打开时默认 display:none；上面的 display:grid 必须让位。 */

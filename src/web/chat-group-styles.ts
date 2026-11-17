@@ -42,7 +42,7 @@ export const GROUP_STYLE = `
   .member-menu-toggle:hover:not(:disabled) { background: var(--wx-hover); }
   .member-menu-toggle:disabled { opacity: 0.5; cursor: default; }
   /* 行内只保留一个 icon；菜单固定定位并按视口夹取，避免被滚动容器裁切。 */
-  .member-menu { position: fixed; z-index: 36; min-width: 132px; padding: 4px;
+  .member-menu { position: fixed; z-index: var(--app-z-submenu); min-width: 132px; padding: 4px;
     border: 1px solid var(--wx-line); border-radius: 8px; background: var(--wx-panel);
     box-shadow: var(--wx-shadow); }
   .member-menu[hidden] { display: none; }

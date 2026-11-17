@@ -9,7 +9,8 @@ export const FILES_STYLE = `
     background: transparent; color: var(--wx-link); font-size: 13px; }
   .files-toggle:hover, .files-toggle.active { background: var(--wx-hover); }
 
-  .files-pane { flex: 0 0 300px; width: 300px; min-width: 0; max-width: 300px;
+  .files-pane { flex: 0 0 var(--app-pane-width-inline); width: var(--app-pane-width-inline);
+    min-width: 0; max-width: var(--app-pane-width-inline);
     min-height: 0; display: flex; flex-direction: column;
     background: var(--wx-sidebar); border-left: 1px solid var(--wx-line); }
   .files-pane[hidden] { display: none; }
@@ -81,12 +82,13 @@ export const FILES_STYLE = `
     border: 0; background: transparent; color: var(--wx-link); font-size: 12px; }
   .files-more[hidden] { display: none; }
 
-  .files-backdrop { position: fixed; inset: 0; z-index: 23; background: rgb(0 0 0 / 40%); }
+  .files-backdrop { position: fixed; inset: 0; z-index: var(--app-z-pane-scrim);
+    background: var(--lenso-scrim); }
   .files-backdrop[hidden] { display: none; }
 
-  .file-preview { position: fixed; inset: 0; z-index: 40; display: grid;
+  .file-preview { position: fixed; inset: 0; z-index: var(--app-z-dialog-overlay); display: grid;
     place-items: center; width: auto; height: auto; max-width: none; max-height: none;
-    margin: 0; border: 0; padding: 16px; background: rgb(0 0 0 / 58%); color: inherit; }
+    margin: 0; border: 0; padding: 16px; background: var(--lenso-scrim); color: inherit; }
   .file-preview:not([open]) { display: none; }
   .file-preview::backdrop { background: transparent; }
   .file-preview-card { width: min(900px, 100%); max-height: min(90dvh, 900px);
@@ -147,15 +149,15 @@ export const FILES_STYLE = `
   }
 
   @media (min-width: 760px) and (max-width: 1199px) {
-    .files-pane { position: fixed; top: 0; right: 0; bottom: 0; z-index: 24;
+    .files-pane { position: fixed; top: 0; right: 0; bottom: 0; z-index: var(--app-z-pane);
       width: 320px; min-width: 320px; max-width: 320px; height: 100dvh;
-      box-shadow: -8px 0 28px rgb(0 0 0 / 22%); }
+      box-shadow: -8px 0 28px var(--lenso-scrim); }
   }
 
   @media (min-width: 1200px) {
     .files-backdrop { display: none !important; }
     /* 聊天区与右侧文件栏默认 50/50，可拖动分隔条调整；宽度变量由 React 岛写入。 */
-    .chat-pane { flex: 1 1 auto; min-width: 320px; }
+    .chat-pane { flex: 1 1 auto; min-width: var(--app-chat-min); }
     /* 右栏打开时为聊天头留出完整联系人标题与常用操作的空间。比例偏大时
        允许文件/监控栏收窄，并让聊天头换行；不要把标题压成几字宽。 */
     body.page-room:has(.files-pane:not([hidden])) .chat-head,
@@ -170,19 +172,19 @@ export const FILES_STYLE = `
     body.page-room:has(.files-pane:not([hidden])) .title-row h2,
     body.page-room:has(#monitor-pane:not([hidden])) .title-row h2 {
       flex: 1 1 120px; min-width: 120px; }
-    /* 先减去 300px 会话栏、分隔条和 320px 聊天工作区，再按比例分配；
+    /* 先减去会话栏、分隔条和聊天工作区，再按比例分配；
        分隔条仍可拖动，但文件/监控栏不会挤掉标题与聊天操作。 */
-    .files-pane { flex: 0 0 calc((100% - 300px - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
-      width: calc((100% - 300px - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
-      min-width: 280px;
-      max-width: calc(100% - 300px - var(--pane-resizer-width) - 320px);
+    .files-pane { flex: 0 0 calc((100% - var(--app-sidebar-width) - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
+      width: calc((100% - var(--app-sidebar-width) - var(--pane-resizer-width)) * var(--right-pane-ratio, 0.5));
+      min-width: var(--app-pane-min);
+      max-width: calc(100% - var(--app-sidebar-width) - var(--pane-resizer-width) - var(--app-chat-min));
       box-sizing: border-box; }
     body.page-room:has(#monitor-pane:not([hidden])) .monitor-pane {
-      max-width: calc(100% - 300px - var(--pane-resizer-width) - 320px); }
+      max-width: calc(100% - var(--app-sidebar-width) - var(--pane-resizer-width) - var(--app-chat-min)); }
   }
 
   @media (max-width: 759px) {
-    .files-pane { position: fixed; inset: 0; z-index: 30; width: 100%;
+    .files-pane { position: fixed; inset: 0; z-index: var(--app-z-legacy-modal); width: 100%;
       min-width: 0; max-width: none; height: 100dvh; border-left: 0;
       padding-top: env(safe-area-inset-top);
       padding-bottom: env(safe-area-inset-bottom); }

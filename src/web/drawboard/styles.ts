@@ -5,7 +5,7 @@
  * 颜色沿用应用页 CSS 变量，暗色模式复用同一套变量；移动端铺满视口。
  */
 export const DRAWBOARD_STYLE = `
-  .db-overlay { position: fixed; inset: 0; z-index: 80; display: flex;
+  .db-overlay { position: fixed; inset: 0; z-index: var(--app-z-drawboard); display: flex;
     align-items: center; justify-content: center; width: auto; height: auto;
     max-width: none; max-height: none; margin: 0; border: 0;
     padding: 16px; background: var(--lenso-scrim); }

@@ -7,6 +7,62 @@
   --spa-text: var(--lenso-label-primary);
   --spa-muted: var(--app-muted);
   --spa-accent: var(--lenso-tint);
+
+  /* 布局宽度单源：SplitLayout 在运行时读取像素值，CSS 直接引用变量。 */
+  --app-sidebar-width: 300px;
+  --app-sidebar-min: 280px;
+  --app-sidebar-max: 320px;
+  /* 桌面右栏：文件 360、监控 420；窄屏文件栏保留原有 300 初始值。 */
+  --app-pane-width: 360px;
+  --app-pane-width-inline: 300px;
+  --app-monitor-width: 420px;
+  --app-pane-min: 280px;
+  --app-pane-max: 440px;
+  --app-chat-min: 320px;
+
+  /* 圆角决策：20px 只给 Card/Alert/Toast 等独立表面，不统一控件圆角。 */
+  --app-radius-xs: 4px;
+  --app-radius-sm: 6px;
+  --app-radius-md: 8px;
+  --app-radius-lg: 10px;
+  --app-radius-xl: 12px;
+  --app-radius-surface: 20px;
+
+  /* 内容带：沿用现有 computed 值，不改既有层级。 */
+  --app-z-dock: 4;
+  --app-z-float: 5;
+  --app-z-drop: 6;
+  --app-z-attach: 8;
+  --app-z-canvas-control: 21;
+  --app-z-canvas-tooltip: 22;
+  --app-z-pane-scrim: 23;
+  --app-z-pane: 24;
+  --app-z-menu: 26;
+  --app-z-legacy-modal: 30;
+  --app-z-popover: 35;
+  --app-z-submenu: 36;
+  --app-z-drawer-overlay: 39;
+  --app-z-dialog-overlay: 40;
+  --app-z-dialog: 41;
+  /* B0 保持 50；Lenso toast 为 100001，后续批次再切换。 */
+  --app-z-toast: 50;
+  --app-z-memory-overlay: 60;
+  --app-z-memory-dialog: 61;
+  --app-z-fenix-overlay: 69;
+  --app-z-fenix-panel: 70;
+  --app-z-drawboard: 80;
+  --app-z-message-menu: 100;
+
+  /* Portal 带：99980–99999，低于 Lenso 自身 100000。B0 只定义不启用。 */
+  --app-z-portal-scrim: calc(var(--lenso-z-index-overlay) - 20);
+  --app-z-portal-dialog: calc(var(--lenso-z-index-overlay) - 15);
+  --app-z-portal-drawer: calc(var(--lenso-z-index-overlay) - 14);
+  --app-z-portal-file-preview: calc(var(--lenso-z-index-overlay) - 12);
+  --app-z-portal-memory: calc(var(--lenso-z-index-overlay) - 10);
+  --app-z-portal-fenix-overlay: calc(var(--lenso-z-index-overlay) - 8);
+  --app-z-portal-fenix-panel: calc(var(--lenso-z-index-overlay) - 7);
+  --app-z-portal-drawboard: calc(var(--lenso-z-index-overlay) - 6);
+  --app-z-portal-local-menu: calc(var(--lenso-z-index-overlay) - 1);
 }
 
 /*
