@@ -26,9 +26,16 @@
   --app-prominent-fill: #0068d6;
 }
 
-button[data-lenso-slot='button'][data-variant='prominent'] {
+button[data-lenso-slot='button'][data-variant='prominent']:not([data-destructive]) {
   background: var(--app-prominent-fill) !important;
   color: var(--lenso-label-on-tint) !important;
+}
+
+/* Lenso 的 destructive 红底配白字只有 3.6:1；沿用同一红色底，改用系统
+ * 提供的 on-fill 黑字，保证危险按钮仍是红色且满足 WCAG AA。 */
+button[data-lenso-slot='button'][data-variant='prominent'][data-destructive] {
+  background: var(--lenso-action-destructive) !important;
+  color: var(--lenso-status-error-on-fill) !important;
 }
 
 * {

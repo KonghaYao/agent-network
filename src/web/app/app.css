@@ -86,7 +86,7 @@
   color: var(--lenso-label-on-tint);
 }
 
-.spa-dialog-content button[data-lenso-slot='button']:not(.primary):not(.danger) {
+.spa-dialog-content button[data-lenso-slot='button']:not(.primary):not(.danger):not([data-destructive]) {
   color: var(--wx-text) !important;
 }
 
@@ -171,9 +171,9 @@
   color: var(--app-muted);
 }
 
-.field input,
+.field input:not([data-lenso-slot]),
 .field select,
-.field textarea {
+.field textarea:not([data-lenso-slot]) {
   width: 100%;
   box-sizing: border-box;
   padding: 8px 10px;
@@ -185,7 +185,7 @@
   font-size: 14px;
 }
 
-.field textarea {
+.field textarea:not([data-lenso-slot]) {
   resize: vertical;
   min-height: 88px;
 }
@@ -663,7 +663,12 @@ body .memory-drawer {
   gap: 8px;
 }
 
-.contact-search-controls input {
+.contact-search-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.contact-search-controls input:not([data-lenso-slot]) {
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -827,13 +832,17 @@ body .memory-drawer {
 
 .room-menu-reissue-text {
   width: 100%;
-  min-height: 150px;
   font:
     12px/1.5 ui-monospace,
     SFMono-Regular,
     Menlo,
     monospace;
-  overflow-wrap: anywhere;
+}
+
+.room-menu-reissue-text textarea {
+  min-height: 150px !important;
+  max-height: 180px !important;
+  font: inherit !important;
 }
 
 .spa-dialog-content.message-search-card {

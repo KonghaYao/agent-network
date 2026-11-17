@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, Input } from '../../app/lenso-controls';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
@@ -598,7 +598,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                           </label>
                           <label className="memory-field">
                             查询
-                            <input
+                            <Input
                               id="memory-recall-query"
                               type="text"
                               maxLength={2000}
@@ -786,7 +786,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                         <form id="memory-manifest-form" className="memory-form" onSubmit={(event) => void submitManifest(event)}>
                           <label className="memory-field">
                             manifest_id
-                            <input
+                            <Input
                               id="memory-manifest-id"
                               type="text"
                               maxLength={128}

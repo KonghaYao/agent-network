@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, TextArea } from '../../app/lenso-controls';
 import { useState } from 'react';
 
 import { copyText } from '../../lib/files';
@@ -63,14 +63,15 @@ export function AgentReissueDialog({
       </p>
       <label className="field">
         <span>新提示词</span>
-        <textarea
-          id="room-menu-reissue-text"
-          className="room-menu-reissue-text"
-          rows={8}
-          readOnly
-          value={prompt}
-          onFocus={(event) => event.currentTarget.select()}
-        />
+        <div className="room-menu-reissue-text">
+          <TextArea
+            id="room-menu-reissue-text"
+            rows={8}
+            readOnly
+            value={prompt}
+            onFocus={(event) => event.currentTarget.select()}
+          />
+        </div>
       </label>
       <div className="row">
         <Button id="room-menu-reissue-copy-prompt" className="primary" type="button" onClick={() => void copy()}>

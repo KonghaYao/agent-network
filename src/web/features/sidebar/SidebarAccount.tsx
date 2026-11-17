@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 
+import { Button } from '../../app/lenso-controls';
 import { useWebSession } from '../../hooks/useWebSession';
 import { accountAvatarFor } from '../../lib/agent-avatar';
 import type { WebIdentity } from '../../lib/identity';
@@ -164,10 +165,12 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
               {me ? me.name : '未登录'}
             </span>
             {me ? (
-              <button
+              <Button
                 className="account-edit"
                 id="account-rename"
                 type="button"
+                variant="borderless"
+                isIconOnly
                 aria-label="编辑姓名"
                 title="编辑姓名"
                 aria-haspopup="dialog"
@@ -176,48 +179,53 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
                 onClick={() => setRenameOpen(true)}
               >
                 <PencilIcon />
-              </button>
+              </Button>
             ) : null}
           </div>
           {me ? (
             <div className="account-actions">
-              <button
+              <Button
                 className="account-scan"
                 id="new-agent"
                 type="button"
+                variant="borderless"
                 aria-haspopup="dialog"
                 aria-controls="new-agent-modal"
                 aria-expanded={newAgentOpen}
                 onClick={() => setNewAgentOpen(true)}
               >
                 新建 Agent
-              </button>
-              <button
+              </Button>
+              <Button
                 className="account-scan"
                 id="device-handoff"
                 type="button"
+                variant="borderless"
                 aria-haspopup="dialog"
                 aria-controls="handoff-modal"
                 aria-expanded={handoffOpen}
                 onClick={() => setHandoffOpen(true)}
               >
                 配对设备
-              </button>
-              <button
+              </Button>
+              <Button
                 className="account-scan"
                 id="memory-open"
                 type="button"
+                variant="borderless"
                 aria-haspopup="dialog"
                 aria-controls="memory-drawer"
                 aria-expanded={memoryOpen}
                 onClick={() => setMemoryOpen(true)}
               >
                 记忆
-              </button>
-              <button
+              </Button>
+              <Button
                 className="account-icon"
                 id="archived-agents"
                 type="button"
+                variant="borderless"
+                isIconOnly
                 aria-label="已归档 Agents"
                 title="已归档 Agents"
                 aria-haspopup="dialog"
@@ -226,11 +234,13 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
                 onClick={() => setArchiveOpen(true)}
               >
                 <ArchiveIcon />
-              </button>
-              <button
+              </Button>
+              <Button
                 className="account-icon"
                 id="logout"
                 type="button"
+                variant="borderless"
+                isIconOnly
                 aria-label="退出登录"
                 title="退出登录"
                 aria-haspopup="dialog"
@@ -239,7 +249,7 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
                 onClick={() => setLogoutOpen(true)}
               >
                 <LogoutIcon />
-              </button>
+              </Button>
             </div>
           ) : null}
         </div>

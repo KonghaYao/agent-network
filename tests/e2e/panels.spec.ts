@@ -633,9 +633,12 @@ test.describe('SPA 右栏与剩余入口', () => {
     await login(page, base, tokenA);
     await page.locator('#new-agent').click();
     await expect(page.locator('#new-agent-modal')).toBeVisible();
+    await expect(page.locator('#new-agent-name')).toHaveAttribute('data-lenso-slot', 'input');
     await page.fill('#new-agent-name', `UI Agent ${Date.now()}`);
     await page.locator('#new-agent-create').click();
     await expect(page.locator('#new-agent-result')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#new-agent-url')).toHaveAttribute('data-lenso-slot', 'input');
+    await expect(page.locator('#new-agent-prompt')).toHaveAttribute('data-lenso-slot', 'textarea');
     await expect(page.locator('#new-agent-url')).toHaveValue(/\/mcp\?token=/u);
     await expect(page.locator('#new-agent-modal .new-agent-warning')).toContainText(
       '不要截图、发群或写入日志',

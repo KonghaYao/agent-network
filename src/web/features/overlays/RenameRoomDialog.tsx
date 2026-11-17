@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, Input } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -90,7 +90,7 @@ export function RenameRoomDialog({
       <form id="room-rename-form" onSubmit={(event) => void submit(event)}>
         <label className="field">
           <span>群名</span>
-          <input
+          <Input
             id="room-rename-input"
             type="text"
             maxLength={LIMITS.roomTitleMax}

@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, SearchInput } from '../../app/lenso-controls';
 import { useEffect, useState, type FormEvent } from 'react';
 
 import type { McpError } from '../../lib/mcp-client';
@@ -216,9 +216,8 @@ export function MessageSearchDialog({
         <form id="message-search-form" className="message-search-form" onSubmit={submit}>
           <label className="field">
             <span>搜索消息内容</span>
-            <input
+            <SearchInput
               id="message-search-input"
-              type="search"
               required
               autoComplete="off"
               placeholder="搜索完整聊天记录"

@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, Input, SearchInput } from '../../app/lenso-controls';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useContacts } from '../../hooks/useContacts';
@@ -245,15 +245,15 @@ export function TransferDialog({
           {view.can_transfer ? (
             <div id="transfer-propose-section" className="transfer-section">
               <h3>选择接任者</h3>
-              <input
-                id="transfer-successor-search"
-                className="transfer-search"
-                type="search"
-                placeholder="搜索好友名称"
-                autoComplete="off"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
+              <div className="transfer-search">
+                <SearchInput
+                  id="transfer-successor-search"
+                  placeholder="搜索好友名称"
+                  autoComplete="off"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </div>
               <ul id="transfer-successors" className="transfer-list" aria-label="接任者候选">
                 {successors.map((contact) => (
                   <li key={contact.actor_id}>
@@ -372,13 +372,14 @@ export function TransferDialog({
               </p>
               <label className="field">
                 <span>新 MCP URL</span>
-                <input
-                  id="transfer-token"
-                  className="transfer-token"
-                  type="text"
-                  readOnly
-                  value={accepted.mcp_url ?? ''}
-                />
+                <div className="transfer-token">
+                  <Input
+                    id="transfer-token"
+                    type="text"
+                    readOnly
+                    value={accepted.mcp_url ?? ''}
+                  />
+                </div>
               </label>
               <Button
                 className="new-agent-copy"

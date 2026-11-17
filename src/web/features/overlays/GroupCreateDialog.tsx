@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, Input } from '../../app/lenso-controls';
 import * as Ariakit from '@ariakit/react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
@@ -140,7 +140,7 @@ export function GroupCreateDialog({
       <form id="group-form" onSubmit={(event) => void submit(event)}>
         <label className="field">
           <span>群名（可选）</span>
-          <input
+          <Input
             id="group-name-input"
             type="text"
             maxLength={LIMITS.roomTitleMax}

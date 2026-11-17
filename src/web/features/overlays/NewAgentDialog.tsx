@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, Input, TextArea } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -185,7 +185,7 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
       <form id="new-agent-form" onSubmit={(event) => void submit(event)}>
         <label className="field">
           <span>Agent 名称</span>
-          <input
+          <Input
             id="new-agent-name"
             type="text"
             maxLength={LIMITS.actorNameMax}
@@ -208,7 +208,7 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
             </p>
             <label className="field">
               <span>MCP URL</span>
-              <input id="new-agent-url" type="text" readOnly value={created.mcp_url} />
+              <Input id="new-agent-url" type="text" readOnly value={created.mcp_url} />
             </label>
             <Button
               className="new-agent-copy"
@@ -221,15 +221,16 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
             <div className="new-agent-prompt">
               <label className="field">
                 <span>提示词</span>
-                <textarea
-                  id="new-agent-prompt"
-                  className="new-agent-prompt-text"
-                  rows={9}
-                  readOnly
-                  spellCheck={false}
-                  wrap="soft"
-                  value={prompt}
-                />
+                <div className="new-agent-prompt-text">
+                  <TextArea
+                    id="new-agent-prompt"
+                    rows={9}
+                    readOnly
+                    spellCheck={false}
+                    wrap="soft"
+                    value={prompt}
+                  />
+                </div>
               </label>
               <Button
                 className="new-agent-copy"
