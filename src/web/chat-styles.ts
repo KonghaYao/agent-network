@@ -11,59 +11,37 @@ const GROUP_COLOR_FALLBACK = GROUP_COLORS[0]!.hex;
  */
 export const APP_STYLE = `
   :root {
-    --wx-green: var(--lenso-tint, #007aff);
-    --wx-green-strong: var(--lenso-control-tint-hover-fill, #0066d6);
-    --wx-bg: var(--lenso-background-primary, #f5f5f7);
-    --wx-sidebar: var(--lenso-background-secondary, #ffffff);
-    --wx-panel: var(--lenso-background-secondary, #ffffff);
-    --wx-line: var(--lenso-separator, #e5e5e5);
-    --wx-text: var(--lenso-label-primary, #1a1a1a);
-    --wx-muted: var(--lenso-label-secondary, #5c5c5c);
-    --wx-hover: var(--lenso-fill-tertiary, #ececec);
-    --wx-active: var(--lenso-fill-secondary, #e3e3e3);
-    --wx-bubble: var(--lenso-background-secondary, #ffffff);
-    --wx-mine: var(--lenso-control-tint-subtle-fill, #dceeff);
-    --wx-mine-text: var(--lenso-label-primary, #111111);
-    --wx-unread: #fa5151;
-    --wx-unread-muted: #8a8a8a;
-    --wx-pref-label: #6b6b6b;
-    --wx-danger: #c0392b;
-    --wx-danger-strong: #a93226;
-    /* 危险菜单项用红字透明底；暗色只换文字色与淡红底，避免低对比。 */
-    --wx-danger-text: #c0392b;
-    --wx-danger-tint: rgb(192 57 43 / 8%);
-    --wx-danger-tint-strong: rgb(192 57 43 / 12%);
-    --wx-link: #576b95;
-    --wx-search: #e6e6e6;
-    --wx-shadow: 0 12px 32px rgb(0 0 0 / 14%);
+    --wx-green: var(--lenso-tint);
+    --wx-green-strong: var(--lenso-control-tint-hover-fill);
+    --wx-bg: var(--lenso-background-primary);
+    --wx-sidebar: var(--lenso-background-secondary);
+    --wx-panel: var(--lenso-background-secondary);
+    --wx-line: var(--lenso-separator);
+    --wx-text: var(--lenso-label-primary);
+    --wx-muted: var(--app-muted);
+    --wx-hover: var(--lenso-fill-tertiary);
+    --wx-active: var(--lenso-fill-secondary);
+    --wx-bubble: var(--lenso-background-secondary);
+    --wx-mine: var(--lenso-control-tint-subtle-fill);
+    --wx-mine-text: var(--lenso-label-primary);
+    --wx-unread: var(--lenso-status-error-fill);
+    --wx-unread-muted: var(--lenso-label-tertiary);
+    --wx-pref-label: var(--lenso-label-secondary);
+    --wx-danger: var(--lenso-action-destructive);
+    --wx-danger-strong: var(--lenso-control-status-error-hover-fill);
+    --wx-danger-text: var(--lenso-action-destructive-text);
+    --wx-danger-tint: var(--lenso-control-status-error-soft-fill);
+    --wx-danger-tint-strong: var(--lenso-control-status-error-soft-hover-fill);
+    --wx-link: var(--lenso-tint-text);
+    --wx-search: var(--lenso-control-field-fill);
+    --wx-shadow: var(--lenso-surface-shadow);
     /* 右侧面板与聊天区之间分隔条的宽度；拖拽岛只改比例，不改这里。 */
     --pane-resizer-width: 6px;
     /* 桌面端右栏占比，默认一半一半；拖拽岛按 localStorage 覆盖。 */
     --right-pane-ratio: 0.5;
     /* 品牌图标统一浅色底：单色 SVG 以 currentColor 编码，<img> 中会渲染为黑色。 */
-    --wx-avatar-icon-bg: #f2f3f5;
+    --wx-avatar-icon-bg: var(--lenso-background-tertiary);
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --wx-bg: var(--lenso-background-primary, #191919);
-      --wx-sidebar: var(--lenso-background-secondary, #2b2b2b);
-      --wx-panel: var(--lenso-background-secondary, #2b2b2b);
-      --wx-line: var(--lenso-separator, #333333);
-      --wx-text: var(--lenso-label-primary, #e5e5e5);
-      --wx-muted: var(--lenso-label-secondary, #b0b0b0);
-      --wx-hover: var(--lenso-fill-tertiary, #333333);
-      --wx-active: var(--lenso-fill-secondary, #404040);
-      --wx-bubble: var(--lenso-background-secondary, #2c2c2c);
-      --wx-search: var(--lenso-control-field-fill, #3a3a3a);
-      --wx-unread-muted: #a6a6a6;
-      --wx-pref-label: #c2c2c2;
-      --wx-danger-text: #ff8a80;
-      --wx-danger-tint: rgb(255 138 128 / 8%);
-      --wx-danger-tint-strong: rgb(255 138 128 / 12%);
-      --wx-shadow: 0 12px 32px rgb(0 0 0 / 45%);
-    }
-  }
-
   body.wide { background: var(--wx-bg); color: var(--wx-text);
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue",
       "Microsoft YaHei", sans-serif; font-size: 14px; line-height: 1.45;
@@ -73,7 +51,7 @@ export const APP_STYLE = `
   button:where(:not([data-lenso-slot])) { border-radius: 4px; border: 1px solid var(--wx-line); background: var(--wx-panel);
     color: var(--wx-text); padding: 7px 14px; font-size: 13px; cursor: pointer; }
   button:where(:not([data-lenso-slot])):hover { background: var(--wx-hover); }
-  button:where(:not([data-lenso-slot])).primary { background: var(--wx-green); border-color: var(--wx-green); color: #fff; }
+  button:where(:not([data-lenso-slot])).primary { background: var(--app-prominent-fill); border-color: var(--app-prominent-fill); color: var(--lenso-label-on-tint); }
   button:where(:not([data-lenso-slot])).primary:hover { background: var(--wx-green-strong); border-color: var(--wx-green-strong); }
   button:where(:not([data-lenso-slot])):disabled { opacity: .55; cursor: not-allowed; }
   button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible,
@@ -115,7 +93,7 @@ export const APP_STYLE = `
   /* 分类未读徽标只计会话数；title 提供数量说明，读屏由 aria-live 汇总播报。 */
   .room-filter-unread { display: inline-flex; align-items: center; justify-content: center;
     flex: 0 0 auto; min-width: 15px; height: 15px; padding: 0 3px; box-sizing: border-box;
-    border-radius: 8px; background: var(--wx-unread); color: #fff; font-size: 10px;
+    border-radius: 8px; background: var(--wx-unread); color: var(--lenso-status-error-on-fill); font-size: 10px;
     font-weight: 400; line-height: 1; }
 
   .sidebar-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
@@ -472,7 +450,7 @@ export const APP_STYLE = `
   .msg.mine .bubble { background: var(--wx-mine); color: var(--wx-mine-text); }
   .msg.mine .bubble::before { right: -6px; border-left: 6px solid var(--wx-mine); }
   .mention { color: var(--wx-link); }
-  .msg.mine .mention { color: #2f6b45; }
+  .msg.mine .mention { color: var(--lenso-tint-text); }
   /* 截断预览只显示纯文本：保留换行，避免半截 Markdown 结构。 */
   .msg-plain-preview { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
   .msg .expand, .msg .collapse { margin-top: 4px; border: 0; background: none; padding: 0;
@@ -491,7 +469,7 @@ export const APP_STYLE = `
   /* 回执紧贴消息下方，外观与上下线系统行一致。 */
   .msg.has-receipt { margin-bottom: 6px; }
   .msg-receipt { margin-top: 0; }
-  .msg-receipt.stale span { color: #b26a00; }
+  .msg-receipt.stale span { color: var(--lenso-status-warning-text); }
   /* 本地发送意图：只展示状态，不进入时间线排序与未读；失败时提供重试。 */
   .msg-outbox { gap: 6px; align-items: center; flex-wrap: wrap; }
   .msg-outbox span { color: var(--wx-muted); }
@@ -536,7 +514,7 @@ export const APP_STYLE = `
   .composer-drop { position: absolute; inset: 8px; z-index: 6; display: grid;
     place-content: center; gap: 4px; box-sizing: border-box; padding: 16px;
     border: 2px dashed var(--wx-green); border-radius: 10px;
-    background: rgb(7 193 96 / 10%); text-align: center; pointer-events: none; }
+    background: var(--lenso-control-tint-subtle-fill); text-align: center; pointer-events: none; }
   .composer-drop[hidden] { display: none; }
   .composer-drop-title { font-size: 15px; font-weight: 600; color: var(--wx-green); }
   .composer-drop-hint { font-size: 12px; color: var(--wx-muted); }
@@ -564,14 +542,14 @@ export const APP_STYLE = `
   .confirm-card { width: min(380px, 100%); box-sizing: border-box; }
   .confirm-message { margin: 0 0 16px; line-height: 1.65;
     white-space: pre-wrap; overflow-wrap: anywhere; }
-  .confirm-card button.danger { background: var(--wx-danger); border-color: var(--wx-danger);
-    color: #fff; }
-  .confirm-card button.danger:hover { background: var(--wx-danger-strong);
+  .confirm-card button.danger:not([data-lenso-slot]) { background: var(--wx-danger); border-color: var(--wx-danger);
+    color: var(--lenso-label-on-destructive); }
+  .confirm-card button.danger:not([data-lenso-slot]):hover { background: var(--wx-danger-strong);
     border-color: var(--wx-danger-strong); }
   .confirm-card button.danger:focus-visible { outline: 2px solid var(--wx-text);
     outline-offset: 2px; }
-  .confirm-card button.danger:disabled { opacity: 1; background: #f6d5d5;
-    border-color: #f6d5d5; color: #7f1d1d; cursor: not-allowed; }
+  .confirm-card button.danger:not([data-lenso-slot]):disabled { opacity: 1; background: var(--wx-danger-tint);
+    border-color: var(--wx-danger-tint); color: var(--wx-danger-text); cursor: not-allowed; }
   .field { display: block; font-size: 12px; color: var(--wx-muted); }
   .field input { display: block; width: 100%; height: 36px; margin-top: 6px; padding: 0 10px;
     border: 1px solid var(--wx-line); border-radius: 4px; background: var(--wx-bg);
@@ -585,7 +563,7 @@ ${GROUP_STYLE}
     font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
   .room-announcement[hidden] { display: none; }
   .room-archive-banner { margin: 8px 16px 0; padding: 8px 12px; border-radius: 6px;
-    border: 1px solid #e6c36a; background: #fff8e1; color: #7a5b00;
+    border: 1px solid var(--lenso-status-warning-border); background: var(--lenso-control-status-warning-soft-fill); color: var(--lenso-status-warning-text);
     font-size: 12px; line-height: 1.6; }
   .room-archive-banner[hidden] { display: none; }
   .composer[hidden] { display: none; }
@@ -615,7 +593,7 @@ ${GROUP_STYLE}
   .new-agent-card { width: min(440px, 100%); box-sizing: border-box; }
   .new-agent-card .field input { box-sizing: border-box; }
   .new-agent-warning { margin: 12px 0; padding: 8px 10px; border-radius: 4px;
-    background: #fff7ed; color: #9a3412; font-size: 12px; line-height: 1.6;
+    background: var(--lenso-control-status-warning-soft-fill); color: var(--lenso-status-warning-text); font-size: 12px; line-height: 1.6;
     text-align: left; overflow-wrap: anywhere; }
   .new-agent-result { margin: 4px 0 12px; padding: 10px; border-radius: 6px;
     background: var(--wx-bg); border: 1px solid var(--wx-line); }
@@ -630,10 +608,6 @@ ${GROUP_STYLE}
     color: var(--wx-text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
     word-break: break-all; resize: vertical; }
-  @media (prefers-color-scheme: dark) {
-    .new-agent-warning { background: #3a2a1a; color: #fdba74; }
-  }
-
   .messages::-webkit-scrollbar, .sidebar-list::-webkit-scrollbar,
   .mention-picker::-webkit-scrollbar, .contact-list::-webkit-scrollbar,
   .member-roster::-webkit-scrollbar { width: 6px; }
@@ -648,7 +622,7 @@ ${GROUP_STYLE}
       background: rgb(255 255 255 / 16%); }
     .msg-time span { background: rgb(255 255 255 / 7%); }
     .msg-system span { background: rgb(255 255 255 / 7%); }
-    .msg-receipt.stale span { color: #e0a458; }
+    .msg-receipt.stale span { color: var(--lenso-status-warning-text); }
   }
 
   @media (min-width: 1200px) {
@@ -709,7 +683,7 @@ ${GROUP_STYLE}
   #contact-requests { position: relative; }
   .request-badge { position: absolute; top: -5px; right: -5px; min-width: 16px;
     height: 16px; padding: 0 4px; border-radius: 8px; background: var(--wx-unread);
-    color: #ffffff; font-size: 10px; line-height: 16px; text-align: center;
+    color: var(--lenso-status-error-on-fill); font-size: 10px; line-height: 16px; text-align: center;
     pointer-events: none; }
   /* 顶部分段控件：同一时间只展示一个面板，切换保留各面板的 DOM 状态。 */
   .contact-modal-card { width: min(760px, 96vw); max-height: min(88dvh, 860px);

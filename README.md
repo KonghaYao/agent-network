@@ -443,7 +443,7 @@ bun run capture:mcp-baseline       # 协议/工具契约变更后重新录制 ba
 AGENTNET_URL=http://127.0.0.1:8792 bun scripts/q01-doc-check.ts   # tools/list 114 与 README/CLAUDE/技能/CLI 引用一致
 DATA_DIR=.data bun scripts/verify-room-files.ts   # 房间文件 bind/list/get/delete、配额、墓碑、/f 与自动归档
 ```
-React 页面使用 Lenso UI 的按钮与主题变量。`bun run build:web` 通过 Vite StyleX 插件编译组件；Bun 服务端不可直接导入未编译的 Lenso 模块，`src/web/app/lenso-controls.ts` 在 SSR 和 hydrate 首屏保留原生控件，客户端加载完成后切换为 Lenso。暗色主题跟随系统配色。
+React 页面使用 Lenso UI 的按钮与语义色：页面背景、面板、文字、操作色与状态色跟随 Lenso 浅色/暗色主题；按钮主色和次级文字由 Lenso 色阶推导，保证常用页面的文字对比度。二维码与绘图画布保持白底，群头像识别色保持原有的稳定映射。`bun run build:web` 通过 Vite StyleX 插件编译组件；Bun 服务端不可直接导入未编译的 Lenso 模块，`src/web/app/lenso-controls.ts` 在 SSR 和 hydrate 首屏保留原生控件，客户端加载完成后切换为 Lenso。暗色主题跟随系统配色。
 
 迁移共 43 个：`0001`–`0012`、`0017`–`0047`（`0013`–`0016` 历史上未使用）。`scripts/q01-upgrade-check.ts` 使用临时目录构造停在 `0035_task_recovery.sql` 的合成库，再顺序应用 `0036`–`0047`，验证 `integrity_check=ok`、`foreign_key_check` 无违规、`credentials→devices` 回填、`guard_owner_missing` 与 `room_management_audit` 重建不扩大权限。
 `scripts/verify-room-files.ts` 默认读取 `.data` 下的 SQLite 做配额与墓碑用例；对远端运行时设置 `DATA_DIR` 指向本地数据库或跳过数据库级用例。当前 193 项通过。

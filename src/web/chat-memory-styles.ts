@@ -48,10 +48,10 @@ export const MEMORY_STYLE = `
     box-sizing: border-box; padding: 2px 7px; border-radius: 9px;
     background: var(--wx-search); color: var(--wx-muted); font-size: 10.5px;
     line-height: 16px; overflow-wrap: anywhere; }
-  .memory-chip.good { background: rgb(7 193 96 / 12%); color: var(--wx-green); }
-  .memory-chip.warn { background: rgb(217 119 6 / 14%); color: #b45309; }
+  .memory-chip.good { background: var(--lenso-control-status-success-soft-fill); color: var(--lenso-status-success-text); }
+  .memory-chip.warn { background: var(--lenso-control-status-warning-soft-fill); color: var(--lenso-status-warning-text); }
   .memory-chip.danger { background: var(--wx-danger-tint); color: var(--wx-danger-text); }
-  .memory-chip.info { background: rgb(87 107 149 / 12%); color: var(--wx-link); }
+  .memory-chip.info { background: var(--lenso-control-tint-subtle-fill); color: var(--lenso-status-info-text); }
   .memory-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
     gap: 6px; margin-top: 10px; }
   .memory-stat { min-width: 0; padding: 7px 8px; border-radius: 8px;
@@ -67,7 +67,7 @@ export const MEMORY_STYLE = `
     font-size: 12px; cursor: pointer; }
   .memory-tab:hover { background: var(--wx-hover); }
   .memory-tab[aria-pressed="true"] { background: var(--wx-green);
-    border-color: var(--wx-green); color: #fff; }
+    border-color: var(--wx-green); color: var(--lenso-label-on-tint); }
   .memory-tab:focus-visible { outline: 2px solid var(--wx-green); outline-offset: 2px; }
   .memory-panel { padding: 12px 14px 22px; }
   .memory-panel[hidden] { display: none; }

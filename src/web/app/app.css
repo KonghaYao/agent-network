@@ -28,7 +28,7 @@
   position: fixed;
   inset: 0;
   z-index: 40;
-  background: rgb(0 0 0 / 42%);
+  background: var(--lenso-scrim);
   animation: spa-fade-in 120ms ease-out;
 }
 
@@ -79,12 +79,11 @@
   color: var(--wx-text);
 }
 
-.spa-dialog-button.primary,
-.spa-dialog-content button.primary {
-  /* 品牌绿 #07c160 与白字对比不足；弹窗内用更深的绿保证 AA。 */
-  background: #067d3f;
-  border-color: #067d3f;
-  color: #fff;
+.spa-dialog-button.primary:not([data-lenso-slot]),
+.spa-dialog-content button.primary:not([data-lenso-slot]) {
+  background: var(--app-prominent-fill);
+  border-color: var(--app-prominent-fill);
+  color: var(--lenso-label-on-tint);
 }
 
 .spa-dialog-content button[data-lenso-slot='button']:not(.primary):not(.danger) {
@@ -95,32 +94,32 @@
   color: var(--wx-text) !important;
 }
 
-.spa-dialog-button.primary:hover,
-.spa-dialog-content button.primary:hover {
-  background: #056b36;
-  border-color: #056b36;
+.spa-dialog-button.primary:not([data-lenso-slot]):hover,
+.spa-dialog-content button.primary:not([data-lenso-slot]):hover {
+  background: var(--lenso-control-tint-hover-fill);
+  border-color: var(--lenso-control-tint-hover-fill);
 }
 
-.spa-dialog-button.danger {
+.spa-dialog-button.danger:not([data-lenso-slot]) {
   background: var(--wx-danger);
   border-color: var(--wx-danger);
-  color: #fff;
+  color: var(--lenso-label-on-destructive);
 }
 
-.spa-dialog-button.danger:hover {
-  background: var(--wx-danger-strong);
-  border-color: var(--wx-danger-strong);
+.spa-dialog-button.danger:not([data-lenso-slot]):hover {
+  background: var(--lenso-control-status-error-hover-fill);
+  border-color: var(--lenso-control-status-error-hover-fill);
 }
 
-.spa-dialog-content button.primary.danger {
+.spa-dialog-content button.primary.danger:not([data-lenso-slot]) {
   background: var(--wx-danger);
   border-color: var(--wx-danger);
-  color: #fff;
+  color: var(--lenso-label-on-destructive);
 }
 
-.spa-dialog-content button.primary.danger:hover {
-  background: var(--wx-danger-strong);
-  border-color: var(--wx-danger-strong);
+.spa-dialog-content button.primary.danger:not([data-lenso-slot]):hover {
+  background: var(--lenso-control-status-error-hover-fill);
+  border-color: var(--lenso-control-status-error-hover-fill);
 }
 
 .spa-popover {
@@ -165,19 +164,11 @@
 }
 
 .field > span {
-  color: #5c5c5c;
+  color: var(--app-muted);
 }
 
 .spa-dialog-content .list-hint {
-  color: #5c5c5c;
-}
-
-@media (prefers-color-scheme: dark) {
-  .field > span,
-  .spa-dialog-content .list-hint,
-  .spa-member-role {
-    color: #b0b0b0;
-  }
+  color: var(--app-muted);
 }
 
 .field input,
@@ -307,7 +298,7 @@
 
 .spa-member-role {
   flex: 0 0 auto;
-  color: #5c5c5c;
+  color: var(--app-muted);
   font-size: 12px;
 }
 
@@ -546,13 +537,7 @@
 
 /* 群主转让说明用正文色而非 legacy 的 muted，保证 WCAG AA。 */
 #members-transfer .members-transfer-meta {
-  color: #5c5c5c;
-}
-
-@media (prefers-color-scheme: dark) {
-  #members-transfer .members-transfer-meta {
-    color: #b0b0b0;
-  }
+  color: var(--app-muted);
 }
 
 /* Memory 抽屉必须盖住自己的遮罩层，否则关闭按钮会被 overlay 拦截。 */
@@ -560,62 +545,8 @@ body .memory-drawer {
   z-index: 40;
 }
 
-/*
- * SPA 对比度基线：legacy 的 muted #999 与品牌绿 #07c160 在浅色底上
- * 达不到 AA。只在 React 根内覆盖，旧壳保持原样；深色使用 #b0b0b0。
- */
-body #root {
-  --wx-muted: #5c5c5c;
-}
-
-@media (prefers-color-scheme: dark) {
-  body #root {
-    --wx-muted: #b0b0b0;
-  }
-}
-
-body #root button.primary:not([data-lenso-slot]) {
-  border-color: #067d3f;
-  background: #067d3f;
-  color: #fff;
-}
-
-body #root button.primary:not([data-lenso-slot]):hover {
-  border-color: #056b36;
-  background: #056b36;
-}
-
-/* Radix portal 挂在 body 下，不继承 `#root` 的对比度变量。 */
-.spa-dialog-content,
-.room-menu,
-.attach-menu,
-.spa-popover,
-.memory-drawer,
-.spa-file-preview,
-.spa-drawboard-fallback {
-  --wx-muted: #5c5c5c;
-}
-
-@media (prefers-color-scheme: dark) {
-  .spa-dialog-content,
-  .room-menu,
-  .attach-menu,
-  .spa-popover,
-  .memory-drawer,
-  .spa-file-preview,
-  .spa-drawboard-fallback {
-    --wx-muted: #b0b0b0;
-  }
-}
-
 .memory-chip.warn {
-  color: #92400e;
-}
-
-@media (prefers-color-scheme: dark) {
-  .memory-chip.warn {
-    color: #fbbf24;
-  }
+  color: var(--lenso-status-warning-text);
 }
 
 /* ---- 4B-5b：好友申请 / 设备配对 / 已归档浮层 ----------------------------- */
@@ -655,19 +586,12 @@ body #root button.primary:not([data-lenso-slot]):hover {
 }
 
 .spa-dialog-content .pairing-status[data-success='1'] {
-  color: #116633;
+  color: var(--lenso-status-success-text);
 }
 
-/* 状态色在暗色面板上保持 AA；亮色沿用 legacy 文案色。 */
-@media (prefers-color-scheme: dark) {
-  .spa-dialog-content .pairing-status[data-success='1'] {
-    color: #4ade80;
-  }
-
-  .spa-dialog-content .pairing-status[data-error='1'],
-  .spa-dialog-content .archive-popover-status[data-error='1'] {
-    color: #ff8a80;
-  }
+.spa-dialog-content .pairing-status[data-error='1'],
+.spa-dialog-content .archive-popover-status[data-error='1'] {
+  color: var(--lenso-status-error-text);
 }
 
 .archive-popover-status[hidden],
@@ -1088,6 +1012,6 @@ body #root button.primary:not([data-lenso-slot]):hover {
 }
 
 .memory-avatar-trigger:focus-visible {
-  outline: 2px solid #067d3f;
+  outline: 2px solid var(--lenso-focus-ring);
   outline-offset: 2px;
 }

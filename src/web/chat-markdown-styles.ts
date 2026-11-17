@@ -27,10 +27,10 @@ export const MARKDOWN_STYLE = `
   .msg-markdown hr { margin: 12px 0; border: 0; border-top: 1px solid var(--wx-line); }
   .msg-markdown a { color: var(--wx-link); text-decoration: underline;
     text-underline-offset: 2px; }
-  .msg.mine .msg-markdown a { color: #2f6b45; }
+  .msg.mine .msg-markdown a { color: var(--lenso-tint-text); }
   .msg-markdown .md-link-blocked { color: inherit; text-decoration: line-through; }
   .msg-markdown .mention { color: var(--wx-link); font-weight: 500; }
-  .msg.mine .msg-markdown .mention { color: #2f6b45; }
+  .msg.mine .msg-markdown .mention { color: var(--lenso-tint-text); }
   .msg-markdown code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12.5px; }
   .msg-markdown .md-code-inline { padding: 1px 4px; border-radius: 3px;

@@ -34,8 +34,8 @@ export const MONITOR_STYLE = `
   .monitor-icon:hover { background: var(--wx-hover); color: var(--wx-text); }
   .monitor-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
     stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-  .monitor-icon.primary { background: var(--wx-green); color: #fff; }
-  .monitor-icon.primary:hover { background: var(--wx-green-strong); color: #fff; }
+  .monitor-icon.primary { background: var(--wx-green); color: var(--lenso-label-on-tint); }
+  .monitor-icon.primary:hover { background: var(--wx-green-strong); color: var(--lenso-label-on-tint); }
   .monitor-icon:disabled { opacity: .45; cursor: default; }
   .monitor-icon[aria-disabled="true"] { background: transparent; color: var(--wx-muted);
     opacity: .45; cursor: default; }

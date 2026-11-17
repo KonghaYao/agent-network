@@ -1,7 +1,7 @@
 export const MESSAGE_ACTIONS_STYLE = `
   .message-action-menu { position: fixed; z-index: 100; min-width: 140px; padding: 6px;
     background: var(--wx-panel); color: var(--wx-text); border: 1px solid var(--wx-line);
-    border-radius: 8px; box-shadow: 0 6px 24px #0003; }
+    border-radius: 8px; box-shadow: var(--lenso-surface-shadow); }
   .message-action-menu button { min-height: 40px; }
   .message-actions-trigger { display: inline-flex; align-items: center; justify-content: center;
     min-width: 32px; min-height: 24px; color: var(--wx-muted); background: transparent;
@@ -28,7 +28,7 @@ export const MESSAGE_ACTIONS_STYLE = `
   .forward-modal { width: min(480px, calc(100vw - 32px)); max-height: 80dvh;
     overflow: auto; border: 1px solid var(--wx-line); border-radius: 12px;
     color: var(--wx-text); background: var(--wx-chat-bg, var(--wx-panel)); }
-  .forward-modal::backdrop { background: #0006; }
+  .forward-modal::backdrop { background: var(--lenso-scrim); }
   .forward-modal h2 { font-size: 16px; }
   .forward-modal input { width: 100%; box-sizing: border-box; padding: 10px; }
   .forward-rooms { display: grid; gap: 6px; margin: 12px 0; }

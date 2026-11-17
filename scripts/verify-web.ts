@@ -367,6 +367,28 @@ function roomLink(roomId: string): string {
   return `#room-list a.room-item[href="/c/${encodeURIComponent(roomId)}"]`;
 }
 
+async function lensoSecondaryColor(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const sample = document.createElement('span');
+    sample.style.color = 'var(--lenso-label-secondary)';
+    document.body.append(sample);
+    const color = getComputedStyle(sample).color;
+    sample.remove();
+    return color;
+  });
+}
+
+async function lensoBackgroundColor(page: Page, token: string): Promise<string> {
+  return page.evaluate((name) => {
+    const sample = document.createElement('span');
+    sample.style.backgroundColor = `var(--lenso-${name})`;
+    document.body.append(sample);
+    const color = getComputedStyle(sample).backgroundColor;
+    sample.remove();
+    return color;
+  }, token);
+}
+
 /** 等待左侧会话列表出现指定名称的条目（direct 名称会由后台补全）。 */
 async function waitRoomListName(page: Page, name: string): Promise<void> {
   await page.waitForFunction(
@@ -5015,9 +5037,9 @@ async function main(): Promise<void> {
       checkEqual('账号区高度保持 legacy 55px', accountLayout?.account?.height, 55);
       checkEqual('账号操作行高度保持 legacy 22px', accountLayout?.actions?.height, 22);
       checkEqual(
-        '改名铅笔保持 legacy 浅色 #999',
+        '改名铅笔使用 Lenso 次级文字色',
         accountLayout?.pencilColor,
-        'rgb(153, 153, 153)',
+        await lensoSecondaryColor(page),
       );
       checkEqual(
         '人类身份五项入口全部可用',
@@ -5190,7 +5212,7 @@ async function main(): Promise<void> {
       await context.close();
     }
 
-    // 5b. 暗色与 Agent 身份：铅笔颜色跟随 legacy，五项入口不被禁用。
+    // 5b. 暗色与 Agent 身份：铅笔颜色跟随 Lenso 主题，五项入口不被禁用。
     {
       const dark = await makeContext(
         browser,
@@ -5209,7 +5231,7 @@ async function main(): Promise<void> {
           return node ? getComputedStyle(node).color : null;
         })()`,
       )) as string | null;
-      checkEqual('改名铅笔保持 legacy 暗色 #8c8c8c', darkPencil, 'rgb(140, 140, 140)');
+      checkEqual('改名铅笔使用 Lenso 暗色次级文字色', darkPencil, await lensoSecondaryColor(dark.page));
       await dark.context.close();
     }
 
@@ -5258,9 +5280,9 @@ async function main(): Promise<void> {
         '1',
       );
       checkEqual(
-        'Agent 身份改名铅笔保持 legacy 浅色 #999',
+        'Agent 身份改名铅笔使用 Lenso 次级文字色',
         agentState.pencilColor,
-        'rgb(153, 153, 153)',
+        await lensoSecondaryColor(agent.page),
       );
 
       const openAndClose = async (
@@ -5450,7 +5472,7 @@ async function main(): Promise<void> {
         bg: getComputedStyle(document.body).backgroundColor
       }))()`)) as { width: number; viewport: number; bg: string };
       check('移动端无横向溢出', layout.width <= layout.viewport + 1, layout);
-      check('暗色背景生效', layout.bg === 'rgb(25, 25, 25)', layout.bg);
+      check('Lenso 暗色背景生效', layout.bg === await lensoBackgroundColor(page, 'background-primary'), layout.bg);
       await context.close();
     }
 
@@ -5679,7 +5701,7 @@ async function main(): Promise<void> {
           await friendRow.locator('.unread').evaluate(
             (node) => getComputedStyle(node).backgroundColor,
           ),
-          'rgb(250, 81, 81)',
+          await lensoBackgroundColor(page, 'status-error-fill'),
         );
         checkEqual(
           '好友分类未读会话数徽标',
@@ -5817,7 +5839,7 @@ async function main(): Promise<void> {
           await mutedRow.locator('.unread').evaluate(
             (node) => getComputedStyle(node).backgroundColor,
           ),
-          'rgb(250, 81, 81)',
+          await lensoBackgroundColor(page, 'status-error-fill'),
         );
         checkEqual(
           '聊天页收到新消息后 Agent 分类徽标恢复',
@@ -5837,7 +5859,7 @@ async function main(): Promise<void> {
           await mutedRow.locator('.unread').evaluate(
             (node) => getComputedStyle(node).backgroundColor,
           ),
-          'rgb(138, 138, 138)',
+          await lensoBackgroundColor(page, 'label-tertiary'),
         );
         checkEqual(
           '聊天页免打扰后侧栏立即显示标签',

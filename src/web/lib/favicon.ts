@@ -9,11 +9,11 @@ import { badgeLabel } from './tab-badge';
  */
 
 const ICON_SIZE = 64;
-const BADGE_COLOR = '#fa5151';
-const BASE_COLOR = '#07c160';
+const BADGE_COLOR = '#ff383c';
+const BASE_COLOR = '#007aff';
 
 /**
- * 基础图标：微信式绿色圆角方块 + 白色对话气泡。
+ * 基础图标：Lenso 系统蓝圆角方块 + 白色对话气泡。
  *
  * 同时供服务端 `<link rel="icon">` 与客户端 canvas 底图使用，保证恢复后
  * 的图标与有红点时完全一致。

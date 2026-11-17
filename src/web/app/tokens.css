@@ -1,24 +1,17 @@
 :root {
   color-scheme: light dark;
-  --lenso-tint: #0759a9;
-  --lenso-link: #0759a9;
-  --spa-bg: var(--lenso-background-primary, #f5f5f7);
-  --spa-surface: var(--lenso-background-secondary, #ffffff);
-  --spa-text: var(--lenso-label-primary, #1a1a1a);
-  --spa-muted: var(--lenso-label-secondary, #666666);
-  --spa-accent: var(--lenso-tint, #007aff);
+  --app-muted: color-mix(in srgb, var(--lenso-label-primary) 68%, var(--lenso-background-secondary));
+  --app-prominent-fill: color-mix(in srgb, var(--lenso-tint-text) 80%, var(--lenso-constant-black));
+  --spa-bg: var(--lenso-background-primary);
+  --spa-surface: var(--lenso-background-secondary);
+  --spa-text: var(--lenso-label-primary);
+  --spa-muted: var(--app-muted);
+  --spa-accent: var(--lenso-tint);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --lenso-background-primary: #191919;
-    --lenso-background-secondary: #242424;
-    --lenso-link: #85c3ff;
-    --spa-bg: var(--lenso-background-primary, #191919);
-    --spa-surface: var(--lenso-background-secondary, #242424);
-    --spa-text: var(--lenso-label-primary, #e5e5e5);
-    --spa-muted: var(--lenso-label-secondary, #a3a3a3);
-  }
+button[data-lenso-slot='button'][data-variant='prominent'] {
+  background: var(--app-prominent-fill) !important;
+  color: var(--lenso-label-on-tint) !important;
 }
 
 * {
