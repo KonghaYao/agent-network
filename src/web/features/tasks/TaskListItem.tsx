@@ -2,12 +2,13 @@ import { TaskPreviewPopover } from './TaskPreviewPopover';
 import type { TaskListItemView } from './types';
 
 /**
- * 常驻 dock 的一行：触发预览的主按钮与“完成”是兄弟按钮，不嵌套。
+ * 常驻 dock 的一行：触发预览的主按钮与“询问进度”/“完成”是兄弟按钮，不嵌套。
  */
 export function TaskListItem({
   item,
   readOnly,
   completing,
+  canAsk,
   previewOpen,
   previewPinned,
   onRequestOpen,
@@ -16,11 +17,13 @@ export function TaskListItem({
   onHoverClose,
   onEscapeKeyDown,
   onOpenTrace,
+  onAskProgress,
   onComplete,
 }: {
   item: TaskListItemView;
   readOnly: boolean;
   completing: boolean;
+  canAsk: boolean;
   previewOpen: boolean;
   previewPinned: boolean;
   onRequestOpen: (rootId: string) => void;
@@ -29,9 +32,11 @@ export function TaskListItem({
   onHoverClose: (rootId: string) => void;
   onEscapeKeyDown: (event: Event) => void;
   onOpenTrace: (rootId: string, focusId: string | null) => void;
+  onAskProgress: (item: TaskListItemView) => void;
   onComplete: (item: TaskListItemView) => void;
 }) {
   const preview = item.preview || '（无正文）';
+  const askable = canAsk && !readOnly;
   const canComplete = !readOnly && item.status === 'open' && item.can_complete;
   const disabledReason = readOnly
     ? '群聊只读归档，不能完成 Task'
@@ -54,8 +59,21 @@ export function TaskListItem({
         onHoverClose={onHoverClose}
         onEscapeKeyDown={onEscapeKeyDown}
         onOpenTrace={onOpenTrace}
+        canAsk={askable}
+        onAskProgress={onAskProgress}
       />
       <div className="task-dock-item-actions">
+        {askable ? (
+          <button
+            type="button"
+            className="task-dock-ask"
+            aria-label={`询问进度：${preview}`}
+            title="引用这条 Task 并询问 Agent 进度"
+            onClick={() => onAskProgress(item)}
+          >
+            询问进度
+          </button>
+        ) : null}
         <button
           type="button"
           className="task-dock-complete"

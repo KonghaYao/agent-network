@@ -23,6 +23,7 @@ import { MessageSearchDialog } from '../features/tasks/MessageSearchDialog';
 import { RoomTaskDock } from '../features/tasks/RoomTaskDock';
 import { TaskTraceDialog } from '../features/tasks/TaskTraceDialog';
 import { useRoomTaskController } from '../features/tasks/useRoomTaskController';
+import { useTaskAskProgress } from '../features/tasks/useTaskAskProgress';
 import { AccountMenu } from '../features/sidebar/AccountMenu';
 import { openAgentMemory } from '../features/memory/memory-store';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -295,6 +296,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const onStatus = useCallback((message: string) => {
     setStatus(message);
   }, []);
+
+  const { draftRequest, canAskTask, onAskTaskProgress, clearDraftRequest } =
+    useTaskAskProgress({ roomId, room, items: chat.items, members, identity, setReply });
 
   const roomActions = useRoomMenuActions({
     room,
@@ -776,6 +780,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       room={room}
                       token={token}
                       actorId={identity.actor_id}
+                      canAskTask={canAskTask}
+                      onAskProgress={onAskTaskProgress}
                       onOpenTrace={openTrace}
                     />
                   ) : null}
@@ -811,6 +817,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       identity={identity}
                       token={token}
                       reply={reply}
+                      draftRequest={draftRequest}
+                      onDraftApplied={clearDraftRequest}
                       sending={false}
                       onCancelReply={() => setReply(null)}
                       onSend={onSend}

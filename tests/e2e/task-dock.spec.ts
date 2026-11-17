@@ -127,14 +127,14 @@ async function sendMessage(
   token: string,
   roomId: string,
   body: string,
-  options: { taskRootId?: string; replyTo?: string } = {},
+  options: { taskRootId?: string; replyTo?: string; invoke?: string[] } = {},
 ): Promise<string> {
   const args: Record<string, unknown> = {
     request_id: requestId('e2e_task_msg'),
     client_message_id: requestId('e2e_task_client'),
     room_id: roomId,
     body,
-    invoke: [],
+    invoke: options.invoke ?? [],
   };
   if (options.taskRootId) args.task_root_id = options.taskRootId;
   if (options.replyTo) args.reply_to = options.replyTo;
@@ -203,6 +203,44 @@ async function setupTaskRoom(
     roots.push(rootId);
   }
   return { owner, agent, roomId, roots };
+}
+
+async function createAgent(
+  base: string,
+  ownerToken: string,
+  name: string,
+): Promise<AgentCreated> {
+  return callTool<AgentCreated>(base, ownerToken, 'network_agent_create', {
+    request_id: requestId('e2e_task_agent'),
+    name,
+  });
+}
+
+async function createGroup(
+  base: string,
+  ownerToken: string,
+  title: string,
+  members: string[],
+): Promise<string> {
+  const created = await callTool<RoomCreated>(base, ownerToken, 'network_room_create', {
+    request_id: requestId('e2e_task_room'),
+    kind: 'group',
+    title,
+    members,
+  });
+  return created.room.room_id;
+}
+
+async function createTask(
+  base: string,
+  token: string,
+  roomId: string,
+  body: string,
+  invoke: string[] = [],
+): Promise<string> {
+  const messageId = await sendMessage(base, token, roomId, body, { invoke });
+  await markTask(base, token, roomId, messageId);
+  return messageId;
 }
 
 function itemLocator(page: Page, rootId: string) {
@@ -991,6 +1029,272 @@ test.describe('浮动 Task dock', () => {
   });
 });
 
+test.describe('Task dock 询问进度', () => {
+  test('复原根消息的 @，引用根消息且不自动发送', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `Ask Owner ${suffix}`);
+    const agentA = await createAgent(base, owner.token, `Ask Agent A ${suffix}`);
+    const agentB = await createAgent(base, owner.token, `Ask Agent B ${suffix}`);
+    const roomId = await createGroup(base, owner.token, `Ask Group ${suffix}`, [
+      agentA.actor_id,
+      agentB.actor_id,
+    ]);
+    // 服务端 mentions 按 actor_id 排序；让正文顺序与之相反，直接验证前端按正文排序。
+    const [first, second] =
+      agentA.actor_id < agentB.actor_id ? [agentB, agentA] : [agentA, agentB];
+    const rootId = await createTask(
+      base,
+      owner.token,
+      roomId,
+      `@${first.name} @${second.name} 请同步交付里程碑`,
+      [first.actor_id, second.actor_id],
+    );
+    await sendMessage(base, agentA.token, roomId, 'A 正在核对', { taskRootId: rootId });
+    await sendMessage(base, agentB.token, roomId, 'B 正在核对', { taskRootId: rootId });
+
+    const sends: string[] = [];
+    page.on('request', (request) => {
+      if (request.headers()['mcp-name'] === 'network_message_send') {
+        sends.push(request.postData() ?? '');
+      }
+    });
+
+    await openRoom(page, base, owner.token, roomId);
+    await expandDock(page);
+    const item = itemLocator(page, rootId);
+    await expect(item.locator('.task-dock-ask')).toBeVisible();
+    await item.locator('.task-dock-ask').click();
+
+    await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'collapsed');
+    await expect(page.locator('#composer-reply')).toBeVisible();
+    await expect(page.locator('#composer-reply')).toContainText('请同步交付里程碑');
+    await expect(page.locator('#body')).toBeFocused();
+    await expect
+      .poll(() => page.locator('#body').inputValue())
+      .toContain('这个 task 现在进度如何？');
+
+    const value = await page.locator('#body').inputValue();
+    expect(value.trim().endsWith('这个 task 现在进度如何？')).toBe(true);
+
+    // 直接断言正文顺序：不能从服务端 mentions 数组推导期望。
+    const firstPosition = value.indexOf(`@${first.name}`);
+    const secondPosition = value.indexOf(`@${second.name}`);
+    expect(firstPosition).toBeGreaterThanOrEqual(0);
+    expect(secondPosition).toBeGreaterThanOrEqual(0);
+    expect(firstPosition).toBeLessThan(secondPosition);
+
+    interface HistoryPage {
+      items: { message_id: string; mentions: { actor_id: string; kind: string }[] }[];
+    }
+    const history = await callTool<HistoryPage>(
+      base,
+      owner.token,
+      'network_history_list',
+      { room_id: roomId, direction: 'before', limit: 50 },
+    );
+    const root = history.items.find((entry) => entry.message_id === rootId);
+    expect(root).toBeTruthy();
+    // 服务端数组与正文顺序相反，证明这个 fixture 真正覆盖了排序缺陷。
+    expect(root?.mentions.map((mention) => mention.actor_id)).toEqual([
+      second.actor_id,
+      first.actor_id,
+    ]);
+
+    await page.waitForTimeout(300);
+    expect(sends).toHaveLength(0);
+    await expect(page.locator('#body')).toHaveValue(value);
+  });
+
+  test('预览被截断时读取一次根正文，按完整正文顺序复原', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `Ask Read Owner ${suffix}`);
+    const agentA = await createAgent(base, owner.token, `Ask Read A ${suffix}`);
+    const agentB = await createAgent(base, owner.token, `Ask Read B ${suffix}`);
+    const roomId = await createGroup(base, owner.token, `Ask Read ${suffix}`, [
+      agentA.actor_id,
+      agentB.actor_id,
+    ]);
+    // 服务端 preview 上限 512 字节：填充文本占满预览，两个 @ 只能从正文读取。
+    const [first, second] =
+      agentA.actor_id < agentB.actor_id ? [agentB, agentA] : [agentA, agentB];
+    const filler = '进度背景说明。'.repeat(80);
+    const rootId = await createTask(
+      base,
+      owner.token,
+      roomId,
+      `${filler}@${first.name} @${second.name} 请同步进度`,
+      [first.actor_id, second.actor_id],
+    );
+
+    await openRoom(page, base, owner.token, roomId);
+    await expandDock(page);
+    const readRequest = page.waitForRequest(
+      (request) =>
+        request.headers()['mcp-name'] === 'network_message_read' &&
+        (request.postData() ?? '').includes(rootId),
+    );
+    await itemLocator(page, rootId).locator('.task-dock-ask').click();
+    await readRequest;
+
+    await expect
+      .poll(() => page.locator('#body').inputValue())
+      .toContain(`@${first.name}`);
+    const value = await page.locator('#body').inputValue();
+    expect(value.indexOf(`@${first.name}`)).toBeGreaterThanOrEqual(0);
+    expect(value.indexOf(`@${second.name}`)).toBeGreaterThanOrEqual(0);
+    expect(value.indexOf(`@${first.name}`)).toBeLessThan(value.indexOf(`@${second.name}`));
+  });
+
+  test('根正文读取失败时按服务端顺序兜底', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `Ask Fallback Owner ${suffix}`);
+    const agentA = await createAgent(base, owner.token, `Ask Fallback A ${suffix}`);
+    const agentB = await createAgent(base, owner.token, `Ask Fallback B ${suffix}`);
+    const roomId = await createGroup(base, owner.token, `Ask Fallback ${suffix}`, [
+      agentA.actor_id,
+      agentB.actor_id,
+    ]);
+    const [first, second] =
+      agentA.actor_id < agentB.actor_id ? [agentB, agentA] : [agentA, agentB];
+    const filler = '进度背景说明。'.repeat(80);
+    const rootId = await createTask(
+      base,
+      owner.token,
+      roomId,
+      `${filler}@${first.name} @${second.name} 请同步进度`,
+      [first.actor_id, second.actor_id],
+    );
+
+    await page.route('**/mcp', async (route) => {
+      if (route.request().headers()['mcp-name'] !== 'network_message_read') {
+        await route.continue();
+        return;
+      }
+      const parsed = JSON.parse(route.request().postData() ?? '{}') as { id?: unknown };
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: toolErrorBody(parsed.id, 'MESSAGE_UNAVAILABLE', '读取失败（模拟）'),
+      });
+    });
+
+    await openRoom(page, base, owner.token, roomId);
+    await expandDock(page);
+    await itemLocator(page, rootId).locator('.task-dock-ask').click();
+
+    await expect
+      .poll(() => page.locator('#body').inputValue())
+      .toContain(`@${second.name}`);
+    const value = await page.locator('#body').inputValue();
+    // 服务端 mentions 按 actor_id 排序，与正文顺序相反。
+    expect(value.indexOf(`@${second.name}`)).toBeGreaterThanOrEqual(0);
+    expect(value.indexOf(`@${first.name}`)).toBeGreaterThanOrEqual(0);
+    expect(value.indexOf(`@${second.name}`)).toBeLessThan(value.indexOf(`@${first.name}`));
+  });
+
+  test('无根 @ 时回退最近参与的 Agent，预览入口共用同一处理', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `Ask Latest Owner ${suffix}`);
+    const agentA = await createAgent(base, owner.token, `Ask Latest A ${suffix}`);
+    const agentB = await createAgent(base, owner.token, `Ask Latest B ${suffix}`);
+    const roomId = await createGroup(base, owner.token, `Ask Latest ${suffix}`, [
+      agentA.actor_id,
+      agentB.actor_id,
+    ]);
+    const rootId = await createTask(base, owner.token, roomId, '请同步交付里程碑');
+    await sendMessage(base, agentA.token, roomId, 'A 较早回复', { taskRootId: rootId });
+    await sendMessage(base, agentB.token, roomId, 'B 最近回复', { taskRootId: rootId });
+
+    await openRoom(page, base, owner.token, roomId);
+    await expandDock(page);
+    const trigger = itemLocator(page, rootId).locator('.task-dock-item-trigger');
+    await trigger.click();
+    const popover = page.locator(`#task-preview-${rootId}`);
+    await expect(popover).toBeVisible();
+    await popover.locator('.task-preview-ask').click();
+
+    await expect(page.locator('#composer-reply')).toBeVisible();
+    await expect(page.locator('#composer-reply')).toContainText('请同步交付里程碑');
+    await expect(page.locator('#body')).toBeFocused();
+    await expect
+      .poll(() => page.locator('#body').inputValue())
+      .toContain(`@${agentB.name} 这个 task 现在进度如何？`);
+    const value = await page.locator('#body').inputValue();
+    expect(value).toContain(`@${agentB.name} 这个 task 现在进度如何？`);
+    expect(value).not.toContain(`@${agentA.name}`);
+  });
+
+  test('没有 Agent 参与时不渲染询问入口', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `Ask Human Owner ${suffix}`);
+    const bystander = await createAgent(base, owner.token, `Ask Bystander ${suffix}`);
+    const roomId = await createGroup(base, owner.token, `Ask Humans ${suffix}`, [
+      bystander.actor_id,
+    ]);
+    const rootId = await createTask(base, owner.token, roomId, '人类之间的 Task');
+    await sendMessage(base, owner.token, roomId, '人类之间的后续回复', {
+      taskRootId: rootId,
+    });
+
+    await openRoom(page, base, owner.token, roomId);
+    await expandDock(page);
+    const item = itemLocator(page, rootId);
+    await expect(item).toBeVisible();
+    await expect(item.locator('.task-dock-ask')).toHaveCount(0);
+    await item.locator('.task-dock-item-trigger').click();
+    await expect(page.locator(`#task-preview-${rootId}`)).toBeVisible();
+    await expect(page.locator(`#task-preview-${rootId} .task-preview-ask`)).toHaveCount(0);
+  });
+
+  test('只读房间不渲染询问入口', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const fixture = await setupTaskRoom(base, suffix, { replies: 1 });
+    await callTool(base, fixture.owner.token, 'network_room_dissolve', {
+      request_id: requestId('e2e_task_dissolve'),
+      room_id: fixture.roomId,
+    });
+
+    await openRoom(page, base, fixture.owner.token, fixture.roomId);
+    await expect(page.locator('#room-archive-banner')).toBeVisible();
+    await expandDock(page);
+    const rootId = fixture.roots[0];
+    if (!rootId) throw new Error('Task fixture 缺少 root');
+    const item = itemLocator(page, rootId);
+    await expect(item.locator('.task-dock-ask')).toHaveCount(0);
+    await item.locator('.task-dock-item-trigger').click();
+    await expect(page.locator(`#task-preview-${rootId}`)).toBeVisible();
+    await expect(page.locator(`#task-preview-${rootId} .task-preview-ask`)).toHaveCount(0);
+  });
+
+  test('已有草稿保留并追加一行，不被静默清空', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const fixture = await setupTaskRoom(base, suffix, { replies: 1 });
+    const rootId = fixture.roots[0];
+    if (!rootId) throw new Error('Task fixture 缺少 root');
+
+    await openRoom(page, base, fixture.owner.token, fixture.roomId);
+    await page.locator('#body').fill('我已经写了一半的草稿');
+    await expandDock(page);
+    await itemLocator(page, rootId).locator('.task-dock-ask').click();
+
+    await expect(page.locator('#body')).toBeFocused();
+    await expect
+      .poll(() => page.locator('#body').inputValue())
+      .toContain(`@${fixture.agent.name} 这个 task 现在进度如何？`);
+    const value = await page.locator('#body').inputValue();
+    expect(value.startsWith('我已经写了一半的草稿\n')).toBe(true);
+    expect(value).toContain(`@${fixture.agent.name} 这个 task 现在进度如何？`);
+    await expect(page.locator('#composer-reply')).toBeVisible();
+  });
+});
+
 test.describe('mobile Task dock', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
@@ -1021,11 +1325,16 @@ test.describe('mobile Task dock', () => {
       .locator('#task-dock .task-dock-complete')
       .boundingBox();
     expect(completeBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+    const askBox = await page.locator('#task-dock .task-dock-ask').boundingBox();
+    expect(askBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+    expect(askBox?.width ?? 0).toBeGreaterThanOrEqual(44);
 
     const trigger = page.locator('#task-dock .task-dock-item-trigger');
     await trigger.tap();
     const popover = page.locator(`#task-preview-${fixture.roots[0]}`);
     await expect(popover).toBeVisible();
+    const popoverAskBox = await popover.locator('.task-preview-ask').boundingBox();
+    expect(popoverAskBox?.height ?? 0).toBeGreaterThanOrEqual(44);
     const popoverBox = await popover.boundingBox();
     expect(popoverBox?.width ?? 0).toBeLessThanOrEqual(390);
     expect(
