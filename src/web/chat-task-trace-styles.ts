@@ -45,6 +45,10 @@ export const TASK_TRACE_STYLE = `
     min-height: 44px; margin: -6px 0 10px; color: var(--wx-text); font-size: 13px;
     cursor: pointer; }
   .message-search-filter input { width: 18px; height: 18px; margin: 0; }
+  /* Lenso Checkbox 根是 button；保留 44px 命中区并去掉原生按钮外观。 */
+  .message-search-filter[data-lenso-slot='checkbox'] { padding: 0; border: 0;
+    background: transparent; color: var(--wx-text); font-size: 13px;
+    font-weight: 400; }
   .task-search-result { display: flex; align-items: flex-start; gap: 8px;
     box-sizing: border-box; width: 100%; min-height: 44px; padding: 10px;
     border: 0; border-top: 1px solid var(--wx-line); background: transparent;

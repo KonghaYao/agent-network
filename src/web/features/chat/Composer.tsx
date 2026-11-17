@@ -1,6 +1,5 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, Menu } from '../../app/lenso-controls';
 import * as Ariakit from '@ariakit/react';
-import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import {
   useCallback,
   useEffect,
@@ -285,6 +284,7 @@ export function Composer({
   const [selections, setSelections] = useState<MentionSelection[]>([]);
   const [mention, setMention] = useState<MentionQuery | null>(null);
   const [localSending, setLocalSending] = useState(false);
+  const [attachOpen, setAttachOpen] = useState(false);
   const [drawboardLoading, setDrawboardLoading] = useState(false);
   const [drawboardError, setDrawboardError] = useState(false);
   const drawboardOpening = useRef(false);
@@ -683,8 +683,16 @@ export function Composer({
           void submit();
         }}
       >
-        <DropdownMenuPrimitive.Root>
-          <DropdownMenuPrimitive.Trigger asChild>
+        <Menu
+          id="attach-menu"
+          label="添加附件"
+          className="attach-menu"
+          itemClassName="attach-menu-item"
+          open={attachOpen}
+          onOpenChange={setAttachOpen}
+          sideOffset={6}
+          align="start"
+          trigger={
             <Button
               className="attach-btn"
               variant="bordered"
@@ -699,32 +707,20 @@ export function Composer({
             >
               +
             </Button>
-          </DropdownMenuPrimitive.Trigger>
-          <DropdownMenuPrimitive.Portal>
-            <DropdownMenuPrimitive.Content
-              id="attach-menu"
-              className="attach-menu spa-menu"
-              aria-label="添加附件"
-              sideOffset={6}
-              align="start"
-            >
-              <DropdownMenuPrimitive.Item
-                className="attach-menu-item"
-                id="attach-menu-file"
-                onSelect={() => fileInputRef.current?.click()}
-              >
-                上传文件
-              </DropdownMenuPrimitive.Item>
-              <DropdownMenuPrimitive.Item
-                className="attach-menu-item"
-                id="attach-menu-draw"
-                onSelect={() => void openDrawboard()}
-              >
-                画板
-              </DropdownMenuPrimitive.Item>
-            </DropdownMenuPrimitive.Content>
-          </DropdownMenuPrimitive.Portal>
-        </DropdownMenuPrimitive.Root>
+          }
+          items={[
+            {
+              id: 'attach-menu-file',
+              label: '上传文件',
+              onSelect: () => fileInputRef.current?.click(),
+            },
+            {
+              id: 'attach-menu-draw',
+              label: '画板',
+              onSelect: () => void openDrawboard(),
+            },
+          ]}
+        />
         <input
           id="composer-file-input"
           ref={fileInputRef}

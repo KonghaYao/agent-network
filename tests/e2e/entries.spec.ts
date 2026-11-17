@@ -805,7 +805,11 @@ test.describe('SPA 剩余入口', () => {
     await page.locator('#message-search-input').fill('柠');
     await page.locator('#message-search-form button[type="submit"]').click();
     await expect(page.locator('#message-search-results .message-search-result')).toHaveCount(1);
-    await page.locator('[data-task-only]').check();
+    const taskOnly = page.locator('[data-task-only]');
+    await expect(taskOnly).toHaveAttribute('data-lenso-slot', 'checkbox');
+    await expect(taskOnly).toHaveClass(/message-search-filter/u);
+    await taskOnly.check();
+    await expect(taskOnly).toHaveAttribute('aria-checked', 'true');
     await page.locator('#message-search-form button[type="submit"]').click();
     const taskResult = page.locator('#message-search-results .task-search-result').first();
     await expect(taskResult).toBeVisible();

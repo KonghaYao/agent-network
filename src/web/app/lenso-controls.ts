@@ -4,14 +4,18 @@ import type {
   SegmentedControlProps,
 } from '@lenso/ui';
 import {
+  cloneElement,
   createElement,
+  Fragment,
   useEffect,
+  useRef,
   useSyncExternalStore,
   type ChangeEvent,
   type ComponentProps,
   type ComponentPropsWithRef,
   type ComponentType,
   type ReactElement,
+  type ReactNode,
 } from 'react';
 
 type LensoModule = typeof import('@lenso/ui');
@@ -232,6 +236,207 @@ export function SegmentedControl({ items, value, onValueChange, ...props }: Segm
       'aria-checked': item.value === value,
       onClick: () => onValueChange?.(item.value),
     }, item.label)),
+  );
+}
+
+export interface MenuAction {
+  id: string;
+  label: ReactNode;
+  onSelect: () => void;
+  className?: string;
+  disabled?: boolean;
+}
+
+export interface MenuAdapterProps {
+  id: string;
+  trigger: ReactElement;
+  items: MenuAction[];
+  label?: string;
+  className?: string;
+  itemClassName?: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  sideOffset?: number;
+  align?: 'start' | 'center' | 'end';
+  container?: Element | DocumentFragment | null;
+}
+
+/**
+ * 动作菜单：Lenso 未就绪时渲染同样可用的原生菜单，就绪后换成 Lenso Menu。
+ * 触发元素与菜单项 id 原样保留；`open` 由调用方持有，异步替换不会丢状态。
+ */
+export function Menu({
+  id,
+  trigger,
+  items,
+  label,
+  className,
+  itemClassName,
+  open,
+  onOpenChange,
+  sideOffset,
+  align,
+  container,
+}: MenuAdapterProps) {
+  const lenso = useLenso();
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const triggerProps = {
+    'aria-haspopup': 'menu' as const,
+    'aria-controls': id,
+    'aria-expanded': open,
+    ref: triggerRef,
+  };
+
+  if (lenso) {
+    const Content = lenso.Menu.Content as unknown as ComponentType<Record<string, unknown>>;
+    const Item = lenso.Menu.Item as unknown as ComponentType<Record<string, unknown>>;
+    const Trigger = lenso.Menu.Trigger as unknown as ComponentType<Record<string, unknown>>;
+    return createElement(
+      lenso.Menu as unknown as ComponentType<Record<string, unknown>>,
+      {
+        open,
+        onOpenChange,
+        container:
+          container ?? (typeof document === 'undefined' ? undefined : document.body),
+      },
+      createElement(Trigger, {
+        render: cloneElement(trigger as ReactElement<Record<string, unknown>>, triggerProps),
+      }),
+      createElement(
+        Content,
+        {
+          id,
+          className,
+          'aria-label': label,
+          sideOffset,
+          align,
+          style: { zIndex: 'var(--app-z-portal-local-menu)' },
+          render: createElement('div', { className }),
+        },
+        items.map((item) =>
+          createElement(
+            Item,
+            {
+              key: item.id,
+              id: item.id,
+              className: itemClassName,
+              disabled: item.disabled,
+              onSelect: () => item.onSelect(),
+              render: createElement('div', { className: itemClassName }),
+            },
+            item.label,
+          ),
+        ),
+      ),
+    );
+  }
+
+  const triggerElement = cloneElement(trigger as ReactElement<Record<string, unknown>>, {
+    ...triggerProps,
+    onClick: (event: { defaultPrevented: boolean }) => {
+      const original = (trigger.props as { onClick?: (next: typeof event) => void }).onClick;
+      original?.(event);
+      if (!event.defaultPrevented) onOpenChange(!open);
+    },
+  });
+
+  return createElement(
+    Fragment,
+    null,
+    triggerElement,
+    open
+      ? createElement(
+          'div',
+          {
+            id,
+            role: 'menu',
+            'aria-label': label,
+            'data-lenso-slot': 'menu-fallback',
+            className: [className, 'attach-menu-native'].filter(Boolean).join(' '),
+            onKeyDown: (event: { key: string }) => {
+              if (event.key !== 'Escape') return;
+              onOpenChange(false);
+              triggerRef.current?.focus();
+            },
+          },
+          items.map((item, index) =>
+            createElement(
+              'button',
+              {
+                key: item.id,
+                id: item.id,
+                type: 'button',
+                role: 'menuitem',
+                className: itemClassName,
+                disabled: item.disabled,
+                autoFocus: index === 0,
+                onClick: () => {
+                  item.onSelect();
+                  onOpenChange(false);
+                },
+              },
+              item.label,
+            ),
+          ),
+        )
+      : null,
+  );
+}
+
+export interface CheckboxAdapterProps {
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  id?: string;
+  className?: string;
+  disabled?: boolean;
+  name?: string;
+  children?: ReactNode;
+  'aria-label'?: string;
+  'data-task-only'?: boolean;
+}
+
+/** 复选框：根节点保留受控 `checked`；未就绪时回退原生 input + label。 */
+export function Checkbox({
+  checked,
+  onCheckedChange,
+  className,
+  children,
+  ...props
+}: CheckboxAdapterProps) {
+  const lenso = useLenso();
+  if (!lenso) {
+    return createElement(
+      'label',
+      { className },
+      createElement('input', {
+        ...props,
+        type: 'checkbox',
+        checked,
+        onChange: (event: ChangeEvent<HTMLInputElement>) =>
+          onCheckedChange(event.currentTarget.checked),
+      }),
+      children,
+    );
+  }
+  const Content = lenso.Checkbox.Content as unknown as ComponentType<Record<string, unknown>>;
+  const Control = lenso.Checkbox.Control as unknown as ComponentType<Record<string, unknown>>;
+  const Indicator = lenso.Checkbox.Indicator as unknown as ComponentType<Record<string, unknown>>;
+  return createElement(
+    lenso.Checkbox as unknown as ComponentType<Record<string, unknown>>,
+    {
+      ...props,
+      className,
+      checked,
+      onCheckedChange: (next: boolean) => onCheckedChange(next === true),
+      'data-lenso-slot': 'checkbox',
+      render: createElement('button', { type: 'button', className }),
+    },
+    createElement(
+      Content,
+      null,
+      createElement(Control, null, createElement(Indicator, null)),
+      children,
+    ),
   );
 }
 

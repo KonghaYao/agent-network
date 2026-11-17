@@ -24,10 +24,18 @@ export const UPLOAD_STYLE = `
     border-radius: var(--lenso-shape-content-2xl); background: var(--lenso-background-tertiary);
     box-shadow: var(--lenso-overlay-shadow); }
   .attach-menu[hidden] { display: none; }
+  /* Lenso Menu 自带 surface、阴影与 fixed 定位；只去掉 legacy 菜单壳的装饰。 */
+  #attach-menu[data-lenso-slot='menu-popup'] { padding: 0; border: 0;
+    background: transparent; box-shadow: none; min-width: 148px;
+    z-index: var(--app-z-portal-local-menu); }
   .attach-menu-item { display: flex; width: 100%; align-items: center; padding: 8px 10px;
+    min-height: 44px; box-sizing: border-box;
     border: 0; border-radius: var(--lenso-shape-content-md); background: none;
     color: var(--lenso-label-primary); font-size: 13px; line-height: 20px; text-align: left;
     cursor: pointer; touch-action: manipulation; }
+  /* Lenso MenuItem 不接受 className；StyleX 用 :not(#\#) 抬特异性，这里用
+     !important 把条目抬到 44px。 */
+  #attach-menu [data-lenso-slot='menu-item'] { min-height: 44px !important; }
   .attach-menu-item:hover, .attach-menu-item:focus { background: var(--lenso-fill-tertiary); }
 
   .composer-files { display: flex; flex-wrap: wrap; gap: 6px; max-height: 88px;

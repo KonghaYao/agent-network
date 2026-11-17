@@ -312,10 +312,41 @@ test.describe.serial('SPA 组件库与状态管理', () => {
   test('附件菜单、消息右键/长按与焦点返回', async ({ page }) => {
     await page.goto(`${base}/c/${roomId}`);
     await expect(page.locator('#composer')).toBeVisible();
+    await expect(page.locator('#attach-file')).toHaveAttribute('data-lenso-slot', 'menu-trigger');
 
     await page.locator('#attach-file').click();
     await expect(page.locator('#attach-menu')).toBeVisible();
+    await expect(page.locator('#attach-menu')).toHaveAttribute('data-lenso-slot', 'menu-popup');
     await expect(page.locator('#attach-menu-file')).toBeVisible();
+
+    await expect(page.locator('#attach-menu-file')).toHaveCSS('min-height', '44px');
+    await expect(page.locator('#attach-menu-draw')).toHaveCSS('min-height', '44px');
+    await page.waitForTimeout(250);
+    const itemHeights = await page
+      .locator('#attach-menu [role="menuitem"]')
+      .evaluateAll((items) =>
+        items.map((item) => Math.round(item.getBoundingClientRect().height)),
+      );
+    expect(itemHeights).toHaveLength(2);
+    expect(itemHeights.every((height) => height >= 44)).toBe(true);
+
+    // 菜单项必须仍在用户激活中同步打开隐藏 file input。
+    const chooserPromise = page.waitForEvent('filechooser');
+    await page.locator('#attach-menu-file').click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles({
+      name: 'attach-menu.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+        'base64',
+      ),
+    });
+    await expect(page.locator('#composer-files .composer-file')).toHaveCount(1);
+    await expect(page.locator('#attach-menu')).toBeHidden();
+
+    await page.locator('#attach-file').click();
+    await expect(page.locator('#attach-menu')).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.locator('#attach-menu')).toBeHidden();
     await expect(page.locator('#attach-file')).toBeFocused();
@@ -341,6 +372,33 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await page.waitForTimeout(650);
     await expect(page.locator('#message-context-menu')).toBeVisible();
     await page.keyboard.press('Escape');
+  });
+
+  test('附件菜单在移动端落在视口内且条目保持 44px', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#composer')).toBeVisible();
+    await expect(page.locator('#attach-file')).toHaveAttribute('data-lenso-slot', 'menu-trigger');
+    await page.locator('#attach-file').click();
+    await expect(page.locator('#attach-menu')).toBeVisible();
+
+    const box = await page.locator('#attach-menu').boundingBox();
+    expect(box).not.toBeNull();
+    if (box) {
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(390);
+      expect(box.y + box.height).toBeLessThanOrEqual(844);
+    }
+    const itemHeights = await page
+      .locator('#attach-menu [role="menuitem"]')
+      .evaluateAll((items) =>
+        items.map((item) => Math.round(item.getBoundingClientRect().height)),
+      );
+    expect(itemHeights.every((height) => height >= 44)).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#attach-menu')).toBeHidden();
+    await expect(page.locator('#attach-file')).toBeFocused();
   });
 
   test('拖放上传走 dropzone，仍保留 XHR 进度与文件 chip', async ({ page }) => {

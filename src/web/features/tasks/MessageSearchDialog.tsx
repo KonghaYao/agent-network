@@ -1,4 +1,4 @@
-import { Button, SearchInput } from '../../app/lenso-controls';
+import { Button, Checkbox, SearchInput } from '../../app/lenso-controls';
 import { useEffect, useState, type FormEvent } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -232,18 +232,17 @@ export function MessageSearchDialog({
               }}
             />
           </label>
-          <label className="message-search-filter">
-            <input
-              type="checkbox"
-              data-task-only
-              checked={taskOnly}
-              onChange={(event) => {
-                setTaskOnly(event.target.checked);
-                reset();
-              }}
-            />
+          <Checkbox
+            className="message-search-filter"
+            data-task-only
+            checked={taskOnly}
+            onCheckedChange={(checked) => {
+              setTaskOnly(checked);
+              reset();
+            }}
+          >
             只看任务
-          </label>
+          </Checkbox>
           <Button className="primary" type="submit" disabled={busy}>
             {busy ? '搜索中…' : '搜索'}
           </Button>
