@@ -11,6 +11,7 @@ import {
   type RoomView,
 } from '../../lib/chat';
 import { outboxPreview, type OutboxIntent } from '../../lib/outbox';
+import type { RoomFileItem } from '../../lib/files-ui';
 import { ChatMessage } from './ChatMessage';
 
 const TIME_GAP = 5 * 60 * 1000;
@@ -22,6 +23,7 @@ interface TimelineProps {
   identityId: string;
   identityName: string;
   identityKind: 'human' | 'agent';
+  token: string;
   mentions: string[];
   outbox: OutboxIntent[];
   olderLoading: boolean;
@@ -37,6 +39,7 @@ interface TimelineProps {
   onMarkRead: (throughSeq: string) => void;
   onToggleTask: (item: HistoryMessage) => void;
   onOpenTask: (rootId: string, focusMessageId: string | null) => void;
+  onOpenFile: (item: RoomFileItem) => void;
   onRecall: (item: HistoryMessage) => void;
   onForward: (item: HistoryMessage) => void;
 }
@@ -48,6 +51,7 @@ export function Timeline({
   identityId,
   identityName,
   identityKind,
+  token,
   mentions,
   outbox,
   olderLoading,
@@ -63,6 +67,7 @@ export function Timeline({
   onMarkRead,
   onToggleTask,
   onOpenTask,
+  onOpenFile,
   onRecall,
   onForward,
 }: TimelineProps) {
@@ -208,12 +213,14 @@ export function Timeline({
           identityId={identityId}
           identityName={identityName}
           identityKind={identityKind}
+          token={token}
           mentions={mentions}
           allItems={messages}
           onQuote={onQuote}
           onStatus={onStatus}
           onToggleTask={onToggleTask}
           onOpenTask={onOpenTask}
+          onOpenFile={onOpenFile}
           onRecall={onRecall}
           onForward={onForward}
         />,

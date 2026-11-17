@@ -84,7 +84,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | React 入口、history 路由与全局壳 | `src/web/app/main.tsx`、`src/web/app/router.tsx`、`src/web/app/AppShell.tsx` |
 | 服务端 React 壳、SSR 邀请页与共享转义 | `src/web/spa-shell.ts`、`src/web/ssr/join.tsx`、`src/web/layout.ts` |
 | 侧栏、搜索、会话行、账号菜单与未读 | `src/web/features/sidebar/Sidebar.tsx`、`RoomRow.tsx`、`AccountMenu.tsx` |
-| 聊天页、时间线、Composer、Markdown 岛与转发 | `src/web/pages/ChatPage.tsx`、`src/web/features/chat/*` |
+| 聊天页、时间线、Composer、消息文件卡片、Markdown 岛与转发 | `src/web/pages/ChatPage.tsx`、`src/web/features/chat/*`、`src/web/features/panels/FilePreviewDialog.tsx` |
 | 群管理、邀请、策略、公告、成员、改名、退群/解散、举报、设备配对与归档 | `src/web/features/overlays/*` |
 | 联系人搜索、好友申请与链接面板 | `src/web/features/contacts/*`、`src/web/features/overlays/ContactRequestsDialog.tsx` |
 | 右侧文件/监控面板、拖拽分栏与 Memory | `src/web/features/panels/*`、`src/web/features/layout/SplitLayout.tsx` |
@@ -182,6 +182,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 - 4B-5b 入口：`features/sidebar/ContactRequestsButton.tsx` + `features/overlays/ContactRequestsDialog.tsx` 复用 `network_contact_requests_list` / `network_contact_request_respond` / `network_contact_request_cancel`；`features/overlays/DeviceHandoffDialog.tsx` 复用 `network_device_pairing_{create,list,approve,cancel}`，二维码由 `uqr` 0.1.3 在 `lib/qr-canvas.ts` 本地绘制，`/pair#c=` 仍由 `lib/token-handoff.ts` 读取并清除；`features/overlays/ArchiveAgentsDialog.tsx` 与聊天菜单 `#room-menu-archive` 复用 `network_agents_get` / `network_agent_archive` / `network_agent_unarchive`，归档与恢复都经 `confirmDialog`。数据 hooks 为 `useContactRequests.ts`（含角标）与 `useArchivedAgents.ts`，不新增 MCP 工具、表或迁移。
 - 4B-6b 入口：`features/contacts/{ContactSearchPanel,ContactRequestsPanel,ContactLinksPanel}.tsx`（搜索添加/好友申请/链接与设置）、`features/overlays/{GroupInvitesPanel,GroupPoliciesPanel,MembersDialog,RenameAgentDialog,AgentReissueDialog,LeaveRoomDialog,RenameRoomDialog,AnnouncementDialog}.tsx`、`features/tasks/{TaskSummaryBar,TaskTraceDialog,MessageSearchDialog}.tsx`、`features/chat/ForwardDialog.tsx`；成员、邀请、策略、公告、改名、转让、退群/解散、举报、归档与 Task 操作均复用既有 MCP 工具与 `queryKeys`，不新增工具、表或迁移。
 - 右栏：文件列表/上传/bind/预览/删除与网页监控 URL 保存/清除/iframe 均在 React 中实现，复用既有 DOM id/class 与 `network_room_file_*` / `network_room_monitor_*` 工具；桌面右栏、平板抽屉与移动端全屏断点保持微信式单栏/双栏规则。Memory 抽屉只在 Agent 自身凭据下显示内容工具；人类身份只显示能力与不支持项。
+- 消息文件卡片：`features/chat/MessageFileCard.tsx` 用 `src/contracts/file-links.ts` 提取同源 `/f/<fileId>`，卡片接近视口时才调用 `network_room_file_get` 换取真实名称、大小与带票据地址；元数据/票据进入 55 分钟 LRU，同一 fileId 合并 in-flight，队列并发 4。图片按 `previewImageMime` 使用 `preview_url` 渲染 `.msg-file-thumb`，加载失败重签一次后移除缩略图并保留可重试卡片；非图片显示类型、名称、大小与 `download_url`，工具失败回退 HEAD 公开文件。点击缩略图/预览复用 `features/panels/FilePreviewDialog.tsx`。输入框 `ComposerFile` 保存 bind 返回的 `preview_url`/`download_url`，已就绪图片在 chip 中显示 48px 同源缩略图。
 - 画板：`features/chat/Composer.tsx` 的 `+` 菜单按需 `import('/assets/chat-drawboard.js')`，导出 PNG 后回到同一上传/chip 链路；新增 Agent、记忆、群主转让入口复用 Radix 菜单与 RHF 表单，不新增后端端点。
 - 验收：`bun run test:spa-shell`（manifest、503、`/static/*`、退役 asset 410）、`bun run test:e2e`（`tests/e2e/{home,chat,components,panels,entries,share-join-pair,shell}.spec.ts`，不再需要 `E2E_SPA`）、`bun run test:web` 与 `bun run test:ux`；legacy 内联壳、旧 `chat-*.ts` 与 resizer/icons bundle 已删除。
 
@@ -194,7 +195,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 - `bun run test:spa-shell`：68 项（manifest、五条 React 路由、SSR 分享/邀请、`/static/*` 缓存与穿越、退役 asset 410、manifest 缺失 503）
 - `bun run test:ux`：45 项 React UX（桌面/移动布局、暗色、IME、输入框自适应、dialog 焦点、mention 键盘选择、文件栏）
 - `bun run test:web:a11y`：11 项（home/room/group-modal axe critical/serious=0 与基线）
-- `bun run test:e2e`：45 项（五条路由、列表/搜索、聊天/IME/附件、右栏、分享/邀请/配对、联系人搜索、群管理、移动端与暗色；不再需要 `E2E_SPA`）
+- `bun run test:e2e`：51 项（五条路由、列表/搜索、聊天/IME/附件与消息文件卡片、右栏、分享/邀请/配对、联系人搜索、群管理、移动端与暗色；不再需要 `E2E_SPA`）
 - `bun scripts/q01-upgrade-check.ts`：24 项本地检查（合成 0035 旧库升级到 0038、34 个迁移、integrity/foreign_key、旧数据映射）
 - `AGENTNET_URL=http://127.0.0.1:8792 bun scripts/q01-doc-check.ts`：34 项（tools/list 114、文档工具名、技能 digest、CLI 覆盖、无旧 shell 脚本、Harness 默认路径、用户名搜索与 actor_id 核对流程）
 - `bun run test:drive`：55 项（MCPP Files 上传、公开下载、`drive_file_info` 与 Drive 生命周期）

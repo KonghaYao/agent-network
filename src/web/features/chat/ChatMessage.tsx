@@ -15,12 +15,14 @@ import {
   type RoomView,
 } from '../../lib/chat';
 import { copyText, extractFileCards } from '../../lib/files';
+import type { RoomFileItem } from '../../lib/files-ui';
 import { readFullMessage } from '../../lib/message-body';
 import { avatarColor, firstChar } from '../../lib/rooms';
 import { openContextMenuAt, useLongPress } from '../../hooks/useLongPress';
 import { openAgentMemory, type AgentMemoryTarget } from '../memory/memory-store';
 import { HumanBody } from './MessageBody';
 import { MarkdownIsland } from './MarkdownIsland';
+import { MessageFileCard } from './MessageFileCard';
 import { TaskSummaryBar } from '../tasks/TaskSummaryBar';
 
 interface ChatMessageProps {
@@ -30,12 +32,14 @@ interface ChatMessageProps {
   identityId: string;
   identityName: string;
   identityKind: 'human' | 'agent';
+  token: string;
   mentions: string[];
   allItems: HistoryMessage[];
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
   onToggleTask: (item: HistoryMessage) => void;
   onOpenTask: (rootId: string, focusMessageId: string | null) => void;
+  onOpenFile: (item: RoomFileItem) => void;
   onRecall: (item: HistoryMessage) => void;
   onForward: (item: HistoryMessage) => void;
 }
@@ -369,12 +373,14 @@ export const ChatMessage = memo(function ChatMessage({
   identityId,
   identityName,
   identityKind,
+  token,
   mentions,
   allItems,
   onQuote,
   onStatus,
   onToggleTask,
   onOpenTask,
+  onOpenFile,
   onRecall,
   onForward,
 }: ChatMessageProps) {
@@ -536,21 +542,14 @@ export const ChatMessage = memo(function ChatMessage({
             {cards.length > 0 ? (
               <div className="msg-files">
                 {cards.map((card) => (
-                  <a
-                    className="msg-file"
+                  <MessageFileCard
                     key={card.fileId}
-                    href={card.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    aria-label={`打开附件 ${card.fileId}`}
-                  >
-                    <span className="msg-file-kind" aria-hidden="true">
-                      FILE
-                    </span>
-                    <span className="msg-file-main">
-                      <span className="msg-file-name">附件 {card.fileId.slice(0, 10)}</span>
-                    </span>
-                  </a>
+                    roomId={room.room_id}
+                    fileId={card.fileId}
+                    token={token}
+                    fallbackName={card.fallbackName}
+                    onOpenPreview={onOpenFile}
+                  />
                 ))}
               </div>
             ) : null}
