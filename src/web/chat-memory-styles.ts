@@ -75,11 +75,11 @@ export const MEMORY_STYLE = `
   .memory-form { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px; }
   .memory-field { display: flex; flex-direction: column; gap: 4px;
     color: var(--wx-muted); font-size: 11.5px; min-width: 0; }
-  .memory-field input, .memory-field select { width: 100%; max-width: 100%;
+  .memory-field input:not([data-lenso-slot]), .memory-field select { width: 100%; max-width: 100%;
     box-sizing: border-box; padding: 8px 9px; border: 1px solid var(--wx-line);
     border-radius: 8px; background: var(--wx-panel); color: var(--wx-text);
     font-size: 13px; }
-  .memory-field input::placeholder { color: var(--wx-muted); }
+  .memory-field input:not([data-lenso-slot])::placeholder { color: var(--wx-muted); }
   .memory-submit { align-self: flex-start; min-height: 40px; padding: 7px 16px; }
   .memory-small-btn { min-height: 36px; padding: 5px 10px; font-size: 12px; }
   .memory-page-btn { display: block; width: 100%; min-height: 40px; margin-top: 8px;

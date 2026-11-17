@@ -205,6 +205,11 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     expect(await page.evaluate(() => localStorage.getItem('agent-network-room-filter'))).toBe(
       'group',
     );
+    // Lenso SegmentedControl 在指针释放后会排一帧聚焦选中项；等它结算，
+    // 避免随后 focus 分隔条时被这一帧抢走焦点。
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    );
 
     const handle = page.locator('#sidebar-resizer');
     await expect(handle).toBeVisible();
@@ -240,6 +245,7 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     const dialog = page.locator('#group-modal');
     await expect(dialog).toBeVisible();
     await expect(dialog).toHaveAttribute('role', 'dialog');
+    await expect(page.locator('#group-name-input')).toHaveAttribute('data-lenso-slot', 'input');
 
     await page.fill('#group-name-input', `弹窗群 ${Date.now()}`);
     await page.locator('#group-search').fill(nameB.slice(0, 4));
@@ -443,6 +449,16 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     const members = page.locator('#members-modal');
     await expect(members).toBeVisible();
     await expect(members).toContainText(nameB);
+    await expect(page.locator('#members-search')).toHaveAttribute(
+      'data-lenso-slot',
+      'search-field-input',
+    );
+    await expect(page.locator('#members-invite-days')).toHaveAttribute(
+      'data-lenso-slot',
+      'number-field-input',
+    );
+    await page.fill('#members-invite-days', '5');
+    await expect(page.locator('#members-invite-days')).toHaveValue('5');
     await page.keyboard.press('Escape');
     await expect(members).toBeHidden();
 
@@ -452,6 +468,15 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     const confirm = page.locator('#confirm-dialog');
     await expect(confirm).toBeVisible();
     await expect(confirm).toContainText(nameB);
+    const danger = page.locator('#confirm-dialog-ok');
+    await expect(danger).toHaveAttribute('data-lenso-slot', 'button');
+    await expect(danger).toHaveAttribute('data-destructive', '');
+    const dangerBackground = await danger.evaluate(
+      (node) => getComputedStyle(node).backgroundColor,
+    );
+    const [red = 0, green = 0, blue = 0] = (dangerBackground.match(/\d+/gu) ?? []).map(Number);
+    expect(red).toBeGreaterThan(green + 40);
+    expect(red).toBeGreaterThan(blue + 40);
     await page.locator('#confirm-dialog-cancel').click();
     await expect(confirm).toBeHidden();
     await expect(page.locator('#members-modal')).toContainText(nameB);
@@ -476,6 +501,7 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await page.keyboard.press('Escape');
     await page.locator('#room-menu-toggle').click();
     await page.locator('#room-menu-announcement').click();
+    await expect(page.locator('#announcement-input')).toHaveAttribute('data-lenso-slot', 'textarea');
     await page.fill('#announcement-input', '组件验收公告');
     await page.locator('#announcement-save').click();
     await expect(page.locator('#announcement-modal')).toBeHidden();
@@ -487,6 +513,9 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     // 群改名。
     await page.locator('#room-menu-toggle').click();
     await page.locator('#room-menu-rename').click();
+    await expect(page.locator('#room-rename-input')).toHaveAttribute('data-lenso-slot', 'input');
+    await expect(page.locator('#room-rename-save')).toHaveAttribute('data-variant', 'prominent');
+    await expect(page.locator('#room-rename-save')).not.toHaveAttribute('data-destructive');
     await page.fill('#room-rename-input', `${roomTitle} 改名`);
     await page.locator('#room-rename-save').click();
     await expect(page.locator('#room-rename-dialog')).toBeHidden();

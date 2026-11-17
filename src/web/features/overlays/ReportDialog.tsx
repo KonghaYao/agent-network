@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, TextArea } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
@@ -102,7 +102,7 @@ export function ReportDialog({
         </label>
         <label className="field">
           <span>补充说明（可选）</span>
-          <textarea
+          <TextArea
             id="report-note"
             rows={4}
             maxLength={LIMITS.contactReportNoteBytes * 2}

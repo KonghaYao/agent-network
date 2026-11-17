@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, SearchInput } from '../../app/lenso-controls';
 import { useEffect, useMemo, useState } from 'react';
 
 import { useRooms } from '../../hooks/useRooms';
@@ -142,9 +142,8 @@ export function ForwardDialog({
       </p>
       <label className="field">
         <span>选择转发会话</span>
-        <input
+        <SearchInput
           id="forward-search"
-          type="search"
           placeholder="搜索会话"
           autoComplete="off"
           value={query}

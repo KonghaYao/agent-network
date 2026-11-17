@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, SearchInput } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 
@@ -406,16 +406,16 @@ export function MembersDialog({
                 {members.length}
               </span>
             </header>
-            <input
-              id="members-current-search"
-              className="member-picker-search"
-              type="search"
-              placeholder="搜索群成员"
-              aria-label="搜索群成员"
-              autoComplete="off"
-              value={memberSearch}
-              onChange={(event) => setMemberSearch(event.target.value)}
-            />
+            <div className="member-picker-search">
+              <SearchInput
+                id="members-current-search"
+                placeholder="搜索群成员"
+                aria-label="搜索群成员"
+                autoComplete="off"
+                value={memberSearch}
+                onChange={(event) => setMemberSearch(event.target.value)}
+              />
+            </div>
             <ul id="members-current" className="member-roster" aria-label="当前群成员">
               {visibleMembers.map((member) => {
                 const actions = member.actions ?? null;
@@ -590,17 +590,17 @@ export function MembersDialog({
                 {canAdd ? candidates.length : 0}
               </span>
             </header>
-            <input
-              id="members-search"
-              className="member-picker-search"
-              type="search"
-              placeholder="搜索好友名称"
-              aria-label="搜索好友名称"
-              autoComplete="off"
-              disabled={!canAdd || contacts.loading}
-              value={candidateSearch}
-              onChange={(event) => setCandidateSearch(event.target.value)}
-            />
+            <div className="member-picker-search">
+              <SearchInput
+                id="members-search"
+                placeholder="搜索好友名称"
+                aria-label="搜索好友名称"
+                autoComplete="off"
+                disabled={!canAdd || contacts.loading}
+                value={candidateSearch}
+                onChange={(event) => setCandidateSearch(event.target.value)}
+              />
+            </div>
             <div
               id="members-contacts"
               className="contact-list"

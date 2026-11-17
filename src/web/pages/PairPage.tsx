@@ -1,4 +1,4 @@
-import { Button } from '../app/lenso-controls';
+import { Button, Input } from '../app/lenso-controls';
 import { useEffect, useRef, useState } from 'react';
 
 import { callTool, type McpError } from '../lib/mcp-client';
@@ -297,7 +297,7 @@ export function PairPage() {
       <p className="share-lead">扫描二维码或输入 12 位配对码，然后在已登录设备上确认。</p>
       <label className="field">
         12 位配对码
-        <input
+        <Input
           id="pair-challenge"
           maxLength={32}
           autoComplete="off"

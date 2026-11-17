@@ -127,12 +127,10 @@ export const APP_STYLE = `
   .room-menu-reissue[hidden] { display: none; }
   .room-menu-reissue-hint { margin: 0 0 6px; font-size: 12px; line-height: 1.45;
     color: var(--wx-muted); }
-  .room-menu-reissue-text { display: block; width: 100%; box-sizing: border-box;
-    min-height: 96px; max-height: 180px; resize: vertical; padding: 6px;
-    border: 1px solid var(--wx-line); border-radius: 4px;
-    background: var(--wx-bg); color: var(--wx-text);
-    font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
-    overflow-wrap: anywhere; }
+  .room-menu-reissue-text { width: 100%;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .room-menu-reissue-text textarea { min-height: 150px !important; max-height: 180px !important;
+    font: inherit !important; overflow-wrap: anywhere; }
   .room-menu-reissue-copy { margin-top: 4px; }
   /* 管理动作与安全动作之间用分隔线分组；危险项保持在末尾。 */
   .room-menu-sep { height: 1px; margin: 4px 6px; background: var(--wx-line); }
@@ -331,11 +329,11 @@ export const APP_STYLE = `
     border: 1px solid var(--wx-line); border-radius: 4px; background: var(--wx-panel);
     color: var(--wx-text); font: inherit; font-size: 13px; }
 
-  .field select, .field textarea { display: block; box-sizing: border-box;
+  .field select, .field textarea:not([data-lenso-slot]) { display: block; box-sizing: border-box;
     width: 100%; margin-top: 6px; padding: 6px 10px; border: 1px solid var(--wx-line);
     border-radius: 4px; background: var(--wx-bg); color: var(--wx-text);
     font: inherit; font-size: 13px; }
-  .field textarea { resize: vertical; line-height: 1.6; }
+  .field textarea:not([data-lenso-slot]) { resize: vertical; line-height: 1.6; }
   .msg.task-message-flash .bubble { outline: 2px solid var(--wx-link);
     outline-offset: 2px; }
 
@@ -550,7 +548,7 @@ export const APP_STYLE = `
   .confirm-card button.danger:not([data-lenso-slot]):disabled { opacity: 1; background: var(--wx-danger-tint);
     border-color: var(--wx-danger-tint); color: var(--wx-danger-text); cursor: not-allowed; }
   .field { display: block; font-size: 12px; color: var(--wx-muted); }
-  .field input { display: block; width: 100%; height: 36px; margin-top: 6px; padding: 0 10px;
+  .field input:not([data-lenso-slot]) { display: block; width: 100%; height: 36px; margin-top: 6px; padding: 0 10px;
     border: 1px solid var(--wx-line); border-radius: 4px; background: var(--wx-bg);
     color: var(--wx-text); font: inherit; font-size: 14px; }
   .picker-label { margin: 14px 0 6px; font-size: 12px; color: var(--wx-muted); }
@@ -601,12 +599,11 @@ ${GROUP_STYLE}
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .new-agent-copy { margin: 6px 0 12px; }
   .new-agent-prompt { margin-top: 2px; padding-top: 12px; border-top: 1px solid var(--wx-line); }
-  .new-agent-prompt-text { display: block; box-sizing: border-box; width: 100%;
-    min-height: 168px; max-height: 320px; margin-top: 6px; padding: 8px 10px;
-    border: 1px solid var(--wx-line); border-radius: 4px; background: var(--wx-bg);
-    color: var(--wx-text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
-    word-break: break-all; resize: vertical; }
+  .new-agent-prompt-text { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; }
+  .new-agent-prompt-text textarea { min-height: 168px !important; max-height: 320px !important;
+    font-family: inherit !important; font-size: inherit !important; line-height: 1.5;
+    white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; }
   .messages::-webkit-scrollbar, .sidebar-list::-webkit-scrollbar,
   .mention-picker::-webkit-scrollbar, .contact-list::-webkit-scrollbar,
   .member-roster::-webkit-scrollbar { width: 6px; }
@@ -720,7 +717,8 @@ ${GROUP_STYLE}
   .contact-search-form > label, .contact-search-confirm > label { color: var(--wx-muted);
     font-size: 11px; }
   .contact-search-controls { display: flex; gap: 8px; min-width: 0; }
-  .contact-search-controls input { flex: 1 1 auto; min-width: 0; height: 34px;
+  .contact-search-field { flex: 1 1 auto; min-width: 0; }
+  .contact-search-controls input:not([data-lenso-slot]) { flex: 1 1 auto; min-width: 0; height: 34px;
     padding: 0 10px; border: 1px solid var(--wx-line); border-radius: 6px;
     background: var(--wx-panel); color: var(--wx-text); font: inherit; }
   .contact-search-controls button { flex: 0 0 auto; padding: 6px 14px; }
@@ -752,7 +750,7 @@ ${GROUP_STYLE}
   .contact-search-confirm code { padding: 6px 8px; border-radius: 5px; background: var(--wx-search);
     color: var(--wx-text); font-size: 11px; white-space: normal; overflow-wrap: anywhere;
     word-break: break-all; }
-  .contact-search-confirm textarea { box-sizing: border-box; width: 100%; min-width: 0;
+  .contact-search-confirm textarea:not([data-lenso-slot]) { box-sizing: border-box; width: 100%; min-width: 0;
     resize: vertical; padding: 7px 9px; border: 1px solid var(--wx-line); border-radius: 6px;
     background: var(--wx-panel); color: var(--wx-text); font: inherit; font-size: 12px; }
   .contact-search-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }

@@ -92,10 +92,11 @@ export const GROUP_STYLE = `
   /* 建群与添加成员共用成员选择器：搜索、分页、类型、备注与多选高亮。 */
   .member-picker-toolbar { display: flex; align-items: center; gap: 8px;
     margin: 0 0 6px; }
-  .member-picker-search { flex: 1 1 auto; min-width: 0; box-sizing: border-box;
+  .member-picker-search { flex: 1 1 auto; min-width: 0; }
+  .member-picker-search input:not([data-lenso-slot]) { box-sizing: border-box;
     padding: 7px 10px; border: 1px solid var(--wx-line); border-radius: 6px;
     background: var(--wx-search); color: var(--wx-text); font-size: 13px; }
-  .member-picker-search:focus { outline: 2px solid var(--lenso-focus-ring);
+  .member-picker-search input:not([data-lenso-slot]):focus { outline: 2px solid var(--lenso-focus-ring);
     outline-offset: 1px; }
   .members-column .member-picker-search { flex: 0 0 auto; margin: 6px 8px 0; }
   .member-picker-more { flex: 0 0 auto; align-self: center; margin: 6px 0;

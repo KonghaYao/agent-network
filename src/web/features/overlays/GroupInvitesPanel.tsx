@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, NumberInput } from '../../app/lenso-controls';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import type { RoomView } from '../../lib/chat';
@@ -229,24 +229,22 @@ export function GroupInvitesPanel({
           <form className="members-invite-form" onSubmit={(event) => void create(event)}>
             <label>
               有效天数
-              <input
+              <NumberInput
                 id="members-invite-days"
-                type="number"
                 min={1}
                 max={30}
                 value={days}
-                onChange={(event) => setDays(Number(event.target.value))}
+                onValueChange={setDays}
               />
             </label>
             <label>
               可加入次数
-              <input
+              <NumberInput
                 id="members-invite-uses"
-                type="number"
                 min={1}
                 max={100}
                 value={uses}
-                onChange={(event) => setUses(Number(event.target.value))}
+                onValueChange={setUses}
               />
             </label>
             <Button id="members-invite-create" className="primary" type="submit" disabled={busy}>

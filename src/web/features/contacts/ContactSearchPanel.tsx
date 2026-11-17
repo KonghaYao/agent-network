@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, SearchInput, TextArea } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 
@@ -170,18 +170,19 @@ export function ContactSearchPanel({
       <form id="contact-search-form" className="contact-search-form" onSubmit={(event) => void search(event)}>
         <label htmlFor="contact-search-input">用户名</label>
         <div className="contact-search-controls">
-          <input
-            id="contact-search-input"
-            type="search"
-            maxLength={LIMITS.actorNameMax}
-            autoComplete="off"
-            placeholder="输入用户名"
-            value={query}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setSelected(null);
-            }}
-          />
+          <div className="contact-search-field">
+            <SearchInput
+              id="contact-search-input"
+              maxLength={LIMITS.actorNameMax}
+              autoComplete="off"
+              placeholder="输入用户名"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setSelected(null);
+              }}
+            />
+          </div>
           <Button id="contact-search-submit" className="primary" type="submit" disabled={busy}>
             {busy ? '搜索中…' : '搜索'}
           </Button>
@@ -237,7 +238,7 @@ export function ContactSearchPanel({
           <strong id="contact-search-confirm-name">{selected.actor.name}</strong>
           <code id="contact-search-confirm-id">{selected.actor.actor_id}</code>
           <label htmlFor="contact-search-message">申请附言（可选）</label>
-          <textarea
+          <TextArea
             id="contact-search-message"
             rows={2}
             maxLength={LIMITS.contactRequestMessageBytes}

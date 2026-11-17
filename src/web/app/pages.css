@@ -272,7 +272,7 @@ body.page-pair .field {
   font-size: 13px;
 }
 
-body.page-pair .field input {
+body.page-pair .field input:not([data-lenso-slot]) {
   width: 100%;
   height: 42px;
   margin-top: 6px;
@@ -282,6 +282,10 @@ body.page-pair .field input {
   background: var(--lenso-control-field-fill);
   color: var(--spa-text);
   font: inherit;
+}
+
+body.page-pair .field [data-lenso-slot='input'] {
+  margin-top: 6px;
 }
 
 body.page-pair .pair-hint {

@@ -376,6 +376,7 @@ test.describe('SPA 剩余入口', () => {
     const other = await context.newPage();
     try {
       await other.goto(`${base}/pair#c=${encodeURIComponent(fragment.challenge)}`);
+      await expect(other.locator('#pair-challenge')).toHaveAttribute('data-lenso-slot', 'input');
       await expect(other.locator('#pair-challenge')).toHaveValue(
         fragment.challenge.toUpperCase(),
       );
@@ -476,6 +477,10 @@ test.describe('SPA 剩余入口', () => {
     await page.locator('#contact-requests').click();
     await expect(page.locator('#contact-modal')).toBeVisible();
     await expect(page.locator('#contact-tab-search')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-search-input')).toHaveAttribute(
+      'data-lenso-slot',
+      'search-field-input',
+    );
 
     await page.locator('#contact-search-input').fill(peer.name);
     await page.locator('#contact-search-submit').click();
@@ -486,6 +491,10 @@ test.describe('SPA 剩余入口', () => {
       .getByRole('button', { name: '核对 ID' })
       .click();
     await expect(page.locator('#contact-search-confirm-id')).toHaveText(peer.actor_id);
+    await expect(page.locator('#contact-search-message')).toHaveAttribute(
+      'data-lenso-slot',
+      'textarea',
+    );
     await page.locator('#contact-search-message').fill('E2E 好友申请');
     await page.locator('#contact-search-send').click();
     await expect(page.locator('#contact-search-status')).toContainText('好友邀请已发送');
@@ -657,6 +666,10 @@ test.describe('SPA 剩余入口', () => {
     await page.locator('#confirm-dialog-ok').click();
     await expect(page.locator('#agent-reissue-modal')).toBeVisible();
     const prompt = await page.locator('#room-menu-reissue-text').inputValue();
+    await expect(page.locator('#room-menu-reissue-text')).toHaveAttribute(
+      'data-lenso-slot',
+      'textarea',
+    );
     expect(prompt).toContain('AGENTNET_TOKEN');
     expect(prompt).not.toContain(agent.token);
     await expect(page.locator('#room-menu-reissue-copy-prompt')).toBeVisible();
@@ -673,6 +686,7 @@ test.describe('SPA 剩余入口', () => {
 
     const renamed = `Renamed ${suffix}`;
     await page.locator('#rename').click();
+    await expect(page.locator('#rename-input')).toHaveAttribute('data-lenso-slot', 'input');
     await page.locator('#rename-input').fill(renamed);
     await page.locator('#rename-save').click();
     await expect(page.locator('#title')).toHaveText(renamed);
@@ -775,6 +789,10 @@ test.describe('SPA 剩余入口', () => {
 
     await page.locator('#message-search-button').click();
     await expect(page.locator('#message-search-dialog')).toBeVisible();
+    await expect(page.locator('#message-search-input')).toHaveAttribute(
+      'data-lenso-slot',
+      'search-field-input',
+    );
     await page.locator('#message-search-input').fill('柠');
     await page.locator('#message-search-form button[type="submit"]').click();
     await expect(page.locator('#message-search-results .message-search-result')).toHaveCount(1);

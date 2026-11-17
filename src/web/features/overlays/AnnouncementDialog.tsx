@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, TextArea } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -90,7 +90,7 @@ export function AnnouncementDialog({
       <form id="announcement-form" onSubmit={(event) => void submit(event)}>
         <label className="field">
           <span>公告正文</span>
-          <textarea
+          <TextArea
             id="announcement-input"
             rows={6}
             maxLength={LIMITS.roomAnnouncementBytes * 2}

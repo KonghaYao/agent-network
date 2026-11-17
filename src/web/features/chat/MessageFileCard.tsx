@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -206,9 +207,19 @@ export const MessageFileCard = memo(function MessageFileCard({
       ref={cardRef}
     >
       {showThumb ? (
-        <button
+        <Button
           type="button"
+          variant="borderless"
           className="msg-file-thumb"
+          style={{
+            width: '100%',
+            height: 'auto',
+            padding: 0,
+            border: 0,
+            borderRadius: 6,
+            overflow: 'hidden',
+            background: 'var(--wx-search)',
+          }}
           title={name}
           aria-label={`预览图片 ${name}`}
           onClick={() => {
@@ -223,7 +234,7 @@ export const MessageFileCard = memo(function MessageFileCard({
             referrerPolicy="no-referrer"
             onError={retryImage}
           />
-        </button>
+        </Button>
       ) : null}
       <span className="msg-file-kind" aria-hidden="true">
         {item ? fileIconLabel(kind) : 'FILE'}
@@ -244,15 +255,25 @@ export const MessageFileCard = memo(function MessageFileCard({
       </span>
       <span className="msg-file-actions">
         {item && kind !== 'other' && previewUrl ? (
-          <button
+          <Button
             type="button"
+            variant="borderless"
+            size="sm"
             className="msg-file-action msg-file-preview"
+            style={{
+              height: 'auto',
+              padding: '3px 5px',
+              background: 'transparent',
+              color: 'var(--wx-link)',
+              fontSize: 12,
+              lineHeight: 1.4,
+            }}
             onClick={() => {
               void openPreview();
             }}
           >
             预览
-          </button>
+          </Button>
         ) : null}
         {download ? (
           <a
@@ -272,9 +293,23 @@ export const MessageFileCard = memo(function MessageFileCard({
           </a>
         ) : null}
         {state.status === 'error' || thumbBroken || actionError ? (
-          <button type="button" className="msg-file-action msg-file-retry" onClick={retry}>
+          <Button
+            type="button"
+            variant="borderless"
+            size="sm"
+            className="msg-file-action msg-file-retry"
+            style={{
+              height: 'auto',
+              padding: '3px 5px',
+              background: 'transparent',
+              color: 'var(--wx-danger)',
+              fontSize: 12,
+              lineHeight: 1.4,
+            }}
+            onClick={retry}
+          >
             重试
-          </button>
+          </Button>
         ) : null}
       </span>
     </div>

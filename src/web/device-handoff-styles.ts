@@ -16,8 +16,11 @@ export const DEVICE_HANDOFF_STYLE = `
   .account-name { display: block; flex: 0 1 auto; min-width: 0; font-size: 13px;
     font-weight: 500; color: var(--wx-text, #333);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .account-edit { flex: 0 0 auto; width: 20px; height: 20px; padding: 0; border: 0;
-    border-radius: 4px; background: none; color: var(--lenso-label-secondary);
+  /* Lenso Button 自带 34px 高度与内边距，并用提升特异性的原子类输出；
+     账号区保留 legacy 的 20/22px 尺寸，因此这里显式覆盖。 */
+  .account-name-row .account-edit { flex: 0 0 auto; width: 20px !important; height: 20px !important;
+    padding: 0 !important; border: 0; border-radius: 4px; background: none;
+    color: var(--lenso-label-secondary) !important;
     display: grid; place-items: center; cursor: pointer; }
   .account-edit:hover { background: var(--wx-hover, #ececec); color: var(--wx-text, #333); }
   .account-edit[hidden] { display: none; }
@@ -31,10 +34,15 @@ export const DEVICE_HANDOFF_STYLE = `
      账号文字入口需显式继承，否则浏览器表单控件会回退到 Arial 并改变宽度。 */
   .account-scan { padding: 0; border: 0; background: none; font: inherit;
     color: var(--lenso-tint-text); font-size: 12px; cursor: pointer; }
+  .account-actions .account-scan { height: 22px !important; line-height: 22px !important;
+    padding: 0 !important; border: 0; background: none; font: inherit;
+    font-size: 12px !important; color: var(--lenso-tint-text) !important; }
   .account-scan:hover { text-decoration: underline; }
   .account-icon { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: 0;
     border-radius: 4px; background: none; color: var(--wx-muted, #999);
     display: grid; place-items: center; cursor: pointer; }
+  .account-actions .account-icon { width: 22px !important; height: 22px !important;
+    padding: 0 !important; color: var(--wx-muted, #999) !important; }
   .account-icon:hover { background: var(--wx-hover, #ececec); color: var(--wx-text, #333); }
   .account-icon[hidden] { display: none; }
   .account-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor;

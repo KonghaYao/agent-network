@@ -210,9 +210,21 @@ function ComposerFileChip({
   return (
     <div className="composer-file" role="listitem" data-file-id={file.fileId ?? ''}>
       {thumb && item && !thumbBroken ? (
-        <button
+        <Button
           type="button"
+          variant="borderless"
           className="composer-file-thumb"
+          style={{
+            flex: '0 0 auto',
+            width: 48,
+            height: 48,
+            margin: 0,
+            padding: 0,
+            border: 0,
+            borderRadius: 6,
+            overflow: 'hidden',
+            background: 'var(--wx-search)',
+          }}
           title={file.name}
           aria-label={`预览图片 ${file.name}`}
           onClick={() => onOpenFile(item)}
@@ -225,7 +237,7 @@ function ComposerFileChip({
             referrerPolicy="no-referrer"
             onError={() => setThumbBroken(true)}
           />
-        </button>
+        </Button>
       ) : (
         <span className="composer-file-badge" aria-hidden="true">
           {fileBadge(file.name)}
