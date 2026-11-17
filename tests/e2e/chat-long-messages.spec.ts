@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -139,6 +139,19 @@ function longBody(marker: string, size: number, tail: string): string {
   const pad = 'filler text ';
   const padding = pad.repeat(Math.ceil(filler / pad.length)).slice(0, filler);
   return `${head}${padding}${bottom}`;
+}
+
+/**
+ * 滚到目标消息并等待自动展开。
+ *
+ * 首屏其他消息的自动展开会改变列表高度，单次 scrollIntoView 可能正好落在
+ * 布局变化之间；重试滚动与短断言可以覆盖这段时间，同时保留“可见即展开”的断言。
+ */
+async function expandOnScroll(locator: Locator, tail: string): Promise<void> {
+  await expect(async () => {
+    await locator.scrollIntoViewIfNeeded();
+    await expect(locator).toContainText(tail, { timeout: 1_500 });
+  }).toPass({ timeout: 30_000 });
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -288,8 +301,7 @@ test.describe('long agent messages', () => {
       .locator('#messages .msg[data-message-id]')
       .filter({ hasText: marker.auto2k });
     await expect(lazy.locator('.expand')).toHaveText('查看全文');
-    await lazy.scrollIntoViewIfNeeded();
-    await expect(lazy).toContainText(marker.auto2kTail, { timeout: 20_000 });
+    await expandOnScroll(lazy, marker.auto2kTail);
     await expect(lazy.locator('.msg-plain-preview')).toHaveCount(0);
     await expect(lazy.locator('.expand')).toHaveCount(0);
   });
@@ -305,22 +317,19 @@ test.describe('long agent messages', () => {
     const low = page
       .locator('#messages .msg[data-message-id]')
       .filter({ hasText: marker.low });
-    await low.scrollIntoViewIfNeeded();
-    await expect(low).toContainText(marker.lowTail, { timeout: 20_000 });
+    await expandOnScroll(low, marker.lowTail);
     await expect(low.locator('.expand')).toHaveCount(0);
 
     const exact = page
       .locator('#messages .msg[data-message-id]')
       .filter({ hasText: marker.exact });
-    await exact.scrollIntoViewIfNeeded();
-    await expect(exact).toContainText(marker.exactTail, { timeout: 20_000 });
+    await expandOnScroll(exact, marker.exactTail);
     await expect(exact.locator('.expand')).toHaveText('收起');
 
     const high = page
       .locator('#messages .msg[data-message-id]')
       .filter({ hasText: marker.high });
-    await high.scrollIntoViewIfNeeded();
-    await expect(high).toContainText(marker.highTail, { timeout: 20_000 });
+    await expandOnScroll(high, marker.highTail);
     const toggle = high.locator('.expand');
     await expect(toggle).toHaveText('收起');
     await toggle.click();

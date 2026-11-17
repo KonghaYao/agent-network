@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 import {
   useCallback,
@@ -152,7 +153,7 @@ export function TaskPreviewPopover({
   return (
     <PopoverPrimitive.Root open={open} onOpenChange={handleOpenChange}>
       <PopoverPrimitive.Trigger asChild>
-        <button
+        <Button
           ref={triggerRef}
           type="button"
           className="task-dock-item-trigger"
@@ -182,7 +183,7 @@ export function TaskPreviewPopover({
             <span>{item.message_count} 消息</span>
             <span>最近 {taskTimeLabel(item.latest_activity_at)}</span>
           </span>
-        </button>
+        </Button>
       </PopoverPrimitive.Trigger>
       <PopoverPrimitive.Portal>
         <PopoverPrimitive.Content
@@ -230,7 +231,7 @@ export function TaskPreviewPopover({
                     : message.preview || '（无正文）';
                   return (
                     <li key={message.message_id}>
-                      <button
+                      <Button
                         type="button"
                         className={`task-preview-recent${message.recalled ? ' is-recalled' : ''}`}
                         aria-label={`查看 ${sender} 的回复：${text}`}
@@ -248,7 +249,7 @@ export function TaskPreviewPopover({
                           </span>
                         </span>
                         <span className="task-preview-recent-text">{text}</span>
-                      </button>
+                      </Button>
                     </li>
                   );
                 })}
@@ -257,7 +258,7 @@ export function TaskPreviewPopover({
           </div>
           <div className="task-preview-actions">
             {canAsk ? (
-              <button
+              <Button
                 type="button"
                 className="task-preview-ask"
                 onClick={() => {
@@ -267,9 +268,9 @@ export function TaskPreviewPopover({
                 }}
               >
                 询问进度
-              </button>
+              </Button>
             ) : null}
-            <button
+            <Button
               type="button"
               className="task-preview-all"
               onClick={() => {
@@ -279,7 +280,7 @@ export function TaskPreviewPopover({
               }}
             >
               查看全部 {item.message_count} 条消息
-            </button>
+            </Button>
           </div>
         </PopoverPrimitive.Content>
       </PopoverPrimitive.Portal>

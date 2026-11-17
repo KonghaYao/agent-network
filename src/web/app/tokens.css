@@ -1,19 +1,34 @@
 :root {
   color-scheme: light dark;
-  --spa-bg: #ededed;
-  --spa-surface: #ffffff;
-  --spa-text: #1a1a1a;
-  --spa-muted: #666666;
-  --spa-accent: #07c160;
+  --app-muted: color-mix(in srgb, var(--lenso-label-primary) 68%, var(--lenso-background-secondary));
+  --app-prominent-fill: color-mix(in srgb, var(--lenso-tint-text) 80%, var(--lenso-constant-black));
+  --spa-bg: var(--lenso-background-primary);
+  --spa-surface: var(--lenso-background-secondary);
+  --spa-text: var(--lenso-label-primary);
+  --spa-muted: var(--app-muted);
+  --spa-accent: var(--lenso-tint);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --spa-bg: #191919;
-    --spa-surface: #242424;
-    --spa-text: #e5e5e5;
-    --spa-muted: #a3a3a3;
-  }
+/*
+ * Lenso 0.11.4 的 tint 文本在浅色控件底（#e3e3e9）与白色面板上不足 4.5:1。
+ * 保持同一蓝色色相，仅加深/提亮到满足 WCAG AA 的可访问值。
+ */
+:root,
+[data-theme='light'] {
+  --lenso-tint-text: #005bb5;
+  --lenso-status-info-text: #005bb5;
+}
+
+[data-theme='dark'] {
+  --lenso-tint-text: #64b5ff;
+  --lenso-status-info-text: #64b5ff;
+  /* 白字 prominent 按钮需要更深底色；Lenso 默认蓝在暗色下只有 3.35:1。 */
+  --app-prominent-fill: #0068d6;
+}
+
+button[data-lenso-slot='button'][data-variant='prominent'] {
+  background: var(--app-prominent-fill) !important;
+  color: var(--lenso-label-on-tint) !important;
 }
 
 * {

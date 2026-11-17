@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useCallback, useEffect, useState } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -222,7 +223,7 @@ export function ContactLinksPanel({
         </div>
         <p className="contact-link-hint">一次性链接，24 小时内有效；对方登录后直接成为好友。</p>
         <div className="contact-link-actions">
-          <button
+          <Button
             id="contact-link-create"
             className="primary"
             type="button"
@@ -230,15 +231,15 @@ export function ContactLinksPanel({
             onClick={() => void create()}
           >
             {busy ? '正在生成…' : '生成好友链接'}
-          </button>
-          <button
+          </Button>
+          <Button
             id="contact-link-copy"
             type="button"
             hidden={!plaintext}
             onClick={() => void copy()}
           >
             复制链接
-          </button>
+          </Button>
         </div>
         <p
           id="contact-link-status"
@@ -266,14 +267,14 @@ export function ContactLinksPanel({
                   ) : null}
                 </div>
                 {link.can_revoke ? (
-                  <button
+                  <Button
                     type="button"
                     disabled={busy}
                     aria-label={`撤销好友链接 ${link.link_id}`}
                     onClick={() => void revoke(link)}
                   >
                     撤销
-                  </button>
+                  </Button>
                 ) : null}
               </li>
             ))

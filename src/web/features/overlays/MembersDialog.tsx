@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 
@@ -361,7 +362,7 @@ export function MembersDialog({
               {selected.length > 0 ? `已选 ${selected.length} 人` : '未选择'}
             </span>
             {room.can_dissolve === true && !room.read_only ? (
-              <button
+              <Button
                 id="group-dissolve"
                 className="danger"
                 type="button"
@@ -369,17 +370,17 @@ export function MembersDialog({
                 onClick={() => void dissolve()}
               >
                 解散群聊
-              </button>
+              </Button>
             ) : null}
-            <button
+            <Button
               id="members-cancel"
               type="button"
               disabled={busy !== null}
               onClick={() => onOpenChange(false)}
             >
               取消
-            </button>
-            <button
+            </Button>
+            <Button
               id="members-add"
               className="primary"
               type="button"
@@ -387,7 +388,7 @@ export function MembersDialog({
               onClick={() => void addMembers()}
             >
               {busy === 'add' ? '正在添加…' : '添加'}
-            </button>
+            </Button>
           </div>
         </>
       }
@@ -452,7 +453,7 @@ export function MembersDialog({
                       actions.can_remove) ? (
                       <span className="member-roster-actions">
                         {actions.can_set_admin ? (
-                          <button
+                          <Button
                             className="member-action"
                             type="button"
                             title="设为管理员"
@@ -461,10 +462,10 @@ export function MembersDialog({
                             onClick={() => void setRole(member, 'admin')}
                           >
                             管
-                          </button>
+                          </Button>
                         ) : null}
                         {actions.can_revoke_admin ? (
-                          <button
+                          <Button
                             className="member-action"
                             type="button"
                             title="撤销管理员"
@@ -473,10 +474,10 @@ export function MembersDialog({
                             onClick={() => void setRole(member, 'member')}
                           >
                             撤
-                          </button>
+                          </Button>
                         ) : null}
                         {actions.can_remove ? (
-                          <button
+                          <Button
                             className="member-action danger"
                             type="button"
                             title="移出群聊"
@@ -485,7 +486,7 @@ export function MembersDialog({
                             onClick={() => void remove(member)}
                           >
                             ×
-                          </button>
+                          </Button>
                         ) : null}
                       </span>
                     ) : null}
@@ -516,33 +517,33 @@ export function MembersDialog({
                     </p>
                     <div className="members-transfer-actions">
                       {ownerTransfer.can_accept ? (
-                        <button
+                        <Button
                           className="primary"
                           type="button"
                           disabled={busy !== null}
                           onClick={() => void transferRequest('accept')}
                         >
                           接受转让
-                        </button>
+                        </Button>
                       ) : null}
                       {ownerTransfer.can_reject ? (
-                        <button
+                        <Button
                           type="button"
                           disabled={busy !== null}
                           onClick={() => void transferRequest('reject')}
                         >
                           拒绝
-                        </button>
+                        </Button>
                       ) : null}
                       {ownerTransfer.can_cancel ? (
-                        <button
+                        <Button
                           className="danger"
                           type="button"
                           disabled={busy !== null}
                           onClick={() => void transferCancel()}
                         >
                           取消转让
-                        </button>
+                        </Button>
                       ) : null}
                     </div>
                   </>
@@ -566,7 +567,7 @@ export function MembersDialog({
                           </option>
                         ))}
                       </select>
-                      <button
+                      <Button
                         className="primary"
                         id="members-transfer-propose"
                         type="button"
@@ -574,7 +575,7 @@ export function MembersDialog({
                         onClick={() => void transferPropose(successor)}
                       >
                         发起转让
-                      </button>
+                      </Button>
                     </div>
                   </>
                 )}
@@ -660,7 +661,7 @@ export function MembersDialog({
               )}
             </div>
             {canAdd && contacts.hasMore ? (
-              <button
+              <Button
                 id="members-more"
                 className="member-picker-more"
                 type="button"
@@ -668,7 +669,7 @@ export function MembersDialog({
                 onClick={() => void contacts.loadMore()}
               >
                 {contacts.loadingMore ? '正在加载…' : '加载更多'}
-              </button>
+              </Button>
             ) : null}
           </section>
         </div>

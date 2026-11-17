@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -319,7 +320,7 @@ export function DeviceHandoffDialog({
                 </p>
               </div>
               <div className="handoff-actions handoff-code-actions">
-                <button
+                <Button
                   className="primary"
                   id="pairing-create"
                   type="button"
@@ -327,17 +328,17 @@ export function DeviceHandoffDialog({
                   onClick={() => void createChallenge()}
                 >
                   {creating ? '正在生成…' : '重新生成'}
-                </button>
-                <button
+                </Button>
+                <Button
                   id="handoff-copy"
                   type="button"
                   disabled={!created}
                   onClick={() => void copyLink()}
                 >
                   复制链接
-                </button>
+                </Button>
               </div>
-              <button
+              <Button
                 className="handoff-retry"
                 id="pairing-retry"
                 type="button"
@@ -345,7 +346,7 @@ export function DeviceHandoffDialog({
                 onClick={() => void createChallenge()}
               >
                 重试
-              </button>
+              </Button>
             </section>
             <section className="handoff-col handoff-col-status" aria-label="设备确认">
               <p
@@ -360,14 +361,14 @@ export function DeviceHandoffDialog({
               <section className="pairing-section" aria-labelledby="pairing-list-title">
                 <div className="pairing-section-head">
                   <h3 id="pairing-list-title">待确认的新设备</h3>
-                  <button
+                  <Button
                     className="pairing-refresh"
                     id="pairing-refresh"
                     type="button"
                     onClick={() => void refreshList()}
                   >
                     刷新
-                  </button>
+                  </Button>
                 </div>
                 <p
                   className="pairing-empty"
@@ -401,23 +402,23 @@ export function DeviceHandoffDialog({
                       </div>
                       <div className="pairing-item-actions">
                         {entry.status === 'pending' && entry.confirm_code ? (
-                          <button
+                          <Button
                             type="button"
                             className="primary"
                             disabled={busyPairing !== null}
                             onClick={() => void decide(entry.pairing_id, 'approve')}
                           >
                             确认新设备
-                          </button>
+                          </Button>
                         ) : null}
-                        <button
+                        <Button
                           type="button"
                           className="danger"
                           disabled={busyPairing !== null}
                           onClick={() => void decide(entry.pairing_id, 'cancel')}
                         >
                           {entry.status === 'approved' ? '撤销批准' : '拒绝'}
-                        </button>
+                        </Button>
                       </div>
                     </li>
                   ))}
@@ -429,14 +430,14 @@ export function DeviceHandoffDialog({
             </section>
           </div>
           <div className="handoff-actions handoff-footer">
-            <button
+            <Button
               ref={closeRef}
               id="handoff-close"
               type="button"
               onClick={() => onOpenChange(false)}
             >
               关闭
-            </button>
+            </Button>
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

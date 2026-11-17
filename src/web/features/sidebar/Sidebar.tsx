@@ -1,3 +1,4 @@
+import { Button, SegmentedControl } from '../../app/lenso-controls';
 import { useEffect, useRef, useState } from 'react';
 
 import { Link } from '../../app/router';
@@ -114,7 +115,7 @@ export function Sidebar(props: SidebarProps) {
         <div className="brand-row">
           <h1>WeBots</h1>
           <ContactRequestsButton onOpen={onOpenContacts} />
-          <button
+          <Button
             className="icon-btn"
             id="new-group"
             type="button"
@@ -123,7 +124,7 @@ export function Sidebar(props: SidebarProps) {
             onClick={onCreateGroup}
           >
             +
-          </button>
+          </Button>
         </div>
         <label className="search-box">
           <svg className="search-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -144,56 +145,34 @@ export function Sidebar(props: SidebarProps) {
             }}
           />
         </label>
-        <div
-          className="room-filter"
-          id="room-filter"
-          role="tablist"
-          aria-label="会话类型"
-          onKeyDown={(event) => {
-            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-            event.preventDefault();
-            const index = FILTERS.findIndex((entry) => entry.value === filter);
-            let next = index;
-            if (event.key === 'Home') next = 0;
-            else if (event.key === 'End') next = FILTERS.length - 1;
-            else if (event.key === 'ArrowLeft') {
-              next = (index - 1 + FILTERS.length) % FILTERS.length;
-            } else next = (index + 1) % FILTERS.length;
-            const target = FILTERS[next];
-            if (!target) return;
-            onFilterChange(target.value);
-            const button = document.getElementById(`room-filter-${target.value}`);
-            button?.focus();
-          }}
-        >
-          {FILTERS.map((entry) => {
-            const selected = entry.value === filter;
-            const count = unreadCounts[entry.value];
-            return (
-              <button
-                key={entry.value}
-                id={`room-filter-${entry.value}`}
-                type="button"
-                role="tab"
-                data-room-filter={entry.value}
-                aria-selected={selected}
-                aria-controls="room-list"
-                tabIndex={selected ? 0 : -1}
-                onClick={() => onFilterChange(entry.value)}
-              >
-                {entry.label}
-                {count > 0 ? (
-                  <span
-                    className="room-filter-unread"
-                    aria-hidden="true"
-                    title={`${count} 个会话有未读消息`}
-                  >
-                    {count > 99 ? '99+' : count}
+        <div className="room-filter" id="room-filter">
+          <SegmentedControl
+            aria-label="会话类型"
+            value={filter}
+            onValueChange={(value) => {
+              if (value === 'friend' || value === 'agent' || value === 'group') onFilterChange(value);
+            }}
+            items={FILTERS.map((entry) => {
+              const count = unreadCounts[entry.value];
+              return {
+                value: entry.value,
+                label: (
+                  <span id={`room-filter-${entry.value}`} data-room-filter={entry.value}>
+                    {entry.label}
+                    {count > 0 ? (
+                      <span
+                        className="room-filter-unread"
+                        aria-hidden="true"
+                        title={`${count} 个会话有未读消息`}
+                      >
+                        {count > 99 ? '99+' : count}
+                      </span>
+                    ) : null}
                   </span>
-                ) : null}
-              </button>
-            );
-          })}
+                ),
+              };
+            })}
+          />
         </div>
         <p
           id="room-filter-unread-status"
@@ -239,9 +218,9 @@ export function Sidebar(props: SidebarProps) {
         </p>
         {status === 'logged-out' ? <LoggedOutStart /> : null}
         {showRetry ? (
-          <button id="room-list-retry" className="list-retry" type="button" onClick={onRetry}>
+          <Button id="room-list-retry" className="list-retry" type="button" onClick={onRetry}>
             重试
-          </button>
+          </Button>
         ) : null}
         {status === 'credential-invalid' ? (
           <Link id="credential-invalid-pair" className="list-retry" to="/pair">
@@ -249,7 +228,7 @@ export function Sidebar(props: SidebarProps) {
           </Link>
         ) : null}
         {moreVisible ? (
-          <button
+          <Button
             id="room-list-more"
             className="list-retry"
             type="button"
@@ -261,7 +240,7 @@ export function Sidebar(props: SidebarProps) {
               : loadMoreError
                 ? '加载更多失败，点击重试'
                 : '加载更多会话'}
-          </button>
+          </Button>
         ) : null}
       </div>
       <footer className="sidebar-foot">

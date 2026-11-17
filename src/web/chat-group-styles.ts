@@ -67,8 +67,8 @@ export const GROUP_STYLE = `
   .members-card .contact-avatar { flex: 0 0 auto; width: 24px; height: 24px;
     border-radius: 5px; font-size: 11px; }
   .contact-choice:hover { background: var(--wx-hover); }
-  .members-card .contact-choice.selected { background: rgb(7 193 96 / 12%);
-    border-color: rgb(7 193 96 / 35%); }
+  .members-card .contact-choice.selected { background: var(--lenso-control-tint-subtle-fill);
+    border-color: var(--lenso-tint); }
   .contact-choice input { flex: 0 0 auto; width: 16px; height: 16px;
     accent-color: var(--wx-green); }
   .contact-kind { flex: 0 0 auto; margin-left: auto; font-size: 11px;
@@ -80,7 +80,8 @@ export const GROUP_STYLE = `
   .members-empty[hidden] { display: none; }
   .member-roster-item[hidden] { display: none; }
   .members-actions { flex: 0 0 auto; align-items: center; }
-  #group-leave, #group-dissolve { color: var(--wx-danger); margin-right: auto; }
+  #group-leave, #group-dissolve { color: var(--wx-danger-text) !important;
+    background: var(--wx-panel) !important; margin-right: auto; }
   .group-profile { flex: 0 0 auto; margin-bottom: 12px; }
   .group-profile label { font-size: 12px; color: var(--wx-muted); }
   #group-name-input { flex: 1; min-width: 0; width: 100%; padding: 7px 10px;
@@ -94,7 +95,7 @@ export const GROUP_STYLE = `
   .member-picker-search { flex: 1 1 auto; min-width: 0; box-sizing: border-box;
     padding: 7px 10px; border: 1px solid var(--wx-line); border-radius: 6px;
     background: var(--wx-search); color: var(--wx-text); font-size: 13px; }
-  .member-picker-search:focus { outline: 2px solid rgb(7 193 96 / 35%);
+  .member-picker-search:focus { outline: 2px solid var(--lenso-focus-ring);
     outline-offset: 1px; }
   .members-column .member-picker-search { flex: 0 0 auto; margin: 6px 8px 0; }
   .member-picker-more { flex: 0 0 auto; align-self: center; margin: 6px 0;
@@ -108,8 +109,8 @@ export const GROUP_STYLE = `
     color: var(--wx-muted); overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; }
   .members-transfer { flex: 0 0 auto; margin: 6px; padding: 8px 10px;
-    border: 1px solid rgb(7 193 96 / 35%); border-radius: 6px;
-    background: rgb(7 193 96 / 8%); }
+    border: 1px solid var(--lenso-tint); border-radius: 6px;
+    background: var(--lenso-control-tint-subtle-fill); }
   .members-transfer[hidden] { display: none; }
   .members-transfer-title { margin: 0 0 4px; font-size: 12px; font-weight: 600; }
   .members-transfer-line { margin: 0 0 2px; font-size: 12px; line-height: 1.5;
@@ -136,7 +137,7 @@ export const GROUP_STYLE = `
   .members-invite-form button:hover:not(:disabled) { background: var(--wx-hover); }
   .members-invite-form button:disabled { opacity: 0.5; cursor: default; }
   .members-invite-share { padding: 8px 10px; border-bottom: 1px solid var(--wx-line);
-    background: rgb(7 193 96 / 8%); }
+    background: var(--lenso-control-tint-subtle-fill); }
   .members-invite-share[hidden], .members-invite-qr[hidden] { display: none; }
   .members-invite-url { margin: 0 0 6px; font-size: 11px; line-height: 1.5;
     color: var(--wx-text); overflow-wrap: anywhere; }

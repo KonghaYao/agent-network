@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -71,10 +72,10 @@ export function RenameRoomDialog({
       contentId="room-rename-dialog"
       footer={
         <div className="row modal-actions">
-          <button id="room-rename-cancel" type="button" onClick={() => onOpenChange(false)}>
+          <Button id="room-rename-cancel" type="button" onClick={() => onOpenChange(false)}>
             取消
-          </button>
-          <button
+          </Button>
+          <Button
             id="room-rename-save"
             type="submit"
             form="room-rename-form"
@@ -82,7 +83,7 @@ export function RenameRoomDialog({
             disabled={isSubmitting}
           >
             {isSubmitting ? '正在保存…' : '保存'}
-          </button>
+          </Button>
         </div>
       }
     >

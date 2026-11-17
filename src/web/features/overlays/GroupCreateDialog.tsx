@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as Ariakit from '@ariakit/react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
@@ -121,10 +122,10 @@ export function GroupCreateDialog({
       className="group-card"
       footer={
         <div className="row modal-actions">
-          <button id="group-cancel" type="button" onClick={() => close(false)} disabled={isSubmitting}>
+          <Button id="group-cancel" type="button" onClick={() => close(false)} disabled={isSubmitting}>
             取消
-          </button>
-          <button
+          </Button>
+          <Button
             id="group-create"
             type="submit"
             form="group-form"
@@ -132,7 +133,7 @@ export function GroupCreateDialog({
             disabled={isSubmitting || !token}
           >
             {isSubmitting ? '正在创建…' : '创建'}
-          </button>
+          </Button>
         </div>
       }
     >
@@ -186,7 +187,7 @@ export function GroupCreateDialog({
             <p className="list-hint">{needle ? '没有匹配的好友' : '没有可选好友'}</p>
           ) : null}
           {contacts.hasMore ? (
-            <button
+            <Button
               id="group-contacts-more"
               className="list-retry"
               type="button"
@@ -194,7 +195,7 @@ export function GroupCreateDialog({
               onClick={() => void contacts.loadMore()}
             >
               {contacts.loadingMore ? '正在加载…' : '加载更多好友'}
-            </button>
+            </Button>
           ) : null}
           {contacts.error ? <p className="field-error">{contacts.error}</p> : null}
         </div>
@@ -205,7 +206,7 @@ export function GroupCreateDialog({
             return (
               <span className="spa-chip" key={id}>
                 {contact?.name ?? id}
-                <button
+                <Button
                   type="button"
                   aria-label={`移除 ${contact?.name ?? id}`}
                   onClick={() => {
@@ -217,7 +218,7 @@ export function GroupCreateDialog({
                   }}
                 >
                   ×
-                </button>
+                </Button>
               </span>
             );
           })}

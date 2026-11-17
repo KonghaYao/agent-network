@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -85,7 +86,7 @@ export function ArchiveAgentsDialog({
             <h2 id="archive-popover-title">已归档 Agents</h2>
           </DialogPrimitive.Title>
           <DialogPrimitive.Close asChild>
-            <button
+            <Button
               id="archive-popover-close"
               className="spa-dialog-close"
               type="button"
@@ -93,7 +94,7 @@ export function ArchiveAgentsDialog({
               title="关闭"
             >
               ×
-            </button>
+            </Button>
           </DialogPrimitive.Close>
           <p
             className="archive-popover-status"
@@ -127,7 +128,7 @@ export function ArchiveAgentsDialog({
                   <span className="archive-name" title={item.name}>
                     {item.name}
                   </span>
-                  <button
+                  <Button
                     type="button"
                     className="archive-restore"
                     data-actor-id={item.actor_id}
@@ -136,7 +137,7 @@ export function ArchiveAgentsDialog({
                     onClick={() => void restore(item.actor_id, item.name)}
                   >
                     {busy ? '恢复中…' : '恢复'}
-                  </button>
+                  </Button>
                 </li>
               );
             })}

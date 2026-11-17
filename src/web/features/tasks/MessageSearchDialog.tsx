@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useEffect, useState, type FormEvent } from 'react';
 
 import type { McpError } from '../../lib/mcp-client';
@@ -206,9 +207,9 @@ export function MessageSearchDialog({
         className="message-search-card"
         footer={
           <div className="row modal-actions">
-            <button id="message-search-close" type="button" onClick={() => onOpenChange(false)}>
+            <Button id="message-search-close" type="button" onClick={() => onOpenChange(false)}>
               关闭
-            </button>
+            </Button>
           </div>
         }
       >
@@ -241,9 +242,9 @@ export function MessageSearchDialog({
             />
             只看任务
           </label>
-          <button className="primary" type="submit" disabled={busy}>
+          <Button className="primary" type="submit" disabled={busy}>
             {busy ? '搜索中…' : '搜索'}
-          </button>
+          </Button>
         </form>
         <p id="message-search-status" className="contact-search-status" role="status" aria-live="polite">
           {status}
@@ -251,7 +252,7 @@ export function MessageSearchDialog({
         <div id="message-search-results" className="message-search-results">
           {taskOnly
             ? tasks.map((entry) => (
-                <button
+                <Button
                   type="button"
                   className="task-search-result"
                   key={entry.task.root_message_id}
@@ -272,10 +273,10 @@ export function MessageSearchDialog({
                       {entry.matches[0]?.snippet || entry.task.preview}
                     </span>
                   </span>
-                </button>
+                </Button>
               ))
             : messages.map((item) => (
-                <button
+                <Button
                   type="button"
                   className="message-search-result"
                   key={item.message_id}
@@ -285,11 +286,11 @@ export function MessageSearchDialog({
                     {item.sender_name} · {timeLabel(item.created_at)}
                   </strong>
                   <span>{item.snippet || item.preview || '（消息已撤回）'}</span>
-                </button>
+                </Button>
               ))}
         </div>
         {hasMore ? (
-          <button
+          <Button
             id="message-search-more"
             className="list-retry"
             type="button"
@@ -297,7 +298,7 @@ export function MessageSearchDialog({
             onClick={() => void run(true)}
           >
             {busy ? '正在加载…' : '更多结果'}
-          </button>
+          </Button>
         ) : null}
       </Modal>
       <Modal
@@ -311,9 +312,9 @@ export function MessageSearchDialog({
         className="message-search-card"
         footer={
           <div className="row modal-actions">
-            <button id="message-context-close" type="button" onClick={() => setContextId(null)}>
+            <Button id="message-context-close" type="button" onClick={() => setContextId(null)}>
               关闭
-            </button>
+            </Button>
           </div>
         }
       >

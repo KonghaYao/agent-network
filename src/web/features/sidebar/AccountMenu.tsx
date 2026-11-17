@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import { lazy, Suspense, useState } from 'react';
 
@@ -47,7 +48,7 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
     <>
       <DropdownMenuPrimitive.Root>
         <DropdownMenuPrimitive.Trigger asChild>
-          <button
+          <Button
             id="account-menu-toggle"
             className="icon-btn account-more"
             type="button"
@@ -56,7 +57,7 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
             disabled={!me}
           >
             ···
-          </button>
+          </Button>
         </DropdownMenuPrimitive.Trigger>
         <DropdownMenuPrimitive.Portal>
           <DropdownMenuPrimitive.Content

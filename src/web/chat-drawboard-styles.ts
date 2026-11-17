@@ -8,25 +8,20 @@ export const DRAWBOARD_FALLBACK_STYLE = `
   .drawboard-fallback { position: fixed; inset: 0; z-index: 80; display: flex;
     align-items: center; justify-content: center; width: auto; height: auto;
     max-width: none; max-height: none; margin: 0; border: 0;
-    padding: 20px; background: rgb(0 0 0 / 58%); }
+    padding: 20px; background: var(--lenso-scrim); }
   .drawboard-fallback:not([open]) { display: none; }
   .drawboard-fallback::backdrop { background: transparent; }
   .drawboard-fallback-card { width: min(360px, 100%); padding: 22px 20px;
-    border: 1px solid var(--wx-line, #e5e5e5); border-radius: 10px;
-    background: var(--wx-panel, #fff); color: var(--wx-text, #1a1a1a);
-    box-shadow: 0 18px 60px rgb(0 0 0 / 35%); text-align: center; }
+    border: 1px solid var(--lenso-separator); border-radius: 10px;
+    background: var(--lenso-background-secondary); color: var(--lenso-label-primary);
+    box-shadow: var(--lenso-surface-shadow); text-align: center; }
   .drawboard-fallback-title { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
-  .drawboard-fallback-text { margin: 0 0 16px; font-size: 13px; color: var(--wx-muted, #999);
+  .drawboard-fallback-text { margin: 0 0 16px; font-size: 13px; color: var(--lenso-label-secondary);
     overflow-wrap: anywhere; }
   .drawboard-fallback-actions { display: flex; justify-content: center; gap: 8px; }
   .drawboard-fallback-actions button { height: 34px; padding: 0 14px;
-    border: 1px solid var(--wx-line, #e5e5e5); border-radius: 5px;
-    background: var(--wx-panel, #fff); color: var(--wx-text, #1a1a1a); cursor: pointer; }
-  .drawboard-fallback-actions button.primary { border-color: var(--wx-green, #07c160);
-    background: var(--wx-green, #07c160); color: #fff; }
-  @media (prefers-color-scheme: dark) {
-    .drawboard-fallback-card, .drawboard-fallback-actions button {
-      background: var(--wx-panel, #2b2b2b); color: var(--wx-text, #e5e5e5);
-    }
-  }
+    border: 1px solid var(--lenso-control-border); border-radius: 5px;
+    background: var(--lenso-control-fill); color: var(--lenso-label-primary); cursor: pointer; }
+  .drawboard-fallback-actions button.primary { border-color: var(--lenso-tint);
+    background: var(--lenso-tint); color: var(--lenso-label-on-tint); }
 `;

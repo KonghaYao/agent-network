@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { ThemeScope } from '../app/lenso-controls';
 
 import type { PublicShareActor, SpaBootstrap } from '../app/bootstrap';
 import { SharePage } from '../pages/SharePage';
@@ -16,7 +17,7 @@ export function renderShareSpaPage(actor: PublicShareActor, manifest: SpaManifes
   return renderSpaShell('share', manifest, {
     title: `添加 ${actor.name} · WeBots`,
     description: `在 WeBots 添加 ${actor.name} 为好友；发送好友申请，对方确认后建立单聊。`,
-    bodyHtml: renderToStaticMarkup(<SharePage actor={actor} />),
+    bodyHtml: renderToStaticMarkup(<ThemeScope className="lenso-root" style={{ display: 'contents' }}><SharePage actor={actor} /></ThemeScope>),
     bootstrap,
     bodyClass: 'page-share',
   });
@@ -28,7 +29,7 @@ export function renderInvalidShareSpaPage(manifest: SpaManifest): string {
   return renderSpaShell('share', manifest, {
     title: '分享链接无效 · WeBots',
     description: '分享链接可能已失效，或会话尚未注册。请向对方索取新的分享链接。',
-    bodyHtml: renderToStaticMarkup(<SharePage actor={null} />),
+    bodyHtml: renderToStaticMarkup(<ThemeScope className="lenso-root" style={{ display: 'contents' }}><SharePage actor={null} /></ThemeScope>),
     bootstrap,
     bodyClass: 'page-share',
   });

@@ -1,3 +1,4 @@
+import { Button } from '../app/lenso-controls';
 /**
  * AI 消息 Markdown 岛：React + Streamdown，只接管 `.bubble` 内的正文。
  *
@@ -153,17 +154,17 @@ function Base64Block({ text }: { text: string }) {
       <div className="msg-base64-head">
         <span className="msg-base64-title">{base64SizeLabel(text)}</span>
         <span className="msg-base64-actions">
-          <button
+          <Button
             type="button"
             className="msg-base64-toggle"
             aria-expanded={expanded}
             onClick={() => setExpanded((value) => !value)}
           >
             {expanded ? '收起' : '查看'}
-          </button>
-          <button type="button" className="msg-base64-copy" onClick={handleCopy}>
+          </Button>
+          <Button type="button" className="msg-base64-copy" onClick={handleCopy}>
             复制
-          </button>
+          </Button>
           <span className="msg-base64-status" role="status" aria-live="polite">
             {copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : ''}
           </span>

@@ -9,19 +9,16 @@
 export const DEVICE_HANDOFF_STYLE = `
   .account { display: flex; align-items: center; gap: 10px; padding: 4px 4px 8px; }
   .account-avatar { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 50%;
-    background: #5b8def; color: #fff; display: grid; place-items: center;
+    background: var(--lenso-tint); color: var(--lenso-label-on-tint); display: grid; place-items: center;
     font-size: 15px; font-weight: 500; }
   .account-main { flex: 1 1 auto; min-width: 0; }
   .account-name-row { display: flex; align-items: center; gap: 2px; min-width: 0; }
   .account-name { display: block; flex: 0 1 auto; min-width: 0; font-size: 13px;
     font-weight: 500; color: var(--wx-text, #333);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* legacy 账号铅笔固定 #999/#8c8c8c；SPA 的 --wx-muted 为对比度调整过，
-     不能套用到该装饰图标，否则与 legacy 观感不一致。 */
   .account-edit { flex: 0 0 auto; width: 20px; height: 20px; padding: 0; border: 0;
-    border-radius: 4px; background: none; color: #999;
+    border-radius: 4px; background: none; color: var(--lenso-label-secondary);
     display: grid; place-items: center; cursor: pointer; }
-  @media (prefers-color-scheme: dark) { .account-edit { color: #8c8c8c; } }
   .account-edit:hover { background: var(--wx-hover, #ececec); color: var(--wx-text, #333); }
   .account-edit[hidden] { display: none; }
   .account-edit svg { width: 14px; height: 14px; fill: none; stroke: currentColor;
@@ -33,7 +30,7 @@ export const DEVICE_HANDOFF_STYLE = `
   /* legacy 基础样式对 button 应用 font: inherit；SPA 壳没有该重置，
      账号文字入口需显式继承，否则浏览器表单控件会回退到 Arial 并改变宽度。 */
   .account-scan { padding: 0; border: 0; background: none; font: inherit;
-    color: var(--wx-link, #576b95); font-size: 12px; cursor: pointer; }
+    color: var(--lenso-tint-text); font-size: 12px; cursor: pointer; }
   .account-scan:hover { text-decoration: underline; }
   .account-icon { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: 0;
     border-radius: 4px; background: none; color: var(--wx-muted, #999);
@@ -47,16 +44,16 @@ export const DEVICE_HANDOFF_STYLE = `
   .me-rename-hint { margin: 0 0 12px; font-size: 12px; color: var(--wx-muted, #666);
     line-height: 1.6; }
   .logout-warning { margin: 0 0 10px; padding: 10px; border-radius: 4px;
-    background: #fff7ed; color: #9a3412; font-size: 13px; line-height: 1.6;
+    background: var(--lenso-control-status-warning-soft-fill); color: var(--lenso-status-warning-text); font-size: 13px; line-height: 1.6;
     overflow-wrap: anywhere; }
   .logout-hint { margin: 0 0 16px; font-size: 12px; color: var(--wx-muted, #666);
     line-height: 1.6; }
   .logout-actions { justify-content: flex-end; }
   /* 只作用于退出确认弹窗；避免全局 .danger 泄漏到会话菜单/文件操作。 */
-  .logout-card button.danger { background: var(--wx-danger, #c0392b);
-    border-color: var(--wx-danger, #c0392b); color: #fff; }
-  .logout-card button.danger:hover { background: var(--wx-danger-strong, #a93226);
-    border-color: var(--wx-danger-strong, #a93226); }
+  .logout-card button.danger:not([data-lenso-slot]) { background: var(--lenso-action-destructive);
+    border-color: var(--lenso-action-destructive); color: var(--lenso-label-on-destructive); }
+  .logout-card button.danger:not([data-lenso-slot]):hover { background: var(--lenso-control-status-error-hover-fill);
+    border-color: var(--lenso-control-status-error-hover-fill); }
   .logout-card button.danger:focus-visible { outline: 2px solid var(--wx-text, #1a1a1a);
     outline-offset: 2px; }
   .logout-card button.danger:disabled { opacity: 1; background: #f6d5d5;
@@ -106,17 +103,17 @@ export const DEVICE_HANDOFF_STYLE = `
     color: var(--wx-text, #333); }
   .pairing-item-actions { display: flex; gap: 8px; margin-top: 8px; }
   .pairing-item-actions button { flex: 1 1 auto; height: 32px; padding: 4px 8px; font-size: 12px; }
-  .pairing-item-actions button.danger { background: var(--wx-danger, #c0392b);
-    border-color: var(--wx-danger, #c0392b); color: #fff; }
+  .pairing-item-actions button.danger:not([data-lenso-slot]) { background: var(--lenso-action-destructive);
+    border-color: var(--lenso-action-destructive); color: var(--lenso-label-on-destructive); }
   .pairing-status { min-height: 1.6em; margin: 0 0 10px; font-size: 12px;
-    color: var(--wx-link, #576b95); overflow-wrap: anywhere; }
-  .pairing-status[data-error] { color: var(--wx-danger, #c0392b); }
-  .pairing-status[data-success] { color: #15803d; }
+    color: var(--lenso-status-info-text); overflow-wrap: anywhere; }
+  .pairing-status[data-error] { color: var(--lenso-status-error-text); }
+  .pairing-status[data-success] { color: var(--lenso-status-success-text); }
   .local-identities { display: grid; gap: 6px; margin-top: 8px; }
   .local-identities-title { margin: 0; font-size: 12px; color: var(--wx-muted, #666); }
   .local-identities .local-identity { width: 100%; }
   .handoff-warning { margin: 12px 0 0; padding: 8px 10px; border-radius: 4px;
-    background: #fff7ed; color: #9a3412; font-size: 12px; line-height: 1.6;
+    background: var(--lenso-control-status-warning-soft-fill); color: var(--lenso-status-warning-text); font-size: 12px; line-height: 1.6;
     overflow-wrap: anywhere; }
   .handoff-actions { display: flex; gap: 8px; }
   .handoff-footer { flex: 0 0 auto; justify-content: flex-end; margin-top: 14px; }

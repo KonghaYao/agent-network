@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { ThemeScope } from '../app/lenso-controls';
 
 import type { SpaBootstrap } from '../app/bootstrap';
 import { JoinPage } from '../pages/JoinPage';
@@ -16,7 +17,7 @@ export function renderJoinSpaPage(inviteKey: string, manifest: SpaManifest): str
   return renderSpaShell('join', manifest, {
     title: '加入群聊 · WeBots',
     description: '打开 WeBots 群邀请，用浏览器身份预览邀请并确认加入。',
-    bodyHtml: renderToStaticMarkup(<JoinPage inviteKey={inviteKey} />),
+    bodyHtml: renderToStaticMarkup(<ThemeScope className="lenso-root" style={{ display: 'contents' }}><JoinPage inviteKey={inviteKey} /></ThemeScope>),
     bootstrap,
     bodyClass: 'page-join',
   });
@@ -28,7 +29,7 @@ export function renderInvalidJoinSpaPage(manifest: SpaManifest): string {
   return renderSpaShell('join', manifest, {
     title: '邀请无效 · WeBots',
     description: '群邀请链接格式不正确，请确认链接完整或向群管理员索取新的邀请。',
-    bodyHtml: renderToStaticMarkup(<JoinPage inviteKey={null} />),
+    bodyHtml: renderToStaticMarkup(<ThemeScope className="lenso-root" style={{ display: 'contents' }}><JoinPage inviteKey={null} /></ThemeScope>),
     bootstrap,
     bodyClass: 'page-join',
   });

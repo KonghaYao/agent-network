@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { semanticColor } from './fixtures/semantic-colors';
+
 /**
  * 4B-6 Home e2e：`bun run test:e2e` 直接运行 React 页面。
  */
@@ -335,11 +337,11 @@ test.describe('SPA Home', () => {
       const background = await page
         .locator('.sidebar')
         .evaluate((element) => getComputedStyle(element).backgroundColor);
-      expect(background).toBe('rgb(43, 43, 43)');
+      expect(background).toBe(await semanticColor(page, '--lenso-background-secondary'));
       const chatBackground = await page
         .locator('.chat-pane')
         .evaluate((element) => getComputedStyle(element).backgroundColor);
-      expect(chatBackground).toBe('rgb(25, 25, 25)');
+      expect(chatBackground).toBe(await semanticColor(page, '--lenso-background-primary'));
     });
   });
 });

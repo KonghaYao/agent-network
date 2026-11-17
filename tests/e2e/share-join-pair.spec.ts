@@ -2,6 +2,8 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { semanticColor } from './fixtures/semantic-colors';
+
 /**
  * 4B-3 Share / Join / Pair e2e。
  *
@@ -211,7 +213,7 @@ test.describe('SPA Share / Join / Pair', () => {
       const background = await page.evaluate(
         () => getComputedStyle(document.body).backgroundColor,
       );
-      expect(background).toBe('rgb(25, 25, 25)');
+      expect(background).toBe(await semanticColor(page, '--lenso-background-primary'));
     } finally {
       await dark.close();
     }

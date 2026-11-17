@@ -7,7 +7,7 @@
  *
  * Upstream reference: FenixAgent apps/web/src/index.css (@import "tailwindcss").
  * Modified for Agent Network: no preflight, @source limited to fenix/**, semantic
- * colors mapped to the existing --wx-* tokens.
+ * colors mapped to Lenso semantic tokens.
  */
 
 @import "tailwindcss/theme.css" layer(theme);
@@ -18,35 +18,35 @@
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
 @theme inline {
-  --color-background: var(--wx-panel, #ffffff);
-  --color-foreground: var(--wx-text, #1a1a1a);
-  --color-card: var(--wx-panel, #ffffff);
-  --color-card-foreground: var(--wx-text, #1a1a1a);
-  --color-popover: var(--wx-panel, #ffffff);
-  --color-popover-foreground: var(--wx-text, #1a1a1a);
-  --color-primary: var(--wx-green, #07c160);
-  --color-primary-foreground: #ffffff;
-  --color-secondary: var(--wx-hover, #ececec);
-  --color-secondary-foreground: var(--wx-text, #1a1a1a);
-  --color-muted: var(--wx-bg, #ededed);
-  --color-muted-foreground: var(--wx-muted, #8c8c8c);
-  --color-accent: var(--wx-hover, #ececec);
-  --color-accent-foreground: var(--wx-text, #1a1a1a);
-  --color-destructive: var(--wx-unread, #fa5151);
-  --color-border: var(--wx-line, #e5e5e5);
-  --color-input: var(--wx-line, #e5e5e5);
-  --color-ring: var(--wx-green, #07c160);
-  --color-surface-0: var(--wx-panel, #ffffff);
-  --color-surface-1: var(--wx-sidebar, #f7f7f7);
-  --color-text-muted: var(--wx-muted, #8c8c8c);
-  --color-text-secondary: var(--wx-text, #3f3f46);
-  --color-text-dim: var(--wx-muted, #a1a1aa);
-  --color-status-error: var(--wx-unread, #dc2626);
-  --color-brand: var(--wx-green, #07c160);
-  --color-brand-glow: rgb(7 193 96 / 25%);
-  --color-cyan: #009296;
-  --color-status-warning: #f59e0b;
-  --color-accent-pink: #8b5cf6;
+  --color-background: var(--lenso-background-secondary);
+  --color-foreground: var(--lenso-label-primary);
+  --color-card: var(--lenso-background-secondary);
+  --color-card-foreground: var(--lenso-label-primary);
+  --color-popover: var(--lenso-background-secondary);
+  --color-popover-foreground: var(--lenso-label-primary);
+  --color-primary: var(--lenso-tint);
+  --color-primary-foreground: var(--lenso-label-on-tint);
+  --color-secondary: var(--lenso-fill-tertiary);
+  --color-secondary-foreground: var(--lenso-label-primary);
+  --color-muted: var(--lenso-background-primary);
+  --color-muted-foreground: var(--app-muted);
+  --color-accent: var(--lenso-fill-tertiary);
+  --color-accent-foreground: var(--lenso-label-primary);
+  --color-destructive: var(--lenso-action-destructive);
+  --color-border: var(--lenso-separator);
+  --color-input: var(--lenso-control-border);
+  --color-ring: var(--lenso-focus-ring);
+  --color-surface-0: var(--lenso-background-secondary);
+  --color-surface-1: var(--lenso-background-primary);
+  --color-text-muted: var(--app-muted);
+  --color-text-secondary: var(--lenso-label-primary);
+  --color-text-dim: var(--lenso-label-tertiary);
+  --color-status-error: var(--lenso-status-error-text);
+  --color-brand: var(--lenso-tint);
+  --color-brand-glow: color-mix(in srgb, var(--lenso-tint) 25%, transparent);
+  --color-cyan: var(--lenso-system-cyan);
+  --color-status-warning: var(--lenso-status-warning-text);
+  --color-accent-pink: var(--lenso-system-purple);
   /*
    * Ported from upstream `packages/ui-components/web/styles/theme.css` compact scale.
    * Tailwind resolves these namespaces at build time; `inline` makes the generated

@@ -1,8 +1,7 @@
 /*
  * 分享/加入/配对页的卡片样式。
  *
- * 与 legacy `layout.ts` 的单列卡片保持同一视觉：桌面居中、移动端单列并
- * 计入安全区；React 页与服务端静态标记共用这些选择器。
+ * Lenso 语义色覆盖分享、加入与配对卡片；移动端保留单列与安全区。
  */
 
 body.page-share,
@@ -31,10 +30,10 @@ body.page-pair main {
   display: block;
   width: min(460px, 100%);
   background: var(--spa-surface);
-  border: 1px solid #e5e5e5;
+  border: 1px solid var(--lenso-separator);
   border-radius: 12px;
   padding: 32px 28px;
-  box-shadow: 0 6px 24px rgb(0 0 0 / 6%);
+  box-shadow: var(--lenso-surface-shadow);
 }
 
 body.page-share h1,
@@ -85,42 +84,42 @@ body.page-pair code {
     SFMono-Regular,
     Menlo,
     monospace;
-  background: #f2f2f2;
+  background: var(--lenso-fill-tertiary);
   border-radius: 4px;
   padding: 2px 6px;
 }
 
-body.page-share button,
-body.page-join button,
-body.page-pair button {
+body.page-share button:not([data-lenso-slot]),
+body.page-join button:not([data-lenso-slot]),
+body.page-pair button:not([data-lenso-slot]) {
   font: inherit;
   border-radius: 4px;
-  border: 1px solid #dcdcdc;
-  background: #fff;
+  border: 1px solid var(--lenso-control-border);
+  background: var(--lenso-control-fill);
   color: var(--spa-text);
   padding: 9px 14px;
   cursor: pointer;
 }
 
-body.page-share button:hover,
-body.page-join button:hover,
-body.page-pair button:hover {
-  background: #f2f2f2;
+body.page-share button:not([data-lenso-slot]):hover,
+body.page-join button:not([data-lenso-slot]):hover,
+body.page-pair button:not([data-lenso-slot]):hover {
+  background: var(--lenso-control-hover-fill);
 }
 
-body.page-share button.primary,
-body.page-join button.primary,
-body.page-pair button.primary {
+body.page-share button.primary:not([data-lenso-slot]),
+body.page-join button.primary:not([data-lenso-slot]),
+body.page-pair button.primary:not([data-lenso-slot]) {
   background: var(--spa-accent);
   border-color: var(--spa-accent);
-  color: #fff;
+  color: var(--lenso-label-on-tint);
 }
 
-body.page-share button.primary:hover,
-body.page-join button.primary:hover,
-body.page-pair button.primary:hover {
-  background: #06ad56;
-  border-color: #06ad56;
+body.page-share button.primary:not([data-lenso-slot]):hover,
+body.page-join button.primary:not([data-lenso-slot]):hover,
+body.page-pair button.primary:not([data-lenso-slot]):hover {
+  background: var(--lenso-control-tint-hover-fill);
+  border-color: var(--lenso-control-tint-hover-fill);
 }
 
 body.page-share button:disabled,
@@ -161,7 +160,7 @@ body.page-pair #status {
   min-height: 1.6em;
   margin: 12px 0 0;
   font-size: 13px;
-  color: #576b95;
+  color: var(--lenso-status-info-text);
   overflow-wrap: anywhere;
   text-align: center;
 }
@@ -169,7 +168,7 @@ body.page-pair #status {
 body.page-share #status[data-error],
 body.page-join #status[data-error],
 body.page-pair #status[data-error] {
-  color: #fa5151;
+  color: var(--lenso-status-error-text);
 }
 
 body.page-share details,
@@ -177,7 +176,7 @@ body.page-join details,
 body.page-pair details {
   margin-top: 16px;
   color: var(--spa-muted);
-  border-top: 1px solid #eee;
+  border-top: 1px solid var(--lenso-separator);
   padding-top: 12px;
   font-size: 12px;
 }
@@ -192,7 +191,7 @@ body.page-share pre,
 body.page-join pre,
 body.page-pair pre {
   overflow-x: auto;
-  background: #f2f2f2;
+  background: var(--lenso-fill-tertiary);
   border-radius: 6px;
   padding: 10px;
   font-size: 12px;
@@ -201,7 +200,7 @@ body.page-pair pre {
 body.page-share a,
 body.page-join a,
 body.page-pair a {
-  color: #576b95;
+  color: var(--lenso-tint-text);
 }
 
 body.page-share .share-head,
@@ -219,7 +218,7 @@ body.page-pair .share-avatar {
   margin: 0 auto 14px;
   border-radius: 10px;
   background: var(--spa-accent);
-  color: #fff;
+  color: var(--lenso-label-on-tint);
   display: grid;
   place-items: center;
   font-size: 26px;
@@ -277,10 +276,10 @@ body.page-pair .field input {
   width: 100%;
   height: 42px;
   margin-top: 6px;
-  border: 1px solid #dcdcdc;
+  border: 1px solid var(--lenso-control-border);
   border-radius: 4px;
   padding: 0 10px;
-  background: #fff;
+  background: var(--lenso-control-field-fill);
   color: var(--spa-text);
   font: inherit;
 }
@@ -302,57 +301,4 @@ body.page-pair .pair-identities dd {
 
 body.page-pair [hidden] {
   display: none;
-}
-
-@media (prefers-color-scheme: dark) {
-  body.page-share main,
-  body.page-join main,
-  body.page-pair main {
-    background: #242424;
-    border-color: #333;
-    box-shadow: none;
-  }
-
-  body.page-share code,
-  body.page-join code,
-  body.page-pair code,
-  body.page-share pre,
-  body.page-join pre,
-  body.page-pair pre {
-    background: #2c2c2c;
-  }
-
-  body.page-share button,
-  body.page-join button,
-  body.page-pair button {
-    background: #2b2b2b;
-    border-color: #3a3a3a;
-    color: #e5e5e5;
-  }
-
-  body.page-share button:hover,
-  body.page-join button:hover,
-  body.page-pair button:hover {
-    background: #333;
-  }
-
-  body.page-share button.primary,
-  body.page-join button.primary,
-  body.page-pair button.primary {
-    background: var(--spa-accent);
-    border-color: var(--spa-accent);
-    color: #fff;
-  }
-
-  body.page-share details,
-  body.page-join details,
-  body.page-pair details {
-    border-top-color: #333;
-  }
-
-  body.page-pair .field input {
-    background: #2b2b2b;
-    border-color: #3a3a3a;
-    color: #e5e5e5;
-  }
 }

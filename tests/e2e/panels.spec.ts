@@ -3,6 +3,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { semanticColor } from './fixtures/semantic-colors';
+
 /**
  * 4B-5 右侧面板与剩余入口：文件、网页监控、画板、Memory、新建 Agent、
  * 管理权交接与群主转让。
@@ -184,6 +186,17 @@ test.describe('SPA 右栏与剩余入口', () => {
       members: [agentId],
     });
     expect(agentRoom.room.room_id).toBeTruthy();
+  });
+
+  test('home-to-room navigation keeps the files pane styled', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await login(page, base, tokenA);
+    await page.goto(base);
+    await page.locator(`#room-list a[data-room-id="${roomId}"]`).click();
+    await expect(page.locator('#files-pane')).toBeVisible();
+    await expect(page.locator('.files-head')).toHaveCSS('display', 'flex');
+    await expect(page.locator('#files-list')).toHaveCSS('list-style-type', 'none');
+    await expect(page.locator('#files-pane')).toHaveCSS('display', 'flex');
   });
 
   test('files pane uploads, previews and deletes a file', async ({ page }) => {
@@ -411,8 +424,10 @@ test.describe('SPA 右栏与剩余入口', () => {
       };
     });
     expect(metrics).not.toBeNull();
-    expect(metrics!.cardBackground).toBe('rgb(43, 43, 43)');
-    expect(metrics!.viewerColor).toBe('rgb(229, 229, 229)');
+    expect(metrics!.cardBackground).toBe(
+      await semanticColor(page, '--lenso-background-secondary'),
+    );
+    expect(metrics!.viewerColor).toBe(await semanticColor(page, '--lenso-label-primary', 'color'));
     expect(metrics!.cardWidth).toBeLessThanOrEqual(390);
     expect(metrics!.toggleVisible).toBe(true);
     expect(metrics!.overflow).toBeLessThanOrEqual(1);
@@ -466,6 +481,8 @@ test.describe('SPA 右栏与剩余入口', () => {
   test('files pane reserves its width before the lazy chunk loads', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await login(page, base, tokenA);
+    // Lenso 控件按需注入；先等首页完成替换，测量窗口只覆盖 FilesPane 懒加载。
+    await page.locator('[data-lenso-slot="button"]').first().waitFor();
     let delayedChunks = 0;
     await page.route('**/assets/FilesPane-*.js', async (route) => {
       delayedChunks += 1;
@@ -478,22 +495,31 @@ test.describe('SPA 右栏与剩余入口', () => {
       const shifts: number[] = [];
       (window as unknown as { __chatWidths: number[] }).__chatWidths = widths;
       (window as unknown as { __layoutShifts: number[] }).__layoutShifts = shifts;
-      new PerformanceObserver((list) => {
-        for (const entry of list.getEntries() as unknown as {
-          hadRecentInput: boolean;
-          value: number;
-          sources: { node: Node | null }[];
-        }[]) {
-          if (entry.hadRecentInput) continue;
-          if (
-            entry.sources.some((source) =>
-              (source.node as Element | null)?.closest?.('.chat-pane, .files-pane'),
-            )
-          ) {
-            shifts.push(entry.value);
-          }
+      // Lenso 控件按需 hydrate 时会替换按钮尺寸；只统计其稳定后的位移，
+      // 避免把 UI 库加载算成文件栏懒加载造成的位移。宽度仍从首帧持续采样。
+      const observeShifts = () => {
+        if (!document.querySelector('[data-lenso-slot="button"]')) {
+          setTimeout(observeShifts, 16);
+          return;
         }
-      }).observe({ type: 'layout-shift', buffered: true });
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries() as unknown as {
+            hadRecentInput: boolean;
+            value: number;
+            sources: { node: Node | null }[];
+          }[]) {
+            if (entry.hadRecentInput) continue;
+            if (
+              entry.sources.some((source) =>
+                (source.node as Element | null)?.closest?.('.chat-pane, .files-pane'),
+              )
+            ) {
+              shifts.push(entry.value);
+            }
+          }
+        }).observe({ type: 'layout-shift', buffered: false });
+      };
+      observeShifts();
       const tick = () => {
         const chat = document.querySelector('.chat-pane');
         if (chat) widths.push(Math.round(chat.getBoundingClientRect().width));
@@ -582,13 +608,13 @@ test.describe('SPA 右栏与剩余入口', () => {
     const color = await page.evaluate(
       () => getComputedStyle(document.getElementById('files-pane')!).backgroundColor,
     );
-    expect(color).toBe('rgb(43, 43, 43)');
+    expect(color).toBe(await semanticColor(page, '--lenso-background-secondary'));
     await page.locator('#monitor-toggle').click();
     await expect(page.locator('#monitor-pane')).toBeVisible();
     const monitorColor = await page.evaluate(
       () => getComputedStyle(document.getElementById('monitor-pane')!).backgroundColor,
     );
-    expect(monitorColor).toBe('rgb(43, 43, 43)');
+    expect(monitorColor).toBe(await semanticColor(page, '--lenso-background-secondary'));
   });
 
   test('drawboard loads on demand and cancels without uploading', async ({ page }) => {

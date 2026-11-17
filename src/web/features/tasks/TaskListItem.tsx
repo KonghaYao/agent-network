@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { TaskPreviewPopover } from './TaskPreviewPopover';
 import type { TaskListItemView } from './types';
 
@@ -64,7 +65,7 @@ export function TaskListItem({
       />
       <div className="task-dock-item-actions">
         {askable ? (
-          <button
+          <Button
             type="button"
             className="task-dock-ask"
             aria-label={`询问进度：${preview}`}
@@ -72,9 +73,9 @@ export function TaskListItem({
             onClick={() => onAskProgress(item)}
           >
             询问进度
-          </button>
+          </Button>
         ) : null}
-        <button
+        <Button
           type="button"
           className="task-dock-complete"
           disabled={!canComplete || completing}
@@ -85,7 +86,7 @@ export function TaskListItem({
           onClick={() => onComplete(item)}
         >
           {completing ? '完成中…' : item.status === 'completed' ? '已完成' : '完成'}
-        </button>
+        </Button>
         {disabledReason ? (
           <span id={reasonId} className="visually-hidden">
             {disabledReason}

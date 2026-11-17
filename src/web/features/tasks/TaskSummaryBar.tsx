@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useQuery } from '@tanstack/react-query';
 
 import { useWebSession } from '../../hooks/useWebSession';
@@ -59,7 +60,7 @@ export function TaskSummaryBar({
   const more = Math.max(0, summary.participant_count - participants.length);
   return (
     <div className="msg-task-bar-slot">
-      <button
+      <Button
         type="button"
         className="task-bar"
         data-task-root={item.message_id}
@@ -84,7 +85,7 @@ export function TaskSummaryBar({
         </span>
         <span className="task-bar-preview">{summary.preview || item.preview || '（无正文）'}</span>
         <span className="task-bar-count">{summary.message_count} 消息</span>
-      </button>
+      </Button>
     </div>
   );
 }

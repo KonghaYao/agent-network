@@ -2,6 +2,7 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 
 import { createIdentity, login, row, type SuiteIdentity } from './fixtures/memory-constellation';
+import { semanticColor } from './fixtures/semantic-colors';
 import {
   SECRET_BEARER,
   SECRET_ENTITY_AWS,
@@ -224,7 +225,7 @@ test.describe('Agent 记忆：实体视角与响应式', () => {
     const background = await page.evaluate(
       () => getComputedStyle(document.querySelector('#agent-memory-dialog') as HTMLElement).backgroundColor,
     );
-    expect(background).toBe('rgb(43, 43, 43)');
+    expect(background).toBe(await semanticColor(page, '--lenso-background-secondary'));
 
     await page.locator('[data-entity-id="entity-1"]').click();
     const detail = entityDetail(page);

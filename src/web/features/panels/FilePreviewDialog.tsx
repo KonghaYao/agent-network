@@ -1,6 +1,7 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState } from 'react';
 
+import { Button } from '../../app/lenso-controls';
 import {
   fileDownloadUrl,
   fileMetaText,
@@ -99,9 +100,9 @@ export function FilePreviewDialog({
                   {item ? fileMetaText(item) : ''}
                 </p>
               </div>
-              <button id="file-preview-close" type="button" aria-label="关闭预览" onClick={onClose}>
+              <Button id="file-preview-close" type="button" aria-label="关闭预览" onClick={onClose}>
                 关闭
-              </button>
+              </Button>
             </header>
             <div id="file-preview-body" className="file-preview-body">
               {!item ? null : kind === 'image' ? (
@@ -137,13 +138,13 @@ export function FilePreviewDialog({
                   ) : null}
                   {markdownToggleVisible ? (
                     <div className="file-preview-md-toolbar">
-                      <button
+                      <Button
                         className="file-preview-md-toggle"
                         type="button"
                         onClick={() => setShowMarkdownSource((value) => !value)}
                       >
                         {showMarkdownSource ? '渲染视图' : '查看原文'}
-                      </button>
+                      </Button>
                     </div>
                   ) : null}
                   {!markdownToggleVisible || showMarkdownSource ? (

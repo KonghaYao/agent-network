@@ -2,6 +2,8 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { semanticColor } from './fixtures/semantic-colors';
+
 /**
  * 4B-6 Chat e2e：五条页面路由始终由 React 渲染。
  *
@@ -1067,11 +1069,11 @@ test.describe('SPA Chat', () => {
       const background = await page
         .locator('.chat-pane')
         .evaluate((element) => getComputedStyle(element).backgroundColor);
-      expect(background).toBe('rgb(25, 25, 25)');
+      expect(background).toBe(await semanticColor(page, '--lenso-background-primary'));
       const head = await page
         .locator('.chat-head')
         .evaluate((element) => getComputedStyle(element).backgroundColor);
-      expect(head).toBe('rgb(43, 43, 43)');
+      expect(head).toBe(await semanticColor(page, '--lenso-background-secondary'));
     });
   });
 });

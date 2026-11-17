@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 import { groupColorFor } from '../../src/web/lib/group-colors';
 import { avatarColor } from '../../src/web/lib/rooms';
+import { semanticColor } from './fixtures/semantic-colors';
 
 /**
  * 群聊专属色与单瓦片头像 e2e：真实 MCP 身份/房间，验证会话列表瓦片、
@@ -422,7 +423,7 @@ test.describe('群聊专属色与单瓦片头像', () => {
     expect(sample).not.toBeNull();
     if (!sample) return;
 
-    expect(sample.head).toBe('rgb(43, 43, 43)');
+    expect(sample.head).toBe(await semanticColor(page, '--lenso-background-secondary'));
     expect(sample.dot).toBe(hexToRgb(color.hex));
     expect(sample.background).toBe(hexToRgb(color.hex));
     expect(sample.color).toBe('rgb(255, 255, 255)');

@@ -1,3 +1,4 @@
+import { Button } from '../app/lenso-controls';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
@@ -586,16 +587,16 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 ) : room ? (
                   <div className="chat-head-actions">
                     {peer?.kind === 'agent' ? (
-                      <button
+                      <Button
                         className="link-btn"
                         id="rename"
                         type="button"
                         onClick={() => roomActions.setRenameAgentOpen(true)}
                       >
                         改名
-                      </button>
+                      </Button>
                     ) : null}
-                    <button
+                    <Button
                       className="link-btn"
                       id="message-search-button"
                       type="button"
@@ -604,9 +605,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       onClick={() => setSearchOpen(true)}
                     >
                       搜索
-                    </button>
+                    </Button>
                     {room.kind === 'group' ? (
-                      <button
+                      <Button
                         ref={membersButtonRef}
                         className="link-btn"
                         id="members-button"
@@ -614,9 +615,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
                         onClick={() => setOverlay('members')}
                       >
                         群成员
-                      </button>
+                      </Button>
                     ) : null}
-                    <button
+                    <Button
                       className={`monitor-toggle${monitorVisible ? ' active' : ''}`}
                       id="monitor-toggle"
                       type="button"
@@ -627,8 +628,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       onClick={toggleMonitor}
                     >
                       <span>网页</span>
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       className={`files-toggle${filesVisible ? ' active' : ''}`}
                       id="files-toggle"
                       type="button"
@@ -637,7 +638,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       onClick={toggleFiles}
                     >
                       文件
-                    </button>
+                    </Button>
                     {/* 桌面账号区在侧栏；移动端侧栏隐藏，才在聊天头部提供入口。 */}
                     {identity && mobile ? <AccountMenu me={identity} /> : null}
                     {room.announcement ? (
@@ -737,9 +738,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 <div id="chat-error" className="chat-error" role="alert" hidden={chat.status !== 'error'}>
                   <p id="chat-error-text">{chat.error || '读取会话失败'}</p>
                   <div className="chat-error-actions">
-                    <button id="chat-error-retry" type="button" onClick={() => void chat.load()}>
+                    <Button id="chat-error-retry" type="button" onClick={() => void chat.load()}>
                       重试
-                    </button>
+                    </Button>
                     <Link id="chat-error-back" to="/">
                       返回会话列表
                     </Link>
@@ -798,9 +799,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       aria-busy="true"
                       onSubmit={(event) => event.preventDefault()}
                     >
-                      <button className="attach-btn" type="button" aria-label="添加附件" disabled>
+                      <Button className="attach-btn" type="button" aria-label="添加附件" disabled>
                         +
-                      </button>
+                      </Button>
                       <div className="composer-main">
                         <textarea
                           id="body"
@@ -810,9 +811,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
                           disabled
                         />
                       </div>
-                      <button className="send-btn primary" id="send" type="submit" disabled>
+                      <Button className="send-btn primary" id="send" type="submit" disabled>
                         发送
-                      </button>
+                      </Button>
                     </form>
                   ) : null}
                   {ready && room && identity && token && !room.read_only ? (

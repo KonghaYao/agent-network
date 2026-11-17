@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
 
 import { clearQueryCache } from '../../app/query';
@@ -60,9 +61,9 @@ export function LogoutDialog({
             <AlertDialogPrimitive.Cancel id="logout-cancel" className="spa-dialog-button">
               取消
             </AlertDialogPrimitive.Cancel>
-            <button id="logout-confirm" type="button" className="spa-dialog-button danger" onClick={logout}>
+            <Button id="logout-confirm" type="button" className="spa-dialog-button danger" onClick={logout}>
               退出登录
-            </button>
+            </Button>
           </div>
         </AlertDialogPrimitive.Content>
       </AlertDialogPrimitive.Portal>

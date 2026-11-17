@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import type { ElementType, Ref } from 'react';
 
@@ -265,7 +266,7 @@ export function RoomMenu({
   return (
     <DropdownMenuPrimitive.Root>
       <DropdownMenuPrimitive.Trigger asChild>
-        <button
+        <Button
           ref={toggleRef}
           id="room-menu-toggle"
           className="icon-btn"
@@ -274,7 +275,7 @@ export function RoomMenu({
           title="会话操作"
         >
           ···
-        </button>
+        </Button>
       </DropdownMenuPrimitive.Trigger>
       <DropdownMenuPrimitive.Portal>
         <DropdownMenuPrimitive.Content

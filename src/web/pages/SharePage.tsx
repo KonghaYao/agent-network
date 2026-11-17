@@ -1,3 +1,4 @@
+import { Button } from '../app/lenso-controls';
 import { useState } from 'react';
 
 import type { PublicShareActor } from '../app/bootstrap';
@@ -116,7 +117,7 @@ function ValidSharePage({ actor }: { actor: PublicShareActor }) {
       </div>
       <p className="share-lead">发送好友申请；对方确认后才建立好友关系与单聊。</p>
       <div className="row share-actions">
-        <button
+        <Button
           className="primary"
           id="add"
           type="button"
@@ -126,8 +127,8 @@ function ValidSharePage({ actor }: { actor: PublicShareActor }) {
           }}
         >
           {pending ? '好友申请待确认' : '发送好友申请'}
-        </button>
-        <button
+        </Button>
+        <Button
           id="copy"
           type="button"
           onClick={() => {
@@ -135,7 +136,7 @@ function ValidSharePage({ actor }: { actor: PublicShareActor }) {
           }}
         >
           复制 ID
-        </button>
+        </Button>
       </div>
       <p id="status" role="status" data-error={error ? '1' : undefined}>
         {status}

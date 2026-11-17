@@ -54,7 +54,7 @@ const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}${MEMORY_STYLE}
   body.wide { display: block; min-height: 100dvh; height: 100dvh; padding: 0;
     overflow: hidden; background: var(--wx-bg); }
   body.wide #root { display: flex; width: 100%; height: 100dvh; min-height: 0; }
-  body.wide #root > main { flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; }
+  body.wide #root > .lenso-root > main { flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; }
 `;
 
 /** Chat 复用 Markdown、回执菜单、附件、文件、监控与画板样式。 */
@@ -89,7 +89,7 @@ export function renderSpaShell(
 <meta property="og:type" content="website">
 <link rel="icon" type="image/svg+xml" href="${escapeHtml(BASE_FAVICON_HREF)}">
 <title>${escapeHtml(title)}</title>
-<style>:root{color-scheme:light dark}${route === 'room' ? CHAT_STYLE : SPA_STYLE}</style>
+<style>:root{color-scheme:light dark}${CHAT_STYLE}</style>
 ${css}
 </head>
 <body class="${escapeHtml(bodyClass)}" data-spa-route="${route}">

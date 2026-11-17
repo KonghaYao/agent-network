@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import * as Ariakit from '@ariakit/react';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import {
@@ -236,7 +237,7 @@ function ComposerFileChip({
         </span>
         <span className="composer-file-meta">{fileMeta(file)}</span>
       </span>
-      <button
+      <Button
         type="button"
         className="composer-file-remove"
         aria-label={`移除 ${file.name}`}
@@ -245,7 +246,7 @@ function ComposerFileChip({
         onClick={onRemove}
       >
         ×
-      </button>
+      </Button>
     </div>
   );
 }
@@ -679,7 +680,7 @@ export function Composer({
       >
         <DropdownMenuPrimitive.Root>
           <DropdownMenuPrimitive.Trigger asChild>
-            <button
+            <Button
               className="attach-btn"
               id="attach-file"
               type="button"
@@ -690,7 +691,7 @@ export function Composer({
               disabled={room.read_only}
             >
               +
-            </button>
+            </Button>
           </DropdownMenuPrimitive.Trigger>
           <DropdownMenuPrimitive.Portal>
             <DropdownMenuPrimitive.Content
@@ -732,9 +733,9 @@ export function Composer({
           {reply ? (
             <div id="composer-reply" className="composer-reply">
               <span>引用 {reply.label}</span>
-              <button type="button" aria-label="取消引用" onClick={onCancelReply}>
+              <Button type="button" aria-label="取消引用" onClick={onCancelReply}>
                 ×
-              </button>
+              </Button>
             </div>
           ) : null}
           <div
@@ -803,9 +804,9 @@ export function Composer({
             }
           />
         </div>
-        <button className="send-btn primary" id="send" type="submit" disabled={!canSend}>
+        <Button className="send-btn primary" id="send" type="submit" disabled={!canSend}>
           发送
-        </button>
+        </Button>
       </form>
       {drawboardLoading ? (
         <div
@@ -833,7 +834,7 @@ export function Composer({
             <p className="drawboard-fallback-title">画板加载失败</p>
             <p className="drawboard-fallback-text">无法加载绘图组件，请检查网络后重试。</p>
             <div className="drawboard-fallback-actions">
-              <button
+              <Button
                 type="button"
                 className="primary"
                 id="drawboard-retry"
@@ -844,10 +845,10 @@ export function Composer({
                 }}
               >
                 重试
-              </button>
-              <button type="button" id="drawboard-error-close" onClick={() => setDrawboardError(false)}>
+              </Button>
+              <Button type="button" id="drawboard-error-close" onClick={() => setDrawboardError(false)}>
                 关闭
-              </button>
+              </Button>
             </div>
           </div>
         </div>

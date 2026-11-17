@@ -1,3 +1,4 @@
+import { Button } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 
@@ -177,31 +178,31 @@ export function ContactRequestsPanel({
                 <div className="contact-request-actions">
                   {item.direction === 'incoming' && item.can_respond ? (
                     <>
-                      <button
+                      <Button
                         type="button"
                         className="primary"
                         disabled={busyId !== null}
                         onClick={() => void respond(item, 'accept')}
                       >
                         {rowBusy ? '处理中…' : '接受'}
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
                         disabled={busyId !== null}
                         onClick={() => void respond(item, 'reject')}
                       >
                         拒绝
-                      </button>
+                      </Button>
                     </>
                   ) : null}
                   {item.can_cancel ? (
-                    <button
+                    <Button
                       type="button"
                       disabled={busyId !== null}
                       onClick={() => void cancel(item)}
                     >
                       {rowBusy ? '处理中…' : '撤销申请'}
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
               </li>
@@ -214,7 +215,7 @@ export function ContactRequestsPanel({
           {requests.error}
         </p>
       ) : null}
-      <button
+      <Button
         id="contact-request-more"
         className="list-retry"
         type="button"
@@ -223,7 +224,7 @@ export function ContactRequestsPanel({
         onClick={() => void requests.loadMore()}
       >
         {requests.loadingMore ? '正在加载…' : '加载更多申请'}
-      </button>
+      </Button>
     </section>
   );
 }

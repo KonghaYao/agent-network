@@ -1,4 +1,5 @@
 import react from '@vitejs/plugin-react';
+import { unplugin as stylex } from '@stylexjs/unplugin';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
@@ -11,7 +12,21 @@ import { defineConfig } from 'vite';
  */
 export default defineConfig({
   base: '/static/',
-  plugins: [react(), tailwindcss()],
+  optimizeDeps: {
+    exclude: ['@lenso/ui', '@lenso/tokens', '@lenso/glass'],
+    include: ['use-sync-external-store/shim', 'use-sync-external-store/shim/with-selector'],
+  },
+  plugins: [
+    stylex.vite({
+      dev: false,
+      runtimeInjection: false,
+      useCSSLayers: false,
+      lightningcssOptions: { exclude: 4 },
+      unstable_moduleResolution: { type: 'commonJS', rootDir: import.meta.dirname },
+    }),
+    react(),
+    tailwindcss(),
+  ],
   build: {
     outDir: 'dist/web',
     emptyOutDir: true,
