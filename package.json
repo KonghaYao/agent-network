@@ -37,6 +37,7 @@
     "test:dsh-plugin": "bun scripts/verify-dsh-plugin.ts",
     "test:ts-codex-monitor": "bun scripts/verify-ts-codex-monitor.ts",
     "test:web": "bun scripts/verify-web.ts",
+    "test:lenso-primitives": "bun scripts/verify-lenso-primitives.ts",
     "test:architecture": "bun scripts/verify-architecture-hotpaths.ts",
     "test:hotpaths": "bun scripts/verify-hotpaths.ts",
     "test:ux": "bun scripts/ux-luna/run.ts",
