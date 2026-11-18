@@ -18,7 +18,7 @@ import { useRoute } from './router';
 import { TabUnreadBadge } from './TabUnreadBadge';
 import { ConfirmHost } from '../features/overlays/confirm';
 import { AgentMemoryDialogHost } from '../features/memory/AgentMemoryDialogHost';
-import { ChatPage } from '../pages/ChatPage';
+import { ChatRouteFallback } from './ChatRouteFallback';
 import { HomePage } from '../pages/HomePage';
 import { JoinPage } from '../pages/JoinPage';
 import { SharePage } from '../pages/SharePage';
@@ -27,6 +27,10 @@ import { SharePage } from '../pages/SharePage';
  * `/pair` 只在直接访问或从首页跳转时使用；拆出入口 chunk 后，普通会话
  * 启动不再下载配对页。PairPage 是纯 CSR 路由，不参与 SSR hydrate。
  */
+const ChatPage = lazy(() =>
+  import('../pages/ChatPage').then((module) => ({ default: module.ChatPage })),
+);
+
 const PairPage = lazy(() =>
   import('../pages/PairPage').then((module) => ({ default: module.PairPage })),
 );
@@ -114,7 +118,9 @@ function App({ bootstrap }: { bootstrap: SpaBootstrap | null }) {
   return (
     <>
       <RouteBoundary>
-        <Suspense fallback={<RouteFallback />}>{page}</Suspense>
+        <Suspense fallback={route.name === 'room' ? <ChatRouteFallback /> : <RouteFallback />}>
+          {page}
+        </Suspense>
       </RouteBoundary>
       {appRoute ? <TabUnreadBadge baseTitle={baseTitle} /> : null}
       <ConfirmHost />

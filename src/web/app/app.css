@@ -465,6 +465,14 @@
   position: relative;
 }
 
+.chat-route-input-skeleton {
+  display: block;
+  width: 100%;
+  height: 38px;
+  border-radius: 6px;
+  background: var(--wx-hover);
+}
+
 .account-more {
   width: 24px;
   height: 24px;
