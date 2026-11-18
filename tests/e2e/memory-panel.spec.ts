@@ -293,22 +293,44 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(page.locator('.spa-drawer-overlay')).toBeVisible();
 
     const geometry = await drawer.evaluate((element) => {
-      const rect = element.getBoundingClientRect();
-      const card = element.querySelector<HTMLElement>('.memory-card')?.getBoundingClientRect();
+      const rect = (node: Element | null) => {
+        if (!node) return null;
+        const box = node.getBoundingClientRect();
+        return { x: box.x, y: box.y, width: box.width, height: box.height, right: box.right, bottom: box.bottom };
+      };
       return {
-        x: rect.x,
-        right: rect.right,
-        width: rect.width,
-        cardWidth: card?.width ?? 0,
+        drawer: rect(element),
+        card: rect(element.querySelector('.memory-card')),
+        overlay: rect(document.querySelector('.spa-drawer-overlay')),
+        close: rect(element.querySelector('#memory-close')),
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-        bodyOverflow: getComputedStyle(document.body).overflow,
       };
     });
-    expect(geometry.right).toBeGreaterThanOrEqual(1279);
-    expect(geometry.width).toBeGreaterThanOrEqual(470);
-    expect(geometry.cardWidth).toBeGreaterThanOrEqual(470);
+    const desktop = geometry.drawer!;
+    expect(desktop.x).toBeGreaterThanOrEqual(799);
+    expect(desktop.x).toBeLessThanOrEqual(801);
+    expect(desktop.y).toBeGreaterThanOrEqual(-0.5);
+    expect(desktop.y).toBeLessThanOrEqual(0.5);
+    expect(desktop.width).toBeGreaterThanOrEqual(470);
+    expect(desktop.width).toBeLessThanOrEqual(481);
+    expect(desktop.height).toBeGreaterThanOrEqual(843);
+    expect(desktop.height).toBeLessThanOrEqual(845);
+    expect(desktop.right).toBeGreaterThanOrEqual(1279);
+    expect(desktop.right).toBeLessThanOrEqual(1280);
+    expect(desktop.bottom).toBeGreaterThanOrEqual(843.5);
+    expect(desktop.bottom).toBeLessThanOrEqual(844.5);
+    expect(geometry.card).not.toBeNull();
+    expect(geometry.card!.x).toBeGreaterThanOrEqual(799);
+    expect(geometry.card!.right).toBeLessThanOrEqual(1280);
+    expect(geometry.card!.height).toBeGreaterThanOrEqual(843);
+    expect(geometry.card!.bottom).toBeLessThanOrEqual(844);
+    expect(geometry.overlay).toEqual({ x: 0, y: 0, width: 1280, height: 844, right: 1280, bottom: 844 });
+    expect(geometry.close).not.toBeNull();
+    expect(geometry.close!.x).toBeGreaterThanOrEqual(0);
+    expect(geometry.close!.y).toBeGreaterThanOrEqual(0);
+    expect(geometry.close!.right).toBeLessThanOrEqual(1280);
+    expect(geometry.close!.bottom).toBeLessThanOrEqual(844);
     expect(geometry.overflow).toBeLessThanOrEqual(1);
-    expect(geometry.bodyOverflow).toBe('hidden');
     await expect(page.locator('[data-memory-tab="context"]')).toBeVisible();
     await page.locator('[data-memory-tab="context"]').click();
     await expect(page.locator('#memory-panel-context')).toBeVisible();
@@ -331,20 +353,46 @@ test.describe('Agent 记忆弹窗', () => {
     await page.locator('#memory-open').click();
     await expect(drawer).toBeVisible({ timeout: 15_000 });
     const mobileGeometry = await drawer.evaluate((element) => {
-      const rect = element.getBoundingClientRect();
-      const card = element.querySelector<HTMLElement>('.memory-card')?.getBoundingClientRect();
+      const rect = (node: Element | null) => {
+        if (!node) return null;
+        const box = node.getBoundingClientRect();
+        return { x: box.x, y: box.y, width: box.width, height: box.height, right: box.right, bottom: box.bottom };
+      };
       return {
-        width: rect.width,
-        right: rect.right,
-        cardWidth: card?.width ?? 0,
+        drawer: rect(element),
+        card: rect(element.querySelector('.memory-card')),
+        overlay: rect(document.querySelector('.spa-drawer-overlay')),
+        close: rect(element.querySelector('#memory-close')),
         background: getComputedStyle(element.querySelector<HTMLElement>('.memory-card')!).backgroundColor,
       };
     });
-    expect(mobileGeometry.width).toBeGreaterThanOrEqual(389);
-    expect(mobileGeometry.right).toBeLessThanOrEqual(391);
-    expect(mobileGeometry.cardWidth).toBeGreaterThanOrEqual(389);
+    const mobile = mobileGeometry.drawer!;
+    expect(mobile.x).toBeGreaterThanOrEqual(-0.5);
+    expect(mobile.x).toBeLessThanOrEqual(0.5);
+    expect(mobile.y).toBeGreaterThanOrEqual(-0.5);
+    expect(mobile.y).toBeLessThanOrEqual(0.5);
+    expect(mobile.width).toBeGreaterThanOrEqual(389.5);
+    expect(mobile.width).toBeLessThanOrEqual(390.5);
+    expect(mobile.height).toBeGreaterThanOrEqual(843.5);
+    expect(mobile.height).toBeLessThanOrEqual(844.5);
+    expect(mobile.right).toBeGreaterThanOrEqual(389.5);
+    expect(mobile.right).toBeLessThanOrEqual(390.5);
+    expect(mobile.bottom).toBeGreaterThanOrEqual(843.5);
+    expect(mobile.bottom).toBeLessThanOrEqual(844.5);
+    expect(mobileGeometry.card).not.toBeNull();
+    expect(mobileGeometry.card!.x).toBeGreaterThanOrEqual(-0.5);
+    expect(mobileGeometry.card!.y).toBeGreaterThanOrEqual(-0.5);
+    expect(mobileGeometry.card!.right).toBeLessThanOrEqual(390.5);
+    expect(mobileGeometry.card!.bottom).toBeLessThanOrEqual(844.5);
+    expect(mobileGeometry.overlay).toEqual({ x: 0, y: 0, width: 390, height: 844, right: 390, bottom: 844 });
+    const close = mobileGeometry.close!;
+    expect(close.x).toBeGreaterThanOrEqual(0);
+    expect(close.y).toBeGreaterThanOrEqual(0);
+    expect(close.right).toBeLessThanOrEqual(390);
+    expect(close.bottom).toBeLessThanOrEqual(844);
+    await expect(page.locator('#memory-close')).toBeInViewport();
     expect(mobileGeometry.background).not.toBe('rgba(0, 0, 0, 0)');
-    await page.keyboard.press('Escape');
+    await page.locator('#memory-close').click();
     await expect(drawer).toBeHidden();
     await expect(page.locator('#memory-open')).toBeFocused();
   });

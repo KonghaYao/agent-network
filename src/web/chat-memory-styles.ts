@@ -10,8 +10,10 @@ export const MEMORY_STYLE = `
   .memory-drawer { margin: 0; padding: 0; border: 0; color: var(--wx-text); }
   .memory-drawer[data-memory-shell='radix'] { position: fixed; inset: 0; width: 100vw; height: 100dvh;
     max-width: 100vw; max-height: 100dvh; background: transparent; overflow: hidden; }
-  .memory-drawer[data-memory-shell='lenso'] { position: relative; inset: auto; width: min(480px, 100vw) !important;
-    height: 100%; max-width: 100vw; max-height: 100%; margin-inline-end: -12px !important;
+  /* Lenso Drawer 给 side 内容加 8/12px 边缘 margin 并把高度扣掉两侧 inset；
+     应用抽屉要求贴边满高，因此统一清零 margin 并用 100% 高度填满 viewport。 */
+  .memory-drawer[data-memory-shell='lenso'] { position: relative; inset: 0; width: min(480px, 100vw) !important;
+    height: 100% !important; max-width: 100vw; max-height: 100%; margin: 0 !important;
     background: transparent; overflow: hidden; border-radius: 0; }
   .spa-drawer-overlay { position: fixed; inset: 0; z-index: var(--app-z-memory-overlay);
     background: rgb(0 0 0 / 32%); }
@@ -189,7 +191,7 @@ export const MEMORY_STYLE = `
     background: var(--wx-danger-tint); color: var(--wx-danger-text); }
   .memory-error-card.is-danger strong { color: var(--wx-danger-text); }
   @media (max-width: 759px) {
-    .memory-drawer[data-memory-shell='lenso'] { width: 100% !important; margin-inline-end: 0 !important; left: -8px; }
+    .memory-drawer[data-memory-shell='lenso'] { inset: 0; width: 100% !important; height: 100% !important; }
     .memory-card { width: 100%; border-left: 0; }
     .memory-panel { padding-bottom: calc(22px + env(safe-area-inset-bottom)); }
     .memory-tabs { gap: 3px; }
