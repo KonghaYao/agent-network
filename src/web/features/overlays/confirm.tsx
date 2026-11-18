@@ -1,7 +1,15 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react';
-import type { ConfirmRenderer } from './ConfirmRenderer';
+import { Button } from '../../app/lenso-controls';
+import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
+import { useEffect, useSyncExternalStore } from 'react';
 
-/** 命令式确认框唯一出口；store 不依赖 Alert renderer。 */
+/**
+ * 命令式确认框：语义与 `window.confirm` 一致——确认返回 true，取消、
+ * Esc、背板点击返回 false；关闭后 Radix 把焦点还给触发元素。
+ *
+ * 这是唯一的 `<alertdialog>` 出口，禁止在 React 页面里再直接调用
+ * `window.confirm`，以便统一 a11y 与移动端样式。
+ */
+
 export interface ConfirmOptions {
   title: string;
   message: string;
@@ -13,25 +21,23 @@ export interface ConfirmOptions {
 interface PendingConfirm {
   options: ConfirmOptions;
   resolve: (value: boolean) => void;
-  renderer: typeof ConfirmRenderer | null;
 }
 
 let pending: PendingConfirm | null = null;
 let returnFocus: HTMLElement | null = null;
-let renderer: typeof ConfirmRenderer | null = null;
-let loading: Promise<void> | null = null;
 const listeners = new Set<() => void>();
-const emit = () => { for (const listener of listeners) listener(); };
-const subscribe = (listener: () => void) => {
-  listeners.add(listener);
-  return () => { listeners.delete(listener); };
-};
-const snapshot = () => pending;
 
-export function preloadConfirm() {
-  loading ??= import('./ConfirmRenderer').then((module) => {
-    renderer = module.ConfirmRenderer;
-  }).catch(() => { loading = null; });
+function emit(): void {
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function snapshot(): PendingConfirm | null {
+  return pending;
 }
 
 function settle(value: boolean): void {
@@ -41,52 +47,81 @@ function settle(value: boolean): void {
   returnFocus = null;
   emit();
   current?.resolve(value);
+  // Radix 只会在存在 Trigger 时自动还焦；命令式确认框自己记录触发元素。
   requestAnimationFrame(() => {
-    if (target?.isConnected) target.focus();
+    if (target && target.isConnected) target.focus();
   });
 }
 
 export function confirmDialog(options: ConfirmOptions): Promise<boolean> {
   if (pending) settle(false);
-  returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  preloadConfirm();
+  returnFocus =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
   return new Promise<boolean>((resolve) => {
-    // 本轮锁定 renderer；chunk 到达不能替换已经获得焦点的 fallback。
-    pending = { options, resolve, renderer };
+    pending = { options, resolve };
     emit();
   });
 }
 
-function ConfirmFallback({ options }: { options: ConfirmOptions }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const dialog = ref.current;
-    dialog?.showModal();
-    return () => { dialog?.close(); };
-  }, []);
-  return (
-    <dialog ref={ref} id="confirm-dialog" role="alertdialog"
-      className="modal-card spa-dialog-content confirm-card"
-      aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message"
-      onCancel={(event) => { event.preventDefault(); settle(false); }}>
-      <h2 id="confirm-dialog-title">{options.title}</h2>
-      <p id="confirm-dialog-message" className="confirm-message">{options.message}</p>
-      <div className="row modal-actions">
-        <button id="confirm-dialog-cancel" className="spa-dialog-button" autoFocus
-          onClick={() => settle(false)}>{options.cancelText ?? '取消'}</button>
-        <button id="confirm-dialog-ok" type="button"
-          className={`spa-dialog-button primary${options.danger ? ' danger' : ''}`}
-          onClick={() => settle(true)}>{options.confirmText ?? '确定'}</button>
-      </div>
-    </dialog>
-  );
-}
-
+/** 挂载一次即可；当前放在 Home/Chat 共用的 App 根里。 */
 export function ConfirmHost() {
   const current = useSyncExternalStore(subscribe, snapshot, snapshot);
-  useEffect(() => () => { if (pending) settle(false); }, []);
-  if (!current) return null;
-  const Renderer = current.renderer;
-  return Renderer ? <Renderer options={current.options} settle={settle} />
-    : <ConfirmFallback options={current.options} />;
+
+  useEffect(
+    () => () => {
+      // 路由切换导致宿主卸载时，别让调用方永远等下去。
+      if (pending) settle(false);
+    },
+    [],
+  );
+
+  const options = current?.options;
+  return (
+    <AlertDialogPrimitive.Root
+      open={current !== null}
+      onOpenChange={(open) => {
+        if (!open) settle(false);
+      }}
+    >
+      <AlertDialogPrimitive.Portal>
+        <AlertDialogPrimitive.Overlay className="spa-dialog-overlay" />
+        <AlertDialogPrimitive.Content
+          id="confirm-dialog"
+          className="modal-card spa-dialog-content confirm-card"
+          aria-describedby="confirm-dialog-message"
+        >
+          <AlertDialogPrimitive.Title asChild>
+            <h2 id="confirm-dialog-title">{options?.title ?? '确认操作'}</h2>
+          </AlertDialogPrimitive.Title>
+          <AlertDialogPrimitive.Description asChild>
+            <p className="confirm-message" id="confirm-dialog-message">
+              {options?.message ?? ''}
+            </p>
+          </AlertDialogPrimitive.Description>
+          <div className="row modal-actions">
+            <AlertDialogPrimitive.Cancel
+              id="confirm-dialog-cancel"
+              className="spa-dialog-button"
+              onClick={() => settle(false)}
+            >
+              {options?.cancelText ?? '取消'}
+            </AlertDialogPrimitive.Cancel>
+            {/*
+              确认键不用 AlertDialog.Action：Radix 的 Action 会先触发
+              onOpenChange(false)，可能抢先把 Promise 结算成 false。这里
+              显式结算 true，再由 onOpenChange 做收尾（pending 已空）。
+            */}
+            <Button
+              id="confirm-dialog-ok"
+              type="button"
+              className={`spa-dialog-button primary${options?.danger ? ' danger' : ''}`}
+              onClick={() => settle(true)}
+            >
+              {options?.confirmText ?? '确定'}
+            </Button>
+          </div>
+        </AlertDialogPrimitive.Content>
+      </AlertDialogPrimitive.Portal>
+    </AlertDialogPrimitive.Root>
+  );
 }
