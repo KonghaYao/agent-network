@@ -30,6 +30,9 @@ type SlotProps = {
   [key: string]: unknown;
 };
 
+/** Lenso Tabs root 默认 `align-items: flex-start`，会让抽屉里的 tabs 与 panels 收缩到内容宽度。 */
+const TABS_ROOT_LAYOUT = { alignItems: 'stretch', width: '100%' } as const;
+
 export function TabsRoot({
   value,
   onValueChange,
@@ -39,7 +42,11 @@ export function TabsRoot({
   const lenso = useLenso();
   const content = createElement(TabsContext.Provider, { value: { value, onValueChange } }, children);
   if (!lenso) {
-    return createElement('div', { className, 'data-lenso-slot': 'tabs-fallback' }, content);
+    return createElement(
+      'div',
+      { className, style: TABS_ROOT_LAYOUT, 'data-lenso-slot': 'tabs-fallback' },
+      content,
+    );
   }
   return createElement(
     lenso.Tabs as unknown as ComponentType<Record<string, unknown>>,
@@ -47,6 +54,7 @@ export function TabsRoot({
       value,
       onValueChange: (next: string | null) => onValueChange(next ?? ''),
       className,
+      xstyle: TABS_ROOT_LAYOUT,
     },
     content,
   );

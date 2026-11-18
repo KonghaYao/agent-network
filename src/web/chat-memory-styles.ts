@@ -60,8 +60,10 @@ export const MEMORY_STYLE = `
   .memory-stat span { display: block; margin-top: 1px; color: var(--wx-muted);
     font-size: 10.5px; overflow-wrap: anywhere; }
   .memory-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px;
+    width: 100%; align-self: stretch; box-sizing: border-box;
     border-bottom: 1px solid var(--wx-line); }
   .memory-tabs[hidden] { display: none; }
+  .memory-panels { width: 100%; align-self: stretch; min-width: 0; }
   /* Lenso Tabs 会覆盖根 className；用稳定的 data-memory-tab 属性承载本地 tab
      视觉。StyleX 用高特异性选择器保护属性，因此与现有 Select 覆盖一致使用
      !important，确保本地尺寸/颜色和选中态不被 Lenso 指示层覆盖。 */

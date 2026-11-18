@@ -118,6 +118,66 @@ async function openRowMemory(page: Page, roomId: string): Promise<void> {
   await expect(page.locator('#agent-memory-dialog')).toBeVisible({ timeout: 15_000 });
 }
 
+/** 让 Agent 自身凭据看到已启用的 Memory 能力与状态，从而渲染 Tabs。 */
+async function enableAgentMemory(page: Page): Promise<void> {
+  await page.route('**/mcp', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    let body: { id?: unknown; params?: { name?: string } } | null = null;
+    try {
+      body = JSON.parse(route.request().postData() ?? 'null') as {
+        id?: unknown;
+        params?: { name?: string };
+      };
+    } catch {
+      // 非 JSON 请求直接放行。
+    }
+    const name = body?.params?.name;
+    if (name === 'network_me') {
+      const response = await route.fetch();
+      const payload = (await response.json()) as {
+        result?: { structuredContent?: { service?: { memory?: Record<string, unknown> } } };
+      };
+      const service = payload.result?.structuredContent?.service;
+      if (service) {
+        service.memory = {
+          ...(service.memory ?? {}),
+          enabled: true,
+          capture: true,
+          recall_modes: ['lookup'],
+          supported: ['lookup'],
+          unsupported: [],
+          reason: null,
+        };
+      }
+      await route.fulfill({ response, json: payload });
+      return;
+    }
+    if (name === 'network_memory_status') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: body?.id ?? null,
+          result: {
+            structuredContent: {
+              enabled: true,
+              capture: true,
+              host_level: 'tool_only',
+              counts: { context: 2, experience: 1, curated: 1, source: 1 },
+            },
+          },
+        }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+}
+
 test.describe('Agent 记忆弹窗', () => {
   let base = '';
   let tokenA = '';
@@ -403,6 +463,73 @@ test.describe('Agent 记忆弹窗', () => {
     const recall = calls.find((call) => call.name === 'network_memory_recall');
     expect(recall?.args.mode).toBe('reflect');
     expect(recall?.args).not.toHaveProperty('minimum_evidence');
+  });
+
+  test('Tabs 与面板撑满卡片内容宽度，桌面与移动端均无横向溢出', async ({ page }) => {
+    await enableAgentMemory(page);
+    await login(page, base, agentToken);
+    await page.locator('#memory-open').click();
+    await expect(page.locator('#memory-drawer')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#memory-tabs [role="tab"]')).toHaveCount(5);
+    await expect(page.locator('#memory-recall-query')).toBeVisible();
+
+    const measure = () =>
+      page.locator('#memory-drawer').evaluate(() => {
+        const read = (selector: string): HTMLElement => {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (!element) throw new Error(`缺少 ${selector}`);
+          return element;
+        };
+        const body = read('#memory-body');
+        const panels = read('#memory-panels');
+        const form = read('#memory-recall-form');
+        const query = read('#memory-recall-query');
+        const card = read('.memory-card');
+        const panel = read('#memory-panel-recall');
+        const panelStyle = getComputedStyle(panel);
+        return {
+          body: body.clientWidth,
+          panels: panels.getBoundingClientRect().width,
+          panelsRight: panels.getBoundingClientRect().right,
+          bodyRight: body.getBoundingClientRect().right,
+          form: form.getBoundingClientRect().width,
+          query: query.getBoundingClientRect().width,
+          panelPadding:
+            Number.parseFloat(panelStyle.paddingLeft) + Number.parseFloat(panelStyle.paddingRight),
+          cardOverflow: card.scrollWidth - card.clientWidth,
+          documentOverflow:
+            document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      });
+
+    const expectStretched = (widths: Awaited<ReturnType<typeof measure>>) => {
+      // panels 必须等于 #memory-body 内容宽度；query 必须等于 panel 内容宽度。
+      expect(Math.abs(widths.panels - widths.body)).toBeLessThanOrEqual(2);
+      expect(Math.abs(widths.query - widths.form)).toBeLessThanOrEqual(2);
+      expect(Math.abs(widths.query - (widths.panels - widths.panelPadding))).toBeLessThanOrEqual(2);
+      expect(widths.panelsRight).toBeLessThanOrEqual(widths.bodyRight + 1);
+      expect(widths.cardOverflow).toBeLessThanOrEqual(0);
+      expect(widths.documentOverflow).toBeLessThanOrEqual(0);
+    };
+
+    const desktop = await measure();
+    expect(desktop.body).toBeGreaterThan(450);
+    expect(desktop.query).toBeGreaterThan(420);
+    expectStretched(desktop);
+
+    // 切换视口会让侧栏按移动端重排并关闭抽屉；重新打开后测量 390。
+    await page.locator('#memory-close').click();
+    await expect(page.locator('#memory-drawer')).toBeHidden();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('#memory-open').click();
+    await expect(page.locator('#memory-drawer')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#memory-recall-query')).toBeVisible();
+
+    const mobile = await measure();
+    expect(mobile.body).toBeGreaterThanOrEqual(389);
+    expect(mobile.body).toBeLessThanOrEqual(391);
+    expect(mobile.query).toBeGreaterThan(350);
+    expectStretched(mobile);
   });
 
   test('Panel disabled 显示不可用态，并归还焦点', async ({ page }) => {
