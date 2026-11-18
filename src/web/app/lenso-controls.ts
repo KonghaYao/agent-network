@@ -36,7 +36,7 @@ function subscribe(listener: () => void) {
   return () => { listeners.delete(listener); };
 }
 
-function useLenso() {
+export function useLenso() {
   return useSyncExternalStore(subscribe, () => loadedLenso, () => null);
 }
 

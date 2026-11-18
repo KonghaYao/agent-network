@@ -1,4 +1,12 @@
-import { Button } from '../../app/lenso-controls';
+import {
+  Button,
+  EmptyState,
+  Pagination,
+  ProgressBar,
+  Separator,
+  Surface,
+  Toolbar,
+} from '../../app/lenso-controls';
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 
 import type { RoomFileItem } from '../../lib/files-ui';
@@ -243,8 +251,23 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
     <>
       <aside className="files-pane" id="files-pane" aria-label="房间文件" hidden={!open}>
         <header className="files-head">
+          <Toolbar
+            aria-label="文件操作"
+            xstyle={{
+              display: 'flex',
+              width: '100%',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              borderRadius: 0,
+            }}
+          >
           <h2>文件</h2>
           <div className="files-head-actions">
+            <Separator
+              orientation="vertical"
+              style={{ alignSelf: 'center', margin: '0 2px' }}
+            />
             <Button
               className="primary files-upload"
               id="files-upload"
@@ -270,6 +293,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
               关闭
             </Button>
           </div>
+        </Toolbar>
         </header>
         <input
           id="files-input"
@@ -314,7 +338,14 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
                 ? `正在加入房间（${upload.index}/${upload.total}）：${upload.name}`
                 : `正在上传（${upload.index}/${upload.total}）：${upload.name}`}
             </p>
-            <progress id="files-progress-bar" max={100} value={upload.percent} />
+            <ProgressBar
+              id="files-progress-bar"
+              className="files-progress-bar"
+              max={100}
+              value={upload.percent}
+              aria-valuenow={upload.percent}
+              aria-label={`文件上传进度 ${upload.percent}%`}
+            />
           </div>
         ) : null}
         <p
@@ -345,7 +376,8 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
             </Button>
           </div>
         ) : null}
-        <ul id="files-list" className="files-list" aria-label="文件列表">
+        <Surface style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <ul id="files-list" className="files-list" aria-label="文件列表">
           {files.loading && files.items.length === 0
             ? Array.from({ length: 3 }, (_, index) => (
                 <li className="file-skeleton" aria-hidden="true" key={index}>
@@ -416,9 +448,19 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
               })}
         </ul>
         {files.items.length === 0 && !files.loading && !files.error ? (
-          <p id="files-empty" className="files-empty">
+          <EmptyState
+            id="files-empty"
+            style={{
+              margin: 'auto 16px',
+              padding: '28px 0',
+              textAlign: 'center',
+              color: 'var(--wx-muted)',
+              fontSize: 12,
+              width: 'auto',
+            }}
+          >
             这个房间还没有文件
-          </p>
+          </EmptyState>
         ) : null}
         {files.loadMoreError ? (
           <p className="files-status error" role="alert">
@@ -426,18 +468,24 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
           </p>
         ) : null}
         {files.hasMore ? (
-          <Button
-            id="files-more"
-            className="files-more"
-            type="button"
-            variant="borderless"
-            size="sm"
-            disabled={files.loadingMore}
-            onClick={() => void files.loadMore()}
+          <Pagination
+            aria-label="文件分页"
+            style={{ flex: '0 0 auto', width: '100%', paddingBottom: 12 }}
           >
-            {files.loadingMore ? '加载中…' : '加载更多'}
-          </Button>
+            <Button
+              id="files-more"
+              className="files-more"
+              type="button"
+              variant="borderless"
+              size="sm"
+              disabled={files.loadingMore}
+              onClick={() => void files.loadMore()}
+            >
+              {files.loadingMore ? '加载中…' : '加载更多'}
+            </Button>
+          </Pagination>
         ) : null}
+        </Surface>
       </aside>
       <LazyFilePreviewDialog item={preview} onClose={() => setPreview(null)} />
     </>

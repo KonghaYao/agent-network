@@ -66,7 +66,7 @@ export const MEMORY_STYLE = `
     border-radius: 999px; background: var(--wx-search); color: var(--wx-text);
     font-size: 12px; cursor: pointer; }
   .memory-tab:hover { background: var(--wx-hover); }
-  .memory-tab[aria-pressed="true"] { background: var(--wx-green);
+  .memory-tab[aria-selected="true"] { background: var(--wx-green);
     border-color: var(--wx-green); color: var(--lenso-label-on-tint); }
   .memory-tab:focus-visible { outline: 2px solid var(--wx-green); outline-offset: 2px; }
   .memory-panel { padding: 12px 14px 22px; }

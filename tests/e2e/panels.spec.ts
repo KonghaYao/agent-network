@@ -197,7 +197,14 @@ test.describe('SPA 右栏与剩余入口', () => {
     await page.locator(`#room-list a[data-room-id="${roomId}"]`).click();
     await expect(page.locator('#files-pane')).toBeVisible();
     await expect(page.locator('.files-head')).toHaveCSS('display', 'flex');
+    await expect(page.locator('.files-head [data-lenso-slot="toolbar"]')).toBeVisible();
+    await expect(page.locator('#files-list').locator('..')).toHaveAttribute(
+      'data-lenso-slot',
+      'surface',
+    );
     await expect(page.locator('#files-list')).toHaveCSS('list-style-type', 'none');
+    await expect(page.locator('#files-empty')).toHaveAttribute('data-lenso-slot', 'empty-state');
+    await expect(page.locator('#files-empty')).toBeVisible();
     await expect(page.locator('#files-pane')).toHaveCSS('display', 'flex');
   });
 
@@ -208,11 +215,20 @@ test.describe('SPA 右栏与剩余入口', () => {
     await expect(page.locator('#title')).toHaveText(nameB);
 
     const fileName = `panel-${Date.now()}.txt`;
+    await page.route('**/mcp-upload', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await route.continue();
+    });
     await page.locator('#files-input').setInputFiles({
       name: fileName,
       mimeType: 'text/plain',
       buffer: Buffer.from('4B-5 files pane'),
     });
+    await expect(page.locator('#files-progress-bar')).toHaveAttribute(
+      'data-lenso-slot',
+      'progress-bar',
+    );
+    await expect(page.locator('#files-progress-bar')).toHaveAttribute('aria-valuenow', /\d+/u);
     const item = page.locator('#files-list .file-item').filter({ hasText: fileName });
     await expect(item).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('#files-status')).toContainText('已上传');
@@ -444,6 +460,12 @@ test.describe('SPA 右栏与剩余入口', () => {
 
     await page.locator('#monitor-toggle').click();
     await expect(page.locator('#monitor-pane')).toBeVisible();
+    await expect(page.locator('#monitor-form [data-lenso-slot="toolbar"]')).toBeVisible();
+    await expect(page.locator('#monitor-form [data-lenso-slot="separator"]')).toBeVisible();
+    await expect(page.locator('#monitor-frame-wrap')).toHaveAttribute(
+      'data-lenso-slot',
+      'surface',
+    );
     await expect(page.locator('#files-pane')).toBeHidden();
     await page.fill('#monitor-url', 'https://example.com/4b5');
     await page.locator('#monitor-save').click();

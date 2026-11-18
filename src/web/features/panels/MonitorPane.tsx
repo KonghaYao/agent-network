@@ -1,4 +1,4 @@
-import { Button, Input } from '../../app/lenso-controls';
+import { Button, Input, Separator, Surface, Toolbar } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useEffect, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
@@ -73,6 +73,16 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
       hidden={!open}
     >
       <form id="monitor-form" className="monitor-toolbar" onSubmit={(event) => void submit(event)}>
+        <Toolbar
+          aria-label="网页监控操作"
+          xstyle={{
+            display: 'flex',
+            width: '100%',
+            alignItems: 'center',
+            gap: 6,
+            borderRadius: 0,
+          }}
+        >
         <h2 id="monitor-title" className="monitor-title">
           网页监控
         </h2>
@@ -116,6 +126,10 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
           >
             清除
           </Button>
+          <Separator
+            orientation="vertical"
+            style={{ flex: '0 0 auto', margin: '0 2px' }}
+          />
           <a
             className="monitor-icon monitor-external"
             id="monitor-external"
@@ -159,6 +173,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
             关闭
           </Button>
         </div>
+        </Toolbar>
       </form>
       {formState.errors.url ? (
         <p id="monitor-url-error" className="field-error" role="alert">
@@ -181,7 +196,19 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
           HTTPS 页面可能阻止 HTTP 目标。
         </p>
       ) : null}
-      <div id="monitor-frame-wrap" className="monitor-frame-wrap">
+      <Surface
+        id="monitor-frame-wrap"
+        style={{
+          position: 'relative',
+          flex: '1 1 auto',
+          minHeight: 0,
+          margin: '8px 10px 10px',
+          overflow: 'hidden',
+          border: '1px solid var(--wx-line)',
+          borderRadius: 6,
+          background: '#fff',
+        }}
+      >
         {!monitor.url ? <p id="monitor-empty" className="monitor-empty">暂无网页</p> : null}
         <iframe
           id="monitor-frame"
@@ -191,7 +218,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
           hidden={!monitor.url}
           referrerPolicy="no-referrer"
         />
-      </div>
+      </Surface>
     </aside>
   );
 }

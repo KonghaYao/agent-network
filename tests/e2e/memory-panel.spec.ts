@@ -287,6 +287,10 @@ test.describe('Agent 记忆弹窗', () => {
     await page.locator('#memory-open').click();
     await expect(page.locator('#memory-drawer')).toBeVisible({ timeout: 15_000 });
 
+    await expect(page.locator('#memory-tabs [data-lenso-slot="tabs-list"]')).toBeVisible();
+    await expect(page.locator('.memory-chip [data-lenso-slot="chip"]').first()).toBeVisible();
+    await expect(page.locator('.memory-stat-grid [data-lenso-slot="card"]').first()).toBeVisible();
+
     const mode = page.locator('#memory-recall-mode');
     await expect(mode).toHaveAttribute('data-lenso-slot', 'select-trigger');
     await expect(mode).toHaveAttribute('role', 'combobox');
@@ -317,7 +321,11 @@ test.describe('Agent 记忆弹窗', () => {
     await page.getByRole('option', { name: '不限', exact: true }).click();
     await expect(evidence).toContainText('不限');
 
-    await page.locator('[data-memory-tab="context"]').click();
+    const contextTab = page.locator('[data-memory-tab="context"]');
+    await expect(contextTab).toHaveAttribute('aria-selected', 'false');
+    await contextTab.click();
+    await expect(contextTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#memory-context-list')).toHaveAttribute('data-lenso-slot', 'surface');
     const contextKind = page.locator('#memory-context-kind');
     await expect(contextKind).toContainText('全部');
     await contextKind.click();

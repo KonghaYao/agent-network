@@ -37,6 +37,7 @@ export const FILES_STYLE = `
   .files-progress[hidden] { display: none; }
   .files-progress-text { margin: 0 0 4px; font-size: 11px; color: var(--wx-muted);
     overflow-wrap: anywhere; }
+  .files-progress-bar { width: 100%; }
   .files-progress progress { width: 100%; height: 5px; accent-color: var(--wx-green); }
   .files-status { margin: 6px 12px 0; font-size: 12px; color: var(--wx-muted);
     line-height: 1.5; overflow-wrap: anywhere; }
@@ -78,9 +79,6 @@ export const FILES_STYLE = `
     background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
   .file-skeleton-lines span:first-child { width: 62%; }
   .file-skeleton-lines span:last-child { width: 42%; }
-  .files-empty { margin: auto 16px; padding: 28px 0; text-align: center;
-    color: var(--wx-muted); font-size: 12px; }
-  .files-empty[hidden] { display: none; }
   .files-more { flex: 0 0 auto; align-self: center; margin: 0 0 12px; padding: 4px 10px;
     border: 0; background: transparent; color: var(--wx-link); font-size: 12px; }
   .files-more[hidden] { display: none; }

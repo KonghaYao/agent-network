@@ -1,18 +1,37 @@
-import { Button, Input, Select } from '../../app/lenso-controls';
+import {
+  Badge,
+  Button,
+  Card,
+  Input,
+  Pagination,
+  Select,
+  Surface,
+} from '../../app/lenso-controls';
+import { Tabs } from '../../app/lenso-tabs';
 import {
   CONTEXT_KIND_OPTIONS,
   RECALL_EVIDENCE_OPTIONS,
   RECALL_MODE_OPTIONS,
 } from './memory-select-options';
+import { MemoryChip, MemoryRow } from './memory-row';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { useWebSession } from '../../hooks/useWebSession';
-import { callTool, type McpError } from '../../lib/mcp-client';
+import { callTool } from '../../lib/mcp-client';
 import { newRequestId } from '../../lib/request-id';
 import type { WebIdentity } from '../../lib/identity';
+import {
+  bytes,
+  excerpt,
+  failureText,
+  num,
+  shortHash,
+  text,
+  time,
+  type MemoryRecord,
+} from './memory-format';
 
-type MemoryRecord = Record<string, unknown>;
 type TabName = 'recall' | 'context' | 'experience' | 'host' | 'governance';
 
 interface MemoryCatalog {
@@ -102,12 +121,6 @@ const RECALL_STATUS: Record<string, string> = {
   skipped_no_boundary: '未赶上运行边界',
 };
 
-const EVIDENCE: Record<string, string> = {
-  host_reported_submitted: '宿主报告已提交',
-  gateway_observed_submitted: '网关观察已提交',
-  served: '已交付',
-};
-
 const HOST_LEVEL: Record<string, string> = {
   tool_only: '仅工具调用',
   api_tool_only: '仅工具调用',
@@ -115,39 +128,13 @@ const HOST_LEVEL: Record<string, string> = {
   controlled_gateway: '受控网关',
 };
 
-function text(value: unknown, fallback = ''): string {
-  return typeof value === 'string' && value ? value : fallback;
-}
-
-function num(value: unknown, fallback = 0): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-}
-
-function bytes(value: unknown): string {
-  const size = num(value, 0);
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function time(value: unknown): string {
-  const ms = typeof value === 'number' ? value : Date.parse(String(value ?? ''));
-  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toLocaleString('zh-CN') : '';
-}
-
-function excerpt(value: unknown, max = 160): string {
-  const raw = String(value ?? '').replace(/\s+/gu, ' ').trim();
-  return raw.length > max ? `${raw.slice(0, max)}…` : raw;
-}
-
-function shortHash(value: unknown): string {
-  const raw = text(value);
-  return raw.length > 16 ? `${raw.slice(0, 8)}…${raw.slice(-4)}` : raw;
-}
-
-function failureText(failure: unknown): string {
-  return (failure as McpError)?.message || String(failure);
-}
+const TAB_LABELS: readonly (readonly [TabName, string])[] = [
+  ['recall', '召回'],
+  ['context', '上下文'],
+  ['experience', '经历'],
+  ['host', '宿主'],
+  ['governance', '治理'],
+];
 
 /**
  * Memory 抽屉。
@@ -497,6 +484,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                 type="button"
                 aria-label="刷新记忆状态"
                 title="刷新"
+                style={{ width: 44, height: 44, padding: 0, borderRadius: 8, fontSize: 20 }}
                 onClick={() => void load()}
               >
                 ↻
@@ -507,6 +495,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                 type="button"
                 aria-label="关闭记忆面板"
                 title="关闭"
+                style={{ width: 44, height: 44, padding: 0, borderRadius: 8, fontSize: 20 }}
                 onClick={() => onOpenChange(false)}
               >
                 ×
@@ -520,13 +509,18 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                 <section id="memory-capability" className="memory-capability" aria-label="Memory 能力与状态">
                   <div className="memory-capability-head">
                     <h3>Memory 能力</h3>
-                    <span className={`memory-chip ${catalog?.enabled ? 'good' : 'danger'}`}>
+                    <Badge
+                      className="memory-chip"
+                      size="sm"
+                      variant="soft"
+                      color={catalog?.enabled ? 'success' : 'danger'}
+                    >
                       {catalog?.enabled ? '已启用' : '未启用'}
-                    </span>
+                    </Badge>
                     {status ? (
-                      <span className="memory-chip info">
+                      <MemoryChip>
                         {HOST_LEVEL[status.host_level ?? ''] ?? status.host_level ?? '等级未知'}
-                      </span>
+                      </MemoryChip>
                     ) : null}
                   </div>
                   {catalog ? (
@@ -537,23 +531,21 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                       </p>
                       <div className="memory-chip-row">
                         {(catalog.recall_modes ?? []).map((mode) => (
-                          <span className="memory-chip info" key={mode}>
-                            {mode}
-                          </span>
+                          <MemoryChip key={mode}>{mode}</MemoryChip>
                         ))}
                         {(catalog.unsupported ?? []).map((item) => (
-                          <span className="memory-chip warn" key={item}>
+                          <MemoryChip key={item} tone="warn">
                             不支持 · {item}
-                          </span>
+                          </MemoryChip>
                         ))}
                       </div>
                       {status ? (
                         <div className="memory-stat-grid">
                           {titleCounts.map(([label, value]) => (
-                            <div className="memory-stat" key={label}>
+                            <Card className="memory-stat" variant="secondary" key={label}>
                               <strong>{value}</strong>
                               <span>{label}</span>
-                            </div>
+                            </Card>
                           ))}
                         </div>
                       ) : null}
@@ -564,31 +556,35 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                   ) : null}
                 </section>
                 {agentReady ? (
-                  <>
-                    <nav id="memory-tabs" className="memory-tabs" aria-label="Memory 视图">
-                      {(['recall', 'context', 'experience', 'host', 'governance'] as const).map((name) => (
-                        <Button
-                          key={name}
-                          className="memory-tab"
-                          type="button"
-                          data-memory-tab={name}
-                          aria-pressed={tab === name}
-                          onClick={() => setTab(name)}
-                        >
-                          {name === 'recall'
-                            ? '召回'
-                            : name === 'context'
-                              ? '上下文'
-                              : name === 'experience'
-                                ? '经历'
-                                : name === 'host'
-                                  ? '宿主'
-                                  : '治理'}
-                        </Button>
-                      ))}
-                    </nav>
+                  <Tabs value={tab} onValueChange={(next) => setTab(next as TabName)}>
+                    <div id="memory-tabs" className="memory-tabs">
+                      <Tabs.List
+                        aria-label="Memory 视图"
+                        xstyle={{
+                          display: 'flex',
+                          width: '100%',
+                          flexWrap: 'wrap',
+                          gap: 4,
+                          padding: 0,
+                          borderRadius: 0,
+                          background: 'transparent',
+                        }}
+                      >
+                        {TAB_LABELS.map(([name, label]) => (
+                          <Tabs.Tab
+                            key={name}
+                            value={name}
+                            className="memory-tab"
+                            data-memory-tab={name}
+                            xstyle={{ width: 'auto', height: 36, minWidth: 0, paddingInline: 10 }}
+                          >
+                            {label}
+                          </Tabs.Tab>
+                        ))}
+                      </Tabs.List>
+                    </div>
                     <div id="memory-panels" className="memory-panels">
-                      <section id="memory-panel-recall" className="memory-panel" hidden={tab !== 'recall'}>
+                      <Tabs.Panel value="recall" id="memory-panel-recall" className="memory-panel" style={{ padding: '12px 14px calc(22px + env(safe-area-inset-bottom))' }}>
                         <form id="memory-recall-form" className="memory-form" onSubmit={(event) => void submitRecall(event)}>
                           <div className="memory-field">
                             <span>模式</span>
@@ -633,13 +629,13 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                           {recall ? (
                             <>
                               <div className="memory-chip-row">
-                                <span className={`memory-chip ${recall.status === 'ready' ? 'good' : 'warn'}`}>
+                                <MemoryChip tone={recall.status === 'ready' ? 'good' : 'warn'}>
                                   {RECALL_STATUS[recall.status ?? ''] ?? recall.status}
-                                </span>
-                                <span className="memory-chip info">覆盖 {recall.coverage ?? '未知'}</span>
-                                <span className={`memory-chip ${recall.evidence_complete ? 'good' : 'warn'}`}>
+                                </MemoryChip>
+                                <MemoryChip>覆盖 {recall.coverage ?? '未知'}</MemoryChip>
+                                <MemoryChip tone={recall.evidence_complete ? 'good' : 'warn'}>
                                   {recall.evidence_complete ? '证据完整' : '证据不完整'}
-                                </span>
+                                </MemoryChip>
                               </div>
                               {recall.budget_used ? (
                                 <p className="memory-detail-meta">
@@ -654,9 +650,9 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                             </>
                           ) : null}
                         </div>
-                      </section>
+                      </Tabs.Panel>
 
-                      <section id="memory-panel-context" className="memory-panel" hidden={tab !== 'context'}>
+                      <Tabs.Panel value="context" id="memory-panel-context" className="memory-panel" style={{ padding: '12px 14px calc(22px + env(safe-area-inset-bottom))' }}>
                         <div className="memory-toolbar">
                           <div className="memory-field">
                             <span>类型</span>
@@ -675,34 +671,37 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                         <p id="memory-context-status" className="memory-state" role="status">
                           {contextStatus}
                         </p>
-                        <div id="memory-context-list" className="memory-list" role="list">
+                        <Surface id="memory-context-list" className="memory-list" role="list" style={{ display: 'flex', flexDirection: 'column', gap: 0, margin: 0 }}>
                           {contexts.map((item, index) => (
                             <div className="memory-list-item" role="listitem" key={text(item.context_id, String(index))}>
                               <Button
                                 className="memory-row"
+                                style={{ minHeight: 44, justifyContent: 'flex-start' }}
                                 type="button"
                                 onClick={() => void openContext(text(item.context_id))}
                               >
                                 <span className="memory-row-title">
                                   {text(item.context_id, '上下文')}
                                 </span>
-                                <span className="memory-chip info">{text(item.kind, '类型未知')}</span>
+                                <MemoryChip>{text(item.kind, '类型未知')}</MemoryChip>
                                 <span className="memory-row-meta">
                                   有效性 {text(item.validity, '未知')} · 创建 {time(item.created_at)}
                                 </span>
                               </Button>
                             </div>
                           ))}
-                        </div>
+                        </Surface>
                         {contextMore ? (
-                          <Button
-                            id="memory-context-more"
-                            className="memory-page-btn"
-                            type="button"
-                            onClick={() => void loadContexts(false)}
-                          >
-                            加载更多
-                          </Button>
+                          <Pagination style={{ display: 'flex', justifyContent: 'center', width: '100%', marginTop: 8 }} aria-label="上下文分页">
+                            <Button
+                              id="memory-context-more"
+                              className="memory-page-btn"
+                              type="button"
+                              onClick={() => void loadContexts(false)}
+                            >
+                              加载更多
+                            </Button>
+                          </Pagination>
                         ) : null}
                         {contextDetail ? (
                           <div id="memory-context-detail" className="memory-detail">
@@ -722,9 +721,9 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                             )}
                           </div>
                         ) : null}
-                      </section>
+                      </Tabs.Panel>
 
-                      <section id="memory-panel-experience" className="memory-panel" hidden={tab !== 'experience'}>
+                      <Tabs.Panel value="experience" id="memory-panel-experience" className="memory-panel" style={{ padding: '12px 14px calc(22px + env(safe-area-inset-bottom))' }}>
                         <div className="memory-toolbar">
                           <Button
                             id="memory-experience-refresh"
@@ -738,11 +737,12 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                         <p id="memory-experience-status" className="memory-state" role="status">
                           {experienceStatus}
                         </p>
-                        <div id="memory-experience-list" className="memory-list" role="list">
+                        <Surface id="memory-experience-list" className="memory-list" role="list" style={{ display: 'flex', flexDirection: 'column', gap: 0, margin: 0 }}>
                           {experiences.map((item, index) => (
                             <div className="memory-list-item" role="listitem" key={text(item.experience_id, String(index))}>
                               <Button
                                 className="memory-row"
+                                style={{ minHeight: 44, justifyContent: 'flex-start' }}
                                 type="button"
                                 onClick={() => void openExperience(text(item.experience_id))}
                               >
@@ -755,16 +755,18 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                               </Button>
                             </div>
                           ))}
-                        </div>
+                        </Surface>
                         {experienceMore ? (
-                          <Button
-                            id="memory-experience-more"
-                            className="memory-page-btn"
-                            type="button"
-                            onClick={() => void loadExperiences(false)}
-                          >
-                            加载更多
-                          </Button>
+                          <Pagination style={{ display: 'flex', justifyContent: 'center', width: '100%', marginTop: 8 }} aria-label="经历分页">
+                            <Button
+                              id="memory-experience-more"
+                              className="memory-page-btn"
+                              type="button"
+                              onClick={() => void loadExperiences(false)}
+                            >
+                              加载更多
+                            </Button>
+                          </Pagination>
                         ) : null}
                         {experienceDetail ? (
                           <div id="memory-experience-detail" className="memory-detail">
@@ -778,9 +780,9 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                             )}
                           </div>
                         ) : null}
-                      </section>
+                      </Tabs.Panel>
 
-                      <section id="memory-panel-host" className="memory-panel" hidden={tab !== 'host'}>
+                      <Tabs.Panel value="host" id="memory-panel-host" className="memory-panel" style={{ padding: '12px 14px calc(22px + env(safe-area-inset-bottom))' }}>
                         <div id="memory-host-info" className="memory-host-info">
                           <p className="memory-note">
                             宿主绑定由已鉴权宿主会话创建；本面板只展示服务端等级与清单状态，
@@ -812,7 +814,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                             <div className="memory-detail">
                               <div className="memory-detail-head">
                                 <h3>提交清单状态</h3>
-                                <span className="memory-chip info">{manifest.status}</span>
+                                <MemoryChip>{manifest.status}</MemoryChip>
                               </div>
                               <dl>
                                 <dt>提交证据</dt>
@@ -832,9 +834,9 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                             </div>
                           ) : null}
                         </div>
-                      </section>
+                      </Tabs.Panel>
 
-                      <section id="memory-panel-governance" className="memory-panel" hidden={tab !== 'governance'}>
+                      <Tabs.Panel value="governance" id="memory-panel-governance" className="memory-panel" style={{ padding: '12px 14px calc(22px + env(safe-area-inset-bottom))' }}>
                         <p id="memory-governance-status" className="memory-state" role="status">
                           {governanceStatus}
                         </p>
@@ -864,12 +866,12 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                             </Button>
                           </div>
                           <p className="memory-note">人工保存只代表明确写入，不是群消息阅读证明。</p>
-                          <div id="memory-curated-list" className="memory-list" role="list">
+                          <Surface id="memory-curated-list" className="memory-list" role="list" style={{ display: 'flex', flexDirection: 'column', gap: 0, margin: 0 }}>
                             {curated.map((item, index) => (
                               <div className="memory-list-item" role="listitem" key={text(item.curated_id, String(index))}>
                                 <div className="memory-row memory-row-static">
                                   <span className="memory-row-title">{text(item.title, '未命名人工记忆')}</span>
-                                  <span className="memory-chip info">修订 {num(item.revision)}</span>
+                                  <MemoryChip>修订 {num(item.revision)}</MemoryChip>
                                   <p className="memory-row-meta">
                                     {text(item.origin, '人工保存')} · 更新 {time(item.updated_at)}
                                   </p>
@@ -893,7 +895,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                                 </div>
                               </div>
                             ))}
-                          </div>
+                          </Surface>
                         </section>
                         <section className="memory-block" aria-labelledby="memory-source-title">
                           <div className="memory-block-head">
@@ -903,17 +905,17 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                             来源只包含该 Agent 实际获得过的消息/文件；遗忘会先从本地排除，
                             后端清除无法确认时保持未知。
                           </p>
-                          <div id="memory-source-list" className="memory-list" role="list">
+                          <Surface id="memory-source-list" className="memory-list" role="list" style={{ display: 'flex', flexDirection: 'column', gap: 0, margin: 0 }}>
                             {sources.map((item, index) => (
                               <div className="memory-list-item" role="listitem" key={text(item.source_id, String(index))}>
                                 <div className="memory-row memory-row-static">
                                   <span className="memory-row-title">
                                     来源 · {text(item.source_kind, '未知')}
                                   </span>
-                                  <span className="memory-chip info">修订 {num(item.revision)}</span>
-                                  <span className={`memory-chip ${item.state === 'active' ? 'good' : 'warn'}`}>
+                                  <MemoryChip>修订 {num(item.revision)}</MemoryChip>
+                                  <MemoryChip tone={item.state === 'active' ? 'good' : 'warn'}>
                                     {text(item.state, '未知')}
-                                  </span>
+                                  </MemoryChip>
                                   <p className="memory-row-meta">
                                     {text(item.origin_room_id, '无房间')} · 创建 {time(item.created_at)}
                                   </p>
@@ -938,16 +940,18 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                                 </div>
                               </div>
                             ))}
-                          </div>
+                          </Surface>
                           {sourceMore ? (
-                            <Button
-                              id="memory-source-more"
-                              className="memory-page-btn"
-                              type="button"
-                              onClick={() => void loadGovernance(true)}
-                            >
-                              加载更多来源
-                            </Button>
+                            <Pagination style={{ display: 'flex', justifyContent: 'center', width: '100%', marginTop: 8 }} aria-label="来源分页">
+                              <Button
+                                id="memory-source-more"
+                                className="memory-page-btn"
+                                type="button"
+                                onClick={() => void loadGovernance(true)}
+                              >
+                                加载更多来源
+                              </Button>
+                            </Pagination>
                           ) : null}
                         </section>
                         {operation ? (
@@ -959,9 +963,9 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                             </p>
                           </div>
                         ) : null}
-                      </section>
+                      </Tabs.Panel>
                     </div>
-                  </>
+                  </Tabs>
                 ) : null}
               </div>
             ) : null}
@@ -969,30 +973,5 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
-  );
-}
-
-/** 召回候选的通用行：只渲染服务端返回的字段，不推断可信度。 */
-function MemoryRow({ item }: { item: MemoryRecord }) {
-  const representation = (item.representation ?? {}) as MemoryRecord;
-  const source = (item.source ?? {}) as MemoryRecord;
-  return (
-    <div className="memory-row memory-row-static">
-      <div className="memory-row-top">
-        <span className="memory-chip info">{text(item.origin_kind, '来源未知')}</span>
-        <span className="memory-chip info">{text(representation.kind, '表示未知')}</span>
-        {text(item.evidence) ? (
-          <span className="memory-chip good">{EVIDENCE[text(item.evidence)] ?? text(item.evidence)}</span>
-        ) : null}
-      </div>
-      <p className="memory-row-meta">
-        {representation.text_bytes !== undefined ? bytes(representation.text_bytes) : ''}
-        {source.source_revision !== undefined ? ` · 来源修订 ${num(source.source_revision)}` : ''}
-        {typeof item.score === 'number' ? ` · 排序分 ${item.score.toFixed(3)}（非可信度）` : ''}
-      </p>
-      {item.preview || item.text ? (
-        <p className="memory-row-preview">{excerpt(item.preview ?? item.text)}</p>
-      ) : null}
-    </div>
   );
 }

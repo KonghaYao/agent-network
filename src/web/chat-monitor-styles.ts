@@ -66,9 +66,6 @@ export const MONITOR_STYLE = `
     overflow: hidden; text-overflow: ellipsis; }
   .monitor-hint[hidden] { display: none; }
 
-  .monitor-frame-wrap { position: relative; flex: 1 1 auto; min-height: 0;
-    margin: 8px 10px 10px; overflow: hidden; border: 1px solid var(--wx-line);
-    border-radius: 6px; background: #fff; }
   .monitor-frame { position: absolute; inset: 0; display: block; width: 100%;
     height: 100%; border: 0; background: #fff; }
   .monitor-frame[hidden] { display: none; }
