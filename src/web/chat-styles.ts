@@ -160,6 +160,18 @@ export const APP_STYLE = `
   .room-menu-item.danger:disabled { opacity: 1; background: transparent;
     color: var(--wx-muted); cursor: not-allowed; }
   .room-menu-item[hidden] { display: none; }
+  /* 账号菜单已换成 Lenso Menu：去掉 legacy 菜单壳，只保留条目标记。
+     Lenso surface 自带边框、阴影与 --lenso-z-index-overlay 定位。 */
+  #account-menu[data-lenso-slot='menu-popup'] { width: 260px;
+    max-width: calc(100vw - 16px); max-height: none; overflow: visible;
+    padding: 0; border: 0; background: transparent; box-shadow: none;
+    z-index: var(--app-z-portal-local-menu); }
+  /* Lenso MenuItem 不接受 className；条目类名由适配层 render 落到 DOM 上。
+     StyleX 用 :not(#\#) 抬特异性，这里用 !important 保持 44px 命中区。 */
+  #account-menu [data-lenso-slot='menu-item'] { min-height: 44px !important;
+    font-size: 13px !important; }
+  #account-menu .room-menu-item { min-height: 44px; }
+  #account-menu [data-lenso-slot='menu-item'].danger { color: var(--wx-danger-text) !important; }
   .room-menu-status { margin: 4px 0 0; padding: 0 10px 2px; font-size: 12px;
     color: var(--wx-green); }
   .room-menu-status[hidden] { display: none; }

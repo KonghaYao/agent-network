@@ -595,10 +595,14 @@
   }
 }
 
-/* 账号菜单在聊天头部时保持 32px 触发区，避免挤占标题。 */
+/* 账号菜单在聊天头部时保持 32px 触发区，避免挤占标题。
+   Lenso MenuTrigger 会给无 children 的 render 触发区套 44px iconTrigger，
+   StyleX 用 :not(#\#) 提权，这里用 !important 维持原有头部高度。 */
 .chat-head-actions .account-more {
-  width: 32px;
-  height: 32px;
+  width: 32px !important;
+  height: 32px !important;
+  padding: 0 !important;
+  font-size: 16px !important;
   margin-left: 0;
 }
 

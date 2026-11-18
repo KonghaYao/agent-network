@@ -1,5 +1,4 @@
-import { Button } from '../../app/lenso-controls';
-import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
+import { Button, Menu, type MenuEntry } from '../../app/lenso-controls';
 import { lazy, Suspense, useState } from 'react';
 
 import type { WebIdentity } from '../../lib/identity';
@@ -24,6 +23,7 @@ const MemoryDialog = lazy(() =>
 export function AccountMenu({ me }: { me: WebIdentity | null }) {
   const session = useWebSession();
   const token = session.session?.token ?? null;
+  const [menuOpen, setMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
@@ -37,17 +37,90 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
     return (open) => {
       setter(open);
       if (open) return;
-      // 入口在 DropdownMenu 中，菜单关闭后会卸载；把焦点还给稳定的触发按钮。
+      // 入口在菜单中，菜单关闭后会卸载；把焦点还给稳定的触发按钮。
       requestAnimationFrame(() => {
         document.getElementById('account-menu-toggle')?.focus();
       });
     };
   };
 
+  const handleMenuOpenChange = (open: boolean, details?: { reason?: string }) => {
+    setMenuOpen(open);
+    if (open || details?.reason === 'item-press') return;
+    // 外部点击/关闭按钮不保证由 SDK 还焦点；选中条目交给随后打开的对话框。
+    requestAnimationFrame(() => {
+      document.getElementById('account-menu-toggle')?.focus();
+    });
+  };
+
+  const items: MenuEntry[] = [
+    {
+      id: 'account-rename',
+      label: '修改我的名称',
+      disabled: !token,
+      onSelect: () => setRenameOpen(true),
+    },
+    {
+      id: 'new-agent',
+      label: '新建 Agent',
+      disabled: !token || me?.kind !== 'human',
+      onSelect: () => setNewAgentOpen(true),
+    },
+    {
+      id: 'device-handoff',
+      label: '配对设备',
+      disabled: !token,
+      onSelect: () => setHandoffOpen(true),
+    },
+    {
+      id: 'archived-agents',
+      label: '已归档 Agents',
+      disabled: !token || me?.kind !== 'human',
+      onSelect: () => setArchiveOpen(true),
+    },
+    {
+      id: 'memory-open',
+      label: '记忆',
+      disabled: !token,
+      onSelect: () => setMemoryOpen(true),
+    },
+  ];
+  if (me?.kind === 'agent') {
+    items.push({
+      id: 'account-memory-self',
+      label: '查看我的记忆',
+      disabled: !token,
+      onSelect: () =>
+        openAgentMemory(
+          { actor_id: me.actor_id, name: me.name },
+          { returnFocus: () => document.getElementById('account-menu-toggle') },
+        ),
+    });
+  }
+  items.push(
+    { id: 'account-menu-sep', separator: true },
+    {
+      id: 'account-logout',
+      label: '退出登录',
+      className: 'room-menu-item danger',
+      variant: 'danger',
+      onSelect: () => setLogoutOpen(true),
+    },
+  );
+
   return (
     <>
-      <DropdownMenuPrimitive.Root>
-        <DropdownMenuPrimitive.Trigger asChild>
+      <Menu
+        id="account-menu"
+        label="账号操作"
+        className="room-menu account-menu"
+        itemClassName="room-menu-item"
+        open={menuOpen}
+        onOpenChange={handleMenuOpenChange}
+        fallbackAnchor
+        sideOffset={6}
+        align="start"
+        trigger={
           <Button
             id="account-menu-toggle"
             className="icon-btn account-more"
@@ -58,81 +131,9 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
           >
             ···
           </Button>
-        </DropdownMenuPrimitive.Trigger>
-        <DropdownMenuPrimitive.Portal>
-          <DropdownMenuPrimitive.Content
-            id="account-menu"
-            className="room-menu spa-menu"
-            aria-label="账号操作"
-            sideOffset={6}
-            align="start"
-          >
-            <DropdownMenuPrimitive.Item
-              id="account-rename"
-              className="room-menu-item"
-              disabled={!token}
-              onSelect={() => setRenameOpen(true)}
-            >
-              修改我的名称
-            </DropdownMenuPrimitive.Item>
-            <DropdownMenuPrimitive.Item
-              id="new-agent"
-              className="room-menu-item"
-              disabled={!token || me?.kind !== 'human'}
-              onSelect={() => setNewAgentOpen(true)}
-            >
-              新建 Agent
-            </DropdownMenuPrimitive.Item>
-            <DropdownMenuPrimitive.Item
-              id="device-handoff"
-              className="room-menu-item"
-              disabled={!token}
-              onSelect={() => setHandoffOpen(true)}
-            >
-              配对设备
-            </DropdownMenuPrimitive.Item>
-            <DropdownMenuPrimitive.Item
-              id="archived-agents"
-              className="room-menu-item"
-              disabled={!token || me?.kind !== 'human'}
-              onSelect={() => setArchiveOpen(true)}
-            >
-              已归档 Agents
-            </DropdownMenuPrimitive.Item>
-            <DropdownMenuPrimitive.Item
-              id="memory-open"
-              className="room-menu-item"
-              disabled={!token}
-              onSelect={() => setMemoryOpen(true)}
-            >
-              记忆
-            </DropdownMenuPrimitive.Item>
-            {me?.kind === 'agent' ? (
-              <DropdownMenuPrimitive.Item
-                id="account-memory-self"
-                className="room-menu-item"
-                disabled={!token}
-                onSelect={() =>
-                  openAgentMemory(
-                    { actor_id: me.actor_id, name: me.name },
-                    { returnFocus: () => document.getElementById('account-menu-toggle') },
-                  )
-                }
-              >
-                查看我的记忆
-              </DropdownMenuPrimitive.Item>
-            ) : null}
-            <DropdownMenuPrimitive.Separator className="room-menu-sep" />
-            <DropdownMenuPrimitive.Item
-              id="account-logout"
-              className="room-menu-item danger"
-              onSelect={() => setLogoutOpen(true)}
-            >
-              退出登录
-            </DropdownMenuPrimitive.Item>
-          </DropdownMenuPrimitive.Content>
-        </DropdownMenuPrimitive.Portal>
-      </DropdownMenuPrimitive.Root>
+        }
+        items={items}
+      />
       {token && me ? (
         <MeRenameDialog
           open={renameOpen}

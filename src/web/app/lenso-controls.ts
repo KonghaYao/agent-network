@@ -429,20 +429,66 @@ export interface MenuAction {
   onSelect: () => void;
   className?: string;
   disabled?: boolean;
+  variant?: 'default' | 'danger';
+}
+
+/** 分隔线不是动作，单独作为条目挂在同一列表里，保证键盘顺序不变。 */
+export interface MenuSeparatorAction {
+  id: string;
+  separator: true;
+}
+
+export type MenuEntry = MenuAction | MenuSeparatorAction;
+
+/** Lenso 关闭原因；fallback 也按同一词汇上报，调用方可区分选中与取消。 */
+export interface MenuOpenChangeDetails {
+  reason?: 'item-press' | 'outside-press' | 'escape-key' | 'close-press';
 }
 
 export interface MenuAdapterProps {
   id: string;
   trigger: ReactElement;
-  items: MenuAction[];
+  items: MenuEntry[];
   label?: string;
   className?: string;
   itemClassName?: string;
   open: boolean;
-  onOpenChange: (open: boolean) => void;
+  onOpenChange: (open: boolean, details?: MenuOpenChangeDetails) => void;
+  /** fallback 需要按触发按钮定位并进入本地 Portal 带时启用。 */
+  fallbackAnchor?: boolean;
   sideOffset?: number;
   align?: 'start' | 'center' | 'end';
   container?: Element | DocumentFragment | null;
+}
+
+function isSeparator(entry: MenuEntry): entry is MenuSeparatorAction {
+  return 'separator' in entry && entry.separator === true;
+}
+
+/** fallback 菜单按触发按钮定位，并夹在视口内；Lenso 由 SDK 自己完成定位。 */
+function fallbackMenuStyle(
+  trigger: HTMLElement | null,
+  align: MenuAdapterProps['align'],
+  sideOffset: number | undefined,
+): CSSProperties | undefined {
+  if (typeof window === 'undefined' || !trigger) return undefined;
+  const rect = trigger.getBoundingClientRect();
+  const width = Math.min(260, window.innerWidth - 16);
+  const preferred = align === 'end'
+    ? rect.right - width
+    : align === 'center'
+      ? rect.left + (rect.width - width) / 2
+      : rect.left;
+  const left = Math.max(8, Math.min(preferred, window.innerWidth - width - 8));
+  const top = Math.max(8, Math.min(rect.bottom + (sideOffset ?? 4), window.innerHeight - 8));
+  return {
+    position: 'fixed',
+    left,
+    top,
+    width,
+    maxHeight: `calc(100vh - ${Math.round(top)}px - 8px)`,
+    overflowY: 'auto',
+  };
 }
 
 /**
@@ -458,12 +504,14 @@ export function Menu({
   itemClassName,
   open,
   onOpenChange,
+  fallbackAnchor,
   sideOffset,
   align,
   container,
 }: MenuAdapterProps) {
   const lenso = useLenso();
   const triggerRef = useRef<HTMLElement | null>(null);
+  const menuRef = useRef<HTMLElement | null>(null);
   const triggerProps = {
     'aria-haspopup': 'menu' as const,
     'aria-controls': id,
@@ -471,9 +519,24 @@ export function Menu({
     ref: triggerRef,
   };
 
+  // fallback 没有 SDK 的外部点击管理；Lenso 就绪后交给原生控制器。
+  useEffect(() => {
+    if (!open || lenso) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (menuRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      onOpenChange(false, { reason: 'outside-press' });
+      triggerRef.current?.focus();
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [lenso, onOpenChange, open]);
+
   if (lenso) {
     const Content = lenso.Menu.Content as unknown as ComponentType<Record<string, unknown>>;
     const Item = lenso.Menu.Item as unknown as ComponentType<Record<string, unknown>>;
+    const Separator = lenso.Menu.Separator as unknown as ComponentType<Record<string, unknown>>;
     const Trigger = lenso.Menu.Trigger as unknown as ComponentType<Record<string, unknown>>;
     return createElement(
       lenso.Menu as unknown as ComponentType<Record<string, unknown>>,
@@ -498,18 +561,22 @@ export function Menu({
           render: createElement('div', { className }),
         },
         items.map((item) =>
-          createElement(
-            Item,
-            {
-              key: item.id,
-              id: item.id,
-              className: itemClassName,
-              disabled: item.disabled,
-              onSelect: () => item.onSelect(),
-              render: createElement('div', { className: itemClassName }),
-            },
-            item.label,
-          ),
+          isSeparator(item)
+            ? createElement(Separator, { key: item.id, id: item.id })
+            : createElement(
+                Item,
+                {
+                  key: item.id,
+                  id: item.id,
+                  variant: item.variant,
+                  disabled: item.disabled,
+                  onSelect: () => item.onSelect(),
+                  render: createElement('div', {
+                    className: item.className ?? itemClassName,
+                  }),
+                },
+                item.label,
+              ),
         ),
       ),
     );
@@ -533,34 +600,50 @@ export function Menu({
           'div',
           {
             id,
+            ref: menuRef,
             role: 'menu',
             'aria-label': label,
             'data-lenso-slot': 'menu-fallback',
             className: [className, 'attach-menu-native'].filter(Boolean).join(' '),
+            style: fallbackAnchor
+              ? {
+                  ...fallbackMenuStyle(triggerRef.current, align, sideOffset),
+                  zIndex: 'var(--app-z-portal-local-menu)',
+                }
+              : undefined,
             onKeyDown: (event: { key: string }) => {
               if (event.key !== 'Escape') return;
-              onOpenChange(false);
+              onOpenChange(false, { reason: 'escape-key' });
               triggerRef.current?.focus();
             },
           },
           items.map((item, index) =>
-            createElement(
-              'button',
-              {
-                key: item.id,
-                id: item.id,
-                type: 'button',
-                role: 'menuitem',
-                className: itemClassName,
-                disabled: item.disabled,
-                autoFocus: index === 0,
-                onClick: () => {
-                  item.onSelect();
-                  onOpenChange(false);
-                },
-              },
-              item.label,
-            ),
+            isSeparator(item)
+              ? createElement('div', {
+                  key: item.id,
+                  id: item.id,
+                  role: 'separator',
+                  className: 'room-menu-sep',
+                })
+              : createElement(
+                  'button',
+                  {
+                    key: item.id,
+                    id: item.id,
+                    type: 'button',
+                    role: 'menuitem',
+                    className: item.className ?? itemClassName,
+                    disabled: item.disabled,
+                    'data-variant': item.variant,
+                    autoFocus: index === 0,
+                    onClick: () => {
+                      item.onSelect();
+                      onOpenChange(false, { reason: 'item-press' });
+                      triggerRef.current?.focus();
+                    },
+                  },
+                  item.label,
+                ),
           ),
         )
       : null,

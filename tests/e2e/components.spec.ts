@@ -416,6 +416,121 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(page.locator('#attach-file')).toBeFocused();
   });
 
+  test('账号菜单使用 Lenso Menu，保留条目、44px、Esc 与外部点击焦点返回', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${base}/c/${roomId}`);
+    const toggle = page.locator('#account-menu-toggle');
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveText('···');
+    await expect(toggle).toHaveAttribute('data-lenso-slot', 'menu-trigger');
+
+    await toggle.click();
+    const menu = page.locator('#account-menu');
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveAttribute('data-lenso-slot', 'menu-popup');
+    await expect(menu).toHaveAttribute('aria-label', '账号操作');
+
+    await expect(page.locator('#account-rename')).toHaveText('修改我的名称');
+    await expect(page.locator('#new-agent')).toHaveText('新建 Agent');
+    await expect(page.locator('#device-handoff')).toHaveText('配对设备');
+    await expect(page.locator('#archived-agents')).toHaveText('已归档 Agents');
+    await expect(page.locator('#memory-open')).toHaveText('记忆');
+    await expect(page.locator('#account-logout')).toHaveText('退出登录');
+    await expect(page.locator('#account-menu [role="separator"]')).toHaveCount(1);
+
+    await expect
+      .poll(
+        () =>
+          page.locator('#account-menu [role="menuitem"]').evaluateAll((items) => {
+            const heights = items.map((item) =>
+              Math.round(item.getBoundingClientRect().height),
+            );
+            return heights.length === 6 && heights.every((height) => height >= 44);
+          }),
+        { timeout: 2000 },
+      )
+      .toBe(true);
+
+    const box = await menu.boundingBox();
+    expect(box).not.toBeNull();
+    if (box) {
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(390);
+      expect(box.y + box.height).toBeLessThanOrEqual(844);
+    }
+
+    // 菜单动作仍打开原对话框，关闭后菜单保持收起。
+    await page.locator('#account-rename').click();
+    await expect(page.locator('#me-rename-dialog')).toBeVisible();
+    await page.locator('#me-rename-cancel').click();
+    await expect(page.locator('#me-rename-dialog')).toBeHidden();
+    await expect(menu).toBeHidden();
+
+    await toggle.click();
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+    await expect(toggle).toBeFocused();
+
+    await toggle.click();
+    await expect(menu).toBeVisible();
+    await page.locator('#title').click();
+    await expect(menu).toBeHidden();
+    await expect(toggle).toBeFocused();
+  });
+
+  test('Lenso 不可用时账号菜单 fallback 仍可操作并返回焦点', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    // Lenso 的异步入口是共享 index chunk；阻断后适配器留在原生 fallback。
+    await page.route('**/assets/index-*.js', (route) => route.abort());
+    await page.goto(`${base}/c/${roomId}`);
+    const toggle = page.locator('#account-menu-toggle');
+    await expect(toggle).toBeVisible();
+
+    await toggle.click();
+    const menu = page.locator('#account-menu');
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveAttribute('data-lenso-slot', 'menu-fallback');
+    await expect(page.locator('#account-rename')).toHaveText('修改我的名称');
+    await expect(page.locator('#new-agent')).toHaveText('新建 Agent');
+    await expect(page.locator('#device-handoff')).toHaveText('配对设备');
+    await expect(page.locator('#archived-agents')).toHaveText('已归档 Agents');
+    await expect(page.locator('#memory-open')).toHaveText('记忆');
+    await expect(page.locator('#account-logout')).toHaveText('退出登录');
+    await expect(page.locator('#account-menu [role="separator"]')).toHaveCount(1);
+    await expect(page.locator('#account-menu [role="menuitem"]')).toHaveCount(6);
+    await expect(page.locator('#account-rename')).toHaveCSS('min-height', '44px');
+
+    const box = await menu.boundingBox();
+    expect(box).not.toBeNull();
+    if (box) {
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(390);
+      expect(box.y + box.height).toBeLessThanOrEqual(844);
+    }
+
+    await page.locator('#account-rename').click();
+    await expect(page.locator('#me-rename-dialog')).toBeVisible();
+    await page.locator('#me-rename-cancel').click();
+    await expect(page.locator('#me-rename-dialog')).toBeHidden();
+    await expect(menu).toBeHidden();
+    await expect(toggle).toBeFocused();
+
+    await toggle.click();
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+    await expect(toggle).toBeFocused();
+
+    await toggle.click();
+    await expect(menu).toBeVisible();
+    await page.locator('#title').click();
+    await expect(menu).toBeHidden();
+    await expect(toggle).toBeFocused();
+  });
+
   test('拖放上传走 dropzone，仍保留 XHR 进度与文件 chip', async ({ page }) => {
     await page.goto(`${base}/c/${roomId}`);
     await expect(page.locator('#composer')).toBeVisible();
