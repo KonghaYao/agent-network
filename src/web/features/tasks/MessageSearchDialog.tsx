@@ -220,6 +220,8 @@ export function MessageSearchDialog({
   return (
     <>
       <Modal
+        // TODO(N2b/N2c): 嵌套浮层迁移后恢复默认 Lenso，父子暂时同用 Radix。
+        shell="radix"
         open={open}
         onOpenChange={onOpenChange}
         title="搜索聊天记录"
@@ -325,6 +327,8 @@ export function MessageSearchDialog({
         ) : null}
       </Modal>
       <Modal
+        // TODO(N2b/N2c): 嵌套浮层迁移后恢复默认 Lenso，父子暂时同用 Radix。
+        shell="radix"
         open={contextId !== null}
         onOpenChange={(next) => {
           if (!next) setContextId(null);

@@ -65,6 +65,8 @@ export function ContactRequestsDialog({
 
   return (
     <Modal
+      // TODO(N2b/N2c): confirm 迁移后恢复默认 Lenso，避免父子浮层跨库。
+      shell="radix"
       open={open}
       onOpenChange={onOpenChange}
       title="添加好友"

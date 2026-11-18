@@ -1,27 +1,10 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { useRef, type ReactNode, type RefObject } from 'react';
+import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
 
-/**
- * Radix Dialog 的薄封装。
- *
- * 保留 legacy 的 `.modal-card` 排版与标题层级；overlay 由 Radix 负责
- * 焦点陷阱、Esc、背板点击与关闭后焦点返回。内容在关闭时直接卸载，
- * 避免隐藏的 dialog 进入 axe 扫描。
- */
-export function Modal({
-  open,
-  onOpenChange,
-  title,
-  titleId,
-  children,
-  footer,
-  className = '',
-  contentId,
-  closeId,
-  closeButtonRef,
-  initialFocusRef,
-  returnFocusRef,
-}: {
+import { LensoBackendProvider, useBackendLease, useLenso } from '../../app/lenso-runtime';
+import './modal.css';
+
+export interface ModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
@@ -32,15 +15,128 @@ export function Modal({
   contentId?: string;
   /** 保留 legacy 关闭按钮 id，供灰度与 E2E 对照。 */
   closeId?: string;
-  /** 调用方需要显式聚焦内置关闭按钮时传入。 */
   closeButtonRef?: RefObject<HTMLButtonElement | null>;
-  /** 打开后优先聚焦的元素；未提供时沿用 Radix 默认焦点。 */
   initialFocusRef?: RefObject<HTMLElement | null>;
-  /** 打开者可能已被卸载（例如菜单项）时，由调用方指定关闭后的落点。 */
+  /** 打开者可能已被卸载（例如菜单项）时，指定关闭后的落点。 */
   returnFocusRef?: RefObject<HTMLElement | null>;
-}) {
-  // 打开弹窗的元素可能是普通按钮而非 Radix Trigger；显式记录并在关闭时
-  // 归还焦点，避免焦点落到 body（键盘用户丢失上下文）。
+  /** 嵌套浮层迁移完成前，父子必须同用 Radix。 */
+  shell?: 'lenso' | 'radix';
+}
+
+let lastOutsideFocus: HTMLElement | null = null;
+let focusUsers = 0;
+function rememberOutside(event: Event) {
+  if (!(event.target instanceof HTMLElement) ||
+      event.target.closest('[role="menu"], [role="dialog"], [role="alertdialog"]')) return;
+  const target = event.type === 'pointerdown'
+    ? event.target.closest<HTMLElement>('button, input, textarea, [tabindex]')
+    : event.target;
+  if (target && target !== document.body) lastOutsideFocus = target;
+}
+function trackOpeners() {
+  if (focusUsers++ === 0) {
+    document.addEventListener('focusin', rememberOutside);
+    document.addEventListener('pointerdown', rememberOutside, true);
+  }
+  return () => {
+    if (--focusUsers === 0) {
+      document.removeEventListener('focusin', rememberOutside);
+      document.removeEventListener('pointerdown', rememberOutside, true);
+      lastOutsideFocus = null;
+    }
+  };
+}
+
+/** 外壳和子控件共用打开周期锁，模块晚到只影响下一次打开。 */
+export function Modal(props: ModalProps) {
+  useEffect(trackOpeners, []);
+  const backend = useBackendLease(props.open);
+  const module = useLenso();
+  return (
+    <LensoBackendProvider backend={backend}>
+      {props.shell !== 'radix' && backend === 'lenso' && module
+        ? <LensoModal {...props} modal={module.Modal} />
+        : <RadixModal {...props} />}
+    </LensoBackendProvider>
+  );
+}
+
+function LensoModal({
+  open, onOpenChange, title, titleId, children, footer, className = '',
+  contentId, closeId, closeButtonRef, initialFocusRef, returnFocusRef, modal: Dialog,
+}: ModalProps & { modal: NonNullable<ReturnType<typeof useLenso>>['Modal'] }) {
+  const generatedTitleId = useId();
+  const headingId = titleId ?? generatedTitleId;
+  const restoreRef = useRef<HTMLElement | null>(lastOutsideFocus);
+  const wasOpen = useRef(false);
+  const remember = (target: EventTarget | null) => {
+    if (!(target instanceof HTMLElement) || target === document.body ||
+        target.closest('[role="dialog"], [role="alertdialog"]')) return;
+    // 菜单项随菜单卸载；通过 ARIA 关联保留稳定 Trigger，而不是失效的条目。
+    const menu = target.closest('[role="menu"]');
+    const trigger = menu?.getAttribute('aria-labelledby');
+    if (menu) {
+      if (trigger) restoreRef.current = document.getElementById(trigger) ?? restoreRef.current;
+      return;
+    }
+    restoreRef.current = target;
+  };
+  if (open && !wasOpen.current) remember(document.activeElement);
+  wasOpen.current = open;
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const rememberOutside = (event: Event) => {
+      if (event.type === 'pointerdown' && event.target instanceof Element &&
+          !event.target.closest('[role="menu"], [role="dialog"], [role="alertdialog"]')) {
+        remember(event.target.closest('button, input, textarea, [tabindex]'));
+      } else if (event.type === 'focusin') remember(event.target);
+    };
+    document.addEventListener('focusin', rememberOutside);
+    document.addEventListener('pointerdown', rememberOutside, true);
+    return () => {
+      document.removeEventListener('focusin', rememberOutside);
+      document.removeEventListener('pointerdown', rememberOutside, true);
+    };
+  }, []);
+  useEffect(() => () => {
+    // 条件挂载消费者（Forward）会连 Root 一起卸载；SDK 无关闭帧可还焦。
+    const target = returnFocusRef?.current ?? restoreRef.current;
+    queueMicrotask(() => {
+      if (target?.isConnected && !document.querySelector('[role="dialog"], [role="alertdialog"]')) target.focus();
+    });
+  }, [returnFocusRef]);
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange} presentation="dialog" modal>
+      <Dialog.Backdrop render={(props) => <div {...props} className="spa-dialog-overlay" />} />
+        <Dialog.Content
+          ref={contentRef}
+          id={contentId}
+          aria-modal="true"
+          aria-labelledby={headingId}
+          aria-describedby={undefined}
+          placement="center"
+          initialFocus={initialFocusRef ? () => initialFocusRef.current : 'auto'}
+          finalFocus={() => returnFocusRef?.current ?? restoreRef.current}
+          render={(props) => <div {...props} className={`modal-card spa-dialog-content ${className}`.trim()} />}
+        >
+          <Dialog.Title id={headingId} render={(props) => <h2 {...props} className={undefined} />}>{title}</Dialog.Title>
+          {children}
+          {footer}
+          <Dialog.Close
+            id={closeId}
+            ref={closeButtonRef}
+            aria-label="关闭"
+            render={(props) => <button {...props} className="spa-dialog-close" />}
+          >×</Dialog.Close>
+        </Dialog.Content>
+    </Dialog.Root>
+  );
+}
+
+function RadixModal({
+  open, onOpenChange, title, titleId, children, footer, className = '',
+  contentId, closeId, closeButtonRef, initialFocusRef, returnFocusRef, shell,
+}: ModalProps) {
   const restoreRef = useRef<HTMLElement | null>(null);
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
@@ -48,6 +144,7 @@ export function Modal({
         <DialogPrimitive.Overlay className="spa-dialog-overlay" />
         <DialogPrimitive.Content
           id={contentId}
+          data-modal-shell={shell === 'radix' ? 'radix' : 'fallback'}
           className={`modal-card spa-dialog-content ${className}`.trim()}
           aria-describedby={undefined}
           onOpenAutoFocus={(event) => {
@@ -74,9 +171,7 @@ export function Modal({
             ref={closeButtonRef}
             className="spa-dialog-close"
             aria-label="关闭"
-          >
-            ×
-          </DialogPrimitive.Close>
+          >×</DialogPrimitive.Close>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

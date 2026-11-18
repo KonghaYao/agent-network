@@ -8,7 +8,13 @@ import {
   type ReactNode,
 } from 'react';
 
-import { useLenso } from './lenso-runtime';
+import { useLensoBackendScope, useLenso as useRuntimeLenso } from './lenso-runtime';
+
+function useLenso() {
+  const module = useRuntimeLenso();
+  const scope = useLensoBackendScope();
+  return scope === 'fallback' ? null : module;
+}
 
 /**
  * Memory 抽屉与添加好友弹窗共用的 Lenso Tabs 懒加载适配。

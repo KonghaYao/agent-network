@@ -97,8 +97,9 @@ function createLazySlot<Props>(
 ) {
   function LazySlot(props: Props): ReactElement {
     const lenso = useLenso();
+    const scope = useLensoBackendScope();
     const merged = defaults ? { ...defaults, ...props } : props;
-    if (!lenso) {
+    if (!lenso || scope === 'fallback') {
       const fallback = { ...(merged as Record<string, unknown>) };
       delete fallback.fullWidth;
       return tag === 'input'
@@ -186,6 +187,7 @@ export function Select({
   ref,
 }: SelectAdapterProps) {
   const lenso = useLenso();
+  const scope = useLensoBackendScope();
   const [open, setOpen] = useState(false);
   const hasEmpty = options.some((option) => option.value === '');
   const lensoValue = value === '' && placeholder && !hasEmpty ? null : value;
@@ -214,7 +216,7 @@ export function Select({
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [open]);
 
-  if (!lenso) {
+  if (!lenso || scope === 'fallback') {
     return createElement(
       'select',
       {
@@ -332,7 +334,8 @@ type SearchInputProps = Omit<ComponentPropsWithRef<'input'>, 'className' | 'type
 /** 搜索输入：Lenso 的复合标签页，只把真实 input 属性透传给输入框。 */
 export function SearchInput({ fullWidth = true, onChange, ...props }: SearchInputProps) {
   const lenso = useLenso();
-  if (!lenso) {
+  const scope = useLensoBackendScope();
+  if (!lenso || scope === 'fallback') {
     return createElement('input', { ...props, onChange, type: 'search' });
   }
   return createElement(
@@ -731,7 +734,8 @@ export function Checkbox({
   ...props
 }: CheckboxAdapterProps) {
   const lenso = useLenso();
-  if (!lenso) {
+  const scope = useLensoBackendScope();
+  if (!lenso || scope === 'fallback') {
     return createElement(
       'label',
       { className },
@@ -805,7 +809,8 @@ export function RadioGroup({
   'aria-labelledby': ariaLabelledBy,
 }: RadioGroupAdapterProps) {
   const lenso = useLenso();
-  if (!lenso) {
+  const scope = useLensoBackendScope();
+  if (!lenso || scope === 'fallback') {
     return createElement(
       'div',
       {

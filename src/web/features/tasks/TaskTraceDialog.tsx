@@ -39,6 +39,8 @@ export function TaskTraceDialog({
 
   return (
     <Modal
+      // TODO(N2b/N2c): 随 MessageSearch 嵌套浮层迁移恢复默认 Lenso；本轮保留抽屉几何。
+      shell="radix"
       open={open}
       onOpenChange={onOpenChange}
       title={summary?.preview || 'Task'}
