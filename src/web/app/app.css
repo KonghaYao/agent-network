@@ -939,6 +939,26 @@ body .memory-drawer {
 
 .spa-dialog-content.message-search-card {
   width: min(680px, calc(100vw - 32px));
+  /* 标题/表单固定，只有结果列表滚动；否则长结果会把底部动作推出可视区。 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* 显式实心表面：结果行透明时也不能让底层聊天文本透出。 */
+  background-color: var(--wx-panel, var(--lenso-background-secondary));
+  color: var(--wx-text, var(--lenso-label-primary));
+  isolation: isolate;
+}
+
+.spa-dialog-content.message-search-card > h2,
+.spa-dialog-content.message-search-card .message-search-form,
+.spa-dialog-content.message-search-card #message-search-status,
+.spa-dialog-content.message-search-card > .list-retry,
+.spa-dialog-content.message-search-card > .modal-actions {
+  flex: 0 0 auto;
+}
+
+.spa-dialog-content.message-search-card > .modal-actions {
+  margin-top: 8px;
 }
 
 .message-search-form {
@@ -948,8 +968,11 @@ body .memory-drawer {
 }
 
 .message-search-results {
-  max-height: min(50dvh, 440px);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .message-search-result,

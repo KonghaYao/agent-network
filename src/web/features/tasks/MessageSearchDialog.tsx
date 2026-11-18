@@ -1,5 +1,5 @@
 import { Button, Checkbox, SearchInput } from '../../app/lenso-controls';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type CSSProperties, type FormEvent } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
 import type { McpError } from '../../lib/mcp-client';
@@ -52,6 +52,26 @@ function failureText(error: unknown): string {
 function timeLabel(value: number): string {
   return new Date(Number(value)).toLocaleString();
 }
+
+/**
+ * Lenso Button 的 StyleX 原子类带 `:not(#\#)` 提权，className 无法覆盖
+ * 固定的 34px 高度、nowrap 与胶囊圆角，正文会溢出并压住下一项。
+ * 内联 style 在 Lenso 合并顺序里最后生效，只复位布局，不改配色逻辑。
+ */
+const SEARCH_RESULT_STYLE: CSSProperties = {
+  display: 'block',
+  boxSizing: 'border-box',
+  width: '100%',
+  height: 'auto',
+  minHeight: 44,
+  padding: '10px',
+  borderRadius: 8,
+  background: 'transparent',
+  color: 'inherit',
+  textAlign: 'left',
+  whiteSpace: 'normal',
+  justifyContent: 'flex-start',
+};
 
 /**
  * 搜索聊天记录：普通全文搜索与“只看任务”。
@@ -256,6 +276,7 @@ export function MessageSearchDialog({
                 <Button
                   type="button"
                   className="task-search-result"
+                  style={SEARCH_RESULT_STYLE}
                   key={entry.task.root_message_id}
                   onClick={() => {
                     onOpenTask(
@@ -280,6 +301,7 @@ export function MessageSearchDialog({
                 <Button
                   type="button"
                   className="message-search-result"
+                  style={SEARCH_RESULT_STYLE}
                   key={item.message_id}
                   onClick={() => setContextId(item.message_id)}
                 >

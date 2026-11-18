@@ -985,6 +985,187 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(page.locator('#members-modal')).toBeVisible();
   });
 
+  test('搜索聊天记录：表单/结果/底部动作不重叠且结果独立滚动', async ({ page }) => {
+    await page.setViewportSize({ width: 1430, height: 1028 });
+    const probe = `searchlayoutprobe${Date.now()}`;
+    for (let index = 0; index < 8; index += 1) {
+      await callTool(base, tokenA, 'network_message_send', {
+        request_id: requestId('e2e_search_layout'),
+        client_message_id: requestId('e2e_search_layout_cm'),
+        room_id: roomId,
+        body: `${probe} 第 ${index + 1} 条：较长的正文用于验证结果项随内容增长，而不是被固定高度裁切后压住下一项。`,
+        invoke: [],
+      });
+    }
+
+    const openSearch = async () => {
+      await page.locator('#message-search-button').click();
+      await expect(page.locator('#message-search-dialog')).toBeVisible();
+      await page.locator('#message-search-input').fill(probe);
+      await page.locator('#message-search-form button[type="submit"]').click();
+      await expect(page.locator('#message-search-results .message-search-result')).toHaveCount(8);
+    };
+
+    await page.goto(`${base}/c/${roomId}`);
+    await openSearch();
+
+    const box = async (selector: string) => {
+      const value = await page.locator(selector).boundingBox();
+      expect(value, selector).not.toBeNull();
+      return value!;
+    };
+    const overlap = (
+      a: { x: number; y: number; width: number; height: number },
+      b: { x: number; y: number; width: number; height: number },
+    ) =>
+      a.x < b.x + b.width - 1 &&
+      b.x < a.x + a.width - 1 &&
+      a.y < b.y + b.height - 1 &&
+      b.y < a.y + a.height - 1;
+
+    const form = await box('#message-search-form');
+    const results = await box('#message-search-results');
+    const footer = await box('#message-search-dialog > .modal-actions');
+    const footerClose = await box('#message-search-close');
+    const closeIcon = await box('#message-search-dialog .spa-dialog-close');
+    const dialog = await box('#message-search-dialog');
+    expect(overlap(form, results)).toBe(false);
+    expect(overlap(results, footer)).toBe(false);
+    expect(overlap(closeIcon, form)).toBe(false);
+    expect(overlap(closeIcon, results)).toBe(false);
+    expect(overlap(closeIcon, footer)).toBe(false);
+    expect(overlap(footerClose, results)).toBe(false);
+    expect(footerClose.y).toBeGreaterThanOrEqual(footer.y - 1);
+    expect(footerClose.y + footerClose.height).toBeLessThanOrEqual(
+      footer.y + footer.height + 1,
+    );
+    // 结果区占据对话框内部空间，而不是被内容撑出 dialog。
+    expect(results.y).toBeGreaterThanOrEqual(form.y + form.height - 1);
+    expect(footer.y).toBeGreaterThanOrEqual(results.y + results.height - 1);
+    expect(footer.y + footer.height).toBeLessThanOrEqual(dialog.y + dialog.height + 1);
+
+    const surface = await page.evaluate(() => {
+      const dialog = document.getElementById('message-search-dialog')!;
+      const results = document.getElementById('message-search-results')!;
+      const first = results.querySelector<HTMLElement>('.message-search-result')!;
+      const second = results.querySelectorAll<HTMLElement>('.message-search-result')[1]!;
+      const style = getComputedStyle(dialog);
+      return {
+        dialogBackground: style.backgroundColor,
+        dialogOpacity: Number.parseFloat(style.opacity),
+        resultHeight: first.getBoundingClientRect().height,
+        resultContentFits: first.scrollHeight <= first.clientHeight + 1,
+        rowGap: second.getBoundingClientRect().top - first.getBoundingClientRect().bottom,
+        scrollable: results.scrollHeight > results.clientHeight + 20,
+      };
+    });
+    // 实心表面：computed background 必须是不透明色，且 dialog 未被整体降透明。
+    expect(surface.dialogBackground).toMatch(/^rgb\(/u);
+    expect(surface.dialogBackground).not.toMatch(/rgba\(/u);
+    expect(surface.dialogOpacity).toBe(1);
+    // 结果项内容不得溢出自身盒子（原缺陷会溢出并覆盖下一项）。
+    expect(surface.resultContentFits).toBe(true);
+    expect(surface.resultHeight).toBeGreaterThanOrEqual(60);
+    expect(surface.rowGap).toBeGreaterThanOrEqual(-1);
+    expect(surface.scrollable).toBe(true);
+
+    const hitClose = await page.evaluate(() => {
+      const hitTarget = (selector: string) => {
+        const target = document.querySelector(selector)!;
+        const rect = target.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+        );
+        return Boolean(hit && hit.closest(selector));
+      };
+      return {
+        footer: hitTarget('#message-search-close'),
+        icon: hitTarget('#message-search-dialog .spa-dialog-close'),
+      };
+    });
+    expect(hitClose).toEqual({ footer: true, icon: true });
+
+    await page.evaluate(() => {
+      document.getElementById('message-search-results')!.scrollTop = 240;
+    });
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.getElementById('message-search-results')!.scrollTop),
+      )
+      .toBeGreaterThan(0);
+
+    // 上下文弹窗复用 message-search-card 的固定头部/滚动正文布局。
+    await page.locator('#message-search-results .message-search-result').first().click();
+    await expect(page.locator('#message-context-dialog')).toBeVisible();
+    const context = await page.evaluate(() => {
+      const dialog = document.getElementById('message-context-dialog')!;
+      const items = document.getElementById('message-context-items')!;
+      const rect = dialog.getBoundingClientRect();
+      return {
+        inViewport: rect.top >= -1 && rect.bottom <= window.innerHeight + 1,
+        background: getComputedStyle(dialog).backgroundColor,
+        itemsOverflow: getComputedStyle(items).overflowY,
+      };
+    });
+    expect(context.inViewport).toBe(true);
+    expect(context.background).toMatch(/^rgb\(/u);
+    expect(context.itemsOverflow).toBe('auto');
+    await page.locator('#message-context-close').click();
+    await expect(page.locator('#message-context-dialog')).toBeHidden();
+
+    await page.locator('#message-search-close').click();
+    await expect(page.locator('#message-search-dialog')).toBeHidden();
+
+    // 390：全屏单栏，结果仍可滚动且不产生横向溢出。
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openSearch();
+    const mobile = await page.evaluate(() => {
+      const dialog = document.getElementById('message-search-dialog')!;
+      const results = document.getElementById('message-search-results')!;
+      const items = Array.from(
+        results.querySelectorAll<HTMLElement>('.message-search-result'),
+      ).map((item) => item.getBoundingClientRect());
+      return {
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        dialogWidth: dialog.getBoundingClientRect().width,
+        viewport: window.innerWidth,
+        resultsScrollWidth: results.scrollWidth,
+        resultsClientWidth: results.clientWidth,
+        scrollable: results.scrollHeight > results.clientHeight + 20,
+        sameColumn: items.every(
+          (item) =>
+            Math.abs(item.left - items[0]!.left) <= 1 &&
+            Math.abs(item.width - items[0]!.width) <= 1,
+        ),
+      };
+    });
+    expect(mobile.overflow).toBeLessThanOrEqual(1);
+    expect(mobile.dialogWidth).toBeLessThanOrEqual(mobile.viewport + 1);
+    expect(mobile.resultsScrollWidth).toBeLessThanOrEqual(mobile.resultsClientWidth + 1);
+    expect(mobile.scrollable).toBe(true);
+    expect(mobile.sameColumn).toBe(true);
+
+    const mobileHit = await page.evaluate(() => {
+      const hitTarget = (selector: string) => {
+        const target = document.querySelector(selector)!;
+        const rect = target.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+        );
+        return Boolean(hit && hit.closest(selector));
+      };
+      return {
+        footer: hitTarget('#message-search-close'),
+        icon: hitTarget('#message-search-dialog .spa-dialog-close'),
+      };
+    });
+    expect(mobileHit).toEqual({ footer: true, icon: true });
+    await page.locator('#message-search-close').click();
+    await expect(page.locator('#message-search-dialog')).toBeHidden();
+  });
+
   test('dialog/menu/combobox/resizer 无 critical/serious axe 违规', async ({ page }) => {
     page.on('console', (message) => {
       if (message.text().startsWith('AXE')) console.log(message.text());
