@@ -96,6 +96,8 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
           aria-label="网页地址"
           maxLength={LIMITS.roomMonitorUrlMax}
           placeholder="https://…"
+          aria-invalid={formState.errors.url ? true : undefined}
+          aria-describedby={formState.errors.url ? 'monitor-url-error' : undefined}
           style={{ height: 36, borderRadius: 8 }}
           {...register('url')}
         />

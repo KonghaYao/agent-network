@@ -3,6 +3,7 @@ import {
   createElement,
   useContext,
   type ComponentType,
+  type CSSProperties,
   type ReactElement,
   type ReactNode,
 } from 'react';
@@ -10,11 +11,12 @@ import {
 import { useLenso } from './lenso-controls';
 
 /**
- * Memory 抽屉专用的 Lenso Tabs 懒加载适配。
+ * Memory 抽屉与添加好友弹窗共用的 Lenso Tabs 懒加载适配。
  *
- * 与 `lenso-controls.ts` 共用同一个 `import('@lenso/ui')`；这个文件只被
- * MemoryDialog 懒加载 chunk 引用，不进入主入口预算。未就绪时渲染
- * `role=tablist/tab/tabpanel` 的原生节点，并保持受控值与面板挂载。
+ * 与 `lenso-controls.ts` 共用同一个 `import('@lenso/ui')`；只在懒加载
+ * 对话框 chunk 中引用，不进入主入口预算。未就绪时渲染
+ * `role=tablist/tab/tabpanel` 的原生节点，并保持受控值、roving tab stop
+ * 与面板挂载。
  */
 interface TabsState {
   value: string;
@@ -27,11 +29,20 @@ type SlotProps = {
   className?: string;
   children?: ReactNode;
   xstyle?: Record<string, unknown>;
+  style?: CSSProperties;
   [key: string]: unknown;
 };
 
 /** Lenso Tabs root 默认 `align-items: flex-start`，会让抽屉里的 tabs 与 panels 收缩到内容宽度。 */
 const TABS_ROOT_LAYOUT = { alignItems: 'stretch', width: '100%' } as const;
+
+/** fallback 根与 Lenso 的 root 一致按列排布；宽度撑满容器，避免 tabs 收缩。 */
+const TABS_ROOT_FALLBACK_LAYOUT: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'stretch',
+  width: '100%',
+};
 
 export function TabsRoot({
   value,
@@ -44,7 +55,7 @@ export function TabsRoot({
   if (!lenso) {
     return createElement(
       'div',
-      { className, style: TABS_ROOT_LAYOUT, 'data-lenso-slot': 'tabs-fallback' },
+      { className, style: TABS_ROOT_FALLBACK_LAYOUT, 'data-lenso-slot': 'tabs-fallback' },
       content,
     );
   }
@@ -60,7 +71,7 @@ export function TabsRoot({
   );
 }
 
-export function TabList({ className, children, ...props }: SlotProps): ReactElement {
+export function TabList({ className, children, xstyle, style, ...props }: SlotProps): ReactElement {
   const lenso = useLenso();
   if (!lenso) {
     return createElement(
@@ -69,6 +80,13 @@ export function TabList({ className, children, ...props }: SlotProps): ReactElem
         ...props,
         className,
         role: 'tablist',
+        style: {
+          display: 'flex',
+          alignItems: 'stretch',
+          width: '100%',
+          ...style,
+          ...(xstyle as CSSProperties | undefined),
+        },
         'data-lenso-slot': 'tabs-list-fallback',
       } as Record<string, unknown>,
       children,
@@ -76,7 +94,7 @@ export function TabList({ className, children, ...props }: SlotProps): ReactElem
   }
   return createElement(
     lenso.Tabs.List as unknown as ComponentType<Record<string, unknown>>,
-    { ...props, className },
+    { ...props, className, style, xstyle },
     children,
   );
 }
@@ -91,6 +109,7 @@ export function Tab({
   const lenso = useLenso();
   const state = useContext(TabsContext);
   if (!lenso) {
+    const selected = state?.value === value;
     return createElement(
       'button',
       {
@@ -98,7 +117,8 @@ export function Tab({
         className,
         type: 'button',
         role: 'tab',
-        'aria-selected': state?.value === value,
+        'aria-selected': selected,
+        tabIndex: selected ? 0 : -1,
         'data-lenso-slot': 'tabs-tab-fallback',
         onClick: () => state?.onValueChange(value),
       } as Record<string, unknown>,

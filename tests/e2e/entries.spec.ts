@@ -648,6 +648,68 @@ test.describe('SPA 剩余入口', () => {
     }
   });
 
+  test('Lenso 不可用时好友分类保持整行布局与 roving tab stop', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `Fallback Owner ${suffix}`);
+
+    // Lenso 的异步入口是 Vite 生成的共享 index chunk；阻断后所有适配器留在 fallback。
+    await page.route('**/assets/index-*.js', (route) => route.abort());
+    await login(page, base, owner.token);
+    await page.locator('#contact-requests').click();
+    await expect(page.locator('#contact-modal')).toBeVisible();
+
+    const tablist = page.locator('#contact-segments [role="tablist"]');
+    await expect(tablist).toHaveAttribute('data-lenso-slot', 'tabs-list-fallback');
+    const geometry = await page.evaluate(() => {
+      const list = document.querySelector<HTMLElement>('#contact-segments [role="tablist"]')!;
+      const wrapper = document.querySelector<HTMLElement>('#contact-segments')!;
+      const style = getComputedStyle(list);
+      return {
+        display: style.display,
+        alignItems: style.alignItems,
+        width: list.getBoundingClientRect().width,
+        wrapperWidth: wrapper.getBoundingClientRect().width,
+        xstyle: list.getAttribute('xstyle'),
+      };
+    });
+    expect(geometry.xstyle).toBeNull();
+    expect(geometry.display).toBe('flex');
+    expect(geometry.alignItems).toBe('stretch');
+    expect(Math.round(geometry.width)).toBe(Math.round(geometry.wrapperWidth));
+
+    const searchTab = page.locator('#contact-tab-search');
+    const requestsTab = page.locator('#contact-tab-requests');
+    const moreTab = page.locator('#contact-tab-more');
+    await expect(page.locator('#contact-panel-search')).toHaveAttribute('tabindex', '0');
+    await expect(searchTab).toHaveAttribute('tabindex', '0');
+    await expect(requestsTab).toHaveAttribute('tabindex', '-1');
+    await expect(moreTab).toHaveAttribute('tabindex', '-1');
+
+    await searchTab.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(requestsTab).toBeFocused();
+    await expect(requestsTab).toHaveAttribute('aria-selected', 'true');
+    await expect(requestsTab).toHaveAttribute('tabindex', '0');
+    await expect(searchTab).toHaveAttribute('tabindex', '-1');
+    await expect(moreTab).toHaveAttribute('tabindex', '-1');
+    await expect(page.locator('#contact-panel-requests')).toBeVisible();
+
+    await page.keyboard.press('End');
+    await expect(moreTab).toBeFocused();
+    await expect(moreTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-panel-more')).toBeVisible();
+
+    await page.keyboard.press('Home');
+    await expect(searchTab).toBeFocused();
+    await expect(searchTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-panel-search')).toBeVisible();
+
+    await page.keyboard.press('ArrowLeft');
+    await expect(moreTab).toBeFocused();
+    await expect(moreTab).toHaveAttribute('aria-selected', 'true');
+  });
+
   test('举报类型使用 Lenso Select 并通过 RHF 提交选中值', async ({ page }) => {
     const base = await baseUrl();
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);

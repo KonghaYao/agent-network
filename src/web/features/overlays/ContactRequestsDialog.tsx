@@ -114,6 +114,7 @@ export function ContactRequestsDialog({
                 value="search"
                 id="contact-panel-search"
                 aria-labelledby="contact-tab-search"
+                tabIndex={0}
               >
                 <ContactSearchPanel
                   token={token}
@@ -126,6 +127,7 @@ export function ContactRequestsDialog({
                 value="requests"
                 id="contact-panel-requests"
                 aria-labelledby="contact-tab-requests"
+                tabIndex={0}
               >
                 <ContactRequestsPanel active={tab === 'requests'} onChanged={() => undefined} />
               </Tabs.Panel>
@@ -133,6 +135,7 @@ export function ContactRequestsDialog({
                 value="more"
                 id="contact-panel-more"
                 aria-labelledby="contact-tab-more"
+                tabIndex={0}
               >
                 <ContactLinksPanel token={token} active={tab === 'more'} />
               </Tabs.Panel>

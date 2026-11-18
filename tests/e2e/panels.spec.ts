@@ -483,6 +483,31 @@ test.describe('SPA 右栏与剩余入口', () => {
     await expect(page.locator('#files-pane')).toBeVisible();
   });
 
+  test('monitor URL errors stay associated with the input', async ({ page }) => {
+    await login(page, base, tokenA);
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#files-pane')).toBeVisible();
+
+    await page.locator('#monitor-toggle').click();
+    await expect(page.locator('#monitor-pane')).toBeVisible();
+    const input = page.locator('#monitor-url');
+    const error = page.locator('#monitor-url-error');
+
+    await input.fill('example.com');
+    await page.locator('#monitor-save').click();
+    await expect(error).toBeVisible();
+    await expect(error).toHaveAttribute('role', 'alert');
+    await expect(input).toHaveAttribute('aria-invalid', 'true');
+    await expect(input).toHaveAttribute('aria-describedby', 'monitor-url-error');
+
+    await input.fill('https://example.com/monitor-linkage');
+    await page.locator('#monitor-save').click();
+    await expect(page.locator('#monitor-status')).toContainText('已保存');
+    await expect(error).toHaveCount(0);
+    await expect(input).not.toHaveAttribute('aria-invalid', 'true');
+    await expect(input).not.toHaveAttribute('aria-describedby', 'monitor-url-error');
+  });
+
   test('tablet drawer uses backdrop and Escape returns focus', async ({ page }) => {
     await page.setViewportSize({ width: 900, height: 800 });
     await login(page, base, tokenA);
