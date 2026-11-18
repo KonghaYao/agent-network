@@ -51,4 +51,3 @@ R 的“4 个豁免”按**表单适配器直接渲染的可见控件**计数。
 | `bun run test:lenso-primitives` | `Lenso 展示原语探针通过：211 项检查` |
 | `bun run build:web` + `bun scripts/measure-web-entry.ts` | 入口 `assets/main-BPreu7lL.js` = 724,624 B，低于硬限 972,800 B |
 | `git diff --check` | 无输出 |
-
