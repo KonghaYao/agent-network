@@ -145,6 +145,13 @@ for (const fallback of [false, true]) {
     await expect(dialog).toHaveCount(0);
     await expect(page).toHaveURL(/\/c\/[^/]+$/);
   });
+  test(`Pair ${backend}：Label 关联配对码输入`, async ({ page }) => {
+    if (fallback) await page.route('**/assets/index-*.js', (route) => route.abort());
+    await page.goto(`${base}/pair`);
+    await expect(page.locator('#pair-challenge')).toBeVisible();
+    await labelled(page, 'pair-challenge', '12 位配对码', fallback);
+  });
+
   test(`Contact policy ${backend}：Label 关联选择器与可访问名`, async ({ page }) => {
     if (fallback) await page.route('**/assets/index-*.js', (route) => route.abort());
     const { roomId } = await setup(page);

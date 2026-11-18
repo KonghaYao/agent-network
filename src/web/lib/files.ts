@@ -185,6 +185,8 @@ export async function copyText(text: string): Promise<void> {
       // 非安全上下文、权限被拒或焦点丢失时继续走 execCommand 回退。
     }
   }
+  // 剪贴板回退的 textarea 只在内存中挂载一次用于 execCommand，不进入界面渲染树，
+  // 因此不属于 Lenso 原生控件盘点范围。
   const area = document.createElement('textarea');
   area.value = text;
   area.setAttribute('readonly', '');

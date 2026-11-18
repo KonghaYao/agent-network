@@ -811,6 +811,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
                   ) : null}
                   {loadingShell ? (
                     // 静态输入区：与真实 composer 同高，避免历史到达时列表被撑开。
+                    // 豁免：加载骨架保留原生 textarea，与 Composer 的 #body 同一契约，
+                    // 不接入 Lenso TextArea；它只占位、不可交互。
                     <form
                       id="composer"
                       className="composer composer--loading"

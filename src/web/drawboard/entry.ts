@@ -51,6 +51,12 @@ const TOOLS: { value: DrawTool; label: string }[] = [
   { value: 'text', label: '文本' },
 ];
 
+/**
+ * 画板模板。
+ *
+ * 豁免：`<label class="db-width">` 与原生 `<input type="range">` 是独立
+ * bundle 的画板能力节点，不接入 Lenso 控件；盘点时不要按未迁移表单统计。
+ */
 const TEMPLATE = `<div class="db-shell">
   <div class="db-toolbar" role="toolbar" aria-label="画板工具">
     <div class="db-group" role="group" aria-label="绘图工具">${TOOLS.map(
