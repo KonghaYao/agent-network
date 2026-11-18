@@ -61,7 +61,7 @@ interface Consumer {
 }
 
 const consumers: Consumer[] = [
-  { name: 'ForwardDialog', id: 'forward-modal', title: 'forward-title', returnTo: '#body',
+  { name: 'ForwardDialog', id: 'forward-modal', title: 'forward-title', returnTo: '[data-message-id].msg',
     open: async (page) => {
       await page.locator('#body').focus();
       await page.locator(`[data-message-id="${message}"] .bubble`).click({ button: 'right' });

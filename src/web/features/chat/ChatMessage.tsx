@@ -1,5 +1,5 @@
 import { Avatar, Button, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
-import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
+import { ContextMenu, ContextMenuItem } from '../../app/lenso-context-menu';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
@@ -19,7 +19,6 @@ import { copyText, extractFileCards } from '../../lib/files';
 import type { RoomFileItem } from '../../lib/files-ui';
 import { readFullMessage } from '../../lib/message-body';
 import { avatarColor, firstChar } from '../../lib/rooms';
-import { openContextMenuAt, useLongPress } from '../../hooks/useLongPress';
 import { openAgentMemory, type AgentMemoryTarget } from '../memory/memory-store';
 import { HumanBody } from './MessageBody';
 import { MarkdownIsland } from './MarkdownIsland';
@@ -318,8 +317,7 @@ function MessageActions({
 }
 
 /**
- * 消息右键/长按菜单。桌面走 contextmenu；移动端由 pointer 计时后合成
- * 同一事件，Radix 负责 portal 定位、Esc 与焦点返回。
+ * 消息右键/长按菜单；统一适配器负责计时、portal 定位、Esc 与焦点返回。
  */
 function MessageContextMenu({
   item,
@@ -359,18 +357,10 @@ function MessageContextMenu({
     memoryTarget,
   );
   return (
-    <ContextMenuPrimitive.Root>
-      <ContextMenuPrimitive.Trigger asChild>{children}</ContextMenuPrimitive.Trigger>
-      <ContextMenuPrimitive.Portal>
-        <ContextMenuPrimitive.Content
-          id="message-context-menu"
-          className="room-menu spa-menu message-action-menu"
-          aria-label="消息操作"
-        >
-          <MessageMenuItems actions={actions} Item={ContextMenuPrimitive.Item} />
-        </ContextMenuPrimitive.Content>
-      </ContextMenuPrimitive.Portal>
-    </ContextMenuPrimitive.Root>
+    <ContextMenu trigger={children as React.ReactElement} id="message-context-menu"
+      className="room-menu spa-menu message-action-menu" label="消息操作">
+      <MessageMenuItems actions={actions} Item={ContextMenuItem} />
+    </ContextMenu>
   );
 }
 
@@ -401,7 +391,6 @@ export const ChatMessage = memo(function ChatMessage({
   const loadingRef = useRef(false);
   const visibleRef = useRef(false);
   const autoRequestedRef = useRef(false);
-  const longPress = useLongPress(openContextMenuAt);
   const mine = item.sender_id === identityId;
   const agent = isAgentMessage(item, members);
   const name = senderName(item.sender_id, members, identityName, identityId);
@@ -514,7 +503,6 @@ export const ChatMessage = memo(function ChatMessage({
           data-sender-kind={agent ? 'agent' : 'human'}
           data-message-preview={item.preview}
           ref={rowRef}
-          {...longPress}
         >
           <span
             className="msg-avatar"

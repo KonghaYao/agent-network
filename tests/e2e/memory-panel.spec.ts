@@ -666,6 +666,12 @@ test.describe('Agent 记忆弹窗', () => {
     const member = page.locator('.member-roster-item').filter({ hasText: agentName });
     await expect(member).toBeVisible();
     await member.locator('.memory-avatar-trigger').click({ button: 'right' });
+    await expect(page.locator('#members-modal #memory-avatar-menu')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#memory-avatar-menu')).toBeHidden();
+    await expect(page.locator('#members-modal')).toBeVisible();
+    await expect(member.locator('.memory-avatar-trigger')).toBeFocused();
+    await member.locator('.memory-avatar-trigger').click({ button: 'right' });
     await page.locator('#memory-avatar-open').click();
     await expect(page.locator('#members-modal')).toBeHidden();
     await expect(page.locator('#agent-memory-dialog')).toBeVisible({ timeout: 15_000 });

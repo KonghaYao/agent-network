@@ -1,4 +1,4 @@
-import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
+import { ContextMenu, ContextMenuItem, ContextMenuSeparator } from '../../app/lenso-context-menu';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   useCallback,
@@ -46,7 +46,7 @@ function findRowElement(roomId: string): HTMLElement | null {
 /**
  * 会话行右键 / 移动端长按菜单。
  *
- * 桌面右键与移动端长按 500ms 共用 Radix ContextMenu；菜单项复用
+ * 桌面右键与移动端长按 500ms 共用 Lenso ContextMenu 适配器；菜单项复用
  * `RoomMenuItems` 与 `useRoomMenuActions`，与聊天头部保持同一套动作。
  * 会话详情按需读取 `network_room_get`，与 ChatPage 共用同一查询缓存；
  * 置顶/免打扰不等待详情，直接写共享偏好 store。
@@ -107,7 +107,7 @@ export function RoomRowMenu({
 
   const handleCloseAutoFocus = useCallback(
     (event: Event) => {
-      // 阻止 Radix 默认的 trigger.focus()：行已被置顶重排，浏览器会把它
+      // 阻止默认的 trigger.focus()：行已被置顶重排，浏览器会把它
       // 滚动到可视区域顶部。手动聚焦时关闭滚动。
       event.preventDefault();
       // 记忆弹窗接管焦点，关闭菜单时不要抢回行焦点。
@@ -199,19 +199,15 @@ export function RoomRowMenu({
   const preference = preferences.preference(room.room_id);
 
   return (
-    <ContextMenuPrimitive.Root open={open} onOpenChange={handleOpenChange}>
-      <ContextMenuPrimitive.Trigger asChild>{children}</ContextMenuPrimitive.Trigger>
-      <ContextMenuPrimitive.Portal>
-        <ContextMenuPrimitive.Content
-          id="room-row-menu"
-          className="room-menu spa-menu"
-          aria-label="会话操作"
-          onCloseAutoFocus={handleCloseAutoFocus}
-        >
+    <>
+      <ContextMenu open={open} onOpenChange={handleOpenChange}
+        trigger={children as React.ReactElement} id="room-row-menu"
+        className="room-menu spa-menu" label="会话操作"
+        onCloseAutoFocus={handleCloseAutoFocus}>
           {roomView ? (
             <RoomMenuItems
-              Item={ContextMenuPrimitive.Item}
-              Separator={ContextMenuPrimitive.Separator}
+              Item={ContextMenuItem}
+              Separator={ContextMenuSeparator}
               idPrefix="room-row-menu"
               room={roomView}
               peerName={peer?.name ?? null}
@@ -255,41 +251,40 @@ export function RoomRowMenu({
             />
           ) : (
             <>
-              <ContextMenuPrimitive.Item
+              <ContextMenuItem
                 id="room-row-menu-pin"
                 className="room-menu-item"
                 onSelect={() => actions.onTogglePreference('pinned')}
               >
                 {preference.pinned ? '取消置顶' : '置顶聊天'}
-              </ContextMenuPrimitive.Item>
-              <ContextMenuPrimitive.Item
+              </ContextMenuItem>
+              <ContextMenuItem
                 id="room-row-menu-mute"
                 className="room-menu-item"
                 onSelect={() => actions.onTogglePreference('muted')}
               >
                 {preference.muted ? '恢复消息提醒' : '消息免打扰'}
-              </ContextMenuPrimitive.Item>
+              </ContextMenuItem>
               {detailQuery.isError ? (
-                <ContextMenuPrimitive.Item
+                <ContextMenuItem
                   id="room-row-menu-retry"
                   className="room-menu-item"
                   onSelect={() => void detailQuery.refetch()}
                 >
                   读取会话失败，点击重试
-                </ContextMenuPrimitive.Item>
+                </ContextMenuItem>
               ) : (
-                <ContextMenuPrimitive.Item
+                <ContextMenuItem
                   id="room-row-menu-loading"
                   className="room-menu-item"
                   disabled
                 >
                   正在读取会话…
-                </ContextMenuPrimitive.Item>
+                </ContextMenuItem>
               )}
             </>
           )}
-        </ContextMenuPrimitive.Content>
-      </ContextMenuPrimitive.Portal>
+      </ContextMenu>
       {roomView && identity && token ? (
         <>
           <MembersDialog
@@ -348,6 +343,6 @@ export function RoomRowMenu({
           />
         </>
       ) : null}
-    </ContextMenuPrimitive.Root>
+    </>
   );
 }

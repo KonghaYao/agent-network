@@ -1,8 +1,6 @@
 import { Avatar, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
-import { useRef } from 'react';
 
 import { Link } from '../../app/router';
-import { openContextMenuAt, useLongPress } from '../../hooks/useLongPress';
 import { groupColorFor, groupColorStyle } from '../../lib/group-colors';
 import {
   avatarColor,
@@ -35,12 +33,6 @@ export function RoomRow({
   preferences?: RoomPreferenceMap;
   onStatus?: (message: string) => void;
 }) {
-  const suppressNextClickRef = useRef(false);
-  const longPress = useLongPress((element, x, y) => {
-    // 长按结束后浏览器仍会补发 click；抑制紧随其后的这一次点击。
-    suppressNextClickRef.current = true;
-    openContextMenuAt(element, x, y);
-  });
   const preference = roomPreference(preferences, room.room_id);
   const unread = isUnread(room);
   const offline = room.peer_kind === 'agent' && room.peer_online === false;
@@ -58,36 +50,6 @@ export function RoomRow({
           data-room-name={room.name}
           data-room-kind={room.kind}
           aria-haspopup="menu"
-          {...longPress}
-          onPointerDown={(event) => {
-            // 开始新手势时重置抑制，避免长按后浏览器没有补发 click 时
-            // 吞掉用户的下一次正常点击。
-            suppressNextClickRef.current = false;
-            longPress.onPointerDown(event);
-          }}
-          onClick={(event) => {
-            if (!suppressNextClickRef.current) return;
-            suppressNextClickRef.current = false;
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-          onKeyDown={(event) => {
-            // 键盘激活不是长按后的补发 click；先解除抑制，避免第一次
-            // Enter 被吞掉。
-            if (event.key === 'Enter' || event.key === ' ') {
-              suppressNextClickRef.current = false;
-            }
-            if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) {
-              return;
-            }
-            event.preventDefault();
-            const rect = event.currentTarget.getBoundingClientRect();
-            openContextMenuAt(
-              event.currentTarget,
-              rect.left + 24,
-              rect.top + rect.height / 2,
-            );
-          }}
         >
           <span className="avatar-wrap">
             {room.kind === 'group' ? (

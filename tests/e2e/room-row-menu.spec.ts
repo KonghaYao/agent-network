@@ -308,8 +308,9 @@ test.describe('会话行右键与长按菜单', () => {
     await expect(page.locator('#room-row-menu-pin')).toBeVisible();
     await expect(page.locator('#room-row-menu-mute')).toBeVisible();
     expect(page.url()).toBe(`${base}/`);
-    // 菜单是 modal：Radix 用 body pointer-events 锁住外部指针事件。
-    await expect.poll(() => bodyPointerEvents(page)).toBe('none');
+    // 不依赖 body 锁实现：打开后键盘可以进入可操作条目。
+    await page.keyboard.press('ArrowDown');
+    await expect(menu.locator('[role="menuitem"]:focus')).toHaveCount(1);
 
     const menuBox = await menu.boundingBox();
     expect(menuBox).not.toBeNull();
@@ -367,8 +368,8 @@ test.describe('会话行右键与长按菜单', () => {
     await pinnedRow.click({ button: 'right', position: { x: 60, y: 24 } });
     await expect(menu).toBeVisible();
     await expect(page.locator('#room-row-menu-pin')).toBeVisible();
-    // 菜单打开时 Radix 通过 body pointer-events 加锁。
-    await expect.poll(() => bodyPointerEvents(page)).toBe('none');
+    await page.keyboard.press('End');
+    await expect(menu.locator('[role="menuitem"]:focus')).toHaveCount(1);
 
     await page.locator('#room-row-menu-pin').click();
     await expect(menu).toBeHidden();
@@ -525,6 +526,103 @@ test.describe('会话行右键与长按菜单', () => {
       await page.keyboard.press('Enter');
       await expect(page).toHaveURL(`${base}/c/${directAB}`);
     });
+  });
+
+  for (const fail of [false, true]) {
+    test(`真实 Lenso chunk ${fail ? '失败' : '延迟'}：fallback 打开周期节点与焦点不切换`, async ({ page }) => {
+      let release!: () => void;
+      const gate = new Promise<void>((done) => { release = done; });
+      let intercepted = 0;
+      await page.route('**/assets/index-*.js', async (route) => {
+        intercepted++;
+        if (fail) await route.abort('failed');
+        else { await gate; await route.continue(); }
+      });
+      try {
+        await page.goto(`${base}/`);
+        const ab = row(page, directAB);
+        await expect(ab).toBeVisible();
+        await ab.click({ button: 'right' });
+        const menu = page.locator('#room-row-menu');
+        await expect(menu).toHaveAttribute('data-lenso-slot', 'context-menu-fallback');
+        await expect(page.locator('#room-row-menu-report')).toBeVisible();
+        await page.keyboard.press('ArrowDown');
+        const identity = await menu.evaluateHandle((node) => ({ node, focus: document.activeElement }));
+        expect(intercepted).toBeGreaterThan(0);
+        release();
+        if (!fail) await expect(page.locator('#new-agent')).toHaveAttribute('data-lenso-slot', 'button');
+        await expect(menu).toHaveAttribute('data-lenso-slot', 'context-menu-fallback');
+        expect(await identity.evaluate(({ node, focus }) => node.isConnected && focus === document.activeElement)).toBe(true);
+        await page.keyboard.press('Tab');
+        await expect(menu).toBeHidden();
+        await expect(ab).toBeFocused();
+        await ab.press('ContextMenu');
+        await expect(menu).toBeVisible();
+        const outside = await row(page, directAC).boundingBox();
+        await page.mouse.click(outside!.x + 20, outside!.y + 20);
+        await expect(menu).toBeHidden();
+        await expect(page).toHaveURL(`${base}/`);
+        await expect(ab).toBeFocused();
+        await ab.press('ContextMenu');
+        await expect(menu).toBeVisible();
+        if (!fail) expect(await menu.evaluate((node) => node.matches(':popover-open'))).toBe(true);
+        await page.locator('#room-row-menu-mute').click();
+        await expect(ab.locator('.room-pref-label')).toHaveText('免打扰');
+      } finally { release(); }
+    });
+  }
+
+  test('外部点击只关闭菜单，不穿透导航；暗色 390 下菜单在视口内', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.goto(`${base}/`);
+    const ab = row(page, directAB);
+    await expect(ab).toBeVisible();
+    await ab.press('ContextMenu');
+    const menu = page.locator('#room-row-menu');
+    await expect(menu).toBeVisible();
+    const box = await menu.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+    await expect(page.locator('#room-row-menu-delete-friend')).toHaveClass(/danger/);
+    await page.mouse.click(370, 750);
+    await expect(menu).toBeHidden();
+    await expect(page).toHaveURL(`${base}/`);
+    await expect(ab).toBeFocused();
+  });
+
+  test('详情未到时禁用项不可选；消息键盘菜单归还焦点', async ({ page }) => {
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    await page.route('**/mcp', async (route) => {
+      if (route.request().headers()['mcp-name'] === 'network_room_get') await gate;
+      await route.continue();
+    });
+    try {
+      await page.goto(`${base}/`);
+      const ab = row(page, directAB);
+      await expect(ab).toBeVisible();
+      await expect(page.locator('#new-agent')).toHaveAttribute('data-lenso-slot', 'button');
+      await ab.press('ContextMenu');
+      const loading = page.locator('#room-row-menu-loading');
+      await expect(loading).toHaveAttribute('aria-disabled', 'true');
+      await loading.click({ force: true });
+      await expect(page.locator('#room-row-menu')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(ab).toBeFocused();
+    } finally { release(); }
+    await page.unrouteAll({ behavior: 'wait' });
+    await page.goto(`${base}/c/${directAB}`);
+    const message = page.locator('#messages .msg').first();
+    await expect(message).toBeVisible();
+    await message.focus();
+    await message.press('Shift+F10');
+    await expect(page.locator('#message-context-menu')).toBeVisible();
+    await page.keyboard.press('ArrowDown');
+    await expect(page.locator('#message-context-menu [role="menuitem"]:focus')).toHaveCount(1);
+    await page.keyboard.press('Tab');
+    await expect(page.locator('#message-context-menu')).toBeHidden();
+    await expect(message).toBeFocused();
   });
 
   test('Shift+F10 打开同一菜单，Esc 后焦点回到会话行', async ({ page }) => {
