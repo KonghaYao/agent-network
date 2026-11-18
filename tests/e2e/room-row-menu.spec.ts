@@ -591,6 +591,79 @@ test.describe('会话行右键与长按菜单', () => {
     await expect(ab).toBeFocused();
   });
 
+  for (const fallback of [false, true]) {
+    for (const width of [1280, 390]) {
+      test(`异步详情保持焦点与底部边界：${fallback ? 'fallback' : 'Lenso'} ${width} 暗色`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 844 });
+        await page.emulateMedia({ colorScheme: 'dark' });
+        let aborted = 0;
+        if (fallback) await page.route('**/assets/index-*.js', async (route) => {
+          aborted++;
+          await route.abort('failed');
+        });
+        let release!: () => void;
+        const gate = new Promise<void>((done) => { release = done; });
+        await page.route('**/mcp', async (route) => {
+          if (route.request().headers()['mcp-name'] === 'network_room_get') await gate;
+          await route.continue();
+        });
+        try {
+          await page.goto(`${base}/`);
+          await expect(page.locator('#room-list .room-item')).toHaveCount(16);
+          if (!fallback) await expect(page.locator('#new-agent')).toHaveAttribute('data-lenso-slot', 'button');
+          const target = page.locator('#room-list a[data-room-id]').last();
+          await target.scrollIntoViewIfNeeded();
+          await target.click({ button: 'right', position: { x: 50, y: 48 } });
+          const menu = page.locator('#room-row-menu');
+          await expect(page.locator('#room-row-menu-loading')).toBeVisible();
+          if (fallback) {
+            expect(aborted).toBeGreaterThan(0);
+            await expect(menu).toHaveAttribute('data-lenso-slot', 'context-menu-fallback');
+          } else expect(await menu.evaluate((node) => node.matches(':popover-open'))).toBe(true);
+          await page.keyboard.press('ArrowDown');
+          await expect(page.locator('#room-row-menu-pin')).toBeFocused();
+          release();
+          const danger = page.locator('#room-row-menu-delete-friend');
+          await expect(danger).toBeVisible();
+          await expect(page.locator('#room-row-menu-pin')).toBeFocused();
+          await page.keyboard.press('ArrowDown');
+          await expect(page.locator('#room-row-menu-mute')).toBeFocused();
+          await expect.poll(() => menu.evaluate((node) => node.getBoundingClientRect().bottom)).toBeLessThanOrEqual(836);
+          expect((await menu.boundingBox())!.y).toBeGreaterThanOrEqual(8);
+          await page.keyboard.press('Escape');
+          await expect(menu).toBeHidden();
+          await expect(target).toBeFocused();
+
+          await target.press('ContextMenu');
+          // 模拟焦点落到 body，文档级导航与 Tab 仍须工作。
+          await menu.evaluate(() => (document.activeElement as HTMLElement).blur());
+          await page.keyboard.press('End');
+          await expect(danger).toBeFocused();
+          await page.keyboard.press('Home');
+          await expect(page.locator('#room-row-menu-pin')).toBeFocused();
+          await page.keyboard.press('Tab');
+          await expect(menu).toBeHidden();
+          await expect(target).toBeFocused();
+
+          await target.press('ContextMenu');
+          if (fallback) {
+            // 缩小到不足以容纳全部内容，验证滚动而不是仅验证翻转。
+            await page.setViewportSize({ width, height: 180 });
+            await expect.poll(() => menu.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+            await expect.poll(() => menu.evaluate((node) => node.getBoundingClientRect().bottom)).toBeLessThanOrEqual(172);
+          }
+          await danger.scrollIntoViewIfNeeded();
+          await expect(danger).toBeInViewport();
+          await danger.click();
+          await expect(menu).toBeHidden();
+          await page.setViewportSize({ width, height: 844 });
+          await expect(page.locator('#confirm-dialog-title')).toHaveText('删除好友');
+          await page.locator('#confirm-dialog-cancel').click();
+        } finally { release(); }
+      });
+    }
+  }
+
   test('详情未到时禁用项不可选；消息键盘菜单归还焦点', async ({ page }) => {
     let release!: () => void;
     const gate = new Promise<void>((done) => { release = done; });

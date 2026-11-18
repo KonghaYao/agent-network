@@ -72,12 +72,68 @@ export function ContextMenu({
   useLayoutEffect(() => {
     if (!open || !menu.current) return;
     const element = menu.current;
-    if (!lenso) {
+    const items = () => [...element.querySelectorAll<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])')];
+    let focusedId = '', focusedIndex = 0;
+    const refocus = () => {
+      const available = items();
+      (available.find((item) => item.id === focusedId) ?? available[focusedIndex] ?? available[0] ?? element)
+        .focus({ preventScroll: true });
+    };
+    const remember = () => {
+      const index = items().indexOf(document.activeElement as HTMLElement);
+      if (index >= 0) {
+        focusedId = document.activeElement!.id;
+        focusedIndex = index;
+      } else if (document.activeElement === element && focusedId) {
+        // SDK 的 pointerleave 可能在异步翻转后重置到容器，保留最后的条目位置。
+        refocus();
+      }
+    };
+    const position = () => {
+      if (lenso) return;
+      const y = Math.max(8, Math.min(point.current.y, innerHeight - 8));
+      const above = y - 8, below = innerHeight - y - 8;
+      const height = element.scrollHeight + element.offsetHeight - element.clientHeight;
+      const up = height > below && above > below;
+      element.style.maxHeight = `${Math.max(0, up ? above : below)}px`;
       const bounds = element.getBoundingClientRect();
       element.style.left = `${Math.max(8, Math.min(point.current.x, innerWidth - bounds.width - 8))}px`;
-      element.style.top = `${Math.max(8, Math.min(point.current.y, innerHeight - bounds.height - 8))}px`;
-    }
+      element.style.top = `${up ? y - bounds.height : y}px`;
+    };
+    const update = () => {
+      position();
+      if (!element.contains(document.activeElement)) refocus();
+    };
+    // capture 层统一接管导航键，避免 SDK 与兜底各移动一次；body 也能恢复键盘操作。
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' && !element.contains(document.activeElement) && document.activeElement !== document.body) return;
+      if (!['Escape', 'Tab', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.key === 'Escape' || event.key === 'Tab') { close(); return; }
+      const available = items(), index = available.indexOf(document.activeElement as HTMLElement);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? available.length - 1
+        : index < 0 ? (event.key === 'ArrowDown' ? 0 : available.length - 1)
+        : (index + (event.key === 'ArrowDown' ? 1 : available.length - 1)) % available.length;
+      available[next]?.focus({ preventScroll: true });
+      available[next]?.scrollIntoView({ block: 'nearest' });
+    };
+    element.addEventListener('focusin', remember);
+    document.addEventListener('keydown', keydown, true);
+    const mutations = new MutationObserver(update);
+    mutations.observe(element, { childList: true, subtree: true });
+    const resize = new ResizeObserver(position);
+    if (!lenso) resize.observe(element);
+    window.addEventListener('resize', position);
+    position();
     element.focus({ preventScroll: true });
+    return () => {
+      mutations.disconnect();
+      resize.disconnect();
+      element.removeEventListener('focusin', remember);
+      document.removeEventListener('keydown', keydown, true);
+      window.removeEventListener('resize', position);
+    };
   }, [open, lenso]);
 
   // 调用方交出这组手势事件；原 Link 的导航仍由其内部 onClick 负责。
@@ -109,24 +165,9 @@ export function ContextMenu({
       }
     },
   });
-  const keydown: HTMLAttributes<HTMLDivElement>['onKeyDown'] = (event) => {
-    if (['Escape', 'Tab'].includes(event.key)) {
-      event.preventDefault();
-      event.stopPropagation();
-      close();
-    }
-    if (lenso || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const items = [...(menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])') ?? [])];
-    const index = items.indexOf(document.activeElement as HTMLElement);
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
-      : index < 0 ? (event.key === 'ArrowDown' ? 0 : items.length - 1)
-      : (index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
-    items[next]?.focus({ preventScroll: true });
-  };
   const contentProps = {
     id, ref: menu, role: 'menu', tabIndex: -1, 'aria-label': label,
-    onKeyDown: keydown, className,
+    className,
     style: { zIndex: 'var(--app-z-portal-local-menu)' },
   };
   const content = open ? <MenuScope.Provider value={{ module: lenso, select: (action) => {
@@ -148,7 +189,7 @@ export function ContextMenu({
       <div {...contentProps}
       data-lenso-slot="context-menu-fallback"
       style={{ ...contentProps.style, position: 'fixed',
-        maxHeight: 'calc(100dvh - 16px)', overflowY: 'auto' }}>
+        overflowY: 'auto' }}>
       {children}
     </div></>, portalContainer?.() ?? document.body)}
   </MenuScope.Provider> : null;
