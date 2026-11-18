@@ -5541,8 +5541,9 @@ async function main(): Promise<void> {
       let failHistory = true;
       await page.route('**/mcp', async (route) => {
         const name = route.request().headers()['mcp-name'];
+        // 懒加载后首载 ack 会在约 300ms 后补拉一次 history；注入必须覆盖
+        // 该窗口，否则第二次请求成功会提前清掉错误态。
         if (name === 'network_history_list' && failHistory) {
-          failHistory = false;
           await route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -5559,6 +5560,7 @@ async function main(): Promise<void> {
       await page.goto(`${server.base}/c/${roomId}`);
       await page.locator('#chat-error').waitFor({ state: 'visible' });
       check('历史失败显示错误态', await page.locator('#chat-error-text').isVisible());
+      failHistory = false;
       await page.locator('#chat-error-retry').click();
       await waitRoom(page, roomId, data.agentA.name);
       check('历史重试后恢复', true);
