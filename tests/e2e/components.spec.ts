@@ -390,12 +390,20 @@ test.describe.serial('SPA 组件库与状态管理', () => {
       expect(box.x + box.width).toBeLessThanOrEqual(390);
       expect(box.y + box.height).toBeLessThanOrEqual(844);
     }
-    const itemHeights = await page
-      .locator('#attach-menu [role="menuitem"]')
-      .evaluateAll((items) =>
-        items.map((item) => Math.round(item.getBoundingClientRect().height)),
-      );
-    expect(itemHeights.every((height) => height >= 44)).toBe(true);
+    // Lenso Menu 打开时带 morph 动画，首帧仍在过渡中；等待稳定后再量高度，
+    // 避免读到过渡中间值。稳定后条目仍须保持至少 44px。
+    await expect
+      .poll(
+        () =>
+          page.locator('#attach-menu [role="menuitem"]').evaluateAll((items) => {
+            const heights = items.map((item) =>
+              Math.round(item.getBoundingClientRect().height),
+            );
+            return heights.length === 2 && heights.every((height) => height >= 44);
+          }),
+        { timeout: 2000 },
+      )
+      .toBe(true);
     await page.keyboard.press('Escape');
     await expect(page.locator('#attach-menu')).toBeHidden();
     await expect(page.locator('#attach-file')).toBeFocused();
