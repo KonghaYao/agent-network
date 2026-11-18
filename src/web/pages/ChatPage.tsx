@@ -1,3 +1,4 @@
+import { Tooltip } from '../app/lenso-tooltip';
 import { Alert, Button, LENSO_SKELETON_FILL, Skeleton, Toolbar } from '../app/lenso-controls';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -597,16 +598,16 @@ export function ChatPage({ roomId }: ChatPageProps) {
                         改名
                       </Button>
                     ) : null}
-                    <Button
+                    <Tooltip as={Button}
                       className="link-btn" variant="borderless" size="sm"
                       id="message-search-button"
                       type="button"
                       aria-label="搜索聊天记录"
-                      title="搜索聊天记录"
+                      hint="搜索聊天记录"
                       onClick={() => setSearchOpen(true)}
                     >
                       搜索
-                    </Button>
+                    </Tooltip>
                     {room.kind === 'group' ? (
                       <Button
                         ref={membersButtonRef}
@@ -618,18 +619,18 @@ export function ChatPage({ roomId }: ChatPageProps) {
                         群成员
                       </Button>
                     ) : null}
-                    <Button
+                    <Tooltip as={Button}
                       className={`monitor-toggle${monitorVisible ? ' active' : ''}`} variant="borderless" size="sm"
                       id="monitor-toggle"
                       type="button"
                       aria-controls="monitor-pane"
                       aria-expanded={monitorVisible}
                       aria-label="打开网页监控"
-                      title="网页监控"
+                      hint="网页监控"
                       onClick={toggleMonitor}
                     >
                       <span>网页</span>
-                    </Button>
+                    </Tooltip>
                     <Button
                       className={`files-toggle${filesVisible ? ' active' : ''}`} variant="borderless" size="sm"
                       id="files-toggle"

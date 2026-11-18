@@ -4,6 +4,7 @@
  * Modified for Agent Network: 平台导入替换；自适应高度与侧栏宽度不变。
  */
 
+import { Tooltip } from '../../../../app/lenso-tooltip';
 import { Button } from "../ui/button";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { type ReactNode, useRef } from "react";
@@ -33,16 +34,16 @@ export function MemoryVisualizationShell({
       <div ref={graphicRef} className="h-full min-h-0 min-w-0 flex-1 overflow-hidden">
         {children(height)}
       </div>
-      <Button
+      <Tooltip as={Button}
         variant="ghost"
         size="icon-xs"
         onClick={() => onPanelOpenChange(!panelOpen)}
-        title={toggleLabel}
+        hint={toggleLabel}
         aria-label={toggleLabel}
         className="hidden h-full w-5 shrink-0 rounded-none border-l md:inline-flex"
       >
         {panelOpen ? <ChevronRight className="size-3" /> : <ChevronLeft className="size-3" />}
-      </Button>
+      </Tooltip>
       <div
         className={`${panelOpen ? "md:w-80 md:border-l" : "md:w-0"} h-full min-h-0 w-0 shrink-0 overflow-hidden bg-card transition-[width] duration-300`}
       >

@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Button, Menu, type MenuEntry } from '../../app/lenso-controls';
 import { lazy, Suspense, useRef, useState } from 'react';
 
@@ -129,16 +130,16 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
         sideOffset={6}
         align="start"
         trigger={
-          <Button
+          <Tooltip as={Button}
             id="account-menu-toggle"
             className="icon-btn account-more"
             type="button"
             aria-label="账号操作"
-            title="账号操作"
+            hint="账号操作"
             disabled={!me}
           >
             ···
-          </Button>
+          </Tooltip>
         }
         items={items}
       />

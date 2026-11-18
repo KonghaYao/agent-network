@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Button } from '../../app/lenso-controls';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
@@ -198,10 +199,10 @@ export function Timeline({
           key={`presence:${item.presence_event_id}`}
           data-presence-id={item.presence_event_id}
         >
-          <span title={item.time_basis === 'inferred' ? '下线时间为崩溃后推断' : undefined}>
+          <Tooltip as="span" hint={item.time_basis === 'inferred' ? '下线时间为崩溃后推断' : undefined}>
             {name} {action}
             {chatTime(item.occurred_at) ? ` · ${chatTime(item.occurred_at)}` : ''}
-          </span>
+          </Tooltip>
         </li>,
       );
     } else {
@@ -275,9 +276,9 @@ export function Timeline({
               key={item.client_message_id}
               data-client-message-id={item.client_message_id}
             >
-              <span title={item.error || undefined}>
+              <Tooltip as="span" hint={item.error || undefined}>
                 {state} · {outboxPreview(item.body)}
-              </span>
+              </Tooltip>
               {item.status === 'failed' && item.retryable ? (
                 <Button
                   className="outbox-retry"

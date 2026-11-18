@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Button } from '../../app/lenso-controls';
 import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
 import { useRef, type ReactNode } from 'react';
@@ -39,16 +40,16 @@ export function AgentAvatarMenu({
   return (
     <ContextMenuPrimitive.Root>
       <ContextMenuPrimitive.Trigger asChild>
-        <Button
+        <Tooltip as={Button}
           ref={triggerRef}
           type="button"
           className={`memory-avatar-trigger${className ? ` ${className}` : ''}`}
           aria-label={`${label}（右键或长按打开记忆菜单）`}
-          title="右键或长按打开记忆菜单"
+          hint="右键或长按打开记忆菜单"
           {...longPress}
         >
           {children}
-        </Button>
+        </Tooltip>
       </ContextMenuPrimitive.Trigger>
       <ContextMenuPrimitive.Portal container={portalContainer?.() ?? undefined}>
         <ContextMenuPrimitive.Content

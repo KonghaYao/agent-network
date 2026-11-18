@@ -16,6 +16,7 @@
  * 两者的渲染模型不同，抽公共层只会得到一层薄转发（已裁定，见前端规范 §4.8）。
  */
 
+import { Tooltip } from '../../../../app/lenso-tooltip';
 import { useTheme } from "../theme";
 import { NS } from "../i18n";
 import { Maximize2, Minimize2 } from "lucide-react";
@@ -299,7 +300,7 @@ export function Constellation({
 
       {/* Fullscreen toggle — 图标改用 lucide 的 `Maximize2` / `Minimize2`（原为两份逐字相同的内联
           SVG 属性块，只差 polyline/line 子元素；路径与 14px 尺寸逐点对应，见 commit 正文）。 */}
-      <button
+      <Tooltip as="button"
         className="fenix-constellation-fullscreen"
         onClick={toggleFullscreen}
         style={{
@@ -326,11 +327,11 @@ export function Constellation({
         onMouseLeave={(e) => {
           (e.currentTarget as HTMLButtonElement).style.opacity = "0.7";
         }}
-        title={isFullscreen ? t("constellation.exitFullscreenTitle") : t("constellation.enterFullscreenTitle")}
+        hint={isFullscreen ? t("constellation.exitFullscreenTitle") : t("constellation.enterFullscreenTitle")}
       >
         {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
         {isFullscreen ? t("constellation.exitFullscreenLabel") : t("constellation.enterFullscreenLabel")}
-      </button>
+      </Tooltip>
 
       {/* Tooltip */}
       <div

@@ -5721,12 +5721,12 @@ async function main(): Promise<void> {
           (await page.locator('#room-filter-group .room-filter-unread').textContent())?.trim(),
           '1',
         );
-        check(
-          '分类徽标带数量说明',
-          (await page
-            .locator('#room-filter-group .room-filter-unread')
-            .getAttribute('title'))?.includes('1 个会话') === true,
-        );
+        const groupBadge = page.locator('#room-filter-group .room-filter-unread');
+        const badgeTitle = (await groupBadge.getAttribute('title')) ?? '';
+        if (!badgeTitle) await groupBadge.hover();
+        const badgeHint = badgeTitle
+          || ((await page.locator('[data-app-tooltip]').textContent()) ?? '');
+        check('分类徽标带数量说明', badgeHint.includes('1 个会话'));
         checkEqual(
           '分类未读汇总使用 polite aria-live',
           await page.locator('#room-filter-unread-status').getAttribute('aria-live'),

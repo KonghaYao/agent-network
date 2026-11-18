@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Button, Menu } from '../../app/lenso-controls';
 import * as Ariakit from '@ariakit/react';
 import {
@@ -209,12 +210,12 @@ function ComposerFileChip({
   return (
     <div className="composer-file" role="listitem" data-file-id={file.fileId ?? ''}>
       {thumb && item && !thumbBroken ? (
-        <Button
+        <Tooltip as={Button}
           type="button"
           variant="borderless"
           size="sm"
           className="composer-file-thumb"
-          title={file.name}
+          hint={file.name}
           aria-label={`预览图片 ${file.name}`}
           onClick={() => onOpenFile(item)}
         >
@@ -226,31 +227,31 @@ function ComposerFileChip({
             referrerPolicy="no-referrer"
             onError={() => setThumbBroken(true)}
           />
-        </Button>
+        </Tooltip>
       ) : (
         <span className="composer-file-badge" aria-hidden="true">
           {fileBadge(file.name)}
         </span>
       )}
       <span className="composer-file-main">
-        <span className="composer-file-name" title={file.name}>
+        <Tooltip as="span" className="composer-file-name" hint={file.name}>
           {file.name}
-        </span>
+        </Tooltip>
         <span className="composer-file-meta">{fileMeta(file)}</span>
       </span>
-      <Button
+      <Tooltip as={Button}
         type="button"
         variant="borderless"
         size="sm"
         isIconOnly
         className="composer-file-remove"
         aria-label={`移除 ${file.name}`}
-        title={`移除 ${file.name}`}
+        hint={`移除 ${file.name}`}
         disabled={removeDisabled}
         onClick={onRemove}
       >
         ×
-      </Button>
+      </Tooltip>
     </div>
   );
 }
@@ -693,7 +694,7 @@ export function Composer({
           sideOffset={6}
           align="start"
           trigger={
-            <Button
+            <Tooltip as={Button}
               className="attach-btn"
               variant="bordered"
               size="md"
@@ -702,11 +703,11 @@ export function Composer({
               aria-label="添加附件"
               aria-haspopup="menu"
               aria-controls="attach-menu"
-              title="添加附件"
+              hint="添加附件"
               disabled={room.read_only}
             >
               +
-            </Button>
+            </Tooltip>
           }
           items={[
             {

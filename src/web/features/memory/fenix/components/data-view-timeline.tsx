@@ -6,6 +6,7 @@
  * 粒度切换只切本地索引、不再按 `occurred_start` 重新分组；组顺序沿用服务端的倒序。
  */
 
+import { Tooltip } from '../../../../app/lenso-tooltip';
 import { EmptyState } from "../ui/empty-state";
 import { Button } from "../ui/button";
 import { NS } from "../i18n";
@@ -117,31 +118,31 @@ export function DataViewTimeline({ _data, filteredRows, onMemoryClick }: DataVie
         <div className="flex items-center gap-1">
           {/* 缩放 */}
           <div className="flex items-center border border-border rounded mr-2">
-            <Button
+            <Tooltip as={Button}
               variant="secondary"
               size="sm"
               onClick={zoomOut}
               disabled={granularity === "year"}
               className="h-7 w-7 p-0"
-              title={t("dataView.zoomOut")}
+              hint={t("dataView.zoomOut")}
               aria-label={t("dataView.zoomOut")}
             >
               <ZoomOut className="h-3 w-3" />
-            </Button>
+            </Tooltip>
             <span className="text-3xs px-2 min-w-12.5 text-center border-x border-border text-foreground">
               {granularityLabels[granularity]}
             </span>
-            <Button
+            <Tooltip as={Button}
               variant="secondary"
               size="sm"
               onClick={zoomIn}
               disabled={granularity === "day"}
               className="h-7 w-7 p-0"
-              title={t("dataView.zoomIn")}
+              hint={t("dataView.zoomIn")}
               aria-label={t("dataView.zoomIn")}
             >
               <ZoomIn className="h-3 w-3" />
-            </Button>
+            </Tooltip>
           </div>
 
           {/* 导航 */}

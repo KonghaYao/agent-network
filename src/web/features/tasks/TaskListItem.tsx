@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Button } from '../../app/lenso-controls';
 import { TaskPreviewPopover } from './TaskPreviewPopover';
 import type { TaskListItemView } from './types';
@@ -65,19 +66,19 @@ export function TaskListItem({
       />
       <div className="task-dock-item-actions">
         {askable ? (
-          <Button
+          <Tooltip as={Button}
             type="button"
             variant="bordered"
             size="sm"
             className="task-dock-ask"
             aria-label={`询问进度：${preview}`}
-            title="引用这条 Task 并询问 Agent 进度"
+            hint="引用这条 Task 并询问 Agent 进度"
             onClick={() => onAskProgress(item)}
           >
             询问进度
-          </Button>
+          </Tooltip>
         ) : null}
-        <Button
+        <Tooltip as={Button}
           type="button"
           variant="bordered"
           size="sm"
@@ -86,11 +87,11 @@ export function TaskListItem({
           aria-busy={completing ? 'true' : undefined}
           aria-describedby={disabledReason ? reasonId : undefined}
           aria-label={`完成 Task：${preview}`}
-          title={disabledReason || '标记为已完成'}
+          hint={disabledReason || '标记为已完成'}
           onClick={() => onComplete(item)}
         >
           {completing ? '完成中…' : item.status === 'completed' ? '已完成' : '完成'}
-        </Button>
+        </Tooltip>
         {disabledReason ? (
           <span id={reasonId} className="visually-hidden">
             {disabledReason}

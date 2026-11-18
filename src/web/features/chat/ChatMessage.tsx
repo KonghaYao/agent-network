@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Avatar, Button, Menu, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
 import { ContextMenu, ContextMenuItem } from '../../app/lenso-context-menu';
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -514,9 +515,9 @@ export const ChatMessage = memo(function ChatMessage({
               headSeq={room.head_seq}
               onOpen={onOpenTask}
             />
-            <div
+            <Tooltip as="div"
               className={`bubble${collapsed ? ' is-collapsed' : ''}`}
-              title={fullTime(item.created_at)}
+              hint={fullTime(item.created_at)}
             >
               {agent ? (
                 truncated && fullBody === null ? (
@@ -529,7 +530,7 @@ export const ChatMessage = memo(function ChatMessage({
               ) : (
                 <HumanBody text={shown} mentions={mentions} />
               )}
-            </div>
+            </Tooltip>
             {cards.length > 0 ? (
               <div className="msg-files">
                 <Suspense fallback={null}>

@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import {
   Avatar,
   AvatarGroup,
@@ -96,13 +97,13 @@ export function TaskSummaryBar({
         <span className="task-bar-avatars">
           <AvatarGroup overlap="ring" style={TASK_AVATAR_GROUP}>
             {participants.map((participant) => (
-              <Avatar
+              <Tooltip as={Avatar}
                 key={participant.actor_id}
-                title={participant.name}
+                hint={participant.name}
                 style={taskAvatarStyle(participant.name)}
               >
                 {firstChar(participant.name)}
-              </Avatar>
+              </Tooltip>
             ))}
           </AvatarGroup>
           {more > 0 ? (

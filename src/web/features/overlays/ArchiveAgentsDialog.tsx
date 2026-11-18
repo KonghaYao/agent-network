@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Button } from '../../app/lenso-controls';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useQueryClient } from '@tanstack/react-query';
@@ -91,15 +92,15 @@ export function ArchiveAgentsDialog({
             <h2 id="archive-popover-title">已归档 Agents</h2>
           </DialogPrimitive.Title>
           <DialogPrimitive.Close asChild>
-            <Button
+            <Tooltip as={Button}
               id="archive-popover-close"
               className="spa-dialog-close"
               type="button"
               aria-label="关闭已归档 Agents"
-              title="关闭"
+              hint="关闭"
             >
               ×
-            </Button>
+            </Tooltip>
           </DialogPrimitive.Close>
           <p
             className="archive-popover-status"
@@ -130,9 +131,9 @@ export function ArchiveAgentsDialog({
                   >
                     {firstChar(item.name)}
                   </span>
-                  <span className="archive-name" title={item.name}>
+                  <Tooltip as="span" className="archive-name" hint={item.name}>
                     {item.name}
-                  </span>
+                  </Tooltip>
                   <Button
                     type="button"
                     className="archive-restore"
