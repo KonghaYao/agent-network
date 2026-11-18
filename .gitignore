@@ -10,7 +10,12 @@ test-results/
 .env
 .env.*
 !.env.example
-.claude/
+# Keep agent-local state out of git, except committed project skills.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/lenso-ui/
+!.claude/skills/lenso-ui-design/
 .peri/
 __pycache__/
 *.pyc
