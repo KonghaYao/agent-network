@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "skills": {
+    "lenso-ui": {
+      "source": "LioRael/lenso-ui",
+      "commit": "1dcf07fc812275726e727352f32b7fdf53a150e3",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/lenso-ui/SKILL.md",
+      "computedHash": "7a7bc7a690bb0df971b644c7d4f7479293637c983a01530f9a697c4e3a9b89d3"
+    },
+    "lenso-ui-design": {
+      "source": "LioRael/lenso-ui",
+      "commit": "1dcf07fc812275726e727352f32b7fdf53a150e3",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/lenso-ui-design/SKILL.md",
+      "computedHash": "7b2e5a9d9841053e83293930966dfd0ba326a65b6d3646bc2aa22607433465be"
+    }
+  }
+}
