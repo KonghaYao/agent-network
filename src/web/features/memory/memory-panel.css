@@ -32,26 +32,30 @@
   }
 }
 
-/* Lenso Drawer 的 side 内容自带 8/12px 边缘 margin 与 24px 内距；
-   记忆面板要求贴边满高，因此清零并由本类接管卡片几何。 */
+/* Lenso Modal 的 StyleX 原子类负责命中与进出场，但不决定应用外壳几何；
+   这里恢复 base Radix 的居中卡片：min(1100px, 100vw - 48px) ×
+   min(84dvh, 820px)、12px 圆角。移动端规则在文件末尾恢复全屏 sheet。 */
 .agent-memory-dialog[data-agent-memory-shell='lenso'] {
-  position: relative;
-  inset: 0;
-  width: 100vw !important;
-  height: 100% !important;
-  max-width: 100vw;
-  max-height: 100%;
+  position: fixed !important;
+  inset: auto !important;
+  top: 50% !important;
+  left: 50% !important;
+  width: min(1100px, calc(100vw - 48px)) !important;
+  height: min(84dvh, 820px) !important;
+  max-width: min(1100px, calc(100vw - 48px)) !important;
+  max-height: min(84dvh, 820px) !important;
   margin: 0 !important;
-  padding: 0;
-  transform: none;
-  border: 0;
-  border-left: 1px solid var(--wx-line);
-  border-radius: 0;
+  padding: 0 !important;
+  transform: translate(-50%, -50%) !important;
+  overflow: hidden;
+  border: 1px solid var(--wx-line) !important;
+  border-radius: 12px !important;
   /* Lenso StyleX 的 background 简写在浏览器里解析为透明；显式恢复面板表面。 */
   background: var(--wx-panel) !important;
   color: var(--wx-text);
-  /* 详情使用 Radix Dialog 时 body 会被设为 pointer-events:none；抽屉自身
-     必须恢复命中，否则页内点击会穿透到 html 并误关抽屉。 */
+  box-shadow: var(--wx-shadow) !important;
+  /* 详情使用 Radix Dialog 时 body 会被设为 pointer-events:none；弹窗自身
+     必须恢复命中，否则页内点击会穿透到 html 并误关弹窗。 */
   pointer-events: auto;
 }
 
@@ -157,11 +161,17 @@
     border-radius: 0;
   }
 
-  /* 移动端保持原全屏 sheet：Lenso Drawer 也占满视口。 */
+  /* 移动端保持原全屏 sheet：Lenso Modal 也占满视口。 */
   .agent-memory-dialog[data-agent-memory-shell='lenso'] {
+    top: 0 !important;
+    left: 0 !important;
     width: 100vw !important;
     height: 100dvh !important;
-    max-height: 100dvh;
+    max-width: 100vw !important;
+    max-height: 100dvh !important;
+    transform: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
   }
 
   .agent-memory-head {

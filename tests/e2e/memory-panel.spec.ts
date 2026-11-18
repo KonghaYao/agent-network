@@ -830,6 +830,8 @@ test.describe('Agent 记忆弹窗', () => {
     await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
     await login(page, base, tokenA);
     await page.goto(`${base}/c/${groupRoom}`);
+    // 等 Lenso 就绪再开记忆，避免首开按设计锁定 Radix 时误判壳。
+    await expect(page.locator('#message-search-button')).toHaveAttribute('data-lenso-slot', 'button');
     await expect(page.locator('#members-button')).toBeVisible({ timeout: 15_000 });
     await page.locator('#members-button').click();
     await expect(page.locator('#members-modal')).toBeVisible();
@@ -853,14 +855,14 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(page.locator('#members-button')).toBeFocused();
   });
 
-  test('页面级 AgentMemory Lenso Drawer：几何、暗色、焦点围栏与滚动锁', async ({ page }) => {
+  test('页面级 AgentMemory Lenso Modal：居中几何、暗色、焦点围栏与滚动锁', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 844 });
     await page.emulateMedia({ colorScheme: 'dark' });
     const calls: MemoryCall[] = [];
     await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
     await login(page, base, tokenA);
     await page.goto(`${base}/c/${groupRoom}`);
-    // 确认 Lenso 已就绪，本次打开才应进入 Drawer。
+    // 确认 Lenso 已就绪，本次打开才应进入 Modal。
     await expect(page.locator('#message-search-button')).toHaveAttribute('data-lenso-slot', 'button');
     await expect(page.locator('#members-button')).toBeVisible({ timeout: 15_000 });
     await page.locator('#members-button').click();
@@ -891,18 +893,25 @@ test.describe('Agent 记忆弹窗', () => {
         drawer: rect(element),
         overlay: rect(document.querySelector('.agent-memory-overlay')),
         background: getComputedStyle(element).backgroundColor,
+        radius: getComputedStyle(element).borderRadius,
         itemsOverflow: getComputedStyle(document.getElementById('agent-memory-content')!).overflowY,
       };
     });
     const box = geometry.drawer!;
-    expect(box.x).toBeGreaterThanOrEqual(-0.5);
-    expect(box.x).toBeLessThanOrEqual(0.5);
-    expect(box.width).toBeGreaterThanOrEqual(1279.5);
-    expect(box.width).toBeLessThanOrEqual(1280.5);
-    expect(box.height).toBeGreaterThanOrEqual(843.5);
-    expect(box.height).toBeLessThanOrEqual(844.5);
-    expect(box.right).toBeGreaterThanOrEqual(1279.5);
-    expect(box.right).toBeLessThanOrEqual(1280.5);
+    // base Radix：min(1100px, 100vw - 48px) × min(84dvh, 820px) 居中、12px 圆角。
+    expect(box.x).toBeGreaterThanOrEqual(89.5);
+    expect(box.x).toBeLessThanOrEqual(90.5);
+    expect(box.y).toBeGreaterThanOrEqual(67);
+    expect(box.y).toBeLessThanOrEqual(68);
+    expect(box.width).toBeGreaterThanOrEqual(1099.5);
+    expect(box.width).toBeLessThanOrEqual(1100.5);
+    expect(box.height).toBeGreaterThanOrEqual(708.5);
+    expect(box.height).toBeLessThanOrEqual(709.5);
+    expect(box.right).toBeGreaterThanOrEqual(1189.5);
+    expect(box.right).toBeLessThanOrEqual(1190.5);
+    expect(box.bottom).toBeGreaterThanOrEqual(776);
+    expect(box.bottom).toBeLessThanOrEqual(777);
+    expect(geometry.radius).toBe('12px');
     expect(geometry.overlay).toEqual({ x: 0, y: 0, width: 1280, height: 844, right: 1280, bottom: 844 });
     const channels = geometry.background.match(/\d+/gu)!.slice(0, 3).map(Number);
     expect(channels.every((channel) => channel < 120)).toBe(true);
@@ -931,8 +940,74 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(page.locator('#members-button')).toBeFocused();
   });
 
+  test('页面级 AgentMemory Lenso Modal：无详情点击 backdrop 关闭并归还焦点', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 844 });
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
+    await login(page, base, tokenA);
+    // 先等首页控件升级，确保本次打开落在 Lenso 壳而不是首开 Radix。
+    await expect(page.locator('#room-filter [data-lenso-slot="segmented-control"]')).toBeVisible({
+      timeout: 15_000,
+    });
+    await openRowMemory(page, directRoom);
+    const dialog = page.locator('#agent-memory-dialog');
+    await expect(dialog).toHaveAttribute('data-agent-memory-shell', 'lenso');
+    await expect(dialog).toBeVisible();
+
+    // 卡片居中后两侧留有可点击遮罩；点击 (20,400) 必须关闭父层。
+    await page.mouse.click(20, 400);
+    await expect(dialog).toBeHidden();
+    await expect(page.locator('.agent-memory-overlay')).toHaveCount(0);
+    await expect(row(page, directRoom)).toBeFocused();
+  });
+
+  test('页面级 AgentMemory Lenso Modal：详情打开时 backdrop/外部点击与 Esc 只关详情', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 844 });
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
+    await login(page, base, tokenA);
+    await expect(page.locator('#room-filter [data-lenso-slot="segmented-control"]')).toBeVisible({
+      timeout: 15_000,
+    });
+    await openRowMemory(page, directRoom);
+    const dialog = page.locator('#agent-memory-dialog');
+    await expect(dialog).toHaveAttribute('data-agent-memory-shell', 'lenso');
+
+    await page.getByRole('button', { name: '表格' }).click();
+    const rows = page.locator('table tbody tr');
+    await expect(rows).toHaveCount(3, { timeout: 15_000 });
+    const detail = page.locator('[data-memory-detail-text]');
+
+    // 1. 详情打开时点击 backdrop：只关详情，父层保持打开。
+    await rows.first().click();
+    await expect(detail).toBeVisible({ timeout: 15_000 });
+    await page.mouse.click(20, 400);
+    await expect(detail).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+
+    // 2. 详情打开时点击父层内部（详情外）：同样只关详情。
+    await rows.first().click();
+    await expect(detail).toBeVisible({ timeout: 15_000 });
+    await page.mouse.click(120, 400);
+    await expect(detail).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+
+    // 3. 详情打开时 Esc 只关详情；第二次 Esc 才关父层。
+    await rows.first().click();
+    await expect(detail).toBeVisible({ timeout: 15_000 });
+    await page.keyboard.press('Escape');
+    await expect(detail).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(row(page, directRoom)).toBeFocused();
+    expect(errors).toEqual([]);
+  });
+
   for (const mode of ['blocked', 'delayed'] as const) {
-    test(`AgentMemory ${mode}：本次打开锁定 Radix，关闭重开升级 Drawer`, async ({ page }) => {
+    test(`AgentMemory ${mode}：本次打开锁定 Radix，关闭重开升级 Lenso`, async ({ page }) => {
       let release!: () => void;
       const gate = new Promise<void>((resolve) => { release = resolve; });
       let intercepted = 0;
@@ -1143,7 +1218,16 @@ test.describe('Agent 记忆弹窗', () => {
     const calls: MemoryCall[] = [];
     await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
     await login(page, base, tokenA);
+    // 等 Lenso 就绪后打开：390 必须保持全屏、可读，而不是桌面居中卡片。
+    await expect(page.locator('#room-filter [data-lenso-slot="segmented-control"]')).toBeVisible({
+      timeout: 15_000,
+    });
     await openRowMemory(page, directRoom);
+    const dialog = page.locator('#agent-memory-dialog');
+    await expect(dialog).toHaveAttribute('data-agent-memory-shell', 'lenso');
+    await expect(dialog).toHaveAttribute('role', 'dialog');
+    await expect(page.locator('#agent-memory-title')).toBeVisible();
+    await expect(page.locator('.agent-memory-overlay')).toBeVisible();
 
     // 视角栏与内容区必须单列堆叠：grid 只有一条列轨，内容区在视角栏下方且不越界。
     const layout = await page.locator('[data-slot="agent-master-detail-workspace"]').evaluate((element) => {
@@ -1169,11 +1253,17 @@ test.describe('Agent 记忆弹窗', () => {
     expect(layout.contentLeft).toBeGreaterThanOrEqual(0);
     expect(layout.contentRight).toBeLessThanOrEqual(391);
 
-    const box = await page.locator('#agent-memory-dialog').boundingBox();
+    const box = await dialog.boundingBox();
     expect(box).not.toBeNull();
-    expect(box!.x).toBeGreaterThanOrEqual(0);
-    expect(box!.width).toBeGreaterThanOrEqual(389);
-    expect(box!.width).toBeLessThanOrEqual(391);
+    expect(box!.x).toBeGreaterThanOrEqual(-0.5);
+    expect(box!.x).toBeLessThanOrEqual(0.5);
+    expect(box!.y).toBeGreaterThanOrEqual(-0.5);
+    expect(box!.y).toBeLessThanOrEqual(0.5);
+    expect(box!.width).toBeGreaterThanOrEqual(389.5);
+    expect(box!.width).toBeLessThanOrEqual(390.5);
+    expect(box!.height).toBeGreaterThanOrEqual(843.5);
+    expect(box!.height).toBeLessThanOrEqual(844.5);
+    expect(await dialog.evaluate((node) => getComputedStyle(node).borderRadius)).toBe('0px');
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,

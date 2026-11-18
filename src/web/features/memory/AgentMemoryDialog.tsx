@@ -6,13 +6,24 @@ import {
   useLensoBackendScope,
 } from '../../app/lenso-runtime';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { lazy, Suspense, useEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 
 import { useWebSession } from '../../hooks/useWebSession';
 import { FenixMemoryApiContext } from './fenix/api';
 import { EmptyState } from './fenix/ui/empty-state';
 import { Spinner } from './fenix/ui/spinner';
 import { createMemoryFenixApi } from './fenix/memory-api';
+import { MemoryDetailContext, type MemoryDetailBinding } from './memory-detail-context';
 import type { AgentMemoryTarget } from './memory-store';
 import './fenix/css/fenix.css';
 import './memory-panel.css';
@@ -135,21 +146,46 @@ type AgentMemoryShellProps = {
  * 页面级记忆面板只有两种打开者：菜单/侧栏（顶层 shell 为空）与 Members
  * （既有流程先关闭 Members 再打开记忆）。因此这里不复制父层 Radix 门控，
  * 只在本次打开周期按 Lenso 是否就绪选壳；模块晚到不影响当前周期。
+ *
+ * 详情层（Radix）通过 context 登记开合状态：Lenso 外壳需要知道当前 Esc
+ * 应该关详情还是关父层，且不能在详情卸载后再查 DOM。
  */
 function AgentMemoryShell({ closeRef, onClose, children }: AgentMemoryShellProps) {
   const backend = useBackendLease(true);
   const lenso = useLenso();
+  const [detailOpen, setDetailOpen] = useState(false);
+  const detailClose = useRef<(() => void) | null>(null);
+  const binding = useMemo<MemoryDetailBinding>(
+    () => ({
+      setDetailOpen(open, close) {
+        detailClose.current = open ? (close ?? null) : null;
+        setDetailOpen(open);
+      },
+    }),
+    [],
+  );
+  const closeDetail = useCallback(() => {
+    detailClose.current?.();
+  }, []);
   return (
     <LensoBackendProvider backend={backend}>
-      {backend === 'lenso' && lenso ? (
-        <LensoMemoryShell closeRef={closeRef} onClose={onClose} drawer={lenso.Drawer}>
-          {children}
-        </LensoMemoryShell>
-      ) : (
-        <RadixMemoryShell closeRef={closeRef} onClose={onClose}>
-          {children}
-        </RadixMemoryShell>
-      )}
+      <MemoryDetailContext.Provider value={binding}>
+        {backend === 'lenso' && lenso ? (
+          <LensoMemoryShell
+            closeRef={closeRef}
+            onClose={onClose}
+            detailOpen={detailOpen}
+            closeDetail={closeDetail}
+            modal={lenso.Modal}
+          >
+            {children}
+          </LensoMemoryShell>
+        ) : (
+          <RadixMemoryShell closeRef={closeRef} onClose={onClose}>
+            {children}
+          </RadixMemoryShell>
+        )}
+      </MemoryDetailContext.Provider>
     </LensoBackendProvider>
   );
 }
@@ -184,57 +220,77 @@ function RadixMemoryShell({
 function LensoMemoryShell({
   closeRef,
   onClose,
+  detailOpen,
+  closeDetail,
   children,
-  drawer: Drawer,
+  modal: Dialog,
 }: AgentMemoryShellProps & {
-  drawer: NonNullable<ReturnType<typeof useLenso>>['Drawer'];
+  detailOpen: boolean;
+  closeDetail: () => void;
+  modal: NonNullable<ReturnType<typeof useLenso>>['Modal'];
 }) {
+  // 详情打开时，Esc 必须在 Lenso / Radix 的 document 监听之前被截获：
+  // 父层会无条件 preventDefault，若放行会同时挡住详情自己的 Esc。这里按
+  // 状态直接关闭详情，不查询 DOM；没有详情时把 Esc 留给 Lenso 的
+  // dismissible 门控。监听器只注册一次，避免重渲染改变与内层监听的顺序。
+  const detailOpenRef = useRef(detailOpen);
+  detailOpenRef.current = detailOpen;
+  const closeDetailRef = useRef(closeDetail);
+  closeDetailRef.current = closeDetail;
   useEffect(() => {
-    // Drawer 固定 dismissible=false：嵌套详情打开时 outside press 不能误关父层。
-    // 没有详情时由本层补回 Esc 关闭语义。
     const onKeyDown = (event: KeyboardEvent) => {
+      if (!detailOpenRef.current) return;
       if (event.key !== 'Escape' || event.isComposing) return;
-      if (document.querySelector('[data-memory-detail-dialog]')) return;
       event.preventDefault();
-      onClose();
+      event.stopImmediatePropagation();
+      closeDetailRef.current();
     };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, []);
+
   return (
-    <Drawer.Root
+    <Dialog.Root
       open
       modal
-      side="end"
-      dismissible={false}
-      closeOnOutsidePress
+      presentation="dialog"
+      /* 详情打开时拒绝 Lenso 自己的 Esc；无详情时交还给 Lenso 关父层。 */
+      dismissible={!detailOpen}
+      /* backdrop 由本层处理：Lenso 的 outside press 等 click 释放，
+         详情已在 pointerdown 关闭，会让父层在释放时误判为“无详情”并关闭。 */
+      closeOnOutsidePress={false}
       onOpenChange={(next) => (next ? undefined : onClose())}
     >
-      <Drawer.Backdrop
+      <Dialog.Backdrop
         variant="opaque"
         render={(props) => (
           <div
             {...props}
             className={`${String(props.className ?? '')} spa-dialog-overlay agent-memory-overlay`.trim()}
+            onPointerDown={(event) => {
+              if (event.target !== event.currentTarget) return;
+              if (detailOpen) closeDetail();
+              else onClose();
+            }}
           />
         )}
       />
-      <Drawer.Content
+      <Dialog.Content
         id="agent-memory-dialog"
         data-agent-memory-shell="lenso"
-        data-drawer-no-drag=""
+        aria-modal="true"
         aria-labelledby="agent-memory-title"
         aria-describedby="agent-memory-note"
+        placement="center"
         initialFocus={() => closeRef.current}
         finalFocus="none"
-        style={{ width: '100vw', maxWidth: '100vw' }}
         render={(props) => (
           <div {...props} className={`${String(props.className ?? '')} agent-memory-dialog`.trim()} />
         )}
       >
         {children}
-      </Drawer.Content>
-    </Drawer.Root>
+      </Dialog.Content>
+    </Dialog.Root>
   );
 }
 
@@ -242,7 +298,7 @@ function AgentMemoryTitle() {
   const lenso = useLenso();
   const backend = useLensoBackendScope();
   return lenso && backend === 'lenso' ? (
-    <lenso.Drawer.Title
+    <lenso.Modal.Title
       id="agent-memory-title"
       render={(props) => <h2 {...props}>Agent 记忆</h2>}
     />

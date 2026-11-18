@@ -6,7 +6,7 @@
  * 揭示入口在 `MemoryDetailBody`。
  */
 
-import { useEffect } from "react";
+import { useLayoutEffect, useRef } from "react";
 
 import { EmptyState } from "../ui/empty-state";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -20,6 +20,7 @@ import { logFenixError } from "../log-error";
 import { memoryTypeTitle } from "../memory-type-title";
 import { HindsightFailureNotice } from "./HindsightFailureNotice";
 import { MemoryDetailBody } from "./MemoryDetailBody";
+import { useMemoryDetailBinding } from "../../memory-detail-context";
 
 interface MemoryDetailModalProps {
   memoryId: string | null;
@@ -46,21 +47,33 @@ export function MemoryDetailModal({ memoryId, onClose }: MemoryDetailModalProps)
   const failure = loadError ? toHindsightFailure(loadError) : null;
 
   const isOpen = memoryId !== null;
-  useEffect(() => {
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const detailBinding = useMemoryDetailBinding();
+
+  // 详情开合登记给记忆外壳：父层的 Esc 门控依赖状态而不是 DOM 查询。
+  // 用布局阶段登记，保证详情首次可交互前父层已经知道它存在。
+  useLayoutEffect(() => {
     if (!isOpen) return;
-    // Lenso top layer 会吞掉 body 的 pointer-events；点击抽屉空白角落时
-    // 事件目标可能是 html，Radix 收不到 outside 交互。这里只负责关闭详情，
-    // 父抽屉由 dismissible 门控保持打开。
+    detailBinding?.setDetailOpen(true, () => closeRef.current());
+    return () => detailBinding?.setDetailOpen(false);
+  }, [detailBinding, isOpen]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    // Lenso top layer 会吞掉 body 的 pointer-events；点击弹窗空白角落时
+    // 事件目标可能是 html，Radix 收不到 outside 交互。这里按详情内容节点
+    // 判断内外，只负责关闭详情，父层由自己的 backdrop 门控保持打开。
     const closeOutside = (event: PointerEvent) => {
-      const content = document.querySelector('[data-memory-detail-dialog]');
-      if (event.target instanceof Node && content?.contains(event.target)) return;
-      onClose();
+      if (event.target instanceof Node && contentRef.current?.contains(event.target)) return;
+      closeRef.current();
     };
     window.addEventListener('pointerdown', closeOutside, true);
     return () => window.removeEventListener('pointerdown', closeOutside, true);
-  }, [isOpen, onClose]);
-  // Lenso Drawer 的内容位于 top layer；详情若继续 portal 到 body 会落在抽屉下方，
-  // 被内容区拦截点击。收进记忆内容容器后仍在抽屉 stacking context 内，遮罩与
+  }, [isOpen]);
+  // Lenso 外壳的内容位于 top layer；详情若继续 portal 到 body 会落在父层下方，
+  // 被内容区拦截点击。收进记忆内容容器后仍在父层 stacking context 内，遮罩与
   // 关闭按钮都可达；Radix fallback 下容器同样存在，行为不变。
   const portalContainer =
     typeof document === 'undefined' ? null : document.getElementById('agent-memory-content');
@@ -68,6 +81,7 @@ export function MemoryDetailModal({ memoryId, onClose }: MemoryDetailModalProps)
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
+        ref={contentRef}
         className="z-[70] max-w-2xl max-h-[80vh] overflow-hidden flex flex-col"
         overlayClassName="z-[70]"
         portalContainer={portalContainer}
