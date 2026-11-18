@@ -974,3 +974,24 @@ export function ThemeScope({ className, ...props }: ComponentPropsWithRef<'div'>
   }, [theme]);
   return createElement('div', { ...props, className, 'data-theme': theme });
 }
+
+/** 内联反馈条：原生 fallback 原样保留 role/aria-live，就绪后交给 Lenso Alert。 */
+export function Alert({
+  status = 'default',
+  title,
+  children,
+  ...props
+}: Omit<ComponentPropsWithRef<'div'>, 'title'> & {
+  status?: 'default' | 'accent' | 'success' | 'warning' | 'danger';
+  title?: ReactNode;
+}) {
+  const lenso = useLenso();
+  if (!lenso) return createElement('div', props, title, children);
+  return createElement(
+    lenso.Alert,
+    { status, ...props } as ComponentProps<typeof lenso.Alert>,
+    createElement(lenso.Alert.Content, null,
+      title ? createElement(lenso.Alert.Title, null, title) : null,
+      createElement(lenso.Alert.Description, null, children)),
+  );
+}

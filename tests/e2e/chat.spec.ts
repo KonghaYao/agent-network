@@ -1055,6 +1055,9 @@ test.describe('SPA Chat', () => {
     test('error state drops the skeleton and static composer', async ({ page }) => {
       await page.goto(`${base}/c/room_missing_e2e`);
       await expect(page.locator('#chat-error')).toBeVisible();
+      await expect(page.locator('#chat-error')).toHaveAttribute('role', 'alert');
+      await expect(page.locator('#chat-error')).toHaveAttribute('aria-live', 'assertive');
+      await expect(page.locator('#chat-error')).toHaveAttribute('data-lenso-slot', 'alert-root');
       await expect(page.locator('#chat-skeleton')).toHaveCount(0);
       await expect(page.locator('#composer')).toHaveCount(0);
     });

@@ -1,18 +1,34 @@
 import {
   Avatar,
+  AvatarGroup,
   Badge,
   Button,
-  LENSO_AVATAR_FILL,
   LENSO_BADGE_FILL,
-  Surface,
 } from '../../app/lenso-controls';
 import { useQuery } from '@tanstack/react-query';
+import type { CSSProperties } from 'react';
 
 import { useWebSession } from '../../hooks/useWebSession';
 import type { HistoryMessage } from '../../lib/chat';
 import { callTool } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { avatarColor, firstChar } from '../../lib/rooms';
+
+const TASK_AVATAR_GROUP = { '--avatar-group-overlap': '6px' } as CSSProperties;
+
+function taskAvatarStyle(name: string): CSSProperties {
+  return {
+    width: 20,
+    height: 20,
+    boxSizing: 'border-box',
+    borderRadius: '50%',
+    background: avatarColor(name),
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: 500,
+    boxShadow: '0 0 0 2px var(--wx-panel)',
+  };
+}
 
 export interface TaskSummary {
   root_message_id: string;
@@ -67,7 +83,6 @@ export function TaskSummaryBar({
   const more = Math.max(0, summary.participant_count - participants.length);
   return (
     <div className="msg-task-bar-slot">
-      <Surface style={{ display: 'contents' }}>
       <Button
         type="button"
         className="task-bar"
@@ -79,16 +94,17 @@ export function TaskSummaryBar({
           T
         </span>
         <span className="task-bar-avatars">
-          {participants.map((participant) => (
-            <span
-              key={participant.actor_id}
-              className="task-avatar"
-              title={participant.name}
-              style={{ background: avatarColor(participant.name) }}
-            >
-              <Avatar style={LENSO_AVATAR_FILL}>{firstChar(participant.name)}</Avatar>
-            </span>
-          ))}
+          <AvatarGroup overlap="ring" style={TASK_AVATAR_GROUP}>
+            {participants.map((participant) => (
+              <Avatar
+                key={participant.actor_id}
+                title={participant.name}
+                style={taskAvatarStyle(participant.name)}
+              >
+                {firstChar(participant.name)}
+              </Avatar>
+            ))}
+          </AvatarGroup>
           {more > 0 ? (
             <span className="task-bar-more">
               <Badge placement="" style={LENSO_BADGE_FILL}>+{more}</Badge>
@@ -98,7 +114,6 @@ export function TaskSummaryBar({
         <span className="task-bar-preview">{summary.preview || item.preview || '（无正文）'}</span>
         <span className="task-bar-count">{summary.message_count} 消息</span>
       </Button>
-      </Surface>
     </div>
   );
 }

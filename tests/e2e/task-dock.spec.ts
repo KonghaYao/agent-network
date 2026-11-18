@@ -1027,6 +1027,49 @@ test.describe('浮动 Task dock', () => {
     await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(2);
     await expect(page.locator('#task-dock')).not.toContainText('迟到的 A Task 不得回填');
   });
+
+  test('多 Agent 参与用 AvatarGroup 展示 20px 头像与 +N', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `Multi Owner ${suffix}`);
+    const agents: AgentCreated[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      agents.push(await createAgent(base, owner.token, `Multi Agent ${index + 1} ${suffix}`));
+    }
+    const roomId = await createGroup(
+      base,
+      owner.token,
+      `Multi Group ${suffix}`,
+      agents.map((agent) => agent.actor_id),
+    );
+    const rootId = await createTask(base, owner.token, roomId, '多 Agent 协作根消息');
+    for (const agent of agents) {
+      await sendMessage(base, agent.token, roomId, `多 Agent 回复 ${agent.name}`, {
+        taskRootId: rootId,
+      });
+    }
+
+    await openRoom(page, base, owner.token, roomId);
+    const bar = page.locator(`.msg-task-bar-slot [data-task-root="${rootId}"]`);
+    await expect(bar).toBeVisible();
+    await expect(bar.locator('[data-lenso-slot="avatar-group"]')).toHaveCount(1);
+    await expect(bar.locator('[data-lenso-slot="avatar"]')).toHaveCount(3);
+    await expect(bar.locator('.task-bar-more')).toHaveText('+1');
+    const barLayout = await bar.evaluate((element) => ({
+      heights: Array.from(element.querySelectorAll('[data-lenso-slot="avatar"]')).map(
+        (avatar) => Math.round(avatar.getBoundingClientRect().height),
+      ),
+      rowHeight: Math.round(element.getBoundingClientRect().height),
+    }));
+    expect(barLayout.heights).toEqual([20, 20, 20]);
+    expect(barLayout.rowHeight).toBeGreaterThanOrEqual(44);
+
+    await expandDock(page);
+    const item = itemLocator(page, rootId);
+    await expect(item.locator('.task-dock-avatars [data-lenso-slot="avatar-group"]')).toHaveCount(1);
+    await expect(item.locator('.task-dock-avatars [data-lenso-slot="avatar"]')).toHaveCount(3);
+    await expect(item.locator('.task-dock-avatars .task-bar-more')).toHaveText('+1');
+  });
 });
 
 test.describe('Task dock 询问进度', () => {

@@ -575,6 +575,12 @@ test.describe.serial('SPA 组件库与状态管理', () => {
 
     await page.goto(`${base}/c/${readOnlyRoom}`);
     await expect(page.locator('#room-archive-banner')).toBeVisible();
+    await expect(page.locator('#room-archive-banner')).toHaveAttribute('role', 'note');
+    await expect(page.locator('#room-archive-banner')).toHaveAttribute('aria-live', 'polite');
+    await expect(page.locator('#room-archive-banner')).toHaveAttribute(
+      'data-lenso-slot',
+      'alert-root',
+    );
     await expect(page.locator('#composer')).toHaveCount(0);
     await expect(page.locator('#composer-drop')).toHaveCount(0);
     const before = page.url();
@@ -661,6 +667,12 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await page.locator('#announcement-save').click();
     await expect(page.locator('#announcement-modal')).toBeHidden();
     await expect(page.locator('#room-announcement')).toContainText('组件验收公告');
+    await expect(page.locator('#room-announcement')).toHaveAttribute('role', 'note');
+    await expect(page.locator('#room-announcement')).toHaveAttribute('aria-live', 'polite');
+    await expect(page.locator('#room-announcement')).toHaveAttribute(
+      'data-lenso-slot',
+      'alert-root',
+    );
     await page.locator('#room-announcement-info').click();
     await expect(page.locator('#room-announcement-popover')).toContainText('组件验收公告');
     await page.keyboard.press('Escape');

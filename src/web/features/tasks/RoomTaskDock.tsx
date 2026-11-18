@@ -1,4 +1,4 @@
-import { Button, EmptyState, Surface } from '../../app/lenso-controls';
+import { Button, EmptyState } from '../../app/lenso-controls';
 import {
   useEffect,
   useRef,
@@ -262,7 +262,6 @@ export function RoomTaskDock({
         onKeyDown={onSectionKeyDown}
       >
         <div className="task-dock-head">
-          <Surface style={{ display: 'contents' }}>
           <Button
             ref={toggleRef}
             id="task-dock-toggle"
@@ -293,7 +292,6 @@ export function RoomTaskDock({
               ▾
             </span>
           </Button>
-          </Surface>
         </div>
         <div
           id="task-dock-panel"
@@ -301,7 +299,6 @@ export function RoomTaskDock({
           hidden={!expanded}
           aria-busy={tasks.loading || tasks.loadingMore ? 'true' : undefined}
         >
-          <Surface style={{ display: 'contents' }}>
           {tasks.error ? (
             <div id="task-dock-error" className="task-dock-error" role="alert">
               <span>Task 加载失败：{tasks.error}</span>
@@ -403,7 +400,6 @@ export function RoomTaskDock({
               {tasks.notice}
             </p>
           ) : null}
-          </Surface>
         </div>
       </section>
       <TaskCompleteDialog

@@ -1,15 +1,17 @@
 import {
+  Alert,
   Badge,
   Button,
   EmptyState,
   LENSO_BADGE_FILL,
   LENSO_SKELETON_FILL,
+  SearchInput,
   Separator,
   SegmentedControl,
   Skeleton,
   Toolbar,
 } from '../../app/lenso-controls';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Link } from '../../app/router';
 import type { RoomPreferenceMap } from '../../lib/room-preferences';
@@ -119,6 +121,21 @@ export function Sidebar(props: SidebarProps) {
     return () => window.clearTimeout(timer);
   }, [unreadCounts]);
 
+  // 组合输入期间吞掉 keydown，避免 Lenso SearchField 的内置 Escape 清空
+  // 正在编辑的候选词；组合结束后 Escape 仍由 SearchField/调用方清空。
+  const detachSearchKeys = useRef<(() => void) | null>(null);
+  const searchRef = useCallback((node: HTMLInputElement | null) => {
+    detachSearchKeys.current?.();
+    detachSearchKeys.current = null;
+    if (!node) return;
+    const onKeyDownCapture = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) event.stopPropagation();
+    };
+    node.addEventListener('keydown', onKeyDownCapture, true);
+    detachSearchKeys.current = () => node.removeEventListener('keydown', onKeyDownCapture, true);
+  }, []);
+  useEffect(() => () => detachSearchKeys.current?.(), []);
+
   return (
     <aside className="sidebar" aria-label="会话列表">
       <header className="sidebar-head">
@@ -138,14 +155,17 @@ export function Sidebar(props: SidebarProps) {
             </Button>
           </Toolbar>
         </div>
-        <label className="search-box">
-          <svg className="search-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" />
-            <path d="m16.5 16.5 4 4" />
-          </svg>
-          <input
+        {/* 视觉 32px、命中区 44px：外层补足上下可点击高度。 */}
+        <div
+          className="search-box"
+          onPointerDown={(event) => {
+            if (event.target instanceof Element && event.target.closest('input, button, a[href], [tabindex]')) return;
+            document.getElementById('room-search')?.focus();
+          }}
+        >
+          <SearchInput
+            ref={searchRef}
             id="room-search"
-            type="search"
             placeholder="搜索"
             autoComplete="off"
             aria-label="搜索会话"
@@ -153,10 +173,11 @@ export function Sidebar(props: SidebarProps) {
             onChange={(event) => onQueryChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key !== 'Escape' || !query) return;
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
               onQueryChange('');
             }}
           />
-        </label>
+        </div>
         <div className="room-filter" id="room-filter">
           <SegmentedControl
             aria-label="会话类型"
@@ -196,15 +217,18 @@ export function Sidebar(props: SidebarProps) {
         >
           {filterAnnouncement}
         </p>
-        <p
-          id="contact-link-banner"
-          className="contact-link-banner"
-          role="status"
-          data-error={notice?.error ? '1' : undefined}
-          hidden={!notice}
-        >
-          {notice?.message ?? ''}
-        </p>
+        {notice ? (
+          <Alert
+            id="contact-link-banner"
+            className="contact-link-banner"
+            role="status"
+            aria-live="polite"
+            status={notice.error ? 'danger' : 'default'}
+            data-error={notice.error ? '1' : undefined}
+          >
+            {notice.message}
+          </Alert>
+        ) : null}
       </header>
       <div className="sidebar-list">
         <ol id="room-list" className="room-list" aria-label={filterLabel}>

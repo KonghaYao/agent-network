@@ -1,4 +1,4 @@
-import { Button, LENSO_SKELETON_FILL, Skeleton, Toolbar } from '../app/lenso-controls';
+import { Alert, Button, LENSO_SKELETON_FILL, Skeleton, Toolbar } from '../app/lenso-controls';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   lazy,
@@ -696,14 +696,28 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 ) : null}
               </header>
               {room?.announcement ? (
-                <div id="room-announcement" className="room-announcement" role="note">
+                <Alert
+                  id="room-announcement"
+                  className="room-announcement"
+                  role="note"
+                  aria-live="polite"
+                  status="default"
+                  style={{ width: 'auto', margin: '8px 16px 0', padding: '8px 12px', borderRadius: 6 }}
+                >
                   {room.announcement}
-                </div>
+                </Alert>
               ) : null}
               {room?.read_only ? (
-                <div id="room-archive-banner" className="room-archive-banner" role="note">
+                <Alert
+                  id="room-archive-banner"
+                  className="room-archive-banner"
+                  role="note"
+                  aria-live="polite"
+                  status="warning"
+                  style={{ width: 'auto', margin: '8px 16px 0', padding: '8px 12px', borderRadius: 6 }}
+                >
                   群聊已解散，当前为只读归档；截至解散点的历史仍可查看。
-                </div>
+                </Alert>
               ) : null}
               <div
                 {...getRootProps({
@@ -731,7 +745,15 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     ))}
                   </div>
                 ) : null}
-                <div id="chat-error" className="chat-error" role="alert" hidden={chat.status !== 'error'}>
+                <Alert
+                  id="chat-error"
+                  className="chat-error"
+                  role="alert"
+                  aria-live="assertive"
+                  status="danger"
+                  hidden={chat.status !== 'error'}
+                  style={{ margin: 0, padding: '26px 20px', textAlign: 'center' }}
+                >
                   <p id="chat-error-text">{chat.error || '读取会话失败'}</p>
                   <div className="chat-error-actions">
                     <Button id="chat-error-retry" type="button" variant="prominent" size="md" onClick={() => void chat.load()}>
@@ -741,7 +763,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       返回会话列表
                     </Link>
                   </div>
-                </div>
+                </Alert>
                 {ready && room && identity ? (
                   <Timeline
                     items={chat.items}

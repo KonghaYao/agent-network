@@ -188,6 +188,12 @@ test.describe('SPA Home', () => {
     await expect(page.locator('body[data-spa-route="home"]')).toBeVisible();
     await expect(page.locator('.sidebar')).toBeVisible();
     await expect(page.locator('#room-search')).toBeVisible();
+    await expect(page.locator('.search-box [data-lenso-slot="search-field"]')).toHaveCount(1);
+    const searchInput = await page.locator('#room-search').boundingBox();
+    expect(searchInput?.height ?? 0).toBeGreaterThanOrEqual(30);
+    expect(searchInput?.height ?? 0).toBeLessThanOrEqual(32);
+    const searchHit = await page.locator('.search-box').boundingBox();
+    expect(searchHit?.height ?? 0).toBeGreaterThanOrEqual(44);
     await expect(page.locator('#room-list .room-item')).toHaveCount(1);
     await expect(page.locator('#room-list .room-name')).toHaveText(nameB);
     await expect(page.locator('#room-list .unread')).toHaveCount(1);
@@ -201,6 +207,24 @@ test.describe('SPA Home', () => {
     await page.press('#room-search', 'Escape');
     await expect(page.locator('#room-search')).toHaveValue('');
     await expect(page.locator('#room-list .room-item')).toHaveCount(1);
+
+    // 组合输入中的 Escape 交给 IME 取消候选，不能清空已输入内容。
+    await page.fill('#room-search', '周末');
+    await page.evaluate(() => {
+      const input = document.getElementById('room-search') as HTMLInputElement;
+      input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true }),
+      );
+    });
+    await expect(page.locator('#room-search')).toHaveValue('周末');
+    await page.evaluate(() => {
+      document
+        .getElementById('room-search')
+        ?.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    });
+    await page.press('#room-search', 'Escape');
+    await expect(page.locator('#room-search')).toHaveValue('');
 
     expect(errors).toEqual([]);
   });
@@ -324,6 +348,11 @@ test.describe('SPA Home', () => {
       await page.goto(`${base}/`);
       await expect(page.locator('.sidebar')).toBeVisible();
       await expect(page.locator('#room-search')).toBeVisible();
+      const searchHit = await page.locator('.search-box').boundingBox();
+      expect(searchHit?.height ?? 0).toBeGreaterThanOrEqual(44);
+      const searchInput = await page.locator('#room-search').boundingBox();
+      expect(searchInput?.height ?? 0).toBeGreaterThanOrEqual(30);
+      expect(searchInput?.height ?? 0).toBeLessThanOrEqual(32);
       await expect(page.locator('#empty-state')).toBeHidden();
     });
   });
@@ -342,6 +371,11 @@ test.describe('SPA Home', () => {
         .locator('.chat-pane')
         .evaluate((element) => getComputedStyle(element).backgroundColor);
       expect(chatBackground).toBe(await semanticColor(page, '--lenso-background-primary'));
+      const search = page.locator('.search-box [data-lenso-slot="search-field-group"]');
+      await expect(search).toHaveCount(1);
+      expect(await search.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
+        await semanticColor(page, '--wx-search'),
+      );
     });
   });
 });

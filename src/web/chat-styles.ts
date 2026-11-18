@@ -72,13 +72,21 @@ export const APP_STYLE = `
   .icon-btn[hidden] { display: none; }
   .icon-btn svg { width: 18px; height: 18px; display: block; fill: none;
     stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-  .search-box { position: relative; display: block; }
-  .search-icon { position: absolute; left: 8px; top: 50%; width: 15px; height: 15px;
-    transform: translateY(-50%); fill: none; stroke: var(--wx-muted); color: var(--wx-muted);
-    stroke-width: 1.8; pointer-events: none; }
-  #room-search { width: 100%; height: 30px; padding: 0 10px 0 28px; border: 0;
-    border-radius: 4px; background: var(--wx-search); color: var(--wx-text);
+  /* 搜索：视觉 32px，外层 min-height 44px 提供命中区。 */
+  .search-box { display: flex; align-items: center; min-height: 44px; }
+  .search-box [data-lenso-slot="search-field"] { width: 100%; max-width: none; gap: 0; }
+  /* StyleX 的 :not(#\#) 提权要求这里显式 important，才能保持 32px 微信密度。 */
+  .search-box [data-lenso-slot="search-field-group"] { height: 32px !important; gap: 5px !important;
+    padding: 0 8px 0 9px !important; border-radius: 6px !important; background: var(--wx-search) !important;
+    box-shadow: none !important; color: var(--wx-text) !important; }
+  .search-box [data-lenso-slot="search-field-search-icon"] { width: 15px !important;
+    height: 15px !important; color: var(--wx-muted) !important; }
+  .search-box [data-lenso-slot="search-field-group"] input { font-size: 13px !important; }
+  #room-search { width: 100%; height: 32px; padding: 0 8px; border: 0;
+    border-radius: 6px; background: var(--wx-search); color: var(--wx-text);
     font: inherit; font-size: 13px; }
+  .search-box [data-lenso-slot="search-field-group"] #room-search { height: 100%;
+    padding: 0; border-radius: 0; background: transparent; }
   #room-search::placeholder { color: var(--wx-muted); }
   #room-search::-webkit-search-cancel-button { -webkit-appearance: none; }
 
@@ -374,9 +382,11 @@ export const APP_STYLE = `
   .head-skeleton--files { width: 46px; }
   .head-skeleton--account { width: 32px; border-radius: 50%; }
   .head-skeleton--menu { width: 28px; height: 28px; }
-  .chat-error { margin: 0; padding: 26px 20px; text-align: center; color: var(--wx-muted); }
-  .chat-error[hidden] { display: none; }
-  .chat-error p { margin: 0 0 12px; color: var(--wx-unread); font-size: 13px;
+  .chat-error, #chat-error { margin: 0; padding: 26px 20px; text-align: center; color: var(--wx-muted); }
+  .chat-error[hidden], #chat-error[hidden] { display: none; }
+  #chat-error [data-lenso-slot="alert-content"] { width: 100%; }
+  #chat-error [data-lenso-slot="alert-description"] { color: var(--wx-muted); }
+  .chat-error p, #chat-error p { margin: 0 0 12px; color: var(--wx-unread); font-size: 13px;
     overflow-wrap: anywhere; }
   .chat-error-actions { display: flex; align-items: center; justify-content: center; gap: 14px; }
   .chat-error-actions a { color: var(--wx-link); font-size: 12px; }
@@ -571,14 +581,22 @@ export const APP_STYLE = `
   .contact-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px;
     overflow-y: auto; margin: 0 0 8px; }
 ${GROUP_STYLE}
-  .room-announcement { margin: 8px 16px 0; padding: 8px 12px; border-radius: 6px;
-    border: 1px solid var(--wx-line); background: var(--wx-panel); color: var(--wx-text);
-    font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .room-announcement[hidden] { display: none; }
-  .room-archive-banner { margin: 8px 16px 0; padding: 8px 12px; border-radius: 6px;
+  .room-announcement, #room-announcement { margin: 8px 16px 0; padding: 8px 12px;
+    border-radius: 6px; border: 1px solid var(--wx-line); background: var(--wx-panel);
+    color: var(--wx-text); font-size: 12px; line-height: 1.6; white-space: pre-wrap;
+    overflow-wrap: anywhere; }
+  .room-announcement[hidden], #room-announcement[hidden] { display: none; }
+  #room-announcement [data-lenso-slot="alert-content"] { width: 100%; }
+  #room-announcement [data-lenso-slot="alert-description"] { font-size: 12px; line-height: 1.6;
+    color: var(--wx-text); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .room-archive-banner, #room-archive-banner { margin: 8px 16px 0; padding: 8px 12px;
+    border-radius: 6px;
     border: 1px solid var(--lenso-status-warning-border); background: var(--lenso-control-status-warning-soft-fill); color: var(--lenso-status-warning-text);
     font-size: 12px; line-height: 1.6; }
-  .room-archive-banner[hidden] { display: none; }
+  .room-archive-banner[hidden], #room-archive-banner[hidden] { display: none; }
+  #room-archive-banner [data-lenso-slot="alert-content"] { width: 100%; }
+  #room-archive-banner [data-lenso-slot="alert-description"] { font-size: 12px; line-height: 1.6;
+    color: var(--lenso-status-warning-text); }
   .composer[hidden] { display: none; }
   .announcement-card { width: min(520px, 100%); box-sizing: border-box; }
   .announcement-input { display: block; box-sizing: border-box; width: 100%;
@@ -788,10 +806,14 @@ ${GROUP_STYLE}
   .contact-request-empty { padding: 2px 0; color: var(--wx-muted); font-size: 12px; }
 
   /* 好友邀请链接：明文只在内存中，列表只展示状态；失败状态用错误色。 */
-  .contact-link-banner { margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--wx-line);
-    border-radius: 8px; background: var(--wx-sidebar); color: var(--wx-text); font-size: 13px;
-    word-break: break-word; }
-  .contact-link-banner[data-error="1"] { border-color: var(--wx-unread); color: var(--wx-unread); }
+  .contact-link-banner, #contact-link-banner { margin: 0 0 8px; padding: 8px 10px;
+    border: 1px solid var(--wx-line); border-radius: 8px; background: var(--wx-sidebar);
+    color: var(--wx-text); font-size: 13px; word-break: break-word; }
+  .contact-link-banner[data-error="1"], #contact-link-banner[data-error="1"] {
+    border-color: var(--wx-unread); color: var(--wx-unread); }
+  #contact-link-banner [data-lenso-slot="alert-content"] { min-width: 0; }
+  #contact-link-banner [data-lenso-slot="alert-description"] { font-size: 13px;
+    line-height: 1.5; color: inherit; overflow-wrap: anywhere; }
   .contact-link-hint { margin: 0 0 10px; color: var(--wx-muted); font-size: 12px;
     line-height: 1.5; }
   .contact-link-actions { display: flex; gap: 8px; margin: 0 0 8px; }

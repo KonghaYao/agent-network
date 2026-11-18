@@ -1,16 +1,16 @@
 import {
   Avatar,
+  AvatarGroup,
   Badge,
   Button,
-  LENSO_AVATAR_FILL,
   LENSO_BADGE_FILL,
-  Surface,
 } from '../../app/lenso-controls';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 import {
   useCallback,
   useEffect,
   useRef,
+  type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
@@ -25,6 +25,21 @@ import type { TaskListItemView } from './types';
 
 const HOVER_OPEN_DELAY = 260;
 const HOVER_CLOSE_DELAY = 180;
+const TASK_AVATAR_GROUP = { '--avatar-group-overlap': '6px' } as CSSProperties;
+
+function taskAvatarStyle(name: string): CSSProperties {
+  return {
+    width: 20,
+    height: 20,
+    boxSizing: 'border-box',
+    borderRadius: '50%',
+    background: avatarColor(name),
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: 500,
+    boxShadow: '0 0 0 2px var(--wx-panel)',
+  };
+}
 
 /**
  * Task 行的摘要预览。
@@ -176,16 +191,17 @@ export function TaskPreviewPopover({
           <span className="task-dock-preview">{preview}</span>
           <span className="task-dock-meta">
             <span className="task-dock-avatars" aria-hidden="true">
-              {participants.map((participant) => (
-                <span
-                  key={participant.actor_id}
-                  className="task-avatar"
-                  title={participant.name}
-                  style={{ background: avatarColor(participant.name) }}
-                >
-                  <Avatar style={LENSO_AVATAR_FILL}>{firstChar(participant.name)}</Avatar>
-                </span>
-              ))}
+              <AvatarGroup overlap="ring" style={TASK_AVATAR_GROUP}>
+                {participants.map((participant) => (
+                  <Avatar
+                    key={participant.actor_id}
+                    title={participant.name}
+                    style={taskAvatarStyle(participant.name)}
+                  >
+                    {firstChar(participant.name)}
+                  </Avatar>
+                ))}
+              </AvatarGroup>
               {more > 0 ? (
                 <span className="task-bar-more">
                   <Badge placement="" style={LENSO_BADGE_FILL}>+{more}</Badge>
@@ -221,7 +237,6 @@ export function TaskPreviewPopover({
           onPointerEnter={clearCloseTimer}
           onPointerLeave={scheduleClose}
         >
-          <Surface style={{ display: 'contents' }}>
           <div className="task-preview-head">
             <span className="task-preview-sender">
               {item.root_sender_name || (item.root_sender_kind === 'agent' ? 'Agent' : '成员')}
@@ -302,7 +317,6 @@ export function TaskPreviewPopover({
               查看全部 {item.message_count} 条消息
             </Button>
           </div>
-          </Surface>
         </PopoverPrimitive.Content>
       </PopoverPrimitive.Portal>
     </PopoverPrimitive.Root>
