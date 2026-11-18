@@ -1095,6 +1095,25 @@ test.describe.serial('SPA 组件库与状态管理', () => {
       )
       .toBeGreaterThan(0);
 
+    // 上下文弹窗复用 message-search-card 的固定头部/滚动正文布局。
+    await page.locator('#message-search-results .message-search-result').first().click();
+    await expect(page.locator('#message-context-dialog')).toBeVisible();
+    const context = await page.evaluate(() => {
+      const dialog = document.getElementById('message-context-dialog')!;
+      const items = document.getElementById('message-context-items')!;
+      const rect = dialog.getBoundingClientRect();
+      return {
+        inViewport: rect.top >= -1 && rect.bottom <= window.innerHeight + 1,
+        background: getComputedStyle(dialog).backgroundColor,
+        itemsOverflow: getComputedStyle(items).overflowY,
+      };
+    });
+    expect(context.inViewport).toBe(true);
+    expect(context.background).toMatch(/^rgb\(/u);
+    expect(context.itemsOverflow).toBe('auto');
+    await page.locator('#message-context-close').click();
+    await expect(page.locator('#message-context-dialog')).toBeHidden();
+
     await page.locator('#message-search-close').click();
     await expect(page.locator('#message-search-dialog')).toBeHidden();
 
